@@ -10,18 +10,18 @@ from config import get_settings
 def main() -> None:
     settings = get_settings()
 
-    logger.info(f"启动 {settings.adapter_app_name}...")
-    logger.info(f"监听地址: {settings.adapter_fastapi_host}:{settings.adapter_fastapi_port}")
-    logger.info(f"调试模式: {settings.adapter_fastapi_debug}")
-    logger.info(f"Worker 数量: {settings.adapter_fastapi_workers}")
+    logger.info(f"启动 {settings.app_name}...")
+    logger.info(f"监听地址: {settings.fastapi_host}:{settings.fastapi_port}")
+    logger.info(f"调试模式: {settings.fastapi_debug}")
+    logger.info(f"Worker 数量: {settings.fastapi_workers}")
 
     uvicorn.run(
         "app:app",
-        host=settings.adapter_fastapi_host,
-        port=settings.adapter_fastapi_port,
-        workers=settings.adapter_fastapi_workers if not settings.adapter_fastapi_debug else 1,
-        reload=settings.adapter_fastapi_debug,
-        log_level=settings.adapter_log_level.lower(),
+        host=settings.fastapi_host,
+        port=settings.fastapi_port,
+        workers=settings.fastapi_workers if not settings.fastapi_debug else 1,
+        reload=settings.fastapi_debug,
+        log_level=settings.log_level.lower(),
         loop="auto",
     )
 
