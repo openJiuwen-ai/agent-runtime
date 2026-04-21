@@ -74,8 +74,15 @@ async def initialize_dpa() -> None:
     card = AgentCard(id=settings.dpa_agent_id, name=settings.dpa_agent_name)
     agent = ReActAgent(card=card)
 
+    custom_headers = {}
+    if settings.llm_user_id:
+        custom_headers["userId"] = settings.llm_user_id
+    if settings.llm_token:
+        custom_headers["token"] = settings.llm_token
+
     config = (
         ReActAgentConfig()
+        .configure_custom_headers(custom_headers)
         .configure_model_client(
             provider=settings.llm_provider,
             api_key=settings.llm_api_key,

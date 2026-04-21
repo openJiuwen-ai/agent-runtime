@@ -5,7 +5,7 @@ description = "DPA × VersatileAdapter A2A 用户服务主入口"
 requires-python = ">=3.11"
 
 dependencies = [
-    # A2A SDK 1.0.0-alpha.1（本地源码包）
+    # A2A SDK 1.0.0a1
     "a2a-sdk==1.0.0a1",
 
     # HTTP 客户端（调用 VersatileAdapter A2A 接口）

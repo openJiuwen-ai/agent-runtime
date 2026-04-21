@@ -9,7 +9,7 @@ description = "动态规划智能体 — 零 A2A 依赖的 Python 包"
 requires-python = ">=3.11"
 dependencies = [
     # OpenJiuwen 核心框架（含 Redis Checkpointer 扩展）
-    "openjiuwen[redis]>=0.1.9",
+    "openjiuwen>=0.1.11",
     # 数据验证
     "pydantic>=2.7.0",
     "pydantic-settings>=2.3.0",

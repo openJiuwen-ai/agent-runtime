@@ -24,6 +24,8 @@ class DPASettings(BaseSettings):
     llm_api_key: Optional[str] = None
     llm_model_name: Optional[str] = None
     llm_verify_ssl: Optional[bool] = None
+    llm_user_id: Optional[str] = None
+    llm_token: Optional[str] = None
 
     # ── Redis（Checkpointer）────────────────────────────────────────────────
     redis_host: Optional[str] = None
