@@ -41,23 +41,23 @@ def setup_logging() -> None:
 
     logger.add(
         sys.stderr,
-        level=settings.log_level.upper() if settings.log_level else "INFO",
+        level=settings.adapter_log_level.upper() if settings.adapter_log_level else "INFO",
         format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
                "<level>{level: <8}</level> | "
                "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> | "
                "<level>{message}</level>"
     )
 
-    if settings.log_file:
-        log_dir = os.path.dirname(settings.log_file)
+    if settings.adapter_log_file:
+        log_dir = os.path.dirname(settings.adapter_log_file)
         if log_dir:
             os.makedirs(log_dir, exist_ok=True)
-        log_file_path = settings.log_file
+        log_file_path = settings.adapter_log_file
         base, ext = os.path.splitext(log_file_path)
         log_file_with_pid = f"{base}_{os.getpid()}{ext}"
         logger.add(
             log_file_with_pid,
-            level=settings.log_level.upper() if settings.log_level else "INFO",
+            level=settings.adapter_log_level.upper() if settings.adapter_log_level else "INFO",
             rotation="100 MB",
             retention="7 days",
             compression="gz",

@@ -239,6 +239,18 @@ class Executor(AgentExecutor):
                     return data
         return None
 
+    def _is_suppressed_node(self, event: TaskArtifactUpdateEvent) -> bool:
+        """判断该 artifact 是否为配置中需要屏蔽的节点（不推送给用户）。"""
+        target = get_settings().va_workflow_result_node
+        if not target:
+            return False
+        for part in event.artifact.parts:
+            if part.WhichOneof("content") == "data":
+                data = MessageToDict(part.data)
+                if isinstance(data, dict) and data.get("node_name") == target:
+                    return True
+        return False
+
     def _extract_qa_node(self, event: TaskArtifactUpdateEvent) -> Optional[str]:
         target_node = get_settings().va_workflow_result_node
         if not target_node:
@@ -294,7 +306,6 @@ class Executor(AgentExecutor):
         )
 
         has_end_node = False
-        final_result: dict | None = None
         qa_result: Optional[str] = None
         stream_resp_count = 0
 
@@ -312,16 +323,15 @@ class Executor(AgentExecutor):
                     )
 
                 if isinstance(event, TaskArtifactUpdateEvent):
-                    await event_queue.enqueue_event(event)
+                    if not self._is_suppressed_node(event):
+                        await event_queue.enqueue_event(event)
 
                     qa = self._extract_qa_node(event)
                     if qa is not None:
                         qa_result = qa
 
-                    result = self._extract_end_node(event)
-                    if result is not None:
+                    if self._extract_end_node(event) is not None:
                         has_end_node = True
-                        final_result = result
 
         except Exception as e:
             logger.exception(f"[Executor] VA send_message 异常：{e}")
@@ -365,7 +375,6 @@ class Executor(AgentExecutor):
         )
 
         has_end_node = False
-        final_result: dict | None = None
         qa_result: Optional[str] = None
 
         try:
@@ -375,16 +384,15 @@ class Executor(AgentExecutor):
                     continue
 
                 if isinstance(event, TaskArtifactUpdateEvent):
-                    await event_queue.enqueue_event(event)
+                    if not self._is_suppressed_node(event):
+                        await event_queue.enqueue_event(event)
 
                     qa = self._extract_qa_node(event)
                     if qa is not None:
                         qa_result = qa
 
-                    result = self._extract_end_node(event)
-                    if result is not None:
+                    if self._extract_end_node(event) is not None:
                         has_end_node = True
-                        final_result = result
 
         except Exception as e:
             logger.exception(f"[Executor] VA continue send_message 异常：{e}")
