@@ -23,6 +23,25 @@ class VersatileProxy:
     def _build_url(self, conv_id: str) -> str:
         return self._url_template.format(conversation_id=conv_id)
 
+    def _generate_curl_command(self, request: httpx.Request, body: bytes) -> str:
+        """生成 curl 命令用于调试"""
+        cmd = f"curl -X {request.method} '{request.url}'"
+        for key, value in request.headers.items():
+            cmd += f" -H '{key}: {value}'"
+        if body:
+            try:
+                json_body = _json.loads(body.decode('utf-8'))
+                cmd += f" -d '{_json.dumps(json_body, ensure_ascii=False)}'"
+            except Exception:
+                cmd += f" -d '{body.decode('utf-8', errors='replace')}'"
+        return cmd
+
+    async def _log_request(self, request: httpx.Request) -> None:
+        """记录请求日志（生成 curl 命令）"""
+        body = await request.aread()
+        curl = self._generate_curl_command(request, body)
+        logger.info(f"\n{'='*20} Proxy Request (Stream) Start {'='*20}\n{curl}\n{'='*20} Proxy Request (Stream) End {'='*20}")
+
     async def dispatch_stream(
         self,
         body: dict,
@@ -41,8 +60,18 @@ class VersatileProxy:
         logger.debug(f"[VersatileProxy] 请求体：{body.get('custom_data', {})})")
 
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
+            async with httpx.AsyncClient(
+                verify=False,
+                limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
+                timeout=httpx.Timeout(self._timeout, read=None),
+            ) as client:
+                # 构建请求对象用于日志
+                request = client.build_request("POST", url, json=body.get("custom_data", {}), headers=headers)
+                await self._log_request(request)
+                
                 async with client.stream("POST", url, json=body.get("custom_data", {}), headers=headers) as response:
+                    logger.info(f"[VersatileProxy] --- Proxy Response (Stream): {response.status_code} ---")
+                    logger.debug(f"[VersatileProxy] Response Headers: {dict(response.headers)}")
                     response.raise_for_status()
                     async for line in response.aiter_lines():
                         line = line.strip()
