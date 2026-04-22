@@ -213,18 +213,17 @@ async def dispatch(
             },
         )
     else:
+        await run()
         collected = []
-        run_task = asyncio.create_task(run())
         while True:
             try:
-                event = await event_queue.dequeue_event()
+                event = await asyncio.wait_for(
+                    event_queue.dequeue_event(), timeout=0.01
+                )
                 event_queue.task_done()
                 collected.append(event)
-            except Exception as e:
-                if type(e).__name__ != "QueueShutDown":
-                    logger.warning(f"[Router] non-stream 队列异常：{e!r}")
+            except Exception:
                 break
-        await run_task
 
         answer = ""
         for event in collected:
