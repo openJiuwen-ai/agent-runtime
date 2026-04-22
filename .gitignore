@@ -38,6 +38,9 @@ Thumbs.db
 logs
 *.log
 
+# Python venv
+.venv311/
+
 # Runtime data
 pids
 *.pid
