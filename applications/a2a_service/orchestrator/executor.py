@@ -363,7 +363,11 @@ class Executor(AgentExecutor):
         event_queue: EventQueue,
     ) -> None:
         """VA 挂起后，下一轮用户输入续轮。va_task_id 为 VA 真实 task_id。"""
-        body = dict(original_body)
+
+        # 从 Redis 读取缓存的首轮请求（优先使用）
+        cached = await self._redis.get_json(session_request_key(conv_id)) or {}
+        first_body = cached.get("body", original_body)
+        body = dict(first_body)
         body["stream"] = True
 
         request = self._build_va_message(
@@ -413,7 +417,7 @@ class Executor(AgentExecutor):
                 task_id=task_id,
                 call_context=call_context,
                 query="",
-                original_body=original_body,
+                original_body=first_body,  # 使用首轮请求的 body
                 event_queue=event_queue,
                 cascade_result=cascade,
             )

@@ -5,8 +5,8 @@ description = "DPA × VersatileAdapter A2A 用户服务主入口"
 requires-python = ">=3.11"
 
 dependencies = [
-    # A2A SDK 1.0.0a1
-    "a2a-sdk==1.0.0a1",
+    # A2A SDK 1.0.0
+    "a2a-sdk==1.0.0",
 
     # HTTP 客户端（调用 VersatileAdapter A2A 接口）
     "httpx>=0.27",
@@ -23,9 +23,6 @@ dependencies = [
 
     # 日志
     "loguru>=0.7",
-
-    # DPA agent 包（本地依赖）
-    "dpa-agent @ ../../../dpa_agent",
 ]
 
 [project.optional-dependencies]

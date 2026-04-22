@@ -5,8 +5,8 @@ description = "Versatile 低代码平台 A2A 适配器"
 requires-python = ">=3.11"
 
 dependencies = [
-    # A2A SDK 1.0.0a1
-    "a2a-sdk[http-server]==1.0.0a1",
+    # A2A SDK 1.0.0
+    "a2a-sdk[http-server]==1.0.0",
 
     # HTTP 客户端（调用 Versatile 平台）
     "httpx>=0.27",

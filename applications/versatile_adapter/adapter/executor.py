@@ -45,6 +45,19 @@ class VersatileAdapterExecutor(AgentExecutor):  # noqa: F821
             f"[VersatileAdapter] execute：conv_id={conv_id}, task_id={task_id}"
         )
 
+        # 先发送 Task 事件（a2a-sdk 1.0.0 要求）
+        from a2a.types.a2a_pb2 import Task, TaskStatus, TaskState
+        user_message = context.message
+        if task_id and conv_id and user_message:
+            await event_queue.enqueue_event(
+                Task(
+                    id=task_id,
+                    context_id=conv_id,
+                    status=TaskStatus(state=TaskState.TASK_STATE_SUBMITTED),
+                    history=[user_message],
+                )
+            )
+
         updater = TaskUpdater(event_queue, task_id, conv_id)
 
         # ── 直接使用传过来的请求头和请求体 ────────────────────────────────
