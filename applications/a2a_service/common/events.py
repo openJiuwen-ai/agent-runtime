@@ -1,56 +1,303 @@
 """
-DPA Agent 事件协议（与 A2A 完全解耦）。
+EDPAgent 事件协议（与 A2A SDK 完全解耦）。
 
-DPA 通过 agent_stream() 生成器 yield 以下三种事件：
-  - ThoughtEvent:      LLM 思考过程（流式中间输出）
-  - AnswerEvent:       最终回答
-  - DelegateRequest:  需要外部 Agent 处理子任务时的委托请求
+本模块对齐《动态规划 Agent 综合需求文档》§4.5 的完整事件序列：
+  会话：conversation_start / conversation_end
+  思考：think_start / think_chunk / think_end
+  规划：todolist_start / todolist_item / todolist_end
+  任务：todo_start / todo_status / todo_end
+  工具：tool_start / tool_status / tool_end
+  中断：interrupt_start / interrupt_end
+  总结：final_answer_start / final_answer_chunk / final_answer_end
 
-整个模块只依赖 pydantic，无任何 A2A SDK 引用。
+另外保留：
+  ThoughtEvent / AnswerEvent  —— 原版兼容事件（agent_adapter 中仍有映射）
+  DelegateRequest             —— Executor 专用（VA 委托路径）
+
+所有事件只依赖 pydantic，不引用 a2a.* 模块。
 """
 from __future__ import annotations
 
-from typing import Literal, Union
+from typing import Any, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 
 
-class ThoughtEvent(BaseModel):
-    """LLM 思考过程（流式中间输出）。"""
+# ════════════════════════════════════════════════════════════════════
+# 会话事件
+# ════════════════════════════════════════════════════════════════════
 
+
+class ConversationStartEvent(BaseModel):
+    """对话开启。每次北向请求开始时发出一次。"""
+    type: Literal["conversation_start"] = "conversation_start"
+    content: str = ""
+
+
+class ConversationEndEvent(BaseModel):
+    """对话结束。整个处理流程结束时发出一次。"""
+    type: Literal["conversation_end"] = "conversation_end"
+    content: str = ""
+
+
+# ════════════════════════════════════════════════════════════════════
+# 思考事件（从 llm_reasoning 流中分段）
+# ════════════════════════════════════════════════════════════════════
+
+
+class ThinkStartEvent(BaseModel):
+    """LLM 思考开始（每轮 ReAct 的第一个 reasoning chunk）。"""
+    type: Literal["think_start"] = "think_start"
+    content: str = ""
+
+
+class ThinkChunkEvent(BaseModel):
+    """LLM 思考流式片段。"""
+    type: Literal["think_chunk"] = "think_chunk"
+    content: str
+
+
+class ThinkEndEvent(BaseModel):
+    """LLM 思考结束（reasoning 流结束或切换为 tool_call / answer）。"""
+    type: Literal["think_end"] = "think_end"
+    content: str = ""
+
+
+# ════════════════════════════════════════════════════════════════════
+# 规划事件（Todolist，由 LLM 在 thought 中按约定 JSON 输出）
+# ════════════════════════════════════════════════════════════════════
+
+
+class TodoListStartEvent(BaseModel):
+    """Todolist 生成开始。"""
+    type: Literal["todolist_start"] = "todolist_start"
+    content: str = ""
+
+
+class TodoListItemEvent(BaseModel):
+    """Todolist 中的单个任务条目。"""
+    type: Literal["todolist_item"] = "todolist_item"
+    id: int | str
+    title: str
+    status: Literal["pending", "in_progress", "done", "failed"] = "pending"
+    content: str = ""
+
+
+class TodoListEndEvent(BaseModel):
+    """Todolist 生成完成。"""
+    type: Literal["todolist_end"] = "todolist_end"
+    count: int = 0
+    content: str = ""
+
+
+# ════════════════════════════════════════════════════════════════════
+# 任务事件（单个 todo 状态变更，由 LLM 在 thought 中按约定 JSON 输出）
+# ════════════════════════════════════════════════════════════════════
+
+
+class TodoStartEvent(BaseModel):
+    """单个 Todo 开始执行。"""
+    type: Literal["todo_start"] = "todo_start"
+    id: int | str
+    title: str = ""
+    content: str = ""
+
+
+class TodoStatusEvent(BaseModel):
+    """单个 Todo 状态变更（执行中）。"""
+    type: Literal["todo_status"] = "todo_status"
+    id: int | str
+    status: Literal["pending", "in_progress", "done", "failed"]
+    content: str = ""
+
+
+class TodoEndEvent(BaseModel):
+    """单个 Todo 执行结束。"""
+    type: Literal["todo_end"] = "todo_end"
+    id: int | str
+    status: Literal["done", "failed"] = "done"
+    content: str = ""
+
+
+# ════════════════════════════════════════════════════════════════════
+# 工具事件（从 Runner 的 tool_start / tool_end 映射）
+# ════════════════════════════════════════════════════════════════════
+
+
+class ToolStartEvent(BaseModel):
+    """工具调用开始。"""
+    type: Literal["tool_start"] = "tool_start"
+    content: str = ""
+    plugin: str = Field(default="", description="工具名")
+    args: dict[str, Any] = Field(default_factory=dict, description="工具入参")
+
+
+class ToolStatusEvent(BaseModel):
+    """工具调用进行中（可选，用于长时任务的进度）。"""
+    type: Literal["tool_status"] = "tool_status"
+    plugin: str = ""
+    content: str = ""
+    progress: Optional[float] = None  # 0.0 - 1.0
+
+
+class ToolEndEvent(BaseModel):
+    """工具调用结束。"""
+    type: Literal["tool_end"] = "tool_end"
+    content: str = ""
+    plugin: str = Field(default="", description="工具名")
+    data: dict[str, Any] = Field(default_factory=dict, description="工具返回数据")
+
+
+# ════════════════════════════════════════════════════════════════════
+# 中断事件（AskUserRail / HITL）
+# ════════════════════════════════════════════════════════════════════
+
+
+class InterruptStartEvent(BaseModel):
+    """等待用户输入。"""
+    type: Literal["interrupt_start"] = "interrupt_start"
+    interrupt_id: str
+    content: str = Field(default="", description="提示话术")
+    context: dict[str, Any] = Field(default_factory=dict)
+
+
+class InterruptEndEvent(BaseModel):
+    """中断已恢复（用户输入被接受）。"""
+    type: Literal["interrupt_end"] = "interrupt_end"
+    interrupt_id: str = ""
+    content: str = Field(default="", description="回显确认信息")
+
+
+# ════════════════════════════════════════════════════════════════════
+# 总结事件（从 llm_output / answer 流分段）
+# ════════════════════════════════════════════════════════════════════
+
+
+class FinalAnswerStartEvent(BaseModel):
+    """最终回答开始。"""
+    type: Literal["final_answer_start"] = "final_answer_start"
+    content: str = ""
+
+
+class FinalAnswerChunkEvent(BaseModel):
+    """最终回答流式片段。"""
+    type: Literal["final_answer_chunk"] = "final_answer_chunk"
+    content: str
+
+
+class FinalAnswerEndEvent(BaseModel):
+    """最终回答结束。"""
+    type: Literal["final_answer_end"] = "final_answer_end"
+    content: str = ""
+
+
+# ════════════════════════════════════════════════════════════════════
+# Executor 专用（非北向事件，不出流）
+# ════════════════════════════════════════════════════════════════════
+
+
+class DelegateRequest(BaseModel):
+    """
+    Agent 需要外部 Agent 处理子任务时 yield 的委托对象。
+
+    协议约定：Orchestrator 收到此对象后：
+      1. 调用 target_agent 完成子任务
+      2. 获得 workflow_result（dict）
+      3. 以 cascade_result=workflow_result 再次调用 agent_stream()
+    """
+    type: Literal["delegate"] = "delegate"
+    intent: str = Field(description="意图标识")
+    target_agent: str | None = None
+    task_description: str = Field(description="自然语言任务描述")
+
+
+# ════════════════════════════════════════════════════════════════════
+# 兼容事件（保留旧版 API，逐步废弃）
+# ════════════════════════════════════════════════════════════════════
+
+
+class ThoughtEvent(BaseModel):
+    """[兼容] 旧版合并的 thought 事件，建议改用 Think* 系列。"""
     type: Literal["thought"] = "thought"
     content: str
 
 
 class AnswerEvent(BaseModel):
-    """最终回答。final=True 时 agent_stream 即将结束。"""
-
+    """[兼容] 旧版合并的 answer 事件，建议改用 FinalAnswer* 系列。"""
     type: Literal["answer"] = "answer"
     content: str
     final: bool = False
 
 
-class DelegateRequest(BaseModel):
-    """
-    DPA 需要外部 Agent 处理子任务时 yield 的委托对象。
-
-    协议约定：
-      调用方（Orchestrator）收到此对象后，必须：
-        1. 调用 target_agent 完成子任务（如果有）
-        2. 获得 workflow_result（dict）
-        3. 以 cascade_result=workflow_result 再次调用 agent_stream()
-      DPA 的 Runner Checkpoint 已保存，续轮时从中断点恢复。
-
-    强格式保证：
-      - Pydantic 模型，字段类型明确
-      - target_agent 限制为注册在 agent_runtime 中的 Agent ID（可选）
-    """
-
-    type: Literal["delegate"] = "delegate"
-    intent: str = Field(description="意图标识，例如 '查余额'、'转账'")
-    target_agent: str | None = Field(None, description="目标 Agent 标识符，例如 'workflow_adapter'")
-    task_description: str = Field(description="自然语言任务描述")
+# ════════════════════════════════════════════════════════════════════
+# 统一 Union 类型
+# ════════════════════════════════════════════════════════════════════
 
 
-# DPA agent_stream 的完整输出类型签名
-AgentEvent = Union[ThoughtEvent, AnswerEvent, DelegateRequest]
+AgentEvent = Union[
+    # 会话
+    ConversationStartEvent,
+    ConversationEndEvent,
+    # 思考
+    ThinkStartEvent,
+    ThinkChunkEvent,
+    ThinkEndEvent,
+    # 规划
+    TodoListStartEvent,
+    TodoListItemEvent,
+    TodoListEndEvent,
+    # 任务
+    TodoStartEvent,
+    TodoStatusEvent,
+    TodoEndEvent,
+    # 工具
+    ToolStartEvent,
+    ToolStatusEvent,
+    ToolEndEvent,
+    # 中断
+    InterruptStartEvent,
+    InterruptEndEvent,
+    # 总结
+    FinalAnswerStartEvent,
+    FinalAnswerChunkEvent,
+    FinalAnswerEndEvent,
+    # Executor
+    DelegateRequest,
+    # 兼容
+    ThoughtEvent,
+    AnswerEvent,
+]
+
+
+# 事件 type → 事件类（给 agent_adapter / user_router 用）
+EVENT_TYPE_MAP = {
+    # 会话
+    "conversation_start": ConversationStartEvent,
+    "conversation_end": ConversationEndEvent,
+    # 思考
+    "think_start": ThinkStartEvent,
+    "think_chunk": ThinkChunkEvent,
+    "think_end": ThinkEndEvent,
+    # 规划
+    "todolist_start": TodoListStartEvent,
+    "todolist_item": TodoListItemEvent,
+    "todolist_end": TodoListEndEvent,
+    # 任务
+    "todo_start": TodoStartEvent,
+    "todo_status": TodoStatusEvent,
+    "todo_end": TodoEndEvent,
+    # 工具
+    "tool_start": ToolStartEvent,
+    "tool_status": ToolStatusEvent,
+    "tool_end": ToolEndEvent,
+    # 中断
+    "interrupt_start": InterruptStartEvent,
+    "interrupt_end": InterruptEndEvent,
+    # 总结
+    "final_answer_start": FinalAnswerStartEvent,
+    "final_answer_chunk": FinalAnswerChunkEvent,
+    "final_answer_end": FinalAnswerEndEvent,
+    # 兼容
+    "thought": ThoughtEvent,
+    "answer": AnswerEvent,
+}

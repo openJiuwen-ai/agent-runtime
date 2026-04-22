@@ -115,3 +115,12 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+
+@app.get("/health", tags=["Health"])
+async def health_check():
+    """服务健康检查"""
+    return {
+        "status": "healthy",
+        "service": "VersatileAdapter",
+    }

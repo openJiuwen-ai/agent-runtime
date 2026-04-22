@@ -370,7 +370,39 @@ async def dispatch(
     conversation_id: str,
     request: Request,
 ) -> StreamingResponse | JSONResponse:
-    body = await request.json()
+    # 显式校验 Content-Type + JSON 解析（对应需求 §5.10）
+    content_type = request.headers.get("content-type", "").lower()
+    if "application/json" not in content_type:
+        return JSONResponse(
+            status_code=415,
+            content={
+                "success": False,
+                "error": "unsupported_media_type",
+                "message": "请求数据格式需为 application/json",
+            },
+        )
+    try:
+        body = await request.json()
+    except Exception as e:
+        logger.warning(f"[Router] JSON 解析失败：{e}")
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "error": "invalid_json",
+                "message": f"请求 body 非合法 JSON 格式：{e}",
+            },
+        )
+    if not isinstance(body, dict):
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "error": "invalid_body",
+                "message": "请求 body 必须是 JSON 对象（dict）",
+            },
+        )
+
     user_query = _extract_query(body)
     stream_mode = body.get("stream", True)
     traceid = str(uuid.uuid4())
@@ -542,17 +574,18 @@ async def dispatch(
             },
         )
     else:
-        await run()
         collected = []
+        run_task = asyncio.create_task(run())
         while True:
             try:
-                event = await asyncio.wait_for(
-                    event_queue.dequeue_event(), timeout=0.01
-                )
+                event = await event_queue.dequeue_event()
                 event_queue.task_done()
                 collected.append(event)
-            except Exception:
+            except Exception as e:
+                if type(e).__name__ != "QueueShutDown":
+                    logger.warning(f"[Router] non-stream 队列异常：{e!r}")
                 break
+        await run_task
 
         answer = ""
         for event in collected:

@@ -8,17 +8,33 @@ version = "0.1.0"
 description = "动态规划智能体 — 零 A2A 依赖的 Python 包"
 requires-python = ">=3.11"
 dependencies = [
-    # OpenJiuwen 核心框架（含 Redis Checkpointer 扩展）
-    "openjiuwen>=0.1.11",
+    # OpenJiuwen 核心框架（锁定 0.1.11，含 configure_custom_headers 等新 API）
+    "openjiuwen==0.1.11",
     # 数据验证
     "pydantic>=2.7.0",
     "pydantic-settings>=2.3.0",
+    # AgentRule.md YAML frontmatter 解析
+    "pyyaml>=6.0",
+    # SQLite checkpointer
+    "aiosqlite>=0.19.0",
     # 日志
     "loguru>=0.7.0",
-    # 注意：无 a2a-sdk，无 httpx，无 fastapi
+    # 加载 .env
+    "python-dotenv>=1.0",
+    # 注意：无 a2a-sdk，无 httpx，无 fastapi（这些由 runtime 提供）
 ]
 
 [project.optional-dependencies]
+runtime = [
+    # runtime 框架依赖：a2a_service / versatile_adapter 运行所需
+    "a2a-sdk==1.0.0a1",
+    "sse-starlette>=3.3.0",
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.30.0",
+    "httpx>=0.27.0",
+    "redis>=5.0.0",
+    "protobuf>=4.25.0",
+]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
