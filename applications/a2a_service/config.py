@@ -8,6 +8,7 @@ from urllib.parse import quote_plus
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=Path(__file__).parent / ".env",
@@ -24,6 +25,19 @@ class Settings(BaseSettings):
     redis_db: Optional[int] = None
     redis_password: Optional[str] = None
     redis_session_ttl: Optional[int] = None
+
+    # ── 启动编排（Redis 锁 + 状态协同）────────────────────────────────────
+    bootstrap_coordination_enabled: bool = True
+    bootstrap_lock_name: str = "a2a_global_bootstrap"
+    bootstrap_lock_ttl_sec: int = 180
+    bootstrap_wait_timeout_sec: int = 300
+    bootstrap_poll_interval_sec: float = 1.0
+
+    # ── 入口限流（与 Orchestrator 限流能力对齐）─────────────────────────────
+    rate_limit_max_requests: int = 1
+    rate_limit_window_seconds: int = 10
+    global_rate_limit_max_requests: int = 10
+    global_rate_limit_window_seconds: int = 10
 
     # ── VersatileAdapter（内部 A2A 服务地址）────────────────────────────────
     versatile_adapter_url: Optional[str] = None
