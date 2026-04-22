@@ -3,20 +3,18 @@ Executor — 核心编排逻辑（a2a-sdk 1.0.0-alpha.1，全量 v1.0 protobuf�
 
 职责：
   1. 实现 AgentExecutor 接口，由 user_router 或 DefaultRequestHandler 调用
-  2. 首轮：调用 agent_stream_func()，处理 DelegateRequest / AnswerEvent
+  2. 首轮：调用 agent_stream()，处理 DelegateRequest / AnswerEvent
   3. DelegateRequest：调用 VersatileAdapter（A2A Client），根据返回决定续轮或挂起
   4. 续轮：从 context.current_task 读取 Task 状态，通过 Task.metadata 传递 va_task_id
 
 Task 状态流转（存于 RedisTaskStore）：
   WORKING → [DelegateRequest + VA 无 end node] → INPUT_REQUIRED（metadata.va_task_id 已写入）
   INPUT_REQUIRED → [下一轮用户输入 + VA 有 end node] → WORKING → cascade → COMPLETED
-  
-Modified for dependency inversion: agent_stream_func is injected as parameter.
 """
 from __future__ import annotations
 
 import uuid
-from typing import AsyncGenerator, Callable, Optional
+from typing import Optional
 
 from a2a.client import Client
 from a2a.server.agent_execution import AgentExecutor, RequestContext
@@ -39,8 +37,9 @@ from google.protobuf.json_format import MessageToDict
 from google.protobuf.struct_pb2 import Struct, Value
 from loguru import logger
 
+from agents.EDPAgent import agent_stream
 from common.constants import session_request_key
-from common.events import AgentEvent, DelegateRequest
+from common.events import DelegateRequest
 from common.redis_client import RedisClient
 from config import get_settings
 from orchestrator.agent_adapter import agent_event_to_a2a
@@ -51,16 +50,11 @@ _TTL = 1800
 
 class Executor(AgentExecutor):
     def __init__(
-        self,
-        va_client: Client,
-        redis: RedisClient,
-        task_store: RedisTaskStore,
-        agent_stream_func: Callable[..., AsyncGenerator[AgentEvent, None]] | None = None,
+        self, va_client: Client, redis: RedisClient, task_store: RedisTaskStore
     ) -> None:
         self._va_client = va_client
         self._redis = redis
         self._task_store = task_store
-        self._agent_stream_func = agent_stream_func
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         conv_id = context.context_id or ""
@@ -137,10 +131,7 @@ class Executor(AgentExecutor):
         event_queue: EventQueue,
         cascade_result: Optional[dict],
     ) -> None:
-        if self._agent_stream_func is None:
-            raise RuntimeError("agent_stream_func not injected - use create_app() or pass to Executor")
-        
-        async for event in self._agent_stream_func(
+        async for event in agent_stream(
             query=query,
             conv_id=conv_id,
             cascade_result=cascade_result,
@@ -248,6 +239,18 @@ class Executor(AgentExecutor):
                     return data
         return None
 
+    def _is_suppressed_node(self, event: TaskArtifactUpdateEvent) -> bool:
+        """判断该 artifact 是否为配置中需要屏蔽的节点（不推送给用户）。"""
+        target = get_settings().va_workflow_result_node
+        if not target:
+            return False
+        for part in event.artifact.parts:
+            if part.WhichOneof("content") == "data":
+                data = MessageToDict(part.data)
+                if isinstance(data, dict) and data.get("node_name") == target:
+                    return True
+        return False
+
     def _extract_qa_node(self, event: TaskArtifactUpdateEvent) -> Optional[str]:
         target_node = get_settings().va_workflow_result_node
         if not target_node:
@@ -303,7 +306,6 @@ class Executor(AgentExecutor):
         )
 
         has_end_node = False
-        final_result: dict | None = None
         qa_result: Optional[str] = None
         stream_resp_count = 0
 
@@ -321,16 +323,15 @@ class Executor(AgentExecutor):
                     )
 
                 if isinstance(event, TaskArtifactUpdateEvent):
-                    await event_queue.enqueue_event(event)
+                    if not self._is_suppressed_node(event):
+                        await event_queue.enqueue_event(event)
 
                     qa = self._extract_qa_node(event)
                     if qa is not None:
                         qa_result = qa
 
-                    result = self._extract_end_node(event)
-                    if result is not None:
+                    if self._extract_end_node(event) is not None:
                         has_end_node = True
-                        final_result = result
 
         except Exception as e:
             logger.exception(f"[Executor] VA send_message 异常：{e}")
@@ -374,7 +375,6 @@ class Executor(AgentExecutor):
         )
 
         has_end_node = False
-        final_result: dict | None = None
         qa_result: Optional[str] = None
 
         try:
@@ -384,16 +384,15 @@ class Executor(AgentExecutor):
                     continue
 
                 if isinstance(event, TaskArtifactUpdateEvent):
-                    await event_queue.enqueue_event(event)
+                    if not self._is_suppressed_node(event):
+                        await event_queue.enqueue_event(event)
 
                     qa = self._extract_qa_node(event)
                     if qa is not None:
                         qa_result = qa
 
-                    result = self._extract_end_node(event)
-                    if result is not None:
+                    if self._extract_end_node(event) is not None:
                         has_end_node = True
-                        final_result = result
 
         except Exception as e:
             logger.exception(f"[Executor] VA continue send_message 异常：{e}")

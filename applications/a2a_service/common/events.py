@@ -1,18 +1,16 @@
 """
 DPA Agent 事件协议（与 A2A 完全解耦）。
 
-DPA 通过 agent_stream() 生成器 yield 以下事件：
+DPA 通过 agent_stream() 生成器 yield 以下三种事件：
   - ThoughtEvent:      LLM 思考过程（流式中间输出）
   - AnswerEvent:       最终回答
-  - ToolStartEvent:    工具调用开始
-  - ToolEndEvent:      工具调用结束（包含结构化返回数据）
   - DelegateRequest:  需要外部 Agent 处理子任务时的委托请求
 
 整个模块只依赖 pydantic，无任何 A2A SDK 引用。
 """
 from __future__ import annotations
 
-from typing import Any, Literal, Union
+from typing import Literal, Union
 
 from pydantic import BaseModel, Field
 
@@ -30,24 +28,6 @@ class AnswerEvent(BaseModel):
     type: Literal["answer"] = "answer"
     content: str
     final: bool = False
-
-
-class ToolStartEvent(BaseModel):
-    """工具调用开始事件。"""
-
-    type: Literal["tool_start"] = "tool_start"
-    content: str
-    plugin: str = Field(description="工具名称")
-    args: dict[str, Any] = Field(default_factory=dict, description="工具参数")
-
-
-class ToolEndEvent(BaseModel):
-    """工具调用结束事件，包含结构化返回数据。"""
-
-    type: Literal["tool_end"] = "tool_end"
-    content: str
-    plugin: str = Field(description="工具名称")
-    data: dict[str, Any] = Field(default_factory=dict, description="工具返回数据")
 
 
 class DelegateRequest(BaseModel):
@@ -72,4 +52,5 @@ class DelegateRequest(BaseModel):
     task_description: str = Field(description="自然语言任务描述")
 
 
-AgentEvent = Union[ThoughtEvent, AnswerEvent, ToolStartEvent, ToolEndEvent, DelegateRequest]
+# DPA agent_stream 的完整输出类型签名
+AgentEvent = Union[ThoughtEvent, AnswerEvent, DelegateRequest]

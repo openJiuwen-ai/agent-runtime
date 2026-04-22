@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional
@@ -9,27 +8,9 @@ from urllib.parse import quote_plus
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-def _get_env_file_path() -> Path:
-    """
-    Get .env file path with CONFIG_PATH support.
-    
-    Priority:
-    1. CONFIG_PATH environment variable (for externalized config)
-    2. Default: .env in the same directory as this file
-    
-    This enables:
-    - Docker/K8s deployment with external config files
-    - Multi-environment support (dev/test/prod)
-    """
-    config_path = os.environ.get("CONFIG_PATH")
-    if config_path:
-        return Path(config_path)
-    return Path(__file__).parent / ".env"
-
-
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=_get_env_file_path(),
+        env_file=Path(__file__).parent / ".env",
         env_file_encoding="utf-8",
         extra="ignore",
     )
