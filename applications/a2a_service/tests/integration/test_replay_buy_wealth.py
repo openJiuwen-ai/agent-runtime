@@ -190,7 +190,8 @@ async def test_replay_simple_buy_wealth_end_to_end(simple_buy_wealth_stream):
     tool_status_idx = event_sequence.index("tool_status")
     assert tool_status_idx == tool_start_idx + 1
 
-    # summary 流式 × 多条 + final_answer_chunk × 1
+    # summary 是 spec 外但实现透传的事件（与 AgentEngine 对齐，见 D-1），
+    # 4 条流式 summary + 1 条 final_answer_chunk 全量
     summary_count = event_sequence.count("summary")
     chunk_count = event_sequence.count("final_answer_chunk")
     assert summary_count == 4  # 4 个流式片段
@@ -217,8 +218,8 @@ async def test_all_frames_are_pattern_a(simple_buy_wealth_stream):
 
 
 @pytest.mark.asyncio
-async def test_think_chunk_has_empty_execution_time(simple_buy_wealth_stream):
-    """决策 3 抓包对齐：只有 think_chunk 帧 execution_time = ""。"""
+async def test_all_frames_have_numeric_execution_time(simple_buy_wealth_stream):
+    """对齐 spec §2.3.3：所有 agent event 的 execution_time 都是数字（含 think_chunk）。"""
     executor = _make_executor()
     queue = EventQueue()
     await executor._run_agent(
@@ -230,12 +231,9 @@ async def test_think_chunk_has_empty_execution_time(simple_buy_wealth_stream):
     for f in frames:
         event_type = f["custom_rsp_data"]["event"]
         exec_time = f["execution_time"]
-        if event_type == "think_chunk":
-            assert exec_time == "", f"think_chunk 应 ''，实际 {exec_time!r}"
-        else:
-            assert isinstance(exec_time, (int, float)), (
-                f"{event_type} 的 execution_time 应是数字，实际 {exec_time!r}"
-            )
+        assert isinstance(exec_time, (int, float)), (
+            f"{event_type} 的 execution_time 应是数字，实际 {exec_time!r}"
+        )
 
 
 @pytest.mark.asyncio
@@ -283,10 +281,15 @@ async def test_latency_and_plugin_always_empty_string(simple_buy_wealth_stream):
         query="x", original_body={}, event_queue=queue, cascade_result=None,
     )
     frames = _collect_serialized_frames(queue)
+    tool_events = {"tool_start", "tool_status", "tool_end"}
     for f in frames:
         inner = f["custom_rsp_data"]
         assert inner["latency"] == ""
-        assert inner["plugin"] == ""
+        # plugin 只有 tool_* 事件才带工具名，其余事件空串
+        if inner["event"] in tool_events:
+            assert inner["plugin"], f"tool event 应该带 plugin，实际为空: {inner}"
+        else:
+            assert inner["plugin"] == ""
 
 
 @pytest.mark.asyncio
@@ -357,7 +360,9 @@ async def test_multi_tool_step_counter_monotonic(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_summary_stream_equals_final_answer_chunk(monkeypatch):
-    """流式 summary 片段拼接后应与 final_answer_chunk 一致。"""
+    """流式 summary 片段拼接后应与 final_answer_chunk 一致
+    （summary 不屏蔽，与 AgentEngine 对齐，见 D-1）。
+    """
     pieces = ["已", "为您完成", "如下事项"]
     full_text = "".join(pieces)
 
@@ -389,7 +394,6 @@ async def test_summary_stream_equals_final_answer_chunk(monkeypatch):
 
     assert len(summary_frames) == 3
     assert len(chunk_frames) == 1
-
     # 流式拼接 = 全量
     concatenated = "".join(f["custom_rsp_data"]["content"] for f in summary_frames)
     assert concatenated == chunk_frames[0]["custom_rsp_data"]["content"] == full_text
@@ -402,7 +406,7 @@ async def test_summary_stream_equals_final_answer_chunk(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_execution_time_monotonic_across_frames(simple_buy_wealth_stream):
-    """忽略 think_chunk（空串）外，其余帧的 execution_time 应单调递增。"""
+    """所有 agent event 的 execution_time 应单调递增（都已是数字）。"""
     import time
 
     executor = _make_executor()
@@ -474,4 +478,4 @@ async def test_out_of_scope_scenario_emits_minimal_frames(monkeypatch):
     assert "conversation_start" in event_seq
     assert "think_start" in event_seq
     assert "final_answer_end" in event_seq
-    assert "conversation_end" in event_seq
+    assert "conversation_end" in event_seq  # spec 外事件，透传（与 AgentEngine 对齐）

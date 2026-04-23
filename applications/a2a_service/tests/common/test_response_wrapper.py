@@ -175,12 +175,12 @@ def test_agent_event_created_time_can_be_overridden():
 
 
 # ════════════════════════════════════════════════════════════════════
-# Pattern A：think_chunk 的 execution_time 为空串（决策 3）
+# agent event：所有事件 execution_time 均为数字（对齐北向 spec §2.3.3）
 # ════════════════════════════════════════════════════════════════════
 
 
-def test_think_chunk_execution_time_is_empty_string():
-    """抓包 quirk：think_chunk 帧的 execution_time 是 ""，不是数字。"""
+def test_think_chunk_execution_time_is_number():
+    """对齐 spec：think_chunk 的 execution_time 也是数字，不是空串。"""
     wrapped = wrap_agent_event(
         event_type="think_chunk",
         content="我来",
@@ -189,7 +189,7 @@ def test_think_chunk_execution_time_is_empty_string():
         conversation_id=CONV_ID,
         elapsed=1.234,
     )
-    assert wrapped["execution_time"] == ""
+    assert wrapped["execution_time"] == 1.234
 
 
 def test_non_think_chunk_execution_time_is_number():
@@ -469,17 +469,17 @@ def test_matches_capture_conversation_start():
 
 
 def test_matches_capture_think_chunk():
-    """抓包 think_chunk 帧：execution_time 为空串，无 error_code。"""
+    """think_chunk 帧按 spec §2.3.3 execution_time 为数字；无 error_code。"""
     wrapped = wrap_agent_event(
         event_type="think_chunk",
         content="我来",
         data=None,
         agent_id=AGENT_ID,
         conversation_id=CONV_ID,
-        elapsed=4.5,  # 真实耗时，但该帧应设为空串
+        elapsed=4.5,
         created_time_ms=1776678843148,
     )
-    assert wrapped["execution_time"] == ""
+    assert wrapped["execution_time"] == 4.5
     assert "error_code" not in wrapped
 
 

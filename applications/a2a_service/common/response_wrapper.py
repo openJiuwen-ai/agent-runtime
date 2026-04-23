@@ -1,22 +1,24 @@
 """
-北向响应包装器（Phase 1 of path B）。
+北向响应包装器。
 
 把内部 A2A / EDPAgent 事件包装成前端可见的 JSON 格式，对齐
 docs/feat-north-api-sse.md §4.4.3 与 docs/north-api-response-format.md §3.
 
 两种包装：
-  - Pattern A：Agent 内部事件（think/todolist/tool/interrupt/summary 等）
-  - Pattern B：Versatile 工作流节点转发事件（event=message/end）
+  - agent event：EDPAgent 内部事件（think/todolist/tool/interrupt/summary 等）
+  - workflow event：Versatile 工作流节点转发事件（event=message/end）
 
 还包含错误/限流场景的简化响应（wrap_error）。
 
-字段语义请直接对齐规范文档。实现上遵守如下抓包 quirk：
+字段语义请直接对齐规范文档：
 
-  1. `execution_time` 只在 event_type == "think_chunk" 时为 ""，其他为数字。
+  1. `execution_time` 对所有 agent event 均为数字（秒），对齐 spec §2.3.3；
+     workflow event 同样为数字。
   2. `error_code` 只在 event_type == "planning_execution_process" 时带上空串；
-     其他 Pattern A 事件不带此字段；Pattern B 也不带。
-  3. `output` / `error` 仅 Pattern A 有，固定空串；Pattern B 不带。
-  4. `latency` / `plugin` 字段均保留为空串，为历史预留字段。
+     其他 agent event 不带此字段；workflow event 也不带。
+  3. `output` / `error` 仅 agent event 有，固定空串；workflow event 不带。
+  4. `latency` 字段保留为空串，为历史预留字段；
+     `plugin` 字段在 tool_* agent event 上承载工具名，其他事件为空串。
 
 本模块不依赖 a2a SDK，只用标准库。
 """
@@ -35,15 +37,12 @@ _EVENTS_WITH_ERROR_CODE: frozenset[str] = frozenset({
     "planning_execution_process",
 })
 
-# 这类事件的 `execution_time` 字段会设为空字符串 ""。
-# 对齐抓包观察：think_chunk 为高频流式 token 帧，服务端未为它计算实时 elapsed。
-_EVENTS_WITH_EMPTY_EXECUTION_TIME: frozenset[str] = frozenset({
-    "think_chunk",
-})
+# （历史上 think_chunk 曾被设为 ""，与抓包对齐；现统一以 spec §2.3.3 为准，数字）
+_EVENTS_WITH_EMPTY_EXECUTION_TIME: frozenset[str] = frozenset()
 
 
 # ════════════════════════════════════════════════════════════════════
-# Pattern A：Agent 事件包装
+# agent event 包装
 # ════════════════════════════════════════════════════════════════════
 
 
@@ -56,6 +55,7 @@ def wrap_agent_event(
     conversation_id: str,
     elapsed: float,
     created_time_ms: int | None = None,
+    plugin: str = "",
 ) -> dict[str, Any]:
     """包装 EDPAgent 内部事件（think / todolist / tool / interrupt / summary 等）。
 
@@ -70,9 +70,10 @@ def wrap_agent_event(
         conversation_id: 当前请求的 conversation_id。
         elapsed: 本次 turn 累计耗时秒数（通常 `time.monotonic() - start`）。
         created_time_ms: 事件产生的 epoch 毫秒；默认取当前时间。
+        plugin: 工具名（tool_* 事件专用），填入 custom_rsp_data.plugin；默认空串。
 
     Returns:
-        可直接 json.dumps 的 dict，格式对齐规范文档 §4.4.3（Pattern A）。
+        可直接 json.dumps 的 dict，格式对齐规范文档 §4.4.3（agent event）。
     """
     exec_time: float | str = (
         "" if event_type in _EVENTS_WITH_EMPTY_EXECUTION_TIME else elapsed
@@ -94,7 +95,7 @@ def wrap_agent_event(
                 else int(time.time() * 1000)
             ),
             "latency": "",
-            "plugin": "",
+            "plugin": plugin,
         },
     }
     if event_type in _EVENTS_WITH_ERROR_CODE:
@@ -103,7 +104,7 @@ def wrap_agent_event(
 
 
 # ════════════════════════════════════════════════════════════════════
-# Pattern B：Versatile 工作流事件包装
+# workflow event 包装
 # ════════════════════════════════════════════════════════════════════
 
 
@@ -117,7 +118,7 @@ def wrap_workflow_event(
 ) -> dict[str, Any]:
     """包装从 Versatile 转发的工作流节点事件。
 
-    Pattern B 比 Pattern A 字段更少：**无 output / error / error_code 字段**，
+    workflow event 比 agent event 字段更少：**无 output / error / error_code 字段**，
     custom_rsp_data 只含 event 和 data 两个键。
 
     Args:
@@ -125,11 +126,11 @@ def wrap_workflow_event(
         data: Versatile 节点数据（含 text / node_id / node_type / node_name /
             workflow_id / summary? / is_finished? 等字段）。event_kind=="end"
             时通常为空 dict。
-        agent_id / conversation_id: 同 Pattern A。
+        agent_id / conversation_id: 同 agent event。
         elapsed: 累计秒数。
 
     Returns:
-        可 json.dumps 的 dict，格式对齐规范文档 §3.3（Pattern B）。
+        可 json.dumps 的 dict，格式对齐规范文档 §3.3（workflow event）。
     """
     if event_kind not in ("message", "end"):
         # 防御：只接受观察到的两个值；其他值也允许透传，避免阻塞将来协议扩展

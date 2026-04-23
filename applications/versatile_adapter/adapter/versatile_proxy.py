@@ -15,18 +15,38 @@ _FORWARD_HEADER_WHITELIST = {
 }
 
 
-def wrap_versatile_response(
-    outer: dict,
-    conv_id: str,
-    agent_id: Optional[str] = None
-) -> dict:
-    """包装 Versatile 返回数据（包装整个 outer）"""
-    return {
-        "success": True,
-        "agent_id": agent_id or "",
-        "conversation_id": conv_id,
-        "custom_rsp_data": outer
-    }
+def _unwrap_upstream_frame(outer: dict) -> dict:
+    """从上游 Versatile NDJSON 行提取工作流事件载荷。
+
+    兼容两种上游形状：
+      1. 带 envelope：``{..., "custom_rsp_data": {"event": "<kind>", "data": {...}}}``
+         （真实 Versatile 网关常见）
+      2. 已解包直发：``{"event": "<kind>", "data": {...}}``
+         （简化网关 / 内部 mock）
+
+    返回：``{"event": "<kind>", "data": {...}}``，供下游 wrap_workflow_event 使用。
+
+    上游异常帧回退为 ``{"event": "message", "data": <raw or {}>}``，
+    把原始载荷交给下游兜底（不会二次套壳）。
+    """
+    if not isinstance(outer, dict):
+        return {"event": "message", "data": {}}
+
+    # 形态 1：带 custom_rsp_data envelope
+    inner = outer.get("custom_rsp_data")
+    if isinstance(inner, dict) and "event" in inner:
+        return {"event": inner["event"], "data": inner.get("data") or {}}
+
+    # 形态 2：上游已直发 {event, data}
+    if "event" in outer:
+        data = outer.get("data")
+        return {
+            "event": outer["event"],
+            "data": data if isinstance(data, dict) else {},
+        }
+
+    # 无法识别：整体当 message 帧的 data 兜底
+    return {"event": "message", "data": outer}
 
 
 class VersatileProxy:
@@ -104,18 +124,8 @@ class VersatileProxy:
                         except Exception:
                             logger.warning(f"[VersatileProxy] 无法解析行：{line!r:.80}")
                             continue
-                      
-                        # 从 body 中提取 agent_id
-                        agent_id = body.get("agent_id", "")
-                        
-                        # 包装整个 outer
-                        wrapped_chunk = wrap_versatile_response(
-                            outer=outer,
-                            conv_id=conv_id,
-                            agent_id=agent_id
-                        )
-                        
-                        yield wrapped_chunk
+
+                        yield _unwrap_upstream_frame(outer)
 
         except httpx.HTTPStatusError as e:
             logger.error(f"[VersatileProxy] HTTP 错误：{e.response.status_code} {url}")

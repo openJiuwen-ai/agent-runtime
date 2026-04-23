@@ -34,11 +34,18 @@ from common.events import (
     ToolEndEvent,
     ToolStatusEvent,
 )
+from config import get_settings
 from orchestrator.executor import Executor
 
 
 CONV_ID = "conv-delegate-1"
 TASK_ID = "task-delegate-1"
+DEFAULT_FILTERED_NODE = "GXZQAResponseNode"
+
+
+def _enable_filtered_node(monkeypatch, node_name: str = DEFAULT_FILTERED_NODE) -> None:
+    """Set va_workflow_result_node on the cached Settings for this test only."""
+    monkeypatch.setattr(get_settings(), "va_workflow_result_node", node_name)
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -57,11 +64,15 @@ def _data_part(data: dict) -> Part:
 
 
 def _va_artifact_event(node_data: dict) -> TaskArtifactUpdateEvent:
-    """构造 VA 返回的 TaskArtifactUpdateEvent（Pattern B 节点帧）。"""
+    """构造 VA 返回的 TaskArtifactUpdateEvent（解包后的 workflow message 帧）。
+
+    data part 形状：``{"event": "message", "data": <node_data>}``
+    """
+    wrapped = {"event": "message", "data": node_data}
     return TaskArtifactUpdateEvent(
         task_id="va-task-1",
         context_id=CONV_ID,
-        artifact=Artifact(artifact_id=f"va-art-{id(node_data)}", parts=[_data_part(node_data)]),
+        artifact=Artifact(artifact_id=f"va-art-{id(node_data)}", parts=[_data_part(wrapped)]),
         last_chunk=False,
     )
 
@@ -200,6 +211,7 @@ async def test_delegate_with_end_node_triggers_cascade(monkeypatch):
 @pytest.mark.asyncio
 async def test_delegate_emits_pattern_b_frames_excluding_filtered(monkeypatch):
     """VA 返回的节点帧都 enqueue 到 event_queue，但 va_workflow_result_node 被过滤。"""
+    _enable_filtered_node(monkeypatch)
     va_events = [
         _va_artifact_event({
             "node_id": "n1",
@@ -246,15 +258,16 @@ async def test_delegate_emits_pattern_b_frames_excluding_filtered(monkeypatch):
 
     enqueued = _drain_queue(queue)
 
-    # 抽出 VA artifact 节点的 node_name
+    # 抽出 VA artifact 节点的 node_name（帧已解包为 {event, data: {node...}}）
     va_node_names = []
     for ev in enqueued:
         if isinstance(ev, TaskArtifactUpdateEvent):
             for part in ev.artifact.parts:
                 if part.WhichOneof("content") == "data":
-                    data = MessageToDict(part.data)
-                    if data.get("node_type") in ("QA", "End"):
-                        va_node_names.append(data.get("node_name"))
+                    frame = MessageToDict(part.data)
+                    node = frame.get("data") if isinstance(frame, dict) else None
+                    if isinstance(node, dict) and node.get("node_type") in ("QA", "End"):
+                        va_node_names.append(node.get("node_name"))
                         break
     # GXZQAResponseNode 被过滤，不在列表里
     assert "GXZQAResponseNode" not in va_node_names
@@ -266,6 +279,7 @@ async def test_delegate_emits_pattern_b_frames_excluding_filtered(monkeypatch):
 @pytest.mark.asyncio
 async def test_delegate_passes_qa_result_as_cascade_input(monkeypatch):
     """被过滤的 GXZQAResponseNode 的 text 应作为 cascade_result 传给第二轮 agent_stream。"""
+    _enable_filtered_node(monkeypatch)
     va_events = [
         _va_artifact_event({
             "node_id": "n1",
@@ -316,6 +330,7 @@ async def test_delegate_passes_qa_result_as_cascade_input(monkeypatch):
 @pytest.mark.asyncio
 async def test_step_counter_continues_across_cascade(monkeypatch):
     """首轮的 tool + delegate 计 2 步，cascade 轮的 tool 计第 3 步。"""
+    _enable_filtered_node(monkeypatch)
     va_events = [
         _va_artifact_event({
             "node_id": "n1", "node_type": "QA",

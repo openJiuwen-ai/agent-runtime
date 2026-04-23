@@ -51,6 +51,7 @@ from loguru import logger
 
 from common.constants import session_request_key
 from common.log_helper import LogHelper
+from common.response_wrapper import wrap_agent_event, wrap_error, wrap_workflow_event
 from config import get_settings
 from orchestrator.executor import Executor
 
@@ -298,15 +299,17 @@ async def _check_rate_limit(
 
 
 def _extract_event_meta(event) -> Optional[dict]:
-    """从 A2A protobuf event 抽出 {pattern, type, content, data}。
+    """从 A2A protobuf event 抽出 {kind, type, content, data}。
 
-    返回 None 表示该 event 不需要向前端推送（例如内部终态信号）。
+    返回 None 表示该 event 不需要向前端推送。
 
-    - Pattern A（Agent 事件）：TaskArtifactUpdateEvent，data part 带 ``type`` 键
-      → 返回 {"pattern": "A", "type": <event_type>, "content": <text>, "data": <剩余>}
-    - Pattern B（Workflow 事件）：TaskArtifactUpdateEvent，data part 带 ``node_type`` 键
-      → 返回 {"pattern": "B", "type": "message", "content": "", "data": <节点数据>}
-    - TaskStatusUpdateEvent(COMPLETED) 当作 final_answer_end 对待（Agent 事件）
+    - agent 事件：TaskArtifactUpdateEvent，data part 带 ``type`` 键
+      → {"kind": "agent", "type": <event_type>, "content": <text>, "data": <剩余>}
+    - workflow 事件：TaskArtifactUpdateEvent，data part 形状为 ``{"event": <kind>, "data": <dict>}``
+      —— 由 VersatileAdapter 的 `_unwrap_upstream_frame` 解包后产出；
+      event == "end" 是上游流结束信号，返回 None 由 [DONE] 收尾。
+      → {"kind": "workflow", "type": "<event>", "content": "", "data": <节点数据>}
+    - TaskStatusUpdateEvent(COMPLETED) 当作 final_answer_end 对待（agent 事件）
     - 其他 TaskStatusUpdateEvent（如 FAILED）返回 None，不推送给前端
     """
     if isinstance(event, TaskArtifactUpdateEvent):
@@ -319,36 +322,52 @@ def _extract_event_meta(event) -> Optional[dict]:
             elif kind == "data":
                 data_dict = MessageToDict(part.data)
 
-        # Pattern B：Versatile 节点帧带 node_type（保持启发式不变，决策 5）
-        if "node_type" in data_dict:
+        # workflow 事件：VersatileAdapter 解包后的 {event, data} 形状
+        if "event" in data_dict and isinstance(data_dict.get("data"), dict):
+            event_kind = data_dict["event"]
+            if event_kind == "end":
+                # 上游流结束信号，不作为北向事件推送
+                return None
             return {
-                "pattern": "B",
-                "type": "message",
+                "kind": "workflow",
+                "type": event_kind,
                 "content": "",
-                "data": data_dict,
+                "data": data_dict["data"],
             }
 
-        # Pattern A：EDPAgent 约定 data 里含 type 字段
+        # agent 事件：EDPAgent 约定 data 里含 type 字段
         if "type" in data_dict:
             event_type = data_dict.pop("type")
+            # 注意：spec 外事件（conversation_end / summary / thought / answer /
+            # delegate）不做屏蔽，与参考实现 AgentEngine 对齐（见 docs/
+            # issue-versatile-blackboard-cache.md 附 D-1）。
             # data 里 content 字段与 text 重复，提出去避免冗余
             data_dict.pop("content", None)
+            # tool_* 事件的 plugin 字段要上浮到 custom_rsp_data.plugin，
+            # 避免埋在 data 里再被外层的空串覆盖。
+            plugin = data_dict.pop("plugin", "")
+            # 若事件自带 data 载荷（如 ToolEndEvent.data），直接作为 payload；
+            # 否则剩余字段（id/title/status/args/progress 等）即 payload。
+            nested = data_dict.pop("data", None)
+            payload = nested if isinstance(nested, dict) else data_dict
             return {
-                "pattern": "A",
+                "kind": "agent",
                 "type": event_type,
                 "content": text_content,
-                "data": data_dict,
+                "data": payload,
+                "plugin": plugin,
             }
 
-        # 未知 artifact 形态，回退为 Pattern A thought 兼容
+        # 未知 artifact 形态，回退为 agent thought 兼容
         logger.debug(
             f"[Router] 未知 artifact event 形态，回退兼容序列化；parts={len(event.artifact.parts)}"
         )
         return {
-            "pattern": "A",
+            "kind": "agent",
             "type": "thought",
             "content": text_content,
             "data": data_dict,
+            "plugin": "",
         }
 
     if isinstance(event, TaskStatusUpdateEvent):
@@ -360,10 +379,11 @@ def _extract_event_meta(event) -> Optional[dict]:
                         content = part.text or ""
                         break
             return {
-                "pattern": "A",
+                "kind": "agent",
                 "type": "final_answer_end",
                 "content": content,
                 "data": {},
+                "plugin": "",
             }
         # 其他 TaskStatusUpdateEvent（FAILED 等）：当前不向前端推送
         return None
@@ -382,7 +402,7 @@ def _serialize_event(event, *, agent_id: str, conversation_id: str, start_time: 
         return None
 
     elapsed = time.monotonic() - start_time
-    if meta["pattern"] == "A":
+    if meta["kind"] == "agent":
         wrapped = wrap_agent_event(
             event_type=meta["type"],
             content=meta["content"],
@@ -390,6 +410,7 @@ def _serialize_event(event, *, agent_id: str, conversation_id: str, start_time: 
             agent_id=agent_id,
             conversation_id=conversation_id,
             elapsed=elapsed,
+            plugin=meta.get("plugin", ""),
         )
     else:
         wrapped = wrap_workflow_event(
@@ -746,6 +767,7 @@ async def dispatch(
                     pushed_events = 0
                     status_message = 0
                     finish_reason = "stream_completed"
+                    turn_start = time.monotonic()
                     try:
                         while True:
                             try:
@@ -757,8 +779,17 @@ async def dispatch(
                                     and event.status.state == TASK_STATE_FAILED
                                 ):
                                     status_message = 1
+                                payload = _serialize_event(
+                                    event,
+                                    agent_id=agent_id,
+                                    conversation_id=conversation_id,
+                                    start_time=turn_start,
+                                )
+                                # None 表示该事件被屏蔽或是流结束信号，不推送
+                                if payload is None:
+                                    continue
                                 pushed_events += 1
-                                yield f"data: {_serialize_event(event)}\n\n"
+                                yield f"data: {payload}\n\n"
                             except Exception as e:
                                 if type(e).__name__ != "QueueShutDown":
                                     logger.warning(

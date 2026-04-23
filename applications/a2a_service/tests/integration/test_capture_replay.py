@@ -80,9 +80,11 @@ def _load_fixture() -> list[dict]:
 # ════════════════════════════════════════════════════════════════════
 
 
-def _va_artifact(data: dict) -> TaskArtifactUpdateEvent:
+def _va_artifact(node_data: dict, event_kind: str = "message") -> TaskArtifactUpdateEvent:
+    """模拟 VersatileAdapter 解包后交付的 artifact：data part 形状为 {event, data}."""
+    wrapped = {"event": event_kind, "data": node_data}
     struct = Struct()
-    struct.update(data)
+    struct.update(wrapped)
     value = Value()
     value.struct_value.CopyFrom(struct)
     part = Part()
@@ -311,7 +313,7 @@ async def test_agent_events_produce_expected_frame_types(monkeypatch):
     ]
     actual_types = [f["custom_rsp_data"]["event"] for f in actual_frames]
 
-    # 每一个期望的 Pattern A 事件类型都应在 actual 里出现
+    # 每一个期望的 agent 事件类型都应在 actual 里出现
     for event_type in fixture_types:
         if event_type == "planning_execution_process":
             # Executor 自动发射，可能数量不完全一致（capture 有 3 条，我们只产 1 条）
@@ -352,21 +354,21 @@ async def test_todolist_item_content_matches_fixture(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_think_chunk_execution_time_empty_aligned_with_fixture(monkeypatch):
-    """fixture 里 think_chunk 的 execution_time 是空串；我们 pipeline 也应如此。"""
-    fixture = _load_fixture()
-    for f in fixture:
-        if f["custom_rsp_data"]["event"] == "think_chunk":
-            assert f["execution_time"] == "", (
-                f"fixture think_chunk execution_time 应为 ''，实际 {f['execution_time']!r}"
-            )
+async def test_think_chunk_execution_time_is_numeric(monkeypatch):
+    """对齐 spec §2.3.3：think_chunk 的 execution_time 是数字，pipeline 也应如此。
 
-    # pipeline 也应一致
+    历史 fixture (buy_wealth_round1_key_frames.jsonl) 捕获自旧版服务端的
+    抓包行为（当时服务端对 think_chunk 不计算实时 elapsed，故出空串）。
+    现以 spec 为准，pipeline 产出全部为数字。
+    """
+    fixture = _load_fixture()
     agent_events = _fixture_to_agent_events(fixture)
     actual = await _run_and_collect(monkeypatch, agent_events=agent_events)
     for f in actual:
         if f["custom_rsp_data"]["event"] == "think_chunk":
-            assert f["execution_time"] == ""
+            assert isinstance(f["execution_time"], (int, float)), (
+                f"think_chunk execution_time 应是数字，实际 {f['execution_time']!r}"
+            )
 
 
 @pytest.mark.asyncio
@@ -493,5 +495,9 @@ async def test_outer_wrapper_fields_match_fixture_for_all_agent_events(monkeypat
         # custom_rsp_data 内层
         inner = f["custom_rsp_data"]
         assert inner["latency"] == ""
-        assert inner["plugin"] == ""
+        # plugin 只有 tool_* 事件才带工具名，其余事件空串
+        if inner["event"] in ("tool_start", "tool_status", "tool_end"):
+            assert inner["plugin"], f"tool event 应该带 plugin: {inner}"
+        else:
+            assert inner["plugin"] == ""
         assert isinstance(inner["createdTime"], int)

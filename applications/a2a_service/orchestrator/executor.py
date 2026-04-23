@@ -40,7 +40,11 @@ from loguru import logger
 
 from agents.EDPAgent import agent_stream
 from common.constants import session_request_key
-from common.events import DelegateRequest
+from common.events import (
+    DelegateRequest,
+    PlanningExecutionProcessEvent,
+    ToolStartEvent,
+)
 from common.log_helper import LogHelper
 from common.redis_client import RedisClient
 from config import get_settings
@@ -299,13 +303,30 @@ class Executor(AgentExecutor):
             return stream_resp.status_update
         return None
 
-    def _extract_end_node(self, event: TaskArtifactUpdateEvent) -> Optional[dict]:
+    def _extract_node_data(
+        self, event: TaskArtifactUpdateEvent
+    ) -> Optional[dict]:
+        """从 VersatileAdapter 解包后的 artifact 取出节点数据。
+
+        data part 形状：``{"event": "<kind>", "data": <node_data>}``
+        —— 只对 ``event == "message"`` 的帧返回 node_data，其他（如 "end"）返回 None。
+        """
         for part in event.artifact.parts:
             if part.WhichOneof("content") == "data":
-                data = MessageToDict(part.data)
-                data = unwrap_versatile_response(data)  # 先解包！
-                if isinstance(data, dict) and data.get("node_type") == "End":
-                    return data
+                frame = MessageToDict(part.data)
+                if not isinstance(frame, dict):
+                    continue
+                if frame.get("event") != "message":
+                    continue
+                inner = frame.get("data")
+                if isinstance(inner, dict):
+                    return inner
+        return None
+
+    def _extract_end_node(self, event: TaskArtifactUpdateEvent) -> Optional[dict]:
+        node = self._extract_node_data(event)
+        if node is not None and node.get("node_type") == "End":
+            return node
         return None
 
     def _is_suppressed_node(self, event: TaskArtifactUpdateEvent) -> bool:
@@ -313,28 +334,18 @@ class Executor(AgentExecutor):
         target = get_settings().va_workflow_result_node
         if not target:
             return False
-        for part in event.artifact.parts:
-            if part.WhichOneof("content") == "data":
-                data = MessageToDict(part.data)
-                data = unwrap_versatile_response(data)  # 先解包！
-                if isinstance(data, dict) and data.get("node_name") == target:
-                    return True
-        return False
+        node = self._extract_node_data(event)
+        return node is not None and node.get("node_name") == target
 
     def _extract_qa_node(self, event: TaskArtifactUpdateEvent) -> Optional[str]:
         target_node = get_settings().va_workflow_result_node
         if not target_node:
             return None
-        for part in event.artifact.parts:
-            if part.WhichOneof("content") == "data":
-                data = MessageToDict(part.data)
-                data = unwrap_versatile_response(data)  # 先解包！
-                if (
-                    isinstance(data, dict)
-                    and data.get("node_type") == "QA"
-                    and data.get("node_name") == target_node
-                ):
-                    return data.get("text", "") or None
+        node = self._extract_node_data(event)
+        if node is None:
+            return None
+        if node.get("node_type") == "QA" and node.get("node_name") == target_node:
+            return node.get("text", "") or None
         return None
 
     async def _call_versatile_adapter(
