@@ -47,7 +47,7 @@ class TestOrchestratorSystem:
         return deployer
 
     @pytest.fixture
-    def access_config(self, db_handler):
+    async def access_config(self, db_handler):
         """创建 AccessConfig 实例"""
         return AccessConfig(
             db_handler=db_handler,
