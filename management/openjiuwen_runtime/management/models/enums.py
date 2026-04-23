@@ -10,6 +10,7 @@ class DeploymentType(str, Enum):
     """部署类型"""
     AGENT = "agent"
     PLUGIN = "plugin"
+    IMAGE = "image"
 
 
 class DeploymentStatus(str, Enum):

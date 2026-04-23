@@ -127,6 +127,46 @@ class DockerDeployer(Deployer[DockerParams]):
 
         return container_id
 
+    async def _deploy_image_container(
+        self,
+        container_name: str,
+        image: str,
+        env_vars: dict,
+        volumes: list,
+        port: str,
+    ) -> str:
+        """
+        使用指定镜像创建容器
+        """
+        create_args = ["create", "--name", container_name]
+
+        if env_vars:
+            for k, v in env_vars.items():
+                create_args.extend(["-e", f"{k}={v}"])
+
+        if volumes:
+            for vol in volumes:
+                if "source" in vol and "target" in vol:
+                    create_args.extend(["-v", f"{vol['source']}:{vol['target']}"])
+
+        create_args.extend(["-p", port])
+        create_args.append(image)
+
+        logger.debug("Creating container from image: %s", container_name)
+        success, output = await self._run_docker_command(*create_args)
+        if not success:
+            raise RuntimeError(f"create container from image failed: {output}")
+
+        container_id = output.strip()
+        logger.debug("container created: %s", container_id)
+
+        logger.debug("Start container: %s", container_name)
+        success, start_out = await self._run_docker_command("start", container_id)
+        if not success:
+            raise RuntimeError(f"Start container failed: {start_out}")
+
+        return container_id
+
     async def deploy(self, ctx: DeployContext[DockerParams]) -> DeployResult:
         """使用 Docker 容器部署应用
         Args:
@@ -146,6 +186,7 @@ class DockerDeployer(Deployer[DockerParams]):
             container_name = docker_params.container_name or f"deploy_{deployment_id}"
             env_vars = docker_params.env_vars
             volumes = docker_params.volumes
+            image = docker_params.image
             host = ctx.host or self.default_host
             iport = "8090"
 
@@ -155,7 +196,6 @@ class DockerDeployer(Deployer[DockerParams]):
                 json.dumps(docker_params.__dict__, indent=2, ensure_ascii=False),
             )
 
-            # Inject parent container proxy environment variables
             proxy_env = {
                 "HTTP_PROXY": os.getenv("HTTP_PROXY", ""),
                 "HTTPS_PROXY": os.getenv("HTTPS_PROXY", ""),
@@ -164,34 +204,37 @@ class DockerDeployer(Deployer[DockerParams]):
                 "https_proxy": os.getenv("https_proxy", ""),
                 "no_proxy": os.getenv("no_proxy", ""),
             }
-            # Filter empty proxy values
             proxy_env_filtered = {k: v for k, v in proxy_env.items() if v}
-            # Merge proxy env with custom env, custom env has higher priority
             env_vars = {**proxy_env_filtered, **env_vars}
 
-            # 非低码情况
-            if not ir_path:
-                if not whl_path:
-                    raise RuntimeError("whl_path is required for docker deployment")
-                if not package_name:
-                    raise RuntimeError("package_name is required for docker deployment")
+            if image:
+                container_id = await self._deploy_image_container(
+                    container_name=container_name,
+                    image=image,
+                    env_vars=env_vars,
+                    volumes=volumes,
+                    port=iport,
+                )
+            else:
+                if not ir_path:
+                    if not whl_path:
+                        raise RuntimeError("whl_path is required for docker deployment")
+                    if not package_name:
+                        raise RuntimeError("package_name is required for docker deployment")
 
-            # 创建并启动低代码Agent容器
-            container_id = await self.deploy_lowcode_container(
-                container_name=container_name,
-                env_vars=env_vars,
-                volumes=volumes,
-                port=iport,
-                ir_source_path=ir_path
-            )
+                container_id = await self.deploy_lowcode_container(
+                    container_name=container_name,
+                    env_vars=env_vars,
+                    volumes=volumes,
+                    port=iport,
+                    ir_source_path=ir_path
+                )
             self._containers[deployment_id] = container_id
 
-            # 获取该容器在宿主机上的port
             success, port_output = await self._run_docker_command("port", container_id, iport)
             if not success or not port_output:
                 raise RuntimeError(f"无法获取容器映射的端口: {container_id}")
 
-            # 解析输出 0.0.0.0:12345 → 拿到 12345
             port = port_output.strip().split(":")[-1]
             url = f"http://{settings.IP}:{port}"
 

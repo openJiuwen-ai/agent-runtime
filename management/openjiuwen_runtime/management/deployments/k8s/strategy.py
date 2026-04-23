@@ -37,6 +37,10 @@ class K8sStrategy(BaseDeploymentStrategy[K8sInfo]):
             "whl_path": kwargs.get("whl_path"),
             "package_name": kwargs.get("package_name"),
             "template_file": kwargs.get("template_file"),
+            "image": kwargs.get("image"),
+            "namespace": kwargs.get("namespace"),
+            "deployment_name": kwargs.get("deployment_name"),
+            "replicas": kwargs.get("replicas"),
             "created_at": now,
             "updated_at": now,
             "data": kwargs.get("data"),
@@ -59,6 +63,7 @@ class K8sStrategy(BaseDeploymentStrategy[K8sInfo]):
                 replicas=data.get("replicas"),
                 config_map=data.get("config_map"),
                 secret=data.get("secret"),
+                image=data.get("image"),
             ),
             data=data.get("data"),
         )

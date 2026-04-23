@@ -24,6 +24,7 @@ from .deployments import (
 from .models.deployment_params import (
     DeployAgentParams,
     DeployPluginParams,
+    DeployImageParams,
     ListDeploymentsParams,
 )
 from .models.enums import DeployMode, DeploymentType, DeploymentStatus
@@ -174,6 +175,32 @@ class DeploymentManager:
         return await self._deploy(
             _DeployExecutionParams(
                 deployment_type=DeploymentType.PLUGIN,
+                name=params.name,
+                version=params.version,
+                mode=params.mode,
+                user_id=params.user_id,
+                space_id=params.space_id,
+                extras=extras,
+            )
+        )
+
+    async def deploy_image(self, params: DeployImageParams) -> DeploymentInfo:
+        """部署镜像"""
+        if params.mode == DeployMode.SUBPROCESS:
+            raise NotImplementedError("deploy_image is not supported for SUBPROCESS mode")
+        logger.info(
+            "Deploying image: name=%s, version=%s, mode=%s, user_id=%s, space_id=%s",
+            params.name,
+            params.version,
+            params.mode,
+            params.user_id,
+            params.space_id,
+        )
+        extras = dict(params.extras)
+        extras["image"] = params.image
+        return await self._deploy(
+            _DeployExecutionParams(
+                deployment_type=DeploymentType.IMAGE,
                 name=params.name,
                 version=params.version,
                 mode=params.mode,

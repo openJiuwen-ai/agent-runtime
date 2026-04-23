@@ -44,3 +44,16 @@ class DeployPluginParams:
     user_id: Optional[str] = None
     space_id: Optional[str] = None
     extras: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class DeployImageParams:
+    """部署镜像的参数（策略扩展字段放入 extras，如环境变量、端口等配置）"""
+
+    image: str
+    name: str
+    version: str
+    mode: DeployMode
+    user_id: Optional[str] = None
+    space_id: Optional[str] = None
+    extras: dict[str, Any] = field(default_factory=dict)

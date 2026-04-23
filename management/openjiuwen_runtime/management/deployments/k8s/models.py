@@ -20,6 +20,7 @@ class K8sParams:
     replicas: Optional[int] = None
     config_map: Optional[dict[str, Any]] = None
     secret: Optional[dict[str, str]] = None
+    image: Optional[str] = None
 
 
 class K8sInfo(BaseModel):
@@ -33,6 +34,10 @@ class K8sInfo(BaseModel):
     whl_path: Optional[str] = None
     package_name: Optional[str] = None
     template_file: Optional[str] = None
+    image: Optional[str] = None
+    namespace: Optional[str] = None
+    deployment_name: Optional[str] = None
+    replicas: Optional[int] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     data: Optional[dict[str, Any]] = None
@@ -51,6 +56,10 @@ class K8sCreate(BaseModel):
     whl_path: Optional[str] = None
     package_name: Optional[str] = None
     template_file: Optional[str] = None
+    image: Optional[str] = None
+    namespace: Optional[str] = None
+    deployment_name: Optional[str] = None
+    replicas: Optional[int] = None
     data: Optional[dict[str, Any]] = None
 
 
@@ -66,6 +75,10 @@ K8S_TABLE_DEF = TableDefinition(
         ColumnDefinition("whl_path", "string", length=512, nullable=True),
         ColumnDefinition("package_name", "string", length=255, nullable=True),
         ColumnDefinition("template_file", "string", length=512, nullable=True),
+        ColumnDefinition("image", "string", length=512, nullable=True),
+        ColumnDefinition("namespace", "string", length=64, nullable=True),
+        ColumnDefinition("deployment_name", "string", length=255, nullable=True),
+        ColumnDefinition("replicas", "integer", nullable=True),
         ColumnDefinition("created_at", "datetime", nullable=False),
         ColumnDefinition("updated_at", "datetime", nullable=False),
         ColumnDefinition("data", "json", nullable=True),

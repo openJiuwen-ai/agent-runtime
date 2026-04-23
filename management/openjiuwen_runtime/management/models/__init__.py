@@ -12,10 +12,16 @@ from .schemas import (
     DeploymentFields,
     DeploymentInfo,
 )
+from .deployment_params import (
+    DeployAgentParams,
+    DeployPluginParams,
+    DeployImageParams,
+    ListDeploymentsParams,
+)
 
 __all__ = [
-    "DeploymentType", 
-    "DeploymentStatus", 
+    "DeploymentType",
+    "DeploymentStatus",
     "DeploymentInfo",
     "DeploymentCreate",
     "DEPLOYMENT_TABLE_NAME",
@@ -23,4 +29,8 @@ __all__ = [
     "TableDefinition",
     "ColumnDefinition",
     "IndexDefinition",
+    "DeployAgentParams",
+    "DeployPluginParams",
+    "DeployImageParams",
+    "ListDeploymentsParams",
 ]

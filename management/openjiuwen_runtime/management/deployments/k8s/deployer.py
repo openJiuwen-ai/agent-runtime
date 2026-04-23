@@ -64,6 +64,7 @@ class K8sDeployer(Deployer[K8sParams]):
             replicas = k8s_params.replicas or 1
             config_map = k8s_params.config_map
             secret = k8s_params.secret
+            image = k8s_params.image
             host = ctx.host or self.default_host
 
             if config_map:
@@ -89,10 +90,10 @@ class K8sDeployer(Deployer[K8sParams]):
                     )
 
             deployment_manifest = self._build_deployment_manifest(
-                deployment_name, namespace, replicas, ctx.deployment_id
+                deployment_name, namespace, replicas, ctx.deployment_id, image
             )
 
-            logger.debug("Creating deployment: deployment_name=%s", deployment_name)
+            logger.debug("Creating deployment: deployment_name=%s, image=%s", deployment_name, image)
             success, output = await self._run_kubectl_command(
                 "apply", "-f", "-", "--namespace", namespace
             )
@@ -142,7 +143,8 @@ class K8sDeployer(Deployer[K8sParams]):
             logger.error("K8s deploy failed: deployment_id=%s, error=%s", ctx.deployment_id, str(e))
             return DeployResult(success=False, message=f"Deployment failed: {str(e)}")
 
-    def _build_deployment_manifest(self, name: str, namespace: str, replicas: int, deployment_id: str) -> str:
+    def _build_deployment_manifest(self, name: str, namespace: str, replicas: int, deployment_id: str, image: Optional[str] = None) -> str:
+        image_name = image or f"{deployment_id}:latest"
         return f"""
 apiVersion: apps/v1
 kind: Deployment
@@ -161,7 +163,7 @@ spec:
     spec:
       containers:
       - name: {name}
-        image: {deployment_id}:latest
+        image: {image_name}
         ports:
         - containerPort: 8000
 """

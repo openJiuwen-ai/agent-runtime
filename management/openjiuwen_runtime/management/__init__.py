@@ -12,6 +12,7 @@ from .manager import DeploymentManager
 from .models.deployment_params import (
     DeployAgentParams,
     DeployPluginParams,
+    DeployImageParams,
     ListDeploymentsParams,
 )
 from .models.enums import DeployMode, DeploymentType, DeploymentStatus
@@ -41,23 +42,21 @@ from .deployments import (
     K8sDeployer,
     K8sStrategy,
 )
+from .dispatcher import Dispatcher, DispatcherConfig
+from .orchestrator import Orchestrator, OrchestratorConfig
 
 __all__ = [
-    # Manager
     "DeploymentManager",
     "DeployMode",
-    # Deployment params
     "DeployAgentParams",
     "DeployPluginParams",
+    "DeployImageParams",
     "ListDeploymentsParams",
-    # Enums
     "DeploymentType",
     "DeploymentStatus",
-    # Schemas
     "DeploymentInfo",
     "DEPLOYMENT_TABLE_NAME",
     "DeploymentFields",
-    # DB
     "DBHandler",
     "SQLiteHandler",
     "MySQLHandler",
@@ -68,25 +67,26 @@ __all__ = [
     "DeployResult",
     "Deployer",
     "BaseDeploymentStrategy",
-    # Subprocess
     "SubprocessParams",
     "ProcessInfo",
     "ProcessCreate",
     "PROCESS_TABLE_DEF",
     "LocalSubprocessDeployer",
     "SubprocessStrategy",
-    # Docker
     "DockerParams",
     "DockerInfo",
     "DockerCreate",
     "DOCKER_TABLE_DEF",
     "DockerDeployer",
     "DockerStrategy",
-    # K8s
     "K8sParams",
     "K8sInfo",
     "K8sCreate",
     "K8S_TABLE_DEF",
     "K8sDeployer",
     "K8sStrategy",
+    "Dispatcher",
+    "DispatcherConfig",
+    "Orchestrator",
+    "OrchestratorConfig",
 ]
