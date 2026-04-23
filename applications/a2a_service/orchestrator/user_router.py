@@ -418,10 +418,10 @@ def _extract_query(body: dict) -> str:
     return ""
 
 
-def _build_request(conversation_id: str, user_query: str, body: dict) -> SendMessageRequest:
+def _build_request(conversation_id: str, user_query: str, body: dict, params: Optional[dict] = None) -> SendMessageRequest:
     """将 Versatile 格式请求体转为 A2A SendMessageRequest。"""
     body_struct = Struct()
-    body_struct.update({"body": body})
+    body_struct.update({"body": body, "params": params or {}})
 
     body_value = Value()
     body_value.struct_value.CopyFrom(body_struct)
@@ -576,12 +576,13 @@ async def dispatch(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
         )
 
-    # 缓存首轮请求头和请求体，供 VA 委托调用使用
+    # 缓存首轮请求头和请求体和参数，供 VA 委托调用使用
     cached = await redis.get_json(session_request_key(conversation_id))
+    params = dict(request.query_params) if hasattr(request, "query_params") else {}
     if cached is None:
         await redis.set_json(
             session_request_key(conversation_id),
-            {"headers": headers, "body": body},
+            {"headers": headers, "body": body, "params": params},
             ex=_REQUEST_TTL,
         )
 
@@ -636,7 +637,7 @@ async def dispatch(
             current_task = await task_store.get(task_id, call_context) if task_id else None
             logger.debug(f"[Router] 并发首轮，复用 task_id={task_id} for conv={conversation_id}")
 
-    send_request = _build_request(conversation_id, user_query, body)
+    send_request = _build_request(conversation_id, user_query, body, params)
     ctx = RequestContext(
         call_context=call_context,
         request=send_request,

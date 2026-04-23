@@ -64,9 +64,11 @@ class VersatileAdapterExecutor(AgentExecutor):  # noqa: F821
         input_data = self._build_first_input(context.message)
         versatile_input = input_data.get("body", {})
         headers = input_data.get("headers", {})
+        params = input_data.get("params", {})
         logger.info(f"[VersatileAdapter] 接收请求：conv_id={conv_id}, task_id={task_id}")
         logger.debug(f"[VersatileAdapter] 请求头：{headers}")
         logger.debug(f"[VersatileAdapter] 请求体：{versatile_input}")
+        logger.debug(f"[VersatileAdapter] 请求参数：{params}")
 
         await updater.start_work()
 
@@ -75,7 +77,7 @@ class VersatileAdapterExecutor(AgentExecutor):  # noqa: F821
         prev_part: Part | None = None
 
         async for chunk in self._proxy.dispatch_stream(
-            versatile_input, conv_id, headers
+            versatile_input, conv_id, headers, params
         ):
             if prev_part is not None:
                 await updater.add_artifact(
@@ -134,4 +136,4 @@ class VersatileAdapterExecutor(AgentExecutor):  # noqa: F821
             if part.WhichOneof("content") == "text" and part.text:
                 text = part.text
                 break
-        return {"body": {"input": {"query": text}}}
+        return {"body": {"input": {"query": text}}, "headers": {}, "params": {}}

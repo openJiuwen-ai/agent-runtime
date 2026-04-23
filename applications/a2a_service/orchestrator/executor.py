@@ -50,6 +50,22 @@ from config import get_settings
 from orchestrator.agent_adapter import agent_event_to_a2a
 from common.redis_task_store import RedisTaskStore
 
+
+def unwrap_versatile_response(data: dict) -> dict:
+    """解包 Versatile 返回数据，返回 custom_rsp_data（原始 data 字段），异常安全"""
+    try:
+        if isinstance(data, dict):
+            # 第一层解包：获取 custom_rsp_data
+            custom_rsp = data.get("custom_rsp_data")
+            if isinstance(custom_rsp, dict):
+                # 第二层：获取原始 data 字段
+                return custom_rsp.get("data", custom_rsp)
+        return data
+    except Exception as e:
+        logger.warning(f"unwrap_versatile_response exception: {e}")
+        return data  # 异常时返回原始数据
+
+
 _TTL = 1800
 
 
@@ -271,12 +287,13 @@ class Executor(AgentExecutor):
         body: dict,
         task_id: str = "",
         conv_id: str = "",
+        params: Optional[dict] = None,
     ) -> SendMessageRequest:
         text_part = Part()
         text_part.text = query
 
         data_struct = Struct()
-        data_struct.update({"headers": headers, "body": body})
+        data_struct.update({"headers": headers, "body": body, "params": params or {}})
         data_value = Value()
         data_value.struct_value.CopyFrom(data_struct)
         data_part = Part()
@@ -307,6 +324,7 @@ class Executor(AgentExecutor):
         for part in event.artifact.parts:
             if part.WhichOneof("content") == "data":
                 data = MessageToDict(part.data)
+                data = unwrap_versatile_response(data)  # 先解包！
                 if isinstance(data, dict) and data.get("node_type") == "End":
                     return data
         return None
@@ -319,6 +337,7 @@ class Executor(AgentExecutor):
         for part in event.artifact.parts:
             if part.WhichOneof("content") == "data":
                 data = MessageToDict(part.data)
+                data = unwrap_versatile_response(data)  # 先解包！
                 if isinstance(data, dict) and data.get("node_name") == target:
                     return True
         return False
@@ -330,6 +349,7 @@ class Executor(AgentExecutor):
         for part in event.artifact.parts:
             if part.WhichOneof("content") == "data":
                 data = MessageToDict(part.data)
+                data = unwrap_versatile_response(data)  # 先解包！
                 if (
                     isinstance(data, dict)
                     and data.get("node_type") == "QA"
@@ -349,6 +369,7 @@ class Executor(AgentExecutor):
         cached = await self._redis.get_json(session_request_key(conv_id)) or {}
         headers = cached.get("headers", {})
         body = dict(cached.get("body", {}))
+        params = cached.get("params", {})
         # 同时修改 custom_data.inputs 和 input（兼容两种格式）
         if "custom_data" in body and isinstance(body["custom_data"], dict):
             # 创建 custom_data 的副本，避免修改原始数据
@@ -373,6 +394,7 @@ class Executor(AgentExecutor):
             query=delegate.task_description,
             headers=headers,
             body=body,
+            params=params,
             task_id="",
             conv_id=conv_id,
         )
@@ -475,13 +497,15 @@ class Executor(AgentExecutor):
         # 从 Redis 读取缓存的首轮请求（优先使用）
         cached = await self._redis.get_json(session_request_key(conv_id)) or {}
         first_body = cached.get("body", original_body)
-        body = dict(first_body)
+        params = cached.get("params", {})
+        body = dict(original_body)
         body["stream"] = True
 
         request = self._build_va_message(
             query=user_input,
             headers=headers,
             body=body,
+            params=params,
             task_id=va_task_id,
             conv_id=conv_id,
         )

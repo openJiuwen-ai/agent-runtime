@@ -15,6 +15,20 @@ _FORWARD_HEADER_WHITELIST = {
 }
 
 
+def wrap_versatile_response(
+    outer: dict,
+    conv_id: str,
+    agent_id: Optional[str] = None
+) -> dict:
+    """包装 Versatile 返回数据（包装整个 outer）"""
+    return {
+        "success": True,
+        "agent_id": agent_id or "",
+        "conversation_id": conv_id,
+        "custom_rsp_data": outer
+    }
+
+
 class VersatileProxy:
     def __init__(self, url_template: str, timeout: int = 600) -> None:
         self._url_template = url_template
@@ -47,6 +61,7 @@ class VersatileProxy:
         body: dict,
         conv_id: str,
         extra_headers: Optional[dict] = None,
+        params: Optional[dict] = None,
     ) -> AsyncGenerator[dict, None]:
         url = self._build_url(conv_id)
         headers = {"Content-Type": "application/json"}
@@ -58,6 +73,7 @@ class VersatileProxy:
         logger.info(f"[VersatileProxy] 发送请求：POST {url}")
         logger.debug(f"[VersatileProxy] 请求头：{headers}")
         logger.debug(f"[VersatileProxy] 请求体：{body.get('custom_data', {})})")
+        logger.debug(f"[VersatileProxy] 请求参数：{params})")
 
         try:
             async with httpx.AsyncClient(
@@ -66,14 +82,15 @@ class VersatileProxy:
                 timeout=httpx.Timeout(self._timeout, read=None),
             ) as client:
                 # 构建请求对象用于日志
-                request = client.build_request("POST", url, json=body.get("custom_data", {}), headers=headers)
+                request = client.build_request("POST", url, json=body.get("custom_data", {}), headers=headers, params=params)
                 await self._log_request(request)
                 
-                async with client.stream("POST", url, json=body.get("custom_data", {}), headers=headers) as response:
+                async with client.stream("POST", url, json=body.get("custom_data", {}), headers=headers, params=params) as response:
                     logger.info(f"[VersatileProxy] --- Proxy Response (Stream): {response.status_code} ---")
                     logger.debug(f"[VersatileProxy] Response Headers: {dict(response.headers)}")
                     response.raise_for_status()
                     async for line in response.aiter_lines():
+                        logger.info(f"[VersatileProxy] proxy received line: {line}]")
                         line = line.strip()
                         if not line:
                             continue
@@ -87,18 +104,18 @@ class VersatileProxy:
                         except Exception:
                             logger.warning(f"[VersatileProxy] 无法解析行：{line!r:.80}")
                             continue
-
-                        # # 外层结构：{"event": "message"/"end", "data": {...}}
-                        # event_type = outer.get("event")
-                        # if event_type == "end":
-                        #     # 流结束信号，无数据，跳过
-                        #     continue
-                        chunk = outer.get("data")
-                        if not isinstance(chunk, dict) or not chunk:
-                            continue
-
-                        logger.debug(f"[VersatileProxy] proxy received chunk: {chunk}]")
-                        yield chunk
+                      
+                        # 从 body 中提取 agent_id
+                        agent_id = body.get("agent_id", "")
+                        
+                        # 包装整个 outer
+                        wrapped_chunk = wrap_versatile_response(
+                            outer=outer,
+                            conv_id=conv_id,
+                            agent_id=agent_id
+                        )
+                        
+                        yield wrapped_chunk
 
         except httpx.HTTPStatusError as e:
             logger.error(f"[VersatileProxy] HTTP 错误：{e.response.status_code} {url}")
