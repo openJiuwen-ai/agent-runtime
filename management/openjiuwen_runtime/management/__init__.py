@@ -43,44 +43,91 @@ from .deployments import (
     K8sStrategy,
 )
 from .orchestrator import Access, AccessConfig
-
+from .dispatch import (
+    EventBus,
+    RedisEventBus,
+    InMemoryEventBus,
+    DispatchSettings,
+    DispatchHeader,
+    DispatchError,
+    QueueTimeoutError,
+    CapacityAllocationError,
+    SessionHeaderError,
+    SessionInfo,
+    SessionState,
+    PodInfo,
+    PodState,
+    ScaleEvent,
+    RedisDispatchStore,
+    Scheduler,
+    ScalerController,
+    create_dispatcher_app,
+)
 __all__ = [
+    # Manager
     "DeploymentManager",
     "DeployMode",
+    # Deployment params
     "DeployAgentParams",
     "DeployPluginParams",
     "DeployImageParams",
     "ListDeploymentsParams",
+    # Enums
     "DeploymentType",
     "DeploymentStatus",
+    # Schemas
     "DeploymentInfo",
     "DEPLOYMENT_TABLE_NAME",
     "DeploymentFields",
+    # DB
     "DBHandler",
     "SQLiteHandler",
     "MySQLHandler",
+    "GaussDBHandler",
     # Base
     "CommonParams",
     "DeployContext",
     "DeployResult",
     "Deployer",
     "BaseDeploymentStrategy",
+    # Subprocess
     "SubprocessParams",
     "ProcessInfo",
     "ProcessCreate",
     "PROCESS_TABLE_DEF",
     "LocalSubprocessDeployer",
     "SubprocessStrategy",
+    # Docker
     "DockerParams",
     "DockerInfo",
     "DockerCreate",
     "DOCKER_TABLE_DEF",
     "DockerDeployer",
     "DockerStrategy",
+    # K8s
     "K8sParams",
     "K8sInfo",
     "K8sCreate",
     "K8S_TABLE_DEF",
     "K8sDeployer",
     "K8sStrategy",
+    # Dispatch
+    "EventBus",
+    "RedisEventBus",
+    "InMemoryEventBus",
+    "DispatchSettings",
+    "DispatchHeader",
+    "DispatchError",
+    "QueueTimeoutError",
+    "CapacityAllocationError",
+    "SessionHeaderError",
+    "SessionInfo",
+    "SessionState",
+    "PodInfo",
+    "PodState",
+    "ScaleEvent",
+    "RedisDispatchStore",
+    "Scheduler",
+    "ScalerController",
+    "create_dispatcher_app",
 ]
