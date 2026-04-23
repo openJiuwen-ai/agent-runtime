@@ -40,34 +40,13 @@ from loguru import logger
 
 from agents.EDPAgent import agent_stream
 from common.constants import session_request_key
-from common.events import (
-    DelegateRequest,
-    PlanningExecutionProcessEvent,
-    ToolStartEvent,
-)
+from common.events import DelegateRequest
+from common.log_helper import LogHelper
 from common.redis_client import RedisClient
 from config import get_settings
 from orchestrator.agent_adapter import agent_event_to_a2a
 from common.redis_task_store import RedisTaskStore
-
-
-def unwrap_versatile_response(data: dict) -> dict:
-    """解包 Versatile 返回数据，返回 custom_rsp_data（原始 data 字段），异常安全"""
-    try:
-        if isinstance(data, dict):
-            # 第一层解包：获取 custom_rsp_data
-            custom_rsp = data.get("custom_rsp_data")
-            if isinstance(custom_rsp, dict):
-                # 第二层：获取原始 data 字段
-                return custom_rsp.get("data", custom_rsp)
-        return data
-    except Exception as e:
-        logger.warning(f"unwrap_versatile_response exception: {e}")
-        return data  # 异常时返回原始数据
-
-
 _TTL = 1800
-
 
 class Executor(AgentExecutor):
     def __init__(
@@ -388,7 +367,16 @@ class Executor(AgentExecutor):
         body["input"] = input_section
         body["stream"] = True
 
+        # 在 a2a 调用侧记录 Versatile 前后 Tag 日志
+        versatile_warn_threshold_ms = LogHelper.resolve_versatile_warn_threshold_ms()
+        versatile_call_id = str(uuid.uuid4())
+        versatile_name = get_settings().versatile_adapter_url or "versatile_adapter"
+        call_started_ms = int(time.time() * 1000)
+        status_message = 0
+        error_message: Optional[str] = None
+
         va_real_task_id: Optional[str] = None
+        continuation_task_id = ""
 
         request = self._build_va_message(
             query=delegate.task_description,
@@ -409,6 +397,14 @@ class Executor(AgentExecutor):
         logger.info(
             f"[Executor] [VersatileProxy] 开始调用 VA: conv={conv_id}, "
             f"intent={delegate.intent}, task_desc={delegate.task_description!r:.60}"
+        )
+
+        # 调用前打点：记录请求头/体快照
+        LogHelper.emit_versatile_start_tag(
+            call_id=versatile_call_id,
+            name=versatile_name,
+            request_headers=headers,
+            request_body=body,
         )
 
         try:
@@ -459,15 +455,31 @@ class Executor(AgentExecutor):
                         )
 
         except Exception as e:
-            logger.exception(f"[Executor] [VersatileProxy] VA send_message 异常：{e}")
+            status_message = 1
+            error_message = str(e)
+            logger.exception(f"[Executor] VA send_message 异常：{e}")
+        finally:
+            # 无论成功/异常都补打结束日志，保证调用可观测性完整
+            duration_ms = int(time.time() * 1000) - call_started_ms
+            continuation_task_id = va_real_task_id or str(uuid.uuid4())
+            output_payload = {
+                "stream_resp_count": stream_resp_count,
+                "has_end_node": has_end_node,
+                "va_task_id": continuation_task_id,
+            }
+            if error_message:
+                output_payload["error"] = error_message
+            LogHelper.emit_versatile_end_tag(
+                call_id=versatile_call_id,
+                name=versatile_name,
+                output_payload=output_payload,
+                status_message=status_message,
+                duration_ms=duration_ms,
+                warn_threshold_ms=versatile_warn_threshold_ms,
+                level_override="ERROR" if status_message else None,
+            )
 
-        va_duration_ms = (time.monotonic() - va_call_start) * 1000
-        logger.info(
-            f"[Executor] [VersatileProxy] ⏱️ VA 调用结束: duration={va_duration_ms:.2f}ms, "
-            f"chunks={stream_resp_count}, forwarded={forwarded_count}, "
-            f"suppressed={suppressed_count}, has_end_node={has_end_node}"
-        )
-        continuation_task_id = va_real_task_id or str(uuid.uuid4())
+        logger.debug(f"[Executor] VA stream_resp_count={stream_resp_count}, conv={conv_id}")
 
         if has_end_node:
             cascade = {"workflow_result": qa_result}
@@ -501,6 +513,14 @@ class Executor(AgentExecutor):
         body = dict(original_body)
         body["stream"] = True
 
+        # 在 a2a 续轮调用侧记录 Versatile 前后 Tag 日志
+        versatile_warn_threshold_ms = LogHelper.resolve_versatile_warn_threshold_ms()
+        versatile_call_id = str(uuid.uuid4())
+        versatile_name = get_settings().versatile_adapter_url or "versatile_adapter"
+        call_started_ms = int(time.time() * 1000)
+        status_message = 0
+        error_message: Optional[str] = None
+
         request = self._build_va_message(
             query=user_input,
             headers=headers,
@@ -512,9 +532,19 @@ class Executor(AgentExecutor):
 
         has_end_node = False
         qa_result: Optional[str] = None
+        stream_resp_count = 0
+
+        # 续轮调用前打点，记录本次输入上下文
+        LogHelper.emit_versatile_start_tag(
+            call_id=versatile_call_id,
+            name=versatile_name,
+            request_headers=headers,
+            request_body=body,
+        )
 
         try:
             async for stream_resp in self._va_client.send_message(request):
+                stream_resp_count += 1
                 event = self._parse_stream_event(stream_resp)
                 if event is None:
                     continue
@@ -531,7 +561,28 @@ class Executor(AgentExecutor):
                         has_end_node = True
 
         except Exception as e:
+            status_message = 1
+            error_message = str(e)
             logger.exception(f"[Executor] VA continue send_message 异常：{e}")
+        finally:
+            # 续轮结束统一打点，补充状态与耗时
+            duration_ms = int(time.time() * 1000) - call_started_ms
+            output_payload = {
+                "stream_resp_count": stream_resp_count,
+                "has_end_node": has_end_node,
+                "va_task_id": va_task_id,
+            }
+            if error_message:
+                output_payload["error"] = error_message
+            LogHelper.emit_versatile_end_tag(
+                call_id=versatile_call_id,
+                name=versatile_name,
+                output_payload=output_payload,
+                status_message=status_message,
+                duration_ms=duration_ms,
+                warn_threshold_ms=versatile_warn_threshold_ms,
+                level_override="ERROR" if status_message else None,
+            )
 
         if has_end_node:
             cascade = {"workflow_result": qa_result}

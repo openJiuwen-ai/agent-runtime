@@ -50,11 +50,7 @@ from google.protobuf.struct_pb2 import Struct, Value
 from loguru import logger
 
 from common.constants import session_request_key
-from common.response_wrapper import (
-    wrap_agent_event,
-    wrap_error,
-    wrap_workflow_event,
-)
+from common.log_helper import LogHelper
 from config import get_settings
 from orchestrator.executor import Executor
 
@@ -477,272 +473,356 @@ async def dispatch(
     conversation_id: str,
     request: Request,
 ) -> StreamingResponse | JSONResponse:
-    # 显式校验 Content-Type + JSON 解析（对应需求 §5.10）
-    content_type = request.headers.get("content-type", "").lower()
-    if "application/json" not in content_type:
-        return JSONResponse(
-            status_code=415,
-            content={
+    traceid = str(uuid.uuid4())
+    settings = get_settings()
+    warn_threshold_ms = LogHelper.resolve_http_warn_threshold_ms(settings)
+    request_started_ms = int(time.time() * 1000)
+    # 在工具类中统一完成请求快照解析与公共字段提取
+    http_request_tag_context = await LogHelper.build_http_request_tag_context(
+        request=request,
+        trace_id=traceid,
+        agent_id=agent_id,
+        conversation_id=conversation_id,
+    )
+
+    with LogHelper.bind_context(http_request_tag_context.log_context):
+        LogHelper.emit_http_request_start_tag(
+            http_request_tag_context=http_request_tag_context,
+        )
+
+        # 显式校验 Content-Type + JSON 解析（对应需求 §5.10）
+        if "application/json" not in http_request_tag_context.content_type:
+            response_content = {
                 "success": False,
                 "error": "unsupported_media_type",
                 "message": "请求数据格式需为 application/json",
-            },
-        )
-    try:
-        body = await request.json()
-    except Exception as e:
-        logger.warning(f"[Router] JSON 解析失败：{e}")
-        return JSONResponse(
-            status_code=400,
-            content={
+            }
+            duration_ms = int(time.time() * 1000) - request_started_ms
+            LogHelper.emit_http_request_end_tag(
+                http_request_tag_context=http_request_tag_context,
+                output_payload=response_content,
+                duration_ms=duration_ms,
+                warn_threshold_ms=warn_threshold_ms,
+            )
+            return JSONResponse(status_code=415, content=response_content)
+
+        try:
+            body = await request.json()
+        except Exception as e:
+            logger.warning(f"[Router] JSON parse failed: {e}")
+            response_content = {
                 "success": False,
                 "error": "invalid_json",
                 "message": f"请求 body 非合法 JSON 格式：{e}",
-            },
-        )
-    if not isinstance(body, dict):
-        return JSONResponse(
-            status_code=400,
-            content={
+            }
+            duration_ms = int(time.time() * 1000) - request_started_ms
+            LogHelper.emit_http_request_end_tag(
+                http_request_tag_context=http_request_tag_context,
+                output_payload=response_content,
+                duration_ms=duration_ms,
+                warn_threshold_ms=warn_threshold_ms,
+                level_override="WARN",
+            )
+            return JSONResponse(status_code=400, content=response_content)
+
+        if not isinstance(body, dict):
+            response_content = {
                 "success": False,
                 "error": "invalid_body",
                 "message": "请求 body 必须是 JSON 对象（dict）",
-            },
-        )
+            }
+            duration_ms = int(time.time() * 1000) - request_started_ms
+            LogHelper.emit_http_request_end_tag(
+                http_request_tag_context=http_request_tag_context,
+                output_payload=response_content,
+                duration_ms=duration_ms,
+                warn_threshold_ms=warn_threshold_ms,
+                level_override="WARN",
+            )
+            return JSONResponse(status_code=400, content=response_content)
 
-    user_query = _extract_query(body)
-    stream_mode = body.get("stream", True)
-    traceid = str(uuid.uuid4())
-    trace_id_str = f"{traceid}-{conversation_id}"
+        user_query = _extract_query(body)
+        stream_mode = bool(body.get("stream", True))
 
-    # 全链路 trace 注入；generate/run/_call_* 都会沿用这个 trace_id
-    with logger.contextualize(trace_id=trace_id_str):
-        logger.info(
-            f"[Router] Incoming dispatch request body: "
-            f"{json.dumps(body, ensure_ascii=False)}"
-        )
-        logger.info(
-            f"[Router] Dispatch request: project={project_id}, "
-            f"agent={agent_id}, conversation={conversation_id}, stream={stream_mode}"
-        )
         logger.info(
             f"[Router] conv={conversation_id} stream={stream_mode} "
             f"query={user_query!r:.80} trace={traceid}"
         )
 
-    executor: Executor = request.app.state.executor
-    redis = request.app.state.redis
-    task_store = request.app.state.task_store
-    event_queue = EventQueue()
-    headers = dict(request.headers)
+        executor: Executor = request.app.state.executor
+        redis = request.app.state.redis
+        task_store = request.app.state.task_store
+        event_queue = EventQueue()
+        headers = http_request_tag_context.request_headers
 
-    # 入口限流：在进入编排执行前统一拦截
-    settings = get_settings()
-    allowed, error_msg, error_code = await _check_rate_limit(
-        redis=redis,
-        settings=settings,
-        agent_id=agent_id,
-        conversation_id=conversation_id,
-    )
-    if not allowed:
-        logger.warning(
-            f"[Router] 限流拦截 conv={conversation_id}, agent={agent_id}, "
-            f"code={error_code}, trace={traceid}"
-        )
-        rejection = wrap_error(
+        # 入口限流：在进入编排执行前统一拦截
+        allowed, error_msg, error_code = await _check_rate_limit(
+            redis=redis,
+            settings=settings,
             agent_id=agent_id,
             conversation_id=conversation_id,
-            elapsed=0.0,
-            error_code=error_code or "",
-            error_msg=error_msg or "",
         )
-        if stream_mode:
-            async def limited_generate():
-                yield f"data: {json.dumps(rejection, ensure_ascii=False)}\n\n"
-                yield "data: [DONE]\n\n"
-
-            return StreamingResponse(
-                limited_generate(),
-                media_type="text/event-stream",
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                headers={
-                    "Cache-Control": "no-cache",
-                    "Connection": "keep-alive",
-                    "X-Accel-Buffering": "no",
-                },
+        if not allowed:
+            logger.warning(
+                f"[Router] Rate limited conv={conversation_id}, agent={agent_id}, "
+                f"code={error_code}, trace={traceid}"
             )
-        return JSONResponse(
-            content=rejection,
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-        )
+            rejection = {
+                "success": False,
+                "error": error_msg,
+                "error_code": error_code,
+                "conversation_id": conversation_id,
+                "agent_id": agent_id,
+            }
+            if stream_mode:
 
-    # 缓存首轮请求头和请求体和参数，供 VA 委托调用使用
-    cached = await redis.get_json(session_request_key(conversation_id))
-    params = dict(request.query_params) if hasattr(request, "query_params") else {}
-    if cached is None:
-        await redis.set_json(
-            session_request_key(conversation_id),
-            {"headers": headers, "body": body, "params": params},
-            ex=_REQUEST_TTL,
-        )
+                async def limited_generate():
+                    with LogHelper.bind_context(http_request_tag_context.log_context):
+                        try:
+                            yield f"data: {json.dumps(rejection, ensure_ascii=False)}\\n\\n"
+                            yield "data: [DONE]\\n\\n"
+                        finally:
+                            duration_ms = int(time.time() * 1000) - request_started_ms
+                            LogHelper.emit_http_request_end_tag(
+                                http_request_tag_context=http_request_tag_context,
+                                output_payload={
+                                    "mode": "stream",
+                                    "status_code": status.HTTP_429_TOO_MANY_REQUESTS,
+                                    "rejection": rejection,
+                                },
+                                duration_ms=duration_ms,
+                                warn_threshold_ms=warn_threshold_ms,
+                            )
 
-    if _is_flow_control_probe(user_query):
-        task_id = await _ensure_task_mapping(redis, conversation_id)
-        probe_response = _build_flow_control_probe_response(conversation_id, agent_id)
-        logger.info(
-            f"[Router] flow-control probe fast-path: conv={conversation_id}, task_id={task_id}, trace={traceid}"
-        )
-        if stream_mode:
-            async def probe_generate():
-                yield f"data: {json.dumps(probe_response, ensure_ascii=False)}\n\n"
-                yield "data: [DONE]\n\n"
-
-            return StreamingResponse(
-                probe_generate(),
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache",
-                    "Connection": "keep-alive",
-                    "X-Accel-Buffering": "no",
-                },
-            )
-        return JSONResponse(content=probe_response)
-
-    # ── Task 管理：conv_id → task_id 映射 ─────────────────────────────────
-    call_context = ServerCallContext()
-    conv_task_key = _CONV_TASK_KEY.format(conversation_id)
-    task_id = await redis.get(conv_task_key)
-    current_task = None
-
-    if task_id:
-        current_task = await task_store.get(task_id, call_context)
-        # 上轮已完成 → 原子重置：先删旧 key，再 SET NX；若并发请求抢先，则沿用对方写入的 task_id
-        if current_task and current_task.status.state == TASK_STATE_COMPLETED:
-            new_task_id = str(uuid.uuid4())
-            await redis.delete(conv_task_key)
-            was_set = await redis.set_nx(conv_task_key, new_task_id, ex=_REQUEST_TTL)
-            task_id = new_task_id if was_set else (await redis.get(conv_task_key) or new_task_id)
-            current_task = None
-            logger.debug(f"[Router] 上轮已完成，新建 task_id={task_id} for conv={conversation_id}")
-    else:
-        # 首轮：SET NX 原子创建，防止并发重入生成两个 task_id
-        new_task_id = str(uuid.uuid4())
-        was_set = await redis.set_nx(conv_task_key, new_task_id, ex=_REQUEST_TTL)
-        if was_set:
-            task_id = new_task_id
-            logger.debug(f"[Router] 新建 task_id={task_id} for conv={conversation_id}")
-        else:
-            # 并发请求已抢先创建，读取其写入的 task_id，复用同一 Task
-            task_id = await redis.get(conv_task_key)
-            current_task = await task_store.get(task_id, call_context) if task_id else None
-            logger.debug(f"[Router] 并发首轮，复用 task_id={task_id} for conv={conversation_id}")
-
-    send_request = _build_request(conversation_id, user_query, body, params)
-    ctx = RequestContext(
-        call_context=call_context,
-        request=send_request,
-        context_id=conversation_id,
-        task_id=task_id,
-        task=current_task,
-    )
-
-    async def run() -> None:
-        # 背景 task 里重新激活 trace_id（contextvars 的 task 边界会丢）
-        with logger.contextualize(trace_id=trace_id_str):
-            logger.info(
-                f"[Router] background task start: conv={conversation_id}, "
-                f"task_id={task_id}"
-            )
-            try:
-                await executor.execute(ctx, event_queue)
-                logger.info(f"[Router] execute 正常完成: conv={conversation_id}")
-            except Exception as e:
-                logger.exception(f"[Router] execute 异常：{e}")
-                try:
-                    await event_queue.enqueue_event(
-                        TaskStatusUpdateEvent(
-                            task_id=task_id,
-                            context_id=conversation_id,
-                            status=TaskStatus(state=TASK_STATE_FAILED),
-                        )
-                    )
-                except Exception:
-                    pass
-            finally:
-                await event_queue.close()
-                logger.debug(
-                    f"[Router] event_queue closed: conv={conversation_id}"
+                return StreamingResponse(
+                    limited_generate(),
+                    media_type="text/event-stream",
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",
+                    },
                 )
 
-    if stream_mode:
-        stream_start_time = time.monotonic()
-        logger.info(
-            f"[Router] 进入 stream 模式: conv={conversation_id}, task_id={task_id}"
+            duration_ms = int(time.time() * 1000) - request_started_ms
+            LogHelper.emit_http_request_end_tag(
+                http_request_tag_context=http_request_tag_context,
+                output_payload=rejection,
+                duration_ms=duration_ms,
+                warn_threshold_ms=warn_threshold_ms,
+            )
+            return JSONResponse(
+                content=rejection,
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
+        # 缓存首轮请求头和请求体，供 VA 委托调用使用
+        cached = await redis.get_json(session_request_key(conversation_id))
+        if cached is None:
+            await redis.set_json(
+                session_request_key(conversation_id),
+                {"headers": headers, "body": body},
+                ex=_REQUEST_TTL,
+            )
+
+        if _is_flow_control_probe(user_query):
+            task_id = await _ensure_task_mapping(redis, conversation_id)
+            probe_response = _build_flow_control_probe_response(conversation_id, agent_id)
+            logger.info(
+                f"[Router] flow-control probe fast-path: conv={conversation_id}, task_id={task_id}, trace={traceid}"
+            )
+            if stream_mode:
+
+                async def probe_generate():
+                    with LogHelper.bind_context(http_request_tag_context.log_context):
+                        try:
+                            yield f"data: {json.dumps(probe_response, ensure_ascii=False)}\n\n"
+                            yield "data: [DONE]\n\n"
+                        finally:
+                            duration_ms = int(time.time() * 1000) - request_started_ms
+                            LogHelper.emit_http_request_end_tag(
+                                http_request_tag_context=http_request_tag_context,
+                                output_payload={
+                                    "mode": "stream",
+                                    "status_code": status.HTTP_200_OK,
+                                    "probe": probe_response,
+                                },
+                                duration_ms=duration_ms,
+                                warn_threshold_ms=warn_threshold_ms,
+                            )
+
+                return StreamingResponse(
+                    probe_generate(),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
+
+            duration_ms = int(time.time() * 1000) - request_started_ms
+            LogHelper.emit_http_request_end_tag(
+                http_request_tag_context=http_request_tag_context,
+                output_payload=probe_response,
+                duration_ms=duration_ms,
+                warn_threshold_ms=warn_threshold_ms,
+            )
+            return JSONResponse(content=probe_response)
+
+        # ── Task 管理：conv_id → task_id 映射 ─────────────────────────────────
+        call_context = ServerCallContext()
+        conv_task_key = _CONV_TASK_KEY.format(conversation_id)
+        task_id = await redis.get(conv_task_key)
+        current_task = None
+
+        if task_id:
+            current_task = await task_store.get(task_id, call_context)
+            # 上轮已完成 → 原子重置：先删旧 key，再 SET NX；若并发请求抢先，则沿用对方写入的 task_id
+            if current_task and current_task.status.state == TASK_STATE_COMPLETED:
+                new_task_id = str(uuid.uuid4())
+                await redis.delete(conv_task_key)
+                was_set = await redis.set_nx(conv_task_key, new_task_id, ex=_REQUEST_TTL)
+                task_id = (
+                    new_task_id
+                    if was_set
+                    else (await redis.get(conv_task_key) or new_task_id)
+                )
+                current_task = None
+                logger.debug(
+                    f"[Router] 上轮已完成，新建 task_id={task_id} for conv={conversation_id}"
+                )
+        else:
+            # 首轮：SET NX 原子创建，防止并发重入生成两个 task_id
+            new_task_id = str(uuid.uuid4())
+            was_set = await redis.set_nx(conv_task_key, new_task_id, ex=_REQUEST_TTL)
+            if was_set:
+                task_id = new_task_id
+                logger.debug(f"[Router] 新建 task_id={task_id} for conv={conversation_id}")
+            else:
+                # 并发请求已抢先创建，读取其写入的 task_id，复用同一 Task
+                task_id = await redis.get(conv_task_key)
+                current_task = (
+                    await task_store.get(task_id, call_context) if task_id else None
+                )
+                logger.debug(
+                    f"[Router] 并发首轮，复用 task_id={task_id} for conv={conversation_id}"
+                )
+
+        send_request = _build_request(conversation_id, user_query, body)
+        ctx = RequestContext(
+            call_context=call_context,
+            request=send_request,
+            context_id=conversation_id,
+            task_id=task_id,
+            task=current_task,
         )
 
-        async def generate():
-            # 同样在 generator 消费时激活 trace_id
-            with logger.contextualize(trace_id=trace_id_str):
-                run_task = asyncio.create_task(run())
-                frame_count = 0
+        async def run() -> None:
+            with LogHelper.bind_context(http_request_tag_context.log_context):
                 try:
-                    while True:
-                        try:
-                            event = await event_queue.dequeue_event()
-                            event_queue.task_done()
-                            payload = _serialize_event(
-                                event,
-                                agent_id=agent_id,
-                                conversation_id=conversation_id,
-                                start_time=stream_start_time,
+                    await executor.execute(ctx, event_queue)
+                except Exception as e:
+                    logger.exception(f"[Router] execute 异常：{e}")
+                    try:
+                        await event_queue.enqueue_event(
+                            TaskStatusUpdateEvent(
+                                task_id=task_id,
+                                context_id=conversation_id,
+                                status=TaskStatus(state=TASK_STATE_FAILED),
                             )
-                            if payload is None:
-                                # 内部控制事件（如 FAILED），不向前端推送
-                                continue
-                            frame_count += 1
-                            # 每一帧出站日志，便于前后端对齐排查
-                            logger.info(
-                                f"[DispatchRouter] 流式，返回给中控的数据: {payload}"
-                            )
-                            yield f"data: {payload}\n\n"
-                        except Exception as e:
-                            if type(e).__name__ != "QueueShutDown":
-                                logger.warning(
-                                    f"[Router] generate 序列化异常，停止推送：{e!r}"
-                                )
-                            break
-                    yield "data: [DONE]\n\n"
-                    logger.info(
-                        f"[Router] stream 结束: conv={conversation_id}, "
-                        f"总共推送 {frame_count} 帧"
-                    )
+                        )
+                    except Exception:
+                        pass
                 finally:
-                    if not run_task.done():
-                        run_task.cancel()
-                        logger.debug(
-                            f"[Router] 客户端断连，取消后台任务：conv={conversation_id}"
+                    await event_queue.close()
+
+        if stream_mode:
+
+            async def generate():
+                with LogHelper.bind_context(http_request_tag_context.log_context):
+                    run_task = asyncio.create_task(run())
+                    pushed_events = 0
+                    status_message = 0
+                    finish_reason = "stream_completed"
+                    try:
+                        while True:
+                            try:
+                                event = await event_queue.dequeue_event()
+                                event_queue.task_done()
+                                if (
+                                    isinstance(event, TaskStatusUpdateEvent)
+                                    and event.status
+                                    and event.status.state == TASK_STATE_FAILED
+                                ):
+                                    status_message = 1
+                                pushed_events += 1
+                                yield f"data: {_serialize_event(event)}\n\n"
+                            except Exception as e:
+                                if type(e).__name__ != "QueueShutDown":
+                                    logger.warning(
+                                        f"[Router] generate 序列化异常，停止推送：{e!r}"
+                                    )
+                                    status_message = 1
+                                break
+                        yield "data: [DONE]\n\n"
+                    finally:
+                        if not run_task.done():
+                            run_task.cancel()
+                            status_message = 1
+                            finish_reason = "client_disconnected"
+                            logger.debug(
+                                f"[Router] 客户端断连，取消后台任务：conv={conversation_id}"
+                            )
+
+                        duration_ms = int(time.time() * 1000) - request_started_ms
+                        end_level = LogHelper.select_tag_level_by_duration(
+                            duration_ms, warn_threshold_ms
+                        )
+                        if status_message and end_level == "INFO":
+                            end_level = "WARN"
+                        LogHelper.emit_http_request_end_tag(
+                            http_request_tag_context=http_request_tag_context,
+                            output_payload={
+                                "mode": "stream",
+                                "status_code": status.HTTP_200_OK,
+                                "events": pushed_events,
+                                "finish_reason": finish_reason,
+                            },
+                            duration_ms=duration_ms,
+                            warn_threshold_ms=warn_threshold_ms,
+                            level_override=end_level,
                         )
 
-        return StreamingResponse(
-            generate(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            },
-        )
-    else:
+            return StreamingResponse(
+                generate(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+
         collected = []
         run_task = asyncio.create_task(run())
+        status_message = 0
         while True:
             try:
                 event = await event_queue.dequeue_event()
                 event_queue.task_done()
+                if (
+                    isinstance(event, TaskStatusUpdateEvent)
+                    and event.status
+                    and event.status.state == TASK_STATE_FAILED
+                ):
+                    status_message = 1
                 collected.append(event)
             except Exception as e:
                 if type(e).__name__ != "QueueShutDown":
                     logger.warning(f"[Router] non-stream 队列异常：{e!r}")
+                    status_message = 1
                 break
         await run_task
 
@@ -759,4 +839,18 @@ async def dispatch(
                         answer = part.text
                         break
 
-        return JSONResponse(content={"success": True, "answer": answer})
+        response_content = {"success": True, "answer": answer}
+        duration_ms = int(time.time() * 1000) - request_started_ms
+        end_level = LogHelper.select_tag_level_by_duration(
+            duration_ms, warn_threshold_ms
+        )
+        if status_message and end_level == "INFO":
+            end_level = "WARN"
+        LogHelper.emit_http_request_end_tag(
+            http_request_tag_context=http_request_tag_context,
+            output_payload=response_content,
+            duration_ms=duration_ms,
+            warn_threshold_ms=warn_threshold_ms,
+            level_override=end_level,
+        )
+        return JSONResponse(content=response_content)
