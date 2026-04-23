@@ -24,12 +24,29 @@ from common.events import (
     ConversationStartEvent, ConversationEndEvent,
     ThinkStartEvent, ThinkChunkEvent, ThinkEndEvent,
     TodoListStartEvent, TodoListItemEvent, TodoListEndEvent,
-    TodoStatusEvent,
-    ToolStartEvent, ToolEndEvent,
+    TodoStartEvent, TodoStatusEvent,
+    ToolStartEvent, ToolStatusEvent, ToolEndEvent,
     InterruptStartEvent,
-    FinalAnswerStartEvent, FinalAnswerChunkEvent, FinalAnswerEndEvent,
+    FinalAnswerStartEvent, SummaryEvent, FinalAnswerChunkEvent, FinalAnswerEndEvent,
     DelegateRequest,
 )
+
+# todolist item status 英 → 中映射（对齐抓包里的 HTML content 格式）
+_TODO_STATUS_CN: dict[str, str] = {
+    "pending": "待执行",
+    "in_progress": "执行中",
+    "done": "完成",
+    "failed": "失败",
+}
+
+
+def _log_stream_payload(evt: AgentEvent) -> None:
+    """在每次 yield AgentEvent 前打一条日志（对齐抓包的 stream payload 行）。"""
+    event_type = getattr(evt, "type", "<unknown>")
+    content = getattr(evt, "content", "") or ""
+    # 截断过长 content 避免刷屏
+    preview = content if len(content) <= 120 else content[:117] + "..."
+    logger.info(f"[EDPAgent] stream payload [{event_type}]: {preview}")
 
 # ── 模块级单例 ──────────────────────────────────────────────────────────
 _agent = None
@@ -193,13 +210,23 @@ async def agent_stream(
 
     # ── 状态机处理 Runner 流 ─────────────────────────────────────────
     processor = _StreamProcessor()
+    raw_event_count = 0
     async for raw_event in agent.stream(inputs=stream_inputs, session=session):
+        raw_event_count += 1
+        logger.debug(
+            f"[DPA] raw event #{raw_event_count}: type={getattr(raw_event, 'type', None)}"
+        )
         for evt in processor.process(raw_event):
+            _log_stream_payload(evt)
             yield evt
 
     # 流结束：flush 尾部事件（think_end / final_answer_end 等）
     for evt in processor.finalize():
+        _log_stream_payload(evt)
         yield evt
+    logger.debug(
+        f"[DPA] agent.stream() 结束：共处理 {raw_event_count} 个 raw event"
+    )
 
     # ── 中断检测：VA 委托 / HITL ──────────────────────────────────────
     pending_delegate = session.get_state("pending_delegate")
@@ -267,6 +294,10 @@ class _StreamProcessor:
         self._think_buffer = ""
         self._answer_buffer = ""
         self._emitted_todolist_ids: set = set()
+        # id → title 缓存，用于 todo_update 时填充 todo_start/status 的 content
+        self._todo_titles: dict[str, str] = {}
+        # 已发过 TodoStartEvent 的 id 集合，避免重复 start
+        self._started_todo_ids: set = set()
 
     def process(self, raw_event) -> list[AgentEvent]:
         """把一个原始 event 转为零或多个 AgentEvent。"""
@@ -294,6 +325,9 @@ class _StreamProcessor:
             return events
 
         # ── 最终答案流（llm_output）──────────────────────────────────
+        # 规范定义（feat-north-api-sse.md §4.5.9）：
+        #   流式片段走 SummaryEvent（token by token）
+        #   全量一次性帧走 FinalAnswerChunkEvent（由 answer 事件触发补发）
         if event_type == "llm_output":
             # 离开 thinking 状态
             events.extend(self._flush_thinking_if_needed())
@@ -301,7 +335,7 @@ class _StreamProcessor:
                 events.append(FinalAnswerStartEvent())
                 self.state = self.STATE_ANSWERING
                 self._answer_buffer = ""
-            events.append(FinalAnswerChunkEvent(content=content))
+            events.append(SummaryEvent(content=content))
             self._answer_buffer += content
             return events
 
@@ -309,10 +343,11 @@ class _StreamProcessor:
         if event_type == "answer":
             events.extend(self._flush_thinking_if_needed())
             if self.state == self.STATE_ANSWERING:
-                # 流式已给过 chunk，这里只补 end
+                # 流式已给过 summary × N，这里补一条全量 final_answer_chunk + end
+                events.append(FinalAnswerChunkEvent(content=self._answer_buffer))
                 events.append(FinalAnswerEndEvent(content=self._answer_buffer))
             else:
-                # 没有流式 output，直接 start + chunk + end
+                # 没有流式 output，直接 start + chunk(全量) + end
                 events.append(FinalAnswerStartEvent())
                 events.append(FinalAnswerChunkEvent(content=content))
                 events.append(FinalAnswerEndEvent(content=content))
@@ -324,10 +359,18 @@ class _StreamProcessor:
         if event_type == "tool_start":
             events.extend(self._flush_thinking_if_needed())
             events.extend(self._flush_answer_if_needed())
+            plugin = payload.get("plugin", "")
+            args = payload.get("args", {}) if isinstance(payload.get("args"), dict) else {}
             events.append(ToolStartEvent(
                 content=content,
-                plugin=payload.get("plugin", ""),
-                args=payload.get("args", {}) if isinstance(payload.get("args"), dict) else {},
+                plugin=plugin,
+                args=args,
+            ))
+            # 跟一个 tool_status（对齐抓包；前端把它当"运行中"提示）
+            # content 与 tool_start 同步，简化实现；如需"正在…"措辞，可在话术层定制
+            events.append(ToolStatusEvent(
+                plugin=plugin,
+                content=content,
             ))
             return events
 
@@ -368,7 +411,11 @@ class _StreamProcessor:
     def _flush_answer_if_needed(self) -> list[AgentEvent]:
         if self.state != self.STATE_ANSWERING:
             return []
-        events = [FinalAnswerEndEvent(content=self._answer_buffer)]
+        # 被其他事件打断时，补全量 final_answer_chunk + end（保证前端拿到权威文本）
+        events: list[AgentEvent] = [
+            FinalAnswerChunkEvent(content=self._answer_buffer),
+            FinalAnswerEndEvent(content=self._answer_buffer),
+        ]
         self.state = self.STATE_IDLE
         self._answer_buffer = ""
         return events
@@ -393,9 +440,26 @@ class _StreamProcessor:
                 except Exception as e:
                     logger.warning(f"[DPA] todolist item 校验失败：{e}")
                     continue
+                # 若 LLM 未提供 content，按抓包格式拼装 HTML 片段
+                if not ev.content:
+                    status_cn = _TODO_STATUS_CN.get(ev.status, ev.status)
+                    ev = ev.model_copy(
+                        update={
+                            "content": f"{ev.id}.{ev.title}（{status_cn}）<br/>"
+                        }
+                    )
                 events.append(ev)
                 self._emitted_todolist_ids.add(str(ev.id))
+                # 缓存 id → title，供后续 todo_update 构造 TodoStartEvent
+                self._todo_titles[str(ev.id)] = ev.title or ""
             events.append(TodoListEndEvent(count=len(items)))
+            logger.info(
+                f"[DPA] 从代码块中发现有效 TodoList，包含 {len(items)} 个步骤"
+            )
+            logger.debug(
+                f"[DPA] TodoList items: "
+                f"{[{'id': i.get('id'), 'title': i.get('title'), 'status': i.get('status')} for i in items if isinstance(i, dict)]}"
+            )
         return events
 
     def _parse_todo_update_blocks(self, text: str) -> list[AgentEvent]:
@@ -409,8 +473,39 @@ class _StreamProcessor:
                 continue
             if not isinstance(upd, dict):
                 continue
+
+            # todo_update 从 LLM 来通常只含 id/status；content 由 title 兜底
+            todo_id = upd.get("id")
+            status = upd.get("status")
+            id_key = str(todo_id) if todo_id is not None else ""
+            title = self._todo_titles.get(id_key, "")
+
+            # 首次看到 in_progress → 先发 todo_start
+            if (
+                status == "in_progress"
+                and id_key
+                and id_key not in self._started_todo_ids
+            ):
+                try:
+                    events.append(TodoStartEvent(
+                        id=todo_id,
+                        title=title,
+                        content=title,
+                    ))
+                    self._started_todo_ids.add(id_key)
+                    logger.debug(
+                        f"[DPA] 首次 in_progress，发 todo_start: id={todo_id}, title={title!r:.40}"
+                    )
+                except Exception as e:
+                    logger.warning(f"[DPA] todo_start 构造失败：{e}")
+
+            # 再发 todo_status（content 默认填入对应 title，便于前端展示）
             try:
+                upd.setdefault("content", title)
                 events.append(TodoStatusEvent(**upd))
+                logger.debug(
+                    f"[DPA] todo_status: id={todo_id}, status={status}"
+                )
             except Exception as e:
                 logger.warning(f"[DPA] todo_update 校验失败：{e}")
         return events

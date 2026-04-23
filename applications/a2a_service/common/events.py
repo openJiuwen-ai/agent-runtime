@@ -149,6 +149,23 @@ class ToolEndEvent(BaseModel):
 
 
 # ════════════════════════════════════════════════════════════════════
+# 执行轨迹事件（由 Executor 在 step 边界发射）
+# ════════════════════════════════════════════════════════════════════
+
+
+class PlanningExecutionProcessEvent(BaseModel):
+    """执行轨迹（step 边界标记）。
+
+    形如 "[执行轨迹] 正在执行步骤N: <desc> (tool=<tool_name>)" 的字符串在 content
+    里提供给前端做"当前卡在哪一步"的展示。
+
+    此事件在北向包装里**独有 error_code: ""** 字段（对齐抓包）。
+    """
+    type: Literal["planning_execution_process"] = "planning_execution_process"
+    content: str = ""
+
+
+# ════════════════════════════════════════════════════════════════════
 # 中断事件（AskUserRail / HITL）
 # ════════════════════════════════════════════════════════════════════
 
@@ -179,8 +196,27 @@ class FinalAnswerStartEvent(BaseModel):
     content: str = ""
 
 
+class SummaryEvent(BaseModel):
+    """流式总结片段（按 LLM token 切片逐段发出）。
+
+    规范定义（feat-north-api-sse.md §4.5.9 / north-api-response-format.md §4.9）：
+      - `summary`：流式通道，承担"边想边说"的 UI 展示
+      - `final_answer_chunk`：**一次性全量**通道，承担"最终权威文本"
+    两者并存，互补不冲突。前端流式展示用 SummaryEvent，存档/回显用
+    FinalAnswerChunkEvent。
+    """
+    type: Literal["summary"] = "summary"
+    content: str
+
+
 class FinalAnswerChunkEvent(BaseModel):
-    """最终回答流式片段。"""
+    """最终回答的**一次性全量**文本帧。
+
+    注意：抓包与规范一致 —— 这一帧并非流式片段，而是在所有 `summary` 流式
+    片段结束后，以单帧形式发送完整版（供校对/回显/存档使用）。
+
+    流式片段请使用 SummaryEvent。
+    """
     type: Literal["final_answer_chunk"] = "final_answer_chunk"
     content: str
 
@@ -254,11 +290,14 @@ AgentEvent = Union[
     ToolStartEvent,
     ToolStatusEvent,
     ToolEndEvent,
+    # 执行轨迹
+    PlanningExecutionProcessEvent,
     # 中断
     InterruptStartEvent,
     InterruptEndEvent,
     # 总结
     FinalAnswerStartEvent,
+    SummaryEvent,
     FinalAnswerChunkEvent,
     FinalAnswerEndEvent,
     # Executor
@@ -290,11 +329,14 @@ EVENT_TYPE_MAP = {
     "tool_start": ToolStartEvent,
     "tool_status": ToolStatusEvent,
     "tool_end": ToolEndEvent,
+    # 执行轨迹
+    "planning_execution_process": PlanningExecutionProcessEvent,
     # 中断
     "interrupt_start": InterruptStartEvent,
     "interrupt_end": InterruptEndEvent,
     # 总结
     "final_answer_start": FinalAnswerStartEvent,
+    "summary": SummaryEvent,
     "final_answer_chunk": FinalAnswerChunkEvent,
     "final_answer_end": FinalAnswerEndEvent,
     # 兼容

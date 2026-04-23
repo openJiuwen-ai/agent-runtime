@@ -13,6 +13,7 @@ Task 状态流转（存于 RedisTaskStore）：
 """
 from __future__ import annotations
 
+import time
 import uuid
 from typing import Optional
 
@@ -39,7 +40,11 @@ from loguru import logger
 
 from agents.EDPAgent import agent_stream
 from common.constants import session_request_key
-from common.events import DelegateRequest
+from common.events import (
+    DelegateRequest,
+    PlanningExecutionProcessEvent,
+    ToolStartEvent,
+)
 from common.redis_client import RedisClient
 from config import get_settings
 from orchestrator.agent_adapter import agent_event_to_a2a
@@ -114,6 +119,7 @@ class Executor(AgentExecutor):
             original_body=original_body,
             event_queue=event_queue,
             cascade_result=None,
+            step_counter=[0],  # cascade 递归共享同一计数器
         )
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
@@ -130,14 +136,64 @@ class Executor(AgentExecutor):
         original_body: dict,
         event_queue: EventQueue,
         cascade_result: Optional[dict],
+        step_counter: Optional[list[int]] = None,
     ) -> None:
+        if step_counter is None:
+            step_counter = [0]
+
+        turn_start = time.monotonic()
+        is_cascade = cascade_result is not None
+        logger.info(
+            f"[Executor] _run_agent 开始: conv={conv_id}, task={task_id}, "
+            f"is_cascade={is_cascade}, step_counter={step_counter[0]}"
+        )
+
+        event_count = 0
         async for event in agent_stream(
             query=query,
             conv_id=conv_id,
             cascade_result=cascade_result,
             context={"body": original_body},
         ):
+            event_count += 1
+            logger.debug(
+                f"[Executor] received agent event #{event_count}: "
+                f"type={type(event).__name__}"
+            )
+            # ── step 边界发射 planning_execution_process ──────────────
+            # 规则：ToolStartEvent 与 DelegateRequest 都计为一个"步骤"
+            if isinstance(event, ToolStartEvent):
+                step_counter[0] += 1
+                desc = event.content or event.plugin or ""
+                planning_content = (
+                    f"[执行轨迹] 正在执行步骤{step_counter[0]}: {desc} "
+                    f"(tool={event.plugin})"
+                )
+                planning = PlanningExecutionProcessEvent(content=planning_content)
+                planning_a2a = agent_event_to_a2a(planning, task_id, conv_id)
+                if planning_a2a is not None:
+                    await event_queue.enqueue_event(planning_a2a)
+                logger.info(
+                    f"[Executor] step 边界: 步骤{step_counter[0]} "
+                    f"(tool={event.plugin}, desc={desc!r:.60})"
+                )
+
             if isinstance(event, DelegateRequest):
+                step_counter[0] += 1
+                planning_content = (
+                    f"[执行轨迹] 正在执行步骤{step_counter[0]}: "
+                    f"{event.task_description} "
+                    f"(tool=adapter:versatile_proxy)"
+                )
+                planning = PlanningExecutionProcessEvent(content=planning_content)
+                planning_a2a = agent_event_to_a2a(planning, task_id, conv_id)
+                if planning_a2a is not None:
+                    await event_queue.enqueue_event(planning_a2a)
+
+                logger.info(
+                    f"[Executor] step 边界: 步骤{step_counter[0]} "
+                    f"(tool=adapter:versatile_proxy, intent={event.intent})"
+                )
                 logger.info(
                     f"[Executor] DelegateRequest → {event.intent}: "
                     f"{event.task_description!r:.60}"
@@ -157,6 +213,7 @@ class Executor(AgentExecutor):
                         original_body=original_body,
                         event_queue=event_queue,
                         cascade_result=va_result,
+                        step_counter=step_counter,
                     )
                 else:
                     # VA 未完成：将 va_task_id 写入 Task metadata，状态改为 INPUT_REQUIRED
@@ -177,6 +234,13 @@ class Executor(AgentExecutor):
                     logger.info(
                         f"[Executor] VA 挂起：conv={conv_id}, va_task={va_task_id}"
                     )
+                # 记录 VA 挂起 / cascade 路径结束时的累计耗时
+                turn_duration_ms = (time.monotonic() - turn_start) * 1000
+                logger.info(
+                    f"[Executor] ⏱️ _run_agent 返回: conv={conv_id}, "
+                    f"duration={turn_duration_ms:.2f}ms, "
+                    f"events_received={event_count}, steps={step_counter[0]}"
+                )
                 return
 
             a2a_event = agent_event_to_a2a(event, task_id, conv_id)
@@ -189,6 +253,14 @@ class Executor(AgentExecutor):
             task.status.CopyFrom(TaskStatus(state=TASK_STATE_COMPLETED))
             await self._task_store.save(task, call_context)
             logger.debug(f"[Executor] Task 标记 COMPLETED：task={task_id}, conv={conv_id}")
+
+        # 本轮（或本次 cascade）正常结束，打总耗时
+        turn_duration_ms = (time.monotonic() - turn_start) * 1000
+        logger.info(
+            f"[Executor] ⏱️ _run_agent 正常结束: conv={conv_id}, "
+            f"duration={turn_duration_ms:.2f}ms, "
+            f"events_received={event_count}, steps_accumulated={step_counter[0]}"
+        )
 
     # ── VersatileAdapter 调用 ─────────────────────────────────────────────────
 
@@ -308,12 +380,24 @@ class Executor(AgentExecutor):
         has_end_node = False
         qa_result: Optional[str] = None
         stream_resp_count = 0
+        forwarded_count = 0
+        suppressed_count = 0
+        va_call_start = time.monotonic()
+
+        logger.info(
+            f"[Executor] [VersatileProxy] 开始调用 VA: conv={conv_id}, "
+            f"intent={delegate.intent}, task_desc={delegate.task_description!r:.60}"
+        )
 
         try:
             async for stream_resp in self._va_client.send_message(request):
                 stream_resp_count += 1
                 event = self._parse_stream_event(stream_resp)
                 if event is None:
+                    logger.debug(
+                        f"[Executor] [VersatileProxy] chunk #{stream_resp_count} "
+                        f"解析为 None，跳过"
+                    )
                     continue
 
                 if va_real_task_id is None and hasattr(event, "task_id") and event.task_id:
@@ -323,20 +407,44 @@ class Executor(AgentExecutor):
                     )
 
                 if isinstance(event, TaskArtifactUpdateEvent):
-                    if not self._is_suppressed_node(event):
+                    if self._is_suppressed_node(event):
+                        suppressed_count += 1
+                        logger.debug(
+                            f"[Executor] [VersatileProxy] chunk #{stream_resp_count} "
+                            f"命中 va_workflow_result_node，抑制不推送"
+                        )
+                    else:
                         await event_queue.enqueue_event(event)
+                        forwarded_count += 1
+                        logger.debug(
+                            f"[Executor] [VersatileProxy] chunk #{stream_resp_count} "
+                            f"已转发到 event_queue"
+                        )
 
                     qa = self._extract_qa_node(event)
                     if qa is not None:
                         qa_result = qa
+                        logger.debug(
+                            f"[Executor] [VersatileProxy] 提取到 QA 节点 text: "
+                            f"{qa!r:.60}"
+                        )
 
                     if self._extract_end_node(event) is not None:
                         has_end_node = True
+                        logger.debug(
+                            f"[Executor] [VersatileProxy] 检测到 End node，"
+                            f"将进入 cascade 路径"
+                        )
 
         except Exception as e:
-            logger.exception(f"[Executor] VA send_message 异常：{e}")
+            logger.exception(f"[Executor] [VersatileProxy] VA send_message 异常：{e}")
 
-        logger.debug(f"[Executor] VA stream_resp_count={stream_resp_count}, conv={conv_id}")
+        va_duration_ms = (time.monotonic() - va_call_start) * 1000
+        logger.info(
+            f"[Executor] [VersatileProxy] ⏱️ VA 调用结束: duration={va_duration_ms:.2f}ms, "
+            f"chunks={stream_resp_count}, forwarded={forwarded_count}, "
+            f"suppressed={suppressed_count}, has_end_node={has_end_node}"
+        )
         continuation_task_id = va_real_task_id or str(uuid.uuid4())
 
         if has_end_node:

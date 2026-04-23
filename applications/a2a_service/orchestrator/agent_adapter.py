@@ -39,10 +39,12 @@ from common.events import (
     TodoStartEvent, TodoStatusEvent, TodoEndEvent,
     # 工具
     ToolStartEvent, ToolStatusEvent, ToolEndEvent,
+    # 执行轨迹
+    PlanningExecutionProcessEvent,
     # 中断
     InterruptStartEvent, InterruptEndEvent,
     # 总结
-    FinalAnswerStartEvent, FinalAnswerChunkEvent, FinalAnswerEndEvent,
+    FinalAnswerStartEvent, SummaryEvent, FinalAnswerChunkEvent, FinalAnswerEndEvent,
     # 兼容
     ThoughtEvent, AnswerEvent,
 )
@@ -108,8 +110,9 @@ def agent_event_to_a2a(
         TodoListStartEvent, TodoListItemEvent, TodoListEndEvent,
         TodoStartEvent, TodoStatusEvent, TodoEndEvent,
         ToolStartEvent, ToolStatusEvent, ToolEndEvent,
+        PlanningExecutionProcessEvent,
         InterruptStartEvent, InterruptEndEvent,
-        FinalAnswerStartEvent, FinalAnswerChunkEvent,
+        FinalAnswerStartEvent, SummaryEvent, FinalAnswerChunkEvent,
         ThoughtEvent, AnswerEvent,
     )
     if isinstance(event, EVENT_GROUPS):

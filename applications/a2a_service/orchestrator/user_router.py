@@ -37,6 +37,7 @@ from a2a.server.events import EventQueue
 from a2a.types.a2a_pb2 import (
     Message,
     SendMessageRequest,
+    TaskArtifactUpdateEvent,
     TaskStatus,
     TaskStatusUpdateEvent,
     TASK_STATE_COMPLETED,
@@ -49,6 +50,11 @@ from google.protobuf.struct_pb2 import Struct, Value
 from loguru import logger
 
 from common.constants import session_request_key
+from common.response_wrapper import (
+    wrap_agent_event,
+    wrap_error,
+    wrap_workflow_event,
+)
 from config import get_settings
 from orchestrator.executor import Executor
 
@@ -295,8 +301,109 @@ async def _check_rate_limit(
         return True, None, None
 
 
-def _serialize_event(event) -> str:
-    return json.dumps(MessageToDict(event), ensure_ascii=False)
+def _extract_event_meta(event) -> Optional[dict]:
+    """从 A2A protobuf event 抽出 {pattern, type, content, data}。
+
+    返回 None 表示该 event 不需要向前端推送（例如内部终态信号）。
+
+    - Pattern A（Agent 事件）：TaskArtifactUpdateEvent，data part 带 ``type`` 键
+      → 返回 {"pattern": "A", "type": <event_type>, "content": <text>, "data": <剩余>}
+    - Pattern B（Workflow 事件）：TaskArtifactUpdateEvent，data part 带 ``node_type`` 键
+      → 返回 {"pattern": "B", "type": "message", "content": "", "data": <节点数据>}
+    - TaskStatusUpdateEvent(COMPLETED) 当作 final_answer_end 对待（Agent 事件）
+    - 其他 TaskStatusUpdateEvent（如 FAILED）返回 None，不推送给前端
+    """
+    if isinstance(event, TaskArtifactUpdateEvent):
+        text_content = ""
+        data_dict: dict = {}
+        for part in event.artifact.parts:
+            kind = part.WhichOneof("content")
+            if kind == "text":
+                text_content = part.text or ""
+            elif kind == "data":
+                data_dict = MessageToDict(part.data)
+
+        # Pattern B：Versatile 节点帧带 node_type（保持启发式不变，决策 5）
+        if "node_type" in data_dict:
+            return {
+                "pattern": "B",
+                "type": "message",
+                "content": "",
+                "data": data_dict,
+            }
+
+        # Pattern A：EDPAgent 约定 data 里含 type 字段
+        if "type" in data_dict:
+            event_type = data_dict.pop("type")
+            # data 里 content 字段与 text 重复，提出去避免冗余
+            data_dict.pop("content", None)
+            return {
+                "pattern": "A",
+                "type": event_type,
+                "content": text_content,
+                "data": data_dict,
+            }
+
+        # 未知 artifact 形态，回退为 Pattern A thought 兼容
+        logger.debug(
+            f"[Router] 未知 artifact event 形态，回退兼容序列化；parts={len(event.artifact.parts)}"
+        )
+        return {
+            "pattern": "A",
+            "type": "thought",
+            "content": text_content,
+            "data": data_dict,
+        }
+
+    if isinstance(event, TaskStatusUpdateEvent):
+        if event.status and event.status.state == TASK_STATE_COMPLETED:
+            content = ""
+            if event.status.message:
+                for part in event.status.message.parts:
+                    if part.WhichOneof("content") == "text":
+                        content = part.text or ""
+                        break
+            return {
+                "pattern": "A",
+                "type": "final_answer_end",
+                "content": content,
+                "data": {},
+            }
+        # 其他 TaskStatusUpdateEvent（FAILED 等）：当前不向前端推送
+        return None
+
+    # 未识别类型：不推送
+    return None
+
+
+def _serialize_event(event, *, agent_id: str, conversation_id: str, start_time: float) -> Optional[str]:
+    """将内部 A2A event 序列化为前端可见的 SSE JSON（已包装）。
+
+    返回 None 表示该 event 不需要产出 SSE 帧（调用方应跳过）。
+    """
+    meta = _extract_event_meta(event)
+    if meta is None:
+        return None
+
+    elapsed = time.monotonic() - start_time
+    if meta["pattern"] == "A":
+        wrapped = wrap_agent_event(
+            event_type=meta["type"],
+            content=meta["content"],
+            data=meta["data"],
+            agent_id=agent_id,
+            conversation_id=conversation_id,
+            elapsed=elapsed,
+        )
+    else:
+        wrapped = wrap_workflow_event(
+            event_kind=meta["type"],
+            data=meta["data"],
+            agent_id=agent_id,
+            conversation_id=conversation_id,
+            elapsed=elapsed,
+        )
+    return json.dumps(wrapped, ensure_ascii=False)
 
 
 def _extract_query(body: dict) -> str:
@@ -406,11 +513,22 @@ async def dispatch(
     user_query = _extract_query(body)
     stream_mode = body.get("stream", True)
     traceid = str(uuid.uuid4())
+    trace_id_str = f"{traceid}-{conversation_id}"
 
-    logger.info(
-        f"[Router] conv={conversation_id} stream={stream_mode} "
-        f"query={user_query!r:.80} trace={traceid}"
-    )
+    # 全链路 trace 注入；generate/run/_call_* 都会沿用这个 trace_id
+    with logger.contextualize(trace_id=trace_id_str):
+        logger.info(
+            f"[Router] Incoming dispatch request body: "
+            f"{json.dumps(body, ensure_ascii=False)}"
+        )
+        logger.info(
+            f"[Router] Dispatch request: project={project_id}, "
+            f"agent={agent_id}, conversation={conversation_id}, stream={stream_mode}"
+        )
+        logger.info(
+            f"[Router] conv={conversation_id} stream={stream_mode} "
+            f"query={user_query!r:.80} trace={traceid}"
+        )
 
     executor: Executor = request.app.state.executor
     redis = request.app.state.redis
@@ -431,17 +549,17 @@ async def dispatch(
             f"[Router] 限流拦截 conv={conversation_id}, agent={agent_id}, "
             f"code={error_code}, trace={traceid}"
         )
-        rejection = {
-            "success": False,
-            "error": error_msg,
-            "error_code": error_code,
-            "conversation_id": conversation_id,
-            "agent_id": agent_id,
-        }
+        rejection = wrap_error(
+            agent_id=agent_id,
+            conversation_id=conversation_id,
+            elapsed=0.0,
+            error_code=error_code or "",
+            error_msg=error_msg or "",
+        )
         if stream_mode:
             async def limited_generate():
-                yield f"data: {json.dumps(rejection, ensure_ascii=False)}\\n\\n"
-                yield "data: [DONE]\\n\\n"
+                yield f"data: {json.dumps(rejection, ensure_ascii=False)}\n\n"
+                yield "data: [DONE]\n\n"
 
             return StreamingResponse(
                 limited_generate(),
@@ -528,41 +646,81 @@ async def dispatch(
     )
 
     async def run() -> None:
-        try:
-            await executor.execute(ctx, event_queue)
-        except Exception as e:
-            logger.exception(f"[Router] execute 异常：{e}")
+        # 背景 task 里重新激活 trace_id（contextvars 的 task 边界会丢）
+        with logger.contextualize(trace_id=trace_id_str):
+            logger.info(
+                f"[Router] background task start: conv={conversation_id}, "
+                f"task_id={task_id}"
+            )
             try:
-                await event_queue.enqueue_event(
-                    TaskStatusUpdateEvent(
-                        task_id=task_id,
-                        context_id=conversation_id,
-                        status=TaskStatus(state=TASK_STATE_FAILED),
+                await executor.execute(ctx, event_queue)
+                logger.info(f"[Router] execute 正常完成: conv={conversation_id}")
+            except Exception as e:
+                logger.exception(f"[Router] execute 异常：{e}")
+                try:
+                    await event_queue.enqueue_event(
+                        TaskStatusUpdateEvent(
+                            task_id=task_id,
+                            context_id=conversation_id,
+                            status=TaskStatus(state=TASK_STATE_FAILED),
+                        )
                     )
+                except Exception:
+                    pass
+            finally:
+                await event_queue.close()
+                logger.debug(
+                    f"[Router] event_queue closed: conv={conversation_id}"
                 )
-            except Exception:
-                pass
-        finally:
-            await event_queue.close()
 
     if stream_mode:
+        stream_start_time = time.monotonic()
+        logger.info(
+            f"[Router] 进入 stream 模式: conv={conversation_id}, task_id={task_id}"
+        )
+
         async def generate():
-            run_task = asyncio.create_task(run())
-            try:
-                while True:
-                    try:
-                        event = await event_queue.dequeue_event()
-                        event_queue.task_done()
-                        yield f"data: {_serialize_event(event)}\n\n"
-                    except Exception as e:
-                        if type(e).__name__ != "QueueShutDown":
-                            logger.warning(f"[Router] generate 序列化异常，停止推送：{e!r}")
-                        break
-                yield "data: [DONE]\n\n"
-            finally:
-                if not run_task.done():
-                    run_task.cancel()
-                    logger.debug(f"[Router] 客户端断连，取消后台任务：conv={conversation_id}")
+            # 同样在 generator 消费时激活 trace_id
+            with logger.contextualize(trace_id=trace_id_str):
+                run_task = asyncio.create_task(run())
+                frame_count = 0
+                try:
+                    while True:
+                        try:
+                            event = await event_queue.dequeue_event()
+                            event_queue.task_done()
+                            payload = _serialize_event(
+                                event,
+                                agent_id=agent_id,
+                                conversation_id=conversation_id,
+                                start_time=stream_start_time,
+                            )
+                            if payload is None:
+                                # 内部控制事件（如 FAILED），不向前端推送
+                                continue
+                            frame_count += 1
+                            # 每一帧出站日志，便于前后端对齐排查
+                            logger.info(
+                                f"[DispatchRouter] 流式，返回给中控的数据: {payload}"
+                            )
+                            yield f"data: {payload}\n\n"
+                        except Exception as e:
+                            if type(e).__name__ != "QueueShutDown":
+                                logger.warning(
+                                    f"[Router] generate 序列化异常，停止推送：{e!r}"
+                                )
+                            break
+                    yield "data: [DONE]\n\n"
+                    logger.info(
+                        f"[Router] stream 结束: conv={conversation_id}, "
+                        f"总共推送 {frame_count} 帧"
+                    )
+                finally:
+                    if not run_task.done():
+                        run_task.cancel()
+                        logger.debug(
+                            f"[Router] 客户端断连，取消后台任务：conv={conversation_id}"
+                        )
 
         return StreamingResponse(
             generate(),
