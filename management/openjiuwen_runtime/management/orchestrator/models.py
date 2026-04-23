@@ -8,6 +8,8 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
+from .interfaces import IMessage
+
 
 class MessagePriority(str, Enum):
     """消息优先级"""
@@ -29,7 +31,7 @@ class SessionState(str, Enum):
     RUNNING = "running"
 
 
-class Message(BaseModel):
+class Message(BaseModel, IMessage):
     """消息模型"""
     session_id: str = Field(..., description="会话ID")
     request_id: Optional[str] = Field(None, description="请求ID")
@@ -39,6 +41,27 @@ class Message(BaseModel):
     payload: Any = Field(..., description="消息负载")
     response_channel: Optional[Any] = Field(None, description="响应通道")
     is_complete: bool = Field(False, description="是否是最后一个消息")
+
+    def get_session_id(self) -> str:
+        return self.session_id
+
+    def get_session_concurrency(self) -> int:
+        return self.concurrency
+
+    def get_session_ttl(self) -> int:
+        return self.ttl
+
+    def get_request_id(self) -> Optional[str]:
+        return self.request_id
+
+    def get_payload(self) -> Any:
+        return self.payload
+
+    def get_priority(self) -> MessagePriority:
+        return self.priority
+
+    def is_complete_msg(self) -> bool:
+        return self.is_complete
 
 
 class SessionInfo(BaseModel):

@@ -42,7 +42,7 @@ from .deployments import (
     K8sDeployer,
     K8sStrategy,
 )
-from .orchestrator import Orchestrator, OrchestratorConfig
+from .orchestrator import Access, AccessConfig
 
 __all__ = [
     "DeploymentManager",
@@ -59,7 +59,6 @@ __all__ = [
     "DBHandler",
     "SQLiteHandler",
     "MySQLHandler",
-    "GaussDBHandler",
     # Base
     "CommonParams",
     "DeployContext",

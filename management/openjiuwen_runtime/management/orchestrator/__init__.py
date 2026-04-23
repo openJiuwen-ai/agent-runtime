@@ -1,7 +1,7 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
-from .access import Orchestrator, OrchestratorConfig
+from .access import Access, AccessConfig
 from .interfaces import IMessageQueue, IServiceManager, ITimer, IServiceHandler
 from .models import (
     Message,
@@ -17,8 +17,8 @@ from .service_manager import ServiceManager
 from .service_handler import ServiceHandler
 
 __all__ = [
-    "Orchestrator",
-    "OrchestratorConfig",
+    "Access",
+    "AccessConfig",
     "IMessageQueue",
     "ServiceState",
     "SessionState",

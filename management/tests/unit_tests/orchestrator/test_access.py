@@ -6,6 +6,55 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
+from openjiuwen_runtime.management.orchestrator.models import Message, MessagePriority
+
+
+class MockMessage:
+    """Mock IMessage 实现"""
+    
+    def __init__(
+        self,
+        session_id: str = "test-session",
+        request_id: str = None,
+        concurrency: int = 1,
+        ttl: int = 30,
+        priority: MessagePriority = MessagePriority.MEDIUM,
+        payload: dict = None,
+        is_complete: bool = False,
+    ):
+        self._session_id = session_id
+        self._request_id = request_id
+        self._concurrency = concurrency
+        self._ttl = ttl
+        self._priority = priority
+        self._payload = payload or {}
+        self._is_complete = is_complete
+        self._response_channel = None
+
+    def get_session_id(self) -> str:
+        return self._session_id
+
+    def get_session_concurrency(self) -> int:
+        return self._concurrency
+
+    def get_session_ttl(self) -> int:
+        return self._ttl
+
+    def get_request_id(self):
+        return self._request_id
+
+    def get_payload(self):
+        return self._payload
+
+    def get_priority(self) -> MessagePriority:
+        return self._priority
+
+    def is_complete_msg(self) -> bool:
+        return self._is_complete
+
+    def get_response_channel(self):
+        return self._response_channel
+
 
 class TestAccess:
     """测试 Access 类"""
@@ -40,6 +89,11 @@ class TestAccess:
         from openjiuwen_runtime.management.orchestrator.access import Access
         return Access(access_config)
 
+    @pytest.fixture
+    def mock_message(self):
+        """创建 Mock 消息"""
+        return MockMessage(session_id="test-session")
+
     @pytest.mark.asyncio
     async def test_init(self, access):
         """测试初始化"""
@@ -57,10 +111,30 @@ class TestAccess:
         """测试发送消息缺少 session_id"""
         await access.init()
 
-        result = await access.send_message({}, {"data": "test"})
+        msg = MockMessage(session_id="")
+        result = await access.send_message(msg)
 
         assert result["success"] is False
         assert "session_id" in result["message"]
+
+        await access.stop()
+
+    @pytest.mark.asyncio
+    async def test_send_message_with_imessage(self, access):
+        """测试使用 IMessage 接口发送消息"""
+        await access.init()
+
+        msg = MockMessage(
+            session_id="test-session",
+            concurrency=2,
+            ttl=60,
+            payload={"data": "test"},
+        )
+        
+        result = await access.send_message(msg)
+
+        assert result["success"] is True
+        assert result["session_id"] == "test-session"
 
         await access.stop()
 

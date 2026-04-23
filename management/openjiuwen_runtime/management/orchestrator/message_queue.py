@@ -8,7 +8,7 @@ import heapq
 import logging
 from typing import Optional
 
-from .interfaces import IMessageQueue
+from .interfaces import IMessageQueue, IMessage
 from .models import Message, MessagePriority
 
 logger = logging.getLogger(__name__)
@@ -33,7 +33,7 @@ class InMemoryMessageQueue(IMessageQueue):
         }
         return priority_map.get(priority, 1)
 
-    async def put(self, message: Message) -> None:
+    async def put(self, message: IMessage) -> None:
         if self._closed:
             raise RuntimeError("Queue is closed")
 
@@ -46,13 +46,13 @@ class InMemoryMessageQueue(IMessageQueue):
             if self._closed:
                 raise RuntimeError("Queue is closed")
 
-            priority_val = self._priority_value(message.priority)
+            priority_val = self._priority_value(message.get_priority())
             self._counter += 1
             heapq.heappush(self._queue, (priority_val, self._counter, message))
-            logger.debug(f"Message put into queue, priority={message.priority}, queue_size={len(self._queue)}")
+            logger.debug(f"Message put into queue, priority={message.get_priority()}, queue_size={len(self._queue)}")
             self._not_empty.notify()
 
-    async def get(self) -> Message:
+    async def get(self) -> IMessage:
         if self._closed and len(self._queue) == 0:
             raise RuntimeError("Queue is closed and empty")
 
@@ -105,13 +105,13 @@ class ZmqMessageQueue(IMessageQueue):
                 logger.error("zmq library not installed, falling back to in-memory queue")
                 self._socket = None
 
-    async def put(self, message: Message) -> None:
+    async def put(self, message: IMessage) -> None:
         if self._closed:
             raise RuntimeError("Queue is closed")
 
         await self._queue.put(message)
 
-    async def get(self) -> Message:
+    async def get(self) -> IMessage:
         if self._closed:
             raise RuntimeError("Queue is closed")
 
@@ -175,7 +175,7 @@ class RabbitMqMessageQueue(IMessageQueue):
             logger.error(f"Failed to connect to RabbitMQ: {e}, falling back to in-memory queue")
             self._use_fallback = True
 
-    async def put(self, message: Message) -> None:
+    async def put(self, message: IMessage) -> None:
         if self._closed:
             raise RuntimeError("Queue is closed")
 
@@ -188,7 +188,10 @@ class RabbitMqMessageQueue(IMessageQueue):
         try:
             import aio_pika
 
-            message_body = message.model_dump_json()
+            if isinstance(message, Message):
+                message_body = message.model_dump_json()
+            else:
+                message_body = str(message.get_payload())
             await self._channel.default_exchange.publish(
                 aio_pika.Message(body=message_body.encode()),
                 routing_key=self._queue_name,
@@ -198,7 +201,7 @@ class RabbitMqMessageQueue(IMessageQueue):
             logger.error(f"Failed to publish message to RabbitMQ: {e}")
             await self._fallback_queue.put(message)
 
-    async def get(self) -> Message:
+    async def get(self) -> IMessage:
         if self._closed:
             raise RuntimeError("Queue is closed")
 

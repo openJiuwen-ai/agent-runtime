@@ -13,6 +13,7 @@ from openjiuwen_runtime.management.manager import DeploymentManager
 
 from .message_queue import InMemoryMessageQueue, IMessageQueue
 from .models import Message, MessagePriority
+from .interfaces import IMessage
 from .service_manager import ServiceManager
 from .timer import Timer
 
@@ -87,20 +88,23 @@ class Access:
 
         logger.info("Access initialized successfully")
 
-    async def send_message(self, header: dict, payload: Any) -> dict:
+    async def send_message(self, msg: IMessage) -> dict:
         """
         发送消息
 
         Args:
-            header: 消息头，包含 session_id、concurrency、ttl
-            payload: 消息负载
+            msg: 实现 IMessage 接口的消息对象
 
         Returns:
             分发结果字典
         """
-        session_id = header.get("session_id")
-        concurrency = header.get("concurrency", 1)
-        ttl = header.get("ttl", self._config.service_ttl)
+        session_id = msg.get_session_id()
+        concurrency = msg.get_session_concurrency()
+        ttl = msg.get_session_ttl()
+        request_id = msg.get_request_id()
+        payload = msg.get_payload()
+        priority = msg.get_priority()
+        response_channel = msg.get_response_channel()
 
         if not session_id:
             logger.error("send_message failed: session_id is required")
@@ -110,7 +114,8 @@ class Access:
             }
 
         logger.debug(
-            f"Sending message: session_id='{session_id}', concurrency={concurrency}, ttl={ttl}"
+            f"Sending message: session_id='{session_id}', request_id='{request_id}', "
+            f"concurrency={concurrency}, ttl={ttl}"
         )
 
         response_future: asyncio.Future = asyncio.get_event_loop().create_future()
@@ -118,11 +123,12 @@ class Access:
 
         message = Message(
             session_id=session_id,
+            request_id=request_id,
             concurrency=concurrency,
             ttl=ttl,
-            priority=MessagePriority.MEDIUM,
+            priority=priority if priority else MessagePriority.MEDIUM,
             payload=payload,
-            response_channel=response_future,
+            response_channel=response_channel if response_channel else response_future,
         )
 
         try:

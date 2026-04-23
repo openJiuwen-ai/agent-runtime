@@ -13,7 +13,7 @@ from openjiuwen_runtime.management.manager import DeploymentManager
 from openjiuwen_runtime.management.models.deployment_params import DeployImageParams
 from openjiuwen_runtime.management.models.enums import DeployMode
 
-from .interfaces import IServiceManager, IMessageQueue
+from .interfaces import IServiceManager, IMessageQueue, IMessage
 from .models import Message, MessagePriority, ServiceInfo, ServiceState, SessionInfo
 from .service_handler import ServiceHandler
 from .timer import Timer
@@ -168,7 +168,7 @@ class ServiceManager(IServiceManager):
         logger.debug(f"Listed {len(services_info)} services")
         return services_info
 
-    async def send_to_service(self, deployment_id: str, message: Message) -> None:
+    async def send_to_service(self, deployment_id: str, message: IMessage) -> None:
         if deployment_id not in self._services:
             logger.warning(f"Service not found: deployment_id='{deployment_id}'")
             return
@@ -272,32 +272,32 @@ class ServiceManager(IServiceManager):
             if "min_idle_services" in kwargs:
                 await self._ensure_min_idle_services()
 
-    async def handle_message(self, message: Message) -> None:
+    async def handle_message(self, message: IMessage) -> None:
         logger.debug(
-            f"Handling message: session_id='{message.session_id}', "
-            f"priority={message.priority}"
+            f"Handling message: session_id='{message.get_session_id()}', "
+            f"priority={message.get_priority()}"
         )
 
-        if message.priority == MessagePriority.HIGH:
+        if message.get_priority() == MessagePriority.HIGH:
             await self._handle_task_request(message)
         else:
             await self._handle_user_request(message)
 
-    async def _handle_user_request(self, message: Message) -> None:
-        logger.debug(f"Handling user request: session_id='{message.session_id}'")
+    async def _handle_user_request(self, message: IMessage) -> None:
+        logger.debug(f"Handling user request: session_id='{message.get_session_id()}'")
 
-        deployment_id = await self._get_available_service(message.concurrency)
+        deployment_id = await self._get_available_service(message.get_session_concurrency())
 
         if deployment_id:
             service_handler = self._services[deployment_id]
             await service_handler.add_session(
-                message.session_id, message.concurrency, message.ttl
+                message.get_session_id(), message.get_session_concurrency(), message.get_session_ttl()
             )
             await self._refresh_timer(deployment_id)
             await service_handler.handle_message(message)
             logger.info(
                 f"User request assigned to existing service: "
-                f"session_id='{message.session_id}', deployment_id='{deployment_id}'"
+                f"session_id='{message.get_session_id()}', deployment_id='{deployment_id}'"
             )
         else:
             if len(self._services) >= self._max_services:
@@ -310,22 +310,22 @@ class ServiceManager(IServiceManager):
                 new_deployment_id = await self.deploy_service()
                 service_handler = self._services[new_deployment_id]
                 await service_handler.add_session(
-                    message.session_id, message.concurrency, message.ttl
+                    message.get_session_id(), message.get_session_concurrency(), message.get_session_ttl()
                 )
                 await service_handler.handle_message(message)
                 logger.info(
                     f"User request assigned to new service: "
-                    f"session_id='{message.session_id}', deployment_id='{new_deployment_id}'"
+                    f"session_id='{message.get_session_id()}', deployment_id='{new_deployment_id}'"
                 )
             except Exception as e:
                 logger.error(
                     f"Failed to create service for user request: error={e}"
                 )
 
-    async def _handle_task_request(self, message: Message) -> None:
-        logger.debug(f"Handling task request: session_id='{message.session_id}'")
+    async def _handle_task_request(self, message: IMessage) -> None:
+        logger.debug(f"Handling task request: session_id='{message.get_session_id()}'")
 
-        payload = message.payload
+        payload = message.get_payload()
         task_type = payload.get("task_type") if isinstance(payload, dict) else None
 
         if task_type == "scale_down":

@@ -11,7 +11,7 @@ from typing import Dict, Optional, Any
 
 from openjiuwen_runtime.foundation.log import get_logger
 
-from .interfaces import IServiceHandler
+from .interfaces import IServiceHandler, IMessage
 from .models import Message, SessionInfo, SessionState, ServiceState
 from .timer import Timer
 
@@ -214,23 +214,23 @@ class ServiceHandler(IServiceHandler):
                     del session.pending_requests[request_id]
             return None
 
-    async def handle_message(self, message: Message) -> None:
-        logger.debug(f"Handling message: session_id='{message.session_id}'")
-        session_id = message.session_id
+    async def handle_message(self, message: IMessage) -> None:
+        logger.debug(f"Handling message: session_id='{message.get_session_id()}'")
+        session_id = message.get_session_id()
         if session_id not in self._sessions:
             logger.warning(f"Session '{session_id}' not found, cannot handle message")
             return
 
-        if message.is_complete and message.request_id:
+        if message.is_complete_msg() and message.get_request_id():
             await self._handle_response_message(message)
         else:
             await self.write_to_session(session_id, message)
         logger.debug(f"Message handled for session '{session_id}'")
 
-    async def _handle_response_message(self, message: Message) -> None:
+    async def _handle_response_message(self, message: IMessage) -> None:
         """处理响应消息"""
-        session_id = message.session_id
-        request_id = message.request_id
+        session_id = message.get_session_id()
+        request_id = message.get_request_id()
 
         async with self._lock:
             if session_id not in self._sessions:
@@ -245,7 +245,7 @@ class ServiceHandler(IServiceHandler):
                 if not response_channel.done():
                     response_channel.set_result(message)
 
-            if message.is_complete:
+            if message.is_complete_msg():
                 del session.pending_requests[request_id]
 
     async def add_session(self, session_id: str, concurrency: int, ttl: int) -> None:
@@ -313,7 +313,7 @@ class ServiceHandler(IServiceHandler):
     async def get_session_count(self) -> int:
         return len(self._sessions)
 
-    async def write_to_session(self, session_id: str, message: Message) -> None:
+    async def write_to_session(self, session_id: str, message: IMessage) -> None:
         if session_id not in self._session_queues:
             logger.warning(f"Session queue '{session_id}' not found")
             return

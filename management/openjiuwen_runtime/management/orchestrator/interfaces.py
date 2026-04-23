@@ -2,9 +2,56 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, TYPE_CHECKING
 
 from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:
+    from .models import MessagePriority
+
+
+class IMessage(ABC):
+    """消息接口，提供统一的消息字段访问方法"""
+
+    @abstractmethod
+    def get_session_id(self) -> str:
+        """获取会话ID"""
+        pass
+
+    @abstractmethod
+    def get_session_concurrency(self) -> int:
+        """获取会话并发度"""
+        pass
+
+    @abstractmethod
+    def get_session_ttl(self) -> int:
+        """获取会话TTL"""
+        pass
+
+    @abstractmethod
+    def get_request_id(self) -> Optional[str]:
+        """获取请求ID"""
+        pass
+
+    @abstractmethod
+    def get_payload(self) -> Any:
+        """获取消息负载"""
+        pass
+
+    @abstractmethod
+    def get_priority(self) -> "MessagePriority":
+        """获取消息优先级"""
+        pass
+
+    @abstractmethod
+    def is_complete_msg(self) -> bool:
+        """是否是最后一个消息"""
+        pass
+
+    @abstractmethod
+    def get_response_channel(self) -> Optional[Any]:
+        """获取响应通道"""
+        pass
 
 
 class Message(BaseModel):

@@ -14,6 +14,53 @@ from openjiuwen_runtime.management.orchestrator.access import Access, AccessConf
 from openjiuwen_runtime.management.orchestrator.models import MessagePriority
 
 
+class MockMessage:
+    """Mock IMessage 实现"""
+    
+    def __init__(
+        self,
+        session_id: str = "test-session",
+        request_id: str = None,
+        concurrency: int = 1,
+        ttl: int = 30,
+        priority: MessagePriority = MessagePriority.MEDIUM,
+        payload: dict = None,
+        is_complete: bool = False,
+    ):
+        self._session_id = session_id
+        self._request_id = request_id
+        self._concurrency = concurrency
+        self._ttl = ttl
+        self._priority = priority
+        self._payload = payload or {}
+        self._is_complete = is_complete
+        self._response_channel = None
+
+    def get_session_id(self) -> str:
+        return self._session_id
+
+    def get_session_concurrency(self) -> int:
+        return self._concurrency
+
+    def get_session_ttl(self) -> int:
+        return self._ttl
+
+    def get_request_id(self):
+        return self._request_id
+
+    def get_payload(self):
+        return self._payload
+
+    def get_priority(self) -> MessagePriority:
+        return self._priority
+
+    def is_complete_msg(self) -> bool:
+        return self._is_complete
+
+    def get_response_channel(self):
+        return self._response_channel
+
+
 class TestOrchestratorSystem:
     """Orchestrator 系统测试"""
 
@@ -76,14 +123,14 @@ class TestOrchestratorSystem:
     @pytest.mark.asyncio
     async def test_send_message_flow(self, access, mock_k8s_deployer):
         """测试消息分发流程"""
-        header = {
-            "session_id": "test-session-1",
-            "concurrency": 1,
-            "ttl": 30,
-        }
-        payload = {"data": "test message"}
+        msg = MockMessage(
+            session_id="test-session-1",
+            concurrency=1,
+            ttl=30,
+            payload={"data": "test message"},
+        )
 
-        result = await access.send_message(header, payload)
+        result = await access.send_message(msg)
 
         assert result["success"] is True
         assert "session_id" in result
@@ -94,13 +141,13 @@ class TestOrchestratorSystem:
         """测试多个 session 的消息分发"""
         results = []
         for i in range(3):
-            header = {
-                "session_id": f"session-{i}",
-                "concurrency": 1,
-                "ttl": 30,
-            }
-            payload = {"data": f"message {i}"}
-            result = await access.send_message(header, payload)
+            msg = MockMessage(
+                session_id=f"session-{i}",
+                concurrency=1,
+                ttl=30,
+                payload={"data": f"message {i}"},
+            )
+            result = await access.send_message(msg)
             results.append(result)
 
         assert all(r["success"] for r in results)
@@ -108,12 +155,13 @@ class TestOrchestratorSystem:
     @pytest.mark.asyncio
     async def test_health_check_after_operations(self, access):
         """测试操作后的健康检查"""
-        header = {
-            "session_id": "health-check-session",
-            "concurrency": 1,
-            "ttl": 30,
-        }
-        await access.send_message(header, {"data": "test"})
+        msg = MockMessage(
+            session_id="health-check-session",
+            concurrency=1,
+            ttl=30,
+            payload={"data": "test"},
+        )
+        await access.send_message(msg)
 
         status = await access.health_check()
 
@@ -137,12 +185,13 @@ class TestOrchestratorSystem:
     @pytest.mark.asyncio
     async def test_send_response_end(self, access):
         """测试发送响应结束消息"""
-        header = {
-            "session_id": "response-end-session",
-            "concurrency": 1,
-            "ttl": 30,
-        }
-        await access.send_message(header, {"data": "test"})
+        msg = MockMessage(
+            session_id="response-end-session",
+            concurrency=1,
+            ttl=30,
+            payload={"data": "test"},
+        )
+        await access.send_message(msg)
 
         await access.send_response_end("response-end-session")
 
@@ -150,12 +199,13 @@ class TestOrchestratorSystem:
     async def test_concurrent_messages(self, access):
         """测试并发消息处理"""
         async def send_message(session_id: str):
-            header = {
-                "session_id": session_id,
-                "concurrency": 1,
-                "ttl": 30,
-            }
-            return await access.send_message(header, {"data": f"concurrent {session_id}"})
+            msg = MockMessage(
+                session_id=session_id,
+                concurrency=1,
+                ttl=30,
+                payload={"data": f"concurrent {session_id}"},
+            )
+            return await access.send_message(msg)
 
         results = await asyncio.gather(
             send_message("concurrent-1"),
@@ -168,10 +218,9 @@ class TestOrchestratorSystem:
     @pytest.mark.asyncio
     async def test_message_without_session_id(self, access):
         """测试缺少 session_id 的消息"""
-        header = {}
-        payload = {"data": "test"}
+        msg = MockMessage(session_id="")
 
-        result = await access.send_message(header, payload)
+        result = await access.send_message(msg)
 
         assert result["success"] is False
         assert "session_id" in result["message"]
@@ -186,12 +235,13 @@ class TestOrchestratorSystem:
             access = Access(access_config)
             await access.init()
 
-            header = {
-                "session_id": "shutdown-test",
-                "concurrency": 1,
-                "ttl": 30,
-            }
-            await access.send_message(header, {"data": "test"})
+            msg = MockMessage(
+                session_id="shutdown-test",
+                concurrency=1,
+                ttl=30,
+                payload={"data": "test"},
+            )
+            await access.send_message(msg)
 
             await access.stop()
 
@@ -202,12 +252,13 @@ class TestOrchestratorSystem:
         """测试自动扩容触发"""
         results = []
         for i in range(5):
-            header = {
-                "session_id": f"scale-session-{i}",
-                "concurrency": 5,
-                "ttl": 30,
-            }
-            result = await access.send_message(header, {"data": f"scale {i}"})
+            msg = MockMessage(
+                session_id=f"scale-session-{i}",
+                concurrency=5,
+                ttl=30,
+                payload={"data": f"scale {i}"},
+            )
+            result = await access.send_message(msg)
             results.append(result)
 
         assert all(r["success"] for r in results)
@@ -227,12 +278,13 @@ class TestOrchestratorSystem:
 
             results = []
             for i in range(5):
-                header = {
-                    "session_id": f"limit-session-{i}",
-                    "concurrency": 1,
-                    "ttl": 30,
-                }
-                result = await access.send_message(header, {"data": f"limit {i}"})
+                msg = MockMessage(
+                    session_id=f"limit-session-{i}",
+                    concurrency=1,
+                    ttl=30,
+                    payload={"data": f"limit {i}"},
+                )
+                result = await access.send_message(msg)
                 results.append(result)
 
             await access.stop()
