@@ -13,7 +13,7 @@ from openjiuwen_runtime.management.manager import DeploymentManager
 
 from .message_queue import InMemoryMessageQueue, IMessageQueue
 from .models import Message, MessagePriority
-from .interfaces import IMessage
+from .interfaces import IMessage, MessageWrapper
 from .service_manager import ServiceManager
 from .timer import Timer
 
@@ -46,8 +46,6 @@ class Access:
         self._message_queue: Optional[IMessageQueue] = None
         self._timer: Optional[Timer] = None
         self._service_manager: Optional[ServiceManager] = None
-        self._message_loop_task: Optional[asyncio.Task] = None
-        self._autoscaling_task: Optional[asyncio.Task] = None
         self._running = False
         self._response_channels: dict[str, asyncio.Queue] = {}
         logger.info(
@@ -82,16 +80,15 @@ class Access:
             service_ttl=self._config.service_ttl,
             timer=self._timer,
             message_queue=self._message_queue,
+            message_timeout=self._config.message_timeout,
+            max_retries=self._config.max_retries,
         )
         logger.info("ServiceManager initialized")
 
         await self._service_manager._ensure_min_idle_services()
+        await self._service_manager.start()
 
         self._running = True
-        self._message_loop_task = asyncio.create_task(self._message_loop())
-        self._autoscaling_task = asyncio.create_task(self._autoscaling_loop())
-        logger.info("Message loop started")
-
         logger.info("Access initialized successfully")
 
     async def send_message(self, msg: IMessage) -> dict:
@@ -126,15 +123,7 @@ class Access:
         response_queue: asyncio.Queue = asyncio.Queue()
         self._response_channels[session_id] = response_queue
 
-        message = Message(
-            session_id=session_id,
-            request_id=request_id,
-            concurrency=concurrency,
-            ttl=ttl,
-            priority=priority if priority else MessagePriority.MEDIUM,
-            payload=payload,
-            response_queue=response_queue if response_queue else response_queue,
-        )
+        message = MessageWrapper(msg, response_queue)
 
         try:
             await self._message_queue.put(message)
@@ -206,32 +195,8 @@ class Access:
 
         self._running = False
 
-        if self._message_loop_task:
-            self._message_loop_task.cancel()
-            try:
-                await self._message_loop_task
-            except asyncio.CancelledError:
-                pass
-            logger.info("Message loop stopped")
-
-        if self._autoscaling_task:
-            self._autoscaling_task.cancel()
-            try:
-                await self._autoscaling_task
-            except asyncio.CancelledError:
-                pass
-            logger.info("Autoscaling loop stopped")
-
         if self._service_manager:
-            services = await self._service_manager.list_services()
-            for service_info in services:
-                try:
-                    await self._service_manager.stop_service(service_info.deployment_id)
-                except Exception as e:
-                    logger.error(
-                        f"Failed to stop service: deployment_id='{service_info.deployment_id}', error={e}"
-                    )
-            logger.info("All services stopped")
+            await self._service_manager.stop()
 
         if self._message_queue:
             await self._message_queue.close()
@@ -247,99 +212,6 @@ class Access:
 
         self._response_channels.clear()
         logger.info("Access stopped successfully")
-
-    async def _message_loop(self) -> None:
-        """消息处理循环"""
-        logger.info("Message loop started")
-
-        while self._running:
-            try:
-                message = await self._message_queue.get()
-                logger.debug(
-                    f"Message received from queue: session_id='{message.session_id}', "
-                    f"priority={message.priority}"
-                )
-
-                try:
-                    await asyncio.wait_for(
-                        self._service_manager.handle_message(message),
-                        timeout=self._config.message_timeout
-                    )
-
-                    if message.response_channel and isinstance(message.response_channel, asyncio.Queue):
-                        await message.response_channel.put(Message(
-                            session_id=message.session_id,
-                            request_id=message.request_id,
-                            concurrency=0,
-                            ttl=0,
-                            priority=message.priority,
-                            payload={"status": "accepted"},
-                            is_complete=False,
-                        ))
-
-                except asyncio.TimeoutError:
-                    logger.warning(
-                        f"Message processing timeout: session_id='{message.session_id}'"
-                    )
-                    await self._handle_message_failure(message, "timeout")
-
-                except Exception as e:
-                    logger.error(
-                        f"Message processing error: session_id='{message.session_id}', error={e}"
-                    )
-                    await self._handle_message_failure(message, str(e))
-
-            except asyncio.CancelledError:
-                logger.debug("Message loop cancelled")
-                break
-            except Exception as e:
-                logger.error(f"Message loop error: error={e}")
-                await asyncio.sleep(0.1)
-
-        logger.info("Message loop ended")
-
-    async def _handle_message_failure(self, message: Message, reason: str) -> None:
-        """处理消息失败"""
-        if message.retry_count < message.max_retries:
-            message.retry_count += 1
-            logger.info(
-                f"Retrying message: session_id='{message.session_id}', "
-                f"retry_count={message.retry_count}, reason='{reason}'"
-            )
-            await self._message_queue.put(message)
-        else:
-            logger.error(
-                f"Message failed after max retries: session_id='{message.session_id}', "
-                f"retry_count={message.retry_count}, reason='{reason}'"
-            )
-            if message.response_queue and isinstance(message.response_queue, asyncio.Queue):
-                await message.response_queue.put(Message(
-                    session_id=message.session_id,
-                    request_id=message.request_id,
-                    concurrency=0,
-                    ttl=0,
-                    priority=message.priority,
-                    payload={"error": f"Message failed after {message.retry_count} retries: {reason}"},
-                    is_complete=True,
-                ))
-
-    async def _autoscaling_loop(self) -> None:
-        """自动伸缩检查循环"""
-        logger.info("Autoscaling loop started")
-
-        while self._running:
-            try:
-                await asyncio.sleep(30)  # 每 30 秒检查一次
-                if self._service_manager:
-                    await self._service_manager._check_autoscaling()
-            except asyncio.CancelledError:
-                logger.debug("Autoscaling loop cancelled")
-                break
-            except Exception as e:
-                logger.error(f"Autoscaling loop error: error={e}")
-                await asyncio.sleep(5)
-
-        logger.info("Autoscaling loop ended")
 
     async def set_image(self, image: str) -> None:
         """
@@ -421,7 +293,7 @@ class Access:
             "message_queue": "initialized" if self._message_queue else "not_initialized",
             "timer": "initialized" if self._timer else "not_initialized",
             "service_manager": "initialized" if self._service_manager else "not_initialized",
-            "message_loop": "running" if self._running and self._message_loop_task and not self._message_loop_task.done() else "stopped",
+            "message_loop": "running" if self._service_manager and self._service_manager._running else "stopped",
         }
 
         if self._message_queue:

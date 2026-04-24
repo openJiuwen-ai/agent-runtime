@@ -7,49 +7,52 @@ from typing import Any, Callable, Optional, TYPE_CHECKING
 from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
-    from .models import MessagePriority
+    from .models import MessagePriority, Message
 
 
-class IMessage(ABC):
-    """消息接口，提供统一的消息字段访问方法"""
-
+class PriorityMessage(ABC):
+    @property
     @abstractmethod
-    def get_session_id(self) -> str:
-        """获取会话ID"""
-        pass
-
-    @abstractmethod
-    def get_session_concurrency(self) -> int:
-        """获取会话并发度"""
-        pass
-
-    @abstractmethod
-    def get_session_ttl(self) -> int:
-        """获取会话TTL"""
-        pass
-
-    @abstractmethod
-    def get_request_id(self) -> Optional[str]:
-        """获取请求唯一ID"""
-        pass
-
-    @abstractmethod
-    def get_payload(self) -> Any:
-        """获取消息负载"""
-        pass
-
-    @abstractmethod
-    def get_priority(self) -> "MessagePriority":
+    def priority(self) -> "MessagePriority":
         """获取消息优先级"""
         pass
 
+
+class IMessage(PriorityMessage):
+    """消息接口，提供统一的消息字段访问方法"""
+
+    @property
     @abstractmethod
-    def is_complete_msg(self) -> bool:
-        """是否是最后一个消息"""
+    def session_id(self) -> str:
+        """获取会话ID"""
+        pass
+
+    @property
+    @abstractmethod
+    def session_concurrency(self) -> int:
+        """获取会话并发度"""
+        pass
+
+    @property
+    @abstractmethod
+    def session_ttl(self) -> int:
+        """获取会话TTL"""
+        pass
+
+    @property
+    @abstractmethod
+    def request_id(self) -> Optional[str]:
+        """获取请求唯一ID"""
+        pass
+
+    @property
+    @abstractmethod
+    def payload(self) -> Any:
+        """获取消息负载"""
         pass
 
 
-class MessageWrapper:
+class MessageWrapper(IMessage):
 
     def __init__(self, message: IMessage, queue: asyncio.Queue):
         self._message = message
@@ -60,16 +63,33 @@ class MessageWrapper:
         return self._message
 
     @property
-    def queue(self) -> Optional[asyncio.Queue]:
+    def queue(self) -> asyncio.Queue:
         """获取响应通道"""
         return self._queue
 
+    @property
+    def session_id(self) -> str:
+        return self._message.session_id
 
-class Message(BaseModel):
-    message_id: str = Field(..., description="消息ID")
-    session_id: Optional[str] = Field(None, description="会话ID")
-    payload: Any = Field(None, description="消息内容")
-    metadata: dict[str, Any] = Field(default_factory=dict, description="元数据")
+    @property
+    def session_concurrency(self) -> int:
+        return self._message.session_concurrency
+
+    @property
+    def session_ttl(self) -> int:
+        return self._message.session_ttl
+
+    @property
+    def request_id(self) -> Optional[str]:
+        return self._message.request_id
+
+    @property
+    def payload(self) -> Any:
+        return self._message.payload
+
+    @property
+    def priority(self) -> "MessagePriority":
+        return self._message.priority
 
 
 class ServiceInfo(BaseModel):
@@ -81,11 +101,11 @@ class ServiceInfo(BaseModel):
 
 class IMessageQueue(ABC):
     @abstractmethod
-    async def put(self, message: Message) -> None:
+    async def put(self, message: PriorityMessage) -> None:
         pass
 
     @abstractmethod
-    async def get(self) -> Message:
+    async def get(self) -> PriorityMessage:
         pass
 
     @abstractmethod
@@ -115,7 +135,7 @@ class IServiceManager(ABC):
         pass
 
     @abstractmethod
-    async def send_to_service(self, deployment_id: str, message: Message) -> None:
+    async def send_to_service(self, deployment_id: str, message: "Message") -> None:
         pass
 
 
@@ -131,7 +151,7 @@ class ITimer(ABC):
 
 class IServiceHandler(ABC):
     @abstractmethod
-    async def handle_message(self, message: Message) -> None:
+    async def handle_message(self, message: "Message") -> None:
         pass
 
     @abstractmethod

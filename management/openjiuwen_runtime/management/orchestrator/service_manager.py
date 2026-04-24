@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, Callable, Any
 from openjiuwen_runtime.foundation.log import get_logger
 from openjiuwen_runtime.management.manager import DeploymentManager
 
-from .interfaces import IServiceManager, IMessageQueue, IMessage
+from .interfaces import IServiceManager, IMessageQueue, IMessage, MessageWrapper
 from .models import Message, MessagePriority, ServiceInfo, ServiceState, SessionInfo
 from .service_handler import ServiceHandler
 from .session_router import SessionRouter, RoutingStrategy
@@ -36,6 +36,8 @@ class ServiceManager(IServiceManager):
         service_ttl: int,
         timer: Timer,
         message_queue: IMessageQueue,
+        message_timeout: int = 30,
+        max_retries: int = 3,
     ):
         self._deployment_manager = deployment_manager
         self._image = image
@@ -47,6 +49,8 @@ class ServiceManager(IServiceManager):
         self._service_ttl = service_ttl
         self._timer = timer
         self._message_queue = message_queue
+        self._message_timeout = message_timeout
+        self._max_retries = max_retries
         self._services: Dict[str, ServiceHandler] = {}
         self._session_router = SessionRouter(strategy=RoutingStrategy.LOOSE)
         self._autoscaler = AutoScaler(ScalingConfig(
@@ -54,6 +58,9 @@ class ServiceManager(IServiceManager):
             max_services=max_services,
         ))
         self._lock = asyncio.Lock()
+        self._running = False
+        self._message_loop_task: Optional[asyncio.Task] = None
+        self._autoscaling_task: Optional[asyncio.Task] = None
         self._config = {
             "image": image,
             "max_concurrency": max_concurrency,
@@ -62,6 +69,8 @@ class ServiceManager(IServiceManager):
             "target_port": target_port,
             "invoke_path": invoke_path,
             "service_ttl": service_ttl,
+            "message_timeout": message_timeout,
+            "max_retries": max_retries,
         }
         logger.info(
             f"ServiceManager initialized: image='{image}', max_concurrency={max_concurrency}, "
@@ -76,6 +85,141 @@ class ServiceManager(IServiceManager):
     @property
     def config(self) -> Dict[str, Any]:
         return self._config
+
+    async def start(self) -> None:
+        """启动 ServiceManager"""
+        if self._running:
+            logger.warning("ServiceManager already running")
+            return
+
+        self._running = True
+        self._message_loop_task = asyncio.create_task(self._message_loop())
+        self._autoscaling_task = asyncio.create_task(self._autoscaling_loop())
+        logger.info("ServiceManager started")
+
+    async def stop(self) -> None:
+        """停止 ServiceManager"""
+        self._running = False
+
+        if self._message_loop_task:
+            self._message_loop_task.cancel()
+            try:
+                await self._message_loop_task
+            except asyncio.CancelledError:
+                pass
+            self._message_loop_task = None
+
+        if self._autoscaling_task:
+            self._autoscaling_task.cancel()
+            try:
+                await self._autoscaling_task
+            except asyncio.CancelledError:
+                pass
+            self._autoscaling_task = None
+
+        for deployment_id in list(self._services.keys()):
+            try:
+                await self.stop_service(deployment_id)
+            except Exception as e:
+                logger.error(f"Failed to stop service: deployment_id='{deployment_id}', error={e}")
+
+        logger.info("ServiceManager stopped")
+
+    async def _message_loop(self) -> None:
+        """消息处理循环"""
+        logger.info("Message loop started")
+
+        while self._running:
+            try:
+                raw_message = await self._message_queue.get()
+                if not isinstance(raw_message, MessageWrapper):
+                    logger.error(f"Invalid message type: {type(raw_message)}")
+                    continue
+
+                message = raw_message
+                logger.debug(
+                    f"Message received from queue: session_id='{message.session_id}', "
+                    f"priority={message.priority}"
+                )
+
+                try:
+                    await asyncio.wait_for(
+                        self.handle_message(message),
+                        timeout=self._message_timeout
+                    )
+
+                    await message.queue.put(Message(
+                        session_id=message.session_id,
+                        request_id=message.request_id,
+                        concurrency=0,
+                        ttl=0,
+                        priority=message.priority,
+                        payload={"status": "accepted"},
+                        is_complete=False,
+                    ))
+
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        f"Message processing timeout: session_id='{message.session_id}'"
+                    )
+                    await self._handle_message_failure(message, "timeout")
+
+                except Exception as e:
+                    logger.error(
+                        f"Message processing error: session_id='{message.session_id}', error={e}"
+                    )
+                    await self._handle_message_failure(message, str(e))
+
+            except asyncio.CancelledError:
+                logger.debug("Message loop cancelled")
+                break
+            except Exception as e:
+                logger.error(f"Message loop error: error={e}")
+                await asyncio.sleep(0.1)
+
+        logger.info("Message loop ended")
+
+    async def _handle_message_failure(self, message: MessageWrapper, reason: str) -> None:
+        """处理消息失败"""
+        if hasattr(message._message, 'retry_count') and hasattr(message._message, 'max_retries'):
+            if message._message.retry_count < message._message.max_retries:
+                message._message.retry_count += 1
+                logger.info(
+                    f"Retrying message: session_id='{message.session_id}', "
+                    f"retry_count={message._message.retry_count}, reason='{reason}'"
+                )
+                await self._message_queue.put(message)
+                return
+
+        logger.error(
+            f"Message failed: session_id='{message.session_id}', reason='{reason}'"
+        )
+        await message.queue.put(Message(
+            session_id=message.session_id,
+            request_id=message.request_id,
+            concurrency=0,
+            ttl=0,
+            priority=message.priority,
+            payload={"error": reason},
+            is_complete=True,
+        ))
+
+    async def _autoscaling_loop(self) -> None:
+        """自动伸缩检查循环"""
+        logger.info("Autoscaling loop started")
+
+        while self._running:
+            try:
+                await asyncio.sleep(30)
+                await self._check_autoscaling()
+            except asyncio.CancelledError:
+                logger.debug("Autoscaling loop cancelled")
+                break
+            except Exception as e:
+                logger.error(f"Autoscaling loop error: error={e}")
+                await asyncio.sleep(5)
+
+        logger.info("Autoscaling loop ended")
 
     async def deploy_service(self) -> str:
         async with self._lock:

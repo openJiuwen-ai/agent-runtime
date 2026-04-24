@@ -45,6 +45,14 @@ class Message(BaseModel, IMessage):
     retry_count: int = Field(0, description="重试次数")
     max_retries: int = Field(3, description="最大重试次数")
 
+    @property
+    def session_concurrency(self) -> int:
+        return self.concurrency
+
+    @property
+    def session_ttl(self) -> int:
+        return self.ttl
+
     def get_session_id(self) -> str:
         return self.session_id
 

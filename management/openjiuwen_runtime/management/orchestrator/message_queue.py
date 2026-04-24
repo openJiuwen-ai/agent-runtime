@@ -8,7 +8,7 @@ import heapq
 import logging
 from typing import Optional
 
-from .interfaces import IMessageQueue, IMessage
+from .interfaces import IMessageQueue, IMessage, PriorityMessage
 from .models import Message, MessagePriority
 
 logger = logging.getLogger(__name__)
@@ -33,7 +33,7 @@ class InMemoryMessageQueue(IMessageQueue):
         }
         return priority_map.get(priority, 1)
 
-    async def put(self, message: IMessage) -> None:
+    async def put(self, message: PriorityMessage) -> None:
         if self._closed:
             raise RuntimeError("Queue is closed")
 
@@ -46,13 +46,13 @@ class InMemoryMessageQueue(IMessageQueue):
             if self._closed:
                 raise RuntimeError("Queue is closed")
 
-            priority_val = self._priority_value(message.get_priority())
+            priority_val = self._priority_value(message.priority)
             self._counter += 1
             heapq.heappush(self._queue, (priority_val, self._counter, message))
-            logger.debug(f"Message put into queue, priority={message.get_priority()}, queue_size={len(self._queue)}")
+            logger.debug(f"Message put into queue, priority={message.priority}, queue_size={len(self._queue)}")
             self._not_empty.notify()
 
-    async def get(self) -> IMessage:
+    async def get(self) -> PriorityMessage:
         if self._closed and len(self._queue) == 0:
             raise RuntimeError("Queue is closed and empty")
 
@@ -138,10 +138,10 @@ class RabbitMqMessageQueue(IMessageQueue):
     """基于 RabbitMQ 的异步消息队列"""
 
     def __init__(
-        self,
-        url: str = "amqp://localhost",
-        queue_name: str = "orchestrator",
-        max_size: int = 100,
+            self,
+            url: str = "amqp://localhost",
+            queue_name: str = "orchestrator",
+            max_size: int = 100,
     ):
         self._url = url
         self._queue_name = queue_name

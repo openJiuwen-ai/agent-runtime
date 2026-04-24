@@ -36,6 +36,30 @@ class MockMessage:
         self._is_complete = is_complete
         self._response_channel = None
 
+    @property
+    def session_id(self) -> str:
+        return self._session_id
+
+    @property
+    def session_concurrency(self) -> int:
+        return self._concurrency
+
+    @property
+    def session_ttl(self) -> int:
+        return self._ttl
+
+    @property
+    def request_id(self):
+        return self._request_id
+
+    @property
+    def payload(self):
+        return self._payload
+
+    @property
+    def priority(self) -> MessagePriority:
+        return self._priority
+
     def get_session_id(self) -> str:
         return self._session_id
 
