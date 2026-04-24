@@ -435,6 +435,17 @@ def _extract_query(body: dict) -> str:
     return ""
 
 
+def _extract_query_params(request) -> dict:
+    """从 FastAPI Request 取 URL query string 并转 dict；非 Request 对象降级为 {}。
+
+    首跳捕获的 params 会写入 session 缓存，供 VA 委托/续轮场景从 Redis 恢复，最终
+    经 A2A DataPart → VersatileAdapter → httpx 透传到 Versatile 后端 URL。
+    """
+    if hasattr(request, "query_params"):
+        return dict(request.query_params)
+    return {}
+
+
 def _build_request(conversation_id: str, user_query: str, body: dict, params: Optional[dict] = None) -> SendMessageRequest:
     """将 Versatile 格式请求体转为 A2A SendMessageRequest。"""
     body_struct = Struct()
@@ -638,12 +649,13 @@ async def dispatch(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             )
 
-        # 缓存首轮请求头和请求体，供 VA 委托调用使用
+        # 缓存首轮请求头、请求体和 URL query params，供 VA 委托调用/续轮恢复使用
+        params = _extract_query_params(request)
         cached = await redis.get_json(session_request_key(conversation_id))
         if cached is None:
             await redis.set_json(
                 session_request_key(conversation_id),
-                {"headers": headers, "body": body},
+                {"headers": headers, "body": body, "params": params},
                 ex=_REQUEST_TTL,
             )
 
@@ -731,7 +743,7 @@ async def dispatch(
                     f"[Router] 并发首轮，复用 task_id={task_id} for conv={conversation_id}"
                 )
 
-        send_request = _build_request(conversation_id, user_query, body)
+        send_request = _build_request(conversation_id, user_query, body, params)
         ctx = RequestContext(
             call_context=call_context,
             request=send_request,
