@@ -190,13 +190,13 @@ class IServiceHandler(ABC):
     """服务入口"""
 
     @abstractmethod
-    def handle_message(self, msg: SessionRequestWrapper):
+    async def handle_message(self, msg: SessionRequestWrapper):
         pass
 
-    def deploy(self):
+    async def deploy(self):
         pass
 
-    def delete(self):
+    async def delete(self):
         pass
 
 
