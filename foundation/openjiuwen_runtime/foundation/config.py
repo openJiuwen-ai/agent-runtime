@@ -45,9 +45,8 @@ class Settings(BaseSettings):
     UV_EXTRA_ARGS: str = Field(default="", env="UV_EXTRA_ARGS")
     DEPLOY_TYPE: Literal["subprocess", "docker", "k8s"] = Field(default="subprocess", env="DEPLOY_TYPE")
     MODE: Literal["dev", "product"] = Field(default="product", env="MODE")
-    KUBECONFIG: str = Field(default="/tmp/deploys/k8s_config.yaml", env="KUBECONFIG")
-    K8S_DEFAULT_CONFIG_PATH: str = Field(default="/tmp/deploys/k8s_deploy_default_config.json",
-                                         env="K8S_DEFAULT_CONFIG_PATH")
+    KUBECONFIG: str = Field(default="", env="KUBECONFIG")
+    K8S_DEFAULT_CONFIG_PATH: str = Field(default="", env="K8S_DEFAULT_CONFIG_PATH")
 
     # ========================
     # 内置 对象
