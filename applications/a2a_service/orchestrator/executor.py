@@ -52,6 +52,18 @@ from orchestrator.agent_adapter import agent_event_to_a2a
 from common.redis_task_store import RedisTaskStore
 _TTL = 1800
 
+def _rewrite_recommend_delegate(intent: str, task_description: str) -> tuple[str, str]:
+    """临时兼容旧链路：推荐首跳改写为平台历史上可识别的入口。"""
+    if intent != "理财推荐":
+        return intent, task_description
+
+    normalized_query = (task_description or "").strip()
+    if not normalized_query or normalized_query == "推荐理财产品":
+        normalized_query = "请推荐低风险理财产品"
+
+    return "理财选品购买", normalized_query
+
+
 class Executor(AgentExecutor):
     def __init__(
         self, va_client: Client, redis: RedisClient, task_store: RedisTaskStore
@@ -360,22 +372,32 @@ class Executor(AgentExecutor):
         headers = cached.get("headers", {})
         body = dict(cached.get("body", {}))
         params = cached.get("params", {})
-        # 同时修改 custom_data.inputs 和 input（兼容两种格式）
-        if "custom_data" in body and isinstance(body["custom_data"], dict):
-            # 创建 custom_data 的副本，避免修改原始数据
-            custom_data = dict(body["custom_data"])
-            if "inputs" in custom_data and isinstance(custom_data["inputs"], dict):
-                # 创建 inputs 的副本
-                inputs = dict(custom_data["inputs"])
-                inputs["query"] = delegate.task_description
-                inputs["intent"] = delegate.intent
-                custom_data["inputs"] = inputs
-            # 更新 body 中的 custom_data
-            body["custom_data"] = custom_data
+
+        effective_intent, effective_query = _rewrite_recommend_delegate(
+            delegate.intent,
+            delegate.task_description,
+        )
+        if effective_intent != delegate.intent or effective_query != delegate.task_description:
+            logger.info(
+                "[Executor] 推荐入口临时改写：intent={} -> {}, query={!r} -> {!r}",
+                delegate.intent,
+                effective_intent,
+                delegate.task_description,
+                effective_query,
+            )
+
         input_section = dict(body.get("input") or {})
-        input_section["query"] = delegate.task_description
-        input_section["intent"] = delegate.intent
+        input_section["query"] = effective_query
+        input_section["intent"] = effective_intent
         body["input"] = input_section
+
+        custom_data = dict(body.get("custom_data") or {})
+        custom_inputs = dict(custom_data.get("inputs") or {})
+        custom_inputs["query"] = effective_query
+        custom_inputs["intent"] = effective_intent
+        custom_data["inputs"] = custom_inputs
+        body["custom_data"] = custom_data
+
         body["stream"] = True
 
         # 在 a2a 调用侧记录 Versatile 前后 Tag 日志
@@ -390,7 +412,7 @@ class Executor(AgentExecutor):
         continuation_task_id = ""
 
         request = self._build_va_message(
-            query=delegate.task_description,
+            query=effective_query,
             headers=headers,
             body=body,
             params=params,
@@ -399,6 +421,7 @@ class Executor(AgentExecutor):
         )
 
         has_end_node = False
+        final_result: dict | None = None
         qa_result: Optional[str] = None
         stream_resp_count = 0
         forwarded_count = 0
@@ -458,8 +481,10 @@ class Executor(AgentExecutor):
                             f"{qa!r:.60}"
                         )
 
-                    if self._extract_end_node(event) is not None:
+                    result = self._extract_end_node(event)
+                    if result is not None:
                         has_end_node = True
+                        final_result = result
                         logger.debug(
                             f"[Executor] [VersatileProxy] 检测到 End node，"
                             f"将进入 cascade 路径"
@@ -493,7 +518,9 @@ class Executor(AgentExecutor):
         logger.debug(f"[Executor] VA stream_resp_count={stream_resp_count}, conv={conv_id}")
 
         if has_end_node:
-            cascade = {"workflow_result": qa_result}
+            cascade = (
+                {"workflow_result": qa_result} if qa_result is not None else final_result
+            )
             logger.info(
                 f"[Executor] VA end node: conv={conv_id}, qa_result={qa_result!r:.60}"
             )
@@ -517,10 +544,11 @@ class Executor(AgentExecutor):
     ) -> None:
         """VA 挂起后，下一轮用户输入续轮。va_task_id 为 VA 真实 task_id。"""
 
-        # 从 Redis 读取缓存的首轮请求（优先使用）
+        # params 仍从 Redis 首轮缓存取（保留 HEAD 的 params URL query 参数透传）
         cached = await self._redis.get_json(session_request_key(conv_id)) or {}
-        first_body = cached.get("body", original_body)
         params = cached.get("params", {})
+        # 对齐 YGQ：续轮直接使用当前请求携带的 body，确保 buyStatus/tranNo 等
+        # 当前轮输入能透传给下游工作流，而不是回退到首轮缓存 body。
         body = dict(original_body)
         body["stream"] = True
 
@@ -542,6 +570,7 @@ class Executor(AgentExecutor):
         )
 
         has_end_node = False
+        final_result: dict | None = None
         qa_result: Optional[str] = None
         stream_resp_count = 0
 
@@ -568,8 +597,10 @@ class Executor(AgentExecutor):
                     if qa is not None:
                         qa_result = qa
 
-                    if self._extract_end_node(event) is not None:
+                    result = self._extract_end_node(event)
+                    if result is not None:
                         has_end_node = True
+                        final_result = result
 
         except Exception as e:
             status_message = 1
@@ -596,7 +627,9 @@ class Executor(AgentExecutor):
             )
 
         if has_end_node:
-            cascade = {"workflow_result": qa_result}
+            cascade = (
+                {"workflow_result": qa_result} if qa_result is not None else final_result
+            )
             logger.info(
                 f"[Executor] VA 续轮 end node: conv={conv_id}, qa_result={qa_result!r:.60}"
             )
@@ -611,7 +644,7 @@ class Executor(AgentExecutor):
                 task_id=task_id,
                 call_context=call_context,
                 query="",
-                original_body=first_body,  # 使用首轮请求的 body
+                original_body=original_body,
                 event_queue=event_queue,
                 cascade_result=cascade,
             )

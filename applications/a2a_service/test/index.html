@@ -489,6 +489,76 @@
             chatHistory.scrollTop = chatHistory.scrollHeight;
         }
 
+        const MAX_DEBUG_LOG_ITEMS = 120;
+        const MAX_DEBUG_STRING_LENGTH = 4000;
+        const MAX_DEBUG_ARRAY_ITEMS = 20;
+        const MAX_DEBUG_OBJECT_KEYS = 30;
+        const MAX_DEBUG_DEPTH = 4;
+
+        function summarizeForDebug(value, depth = 0, seen = new WeakSet()) {
+            if (typeof value === 'string') {
+                if (value.length <= MAX_DEBUG_STRING_LENGTH) return value;
+                return `${value.slice(0, MAX_DEBUG_STRING_LENGTH)}\n... <truncated ${value.length - MAX_DEBUG_STRING_LENGTH} chars>`;
+            }
+
+            if (value === null || value === undefined) {
+                return value;
+            }
+
+            if (typeof value !== 'object') {
+                return value;
+            }
+
+            if (depth >= MAX_DEBUG_DEPTH) {
+                if (Array.isArray(value)) {
+                    return `[Array(${value.length})]`;
+                }
+                return `[Object keys=${Object.keys(value).length}]`;
+            }
+
+            if (seen.has(value)) {
+                return '[Circular]';
+            }
+            seen.add(value);
+
+            if (Array.isArray(value)) {
+                const items = value
+                    .slice(0, MAX_DEBUG_ARRAY_ITEMS)
+                    .map(item => summarizeForDebug(item, depth + 1, seen));
+                if (value.length > MAX_DEBUG_ARRAY_ITEMS) {
+                    items.push(`... ${value.length - MAX_DEBUG_ARRAY_ITEMS} more items`);
+                }
+                return items;
+            }
+
+            const entries = Object.entries(value);
+            const result = {};
+            for (const [index, [key, item]] of entries.entries()) {
+                if (index >= MAX_DEBUG_OBJECT_KEYS) {
+                    result.__truncated__ = `${entries.length - MAX_DEBUG_OBJECT_KEYS} more keys`;
+                    break;
+                }
+                result[key] = summarizeForDebug(item, depth + 1, seen);
+            }
+            return result;
+        }
+
+        function stringifyForDebug(data) {
+            try {
+                return JSON.stringify(summarizeForDebug(data), null, 2);
+            } catch (error) {
+                return `[Unserializable debug payload] ${error.message || error}`;
+            }
+        }
+
+        function trimDebugLog() {
+            const items = Array.from(debugLog.querySelectorAll('.log-item'));
+            const overflow = items.length - MAX_DEBUG_LOG_ITEMS;
+            if (overflow > 0) {
+                items.slice(0, overflow).forEach(item => item.remove());
+            }
+        }
+
         function setStatus(status, text) {
             statusBadge.className = 'status-indicator';
             if (status === 'active') statusBadge.classList.add('status-active');
@@ -531,9 +601,9 @@
 
             let displayData = '';
             if (typeof data === 'string') {
-                displayData = data;
+                displayData = summarizeForDebug(data);
             } else {
-                displayData = JSON.stringify(data, null, 2);
+                displayData = stringifyForDebug(data);
             }
 
             div.innerHTML = `
@@ -542,6 +612,7 @@
             `;
 
             debugLog.appendChild(div);
+            trimDebugLog();
             debugLog.scrollTop = debugLog.scrollHeight;
         }
 
@@ -734,8 +805,44 @@
                             try {
                                 const data = JSON.parse(eventData);
 
+                                const readPartText = (part) => {
+                                    if (!part) return "";
+                                    if (typeof part.text === 'string' && part.text) {
+                                        return part.text;
+                                    }
+                                    if (part.data !== undefined && part.data !== null) {
+                                        try {
+                                            return JSON.stringify(part.data, null, 2);
+                                        } catch (e) {}
+                                    }
+                                    return "";
+                                };
+
+                                const readParts = (parts) => {
+                                    if (!Array.isArray(parts)) return "";
+                                    return parts.map(readPartText).filter(Boolean).join('\n');
+                                };
+
+                                const readArtifacts = (artifacts) => {
+                                    if (!Array.isArray(artifacts)) return "";
+                                    return artifacts
+                                        .map(artifact => readParts(artifact && artifact.parts))
+                                        .filter(Boolean)
+                                        .join('\n');
+                                };
+
+                                const a2aState = data.status && data.status.state
+                                    ? data.status.state
+                                    : (data.task && data.task.status && data.task.status.state) || "";
+                                const eventLabel = a2aState
+                                    || (data.artifact ? 'artifact_update' : '')
+                                    || (data.message ? 'message' : '')
+                                    || (data.task ? 'task' : '')
+                                    || data.event
+                                    || 'event';
+
                                 // 记录解析后的 SSE 响应报文
-                                appendDebugLog('RES', `SSE Chunk: ${data.status || data.event || 'event'}`, data);
+                                appendDebugLog('RES', `SSE Chunk: ${eventLabel}`, data);
 
                                 // 1. 递归提取业务文本内容 (Aggressive extraction)
                                 const findText = (obj) => {
@@ -748,6 +855,14 @@
                                         return obj;
                                     }
                                     if (typeof obj !== 'object') return "";
+
+                                    const a2aText =
+                                        readParts(obj.artifact && obj.artifact.parts)
+                                        || readParts(obj.status && obj.status.message && obj.status.message.parts)
+                                        || readParts(obj.message && obj.message.parts)
+                                        || readParts(obj.task && obj.task.status && obj.task.status.message && obj.task.status.message.parts)
+                                        || readArtifacts(obj.task && obj.task.artifacts);
+                                    if (a2aText) return a2aText;
 
                                     // 优先尝试已知路径
                                     if (typeof obj.text === 'string' && obj.text) return obj.text;
@@ -777,12 +892,27 @@
                                 }
 
                                 // 2. 处理 AgentEngine 内部状态消息 (仅更新 UI 状态)
-                                if (data.status === 'completed') {
+                                if (a2aState === 'TASK_STATE_COMPLETED' || data.status === 'completed') {
                                     setStatus('idle', '⚪ Idle');
-                                } else if (data.status === 'suspended') {
+                                } else if (
+                                    a2aState === 'TASK_STATE_INPUT_REQUIRED'
+                                    || a2aState === 'TASK_STATE_AUTH_REQUIRED'
+                                    || data.status === 'suspended'
+                                ) {
                                     setStatus('blocked', '🟡 Suspended');
-                                } else if (data.status === 'error' || data.event === 'error') {
-                                    const errorReason = data.message?.reason || data.data?.error || "Unknown error";
+                                } else if (
+                                    a2aState === 'TASK_STATE_FAILED'
+                                    || a2aState === 'TASK_STATE_CANCELED'
+                                    || a2aState === 'TASK_STATE_REJECTED'
+                                    || data.status === 'error'
+                                    || data.event === 'error'
+                                ) {
+                                    const errorReason =
+                                        findText(data.status && data.status.message)
+                                        || findText(data.task && data.task.status && data.task.status.message)
+                                        || (data.message && data.message.reason)
+                                        || (data.data && data.data.error)
+                                        || "Unknown error";
                                     appendMessage('system', `❌ Error: ${errorReason}`);
                                     setStatus('error', '🔴 Error');
                                 }

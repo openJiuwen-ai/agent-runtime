@@ -46,6 +46,8 @@ class VersatileAdapterExecutor(AgentExecutor):  # noqa: F821
         )
 
         # 先发送 Task 事件（a2a-sdk 1.0.0 要求）
+        # 注：wyt 在 backup_enhancement 分支删除了这段，原因未说明；
+        # 已记录在 docs/issue-wyt-merge-decisions.md V-1 待核实 a2a-sdk 版本与协议要求。
         from a2a.types.a2a_pb2 import Task, TaskStatus, TaskState
         user_message = context.message
         if task_id and conv_id and user_message:

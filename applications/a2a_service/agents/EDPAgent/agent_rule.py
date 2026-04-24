@@ -21,9 +21,8 @@ limits:
   max_input_attempts: 3
   interrupt_timeout_seconds: 300
   tasks:
-    transfer: 10
-    buy_wealth: 5
-    query_balance: 10
+        call_versatile: 10
+        ask_user: 5
   termination_keywords:
     - 终止执行
     - 取消

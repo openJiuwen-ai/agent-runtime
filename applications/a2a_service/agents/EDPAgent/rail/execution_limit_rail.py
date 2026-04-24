@@ -1,7 +1,7 @@
 """
 ExecutionLimitRail - 按工具名的执行次数计数与上限控制。
 
-规则 5（需求文档 §4.2）：按任务类型配置上限（如 transfer: 10）。
+规则 5（需求文档 §4.2）：按工具名配置上限（如 call_versatile: 10）。
 
 同时承担在 Runner 的流里补发 tool_start / tool_end 事件的职责
 （Runner 自身发的事件类型名就是 tool_start / tool_end，本 Rail 用

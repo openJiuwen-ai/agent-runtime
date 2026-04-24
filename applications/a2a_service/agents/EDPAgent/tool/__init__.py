@@ -1,4 +1,13 @@
-from .query_balance import query_balance_tool
-from .transfer import transfer_tool
+from .ask_user import ask_user_tool
+from .call_versatile import call_versatile_tool
 
-__all__ = ["query_balance_tool", "transfer_tool"]
+TOOLS = [
+	ask_user_tool,
+	call_versatile_tool,
+]
+
+__all__ = [
+	"ask_user_tool",
+	"call_versatile_tool",
+	"TOOLS",
+]

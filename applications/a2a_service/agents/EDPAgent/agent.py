@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import re
-import uuid
 from pathlib import Path
 from typing import AsyncGenerator, Optional
 
@@ -19,6 +18,7 @@ from loguru import logger
 
 from .agent_rule import AgentRuleConfig, load_agent_rule
 from .config import get_settings
+from .prompt import build_system_prompt
 from common.events import (
     AgentEvent,
     ConversationStartEvent, ConversationEndEvent,
@@ -75,15 +75,14 @@ async def initialize_dpa() -> None:
     from openjiuwen.core.runner.runner_config import DEFAULT_RUNNER_CONFIG
     from openjiuwen.core.session.checkpointer.checkpointer import CheckpointerConfig
     from openjiuwen.core.single_agent import AgentCard, ReActAgent, ReActAgentConfig
+    from openjiuwen.core.sys_operation import LocalWorkConfig, OperationMode, SysOperationCard
 
     from .rail import (
         VersatileInterruptRail,
         IterationLimitRail,
         ExecutionLimitRail,
-        AskUserRail,
     )
-    from .tool.query_balance import query_balance_tool
-    from .tool.transfer import transfer_tool
+    from .tool import TOOLS
 
     # ── 加载 AgentRule.md ────────────────────────────────────────────
     try:
@@ -100,6 +99,8 @@ async def initialize_dpa() -> None:
         system_prompt = "你是一个基金理财智能体。"
         logger.warning("[DPA] AgentRule.md 未找到，使用默认配置")
 
+    system_prompt = f"{system_prompt.strip()}\n\n{build_system_prompt().strip()}"
+
     # ── 配置 Redis Checkpointer ──────────────────────────────────────
     runner_config = DEFAULT_RUNNER_CONFIG.model_copy(deep=True)
     runner_config.checkpointer_config = CheckpointerConfig(
@@ -115,6 +116,14 @@ async def initialize_dpa() -> None:
     Runner.set_config(runner_config)
     await Runner.start()
     logger.info("[DPA] Runner 已启动，Checkpointer=redis")
+
+    # ── 注册 SysOperationCard（Skill read_file / 沙箱归一化依赖）──────────
+    sysop_card = SysOperationCard(
+        mode=OperationMode.LOCAL,
+        work_config=LocalWorkConfig(work_dir=None),
+    )
+    Runner.resource_mgr.add_sys_operation(sysop_card)
+    logger.info(f"[DPA] SysOperationCard 已注册：id={sysop_card.id}")
 
     # ── 创建 ReActAgent ──────────────────────────────────────────────
     card = AgentCard(id=settings.dpa_agent_id, name=settings.dpa_agent_name)
@@ -140,26 +149,50 @@ async def initialize_dpa() -> None:
         .configure_prompt_template([{"role": "system", "content": system_prompt}])
         .configure_max_iterations(_agent_rule.limits.max_iterations)
     )
+    config.sys_operation_id = sysop_card.id
     agent.configure(config)
 
     if hasattr(config, "model_client_config") and config.model_client_config is not None:
         config.model_client_config.timeout = settings.llm_timeout
 
+    # ── 注册 read_file（Skill 按需读取 SKILL.md）──────────────────────
+    read_file_card = Runner.resource_mgr.get_sys_op_tool_cards(
+        sys_operation_id=sysop_card.id,
+        operation_name="fs",
+        tool_name="read_file",
+    )
+    if read_file_card is not None:
+        agent.ability_manager.add(read_file_card)
+        logger.info("[DPA] read_file 已加入 Agent 能力集")
+    else:
+        logger.warning("[DPA] 未获取到 read_file 能力卡，Skill 将无法按需读取 SKILL.md")
+
     # ── 注册工具 ─────────────────────────────────────────────────────
-    Runner.resource_mgr.add_tool(query_balance_tool)
-    agent.ability_manager.add(query_balance_tool.card)
-    Runner.resource_mgr.add_tool(transfer_tool)
-    agent.ability_manager.add(transfer_tool.card)
+    for tool in TOOLS:
+        Runner.resource_mgr.add_tool(tool)
+        agent.ability_manager.add(tool.card)
 
     # ── 注册 Rails（顺序决定优先级影响）──────────────────────────────
-    # AskUserRail 会在 init() 中自动注册 ask_user 工具
     await agent.register_rail(IterationLimitRail(_agent_rule))
     await agent.register_rail(ExecutionLimitRail(_agent_rule))
-    await agent.register_rail(VersatileInterruptRail())
-    await agent.register_rail(AskUserRail(_agent_rule))
+    await agent.register_rail(VersatileInterruptRail(sys_operation_id=sysop_card.id))
+
+    # ── 注册 Skill（运行时按需 read_file 渐进披露）──────────────────
+    skills_root = Path(__file__).resolve().parent / "skills"
+    skill_count = 0
+    if skills_root.exists():
+        for skill_dir in sorted(skills_root.iterdir()):
+            if skill_dir.is_dir() and (skill_dir / "SKILL.md").exists():
+                await agent.register_skill(str(skill_dir))
+                skill_count += 1
+    else:
+        logger.warning(f"[DPA] 技能目录不存在：{skills_root}")
 
     _agent = agent
-    logger.info(f"[DPA] 初始化完成：agent_id={settings.dpa_agent_id}，已注册 4 个 Rail")
+    logger.info(
+        f"[DPA] 初始化完成：agent_id={settings.dpa_agent_id}，"
+        f"已注册 3 个 Rail，skills={skill_count}"
+    )
 
 
 async def agent_stream(
@@ -228,7 +261,7 @@ async def agent_stream(
         f"[DPA] agent.stream() 结束：共处理 {raw_event_count} 个 raw event"
     )
 
-    # ── 中断检测：VA 委托 / HITL ──────────────────────────────────────
+    # ── 中断检测：VA 委托 ─────────────────────────────────────────────
     pending_delegate = session.get_state("pending_delegate")
     if pending_delegate:
         logger.info(
@@ -236,18 +269,6 @@ async def agent_stream(
         )
         yield DelegateRequest.model_validate(pending_delegate)
         session.update_state({"pending_delegate": None})
-        return
-
-    # HITL 中断检测（AskUserRail 写入的 interrupt 信息）
-    interrupt_info = session.get_state("interrupt_info")
-    if interrupt_info:
-        logger.info(f"[DPA] 检测到 HITL 中断：{interrupt_info}")
-        yield InterruptStartEvent(
-            interrupt_id=interrupt_info.get("interrupt_id", str(uuid.uuid4())),
-            content=interrupt_info.get("message", "请确认"),
-            context=interrupt_info.get("context", {}),
-        )
-        session.update_state({"interrupt_info": None})
         return
 
     # 会话正常结束（只在外部请求首轮入口侧发；cascade 续轮是中间态不发）
@@ -277,8 +298,8 @@ class _StreamProcessor:
 
     原始事件类型：
       llm_reasoning   → think_start / think_chunk / think_end + todolist 解析
-      llm_output      → final_answer_start / final_answer_chunk
-      answer          → final_answer_end（可能跟在 llm_output 后，也可能独立）
+    llm_output      → final_answer_start / final_answer_chunk
+    answer          → final_answer_end（可能跟在 llm_output 后，也可能独立）
       tool_start      → ToolStartEvent
       tool_end        → ToolEndEvent
 
