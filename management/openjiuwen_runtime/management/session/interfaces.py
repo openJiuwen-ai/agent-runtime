@@ -98,6 +98,7 @@ class SessionRequestWrapper:
     def response_queue(self) -> asyncio.Queue[Any]:
         return self._response_queue
 
+    @property
     def cancel(self) -> asyncio.Future:
         return self._cancel
 
@@ -165,11 +166,11 @@ class IAccess(ABC):
     """消息统一入口，内部调用session策略，把IRequest转换为ISessionRequest"""
 
     @abstractmethod
-    def init(self, response_parser: IResponseParser):
+    def init(self, response_parser: IResponseParser, strategy: ISessionStrategy):
         pass
 
     @abstractmethod
-    def send_message(self, msg: IRequest, response_parser: IResponseParser) -> AsyncIterator[Any]:
+    def send_message(self, msg: IRequest) -> AsyncIterator[Any]:
         pass
 
 
@@ -193,6 +194,9 @@ class IServiceHandler(ABC):
         pass
 
     def deploy(self):
+        pass
+
+    def delete(self):
         pass
 
 
