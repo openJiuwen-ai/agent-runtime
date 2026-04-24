@@ -1,0 +1,13 @@
+{
+  "namespace": "default",
+  "image": "swr.cn-north-4.myhuaweicloud.com/openjiuwen/studio-lowercode-agent-amd64:0.0.1",
+  "image_pull_policy": "IfNotPresent",
+  "replicas": 1,
+  "container_port": 7888,
+  "service_port": 7888,
+  "service_type": "LoadBalancer",
+  "node_port": 30019,
+  "node_selector": {
+    "kubernetes.io/hostname": "k8s-node1"
+  }
+}

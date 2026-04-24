@@ -1,5 +1,6 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+from __future__ import annotations
 
 import asyncio
 import uuid
@@ -20,6 +21,7 @@ from .deployments import (
     SubprocessStrategy,
     DockerStrategy,
     K8sStrategy,
+    K8S_IMPORT_ERROR,
 )
 from .models.deployment_params import (
     DeployAgentParams,
@@ -90,11 +92,19 @@ class DeploymentManager:
     @staticmethod
     def _create_default_strategies() -> dict[DeployMode, BaseDeploymentStrategy]:
         """创建默认策略"""
-        return {
+        strategies = {
             DeployMode.SUBPROCESS: SubprocessStrategy(),
             DeployMode.DOCKER: DockerStrategy(),
-            DeployMode.K8S: K8sStrategy(),
+
         }
+        if K8sStrategy is not None:
+            strategies[DeployMode.K8S] = K8sStrategy()
+        else:
+            logger.warning(
+                "K8s strategy disabled because Kubernetes dependencies could not be imported: %s",
+                K8S_IMPORT_ERROR,
+            )
+        return strategies
 
     @staticmethod
     def _generate_deployment_id() -> str:
@@ -335,6 +345,10 @@ class DeploymentManager:
 
     def _get_strategy(self, mode: DeployMode) -> BaseDeploymentStrategy:
         """获取部署策略"""
+        if mode == DeployMode.K8S and K8S_IMPORT_ERROR is not None:
+            raise RuntimeError(
+                f"K8s deployment is unavailable because Kubernetes dependencies failed to import: {K8S_IMPORT_ERROR}"
+            ) from K8S_IMPORT_ERROR
         return self._strategies[mode]
 
     async def _detect_deploy_mode(self, deployment_id: str) -> Optional[DeployMode]:
@@ -442,7 +456,9 @@ class DeploymentManager:
             await strategy.create_record(
                 self.db_handler, deployment_id, params.version, **extras
             )
-            await strategy.deploy(deployment_id, self.db_handler)
+            deploy_result = await strategy.deploy(deployment_id, self.db_handler)
+            if not deploy_result.success:
+                raise RuntimeError(deploy_result.message or f"Deployment {deployment_id} failed")
 
             await self._wait_until_deployment_ready(deployment_id)
             logger.info(
@@ -457,6 +473,7 @@ class DeploymentManager:
                 {DeploymentFields.DEPLOYMENT_ID: deployment_id},
                 {DeploymentFields.DEPLOYMENT_STATUS: DeploymentStatus.FAILED.value},
             )
+            raise
 
         deployment_record = await self.db_handler.get(
             DEPLOYMENT_TABLE_NAME,

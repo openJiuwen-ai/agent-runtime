@@ -9,16 +9,60 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from openjiuwen_runtime.foundation.db.table_def import ColumnDefinition, TableDefinition
 from openjiuwen_runtime.foundation.log import get_logger
 from openjiuwen_runtime.management import (
     DeployAgentParams,
     DeploymentManager,
     DeployMode,
 )
+from openjiuwen_runtime.management.deployments.base.models import DeployResult
+from openjiuwen_runtime.management.models.enums import DeploymentStatus
 from openjiuwen_runtime.foundation.db.sqlite_handler import SQLiteHandler
 from openjiuwen_runtime.foundation.packaging import package_python_to_whl
 
 logger = get_logger(__name__)
+
+
+class FailingStrategy:
+    """用于验证失败会向上抛出的最小策略实现。"""
+
+    def __init__(self):
+        self._records: dict[str, dict] = {}
+        self._table_def = TableDefinition(
+            table_name="failing_strategy",
+            columns=[
+                ColumnDefinition("id", "integer", primary_key=True, autoincrement=True),
+                ColumnDefinition("deployment_id", "string", unique=True, nullable=False),
+                ColumnDefinition("version", "string", nullable=False),
+            ],
+        )
+
+    def get_table_definition(self) -> TableDefinition:
+        return self._table_def
+
+    async def create_record(self, db_handler, deployment_id: str, version: str, **kwargs):
+        self._records[deployment_id] = {"deployment_id": deployment_id, "version": version, **kwargs}
+        return self._records[deployment_id]
+
+    async def get_record(self, db_handler, deployment_id: str):
+        return self._records.get(deployment_id)
+
+    async def delete_record(self, db_handler, deployment_id: str) -> bool:
+        return self._records.pop(deployment_id, None) is not None
+
+    async def deploy(self, deployment_id: str, db_handler) -> DeployResult:
+        return DeployResult(
+            success=False,
+            deployment_id=deployment_id,
+            message="simulated deploy failure",
+        )
+
+    async def stop(self, deployment_id: str, db_handler) -> DeployResult:
+        return DeployResult(success=True, deployment_id=deployment_id, message="stopped")
+
+    async def get_status(self, deployment_id: str, db_handler) -> DeploymentStatus:
+        return DeploymentStatus.FAILED
 
 
 class ManagerTest(unittest.IsolatedAsyncioTestCase):
@@ -132,6 +176,30 @@ class ManagerTest(unittest.IsolatedAsyncioTestCase):
             status = await self.manager.get_deployment_status(deployment_info.deployment_id)
             from openjiuwen_runtime.management.models.enums import DeploymentStatus
             self.assertEqual(status, DeploymentStatus.STOPPED)
+
+    async def test_deploy_agent_raises_when_strategy_reports_failure(self):
+        deployment_id = "failing-deploy-test"
+        failing_manager = DeploymentManager(
+            db_handler=self.db_handler,
+            strategies={DeployMode.SUBPROCESS: FailingStrategy()},
+        )
+        await self.db_handler.init_table(
+            failing_manager._get_strategy(DeployMode.SUBPROCESS).get_table_definition()
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "simulated deploy failure"):
+            await failing_manager.deploy_agent(
+                DeployAgentParams(
+                    name="test_failed_agent",
+                    version="1.0.0",
+                    mode=DeployMode.SUBPROCESS,
+                    extras={"deployment_id": deployment_id},
+                )
+            )
+
+        deployment = await failing_manager.get_deployment(deployment_id)
+        self.assertIsNotNone(deployment)
+        self.assertEqual(deployment.deployment_status, DeploymentStatus.FAILED)
 
 
 if __name__ == '__main__':

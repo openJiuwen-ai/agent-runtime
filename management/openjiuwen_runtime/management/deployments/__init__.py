@@ -32,14 +32,26 @@ from .docker import (
     DockerDeployer,
     DockerStrategy,
 )
-from .k8s import (
-    K8sParams,
-    K8sInfo,
-    K8sCreate,
-    K8S_TABLE_DEF,
-    K8sDeployer,
-    K8sStrategy,
-)
+
+K8S_IMPORT_ERROR = None
+
+try:
+    from .k8s import (
+        K8sParams,
+        K8sInfo,
+        K8sCreate,
+        K8S_TABLE_DEF,
+        K8sDeployer,
+        K8sStrategy,
+    )
+except Exception as exc:  # pragma: no cover - depends on local runtime availability
+    K8S_IMPORT_ERROR = exc
+    K8sParams = None
+    K8sInfo = None
+    K8sCreate = None
+    K8S_TABLE_DEF = None
+    K8sDeployer = None
+    K8sStrategy = None
 
 __all__ = [
     # Base
@@ -63,6 +75,7 @@ __all__ = [
     "DockerDeployer",
     "DockerStrategy",
     # K8s
+    "K8S_IMPORT_ERROR",
     "K8sParams",
     "K8sInfo",
     "K8sCreate",

@@ -237,9 +237,12 @@ async def deploy_agent(
 
     except Exception as e:
         logger.exception("Agent deployment failed")
+        detail = str(e)
+        if not detail.startswith("Deployment failed"):
+            detail = f"Deployment failed: {detail}"
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Deployment failed: {str(e)}",
+            detail=detail,
         ) from e
 
 

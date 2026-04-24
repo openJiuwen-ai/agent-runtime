@@ -19,6 +19,7 @@ class DeploymentStatus(str, Enum):
     RUNNING = "running"
     STOPPED = "stopped"
     FAILED = "failed"
+    RUNNING_NOTREADY = "running_not_ready"
 
 
 class DeployMode(str, Enum):

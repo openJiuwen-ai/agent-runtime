@@ -3,10 +3,14 @@
 
 """Server Configuration"""
 import os
+import json
+import logging
 from typing import Optional, Literal
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field, model_validator
+
+logger = logging.getLogger(__name__)
 
 # 定义项目根目录
 PROJECT_ROOT = Path(__file__).parents[3].resolve()
@@ -41,6 +45,9 @@ class Settings(BaseSettings):
     UV_EXTRA_ARGS: str = Field(default="", env="UV_EXTRA_ARGS")
     DEPLOY_TYPE: Literal["subprocess", "docker", "k8s"] = Field(default="subprocess", env="DEPLOY_TYPE")
     MODE: Literal["dev", "product"] = Field(default="product", env="MODE")
+    KUBECONFIG: str = Field(default="/tmp/deploys/k8s_config.yaml", env="KUBECONFIG")
+    K8S_DEFAULT_CONFIG_PATH: str = Field(default="/tmp/deploys/k8s_deploy_default_config.json",
+                                         env="K8S_DEFAULT_CONFIG_PATH")
 
     # ========================
     # 内置 对象
@@ -124,6 +131,25 @@ class Settings(BaseSettings):
         self.dist_path.mkdir(parents=True, exist_ok=True)
 
         return self
+
+    def get_k8s_defaults(self) -> dict:
+        """读取 K8s 默认配置 JSON 文件，返回参数字典。"""
+        if not self.K8S_DEFAULT_CONFIG_PATH:
+            logger.warning("K8S_DEFAULT_CONFIG_PATH is not set, using empty defaults")
+            return {}
+        config_path = Path(self.K8S_DEFAULT_CONFIG_PATH)
+        if not config_path.is_absolute():
+            config_path = PROJECT_ROOT / config_path
+        if not config_path.exists():
+            logger.warning("K8s default config file not found: %s", config_path)
+            return {}
+        try:
+            defaults = json.loads(config_path.read_text(encoding="utf-8"))
+            logger.info("Loaded K8s default config from %s: %d params", config_path, len(defaults))
+            return defaults
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.error("Failed to parse K8s default config file %s: %s", config_path, e)
+            return {}
 
 
     # 自动从 .env 读取
