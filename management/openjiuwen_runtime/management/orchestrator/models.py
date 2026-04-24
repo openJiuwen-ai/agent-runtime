@@ -20,9 +20,10 @@ class MessagePriority(str, Enum):
 
 class ServiceState(str, Enum):
     """服务状态"""
-    RESERVED = "reserved"
-    IDLE = "idle"
+    DEPLOYING = "deploying"
     RUNNING = "running"
+    IDLE = "idle"
+    UNLOADING = "unloading"
 
 
 class SessionState(str, Enum):
@@ -39,8 +40,10 @@ class Message(BaseModel, IMessage):
     ttl: int = Field(..., description="生存时间（秒）")
     priority: MessagePriority = Field(..., description="消息优先级")
     payload: Any = Field(..., description="消息负载")
-    response_channel: Optional[Any] = Field(None, description="响应通道")
+    response_queue: Optional[Any] = Field(None, description="响应通道")
     is_complete: bool = Field(False, description="是否是最后一个消息")
+    retry_count: int = Field(0, description="重试次数")
+    max_retries: int = Field(3, description="最大重试次数")
 
     def get_session_id(self) -> str:
         return self.session_id
@@ -63,6 +66,10 @@ class Message(BaseModel, IMessage):
     def is_complete_msg(self) -> bool:
         return self.is_complete
 
+    def get_response_queue(self) -> Optional[Any]:
+        """获取响应通道"""
+        return self.response_queue
+
 
 class SessionInfo(BaseModel):
     """会话信息模型"""
@@ -72,7 +79,8 @@ class SessionInfo(BaseModel):
     state: SessionState = Field(..., description="会话状态")
     created_at: float = Field(..., description="创建时间戳")
     last_active_at: float = Field(..., description="最后活跃时间戳")
-    pending_requests: dict[str, Any] = Field(default_factory=dict, description="已发送请求映射，key是request_id，value是response_channel")
+    pending_requests: dict[str, Any] = Field(default_factory=dict,
+                                             description="已发送请求映射，key是request_id，value是response_channel")
 
 
 class ServiceInfo(BaseModel):

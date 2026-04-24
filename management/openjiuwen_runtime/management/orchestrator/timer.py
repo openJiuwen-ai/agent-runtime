@@ -40,7 +40,8 @@ class Timer(ITimer):
         except asyncio.CancelledError:
             pass
 
-        del self._timers[key]
+        if key in self._timers:
+            del self._timers[key]
         logger.info(f"Timer cancelled: key='{key}'")
         return True
 

@@ -7,7 +7,7 @@ import asyncio
 import time
 import uuid
 import json
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, Set
 
 from openjiuwen_runtime.foundation.log import get_logger
 
@@ -21,20 +21,35 @@ logger = get_logger(__name__)
 class ServiceHandler(IServiceHandler):
     """服务处理器，管理服务状态和会话"""
 
+    TRANSITIONS: Dict[ServiceState, Set[ServiceState]] = {
+        ServiceState.DEPLOYING: {ServiceState.RUNNING, ServiceState.IDLE},
+        ServiceState.RUNNING: {ServiceState.IDLE, ServiceState.UNLOADING},
+        ServiceState.IDLE: {ServiceState.RUNNING, ServiceState.UNLOADING},
+        ServiceState.UNLOADING: set(),
+    }
+
     def __init__(
         self,
         deployment_id: str,
         max_concurrency: int,
         service_ttl: int,
         timer: Timer,
+        deployment_manager: Optional[Any] = None,
+        image: Optional[str] = None,
+        target_port: int = 8000,
+        invoke_path: str = "/invoke",
         service_url: Optional[str] = None,
     ):
         self._deployment_id = deployment_id
         self._max_concurrency = max_concurrency
         self._service_ttl = service_ttl
         self._timer = timer
+        self._deployment_manager = deployment_manager
+        self._image = image
+        self._target_port = target_port
+        self._invoke_path = invoke_path
         self._service_url = service_url
-        self._state = ServiceState.IDLE
+        self._state = ServiceState.DEPLOYING
         self._sessions: Dict[str, SessionInfo] = {}
         self._session_queues: Dict[str, asyncio.Queue] = {}
         self._current_concurrency = 0
@@ -42,6 +57,7 @@ class ServiceHandler(IServiceHandler):
         self._websocket: Optional[Any] = None
         self._ws_receive_task: Optional[asyncio.Task] = None
         self._running = False
+        self._message_loop_task: Optional[asyncio.Task] = None
         logger.info(
             f"ServiceHandler initialized: deployment_id='{deployment_id}', "
             f"max_concurrency={max_concurrency}, service_ttl={service_ttl}s, "
@@ -65,8 +81,16 @@ class ServiceHandler(IServiceHandler):
         return self._current_concurrency
 
     @property
+    def max_concurrency(self) -> int:
+        return self._max_concurrency
+
+    @property
     def websocket(self) -> Optional[Any]:
         return self._websocket
+
+    def has_capacity(self) -> bool:
+        """检查服务是否有空闲容量"""
+        return self._current_concurrency < self._max_concurrency
 
     async def connect_websocket(self) -> bool:
         """连接 WebSocket 服务"""
@@ -325,19 +349,108 @@ class ServiceHandler(IServiceHandler):
         logger.info(f"Session timeout: session_id='{session_id}'")
         await self.remove_session(session_id)
 
-    async def _update_state(self) -> None:
+    def _can_transition(self, target_state: ServiceState) -> bool:
+        return target_state in self.TRANSITIONS.get(self._state, set())
+
+    async def _transition_to(self, target_state: ServiceState) -> bool:
+        if not self._can_transition(target_state):
+            logger.warning(f"Invalid state transition: {self._state} -> {target_state}")
+            return False
         old_state = self._state
+        self._state = target_state
+        logger.info(f"State transition: {old_state} -> {target_state}")
+        return True
 
-        if len(self._sessions) == 0:
-            self._state = ServiceState.IDLE
-        else:
-            self._state = ServiceState.RUNNING
+    async def deploy(self) -> bool:
+        if self._state != ServiceState.DEPLOYING:
+            logger.warning(f"Cannot deploy: invalid state {self._state}")
+            return False
 
-        if old_state != self._state:
-            logger.info(
-                f"Service state changed: deployment_id='{self._deployment_id}', "
-                f"old_state={old_state.value}, new_state={self._state.value}"
+        try:
+            from openjiuwen_runtime.management.models.deployment_params import DeployImageParams
+            from openjiuwen_runtime.management.models.enums import DeployMode
+
+            params = DeployImageParams(
+                image=self._image,
+                name=f"service-{self._deployment_id[:8]}",
+                version="1.0.0",
+                mode=DeployMode.K8S,
+                extras={
+                    "target_port": self._target_port,
+                    "invoke_path": self._invoke_path,
+                },
             )
+            deployment_info = await self._deployment_manager.deploy_image(params)
+            self._deployment_id = deployment_info.deployment_id
+
+            await self._transition_to(ServiceState.IDLE)
+            logger.info(f"Service deployed: deployment_id='{self._deployment_id}'")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to deploy service: {e}")
+            return False
+
+    async def undeploy(self) -> bool:
+        if self._state == ServiceState.UNLOADING:
+            logger.warning("Service already unloading")
+            return False
+
+        if len(self._sessions) > 0:
+            logger.warning(f"Cannot undeploy: {len(self._sessions)} active sessions")
+            return False
+
+        if not await self._transition_to(ServiceState.UNLOADING):
+            return False
+
+        try:
+            success = await self._deployment_manager.delete_deployment(self._deployment_id)
+            if success:
+                logger.info(f"Service undeployed: deployment_id='{self._deployment_id}'")
+            return success
+        except Exception as e:
+            logger.error(f"Failed to undeploy service: {e}")
+            return False
+
+    async def start(self) -> None:
+        if self._running:
+            logger.warning("ServiceHandler already running")
+            return
+
+        self._running = True
+        self._message_loop_task = asyncio.create_task(self._message_loop())
+        logger.info(f"ServiceHandler started: deployment_id='{self._deployment_id}'")
+
+    async def stop(self) -> None:
+        self._running = False
+
+        if hasattr(self, '_message_loop_task') and self._message_loop_task:
+            self._message_loop_task.cancel()
+            try:
+                await self._message_loop_task
+            except asyncio.CancelledError:
+                pass
+            self._message_loop_task = None
+
+        await self.disconnect_websocket()
+        logger.info(f"ServiceHandler stopped: deployment_id='{self._deployment_id}'")
+
+    async def _message_loop(self) -> None:
+        while self._running:
+            try:
+                await asyncio.sleep(0.1)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Message loop error: {e}")
+                await asyncio.sleep(1)
+
+    async def _update_state(self) -> None:
+        if len(self._sessions) == 0:
+            if self._state == ServiceState.RUNNING:
+                await self._transition_to(ServiceState.IDLE)
+        else:
+            if self._state == ServiceState.IDLE:
+                await self._transition_to(ServiceState.RUNNING)
 
     async def has_capacity(self, concurrency: int) -> bool:
         return self._current_concurrency + concurrency <= self._max_concurrency

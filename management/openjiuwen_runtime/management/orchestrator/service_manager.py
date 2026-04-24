@@ -10,12 +10,12 @@ from typing import Dict, List, Optional, Callable, Any
 
 from openjiuwen_runtime.foundation.log import get_logger
 from openjiuwen_runtime.management.manager import DeploymentManager
-from openjiuwen_runtime.management.models.deployment_params import DeployImageParams
-from openjiuwen_runtime.management.models.enums import DeployMode
 
 from .interfaces import IServiceManager, IMessageQueue, IMessage
 from .models import Message, MessagePriority, ServiceInfo, ServiceState, SessionInfo
 from .service_handler import ServiceHandler
+from .session_router import SessionRouter, RoutingStrategy
+from .autoscaler import AutoScaler, ScalingConfig, ScalingAction
 from .timer import Timer
 
 logger = get_logger(__name__)
@@ -48,6 +48,11 @@ class ServiceManager(IServiceManager):
         self._timer = timer
         self._message_queue = message_queue
         self._services: Dict[str, ServiceHandler] = {}
+        self._session_router = SessionRouter(strategy=RoutingStrategy.LOOSE)
+        self._autoscaler = AutoScaler(ScalingConfig(
+            min_idle_services=min_idle_services,
+            max_services=max_services,
+        ))
         self._lock = asyncio.Lock()
         self._config = {
             "image": image,
@@ -81,29 +86,26 @@ class ServiceManager(IServiceManager):
                 raise RuntimeError(f"Maximum services limit reached: {self._max_services}")
 
             deployment_id = str(uuid.uuid4())
-            logger.info(f"Deploying new service: deployment_id='{deployment_id}'")
+            logger.info(f"Creating new service handler: deployment_id='{deployment_id}'")
 
             try:
-                params = DeployImageParams(
-                    image=self._image,
-                    name=f"service-{deployment_id[:8]}",
-                    version="1.0.0",
-                    mode=DeployMode.DOCKER,
-                    extras={
-                        "target_port": self._target_port,
-                        "invoke_path": self._invoke_path,
-                    },
-                )
-                deployment_info = await self._deployment_manager.deploy_image(params)
-                deployment_id = deployment_info.deployment_id
-
                 service_handler = ServiceHandler(
                     deployment_id=deployment_id,
                     max_concurrency=self._max_concurrency,
                     service_ttl=self._service_ttl,
                     timer=self._timer,
+                    deployment_manager=self._deployment_manager,
+                    image=self._image,
+                    target_port=self._target_port,
+                    invoke_path=self._invoke_path,
                 )
                 self._services[deployment_id] = service_handler
+
+                if not await service_handler.deploy():
+                    del self._services[deployment_id]
+                    raise RuntimeError(f"Failed to deploy service: deployment_id='{deployment_id}'")
+
+                await service_handler.start()
 
                 await self._timer.start_timer(
                     f"service_{deployment_id}",
@@ -118,6 +120,8 @@ class ServiceManager(IServiceManager):
                 return deployment_id
 
             except Exception as e:
+                if deployment_id in self._services:
+                    del self._services[deployment_id]
                 logger.error(f"Failed to deploy service: error={e}")
                 raise
 
@@ -133,12 +137,17 @@ class ServiceManager(IServiceManager):
                 await self._timer.cancel_timer(f"service_{deployment_id}")
 
                 service_handler = self._services[deployment_id]
+                
+                await service_handler.stop()
+                
                 for session_id in list(service_handler.sessions.keys()):
                     await service_handler.remove_session(session_id)
+                    self._session_router.unregister_session(session_id)
 
-                success = await self._deployment_manager.delete_deployment(deployment_id)
+                success = await service_handler.undeploy()
 
                 if success:
+                    self._session_router.unregister_service(deployment_id)
                     del self._services[deployment_id]
                     logger.info(
                         f"Service stopped successfully: deployment_id='{deployment_id}', "
@@ -178,64 +187,78 @@ class ServiceManager(IServiceManager):
         logger.debug(f"Message sent to service: deployment_id='{deployment_id}'")
 
     async def _ensure_min_idle_services(self) -> None:
-        async with self._lock:
-            idle_count = 0
-            for service_handler in self._services.values():
-                if service_handler.state == ServiceState.IDLE:
-                    idle_count += 1
-
-            logger.debug(
-                f"Checking min idle services: current_idle={idle_count}, "
-                f"min_idle_services={self._min_idle_services}"
-            )
-
-            services_to_create = self._min_idle_services - idle_count
-            if services_to_create > 0:
-                available_slots = self._max_services - len(self._services)
-                services_to_create = min(services_to_create, available_slots)
-
-                if services_to_create > 0:
-                    logger.info(
-                        f"Creating {services_to_create} idle services to meet minimum requirement"
-                    )
-                    for _ in range(services_to_create):
-                        try:
-                            await self.deploy_service()
-                        except Exception as e:
-                            logger.error(f"Failed to create idle service: error={e}")
-                            break
-
-    async def _get_available_service(self, concurrency: int) -> Optional[str]:
-        reserved_service_id = None
-        for deployment_id, service_handler in self._services.items():
-            if service_handler.state == ServiceState.RESERVED:
-                if await service_handler.has_capacity(concurrency):
-                    reserved_service_id = deployment_id
-                    break
-
-        if reserved_service_id:
-            logger.debug(
-                f"Found reserved service with capacity: deployment_id='{reserved_service_id}'"
-            )
-            return reserved_service_id
-
-        for deployment_id, service_handler in self._services.items():
+        idle_count = 0
+        for service_handler in self._services.values():
             if service_handler.state == ServiceState.IDLE:
-                if await service_handler.has_capacity(concurrency):
-                    logger.debug(
-                        f"Found idle service with capacity: deployment_id='{deployment_id}'"
-                    )
-                    return deployment_id
+                idle_count += 1
+
+        logger.debug(
+            f"Checking min idle services: current_idle={idle_count}, "
+            f"min_idle_services={self._min_idle_services}"
+        )
+
+        services_to_create = self._min_idle_services - idle_count
+        if services_to_create > 0:
+            available_slots = self._max_services - len(self._services)
+            services_to_create = min(services_to_create, available_slots)
+
+            if services_to_create > 0:
+                logger.info(
+                    f"Creating {services_to_create} idle services to meet minimum requirement"
+                )
+                for _ in range(services_to_create):
+                    try:
+                        await self.deploy_service()
+                    except Exception as e:
+                        logger.error(f"Failed to create idle service: error={e}")
+                        break
+
+    async def _check_autoscaling(self) -> None:
+        """检查自动伸缩"""
+        metrics = self._autoscaler.collect_metrics(self._services)
+        action, target_deployment_id = self._autoscaler.check_scaling(metrics)
+
+        if action == ScalingAction.SCALE_UP:
+            try:
+                await self.deploy_service()
+                self._autoscaler.record_scaling()
+                logger.info("Auto-scaling: scaled up")
+            except Exception as e:
+                logger.error(f"Failed to scale up: error={e}")
+
+        elif action == ScalingAction.SCALE_DOWN and target_deployment_id:
+            try:
+                await self.stop_service(target_deployment_id)
+                self._autoscaler.record_scaling()
+                logger.info(f"Auto-scaling: scaled down deployment_id='{target_deployment_id}'")
+            except Exception as e:
+                logger.error(f"Failed to scale down: error={e}")
+
+        self._autoscaler.cleanup_stale_services(list(self._services.keys()))
+
+    async def _get_available_service(self, session_id: str, concurrency: int = 1) -> Optional[str]:
+        deployment_id = self._session_router.get_service_for_session(
+            session_id, self._services
+        )
+
+        if deployment_id:
+            return deployment_id
 
         for deployment_id, service_handler in self._services.items():
-            if service_handler.state == ServiceState.RUNNING:
-                if await service_handler.has_capacity(concurrency):
-                    logger.debug(
-                        f"Found running service with capacity: deployment_id='{deployment_id}'"
-                    )
-                    return deployment_id
+            if service_handler.state == ServiceState.IDLE and service_handler.has_capacity():
+                logger.debug(
+                    f"Found idle service with capacity: deployment_id='{deployment_id}'"
+                )
+                return deployment_id
 
-        logger.debug(f"No available service found for concurrency={concurrency}")
+        for deployment_id, service_handler in self._services.items():
+            if service_handler.state == ServiceState.RUNNING and service_handler.has_capacity():
+                logger.debug(
+                    f"Found running service with capacity: deployment_id='{deployment_id}'"
+                )
+                return deployment_id
+
+        logger.debug(f"No available service found for session_id='{session_id}'")
         return None
 
     async def _on_service_timeout(self, deployment_id: str) -> None:
@@ -278,7 +301,10 @@ class ServiceManager(IServiceManager):
             f"priority={message.get_priority()}"
         )
 
-        if message.get_priority() == MessagePriority.HIGH:
+        payload = message.get_payload()
+        task_type = payload.get("task_type") if isinstance(payload, dict) else None
+
+        if task_type:
             await self._handle_task_request(message)
         else:
             await self._handle_user_request(message)
@@ -286,18 +312,22 @@ class ServiceManager(IServiceManager):
     async def _handle_user_request(self, message: IMessage) -> None:
         logger.debug(f"Handling user request: session_id='{message.get_session_id()}'")
 
-        deployment_id = await self._get_available_service(message.get_session_concurrency())
+        session_id = message.get_session_id()
+        deployment_id = await self._get_available_service(
+            session_id, message.get_session_concurrency()
+        )
 
         if deployment_id:
             service_handler = self._services[deployment_id]
             await service_handler.add_session(
-                message.get_session_id(), message.get_session_concurrency(), message.get_session_ttl()
+                session_id, message.get_session_concurrency(), message.get_session_ttl()
             )
+            self._session_router.register_session(session_id, deployment_id)
             await self._refresh_timer(deployment_id)
             await service_handler.handle_message(message)
             logger.info(
                 f"User request assigned to existing service: "
-                f"session_id='{message.get_session_id()}', deployment_id='{deployment_id}'"
+                f"session_id='{session_id}', deployment_id='{deployment_id}'"
             )
         else:
             if len(self._services) >= self._max_services:
@@ -335,8 +365,21 @@ class ServiceManager(IServiceManager):
         elif task_type == "config_update":
             config_updates = payload.get("config", {})
             await self.update_config(**config_updates)
+        elif task_type == "response_end":
+            session_id = payload.get("session_id")
+            if session_id:
+                await self._handle_response_end(session_id)
         else:
             logger.warning(f"Unknown task type: task_type='{task_type}'")
+
+    async def _handle_response_end(self, session_id: str) -> None:
+        """处理响应结束"""
+        logger.info(f"Response end for session: session_id='{session_id}'")
+        deployment_id = self._session_router.get_session_service(session_id)
+        if deployment_id and deployment_id in self._services:
+            service_handler = self._services[deployment_id]
+            await service_handler.remove_session(session_id)
+            self._session_router.unregister_session(session_id)
 
     async def _scale_down(self, deployment_id: str) -> None:
         logger.info(f"Scaling down service: deployment_id='{deployment_id}'")

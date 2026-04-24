@@ -1,6 +1,6 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
-
+import asyncio
 from abc import ABC, abstractmethod
 from typing import Any, Callable, Optional, TYPE_CHECKING
 
@@ -30,7 +30,7 @@ class IMessage(ABC):
 
     @abstractmethod
     def get_request_id(self) -> Optional[str]:
-        """获取请求ID"""
+        """获取请求唯一ID"""
         pass
 
     @abstractmethod
@@ -48,10 +48,21 @@ class IMessage(ABC):
         """是否是最后一个消息"""
         pass
 
-    @abstractmethod
-    def get_response_channel(self) -> Optional[Any]:
+
+class MessageWrapper:
+
+    def __init__(self, message: IMessage, queue: asyncio.Queue):
+        self._message = message
+        self._queue = queue
+
+    @property
+    def message(self) -> IMessage:
+        return self._message
+
+    @property
+    def queue(self) -> Optional[asyncio.Queue]:
         """获取响应通道"""
-        pass
+        return self._queue
 
 
 class Message(BaseModel):
@@ -133,4 +144,24 @@ class IServiceHandler(ABC):
 
     @abstractmethod
     async def get_session_count(self) -> int:
+        pass
+
+    @abstractmethod
+    async def deploy(self) -> bool:
+        """部署服务"""
+        pass
+
+    @abstractmethod
+    async def undeploy(self) -> bool:
+        """卸载服务"""
+        pass
+
+    @abstractmethod
+    async def start(self) -> None:
+        """启动事件循环"""
+        pass
+
+    @abstractmethod
+    async def stop(self) -> None:
+        """停止事件循环"""
         pass

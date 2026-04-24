@@ -77,21 +77,19 @@ class TestOrchestratorSystem:
     async def db_handler(self, temp_db_path):
         """创建 SQLite DBHandler"""
         handler = SQLiteHandler(db_path=temp_db_path)
-        await handler.initialize()
         yield handler
-        await handler.shutdown()
 
     @pytest.fixture
-    def mock_k8s_deployer(self):
-        """创建 mock K8s Deployer"""
-        deployer = MagicMock()
-        deployer.deploy = AsyncMock(return_value=MagicMock(
-            success=True,
-            message="K8s deployment started",
-            url="http://test-service.default.svc.cluster.local:8000"
-        ))
-        deployer.undeploy = AsyncMock(return_value=True)
-        return deployer
+    def mock_deployment_manager(self):
+        """创建 mock DeploymentManager"""
+        manager = MagicMock()
+        deployment_info = MagicMock()
+        deployment_info.deployment_id = "test-deployment-id"
+        manager.deploy_image = AsyncMock(return_value=deployment_info)
+        manager.delete_deployment = AsyncMock(return_value=True)
+        manager.initialize = AsyncMock()
+        manager.shutdown = AsyncMock()
+        return manager
 
     @pytest.fixture
     async def access_config(self, db_handler):
@@ -109,11 +107,11 @@ class TestOrchestratorSystem:
         )
 
     @pytest.fixture
-    async def access(self, access_config, mock_k8s_deployer):
-        """创建 Access 实例并 mock K8s 操作"""
+    async def access(self, access_config, mock_deployment_manager):
+        """创建 Access 实例并 mock 部署操作"""
         with patch(
-            "openjiuwen_runtime.management.deployments.k8s.deployer.K8sDeployer",
-            return_value=mock_k8s_deployer
+            "openjiuwen_runtime.management.orchestrator.access.DeploymentManager",
+            return_value=mock_deployment_manager
         ):
             access = Access(access_config)
             await access.init()
@@ -121,7 +119,7 @@ class TestOrchestratorSystem:
             await access.stop()
 
     @pytest.mark.asyncio
-    async def test_send_message_flow(self, access, mock_k8s_deployer):
+    async def test_send_message_flow(self, access, mock_deployment_manager):
         """测试消息分发流程"""
         msg = MockMessage(
             session_id="test-session-1",
@@ -137,7 +135,7 @@ class TestOrchestratorSystem:
         assert result["session_id"] == "test-session-1"
 
     @pytest.mark.asyncio
-    async def test_multiple_sessions(self, access, mock_k8s_deployer):
+    async def test_multiple_sessions(self, access, mock_deployment_manager):
         """测试多个 session 的消息分发"""
         results = []
         for i in range(3):
@@ -226,11 +224,11 @@ class TestOrchestratorSystem:
         assert "session_id" in result["message"]
 
     @pytest.mark.asyncio
-    async def test_graceful_shutdown(self, access_config, mock_k8s_deployer):
+    async def test_graceful_shutdown(self, access_config, mock_deployment_manager):
         """测试优雅关闭"""
         with patch(
-            "openjiuwen_runtime.management.deployments.k8s.deployer.K8sDeployer",
-            return_value=mock_k8s_deployer
+            "openjiuwen_runtime.management.orchestrator.access.DeploymentManager",
+            return_value=mock_deployment_manager
         ):
             access = Access(access_config)
             await access.init()
@@ -248,7 +246,7 @@ class TestOrchestratorSystem:
             assert access._running is False
 
     @pytest.mark.asyncio
-    async def test_autoscaling_trigger(self, access, mock_k8s_deployer):
+    async def test_autoscaling_trigger(self, access, mock_deployment_manager):
         """测试自动扩容触发"""
         results = []
         for i in range(5):
@@ -264,14 +262,14 @@ class TestOrchestratorSystem:
         assert all(r["success"] for r in results)
 
     @pytest.mark.asyncio
-    async def test_max_services_limit(self, access_config, db_handler, mock_k8s_deployer):
+    async def test_max_services_limit(self, access_config, db_handler, mock_deployment_manager):
         """测试最大服务数限制"""
         access_config.max_services = 2
         access_config.max_concurrency = 1
 
         with patch(
-            "openjiuwen_runtime.management.deployments.k8s.deployer.K8sDeployer",
-            return_value=mock_k8s_deployer
+            "openjiuwen_runtime.management.orchestrator.access.DeploymentManager",
+            return_value=mock_deployment_manager
         ):
             access = Access(access_config)
             await access.init()
@@ -292,7 +290,7 @@ class TestOrchestratorSystem:
         assert len(results) == 5
 
     @pytest.mark.asyncio
-    async def test_min_idle_services(self, db_handler, mock_k8s_deployer):
+    async def test_min_idle_services(self, db_handler, mock_deployment_manager):
         """测试最小空闲服务数"""
         config = AccessConfig(
             db_handler=db_handler,
@@ -307,8 +305,8 @@ class TestOrchestratorSystem:
         )
 
         with patch(
-            "openjiuwen_runtime.management.deployments.k8s.deployer.K8sDeployer",
-            return_value=mock_k8s_deployer
+            "openjiuwen_runtime.management.orchestrator.access.DeploymentManager",
+            return_value=mock_deployment_manager
         ):
             access = Access(config)
             await access.init()

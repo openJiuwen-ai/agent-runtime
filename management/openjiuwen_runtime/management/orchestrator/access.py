@@ -33,6 +33,8 @@ class AccessConfig:
     invoke_path: str = "/invoke"
     service_ttl: int = 300
     queue_size: int = 100
+    message_timeout: int = 30  # 消息处理超时（秒）
+    max_retries: int = 3  # 最大重试次数
 
 
 class Access:
@@ -45,8 +47,9 @@ class Access:
         self._timer: Optional[Timer] = None
         self._service_manager: Optional[ServiceManager] = None
         self._message_loop_task: Optional[asyncio.Task] = None
+        self._autoscaling_task: Optional[asyncio.Task] = None
         self._running = False
-        self._response_channels: dict[str, asyncio.Future] = {}
+        self._response_channels: dict[str, asyncio.Queue] = {}
         logger.info(
             f"Access created with config: image='{config.image}', "
             f"max_concurrency={config.max_concurrency}, min_idle_services={config.min_idle_services}, "
@@ -82,8 +85,11 @@ class Access:
         )
         logger.info("ServiceManager initialized")
 
+        await self._service_manager._ensure_min_idle_services()
+
         self._running = True
         self._message_loop_task = asyncio.create_task(self._message_loop())
+        self._autoscaling_task = asyncio.create_task(self._autoscaling_loop())
         logger.info("Message loop started")
 
         logger.info("Access initialized successfully")
@@ -96,7 +102,7 @@ class Access:
             msg: 实现 IMessage 接口的消息对象
 
         Returns:
-            分发结果字典
+            分发结果字典，包含 response_queue 用于接收流式响应
         """
         session_id = msg.get_session_id()
         concurrency = msg.get_session_concurrency()
@@ -104,7 +110,6 @@ class Access:
         request_id = msg.get_request_id()
         payload = msg.get_payload()
         priority = msg.get_priority()
-        response_channel = msg.get_response_channel()
 
         if not session_id:
             logger.error("send_message failed: session_id is required")
@@ -118,8 +123,8 @@ class Access:
             f"concurrency={concurrency}, ttl={ttl}"
         )
 
-        response_future: asyncio.Future = asyncio.get_event_loop().create_future()
-        self._response_channels[session_id] = response_future
+        response_queue: asyncio.Queue = asyncio.Queue()
+        self._response_channels[session_id] = response_queue
 
         message = Message(
             session_id=session_id,
@@ -128,15 +133,18 @@ class Access:
             ttl=ttl,
             priority=priority if priority else MessagePriority.MEDIUM,
             payload=payload,
-            response_channel=response_channel if response_channel else response_future,
+            response_queue=response_queue if response_queue else response_queue,
         )
 
         try:
             await self._message_queue.put(message)
             logger.debug(f"Message put into queue: session_id='{session_id}'")
 
-            result = await response_future
-            return result
+            return {
+                "success": True,
+                "session_id": session_id,
+                "response_queue": response_queue,
+            }
 
         except Exception as e:
             logger.error(f"send_message failed: session_id='{session_id}', error={e}")
@@ -144,6 +152,29 @@ class Access:
                 "success": False,
                 "message": str(e),
             }
+
+    async def receive_stream(self, session_id: str):
+        """
+        接收流式响应
+
+        Args:
+            session_id: 会话 ID
+
+        Yields:
+            响应消息，直到 is_complete == True
+        """
+        response_queue = self._response_channels.get(session_id)
+        if not response_queue:
+            logger.error(f"No response queue for session: session_id='{session_id}'")
+            return
+
+        try:
+            while True:
+                message = await response_queue.get()
+                yield message
+                if message.is_complete:
+                    logger.debug(f"Stream completed: session_id='{session_id}'")
+                    break
         finally:
             if session_id in self._response_channels:
                 del self._response_channels[session_id]
@@ -163,7 +194,7 @@ class Access:
             ttl=0,
             priority=MessagePriority.HIGH,
             payload={"task_type": "response_end", "session_id": session_id},
-            response_channel=None,
+            response_queue=None,
         )
 
         await self._message_queue.put(end_message)
@@ -182,6 +213,14 @@ class Access:
             except asyncio.CancelledError:
                 pass
             logger.info("Message loop stopped")
+
+        if self._autoscaling_task:
+            self._autoscaling_task.cancel()
+            try:
+                await self._autoscaling_task
+            except asyncio.CancelledError:
+                pass
+            logger.info("Autoscaling loop stopped")
 
         if self._service_manager:
             services = await self._service_manager.list_services()
@@ -221,14 +260,34 @@ class Access:
                     f"priority={message.priority}"
                 )
 
-                await self._service_manager.handle_message(message)
+                try:
+                    await asyncio.wait_for(
+                        self._service_manager.handle_message(message),
+                        timeout=self._config.message_timeout
+                    )
 
-                if message.response_channel and isinstance(message.response_channel, asyncio.Future):
-                    if not message.response_channel.done():
-                        message.response_channel.set_result({
-                            "success": True,
-                            "session_id": message.session_id,
-                        })
+                    if message.response_channel and isinstance(message.response_channel, asyncio.Queue):
+                        await message.response_channel.put(Message(
+                            session_id=message.session_id,
+                            request_id=message.request_id,
+                            concurrency=0,
+                            ttl=0,
+                            priority=message.priority,
+                            payload={"status": "accepted"},
+                            is_complete=False,
+                        ))
+
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        f"Message processing timeout: session_id='{message.session_id}'"
+                    )
+                    await self._handle_message_failure(message, "timeout")
+
+                except Exception as e:
+                    logger.error(
+                        f"Message processing error: session_id='{message.session_id}', error={e}"
+                    )
+                    await self._handle_message_failure(message, str(e))
 
             except asyncio.CancelledError:
                 logger.debug("Message loop cancelled")
@@ -238,6 +297,49 @@ class Access:
                 await asyncio.sleep(0.1)
 
         logger.info("Message loop ended")
+
+    async def _handle_message_failure(self, message: Message, reason: str) -> None:
+        """处理消息失败"""
+        if message.retry_count < message.max_retries:
+            message.retry_count += 1
+            logger.info(
+                f"Retrying message: session_id='{message.session_id}', "
+                f"retry_count={message.retry_count}, reason='{reason}'"
+            )
+            await self._message_queue.put(message)
+        else:
+            logger.error(
+                f"Message failed after max retries: session_id='{message.session_id}', "
+                f"retry_count={message.retry_count}, reason='{reason}'"
+            )
+            if message.response_queue and isinstance(message.response_queue, asyncio.Queue):
+                await message.response_queue.put(Message(
+                    session_id=message.session_id,
+                    request_id=message.request_id,
+                    concurrency=0,
+                    ttl=0,
+                    priority=message.priority,
+                    payload={"error": f"Message failed after {message.retry_count} retries: {reason}"},
+                    is_complete=True,
+                ))
+
+    async def _autoscaling_loop(self) -> None:
+        """自动伸缩检查循环"""
+        logger.info("Autoscaling loop started")
+
+        while self._running:
+            try:
+                await asyncio.sleep(30)  # 每 30 秒检查一次
+                if self._service_manager:
+                    await self._service_manager._check_autoscaling()
+            except asyncio.CancelledError:
+                logger.debug("Autoscaling loop cancelled")
+                break
+            except Exception as e:
+                logger.error(f"Autoscaling loop error: error={e}")
+                await asyncio.sleep(5)
+
+        logger.info("Autoscaling loop ended")
 
     async def set_image(self, image: str) -> None:
         """

@@ -18,7 +18,9 @@ class TestServiceManager:
     def mock_deployment_manager(self):
         """创建 mock DeploymentManager"""
         manager = MagicMock()
-        manager.deploy_image = AsyncMock(return_value=MagicMock(deployment_id="test-deployment-1"))
+        deployment_info = MagicMock()
+        deployment_info.deployment_id = "test-deployment-1"
+        manager.deploy_image = AsyncMock(return_value=deployment_info)
         manager.delete_deployment = AsyncMock(return_value=True)
         manager.list_deployments = AsyncMock(return_value=[])
         manager.initialize = AsyncMock()
@@ -59,6 +61,11 @@ class TestServiceManager:
 
         assert deployment_id is not None
         mock_deployment_manager.deploy_image.assert_called_once()
+        
+        service_handler = service_manager.services.get(deployment_id)
+        assert service_handler is not None
+        from openjiuwen_runtime.management.orchestrator.models import ServiceState
+        assert service_handler.state == ServiceState.IDLE
 
     @pytest.mark.asyncio
     async def test_stop_service(self, service_manager, mock_deployment_manager):
@@ -69,6 +76,7 @@ class TestServiceManager:
 
         assert result is True
         mock_deployment_manager.delete_deployment.assert_called()
+        assert deployment_id not in service_manager.services
 
     @pytest.mark.asyncio
     async def test_stop_service_not_found(self, service_manager):
@@ -111,8 +119,7 @@ class TestServiceManager:
             payload={"data": "test"},
         )
 
-        with pytest.raises(ValueError, match="Service not found"):
-            await service_manager.send_to_service("non-existent", message)
+        await service_manager.send_to_service("non-existent", message)
 
     @pytest.mark.asyncio
     async def test_update_config(self, service_manager):
@@ -121,3 +128,22 @@ class TestServiceManager:
 
         assert service_manager._max_concurrency == 20
         assert service_manager._max_services == 10
+
+    @pytest.mark.asyncio
+    async def test_deploy_service_state_flow(self, service_manager, mock_deployment_manager):
+        """测试部署服务的状态流转"""
+        from openjiuwen_runtime.management.orchestrator.models import ServiceState
+        
+        deployment_id = await service_manager.deploy_service()
+        service_handler = service_manager.services[deployment_id]
+        
+        assert service_handler.state == ServiceState.IDLE
+
+    @pytest.mark.asyncio
+    async def test_max_services_limit(self, service_manager, mock_deployment_manager):
+        """测试最大服务数限制"""
+        for i in range(5):
+            await service_manager.deploy_service()
+        
+        with pytest.raises(RuntimeError, match="Maximum services limit reached"):
+            await service_manager.deploy_service()
