@@ -5,7 +5,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Callable, Optional, TYPE_CHECKING, AsyncIterator
 
 if TYPE_CHECKING:
-    from .models import MessagePriority
+    from .models import AccessConfig, MessagePriority
 
 
 class PriorityMessage(ABC):
@@ -166,7 +166,7 @@ class IAccess(ABC):
     """消息统一入口，内部调用session策略，把IRequest转换为ISessionRequest"""
 
     @abstractmethod
-    def init(self, response_parser: IResponseParser, strategy: ISessionStrategy):
+    def init(self, response_parser: IResponseParser, strategy: ISessionStrategy, config: AccessConfig):
         pass
 
     @abstractmethod
