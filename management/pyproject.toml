@@ -31,6 +31,7 @@ dependencies = [
     "websockets>=13.0",
     "kubernetes>=33.1.0",
     "kubernetes-asyncio>=29.0.0",
+    "aio-pika>=9.4.0",
 ]
 
 [tool.uv.sources]

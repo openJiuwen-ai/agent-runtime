@@ -21,8 +21,7 @@ class InMemoryMessageQueue(IMessageQueue):
         self._max_size = max_size
         self._queue: list[tuple[int, int, Message]] = []
         self._counter = 0
-        self._lock = asyncio.Lock()
-        self._not_empty = asyncio.Condition()
+        self._condition = asyncio.Condition()
         self._closed = False
 
     def _priority_value(self, priority: MessagePriority) -> int:
@@ -37,11 +36,11 @@ class InMemoryMessageQueue(IMessageQueue):
         if self._closed:
             raise RuntimeError("Queue is closed")
 
-        async with self._not_empty:
+        async with self._condition:
             if len(self._queue) >= self._max_size:
-                logger.warning(f"Queue is full (size={self._max_size}), waiting...")
-                while len(self._queue) >= self._max_size and not self._closed:
-                    await asyncio.sleep(0.01)
+                logger.warning("Queue is full (size=%s), waiting...", self._max_size)
+            while len(self._queue) >= self._max_size and not self._closed:
+                await self._condition.wait()
 
             if self._closed:
                 raise RuntimeError("Queue is closed")
@@ -49,28 +48,34 @@ class InMemoryMessageQueue(IMessageQueue):
             priority_val = self._priority_value(message.priority)
             self._counter += 1
             heapq.heappush(self._queue, (priority_val, self._counter, message))
-            logger.debug(f"Message put into queue, priority={message.priority}, queue_size={len(self._queue)}")
-            self._not_empty.notify()
+            # logger.debug(f"Message put into queue, priority={message.priority}, queue_size={len(self._queue)}")
+            logger.debug(
+                "Message put into queue, priority=%s, queue_size=%s",
+                message.get_priority(),
+                len(self._queue),
+            )
+            self._condition.notify_all()
 
     async def get(self) -> PriorityMessage:
         if self._closed and len(self._queue) == 0:
             raise RuntimeError("Queue is closed and empty")
 
-        async with self._not_empty:
+        async with self._condition:
             while len(self._queue) == 0 and not self._closed:
-                await self._not_empty.wait()
+                await self._condition.wait()
 
             if len(self._queue) == 0:
                 raise RuntimeError("Queue is closed and empty")
 
             _, _, message = heapq.heappop(self._queue)
-            logger.debug(f"Message get from queue, queue_size={len(self._queue)}")
+            logger.debug("Message get from queue, queue_size=%s", len(self._queue))
+            self._condition.notify_all()
             return message
 
     async def close(self) -> None:
-        async with self._not_empty:
+        async with self._condition:
             self._closed = True
-            self._not_empty.notify_all()
+            self._condition.notify_all()
         logger.info("InMemoryMessageQueue closed")
 
     async def size(self) -> int:
@@ -138,10 +143,10 @@ class RabbitMqMessageQueue(IMessageQueue):
     """基于 RabbitMQ 的异步消息队列"""
 
     def __init__(
-            self,
-            url: str = "amqp://localhost",
-            queue_name: str = "orchestrator",
-            max_size: int = 100,
+        self,
+        url: str = "amqp://localhost",
+        queue_name: str = "orchestrator",
+        max_size: int = 100,
     ):
         self._url = url
         self._queue_name = queue_name
@@ -149,6 +154,7 @@ class RabbitMqMessageQueue(IMessageQueue):
         self._connection: Optional[object] = None
         self._channel: Optional[object] = None
         self._queue: Optional[object] = None
+        self._consumer_tag: Optional[str] = None
         self._closed = False
         self._fallback_queue: InMemoryMessageQueue = InMemoryMessageQueue(max_size=max_size)
         self._use_fallback = True
@@ -222,6 +228,8 @@ class RabbitMqMessageQueue(IMessageQueue):
 
     async def close(self) -> None:
         self._closed = True
+        # 先取消订阅再关闭连接，避免关闭阶段仍触发消费回调
+        await self.stop_consume()
         await self._fallback_queue.close()
         if self._connection is not None:
             await self._connection.close()
@@ -244,3 +252,62 @@ class RabbitMqMessageQueue(IMessageQueue):
 
         size = await self.size()
         return size >= self._max_size
+
+    async def start_consume(self, handler) -> bool:
+        """
+        启动 RabbitMQ 订阅消费。
+        handler 签名: async def handler(message: IMessage) -> None
+        """
+        if self._closed:
+            raise RuntimeError("Queue is closed")
+
+        await self._ensure_connection()
+        if self._use_fallback:
+            logger.warning("RabbitMQ unavailable, start_consume skipped (fallback mode)")
+            return False
+        if self._consumer_tag is not None:
+            # 幂等：重复启动直接返回成功，避免重复注册 consumer
+            logger.info(
+                "RabbitMQ consumer already running: queue=%s tag=%s",
+                self._queue_name,
+                self._consumer_tag,
+            )
+            return True
+
+        async def _on_message(message) -> None:
+            async with message.process():
+                try:
+                    payload = Message.model_validate_json(message.body.decode())
+                    await handler(payload)
+                except Exception as exc:
+                    # 透传异常给 broker 的 ack/requeue 机制处理，不在 SDK 内吞掉
+                    logger.error(
+                        "RabbitMQ consume handler failed: queue=%s tag=%s request_id=%s error=%s",
+                        self._queue_name,
+                        self._consumer_tag,
+                        getattr(payload, "request_id", None) if "payload" in locals() else None,
+                        exc,
+                    )
+                    raise
+
+        self._consumer_tag = await self._queue.consume(_on_message)
+        logger.info("RabbitMQ consumer started: queue=%s tag=%s", self._queue_name, self._consumer_tag)
+        return True
+
+    async def stop_consume(self) -> None:
+        """停止 RabbitMQ 订阅消费。"""
+        if self._use_fallback or self._queue is None or self._consumer_tag is None:
+            # 幂等：未启动 consumer、fallback 模式或队列未初始化时直接返回
+            logger.debug(
+                "RabbitMQ consumer stop skipped: queue=%s fallback=%s has_queue=%s has_tag=%s",
+                self._queue_name,
+                self._use_fallback,
+                self._queue is not None,
+                self._consumer_tag is not None,
+            )
+            return
+        try:
+            await self._queue.cancel(self._consumer_tag)
+            logger.info("RabbitMQ consumer stopped: queue=%s tag=%s", self._queue_name, self._consumer_tag)
+        finally:
+            self._consumer_tag = None

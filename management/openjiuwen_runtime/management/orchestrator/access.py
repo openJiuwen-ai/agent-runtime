@@ -11,7 +11,7 @@ from openjiuwen_runtime.foundation.db.handler import DBHandler
 from openjiuwen_runtime.foundation.log import get_logger
 from openjiuwen_runtime.management.manager import DeploymentManager
 
-from .message_queue import InMemoryMessageQueue, IMessageQueue
+from .message_queue import InMemoryMessageQueue, RabbitMqMessageQueue, ZmqMessageQueue, IMessageQueue
 from .models import Message, MessagePriority
 from .interfaces import IMessage, MessageWrapper
 from .service_manager import ServiceManager
@@ -35,6 +35,11 @@ class AccessConfig:
     queue_size: int = 100
     message_timeout: int = 30  # 消息处理超时（秒）
     max_retries: int = 3  # 最大重试次数
+    queue_backend: str = "memory"
+    rabbitmq_url: str = "amqp://localhost"
+    rabbitmq_queue_name: str = "orchestrator"
+    zmq_bind_address: str = "tcp://*:5555"
+    consume_from_broker: bool = False
 
 
 class Access:
@@ -47,12 +52,18 @@ class Access:
         self._timer: Optional[Timer] = None
         self._service_manager: Optional[ServiceManager] = None
         self._running = False
+        # 本地消息循环任务句柄（仅在非 broker 消费模式或 broker 降级时启用）
+        self._message_loop_task: Optional[asyncio.Task] = None
+        # 记录 broker 订阅是否成功启动，stop 时据此决定是否显式解订阅
+        self._broker_consumer_started = False
         self._response_channels: dict[str, asyncio.Queue] = {}
+        self._consume_from_broker = bool(config.consume_from_broker)
         logger.info(
             f"Access created with config: image='{config.image}', "
             f"max_concurrency={config.max_concurrency}, min_idle_services={config.min_idle_services}, "
             f"max_services={config.max_services}, target_port={config.target_port}, "
-            f"invoke_path='{config.invoke_path}', service_ttl={config.service_ttl}s, queue_size={config.queue_size}"
+            f"invoke_path='{config.invoke_path}', service_ttl={config.service_ttl}s, queue_size={config.queue_size}, "
+            f"queue_backend='{config.queue_backend}', consume_from_broker={self._consume_from_broker}"
         )
 
     async def init(self) -> None:
@@ -63,8 +74,8 @@ class Access:
         await self._deployment_manager.initialize()
         logger.info("DeploymentManager initialized")
 
-        self._message_queue = InMemoryMessageQueue(max_size=self._config.queue_size)
-        logger.info(f"MessageQueue initialized with size={self._config.queue_size}")
+        self._message_queue = self._build_message_queue()
+        logger.info("MessageQueue initialized: backend='%s'", (self._config.queue_backend or "memory"))
 
         self._timer = Timer()
         logger.info("Timer initialized")
@@ -89,6 +100,36 @@ class Access:
         await self._service_manager.start()
 
         self._running = True
+        self._broker_consumer_started = False
+        if self._consume_from_broker and isinstance(self._message_queue, RabbitMqMessageQueue):
+            started = await self._message_queue.start_consume(self._handle_broker_message)
+            if started:
+                self._broker_consumer_started = True
+                logger.info(
+                    "RabbitMQ consumer mode enabled: queue=%s url=%s",
+                    self._config.rabbitmq_queue_name,
+                    self._config.rabbitmq_url,
+                )
+            else:
+                # broker 不可用时降级到原有本地 message loop，保证可继续处理 send_message
+                logger.warning(
+                    "RabbitMQ consumer mode requested but not started, "
+                    "fallback to local message loop: queue=%s url=%s",
+                    self._config.rabbitmq_queue_name,
+                    self._config.rabbitmq_url,
+                )
+                self._message_loop_task = asyncio.create_task(self._message_loop())
+                logger.info("Message loop started")
+        else:
+            if self._consume_from_broker and not isinstance(self._message_queue, RabbitMqMessageQueue):
+                logger.warning(
+                    "consume_from_broker is only supported for rabbitmq backend, "
+                    "fallback to message loop for backend='%s'",
+                    (self._config.queue_backend or "memory"),
+                )
+            self._message_loop_task = asyncio.create_task(self._message_loop())
+            logger.info("Message loop started")
+
         logger.info("Access initialized successfully")
 
     async def send_message(self, msg: IMessage) -> dict:
@@ -122,6 +163,12 @@ class Access:
 
         response_queue: asyncio.Queue = asyncio.Queue()
         self._response_channels[session_id] = response_queue
+        if self._consume_from_broker and self._message_loop_task is None:
+            logger.error("send_message is unavailable in broker-consumer mode")
+            return {
+                "success": False,
+                "message": "send_message is unavailable when consume_from_broker=True",
+            }
 
         message = MessageWrapper(msg, response_queue)
 
@@ -194,24 +241,74 @@ class Access:
         logger.info("Stopping Access")
 
         self._running = False
+        try:
+            if self._message_queue and isinstance(self._message_queue, RabbitMqMessageQueue):
+                if self._broker_consumer_started:
+                    try:
+                        # 先解订阅，再关连接，避免停机窗口继续收到 broker 消息
+                        await self._message_queue.stop_consume()
+                    except Exception as exc:
+                        logger.warning("Failed to stop RabbitMQ consumer: %s", exc)
+                    finally:
+                        self._broker_consumer_started = False
+                else:
+                    logger.debug("RabbitMQ consumer not started, skip stop_consume")
 
-        if self._service_manager:
-            await self._service_manager.stop()
+            if self._service_manager:
+                await self._service_manager.stop()
 
-        if self._message_queue:
-            await self._message_queue.close()
-            logger.info("Message queue closed")
+            if self._message_queue:
+                await self._message_queue.close()
+                logger.info("Message queue closed")
 
-        if self._timer:
-            await self._timer.stop_all()
-            logger.info("Timer stopped")
+            if self._timer:
+                await self._timer.stop_all()
+                logger.info("Timer stopped")
 
-        if self._deployment_manager:
-            await self._deployment_manager.shutdown()
-            logger.info("DeploymentManager shutdown")
+            if self._deployment_manager:
+                await self._deployment_manager.shutdown()
+                logger.info("DeploymentManager shutdown")
+        finally:
+            # 无论前面清理是否出错，都保证本地 loop 被回收
+            if self._message_loop_task:
+                self._message_loop_task.cancel()
+                try:
+                    await self._message_loop_task
+                except asyncio.CancelledError:
+                    pass
+                self._message_loop_task = None
 
         self._response_channels.clear()
         logger.info("Access stopped successfully")
+
+    def _build_message_queue(self) -> IMessageQueue:
+        backend = (self._config.queue_backend or "memory").strip().lower()
+        if backend == "rabbitmq":
+            return RabbitMqMessageQueue(
+                url=self._config.rabbitmq_url,
+                queue_name=self._config.rabbitmq_queue_name,
+                max_size=self._config.queue_size,
+            )
+        if backend == "zmq":
+            return ZmqMessageQueue(
+                bind_address=self._config.zmq_bind_address,
+                max_size=self._config.queue_size,
+            )
+        return InMemoryMessageQueue(max_size=self._config.queue_size)
+
+    async def _handle_broker_message(self, message: IMessage) -> None:
+        """
+        Broker 订阅回调：
+        统一走 ServiceManager.handle_message，便于对齐当前编排流程。
+        """
+        if not self._running:
+            # stop 流程中可能仍收到末尾消息，这里直接丢弃避免停机后继续执行业务逻辑
+            logger.debug("Broker message dropped because access is stopping/stopped")
+            return
+        if not self._service_manager:
+            logger.warning("Broker message dropped: service_manager not initialized")
+            return
+        await self._service_manager.handle_message(message)
 
     async def set_image(self, image: str) -> None:
         """
