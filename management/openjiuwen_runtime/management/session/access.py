@@ -4,6 +4,7 @@
 """Access：策略生成 session_id / 并发度 / TTL，交给 ServiceManager（双队列）。"""
 
 import asyncio
+import uuid
 from typing import Any, AsyncIterator, Optional
 
 from openjiuwen_runtime.foundation.log import get_logger
@@ -21,6 +22,47 @@ from .models import AccessConfig, SessionConfig
 logger = get_logger(__name__)
 
 
+class _AutoIdRequest(IRequest):
+    """覆盖 ``request_id`` 为 Access 生成的 UUID，其余字段透传给原始 ``IRequest``。
+
+    用途：当用户 ``IRequest.request_id`` 为空时，Access 自动生成；下游
+    ``WSServiceMessageChannel`` 依靠 ``request_id`` 做多路复用，否则会拒收。
+    """
+
+    def __init__(self, base: IRequest, rid: str) -> None:
+        self._base = base
+        self._rid = rid
+
+    @property
+    def request_id(self) -> Optional[str]:
+        return self._rid
+
+    @property
+    def chat_id(self) -> Optional[str]:
+        return self._base.chat_id
+
+    @property
+    def bot_id(self) -> Optional[str]:
+        return self._base.bot_id
+
+    @property
+    def user_id(self) -> Optional[str]:
+        return self._base.user_id
+
+    @property
+    def session_id(self) -> Optional[str]:
+        return self._base.session_id
+
+    @property
+    def wire_dict(self) -> Any:
+        # 让 ws_client_channel._to_jsonable 能拿到含 request_id 的上行字典；
+        # 若原对象没有 wire_dict，返回 None 走默认序列化分支。
+        wd = getattr(self._base, "wire_dict", None)
+        if isinstance(wd, dict):
+            return wd
+        return None
+
+
 class Access(IAccess):
     def __init__(self, service_manager: IServiceManager) -> None:
         self._service_manager = service_manager
@@ -29,11 +71,11 @@ class Access(IAccess):
         self._config: Optional[AccessConfig] = None
 
     async def init(
-        self,
-        response_parser: IResponseParser,
-        strategy: ISessionStrategy,
-        config: AccessConfig,
-        session_config: SessionConfig,
+            self,
+            response_parser: IResponseParser,
+            strategy: ISessionStrategy,
+            config: AccessConfig,
+            session_config: SessionConfig,
     ) -> None:
         # 与入口共享的会话维度：并发与 TTL 写入策略，供 handle_session 填充 ISessionRequest
         self._response_parser = response_parser
@@ -73,6 +115,16 @@ class Access(IAccess):
             return
 
         rid = getattr(msg, "request_id", None)
+        if not rid:
+            rid = uuid.uuid4().hex
+            logger.info(
+                "Access 自动生成 request_id=%s（请求未提供，多路复用必须非空）", rid
+            )
+            wd = getattr(msg, "wire_dict", None)
+            if isinstance(wd, dict) and not wd.get("request_id"):
+                # 对端按 request_id 回包路由；inplace 注入到原 wire_dict 即可
+                wd["request_id"] = rid
+            msg = _AutoIdRequest(msg, rid)
         logger.info("Access 收到请求: request_id=%s", rid)
         # 2) 策略层：从业务请求解析出 session_id、会话级并发、TTL
         session_request = self._strategy.handle_session(msg)
@@ -94,7 +146,7 @@ class Access(IAccess):
         try:
             while True:
                 try:
-                    to = self._config.message_timeout if self._config else 30
+                    to = self._config.message_timeout if self._config else 600
                     data = await asyncio.wait_for(response_queue.get(), timeout=to)
                 except asyncio.TimeoutError:
                     # 等响应超时：结束迭代（业务上视为挂起/失败，由调用方处理）

@@ -119,7 +119,11 @@ class ServiceHandler(IServiceHandler):
         await sh.handle_message(msg)
 
     async def invoke_channel(self, wrapper: SessionRequestWrapper) -> None:
-        """SessionHandler 在取得 session 信号量后调用：再占 1 路服务级并发, 经通道下发给下游。"""
+        """SessionHandler 在取得 session 信号量后调用：再占 1 路服务级并发, 经通道下发给下游。
+
+        此处 ``await self._channel.send(...)`` 为
+        ``WSServiceMessageChannel`` 等 ``IServiceMessageChannel`` 实现的业务上行入口。
+        """
         await self._service_sem.acquire()
         self._inflight += 1
         rid = wrapper.session_request.request_id

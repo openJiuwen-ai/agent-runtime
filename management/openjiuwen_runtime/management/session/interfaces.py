@@ -11,6 +11,7 @@ from typing import (
     TYPE_CHECKING,
     AsyncIterator,
     Protocol,
+    TypeAlias,
     runtime_checkable,
 )
 
@@ -18,6 +19,9 @@ from .models import MessagePriority, MessageType
 
 if TYPE_CHECKING:
     from .models import AccessConfig, SessionConfig
+
+# 与 ``ServiceHandler`` 传入的 ``async def on_request_complete(r)`` 一致（可 await）
+OnRequestCompleteCallback: TypeAlias = Callable[[Optional[str]], Awaitable[None]]
 
 
 class PriorityMessage(ABC):
@@ -178,6 +182,9 @@ class IAccess(ABC):
 class IServiceMessageChannel(Protocol):
     """与下游服务通信；单服务实例上通常是 **一条长连接**（如 WebSocket），上有多路并发流式 ``request_id``。
 
+    **实现方式**：用结构子类型实现本 Protocol（**不要**让具体子类再继承本 Protocol，以免与
+    类型检查器对 ``Protocol`` 子类化的限制冲突。）
+
     约定:
     * ``send`` 中 **上行** 发送一帧业务负载（通常 JSON 序列化自 ``ISessionRequest.raw_msg``）;
     * **下行** 由实现类在独接收循环里按 ``IResponseParser.request_id`` 分片写入对应 ``SessionRequestWrapper.response_queue``;
@@ -191,7 +198,7 @@ class IServiceMessageChannel(Protocol):
         wrapper: SessionRequestWrapper,
         *,
         response_parser: IResponseParser,
-        on_request_complete: Callable[[Optional[str]], Awaitable[None]],
+        on_request_complete: OnRequestCompleteCallback,
     ) -> None: ...
 
 
