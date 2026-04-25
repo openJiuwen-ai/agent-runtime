@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional
 
 from openjiuwen_runtime.foundation.log import get_logger
 
@@ -54,6 +54,8 @@ class ServiceHandler(IServiceHandler):
         self._by_request: Dict[str, SessionRequestWrapper] = {}
         self._pod_info: Any = None
         self._closed = False
+        # ServiceManager 注入：in_use 且 session/inflight 均空时，按 service_ttl 转入 idle
+        self._idle_pool_hook: Optional[Callable[[str], Awaitable[None]]] = None
         # WebSocket 等通道在绑定后可拿到本实例与 IResponseParser，供接收循环多路分片
         if hasattr(self._channel, "bind_handler"):
             self._channel.bind_handler(self, self._parser)  # type: ignore[union-attr]
@@ -79,9 +81,18 @@ class ServiceHandler(IServiceHandler):
     def active_session_count(self) -> int:
         return len(self._sessions)
 
+    def open_session_ids(self) -> list[str]:
+        return list(self._sessions.keys())
+
     @property
     def pod_info(self) -> Any:
         return self._pod_info
+
+    def set_idle_pool_transition_hook(
+        self, hook: Optional[Callable[[str], Awaitable[None]]]
+    ) -> None:
+        """由 ServiceManager 设置：在 in_use 上最后一次 inflight 结束且无 session 时回调。"""
+        self._idle_pool_hook = hook
 
     def has_session(self, session_id: str) -> bool:
         return session_id in self._sessions
@@ -148,6 +159,10 @@ class ServiceHandler(IServiceHandler):
                 self._inflight,
                 r,
             )
+            hook = self._idle_pool_hook
+            # 无在途 inflight 即触发「无业务」计时；session 记录可仍在，由 Manager 入 idle 前逐出
+            if hook and self._inflight == 0:
+                asyncio.get_running_loop().create_task(hook(self._id))
 
         try:
             await self._channel.send(

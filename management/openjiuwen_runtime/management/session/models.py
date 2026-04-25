@@ -48,13 +48,19 @@ class AccessConfig:
     db_handler: Optional["DBHandler"] = None
     service_concurrency: int = 200
     min_idle_services: int = 1
+    """池中**至少**保持的**空闲**实例数（仅由 autoscale 补位，**不会**因 ``service_ttl`` 从 idle 删 Pod）。
+    若 ``len(_idle) < min_idle``，约每 ``autoscale_interval`` 会 deploy 预热实例入 idle。设为 ``0`` 表示不维护热备。"""
     max_services: int = 10
     target_port: int = 8000
     invoke_path: str = ""  # 与 pod_ip:target_port 组成 WS URI；空则仅 ws://host:port
     ws_use_tls: bool = False  # True 为 wss://，否为 ws://
 
     service_ttl: int = 300
-    """无 session 且无非活跃请求时，空闲实例在池中保留的最长时间（秒），超时缩容。"""
+    """① **in_use** 在「无 session、无 inflight」后，等待本秒数再**转入** ``_idle``。②
+    当 **len(idle) > min_idle_services** 时，对**多出来**的 idle 删 Pod 前再等待本秒数，直到缩至 ``min``。
+    **从 in_use 刚转入** idle 时若已超额，不叠第二次同长度等待（与 ① 合并）。底数 min 台 idle 不按本字段被删。
+    设为 ``0`` 时无等待。负值行为与实现相关，勿用。
+    """
 
     message_timeout: int = 600
     max_retries: int = 3

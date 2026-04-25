@@ -155,6 +155,10 @@ class ITimer(ABC):
     async def cancel_timer(self, key: str) -> bool:
         pass
 
+    async def stop_all(self) -> None:
+        """若实现支持，取消所有活动计时；默认无操作。"""
+        return
+
 
 class ISessionStrategy(ABC):
     @abstractmethod
@@ -175,6 +179,11 @@ class IAccess(ABC):
 
     @abstractmethod
     def send_message(self, msg: IRequest) -> AsyncIterator[Any]:
+        pass
+
+    @abstractmethod
+    async def shutdown(self) -> None:
+        """优雅退出：停后台 task/双队列/计时器，并释放已拉起的各服务实例（如 Pod/连接）。"""
         pass
 
 
@@ -256,6 +265,10 @@ class IServiceHandler(ABC):
     def active_session_count(self) -> int:
         pass
 
+    def open_session_ids(self) -> list[str]:
+        """当前实例上仍占位的 session_id 列表；默认无。转入 idle 前可据此清理亲和路由。"""
+        return []
+
     @abstractmethod
     def has_session(self, session_id: str) -> bool:
         pass
@@ -275,6 +288,12 @@ class IServiceHandler(ABC):
     @abstractmethod
     async def delete(self) -> None:
         pass
+
+    def set_idle_pool_transition_hook(
+        self, hook: Optional[Callable[[str], Awaitable[None]]]
+    ) -> None:
+        """默认无实现；`ServiceHandler` 会注入，供无业务时按 `service_ttl` 转入 idle 池。"""
+        return
 
 
 class ISessionHandler(ABC):

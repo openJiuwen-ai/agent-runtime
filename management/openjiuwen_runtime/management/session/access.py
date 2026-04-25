@@ -69,6 +69,7 @@ class Access(IAccess):
         self._strategy: Optional[ISessionStrategy] = None
         self._response_parser: Optional[IResponseParser] = None
         self._config: Optional[AccessConfig] = None
+        self._shutdown_done: bool = False
 
     async def init(
             self,
@@ -105,8 +106,20 @@ class Access(IAccess):
             "Access init 完成: message_timeout=%s", getattr(config, "message_timeout", None)
         )
 
+    async def shutdown(self) -> None:
+        """优雅退出：停 ServiceManager 内全部 asyncio 任务与双队列、取消定时器、delete 已拉起的服务。"""
+        if self._shutdown_done:
+            logger.debug("Access shutdown 被忽略(幂等): 已关闭")
+            return
+        self._shutdown_done = True
+        await self._service_manager.stop()
+        logger.info("Access 已 shutdown")
+
     async def send_message(self, msg: IRequest) -> AsyncIterator[Any]:
         # 1) 未 init 时直接失败并打 error
+        if self._shutdown_done:
+            logger.error("Access 已 shutdown，不再收消息")
+            return
         if not self._strategy:
             logger.error("Access 未初始化，需先调用 init()")
             return

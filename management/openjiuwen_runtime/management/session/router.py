@@ -67,3 +67,8 @@ class ServiceRouter:
                 del self._session_service[session_id]
                 return True
             return False
+
+    async def clear(self) -> None:
+        """清空 session_id → service_id 的亲和表（如进程退出/优雅停机）。"""
+        async with self._lock:
+            self._session_service.clear()

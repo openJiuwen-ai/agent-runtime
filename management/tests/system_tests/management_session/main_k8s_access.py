@@ -61,16 +61,55 @@ from openjiuwen_runtime.management.session.timer import Timer
 from openjiuwen_runtime.management.session.ws_client_channel import WSServiceMessageChannel
 
 
-class DictStreamParser(IResponseParser):
-    """适配常见服务端响应：JSON-RPC 风格、流式分片、type/event 风格混合存在。"""
+def _e2a_nested_is_complete(data: dict[str, Any]) -> bool:
+    """``provenance.details.is_complete``（jiuwenclaw 网关对 agent chunk 的归一化）。"""
+    prov = data.get("provenance")
+    if not isinstance(prov, dict):
+        return False
+    det = prov.get("details")
+    if not isinstance(det, dict):
+        return False
+    return det.get("is_complete") is True
+
+
+class E2aEnvelopResponseParser(IResponseParser):
+    """解析 e2a / jiuwenclaw 网关归一化后的 WebSocket 下行 JSON。
+
+    典型终态一帧（节选）::
+
+        {
+            "protocol_version": "1.0",
+            "request_id": "req_xxx",
+            "response_id": "req_xxx",
+            "is_final": true,
+            "status": "succeeded",
+            "response_kind": "e2a.complete",
+            "provenance": {"details": {"is_complete": true, ...}},
+            "body": {"result": {}},
+            ...
+        }
+
+    * ``request_id``：与上行多路复用键一致，优先取 ``request_id``，否则 ``response_id``/``id``。
+    * **终态**（``is_completed`` 为真）：任一为真即可——``is_final``、``provenance.details.is_complete``、
+      历史兼容字段（``error``/``done``/``is_end``/``event`` 等）。
+    * ``response``：返回**整条原始 dict**（不剥 ``body``），便于业务自行读 ``body.result`` 等。
+    """
 
     _END_EVENTS = {"stream.end", "stream.done", "chat.done", "response.end"}
+    _TERMINAL_STATUS = {"succeeded", "failed", "canceled", "cancelled", "error"}
 
     def request_id(self, data: dict[str, Any]) -> Optional[str]:
-        rid = data.get("request_id") or data.get("id")
+        rid = data.get("request_id") or data.get("response_id") or data.get("id")
         return str(rid) if rid is not None else None
 
     def is_completed(self, data: dict[str, Any]) -> bool:
+        if data.get("is_final") is True:
+            return True
+        if _e2a_nested_is_complete(data):
+            return True
+        st = data.get("status")
+        if isinstance(st, str) and st in self._TERMINAL_STATUS and st != "succeeded":
+            return True
         if "error_code" in data or "error" in data:
             return True
         if data.get("completed") is True:
@@ -80,16 +119,17 @@ class DictStreamParser(IResponseParser):
         ev = data.get("event")
         if isinstance(ev, str) and ev in self._END_EVENTS:
             return True
+        rk = data.get("response_kind")
+        if isinstance(rk, str) and rk.endswith(".complete"):
+            return True
         return False
 
     def response(self, data: dict[str, Any]) -> Any:
-        if "error" in data:
-            return data["error"]
-        if "message" in data and "error_code" in data:
-            return data["message"]
-        if "result" in data:
-            return data["result"]
-        return data.get("text", data)
+        return data
+
+
+# 供 Access / ServiceManager 等保持旧名称引用
+DictStreamParser = E2aEnvelopResponseParser
 
 
 class WireIRequest(IRequest):
@@ -257,7 +297,7 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=(0, 1),
         help="1 使用 wss://，0 使用 ws://（直连 pod_ip 时一般为 0）",
     )
-    p.add_argument("--service-ttl", type=int, default=300)
+    p.add_argument("--service-ttl", type=int, default=30)
     p.add_argument("--message-timeout", type=int, default=30)
     p.add_argument("--autoscale-interval", type=float, default=0.2)
     p.add_argument(
@@ -315,7 +355,7 @@ async def _amain() -> int:
 
     class _Factory(IServiceInstanceFactory):
         async def new_service(
-            self, response_parser: IResponseParser
+                self, response_parser: IResponseParser
         ) -> IServiceHandler:
             k8s = K8sServiceHandler(
                 args.image,
@@ -379,9 +419,13 @@ async def _amain() -> int:
             file=sys.stderr,
         )
         async for chunk in access.send_message(wire):
+            print("receive chunk:")
             print(json.dumps(chunk, ensure_ascii=False, default=str))
+
+        print("响应完成，等待2分钟，pod销毁")
+        await asyncio.sleep(120)
     finally:
-        await sm.stop()
+        await access.shutdown()
     return 0
 
 
