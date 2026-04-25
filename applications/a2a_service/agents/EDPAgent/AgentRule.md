@@ -75,42 +75,70 @@ scripts:
 
 ### 2.1 任务规划（Todolist）
 
-在开始执行任何工具调用之前，**必须先输出一段任务规划**。格式为下面的 Markdown 代码块，**必须严格遵守 JSON 格式**：
+在开始执行任何工具调用之前，**必须调用 `todolist_create` 工具创建任务规划**。
 
-````
-```todolist
-[
-  {"id": 1, "title": "查询理财卡余额", "status": "pending"},
-  {"id": 2, "title": "推荐 2 支理财产品", "status": "pending"},
-  {"id": 3, "title": "确认购买信息", "status": "pending"}
-]
+使用方式：
 ```
-````
+调用 todolist_create，参数 tasks 为分号(;)分隔的任务列表
 
-字段约束：
-- `id`：正整数，从 1 开始递增
-- `title`：简短任务名（≤30 字）
-- `status`：只能是 `pending` / `in_progress` / `done` / `failed` 之一
+示例：
+{
+  "tasks": "查询理财卡余额;推荐 2 支理财产品;确认购买信息"
+}
+```
+
+或使用 JSON 格式：
+```
+{
+  "json_tasks": [
+    {"content": "查询理财卡余额"},
+    {"content": "推荐 2 支理财产品"},
+    {"content": "确认购买信息"}
+  ]
+}
+```
+
+**重要规则**：
+- 第一个任务自动设为 in_progress，其余为 pending
+- 同一时间只能有一个 in_progress 任务
+- 任务描述必须具体、可执行、清晰明确
 
 ### 2.2 任务状态更新
 
-每当开始或完成一个 todo，在对应 thought 中输出一段状态变更：
+每当开始或完成一个任务，**必须调用 `todolist_modify` 工具更新状态**。
 
-````
-```todo_update
-{"id": 1, "status": "in_progress"}
+使用方式：
 ```
-````
+开始任务（设为 in_progress）：
+{
+  "action": "start",
+  "index": 1
+}
 
-或完成时：
+完成任务（设为 completed）：
+{
+  "action": "complete",
+  "index": 1,
+  "updates": {"result": "任务执行结果"}
+}
 
-````
-```todo_update
-{"id": 1, "status": "done"}
+标记失败（设为 failed）：
+{
+  "action": "fail",
+  "index": 1
+}
+
+追加新任务：
+{
+  "action": "append",
+  "tasks": "新任务描述"
+}
 ```
-````
 
-**仅输出 `id` 和 `status` 两个字段**。
+**重要规则**：
+- 仅当 index=1 或前序任务全部 COMPLETED 时才能 start
+- 同一时间只能有一个 in_progress 任务
+- 完成后建议通过 updates.result 保存执行结果
 
 ### 2.3 工具调用
 

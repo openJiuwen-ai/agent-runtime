@@ -19,7 +19,7 @@ from loguru import logger
 from .agent_rule import AgentRuleConfig, load_agent_rule
 from .config import get_settings
 from .prompt import build_system_prompt
-from common.events import (
+from ...common.events import (
     AgentEvent,
     ConversationStartEvent, ConversationEndEvent,
     ThinkStartEvent, ThinkChunkEvent, ThinkEndEvent,
@@ -30,14 +30,6 @@ from common.events import (
     FinalAnswerStartEvent, SummaryEvent, FinalAnswerChunkEvent, FinalAnswerEndEvent,
     DelegateRequest,
 )
-
-# todolist item status 英 → 中映射（对齐抓包里的 HTML content 格式）
-_TODO_STATUS_CN: dict[str, str] = {
-    "pending": "待执行",
-    "in_progress": "执行中",
-    "done": "完成",
-    "failed": "失败",
-}
 
 
 def _log_stream_payload(evt: AgentEvent) -> None:
@@ -287,23 +279,19 @@ def _get_agent():
     return _agent
 
 
-# Todolist 约定代码块正则
-_TODOLIST_RE = re.compile(r"```todolist\s*\n(.*?)\n```", re.DOTALL)
-_TODO_UPDATE_RE = re.compile(r"```todo_update\s*\n(.*?)\n```", re.DOTALL)
-
-
 class _StreamProcessor:
     """
     把 Runner 原始事件流转换为细粒度 AgentEvent 的状态机。
 
     原始事件类型：
-      llm_reasoning   → think_start / think_chunk / think_end + todolist 解析
-    llm_output      → final_answer_start / final_answer_chunk
-    answer          → final_answer_end（可能跟在 llm_output 后，也可能独立）
+      llm_reasoning   → think_start / think_chunk / think_end
+      llm_output      → final_answer_start / final_answer_chunk
+      answer          → final_answer_end（可能跟在 llm_output 后，也可能独立）
       tool_start      → ToolStartEvent
       tool_end        → ToolEndEvent
 
-    think_end 触发时，扫描累积文本中的 ```todolist``` 和 ```todo_update``` 代码块。
+    Todo 任务通过 todolist_create / todolist_modify 工具管理，
+    工具执行结果在 tool_end 时解析为 TodoList/TodoStatus 事件。
     """
 
     STATE_IDLE = "idle"
@@ -398,11 +386,16 @@ class _StreamProcessor:
         if event_type == "tool_end":
             events.extend(self._flush_thinking_if_needed())
             events.extend(self._flush_answer_if_needed())
+            plugin = payload.get("plugin", "")
+            tool_data = payload.get("data", {}) if isinstance(payload.get("data"), dict) else {}
             events.append(ToolEndEvent(
                 content=content,
-                plugin=payload.get("plugin", ""),
-                data=payload.get("data", {}) if isinstance(payload.get("data"), dict) else {},
+                plugin=plugin,
+                data=tool_data,
             ))
+            # 解析 Todo 工具调用结果，转换为 TodoList 事件
+            if plugin in ("todolist_create", "todolist_modify"):
+                events.extend(self._parse_todo_tool_result(tool_data, plugin))
             return events
 
         # 未识别的事件忽略
@@ -421,9 +414,6 @@ class _StreamProcessor:
         if self.state != self.STATE_THINKING:
             return []
         events = []
-        # 解析 todolist 代码块
-        events.extend(self._parse_todolist_blocks(self._think_buffer))
-        events.extend(self._parse_todo_update_blocks(self._think_buffer))
         events.append(ThinkEndEvent())
         self.state = self.STATE_IDLE
         self._think_buffer = ""
@@ -441,92 +431,76 @@ class _StreamProcessor:
         self._answer_buffer = ""
         return events
 
-    def _parse_todolist_blocks(self, text: str) -> list[AgentEvent]:
+    # ════════════════════════════════════════════════════════════════════
+    # Todo 工具结果解析
+    # ════════════════════════════════════════════════════════════════════
+
+    def _map_todo_status(self, status: str) -> str:
+        """状态映射：TodoStatus 枚举值 → AgentEvent status 字符串"""
+        mapping = {
+            "PENDING": "pending",
+            "IN_PROGRESS": "in_progress",
+            "COMPLETED": "done",
+            "CANCELLED": "done",  # cancelled 映射为 done
+            "FAILED": "failed",
+        }
+        return mapping.get(status.upper(), status.lower())
+
+    def _parse_todo_tool_result(self, tool_data: dict, tool_name: str) -> list[AgentEvent]:
+        """解析 Todo 工具调用结果，转换为 TodoList 事件"""
         events: list[AgentEvent] = []
-        for m in _TODOLIST_RE.finditer(text):
-            body = m.group(1).strip()
-            try:
-                items = json.loads(body)
-            except json.JSONDecodeError as e:
-                logger.warning(f"[DPA] todolist JSON 解析失败：{e}")
-                continue
-            if not isinstance(items, list):
-                continue
-            events.append(TodoListStartEvent())
-            for item in items:
-                if not isinstance(item, dict):
-                    continue
-                try:
-                    ev = TodoListItemEvent(**item)
-                except Exception as e:
-                    logger.warning(f"[DPA] todolist item 校验失败：{e}")
-                    continue
-                # 若 LLM 未提供 content，按抓包格式拼装 HTML 片段
-                if not ev.content:
-                    status_cn = _TODO_STATUS_CN.get(ev.status, ev.status)
-                    ev = ev.model_copy(
-                        update={
-                            "content": f"{ev.id}.{ev.title}（{status_cn}）<br/>"
-                        }
-                    )
-                events.append(ev)
-                self._emitted_todolist_ids.add(str(ev.id))
-                # 缓存 id → title，供后续 todo_update 构造 TodoStartEvent
-                self._todo_titles[str(ev.id)] = ev.title or ""
-            events.append(TodoListEndEvent(count=len(items)))
-            logger.info(
-                f"[DPA] 从代码块中发现有效 TodoList，包含 {len(items)} 个步骤"
-            )
-            logger.debug(
-                f"[DPA] TodoList items: "
-                f"{[{'id': i.get('id'), 'title': i.get('title'), 'status': i.get('status')} for i in items if isinstance(i, dict)]}"
-            )
-        return events
 
-    def _parse_todo_update_blocks(self, text: str) -> list[AgentEvent]:
-        events: list[AgentEvent] = []
-        for m in _TODO_UPDATE_RE.finditer(text):
-            body = m.group(1).strip()
-            try:
-                upd = json.loads(body)
-            except json.JSONDecodeError as e:
-                logger.warning(f"[DPA] todo_update JSON 解析失败：{e}")
-                continue
-            if not isinstance(upd, dict):
-                continue
-
-            # todo_update 从 LLM 来通常只含 id/status；content 由 title 兜底
-            todo_id = upd.get("id")
-            status = upd.get("status")
-            id_key = str(todo_id) if todo_id is not None else ""
-            title = self._todo_titles.get(id_key, "")
-
-            # 首次看到 in_progress → 先发 todo_start
-            if (
-                status == "in_progress"
-                and id_key
-                and id_key not in self._started_todo_ids
-            ):
-                try:
-                    events.append(TodoStartEvent(
-                        id=todo_id,
-                        title=title,
-                        content=title,
+        if tool_name == "todolist_create":
+            # todolist_create 返回 {"tasks": [...], "count": N}
+            tasks = tool_data.get("tasks", [])
+            if tasks:
+                events.append(TodoListStartEvent())
+                for task in tasks:
+                    # 使用 index 作为 id（用户要求用原有 id）
+                    task_id = task.get("index", 0)
+                    task_content = task.get("content", "")
+                    task_status = self._map_todo_status(task.get("status", "PENDING"))
+                    events.append(TodoListItemEvent(
+                        id=task_id,
+                        title=task_content,
+                        status=task_status,
                     ))
-                    self._started_todo_ids.add(id_key)
-                    logger.debug(
-                        f"[DPA] 首次 in_progress，发 todo_start: id={todo_id}, title={title!r:.40}"
-                    )
-                except Exception as e:
-                    logger.warning(f"[DPA] todo_start 构造失败：{e}")
-
-            # 再发 todo_status（content 默认填入对应 title，便于前端展示）
-            try:
-                upd.setdefault("content", title)
-                events.append(TodoStatusEvent(**upd))
-                logger.debug(
-                    f"[DPA] todo_status: id={todo_id}, status={status}"
+                    # 缓存 id → title，供后续状态更新使用
+                    self._todo_titles[str(task_id)] = task_content
+                    self._emitted_todolist_ids.add(str(task_id))
+                events.append(TodoListEndEvent(count=len(tasks)))
+                logger.info(
+                    f"[DPA] 从 todolist_create 工具发现 {len(tasks)} 个任务"
                 )
-            except Exception as e:
-                logger.warning(f"[DPA] todo_update 校验失败：{e}")
+
+        elif tool_name == "todolist_modify":
+            # todolist_modify 返回 {"task": {...}}
+            task = tool_data.get("task", {})
+            if task:
+                task_id = task.get("index", 0)
+                task_status = self._map_todo_status(task.get("status", "PENDING"))
+                task_content = task.get("content", "")
+
+                # 如果是刚变为 in_progress，先发 todo_start
+                if task_status == "in_progress" and str(task_id) not in self._started_todo_ids:
+                    events.append(TodoStartEvent(
+                        id=task_id,
+                        title=task_content,
+                        content=task_content,
+                    ))
+                    self._started_todo_ids.add(str(task_id))
+                    logger.debug(
+                        f"[DPA] todolist_modify 触发 todo_start: id={task_id}"
+                    )
+
+                # 发出状态更新事件
+                events.append(TodoStatusEvent(
+                    id=task_id,
+                    status=task_status,
+                    content=task_content or self._todo_titles.get(str(task_id), ""),
+                ))
+                logger.debug(
+                    f"[DPA] todolist_modify 触发 todo_status: id={task_id}, status={task_status}"
+                )
+
         return events
