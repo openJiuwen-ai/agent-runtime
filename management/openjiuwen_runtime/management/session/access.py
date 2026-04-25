@@ -9,7 +9,7 @@ from typing import Any, AsyncIterator, Optional
 from openjiuwen_runtime.foundation.log import get_logger
 
 from .interfaces import IAccess, IRequest, IResponseParser, ISessionStrategy, IServiceManager, SessionRequestWrapper
-from .models import AccessConfig
+from .models import AccessConfig, SessionConfig
 
 logger = get_logger(__name__)
 
@@ -23,18 +23,26 @@ class Access(IAccess):
         self._response_parser: Optional[IResponseParser] = None
         self._config: Optional[AccessConfig] = None
 
-    def init(self, response_parser: IResponseParser, strategy: ISessionStrategy, config: AccessConfig):
+    def init(self, response_parser: IResponseParser, strategy: ISessionStrategy, config: AccessConfig, session_config: SessionConfig):
         self._response_parser = response_parser
         self._strategy = strategy
         self._config = config
         self._service_manager.init(response_parser)
-        strategy._concurrency = config.max_concurrency
-        strategy._ttl = config.service_ttl
+        strategy._concurrency = session_config.concurrency
+        strategy._ttl = session_config.ttl
         logger.info(
-            f"Access initialized: concurrency={config.max_concurrency}, "
-            f"ttl={config.service_ttl}s, "
+            f"Access initialized: image='{config.image}', "
+            f"session_concurrency={session_config.concurrency}, "
+            f"session_ttl={session_config.ttl}s, "
+            f"max_concurrency={config.max_concurrency}, "
+            f"min_idle_services={config.min_idle_services}, "
+            f"max_services={config.max_services}, "
+            f"target_port={config.target_port}, "
+            f"invoke_path='{config.invoke_path}', "
+            f"service_ttl={config.service_ttl}s, "
             f"queue_size={config.queue_size}, "
-            f"message_timeout={config.message_timeout}s"
+            f"message_timeout={config.message_timeout}s, "
+            f"max_retries={config.max_retries}"
         )
 
     async def send_message(self, msg: IRequest) -> AsyncIterator[Any]:

@@ -43,3 +43,10 @@ class SessionState(str, Enum):
     """会话状态"""
     IDLE = "idle"
     RUNNING = "running"
+
+
+class SessionConfig:
+    """Session 级别配置"""
+
+    concurrency: int = 1  # 单 session 并发度
+    ttl: int = 300  # 单 session 生存时间（秒）
