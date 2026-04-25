@@ -22,6 +22,7 @@ from .service_handler import ServiceHandler
 from .service_manager import ServiceManager
 from .session_request import SessionRequest
 from .timer import Timer
+from .ws_client_channel import WSServiceMessageChannel, serialize_request_payload
 
 __all__ = (
     "Access",
@@ -47,4 +48,6 @@ __all__ = (
     "SessionRequest",
     "SessionRequestWrapper",
     "Timer",
+    "WSServiceMessageChannel",
+    "serialize_request_payload",
 )

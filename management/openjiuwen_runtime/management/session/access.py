@@ -45,7 +45,7 @@ class Access(IAccess):
         await self._service_manager.start()
         logger.info(
             "Access 已初始化: user_q=%s sys_q=%s image=%s session_max=%s session_ttl=%s "
-            "service_concurrency=%s min_idle=%s max=%s port=%s path=%s service_ttl=%s",
+            "service_concurrency=%s min_idle=%s max=%s port=%s path=%s ws_tls=%s service_ttl=%s",
             config.user_queue_size,
             config.system_queue_size,
             config.image,
@@ -56,6 +56,7 @@ class Access(IAccess):
             config.max_services,
             config.target_port,
             config.invoke_path,
+            config.ws_use_tls,
             config.service_ttl,
         )
         logger.debug(

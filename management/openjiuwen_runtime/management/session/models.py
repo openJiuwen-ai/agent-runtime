@@ -50,7 +50,9 @@ class AccessConfig:
     min_idle_services: int = 1
     max_services: int = 10
     target_port: int = 8000
-    invoke_path: str = "/invoke"
+    invoke_path: str = "/invoke"  # 与 pod_ip:target_port 组成 WS URI 路径
+    ws_use_tls: bool = False  # True 为 wss://，否为 ws://
+
     service_ttl: int = 300
     """无 session 且无非活跃请求时，空闲实例在池中保留的最长时间（秒），超时缩容。"""
 

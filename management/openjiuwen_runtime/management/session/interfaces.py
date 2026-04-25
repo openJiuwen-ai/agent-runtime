@@ -176,7 +176,14 @@ class IAccess(ABC):
 
 @runtime_checkable
 class IServiceMessageChannel(Protocol):
-    """与下游服务通信；单请求在实例上占 1 服务并发，完成后必须调用 on_request_complete 归还。"""
+    """与下游服务通信；单服务实例上通常是 **一条长连接**（如 WebSocket），上有多路并发流式 ``request_id``。
+
+    约定:
+    * ``send`` 中 **上行** 发送一帧业务负载（通常 JSON 序列化自 ``ISessionRequest.raw_msg``）;
+    * **下行** 由实现类在独接收循环里按 ``IResponseParser.request_id`` 分片写入对应 ``SessionRequestWrapper.response_queue``;
+    * 当某 ``request_id`` 的响应用 ``IResponseParser.is_completed`` 判定结束时，**必须** ``await on_request_complete(request_id)`` 归还本实例并发。
+    可选实现(鸭子类型): ``bind_handler(handler, parser)``、``on_pod_ready(service_id, pod_info)``、``close()``.
+    """
 
     async def send(
         self,

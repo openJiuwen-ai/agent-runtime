@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import uuid
 from typing import Any, Dict, Optional
 
@@ -53,6 +54,9 @@ class ServiceHandler(IServiceHandler):
         self._by_request: Dict[str, SessionRequestWrapper] = {}
         self._pod_info: Any = None
         self._closed = False
+        # WebSocket 等通道在绑定后可拿到本实例与 IResponseParser，供接收循环多路分片
+        if hasattr(self._channel, "bind_handler"):
+            self._channel.bind_handler(self, self._parser)  # type: ignore[union-attr]
         logger.debug("ServiceHandler 构造: service_id=%s total_concurrency=%s", self._id, self._total)
 
     @property
@@ -196,6 +200,10 @@ class ServiceHandler(IServiceHandler):
             logger.debug("已通知 message_channel on_pod_ready")
 
     async def delete(self) -> None:
+        # 先关长连接(WS)再删 Pod, 避免悬挂接收协程
+        if hasattr(self._channel, "close"):
+            with contextlib.suppress(Exception):
+                await self._channel.close()  # type: ignore[union-attr, misc]
         try:
             if self._deploy.resource_id:
                 await self._deploy.delete()
