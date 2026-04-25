@@ -50,8 +50,15 @@ from google.protobuf.struct_pb2 import Struct, Value
 from loguru import logger
 
 from common.constants import session_request_key
-from common.log_helper import LogHelper
-from common.response_wrapper import wrap_agent_event, wrap_error, wrap_workflow_event
+from common.logger import (
+    Extra,
+    Tag,
+    bind_context,
+    build_http_request_tag_context,
+    build_http_trace,
+    to_logger,
+)
+from common.response_wrapper import wrap_agent_event, wrap_workflow_event
 from config import get_settings
 from orchestrator.executor import Executor
 
@@ -507,19 +514,25 @@ async def dispatch(
 ) -> StreamingResponse | JSONResponse:
     traceid = str(uuid.uuid4())
     settings = get_settings()
-    warn_threshold_ms = LogHelper.resolve_http_warn_threshold_ms(settings)
     request_started_ms = int(time.time() * 1000)
     # 在工具类中统一完成请求快照解析与公共字段提取
-    http_request_tag_context = await LogHelper.build_http_request_tag_context(
+    http_request_tag_context = await build_http_request_tag_context(
         request=request,
         trace_id=traceid,
         agent_id=agent_id,
         conversation_id=conversation_id,
     )
 
-    with LogHelper.bind_context(http_request_tag_context.log_context):
-        LogHelper.emit_http_request_start_tag(
-            http_request_tag_context=http_request_tag_context,
+    with bind_context(http_request_tag_context.log_context):
+        to_logger(
+            message=build_http_trace(
+                http_request_tag_context=http_request_tag_context,
+                input_payload={
+                    "request_header": http_request_tag_context.request_headers,
+                    "request_body": http_request_tag_context.request_body_snapshot,
+                },
+            ),
+            extra=Extra(tag=Tag.TAG_HTTP_REQUEST_START, cost=0),
         )
 
         # 显式校验 Content-Type + JSON 解析（对应需求 §5.10）
@@ -530,11 +543,13 @@ async def dispatch(
                 "message": "请求数据格式需为 application/json",
             }
             duration_ms = int(time.time() * 1000) - request_started_ms
-            LogHelper.emit_http_request_end_tag(
-                http_request_tag_context=http_request_tag_context,
-                output_payload=response_content,
-                duration_ms=duration_ms,
-                warn_threshold_ms=warn_threshold_ms,
+            to_logger(
+                level="WARNING",
+                message=build_http_trace(
+                    http_request_tag_context=http_request_tag_context,
+                    output_payload=response_content,
+                ),
+                extra=Extra(tag=Tag.TAG_HTTP_REQUEST_END, cost=max(duration_ms, 0)),
             )
             return JSONResponse(status_code=415, content=response_content)
 
@@ -548,12 +563,13 @@ async def dispatch(
                 "message": f"请求 body 非合法 JSON 格式：{e}",
             }
             duration_ms = int(time.time() * 1000) - request_started_ms
-            LogHelper.emit_http_request_end_tag(
-                http_request_tag_context=http_request_tag_context,
-                output_payload=response_content,
-                duration_ms=duration_ms,
-                warn_threshold_ms=warn_threshold_ms,
-                level_override="WARN",
+            to_logger(
+                level="WARNING",
+                message=build_http_trace(
+                    http_request_tag_context=http_request_tag_context,
+                    output_payload=response_content,
+                ),
+                extra=Extra(tag=Tag.TAG_HTTP_REQUEST_END, cost=max(duration_ms, 0)),
             )
             return JSONResponse(status_code=400, content=response_content)
 
@@ -564,12 +580,13 @@ async def dispatch(
                 "message": "请求 body 必须是 JSON 对象（dict）",
             }
             duration_ms = int(time.time() * 1000) - request_started_ms
-            LogHelper.emit_http_request_end_tag(
-                http_request_tag_context=http_request_tag_context,
-                output_payload=response_content,
-                duration_ms=duration_ms,
-                warn_threshold_ms=warn_threshold_ms,
-                level_override="WARN",
+            to_logger(
+                level="WARNING",
+                message=build_http_trace(
+                    http_request_tag_context=http_request_tag_context,
+                    output_payload=response_content,
+                ),
+                extra=Extra(tag=Tag.TAG_HTTP_REQUEST_END, cost=max(duration_ms, 0)),
             )
             return JSONResponse(status_code=400, content=response_content)
 
@@ -609,21 +626,23 @@ async def dispatch(
             if stream_mode:
 
                 async def limited_generate():
-                    with LogHelper.bind_context(http_request_tag_context.log_context):
+                    with bind_context(http_request_tag_context.log_context):
                         try:
                             yield f"data: {json.dumps(rejection, ensure_ascii=False)}\\n\\n"
                             yield "data: [DONE]\\n\\n"
                         finally:
                             duration_ms = int(time.time() * 1000) - request_started_ms
-                            LogHelper.emit_http_request_end_tag(
-                                http_request_tag_context=http_request_tag_context,
-                                output_payload={
-                                    "mode": "stream",
-                                    "status_code": status.HTTP_429_TOO_MANY_REQUESTS,
-                                    "rejection": rejection,
-                                },
-                                duration_ms=duration_ms,
-                                warn_threshold_ms=warn_threshold_ms,
+                            to_logger(
+                                level="WARNING",
+                                message=build_http_trace(
+                                    http_request_tag_context=http_request_tag_context,
+                                    output_payload={
+                                        "mode": "stream",
+                                        "status_code": status.HTTP_429_TOO_MANY_REQUESTS,
+                                        "rejection": rejection,
+                                    },
+                                ),
+                                extra=Extra(tag=Tag.TAG_HTTP_REQUEST_END, cost=max(duration_ms, 0)),
                             )
 
                 return StreamingResponse(
@@ -638,11 +657,13 @@ async def dispatch(
                 )
 
             duration_ms = int(time.time() * 1000) - request_started_ms
-            LogHelper.emit_http_request_end_tag(
-                http_request_tag_context=http_request_tag_context,
-                output_payload=rejection,
-                duration_ms=duration_ms,
-                warn_threshold_ms=warn_threshold_ms,
+            to_logger(
+                level="WARNING",
+                message=build_http_trace(
+                    http_request_tag_context=http_request_tag_context,
+                    output_payload=rejection,
+                ),
+                extra=Extra(tag=Tag.TAG_HTTP_REQUEST_END, cost=max(duration_ms, 0)),
             )
             return JSONResponse(
                 content=rejection,
@@ -668,21 +689,22 @@ async def dispatch(
             if stream_mode:
 
                 async def probe_generate():
-                    with LogHelper.bind_context(http_request_tag_context.log_context):
+                    with bind_context(http_request_tag_context.log_context):
                         try:
                             yield f"data: {json.dumps(probe_response, ensure_ascii=False)}\n\n"
                             yield "data: [DONE]\n\n"
                         finally:
                             duration_ms = int(time.time() * 1000) - request_started_ms
-                            LogHelper.emit_http_request_end_tag(
-                                http_request_tag_context=http_request_tag_context,
-                                output_payload={
-                                    "mode": "stream",
-                                    "status_code": status.HTTP_200_OK,
-                                    "probe": probe_response,
-                                },
-                                duration_ms=duration_ms,
-                                warn_threshold_ms=warn_threshold_ms,
+                            to_logger(
+                                message=build_http_trace(
+                                    http_request_tag_context=http_request_tag_context,
+                                    output_payload={
+                                        "mode": "stream",
+                                        "status_code": status.HTTP_200_OK,
+                                        "probe": probe_response,
+                                    },
+                                ),
+                                extra=Extra(tag=Tag.TAG_HTTP_REQUEST_END, cost=max(duration_ms, 0)),
                             )
 
                 return StreamingResponse(
@@ -696,11 +718,12 @@ async def dispatch(
                 )
 
             duration_ms = int(time.time() * 1000) - request_started_ms
-            LogHelper.emit_http_request_end_tag(
-                http_request_tag_context=http_request_tag_context,
-                output_payload=probe_response,
-                duration_ms=duration_ms,
-                warn_threshold_ms=warn_threshold_ms,
+            to_logger(
+                message=build_http_trace(
+                    http_request_tag_context=http_request_tag_context,
+                    output_payload=probe_response,
+                ),
+                extra=Extra(tag=Tag.TAG_HTTP_REQUEST_END, cost=max(duration_ms, 0)),
             )
             return JSONResponse(content=probe_response)
 
@@ -753,7 +776,7 @@ async def dispatch(
         )
 
         async def run() -> None:
-            with LogHelper.bind_context(http_request_tag_context.log_context):
+            with bind_context(http_request_tag_context.log_context):
                 try:
                     await executor.execute(ctx, event_queue)
                 except Exception as e:
@@ -774,7 +797,7 @@ async def dispatch(
         if stream_mode:
 
             async def generate():
-                with LogHelper.bind_context(http_request_tag_context.log_context):
+                with bind_context(http_request_tag_context.log_context):
                     run_task = asyncio.create_task(run())
                     pushed_events = 0
                     status_message = 0
@@ -820,22 +843,18 @@ async def dispatch(
                             )
 
                         duration_ms = int(time.time() * 1000) - request_started_ms
-                        end_level = LogHelper.select_tag_level_by_duration(
-                            duration_ms, warn_threshold_ms
-                        )
-                        if status_message and end_level == "INFO":
-                            end_level = "WARN"
-                        LogHelper.emit_http_request_end_tag(
-                            http_request_tag_context=http_request_tag_context,
-                            output_payload={
-                                "mode": "stream",
-                                "status_code": status.HTTP_200_OK,
-                                "events": pushed_events,
-                                "finish_reason": finish_reason,
-                            },
-                            duration_ms=duration_ms,
-                            warn_threshold_ms=warn_threshold_ms,
-                            level_override=end_level,
+                        to_logger(
+                            level="WARNING" if status_message else "INFO",
+                            message=build_http_trace(
+                                http_request_tag_context=http_request_tag_context,
+                                output_payload={
+                                    "mode": "stream",
+                                    "status_code": status.HTTP_200_OK,
+                                    "events": pushed_events,
+                                    "finish_reason": finish_reason,
+                                },
+                            ),
+                            extra=Extra(tag=Tag.TAG_HTTP_REQUEST_END, cost=max(duration_ms, 0)),
                         )
 
             return StreamingResponse(
@@ -884,16 +903,12 @@ async def dispatch(
 
         response_content = {"success": True, "answer": answer}
         duration_ms = int(time.time() * 1000) - request_started_ms
-        end_level = LogHelper.select_tag_level_by_duration(
-            duration_ms, warn_threshold_ms
-        )
-        if status_message and end_level == "INFO":
-            end_level = "WARN"
-        LogHelper.emit_http_request_end_tag(
-            http_request_tag_context=http_request_tag_context,
-            output_payload=response_content,
-            duration_ms=duration_ms,
-            warn_threshold_ms=warn_threshold_ms,
-            level_override=end_level,
+        to_logger(
+            level="WARNING" if status_message else "INFO",
+            message=build_http_trace(
+                http_request_tag_context=http_request_tag_context,
+                output_payload=response_content,
+            ),
+            extra=Extra(tag=Tag.TAG_HTTP_REQUEST_END, cost=max(duration_ms, 0)),
         )
         return JSONResponse(content=response_content)

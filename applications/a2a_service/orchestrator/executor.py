@@ -45,7 +45,13 @@ from common.events import (
     PlanningExecutionProcessEvent,
     ToolStartEvent,
 )
-from common.log_helper import LogHelper
+from common.logger import (
+    Extra,
+    Tag,
+    build_versatile_end_observation,
+    build_versatile_start_observation,
+    to_logger,
+)
 from common.redis_client import RedisClient
 from config import get_settings
 from orchestrator.agent_adapter import agent_event_to_a2a
@@ -401,7 +407,6 @@ class Executor(AgentExecutor):
         body["stream"] = True
 
         # 在 a2a 调用侧记录 Versatile 前后 Tag 日志
-        versatile_warn_threshold_ms = LogHelper.resolve_versatile_warn_threshold_ms()
         versatile_call_id = str(uuid.uuid4())
         versatile_name = get_settings().versatile_adapter_url or "versatile_adapter"
         call_started_ms = int(time.time() * 1000)
@@ -426,19 +431,20 @@ class Executor(AgentExecutor):
         stream_resp_count = 0
         forwarded_count = 0
         suppressed_count = 0
-        va_call_start = time.monotonic()
-
         logger.info(
             f"[Executor] [VersatileProxy] 开始调用 VA: conv={conv_id}, "
             f"intent={delegate.intent}, task_desc={delegate.task_description!r:.60}"
         )
 
         # 调用前打点：记录请求头/体快照
-        LogHelper.emit_versatile_start_tag(
-            call_id=versatile_call_id,
-            name=versatile_name,
-            request_headers=headers,
-            request_body=body,
+        to_logger(
+            message=build_versatile_start_observation(
+                call_id=versatile_call_id,
+                name=versatile_name,
+                request_headers=headers,
+                request_body=body,
+            ),
+            extra=Extra(tag=Tag.TAG_VERSATILE_START, cost=0),
         )
 
         try:
@@ -486,8 +492,7 @@ class Executor(AgentExecutor):
                         has_end_node = True
                         final_result = result
                         logger.debug(
-                            f"[Executor] [VersatileProxy] 检测到 End node，"
-                            f"将进入 cascade 路径"
+                            "[Executor] [VersatileProxy] 检测到 End node，将进入 cascade 路径"
                         )
 
         except Exception as e:
@@ -505,14 +510,16 @@ class Executor(AgentExecutor):
             }
             if error_message:
                 output_payload["error"] = error_message
-            LogHelper.emit_versatile_end_tag(
-                call_id=versatile_call_id,
-                name=versatile_name,
-                output_payload=output_payload,
-                status_message=status_message,
-                duration_ms=duration_ms,
-                warn_threshold_ms=versatile_warn_threshold_ms,
-                level_override="ERROR" if status_message else None,
+            to_logger(
+                level="ERROR" if status_message else "INFO",
+                message=build_versatile_end_observation(
+                    call_id=versatile_call_id,
+                    name=versatile_name,
+                    output_payload=output_payload,
+                    status_message=status_message,
+                    duration_ms=duration_ms,
+                ),
+                extra=Extra(tag=Tag.TAG_VERSATILE_END, cost=max(duration_ms, 0)),
             )
 
         logger.debug(f"[Executor] VA stream_resp_count={stream_resp_count}, conv={conv_id}")
@@ -553,7 +560,6 @@ class Executor(AgentExecutor):
         body["stream"] = True
 
         # 在 a2a 续轮调用侧记录 Versatile 前后 Tag 日志
-        versatile_warn_threshold_ms = LogHelper.resolve_versatile_warn_threshold_ms()
         versatile_call_id = str(uuid.uuid4())
         versatile_name = get_settings().versatile_adapter_url or "versatile_adapter"
         call_started_ms = int(time.time() * 1000)
@@ -575,11 +581,14 @@ class Executor(AgentExecutor):
         stream_resp_count = 0
 
         # 续轮调用前打点，记录本次输入上下文
-        LogHelper.emit_versatile_start_tag(
-            call_id=versatile_call_id,
-            name=versatile_name,
-            request_headers=headers,
-            request_body=body,
+        to_logger(
+            message=build_versatile_start_observation(
+                call_id=versatile_call_id,
+                name=versatile_name,
+                request_headers=headers,
+                request_body=body,
+            ),
+            extra=Extra(tag=Tag.TAG_VERSATILE_START, cost=0),
         )
 
         try:
@@ -616,14 +625,16 @@ class Executor(AgentExecutor):
             }
             if error_message:
                 output_payload["error"] = error_message
-            LogHelper.emit_versatile_end_tag(
-                call_id=versatile_call_id,
-                name=versatile_name,
-                output_payload=output_payload,
-                status_message=status_message,
-                duration_ms=duration_ms,
-                warn_threshold_ms=versatile_warn_threshold_ms,
-                level_override="ERROR" if status_message else None,
+            to_logger(
+                level="ERROR" if status_message else "INFO",
+                message=build_versatile_end_observation(
+                    call_id=versatile_call_id,
+                    name=versatile_name,
+                    output_payload=output_payload,
+                    status_message=status_message,
+                    duration_ms=duration_ms,
+                ),
+                extra=Extra(tag=Tag.TAG_VERSATILE_END, cost=max(duration_ms, 0)),
             )
 
         if has_end_node:

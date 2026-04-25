@@ -52,7 +52,7 @@ class Settings(BaseSettings):
 
     # ── 日志 ────────────────────────────────────────────────────────────────
     log_level: Optional[str] = None
-    log_file: Optional[str] = None
+    log_dir: Optional[str] = None
 
     @property
     def redis_url(self) -> str:

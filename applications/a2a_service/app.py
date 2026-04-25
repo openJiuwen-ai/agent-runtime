@@ -50,30 +50,71 @@ def setup_logging() -> None:
         format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
                "<level>{level: <8}</level> | "
                "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> | "
-               "<yellow>{extra[trace_id]}</yellow> | "
                "<level>{message}</level>"
     )
 
-    if settings.log_file:
-        log_dir = os.path.dirname(settings.log_file)
+    if settings.log_dir:
+        log_dir = settings.log_dir
         if log_dir:
             os.makedirs(log_dir, exist_ok=True)
-        log_file_path = settings.log_file
-        base, ext = os.path.splitext(log_file_path)
-        log_file_with_pid = f"{base}_{os.getpid()}{ext}"
+        log_file_with_pid = f"{log_dir}{os.sep}/process_{os.getpid()}.log"
+        audit_log = f"{log_dir}{os.sep}/audit_{os.getpid()}.log"
         logger.add(
             log_file_with_pid,
-            level=settings.log_level.upper() if settings.log_level else "INFO",
-            rotation="100 MB",
+            level="INFO",
+            rotation="20 MB",
             retention="7 days",
             compression="gz",
-            format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
-                   "<level>{level: <8}</level> | "
-                   "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> | "
-                   "<level>{message}</level>"
+            format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> \x01 "
+                   "<level>{level: <8}</level> \x01 "
+                   "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> \x01 "
+                   "<level>{message}</level>",
+            filter=lambda record: len(record["extra"]) == 0
         )
 
-    logger.configure(extra={"trace_id": "default_trace_id"})
+        logger.add(
+            log_file_with_pid,
+            level="INFO",
+            format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> \x01 "
+                   "<level>{level: <8}</level> \x01 "
+                   "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> \x01 "
+                   "<cyan>{extra[trace_id]}</cyan> \x01 "
+                   "<cyan>{extra[agent_id]}</cyan> \x01 "
+                   "<cyan>{extra[conversation_id]}</cyan> \x01 "
+                   "<level>{message}</level>",
+            filter=lambda record: len(record["extra"]) > 0 and "tag" not in record["extra"] and "source" not in record[
+                "extra"]
+        )
+
+        logger.add(
+            log_file_with_pid,
+            level="INFO",
+            format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> \x01 "
+                   "<level>{level: <8}</level> \x01 "
+                   "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> \x01 "
+                   "<cyan>{extra[trace_id]}</cyan> \x01 "
+                   "<cyan>{extra[agent_id]}</cyan> \x01 "
+                   "<cyan>{extra[conversation_id]}</cyan> \x01 "
+                   "<cyan>{extra[tag]}</cyan> \x01 "
+                   "<cyan>{extra[cost]}</cyan> \x01 "
+                   "<level>{message}</level>",
+            filter=lambda record: "tag" in record["extra"]
+        )
+        logger.add(
+            audit_log,
+            level="INFO",
+            rotation="20 MB",
+            retention="30 days",
+            compression="gz",
+            format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> \x01 "
+                   "<level>{level: <8}</level> \x01 "
+                   "<cyan>{extra[source]}</cyan> \x01 "
+                   "<cyan>{extra[user]}</cyan> \x01 "
+                   "<cyan>{extra[result]}</cyan> \x01 "
+                   "<cyan>{extra[terminal]}</cyan> \x01 "
+                   "<level>{message}</level>",
+            filter=lambda record: "source" in record["extra"]
+        )
 
 
 setup_logging()
