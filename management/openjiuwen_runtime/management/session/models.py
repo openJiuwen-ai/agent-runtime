@@ -23,9 +23,6 @@ class MessagePriority(str, Enum):
 
 class MessageType(str, Enum):
     USER_REQUEST = "user_request"
-    SERVICE_TTL = "service_ttl"
-    SESSION_TTL = "session_ttl"
-    AGENT_RESPONSE = "agent_response"
 
 
 @dataclass
@@ -60,17 +57,3 @@ class AccessConfig:
     message_timeout: int = 30
     max_retries: int = 3
     autoscale_interval: float = 0.2
-
-
-class ServiceState(str, Enum):
-    INITIALIZING = "initializing"
-    RUNNING = "running"
-    IDLE = "idle"
-    TERMINATING = "terminating"
-    CRASH = "crash"
-
-
-class SessionState(str, Enum):
-    IDLE = "idle"
-    RUNNING = "running"
-    LIMIT = "limit"

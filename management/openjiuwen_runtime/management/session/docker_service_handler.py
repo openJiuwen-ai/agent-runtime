@@ -41,22 +41,24 @@ class DockerServiceHandler:
         self._host = host
         self._port = int(publish_port)
         self._container_id: Optional[str] = None
+        logger.debug("DockerServiceHandler 初始化: image=%s host=%s port=%s", image, host, self._port)
 
     @property
     def container_id(self) -> Optional[str]:
         return self._container_id
 
     async def deploy(self) -> DockerRunInfo:
-        # 可替换为实际 docker run + 等待健康检查
+        # 生产可替换为 aiodocker run + 健康检查
+        logger.debug("Docker deploy(桩) 开始: image=%s", self._image)
         self._container_id = f"ctr-{uuid.uuid4().hex[:12]}"
         info = DockerRunInfo(container_id=self._container_id, host=self._host, port=self._port)
-        logger.info("Docker deploy (stub): %s", info)
+        logger.info("Docker deploy(桩) 成功: %s", info)
         return info
 
     async def delete(self) -> str:
         cid = self._container_id or "unknown"
         self._container_id = None
-        logger.info("Docker delete (stub): %s", cid)
+        logger.info("Docker delete(桩) 完成: container_id=%s", cid)
         return cid
 
 

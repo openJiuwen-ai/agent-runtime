@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from typing import Any, Dict, Optional
 
@@ -41,6 +42,8 @@ class ServiceHandler(IServiceHandler):
             raise ValueError("total_concurrency must be positive")
         self._id = service_id or str(uuid.uuid4())
         self._total = total_concurrency
+        # 服务级并发：与 session 内并发独立，二者都通过 acquire 排队
+        self._service_sem = asyncio.BoundedSemaphore(total_concurrency)
         self._inflight = 0
         self._channel = message_channel
         self._parser = response_parser
@@ -50,6 +53,7 @@ class ServiceHandler(IServiceHandler):
         self._by_request: Dict[str, SessionRequestWrapper] = {}
         self._pod_info: Any = None
         self._closed = False
+        logger.debug("ServiceHandler 构造: service_id=%s total_concurrency=%s", self._id, self._total)
 
     @property
     def id(self) -> str:
@@ -80,34 +84,62 @@ class ServiceHandler(IServiceHandler):
 
     async def handle_message(self, msg: SessionRequestWrapper) -> None:
         if self._closed:
+            logger.error("ServiceHandler 已关闭, 拒收: service_id=%s", self._id)
             raise RuntimeError("ServiceHandler is closed")
         sreq = msg.session_request
         session_id = sreq.session_id
         max_sess = sreq.session_concurrency
         if max_sess <= 0:
+            logger.error("session_concurrency 非法: %s", max_sess)
             raise ValueError("session_concurrency must be positive")
 
+        # 每 session 一个 SessionHandler, 内用 BoundedSemaphore 做会话内限流
         sh = self._sessions.get(session_id)
         if sh is None:
             sh = SessionHandler(
                 session_id, max_sess, self, self._session_router
             )
             self._sessions[session_id] = sh
+            logger.info(
+                "新 session 子处理器: service_id=%s session_id=%s max_parallel=%s",
+                self._id,
+                session_id,
+                max_sess,
+            )
+        logger.debug(
+            "ServiceHandler 分发到 SessionHandler: service_id=%s session_id=%s request_id=%s",
+            self._id,
+            session_id,
+            sreq.request_id,
+        )
         await sh.handle_message(msg)
 
     async def invoke_channel(self, wrapper: SessionRequestWrapper) -> None:
-        """由 SessionHandler 在取得 session 信号量后调用：占 1 个服务并发并下行。"""
-        if self._inflight >= self._total:
-            raise RuntimeError("insufficient service capacity")
+        """SessionHandler 在取得 session 信号量后调用：再占 1 路服务级并发, 经通道下发给下游。"""
+        await self._service_sem.acquire()
         self._inflight += 1
         rid = wrapper.session_request.request_id
         if rid:
             self._by_request[rid] = wrapper
+        logger.debug(
+            "invoke_channel 开始: service_id=%s inflight=%s/%s request_id=%s",
+            self._id,
+            self._inflight,
+            self._total,
+            rid,
+        )
 
         async def _complete(r: Optional[str]) -> None:
             self._inflight = max(0, self._inflight - 1)
+            self._service_sem.release()
             if r:
                 self._by_request.pop(r, None)
+            logger.debug(
+                "invoke_channel 完成释放并发: service_id=%s inflight=%s request_id=%s",
+                self._id,
+                self._inflight,
+                r,
+            )
 
         try:
             await self._channel.send(
@@ -116,29 +148,40 @@ class ServiceHandler(IServiceHandler):
                 response_parser=self._parser,
                 on_request_complete=_complete,
             )
-        except Exception:
+        except Exception as e:
+            logger.error(
+                "消息通道 send 失败: service_id=%s request_id=%s err=%s",
+                self._id,
+                rid,
+                e,
+                exc_info=True,
+            )
             await _complete(rid)
             raise
 
     async def dispatch_inbound_chunk(
         self, data: dict[str, Any], response_parser: IResponseParser
     ) -> bool:
-        """长连接多路复用：按响应中的 request_id 写入对应 response_queue。"""
+        """长连接多路复用：按响应中的 request_id 写回对应 response_queue。"""
         rid = response_parser.request_id(data)
         if not rid:
+            logger.debug("下行分片无 request_id, 已忽略")
             return False
         w = self._by_request.get(rid)
         if w is None:
+            logger.debug("下行分片 request_id 无活跃等待: %s", rid)
             return False
         if w.cancel.done():
             return True
         await w.response_queue.put(data)
+        logger.debug("下行分片已写入 response_queue: request_id=%s", rid)
         return True
 
     async def remove_session(self, session_id: str) -> int:
         sh = self._sessions.pop(session_id, None)
         if sh is None:
             return 0
+        logger.info("移除 session: service_id=%s session_id=%s", self._id, session_id)
         for rid in list(sh.active_rids):
             w = self._by_request.get(rid)
             if w is not None and not w.cancel.done():
@@ -147,20 +190,24 @@ class ServiceHandler(IServiceHandler):
 
     async def deploy(self) -> None:
         self._pod_info = await self._deploy.deploy()
+        logger.info("ServiceHandler deploy 完成: service_id=%s pod/资源已就绪", self._id)
         if self._pod_info is not None and hasattr(self._channel, "on_pod_ready"):
             await self._channel.on_pod_ready(self._id, self._pod_info)  # type: ignore[attr-defined]
+            logger.debug("已通知 message_channel on_pod_ready")
 
     async def delete(self) -> None:
         try:
             if self._deploy.resource_id:
                 await self._deploy.delete()
         except Exception as e:  # noqa: BLE001
-            logger.warning("deploy delete failed: %s", e)
+            logger.error("deploy 后端 delete 失败: service_id=%s err=%s", self._id, e, exc_info=True)
         self._closed = True
         self._sessions.clear()
         self._by_request.clear()
         self._inflight = 0
+        self._service_sem = asyncio.BoundedSemaphore(self._total)
         await self._session_router.clear()
+        logger.info("ServiceHandler 已销毁: service_id=%s", self._id)
 
     async def close(self) -> None:
         await self.delete()

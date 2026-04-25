@@ -98,7 +98,7 @@ class _Rec:
 
 
 class _Factory(IServiceInstanceFactory):
-    def __init__(self, ch: MockChannel, sc: int, dlist: list[Optional[object]]) -> None:
+    def __init__(self, ch: Any, sc: int, dlist: list[Optional[object]]) -> None:
         self._ch = ch
         self._sc = sc
         self._d = dlist
@@ -112,6 +112,44 @@ class _Factory(IServiceInstanceFactory):
             response_parser=response_parser,
             deploy_controller=dc,
         )
+
+
+class _HoldCh:
+    """与 test_session_concurrency_interleave 中 HoldChannel 相同语义，自 Access 全链路观测。"""
+
+    def __init__(self) -> None:
+        self._lock = asyncio.Lock()
+        self.in_send = 0
+        self.max_in_send = 0
+        self.by_session: dict[str, int] = {}
+        self.gate = asyncio.Event()
+
+    async def send(
+        self,
+        service_id: str,
+        wrapper: SessionRequestWrapper,
+        *,
+        response_parser: IResponseParser,
+        on_request_complete: Callable[[Optional[str]], Awaitable[None]],
+    ) -> None:
+        sid = wrapper.session_request.session_id
+        rid = wrapper.session_request.request_id
+        async with self._lock:
+            self.in_send += 1
+            if self.in_send > self.max_in_send:
+                self.max_in_send = self.in_send
+            self.by_session[sid] = self.by_session.get(sid, 0) + 1
+        await self.gate.wait()
+        async with self._lock:
+            self.in_send -= 1
+            self.by_session[sid] -= 1
+        if wrapper.cancel.done():
+            await on_request_complete(rid)
+            return
+        await wrapper.response_queue.put(
+            {"request_id": rid, "result": "ok", "completed": True}
+        )
+        await on_request_complete(rid)
 
 
 async def _stack(
@@ -155,6 +193,41 @@ async def _stack(
         session_config=SessionConfig(concurrency=2, ttl=0),
     )
     return acc, ch, sm, drec, f
+
+
+async def _stack_holding(
+    scap: int = 20,
+    sess_cap: int = 10,
+) -> tuple[Access, _HoldCh, ServiceManager]:
+    ch = _HoldCh()
+    dlist: list[Optional[object]] = [None] * 20
+    f = _Factory(ch, scap, dlist)
+    dq: PriorityDualAsyncQueues[QueueItem] = PriorityDualAsyncQueues(100, 1000)
+    sm = ServiceManager(
+        f,
+        dq,
+        Timer(),
+        service_concurrency=scap,
+        min_idle_services=0,
+        max_services=5,
+        autoscale_interval=0.1,
+        service_idle_ttl=300,
+    )
+    acc = Access(sm)
+    cfg = AccessConfig(
+        user_queue_size=1000,
+        system_queue_size=100,
+        service_concurrency=scap,
+        min_idle_services=0,
+        max_services=5,
+    )
+    await acc.init(
+        response_parser=_P(),
+        strategy=PerChatBotStrategy(),
+        config=cfg,
+        session_config=SessionConfig(concurrency=sess_cap, ttl=0),
+    )
+    return acc, ch, sm
 
 
 @pytest.mark.asyncio
@@ -201,5 +274,45 @@ async def test_system_queue_reclaim() -> None:
     try:
         await sm.enqueue_system(ServiceReclaimEvent(service_id="nope"))
         await asyncio.sleep(0.01)
+    finally:
+        await sm.stop()
+
+
+@pytest.mark.asyncio
+async def test_access_session_concurrency_interleave() -> None:
+    """多 session 经 Access + ServiceManager 并发路由：c1 11 条 + c2 9 条，c1 限 10 时 send 内共 19 条。"""
+    acc, ch, sm = await _stack_holding(20, 10)
+    try:
+
+        async def one(rid: str, cid: str) -> list[Any]:
+            o: list[Any] = []
+            async for x in acc.send_message(
+                cast(
+                    IRequest,
+                    TRequest(request_id=rid, chat_id=cid, bot_id="b1", user_id="u1"),
+                )
+            ):
+                o.append(x)
+            return o
+
+        tasks: list[asyncio.Task[Any]] = []
+        for i in range(11):
+            tasks.append(
+                asyncio.create_task(one(f"r1-{i}", "c1"))
+            )
+        for j in range(9):
+            tasks.append(
+                asyncio.create_task(one(f"r2-{j}", "c2"))
+            )
+        for _ in range(200):
+            if ch.in_send == 19:
+                break
+            await asyncio.sleep(0.01)
+        else:
+            assert ch.in_send == 19, f"in_send={ch.in_send} by={ch.by_session}"
+        assert ch.by_session.get("c1::b1", 0) == 10
+        assert ch.by_session.get("c2::b1", 0) == 9
+        ch.gate.set()
+        await asyncio.gather(*tasks)
     finally:
         await sm.stop()

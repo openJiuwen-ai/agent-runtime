@@ -110,11 +110,14 @@ class K8sServiceHandler:
             return
         try:
             config.load_incluster_config()
+            logger.debug("K8s 已加载 in-cluster 配置")
         except config.ConfigException:
             if self._kubeconfig:
                 await config.load_kube_config(config_file=self._kubeconfig)
+                logger.debug("K8s 已加载 kubeconfig: %s", self._kubeconfig)
             else:
                 await config.load_kube_config()
+                logger.debug("K8s 已加载默认 kubeconfig")
         self._config_loaded = True
 
     def _build_pod_body(self, pod_name: str) -> client.V1Pod:
@@ -146,13 +149,15 @@ class K8sServiceHandler:
         )
 
     async def deploy(self) -> PodDeployInfo:
+        # 1) 加载集群访问配置 2) 创建 Pod 3) 轮询至 Running + Ready + 有 podIP
         await self._ensure_config()
 
         pod_name = self._generate_pod_name()
         body = self._build_pod_body(pod_name)
         logger.info(
-            "Creating pod: name=%s, namespace=%s, image=%s", pod_name, self._namespace, self._image
+            "K8s 创建 Pod: name=%s namespace=%s image=%s", pod_name, self._namespace, self._image
         )
+        logger.debug("Pod 规约: container=%s port=%s", self._container_name, self._container_port)
 
         api_client = client.ApiClient()
         try:
@@ -238,10 +243,14 @@ class K8sServiceHandler:
                     )
 
             if loop.time() >= deadline:
+                logger.error(
+                    "K8s Pod 就绪超时: name=%s phase=%s last_reason=%s", pod_name, phase, last_reason
+                )
                 raise TimeoutError(
                     f"Pod {pod_name} not Running 1/1 within {self._ready_timeout}s "
                     f"(phase={phase!r}, last_reason={last_reason!r})"
                 )
+            logger.debug("K8s 等待 Pod 就绪: name=%s phase=%s", pod_name, phase)
             await asyncio.sleep(self._ready_poll_interval)
 
     async def delete(self) -> str:
@@ -289,6 +298,7 @@ class K8sServiceHandler:
                 raise
 
             if loop.time() >= deadline:
+                logger.error("K8s Pod 删除超时: name=%s", pod_name)
                 raise TimeoutError(
                     f"Pod {pod_name} not deleted within {self._delete_timeout}s"
                 )

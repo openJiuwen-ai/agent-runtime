@@ -10,17 +10,9 @@ from typing import Optional, Dict
 class SessionRouter:
     """Session 映射管理，支持并发安全访问"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._lock = asyncio.Lock()
         self._request_session: Dict[str, str] = {}
-
-    async def acquire(self) -> None:
-        """获取锁"""
-        await self._lock.acquire()
-
-    def release(self) -> None:
-        """释放锁"""
-        self._lock.release()
 
     async def get_request_session(self, request_id: str) -> Optional[str]:
         """获取 request_id 对应的 session_id"""
@@ -54,17 +46,9 @@ class SessionRouter:
 class ServiceRouter:
     """Service 映射管理，支持并发安全访问"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._lock = asyncio.Lock()
         self._session_service: Dict[str, str] = {}
-
-    async def acquire(self) -> None:
-        """获取锁"""
-        await self._lock.acquire()
-
-    def release(self) -> None:
-        """释放锁"""
-        self._lock.release()
 
     async def get_session_service(self, session_id: str) -> Optional[str]:
         """获取 session_id 对应的 service_id"""
@@ -83,8 +67,3 @@ class ServiceRouter:
                 del self._session_service[session_id]
                 return True
             return False
-
-    async def get_session_service_size(self) -> int:
-        """获取 session_service 映射大小"""
-        async with self._lock:
-            return len(self._session_service)
