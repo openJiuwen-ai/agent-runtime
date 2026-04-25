@@ -19,7 +19,7 @@ from loguru import logger
 from .agent_rule import AgentRuleConfig, load_agent_rule
 from .config import get_settings
 from .prompt import build_system_prompt
-from ...common.events import (
+from common.events import (
     AgentEvent,
     ConversationStartEvent, ConversationEndEvent,
     ThinkStartEvent, ThinkChunkEvent, ThinkEndEvent,
