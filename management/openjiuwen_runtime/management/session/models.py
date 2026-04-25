@@ -32,7 +32,9 @@ class SessionConfig:
     concurrency: int = 1
     """同一 session 内最大并行处理中的请求数（会话级限流）。"""
     ttl: int = 300
-    """session 亲和与计时滑动窗口（秒；0 表示不启用 session TTL 计时器）。"""
+    """session 亲和保活窗口 (秒): 请求结束起计时, 期间收到该 session 的新消息会**取消**计时;
+    超时则移除 session handler、归还其在 service_handler 上占用的并发位。
+    设为 ``0`` 表示请求一结束、且该 session 无 inflight 时**立刻**释放, 不保留亲和。"""
 
 
 @dataclass
@@ -56,10 +58,11 @@ class AccessConfig:
     ws_use_tls: bool = False  # True 为 wss://，否为 ws://
 
     service_ttl: int = 300
-    """① **in_use** 在「无 session、无 inflight」后，等待本秒数再**转入** ``_idle``。②
-    当 **len(idle) > min_idle_services** 时，对**多出来**的 idle 删 Pod 前再等待本秒数，直到缩至 ``min``。
-    **从 in_use 刚转入** idle 时若已超额，不叠第二次同长度等待（与 ① 合并）。底数 min 台 idle 不按本字段被删。
-    设为 ``0`` 时无等待。负值行为与实现相关，勿用。
+    """① **in_use** 实例在「所有 session 均已归还 + 无 inflight」后, 等待本秒数再**转入** ``_idle``;
+    等待期间若又分配到新消息则取消等待, 实例继续占用。
+    ② 当 **len(idle) > min_idle_services** 时, 多余 idle 立即被回收 (删 Pod);
+    若多余实例是**刚从 in_use 转入** idle 的, 由于 in_use 阶段已等过一次本字段, 不再叠加二次等待。
+    底数 min 台 idle 不会被本字段删除。设为 ``0`` 时①阶段无等待。负值行为未定义, 请勿使用。
     """
 
     message_timeout: int = 600

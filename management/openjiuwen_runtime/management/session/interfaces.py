@@ -269,6 +269,10 @@ class IServiceHandler(ABC):
         """当前实例上仍占位的 session_id 列表；默认无。转入 idle 前可据此清理亲和路由。"""
         return []
 
+    def session_active_request_count(self, session_id: str) -> int:
+        """指定 session 上仍在飞的请求数；默认 0。session_ttl 到期时用以判断是否可立即移除。"""
+        return 0
+
     @abstractmethod
     def has_session(self, session_id: str) -> bool:
         pass

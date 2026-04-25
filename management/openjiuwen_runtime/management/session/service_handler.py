@@ -54,7 +54,7 @@ class ServiceHandler(IServiceHandler):
         self._by_request: Dict[str, SessionRequestWrapper] = {}
         self._pod_info: Any = None
         self._closed = False
-        # ServiceManager 注入：in_use 且 session/inflight 均空时，按 service_ttl 转入 idle
+        # ServiceManager 注入: 每次 inflight 归零后被回调一次, Manager 据此推动到期 session 清理与 service_ttl 计时
         self._idle_pool_hook: Optional[Callable[[str], Awaitable[None]]] = None
         # WebSocket 等通道在绑定后可拿到本实例与 IResponseParser，供接收循环多路分片
         if hasattr(self._channel, "bind_handler"):
@@ -84,6 +84,10 @@ class ServiceHandler(IServiceHandler):
     def open_session_ids(self) -> list[str]:
         return list(self._sessions.keys())
 
+    def session_active_request_count(self, session_id: str) -> int:
+        sh = self._sessions.get(session_id)
+        return len(sh.active_rids) if sh else 0
+
     @property
     def pod_info(self) -> Any:
         return self._pod_info
@@ -91,7 +95,8 @@ class ServiceHandler(IServiceHandler):
     def set_idle_pool_transition_hook(
         self, hook: Optional[Callable[[str], Awaitable[None]]]
     ) -> None:
-        """由 ServiceManager 设置：在 in_use 上最后一次 inflight 结束且无 session 时回调。"""
+        """由 ServiceManager 设置: 每次 inflight 归零后回调一次, 由 Manager 自行判断
+        是否要 flush 已到期 session、是否要 arm service_ttl。"""
         self._idle_pool_hook = hook
 
     def has_session(self, session_id: str) -> bool:
@@ -160,7 +165,7 @@ class ServiceHandler(IServiceHandler):
                 r,
             )
             hook = self._idle_pool_hook
-            # 无在途 inflight 即触发「无业务」计时；session 记录可仍在，由 Manager 入 idle 前逐出
+            # inflight 归零即回调一次, 由 Manager 检查 pending session 与是否 arm service_ttl
             if hook and self._inflight == 0:
                 asyncio.get_running_loop().create_task(hook(self._id))
 

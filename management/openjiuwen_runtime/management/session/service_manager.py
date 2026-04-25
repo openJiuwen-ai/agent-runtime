@@ -65,13 +65,16 @@ class ServiceManager(IServiceManager):
         self._to_idle_timer_armed: set[str] = set()
         # 已 arm「多余 idle 回收」的 service_id，避免对同一台重复入队/定时
         self._excess_idle_timer_armed: set[str] = set()
+        # session_ttl 已到期但当时该 session 仍有 inflight, 待 _complete/新消息后清理
+        # 形如 {session_id: service_id}; 接到新消息会自动清掉, _complete 钩子会触发 flush
+        self._pending_expired_sessions: dict[str, str] = {}
         self._stop_completed: bool = False
 
     async def init(self, response_parser: IResponseParser) -> None:
         self._response_parser = response_parser
         logger.info(
-            "ServiceManager 已 init: 服务级并发 sc=%s min_idle=%s max=%s "
-            "service_ttl(in_use→idle 等待, 且 idle>min 时回收多余)=%s",
+            "ServiceManager 已 init: sc=%s min_idle=%s max=%s "
+            "service_ttl(in_use 全空→idle 等待秒数; 入 idle 后超 min 立即回收, 不二次等待)=%s",
             self._service_concurrency,
             self._min_idle,
             self._max_services,
@@ -120,6 +123,7 @@ class ServiceManager(IServiceManager):
         self._user_route_tasks.clear()
         self._to_idle_timer_armed.clear()
         self._excess_idle_timer_armed.clear()
+        self._pending_expired_sessions.clear()
         try:
             await self._timer.stop_all()
         except Exception as e:  # noqa: BLE001
@@ -275,12 +279,17 @@ class ServiceManager(IServiceManager):
             return
         sreq = w.session_request
         session_id = sreq.session_id
+        # 新消息进入：先取消该 session 待生效的 session_ttl 计时与延期清理标记
+        # 满足规则「session_ttl 之内有 session 的消息，则删除 session_ttl 定时器」
+        await self._timer.cancel_timer(f"sess:{session_id}")
+        self._pending_expired_sessions.pop(session_id, None)
         h: Optional[IServiceHandler] = None
         try:
             # 在锁内完成亲和查找 / 新拉实例，避免与池状态竞争；handle_message 在锁外执行
             async with self._lock:
                 h = await self._pick_or_create(sreq)
             if h is not None:
+                # 新消息分配到该服务：取消 service_ttl 计时（in_use→idle 转入）
                 await self._cancel_in_use_to_idle_timer(h.id)
             async with self._lock:
                 if h is not None and not h.has_session(session_id):
@@ -306,17 +315,24 @@ class ServiceManager(IServiceManager):
             logger.error("路由/处理过程异常, session_id=%s: %s", session_id, e, exc_info=True)
             await self._fail(w, 100002, session_id=session_id)
         else:
+            # 请求结束: 按 session_ttl 维持映射；ttl<=0 视为「不保留」立即标记 pending 等待 flush
             if sreq.session_ttl > 0:
                 try:
                     await self._arm_session_timer(session_id, sreq.session_ttl)
                 except Exception as e2:  # noqa: BLE001
                     logger.error("arm session 计时器失败: %s", e2, exc_info=True)
+            elif h is not None:
+                self._pending_expired_sessions[session_id] = h.id
+                # 由 _complete 钩子触发 flush；此处主动尝试一次以应对 _complete 已先于本行返回
+                await self._flush_pending_expired_for_service(h.id)
 
     async def _arm_session_timer(self, session_id: str, ttl: int) -> None:
         if ttl <= 0:
             return
         key = f"sess:{session_id}"
         await self._timer.cancel_timer(key)
+        # 重新 arm 等同于「session 又活跃」, 清掉旧的延期清理标记
+        self._pending_expired_sessions.pop(session_id, None)
 
         async def _expired() -> None:
             await self._on_session_expired(session_id)
@@ -325,8 +341,10 @@ class ServiceManager(IServiceManager):
         logger.info("已 arm session TTL 计时: session_id=%s ttl=%s", session_id, ttl)
 
     async def _on_session_expired(self, session_id: str) -> None:
-        logger.info("session TTL 到期, 开始清理: session_id=%s", session_id)
-        to_arm: Optional[str] = None
+        """session_ttl 到期: 若该 session 已无 inflight 则立即移除并触发 flush；否则入 pending 等待 _complete 后由 hook flush。"""
+        logger.info("session TTL 到期, 准备回收: session_id=%s", session_id)
+        target_svc: Optional[str] = None
+        removed = False
         async with self._lock:
             stored = await self._service_router.get_session_service(session_id)
             if not stored:
@@ -335,18 +353,61 @@ class ServiceManager(IServiceManager):
             if h is None:
                 await self._service_router.delete_session_service(session_id)
                 return
+            target_svc = stored
+            if h.session_active_request_count(session_id) > 0:
+                # 仍有飞行中的请求, 暂不移除以避免取消正在处理的请求
+                self._pending_expired_sessions[session_id] = stored
+                logger.info(
+                    "session 到期但仍有 inflight, 入延期清理队列: session_id=%s service_id=%s rids=%s",
+                    session_id,
+                    stored,
+                    h.session_active_request_count(session_id),
+                )
+                return
             await h.remove_session(session_id)
             await self._service_router.delete_session_service(session_id)
-            if h.active_session_count == 0 and h.id in self._in_use:
-                if h.inflight_requests == 0:
-                    to_arm = h.id
-        if to_arm:
-            await self._arm_in_use_to_idle_pool(to_arm)
-        logger.debug("session TTL 清理结束: session_id=%s", session_id)
+            self._pending_expired_sessions.pop(session_id, None)
+            removed = True
+            logger.info(
+                "session 已移除并归还 service 并发: session_id=%s service_id=%s 剩余sessions=%s",
+                session_id,
+                stored,
+                h.active_session_count,
+            )
+        if removed and target_svc:
+            await self._flush_pending_expired_for_service(target_svc)
+
+    async def _flush_pending_expired_for_service(self, service_id: str) -> None:
+        """清理 service 上所有「到期但仍 inflight」的 session；若清理后 sessions=0 且 inflight=0, arm service_ttl。"""
+        h: Optional[IServiceHandler] = None
+        async with self._lock:
+            h = self._in_use.get(service_id) or self._idle.get(service_id)
+        if h is None:
+            return
+        async with self._lock:
+            sids = [
+                sid
+                for sid, svc in list(self._pending_expired_sessions.items())
+                if svc == service_id
+            ]
+            for sid in sids:
+                if h.session_active_request_count(sid) == 0:
+                    await h.remove_session(sid)
+                    await self._service_router.delete_session_service(sid)
+                    self._pending_expired_sessions.pop(sid, None)
+                    logger.info(
+                        "延期清理已移除 session: session_id=%s service_id=%s 剩余sessions=%s",
+                        sid,
+                        service_id,
+                        h.active_session_count,
+                    )
+        # 仅 in_use 上需 arm service_ttl；arm 内部还会再判一次状态防竞争
+        if service_id in self._in_use:
+            await self._arm_in_use_to_idle_pool(service_id)
 
     async def _on_in_use_may_move_to_idle_pool(self, service_id: str) -> None:
-        """ServiceHandler: 当前链路上 inflight=0 时调用；经 service_ttl 后转入 idle（入池前会逐出 session）。"""
-        await self._arm_in_use_to_idle_pool(service_id)
+        """ServiceHandler 在 inflight=0 时回调: 推动延期 session 清理并按状态 arm service_ttl。"""
+        await self._flush_pending_expired_for_service(service_id)
 
     async def _cancel_in_use_to_idle_timer(self, service_id: str) -> None:
         self._to_idle_timer_armed.discard(service_id)
@@ -357,14 +418,15 @@ class ServiceManager(IServiceManager):
         await self._timer.cancel_timer(f"excess_idle:svc:{service_id}")
 
     async def _arm_in_use_to_idle_pool(self, service_id: str) -> None:
-        """in_use 上 in-flight 请求已清：等待 service_ttl 后转入 _idle；若有 session 枟在 _move 时逐出。"""
+        """in_use 实例的所有 session 均已归还且无 in-flight: 等待 service_ttl 后转入 _idle。"""
         if self._service_idle_ttl < 0:
             return
         async with self._lock:
             h = self._in_use.get(service_id)
             if h is None:
                 return
-            if h.inflight_requests > 0:
+            if h.inflight_requests > 0 or h.active_session_count > 0:
+                # 仍有业务/会话占用, 不 arm
                 return
         if self._service_idle_ttl == 0:
             await self._move_in_use_to_idle_pool(service_id)
@@ -387,40 +449,29 @@ class ServiceManager(IServiceManager):
         )
 
     async def _move_in_use_to_idle_pool(self, service_id: str) -> None:
-        sids: list[str] = []
-        h: Optional[IServiceHandler] = None
+        """service_ttl 到期: 若仍无 session/inflight 则转入 idle 池；否则让出（说明 ttl 内来了新业务）。"""
         async with self._lock:
             oh = self._in_use.get(service_id)
             if oh is None:
                 return
-            if oh.inflight_requests > 0:
-                logger.debug(
-                    "暂缓转入 idle: 仍有 in-flight service_id=%s inflight=%s",
+            if oh.inflight_requests > 0 or oh.active_session_count > 0:
+                # service_ttl 期间又被分配了 session/请求, 让出 (不再强行驱逐)
+                logger.info(
+                    "service_ttl 到期但 service 已重新被占用, 取消转入 idle: service_id=%s sessions=%s inflight=%s",
                     service_id,
+                    oh.active_session_count,
                     oh.inflight_requests,
                 )
                 return
-            sids = list(oh.open_session_ids())
-            h = oh
-        for sid in sids:
-            await h.remove_session(sid)  # type: ignore[union-attr]
-            await self._service_router.delete_session_service(sid)
-        async with self._lock:
-            h2 = self._in_use.get(service_id)
-            if h2 is None or h2 is not h:
-                return
-            if h2.inflight_requests > 0 or h2.active_session_count > 0:
-                logger.debug(
-                    "暂缓转入 idle: 转入前状态变化 service_id=%s sessions=%s inflight=%s",
-                    service_id,
-                    h2.active_session_count,
-                    h2.inflight_requests,
-                )
-                return
-            self._in_use.pop(h2.id, None)
-            self._idle[h2.id] = h2
-        logger.info("实例已自 in_use 转入 idle 池: service_id=%s", service_id)
-        # 本实例在 in_use 上已等满一次 service_ttl，若此时 idle>min 不再等第二次同长度 ttl
+            self._in_use.pop(oh.id, None)
+            self._idle[oh.id] = oh
+        logger.info(
+            "实例已自 in_use 转入 idle 池: service_id=%s, 当前 idle=%s min_idle=%s",
+            service_id,
+            len(self._idle),
+            self._min_idle,
+        )
+        # 本实例在 in_use 已等满一次 service_ttl, 若 idle>min 直接回收 Pod, 不再二次等待
         await self._schedule_excess_idle_reclaim_if_needed(after_in_use_to_idle=True)
 
     async def _schedule_excess_idle_reclaim_if_needed(
