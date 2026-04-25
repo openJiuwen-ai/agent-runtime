@@ -1,4 +1,4 @@
-from openjiuwen_runtime.management.session.service_handler import K8sServiceHandler
+from openjiuwen_runtime.management.session.k8s_service_handler import K8sServiceHandler
 #from .service_handler import K8sServiceHandler
 import asyncio
 

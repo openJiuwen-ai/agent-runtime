@@ -25,19 +25,19 @@ class ServiceManager(IServiceManager):
     """服务管理器，管理服务生命周期和消息路由"""
 
     def __init__(
-        self,
-        deployment_manager: DeploymentManager,
-        image: str,
-        max_concurrency: int,
-        min_idle_services: int,
-        max_services: int,
-        target_port: int,
-        invoke_path: str,
-        service_ttl: int,
-        timer: Timer,
-        message_queue: IMessageQueue,
-        message_timeout: int = 30,
-        max_retries: int = 3,
+            self,
+            deployment_manager: DeploymentManager,
+            image: str,
+            max_concurrency: int,
+            min_idle_services: int,
+            max_services: int,
+            target_port: int,
+            invoke_path: str,
+            service_ttl: int,
+            timer: Timer,
+            message_queue: IMessageQueue,
+            message_timeout: int = 30,
+            max_retries: int = 3,
     ):
         self._deployment_manager = deployment_manager
         self._image = image
@@ -128,6 +128,8 @@ class ServiceManager(IServiceManager):
     async def _message_loop(self) -> None:
         """消息处理循环"""
         logger.info("Message loop started")
+
+        # 根据最小空闲服务数并发拉起服务
 
         while self._running:
             try:
@@ -281,9 +283,9 @@ class ServiceManager(IServiceManager):
                 await self._timer.cancel_timer(f"service_{deployment_id}")
 
                 service_handler = self._services[deployment_id]
-                
+
                 await service_handler.stop()
-                
+
                 for session_id in list(service_handler.sessions.keys()):
                     await service_handler.remove_session(session_id)
                     self._session_router.unregister_session(session_id)

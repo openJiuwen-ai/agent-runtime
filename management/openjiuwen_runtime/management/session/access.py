@@ -1,52 +1,64 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
-"""Access 入口实现 - 调用 session 策略将 IRequest 转换为 ISessionRequest，路由到 ServiceManager"""
+"""Access：策略生成 session_id / 并发度 / TTL，交给 ServiceManager（双队列）。"""
 
 import asyncio
 from typing import Any, AsyncIterator, Optional
 
 from openjiuwen_runtime.foundation.log import get_logger
 
-from .interfaces import IAccess, IRequest, IResponseParser, ISessionStrategy, IServiceManager, SessionRequestWrapper
+from .interfaces import (
+    IAccess,
+    IRequest,
+    IResponseParser,
+    ISessionStrategy,
+    IServiceManager,
+    SessionRequestWrapper,
+)
 from .models import AccessConfig, SessionConfig
 
 logger = get_logger(__name__)
 
 
 class Access(IAccess):
-    """消息统一入口，内部调用 session 策略，把 IRequest 转换为 ISessionRequest"""
-
     def __init__(self, service_manager: IServiceManager):
         self._service_manager = service_manager
         self._strategy: Optional[ISessionStrategy] = None
         self._response_parser: Optional[IResponseParser] = None
         self._config: Optional[AccessConfig] = None
 
-    def init(self, response_parser: IResponseParser, strategy: ISessionStrategy, config: AccessConfig, session_config: SessionConfig):
+    async def init(
+        self,
+        response_parser: IResponseParser,
+        strategy: ISessionStrategy,
+        config: AccessConfig,
+        session_config: SessionConfig,
+    ) -> None:
         self._response_parser = response_parser
         self._strategy = strategy
         self._config = config
-        self._service_manager.init(response_parser)
         strategy._concurrency = session_config.concurrency
         strategy._ttl = session_config.ttl
+        await self._service_manager.init(response_parser)
+        await self._service_manager.start()
         logger.info(
-            f"Access initialized: image='{config.image}', "
-            f"session_concurrency={session_config.concurrency}, "
-            f"session_ttl={session_config.ttl}s, "
-            f"max_concurrency={config.max_concurrency}, "
-            f"min_idle_services={config.min_idle_services}, "
-            f"max_services={config.max_services}, "
-            f"target_port={config.target_port}, "
-            f"invoke_path='{config.invoke_path}', "
-            f"service_ttl={config.service_ttl}s, "
-            f"queue_size={config.queue_size}, "
-            f"message_timeout={config.message_timeout}s, "
-            f"max_retries={config.max_retries}"
+            "Access initialized: user_q=%s sys_q=%s image=%s session_max=%s session_ttl=%s "
+            "service_concurrency=%s min_idle=%s max=%s port=%s path=%s service_ttl=%s",
+            config.user_queue_size,
+            config.system_queue_size,
+            config.image,
+            session_config.concurrency,
+            session_config.ttl,
+            config.service_concurrency,
+            config.min_idle_services,
+            config.max_services,
+            config.target_port,
+            config.invoke_path,
+            config.service_ttl,
         )
 
     async def send_message(self, msg: IRequest) -> AsyncIterator[Any]:
-        """将 IRequest 通过策略转换为 ISessionRequest，路由到 ServiceManager，流式返回响应"""
         if not self._strategy:
             logger.error("Access not initialized, call init() first")
             return
@@ -55,17 +67,10 @@ class Access(IAccess):
             return
 
         session_request = self._strategy.handle_session(msg)
-
         response_queue: asyncio.Queue[Any] = asyncio.Queue()
         cancel: asyncio.Future = asyncio.get_running_loop().create_future()
         wrapper = SessionRequestWrapper(session_request, response_queue, cancel)
-
-        self._service_manager.handle_message(wrapper)
-        logger.debug(
-            f"Message dispatched: session_id='{session_request.session_id}', "
-            f"request_id='{session_request.request_id}'"
-        )
-
+        await self._service_manager.handle_message(wrapper)
         try:
             while True:
                 try:
@@ -74,25 +79,13 @@ class Access(IAccess):
                         timeout=self._config.message_timeout if self._config else 30,
                     )
                 except asyncio.TimeoutError:
-                    logger.warning(
-                        f"Response timeout: session_id='{session_request.session_id}', "
-                        f"request_id='{session_request.request_id}'"
-                    )
                     break
-
-                if cancel.done():
-                    logger.debug(f"Message cancelled: session_id='{session_request.session_id}'")
-                    break
-
                 if self._response_parser.is_completed(data):
                     yield self._response_parser.response(data)
                     break
-
+                if cancel.done():
+                    break
                 yield self._response_parser.response(data)
         finally:
             if not cancel.done():
                 cancel.set_result(None)
-            logger.debug(
-                f"Message stream ended: session_id='{session_request.session_id}', "
-                f"request_id='{session_request.request_id}'"
-            )
