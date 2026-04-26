@@ -60,7 +60,7 @@ TODO_QUERY_DESCRIPTION = """
 ## 何时使用 todo_query
 
 使用 todo_query 的场景：
-- 每次修改任务后，必须向用户展示当前任务进度
+- 每次调用 todo_modify 修改任务后，必须调用此工具向用户展示当前任务进度
 - 需要查看当前任务全貌和各任务索引，再决定如何更新
 - 不确定当前有哪些任务处于 in_progress 或 pending
 

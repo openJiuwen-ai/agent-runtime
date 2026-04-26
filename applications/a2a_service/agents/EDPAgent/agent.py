@@ -394,7 +394,7 @@ class _StreamProcessor:
                 data=tool_data,
             ))
             # 解析 Todo 工具调用结果，转换为 TodoList 事件
-            if plugin in ("todolist_create", "todolist_modify"):
+            if plugin in ("todolist_create", "todolist_modify", "todolist_query"):
                 events.extend(self._parse_todo_tool_result(tool_data, plugin))
             return events
 
@@ -471,6 +471,27 @@ class _StreamProcessor:
                 events.append(TodoListEndEvent(count=len(tasks)))
                 logger.info(
                     f"[DPA] 从 todolist_create 工具发现 {len(tasks)} 个任务"
+                )
+
+        elif tool_name == "todolist_query":
+            # todolist_query 返回 {"tasks": [...], "count": N}
+            tasks = tool_data.get("tasks", [])
+            if tasks:
+                for task in tasks:
+                    # 使用 index 作为 id
+                    task_id = task.get("index", 0)
+                    task_content = task.get("content", "")
+                    task_status = self._map_todo_status(task.get("status", "PENDING"))
+                    events.append(TodoListItemEvent(
+                        id=task_id,
+                        title=task_content,
+                        status=task_status,
+                    ))
+                    # 缓存 id → title，供后续状态更新使用
+                    self._todo_titles[str(task_id)] = task_content
+                    self._emitted_todolist_ids.add(str(task_id))
+                logger.info(
+                    f"[DPA] 从 todolist_query 工具发现 {len(tasks)} 个任务"
                 )
 
         elif tool_name == "todolist_modify":
