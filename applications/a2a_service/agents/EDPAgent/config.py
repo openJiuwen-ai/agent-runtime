@@ -15,6 +15,7 @@ from urllib.parse import quote_plus
 
 from dotenv import load_dotenv
 from loguru import logger
+from common.crypto import decrypt_config_value
 from pydantic import BaseModel
 
 # 加载 a2a_service/.env 到 os.environ，让 os.getenv 能读到 PLANNING_AGENT_MODEL_* 等变量
@@ -71,6 +72,7 @@ def _build_custom_headers() -> Optional[dict[str, Any]]:
 
     token = os.getenv("PLANNING_AGENT_MODEL_TOKEN", "")
     if token:
+        token = decrypt_config_value(token) or ""
         token_header = os.getenv("PLANNING_AGENT_MODEL_TOKEN_HEADER", "")
         if not token_header:
             raise ValueError(
@@ -124,10 +126,13 @@ def get_settings() -> DPASettings:
     except ValueError:
         timeout = 120.0
 
+    raw_api_key = os.getenv("PLANNING_AGENT_MODEL_API_KEY", "")
+    raw_redis_pwd = os.getenv("REDIS_PASSWORD", "")
+
     return DPASettings(
         llm_provider=_infer_provider(api_base),
         llm_api_base=api_base,
-        llm_api_key=os.getenv("PLANNING_AGENT_MODEL_API_KEY", ""),
+        llm_api_key=decrypt_config_value(raw_api_key) if raw_api_key else "",
         llm_model_name=os.getenv("PLANNING_AGENT_MODEL_NAME", ""),
         llm_verify_ssl=os.getenv("SKILL_LLM_TLS_VERIFY", "false").lower() == "true",
         llm_timeout=timeout,
@@ -135,7 +140,7 @@ def get_settings() -> DPASettings:
         redis_host=os.getenv("REDIS_HOST", "localhost"),
         redis_port=int(os.getenv("REDIS_PORT", "6379")),
         redis_db=int(os.getenv("REDIS_DB", "0")),
-        redis_password=os.getenv("REDIS_PASSWORD", ""),
+        redis_password=decrypt_config_value(raw_redis_pwd) if raw_redis_pwd else "",
         redis_checkpointer_ttl_minutes=int(
             os.getenv("REDIS_CHECKPOINTER_TTL_MINUTES", "60")
         ),

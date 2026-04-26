@@ -23,6 +23,9 @@ dependencies = [
 
     # 日志
     "loguru>=0.7",
+
+    # 配置加解密（common.crypto）
+    "pycryptodome>=3.20.0",
 ]
 
 [project.optional-dependencies]

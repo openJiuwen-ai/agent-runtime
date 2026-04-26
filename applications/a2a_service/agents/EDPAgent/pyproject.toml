@@ -21,6 +21,8 @@ dependencies = [
     "loguru>=0.7.0",
     # 加载 .env
     "python-dotenv>=1.0",
+    # 与 a2a_service 内 common.crypto 一致（单独安装 EDPAgent 包时仍可用）
+    "pycryptodome>=3.20.0",
     # 注意：无 a2a-sdk，无 httpx，无 fastapi（这些由 runtime 提供）
 ]
 

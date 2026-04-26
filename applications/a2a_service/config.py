@@ -7,6 +7,8 @@ from urllib.parse import quote_plus
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from common.crypto import decrypt_config_value
+
 
 
 class Settings(BaseSettings):
@@ -57,7 +59,8 @@ class Settings(BaseSettings):
     @property
     def redis_url(self) -> str:
         if self.redis_password:
-            pwd = quote_plus(self.redis_password)
+            plain = decrypt_config_value(self.redis_password) or ""
+            pwd = quote_plus(plain)
             return f"redis://:{pwd}@{self.redis_host}:{self.redis_port}/{self.redis_db}"
         return f"redis://{self.redis_host}:{self.redis_port}/{self.redis_db}"
 
