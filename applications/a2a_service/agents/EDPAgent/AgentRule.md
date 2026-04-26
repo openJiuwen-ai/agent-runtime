@@ -77,69 +77,12 @@ scripts:
 
 在开始执行任何工具调用之前，**必须调用 `todolist_create` 工具创建任务规划**。
 
-使用方式：
-```
-调用 todolist_create，参数 tasks 为分号(;)分隔的任务列表
-
-示例：
-{
-  "tasks": "查询理财卡余额;推荐 2 支理财产品;确认购买信息"
-}
-```
-
-或使用 JSON 格式：
-```
-{
-  "json_tasks": [
-    {"content": "查询理财卡余额"},
-    {"content": "推荐 2 支理财产品"},
-    {"content": "确认购买信息"}
-  ]
-}
-```
-
-**重要规则**：
-- 第一个任务自动设为 in_progress，其余为 pending
-- 同一时间只能有一个 in_progress 任务
-- 任务描述必须具体、可执行、清晰明确
-
 ### 2.2 任务状态更新
 
 每当开始或完成一个任务，**必须调用 `todolist_modify` 工具更新状态**。
 
-使用方式：
-```
-开始任务（设为 in_progress）：
-{
-  "action": "start",
-  "index": 1
-}
-
-完成任务（设为 completed）：
-{
-  "action": "complete",
-  "index": 1,
-  "updates": {"result": "任务执行结果"}
-}
-
-标记失败（设为 failed）：
-{
-  "action": "fail",
-  "index": 1
-}
-
-追加新任务：
-{
-  "action": "append",
-  "tasks": "新任务描述"
-}
-```
-
 **重要规则**：
-- 仅当 index=1 或前序任务全部 COMPLETED 时才能 start
-- 同一时间只能有一个 in_progress 任务
-- 完成后建议通过 updates.result 保存执行结果
-- **强制要求**：每次调用 `todolist_modify` 后，必须立即调用 `todolist_query` 查询最新任务列表，并在最终答案中向用户展示完整进度（包含所有任务的 index、content、status）。禁止跳过此步骤。如果不调用 `todolist_query` 展示进度，用户将无法看到任务最新状态，视为本次操作未完成。
+- 每次调用 `todolist_modify` 后，必须立即调用 `todolist_query` 查询最新任务列表，向用户展示完整进度。
 
 
 ### 2.3 工具调用
