@@ -23,18 +23,27 @@ from Crypto.Random import get_random_bytes
 logger = logging.getLogger(__name__)
 
 
+def _strip_matched_quotes(text: str) -> str:
+    """若字符串首尾被相同的成对单/双引号包裹，则去掉这一对引号；否则原样返回。
+
+    将原本嵌入在 if 条件中的多重 `startswith/endswith` 布尔表达式抽到独立函数，
+    使主流程的判断条件更精炼。
+    """
+    if len(text) < 2:
+        return text
+    for quote in ('"', "'"):
+        if text.startswith(quote) and text.endswith(quote):
+            return text[1:-1]
+    return text
+
+
 def parse_master_key_from_string(key_material: Optional[str]) -> Optional[bytes]:
     """
     将 Base64 形式的主密钥字符串解析为 32 字节（与从 AES_MASTER_KEY 环境变量读取的规则一致）。
     """
     if not key_material:
         return None
-    key_base64 = key_material.strip()
-    if (key_base64.startswith('"') and key_base64.endswith('"')) or (
-        key_base64.startswith("'") and key_base64.endswith("'")
-    ):
-        key_base64 = key_base64[1:-1]
-    key_base64 = key_base64.strip()
+    key_base64 = _strip_matched_quotes(key_material.strip()).strip()
     if not key_base64:
         logger.error("Master key is empty after trimming.")
         return None
@@ -64,7 +73,8 @@ class CryptoUtils:
         if self.master_key is not None and len(self.master_key) != 32:
             raise ValueError("master_key length must be 32 bytes")
 
-    def _get_master_key_from_env(self) -> Optional[bytes]:
+    @staticmethod
+    def _get_master_key_from_env() -> Optional[bytes]:
         key_base64 = os.getenv("AES_MASTER_KEY")
         if not key_base64:
             logger.warning(
@@ -120,8 +130,8 @@ class CryptoUtils:
             nonce_len = 12
             tag_len = 16
             salt = data[:salt_len]
-            nonce = data[salt_len : salt_len + nonce_len]
-            ciphertext_bytes = data[salt_len + nonce_len : -tag_len]
+            nonce = data[salt_len:salt_len + nonce_len]
+            ciphertext_bytes = data[salt_len + nonce_len:-tag_len]
             auth_tag = data[-tag_len:]
             encryption_key = self.hkdf_derive(self.master_key, salt)
             cipher = AES.new(encryption_key, AES.MODE_GCM, nonce=nonce)

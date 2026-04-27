@@ -423,9 +423,9 @@ async def test_delegate_without_end_node_does_not_cascade(monkeypatch):
         }),
         # 无 End node
     ]
+    # ``_make_executor_with_va_stream`` 内部已将 ``task_store.get`` mock 为
+    # ``AsyncMock(return_value=None)``，无需在测试中再次访问 Executor 的私有
     executor = _make_executor_with_va_stream(va_events)
-    # 让 task_store.get 返回 None（避免 metadata 更新路径失败）
-    executor._task_store.get = AsyncMock(return_value=None)
 
     call_count = [0]
 
