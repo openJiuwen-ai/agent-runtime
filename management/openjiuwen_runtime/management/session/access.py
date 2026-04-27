@@ -116,6 +116,22 @@ class Access(IAccess):
         await self._service_manager.stop()
         logger.info("Access 已 shutdown")
 
+    async def update_config(
+        self, config: AccessConfig, session_config: Optional[SessionConfig] = None
+    ) -> None:
+        """运行时热更新配置。存量 session/service 不变，新建的使用新值。"""
+        self._config = config
+        await self._service_manager.update_config(
+            min_idle_services=config.min_idle_services,
+            max_services=config.max_services,
+            service_idle_ttl=config.service_ttl,
+            autoscale_interval=config.autoscale_interval,
+        )
+        if session_config and self._strategy:
+            self._strategy._concurrency = session_config.concurrency
+            self._strategy._ttl = session_config.ttl
+        logger.info("Access 配置已热更新")
+
     async def send_message(self, msg: IRequest | ISessionRequest) -> AsyncIterator[Any]:
         # 1) 未 init 时直接失败并打 error
         if self._shutdown_done:

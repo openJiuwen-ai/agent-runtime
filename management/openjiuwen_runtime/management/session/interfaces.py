@@ -186,6 +186,13 @@ class IAccess(ABC):
         """优雅退出：停后台 task/双队列/计时器，并释放已拉起的各服务实例（如 Pod/连接）。"""
         pass
 
+    @abstractmethod
+    async def update_config(
+        self, config: "AccessConfig", session_config: Optional["SessionConfig"] = None
+    ) -> None:
+        """运行时热更新配置。存量 session/service 不变，新建的使用新值。"""
+        pass
+
 
 @runtime_checkable
 class IServiceMessageChannel(Protocol):
@@ -237,6 +244,10 @@ class IServiceManager(ABC):
     @abstractmethod
     async def enqueue_system(self, event: Any) -> None:
         """投递内部高优先级消息（如缩容、运维事件）。"""
+
+    @abstractmethod
+    async def update_config(self, **kwargs) -> None:
+        """运行时更新调度参数并递增代际。"""
 
 
 class IServiceHandler(ABC):

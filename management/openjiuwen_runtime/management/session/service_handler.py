@@ -38,11 +38,13 @@ class ServiceHandler(IServiceHandler):
         message_channel: IServiceMessageChannel,
         response_parser: IResponseParser,
         deploy_controller: Optional[IDeployController] = None,
+        generation: int = 0,
     ) -> None:
         if total_concurrency <= 0:
             raise ValueError("total_concurrency must be positive")
         self._id = service_id or str(uuid.uuid4())
         self._total = total_concurrency
+        self._generation = generation
         # 服务级并发：与 session 内并发独立，二者都通过 acquire 排队
         self._service_sem = asyncio.BoundedSemaphore(total_concurrency)
         self._inflight = 0

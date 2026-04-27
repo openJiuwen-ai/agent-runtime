@@ -51,6 +51,7 @@ class ServiceManager(IServiceManager):
         self._max_services = max_services
         self._autoscale_interval = autoscale_interval
         self._service_idle_ttl = service_idle_ttl
+        self._generation: int = 0
 
         self._response_parser: Optional[IResponseParser] = None
         self._lock = asyncio.Lock()
@@ -171,6 +172,45 @@ class ServiceManager(IServiceManager):
             self._q.system_qsize(),
         )
 
+    async def update_config(self, **kwargs) -> None:
+        async with self._lock:
+            self._generation += 1
+            for key, value in kwargs.items():
+                if key == "min_idle_services":
+                    self._min_idle = value
+                elif key == "max_services":
+                    self._max_services = value
+                elif key == "service_idle_ttl":
+                    self._service_idle_ttl = value
+                elif key == "autoscale_interval":
+                    self._autoscale_interval = value
+            # 立即回收旧代际 idle service（无 session/inflight，安全删除）
+            to_reclaim = [
+                sid for sid, h in self._idle.items()
+                if h._generation != self._generation
+                and h.active_session_count == 0
+                and h.inflight_requests == 0
+            ]
+            for sid in to_reclaim:
+                h = self._idle.pop(sid, None)
+                if h:
+                    try:
+                        await h.delete()
+                        logger.info(
+                            "热更新: 已回收旧代际 idle service: service_id=%s old_gen=%s new_gen=%s",
+                            sid, h._generation, self._generation,
+                        )
+                    except Exception as e:  # noqa: BLE001
+                        logger.error("回收旧代际 idle service 失败: service_id=%s err=%s", sid, e)
+            logger.info(
+                "ServiceManager 配置已更新: generation=%s min_idle=%s max=%s idle_ttl=%s autoscale=%s",
+                self._generation,
+                self._min_idle,
+                self._max_services,
+                self._service_idle_ttl,
+                self._autoscale_interval,
+            )
+
     def _total_services(self) -> int:
         return len(self._in_use) + len(self._idle)
 
@@ -222,13 +262,15 @@ class ServiceManager(IServiceManager):
         if self._min_idle <= 0:
             return
         async with self._lock:
-            while self._min_idle > len(self._idle) and self._total_services() < self._max_services:
+            cur_gen_idle = sum(1 for h in self._idle.values() if h._generation == self._generation)
+            while cur_gen_idle < self._min_idle and self._total_services() < self._max_services:
                 h = await self._new_deployed()
                 if h is None:
                     logger.error("预拉热失败: factory/deploy 未返回可用实例, 已停止继续拉起")
                     break
                 self._idle[h.id] = h
-                logger.info("预拉热: 新实例入 idle, service_id=%s", h.id)
+                cur_gen_idle += 1
+                logger.info("预拉热: 新实例入 idle, service_id=%s gen=%s", h.id, h._generation)
         # 预拉热入 idle 的实例不启动「in_use→idle / 删 Pod」的 service_ttl 计时
 
     async def _ensure_min_idle(self) -> None:
@@ -236,20 +278,22 @@ class ServiceManager(IServiceManager):
             return
         _first_gap = True
         async with self._lock:
-            while self._min_idle > len(self._idle) and self._total_services() < self._max_services:
+            cur_gen_idle = sum(1 for h in self._idle.values() if h._generation == self._generation)
+            while cur_gen_idle < self._min_idle and self._total_services() < self._max_services:
                 if _first_gap:
                     _first_gap = False
                     logger.debug(
-                        "autoscale: min_idle=%s 但当前 idle=%s (total=%s), 将补发新实例以维持热备",
+                        "autoscale: min_idle=%s 但当前同代际 idle=%s (total=%s), 将补发新实例以维持热备",
                         self._min_idle,
-                        len(self._idle),
+                        cur_gen_idle,
                         self._total_services(),
                     )
                 h = await self._new_deployed()
                 if h is None:
                     break
                 self._idle[h.id] = h
-                logger.info("autoscale: 新实例入 idle, service_id=%s", h.id)
+                cur_gen_idle += 1
+                logger.info("autoscale: 新实例入 idle, service_id=%s gen=%s", h.id, h._generation)
         # 新入 idle 的实例不启动 service_ttl 删 Pod；仅 min_idle 维持数量
 
     async def _new_deployed(self) -> Optional[IServiceHandler]:
@@ -260,6 +304,7 @@ class ServiceManager(IServiceManager):
         except Exception as e:  # noqa: BLE001
             logger.error("创建服务实例失败 (factory): %s", e, exc_info=True)
             return None
+        h._generation = self._generation
         h.set_idle_pool_transition_hook(self._on_in_use_may_move_to_idle_pool)
         try:
             await h.deploy()
@@ -492,6 +537,13 @@ class ServiceManager(IServiceManager):
                     break
         if candidate is None:
             return
+        candidate_h = self._idle.get(candidate)
+        # 旧代际 idle：立即回收，不等 service_ttl
+        if candidate_h is not None and candidate_h._generation != self._generation:
+            self._excess_idle_timer_armed.add(candidate)
+            await self.enqueue_system(ServiceReclaimEvent(service_id=candidate))
+            logger.debug("旧代际 idle 立即回收入队: service_id=%s gen=%s", candidate, candidate_h._generation)
+            return
         # in_use 已按同字段等过一次；或显式 service_ttl=0
         if self._service_idle_ttl == 0 or after_in_use_to_idle:
             self._excess_idle_timer_armed.add(candidate)
@@ -558,9 +610,9 @@ class ServiceManager(IServiceManager):
         await self._schedule_excess_idle_reclaim_if_needed()
 
     async def _pick_or_create(self, sreq) -> Optional[IServiceHandler]:  # noqa: ANN001
-        # 1) 亲和：该 session 已绑定到某 service，则复用
-        # 2) 否则在 in_use/idle 中找尚有服务级并发的实例
-        # 3) 再否则在 max 允许下新 deploy
+        # 1) 亲和：该 session 已绑定到某 service，则复用（不管代际）
+        # 2) 否则在 in_use/idle 中找同代际且尚有服务级并发的实例
+        # 3) 再否则在 max 允许下新 deploy（带当前 generation）
         need = self._NEED
         session_id = sreq.session_id
         sid = await self._service_router.get_session_service(session_id)
@@ -577,17 +629,18 @@ class ServiceManager(IServiceManager):
                     await self._cancel_excess_idle_timer(h.id)
                     logger.debug("从 idle 取回实例, service_id=%s", h.id)
                 return h
+        # 新 session：只选同代际
         for h in self._in_use.values():
-            if h.available_concurrency >= need:
-                logger.debug("选用 in_use 实例: service_id=%s avail=%s", h.id, h.available_concurrency)
+            if h._generation == self._generation and h.available_concurrency >= need:
+                logger.debug("选用 in_use 实例: service_id=%s gen=%s avail=%s", h.id, h._generation, h.available_concurrency)
                 return h
         for h in list(self._idle.values()):
-            if h.available_concurrency >= need:
+            if h._generation == self._generation and h.available_concurrency >= need:
                 self._idle.pop(h.id, None)
                 self._in_use[h.id] = h
                 await self._cancel_in_use_to_idle_timer(h.id)
                 await self._cancel_excess_idle_timer(h.id)
-                logger.debug("从 idle 唤醒实例: service_id=%s", h.id)
+                logger.debug("从 idle 唤醒同代际实例: service_id=%s gen=%s", h.id, h._generation)
                 return h
         if self._total_services() >= self._max_services:
             logger.debug(
@@ -600,7 +653,7 @@ class ServiceManager(IServiceManager):
         if h2 is None:
             return None
         self._in_use[h2.id] = h2
-        logger.info("新建实例并入 in_use: service_id=%s 当前总数=%s", h2.id, self._total_services())
+        logger.info("新建实例并入 in_use: service_id=%s gen=%s 当前总数=%s", h2.id, h2._generation, self._total_services())
         return h2
 
     async def _fail(
