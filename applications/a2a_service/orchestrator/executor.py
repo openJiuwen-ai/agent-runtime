@@ -1,3 +1,6 @@
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
 """
 Executor — 核心编排逻辑（a2a-sdk 1.0.0-alpha.1，全量 v1.0 protobuf）。
 
@@ -15,6 +18,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from dataclasses import dataclass
 from typing import Optional
 
 from a2a.client import Client
@@ -56,7 +60,9 @@ from common.redis_client import RedisClient
 from config import get_settings
 from orchestrator.agent_adapter import agent_event_to_a2a
 from common.redis_task_store import RedisTaskStore
+
 _TTL = 1800
+
 
 def _rewrite_recommend_delegate(intent: str, task_description: str) -> tuple[str, str]:
     """临时兼容旧链路：推荐首跳改写为平台历史上可识别的入口。"""
@@ -68,6 +74,36 @@ def _rewrite_recommend_delegate(intent: str, task_description: str) -> tuple[str
         normalized_query = "请推荐低风险理财产品"
 
     return "理财选品购买", normalized_query
+
+
+@dataclass(frozen=True)
+class _TurnContext:
+    """单轮 Executor 编排所需的上下文。
+
+    将相关性较强的会话/任务/调用句柄打包传递，避免在内部方法间传入
+    个数较多的散参数（参考 G.FNM.03）。
+    """
+
+    conv_id: str
+    task_id: str
+    call_context: ServerCallContext
+    event_queue: EventQueue
+
+
+@dataclass(frozen=True)
+class _VaRequestPayload:
+    """构造 VersatileAdapter ``SendMessageRequest`` 的载荷集合。
+
+    ``headers`` / ``body`` / ``params`` 在调用层共同决定下游工作流入参，
+    通过统一的 dataclass 进行命名封装（参考 G.FNM.03）。
+    """
+
+    query: str
+    headers: dict
+    body: dict
+    params: Optional[dict] = None
+    task_id: str = ""
+    conv_id: str = ""
 
 
 class Executor(AgentExecutor):
@@ -99,6 +135,13 @@ class Executor(AgentExecutor):
                         original_headers = data.get("headers", {})
                         original_body = data.get("body", data)
 
+        turn_ctx = _TurnContext(
+            conv_id=conv_id,
+            task_id=task_id,
+            call_context=call_context,
+            event_queue=event_queue,
+        )
+
         # ── 续轮路径：Task 处于 INPUT_REQUIRED（VA 上次未完成）───────────────
         if current_task and current_task.status.state == TASK_STATE_INPUT_REQUIRED:
             meta = MessageToDict(current_task.metadata)
@@ -107,14 +150,11 @@ class Executor(AgentExecutor):
                 f"[Executor] INPUT_REQUIRED 续轮：conv={conv_id}, va_task={va_task_id}"
             )
             await self._continue_versatile_adapter(
-                conv_id=conv_id,
-                task_id=task_id,
-                call_context=call_context,
+                turn_ctx,
                 va_task_id=va_task_id,
                 user_input=user_query,
                 headers=original_headers,
                 original_body=original_body,
-                event_queue=event_queue,
             )
             return
 
@@ -128,13 +168,10 @@ class Executor(AgentExecutor):
             await self._task_store.save(new_task, call_context)
             logger.debug(f"[Executor] 创建 Task：task={task_id}, conv={conv_id}")
 
-        await self._run_agent(
-            conv_id=conv_id,
-            task_id=task_id,
-            call_context=call_context,
+        await self.run_agent(
+            turn_ctx,
             query=user_query,
             original_body=original_body,
-            event_queue=event_queue,
             cascade_result=None,
             step_counter=[0],  # cascade 递归共享同一计数器
         )
@@ -144,24 +181,26 @@ class Executor(AgentExecutor):
 
     # ── 核心递归编排 ──────────────────────────────────────────────────────────
 
-    async def _run_agent(
+    async def run_agent(
         self,
-        conv_id: str,
-        task_id: str,
-        call_context: ServerCallContext,
+        turn_ctx: _TurnContext,
         query: str,
         original_body: dict,
-        event_queue: EventQueue,
         cascade_result: Optional[dict],
         step_counter: Optional[list[int]] = None,
     ) -> None:
         if step_counter is None:
             step_counter = [0]
 
+        conv_id = turn_ctx.conv_id
+        task_id = turn_ctx.task_id
+        call_context = turn_ctx.call_context
+        event_queue = turn_ctx.event_queue
+
         turn_start = time.monotonic()
         is_cascade = cascade_result is not None
         logger.info(
-            f"[Executor] _run_agent 开始: conv={conv_id}, task={task_id}, "
+            f"[Executor] run_agent 开始: conv={conv_id}, task={task_id}, "
             f"is_cascade={is_cascade}, step_counter={step_counter[0]}"
         )
 
@@ -216,19 +255,14 @@ class Executor(AgentExecutor):
                     f"{event.task_description!r:.60}"
                 )
                 va_result, va_task_id = await self._call_versatile_adapter(
+                    turn_ctx,
                     delegate=event,
-                    conv_id=conv_id,
-                    task_id=task_id,
-                    event_queue=event_queue,
                 )
                 if va_result is not None:
-                    await self._run_agent(
-                        conv_id=conv_id,
-                        task_id=task_id,
-                        call_context=call_context,
+                    await self.run_agent(
+                        turn_ctx,
                         query=query,
                         original_body=original_body,
-                        event_queue=event_queue,
                         cascade_result=va_result,
                         step_counter=step_counter,
                     )
@@ -254,7 +288,7 @@ class Executor(AgentExecutor):
                 # 记录 VA 挂起 / cascade 路径结束时的累计耗时
                 turn_duration_ms = (time.monotonic() - turn_start) * 1000
                 logger.info(
-                    f"[Executor] ⏱️ _run_agent 返回: conv={conv_id}, "
+                    f"[Executor] ⏱️ run_agent 返回: conv={conv_id}, "
                     f"duration={turn_duration_ms:.2f}ms, "
                     f"events_received={event_count}, steps={step_counter[0]}"
                 )
@@ -274,27 +308,25 @@ class Executor(AgentExecutor):
         # 本轮（或本次 cascade）正常结束，打总耗时
         turn_duration_ms = (time.monotonic() - turn_start) * 1000
         logger.info(
-            f"[Executor] ⏱️ _run_agent 正常结束: conv={conv_id}, "
+            f"[Executor] ⏱️ run_agent 正常结束: conv={conv_id}, "
             f"duration={turn_duration_ms:.2f}ms, "
             f"events_received={event_count}, steps_accumulated={step_counter[0]}"
         )
 
     # ── VersatileAdapter 调用 ─────────────────────────────────────────────────
 
-    def _build_va_message(
-        self,
-        query: str,
-        headers: dict,
-        body: dict,
-        task_id: str = "",
-        conv_id: str = "",
-        params: Optional[dict] = None,
-    ) -> SendMessageRequest:
+    def _build_va_message(self, payload: _VaRequestPayload) -> SendMessageRequest:
         text_part = Part()
-        text_part.text = query
+        text_part.text = payload.query
 
         data_struct = Struct()
-        data_struct.update({"headers": headers, "body": body, "params": params or {}})
+        data_struct.update(
+            {
+                "headers": payload.headers,
+                "body": payload.body,
+                "params": payload.params or {},
+            }
+        )
         data_value = Value()
         data_value.struct_value.CopyFrom(data_struct)
         data_part = Part()
@@ -303,8 +335,8 @@ class Executor(AgentExecutor):
         msg = Message(
             role=ROLE_USER,
             message_id=str(uuid.uuid4()),
-            task_id=task_id,
-            context_id=conv_id,
+            task_id=payload.task_id,
+            context_id=payload.conv_id,
         )
         msg.parts.extend([text_part, data_part])
         return SendMessageRequest(message=msg)
@@ -368,12 +400,13 @@ class Executor(AgentExecutor):
 
     async def _call_versatile_adapter(
         self,
+        turn_ctx: _TurnContext,
         delegate: DelegateRequest,
-        conv_id: str,
-        task_id: str,
-        event_queue: EventQueue,
     ) -> tuple[Optional[dict], Optional[str]]:
         """DPA 委托场景：从 Redis 取首轮缓存，替换 query/intent 后发给 VA。"""
+        conv_id = turn_ctx.conv_id
+        event_queue = turn_ctx.event_queue
+
         cached = await self._redis.get_json(session_request_key(conv_id)) or {}
         headers = cached.get("headers", {})
         body = dict(cached.get("body", {}))
@@ -417,12 +450,14 @@ class Executor(AgentExecutor):
         continuation_task_id = ""
 
         request = self._build_va_message(
-            query=effective_query,
-            headers=headers,
-            body=body,
-            params=params,
-            task_id="",
-            conv_id=conv_id,
+            _VaRequestPayload(
+                query=effective_query,
+                headers=headers,
+                body=body,
+                params=params,
+                task_id="",
+                conv_id=conv_id,
+            )
         )
 
         has_end_node = False
@@ -540,16 +575,17 @@ class Executor(AgentExecutor):
 
     async def _continue_versatile_adapter(
         self,
-        conv_id: str,
-        task_id: str,
-        call_context: ServerCallContext,
+        turn_ctx: _TurnContext,
         va_task_id: str,
         user_input: str,
         headers: dict,
         original_body: dict,
-        event_queue: EventQueue,
     ) -> None:
         """VA 挂起后，下一轮用户输入续轮。va_task_id 为 VA 真实 task_id。"""
+        conv_id = turn_ctx.conv_id
+        task_id = turn_ctx.task_id
+        call_context = turn_ctx.call_context
+        event_queue = turn_ctx.event_queue
 
         # params 仍从 Redis 首轮缓存取（保留 HEAD 的 params URL query 参数透传）
         cached = await self._redis.get_json(session_request_key(conv_id)) or {}
@@ -567,12 +603,14 @@ class Executor(AgentExecutor):
         error_message: Optional[str] = None
 
         request = self._build_va_message(
-            query=user_input,
-            headers=headers,
-            body=body,
-            params=params,
-            task_id=va_task_id,
-            conv_id=conv_id,
+            _VaRequestPayload(
+                query=user_input,
+                headers=headers,
+                body=body,
+                params=params,
+                task_id=va_task_id,
+                conv_id=conv_id,
+            )
         )
 
         has_end_node = False
@@ -650,13 +688,10 @@ class Executor(AgentExecutor):
                 task.status.CopyFrom(TaskStatus(state=TASK_STATE_WORKING))
                 await self._task_store.save(task, call_context)
 
-            await self._run_agent(
-                conv_id=conv_id,
-                task_id=task_id,
-                call_context=call_context,
+            await self.run_agent(
+                turn_ctx,
                 query="",
                 original_body=original_body,
-                event_queue=event_queue,
                 cascade_result=cascade,
             )
         else:

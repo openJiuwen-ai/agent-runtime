@@ -1,3 +1,6 @@
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
 """
 异步 Redis 客户端（redis-py asyncio）。
 """
@@ -16,6 +19,7 @@ if redis.call('GET', KEYS[1]) == ARGV[1] then
 end
 return 0
 """
+
 
 class RedisClient:
     """轻量 Redis 封装，仅暴露项目用到的操作。"""

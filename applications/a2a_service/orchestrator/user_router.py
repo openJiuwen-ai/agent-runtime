@@ -1,3 +1,6 @@
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
 """
 user_router — 用户入口路由（Versatile 平台定制格式）。
 
@@ -29,7 +32,7 @@ import asyncio
 import json
 import time
 import uuid
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 from a2a.server.agent_execution import RequestContext
 from a2a.server.context import ServerCallContext
@@ -453,7 +456,12 @@ def _extract_query_params(request) -> dict:
     return {}
 
 
-def _build_request(conversation_id: str, user_query: str, body: dict, params: Optional[dict] = None) -> SendMessageRequest:
+def _build_request(
+    conversation_id: str,
+    user_query: str,
+    body: dict,
+    params: Optional[dict] = None,
+) -> SendMessageRequest:
     """将 Versatile 格式请求体转为 A2A SendMessageRequest。"""
     body_struct = Struct()
     body_struct.update({"body": body, "params": params or {}})
@@ -789,8 +797,11 @@ async def dispatch(
                                 status=TaskStatus(state=TASK_STATE_FAILED),
                             )
                         )
-                    except Exception:
-                        pass
+                    except Exception as enqueue_exc:
+                        logger.warning(
+                            "[Router] 入队 FAILED 状态事件失败（忽略）：{!r}",
+                            enqueue_exc,
+                        )
                 finally:
                     await event_queue.close()
 
@@ -888,14 +899,17 @@ async def dispatch(
                 break
         await run_task
 
+        def _is_completed_task_event(evt: Any) -> bool:
+            return (
+                isinstance(evt, TaskStatusUpdateEvent)
+                and evt.status
+                and evt.status.state == TASK_STATE_COMPLETED
+                and evt.status.message
+            )
+
         answer = ""
         for event in collected:
-            if (
-                isinstance(event, TaskStatusUpdateEvent)
-                and event.status
-                and event.status.state == TASK_STATE_COMPLETED
-                and event.status.message
-            ):
+            if _is_completed_task_event(event):
                 for part in event.status.message.parts:
                     if part.WhichOneof("content") == "text":
                         answer = part.text

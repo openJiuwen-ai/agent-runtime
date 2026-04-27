@@ -1,3 +1,6 @@
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
 """
 Phase 4 事件补齐单测（common/events.py + response_wrapper 交互）。
 

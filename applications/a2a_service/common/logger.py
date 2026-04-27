@@ -1,3 +1,6 @@
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
 """
 日志 模板函数。
 """
@@ -6,7 +9,7 @@ import json
 import logging
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Any, Optional
 
@@ -37,6 +40,7 @@ class TagTrace(BaseModel):
     tags: Optional[list] = None # 时间TAG可以记录这里,
     release: Optional[str] = None # Agent版本信息
 
+
 class ObservationType(StrEnum):
     SPAN = "SPAN"  # 通用操作 / 跨度
     EVENT = "EVENT" # 时间点事件
@@ -49,11 +53,18 @@ class ObservationType(StrEnum):
     EMBEDDING = "EMBEDDING" # 向量生成
     GUARDRAIL = "GUARDRAIL" # 安全检查
 
+
 class TagObservation(BaseModel):
-    id: str # 一个阶段的唯一id,暂时使用时间戳来代替id，保证start和end的id是一样的
-    trace_id: Optional[str] = None # 暂时可以先不传，工具从日志头解析
-    parent_observation_id: Optional[str] = None # 父Observation的ID，如果是接口调用下的感知、规划、执行、反思阶段，没有父ID，如果是模型调用、执行todolist、调用Versatile等属于规划、执行等阶段的更细粒度步骤，父ID为其上一层阶段的ID,现阶段置空
-    type: Optional[ObservationType] = None # 可根据阶段类型匹配，例如某一跨度的阶段可以使用SPAN，模型调用使用GENERATION，工具调用使用TOOL等,
+    # 一个阶段的唯一id,暂时使用时间戳来代替id，保证start和end的id是一样的
+    id: str
+    # 暂时可以先不传，工具从日志头解析
+    trace_id: Optional[str] = None
+    # 父Observation的ID，如果是接口调用下的感知、规划、执行、反思阶段，没有父ID，
+    # 如果是模型调用、执行todolist、调用Versatile等属于规划、执行等阶段的更细粒度步骤，
+    # 父ID为其上一层阶段的ID,现阶段置空
+    parent_observation_id: Optional[str] = None
+    # 可根据阶段类型匹配，例如某一跨度的阶段可以使用SPAN，模型调用使用GENERATION，工具调用使用TOOL等
+    type: Optional[ObservationType] = None
     name: Optional[str] = None
     start_time: Optional[str] = None
     end_time: Optional[str] = None
@@ -65,10 +76,11 @@ class TagObservation(BaseModel):
     internal_model_id: Optional[str] = None # 模型调用阶段的模型ID, 现阶段不填
     model_parameters: Optional[dict] = None # 模型调用阶段的模型参数信息, 现阶段不填
     usage_details: Optional[dict[str, int]] = None # 模型调用阶段的模型使用信息，例如token数等, 现阶段不填,
-    cost_details:  Optional[dict[str, int]] = None # 模型调用阶段的模型耗时信息，例如Cost数等, 暂时只记录首token耗时,
+    cost_details: Optional[dict[str, int]] = None # 模型调用阶段的模型耗时信息，例如Cost数等, 暂时只记录首token耗时,
     total_cost: Optional[int] = None # 模型调用阶段的调用总耗时, 或者接口 / 工具调用的耗时,
     completion_start_time: Optional[str] = None # 模型调用阶段的流式响应开始时间, 现阶段不填,
     prompt_id: Optional[str] = None # 模型调用阶段使用的Prompt ID, 现阶段不填
+
 
 class Tag(StrEnum):
     TAG_HTTP_REQUEST_START = "HTTP_REQUEST_START"
@@ -83,6 +95,7 @@ class Tag(StrEnum):
     TAG_SKILL_EXECUTE_END = "SKILL_EXECUTE_END"
     TAG_VERSATILE_START = "VERSATILE_START"
     TAG_VERSATILE_END = "VERSATILE_END"
+
 
 class Extra(BaseModel):
     tag: Optional[Tag] = None
@@ -121,7 +134,12 @@ def to_logger(level: int | str = logging.INFO, message: Any = "", extra: Extra |
 
 
 def current_local_time() -> str:
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    # 生成毫秒精度本地时间字符串，显式指定 UTC 时区后转换为本地时区以避免时区歧义
+    return (
+        datetime.now(tz=timezone.utc)
+        .astimezone()
+        .strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    )
 
 
 def extract_header_value(headers: dict[str, str], name: str) -> str:

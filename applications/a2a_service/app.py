@@ -1,3 +1,6 @@
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
 """
 A2A Service 进程入口。
 
@@ -31,10 +34,11 @@ from starlette.applications import Starlette
 
 from agents.EDPAgent import initialize
 from common.redis_client import RedisClient
+from common.redis_task_store import RedisTaskStore
 from config import get_settings
 from orchestrator.executor import Executor
-from common.redis_task_store import RedisTaskStore
 from orchestrator.user_router import router as user_router
+from test.simulate import router as simulate_router
 
 os.environ['NO_PROXY'] = 'localhost,127.0.0.1'
 
@@ -163,8 +167,10 @@ def _build_dpa_card() -> AgentCard:
 def _bootstrap_lock_key(lock_name: str) -> str:
     return f"a2a:bootstrap:lock:{lock_name}"
 
+
 def _bootstrap_status_key(lock_name: str) -> str:
     return f"a2a:bootstrap:status:{lock_name}"
+
 
 async def _set_bootstrap_status(
     redis: RedisClient,
@@ -182,6 +188,7 @@ async def _set_bootstrap_status(
         "update_time": int(time.time()),
     }
     await redis.set_json(status_key, payload, ex=max(int(ttl_seconds), 60))
+
 
 async def _wait_for_bootstrap_ready(
     redis: RedisClient,
@@ -213,6 +220,7 @@ async def _wait_for_bootstrap_ready(
             return False
         await asyncio.sleep(poll)
     return False
+
 
 async def _run_global_bootstrap_once() -> None:
     logger.info("[A2AService] LEADER 全局 bootstrap 无额外任务，标记为 ready")
@@ -276,8 +284,11 @@ class _BootstrapCoordinator:
                     message=str(exc),
                     ttl_seconds=self.bootstrap_status_ttl,
                 )
-            except Exception:
-                pass
+            except Exception as mark_exc:
+                logger.debug(
+                    "[A2AService] 标记 bootstrap failed 失败（忽略）: {}",
+                    mark_exc,
+                )
 
     async def close(self) -> None:
         await self._release_leader_lock(reason="service closing")
@@ -361,7 +372,7 @@ class _BootstrapCoordinator:
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(fastapi_app: FastAPI):
     settings = get_settings()
     redis = RedisClient()
     http_client: Optional[httpx.AsyncClient] = None
@@ -389,14 +400,14 @@ async def lifespan(app: FastAPI):
             agent_card=dpa_card,
         )
 
-        app.state.redis = redis
-        app.state.task_store = task_store
-        app.state.executor = executor
+        fastapi_app.state.redis = redis
+        fastapi_app.state.task_store = task_store
+        fastapi_app.state.executor = executor
 
         a2a_routes = create_agent_card_routes(dpa_card) + create_jsonrpc_routes(
             request_handler, rpc_url="/"
         )
-        app.mount("/a2a", Starlette(routes=a2a_routes))
+        fastapi_app.mount("/a2a", Starlette(routes=a2a_routes))
 
         logger.info(
             f"[A2AService] 启动完成："
@@ -418,8 +429,8 @@ async def lifespan(app: FastAPI):
         try:
             from openjiuwen.core.runner import Runner
             await Runner.stop()
-        except Exception:
-            pass
+        except Exception as stop_exc:
+            logger.debug("[A2AService] Runner.stop 异常（忽略）: {}", stop_exc)
         logger.info("[A2AService] 关闭完成")
 
 
@@ -433,8 +444,6 @@ app = FastAPI(
 )
 
 app.include_router(user_router)
-
-from test.simulate import router as simulate_router
 app.include_router(simulate_router)
 
 

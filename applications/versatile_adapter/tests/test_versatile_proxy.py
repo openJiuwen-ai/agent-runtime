@@ -1,3 +1,6 @@
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
 """Unit tests for adapter.versatile_proxy.
 
 Drives Solution A: proxy must peel the upstream Versatile envelope so
@@ -47,8 +50,10 @@ def test_unwrap_upstream_frame_end_yields_empty_data():
 
 
 def test_unwrap_upstream_frame_missing_custom_rsp_data_returns_safe_default():
-    """Malformed upstream without custom_rsp_data falls back to a 'message'
-    frame carrying the raw payload, so downstream can still reason about it."""
+    """Malformed upstream without custom_rsp_data falls back to a 'message' frame.
+
+    Frame carries the raw payload, so downstream can still reason about it.
+    """
     upstream = {"success": True, "garbled": "payload"}
     result = _unwrap_upstream_frame(upstream)
     assert result["event"] == "message"
@@ -62,8 +67,10 @@ def test_unwrap_upstream_frame_non_dict_returns_safe_default():
 
 
 def test_unwrap_upstream_frame_already_unwrapped_message_passes_through():
-    """Some upstream gateways send {event, data} directly without the custom_rsp_data
-    envelope. Peel should pass through unchanged (don't double-wrap)."""
+    """Some upstream gateways send {event, data} directly without the envelope.
+
+    Peel should pass through unchanged (don't double-wrap).
+    """
     already_unwrapped = {
         "event": "message",
         "data": {"node_type": "QA", "node_name": "xxx", "text": "hi"},
@@ -102,10 +109,8 @@ async def test_dispatch_stream_yields_unwrapped_frames_only(httpx_mock):
     )
 
     proxy = VersatileProxy(url_template="https://va.test/v1/{conversation_id}")
-    chunks = [c async for c in proxy.dispatch_stream(
-        body={"custom_data": {}},
-        conv_id="conv-1",
-    )]
+    stream = proxy.dispatch_stream(body={"custom_data": {}}, conv_id="conv-1")
+    chunks = [chunk async for chunk in stream]
 
     assert chunks == [
         {"event": "message", "data": {"node_type": "QA", "text": "hi"}},

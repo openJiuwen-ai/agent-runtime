@@ -1,3 +1,6 @@
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
 """
 VersatileAdapter 进程入口（a2a-sdk 1.0.0-alpha.1）。
 
@@ -74,7 +77,7 @@ setup_logging()
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(fastapi_app: FastAPI):
     settings = get_settings()
 
     versatile_proxy = VersatileProxy(
@@ -96,7 +99,7 @@ async def lifespan(app: FastAPI):
         create_agent_card_routes(VERSATILE_ADAPTER_CARD)
         + create_jsonrpc_routes(request_handler, rpc_url="/")
     )
-    app.mount("/", Starlette(routes=a2a_routes))
+    fastapi_app.mount("/", Starlette(routes=a2a_routes))
 
     logger.info(
         f"[VersatileAdapter] 启动完成，"

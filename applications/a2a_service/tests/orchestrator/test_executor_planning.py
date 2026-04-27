@@ -1,3 +1,6 @@
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
 """
 Executor 的 planning_execution_process 发射集成测试（Phase 3.3）。
 
@@ -24,7 +27,7 @@ from common.events import (
     ToolStartEvent,
     ToolEndEvent,
 )
-from orchestrator.executor import Executor
+from orchestrator.executor import Executor, _TurnContext
 
 
 def _collect_emitted_events(event_queue: EventQueue) -> list:
@@ -37,8 +40,8 @@ def _collect_emitted_events(event_queue: EventQueue) -> list:
     try:
         while True:
             events.append(inner.get_nowait())
-    except Exception:
-        pass
+    except asyncio.QueueEmpty:
+        return events
     return events
 
 
@@ -85,13 +88,16 @@ async def test_planning_event_emitted_before_each_tool_start(monkeypatch):
     )
 
     event_queue = EventQueue()
-    await executor._run_agent(
+    turn_ctx = _TurnContext(
         conv_id="conv-1",
         task_id="task-1",
         call_context=MagicMock(),
+        event_queue=event_queue,
+    )
+    await executor.run_agent(
+        turn_ctx,
         query="测试",
         original_body={},
-        event_queue=event_queue,
         cascade_result=None,
     )
 
@@ -126,13 +132,16 @@ async def test_step_counter_increments_with_each_tool_start(monkeypatch):
     )
 
     event_queue = EventQueue()
-    await executor._run_agent(
+    turn_ctx = _TurnContext(
         conv_id="conv-1",
         task_id="task-1",
         call_context=MagicMock(),
+        event_queue=event_queue,
+    )
+    await executor.run_agent(
+        turn_ctx,
         query="x",
         original_body={},
-        event_queue=event_queue,
         cascade_result=None,
     )
 

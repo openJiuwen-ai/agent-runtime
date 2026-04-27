@@ -1,3 +1,6 @@
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
 """
 Task A: 真实抓包逐帧回放对齐测试。
 
@@ -16,6 +19,7 @@ execution_time 原值）。本测试比对我们 pipeline 产出的帧是否与 
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -45,12 +49,21 @@ from common.events import (
     ToolStartEvent,
     ToolStatusEvent,
 )
-from orchestrator.executor import Executor
+from orchestrator.executor import Executor, _TurnContext
 from orchestrator.user_router import _serialize_event
 
 
 CAPTURE_AGENT_ID = "fcbcd0ce-73b0-4097-a0cb-6286341f88f6"
 CAPTURE_CONV_ID = "90d40c85-cca4-43fe-8e3f-9ad3717fb1b4"
+
+
+def _make_turn_ctx(queue: EventQueue, *, task_id: str = "t") -> _TurnContext:
+    return _TurnContext(
+        conv_id=CAPTURE_CONV_ID,
+        task_id=task_id,
+        call_context=MagicMock(),
+        event_queue=queue,
+    )
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -187,8 +200,8 @@ def _drain_queue(queue: EventQueue) -> list:
     try:
         while True:
             events.append(inner.get_nowait())
-    except Exception:
-        pass
+    except asyncio.QueueEmpty:
+        return events
     return events
 
 
@@ -197,7 +210,7 @@ async def _run_and_collect(
     agent_events: list,
     va_events_by_call: list[list[TaskArtifactUpdateEvent]] | None = None,
 ) -> list[dict]:
-    """跑 Executor._run_agent，返回包装后的 SSE 帧（dict 列表）。"""
+    """跑 Executor.run_agent，返回包装后的 SSE 帧（dict 列表）。"""
     va_events_by_call = va_events_by_call or []
     call_idx = [0]
 
@@ -232,13 +245,10 @@ async def _run_and_collect(
     executor = Executor(va_client=va_client, redis=redis, task_store=task_store)
 
     queue = EventQueue()
-    await executor._run_agent(
-        conv_id=CAPTURE_CONV_ID,
-        task_id="t",
-        call_context=MagicMock(),
+    await executor.run_agent(
+        _make_turn_ctx(queue),
         query="买理财",
         original_body={},
-        event_queue=queue,
         cascade_result=None,
     )
 
@@ -426,22 +436,21 @@ async def test_pattern_b_frames_from_va_match_fixture_shape(monkeypatch):
     redis = MagicMock()
     redis.get_json = AsyncMock(return_value={"headers": {}, "body": {}})
     va_client = MagicMock()
-    va_client.send_message = lambda req: _async_iter(
-        [_wrap_stream_resp(e) for e in va_events]
-    )
+
+    def _send_message(_req):
+        return _async_iter([_wrap_stream_resp(e) for e in va_events])
+
+    va_client.send_message = _send_message
     task_store = MagicMock()
     task_store.get = AsyncMock(return_value=None)
     task_store.save = AsyncMock()
     executor = Executor(va_client=va_client, redis=redis, task_store=task_store)
 
     queue = EventQueue()
-    await executor._run_agent(
-        conv_id=CAPTURE_CONV_ID,
-        task_id="t",
-        call_context=MagicMock(),
+    await executor.run_agent(
+        _make_turn_ctx(queue),
         query="x",
         original_body={},
-        event_queue=queue,
         cascade_result=None,
     )
 
