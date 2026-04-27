@@ -54,11 +54,17 @@ class Settings(BaseSettings):
     deploy_path: Path | None = None
     dist_path: Path | None = None
 
+    def _server_env_file_present(self) -> bool:
+        env_file = self.model_config.get("env_file")
+        return bool(env_file and Path(env_file).exists())
+
     # ========================
     # MySQL 动态必选校验
     # ========================
     @model_validator(mode="after")
     def check_mysql_required(self) -> "Settings":
+        if not self._server_env_file_present():
+            return self
         if self.DB_TYPE in {"mysql", "gaussdb", "opengauss"}:
             missing = []
             if not self.DB_HOST:
@@ -80,6 +86,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def check_runtime_required(self) -> "Settings":
+        if not self._server_env_file_present():
+            return self
         missing = []
         if not self.IP:
             missing.append("IP")

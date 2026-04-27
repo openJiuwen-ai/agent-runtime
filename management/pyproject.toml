@@ -35,6 +35,7 @@ dependencies = [
 ]
 
 [tool.uv.sources]
+openjiuwen-runtime-foundation = { path = "../foundation", editable = true }
 
 [tool.uv]
 default-groups = ['dev']
