@@ -38,8 +38,7 @@ from common.redis_task_store import RedisTaskStore
 from config import get_settings
 from orchestrator.executor import Executor
 from orchestrator.user_router import router as user_router
-
-from test.simulate import router as simulate_router
+from tools.simulate_router.simulate import router as simulate_router
 
 os.environ['NO_PROXY'] = 'localhost,127.0.0.1'
 

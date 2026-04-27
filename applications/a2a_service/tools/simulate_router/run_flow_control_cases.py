@@ -21,9 +21,10 @@ from urllib.parse import quote_plus
 
 import httpx
 
-PARENT_DIR = Path(__file__).resolve().parents[1]
-if str(PARENT_DIR) not in sys.path:
-    sys.path.append(str(PARENT_DIR))
+# 本脚本位于 a2a_service/tools/simulate_router/，向上 2 级才是 a2a_service 根目录
+A2A_SERVICE_ROOT = Path(__file__).resolve().parents[2]
+if str(A2A_SERVICE_ROOT) not in sys.path:
+    sys.path.append(str(A2A_SERVICE_ROOT))
 
 from common.redis_client import RedisClient
 from orchestrator.user_router import _check_rate_limit
@@ -692,7 +693,7 @@ def _build_service_log_pattern(env_path: Path, env: dict[str, str]) -> str:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="One-click runner for flow control test cases.")
-    parser.add_argument("--env-file", default=str(Path(__file__).resolve().parents[1] / ".env"))
+    parser.add_argument("--env-file", default=str(Path(__file__).resolve().parents[2] / ".env"))
     parser.add_argument("--project-id", default=DEFAULT_PROJECT_ID)
     parser.add_argument("--agent-id", default="")
     parser.add_argument("--base-url", default="")
