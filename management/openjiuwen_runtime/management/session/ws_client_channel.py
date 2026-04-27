@@ -279,16 +279,13 @@ class WSServiceMessageChannel:
         ev = asyncio.Event()
         self._request_done[rid] = ev
         try:
-            text = self._payload_from_raw(wrapper.session_request.raw_msg)
-            if not isinstance(text, str):
-                text = str(text)
             logger.info(
                 "WSS 业务上行: service_id=%s request_id=%s bytes=%s",
                 service_id,
                 rid,
-                len(text.encode("utf-8")),
+                len(wrapper.session_request.raw_msg),
             )
-            await w.send(text)
+            await w.send(wrapper.session_request.raw_msg)
         except Exception as e:
             self._request_done.pop(rid, None)
             logger.error("WSS 上行失败: request_id=%s %s", rid, e, exc_info=True)
