@@ -137,9 +137,6 @@ class Access(IAccess):
         if self._shutdown_done:
             logger.error("Access 已 shutdown，不再收消息")
             return
-        if not self._strategy:
-            logger.error("Access 未初始化，需先调用 init()")
-            return
         if not self._response_parser:
             logger.error("ResponseParser 未设置")
             return
@@ -167,6 +164,9 @@ class Access(IAccess):
                 msg = _AutoIdRequest(msg, rid)
             logger.info("Access 收到请求: request_id=%s", rid)
             # 2) 策略层：从业务请求解析出 session_id、会话级并发、TTL
+            if not self._strategy:
+                logger.error("未设置session策略")
+                return
             session_request = self._strategy.handle_session(msg)
             logger.debug(
                 "Access 策略生成 session: session_id=%s session_conc=%s session_ttl=%s",
