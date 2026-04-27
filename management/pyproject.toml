@@ -17,10 +17,10 @@ dependencies = [
     "sqlalchemy==2.0.41",
     "pymysql==1.1.1",
     "cryptography>=42.0.0",
-    "pydantic==2.11.7",
-    "pydantic-settings==2.5.2",
+    "pydantic>=2.11.7",
+    "pydantic-settings>=2.5.2",
     "aiomysql==0.2.0",
-    "aiosqlite==0.21.0",
+    "aiosqlite>=0.21.0",
     "redis==7.1.0",
     # lint
     "ruff==0.9.10",
