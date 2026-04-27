@@ -57,12 +57,12 @@ class MockChannel:
         self.send_log: List[tuple] = []
 
     async def send(
-        self,
-        service_id: str,
-        wrapper: SessionRequestWrapper,
-        *,
-        response_parser: IResponseParser,
-        on_request_complete: Callable[[Optional[str]], Awaitable[None]],
+            self,
+            service_id: str,
+            wrapper: SessionRequestWrapper,
+            *,
+            response_parser: IResponseParser,
+            on_request_complete: Callable[[Optional[str]], Awaitable[None]],
     ) -> None:
         self.send_log.append((service_id, wrapper.session_request.session_id))
         if wrapper.cancel.done():
@@ -125,12 +125,12 @@ class _HoldCh:
         self.gate = asyncio.Event()
 
     async def send(
-        self,
-        service_id: str,
-        wrapper: SessionRequestWrapper,
-        *,
-        response_parser: IResponseParser,
-        on_request_complete: Callable[[Optional[str]], Awaitable[None]],
+            self,
+            service_id: str,
+            wrapper: SessionRequestWrapper,
+            *,
+            response_parser: IResponseParser,
+            on_request_complete: Callable[[Optional[str]], Awaitable[None]],
     ) -> None:
         sid = wrapper.session_request.session_id
         rid = wrapper.session_request.request_id
@@ -153,10 +153,10 @@ class _HoldCh:
 
 
 async def _stack(
-    min_idle: int = 0,
-    max_svc: int = 5,
-    scap: int = 10,
-    deploys: int = 0,
+        min_idle: int = 0,
+        max_svc: int = 5,
+        scap: int = 10,
+        deploys: int = 0,
 ) -> tuple[Access, MockChannel, ServiceManager, Optional[_Rec], _Factory]:
     ch = MockChannel()
     drec: Optional[_Rec]
@@ -188,16 +188,16 @@ async def _stack(
     )
     await acc.init(
         response_parser=_P(),
-        strategy=PerChatBotStrategy(),
         config=cfg,
         session_config=SessionConfig(concurrency=2, ttl=0),
+        strategy=PerChatBotStrategy(),
     )
     return acc, ch, sm, drec, f
 
 
 async def _stack_holding(
-    scap: int = 20,
-    sess_cap: int = 10,
+        scap: int = 20,
+        sess_cap: int = 10,
 ) -> tuple[Access, _HoldCh, ServiceManager]:
     ch = _HoldCh()
     dlist: list[Optional[object]] = [None] * 20
@@ -223,9 +223,9 @@ async def _stack_holding(
     )
     await acc.init(
         response_parser=_P(),
-        strategy=PerChatBotStrategy(),
         config=cfg,
         session_config=SessionConfig(concurrency=sess_cap, ttl=0),
+        strategy=PerChatBotStrategy(),
     )
     return acc, ch, sm
 
@@ -287,10 +287,10 @@ async def test_access_session_concurrency_interleave() -> None:
         async def one(rid: str, cid: str) -> list[Any]:
             o: list[Any] = []
             async for x in acc.send_message(
-                cast(
-                    IRequest,
-                    TRequest(request_id=rid, chat_id=cid, bot_id="b1", user_id="u1"),
-                )
+                    cast(
+                        IRequest,
+                        TRequest(request_id=rid, chat_id=cid, bot_id="b1", user_id="u1"),
+                    )
             ):
                 o.append(x)
             return o

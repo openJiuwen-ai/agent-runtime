@@ -65,12 +65,12 @@ class MockMessageChannel:
         self.send_calls: List[Tuple[str, str, Optional[str]]] = []
 
     async def send(
-        self,
-        service_id: str,
-        wrapper: SessionRequestWrapper,
-        *,
-        response_parser: IResponseParser,
-        on_request_complete: Callable[[Optional[str]], Awaitable[None]],
+            self,
+            service_id: str,
+            wrapper: SessionRequestWrapper,
+            *,
+            response_parser: IResponseParser,
+            on_request_complete: Callable[[Optional[str]], Awaitable[None]],
     ) -> None:
         sreq = wrapper.session_request
         self.send_calls.append((service_id, sreq.session_id, sreq.request_id))
@@ -113,9 +113,9 @@ class RecordingK8s:
 
 
 def make_factory(
-    channel: Any,
-    service_concurrency: int,
-    k8s_per_service: bool = False,
+        channel: Any,
+        service_concurrency: int,
+        k8s_per_service: bool = False,
 ) -> Tuple[IServiceInstanceFactory, List[RecordingK8s]]:
     k8s_list: list[RecordingK8s] = []
 
@@ -138,13 +138,13 @@ def make_factory(
 
 
 async def _build_access(
-    *,
-    service_concurrency: int = 10,
-    per_session: int = 1,
-    min_idle: int = 0,
-    max_services: int = 5,
-    k8s_per_service: bool = False,
-    channel: Any = None,
+        *,
+        service_concurrency: int = 10,
+        per_session: int = 1,
+        min_idle: int = 0,
+        max_services: int = 5,
+        k8s_per_service: bool = False,
+        channel: Any = None,
 ) -> Tuple[Access, Any, ServiceManager, List[RecordingK8s]]:
     ch = channel or MockMessageChannel()
     factory, k8s_list = make_factory(ch, service_concurrency, k8s_per_service)
@@ -169,9 +169,9 @@ async def _build_access(
     )
     await acc.init(
         response_parser=DictStreamParser(),
-        strategy=PerChatBotStrategy(),
         config=cfg,
         session_config=SessionConfig(concurrency=per_session, ttl=0),
+        strategy=PerChatBotStrategy(),
     )
     return acc, ch, sm, k8s_list
 
@@ -211,7 +211,7 @@ async def test_bootstrap_creates_min_idle_services() -> None:
         assert len(k8s_list) == 2
         assert {k.deploy_count for k in k8s_list} == {1}
         async for _ in acc.send_message(
-            ireq(TRequest(request_id="1", chat_id="a", bot_id="b"))
+                ireq(TRequest(request_id="1", chat_id="a", bot_id="b"))
         ):
             pass
         assert len(ch.send_calls) >= 1
@@ -232,7 +232,7 @@ async def test_routing_fails_when_no_instance_available() -> None:
         sm._pick_or_create = AsyncMock(return_value=None)  # type: ignore[method-assign]
         out: list[Any] = []
         async for x in acc.send_message(
-            ireq(TRequest(request_id="1", chat_id="a", bot_id="b"))
+                ireq(TRequest(request_id="1", chat_id="a", bot_id="b"))
         ):
             out.append(x)
         assert out
@@ -254,11 +254,11 @@ async def test_mock_k8s_per_service_instance() -> None:
     )
     try:
         async for _ in acc.send_message(
-            ireq(TRequest(request_id="1", chat_id="a", bot_id="b"))
+                ireq(TRequest(request_id="1", chat_id="a", bot_id="b"))
         ):
             pass
         async for _ in acc.send_message(
-            ireq(TRequest(request_id="2", chat_id="b", bot_id="b"))
+                ireq(TRequest(request_id="2", chat_id="b", bot_id="b"))
         ):
             pass
         assert len(k8s_list) == 1
@@ -294,7 +294,7 @@ async def test_k8s_deploy_mock_async() -> None:
 
     class MFactory(IServiceInstanceFactory):
         async def new_service(
-            self, response_parser: IResponseParser
+                self, response_parser: IResponseParser
         ) -> IServiceHandler:
             return ServiceHandler(
                 total_concurrency=3,

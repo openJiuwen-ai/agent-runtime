@@ -402,9 +402,9 @@ async def _amain() -> int:
     try:
         await access.init(
             response_parser=DictStreamParser(),
-            strategy=PerChatBotStrategy(),
             config=acc_cfg,
             session_config=session_cfg,
+            strategy=PerChatBotStrategy(),
         )
         msg = _load_message_payload(args)
         wire = WireIRequest(msg)

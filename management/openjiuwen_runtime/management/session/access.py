@@ -15,7 +15,7 @@ from .interfaces import (
     IResponseParser,
     ISessionStrategy,
     IServiceManager,
-    SessionRequestWrapper,
+    SessionRequestWrapper, ISessionRequest,
 )
 from .models import AccessConfig, SessionConfig
 
@@ -74,16 +74,17 @@ class Access(IAccess):
     async def init(
             self,
             response_parser: IResponseParser,
-            strategy: ISessionStrategy,
             config: AccessConfig,
             session_config: SessionConfig,
+            strategy: ISessionStrategy = None,
     ) -> None:
         # 与入口共享的会话维度：并发与 TTL 写入策略，供 handle_session 填充 ISessionRequest
         self._response_parser = response_parser
-        self._strategy = strategy
         self._config = config
-        strategy._concurrency = session_config.concurrency
-        strategy._ttl = session_config.ttl
+        if strategy:
+            self._strategy = strategy
+            strategy._concurrency = session_config.concurrency
+            strategy._ttl = session_config.ttl
         await self._service_manager.init(response_parser)
         await self._service_manager.start()
         logger.info(
@@ -115,7 +116,7 @@ class Access(IAccess):
         await self._service_manager.stop()
         logger.info("Access 已 shutdown")
 
-    async def send_message(self, msg: IRequest) -> AsyncIterator[Any]:
+    async def send_message(self, msg: IRequest | ISessionRequest) -> AsyncIterator[Any]:
         # 1) 未 init 时直接失败并打 error
         if self._shutdown_done:
             logger.error("Access 已 shutdown，不再收消息")
@@ -126,27 +127,35 @@ class Access(IAccess):
         if not self._response_parser:
             logger.error("ResponseParser 未设置")
             return
-
-        rid = getattr(msg, "request_id", None)
-        if not rid:
-            rid = uuid.uuid4().hex
-            logger.info(
-                "Access 自动生成 request_id=%s（请求未提供，多路复用必须非空）", rid
+        if isinstance(msg, ISessionRequest):
+            session_request = msg
+            logger.debug(
+                "Access receive session: session_id=%s session_conc=%s session_ttl=%s",
+                session_request.session_id,
+                session_request.session_concurrency,
+                session_request.session_ttl,
             )
-            wd = getattr(msg, "wire_dict", None)
-            if isinstance(wd, dict) and not wd.get("request_id"):
-                # 对端按 request_id 回包路由；inplace 注入到原 wire_dict 即可
-                wd["request_id"] = rid
-            msg = _AutoIdRequest(msg, rid)
-        logger.info("Access 收到请求: request_id=%s", rid)
-        # 2) 策略层：从业务请求解析出 session_id、会话级并发、TTL
-        session_request = self._strategy.handle_session(msg)
-        logger.debug(
-            "Access 策略生成 session: session_id=%s session_conc=%s session_ttl=%s",
-            session_request.session_id,
-            session_request.session_concurrency,
-            session_request.session_ttl,
-        )
+        else:
+            rid = getattr(msg, "request_id", None)
+            if not rid:
+                rid = uuid.uuid4().hex
+                logger.info(
+                    "Access 自动生成 request_id=%s（请求未提供，多路复用必须非空）", rid
+                )
+                wd = getattr(msg, "wire_dict", None)
+                if isinstance(wd, dict) and not wd.get("request_id"):
+                    # 对端按 request_id 回包路由；inplace 注入到原 wire_dict 即可
+                    wd["request_id"] = rid
+                msg = _AutoIdRequest(msg, rid)
+            logger.info("Access 收到请求: request_id=%s", rid)
+            # 2) 策略层：从业务请求解析出 session_id、会话级并发、TTL
+            session_request = self._strategy.handle_session(msg)
+            logger.debug(
+                "Access 策略生成 session: session_id=%s session_conc=%s session_ttl=%s",
+                session_request.session_id,
+                session_request.session_concurrency,
+                session_request.session_ttl,
+            )
 
         # 3) 每个入口请求独占一条响应队列 + cancel，用于多路复用/取消
         response_queue: asyncio.Queue[Any] = asyncio.Queue()
