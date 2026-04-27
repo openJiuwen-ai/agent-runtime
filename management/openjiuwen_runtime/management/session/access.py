@@ -145,11 +145,13 @@ class Access(IAccess):
             return
         if isinstance(msg, ISessionRequest):
             session_request = msg
+            rid = session_request.request_id
             logger.debug(
-                "Access receive session: session_id=%s session_conc=%s session_ttl=%s",
+                "Access receive session: session_id=%s session_conc=%s session_ttl=%s request_id=%s",
                 session_request.session_id,
                 session_request.session_concurrency,
                 session_request.session_ttl,
+                rid,
             )
         else:
             rid = getattr(msg, "request_id", None)
