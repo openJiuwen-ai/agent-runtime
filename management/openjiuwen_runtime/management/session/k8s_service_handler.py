@@ -58,6 +58,9 @@ class K8sServiceHandler:
         delete_grace_period: int = 30,
         delete_timeout: float = 120.0,
         delete_poll_interval: float = 1.0,
+        nfs_server: Optional[str] = None,     # NFS 服务器地址
+        nfs_path: Optional[str] = None,       # NFS 共享路径
+        nfs_mount_path: Optional[str] = None, # 容器内挂载路径
     ):
         if not image:
             raise ValueError("image is required")
@@ -80,6 +83,9 @@ class K8sServiceHandler:
         self._delete_grace_period = int(delete_grace_period)
         self._delete_timeout = float(delete_timeout)
         self._delete_poll_interval = float(delete_poll_interval)
+        self._nfs_server = nfs_server
+        self._nfs_path = nfs_path
+        self._nfs_mount_path = nfs_mount_path
 
         self._pod_name: Optional[str] = None
         self._config_loaded = False
@@ -126,12 +132,34 @@ class K8sServiceHandler:
         if self._extra_labels:
             labels.update(self._extra_labels)
 
+        volume_mounts = []
+        volumes = []
+
+        if self._nfs_server and self._nfs_path and self._nfs_mount_path:
+            nfs_volume_name = "nfs-volume"
+            volumes.append(
+                client.V1Volume(
+                    name=nfs_volume_name,
+                    nfs=client.V1NFSVolumeSource(
+                        server=self._nfs_server,
+                        path=self._nfs_path,
+                    ),
+                )
+            )
+            volume_mounts.append(
+                client.V1VolumeMount(
+                    name=nfs_volume_name,
+                    mount_path=self._nfs_mount_path,
+                )
+            )
+
         container = client.V1Container(
             name=self._container_name,
             image=self._image,
             image_pull_policy=self._image_pull_policy,
             ports=[client.V1ContainerPort(name=self._port_name, container_port=self._container_port)],
             env=env_list or None,
+            volume_mounts=volume_mounts or None,
             readiness_probe=client.V1Probe(
                 tcp_socket=client.V1TCPSocketAction(port=self._container_port),
                 initial_delay_seconds=self._readiness_initial_delay,
@@ -145,7 +173,11 @@ class K8sServiceHandler:
             metadata=client.V1ObjectMeta(
                 name=pod_name, namespace=self._namespace, labels=labels
             ),
-            spec=client.V1PodSpec(containers=[container], restart_policy=self._restart_policy),
+            spec=client.V1PodSpec(
+                containers=[container],
+                restart_policy=self._restart_policy,
+                volumes=volumes or None,
+            ),
         )
 
     async def deploy(self) -> PodDeployInfo:
