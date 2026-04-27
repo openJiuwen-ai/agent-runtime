@@ -28,7 +28,7 @@ class RedisClient:
         self._client: Optional[Redis] = None
 
     async def connect(self, url: str) -> None:
-        self._client = Redis.from_url(url, decode_responses=True)
+        self._client = Redis.from_url(url, decode_responses=True, protocol=2)
         await self._client.ping()
         logger.info(f"[Redis] 已连接：{url}")
 

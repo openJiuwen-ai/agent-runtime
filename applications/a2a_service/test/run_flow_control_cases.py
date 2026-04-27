@@ -182,7 +182,7 @@ class FlowControlTester:
         self.project_id = project_id
         self.agent_id = agent_id
         self.redis_url = redis_url
-        self.redis = Redis.from_url(redis_url, decode_responses=True)
+        self.redis = Redis.from_url(redis_url, decode_responses=True, protocol=2)
         self.session_limit = session_limit
         self.session_window = session_window
         self.global_limit = global_limit
