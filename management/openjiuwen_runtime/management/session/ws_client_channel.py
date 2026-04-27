@@ -332,19 +332,13 @@ def _ws_is_closed(ws: Any) -> bool:
 
 
 def _decode_ws_message(raw: object) -> Optional[dict[str, Any]]:
-    if isinstance(raw, bytes):
-        try:
-            raw = raw.decode("utf-8")
-        except UnicodeDecodeError:
-            logger.error("WSS 收到非 UTF-8 帧, 已忽略")
-            return None
-    if not isinstance(raw, str):
-        return None
     try:
+        logger.info("WSS 下行 JSON")
         out = json.loads(raw)
     except json.JSONDecodeError as e:
         logger.error("WSS 下行非 JSON, 已忽略: %s", e)
         return None
     if not isinstance(out, dict):
+        logger.error("WSS 下行非 JSON dict, 已忽略")
         return None
     return out
