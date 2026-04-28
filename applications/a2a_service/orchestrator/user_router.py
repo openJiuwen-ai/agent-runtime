@@ -64,6 +64,7 @@ from common.logger import (
 from common.response_wrapper import wrap_agent_event, wrap_workflow_event
 from config import get_settings
 from orchestrator.executor import Executor
+from orchestrator.sse_helpers import log_outbound_sse, next_sse_event
 
 router = APIRouter()
 
@@ -817,8 +818,9 @@ async def dispatch(
                     try:
                         while True:
                             try:
-                                event = await event_queue.dequeue_event()
-                                event_queue.task_done()
+                                event = await next_sse_event(event_queue)
+                                if event is None:
+                                    break
                                 if (
                                     isinstance(event, TaskStatusUpdateEvent)
                                     and event.status
@@ -835,13 +837,18 @@ async def dispatch(
                                 if payload is None:
                                     continue
                                 pushed_events += 1
+                                log_outbound_sse(
+                                    conversation_id=conversation_id,
+                                    sequence=pushed_events,
+                                    payload=payload,
+                                    event_kind=type(event).__name__,
+                                )
                                 yield f"data: {payload}\n\n"
                             except Exception as e:
-                                if type(e).__name__ != "QueueShutDown":
-                                    logger.warning(
-                                        f"[Router] generate 序列化异常，停止推送：{e!r}"
-                                    )
-                                    status_message = 1
+                                logger.warning(
+                                    f"[Router] generate 序列化异常，停止推送：{e!r}"
+                                )
+                                status_message = 1
                                 break
                         yield "data: [DONE]\n\n"
                     finally:
@@ -883,8 +890,9 @@ async def dispatch(
         status_message = 0
         while True:
             try:
-                event = await event_queue.dequeue_event()
-                event_queue.task_done()
+                event = await next_sse_event(event_queue)
+                if event is None:
+                    break
                 if (
                     isinstance(event, TaskStatusUpdateEvent)
                     and event.status
@@ -893,9 +901,8 @@ async def dispatch(
                     status_message = 1
                 collected.append(event)
             except Exception as e:
-                if type(e).__name__ != "QueueShutDown":
-                    logger.warning(f"[Router] non-stream 队列异常：{e!r}")
-                    status_message = 1
+                logger.warning(f"[Router] non-stream 队列异常：{e!r}")
+                status_message = 1
                 break
         await run_task
 
