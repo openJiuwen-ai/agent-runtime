@@ -82,7 +82,7 @@ class TodoListItemEvent(BaseModel):
     type: Literal["todolist_item"] = "todolist_item"
     id: int | str
     title: str
-    status: Literal["pending", "in_progress", "done", "failed"] = "pending"
+    status: Literal["pending", "in_progress", "done", "failed", "cancelled"] = "pending"
     content: str = ""
 
 
