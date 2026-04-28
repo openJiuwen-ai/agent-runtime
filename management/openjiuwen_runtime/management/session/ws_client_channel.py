@@ -312,6 +312,10 @@ class WSServiceMessageChannel:
             with contextlib.suppress(asyncio.CancelledError):
                 await t_cancel
             raise
+        # recv 在首帧 is_completed 即 set ev，此时分片刚入队，Access 可能尚未从 response_queue 取到终态。
+        # 若马上 on_request_complete → _by_request 被 pop，会与消费端竞态并截断尾包。须等 Access 在 finally 里 set cancel。
+        if ev.is_set() and not wrapper.cancel.done():
+            await wrapper.cancel
         if not ev.is_set() and (self._closed or wrapper.cancel.done()):
             logger.info("WSS 本请求在终态前结束(取消/关闭): request_id=%s", rid)
         await on_request_complete(rid)
