@@ -194,15 +194,14 @@ class Access(IAccess):
                         "Access 等待下游响应超时: request_id=%s timeout=%s", rid, to
                     )
                     break
+                logger.debug("Access 收到流式分片, request_id=%s", rid)
+                yield self._response_parser.response(data)
                 if self._response_parser.is_completed(data):
                     logger.debug("Access 收到终态分片, request_id=%s", rid)
-                    yield self._response_parser.response(data)
                     break
                 if cancel.done():
                     logger.debug("Access 因 cancel 结束收包, request_id=%s", rid)
                     break
-                logger.debug("Access 收到流式分片, request_id=%s", rid)
-                yield self._response_parser.response(data)
         finally:
             if not cancel.done():
                 cancel.set_result(None)
