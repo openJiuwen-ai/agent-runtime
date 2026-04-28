@@ -1,3 +1,6 @@
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
 """
 Task B: DelegateRequest → VA → cascade 完整路径集成测试。
 
@@ -11,6 +14,7 @@ Task B: DelegateRequest → VA → cascade 完整路径集成测试。
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -35,12 +39,22 @@ from common.events import (
     ToolStatusEvent,
 )
 from config import get_settings
-from orchestrator.executor import Executor
+from orchestrator.executor import Executor, _TurnContext
 
 
 CONV_ID = "conv-delegate-1"
 TASK_ID = "task-delegate-1"
 DEFAULT_FILTERED_NODE = "GXZQAResponseNode"
+
+
+def _make_turn_ctx(queue: EventQueue) -> _TurnContext:
+    """Build a default ``_TurnContext`` used by tests in this module."""
+    return _TurnContext(
+        conv_id=CONV_ID,
+        task_id=TASK_ID,
+        call_context=MagicMock(),
+        event_queue=queue,
+    )
 
 
 def _enable_filtered_node(monkeypatch, node_name: str = DEFAULT_FILTERED_NODE) -> None:
@@ -110,9 +124,11 @@ def _make_executor_with_va_stream(va_events: list[TaskArtifactUpdateEvent]) -> E
 
     # va_client mock：send_message 返回 async iterator of stream_resp
     va_client = MagicMock()
+
     def mock_send_message(request):
         stream_resps = [_wrap_as_stream_resp(e) for e in va_events]
         return _async_iter(stream_resps)
+
     va_client.send_message = mock_send_message
 
     # task_store mock
@@ -131,8 +147,8 @@ def _drain_queue(queue: EventQueue) -> list:
     try:
         while True:
             events.append(inner.get_nowait())
-    except Exception:
-        pass
+    except asyncio.QueueEmpty:
+        return events
     return events
 
 
@@ -194,13 +210,10 @@ async def test_delegate_with_end_node_triggers_cascade(monkeypatch):
     monkeypatch.setattr("orchestrator.executor.agent_stream", fake_agent_stream)
 
     queue = EventQueue()
-    await executor._run_agent(
-        conv_id=CONV_ID,
-        task_id=TASK_ID,
-        call_context=MagicMock(),
+    await executor.run_agent(
+        _make_turn_ctx(queue),
         query="测试",
         original_body={},
-        event_queue=queue,
         cascade_result=None,
     )
 
@@ -251,9 +264,11 @@ async def test_delegate_emits_pattern_b_frames_excluding_filtered(monkeypatch):
     monkeypatch.setattr("orchestrator.executor.agent_stream", fake_agent_stream)
 
     queue = EventQueue()
-    await executor._run_agent(
-        conv_id=CONV_ID, task_id=TASK_ID, call_context=MagicMock(),
-        query="x", original_body={}, event_queue=queue, cascade_result=None,
+    await executor.run_agent(
+        _make_turn_ctx(queue),
+        query="x",
+        original_body={},
+        cascade_result=None,
     )
 
     enqueued = _drain_queue(queue)
@@ -312,9 +327,11 @@ async def test_delegate_passes_qa_result_as_cascade_input(monkeypatch):
     monkeypatch.setattr("orchestrator.executor.agent_stream", fake_agent_stream)
 
     queue = EventQueue()
-    await executor._run_agent(
-        conv_id=CONV_ID, task_id=TASK_ID, call_context=MagicMock(),
-        query="x", original_body={}, event_queue=queue, cascade_result=None,
+    await executor.run_agent(
+        _make_turn_ctx(queue),
+        query="x",
+        original_body={},
+        cascade_result=None,
     )
 
     # cascade 轮被调时，cascade_result = {"workflow_result": "QA节点的最终文本结果"}
@@ -362,9 +379,11 @@ async def test_step_counter_continues_across_cascade(monkeypatch):
     monkeypatch.setattr("orchestrator.executor.agent_stream", fake_agent_stream)
 
     queue = EventQueue()
-    await executor._run_agent(
-        conv_id=CONV_ID, task_id=TASK_ID, call_context=MagicMock(),
-        query="x", original_body={}, event_queue=queue, cascade_result=None,
+    await executor.run_agent(
+        _make_turn_ctx(queue),
+        query="x",
+        original_body={},
+        cascade_result=None,
     )
 
     # 收集所有 planning_execution_process 的 content
@@ -404,9 +423,9 @@ async def test_delegate_without_end_node_does_not_cascade(monkeypatch):
         }),
         # 无 End node
     ]
+    # ``_make_executor_with_va_stream`` 内部已将 ``task_store.get`` mock 为
+    # ``AsyncMock(return_value=None)``，无需在测试中再次访问 Executor 的私有
     executor = _make_executor_with_va_stream(va_events)
-    # 让 task_store.get 返回 None（避免 metadata 更新路径失败）
-    executor._task_store.get = AsyncMock(return_value=None)
 
     call_count = [0]
 
@@ -417,9 +436,11 @@ async def test_delegate_without_end_node_does_not_cascade(monkeypatch):
     monkeypatch.setattr("orchestrator.executor.agent_stream", fake_agent_stream)
 
     queue = EventQueue()
-    await executor._run_agent(
-        conv_id=CONV_ID, task_id=TASK_ID, call_context=MagicMock(),
-        query="x", original_body={}, event_queue=queue, cascade_result=None,
+    await executor.run_agent(
+        _make_turn_ctx(queue),
+        query="x",
+        original_body={},
+        cascade_result=None,
     )
 
     # 只调一次（没有 cascade）

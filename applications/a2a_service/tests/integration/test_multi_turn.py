@@ -1,3 +1,6 @@
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
 """
 Test C: 多轮对话 step_counter 复位 + 跨 turn 状态独立。
 
@@ -13,6 +16,7 @@ Test C: 多轮对话 step_counter 复位 + 跨 turn 状态独立。
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -35,11 +39,20 @@ from common.events import (
     ToolStartEvent,
     ToolStatusEvent,
 )
-from orchestrator.executor import Executor
+from orchestrator.executor import Executor, _TurnContext
 from orchestrator.user_router import _serialize_event
 
 
 CONV_ID = "conv-multi-turn"
+
+
+def _make_turn_ctx(queue: EventQueue, *, task_id: str = "t") -> _TurnContext:
+    return _TurnContext(
+        conv_id=CONV_ID,
+        task_id=task_id,
+        call_context=MagicMock(),
+        event_queue=queue,
+    )
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -65,8 +78,8 @@ def _drain_queue(queue: EventQueue) -> list:
     try:
         while True:
             events.append(inner.get_nowait())
-    except Exception:
-        pass
+    except asyncio.QueueEmpty:
+        return events
     return events
 
 
@@ -84,12 +97,12 @@ def _extract_planning_contents(queue_events: list) -> list[str]:
 
 
 # ════════════════════════════════════════════════════════════════════
-# 测试 1：连续两次 _run_agent 调用，step_counter 各自从 1 开始
+# 测试 1：连续两次 run_agent 调用，step_counter 各自从 1 开始
 # ════════════════════════════════════════════════════════════════════
 
 
 @pytest.mark.asyncio
-async def test_each_run_agent_invocation_starts_step_counter_from_one(monkeypatch):
+async def test_eachrun_agent_invocation_starts_step_counter_from_one(monkeypatch):
     executor = _make_executor()
 
     async def fake_agent_stream(**kwargs):
@@ -103,18 +116,20 @@ async def test_each_run_agent_invocation_starts_step_counter_from_one(monkeypatc
 
     # 第一轮
     queue1 = EventQueue()
-    await executor._run_agent(
-        conv_id=CONV_ID, task_id="t1", call_context=MagicMock(),
-        query="第一轮", original_body={}, event_queue=queue1,
+    await executor.run_agent(
+        _make_turn_ctx(queue1, task_id="t1"),
+        query="第一轮",
+        original_body={},
         cascade_result=None,
     )
     planning1 = _extract_planning_contents(_drain_queue(queue1))
 
-    # 第二轮（新的 queue + 新的 _run_agent 调用）
+    # 第二轮（新的 queue + 新的 run_agent 调用）
     queue2 = EventQueue()
-    await executor._run_agent(
-        conv_id=CONV_ID, task_id="t2", call_context=MagicMock(),
-        query="第二轮", original_body={}, event_queue=queue2,
+    await executor.run_agent(
+        _make_turn_ctx(queue2, task_id="t2"),
+        query="第二轮",
+        original_body={},
         cascade_result=None,
     )
     planning2 = _extract_planning_contents(_drain_queue(queue2))
@@ -132,8 +147,8 @@ async def test_each_run_agent_invocation_starts_step_counter_from_one(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_step_counter_continues_within_single_run_agent(monkeypatch):
-    """同一次 _run_agent 内的多 tool 应延续计数（Task B 已验，这里做回归保护）。"""
+async def test_step_counter_continues_within_singlerun_agent(monkeypatch):
+    """同一次 run_agent 内的多 tool 应延续计数（Task B 已验，这里做回归保护）。"""
     executor = _make_executor()
 
     async def fake_agent_stream(**kwargs):
@@ -150,9 +165,11 @@ async def test_step_counter_continues_within_single_run_agent(monkeypatch):
     monkeypatch.setattr("orchestrator.executor.agent_stream", fake_agent_stream)
 
     queue = EventQueue()
-    await executor._run_agent(
-        conv_id=CONV_ID, task_id="t", call_context=MagicMock(),
-        query="x", original_body={}, event_queue=queue, cascade_result=None,
+    await executor.run_agent(
+        _make_turn_ctx(queue),
+        query="x",
+        original_body={},
+        cascade_result=None,
     )
     planning = _extract_planning_contents(_drain_queue(queue))
     assert len(planning) == 3
@@ -183,9 +200,11 @@ async def test_default_step_counter_does_not_leak_across_calls(monkeypatch):
     # 连续跑 5 次，每次都不传 step_counter
     for i in range(5):
         queue = EventQueue()
-        await executor._run_agent(
-            conv_id=CONV_ID, task_id=f"t{i}", call_context=MagicMock(),
-            query="x", original_body={}, event_queue=queue, cascade_result=None,
+        await executor.run_agent(
+            _make_turn_ctx(queue, task_id=f"t{i}"),
+            query="x",
+            original_body={},
+            cascade_result=None,
             # 注意：不显式传 step_counter，用默认值
         )
         planning = _extract_planning_contents(_drain_queue(queue))
@@ -221,16 +240,20 @@ async def test_frames_are_isolated_per_turn(monkeypatch):
     monkeypatch.setattr("orchestrator.executor.agent_stream", varying_stream)
 
     queue1 = EventQueue()
-    await executor._run_agent(
-        conv_id=CONV_ID, task_id="t1", call_context=MagicMock(),
-        query="q1", original_body={}, event_queue=queue1, cascade_result=None,
+    await executor.run_agent(
+        _make_turn_ctx(queue1, task_id="t1"),
+        query="q1",
+        original_body={},
+        cascade_result=None,
     )
     events1 = _drain_queue(queue1)
 
     queue2 = EventQueue()
-    await executor._run_agent(
-        conv_id=CONV_ID, task_id="t2", call_context=MagicMock(),
-        query="q2", original_body={}, event_queue=queue2, cascade_result=None,
+    await executor.run_agent(
+        _make_turn_ctx(queue2, task_id="t2"),
+        query="q2",
+        original_body={},
+        cascade_result=None,
     )
     events2 = _drain_queue(queue2)
 
@@ -262,8 +285,10 @@ async def test_frames_are_isolated_per_turn(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_serialize_start_time_is_per_turn(monkeypatch):
-    """_serialize_event 的 start_time 由上层 generate() 决定；
-    模拟"上层对每轮独立计时"，execution_time 应从接近 0 开始。"""
+    """_serialize_event 的 start_time 由上层 generate() 决定。
+
+    模拟"上层对每轮独立计时"，execution_time 应从接近 0 开始。
+    """
     import time
 
     executor = _make_executor()
@@ -276,9 +301,11 @@ async def test_serialize_start_time_is_per_turn(monkeypatch):
 
     # 第一轮
     queue1 = EventQueue()
-    await executor._run_agent(
-        conv_id=CONV_ID, task_id="t1", call_context=MagicMock(),
-        query="q1", original_body={}, event_queue=queue1, cascade_result=None,
+    await executor.run_agent(
+        _make_turn_ctx(queue1, task_id="t1"),
+        query="q1",
+        original_body={},
+        cascade_result=None,
     )
     start1 = time.monotonic()
     times1 = []
@@ -294,9 +321,11 @@ async def test_serialize_start_time_is_per_turn(monkeypatch):
 
     # 第二轮
     queue2 = EventQueue()
-    await executor._run_agent(
-        conv_id=CONV_ID, task_id="t2", call_context=MagicMock(),
-        query="q2", original_body={}, event_queue=queue2, cascade_result=None,
+    await executor.run_agent(
+        _make_turn_ctx(queue2, task_id="t2"),
+        query="q2",
+        original_body={},
+        cascade_result=None,
     )
     start2 = time.monotonic()  # 新一轮的起点
     times2 = []
@@ -330,9 +359,11 @@ async def test_each_turn_has_own_conversation_markers(monkeypatch):
 
     for turn_idx in range(3):
         queue = EventQueue()
-        await executor._run_agent(
-            conv_id=CONV_ID, task_id=f"t{turn_idx}", call_context=MagicMock(),
-            query="x", original_body={}, event_queue=queue, cascade_result=None,
+        await executor.run_agent(
+            _make_turn_ctx(queue, task_id=f"t{turn_idx}"),
+            query="x",
+            original_body={},
+            cascade_result=None,
         )
         types_seen = set()
         for ev in _drain_queue(queue):

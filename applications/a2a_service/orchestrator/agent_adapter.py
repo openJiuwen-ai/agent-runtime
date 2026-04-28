@@ -1,3 +1,6 @@
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
 """
 Agent 事件 → A2A v1.0 事件转换。
 
@@ -104,7 +107,7 @@ def agent_event_to_a2a(
         return _completed(task_id, conv_id, event.content)
 
     # ── 其余事件统一 TaskArtifactUpdateEvent ──────────────────────────
-    EVENT_GROUPS = (
+    event_groups = (
         ConversationStartEvent, ConversationEndEvent,
         ThinkStartEvent, ThinkChunkEvent, ThinkEndEvent,
         TodoListStartEvent, TodoListItemEvent, TodoListEndEvent,
@@ -115,7 +118,7 @@ def agent_event_to_a2a(
         FinalAnswerStartEvent, SummaryEvent, FinalAnswerChunkEvent,
         ThoughtEvent, AnswerEvent,
     )
-    if isinstance(event, EVENT_GROUPS):
+    if isinstance(event, event_groups):
         data = event.model_dump()
         text = str(data.get("content", "") or "")
         return _artifact_event(task_id, conv_id, _build_artifact(text, data))

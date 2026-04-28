@@ -1,3 +1,6 @@
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
 """
 response_wrapper 单测。
 
@@ -27,8 +30,10 @@ CONV_ID = "90d40c85-cca4-43fe-8e3f-9ad3717fb1b4"
 
 
 def test_agent_event_has_all_outer_fields():
-    """外层 7 个字段齐全：success / agent_id / conversation_id / output /
-    error / execution_time / custom_rsp_data。"""
+    """外层 7 个字段齐全。
+
+    success / agent_id / conversation_id / output / error / execution_time / custom_rsp_data。
+    """
     wrapped = wrap_agent_event(
         event_type="conversation_start",
         content="本轮对话开始",
@@ -50,8 +55,10 @@ def test_agent_event_has_all_outer_fields():
 
 
 def test_agent_event_has_all_inner_fields():
-    """内层 custom_rsp_data 6 字段齐全：data / event / content /
-    createdTime / latency / plugin。"""
+    """内层 custom_rsp_data 6 字段齐全。
+
+    data / event / content / createdTime / latency / plugin。
+    """
     wrapped = wrap_agent_event(
         event_type="think_start",
         content="准备进行步骤规划",
@@ -351,8 +358,10 @@ def test_workflow_event_has_no_output_error_error_code():
 
 
 def test_workflow_event_custom_rsp_data_has_no_content_createdtime_plugin():
-    """Pattern B 的 custom_rsp_data 只有 event + data 两个键，
-    不含 Pattern A 特有的 content / createdTime / latency / plugin。"""
+    """Pattern B 的 custom_rsp_data 只有 event + data 两个键。
+
+    不含 Pattern A 特有的 content / createdTime / latency / plugin。
+    """
     wrapped = wrap_workflow_event(
         event_kind="message",
         data={"node_type": "QA"},

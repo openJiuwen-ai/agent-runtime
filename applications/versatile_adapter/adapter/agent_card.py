@@ -1,3 +1,6 @@
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
 """
 VersatileAdapter A2A AgentCard（protobuf 类型，a2a-sdk 1.0.0-alpha.1）。
 """

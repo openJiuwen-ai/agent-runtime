@@ -1,3 +1,6 @@
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
 from __future__ import annotations
 
 from functools import lru_cache
@@ -6,6 +9,8 @@ from typing import Optional
 from urllib.parse import quote_plus
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from common.crypto import decrypt_config_value
 
 
 
@@ -52,12 +57,13 @@ class Settings(BaseSettings):
 
     # ── 日志 ────────────────────────────────────────────────────────────────
     log_level: Optional[str] = None
-    log_file: Optional[str] = None
+    log_dir: Optional[str] = None
 
     @property
     def redis_url(self) -> str:
         if self.redis_password:
-            pwd = quote_plus(self.redis_password)
+            plain = decrypt_config_value(self.redis_password) or ""
+            pwd = quote_plus(plain)
             return f"redis://:{pwd}@{self.redis_host}:{self.redis_port}/{self.redis_db}"
         return f"redis://{self.redis_host}:{self.redis_port}/{self.redis_db}"
 

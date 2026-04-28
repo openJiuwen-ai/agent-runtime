@@ -1,8 +1,13 @@
+#!/usr/bin/env python
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
 from __future__ import annotations
 
 import argparse
 import asyncio
 import glob
+import logging
 import os
 import sys
 import time
@@ -16,9 +21,10 @@ from urllib.parse import quote_plus
 
 import httpx
 
-PARENT_DIR = Path(__file__).resolve().parents[1]
-if str(PARENT_DIR) not in sys.path:
-    sys.path.insert(0, str(PARENT_DIR))
+# 本脚本位于 a2a_service/tools/simulate_router/，向上 2 级才是 a2a_service 根目录
+A2A_SERVICE_ROOT = Path(__file__).resolve().parents[2]
+if str(A2A_SERVICE_ROOT) not in sys.path:
+    sys.path.append(str(A2A_SERVICE_ROOT))
 
 from common.redis_client import RedisClient
 from orchestrator.user_router import _check_rate_limit
@@ -34,8 +40,19 @@ DEFAULT_PROJECT_ID = "demo"
 DEFAULT_TIMEOUT = 120.0
 
 
+# 该脚本属于命令行测试入口，需要将运行进度直接打印到控制台。
+# 这里通过 logging 模块输出（满足 G.LOG.02），并使用极简格式，避免对消息内容产生干扰。
+_LOGGER = logging.getLogger("a2a_service.flow_control_runner")
+if not _LOGGER.handlers:
+    _handler = logging.StreamHandler(stream=sys.stdout)
+    _handler.setFormatter(logging.Formatter("%(message)s"))
+    _LOGGER.addHandler(_handler)
+    _LOGGER.setLevel(logging.INFO)
+    _LOGGER.propagate = False
+
+
 def _echo(message: str) -> None:
-    print(message, flush=True)
+    _LOGGER.info("%s", message)
 
 
 @dataclass
@@ -166,7 +183,7 @@ class FlowControlTester:
         self.project_id = project_id
         self.agent_id = agent_id
         self.redis_url = redis_url
-        self.redis = Redis.from_url(redis_url, decode_responses=True)
+        self.redis = Redis.from_url(redis_url, decode_responses=True, protocol=2)
         self.session_limit = session_limit
         self.session_window = session_window
         self.global_limit = global_limit
@@ -238,7 +255,8 @@ class FlowControlTester:
     def global_key(self) -> str:
         return f"a2a_service:rate_limit:{self.agent_id}:global"
 
-    def task_mapping_key(self, conversation_id: str) -> str:
+    @staticmethod
+    def task_mapping_key(conversation_id: str) -> str:
         return f"session:{conversation_id}:a2a_task_id"
 
     def track(self, *conversation_ids: str) -> None:
@@ -325,7 +343,14 @@ class FlowControlTester:
         finally:
             await redis_client.disconnect()
         passed = all(fill_results) and not blocked_allowed and blocked_code == "100001"
-        return CaseResult("S01", passed, f"fill={fill_results}, new={blocked_allowed}, code={blocked_code}, msg={blocked_msg}")
+        return CaseResult(
+            "S01",
+            passed,
+            (
+                f"fill={fill_results}, new={blocked_allowed}, "
+                f"code={blocked_code}, msg={blocked_msg}"
+            ),
+        )
 
     async def case_s02(self) -> CaseResult:
         existing_conv = f"s02-old-{uuid.uuid4().hex[:8]}"
@@ -358,7 +383,11 @@ class FlowControlTester:
         return CaseResult(
             "S02",
             passed,
-            f"first={first_allowed}, fill={fill_results}, existing_again={existing_again_allowed}, session_limit={relaxed_session_limit}",
+            (
+                f"first={first_allowed}, fill={fill_results}, "
+                f"existing_again={existing_again_allowed}, "
+                f"session_limit={relaxed_session_limit}"
+            ),
         )
 
     async def case_r01(self) -> CaseResult:
@@ -367,8 +396,18 @@ class FlowControlTester:
         await self.post(conv, stream=False)
         status_code, body = await self.post(conv, stream=False)
         required = {"success", "error", "error_code", "conversation_id", "agent_id"}
-        passed = status_code == 429 and isinstance(body, dict) and required.issubset(body.keys()) and body.get("success") is False
-        return CaseResult("R01", passed, f"status={status_code}, keys={sorted(body.keys()) if isinstance(body, dict) else type(body).__name__}")
+        passed = (
+            status_code == 429
+            and isinstance(body, dict)
+            and required.issubset(body.keys())
+            and body.get("success") is False
+        )
+        body_keys = sorted(body.keys()) if isinstance(body, dict) else type(body).__name__
+        return CaseResult(
+            "R01",
+            passed,
+            f"status={status_code}, keys={body_keys}",
+        )
 
     async def case_r02(self) -> CaseResult:
         conv = f"r02-{uuid.uuid4().hex[:8]}"
@@ -462,7 +501,11 @@ class FlowControlTester:
         return CaseResult(
             "D03",
             passed,
-            f"wait={wait_seconds:.1f}s, global_cleared={old_members_cleared}, retry_allowed={retry_allowed}, code={blocked_code}, msg={blocked_msg}",
+            (
+                f"wait={wait_seconds:.1f}s, global_cleared={old_members_cleared}, "
+                f"retry_allowed={retry_allowed}, code={blocked_code}, "
+                f"msg={blocked_msg}"
+            ),
         )
 
     async def case_p01(self) -> CaseResult:
@@ -650,7 +693,7 @@ def _build_service_log_pattern(env_path: Path, env: dict[str, str]) -> str:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="One-click runner for flow control test cases.")
-    parser.add_argument("--env-file", default=str(Path(__file__).resolve().parents[1] / ".env"))
+    parser.add_argument("--env-file", default=str(Path(__file__).resolve().parents[2] / ".env"))
     parser.add_argument("--project-id", default=DEFAULT_PROJECT_ID)
     parser.add_argument("--agent-id", default="")
     parser.add_argument("--base-url", default="")

@@ -1,3 +1,6 @@
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
 """
 _StreamProcessor Phase 4 行为集成测试（agent-store-zhl/community/EDPAgent/agent.py
 和 agent-runtime/applications/a2a_service/agents/EDPAgent/agent.py 保持同步）。

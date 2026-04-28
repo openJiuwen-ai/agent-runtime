@@ -1,3 +1,6 @@
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
 """
 VersatileAdapterExecutor — 无 LLM 的 A2A 执行器（a2a-sdk 1.0.0-alpha.1）。
 

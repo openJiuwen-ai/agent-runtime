@@ -1,3 +1,6 @@
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
 """
 VersatileProxy — 通过 HTTP 流式调用 Versatile 低代码平台（NDJSON 协议）。
 """
@@ -57,8 +60,9 @@ class VersatileProxy:
     def _build_url(self, conv_id: str) -> str:
         return self._url_template.format(conversation_id=conv_id)
 
-    def _generate_curl_command(self, request: httpx.Request, body: bytes) -> str:
-        """生成 curl 命令用于调试"""
+    @staticmethod
+    def _generate_curl_command(request: httpx.Request, body: bytes) -> str:
+        """生成 curl 命令用于调试。"""
         cmd = f"curl -X {request.method} '{request.url}'"
         for key, value in request.headers.items():
             cmd += f" -H '{key}: {value}'"
@@ -71,10 +75,12 @@ class VersatileProxy:
         return cmd
 
     async def _log_request(self, request: httpx.Request) -> None:
-        """记录请求日志（生成 curl 命令）"""
+        """记录请求日志（生成 curl 命令）。"""
         body = await request.aread()
         curl = self._generate_curl_command(request, body)
-        logger.info(f"\n{'='*20} Proxy Request (Stream) Start {'='*20}\n{curl}\n{'='*20} Proxy Request (Stream) End {'='*20}")
+        banner_start = f"{'='*20} Proxy Request (Stream) Start {'='*20}"
+        banner_end = f"{'='*20} Proxy Request (Stream) End {'='*20}"
+        logger.info("\n{}\n{}\n{}", banner_start, curl, banner_end)
 
     async def dispatch_stream(
         self,
@@ -102,10 +108,23 @@ class VersatileProxy:
                 timeout=httpx.Timeout(self._timeout, read=None),
             ) as client:
                 # 构建请求对象用于日志
-                request = client.build_request("POST", url, json=body.get("custom_data", {}), headers=headers, params=params)
+                custom_body = body.get("custom_data", {})
+                request = client.build_request(
+                    "POST",
+                    url,
+                    json=custom_body,
+                    headers=headers,
+                    params=params,
+                )
                 await self._log_request(request)
-                
-                async with client.stream("POST", url, json=body.get("custom_data", {}), headers=headers, params=params) as response:
+
+                async with client.stream(
+                    "POST",
+                    url,
+                    json=custom_body,
+                    headers=headers,
+                    params=params,
+                ) as response:
                     logger.info(f"[VersatileProxy] --- Proxy Response (Stream): {response.status_code} ---")
                     logger.debug(f"[VersatileProxy] Response Headers: {dict(response.headers)}")
                     response.raise_for_status()

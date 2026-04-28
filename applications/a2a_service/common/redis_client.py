@@ -1,3 +1,6 @@
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
 """
 异步 Redis 客户端（redis-py asyncio）。
 """
@@ -5,6 +8,7 @@ from __future__ import annotations
 
 import json
 from typing import Any, Optional
+from urllib.parse import urlsplit, urlunsplit
 
 from loguru import logger
 from redis.asyncio import Redis
@@ -17,6 +21,7 @@ end
 return 0
 """
 
+
 class RedisClient:
     """轻量 Redis 封装，仅暴露项目用到的操作。"""
 
@@ -24,9 +29,19 @@ class RedisClient:
         self._client: Optional[Redis] = None
 
     async def connect(self, url: str) -> None:
-        self._client = Redis.from_url(url, decode_responses=True)
+        self._client = Redis.from_url(url, decode_responses=True, protocol=2)
         await self._client.ping()
-        logger.info(f"[Redis] 已连接：{url}")
+        safe_url = url
+        parsed = urlsplit(url)
+        if parsed.password is not None:
+            username = parsed.username or ""
+            host = parsed.hostname or ""
+            if host and ":" in host and not host.startswith("["):
+                host = f"[{host}]"
+            port = f":{parsed.port}" if parsed.port is not None else ""
+            masked_netloc = f"{username}:@{host}{port}"
+            safe_url = urlunsplit((parsed.scheme, masked_netloc, parsed.path, parsed.query, parsed.fragment))
+        logger.info(f"[Redis] 已连接：{safe_url}")
 
     async def disconnect(self) -> None:
         if self._client:

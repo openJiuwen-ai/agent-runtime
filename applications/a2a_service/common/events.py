@@ -1,3 +1,6 @@
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
 """
 EDPAgent 事件协议（与 A2A SDK 完全解耦）。
 

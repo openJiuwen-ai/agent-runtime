@@ -1,7 +1,10 @@
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
 """
 Phase 5 回放集成测试：模拟"买理财"抓包的核心序列，端到端验证输出。
 
-链路：mock agent_stream → Executor._run_agent → EventQueue → _serialize_event
+链路：mock agent_stream → Executor.run_agent → EventQueue → _serialize_event
       → 拿到完整 SSE 帧列表 → 逐帧断言
 
 这个测试覆盖 Phase 1-4 的所有关键修改：
@@ -15,6 +18,7 @@ Phase 5 回放集成测试：模拟"买理财"抓包的核心序列，端到端�
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock
 
@@ -41,7 +45,7 @@ from common.events import (
     TodoStartEvent,
     TodoStatusEvent,
 )
-from orchestrator.executor import Executor
+from orchestrator.executor import Executor, _TurnContext
 from orchestrator.user_router import _serialize_event
 
 
@@ -58,6 +62,15 @@ def _make_executor() -> Executor:
     return Executor(va_client=va_client, redis=redis, task_store=task_store)
 
 
+def _make_turn_ctx(queue: EventQueue, *, task_id: str = "t") -> _TurnContext:
+    return _TurnContext(
+        conv_id=CONV_ID,
+        task_id=task_id,
+        call_context=MagicMock(),
+        event_queue=queue,
+    )
+
+
 def _drain_queue(queue: EventQueue) -> list:
     """从 EventQueue 内部抽出所有 enqueue 过的 event。"""
     inner = getattr(queue, "_queue", None) or getattr(queue, "queue", None)
@@ -67,8 +80,8 @@ def _drain_queue(queue: EventQueue) -> list:
     try:
         while True:
             events.append(inner.get_nowait())
-    except Exception:
-        pass
+    except asyncio.QueueEmpty:
+        return events
     return events
 
 
@@ -163,13 +176,10 @@ async def test_replay_simple_buy_wealth_end_to_end(simple_buy_wealth_stream):
     """完整回放：验证总帧数、事件顺序、关键字段。"""
     executor = _make_executor()
     queue = EventQueue()
-    await executor._run_agent(
-        conv_id=CONV_ID,
-        task_id="task-1",
-        call_context=MagicMock(),
+    await executor.run_agent(
+        _make_turn_ctx(queue, task_id="task-1"),
         query="我要买理财",
         original_body={},
-        event_queue=queue,
         cascade_result=None,
     )
 
@@ -203,9 +213,11 @@ async def test_all_frames_are_pattern_a(simple_buy_wealth_stream):
     """这个场景无 Versatile 调用，所有帧都应是 Pattern A（含 output/error）。"""
     executor = _make_executor()
     queue = EventQueue()
-    await executor._run_agent(
-        conv_id=CONV_ID, task_id="t", call_context=MagicMock(),
-        query="x", original_body={}, event_queue=queue, cascade_result=None,
+    await executor.run_agent(
+        _make_turn_ctx(queue),
+        query="x",
+        original_body={},
+        cascade_result=None,
     )
     frames = _collect_serialized_frames(queue)
     for f in frames:
@@ -222,9 +234,11 @@ async def test_all_frames_have_numeric_execution_time(simple_buy_wealth_stream):
     """对齐 spec §2.3.3：所有 agent event 的 execution_time 都是数字（含 think_chunk）。"""
     executor = _make_executor()
     queue = EventQueue()
-    await executor._run_agent(
-        conv_id=CONV_ID, task_id="t", call_context=MagicMock(),
-        query="x", original_body={}, event_queue=queue, cascade_result=None,
+    await executor.run_agent(
+        _make_turn_ctx(queue),
+        query="x",
+        original_body={},
+        cascade_result=None,
     )
     frames = _collect_serialized_frames(queue)
 
@@ -241,9 +255,11 @@ async def test_planning_execution_process_has_error_code(simple_buy_wealth_strea
     """决策 2 抓包对齐：planning_execution_process 独有 error_code 字段。"""
     executor = _make_executor()
     queue = EventQueue()
-    await executor._run_agent(
-        conv_id=CONV_ID, task_id="t", call_context=MagicMock(),
-        query="x", original_body={}, event_queue=queue, cascade_result=None,
+    await executor.run_agent(
+        _make_turn_ctx(queue),
+        query="x",
+        original_body={},
+        cascade_result=None,
     )
     frames = _collect_serialized_frames(queue)
 
@@ -262,9 +278,11 @@ async def test_planning_execution_process_has_error_code(simple_buy_wealth_strea
 async def test_todolist_item_content_has_html_br(simple_buy_wealth_stream):
     executor = _make_executor()
     queue = EventQueue()
-    await executor._run_agent(
-        conv_id=CONV_ID, task_id="t", call_context=MagicMock(),
-        query="x", original_body={}, event_queue=queue, cascade_result=None,
+    await executor.run_agent(
+        _make_turn_ctx(queue),
+        query="x",
+        original_body={},
+        cascade_result=None,
     )
     frames = _collect_serialized_frames(queue)
     for f in frames:
@@ -276,9 +294,11 @@ async def test_todolist_item_content_has_html_br(simple_buy_wealth_stream):
 async def test_latency_and_plugin_always_empty_string(simple_buy_wealth_stream):
     executor = _make_executor()
     queue = EventQueue()
-    await executor._run_agent(
-        conv_id=CONV_ID, task_id="t", call_context=MagicMock(),
-        query="x", original_body={}, event_queue=queue, cascade_result=None,
+    await executor.run_agent(
+        _make_turn_ctx(queue),
+        query="x",
+        original_body={},
+        cascade_result=None,
     )
     frames = _collect_serialized_frames(queue)
     tool_events = {"tool_start", "tool_status", "tool_end"}
@@ -297,9 +317,11 @@ async def test_planning_step_counter_matches_tool_count(simple_buy_wealth_stream
     """单一 ToolStartEvent 应仅触发 1 条 planning_execution_process(步骤 1)。"""
     executor = _make_executor()
     queue = EventQueue()
-    await executor._run_agent(
-        conv_id=CONV_ID, task_id="t", call_context=MagicMock(),
-        query="x", original_body={}, event_queue=queue, cascade_result=None,
+    await executor.run_agent(
+        _make_turn_ctx(queue),
+        query="x",
+        original_body={},
+        cascade_result=None,
     )
     frames = _collect_serialized_frames(queue)
 
@@ -335,9 +357,11 @@ async def test_multi_tool_step_counter_monotonic(monkeypatch):
 
     executor = _make_executor()
     queue = EventQueue()
-    await executor._run_agent(
-        conv_id=CONV_ID, task_id="t", call_context=MagicMock(),
-        query="x", original_body={}, event_queue=queue, cascade_result=None,
+    await executor.run_agent(
+        _make_turn_ctx(queue),
+        query="x",
+        original_body={},
+        cascade_result=None,
     )
     frames = _collect_serialized_frames(queue)
 
@@ -379,9 +403,11 @@ async def test_summary_stream_equals_final_answer_chunk(monkeypatch):
 
     executor = _make_executor()
     queue = EventQueue()
-    await executor._run_agent(
-        conv_id=CONV_ID, task_id="t", call_context=MagicMock(),
-        query="x", original_body={}, event_queue=queue, cascade_result=None,
+    await executor.run_agent(
+        _make_turn_ctx(queue),
+        query="x",
+        original_body={},
+        cascade_result=None,
     )
     frames = _collect_serialized_frames(queue)
 
@@ -413,9 +439,11 @@ async def test_execution_time_monotonic_across_frames(simple_buy_wealth_stream):
     queue = EventQueue()
 
     # 跑一遍后 frames 已产生；但 _serialize_event 的 start_time 是参数
-    await executor._run_agent(
-        conv_id=CONV_ID, task_id="t", call_context=MagicMock(),
-        query="x", original_body={}, event_queue=queue, cascade_result=None,
+    await executor.run_agent(
+        _make_turn_ctx(queue),
+        query="x",
+        original_body={},
+        cascade_result=None,
     )
 
     # 用真实 monotonic 序列化
@@ -462,10 +490,11 @@ async def test_out_of_scope_scenario_emits_minimal_frames(monkeypatch):
 
     executor = _make_executor()
     queue = EventQueue()
-    await executor._run_agent(
-        conv_id=CONV_ID, task_id="t", call_context=MagicMock(),
-        query="我要赚i豆", original_body={},
-        event_queue=queue, cascade_result=None,
+    await executor.run_agent(
+        _make_turn_ctx(queue),
+        query="我要赚i豆",
+        original_body={},
+        cascade_result=None,
     )
     frames = _collect_serialized_frames(queue)
     event_seq = [f["custom_rsp_data"]["event"] for f in frames]
