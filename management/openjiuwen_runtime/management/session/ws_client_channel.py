@@ -28,11 +28,6 @@ logger = get_logger(__name__)
 __all__ = ("WSServiceMessageChannel", "serialize_request_payload")
 
 
-async def _await_cancel_future(fut: asyncio.Future[Any]) -> None:
-    """在 asyncio.wait 中与 Event.wait 并列等待 cancel Future。"""
-    await fut
-
-
 PayloadBuilder = Callable[[Any], str]
 
 
@@ -292,32 +287,15 @@ class WSServiceMessageChannel:
             await on_request_complete(rid)
             raise
 
-        # 等下行 is_completed 置位；与 cancel/关链 竞态用 wait 而非短轮询
-        t_ev = asyncio.create_task(ev.wait())
-        t_cancel = asyncio.create_task(_await_cancel_future(wrapper.cancel))
-        try:
-            _done, pending = await asyncio.wait(
-                {t_ev, t_cancel},
-                return_when=asyncio.FIRST_COMPLETED,
+        # Access.send_message 在 finally 里 set cancel；必须等 Access 迭代结束（含终态 yield）再 on_request_complete。
+        # 曾与 recv 的 ev、以及 wrapper.cancel 做 asyncio.wait(FIRST_COMPLETED)：若 cancel 先于终端帧入队/消费完成，
+        # 会立刻 on_request_complete 并 pop _by_request，recv 仍在写队列 → 表现为尾包丢失。
+        await wrapper.cancel
+        if not ev.is_set():
+            logger.info(
+                "WSS 未观察到终端下行即结束(cancel/超时/关闭): request_id=%s",
+                rid,
             )
-            for t in pending:
-                t.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await t
-        except Exception:
-            t_ev.cancel()
-            t_cancel.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await t_ev
-            with contextlib.suppress(asyncio.CancelledError):
-                await t_cancel
-            raise
-        # recv 在首帧 is_completed 即 set ev，此时分片刚入队，Access 可能尚未从 response_queue 取到终态。
-        # 若马上 on_request_complete → _by_request 被 pop，会与消费端竞态并截断尾包。须等 Access 在 finally 里 set cancel。
-        if ev.is_set() and not wrapper.cancel.done():
-            await wrapper.cancel
-        if not ev.is_set() and (self._closed or wrapper.cancel.done()):
-            logger.info("WSS 本请求在终态前结束(取消/关闭): request_id=%s", rid)
         await on_request_complete(rid)
         self._request_done.pop(rid, None)
 
