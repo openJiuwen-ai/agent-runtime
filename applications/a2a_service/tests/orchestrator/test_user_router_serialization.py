@@ -326,7 +326,6 @@ def test_serialize_other_agent_event_has_no_error_code():
 
 
 def test_serialize_workflow_message_event():
-    """对齐 AgentEngine：custom_rsp_data 直接是上游节点 dict，无 {event, data} 二级。"""
     node_data = {
         "text": '{"SPTRANSRETCODE":"00009","INSTRUCTIONKEY":"GET_GRAY_INFO"}',
         "index": "0",
@@ -344,12 +343,10 @@ def test_serialize_workflow_message_event():
     assert "output" not in parsed
     assert "error" not in parsed
     assert "error_code" not in parsed
-    # custom_rsp_data 直接是节点 dict
-    assert parsed["custom_rsp_data"]["node_type"] == "QA"
-    assert "event" not in parsed["custom_rsp_data"]
-    assert "data" not in parsed["custom_rsp_data"]
-    # text 里的内嵌 JSON 字符串应该原样保留
-    inner = json.loads(parsed["custom_rsp_data"]["text"])
+    assert parsed["custom_rsp_data"]["event"] == "message"
+    assert parsed["custom_rsp_data"]["data"]["node_type"] == "QA"
+    # data.text 里的内嵌 JSON 字符串应该原样保留
+    inner = json.loads(parsed["custom_rsp_data"]["data"]["text"])
     assert inner["INSTRUCTIONKEY"] == "GET_GRAY_INFO"
 
 

@@ -117,38 +117,41 @@ def wrap_agent_event(
 
 
 def wrap_workflow_event(
+    event_kind: str,
     data: dict[str, Any],
     *,
     agent_id: str,
     conversation_id: str,
     elapsed: float,
 ) -> dict[str, Any]:
-    """包装从 Versatile 转发的工作流节点事件，对齐 AgentEngine 实际帧形态。
+    """包装从 Versatile 转发的工作流节点事件。
 
-    AgentEngine ``default_transform_response`` 把上游 Versatile 整段 chunk dict
-    （扁平形态，含 ``node_type / node_name / text / data / summary`` 等）**直接**
-    塞进 ``custom_rsp_data``，无 ``{event, data}`` 二级包装、无六件套。
-
-    与 Pattern A（agent event）的差异：
-      - 外层无 ``output / error / error_code`` 字段
-      - ``custom_rsp_data`` 直接是节点 dict，不再嵌套
+    workflow event 比 agent event 字段更少：**无 output / error / error_code 字段**，
+    custom_rsp_data 只含 event 和 data 两个键。
 
     Args:
-        data: Versatile 节点 dict。``event_kind=="end"`` 的帧由
-            ``user_router._extract_event_meta`` 上游过滤，不再传入此函数。
+        event_kind: "message" 或 "end"。
+        data: Versatile 节点数据（含 text / node_id / node_type / node_name /
+            workflow_id / summary? / is_finished? 等字段）。event_kind=="end"
+            时通常为空 dict。
         agent_id / conversation_id: 同 agent event。
         elapsed: 累计秒数。
 
     Returns:
-        可 json.dumps 的 dict，对齐 ``AgentEngine/src/core/
-        enterprise_dispatch_respmod.py:default_transform_response``。
+        可 json.dumps 的 dict，格式对齐规范文档 §3.3（workflow event）。
     """
+    if event_kind not in ("message", "end"):
+        # 防御：只接受观察到的两个值；其他值也允许透传，避免阻塞将来协议扩展
+        pass
     return {
         "success": True,
         "agent_id": agent_id,
         "conversation_id": conversation_id,
         "execution_time": elapsed,
-        "custom_rsp_data": data if isinstance(data, dict) else {},
+        "custom_rsp_data": {
+            "event": event_kind,
+            "data": data,
+        },
     }
 
 
