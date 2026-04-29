@@ -116,15 +116,27 @@ class Tag(StrEnum):
     TAG_VERSATILE_END = "VERSATILE_END"
 
 
+class ResultEnum(StrEnum):
+    SUCCESS = "success"
+    FAILED = "failed"
+
+
 class Extra(BaseModel):
     tag: Optional[Tag] = None
     cost: Optional[int] = None
     source: Optional[str] = None
     user: Optional[str] = None
-    result: Optional[str] = None
+    result: Optional[ResultEnum] = None
     terminal: Optional[str] = None
 
-
+class Level(StrEnum):
+    CRITICAL = "CRITICAL"
+    ERROR = "ERROR"
+    WARNING = "WARNING"
+    INFO = "INFO"
+    DEBUG = "DEBUG"
+	
+	
 @dataclass(frozen=True)
 class LogContext:
     trace_id: str
@@ -142,7 +154,7 @@ class HttpRequestTagContext:
     user_id: str
 
 
-def to_logger(level: int | str = logging.INFO, message: Any = "", extra: Extra | None = None):
+def to_logger(level: str = Level.INFO, message: Any = "", extra: Extra | None = None):
     if extra is not None:
         if isinstance(message, BaseModel):
             message = message.model_dump_json(exclude_none=True)
@@ -150,7 +162,16 @@ def to_logger(level: int | str = logging.INFO, message: Any = "", extra: Extra |
             logger.log(level, message)
     else:
         logger.log(level, message)
+		
 
+def get_real_ip(request: Request):
+    x_forwarded_for = request.headers.get("x-forwarded-for")
+    if x_forwarded_for:
+        client_ip = x_forwarded_for.split(",")[0].strip()
+    else:
+        client_ip = request.client.host
+    return client_ip
+	
 
 def current_local_time() -> str:
     # 生成毫秒精度本地时间字符串，显式指定 UTC 时区后转换为本地时区以避免时区歧义

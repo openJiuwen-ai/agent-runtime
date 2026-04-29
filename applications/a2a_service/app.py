@@ -42,6 +42,31 @@ from tools.simulate_router.simulate import router as simulate_router
 
 os.environ['NO_PROXY'] = 'localhost,127.0.0.1'
 
+def dynamic_format(record):
+    if len(record["extra"]) > 0 and "tag" not in record["extra"]:
+        return "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> \x01 " \
+               "<level>{level.name:<8}</level> \x01 " \
+               "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> \x01 " \
+               "<cyan>{extra[trace_id]}</cyan> \x01 " \
+               "<cyan>{extra[agent_id]}</cyan> \x01 " \
+               "<cyan>{extra[conversation_id]}</cyan> \x01 " \
+               "<level>{message}</level>\n"
+    elif "tag" in record["extra"]:  # tag类日志
+        return "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> \x01 " \
+               "<level>{level.name:<8}</level> \x01 " \
+               "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> \x01 " \
+               "<cyan>{extra[trace_id]}</cyan> \x01 " \
+               "<cyan>{extra[agent_id]}</cyan> \x01 " \
+               "<cyan>{extra[conversation_id]}</cyan> \x01 " \
+               "<cyan>{extra[tag]}</cyan> \x01 " \
+               "<cyan>{extra[cost]}</cyan> \x01 " \
+               "<level>{message}</level>\n"
+    else:
+        return "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> \x01 " \
+               "<level>{level.name:<8}</level> \x01 " \
+               "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> \x01 " \
+               "<level>{message}</level>\n"
+
 
 def setup_logging() -> None:
     settings = get_settings()
@@ -65,45 +90,14 @@ def setup_logging() -> None:
         audit_log = f"{log_dir}{os.sep}/audit_{os.getpid()}.log"
         logger.add(
             log_file_with_pid,
-            level="INFO",
+            level=settings.log_level.upper() if settings.log_level else "INFO",
             rotation="20 MB",
             retention="7 days",
             compression="gz",
-            format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> \x01 "
-                   "<level>{level: <8}</level> \x01 "
-                   "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> \x01 "
-                   "<level>{message}</level>",
-            filter=lambda record: len(record["extra"]) == 0
+            format=dynamic_format,
+            filter=lambda record: len(record["extra"]) == 0 or "source" not in record["extra"]
         )
 
-        logger.add(
-            log_file_with_pid,
-            level="INFO",
-            format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> \x01 "
-                   "<level>{level: <8}</level> \x01 "
-                   "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> \x01 "
-                   "<cyan>{extra[trace_id]}</cyan> \x01 "
-                   "<cyan>{extra[agent_id]}</cyan> \x01 "
-                   "<cyan>{extra[conversation_id]}</cyan> \x01 "
-                   "<level>{message}</level>",
-            filter=lambda record: len(record["extra"]) > 0 and "tag" not in record["extra"] and "source" not in record[
-                "extra"]
-        )
-
-        logger.add(
-            log_file_with_pid,
-            level="INFO",
-            format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> \x01 "
-                   "<level>{level: <8}</level> \x01 "
-                   "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> \x01 "
-                   "<cyan>{extra[trace_id]}</cyan> \x01 "
-                   "<cyan>{extra[agent_id]}</cyan> \x01 "
-                   "<cyan>{extra[conversation_id]}</cyan> \x01 "
-                   "<cyan>{extra[tag]}</cyan> \x01 "
-                   "<cyan>{extra[cost]}</cyan> \x01 "
-                   "<level>{message}</level>",
-            filter=lambda record: "tag" in record["extra"]
-        )
         logger.add(
             audit_log,
             level="INFO",

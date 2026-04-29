@@ -43,86 +43,89 @@ class VersatileAdapterExecutor(AgentExecutor):  # noqa: F821
     ) -> None:
         task_id = context.task_id
         conv_id = context.context_id
+        trace_id = (context.task_id or uuid.uuid4().hex)
 
-        logger.info(
-            f"[VersatileAdapter] execute：conv_id={conv_id}, task_id={task_id}"
-        )
+        with logger.contextualize(trace_id=trace_id, task_id=task_id, conv_id=conv_id):
 
-        # 先发送 Task 事件（a2a-sdk 1.0.0 要求）
-        # 注：wyt 在 backup_enhancement 分支删除了这段，原因未说明；
-        # 已记录在 docs/issue-wyt-merge-decisions.md V-1 待核实 a2a-sdk 版本与协议要求。
-        from a2a.types.a2a_pb2 import Task, TaskStatus, TaskState
-        user_message = context.message
-        if task_id and conv_id and user_message:
-            await event_queue.enqueue_event(
-                Task(
-                    id=task_id,
-                    context_id=conv_id,
-                    status=TaskStatus(state=TaskState.TASK_STATE_SUBMITTED),
-                    history=[user_message],
-                )
+            logger.info(
+                f"[VersatileAdapter] execute：conv_id={conv_id}, task_id={task_id}"
             )
-
-        updater = TaskUpdater(event_queue, task_id, conv_id)
-
-        # ── 直接使用传过来的请求头和请求体 ────────────────────────────────
-        input_data = self._build_first_input(context.message)
-        versatile_input = input_data.get("body", {})
-        headers = input_data.get("headers", {})
-        params = input_data.get("params", {})
-        logger.info(f"[VersatileAdapter] 接收请求：conv_id={conv_id}, task_id={task_id}")
-        logger.debug(f"[VersatileAdapter] 请求头：{headers}")
-        logger.debug(f"[VersatileAdapter] 请求体：{versatile_input}")
-        logger.debug(f"[VersatileAdapter] 请求参数：{params}")
-
-        await updater.start_work()
-
-        # ── 纯透传调用 VersatileProxy，流式推送 ─────────────────────────────
-        # 用"前一个 chunk"模式：延迟一次，确保最后一个 chunk 以 last_chunk=True 发送且不重复
-        prev_part: Part | None = None
-
-        try:
-            async for chunk in self._proxy.dispatch_stream(
-                versatile_input, conv_id, headers, params
-            ):
+    
+            # 先发送 Task 事件（a2a-sdk 1.0.0 要求）
+            # 注：wyt 在 backup_enhancement 分支删除了这段，原因未说明；
+            # 已记录在 docs/issue-wyt-merge-decisions.md V-1 待核实 a2a-sdk 版本与协议要求。
+            from a2a.types.a2a_pb2 import Task, TaskStatus, TaskState
+            user_message = context.message
+            if task_id and conv_id and user_message:
+                await event_queue.enqueue_event(
+                    Task(
+                        id=task_id,
+                        context_id=conv_id,
+                        status=TaskStatus(state=TaskState.TASK_STATE_SUBMITTED),
+                        history=[user_message],
+                    )
+                )
+    
+            updater = TaskUpdater(event_queue, task_id, conv_id)
+    
+            # ── 直接使用传过来的请求头和请求体 ────────────────────────────────
+            input_data = self._build_first_input(context.message)
+            versatile_input = input_data.get("body", {})
+            headers = input_data.get("headers", {})
+            params = input_data.get("params", {})
+            logger.info(f"[VersatileAdapter] 接收请求：conv_id={conv_id}, task_id={task_id}")
+            logger.debug(f"[VersatileAdapter] 请求头：{headers}")
+            logger.debug(f"[VersatileAdapter] 请求体：{versatile_input}")
+            logger.debug(f"[VersatileAdapter] 请求参数：{params}")
+    
+            await updater.start_work()
+    
+            # ── 纯透传调用 VersatileProxy，流式推送 ─────────────────────────────
+            # 用"前一个 chunk"模式：延迟一次，确保最后一个 chunk 以 last_chunk=True 发送且不重复
+            prev_part: Part | None = None
+    
+            try:
+                async for chunk in self._proxy.dispatch_stream(
+                    versatile_input, conv_id, headers, params
+                ):
+                    if prev_part is not None:
+                        await updater.add_artifact(
+                            parts=[prev_part],
+                            artifact_id=str(uuid.uuid4()),
+                            last_chunk=False,
+                        )
+    
+                    data_part = Part()
+                    proto_value = ProtoValue()
+                    ParseDict(chunk, proto_value.struct_value)
+                    data_part.data.CopyFrom(proto_value)
+                    prev_part = data_part
+    
+                # ── 流结束：将最后一个 chunk 以 last_chunk=True 发出 ─────────────────
                 if prev_part is not None:
                     await updater.add_artifact(
                         parts=[prev_part],
                         artifact_id=str(uuid.uuid4()),
-                        last_chunk=False,
+                        last_chunk=True,
                     )
-
-                data_part = Part()
-                proto_value = ProtoValue()
-                ParseDict(chunk, proto_value.struct_value)
-                data_part.data.CopyFrom(proto_value)
-                prev_part = data_part
-
-            # ── 流结束：将最后一个 chunk 以 last_chunk=True 发出 ─────────────────
-            if prev_part is not None:
-                await updater.add_artifact(
-                    parts=[prev_part],
-                    artifact_id=str(uuid.uuid4()),
-                    last_chunk=True,
+                else:
+                    text_part = Part()
+                    text_part.text = "流结束"
+                    await updater.add_artifact(
+                        parts=[text_part],
+                        artifact_id=str(uuid.uuid4()),
+                        last_chunk=True,
+                    )
+    
+                logger.info(
+                    f"[VersatileAdapter] 流结束：conv_id={conv_id}, task_id={task_id}"
                 )
-            else:
-                text_part = Part()
-                text_part.text = "流结束"
-                await updater.add_artifact(
-                    parts=[text_part],
-                    artifact_id=str(uuid.uuid4()),
-                    last_chunk=True,
+            except Exception as e:
+                logger.exception(
+                    f"[VersatileAdapter] proxy 流异常：conv_id={conv_id}, task_id={task_id}"
                 )
-
-            logger.info(
-                f"[VersatileAdapter] 流结束：conv_id={conv_id}, task_id={task_id}"
-            )
-        except Exception as e:
-            logger.exception(
-                f"[VersatileAdapter] proxy 流异常：conv_id={conv_id}, task_id={task_id}"
-            )
-            await updater.failed(message=str(e))
-            return
+                await updater.failed(message=str(e))
+                return
 
     @override
     async def cancel(

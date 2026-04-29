@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import socket
 import time
 import uuid
 from typing import Any, Optional, Tuple
@@ -60,6 +61,7 @@ from common.logger import (
     build_http_request_tag_context,
     build_http_trace,
     to_logger,
+    get_real_ip, Level, ResultEnum
 )
 from common.response_wrapper import wrap_agent_event, wrap_workflow_event
 from config import get_settings
@@ -684,7 +686,6 @@ async def dispatch(
                                 ),
                                 extra=Extra(tag=Tag.TAG_HTTP_REQUEST_END, cost=max(duration_ms, 0)),
                             )
-
                 return StreamingResponse(
                     limited_generate(),
                     media_type="text/event-stream",
@@ -765,6 +766,10 @@ async def dispatch(
                 ),
                 extra=Extra(tag=Tag.TAG_HTTP_REQUEST_END, cost=max(duration_ms, 0)),
             )
+            to_logger(Level.INFO, user_query,
+                      Extra(source=get_real_ip(request), user=body.get("userId", ""), result=ResultEnum.SUCCESS,
+                            terminal=socket.gethostbyname(socket.gethostname()))
+                      )
             return JSONResponse(content=probe_response)
 
         # ── Task 管理：conv_id → task_id 映射 ─────────────────────────────────
@@ -892,6 +897,17 @@ async def dispatch(
                             logger.debug(
                                 f"[Router] 客户端断连，取消后台任务：conv={conversation_id}"
                             )
+                            to_logger(Level.INFO, user_query,
+                                      Extra(source=get_real_ip(request), user=body.get("userId", ""),
+                                            result=ResultEnum.FAILED,
+                                            terminal=socket.gethostbyname(socket.gethostname()))
+                                      )
+                        else:
+                            to_logger(Level.INFO, user_query,
+                                      Extra(source=get_real_ip(request), user=body.get("userId", ""),
+                                            result=ResultEnum.SUCCESS,
+                                            terminal=socket.gethostbyname(socket.gethostname()))
+                                      )
 
                         duration_ms = int(time.time() * 1000) - request_started_ms
                         to_logger(
@@ -907,7 +923,6 @@ async def dispatch(
                             ),
                             extra=Extra(tag=Tag.TAG_HTTP_REQUEST_END, cost=max(duration_ms, 0)),
                         )
-
             return StreamingResponse(
                 generate(),
                 media_type="text/event-stream",
@@ -965,4 +980,8 @@ async def dispatch(
             ),
             extra=Extra(tag=Tag.TAG_HTTP_REQUEST_END, cost=max(duration_ms, 0)),
         )
+        to_logger(Level.INFO, user_query,
+                  Extra(source=get_real_ip(request), user=body.get("userId", ""), result=ResultEnum.SUCCESS,
+                        terminal=socket.gethostbyname(socket.gethostname()))
+                  )
         return JSONResponse(content=response_content)
