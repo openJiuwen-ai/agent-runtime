@@ -61,6 +61,10 @@ class K8sServiceHandler:
         nfs_server: Optional[str] = None,     # NFS 服务器地址
         nfs_path: Optional[str] = None,       # NFS 共享路径
         nfs_mount_path: Optional[str] = None, # 容器内挂载路径
+        cpu_request: str = "500m",
+        memory_request: str = "1Gi",
+        cpu_limit: Optional[str] = None,
+        memory_limit: Optional[str] = None,
     ):
         if not image:
             raise ValueError("image is required")
@@ -86,6 +90,11 @@ class K8sServiceHandler:
         self._nfs_server = nfs_server
         self._nfs_path = nfs_path
         self._nfs_mount_path = nfs_mount_path
+
+        self._cpu_request = cpu_request
+        self._memory_request = memory_request
+        self._cpu_limit = cpu_limit if cpu_limit is not None else cpu_request
+        self._memory_limit = memory_limit if memory_limit is not None else memory_request
 
         self._pod_name: Optional[str] = None
         self._config_loaded = False
@@ -153,6 +162,17 @@ class K8sServiceHandler:
                 )
             )
 
+        container_resources = client.V1ResourceRequirements(
+            requests={
+                "cpu": self._cpu_request,
+                "memory": self._memory_request,
+            },
+            limits={
+                "cpu": self._cpu_limit,
+                "memory": self._memory_limit,
+            },
+        )
+
         container = client.V1Container(
             name=self._container_name,
             image=self._image,
@@ -160,6 +180,7 @@ class K8sServiceHandler:
             ports=[client.V1ContainerPort(name=self._port_name, container_port=self._container_port)],
             env=env_list or None,
             volume_mounts=volume_mounts or None,
+            resources=container_resources,
             readiness_probe=client.V1Probe(
                 tcp_socket=client.V1TCPSocketAction(port=self._container_port),
                 initial_delay_seconds=self._readiness_initial_delay,
@@ -189,7 +210,15 @@ class K8sServiceHandler:
         logger.info(
             "K8s 创建 Pod: name=%s namespace=%s image=%s", pod_name, self._namespace, self._image
         )
-        logger.debug("Pod 规约: container=%s port=%s", self._container_name, self._container_port)
+        logger.debug(
+            "Pod 规约: container=%s port=%s resources(cpu/mem)=requests[%s/%s] limits[%s/%s]",
+            self._container_name,
+            self._container_port,
+            self._cpu_request,
+            self._memory_request,
+            self._cpu_limit,
+            self._memory_limit,
+        )
 
         api_client = client.ApiClient()
         try:
