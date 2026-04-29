@@ -446,7 +446,6 @@ def _serialize_event(event, *, agent_id: str, conversation_id: str, start_time: 
         )
     else:
         wrapped = wrap_workflow_event(
-            event_kind=meta["type"],
             data=meta["data"],
             agent_id=agent_id,
             conversation_id=conversation_id,

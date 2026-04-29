@@ -307,7 +307,14 @@ def test_wrapper_accepts_brand_new_event_type():
 # ════════════════════════════════════════════════════════════════════
 
 
-def test_workflow_message_event_shape():
+def test_workflow_event_custom_rsp_data_is_node_data_directly():
+    """对齐 AgentEngine default_transform_response：custom_rsp_data 直接是上游节点 dict。
+
+    AgentEngine/src/core/enterprise_dispatch_respmod.py:99-104：
+        custom_rsp_data = json.loads(response_text)  # 整段上游 chunk
+        result["custom_rsp_data"] = custom_rsp_data
+    上游 chunk 是扁平 dict（含 node_type/node_name/text 等），不再包 {event, data}。
+    """
     node_data = {
         "text": '{"SPTRANSRETCODE":"00009"}',
         "index": "0",
@@ -317,7 +324,6 @@ def test_workflow_message_event_shape():
         "workflow_id": "b2c3d4e5",
     }
     wrapped = wrap_workflow_event(
-        event_kind="message",
         data=node_data,
         agent_id=AGENT_ID,
         conversation_id=CONV_ID,
@@ -327,26 +333,41 @@ def test_workflow_message_event_shape():
     assert wrapped["agent_id"] == AGENT_ID
     assert wrapped["conversation_id"] == CONV_ID
     assert wrapped["execution_time"] == 7.537
-    assert wrapped["custom_rsp_data"]["event"] == "message"
-    assert wrapped["custom_rsp_data"]["data"] == node_data
+    # custom_rsp_data 直接是节点数据
+    assert wrapped["custom_rsp_data"] == node_data
+    # 不再有 {event, data} 两级包装
+    assert "event" not in wrapped["custom_rsp_data"]
+    assert "data" not in wrapped["custom_rsp_data"]
 
 
-def test_workflow_end_event_shape():
+def test_workflow_event_handles_start_node():
+    """mock_workflow_server_v5.py:295 的 Start 节点形态。"""
+    node = {"node_type": "Start", "node_name": "StartNode", "conversation_id": "c1"}
     wrapped = wrap_workflow_event(
-        event_kind="end",
-        data={},
+        data=node,
         agent_id=AGENT_ID,
         conversation_id=CONV_ID,
-        elapsed=7.54,
+        elapsed=0.05,
     )
-    assert wrapped["custom_rsp_data"]["event"] == "end"
-    assert wrapped["custom_rsp_data"]["data"] == {}
+    assert wrapped["custom_rsp_data"] == node
 
 
-def test_workflow_event_has_no_output_error_error_code():
-    """Pattern B 外层不含 output / error / error_code。"""
+def test_workflow_event_handles_llm_node():
+    """mock_workflow_server_v5.py:306 的 LLM 节点形态（带 text）。"""
+    node = {"text": "正在分析您的资金情况...", "node_type": "LLM", "node_name": "LLM_NODE"}
     wrapped = wrap_workflow_event(
-        event_kind="message",
+        data=node,
+        agent_id=AGENT_ID,
+        conversation_id=CONV_ID,
+        elapsed=0.5,
+    )
+    assert wrapped["custom_rsp_data"] == node
+    assert wrapped["custom_rsp_data"]["text"] == "正在分析您的资金情况..."
+
+
+def test_workflow_event_outer_has_no_output_error_error_code():
+    """对齐 AgentEngine：外层无 output / error / error_code。"""
+    wrapped = wrap_workflow_event(
         data={"node_type": "QA"},
         agent_id=AGENT_ID,
         conversation_id=CONV_ID,
@@ -357,20 +378,29 @@ def test_workflow_event_has_no_output_error_error_code():
     assert "error_code" not in wrapped
 
 
-def test_workflow_event_custom_rsp_data_has_no_content_createdtime_plugin():
-    """Pattern B 的 custom_rsp_data 只有 event + data 两个键。
-
-    不含 Pattern A 特有的 content / createdTime / latency / plugin。
-    """
+def test_workflow_event_outer_has_only_5_keys():
+    """对齐 AgentEngine：外层固定 5 键。"""
     wrapped = wrap_workflow_event(
-        event_kind="message",
         data={"node_type": "QA"},
         agent_id=AGENT_ID,
         conversation_id=CONV_ID,
         elapsed=0.1,
     )
-    inner = wrapped["custom_rsp_data"]
-    assert set(inner.keys()) == {"event", "data"}
+    assert set(wrapped.keys()) == {
+        "success", "agent_id", "conversation_id",
+        "execution_time", "custom_rsp_data",
+    }
+
+
+def test_workflow_event_non_dict_data_falls_back_to_empty_dict():
+    """防御：data 不是 dict 时（不会发生但有备无患），custom_rsp_data 兜底为 {}。"""
+    wrapped = wrap_workflow_event(
+        data=None,  # type: ignore[arg-type]
+        agent_id=AGENT_ID,
+        conversation_id=CONV_ID,
+        elapsed=0.1,
+    )
+    assert wrapped["custom_rsp_data"] == {}
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -417,10 +447,9 @@ def test_wrapped_agent_event_json_round_trip():
 
 
 def test_wrapped_workflow_event_handles_nested_json_string_in_text():
-    """Pattern B 的 data.text 是转义过的 JSON 字符串，应保持原样。"""
+    """workflow 节点的 text 是转义过的 JSON 字符串，应保持原样。"""
     inner_json = '{"SPTRANSRETCODE":"00009","INSTRUCTIONKEY":"GET_GRAY_INFO"}'
     wrapped = wrap_workflow_event(
-        event_kind="message",
         data={
             "text": inner_json,
             "node_type": "QA",
@@ -434,10 +463,10 @@ def test_wrapped_workflow_event_handles_nested_json_string_in_text():
     )
     s = json.dumps(wrapped, ensure_ascii=False)
     reparsed = json.loads(s)
-    # 内嵌 JSON 仍然是字符串（前端需要二次解析）
-    assert reparsed["custom_rsp_data"]["data"]["text"] == inner_json
+    # text 直接挂在 custom_rsp_data 下，不再嵌套 data 一级
+    assert reparsed["custom_rsp_data"]["text"] == inner_json
     assert (
-        json.loads(reparsed["custom_rsp_data"]["data"]["text"])["INSTRUCTIONKEY"]
+        json.loads(reparsed["custom_rsp_data"]["text"])["INSTRUCTIONKEY"]
         == "GET_GRAY_INFO"
     )
 
@@ -511,21 +540,24 @@ def test_matches_capture_planning_execution_process():
 
 
 def test_matches_capture_workflow_message():
-    """抓包 Pattern B 节点帧。"""
+    """对齐 AgentEngine default_transform_response 的输出帧形态。
+
+    custom_rsp_data 直接是上游节点 dict，无 {event, data} 二级。
+    """
     inner_text = (
         '{"SPTRANSRETCODE":"00009","INSTRUCTIONKEY":"GET_GRAY_INFO",'
         '"CURRENTNODE":"理财-课题版灰度策略查询"}'
     )
+    node_data = {
+        "text": inner_text,
+        "index": "0",
+        "node_id": "node_1231231231231",
+        "node_type": "QA",
+        "node_name": "问答_获取灰度策略",
+        "workflow_id": "b2c3d4e5-f6a7-8901-bcde-f23456789012",
+    }
     wrapped = wrap_workflow_event(
-        event_kind="message",
-        data={
-            "text": inner_text,
-            "index": "0",
-            "node_id": "node_1231231231231",
-            "node_type": "QA",
-            "node_name": "问答_获取灰度策略",
-            "workflow_id": "b2c3d4e5-f6a7-8901-bcde-f23456789012",
-        },
+        data=node_data,
         agent_id=AGENT_ID,
         conversation_id=CONV_ID,
         elapsed=7.537642,
@@ -535,15 +567,5 @@ def test_matches_capture_workflow_message():
         "agent_id": AGENT_ID,
         "conversation_id": CONV_ID,
         "execution_time": 7.537642,
-        "custom_rsp_data": {
-            "event": "message",
-            "data": {
-                "text": inner_text,
-                "index": "0",
-                "node_id": "node_1231231231231",
-                "node_type": "QA",
-                "node_name": "问答_获取灰度策略",
-                "workflow_id": "b2c3d4e5-f6a7-8901-bcde-f23456789012",
-            },
-        },
+        "custom_rsp_data": node_data,
     }
