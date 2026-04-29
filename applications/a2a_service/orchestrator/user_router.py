@@ -462,10 +462,21 @@ def _build_request(
     user_query: str,
     body: dict,
     params: Optional[dict] = None,
+    headers: Optional[dict] = None,
 ) -> SendMessageRequest:
-    """将 Versatile 格式请求体转为 A2A SendMessageRequest。"""
+    """将 Versatile 格式请求体转为 A2A SendMessageRequest。
+
+    headers 须随每轮请求透传给 executor，否则下游 versatile_adapter
+    收不到 cust-token / x-user-id 等关键头（见 issue 2026-04-28）。
+    """
     body_struct = Struct()
-    body_struct.update({"body": body, "params": params or {}})
+    body_struct.update(
+        {
+            "body": body,
+            "params": params or {},
+            "headers": headers or {},
+        }
+    )
 
     body_value = Value()
     body_value.struct_value.CopyFrom(body_struct)
@@ -775,7 +786,9 @@ async def dispatch(
                     f"[Router] 并发首轮，复用 task_id={task_id} for conv={conversation_id}"
                 )
 
-        send_request = _build_request(conversation_id, user_query, body, params)
+        send_request = _build_request(
+            conversation_id, user_query, body, params, headers=headers
+        )
         ctx = RequestContext(
             call_context=call_context,
             request=send_request,

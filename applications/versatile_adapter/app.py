@@ -83,6 +83,12 @@ async def lifespan(fastapi_app: FastAPI):
     versatile_proxy = VersatileProxy(
         url_template=settings.versatile_url_template,
         timeout=settings.versatile_timeout,
+        headers_template=settings.versatile_headers_template,
+    )
+
+    logger.info(
+        f"[VersatileAdapter] Versatile headers template keys: "
+        f"{sorted(settings.versatile_headers_template.keys())}"
     )
 
     executor = VersatileAdapterExecutor(
