@@ -27,6 +27,25 @@ _CONVERSATION_ID_CTX: contextvars.ContextVar[str] = contextvars.ContextVar(
     "applications_logger_conversation_id", default="unknown"
 )
 
+# 审计日志中需要脱敏的敏感字段名（统一使用小写匹配）
+_SENSITIVE_KEYS = {
+    "api_key", "apikey", "token", "access_token", "refresh_token",
+    "password", "secret", "authorization", "cust-token",
+}
+
+
+def _mask_sensitive_fields(payload: Any) -> Any:
+    """对 dict / list 结构做递归脱敏，命中 _SENSITIVE_KEYS 的字段值替换为 '***'。"""
+    if isinstance(payload, dict):
+        return {
+            k: ("***" if isinstance(k, str) and k.lower() in _SENSITIVE_KEYS
+                else _mask_sensitive_fields(v))
+            for k, v in payload.items()
+        }
+    if isinstance(payload, list):
+        return [_mask_sensitive_fields(v) for v in payload]
+    return payload
+
 
 class TagTrace(BaseModel):
     id: Optional[str] = None # trace_id
@@ -198,11 +217,16 @@ async def build_http_request_tag_context(
             if "application/json" in content_type:
                 try:
                     request_body_snapshot = json.loads(raw_body_text)
+                    request_body_snapshot = _mask_sensitive_fields(request_body_snapshot)
                 except Exception:
+                    logger.exception("[logger] 请求 body JSON 解析失败")
                     request_body_snapshot = {"raw_body": raw_body_text}
+                    request_body_snapshot = _mask_sensitive_fields(request_body_snapshot)
             else:
                 request_body_snapshot = {"raw_body": raw_body_text}
+                request_body_snapshot = _mask_sensitive_fields(request_body_snapshot)
     except Exception:
+        logger.exception("[logger] 请求 body 读取失败")
         request_body_snapshot = {"raw_body": "<unavailable>"}
 
     user_id = extract_header_value(
