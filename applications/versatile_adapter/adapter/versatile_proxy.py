@@ -79,6 +79,7 @@ class VersatileProxy:
                 json_body = _json.loads(body.decode('utf-8'))
                 cmd += f" -d '{_json.dumps(json_body, ensure_ascii=False)}'"
             except Exception:
+                logger.debug("[VersatileProxy] body 非 JSON，curl 命令使用 raw 字节回退")
                 cmd += f" -d '{body.decode('utf-8', errors='replace')}'"
         return cmd
 
@@ -147,7 +148,7 @@ class VersatileProxy:
                         )
                     response.raise_for_status()
                     async for line in response.aiter_lines():
-                        logger.info(f"[VersatileProxy] proxy received line: {line}]")
+                        logger.debug(f"[VersatileProxy] proxy received line: {line}]")
                         line = line.strip()
                         if not line:
                             continue
@@ -170,5 +171,7 @@ class VersatileProxy:
                 f"[VersatileProxy] HTTPStatusError 已记录："
                 f"{e.response.status_code} {url}"
             )
+            raise
         except httpx.RequestError as e:
             logger.error(f"[VersatileProxy] 请求错误：{e}")
+            raise

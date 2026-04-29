@@ -72,6 +72,12 @@ def setup_logging() -> None:
 
     logger.configure(extra={"trace_id": "default_trace_id"})
 
+    logger.info(
+        f"[VersatileAdapter] 日志初始化完成 "
+        f"level={settings.adapter_log_level or 'INFO'} "
+        f"file={settings.adapter_log_file or '-'}"
+    )
+
 
 setup_logging()
 
@@ -129,6 +135,7 @@ app = FastAPI(
 @app.get("/health", tags=["Health"])
 async def health_check():
     """服务健康检查"""
+    logger.debug("[VersatileAdapter] health check")
     return {
         "status": "healthy",
         "service": "VersatileAdapter",

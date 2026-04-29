@@ -81,41 +81,48 @@ class VersatileAdapterExecutor(AgentExecutor):  # noqa: F821
         # 用"前一个 chunk"模式：延迟一次，确保最后一个 chunk 以 last_chunk=True 发送且不重复
         prev_part: Part | None = None
 
-        async for chunk in self._proxy.dispatch_stream(
-            versatile_input, conv_id, headers, params
-        ):
+        try:
+            async for chunk in self._proxy.dispatch_stream(
+                versatile_input, conv_id, headers, params
+            ):
+                if prev_part is not None:
+                    await updater.add_artifact(
+                        parts=[prev_part],
+                        artifact_id=str(uuid.uuid4()),
+                        last_chunk=False,
+                    )
+
+                data_part = Part()
+                proto_value = ProtoValue()
+                ParseDict(chunk, proto_value.struct_value)
+                data_part.data.CopyFrom(proto_value)
+                prev_part = data_part
+
+            # ── 流结束：将最后一个 chunk 以 last_chunk=True 发出 ─────────────────
             if prev_part is not None:
                 await updater.add_artifact(
                     parts=[prev_part],
                     artifact_id=str(uuid.uuid4()),
-                    last_chunk=False,
+                    last_chunk=True,
+                )
+            else:
+                text_part = Part()
+                text_part.text = "流结束"
+                await updater.add_artifact(
+                    parts=[text_part],
+                    artifact_id=str(uuid.uuid4()),
+                    last_chunk=True,
                 )
 
-            data_part = Part()
-            proto_value = ProtoValue()
-            ParseDict(chunk, proto_value.struct_value)
-            data_part.data.CopyFrom(proto_value)
-            prev_part = data_part
-
-        # ── 流结束：将最后一个 chunk 以 last_chunk=True 发出 ─────────────────
-        if prev_part is not None:
-            await updater.add_artifact(
-                parts=[prev_part],
-                artifact_id=str(uuid.uuid4()),
-                last_chunk=True,
+            logger.info(
+                f"[VersatileAdapter] 流结束：conv_id={conv_id}, task_id={task_id}"
             )
-        else:
-            text_part = Part()
-            text_part.text = "流结束"
-            await updater.add_artifact(
-                parts=[text_part],
-                artifact_id=str(uuid.uuid4()),
-                last_chunk=True,
+        except Exception as e:
+            logger.exception(
+                f"[VersatileAdapter] proxy 流异常：conv_id={conv_id}, task_id={task_id}"
             )
-
-        logger.info(
-            f"[VersatileAdapter] 流结束：conv_id={conv_id}, task_id={task_id}"
-        )
+            await updater.failed(message=str(e))
+            return
 
     @override
     async def cancel(
@@ -141,4 +148,8 @@ class VersatileAdapterExecutor(AgentExecutor):  # noqa: F821
             if part.WhichOneof("content") == "text" and part.text:
                 text = part.text
                 break
+        if not text:
+            logger.warning(
+                "[VersatileAdapter] message 中未提取到 data/text part，使用空查询兜底"
+            )
         return {"body": {"input": {"query": text}}, "headers": {}, "params": {}}
