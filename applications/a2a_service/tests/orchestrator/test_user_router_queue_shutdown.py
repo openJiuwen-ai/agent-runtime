@@ -160,3 +160,24 @@ def test_log_outbound_sse_payload_byte_length_handles_multibyte(loguru_records):
     assert info
     expected_bytes = len(payload.encode("utf-8"))
     assert f"bytes={expected_bytes}" in info[-1]["message"]
+
+
+def test_log_outbound_sse_includes_full_payload(loguru_records):
+    """SSE 出栈日志应该把整段 payload 原文也打出来，便于现场排障对照前端帧形态。
+
+    现状（仅打 kind+bytes）排障时只能看到字节数，看不到 custom_rsp_data 实际内容，
+    workflow event shape 类问题需要靠抓包或推断。把 payload 一并打到 INFO 行即可。
+    """
+    payload = '{"custom_rsp_data":{"event":"message","data":{"node_type":"Start"}}}'
+    log_outbound_sse(
+        conversation_id="conv-x",
+        sequence=7,
+        payload=payload,
+        event_kind="TaskArtifactUpdateEvent",
+    )
+    info = [r for r in loguru_records if r["level"].name == "INFO"]
+    assert info, "expected at least one INFO record"
+    msg = info[-1]["message"]
+    assert f"payload={payload}" in msg, (
+        f"INFO message should contain full payload; got: {msg!r}"
+    )

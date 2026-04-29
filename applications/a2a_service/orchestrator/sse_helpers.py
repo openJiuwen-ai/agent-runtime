@@ -45,9 +45,10 @@ def log_outbound_sse(
     日志确认 Runtime 实际向北向推送了哪些事件、字节数与顺序。
     """
     logger.info(
-        "[Router] → SSE conv={} #{} kind={} bytes={}",
+        "[Router] → SSE conv={} #{} kind={} bytes={} payload={}",
         conversation_id,
         sequence,
         event_kind,
         len(payload.encode("utf-8")),
+        payload,
     )
