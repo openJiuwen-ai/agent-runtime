@@ -11,13 +11,20 @@ from pydantic import Json
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-# 调用 Versatile 时无条件注入的默认请求头（JSON 字符串，会被 Json[...] 字段解析）。
-# 用途：注入 Cookie:AGENT_SID 等 Session 鉴权头，让依赖 Session 的工作流（FUND_BETA 等）
-# 即使上游不传 Cookie 也能跑通（issue 2026-04-28-versatile-adapter-missing-auth-headers）。
-# 暂不暴露到 .env：硬编码默认值；如需覆盖可通过环境变量 VERSATILE_HEADERS_TEMPLATE 临时设置。
+# 调用 Versatile 时默认注入的请求头（JSON 字符串，会被 Json[...] 字段解析）。
+#
+# 默认值仅放跨环境通用的非鉴权头（Accept / stream），**不含 Cookie**：
+# 把环境特定的 Session token（如 ``AGENT_SID=...``）钉死在代码里，跨环境共用同
+# 一份代码时会触发 VA "URL.project_id ↔ token.project_id mismatch" 的 403
+# （c1a46ad 引入、随后由本次重构纠正）。
+#
+# 需要 Cookie 的部署，在 `.env` 或环境变量里设置 ``VERSATILE_HEADERS_TEMPLATE``
+# 显式注入：
+#
+#     VERSATILE_HEADERS_TEMPLATE={"Cookie":"AGENT_SID=<your_token>",\
+#         "Accept":"application/json, text/event-stream","stream":"true"}
 _DEFAULT_VERSATILE_HEADERS_TEMPLATE = (
-    '{"Cookie":"AGENT_SID=testUser|0",'
-    '"Accept":"application/json, text/event-stream",'
+    '{"Accept":"application/json, text/event-stream",'
     '"stream":"true"}'
 )
 

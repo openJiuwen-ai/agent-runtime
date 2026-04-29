@@ -396,7 +396,26 @@ def _extract_event_meta(event) -> Optional[dict]:
                 "data": {},
                 "plugin": "",
             }
-        # 其他 TaskStatusUpdateEvent（FAILED 等）：当前不向前端推送
+        # FAILED 事件映射为 interrupt_start agent 帧，对齐 AgentEngine：
+        # 顶层 success=False + error=<msg>，custom_rsp_data.event=interrupt_start。
+        # 错误描述放在 status.message.parts[0].text，由 Executor 在 VA 上游报错或
+        # execute() 异常时填充。
+        if event.status and event.status.state == TASK_STATE_FAILED:
+            content = ""
+            if event.status.message:
+                for part in event.status.message.parts:
+                    if part.WhichOneof("content") == "text":
+                        content = part.text or ""
+                        break
+            return {
+                "kind": "agent",
+                "type": "interrupt_start",
+                "content": content,
+                "data": {},
+                "plugin": "",
+                "success": False,
+                "error": content,
+            }
         return None
 
     # 未识别类型：不推送
@@ -422,6 +441,8 @@ def _serialize_event(event, *, agent_id: str, conversation_id: str, start_time: 
             conversation_id=conversation_id,
             elapsed=elapsed,
             plugin=meta.get("plugin", ""),
+            success=meta.get("success", True),
+            error=meta.get("error", ""),
         )
     else:
         wrapped = wrap_workflow_event(

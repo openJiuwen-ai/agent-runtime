@@ -92,11 +92,20 @@ def _build_completed_status_event(text: str) -> TaskStatusUpdateEvent:
     )
 
 
-def _build_failed_status_event() -> TaskStatusUpdateEvent:
+def _build_failed_status_event(text: str = "") -> TaskStatusUpdateEvent:
+    """模拟 VA 上游报错 / 内部异常 → TaskStatusUpdateEvent(FAILED)。
+
+    错误描述放在 status.message.parts[0].text，由 _extract_event_meta 转成
+    interrupt_start 帧的 content/error 字段。
+    """
+    status = TaskStatus(state=TASK_STATE_FAILED)
+    if text:
+        msg = Message(role=ROLE_AGENT, message_id="m-failed", parts=[Part(text=text)])
+        status = TaskStatus(state=TASK_STATE_FAILED, message=msg)
     return TaskStatusUpdateEvent(
         task_id=TASK_ID,
         context_id=CONV_ID,
-        status=TaskStatus(state=TASK_STATE_FAILED),
+        status=status,
     )
 
 
@@ -229,10 +238,35 @@ def test_extract_completed_becomes_final_answer_end():
     }
 
 
-def test_extract_failed_returns_none():
-    """FAILED 状态不向前端推送（当前行为）。"""
+def test_extract_failed_with_message_becomes_interrupt_start():
+    """FAILED 状态映射为 interrupt_start agent 事件，对齐 AgentEngine。
+
+    AgentEngine 用 ``custom_rsp_data.event=interrupt_start`` 配合顶层
+    ``success: false`` + ``error: <msg>`` 把上游报错或内部异常告诉前端，本框架对齐。
+    """
+    ev = _build_failed_status_event("执行报错，错误码：103104")
+    meta = _extract_event_meta(ev)
+    assert meta == {
+        "kind": "agent",
+        "type": "interrupt_start",
+        "content": "执行报错，错误码：103104",
+        "data": {},
+        "plugin": "",
+        "success": False,
+        "error": "执行报错，错误码：103104",
+    }
+
+
+def test_extract_failed_without_message_still_becomes_interrupt_start():
+    """FAILED 没带 message 时也要产出 interrupt_start，content/error 留空字符串。"""
     ev = _build_failed_status_event()
-    assert _extract_event_meta(ev) is None
+    meta = _extract_event_meta(ev)
+    assert meta is not None
+    assert meta["kind"] == "agent"
+    assert meta["type"] == "interrupt_start"
+    assert meta["success"] is False
+    assert meta["content"] == ""
+    assert meta["error"] == ""
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -355,13 +389,27 @@ def test_serialize_completed_status_becomes_final_answer_end_frame():
     assert parsed["custom_rsp_data"]["content"] == "任务完成"
 
 
-def test_serialize_failed_status_returns_none():
-    """FAILED 事件不产出 SSE 帧。"""
-    ev = _build_failed_status_event()
+def test_serialize_failed_status_becomes_interrupt_start_frame():
+    """FAILED 事件产出 success:false + custom_rsp_data.event=interrupt_start，
+    与 AgentEngine planning_agent.build_planning_stream_payload 的 interrupt_start 形态对齐。
+    """
+    ev = _build_failed_status_event("执行报错，错误码：103104，错误信息：xxx")
     payload = _serialize_event(
         ev, agent_id=AGENT_ID, conversation_id=CONV_ID, start_time=0.0,
     )
-    assert payload is None
+    assert payload is not None
+    parsed = json.loads(payload)
+    # 顶层带 success:false + error
+    assert parsed["success"] is False
+    assert parsed["agent_id"] == AGENT_ID
+    assert parsed["conversation_id"] == CONV_ID
+    assert parsed["output"] == ""
+    assert parsed["error"] == "执行报错，错误码：103104，错误信息：xxx"
+    # custom_rsp_data 形态对齐 agent event
+    assert parsed["custom_rsp_data"]["event"] == "interrupt_start"
+    assert parsed["custom_rsp_data"]["content"] == "执行报错，错误码：103104，错误信息：xxx"
+    assert parsed["custom_rsp_data"]["data"] == {}
+    assert parsed["custom_rsp_data"]["plugin"] == ""
 
 
 def test_serialize_monotonic_elapsed():

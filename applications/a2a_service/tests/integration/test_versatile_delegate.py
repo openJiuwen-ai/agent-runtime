@@ -24,7 +24,13 @@ from a2a.server.events import EventQueue
 from a2a.types.a2a_pb2 import (
     Artifact,
     Part,
+    TASK_STATE_FAILED,
+    TASK_STATE_INPUT_REQUIRED,
+    TASK_STATE_WORKING,
+    Task,
     TaskArtifactUpdateEvent,
+    TaskStatus,
+    TaskStatusUpdateEvent,
 )
 from google.protobuf.json_format import MessageToDict
 from google.protobuf.struct_pb2 import Struct, Value
@@ -87,6 +93,24 @@ def _va_artifact_event(node_data: dict) -> TaskArtifactUpdateEvent:
         task_id="va-task-1",
         context_id=CONV_ID,
         artifact=Artifact(artifact_id=f"va-art-{id(node_data)}", parts=[_data_part(wrapped)]),
+        last_chunk=False,
+    )
+
+
+def _va_terminal_event(event_kind: str, err_data: dict) -> TaskArtifactUpdateEvent:
+    """构造 VA 返回的非 message 类终态帧（event=error / event=exception）。
+
+    对齐 AgentEngine versatile_proxy.py:336 的 ``event=='exception'`` 终态识别，
+    以及实际 VA 网关上抓到的 ``event=='error'`` 帧形态。
+    """
+    wrapped = {"event": event_kind, "data": err_data}
+    return TaskArtifactUpdateEvent(
+        task_id="va-task-1",
+        context_id=CONV_ID,
+        artifact=Artifact(
+            artifact_id=f"va-art-{event_kind}-{id(err_data)}",
+            parts=[_data_part(wrapped)],
+        ),
         last_chunk=False,
     )
 
@@ -445,3 +469,202 @@ async def test_delegate_without_end_node_does_not_cascade(monkeypatch):
 
     # 只调一次（没有 cascade）
     assert call_count[0] == 1
+
+
+# ════════════════════════════════════════════════════════════════════
+# 测试 4：VA 上游报错（event=error / event=exception）→ 终态 FAILED
+# ════════════════════════════════════════════════════════════════════
+# 对齐 AgentEngine：上游 event=exception 视为 workflow_complete 终态
+# （versatile_proxy.py:336）；agent-runtime 这里把 event in (error, exception)
+# 都识别为终态，避免错误后无 End node → INPUT_REQUIRED → 续轮锁死 conv_id。
+
+
+def _make_executor_with_real_task(
+    va_events: list[TaskArtifactUpdateEvent],
+    *,
+    initial_va_task_id: str = "stale-va-task-id",
+) -> tuple[Executor, Task]:
+    """变体：task_store.get 返回真实 Task，验证 save 时落了哪些字段。
+
+    Returns: (executor, task) — 直接拿 task 看最终持久化状态。
+    """
+    fake_task = Task(
+        id=TASK_ID,
+        context_id=CONV_ID,
+        status=TaskStatus(state=TASK_STATE_WORKING),
+    )
+    fake_task.metadata.update({"va_task_id": initial_va_task_id})
+
+    redis = MagicMock()
+    redis.get_json = AsyncMock(return_value={
+        "headers": {},
+        "body": {
+            "input": {"query": "原始用户输入"},
+            "custom_data": {"inputs": {"query": "原始用户输入", "intent": ""}},
+            "stream": True,
+        },
+    })
+
+    va_client = MagicMock()
+    def mock_send_message(request):
+        return _async_iter([_wrap_as_stream_resp(e) for e in va_events])
+    va_client.send_message = mock_send_message
+
+    task_store = MagicMock()
+    task_store.get = AsyncMock(return_value=fake_task)
+    task_store.save = AsyncMock()
+
+    return Executor(va_client=va_client, redis=redis, task_store=task_store), fake_task
+
+
+@pytest.mark.asyncio
+async def test_va_error_event_marks_task_failed_and_clears_task_id(monkeypatch):
+    """VA 流出现 event=error 时：task 落 FAILED + va_task_id 清空，破解 conv_id 锁死。"""
+    err_msg = "执行报错，错误码：103104，错误信息：'NoneType' object has no attribute 'content'"
+    va_events = [_va_terminal_event("error", {"code": "103104", "message": err_msg})]
+    executor, task = _make_executor_with_real_task(va_events)
+
+    async def fake_agent_stream(**kwargs):
+        yield DelegateRequest(intent="查", task_description="查灰度")
+
+    monkeypatch.setattr("orchestrator.executor.agent_stream", fake_agent_stream)
+
+    queue = EventQueue()
+    await executor.run_agent(
+        _make_turn_ctx(queue),
+        query="x",
+        original_body={},
+        cascade_result=None,
+    )
+
+    # 至少一次 save 调用，最终状态是 FAILED，va_task_id 被清空
+    save_calls = executor._task_store.save.call_args_list
+    assert len(save_calls) >= 1
+    saved_task = save_calls[-1][0][0]
+    assert saved_task.status.state == TASK_STATE_FAILED
+    saved_meta = MessageToDict(saved_task.metadata)
+    assert saved_meta.get("va_task_id", "") == ""
+
+
+@pytest.mark.asyncio
+async def test_va_error_event_enqueues_failed_status_with_message(monkeypatch):
+    """VA 流出现 event=error 时：北向 enqueue TaskStatusUpdateEvent(FAILED) 并带错误描述。
+
+    user_router._extract_event_meta 会把 status.message.text 转为 interrupt_start.content。
+    """
+    err_msg = "执行报错，错误码：103104，错误信息：xxx"
+    va_events = [_va_terminal_event("error", {"code": "103104", "message": err_msg})]
+    executor, _ = _make_executor_with_real_task(va_events)
+
+    async def fake_agent_stream(**kwargs):
+        yield DelegateRequest(intent="查", task_description="查")
+
+    monkeypatch.setattr("orchestrator.executor.agent_stream", fake_agent_stream)
+
+    queue = EventQueue()
+    await executor.run_agent(
+        _make_turn_ctx(queue),
+        query="x",
+        original_body={},
+        cascade_result=None,
+    )
+
+    enqueued = _drain_queue(queue)
+    failed_events = [
+        e for e in enqueued
+        if isinstance(e, TaskStatusUpdateEvent)
+        and e.status and e.status.state == TASK_STATE_FAILED
+    ]
+    assert len(failed_events) == 1, f"期望 1 个 FAILED 事件，实际 {len(failed_events)} 个"
+    fe = failed_events[0]
+    assert fe.status.message, "FAILED 事件必须带 status.message 让前端拿到错误描述"
+    text_chunks = [
+        p.text for p in fe.status.message.parts
+        if p.WhichOneof("content") == "text"
+    ]
+    assert any(err_msg in t for t in text_chunks), (
+        f"FAILED 事件 message text 应含错误描述，实际为 {text_chunks!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_va_error_event_does_not_emit_input_required(monkeypatch):
+    """VA 流出现 event=error 时：不应再发 INPUT_REQUIRED（避免下次请求走续轮路径锁死 conv_id）。"""
+    va_events = [_va_terminal_event("error", {"code": "103104", "message": "错误"})]
+    executor, _ = _make_executor_with_real_task(va_events)
+
+    async def fake_agent_stream(**kwargs):
+        yield DelegateRequest(intent="查", task_description="查")
+
+    monkeypatch.setattr("orchestrator.executor.agent_stream", fake_agent_stream)
+
+    queue = EventQueue()
+    await executor.run_agent(
+        _make_turn_ctx(queue),
+        query="x",
+        original_body={},
+        cascade_result=None,
+    )
+
+    enqueued = _drain_queue(queue)
+    input_required = [
+        e for e in enqueued
+        if isinstance(e, TaskStatusUpdateEvent)
+        and e.status and e.status.state == TASK_STATE_INPUT_REQUIRED
+    ]
+    assert len(input_required) == 0, "VA 报错路径不应发出 INPUT_REQUIRED 状态事件"
+
+
+@pytest.mark.asyncio
+async def test_va_exception_event_also_treated_as_terminal(monkeypatch):
+    """VA 上游 event=exception（AgentEngine 已识别的另一种终态形态）也走 FAILED 路径。"""
+    va_events = [
+        _va_terminal_event("exception", {"message": "工作流执行抛出异常"}),
+    ]
+    executor, _ = _make_executor_with_real_task(va_events)
+
+    async def fake_agent_stream(**kwargs):
+        yield DelegateRequest(intent="查", task_description="查")
+
+    monkeypatch.setattr("orchestrator.executor.agent_stream", fake_agent_stream)
+
+    queue = EventQueue()
+    await executor.run_agent(
+        _make_turn_ctx(queue),
+        query="x",
+        original_body={},
+        cascade_result=None,
+    )
+
+    enqueued = _drain_queue(queue)
+    failed_events = [
+        e for e in enqueued
+        if isinstance(e, TaskStatusUpdateEvent)
+        and e.status and e.status.state == TASK_STATE_FAILED
+    ]
+    assert len(failed_events) == 1
+
+
+@pytest.mark.asyncio
+async def test_va_error_event_does_not_trigger_cascade(monkeypatch):
+    """VA 报错不应被当成 End node → 不该触发 cascade 续轮。"""
+    va_events = [_va_terminal_event("error", {"code": "103104", "message": "错"})]
+    executor, _ = _make_executor_with_real_task(va_events)
+
+    call_count = [0]
+
+    async def fake_agent_stream(**kwargs):
+        call_count[0] += 1
+        yield DelegateRequest(intent="查", task_description="查")
+
+    monkeypatch.setattr("orchestrator.executor.agent_stream", fake_agent_stream)
+
+    queue = EventQueue()
+    await executor.run_agent(
+        _make_turn_ctx(queue),
+        query="x",
+        original_body={},
+        cascade_result=None,
+    )
+
+    assert call_count[0] == 1, "VA 报错路径不应触发 cascade（agent_stream 不应被调用第二次）"

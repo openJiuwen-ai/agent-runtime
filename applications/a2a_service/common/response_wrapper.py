@@ -59,6 +59,8 @@ def wrap_agent_event(
     elapsed: float,
     created_time_ms: int | None = None,
     plugin: str = "",
+    success: bool = True,
+    error: str = "",
 ) -> dict[str, Any]:
     """包装 EDPAgent 内部事件（think / todolist / tool / interrupt / summary 等）。
 
@@ -74,6 +76,9 @@ def wrap_agent_event(
         elapsed: 本次 turn 累计耗时秒数（通常 `time.monotonic() - start`）。
         created_time_ms: 事件产生的 epoch 毫秒；默认取当前时间。
         plugin: 工具名（tool_* 事件专用），填入 custom_rsp_data.plugin；默认空串。
+        success: 顶层 ``success`` 字段。VA 上游报错或内部异常映射为 interrupt_start
+            帧时设为 False，对齐 AgentEngine planning_agent 的失败帧形态。
+        error: 顶层 ``error`` 字段。仅 success=False 时承载错误描述。
 
     Returns:
         可直接 json.dumps 的 dict，格式对齐规范文档 §4.4.3（agent event）。
@@ -82,11 +87,11 @@ def wrap_agent_event(
         "" if event_type in _EVENTS_WITH_EMPTY_EXECUTION_TIME else elapsed
     )
     wrapped: dict[str, Any] = {
-        "success": True,
+        "success": success,
         "agent_id": agent_id,
         "conversation_id": conversation_id,
         "output": "",
-        "error": "",
+        "error": error,
         "execution_time": exec_time,
         "custom_rsp_data": {
             "data": data or {},
