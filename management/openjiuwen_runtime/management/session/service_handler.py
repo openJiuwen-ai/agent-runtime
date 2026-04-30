@@ -31,14 +31,14 @@ class ServiceHandler(IServiceHandler):
     """单请求占 1 个服务并发；request_id 注册在 _by_request 供下行多路复用写回。"""
 
     def __init__(
-        self,
-        service_id: Optional[str] = None,
-        *,
-        total_concurrency: int = 200,
-        message_channel: IServiceMessageChannel,
-        response_parser: IResponseParser,
-        deploy_controller: Optional[IDeployController] = None,
-        generation: int = 0,
+            self,
+            service_id: Optional[str] = None,
+            *,
+            total_concurrency: int = 200,
+            message_channel: IServiceMessageChannel,
+            response_parser: IResponseParser,
+            deploy_controller: Optional[IDeployController] = None,
+            generation: int = 0,
     ) -> None:
         if total_concurrency <= 0:
             raise ValueError("total_concurrency must be positive")
@@ -95,7 +95,7 @@ class ServiceHandler(IServiceHandler):
         return self._pod_info
 
     def set_idle_pool_transition_hook(
-        self, hook: Optional[Callable[[str], Awaitable[None]]]
+            self, hook: Optional[Callable[[str], Awaitable[None]]]
     ) -> None:
         """由 ServiceManager 设置: 每次 inflight 归零后回调一次, 由 Manager 自行判断
         是否要 flush 已到期 session、是否要 arm service_ttl。"""
@@ -143,7 +143,8 @@ class ServiceHandler(IServiceHandler):
         ``WSServiceMessageChannel`` 等 ``IServiceMessageChannel`` 实现的业务上行入口。
         """
         await self._service_sem.acquire()
-        self._inflight += 1
+        session_concurrency = wrapper.session_request.session_concurrency
+        self._inflight += session_concurrency
         rid = wrapper.session_request.request_id
         if rid:
             self._by_request[rid] = wrapper
@@ -156,7 +157,7 @@ class ServiceHandler(IServiceHandler):
         )
 
         async def _complete(r: Optional[str]) -> None:
-            self._inflight = max(0, self._inflight - 1)
+            self._inflight = max(0, self._inflight - session_concurrency)
             self._service_sem.release()
             if r:
                 self._by_request.pop(r, None)
@@ -190,7 +191,7 @@ class ServiceHandler(IServiceHandler):
             raise
 
     async def dispatch_inbound_chunk(
-        self, data: dict[str, Any], response_parser: IResponseParser
+            self, data: dict[str, Any], response_parser: IResponseParser
     ) -> bool:
         """长连接多路复用：按响应中的 request_id 写回对应 response_queue。"""
         rid = response_parser.request_id(data)

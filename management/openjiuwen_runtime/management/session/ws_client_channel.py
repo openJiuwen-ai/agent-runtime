@@ -27,7 +27,6 @@ logger = get_logger(__name__)
 
 __all__ = ("WSServiceMessageChannel", "serialize_request_payload")
 
-
 PayloadBuilder = Callable[[Any], str]
 
 
@@ -275,9 +274,13 @@ class WSServiceMessageChannel:
         self._request_done[rid] = ev
         try:
             logger.info(
-                "WSS 业务上行: service_id=%s request_id=%s bytes=%s",
+                "WSS 业务上行: service_id=%s, request_id=%s, "
+                "session_id=%d, session_concurrency=%d, session_ttl=%d, bytes=%s",
                 service_id,
                 rid,
+                wrapper.session_request.session_id,
+                wrapper.session_request.session_concurrency,
+                wrapper.session_request.session_ttl,
                 len(wrapper.session_request.raw_msg),
             )
             await w.send(wrapper.session_request.raw_msg)
