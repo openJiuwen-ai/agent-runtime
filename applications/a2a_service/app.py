@@ -76,10 +76,8 @@ def setup_logging() -> None:
     logger.add(
         sys.stderr,
         level=settings.log_level.upper() if settings.log_level else "INFO",
-        format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
-               "<level>{level: <8}</level> | "
-               "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> | "
-               "<level>{message}</level>"
+        format = dynamic_format,
+        filter = lambda record: len(record["extra"]) == 0 or "source" not in record["extra"]
     )
 
     if settings.log_dir:
