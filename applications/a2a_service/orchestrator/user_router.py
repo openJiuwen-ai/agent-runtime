@@ -672,7 +672,6 @@ async def dispatch(
                     with bind_context(http_request_tag_context.log_context):
                         try:
                             yield f"data: {json.dumps(rejection, ensure_ascii=False)}\\n\\n"
-                            yield "data: [DONE]\\n\\n"
                         finally:
                             duration_ms = int(time.time() * 1000) - request_started_ms
                             to_logger(
@@ -734,7 +733,6 @@ async def dispatch(
                     with bind_context(http_request_tag_context.log_context):
                         try:
                             yield f"data: {json.dumps(probe_response, ensure_ascii=False)}\n\n"
-                            yield "data: [DONE]\n\n"
                         finally:
                             duration_ms = int(time.time() * 1000) - request_started_ms
                             to_logger(
@@ -889,7 +887,6 @@ async def dispatch(
                                 )
                                 status_message = 1
                                 break
-                        yield "data: [DONE]\n\n"
                     finally:
                         if not run_task.done():
                             run_task.cancel()
