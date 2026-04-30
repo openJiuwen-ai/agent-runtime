@@ -38,39 +38,40 @@ class K8sServiceHandler:
     _NAME_INVALID_CHARS = re.compile(r"[^a-z0-9-]+")
 
     def __init__(
-        self,
-        image: str,
-        *,
-        name_prefix: str = "jiuwenclaw",
-        namespace: str = "default",
-        container_name: str = "jiuwenclaw-agentserver",
-        container_port: int = 18092,
-        port_name: str = "http1",
-        image_pull_policy: str = "IfNotPresent",
-        env_vars: Optional[Dict[str, str]] = None,
-        extra_labels: Optional[Dict[str, str]] = None,
-        restart_policy: str = "Always",
-        readiness_initial_delay: int = 5,
-        readiness_period: int = 10,
-        kubeconfig: Optional[str] = None,
-        ready_timeout: float = 300.0,
-        ready_poll_interval: float = 2.0,
-        delete_grace_period: int = 30,
-        delete_timeout: float = 120.0,
-        delete_poll_interval: float = 1.0,
-        nfs_server: Optional[str] = None,     # NFS 服务器地址
-        nfs_path: Optional[str] = None,       # NFS 共享路径
-        nfs_mount_path: Optional[str] = None, # 容器内挂载路径
-        cpu_request: str = "500m",
-        memory_request: str = "1Gi",
-        cpu_limit: Optional[str] = None,
-        memory_limit: Optional[str] = None,
+            self,
+            image: str,
+            *,
+            name_prefix: str = "jiuwenclaw",
+            namespace: str = "default",
+            pod_name: str = None,
+            container_name: str = "jiuwenclaw-agentserver",
+            container_port: int = 18092,
+            port_name: str = "http1",
+            image_pull_policy: str = "IfNotPresent",
+            env_vars: Optional[Dict[str, str]] = None,
+            extra_labels: Optional[Dict[str, str]] = None,
+            restart_policy: str = "Always",
+            readiness_initial_delay: int = 5,
+            readiness_period: int = 10,
+            kubeconfig: Optional[str] = None,
+            ready_timeout: float = 300.0,
+            ready_poll_interval: float = 2.0,
+            delete_grace_period: int = 30,
+            delete_timeout: float = 120.0,
+            delete_poll_interval: float = 1.0,
+            nfs_server: Optional[str] = None,  # NFS 服务器地址
+            nfs_path: Optional[str] = None,  # NFS 共享路径
+            nfs_mount_path: Optional[str] = None,  # 容器内挂载路径
+            cpu_request: str = "500m",
+            memory_request: str = "1Gi",
+            cpu_limit: Optional[str] = None,
+            memory_limit: Optional[str] = None,
     ):
         if not image:
             raise ValueError("image is required")
 
         self._image = image
-        self._name_prefix = self._sanitize_prefix(name_prefix)
+        self._name_prefix = pod_name if pod_name else self._sanitize_prefix(name_prefix)
         self._namespace = namespace
         self._container_name = container_name
         self._container_port = int(container_port)
@@ -259,7 +260,7 @@ class K8sServiceHandler:
             await api_client.close()
 
     async def _wait_running_ready(
-        self, core: client.CoreV1Api, pod_name: str
+            self, core: client.CoreV1Api, pod_name: str
     ) -> Tuple[str, Optional[str], Optional[str]]:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self._ready_timeout
@@ -285,10 +286,10 @@ class K8sServiceHandler:
             pod_ip = (status.pod_ip if status else None) or ""
 
             if (
-                phase == "Running"
-                and all_containers_ready
-                and ready_cond_true
-                and pod_ip
+                    phase == "Running"
+                    and all_containers_ready
+                    and ready_cond_true
+                    and pod_ip
             ):
                 host_ip = status.host_ip if status else None
                 node_name = getattr(pod.spec, "node_name", None) if pod.spec else None
