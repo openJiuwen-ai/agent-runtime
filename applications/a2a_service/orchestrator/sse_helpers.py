@@ -32,6 +32,9 @@ async def next_sse_event(event_queue: Any) -> Optional[Any]:
     return event
 
 
+_SSE_PAYLOAD_DEBUG_TRUNCATE = 2000
+
+
 def log_outbound_sse(
     *,
     conversation_id: str,
@@ -39,16 +42,24 @@ def log_outbound_sse(
     payload: str,
     event_kind: str,
 ) -> None:
-    """北向 SSE 推送埋点（INFO 级，每帧一行）。
+    """北向 SSE 推送埋点。
 
-    用于现场排障：当只能看 a2a_service 日志、看不到客户端抓包时，可以通过这条
-    日志确认 Runtime 实际向北向推送了哪些事件、字节数与顺序。
+    INFO 级：每帧一行的元数据（conv/序号/事件类型/字节数），用于现场排障时确认
+    Runtime 实际向北向推送了哪些事件、顺序与体量。
+
+    DEBUG 级：仅新增 payload 截断内容（默认 ~2000 字符），通过 ``sequence``
+    与 INFO 行关联，避免字段重复占行；开发联调或问题复盘时可临时把 log_level
+    调到 DEBUG 看到完整报文（步骤 8）。
     """
     logger.info(
-        "[Router] → SSE conv={} #{} kind={} bytes={} payload={}",
+        "[Router] → SSE conv={} #{} kind={} bytes={}",
         conversation_id,
         sequence,
         event_kind,
         len(payload.encode("utf-8")),
-        payload,
+    )
+    logger.opt(lazy=True).debug(
+        "[Router] → SSE #{} payload={}",
+        lambda s=sequence: s,
+        lambda p=payload: p[:_SSE_PAYLOAD_DEBUG_TRUNCATE],
     )

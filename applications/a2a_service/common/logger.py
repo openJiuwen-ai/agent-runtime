@@ -34,17 +34,24 @@ _SENSITIVE_KEYS = {
 }
 
 
-def _mask_sensitive_fields(payload: Any) -> Any:
-    """对 dict / list 结构做递归脱敏，命中 _SENSITIVE_KEYS 的字段值替换为 '***'。"""
+def mask_sensitive_fields(payload: Any) -> Any:
+    """对 dict / list 结构做递归脱敏，命中 _SENSITIVE_KEYS 的字段值替换为 '***'。
+
+    供入参/出参/链路 chunk 等一切落日志的结构化数据复用，统一脱敏口径。
+    """
     if isinstance(payload, dict):
         return {
             k: ("***" if isinstance(k, str) and k.lower() in _SENSITIVE_KEYS
-                else _mask_sensitive_fields(v))
+                else mask_sensitive_fields(v))
             for k, v in payload.items()
         }
     if isinstance(payload, list):
-        return [_mask_sensitive_fields(v) for v in payload]
+        return [mask_sensitive_fields(v) for v in payload]
     return payload
+
+
+# 兼容历史调用：保留私有别名（原 build_http_request_tag_context 内调用方式不变）
+_mask_sensitive_fields = mask_sensitive_fields
 
 
 class TagTrace(BaseModel):

@@ -16,10 +16,11 @@ Task 状态流转（存于 RedisTaskStore）：
 """
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 from a2a.client import Client
 from a2a.server.agent_execution import AgentExecutor, RequestContext
@@ -56,6 +57,7 @@ from common.logger import (
     Tag,
     build_versatile_end_observation,
     build_versatile_start_observation,
+    mask_sensitive_fields,
     to_logger,
 )
 from common.redis_client import RedisClient
@@ -64,6 +66,34 @@ from orchestrator.agent_adapter import agent_event_to_a2a
 from common.redis_task_store import RedisTaskStore
 
 _TTL = 1800
+
+
+def _safe_dump_event(event: Any) -> str:
+    """把 a2a 事件（protobuf）序列化为 JSON 字符串，应用敏感字段脱敏。
+
+    序列化失败时返回错误占位符，保证调用方拿到的永远是 ``str``，
+    便于落 DEBUG 日志而不影响主链路。
+    """
+    try:
+        return json.dumps(
+            mask_sensitive_fields(MessageToDict(event)),
+            ensure_ascii=False,
+        )
+    except Exception as dump_exc:
+        return f"<dump failed: {dump_exc}>"
+
+
+def _log_va_chunk_debug(stream_resp_count: int, event: Any) -> None:
+    """DEBUG 级埋点：打印 a2a_service 从 VersatileAdapter 接收到的每一帧 chunk 内容。
+
+    使用 ``logger.opt(lazy=True)`` 延迟求值：DEBUG 未启用时不会触发 MessageToDict
+    与 json.dumps，避免在生产 INFO 级别下白白消耗 CPU。
+    """
+    logger.opt(lazy=True).debug(
+        "[Executor] [VersatileProxy] chunk #{} payload={}",
+        lambda c=stream_resp_count: c,
+        lambda e=event: _safe_dump_event(e),
+    )
 
 
 def _rewrite_recommend_delegate(intent: str, task_description: str) -> tuple[str, str]:
@@ -586,6 +616,9 @@ class Executor(AgentExecutor):
                     )
                     continue
 
+                # DEBUG 级：打印从 VersatileAdapter 接收到的整帧报文（步骤 7 首轮路径）
+                _log_va_chunk_debug(stream_resp_count, event)
+
                 if va_real_task_id is None and hasattr(event, "task_id") and event.task_id:
                     va_real_task_id = event.task_id
                     logger.debug(
@@ -741,6 +774,9 @@ class Executor(AgentExecutor):
                 event = self._parse_stream_event(stream_resp)
                 if event is None:
                     continue
+
+                # DEBUG 级：打印从 VersatileAdapter 接收到的整帧报文（步骤 7 续轮路径）
+                _log_va_chunk_debug(stream_resp_count, event)
 
                 if isinstance(event, TaskArtifactUpdateEvent):
                     if not self._is_suppressed_node(event):
