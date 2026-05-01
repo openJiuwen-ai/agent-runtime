@@ -42,30 +42,46 @@ from tools.simulate_router.simulate import router as simulate_router
 
 os.environ['NO_PROXY'] = 'localhost,127.0.0.1'
 
+
+
 def dynamic_format(record):
-    if len(record["extra"]) > 0 and "tag" not in record["extra"]:
-        return "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> \x01 " \
-               "<level>{level.name:<8}</level> \x01 " \
-               "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> \x01 " \
-               "<cyan>{extra[trace_id]}</cyan> \x01 " \
-               "<cyan>{extra[agent_id]}</cyan> \x01 " \
-               "<cyan>{extra[conversation_id]}</cyan> \x01 " \
-               "<level>{message}</level>\n"
-    elif "tag" in record["extra"]:  # tag类日志
-        return "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> \x01 " \
-               "<level>{level.name:<8}</level> \x01 " \
-               "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> \x01 " \
-               "<cyan>{extra[trace_id]}</cyan> \x01 " \
-               "<cyan>{extra[agent_id]}</cyan> \x01 " \
-               "<cyan>{extra[conversation_id]}</cyan> \x01 " \
-               "<cyan>{extra[tag]}</cyan> \x01 " \
-               "<cyan>{extra[cost]}</cyan> \x01 " \
-               "<level>{message}</level>\n"
+    # 安全获取 extra 中的字段，如果不存在则使用默认值
+    extra = record.get("extra", {})
+    trace_id = extra.get("trace_id", "default_trace_id")
+    agent_id = extra.get("agent_id", "default_agent_id")
+    conversation_id = extra.get("conversation_id", "default_conversation_id")
+
+    if len(extra) > 0 and "tag" not in extra:
+        return (
+            f"<green>{{time:YYYY-MM-DD HH:mm:ss.SSS}}</green> \x01 "
+            f"<level>{{level.name:<8}}</level> \x01 "
+            f"<cyan>{{name}}</cyan>:<cyan>{{function}}</cyan>:<cyan>{{line}}</cyan> \x01 "
+            f"<cyan>{trace_id}</cyan> \x01 "
+            f"<cyan>{agent_id}</cyan> \x01 "
+            f"<cyan>{conversation_id}</cyan> \x01 "
+            f"<level>{{message}}</level>\n"
+        )
+    elif "tag" in extra:  # tag类日志
+        tag = extra.get("tag", "N/A")
+        cost = extra.get("cost", "N/A")
+        return (
+            f"<green>{{time:YYYY-MM-DD HH:mm:ss.SSS}}</green> \x01 "
+            f"<level>{{level.name:<8}}</level> \x01 "
+            f"<cyan>{{name}}</cyan>:<cyan>{{function}}</cyan>:<cyan>{{line}}</cyan> \x01 "
+            f"<cyan>{trace_id}</cyan> \x01 "
+            f"<cyan>{agent_id}</cyan> \x01 "
+            f"<cyan>{conversation_id}</cyan> \x01 "
+            f"<cyan>{tag}</cyan> \x01 "
+            f"<cyan>{cost}</cyan> \x01 "
+            f"<level>{{message}}</level>\n"
+        )
     else:
-        return "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> \x01 " \
-               "<level>{level.name:<8}</level> \x01 " \
-               "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> \x01 " \
-               "<level>{message}</level>\n"
+        return (
+            f"<green>{{time:YYYY-MM-DD HH:mm:ss.SSS}}</green> \x01 "
+            f"<level>{{level.name:<8}}</level> \x01 "
+            f"<cyan>{{name}}</cyan>:<cyan>{{function}}</cyan>:<cyan>{{line}}</cyan> \x01 "
+            f"<level>{{message}}</level>\n"
+        )
 
 
 def setup_logging() -> None:

@@ -109,18 +109,20 @@ class TagObservation(BaseModel):
 
 
 class Tag(StrEnum):
-    TAG_HTTP_REQUEST_START = "HTTP_REQUEST_START"
-    TAG_HTTP_REQUEST_END = "HTTP_REQUEST_END"
-    TAG_AGENT_INIT_TOOLLIST = "AGENT_INIT_TOOLLIST"
-    TAG_LLM_CALL_START = "LLM_CALL_START"
-    TAG_LLM_CALL_END = "LLM_CALL_END"
-    TAG_PLANNING_DECISION = "PLANNING_DECISION"
-    TAG_TODOLIST_QUERY = "TODOLIST_QUERY"
-    TAG_TODOLIST_SAVE = "TODOLIST_SAVE"
-    TAG_SKILL_EXECUTE_START = "SKILL_EXECUTE_START"
-    TAG_SKILL_EXECUTE_END = "SKILL_EXECUTE_END"
-    TAG_VERSATILE_START = "VERSATILE_START"
-    TAG_VERSATILE_END = "VERSATILE_END"
+    TAG_HTTP_REQUEST_START = "TAG_HTTP_REQUEST_START"
+    TAG_HTTP_REQUEST_END = "TAG_HTTP_REQUEST_END"
+    TAG_AGENT_INIT_TOOLLIST = "TAG_AGENT_INIT_TOOLLIST"
+    TAG_LLM_CALL_START = "TAG_LLM_CALL_START"
+    TAG_LLM_CALL_END = "TAG_LLM_CALL_END"
+    TAG_PLANNING_DECISION = "TAG_PLANNING_DECISION"
+    TAG_TODOLIST_QUERY = "TAG_TODOLIST_QUERY"
+    TAG_TODOLIST_SAVE = "TAG_TODOLIST_SAVE"
+    TAG_SKILL_EXECUTE_START = "TAG_SKILL_EXECUTE_START"
+    TAG_SKILL_EXECUTE_END = "TAG_SKILL_EXECUTE_END"
+    TAG_TOOL_EXECUTE_START = "TAG_TOOL_EXECUTE_START"
+    TAG_TOOL_EXECUTE_END = "TAG_TOOL_EXECUTE_END"
+    TAG_VERSATILE_START = "TAG_VERSATILE_START"
+    TAG_VERSATILE_END = "TAG_VERSATILE_END"
 
 
 class ResultEnum(StrEnum):
@@ -161,11 +163,52 @@ class HttpRequestTagContext:
     user_id: str
 
 
-def to_logger(level: str = Level.INFO, message: Any = "", extra: Extra | None = None):
+
+# def to_logger(level: str = Level.INFO, message: Any = "", extra: Extra | None = None):
+#     if extra is not None:
+#         if isinstance(message, BaseModel):
+#             message = message.model_dump_json(exclude_none=True)
+#         with logger.contextualize(**extra.model_dump(exclude_none=True)):
+#             logger.log(level, message)
+#     else:
+#         logger.log(level, message)
+
+
+def to_logger(level: str = Level.INFO, message: Any = "",
+              extra: Extra | None = None,
+              log_context: LogContext | None = None):
+    """
+    记录日志，支持直接传入 log_context 而不需要使用 with bind_context() 语法。
+
+    Args:
+        level: 日志级别
+        message: 日志消息
+        extra: 额外的日志字段
+        log_context: 日志上下文（包含 trace_id, agent_id, conversation_id）
+    """
+    # 构建 contextualize 的参数
+    context_params = {}
+
+    # 如果提供了 log_context，将上下文信息添加到 contextualize 参数中
+    if log_context is not None:
+        context_params.update({
+            "trace_id": log_context.trace_id,
+            "agent_id": log_context.agent_id,
+            "conversation_id": log_context.conversation_id,
+        })
+
+    # 如果有 extra 字段，合并到上下文参数中
     if extra is not None:
+        extra_dict = extra.model_dump(exclude_none=True)
+        context_params.update(extra_dict)
+
+        # 如果 message 是 BaseModel，转换为 JSON
         if isinstance(message, BaseModel):
             message = message.model_dump_json(exclude_none=True)
-        with logger.contextualize(**extra.model_dump(exclude_none=True)):
+
+    # 使用 logger.contextualize 添加所有上下文和额外字段
+    if context_params:
+        with logger.contextualize(**context_params):
             logger.log(level, message)
     else:
         logger.log(level, message)

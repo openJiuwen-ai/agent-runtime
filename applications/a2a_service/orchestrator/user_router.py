@@ -566,363 +566,194 @@ async def dispatch(
         conversation_id=conversation_id,
     )
 
-    with bind_context(http_request_tag_context.log_context):
+    to_logger(
+        level=Level.INFO,
+        message=build_http_trace(
+            http_request_tag_context=http_request_tag_context,
+            input_payload={
+                "request_header": http_request_tag_context.request_headers,
+                "request_body": http_request_tag_context.request_body_snapshot,
+            },
+        ),
+        extra=Extra(tag=Tag.TAG_HTTP_REQUEST_START, cost=0),
+        log_context=http_request_tag_context.log_context,
+    )
+
+    # 显式校验 Content-Type + JSON 解析（对应需求 §5.10）
+    if "application/json" not in http_request_tag_context.content_type:
+        response_content = {
+            "success": False,
+            "error": "unsupported_media_type",
+            "message": "请求数据格式需为 application/json",
+        }
+        duration_ms = int(time.time() * 1000) - request_started_ms
         to_logger(
+            level="WARNING",
             message=build_http_trace(
                 http_request_tag_context=http_request_tag_context,
-                input_payload={
-                    "request_header": http_request_tag_context.request_headers,
-                    "request_body": http_request_tag_context.request_body_snapshot,
-                },
+                output_payload=response_content,
             ),
-            extra=Extra(tag=Tag.TAG_HTTP_REQUEST_START, cost=0),
+            extra=Extra(tag=Tag.TAG_HTTP_REQUEST_END, cost=max(duration_ms, 0)),
         )
+        return JSONResponse(status_code=415, content=response_content)
 
-        # 显式校验 Content-Type + JSON 解析（对应需求 §5.10）
-        if "application/json" not in http_request_tag_context.content_type:
-            response_content = {
-                "success": False,
-                "error": "unsupported_media_type",
-                "message": "请求数据格式需为 application/json",
-            }
-            duration_ms = int(time.time() * 1000) - request_started_ms
-            to_logger(
-                level="WARNING",
-                message=build_http_trace(
-                    http_request_tag_context=http_request_tag_context,
-                    output_payload=response_content,
-                ),
-                extra=Extra(tag=Tag.TAG_HTTP_REQUEST_END, cost=max(duration_ms, 0)),
-            )
-            return JSONResponse(status_code=415, content=response_content)
-
-        try:
-            body = await request.json()
-        except Exception as e:
-            logger.warning(f"[Router] JSON parse failed: {e}")
-            response_content = {
-                "success": False,
-                "error": "invalid_json",
-                "message": f"请求 body 非合法 JSON 格式：{e}",
-            }
-            duration_ms = int(time.time() * 1000) - request_started_ms
-            to_logger(
-                level="WARNING",
-                message=build_http_trace(
-                    http_request_tag_context=http_request_tag_context,
-                    output_payload=response_content,
-                ),
-                extra=Extra(tag=Tag.TAG_HTTP_REQUEST_END, cost=max(duration_ms, 0)),
-            )
-            return JSONResponse(status_code=400, content=response_content)
-
-        if not isinstance(body, dict):
-            response_content = {
-                "success": False,
-                "error": "invalid_body",
-                "message": "请求 body 必须是 JSON 对象（dict）",
-            }
-            duration_ms = int(time.time() * 1000) - request_started_ms
-            to_logger(
-                level="WARNING",
-                message=build_http_trace(
-                    http_request_tag_context=http_request_tag_context,
-                    output_payload=response_content,
-                ),
-                extra=Extra(tag=Tag.TAG_HTTP_REQUEST_END, cost=max(duration_ms, 0)),
-            )
-            return JSONResponse(status_code=400, content=response_content)
-
-        user_query = _extract_query(body)
-        stream_mode = bool(body.get("stream", True))
-
-        logger.info(
-            f"[Router] conv={conversation_id} stream={stream_mode} "
-            f"query={user_query!r:.80} trace={traceid}"
+    try:
+        body = await request.json()
+    except Exception as e:
+        logger.warning(f"[Router] JSON parse failed: {e}")
+        response_content = {
+            "success": False,
+            "error": "invalid_json",
+            "message": f"请求 body 非合法 JSON 格式：{e}",
+        }
+        duration_ms = int(time.time() * 1000) - request_started_ms
+        to_logger(
+            level="WARNING",
+            message=build_http_trace(
+                http_request_tag_context=http_request_tag_context,
+                output_payload=response_content,
+            ),
+            extra=Extra(tag=Tag.TAG_HTTP_REQUEST_END, cost=max(duration_ms, 0)),
         )
+        return JSONResponse(status_code=400, content=response_content)
 
-        executor: Executor = request.app.state.executor
-        redis = request.app.state.redis
-        task_store = request.app.state.task_store
-        event_queue = EventQueue()
-        headers = http_request_tag_context.request_headers
-
-        # 入口限流：在进入编排执行前统一拦截
-        allowed, error_msg, error_code = await _check_rate_limit(
-            redis=redis,
-            settings=settings,
-            agent_id=agent_id,
-            conversation_id=conversation_id,
+    if not isinstance(body, dict):
+        response_content = {
+            "success": False,
+            "error": "invalid_body",
+            "message": "请求 body 必须是 JSON 对象（dict）",
+        }
+        duration_ms = int(time.time() * 1000) - request_started_ms
+        to_logger(
+            level=Level.WARNING,
+            message=build_http_trace(
+                http_request_tag_context=http_request_tag_context,
+                output_payload=response_content,
+            ),
+            extra=Extra(tag=Tag.TAG_HTTP_REQUEST_END, cost=max(duration_ms, 0)),
+            log_context=http_request_tag_context.log_context,
         )
-        if not allowed:
-            logger.warning(
-                f"[Router] Rate limited conv={conversation_id}, agent={agent_id}, "
-                f"code={error_code}, trace={traceid}"
-            )
-            rejection = {
-                "success": False,
-                "error": error_msg,
-                "error_code": error_code,
-                "conversation_id": conversation_id,
-                "agent_id": agent_id,
-            }
-            if stream_mode:
+        return JSONResponse(status_code=400, content=response_content)
 
-                async def limited_generate():
-                    with bind_context(http_request_tag_context.log_context):
-                        try:
-                            yield f"data: {json.dumps(rejection, ensure_ascii=False)}\\n\\n"
-                        finally:
-                            duration_ms = int(time.time() * 1000) - request_started_ms
-                            to_logger(
-                                level="WARNING",
-                                message=build_http_trace(
-                                    http_request_tag_context=http_request_tag_context,
-                                    output_payload={
-                                        "mode": "stream",
-                                        "status_code": status.HTTP_429_TOO_MANY_REQUESTS,
-                                        "rejection": rejection,
-                                    },
-                                ),
-                                extra=Extra(tag=Tag.TAG_HTTP_REQUEST_END, cost=max(duration_ms, 0)),
-                            )
-                return StreamingResponse(
-                    limited_generate(),
-                    media_type="text/event-stream",
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    headers={
-                        "Cache-Control": "no-cache",
-                        "Connection": "keep-alive",
-                        "X-Accel-Buffering": "no",
-                    },
-                )
+    user_query = _extract_query(body)
+    stream_mode = bool(body.get("stream", True))
 
-            duration_ms = int(time.time() * 1000) - request_started_ms
-            to_logger(
-                level="WARNING",
-                message=build_http_trace(
-                    http_request_tag_context=http_request_tag_context,
-                    output_payload=rejection,
-                ),
-                extra=Extra(tag=Tag.TAG_HTTP_REQUEST_END, cost=max(duration_ms, 0)),
-            )
-            return JSONResponse(
-                content=rejection,
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            )
+    logger.info(
+        f"[Router] conv={conversation_id} stream={stream_mode} "
+        f"query={user_query!r:.80} trace={traceid}"
+    )
 
-        # 缓存首轮请求头、请求体和 URL query params，供 VA 委托调用/续轮恢复使用
-        params = _extract_query_params(request)
-        cached = await redis.get_json(session_request_key(conversation_id))
-        if cached is None:
-            await redis.set_json(
-                session_request_key(conversation_id),
-                {"headers": headers, "body": body, "params": params},
-                ex=_REQUEST_TTL,
-            )
+    executor: Executor = request.app.state.executor
+    redis = request.app.state.redis
+    task_store = request.app.state.task_store
+    event_queue = EventQueue()
+    headers = http_request_tag_context.request_headers
 
-        if _is_flow_control_probe(user_query):
-            task_id = await _ensure_task_mapping(redis, conversation_id)
-            probe_response = _build_flow_control_probe_response(conversation_id, agent_id)
-            logger.info(
-                f"[Router] flow-control probe fast-path: conv={conversation_id}, task_id={task_id}, trace={traceid}"
-            )
-            if stream_mode:
-
-                async def probe_generate():
-                    with bind_context(http_request_tag_context.log_context):
-                        try:
-                            yield f"data: {json.dumps(probe_response, ensure_ascii=False)}\n\n"
-                        finally:
-                            duration_ms = int(time.time() * 1000) - request_started_ms
-                            to_logger(
-                                message=build_http_trace(
-                                    http_request_tag_context=http_request_tag_context,
-                                    output_payload={
-                                        "mode": "stream",
-                                        "status_code": status.HTTP_200_OK,
-                                        "probe": probe_response,
-                                    },
-                                ),
-                                extra=Extra(tag=Tag.TAG_HTTP_REQUEST_END, cost=max(duration_ms, 0)),
-                            )
-
-                return StreamingResponse(
-                    probe_generate(),
-                    media_type="text/event-stream",
-                    headers={
-                        "Cache-Control": "no-cache",
-                        "Connection": "keep-alive",
-                        "X-Accel-Buffering": "no",
-                    },
-                )
-
-            duration_ms = int(time.time() * 1000) - request_started_ms
-            to_logger(
-                message=build_http_trace(
-                    http_request_tag_context=http_request_tag_context,
-                    output_payload=probe_response,
-                ),
-                extra=Extra(tag=Tag.TAG_HTTP_REQUEST_END, cost=max(duration_ms, 0)),
-            )
-            to_logger(Level.INFO, user_query,
-                      Extra(source=get_real_ip(request), user=body.get("userId", ""), result=ResultEnum.SUCCESS,
-                            terminal=socket.gethostbyname(socket.gethostname()))
-                      )
-            return JSONResponse(content=probe_response)
-
-        # ── Task 管理：conv_id → task_id 映射 ─────────────────────────────────
-        call_context = ServerCallContext()
-        conv_task_key = _CONV_TASK_KEY.format(conversation_id)
-        task_id = await redis.get(conv_task_key)
-        current_task = None
-
-        if task_id:
-            current_task = await task_store.get(task_id, call_context)
-            # 上轮已完成 → 原子重置：先删旧 key，再 SET NX；若并发请求抢先，则沿用对方写入的 task_id
-            if current_task and current_task.status.state == TASK_STATE_COMPLETED:
-                new_task_id = str(uuid.uuid4())
-                await redis.delete(conv_task_key)
-                was_set = await redis.set_nx(conv_task_key, new_task_id, ex=_REQUEST_TTL)
-                task_id = (
-                    new_task_id
-                    if was_set
-                    else (await redis.get(conv_task_key) or new_task_id)
-                )
-                current_task = None
-                logger.debug(
-                    f"[Router] 上轮已完成，新建 task_id={task_id} for conv={conversation_id}"
-                )
-        else:
-            # 首轮：SET NX 原子创建，防止并发重入生成两个 task_id
-            new_task_id = str(uuid.uuid4())
-            was_set = await redis.set_nx(conv_task_key, new_task_id, ex=_REQUEST_TTL)
-            if was_set:
-                task_id = new_task_id
-                logger.debug(f"[Router] 新建 task_id={task_id} for conv={conversation_id}")
-            else:
-                # 并发请求已抢先创建，读取其写入的 task_id，复用同一 Task
-                task_id = await redis.get(conv_task_key)
-                current_task = (
-                    await task_store.get(task_id, call_context) if task_id else None
-                )
-                logger.debug(
-                    f"[Router] 并发首轮，复用 task_id={task_id} for conv={conversation_id}"
-                )
-
-        send_request = _build_request(
-            conversation_id, user_query, body, params, headers=headers
+    # 入口限流：在进入编排执行前统一拦截
+    allowed, error_msg, error_code = await _check_rate_limit(
+        redis=redis,
+        settings=settings,
+        agent_id=agent_id,
+        conversation_id=conversation_id,
+    )
+    if not allowed:
+        logger.warning(
+            f"[Router] Rate limited conv={conversation_id}, agent={agent_id}, "
+            f"code={error_code}, trace={traceid}"
         )
-        ctx = RequestContext(
-            call_context=call_context,
-            request=send_request,
-            context_id=conversation_id,
-            task_id=task_id,
-            task=current_task,
-        )
-
-        async def run() -> None:
-            with bind_context(http_request_tag_context.log_context):
-                try:
-                    await executor.execute(ctx, event_queue)
-                except Exception as e:
-                    logger.exception(f"[Router] execute 异常：{e}")
-                    try:
-                        await event_queue.enqueue_event(
-                            TaskStatusUpdateEvent(
-                                task_id=task_id,
-                                context_id=conversation_id,
-                                status=TaskStatus(state=TASK_STATE_FAILED),
-                            )
-                        )
-                    except Exception as enqueue_exc:
-                        logger.warning(
-                            "[Router] 入队 FAILED 状态事件失败（忽略）：{!r}",
-                            enqueue_exc,
-                        )
-                finally:
-                    await event_queue.close()
-
+        rejection = {
+            "success": False,
+            "error": error_msg,
+            "error_code": error_code,
+            "conversation_id": conversation_id,
+            "agent_id": agent_id,
+        }
         if stream_mode:
 
-            async def generate():
+            async def limited_generate():
                 with bind_context(http_request_tag_context.log_context):
-                    run_task = asyncio.create_task(run())
-                    pushed_events = 0
-                    status_message = 0
-                    finish_reason = "stream_completed"
-                    turn_start = time.monotonic()
                     try:
-                        while True:
-                            try:
-                                event = await next_sse_event(event_queue)
-                                if event is None:
-                                    break
-                                if (
-                                    isinstance(event, TaskStatusUpdateEvent)
-                                    and event.status
-                                    and event.status.state == TASK_STATE_FAILED
-                                ):
-                                    status_message = 1
-                                payload = _serialize_event(
-                                    event,
-                                    agent_id=agent_id,
-                                    conversation_id=conversation_id,
-                                    start_time=turn_start,
-                                )
-                                # None 表示该事件被屏蔽或是流结束信号，不推送
-                                if payload is None:
-                                    continue
-                                pushed_events += 1
-                                log_outbound_sse(
-                                    conversation_id=conversation_id,
-                                    sequence=pushed_events,
-                                    payload=payload,
-                                    event_kind=type(event).__name__,
-                                )
-                                yield f"data: {payload}\n\n"
-                            except Exception as e:
-                                logger.warning(
-                                    f"[Router] generate 序列化异常，停止推送：{e!r}"
-                                )
-                                status_message = 1
-                                break
+                        yield f"data: {json.dumps(rejection, ensure_ascii=False)}\\n\\n"
                     finally:
-                        if not run_task.done():
-                            run_task.cancel()
-                            status_message = 1
-                            finish_reason = "client_disconnected"
-                            logger.debug(
-                                f"[Router] 客户端断连，取消后台任务：conv={conversation_id}"
-                            )
-                            to_logger(Level.INFO, user_query,
-                                      Extra(source=get_real_ip(request), user=body.get("userId", ""),
-                                            result=ResultEnum.FAILED,
-                                            terminal=socket.gethostbyname(socket.gethostname()))
-                                      )
-                        else:
-                            to_logger(Level.INFO, user_query,
-                                      Extra(source=get_real_ip(request), user=body.get("userId", ""),
-                                            result=ResultEnum.SUCCESS,
-                                            terminal=socket.gethostbyname(socket.gethostname()))
-                                      )
-
                         duration_ms = int(time.time() * 1000) - request_started_ms
                         to_logger(
-                            level="WARNING" if status_message else "INFO",
+                            level=Level.WARNING,
+                            message=build_http_trace(
+                                http_request_tag_context=http_request_tag_context,
+                                output_payload={
+                                    "mode": "stream",
+                                    "status_code": status.HTTP_429_TOO_MANY_REQUESTS,
+                                    "rejection": rejection,
+                                },
+                            ),
+                            extra=Extra(tag=Tag.TAG_HTTP_REQUEST_END, cost=max(duration_ms, 0)),
+                            log_context=http_request_tag_context.log_context,
+                        )
+            return StreamingResponse(
+                limited_generate(),
+                media_type="text/event-stream",
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+
+        duration_ms = int(time.time() * 1000) - request_started_ms
+        to_logger(
+            level=Level.WARNING,
+            message=build_http_trace(
+                http_request_tag_context=http_request_tag_context,
+                output_payload=rejection,
+            ),
+            extra=Extra(tag=Tag.TAG_HTTP_REQUEST_END, cost=max(duration_ms, 0)),
+            log_context=http_request_tag_context.log_context,
+        )
+        return JSONResponse(
+            content=rejection,
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+
+    # 缓存首轮请求头、请求体和 URL query params，供 VA 委托调用/续轮恢复使用
+    params = _extract_query_params(request)
+    cached = await redis.get_json(session_request_key(conversation_id))
+    if cached is None:
+        await redis.set_json(
+            session_request_key(conversation_id),
+            {"headers": headers, "body": body, "params": params},
+            ex=_REQUEST_TTL,
+        )
+
+    if _is_flow_control_probe(user_query):
+        task_id = await _ensure_task_mapping(redis, conversation_id)
+        probe_response = _build_flow_control_probe_response(conversation_id, agent_id)
+        logger.info(
+            f"[Router] flow-control probe fast-path: conv={conversation_id}, task_id={task_id}, trace={traceid}"
+        )
+        if stream_mode:
+
+            async def probe_generate():
+                with bind_context(http_request_tag_context.log_context):
+                    try:
+                        yield f"data: {json.dumps(probe_response, ensure_ascii=False)}\n\n"
+                    finally:
+                        duration_ms = int(time.time() * 1000) - request_started_ms
+                        to_logger(
                             message=build_http_trace(
                                 http_request_tag_context=http_request_tag_context,
                                 output_payload={
                                     "mode": "stream",
                                     "status_code": status.HTTP_200_OK,
-                                    "events": pushed_events,
-                                    "finish_reason": finish_reason,
+                                    "probe": probe_response,
                                 },
                             ),
                             extra=Extra(tag=Tag.TAG_HTTP_REQUEST_END, cost=max(duration_ms, 0)),
+                            log_context=http_request_tag_context.log_context,
                         )
+
             return StreamingResponse(
-                generate(),
+                probe_generate(),
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",
@@ -931,55 +762,237 @@ async def dispatch(
                 },
             )
 
-        collected = []
-        run_task = asyncio.create_task(run())
-        status_message = 0
-        while True:
-            try:
-                event = await next_sse_event(event_queue)
-                if event is None:
-                    break
-                if (
-                    isinstance(event, TaskStatusUpdateEvent)
-                    and event.status
-                    and event.status.state == TASK_STATE_FAILED
-                ):
-                    status_message = 1
-                collected.append(event)
-            except Exception as e:
-                logger.warning(f"[Router] non-stream 队列异常：{e!r}")
-                status_message = 1
-                break
-        await run_task
-
-        def _is_completed_task_event(evt: Any) -> bool:
-            return (
-                isinstance(evt, TaskStatusUpdateEvent)
-                and evt.status
-                and evt.status.state == TASK_STATE_COMPLETED
-                and evt.status.message
-            )
-
-        answer = ""
-        for event in collected:
-            if _is_completed_task_event(event):
-                for part in event.status.message.parts:
-                    if part.WhichOneof("content") == "text":
-                        answer = part.text
-                        break
-
-        response_content = {"success": True, "answer": answer}
         duration_ms = int(time.time() * 1000) - request_started_ms
         to_logger(
-            level="WARNING" if status_message else "INFO",
+            level=Level.INFO,
             message=build_http_trace(
                 http_request_tag_context=http_request_tag_context,
-                output_payload=response_content,
+                output_payload=probe_response,
             ),
             extra=Extra(tag=Tag.TAG_HTTP_REQUEST_END, cost=max(duration_ms, 0)),
+            log_context=http_request_tag_context.log_context,
         )
-        to_logger(Level.INFO, user_query,
-                  Extra(source=get_real_ip(request), user=body.get("userId", ""), result=ResultEnum.SUCCESS,
-                        terminal=socket.gethostbyname(socket.gethostname()))
-                  )
-        return JSONResponse(content=response_content)
+        to_logger(level=Level.INFO, message=user_query,
+                  extra=Extra(source=get_real_ip(request), user=body.get("userId", ""), result=ResultEnum.SUCCESS,
+                              terminal=socket.gethostbyname(socket.gethostname())),
+                  log_context=http_request_tag_context.log_context,
+                  ),
+        return JSONResponse(content=probe_response)
+
+    # ── Task 管理：conv_id → task_id 映射 ─────────────────────────────────
+    call_context = ServerCallContext()
+    conv_task_key = _CONV_TASK_KEY.format(conversation_id)
+    task_id = await redis.get(conv_task_key)
+    current_task = None
+
+    if task_id:
+        current_task = await task_store.get(task_id, call_context)
+        # 上轮已完成 → 原子重置：先删旧 key，再 SET NX；若并发请求抢先，则沿用对方写入的 task_id
+        if current_task and current_task.status.state == TASK_STATE_COMPLETED:
+            new_task_id = str(uuid.uuid4())
+            await redis.delete(conv_task_key)
+            was_set = await redis.set_nx(conv_task_key, new_task_id, ex=_REQUEST_TTL)
+            task_id = (
+                new_task_id
+                if was_set
+                else (await redis.get(conv_task_key) or new_task_id)
+            )
+            current_task = None
+            logger.debug(
+                f"[Router] 上轮已完成，新建 task_id={task_id} for conv={conversation_id}"
+            )
+    else:
+        # 首轮：SET NX 原子创建，防止并发重入生成两个 task_id
+        new_task_id = str(uuid.uuid4())
+        was_set = await redis.set_nx(conv_task_key, new_task_id, ex=_REQUEST_TTL)
+        if was_set:
+            task_id = new_task_id
+            logger.debug(f"[Router] 新建 task_id={task_id} for conv={conversation_id}")
+        else:
+            # 并发请求已抢先创建，读取其写入的 task_id，复用同一 Task
+            task_id = await redis.get(conv_task_key)
+            current_task = (
+                await task_store.get(task_id, call_context) if task_id else None
+            )
+            logger.debug(
+                f"[Router] 并发首轮，复用 task_id={task_id} for conv={conversation_id}"
+            )
+
+    send_request = _build_request(
+        conversation_id, user_query, body, params, headers=headers
+    )
+    ctx = RequestContext(
+        call_context=call_context,
+        request=send_request,
+        context_id=conversation_id,
+        task_id=task_id,
+        task=current_task,
+    )
+
+    async def run() -> None:
+        with bind_context(http_request_tag_context.log_context):
+            try:
+                await executor.execute(ctx, event_queue)
+            except Exception as e:
+                logger.exception(f"[Router] execute 异常：{e}")
+                try:
+                    await event_queue.enqueue_event(
+                        TaskStatusUpdateEvent(
+                            task_id=task_id,
+                            context_id=conversation_id,
+                            status=TaskStatus(state=TASK_STATE_FAILED),
+                        )
+                    )
+                except Exception as enqueue_exc:
+                    logger.warning(
+                        "[Router] 入队 FAILED 状态事件失败（忽略）：{!r}",
+                        enqueue_exc,
+                    )
+            finally:
+                await event_queue.close()
+
+    if stream_mode:
+
+        async def generate():
+            with bind_context(http_request_tag_context.log_context):
+                run_task = asyncio.create_task(run())
+                pushed_events = 0
+                status_message = 0
+                finish_reason = "stream_completed"
+                turn_start = time.monotonic()
+                try:
+                    while True:
+                        try:
+                            event = await next_sse_event(event_queue)
+                            if event is None:
+                                break
+                            if (
+                                isinstance(event, TaskStatusUpdateEvent)
+                                and event.status
+                                and event.status.state == TASK_STATE_FAILED
+                            ):
+                                status_message = 1
+                            payload = _serialize_event(
+                                event,
+                                agent_id=agent_id,
+                                conversation_id=conversation_id,
+                                start_time=turn_start,
+                            )
+                            # None 表示该事件被屏蔽或是流结束信号，不推送
+                            if payload is None:
+                                continue
+                            pushed_events += 1
+                            log_outbound_sse(
+                                conversation_id=conversation_id,
+                                sequence=pushed_events,
+                                payload=payload,
+                                event_kind=type(event).__name__,
+                            )
+                            yield f"data: {payload}\n\n"
+                        except Exception as e:
+                            logger.warning(
+                                f"[Router] generate 序列化异常，停止推送：{e!r}"
+                            )
+                            status_message = 1
+                            break
+                finally:
+                    if not run_task.done():
+                        run_task.cancel()
+                        status_message = 1
+                        finish_reason = "client_disconnected"
+                        logger.debug(
+                            f"[Router] 客户端断连，取消后台任务：conv={conversation_id}"
+                        )
+                        to_logger(level=Level.INFO, message=user_query,
+                                  extra=Extra(source=get_real_ip(request), user=body.get("userId", ""),
+                                              result=ResultEnum.FAILED,
+                                              terminal=socket.gethostbyname(socket.gethostname())),
+                                  log_context=http_request_tag_context.log_context,
+                                  )
+                    else:
+                        to_logger(level=Level.INFO, message=user_query,
+                                  extra=Extra(source=get_real_ip(request), user=body.get("userId", ""),
+                                              result=ResultEnum.SUCCESS,
+                                              terminal=socket.gethostbyname(socket.gethostname())),
+                                  log_context=http_request_tag_context.log_context,
+                                  )
+
+                    duration_ms = int(time.time() * 1000) - request_started_ms
+                    to_logger(
+                        level=Level.WARNING if status_message else Level.INFO,
+                        message=build_http_trace(
+                            http_request_tag_context=http_request_tag_context,
+                            output_payload={
+                                "mode": "stream",
+                                "status_code": status.HTTP_200_OK,
+                                "events": pushed_events,
+                                "finish_reason": finish_reason,
+                            },
+                        ),
+                        extra=Extra(tag=Tag.TAG_HTTP_REQUEST_END, cost=max(duration_ms, 0)),
+                        log_context=http_request_tag_context.log_context,
+                    )
+        return StreamingResponse(
+            generate(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    collected = []
+    run_task = asyncio.create_task(run())
+    status_message = 0
+    while True:
+        try:
+            event = await next_sse_event(event_queue)
+            if event is None:
+                break
+            if (
+                isinstance(event, TaskStatusUpdateEvent)
+                and event.status
+                and event.status.state == TASK_STATE_FAILED
+            ):
+                status_message = 1
+            collected.append(event)
+        except Exception as e:
+            logger.warning(f"[Router] non-stream 队列异常：{e!r}")
+            status_message = 1
+            break
+    await run_task
+
+    def _is_completed_task_event(evt: Any) -> bool:
+        return (
+            isinstance(evt, TaskStatusUpdateEvent)
+            and evt.status
+            and evt.status.state == TASK_STATE_COMPLETED
+            and evt.status.message
+        )
+
+    answer = ""
+    for event in collected:
+        if _is_completed_task_event(event):
+            for part in event.status.message.parts:
+                if part.WhichOneof("content") == "text":
+                    answer = part.text
+                    break
+
+    response_content = {"success": True, "answer": answer}
+    duration_ms = int(time.time() * 1000) - request_started_ms
+    to_logger(
+        level=Level.WARNING if status_message else Level.INFO,
+        message=build_http_trace(
+            http_request_tag_context=http_request_tag_context,
+            output_payload=response_content,
+        ),
+        extra=Extra(tag=Tag.TAG_HTTP_REQUEST_END, cost=max(duration_ms, 0)),
+        log_context=http_request_tag_context.log_context,
+    )
+    to_logger(level=Level.INFO, message=user_query,
+              extra=Extra(source=get_real_ip(request), user=body.get("userId", ""), result=ResultEnum.SUCCESS,
+                          terminal=socket.gethostbyname(socket.gethostname())),
+              log_context=http_request_tag_context.log_context,
+              )
+    return JSONResponse(content=response_content)
