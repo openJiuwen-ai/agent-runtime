@@ -687,7 +687,6 @@ class Executor(AgentExecutor):
                     output_payload=output_payload,
                     status_message=status_message,
                     duration_ms=duration_ms,
-                    start_time=call_started_ms,
                 ),
                 extra=Extra(tag=Tag.TAG_VERSATILE_END, cost=max(duration_ms, 0)),
             )
