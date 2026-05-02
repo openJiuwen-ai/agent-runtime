@@ -113,7 +113,10 @@ class Tag(StrEnum):
     TAG_HTTP_REQUEST_END = "TAG_HTTP_REQUEST_END"
     TAG_AGENT_INIT_TOOLLIST = "TAG_AGENT_INIT_TOOLLIST"
     TAG_LLM_CALL_START = "TAG_LLM_CALL_START"
-    TAG_LLM_CALL_END = "TAG_LLM_CALL_END"
+    TAG_LLM_CALL_FIRST_TOKEN = "TAG_LLM_CALL_FIRST_TOKEN"       #大模型首TOKEN返回
+    TAG_LLM_CALL_STREAM_TOKEN = "TAG_LLM_CALL_STREAM_TOKEN"     #大模型流式TOKEN返回
+    TAG_LLM_CALL_END = "TAG_LLM_CALL_END"                       #大模型调用结束
+    TAG_LLM_CALL_STATISTICS = "TAG_LLM_CALL_STATISTICS"         #大模型调用统计
     TAG_PLANNING_DECISION = "TAG_PLANNING_DECISION"
     TAG_TODOLIST_QUERY = "TAG_TODOLIST_QUERY"
     TAG_TODOLIST_SAVE = "TAG_TODOLIST_SAVE"
@@ -123,6 +126,7 @@ class Tag(StrEnum):
     TAG_TOOL_EXECUTE_END = "TAG_TOOL_EXECUTE_END"
     TAG_VERSATILE_START = "TAG_VERSATILE_START"
     TAG_VERSATILE_END = "TAG_VERSATILE_END"
+    TAG_CUSTOM = "TAG_CUSTOM"                                   #自定义的不确定，用于临时打日志调试
 
 
 class ResultEnum(StrEnum):
@@ -179,7 +183,10 @@ def to_logger(level: str = Level.INFO, message: Any = "",
               log_context: LogContext | None = None):
     """
     记录日志，支持直接传入 log_context 而不需要使用 with bind_context() 语法。
+<<<<<<< HEAD
+=======
 
+>>>>>>> 284d3198494401de83d663be61844791b8415e5d
     Args:
         level: 日志级别
         message: 日志消息
@@ -209,9 +216,9 @@ def to_logger(level: str = Level.INFO, message: Any = "",
     # 使用 logger.contextualize 添加所有上下文和额外字段
     if context_params:
         with logger.contextualize(**context_params):
-            logger.log(level, message)
+            logger.opt(depth=1).log(level, message)
     else:
-        logger.log(level, message)
+        logger.opt(depth=1).log(level, message)
 		
 
 def get_real_ip(request: Request):
@@ -356,6 +363,7 @@ def build_versatile_start_observation(
             "request_header": request_headers,
             "request_body": request_body,
         },
+        status_message=0,
     )
 
 
@@ -366,6 +374,7 @@ def build_versatile_end_observation(
     output_payload: dict[str, Any],
     status_message: Any,
     duration_ms: int,
+    start_time: int,
 ) -> TagObservation:
     trace_id, _, _ = current_tag_context()
     return TagObservation(
@@ -373,8 +382,11 @@ def build_versatile_end_observation(
         trace_id=trace_id,
         type=ObservationType.TOOL,
         name=name,
+        start_time=datetime.fromtimestamp(int(start_time/1000)).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
         end_time=current_local_time(),
         output=output_payload,
         status_message=status_message,
         total_cost=max(duration_ms, 0),
     )
+
+
