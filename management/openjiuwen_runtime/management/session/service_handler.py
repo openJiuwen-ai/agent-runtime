@@ -1,7 +1,7 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
-"""单实例：服务级并发（单请求=1）、session 子处理器、部署与下行通道。"""
+"""单实例：服务级并发按 session 预留 session_concurrency、消息级在 invoke_channel 计数、session 子处理器与下行通道。"""
 
 from __future__ import annotations
 
@@ -28,25 +28,29 @@ __all__ = ("ServiceHandler",)
 
 
 class ServiceHandler(IServiceHandler):
-    """单请求占 1 个服务并发；request_id 注册在 _by_request 供下行多路复用写回。"""
+    """每个 session 首次占用时在本实例上预留 ``session_concurrency`` 的服务额度；
+    同 session 的后续消息不再增加预留，仅受 SessionHandler 内并发限制。
+    通道在途请求数见 ``inflight_requests``（用于 TTL / idle 钩子），与服务额度无关。"""
 
     def __init__(
-            self,
-            service_id: Optional[str] = None,
-            *,
-            total_concurrency: int = 200,
-            message_channel: IServiceMessageChannel,
-            response_parser: IResponseParser,
-            deploy_controller: Optional[IDeployController] = None,
-            generation: int = 0,
+        self,
+        service_id: Optional[str] = None,
+        *,
+        total_concurrency: int = 200,
+        message_channel: IServiceMessageChannel,
+        response_parser: IResponseParser,
+        deploy_controller: Optional[IDeployController] = None,
+        generation: int = 0,
     ) -> None:
         if total_concurrency <= 0:
             raise ValueError("total_concurrency must be positive")
         self._id = service_id or str(uuid.uuid4())
         self._total = total_concurrency
         self._generation = generation
-        # 服务级并发：与 session 内并发独立，二者都通过 acquire 排队
-        self._service_sem = asyncio.BoundedSemaphore(total_concurrency)
+        # session_id -> 已预留的服务级额度（等于该 session 声明的 session_concurrency）
+        self._session_reserved: Dict[str, int] = {}
+        self._session_create_lock = asyncio.Lock()
+        # 通道上尚未完成回调的请求数（消息粒度），用于 idle / session 延期清理
         self._inflight = 0
         self._channel = message_channel
         self._parser = response_parser
@@ -73,11 +77,22 @@ class ServiceHandler(IServiceHandler):
 
     @property
     def available_concurrency(self) -> int:
-        return self._total - self._inflight
+        used = sum(self._session_reserved.values())
+        return max(0, self._total - used)
 
     @property
     def inflight_requests(self) -> int:
         return self._inflight
+
+    def try_reserve_session_quota(self, session_id: str, quota: int) -> bool:
+        """为尚未预留的 session 占用服务额度；已预留则幂等成功。非 async，供 ServiceManager 持锁调用。"""
+        if session_id in self._session_reserved:
+            return True
+        need = max(1, int(quota))
+        if self.available_concurrency < need:
+            return False
+        self._session_reserved[session_id] = need
+        return True
 
     @property
     def active_session_count(self) -> int:
@@ -95,7 +110,7 @@ class ServiceHandler(IServiceHandler):
         return self._pod_info
 
     def set_idle_pool_transition_hook(
-            self, hook: Optional[Callable[[str], Awaitable[None]]]
+        self, hook: Optional[Callable[[str], Awaitable[None]]]
     ) -> None:
         """由 ServiceManager 设置: 每次 inflight 归零后回调一次, 由 Manager 自行判断
         是否要 flush 已到期 session、是否要 arm service_ttl。"""
@@ -115,19 +130,26 @@ class ServiceHandler(IServiceHandler):
             logger.error("session_concurrency 非法: %s", max_sess)
             raise ValueError("session_concurrency must be positive")
 
-        # 每 session 一个 SessionHandler, 内用 BoundedSemaphore 做会话内限流
-        sh = self._sessions.get(session_id)
-        if sh is None:
-            sh = SessionHandler(
-                session_id, max_sess, self, self._session_router
-            )
-            self._sessions[session_id] = sh
-            logger.info(
-                "新 session 子处理器: service_id=%s session_id=%s max_parallel=%s",
-                self._id,
-                session_id,
-                max_sess,
-            )
+        # 每 session 一个 SessionHandler；额度由 ServiceManager 持锁预留，或直接调用本实例时在此补齐
+        async with self._session_create_lock:
+            sh = self._sessions.get(session_id)
+            if sh is None:
+                if session_id not in self._session_reserved:
+                    if not self.try_reserve_session_quota(session_id, max_sess):
+                        raise RuntimeError(
+                            f"service_id={self._id} 无足够并发为新 session 预留 "
+                            f"(session_concurrency={max_sess}, available={self.available_concurrency})"
+                        )
+                sh = SessionHandler(
+                    session_id, max_sess, self, self._session_router
+                )
+                self._sessions[session_id] = sh
+                logger.info(
+                    "新 session 子处理器: service_id=%s session_id=%s max_parallel=%s",
+                    self._id,
+                    session_id,
+                    max_sess,
+                )
         logger.debug(
             "ServiceHandler 分发到 SessionHandler: service_id=%s session_id=%s request_id=%s",
             self._id,
@@ -137,32 +159,29 @@ class ServiceHandler(IServiceHandler):
         await sh.handle_message(msg)
 
     async def invoke_channel(self, wrapper: SessionRequestWrapper) -> None:
-        """SessionHandler 在取得 session 信号量后调用：再占 1 路服务级并发, 经通道下发给下游。
+        """SessionHandler 在取得 session 信号量后调用：登记在途请求并发通道（不占服务额度）。
 
         此处 ``await self._channel.send(...)`` 为
         ``WSServiceMessageChannel`` 等 ``IServiceMessageChannel`` 实现的业务上行入口。
         """
-        await self._service_sem.acquire()
-        session_concurrency = wrapper.session_request.session_concurrency
-        self._inflight += session_concurrency
+        self._inflight += 1
         rid = wrapper.session_request.request_id
         if rid:
             self._by_request[rid] = wrapper
         logger.debug(
-            "invoke_channel 开始: service_id=%s inflight=%s/%s request_id=%s",
+            "invoke_channel 开始: service_id=%s channel_inflight=%s reserved_sessions=%s request_id=%s",
             self._id,
             self._inflight,
-            self._total,
+            len(self._session_reserved),
             rid,
         )
 
         async def _complete(r: Optional[str]) -> None:
-            self._inflight = max(0, self._inflight - session_concurrency)
-            self._service_sem.release()
+            self._inflight = max(0, self._inflight - 1)
             if r:
                 self._by_request.pop(r, None)
             logger.debug(
-                "invoke_channel 完成释放并发: service_id=%s inflight=%s request_id=%s",
+                "invoke_channel 完成: service_id=%s channel_inflight=%s request_id=%s",
                 self._id,
                 self._inflight,
                 r,
@@ -191,7 +210,7 @@ class ServiceHandler(IServiceHandler):
             raise
 
     async def dispatch_inbound_chunk(
-            self, data: dict[str, Any], response_parser: IResponseParser
+        self, data: dict[str, Any], response_parser: IResponseParser
     ) -> bool:
         """长连接多路复用：按响应中的 request_id 写回对应 response_queue。"""
         rid = response_parser.request_id(data)
@@ -211,7 +230,9 @@ class ServiceHandler(IServiceHandler):
     async def remove_session(self, session_id: str) -> int:
         sh = self._sessions.pop(session_id, None)
         if sh is None:
+            self._session_reserved.pop(session_id, None)
             return 0
+        self._session_reserved.pop(session_id, None)
         logger.info("移除 session: service_id=%s session_id=%s", self._id, session_id)
         for rid in list(sh.active_rids):
             w = self._by_request.get(rid)
@@ -239,8 +260,8 @@ class ServiceHandler(IServiceHandler):
         self._closed = True
         self._sessions.clear()
         self._by_request.clear()
+        self._session_reserved.clear()
         self._inflight = 0
-        self._service_sem = asyncio.BoundedSemaphore(self._total)
         await self._session_router.clear()
         logger.info("ServiceHandler 已销毁: service_id=%s", self._id)
 

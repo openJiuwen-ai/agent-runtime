@@ -123,4 +123,6 @@ async def test_session_cap_interleaves_other_sessions() -> None:
     ch.gate.set()
     await asyncio.gather(*tasks)
     assert h.inflight_requests == 0
+    await h.remove_session("sess1")
+    await h.remove_session("sess2")
     assert h.available_concurrency == 20

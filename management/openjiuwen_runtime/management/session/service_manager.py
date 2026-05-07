@@ -1,7 +1,7 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
-"""服务管理：双 asyncio 队列（系统优先）、单请求=1 服务并发、亲和、起停与缩容。"""
+"""服务管理：双 asyncio 队列（系统优先）、按 session 预留服务并发、亲和、起停与缩容。"""
 
 from __future__ import annotations
 
@@ -314,9 +314,6 @@ class ServiceManager(IServiceManager):
         logger.debug("新服务 deploy 成功, 待加入池: service_id=%s", h.id)
         return h
 
-    # 单请求在实例上占 1 个服务并发
-    _NEED = 1
-
     async def _handle_user_request(self, raw: RawMessage) -> None:
         w = raw.message
         if not isinstance(w, SessionRequestWrapper):
@@ -330,20 +327,36 @@ class ServiceManager(IServiceManager):
         self._pending_expired_sessions.pop(session_id, None)
         h: Optional[IServiceHandler] = None
         try:
-            # 在锁内完成亲和查找 / 新拉实例，避免与池状态竞争；handle_message 在锁外执行
+            # 在锁内完成亲和查找 / 新实例 / 新 session 的服务额度预留与路由绑定
             async with self._lock:
                 h = await self._pick_or_create(sreq)
+                if h is not None:
+                    bound_sid = await self._service_router.get_session_service(session_id)
+                    if bound_sid is None:
+                        if not h.try_reserve_session_quota(
+                            session_id, sreq.session_concurrency
+                        ):
+                            logger.warning(
+                                "服务额度预留失败(与 pick 不一致): session_id=%s service_id=%s "
+                                "need=%s avail=%s",
+                                session_id,
+                                h.id,
+                                sreq.session_concurrency,
+                                h.available_concurrency,
+                            )
+                            h = None
+                        else:
+                            await self._service_router.set_session_service(
+                                session_id, h.id
+                            )
+                            logger.info(
+                                "session 已绑定到实例: session_id=%s -> service_id=%s",
+                                session_id,
+                                h.id,
+                            )
             if h is not None:
                 # 新消息分配到该服务：取消 service_ttl 计时（in_use→idle 转入）
                 await self._cancel_in_use_to_idle_timer(h.id)
-            async with self._lock:
-                if h is not None and not h.has_session(session_id):
-                    await self._service_router.set_session_service(session_id, h.id)
-                    logger.info(
-                        "session 已绑定到实例: session_id=%s -> service_id=%s",
-                        session_id,
-                        h.id,
-                    )
             if h is None:
                 await self._fail(w, 100001, session_id=session_id)
                 return
@@ -613,7 +626,7 @@ class ServiceManager(IServiceManager):
         # 1) 亲和：该 session 已绑定到某 service，则复用（不管代际）
         # 2) 否则在 in_use/idle 中找同代际且尚有服务级并发的实例
         # 3) 再否则在 max 允许下新 deploy（带当前 generation）
-        need = self._NEED
+        need = max(1, int(sreq.session_concurrency))
         session_id = sreq.session_id
         sid = await self._service_router.get_session_service(session_id)
         if sid is not None:

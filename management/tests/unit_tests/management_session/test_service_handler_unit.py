@@ -56,7 +56,7 @@ class _Ch:
 def _sreq() -> ISessionRequest:
     return SessionRequest(
         session_id="s1",
-        concurrency=2,
+        concurrency=1,
         ttl=0,
         request_id="r1",
         raw=cast(IRequest, object()),
@@ -79,6 +79,8 @@ async def test_one_inflight_decrements() -> None:
     assert h.available_concurrency == 1
     await h.handle_message(w)
     assert h.inflight_requests == 0
+    assert h.available_concurrency == 0
+    await h.remove_session("s1")
     assert h.available_concurrency == 1
     assert await h._session_router.get_request_session_size() == 0
 

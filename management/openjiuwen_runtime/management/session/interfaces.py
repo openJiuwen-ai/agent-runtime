@@ -266,10 +266,14 @@ class IServiceHandler(ABC):
     def available_concurrency(self) -> int:
         pass
 
+    @abstractmethod
+    def try_reserve_session_quota(self, session_id: str, quota: int) -> bool:
+        """为新 session 预留 ``quota`` 点服务并发；同一 session 重复调用须幂等成功。"""
+
     @property
     @abstractmethod
     def inflight_requests(self) -> int:
-        """当前实例上占用的服务级并发（单请求计 1）。"""
+        """当前实例上通道在途请求数（消息粒度），用于 TTL / idle；不等同于服务额度占用。"""
 
     @property
     @abstractmethod
