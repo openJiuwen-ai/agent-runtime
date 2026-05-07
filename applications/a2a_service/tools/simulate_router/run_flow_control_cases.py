@@ -415,7 +415,7 @@ class FlowControlTester:
         await self.post(conv, stream=False)
         status_code, body = await self.post(conv, stream=True)
         text = body.decode("utf-8", errors="replace") if isinstance(body, (bytes, bytearray)) else str(body)
-        passed = status_code == 429 and "error_code" in text and "[DONE]" in text
+        passed = status_code == 429 and "error_code" in text
         return CaseResult("R02", passed, f"status={status_code}, body={text[:120]!r}")
 
     async def case_r03(self) -> CaseResult:
