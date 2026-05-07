@@ -141,22 +141,18 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
             venv_path = self.venv_manager.create_venv(deployment_id)
             logger.info("Virtual environment created: %s", venv_path)
 
-            if settings.MODE == "dev":
-                # 安装基础运行时 WHL（foundation/management/service）
-                base_whl_files = sorted(settings.dist_path.glob("openjiuwen_runtime_*.whl"))
-                for whl_file in base_whl_files:
-                    self.venv_manager.pip_install(deployment_id, str(whl_file))
-                    logger.info("Installed base WHL: %s", whl_file.name)
+            # 获取所有 .whl 文件
+            logger.info("dist_path: %s", settings.dist_path)
+            whl_files = list(settings.dist_path.glob("*.whl"))
+            if not whl_files:
+                raise RuntimeError(f"No .whl files found in dist directory: {settings.dist_path}")
 
-                # 安装 CLI 指定的 agent/plugin WHL
-                if whl_path and Path(whl_path).exists():
-                    self.venv_manager.pip_install(deployment_id, str(whl_path))
-                    logger.info("Installed agent WHL: %s", whl_path)
-                else:
-                    raise RuntimeError(f"Agent WHL not found: {whl_path}")
-            else:
-                # 从 PyPI仓库安装 lowcode-agent-runner
-                self.venv_manager.pip_install(deployment_id, "lowcode-agent-runner")
+            logger.info("whl_files: %s", whl_files)
+
+            # 循环安装所有 whl 包
+            for whl_file in whl_files:
+                self.venv_manager.install_whl(deployment_id, str(whl_file))
+                logger.info("Installed WHL package: %s", whl_file)
 
             # 获取虚拟环境Python解释器
             python_executable = self.venv_manager.get_python_executable(deployment_id)
@@ -165,15 +161,12 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
             if not package_name:
                 raise RuntimeError("package_name is required for subprocess deployment")
 
-            # 未指定端口时自动分配可用端口
-            port = ctx.port if ctx.port else self._get_available_port()
-
             cmd = [
                 str(python_executable),
                 "-m",
                 package_name,
                 "--host", "0.0.0.0",
-                "--port", str(port)
+                "--port", str(ctx.port)
             ]
             if ir_path:
                 cmd.extend(["--irpath", ir_path])
@@ -191,36 +184,27 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
                 env["RUNTIME_USERDATA"] = userdata
                 logger.info("Using userdata: %s", mask_userdata(userdata))
 
-            # 创建日志目录，将 stdout/stderr 重定向到日志文件
-            log_dir = venv_path.parent / "logs"
-            log_dir.mkdir(parents=True, exist_ok=True)
-            log_file = log_dir / "agent.log"
-            log_fp = open(log_file, "a", encoding="utf-8")
-
             process = subprocess.Popen(
                 cmd,
                 env=env,
-                stdout=log_fp,
-                stderr=log_fp,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 creationflags=creation_flags,
             )
-            logger.info("Agent log file: %s", log_file)
 
             # 6. 等待进程启动并检查状态
             await asyncio.sleep(2)
 
             if process.poll() is not None:
-                # 进程已经退出，从日志文件读取错误信息
-                log_fp.close()
-                error_msg = "Unknown error"
-                try:
-                    error_msg = log_file.read_text(encoding="utf-8", errors="ignore").strip() or error_msg
-                except Exception:
-                    pass
+                # 进程已经退出，读取错误信息
+                stdout, stderr = process.communicate()
+                stderr_txt = stderr.decode("utf-8", errors="ignore")
+                stdout_txt = stdout.decode("utf-8", errors="ignore")
+                error_msg = stderr_txt or stdout_txt or "Unknown error"
                 logger.error("Process exited for %s: %s", deployment_id, error_msg)
                 raise RuntimeError(f"Process exited: {error_msg}")
 
-            url = f"http://{settings.IP}:{port}/"
+            url = f"http://{settings.IP}:{ctx.port}/"
             logger.info(
                 "Deployment %s succeeded, PID: %s, URL: %s",
                 deployment_id,

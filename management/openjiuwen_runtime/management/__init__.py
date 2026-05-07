@@ -4,7 +4,6 @@
 """OpenJiuwen Runtime Management SDK"""
 
 from openjiuwen_runtime.foundation.db.handler import DBHandler
-from openjiuwen_runtime.foundation.db.gaussdb_handler import GaussDBHandler
 from openjiuwen_runtime.foundation.db.mysql_handler import MySQLHandler
 from openjiuwen_runtime.foundation.db.sqlite_handler import SQLiteHandler
 
@@ -61,7 +60,6 @@ __all__ = [
     "DBHandler",
     "SQLiteHandler",
     "MySQLHandler",
-    "GaussDBHandler",
     # Base
     "CommonParams",
     "DeployContext",

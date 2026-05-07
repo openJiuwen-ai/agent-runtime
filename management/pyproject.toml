@@ -14,7 +14,7 @@ dependencies = [
     # config
     "pyyaml>=6.0",
     # db
-    "sqlalchemy==2.0.41",
+    "sqlalchemy==2.0.48",
     "pymysql==1.1.1",
     "cryptography>=42.0.0",
     "pydantic==2.11.7",
@@ -24,7 +24,7 @@ dependencies = [
     "redis==7.1.0",
     # lint
     "ruff==0.9.10",
-    "openjiuwen-runtime-foundation==0.1.0"
+    # local dependency
 ]
 
 [tool.uv.sources]

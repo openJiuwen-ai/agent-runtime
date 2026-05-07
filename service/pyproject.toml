@@ -8,14 +8,17 @@ version = "0.1.0"
 description = "OpenJiuwen Runtime"
 requires-python = ">=3.11.4"
 dependencies = [
+    "openjiuwen-runtime-foundation",
     "fastapi==0.115.11",
     "uvicorn[standard]==0.42.0",
     "pydantic==2.11.7",
     "pydantic[email]==2.11.7",
     "pydantic-settings==2.5.2",
     "greenlet>=3.3.1",
-    "openjiuwen-runtime-foundation==0.1.0"
 ]
+
+[tool.uv.sources]
+openjiuwen-runtime-foundation = { path = "../foundation", editable = true }
 
 [tool.uv]
 default-groups = ['dev']

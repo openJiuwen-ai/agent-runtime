@@ -4,7 +4,6 @@
 from .handler import DBHandler
 from .sqlalchemy_handler import SQLAlchemyHandler
 from .mysql_handler import MySQLHandler
-from .gaussdb_handler import GaussDBHandler
 from .sqlite_handler import SQLiteHandler
 from .redis_handler import RedisHandler
 
@@ -12,7 +11,6 @@ __all__ = [
     "DBHandler",
     "SQLAlchemyHandler",
     "MySQLHandler",
-    "GaussDBHandler",
     "SQLiteHandler",
     "RedisHandler",
 ]

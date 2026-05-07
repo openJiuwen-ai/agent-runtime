@@ -9,9 +9,8 @@ COPY foundation ./foundation
 COPY management ./management
 COPY server ./server
 
-RUN sed -i '/"openjiuwen-runtime-foundation==/d' /app/management/pyproject.toml
-RUN sed -i '/"openjiuwen-runtime-foundation==/d' /app/server/pyproject.toml
-RUN sed -i '/"openjiuwen-runtime-management==/d' /app/server/pyproject.toml
+RUN sed -i '/openjiuwen-runtime-foundation/d' /app/management/pyproject.toml
+RUN sed -i '/openjiuwen-runtime-management/d' /app/server/pyproject.toml
 
 RUN pip install uv -i ${INDEX_URL}
 RUN sed -i "s#url = \"[^\"]*\"#url = \"${INDEX_URL}\"#g" /app/foundation/pyproject.toml

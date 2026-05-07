@@ -8,7 +8,6 @@ import subprocess
 import sys
 import os
 import shlex
-import time
 from pathlib import Path
 from typing import Optional
 from .log import get_logger
@@ -156,100 +155,82 @@ class VirtualEnvironmentManager:
 
         return python_path
 
-    def pip_install(self, deployment_id: str, package: str) -> bool:
+
+    def install_whl(self, deployment_id: str, whl_path: str) -> bool:
         """
-        Install a specified PyPI package in the isolated virtual environment.
-        Auto retry on network timeout error, with uv cache resume support.
+        在虚拟环境中安装WHL包
 
         Args:
-            deployment_id: Unique identifier for the deployment
-            package: Package name with optional version specifier,
-                    e.g. requests, fastapi==0.115.11, local wheel path
+            deployment_id: 部署ID
+            whl_path: WHL包文件路径
 
         Returns:
-            True if installation succeeded, False otherwise
+            是否安装成功
+
+        Raises:
+            RuntimeError: 安装失败
         """
         python_executable = self.get_python_executable(deployment_id)
+
+        logger.info("Installing WHL package: %s into %s", whl_path, deployment_id)
+
         uv_extra_args_list = shlex.split(settings.UV_EXTRA_ARGS.strip())
 
-        logger.info("Installing package: %s into venv [%s]", package, deployment_id)
-
+        # 使用 uv pip 安装包，通过虚拟环境路径指定目标环境
         uv_exe = _resolve_uv_executable()
         cmd = [
             uv_exe, "pip", "install",
-            package,
+            whl_path,
             "--python", str(python_executable),
             *uv_extra_args_list
         ]
-        logger.debug("Execute install command: %s", " ".join(cmd))
+        logger.debug("Command: %s", " ".join(cmd))
 
-        max_retry = 3
-        retry_delay = 5
-        retry_count = 0
+        try:
+            env = os.environ.copy()
+            env["VIRTUAL_ENV"] = str(self.get_venv_path(deployment_id))
+            result = subprocess.run(
+                cmd,
+                env=env,
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+            )
 
-        timeout_keywords = {
-            "operation timed out",
-            "network timeout",
-            "request or response body error",
-            "failed to fetch",
-            "timeout"
-        }
-
-        while retry_count < max_retry:
-            try:
-                env = os.environ.copy()
-                env["VIRTUAL_ENV"] = str(self.get_venv_path(deployment_id))
-                # Extended timeout for slow private pypi
-                env["UV_HTTP_TIMEOUT"] = "600"
-                env["UV_REQUEST_TIMEOUT"] = "600"
-                # Disable concurrent download for unstable internal repo
-                env["UV_CONCURRENT_DOWNLOADS"] = "1"
-
-                result = subprocess.run(
-                    cmd,
-                    env=env,
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
+            if result.returncode != 0:
+                logger.warning(
+                    "pip install returned code %s: %s",
+                    result.returncode,
+                    result.stderr,
                 )
 
-                if result.returncode == 0:
-                    logger.info("Package installed successfully: %s", package)
-                    return True
+            result = subprocess.run(
+                [str(python_executable), "-m", "pip", "list", "--format=json"],
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+            )
 
-                # Check whether error is network timeout related
-                stderr_lower = result.stderr.lower()
-                is_timeout_error = any(kw in stderr_lower for kw in timeout_keywords)
+            if result.returncode == 0:
+                import json
+                installed_packages = json.loads(result.stdout)
+                whl_name = Path(whl_path).stem.split("-")[0].lower().replace("_", "-")
+                for pkg in installed_packages:
+                    if pkg["name"].lower().replace("_", "-") == whl_name:
+                        logger.info("WHL package installed successfully: %s", whl_path)
+                        return True
 
-                logger.error(
-                    "Package install failed | exit_code=%s | retry=%s/%s | stderr=%s",
-                    result.returncode, retry_count + 1, max_retry, result.stderr
-                )
+                logger.error("WHL package not found in installed list: %s", whl_path)
+                raise RuntimeError(
+                    "Failed to install WHL package: package not in pip list"
+                ) from None
+            else:
+                logger.error("Failed to verify installation: %s", result.stderr)
+                raise RuntimeError("Failed to verify WHL installation") from None
 
-                if not is_timeout_error:
-                    # Non-timeout error, no retry
-                    return False
-
-                retry_count += 1
-                if retry_count < max_retry:
-                    logger.warning(
-                        "Network timeout detected, retry after %s seconds",
-                        retry_delay
-                    )
-                    time.sleep(retry_delay)
-
-            except Exception as e:
-                logger.error(
-                    "Exception occurred while installing package %s: %s",
-                    package, str(e)
-                )
-                retry_count += 1
-                if retry_count < max_retry:
-                    time.sleep(retry_delay)
-
-        logger.error("Reached maximum retry limit, install failed: %s", package)
-        return False
-
+        except Exception as e:
+            logger.error("Failed to install WHL: %s", e)
+            raise RuntimeError(f"Failed to install WHL package: {e}") from e
 
     def delete_venv(self, deployment_id: str) -> bool:
         """
