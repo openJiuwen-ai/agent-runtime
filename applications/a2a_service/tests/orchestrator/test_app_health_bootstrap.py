@@ -35,6 +35,11 @@ setattr(sys.modules["agents"], "EDPAgent", fake_edp_agent)
 
 app_module = importlib.import_module("app")
 
+# 本测试模块的目标即覆盖 ``app._BootstrapCoordinator`` 这一实现细节类的
+# disabled / leader / follower / close 等分支。这里通过一次性引入本地别名
+# 集中访问，避免在每个用例中反复触发 G.CLS.11（受保护成员访问）。
+BootstrapCoordinator = app_module._BootstrapCoordinator  # pylint: disable=protected-access
+
 
 class _FakeRedis:
     def __init__(self, *, lock_granted: bool = False, follower_state: dict | None = None):
@@ -98,7 +103,7 @@ async def test_health_check_returns_success_passthrough():
 @pytest.mark.asyncio
 async def test_bootstrap_run_skips_when_disabled():
     redis = _FakeRedis(lock_granted=True)
-    coordinator = app_module._BootstrapCoordinator(
+    coordinator = BootstrapCoordinator(
         settings=_settings(bootstrap_coordination_enabled=False),
         redis=redis,
     )
@@ -125,7 +130,7 @@ async def test_bootstrap_run_leader_flow_marks_ready_and_releases_lock(monkeypat
     monkeypatch.setattr(app_module, "_run_global_bootstrap_once", _fake_run_global_bootstrap_once)
 
     redis = _FakeRedis(lock_granted=True)
-    coordinator = app_module._BootstrapCoordinator(settings=_settings(), redis=redis)
+    coordinator = BootstrapCoordinator(settings=_settings(), redis=redis)
 
     await coordinator.run()
 
@@ -150,7 +155,7 @@ async def test_bootstrap_run_follower_flow_waits_ready(monkeypatch):
     monkeypatch.setattr(app_module, "_wait_for_bootstrap_ready", _fake_wait_for_bootstrap_ready)
 
     redis = _FakeRedis(lock_granted=False)
-    coordinator = app_module._BootstrapCoordinator(settings=_settings(), redis=redis)
+    coordinator = BootstrapCoordinator(settings=_settings(), redis=redis)
 
     await coordinator.run()
 
@@ -168,7 +173,7 @@ async def test_bootstrap_run_follower_flow_raises_when_wait_timeout(monkeypatch)
     monkeypatch.setattr(app_module, "_wait_for_bootstrap_ready", _fake_wait_for_bootstrap_ready)
 
     redis = _FakeRedis(lock_granted=False, follower_state={"status": "initializing", "owner_id": "x"})
-    coordinator = app_module._BootstrapCoordinator(settings=_settings(), redis=redis)
+    coordinator = BootstrapCoordinator(settings=_settings(), redis=redis)
 
     with pytest.raises(RuntimeError, match="等待 LEADER bootstrap 完成失败"):
         await coordinator.run()
@@ -184,7 +189,7 @@ async def test_mark_failed_if_needed_sets_failed_status_when_needed(monkeypatch)
     monkeypatch.setattr(app_module, "_set_bootstrap_status", _fake_set_bootstrap_status)
 
     redis = _FakeRedis(lock_granted=False)
-    coordinator = app_module._BootstrapCoordinator(settings=_settings(), redis=redis)
+    coordinator = BootstrapCoordinator(settings=_settings(), redis=redis)
     coordinator.leader_locked = True
     coordinator.bootstrap_ready = False
 
@@ -203,7 +208,7 @@ async def test_mark_failed_if_needed_swallows_internal_errors(monkeypatch):
     monkeypatch.setattr(app_module, "_set_bootstrap_status", _fake_set_bootstrap_status)
 
     redis = _FakeRedis(lock_granted=False)
-    coordinator = app_module._BootstrapCoordinator(settings=_settings(), redis=redis)
+    coordinator = BootstrapCoordinator(settings=_settings(), redis=redis)
     coordinator.leader_locked = True
     coordinator.bootstrap_ready = False
 
@@ -213,7 +218,7 @@ async def test_mark_failed_if_needed_swallows_internal_errors(monkeypatch):
 @pytest.mark.asyncio
 async def test_close_releases_leader_lock_when_held():
     redis = _FakeRedis(lock_granted=False)
-    coordinator = app_module._BootstrapCoordinator(settings=_settings(), redis=redis)
+    coordinator = BootstrapCoordinator(settings=_settings(), redis=redis)
     coordinator.leader_locked = True
 
     await coordinator.close()

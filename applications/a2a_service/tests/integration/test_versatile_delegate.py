@@ -163,6 +163,19 @@ def _make_executor_with_va_stream(va_events: list[TaskArtifactUpdateEvent]) -> E
     return Executor(va_client=va_client, redis=redis, task_store=task_store)
 
 
+def _is_event_with_state(event, state) -> bool:
+    """判断事件是否是 ``TaskStatusUpdateEvent`` 且处于指定状态。
+
+    抽成单独的 helper 是为了把推导式中包含多个 ``and`` 子句的过滤条件
+    简化为单子句形式（参考 G.EXP.04：避免推导式带超过两个子句或多行子句）。
+    """
+    return (
+        isinstance(event, TaskStatusUpdateEvent)
+        and event.status is not None
+        and event.status.state == state
+    )
+
+
 def _drain_queue(queue: EventQueue) -> list:
     inner = getattr(queue, "_queue", None) or getattr(queue, "queue", None)
     if inner is None:
@@ -483,10 +496,12 @@ def _make_executor_with_real_task(
     va_events: list[TaskArtifactUpdateEvent],
     *,
     initial_va_task_id: str = "stale-va-task-id",
-) -> tuple[Executor, Task]:
+) -> tuple[Executor, Task, MagicMock]:
     """变体：task_store.get 返回真实 Task，验证 save 时落了哪些字段。
 
-    Returns: (executor, task) — 直接拿 task 看最终持久化状态。
+    Returns: (executor, task, task_store) — 直接拿 task 看最终持久化状态；
+    一并返回 task_store 引用，方便用例 assert ``save`` 调用而不必访问
+    ``executor`` 的受保护成员（参考 G.CLS.11）。
     """
     fake_task = Task(
         id=TASK_ID,
@@ -506,15 +521,17 @@ def _make_executor_with_real_task(
     })
 
     va_client = MagicMock()
+
     def mock_send_message(request):
         return _async_iter([_wrap_as_stream_resp(e) for e in va_events])
+
     va_client.send_message = mock_send_message
 
     task_store = MagicMock()
     task_store.get = AsyncMock(return_value=fake_task)
     task_store.save = AsyncMock()
 
-    return Executor(va_client=va_client, redis=redis, task_store=task_store), fake_task
+    return Executor(va_client=va_client, redis=redis, task_store=task_store), fake_task, task_store
 
 
 @pytest.mark.asyncio
@@ -522,7 +539,7 @@ async def test_va_error_event_marks_task_failed_and_clears_task_id(monkeypatch):
     """VA 流出现 event=error 时：task 落 FAILED + va_task_id 清空，破解 conv_id 锁死。"""
     err_msg = "执行报错，错误码：103104，错误信息：'NoneType' object has no attribute 'content'"
     va_events = [_va_terminal_event("error", {"code": "103104", "message": err_msg})]
-    executor, task = _make_executor_with_real_task(va_events)
+    executor, task, task_store = _make_executor_with_real_task(va_events)
 
     async def fake_agent_stream(**kwargs):
         yield DelegateRequest(intent="查", task_description="查灰度")
@@ -538,7 +555,7 @@ async def test_va_error_event_marks_task_failed_and_clears_task_id(monkeypatch):
     )
 
     # 至少一次 save 调用，最终状态是 FAILED，va_task_id 被清空
-    save_calls = executor._task_store.save.call_args_list
+    save_calls = task_store.save.call_args_list
     assert len(save_calls) >= 1
     saved_task = save_calls[-1][0][0]
     assert saved_task.status.state == TASK_STATE_FAILED
@@ -554,7 +571,7 @@ async def test_va_error_event_enqueues_failed_status_with_message(monkeypatch):
     """
     err_msg = "执行报错，错误码：103104，错误信息：xxx"
     va_events = [_va_terminal_event("error", {"code": "103104", "message": err_msg})]
-    executor, _ = _make_executor_with_real_task(va_events)
+    executor, _task, _task_store = _make_executor_with_real_task(va_events)
 
     async def fake_agent_stream(**kwargs):
         yield DelegateRequest(intent="查", task_description="查")
@@ -570,11 +587,7 @@ async def test_va_error_event_enqueues_failed_status_with_message(monkeypatch):
     )
 
     enqueued = _drain_queue(queue)
-    failed_events = [
-        e for e in enqueued
-        if isinstance(e, TaskStatusUpdateEvent)
-        and e.status and e.status.state == TASK_STATE_FAILED
-    ]
+    failed_events = [e for e in enqueued if _is_event_with_state(e, TASK_STATE_FAILED)]
     assert len(failed_events) == 1, f"期望 1 个 FAILED 事件，实际 {len(failed_events)} 个"
     fe = failed_events[0]
     assert fe.status.message, "FAILED 事件必须带 status.message 让前端拿到错误描述"
@@ -591,7 +604,7 @@ async def test_va_error_event_enqueues_failed_status_with_message(monkeypatch):
 async def test_va_error_event_does_not_emit_input_required(monkeypatch):
     """VA 流出现 event=error 时：不应再发 INPUT_REQUIRED（避免下次请求走续轮路径锁死 conv_id）。"""
     va_events = [_va_terminal_event("error", {"code": "103104", "message": "错误"})]
-    executor, _ = _make_executor_with_real_task(va_events)
+    executor, _task, _task_store = _make_executor_with_real_task(va_events)
 
     async def fake_agent_stream(**kwargs):
         yield DelegateRequest(intent="查", task_description="查")
@@ -607,11 +620,7 @@ async def test_va_error_event_does_not_emit_input_required(monkeypatch):
     )
 
     enqueued = _drain_queue(queue)
-    input_required = [
-        e for e in enqueued
-        if isinstance(e, TaskStatusUpdateEvent)
-        and e.status and e.status.state == TASK_STATE_INPUT_REQUIRED
-    ]
+    input_required = [e for e in enqueued if _is_event_with_state(e, TASK_STATE_INPUT_REQUIRED)]
     assert len(input_required) == 0, "VA 报错路径不应发出 INPUT_REQUIRED 状态事件"
 
 
@@ -621,7 +630,7 @@ async def test_va_exception_event_also_treated_as_terminal(monkeypatch):
     va_events = [
         _va_terminal_event("exception", {"message": "工作流执行抛出异常"}),
     ]
-    executor, _ = _make_executor_with_real_task(va_events)
+    executor, _task, _task_store = _make_executor_with_real_task(va_events)
 
     async def fake_agent_stream(**kwargs):
         yield DelegateRequest(intent="查", task_description="查")
@@ -637,11 +646,7 @@ async def test_va_exception_event_also_treated_as_terminal(monkeypatch):
     )
 
     enqueued = _drain_queue(queue)
-    failed_events = [
-        e for e in enqueued
-        if isinstance(e, TaskStatusUpdateEvent)
-        and e.status and e.status.state == TASK_STATE_FAILED
-    ]
+    failed_events = [e for e in enqueued if _is_event_with_state(e, TASK_STATE_FAILED)]
     assert len(failed_events) == 1
 
 
@@ -649,7 +654,7 @@ async def test_va_exception_event_also_treated_as_terminal(monkeypatch):
 async def test_va_error_event_does_not_trigger_cascade(monkeypatch):
     """VA 报错不应被当成 End node → 不该触发 cascade 续轮。"""
     va_events = [_va_terminal_event("error", {"code": "103104", "message": "错"})]
-    executor, _ = _make_executor_with_real_task(va_events)
+    executor, _task, _task_store = _make_executor_with_real_task(va_events)
 
     call_count = [0]
 

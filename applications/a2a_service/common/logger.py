@@ -113,10 +113,10 @@ class Tag(StrEnum):
     TAG_HTTP_REQUEST_END = "TAG_HTTP_REQUEST_END"
     TAG_AGENT_INIT_TOOLLIST = "TAG_AGENT_INIT_TOOLLIST"
     TAG_LLM_CALL_START = "TAG_LLM_CALL_START"
-    TAG_LLM_CALL_FIRST_TOKEN = "TAG_LLM_CALL_FIRST_TOKEN"       #大模型首TOKEN返回
-    TAG_LLM_CALL_STREAM_TOKEN = "TAG_LLM_CALL_STREAM_TOKEN"     #大模型流式TOKEN返回
-    TAG_LLM_CALL_END = "TAG_LLM_CALL_END"                       #大模型调用结束
-    TAG_LLM_CALL_STATISTICS = "TAG_LLM_CALL_STATISTICS"         #大模型调用统计
+    TAG_LLM_CALL_FIRST_TOKEN = "TAG_LLM_CALL_FIRST_TOKEN"       # 大模型首TOKEN返回
+    TAG_LLM_CALL_STREAM_TOKEN = "TAG_LLM_CALL_STREAM_TOKEN"     # 大模型流式TOKEN返回
+    TAG_LLM_CALL_END = "TAG_LLM_CALL_END"                       # 大模型调用结束
+    TAG_LLM_CALL_STATISTICS = "TAG_LLM_CALL_STATISTICS"         # 大模型调用统计
     TAG_PLANNING_DECISION = "TAG_PLANNING_DECISION"
     TAG_TODOLIST_QUERY = "TAG_TODOLIST_QUERY"
     TAG_TODOLIST_SAVE = "TAG_TODOLIST_SAVE"
@@ -126,7 +126,7 @@ class Tag(StrEnum):
     TAG_TOOL_EXECUTE_END = "TAG_TOOL_EXECUTE_END"
     TAG_VERSATILE_START = "TAG_VERSATILE_START"
     TAG_VERSATILE_END = "TAG_VERSATILE_END"
-    TAG_CUSTOM = "TAG_CUSTOM"                                   #自定义的不确定，用于临时打日志调试
+    TAG_CUSTOM = "TAG_CUSTOM"                                   # 自定义的不确定，用于临时打日志调试
 
 
 class ResultEnum(StrEnum):
@@ -142,14 +142,15 @@ class Extra(BaseModel):
     result: Optional[ResultEnum] = None
     terminal: Optional[str] = None
 
+
 class Level(StrEnum):
     CRITICAL = "CRITICAL"
     ERROR = "ERROR"
     WARNING = "WARNING"
     INFO = "INFO"
     DEBUG = "DEBUG"
-	
-	
+
+
 @dataclass(frozen=True)
 class LogContext:
     trace_id: str
@@ -165,7 +166,6 @@ class HttpRequestTagContext:
     request_headers: dict[str, str]
     request_body_snapshot: Any
     user_id: str
-
 
 
 # def to_logger(level: str = Level.INFO, message: Any = "", extra: Extra | None = None):
@@ -215,7 +215,7 @@ def to_logger(level: str = Level.INFO, message: Any = "",
             logger.opt(depth=1).log(level, message)
     else:
         logger.opt(depth=1).log(level, message)
-		
+
 
 def get_real_ip(request: Request):
     x_forwarded_for = request.headers.get("x-forwarded-for")
@@ -224,7 +224,7 @@ def get_real_ip(request: Request):
     else:
         client_ip = request.client.host
     return client_ip
-	
+
 
 def current_local_time() -> str:
     # 生成毫秒精度本地时间字符串，显式指定 UTC 时区后转换为本地时区以避免时区歧义
@@ -378,7 +378,7 @@ def build_versatile_end_observation(
         trace_id=trace_id,
         type=ObservationType.TOOL,
         name=name,
-        start_time=datetime.fromtimestamp(int(start_time/1000)).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
+        start_time=datetime.fromtimestamp(int(start_time / 1000)).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
         end_time=current_local_time(),
         output=output_payload,
         status_message=status_message,
