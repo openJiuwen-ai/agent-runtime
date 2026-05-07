@@ -27,6 +27,7 @@ logger = get_logger(__name__)
 
 __all__ = ("WSServiceMessageChannel", "serialize_request_payload")
 
+
 PayloadBuilder = Callable[[Any], str]
 
 
@@ -274,16 +275,18 @@ class WSServiceMessageChannel:
         self._request_done[rid] = ev
         try:
             logger.info(
-                "WSS 业务上行: service_id=%s, request_id=%s, "
-                "session_id=%d, session_concurrency=%d, session_ttl=%d, bytes=%s",
+                "WSS 业务上行: service_id=%s request_id=%s",
                 service_id,
                 rid,
-                wrapper.session_request.session_id,
-                wrapper.session_request.session_concurrency,
-                wrapper.session_request.session_ttl,
-                len(wrapper.session_request.raw_msg),
             )
-            await w.send(wrapper.session_request.raw_msg)
+            payload = wrapper.session_request.raw_msg
+            if isinstance(payload, (bytearray, memoryview)):
+                payload = bytes(payload)
+            if not isinstance(payload, (str, bytes)):
+                raise TypeError(
+                    f"raw_msg must be str or bytes for WebSocket send, got {type(payload).__name__}"
+                )
+            await w.send(payload)
         except Exception as e:
             self._request_done.pop(rid, None)
             logger.error("WSS 上行失败: request_id=%s %s", rid, e, exc_info=True)

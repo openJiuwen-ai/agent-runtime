@@ -320,13 +320,12 @@ async def _run_one(
 ) -> None:
     rid = f"req_{spec.sid}_{seq}_{uuid.uuid4().hex[:6]}"
     msg = _render_message(template, spec.sid, seq, rid)
-    wire = WireIRequest(msg)
     sreq = SessionRequest(
         session_id=spec.sid,
         concurrency=spec.conc,
         ttl=spec.ttl,
         request_id=rid,
-        raw=wire,
+        raw=json.dumps(msg, ensure_ascii=False),
     )
     ts0 = time.monotonic() - t0
     print(
