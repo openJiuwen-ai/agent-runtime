@@ -4,26 +4,28 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ir-execution-service"
-version = "0.1.0"
-description = "IR 执行 HTTP 服务：Runner、记忆引擎、OBS、DSL 工作流编译"
+version = "0.1.1"
+description = "面向低代码的工作流 IR 执行 HTTP 服务：编译 IR、执行节点、管理会话上下文与交互状态"
 requires-python = ">=3.11.4"
-# openjiuwen-runtime-service：本仓库 agent-runtime/service（会传递依赖 openjiuwen-runtime-foundation）。
-# openjiuwen：从 PyPI 安装（>=0.1.9）。
-# openjiuwen_studio：从 git 拉取 backend 子目录源码。
+
 dependencies = [
     "openjiuwen[chromadb,obs]>=0.1.9",
-    "openjiuwen_studio>=0.1.7",
-    "openjiuwen-runtime-service",
     "filelock>=3.13.0",
     "fastapi>=0.104.0",
     "uvicorn[standard]>=0.24.0",
     "pydantic>=2.5.0",
     "sse-starlette>=1.8.0",
     "python-dotenv>=1.2.1",
+    "openjiuwen_studio==0.1.7",
+    "openjiuwen-runtime-foundation==0.1.0",
+    "openjiuwen-runtime-service==0.1.0"
 ]
 
-[tool.uv.sources]
-openjiuwen-runtime-service = { path = "../../service", editable = true }
+
+[project.optional-dependencies]
+gaussdb = [
+    "async-gaussdb>=0.30.4",
+]
 
 [tool.uv]
 default-groups = ["dev"]
@@ -39,15 +41,15 @@ url = "https://mirrors.aliyun.com/pypi/simple/"
 
 [tool.setuptools.packages.find]
 where = ["."]
-exclude = ["*.egg-info", "test_script", "ir_for_test", "logs"]
-include = ["runtime_support*"]
+exclude = [
+    "*.egg-info",
+    "test_script",
+    "ir_for_test",
+    "logs",
+    "ir_execution_service.test*",
+    "ir_execution_service.logs*",
+    "ir_execution_service.openjiuwen_runtime*",
+]
+include = ["ir_execution_service*"]
 
 [tool.setuptools]
-py-modules = [
-    "dsl_workflow_dependency_loader",
-    "invoke_api",
-    "ir_execution_service_app",
-    "react_agent_builder",
-    "stream_api",
-    "workflow_ir_builder",
-]

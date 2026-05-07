@@ -3,6 +3,9 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
 # -*- coding: UTF-8 -*-
+# ruff: noqa: E402
+# 说明：本模块需要在导入业务包之前完成若干环境变量的注入（DB_TYPE、沙箱 URL、
+# 工作流超时等），顺序敏感。故整体豁免 E402 模块级导入顺序检查。
 """
 Lowcode Agent App
 
@@ -37,9 +40,18 @@ import os
 import sys
 from typing import AsyncIterator, Tuple
 
-# 设置 DB_TYPE=none，避免数据库配置检查
-# 注意：使用直接赋值而不是 setdefault，确保覆盖从 runtime 服务继承的 DB_TYPE
-os.environ["DB_TYPE"] = "none"
+# 运行时数据库类型：优先保留外部注入（例如 gaussdb），缺失/非法值回退 sqlite。
+_VALID_DB_TYPES = {"mysql", "sqlite", "gaussdb", "opengauss"}
+_runtime_db_type = (os.getenv("DB_TYPE") or "").strip().lower()
+if _runtime_db_type not in _VALID_DB_TYPES:
+    _runtime_db_type = "sqlite"
+os.environ["DB_TYPE"] = _runtime_db_type
+
+# lowcode 运行链路会间接导入 openjiuwen_studio，当前其数据库层仅支持 mysql/sqlite/none。
+# 当 runtime 以 gaussdb/opengauss 启动时，这里切换 studio 侧 DB_TYPE，避免因不支持而阻塞低码启动。
+_studio_db_type = (os.getenv("LOWCODE_STUDIO_DB_TYPE") or "sqlite").strip().lower()
+if _studio_db_type not in {"mysql", "sqlite", "none"}:
+    _studio_db_type = "sqlite"
 
 
 def _parse_userdata_env_vars():
@@ -51,7 +63,7 @@ def _parse_userdata_env_vars():
     2. userdata.env_vars
     3. 默认值 (最低)
 
-    注意：DB_TYPE 环境变量由 lowcode_agent_runner 控制，不应该被 userdata 覆盖
+    注意：DB_TYPE 环境变量由启动器或系统环境控制，不应该被 userdata 覆盖
     """
     userdata_str = os.getenv("RUNTIME_USERDATA", "")
     env_vars = {}
@@ -90,7 +102,6 @@ from openjiuwen.core.runner import Runner
 from openjiuwen.core.single_agent.legacy import WorkflowAgentConfig as LegacyWorkflowAgentConfig
 
 from openjiuwen_runtime.examples.lowcode_agent.agui_converter import (
-    agui_append_text_and_finish_events,
     agui_assistant_text_as_answer_events,
     agui_error_events,
     agui_trace_context,
@@ -103,6 +114,9 @@ from openjiuwen_runtime.examples.lowcode_agent.workflow_registration import (
     normalize_workflow_providers_for_agent,
 )
 from openjiuwen_runtime.service.app.agent_app import AgentApp
+
+if _runtime_db_type in {"gaussdb", "opengauss"}:
+    os.environ["DB_TYPE"] = _studio_db_type
 
 from openjiuwen_studio.core.executor.component.code_runner.remote import remote_code_runner
 

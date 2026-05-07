@@ -1,0 +1,153 @@
+{
+  "id": "58b3bd35-8280-4e16-9f7c-96d941a5d3a4",
+  "version": "draft",
+  "name": "test_plugin_cloud_001",
+  "description": "云侧tavily插件",
+  "start_id": [
+    "start_0Aihs"
+  ],
+  "end_id": [
+    "end_0Aihs"
+  ],
+  "components": [
+    {
+      "id": "start_0Aihs",
+      "version": "",
+      "name": "开始",
+      "description": "",
+      "type": 1,
+      "type_version": "1.0.0",
+      "inputs": {
+        "query": "${query}"
+      },
+      "outputs": {},
+      "branches": [],
+      "configs": {}
+    },
+    {
+      "id": "end_0Aihs",
+      "version": "",
+      "name": "结束",
+      "description": "",
+      "type": 2,
+      "type_version": "1.0.0",
+      "inputs": {
+        "result": "${plugin_BCvUb.data}",
+        "plugin_error_message": "${plugin_BCvUb.error_message}",
+        "plugin_error_code": "${plugin_BCvUb.error_code}"
+      },
+      "outputs": {},
+      "branches": [],
+      "configs": {
+        "response_template": "",
+        "stream_output": false
+      }
+    },
+    {
+      "id": "plugin_BCvUb",
+      "version": "",
+      "name": "/search",
+      "description": "",
+      "type": 19,
+      "type_version": "1.0.0",
+      "inputs": {
+        "query": "${start_0Aihs.query}"
+      },
+      "outputs": {},
+      "branches": [],
+      "configs": {
+        "type": "service",
+        "tool": {
+          "tool_id": "7a1c117c-fe62-4d16-873e-16571b0ef952",
+          "name": "/search",
+          "description": "/search",
+          "params": [
+            {
+              "name": "query",
+              "description": "用户输入的查询语句",
+              "type": "string",
+              "required": false,
+              "default_value": "",
+              "method": "body",
+              "runtime": true
+            },
+            {
+              "name": "search_depth",
+              "description": "检索深度",
+              "type": "string",
+              "required": false,
+              "default_value": "advanced",
+              "method": "body",
+              "runtime": false
+            },
+            {
+              "name": "Authorization",
+              "description": "Authorization",
+              "type": "string",
+              "required": false,
+              "default_value": "xxx",
+              "method": "header",
+              "runtime": false
+            }
+          ],
+          "path": "https://api.tavily.com/search",
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "method": "POST",
+          "response": []
+        },
+        "exception_config": {
+          "max_retries": 0,
+          "timeout_seconds": 300,
+          "except_handling_method": "break",
+          "return_content": {},
+          "execute_exception_step": {
+            "default_router_id": "default",
+            "error_router_id": "branch_error"
+          }
+        }
+      }
+    }
+  ],
+  "connections": [
+    {
+      "source": "start_0Aihs",
+      "branch_id": "",
+      "target": "plugin_BCvUb"
+    },
+    {
+      "source": "plugin_BCvUb",
+      "branch_id": "",
+      "target": "end_0Aihs"
+    }
+  ],
+  "inputs": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string",
+        "description": ""
+      }
+    },
+    "required": []
+  },
+  "outputs": {
+    "result": {
+      "type": "ref",
+      "description": ""
+    },
+    "plugin_error_message": {
+      "type": "ref",
+      "description": "插件 Restful 失败原因（调试用，对应 ToolComponent error_message）"
+    },
+    "plugin_error_code": {
+      "type": "ref",
+      "description": "插件错误码（调试用，0 通常表示工具层认为成功）"
+    }
+  },
+  "configs": {},
+  "dependencies": {
+    "workflows": []
+  }
+}

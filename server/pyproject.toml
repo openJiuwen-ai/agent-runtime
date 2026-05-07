@@ -8,16 +8,13 @@ version = "1.0.0"
 description = "Agent Runtime Manager Server"
 requires-python = ">=3.11.4"
 dependencies = [
-    "openjiuwen-runtime-foundation",
     "fastapi==0.115.11",
     "uvicorn==0.42.0",
     "python-dotenv>=1.0.0",
     "python-multipart>=0.0.6",
-    # local dependencies
+    "openjiuwen-runtime-foundation==0.1.0",
+    "openjiuwen-runtime-management==0.1.0"
 ]
-
-[tool.uv.sources]
-openjiuwen-runtime-foundation = { path = "../foundation", editable = true }
 
 [tool.uv]
 default-groups = ['dev']
