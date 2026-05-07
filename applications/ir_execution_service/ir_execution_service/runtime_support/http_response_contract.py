@@ -1,8 +1,6 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
-# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
-
 """低码 Runner HTTP 响应体约定。"""
 
 from __future__ import annotations
@@ -114,3 +112,4 @@ def to_jsonable(obj: Any) -> Any:
     if hasattr(obj, "__dict__"):
         return {k: to_jsonable(v) for k, v in vars(obj).items() if not k.startswith("_")}
     return str(obj)
+

@@ -1,0 +1,5 @@
+logs/
+openjiuwen_runtime/
+ir_execution_service/logs/
+ir_execution_service/openjiuwen_runtime/
+__pycache__/

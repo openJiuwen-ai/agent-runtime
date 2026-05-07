@@ -2,9 +2,10 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
 
-"""进程环境变量读取与 LLM_KEY__ 变量名推导；不加载任何 .env 文件。
+"""进程环境变量读取与 LLM_KEY__ 变量名推导。
 
-启动前请调用 runtime_env_prepare.prepare_runtime_environment()。
+本模块不调用 load_dotenv；由应用入口（如 ir_execution_service_app）在启动时加载 .env。
+启动校验与默认值请调用 runtime_env_prepare.prepare_runtime_environment。
 """
 
 from __future__ import annotations
@@ -14,7 +15,10 @@ import re
 from pathlib import Path
 from urllib.parse import urlparse
 
-_APP_ROOT = Path(__file__).resolve().parent.parent
+from .studio_secrets import resolve_secret_env
+
+# Service root: .../applications/ir_execution_service
+_APP_ROOT = Path(__file__).resolve().parent.parent.parent
 ENV_FILE_PATH = _APP_ROOT / ".env"
 
 LLM_API_KEY_ENV_PREFIX = "LLM_KEY__"
@@ -98,7 +102,7 @@ def resolve_llm_api_key_from_env(base_url: str = "") -> str:
     env_key = llm_api_key_env_var_name(base_url)
     if "<SLUG_FROM_BASE_URL>" in env_key:
         return ""
-    return (os.environ.get(env_key) or "").strip()
+    return resolve_secret_env(env_key, "")
 
 
 def resolve_verify_ssl_from_env() -> bool:

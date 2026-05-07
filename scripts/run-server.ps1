@@ -91,6 +91,12 @@ $EnvFile = Join-Path $ServerDir ".env"
 
 Import-DotEnv -EnvFile $EnvFile
 
+$FoundationInstallTarget = "..\foundation"
+if (($env:DB_TYPE ?? "").Trim().ToLower() -in @("gaussdb", "opengauss")) {
+    $FoundationInstallTarget = "..\foundation[gaussdb]"
+    Write-Info "Detected DB_TYPE=$($env:DB_TYPE); install foundation with [gaussdb] optional dependency."
+}
+
 Push-Location $ProjectDir
 try {
     Invoke-CheckedCommand -FilePath "git" -Arguments @("submodule", "update", "--init", "--recursive") -ErrorMessage "git submodule update --init failed"
@@ -162,7 +168,7 @@ try {
             throw "Runtime python not found: $VenvPython"
         }
         Invoke-CheckedCommand -FilePath "uv" -Arguments (@("pip", "install", "-e", "..\management") + $UvExtraArgs) -ErrorMessage "uv pip install management failed"
-        Invoke-CheckedCommand -FilePath "uv" -Arguments (@("pip", "install", "-e", "..\foundation") + $UvExtraArgs) -ErrorMessage "uv pip install foundation failed"
+        Invoke-CheckedCommand -FilePath "uv" -Arguments (@("pip", "install", "-e", $FoundationInstallTarget) + $UvExtraArgs) -ErrorMessage "uv pip install foundation failed"
 
         & $VenvPython -m openjiuwen_runtime.server.main
         if ($LASTEXITCODE -ne 0) {

@@ -3,8 +3,9 @@
 
 """本地测试入口：加载服务根目录 .env，补齐 OBS 占位，再启动服务。
 
-用法（在 applications/ir_execution_service 下）：
-  uv run python test/run_local_with_dotenv.py
+用法（在 applications/ir_execution_service 下，任选其一）：
+  uv run python ir_execution_service/test/run_local_with_dotenv.py
+  uv run python -m ir_execution_service.test.run_local_with_dotenv
 
 可选环境变量：IR_EXEC_HOST（默认 0.0.0.0）、IR_EXEC_PORT（默认 8090）。
 """
@@ -22,9 +23,15 @@ logging.basicConfig(
 )
 _BOOT_LOG = logging.getLogger(__name__)
 
-# 本文件在 .../ir_execution_service/test/；应用与 ir_execution_service_app 在上一级
-_SERVICE_ROOT = Path(__file__).resolve().parent.parent
+# 本文件在 .../applications/ir_execution_service/ir_execution_service/test/
+# 项目根（与 pyproject.toml、.env 同级）为 .../applications/ir_execution_service
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _TEST_IR_ROOT = Path(__file__).resolve().parent
+
+# 从源码目录以「脚本路径」启动时，sys.path[0] 可能不含项目根，导致 `import ir_execution_service` 失败。
+# 用 append 避免 insert(0) 把路径插到最前引发同名模块遮蔽；若仍被 shadow，可改用: python -m ...
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.append(str(_PROJECT_ROOT))
 
 
 def _ensure_env(log: logging.Logger) -> None:
@@ -33,14 +40,14 @@ def _ensure_env(log: logging.Logger) -> None:
     except ImportError as e:
         raise ImportError("缺少 python-dotenv，请在本目录执行: uv sync") from e
 
-    for env_path in (_SERVICE_ROOT / ".env", _TEST_IR_ROOT / ".env"):
+    for env_path in (_PROJECT_ROOT / ".env", _TEST_IR_ROOT / ".env"):
         if env_path.is_file():
             load_dotenv(env_path)
             break
     else:
         log.warning(
             "未找到 %s 或 %s，仅使用当前进程已有环境变量",
-            _SERVICE_ROOT / ".env",
+            _PROJECT_ROOT / ".env",
             _TEST_IR_ROOT / ".env",
         )
 
@@ -70,11 +77,8 @@ def main() -> None:
     # 因此必须确保 dotenv 已加载（见上面的 _ensure_env）。
     log = logging.getLogger(__name__)
 
-    service = str(_SERVICE_ROOT)
-    if service not in sys.path:
-        sys.path.append(service)
-
-    import ir_execution_service_app as app_entry
+    # 以脚本方式运行时 __package__ 为空，不能用相对导入；用包全名导入。
+    import ir_execution_service.ir_execution_service_app as app_entry
 
     host = (os.environ.get("IR_EXEC_HOST") or "0.0.0.0").strip()
     port = int((os.environ.get("IR_EXEC_PORT") or "8090").strip())

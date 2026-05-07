@@ -1,0 +1,11 @@
+exclude logs/*
+recursive-exclude logs *
+
+exclude openjiuwen_runtime/*
+recursive-exclude openjiuwen_runtime *
+
+exclude ir_execution_service/logs/*
+recursive-exclude ir_execution_service/logs *
+
+exclude ir_execution_service/openjiuwen_runtime/*
+recursive-exclude ir_execution_service/openjiuwen_runtime *

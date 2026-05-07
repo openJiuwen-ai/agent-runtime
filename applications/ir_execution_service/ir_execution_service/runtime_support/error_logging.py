@@ -15,7 +15,8 @@ def setup_error_file_logging() -> Path:
     可通过环境变量 IR_ERROR_LOG_PATH 覆盖。
     """
 
-    app_root = Path(__file__).resolve().parent.parent
+    # Service root: .../applications/ir_execution_service
+    app_root = Path(__file__).resolve().parent.parent.parent
     default_path = app_root / "logs" / "error.log"
     raw = (os.environ.get("IR_ERROR_LOG_PATH") or "").strip()
     log_path = Path(raw).expanduser().resolve() if raw else default_path.resolve()

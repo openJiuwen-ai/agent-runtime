@@ -27,6 +27,11 @@ dependencies = [
     "ruff==0.9.10",
 ]
 
+[project.optional-dependencies]
+gaussdb = [
+    "async-gaussdb>=0.30.4",
+]
+
 [tool.uv]
 default-groups = ['dev']
 

@@ -85,7 +85,7 @@
               "description": "Authorization",
               "type": "string",
               "required": false,
-              "default_value": "Bearer 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",
+              "default_value": "xxx",
               "method": "header",
               "runtime": false
             }

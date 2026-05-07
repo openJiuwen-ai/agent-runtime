@@ -9,12 +9,13 @@ description = "Lowcode Agent Runner - 从导出的 JSON 配置加载并运行 Ag
 requires-python = ">=3.11.4"
 dependencies = [
     "openjiuwen[chromadb,obs]==0.1.10",
-    "openjiuwen_studio>=0.1.7",
     "fastapi==0.115.11",
     "uvicorn[standard]==0.42.0",
     "pydantic==2.11.7",
     "pydantic[email]==2.11.7",
     "pydantic-settings==2.5.2",
+    "openjiuwen-studio==0.1.7",
+    "openjiuwen-runtime-service==0.1.0"
 ]
 
 [project.scripts]

@@ -20,7 +20,14 @@ from openjiuwen_studio.lowcode.compiler import AgentCompiler
 from openjiuwen_studio.lowcode.config_adapter import ConfigAdapter
 from openjiuwen_studio.lowcode.schemas import ModelOverride
 
-from runtime_support.runtime_env import get_bool_env, get_env, resolve_llm_api_key_from_env, resolve_memory_scope_id
+from .runtime_support.runtime_env import (
+    clean_env_value,
+    get_bool_env,
+    get_env,
+    resolve_llm_api_key_from_env,
+    resolve_memory_scope_id,
+)
+from .runtime_support.studio_secrets import decrypt_optional_secret, resolve_secret_env
 
 
 def build_model_overrides_from_default_llm_env(export_data: dict[str, Any]) -> dict[str, ModelOverride]:
@@ -30,10 +37,10 @@ def build_model_overrides_from_default_llm_env(export_data: dict[str, Any]) -> d
     if mid is None or not str(mid).strip():
         return {}
 
-    model_name = (os.environ.get("DEFAULT_LLM_MODEL_NAME") or "").strip()
-    base_url = (os.environ.get("DEFAULT_LLM_API_BASE") or "").strip()
-    api_key = (os.environ.get("DEFAULT_LLM_API_KEY") or "").strip()
-    provider = (os.environ.get("DEFAULT_LLM_MODEL_PROVIDER") or "").strip()
+    model_name = clean_env_value("DEFAULT_LLM_MODEL_NAME")
+    base_url = clean_env_value("DEFAULT_LLM_API_BASE")
+    api_key = resolve_secret_env("DEFAULT_LLM_API_KEY", "")
+    provider = clean_env_value("DEFAULT_LLM_MODEL_PROVIDER", "")
 
     if not api_key and base_url:
         api_key = resolve_llm_api_key_from_env(base_url)
@@ -65,9 +72,11 @@ def normalize_runtime_config_for_react_agent(
     m = getattr(config, "model_config", None)
     info = getattr(m, "model_info", None) if m is not None else None
     model_provider = str(getattr(m, "model_provider", "") or "")
+    raw_api_key = str(getattr(info, "api_key", "") or "").strip()
+    api_key_plain = decrypt_optional_secret(raw_api_key)
     mcc = ModelClientConfig(
         model_provider=model_provider,
-        api_key=str(getattr(info, "api_key", "") or ""),
+        api_key=api_key_plain,
         api_base=str(getattr(info, "api_base", "") or ""),
         verify_ssl=get_bool_env("LLM_SSL_VERIFY", True),
     )
@@ -84,7 +93,7 @@ def normalize_runtime_config_for_react_agent(
         mem_scope_id=config.memory_scope_id or "",
         model_name=str(model_name),
         model_provider=model_provider,
-        api_key=str(getattr(info, "api_key", "") or ""),
+        api_key=api_key_plain,
         api_base=str(getattr(info, "api_base", "") or ""),
         prompt_template_name=config.prompt_template_name or "",
         prompt_template=list(config.prompt_template or []),

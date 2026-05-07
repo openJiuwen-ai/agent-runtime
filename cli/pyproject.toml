@@ -12,9 +12,8 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "fastapi>=0.100.0",
     "uvicorn>=0.23.0",
-    # local dependencies
-    # "openjiuwen-runtime-management @ file:///${PROJECT_ROOT}/../management",
-    "openjiuwen-runtime-management==0.0.1",
+    "openjiuwen-runtime-foundation==0.1.0",
+    "openjiuwen-runtime-management==0.1.0"
 ]
 
 [tool.uv]
