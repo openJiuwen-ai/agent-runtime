@@ -1,7 +1,6 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
-# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
 
 """进程环境变量读取与 LLM_KEY__ 变量名推导；不加载任何 .env 文件。
 

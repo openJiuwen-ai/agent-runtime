@@ -2,22 +2,19 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
-# -*- coding: utf-8 -*-
-
 from __future__ import annotations
 
 import json
 import os
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException
 
-from runtime_support.http_response_contract import LowcodeApiResponseCode
-from runtime_support.ir_fetch import (
+from .http_response_contract import LowcodeApiResponseCode
+from .ir_resolver import (
     detect_executable_kind,
-    ensure_ir_local_path,
+    ensure_ir_root,
     lowcode_code_from_http_exception,
 )
 
@@ -31,25 +28,13 @@ class ExecutionPrepareError(Exception):
 
 @dataclass(slots=True)
 class PreparedExecutionRequest:
-    ir_local_json_path: Path
+    ir_root: dict[str, Any]
     executable_kind: str
     inputs_obj: Any
     space_id: str
     current_user: dict[str, Any]
     session_id: str
     timeout_seconds: float
-
-
-def _load_ir_root(ir_local_json_path: Path) -> dict[str, Any]:
-    try:
-        ir_root = json.loads(ir_local_json_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        c = LowcodeApiResponseCode.IR_INVALID
-        raise ExecutionPrepareError(c, f"{c.default_message}: {exc}") from exc
-    if not isinstance(ir_root, dict):
-        c = LowcodeApiResponseCode.IR_INVALID
-        raise ExecutionPrepareError(c, "IR root must be a JSON object")
-    return ir_root
 
 
 def _detect_executable_kind(ir_root: dict[str, Any]) -> str:
@@ -155,12 +140,11 @@ def _prepare_inputs_for_kind(
 
 async def prepare_execution_request(body: Any) -> PreparedExecutionRequest:
     try:
-        ir_local_json_path = await ensure_ir_local_path(getattr(body, "ir_path"))
+        ir_root = await ensure_ir_root(getattr(body, "ir_path"))
     except HTTPException as exc:
         code, message = lowcode_code_from_http_exception(exc)
         raise ExecutionPrepareError(code, message) from exc
 
-    ir_root = _load_ir_root(ir_local_json_path)
     executable_kind = _detect_executable_kind(ir_root)
     user_id = str(getattr(body, "user_id"))
     inputs_obj = _prepare_inputs_for_kind(
@@ -169,7 +153,7 @@ async def prepare_execution_request(body: Any) -> PreparedExecutionRequest:
     space_id = os.environ.get("WORKFLOW_SPACE_ID", "default")
 
     return PreparedExecutionRequest(
-        ir_local_json_path=ir_local_json_path,
+        ir_root=ir_root,
         executable_kind=executable_kind,
         inputs_obj=inputs_obj,
         space_id=space_id,
@@ -177,3 +161,4 @@ async def prepare_execution_request(body: Any) -> PreparedExecutionRequest:
         session_id=getattr(body, "conversation_id"),
         timeout_seconds=getattr(body, "timeout_ms") / 1000.0,
     )
+

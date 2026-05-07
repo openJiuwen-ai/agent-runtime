@@ -1,7 +1,4 @@
 # coding: utf-8
-# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
-
-# -*- coding: utf-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
 
 """execute_stream 的 SSE 逻辑与 chunk 到 ResponseModel 的映射。"""
@@ -9,29 +6,34 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import time
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
-from dsl_workflow_dependency_loader import WorkflowLlmApiKeyMissingError
 from fastapi.exceptions import RequestValidationError
+from openjiuwen.core.context_engine.schema.config import ContextEngineConfig
 from openjiuwen.core.runner import Runner
+from openjiuwen_runtime.foundation.log import get_logger
 from openjiuwen_studio.schemas import ResponseModel
 
-from runtime_support.http_response_contract import (
+from .dsl_workflow_dependency_loader import WorkflowLlmApiKeyMissingError
+from .react_agent_builder import build_react_agent_from_ir_dict
+from .runtime_support.context_persistence import RedisContextPersistence
+from .runtime_support.execution_request import ExecutionPrepareError, prepare_execution_request
+from .runtime_support.http_response_contract import (
     LowcodeApiResponseCode,
     ResponseDataType,
     build_error_response_model,
     to_jsonable,
 )
-from runtime_support.execution_request import ExecutionPrepareError, prepare_execution_request
-from runtime_support.runtime_bootstrap import ensure_runtime_ready
-
-from react_agent_builder import build_react_agent_from_ir
-
-from openjiuwen_runtime.foundation.log import get_logger
+from .runtime_support.runtime_bootstrap import ensure_runtime_ready
+from .runtime_support.workflow_context_helpers import append_user_input_message_if_needed, stable_workflow_context_id
+from .runtime_support.interface_logger import log_server
 
 _log = get_logger(__name__)
+_ctx_store = RedisContextPersistence()
 
 
 @asynccontextmanager
@@ -301,24 +303,54 @@ async def validation_error_stream_events(exc: RequestValidationError) -> AsyncIt
 
 async def execute_stream_event_source(body: Any) -> AsyncIterator[str]:
     """FastAPI 路由层入口。"""
+    t0 = time.perf_counter()
+    last_code: int = 0
+    last_message: str = "success"
     try:
         await ensure_runtime_ready()
     except Exception as e:
-        yield _stream_error_event(LowcodeApiResponseCode.SERVICE_UNAVAILABLE, message=str(e))
+        c = LowcodeApiResponseCode.SERVICE_UNAVAILABLE
+        last_code = int(c)
+        last_message = str(e)
+        yield _stream_error_event(c, message=str(e))
+        log_server(
+            interface_name="execute_stream",
+            cost_ms=(time.perf_counter() - t0) * 1000.0,
+            ok=False,
+            return_code=last_code,
+            return_info=last_message,
+            add_info={"phase": "startup"},
+        )
         return
 
     try:
         prepared = await prepare_execution_request(body)
     except ExecutionPrepareError as exc:
+        last_code = int(exc.code)
+        last_message = str(exc.message)
         yield _stream_error_event(exc.code, message=exc.message)
+        log_server(
+            interface_name="execute_stream",
+            cost_ms=(time.perf_counter() - t0) * 1000.0,
+            ok=False,
+            return_code=last_code,
+            return_info=last_message,
+            add_info={"phase": "prepare"},
+        )
         return
 
     if prepared.executable_kind == "workflow":
-        try:
-            from workflow_ir_builder import build_core_workflow_from_ir_file
+        session_id = str(prepared.session_id or "").strip()
+        if not session_id:
+            c = LowcodeApiResponseCode.MISSING_PARAM
+            yield _stream_error_event(c, message=c.format_message(field="conversation_id"))
+            return
 
-            workflow = await build_core_workflow_from_ir_file(
-                prepared.ir_local_json_path,
+        try:
+            from .workflow_ir_builder import build_core_workflow_from_ir_dict
+
+            workflow = await build_core_workflow_from_ir_dict(
+                prepared.ir_root,
                 space_id=prepared.space_id,
                 current_user=prepared.current_user,
             )
@@ -329,19 +361,88 @@ async def execute_stream_event_source(body: Any) -> AsyncIterator[str]:
             yield _stream_error_event(LowcodeApiResponseCode.IR_LOAD_FAILED, message=str(e))
             return
 
-        chunk_iterator = Runner.run_workflow_streaming(
-            workflow=workflow,
-            inputs=prepared.inputs_obj,
-            session=prepared.session_id,
-        )
-        async for line in _workflow_stream_event_source(chunk_iterator, prepared.timeout_seconds):
-            yield line
+        conversation_id = session_id
+        context_id = stable_workflow_context_id(workflow)
+        had_interaction = False
+
+        from openjiuwen.core.common.constants.constant import INTERACTION
+        from openjiuwen.core.session.stream import OutputSchema
+
+        try:
+            async with _ctx_store.conversation_lock(conversation_id=conversation_id):
+                context = await _ctx_store.load_context(
+                    conversation_id=conversation_id,
+                    context_id=context_id,
+                    config=ContextEngineConfig(),
+                )
+                await append_user_input_message_if_needed(context, prepared.inputs_obj)
+
+                async def _wrapped_chunks() -> AsyncIterator[Any]:
+                    nonlocal had_interaction
+                    inner = Runner.run_workflow_streaming(
+                        workflow=workflow,
+                        inputs=prepared.inputs_obj,
+                        session=prepared.session_id,
+                        context=context,
+                    )
+                    async for ch in inner:
+                        if isinstance(ch, OutputSchema) and ch.type == INTERACTION:
+                            had_interaction = True
+                            await _ctx_store.save_on_interaction(
+                                conversation_id=conversation_id,
+                                context_id=context_id,
+                                context=context,
+                            )
+                        yield ch
+
+                async for line in _workflow_stream_event_source(_wrapped_chunks(), prepared.timeout_seconds):
+                    try:
+                        parsed = json.loads(line)
+                        last_code = int(parsed.get("code", last_code))
+                        last_message = str(parsed.get("message", last_message) or last_message)
+                    except Exception as exc:
+                        _log.warning("failed to parse workflow stream line as json: %s", exc)
+                        last_code = int(LowcodeApiResponseCode.INTERNAL_ERROR)
+                        last_message = "parse failed"
+                    yield line
+
+                if not had_interaction:
+                    await _ctx_store.delete(conversation_id=conversation_id, context_id=context_id)
+        except Exception as e:
+            _log.exception("workflow stream failed: %s", e)
+            if conversation_id:
+                await _ctx_store.delete(conversation_id=conversation_id, context_id=context_id)
+            # Keep existing error mapping behavior.
+            c = LowcodeApiResponseCode.INTERNAL_ERROR
+            last_code = int(c)
+            last_message = str(e)
+            yield _stream_error_event(c, message=str(e))
+        finally:
+            log_server(
+                interface_name="execute_stream",
+                cost_ms=(time.perf_counter() - t0) * 1000.0,
+                ok=last_code == 0,
+                return_code=last_code,
+                return_info=last_message,
+                add_info={"kind": "workflow"},
+            )
         return
 
     try:
-        react_agent = await build_react_agent_from_ir(prepared.ir_local_json_path, prepared.current_user)
+        react_agent = await build_react_agent_from_ir_dict(prepared.ir_root, prepared.current_user)
     except Exception as e:
-        yield _stream_error_event(LowcodeApiResponseCode.IR_LOAD_FAILED, message=str(e))
+        c = LowcodeApiResponseCode.IR_LOAD_FAILED
+        last_code = int(c)
+        last_message = str(e)
+        yield _stream_error_event(c, message=str(e))
+        log_server(
+            interface_name="execute_stream",
+            cost_ms=(time.perf_counter() - t0) * 1000.0,
+            ok=False,
+            return_code=last_code,
+            return_info=last_message,
+            add_info={"phase": "agent_build"},
+        )
         return
 
     chunk_iterator = Runner.run_agent_streaming(
@@ -349,6 +450,24 @@ async def execute_stream_event_source(body: Any) -> AsyncIterator[str]:
         inputs=prepared.inputs_obj,
         session=prepared.session_id,
     )
-    async for line in _agent_stream_event_source(chunk_iterator, prepared.timeout_seconds):
-        yield line
+    try:
+        async for line in _agent_stream_event_source(chunk_iterator, prepared.timeout_seconds):
+            try:
+                parsed = json.loads(line)
+                last_code = int(parsed.get("code", last_code))
+                last_message = str(parsed.get("message", last_message) or last_message)
+            except Exception as exc:
+                _log.warning("failed to parse agent stream line as json: %s", exc)
+                last_code = int(LowcodeApiResponseCode.INTERNAL_ERROR)
+                last_message = "parse failed"
+            yield line
+    finally:
+        log_server(
+            interface_name="execute_stream",
+            cost_ms=(time.perf_counter() - t0) * 1000.0,
+            ok=last_code == 0,
+            return_code=last_code,
+            return_info=last_message,
+            add_info={"kind": "agent"},
+        )
 

@@ -1,9 +1,6 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
-# -*- coding: utf-8 -*-
-# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
-
 """execute_invoke 的业务逻辑与返回体转换。"""
 
 from __future__ import annotations
@@ -14,23 +11,28 @@ from typing import Any
 from fastapi.responses import JSONResponse
 
 from openjiuwen.core.runner import Runner
+from openjiuwen.core.context_engine.schema.config import ContextEngineConfig
 from openjiuwen_runtime.foundation.log import get_logger
 from openjiuwen_studio.schemas import ResponseModel
 
-from dsl_workflow_dependency_loader import WorkflowLlmApiKeyMissingError
-from react_agent_builder import build_react_agent_from_ir
-from runtime_support.http_response_contract import (
+from .dsl_workflow_dependency_loader import WorkflowLlmApiKeyMissingError
+from .react_agent_builder import build_react_agent_from_ir_dict
+from .runtime_support.context_persistence import RedisContextPersistence
+from .runtime_support.http_response_contract import (
     LowcodeApiResponseCode,
     ResponseDataType,
     build_error_response_model,
     to_jsonable,
 )
-from runtime_support.execution_request import ExecutionPrepareError, prepare_execution_request
-from runtime_support.runtime_bootstrap import ensure_runtime_ready
+from .runtime_support.execution_request import ExecutionPrepareError, prepare_execution_request
+from .runtime_support.runtime_bootstrap import ensure_runtime_ready
+from .runtime_support.workflow_context_helpers import append_user_input_message_if_needed, stable_workflow_context_id
 
 JSON_MEDIA_TYPE = "application/json; charset=utf-8"
 
 _log = get_logger(__name__)
+
+_ctx_store = RedisContextPersistence()
 
 
 def _json_response(model: ResponseModel) -> JSONResponse:
@@ -195,11 +197,19 @@ async def handle_execute_invoke(body: Any) -> JSONResponse:
         return _json_response(build_error_response_model(exc.code, message=exc.message))
 
     if prepared.executable_kind == "workflow":
-        from workflow_ir_builder import build_core_workflow_from_ir_file
+        session_id = str(prepared.session_id or "").strip()
+        if not session_id:
+            c = LowcodeApiResponseCode.MISSING_PARAM
+            return _json_response(
+                build_error_response_model(c, message=c.format_message(field="conversation_id"))
+            )
+
+        from .workflow_ir_builder import build_core_workflow_from_ir_dict
+        from openjiuwen.core.workflow import WorkflowExecutionState, WorkflowOutput
 
         try:
-            workflow = await build_core_workflow_from_ir_file(
-                prepared.ir_local_json_path,
+            workflow = await build_core_workflow_from_ir_dict(
+                prepared.ir_root,
                 space_id=prepared.space_id,
                 current_user=prepared.current_user,
             )
@@ -209,19 +219,46 @@ async def handle_execute_invoke(body: Any) -> JSONResponse:
         except Exception as e:
             return _json_response(build_error_response_model(LowcodeApiResponseCode.IR_LOAD_FAILED, message=str(e)))
 
+        conversation_id = session_id
+        context_id = stable_workflow_context_id(workflow)
+
         try:
-            wf_output = await asyncio.wait_for(
-                Runner.run_workflow(workflow=workflow, inputs=prepared.inputs_obj, session=prepared.session_id),
-                timeout=prepared.timeout_seconds,
-            )
+            async with _ctx_store.conversation_lock(conversation_id=conversation_id):
+                context = await _ctx_store.load_context(
+                    conversation_id=conversation_id,
+                    context_id=context_id,
+                    config=ContextEngineConfig(),
+                )
+                await append_user_input_message_if_needed(context, prepared.inputs_obj)
+
+                wf_output = await asyncio.wait_for(
+                    Runner.run_workflow(
+                        workflow=workflow,
+                        inputs=prepared.inputs_obj,
+                        session=prepared.session_id,
+                        context=context,
+                    ),
+                    timeout=prepared.timeout_seconds,
+                )
+
+                if isinstance(wf_output, WorkflowOutput) and wf_output.state == WorkflowExecutionState.INPUT_REQUIRED:
+                    await _ctx_store.save_on_interaction(
+                        conversation_id=conversation_id,
+                        context_id=context_id,
+                        context=context,
+                    )
+                else:
+                    await _ctx_store.delete(conversation_id=conversation_id, context_id=context_id)
         except Exception as e:
             _log.exception("workflow invoke failed: %s", e)
+            if conversation_id:
+                await _ctx_store.delete(conversation_id=conversation_id, context_id=context_id)
             return _json_response(_invoke_exception_to_model(e))
 
         return _json_response(_workflow_invoke_result_to_model(wf_output))
 
     try:
-        react_agent = await build_react_agent_from_ir(prepared.ir_local_json_path, prepared.current_user)
+        react_agent = await build_react_agent_from_ir_dict(prepared.ir_root, prepared.current_user)
     except Exception as e:
         return _json_response(build_error_response_model(LowcodeApiResponseCode.IR_LOAD_FAILED, message=str(e)))
 

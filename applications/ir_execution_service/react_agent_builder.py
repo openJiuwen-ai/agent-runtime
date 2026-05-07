@@ -1,5 +1,5 @@
 # coding: utf-8
-# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
 
 """从 Studio 导出 IR 构建 ReActAgent。"""
 from __future__ import annotations
@@ -325,6 +325,19 @@ async def build_react_agent_from_ir(ir_path: Path, current_user: dict[str, Any])
     model_overrides = build_model_overrides_from_default_llm_env(export_data)
     return await build_react_agent_from_export_data(
         export_data,
+        current_user,
+        model_overrides=model_overrides or None,
+    )
+
+
+async def build_react_agent_from_ir_dict(
+    ir_root: dict[str, Any],
+    current_user: dict[str, Any],
+) -> ReActAgent:
+    """由已解析的 IR 根对象构建 ReActAgent，模型覆盖规则与按文件读取路径一致。"""
+    model_overrides = build_model_overrides_from_default_llm_env(ir_root)
+    return await build_react_agent_from_export_data(
+        ir_root,
         current_user,
         model_overrides=model_overrides or None,
     )

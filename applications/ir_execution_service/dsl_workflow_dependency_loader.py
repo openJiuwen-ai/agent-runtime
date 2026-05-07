@@ -1,9 +1,6 @@
-#!/usr/bin/env python
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
-# -*- coding: utf-8 -*-
-# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
 """
 DSL 工作流依赖解析：从导出 JSON 的 dependencies.workflows 解析子工作流，实现 IWorkflowLoader，
 使 ExecutorWorkflow.compile 无需查库。

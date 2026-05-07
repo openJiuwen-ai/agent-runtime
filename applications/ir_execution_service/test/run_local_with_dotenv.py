@@ -1,9 +1,7 @@
-#!/usr/bin/env python
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
-# -*- coding: utf-8 -*-
-"""本地测试入口：加载服务根目录 .env，补齐 OBS 占位，IR 根目录为本脚本所在 test/，再启动服务。
+"""本地测试入口：加载服务根目录 .env，补齐 OBS 占位，再启动服务。
 
 用法（在 applications/ir_execution_service 下）：
   uv run python test/run_local_with_dotenv.py
@@ -47,7 +45,6 @@ def _ensure_env(log: logging.Logger) -> None:
         )
 
     _TEST_IR_ROOT.mkdir(parents=True, exist_ok=True)
-    os.environ["LOWCODE_IR_DOWNLOAD_DIR"] = str(_TEST_IR_ROOT.resolve())
 
     obs_placeholders = {
         "OBS_ACCESS_KEY_ID": "local-placeholder",
@@ -82,9 +79,8 @@ def main() -> None:
     host = (os.environ.get("IR_EXEC_HOST") or "0.0.0.0").strip()
     port = int((os.environ.get("IR_EXEC_PORT") or "8090").strip())
     log.info(
-        "IR 本地目录: %s\n请求 ir_path 需为该目录下的相对路径，例如 complicated_dsl.json 对应 test/complicated_dsl.json\n"
+        "IR 拉取：通过 OBS（可选二级缓存：内存/Redis）读取；本脚本会注入 OBS 占位配置以便本地启动。\n"
         "监听: http://%s:%s",
-        os.environ.get("LOWCODE_IR_DOWNLOAD_DIR"),
         host,
         port,
     )

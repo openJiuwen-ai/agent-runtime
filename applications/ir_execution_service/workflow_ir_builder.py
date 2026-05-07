@@ -1,9 +1,6 @@
-#!/usr/bin/env python
 # coding: utf-8
-# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
-
-# -*- coding: utf-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
+
 """
 从低码工作流 JSON 构建可执行的 openjiuwen.core.workflow.workflow.Workflow。
 
