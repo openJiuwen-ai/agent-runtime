@@ -16,8 +16,7 @@ class Settings(BaseSettings):
     # --------------------------
     # 【基础配置】
     # --------------------------
-    DB_TYPE: Literal["mysql", "sqlite"] = Field(default="sqlite", env="DB_TYPE")
-
+    DB_TYPE: Literal["mysql", "sqlite", "gaussdb", "opengauss"] = Field(default="sqlite", env="DB_TYPE")
 
     # --------------------------
     # 【MySQL 配置】（静态可选，DB_TYPE=mysql 时必选）
@@ -31,9 +30,8 @@ class Settings(BaseSettings):
     # --------------------------
     # 【服务配置】
     # --------------------------
-    # ✅【必选配置】
-    IP: str = Field(env="IP")
-    LOWCODE_IMAGE: str = Field(env="LOWCODE_IMAGE")
+    IP: Optional[str] = Field(default=None, env="IP")
+    LOWCODE_IMAGE: Optional[str] = Field(default=None, env="LOWCODE_IMAGE")
 
     # 可选配置
     DEPLOY_DIR: str = Field(default="/tmp/deploys", env="DEPLOY_DIR")
@@ -42,6 +40,7 @@ class Settings(BaseSettings):
     PORT: int = Field(default=8186, env="PORT")
     UV_EXTRA_ARGS: str = Field(default="", env="UV_EXTRA_ARGS")
     DEPLOY_TYPE: Literal["subprocess", "docker", "k8s"] = Field(default="subprocess", env="DEPLOY_TYPE")
+    MODE: Literal["dev", "product"] = Field(default="product", env="MODE")
 
     # ========================
     # 内置 对象
@@ -54,7 +53,7 @@ class Settings(BaseSettings):
     # ========================
     @model_validator(mode="after")
     def check_mysql_required(self) -> "Settings":
-        if self.DB_TYPE == "mysql":
+        if self.DB_TYPE in {"mysql", "gaussdb", "opengauss"}:
             missing = []
             if not self.DB_HOST:
                 missing.append("DB_HOST")
@@ -68,7 +67,26 @@ class Settings(BaseSettings):
                 missing.append("DB_NAME")
 
             if missing:
-                raise ValueError(f"When DB_TYPE=mysql, the following fields are required: {', '.join(missing)}")
+                raise ValueError(
+                    f"When DB_TYPE is mysql/gaussdb/opengauss, the following fields are required: {', '.join(missing)}"
+                )
+        return self
+
+    @model_validator(mode="after")
+    def check_runtime_required(self) -> "Settings":
+        missing = []
+        if not self.IP:
+            missing.append("IP")
+
+        if self.DEPLOY_TYPE in {"docker", "k8s"} and not self.LOWCODE_IMAGE:
+            missing.append("LOWCODE_IMAGE")
+
+        if missing:
+            deploy_type = self.DEPLOY_TYPE
+            raise ValueError(
+                f"Missing required runtime settings for DEPLOY_TYPE={deploy_type}: {', '.join(missing)}"
+            )
+
         return self
 
     # ========================

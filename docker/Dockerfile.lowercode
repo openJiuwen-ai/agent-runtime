@@ -9,8 +9,9 @@ COPY applications ./applications
 COPY service ./service
 COPY foundation ./foundation
 
-RUN sed -i '/openjiuwen-runtime-service/d' /app/applications/lowcode_agent/pyproject.toml
-RUN sed -i '/openjiuwen-runtime-foundation/d' /app/applications/lowcode_agent/pyproject.toml
+RUN sed -i '/"openjiuwen-studio==/d' /app/applications/lowcode_agent/pyproject.toml
+RUN sed -i '/"openjiuwen-runtime-service==/d' /app/applications/lowcode_agent/pyproject.toml
+RUN sed -i '/"openjiuwen-runtime-foundation==/d' /app/service/pyproject.toml
 
 RUN pip install uv -i ${INDEX_URL}
 RUN sed -i "s#url = \"[^\"]*\"#url = \"${INDEX_URL}\"#g" /app/applications/lowcode_agent/pyproject.toml
