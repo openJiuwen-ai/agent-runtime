@@ -59,6 +59,7 @@ from common.logger import (
     build_versatile_start_observation,
     mask_sensitive_fields,
     to_logger,
+    Level
 )
 from common.redis_client import RedisClient
 from config import get_settings
@@ -89,10 +90,18 @@ def _log_va_chunk_debug(stream_resp_count: int, event: Any) -> None:
     使用 ``logger.opt(lazy=True)`` 延迟求值：DEBUG 未启用时不会触发 MessageToDict
     与 json.dumps，避免在生产 INFO 级别下白白消耗 CPU。
     """
-    logger.opt(lazy=True).debug(
-        "[Executor] [VersatileProxy] chunk #{} payload={}",
-        lambda c=stream_resp_count: c,
-        lambda e=event: _safe_dump_event(e),
+    # logger.opt(lazy=True).debug(
+    #     "[Executor] [VersatileProxy] chunk #{} payload={}",
+    #     lambda c=stream_resp_count: c,
+    #     lambda e=event: _safe_dump_event(e),
+    # )
+    to_logger(
+        level=Level.DEBUG,
+        message={
+            "stream_resp_count":stream_resp_count,
+            "content":_safe_dump_event(event),
+        },
+        extra=Extra(tag=Tag.TAG_VERSATILE_CHUNK, cost=0),
     )
 
 
