@@ -111,7 +111,7 @@ def agent_event_to_a2a(
         ConversationStartEvent, ConversationEndEvent,
         ThinkStartEvent, ThinkChunkEvent, ThinkEndEvent,
         TodoListStartEvent, TodoListItemEvent, TodoListEndEvent,
-        TodoStartEvent, TodoStatusEvent, TodoEndEvent,
+        TodoStatusEvent, TodoEndEvent,
         ToolStartEvent, ToolStatusEvent, ToolEndEvent,
         PlanningExecutionProcessEvent,
         InterruptStartEvent, InterruptEndEvent,
