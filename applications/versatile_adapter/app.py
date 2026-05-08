@@ -36,20 +36,19 @@ from adapter.versatile_proxy import VersatileProxy
 
 os.environ['NO_PROXY'] = 'localhost,127.0.0.1'
 
-
 def dynamic_format(record) -> str:
     if len(record["extra"]) == 0:
         return "<green>{time:YYYY-MM-DD HH:mm:ss}</green> \x01 " \
                    "<level>{level: <8}</level> \x01 " \
                    "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> \x01 " \
                    "<level>{message}</level> \n"
-    elif "conversation_id" in record["extra"]:
+    elif "conv_id" in record["extra"]:
         return "<green>{time:YYYY-MM-DD HH:mm:ss}</green> \x01 " \
                    "<level>{level: <8}</level> \x01 " \
                    "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> \x01 " \
                    "<cyan>{extra[trace_id]}</cyan> \x01 " \
-                   "<cyan>{extra[task_id]}</cyan> \x01 " \
-                   "<cyan>{extra[conversation_id]}</cyan> \x01 " \
+                   "<cyan>{extra[agent_id]}</cyan> \x01 " \
+                   "<cyan>{extra[conv_id]}</cyan> \x01 " \
                    "<level>{message}</level>\n"
     else:
         return "<green>{time:YYYY-MM-DD HH:mm:ss}</green> \x01 " \
@@ -153,11 +152,11 @@ app = FastAPI(
 @app.middleware("http")
 async def inject_trace_id(request, call_next):
     trace_id = request.headers.get("x-trace-id") or uuid.uuid4().hex
+    logger.debug(f"接收到请求: {request.method} {request.url}，trace_id={trace_id}")
     with logger.contextualize(trace_id=trace_id):
         response = await call_next(request)
     response.headers["x-trace-id"] = trace_id
     return response
-
 
 @app.get("/health", tags=["Health"])
 async def health_check():

@@ -721,7 +721,7 @@ async def dispatch(
     if cached is None:
         await redis.set_json(
             session_request_key(conversation_id),
-            {"headers": headers, "body": body, "params": params},
+            {"headers": headers, "body": body, "params": params, "trace_id": traceid, "agent_id": agent_id},
             ex=_REQUEST_TTL,
         )
 

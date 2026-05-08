@@ -17,6 +17,8 @@ _FORWARD_HEADER_WHITELIST = {
     "x-user-id", "x-project-id", "cust-token", "cust-userid",
     # 允许上游动态覆盖模板里的 Cookie（用户级 AGENT_SID 等）
     "cookie",
+    # 用于端到端的分布式追踪
+    "x-trace-id",
 }
 
 

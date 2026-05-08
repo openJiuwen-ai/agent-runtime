@@ -43,12 +43,20 @@ class VersatileAdapterExecutor(AgentExecutor):  # noqa: F821
     ) -> None:
         task_id = context.task_id
         conv_id = context.context_id
-        trace_id = (context.task_id or uuid.uuid4().hex)
 
-        with logger.contextualize(trace_id=trace_id, task_id=task_id, conv_id=conv_id):
+        # ── 直接使用传过来的请求头和请求体 ────────────────────────────────
+        input_data = self._build_first_input(context.message)
+        versatile_input = input_data.get("body", {})
+        headers = input_data.get("headers", {})
+        params = input_data.get("params", {})
+        trace_id = input_data.get("trace_id", "")
+        agent_id = input_data.get("agent_id", "")
+
+        # 将 trace_id、agent_id 和 conv_id 打在日志中
+        with logger.contextualize(trace_id=trace_id, agent_id=agent_id, conv_id=conv_id):
 
             logger.info(
-                f"[VersatileAdapter] execute：conv_id={conv_id}, task_id={task_id}"
+                f"[VersatileAdapter] execute：conv_id={conv_id}, task_id={task_id}, agent_id={agent_id}"
             )
     
             # 先发送 Task 事件（a2a-sdk 1.0.0 要求）
@@ -68,12 +76,8 @@ class VersatileAdapterExecutor(AgentExecutor):  # noqa: F821
     
             updater = TaskUpdater(event_queue, task_id, conv_id)
     
-            # ── 直接使用传过来的请求头和请求体 ────────────────────────────────
-            input_data = self._build_first_input(context.message)
-            versatile_input = input_data.get("body", {})
-            headers = input_data.get("headers", {})
-            params = input_data.get("params", {})
-            logger.info(f"[VersatileAdapter] 接收请求：conv_id={conv_id}, task_id={task_id}")
+
+            logger.info(f"[VersatileAdapter] 接收请求：conv_id={conv_id}, task_id={task_id}, agent_id={agent_id}")
             logger.debug(f"[VersatileAdapter] 请求头：{headers}")
             logger.debug(f"[VersatileAdapter] 请求体：{versatile_input}")
             logger.debug(f"[VersatileAdapter] 请求参数：{params}")
@@ -118,11 +122,11 @@ class VersatileAdapterExecutor(AgentExecutor):  # noqa: F821
                     )
     
                 logger.info(
-                    f"[VersatileAdapter] 流结束：conv_id={conv_id}, task_id={task_id}"
+                    f"[VersatileAdapter] 流结束：conv_id={conv_id}, task_id={task_id}, agent_id={agent_id}"
                 )
             except Exception as e:
                 logger.exception(
-                    f"[VersatileAdapter] proxy 流异常：conv_id={conv_id}, task_id={task_id}"
+                    f"[VersatileAdapter] proxy 流异常：conv_id={conv_id}, task_id={task_id}, agent_id={agent_id}"
                 )
                 await updater.failed(message=str(e))
                 return
@@ -134,10 +138,14 @@ class VersatileAdapterExecutor(AgentExecutor):  # noqa: F821
         conv_id = context.context_id
         task_id = context.task_id
 
+        # 从 input_data 中获取 agent_id
+        input_data = self._build_first_input(context.message)
+        agent_id = input_data.get("agent_id", "")
+
         updater = TaskUpdater(event_queue, task_id, conv_id)
         await updater.cancel()
         logger.info(
-            f"[VersatileAdapter] 任务已取消：conv_id={conv_id}, task_id={task_id}"
+            f"[VersatileAdapter] 任务已取消：conv_id={conv_id}, task_id={task_id}, agent_id={agent_id}"
         )
 
     def _build_first_input(self, message) -> dict:

@@ -145,6 +145,8 @@ class _VaRequestPayload:
     params: Optional[dict] = None
     task_id: str = ""
     conv_id: str = ""
+    trace_id: str = ""
+    agent_id: str = ""
 
 
 class Executor(AgentExecutor):
@@ -369,6 +371,8 @@ class Executor(AgentExecutor):
                 "headers": payload.headers,
                 "body": payload.body,
                 "params": payload.params or {},
+                "trace_id": payload.trace_id,
+                "agent_id": payload.agent_id,
             }
         )
         data_value = Value()
@@ -542,6 +546,7 @@ class Executor(AgentExecutor):
         headers = cached.get("headers", {})
         body = dict(cached.get("body", {}))
         params = cached.get("params", {})
+        trace_id = cached.get("trace_id", "")
 
         effective_intent, effective_query = _rewrite_recommend_delegate(
             delegate.intent,
@@ -579,6 +584,9 @@ class Executor(AgentExecutor):
 
         va_real_task_id: Optional[str] = None
         continuation_task_id = ""
+        
+        # 从 delegate.target_agent 获取 agent_id
+        agent_id = delegate.target_agent or ""
 
         request = self._build_va_message(
             _VaRequestPayload(
@@ -588,6 +596,8 @@ class Executor(AgentExecutor):
                 params=params,
                 task_id="",
                 conv_id=conv_id,
+                trace_id=trace_id,
+                agent_id=agent_id,
             )
         )
 
@@ -738,6 +748,8 @@ class Executor(AgentExecutor):
         # params 仍从 Redis 首轮缓存取（保留 HEAD 的 params URL query 参数透传）
         cached = await self._redis.get_json(session_request_key(conv_id)) or {}
         params = cached.get("params", {})
+        trace_id = cached.get("trace_id", "")
+        agent_id = cached.get("agent_id", "")
         # 对齐 YGQ：续轮直接使用当前请求携带的 body，确保 buyStatus/tranNo 等
         # 当前轮输入能透传给下游工作流，而不是回退到首轮缓存 body。
         body = dict(original_body)
@@ -749,7 +761,7 @@ class Executor(AgentExecutor):
         call_started_ms = int(time.time() * 1000)
         status_message = 0
         error_message: Optional[str] = None
-
+        
         request = self._build_va_message(
             _VaRequestPayload(
                 query=user_input,
@@ -758,6 +770,8 @@ class Executor(AgentExecutor):
                 params=params,
                 task_id=va_task_id,
                 conv_id=conv_id,
+                trace_id=trace_id,
+                agent_id=agent_id,
             )
         )
 
