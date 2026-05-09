@@ -98,8 +98,8 @@ def _log_va_chunk_debug(stream_resp_count: int, event: Any) -> None:
     to_logger(
         level=Level.DEBUG,
         message={
-            "stream_resp_count":stream_resp_count,
-            "content":_safe_dump_event(event),
+            "stream_resp_count": stream_resp_count,
+            "content": _safe_dump_event(event),
         },
         extra=Extra(tag=Tag.TAG_VERSATILE_CHUNK, cost=0),
     )

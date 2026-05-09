@@ -113,25 +113,27 @@ class Tag(StrEnum):
     TAG_HTTP_REQUEST_END = "TAG_HTTP_REQUEST_END"
     TAG_AGENT_INIT_TOOLLIST = "TAG_AGENT_INIT_TOOLLIST"
     TAG_LLM_CALL_START = "TAG_LLM_CALL_START"
-    TAG_LLM_CALL_FIRST_TOKEN = "TAG_LLM_CALL_FIRST_TOKEN"       #大模型首TOKEN返回
-    TAG_LLM_CALL_STREAM_TOKEN = "TAG_LLM_CALL_STREAM_TOKEN"     #大模型流式TOKEN返回
-    TAG_LLM_CALL_END = "TAG_LLM_CALL_END"                       #大模型调用结束
-    TAG_LLM_CALL_STATISTICS = "TAG_LLM_CALL_STATISTICS"         #大模型调用统计
-    TAG_PLANNING_DECISION = "TAG_PLANNING_DECISION"             #大模型规划任务执行
+    TAG_LLM_CALL_FIRST_TOKEN = "TAG_LLM_CALL_FIRST_TOKEN"       # 大模型首TOKEN返回
+    TAG_LLM_CALL_STREAM_TOKEN = "TAG_LLM_CALL_STREAM_TOKEN"     # 大模型流式TOKEN返回
+    TAG_LLM_CALL_END = "TAG_LLM_CALL_END"                       # 大模型调用结束
+    TAG_LLM_CALL_STATISTICS = "TAG_LLM_CALL_STATISTICS"         # 大模型调用统计
+    TAG_PLANNING_DECISION = "TAG_PLANNING_DECISION"             # 大模型规划任务执行
     TAG_TODOLIST_QUERY = "TAG_TODOLIST_QUERY"
-    TAG_TODOLIST_SAVE = "TAG_TODOLIST_SAVE"                     #任务执行完毕保存状态
+    TAG_TODOLIST_SAVE = "TAG_TODOLIST_SAVE"                     # 任务执行完毕保存状态
     TAG_SKILL_EXECUTE_START = "TAG_SKILL_EXECUTE_START"
     TAG_SKILL_EXECUTE_END = "TAG_SKILL_EXECUTE_END"
     TAG_TOOL_EXECUTE_START = "TAG_TOOL_EXECUTE_START"
     TAG_TOOL_EXECUTE_END = "TAG_TOOL_EXECUTE_END"
-    TAG_VERSATILE_START = "TAG_VERSATILE_START"                 #Versatile调用开始
-    TAG_VERSATILE_CHUNK = "TAG_VERSATILE_CHUNK"                 #Versatile流式chunk返回
-    TAG_VERSATILE_END = "TAG_VERSATILE_END"                     #Versatile调用结束
-    TAG_CUSTOM = "TAG_CUSTOM"                                   #自定义的不确定，用于临时打日志调试
+    TAG_VERSATILE_START = "TAG_VERSATILE_START"                 # Versatile调用开始
+    TAG_VERSATILE_CHUNK = "TAG_VERSATILE_CHUNK"                 # Versatile流式chunk返回
+    TAG_VERSATILE_END = "TAG_VERSATILE_END"                     # Versatile调用结束
+    TAG_CUSTOM = "TAG_CUSTOM"                                   # 自定义的不确定，用于临时打日志调试
+
 
 class ResultEnum(StrEnum):
     SUCCESS = "success"
     FAILED = "failed"
+
 
 class Extra(BaseModel):
     tag: Optional[Tag] = None

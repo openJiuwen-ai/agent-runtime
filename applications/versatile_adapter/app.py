@@ -36,6 +36,7 @@ from adapter.versatile_proxy import VersatileProxy
 
 os.environ['NO_PROXY'] = 'localhost,127.0.0.1'
 
+
 def dynamic_format(record) -> str:
     if len(record["extra"]) == 0:
         return "<green>{time:YYYY-MM-DD HH:mm:ss}</green> \x01 " \
@@ -157,6 +158,7 @@ async def inject_trace_id(request, call_next):
         response = await call_next(request)
     response.headers["x-trace-id"] = trace_id
     return response
+
 
 @app.get("/health", tags=["Health"])
 async def health_check():
