@@ -91,7 +91,9 @@ class VersatileProxy:
         curl = self._generate_curl_command(request, body)
         banner_start = f"{'='*20} Proxy Request (Stream) Start {'='*20}"
         banner_end = f"{'='*20} Proxy Request (Stream) End {'='*20}"
-        logger.info("\n{}\n{}\n{}", banner_start, curl, banner_end)
+        logger.info("[VersatileProxy] {}", banner_start)
+        logger.info("[VersatileProxy] {}", curl)
+        logger.info("[VersatileProxy] {}", banner_end)
 
     async def dispatch_stream(
         self,
