@@ -113,27 +113,26 @@ class Tag(StrEnum):
     TAG_HTTP_REQUEST_END = "TAG_HTTP_REQUEST_END"
     TAG_AGENT_INIT_TOOLLIST = "TAG_AGENT_INIT_TOOLLIST"
     TAG_LLM_CALL_START = "TAG_LLM_CALL_START"
-    TAG_LLM_CALL_FIRST_TOKEN = "TAG_LLM_CALL_FIRST_TOKEN"       # 大模型首TOKEN返回
-    TAG_LLM_CALL_STREAM_TOKEN = "TAG_LLM_CALL_STREAM_TOKEN"     # 大模型流式TOKEN返回
-    TAG_LLM_CALL_END = "TAG_LLM_CALL_END"                       # 大模型调用结束
-    TAG_LLM_CALL_STATISTICS = "TAG_LLM_CALL_STATISTICS"         # 大模型调用统计
-    TAG_PLANNING_DECISION = "TAG_PLANNING_DECISION"             # 大模型规划任务执行
+    TAG_LLM_CALL_FIRST_TOKEN = "TAG_LLM_CALL_FIRST_TOKEN"  # 大模型首TOKEN返回
+    TAG_LLM_CALL_STREAM_TOKEN = "TAG_LLM_CALL_STREAM_TOKEN"  # 大模型流式TOKEN返回
+    TAG_LLM_CALL_END = "TAG_LLM_CALL_END"  # 大模型调用结束
+    TAG_LLM_CALL_STATISTICS = "TAG_LLM_CALL_STATISTICS"  # 大模型调用统计
+    TAG_PLANNING_DECISION = "TAG_PLANNING_DECISION"  # 大模型规划任务执行
     TAG_TODOLIST_QUERY = "TAG_TODOLIST_QUERY"
-    TAG_TODOLIST_SAVE = "TAG_TODOLIST_SAVE"                     # 任务执行完毕保存状态
+    TAG_TODOLIST_SAVE = "TAG_TODOLIST_SAVE"  # 任务执行完毕保存状态
     TAG_SKILL_EXECUTE_START = "TAG_SKILL_EXECUTE_START"
     TAG_SKILL_EXECUTE_END = "TAG_SKILL_EXECUTE_END"
     TAG_TOOL_EXECUTE_START = "TAG_TOOL_EXECUTE_START"
     TAG_TOOL_EXECUTE_END = "TAG_TOOL_EXECUTE_END"
-    TAG_VERSATILE_START = "TAG_VERSATILE_START"                 # Versatile调用开始
-    TAG_VERSATILE_CHUNK = "TAG_VERSATILE_CHUNK"                 # Versatile流式chunk返回
-    TAG_VERSATILE_END = "TAG_VERSATILE_END"                     # Versatile调用结束
-    TAG_CUSTOM = "TAG_CUSTOM"                                   # 自定义的不确定，用于临时打日志调试
+    TAG_VERSATILE_START = "TAG_VERSATILE_START"  # Versatile调用开始
+    TAG_VERSATILE_CHUNK = "TAG_VERSATILE_CHUNK"  # Versatile流式chunk返回
+    TAG_VERSATILE_END = "TAG_VERSATILE_END"  # Versatile调用结束
+    TAG_CUSTOM = "TAG_CUSTOM"  # 自定义的不确定，用于临时打日志调试
 
 
 class ResultEnum(StrEnum):
     SUCCESS = "success"
     FAILED = "failed"
-
 
 class Extra(BaseModel):
     tag: Optional[Tag] = None
@@ -328,18 +327,22 @@ def build_http_trace(
     release: str = "1.0.0",
 ) -> TagTrace:
     trace_id = http_request_tag_context.log_context.trace_id
-    return TagTrace(
-        id=trace_id,
-        timestamp=current_local_time(),
-        name=http_request_tag_context.request_path,
-        user_id=http_request_tag_context.user_id,
-        session_id=http_request_tag_context.log_context.conversation_id,
-        input=input_payload if input_payload is not None else {},
-        output=output_payload if output_payload is not None else {},
-        metadata=metadata if metadata is not None else {"UNION_NO": trace_id},
-        tags=tags if tags is not None else [],
-        release=release,
-    )
+    result = {
+        "id": trace_id,
+        "timestamp": current_local_time(),
+        "name": http_request_tag_context.request_path,
+        "user_id": http_request_tag_context.user_id,
+        "session_id": http_request_tag_context.log_context.conversation_id,
+        "metadata": metadata if metadata is not None else {"UNION_NO": trace_id},
+        "tags": tags if tags is not None else [],
+        "release": release,
+    }
+    # 只有非 None 时才添加 input/output
+    if input_payload is not None:
+        result["input"] = input_payload
+    if output_payload is not None:
+        result["output"] = output_payload
+    return result
 
 
 def build_versatile_start_observation(
@@ -360,7 +363,6 @@ def build_versatile_start_observation(
             "request_header": request_headers,
             "request_body": request_body,
         },
-        status_message=0,
     )
 
 
@@ -371,7 +373,6 @@ def build_versatile_end_observation(
     output_payload: dict[str, Any],
     status_message: Any,
     duration_ms: int,
-    start_time: int,
 ) -> TagObservation:
     trace_id, _, _ = current_tag_context()
     return TagObservation(
@@ -379,7 +380,6 @@ def build_versatile_end_observation(
         trace_id=trace_id,
         type=ObservationType.TOOL,
         name=name,
-        start_time=datetime.fromtimestamp(int(start_time / 1000)).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
         end_time=current_local_time(),
         output=output_payload,
         status_message=status_message,

@@ -570,6 +570,9 @@ async def dispatch(
         level=Level.INFO,
         message=build_http_trace(
             http_request_tag_context=http_request_tag_context,
+            metadata={
+                "UNION_NO": http_request_tag_context.request_body_snapshot.get("custom_data", {}).get("inputs", {}).get("UNION_NO", None)
+            },
             input_payload={
                 "request_header": http_request_tag_context.request_headers,
                 "request_body": http_request_tag_context.request_body_snapshot,
@@ -591,6 +594,11 @@ async def dispatch(
             level="WARNING",
             message=build_http_trace(
                 http_request_tag_context=http_request_tag_context,
+                metadata={
+                    "UNION_NO": http_request_tag_context.request_body_snapshot.get("custom_data", {}).get("inputs",
+                                                                                                          {}).get(
+                        "UNION_NO", None)
+                },
                 output_payload=response_content,
             ),
             extra=Extra(tag=Tag.TAG_HTTP_REQUEST_END, cost=max(duration_ms, 0)),
@@ -611,6 +619,11 @@ async def dispatch(
             level="WARNING",
             message=build_http_trace(
                 http_request_tag_context=http_request_tag_context,
+                metadata={
+                    "UNION_NO": http_request_tag_context.request_body_snapshot.get("custom_data", {}).get("inputs",
+                                                                                                          {}).get(
+                        "UNION_NO", None)
+                },
                 output_payload=response_content,
             ),
             extra=Extra(tag=Tag.TAG_HTTP_REQUEST_END, cost=max(duration_ms, 0)),
@@ -628,6 +641,11 @@ async def dispatch(
             level=Level.WARNING,
             message=build_http_trace(
                 http_request_tag_context=http_request_tag_context,
+                metadata={
+                    "UNION_NO": http_request_tag_context.request_body_snapshot.get("custom_data", {}).get("inputs",
+                                                                                                          {}).get(
+                        "UNION_NO", None)
+                },
                 output_payload=response_content,
             ),
             extra=Extra(tag=Tag.TAG_HTTP_REQUEST_END, cost=max(duration_ms, 0)),
@@ -680,6 +698,11 @@ async def dispatch(
                             level=Level.WARNING,
                             message=build_http_trace(
                                 http_request_tag_context=http_request_tag_context,
+                                metadata={
+                                    "UNION_NO": http_request_tag_context.request_body_snapshot.get("custom_data",
+                                                                                                   {}).get(
+                                        "inputs", {}).get("UNION_NO", None)
+                                },
                                 output_payload={
                                     "mode": "stream",
                                     "status_code": status.HTTP_429_TOO_MANY_REQUESTS,
@@ -705,6 +728,11 @@ async def dispatch(
             level=Level.WARNING,
             message=build_http_trace(
                 http_request_tag_context=http_request_tag_context,
+                metadata={
+                    "UNION_NO": http_request_tag_context.request_body_snapshot.get("custom_data", {}).get("inputs",
+                                                                                                          {}).get(
+                        "UNION_NO", None)
+                },
                 output_payload=rejection,
             ),
             extra=Extra(tag=Tag.TAG_HTTP_REQUEST_END, cost=max(duration_ms, 0)),
@@ -767,16 +795,16 @@ async def dispatch(
             level=Level.INFO,
             message=build_http_trace(
                 http_request_tag_context=http_request_tag_context,
+                metadata={
+                    "UNION_NO": http_request_tag_context.request_body_snapshot.get("custom_data", {}).get("inputs",
+                                                                                                          {}).get(
+                        "UNION_NO", None)
+                },
                 output_payload=probe_response,
             ),
             extra=Extra(tag=Tag.TAG_HTTP_REQUEST_END, cost=max(duration_ms, 0)),
             log_context=http_request_tag_context.log_context,
         )
-        to_logger(level=Level.INFO, message=user_query,
-                  extra=Extra(source=get_real_ip(request), user=body.get("userId", ""), result=ResultEnum.SUCCESS,
-                              terminal=socket.gethostbyname(socket.gethostname())),
-                  log_context=http_request_tag_context.log_context,
-                  ),
         return JSONResponse(content=probe_response)
 
     # ── Task 管理：conv_id → task_id 映射 ─────────────────────────────────
@@ -920,8 +948,13 @@ async def dispatch(
                     duration_ms = int(time.time() * 1000) - request_started_ms
                     to_logger(
                         level=Level.WARNING if status_message else Level.INFO,
+
                         message=build_http_trace(
                             http_request_tag_context=http_request_tag_context,
+                            metadata={
+                                "UNION_NO": http_request_tag_context.request_body_snapshot.get("custom_data", {}).get(
+                                    "inputs", {}).get("UNION_NO", None)
+                            },
                             output_payload={
                                 "mode": "stream",
                                 "status_code": status.HTTP_200_OK,
@@ -985,14 +1018,13 @@ async def dispatch(
         level=Level.WARNING if status_message else Level.INFO,
         message=build_http_trace(
             http_request_tag_context=http_request_tag_context,
+            metadata={
+                "UNION_NO": http_request_tag_context.request_body_snapshot.get("custom_data", {}).get("inputs", {}).get(
+                    "UNION_NO", None)
+            },
             output_payload=response_content,
         ),
         extra=Extra(tag=Tag.TAG_HTTP_REQUEST_END, cost=max(duration_ms, 0)),
         log_context=http_request_tag_context.log_context,
     )
-    to_logger(level=Level.INFO, message=user_query,
-              extra=Extra(source=get_real_ip(request), user=body.get("userId", ""), result=ResultEnum.SUCCESS,
-                          terminal=socket.gethostbyname(socket.gethostname())),
-              log_context=http_request_tag_context.log_context,
-              )
     return JSONResponse(content=response_content)
