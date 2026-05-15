@@ -624,6 +624,8 @@ class Executor(AgentExecutor):
             extra=Extra(tag=Tag.TAG_VERSATILE_START, cost=0),
         )
 
+        # 收集所有 chunk 用于最终拼接
+        all_chunks = []
         try:
             async for stream_resp in self._va_client.send_message(request):
                 stream_resp_count += 1
@@ -637,6 +639,13 @@ class Executor(AgentExecutor):
 
                 # DEBUG 级：打印从 VersatileAdapter 接收到的整帧报文（步骤 7 首轮路径）
                 _log_va_chunk_debug(stream_resp_count, event)
+                # 收集 chunk 信息
+                chunk_info = {
+                    "index": stream_resp_count,
+                    "event_type": type(event).__name__,
+                    "content": _safe_dump_event(event),
+                }
+                all_chunks.append(chunk_info)
 
                 if va_real_task_id is None and hasattr(event, "task_id") and event.task_id:
                     va_real_task_id = event.task_id
@@ -695,6 +704,7 @@ class Executor(AgentExecutor):
                 "stream_resp_count": stream_resp_count,
                 "has_end_node": has_end_node,
                 "va_task_id": continuation_task_id,
+                "all_chunks": all_chunks,
             }
             if error_message:
                 output_payload["error"] = error_message
@@ -706,12 +716,9 @@ class Executor(AgentExecutor):
                     output_payload=output_payload,
                     status_message=status_message,
                     duration_ms=duration_ms,
-                    start_time=call_started_ms,
                 ),
                 extra=Extra(tag=Tag.TAG_VERSATILE_END, cost=max(duration_ms, 0)),
             )
-
-        logger.debug(f"[Executor] VA stream_resp_count={stream_resp_count}, conv={conv_id}")
 
         if has_end_node:
             cascade = (
@@ -792,12 +799,22 @@ class Executor(AgentExecutor):
             extra=Extra(tag=Tag.TAG_VERSATILE_START, cost=0),
         )
 
+        # 收集所有 chunk 用于最终拼接
+        all_chunks = []
         try:
             async for stream_resp in self._va_client.send_message(request):
                 stream_resp_count += 1
                 event = self._parse_stream_event(stream_resp)
                 if event is None:
                     continue
+
+                # 收集 chunk 信息
+                chunk_info = {
+                    "index": stream_resp_count,
+                    "event_type": type(event).__name__,
+                    "content": _safe_dump_event(event),
+                }
+                all_chunks.append(chunk_info)
 
                 # DEBUG 级：打印从 VersatileAdapter 接收到的整帧报文（步骤 7 续轮路径）
                 _log_va_chunk_debug(stream_resp_count, event)
@@ -831,6 +848,7 @@ class Executor(AgentExecutor):
                 "stream_resp_count": stream_resp_count,
                 "has_end_node": has_end_node,
                 "va_task_id": va_task_id,
+                "all_chunks": all_chunks,
             }
             if error_message:
                 output_payload["error"] = error_message
@@ -842,7 +860,6 @@ class Executor(AgentExecutor):
                     output_payload=output_payload,
                     status_message=status_message,
                     duration_ms=duration_ms,
-                    start_time=call_started_ms,
                 ),
                 extra=Extra(tag=Tag.TAG_VERSATILE_END, cost=max(duration_ms, 0)),
             )

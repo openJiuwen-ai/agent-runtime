@@ -43,7 +43,7 @@ from tools.simulate_router.simulate import router as simulate_router
 os.environ['NO_PROXY'] = 'localhost,127.0.0.1'
 
 
-
+LOG_FIELD_SEPARATOR = '\x01'
 def dynamic_format(record):
     # 安全获取 extra 中的字段，如果不存在则使用默认值
     extra = record.get("extra", {})
@@ -53,33 +53,33 @@ def dynamic_format(record):
 
     if len(extra) > 0 and "tag" not in extra:
         return (
-            f"<green>{{time:YYYY-MM-DD HH:mm:ss.SSS}}</green> \x01 "
-            f"<level>{{level.name:<8}}</level> \x01 "
-            f"<cyan>{{name}}</cyan>:<cyan>{{function}}</cyan>:<cyan>{{line}}</cyan> \x01 "
-            f"<cyan>{trace_id}</cyan> \x01 "
-            f"<cyan>{agent_id}</cyan> \x01 "
-            f"<cyan>{conversation_id}</cyan> \x01 "
+            f"<green>{{time:YYYY-MM-DD HH:mm:ss.SSS}}</green>{LOG_FIELD_SEPARATOR}"
+            f"<level>{{level.name:<8}}</level>{LOG_FIELD_SEPARATOR}"
+            f"<cyan>{{name}}</cyan>:<cyan>{{function}}</cyan>:<cyan>{{line}}</cyan>{LOG_FIELD_SEPARATOR}"
+            f"<cyan>{trace_id}</cyan>{LOG_FIELD_SEPARATOR}"
+            f"<cyan>{agent_id}</cyan>{LOG_FIELD_SEPARATOR}"
+            f"<cyan>{conversation_id}</cyan>{LOG_FIELD_SEPARATOR}"
             f"<level>{{message}}</level>\n"
         )
     elif "tag" in extra:  # tag类日志
         tag = extra.get("tag", "N/A")
         cost = extra.get("cost", "N/A")
         return (
-            f"<green>{{time:YYYY-MM-DD HH:mm:ss.SSS}}</green> \x01 "
+            f"<green>{{time:YYYY-MM-DD HH:mm:ss.SSS}}</green>{LOG_FIELD_SEPARATOR}"
             f"<level>{{level.name:<8}}</level> \x01 "
-            f"<cyan>{{name}}</cyan>:<cyan>{{function}}</cyan>:<cyan>{{line}}</cyan> \x01 "
-            f"<cyan>{trace_id}</cyan> \x01 "
-            f"<cyan>{agent_id}</cyan> \x01 "
-            f"<cyan>{conversation_id}</cyan> \x01 "
-            f"<cyan>{tag}</cyan> \x01 "
-            f"<cyan>{cost}</cyan> \x01 "
+            f"<cyan>{{name}}</cyan>:<cyan>{{function}}</cyan>:<cyan>{{line}}</cyan>{LOG_FIELD_SEPARATOR}"
+            f"<cyan>{trace_id}</cyan>{LOG_FIELD_SEPARATOR}"
+            f"<cyan>{agent_id}</cyan>{LOG_FIELD_SEPARATOR}"
+            f"<cyan>{conversation_id}</cyan>{LOG_FIELD_SEPARATOR}"
+            f"<cyan>{tag}</cyan>{LOG_FIELD_SEPARATOR}"
+            f"<cyan>{cost}</cyan>{LOG_FIELD_SEPARATOR}"
             f"<level>{{message}}</level>\n"
         )
     else:
         return (
-            f"<green>{{time:YYYY-MM-DD HH:mm:ss.SSS}}</green> \x01 "
-            f"<level>{{level.name:<8}}</level> \x01 "
-            f"<cyan>{{name}}</cyan>:<cyan>{{function}}</cyan>:<cyan>{{line}}</cyan> \x01 "
+            f"<green>{{time:YYYY-MM-DD HH:mm:ss.SSS}}</green>{LOG_FIELD_SEPARATOR}"
+            f"<level>{{level.name:<8}}</level>{LOG_FIELD_SEPARATOR}"
+            f"<cyan>{{name}}</cyan>:<cyan>{{function}}</cyan>:<cyan>{{line}}</cyan>{LOG_FIELD_SEPARATOR}"
             f"<level>{{message}}</level>\n"
         )
 
