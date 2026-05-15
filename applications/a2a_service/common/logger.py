@@ -342,7 +342,8 @@ def build_http_trace(
         result["input"] = input_payload
     if output_payload is not None:
         result["output"] = output_payload
-    return result
+
+    return json.dumps(result, ensure_ascii=False)
 
 
 def build_versatile_start_observation(
