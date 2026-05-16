@@ -571,7 +571,8 @@ async def dispatch(
         message=build_http_trace(
             http_request_tag_context=http_request_tag_context,
             metadata={
-                "UNION_NO": http_request_tag_context.request_body_snapshot.get("custom_data", {}).get("inputs", {}).get("UNION_NO", None)
+                "UNION_NO": http_request_tag_context.request_body_snapshot.get("custom_data", {}).get("inputs",
+                    {}).get("UNION_NO", None)
             },
             input_payload={
                 "request_header": http_request_tag_context.request_headers,

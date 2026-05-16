@@ -44,6 +44,8 @@ os.environ['NO_PROXY'] = 'localhost,127.0.0.1'
 
 
 LOG_FIELD_SEPARATOR = '\x01'
+
+
 def dynamic_format(record):
     # 安全获取 extra 中的字段，如果不存在则使用默认值
     extra = record.get("extra", {})

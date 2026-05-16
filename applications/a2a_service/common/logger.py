@@ -134,6 +134,7 @@ class ResultEnum(StrEnum):
     SUCCESS = "success"
     FAILED = "failed"
 
+
 class Extra(BaseModel):
     tag: Optional[Tag] = None
     cost: Optional[int] = None
