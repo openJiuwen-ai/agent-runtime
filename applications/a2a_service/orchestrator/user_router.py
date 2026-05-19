@@ -359,17 +359,23 @@ def _extract_event_meta(event) -> Optional[dict]:
             # tool_* 事件的 plugin 字段要上浮到 custom_rsp_data.plugin，
             # 避免埋在 data 里再被外层的空串覆盖。
             plugin = data_dict.pop("plugin", "")
+            # display 字段上浮到 custom_rsp_data.display（北向接口 v1.3），
+            # 仅当 display 非 None 时才提取，保持向后兼容。
+            display = data_dict.pop("display", None)
             # 若事件自带 data 载荷（如 ToolEndEvent.data），直接作为 payload；
             # 否则剩余字段（id/title/status/args/progress 等）即 payload。
             nested = data_dict.pop("data", None)
             payload = nested if isinstance(nested, dict) else data_dict
-            return {
+            meta: dict[str, Any] = {
                 "kind": "agent",
                 "type": event_type,
                 "content": text_content,
                 "data": payload,
                 "plugin": plugin,
             }
+            if display is not None:
+                meta["display"] = display
+            return meta
 
         # 未知 artifact 形态，回退为 agent thought 兼容
         logger.debug(
@@ -445,6 +451,7 @@ def _serialize_event(event, *, agent_id: str, conversation_id: str, start_time: 
             plugin=meta.get("plugin", ""),
             success=meta.get("success", True),
             error=meta.get("error", ""),
+            display=meta.get("display"),
         )
     else:
         wrapped = wrap_workflow_event(
