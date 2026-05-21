@@ -115,11 +115,13 @@ async def lifespan(fastapi_app: FastAPI):
         f"{sorted(settings.versatile_headers_template.keys())}"
     )
 
+    task_store = InMemoryTaskStore()
+
     executor = VersatileAdapterExecutor(
         versatile_proxy=versatile_proxy,
+        task_store=task_store,
     )
 
-    task_store = InMemoryTaskStore()
     request_handler = DefaultRequestHandler(
         agent_executor=executor,
         task_store=task_store,

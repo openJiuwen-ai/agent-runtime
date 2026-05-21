@@ -775,7 +775,7 @@ class Executor(AgentExecutor):
                 headers=headers,
                 body=body,
                 params=params,
-                task_id=va_task_id,
+                task_id="",
                 conv_id=conv_id,
                 trace_id=trace_id,
                 agent_id=agent_id,

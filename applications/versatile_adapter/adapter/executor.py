@@ -12,6 +12,7 @@ VersatileAdapterExecutor — 无 LLM 的 A2A 执行器（a2a-sdk 1.0.0-alpha.1�
 """
 from __future__ import annotations
 
+import asyncio
 import uuid
 
 from google.protobuf.json_format import MessageToDict, ParseDict
@@ -20,12 +21,25 @@ from typing_extensions import override
 
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
-from a2a.server.tasks import TaskUpdater
+from a2a.server.tasks import TaskStore, TaskUpdater
 from a2a.types.a2a_pb2 import Part, Role
 
 from loguru import logger
 
 from adapter.versatile_proxy import VersatileProxy
+
+_CLEANUP_DELAY_SECONDS = 60.0
+
+
+async def _delayed_delete_task(
+    task_store: TaskStore, task_id: str, call_context,
+) -> None:
+    await asyncio.sleep(_CLEANUP_DELAY_SECONDS)
+    try:
+        await task_store.delete(task_id, call_context)
+        logger.info(f"[VersatileAdapter] Task 已从 TaskStore 删除：task_id={task_id}")
+    except Exception:
+        logger.exception(f"[VersatileAdapter] Task 删除失败：task_id={task_id}")
 
 
 class VersatileAdapterExecutor(AgentExecutor):  # noqa: F821
@@ -34,8 +48,10 @@ class VersatileAdapterExecutor(AgentExecutor):  # noqa: F821
     def __init__(
         self,
         versatile_proxy: VersatileProxy,
+        task_store: TaskStore,
     ) -> None:
         self._proxy = versatile_proxy
+        self._task_store = task_store
 
     @override
     async def execute(
@@ -121,6 +137,7 @@ class VersatileAdapterExecutor(AgentExecutor):  # noqa: F821
                         last_chunk=True,
                     )
     
+                await updater.complete()
                 logger.info(
                     f"[VersatileAdapter] 流结束：conv_id={conv_id}, task_id={task_id}, agent_id={agent_id}"
                 )
@@ -129,7 +146,13 @@ class VersatileAdapterExecutor(AgentExecutor):  # noqa: F821
                     f"[VersatileAdapter] proxy 流异常：conv_id={conv_id}, task_id={task_id}, agent_id={agent_id}"
                 )
                 await updater.failed(message=str(e))
-                return
+            finally:
+                if task_id and context.call_context:
+                    asyncio.create_task(
+                        _delayed_delete_task(
+                            self._task_store, task_id, context.call_context
+                        )
+                    )
 
     @override
     async def cancel(
@@ -147,6 +170,12 @@ class VersatileAdapterExecutor(AgentExecutor):  # noqa: F821
         logger.info(
             f"[VersatileAdapter] 任务已取消：conv_id={conv_id}, task_id={task_id}, agent_id={agent_id}"
         )
+        if task_id and context.call_context:
+            asyncio.create_task(
+                _delayed_delete_task(
+                    self._task_store, task_id, context.call_context
+                )
+            )
 
     def _build_first_input(self, message) -> dict:
         for part in message.parts:
