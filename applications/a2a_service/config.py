@@ -46,6 +46,8 @@ class Settings(BaseSettings):
 
     # ── VersatileAdapter（内部 A2A 服务地址）────────────────────────────────
     versatile_adapter_url: Optional[str] = None
+    # a2a_service → VersatileAdapter 的 HTTP 超时（秒），与 VERSATILE_TIMEOUT 默认值对齐
+    versatile_adapter_timeout: float = 600.0
     # VA 流中携带工作流最终结果的 QA 节点名称（node_type=="QA" 且 node_name==此值）
     va_workflow_result_node: Optional[str] = None
 
