@@ -61,6 +61,7 @@ def wrap_agent_event(
     plugin: str = "",
     success: bool = True,
     error: str = "",
+    display: bool | None = None,
 ) -> dict[str, Any]:
     """包装 EDPAgent 内部事件（think / todolist / tool / interrupt / summary 等）。
 
@@ -79,6 +80,8 @@ def wrap_agent_event(
         success: 顶层 ``success`` 字段。VA 上游报错或内部异常映射为 interrupt_start
             帧时设为 False，对齐 AgentEngine planning_agent 的失败帧形态。
         error: 顶层 ``error`` 字段。仅 success=False 时承载错误描述。
+        display: 北向接口 v1.3 新增字段。true=前端拼接, false=前端停止拼接,
+            None=不写入(向后兼容)。
 
     Returns:
         可直接 json.dumps 的 dict，格式对齐规范文档 §4.4.3（agent event）。
@@ -86,6 +89,22 @@ def wrap_agent_event(
     exec_time: float | str = (
         "" if event_type in _EVENTS_WITH_EMPTY_EXECUTION_TIME else elapsed
     )
+    custom_rsp_data: dict[str, Any] = {
+        "data": data or {},
+        "event": event_type,
+        "content": content,
+        "createdTime": (
+            created_time_ms
+            if created_time_ms is not None
+            else int(time.time() * 1000)
+        ),
+        "latency": "",
+        "plugin": plugin,
+    }
+    # 仅当 display 非 None 时才写入 custom_rsp_data，保持向后兼容
+    if display is not None:
+        custom_rsp_data["display"] = display
+
     wrapped: dict[str, Any] = {
         "success": success,
         "agent_id": agent_id,
@@ -93,18 +112,7 @@ def wrap_agent_event(
         "output": "",
         "error": error,
         "execution_time": exec_time,
-        "custom_rsp_data": {
-            "data": data or {},
-            "event": event_type,
-            "content": content,
-            "createdTime": (
-                created_time_ms
-                if created_time_ms is not None
-                else int(time.time() * 1000)
-            ),
-            "latency": "",
-            "plugin": plugin,
-        },
+        "custom_rsp_data": custom_rsp_data,
     }
     if event_type in _EVENTS_WITH_ERROR_CODE:
         wrapped["error_code"] = ""

@@ -52,18 +52,30 @@ class ThinkStartEvent(BaseModel):
     """LLM 思考开始（每轮 ReAct 的第一个 reasoning chunk）。"""
     type: Literal["think_start"] = "think_start"
     content: str = ""
+    display: bool | None = Field(
+        default=None,
+        description="true=前端开始拼接, false=前端停止拼接, None=不指定(向后兼容)"
+    )
 
 
 class ThinkChunkEvent(BaseModel):
     """LLM 思考流式片段。"""
     type: Literal["think_chunk"] = "think_chunk"
     content: str
+    display: bool | None = Field(
+        default=None,
+        description="true=前端继续拼接, false=前端停止拼接, None=不指定(向后兼容)"
+    )
 
 
 class ThinkEndEvent(BaseModel):
     """LLM 思考结束（reasoning 流结束或切换为 tool_call / answer）。"""
     type: Literal["think_end"] = "think_end"
     content: str = ""
+    display: bool | None = Field(
+        default=None,
+        description="true=前端停止拼接并展示, false=前端丢弃拼接内容, None=不指定(向后兼容)"
+    )
 
 
 # ════════════════════════════════════════════════════════════════════
