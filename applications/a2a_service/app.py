@@ -395,7 +395,9 @@ async def lifespan(fastapi_app: FastAPI):
         await initialize()
         logger.info("[A2AService] Agent 初始化完成")
 
-        http_client = httpx.AsyncClient()
+        http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(settings.versatile_adapter_timeout, read=None)
+        )
         va_card = _build_va_card(settings.versatile_adapter_url)
         factory = ClientFactory(ClientConfig(httpx_client=http_client))
         va_client = factory.create(va_card)

@@ -39,13 +39,17 @@ class Settings(BaseSettings):
     bootstrap_poll_interval_sec: float = 1.0
 
     # ── 入口限流（与 Orchestrator 限流能力对齐）─────────────────────────────
+    # 会话级限流
     rate_limit_max_requests: int = 1
     rate_limit_window_seconds: int = 10
+    # 全局级限流
     global_rate_limit_max_requests: int = 10
     global_rate_limit_window_seconds: int = 10
 
     # ── VersatileAdapter（内部 A2A 服务地址）────────────────────────────────
     versatile_adapter_url: Optional[str] = None
+    # a2a_service → VersatileAdapter 的 HTTP 超时（秒），与versatile_adapter中VERSATILE_TIMEOUT 默认值对齐
+    versatile_adapter_timeout: int = 600    
     # VA 流中携带工作流最终结果的 QA 节点名称（node_type=="QA" 且 node_name==此值）
     va_workflow_result_node: Optional[str] = None
 
