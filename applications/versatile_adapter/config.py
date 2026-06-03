@@ -7,7 +7,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from pydantic import Json
+from pydantic import Field, Json
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -34,6 +34,8 @@ class Settings(BaseSettings):
         env_file=Path(__file__).parent / ".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        validate_by_name=True,
+        validate_by_alias=True,
     )
 
     # ── App ─────────────────────────────────────────────────────────────────
@@ -43,6 +45,10 @@ class Settings(BaseSettings):
     versatile_url_template: Optional[str] = None
     versatile_timeout: Optional[int] = None
     versatile_headers_template: Json[Dict[str, Any]] = _DEFAULT_VERSATILE_HEADERS_TEMPLATE
+    versatile_adapter_type: str = "controller"  # "controller" 或 "workflow"
+    versatile_workflow_result_node: Optional[str] = Field(
+        default=None, alias="va_workflow_result_node",
+    )  # 环境变量 VA_WORKFLOW_RESULT_NODE，代码中用 versatile_ 前缀访问
 
     # ── FastAPI ─────────────────────────────────────────────────────────────
     adapter_fastapi_host: Optional[str] = None
@@ -53,6 +59,21 @@ class Settings(BaseSettings):
     # ── 日志 ────────────────────────────────────────────────────────────────
     adapter_log_level: Optional[str] = None
     adapter_log_file: Optional[str] = None
+
+    # ── Redis ──────────────────────────────────────────────────────────────
+    redis_host: Optional[str] = None
+    redis_port: Optional[int] = None
+    redis_db: Optional[int] = None
+    redis_password: Optional[str] = None
+    redis_session_ttl: Optional[int] = None
+
+    @property
+    def redis_url(self) -> str:
+        from urllib.parse import quote_plus
+        if self.redis_password:
+            pwd = quote_plus(self.redis_password)
+            return f"redis://:{pwd}@{self.redis_host}:{self.redis_port}/{self.redis_db}"
+        return f"redis://{self.redis_host}:{self.redis_port}/{self.redis_db}"
 
 
 @lru_cache

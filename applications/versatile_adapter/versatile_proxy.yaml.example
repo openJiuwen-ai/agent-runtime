@@ -1,0 +1,48 @@
+# versatile_proxy.yaml — VersatileAdapterRunner 动态路由配置示例
+#
+# 部署路径（默认）：/etc/edpagent/config/versatile_proxy.yaml
+# 若该文件不存在，Runner 会自动从 Settings（.env / 环境变量）生成唯一的 controller 配置。
+#
+# adapters 列表可包含多个 adapter，运行时按 route 动态匹配：
+#   - route 含 workflow_id / intent 且匹配到 workflow 配置 → VersatileWorkflow
+#   - 否则 → VersatileController（使用第一个 type=controller 的配置）
+#
+# 各字段说明：
+#   name                     — 适配器名称（日志标识）
+#   type                     — controller（一级控制器）或 workflow（低码工作流）
+#   url_template             — URL 模板，支持占位符 {conversation_id}、{workflow_id}
+#   timeout                  — HTTP 流式请求超时（秒），默认 600
+#   headers_template         — 调用 Versatile 时注入的默认请求头
+#   forward_header_whitelist — 仅转发白名单中的外部请求头（小写）；不设置则转发全部
+#   workflow_result_node     — （仅 controller）SSE 流中匹配 node_type=="QA" 且
+#                              node_name==此值的帧，提取 text 作为 workflow_result
+#   workflow_id              — （仅 workflow）route 中 workflow_id 精确匹配时命中
+#   intent                   — （仅 workflow）route 中 intent 匹配时命中
+
+adapters:
+  - name: default_controller
+    type: controller
+    url_template: "https://versatile.example.com/api/conversations/{conversation_id}"
+    timeout: 600
+    headers_template:
+      Accept: "application/json, text/event-stream"
+      stream: "true"
+    forward_header_whitelist:
+       - x-user-id
+       - x-project-id
+       - cust-token
+       - cust-userid
+       - cookie
+    workflow_result_node: ""
+
+  - name: versatile_workflow_1
+    type: workflow
+    intent: "knowledge_qa"
+    url_template: "https://versatile.example.com/workflows/{workflow_id}/conversations/{conversation_id}"
+    timeout: 600
+    headers_template:
+      Accept: "application/json, text/event-stream"
+      stream: "true"
+    forward_header_whitelist:
+       - x-trace-id
+    workflow_id: "wf_abc123"

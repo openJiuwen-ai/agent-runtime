@@ -338,9 +338,6 @@ def _extract_event_meta(event) -> Optional[dict]:
         # workflow 事件：VersatileAdapter 解包后的 {event, data} 形状
         if "event" in data_dict and isinstance(data_dict.get("data"), dict):
             event_kind = data_dict["event"]
-            if event_kind == "end":
-                # 上游流结束信号，不作为北向事件推送
-                return None
             return {
                 "kind": "workflow",
                 "type": event_kind,

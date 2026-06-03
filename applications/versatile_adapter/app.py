@@ -23,15 +23,17 @@ from contextlib import asynccontextmanager
 
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.routes import create_agent_card_routes, create_jsonrpc_routes
-from a2a.server.tasks import InMemoryTaskStore
 from fastapi import FastAPI
 from loguru import logger
 from starlette.applications import Starlette
 
+from a2a.server.tasks import InMemoryTaskStore, TaskStore
+from persistence.redis_client import RedisClient
+from persistence.redis_task_store import RedisTaskStore
 from config import get_settings
-from adapter.agent_card import VERSATILE_ADAPTER_CARD
-from adapter.executor import VersatileAdapterExecutor
-from adapter.versatile_proxy import VersatileProxy
+from a2a_facade.agent_card import VERSATILE_ADAPTER_CARD
+from dispatcher.runner import VersatileAdapterRunner
+from a2a_facade.executor import A2aVersatileExecutor
 
 
 os.environ['NO_PROXY'] = 'localhost,127.0.0.1'
@@ -100,26 +102,38 @@ def setup_logging() -> None:
 setup_logging()
 
 
+_TTL = 1800
+
+
+async def _create_task_store(settings) -> tuple[TaskStore, RedisClient | None]:
+    """根据配置创建 TaskStore：Redis 有效时使用 RedisTaskStore，否则回退 InMemoryTaskStore。
+
+    Returns:
+        (task_store, redis_client) — redis_client 在 Redis 模式下非 None，调用方需在关闭时 disconnect。
+    """
+    if settings.redis_host:
+        redis = RedisClient()
+        await redis.connect(settings.redis_url)
+        task_store = RedisTaskStore(redis, ttl=settings.redis_session_ttl or _TTL)
+        logger.info(f"[VersatileAdapter] TaskStore=RedisTaskStore, host={settings.redis_host}")
+        return task_store, redis
+    logger.info("[VersatileAdapter] TaskStore=InMemoryTaskStore（未配置 Redis）")
+    return InMemoryTaskStore(), None
+
+
 @asynccontextmanager
 async def lifespan(fastapi_app: FastAPI):
     settings = get_settings()
 
-    versatile_proxy = VersatileProxy(
-        url_template=settings.versatile_url_template,
-        timeout=settings.versatile_timeout,
-        headers_template=settings.versatile_headers_template,
-    )
+    # 1. 创建 TaskStore（按配置选择 Redis 或 InMemory）
+    task_store, redis = await _create_task_store(settings)
 
-    logger.info(
-        f"[VersatileAdapter] Versatile headers template keys: "
-        f"{sorted(settings.versatile_headers_template.keys())}"
-    )
+    # 2. 从 YAML 配置创建 Runner（动态路由）
+    runner = VersatileAdapterRunner()
 
-    executor = VersatileAdapterExecutor(
-        versatile_proxy=versatile_proxy,
-    )
+    # 3. 创建 A2A 薄壳
+    executor = A2aVersatileExecutor(runner=runner)
 
-    task_store = InMemoryTaskStore()
     request_handler = DefaultRequestHandler(
         agent_executor=executor,
         task_store=task_store,
@@ -131,14 +145,13 @@ async def lifespan(fastapi_app: FastAPI):
     )
     fastapi_app.mount("/", Starlette(routes=a2a_routes))
 
-    logger.info(
-        f"[VersatileAdapter] 启动完成，"
-        f"Versatile URL template: {settings.versatile_url_template}"
-    )
+    logger.info("[VersatileAdapter] 启动完成")
 
     try:
         yield
     finally:
+        if redis:
+            await redis.disconnect()
         logger.info("[VersatileAdapter] 关闭完成")
 
 

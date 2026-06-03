@@ -28,6 +28,7 @@ from a2a.server.context import ServerCallContext
 from a2a.server.events import EventQueue
 from a2a.types.a2a_pb2 import (
     Message,
+    Artifact,
     Part,
     SendMessageRequest,
     Task,
@@ -41,7 +42,7 @@ from a2a.types.a2a_pb2 import (
     TASK_STATE_INPUT_REQUIRED,
     TASK_STATE_WORKING,
 )
-from google.protobuf.json_format import MessageToDict
+from google.protobuf.json_format import MessageToDict, ParseDict
 from google.protobuf.struct_pb2 import Struct, Value
 from loguru import logger
 
@@ -390,41 +391,10 @@ class Executor(AgentExecutor):
         return SendMessageRequest(message=msg)
 
     def _parse_stream_event(self, stream_resp):
-        which = (
-            stream_resp.WhichOneof("payload")
-            if hasattr(stream_resp, "WhichOneof")
-            else None
-        )
-        if which == "artifact_update":
+        if stream_resp.HasField("artifact_update"):
             return stream_resp.artifact_update
-        if which == "status_update":
+        if stream_resp.HasField("status_update"):
             return stream_resp.status_update
-        return None
-
-    def _extract_node_data(
-        self, event: TaskArtifactUpdateEvent
-    ) -> Optional[dict]:
-        """从 VersatileAdapter 解包后的 artifact 取出节点数据。
-
-        data part 形状：``{"event": "<kind>", "data": <node_data>}``
-        —— 只对 ``event == "message"`` 的帧返回 node_data，其他（如 "end"）返回 None。
-        """
-        for part in event.artifact.parts:
-            if part.WhichOneof("content") == "data":
-                frame = MessageToDict(part.data)
-                if not isinstance(frame, dict):
-                    continue
-                if frame.get("event") != "message":
-                    continue
-                inner = frame.get("data")
-                if isinstance(inner, dict):
-                    return inner
-        return None
-
-    def _extract_end_node(self, event: TaskArtifactUpdateEvent) -> Optional[dict]:
-        node = self._extract_node_data(event)
-        if node is not None and node.get("node_type") == "End":
-            return node
         return None
 
     def _extract_upstream_error(self, event: TaskArtifactUpdateEvent) -> Optional[dict]:
@@ -507,24 +477,56 @@ class Executor(AgentExecutor):
             f"msg={(upstream_error.get('message') or '')!r:.80}"
         )
 
-    def _is_suppressed_node(self, event: TaskArtifactUpdateEvent) -> bool:
-        """判断该 artifact 是否为配置中需要屏蔽的节点（不推送给用户）。"""
-        target = get_settings().va_workflow_result_node
-        if not target:
-            return False
-        node = self._extract_node_data(event)
-        return node is not None and node.get("node_name") == target
+    def _extract_workflow_result(self, event: TaskStatusUpdateEvent) -> Optional[str]:
+        """从 VA 的 COMPLETED 状态事件 message 中提取 workflow_result。
 
-    def _extract_qa_node(self, event: TaskArtifactUpdateEvent) -> Optional[str]:
-        target_node = get_settings().va_workflow_result_node
-        if not target_node:
+        VA 侧在 updater.complete(message) 时通过 Part 的 metadata {"vatype": "workflow_result"} 标识，
+        DataPart 为纯文本 string_value。
+        """
+        if not event.status or not event.status.message:
             return None
-        node = self._extract_node_data(event)
-        if node is None:
-            return None
-        if node.get("node_type") == "QA" and node.get("node_name") == target_node:
-            return node.get("text", "") or None
+        for part in event.status.message.parts:
+            if not part.HasField("text") or not part.HasField("metadata"):
+                continue
+            meta = MessageToDict(part.metadata)
+            if meta.get("vatype") == "workflow_result":
+                return part.text
         return None
+
+    async def _forward_artifact(
+        self, turn_ctx: _TurnContext, event: TaskArtifactUpdateEvent, event_queue: EventQueue,
+    ) -> None:
+        """转发 VA artifact 事件：将 text Part 转换为 data Part 后入队。"""
+        parts = []
+        for part in event.artifact.parts:
+            if not part.HasField("text") or not part.HasField("metadata"):
+                continue
+            meta = MessageToDict(part.metadata)
+            if meta.get("vatype") != "data_proxy":
+                continue
+            try:
+                parsed = json.loads(part.text)
+            except ValueError:
+                logger.error("[Executor] [VersatileProxy] 待转发内容不是结构化信息，跳过不处理")
+                continue
+            new_part = Part(data=ParseDict(parsed, Value()), media_type=part.media_type)
+            parts.append(new_part)
+
+        await event_queue.enqueue_event(
+            TaskArtifactUpdateEvent(
+                task_id=turn_ctx.task_id,
+                context_id=turn_ctx.conv_id,
+                artifact=Artifact(
+                    artifact_id=event.artifact.artifact_id,
+                    name=event.artifact.name,
+                    parts=parts,
+                    metadata=event.artifact.metadata,
+                    extensions=event.artifact.extensions,
+                ),
+                append=event.append,
+                last_chunk=event.last_chunk,
+            )
+        )
 
     async def _call_versatile_adapter(
         self,
@@ -584,7 +586,7 @@ class Executor(AgentExecutor):
 
         va_real_task_id: Optional[str] = None
         continuation_task_id = ""
-        
+
         # 从 delegate.target_agent 获取 agent_id
         agent_id = delegate.target_agent or ""
 
@@ -602,12 +604,10 @@ class Executor(AgentExecutor):
         )
 
         has_end_node = False
-        final_result: dict | None = None
         qa_result: Optional[str] = None
         upstream_error: Optional[dict] = None
         stream_resp_count = 0
         forwarded_count = 0
-        suppressed_count = 0
         logger.info(
             f"[Executor] [VersatileProxy] 开始调用 VA: conv={conv_id}, "
             f"intent={delegate.intent}, task_desc={delegate.task_description!r:.60}"
@@ -654,43 +654,26 @@ class Executor(AgentExecutor):
                     )
 
                 if isinstance(event, TaskArtifactUpdateEvent):
-                    if self._is_suppressed_node(event):
-                        suppressed_count += 1
-                        logger.debug(
-                            f"[Executor] [VersatileProxy] chunk #{stream_resp_count} "
-                            f"命中 va_workflow_result_node，抑制不推送"
-                        )
-                    else:
-                        await event_queue.enqueue_event(event)
-                        forwarded_count += 1
-                        logger.debug(
-                            f"[Executor] [VersatileProxy] chunk #{stream_resp_count} "
-                            f"已转发到 event_queue"
-                        )
+                    # data_proxy → 转换 text Part 后转发前端
+                    await self._forward_artifact(turn_ctx, event, event_queue)
+                    forwarded_count += 1
 
-                    qa = self._extract_qa_node(event)
-                    if qa is not None:
-                        qa_result = qa
-                        logger.debug(
-                            f"[Executor] [VersatileProxy] 提取到 QA 节点 text: "
-                            f"{qa!r:.60}"
-                        )
-
-                    result = self._extract_end_node(event)
-                    if result is not None:
+                elif isinstance(event, TaskStatusUpdateEvent):
+                    if event.status.state == TASK_STATE_COMPLETED:
                         has_end_node = True
-                        final_result = result
-                        logger.debug(
-                            "[Executor] [VersatileProxy] 检测到 End node，将进入 cascade 路径"
-                        )
-
-                    if upstream_error is None:
-                        err = self._extract_upstream_error(event)
-                        if err is not None:
-                            upstream_error = err
+                        # 从 COMPLETED 状态事件的 message 中提取 workflow_result
+                        wr = self._extract_workflow_result(event)
+                        if wr is not None:
+                            qa_result = wr
                             logger.debug(
-                                "[Executor] [VersatileProxy] 检测到 VA 上游错误终态帧"
+                                f"[Executor] [VersatileProxy] chunk #{stream_resp_count} "
+                                f"status COMPLETED, workflow_result={wr!r:.60}"
                             )
+                        logger.debug("[Executor] VA TaskStatusUpdateEvent(COMPLETED)")
+                    elif event.status.state == TASK_STATE_FAILED:
+                        if upstream_error is None:
+                            upstream_error = {"message": "VA 任务异常终止"}
+                        logger.debug("[Executor] VA TaskStatusUpdateEvent(FAILED)")
 
         except Exception as e:
             status_message = 1
@@ -722,7 +705,7 @@ class Executor(AgentExecutor):
 
         if has_end_node:
             cascade = (
-                {"workflow_result": qa_result} if qa_result is not None else final_result
+                {"workflow_result": qa_result} if qa_result is not None else {}
             )
             logger.info(
                 f"[Executor] VA end node: conv={conv_id}, qa_result={qa_result!r:.60}"
@@ -768,7 +751,7 @@ class Executor(AgentExecutor):
         call_started_ms = int(time.time() * 1000)
         status_message = 0
         error_message: Optional[str] = None
-        
+
         request = self._build_va_message(
             _VaRequestPayload(
                 query=user_input,
@@ -783,7 +766,6 @@ class Executor(AgentExecutor):
         )
 
         has_end_node = False
-        final_result: dict | None = None
         qa_result: Optional[str] = None
         upstream_error: Optional[dict] = None
         stream_resp_count = 0
@@ -820,22 +802,21 @@ class Executor(AgentExecutor):
                 _log_va_chunk_debug(stream_resp_count, event)
 
                 if isinstance(event, TaskArtifactUpdateEvent):
-                    if not self._is_suppressed_node(event):
-                        await event_queue.enqueue_event(event)
+                    # data_proxy → 转换 text Part 后转发前端
+                    await self._forward_artifact(turn_ctx, event, event_queue)
 
-                    qa = self._extract_qa_node(event)
-                    if qa is not None:
-                        qa_result = qa
-
-                    result = self._extract_end_node(event)
-                    if result is not None:
+                elif isinstance(event, TaskStatusUpdateEvent):
+                    if event.status.state == TASK_STATE_COMPLETED:
                         has_end_node = True
-                        final_result = result
-
-                    if upstream_error is None:
-                        err = self._extract_upstream_error(event)
-                        if err is not None:
-                            upstream_error = err
+                        # 从 COMPLETED 状态事件的 message 中提取 workflow_result
+                        wr = self._extract_workflow_result(event)
+                        if wr is not None:
+                            qa_result = wr
+                        logger.debug("[Executor] VA 续轮 TaskStatusUpdateEvent(COMPLETED)")
+                    elif event.status.state == TASK_STATE_FAILED:
+                        if upstream_error is None:
+                            upstream_error = {"message": "VA 任务异常终止"}
+                        logger.debug("[Executor] VA 续轮 TaskStatusUpdateEvent(FAILED)")
 
         except Exception as e:
             status_message = 1
@@ -866,7 +847,7 @@ class Executor(AgentExecutor):
 
         if has_end_node:
             cascade = (
-                {"workflow_result": qa_result} if qa_result is not None else final_result
+                {"workflow_result": qa_result} if qa_result is not None else {}
             )
             logger.info(
                 f"[Executor] VA 续轮 end node: conv={conv_id}, qa_result={qa_result!r:.60}"
