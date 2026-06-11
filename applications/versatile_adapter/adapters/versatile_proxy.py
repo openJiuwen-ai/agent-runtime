@@ -26,12 +26,13 @@ from adapters.base_adapter import BaseAdapter
 class VersatileStreamCtx:
     """SSE 行循环中累积的可变状态，贯穿 _process_line → _process_chunk → _on_stream_end。"""
 
-    __slots__ = ("completed", "is_failed", "execution_result")
+    __slots__ = ("completed", "is_failed", "execution_result", "error_message")
 
     def __init__(self) -> None:
         self.completed: bool = False
         self.is_failed: bool = False
         self.execution_result: str | None = None
+        self.error_message: str = ""
 
 
 class VersatileProxy(BaseAdapter):
@@ -82,9 +83,13 @@ class VersatileProxy(BaseAdapter):
         """子类实现：解析 data 行内容，通过 ctx 累积状态，返回事件列表。"""
 
     def _process_line(self, line: str, ctx: VersatileStreamCtx) -> list[AdapterEvent]:
-        """SSE 行过滤（跳过 id/event/空行），仅 data 行交由 _process_chunk 处理。"""
+        """SSE 行过滤（跳过 id/event/retry/空行），仅 data 行交由 _process_chunk 处理。"""
         line = line.strip()
         if not line:
+            return []
+        # SSE 控制行（RFC EventSource）：id:/event:/retry: 不携带业务负载，应整行跳过。
+        # 之前 docstring 声明跳过 id/event 但代码未实现，会把控制行当作数据帧透传给前端。
+        if line.startswith(("id:", "event:", "retry:", ":")):
             return []
         if line.startswith("data:"):
             line = line[5:].strip()

@@ -10,6 +10,7 @@ HTTP 流断流由调用方（executor）通过流结束触发 complete()。
 """
 from __future__ import annotations
 
+import re as _re
 from typing import Optional
 
 from adapters.versatile_proxy import VersatileProxy, VersatileStreamCtx
@@ -22,7 +23,9 @@ from event.events import (
 class VersatileWorkflow(VersatileProxy):
     """低码工作流协议适配器。"""
 
-    _SKIP_TYPES = frozenset({"finish", "runCompleted", "dialogId"})
+    _SKIP_TYPE_PATTERN = _re.compile(
+        r'"type"\s*:\s*"(?:finish|runCompleted|dialogId)"'
+    )
 
     def __init__(
         self,
@@ -39,9 +42,8 @@ class VersatileWorkflow(VersatileProxy):
         return self._url_template.format(conversation_id=conv_id, workflow_id=self._workflow_id)
 
     def _process_chunk(self, chunk: str, ctx: VersatileStreamCtx) -> list[AdapterEvent]:
-        for t in self._SKIP_TYPES:
-            if f'"type":"{t}"' in chunk:
-                return []
+        if self._SKIP_TYPE_PATTERN.search(chunk):
+            return []
         return [AdapterEvent(data_proxy=DataProxyContent(raw_data=chunk))]
 
     def _on_stream_end(self, ctx: VersatileStreamCtx) -> list[AdapterEvent]:

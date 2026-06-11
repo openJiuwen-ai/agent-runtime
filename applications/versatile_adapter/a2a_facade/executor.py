@@ -75,6 +75,7 @@ class A2aVersatileExecutor(AgentExecutor):
 
             updater = await self._setup_task(context, event_queue)
             message = None
+            failed_message = None
             is_failed = False
 
             try:
@@ -92,17 +93,24 @@ class A2aVersatileExecutor(AgentExecutor):
                         if event.execution_completed.result:
                             part = self._make_text_part(event.execution_completed.result, "workflow_result")
                             message = new_message(parts=[part])
+                        if is_failed and event.execution_completed.error_message:
+                            err_part = self._make_text_part(
+                                event.execution_completed.error_message, "upstream_error"
+                            )
+                            failed_message = new_message(parts=[err_part])
 
                 if is_failed:
-                    await updater.failed()
+                    await updater.failed(failed_message)
                     logger.info(f"[A2aVA] 流异常结束(failed): conv_id={context.context_id}, task_id={context.task_id}")
                 else:
                     await updater.complete(message)
                     logger.info(f"[A2aVA] 流结束: conv_id={context.context_id}, task_id={context.task_id}")
 
-            except Exception:
+            except Exception as exc:
                 logger.exception(f"[A2aVA] 流异常: conv_id={context.context_id}, task_id={context.task_id}")
-                await updater.failed()
+                err_part = self._make_text_part(str(exc), "upstream_error")
+                failed_message = new_message(parts=[err_part])
+                await updater.failed(failed_message)
                 return
 
     @override

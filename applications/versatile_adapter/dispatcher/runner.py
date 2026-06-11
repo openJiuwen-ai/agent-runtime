@@ -11,6 +11,7 @@ VersatileAdapterRunner — 配置驱动的动态路由层。
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import AsyncGenerator, Optional
 
@@ -23,7 +24,22 @@ from config import get_settings
 from event.events import AdapterEvent
 
 
-_DEFAULT_CONFIG_PATH = Path("/etc/edpagent/config/versatile_proxy.yaml")
+# 配置文件加载优先级：
+#   1. VersatileAdapterRunner(config_path=...) 显式参数
+#   2. 环境变量 VERSATILE_PROXY_CONFIG_PATH
+#   3. 部署默认路径 /etc/edpagent/config/versatile_proxy.yaml
+#   4. 当前 versatile_adapter 目录下的 versatile_proxy.yaml（便于本地开发）
+_DEPLOY_DEFAULT_CONFIG_PATH = Path("/etc/edpagent/config/versatile_proxy.yaml")
+_LOCAL_DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / "versatile_proxy.yaml"
+
+
+def _resolve_default_config_path() -> Path:
+    env_path = os.environ.get("VERSATILE_PROXY_CONFIG_PATH")
+    if env_path:
+        return Path(env_path)
+    if _DEPLOY_DEFAULT_CONFIG_PATH.exists():
+        return _DEPLOY_DEFAULT_CONFIG_PATH
+    return _LOCAL_DEFAULT_CONFIG_PATH
 
 
 class _VersatileAdapterConfig:
@@ -54,7 +70,7 @@ class VersatileAdapterRunner:
     """配置驱动的动态路由 Runner。"""
 
     def __init__(self, config_path: Optional[Path] = None) -> None:
-        path = config_path or _DEFAULT_CONFIG_PATH
+        path = config_path or _resolve_default_config_path()
         self._adapters = self._load_config(path)
         if not self._adapters:
             self._adapters = self._build_from_settings()

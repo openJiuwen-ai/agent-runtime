@@ -28,9 +28,14 @@ class ExecutionInputRequiredContent(BaseModel, frozen=True):
 
 
 class ExecutionCompletedContent(BaseModel, frozen=True):
-    """终态信号：任务完成并携带工作流结果。"""
+    """终态信号：任务完成并携带工作流结果。
+
+    is_failed=True 时，error_message 携带上游错误详情（如 exception 帧原始 JSON），
+    供 a2a_service 提取结构化错误信息映射到 TaskStatusUpdateEvent(FAILED).status.message。
+    """
     is_failed: bool = False
     result: str
+    error_message: str = ""
 
 
 class AdapterEvent(BaseModel):

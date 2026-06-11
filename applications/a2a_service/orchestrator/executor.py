@@ -91,19 +91,12 @@ def _log_va_chunk_debug(stream_resp_count: int, event: Any) -> None:
     使用 ``logger.opt(lazy=True)`` 延迟求值：DEBUG 未启用时不会触发 MessageToDict
     与 json.dumps，避免在生产 INFO 级别下白白消耗 CPU。
     """
-    # logger.opt(lazy=True).debug(
-    #     "[Executor] [VersatileProxy] chunk #{} payload={}",
-    #     lambda c=stream_resp_count: c,
-    #     lambda e=event: _safe_dump_event(e),
-    # )
-    to_logger(
-        level=Level.DEBUG,
-        message={
-            "stream_resp_count": stream_resp_count,
-            "content": _safe_dump_event(event),
-        },
-        extra=Extra(tag=Tag.TAG_VERSATILE_CHUNK, cost=0),
-    )
+    with logger.contextualize(tag=Tag.TAG_VERSATILE_CHUNK, cost=0):
+        logger.opt(lazy=True).debug(
+            "[Executor] [VersatileProxy] chunk #{} payload={}",
+            lambda c=stream_resp_count: c,
+            lambda e=event: _safe_dump_event(e),
+        )
 
 
 def _rewrite_recommend_delegate(intent: str, task_description: str) -> tuple[str, str]:
@@ -148,6 +141,7 @@ class _VaRequestPayload:
     conv_id: str = ""
     trace_id: str = ""
     agent_id: str = ""
+    target: Optional[dict] = None
 
 
 class Executor(AgentExecutor):
@@ -374,6 +368,7 @@ class Executor(AgentExecutor):
                 "params": payload.params or {},
                 "trace_id": payload.trace_id,
                 "agent_id": payload.agent_id,
+                "target": payload.target or {},
             }
         )
         data_value = Value()
@@ -395,27 +390,6 @@ class Executor(AgentExecutor):
             return stream_resp.artifact_update
         if stream_resp.HasField("status_update"):
             return stream_resp.status_update
-        return None
-
-    def _extract_upstream_error(self, event: TaskArtifactUpdateEvent) -> Optional[dict]:
-        """识别 VA 上游错误终态帧。
-
-        AgentEngine ``versatile_proxy.py:336`` 把 ``event=='exception'`` 视为
-        workflow_complete 终态。这里把 ``event in ("error", "exception")`` 都识别
-        为终态错误，返回 data 部分（含 code/message）；非错误帧返回 None。
-
-        识别后 Executor 应把 Task 标 FAILED 并清空 ``va_task_id``，避免下次请求被
-        当成 cascade 续轮、用 stale task_id 调 VA 锁死 conversation。
-        """
-        for part in event.artifact.parts:
-            if part.WhichOneof("content") != "data":
-                continue
-            frame = MessageToDict(part.data)
-            if not isinstance(frame, dict):
-                continue
-            if frame.get("event") in ("error", "exception"):
-                inner = frame.get("data")
-                return inner if isinstance(inner, dict) else {}
         return None
 
     @staticmethod
@@ -493,6 +467,35 @@ class Executor(AgentExecutor):
                 return part.text
         return None
 
+    def _extract_failed_error(self, event: TaskStatusUpdateEvent) -> Optional[dict]:
+        """从 VA 的 FAILED 状态事件 message 中提取上游错误详情。
+
+        VA 侧在 updater.failed(message) 时通过 Part 的 metadata {"vatype": "upstream_error"} 标识，
+        text 为上游 exception 帧原始 JSON。解析失败时返回 {"message": <raw_text>}。
+        无 message 时返回 None（调用方使用兜底通用文案）。
+        """
+        if not event.status or not event.status.message:
+            return None
+        for part in event.status.message.parts:
+            if not part.HasField("text") or not part.HasField("metadata"):
+                continue
+            meta = MessageToDict(part.metadata)
+            if meta.get("vatype") != "upstream_error":
+                continue
+            raw_text = part.text or ""
+            if not raw_text:
+                continue
+            try:
+                parsed = json.loads(raw_text)
+            except (ValueError, TypeError):
+                return {"message": raw_text}
+            if isinstance(parsed, dict):
+                # 兼容 {"event": "exception", "data": {code, message}} 与扁平 {code, message}
+                inner = parsed.get("data") if isinstance(parsed.get("data"), dict) else parsed
+                return inner
+            return {"message": raw_text}
+        return None
+
     async def _forward_artifact(
         self, turn_ctx: _TurnContext, event: TaskArtifactUpdateEvent, event_queue: EventQueue,
     ) -> None:
@@ -511,6 +514,10 @@ class Executor(AgentExecutor):
                 continue
             new_part = Part(data=ParseDict(parsed, Value()), media_type=part.media_type)
             parts.append(new_part)
+
+        # parts 为空时不入队，避免下游产出空 thought SSE 帧（次要问题 #2）
+        if not parts:
+            return
 
         await event_queue.enqueue_event(
             TaskArtifactUpdateEvent(
@@ -600,6 +607,7 @@ class Executor(AgentExecutor):
                 conv_id=conv_id,
                 trace_id=trace_id,
                 agent_id=agent_id,
+                target={"type": "workflow", "intent": effective_intent} if effective_intent else None,
             )
         )
 
@@ -672,8 +680,11 @@ class Executor(AgentExecutor):
                         logger.debug("[Executor] VA TaskStatusUpdateEvent(COMPLETED)")
                     elif event.status.state == TASK_STATE_FAILED:
                         if upstream_error is None:
-                            upstream_error = {"message": "VA 任务异常终止"}
-                        logger.debug("[Executor] VA TaskStatusUpdateEvent(FAILED)")
+                            extracted = self._extract_failed_error(event)
+                            upstream_error = extracted if extracted else {"message": "VA 任务异常终止"}
+                        logger.debug(
+                            f"[Executor] VA TaskStatusUpdateEvent(FAILED), upstream_error={upstream_error!r:.120}"
+                        )
 
         except Exception as e:
             status_message = 1
@@ -815,8 +826,11 @@ class Executor(AgentExecutor):
                         logger.debug("[Executor] VA 续轮 TaskStatusUpdateEvent(COMPLETED)")
                     elif event.status.state == TASK_STATE_FAILED:
                         if upstream_error is None:
-                            upstream_error = {"message": "VA 任务异常终止"}
-                        logger.debug("[Executor] VA 续轮 TaskStatusUpdateEvent(FAILED)")
+                            extracted = self._extract_failed_error(event)
+                            upstream_error = extracted if extracted else {"message": "VA 任务异常终止"}
+                        logger.debug(
+                            f"[Executor] VA 续轮 TaskStatusUpdateEvent(FAILED), upstream_error={upstream_error!r:.120}"
+                        )
 
         except Exception as e:
             status_message = 1
