@@ -63,7 +63,11 @@ from common.logger import (
     to_logger,
     get_real_ip, Level, ResultEnum
 )
-from common.response_wrapper import wrap_agent_event, wrap_workflow_event
+from common.response_wrapper import (
+    wrap_agent_event,
+    wrap_sub_task_event,
+    wrap_workflow_event,
+)
 from config import get_settings
 from orchestrator.executor import Executor
 from orchestrator.sse_helpers import log_outbound_sse, next_sse_event
@@ -311,6 +315,50 @@ async def _check_rate_limit(
         return True, None, None
 
 
+def _extract_inner_by_kind(inner: dict) -> dict:
+    """把 sub_task 信封内层（子节点原帧）按 kind 提取为 inner_meta。
+
+    复用与顶层 agent/workflow 相同的判别，额外处理框架合成的生命周期帧：
+      - agent 原帧（含 ``type`` 键）→ ``{kind:"agent", type, content, data, plugin}``
+      - 生命周期 node_start/node_end（``event`` 键）→ ``{kind:"lifecycle", data:<原帧>}``（原样透传）
+      - workflow VA 原生帧（``event`` + 嵌套 ``data`` dict）→ ``{kind:"workflow", type:<event>, data:<节点数据>}``
+
+    返回的 inner_meta 交由 ``wrap_sub_task_event`` 渲染为"标准单帧 custom_rsp_data"。
+    """
+    if not isinstance(inner, dict):
+        return {"kind": "lifecycle", "data": {}}
+
+    # agent 原帧：EDPAgent 事件 model_dump，含 type 键（与顶层 agent 分支同构）
+    if "type" in inner:
+        nested = inner.get("data")
+        if isinstance(nested, dict):
+            payload = nested
+        else:
+            payload = {
+                k: v for k, v in inner.items()
+                if k not in ("type", "content", "plugin", "data", "display")
+            }
+        return {
+            "kind": "agent",
+            "type": inner.get("type"),
+            "content": inner.get("content", "") or "",
+            "data": payload,
+            "plugin": inner.get("plugin", ""),
+            # display（北向 v1.3）贯穿级联：子 Agent think 帧的 display 与顶层一致
+            "display": inner.get("display"),
+        }
+
+    event_kind = inner.get("event")
+    # 框架合成的生命周期帧：原样透传（已是 {event, ...} wire 形态）
+    if event_kind in ("node_start", "node_end"):
+        return {"kind": "lifecycle", "data": inner}
+    # workflow VA 原生帧：{event, data:{...}}（message 等）
+    if isinstance(inner.get("data"), dict):
+        return {"kind": "workflow", "type": event_kind, "data": inner["data"]}
+    # 兜底：按生命周期原样透传，避免误判为 agent 丢失结构
+    return {"kind": "lifecycle", "data": inner}
+
+
 def _extract_event_meta(event) -> Optional[dict]:
     """从 A2A protobuf event 抽出 {kind, type, content, data}。
 
@@ -319,8 +367,8 @@ def _extract_event_meta(event) -> Optional[dict]:
     - agent 事件：TaskArtifactUpdateEvent，data part 带 ``type`` 键
       → {"kind": "agent", "type": <event_type>, "content": <text>, "data": <剩余>}
     - workflow 事件：TaskArtifactUpdateEvent，data part 形状为 ``{"event": <kind>, "data": <dict>}``
-      —— 由 VersatileAdapter 的 `_unwrap_upstream_frame` 解包后产出；
-      event == "end" 是上游流结束信号，返回 None 由 [DONE] 收尾。
+      —— 新 VA（sidecar）经 data_proxy 文本帧下传，a2a 侧 Executor._extract_data_proxy_frames
+      （json.loads）还原后转发。
       → {"kind": "workflow", "type": "<event>", "content": "", "data": <节点数据>}
     - TaskStatusUpdateEvent(COMPLETED) 当作 final_answer_end 对待（agent 事件）
     - 其他 TaskStatusUpdateEvent（如 FAILED）返回 None，不推送给前端
@@ -334,6 +382,18 @@ def _extract_event_meta(event) -> Optional[dict]:
                 text_content = part.text or ""
             elif kind == "data":
                 data_dict = MessageToDict(part.data)
+
+        # sub_task 信封分支（级联盖章）：在通用 agent/workflow 分支之前判别。
+        # SubTaskEvent 经 agent_adapter 序列化为 data 带 type="sub_task" 的 artifact。
+        # 把 sub_task_path/node_kind 提到顶层，内层 data（子节点原帧）按 kind 渲染。
+        if data_dict.get("type") == "sub_task":
+            inner_meta = _extract_inner_by_kind(data_dict.get("data") or {})
+            return {
+                "kind": "sub_task",
+                "sub_task_path": data_dict.get("sub_task_path") or [],
+                "node_kind": data_dict.get("node_kind") or "agent",
+                "inner": inner_meta,
+            }
 
         # workflow 事件：VersatileAdapter 解包后的 {event, data} 形状
         if "event" in data_dict and isinstance(data_dict.get("data"), dict):
@@ -450,6 +510,15 @@ def _serialize_event(event, *, agent_id: str, conversation_id: str, start_time: 
             error=meta.get("error", ""),
             display=meta.get("display"),
         )
+    elif meta["kind"] == "sub_task":
+        wrapped = wrap_sub_task_event(
+            sub_task_path=meta["sub_task_path"],
+            node_kind=meta["node_kind"],
+            inner_meta=meta["inner"],
+            agent_id=agent_id,
+            conversation_id=conversation_id,
+            elapsed=elapsed,
+        )
     else:
         wrapped = wrap_workflow_event(
             event_kind=meta["type"],
@@ -547,6 +616,27 @@ def _build_flow_control_probe_response(conversation_id: str, agent_id: str) -> d
         "conversation_id": conversation_id,
         "agent_id": agent_id,
     }
+
+
+@router.post(
+    "/v1/{project_id}/agents/{agent_id}/conversations/{conversation_id}/cancel",
+    response_model=None,
+)
+async def cancel_task(
+    project_id: str,
+    agent_id: str,
+    conversation_id: str,
+    request: Request,
+) -> JSONResponse:
+    """整会话取消端点（对齐 TECH §4.2 API 级深度取消）。
+
+    设置主 Executor 的取消令牌并经 A2A CancelTask 向各子 Agent 深度传播；
+    当前无子 Agent 调度（sub_agent_client=None）时仅设置令牌、行为安全。
+    """
+    executor: Executor = request.app.state.executor
+    await executor.cancel_task(conversation_id)
+    logger.info(f"[Router] cancel 请求：conv={conversation_id}, agent={agent_id}")
+    return JSONResponse({"status": "cancel_requested"})
 
 
 @router.post(

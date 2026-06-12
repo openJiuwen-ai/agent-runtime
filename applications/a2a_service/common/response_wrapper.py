@@ -164,6 +164,99 @@ def wrap_workflow_event(
 
 
 # ════════════════════════════════════════════════════════════════════
+# sub_task 信封包装（级联盖章，对齐 TECH §3.2 / 北向消息定义文档 §2）
+# ════════════════════════════════════════════════════════════════════
+
+
+def _render_inner_custom_rsp_data(
+    inner_meta: dict[str, Any],
+    *,
+    agent_id: str,
+    conversation_id: str,
+    elapsed: float,
+) -> dict[str, Any]:
+    """把子节点原帧的 inner_meta 渲染成"标准单帧 custom_rsp_data"。
+
+    保证 ``sub_task.data`` 与该帧**非并行单独渲染时逐字段一致**（前端整段复用既有渲染器）：
+      - ``agent``：复用 wrap_agent_event 的 custom_rsp_data（含 event/content/data/plugin…）；
+      - ``workflow``：复用 wrap_workflow_event 的 custom_rsp_data（``{event, data}``）；
+      - ``lifecycle``：node_start/node_end 为框架合成帧，按原样透传 ``{event, ...}``。
+    """
+    kind = inner_meta.get("kind")
+    if kind == "workflow":
+        return wrap_workflow_event(
+            event_kind=inner_meta["type"],
+            data=inner_meta.get("data") or {},
+            agent_id=agent_id,
+            conversation_id=conversation_id,
+            elapsed=elapsed,
+        )["custom_rsp_data"]
+    if kind == "lifecycle":
+        # 框架合成的生命周期帧（node_start/node_end），已是 {event, ...} 形态，原样透传
+        return inner_meta.get("data") or {}
+    # 默认按 agent 帧渲染
+    return wrap_agent_event(
+        event_type=inner_meta.get("type", "thought"),
+        content=inner_meta.get("content", ""),
+        data=inner_meta.get("data") or {},
+        agent_id=agent_id,
+        conversation_id=conversation_id,
+        elapsed=elapsed,
+        plugin=inner_meta.get("plugin", ""),
+        display=inner_meta.get("display"),  # display（北向 v1.3）贯穿级联
+    )["custom_rsp_data"]
+
+
+def wrap_sub_task_event(
+    *,
+    sub_task_path: list[str],
+    node_kind: str,
+    inner_meta: dict[str, Any],
+    agent_id: str,
+    conversation_id: str,
+    elapsed: float,
+) -> dict[str, Any]:
+    """包装级联盖章子节点帧（``custom_rsp_data.event == "sub_task"``）。
+
+    外层信封与 agent event 一致（success/agent_id/conversation_id/output/error/
+    execution_time）；``custom_rsp_data`` 顶层带 ``event="sub_task"`` + ``sub_task_path``
+    + ``node_kind``，``data`` 为子节点原帧渲染后的标准 custom_rsp_data（见
+    ``_render_inner_custom_rsp_data``）。
+
+    Args:
+        sub_task_path: 节点绝对路径数组（root→生产者；段 = entity_id / workflow_id）。
+        node_kind: ``"agent"`` 或 ``"workflow"``，前端据此渲染（卡片 / 进度条）。
+        inner_meta: 子节点原帧的提取结果（``kind`` ∈ agent/workflow/lifecycle）。
+        agent_id / conversation_id: 同 agent event。
+        elapsed: 累计秒数。
+
+    Returns:
+        可 json.dumps 的 dict，对齐北向消息定义文档 §2。子帧内部错误体现在
+        ``data.node_end.status``，外层 ``success`` 恒为 true（=传输成功）。
+    """
+    inner = _render_inner_custom_rsp_data(
+        inner_meta,
+        agent_id=agent_id,
+        conversation_id=conversation_id,
+        elapsed=elapsed,
+    )
+    return {
+        "success": True,
+        "agent_id": agent_id,
+        "conversation_id": conversation_id,
+        "output": "",
+        "error": "",
+        "execution_time": elapsed,
+        "custom_rsp_data": {
+            "event": "sub_task",
+            "sub_task_path": sub_task_path,
+            "node_kind": node_kind,
+            "data": inner,
+        },
+    }
+
+
+# ════════════════════════════════════════════════════════════════════
 # 错误 / 限流响应包装
 # ════════════════════════════════════════════════════════════════════
 

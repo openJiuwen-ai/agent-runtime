@@ -6,6 +6,13 @@ from .events import (
     ThoughtEvent,
     AnswerEvent,
     DelegateRequest,
+    # 并行子 Agent / 多工作流
+    SubAgentSpec,
+    SubAgentDispatchRequest,
+    SubAgentResult,
+    WorkflowSpec,
+    MultiDelegateRequest,
+    SubTaskEvent,
 )
 
 __all__ = [
@@ -13,4 +20,10 @@ __all__ = [
     "ThoughtEvent",
     "AnswerEvent",
     "DelegateRequest",
+    "SubAgentSpec",
+    "SubAgentDispatchRequest",
+    "SubAgentResult",
+    "WorkflowSpec",
+    "MultiDelegateRequest",
+    "SubTaskEvent",
 ]

@@ -53,6 +53,17 @@ class Settings(BaseSettings):
     # VA 流中携带工作流最终结果的 QA 节点名称（node_type=="QA" 且 node_name==此值）
     va_workflow_result_node: Optional[str] = None
 
+    # ── 并行子 Agent / 多工作流（对齐 TECH §5.1）────────────────────────────
+    # 注：子 Agent url 不再由框架配置（P-006）——由 Agent 自管、随派发请求下传，
+    # Executor 按 spec.url 懒构造 client。原 SUB_AGENT_URL 已移除。
+    max_concurrent_sub_agents: int = 3          # 全局并发子 Agent 上限
+    sub_agent_timeout_seconds: int = 1800        # 单子 Agent 执行超时秒数（默认 30 分钟）
+    max_parallel_workflows_per_agent: int = 3    # 单子 Agent 内最大并行工作流数
+    workflow_timeout_seconds: int = 900          # 单工作流 VA 调用超时秒数（默认 15 分钟）
+    max_call_depth: int = 3                      # 递归派发深度上限（root=0，主→子=1…），防爆栈
+    # 子 Agent 写自身 Redis 会话上下文时使用的 agent_id（标识子 Agent 身份，不继承主流程）
+    dpa_agent_id: Optional[str] = None
+
     # ── FastAPI ─────────────────────────────────────────────────────────────
     fastapi_host: Optional[str] = None
     fastapi_port: Optional[int] = None

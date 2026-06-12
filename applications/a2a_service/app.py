@@ -398,6 +398,9 @@ async def lifespan(fastapi_app: FastAPI):
         await initialize()
         logger.info("[A2AService] Agent 初始化完成")
 
+        # read=None 关闭 SSE 流读超时：子 Agent 进入并行工作流阶段事件流会出现 >5s 空档
+        # （VA 跑批），默认 5s read 超时会误杀子 Agent；整体时长由框架 sub_agent_timeout_seconds
+        # （asyncio.wait_for）兜底（见 ref_deploy_a2a_troubleshooting #6）。
         http_client = httpx.AsyncClient(
             timeout=httpx.Timeout(settings.versatile_adapter_timeout, read=None)
         )
@@ -405,8 +408,21 @@ async def lifespan(fastapi_app: FastAPI):
         factory = ClientFactory(ClientConfig(httpx_client=http_client))
         va_client = factory.create(va_card)
 
+        # 并行子 Agent 寻址（P-006）：url 由 Agent 自管、随派发请求下传，框架不再从配置读取，
+        # 也不在启动期拉取子 Agent AgentCard。改为把 factory 注入 Executor，由其按 spec.url
+        # 懒 create_from_url + 缓存（每 url 一个 client）。某子 Agent 不可达只降级该实体。
         task_store = RedisTaskStore(redis, ttl=settings.redis_session_ttl or _TTL)
-        executor = Executor(va_client=va_client, redis=redis, task_store=task_store)
+        executor = Executor(
+            va_client=va_client,
+            redis=redis,
+            task_store=task_store,
+            client_factory=factory,
+            max_concurrent_sub_agents=settings.max_concurrent_sub_agents,
+            sub_agent_timeout_seconds=settings.sub_agent_timeout_seconds,
+            max_parallel_workflows_per_agent=settings.max_parallel_workflows_per_agent,
+            workflow_timeout_seconds=settings.workflow_timeout_seconds,
+            max_call_depth=settings.max_call_depth,
+        )
 
         dpa_card = _build_dpa_card()
         request_handler = DefaultRequestHandler(

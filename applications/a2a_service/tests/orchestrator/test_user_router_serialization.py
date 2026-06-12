@@ -183,10 +183,13 @@ def test_extract_workflow_end_node_inside_message_is_still_workflow():
     assert meta["data"]["node_type"] == "End"
 
 
-def test_extract_workflow_end_event_returns_none():
-    """上游 event=end 是流结束信号，不作为北向事件发出，由 [DONE] 收尾。"""
+def test_extract_workflow_end_event_no_longer_suppressed():
+    """sidecar VA 完成走 TaskStatusUpdateEvent(COMPLETED)，不再发 ``event:"end"`` 帧；
+    旧的 end 抑制已随同事重构移除，若仍出现则按普通 workflow 事件解析、不再吞掉。"""
     ev = _build_workflow_artifact_event("end", {})
-    assert _extract_event_meta(ev) is None
+    meta = _extract_event_meta(ev)
+    assert meta is not None
+    assert meta["kind"] == "workflow" and meta["type"] == "end"
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -350,13 +353,15 @@ def test_serialize_workflow_message_event():
     assert inner["INSTRUCTIONKEY"] == "GET_GRAY_INFO"
 
 
-def test_serialize_workflow_end_event_returns_none():
-    """上游 end 帧不该产出北向事件，由 [DONE] 收尾。"""
+def test_serialize_workflow_end_event_no_longer_suppressed():
+    """sidecar VA 不再发 ``event:"end"`` 帧（完成走 COMPLETED）；旧 end 抑制已移除，
+    若仍出现则按普通 workflow 事件序列化、不再吞掉。"""
     ev = _build_workflow_artifact_event("end", {})
     payload = _serialize_event(
         ev, agent_id=AGENT_ID, conversation_id=CONV_ID, start_time=0.0,
     )
-    assert payload is None
+    assert payload is not None
+    assert '"event": "end"' in payload
 
 
 def test_serialize_tool_end_preserves_plugin_name():

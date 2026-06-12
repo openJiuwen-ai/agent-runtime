@@ -30,6 +30,7 @@ from a2a.server.events import EventQueue
 from a2a.types.a2a_pb2 import (
     Artifact,
     Part,
+    StreamResponse,
     TaskArtifactUpdateEvent,
 )
 from google.protobuf.struct_pb2 import Struct, Value
@@ -94,14 +95,11 @@ def _load_fixture() -> list[dict]:
 
 
 def _va_artifact(node_data: dict, event_kind: str = "message") -> TaskArtifactUpdateEvent:
-    """模拟 VersatileAdapter 解包后交付的 artifact：data part 形状为 {event, data}."""
-    wrapped = {"event": event_kind, "data": node_data}
-    struct = Struct()
-    struct.update(wrapped)
-    value = Value()
-    value.struct_value.CopyFrom(struct)
-    part = Part()
-    part.data.CopyFrom(value)
+    """新 VA 契约：业务帧用文本装在 ``vatype=data_proxy`` 的 text Part 里（a2a 侧 json.loads 还原）。"""
+    frame = {"event": event_kind, "data": node_data}
+    meta = Struct()
+    meta.update({"vatype": "data_proxy"})
+    part = Part(text=json.dumps(frame, ensure_ascii=False), metadata=meta)
     return TaskArtifactUpdateEvent(
         task_id="va-task",
         context_id=CAPTURE_CONV_ID,
@@ -111,10 +109,7 @@ def _va_artifact(node_data: dict, event_kind: str = "message") -> TaskArtifactUp
 
 
 def _wrap_stream_resp(event):
-    return SimpleNamespace(
-        WhichOneof=lambda f: "artifact_update" if f == "payload" else None,
-        artifact_update=event,
-    )
+    return StreamResponse(artifact_update=event)
 
 
 async def _async_iter(items):

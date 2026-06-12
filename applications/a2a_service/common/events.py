@@ -21,6 +21,7 @@ EDPAgent 事件协议（与 A2A SDK 完全解耦）。
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
@@ -263,6 +264,85 @@ class DelegateRequest(BaseModel):
 
 
 # ════════════════════════════════════════════════════════════════════
+# 并行子 Agent / 多工作流（Executor 专用 + 级联盖章信封）
+#   对齐 TECH_Design.md §2.1：
+#     - SubAgentSpec / SubAgentDispatchRequest  主 Agent 侧，派发并行子 Agent
+#     - WorkflowSpec  / MultiDelegateRequest     子 Agent 侧，派发并行工作流
+#     - SubAgentResult                            Executor 内部聚合，不出 SSE
+#     - SubTaskEvent                              级联盖章信封，进入 SSE 流、前端消费
+# ════════════════════════════════════════════════════════════════════
+
+
+@dataclass
+class SubAgentSpec:
+    """单个并行子 Agent 的派发规格（主 Agent 侧）。"""
+    entity_id: str    # 业务实体唯一标识，同时作为前端显示 key / sub_task_path 段
+    entity_name: str  # LLM 识别的中文公司名称，透传至前端展示
+    query: str        # 针对该实体的子任务描述
+    url: str = ""     # 该子 Agent 的 A2A 端点；由 Agent 自管、派发时下传（P-006）。
+                      # 框架据此按 url 懒构造/缓存 client；空 + 无注入 client → 该实体降级 failed。
+
+
+class SubAgentDispatchRequest(BaseModel):
+    """主 Agent yield 的并行子 Agent 派发请求（Executor 专用，不出 SSE）。"""
+    type: Literal["sub_agent_dispatch"] = "sub_agent_dispatch"
+    specs: list[SubAgentSpec]
+
+
+@dataclass(frozen=True)
+class SubAgentResult:
+    """单个子 Agent 的执行结果（Executor 内部聚合用，不出 SSE）。"""
+    entity_id: str
+    status: Literal["done", "failed", "cancelled", "timeout"]
+    content: str = ""        # 子 Agent LLM 最终回答全量文本（来自 FinalAnswerChunkEvent.content；end 仅作结束标记，默认空）
+    error: str = ""
+    child_task_id: str = ""  # 子 Agent A2A task_id，用于协议级取消和崩溃恢复
+
+
+@dataclass
+class WorkflowSpec:
+    """单个并行工作流的派发规格（子 Agent 侧）。"""
+    workflow_id: str          # 唯一标识，作 SubTaskEvent.sub_task_path 工作流段（同父下唯一）；不传给 VA
+    intent: str               # VA 调用意图标识，对应 DelegateRequest.intent
+    task_description: str      # 自然语言任务描述，对应 DelegateRequest.task_description
+    target_agent: str = ""    # VA target_agent（agent_id），对应 DelegateRequest.target_agent
+
+    def va_fields(self) -> dict:
+        """提取 VA 调用所需字段，用于构造 DelegateRequest。"""
+        return {
+            "intent": self.intent,
+            "task_description": self.task_description,
+            "target_agent": self.target_agent or None,
+        }
+
+
+class MultiDelegateRequest(BaseModel):
+    """子 Agent yield 的并行工作流派发请求（Executor 专用，不出 SSE）。"""
+    type: Literal["multi_delegate"] = "multi_delegate"
+    workflows: list[WorkflowSpec]
+
+
+class SubTaskEvent(BaseModel):
+    """级联盖章信封（北向唯一的子节点事件信封，进入 SSE 流、前端消费）。
+
+    子节点（子 Agent / 并行工作流）的原始帧**原封不动**放进 ``data``，外层只加
+    ``sub_task`` 判别 + 节点绝对路径 + 节点类型；层级靠 ``sub_task_path`` 数组表达，
+    wire 帧**任意深度都单层**（中间节点透传、不再套壳）。
+
+    ``data`` 两种内容：
+      - report 帧：子节点原始帧（agent 节点为 ``{type:"think_chunk",...}`` 等；
+        workflow 节点为 VA 原生 ``{event:"message","data":<node>}``）。
+      - 生命周期帧：
+        ``{event:"node_start", entity_name|intent:...}`` /
+        ``{event:"node_end", status:"done|failed|cancelled|timeout", content|result|error|reason|elapsed_ms:...}``
+    """
+    type: Literal["sub_task"] = "sub_task"   # 北向 event 判别字段
+    sub_task_path: list[str]                  # 绝对路径数组（root→生产者；段 = entity_id / workflow_id）
+    node_kind: Literal["agent", "workflow"]   # 节点类型，前端据此渲染（卡片 / 进度条）；每帧都带
+    data: dict[str, Any] = Field(default_factory=dict)  # 整帧原报文（原事件类型字段保留）
+
+
+# ════════════════════════════════════════════════════════════════════
 # 兼容事件（保留旧版 API，逐步废弃）
 # ════════════════════════════════════════════════════════════════════
 
@@ -317,6 +397,9 @@ AgentEvent = Union[
     FinalAnswerEndEvent,
     # Executor
     DelegateRequest,
+    SubAgentDispatchRequest,   # 主 Agent 侧并行子 Agent 派发（不出 SSE）
+    MultiDelegateRequest,      # 子 Agent 侧并行工作流派发（不出 SSE）
+    SubTaskEvent,              # 级联盖章信封（出 SSE，前端消费）
     # 兼容
     ThoughtEvent,
     AnswerEvent,
@@ -354,6 +437,8 @@ EVENT_TYPE_MAP = {
     "summary": SummaryEvent,
     "final_answer_chunk": FinalAnswerChunkEvent,
     "final_answer_end": FinalAnswerEndEvent,
+    # 级联盖章信封
+    "sub_task": SubTaskEvent,
     # 兼容
     "thought": ThoughtEvent,
     "answer": AnswerEvent,
