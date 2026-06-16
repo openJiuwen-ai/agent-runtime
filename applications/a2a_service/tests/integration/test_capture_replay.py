@@ -29,8 +29,13 @@ import pytest
 from a2a.server.events import EventQueue
 from a2a.types.a2a_pb2 import (
     Artifact,
+    Message,
     Part,
+    ROLE_AGENT,
+    TASK_STATE_COMPLETED,
     TaskArtifactUpdateEvent,
+    TaskStatus,
+    TaskStatusUpdateEvent,
 )
 from google.protobuf.struct_pb2 import Struct, Value
 
@@ -93,27 +98,67 @@ def _load_fixture() -> list[dict]:
 # ════════════════════════════════════════════════════════════════════
 
 
-def _va_artifact(node_data: dict, event_kind: str = "message") -> TaskArtifactUpdateEvent:
-    """模拟 VersatileAdapter 解包后交付的 artifact：data part 形状为 {event, data}."""
-    wrapped = {"event": event_kind, "data": node_data}
-    struct = Struct()
-    struct.update(wrapped)
-    value = Value()
-    value.struct_value.CopyFrom(struct)
+def _text_part(text: str, vatype: str | None = None) -> Part:
+    """构造 text Part，可选 metadata.vatype。"""
+    metadata = None
+    if vatype:
+        metadata = Struct()
+        metadata.update({"vatype": vatype})
     part = Part()
-    part.data.CopyFrom(value)
+    part.text = text
+    if metadata is not None:
+        part.metadata.CopyFrom(metadata)
+    return part
+
+
+def _va_artifact(node_data: dict, event_kind: str = "message") -> TaskArtifactUpdateEvent:
+    """模拟 VersatileAdapter 透传的数据帧：text Part(vatype=data_proxy)，text 是 JSON 字符串。
+
+    对应 VA 侧 _make_text_part(event.data_proxy.raw_data, "data_proxy") 的产物。
+    """
+    wrapped = {"event": event_kind, "data": node_data}
+    payload = json.dumps(wrapped, ensure_ascii=False)
     return TaskArtifactUpdateEvent(
         task_id="va-task",
         context_id=CAPTURE_CONV_ID,
-        artifact=Artifact(artifact_id="va-art", parts=[part]),
+        artifact=Artifact(artifact_id="va-art", parts=[_text_part(payload, vatype="data_proxy")]),
         last_chunk=False,
     )
 
 
+def _va_completed_event(workflow_result: str | None = None) -> TaskStatusUpdateEvent:
+    """模拟 VersatileAdapter 工作流完成事件：TaskStatusUpdateEvent(COMPLETED)。
+
+    对应 VA 侧 updater.complete(message) 的产物，可选携带 vatype=workflow_result Part。
+    """
+    message = None
+    if workflow_result:
+        message = Message(
+            role=ROLE_AGENT,
+            message_id="va-msg-completed",
+            task_id="va-task",
+            context_id=CAPTURE_CONV_ID,
+            parts=[_text_part(workflow_result, vatype="workflow_result")],
+        )
+    status = TaskStatus(state=TASK_STATE_COMPLETED)
+    if message is not None:
+        status.message.CopyFrom(message)
+    return TaskStatusUpdateEvent(
+        task_id="va-task",
+        context_id=CAPTURE_CONV_ID,
+        status=status,
+    )
+
+
 def _wrap_stream_resp(event):
+    """根据事件类型返回 oneof stream_resp 对象（兼容 artifact_update 与 status_update）。"""
+    is_status = isinstance(event, TaskStatusUpdateEvent)
+    field_name = "status_update" if is_status else "artifact_update"
     return SimpleNamespace(
-        WhichOneof=lambda f: "artifact_update" if f == "payload" else None,
-        artifact_update=event,
+        WhichOneof=lambda f, _field=field_name: _field if f == "payload" else None,
+        HasField=lambda f, _field=field_name: f == _field,
+        artifact_update=None if is_status else event,
+        status_update=event if is_status else None,
     )
 
 
@@ -412,7 +457,7 @@ async def test_pattern_b_frames_from_va_match_fixture_shape(monkeypatch):
     va_events = []
     for f in message_frames:
         va_events.append(_va_artifact(f["custom_rsp_data"]["data"]))
-    # 补 End node
+    # 补 End node 数据帧（前端可见的"流到达 End"信号）
     va_events.append(_va_artifact({
         "node_id": "node_end",
         "node_type": "End",
@@ -420,6 +465,8 @@ async def test_pattern_b_frames_from_va_match_fixture_shape(monkeypatch):
         "is_finished": True,
         "workflow_id": "wf-1",
     }))
+    # 补 COMPLETED 状态事件（驱动 Executor 的 has_end_node=True）
+    va_events.append(_va_completed_event(workflow_result=None))
 
     # 在 agent 流里发一次 DelegateRequest 触发 VA 调用
     call_count = [0]

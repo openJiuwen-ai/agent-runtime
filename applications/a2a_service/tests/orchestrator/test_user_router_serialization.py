@@ -183,10 +183,18 @@ def test_extract_workflow_end_node_inside_message_is_still_workflow():
     assert meta["data"]["node_type"] == "End"
 
 
-def test_extract_workflow_end_event_returns_none():
-    """上游 event=end 是流结束信号，不作为北向事件发出，由 [DONE] 收尾。"""
+def test_extract_workflow_end_event_passes_through():
+    """上游 event=end 帧目前由 Runtime 透传给前端（已知 TODO：未来下沉到 VA 侧过滤）。
+
+    历史背景：旧实现在 user_router 硬编码 ``if event_kind == "end": return None``，
+    违反"业务语义不进 Runtime"原则。已在 PR-320 review v3 #7 中删除该硬编码，
+    后续 PR 会把过滤下沉到 versatile_adapter 的 _process_chunk。
+    """
     ev = _build_workflow_artifact_event("end", {})
-    assert _extract_event_meta(ev) is None
+    meta = _extract_event_meta(ev)
+    assert meta is not None
+    assert meta["kind"] == "workflow"
+    assert meta["type"] == "end"
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -350,13 +358,24 @@ def test_serialize_workflow_message_event():
     assert inner["INSTRUCTIONKEY"] == "GET_GRAY_INFO"
 
 
-def test_serialize_workflow_end_event_returns_none():
-    """上游 end 帧不该产出北向事件，由 [DONE] 收尾。"""
+def test_serialize_workflow_end_event_passes_through():
+    """上游 end 帧目前由 Runtime 透传：序列化产出 custom_rsp_data 载荷（已知 TODO，应下沉到 VA）。
+
+    历史背景：旧实现在 user_router 硬编码过滤该帧；现已删除（PR-320 review v3 #7），
+    所以 _serialize_event 会照常产出 custom_rsp_data.event=="end" 的载荷。
+    """
     ev = _build_workflow_artifact_event("end", {})
     payload = _serialize_event(
         ev, agent_id=AGENT_ID, conversation_id=CONV_ID, start_time=0.0,
     )
-    assert payload is None
+    assert payload is not None
+    parsed = json.loads(payload)
+    assert parsed["success"] is True
+    assert parsed["agent_id"] == AGENT_ID
+    assert parsed["conversation_id"] == CONV_ID
+    # custom_rsp_data 只含 event 与 data（参见 wrap_workflow_event）
+    assert parsed["custom_rsp_data"]["event"] == "end"
+    assert parsed["custom_rsp_data"]["data"] == {}
 
 
 def test_serialize_tool_end_preserves_plugin_name():
@@ -421,7 +440,9 @@ def test_serialize_monotonic_elapsed():
     p1 = _serialize_event(
         ev, agent_id=AGENT_ID, conversation_id=CONV_ID, start_time=t0,
     )
-    time.sleep(0.01)
+    # Windows ``time.monotonic`` 分辨率约 15.6 ms，sleep 必须充分跨过一个 tick，
+    # 否则两次 elapsed 都可能落在同一 tick 边界上（均为 0.0），导致单调断言假阴性。
+    time.sleep(0.05)
     p2 = _serialize_event(
         ev, agent_id=AGENT_ID, conversation_id=CONV_ID, start_time=t0,
     )

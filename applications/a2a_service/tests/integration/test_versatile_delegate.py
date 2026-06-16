@@ -6,11 +6,20 @@ Task B: DelegateRequest → VA → cascade 完整路径集成测试。
 
 覆盖 Pattern B 的核心主路径：
   1. agent 发出 DelegateRequest → Executor 调 VA
-  2. VA 返回含 End node 的帧流 → cascade 续轮
+  2. VA 通过 TaskStatusUpdateEvent(COMPLETED) 标识工作流结束 → cascade 续轮
   3. step_counter 跨 cascade 递增
-  4. va_workflow_result_node 命中的节点被过滤（不推给前端），其 text 成为 cascade_result
-  5. 其他节点正常走到 event_queue
-  6. VA 未完成（无 End node）→ 挂起为 INPUT_REQUIRED（未在此文件测，见 _task_store_save 行为）
+  4. va_workflow_result_node 命中的节点其 text 走 COMPLETED.message 的 vatype=workflow_result Part 作为 cascade_result
+  5. 其他节点正常通过 TaskArtifactUpdateEvent + text Part(vatype=data_proxy) 走到 event_queue
+  6. VA 未完成（无 COMPLETED 事件）→ 不 cascade（用 INPUT_REQUIRED 或自然结束）
+  7. VA 上游报错 → 通过 TaskStatusUpdateEvent(FAILED) + vatype=upstream_error Part 携带错误详情
+
+协议契约：
+  - 数据帧：TaskArtifactUpdateEvent，artifact.parts = [Part(text=json_str,
+      metadata={vatype:"data_proxy"})]
+  - 结束事件：TaskStatusUpdateEvent(state=COMPLETED, message=Message(parts=[
+      Part(text=qa_text, metadata={vatype:"workflow_result"})]))
+  - 失败事件：TaskStatusUpdateEvent(state=FAILED, message=Message(parts=[
+      Part(text=err_json, metadata={vatype:"upstream_error"})]))
 """
 from __future__ import annotations
 
@@ -23,7 +32,10 @@ import pytest
 from a2a.server.events import EventQueue
 from a2a.types.a2a_pb2 import (
     Artifact,
+    Message,
     Part,
+    ROLE_AGENT,
+    TASK_STATE_COMPLETED,
     TASK_STATE_FAILED,
     TASK_STATE_INPUT_REQUIRED,
     TASK_STATE_WORKING,
@@ -69,57 +81,106 @@ def _enable_filtered_node(monkeypatch, node_name: str = DEFAULT_FILTERED_NODE) -
 
 
 # ════════════════════════════════════════════════════════════════════
-# 辅助：构造 VA 流 mock
+# 辅助：构造 VA 流 mock（新协议：text Part + vatype + Status 事件）
 # ════════════════════════════════════════════════════════════════════
 
 
-def _data_part(data: dict) -> Part:
-    struct = Struct()
-    struct.update(data)
-    value = Value()
-    value.struct_value.CopyFrom(struct)
+def _text_part(text: str, vatype: str | None = None) -> Part:
+    """构造 text Part，可选 metadata.vatype。"""
+    metadata = None
+    if vatype:
+        metadata = Struct()
+        metadata.update({"vatype": vatype})
     part = Part()
-    part.data.CopyFrom(value)
+    part.text = text
+    if metadata is not None:
+        part.metadata.CopyFrom(metadata)
     return part
 
 
-def _va_artifact_event(node_data: dict) -> TaskArtifactUpdateEvent:
-    """构造 VA 返回的 TaskArtifactUpdateEvent（解包后的 workflow message 帧）。
+def _va_data_proxy_event(node_data: dict) -> TaskArtifactUpdateEvent:
+    """构造 VA 透传的数据帧：text Part(vatype=data_proxy)，text 是 JSON 字符串。
 
-    data part 形状：``{"event": "message", "data": <node_data>}``
+    对应 VA 侧 _make_text_part(event.data_proxy.raw_data, "data_proxy") 的产物。
+    node_data 形如 ``{"event": "message", "data": {node_type, node_name, text, ...}}``
+    或扁平 ``{node_type, node_name, text, ...}`` —— 这里默认采用前者，与一级控制器实际帧一致。
     """
     wrapped = {"event": "message", "data": node_data}
-    return TaskArtifactUpdateEvent(
-        task_id="va-task-1",
-        context_id=CONV_ID,
-        artifact=Artifact(artifact_id=f"va-art-{id(node_data)}", parts=[_data_part(wrapped)]),
-        last_chunk=False,
-    )
-
-
-def _va_terminal_event(event_kind: str, err_data: dict) -> TaskArtifactUpdateEvent:
-    """构造 VA 返回的非 message 类终态帧（event=error / event=exception）。
-
-    对齐 AgentEngine versatile_proxy.py:336 的 ``event=='exception'`` 终态识别，
-    以及实际 VA 网关上抓到的 ``event=='error'`` 帧形态。
-    """
-    wrapped = {"event": event_kind, "data": err_data}
+    payload = json.dumps(wrapped, ensure_ascii=False)
     return TaskArtifactUpdateEvent(
         task_id="va-task-1",
         context_id=CONV_ID,
         artifact=Artifact(
-            artifact_id=f"va-art-{event_kind}-{id(err_data)}",
-            parts=[_data_part(wrapped)],
+            artifact_id=f"va-art-{id(node_data)}",
+            parts=[_text_part(payload, vatype="data_proxy")],
         ),
         last_chunk=False,
     )
 
 
-def _wrap_as_stream_resp(event: TaskArtifactUpdateEvent) -> SimpleNamespace:
-    """模拟 VA client 返回的 oneof stream_resp 对象。"""
+def _va_completed_event(workflow_result: str | None = None) -> TaskStatusUpdateEvent:
+    """构造 VA 工作流完成事件：TaskStatusUpdateEvent(COMPLETED)。
+
+    若 workflow_result 非空，附带 message 含 text Part(vatype=workflow_result)。
+    对应 VA 侧 updater.complete(message) 的产物。
+    """
+    message = None
+    if workflow_result:
+        message = Message(
+            role=ROLE_AGENT,
+            message_id="va-msg-completed",
+            task_id="va-task-1",
+            context_id=CONV_ID,
+            parts=[_text_part(workflow_result, vatype="workflow_result")],
+        )
+    status = TaskStatus(state=TASK_STATE_COMPLETED)
+    if message is not None:
+        status.message.CopyFrom(message)
+    return TaskStatusUpdateEvent(
+        task_id="va-task-1",
+        context_id=CONV_ID,
+        status=status,
+    )
+
+
+def _va_failed_event(error_payload: dict | None = None) -> TaskStatusUpdateEvent:
+    """构造 VA 工作流失败事件：TaskStatusUpdateEvent(FAILED)。
+
+    若 error_payload 非空，附带 message 含 text Part(vatype=upstream_error)，
+    text 是错误 JSON 字符串。对应 VA 侧 updater.failed(message) 的产物。
+    """
+    message = None
+    if error_payload is not None:
+        err_json = json.dumps(error_payload, ensure_ascii=False)
+        message = Message(
+            role=ROLE_AGENT,
+            message_id="va-msg-failed",
+            task_id="va-task-1",
+            context_id=CONV_ID,
+            parts=[_text_part(err_json, vatype="upstream_error")],
+        )
+    status = TaskStatus(state=TASK_STATE_FAILED)
+    if message is not None:
+        status.message.CopyFrom(message)
+    return TaskStatusUpdateEvent(
+        task_id="va-task-1",
+        context_id=CONV_ID,
+        status=status,
+    )
+
+
+def _wrap_as_stream_resp(event) -> SimpleNamespace:
+    """模拟 VA client 返回的 oneof stream_resp 对象。
+
+    根据 event 类型设置正确的 oneof 字段，与 protobuf oneof 访问保持一致。
+    """
+    is_status = isinstance(event, TaskStatusUpdateEvent)
+    field_name = "status_update" if is_status else "artifact_update"
     return SimpleNamespace(
-        WhichOneof=lambda field: "artifact_update" if field == "payload" else None,
-        artifact_update=event,
+        WhichOneof=lambda f, _field=field_name: _field if f == "payload" else None,
+        HasField=lambda f, _field=field_name: f == _field,
+        artifact_update=None if is_status else event,
+        status_update=event if is_status else None,
     )
 
 
@@ -133,9 +194,12 @@ async def _async_iter(items):
 # ════════════════════════════════════════════════════════════════════
 
 
-def _make_executor_with_va_stream(va_events: list[TaskArtifactUpdateEvent]) -> Executor:
-    """返回一个 Executor，其 _va_client.send_message 会 yield 指定的 VA 事件。"""
-    # redis mock：返回模拟的 cached body
+def _make_executor_with_va_stream(va_events: list) -> Executor:
+    """返回一个 Executor，其 _va_client.send_message 会 yield 指定的 VA 事件。
+
+    va_events 可以混合 TaskArtifactUpdateEvent + TaskStatusUpdateEvent，
+    按列表顺序依次 yield 给消费方。
+    """
     redis = MagicMock()
     redis.get_json = AsyncMock(return_value={
         "headers": {},
@@ -146,7 +210,6 @@ def _make_executor_with_va_stream(va_events: list[TaskArtifactUpdateEvent]) -> E
         },
     })
 
-    # va_client mock：send_message 返回 async iterator of stream_resp
     va_client = MagicMock()
 
     def mock_send_message(request):
@@ -155,7 +218,6 @@ def _make_executor_with_va_stream(va_events: list[TaskArtifactUpdateEvent]) -> E
 
     va_client.send_message = mock_send_message
 
-    # task_store mock
     task_store = MagicMock()
     task_store.get = AsyncMock(return_value=None)
     task_store.save = AsyncMock()
@@ -164,11 +226,7 @@ def _make_executor_with_va_stream(va_events: list[TaskArtifactUpdateEvent]) -> E
 
 
 def _is_event_with_state(event, state) -> bool:
-    """判断事件是否是 ``TaskStatusUpdateEvent`` 且处于指定状态。
-
-    抽成单独的 helper 是为了把推导式中包含多个 ``and`` 子句的过滤条件
-    简化为单子句形式（参考 G.EXP.04：避免推导式带超过两个子句或多行子句）。
-    """
+    """判断事件是否是 ``TaskStatusUpdateEvent`` 且处于指定状态。"""
     return (
         isinstance(event, TaskStatusUpdateEvent)
         and event.status is not None
@@ -190,16 +248,15 @@ def _drain_queue(queue: EventQueue) -> list:
 
 
 # ════════════════════════════════════════════════════════════════════
-# 测试 1：VA 返回含 End node → cascade 触发
+# 测试 1：VA 返回 COMPLETED → cascade 触发
 # ════════════════════════════════════════════════════════════════════
 
 
 @pytest.mark.asyncio
-async def test_delegate_with_end_node_triggers_cascade(monkeypatch):
-    """VA 响应含 End node → Executor 应调 agent_stream 第二次（cascade）。"""
+async def test_delegate_with_completed_event_triggers_cascade(monkeypatch):
+    """VA 流以 TaskStatusUpdateEvent(COMPLETED) 结束 → Executor 应调 agent_stream 第二次（cascade）。"""
     va_events = [
-        # 节点数据帧：INSTRUCTIONKEY=GET_GRAY_INFO
-        _va_artifact_event({
+        _va_data_proxy_event({
             "text": '{"SPTRANSRETCODE":"00009","INSTRUCTIONKEY":"GET_GRAY_INFO"}',
             "index": "0",
             "node_id": "node_gray",
@@ -207,16 +264,8 @@ async def test_delegate_with_end_node_triggers_cascade(monkeypatch):
             "node_name": "问答_获取灰度策略",
             "workflow_id": "wf-1",
         }),
-        # va_workflow_result_node 帧（默认 GXZQAResponseNode）→ 被过滤
-        _va_artifact_event({
-            "text": "QA结果文本",
-            "node_id": "node_qa_result",
-            "node_type": "QA",
-            "node_name": "GXZQAResponseNode",
-            "workflow_id": "wf-1",
-        }),
-        # End node 帧
-        _va_artifact_event({
+        # End 节点数据帧（仅作为前端可见的"流到达 End"信号，由 VA 透传）
+        _va_data_proxy_event({
             "text": "",
             "node_id": "node_end",
             "node_type": "End",
@@ -224,16 +273,16 @@ async def test_delegate_with_end_node_triggers_cascade(monkeypatch):
             "is_finished": True,
             "workflow_id": "wf-1",
         }),
+        # 真正驱动 has_end_node = True 的是 COMPLETED 状态事件
+        _va_completed_event(workflow_result=None),
     ]
     executor = _make_executor_with_va_stream(va_events)
 
-    # 记录 agent_stream 调用次数
     call_count = [0]
 
     async def fake_agent_stream(**kwargs):
         call_count[0] += 1
         if call_count[0] == 1:
-            # 第一次：agent 产生 DelegateRequest
             yield ConversationStartEvent()
             yield ThinkStartEvent()
             yield DelegateRequest(
@@ -241,7 +290,6 @@ async def test_delegate_with_end_node_triggers_cascade(monkeypatch):
                 task_description="查询课题版灰度策略",
             )
         else:
-            # 第二次（cascade）：直接结束
             yield ConversationEndEvent()
 
     monkeypatch.setattr("orchestrator.executor.agent_stream", fake_agent_stream)
@@ -259,31 +307,25 @@ async def test_delegate_with_end_node_triggers_cascade(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_delegate_emits_pattern_b_frames_excluding_filtered(monkeypatch):
-    """VA 返回的节点帧都 enqueue 到 event_queue，但 va_workflow_result_node 被过滤。"""
+async def test_delegate_forwards_data_proxy_frames(monkeypatch):
+    """VA 返回的 data_proxy text Part 帧都 enqueue 到 event_queue。"""
     _enable_filtered_node(monkeypatch)
     va_events = [
-        _va_artifact_event({
+        _va_data_proxy_event({
             "node_id": "n1",
             "node_type": "QA",
-            "node_name": "问答_获取灰度策略",  # 非过滤节点
+            "node_name": "问答_获取灰度策略",
             "text": "data1",
             "workflow_id": "wf-1",
         }),
-        _va_artifact_event({
-            "node_id": "n2",
-            "node_type": "QA",
-            "node_name": "GXZQAResponseNode",  # 默认被过滤
-            "text": "suppressed",
-            "workflow_id": "wf-1",
-        }),
-        _va_artifact_event({
+        _va_data_proxy_event({
             "node_id": "node_end",
             "node_type": "End",
             "node_name": "结束",
             "is_finished": True,
             "workflow_id": "wf-1",
         }),
+        _va_completed_event(workflow_result=None),
     ]
     executor = _make_executor_with_va_stream(va_events)
 
@@ -296,7 +338,7 @@ async def test_delegate_emits_pattern_b_frames_excluding_filtered(monkeypatch):
                 intent="查询", task_description="查询灰度",
             )
         else:
-            yield ConversationEndEvent()  # cascade 轮直接结束，防死循环
+            yield ConversationEndEvent()
 
     monkeypatch.setattr("orchestrator.executor.agent_stream", fake_agent_stream)
 
@@ -310,7 +352,7 @@ async def test_delegate_emits_pattern_b_frames_excluding_filtered(monkeypatch):
 
     enqueued = _drain_queue(queue)
 
-    # 抽出 VA artifact 节点的 node_name（帧已解包为 {event, data: {node...}}）
+    # _forward_artifact 会把 text Part(vatype=data_proxy) 的 JSON 解析后转为 data Part 推前端
     va_node_names = []
     for ev in enqueued:
         if isinstance(ev, TaskArtifactUpdateEvent):
@@ -321,32 +363,26 @@ async def test_delegate_emits_pattern_b_frames_excluding_filtered(monkeypatch):
                     if isinstance(node, dict) and node.get("node_type") in ("QA", "End"):
                         va_node_names.append(node.get("node_name"))
                         break
-    # GXZQAResponseNode 被过滤，不在列表里
-    assert "GXZQAResponseNode" not in va_node_names
-    # 其他节点应该都在
+    # 全部 data_proxy 帧都被转发
     assert "问答_获取灰度策略" in va_node_names
-    assert "结束" in va_node_names  # End node 本身不被过滤
+    assert "结束" in va_node_names
 
 
 @pytest.mark.asyncio
-async def test_delegate_passes_qa_result_as_cascade_input(monkeypatch):
-    """被过滤的 GXZQAResponseNode 的 text 应作为 cascade_result 传给第二轮 agent_stream。"""
+async def test_delegate_passes_workflow_result_as_cascade_input(monkeypatch):
+    """COMPLETED.message 的 vatype=workflow_result Part 应作为 cascade_result 传给第二轮 agent_stream。"""
     _enable_filtered_node(monkeypatch)
+    qa_text = "QA节点的最终文本结果"
     va_events = [
-        _va_artifact_event({
+        _va_data_proxy_event({
             "node_id": "n1",
             "node_type": "QA",
-            "node_name": "GXZQAResponseNode",  # 过滤节点，text 用于 cascade
-            "text": "QA节点的最终文本结果",
+            "node_name": "问答_中间节点",
+            "text": "intermediate",
             "workflow_id": "wf-1",
         }),
-        _va_artifact_event({
-            "node_id": "node_end",
-            "node_type": "End",
-            "node_name": "结束",
-            "is_finished": True,
-            "workflow_id": "wf-1",
-        }),
+        # workflow_result 通过 COMPLETED 事件的 message 携带
+        _va_completed_event(workflow_result=qa_text),
     ]
     executor = _make_executor_with_va_stream(va_events)
 
@@ -355,10 +391,8 @@ async def test_delegate_passes_qa_result_as_cascade_input(monkeypatch):
     async def fake_agent_stream(**kwargs):
         received_cascade_result[0] = kwargs.get("cascade_result")
         if received_cascade_result[0] is None:
-            # 首轮：产生 Delegate
             yield DelegateRequest(intent="查", task_description="查")
         else:
-            # Cascade 轮：结束
             yield ConversationEndEvent()
 
     monkeypatch.setattr("orchestrator.executor.agent_stream", fake_agent_stream)
@@ -371,9 +405,8 @@ async def test_delegate_passes_qa_result_as_cascade_input(monkeypatch):
         cascade_result=None,
     )
 
-    # cascade 轮被调时，cascade_result = {"workflow_result": "QA节点的最终文本结果"}
     assert received_cascade_result[0] is not None
-    assert received_cascade_result[0] == {"workflow_result": "QA节点的最终文本结果"}
+    assert received_cascade_result[0] == {"workflow_result": qa_text}
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -386,16 +419,13 @@ async def test_step_counter_continues_across_cascade(monkeypatch):
     """首轮的 tool + delegate 计 2 步，cascade 轮的 tool 计第 3 步。"""
     _enable_filtered_node(monkeypatch)
     va_events = [
-        _va_artifact_event({
+        _va_data_proxy_event({
             "node_id": "n1", "node_type": "QA",
-            "node_name": "GXZQAResponseNode",
-            "text": "cascade-data",
+            "node_name": "问答_中间节点",
+            "text": "intermediate",
             "workflow_id": "wf-1",
         }),
-        _va_artifact_event({
-            "node_id": "node_end", "node_type": "End", "node_name": "结束",
-            "is_finished": True, "workflow_id": "wf-1",
-        }),
+        _va_completed_event(workflow_result="cascade-data"),
     ]
     executor = _make_executor_with_va_stream(va_events)
 
@@ -423,7 +453,6 @@ async def test_step_counter_continues_across_cascade(monkeypatch):
         cascade_result=None,
     )
 
-    # 收集所有 planning_execution_process 的 content
     planning_contents = []
     for ev in _drain_queue(queue):
         if isinstance(ev, TaskArtifactUpdateEvent):
@@ -444,24 +473,22 @@ async def test_step_counter_continues_across_cascade(monkeypatch):
 
 
 # ════════════════════════════════════════════════════════════════════
-# 测试 3：VA 未完成（无 End node）→ 不 cascade
+# 测试 3：VA 未完成（无 COMPLETED 事件）→ 不 cascade
 # ════════════════════════════════════════════════════════════════════
 
 
 @pytest.mark.asyncio
-async def test_delegate_without_end_node_does_not_cascade(monkeypatch):
-    """VA 响应无 End node → agent_stream 只被调一次（不 cascade）。"""
+async def test_delegate_without_completed_event_does_not_cascade(monkeypatch):
+    """VA 流自然结束但未发 COMPLETED → agent_stream 只被调一次（不 cascade）。"""
     va_events = [
-        _va_artifact_event({
+        _va_data_proxy_event({
             "node_id": "n1", "node_type": "QA",
             "node_name": "某中间节点",
             "text": "incomplete",
             "workflow_id": "wf-1",
         }),
-        # 无 End node
+        # 无 TaskStatusUpdateEvent(COMPLETED)
     ]
-    # ``_make_executor_with_va_stream`` 内部已将 ``task_store.get`` mock 为
-    # ``AsyncMock(return_value=None)``，无需在测试中再次访问 Executor 的私有
     executor = _make_executor_with_va_stream(va_events)
 
     call_count = [0]
@@ -485,24 +512,16 @@ async def test_delegate_without_end_node_does_not_cascade(monkeypatch):
 
 
 # ════════════════════════════════════════════════════════════════════
-# 测试 4：VA 上游报错（event=error / event=exception）→ 终态 FAILED
+# 测试 4：VA 上游报错（FAILED + upstream_error）→ 终态 FAILED + 错误透传
 # ════════════════════════════════════════════════════════════════════
-# 对齐 AgentEngine：上游 event=exception 视为 workflow_complete 终态
-# （versatile_proxy.py:336）；agent-runtime 这里把 event in (error, exception)
-# 都识别为终态，避免错误后无 End node → INPUT_REQUIRED → 续轮锁死 conv_id。
 
 
 def _make_executor_with_real_task(
-    va_events: list[TaskArtifactUpdateEvent],
+    va_events: list,
     *,
     initial_va_task_id: str = "stale-va-task-id",
 ) -> tuple[Executor, Task, MagicMock]:
-    """变体：task_store.get 返回真实 Task，验证 save 时落了哪些字段。
-
-    Returns: (executor, task, task_store) — 直接拿 task 看最终持久化状态；
-    一并返回 task_store 引用，方便用例 assert ``save`` 调用而不必访问
-    ``executor`` 的受保护成员（参考 G.CLS.11）。
-    """
+    """变体：task_store.get 返回真实 Task，验证 save 时落了哪些字段。"""
     fake_task = Task(
         id=TASK_ID,
         context_id=CONV_ID,
@@ -535,10 +554,10 @@ def _make_executor_with_real_task(
 
 
 @pytest.mark.asyncio
-async def test_va_error_event_marks_task_failed_and_clears_task_id(monkeypatch):
-    """VA 流出现 event=error 时：task 落 FAILED + va_task_id 清空，破解 conv_id 锁死。"""
+async def test_va_failed_event_marks_task_failed_and_clears_task_id(monkeypatch):
+    """VA 流以 FAILED 事件结束时：task 落 FAILED + va_task_id 清空，破解 conv_id 锁死。"""
     err_msg = "执行报错，错误码：103104，错误信息：'NoneType' object has no attribute 'content'"
-    va_events = [_va_terminal_event("error", {"code": "103104", "message": err_msg})]
+    va_events = [_va_failed_event({"code": "103104", "message": err_msg})]
     executor, task, task_store = _make_executor_with_real_task(va_events)
 
     async def fake_agent_stream(**kwargs):
@@ -554,7 +573,6 @@ async def test_va_error_event_marks_task_failed_and_clears_task_id(monkeypatch):
         cascade_result=None,
     )
 
-    # 至少一次 save 调用，最终状态是 FAILED，va_task_id 被清空
     save_calls = task_store.save.call_args_list
     assert len(save_calls) >= 1
     saved_task = save_calls[-1][0][0]
@@ -564,13 +582,13 @@ async def test_va_error_event_marks_task_failed_and_clears_task_id(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_va_error_event_enqueues_failed_status_with_message(monkeypatch):
-    """VA 流出现 event=error 时：北向 enqueue TaskStatusUpdateEvent(FAILED) 并带错误描述。
+async def test_va_failed_event_enqueues_failed_status_with_message(monkeypatch):
+    """VA 流以 FAILED 事件结束时：北向 enqueue TaskStatusUpdateEvent(FAILED) 并带错误描述。
 
     user_router._extract_event_meta 会把 status.message.text 转为 interrupt_start.content。
     """
     err_msg = "执行报错，错误码：103104，错误信息：xxx"
-    va_events = [_va_terminal_event("error", {"code": "103104", "message": err_msg})]
+    va_events = [_va_failed_event({"code": "103104", "message": err_msg})]
     executor, _task, _task_store = _make_executor_with_real_task(va_events)
 
     async def fake_agent_stream(**kwargs):
@@ -596,14 +614,14 @@ async def test_va_error_event_enqueues_failed_status_with_message(monkeypatch):
         if p.WhichOneof("content") == "text"
     ]
     assert any(err_msg in t for t in text_chunks), (
-        f"FAILED 事件 message text 应含错误描述，实际为 {text_chunks!r}"
+        f"FAILED 事件 message text 应含错误描述（含错误码 103104 与具体 message），实际为 {text_chunks!r}"
     )
 
 
 @pytest.mark.asyncio
-async def test_va_error_event_does_not_emit_input_required(monkeypatch):
-    """VA 流出现 event=error 时：不应再发 INPUT_REQUIRED（避免下次请求走续轮路径锁死 conv_id）。"""
-    va_events = [_va_terminal_event("error", {"code": "103104", "message": "错误"})]
+async def test_va_failed_event_does_not_emit_input_required(monkeypatch):
+    """VA FAILED 路径不应再发 INPUT_REQUIRED（避免下次请求走续轮路径锁死 conv_id）。"""
+    va_events = [_va_failed_event({"code": "103104", "message": "错误"})]
     executor, _task, _task_store = _make_executor_with_real_task(va_events)
 
     async def fake_agent_stream(**kwargs):
@@ -621,15 +639,13 @@ async def test_va_error_event_does_not_emit_input_required(monkeypatch):
 
     enqueued = _drain_queue(queue)
     input_required = [e for e in enqueued if _is_event_with_state(e, TASK_STATE_INPUT_REQUIRED)]
-    assert len(input_required) == 0, "VA 报错路径不应发出 INPUT_REQUIRED 状态事件"
+    assert len(input_required) == 0, "VA FAILED 路径不应发出 INPUT_REQUIRED 状态事件"
 
 
 @pytest.mark.asyncio
-async def test_va_exception_event_also_treated_as_terminal(monkeypatch):
-    """VA 上游 event=exception（AgentEngine 已识别的另一种终态形态）也走 FAILED 路径。"""
-    va_events = [
-        _va_terminal_event("exception", {"message": "工作流执行抛出异常"}),
-    ]
+async def test_va_failed_event_without_payload_falls_back_to_generic_message(monkeypatch):
+    """VA FAILED 事件 status.message 为空时，应使用兜底通用错误文案。"""
+    va_events = [_va_failed_event(error_payload=None)]
     executor, _task, _task_store = _make_executor_with_real_task(va_events)
 
     async def fake_agent_stream(**kwargs):
@@ -648,12 +664,21 @@ async def test_va_exception_event_also_treated_as_terminal(monkeypatch):
     enqueued = _drain_queue(queue)
     failed_events = [e for e in enqueued if _is_event_with_state(e, TASK_STATE_FAILED)]
     assert len(failed_events) == 1
+    fe = failed_events[0]
+    text_chunks = [
+        p.text for p in fe.status.message.parts
+        if p.WhichOneof("content") == "text"
+    ]
+    # 兜底通用文案
+    assert any("VA" in t or "异常" in t for t in text_chunks), (
+        f"VA 未携带错误详情时应使用兜底文案，实际为 {text_chunks!r}"
+    )
 
 
 @pytest.mark.asyncio
-async def test_va_error_event_does_not_trigger_cascade(monkeypatch):
-    """VA 报错不应被当成 End node → 不该触发 cascade 续轮。"""
-    va_events = [_va_terminal_event("error", {"code": "103104", "message": "错"})]
+async def test_va_failed_event_does_not_trigger_cascade(monkeypatch):
+    """VA FAILED 不应被当成成功完成 → 不该触发 cascade 续轮。"""
+    va_events = [_va_failed_event({"code": "103104", "message": "错"})]
     executor, _task, _task_store = _make_executor_with_real_task(va_events)
 
     call_count = [0]
@@ -672,4 +697,4 @@ async def test_va_error_event_does_not_trigger_cascade(monkeypatch):
         cascade_result=None,
     )
 
-    assert call_count[0] == 1, "VA 报错路径不应触发 cascade（agent_stream 不应被调用第二次）"
+    assert call_count[0] == 1, "VA FAILED 路径不应触发 cascade（agent_stream 不应被调用第二次）"
