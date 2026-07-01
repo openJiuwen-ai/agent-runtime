@@ -16,6 +16,9 @@ from .table_def import TableDefinition, ColumnDefinition, IndexDefinition
 
 logger = get_logger(__name__)
 
+# 定期回收池内连接，应小于 MySQL wait_timeout / 中间层 idle 超时。
+_DEFAULT_POOL_RECYCLE_SECONDS = 1800
+
 
 class Base(DeclarativeBase):
     pass
@@ -48,7 +51,9 @@ class SQLAlchemyHandler(DBHandler):
         self.engine = create_async_engine(
             self.database_url,
             echo=False,
-            connect_args=self.connect_args
+            connect_args=self.connect_args,
+            pool_pre_ping=True,
+            pool_recycle=_DEFAULT_POOL_RECYCLE_SECONDS,
         )
         self.session_factory = async_sessionmaker(
             self.engine, class_=AsyncSession, expire_on_commit=False
