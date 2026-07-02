@@ -17,8 +17,10 @@ from openjiuwen_runtime.management.session.interfaces import (
     ISessionRequest,
     SessionRequestWrapper,
 )
+from openjiuwen_runtime.management.session.router import SessionRouter
 from openjiuwen_runtime.management.session.runtime import NoOpDeployController
 from openjiuwen_runtime.management.session.service_handler import ServiceHandler
+from openjiuwen_runtime.management.session.session_handler import SessionHandler
 from openjiuwen_runtime.management.session.session_request import SessionRequest
 
 
@@ -102,13 +104,19 @@ async def test_session_cap_interleaves_other_sessions() -> None:
     )
     loop = asyncio.get_running_loop()
     cap = 10
+    # 解耦后：每 session 一个 SessionHandler（持有 [h] 作为 endpoint），各自 semaphore(cap)
+    router = SessionRouter()
+    assert h.try_reserve_session_quota("sess1", cap)
+    assert h.try_reserve_session_quota("sess2", cap)
+    sh1 = SessionHandler("sess1", cap, [h], router)
+    sh2 = SessionHandler("sess2", cap, [h], router)
     tasks = []
     for i in range(11):
         w = _wrap("sess1", f"s1-r{i}", cap, loop)
-        tasks.append(asyncio.create_task(h.handle_message(w)))
+        tasks.append(asyncio.create_task(sh1.handle_message(w)))
     for j in range(9):
         w = _wrap("sess2", f"s2-r{j}", cap, loop)
-        tasks.append(asyncio.create_task(h.handle_message(w)))
+        tasks.append(asyncio.create_task(sh2.handle_message(w)))
     for _ in range(200):
         if ch.in_send == 19:
             break
@@ -124,6 +132,6 @@ async def test_session_cap_interleaves_other_sessions() -> None:
     ch.gate.set()
     await asyncio.gather(*tasks)
     assert h.inflight_requests == 0
-    await h.remove_session("sess1")
-    await h.remove_session("sess2")
+    await h.evict_session("sess1")
+    await h.evict_session("sess2")
     assert h.available_concurrency == 20

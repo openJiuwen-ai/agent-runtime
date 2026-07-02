@@ -1,7 +1,11 @@
 ﻿# coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
-"""服务管理：双 asyncio 队列（系统优先）、按 session 预留服务并发、亲和、起停与缩容。"""
+"""服务管理（Pod 池）：双 asyncio 队列（系统优先）、Pod 生命周期、autoscale、亲和借还、起停与缩容。
+
+解耦后 session 编排（消息入口、TTL、pending 过期）外移到 SessionRuntimeManager，
+本类仅保留 Pod 池职责。
+"""
 
 from __future__ import annotations
 
@@ -13,7 +17,6 @@ from kubernetes_asyncio.client.rest import ApiException
 from openjiuwen_runtime.foundation.log import get_logger
 
 from .dual_queue import PriorityDualAsyncQueues
-from .exception import exception_message
 from .internal_events import ServiceReclaimEvent
 from .interfaces import (
     IResponseParser,
@@ -26,7 +29,7 @@ from .interfaces import (
 )
 from .k8s_service_handler import K8sServiceHandler, POD_LABEL_SELECTOR
 from .models import MessageType
-from .router import ServiceRouter
+from .session_runtime_manager import SessionRuntimeManager
 
 logger = get_logger(__name__)
 
@@ -90,7 +93,6 @@ class ServiceManager(IServiceManager):
         self._idle: dict[Optional[str], dict[str, IServiceHandler]] = {}
         # 服务模板配置列表: [{template_id, min_idle, max_services, ...}]
         self._service_templates: list[Dict[str, Any]] = service_templates or []
-        self._service_router = ServiceRouter()
         self._running = False
         self._message_task: Optional[asyncio.Task[Any]] = None
         self._autoscale_task: Optional[asyncio.Task[Any]] = None
@@ -103,9 +105,9 @@ class ServiceManager(IServiceManager):
         self._to_idle_timer_armed: set[str] = set()
         # 已 arm「多余 idle 回收」的 service_id，避免对同一台重复入队/定时
         self._excess_idle_timer_armed: set[str] = set()
-        # session_ttl 已到期但当时该 session 仍有 inflight, 待 _complete/新消息后清理
-        # 形如 {session_id: service_id}; 接到新消息会自动清掉, _complete 钩子会触发 flush
-        self._pending_expired_sessions: dict[str, str] = {}
+        # session 编排（消息入口 / TTL / pending 过期）——由 Access 在构造后注入，
+        # 避免 ServiceManager ↔ SessionRuntimeManager 构造期的循环依赖
+        self._session_runtime: Optional["SessionRuntimeManager"] = None
         # deploy 进行中、尚未入 _idle/_in_use 的实例（stop 时必须一并 delete）
         self._deploying: set[IServiceHandler] = set()
         self._stop_completed: bool = False
@@ -125,11 +127,34 @@ class ServiceManager(IServiceManager):
             self._service_idle_ttl,
         )
 
+    def set_session_runtime(self, session_runtime: "SessionRuntimeManager") -> None:
+        """注入 session 编排层（由 Access 在构造两者后调用，打破构造期循环依赖）。"""
+        self._session_runtime = session_runtime
+
+    # ==================== 供 SessionRuntimeManager 调用的 Pod 池接口 ====================
+
+    async def pick_or_create_pod(self, sreq) -> Optional[IServiceHandler]:  # noqa: ANN001
+        """选/建一个 Pod 供 session 装填为 endpoint；返回前取消其 idle/reclaim 计时。"""
+        h = await self._pick_or_create(sreq)
+        if h is not None:
+            # 该 Pod 即将承载业务：取消 in_use→idle 与 多余 idle 回收 计时
+            await self._cancel_in_use_to_idle_timer(h.id)
+            await self._cancel_excess_idle_timer(h.id)
+        return h
+
+    def find_service_handler(self, service_id: str) -> Optional[IServiceHandler]:
+        """公开包装：在所有模板组的 in_use/idle 池中查找 service_id。"""
+        return self._find_service_handler(service_id)
+
     async def start(self) -> None:
         if self._running:
             logger.debug("ServiceManager start 被忽略: 已在运行中")
             return
         self._running = True
+
+        # 若未由上层注入 session 编排层，则在此自动构造（兼容直接构造 ServiceManager 的用法）
+        if self._session_runtime is None:
+            self._session_runtime = SessionRuntimeManager(self._timer, self)
 
         async with self._lock:
             # 为所有 template_id 初始化池结构
@@ -212,7 +237,6 @@ class ServiceManager(IServiceManager):
             self._to_idle_timer_armed.clear()
             self._excess_idle_timer_armed.clear()
             self._deleting_services.clear()
-            self._pending_expired_sessions.clear()
             try:
                 await self._timer.stop_all()
             except Exception as e:  # noqa: BLE001
@@ -245,12 +269,14 @@ class ServiceManager(IServiceManager):
                     logger.error(
                         "停服时 delete 服务实例失败: service_id=%s err=%s", h.id, e, exc_info=True
                     )
-            
-            try:
-                await self._service_router.clear()
-            except Exception as e:
-                logger.error("ServiceRouter clear 失败: %s", e, exc_info=True)
-            
+
+            # 清理 session 编排层（TTL 计时 / pending 标记）
+            if self._session_runtime is not None:
+                try:
+                    await self._session_runtime.shutdown()
+                except Exception as e:  # noqa: BLE001
+                    logger.error("SessionRuntimeManager shutdown 失败: %s", e, exc_info=True)
+
             # 只有全部成功才标记为已完成，否则保持 _stop_completed=False 以便重试
             if n_failed == 0:
                 self._stop_completed = True
@@ -390,7 +416,12 @@ class ServiceManager(IServiceManager):
                 continue
             if item.message_type == MessageType.USER_REQUEST:
                 # 为每条用户消息创建独立协程，使多 session 可并行进入 ServiceHandler
-                t = asyncio.create_task(self._handle_user_request(item))
+                # session 编排（TTL/亲和/pending）全部在 SessionRuntimeManager 内
+                rt = self._session_runtime
+                if rt is None:
+                    logger.error("SessionRuntimeManager 未注入, 丢弃用户消息")
+                    continue
+                t = asyncio.create_task(rt.handle_user_request(item))
                 self._user_route_tasks.add(t)
                 t.add_done_callback(self._discard_user_route_task)
                 logger.debug("已 spawn 用户路由 task, 当前在途数=%s", len(self._user_route_tasks))
@@ -551,192 +582,6 @@ class ServiceManager(IServiceManager):
         logger.debug("新服务 deploy 成功, 待加入池: service_id=%s", h.id)
         return h
 
-    async def _handle_user_request(self, raw: RawMessage) -> None:
-        w = raw.message
-        if not isinstance(w, SessionRequestWrapper):
-            logger.error("用户消息体类型错误, 预期 SessionRequestWrapper, 实际 %s", type(w))
-            return
-        sreq = w.session_request
-        session_id = sreq.session_id
-        
-        if self._deprecated:
-            logger.warning(
-                "待老化的 ServiceManager 正在处理新请求: session_id=%s request_id=%s",
-                session_id,
-                sreq.request_id,
-            )
-            
-        # 新消息进入：先取消该 session 待生效的 session_ttl 计时与延期清理标记
-        # 满足规则「session_ttl 之内有 session 的消息，则删除 session_ttl 定时器」
-        await self._timer.cancel_timer(f"sess:{session_id}")
-        self._pending_expired_sessions.pop(session_id, None)
-        h: Optional[IServiceHandler] = None
-        # 预留失败但已被 _pick_or_create 放入 _in_use 池的实例: 锁外推动其走 in_use→idle 回收, 避免孤儿泄漏
-        failed_to_reserve: Optional[IServiceHandler] = None
-        try:
-            # 在锁内完成亲和查找 / 新实例 / 新 session 的服务额度预留与路由绑定
-            async with self._lock:
-                h = await self._pick_or_create(sreq)
-                if h is not None:
-                    bound_sid = await self._service_router.get_session_service(session_id)
-                    if bound_sid is None:
-                        if not h.try_reserve_session_quota(
-                                session_id, sreq.session_concurrency
-                        ):
-                            logger.warning(
-                                "服务额度预留失败(资源不足): session_id=%s service_id=%s "
-                                "need=%s avail=%s",
-                                session_id,
-                                h.id,
-                                sreq.session_concurrency,
-                                h.available_concurrency,
-                            )
-                            # 记录失败的实例, 锁外推动其走 idle 回收流程; 仅置空 h 会导致
-                            # _pick_or_create 刚放入 _in_use 的实例成为孤儿 (无 session/inflight
-                            # 永不触发 _on_in_use_may_move_to_idle_pool 钩子), Pod 永久驻留
-                            failed_to_reserve = h
-                            h = None
-                        else:
-                            await self._service_router.set_session_service(
-                                session_id, h.id
-                            )
-                            logger.info(
-                                "session 已绑定到实例: session_id=%s -> service_id=%s",
-                                session_id,
-                                h.id,
-                            )
-            if h is not None:
-                # 新消息分配到该服务：取消所有相关计时器
-                # 1. 取消 in_use→idle 计时（如果实例之前在 in_use 且等待转入 idle）
-                # 2. 取消 excess_idle 回收计时（如果实例之前在 idle 且可能被回收）
-                await self._cancel_in_use_to_idle_timer(h.id)
-                await self._cancel_excess_idle_timer(h.id)
-
-            # 预留失败的实例 (含 _pick_or_create 新 deploy 的): 推动走 in_use→idle 回收
-            # service_ttl 到期后转入 idle, 若 idle>min_idle 则被 excess_idle 回收删 Pod;
-            # 若 idle<=min_idle 则作为热备保留, 可被后续 need 较小的请求复用
-            #
-            # 安全性说明:
-            # 1. _pick_or_create 分支2(in_use/idle 查找)已用 available>=need 过滤, 返回的实例
-            #    try_reserve_session_quota 必成功; 唯一预留失败的是分支3(新 deploy), 是全新的
-            #    无 session/inflight。故 failed_to_reserve 通常无其他占用。
-            # 2. 即使存在竞态(锁外调用前其他请求在此实例预留成功), _arm_in_use_to_idle_pool
-            #    内部有 `inflight>0 or active_session_count>0 则 return` 的保护, 不会错误 arm。
-            # 3. 若因有占用而跳过 arm, 该实例由其他请求的 _on_in_use_may_move_to_idle_pool
-            #    钩子(inflight 归零时)推动, 不会成为孤儿。
-            if failed_to_reserve is not None:
-                await self._arm_in_use_to_idle_pool(failed_to_reserve.id)
-
-            if h is None:
-                await self._fail(w, 100001, session_id=session_id)
-                return
-            
-            # 获取 Pod 信息用于日志
-            pod_name = "unknown"
-            if hasattr(h, "pod_info") and h.pod_info:
-                pod_name = h.pod_info.pod_name
-            
-            logger.info(
-                "路由到服务实例: service_id=%s session_id=%s request_id=%s pod=%s",
-                h.id,
-                session_id,
-                sreq.request_id,
-                pod_name,
-            )
-            await h.handle_message(w)
-            logger.debug(
-                "已完成消息处理: service_id=%s session_id=%s request_id=%s pod=%s",
-                h.id,
-                session_id,
-                sreq.request_id,
-                pod_name,
-            )
-        except asyncio.CancelledError:
-            logger.error("session_id=%s 被中断执行", session_id)
-            await self._fail(w, 100003, session_id=session_id)
-        except Exception as e:  # noqa: BLE001
-            logger.error("路由/处理过程异常, session_id=%s: %s", session_id, e, exc_info=True)
-            await self._fail(w, 100002, session_id=session_id)
-        finally:
-            # 请求结束: 按 session_ttl 维持映射；ttl<=0 视为「不保留」立即标记 pending 等待 flush
-            # 使用 finally 确保无论成功或失败都能正确清理 session
-            if h is not None:
-                if sreq.session_ttl > 0:
-                    try:
-                        await self._arm_session_timer(session_id, sreq.session_ttl)
-                    except Exception as e2:  # noqa: BLE001
-                        logger.error("arm session 计时器失败: %s", e2, exc_info=True)
-                    else:
-                        logger.debug(
-                            "ServiceManager session active: session_id=%s ttl=%s service_id=%s",
-                            session_id,
-                            sreq.session_ttl,
-                            h.id,
-                        )
-                else:
-                    self._pending_expired_sessions[session_id] = h.id
-                    logger.debug(
-                        "ServiceManager session ttl<=0 pending expired: session_id=%s service_id=%s",
-                        session_id,
-                        h.id,
-                    )
-                    # 由 _complete 钩子触发 flush；此处主动尝试一次以应对 _complete 已先于本行返回
-                    await self._flush_pending_expired_for_service(h.id)
-
-    async def _arm_session_timer(self, session_id: str, ttl: int) -> None:
-        if ttl <= 0:
-            return
-        key = f"sess:{session_id}"
-        await self._timer.cancel_timer(key)
-        # 重新 arm 等同于「session 又活跃」, 清掉旧的延期清理标记
-        self._pending_expired_sessions.pop(session_id, None)
-
-        async def _expired() -> None:
-            await self._on_session_expired(session_id)
-
-        await self._timer.start_timer(key, ttl, _expired)
-        logger.info("已 arm session TTL 计时: session_id=%s ttl=%s", session_id, ttl)
-
-    async def _on_session_expired(self, session_id: str) -> None:
-        """session_ttl 到期: 若该 session 已无 inflight 则立即移除并触发 flush；否则入 pending 等待 _complete 后由 hook flush。"""
-        logger.info("session TTL 到期, 准备回收: session_id=%s", session_id)
-        target_svc: Optional[str] = None
-        removed = False
-        async with self._lock:
-            stored = await self._service_router.get_session_service(session_id)
-            if not stored:
-                return
-            
-            # 在所有模板组中查找该 service_id
-            h: Optional[IServiceHandler] = self._find_service_handler(stored)
-            
-            if h is None:
-                await self._service_router.delete_session_service(session_id)
-                return
-            target_svc = stored
-            if h.session_active_request_count(session_id) > 0:
-                # 仍有飞行中的请求, 暂不移除以避免取消正在处理的请求
-                self._pending_expired_sessions[session_id] = stored
-                logger.info(
-                    "session 到期但仍有 inflight, 入延期清理队列: session_id=%s service_id=%s rids=%s",
-                    session_id,
-                    stored,
-                    h.session_active_request_count(session_id),
-                )
-                return
-            await h.remove_session(session_id)
-            await self._service_router.delete_session_service(session_id)
-            self._pending_expired_sessions.pop(session_id, None)
-            removed = True
-            logger.info(
-                "session 已移除并归还 service 并发: session_id=%s service_id=%s 剩余sessions=%s",
-                session_id,
-                stored,
-                h.active_session_count,
-            )
-        if removed and target_svc:
-            await self._flush_pending_expired_for_service(target_svc)
-
     def _find_service_handler(self, service_id: str) -> Optional[IServiceHandler]:
         """在所有模板组的 in_use 和 idle 池中查找指定的 service_id。
 
@@ -750,53 +595,43 @@ class ServiceManager(IServiceManager):
         for pool in self._in_use.values():
             if service_id in pool:
                 return pool[service_id]
-        
+
         # 再在 idle 池中查找
         for pool in self._idle.values():
             if service_id in pool:
                 return pool[service_id]
-        
+
         return None
 
-    async def _flush_pending_expired_for_service(self, service_id: str) -> None:
-        """清理 service 上所有「到期但仍 inflight」的 session；若清理后 sessions=0 且 inflight=0, arm service_ttl。"""
-        h: Optional[IServiceHandler] = self._find_service_handler(service_id)
+    async def _on_in_use_may_move_to_idle_pool(self, service_id: str) -> None:
+        """ServiceHandler 在 inflight=0 时回调：先推动 session 层 flush pending 过期，再按状态 arm service_ttl。"""
+        await self.reconsider_idle_transition(service_id)
 
+    async def reconsider_idle_transition(self, service_id: str) -> None:
+        """供 session 层在 evict_session 释放 quota 后调用，重新评估该 Pod 的 idle 转换。
+
+        场景：session TTL 到期 evict 释放 quota 时，inflight 往往早已归零，
+        inflight 归零 hook 不会再触发；需由 session 层主动调用本方法推动
+        in_use→idle 的 service_ttl 计时，否则工作 Pod 会卡在 in_use 池。
+        """
+        # 1. session 层：清理该 Pod 上「到期但仍 inflight（现已归零）」的 session
+        if self._session_runtime is not None:
+            try:
+                await self._session_runtime.flush_pending_for_service(service_id)
+            except Exception as e:  # noqa: BLE001
+                logger.error("flush_pending_for_service 失败: service_id=%s err=%s", service_id, e, exc_info=True)
+        # 2. Pod 层：按 Pod 状态 arm service_ttl（转入 idle）
+        h = self._find_service_handler(service_id)
         if h is None:
             return
-
-        async with self._lock:
-            sids = [
-                sid
-                for sid, svc in list(self._pending_expired_sessions.items())
-                if svc == service_id
-            ]
-            for sid in sids:
-                if h.session_active_request_count(sid) == 0:
-                    await h.remove_session(sid)
-                    await self._service_router.delete_session_service(sid)
-                    self._pending_expired_sessions.pop(sid, None)
-                    logger.info(
-                        "延期清理已移除 session: session_id=%s service_id=%s 剩余sessions=%s",
-                        sid,
-                        service_id,
-                        h.active_session_count,
-                    )
-
-        # 检查是否在 in_use 中（遍历所有模板组）
         in_in_use = False
         async with self._lock:
             for pool in self._in_use.values():
                 if service_id in pool:
                     in_in_use = True
                     break
-
         if in_in_use:
             await self._arm_in_use_to_idle_pool(service_id)
-
-    async def _on_in_use_may_move_to_idle_pool(self, service_id: str) -> None:
-        """ServiceHandler 在 inflight=0 时回调: 推动延期 session 清理并按状态 arm service_ttl。"""
-        await self._flush_pending_expired_for_service(service_id)
 
     async def _cancel_in_use_to_idle_timer(self, service_id: str) -> None:
         self._to_idle_timer_armed.discard(service_id)
@@ -1013,65 +848,26 @@ class ServiceManager(IServiceManager):
         await self._schedule_excess_idle_reclaim_if_needed()
 
     async def _pick_or_create(self, sreq) -> Optional[IServiceHandler]:  # noqa: ANN001
-        """根据 session 请求选择或创建服务实例。
+        """为 session 请求选择或创建一个**有可用容量**的 Pod 实例（endpoint 装填用）。
 
         选择策略：
-        1) 亲和：该 session 已绑定到某 service，则复用
-        2) 否则在相同 template_id 组的 in_use/idle 池中找尚有服务级并发的实例
+        1) 在相同 template_id 组的 in_use 池中找尚有服务级并发的实例
+        2) 否则在 idle 池中唤醒一个有容量的实例
         3) 再否则在该 template_id 组的 max 允许下新 deploy
+
+        注：session 亲和（同 session 复用同一 Pod）由 SessionHandler（持有 endpoints）
+        在 SessionRuntimeManager 层处理，本方法不再做亲和查找。
         """
         need = max(1, int(sreq.session_concurrency))
-        session_id = sreq.session_id
 
         # 获取 template_id
         template_id: Optional[str] = None
         if sreq.service_template:
             template_id = sreq.service_template.get("template_id")
 
-        # 1) 亲和：该 session 已绑定到某 service，则复用
-        sid = await self._service_router.get_session_service(session_id)
-        if sid is not None:
-            # 在所有模板组中查找该 service_id
-            h: Optional[IServiceHandler] = None
-            found_template_id: Optional[str] = None
-            for tid, pool in self._in_use.items():
-                if sid in pool:
-                    h = pool[sid]
-                    found_template_id = tid
-                    break
-
-            if h is None:
-                for tid, pool in self._idle.items():
-                    if sid in pool:
-                        h = pool[sid]
-                        found_template_id = tid
-                        break
-
-            if h is None:
-                await self._service_router.delete_session_service(session_id)
-                logger.debug("亲和失效: 路由表有记录但池无此实例, 已删映射 session_id=%s", session_id)
-            else:
-                # 从 idle 移到 in_use
-                if found_template_id is not None:
-                    if sid in self._idle.get(found_template_id, {}):
-                        self._idle[found_template_id].pop(sid, None)
-                        self._in_use.setdefault(found_template_id, {})[sid] = h
-                else:
-                    # 兼容旧逻辑
-                    for tid, pool in self._idle.items():
-                        if sid in pool:
-                            pool.pop(sid, None)
-                            self._in_use.setdefault(tid, {})[sid] = h
-                            break
-
-                # 注意：计时器取消由调用者 _handle_user_request 在锁外统一处理
-                logger.debug("从 idle 取回实例, service_id=%s template_id=%s", h.id, found_template_id)
-                return h
-
-        # 2) 新 session：在相同 template_id 组的 in_use/idle 中找实例
+        # 1) 在相同 template_id 组的 in_use 中找有容量的实例
         target_template_id = template_id
 
-        # 先在 in_use 池中查找
         in_use_pool = self._in_use.get(target_template_id, {})
         for h in in_use_pool.values():
             if h.available_concurrency >= need:
@@ -1081,13 +877,12 @@ class ServiceManager(IServiceManager):
                 )
                 return h
 
-        # 再在 idle 池中查找
+        # 2) 在 idle 池中唤醒有容量的实例
         idle_pool = self._idle.get(target_template_id, {})
         for h in list(idle_pool.values()):
             if h.available_concurrency >= need:
                 idle_pool.pop(h.id, None)
                 self._in_use.setdefault(target_template_id, {})[h.id] = h
-                # 注意：计时器取消由调用者 _handle_user_request 在锁外统一处理
                 logger.debug(
                     "从 idle 唤醒实例 (template_id=%s): service_id=%s",
                     target_template_id, h.id
@@ -1098,7 +893,7 @@ class ServiceManager(IServiceManager):
         # 从 _service_templates 中查询获取完整的模板配置
         template_config = self._get_template_config(target_template_id)
         max_services_for_tpl = self._get_template_max_services(target_template_id)
-        
+
         if self._total_services_by_template(target_template_id) >= max_services_for_tpl:
             logger.debug(
                 "pick: 未选到可用实例且 template_id=%s 已达 max_services=%s, 当前该组实例=%s",
@@ -1123,7 +918,7 @@ class ServiceManager(IServiceManager):
             logger.warning(
                 "预检拦截(会话并发超过单实例总并发): session_id=%s template_id=%s "
                 "session_concurrency=%s service_concurrency=%s, 拒绝扩容",
-                session_id, target_template_id, need, service_concurrency_for_tpl,
+                sreq.session_id, target_template_id, need, service_concurrency_for_tpl,
             )
             return None
 
@@ -1136,47 +931,6 @@ class ServiceManager(IServiceManager):
             h2.id, target_template_id, self._total_services_by_template(target_template_id)
         )
         return h2
-
-    async def _fail(
-        self, w: SessionRequestWrapper, code: int, *, session_id: str | None = None
-    ) -> None:
-        # 对客户端可见的失败：通过 response_queue 下发错误并结束 cancel
-        em = exception_message(code)
-        if code == 100001:
-            logger.warning(
-                "业务拒绝(资源已满): code=%s session_id=%s %s", em.code, session_id, em.message
-            )
-        else:
-            logger.error(
-                "业务失败: code=%s session_id=%s %s", em.code, session_id, em.message
-            )
-        # 错误响应必须符合上游 wire_codec.parse_agent_server_wire_chunk 的 legacy chunk shape
-        # (request_id + channel_id + is_complete + payload, 且无 ok), 否则上游抛
-        # ValueError: unrecognized wire shape, 导致前端收不到错误信息。
-        # request_id 是 WSS 多路复用硬条件, 缺失会被 dispatch_inbound_chunk 丢弃。
-        # channel_id 不在 IRequest 契约内, 兼容两种实现: 顶层属性 或 wire_dict 字段。
-        sreq = w.session_request
-        rid = sreq.request_id or ""
-        raw_msg = sreq.raw_msg
-        channel_id = getattr(raw_msg, "channel_id", None)
-        if channel_id is None:
-            wire_dict = getattr(raw_msg, "wire_dict", None)
-            if isinstance(wire_dict, dict):
-                channel_id = wire_dict.get("channel_id")
-        channel_id = str(channel_id) if channel_id is not None else ""
-        await w.response_queue.put(
-            {
-                "request_id": rid,
-                "channel_id": channel_id,
-                "is_complete": True,
-                "payload": {
-                    "error_code": em.code,
-                    "message": em.message,
-                },
-            }
-        )
-        if w.cancel and not w.cancel.done():
-            w.cancel.set_result(None)
 
     def get_stats(self) -> dict:
         """返回当前 ServiceManager 的业务量统计（纯内存读取，无 IO）。"""
@@ -1492,31 +1246,19 @@ class ServiceManager(IServiceManager):
                         self._to_idle_timer_armed.discard(service_id)
                         self._excess_idle_timer_armed.discard(service_id)
 
-                        router_session_ids = await self._service_router.delete_service_sessions(service_id)
-                        if router_session_ids:
-                            logger.info(
-                                "已清理失效 Service 的 session 亲和映射: service_id=%s sessions=%s",
-                                service_id,
-                                router_session_ids,
-                            )
-                        session_ids = sorted(set(h.open_session_ids()) | set(router_session_ids))
-                        for session_id in session_ids:
-                            self._pending_expired_sessions.pop(session_id, None)
+                        # session 侧清理（委托 session 编排层）：从引用该 Pod 的
+                        # SessionHandler 摘除 endpoint、清 _pending_expired 记录。
+                        # 注：ServiceManager 不再持有 _service_router / _pending_expired_sessions
+                        # （已迁至 SessionRuntimeManager）。
+                        if self._session_runtime is not None:
                             try:
-                                await h.remove_session(session_id)
-                            except Exception as e:
+                                await self._session_runtime.on_pod_removed(service_id)
+                            except Exception as e:  # noqa: BLE001
                                 logger.error(
-                                    "移除失效 Pod 的 Session 失败: service_id=%s session_id=%s err=%s",
-                                    service_id,
-                                    session_id,
-                                    e,
-                                    exc_info=True,
+                                    "session 侧清理失效 Pod 失败: service_id=%s err=%s",
+                                    service_id, e, exc_info=True,
                                 )
-                            logger.info(
-                                "已移除失效 Pod 的 Session 绑定: session_id=%s service_id=%s",
-                                session_id,
-                                service_id,
-                            )
+                        session_ids = list(h.open_session_ids())
 
                         handlers_to_delete.append((service_id, h, pod_name, reason, session_ids))
 

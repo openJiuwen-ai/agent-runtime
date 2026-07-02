@@ -13,8 +13,10 @@ from openjiuwen_runtime.management.session.interfaces import (
     ISessionRequest,
     SessionRequestWrapper,
 )
+from openjiuwen_runtime.management.session.router import SessionRouter
 from openjiuwen_runtime.management.session.runtime import NoOpDeployController
 from openjiuwen_runtime.management.session.service_handler import ServiceHandler
+from openjiuwen_runtime.management.session.session_handler import SessionHandler
 from openjiuwen_runtime.management.session.session_request import SessionRequest
 
 
@@ -74,14 +76,19 @@ async def test_one_inflight_decrements() -> None:
         deploy_controller=NoOpDeployController(),
         service_template=None,
     )
+    # quota 预留：解耦后由 ServiceHandler.try_reserve_session_quota 承担
+    assert h.available_concurrency == 1
+    assert h.try_reserve_session_quota("s1", 1)
+    assert h.available_concurrency == 0
+    # 消息经 SessionHandler（持有 [h] 作为 endpoint）路由到 ServiceHandler.send_message
+    sh = SessionHandler("s1", 1, [h], SessionRouter())
     w = SessionRequestWrapper(
         _sreq(), asyncio.Queue(), asyncio.get_running_loop().create_future()
     )
-    assert h.available_concurrency == 1
-    await h.handle_message(w)
+    await sh.handle_message(w)
     assert h.inflight_requests == 0
-    assert h.available_concurrency == 0
-    await h.remove_session("s1")
+    # evict_session 释放 quota（pod-local）
+    await h.evict_session("s1")
     assert h.available_concurrency == 1
 
 

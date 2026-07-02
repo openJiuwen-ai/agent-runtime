@@ -198,7 +198,7 @@ async def _stack(
         session_config=SessionConfig(concurrency=2, ttl=0),
         strategy=PerChatBotStrategy(),
     )
-    return acc, ch, create_sm(), drec, f
+    return acc, ch, await create_sm(), drec, f
 
 
 async def _stack_holding(
@@ -236,7 +236,7 @@ async def _stack_holding(
         session_config=SessionConfig(concurrency=sess_cap, ttl=0),
         strategy=PerChatBotStrategy(),
     )
-    return acc, ch, create_sm()
+    return acc, ch, await create_sm()
 
 
 @pytest.mark.asyncio

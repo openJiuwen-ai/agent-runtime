@@ -243,6 +243,34 @@ class IServiceMessageChannel(Protocol):
         pass
 
 
+@runtime_checkable
+class ISendEndpoint(Protocol):
+    """SessionHandler 通过此接口向某个 Pod 发送请求，不绑定具体 ServiceHandler 类型。
+
+    约定:
+    * 由 ``ServiceHandler`` 实现（结构子类型，不要让具体子类再继承本 Protocol）；
+    * ``send_message`` 完成 inflight 计数、request_id → wrapper 映射（供下行分片）、
+      实际的 ``IServiceMessageChannel.send`` 以及完成回调（inflight 归零通知 idle_pool_hook）；
+    * ``inflight`` / ``endpoint_id`` 用于 SessionHandler 的最少负载路由与用户亲和记录。
+
+    单 Pod 场景：SessionHandler 持有 1 个端点；多 Pod 场景：持有 N 个端点。
+    """
+
+    @property
+    def endpoint_id(self) -> str:
+        """端点唯一标识（ServiceHandler 场景下等于 service_id）。"""
+        ...
+
+    @property
+    def inflight(self) -> int:
+        """当前端点在途请求数，用于最少负载路由。"""
+        ...
+
+    async def send_message(self, wrapper: SessionRequestWrapper) -> None:
+        """发送请求并追踪完成。SessionHandler 在获取信号量后调用此方法。"""
+        ...
+
+
 class IServiceInstanceFactory(ABC):
     @abstractmethod
     async def new_service(
@@ -317,26 +345,23 @@ class IServiceHandler(ABC):
     @property
     @abstractmethod
     def active_session_count(self) -> int:
+        """当前实例上仍预留额度的 session 数（基于 ``_session_reserved``）。
+
+        解耦后语义为 quota 计数，用于 idle/TTL 判定，而非 SessionHandler 实例数。
+        """
         pass
 
     def open_session_ids(self) -> list[str]:
-        """当前实例上仍占位的 session_id 列表；默认无。转入 idle 前可据此清理亲和路由。"""
+        """当前实例上仍预留额度的 session_id 列表；默认无。转入 idle 前可据此清理亲和路由。"""
         return []
 
-    def session_active_request_count(self, session_id: str) -> int:
-        """指定 session 上仍在飞的请求数；默认 0。session_ttl 到期时用以判断是否可立即移除。"""
-        return 0
-
     @abstractmethod
-    def has_session(self, session_id: str) -> bool:
-        pass
+    async def evict_session(self, session_id: str) -> int:
+        """释放该 session 在本实例的预留额度，并取消本实例上该 session 的在途请求（pod-local）。
 
-    @abstractmethod
-    async def handle_message(self, msg: "SessionRequestWrapper") -> None:
-        pass
-
-    @abstractmethod
-    async def remove_session(self, session_id: str) -> int:
+        解耦后取代原 ``remove_session``：只处理 pod-local 状态（quota + 取消），
+        不销毁 SessionHandler 实例（后者由 SessionRegistry 负责）。
+        """
         pass
 
     @abstractmethod
