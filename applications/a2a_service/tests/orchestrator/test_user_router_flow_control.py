@@ -15,7 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from orchestrator.user_router import (
+from api.dispatch import (
     DEFAULT_GLOBAL_MAX_REQUESTS,
     DEFAULT_GLOBAL_WINDOW_SECONDS,
     DEFAULT_SESSION_MAX_REQUESTS,
@@ -142,7 +142,7 @@ async def test_check_rate_limit_fail_open_when_redis_client_uninitialized():
 @pytest.mark.asyncio
 async def test_check_rate_limit_skips_when_rate_limit_disabled(monkeypatch):
     monkeypatch.setattr(
-        "orchestrator.user_router._get_rate_limit_config",
+        "api.dispatch._get_rate_limit_config",
         lambda _agent_id, _settings_obj: {"enabled": False},
     )
 

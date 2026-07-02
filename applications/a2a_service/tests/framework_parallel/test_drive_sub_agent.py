@@ -1,30 +1,22 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
-"""_drive_sub_agent：StreamResponse 类型契约 + 断线重连 + tasks/get 回退。
-
-关联用例：CTX-07 / TECH §3.2 实现注 1（WhichOneof 而非 isinstance）、
-RECONN-01（抖动重连续接 live 尾流）、RECONN-03（断连期间已完成→tasks/get，不误判 failed）、
-RECONN-05（首帧前断线→failed）。
-"""
-# 单元测试以白盒方式直接验证 Executor 的内部实现（受保护成员），
-# G.CLS.11（建议级）针对生产封装，不适用于此类白盒测试，故统一豁免。
+"""RemoteAgentHandler sub-agent stream driving tests."""
+# Test files intentionally access private members to validate edge cases.
 # pylint: disable=protected-access
 from __future__ import annotations
 
-import asyncio
-
-import httpx
 import pytest
+import httpx
 from a2a.types.a2a_pb2 import StreamResponse, Task
+from google.protobuf.json_format import MessageToDict
 from a2a.utils.errors import UnsupportedOperationError
 
-import orchestrator.executor as EXE
-from common.events import SubAgentSpec
-
+import orchestrator.handlers.remote_agent_handler as remote_module
 from tests.framework_parallel._helpers import (
     FakeAsyncStream,
     FakeSubAgentClient,
+    collect_sub_tasks,
     make_executor,
     make_turn_ctx,
     sr_artifact,
@@ -34,39 +26,84 @@ from tests.framework_parallel._helpers import (
     task_completed_text,
 )
 
-_SPEC = SubAgentSpec(entity_id="A", entity_name="企业A", query="分析A")
+_SPEC = {"entity_id": "A", "entity_name": "Entity A", "query": "Analyze A", "url": ""}
 
 
-async def _drive(executor, *, child_path=("A",)):
+async def _drive(executor):
     ctx = make_turn_ctx()
-    frames = []
-    async for f in executor._drive_sub_agent(
-        _SPEC, "c:sub:A", child_path, ctx, asyncio.Event()
-    ):
-        frames.append(f)
-    return frames
-
-
-# ── CTX-07：类型契约（WhichOneof 判别，不依赖 isinstance）────────────────────
+    handler = executor._test_remote_handler
+    client = handler._sub_agent_clients[""]
+    result = await handler._drive_sub_agent(
+        remote_module._DriveSubAgentRequest(
+            client=client,
+            spec=_SPEC,
+            query="Analyze A",
+            turn_ctx=ctx,
+            path=["A"],
+        )
+    )
+    return result, collect_sub_tasks(ctx.event_queue)
 
 
 async def test_stream_dispatch_by_whichoneof_happy_path():
     client = FakeSubAgentClient(send=[FakeAsyncStream([
         sr_task("child-1"),
-        sr_artifact({"type": "think_chunk", "content": "正在分析A"}),
-        sr_completed_text("实体A最终回答"),
+        sr_artifact({"type": "think_chunk", "content": "analyzing A"}),
+        sr_completed_text("entity A final answer"),
     ])])
     executor = make_executor(sub_agent_client=client)
 
-    frames = await _drive(executor)
+    result, frames = await _drive(executor)
 
-    assert frames[0] == {"type": "__task_created__", "task_id": "child-1"}
-    assert frames[1] == {"type": "think_chunk", "content": "正在分析A"}
-    assert frames[2] == {"type": "__completed__", "content": "实体A最终回答"}
+    assert result == {"content": "entity A final answer", "child_task_id": "child-1"}
+    assert frames == [
+        {
+            "type": "sub_task",
+            "sub_task_path": ["A"],
+            "node_kind": "agent",
+            "data": {"type": "think_chunk", "content": "analyzing A"},
+        }
+    ]
+
+
+async def test_sub_agent_request_inherits_body_and_uses_safe_context_id():
+    client = FakeSubAgentClient(send=[FakeAsyncStream([
+        sr_task("child-1"),
+        sr_completed_text("done"),
+    ])])
+    executor = make_executor(
+        sub_agent_client=client,
+        redis_json={
+            "headers": {"Authorization": "Bearer token"},
+            "params": {"workspace_id": "ws"},
+            "trace_id": "trace-1",
+            "body": {"input": {"account": "001"}},
+        },
+    )
+    ctx = make_turn_ctx(conv_id="conv_1")
+    handler = executor._test_remote_handler
+
+    result = await handler._drive_sub_agent(
+        remote_module._DriveSubAgentRequest(
+            client=client,
+            spec=_SPEC,
+            query="Analyze A",
+            turn_ctx=ctx,
+            path=["A"],
+        )
+    )
+
+    assert result == {"content": "done", "child_task_id": "child-1"}
+    request = client.send_requests[0]
+    assert request.message.context_id == "conv_1-sub-A"
+    assert ":" not in request.message.context_id
+    data_part = next(part for part in request.message.parts if part.WhichOneof("content") == "data")
+    session_context = MessageToDict(data_part.data)["session_context"]
+    assert session_context["body"] == {"input": {"account": "001"}}
+    assert session_context["sub_task_path"] == ["A"]
 
 
 def test_streamresponse_is_not_task_instance():
-    """文档化 CTX-07：StreamResponse 对 Task 恒 isinstance False，必须靠 WhichOneof。"""
     sr = StreamResponse(task=Task(id="x"))
     assert sr.WhichOneof("payload") == "task"
     assert not isinstance(sr, Task)
@@ -75,88 +112,124 @@ def test_streamresponse_is_not_task_instance():
 # ── 问题 1：子 Agent FAILED 终态 → __terminal__，不可落流末当 done ────────────
 
 
-async def test_failed_status_yields_terminal_not_silent_done():
-    """子 Agent 返回 FAILED status_update → 产出 __terminal__(failed)，error 取 message 文本。"""
+async def test_failed_status_raises_not_silent_done():
+    """子 Agent 返回 FAILED status_update → 抛错，不会落流末当 done。"""
     client = FakeSubAgentClient(send=[FakeAsyncStream([
         sr_task("child-1"),
         sr_failed("子Agent内部异常"),
     ])])
     executor = make_executor(sub_agent_client=client)
 
-    frames = await _drive(executor)
-
-    assert frames[0] == {"type": "__task_created__", "task_id": "child-1"}
-    assert frames[-1] == {
-        "type": "__terminal__", "status": "failed", "error": "子Agent内部异常",
-    }
-    # 关键：未产出 __completed__（不会被上层当成功）
-    assert all(f.get("type") != "__completed__" for f in frames)
+    with pytest.raises(RuntimeError, match="子Agent内部异常"):
+        await _drive(executor)
 
 
 # ── RECONN-03：断连期间已完成 → resubscribe 抛错 → tasks/get 回退 ────────────
 
 
 async def test_resubscribe_unsupported_falls_back_to_tasks_get():
-    # 首帧拿到 task_id 后流抛 UnsupportedOperationError（终态/队列已关）
     client = FakeSubAgentClient(
         send=[FakeAsyncStream([sr_task("child-1")], exc=UnsupportedOperationError())],
-        get_task=task_completed_text("child-1", "断连期间已跑完"),
+        get_task=task_completed_text("child-1", "completed during disconnect"),
     )
     executor = make_executor(sub_agent_client=client)
 
-    frames = await _drive(executor)
+    result, _frames = await _drive(executor)
 
-    assert {"type": "__task_created__", "task_id": "child-1"} in frames
-    assert frames[-1] == {"type": "__completed__", "content": "断连期间已跑完"}
-    assert client.get_task_calls == 1  # 走了 tasks/get 回退
+    assert result == {"content": "completed during disconnect", "child_task_id": "child-1"}
+    assert client.get_task_calls == 1
+
+
+async def test_network_disconnect_resubscribes_and_returns_completed(monkeypatch):
+    sleeps: list[int] = []
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr("orchestrator.handlers.remote_agent_handler.asyncio.sleep", fake_sleep)
+    client = FakeSubAgentClient(
+        send=[
+            FakeAsyncStream(
+                [sr_task("child-1")],
+                exc=httpx.ReadError("stream disconnected"),
+            )
+        ],
+        subscribe=[FakeAsyncStream([sr_completed_text("completed after subscribe")])],
+    )
+    executor = make_executor(sub_agent_client=client)
+
+    result, _frames = await _drive(executor)
+
+    assert result == {"content": "completed after subscribe", "child_task_id": "child-1"}
+    assert client.subscribe_calls == 1
+    assert sleeps == [2]
+
+
+async def test_network_disconnect_retry_exhausted_falls_back_to_tasks_get(monkeypatch):
+    sleeps: list[int] = []
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr("orchestrator.handlers.remote_agent_handler.asyncio.sleep", fake_sleep)
+    client = FakeSubAgentClient(
+        send=[
+            FakeAsyncStream(
+                [sr_task("child-1")],
+                exc=httpx.RemoteProtocolError("stream disconnected"),
+            )
+        ],
+        subscribe=[
+            FakeAsyncStream([], exc=httpx.ReadError("again")),
+            FakeAsyncStream([], exc=httpx.ReadError("again")),
+            FakeAsyncStream([], exc=httpx.ReadError("again")),
+            FakeAsyncStream([], exc=httpx.ReadError("again")),
+        ],
+        get_task=task_completed_text("child-1", "completed via get"),
+    )
+    executor = make_executor(sub_agent_client=client)
+
+    result, _frames = await _drive(executor)
+
+    assert result == {"content": "completed via get", "child_task_id": "child-1"}
+    assert client.subscribe_calls == 3
+    assert client.get_task_calls == 1
+    assert sleeps == [2, 4, 8]
+
+
+async def test_network_disconnect_retry_exhausted_and_tasks_get_empty_reraises(monkeypatch):
+    async def fake_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr("orchestrator.handlers.remote_agent_handler.asyncio.sleep", fake_sleep)
+    client = FakeSubAgentClient(
+        send=[
+            FakeAsyncStream(
+                [sr_task("child-1")],
+                exc=httpx.ReadError("stream disconnected"),
+            )
+        ],
+        subscribe=[
+            FakeAsyncStream([], exc=httpx.ReadError("again")),
+            FakeAsyncStream([], exc=httpx.ReadError("again")),
+            FakeAsyncStream([], exc=httpx.ReadError("again")),
+            FakeAsyncStream([], exc=httpx.ReadError("again")),
+        ],
+        get_task=None,
+    )
+    executor = make_executor(sub_agent_client=client)
+
+    with pytest.raises(httpx.ReadError):
+        await _drive(executor)
+
+    assert client.get_task_calls == 1
 
 
 async def test_resubscribe_unsupported_and_tasks_get_empty_reraises():
     client = FakeSubAgentClient(
         send=[FakeAsyncStream([sr_task("child-1")], exc=UnsupportedOperationError())],
-        get_task=None,  # tasks/get 也拿不到 → 上层转 failed
+        get_task=None,
     )
     executor = make_executor(sub_agent_client=client)
     with pytest.raises(UnsupportedOperationError):
         await _drive(executor)
-
-
-# ── RECONN-01：网络抖动 → subscribe 重连，续接 live 尾流 ─────────────────────
-
-
-async def test_network_blip_reconnects_via_subscribe(monkeypatch):
-    monkeypatch.setattr(EXE.asyncio, "sleep", _no_sleep)  # 跳过指数退避真实等待
-    client = FakeSubAgentClient(
-        send=[FakeAsyncStream([sr_task("child-1")], exc=httpx.ReadError("blip"))],
-        subscribe=[FakeAsyncStream([
-            sr_task("child-1"),  # resubscribe 首帧快照：child_task_id 已知 → 不重复 yield
-            sr_artifact({"type": "think_chunk", "content": "续接尾流"}),
-            sr_completed_text("最终回答"),
-        ])],
-    )
-    executor = make_executor(sub_agent_client=client)
-
-    frames = await _drive(executor)
-
-    assert client.subscribe_calls == 1
-    assert frames[0] == {"type": "__task_created__", "task_id": "child-1"}
-    assert frames[1] == {"type": "think_chunk", "content": "续接尾流"}
-    assert frames[-1] == {"type": "__completed__", "content": "最终回答"}
-    # 无重复 __task_created__（resubscribe 快照帧不重复捕获）
-    assert sum(1 for f in frames if f.get("type") == "__task_created__") == 1
-
-
-# ── RECONN-05：首帧（task）前断线 → 无 task_id 可重连 → 抛错（failed 兜底）───
-
-
-async def test_blip_before_first_frame_reraises():
-    client = FakeSubAgentClient(
-        send=[FakeAsyncStream([], exc=httpx.RemoteProtocolError("early"))],
-    )
-    executor = make_executor(sub_agent_client=client)
-    with pytest.raises(httpx.RemoteProtocolError):
-        await _drive(executor)
-
-
-async def _no_sleep(*_a, **_k):
-    return None

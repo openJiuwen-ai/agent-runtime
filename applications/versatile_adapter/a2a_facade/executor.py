@@ -1,48 +1,46 @@
 # coding: utf-8
-# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
-
-"""
-A2aVersatileExecutor — A2A 薄壳适配层。
-
-纯 A2A 协议适配：不包含业务逻辑。
-- 从 A2A RequestContext 解析 input_data（target/body/headers/params）
-- 调用 VersatileAdapterRunner.run_async() 获取 AdapterEvent
-- 基于 AdapterEvent 类型做 A2A 协议映射
-"""
 from __future__ import annotations
 
+import json
 import uuid
 
-from google.protobuf.json_format import MessageToDict, ParseDict
 from google.protobuf import struct_pb2
+from google.protobuf.json_format import MessageToDict, ParseDict
 from typing_extensions import override
 
+from a2a.helpers import new_message
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.server.tasks import TaskUpdater
-from a2a.helpers import (
-    new_message
-)
 from a2a.types.a2a_pb2 import (
+    Artifact,
     Message,
     Part,
     Task,
     TaskState,
     TaskStatus,
+    TaskArtifactUpdateEvent,
     TaskStatusUpdateEvent,
     TASK_STATE_COMPLETED,
     TASK_STATE_FAILED,
     TASK_STATE_INPUT_REQUIRED,
-    ROLE_AGENT,
 )
 from loguru import logger
 
 from dispatcher.runner import VersatileAdapterRunner
 
 
-class A2aVersatileExecutor(AgentExecutor):
-    """A2A 协议薄壳：AdapterEvent → A2A Artifact/Status 映射。"""
+def _data_part(data: dict) -> Part:
+    part = Part()
+    part.data.CopyFrom(ParseDict(data, struct_pb2.Value()))
+    return part
 
+
+def _struct(data: dict) -> struct_pb2.Struct:
+    return ParseDict(data, struct_pb2.Struct())
+
+
+class A2aVersatileExecutor(AgentExecutor):
     def __init__(self, runner: VersatileAdapterRunner) -> None:
         self._runner = runner
 
@@ -50,8 +48,12 @@ class A2aVersatileExecutor(AgentExecutor):
         self, context: RequestContext, event_queue: EventQueue
     ) -> TaskUpdater:
         if context.current_task is None:
-            task = Task(id=context.task_id, context_id=context.context_id,
-                        status=TaskStatus(state=TaskState.TASK_STATE_SUBMITTED), history=[context.message])
+            task = Task(
+                id=context.task_id,
+                context_id=context.context_id,
+                status=TaskStatus(state=TaskState.TASK_STATE_SUBMITTED),
+                history=[context.message],
+            )
             await event_queue.enqueue_event(task)
         else:
             task = context.current_task
@@ -60,9 +62,7 @@ class A2aVersatileExecutor(AgentExecutor):
         return updater
 
     @override
-    async def execute(
-        self, context: RequestContext, event_queue: EventQueue
-    ) -> None:
+    async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         if not context.message or not context.context_id or not context.task_id:
             return
 
@@ -71,47 +71,82 @@ class A2aVersatileExecutor(AgentExecutor):
         runner_kw = self._extract_runner_kwargs(input_data, context.context_id)
 
         with logger.contextualize(**log_kw):
-            logger.info(f"[A2aVA] execute: conv_id={context.context_id}, task_id={context.task_id}")
-
+            logger.info(
+                f"[A2aVA] execute: conv_id={context.context_id}, task_id={context.task_id}"
+            )
             updater = await self._setup_task(context, event_queue)
-            message = None
-            is_failed = False
+            terminal_sent = False
 
             try:
                 async for event in self._runner.run_async(**runner_kw):
                     if event.data_proxy is not None:
-                        part = self._make_text_part(event.data_proxy.raw_data, "data_proxy")
-                        await updater.add_artifact(parts=[part])
+                        if terminal_sent:
+                            logger.warning(
+                                "[A2aVA] drop display frame after terminal: task_id={}",
+                                context.task_id,
+                            )
+                            continue
+                        await self._emit_proxy_artifact(
+                            event_queue,
+                            task_id=context.task_id,
+                            context_id=context.context_id,
+                            chunk=self._parse_proxy_payload(event.data_proxy.raw_data),
+                        )
+                        continue
 
-                    elif event.execution_input_required is not None:
-                        await updater.requires_input()
+                    if event.execution_input_required is not None:
+                        if not terminal_sent:
+                            await self._emit_input_required(
+                                event_queue,
+                                task_id=context.task_id,
+                                context_id=context.context_id,
+                                text="等待用户输入",
+                            )
+                            terminal_sent = True
                         return
 
-                    elif event.execution_completed is not None:
-                        is_failed = event.execution_completed.is_failed
-                        if event.execution_completed.error_message:
-                            part = self._make_text_part(event.execution_completed.error_message, "upstream_error")
-                            message = new_message(parts=[part])
-                        elif event.execution_completed.result:
-                            part = self._make_text_part(event.execution_completed.result, "workflow_result")
-                            message = new_message(parts=[part])
+                    if event.execution_completed is not None:
+                        if terminal_sent:
+                            continue
+                        terminal_sent = True
+                        completed = event.execution_completed
+                        if completed.is_failed:
+                            await self._emit_failed(
+                                event_queue,
+                                task_id=context.task_id,
+                                context_id=context.context_id,
+                                text=str(completed.error_message or completed.result or "执行报错（无详细信息）"),
+                            )
+                        else:
+                            await self._emit_completed(
+                                event_queue,
+                                task_id=context.task_id,
+                                context_id=context.context_id,
+                                result=completed.result,
+                            )
 
-                if is_failed:
-                    await updater.failed(message)
-                    logger.info(f"[A2aVA] 流异常结束(failed): conv_id={context.context_id}, task_id={context.task_id}")
-                else:
-                    await updater.complete(message)
-                    logger.info(f"[A2aVA] 流结束: conv_id={context.context_id}, task_id={context.task_id}")
+                if not terminal_sent:
+                    await self._emit_completed(
+                        event_queue,
+                        task_id=context.task_id,
+                        context_id=context.context_id,
+                        result=None,
+                    )
 
             except Exception:
-                logger.exception(f"[A2aVA] 流异常: conv_id={context.context_id}, task_id={context.task_id}")
-                await updater.failed()
-                return
+                logger.exception(
+                    f"[A2aVA] stream exception: conv_id={context.context_id}, task_id={context.task_id}"
+                )
+                if not terminal_sent:
+                    await self._emit_failed(
+                        event_queue,
+                        task_id=context.task_id,
+                        context_id=context.context_id,
+                        text="执行报错（无详细信息）",
+                    )
 
     @override
-    async def cancel(
-        self, context: RequestContext, event_queue: EventQueue
-    ) -> None:
+    async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
         conv_id = context.context_id
         task_id = context.task_id
         input_data = self._build_first_input(context.message)
@@ -119,15 +154,136 @@ class A2aVersatileExecutor(AgentExecutor):
 
         updater = TaskUpdater(event_queue, task_id, conv_id)
         await updater.cancel()
-        logger.info(f"[A2aVA] 任务已取消: conv_id={conv_id}, task_id={task_id}, agent_id={agent_id}")
+        logger.info(
+            f"[A2aVA] cancel: conv_id={conv_id}, task_id={task_id}, agent_id={agent_id}"
+        )
+
+    async def _emit_proxy_artifact(
+        self,
+        event_queue: EventQueue,
+        *,
+        task_id: str,
+        context_id: str,
+        chunk: dict,
+    ) -> None:
+        await event_queue.enqueue_event(
+            TaskArtifactUpdateEvent(
+                task_id=task_id,
+                context_id=context_id,
+                artifact=Artifact(
+                    artifact_id=str(uuid.uuid4()),
+                    parts=[_data_part(chunk)],
+                    metadata=_struct({"type": "versatile_proxy"}),
+                ),
+                last_chunk=False,
+            )
+        )
+
+    async def _emit_completed(
+        self,
+        event_queue: EventQueue,
+        *,
+        task_id: str,
+        context_id: str,
+        result,
+    ) -> None:
+        message = None
+        if result:
+            message = new_message(parts=[self._make_text_part(str(result), "workflow_result")])
+        status_event = TaskStatusUpdateEvent(
+            task_id=task_id,
+            context_id=context_id,
+            status=TaskStatus(state=TASK_STATE_COMPLETED, message=message),
+        )
+        status_event.metadata.CopyFrom(
+            _struct({"cascade_result": self._cascade_result(result)})
+        )
+        await event_queue.enqueue_event(status_event)
+
+    async def _emit_failed(
+        self,
+        event_queue: EventQueue,
+        *,
+        task_id: str,
+        context_id: str,
+        text: str,
+    ) -> None:
+        await event_queue.enqueue_event(
+            TaskStatusUpdateEvent(
+                task_id=task_id,
+                context_id=context_id,
+                status=TaskStatus(
+                    state=TASK_STATE_FAILED,
+                    message=new_message(parts=[self._make_text_part(text or "执行报错（无详细信息）", "upstream_error")]),
+                ),
+            )
+        )
+        logger.warning(
+            "A2A_WARNING:VA_TERMINAL_FALLBACK state=FAILED task_id={} context_id={} text={}",
+            task_id,
+            context_id,
+            text,
+        )
+
+    async def _emit_input_required(
+        self,
+        event_queue: EventQueue,
+        *,
+        task_id: str,
+        context_id: str,
+        text: str,
+    ) -> None:
+        await event_queue.enqueue_event(
+            TaskStatusUpdateEvent(
+                task_id=task_id,
+                context_id=context_id,
+                status=TaskStatus(
+                    state=TASK_STATE_INPUT_REQUIRED,
+                    message=new_message(parts=[self._make_text_part(text or "等待用户输入")]),
+                ),
+            )
+        )
+        logger.info(
+            "A2A_INFO:VA_INPUT_REQUIRED state=INPUT_REQUIRED task_id={} context_id={} text={}",
+            task_id,
+            context_id,
+            text,
+        )
+
+    @staticmethod
+    def _cascade_result(result) -> dict:
+        if result is None:
+            return {}
+        if isinstance(result, dict):
+            return result
+        if isinstance(result, str):
+            try:
+                parsed = json.loads(result)
+                return parsed if isinstance(parsed, dict) else {"workflow_result": result}
+            except Exception:
+                return {"workflow_result": result}
+        return {"workflow_result": result}
+
+    @staticmethod
+    def _parse_proxy_payload(raw_data) -> dict:
+        if isinstance(raw_data, dict):
+            return raw_data
+        if isinstance(raw_data, str):
+            try:
+                parsed = json.loads(raw_data)
+                return parsed if isinstance(parsed, dict) else {"event": "message", "data": {"text": raw_data}}
+            except Exception:
+                return {"event": "message", "data": {"text": raw_data}}
+        return {"event": "message", "data": {"value": raw_data}}
 
     def _make_text_part(
-        self, text: str, vatype: str | None = None, media_type: str | None = None,
+        self,
+        text: str,
+        vatype: str | None = None,
+        media_type: str | None = None,
     ) -> Part:
-        """构造 text Part，可选附带 vatype metadata。"""
         metadata = {"vatype": vatype} if vatype else None
-        part = Part(text=text, media_type=media_type or '', metadata=metadata)
-        return part
+        return Part(text=text, media_type=media_type or "", metadata=metadata)
 
     def _build_first_input(self, message) -> dict:
         for part in message.parts:
@@ -141,7 +297,7 @@ class A2aVersatileExecutor(AgentExecutor):
                 text = part.text
                 break
         if not text:
-            logger.warning("[A2aVA] message 中未提取到 data/text part，使用空查询兜底")
+            logger.warning("[A2aVA] message has no data/text part, using empty query")
         return {"body": {"input": {"query": text}}, "headers": {}, "params": {}}
 
     @staticmethod

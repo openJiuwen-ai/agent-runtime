@@ -13,8 +13,18 @@ from __future__ import annotations
 
 import pytest
 
+from a2a.types.a2a_pb2 import TASK_STATE_INPUT_REQUIRED
 from a2a_facade.executor import A2aVersatileExecutor
 from dispatcher.runner import VersatileAdapterRunner
+from loguru import logger
+
+
+class _EventQueueStub:
+    def __init__(self):
+        self.events = []
+
+    async def enqueue_event(self, event):
+        self.events.append(event)
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -116,3 +126,48 @@ class TestExtractLoggingContext:
         ctx = A2aVersatileExecutor._extract_logging_context({}, "conv-1")
         assert ctx["trace_id"] == ""
         assert ctx["agent_id"] == ""
+
+
+# ════════════════════════════════════════════════════════════════════
+# INPUT_REQUIRED 日志语义
+# ════════════════════════════════════════════════════════════════════
+
+
+class TestInputRequiredLogging:
+    @staticmethod
+    @pytest.mark.asyncio
+    async def test_input_required_emits_state_event_without_warning_log():
+        executor = A2aVersatileExecutor(runner=None)
+        queue = _EventQueueStub()
+        records = []
+        sink_id = logger.add(
+            lambda message: records.append(message.record),
+            level="DEBUG",
+            format="{message}",
+        )
+        try:
+            await executor._emit_input_required(
+                queue,
+                task_id="task-1",
+                context_id="ctx-1",
+                text="等待用户输入",
+            )
+        finally:
+            logger.remove(sink_id)
+
+        assert len(queue.events) == 1
+        event = queue.events[0]
+        assert event.status.state == TASK_STATE_INPUT_REQUIRED
+        assert event.status.message.parts[0].text == "等待用户输入"
+
+        messages = [r["message"] for r in records]
+        assert any("A2A_INFO:VA_INPUT_REQUIRED state=INPUT_REQUIRED" in m for m in messages)
+        assert not any(
+            "A2A_WARNING:VA_TERMINAL_FALLBACK state=INPUT_REQUIRED" in m
+            for m in messages
+        )
+        assert all(
+            r["level"].name != "WARNING"
+            or "state=INPUT_REQUIRED" not in r["message"]
+            for r in records
+        )

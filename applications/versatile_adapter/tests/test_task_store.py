@@ -108,14 +108,24 @@ class TestRedisTaskStore:
         assert result.status.state == TaskState.TASK_STATE_COMPLETED
 
     @pytest.mark.asyncio
-    async def test_key_prefix_isolation(self, task_store, ctx):
-        """vafacade:task: 前缀与 a2a_service 的 a2a:task: 不冲突。"""
+    async def test_key_prefix_unified(self, task_store, ctx):
+        """与 a2a_service 统一使用 a2a:task: 前缀，便于多级任务路由。"""
         ts, store = task_store
         task = _make_task("t-prefix")
         await ts.save(task, ctx)
         keys = [k for k in store.keys() if "t-prefix" in k]
         assert len(keys) == 1
-        assert keys[0].startswith("vafacade:task:")
+        assert keys[0].startswith("a2a:task:")
+
+    @pytest.mark.asyncio
+    async def test_save_writes_source_agent(self, task_store, ctx):
+        """save 时在 task.metadata 中写入 source_agent=versatile_adapter。"""
+        ts, _ = task_store
+        task = _make_task("t-source")
+        await ts.save(task, ctx)
+        restored = await ts.get("t-source", ctx)
+        assert restored is not None
+        assert restored.metadata.fields["source_agent"].string_value == "versatile_adapter"
 
     @pytest.mark.asyncio
     async def test_serialization_round_trip(self, task_store, ctx):

@@ -26,7 +26,7 @@ import pytest
 from a2a.server.events import EventQueue
 from google.protobuf.json_format import MessageToDict
 
-from common.events import (
+from agents.EDPAgent.events import (
     ConversationEndEvent,
     ConversationStartEvent,
     FinalAnswerChunkEvent,
@@ -46,7 +46,7 @@ from common.events import (
     TodoStatusEvent,
 )
 from orchestrator.executor import Executor, _TurnContext
-from orchestrator.user_router import _serialize_event
+from api.dispatch import _serialize_event
 
 
 AGENT_ID = "fcbcd0ce-73b0-4097-a0cb-6286341f88f6"

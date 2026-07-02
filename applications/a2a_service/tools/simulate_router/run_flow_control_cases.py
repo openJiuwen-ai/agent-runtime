@@ -27,7 +27,7 @@ if str(A2A_SERVICE_ROOT) not in sys.path:
     sys.path.append(str(A2A_SERVICE_ROOT))
 
 from common.redis_client import RedisClient
-from orchestrator.user_router import _check_rate_limit
+from api.dispatch import _check_rate_limit
 from redis import Redis
 
 

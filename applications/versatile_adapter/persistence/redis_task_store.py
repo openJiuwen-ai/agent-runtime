@@ -6,6 +6,8 @@ Redis-backed A2A TaskStore。
 
 Task protobuf 序列化为 base64 二进制存入 Redis，key 格式：a2a:task:{task_id}。
 TTL 复用 redis_session_ttl 配置（秒），默认 1800 s。
+
+与 a2a_service 统一 key 前缀，支持多级任务管理（source_agent 标识任务来源）。
 """
 from __future__ import annotations
 
@@ -15,11 +17,13 @@ from typing import Optional
 from a2a.server.context import ServerCallContext
 from a2a.server.tasks.task_store import TaskStore
 from a2a.types.a2a_pb2 import ListTasksRequest, ListTasksResponse, Task
+from google.protobuf.struct_pb2 import Struct
 from loguru import logger
 
 from persistence.redis_client import RedisClient
 
-_KEY_PREFIX = "vafacade:task:"
+_KEY_PREFIX = "a2a:task:"
+_SOURCE_AGENT = "versatile_adapter"
 
 
 class RedisTaskStore(TaskStore):
@@ -28,10 +32,26 @@ class RedisTaskStore(TaskStore):
         self._ttl = ttl
 
     async def save(self, task: Task, context: ServerCallContext) -> None:
+        # 在保存前确保 metadata 中包含 source_agent 字段，用于多级任务路由
+        if not task.HasField("metadata"):
+            task.metadata.CopyFrom(Struct())
+        # 使用 Struct.update 来设置字段，避免直接操作内部字典
+        meta_dict = {}
+        try:
+            from google.protobuf.json_format import MessageToDict
+
+            meta_dict = MessageToDict(task.metadata)
+        except Exception as exc:
+            logger.debug(f"[TaskStore] metadata conversion failed, fallback to empty metadata: {exc!r}")
+        meta_dict["source_agent"] = _SOURCE_AGENT
+        new_meta = Struct()
+        new_meta.update(meta_dict)
+        task.metadata.CopyFrom(new_meta)
+
         key = _KEY_PREFIX + task.id
         data = base64.b64encode(task.SerializeToString()).decode("ascii")
         await self._redis.set(key, data, ex=self._ttl)
-        logger.debug(f"[TaskStore] save task={task.id} state={task.status.state}")
+        logger.debug(f"[TaskStore] save task={task.id} state={task.status.state} source_agent={_SOURCE_AGENT}")
 
     async def get(self, task_id: str, context: ServerCallContext) -> Optional[Task]:
         if not task_id:

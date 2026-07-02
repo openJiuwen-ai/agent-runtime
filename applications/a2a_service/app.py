@@ -20,6 +20,7 @@ import socket
 import sys
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, Optional
 
 import httpx
@@ -34,13 +35,51 @@ from starlette.applications import Starlette
 
 from agents.EDPAgent import initialize
 from common.redis_client import RedisClient
-from common.redis_task_store import RedisTaskStore
+from common.redis_task_store import ReadOnlyTaskStore, RedisTaskStore
 from config import get_settings
+from channels.registry import AdapterRegistry
+from api.dispatch import router as dispatch_router
 from orchestrator.executor import Executor
-from orchestrator.user_router import router as user_router
+from orchestrator.route import RouteDispatcher
+from orchestrator.state import TaskStateManager
 from tools.simulate_router.simulate import router as simulate_router
 
-os.environ['NO_PROXY'] = 'localhost,127.0.0.1'
+
+def _load_env_to_environ() -> None:
+    # pydantic-settings 读 .env 只填充 Settings 对象，不写回 os.environ；
+    # 而 httpx(trust_env=True) 与本模块的 NO_PROXY 合并逻辑都读 os.environ。
+    # 这里用 load_dotenv 把 .env 同步进 os.environ，让代理相关变量对 httpx 生效。
+    # override=False：容器 ENV / 真实环境变量优先级更高，.env 仅作兜底。
+    _env_file = Path(__file__).parent / ".env"
+    if not _env_file.exists():
+        return
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(_env_file, override=False)
+    except ImportError:
+        logger.warning("[NO_PROXY] python-dotenv 未安装，跳过 .env → os.environ 同步")
+
+
+def _init_no_proxy() -> None:
+    # 先把 .env 中的代理变量加载进 os.environ（pydantic-settings 不会做这一步）
+    _load_env_to_environ()
+    # 合并 NO_PROXY：保留本地地址兜底（localhost/127.0.0.1），同时并入 env 已有配置，
+    # 使实际场景可通过 .env 的 NO_PROXY 增加需绕过代理的地址。
+    # 大小写同步设置，避免部分库（requests/urllib3）只读小写 no_proxy 导致行为不一致。
+    local_defaults = {"localhost", "127.0.0.1"}
+    existing = os.environ.get("NO_PROXY") or os.environ.get("no_proxy") or ""
+    merged = local_defaults | {h.strip() for h in existing.split(",") if h.strip()}
+    value = ",".join(sorted(merged))
+    os.environ["NO_PROXY"] = value
+    os.environ["no_proxy"] = value
+    # 调试日志：确认运行阶段是否正确拿到 env 中的 NO_PROXY 配置
+    logger.info(
+        f"[NO_PROXY] env 原始值={existing!r} 合并后={value!r} "
+        f"HTTP_PROXY={os.environ.get('HTTP_PROXY')!r} HTTPS_PROXY={os.environ.get('HTTPS_PROXY')!r}"
+    )
+
+
+_init_no_proxy()
 
 
 LOG_FIELD_SEPARATOR = '\x01'
@@ -412,28 +451,53 @@ async def lifespan(fastapi_app: FastAPI):
         # 也不在启动期拉取子 Agent AgentCard。改为把 factory 注入 Executor，由其按 spec.url
         # 懒 create_from_url + 缓存（每 url 一个 client）。某子 Agent 不可达只降级该实体。
         task_store = RedisTaskStore(redis, ttl=settings.redis_session_ttl or _TTL)
-        executor = Executor(
+        state_manager = TaskStateManager(task_store)
+        dpa_card = _build_dpa_card()
+
+        config_path = os.path.join(
+            os.path.dirname(__file__), "orchestrator", "config", "route_config.yaml"
+        )
+        route_dispatcher = RouteDispatcher(
+            state_manager,
+            config_path=config_path,
+            local_agent_names=[dpa_card.name],
+        )
+        route_dispatcher.register_handlers_from_config(
+            state_manager=state_manager,
             va_client=va_client,
             redis=redis,
-            task_store=task_store,
             client_factory=factory,
             max_concurrent_sub_agents=settings.max_concurrent_sub_agents,
             sub_agent_timeout_seconds=settings.sub_agent_timeout_seconds,
             max_parallel_workflows_per_agent=settings.max_parallel_workflows_per_agent,
             workflow_timeout_seconds=settings.workflow_timeout_seconds,
             max_call_depth=settings.max_call_depth,
+            route_dispatcher=route_dispatcher,
+            local_agent_name=dpa_card.name,
         )
 
-        dpa_card = _build_dpa_card()
+        executor = Executor(
+            redis=redis,
+            route_dispatcher=route_dispatcher,
+            state_manager=state_manager,
+        )
+
+        # SDK DefaultRequestHandler 的 TaskManager 对每个流式事件都调用 task_store.save()，
+        # 用 ReadOnlyTaskStore 包装使 SDK 的 save 为空操作，避免数千次全量 Task 序列化写入 Redis。
+        # Task 状态持久化由应用层 TaskStateManager 统一管理。
+        sdk_task_store = ReadOnlyTaskStore(task_store)
         request_handler = DefaultRequestHandler(
             agent_executor=executor,
-            task_store=task_store,
+            task_store=sdk_task_store,
             agent_card=dpa_card,
         )
 
         fastapi_app.state.redis = redis
         fastapi_app.state.task_store = task_store
         fastapi_app.state.executor = executor
+        fastapi_app.state.adapter_registry = AdapterRegistry.from_yaml(
+            os.path.join(os.path.dirname(__file__), "channels.yaml")
+        )
 
         a2a_routes = create_agent_card_routes(dpa_card) + create_jsonrpc_routes(
             request_handler, rpc_url="/"
@@ -474,7 +538,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-app.include_router(user_router)
+app.include_router(dispatch_router)
 app.include_router(simulate_router)
 
 

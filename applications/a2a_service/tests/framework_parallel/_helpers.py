@@ -9,6 +9,8 @@
 ``agents.EDPAgent.agent_stream`` 占位，仅用于打通模块 import 链；所有被测路径
 要么完全绕过 agent_stream，要么由各用例自行 monkeypatch 受控替身。
 """
+# Test files intentionally access private members to validate edge cases.
+# pylint: disable=protected-access
 from __future__ import annotations
 
 import asyncio
@@ -53,6 +55,10 @@ from google.protobuf.json_format import MessageToDict
 from google.protobuf.struct_pb2 import Struct, Value
 
 from orchestrator.executor import Executor, _TurnContext
+from orchestrator.handlers.remote_agent_handler import RemoteAgentHandler
+from orchestrator.handlers.requester_handler import RequesterHandler
+from orchestrator.route import RouteDispatcher
+from orchestrator.state import TaskStateManager
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -61,7 +67,7 @@ from orchestrator.executor import Executor, _TurnContext
 
 
 def data_part(payload: dict) -> Part:
-    """构造一个 DataPart（与 agent_adapter._build_data_part 同构）。"""
+    """构造一个 DataPart（与 channels.dict_to_a2a 同构）。"""
     struct = Struct()
     struct.update(payload)
     value = Value()
@@ -191,14 +197,18 @@ class FakeSubAgentClient:
         self.send_calls = 0
         self.subscribe_calls = 0
         self.get_task_calls = 0
+        self.send_requests = []
+        self.subscribe_requests = []
         self.cancel_task = AsyncMock()
 
-    def send_message(self, _request):
+    def send_message(self, request):
+        self.send_requests.append(request)
         s = self._send[min(self.send_calls, len(self._send) - 1)]
         self.send_calls += 1
         return s() if callable(s) else s
 
-    def subscribe(self, _request):
+    def subscribe(self, request):
+        self.subscribe_requests.append(request)
         s = self._subscribe[min(self.subscribe_calls, len(self._subscribe) - 1)]
         self.subscribe_calls += 1
         return s() if callable(s) else s
@@ -222,6 +232,7 @@ def make_executor(*, sub_agent_client: Any = None, redis_json: Any = None, **lim
     """
     va_client = MagicMock()
     redis = MagicMock()
+    redis.get = AsyncMock(return_value="")
     redis.get_json = AsyncMock(return_value=({} if redis_json is None else redis_json))
     redis.set_json = AsyncMock()
     task_store = MagicMock()
@@ -236,13 +247,31 @@ def make_executor(*, sub_agent_client: Any = None, redis_json: Any = None, **lim
         max_call_depth=3,
     )
     cfg.update(limits)
-    return Executor(
+    state_manager = TaskStateManager(task_store=task_store)
+    dispatcher = RouteDispatcher(state_manager)
+    remote_handler = RemoteAgentHandler(
         va_client=va_client,
         redis=redis,
-        task_store=task_store,
-        sub_agent_client=sub_agent_client,
+        state_manager=state_manager,
+        client_factory=None,
         **cfg,
     )
+    if sub_agent_client is not None:
+        remote_handler._sub_agent_clients[""] = sub_agent_client
+    executor = Executor(
+        redis=redis,
+        route_dispatcher=dispatcher,
+        state_manager=state_manager,
+    )
+    dispatcher.register_handler("requester", RequesterHandler(state_manager).handle)
+    dispatcher.register_handler("remote_agent", remote_handler.handle)
+    executor._remote_handler = remote_handler
+    executor._test_remote_handler = remote_handler
+    executor._test_state_manager = state_manager
+    executor._test_task_store = task_store
+    executor._test_va_client = va_client
+    executor._fetch_final_via_get = remote_handler._fetch_final_via_get
+    return executor
 
 
 def make_turn_ctx(*, conv_id: str = "c", task_id: str = "t", sub_task_path: tuple = ()) -> _TurnContext:
@@ -251,7 +280,7 @@ def make_turn_ctx(*, conv_id: str = "c", task_id: str = "t", sub_task_path: tupl
         task_id=task_id,
         call_context=MagicMock(),
         event_queue=EventQueue(),
-        sub_task_path=sub_task_path,
+        sub_task_path=tuple(str(p) for p in sub_task_path),
     )
 
 

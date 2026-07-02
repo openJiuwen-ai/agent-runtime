@@ -80,8 +80,6 @@ def wrap_agent_event(
         success: 顶层 ``success`` 字段。VA 上游报错或内部异常映射为 interrupt_start
             帧时设为 False，对齐 AgentEngine planning_agent 的失败帧形态。
         error: 顶层 ``error`` 字段。仅 success=False 时承载错误描述。
-        display: 北向接口 v1.3 新增字段。true=前端拼接, false=前端停止拼接,
-            None=不写入(向后兼容)。
 
     Returns:
         可直接 json.dumps 的 dict，格式对齐规范文档 §4.4.3（agent event）。
@@ -101,7 +99,6 @@ def wrap_agent_event(
         "latency": "",
         "plugin": plugin,
     }
-    # 仅当 display 非 None 时才写入 custom_rsp_data，保持向后兼容
     if display is not None:
         custom_rsp_data["display"] = display
 
@@ -164,7 +161,7 @@ def wrap_workflow_event(
 
 
 # ════════════════════════════════════════════════════════════════════
-# sub_task 信封包装（级联盖章，对齐 TECH §3.2 / 北向消息定义文档 §2）
+# 错误 / 限流响应包装
 # ════════════════════════════════════════════════════════════════════
 
 
@@ -175,35 +172,26 @@ def _render_inner_custom_rsp_data(
     conversation_id: str,
     elapsed: float,
 ) -> dict[str, Any]:
-    """把子节点原帧的 inner_meta 渲染成"标准单帧 custom_rsp_data"。
-
-    保证 ``sub_task.data`` 与该帧**非并行单独渲染时逐字段一致**（前端整段复用既有渲染器）：
-      - ``agent``：复用 wrap_agent_event 的 custom_rsp_data（含 event/content/data/plugin…）；
-      - ``workflow``：复用 wrap_workflow_event 的 custom_rsp_data（``{event, data}``）；
-      - ``lifecycle``：node_start/node_end 为框架合成帧，按原样透传 ``{event, ...}``。
-    """
     kind = inner_meta.get("kind")
     if kind == "workflow":
         return wrap_workflow_event(
-            event_kind=inner_meta["type"],
+            event_kind=str(inner_meta.get("type") or "message"),
             data=inner_meta.get("data") or {},
             agent_id=agent_id,
             conversation_id=conversation_id,
             elapsed=elapsed,
         )["custom_rsp_data"]
     if kind == "lifecycle":
-        # 框架合成的生命周期帧（node_start/node_end），已是 {event, ...} 形态，原样透传
         return inner_meta.get("data") or {}
-    # 默认按 agent 帧渲染
     return wrap_agent_event(
-        event_type=inner_meta.get("type", "thought"),
-        content=inner_meta.get("content", ""),
+        event_type=str(inner_meta.get("type") or "thought"),
+        content=str(inner_meta.get("content") or ""),
         data=inner_meta.get("data") or {},
         agent_id=agent_id,
         conversation_id=conversation_id,
         elapsed=elapsed,
-        plugin=inner_meta.get("plugin", ""),
-        display=inner_meta.get("display"),  # display（北向 v1.3）贯穿级联
+        plugin=str(inner_meta.get("plugin") or ""),
+        display=inner_meta.get("display"),
     )["custom_rsp_data"]
 
 
@@ -216,30 +204,6 @@ def wrap_sub_task_event(
     conversation_id: str,
     elapsed: float,
 ) -> dict[str, Any]:
-    """包装级联盖章子节点帧（``custom_rsp_data.event == "sub_task"``）。
-
-    外层信封与 agent event 一致（success/agent_id/conversation_id/output/error/
-    execution_time）；``custom_rsp_data`` 顶层带 ``event="sub_task"`` + ``sub_task_path``
-    + ``node_kind``，``data`` 为子节点原帧渲染后的标准 custom_rsp_data（见
-    ``_render_inner_custom_rsp_data``）。
-
-    Args:
-        sub_task_path: 节点绝对路径数组（root→生产者；段 = entity_id / workflow_id）。
-        node_kind: ``"agent"`` 或 ``"workflow"``，前端据此渲染（卡片 / 进度条）。
-        inner_meta: 子节点原帧的提取结果（``kind`` ∈ agent/workflow/lifecycle）。
-        agent_id / conversation_id: 同 agent event。
-        elapsed: 累计秒数。
-
-    Returns:
-        可 json.dumps 的 dict，对齐北向消息定义文档 §2。子帧内部错误体现在
-        ``data.node_end.status``，外层 ``success`` 恒为 true（=传输成功）。
-    """
-    inner = _render_inner_custom_rsp_data(
-        inner_meta,
-        agent_id=agent_id,
-        conversation_id=conversation_id,
-        elapsed=elapsed,
-    )
     return {
         "success": True,
         "agent_id": agent_id,
@@ -251,14 +215,14 @@ def wrap_sub_task_event(
             "event": "sub_task",
             "sub_task_path": sub_task_path,
             "node_kind": node_kind,
-            "data": inner,
+            "data": _render_inner_custom_rsp_data(
+                inner_meta,
+                agent_id=agent_id,
+                conversation_id=conversation_id,
+                elapsed=elapsed,
+            ),
         },
     }
-
-
-# ════════════════════════════════════════════════════════════════════
-# 错误 / 限流响应包装
-# ════════════════════════════════════════════════════════════════════
 
 
 def wrap_error(
@@ -272,7 +236,7 @@ def wrap_error(
     """限流、内部错误等场景的简化响应。
 
     与成功帧相比：``success`` 为 False，带 ``error_code`` 和 ``error_msg``，
-    没有 ``custom_rsp_data``。当前限流分支（user_router.py:434-440）已经是
+    没有 ``custom_rsp_data``。当前限流分支（api/dispatch.py）已经是
     这种结构，保持兼容。
 
     Args:

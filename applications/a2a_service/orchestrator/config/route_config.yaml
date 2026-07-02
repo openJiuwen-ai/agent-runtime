@@ -1,0 +1,37 @@
+handlers:
+  local_agent: "orchestrator.handlers.local_agent_handler.LocalAgentHandler"
+  remote_agent: "orchestrator.handlers.remote_agent_handler.RemoteAgentHandler"
+  requester: "orchestrator.handlers.requester_handler.RequesterHandler"
+
+max_cascade_depth: 10
+
+default_profile:
+  requester:
+    suspended_states:
+      - "INPUT_REQUIRED"
+      - "AUTH_REQUIRED"
+
+  local_agent:
+    delegate_types:
+      - "delegate"
+      - "sub_agent_dispatch"
+      - "multi_delegate"
+    default_remote_agent: "versatile_adapter"
+
+  remote_agent:
+    terminal_frame_types:
+      - "CONTROL_COMPLETED"
+      - "CONTROL_FAILED"
+    frame_type_map:
+      COMPLETED: "CONTROL_COMPLETED"
+      FAILED: "CONTROL_FAILED"
+      INPUT_REQUIRED: "CONTROL_INPUT_REQUIRED"
+      AUTH_REQUIRED: "CONTROL_AUTH_REQUIRED"
+      SUBMITTED: "CONTROL_SUBMITTED"
+      WORKING: "CONTROL_WORKING"
+      CANCELED: "CONTROL_CANCELED"
+      REJECTED: "CONTROL_REJECTED"
+      ARTIFACT: "DATA"
+    default_frame_type: "CONTROL_UNSPECIFIED"
+
+profiles: {}

@@ -31,7 +31,7 @@ from a2a.types.a2a_pb2 import (
 from google.protobuf.json_format import MessageToDict
 from google.protobuf.struct_pb2 import Struct, Value
 
-from common.events import (
+from agents.EDPAgent.events import (
     ConversationEndEvent,
     ConversationStartEvent,
     ThinkStartEvent,
@@ -40,7 +40,7 @@ from common.events import (
     ToolStatusEvent,
 )
 from orchestrator.executor import Executor, _TurnContext
-from orchestrator.user_router import _serialize_event
+from api.dispatch import _serialize_event
 
 
 CONV_ID = "conv-multi-turn"

@@ -21,6 +21,8 @@ Task B: DelegateRequest → VA → cascade 完整路径集成测试。
   - 失败事件：TaskStatusUpdateEvent(state=FAILED, message=Message(parts=[
       Part(text=err_json, metadata={vatype:"upstream_error"})]))
 """
+# Test files intentionally access private members to validate edge cases.
+# pylint: disable=protected-access
 from __future__ import annotations
 
 import asyncio
@@ -50,7 +52,7 @@ from a2a.types.a2a_pb2 import (
 from google.protobuf.json_format import MessageToDict
 from google.protobuf.struct_pb2 import Struct, Value
 
-from common.events import (
+from agents.EDPAgent.events import (
     ConversationEndEvent,
     ConversationStartEvent,
     DelegateRequest,
@@ -60,7 +62,9 @@ from common.events import (
     ToolStatusEvent,
 )
 from config import get_settings
-from orchestrator.executor import Executor, _TurnContext, _VaRequestPayload
+from orchestrator.executor import _TurnContext
+from orchestrator.handlers.remote_agent_handler import _VaRequestPayload
+from tests.framework_parallel._helpers import make_executor as make_refactor_executor
 
 
 CONV_ID = "conv-delegate-1"
@@ -240,12 +244,16 @@ def _make_executor_with_va_stream(va_events: list) -> Executor:
     task_store.get = AsyncMock(return_value=None)
     task_store.save = AsyncMock()
 
-    return Executor(va_client=va_client, redis=redis, task_store=task_store)
+    executor = make_refactor_executor(redis_json=redis.get_json.return_value)
+    executor._test_va_client.send_message = mock_send_message
+    executor._test_task_store.get = task_store.get
+    executor._test_task_store.save = task_store.save
+    return executor
 
 
 def test_build_va_message_packs_target_for_workflow_routing():
     executor = _make_executor_with_va_stream([])
-    request = executor._build_va_message(
+    request = executor._test_remote_handler._build_va_message(
         _VaRequestPayload(
             query="查理财",
             headers={},
@@ -293,7 +301,7 @@ adapters:
         encoding="utf-8",
     )
     executor = _make_executor_with_va_stream([])
-    request = executor._build_va_message(
+    request = executor._test_remote_handler._build_va_message(
         _VaRequestPayload(
             query="查理财",
             headers={},
@@ -612,7 +620,7 @@ def _make_executor_with_real_task(
     va_events: list,
     *,
     initial_va_task_id: str = "stale-va-task-id",
-) -> tuple[Executor, Task, MagicMock]:
+) -> tuple[object, Task, MagicMock]:
     """变体：task_store.get 返回真实 Task，验证 save 时落了哪些字段。"""
     fake_task = Task(
         id=TASK_ID,
@@ -642,7 +650,11 @@ def _make_executor_with_real_task(
     task_store.get = AsyncMock(return_value=fake_task)
     task_store.save = AsyncMock()
 
-    return Executor(va_client=va_client, redis=redis, task_store=task_store), fake_task, task_store
+    executor = make_refactor_executor(redis_json=redis.get_json.return_value)
+    executor._test_va_client.send_message = mock_send_message
+    executor._test_task_store.get = task_store.get
+    executor._test_task_store.save = task_store.save
+    return executor, fake_task, task_store
 
 
 @pytest.mark.asyncio
@@ -671,6 +683,43 @@ async def test_va_failed_event_marks_task_failed_and_clears_task_id(monkeypatch)
     assert saved_task.status.state == TASK_STATE_FAILED
     saved_meta = MessageToDict(saved_task.metadata)
     assert saved_meta.get("va_task_id", "") == ""
+
+
+@pytest.mark.asyncio
+async def test_va_error_event_enqueues_failed_status_with_message(monkeypatch):
+    """新契约：VA 发 FAILED 时北向 enqueue TaskStatusUpdateEvent(FAILED) 并带错误描述。
+
+    新契约下详细错误码留在 VA 侧日志，a2a 侧给通用错误描述（``VA 任务异常终止``）。
+    api.dispatch._extract_event_meta 会把 status.message.text 转为 interrupt_start.content。
+    """
+    va_events = [_va_failed()]
+    executor, _task, _task_store = _make_executor_with_real_task(va_events)
+
+    async def fake_agent_stream(**kwargs):
+        yield DelegateRequest(intent="查", task_description="查")
+
+    monkeypatch.setattr("orchestrator.executor.agent_stream", fake_agent_stream)
+
+    queue = EventQueue()
+    await executor.run_agent(
+        _make_turn_ctx(queue),
+        query="x",
+        original_body={},
+        cascade_result=None,
+    )
+
+    enqueued = _drain_queue(queue)
+    failed_events = [e for e in enqueued if _is_event_with_state(e, TASK_STATE_FAILED)]
+    assert len(failed_events) == 1, f"期望 1 个 FAILED 事件，实际 {len(failed_events)} 个"
+    fe = failed_events[0]
+    assert fe.status.message, "FAILED 事件必须带 status.message 让前端拿到错误描述"
+    text_chunks = [
+        p.text for p in fe.status.message.parts
+        if p.WhichOneof("content") == "text"
+    ]
+    assert any(t.strip() for t in text_chunks), (
+        f"FAILED 事件 message text 应非空，实际为 {text_chunks!r}"
+    )
 
 
 @pytest.mark.asyncio

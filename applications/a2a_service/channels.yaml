@@ -1,0 +1,10 @@
+default_route_key: mobile_bank
+default_channel: mobile_bank
+channels:
+  - name: mobile_bank
+    class: channels.mobile_bank_channel.MobileBankChannel
+routes:
+  - route_key: mobile_bank
+    prefix: /v1
+    path_template: /{project_id}/agents/{agent_id}/conversations/{conversation_id}
+    channel: mobile_bank

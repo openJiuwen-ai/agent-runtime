@@ -33,7 +33,7 @@ from tests.framework_parallel._helpers import (
 async def test_cancel_task_without_client_sets_token_only():
     executor = make_executor(sub_agent_client=None)
     await executor.cancel_task("conv-1")
-    token = executor._cancel_tokens.get("conv-1")
+    token = executor._test_remote_handler._cancel_tokens.get("conv-1")
     assert token is not None and token.is_set()
 
 
@@ -43,14 +43,15 @@ async def test_cancel_task_without_client_sets_token_only():
 async def test_cancel_task_propagates_to_each_child():
     client = FakeSubAgentClient()
     executor = make_executor(sub_agent_client=client)
-    executor._cancel_tokens["conv-1"] = asyncio.Event()
-    executor._child_task_ids["conv-1"] = {
+    handler = executor._test_remote_handler
+    handler._cancel_tokens["conv-1"] = asyncio.Event()
+    handler._child_task_ids["conv-1"] = {
         "A": {"task_id": "ta", "url": ""}, "B": {"task_id": "tb", "url": ""},
     }
 
     await executor.cancel_task("conv-1")
 
-    assert executor._cancel_tokens["conv-1"].is_set()
+    assert handler._cancel_tokens["conv-1"].is_set()
     assert client.cancel_task.await_count == 2
     sent_ids = {call.args[0].id for call in client.cancel_task.await_args_list}
     assert sent_ids == {"ta", "tb"}
@@ -60,8 +61,9 @@ async def test_cancel_task_best_effort_continues_on_error():
     client = FakeSubAgentClient()
     client.cancel_task = AsyncMock(side_effect=[RuntimeError("child A 已终态"), None])
     executor = make_executor(sub_agent_client=client)
-    executor._cancel_tokens["conv-1"] = asyncio.Event()
-    executor._child_task_ids["conv-1"] = {
+    handler = executor._test_remote_handler
+    handler._cancel_tokens["conv-1"] = asyncio.Event()
+    handler._child_task_ids["conv-1"] = {
         "A": {"task_id": "ta", "url": ""}, "B": {"task_id": "tb", "url": ""},
     }
 
@@ -76,7 +78,7 @@ async def test_cancel_task_best_effort_continues_on_error():
 async def test_cancel_sets_token_and_enqueues_canceled():
     executor = make_executor()
     token = asyncio.Event()
-    executor._cancel_tokens["sub-conv"] = token
+    executor._test_remote_handler._cancel_tokens["sub-conv"] = token
     context = SimpleNamespace(context_id="sub-conv", task_id="task-1", call_context=None)
     eq = EventQueue()
 

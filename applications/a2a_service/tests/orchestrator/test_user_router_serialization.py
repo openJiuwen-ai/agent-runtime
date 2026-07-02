@@ -24,7 +24,7 @@ from a2a.types.a2a_pb2 import (
 )
 from google.protobuf.struct_pb2 import Struct, Value
 
-from orchestrator.user_router import _extract_event_meta, _serialize_event
+from api.dispatch import _extract_answer_from_events, _extract_event_meta, _serialize_event
 
 
 AGENT_ID = "fcbcd0ce-73b0-4097-a0cb-6286341f88f6"
@@ -234,16 +234,10 @@ def test_serialize_spec_external_event_emits_frame():
 # ════════════════════════════════════════════════════════════════════
 
 
-def test_extract_completed_becomes_final_answer_end():
+def test_extract_completed_is_internal_control_status_not_display_frame():
     ev = _build_completed_status_event("本轮任务全部完成")
     meta = _extract_event_meta(ev)
-    assert meta == {
-        "kind": "agent",
-        "type": "final_answer_end",
-        "content": "本轮任务全部完成",
-        "data": {},
-        "plugin": "",
-    }
+    assert meta is None
 
 
 def test_extract_failed_with_message_becomes_interrupt_start():
@@ -398,14 +392,50 @@ def test_serialize_tool_end_preserves_plugin_name():
     assert inner["data"] == {}
 
 
-def test_serialize_completed_status_becomes_final_answer_end_frame():
+def test_serialize_completed_status_is_suppressed():
     ev = _build_completed_status_event("任务完成")
     payload = _serialize_event(
         ev, agent_id=AGENT_ID, conversation_id=CONV_ID, start_time=0.0,
     )
-    parsed = json.loads(payload)
-    assert parsed["custom_rsp_data"]["event"] == "final_answer_end"
-    assert parsed["custom_rsp_data"]["content"] == "任务完成"
+    assert payload is None
+
+
+def test_serialize_final_answer_chunk_then_completed_does_not_duplicate_final_answer():
+    events = [
+        _build_agent_artifact_event("final_answer_chunk", "报告"),
+        _build_agent_artifact_event("final_answer_end", ""),
+        _build_completed_status_event("报告"),
+    ]
+
+    payloads = [
+        _serialize_event(
+            event, agent_id=AGENT_ID, conversation_id=CONV_ID, start_time=0.0,
+        )
+        for event in events
+    ]
+    parsed = [json.loads(payload) for payload in payloads if payload is not None]
+
+    assert [frame["custom_rsp_data"]["event"] for frame in parsed] == [
+        "final_answer_chunk",
+        "final_answer_end",
+    ]
+    assert [frame["custom_rsp_data"]["content"] for frame in parsed] == ["报告", ""]
+
+
+def test_extract_answer_from_events_prefers_display_chunk_over_completed_status():
+    events = [
+        _build_agent_artifact_event("final_answer_chunk", "报告"),
+        _build_agent_artifact_event("final_answer_end", ""),
+        _build_completed_status_event("报告"),
+    ]
+
+    assert _extract_answer_from_events(events) == "报告"
+
+
+def test_extract_answer_from_events_falls_back_to_completed_status():
+    events = [_build_completed_status_event("兜底答案")]
+
+    assert _extract_answer_from_events(events) == "兜底答案"
 
 
 def test_serialize_failed_status_becomes_interrupt_start_frame():
@@ -436,15 +466,15 @@ def test_serialize_monotonic_elapsed():
     import time
 
     ev = _build_agent_artifact_event("todolist_start", "规划任务清单")
-    t0 = time.monotonic()
+    now = time.monotonic()
     p1 = _serialize_event(
-        ev, agent_id=AGENT_ID, conversation_id=CONV_ID, start_time=t0,
+        ev, agent_id=AGENT_ID, conversation_id=CONV_ID, start_time=now - 0.1,
     )
     # Windows ``time.monotonic`` 分辨率约 15.6 ms，sleep 必须充分跨过一个 tick，
     # 否则两次 elapsed 都可能落在同一 tick 边界上（均为 0.0），导致单调断言假阴性。
     time.sleep(0.05)
     p2 = _serialize_event(
-        ev, agent_id=AGENT_ID, conversation_id=CONV_ID, start_time=t0,
+        ev, agent_id=AGENT_ID, conversation_id=CONV_ID, start_time=now - 0.2,
     )
     e1 = json.loads(p1)["execution_time"]
     e2 = json.loads(p2)["execution_time"]

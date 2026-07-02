@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from google.protobuf.json_format import MessageToDict
 
-from orchestrator.user_router import _build_request
+from api.dispatch import _build_request
 
 
 CONV_ID = "conv-headers-1"

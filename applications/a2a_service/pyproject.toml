@@ -20,6 +20,8 @@ dependencies = [
 
     # 配置管理
     "pydantic-settings>=2.3",
+    # .env → os.environ 同步（代理变量需对 httpx 生效）
+    "python-dotenv>=1.0",
 
     # 日志
     "loguru>=0.7",

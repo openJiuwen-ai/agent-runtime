@@ -2,7 +2,7 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
 """
-user_router — 用户入口路由（Versatile 平台定制格式）。
+dispatch — 用户入口 HTTP 接线层（Versatile 平台定制格式）。
 
 暴露端点（URL 和参数格式与 Versatile 平台约定保持不变）：
   POST /v1/{project_id}/agents/{agent_id}/conversations/{conversation_id}
@@ -63,19 +63,17 @@ from common.logger import (
     to_logger,
     get_real_ip, Level, ResultEnum
 )
-from common.response_wrapper import (
-    wrap_agent_event,
-    wrap_sub_task_event,
-    wrap_workflow_event,
-)
+from channels.normalizer import EventNormalizer
+from channels.mobile_bank_channel import MobileBankChannel
+from channels.observability import log_channel_event, record_channel_format_error
 from config import get_settings
 from orchestrator.executor import Executor
 from orchestrator.sse_helpers import log_outbound_sse, next_sse_event
+from orchestrator.state import CONV_TASK_KEY
 
 router = APIRouter()
 
 _REQUEST_TTL = 1800
-_CONV_TASK_KEY = "session:{}:a2a_task_id"
 ERROR_CODE_RATE_LIMIT_EXCEEDED = "100001"
 ERROR_MSG_RATE_LIMIT_EXCEEDED = "系统超负载，请在稍后重试"
 DEFAULT_SESSION_MAX_REQUESTS = 1
@@ -315,50 +313,6 @@ async def _check_rate_limit(
         return True, None, None
 
 
-def _extract_inner_by_kind(inner: dict) -> dict:
-    """把 sub_task 信封内层（子节点原帧）按 kind 提取为 inner_meta。
-
-    复用与顶层 agent/workflow 相同的判别，额外处理框架合成的生命周期帧：
-      - agent 原帧（含 ``type`` 键）→ ``{kind:"agent", type, content, data, plugin}``
-      - 生命周期 node_start/node_end（``event`` 键）→ ``{kind:"lifecycle", data:<原帧>}``（原样透传）
-      - workflow VA 原生帧（``event`` + 嵌套 ``data`` dict）→ ``{kind:"workflow", type:<event>, data:<节点数据>}``
-
-    返回的 inner_meta 交由 ``wrap_sub_task_event`` 渲染为"标准单帧 custom_rsp_data"。
-    """
-    if not isinstance(inner, dict):
-        return {"kind": "lifecycle", "data": {}}
-
-    # agent 原帧：EDPAgent 事件 model_dump，含 type 键（与顶层 agent 分支同构）
-    if "type" in inner:
-        nested = inner.get("data")
-        if isinstance(nested, dict):
-            payload = nested
-        else:
-            payload = {
-                k: v for k, v in inner.items()
-                if k not in ("type", "content", "plugin", "data", "display")
-            }
-        return {
-            "kind": "agent",
-            "type": inner.get("type"),
-            "content": inner.get("content", "") or "",
-            "data": payload,
-            "plugin": inner.get("plugin", ""),
-            # display（北向 v1.3）贯穿级联：子 Agent think 帧的 display 与顶层一致
-            "display": inner.get("display"),
-        }
-
-    event_kind = inner.get("event")
-    # 框架合成的生命周期帧：原样透传（已是 {event, ...} wire 形态）
-    if event_kind in ("node_start", "node_end"):
-        return {"kind": "lifecycle", "data": inner}
-    # workflow VA 原生帧：{event, data:{...}}（message 等）
-    if isinstance(inner.get("data"), dict):
-        return {"kind": "workflow", "type": event_kind, "data": inner["data"]}
-    # 兜底：按生命周期原样透传，避免误判为 agent 丢失结构
-    return {"kind": "lifecycle", "data": inner}
-
-
 def _extract_event_meta(event) -> Optional[dict]:
     """从 A2A protobuf event 抽出 {kind, type, content, data}。
 
@@ -367,11 +321,13 @@ def _extract_event_meta(event) -> Optional[dict]:
     - agent 事件：TaskArtifactUpdateEvent，data part 带 ``type`` 键
       → {"kind": "agent", "type": <event_type>, "content": <text>, "data": <剩余>}
     - workflow 事件：TaskArtifactUpdateEvent，data part 形状为 ``{"event": <kind>, "data": <dict>}``
-      —— 新 VA（sidecar）经 data_proxy 文本帧下传，a2a 侧 Executor._extract_data_proxy_frames
-      （json.loads）还原后转发。
-      → {"kind": "workflow", "type": "<event>", "content": "", "data": <节点数据>}
-    - TaskStatusUpdateEvent(COMPLETED) 当作 final_answer_end 对待（agent 事件）
-    - 其他 TaskStatusUpdateEvent（如 FAILED）返回 None，不推送给前端
+      —— 由 VersatileAdapter 的 `_unwrap_upstream_frame` 解包后产出；
+      event == "end" 是上游流结束信号，返回 None 由 [DONE] 收尾。
+    - Completed status events are internal control frames and are not pushed.
+    - Failed status events are mapped to interrupt_start; other status events are skipped.
+    - TaskStatusUpdateEvent(COMPLETED) 是内部控制状态，不推送给前端；
+      前端通过 agent 展示帧 final_answer_end 感知回答结束。
+    - FAILED 映射为 interrupt_start，其余 TaskStatusUpdateEvent 不推送。
     """
     if isinstance(event, TaskArtifactUpdateEvent):
         text_content = ""
@@ -382,18 +338,6 @@ def _extract_event_meta(event) -> Optional[dict]:
                 text_content = part.text or ""
             elif kind == "data":
                 data_dict = MessageToDict(part.data)
-
-        # sub_task 信封分支（级联盖章）：在通用 agent/workflow 分支之前判别。
-        # SubTaskEvent 经 agent_adapter 序列化为 data 带 type="sub_task" 的 artifact。
-        # 把 sub_task_path/node_kind 提到顶层，内层 data（子节点原帧）按 kind 渲染。
-        if data_dict.get("type") == "sub_task":
-            inner_meta = _extract_inner_by_kind(data_dict.get("data") or {})
-            return {
-                "kind": "sub_task",
-                "sub_task_path": data_dict.get("sub_task_path") or [],
-                "node_kind": data_dict.get("node_kind") or "agent",
-                "inner": inner_meta,
-            }
 
         # workflow 事件：VersatileAdapter 解包后的 {event, data} 形状
         if "event" in data_dict and isinstance(data_dict.get("data"), dict):
@@ -416,23 +360,17 @@ def _extract_event_meta(event) -> Optional[dict]:
             # tool_* 事件的 plugin 字段要上浮到 custom_rsp_data.plugin，
             # 避免埋在 data 里再被外层的空串覆盖。
             plugin = data_dict.pop("plugin", "")
-            # display 字段上浮到 custom_rsp_data.display（北向接口 v1.3），
-            # 仅当 display 非 None 时才提取，保持向后兼容。
-            display = data_dict.pop("display", None)
             # 若事件自带 data 载荷（如 ToolEndEvent.data），直接作为 payload；
             # 否则剩余字段（id/title/status/args/progress 等）即 payload。
             nested = data_dict.pop("data", None)
             payload = nested if isinstance(nested, dict) else data_dict
-            meta: dict[str, Any] = {
+            return {
                 "kind": "agent",
                 "type": event_type,
                 "content": text_content,
                 "data": payload,
                 "plugin": plugin,
             }
-            if display is not None:
-                meta["display"] = display
-            return meta
 
         # 未知 artifact 形态，回退为 agent thought 兼容
         logger.debug(
@@ -448,19 +386,7 @@ def _extract_event_meta(event) -> Optional[dict]:
 
     if isinstance(event, TaskStatusUpdateEvent):
         if event.status and event.status.state == TASK_STATE_COMPLETED:
-            content = ""
-            if event.status.message:
-                for part in event.status.message.parts:
-                    if part.WhichOneof("content") == "text":
-                        content = part.text or ""
-                        break
-            return {
-                "kind": "agent",
-                "type": "final_answer_end",
-                "content": content,
-                "data": {},
-                "plugin": "",
-            }
+            return None
         # FAILED 事件映射为 interrupt_start agent 帧，对齐 AgentEngine：
         # 顶层 success=False + error=<msg>，custom_rsp_data.event=interrupt_start。
         # 错误描述放在 status.message.parts[0].text，由 Executor 在 VA 上游报错或
@@ -487,47 +413,82 @@ def _extract_event_meta(event) -> Optional[dict]:
     return None
 
 
-def _serialize_event(event, *, agent_id: str, conversation_id: str, start_time: float) -> Optional[str]:
+def _serialize_event(
+    event,
+    *,
+    agent_id: str,
+    conversation_id: str,
+    start_time: float,
+    channel=None,
+) -> Optional[str]:
     """将内部 A2A event 序列化为前端可见的 SSE JSON（已包装）。
 
     返回 None 表示该 event 不需要产出 SSE 帧（调用方应跳过）。
     """
-    meta = _extract_event_meta(event)
-    if meta is None:
+    normalized = EventNormalizer.normalize(event)
+    if normalized is None:
         return None
 
     elapsed = time.monotonic() - start_time
-    if meta["kind"] == "agent":
-        wrapped = wrap_agent_event(
-            event_type=meta["type"],
-            content=meta["content"],
-            data=meta["data"],
-            agent_id=agent_id,
-            conversation_id=conversation_id,
-            elapsed=elapsed,
-            plugin=meta.get("plugin", ""),
-            success=meta.get("success", True),
-            error=meta.get("error", ""),
-            display=meta.get("display"),
-        )
-    elif meta["kind"] == "sub_task":
-        wrapped = wrap_sub_task_event(
-            sub_task_path=meta["sub_task_path"],
-            node_kind=meta["node_kind"],
-            inner_meta=meta["inner"],
+    formatter = channel or MobileBankChannel()
+    try:
+        wrapped = formatter.format_event(
+            normalized,
             agent_id=agent_id,
             conversation_id=conversation_id,
             elapsed=elapsed,
         )
-    else:
-        wrapped = wrap_workflow_event(
-            event_kind=meta["type"],
-            data=meta["data"],
-            agent_id=agent_id,
+    except Exception as exc:
+        record_channel_format_error(
+            channel=getattr(formatter, "name", type(formatter).__name__),
+            event_type=str(normalized.get("type") or ""),
+            task_id=getattr(event, "task_id", ""),
             conversation_id=conversation_id,
-            elapsed=elapsed,
+            error=exc,
         )
+        return None
+    if wrapped is None:
+        return None
+    log_channel_event(
+        level=Level.DEBUG,
+        action="CHANNEL_SERIALIZE_EVENT",
+        channel=getattr(formatter, "name", type(formatter).__name__),
+        event_type=str(normalized.get("type") or ""),
+        task_id=getattr(event, "task_id", ""),
+        conversation_id=conversation_id,
+        payload={"agent_id": agent_id, "elapsed": elapsed},
+    )
     return json.dumps(wrapped, ensure_ascii=False)
+
+
+def _extract_answer_from_events(events: list[Any]) -> str:
+    final_answer_chunk = ""
+    final_answer_end = ""
+    completed_answer = ""
+
+    for event in events:
+        normalized = EventNormalizer.normalize(event)
+        if normalized:
+            event_type = normalized.get("type")
+            data = normalized.get("data") if isinstance(normalized.get("data"), dict) else {}
+            content = str(data.get("content") or "")
+            if event_type == "final_answer_chunk" and content:
+                final_answer_chunk = content
+            elif event_type == "final_answer_end" and content:
+                final_answer_end = content
+
+        is_completed_status = (
+            isinstance(event, TaskStatusUpdateEvent)
+            and event.status
+            and event.status.state == TASK_STATE_COMPLETED
+        )
+        if is_completed_status and event.status.message:
+            for part in event.status.message.parts:
+                if part.WhichOneof("content") == "text":
+                    completed_answer = part.text
+                    break
+
+    return final_answer_chunk or final_answer_end or completed_answer
 
 
 def _extract_query(body: dict) -> str:
@@ -597,7 +558,7 @@ def _is_flow_control_probe(user_query: str) -> bool:
 
 
 async def _ensure_task_mapping(redis, conversation_id: str) -> str:
-    conv_task_key = _CONV_TASK_KEY.format(conversation_id)
+    conv_task_key = CONV_TASK_KEY.format(conversation_id)
     task_id = await redis.get(conv_task_key)
     if task_id:
         return task_id
@@ -619,39 +580,64 @@ def _build_flow_control_probe_response(conversation_id: str, agent_id: str) -> d
 
 
 @router.post(
-    "/v1/{project_id}/agents/{agent_id}/conversations/{conversation_id}/cancel",
+    "/v1/{channel_path:path}/cancel",
     response_model=None,
 )
 async def cancel_task(
-    project_id: str,
-    agent_id: str,
-    conversation_id: str,
+    channel_path: str,
     request: Request,
 ) -> JSONResponse:
-    """整会话取消端点（对齐 TECH §4.2 API 级深度取消）。
+    adapter_registry = getattr(request.app.state, "adapter_registry", None)
+    route_spec = None
+    path_params: dict[str, str] = {}
+    base_path = request.url.path.removesuffix("/cancel")
+    if adapter_registry is not None:
+        route_spec, path_params = adapter_registry.match_route(base_path)
+    if route_spec is None:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={
+                "success": False,
+                "error": "channel_route_not_found",
+                "message": f"no channel route matched: {base_path}",
+            },
+        )
 
-    设置主 Executor 的取消令牌并经 A2A CancelTask 向各子 Agent 深度传播；
-    当前无子 Agent 调度（sub_agent_client=None）时仅设置令牌、行为安全。
-    """
+    conversation_id = str(path_params.get("conversation_id") or path_params.get("conv_id") or "")
+
     executor: Executor = request.app.state.executor
     await executor.cancel_task(conversation_id)
-    logger.info(f"[Router] cancel 请求：conv={conversation_id}, agent={agent_id}")
     return JSONResponse({"status": "cancel_requested"})
 
 
 @router.post(
-    "/v1/{project_id}/agents/{agent_id}/conversations/{conversation_id}",
+    "/v1/{channel_path:path}",
     response_model=None,
 )
 async def dispatch(
-    project_id: str,
-    agent_id: str,
-    conversation_id: str,
+    channel_path: str,
     request: Request,
 ) -> StreamingResponse | JSONResponse:
     traceid = str(uuid.uuid4())
     settings = get_settings()
     request_started_ms = int(time.time() * 1000)
+    adapter_registry = getattr(request.app.state, "adapter_registry", None)
+    route_spec = None
+    path_params: dict[str, str] = {}
+    if adapter_registry is not None:
+        route_spec, path_params = adapter_registry.match_route(request.url.path)
+    if route_spec is None:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={
+                "success": False,
+                "error": "channel_route_not_found",
+                "message": f"no channel route matched: {request.url.path}",
+            },
+        )
+    agent_id = str(path_params.get("agent_id") or "")
+    conversation_id = str(path_params.get("conversation_id") or path_params.get("conv_id") or "")
+
     # 在工具类中统一完成请求快照解析与公共字段提取
     http_request_tag_context = await build_http_request_tag_context(
         request=request,
@@ -748,19 +734,50 @@ async def dispatch(
         )
         return JSONResponse(status_code=400, content=response_content)
 
-    user_query = _extract_query(body)
-    stream_mode = bool(body.get("stream", True))
+    executor: Executor = request.app.state.executor
+    redis = request.app.state.redis
+    task_store = request.app.state.task_store
+    channel = route_spec.channel
+    event_queue = EventQueue()
+    headers = http_request_tag_context.request_headers
+    params = _extract_query_params(request)
+    try:
+        parsed_request = channel.parse_request(
+            body,
+            path_params=path_params,
+            headers=headers,
+            params=params,
+        )
+    except ValueError as e:
+        response_content = {
+            "success": False,
+            "error": "invalid_request",
+            "message": str(e),
+        }
+        return JSONResponse(status_code=400, content=response_content)
+
+    user_query = parsed_request.query
+    stream_mode = parsed_request.stream
+    agent_id = parsed_request.agent_id
+    conversation_id = parsed_request.conversation_id
+
+    log_channel_event(
+        action="CHANNEL_ROUTE_SELECTED",
+        channel=getattr(channel, "name", type(channel).__name__),
+        conversation_id=conversation_id,
+        payload={
+            "route_key": getattr(route_spec, "route_key", ""),
+            "prefix": getattr(route_spec, "prefix", ""),
+            "path_template": getattr(route_spec, "path_template", ""),
+            "request_path": request.url.path,
+            "agent_id": agent_id,
+        },
+    )
 
     logger.info(
         f"[Router] conv={conversation_id} stream={stream_mode} "
         f"query={user_query!r:.80} trace={traceid}"
     )
-
-    executor: Executor = request.app.state.executor
-    redis = request.app.state.redis
-    task_store = request.app.state.task_store
-    event_queue = EventQueue()
-    headers = http_request_tag_context.request_headers
 
     # 入口限流：在进入编排执行前统一拦截
     allowed, error_msg, error_code = await _check_rate_limit(
@@ -839,7 +856,6 @@ async def dispatch(
         )
 
     # 缓存首轮请求头、请求体和 URL query params，供 VA 委托调用/续轮恢复使用
-    params = _extract_query_params(request)
     cached = await redis.get_json(session_request_key(conversation_id))
     if cached is None:
         await redis.set_json(
@@ -904,7 +920,7 @@ async def dispatch(
 
     # ── Task 管理：conv_id → task_id 映射 ─────────────────────────────────
     call_context = ServerCallContext()
-    conv_task_key = _CONV_TASK_KEY.format(conversation_id)
+    conv_task_key = CONV_TASK_KEY.format(conversation_id)
     task_id = await redis.get(conv_task_key)
     current_task = None
 
@@ -941,9 +957,7 @@ async def dispatch(
                 f"[Router] 并发首轮，复用 task_id={task_id} for conv={conversation_id}"
             )
 
-    send_request = _build_request(
-        conversation_id, user_query, body, params, headers=headers
-    )
+    send_request = channel.build_message(parsed_request)
     ctx = RequestContext(
         call_context=call_context,
         request=send_request,
@@ -1000,6 +1014,7 @@ async def dispatch(
                                 agent_id=agent_id,
                                 conversation_id=conversation_id,
                                 start_time=turn_start,
+                                channel=channel,
                             )
                             # None 表示该事件被屏蔽或是流结束信号，不推送
                             if payload is None:
@@ -1091,21 +1106,7 @@ async def dispatch(
             break
     await run_task
 
-    def _is_completed_task_event(evt: Any) -> bool:
-        return (
-            isinstance(evt, TaskStatusUpdateEvent)
-            and evt.status
-            and evt.status.state == TASK_STATE_COMPLETED
-            and evt.status.message
-        )
-
-    answer = ""
-    for event in collected:
-        if _is_completed_task_event(event):
-            for part in event.status.message.parts:
-                if part.WhichOneof("content") == "text":
-                    answer = part.text
-                    break
+    answer = _extract_answer_from_events(collected)
 
     response_content = {"success": True, "answer": answer}
     duration_ms = int(time.time() * 1000) - request_started_ms

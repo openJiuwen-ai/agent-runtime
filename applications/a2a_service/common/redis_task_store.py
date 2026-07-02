@@ -51,3 +51,34 @@ class RedisTaskStore(TaskStore):
         self, params: ListTasksRequest, context: ServerCallContext
     ) -> ListTasksResponse:
         return ListTasksResponse()
+
+
+class ReadOnlyTaskStore(TaskStore):
+    """只读 TaskStore 包装器：读/删/列表委托给底层 store，save 为空操作。
+
+    用于 SDK DefaultRequestHandler，避免 SDK 的 TaskManager 对每个流式事件
+    都全量序列化 Task 写入 Redis（数千次 save 雪崩）。
+    Task 状态持久化由应用层 TaskStateManager 统一管理：
+    - create_task / update_task_status → save 到 Redis
+    - finalize_completed → save COMPLETED 到 Redis
+    SDK 仅在内存中维护 _current_task 处理事件流，artifacts 通过 SSE 实时透传上游，
+    无需持久化。
+    """
+
+    def __init__(self, inner: TaskStore) -> None:
+        self._inner = inner
+
+    async def save(self, task: Task, context: ServerCallContext) -> None:
+        # 空操作：SDK 的事件级 save 不写 Redis，由应用层 TaskStateManager 管理状态持久化
+        pass
+
+    async def get(self, task_id: str, context: ServerCallContext) -> Optional[Task]:
+        return await self._inner.get(task_id, context)
+
+    async def delete(self, task_id: str, context: ServerCallContext) -> None:
+        await self._inner.delete(task_id, context)
+
+    async def list(
+        self, params: ListTasksRequest, context: ServerCallContext
+    ) -> ListTasksResponse:
+        return await self._inner.list(params, context)

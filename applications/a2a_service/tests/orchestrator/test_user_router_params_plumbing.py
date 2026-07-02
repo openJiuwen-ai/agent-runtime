@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from google.protobuf.json_format import MessageToDict
 
-from orchestrator.user_router import _build_request, _extract_query_params
+from api.dispatch import _build_request, _extract_query_params
 
 
 CONV_ID = "conv-params-1"
