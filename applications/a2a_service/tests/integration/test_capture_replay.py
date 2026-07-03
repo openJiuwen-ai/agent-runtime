@@ -38,8 +38,10 @@ from a2a.types.a2a_pb2 import (
     TaskStatusUpdateEvent,
 )
 from google.protobuf.struct_pb2 import Struct, Value
+from orchestrator.executor import Executor, _TurnContext
+from api.dispatch import _serialize_event
 
-from agents.EDPAgent.events import (
+from .events import (
     ConversationEndEvent,
     ConversationStartEvent,
     DelegateRequest,
@@ -54,8 +56,6 @@ from agents.EDPAgent.events import (
     ToolStartEvent,
     ToolStatusEvent,
 )
-from orchestrator.executor import Executor, _TurnContext
-from api.dispatch import _serialize_event
 
 
 CAPTURE_AGENT_ID = "fcbcd0ce-73b0-4097-a0cb-6286341f88f6"

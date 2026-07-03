@@ -51,8 +51,12 @@ from a2a.types.a2a_pb2 import (
 )
 from google.protobuf.json_format import MessageToDict
 from google.protobuf.struct_pb2 import Struct, Value
+from config import get_settings
+from orchestrator.executor import _TurnContext
+from orchestrator.handlers.remote_agent_handler import _VaRequestPayload
+from tests.framework_parallel._helpers import make_executor as make_refactor_executor
 
-from agents.EDPAgent.events import (
+from .events import (
     ConversationEndEvent,
     ConversationStartEvent,
     DelegateRequest,
@@ -61,10 +65,6 @@ from agents.EDPAgent.events import (
     ToolEndEvent,
     ToolStatusEvent,
 )
-from config import get_settings
-from orchestrator.executor import _TurnContext
-from orchestrator.handlers.remote_agent_handler import _VaRequestPayload
-from tests.framework_parallel._helpers import make_executor as make_refactor_executor
 
 
 CONV_ID = "conv-delegate-1"

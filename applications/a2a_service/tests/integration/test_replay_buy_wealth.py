@@ -25,8 +25,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from a2a.server.events import EventQueue
 from google.protobuf.json_format import MessageToDict
+from orchestrator.executor import Executor, _TurnContext
+from api.dispatch import _serialize_event
 
-from agents.EDPAgent.events import (
+from .events import (
     ConversationEndEvent,
     ConversationStartEvent,
     FinalAnswerChunkEvent,
@@ -45,8 +47,6 @@ from agents.EDPAgent.events import (
     TodoStartEvent,
     TodoStatusEvent,
 )
-from orchestrator.executor import Executor, _TurnContext
-from api.dispatch import _serialize_event
 
 
 AGENT_ID = "fcbcd0ce-73b0-4097-a0cb-6286341f88f6"
