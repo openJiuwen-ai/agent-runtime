@@ -88,6 +88,8 @@ class WSServiceMessageChannel:
             connect_timeout: float = 30.0,
             additional_headers: Optional[Any] = None,
             verify_peer: Optional[Callable[[dict], bool]] = None,
+            ws_ping_interval: float = 20.0,
+            ws_ping_timeout: float = 20.0,
     ) -> None:
         self._fallback_port = int(target_port) if target_port is not None else None
         self._port = self._fallback_port or 0
@@ -120,6 +122,9 @@ class WSServiceMessageChannel:
         # 在途 request 流式结束: is_completed 时 set
         self._request_done: Dict[str, asyncio.Event] = {}
         self._last_service_id: str = ""
+        self._ws_ping_interval = ws_ping_interval
+        self._ws_ping_timeout = ws_ping_timeout
+
         logger.debug(
             "WSServiceMessageChannel: port=%s container=%s path=%s tls=%s",
             target_port,
@@ -219,7 +224,7 @@ class WSServiceMessageChannel:
                 raise RuntimeError("WSS 已关闭")
             if not self._ws_url:
                 raise RuntimeError("WebSocket URL 未设置")
-            logger.info("WSS 正在连接: %s", self._ws_url)
+            logger.info("WSS 正在连接: %s, ping_interval=%f, ping_timeout=%f", self._ws_url, self._ws_ping_interval, self._ws_ping_timeout)
             # dict 直接用；回调则每次连接现取一份（如刷新链路令牌：新 nonce/新签发时间）。
             hdrs = self._additional_headers
             if callable(hdrs):
@@ -228,8 +233,8 @@ class WSServiceMessageChannel:
                 websockets.connect(
                     self._ws_url,
                     open_timeout=self._connect_timeout,
-                    ping_interval=20.0,
-                    ping_timeout=20.0,
+                    ping_interval=self._ws_ping_interval,
+                    ping_timeout=self._ws_ping_timeout,
                     additional_headers=hdrs,
                 ),
                 timeout=self._connect_timeout,

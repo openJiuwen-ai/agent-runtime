@@ -172,17 +172,27 @@ class K8sServiceHandler:
             delete_grace_period: int = 30,
             delete_timeout: float = 120.0,
             delete_poll_interval: float = 1.0,
+            mount_type: Optional[str] = None,
+            pvc: Optional[str] = None,
             nfs_server: Optional[str] = None,  # NFS 服务器地址
             nfs_path: Optional[str] = None,  # NFS 共享路径
-            nfs_mount_path: Optional[str] = None,  # 容器内挂载路径
+            mount_path: Optional[str] = None,  # 容器内挂载路径
             mode: str = "product",  # 运行环境模式：支持 dev / product 两种值
             node_name: Optional[str] = None,  # 强制调度到指定节点
     ):
         if not containers:
             raise ValueError("containers must not be empty")
+
         ports = [int(c.port) for c in containers]
         if len(set(ports)) != len(ports):
             raise ValueError("container ports must be unique in one pod")
+
+        if mount_type == "nfs":
+            if not nfs_server or not nfs_path or not mount_path:
+                raise ValueError("nfs_server, nfs_path and mount_path are required when mount_type is 'nfs'")
+        elif mount_type == "pvc":
+            if not pvc:
+                raise ValueError("pvc is required when mount_type is 'pvc'")
 
         self._containers = list(containers)
         self._name_prefix = pod_name if pod_name else self._sanitize_prefix(name_prefix)
@@ -195,9 +205,11 @@ class K8sServiceHandler:
         self._delete_grace_period = int(delete_grace_period)
         self._delete_timeout = float(delete_timeout)
         self._delete_poll_interval = float(delete_poll_interval)
+        self._mount_type = mount_type
+        self._pvc = pvc
         self._nfs_server = nfs_server
         self._nfs_path = nfs_path
-        self._nfs_mount_path = nfs_mount_path
+        self._mount_path = mount_path
         self._mode = mode
         self._node_name = node_name
         self._pod_name: Optional[str] = None
@@ -222,17 +234,23 @@ class K8sServiceHandler:
         return "".join(secrets.choice(alphabet) for _ in range(length))
 
     @classmethod
-    def _build_nfs_volume_name(cls, container_name: str, idx: int) -> str:
+    def _build_nfs_volume_name(cls, name: str) -> str:
         # K8s volume 名需符合 DNS-1123 label：小写字母数字或 '-'，长度 <= 63
-        sanitized = cls._NAME_INVALID_CHARS.sub("-", (container_name or "").lower()).strip("-")
-        base = sanitized or f"c{idx}"
+        sanitized = cls._NAME_INVALID_CHARS.sub("-", (name or "").lower()).strip("-")
         # 预留 "nfs-" 前缀 4 字符，整体限制 63 字符
-        return f"nfs-{base[:59]}"
+        return f"nfs-{sanitized[:59]}"
 
     @classmethod
-    def _build_host_path_volume_name(cls, container_name: str, idx: int, mount_idx: int) -> str:
+    def _build_pvc_volume_name(cls, name: str) -> str:
+        # K8s volume 名需符合 DNS-1123 label：小写字母数字或 '-'，长度 <= 63
+        sanitized = cls._NAME_INVALID_CHARS.sub("-", (name or "").lower()).strip("-")
+        # 预留 "nfs-" 前缀 4 字符，整体限制 63 字符
+        return f"pvc-{sanitized[:59]}"
+
+    @classmethod
+    def _build_host_path_volume_name(cls, name: str, idx: int, mount_idx: int) -> str:
         # 预留 "hp-" 前缀和索引后缀，避免同一 Pod 内多容器、多挂载重名。
-        sanitized = cls._NAME_INVALID_CHARS.sub("-", (container_name or "").lower()).strip("-")
+        sanitized = cls._NAME_INVALID_CHARS.sub("-", (name or "").lower()).strip("-")
         base = sanitized or f"c{idx}"
         suffix = f"-{idx}-{mount_idx}"
         return f"hp-{base[: 63 - len('hp-') - len(suffix)]}{suffix}"
@@ -345,28 +363,40 @@ class K8sServiceHandler:
 
         annotations: Dict[str, str] = {}
         volumes: List[client.V1Volume] = []
-        nfs_enabled = bool(self._nfs_server and self._nfs_path and self._nfs_mount_path)
+
+        if self._mount_type == "nfs":
+            pod_volume_name = self._build_nfs_volume_name(pod_name)
+            volumes.append(
+                client.V1Volume(
+                    name=pod_volume_name,
+                    nfs=client.V1NFSVolumeSource(
+                        server=self._nfs_server,
+                        path=self._nfs_path,
+                    ),
+                )
+            )
+        elif self._mount_type == "pvc":
+            pod_volume_name = self._build_pvc_volume_name(pod_name)
+            volumes.append(
+                client.V1Volume(
+                    name=pod_volume_name,
+                    persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(
+                        claim_name=self._pvc,
+                        read_only=False,
+                    )
+                )
+            )
 
         pod_containers: List[client.V1Container] = []
         for idx, spec in enumerate(self._containers):
             env_list = [client.V1EnvVar(name=k, value=str(v)) for k, v in spec.env_vars.items()]
 
             container_volume_mounts: List[client.V1VolumeMount] = []
-            if nfs_enabled:
-                nfs_volume_name = self._build_nfs_volume_name(spec.name, idx)
-                volumes.append(
-                    client.V1Volume(
-                        name=nfs_volume_name,
-                        nfs=client.V1NFSVolumeSource(
-                            server=self._nfs_server,
-                            path=self._nfs_path,
-                        ),
-                    )
-                )
+            if self._mount_type == "nfs" or self._mount_type == "pvc":
                 container_volume_mounts.append(
                     client.V1VolumeMount(
-                        name=nfs_volume_name,
-                        mount_path=self._nfs_mount_path,
+                        name=pod_volume_name,
+                        mount_path=self._mount_path,
                     )
                 )
 
