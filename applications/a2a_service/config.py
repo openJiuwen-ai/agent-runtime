@@ -70,6 +70,18 @@ class Settings(BaseSettings):
     fastapi_debug: Optional[bool] = None
     fastapi_workers: Optional[int] = None
 
+    # ── Runtime DB（DB 权威 + Redis 缓存）──────────────────────────────────
+    # 开关：true=启用DB持久化（先写DB再写Redis，Redis miss时回源DB）；false=纯Redis模式（不连DB）
+    runtime_db_enabled: bool = False
+    # 禁用DB时以下字段允许留空，启用DB时在 validator 中校验
+    runtime_db_type: Optional[str] = None
+    runtime_db_host: Optional[str] = None
+    runtime_db_port: Optional[str] = None
+    runtime_db_name: Optional[str] = None
+    runtime_db_user: Optional[str] = None
+    runtime_db_password: Optional[str] = None
+    runtime_db_sqlite_path: Optional[str] = None
+
     # ── 日志 ────────────────────────────────────────────────────────────────
     log_level: Optional[str] = None
     log_dir: Optional[str] = None

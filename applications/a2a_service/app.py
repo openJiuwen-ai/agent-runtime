@@ -43,7 +43,9 @@ from orchestrator.executor import Executor
 from orchestrator.route import RouteDispatcher
 from orchestrator.state import TaskStateManager
 from tools.simulate_router.simulate import router as simulate_router
-
+from openjiuwen_runtime.foundation.state.data_store_factory import build_runtime_state_store_and_db_handler
+from openjiuwen_runtime.foundation.state.kv_adapter import KvAdapter
+from openjiuwen_runtime.foundation.state.task_store_adapter import TaskStoreAdapter
 
 def _load_env_to_environ() -> None:
     # pydantic-settings 读 .env 只填充 Settings 对象，不写回 os.environ；
@@ -428,11 +430,36 @@ async def lifespan(fastapi_app: FastAPI):
     settings = get_settings()
     redis = RedisClient()
     http_client: Optional[httpx.AsyncClient] = None
+    db_handler = None
     bootstrap = _BootstrapCoordinator(settings=settings, redis=redis)
 
     try:
         await redis.connect(settings.redis_url)
         await bootstrap.run()
+
+        session_ttl = settings.redis_session_ttl or _TTL
+        data_store = None
+
+        if settings.runtime_db_enabled:
+            data_store, db_handler = await build_runtime_state_store_and_db_handler(
+                settings=settings,
+                cache_store=redis,
+            )
+            task_kv = KvAdapter(data_store, namespace="task", default_ttl_seconds=session_ttl)
+            session_task_kv = KvAdapter(data_store, namespace="session_task", default_ttl_seconds=session_ttl)
+            session_request_kv = KvAdapter(data_store, namespace="session_request", default_ttl_seconds=session_ttl)
+            logger.info(
+                "[A2AService] KvAdapter 初始化完成：namespace=task/session_task/session_request, "
+                "ttl={}s, backend=CacheBackedDataStore(DB权威+Redis缓存)",
+                session_ttl,
+            )
+        else:
+            session_task_kv = None
+            session_request_kv = None
+            db_handler = None
+            logger.info(
+                "[A2AService] DB持久化已禁用（runtime_db_enabled=false），使用纯Redis模式",
+            )
 
         await initialize()
         logger.info("[A2AService] Agent 初始化完成")
@@ -450,7 +477,12 @@ async def lifespan(fastapi_app: FastAPI):
         # 并行子 Agent 寻址（P-006）：url 由 Agent 自管、随派发请求下传，框架不再从配置读取，
         # 也不在启动期拉取子 Agent AgentCard。改为把 factory 注入 Executor，由其按 spec.url
         # 懒 create_from_url + 缓存（每 url 一个 client）。某子 Agent 不可达只降级该实体。
-        task_store = RedisTaskStore(redis, ttl=settings.redis_session_ttl or _TTL)
+        if settings.runtime_db_enabled:
+            task_store = TaskStoreAdapter(task_kv)
+            logger.info("[A2AService] TaskStoreAdapter 初始化完成：底层=KvAdapter(task) → CacheBackedDataStore")
+        else:
+            task_store = RedisTaskStore(redis, ttl=session_ttl)
+            logger.info("[A2AService] RedisTaskStore 初始化完成：纯Redis模式")
         state_manager = TaskStateManager(task_store)
         dpa_card = _build_dpa_card()
 
@@ -474,12 +506,15 @@ async def lifespan(fastapi_app: FastAPI):
             max_call_depth=settings.max_call_depth,
             route_dispatcher=route_dispatcher,
             local_agent_name=dpa_card.name,
+            session_request_kv=session_request_kv,
         )
 
         executor = Executor(
             redis=redis,
             route_dispatcher=route_dispatcher,
             state_manager=state_manager,
+            session_task_kv=session_task_kv,
+            session_request_kv=session_request_kv,
         )
 
         # SDK DefaultRequestHandler 的 TaskManager 对每个流式事件都调用 task_store.save()，
@@ -493,7 +528,11 @@ async def lifespan(fastapi_app: FastAPI):
         )
 
         fastapi_app.state.redis = redis
+        fastapi_app.state.db_handler = db_handler
+        fastapi_app.state.data_store = data_store
         fastapi_app.state.task_store = task_store
+        fastapi_app.state.session_task_kv = session_task_kv
+        fastapi_app.state.session_request_kv = session_request_kv
         fastapi_app.state.executor = executor
         fastapi_app.state.adapter_registry = AdapterRegistry.from_yaml(
             os.path.join(os.path.dirname(__file__), "channels.yaml")
@@ -520,6 +559,11 @@ async def lifespan(fastapi_app: FastAPI):
         await bootstrap.close()
         if http_client:
             await http_client.aclose()
+        if db_handler:
+            try:
+                await db_handler.disconnect()
+            except Exception as e:
+                logger.warning(f"[A2AService] DB关闭异常: {e}")
         await redis.disconnect()
         try:
             from openjiuwen.core.runner import Runner

@@ -179,11 +179,13 @@ class RemoteAgentHandler:
         max_parallel_workflows_per_agent: int = 3,
         workflow_timeout_seconds: int = 900,
         max_call_depth: int = 3,
+        session_request_kv: object | None = None,
     ):
         self._va_client = va_client
         self._redis = redis
         self._state_manager = state_manager
         self._client_factory = client_factory
+        self._session_request_kv = session_request_kv
         self._sub_agent_clients: dict[str, Client] = {}
         self.max_concurrent_sub_agents = max_concurrent_sub_agents
         self.sub_agent_timeout_seconds = sub_agent_timeout_seconds

@@ -88,9 +88,13 @@ class Executor(AgentExecutor):
         task_store: object | None = None,
         sub_agent_client: object | None = None,
         client_factory: object | None = None,
+        session_task_kv: object | None = None,
+        session_request_kv: object | None = None,
         **handler_limits: object,
     ) -> None:
         self._redis = redis
+        self._session_task_kv = session_task_kv
+        self._session_request_kv = session_request_kv
         self._remote_handler = None
         if route_dispatcher is None or state_manager is None:
             from orchestrator.handlers.remote_agent_handler import RemoteAgentHandler
@@ -409,15 +413,34 @@ class Executor(AgentExecutor):
         existing = await self._redis.get_json(session_request_key(conv_id))
         if existing is not None:
             return
+        # DB回源：Redis未命中时尝试从DB恢复首轮请求缓存
+        if self._session_request_kv is not None:
+            try:
+                db_record = await self._session_request_kv.get(conv_id)
+                if db_record is not None and isinstance(db_record, dict):
+                    await self._redis.set_json(
+                        session_request_key(conv_id),
+                        db_record,
+                        ex=_TTL,
+                    )
+                    return
+            except Exception as e:
+                logger.warning(f"[Executor] session_request DB回源失败: {e}")
+        session_data = {
+            "headers": session_ctx.get("headers", {}),
+            "trace_id": session_ctx.get("trace_id", ""),
+            "agent_id": getattr(get_settings(), "dpa_agent_id", "") or "",
+            "params": session_ctx.get("params", {}),
+            "body": session_ctx.get("body", {}),
+        }
+        if self._session_request_kv is not None:
+            try:
+                await self._session_request_kv.put(conv_id, session_data)
+            except Exception as e:
+                logger.warning(f"[Executor] session_request DB写入失败: {e}")
         await self._redis.set_json(
             session_request_key(conv_id),
-            {
-                "headers": session_ctx.get("headers", {}),
-                "trace_id": session_ctx.get("trace_id", ""),
-                "agent_id": getattr(get_settings(), "dpa_agent_id", "") or "",
-                "params": session_ctx.get("params", {}),
-                "body": session_ctx.get("body", {}),
-            },
+            session_data,
             ex=_TTL,
         )
         logger.info(f"[Executor] sub-session context initialized: conv={conv_id}")
