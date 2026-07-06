@@ -25,7 +25,7 @@ _FOUNDATION_ROOT = os.path.normpath(
     os.path.join(os.path.dirname(__file__), "..", "..")
 )
 if _FOUNDATION_ROOT not in sys.path:
-    sys.path.insert(0, _FOUNDATION_ROOT)
+    sys.path.append(_FOUNDATION_ROOT)
 
 # mock a2a 包，避免 foundation 层依赖应用层 a2a 导致 ImportError
 _a2a_pkgs = [
