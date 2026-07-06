@@ -47,6 +47,7 @@ from openjiuwen_runtime.foundation.state.data_store_factory import build_runtime
 from openjiuwen_runtime.foundation.state.kv_adapter import KvAdapter
 from openjiuwen_runtime.foundation.state.task_store_adapter import TaskStoreAdapter
 
+
 def _load_env_to_environ() -> None:
     # pydantic-settings 读 .env 只填充 Settings 对象，不写回 os.environ；
     # 而 httpx(trust_env=True) 与本模块的 NO_PROXY 合并逻辑都读 os.environ。

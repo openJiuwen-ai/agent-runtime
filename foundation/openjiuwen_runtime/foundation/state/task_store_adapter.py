@@ -13,6 +13,7 @@ from a2a.server.tasks.task_store import TaskStore
 from a2a.types.a2a_pb2 import ListTasksRequest, ListTasksResponse, Task
 from google.protobuf.json_format import ParseDict
 from google.protobuf.struct_pb2 import Struct
+from loguru import logger
 
 from .kv_adapter import KvAdapter
 
@@ -41,8 +42,8 @@ class TaskStoreAdapter(TaskStore):
             try:
                 from google.protobuf.json_format import MessageToDict
                 meta_dict = MessageToDict(task.metadata)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"[TaskStoreAdapter] MessageToDict failed: {e}")
             meta_dict["source_agent"] = self._source_agent
             new_meta = Struct()
             new_meta.update(meta_dict)

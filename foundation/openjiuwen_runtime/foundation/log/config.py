@@ -135,7 +135,7 @@ def setup_logging(
         resolved_log_file = _pick_log_file_override(log_file)
     else:
         logging.basicConfig(
-            level=logging.INFO,
+            level=logging.DEBUG,
             format=_STANDARD_LOG_FORMAT,
             datefmt=_STANDARD_LOG_DATEFMT,
         )
