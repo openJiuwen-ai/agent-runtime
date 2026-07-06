@@ -94,7 +94,6 @@ class DbDataStore(DataStore):
         now = datetime.utcnow()
         expire_at = now + timedelta(seconds=ttl_seconds) if ttl_seconds else None
         filters = self._filters(namespace, key)
-        existing = await self._db.get(self._table, filters)
         logger.debug(
             "[DbDataStore] write_begin namespace=%s key=%s ttl=%s expire_at=%s",
             namespace,
@@ -103,7 +102,7 @@ class DbDataStore(DataStore):
             expire_at,
         )
 
-        if existing is None:
+        try:
             await self._db.create(
                 self._table,
                 {
@@ -118,7 +117,10 @@ class DbDataStore(DataStore):
             )
             logger.debug("[DbDataStore] write_insert namespace=%s key=%s", namespace, key)
             return
+        except Exception as e:
+            logger.debug("[DbDataStore] create_failed fallback to update: %s", e)
 
+        existing = await self._db.get(self._table, filters)
         current = existing.to_dict() if hasattr(existing, "to_dict") else {}
         await self._db.update(
             self._table,

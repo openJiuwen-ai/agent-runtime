@@ -1018,6 +1018,12 @@ async def dispatch(
         else:
             # 并发请求已抢先创建，读取其写入的 task_id，复用同一 Task
             task_id = await redis.get(conv_task_key)
+            # 用 Redis 的 task_id 修正 DB，消除并发首轮产生的孤儿数据
+            if task_id and session_task_kv is not None:
+                try:
+                    await session_task_kv.put(conversation_id, {"task_id": task_id})
+                except Exception as e:
+                    logger.warning(f"[Router] session_task DB修正失败(并发首轮): {e}")
             current_task = (
                 await task_store.get(task_id, call_context) if task_id else None
             )
