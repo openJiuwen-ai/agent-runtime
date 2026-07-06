@@ -159,6 +159,10 @@ class WireIRequest(IRequest):
     def session_id(self) -> Optional[str]:
         return self._opt("session_id")
 
+    @property
+    def channel_id(self) -> str:
+        return self._opt("channel_id") or ""
+
 
 @dataclass(frozen=True)
 class SessionSpec:

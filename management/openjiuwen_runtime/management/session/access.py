@@ -58,6 +58,12 @@ class _AutoIdRequest(IRequest):
         return self._base.session_id
 
     @property
+    def channel_id(self) -> str:
+        # IRequest 契约不强制 channel_id；_base 可能有（如 AgentRequest）也可能没有。
+        # 用 getattr 兜底，与 SessionRequest.channel_id 的反射风格一致，避免 AttributeError。
+        return str(getattr(self._base, "channel_id", "") or "")
+
+    @property
     def wire_dict(self) -> Any:
         # 让 ws_client_channel._to_jsonable 能拿到含 request_id 的上行字典；
         # 若原对象没有 wire_dict，返回 None 走默认序列化分支。

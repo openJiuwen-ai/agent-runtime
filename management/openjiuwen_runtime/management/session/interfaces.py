@@ -98,6 +98,16 @@ class ISessionRequest(PriorityMessage):
 
     @property
     @abstractmethod
+    def channel_id(self) -> str:
+        """通道 ID，用于错误响应回带（参考 AgentServer 的 request.channel_id 闭环透传）。
+
+        各实现应从其底层请求对象（如 AgentRequest.channel_id / E2AEnvelope.channel）取出，
+        缺失时返回空字符串。避免 _fail 通过 raw_msg 猜测形态取值。
+        """
+        pass
+
+    @property
+    @abstractmethod
     def raw_msg(self) -> Any:
         pass
 

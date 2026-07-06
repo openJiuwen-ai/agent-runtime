@@ -49,6 +49,11 @@ class SessionRequest(ISessionRequest):
         return self._raw
 
     @property
+    def channel_id(self) -> str:
+        # 兼容 IRequest 子类（如 AgentRequest 有 channel_id 属性）；缺失时回退空串
+        return str(getattr(self._raw, "channel_id", "") or "")
+
+    @property
     def service_template(self) -> Optional[dict]:
         return self._service_template
 

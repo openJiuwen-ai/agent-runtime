@@ -1153,17 +1153,11 @@ class ServiceManager(IServiceManager):
         # 错误响应必须符合上游 wire_codec.parse_agent_server_wire_chunk 的 legacy chunk shape
         # (request_id + channel_id + is_complete + payload, 且无 ok), 否则上游抛
         # ValueError: unrecognized wire shape, 导致前端收不到错误信息。
-        # request_id 是 WSS 多路复用硬条件, 缺失会被 dispatch_inbound_chunk 丢弃。
-        # channel_id 不在 IRequest 契约内, 兼容两种实现: 顶层属性 或 wire_dict 字段。
+        # channel_id 直接取自 ISessionRequest.channel_id（与 AgentServer 的 request.channel_id 同源），
+        # 不再通过 raw_msg 猜测形态（_SessionRequest.raw_msg 返回 JSON 字符串会取不到）。
         sreq = w.session_request
         rid = sreq.request_id or ""
-        raw_msg = sreq.raw_msg
-        channel_id = getattr(raw_msg, "channel_id", None)
-        if channel_id is None:
-            wire_dict = getattr(raw_msg, "wire_dict", None)
-            if isinstance(wire_dict, dict):
-                channel_id = wire_dict.get("channel_id")
-        channel_id = str(channel_id) if channel_id is not None else ""
+        channel_id = sreq.channel_id
         await w.response_queue.put(
             {
                 "request_id": rid,

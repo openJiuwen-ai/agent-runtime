@@ -192,6 +192,10 @@ class WireIRequest(IRequest):
     def session_id(self) -> Optional[str]:
         return self._opt("session_id")
 
+    @property
+    def channel_id(self) -> str:
+        return self._opt("channel_id") or ""
+
 
 def _parse_env(pairs: List[str]) -> dict[str, str]:
     out: dict[str, str] = {}
