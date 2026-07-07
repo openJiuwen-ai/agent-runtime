@@ -71,6 +71,10 @@ if "agents.EDPAgent" not in sys.modules and importlib.util.find_spec("agents.EDP
             yield  # pragma: no cover
         return
 
+    async def _initialize_stub(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
     edp_module.agent_stream = _agent_stream_stub  # type: ignore[attr-defined]
+    edp_module.initialize = _initialize_stub  # type: ignore[attr-defined]
     sys.modules["agents.EDPAgent"] = edp_module
     setattr(pkg_agents, "EDPAgent", edp_module)
