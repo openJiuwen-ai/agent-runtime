@@ -28,6 +28,12 @@ dependencies = [
 
     # 配置加解密（common.crypto）
     "pycryptodome>=3.20.0",
+
+    # protobuf（common.task_store_adapter 序列化 A2A Task）
+    "protobuf>=5.29.5",
+
+    # SQLAlchemy（common.data_store_factory 构建 DB handler）
+    "sqlalchemy[asyncio]>=2.0.0",
 ]
 
 [project.optional-dependencies]

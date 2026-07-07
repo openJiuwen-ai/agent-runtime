@@ -43,9 +43,9 @@ from orchestrator.executor import Executor
 from orchestrator.route import RouteDispatcher
 from orchestrator.state import TaskStateManager
 from tools.simulate_router.simulate import router as simulate_router
-from openjiuwen_runtime.foundation.state.data_store_factory import build_runtime_state_store_and_db_handler
-from openjiuwen_runtime.foundation.state.kv_adapter import KvAdapter
-from openjiuwen_runtime.foundation.state.task_store_adapter import TaskStoreAdapter
+from common.data_store_factory import build_runtime_state_store_and_db_handler
+from common.kv_adapter import KvAdapter
+from common.task_store_adapter import TaskStoreAdapter
 
 
 def _load_env_to_environ() -> None:

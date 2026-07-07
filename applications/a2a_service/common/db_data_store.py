@@ -7,7 +7,7 @@ import json
 from datetime import datetime, timedelta
 from typing import Any, Optional, Protocol
 
-from ..log import get_logger
+from openjiuwen_runtime.foundation.log import get_logger
 from .data_store import DataRecord, DataStore
 
 logger = get_logger(__name__)

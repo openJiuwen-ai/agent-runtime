@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from ..log import get_logger
+from openjiuwen_runtime.foundation.log import get_logger
 from .data_store import DataRecord, DataStore
 
 logger = get_logger(__name__)

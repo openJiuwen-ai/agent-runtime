@@ -16,7 +16,8 @@ from unittest.mock import MagicMock
 class _OpenJiuwenStubFinder(importlib.abc.MetaPathFinder, importlib.abc.Loader):
     def find_spec(self, fullname, path=None, target=None):  # noqa: ARG002
         if fullname != "openjiuwen" and not fullname.startswith("openjiuwen."):
-            return None
+            if fullname != "openjiuwen_runtime" and not fullname.startswith("openjiuwen_runtime."):
+                return None
         if importlib.machinery.PathFinder.find_spec(fullname, path) is not None:
             return None
         return importlib.machinery.ModuleSpec(fullname, self, is_package=True)
@@ -71,10 +72,5 @@ if "agents.EDPAgent" not in sys.modules and importlib.util.find_spec("agents.EDP
         return
 
     edp_module.agent_stream = _agent_stream_stub  # type: ignore[attr-defined]
-
-    async def _initialize_stub(*_args: Any, **_kwargs: Any) -> None:
-        return None
-
-    edp_module.initialize = _initialize_stub  # type: ignore[attr-defined]
     sys.modules["agents.EDPAgent"] = edp_module
     setattr(pkg_agents, "EDPAgent", edp_module)

@@ -12,39 +12,15 @@
 
 from __future__ import annotations
 
-import os
-import sys
-import types
 import unittest
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Optional
 
-# 将 foundation 根目录加入 sys.path
-_FOUNDATION_ROOT = os.path.normpath(
-    os.path.join(os.path.dirname(__file__), "..", "..")
-)
-if _FOUNDATION_ROOT not in sys.path:
-    sys.path.append(_FOUNDATION_ROOT)
-
-# mock a2a 包，避免 foundation 层依赖应用层 a2a 导致 ImportError
-_a2a_pkgs = [
-    "a2a", "a2a.server", "a2a.server.context", "a2a.server.tasks",
-    "a2a.server.tasks.task_store", "a2a.types", "a2a.types.a2a_pb2",
-]
-for _pkg in _a2a_pkgs:
-    if _pkg not in sys.modules:
-        sys.modules[_pkg] = types.ModuleType(_pkg)
-sys.modules["a2a.server.context"].ServerCallContext = type("ServerCallContext", (), {})
-sys.modules["a2a.server.tasks.task_store"].TaskStore = type("TaskStore", (), {})
-sys.modules["a2a.types.a2a_pb2"].ListTasksRequest = type("ListTasksRequest", (), {})
-sys.modules["a2a.types.a2a_pb2"].ListTasksResponse = type("ListTasksResponse", (), {})
-sys.modules["a2a.types.a2a_pb2"].Task = type("Task", (), {})
-
-from openjiuwen_runtime.foundation.state.data_store import DataRecord  # noqa: E402
-from openjiuwen_runtime.foundation.state.db_data_store import DbDataStore  # noqa: E402
-from openjiuwen_runtime.foundation.state.cache_backed_data_store import CacheBackedDataStore  # noqa: E402
-from openjiuwen_runtime.foundation.state.kv_adapter import KvAdapter  # noqa: E402
+from common.data_store import DataRecord
+from common.db_data_store import DbDataStore
+from common.cache_backed_data_store import CacheBackedDataStore
+from common.kv_adapter import KvAdapter
 
 
 # ---------------------------------------------------------------------------
