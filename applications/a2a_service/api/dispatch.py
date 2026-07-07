@@ -557,13 +557,32 @@ def _is_flow_control_probe(user_query: str) -> bool:
     return user_query.startswith(FLOW_CONTROL_TEST_QUERY_PREFIX)
 
 
-async def _ensure_task_mapping(redis, conversation_id: str) -> str:
+async def _ensure_task_mapping(redis, conversation_id: str, session_task_kv=None) -> str:
     conv_task_key = CONV_TASK_KEY.format(conversation_id)
     task_id = await redis.get(conv_task_key)
     if task_id:
         return task_id
 
+    # DB回源：Redis未命中时尝试从DB恢复task_id
+    if session_task_kv is not None:
+        try:
+            db_record = await session_task_kv.get(conversation_id)
+            if db_record is not None and isinstance(db_record, dict):
+                db_task_id = db_record.get("task_id")
+                if db_task_id:
+                    was_set = await redis.set_nx(conv_task_key, db_task_id, ex=_REQUEST_TTL)
+                    if was_set:
+                        return db_task_id
+                    return await redis.get(conv_task_key) or db_task_id
+        except Exception as e:
+            logger.warning(f"[Router] _ensure_task_mapping DB回源失败: {e}")
+
     new_task_id = str(uuid.uuid4())
+    if session_task_kv is not None:
+        try:
+            await session_task_kv.put(conversation_id, {"task_id": new_task_id})
+        except Exception as e:
+            logger.warning(f"[Router] _ensure_task_mapping DB写入失败: {e}")
     was_set = await redis.set_nx(conv_task_key, new_task_id, ex=_REQUEST_TTL)
     if was_set:
         return new_task_id
@@ -858,14 +877,36 @@ async def dispatch(
     # 缓存首轮请求头、请求体和 URL query params，供 VA 委托调用/续轮恢复使用
     cached = await redis.get_json(session_request_key(conversation_id))
     if cached is None:
+        session_request_kv = getattr(request.app.state, "session_request_kv", None)
+        # DB回源：Redis未命中时尝试从DB恢复首轮请求缓存
+        if session_request_kv is not None:
+            try:
+                db_record = await session_request_kv.get(conversation_id)
+                if db_record is not None and isinstance(db_record, dict):
+                    cached = db_record
+                    await redis.set_json(
+                        session_request_key(conversation_id),
+                        db_record,
+                        ex=_REQUEST_TTL,
+                    )
+            except Exception as e:
+                logger.warning(f"[Router] session_request DB回源失败: {e}")
+    if cached is None:
+        session_data = {"headers": headers, "body": body, "params": params, "trace_id": traceid, "agent_id": agent_id}
+        if session_request_kv is not None:
+            try:
+                await session_request_kv.put(conversation_id, session_data)
+            except Exception as e:
+                logger.warning(f"[Router] session_request DB写入失败: {e}")
         await redis.set_json(
             session_request_key(conversation_id),
-            {"headers": headers, "body": body, "params": params, "trace_id": traceid, "agent_id": agent_id},
+            session_data,
             ex=_REQUEST_TTL,
         )
 
     if _is_flow_control_probe(user_query):
-        task_id = await _ensure_task_mapping(redis, conversation_id)
+        _session_task_kv = getattr(request.app.state, "session_task_kv", None)
+        task_id = await _ensure_task_mapping(redis, conversation_id, _session_task_kv)
         probe_response = _build_flow_control_probe_response(conversation_id, agent_id)
         logger.info(
             f"[Router] flow-control probe fast-path: conv={conversation_id}, task_id={task_id}, trace={traceid}"
@@ -923,12 +964,34 @@ async def dispatch(
     conv_task_key = CONV_TASK_KEY.format(conversation_id)
     task_id = await redis.get(conv_task_key)
     current_task = None
+    session_task_kv = getattr(request.app.state, "session_task_kv", None)
+
+    # DB回源：Redis未命中时尝试从DB恢复task_id
+    if task_id is None and session_task_kv is not None:
+        try:
+            db_record = await session_task_kv.get(conversation_id)
+            if db_record is not None and isinstance(db_record, dict):
+                db_task_id = db_record.get("task_id")
+                if db_task_id:
+                    was_set = await redis.set_nx(conv_task_key, db_task_id, ex=_REQUEST_TTL)
+                    if was_set:
+                        task_id = db_task_id
+                    else:
+                        task_id = await redis.get(conv_task_key) or db_task_id
+        except Exception as e:
+            logger.warning(f"[Router] session_task DB回源失败: {e}")
 
     if task_id:
         current_task = await task_store.get(task_id, call_context)
         # 上轮已完成 → 原子重置：先删旧 key，再 SET NX；若并发请求抢先，则沿用对方写入的 task_id
         if current_task and current_task.status.state == TASK_STATE_COMPLETED:
             new_task_id = str(uuid.uuid4())
+            if session_task_kv is not None:
+                try:
+                    await session_task_kv.delete(conversation_id)
+                    await session_task_kv.put(conversation_id, {"task_id": new_task_id})
+                except Exception as e:
+                    logger.warning(f"[Router] session_task DB写入失败(上轮完成重建): {e}")
             await redis.delete(conv_task_key)
             was_set = await redis.set_nx(conv_task_key, new_task_id, ex=_REQUEST_TTL)
             task_id = (
@@ -943,6 +1006,11 @@ async def dispatch(
     else:
         # 首轮：SET NX 原子创建，防止并发重入生成两个 task_id
         new_task_id = str(uuid.uuid4())
+        if session_task_kv is not None:
+            try:
+                await session_task_kv.put(conversation_id, {"task_id": new_task_id})
+            except Exception as e:
+                logger.warning(f"[Router] session_task DB写入失败(首轮创建): {e}")
         was_set = await redis.set_nx(conv_task_key, new_task_id, ex=_REQUEST_TTL)
         if was_set:
             task_id = new_task_id
@@ -950,6 +1018,12 @@ async def dispatch(
         else:
             # 并发请求已抢先创建，读取其写入的 task_id，复用同一 Task
             task_id = await redis.get(conv_task_key)
+            # 用 Redis 的 task_id 修正 DB，消除并发首轮产生的孤儿数据
+            if task_id and session_task_kv is not None:
+                try:
+                    await session_task_kv.put(conversation_id, {"task_id": task_id})
+                except Exception as e:
+                    logger.warning(f"[Router] session_task DB修正失败(并发首轮): {e}")
             current_task = (
                 await task_store.get(task_id, call_context) if task_id else None
             )

@@ -4,6 +4,13 @@
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+_Foundation_ROOT = str(Path(__file__).resolve().parents[2] / "foundation")
+if _Foundation_ROOT not in sys.path:
+    sys.path.append(_Foundation_ROOT)
+
 import uvicorn
 from loguru import logger
 

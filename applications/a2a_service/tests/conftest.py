@@ -16,7 +16,8 @@ from unittest.mock import MagicMock
 class _OpenJiuwenStubFinder(importlib.abc.MetaPathFinder, importlib.abc.Loader):
     def find_spec(self, fullname, path=None, target=None):  # noqa: ARG002
         if fullname != "openjiuwen" and not fullname.startswith("openjiuwen."):
-            return None
+            if fullname != "openjiuwen_runtime" and not fullname.startswith("openjiuwen_runtime."):
+                return None
         if importlib.machinery.PathFinder.find_spec(fullname, path) is not None:
             return None
         return importlib.machinery.ModuleSpec(fullname, self, is_package=True)
