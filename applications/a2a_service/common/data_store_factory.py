@@ -11,7 +11,7 @@ from typing import Any, Optional
 from urllib.parse import quote_plus, unquote_plus
 
 from loguru import logger
-from openjiuwen_runtime.foundation.db.table_def import ColumnDefinition, TableDefinition
+from openjiuwen_runtime.foundation.db.table_def import ColumnDefinition, IndexDefinition, TableDefinition
 from .data_store import DataStore
 from .db_data_store import DbDataStore
 from .cache_backed_data_store import CacheBackedDataStore
@@ -68,6 +68,9 @@ def _runtime_kv_table_def() -> TableDefinition:
             ColumnDefinition(name="state_metadata", data_type="json", nullable=True),
             ColumnDefinition(name="updated_at", data_type="datetime", nullable=False),
             ColumnDefinition(name="expire_at", data_type="datetime", nullable=True),
+        ],
+        indexes=[
+            IndexDefinition(columns=["state_domain", "state_key"], unique=True),
         ],
     )
 
