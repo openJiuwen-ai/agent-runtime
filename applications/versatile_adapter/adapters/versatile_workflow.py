@@ -21,7 +21,6 @@ from event.events import (
     AdapterEvent,
     DataProxyContent,
     ExecutionCompletedContent,
-    ExecutionInputRequiredContent,
 )
 
 
@@ -49,11 +48,16 @@ class VersatileWorkflow(VersatileProxy):
             ctx.completed = True
             return []
 
+        if re.search(r'"event"\s*:\s*"end"', chunk):
+            logger.debug(f"[VersatileWorkflow] end 帧，标记完成")
+            ctx.completed = True
+            return [AdapterEvent(data_proxy=DataProxyContent(raw_data=chunk))]
+
         if re.search(r'"type"\s*:\s*"dialogId"', chunk):
             return []
 
-        if re.search(r'"event"\s*:\s*"exception"', chunk):
-            logger.debug(f"[VersatileWorkflow] exception 帧，yield data_proxy")
+        if re.search(r'"event"\s*:\s*"(?:error|exception)"', chunk):
+            logger.debug(f"[VersatileWorkflow] error/exception 帧，yield data_proxy")
             ctx.completed = True
             ctx.is_failed = True
             ctx.error_message = chunk
@@ -78,7 +82,11 @@ class VersatileWorkflow(VersatileProxy):
 
     def _on_stream_end(self, ctx: VersatileStreamCtx) -> list[AdapterEvent]:
         if not ctx.completed:
-            return [AdapterEvent(execution_input_required=ExecutionInputRequiredContent())]
+            return [AdapterEvent(execution_completed=ExecutionCompletedContent(
+                is_failed=True,
+                result="",
+                error_message=ctx.error_message or "工作流异常终止，未收到完成信号",
+            ))]
 
         if ctx.is_failed or ctx.execution_result:
             return [AdapterEvent(execution_completed=ExecutionCompletedContent(

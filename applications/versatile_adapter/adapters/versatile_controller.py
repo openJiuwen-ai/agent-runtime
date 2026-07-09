@@ -52,8 +52,8 @@ class VersatileController(VersatileProxy):
             ctx.completed = True
             return [AdapterEvent(data_proxy=DataProxyContent(raw_data=chunk))]
 
-        if re.search(r'"event"\s*:\s*"exception"', chunk):
-            logger.debug(f"[VersatileController] exception 帧，yield data_proxy")
+        if re.search(r'"event"\s*:\s*"(?:error|exception)"', chunk):
+            logger.debug(f"[VersatileController] error/exception 帧，yield data_proxy")
             ctx.completed = True
             ctx.is_failed = True
             ctx.error_message = chunk
@@ -78,6 +78,12 @@ class VersatileController(VersatileProxy):
 
     def _on_stream_end(self, ctx: VersatileStreamCtx) -> list[AdapterEvent]:
         if not ctx.completed:
+            if ctx.is_failed:
+                return [AdapterEvent(execution_completed=ExecutionCompletedContent(
+                    is_failed=True,
+                    result="",
+                    error_message=ctx.error_message or "工作流异常终止",
+                ))]
             return [AdapterEvent(execution_input_required=ExecutionInputRequiredContent())]
 
         if ctx.is_failed or ctx.execution_result:

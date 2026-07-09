@@ -236,14 +236,15 @@ class TestControllerProcessChunk:
         assert len(events) == 1
 
     @staticmethod
-    def test_error_event_passes_through_without_terminating():
+    def test_error_event_sets_completed_and_failed():
+        """event=error 帧与 exception 一致：标记 completed + is_failed，转发前端。"""
         ctrl = VersatileController("http://h/")
         ctx = VersatileStreamCtx()
         chunk = '{"event": "error", "data": {"message": "err"}}'
         events = ctrl._process_chunk(chunk, ctx)
-        assert ctx.completed is False
-        assert ctx.is_failed is False
-        assert ctx.error_message == ""
+        assert ctx.completed is True
+        assert ctx.is_failed is True
+        assert ctx.error_message == chunk
         assert len(events) == 1
 
     @staticmethod
@@ -333,6 +334,17 @@ class TestControllerOnStreamEnd:
         assert events[0].execution_input_required is not None
 
     @staticmethod
+    def test_not_completed_but_failed_yields_failed(ctrl):
+        """未完成但出现过 error 帧 → FAILED（而非 INPUT_REQUIRED）。"""
+        ctx = VersatileStreamCtx()
+        ctx.is_failed = True
+        ctx.error_message = '{"event":"error","data":{"code":"101595"}}'
+        events = ctrl._on_stream_end(ctx)
+        assert len(events) == 1
+        assert events[0].execution_completed is not None
+        assert events[0].execution_completed.is_failed is True
+
+    @staticmethod
     def test_completed_with_result_yields_completed(ctrl):
         ctx = VersatileStreamCtx()
         ctx.completed = True
@@ -411,11 +423,13 @@ class TestWorkflowProcessChunk:
         assert wf._process_chunk(chunk, ctx) == []
 
     @staticmethod
-    def test_workflow_on_stream_end_not_completed_yields_input_required(wf):
+    def test_workflow_on_stream_end_not_completed_yields_failed(wf):
+        """工作流未完成时兜底 FAILED（而非 INPUT_REQUIRED）。"""
         ctx = VersatileStreamCtx()
         events = wf._on_stream_end(ctx)
         assert len(events) == 1
-        assert events[0].execution_input_required is not None
+        assert events[0].execution_completed is not None
+        assert events[0].execution_completed.is_failed is True
 
     @staticmethod
     def test_workflow_on_stream_end_completed_no_result_yields_nothing(wf):
@@ -424,18 +438,30 @@ class TestWorkflowProcessChunk:
         assert wf._on_stream_end(ctx) == []
 
     @staticmethod
-    def test_workflow_error_event_passes_through_without_terminating(wf):
+    def test_workflow_error_event_sets_completed_and_failed(wf):
+        """event=error 帧标记 completed + is_failed，转发前端，终态 FAILED。"""
         ctx = VersatileStreamCtx()
         chunk = '{"event":"error","data":{"message":"workflow failed"}}'
         events = wf._process_chunk(chunk, ctx)
-        assert ctx.completed is False
-        assert ctx.is_failed is False
-        assert ctx.error_message == ""
+        assert ctx.completed is True
+        assert ctx.is_failed is True
+        assert ctx.error_message == chunk
         assert len(events) == 1
 
         completed = wf._on_stream_end(ctx)
         assert len(completed) == 1
-        assert completed[0].execution_input_required is not None
+        assert completed[0].execution_completed.is_failed is True
+
+    @staticmethod
+    def test_workflow_end_event_sets_completed(wf):
+        """event=end 帧标记完成，终态无 error。"""
+        ctx = VersatileStreamCtx()
+        chunk = '{"event":"end"}'
+        events = wf._process_chunk(chunk, ctx)
+        assert ctx.completed is True
+        assert ctx.is_failed is False
+        assert len(events) == 1
+        assert events[0].data_proxy.raw_data == chunk
 
     @staticmethod
     def test_workflow_result_node_extracted():
