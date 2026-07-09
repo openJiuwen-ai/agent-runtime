@@ -11,13 +11,11 @@ from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy import select, update, delete, func
 
 from ..log import get_logger
+from .engine_options import build_async_engine_kwargs
 from .handler import DBHandler
 from .table_def import TableDefinition, ColumnDefinition, IndexDefinition
 
 logger = get_logger(__name__)
-
-# 定期回收池内连接，应小于 MySQL wait_timeout / 中间层 idle 超时。
-_DEFAULT_POOL_RECYCLE_SECONDS = 1800
 
 
 class Base(DeclarativeBase):
@@ -48,17 +46,17 @@ class SQLAlchemyHandler(DBHandler):
         logger.info("Connecting to database")
         # 关闭 aiosqlite 的 DEBUG 日志
         logging.getLogger("aiosqlite").setLevel(logging.WARNING)
-        self.engine = create_async_engine(
-            self.database_url,
-            echo=False,
-            connect_args=self.connect_args,
-            pool_pre_ping=True,
-            pool_recycle=_DEFAULT_POOL_RECYCLE_SECONDS,
-        )
+        engine_kwargs = build_async_engine_kwargs(connect_args=self.connect_args)
+        self.engine = create_async_engine(self.database_url, **engine_kwargs)
         self.session_factory = async_sessionmaker(
             self.engine, class_=AsyncSession, expire_on_commit=False
         )
-        logger.info("Database connected")
+        logger.info(
+            "Database connected (pool_size=%s max_overflow=%s pool_timeout=%s)",
+            engine_kwargs["pool_size"],
+            engine_kwargs["max_overflow"],
+            engine_kwargs["pool_timeout"],
+        )
 
     async def disconnect(self) -> None:
         logger.info("Disconnecting from database")

@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 from urllib.parse import quote
 
+from openjiuwen_runtime.foundation.db.engine_options import build_async_engine_kwargs
 from openjiuwen_runtime.foundation.log import get_logger
 
 _log = get_logger(__name__)
@@ -107,7 +108,7 @@ class MemoryEngineManager:
         async_database_url = get_async_database_url(sync_database_url)
 
         db_store = DefaultDbStore(
-            create_async_engine(async_database_url, pool_size=20, max_overflow=20)
+            create_async_engine(async_database_url, **build_async_engine_kwargs())
         )
         kv_store = cls._create_kv_store(async_database_url)
 
@@ -190,7 +191,7 @@ class MemoryEngineManager:
         if kv_type in ("db", "sql", "sqlite", "mysql"):
             _log.info("Memory engine KV: DbBasedKVStore (same DSN as DB_TYPE)")
             return DbBasedKVStore(
-                create_async_engine(async_database_url, pool_pre_ping=True, echo=False)
+                create_async_engine(async_database_url, **build_async_engine_kwargs())
             )
         raise ValueError(
             f"Unknown KV_STORE_TYPE={kv_type!r}; expected 'redis', 'inmemory', or 'db'."
