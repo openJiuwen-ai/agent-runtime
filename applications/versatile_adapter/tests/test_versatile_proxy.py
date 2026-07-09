@@ -334,17 +334,6 @@ class TestControllerOnStreamEnd:
         assert events[0].execution_input_required is not None
 
     @staticmethod
-    def test_not_completed_but_failed_yields_failed(ctrl):
-        """未完成但出现过 error 帧 → FAILED（而非 INPUT_REQUIRED）。"""
-        ctx = VersatileStreamCtx()
-        ctx.is_failed = True
-        ctx.error_message = '{"event":"error","data":{"code":"101595"}}'
-        events = ctrl._on_stream_end(ctx)
-        assert len(events) == 1
-        assert events[0].execution_completed is not None
-        assert events[0].execution_completed.is_failed is True
-
-    @staticmethod
     def test_completed_with_result_yields_completed(ctrl):
         ctx = VersatileStreamCtx()
         ctx.completed = True
@@ -423,13 +412,12 @@ class TestWorkflowProcessChunk:
         assert wf._process_chunk(chunk, ctx) == []
 
     @staticmethod
-    def test_workflow_on_stream_end_not_completed_yields_failed(wf):
-        """工作流未完成时兜底 FAILED（而非 INPUT_REQUIRED）。"""
+    def test_workflow_on_stream_end_not_completed_yields_input_required(wf):
+        """工作流未完成且无 error 时兜底 INPUT_REQUIRED。"""
         ctx = VersatileStreamCtx()
         events = wf._on_stream_end(ctx)
         assert len(events) == 1
-        assert events[0].execution_completed is not None
-        assert events[0].execution_completed.is_failed is True
+        assert events[0].execution_input_required is not None
 
     @staticmethod
     def test_workflow_on_stream_end_completed_no_result_yields_nothing(wf):

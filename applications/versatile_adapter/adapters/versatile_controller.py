@@ -78,12 +78,6 @@ class VersatileController(VersatileProxy):
 
     def _on_stream_end(self, ctx: VersatileStreamCtx) -> list[AdapterEvent]:
         if not ctx.completed:
-            if ctx.is_failed:
-                return [AdapterEvent(execution_completed=ExecutionCompletedContent(
-                    is_failed=True,
-                    result="",
-                    error_message=ctx.error_message or "工作流异常终止",
-                ))]
             return [AdapterEvent(execution_input_required=ExecutionInputRequiredContent())]
 
         if ctx.is_failed or ctx.execution_result:
