@@ -165,6 +165,7 @@ class K8sServiceHandler:
             namespace: str = "default",
             pod_name: str = None,
             extra_labels: Optional[Dict[str, str]] = None,
+            owner_reference: Optional[client.V1OwnerReference] = None,  # Pod ownerReference，用于 owner 删除时级联清理
             restart_policy: str = "Always",
             kubeconfig: Optional[str] = None,
             ready_timeout: float = 300.0,
@@ -198,6 +199,7 @@ class K8sServiceHandler:
         self._name_prefix = pod_name if pod_name else self._sanitize_prefix(name_prefix)
         self._namespace = namespace
         self._extra_labels: Dict[str, str] = dict(extra_labels or {})
+        self._owner_reference = owner_reference
         self._restart_policy = restart_policy
         self._kubeconfig = kubeconfig
         self._ready_timeout = float(ready_timeout)
@@ -457,6 +459,7 @@ class K8sServiceHandler:
                 namespace=self._namespace,
                 labels=labels,
                 annotations=annotations or None,
+                owner_references=[self._owner_reference] if self._owner_reference else None,
             ),
             spec=client.V1PodSpec(
                 containers=pod_containers,
