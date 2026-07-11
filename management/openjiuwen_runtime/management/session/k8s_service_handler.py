@@ -89,6 +89,30 @@ class HostPathMount:
 
 
 @dataclass(frozen=True)
+class ConfigMapMount:
+    """容器内的 ConfigMap 挂载声明。
+
+    - ``config_map_name``: ConfigMap 名称，写入 ``V1ConfigMapVolumeSource.name``
+    - ``mount_path``: 容器内目标路径
+    - ``sub_path``: 可选，对应 ``V1VolumeMount.sub_path``，挂载 ConfigMap 中的单个 key 到指定文件路径
+    - ``items``: 可选，``[(key, path), ...]`` 列表，写入 ``V1ConfigMapVolumeSource.items``，选择性挂载部分 key
+    - ``read_only``: 默认 True，ConfigMap 挂载为只读
+    """
+
+    config_map_name: str
+    mount_path: str
+    sub_path: Optional[str] = None
+    items: Optional[List[Tuple[str, str]]] = None
+    read_only: bool = True
+
+    def __post_init__(self) -> None:
+        if not self.config_map_name:
+            raise ValueError("ConfigMapMount.config_map_name is required")
+        if not self.mount_path:
+            raise ValueError("ConfigMapMount.mount_path is required")
+
+
+@dataclass(frozen=True)
 class ContainerSpec:
     name: str
     image: str
@@ -121,6 +145,9 @@ class ContainerSpec:
     # ---- hostPath 挂载（对应 ``docker run -v HOST:CTR``） ----
     host_path_mounts: List[HostPathMount] = field(default_factory=list)
 
+    # ---- ConfigMap 挂载（对应 ``volumes.configMap`` + ``volumeMounts``） ----
+    configmap_mounts: List[ConfigMapMount] = field(default_factory=list)
+
     cpu_request: Optional[str] = None
     memory_request: Optional[str] = None
     cpu_limit: Optional[str] = None
@@ -144,6 +171,7 @@ class ContainerSpec:
         object.__setattr__(self, "capabilities_add", list(self.capabilities_add or []))
         object.__setattr__(self, "capabilities_drop", list(self.capabilities_drop or []))
         object.__setattr__(self, "host_path_mounts", list(self.host_path_mounts or []))
+        object.__setattr__(self, "configmap_mounts", list(self.configmap_mounts or []))
         if self.host_port is not None:
             hp = int(self.host_port)
             if hp <= 0 or hp > 65535:
@@ -256,6 +284,14 @@ class K8sServiceHandler:
         base = sanitized or f"c{idx}"
         suffix = f"-{idx}-{mount_idx}"
         return f"hp-{base[: 63 - len('hp-') - len(suffix)]}{suffix}"
+
+    @classmethod
+    def _build_configmap_volume_name(cls, name: str, idx: int, mount_idx: int) -> str:
+        # 预留 "cm-" 前缀和索引后缀，避免同一 Pod 内多容器、多挂载重名。
+        sanitized = cls._NAME_INVALID_CHARS.sub("-", (name or "").lower()).strip("-")
+        base = sanitized or f"c{idx}"
+        suffix = f"-{idx}-{mount_idx}"
+        return f"cm-{base[: 63 - len('cm-') - len(suffix)]}{suffix}"
 
     @classmethod
     def _build_security_context(cls, spec: ContainerSpec) -> Optional[client.V1SecurityContext]:
@@ -418,6 +454,31 @@ class K8sServiceHandler:
                         name=volume_name,
                         mount_path=mount.mount_path,
                         read_only=mount.read_only,
+                    )
+                )
+
+            for cm_idx, cm_mount in enumerate(spec.configmap_mounts):
+                volume_name = self._build_configmap_volume_name(cm_mount.config_map_name, idx, cm_idx)
+                cm_items = None
+                if cm_mount.items:
+                    cm_items = [
+                        client.V1KeyToPath(key=k, path=p) for k, p in cm_mount.items
+                    ]
+                volumes.append(
+                    client.V1Volume(
+                        name=volume_name,
+                        config_map=client.V1ConfigMapVolumeSource(
+                            name=cm_mount.config_map_name,
+                            items=cm_items,
+                        ),
+                    )
+                )
+                container_volume_mounts.append(
+                    client.V1VolumeMount(
+                        name=volume_name,
+                        mount_path=cm_mount.mount_path,
+                        sub_path=cm_mount.sub_path,
+                        read_only=cm_mount.read_only,
                     )
                 )
 
