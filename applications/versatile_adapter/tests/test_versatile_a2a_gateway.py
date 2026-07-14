@@ -205,6 +205,26 @@ class TestStatusUpdate:
         assert ctx.completed is False
         assert len(events) == 0
 
+    def test_canceled_with_message(self, gw):
+        ctx = VersatileStreamCtx()
+        chunk = json.dumps(_make_status_update("TASK_STATE_CANCELED", "用户取消操作"))
+        events = gw._process_chunk(chunk, ctx)
+        assert ctx.completed is True
+        assert ctx.is_failed is True
+        assert ctx.error_message == "用户取消操作"
+        assert len(events) == 1
+        frame = json.loads(events[0].data_proxy.raw_data)
+        assert frame["event"] == "error"
+        assert frame["data"]["message"] == "用户取消操作"
+
+    def test_canceled_without_message(self, gw):
+        ctx = VersatileStreamCtx()
+        chunk = json.dumps(_make_status_update("TASK_STATE_CANCELED"))
+        events = gw._process_chunk(chunk, ctx)
+        assert ctx.completed is True
+        assert ctx.is_failed is True
+        assert ctx.error_message != ""
+
 
 class TestOnStreamEnd:
     def test_stream_end_without_status_yields_input_required(self, gw):
@@ -272,3 +292,163 @@ class TestResultExtraction:
         gw2._process_chunk(json.dumps(_make_artifact_update("A1", "文本", append=False, last_chunk=True)), ctx)
         gw2._process_chunk(json.dumps(_make_status_update("TASK_STATE_COMPLETED")), ctx)
         assert ctx.execution_result == "文本"
+
+
+class TestEdgeCases:
+    """边界与防御性测试。"""
+
+    def test_result_not_dict_passthrough(self, gw):
+        """result 为字符串时透传。"""
+        ctx = VersatileStreamCtx()
+        chunk = json.dumps({"jsonrpc": "2.0", "id": "req-001", "result": "some string"})
+        events = gw._process_chunk(chunk, ctx)
+        assert len(events) == 1
+        assert events[0].data_proxy is not None
+
+    def test_result_none_passthrough(self, gw):
+        """result 为 null 时透传。"""
+        ctx = VersatileStreamCtx()
+        chunk = json.dumps({"jsonrpc": "2.0", "id": "req-001", "result": None})
+        events = gw._process_chunk(chunk, ctx)
+        assert len(events) == 1
+        assert events[0].data_proxy is not None
+
+    def test_state_null_treated_as_empty(self, gw):
+        """state 为 null 时不报错。"""
+        ctx = VersatileStreamCtx()
+        chunk = json.dumps({
+            "jsonrpc": "2.0", "id": "req-001",
+            "result": {"taskId": "t1", "payload": {"taskStatusUpdate": {"state": None}}},
+        })
+        events = gw._process_chunk(chunk, ctx)
+        assert ctx.completed is False
+        assert len(events) == 0
+
+    def test_state_integer_treated_as_string(self, gw):
+        """state 为整数时不报错。"""
+        ctx = VersatileStreamCtx()
+        chunk = json.dumps({
+            "jsonrpc": "2.0", "id": "req-001",
+            "result": {"taskId": "t1", "payload": {"taskStatusUpdate": {"state": 123}}},
+        })
+        events = gw._process_chunk(chunk, ctx)
+        assert ctx.completed is False
+
+    def test_rejected_with_message(self, gw):
+        """REJECTED 带 message 提取错误信息。"""
+        ctx = VersatileStreamCtx()
+        chunk = json.dumps(_make_status_update("TASK_STATE_REJECTED", "请求被拒绝"))
+        events = gw._process_chunk(chunk, ctx)
+        assert ctx.completed is True
+        assert ctx.is_failed is True
+        assert ctx.error_message == "请求被拒绝"
+        assert len(events) == 1
+        frame = json.loads(events[0].data_proxy.raw_data)
+        assert frame["event"] == "error"
+        assert frame["data"]["message"] == "请求被拒绝"
+
+    def test_rejected_without_message(self, gw):
+        """REJECTED 无 message 使用默认文案。"""
+        ctx = VersatileStreamCtx()
+        chunk = json.dumps(_make_status_update("TASK_STATE_REJECTED"))
+        events = gw._process_chunk(chunk, ctx)
+        assert ctx.completed is True
+        assert ctx.is_failed is True
+        assert ctx.error_message != ""
+
+    def test_rejected_terminal(self, gw):
+        """REJECTED 终态走 FAILED 路径。"""
+        ctx = VersatileStreamCtx()
+        ctx.completed = True
+        ctx.is_failed = True
+        ctx.error_message = "REJECTED"
+        events = gw._on_stream_end(ctx)
+        assert len(events) == 1
+        assert events[0].execution_completed.is_failed is True
+        assert events[0].execution_completed.error_message == "REJECTED"
+
+    def test_empty_text_skipped(self, gw):
+        """空 text 不发 message 帧。"""
+        ctx = VersatileStreamCtx()
+        chunk = json.dumps({
+            "jsonrpc": "2.0", "id": "req-001",
+            "result": {"taskId": "t1", "payload": {"taskArtifactUpdate": {
+                "artifact": {"artifactId": "A1", "parts": [{"type": "text", "text": ""}]},
+                "append": True, "lastChunk": True,
+            }}},
+        })
+        events = gw._process_chunk(chunk, ctx)
+        assert len(events) == 0
+
+    def test_parts_not_list(self, gw):
+        """parts 为 dict 时不报错。"""
+        ctx = VersatileStreamCtx()
+        chunk = json.dumps({
+            "jsonrpc": "2.0", "id": "req-001",
+            "result": {"taskId": "t1", "payload": {"taskArtifactUpdate": {
+                "artifact": {"artifactId": "A1", "parts": {"not": "a list"}},
+                "append": True, "lastChunk": True,
+            }}},
+        })
+        events = gw._process_chunk(chunk, ctx)
+        assert len(events) == 0
+
+    def test_part_not_dict_skipped(self, gw):
+        """parts 中非 dict 元素被跳过。"""
+        ctx = VersatileStreamCtx()
+        chunk = json.dumps({
+            "jsonrpc": "2.0", "id": "req-001",
+            "result": {"taskId": "t1", "payload": {"taskArtifactUpdate": {
+                "artifact": {"artifactId": "A1", "parts": ["not_a_dict", {"type": "text", "text": "有效"}]},
+                "append": True, "lastChunk": True,
+            }}},
+        })
+        events = gw._process_chunk(chunk, ctx)
+        assert ctx.artifact_texts == {"A1": "有效"}
+        assert len(events) == 1
+
+
+class TestExtractUserId:
+    """userId 提取测试。"""
+
+    def test_x_user_id_lowercase(self, gw):
+        gw._passed_headers = {"x-user-id": "from-x-user-id"}
+        assert gw._extract_user_id() == "from-x-user-id"
+
+    def test_userid_lowercase_from_starlette(self, gw):
+        gw._passed_headers = {"userid": "from-userid"}
+        assert gw._extract_user_id() == "from-userid"
+
+    def test_cust_userid_fallback(self, gw):
+        gw._passed_headers = {"cust-userid": "from-cust"}
+        assert gw._extract_user_id() == "from-cust"
+
+    def test_mixed_case_key(self, gw):
+        gw._passed_headers = {"X-User-Id": "from-mixed"}
+        assert gw._extract_user_id() == "from-mixed"
+
+    def test_priority_userid_over_x_user_id(self, gw):
+        """userid 和 x-user-id 同时存在时取到非空值（不保证优先级）。"""
+        gw._passed_headers = {"userid": "from-userid", "x-user-id": "from-x-user-id"}
+        result = gw._extract_user_id()
+        assert result in ("from-userid", "from-x-user-id")
+        assert result != ""
+
+    def test_empty_value_skipped(self, gw):
+        gw._passed_headers = {"userid": "", "x-user-id": "fallback"}
+        assert gw._extract_user_id() == "fallback"
+
+    def test_no_user_id_header_returns_empty(self, gw):
+        gw._passed_headers = {"content-type": "application/json"}
+        assert gw._extract_user_id() == ""
+
+    def test_user_id_in_both_header_and_body(self, gw):
+        """header 和 body 中的 userId 一致。"""
+        gw._passed_headers = {"userId": "user-123"}
+        gw._cached_user_id = gw._extract_user_id()
+        gw._trace_id = "trace-001"
+        headers = gw._build_headers({"userId": "user-123"})
+        body = {"input": {"query": "test"}, "custom_data": {"inputs": {"query": "test"}}}
+        rb = gw._build_request_body(body)
+        assert headers["userId"] == "user-123"
+        assert rb["params"]["metadata"]["userId"] == "user-123"
