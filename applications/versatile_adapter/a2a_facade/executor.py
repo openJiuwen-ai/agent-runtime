@@ -74,6 +74,11 @@ class A2aVersatileExecutor(AgentExecutor):
             logger.info(
                 f"[A2aVA] execute: conv_id={context.context_id}, task_id={context.task_id}"
             )
+            logger.info(
+                f"[A2aVA] 收到请求: conv_id={context.context_id}, task_id={context.task_id}, "
+                f"body={str(runner_kw.get('body', {}))[:200]}, headers={runner_kw.get('headers', {})}, "
+                f"trace_id={runner_kw.get('trace_id', '')}"
+            )
             updater = await self._setup_task(context, event_queue)
             terminal_sent = False
 
@@ -149,13 +154,12 @@ class A2aVersatileExecutor(AgentExecutor):
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
         conv_id = context.context_id
         task_id = context.task_id
-        input_data = self._build_first_input(context.message)
-        agent_id = input_data.get("agent_id", "")
+        self._build_first_input(context.message)
 
         updater = TaskUpdater(event_queue, task_id, conv_id)
         await updater.cancel()
         logger.info(
-            f"[A2aVA] cancel: conv_id={conv_id}, task_id={task_id}, agent_id={agent_id}"
+            f"[A2aVA] cancel: conv_id={conv_id}, task_id={task_id}"
         )
 
     async def _emit_proxy_artifact(
@@ -304,7 +308,6 @@ class A2aVersatileExecutor(AgentExecutor):
     def _extract_logging_context(input_data: dict, conv_id: str) -> dict:
         return {
             "trace_id": input_data.get("trace_id", ""),
-            "agent_id": input_data.get("agent_id", ""),
             "conv_id": conv_id,
         }
 
@@ -318,4 +321,5 @@ class A2aVersatileExecutor(AgentExecutor):
             "body": input_data.get("body", {}),
             "headers": input_data.get("headers", {}),
             "params": input_data.get("params", {}),
+            "trace_id": input_data.get("trace_id", ""),
         }

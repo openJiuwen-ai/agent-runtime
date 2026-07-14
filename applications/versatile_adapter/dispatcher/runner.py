@@ -18,6 +18,7 @@ from typing import AsyncGenerator, Optional
 import yaml
 from loguru import logger
 
+from adapters.versatile_a2a_gateway import VersatileA2AGateway
 from adapters.versatile_controller import VersatileController
 from adapters.versatile_workflow import VersatileWorkflow
 from config import get_settings
@@ -54,6 +55,18 @@ def _merge_workflow_defaults(raw: dict, workflow_defaults: dict) -> dict:
     return merged
 
 
+def _merge_a2a_gateway_defaults(raw: dict, a2a_gateway_defaults: dict) -> dict:
+    if raw.get("type") != "a2a_gateway":
+        return raw
+
+    merged = {**a2a_gateway_defaults, **raw}
+    default_headers = a2a_gateway_defaults.get("headers_template") or {}
+    adapter_headers = raw.get("headers_template") or {}
+    if default_headers or adapter_headers:
+        merged["headers_template"] = {**default_headers, **adapter_headers}
+    return merged
+
+
 class _VersatileAdapterConfig:
     """单个 adapter 的配置。"""
 
@@ -61,6 +74,7 @@ class _VersatileAdapterConfig:
         "name", "type", "url_template", "timeout",
         "headers_template", "forward_header_whitelist",
         "workflow_result_node", "workflow_id", "intent",
+        "a2a_gateway_base", "agent_card_name", "token",
     )
 
     def __init__(self, raw: dict) -> None:
@@ -76,12 +90,17 @@ class _VersatileAdapterConfig:
         self.workflow_result_node = raw.get("workflow_result_node")
         self.workflow_id = raw.get("workflow_id")
         self.intent = raw.get("intent")
+        # A2A Gateway 专用
+        self.a2a_gateway_base = raw.get("a2a_gateway_base", "")
+        self.agent_card_name = raw.get("agent_card_name", "")
+        self.token = raw.get("token", "")
 
 
 class VersatileAdapterRunner:
     """配置驱动的动态路由 Runner。"""
 
     def __init__(self, config_path: Optional[Path] = None) -> None:
+        self._workflow_adapter_type = os.getenv("VA_WORKFLOW_ADAPTER_TYPE", "a2a_gateway")
         path = config_path or _resolve_default_config_path()
         self._adapters = self._load_config(path)
         if not self._adapters:
@@ -100,11 +119,14 @@ class VersatileAdapterRunner:
         with open(path, encoding="utf-8") as f:
             raw = yaml.safe_load(f) or {}
         workflow_defaults = raw.get("workflow_defaults", {})
+        a2a_gateway_defaults = raw.get("a2a_gateway_defaults", {})
         adapters_raw = raw.get("adapters", [])
-        return [
-            _VersatileAdapterConfig(_merge_workflow_defaults(b, workflow_defaults))
-            for b in adapters_raw
-        ]
+        configs: list[_VersatileAdapterConfig] = []
+        for b in adapters_raw:
+            merged = _merge_workflow_defaults(b, workflow_defaults)
+            merged = _merge_a2a_gateway_defaults(merged, a2a_gateway_defaults)
+            configs.append(_VersatileAdapterConfig(merged))
+        return configs
 
     @staticmethod
     def _build_from_settings() -> list[_VersatileAdapterConfig]:
@@ -131,7 +153,7 @@ class VersatileAdapterRunner:
     def _match_workflow(self, target: dict) -> Optional[_VersatileAdapterConfig]:
         """根据 target 中的 workflow_id 或 intent 匹配 workflow 配置。"""
         for b in self._adapters:
-            if b.type != "workflow":
+            if b.type != self._workflow_adapter_type:
                 continue
             if b.workflow_id and target.get("workflow_id") == b.workflow_id:
                 return b
@@ -152,6 +174,17 @@ class VersatileAdapterRunner:
                 forward_header_whitelist=whitelist,
                 workflow_result_node=cfg.workflow_result_node,
             )
+        if cfg.type == "a2a_gateway":
+            return VersatileA2AGateway(
+                a2a_gateway_base=cfg.a2a_gateway_base,
+                agent_card_name=cfg.agent_card_name,
+                token=cfg.token,
+                url_template=cfg.url_template,
+                timeout=cfg.timeout,
+                headers_template=cfg.headers_template,
+                forward_header_whitelist=whitelist,
+                workflow_result_node=cfg.workflow_result_node,
+            )
         return VersatileController(
             url_template=cfg.url_template,
             timeout=cfg.timeout,
@@ -160,8 +193,9 @@ class VersatileAdapterRunner:
             workflow_result_node=cfg.workflow_result_node,
         )
 
-    async def run_async(self, target: dict, headers: dict, params: dict,
-                        body: dict) -> AsyncGenerator[AdapterEvent, None]:
+    async def run_async(  # pylint: disable=too-many-arguments
+        self, target: dict, headers: dict, params: dict,
+        body: dict, trace_id: str = "") -> AsyncGenerator[AdapterEvent, None]:
         """根据 target 动态匹配配置并创建适配器，驱动流。"""
         conv_id = target.get("conversation_id", "")
         wf_cfg = self._match_workflow(target)
@@ -170,7 +204,14 @@ class VersatileAdapterRunner:
             raise ValueError(f"无法匹配 adapter 配置: target={target}")
 
         logger.debug(f"[VersatileAdapterRunner] target 匹配 adapter={cfg.name} ({cfg.type})")
+        logger.info(
+            f"[VersatileAdapterRunner] 路由决策: intent={target.get('intent', '')}, "
+            f"adapter={cfg.name} (type={cfg.type}), conv_id={conv_id}"
+        )
         adapter = self._create_adapter(cfg)
 
-        async for event in adapter.dispatch_stream(conv_id, headers=headers, params=params, body=body):
+        async for event in adapter.dispatch_stream(
+            conv_id, headers=headers, params=params, body=body,
+            trace_id=trace_id,
+        ):
             yield event

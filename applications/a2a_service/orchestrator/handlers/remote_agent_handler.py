@@ -532,6 +532,10 @@ class RemoteAgentHandler:
                 "data": data,
             },
         }
+        logger.info(
+            f"[RemoteAgentHandler] SubTaskEvent 盖章: sub_task_path={sub_task_path}, "
+            f"node_kind={node_kind}, data={str(data)[:200]}"
+        )
         await turn_ctx.event_queue.enqueue_event(
             dict_to_a2a(event, turn_ctx.task_id, turn_ctx.conv_id)
         )

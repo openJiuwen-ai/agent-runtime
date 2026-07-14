@@ -13,6 +13,15 @@ if str(_VA_ROOT) not in sys.path:
     sys.path.append(str(_VA_ROOT))
 
 
+@pytest.fixture(autouse=True)
+def _va_workflow_adapter_type_workflow(monkeypatch):
+    """现有测试的 YAML 配置均使用 type: workflow 适配器，
+    默认设置 VA_WORKFLOW_ADAPTER_TYPE=workflow 使 _match_workflow 匹配 workflow 类型。
+    需测试 a2a_gateway 路由的用例可覆盖此环境变量。
+    """
+    monkeypatch.setenv("VA_WORKFLOW_ADAPTER_TYPE", "workflow")
+
+
 @pytest.fixture
 def va_root() -> Path:
     """VA 进程根目录。"""

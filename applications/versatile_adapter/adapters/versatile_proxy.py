@@ -23,15 +23,22 @@ from adapters.base_adapter import BaseAdapter
 
 
 class VersatileStreamCtx:
-    """SSE 行循环中累积的可变状态，贯穿 _process_line → _process_chunk → _on_stream_end。"""
+    """SSE 行循环中累积的可变状态，贯穿 _process_line -> _process_chunk -> _on_stream_end。"""
 
-    __slots__ = ("completed", "is_failed", "execution_result", "error_message")
+    __slots__ = (
+        "completed", "is_failed", "execution_result", "error_message",
+        "artifact_texts", "last_artifact_id", "input_required",
+    )
 
     def __init__(self) -> None:
         self.completed: bool = False
         self.is_failed: bool = False
         self.execution_result: str | None = None
         self.error_message: str = ""
+        # A2A Gateway 专用：artifact 累积
+        self.artifact_texts: dict[str, str] = {}
+        self.last_artifact_id: str = ""
+        self.input_required: bool = False
 
 
 class VersatileProxy(BaseAdapter):
@@ -98,13 +105,19 @@ class VersatileProxy(BaseAdapter):
 
     # ── 主流程 ────────────────────────────────────────────────
 
-    async def dispatch_stream(
+    async def dispatch_stream(  # pylint: disable=too-many-arguments
         self,
         conv_id: str,
         headers: Optional[dict] = None,
         params: Optional[dict] = None,
         body: Optional[dict] = None,
+        trace_id: str = "",
     ) -> AsyncGenerator[AdapterEvent, None]:
+        # 存储入口上下文，供子类钩子方法使用
+        self._conv_id = conv_id
+        self._trace_id = trace_id
+        self._passed_headers = headers or {}
+
         url = self._build_url(conv_id)
         req_headers = self._build_headers(headers)
         request_body = self._build_request_body(body or {})
@@ -149,10 +162,14 @@ class VersatileProxy(BaseAdapter):
     @staticmethod
     async def _log_request(request: httpx.Request) -> None:
         """记录请求日志（生成 curl 命令）。"""
+        _sensitive_headers = {"token", "authorization", "cookie", "set-cookie"}
         body = await request.aread()
         cmd = f"curl -X {request.method} '{request.url}'"
         for key, value in request.headers.items():
-            cmd += f" -H '{key}: {value}'"
+            if key.lower() in _sensitive_headers:
+                cmd += f" -H '{key}: ***'"
+            else:
+                cmd += f" -H '{key}: {value}'"
         if body:
             cmd += f" -d '{body.decode('utf-8', errors='replace')}'"
         banner_start = f"{'='*20} Proxy Request (Stream) Start {'='*20}"
