@@ -79,7 +79,7 @@ class RequesterHandler:
             await self._handle_failed(event_data, task_id, conv_id, call_context)
             return
 
-        await self._handle_raw_event(event_data, task_id, conv_id, event_queue)
+        await self._handle_raw_event(event_data, task_id, conv_id, event_queue, context)
 
     async def _handle_tool_start(
         self,
@@ -127,10 +127,42 @@ class RequesterHandler:
         task_id: str,
         conv_id: str,
         event_queue: Any,
+        context: Dict[str, Any],
     ) -> None:
         raw_event = event_data.get("raw_event")
         if raw_event is None:
             return
+
+        if isinstance(raw_event, dict) and raw_event.get("type") == "heartbeat":
+            outer_data = _raw_data(raw_event)
+            # HeartbeatEvent 自身有 data 字段存心跳详情，经 _normalize_agent_event 后多一层嵌套
+            nested_data = outer_data.get("data")
+            data: dict[str, Any] = nested_data if isinstance(nested_data, dict) else outer_data
+            hb = context.get("heartbeat_runtime")
+            if hb is not None:
+                request_id = str(data.get("request_id") or conv_id)
+                hb_type = str(data.get("heartbeat_type") or "")
+                source = str(data.get("source") or "a2a_service")
+
+                if hb_type == "initial":
+                    await hb.start_heartbeat(request_id=request_id, source=source)
+                elif hb_type == "end":
+                    stop_result = await hb.stop_heartbeat(
+                        request_id=request_id,
+                        reason=f"agent_end:{data.get('status', '')}",
+                        mark_end=True,
+                    )
+                    if not bool(stop_result.get("forward_to_frontend", False)):
+                        logger.info(
+                            "[RequesterHandler] duplicate heartbeat end suppressed: conv={}, request_id={}, code={}",
+                            conv_id,
+                            request_id,
+                            stop_result.get("code"),
+                        )
+                        return
+
+                await hb.attach_seq(raw_event, request_id=request_id)
+
         a2a_event = _agent_dict_to_a2a(raw_event, task_id, conv_id)
         if a2a_event is not None and event_queue is not None:
             await event_queue.enqueue_event(a2a_event)

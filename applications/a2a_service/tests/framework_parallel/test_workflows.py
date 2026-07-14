@@ -42,7 +42,15 @@ async def test_multi_delegate_over_limit_rejects_all_without_running():
     capture = {}
 
     class _Executor:
-        async def run_agent(self, _turn_ctx, *, query, original_body, cascade_result, step_counter=None):
+        async def run_agent(
+            self,
+            _turn_ctx,
+            *,
+            query,
+            original_body,
+            cascade_result,
+            run_options=None,
+        ):
             capture["cascade"] = cascade_result
 
     await handler._handle_multi_delegate(
@@ -74,7 +82,15 @@ async def test_multi_delegate_within_limit_aggregates():
     capture = {}
 
     class _Executor:
-        async def run_agent(self, _turn_ctx, *, query, original_body, cascade_result, step_counter=None):
+        async def run_agent(
+            self,
+            _turn_ctx,
+            *,
+            query,
+            original_body,
+            cascade_result,
+            run_options=None,
+        ):
             capture["cascade"] = cascade_result
 
     await handler._handle_multi_delegate(

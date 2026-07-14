@@ -420,6 +420,7 @@ def _serialize_event(
     conversation_id: str,
     start_time: float,
     channel=None,
+    redis=None,
 ) -> Optional[str]:
     """将内部 A2A event 序列化为前端可见的 SSE JSON（已包装）。
 
@@ -428,6 +429,17 @@ def _serialize_event(
     normalized = EventNormalizer.normalize(event)
     if normalized is None:
         return None
+
+    # 兜底补齐 heartbeat.seq：若上游未注入，则在出流层按 conv_id 递增分配。
+    if (
+        normalized.get("type") == "heartbeat"
+        and isinstance(normalized.get("data"), dict)
+        and not isinstance(normalized["data"].get("seq"), int)
+    ):
+        # _serialize_event 保持同步函数，这里仅做本地兜底计数；
+        # 跨请求单调递增优先在请求内 heartbeat runtime 注入。
+        seq = _next_heartbeat_seq(conversation_id)
+        normalized["data"]["seq"] = seq
 
     elapsed = time.monotonic() - start_time
     formatter = channel or MobileBankChannel()
@@ -459,6 +471,15 @@ def _serialize_event(
         payload={"agent_id": agent_id, "elapsed": elapsed},
     )
     return json.dumps(wrapped, ensure_ascii=False)
+
+
+_HEARTBEAT_SEQ_LOCAL: dict[str, int] = {}
+
+
+def _next_heartbeat_seq(conv_id: str) -> int:
+    value = _HEARTBEAT_SEQ_LOCAL.get(conv_id, 0) + 1
+    _HEARTBEAT_SEQ_LOCAL[conv_id] = value
+    return value
 
 
 def _extract_answer_from_events(events: list[Any]) -> str:

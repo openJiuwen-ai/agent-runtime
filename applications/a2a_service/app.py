@@ -500,6 +500,8 @@ async def lifespan(fastapi_app: FastAPI):
             va_client=va_client,
             redis=redis,
             client_factory=factory,
+            heartbeat_interval_seconds=getattr(settings, "heartbeat_interval_seconds", 15),
+            heartbeat_timeout_seconds=getattr(settings, "heartbeat_timeout_seconds", 1800),
             max_concurrent_sub_agents=settings.max_concurrent_sub_agents,
             sub_agent_timeout_seconds=settings.sub_agent_timeout_seconds,
             max_parallel_workflows_per_agent=settings.max_parallel_workflows_per_agent,
@@ -514,6 +516,8 @@ async def lifespan(fastapi_app: FastAPI):
             redis=redis,
             route_dispatcher=route_dispatcher,
             state_manager=state_manager,
+            heartbeat_interval_seconds=getattr(settings, "heartbeat_interval_seconds", 15),
+            heartbeat_timeout_seconds=getattr(settings, "heartbeat_timeout_seconds", 1800),
             session_task_kv=session_task_kv,
             session_request_kv=session_request_kv,
         )

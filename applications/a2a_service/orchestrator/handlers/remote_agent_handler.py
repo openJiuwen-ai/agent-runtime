@@ -5,7 +5,7 @@ import asyncio
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, TYPE_CHECKING
 
 import httpx
 from a2a.client import Client, ClientFactory
@@ -57,6 +57,10 @@ from ..state import (
     META_KEY_SOURCE_AGENT,
     TaskStateManager,
 )
+
+if TYPE_CHECKING:
+    from a2a.server.events import EventQueue
+    from ..executor import _TurnContext
 
 
 def _raw_data(raw_event: Any) -> dict[str, Any]:
@@ -174,6 +178,8 @@ class RemoteAgentHandler:
         redis: RedisClient,
         state_manager: TaskStateManager,
         client_factory: ClientFactory | None = None,
+        heartbeat_interval_seconds: int = 15,
+        heartbeat_timeout_seconds: int = 1800,
         max_concurrent_sub_agents: int = 3,
         sub_agent_timeout_seconds: int = 1800,
         max_parallel_workflows_per_agent: int = 3,
@@ -185,6 +191,8 @@ class RemoteAgentHandler:
         self._redis = redis
         self._state_manager = state_manager
         self._client_factory = client_factory
+        self.heartbeat_interval_seconds = int(heartbeat_interval_seconds)
+        self.heartbeat_timeout_seconds = int(heartbeat_timeout_seconds)
         self._session_request_kv = session_request_kv
         self._sub_agent_clients: dict[str, Client] = {}
         self.max_concurrent_sub_agents = max_concurrent_sub_agents
@@ -232,6 +240,11 @@ class RemoteAgentHandler:
         conv_id = context.get("conv_id", "")
         event_queue = turn_ctx.event_queue if turn_ctx else None
 
+        if not isinstance(step_counter, list):
+            step_counter = [0]
+        if not step_counter:
+            step_counter.append(0)
+
         if step_counter is not None:
             step_counter[0] += 1
 
@@ -274,7 +287,9 @@ class RemoteAgentHandler:
             return
 
         va_result, va_task_id, finalized = await self._call_versatile_adapter(
-            turn_ctx, delegate=delegate
+            turn_ctx,
+            delegate=delegate,
+            context=context,
         )
 
         parent_task_id = turn_ctx.task_id
@@ -289,6 +304,9 @@ class RemoteAgentHandler:
 
         if va_result is not None:
             executor = context.get("executor")
+            if executor is None:
+                logger.warning("[RemoteAgentHandler] 缺少 executor，跳过 cascade 续轮")
+                return
             query = context.get("query", "")
             original_body = context.get("original_body", {})
             step_counter = context.get("step_counter")
@@ -302,7 +320,10 @@ class RemoteAgentHandler:
                 query=query,
                 original_body=original_body,
                 cascade_result=va_result,
-                step_counter=step_counter,
+                run_options={
+                    "step_counter": step_counter,
+                    "heartbeat_runtime": context.get("heartbeat_runtime"),
+                },
             )
         elif finalized:
             pass
@@ -369,7 +390,10 @@ class RemoteAgentHandler:
                 query=context.get("query", ""),
                 original_body=context.get("original_body", {}),
                 cascade_result=cascade,
-                step_counter=context.get("step_counter"),
+                run_options={
+                    "step_counter": context.get("step_counter"),
+                    "heartbeat_runtime": context.get("heartbeat_runtime"),
+                },
             )
 
     async def _handle_sub_agent_dispatch(
@@ -438,7 +462,10 @@ class RemoteAgentHandler:
                 query=context.get("query", ""),
                 original_body=context.get("original_body", {}),
                 cascade_result=cascade,
-                step_counter=context.get("step_counter"),
+                run_options={
+                    "step_counter": context.get("step_counter"),
+                    "heartbeat_runtime": context.get("heartbeat_runtime"),
+                },
             )
 
     async def _handle_request_resume(
@@ -769,7 +796,7 @@ class RemoteAgentHandler:
                     raise RuntimeError(
                         "VA workflow returned INPUT_REQUIRED; parallel workflow does not support suspension"
                     )
-        return final_result
+        return final_result if final_result is not None else {}
 
     async def _run_one_sub_agent(
         self,
@@ -1280,6 +1307,7 @@ class RemoteAgentHandler:
         self,
         turn_ctx: Any,
         delegate: Any,
+        context: Optional[Dict[str, Any]] = None,
     ) -> tuple[Optional[dict], str, bool]:
         """DPA 委托场景：从 Redis 取首轮缓存，替换 query/intent 后发给 VA。
 
@@ -1376,6 +1404,7 @@ class RemoteAgentHandler:
         )
 
         all_chunks = []
+        heartbeat_runtime = (context or {}).get("heartbeat_runtime")
         try:
             async for stream_resp in self._va_client.send_message(request):
                 stream_resp_count += 1
@@ -1427,7 +1456,27 @@ class RemoteAgentHandler:
                             upstream_error = self._extract_failed_error(event) or {"message": "VA 任务异常终止"}
                         logger.debug("[RemoteAgentHandler] VA TaskStatusUpdateEvent(FAILED)")
 
+        except asyncio.TimeoutError as e:
+            if heartbeat_runtime is not None:
+                await heartbeat_runtime.notify_heartbeat(
+                    request_id=conv_id,
+                    heartbeat_type="end",
+                    status="timeout",
+                    source="a2a_service",
+                )
+                await heartbeat_runtime.stop_heartbeat(conv_id, reason="timeout", mark_end=False)
+            status_message = 1
+            error_message = str(e)
+            logger.exception(f"[RemoteAgentHandler] VA send_message 超时：{e}")
         except Exception as e:
+            if heartbeat_runtime is not None:
+                await heartbeat_runtime.notify_heartbeat(
+                    request_id=conv_id,
+                    heartbeat_type="end",
+                    status="error",
+                    source="a2a_service",
+                )
+                await heartbeat_runtime.stop_heartbeat(conv_id, reason="error", mark_end=False)
             status_message = 1
             error_message = str(e)
             logger.exception(f"[RemoteAgentHandler] VA send_message 异常：{e}")
@@ -1487,7 +1536,8 @@ class RemoteAgentHandler:
         event_queue = turn_ctx.event_queue
 
         # params 仍从 Redis 首轮缓存取（保留 HEAD 的 params URL query 参数透传）
-        cached = await self._redis.get_json(session_request_key(conv_id)) or {}
+        cached_raw = await self._redis.get_json(session_request_key(conv_id))
+        cached: dict[str, Any] = cached_raw if isinstance(cached_raw, dict) else {}
         params = cached.get("params", {})
         trace_id = cached.get("trace_id", "")
         agent_id = cached.get("agent_id", "")
@@ -1495,9 +1545,12 @@ class RemoteAgentHandler:
         # 当前轮输入能透传给下游工作流，而不是回退到首轮缓存 body。
         body = dict(original_body)
         body["stream"] = True
-        input_section = body.get("input") if isinstance(body.get("input"), dict) else {}
-        custom_data = body.get("custom_data") if isinstance(body.get("custom_data"), dict) else {}
-        custom_inputs = custom_data.get("inputs") if isinstance(custom_data.get("inputs"), dict) else {}
+        raw_input_section = body.get("input")
+        input_section: dict[str, Any] = raw_input_section if isinstance(raw_input_section, dict) else {}
+        raw_custom_data = body.get("custom_data")
+        custom_data: dict[str, Any] = raw_custom_data if isinstance(raw_custom_data, dict) else {}
+        raw_custom_inputs = custom_data.get("inputs")
+        custom_inputs: dict[str, Any] = raw_custom_inputs if isinstance(raw_custom_inputs, dict) else {}
         routed_intent = input_section.get("intent") or custom_inputs.get("intent") or ""
 
         # 在 a2a 续轮调用侧记录 Versatile 前后 Tag 日志
@@ -1539,6 +1592,7 @@ class RemoteAgentHandler:
 
         # 收集所有 chunk 用于最终拼接
         all_chunks = []
+        heartbeat_runtime = (context or {}).get("heartbeat_runtime")
         try:
             async for stream_resp in self._va_client.send_message(request):
                 stream_resp_count += 1
@@ -1577,7 +1631,27 @@ class RemoteAgentHandler:
                             upstream_error = self._extract_failed_error(event) or {"message": "VA 任务异常终止"}
                         logger.debug("[RemoteAgentHandler] VA 续轮 TaskStatusUpdateEvent(FAILED)")
 
+        except asyncio.TimeoutError as e:
+            if heartbeat_runtime is not None:
+                await heartbeat_runtime.notify_heartbeat(
+                    request_id=conv_id,
+                    heartbeat_type="end",
+                    status="timeout",
+                    source="a2a_service",
+                )
+                await heartbeat_runtime.stop_heartbeat(conv_id, reason="timeout", mark_end=False)
+            status_message = 1
+            error_message = str(e)
+            logger.exception(f"[RemoteAgentHandler] VA continue send_message 超时：{e}")
         except Exception as e:
+            if heartbeat_runtime is not None:
+                await heartbeat_runtime.notify_heartbeat(
+                    request_id=conv_id,
+                    heartbeat_type="end",
+                    status="error",
+                    source="a2a_service",
+                )
+                await heartbeat_runtime.stop_heartbeat(conv_id, reason="error", mark_end=False)
             status_message = 1
             error_message = str(e)
             logger.exception(f"[RemoteAgentHandler] VA continue send_message 异常：{e}")
@@ -1622,6 +1696,9 @@ class RemoteAgentHandler:
                     query="",
                     original_body=original_body,
                     cascade_result=cascade,
+                    run_options={
+                        "heartbeat_runtime": (context or {}).get("heartbeat_runtime"),
+                    },
                 )
 
         elif upstream_error is not None:

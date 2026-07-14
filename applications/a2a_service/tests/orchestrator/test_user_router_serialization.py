@@ -500,3 +500,24 @@ def test_end_to_end_capture_conversation_start():
     assert parsed["custom_rsp_data"]["content"] == "本轮对话开始"
     assert parsed["custom_rsp_data"]["latency"] == ""
     assert parsed["custom_rsp_data"]["plugin"] == ""
+
+
+def test_serialize_heartbeat_fills_seq_when_missing():
+    ev = _build_agent_artifact_event(
+        "heartbeat",
+        "",
+        extra={
+            "request_id": "conv-heartbeat",
+            "heartbeat_type": "normal",
+            "status": "processing",
+            "source": "a2a_service",
+        },
+    )
+
+    payload = _serialize_event(
+        ev, agent_id=AGENT_ID, conversation_id="conv-heartbeat", start_time=0.0,
+    )
+    assert payload is not None
+    parsed = json.loads(payload)
+    assert parsed["custom_rsp_data"]["event"] == "heartbeat"
+    assert isinstance(parsed["custom_rsp_data"]["data"].get("seq"), int)

@@ -57,7 +57,10 @@ class LocalAgentHandler:
                     query=query,
                     original_body=original_body,
                     cascade_result=None,
-                    step_counter=step_counter or [0],
+                    run_options={
+                        "step_counter": step_counter or [0],
+                        "heartbeat_runtime": context.get("heartbeat_runtime"),
+                    },
                 )
             return
 

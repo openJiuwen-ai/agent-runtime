@@ -16,11 +16,12 @@ Task 状态流转（存于 RedisTaskStore）：
 """
 from __future__ import annotations
 
+import asyncio
 import inspect
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any
 
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.context import ServerCallContext
@@ -37,13 +38,13 @@ from a2a.types.a2a_pb2 import (
 from google.protobuf.json_format import MessageToDict
 from loguru import logger
 
-from agents.EDPAgent import agent_stream
 from channels.dict_to_a2a import clear_artifact_id_cache
 from channels.observability import log_channel_event
 from common.constants import session_request_key
 from common.logger import Level
 from common.redis_client import RedisClient
 from config import get_settings
+from orchestrator.heartbeat_runtime import HeartbeatRuntimeManager
 from orchestrator.route import (
     NormalizedEvent,
     RouteDispatcher,
@@ -51,6 +52,19 @@ from orchestrator.route import (
 from orchestrator.state import TaskStateManager, CONV_TASK_KEY
 
 _TTL = 1800
+
+# 兼容测试 monkeypatch：优先使用模块级变量；未注入时再懒加载真实实现。
+agent_stream = None
+
+
+def _resolve_agent_stream():
+    global agent_stream
+    if agent_stream is not None:
+        return agent_stream
+    from agents.EDPAgent import agent_stream as edp_agent_stream
+
+    agent_stream = edp_agent_stream
+    return agent_stream
 
 
 @dataclass(frozen=True)
@@ -66,6 +80,14 @@ class _TurnContext:
     call_context: ServerCallContext
     event_queue: EventQueue
     sub_task_path: tuple[str, ...] = ()
+
+
+@dataclass
+class _RunAgentOptions:
+    """run_agent 的可选参数封装，避免相关参数散列扩散。"""
+
+    step_counter: list[int] | None = None
+    heartbeat_runtime: HeartbeatRuntimeManager | None = None
 
 
 class Executor(AgentExecutor):
@@ -84,17 +106,22 @@ class Executor(AgentExecutor):
         route_dispatcher: RouteDispatcher | None = None,
         state_manager: TaskStateManager | None = None,
         *,
-        va_client: object | None = None,
-        task_store: object | None = None,
-        sub_agent_client: object | None = None,
-        client_factory: object | None = None,
-        session_task_kv: object | None = None,
-        session_request_kv: object | None = None,
-        **handler_limits: object,
+        va_client: Any | None = None,
+        task_store: Any | None = None,
+        sub_agent_client: Any | None = None,
+        client_factory: Any | None = None,
+        session_task_kv: Any | None = None,
+        session_request_kv: Any | None = None,
+        **handler_limits: Any,
     ) -> None:
         self._redis = redis
+        self._heartbeat_interval_seconds = int(handler_limits.get("heartbeat_interval_seconds", 15))
+        self._heartbeat_timeout_seconds = int(handler_limits.get("heartbeat_timeout_seconds", 1800))
         self._session_task_kv = session_task_kv
         self._session_request_kv = session_request_kv
+        # 心跳 runtime 按会话复用，避免续轮时 normal loop 被上一轮 finally 提前销毁。
+        self._heartbeat_runtime_registry: dict[str, HeartbeatRuntimeManager] = {}
+        self._heartbeat_runtime_lock = asyncio.Lock()
         self._remote_handler = None
         if route_dispatcher is None or state_manager is None:
             from orchestrator.handlers.remote_agent_handler import RemoteAgentHandler
@@ -107,6 +134,8 @@ class Executor(AgentExecutor):
                 redis=redis,
                 state_manager=state_manager,
                 client_factory=client_factory,
+                heartbeat_interval_seconds=self._heartbeat_interval_seconds,
+                heartbeat_timeout_seconds=self._heartbeat_timeout_seconds,
                 max_concurrent_sub_agents=int(handler_limits.get("max_concurrent_sub_agents", 3)),
                 sub_agent_timeout_seconds=int(handler_limits.get("sub_agent_timeout_seconds", 1800)),
                 max_parallel_workflows_per_agent=int(handler_limits.get("max_parallel_workflows_per_agent", 3)),
@@ -115,7 +144,10 @@ class Executor(AgentExecutor):
             )
             if sub_agent_client is not None:
                 remote_handler._sub_agent_clients[""] = sub_agent_client
-            route_dispatcher.register_handler("requester", RequesterHandler(state_manager).handle)
+            route_dispatcher.register_handler(
+                "requester",
+                RequesterHandler(state_manager).handle,
+            )
             route_dispatcher.register_handler("remote_agent", remote_handler.handle)
             self._remote_handler = remote_handler
 
@@ -131,6 +163,62 @@ class Executor(AgentExecutor):
         if isinstance(root_task_id, bytes):
             root_task_id = root_task_id.decode("utf-8")
         return root_task_id if isinstance(root_task_id, str) else ""
+
+    async def _acquire_heartbeat_runtime(
+        self,
+        *,
+        conv_id: str,
+        task_id: str,
+        event_queue: EventQueue,
+    ) -> HeartbeatRuntimeManager:
+        async with self._heartbeat_runtime_lock:
+            runtime = self._heartbeat_runtime_registry.get(conv_id)
+            if runtime is None:
+                runtime = HeartbeatRuntimeManager(
+                    conv_id=conv_id,
+                    task_id=task_id,
+                    event_queue=event_queue,
+                    redis=self._redis,
+                    interval_seconds=self._heartbeat_interval_seconds,
+                    timeout_seconds=self._heartbeat_timeout_seconds,
+                )
+                self._heartbeat_runtime_registry[conv_id] = runtime
+                return runtime
+
+            runtime.bind_context(
+                conv_id=conv_id,
+                task_id=task_id,
+                event_queue=event_queue,
+            )
+            return runtime
+
+    async def _release_heartbeat_runtime(self, conv_id: str) -> None:
+        if not conv_id:
+            return
+        async with self._heartbeat_runtime_lock:
+            runtime = self._heartbeat_runtime_registry.pop(conv_id, None)
+        if runtime is not None:
+            await runtime.cleanup()
+
+    async def _cleanup_heartbeat_runtime_if_terminal(
+        self,
+        *,
+        conv_id: str,
+        task_id: str,
+        call_context: ServerCallContext,
+    ) -> None:
+        if not conv_id or not task_id:
+            return
+        try:
+            task = await self._state_manager.get_task(task_id, call_context)
+        except Exception as exc:
+            logger.warning("[Executor] 查询任务状态失败，跳过心跳回收: {}", exc)
+            return
+        if not isinstance(task, dict):
+            return
+        status = str(task.get("status_state") or "").upper()
+        if status in {"COMPLETED", "FAILED", "CANCELED"}:
+            await self._release_heartbeat_runtime(conv_id)
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         """编排入口：解析请求 → 构建 NormalizedEvent → dispatch → return
@@ -159,6 +247,25 @@ class Executor(AgentExecutor):
             sub_task_path=sub_task_path,
         )
 
+        transient_hb = False
+        if conv_id:
+            heartbeat_runtime = await self._acquire_heartbeat_runtime(
+                conv_id=conv_id,
+                task_id=task_id,
+                event_queue=event_queue,
+            )
+        else:
+            # 无 conv_id 的极端场景退化为单轮 runtime，避免空键污染会话注册表。
+            transient_hb = True
+            heartbeat_runtime = HeartbeatRuntimeManager(
+                conv_id=conv_id,
+                task_id=task_id,
+                event_queue=event_queue,
+                redis=self._redis,
+                interval_seconds=self._heartbeat_interval_seconds,
+                timeout_seconds=self._heartbeat_timeout_seconds,
+            )
+
         event = NormalizedEvent(
             type="request",
             data={
@@ -183,8 +290,23 @@ class Executor(AgentExecutor):
             "step_counter": [0],
             "route_dispatcher": self._route_dispatcher,
             "is_specify_task": is_specify_task,
+            "heartbeat_runtime": heartbeat_runtime,
         }
-        await self._route_dispatcher.dispatch(event, handler_context)
+        try:
+            await self._route_dispatcher.dispatch(event, handler_context)
+        except Exception:
+            if conv_id:
+                await self._release_heartbeat_runtime(conv_id)
+            raise
+        finally:
+            if transient_hb:
+                await heartbeat_runtime.cleanup()
+            else:
+                await self._cleanup_heartbeat_runtime_if_terminal(
+                    conv_id=conv_id,
+                    task_id=task_id,
+                    call_context=call_context,
+                )
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
         task_id = context.task_id or ""
@@ -201,6 +323,7 @@ class Executor(AgentExecutor):
                 status=TaskStatus(state=TASK_STATE_CANCELED),
             )
         )
+        await self._release_heartbeat_runtime(conv_id)
         logger.info(f"[Executor] cancel: conv={conv_id}, task={task_id}")
 
     async def cancel_task(self, conv_id: str, call_context: ServerCallContext | None = None) -> None:
@@ -215,6 +338,7 @@ class Executor(AgentExecutor):
             for sub_task_id in metadata.get("sub_tasks", []) or []:
                 child_task_infos.append({"task_id": str(sub_task_id), "url": ""})
         await self._cancel_remote_children(conv_id, child_task_infos)
+        await self._release_heartbeat_runtime(conv_id)
         logger.info(f"[Executor] cancel_task: conv={conv_id}, task={task_id}")
 
     async def _cancel_remote_children(
@@ -236,8 +360,8 @@ class Executor(AgentExecutor):
         turn_ctx: _TurnContext,
         query: str,
         original_body: dict,
-        cascade_result: Optional[dict],
-        step_counter: Optional[list[int]] = None,
+        cascade_result: dict[str, Any] | None,
+        run_options: _RunAgentOptions | dict[str, Any] | None = None,
     ) -> None:
         """Local Agent 执行：迭代 agent_stream，事件处理 + DelegateRequest 转 dispatch
 
@@ -247,6 +371,17 @@ class Executor(AgentExecutor):
         - handler 通过 context["_stream_interrupted"] 信号通知流中断（如 DelegateRequest）
         - 正常结束 → finalize_completed
         """
+        options = run_options
+        if isinstance(options, dict):
+            options = _RunAgentOptions(
+                step_counter=options.get("step_counter") if isinstance(options.get("step_counter"), list) else None,
+                heartbeat_runtime=options.get("heartbeat_runtime"),
+            )
+        elif options is None:
+            options = _RunAgentOptions()
+
+        step_counter = options.step_counter
+        heartbeat_runtime = options.heartbeat_runtime
         if step_counter is None:
             step_counter = [0]
 
@@ -277,16 +412,21 @@ class Executor(AgentExecutor):
             "original_body": original_body,
             "step_counter": step_counter,
             "route_dispatcher": self._route_dispatcher,
+            "heartbeat_runtime": heartbeat_runtime,
         }
 
         event_count = 0
         final_answer_chunk = ""
         final_answer_end = ""
-        async for event in agent_stream(
+        stream_fn = _resolve_agent_stream()
+        async for event in stream_fn(
             query=query,
             conv_id=conv_id,
             cascade_result=cascade_result,
-            context={"body": original_body},
+            context={
+                "body": original_body,
+                "is_sub_agent": bool(turn_ctx.sub_task_path),
+            },
         ):
             event_count += 1
             event_type = event.get("type") if isinstance(event, dict) else ""

@@ -3,7 +3,6 @@
 # pylint: disable=protected-access
 from __future__ import annotations
 
-import json
 from types import SimpleNamespace
 
 import pytest
@@ -31,6 +30,7 @@ class _Redis:
         self.values: dict[str, str] = {}
         self.json_values: dict[str, object] = {}
         self.set_nx_result = True
+        self.incr_values: dict[str, int] = {}
 
     async def get(self, key: str):
         return self.values.get(key)
@@ -49,6 +49,14 @@ class _Redis:
 
     async def set_json(self, key: str, value, ex=None):  # noqa: ARG002
         self.json_values[key] = value
+
+    async def incr(self, key: str):
+        val = self.incr_values.get(key, 0) + 1
+        self.incr_values[key] = val
+        return val
+
+    async def expire(self, key: str, seconds: int):  # noqa: ARG002
+        return True
 
 
 class _TaskStore:
