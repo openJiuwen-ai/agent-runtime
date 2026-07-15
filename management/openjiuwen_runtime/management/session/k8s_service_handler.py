@@ -9,7 +9,7 @@ import re
 import secrets
 import string
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from kubernetes_asyncio import client, config
 from kubernetes_asyncio.client.rest import ApiException
@@ -704,14 +704,11 @@ class K8sServiceHandler:
             kubeconfig: Optional[str] = None,
             label_selector: str = "",
             grace_period: int = 30,
-            keep_pod_names: Optional[Set[str]] = None,
     ) -> int:
-        """按 label selector 批量删除匹配的 Pod。
+        """按 label selector 批量删除所有匹配的 Pod（主备切换时清理旧 PRIMARY 遗留的 Pod）。
 
-        ``keep_pod_names`` 中的 Pod 跳过（当前纳管 / 正在删除中的实例）。
         返回已提交删除的 Pod 数量。
         """
-        keep = set(keep_pod_names or ())
         try:
             config.load_incluster_config()
         except config.ConfigException:
@@ -728,18 +725,12 @@ class K8sServiceHandler:
             )
             pod_names = [
                 p.metadata.name for p in (pods.items or [])
-                if p.metadata and p.metadata.name and p.metadata.name not in keep
+                if p.metadata and p.metadata.name
             ]
             if not pod_names:
-                logger.debug(
-                    "无未纳管 Pod 需清理: namespace=%s selector=%s keep=%s",
-                    namespace, label_selector, len(keep),
-                )
+                logger.info("无匹配 Pod 需清理: namespace=%s selector=%s", namespace, label_selector)
                 return 0
-            logger.info(
-                "开始清理未纳管 Pod: namespace=%s count=%s keep=%s",
-                namespace, len(pod_names), len(keep),
-            )
+            logger.info("开始批量清理 Pod: namespace=%s count=%s", namespace, len(pod_names))
             for name in pod_names:
                 try:
                     await core.delete_namespaced_pod(
@@ -754,7 +745,7 @@ class K8sServiceHandler:
                 except ApiException as exc:
                     if exc.status != 404:
                         logger.error("删除 Pod 失败: name=%s err=%s", name, exc)
-            logger.info("未纳管 Pod 清理完成: deleted=%s", deleted)
+            logger.info("批量清理完成: deleted=%s", deleted)
         finally:
             await api_client.close()
         return deleted

@@ -100,8 +100,6 @@ class ServiceManager(IServiceManager):
         self._deleting_services: set[str] = set()
         # 缩容已从池摘走、K8s delete 尚未结束：仍计入 max_services，避免第二轮抢跑占位
         self._reclaim_occupancy: dict[Optional[str], int] = {}
-        # 缩容 delete 进行中的 Pod 名（未入池），扫删时需保留
-        self._deleting_pod_names: set[str] = set()
         self._user_route_tasks: set[asyncio.Task[Any]] = set()
         # 缩容回收（含 await delete）后台任务；不可 await 在 message_loop 内，否则堵住用户出队
         self._reclaim_tasks: set[asyncio.Task[Any]] = set()
@@ -247,7 +245,6 @@ class ServiceManager(IServiceManager):
             self._excess_idle_timer_armed.clear()
             self._deleting_services.clear()
             self._reclaim_occupancy.clear()
-            self._deleting_pod_names.clear()
             self._pending_expired_sessions.clear()
             try:
                 await self._timer.stop_all()
@@ -1094,7 +1091,6 @@ class ServiceManager(IServiceManager):
         h: Optional[IServiceHandler] = None
         should_delete = False
         template_id: Optional[str] = None
-        reclaim_pod_name: Optional[str] = None
 
         async with self._lock:
             if service_id in self._deleting_services:
@@ -1134,20 +1130,8 @@ class ServiceManager(IServiceManager):
             self._reclaim_occupancy[template_id] = (
                 self._reclaim_occupancy.get(template_id, 0) + 1
             )
-            if hasattr(oh, "pod_info") and oh.pod_info and getattr(oh.pod_info, "pod_name", None):
-                reclaim_pod_name = str(oh.pod_info.pod_name)
-                self._deleting_pod_names.add(reclaim_pod_name)
             h = oh
             should_delete = True
-
-        if should_delete and h is not None:
-            # 删除期间禁止再按旧亲和绑到该 service
-            try:
-                await self._service_router.delete_service_sessions(service_id)
-            except Exception as e:  # noqa: BLE001
-                logger.debug(
-                    "缩容清理亲和失败(忽略): service_id=%s err=%s", service_id, e
-                )
 
         if not should_delete or h is None:
             return
@@ -1169,8 +1153,6 @@ class ServiceManager(IServiceManager):
                     self._reclaim_occupancy.pop(template_id, None)
                 else:
                     self._reclaim_occupancy[template_id] = n - 1
-                if reclaim_pod_name:
-                    self._deleting_pod_names.discard(reclaim_pod_name)
         await self._schedule_excess_idle_reclaim_if_needed()
 
     async def _pick_existing_locked(
@@ -1182,59 +1164,50 @@ class ServiceManager(IServiceManager):
         # 1) 亲和：该 session 已绑定到某 service，则复用
         sid = await self._service_router.get_session_service(session_id)
         if sid is not None:
-            if sid in self._deleting_services:
-                await self._service_router.delete_session_service(session_id)
-                logger.debug(
-                    "亲和指向缩容中实例, 已清映射: session_id=%s service_id=%s",
-                    session_id,
-                    sid,
-                )
-            else:
-                h: Optional[IServiceHandler] = None
-                found_template_id: Optional[str] = None
-                for tid, pool in self._in_use.items():
+            h: Optional[IServiceHandler] = None
+            found_template_id: Optional[str] = None
+            for tid, pool in self._in_use.items():
+                if sid in pool:
+                    h = pool[sid]
+                    found_template_id = tid
+                    break
+
+            if h is None:
+                for tid, pool in self._idle.items():
                     if sid in pool:
                         h = pool[sid]
                         found_template_id = tid
                         break
 
-                if h is None:
+            if h is None:
+                # 含缩容已 pop、delete 未完成：池中无实例，清映射后走选池/扩容
+                await self._service_router.delete_session_service(session_id)
+                logger.debug(
+                    "亲和失效: 路由表有记录但池无此实例, 已删映射 session_id=%s", session_id
+                )
+            else:
+                # 从 idle 移到 in_use
+                if found_template_id is not None:
+                    if sid in self._idle.get(found_template_id, {}):
+                        self._idle[found_template_id].pop(sid, None)
+                        self._in_use.setdefault(found_template_id, {})[sid] = h
+                else:
+                    # 兼容旧逻辑
                     for tid, pool in self._idle.items():
                         if sid in pool:
-                            h = pool[sid]
-                            found_template_id = tid
+                            pool.pop(sid, None)
+                            self._in_use.setdefault(tid, {})[sid] = h
                             break
-
-                if h is None:
-                    await self._service_router.delete_session_service(session_id)
-                    logger.debug(
-                        "亲和失效: 路由表有记录但池无此实例, 已删映射 session_id=%s", session_id
-                    )
-                else:
-                    # 从 idle 移到 in_use
-                    if found_template_id is not None:
-                        if sid in self._idle.get(found_template_id, {}):
-                            self._idle[found_template_id].pop(sid, None)
-                            self._in_use.setdefault(found_template_id, {})[sid] = h
-                    else:
-                        # 兼容旧逻辑
-                        for tid, pool in self._idle.items():
-                            if sid in pool:
-                                pool.pop(sid, None)
-                                self._in_use.setdefault(tid, {})[sid] = h
-                                break
-                    # 注意：计时器取消由调用方 _handle_user_request 在锁外统一处理
-                    logger.debug(
-                        "从 idle 取回实例, service_id=%s template_id=%s", h.id, found_template_id
-                    )
-                    return h
+                # 注意：计时器取消由调用方 _handle_user_request 在锁外统一处理
+                logger.debug(
+                    "从 idle 取回实例, service_id=%s template_id=%s", h.id, found_template_id
+                )
+                return h
 
         # 2) 新 session：在相同 template_id 组的 in_use/idle 中找实例
         # 先在 in_use 池中查找
         in_use_pool = self._in_use.get(template_id, {})
         for h in in_use_pool.values():
-            if h.id in self._deleting_services:
-                continue
             if h.available_concurrency >= need:
                 logger.debug(
                     "选用 in_use 实例 (template_id=%s): service_id=%s avail=%s",
@@ -1245,8 +1218,6 @@ class ServiceManager(IServiceManager):
         # 再在 idle 池中查找
         idle_pool = self._idle.get(template_id, {})
         for h in list(idle_pool.values()):
-            if h.id in self._deleting_services:
-                continue
             if h.available_concurrency >= need:
                 idle_pool.pop(h.id, None)
                 self._in_use.setdefault(template_id, {})[h.id] = h
@@ -1340,7 +1311,7 @@ class ServiceManager(IServiceManager):
         """根据 session 请求选择或创建服务实例，并完成额度预留与亲和绑定。
 
         选择策略：
-        1) 亲和：该 session 已绑定到某 service，则复用（缩容中的亲和会清映射）
+        1) 亲和：该 session 已绑定到某 service，则复用（池中已无则清映射）
         2) 否则在相同 template_id 组的 in_use/idle 池中找尚有服务级并发的实例
         3) 再否则在该 template_id 组的 max 允许下新 deploy（deploy 在锁外执行）
            同一 session_id 仅允许一个 in-flight deploy；后来者 await 其结果再选池/绑定，
@@ -1567,7 +1538,6 @@ class ServiceManager(IServiceManager):
                 if not self._running:
                     break
                 await self._cleanup_failed_pods()
-                await self._sweep_unmanaged_pods()
             except asyncio.CancelledError:
                 logger.debug("Pod 监控任务被取消")
                 break
@@ -1703,41 +1673,9 @@ class ServiceManager(IServiceManager):
 
         await self._cleanup_dead_pods(failed_pods)
 
-    async def _sweep_unmanaged_pods(self) -> None:
-        """删除 label 匹配但未被本 SM 纳管/缩容中的幽灵 Pod。
-
-        deploy 进行中（create→Ready）不得扫删：此时 Pod 已在集群，但
-        ``pod_info`` 尚未回填，若误删会导致预拉热/冷启动刚起来就被 kill。
-        """
-        if self._deploy_mode != "k8s":
-            return
-        async with self._lock:
-            if self._deploying:
-                logger.debug(
-                    "跳过未纳管扫删: 有 %s 个实例正在 deploy", len(self._deploying)
-                )
-                return
-            keep = set(self._deleting_pod_names)
-            for pool in [self._in_use, self._idle]:
-                for template_pool in pool.values():
-                    for h in template_pool.values():
-                        keep |= self._handler_pod_names(h)
-        if not keep:
-            # 池为空时扫删会误伤并发刚创建、尚未入池的 Pod；交给 reclaim/stop 路径即可
-            logger.debug("跳过未纳管扫删: 当前无纳管 Pod")
-            return
-        try:
-            await K8sServiceHandler.cleanup_all_agentserver_pods(
-                namespace=self._namespace,
-                kubeconfig=self._kubeconfig,
-                label_selector=POD_LABEL_SELECTOR,
-                keep_pod_names=keep,
-            )
-        except (ApiException, config.ConfigException, OSError) as e:
-            logger.error("未纳管 Pod 扫删失败: %s", e, exc_info=True)
-
     @staticmethod
     def _handler_pod_names(h: IServiceHandler) -> Set[str]:
+        """收集 handler 已关联的 Pod 名（含 deploy 中 resource_id 尚未回填 pod_info 的情况）。"""
         names: Set[str] = set()
         if hasattr(h, "pod_info") and h.pod_info and getattr(h.pod_info, "pod_name", None):
             names.add(str(h.pod_info.pod_name))
@@ -1748,7 +1686,7 @@ class ServiceManager(IServiceManager):
         return names
 
     async def _collect_managed_pod_names(self) -> Set[str]:
-        """收集当前 ServiceManager 池中仍记录的 Pod 名称。"""
+        """收集当前 ServiceManager 池中仍记录的 Pod 名称（含 deploy 进行中）。"""
         pod_names: Set[str] = set()
         async with self._lock:
             for pool in [self._in_use, self._idle]:
