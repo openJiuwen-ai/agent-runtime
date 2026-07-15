@@ -56,7 +56,15 @@ async def test_dispatch_respects_max_call_depth_without_emitting_nodes():
     capture = {}
 
     class _Executor:
-        async def run_agent(self, _turn_ctx, *, query, original_body, cascade_result, step_counter=None):
+        async def run_agent(
+            self,
+            _turn_ctx,
+            *,
+            query,
+            original_body,
+            cascade_result,
+            run_options=None,
+        ):
             capture["cascade"] = cascade_result
 
     await handler._handle_sub_agent_dispatch(
@@ -150,9 +158,19 @@ async def test_sub_agent_dispatch_resumes_with_cancelled_cascade():
         }
 
     class _Executor:
-        async def run_agent(self, _turn_ctx, *, query, original_body, cascade_result, step_counter=None):
+        async def run_agent(
+            self,
+            _turn_ctx,
+            *,
+            query,
+            original_body,
+            cascade_result,
+            run_options=None,
+        ):
             capture["cascade"] = cascade_result
-            capture["step_counter"] = step_counter
+            capture["step_counter"] = (
+                run_options.get("step_counter") if isinstance(run_options, dict) else None
+            )
 
     handler._run_one_sub_agent = cancelled_run_one
 

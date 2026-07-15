@@ -6,7 +6,7 @@
 通过 mock httpx 注入 SSE 响应，验证 Runner 完整流程：
 - 配置加载 → target 路由匹配 → adapter 创建 → dispatch_stream → 标准化 AdapterEvent 输出
 - 一级控制器：data_proxy + execution_completed 终态
-- 低码工作流：data_proxy + execution_input_required（无 End 节点）
+- 低码工作流：data_proxy + execution_completed 终态（无 End 节点时兜底 FAILED）
 - 错误路径：404/422 HTTPStatusError 透传
 """
 from __future__ import annotations

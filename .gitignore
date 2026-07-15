@@ -119,3 +119,6 @@ htmlcov/
 dmypy.json
 
 .trae
+
+# 本地 EDPAgent 子目录忽略
+applications/a2a_service/agents/EDPAgent/

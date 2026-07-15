@@ -90,6 +90,13 @@ class RedisClient:
     async def set_json(self, key: str, value: Any, ex: Optional[int] = None) -> None:
         await self.set(key, json.dumps(value, ensure_ascii=False), ex=ex)
 
+    async def incr(self, key: str) -> int:
+        return int(await self.client.incr(key))
+
+    async def expire(self, key: str, seconds: int) -> bool:
+        ttl = max(int(seconds), 1)
+        return bool(await self.client.expire(key, ttl))
+
     async def acquire_lock(self, lock_key: str, owner_id: str, ttl_seconds: int) -> bool:
         ttl = max(int(ttl_seconds), 1)
         return await self.set_if_not_exists(lock_key, owner_id, ex=ttl)

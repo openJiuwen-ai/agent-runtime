@@ -114,18 +114,16 @@ class TestMakeTextPart:
 
 class TestExtractLoggingContext:
     @staticmethod
-    def test_extracts_trace_and_agent_id():
-        input_data = {"trace_id": "t-1", "agent_id": "a-1", "other": "x"}
+    def test_extracts_trace_id():
+        input_data = {"trace_id": "t-1", "other": "x"}
         ctx = A2aVersatileExecutor._extract_logging_context(input_data, "conv-1")
         assert ctx["trace_id"] == "t-1"
-        assert ctx["agent_id"] == "a-1"
         assert ctx["conv_id"] == "conv-1"
 
     @staticmethod
     def test_missing_fields_default_empty():
         ctx = A2aVersatileExecutor._extract_logging_context({}, "conv-1")
         assert ctx["trace_id"] == ""
-        assert ctx["agent_id"] == ""
 
 
 # ════════════════════════════════════════════════════════════════════

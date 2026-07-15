@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     versatile_adapter_url: Optional[str] = None
     # a2a_service → VersatileAdapter 的 HTTP 超时（秒），与versatile_adapter中VERSATILE_TIMEOUT 默认值对齐，需要<=工小智前端超时时延57s
     versatile_adapter_timeout: int = 57
+    # Runtime 心跳参数
+    heartbeat_interval_seconds: int = 15
+    heartbeat_timeout_seconds: int = 1800
     # VA 流中携带工作流最终结果的 QA 节点名称（node_type=="QA" 且 node_name==此值）
     va_workflow_result_node: Optional[str] = None
 

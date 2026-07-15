@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     versatile_timeout: Optional[int] = None
     versatile_headers_template: Json[Dict[str, Any]] = _DEFAULT_VERSATILE_HEADERS_TEMPLATE
     versatile_adapter_type: str = "controller"  # "controller" 或 "workflow"
+    versatile_workflow_adapter_type: str = Field(
+        default="a2a_gateway", alias="va_workflow_adapter_type",
+    )  # 环境变量 VA_WORKFLOW_ADAPTER_TYPE，默认走 a2a_gateway 网关模式，设为 "workflow" 切换回直连低码工作流
     versatile_workflow_result_node: Optional[str] = Field(
         default=None, alias="va_workflow_result_node",
     )  # 环境变量 VA_WORKFLOW_RESULT_NODE，代码中用 versatile_ 前缀访问

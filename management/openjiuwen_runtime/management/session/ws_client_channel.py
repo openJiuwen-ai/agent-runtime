@@ -371,7 +371,6 @@ def _ws_is_closed(ws: Any) -> bool:
 
 def _decode_ws_message(raw: object) -> Optional[dict[str, Any]]:
     try:
-        logger.info("WSS 下行 JSON")
         out = json.loads(raw)
     except json.JSONDecodeError as e:
         logger.error("WSS 下行非 JSON, 已忽略: %s", e)

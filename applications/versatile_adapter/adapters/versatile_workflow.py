@@ -49,11 +49,16 @@ class VersatileWorkflow(VersatileProxy):
             ctx.completed = True
             return []
 
+        if re.search(r'"event"\s*:\s*"end"', chunk):
+            logger.debug(f"[VersatileWorkflow] end 帧，标记完成")
+            ctx.completed = True
+            return [AdapterEvent(data_proxy=DataProxyContent(raw_data=chunk))]
+
         if re.search(r'"type"\s*:\s*"dialogId"', chunk):
             return []
 
-        if re.search(r'"event"\s*:\s*"exception"', chunk):
-            logger.debug(f"[VersatileWorkflow] exception 帧，yield data_proxy")
+        if re.search(r'"event"\s*:\s*"(?:error|exception)"', chunk):
+            logger.debug(f"[VersatileWorkflow] error/exception 帧，yield data_proxy")
             ctx.completed = True
             ctx.is_failed = True
             ctx.error_message = chunk

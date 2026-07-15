@@ -16,22 +16,32 @@
 #   - forward_header_whitelist 不合并；adapter 配置后整体覆盖默认白名单
 #   - controller 通常只有一个，请在 controller adapter 内完整配置
 #
+# a2a_gateway_defaults 仅对 type: a2a_gateway 的 adapter 生效（同上逻辑）。
+# 通过环境变量 VA_WORKFLOW_ADAPTER_TYPE 切换：
+#   VA_WORKFLOW_ADAPTER_TYPE=workflow     -> _match_workflow 匹配 type: workflow
+#   VA_WORKFLOW_ADAPTER_TYPE=a2a_gateway  -> _match_workflow 匹配 type: a2a_gateway（默认）
+#
 # adapters 列表可包含多个 adapter，运行时按 target 动态匹配：
-#   - target 含 workflow_id / intent 且匹配到 workflow 配置 → VersatileWorkflow
-#   - 否则 → VersatileController（使用第一个 type=controller 的配置）
+#   - VA_WORKFLOW_ADAPTER_TYPE=workflow 时，target 含 workflow_id / intent 且匹配到 workflow 配置 -> VersatileWorkflow
+#   - VA_WORKFLOW_ADAPTER_TYPE=a2a_gateway 时，target 含 workflow_id / intent 且匹配到 a2a_gateway 配置 -> VersatileA2AGateway
+#   - 否则 -> VersatileController（使用第一个 type=controller 的配置）
 #
 # 各字段说明：
-#   name                     — 适配器名称（日志标识）
-#   type                     — controller（一级控制器）或 workflow（低码工作流）
-#   url_template             — URL 模板，支持占位符 {conversation_id}、{workflow_id}
-#   timeout                  — HTTP 流式请求超时（秒），默认 600
-#   headers_template         — 调用 Versatile 时注入的默认请求头
-#   forward_header_whitelist — 仅转发白名单中的外部请求头（小写）；不设置则转发全部
-#   workflow_result_node     — （controller/workflow 可选）SSE 流中匹配 node_type=="QA" 且
+#   name                     - 适配器名称（日志标识）
+#   type                     - controller / workflow / a2a_gateway
+#   url_template             - URL 模板，支持占位符 {conversation_id}、{workflow_id}、
+#                              {a2a_gateway_base}、{agent_card_name}
+#   timeout                  - HTTP 流式请求超时（秒），默认 600
+#   headers_template         - 调用时注入的默认请求头
+#   forward_header_whitelist - 仅转发白名单中的外部请求头（小写）；不设置则转发全部
+#   workflow_result_node     - （controller/workflow 可选）SSE 流中匹配 node_type=="QA" 且
 #                              node_name==此值的帧，提取 text 作为 workflow_result；
-#                              adapter 级配置，每个 adapter 可不同
-#   workflow_id              — （仅 workflow）target 中 workflow_id 精确匹配时命中
-#   intent                   — （仅 workflow）target 中 intent 匹配时命中
+#                              A2A Gateway 模式不使用此字段（取最后 artifact）
+#   workflow_id              - （仅 workflow/a2a_gateway）target 中 workflow_id 精确匹配时命中
+#   intent                   - （仅 workflow/a2a_gateway）target 中 intent 匹配时命中
+#   a2a_gateway_base         - （仅 a2a_gateway）网关基础地址
+#   agent_card_name          - （仅 a2a_gateway）AgentCard 名称
+#   token                    - （仅 a2a_gateway）鉴权 token
 
 workflow_defaults:
   url_template: "https://versatile.example.com/workflows/{workflow_id}/conversations/{conversation_id}"
@@ -45,6 +55,22 @@ workflow_defaults:
     - cust-token
     - cust-userid
     - cookie
+
+# A2A Gateway 默认配置（VA_WORKFLOW_ADAPTER_TYPE=a2a_gateway 时生效）
+a2a_gateway_defaults:
+  a2a_gateway_base: "https://a2a-gateway.example.com"
+  url_template: "{a2a_gateway_base}/a2a/{agent_card_name}"
+  timeout: 600
+  headers_template:
+    Accept: "text/event-stream, application/json"
+    Content-Type: "application/json"
+  forward_header_whitelist:
+    - x-b3-traceid
+    - x-b3-spanid
+    - x-b3-parentspanid
+    - x-b3-sampled
+    - x-biz-tag
+    - x-user-id
 
 adapters:
   - name: default_controller
@@ -80,3 +106,12 @@ adapters:
       - authorization
       - x-tenant-id
     workflow_result_node: "SpecialQAResponseNode"
+
+  # A2A Gateway 适配器（VA_WORKFLOW_ADAPTER_TYPE=a2a_gateway 时命中）
+  # 公共字段继承 a2a_gateway_defaults，只需配置差异项
+  - name: versatile_gateway_knowledge_qa
+    type: a2a_gateway
+    intent: "knowledge_qa"
+    agent_card_name: "KnowledgeAgent"
+    token: "workflow-knowledge-token"
+    workflow_result_node: "WorkflowQAResponseNode"

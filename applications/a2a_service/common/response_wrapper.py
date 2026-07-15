@@ -30,6 +30,8 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from loguru import logger
+
 # ════════════════════════════════════════════════════════════════════
 # 事件类型白名单
 # ════════════════════════════════════════════════════════════════════
@@ -148,7 +150,7 @@ def wrap_workflow_event(
     if event_kind not in ("message", "end"):
         # 防御：只接受观察到的两个值；其他值也允许透传，避免阻塞将来协议扩展
         pass
-    return {
+    result = {
         "success": True,
         "agent_id": agent_id,
         "conversation_id": conversation_id,
@@ -158,6 +160,11 @@ def wrap_workflow_event(
             "data": data,
         },
     }
+    logger.debug(
+        f"[ResponseWrapper] 输出 workflow_event: event={event_kind}, "
+        f"conv={conversation_id}, data={str(data)[:200]}"
+    )
+    return result
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -204,7 +211,7 @@ def wrap_sub_task_event(
     conversation_id: str,
     elapsed: float,
 ) -> dict[str, Any]:
-    return {
+    result = {
         "success": True,
         "agent_id": agent_id,
         "conversation_id": conversation_id,
@@ -223,6 +230,11 @@ def wrap_sub_task_event(
             ),
         },
     }
+    logger.debug(
+        f"[ResponseWrapper] 输出 sub_task_event: sub_task_path={sub_task_path}, "
+        f"node_kind={node_kind}, conv={conversation_id}"
+    )
+    return result
 
 
 def wrap_error(
