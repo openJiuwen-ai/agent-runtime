@@ -503,6 +503,67 @@ async def test_stop_waits_for_in_flight_reclaim_delete() -> None:
 
 
 @pytest.mark.asyncio
+async def test_reclaim_occupancy_counts_toward_max_until_delete_done() -> None:
+    """缩容 pop 后、delete 完成前仍占用 max 名额，避免第二轮抢跑扩容。"""
+    delete_started = asyncio.Event()
+    delete_gate = asyncio.Event()
+
+    class SlowDeleteDeploy:
+        resource_id = "pod-x"
+
+        async def deploy(self) -> None:
+            return None
+
+        async def delete(self) -> None:
+            delete_started.set()
+            await delete_gate.wait()
+
+    class Factory(IServiceInstanceFactory):
+        async def new_service(
+            self,
+            response_parser: IResponseParser,
+            service_template: Optional[Dict[str, Any]] = None,
+        ) -> IServiceHandler:
+            return ServiceHandler(
+                service_id="idle-to-drop",
+                total_concurrency=1,
+                message_channel=_Ch(),  # type: ignore[arg-type]
+                response_parser=response_parser,
+                deploy_controller=SlowDeleteDeploy(),  # type: ignore[arg-type]
+                service_template=service_template,
+            )
+
+    dq: PriorityDualAsyncQueues[QueueItem] = PriorityDualAsyncQueues(8, 8)
+    sm = ServiceManager(
+        Factory(),
+        dq,
+        Timer(),
+        service_concurrency=1,
+        min_idle_services=0,
+        max_services=1,
+        service_idle_ttl=0,
+        pod_monitor_enabled=False,
+    )
+    await sm.init(_P())
+    sm._running = True  # noqa: SLF001
+    h = await Factory().new_service(_P())
+    sm._idle.setdefault(None, {})[h.id] = h  # noqa: SLF001
+
+    reclaim_task = asyncio.create_task(sm._on_service_reclaim(h.id))  # noqa: SLF001
+    await asyncio.wait_for(delete_started.wait(), timeout=2.0)
+    assert h.id not in sm._idle.get(None, {})  # noqa: SLF001
+    assert sm._total_services_by_template(None) == 1  # noqa: SLF001
+    assert sm._try_begin_deploy_locked(  # noqa: SLF001
+        _sreq("other"), need=1, template_id=None
+    ) is None
+
+    delete_gate.set()
+    await reclaim_task
+    assert sm._reclaim_occupancy.get(None, 0) == 0  # noqa: SLF001
+    await sm.stop()
+
+
+@pytest.mark.asyncio
 async def test_slow_reclaim_does_not_block_message_loop_user_route() -> None:
     """缩容 delete 缓慢时，message_loop 仍应继续 dequeue 并 spawn 用户路由。"""
     reclaim_started = asyncio.Event()
