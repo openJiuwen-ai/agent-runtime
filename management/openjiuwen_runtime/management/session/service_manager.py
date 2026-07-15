@@ -636,6 +636,68 @@ class ServiceManager(IServiceManager):
             async with self._lock:
                 self._deleting_services.discard(h.id)
 
+    def _evacuate_same_id_locked(
+        self,
+        service_id: str,
+        *,
+        keep: IServiceHandler,
+    ) -> Optional[IServiceHandler]:
+        """池中若已有同 service_id 且非 keep，摘出旧实例。调用方须持有 ``self._lock``。
+
+        确定性 service_id（如 group+bot）在日落竞态下会二次 deploy 同名 handler；
+        若直接 ``pool[id]=new`` 覆盖，旧 Pod 会游离且永不可 reclaim。
+        """
+        displaced: Optional[IServiceHandler] = None
+        for pool_map in (self._in_use, self._idle):
+            for tid, pool in pool_map.items():
+                existing = pool.get(service_id)
+                if existing is None or existing is keep:
+                    continue
+                pool.pop(service_id, None)
+                displaced = existing
+                logger.warning(
+                    "入池前驱逐同名旧实例: service_id=%s template_id=%s "
+                    "(避免覆盖导致 K8s Pod 孤儿残留)",
+                    service_id,
+                    tid,
+                )
+                break
+            if displaced is not None:
+                break
+        if displaced is not None:
+            self._to_idle_timer_armed.discard(service_id)
+            self._excess_idle_timer_armed.discard(service_id)
+        return displaced
+
+    async def _cleanup_displaced_handler(self, old: IServiceHandler) -> None:
+        """删除被同名覆盖驱逐的旧 handler，并清理其 session 亲和。"""
+        await self._cancel_in_use_to_idle_timer(old.id)
+        await self._cancel_excess_idle_timer(old.id)
+        # 只清旧实例上的 session，避免误伤同 id 新实例上已建立的绑定。
+        # 含仅预留额度、尚未创建 SessionHandler 的 sticky（日落竞态常见）。
+        reserved = getattr(old, "_session_reserved", None)
+        sid_set: set[str] = set(old.open_session_ids())
+        if isinstance(reserved, dict):
+            sid_set.update(reserved.keys())
+        for sid in sid_set:
+            await self._service_router.delete_session_service(sid)
+            self._pending_expired_sessions.pop(sid, None)
+        try:
+            # 不用 _safe_delete_handler：其按 service_id 入 _deleting_services，
+            # 会与同名新实例短暂冲突。
+            await asyncio.shield(old.delete())
+            logger.warning(
+                "已删除被同名覆盖的旧实例: service_id=%s",
+                old.id,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.error(
+                "删除被覆盖旧实例失败: service_id=%s err=%s",
+                old.id,
+                e,
+                exc_info=True,
+            )
+
     async def _deploy_and_admit(
         self,
         template_id: Optional[str],
@@ -646,6 +708,7 @@ class ServiceManager(IServiceManager):
         """调用方须已 ``_begin_pending_deploy_locked`` 且已释放锁。deploy 在锁外执行。"""
         h: Optional[IServiceHandler] = None
         orphan: Optional[IServiceHandler] = None
+        displaced: Optional[IServiceHandler] = None
         admitted: Optional[IServiceHandler] = None
         try:
             h = await self._new_deployed(deploy_template)
@@ -674,9 +737,11 @@ class ServiceManager(IServiceManager):
                             into,
                         )
                 elif into == "idle":
+                    displaced = self._evacuate_same_id_locked(h.id, keep=h)
                     self._idle.setdefault(template_id, {})[h.id] = h
                     admitted = h
                 else:
+                    displaced = self._evacuate_same_id_locked(h.id, keep=h)
                     self._in_use.setdefault(template_id, {})[h.id] = h
                     admitted = h
                     logger.info(
@@ -688,6 +753,8 @@ class ServiceManager(IServiceManager):
         if orphan is not None:
             await self._safe_delete_handler(orphan)
             return None
+        if displaced is not None:
+            await self._cleanup_displaced_handler(displaced)
         return admitted
 
     async def _new_deployed(
@@ -740,7 +807,8 @@ class ServiceManager(IServiceManager):
         self._pending_expired_sessions.pop(session_id, None)
         h: Optional[IServiceHandler] = None
         try:
-            # 亲和 / 选池 / 预留绑定；deploy 在 _pick_or_create 内部锁外执行，不堵其他路由
+            # 亲和 / 选池 / 额度预留与路由绑定在 _pick_or_create 内完成；
+            # deploy 在其内部锁外执行，不堵其他路由。预留失败时的 in_use→idle 推动也在其内处理。
             h = await self._pick_or_create(sreq)
             if h is not None:
                 # 新消息分配到该服务：取消所有相关计时器
@@ -1244,10 +1312,14 @@ class ServiceManager(IServiceManager):
             )
             return None
 
+        # 使用查询到的模板配置进行部署（如果存在）
         deploy_template = template_config if template_config else sreq.service_template
 
         # 预检拦截: 单 session 声明的并发 need 若已超过单实例总并发上限, 即使新 deploy
         # 一个 Pod 也无法满足 try_reserve_session_quota (available=total<need), 必然预留失败。
+        # 此时直接拒绝, 避免无效扩容 (Pod 创建后即成孤儿, 触发问题1的泄漏路径)。
+        # service_concurrency 直接取自 deploy_template (模板配置或 sreq.service_template),
+        # 缺失时回退到 Manager 全局 self._service_concurrency。
         sc_raw = deploy_template.get("service_concurrency") if deploy_template else None
         service_concurrency_for_tpl = (
             int(sc_raw) if sc_raw is not None else self._service_concurrency
@@ -1279,6 +1351,8 @@ class ServiceManager(IServiceManager):
                 sreq.session_concurrency,
                 h.available_concurrency,
             )
+            # 调用方须对失败实例做 in_use→idle 推动；仅丢弃返回值会导致刚入 _in_use
+            # 的实例成为孤儿 (无 session/inflight 永不触发 _on_in_use_may_move_to_idle_pool)。
             return False
         await self._service_router.set_session_service(session_id, h.id)
         logger.info(
@@ -1326,7 +1400,8 @@ class ServiceManager(IServiceManager):
         if sreq.service_template:
             template_id = sreq.service_template.get("template_id")
 
-        # 预留失败实例：锁外 arm in_use→idle，避免孤儿泄漏（语义同原 _handle_user_request）
+        # 预留失败但已被放入 _in_use 的实例: 锁外推动 in_use→idle 回收, 避免孤儿泄漏
+        # (语义同原 _handle_user_request；deploy 出锁后绑定也在本方法内完成)
         failed_to_reserve: Optional[IServiceHandler] = None
         # 冷启动占位后偶发竞态，允许有限次重试选池/绑定
         for _ in range(5):
@@ -1353,7 +1428,18 @@ class ServiceManager(IServiceManager):
                             )
 
             if failed_to_reserve is not None:
-                # 竞态预留失败：推动回收；通常无占用，有占用则 arm 内部会跳过
+                # 预留失败的实例 (含新 deploy 刚入池的): 推动走 in_use→idle 回收。
+                # service_ttl 到期后转入 idle, 若 idle>min_idle 则被 excess_idle 回收删 Pod;
+                # 若 idle<=min_idle 则作为热备保留, 可被后续 need 较小的请求复用。
+                #
+                # 安全性说明:
+                # 1. _pick_existing 已用 available>=need 过滤, 正常应预留成功; 失败多为竞态
+                #    (他请求先占额度), 或预检漏网的 need>单实例总并发。新 deploy 实例通常
+                #    无 session/inflight, failed_to_reserve 一般无其他占用。
+                # 2. 即使存在竞态(arm 前其他请求已在此实例预留成功), _arm_in_use_to_idle_pool
+                #    内部有 `inflight>0 or active_session_count>0 则 return` 的保护, 不会错误 arm。
+                # 3. 若因有占用而跳过 arm, 该实例由其他请求的 _on_in_use_may_move_to_idle_pool
+                #    钩子(inflight 归零时)推动, 不会成为孤儿。
                 await self._arm_in_use_to_idle_pool(failed_to_reserve.id)
                 failed_to_reserve = None
                 continue

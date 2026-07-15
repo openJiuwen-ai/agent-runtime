@@ -616,3 +616,74 @@ async def test_slow_reclaim_does_not_block_message_loop_user_route() -> None:
         except asyncio.CancelledError:
             pass
         await sm.stop()
+
+
+@pytest.mark.asyncio
+async def test_deploy_and_admit_displaces_same_service_id_and_deletes_old() -> None:
+    """同名 service_id 再次入池时，须驱逐并 delete 旧 handler，避免 K8s 孤儿 Pod。"""
+    deleted: list[str] = []
+
+    class TrackingDeploy:
+        def __init__(self, name: str) -> None:
+            self.resource_id = name
+            self.name = name
+
+        async def deploy(self) -> None:
+            return None
+
+        async def delete(self) -> None:
+            deleted.append(self.name)
+
+    class Factory(IServiceInstanceFactory):
+        def __init__(self) -> None:
+            self.n = 0
+
+        async def new_service(
+            self,
+            response_parser: IResponseParser,
+            service_template: Optional[Dict[str, Any]] = None,
+        ) -> IServiceHandler:
+            self.n += 1
+            rid = f"pod-{self.n}"
+            return ServiceHandler(
+                service_id="loadtest_s16bot_main",
+                total_concurrency=10,
+                message_channel=_Ch(),  # type: ignore[arg-type]
+                response_parser=response_parser,
+                deploy_controller=TrackingDeploy(rid),  # type: ignore[arg-type]
+                service_template=service_template,
+            )
+
+    factory = Factory()
+    dq: PriorityDualAsyncQueues[QueueItem] = PriorityDualAsyncQueues(8, 8)
+    sm = ServiceManager(
+        factory,
+        dq,
+        Timer(),
+        service_concurrency=10,
+        min_idle_services=0,
+        max_services=5,
+        service_idle_ttl=0,
+        pod_monitor_enabled=False,
+    )
+    await sm.init(_P())
+    sm._running = True  # noqa: SLF001
+    sm._in_use[None] = {}  # noqa: SLF001
+    sm._idle[None] = {}  # noqa: SLF001
+
+    old = await factory.new_service(_P())
+    assert old.try_reserve_session_quota("sticky-other-group", 10)
+    sm._in_use[None][old.id] = old  # noqa: SLF001
+    await sm._service_router.set_session_service("sticky-other-group", old.id)  # noqa: SLF001
+
+    sm._begin_pending_deploy_locked(None, into="in_use")  # noqa: SLF001
+    new_h = await sm._deploy_and_admit(None, None, into="in_use")  # noqa: SLF001
+
+    assert new_h is not None
+    assert new_h is not old
+    assert new_h.id == "loadtest_s16bot_main"
+    assert sm._in_use[None][new_h.id] is new_h  # noqa: SLF001
+    assert deleted == ["pod-1"]
+    assert await sm._service_router.get_session_service("sticky-other-group") is None  # noqa: SLF001
+
+    await sm.stop()
