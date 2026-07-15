@@ -98,7 +98,11 @@ class ServiceManager(IServiceManager):
         self._pod_watch_task: Optional[asyncio.Task[Any]] = None
         # 正在被失效 Pod 清理流程删除的 service_id，避免 watch/轮询/缩容/stop 之间重复 delete
         self._deleting_services: set[str] = set()
+        # 缩容已从池摘走、K8s delete 尚未结束：仍计入 max_services，避免第二轮抢跑占位
+        self._reclaim_occupancy: dict[Optional[str], int] = {}
         self._user_route_tasks: set[asyncio.Task[Any]] = set()
+        # 缩容回收（含 await delete）后台任务；不可 await 在 message_loop 内，否则堵住用户出队
+        self._reclaim_tasks: set[asyncio.Task[Any]] = set()
         # 已 arm「in_use → idle」计时的 service_id，避免对同一实例重复开多个计时器
         self._to_idle_timer_armed: set[str] = set()
         # 已 arm「多余 idle 回收」的 service_id，避免对同一台重复入队/定时
@@ -108,6 +112,14 @@ class ServiceManager(IServiceManager):
         self._pending_expired_sessions: dict[str, str] = {}
         # deploy 进行中、尚未入 _idle/_in_use 的实例（stop 时必须一并 delete）
         self._deploying: set[IServiceHandler] = set()
+        # 已占位、尚未入池的 deploy 计数（按 template_id），计入 max_services，避免锁外并行冷启动超限
+        self._pending_deploys: dict[Optional[str], int] = {}
+        # 目标入 idle 的 pending（预热/autoscale）；计入 min_idle，避免锁外 deploy 期间被再补一台
+        self._pending_idle_deploys: dict[Optional[str], int] = {}
+        # 同 session_id 冷启动合并：leader 占 pending 并 deploy，后来者 await 同一 Future 再选池/绑定
+        self._session_deploy_waiters: dict[
+            str, asyncio.Future[Optional[IServiceHandler]]
+        ] = {}
         self._stop_completed: bool = False
         # 老化标记：当调用 update_config 时设置为 True，表示此 ServiceManager 待老化
         self._deprecated: bool = False
@@ -175,7 +187,12 @@ class ServiceManager(IServiceManager):
         )
 
     async def stop(self) -> None:
-        """停 message/autoscale/用户子任务、取消全部计时、delete 所有 in_use/idle 实例并清亲和表；幂等。"""
+        """停止 ServiceManager（幂等）。
+
+        依次取消并等待：消息循环、autoscale 循环、Pod 监控/watch（若启用）、
+        在途用户路由任务、在途缩容回收任务；再取消全部计时器，
+        delete 所有 in_use/idle/deploying 实例，并清空 session 亲和表。
+        """
         # 使用锁防止并发调用 stop()
         async with self._stop_lock:
             if self._stop_completed:
@@ -184,7 +201,11 @@ class ServiceManager(IServiceManager):
             
             self._running = False
             self._q.mark_closed()
-            logger.info("ServiceManager 正在停止: 已标记队列关闭, 在途用户路由任务数=%s", len(self._user_route_tasks))
+            logger.info(
+                "ServiceManager 正在停止: 已标记队列关闭, 在途用户路由=%s 在途缩容=%s",
+                len(self._user_route_tasks),
+                len(self._reclaim_tasks),
+            )
             for t in (
                 self._message_task,
                 self._autoscale_task,
@@ -209,9 +230,21 @@ class ServiceManager(IServiceManager):
                     *self._user_route_tasks, return_exceptions=True
                 )
             self._user_route_tasks.clear()
+            # 缩容已从 idle pop，cancel 会导致 K8s delete 半截中断 → 幽灵 Pod。
+            # 必须等 reclaim 跑完（其内部对 delete 使用 shield）。
+            if self._reclaim_tasks:
+                logger.info(
+                    "ServiceManager 停止: 等待 %s 个在途缩容完成",
+                    len(self._reclaim_tasks),
+                )
+                await asyncio.gather(
+                    *self._reclaim_tasks, return_exceptions=True
+                )
+            self._reclaim_tasks.clear()
             self._to_idle_timer_armed.clear()
             self._excess_idle_timer_armed.clear()
             self._deleting_services.clear()
+            self._reclaim_occupancy.clear()
             self._pending_expired_sessions.clear()
             try:
                 await self._timer.stop_all()
@@ -230,9 +263,18 @@ class ServiceManager(IServiceManager):
                         len(self._deploying),
                     )
                     all_handlers.extend(self._deploying)
+                # 标记为本轮 stop 认领，避免锁外 deploy 完成后的 orphan 路径二次 delete
+                for h in all_handlers:
+                    self._deleting_services.add(h.id)
                 self._in_use.clear()
                 self._idle.clear()
                 self._deploying.clear()
+                self._pending_deploys.clear()
+                self._pending_idle_deploys.clear()
+                for fut in self._session_deploy_waiters.values():
+                    if not fut.done():
+                        fut.set_result(None)
+                self._session_deploy_waiters.clear()
             n_release = 0
             n_failed = 0
             for h in all_handlers:
@@ -243,14 +285,17 @@ class ServiceManager(IServiceManager):
                 except Exception as e:
                     n_failed += 1
                     logger.error(
-                        "停服时 delete 服务实例失败: service_id=%s err=%s", h.id, e, exc_info=True
+                        "停服时 delete 服务实例失败: service_id=%s err=%s",
+                        h.id,
+                        e,
+                        exc_info=True,
                     )
-            
+
             try:
                 await self._service_router.clear()
             except Exception as e:
                 logger.error("ServiceRouter clear 失败: %s", e, exc_info=True)
-            
+
             # 只有全部成功才标记为已完成，否则保持 _stop_completed=False 以便重试
             if n_failed == 0:
                 self._stop_completed = True
@@ -263,6 +308,9 @@ class ServiceManager(IServiceManager):
                     "将保持 _stop_completed=False，允许通过 try_cleanup_if_idle() 重试清理",
                     n_release, n_failed, len(all_handlers)
                 )
+            # stop_completed 置位后再摘认领标记，避免与 orphan 路径夹缝二次 delete
+            for h in all_handlers:
+                self._deleting_services.discard(h.id)
 
     async def handle_message(self, msg: SessionRequestWrapper) -> None:
         if self._deprecated:
@@ -293,12 +341,14 @@ class ServiceManager(IServiceManager):
         )
 
     def _total_services(self) -> int:
-        """获取所有模板组的总实例数。"""
+        """获取所有模板组的总实例数（含 pending deploy / 缩容占位）。"""
         total = 0
         for pool in self._in_use.values():
             total += len(pool)
         for pool in self._idle.values():
             total += len(pool)
+        total += sum(self._pending_deploys.values())
+        total += sum(self._reclaim_occupancy.values())
         return total
 
     def _get_template_min_idle(self, template_id: Optional[str]) -> int:
@@ -354,14 +404,49 @@ class ServiceManager(IServiceManager):
         return self._max_services
 
     def _total_services_by_template(self, template_id: Optional[str]) -> int:
-        """获取指定 template_id 的总实例数（in_use + idle）。"""
+        """获取指定 template_id 的总实例数（in_use + idle + pending deploy + 缩容占位）。"""
         in_use_count = len(self._in_use.get(template_id, {}))
         idle_count = len(self._idle.get(template_id, {}))
-        return in_use_count + idle_count
+        pending = self._pending_deploys.get(template_id, 0)
+        reclaiming = self._reclaim_occupancy.get(template_id, 0)
+        return in_use_count + idle_count + pending + reclaiming
+
+    def _begin_pending_deploy_locked(
+        self, template_id: Optional[str], *, into: str = "in_use"
+    ) -> None:
+        """调用方须持有 self._lock。``into`` 为 idle / in_use。"""
+        self._pending_deploys[template_id] = self._pending_deploys.get(template_id, 0) + 1
+        if into == "idle":
+            self._pending_idle_deploys[template_id] = (
+                self._pending_idle_deploys.get(template_id, 0) + 1
+            )
+
+    def _end_pending_deploy_locked(
+        self, template_id: Optional[str], *, into: str = "in_use"
+    ) -> None:
+        """调用方须持有 self._lock。"""
+        n = self._pending_deploys.get(template_id, 0)
+        if n <= 1:
+            self._pending_deploys.pop(template_id, None)
+        else:
+            self._pending_deploys[template_id] = n - 1
+        if into == "idle":
+            ni = self._pending_idle_deploys.get(template_id, 0)
+            if ni <= 1:
+                self._pending_idle_deploys.pop(template_id, None)
+            else:
+                self._pending_idle_deploys[template_id] = ni - 1
 
     def _idle_count_by_template(self, template_id: Optional[str]) -> int:
-        """获取指定 template_id 的空闲实例数。"""
+        """获取指定 template_id 的空闲实例数（不含尚未入池的 pending）。"""
         return len(self._idle.get(template_id, {}))
+
+    def _effective_idle_count_by_template(self, template_id: Optional[str]) -> int:
+        """idle + 即将入 idle 的 pending，用于 min_idle 判定。"""
+        return (
+            self._idle_count_by_template(template_id)
+            + self._pending_idle_deploys.get(template_id, 0)
+        )
 
     def _discard_user_route_task(self, task: asyncio.Task[Any]) -> None:
         self._user_route_tasks.discard(task)
@@ -370,6 +455,14 @@ class ServiceManager(IServiceManager):
         exc = task.exception()
         if exc is not None:
             logger.error("用户路由子任务失败: %s", exc, exc_info=True)
+
+    def _discard_reclaim_task(self, task: asyncio.Task[Any]) -> None:
+        self._reclaim_tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error("缩容回收子任务失败: %s", exc, exc_info=True)
 
     async def _message_loop(self) -> None:
         while self._running:
@@ -382,8 +475,12 @@ class ServiceManager(IServiceManager):
                 logger.debug("message_loop 被取消")
                 break
             if isinstance(item, ServiceReclaimEvent):
-                logger.info("处理系统事件: 缩容回收 service_id=%s", item.service_id)
-                await self._on_service_reclaim(item.service_id)
+                # 缩容含 await delete，必须后台执行；串行 await 会让 message_loop
+                # 无法继续取出用户请求（即便 user 队列已有积压）。
+                logger.info("处理系统事件: 缩容回收 service_id=%s (后台)", item.service_id)
+                t = asyncio.create_task(self._on_service_reclaim(item.service_id))
+                self._reclaim_tasks.add(t)
+                t.add_done_callback(self._discard_reclaim_task)
                 continue
             if not isinstance(item, RawMessage):
                 logger.debug("跳过非 RawMessage: %s", type(item))
@@ -408,24 +505,69 @@ class ServiceManager(IServiceManager):
             except Exception as e:  # noqa: BLE001
                 logger.error("autoscale 周期任务异常: %s", e, exc_info=True)
 
+    async def _fill_min_idle_for_template(
+        self,
+        template_id: Optional[str],
+        *,
+        min_idle_services: int,
+        max_services: int,
+        deploy_template: Optional[Dict[str, Any]],
+        log_prefix: str,
+    ) -> None:
+        """按需补齐 idle；锁内只占位，deploy 在锁外执行，避免堵住用户路由。"""
+        if min_idle_services <= 0:
+            return
+        first_gap = True
+        while True:
+            async with self._lock:
+                # 须把 pending_idle 算进 min_idle：锁外 deploy 期间 autoscale 也会进来，
+                # 若只看已入池 idle，会在预热未完成时再补拉一台。
+                idle_n = self._effective_idle_count_by_template(template_id)
+                total_n = self._total_services_by_template(template_id)
+                if idle_n >= min_idle_services or total_n >= max_services:
+                    return
+                if first_gap:
+                    first_gap = False
+                    logger.debug(
+                        "%s: min_idle=%s 但当前 effective_idle=%s (pool_idle=%s total=%s), 将补发新实例",
+                        log_prefix,
+                        min_idle_services,
+                        idle_n,
+                        self._idle_count_by_template(template_id),
+                        total_n,
+                    )
+                self._begin_pending_deploy_locked(template_id, into="idle")
+
+            h = await self._deploy_and_admit(
+                template_id, deploy_template, into="idle"
+            )
+            if h is None:
+                logger.error(
+                    "%s失败 (template_id=%s): factory/deploy 未返回可用实例, 已停止继续拉起",
+                    log_prefix,
+                    template_id,
+                )
+                return
+            logger.info(
+                "%s: 新实例入 idle (template_id=%s), service_id=%s",
+                log_prefix,
+                template_id,
+                h.id,
+            )
+
     async def _bootstrap_min_idle(self) -> None:
         if self._min_idle <= 0:
             return
 
         # 如果没有配置模板，使用默认配置拉起
         if not self._service_templates:
-            if self._min_idle <= 0:
-                return
-            async with self._lock:
-                template_id = None
-                while self._idle_count_by_template(template_id) < self._min_idle and \
-                      self._total_services_by_template(template_id) < self._max_services:
-                    h = await self._new_deployed()
-                    if h is None:
-                        logger.error("预拉热失败: factory/deploy 未返回可用实例, 已停止继续拉起")
-                        break
-                    self._idle.setdefault(template_id, {})[h.id] = h
-                    logger.info("预拉热: 新实例入 idle (default), service_id=%s", h.id)
+            await self._fill_min_idle_for_template(
+                None,
+                min_idle_services=self._min_idle,
+                max_services=self._max_services,
+                deploy_template=None,
+                log_prefix="预拉热",
+            )
             return
 
         # 按每个模板配置分别拉起
@@ -434,25 +576,13 @@ class ServiceManager(IServiceManager):
             # 优先使用模板配置中的 min_idle_services 字段
             min_idle_services = tpl.get("min_idle_services", self._min_idle)
             max_services = tpl.get("max_services", self._max_services)
-
-            if min_idle_services <= 0:
-                continue
-
-            async with self._lock:
-                while self._idle_count_by_template(template_id) < min_idle_services and \
-                      self._total_services_by_template(template_id) < max_services:
-                    h = await self._new_deployed(tpl)
-                    if h is None:
-                        logger.error(
-                            "预拉热失败 (template_id=%s): factory/deploy 未返回可用实例, 已停止继续拉起",
-                            template_id
-                        )
-                        break
-                    self._idle.setdefault(template_id, {})[h.id] = h
-                    logger.info(
-                        "预拉热: 新实例入 idle (template_id=%s), service_id=%s",
-                        template_id, h.id
-                    )
+            await self._fill_min_idle_for_template(
+                template_id,
+                min_idle_services=min_idle_services,
+                max_services=max_services,
+                deploy_template=tpl,
+                log_prefix="预拉热",
+            )
 
         # 预拉热入 idle 的实例不启动「in_use→idle / 删 Pod」的 service_ttl 计时
 
@@ -462,26 +592,13 @@ class ServiceManager(IServiceManager):
 
         # 如果没有配置模板，使用默认配置
         if not self._service_templates:
-            if self._min_idle <= 0:
-                return
-            template_id = None
-            _first_gap = True
-            async with self._lock:
-                while self._idle_count_by_template(template_id) < self._min_idle and \
-                      self._total_services_by_template(template_id) < self._max_services:
-                    if _first_gap:
-                        _first_gap = False
-                        logger.debug(
-                            "autoscale: min_idle=%s 但当前 idle=%s (total=%s), 将补发新实例以维持热备",
-                            self._min_idle,
-                            self._idle_count_by_template(template_id),
-                            self._total_services_by_template(template_id),
-                        )
-                    h = await self._new_deployed()
-                    if h is None:
-                        break
-                    self._idle.setdefault(template_id, {})[h.id] = h
-                    logger.info("autoscale: 新实例入 idle (default), service_id=%s", h.id)
+            await self._fill_min_idle_for_template(
+                None,
+                min_idle_services=self._min_idle,
+                max_services=self._max_services,
+                deploy_template=None,
+                log_prefix="autoscale",
+            )
             return
 
         # 按每个模板配置分别维护
@@ -490,39 +607,155 @@ class ServiceManager(IServiceManager):
             # 优先使用模板配置中的 min_idle_services 字段
             min_idle_services = tpl.get("min_idle_services", self._min_idle)
             max_services = tpl.get("max_services", self._max_services)
-
-            if min_idle_services <= 0:
-                continue
-
-            _first_gap = True
-            async with self._lock:
-                while self._idle_count_by_template(template_id) < min_idle_services and \
-                      self._total_services_by_template(template_id) < max_services:
-                    if _first_gap:
-                        _first_gap = False
-                        logger.debug(
-                            "autoscale (template_id=%s): min_idle_services=%s 但当前 idle=%s (total=%s), 将补发新实例",
-                            template_id, min_idle_services,
-                            self._idle_count_by_template(template_id),
-                            self._total_services_by_template(template_id),
-                        )
-                    h = await self._new_deployed(tpl)
-                    if h is None:
-                        break
-                    self._idle.setdefault(template_id, {})[h.id] = h
-                    logger.info(
-                        "autoscale: 新实例入 idle (template_id=%s), service_id=%s",
-                        template_id, h.id
-                    )
+            await self._fill_min_idle_for_template(
+                template_id,
+                min_idle_services=min_idle_services,
+                max_services=max_services,
+                deploy_template=tpl,
+                log_prefix=f"autoscale (template_id={template_id})",
+            )
         # 新入 idle 的实例不启动 service_ttl 删 Pod；仅 min_idle 维持数量
 
     async def _safe_delete_handler(self, h: IServiceHandler) -> None:
+        """幂等 delete：若 stop/监控等已认领同一实例，则跳过，避免二次 delete。"""
+        async with self._lock:
+            if h.id in self._deleting_services:
+                logger.info(
+                    "跳过 delete: 实例已由其他清理路径处理 service_id=%s",
+                    h.id,
+                )
+                return
+            self._deleting_services.add(h.id)
         try:
             await h.delete()
         except Exception as e:  # noqa: BLE001
             logger.error(
                 "清理服务实例失败: service_id=%s err=%s", h.id, e, exc_info=True
             )
+        finally:
+            async with self._lock:
+                self._deleting_services.discard(h.id)
+
+    def _evacuate_same_id_locked(
+        self,
+        service_id: str,
+        *,
+        keep: IServiceHandler,
+    ) -> Optional[IServiceHandler]:
+        """池中若已有同 service_id 且非 keep，摘出旧实例。调用方须持有 ``self._lock``。
+
+        确定性 service_id（如 group+bot）在日落竞态下会二次 deploy 同名 handler；
+        若直接 ``pool[id]=new`` 覆盖，旧 Pod 会游离且永不可 reclaim。
+        """
+        displaced: Optional[IServiceHandler] = None
+        for pool_map in (self._in_use, self._idle):
+            for tid, pool in pool_map.items():
+                existing = pool.get(service_id)
+                if existing is None or existing is keep:
+                    continue
+                pool.pop(service_id, None)
+                displaced = existing
+                logger.warning(
+                    "入池前驱逐同名旧实例: service_id=%s template_id=%s "
+                    "(避免覆盖导致 K8s Pod 孤儿残留)",
+                    service_id,
+                    tid,
+                )
+                break
+            if displaced is not None:
+                break
+        if displaced is not None:
+            self._to_idle_timer_armed.discard(service_id)
+            self._excess_idle_timer_armed.discard(service_id)
+        return displaced
+
+    async def _cleanup_displaced_handler(self, old: IServiceHandler) -> None:
+        """删除被同名覆盖驱逐的旧 handler，并清理其 session 亲和。"""
+        await self._cancel_in_use_to_idle_timer(old.id)
+        await self._cancel_excess_idle_timer(old.id)
+        # 只清旧实例上的 session，避免误伤同 id 新实例上已建立的绑定。
+        # 含仅预留额度、尚未创建 SessionHandler 的 sticky（日落竞态常见）。
+        reserved = getattr(old, "_session_reserved", None)
+        sid_set: set[str] = set(old.open_session_ids())
+        if isinstance(reserved, dict):
+            sid_set.update(reserved.keys())
+        for sid in sid_set:
+            await self._service_router.delete_session_service(sid)
+            self._pending_expired_sessions.pop(sid, None)
+        try:
+            # 不用 _safe_delete_handler：其按 service_id 入 _deleting_services，
+            # 会与同名新实例短暂冲突。
+            await asyncio.shield(old.delete())
+            logger.warning(
+                "已删除被同名覆盖的旧实例: service_id=%s",
+                old.id,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.error(
+                "删除被覆盖旧实例失败: service_id=%s err=%s",
+                old.id,
+                e,
+                exc_info=True,
+            )
+
+    async def _deploy_and_admit(
+        self,
+        template_id: Optional[str],
+        deploy_template: Optional[Dict[str, Any]],
+        *,
+        into: str,
+    ) -> Optional[IServiceHandler]:
+        """调用方须已 ``_begin_pending_deploy_locked`` 且已释放锁。deploy 在锁外执行。"""
+        h: Optional[IServiceHandler] = None
+        orphan: Optional[IServiceHandler] = None
+        displaced: Optional[IServiceHandler] = None
+        admitted: Optional[IServiceHandler] = None
+        try:
+            h = await self._new_deployed(deploy_template)
+        finally:
+            async with self._lock:
+                self._end_pending_deploy_locked(template_id, into=into)
+                if h is None:
+                    pass
+                elif not self._running:
+                    # stop() 可能已从 _deploying 摘走并认领 delete；勿二次 orphan delete
+                    if self._stop_completed or h.id in self._deleting_services:
+                        logger.info(
+                            "deploy 完成时 stop 已认领/已完成清理, 跳过 orphan delete: "
+                            "service_id=%s template_id=%s stop_completed=%s",
+                            h.id,
+                            template_id,
+                            self._stop_completed,
+                        )
+                    else:
+                        orphan = h
+                        logger.info(
+                            "deploy 完成但 ServiceManager 已停止, 将 orphan delete: "
+                            "service_id=%s template_id=%s into=%s",
+                            h.id,
+                            template_id,
+                            into,
+                        )
+                elif into == "idle":
+                    displaced = self._evacuate_same_id_locked(h.id, keep=h)
+                    self._idle.setdefault(template_id, {})[h.id] = h
+                    admitted = h
+                else:
+                    displaced = self._evacuate_same_id_locked(h.id, keep=h)
+                    self._in_use.setdefault(template_id, {})[h.id] = h
+                    admitted = h
+                    logger.info(
+                        "新建实例并入 in_use: service_id=%s template_id=%s 当前该组总数=%s",
+                        h.id,
+                        template_id,
+                        self._total_services_by_template(template_id),
+                    )
+        if orphan is not None:
+            await self._safe_delete_handler(orphan)
+            return None
+        if displaced is not None:
+            await self._cleanup_displaced_handler(displaced)
+        return admitted
 
     async def _new_deployed(
         self, service_template: Optional[Dict[str, Any]] = None
@@ -535,7 +768,8 @@ class ServiceManager(IServiceManager):
             logger.error("创建服务实例失败 (factory): %s", e, exc_info=True)
             return None
         h.set_idle_pool_transition_hook(self._on_in_use_may_move_to_idle_pool)
-        self._deploying.add(h)
+        async with self._lock:
+            self._deploying.add(h)
         try:
             await h.deploy()
         except asyncio.CancelledError:
@@ -547,7 +781,8 @@ class ServiceManager(IServiceManager):
             await self._safe_delete_handler(h)
             return None
         finally:
-            self._deploying.discard(h)
+            async with self._lock:
+                self._deploying.discard(h)
         logger.debug("新服务 deploy 成功, 待加入池: service_id=%s", h.id)
         return h
 
@@ -571,61 +806,16 @@ class ServiceManager(IServiceManager):
         await self._timer.cancel_timer(f"sess:{session_id}")
         self._pending_expired_sessions.pop(session_id, None)
         h: Optional[IServiceHandler] = None
-        # 预留失败但已被 _pick_or_create 放入 _in_use 池的实例: 锁外推动其走 in_use→idle 回收, 避免孤儿泄漏
-        failed_to_reserve: Optional[IServiceHandler] = None
         try:
-            # 在锁内完成亲和查找 / 新实例 / 新 session 的服务额度预留与路由绑定
-            async with self._lock:
-                h = await self._pick_or_create(sreq)
-                if h is not None:
-                    bound_sid = await self._service_router.get_session_service(session_id)
-                    if bound_sid is None:
-                        if not h.try_reserve_session_quota(
-                                session_id, sreq.session_concurrency
-                        ):
-                            logger.warning(
-                                "服务额度预留失败(资源不足): session_id=%s service_id=%s "
-                                "need=%s avail=%s",
-                                session_id,
-                                h.id,
-                                sreq.session_concurrency,
-                                h.available_concurrency,
-                            )
-                            # 记录失败的实例, 锁外推动其走 idle 回收流程; 仅置空 h 会导致
-                            # _pick_or_create 刚放入 _in_use 的实例成为孤儿 (无 session/inflight
-                            # 永不触发 _on_in_use_may_move_to_idle_pool 钩子), Pod 永久驻留
-                            failed_to_reserve = h
-                            h = None
-                        else:
-                            await self._service_router.set_session_service(
-                                session_id, h.id
-                            )
-                            logger.info(
-                                "session 已绑定到实例: session_id=%s -> service_id=%s",
-                                session_id,
-                                h.id,
-                            )
+            # 亲和 / 选池 / 额度预留与路由绑定在 _pick_or_create 内完成；
+            # deploy 在其内部锁外执行，不堵其他路由。预留失败时的 in_use→idle 推动也在其内处理。
+            h = await self._pick_or_create(sreq)
             if h is not None:
                 # 新消息分配到该服务：取消所有相关计时器
                 # 1. 取消 in_use→idle 计时（如果实例之前在 in_use 且等待转入 idle）
                 # 2. 取消 excess_idle 回收计时（如果实例之前在 idle 且可能被回收）
                 await self._cancel_in_use_to_idle_timer(h.id)
                 await self._cancel_excess_idle_timer(h.id)
-
-            # 预留失败的实例 (含 _pick_or_create 新 deploy 的): 推动走 in_use→idle 回收
-            # service_ttl 到期后转入 idle, 若 idle>min_idle 则被 excess_idle 回收删 Pod;
-            # 若 idle<=min_idle 则作为热备保留, 可被后续 need 较小的请求复用
-            #
-            # 安全性说明:
-            # 1. _pick_or_create 分支2(in_use/idle 查找)已用 available>=need 过滤, 返回的实例
-            #    try_reserve_session_quota 必成功; 唯一预留失败的是分支3(新 deploy), 是全新的
-            #    无 session/inflight。故 failed_to_reserve 通常无其他占用。
-            # 2. 即使存在竞态(锁外调用前其他请求在此实例预留成功), _arm_in_use_to_idle_pool
-            #    内部有 `inflight>0 or active_session_count>0 则 return` 的保护, 不会错误 arm。
-            # 3. 若因有占用而跳过 arm, 该实例由其他请求的 _on_in_use_may_move_to_idle_pool
-            #    钩子(inflight 归零时)推动, 不会成为孤儿。
-            if failed_to_reserve is not None:
-                await self._arm_in_use_to_idle_pool(failed_to_reserve.id)
 
             if h is None:
                 await self._fail(w, 100001, session_id=session_id)
@@ -964,12 +1154,19 @@ class ServiceManager(IServiceManager):
         )
 
     async def _on_service_reclaim(self, service_id: str) -> None:
+        """从 idle 摘实例并 delete；锁外 delete，且不受外层 cancel 中断。"""
         self._excess_idle_timer_armed.discard(service_id)
         h: Optional[IServiceHandler] = None
         should_delete = False
         template_id: Optional[str] = None
 
         async with self._lock:
+            if service_id in self._deleting_services:
+                logger.debug(
+                    "缩容跳过: 实例已在删除中 service_id=%s", service_id
+                )
+                return
+
             # 找到 service_id 所属的 template_id 组
             for tid, idle_pool in self._idle.items():
                 if service_id in idle_pool:
@@ -997,12 +1194,18 @@ class ServiceManager(IServiceManager):
                 return
 
             self._idle[template_id].pop(service_id, None)
+            self._deleting_services.add(service_id)
+            self._reclaim_occupancy[template_id] = (
+                self._reclaim_occupancy.get(template_id, 0) + 1
+            )
             h = oh
             should_delete = True
+
         if not should_delete or h is None:
             return
         try:
-            await h.delete()
+            # pop 后必须尽量把 delete 做完：外层 task cancel / stop 不得半截打断
+            await asyncio.shield(h.delete())
             logger.info(
                 "缩容已删除 idle 实例: service_id=%s template_id=%s (多余或系统事件)",
                 service_id, template_id
@@ -1010,28 +1213,25 @@ class ServiceManager(IServiceManager):
         except Exception as e:  # noqa: BLE001
             logger.error("缩容 delete 失败: service_id=%s err=%s", service_id, e, exc_info=True)
             return
+        finally:
+            async with self._lock:
+                self._deleting_services.discard(service_id)
+                n = self._reclaim_occupancy.get(template_id, 0)
+                if n <= 1:
+                    self._reclaim_occupancy.pop(template_id, None)
+                else:
+                    self._reclaim_occupancy[template_id] = n - 1
         await self._schedule_excess_idle_reclaim_if_needed()
 
-    async def _pick_or_create(self, sreq) -> Optional[IServiceHandler]:  # noqa: ANN001
-        """根据 session 请求选择或创建服务实例。
-
-        选择策略：
-        1) 亲和：该 session 已绑定到某 service，则复用
-        2) 否则在相同 template_id 组的 in_use/idle 池中找尚有服务级并发的实例
-        3) 再否则在该 template_id 组的 max 允许下新 deploy
-        """
-        need = max(1, int(sreq.session_concurrency))
+    async def _pick_existing_locked(
+        self, sreq, need: int, template_id: Optional[str]
+    ) -> Optional[IServiceHandler]:  # noqa: ANN001
+        """在池中亲和或选实例。调用方须持有 self._lock。不 deploy。"""
         session_id = sreq.session_id
-
-        # 获取 template_id
-        template_id: Optional[str] = None
-        if sreq.service_template:
-            template_id = sreq.service_template.get("template_id")
 
         # 1) 亲和：该 session 已绑定到某 service，则复用
         sid = await self._service_router.get_session_service(session_id)
         if sid is not None:
-            # 在所有模板组中查找该 service_id
             h: Optional[IServiceHandler] = None
             found_template_id: Optional[str] = None
             for tid, pool in self._in_use.items():
@@ -1048,8 +1248,11 @@ class ServiceManager(IServiceManager):
                         break
 
             if h is None:
+                # 含缩容已 pop、delete 未完成：池中无实例，清映射后走选池/扩容
                 await self._service_router.delete_session_service(session_id)
-                logger.debug("亲和失效: 路由表有记录但池无此实例, 已删映射 session_id=%s", session_id)
+                logger.debug(
+                    "亲和失效: 路由表有记录但池无此实例, 已删映射 session_id=%s", session_id
+                )
             else:
                 # 从 idle 移到 in_use
                 if found_template_id is not None:
@@ -1063,47 +1266,49 @@ class ServiceManager(IServiceManager):
                             pool.pop(sid, None)
                             self._in_use.setdefault(tid, {})[sid] = h
                             break
-
-                # 注意：计时器取消由调用者 _handle_user_request 在锁外统一处理
-                logger.debug("从 idle 取回实例, service_id=%s template_id=%s", h.id, found_template_id)
+                # 注意：计时器取消由调用方 _handle_user_request 在锁外统一处理
+                logger.debug(
+                    "从 idle 取回实例, service_id=%s template_id=%s", h.id, found_template_id
+                )
                 return h
 
         # 2) 新 session：在相同 template_id 组的 in_use/idle 中找实例
-        target_template_id = template_id
-
         # 先在 in_use 池中查找
-        in_use_pool = self._in_use.get(target_template_id, {})
+        in_use_pool = self._in_use.get(template_id, {})
         for h in in_use_pool.values():
             if h.available_concurrency >= need:
                 logger.debug(
                     "选用 in_use 实例 (template_id=%s): service_id=%s avail=%s",
-                    target_template_id, h.id, h.available_concurrency
+                    template_id, h.id, h.available_concurrency
                 )
                 return h
 
         # 再在 idle 池中查找
-        idle_pool = self._idle.get(target_template_id, {})
+        idle_pool = self._idle.get(template_id, {})
         for h in list(idle_pool.values()):
             if h.available_concurrency >= need:
                 idle_pool.pop(h.id, None)
-                self._in_use.setdefault(target_template_id, {})[h.id] = h
-                # 注意：计时器取消由调用者 _handle_user_request 在锁外统一处理
+                self._in_use.setdefault(template_id, {})[h.id] = h
+                # 注意：计时器取消由调用方 _handle_user_request 在锁外统一处理
                 logger.debug(
                     "从 idle 唤醒实例 (template_id=%s): service_id=%s",
-                    target_template_id, h.id
+                    template_id, h.id
                 )
                 return h
+        return None
 
-        # 3) 未找到匹配实例，在该 template_id 组的 max 允许下新 deploy
-        # 从 _service_templates 中查询获取完整的模板配置
-        template_config = self._get_template_config(target_template_id)
-        max_services_for_tpl = self._get_template_max_services(target_template_id)
-        
-        if self._total_services_by_template(target_template_id) >= max_services_for_tpl:
+    def _try_begin_deploy_locked(
+        self, sreq, need: int, template_id: Optional[str]
+    ) -> Optional[Dict[str, Any]]:  # noqa: ANN001
+        """锁内判断是否可扩容并占位。成功返回 deploy_template，否则 None。"""
+        template_config = self._get_template_config(template_id)
+        max_services_for_tpl = self._get_template_max_services(template_id)
+
+        if self._total_services_by_template(template_id) >= max_services_for_tpl:
             logger.debug(
                 "pick: 未选到可用实例且 template_id=%s 已达 max_services=%s, 当前该组实例=%s",
-                target_template_id, max_services_for_tpl,
-                self._total_services_by_template(target_template_id),
+                template_id, max_services_for_tpl,
+                self._total_services_by_template(template_id),
             )
             return None
 
@@ -1123,19 +1328,158 @@ class ServiceManager(IServiceManager):
             logger.warning(
                 "预检拦截(会话并发超过单实例总并发): session_id=%s template_id=%s "
                 "session_concurrency=%s service_concurrency=%s, 拒绝扩容",
-                session_id, target_template_id, need, service_concurrency_for_tpl,
+                sreq.session_id, template_id, need, service_concurrency_for_tpl,
             )
             return None
 
-        h2 = await self._new_deployed(deploy_template)
-        if h2 is None:
-            return None
-        self._in_use.setdefault(target_template_id, {})[h2.id] = h2
+        self._begin_pending_deploy_locked(template_id, into="in_use")
+        return deploy_template if deploy_template is not None else {}
+
+    async def _bind_session_to_handler_locked(
+        self, sreq, h: IServiceHandler
+    ) -> bool:  # noqa: ANN001
+        """新 session 预留额度并写亲和；已绑定则视为成功。调用方须持有锁。"""
+        session_id = sreq.session_id
+        bound_sid = await self._service_router.get_session_service(session_id)
+        if bound_sid is not None:
+            return True
+        if not h.try_reserve_session_quota(session_id, sreq.session_concurrency):
+            logger.warning(
+                "服务额度预留失败(资源不足): session_id=%s service_id=%s need=%s avail=%s",
+                session_id,
+                h.id,
+                sreq.session_concurrency,
+                h.available_concurrency,
+            )
+            # 调用方须对失败实例做 in_use→idle 推动；仅丢弃返回值会导致刚入 _in_use
+            # 的实例成为孤儿 (无 session/inflight 永不触发 _on_in_use_may_move_to_idle_pool)。
+            return False
+        await self._service_router.set_session_service(session_id, h.id)
         logger.info(
-            "新建实例并入 in_use: service_id=%s template_id=%s 当前该组总数=%s",
-            h2.id, target_template_id, self._total_services_by_template(target_template_id)
+            "session 已绑定到实例: session_id=%s -> service_id=%s",
+            session_id,
+            h.id,
         )
-        return h2
+        return True
+
+    def _get_session_deploy_waiter_locked(
+        self, session_id: str
+    ) -> Optional[asyncio.Future[Optional[IServiceHandler]]]:
+        """若该 session 已有进行中的冷启动，返回其 Future（调用方须持锁）。"""
+        fut = self._session_deploy_waiters.get(session_id)
+        if fut is None or fut.done():
+            return None
+        return fut
+
+    def _register_session_deploy_leader_locked(
+        self, session_id: str
+    ) -> asyncio.Future[Optional[IServiceHandler]]:
+        """当前协程成为该 session 冷启动 leader；调用方须已占 pending 且持锁。"""
+        fut: asyncio.Future[Optional[IServiceHandler]] = (
+            asyncio.get_running_loop().create_future()
+        )
+        self._session_deploy_waiters[session_id] = fut
+        return fut
+
+    async def _pick_or_create(self, sreq) -> Optional[IServiceHandler]:  # noqa: ANN001
+        """根据 session 请求选择或创建服务实例，并完成额度预留与亲和绑定。
+
+        选择策略：
+        1) 亲和：该 session 已绑定到某 service，则复用（池中已无则清映射）
+        2) 否则在相同 template_id 组的 in_use/idle 池中找尚有服务级并发的实例
+        3) 再否则在该 template_id 组的 max 允许下新 deploy（deploy 在锁外执行）
+           同一 session_id 仅允许一个 in-flight deploy；后来者 await 其结果再选池/绑定，
+           避免惊群重复占满 max_services。
+           缩容 delete 未完成前仍占用 max 名额（reclaim_occupancy）。
+
+        注意：本方法自行获取/释放 ``self._lock``，调用方勿再持锁调用。
+        """
+        need = max(1, int(sreq.session_concurrency))
+        session_id = sreq.session_id
+        template_id: Optional[str] = None
+        if sreq.service_template:
+            template_id = sreq.service_template.get("template_id")
+
+        # 预留失败但已被放入 _in_use 的实例: 锁外推动 in_use→idle 回收, 避免孤儿泄漏
+        # (语义同原 _handle_user_request；deploy 出锁后绑定也在本方法内完成)
+        failed_to_reserve: Optional[IServiceHandler] = None
+        # 冷启动占位后偶发竞态，允许有限次重试选池/绑定
+        for _ in range(5):
+            deploy_template: Optional[Dict[str, Any]] = None
+            join_future: Optional[asyncio.Future[Optional[IServiceHandler]]] = None
+            leader_future: Optional[asyncio.Future[Optional[IServiceHandler]]] = None
+            h: Optional[IServiceHandler] = None
+            async with self._lock:
+                h = await self._pick_existing_locked(sreq, need, template_id)
+                if h is not None:
+                    if await self._bind_session_to_handler_locked(sreq, h):
+                        return h
+                    failed_to_reserve = h
+                    h = None
+                else:
+                    join_future = self._get_session_deploy_waiter_locked(session_id)
+                    if join_future is None:
+                        deploy_template = self._try_begin_deploy_locked(
+                            sreq, need, template_id
+                        )
+                        if deploy_template is not None:
+                            leader_future = self._register_session_deploy_leader_locked(
+                                session_id
+                            )
+
+            if failed_to_reserve is not None:
+                # 预留失败的实例 (含新 deploy 刚入池的): 推动走 in_use→idle 回收。
+                # service_ttl 到期后转入 idle, 若 idle>min_idle 则被 excess_idle 回收删 Pod;
+                # 若 idle<=min_idle 则作为热备保留, 可被后续 need 较小的请求复用。
+                #
+                # 安全性说明:
+                # 1. _pick_existing 已用 available>=need 过滤, 正常应预留成功; 失败多为竞态
+                #    (他请求先占额度), 或预检漏网的 need>单实例总并发。新 deploy 实例通常
+                #    无 session/inflight, failed_to_reserve 一般无其他占用。
+                # 2. 即使存在竞态(arm 前其他请求已在此实例预留成功), _arm_in_use_to_idle_pool
+                #    内部有 `inflight>0 or active_session_count>0 则 return` 的保护, 不会错误 arm。
+                # 3. 若因有占用而跳过 arm, 该实例由其他请求的 _on_in_use_may_move_to_idle_pool
+                #    钩子(inflight 归零时)推动, 不会成为孤儿。
+                await self._arm_in_use_to_idle_pool(failed_to_reserve.id)
+                failed_to_reserve = None
+                continue
+
+            if join_future is not None:
+                try:
+                    await join_future
+                except Exception:  # noqa: BLE001
+                    logger.debug(
+                        "等待同 session 冷启动结束异常, session_id=%s",
+                        session_id,
+                        exc_info=True,
+                    )
+                # leader 已 admit（或失败）；本轮重新选池/绑定，不再占 pending
+                continue
+
+            if deploy_template is None:
+                return None
+
+            admitted: Optional[IServiceHandler] = None
+            try:
+                admitted = await self._deploy_and_admit(
+                    template_id, deploy_template or None, into="in_use"
+                )
+            finally:
+                async with self._lock:
+                    # 仅当仍是本 leader 注册的 Future 时收尾，避免误伤后续重试
+                    if (
+                        leader_future is not None
+                        and self._session_deploy_waiters.get(session_id)
+                        is leader_future
+                    ):
+                        self._session_deploy_waiters.pop(session_id, None)
+                    if leader_future is not None and not leader_future.done():
+                        leader_future.set_result(admitted)
+            if admitted is None:
+                return None
+            # 入池后下一轮再选池并绑定
+
+        return None
 
     async def _fail(
         self, w: SessionRequestWrapper, code: int, *, session_id: str | None = None
@@ -1415,15 +1759,28 @@ class ServiceManager(IServiceManager):
 
         await self._cleanup_dead_pods(failed_pods)
 
+    @staticmethod
+    def _handler_pod_names(h: IServiceHandler) -> Set[str]:
+        """收集 handler 已关联的 Pod 名（含 deploy 中 resource_id 尚未回填 pod_info 的情况）。"""
+        names: Set[str] = set()
+        if hasattr(h, "pod_info") and h.pod_info and getattr(h.pod_info, "pod_name", None):
+            names.add(str(h.pod_info.pod_name))
+        deploy = getattr(h, "_deploy", None)
+        rid = getattr(deploy, "resource_id", None) if deploy is not None else None
+        if rid:
+            names.add(str(rid))
+        return names
+
     async def _collect_managed_pod_names(self) -> Set[str]:
-        """收集当前 ServiceManager 池中仍记录的 Pod 名称。"""
+        """收集当前 ServiceManager 池中仍记录的 Pod 名称（含 deploy 进行中）。"""
         pod_names: Set[str] = set()
         async with self._lock:
             for pool in [self._in_use, self._idle]:
                 for template_pool in pool.values():
                     for h in template_pool.values():
-                        if hasattr(h, "pod_info") and h.pod_info:
-                            pod_names.add(h.pod_info.pod_name)
+                        pod_names |= self._handler_pod_names(h)
+            for h in self._deploying:
+                pod_names |= self._handler_pod_names(h)
         return pod_names
 
     def _remove_service_from_core_pools(self, service_id: str) -> tuple[bool, bool]:
