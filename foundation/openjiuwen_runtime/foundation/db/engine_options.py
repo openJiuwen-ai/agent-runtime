@@ -11,8 +11,8 @@ from typing import Any
 # 定期回收池内连接，应小于 MySQL wait_timeout / 中间层 idle 超时。
 DEFAULT_POOL_RECYCLE_SECONDS = 1800
 
-# 与历史 create_async_engine(pool_size=20, max_overflow=20) 保持一致（可通过 RUNTIME_DB_POOL_* 覆盖）
-DEFAULT_POOL_SIZE = 20
+# 可通过 RUNTIME_DB_POOL_* / DB_POOL_* 覆盖
+DEFAULT_POOL_SIZE = 2
 DEFAULT_MAX_OVERFLOW = 20
 DEFAULT_POOL_TIMEOUT = 30
 
