@@ -31,6 +31,7 @@ if "agents.EDPAgent" not in sys.modules:
         return
 
     _edp.agent_stream = _agent_stream_placeholder  # type: ignore[attr-defined]
+    _edp.get_otel_tracer = lambda: None  # type: ignore[attr-defined]  # OTel 默认关闭（编排层 span 降级为空操作）
     sys.modules["agents.EDPAgent"] = _edp
     setattr(_pkg, "EDPAgent", _edp)
 
@@ -328,3 +329,51 @@ def collect_sub_tasks(event_queue: EventQueue) -> list[dict]:
 
 def find_status_events(event_queue: EventQueue):
     return [ev for ev in drain_queue(event_queue) if isinstance(ev, TaskStatusUpdateEvent)]
+
+
+# ══════════════════════════════════════════════════════════════════════
+# OTel tracer 替身（编排层 span 测试用）
+# ══════════════════════════════════════════════════════════════════════
+
+
+class _FakeSpan:
+    """OTel span 替身：支持 cm 协议、is_recording()=True、记录 set_attribute 与 __exit__。"""
+
+    def __init__(self) -> None:
+        self.is_recording = MagicMock(return_value=True)
+        self.set_attribute = MagicMock()
+        self.exited = None  # (exc_type, exc, tb) 或 None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.exited = (exc_type, exc, tb)
+        return False  # 不吞异常
+
+
+def make_fake_tracer():
+    """返回一个 OTel tracer 替身。
+
+    ``tracer.start_as_current_span(name, kind=...)`` 每调一次新建一个 ``_FakeSpan``，
+    并把 ``(args, kwargs, span)`` 追加到 ``tracer.created``，便于断言 span 名/种类/数量。
+    """
+    class _Tracer:
+        def __init__(self) -> None:
+            self.created: list = []
+            self.start_as_current_span = MagicMock(side_effect=self._make)
+
+        def _make(self, *args, **kwargs):
+            sp = _FakeSpan()
+            self.created.append((args, kwargs, sp))
+            return sp
+
+    return _Tracer()
+
+
+def patch_tracer(monkeypatch, tracer):
+    """把 orchestrator.otel_spans._get_tracer 替换为返回 ``tracer``（None=模拟 OTel 关闭）。"""
+    import orchestrator.otel_spans as otel_spans
+
+    monkeypatch.setattr(otel_spans, "_get_tracer", lambda: tracer)
+

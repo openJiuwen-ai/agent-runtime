@@ -41,6 +41,10 @@ dev = [
     "pytest>=8",
     "pytest-asyncio>=0.23",
     "httpx",
+    # OTel 轨迹上报（编排层 span 经 agents.EDPAgent.get_otel_tracer() 复用 EDPAgent 的 TracerProvider）。
+    # 仅 API（SpanKind/propagate），不含 SDK/exporter——SDK 与 otlp 导出由 openjiuwen[observability]
+    # 在 deployment 镜像内带入。a2a_service 主 dependencies 不列，与 openjiuwen 同 posture（懒导入+镜像提供）。
+    "opentelemetry-api>=1.20",
 ]
 
 [build-system]

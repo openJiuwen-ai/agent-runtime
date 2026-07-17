@@ -80,6 +80,7 @@ class _TurnContext:
     call_context: ServerCallContext
     event_queue: EventQueue
     sub_task_path: tuple[str, ...] = ()
+    otel_session_id: str = ""   # 主 Agent 原始 conversation_id（子 Agent 场景，用于 span 的 session.id）
 
 
 @dataclass
@@ -226,6 +227,21 @@ class Executor(AgentExecutor):
         核心原则：execute 只做"构建事件 → dispatch"，不做任何路由目标判断。
         所有后续逻辑（创建 Task、续轮、委托调用等）由 handler 处理。
         """
+        # 子 Agent 作为 A2A Server：提取主 Agent 传来的 traceparent + session_id（v2.0 §4.3.5）。
+        # attach 后，本 execute 内创建的所有 span（含 SDK 的 chain.EDPAgent）自动挂在主 Agent trace 树下。
+        _sess_ctx = self._extract_session_context(context)
+        upstream_traceparent = _sess_ctx.get("traceparent", "")
+        upstream_session_id = _sess_ctx.get("session_id", "")
+        _otel_token = None
+        if upstream_traceparent:
+            try:
+                from opentelemetry.context import attach
+                from opentelemetry.propagate import extract
+
+                _otel_token = attach(extract({"traceparent": upstream_traceparent}))
+            except ImportError:
+                pass
+
         await self._init_session_context_if_needed(context)
 
         conv_id = context.context_id or ""
@@ -245,6 +261,7 @@ class Executor(AgentExecutor):
             call_context=call_context,
             event_queue=event_queue,
             sub_task_path=sub_task_path,
+            otel_session_id=upstream_session_id,
         )
 
         transient_hb = False
@@ -291,6 +308,7 @@ class Executor(AgentExecutor):
             "route_dispatcher": self._route_dispatcher,
             "is_specify_task": is_specify_task,
             "heartbeat_runtime": heartbeat_runtime,
+            "otel_session_id": upstream_session_id,
         }
         try:
             await self._route_dispatcher.dispatch(event, handler_context)
@@ -307,6 +325,14 @@ class Executor(AgentExecutor):
                     task_id=task_id,
                     call_context=call_context,
                 )
+            # detach OTel context，防泄漏（异常路径也执行，v2.0 §4.3.5）
+            if _otel_token is not None:
+                try:
+                    from opentelemetry.context import detach
+
+                    detach(_otel_token)
+                except ImportError:
+                    pass
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
         task_id = context.task_id or ""
@@ -572,6 +598,8 @@ class Executor(AgentExecutor):
             "agent_id": getattr(get_settings(), "dpa_agent_id", "") or "",
             "params": session_ctx.get("params", {}),
             "body": session_ctx.get("body", {}),
+            "session_id": session_ctx.get("session_id", ""),
+            "traceparent": session_ctx.get("traceparent", ""),
         }
         if self._session_request_kv is not None:
             try:

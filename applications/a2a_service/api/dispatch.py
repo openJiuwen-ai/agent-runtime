@@ -68,6 +68,7 @@ from channels.mobile_bank_channel import MobileBankChannel
 from channels.observability import log_channel_event, record_channel_format_error
 from config import get_settings
 from orchestrator.executor import Executor
+from orchestrator.otel_spans import set_span_attrs, start_http_request_span
 from orchestrator.sse_helpers import log_outbound_sse, next_sse_event
 from orchestrator.state import CONV_TASK_KEY
 
@@ -678,6 +679,36 @@ async def dispatch(
     agent_id = str(path_params.get("agent_id") or "")
     conversation_id = str(path_params.get("conversation_id") or path_params.get("conv_id") or "")
 
+    # http.request 是整条 trace 的根（v2.0 §4.3.1）：dispatch 是 HTTP 入口，span 从此处起、
+    # 覆盖后续所有 return 路径（415/400/429/probe/stream/non-stream）。_dispatch_body 返回 Response，
+    # 此处从 Response.status_code 统一回填 http.response.status_code，免去在每个 return 处重复设置。
+    # 404（路由未命中）发生在 span 之前，不计入 trace（属路由缺失，非 agent 请求）。
+    with start_http_request_span(
+        conversation_id,
+        method=request.method,
+        route=request.url.path,
+        trace_id=traceid,
+        agent_id=agent_id,
+    ) as http_span:
+        _resp = await _dispatch_body(
+            request, settings, route_spec, path_params,
+            agent_id, conversation_id, traceid, request_started_ms,
+        )
+        if http_span is not None and _resp is not None:
+            set_span_attrs(http_span, {"http.response.status_code": getattr(_resp, "status_code", 0)})
+        return _resp
+
+
+async def _dispatch_body(
+    request,
+    settings,
+    route_spec,
+    path_params,
+    agent_id,
+    conversation_id,
+    traceid,
+    request_started_ms,
+):
     # 在工具类中统一完成请求快照解析与公共字段提取
     http_request_tag_context = await build_http_request_tag_context(
         request=request,

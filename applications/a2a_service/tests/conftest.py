@@ -77,5 +77,6 @@ if "agents.EDPAgent" not in sys.modules and importlib.util.find_spec("agents.EDP
         return None
 
     edp_module.initialize = _initialize_stub  # type: ignore[attr-defined]
+    edp_module.get_otel_tracer = lambda: None  # type: ignore[attr-defined]  # OTel 默认关闭（编排层 span 降级为空操作）
     sys.modules["agents.EDPAgent"] = edp_module
     setattr(pkg_agents, "EDPAgent", edp_module)
