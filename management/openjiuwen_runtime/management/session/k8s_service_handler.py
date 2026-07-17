@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import secrets
 import string
@@ -528,6 +529,7 @@ class K8sServiceHandler:
                 volumes=volumes or None,
                 node_name=self._node_name if self._mode == "dev" else None,
                 security_context=pod_security_context,
+                enable_service_links=(os.getenv("ENABLE_SERVICE_LINKS", "false").lower() == "true"),
             ),
         )
 
