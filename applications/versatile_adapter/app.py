@@ -20,7 +20,7 @@ import os
 import sys
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from a2a.server.request_handlers import DefaultRequestHandler
@@ -106,7 +106,7 @@ def _va_cleanup_logs(files):
     # ━━━ 第4步：按天数清理（只清理归档文件）━━━
     if retention_days > 0:
         # retention_days=0 表示不按天数清理，跳过此步骤
-        cutoff_time = (datetime.now() - timedelta(days=retention_days)).timestamp()
+        cutoff_time = (datetime.now(tz=timezone.utc) - timedelta(days=retention_days)).timestamp()
         # 计算截止时间点：当前时间 - retention_days 天
         # 例如 retention_days=7，cutoff_time 就是7天前的 Unix 时间戳
         for f in archive_files:
@@ -184,7 +184,7 @@ def _cleanup_stale_pid_logs(log_dir: str, current_pid: int, retention_days: int)
     if not log_path.exists():
         return
 
-    cutoff_time = (datetime.now() - timedelta(days=retention_days)).timestamp()
+    cutoff_time = (datetime.now(tz=timezone.utc) - timedelta(days=retention_days)).timestamp()
 
     for f in log_path.glob("versatile_adapter_*.log*"):
         if not f.is_file():

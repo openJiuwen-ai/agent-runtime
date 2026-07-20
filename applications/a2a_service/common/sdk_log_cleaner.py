@@ -21,7 +21,7 @@
 import os
 import sys
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 # 从 foundation 导入 Handler（支持 gzip 压缩）
 from openjiuwen_runtime.foundation.log.handler import CompressedRotatingFileHandler
@@ -48,8 +48,8 @@ class CleanableCompressedRotatingFileHandler(CompressedRotatingFileHandler):
             self,
             filename: str,
             mode: str = "a",
-            maxBytes: int = 0,
-            backupCount: int = 0,
+            max_bytes: int = 0,
+            backup_count: int = 0,
             encoding: str = "utf-8",
             delay: bool = False,
             retention_days: int = 0,
@@ -58,8 +58,8 @@ class CleanableCompressedRotatingFileHandler(CompressedRotatingFileHandler):
         super().__init__(
             filename=filename,
             mode=mode,
-            maxBytes=maxBytes,
-            backupCount=backupCount,
+            maxBytes=max_bytes,
+            backupCount=backup_count,
             encoding=encoding,
             delay=delay,
         )
@@ -81,7 +81,7 @@ class CleanableCompressedRotatingFileHandler(CompressedRotatingFileHandler):
         log_path = Path(self.baseFilename)
         log_dir = log_path.parent
         log_name = log_path.name
-        cutoff_time = (datetime.now() - timedelta(days=self._retention_days)).timestamp()
+        cutoff_time = (datetime.now(tz=timezone.utc) - timedelta(days=self._retention_days)).timestamp()
 
         for f in log_dir.glob(f"{log_name}*.gz"):
             if f.is_file():
@@ -163,8 +163,8 @@ class CleanableDefaultLogger(DefaultLogger):
                 env_max_bytes = int(os.getenv("JIUWEN_LOG_MAX_BYTES", handler.maxBytes))
                 cleanable_handler = CleanableCompressedRotatingFileHandler(
                     filename=handler.baseFilename,
-                    maxBytes=env_max_bytes,
-                    backupCount=env_backup_count,
+                    max_bytes=env_max_bytes,
+                    backup_count=env_backup_count,
                     encoding="utf-8",
                     retention_days=self._retention_days,
                     max_total_size=self._max_total_size,
