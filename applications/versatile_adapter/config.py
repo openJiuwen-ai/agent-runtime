@@ -62,6 +62,12 @@ class Settings(BaseSettings):
     # ── 日志 ────────────────────────────────────────────────────────────────
     adapter_log_level: Optional[str] = None
     adapter_log_file: Optional[str] = None
+    # 日志轮转大小（loguru格式，如 "100 MB"）
+    adapter_log_rotation_size: str = "100 MB"
+    # 日志保留天数（0=不按天数清理）
+    adapter_log_retention_days: int = 7
+    # 日志总空间上限（字节，0=不按空间清理，默认500MB）
+    adapter_log_max_total_size: int = 524288000
 
     # ── Redis ──────────────────────────────────────────────────────────────
     redis_host: Optional[str] = None
