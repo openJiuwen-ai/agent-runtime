@@ -79,7 +79,6 @@ def _va_cleanup_logs(files):
           只删 .gz 归档文件。
     """
     # ━━━ 第1步：读取配置 ━━━
-    from config import get_settings
     _settings = get_settings()
     retention_days = _settings.adapter_log_retention_days
     max_total_size = _settings.adapter_log_max_total_size
