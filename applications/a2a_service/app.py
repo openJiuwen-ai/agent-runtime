@@ -20,7 +20,7 @@ import socket
 import sys
 import time
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -162,7 +162,7 @@ def _cleanup_logs(files):
 
     # 1. 按天数清理（只清理归档文件）
     if retention_days > 0:
-        cutoff_time = (datetime.now() - timedelta(days=retention_days)).timestamp()
+        cutoff_time = (datetime.now(tz=timezone.utc) - timedelta(days=retention_days)).timestamp()
         for f in archive_files:
             try:
                 if f.stat().st_mtime < cutoff_time:

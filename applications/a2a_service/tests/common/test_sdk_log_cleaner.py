@@ -23,7 +23,7 @@ import io
 import os
 import sys
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -31,7 +31,7 @@ from unittest.mock import patch
 # 显式从源码目录加载真实 foundation 包，避免被 conftest 的 stub 污染。
 _FOUNDATION_ROOT = Path(__file__).resolve().parents[4] / "foundation"
 if str(_FOUNDATION_ROOT) not in sys.path:
-    sys.path.insert(0, str(_FOUNDATION_ROOT))
+    sys.path.append(str(_FOUNDATION_ROOT))
 # 清除可能被 stub 污染的缓存，强制重新解析真实模块
 for _mod_name in list(sys.modules.keys()):
     if _mod_name == "openjiuwen_runtime" or _mod_name.startswith("openjiuwen_runtime."):
@@ -80,8 +80,8 @@ class CleanableHandlerRetentionDaysTest(unittest.TestCase):
             log_path = Path(tmp) / "app.log"
             _write_bytes(log_path, 100)
 
-            now_ts = datetime.now().timestamp()
-            old_ts = (datetime.now() - timedelta(days=10)).timestamp()
+            now_ts = datetime.now(tz=timezone.utc).timestamp()
+            old_ts = (datetime.now(tz=timezone.utc) - timedelta(days=10)).timestamp()
 
             _make_gz(log_path.with_suffix(".log.1.gz"), 50, old_ts)
             _make_gz(log_path.with_suffix(".log.2.gz"), 50, old_ts)
@@ -106,7 +106,7 @@ class CleanableHandlerRetentionDaysTest(unittest.TestCase):
             log_path = Path(tmp) / "app.log"
             _write_bytes(log_path, 100)
 
-            old_ts = (datetime.now() - timedelta(days=30)).timestamp()
+            old_ts = (datetime.now(tz=timezone.utc) - timedelta(days=30)).timestamp()
             _make_gz(log_path.with_suffix(".log.1.gz"), 50, old_ts)
 
             handler = _make_handler(log_path, retention_days=0, max_total_size=0)
@@ -130,7 +130,7 @@ class CleanableHandlerTotalSizeTest(unittest.TestCase):
             log_path = Path(tmp) / "app.log"
             _write_bytes(log_path, 100)
 
-            base_ts = datetime.now().timestamp()
+            base_ts = datetime.now(tz=timezone.utc).timestamp()
             _make_gz(log_path.with_suffix(".log.1.gz"), 100, base_ts - 300)
             _make_gz(log_path.with_suffix(".log.2.gz"), 100, base_ts - 200)
             _make_gz(log_path.with_suffix(".log.3.gz"), 100, base_ts - 100)
@@ -157,7 +157,7 @@ class CleanableHandlerTotalSizeTest(unittest.TestCase):
             log_path = Path(tmp) / "app.log"
             _write_bytes(log_path, 100)
 
-            _make_gz(log_path.with_suffix(".log.1.gz"), 100, datetime.now().timestamp())
+            _make_gz(log_path.with_suffix(".log.1.gz"), 100, datetime.now(tz=timezone.utc).timestamp())
 
             handler = _make_handler(log_path, retention_days=0, max_total_size=0)
             handler._cleanup_by_total_size()
@@ -173,7 +173,7 @@ class CleanableHandlerTotalSizeTest(unittest.TestCase):
             log_path = Path(tmp) / "app.log"
             _write_bytes(log_path, 50)
 
-            _make_gz(log_path.with_suffix(".log.1.gz"), 50, datetime.now().timestamp())
+            _make_gz(log_path.with_suffix(".log.1.gz"), 50, datetime.now(tz=timezone.utc).timestamp())
 
             handler = _make_handler(log_path, retention_days=0, max_total_size=1024)
             handler._cleanup_by_total_size()
@@ -190,7 +190,7 @@ class CleanableHandlerExceptionTest(unittest.TestCase):
             log_path = Path(tmp) / "app.log"
             _write_bytes(log_path, 10)
 
-            old_ts = (datetime.now() - timedelta(days=10)).timestamp()
+            old_ts = (datetime.now(tz=timezone.utc) - timedelta(days=10)).timestamp()
             gz = log_path.with_suffix(".log.1.gz")
             _make_gz(gz, 10, old_ts)
 
@@ -207,7 +207,7 @@ class CleanableHandlerExceptionTest(unittest.TestCase):
             log_path = Path(tmp) / "app.log"
             _write_bytes(log_path, 100)
 
-            base_ts = datetime.now().timestamp()
+            base_ts = datetime.now(tz=timezone.utc).timestamp()
             _make_gz(log_path.with_suffix(".log.1.gz"), 100, base_ts - 100)
 
             handler = _make_handler(log_path, retention_days=0, max_total_size=10)
