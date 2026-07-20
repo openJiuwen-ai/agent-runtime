@@ -34,6 +34,11 @@ dependencies = [
 
     # SQLAlchemy（common.data_store_factory 构建 DB handler）
     "sqlalchemy[asyncio]>=2.0.0",
+
+    # 平台层 DB 抽象（common/data_store_factory、db_data_store、cache_backed_data_store
+    # 顶层 import openjiuwen_runtime.foundation.*）。硬 import 依赖，与 sqlalchemy 同样两处同步：
+    # 部署镜像由 agent-store deployment/Dockerfile 的 uv pip install 清单装入（镜像构建不读本文件）。
+    "openjiuwen-runtime-foundation>=0.1.0",
 ]
 
 [project.optional-dependencies]
