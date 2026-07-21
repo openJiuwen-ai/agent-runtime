@@ -90,7 +90,7 @@ class CleanableCompressedRotatingFileHandler(CompressedRotatingFileHandler):
                         f.unlink()
                 except OSError as e:
                     # 用 print 到 stderr，不用 loguru（避免在 Handler 中递归调用日志）
-                    print(f"[sdk_log_cleanup] WARN 按天数清理删除失败: {f} -> {e}", file=sys.stderr)
+                    sys.stderr.write(f"[sdk_log_cleanup] WARN 按天数清理删除失败: {f} -> {e}\n")
 
     def _cleanup_by_total_size(self) -> None:
         """按总空间清理（活跃文件计入总量但不删除，只删 .gz 归档文件）"""
@@ -106,7 +106,7 @@ class CleanableCompressedRotatingFileHandler(CompressedRotatingFileHandler):
                 try:
                     archive_files.append((f.stat().st_mtime, f))
                 except OSError as e:
-                    print(f"[sdk_log_cleanup] WARN 扫描归档文件 stat 失败: {f} -> {e}", file=sys.stderr)
+                    sys.stderr.write(f"[sdk_log_cleanup] WARN 扫描归档文件 stat 失败: {f} -> {e}\n")
                     continue
 
         archive_total = sum(f.stat().st_size for _, f in archive_files if f.exists())
@@ -123,7 +123,7 @@ class CleanableCompressedRotatingFileHandler(CompressedRotatingFileHandler):
                 f.unlink()
                 total_size -= file_size
             except OSError as e:
-                print(f"[sdk_log_cleanup] WARN 按空间清理删除失败: {f} -> {e}", file=sys.stderr)
+                sys.stderr.write(f"[sdk_log_cleanup] WARN 按空间清理删除失败: {f} -> {e}\n")
 
 
 class CleanableDefaultLogger(DefaultLogger):
@@ -211,7 +211,7 @@ def setup_sdk_log_cleaner() -> None:
             LogManager.get_logger(log_type)
         except Exception as e:
             # 某些 logger 可能因配置缺失创建失败，跳过但不静默
-            print(f"[sdk_log_cleanup] WARN 预触发 logger 失败 log_type={log_type}: {e}", file=sys.stderr)
+            sys.stderr.write(f"[sdk_log_cleanup] WARN 预触发 logger 失败 log_type={log_type}: {e}\n")
 
     # 第 2 步：遍历所有已创建的 logger，逐个替换
     all_loggers = LogManager.get_all_loggers()
@@ -275,4 +275,4 @@ def _compress_legacy_archives(all_loggers: dict) -> None:
                     legacy.unlink()
                 except Exception as e:
                     # 压缩失败保留原文件，避免数据丢失
-                    print(f"[sdk_log_cleanup] WARN 压缩残留归档失败 {legacy}: {e}", file=sys.stderr)
+                    sys.stderr.write(f"[sdk_log_cleanup] WARN 压缩残留归档失败 {legacy}: {e}\n")
