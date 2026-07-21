@@ -119,7 +119,7 @@ def _va_cleanup_logs(files):
             except OSError as e:
                 # OSError 可能原因：文件被占用、权限不足、文件已被其他进程删除
                 # 用 print 到 stderr，不用 loguru（避免在 retention 回调中递归调用 loguru）
-                print(f"[va_log_cleanup] WARN 按天数清理删除失败: {f} -> {e}", file=sys.stderr)
+                sys.stderr.write(f"[va_log_cleanup] WARN 按天数清理删除失败: {f} -> {e}\n")
 
     # ━━━ 第5步：按总空间清理（活跃文件 + 剩余归档文件的总和）━━━
     if max_total_size > 0:
@@ -158,7 +158,7 @@ def _va_cleanup_logs(files):
                     total_size -= file_size
                     # 从总空间中减去已删除文件的大小
                 except OSError as e:
-                    print(f"[va_log_cleanup] WARN 按空间清理删除失败: {f} -> {e}", file=sys.stderr)
+                    sys.stderr.write(f"[va_log_cleanup] WARN 按空间清理删除失败: {f} -> {e}\n")
 
 
 def _cleanup_stale_pid_logs(log_dir: str, current_pid: int, retention_days: int) -> None:
@@ -195,7 +195,7 @@ def _cleanup_stale_pid_logs(log_dir: str, current_pid: int, retention_days: int)
             if f.stat().st_mtime < cutoff_time:
                 f.unlink()
         except OSError as e:
-            print(f"[va_log_cleanup] WARN 僵尸文件清理失败: {f} -> {e}", file=sys.stderr)
+            sys.stderr.write(f"[va_log_cleanup] WARN 僵尸文件清理失败: {f} -> {e}\n")
 
 
 def setup_logging() -> None:

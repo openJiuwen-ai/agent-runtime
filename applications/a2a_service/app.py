@@ -169,7 +169,7 @@ def _cleanup_logs(files):
                     f.unlink()
             except OSError as e:
                 # 用 print 到 stderr，不用 loguru（避免在 retention 回调中递归调用 loguru）
-                print(f"[log_cleanup] WARN 按天数清理删除失败: {f} -> {e}", file=sys.stderr)
+                sys.stderr.write(f"[log_cleanup] WARN 按天数清理删除失败: {f} -> {e}\n")
 
     # 2. 按总空间清理（活跃文件 + 剩余归档文件的总和）
     if max_total_size > 0:
@@ -189,7 +189,7 @@ def _cleanup_logs(files):
                     f.unlink()
                     total_size -= file_size
                 except OSError as e:
-                    print(f"[log_cleanup] WARN 按空间清理删除失败: {f} -> {e}", file=sys.stderr)
+                    sys.stderr.write(f"[log_cleanup] WARN 按空间清理删除失败: {f} -> {e}\n")
 
 
 def setup_logging() -> None:
