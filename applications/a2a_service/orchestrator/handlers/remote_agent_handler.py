@@ -50,12 +50,22 @@ from common.logger import (
 from common.redis_client import RedisClient
 from config import get_settings
 from channels.dict_to_a2a import dict_to_a2a
-from ..otel_spans import (
-    set_current_span_attrs,
-    set_span_attrs,
-    start_sub_agent_dispatch_span,
-    start_versatile_adapter_span,
-)
+try:
+    # v2.0 §4.2.6/§4.3.2/§4.3.3：编排层 span 的 context manager 归 agent-store EDPAgent
+    # （otel_span_helper.py），与 chain/llm span 共用同一 TracerProvider；tracer 未注入
+    # （OTel 关闭/未装）时 helper 自身 yield None，零侵入。
+    from agents.EDPAgent.otel_span_helper import (
+        start_sub_agent_dispatch_span,
+        start_versatile_adapter_span,
+    )
+except Exception:  # 旧 EDPAgent 基线无 helper → 降级空操作（设计 §6 安全降级，不阻断服务）
+    from contextlib import nullcontext
+
+    def start_versatile_adapter_span(*_args, **_kwargs):
+        return nullcontext(None)
+
+    def start_sub_agent_dispatch_span(*_args, **_kwargs):
+        return nullcontext(None)
 from ..route.normalized_event import NormalizedEvent, RouteTarget
 from ..state import (
     InputRequiredState,
@@ -67,6 +77,33 @@ from ..state import (
 if TYPE_CHECKING:
     from a2a.server.events import EventQueue
     from ..executor import _TurnContext
+
+
+def _set_span_attrs(span, attrs: Dict[str, Any]) -> None:
+    """在 yield 出的 span 上补 response 属性（空串/None 跳过；span None/非 recording 时 no-op）。"""
+    if span is None or not getattr(span, "is_recording", lambda: False)():
+        return
+    for key, value in (attrs or {}).items():
+        if value is None or value == "":
+            continue
+        try:
+            span.set_attribute(key, value)
+        except Exception:
+            # 属性类型不兼容等异常不阻断主流程
+            pass
+
+
+def _set_current_span_attrs(attrs: Dict[str, Any]) -> None:
+    """在当前活跃 span 上补属性（_call_versatile_adapter 等 finally 块拿不到 span 对象时用）。
+
+    span 由调用方 ``with`` 创建并设为 current，此处经 ``get_current_span()`` 取回
+    （与 v2.0 §4.2.4 ``_emit_metric`` 同手法）。无当前 span / OTel 未装 → no-op。
+    """
+    try:
+        from opentelemetry.trace import get_current_span
+    except ImportError:
+        return
+    _set_span_attrs(get_current_span(), attrs)
 
 
 def _raw_data(raw_event: Any) -> dict[str, Any]:
@@ -293,9 +330,9 @@ class RemoteAgentHandler:
             return
 
         with start_versatile_adapter_span(
-            turn_ctx.otel_session_id or turn_ctx.conv_id,
             query_intent=_field(delegate, "intent"),
             query_description=_field(delegate, "task_description"),
+            session_id=turn_ctx.otel_session_id or turn_ctx.conv_id,
             dispatch_mode="single",
         ):
             va_result, va_task_id, finalized = await self._call_versatile_adapter(
@@ -514,7 +551,12 @@ class RemoteAgentHandler:
             f"remote_task_id={va_task_id}, source_agent={source_agent}"
         )
 
-        with start_versatile_adapter_span(turn_ctx.otel_session_id or turn_ctx.conv_id, dispatch_mode="single"):
+        with start_versatile_adapter_span(
+            query_intent="",
+            query_description="",
+            session_id=turn_ctx.otel_session_id or turn_ctx.conv_id,
+            dispatch_mode="single",
+        ):
             await self._continue_versatile_adapter(
                 _ContinueVaRequest(
                     turn_ctx=turn_ctx,
@@ -621,9 +663,9 @@ class RemoteAgentHandler:
                     "elapsed_ms": int((time.monotonic() - started) * 1000),
                 }
             with start_versatile_adapter_span(
-                turn_ctx.otel_session_id or turn_ctx.conv_id,
                 query_intent=str(delegate.get("data", {}).get("intent", "")),
                 query_description=str(delegate.get("data", {}).get("task_description", "")),
+                session_id=turn_ctx.otel_session_id or turn_ctx.conv_id,
                 dispatch_mode="parallel",
                 workflow_id=workflow_id,
                 target_agent=str(delegate.get("data", {}).get("target_agent") or ""),
@@ -633,7 +675,7 @@ class RemoteAgentHandler:
                     self._drive_workflow_va(turn_ctx, delegate, path, cancel_event),
                     timeout=self.workflow_timeout_seconds,
                 )
-                set_span_attrs(wf_span, {
+                _set_span_attrs(wf_span, {
                     "openjiuwen.va.status": "done" if cascade is not None else "failed",
                     "openjiuwen.va.elapsed_ms": int((time.monotonic() - started) * 1000),
                     "openjiuwen.va.workflow_result": json.dumps(cascade, ensure_ascii=False) if cascade else "",
@@ -848,13 +890,13 @@ class RemoteAgentHandler:
             if client is None:
                 raise RuntimeError(f"sub agent url is missing or client factory unavailable: {url!r}")
             with start_sub_agent_dispatch_span(
-                turn_ctx.otel_session_id or turn_ctx.conv_id,
                 entity_id=entity_id,
                 entity_name=entity_name,
                 query=query,
                 sub_agent_url=url,
                 sub_task_path=str(path),
                 context_id=f"{turn_ctx.conv_id}-sub-{entity_id}",
+                session_id=turn_ctx.otel_session_id or turn_ctx.conv_id,
             ) as sub_span:
                 result = await asyncio.wait_for(
                     self._drive_sub_agent(
@@ -869,7 +911,7 @@ class RemoteAgentHandler:
                     ),
                     timeout=self.sub_agent_timeout_seconds,
                 )
-                set_span_attrs(sub_span, {
+                _set_span_attrs(sub_span, {
                     "openjiuwen.subagent.child_task_id": result.get("child_task_id", ""),
                     "openjiuwen.subagent.status": "cancelled" if result.get("terminal_status") == "cancelled" else "done",
                     "openjiuwen.subagent.elapsed_ms": int((time.monotonic() - started) * 1000),
@@ -1548,7 +1590,7 @@ class RemoteAgentHandler:
             if error_message:
                 output_payload["error"] = error_message
             # 在当前 VA span（由 _handle_delegate 的 with 创建）上补 response 属性（v2.0 §3.2）
-            set_current_span_attrs({
+            _set_current_span_attrs({
                 "openjiuwen.va.elapsed_ms": duration_ms,
                 "openjiuwen.va.status": "failed" if (upstream_error is not None or error_message) else ("completed" if has_end_node else "suspended"),
                 "openjiuwen.va.response_summary": json.dumps({"stream_resp_count": stream_resp_count, "has_end_node": has_end_node, "va_task_id": continuation_task_id}, ensure_ascii=False),
@@ -1729,7 +1771,7 @@ class RemoteAgentHandler:
             if error_message:
                 output_payload["error"] = error_message
             # 在当前 VA span（由 _handle_request_resume 的 with 创建）上补 response 属性（v2.0 §3.2）
-            set_current_span_attrs({
+            _set_current_span_attrs({
                 "openjiuwen.va.elapsed_ms": duration_ms,
                 "openjiuwen.va.status": "failed" if (upstream_error is not None or error_message) else ("completed" if has_end_node else "suspended"),
                 "openjiuwen.va.response_summary": json.dumps({"stream_resp_count": stream_resp_count, "has_end_node": has_end_node, "va_task_id": va_task_id}, ensure_ascii=False),

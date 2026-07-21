@@ -32,6 +32,10 @@ if "agents.EDPAgent" not in sys.modules:
 
     _edp.agent_stream = _agent_stream_placeholder  # type: ignore[attr-defined]
     _edp.get_otel_tracer = lambda: None  # type: ignore[attr-defined]  # OTel 默认关闭（编排层 span 降级为空操作）
+    # v2.0：编排层 span 的 cm 归 EDPAgent.otel_span_helper，注入同签名桩（默认 tracer 未注入 → yield None）
+    from tests.otel_span_helper_stub import install_otel_span_helper_stub
+
+    install_otel_span_helper_stub(_edp)
     sys.modules["agents.EDPAgent"] = _edp
     setattr(_pkg, "EDPAgent", _edp)
 
@@ -372,8 +376,9 @@ def make_fake_tracer():
 
 
 def patch_tracer(monkeypatch, tracer):
-    """把 orchestrator.otel_spans._get_tracer 替换为返回 ``tracer``（None=模拟 OTel 关闭）。"""
-    import orchestrator.otel_spans as otel_spans
+    """把假 tracer 注入 EDPAgent otel_span_helper 桩（None=模拟 OTel 关闭，cm yield None）。"""
+    from agents.EDPAgent import otel_span_helper
 
-    monkeypatch.setattr(otel_spans, "_get_tracer", lambda: tracer)
+    monkeypatch.setattr(otel_span_helper, "_tracer", tracer)
+    monkeypatch.setattr(otel_span_helper, "_OTEL_AVAILABLE", tracer is not None)
 

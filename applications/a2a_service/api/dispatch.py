@@ -68,7 +68,16 @@ from channels.mobile_bank_channel import MobileBankChannel
 from channels.observability import log_channel_event, record_channel_format_error
 from config import get_settings
 from orchestrator.executor import Executor
-from orchestrator.otel_spans import set_span_attrs, start_http_request_span
+try:
+    # v2.0 §4.2.6/§4.3.1：编排层 span 的 context manager 归 agent-store EDPAgent
+    # （otel_span_helper.py），与 chain/llm span 共用同一 TracerProvider；tracer 未注入
+    # （OTel 关闭/未装）时 helper 自身 yield None，零侵入。
+    from agents.EDPAgent.otel_span_helper import start_http_request_span
+except Exception:  # 旧 EDPAgent 基线无 helper → 降级空操作（设计 §6 安全降级，不阻断服务）
+    from contextlib import nullcontext
+
+    def start_http_request_span(*_args, **_kwargs):
+        return nullcontext(None)
 from orchestrator.sse_helpers import log_outbound_sse, next_sse_event
 from orchestrator.state import CONV_TASK_KEY
 
@@ -684,18 +693,29 @@ async def dispatch(
     # 此处从 Response.status_code 统一回填 http.response.status_code，免去在每个 return 处重复设置。
     # 404（路由未命中）发生在 span 之前，不计入 trace（属路由缺失，非 agent 请求）。
     with start_http_request_span(
-        conversation_id,
         method=request.method,
         route=request.url.path,
+        session_id=conversation_id,
         trace_id=traceid,
         agent_id=agent_id,
     ) as http_span:
+        # v2.0 §3.2：请求体 JSON 上 http 根 span（用户提问在 trace 上的权威可见位置）。
+        # request.body() 有缓存，不影响 _dispatch_body 里的 request.json()。
+        if http_span is not None:
+            try:
+                _raw_body = await request.body()
+                if _raw_body:
+                    http_span.set_attribute(
+                        "openjiuwen.http.request_body", _raw_body.decode("utf-8", errors="replace")
+                    )
+            except Exception:
+                pass  # 体读取失败不阻断请求
         _resp = await _dispatch_body(
             request, settings, route_spec, path_params,
             agent_id, conversation_id, traceid, request_started_ms,
         )
         if http_span is not None and _resp is not None:
-            set_span_attrs(http_span, {"http.response.status_code": getattr(_resp, "status_code", 0)})
+            http_span.set_attribute("http.response.status_code", getattr(_resp, "status_code", 0))
         return _resp
 
 

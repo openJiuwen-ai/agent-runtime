@@ -15,7 +15,6 @@ from a2a.server.agent_execution import RequestContext
 from a2a.server.context import ServerCallContext
 from a2a.server.events import EventQueue
 
-import orchestrator.otel_spans as otel_spans
 from tests.framework_parallel._helpers import make_executor, make_fake_tracer, patch_tracer
 
 
