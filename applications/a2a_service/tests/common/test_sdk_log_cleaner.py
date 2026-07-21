@@ -9,11 +9,12 @@
 3. 异常分支：归档文件 stat/unlink 失败时输出 stderr 警告，不抛出
 
 实现说明：
-- 由于 conftest.py 的 _OpenJiuwenStubFinder 会将 openjiuwen_runtime 包替换为
-  MagicMock（避免依赖真实 SDK），本测试不通过 __init__ 构造 handler
-  （super().__init__ 是 MagicMock，不会设置 baseFilename 等属性），
-  而是用 __new__ + 手动属性注入的方式，只测试 _cleanup_by_retention /
-  _cleanup_by_total_size 的纯 Path 操作逻辑。
+- conftest.py 的 _OpenJiuwenStubFinder 会将 openjiuwen 包替换为 MagicMock，
+  但 openjiuwen_runtime（foundation）通过 sys.path.append 加载真实包。
+- CleanableCompressedRotatingFileHandler 的父类 CompressedRotatingFileHandler
+  来自真实 foundation，可正常 __init__ 构造。
+- retention_days / max_total_size 通过构造参数传入，cleanup_by_retention /
+  cleanup_by_total_size 是公开方法，直接调用测试。
 """
 
 from __future__ import annotations
@@ -58,16 +59,22 @@ def _make_gz(path: Path, size: int, mtime: float) -> None:
 
 
 def _make_handler(log_path: Path, retention_days: int, max_total_size: int) -> CleanableCompressedRotatingFileHandler:
-    """绕过 __init__（依赖被 stub 的父类），手动构造 handler 实例。
+    """正式构造 handler 实例。
 
-    CleanableCompressedRotatingFileHandler._cleanup_by_retention /
-    _cleanup_by_total_size 只依赖 self.baseFilename / self._retention_days /
-    self._max_total_size，不调用父类方法，因此可独立测试。
+    CleanableCompressedRotatingFileHandler 的父类 CompressedRotatingFileHandler
+    来自真实 foundation 包（通过 sys.path.append 加载），可以正常 __init__ 构造。
+    retention_days 和 max_total_size 通过构造参数传入，cleanup_by_retention /
+    cleanup_by_total_size 是公开方法，可直接调用测试。
     """
-    handler = CleanableCompressedRotatingFileHandler.__new__(CleanableCompressedRotatingFileHandler)
-    handler.baseFilename = str(log_path)
-    handler._retention_days = retention_days
-    handler._max_total_size = max_total_size
+    handler = CleanableCompressedRotatingFileHandler(
+        filename=str(log_path),
+        max_bytes=1024,
+        backup_count=3,
+        encoding="utf-8",
+        delay=True,  # 延迟打开文件，避免测试清理时文件句柄占用
+        retention_days=retention_days,
+        max_total_size=max_total_size,
+    )
     return handler
 
 
@@ -88,7 +95,7 @@ class CleanableHandlerRetentionDaysTest(unittest.TestCase):
             _make_gz(log_path.with_suffix(".log.3.gz"), 50, now_ts)
 
             handler = _make_handler(log_path, retention_days=7, max_total_size=0)
-            handler._cleanup_by_retention()
+            handler.cleanup_by_retention()
 
             self.assertFalse(log_path.with_suffix(".log.1.gz").exists())
             self.assertFalse(log_path.with_suffix(".log.2.gz").exists())
@@ -110,7 +117,7 @@ class CleanableHandlerRetentionDaysTest(unittest.TestCase):
             _make_gz(log_path.with_suffix(".log.1.gz"), 50, old_ts)
 
             handler = _make_handler(log_path, retention_days=0, max_total_size=0)
-            handler._cleanup_by_retention()
+            handler.cleanup_by_retention()
 
             # cutoff=now，30天前的文件 mtime < now，被删除
             self.assertFalse(log_path.with_suffix(".log.1.gz").exists())
@@ -138,7 +145,7 @@ class CleanableHandlerTotalSizeTest(unittest.TestCase):
             # max_total_size=1，活跃文件 100B 已超限，所有归档都会被删到 total_size<=1
             # 由于活跃文件不能删，所有 .gz 归档会被删尽
             handler = _make_handler(log_path, retention_days=0, max_total_size=1)
-            handler._cleanup_by_total_size()
+            handler.cleanup_by_total_size()
 
             # 所有归档被删（从最旧 1.gz 开始，依次 2.gz、3.gz）
             self.assertFalse(log_path.with_suffix(".log.1.gz").exists())
@@ -160,7 +167,7 @@ class CleanableHandlerTotalSizeTest(unittest.TestCase):
             _make_gz(log_path.with_suffix(".log.1.gz"), 100, datetime.now(tz=timezone.utc).timestamp())
 
             handler = _make_handler(log_path, retention_days=0, max_total_size=0)
-            handler._cleanup_by_total_size()
+            handler.cleanup_by_total_size()
 
             # max_total_size=0，total_size=活跃100+归档>0，归档被删到 total_size<=0
             # 活跃文件不删，但归档会被删尽
@@ -176,7 +183,7 @@ class CleanableHandlerTotalSizeTest(unittest.TestCase):
             _make_gz(log_path.with_suffix(".log.1.gz"), 50, datetime.now(tz=timezone.utc).timestamp())
 
             handler = _make_handler(log_path, retention_days=0, max_total_size=1024)
-            handler._cleanup_by_total_size()
+            handler.cleanup_by_total_size()
 
             self.assertTrue(log_path.with_suffix(".log.1.gz").exists())
 
@@ -198,7 +205,7 @@ class CleanableHandlerExceptionTest(unittest.TestCase):
 
             with patch("sys.stderr", new_callable=io.StringIO) as fake_err:
                 with patch.object(Path, "unlink", side_effect=OSError("perm denied")):
-                    handler._cleanup_by_retention()
+                    handler.cleanup_by_retention()
                 self.assertIn("按天数清理删除失败", fake_err.getvalue())
 
     def test_cleanup_by_total_size_handles_oserror(self) -> None:
@@ -214,7 +221,7 @@ class CleanableHandlerExceptionTest(unittest.TestCase):
 
             with patch("sys.stderr", new_callable=io.StringIO) as fake_err:
                 with patch.object(Path, "unlink", side_effect=OSError("perm denied")):
-                    handler._cleanup_by_total_size()
+                    handler.cleanup_by_total_size()
                 self.assertIn("按空间清理删除失败", fake_err.getvalue())
 
 
