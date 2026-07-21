@@ -55,7 +55,7 @@ async def test_remote_handler_builds_sub_agent_client_from_yaml_url_card():
     factory.create.assert_called_once()
     assert not factory.create_from_url.called
     card = factory.create.call_args.args[0]
-    assert card.supported_interfaces[0].url == "http://child/a2a/"
+    assert card.supported_interfaces[0].url == "http://child/a2a"
     assert card.supported_interfaces[0].protocol_binding == TransportProtocol.JSONRPC
     assert card.supported_interfaces[0].protocol_version == PROTOCOL_VERSION_1_0
     assert card.capabilities.streaming is True
