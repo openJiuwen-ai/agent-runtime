@@ -259,6 +259,7 @@ def make_executor(*, sub_agent_client: Any = None, redis_json: Any = None, **lim
     if sub_agent_client is not None:
         # mock _get_sub_agent_client 直接返回传入的 client（绕过 cache_key 格式）
         _mock_client = sub_agent_client
+
         async def _mock_get_client(url, agent_card_name="SubDPA"):
             return _mock_client
         remote_handler._get_sub_agent_client = _mock_get_client

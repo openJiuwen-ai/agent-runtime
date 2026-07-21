@@ -32,7 +32,8 @@ from orchestrator.handlers.remote_agent_handler import RemoteAgentHandler
 class TestBuildSubAgentCard:
     """测试 _build_sub_agent_card 的 URL/name/token 适配。"""
 
-    def test_url_no_trailing_slash(self):
+    @staticmethod
+    def test_url_no_trailing_slash():
         """URL 末尾不应有 /（网关路径 /a2a/SubEDPAgent 不需要末尾 /）。"""
         card = RemoteAgentHandler._build_sub_agent_card(
             "https://a2a-gateway.example.com/a2a/SubEDPAgent"
@@ -41,7 +42,8 @@ class TestBuildSubAgentCard:
         assert not rpc_url.endswith("/"), f"URL 末尾不应有 /: {rpc_url}"
         assert rpc_url == "https://a2a-gateway.example.com/a2a/SubEDPAgent"
 
-    def test_url_strips_trailing_slash_from_input(self):
+    @staticmethod
+    def test_url_strips_trailing_slash_from_input():
         """输入 URL 含末尾 / 时应被去掉。"""
         card = RemoteAgentHandler._build_sub_agent_card(
             "https://a2a-gateway.example.com/a2a/SubEDPAgent/"
@@ -49,7 +51,8 @@ class TestBuildSubAgentCard:
         rpc_url = card.supported_interfaces[0].url
         assert not rpc_url.endswith("/"), f"末尾 / 应被去掉: {rpc_url}"
 
-    def test_name_uses_agent_card_name(self):
+    @staticmethod
+    def test_name_uses_agent_card_name():
         """AgentCard.name 应使用配置的 agent_card_name，不是硬编码 SubDPA。"""
         card = RemoteAgentHandler._build_sub_agent_card(
             "https://a2a-gateway.example.com/a2a/SubEDPAgent",
@@ -57,14 +60,16 @@ class TestBuildSubAgentCard:
         )
         assert card.name == "SubEDPAgent", f"name 应为 SubEDPAgent: {card.name}"
 
-    def test_name_default_sub_dpa(self):
+    @staticmethod
+    def test_name_default_sub_dpa():
         """未传 agent_card_name 时默认 SubDPA。"""
         card = RemoteAgentHandler._build_sub_agent_card(
             "https://a2a-gateway.example.com/a2a/SubDPA"
         )
         assert card.name == "SubDPA"
 
-    def test_token_param_accepted(self):
+    @staticmethod
+    def test_token_param_accepted():
         """token 参数不再需要（gateway 模式不注入 token）。"""
         card = RemoteAgentHandler._build_sub_agent_card(
             "https://a2a-gateway.example.com/a2a/SubEDPAgent",
@@ -72,14 +77,16 @@ class TestBuildSubAgentCard:
         )
         assert card.name == "SubEDPAgent"
 
-    def test_no_token_no_error(self):
+    @staticmethod
+    def test_no_token_no_error():
         """无 token 时不报错。"""
         card = RemoteAgentHandler._build_sub_agent_card(
             "https://a2a-gateway.example.com/a2a/SubEDPAgent",
         )
         assert len(card.security_schemes) == 0
 
-    def test_protocol_version_1_0(self):
+    @staticmethod
+    def test_protocol_version_1_0():
         """协议版本应为 1.0。"""
         from a2a.utils.constants import PROTOCOL_VERSION_1_0
 
@@ -88,7 +95,8 @@ class TestBuildSubAgentCard:
         )
         assert card.supported_interfaces[0].protocol_version == PROTOCOL_VERSION_1_0
 
-    def test_streaming_capability(self):
+    @staticmethod
+    def test_streaming_capability():
         """应支持流式传输。"""
         card = RemoteAgentHandler._build_sub_agent_card(
             "https://a2a-gateway.example.com/a2a/SubEDPAgent"

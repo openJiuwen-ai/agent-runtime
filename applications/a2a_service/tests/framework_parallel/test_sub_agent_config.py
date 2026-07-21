@@ -24,7 +24,8 @@ SubAgentsConfig.model_rebuild()
 class TestSubAgentEntryFields:
     """测试 SubAgentEntry 新增的 a2a_gateway_base/agent_card_name/token 字段。"""
 
-    def test_default_values(self):
+    @staticmethod
+    def test_default_values():
         """默认值正确。"""
         entry = SubAgentEntry()
         assert entry.entity_type == "default"
@@ -35,7 +36,8 @@ class TestSubAgentEntryFields:
         assert entry.agent_card_name == "SubDPA"
         assert entry.token == ""
 
-    def test_gateway_fields_settable(self):
+    @staticmethod
+    def test_gateway_fields_settable():
         """可设置网关相关字段。"""
         entry = SubAgentEntry(
             entity_type="ZDT",
@@ -51,7 +53,8 @@ class TestSubAgentEntryFields:
         assert entry.agent_card_name == "SubEDPAgent"
         assert entry.token == "sub-agent-token"
 
-    def test_yaml_round_trip(self):
+    @staticmethod
+    def test_yaml_round_trip():
         """yaml 配置可正确解析为 SubAgentEntry。"""
         yaml_data = {
             "sub_agents": [
@@ -73,7 +76,8 @@ class TestSubAgentEntryFields:
         assert entry.a2a_gateway_base == "https://a2a-gateway.example.com"
         assert entry.token == "sub-agent-token"
 
-    def test_direct_mode_default(self):
+    @staticmethod
+    def test_direct_mode_default():
         """不配 endpoint_type 时默认 direct 模式。"""
         yaml_data = {
             "sub_agents": [
