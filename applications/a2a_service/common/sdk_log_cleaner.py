@@ -63,25 +63,25 @@ class CleanableCompressedRotatingFileHandler(CompressedRotatingFileHandler):
             encoding=encoding,
             delay=delay,
         )
-        self._retention_days = retention_days
-        self._max_total_size = max_total_size
+        self.retention_days = retention_days
+        self.max_total_size = max_total_size
 
-    def doRollover(self) -> None:
+    def doRollover(self) -> None:  # noqa: N802 继承自标准库 RotatingFileHandler，必须保持原名
         # 1. 调用 foundation 的轮转 + gzip 压缩逻辑
         super().doRollover()
 
         # 2. 清理逻辑（与 a2a/VA 保持一致，只删 .gz）
-        if self._retention_days > 0:
-            self._cleanup_by_retention()
-        if self._max_total_size > 0:
-            self._cleanup_by_total_size()
+        if self.retention_days > 0:
+            self.cleanup_by_retention()
+        if self.max_total_size > 0:
+            self.cleanup_by_total_size()
 
-    def _cleanup_by_retention(self) -> None:
+    def cleanup_by_retention(self) -> None:
         """按天数清理（只清理 .gz 归档文件，不删活跃文件）"""
         log_path = Path(self.baseFilename)
         log_dir = log_path.parent
         log_name = log_path.name
-        cutoff_time = (datetime.now(tz=timezone.utc) - timedelta(days=self._retention_days)).timestamp()
+        cutoff_time = (datetime.now(tz=timezone.utc) - timedelta(days=self.retention_days)).timestamp()
 
         for f in log_dir.glob(f"{log_name}*.gz"):
             if f.is_file():
@@ -92,7 +92,7 @@ class CleanableCompressedRotatingFileHandler(CompressedRotatingFileHandler):
                     # 用 print 到 stderr，不用 loguru（避免在 Handler 中递归调用日志）
                     sys.stderr.write(f"[sdk_log_cleanup] WARN 按天数清理删除失败: {f} -> {e}\n")
 
-    def _cleanup_by_total_size(self) -> None:
+    def cleanup_by_total_size(self) -> None:
         """按总空间清理（活跃文件计入总量但不删除，只删 .gz 归档文件）"""
         log_path = Path(self.baseFilename)
         log_dir = log_path.parent
@@ -111,12 +111,12 @@ class CleanableCompressedRotatingFileHandler(CompressedRotatingFileHandler):
 
         archive_total = sum(f.stat().st_size for _, f in archive_files if f.exists())
         total_size = active_size + archive_total
-        if total_size <= self._max_total_size:
+        if total_size <= self.max_total_size:
             return
 
         archive_files.sort(key=lambda x: x[0])  # 最旧在前
         for mtime, f in archive_files:
-            if total_size <= self._max_total_size:
+            if total_size <= self.max_total_size:
                 break
             try:
                 file_size = f.stat().st_size
