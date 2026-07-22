@@ -51,14 +51,14 @@ from common.redis_client import RedisClient
 from config import get_settings
 from channels.dict_to_a2a import dict_to_a2a
 try:
-    # v2.0 §4.2.6/§4.3.2/§4.3.3：编排层 span 的 context manager 归 agent-store EDPAgent
-    # （otel_span_helper.py），与 chain/llm span 共用同一 TracerProvider；tracer 未注入
+    # 编排层 span 的 context manager 由 EDPAgent（otel_span_helper.py）提供，
+    # 与其 chain/llm span 共用同一 TracerProvider；tracer 未注入
     # （OTel 关闭/未装）时 helper 自身 yield None，零侵入。
     from agents.EDPAgent.otel_span_helper import (
         start_sub_agent_dispatch_span,
         start_versatile_adapter_span,
     )
-except Exception:  # 旧 EDPAgent 基线无 helper → 降级空操作（设计 §6 安全降级，不阻断服务）
+except Exception:  # EDPAgent 未提供 helper 时降级为空操作（不阻断服务）
     from contextlib import nullcontext
 
     def start_versatile_adapter_span(*_args, **_kwargs):
@@ -96,8 +96,8 @@ def _set_span_attrs(span, attrs: Dict[str, Any]) -> None:
 def _set_current_span_attrs(attrs: Dict[str, Any]) -> None:
     """在当前活跃 span 上补属性（_call_versatile_adapter 等 finally 块拿不到 span 对象时用）。
 
-    span 由调用方 ``with`` 创建并设为 current，此处经 ``get_current_span()`` 取回
-    （与 v2.0 §4.2.4 ``_emit_metric`` 同手法）。无当前 span / OTel 未装 → no-op。
+    span 由调用方 ``with`` 创建并设为 current，此处经 ``get_current_span()`` 取回。
+    无当前 span / OTel 未装 → no-op。
     """
     try:
         from opentelemetry.trace import get_current_span
@@ -991,7 +991,7 @@ class RemoteAgentHandler:
 
         data_struct = Struct()
         cached = await self._redis.get_json(session_request_key(turn_ctx.conv_id)) or {}
-        # inject OTel W3C trace context：让子 Agent 的 span 挂在主 Agent trace 树下（v2.0 §4.3.4）。
+        # inject OTel W3C trace context：让子 Agent 的 span 挂在主 Agent trace 树下。
         # inject() 取当前 OTel context（此刻 current span = 本 sub_agent.dispatch）→ traceparent 以其为 parent。
         _traceparent = ""
         try:
@@ -1589,7 +1589,7 @@ class RemoteAgentHandler:
             }
             if error_message:
                 output_payload["error"] = error_message
-            # 在当前 VA span（由 _handle_delegate 的 with 创建）上补 response 属性（v2.0 §3.2）
+            # 在当前 VA span（由 _handle_delegate 的 with 创建）上补 response 属性
             _set_current_span_attrs({
                 "openjiuwen.va.elapsed_ms": duration_ms,
                 "openjiuwen.va.status": "failed" if (upstream_error is not None or error_message) else ("completed" if has_end_node else "suspended"),
@@ -1770,7 +1770,7 @@ class RemoteAgentHandler:
             }
             if error_message:
                 output_payload["error"] = error_message
-            # 在当前 VA span（由 _handle_request_resume 的 with 创建）上补 response 属性（v2.0 §3.2）
+            # 在当前 VA span（由 _handle_request_resume 的 with 创建）上补 response 属性
             _set_current_span_attrs({
                 "openjiuwen.va.elapsed_ms": duration_ms,
                 "openjiuwen.va.status": "failed" if (upstream_error is not None or error_message) else ("completed" if has_end_node else "suspended"),

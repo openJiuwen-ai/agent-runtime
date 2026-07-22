@@ -276,7 +276,7 @@ async def test_helpers_task_mapping_build_request_and_probe():
     assert dispatch_module._extract_query_params(object()) == {}
 
 
-# ── http.request span（v2.0 §4.3.1：dispatch 是 HTTP 入口）─────────────────────
+# ── http.request span（dispatch 是 HTTP 入口，span 从此处起）─────────────────────
 
 
 def _inject_tracer(monkeypatch):
@@ -302,7 +302,7 @@ def test_dispatch_http_span_created_with_200_status(monkeypatch):
     span.set_attribute.assert_any_call("http.request.method", "POST")
     span.set_attribute.assert_any_call("http.route", "/v1/demo/agents/agent-a/conversations/conv-1")
     span.set_attribute.assert_any_call("http.response.status_code", 200)
-    # v2.0 §3.2：http 根 span 必须携带请求体（用户提问在 trace 上的权威可见位置）
+    # http 根 span 必须携带请求体（用户提问在 trace 上的权威可见位置）
     body_calls = [c for c in span.set_attribute.call_args_list if c.args[0] == "openjiuwen.http.request_body"]
     assert body_calls, "http 根 span 应携带 openjiuwen.http.request_body"
     assert "normal" in body_calls[0].args[1]

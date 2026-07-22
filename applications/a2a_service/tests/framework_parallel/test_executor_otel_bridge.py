@@ -1,7 +1,7 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
-"""回归守卫：http.request span 已移至 api/dispatch.py（v2.0 §4.3.1），executor.execute()
+"""回归守卫：http.request span 在 api/dispatch.py（HTTP 入口），executor.execute()
 不再创建任何 OTel span。本测试注入假 tracer 调 execute()，断言它不建 span——
 防止后续误把 span 重新加回 execute（那样会和 dispatch 的根 span 嵌套成两个 http.request）。
 """

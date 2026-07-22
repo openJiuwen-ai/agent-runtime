@@ -3,7 +3,7 @@
 
 """``agents.EDPAgent.otel_span_helper`` 的测试桩。
 
-v2.0 §4.2.6：编排层 span 的 context manager 归 agent-store EDPAgent（otel_span_helper.py），
+编排层 span 的 context manager 由 EDPAgent（otel_span_helper.py）提供，
 runtime（dispatch.py / remote_agent_handler.py）经 ``from agents.EDPAgent.otel_span_helper
 import ...`` 消费。测试环境没有真 EDPAgent，本模块复刻其极简行为供 ``sys.modules`` 注入：
 tracer 未注入（``_OTEL_AVAILABLE=False``）时各 cm ``yield None``；注入后经

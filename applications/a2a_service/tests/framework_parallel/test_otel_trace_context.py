@@ -1,7 +1,7 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
-"""Stage 2 traceparent 跨 Agent 传播测试（v2.0 §4.3.4 inject / §4.3.5 extract）。
+"""traceparent 跨 Agent 传播测试（inject / extract）。
 
 - inject：_drive_sub_agent 发出的 A2A Message session_context 含 traceparent + session_id
 - extract/otel_session_id：execute() 从 session_context 取出并透传到 handler_context / turn_ctx

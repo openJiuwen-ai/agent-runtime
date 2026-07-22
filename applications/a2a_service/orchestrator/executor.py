@@ -227,7 +227,7 @@ class Executor(AgentExecutor):
         核心原则：execute 只做"构建事件 → dispatch"，不做任何路由目标判断。
         所有后续逻辑（创建 Task、续轮、委托调用等）由 handler 处理。
         """
-        # 子 Agent 作为 A2A Server：提取主 Agent 传来的 traceparent + session_id（v2.0 §4.3.5）。
+        # 子 Agent 作为 A2A Server：提取主 Agent 传来的 traceparent + session_id。
         # attach 后，本 execute 内创建的所有 span（含 SDK 的 chain.EDPAgent）自动挂在主 Agent trace 树下。
         _sess_ctx = self._extract_session_context(context)
         upstream_traceparent = _sess_ctx.get("traceparent", "")
@@ -325,7 +325,7 @@ class Executor(AgentExecutor):
                     task_id=task_id,
                     call_context=call_context,
                 )
-            # detach OTel context，防泄漏（异常路径也执行，v2.0 §4.3.5）
+            # detach OTel context，防泄漏（异常路径也执行）
             if _otel_token is not None:
                 try:
                     from opentelemetry.context import detach

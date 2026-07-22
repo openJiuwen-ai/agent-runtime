@@ -78,7 +78,7 @@ if "agents.EDPAgent" not in sys.modules and importlib.util.find_spec("agents.EDP
 
     edp_module.initialize = _initialize_stub  # type: ignore[attr-defined]
     edp_module.get_otel_tracer = lambda: None  # type: ignore[attr-defined]  # OTel 默认关闭（编排层 span 降级为空操作）
-    # v2.0：编排层 span 的 cm 归 EDPAgent.otel_span_helper，注入同签名桩（默认 tracer 未注入 → yield None）
+    # 编排层 span 的 cm 由 EDPAgent.otel_span_helper 提供，注入同签名桩（默认 tracer 未注入 → yield None）
     from tests.otel_span_helper_stub import install_otel_span_helper_stub
 
     install_otel_span_helper_stub(edp_module)
