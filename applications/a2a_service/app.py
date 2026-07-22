@@ -142,8 +142,9 @@ def _cleanup_logs(files):
 
     注意：活跃文件（无 .gz 后缀的 .log 文件）不参与删除，只删 .gz 归档文件。
     """
-    retention_days = int(os.getenv("LOG_RETENTION_DAYS", "7"))
-    max_total_size = int(os.getenv("LOG_MAX_TOTAL_SIZE", "524288000"))
+    _settings = get_settings()
+    retention_days = _settings.log_retention_days
+    max_total_size = _settings.log_max_total_size
 
     if not files:
         return
@@ -530,8 +531,9 @@ async def lifespan(fastapi_app: FastAPI):
         from openjiuwen.core.common.logging.log_config import configure_log_config
         from openjiuwen.core.common.logging.default.constant import DEFAULT_INNER_LOG_CONFIG
         custom_log_config = DEFAULT_INNER_LOG_CONFIG.copy()
-        custom_log_config["backup_count"] = int(os.getenv("JIUWEN_LOG_BACKUP_COUNT", 20))
-        custom_log_config["max_bytes"] = int(os.getenv("JIUWEN_LOG_MAX_BYTES", 20971520))
+        # 通过 settings 读取，复用 pydantic 校验和默认值，避免 os.getenv 遇到空字符串抛 ValueError
+        custom_log_config["backup_count"] = settings.jiuwen_log_backup_count
+        custom_log_config["max_bytes"] = settings.jiuwen_log_max_bytes
         configure_log_config(custom_log_config)
 
         await initialize()
