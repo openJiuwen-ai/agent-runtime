@@ -34,6 +34,9 @@ dependencies = [
 
     # SQLAlchemy（common.data_store_factory 构建 DB handler）
     "sqlalchemy[asyncio]>=2.0.0",
+
+    # openjiuwen runtime foundation（SDK 日志清理等基础能力）
+    "openjiuwen-runtime-foundation>=0.1.0",
 ]
 
 [project.optional-dependencies]

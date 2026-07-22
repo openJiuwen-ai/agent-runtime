@@ -26,6 +26,8 @@ from datetime import datetime, timedelta, timezone
 # 从 foundation 导入 Handler（支持 gzip 压缩）
 from openjiuwen_runtime.foundation.log.handler import CompressedRotatingFileHandler
 
+from config import get_settings
+
 # 从 SDK 导入 DefaultLogger 和相关类（不修改 SDK，只继承）
 from openjiuwen.core.common.logging.default.default_impl import (
     DefaultLogger,
@@ -157,10 +159,11 @@ class CleanableDefaultLogger(DefaultLogger):
                 handler.close()
 
                 # 用 foundation 的 Handler 替换（获得压缩 + 清理能力）
-                # backupCount/maxBytes 优先从环境变量读取（与 app.py 中的 configure_log_config 保持一致），
+                # backupCount/maxBytes 从 settings 读取（与 app.py 中的 configure_log_config 保持一致），
                 # 避免旧 handler（SDK 默认值 20）覆盖用户配置
-                env_backup_count = int(os.getenv("JIUWEN_LOG_BACKUP_COUNT", handler.backupCount))
-                env_max_bytes = int(os.getenv("JIUWEN_LOG_MAX_BYTES", handler.maxBytes))
+                _s = get_settings()
+                env_backup_count = _s.jiuwen_log_backup_count
+                env_max_bytes = _s.jiuwen_log_max_bytes
                 cleanable_handler = CleanableCompressedRotatingFileHandler(
                     filename=handler.baseFilename,
                     max_bytes=env_max_bytes,
@@ -200,10 +203,11 @@ def setup_sdk_log_cleaner() -> None:
     背景：configure_log_config() 在 initialize() 之前执行，此时 SDK 用原生
     SafeRotatingFileHandler（不压缩）。如果此时活跃文件已超 maxBytes，轮转会
     生成 .1/.2/...（未压缩）。本函数第 3 步把这些残留文件压缩成 .gz，否则
-    它们不会被清理逻辑扫描到（清理只扫 .gz），会永久残留。
+    他们不会被清理逻辑扫描到（清理只扫 .gz），会永久残留。
     """
-    retention_days = int(os.getenv("JIUWEN_LOG_RETENTION_DAYS", 7))
-    max_total_size = int(os.getenv("JIUWEN_LOG_MAX_TOTAL_SIZE", 524288000))
+    _settings = get_settings()
+    retention_days = _settings.jiuwen_log_retention_days
+    max_total_size = _settings.jiuwen_log_max_total_size
 
     # 第 1 步：预触发所有懒加载 logger，确保它们被创建并加入 _loggers dict
     for log_type in _ALL_SDK_LOG_TYPES:
