@@ -201,13 +201,13 @@ class FakeSubAgentClient:
         self.subscribe_requests = []
         self.cancel_task = AsyncMock()
 
-    def send_message(self, request):
+    def send_message(self, request, context=None):
         self.send_requests.append(request)
         s = self._send[min(self.send_calls, len(self._send) - 1)]
         self.send_calls += 1
         return s() if callable(s) else s
 
-    def subscribe(self, request):
+    def subscribe(self, request, context=None):
         self.subscribe_requests.append(request)
         s = self._subscribe[min(self.subscribe_calls, len(self._subscribe) - 1)]
         self.subscribe_calls += 1
@@ -257,6 +257,13 @@ def make_executor(*, sub_agent_client: Any = None, redis_json: Any = None, **lim
         **cfg,
     )
     if sub_agent_client is not None:
+        # mock _get_sub_agent_client 直接返回传入的 client（绕过 cache_key 格式）
+        _mock_client = sub_agent_client
+
+        async def _mock_get_client(url, agent_card_name="SubDPA"):
+            return _mock_client
+        remote_handler._get_sub_agent_client = _mock_get_client
+        # 同时存 "" key 保持兼容（部分测试直接读 _sub_agent_clients[""]）
         remote_handler._sub_agent_clients[""] = sub_agent_client
     executor = Executor(
         redis=redis,
