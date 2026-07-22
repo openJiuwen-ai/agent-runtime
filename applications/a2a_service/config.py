@@ -107,17 +107,17 @@ class Settings(BaseSettings):
     log_rotation_size: str = "20 MB"
     # 日志保留天数（0=不按天数清理）
     log_retention_days: int = 7
-    # 日志总空间上限（字节，0=不按空间清理，默认500MB）
+    # 日志总空间上限（MB，0=不按空间清理，默认500MB）
     log_max_total_size: int = 524288000
 
     # ── SDK 日志（openjiuwen SDK 的日志清理配置）────────────────────────────
-    # SDK 日志单文件大小阈值（字节，达到即触发轮转，默认20MB）
+    # SDK 日志单文件大小阈值（MB，达到即触发轮转，默认20MB）
     jiuwen_log_max_bytes: int = 20971520
     # SDK 日志归档文件保留数量（轮转后最多保留 N 个 .gz，默认20）
     jiuwen_log_backup_count: int = 20
     # SDK 日志归档保留天数（0=不按天数清理，默认7天）
     jiuwen_log_retention_days: int = 7
-    # SDK 日志总空间上限（字节，0=不按空间清理，默认500MB）
+    # SDK 日志总空间上限（MB，0=不按空间清理，默认500MB）
     jiuwen_log_max_total_size: int = 524288000
 
     @field_validator("log_max_total_size", "jiuwen_log_max_bytes", "jiuwen_log_max_total_size", mode="before")

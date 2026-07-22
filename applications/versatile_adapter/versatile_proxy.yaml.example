@@ -29,8 +29,10 @@
 # 各字段说明：
 #   name                     - 适配器名称（日志标识）
 #   type                     - controller / workflow / a2a_gateway
-#   url_template             - URL 模板，支持占位符 {conversation_id}、{workflow_id}、
-#                              {a2a_gateway_base}、{agent_card_name}
+#   url_template             - URL 模板：
+#                                - controller: 仅支持 {conversation_id}（project_id/agent_id 请写真实值）
+#                                - workflow: 支持 {workflow_id}、{conversation_id}（project_id 请写真实值）
+#                                - a2a_gateway: 支持 {a2a_gateway_base}、{agent_card_name}
 #   timeout                  - HTTP 流式请求超时（秒），默认 600
 #   headers_template         - 调用时注入的默认请求头
 #   forward_header_whitelist - 仅转发白名单中的外部请求头（小写）；不设置则转发全部
@@ -44,7 +46,7 @@
 #   token                    - （仅 a2a_gateway）鉴权 token
 
 workflow_defaults:
-  url_template: "https://versatile.example.com/workflows/{workflow_id}/conversations/{conversation_id}"
+  url_template: "https://versatile.example.com/v1/{project_id}/agent-manager/workflows/{workflow_id}/conversations/{conversation_id}"
   timeout: 600
   headers_template:
     Accept: "application/json, text/event-stream"
@@ -75,7 +77,7 @@ a2a_gateway_defaults:
 adapters:
   - name: default_controller
     type: controller
-    url_template: "https://versatile.example.com/api/conversations/{conversation_id}"
+    url_template: "https://versatile.example.com/v1/{project_id}/agents/agt_default/conversations/{conversation_id}"
     timeout: 600
     headers_template:
       Accept: "application/json, text/event-stream"
@@ -98,7 +100,7 @@ adapters:
     type: workflow
     intent: "special_flow"
     workflow_id: "wf_special"
-    url_template: "https://special.example.com/workflows/{workflow_id}/conversations/{conversation_id}"
+    url_template: "https://special.example.com/v1/{project_id}/agent-manager/workflows/{workflow_id}/conversations/{conversation_id}"
     timeout: 120
     headers_template:
       X-App-Code: "special"
@@ -114,4 +116,3 @@ adapters:
     intent: "knowledge_qa"
     agent_card_name: "KnowledgeAgent"
     token: "workflow-knowledge-token"
-    workflow_result_node: "WorkflowQAResponseNode"
