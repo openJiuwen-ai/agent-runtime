@@ -35,7 +35,9 @@ dependencies = [
     # SQLAlchemy（common.data_store_factory 构建 DB handler）
     "sqlalchemy[asyncio]>=2.0.0",
 
-    # openjiuwen runtime foundation（SDK 日志清理等基础能力）
+    # 平台层基础能力（common/data_store_factory、db_data_store、cache_backed_data_store
+    # 顶层 import openjiuwen_runtime.foundation.*；SDK 日志清理等）。硬 import 依赖，两处同步：
+    # 部署镜像由 agent-store deployment/Dockerfile 的 uv pip install 清单装入（镜像构建不读本文件）。
     "openjiuwen-runtime-foundation>=0.1.0",
 ]
 
@@ -44,6 +46,10 @@ dev = [
     "pytest>=8",
     "pytest-asyncio>=0.23",
     "httpx",
+    # OTel 轨迹上报（编排层 span 经 agents.EDPAgent.otel_span_helper 复用 EDPAgent 的 TracerProvider）。
+    # 仅 API（SpanKind/propagate），不含 SDK/exporter——SDK 与 otlp 导出由 openjiuwen[observability]
+    # 在 deployment 镜像内带入。a2a_service 主 dependencies 不列，与 openjiuwen 同 posture（懒导入+镜像提供）。
+    "opentelemetry-api>=1.20",
 ]
 
 [build-system]

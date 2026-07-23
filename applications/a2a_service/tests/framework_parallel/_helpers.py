@@ -31,6 +31,16 @@ if "agents.EDPAgent" not in sys.modules:
         return
 
     _edp.agent_stream = _agent_stream_placeholder  # type: ignore[attr-defined]
+
+    def _get_otel_tracer_none():
+        # OTel 默认关闭（编排层 span 降级为空操作）
+        return None
+
+    _edp.get_otel_tracer = _get_otel_tracer_none  # type: ignore[attr-defined]
+    # 编排层 span 的 cm 由 EDPAgent.otel_span_helper 提供，注入同签名桩（默认 tracer 未注入 → yield None）
+    from tests.otel_span_helper_stub import install_otel_span_helper_stub
+
+    install_otel_span_helper_stub(_edp)
     sys.modules["agents.EDPAgent"] = _edp
     setattr(_pkg, "EDPAgent", _edp)
 
@@ -335,3 +345,52 @@ def collect_sub_tasks(event_queue: EventQueue) -> list[dict]:
 
 def find_status_events(event_queue: EventQueue):
     return [ev for ev in drain_queue(event_queue) if isinstance(ev, TaskStatusUpdateEvent)]
+
+
+# ══════════════════════════════════════════════════════════════════════
+# OTel tracer 替身（编排层 span 测试用）
+# ══════════════════════════════════════════════════════════════════════
+
+
+class _FakeSpan:
+    """OTel span 替身：支持 cm 协议、is_recording()=True、记录 set_attribute 与 __exit__。"""
+
+    def __init__(self) -> None:
+        self.is_recording = MagicMock(return_value=True)
+        self.set_attribute = MagicMock()
+        self.exited = None  # (exc_type, exc, tb) 或 None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.exited = (exc_type, exc, tb)
+        return False  # 不吞异常
+
+
+def make_fake_tracer():
+    """返回一个 OTel tracer 替身。
+
+    ``tracer.start_as_current_span(name, kind=...)`` 每调一次新建一个 ``_FakeSpan``，
+    并把 ``(args, kwargs, span)`` 追加到 ``tracer.created``，便于断言 span 名/种类/数量。
+    """
+    class _Tracer:
+        def __init__(self) -> None:
+            self.created: list = []
+            self.start_as_current_span = MagicMock(side_effect=self._make)
+
+        def _make(self, *args, **kwargs):
+            sp = _FakeSpan()
+            self.created.append((args, kwargs, sp))
+            return sp
+
+    return _Tracer()
+
+
+def patch_tracer(monkeypatch, tracer):
+    """把假 tracer 注入 EDPAgent otel_span_helper 桩（None=模拟 OTel 关闭，cm yield None）。"""
+    from agents.EDPAgent import otel_span_helper
+
+    monkeypatch.setattr(otel_span_helper, "_tracer", tracer)
+    monkeypatch.setattr(otel_span_helper, "_OTEL_AVAILABLE", tracer is not None)
+

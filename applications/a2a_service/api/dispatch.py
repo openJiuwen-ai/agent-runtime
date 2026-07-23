@@ -33,6 +33,7 @@ import json
 import socket
 import time
 import uuid
+from dataclasses import dataclass
 from typing import Any, Optional, Tuple
 
 from a2a.server.agent_execution import RequestContext
@@ -68,6 +69,16 @@ from channels.mobile_bank_channel import MobileBankChannel
 from channels.observability import log_channel_event, record_channel_format_error
 from config import get_settings
 from orchestrator.executor import Executor
+try:
+    # 编排层 span 的 context manager 由 EDPAgent（otel_span_helper.py）提供，
+    # 与其 chain/llm span 共用同一 TracerProvider；tracer 未注入
+    # （OTel 关闭/未装）时 helper 自身 yield None，零侵入。
+    from agents.EDPAgent.otel_span_helper import start_http_request_span
+except Exception:  # EDPAgent 未提供 helper 时降级为空操作（不阻断服务）
+    from contextlib import nullcontext
+
+    def start_http_request_span(*_args, **_kwargs):
+        return nullcontext(None)
 from orchestrator.sse_helpers import log_outbound_sse, next_sse_event
 from orchestrator.state import CONV_TASK_KEY
 
@@ -678,6 +689,66 @@ async def dispatch(
     agent_id = str(path_params.get("agent_id") or "")
     conversation_id = str(path_params.get("conversation_id") or path_params.get("conv_id") or "")
 
+    # http.request 是整条 trace 的根 span：dispatch 是 HTTP 入口，span 从此处起、
+    # 覆盖后续所有 return 路径（415/400/429/probe/stream/non-stream）。_dispatch_body 返回 Response，
+    # 此处从 Response.status_code 统一回填 http.response.status_code，免去在每个 return 处重复设置。
+    # 404（路由未命中）发生在 span 之前，不计入 trace（属路由缺失，非 agent 请求）。
+    with start_http_request_span(
+        method=request.method,
+        route=request.url.path,
+        session_id=conversation_id,
+        trace_id=traceid,
+        agent_id=agent_id,
+    ) as http_span:
+        # 请求体 JSON 记到 http 根 span 上（用户提问在 trace 上的权威可见位置）。
+        # request.body() 有缓存，不影响 _dispatch_body 里的 request.json()。
+        if http_span is not None:
+            try:
+                _raw_body = await request.body()
+                if _raw_body:
+                    http_span.set_attribute(
+                        "openjiuwen.http.request_body", _raw_body.decode("utf-8", errors="replace")
+                    )
+            except Exception:
+                pass  # 体读取失败不阻断请求
+        _resp = await _dispatch_body(_DispatchBodyParams(
+            request=request,
+            settings=settings,
+            route_spec=route_spec,
+            path_params=path_params,
+            agent_id=agent_id,
+            conversation_id=conversation_id,
+            traceid=traceid,
+            request_started_ms=request_started_ms,
+        ))
+        if http_span is not None and _resp is not None:
+            http_span.set_attribute("http.response.status_code", getattr(_resp, "status_code", 0))
+        return _resp
+
+
+@dataclass
+class _DispatchBodyParams:
+    """``_dispatch_body`` 的入参包（原 dispatch 路由的入参直传）。"""
+
+    request: Any
+    settings: Any
+    route_spec: Any
+    path_params: Any
+    agent_id: str
+    conversation_id: str
+    traceid: str
+    request_started_ms: int
+
+
+async def _dispatch_body(params: _DispatchBodyParams):
+    request = params.request
+    settings = params.settings
+    route_spec = params.route_spec
+    path_params = params.path_params
+    agent_id = params.agent_id
+    conversation_id = params.conversation_id
+    traceid = params.traceid
+    request_started_ms = params.request_started_ms
     # 在工具类中统一完成请求快照解析与公共字段提取
     http_request_tag_context = await build_http_request_tag_context(
         request=request,

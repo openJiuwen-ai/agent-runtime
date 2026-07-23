@@ -50,6 +50,22 @@ from common.logger import (
 from common.redis_client import RedisClient
 from config import get_settings
 from channels.dict_to_a2a import dict_to_a2a
+try:
+    # 编排层 span 的 context manager 由 EDPAgent（otel_span_helper.py）提供，
+    # 与其 chain/llm span 共用同一 TracerProvider；tracer 未注入
+    # （OTel 关闭/未装）时 helper 自身 yield None，零侵入。
+    from agents.EDPAgent.otel_span_helper import (
+        start_sub_agent_dispatch_span,
+        start_versatile_adapter_span,
+    )
+except Exception:  # EDPAgent 未提供 helper 时降级为空操作（不阻断服务）
+    from contextlib import nullcontext
+
+    def start_versatile_adapter_span(*_args, **_kwargs):
+        return nullcontext(None)
+
+    def start_sub_agent_dispatch_span(*_args, **_kwargs):
+        return nullcontext(None)
 from ..route.normalized_event import NormalizedEvent, RouteTarget
 from ..state import (
     InputRequiredState,
@@ -61,6 +77,33 @@ from ..state import (
 if TYPE_CHECKING:
     from a2a.server.events import EventQueue
     from ..executor import _TurnContext
+
+
+def _set_span_attrs(span, attrs: Dict[str, Any]) -> None:
+    """在 yield 出的 span 上补 response 属性（空串/None 跳过；span None/非 recording 时 no-op）。"""
+    if span is None or not getattr(span, "is_recording", lambda: False)():
+        return
+    for key, value in (attrs or {}).items():
+        if value is None or value == "":
+            continue
+        try:
+            span.set_attribute(key, value)
+        except Exception:
+            # 属性类型不兼容等异常不阻断主流程
+            pass
+
+
+def _set_current_span_attrs(attrs: Dict[str, Any]) -> None:
+    """在当前活跃 span 上补属性（_call_versatile_adapter 等 finally 块拿不到 span 对象时用）。
+
+    span 由调用方 ``with`` 创建并设为 current，此处经 ``get_current_span()`` 取回。
+    无当前 span / OTel 未装 → no-op。
+    """
+    try:
+        from opentelemetry.trace import get_current_span
+    except ImportError:
+        return
+    _set_span_attrs(get_current_span(), attrs)
 
 
 def _raw_data(raw_event: Any) -> dict[str, Any]:
@@ -286,11 +329,17 @@ class RemoteAgentHandler:
             logger.warning("[RemoteAgentHandler] delegate 处理缺少必要上下文")
             return
 
-        va_result, va_task_id, finalized = await self._call_versatile_adapter(
-            turn_ctx,
-            delegate=delegate,
-            context=context,
-        )
+        with start_versatile_adapter_span(
+            query_intent=_field(delegate, "intent"),
+            query_description=_field(delegate, "task_description"),
+            session_id=turn_ctx.otel_session_id or turn_ctx.conv_id,
+            dispatch_mode="single",
+        ):
+            va_result, va_task_id, finalized = await self._call_versatile_adapter(
+                turn_ctx,
+                delegate=delegate,
+                context=context,
+            )
 
         parent_task_id = turn_ctx.task_id
         if va_task_id and parent_task_id:
@@ -502,16 +551,22 @@ class RemoteAgentHandler:
             f"remote_task_id={va_task_id}, source_agent={source_agent}"
         )
 
-        await self._continue_versatile_adapter(
-            _ContinueVaRequest(
-                turn_ctx=turn_ctx,
-                va_task_id=va_task_id,
-                user_input=user_input,
-                headers=headers,
-                original_body=body,
-                context=context,
+        with start_versatile_adapter_span(
+            query_intent="",
+            query_description="",
+            session_id=turn_ctx.otel_session_id or turn_ctx.conv_id,
+            dispatch_mode="single",
+        ):
+            await self._continue_versatile_adapter(
+                _ContinueVaRequest(
+                    turn_ctx=turn_ctx,
+                    va_task_id=va_task_id,
+                    user_input=user_input,
+                    headers=headers,
+                    original_body=body,
+                    context=context,
+                )
             )
-        )
 
     async def _suspend_task(
         self,
@@ -607,10 +662,24 @@ class RemoteAgentHandler:
                     "error": "workflow cancelled",
                     "elapsed_ms": int((time.monotonic() - started) * 1000),
                 }
-            cascade = await asyncio.wait_for(
-                self._drive_workflow_va(turn_ctx, delegate, path, cancel_event),
-                timeout=self.workflow_timeout_seconds,
-            )
+            with start_versatile_adapter_span(
+                query_intent=str(delegate.get("data", {}).get("intent", "")),
+                query_description=str(delegate.get("data", {}).get("task_description", "")),
+                session_id=turn_ctx.otel_session_id or turn_ctx.conv_id,
+                dispatch_mode="parallel",
+                workflow_id=workflow_id,
+                target_agent=str(delegate.get("data", {}).get("target_agent") or ""),
+                sub_task_path=str(path),
+            ) as wf_span:
+                cascade = await asyncio.wait_for(
+                    self._drive_workflow_va(turn_ctx, delegate, path, cancel_event),
+                    timeout=self.workflow_timeout_seconds,
+                )
+                _set_span_attrs(wf_span, {
+                    "openjiuwen.va.status": "done" if cascade is not None else "failed",
+                    "openjiuwen.va.elapsed_ms": int((time.monotonic() - started) * 1000),
+                    "openjiuwen.va.workflow_result": json.dumps(cascade, ensure_ascii=False) if cascade else "",
+                })
             elapsed_ms = int((time.monotonic() - started) * 1000)
             if cancel_event is not None and cancel_event.is_set():
                 await self._emit_sub_task(
@@ -829,6 +898,7 @@ class RemoteAgentHandler:
                 f"[SubAgent] entity_id={entity_id}, endpoint_type=direct, url={url}"
             )
         path = [str(p) for p in getattr(turn_ctx, "sub_task_path", ())] + [entity_id]
+        started = time.monotonic()
         await self._emit_sub_task(
             turn_ctx,
             path,
@@ -839,19 +909,35 @@ class RemoteAgentHandler:
             client = await self._get_sub_agent_client(url, agent_card_name)
             if client is None:
                 raise RuntimeError(f"sub agent url is missing or client factory unavailable: {url!r}")
-            result = await asyncio.wait_for(
-                self._drive_sub_agent(
-                    _DriveSubAgentRequest(
-                        client=client,
-                        spec=spec,
-                        query=query,
-                        turn_ctx=turn_ctx,
-                        path=path,
-                        cancel_event=cancel_event,
-                    )
-                ),
-                timeout=self.sub_agent_timeout_seconds,
-            )
+            with start_sub_agent_dispatch_span(
+                entity_id=entity_id,
+                entity_name=entity_name,
+                query=query,
+                sub_agent_url=url,
+                sub_task_path=str(path),
+                context_id=f"{turn_ctx.conv_id}-sub-{entity_id}",
+                session_id=turn_ctx.otel_session_id or turn_ctx.conv_id,
+            ) as sub_span:
+                result = await asyncio.wait_for(
+                    self._drive_sub_agent(
+                        _DriveSubAgentRequest(
+                            client=client,
+                            spec=spec,
+                            query=query,
+                            turn_ctx=turn_ctx,
+                            path=path,
+                            cancel_event=cancel_event,
+                        )
+                    ),
+                    timeout=self.sub_agent_timeout_seconds,
+                )
+                _sub_status = "cancelled" if result.get("terminal_status") == "cancelled" else "done"
+                _set_span_attrs(sub_span, {
+                    "openjiuwen.subagent.child_task_id": result.get("child_task_id", ""),
+                    "openjiuwen.subagent.status": _sub_status,
+                    "openjiuwen.subagent.elapsed_ms": int((time.monotonic() - started) * 1000),
+                    "openjiuwen.subagent.content_summary": str(result.get("content", ""))[:200],
+                })
             if result.get("terminal_status") == "cancelled":
                 await self._emit_sub_task(
                     turn_ctx,
@@ -926,6 +1012,17 @@ class RemoteAgentHandler:
 
         data_struct = Struct()
         cached = await self._redis.get_json(session_request_key(turn_ctx.conv_id)) or {}
+        # inject OTel W3C trace context：让子 Agent 的 span 挂在主 Agent trace 树下。
+        # inject() 取当前 OTel context（此刻 current span = 本 sub_agent.dispatch）→ traceparent 以其为 parent。
+        _traceparent = ""
+        try:
+            from opentelemetry.propagate import inject as _otel_inject
+
+            _carrier: dict = {}
+            _otel_inject(_carrier)
+            _traceparent = _carrier.get("traceparent", "")
+        except ImportError:
+            pass
         data_struct.update(
             {
                 "session_context": {
@@ -934,6 +1031,8 @@ class RemoteAgentHandler:
                     "trace_id": cached.get("trace_id", ""),
                     "body": cached.get("body", {}),
                     "sub_task_path": path,
+                    "session_id": getattr(turn_ctx, "otel_session_id", "") or turn_ctx.conv_id,
+                    "traceparent": _traceparent,
                 }
             }
         )
@@ -1538,6 +1637,21 @@ class RemoteAgentHandler:
             }
             if error_message:
                 output_payload["error"] = error_message
+            # 在当前 VA span（由 _handle_delegate 的 with 创建）上补 response 属性
+            if upstream_error is not None or error_message:
+                _va_status = "failed"
+            else:
+                _va_status = "completed" if has_end_node else "suspended"
+            _va_response_summary = json.dumps({
+                "stream_resp_count": stream_resp_count,
+                "has_end_node": has_end_node,
+                "va_task_id": continuation_task_id,
+            }, ensure_ascii=False)
+            _set_current_span_attrs({
+                "openjiuwen.va.elapsed_ms": duration_ms,
+                "openjiuwen.va.status": _va_status,
+                "openjiuwen.va.response_summary": _va_response_summary,
+            })
             to_logger(
                 level="ERROR" if status_message else "INFO",
                 message=build_versatile_end_observation(
@@ -1713,6 +1827,21 @@ class RemoteAgentHandler:
             }
             if error_message:
                 output_payload["error"] = error_message
+            # 在当前 VA span（由 _handle_request_resume 的 with 创建）上补 response 属性
+            if upstream_error is not None or error_message:
+                _va_status = "failed"
+            else:
+                _va_status = "completed" if has_end_node else "suspended"
+            _va_response_summary = json.dumps({
+                "stream_resp_count": stream_resp_count,
+                "has_end_node": has_end_node,
+                "va_task_id": va_task_id,
+            }, ensure_ascii=False)
+            _set_current_span_attrs({
+                "openjiuwen.va.elapsed_ms": duration_ms,
+                "openjiuwen.va.status": _va_status,
+                "openjiuwen.va.response_summary": _va_response_summary,
+            })
             to_logger(
                 level="ERROR" if status_message else "INFO",
                 message=build_versatile_end_observation(

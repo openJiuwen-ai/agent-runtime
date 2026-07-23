@@ -11,9 +11,11 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import api.dispatch as dispatch_module
+from opentelemetry.trace import SpanKind
 from api.dispatch import router
 from channels.base import ParsedRequest
 from channels.registry import RouteSpec
+from tests.framework_parallel._helpers import make_fake_tracer, patch_tracer
 
 
 class _Registry:
@@ -272,3 +274,85 @@ async def test_helpers_task_mapping_build_request_and_probe():
     assert dispatch_module._extract_query({"custom_data": {"inputs": {"query": "q"}}}) == "q"
     assert dispatch_module._extract_query_params(SimpleNamespace(query_params={"a": "b"})) == {"a": "b"}
     assert dispatch_module._extract_query_params(object()) == {}
+
+
+# ── http.request span（dispatch 是 HTTP 入口，span 从此处起）─────────────────────
+
+
+def _inject_tracer(monkeypatch):
+    """注入假 tracer，返回它（断言 span 创建用）。"""
+    tracer = make_fake_tracer()
+    patch_tracer(monkeypatch, tracer)
+    return tracer
+
+
+def test_dispatch_http_span_created_with_200_status(monkeypatch):
+    tracer = _inject_tracer(monkeypatch)
+    client, _app = _client()
+    response = client.post(
+        "/v1/demo/agents/agent-a/conversations/conv-1",
+        json={"input": {"query": "normal"}, "stream": False},
+    )
+    assert response.status_code == 200
+    assert len(tracer.created) == 1, "一次请求恰好 1 个 http 根 span"
+    args, kwargs, span = tracer.created[0]
+    assert args == ("http.request",)
+    assert kwargs == {"kind": SpanKind.SERVER}
+    span.set_attribute.assert_any_call("session.id", "conv-1")
+    span.set_attribute.assert_any_call("http.request.method", "POST")
+    span.set_attribute.assert_any_call("http.route", "/v1/demo/agents/agent-a/conversations/conv-1")
+    span.set_attribute.assert_any_call("http.response.status_code", 200)
+    # http 根 span 必须携带请求体（用户提问在 trace 上的权威可见位置）
+    body_calls = [c for c in span.set_attribute.call_args_list if c.args[0] == "openjiuwen.http.request_body"]
+    assert body_calls, "http 根 span 应携带 openjiuwen.http.request_body"
+    assert "normal" in body_calls[0].args[1]
+
+
+def test_dispatch_http_span_records_415_status(monkeypatch):
+    tracer = _inject_tracer(monkeypatch)
+    client, _app = _client()
+    response = client.post(
+        "/v1/demo/agents/agent-a/conversations/conv-1", content="x"
+    )
+    assert response.status_code == 415
+    assert len(tracer.created) == 1, "415 也进 span（dispatch 是 http 入口）"
+    _, _, span = tracer.created[0]
+    span.set_attribute.assert_any_call("http.response.status_code", 415)
+
+
+def test_dispatch_http_span_records_429_status(monkeypatch):
+    async def _limited(**_kwargs):
+        return False, "limited", "100001"
+
+    monkeypatch.setattr(dispatch_module, "_check_rate_limit", _limited)
+    tracer = _inject_tracer(monkeypatch)
+    client, _app = _client()
+    response = client.post(
+        "/v1/demo/agents/agent-a/conversations/conv-1",
+        json={"input": {"query": "x"}, "stream": False},
+    )
+    assert response.status_code == 429
+    _, _, span = tracer.created[0]
+    span.set_attribute.assert_any_call("http.response.status_code", 429)
+
+
+def test_dispatch_404_route_miss_creates_no_span(monkeypatch):
+    """404（路由未命中）发生在 span 之前——不应创建 span。"""
+    tracer = _inject_tracer(monkeypatch)
+    client, _app = _client(registry=False)
+    response = client.post("/v1/demo/agents/agent-a/conversations/conv-1", json={})
+    assert response.status_code == 404
+    assert tracer.created == [], "404 在 span 之前，不进 trace"
+
+
+def test_dispatch_no_span_and_works_when_tracer_disabled(monkeypatch):
+    """tracer=None（OTel 关闭）：dispatch 正常跑、不创建任何 span。"""
+    patch_tracer(monkeypatch, None)
+    tracer = make_fake_tracer()  # 不接入；仅证明未被调用
+    client, _app = _client()
+    response = client.post(
+        "/v1/demo/agents/agent-a/conversations/conv-1",
+        json={"input": {"query": "normal"}, "stream": False},
+    )
+    assert response.status_code == 200
+    assert tracer.created == [], "OTel 关闭时 dispatch 不创建 span"

@@ -22,5 +22,15 @@ if "agents.EDPAgent" not in sys.modules and importlib.util.find_spec("agents.EDP
         return
 
     edp_module.agent_stream = _agent_stream_stub  # type: ignore[attr-defined]
+
+    def _get_otel_tracer_none():
+        # OTel 默认关闭（编排层 span 降级为空操作）
+        return None
+
+    edp_module.get_otel_tracer = _get_otel_tracer_none  # type: ignore[attr-defined]
+    # 编排层 span 的 cm 由 EDPAgent.otel_span_helper 提供，注入同签名桩（默认 tracer 未注入 → yield None）
+    from tests.otel_span_helper_stub import install_otel_span_helper_stub
+
+    install_otel_span_helper_stub(edp_module)
     sys.modules["agents.EDPAgent"] = edp_module
     setattr(pkg_agents, "EDPAgent", edp_module)
