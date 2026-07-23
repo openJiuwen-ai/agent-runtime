@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional, TYPE_CHECKING
 
 import httpx
-from a2a.client import Client, ClientFactory
+from a2a.client import Client, ClientCallContext, ClientFactory
 from a2a.client.errors import A2AClientError
 from a2a.utils.constants import PROTOCOL_VERSION_1_0, TransportProtocol
 from a2a.utils.errors import TaskNotFoundError, UnsupportedOperationError
@@ -758,20 +758,27 @@ class RemoteAgentHandler:
                 "elapsed_ms": elapsed_ms,
             }
 
-    async def _get_sub_agent_client(self, url: str) -> Optional[Client]:
-        client = self._sub_agent_clients.get(url)
+    async def _get_sub_agent_client(
+        self, url: str, agent_card_name: str = "SubDPA"
+    ) -> Optional[Client]:
+        cache_key = f"{url}|{agent_card_name}"
+        client = self._sub_agent_clients.get(cache_key)
         if client is not None:
             return client
         if not url or self._client_factory is None:
             return None
-        client = self._client_factory.create(self._build_sub_agent_card(url))
-        self._sub_agent_clients[url] = client
+        client = self._client_factory.create(
+            self._build_sub_agent_card(url, agent_card_name)
+        )
+        self._sub_agent_clients[cache_key] = client
         return client
 
     @staticmethod
-    def _build_sub_agent_card(url: str) -> AgentCard:
-        rpc_url = url.rstrip("/") + "/"
-        card = AgentCard(name="SubDPA", description="子 Agent A2A 端点", version="1.0.0")
+    def _build_sub_agent_card(
+        url: str, agent_card_name: str = "SubDPA"
+    ) -> AgentCard:
+        rpc_url = url.rstrip("/")
+        card = AgentCard(name=agent_card_name, description="子 Agent A2A 端点", version="1.0.0")
         card.supported_interfaces.append(
             AgentInterface(
                 protocol_binding=TransportProtocol.JSONRPC,
@@ -876,7 +883,20 @@ class RemoteAgentHandler:
         entity_id = str(spec.get("entity_id") or uuid.uuid4())
         entity_name = str(spec.get("entity_name") or "")
         query = str(spec.get("query") or "")
-        url = str(spec.get("sub_agent_url") or spec.get("url") or "")
+        agent_card_name = str(spec.get("agent_card_name") or spec.get("name") or "SubDPA")
+        endpoint_type = str(spec.get("endpoint_type") or "direct").lower()
+        if endpoint_type == "gateway":
+            gateway_base = str(spec.get("a2a_gateway_base") or "")
+            url = f"{gateway_base}/a2a/{agent_card_name}" if gateway_base else ""
+            logger.info(
+                f"[SubAgent] entity_id={entity_id}, endpoint_type=gateway, "
+                f"agent_card_name={agent_card_name}, url={url}"
+            )
+        else:
+            url = str(spec.get("sub_agent_url") or spec.get("url") or "")
+            logger.info(
+                f"[SubAgent] entity_id={entity_id}, endpoint_type=direct, url={url}"
+            )
         path = [str(p) for p in getattr(turn_ctx, "sub_task_path", ())] + [entity_id]
         started = time.monotonic()
         await self._emit_sub_task(
@@ -886,7 +906,7 @@ class RemoteAgentHandler:
             {"event": "node_start", "entity_name": entity_name},
         )
         try:
-            client = await self._get_sub_agent_client(url)
+            client = await self._get_sub_agent_client(url, agent_card_name)
             if client is None:
                 raise RuntimeError(f"sub agent url is missing or client factory unavailable: {url!r}")
             with start_sub_agent_dispatch_span(
@@ -1026,6 +1046,33 @@ class RemoteAgentHandler:
         msg.parts.extend([Part(text=query), Part(data=data_value)])
         request = SendMessageRequest(message=msg)
 
+        # 按 endpoint_type 决定是否注入 userId + token HTTP Header
+        endpoint_type = str(spec.get("endpoint_type") or "direct").lower()
+        call_context = None
+        if endpoint_type == "gateway":
+            upstream_headers = cached.get("headers", {})
+            user_id = (
+                upstream_headers.get("x-user-id")
+                or upstream_headers.get("X-User-Id")
+                or upstream_headers.get("userId")
+                or upstream_headers.get("userid")
+                or ""
+            )
+            ctx_headers: dict[str, str] = {}
+            if user_id:
+                ctx_headers["userId"] = user_id
+            else:
+                logger.warning("[SubAgent] userId 未从 session 缓存中提取到，A2AGateway 可能返回 401")
+            token = str(spec.get("token") or "")
+            if token:
+                ctx_headers["token"] = token
+            if ctx_headers:
+                call_context = ClientCallContext(state={"headers": ctx_headers})
+                logger.info(
+                    f"[SubAgent] Header 注入: endpoint_type=gateway, "
+                    f"userId={'有' if user_id else '无'}, token={'有' if token else '无'}"
+                )
+
         content = ""
         child_task_id = ""
         retry_count = 0
@@ -1034,9 +1081,9 @@ class RemoteAgentHandler:
         while True:
             try:
                 stream = (
-                    client.send_message(request)
+                    client.send_message(request, context=call_context)
                     if not child_task_id
-                    else client.subscribe(SubscribeToTaskRequest(id=child_task_id))
+                    else client.subscribe(SubscribeToTaskRequest(id=child_task_id), context=call_context)
                 )
                 async for stream_resp in stream:
                     retry_count = 0

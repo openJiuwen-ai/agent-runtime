@@ -8,9 +8,24 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import quote_plus
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from common.crypto import decrypt_config_value
+
+
+def _parse_size_to_bytes(value) -> int:
+    """将 MB 字符串转为字节 int。
+
+    只支持 MB 单位，如 '500 MB'、'20MB'；纯数字按字节。
+    """
+    if isinstance(value, int):
+        return value
+    s = str(value).strip().upper()
+    if s.endswith("MB"):
+        num = s[:-2].strip()
+        return int(float(num) * 1024 * 1024)
+    return int(s)
 
 
 
@@ -88,6 +103,27 @@ class Settings(BaseSettings):
     # ── 日志 ────────────────────────────────────────────────────────────────
     log_level: Optional[str] = None
     log_dir: Optional[str] = None
+    # 日志轮转大小（loguru格式，如 "20 MB"）
+    log_rotation_size: str = "20 MB"
+    # 日志保留天数（0=不按天数清理）
+    log_retention_days: int = 7
+    # 日志总空间上限（MB，0=不按空间清理，默认500MB）
+    log_max_total_size: int = 524288000
+
+    # ── SDK 日志（openjiuwen SDK 的日志清理配置）────────────────────────────
+    # SDK 日志单文件大小阈值（MB，达到即触发轮转，默认20MB）
+    jiuwen_log_max_bytes: int = 20971520
+    # SDK 日志归档文件保留数量（轮转后最多保留 N 个 .gz，默认20）
+    jiuwen_log_backup_count: int = 20
+    # SDK 日志归档保留天数（0=不按天数清理，默认7天）
+    jiuwen_log_retention_days: int = 7
+    # SDK 日志总空间上限（MB，0=不按空间清理，默认500MB）
+    jiuwen_log_max_total_size: int = 524288000
+
+    @field_validator("log_max_total_size", "jiuwen_log_max_bytes", "jiuwen_log_max_total_size", mode="before")
+    @classmethod
+    def _parse_size_fields(cls, v):
+        return _parse_size_to_bytes(v)
 
     @property
     def redis_url(self) -> str:

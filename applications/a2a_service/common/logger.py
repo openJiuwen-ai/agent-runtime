@@ -10,7 +10,7 @@ import logging
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from enum import StrEnum
+from enum import Enum
 from typing import Any, Optional
 
 from fastapi import Request
@@ -67,7 +67,7 @@ class TagTrace(BaseModel):
     release: Optional[str] = None # Agent版本信息
 
 
-class ObservationType(StrEnum):
+class ObservationType(str, Enum):
     SPAN = "SPAN"  # 通用操作 / 跨度
     EVENT = "EVENT" # 时间点事件
     GENERATION = "GENERATION" # LLM生成操作
@@ -108,7 +108,7 @@ class TagObservation(BaseModel):
     prompt_id: Optional[str] = None # 模型调用阶段使用的Prompt ID, 现阶段不填
 
 
-class Tag(StrEnum):
+class Tag(str, Enum):
     TAG_HTTP_REQUEST_START = "TAG_HTTP_REQUEST_START"
     TAG_HTTP_REQUEST_END = "TAG_HTTP_REQUEST_END"
     TAG_AGENT_INIT_TOOLLIST = "TAG_AGENT_INIT_TOOLLIST"
@@ -130,7 +130,7 @@ class Tag(StrEnum):
     TAG_CUSTOM = "TAG_CUSTOM"  # 自定义的不确定，用于临时打日志调试
 
 
-class ResultEnum(StrEnum):
+class ResultEnum(str, Enum):
     SUCCESS = "success"
     FAILED = "failed"
 
@@ -144,7 +144,7 @@ class Extra(BaseModel):
     terminal: Optional[str] = None
 
 
-class Level(StrEnum):
+class Level(str, Enum):
     CRITICAL = "CRITICAL"
     ERROR = "ERROR"
     WARNING = "WARNING"

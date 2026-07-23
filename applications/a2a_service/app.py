@@ -20,6 +20,7 @@ import socket
 import sys
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -128,6 +129,70 @@ def dynamic_format(record):
         )
 
 
+def _cleanup_logs(files):
+    """
+    loguru retention 回调函数：按天数 + 按总空间清理。
+
+    loguru 在每次轮转后调用此函数，传入所有匹配的日志文件列表。
+    注意：loguru 传入的可能是 Path 对象或字符串，统一转为 Path 处理。
+
+    清理逻辑：
+    1. 按保留天数清理：删除修改时间超过 retention_days 的归档文件
+    2. 按总空间清理：如果总空间超限，从最旧归档文件开始逐一删除
+
+    注意：活跃文件（无 .gz 后缀的 .log 文件）不参与删除，只删 .gz 归档文件。
+    """
+    _settings = get_settings()
+    retention_days = _settings.log_retention_days
+    max_total_size = _settings.log_max_total_size
+
+    if not files:
+        return
+
+    # 统一转为 Path 对象（loguru 可能传入字符串）
+    files = [Path(f) for f in files]
+
+    # 按文件名区分活跃文件和归档文件（不用 mtime 猜测，避免误删刚压缩的归档）
+    # 活跃文件：无 .gz 后缀的 .log 文件（正在被 loguru 写入）
+    # 归档文件：.gz 后缀的压缩文件（已被轮转压缩）
+    active_files = [f for f in files if f.exists() and not f.name.endswith(".gz")]
+    archive_files = [f for f in files if f.exists() and f.name.endswith(".gz")]
+
+    if not archive_files:
+        return
+
+    # 1. 按天数清理（只清理归档文件）
+    if retention_days > 0:
+        cutoff_time = (datetime.now(tz=timezone.utc) - timedelta(days=retention_days)).timestamp()
+        for f in archive_files:
+            try:
+                if f.stat().st_mtime < cutoff_time:
+                    f.unlink()
+            except OSError as e:
+                # 用 print 到 stderr，不用 loguru（避免在 retention 回调中递归调用 loguru）
+                sys.stderr.write(f"[log_cleanup] WARN 按天数清理删除失败: {f} -> {e}\n")
+
+    # 2. 按总空间清理（活跃文件 + 剩余归档文件的总和）
+    if max_total_size > 0:
+        # 重新获取未被天数清理删掉的归档文件
+        remaining_archives = [(f.stat().st_mtime, f) for f in archive_files if f.exists()]
+        active_size = sum(f.stat().st_size for f in active_files if f.exists())
+        archive_total = sum(f.stat().st_size for _, f in remaining_archives)
+        total_size = active_size + archive_total
+
+        if total_size > max_total_size:
+            remaining_archives.sort(key=lambda x: x[0])  # 最旧在前
+            for _mtime, f in remaining_archives:
+                if total_size <= max_total_size:
+                    break
+                try:
+                    file_size = f.stat().st_size
+                    f.unlink()
+                    total_size -= file_size
+                except OSError as e:
+                    sys.stderr.write(f"[log_cleanup] WARN 按空间清理删除失败: {f} -> {e}\n")
+
+
 def setup_logging() -> None:
     settings = get_settings()
 
@@ -152,8 +217,8 @@ def setup_logging() -> None:
         logger.add(
             log_file,
             level=settings.log_level.upper() if settings.log_level else "INFO",
-            rotation="20 MB",
-            retention="7 days",
+            rotation=settings.log_rotation_size,
+            retention=_cleanup_logs,
             compression="gz",
             format=dynamic_format,
             filter=lambda record: len(record["extra"]) == 0 or "source" not in record["extra"]
@@ -162,8 +227,8 @@ def setup_logging() -> None:
         logger.add(
             audit_log,
             level="INFO",
-            rotation="20 MB",
-            retention="30 days",
+            rotation=settings.log_rotation_size,
+            retention=_cleanup_logs,
             compression="gz",
             format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> \x01 "
                    "<level>{level: <8}</level> \x01 "
@@ -462,8 +527,23 @@ async def lifespan(fastapi_app: FastAPI):
                 "[A2AService] DB持久化已禁用（runtime_db_enabled=false），使用纯Redis模式",
             )
 
+        # 在 initialize() 之前，覆盖 SDK 日志配置（轮转大小、备份数量）
+        from openjiuwen.core.common.logging.log_config import configure_log_config
+        from openjiuwen.core.common.logging.default.constant import DEFAULT_INNER_LOG_CONFIG
+        custom_log_config = DEFAULT_INNER_LOG_CONFIG.copy()
+        # 通过 settings 读取，复用 pydantic 校验和默认值，避免 os.getenv 遇到空字符串抛 ValueError
+        custom_log_config["backup_count"] = settings.jiuwen_log_backup_count
+        custom_log_config["max_bytes"] = settings.jiuwen_log_max_bytes
+        configure_log_config(custom_log_config)
+
         await initialize()
         logger.info("[A2AService] Agent 初始化完成")
+
+        # SDK 日志清理：用 foundation Handler 替换 SDK 默认 Handler，
+        # 为 SDK 的 21 个 logger 增加 gzip 压缩 + 按天数清理 + 按总空间清理能力
+        from common.sdk_log_cleaner import setup_sdk_log_cleaner
+        setup_sdk_log_cleaner()
+        logger.info("[A2AService] SDK 日志清理已启用（gzip压缩+按天数+按空间清理）")
 
         # read=None 关闭 SSE 流读超时：子 Agent 进入并行工作流阶段事件流会出现 >5s 空档
         # （VA 跑批），默认 5s read 超时会误杀子 Agent；整体时长由框架 sub_agent_timeout_seconds

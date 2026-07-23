@@ -7,8 +7,22 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from pydantic import Field, Json
+from pydantic import Field, Json, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _parse_size_to_bytes(value) -> int:
+    """将 MB 字符串转为字节 int。
+
+    只支持 MB 单位，如 '500 MB'、'20MB'；纯数字按字节。
+    """
+    if isinstance(value, int):
+        return value
+    s = str(value).strip().upper()
+    if s.endswith("MB"):
+        num = s[:-2].strip()
+        return int(float(num) * 1024 * 1024)
+    return int(s)
 
 
 # 调用 Versatile 时默认注入的请求头（JSON 字符串，会被 Json[...] 字段解析）。
@@ -62,6 +76,17 @@ class Settings(BaseSettings):
     # ── 日志 ────────────────────────────────────────────────────────────────
     adapter_log_level: Optional[str] = None
     adapter_log_file: Optional[str] = None
+    # 日志轮转大小（loguru格式，如 "100 MB"）
+    adapter_log_rotation_size: str = "100 MB"
+    # 日志保留天数（0=不按天数清理）
+    adapter_log_retention_days: int = 7
+    # 日志总空间上限（MB，0=不按空间清理，默认500MB）
+    adapter_log_max_total_size: int = 524288000
+
+    @field_validator("adapter_log_max_total_size", mode="before")
+    @classmethod
+    def _parse_size_fields(cls, v):
+        return _parse_size_to_bytes(v)
 
     # ── Redis ──────────────────────────────────────────────────────────────
     redis_host: Optional[str] = None
