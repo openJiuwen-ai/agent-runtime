@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     RUNTIME_DB_PASSWORD: Optional[str] = Field(default=None, env="RUNTIME_DB_PASSWORD")
     RUNTIME_DB_NAME: Optional[str] = Field(default=None, env="RUNTIME_DB_NAME")
 
+    # SQLAlchemy 连接池默认值（亦支持 DB_POOL_SIZE / DB_MAX_OVERFLOW / DB_POOL_TIMEOUT 别名）
+    RUNTIME_DB_POOL_SIZE: int = Field(default=2, env="RUNTIME_DB_POOL_SIZE")
+    RUNTIME_DB_MAX_OVERFLOW: int = Field(default=20, env="RUNTIME_DB_MAX_OVERFLOW")
+    RUNTIME_DB_POOL_TIMEOUT: int = Field(default=30, env="RUNTIME_DB_POOL_TIMEOUT")
+
     # --------------------------
     # 【服务配置】
     # --------------------------

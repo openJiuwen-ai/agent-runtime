@@ -11,6 +11,7 @@ from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy import select, update, delete, func
 
 from ..log import get_logger
+from .engine_options import build_async_engine_kwargs
 from .handler import DBHandler
 from .table_def import TableDefinition, ColumnDefinition, IndexDefinition
 
@@ -45,15 +46,17 @@ class SQLAlchemyHandler(DBHandler):
         logger.info("Connecting to database")
         # 关闭 aiosqlite 的 DEBUG 日志
         logging.getLogger("aiosqlite").setLevel(logging.WARNING)
-        self.engine = create_async_engine(
-            self.database_url,
-            echo=False,
-            connect_args=self.connect_args
-        )
+        engine_kwargs = build_async_engine_kwargs(connect_args=self.connect_args)
+        self.engine = create_async_engine(self.database_url, **engine_kwargs)
         self.session_factory = async_sessionmaker(
             self.engine, class_=AsyncSession, expire_on_commit=False
         )
-        logger.info("Database connected")
+        logger.info(
+            "Database connected (pool_size=%s max_overflow=%s pool_timeout=%s)",
+            engine_kwargs["pool_size"],
+            engine_kwargs["max_overflow"],
+            engine_kwargs["pool_timeout"],
+        )
 
     async def disconnect(self) -> None:
         logger.info("Disconnecting from database")
