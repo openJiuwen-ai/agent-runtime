@@ -838,8 +838,9 @@ class K8sServiceHandler:
                 )
                 pod_statuses.append(pod_status_info)
             logger.info(
-                "监控接口完成 Pod 状态查询: namespace=%s total=%s running=%s",
+                "监控接口完成 Pod 状态查询: namespace=%s selector=%s total=%s running=%s",
                 namespace,
+                label_selector,
                 len(pod_statuses),
                 sum(1 for p in pod_statuses if p.status == "Running"),
             )
