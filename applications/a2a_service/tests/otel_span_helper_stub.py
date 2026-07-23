@@ -12,8 +12,6 @@ tracer 未注入（``_OTEL_AVAILABLE=False``）时各 cm ``yield None``；注入
 """
 # Test files intentionally access private members to validate edge cases.
 # pylint: disable=protected-access
-# 桩函数签名必须与生产 otel_span_helper 保持一致，参数个数不做收敛。
-# pylint: disable=too-many-arguments,too-many-positional-arguments
 from __future__ import annotations
 
 import contextlib
@@ -65,9 +63,13 @@ def build_otel_span_helper_stub() -> types.ModuleType:
             attrs["openjiuwen.agent.name"] = agent_id
         return _span("http.request", "server", attrs)
 
-    def start_versatile_adapter_span(query_intent, query_description, session_id,
-                                     dispatch_mode="single", workflow_id="",
-                                     target_agent="", sub_task_path=""):
+    # 生产 helper 的可选编排上下文字段（dispatch_mode/workflow_id/target_agent/
+    # sub_task_path）经 **options 收敛；runtime 调用点全部关键字传参，行为等价。
+    def start_versatile_adapter_span(query_intent, query_description, session_id, **options):
+        dispatch_mode = options.get("dispatch_mode", "single")
+        workflow_id = options.get("workflow_id", "")
+        target_agent = options.get("target_agent", "")
+        sub_task_path = options.get("sub_task_path", "")
         attrs = {
             "openjiuwen.va.dispatch_mode": dispatch_mode,
             "openjiuwen.va.query_intent": query_intent,
@@ -82,16 +84,17 @@ def build_otel_span_helper_stub() -> types.ModuleType:
             attrs["openjiuwen.va.sub_task_path"] = sub_task_path
         return _span("service.versatile_adapter", "client", attrs)
 
-    def start_sub_agent_dispatch_span(entity_id, entity_name, query, sub_agent_url,
-                                      sub_task_path, context_id, session_id):
+    # 追踪上下文字段（sub_task_path/context_id/session_id）经 **options 收敛；
+    # runtime 调用点全部关键字传参，行为等价。
+    def start_sub_agent_dispatch_span(entity_id, entity_name, query, sub_agent_url, **options):
         attrs = {
             "openjiuwen.subagent.entity_id": entity_id,
             "openjiuwen.subagent.entity_name": entity_name,
             "openjiuwen.subagent.query": query,
             "openjiuwen.subagent.sub_agent_url": sub_agent_url,
-            "openjiuwen.subagent.sub_task_path": sub_task_path,
-            "openjiuwen.subagent.context_id": context_id,
-            "session.id": session_id,
+            "openjiuwen.subagent.sub_task_path": options["sub_task_path"],
+            "openjiuwen.subagent.context_id": options["context_id"],
+            "session.id": options["session_id"],
         }
         return _span("sub_agent.dispatch", "client", attrs)
 

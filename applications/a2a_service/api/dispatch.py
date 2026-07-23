@@ -33,6 +33,7 @@ import json
 import socket
 import time
 import uuid
+from dataclasses import dataclass
 from typing import Any, Optional, Tuple
 
 from a2a.server.agent_execution import RequestContext
@@ -710,27 +711,44 @@ async def dispatch(
                     )
             except Exception:
                 pass  # 体读取失败不阻断请求
-        _resp = await _dispatch_body(
-            request, settings, route_spec, path_params,
-            agent_id, conversation_id, traceid, request_started_ms,
-        )
+        _resp = await _dispatch_body(_DispatchBodyParams(
+            request=request,
+            settings=settings,
+            route_spec=route_spec,
+            path_params=path_params,
+            agent_id=agent_id,
+            conversation_id=conversation_id,
+            traceid=traceid,
+            request_started_ms=request_started_ms,
+        ))
         if http_span is not None and _resp is not None:
             http_span.set_attribute("http.response.status_code", getattr(_resp, "status_code", 0))
         return _resp
 
 
-# 参数即原 dispatch 路由的入参直传，拆包只会增加中间层，保持扁平签名。
-# pylint: disable=too-many-arguments,too-many-positional-arguments
-async def _dispatch_body(
-    request,
-    settings,
-    route_spec,
-    path_params,
-    agent_id,
-    conversation_id,
-    traceid,
-    request_started_ms,
-):
+@dataclass
+class _DispatchBodyParams:
+    """``_dispatch_body`` 的入参包（原 dispatch 路由的入参直传）。"""
+
+    request: Any
+    settings: Any
+    route_spec: Any
+    path_params: Any
+    agent_id: str
+    conversation_id: str
+    traceid: str
+    request_started_ms: int
+
+
+async def _dispatch_body(params: _DispatchBodyParams):
+    request = params.request
+    settings = params.settings
+    route_spec = params.route_spec
+    path_params = params.path_params
+    agent_id = params.agent_id
+    conversation_id = params.conversation_id
+    traceid = params.traceid
+    request_started_ms = params.request_started_ms
     # 在工具类中统一完成请求快照解析与公共字段提取
     http_request_tag_context = await build_http_request_tag_context(
         request=request,
