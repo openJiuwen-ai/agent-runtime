@@ -931,9 +931,10 @@ class RemoteAgentHandler:
                     ),
                     timeout=self.sub_agent_timeout_seconds,
                 )
+                _sub_status = "cancelled" if result.get("terminal_status") == "cancelled" else "done"
                 _set_span_attrs(sub_span, {
                     "openjiuwen.subagent.child_task_id": result.get("child_task_id", ""),
-                    "openjiuwen.subagent.status": "cancelled" if result.get("terminal_status") == "cancelled" else "done",
+                    "openjiuwen.subagent.status": _sub_status,
                     "openjiuwen.subagent.elapsed_ms": int((time.monotonic() - started) * 1000),
                     "openjiuwen.subagent.content_summary": str(result.get("content", ""))[:200],
                 })
@@ -1637,10 +1638,19 @@ class RemoteAgentHandler:
             if error_message:
                 output_payload["error"] = error_message
             # 在当前 VA span（由 _handle_delegate 的 with 创建）上补 response 属性
+            if upstream_error is not None or error_message:
+                _va_status = "failed"
+            else:
+                _va_status = "completed" if has_end_node else "suspended"
+            _va_response_summary = json.dumps({
+                "stream_resp_count": stream_resp_count,
+                "has_end_node": has_end_node,
+                "va_task_id": continuation_task_id,
+            }, ensure_ascii=False)
             _set_current_span_attrs({
                 "openjiuwen.va.elapsed_ms": duration_ms,
-                "openjiuwen.va.status": "failed" if (upstream_error is not None or error_message) else ("completed" if has_end_node else "suspended"),
-                "openjiuwen.va.response_summary": json.dumps({"stream_resp_count": stream_resp_count, "has_end_node": has_end_node, "va_task_id": continuation_task_id}, ensure_ascii=False),
+                "openjiuwen.va.status": _va_status,
+                "openjiuwen.va.response_summary": _va_response_summary,
             })
             to_logger(
                 level="ERROR" if status_message else "INFO",
@@ -1818,10 +1828,19 @@ class RemoteAgentHandler:
             if error_message:
                 output_payload["error"] = error_message
             # 在当前 VA span（由 _handle_request_resume 的 with 创建）上补 response 属性
+            if upstream_error is not None or error_message:
+                _va_status = "failed"
+            else:
+                _va_status = "completed" if has_end_node else "suspended"
+            _va_response_summary = json.dumps({
+                "stream_resp_count": stream_resp_count,
+                "has_end_node": has_end_node,
+                "va_task_id": va_task_id,
+            }, ensure_ascii=False)
             _set_current_span_attrs({
                 "openjiuwen.va.elapsed_ms": duration_ms,
-                "openjiuwen.va.status": "failed" if (upstream_error is not None or error_message) else ("completed" if has_end_node else "suspended"),
-                "openjiuwen.va.response_summary": json.dumps({"stream_resp_count": stream_resp_count, "has_end_node": has_end_node, "va_task_id": va_task_id}, ensure_ascii=False),
+                "openjiuwen.va.status": _va_status,
+                "openjiuwen.va.response_summary": _va_response_summary,
             })
             to_logger(
                 level="ERROR" if status_message else "INFO",

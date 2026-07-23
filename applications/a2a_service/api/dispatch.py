@@ -719,6 +719,8 @@ async def dispatch(
         return _resp
 
 
+# 参数即原 dispatch 路由的入参直传，拆包只会增加中间层，保持扁平签名。
+# pylint: disable=too-many-arguments,too-many-positional-arguments
 async def _dispatch_body(
     request,
     settings,

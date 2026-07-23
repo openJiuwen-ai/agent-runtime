@@ -31,7 +31,12 @@ if "agents.EDPAgent" not in sys.modules:
         return
 
     _edp.agent_stream = _agent_stream_placeholder  # type: ignore[attr-defined]
-    _edp.get_otel_tracer = lambda: None  # type: ignore[attr-defined]  # OTel 默认关闭（编排层 span 降级为空操作）
+
+    def _get_otel_tracer_none():
+        # OTel 默认关闭（编排层 span 降级为空操作）
+        return None
+
+    _edp.get_otel_tracer = _get_otel_tracer_none  # type: ignore[attr-defined]
     # 编排层 span 的 cm 由 EDPAgent.otel_span_helper 提供，注入同签名桩（默认 tracer 未注入 → yield None）
     from tests.otel_span_helper_stub import install_otel_span_helper_stub
 

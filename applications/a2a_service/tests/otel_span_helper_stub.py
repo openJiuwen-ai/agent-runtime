@@ -10,6 +10,10 @@ tracer 未注入（``_OTEL_AVAILABLE=False``）时各 cm ``yield None``；注入
 ``_tracer.start_as_current_span`` 建 span 并在进入时设置属性（span 名 / kind / 属性名
 与生产签名保持一致）。tracer 注入用 ``_helpers.patch_tracer``。
 """
+# Test files intentionally access private members to validate edge cases.
+# pylint: disable=protected-access
+# 桩函数签名必须与生产 otel_span_helper 保持一致，参数个数不做收敛。
+# pylint: disable=too-many-arguments,too-many-positional-arguments
 from __future__ import annotations
 
 import contextlib
