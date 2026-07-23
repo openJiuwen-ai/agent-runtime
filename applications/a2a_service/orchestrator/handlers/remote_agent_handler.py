@@ -375,7 +375,53 @@ class RemoteAgentHandler:
                 },
             )
         elif finalized:
-            pass
+            # VA 上游报错：_finalize_failed 已在 _call_versatile_adapter 内部完成
+            # （标记 FAILED + 清 va_task_id + 入队 FAILED 事件）。
+            # 此处调 Agent 生成降级回复，确保 SSE 流包含 final_answer / conversation_end。
+            # 防递归：同一个 turn_ctx 只允许一次降级回复，避免 Agent 再次调 VA 失败后无限循环。
+            if getattr(turn_ctx, "_degrade_attempted", False):
+                logger.warning(
+                    f"[RemoteAgentHandler] 降级回复已尝试过，跳过: conv={turn_ctx.conv_id}"
+                )
+            else:
+                object.__setattr__(turn_ctx, "_degrade_attempted", True)
+                executor = context.get("executor")
+                if executor is not None:
+                    query = context.get("query", "")
+                    original_body = context.get("original_body", {})
+                    step_counter = context.get("step_counter")
+                    logger.info(
+                        f"[RemoteAgentHandler] VA 上游报错，启动 Agent 降级回复: "
+                        f"conv={turn_ctx.conv_id}, task_id={turn_ctx.task_id}, "
+                        f"query={query!r:.60}"
+                    )
+                    import time as _time
+                    _degrade_start = _time.monotonic()
+                    try:
+                        await executor.run_agent(
+                            turn_ctx,
+                            query=query,
+                            original_body=original_body,
+                            cascade_result={"workflow_result": None, "error": "upstream_failed"},
+                            run_options={
+                                "step_counter": step_counter,
+                                "heartbeat_runtime": context.get("heartbeat_runtime"),
+                            },
+                        )
+                        _degrade_ms = (_time.monotonic() - _degrade_start) * 1000
+                        logger.info(
+                            f"[RemoteAgentHandler] Agent 降级回复完成: "
+                            f"conv={turn_ctx.conv_id}, duration={_degrade_ms:.2f}ms"
+                        )
+                    except Exception as e:
+                        _degrade_ms = (_time.monotonic() - _degrade_start) * 1000
+                        logger.error(
+                            f"[RemoteAgentHandler] Agent 降级回复失败: "
+                            f"conv={turn_ctx.conv_id}, task_id={turn_ctx.task_id}, "
+                            f"duration={_degrade_ms:.2f}ms, "
+                            f"error_type={type(e).__name__}, error={e}",
+                            exc_info=True,
+                        )
         else:
             await self._suspend_task(turn_ctx, va_task_id, context)
 
@@ -1880,6 +1926,46 @@ class RemoteAgentHandler:
         elif upstream_error is not None:
             # VA 续轮也报错：同样落 FAILED + 清空 va_task_id，破解 conv_id 锁死
             await self._finalize_failed(turn_ctx, upstream_error)
+            # 调 Agent 生成降级回复，确保 SSE 流包含 final_answer / conversation_end
+            # 防递归：同一个 turn_ctx 只允许一次降级回复
+            if getattr(turn_ctx, "_degrade_attempted", False):
+                logger.warning(
+                    f"[RemoteAgentHandler] 续轮降级回复已尝试过，跳过: conv={conv_id}"
+                )
+            else:
+                object.__setattr__(turn_ctx, "_degrade_attempted", True)
+                executor = (context or {}).get("executor")
+                if executor is not None:
+                    logger.info(
+                        f"[RemoteAgentHandler] VA 续轮上游报错，启动 Agent 降级回复: "
+                        f"conv={conv_id}, task_id={task_id}"
+                    )
+                    import time as _time
+                    _degrade_start = _time.monotonic()
+                    try:
+                        await executor.run_agent(
+                            turn_ctx,
+                            query="",
+                            original_body=original_body,
+                            cascade_result={"workflow_result": None, "error": "upstream_failed"},
+                            run_options={
+                                "heartbeat_runtime": (context or {}).get("heartbeat_runtime"),
+                            },
+                        )
+                        _degrade_ms = (_time.monotonic() - _degrade_start) * 1000
+                        logger.info(
+                            f"[RemoteAgentHandler] 续轮 Agent 降级回复完成: "
+                            f"conv={conv_id}, duration={_degrade_ms:.2f}ms"
+                        )
+                    except Exception as e:
+                        _degrade_ms = (_time.monotonic() - _degrade_start) * 1000
+                        logger.error(
+                            f"[RemoteAgentHandler] 续轮 Agent 降级回复失败: "
+                            f"conv={conv_id}, task_id={task_id}, "
+                            f"duration={_degrade_ms:.2f}ms, "
+                            f"error_type={type(e).__name__}, error={e}",
+                            exc_info=True,
+                        )
         else:
             await self._state_manager.save_input_required(
                 InputRequiredState(
