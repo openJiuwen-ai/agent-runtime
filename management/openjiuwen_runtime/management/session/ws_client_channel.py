@@ -121,6 +121,8 @@ class WSServiceMessageChannel:
         self._closed = False
         # 在途 request 流式结束: is_completed 时 set
         self._request_done: Dict[str, asyncio.Event] = {}
+        # 在途 request 的 cancel Future（由 send 注册，连接断开时由 _recv_loop 唤醒）
+        self._inflight_cancels: Dict[str, "asyncio.Future"] = {}
         self._last_service_id: str = ""
         self._ws_ping_interval = ws_ping_interval
         self._ws_ping_timeout = ws_ping_timeout
@@ -204,6 +206,13 @@ class WSServiceMessageChannel:
             if not ev.is_set():
                 ev.set()
         self._request_done.clear()
+        for cancel_fut in self._inflight_cancels.values():
+            if not cancel_fut.done():
+                try:
+                    cancel_fut.set_result(None)
+                except asyncio.InvalidStateError:
+                    pass
+        self._inflight_cancels.clear()
         self._handler = None
         self._default_parser = None
         logger.info("WSServiceMessageChannel 已关闭: last_service_id=%s", self._last_service_id)
@@ -288,9 +297,22 @@ class WSServiceMessageChannel:
         except Exception as e:
             logger.error("WSS 接收循环异常: %s", e, exc_info=True)
         finally:
+            # 连接已断：清除 stale ws 引用，使下次 _ensure_connected 能重连。
+            # 不清除的话 _ws_is_closed 对 CLOSING 态可能返回 False，_ensure_connected
+            # 会误判"连接正常"直接 return，导致永不重连（keepalive ping timeout 事故根因）。
+            self._ws = None
             for ev in self._request_done.values():
                 if not ev.is_set():
                     ev.set()
+            # 唤醒所有卡在 `await wrapper.cancel` 的 send 协程：连接已断，响应永远不会
+            # 到达，必须主动 set_result 让 send 继续走到 on_request_complete → _inflight 归零，
+            # 否则 session TTL 到期时 inflight>0 无法移除绑定，亲和性反复路由到死实例。
+            for rid, cancel_fut in list(self._inflight_cancels.items()):
+                if not cancel_fut.done():
+                    try:
+                        cancel_fut.set_result(None)
+                    except asyncio.InvalidStateError:
+                        pass
 
     async def send(
             self,
@@ -325,6 +347,7 @@ class WSServiceMessageChannel:
 
         ev = asyncio.Event()
         self._request_done[rid] = ev
+        self._inflight_cancels[rid] = wrapper.cancel
         try:
             logger.info(
                 "WSS 业务上行: service_id=%s request_id=%s",
@@ -339,6 +362,7 @@ class WSServiceMessageChannel:
             await w.send(payload)
         except Exception as e:
             self._request_done.pop(rid, None)
+            self._inflight_cancels.pop(rid, None)
             logger.error("WSS 上行失败: request_id=%s %s", rid, e, exc_info=True)
             await on_request_complete(rid)
             raise
@@ -346,6 +370,8 @@ class WSServiceMessageChannel:
         # Access.send_message 在 finally 里 set cancel；必须等 Access 迭代结束（含终态 yield）再 on_request_complete。
         # 曾与 recv 的 ev、以及 wrapper.cancel 做 asyncio.wait(FIRST_COMPLETED)：若 cancel 先于终端帧入队/消费完成，
         # 会立刻 on_request_complete 并 pop _by_request，recv 仍在写队列 → 表现为尾包丢失。
+        # 注意：连接断开时 _recv_loop 的 finally 会直接 set_result(wrapper.cancel) 唤醒此处，
+        # 因为此时 recv 已退出、不再写队列，不存在尾包丢失风险。
         await wrapper.cancel
         if not ev.is_set():
             logger.info(
@@ -354,6 +380,7 @@ class WSServiceMessageChannel:
             )
         await on_request_complete(rid)
         self._request_done.pop(rid, None)
+        self._inflight_cancels.pop(rid, None)
 
     @property
     def ws_url(self) -> Optional[str]:
@@ -363,9 +390,22 @@ class WSServiceMessageChannel:
 def _ws_is_closed(ws: Any) -> bool:
     if ws is None:
         return True
+    # 优先用 closed 属性（websockets legacy: state is State.CLOSED）
     closed = getattr(ws, "closed", None)
+    if closed is not None and bool(closed):
+        return True
+    # 兜底：检查 state 属性（websockets 的 CLOSING/CLOSED 都视为不可用）
+    state = getattr(ws, "state", None)
+    if state is not None:
+        state_name = getattr(state, "name", str(state))
+        if state_name in ("CLOSING", "CLOSED"):
+            return True
+        # 兼容旧版用整数/字符串表示的 state
+        if str(state).upper() in ("CLOSING", "CLOSED"):
+            return True
+    # closed 为 False 且 state 为 OPEN：连接可用
     if closed is not None:
-        return bool(closed)
+        return False
     return False
 
 

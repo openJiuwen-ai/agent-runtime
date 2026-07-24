@@ -45,6 +45,40 @@ POD_WATCH_TIMEOUT_SECONDS = 300
 POD_WATCH_RECONNECT_DELAY_SECONDS = 3.0
 
 
+def _is_channel_connection_error(exc: BaseException) -> bool:
+    """判断异常是否为 WSS 通道级故障（连接断开/不可用）。
+
+    通道级故障意味着该 service 实例的 WebSocket 已断或不可用，
+    后续对同一实例的请求必然失败。需要立即释放 session 绑定并驱逐坏实例，
+    避免亲和性反复路由到同一死实例。
+    """
+    # websockets.exceptions.ConnectionClosedError / ConnectionClosedOK
+    exc_name = type(exc).__name__
+    if exc_name in (
+        "ConnectionClosedError",
+        "ConnectionClosedOK",
+        "ConnectionClosed",
+    ):
+        return True
+    # 按模块名匹配（避免硬依赖 websockets 库）
+    exc_module = getattr(type(exc), "__module__", "") or ""
+    if "websockets" in exc_module and "Connection" in exc_name:
+        return True
+    # RuntimeError 中含 keepalive / connection / websocket 关键词的也视为通道故障
+    msg = str(exc).lower()
+    if isinstance(exc, (ConnectionError, OSError)):
+        return True
+    if any(kw in msg for kw in (
+        "keepalive ping timeout",
+        "connection closed",
+        "websocket",
+        "wss 已关闭",
+        "wss 连接失败",
+    )):
+        return True
+    return False
+
+
 class ServiceManager(IServiceManager):
     def __init__(
         self,
@@ -806,6 +840,7 @@ class ServiceManager(IServiceManager):
         await self._timer.cancel_timer(f"sess:{session_id}")
         self._pending_expired_sessions.pop(session_id, None)
         h: Optional[IServiceHandler] = None
+        channel_error: bool = False
         try:
             # 亲和 / 选池 / 额度预留与路由绑定在 _pick_or_create 内完成；
             # deploy 在其内部锁外执行，不堵其他路由。预留失败时的 in_use→idle 推动也在其内处理。
@@ -847,11 +882,25 @@ class ServiceManager(IServiceManager):
         except Exception as e:  # noqa: BLE001
             logger.error("路由/处理过程异常, session_id=%s: %s", session_id, e, exc_info=True)
             await self._fail(w, 100002, session_id=session_id)
+            # 通道级故障（WSS 断连/不可用）：立即释放 session 绑定并驱逐坏实例，
+            # 否则 session 亲和会反复把同一 user/group/bot 路由到死实例，
+            # 导致"遇到一次慢工具就永久不可恢复"。
+            if h is not None and _is_channel_connection_error(e):
+                channel_error = True
+                logger.warning(
+                    "检测到通道级故障, 立即释放绑定并驱逐坏实例: "
+                    "session_id=%s service_id=%s err=%s",
+                    session_id, h.id, e,
+                )
+                await self._release_and_evict_on_channel_error(session_id, h, str(e))
         finally:
             # 请求结束: 按 session_ttl 维持映射；ttl<=0 视为「不保留」立即标记 pending 等待 flush
             # 使用 finally 确保无论成功或失败都能正确清理 session
             if h is not None:
-                if sreq.session_ttl > 0:
+                # 通道级故障已在上文释放绑定并驱逐实例，此处不再 re-arm TTL
+                if channel_error:
+                    pass
+                elif sreq.session_ttl > 0:
                     try:
                         await self._arm_session_timer(session_id, sreq.session_ttl)
                     except Exception as e2:  # noqa: BLE001
@@ -926,6 +975,61 @@ class ServiceManager(IServiceManager):
             )
         if removed and target_svc:
             await self._flush_pending_expired_for_service(target_svc)
+
+    async def _release_and_evict_on_channel_error(
+        self,
+        session_id: str,
+        h: IServiceHandler,
+        reason: str,
+    ) -> None:
+        """通道级故障应急：立即释放 session 绑定 + 从池中摘除坏实例 + 异步删 Pod。
+
+        背景：WSS keepalive ping timeout / 连接断开后，坏实例的 WebSocket 永久不可用。
+        若仅 _fail + re-arm TTL，session 亲和会反复把同一 user/group/bot 路由到死实例，
+        导致"遇到一次慢工具就永久不可恢复"。此方法在检测到通道故障时立即：
+        1. 从 router 删除 session→service 映射（解除亲和绑定）
+        2. 从 handler 移除该 session（归还并发、取消 in-flight rid）
+        3. 从 in_use/idle 池中摘除坏实例（不再被 _pick_existing_locked 选中）
+        4. 异步 _safe_delete_handler 删 Pod（不阻塞当前请求路径）
+        后续同 user/group/bot 的请求会 _pick_or_create 路由到健康实例或新 deploy。
+        """
+        # 1. 取消 session TTL 计时与 pending 标记
+        await self._timer.cancel_timer(f"sess:{session_id}")
+        self._pending_expired_sessions.pop(session_id, None)
+
+        evicted = False
+        async with self._lock:
+            # 2. 删除 session→service 亲和映射
+            bound = await self._service_router.get_session_service(session_id)
+            if bound is not None:
+                await self._service_router.delete_session_service(session_id)
+            # 3. 从 in_use/idle 池中摘除坏实例
+            for pool_map in (self._in_use, self._idle):
+                for tid, pool in pool_map.items():
+                    if h.id in pool:
+                        pool.pop(h.id, None)
+                        self._to_idle_timer_armed.discard(h.id)
+                        self._excess_idle_timer_armed.discard(h.id)
+                        evicted = True
+                        logger.warning(
+                            "已从池中摘除通道故障实例: service_id=%s template_id=%s reason=%s",
+                            h.id, tid, reason,
+                        )
+                        break
+                if evicted:
+                    break
+
+        # 4. 移除该 session 在 handler 上的状态（取消 in-flight rid、归还并发）
+        try:
+            await h.remove_session(session_id)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("移除 session 失败(忽略): service_id=%s err=%s", h.id, e)
+
+        # 5. 异步删除 Pod（不阻塞当前请求路径；_safe_delete_handler 幂等）
+        if evicted:
+            asyncio.get_running_loop().create_task(
+                self._safe_delete_handler(h)
+            )
 
     def _find_service_handler(self, service_id: str) -> Optional[IServiceHandler]:
         """在所有模板组的 in_use 和 idle 池中查找指定的 service_id。
