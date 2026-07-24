@@ -796,6 +796,9 @@ class ServiceManager(IServiceManager):
             logger.error("创建服务实例失败 (factory): %s", e, exc_info=True)
             return None
         h.set_idle_pool_transition_hook(self._on_in_use_may_move_to_idle_pool)
+        # C 方案: 注入 unhealthy hook; ServiceHandler.send_message 失败时回调,
+        # Manager 据此把本实例从池中摘除 + delete pod, 让后续消息路由到其他健康 Pod。
+        h.set_unhealthy_hook(self.force_evict_unhealthy_service)
         async with self._lock:
             self._deploying.add(h)
         try:
@@ -1627,3 +1630,85 @@ class ServiceManager(IServiceManager):
 
         if handlers_to_delete:
             logger.warning("Pod 监控：清理完成，已移除 %s 个失效 Pod", len(handlers_to_delete))
+
+    # ==================== 不健康 Pod 主动摘除（C 方案）====================
+
+    async def force_evict_unhealthy_service(
+            self, service_id: str, reason: str
+    ) -> None:
+        """主动摘除一个不健康的 ServiceHandler（由 ServiceHandler.send_message 失败时回调）。
+
+        与 ``_cleanup_dead_pods`` 的差异: 此处不依赖 K8s Pod 状态轮询, 而是由业务
+        通道异常直接触发; 适用于 agentserver event loop 被同步 tool 堵死、WSS
+        keepalive ping timeout 后无法恢复等场景。
+
+        流程 (与 ``_cleanup_dead_pods`` 一致, 复用同一套池/计时器/session 侧清理逻辑):
+        1. 锁内把 service_id 对应的 handler 从 in_use / idle 池摘除, 加入
+           _deleting_services 防止 stop/监控/缩容并发二次 delete;
+        2. 调用 ``session_runtime.on_pod_removed`` 让 SessionHandler 摘除 endpoint,
+           下一条消息进来时 ``sh.endpoint_count==0`` 触发 ``pick_or_create_pod``
+           重新选健康 Pod (多 Pod 部署下 fail-over, 单 Pod 部署下触发新 deploy);
+        3. 取消该实例上所有 session TTL 计时;
+        4. ``h.delete()``: 先关 WSS 长连接, 再 K8s delete pod; Deployment/ReplicaSet
+           会自动拉起新 pod, autoscale loop 会感知并加入 in_use 池;
+        5. 释放 ``_deleting_services`` 占位。
+
+        幂等: 若 service_id 已在 ``_deleting_services`` 中, 直接返回。
+        """
+        h_to_delete: Optional[IServiceHandler] = None
+        async with self._lock:
+            if service_id in self._deleting_services:
+                logger.info(
+                    "跳过 force_evict: 实例已在删除中 service_id=%s",
+                    service_id,
+                )
+                return
+            # _find_service_handler 是同步方法, 不获取锁, 可在已持锁时调用
+            h = self._find_service_handler(service_id)
+            if h is None:
+                logger.info(
+                    "force_evict 未找到实例 (可能已被其他路径清理): service_id=%s",
+                    service_id,
+                )
+                return
+            self._deleting_services.add(service_id)
+            removed_in_use, removed_idle = self._remove_service_from_core_pools(service_id)
+            self._to_idle_timer_armed.discard(service_id)
+            self._excess_idle_timer_armed.discard(service_id)
+            logger.warning(
+                "不健康 Pod 主动摘除: service_id=%s reason=%s "
+                "removed_from_in_use=%s removed_from_idle=%s",
+                service_id, reason, removed_in_use, removed_idle,
+            )
+            h_to_delete = h
+
+        # session 侧清理 (锁外, 避免与 ServiceHandler.send_message 持锁调用形成死锁)
+        if self._session_runtime is not None:
+            try:
+                await self._session_runtime.on_pod_removed(service_id)
+            except Exception as e:  # noqa: BLE001
+                logger.error(
+                    "force_evict 的 session 侧清理失败: service_id=%s err=%s",
+                    service_id, e, exc_info=True,
+                )
+
+        # 取消该实例上所有 session TTL 计时, 再 delete 底层 pod
+        if h_to_delete is not None:
+            for session_id in list(h_to_delete.open_session_ids()):
+                await self._timer.cancel_timer(f"sess:{session_id}")
+            await self._cancel_in_use_to_idle_timer(service_id)
+            await self._cancel_excess_idle_timer(service_id)
+            try:
+                await h_to_delete.delete()
+            except Exception as e:  # noqa: BLE001
+                logger.error(
+                    "force_evict delete 失败: service_id=%s err=%s",
+                    service_id, e, exc_info=True,
+                )
+            finally:
+                async with self._lock:
+                    self._deleting_services.discard(service_id)
+            logger.warning(
+                "不健康 Pod 已完成摘除+delete: service_id=%s",
+                service_id,
+            )

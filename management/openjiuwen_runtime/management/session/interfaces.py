@@ -384,6 +384,17 @@ class IServiceHandler(ABC):
         """默认无实现；`ServiceHandler` 会注入，供无业务时按 `service_ttl` 转入 idle 池。"""
         return
 
+    def set_unhealthy_hook(
+            self, hook: Optional[Callable[[str, str], Awaitable[None]]]
+    ) -> None:
+        """默认无实现; ``ServiceHandler`` 会注入, 供 send_message 失败时通知
+        ServiceManager 把本实例从池中摘除并触发 session 侧 endpoint 摘除,
+        让下一条消息路由到其他健康 Pod。
+
+        约定 hook 签名: ``async def hook(service_id: str, reason: str) -> None``。
+        """
+        return
+
 
 class ISessionHandler(ABC):
     @abstractmethod
