@@ -68,6 +68,11 @@ class ServiceHandler(IServiceHandler, ISendEndpoint):
         self._closed = False
         # ServiceManager 注入: 每次 inflight 归零后被回调一次, Manager 据此推动到期 session 清理与 service_ttl 计时
         self._idle_pool_hook: Optional[Callable[[str], Awaitable[None]]] = None
+        # ServiceManager 注入: send_message 失败时 (WSS 重连重试仍失败/通道异常) 被回调,
+        # Manager 据此把本实例从 in_use 池摘除、触发 session 侧 endpoint 摘除 + delete pod,
+        # 让下一条消息路由到其他健康 Pod (典型场景: agentserver event loop 被同步 tool 堵死,
+        # WSS keepalive ping timeout 后无法恢复)。
+        self._unhealthy_hook: Optional[Callable[[str, str], Awaitable[None]]] = None
         # WebSocket 等通道在绑定后可拿到本实例与 IResponseParser，供接收循环多路分片
         if hasattr(self._channel, "bind_handler"):
             self._channel.bind_handler(self, self._parser)  # type: ignore[union-attr]
@@ -153,6 +158,22 @@ class ServiceHandler(IServiceHandler, ISendEndpoint):
                 exc_info=True,
             )
             await _complete(rid)
+            # 通知 ServiceManager 把本实例标记为不健康并摘除: 让后续消息路由到其他健康 Pod。
+            # 用 create_task 异步触发, 避免阻塞当前异常路径; hook 内部有 _deleting_services 防重入。
+            hook = self._unhealthy_hook
+            if hook is not None and not self._closed:
+                reason = f"{type(e).__name__}: {e}"
+                try:
+                    asyncio.get_running_loop().create_task(hook(self._id, reason))
+                    logger.info(
+                        "已通知 ServiceManager 标记不健康: service_id=%s reason=%s",
+                        self._id, reason,
+                    )
+                except Exception as hook_err:  # noqa: BLE001
+                    logger.error(
+                        "标记不健康钩子调用失败: service_id=%s err=%s",
+                        self._id, hook_err, exc_info=True,
+                    )
             raise
 
     # 兼容别名：原 invoke_channel 改名为 send_message，保留旧名一个版本便于过渡
@@ -210,6 +231,17 @@ class ServiceHandler(IServiceHandler, ISendEndpoint):
     def set_idle_pool_transition_hook(self, hook: Optional[Callable[[str], Awaitable[None]]]) -> None:
         """设置空闲池转换钩子（由 ServiceManager 调用，每次 inflight 归零后回调一次）。"""
         self._idle_pool_hook = hook
+
+    def set_unhealthy_hook(
+            self, hook: Optional[Callable[[str, str], Awaitable[None]]]
+    ) -> None:
+        """设置不健康通知钩子（由 ServiceManager 调用，send_message 失败时回调一次）。
+
+        约定 hook 签名: ``async def hook(service_id: str, reason: str) -> None``。
+        ServiceManager 在收到回调后, 会把本实例从 in_use 池摘除、触发 session 侧
+        endpoint 摘除、并 delete 底层 pod, 让后续消息路由到其他健康 Pod。
+        """
+        self._unhealthy_hook = hook
 
     # ==================== IServiceHandler：session 驱逐（pod-local）====================
 

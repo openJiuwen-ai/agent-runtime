@@ -9,7 +9,7 @@ import asyncio
 import contextlib
 import json
 from dataclasses import asdict, is_dataclass
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Union
 
 import websockets
 import websockets.exceptions
@@ -288,6 +288,11 @@ class WSServiceMessageChannel:
         except Exception as e:
             logger.error("WSS 接收循环异常: %s", e, exc_info=True)
         finally:
+            # 关键: 主动清空 _ws 引用。websockets 13+ 的 Connection 对象在
+            # keepalive ping timeout 后 state 可能停留在 CLOSING (而非 CLOSED),
+            # _ws_is_closed 返回 False, _ensure_connected 误判"还活着"不重连,
+            # 后续 send 抛 ConnectionClosedError。清空后下次 send 必走重连路径。
+            self._ws = None
             for ev in self._request_done.values():
                 if not ev.is_set():
                     ev.set()
@@ -336,7 +341,7 @@ class WSServiceMessageChannel:
                 payload = bytes(payload)
             if not isinstance(payload, (str, bytes)):
                 payload = self._payload_from_raw(payload)
-            await w.send(payload)
+            await self._send_with_reconnect(w, payload, rid)
         except Exception as e:
             self._request_done.pop(rid, None)
             logger.error("WSS 上行失败: request_id=%s %s", rid, e, exc_info=True)
@@ -355,6 +360,39 @@ class WSServiceMessageChannel:
         await on_request_complete(rid)
         self._request_done.pop(rid, None)
 
+    async def _send_with_reconnect(
+            self, w: Any, payload: Union[str, bytes], rid: str
+    ) -> None:
+        """上行一帧 payload; 连接已断开时自动重连重试一次。
+
+        背景: websockets 15.0.1 在 keepalive ping timeout 后, ws 对象可能
+        仍残留在 self._ws (state=CLOSING); 此时直接 send 抛 ConnectionClosedError。
+        原实现把异常向上抛, 让 Access 等待 300s 超时; 现在主动清空 _ws、
+        调 _ensure_connected 重连到同一个 agentserver pod, 重发 payload 一次。
+        """
+        try:
+            await w.send(payload)
+        except (websockets.exceptions.ConnectionClosed, OSError, RuntimeError) as e:
+            # 强制清空, 下次 _ensure_connected 必走重连路径
+            self._ws = None
+            logger.warning(
+                "WSS 上行失败, 准备重连重试: request_id=%s err=%s",
+                rid, e,
+            )
+            try:
+                await self._ensure_connected()
+            except Exception as conn_err:
+                logger.error(
+                    "WSS 重连失败: request_id=%s err=%s",
+                    rid, conn_err, exc_info=True,
+                )
+                raise
+            new_w = self._ws
+            if new_w is None or _ws_is_closed(new_w):
+                raise RuntimeError("WSS 重连后连接仍不可用")
+            logger.info("WSS 重连成功, 重发 payload: request_id=%s", rid)
+            await new_w.send(payload)
+
     @property
     def ws_url(self) -> Optional[str]:
         return self._ws_url
@@ -363,6 +401,19 @@ class WSServiceMessageChannel:
 def _ws_is_closed(ws: Any) -> bool:
     if ws is None:
         return True
+    # 优先用 state 属性: websockets 13+ asyncio.Connection 没有 closed 属性,
+    # 只有 state; State 是 IntEnum (CONNECTING=0, OPEN=1, CLOSING=2, CLOSED=3)
+    state = getattr(ws, "state", None)
+    if state is not None:
+        name = getattr(state, "name", None)
+        if isinstance(name, str) and name in ("CLOSING", "CLOSED"):
+            return True
+        try:
+            if int(state) >= 2:  # OPEN=1, CLOSING/CLOSED>=2
+                return True
+        except (TypeError, ValueError):
+            pass
+    # 旧版 legacy WebSocketClientProtocol 用 closed 属性
     closed = getattr(ws, "closed", None)
     if closed is not None:
         return bool(closed)
