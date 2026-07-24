@@ -289,7 +289,7 @@ def _load_versatile_runner():
 
 def test_a2a_message_target_routes_to_a2a_gateway_adapter(tmp_path):
     """VA_WORKFLOW_ADAPTER_TYPE=a2a_gateway（默认）时，type: a2a_gateway 的 adapter 能被路由匹配。"""
-    Runner = _load_versatile_runner()
+    runner_cls = _load_versatile_runner()
 
     config_path = tmp_path / "versatile_proxy.yaml"
     config_path.write_text(
@@ -326,7 +326,7 @@ adapters:
 
     data_part = next(p for p in request.message.parts if p.WhichOneof("content") == "data")
     target = MessageToDict(data_part.data)["target"]
-    runner = Runner(config_path=config_path)
+    runner = runner_cls(config_path=config_path)
     cfg = runner._match_workflow(target)
 
     assert cfg is not None
@@ -335,7 +335,7 @@ adapters:
 
 def test_a2a_message_target_routes_to_workflow_adapter(tmp_path, monkeypatch):
     """VA_WORKFLOW_ADAPTER_TYPE=workflow 时，type: workflow 的 adapter 能被路由匹配。"""
-    Runner = _load_versatile_runner()
+    runner_cls = _load_versatile_runner()
 
     # VA_WORKFLOW_ADAPTER_TYPE 默认 a2a_gateway，测试 workflow 模式时改成 workflow
     monkeypatch.setenv("VA_WORKFLOW_ADAPTER_TYPE", "workflow")
@@ -373,7 +373,7 @@ adapters:
 
     data_part = next(p for p in request.message.parts if p.WhichOneof("content") == "data")
     target = MessageToDict(data_part.data)["target"]
-    runner = Runner(config_path=config_path)
+    runner = runner_cls(config_path=config_path)
     cfg = runner._match_workflow(target)
 
     assert cfg is not None
