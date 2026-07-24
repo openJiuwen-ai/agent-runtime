@@ -278,13 +278,18 @@ def test_build_va_message_packs_target_for_workflow_routing():
     }
 
 
+def _load_versatile_runner():
+    """加载 VersatileAdapterRunner，用 append 避免模块重名风险。"""
+    va_root = str(Path(__file__).resolve().parents[3] / "versatile_adapter")
+    if va_root not in sys.path:
+        sys.path.append(va_root)
+    from dispatcher.runner import VersatileAdapterRunner
+    return VersatileAdapterRunner
+
+
 def test_a2a_message_target_routes_to_a2a_gateway_adapter(tmp_path):
     """VA_WORKFLOW_ADAPTER_TYPE=a2a_gateway（默认）时，type: a2a_gateway 的 adapter 能被路由匹配。"""
-    va_root = Path(__file__).resolve().parents[3] / "versatile_adapter"
-    if str(va_root) not in sys.path:
-        sys.path.insert(0, str(va_root))
-
-    from dispatcher.runner import VersatileAdapterRunner
+    VersatileAdapterRunner = _load_versatile_runner()
 
     config_path = tmp_path / "versatile_proxy.yaml"
     config_path.write_text(
@@ -330,11 +335,7 @@ adapters:
 
 def test_a2a_message_target_routes_to_workflow_adapter(tmp_path, monkeypatch):
     """VA_WORKFLOW_ADAPTER_TYPE=workflow 时，type: workflow 的 adapter 能被路由匹配。"""
-    va_root = Path(__file__).resolve().parents[3] / "versatile_adapter"
-    if str(va_root) not in sys.path:
-        sys.path.insert(0, str(va_root))
-
-    from dispatcher.runner import VersatileAdapterRunner
+    VersatileAdapterRunner = _load_versatile_runner()
 
     # VA_WORKFLOW_ADAPTER_TYPE 默认 a2a_gateway，测试 workflow 模式时改成 workflow
     monkeypatch.setenv("VA_WORKFLOW_ADAPTER_TYPE", "workflow")
