@@ -15,12 +15,12 @@ from openjiuwen_runtime.management.session.interfaces import (
     IResponseParser,
     IRequest,
     ISessionRequest,
-    SessionRequestWrapper,
+    ScopeRequestWrapper,
 )
 from openjiuwen_runtime.management.session.router import SessionRouter
 from openjiuwen_runtime.management.session.runtime import NoOpDeployController
 from openjiuwen_runtime.management.session.service_handler import ServiceHandler
-from openjiuwen_runtime.management.session.session_handler import SessionHandler
+from openjiuwen_runtime.management.session.service_scope_handler import ServiceScopeHandler
 from openjiuwen_runtime.management.session.session_request import SessionRequest
 
 
@@ -49,12 +49,12 @@ class HoldChannel:
     async def send(
         self,
         service_id: str,
-        wrapper: SessionRequestWrapper,
+        wrapper: ScopeRequestWrapper,
         *,
         response_parser: IResponseParser,
         on_request_complete: Callable[[Optional[str]], Awaitable[None]],
     ) -> None:
-        sid = wrapper.session_request.session_id
+        sid = wrapper.session_request.service_id
         rid = wrapper.session_request.request_id
         async with self._lock:
             self.in_send += 1
@@ -76,15 +76,15 @@ class HoldChannel:
 
 def _wrap(
     session_id: str, rid: str, cap: int, loop: asyncio.AbstractEventLoop
-) -> SessionRequestWrapper:
+) -> ScopeRequestWrapper:
     sreq: ISessionRequest = SessionRequest(
-        session_id=session_id,
+        service_id=session_id,
         concurrency=cap,
         ttl=0,
         request_id=rid,
         raw=cast(IRequest, object()),
     )
-    return SessionRequestWrapper(sreq, asyncio.Queue(), loop.create_future())
+    return ScopeRequestWrapper(sreq, asyncio.Queue(), loop.create_future())
 
 
 @pytest.mark.asyncio
@@ -104,12 +104,12 @@ async def test_session_cap_interleaves_other_sessions() -> None:
     )
     loop = asyncio.get_running_loop()
     cap = 10
-    # 解耦后：每 session 一个 SessionHandler（持有 [h] 作为 endpoint），各自 semaphore(cap)
+    # 解耦后：每 session 一个 ServiceScopeHandler（持有 [h] 作为 endpoint），各自 semaphore(cap)
     router = SessionRouter()
     assert h.try_reserve_session_quota("sess1", cap)
     assert h.try_reserve_session_quota("sess2", cap)
-    sh1 = SessionHandler("sess1", cap, [h], router)
-    sh2 = SessionHandler("sess2", cap, [h], router)
+    sh1 = ServiceScopeHandler("sess1", cap, [h], router)
+    sh2 = ServiceScopeHandler("sess2", cap, [h], router)
     tasks = []
     for i in range(11):
         w = _wrap("sess1", f"s1-r{i}", cap, loop)

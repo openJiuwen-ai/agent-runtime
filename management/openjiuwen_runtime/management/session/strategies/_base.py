@@ -30,7 +30,7 @@ class BaseSessionStrategy(ISessionStrategy):
             logger.warning("策略生成的 session 键为空或全空白, request_id=%s", msg.request_id)
         logger.debug("策略 handle_session: session_id=%s conc=%s ttl=%s", sid, self._concurrency, self._ttl)
         return SessionRequest(
-            session_id=sid,
+            service_id=sid,
             concurrency=self._concurrency,
             ttl=self._ttl,
             request_id=msg.request_id,

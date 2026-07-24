@@ -50,7 +50,7 @@ class _Ch:
 
 def _sreq(session_id: str, request_id: str = "r") -> SessionRequest:
     return SessionRequest(
-        session_id=session_id,
+        service_id=session_id,
         concurrency=1,
         ttl=0,
         request_id=request_id,

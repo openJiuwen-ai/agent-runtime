@@ -20,7 +20,7 @@ from openjiuwen_runtime.management.session.interfaces import (
     IServiceInstanceFactory,
     IServiceHandler,
     IRequest,
-    SessionRequestWrapper,
+    ScopeRequestWrapper,
 )
 from openjiuwen_runtime.management.session.models import AccessConfig, SessionConfig
 from openjiuwen_runtime.management.session.runtime import NoOpDeployController
@@ -59,12 +59,12 @@ class MockChannel:
     async def send(
             self,
             service_id: str,
-            wrapper: SessionRequestWrapper,
+            wrapper: ScopeRequestWrapper,
             *,
             response_parser: IResponseParser,
             on_request_complete: Callable[[Optional[str]], Awaitable[None]],
     ) -> None:
-        self.send_log.append((service_id, wrapper.session_request.session_id))
+        self.send_log.append((service_id, wrapper.session_request.service_id))
         if wrapper.cancel.done():
             await on_request_complete(wrapper.session_request.request_id)
             return
@@ -130,12 +130,12 @@ class _HoldCh:
     async def send(
             self,
             service_id: str,
-            wrapper: SessionRequestWrapper,
+            wrapper: ScopeRequestWrapper,
             *,
             response_parser: IResponseParser,
             on_request_complete: Callable[[Optional[str]], Awaitable[None]],
     ) -> None:
-        sid = wrapper.session_request.session_id
+        sid = wrapper.session_request.service_id
         rid = wrapper.session_request.request_id
         async with self._lock:
             self.in_send += 1

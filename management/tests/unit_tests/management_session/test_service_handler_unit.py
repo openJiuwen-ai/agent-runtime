@@ -11,12 +11,12 @@ from openjiuwen_runtime.management.session.interfaces import (
     IResponseParser,
     IRequest,
     ISessionRequest,
-    SessionRequestWrapper,
+    ScopeRequestWrapper,
 )
 from openjiuwen_runtime.management.session.router import SessionRouter
 from openjiuwen_runtime.management.session.runtime import NoOpDeployController
 from openjiuwen_runtime.management.session.service_handler import ServiceHandler
-from openjiuwen_runtime.management.session.session_handler import SessionHandler
+from openjiuwen_runtime.management.session.service_scope_handler import ServiceScopeHandler
 from openjiuwen_runtime.management.session.session_request import SessionRequest
 
 
@@ -39,7 +39,7 @@ class _Ch:
     async def send(
         self,
         service_id: str,
-        wrapper: SessionRequestWrapper,
+        wrapper: ScopeRequestWrapper,
         *,
         response_parser: IResponseParser,
         on_request_complete: Callable[[Optional[str]], Awaitable[None]],
@@ -57,7 +57,7 @@ class _Ch:
 
 def _sreq() -> ISessionRequest:
     return SessionRequest(
-        session_id="s1",
+        service_id="s1",
         concurrency=1,
         ttl=0,
         request_id="r1",
@@ -80,9 +80,9 @@ async def test_one_inflight_decrements() -> None:
     assert h.available_concurrency == 1
     assert h.try_reserve_session_quota("s1", 1)
     assert h.available_concurrency == 0
-    # 消息经 SessionHandler（持有 [h] 作为 endpoint）路由到 ServiceHandler.send_message
-    sh = SessionHandler("s1", 1, [h], SessionRouter())
-    w = SessionRequestWrapper(
+    # 消息经 ServiceScopeHandler（持有 [h] 作为 endpoint）路由到 ServiceHandler.send_message
+    sh = ServiceScopeHandler("s1", 1, [h], SessionRouter())
+    w = ScopeRequestWrapper(
         _sreq(), asyncio.Queue(), asyncio.get_running_loop().create_future()
     )
     await sh.handle_message(w)
