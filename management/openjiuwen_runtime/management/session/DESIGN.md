@@ -116,7 +116,7 @@ flowchart TB
 | `session_handler.py` | `SessionHandler`：会话内 `BoundedSemaphore` + `invoke_channel`。 |
 | `dual_queue.py` | 系统优先的 `get()`：先 `drain` 系统队列，再与阻塞用户队列用 `asyncio.wait(FIRST_COMPLETED)`。 |
 | `router.py` | `ServiceRouter`：`session_id -> service_id`；`SessionRouter`：`request_id -> session_id`（在 ServiceHandler 上用于下行匹配）。 |
-| `ws_client_channel.py` | `WSServiceMessageChannel`：`serialize_request_payload` / `wire_dict` 上行业务、`_ensure_connected`、`on_pod_ready` 中预建链、`send` 内等待 `is_completed` 与 `cancel`、`close`。 |
+| `ws_client_channel.py` | `WSServiceMessageChannel`：`serialize_request_payload` / `wire_dict` 上行业务、`ensure_connected`、`on_pod_ready` 中预建链、`send` 内等待 `is_completed` 与 `cancel`、`close`。 |
 | `k8s_service_handler.py` | `K8sServiceHandler` 创建/等待 Pod Ready、`cleanup_all_agentserver_pods` 按 label 批量删 Pod；`K8sDeployController` 适配 `IDeployController`、`PodDeployInfo`。 |
 | `docker_service_handler.py` | Docker 侧部署信息与实现（如存在）。 |
 | `runtime.py` | `IDeployController` 协议、`NoOpDeployController` 不调真实部署。 |
@@ -187,7 +187,7 @@ sequenceDiagram
 ### 5.5 部署与 WSS 建链
 
 - `ServiceHandler.deploy()`：`pod_info = await deploy_controller.deploy()`，若非空且通道有 `on_pod_ready`，`await on_pod_ready(service_id, pod_info)`。
-- `WSServiceMessageChannel`：用 `PodDeployInfo.pod_ip`（或 Docker 的 `host`）与**部署声明的 `port`** 拼 `ws://`/`wss://` URL，在 `on_pod_ready` 内 `await _ensure_connected()` 完成与业务进程握手（避免「K8s Ready 但首包发不出去」的纯懒连问题）。
+- `WSServiceMessageChannel`：用 `PodDeployInfo.pod_ip`（或 Docker 的 `host`）与**部署声明的 `port`** 拼 `ws://`/`wss://` URL，在 `on_pod_ready` 内 `await ensure_connected()` 完成与业务进程握手（避免「K8s Ready 但首包发不出去」的纯懒连问题）。
 - **上行体**：`serialize_request_payload` 对 `IRequest`/`wire_dict` 序列化；`request_id` 非空是 **WSS 多路复用硬条件**；`Access` 在缺失时可自动生成 UUID 并补 `wire_dict`。
 
 ### 5.6 缩容与停止

@@ -133,7 +133,7 @@ class SessionRuntimeManager:
 
             # 确保 endpoint（Pod）就绪：首次装填 1 个 endpoint（多 Pod 扩缩容见 multi-pod）
             async with self._lock:
-                if sh.endpoint_count == 0:
+                if not sh.has_routable_endpoint():
                     h = await self._sm.pick_or_create_pod(sreq)
                     if h is None:
                         await self._fail(w, 100001, session_id=session_id)
@@ -333,23 +333,16 @@ class SessionRuntimeManager:
         # (request_id + channel_id + is_complete + payload, 且无 ok), 否则上游抛
         # ValueError: unrecognized wire shape, 导致前端收不到错误信息。
         # request_id 是 WSS 多路复用硬条件, 缺失会被 dispatch_inbound_chunk 丢弃。
-        # channel_id 不在 IRequest 契约内, 兼容两种实现: 顶层属性 或 wire_dict 字段。
         sreq = w.session_request
         rid = sreq.request_id or ""
-        raw_msg = sreq.raw_msg
-        channel_id = getattr(raw_msg, "channel_id", None)
-        if channel_id is None:
-            wire_dict = getattr(raw_msg, "wire_dict", None)
-            if isinstance(wire_dict, dict):
-                channel_id = wire_dict.get("channel_id")
-        channel_id = str(channel_id) if channel_id is not None else ""
+        channel_id = str(sreq.channel_id or "")
         await w.response_queue.put(
             {
                 "request_id": rid,
                 "channel_id": channel_id,
                 "is_complete": True,
                 "payload": {
-                    "error_code": em.code,
+                    "error": em.message,
                     "message": em.message,
                 },
             }

@@ -109,21 +109,26 @@ class SessionHandler(ISessionHandler):
     def has_endpoint(self, endpoint_id: str) -> bool:
         return any(ep.endpoint_id == endpoint_id for ep in self._endpoints)
 
+    def has_routable_endpoint(self) -> bool:
+        """是否存在可路由的端点; 全部不可路由时编排层据此触发 pick_or_create_pod。"""
+        return any(getattr(ep, "is_routable", True) for ep in self._endpoints)
+
     def _pick_endpoint(self, user_id: Optional[str]) -> Optional[ISendEndpoint]:
-        """路由策略：用户亲和 → 最少负载。"""
-        if not self._endpoints:
+        """路由策略：用户亲和 → 最少负载（跳过接收侧死亡/不可路由的端点）。"""
+        routable = [ep for ep in self._endpoints if getattr(ep, "is_routable", True)]
+        if not routable:
             return None
 
         # 1. 用户亲和：同一 user_id 始终路由到同一端点
         if user_id:
             affined_id = self._user_affinity.get(user_id)
             if affined_id:
-                for ep in self._endpoints:
+                for ep in routable:
                     if ep.endpoint_id == affined_id:
                         return ep
 
         # 2. 最少负载：选择 inflight 最少的端点
-        best = min(self._endpoints, key=lambda ep: ep.inflight)
+        best = min(routable, key=lambda ep: ep.inflight)
 
         # 3. 记录亲和（首次分配）
         if user_id:

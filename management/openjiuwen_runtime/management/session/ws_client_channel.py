@@ -183,7 +183,7 @@ class WSServiceMessageChannel:
         self._ws_url = _build_ws_url(str(host), self._port, self._path, self._use_tls)
         self._last_service_id = service_id
         logger.info("WSS 基址已就绪: service_id=%s url=%s", service_id, self._ws_url)
-        await self._ensure_connected()
+        await self.ensure_connected()
         logger.info("WSS 已在 deploy 后完成预建链: service_id=%s", service_id)
 
     async def close(self) -> None:
@@ -208,7 +208,7 @@ class WSServiceMessageChannel:
         self._default_parser = None
         logger.info("WSServiceMessageChannel 已关闭: last_service_id=%s", self._last_service_id)
 
-    async def _ensure_connected(self) -> None:
+    async def ensure_connected(self) -> None:
         if not self._ws_url:
             raise RuntimeError(
                 "WebSocket URL 未就绪: 需先 K8s/Docker deploy 并成功 on_pod_ready"
@@ -224,7 +224,12 @@ class WSServiceMessageChannel:
                 raise RuntimeError("WSS 已关闭")
             if not self._ws_url:
                 raise RuntimeError("WebSocket URL 未设置")
-            logger.info("WSS 正在连接: %s, ping_interval=%f, ping_timeout=%f", self._ws_url, self._ws_ping_interval, self._ws_ping_timeout)
+            logger.info(
+                "WSS 正在连接: %s, ping_interval=%f, ping_timeout=%f",
+                self._ws_url,
+                self._ws_ping_interval,
+                self._ws_ping_timeout,
+            )
             # dict 直接用；回调则每次连接现取一份（如刷新链路令牌：新 nonce/新签发时间）。
             hdrs = self._additional_headers
             if callable(hdrs):
@@ -264,12 +269,15 @@ class WSServiceMessageChannel:
         w = self._ws
         if w is None:
             return
+        # 接收侧异常退出原因; None 表示正常退出(主动 close/cancel), 不触发摘路由
+        died_reason: Optional[str] = None
         try:
             while not self._closed and w is not None and not _ws_is_closed(w):
                 try:
                     raw = await w.recv()
                 except (websockets.exceptions.ConnectionClosed, OSError) as e:
                     logger.error("WSS 接收已断开: %s", e, exc_info=True)
+                    died_reason = f"{type(e).__name__}: {e}"
                     break
                 data = _decode_ws_message(raw)
                 if data is None:
@@ -287,15 +295,24 @@ class WSServiceMessageChannel:
             raise
         except Exception as e:
             logger.error("WSS 接收循环异常: %s", e, exc_info=True)
+            died_reason = f"{type(e).__name__}: {e}"
         finally:
             # 关键: 主动清空 _ws 引用。websockets 13+ 的 Connection 对象在
             # keepalive ping timeout 后 state 可能停留在 CLOSING (而非 CLOSED),
-            # _ws_is_closed 返回 False, _ensure_connected 误判"还活着"不重连,
+            # _ws_is_closed 返回 False, ensure_connected 误判"还活着"不重连,
             # 后续 send 抛 ConnectionClosedError。清空后下次 send 必走重连路径。
             self._ws = None
             for ev in self._request_done.values():
                 if not ev.is_set():
                     ev.set()
+            # 接收侧异常退出时通知 ServiceHandler: 失败在飞请求 + 摘路由 + 重连探测
+            if died_reason is not None and not self._closed:
+                try:
+                    await h.on_receive_loop_died(died_reason)
+                except Exception as hook_err:  # noqa: BLE001
+                    logger.error(
+                        "on_receive_loop_died 回调失败: %s", hook_err, exc_info=True,
+                    )
 
     async def send(
             self,
@@ -318,7 +335,7 @@ class WSServiceMessageChannel:
         self._default_parser = response_parser
         self._last_service_id = service_id
         try:
-            await self._ensure_connected()
+            await self.ensure_connected()
         except Exception as e:
             logger.error("WSS 连接失败: %s", e, exc_info=True)
             await on_request_complete(rid)
@@ -368,19 +385,19 @@ class WSServiceMessageChannel:
         背景: websockets 15.0.1 在 keepalive ping timeout 后, ws 对象可能
         仍残留在 self._ws (state=CLOSING); 此时直接 send 抛 ConnectionClosedError。
         原实现把异常向上抛, 让 Access 等待 300s 超时; 现在主动清空 _ws、
-        调 _ensure_connected 重连到同一个 agentserver pod, 重发 payload 一次。
+        调 ensure_connected 重连到同一个 agentserver pod, 重发 payload 一次。
         """
         try:
             await w.send(payload)
         except (websockets.exceptions.ConnectionClosed, OSError, RuntimeError) as e:
-            # 强制清空, 下次 _ensure_connected 必走重连路径
+            # 强制清空, 下次 ensure_connected 必走重连路径
             self._ws = None
             logger.warning(
                 "WSS 上行失败, 准备重连重试: request_id=%s err=%s",
                 rid, e,
             )
             try:
-                await self._ensure_connected()
+                await self.ensure_connected()
             except Exception as conn_err:
                 logger.error(
                     "WSS 重连失败: request_id=%s err=%s",

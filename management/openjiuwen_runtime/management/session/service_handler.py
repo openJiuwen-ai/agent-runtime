@@ -73,6 +73,8 @@ class ServiceHandler(IServiceHandler, ISendEndpoint):
         # 让下一条消息路由到其他健康 Pod (典型场景: agentserver event loop 被同步 tool 堵死,
         # WSS keepalive ping timeout 后无法恢复)。
         self._unhealthy_hook: Optional[Callable[[str, str], Awaitable[None]]] = None
+        self._routable: bool = True
+        self._reconnect_task: Optional[asyncio.Task[None]] = None
         # WebSocket 等通道在绑定后可拿到本实例与 IResponseParser，供接收循环多路分片
         if hasattr(self._channel, "bind_handler"):
             self._channel.bind_handler(self, self._parser)  # type: ignore[union-attr]
@@ -107,6 +109,11 @@ class ServiceHandler(IServiceHandler, ISendEndpoint):
     def inflight(self) -> int:
         """ISendEndpoint.inflight：当前端点在途请求数（同 inflight_requests）。"""
         return self._inflight
+
+    @property
+    def is_routable(self) -> bool:
+        """ISendEndpoint.is_routable：接收侧死亡后置 False，重连成功后恢复 True。"""
+        return self._routable
 
     async def send_message(self, wrapper: SessionRequestWrapper) -> None:
         """ISendEndpoint.send_message：登记在途请求并发通道（不占服务额度）。
@@ -243,6 +250,90 @@ class ServiceHandler(IServiceHandler, ISendEndpoint):
         """
         self._unhealthy_hook = hook
 
+    async def on_receive_loop_died(self, reason: str) -> None:
+        """WSS 接收循环异常退出时由 ``WSServiceMessageChannel._recv_loop`` 回调:
+        1. 给所有在飞请求的 ``response_queue`` 写入 error chunk, 让 Access 立即拿到失败
+           而非等待 ``message_timeout`` 超时;
+        2. 置 ``is_routable = False``, 让路由层暂时跳过本端点, 新请求打到其他健康 Pod;
+        3. 后台启动一次性重连探测 (复用原有 ``ensure_connected``):
+           - 成功 → 恢复 ``is_routable = True`` (重新加入路由);
+           - 失败 → 调 ``_unhealthy_hook`` 触发 ``force_evict_unhealthy_service`` 删 Pod。
+        """
+        if self._closed:
+            return
+        try:
+            await self._fail_inflight_requests(reason)
+        except Exception as e:  # noqa: BLE001
+            logger.error("fail_inflight_requests 失败: service_id=%s err=%s", self._id, e, exc_info=True)
+        if not self._routable:
+            return
+        self._routable = False
+        logger.warning(
+            "接收侧死亡, 暂时摘除路由: service_id=%s reason=%s",
+            self._id, reason,
+        )
+        if (self._reconnect_task is None or self._reconnect_task.done()) and not self._closed:
+            self._reconnect_task = asyncio.get_running_loop().create_task(
+                self._reconnect_or_evict(reason), name=f"wss-reconnect:{self._id}"
+            )
+
+    async def _fail_inflight_requests(self, reason: str) -> None:
+        """给所有在飞请求写入一个error chunk"""
+        rids = list(self._by_request.keys())
+        failed = 0
+        for rid in rids:
+            w = self._by_request.get(rid)
+            if w is None or w.cancel.done():
+                continue
+            sreq = w.session_request
+            channel_id = str(sreq.channel_id or "")
+            try:
+                await w.response_queue.put(
+                    {
+                        "request_id": rid,
+                        "channel_id": channel_id,
+                        "is_complete": True,
+                        "payload": {
+                            "error": f"下游通道已断开: {reason}",
+                            "message": f"下游通道已断开: {reason}",
+                        },
+                    }
+                )
+                if w.cancel and not w.cancel.done():
+                    w.cancel.set_result(None)
+                failed += 1
+            except Exception as e:  # noqa: BLE001
+                logger.error("fail_inflight 单请求失败: service_id=%s rid=%s err=%s", self._id, rid, e)
+        if failed:
+            logger.info(
+                "已 fail 在飞请求: service_id=%s count=%s reason=%s",
+                self._id, failed, reason,
+            )
+
+    async def _reconnect_or_evict(self, reason: str) -> None:
+        """重连探测，成功恢复路由; 失败走删 Pod"""
+        try:
+            await self._channel.ensure_connected()  # type: ignore[union-attr]
+        except asyncio.CancelledError:
+            return
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "重连探测失败, 触发删 Pod: service_id=%s reason=%s err=%s",
+                self._id, reason, e,
+            )
+            hook = self._unhealthy_hook
+            if hook is not None and not self._closed:
+                try:
+                    asyncio.get_running_loop().create_task(
+                        hook(self._id, f"reconnect failed after recv loop death: {reason}")
+                    )
+                except Exception as hook_err:  # noqa: BLE001
+                    logger.error("触发 unhealthy hook 失败: service_id=%s err=%s", self._id, hook_err)
+            return
+        # 重连成功: 恢复可路由
+        self._routable = True
+        logger.info("重连探测成功, 恢复可路由: service_id=%s", self._id)
+
     # ==================== IServiceHandler：session 驱逐（pod-local）====================
 
     async def evict_session(self, session_id: str) -> int:
@@ -305,6 +396,13 @@ class ServiceHandler(IServiceHandler, ISendEndpoint):
             logger.debug("已通知 message_channel on_pod_ready")
 
     async def delete(self) -> None:
+        # 先停重连探测任务, 避免删 Pod 期间还在探测
+        t = self._reconnect_task
+        self._reconnect_task = None
+        if t and not t.done():
+            t.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await t
         # 先关长连接(WS)再删 Pod, 避免悬挂接收协程
         if hasattr(self._channel, "close"):
             with contextlib.suppress(Exception):
