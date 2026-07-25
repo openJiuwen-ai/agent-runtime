@@ -332,7 +332,7 @@ async def _run_one(
     rid = f"req_{spec.sid}_{seq}_{uuid.uuid4().hex[:6]}"
     msg = _render_message(template, spec.sid, seq, rid)
     sreq = SessionRequest(
-        session_id=spec.sid,
+        service_id=spec.sid,
         concurrency=spec.conc,
         ttl=spec.ttl,
         request_id=rid,

@@ -15,7 +15,7 @@ from .interfaces import (
     IResponseParser,
     ISessionStrategy,
     IServiceManager,
-    SessionRequestWrapper, ISessionRequest,
+    ScopeRequestWrapper, ISessionRequest,
 )
 from .models import AccessConfig, SessionConfig
 
@@ -278,7 +278,7 @@ class Access(IAccess):
             rid = session_request.request_id
             logger.debug(
                 "Access receive session: session_id=%s session_conc=%s session_ttl=%s request_id=%s",
-                session_request.session_id,
+                session_request.service_id,
                 session_request.session_concurrency,
                 session_request.session_ttl,
                 rid,
@@ -303,7 +303,7 @@ class Access(IAccess):
             session_request = self._strategy.handle_session(msg)
             logger.debug(
                 "Access 策略生成 session: session_id=%s session_conc=%s session_ttl=%s",
-                session_request.session_id,
+                session_request.service_id,
                 session_request.session_concurrency,
                 session_request.session_ttl,
             )
@@ -311,7 +311,7 @@ class Access(IAccess):
         # 3) 每个入口请求独占一条响应队列 + cancel，用于多路复用/取消
         response_queue: asyncio.Queue[Any] = asyncio.Queue()
         cancel: asyncio.Future = asyncio.get_running_loop().create_future()
-        wrapper = SessionRequestWrapper(session_request, response_queue, cancel)
+        wrapper = ScopeRequestWrapper(session_request, response_queue, cancel)
 
         # 4) 入用户队列，由 ServiceManager 异步消费并路由到具体服务实例
         await self._service_manager.handle_message(wrapper)

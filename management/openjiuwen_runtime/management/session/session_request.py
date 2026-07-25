@@ -14,14 +14,14 @@ class SessionRequest(ISessionRequest):
 
     def __init__(
         self,
-        session_id: str,
+        service_id: str,
         concurrency: int,
         ttl: int,
         request_id: Optional[str],
         raw: IRequest,
         service_template: Optional[dict] = None,
     ):
-        self._session_id = session_id
+        self._service_id = service_id
         self._concurrency = concurrency
         self._ttl = ttl
         self._request_id = request_id
@@ -29,8 +29,8 @@ class SessionRequest(ISessionRequest):
         self._service_template = service_template
 
     @property
-    def session_id(self) -> str:
-        return self._session_id
+    def service_id(self) -> str:
+        return self._service_id
 
     @property
     def session_concurrency(self) -> int:

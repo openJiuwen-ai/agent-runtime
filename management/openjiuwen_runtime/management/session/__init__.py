@@ -12,10 +12,10 @@ from .interfaces import (
     IServiceManager,
     IServiceMessageChannel,
     OnRequestCompleteCallback,
-    ISessionHandler,
+    IServiceScopeHandler,
     ISessionRequest,
     ISessionStrategy,
-    SessionRequestWrapper,
+    ScopeRequestWrapper,
 )
 from .models import AccessConfig, MessagePriority, MessageType, SessionConfig
 from .runtime import IDeployController, NoOpDeployController
@@ -36,7 +36,7 @@ __all__ = (
     "IServiceInstanceFactory",
     "IServiceManager",
     "IServiceMessageChannel",
-    "ISessionHandler",
+    "IServiceScopeHandler",
     "ISessionRequest",
     "ISessionStrategy",
     "MessagePriority",
@@ -48,7 +48,7 @@ __all__ = (
     "ServiceManager",
     "SessionConfig",
     "SessionRequest",
-    "SessionRequestWrapper",
+    "ScopeRequestWrapper",
     "serialize_request_payload",
     "Timer",
     "WSServiceMessageChannel",

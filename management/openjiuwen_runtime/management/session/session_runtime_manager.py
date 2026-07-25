@@ -1,13 +1,13 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
-"""Session 运行时管理：SessionHandler 归属、消息入口、session TTL/亲和/pending 过期。
+"""Session 运行时管理：ServiceScopeHandler 归属、消息入口、session TTL/亲和/pending 过期。
 
 第二层解耦：从 ServiceManager 抽取的 session 编排职责。与 ServiceManager（Pod 池）协作：
 - 向 ServiceManager 借/还 endpoint（Pod）；
 - ServiceManager 在 Pod inflight 归零时回调 :meth:`flush_pending_for_service`。
 
-内含 :class:`SessionRegistry`（SessionHandler 归属，替代原 ServiceHandler._sessions）。
+内含 :class:`ServiceScopeRegistry`（ServiceScopeHandler 归属，替代原 ServiceHandler._sessions）。
 """
 
 from __future__ import annotations
@@ -22,10 +22,10 @@ from .interfaces import (
     IServiceHandler,
     ITimer,
     RawMessage,
-    SessionRequestWrapper,
+    ScopeRequestWrapper,
 )
 from .router import SessionRouter
-from .session_handler import SessionHandler
+from .service_scope_handler import ServiceScopeHandler
 
 if TYPE_CHECKING:
     # 仅用于类型提示，避免与 ServiceManager 的运行时循环导入
@@ -34,15 +34,15 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-class SessionRegistry:
-    """SessionHandler 的归属与生命周期管理（替代原 ServiceHandler._sessions）。
+class ServiceScopeRegistry:
+    """ServiceScopeHandler 的归属与生命周期管理（替代原 ServiceHandler._sessions）。
 
-    每个 session_id 对应一个 SessionHandler；endpoints 由 SessionRuntimeManager 装填。
+    每个 session_id 对应一个 ServiceScopeHandler；endpoints 由 SessionRuntimeManager 装填。
     """
 
     def __init__(self, session_router: SessionRouter) -> None:
         self._lock = asyncio.Lock()
-        self._handlers: Dict[str, SessionHandler] = {}
+        self._handlers: Dict[str, ServiceScopeHandler] = {}
         self._session_router = session_router
 
     @property
@@ -51,28 +51,28 @@ class SessionRegistry:
 
     async def get_or_create(
         self, session_id: str, max_parallel: int,
-    ) -> SessionHandler:
-        """获取或创建 SessionHandler（endpoints 为空，由 SessionRuntimeManager 装填）。"""
+    ) -> ServiceScopeHandler:
+        """获取或创建 ServiceScopeHandler（endpoints 为空，由 SessionRuntimeManager 装填）。"""
         async with self._lock:
             sh = self._handlers.get(session_id)
             if sh is None:
-                sh = SessionHandler(
+                sh = ServiceScopeHandler(
                     session_id, max_parallel, [], self._session_router
                 )
                 self._handlers[session_id] = sh
                 logger.info(
-                    "SessionRegistry 新建 SessionHandler: session_id=%s max_parallel=%s",
+                    "ServiceScopeRegistry 新建 ServiceScopeHandler: session_id=%s max_parallel=%s",
                     session_id, max_parallel,
                 )
             return sh
 
-    def get(self, session_id: str) -> Optional[SessionHandler]:
+    def get(self, session_id: str) -> Optional[ServiceScopeHandler]:
         return self._handlers.get(session_id)
 
     def has_session(self, session_id: str) -> bool:
         return session_id in self._handlers
 
-    async def remove(self, session_id: str) -> Optional[SessionHandler]:
+    async def remove(self, session_id: str) -> Optional[ServiceScopeHandler]:
         async with self._lock:
             return self._handlers.pop(session_id, None)
 
@@ -96,24 +96,24 @@ class SessionRuntimeManager:
     ) -> None:
         self._timer = timer
         self._sm = service_manager
-        self._registry = SessionRegistry(SessionRouter())
+        self._registry = ServiceScopeRegistry(SessionRouter())
         self._lock = asyncio.Lock()
         # session_id -> 代表性 service_id（TTL 到期时仍有 inflight 的延期清理队列）
-        self._pending_expired: Dict[str, str] = {}
+        self._pending_scope_expiry: Dict[str, str] = {}
 
     @property
-    def registry(self) -> SessionRegistry:
+    def registry(self) -> ServiceScopeRegistry:
         return self._registry
 
     # ==================== 消息入口 ====================
 
     async def handle_user_request(self, raw: RawMessage) -> None:
         w = raw.message
-        if not isinstance(w, SessionRequestWrapper):
-            logger.error("用户消息体类型错误, 预期 SessionRequestWrapper, 实际 %s", type(w))
+        if not isinstance(w, ScopeRequestWrapper):
+            logger.error("用户消息体类型错误, 预期 ScopeRequestWrapper, 实际 %s", type(w))
             return
         sreq = w.session_request
-        session_id = sreq.session_id
+        session_id = sreq.service_id
 
         if self._sm.is_deprecated():
             logger.warning(
@@ -123,10 +123,10 @@ class SessionRuntimeManager:
             )
 
         # 新消息进入：先取消该 session 待生效的 session_ttl 计时与延期清理标记
-        await self._timer.cancel_timer(f"sess:{session_id}")
-        self._pending_expired.pop(session_id, None)
+        await self._timer.cancel_timer(f"scope:{session_id}")
+        self._pending_scope_expiry.pop(session_id, None)
 
-        sh: Optional[SessionHandler] = None
+        sh: Optional[ServiceScopeHandler] = None
         failed_to_reserve: Optional[IServiceHandler] = None
         try:
             sh = await self._registry.get_or_create(session_id, sreq.session_concurrency)
@@ -167,7 +167,7 @@ class SessionRuntimeManager:
                 await self._fail(w, 100001, session_id=session_id)
                 return
 
-            # 转发到 SessionHandler（不再经过 ServiceHandler.handle_message）
+            # 转发到 ServiceScopeHandler（不再经过 ServiceHandler.handle_message）
             endpoint_id = self._peek_endpoint_id(sh)
             pod_name = self._pod_name_for(endpoint_id)
             logger.info(
@@ -190,7 +190,7 @@ class SessionRuntimeManager:
             if sh is not None:
                 if sreq.session_ttl > 0:
                     try:
-                        await self._arm_session_timer(session_id, sreq.session_ttl)
+                        await self._arm_scope_timer(session_id, sreq.session_ttl)
                     except Exception as e2:  # noqa: BLE001
                         logger.error("arm session 计时器失败: %s", e2, exc_info=True)
                     else:
@@ -201,7 +201,7 @@ class SessionRuntimeManager:
                 else:
                     rep = self._peek_endpoint_id(sh)
                     if rep is not None:
-                        self._pending_expired[session_id] = rep
+                        self._pending_scope_expiry[session_id] = rep
                         logger.debug(
                             "session ttl<=0 pending expired: session_id=%s service_id=%s",
                             session_id, rep,
@@ -209,7 +209,8 @@ class SessionRuntimeManager:
                         # 由 inflight 归零钩子触发 flush；此处主动尝试一次
                         await self.flush_pending_for_service(rep)
 
-    def _peek_endpoint_id(self, sh: SessionHandler) -> Optional[str]:
+    @staticmethod
+    def _peek_endpoint_id(sh: ServiceScopeHandler) -> Optional[str]:
         ids = sh.endpoint_ids
         return ids[0] if ids else None
 
@@ -223,21 +224,21 @@ class SessionRuntimeManager:
 
     # ==================== TTL / 过期 ====================
 
-    async def _arm_session_timer(self, session_id: str, ttl: int) -> None:
+    async def _arm_scope_timer(self, session_id: str, ttl: int) -> None:
         if ttl <= 0:
             return
-        key = f"sess:{session_id}"
+        key = f"scope:{session_id}"
         await self._timer.cancel_timer(key)
         # 重新 arm 等同于「session 又活跃」, 清掉旧的延期清理标记
-        self._pending_expired.pop(session_id, None)
+        self._pending_scope_expiry.pop(session_id, None)
 
         async def _expired() -> None:
-            await self._on_session_expired(session_id)
+            await self._on_scope_expired(session_id)
 
         await self._timer.start_timer(key, ttl, _expired)
         logger.info("已 arm session TTL 计时: session_id=%s ttl=%s", session_id, ttl)
 
-    async def _on_session_expired(self, session_id: str) -> None:
+    async def _on_scope_expired(self, session_id: str) -> None:
         """session_ttl 到期: 若该 session 已无 inflight 则立即移除并触发 flush；否则入 pending 等待。"""
         logger.info("session TTL 到期, 准备回收: session_id=%s", session_id)
         target_svc: Optional[str] = None
@@ -251,14 +252,14 @@ class SessionRuntimeManager:
             if len(sh.active_rids) > 0:
                 rep = self._peek_endpoint_id(sh)
                 if rep is not None:
-                    self._pending_expired[session_id] = rep
+                    self._pending_scope_expiry[session_id] = rep
                 logger.info(
                     "session 到期但仍有 inflight, 入延期清理队列: session_id=%s rids=%s",
                     session_id, len(sh.active_rids),
                 )
                 return
 
-            # 在途已空：逐 Pod 释放 quota + 取消，再销毁 SessionHandler
+            # 在途已空：逐 Pod 释放 quota + 取消，再销毁 ServiceScopeHandler
             evicted_endpoints: list[str] = []
             for endpoint_id in sh.endpoint_ids:
                 h = self._sm.find_service_handler(endpoint_id)
@@ -268,7 +269,7 @@ class SessionRuntimeManager:
                 if target_svc is None:
                     target_svc = endpoint_id
             await self._registry.remove(session_id)
-            self._pending_expired.pop(session_id, None)
+            self._pending_scope_expiry.pop(session_id, None)
             removed = True
             logger.info(
                 "session 已移除并归还 service 并发: session_id=%s", session_id,
@@ -295,13 +296,13 @@ class SessionRuntimeManager:
         async with self._lock:
             sids = [
                 sid
-                for sid, svc in list(self._pending_expired.items())
+                for sid, svc in list(self._pending_scope_expiry.items())
                 if svc == service_id
             ]
             for sid in sids:
                 sh = self._registry.get(sid)
                 if sh is None:
-                    self._pending_expired.pop(sid, None)
+                    self._pending_scope_expiry.pop(sid, None)
                     continue
                 if len(sh.active_rids) == 0:
                     for endpoint_id in sh.endpoint_ids:
@@ -309,7 +310,7 @@ class SessionRuntimeManager:
                         if h is not None:
                             await h.evict_session(sid)
                     await self._registry.remove(sid)
-                    self._pending_expired.pop(sid, None)
+                    self._pending_scope_expiry.pop(sid, None)
                     logger.info(
                         "延期清理已移除 session: session_id=%s service_id=%s",
                         sid, service_id,
@@ -318,7 +319,7 @@ class SessionRuntimeManager:
     # ==================== 失败响应 ====================
 
     async def _fail(
-        self, w: SessionRequestWrapper, code: int, *, session_id: str | None = None
+        self, w: ScopeRequestWrapper, code: int, *, session_id: str | None = None
     ) -> None:
         em = exception_message(code)
         if code == 100001:
@@ -360,7 +361,7 @@ class SessionRuntimeManager:
     # ==================== 生命周期（由 ServiceManager.stop 调用）====================
 
     async def on_pod_removed(self, service_id: str) -> None:
-        """某 Pod 已失效被移除：从所有引用它的 SessionHandler 中摘除该 endpoint。
+        """某 Pod 已失效被移除：从所有引用它的 ServiceScopeHandler 中摘除该 endpoint。
 
         - 单 endpoint 的 session：摘除后 endpoint_count==0，下条消息会触发 pick_or_create 重新装填；
         - 多 endpoint 的 session：摘除该 endpoint，其余继续服务；
@@ -377,12 +378,12 @@ class SessionRuntimeManager:
                     sid, service_id, sh.endpoint_count,
                 )
             # 清理指向该 Pod 的 pending 记录
-            stale = [sid for sid, svc in self._pending_expired.items() if svc == service_id]
+            stale = [sid for sid, svc in self._pending_scope_expiry.items() if svc == service_id]
             for sid in stale:
-                self._pending_expired.pop(sid, None)
+                self._pending_scope_expiry.pop(sid, None)
 
     async def shutdown(self) -> None:
-        """清理所有 session TTL 计时与 pending 标记（SessionHandler 由 registry 丢弃）。"""
+        """清理所有 session TTL 计时与 pending 标记（ServiceScopeHandler 由 registry 丢弃）。"""
         for sid in list(self._registry.all_session_ids()):
-            await self._timer.cancel_timer(f"sess:{sid}")
-        self._pending_expired.clear()
+            await self._timer.cancel_timer(f"scope:{sid}")
+        self._pending_scope_expiry.clear()

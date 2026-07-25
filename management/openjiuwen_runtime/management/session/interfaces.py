@@ -78,7 +78,8 @@ class IRequest(ABC):
 class ISessionRequest(PriorityMessage):
     @property
     @abstractmethod
-    def session_id(self) -> str:
+    def service_id(self) -> str:
+        """ServiceScope 标识（group+bot 派生）；注意与 :class:`IRequest.session_id`（page session）区分。"""
         pass
 
     @property
@@ -114,7 +115,7 @@ class ResponseMessage:
         self.data = data
 
 
-class SessionRequestWrapper:
+class ScopeRequestWrapper:
     def __init__(
             self,
             request: ISessionRequest,
@@ -231,13 +232,13 @@ class IServiceMessageChannel(Protocol):
 
     约定:
     * ``send`` 中 **上行** 发送一帧业务负载（通常 JSON 序列化自 ``ISessionRequest.raw_msg``）;
-    * **下行** 由实现类在独接收循环里按 ``IResponseParser.request_id`` 分片写入对应 ``SessionRequestWrapper.response_queue``;
+    * **下行** 由实现类在独接收循环里按 ``IResponseParser.request_id`` 分片写入对应 ``ScopeRequestWrapper.response_queue``;
     * 当某 ``request_id`` 的响应用 ``IResponseParser.is_completed`` 判定结束时，**必须**
     ``await on_request_complete(request_id)`` 归还本实例并发。
     可选实现(鸭子类型): ``bind_handler(handler, parser)``、``on_pod_ready(service_id, pod_info)``、``close()``.
     """
 
-    async def send(self, service_id: str, wrapper: SessionRequestWrapper, *, response_parser: IResponseParser,
+    async def send(self, service_id: str, wrapper: ScopeRequestWrapper, *, response_parser: IResponseParser,
                    on_request_complete: OnRequestCompleteCallback,
                    ) -> None:
         pass
@@ -245,15 +246,15 @@ class IServiceMessageChannel(Protocol):
 
 @runtime_checkable
 class ISendEndpoint(Protocol):
-    """SessionHandler 通过此接口向某个 Pod 发送请求，不绑定具体 ServiceHandler 类型。
+    """ServiceScopeHandler 通过此接口向某个 Pod 发送请求，不绑定具体 ServiceHandler 类型。
 
     约定:
     * 由 ``ServiceHandler`` 实现（结构子类型，不要让具体子类再继承本 Protocol）；
     * ``send_message`` 完成 inflight 计数、request_id → wrapper 映射（供下行分片）、
       实际的 ``IServiceMessageChannel.send`` 以及完成回调（inflight 归零通知 idle_pool_hook）；
-    * ``inflight`` / ``endpoint_id`` 用于 SessionHandler 的最少负载路由与用户亲和记录。
+    * ``inflight`` / ``endpoint_id`` 用于 ServiceScopeHandler 的最少负载路由与用户亲和记录。
 
-    单 Pod 场景：SessionHandler 持有 1 个端点；多 Pod 场景：持有 N 个端点。
+    单 Pod 场景：ServiceScopeHandler 持有 1 个端点；多 Pod 场景：持有 N 个端点。
     """
 
     @property
@@ -266,8 +267,8 @@ class ISendEndpoint(Protocol):
         """当前端点在途请求数，用于最少负载路由。"""
         ...
 
-    async def send_message(self, wrapper: SessionRequestWrapper) -> None:
-        """发送请求并追踪完成。SessionHandler 在获取信号量后调用此方法。"""
+    async def send_message(self, wrapper: ScopeRequestWrapper) -> None:
+        """发送请求并追踪完成。ServiceScopeHandler 在获取信号量后调用此方法。"""
         ...
 
 
@@ -293,7 +294,7 @@ class IServiceManager(ABC):
         pass
 
     @abstractmethod
-    async def handle_message(self, msg: "SessionRequestWrapper") -> None:
+    async def handle_message(self, msg: "ScopeRequestWrapper") -> None:
         pass
 
     @abstractmethod
@@ -347,7 +348,7 @@ class IServiceHandler(ABC):
     def active_session_count(self) -> int:
         """当前实例上仍预留额度的 session 数（基于 ``_session_reserved``）。
 
-        解耦后语义为 quota 计数，用于 idle/TTL 判定，而非 SessionHandler 实例数。
+        解耦后语义为 quota 计数，用于 idle/TTL 判定，而非 ServiceScopeHandler 实例数。
         """
         pass
 
@@ -360,7 +361,7 @@ class IServiceHandler(ABC):
         """释放该 session 在本实例的预留额度，并取消本实例上该 session 的在途请求（pod-local）。
 
         解耦后取代原 ``remove_session``：只处理 pod-local 状态（quota + 取消），
-        不销毁 SessionHandler 实例（后者由 SessionRegistry 负责）。
+        不销毁 ServiceScopeHandler 实例（后者由 ServiceScopeRegistry 负责）。
         """
         pass
 
@@ -396,7 +397,7 @@ class IServiceHandler(ABC):
         return
 
 
-class ISessionHandler(ABC):
+class IServiceScopeHandler(ABC):
     @abstractmethod
-    async def handle_message(self, msg: "SessionRequestWrapper") -> None:
+    async def handle_message(self, msg: "ScopeRequestWrapper") -> None:
         pass

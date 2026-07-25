@@ -246,8 +246,8 @@ def _load_message_payload(ns: argparse.Namespace) -> dict[str, Any]:
         data["bot_id"] = ns.bot_id
     if ns.user_id is not None:
         data["user_id"] = ns.user_id
-    if ns.session_id is not None:
-        data["session_id"] = ns.session_id
+    if ns.service_id is not None:
+        data["session_id"] = ns.service_id
     return data
 
 
