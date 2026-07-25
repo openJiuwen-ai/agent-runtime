@@ -323,10 +323,17 @@ class Access(IAccess):
                     to = self._config.message_timeout if self._config else 600
                     data = await asyncio.wait_for(response_queue.get(), timeout=to)
                 except asyncio.TimeoutError:
-                    # 等响应超时：结束迭代（业务上视为挂起/失败，由调用方处理）
                     logger.error(
                         "Access 等待下游响应超时: request_id=%s timeout=%s", rid, to
                     )
+                    try:
+                        # 等响应超时: 写一个 error chunk 给上游, 否则前端只能看到流静默结束
+                        await self._put_timeout_error_chunk(response_queue, session_request, rid, to)
+                    except Exception as put_err:  # noqa: BLE001
+                        logger.error(
+                            "Access 超时写入 error chunk 失败: request_id=%s err=%s",
+                            rid, put_err, exc_info=True,
+                        )
                     break
                 logger.debug("Access 收到流式分片, request_id=%s", rid)
                 yield self._response_parser.response(data)
@@ -346,3 +353,24 @@ class Access(IAccess):
                 cleaned = await current_sm.try_cleanup_if_idle()
                 if cleaned:
                     logger.info("老化的 ServiceManager 已成功清理")
+
+    async def _put_timeout_error_chunk(
+            self,
+            response_queue: asyncio.Queue[Any],
+            session_request: ISessionRequest,
+            rid: str,
+            timeout: int,
+    ) -> None:
+        """写入一个超时error chunk"""
+        channel_id = str(session_request.channel_id or "")
+        await response_queue.put(
+            {
+                "request_id": rid,
+                "channel_id": channel_id,
+                "is_complete": True,
+                "payload": {
+                    "error": f"下游响应超时({timeout}s)",
+                    "message": f"下游响应超时({timeout}s)",
+                },
+            }
+        )

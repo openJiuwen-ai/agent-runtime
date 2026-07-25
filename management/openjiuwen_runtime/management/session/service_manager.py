@@ -1107,10 +1107,14 @@ class ServiceManager(IServiceManager):
     ) -> Optional[IServiceHandler]:
         """在池中按容量选实例。调用方须持有 self._lock。不 deploy。
 
-        注：session 亲和由 ServiceScopeHandler / SessionRuntimeManager 处理，此处不做亲和查找。
+        注：session 亲和由 SessionHandler / SessionRuntimeManager 处理，此处不做亲和查找。
+        跳过 ``is_routable=False`` 的实例(接收侧已死亡、暂时摘路由), 避免选到 event loop
+        被堵死但 K8s phase 仍 Running 的 Pod。
         """
         in_use_pool = self._in_use.get(template_id, {})
         for h in in_use_pool.values():
+            if not getattr(h, "is_routable", True):
+                continue
             if h.available_concurrency >= need:
                 logger.debug(
                     "选用 in_use 实例 (template_id=%s): service_id=%s avail=%s",
@@ -1120,6 +1124,8 @@ class ServiceManager(IServiceManager):
 
         idle_pool = self._idle.get(template_id, {})
         for h in list(idle_pool.values()):
+            if not getattr(h, "is_routable", True):
+                continue
             if h.available_concurrency >= need:
                 idle_pool.pop(h.id, None)
                 self._in_use.setdefault(template_id, {})[h.id] = h

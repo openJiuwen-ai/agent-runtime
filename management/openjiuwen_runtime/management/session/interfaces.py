@@ -103,6 +103,11 @@ class ISessionRequest(PriorityMessage):
         pass
 
     @property
+    def channel_id(self) -> Optional[str]:
+        """默认 None; 具体实现可覆盖, 供 error chunk 构造时使用。"""
+        return None
+
+    @property
     @abstractmethod
     def service_template(self) -> Optional[Dict[str, Any]]:
         pass
@@ -235,7 +240,8 @@ class IServiceMessageChannel(Protocol):
     * **下行** 由实现类在独接收循环里按 ``IResponseParser.request_id`` 分片写入对应 ``ScopeRequestWrapper.response_queue``;
     * 当某 ``request_id`` 的响应用 ``IResponseParser.is_completed`` 判定结束时，**必须**
     ``await on_request_complete(request_id)`` 归还本实例并发。
-    可选实现(鸭子类型): ``bind_handler(handler, parser)``、``on_pod_ready(service_id, pod_info)``、``close()``.
+    可选实现(鸭子类型): ``bind_handler(handler, parser)``、``on_pod_ready(service_id, pod_info)``、
+    ``ensure_connected()``、``close()``.
     """
 
     async def send(self, service_id: str, wrapper: ScopeRequestWrapper, *, response_parser: IResponseParser,
@@ -267,8 +273,13 @@ class ISendEndpoint(Protocol):
         """当前端点在途请求数，用于最少负载路由。"""
         ...
 
-    async def send_message(self, wrapper: ScopeRequestWrapper) -> None:
-        """发送请求并追踪完成。ServiceScopeHandler 在获取信号量后调用此方法。"""
+    @property
+    def is_routable(self) -> bool:
+        """端点是否可参与路由; 接收侧死亡后置 False, 重连成功后恢复 True。"""
+        ...
+
+    async def send_message(self, wrapper: SessionRequestWrapper) -> None:
+        """发送请求并追踪完成。SessionHandler 在获取信号量后调用此方法。"""
         ...
 
 
@@ -393,6 +404,16 @@ class IServiceHandler(ABC):
         让下一条消息路由到其他健康 Pod。
 
         约定 hook 签名: ``async def hook(service_id: str, reason: str) -> None``。
+        """
+        return
+
+    async def on_receive_loop_died(self, reason: str) -> None:
+        """WSS 接收循环异常退出时回调: ServiceHandler 实现: 失败在飞请求 + 摘路由 + 重连探测。
+        1. 给所有在飞请求的 response_queue 写入 error chunk, 让 Access 立即拿到失败
+           而非等待 message_timeout 超时;
+        2. 置 ``is_routable = False``, 让路由层暂时跳过本端点, 新请求打到其他健康 Pod;
+        3. 后台一次性重连探测: 成功恢复 ``is_routable = True``; 失败触发
+           ``_unhealthy_hook`` → ``force_evict_unhealthy_service`` 删 Pod。
         """
         return
 
