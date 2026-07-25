@@ -20,7 +20,7 @@ from .interfaces import (
     IResponseParser,
     IServiceHandler,
     OnRequestCompleteCallback,
-    SessionRequestWrapper,
+    ScopeRequestWrapper,
 )
 
 logger = get_logger(__name__)
@@ -317,7 +317,7 @@ class WSServiceMessageChannel:
     async def send(
             self,
             service_id: str,
-            wrapper: SessionRequestWrapper,
+            wrapper: ScopeRequestWrapper,
             *,
             response_parser: IResponseParser,
             on_request_complete: OnRequestCompleteCallback,

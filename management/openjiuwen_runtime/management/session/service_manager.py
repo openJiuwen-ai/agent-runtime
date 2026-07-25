@@ -25,7 +25,7 @@ from .interfaces import (
     IServiceManager,
     ITimer,
     RawMessage,
-    SessionRequestWrapper,
+    ScopeRequestWrapper,
 )
 from .k8s_service_handler import K8sServiceHandler, POD_LABEL_SELECTOR
 from .models import MessageType
@@ -335,11 +335,11 @@ class ServiceManager(IServiceManager):
             for h in all_handlers:
                 self._deleting_services.discard(h.id)
 
-    async def handle_message(self, msg: SessionRequestWrapper) -> None:
+    async def handle_message(self, msg: ScopeRequestWrapper) -> None:
         if self._deprecated:
             logger.warning(
                 "ServiceManager 已标记为待老化，但仍收到新消息: session_id=%s request_id=%s",
-                msg.session_request.session_id,
+                msg.session_request.service_id,
                 msg.session_request.request_id,
             )
         sreq = msg.session_request
@@ -350,7 +350,7 @@ class ServiceManager(IServiceManager):
         await self._q.put_user(raw)
         logger.debug(
             "ServiceManager 用户消息已入队: session_id=%s request_id=%s user_q~=%s",
-            sreq.session_id,
+            sreq.service_id,
             sreq.request_id,
             self._q.user_qsize(),
         )
@@ -699,7 +699,7 @@ class ServiceManager(IServiceManager):
         """清理被同 id 挤出的旧 handler，并 delete 其底层资源。"""
         await self._cancel_in_use_to_idle_timer(old.id)
         await self._cancel_excess_idle_timer(old.id)
-        # session 侧：从引用该 Pod 的 SessionHandler 摘除 endpoint、清 pending
+        # session 侧：从引用该 Pod 的 ServiceScopeHandler 摘除 endpoint、清 pending
         if self._session_runtime is not None:
             try:
                 await self._session_runtime.on_pod_removed(old.id)
@@ -709,7 +709,7 @@ class ServiceManager(IServiceManager):
                     old.id, e, exc_info=True,
                 )
         for session_id in list(old.open_session_ids()):
-            await self._timer.cancel_timer(f"sess:{session_id}")
+            await self._timer.cancel_timer(f"scope:{session_id}")
         try:
             # 不用 _safe_delete_handler：勿把 service_id 放进 _deleting_services，
             # 否则会与新实例的后续清理路径互相干扰。
@@ -1167,7 +1167,7 @@ class ServiceManager(IServiceManager):
             logger.warning(
                 "预检拦截(会话并发超过单实例总并发): session_id=%s template_id=%s "
                 "session_concurrency=%s service_concurrency=%s, 拒绝扩容",
-                sreq.session_id, template_id, need, service_concurrency_for_tpl,
+                sreq.service_id, template_id, need, service_concurrency_for_tpl,
             )
             return None
 
@@ -1204,13 +1204,13 @@ class ServiceManager(IServiceManager):
            避免惊群重复占满 max_services。
            缩容 delete 未完成前仍占用 max 名额（reclaim_occupancy）。
 
-        注：session 亲和（同 session 复用同一 Pod）由 SessionHandler（持有 endpoints）
+        注：session 亲和（同 session 复用同一 Pod）由 ServiceScopeHandler（持有 endpoints）
         在 SessionRuntimeManager 层处理，本方法不再做亲和查找 / 额度预留。
 
         注意：本方法自行获取/释放 ``self._lock``，调用方勿再持锁调用。
         """
         need = max(1, int(sreq.session_concurrency))
-        session_id = sreq.session_id
+        session_id = sreq.service_id
         template_id: Optional[str] = None
         if sreq.service_template:
             template_id = sreq.service_template.get("template_id")
@@ -1599,8 +1599,8 @@ class ServiceManager(IServiceManager):
                         self._excess_idle_timer_armed.discard(service_id)
 
                         # session 侧清理（委托 session 编排层）：从引用该 Pod 的
-                        # SessionHandler 摘除 endpoint、清 _pending_expired 记录。
-                        # 注：ServiceManager 不再持有 _service_router / _pending_expired_sessions
+                        # ServiceScopeHandler 摘除 endpoint、清 _pending_scope_expiry 记录。
+                        # 注：ServiceManager 不再持有 _service_router / _pending_scope_expiry_sessions
                         # （已迁至 SessionRuntimeManager）。
                         if self._session_runtime is not None:
                             try:
@@ -1617,7 +1617,7 @@ class ServiceManager(IServiceManager):
         for service_id, h, pod_name, reason, session_ids in handlers_to_delete:
             try:
                 for session_id in session_ids:
-                    await self._timer.cancel_timer(f"sess:{session_id}")
+                    await self._timer.cancel_timer(f"scope:{session_id}")
                 await self._cancel_in_use_to_idle_timer(service_id)
                 await self._cancel_excess_idle_timer(service_id)
                 try:

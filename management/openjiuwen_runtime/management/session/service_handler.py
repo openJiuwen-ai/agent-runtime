@@ -3,7 +3,7 @@
 
 """单实例（Pod）：服务级并发按 session 预留额度、消息级在途计数、发送端点与下行通道。
 
-解耦后 ServiceHandler 不再创建/持有 SessionHandler 实例（归属权在 SessionRegistry），
+解耦后 ServiceHandler 不再创建/持有 ServiceScopeHandler 实例（归属权在 ServiceScopeRegistry），
 仅负责：quota 预留、inflight 计数、``ISendEndpoint.send_message``、下行分片、Pod 生命周期。
 """
 
@@ -21,7 +21,7 @@ from .interfaces import (
     ISendEndpoint,
     IServiceHandler,
     IServiceMessageChannel,
-    SessionRequestWrapper,
+    ScopeRequestWrapper,
 )
 from .runtime import IDeployController, NoOpDeployController
 
@@ -34,10 +34,10 @@ class ServiceHandler(IServiceHandler, ISendEndpoint):
     """单个 Pod 的管理者 + 发送端点。
 
     * 实现 :class:`ISendEndpoint`（``send_message`` / ``endpoint_id`` / ``inflight``），
-      供 SessionHandler 跨多端点路由调用；
+      供 ServiceScopeHandler 跨多端点路由调用；
     * 实现 :class:`IServiceHandler`（quota / 生命周期 / idle 钩子），供 ServiceManager 管理 Pod 池；
-    * **不再** 创建或持有 SessionHandler 实例，**不再** 实现 ``handle_message``
-      （消息入口由 SessionRuntimeManager → SessionHandler 承担）。
+    * **不再** 创建或持有 ServiceScopeHandler 实例，**不再** 实现 ``handle_message``
+      （消息入口由 SessionRuntimeManager → ServiceScopeHandler 承担）。
     """
 
     def __init__(
@@ -63,7 +63,7 @@ class ServiceHandler(IServiceHandler, ISendEndpoint):
         self._channel = message_channel
         self._parser = response_parser
         self._deploy: IDeployController = deploy_controller or NoOpDeployController()
-        self._by_request: Dict[str, SessionRequestWrapper] = {}
+        self._by_request: Dict[str, ScopeRequestWrapper] = {}
         self._pod_info: Any = None
         self._closed = False
         # ServiceManager 注入: 每次 inflight 归零后被回调一次, Manager 据此推动到期 session 清理与 service_ttl 计时
@@ -118,7 +118,7 @@ class ServiceHandler(IServiceHandler, ISendEndpoint):
     async def send_message(self, wrapper: SessionRequestWrapper) -> None:
         """ISendEndpoint.send_message：登记在途请求并发通道（不占服务额度）。
 
-        由 SessionHandler 在取得 session 信号量后调用。此处
+        由 ServiceScopeHandler 在取得 session 信号量后调用。此处
         ``await self._channel.send(...)`` 为 ``WSServiceMessageChannel`` 等
         ``IServiceMessageChannel`` 实现的业务上行入口。
         """
@@ -184,7 +184,7 @@ class ServiceHandler(IServiceHandler, ISendEndpoint):
             raise
 
     # 兼容别名：原 invoke_channel 改名为 send_message，保留旧名一个版本便于过渡
-    async def invoke_channel(self, wrapper: SessionRequestWrapper) -> None:
+    async def invoke_channel(self, wrapper: ScopeRequestWrapper) -> None:
         """deprecated 别名，等价于 :meth:`send_message`。"""
         await self.send_message(wrapper)
 
@@ -340,7 +340,7 @@ class ServiceHandler(IServiceHandler, ISendEndpoint):
         """释放该 session 在本实例的预留额度，并取消本实例上该 session 的在途请求。
 
         解耦后取代原 ``remove_session``：只处理 pod-local 状态（quota + 取消），
-        不销毁 SessionHandler 实例（后者由 SessionRegistry 负责）。
+        不销毁 ServiceScopeHandler 实例（后者由 ServiceScopeRegistry 负责）。
 
         Returns:
             1 表示该 session 曾在本实例预留额度（已驱逐）；0 表示未找到（无操作）。
@@ -352,7 +352,7 @@ class ServiceHandler(IServiceHandler, ISendEndpoint):
             w = self._by_request.get(rid)
             if w is None:
                 continue
-            if w.session_request.session_id == session_id and not w.cancel.done():
+            if w.session_request.service_id == session_id and not w.cancel.done():
                 w.cancel.set_result(None)
                 cancelled += 1
         logger.info(

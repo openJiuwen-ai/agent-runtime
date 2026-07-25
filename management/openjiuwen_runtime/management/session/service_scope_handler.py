@@ -3,7 +3,7 @@
 
 """单 session 限流 + 多发送端点路由（与 ServiceHandler 类型解耦）。
 
-SessionHandler 不再引用 ServiceHandler 类型，仅依赖 :class:`ISendEndpoint` 接口。
+ServiceScopeHandler 不再引用 ServiceHandler 类型，仅依赖 :class:`ISendEndpoint` 接口。
 单 Pod 场景持有 1 个端点；多 Pod 场景持有 N 个端点，按「用户亲和 → 最少负载」路由。
 """
 
@@ -14,13 +14,13 @@ from typing import Dict, List, Optional, Set
 
 from openjiuwen_runtime.foundation.log import get_logger
 
-from .interfaces import IResponseParser, ISendEndpoint, ISessionHandler, SessionRequestWrapper
+from .interfaces import IResponseParser, ISendEndpoint, IServiceScopeHandler, ScopeRequestWrapper
 from .router import SessionRouter
 
 logger = get_logger(__name__)
 
 
-class SessionHandler(ISessionHandler):
+class ServiceScopeHandler(IServiceScopeHandler):
     """同 session 内限流 + 多端点路由。
 
     最多 ``session_concurrency`` 路并行，路由策略：用户亲和 → 最少负载。
@@ -29,12 +29,12 @@ class SessionHandler(ISessionHandler):
 
     def __init__(
         self,
-        session_id: str,
+        service_id: str,
         max_parallel: int,
         endpoints: List[ISendEndpoint],
         session_router: SessionRouter,
     ) -> None:
-        self._session_id = session_id
+        self._service_id = service_id
         m = max(1, int(max_parallel))
         self._sem = asyncio.BoundedSemaphore(m)
         self._endpoints: List[ISendEndpoint] = list(endpoints)
@@ -43,13 +43,13 @@ class SessionHandler(ISessionHandler):
         # 用户亲和: user_id -> endpoint_id
         self._user_affinity: Dict[str, str] = {}
         logger.debug(
-            "SessionHandler 构造: session_id=%s max_parallel=%s endpoints=%s",
-            session_id, m, [ep.endpoint_id for ep in self._endpoints],
+            "ServiceScopeHandler 构造: session_id=%s max_parallel=%s endpoints=%s",
+            self._service_id, m, [ep.endpoint_id for ep in self._endpoints],
         )
 
     @property
-    def session_id(self) -> str:
-        return self._session_id
+    def service_id(self) -> str:
+        return self._service_id
 
     @property
     def active_rids(self) -> Set[str]:
@@ -69,14 +69,14 @@ class SessionHandler(ISessionHandler):
         """弹性扩容：追加一个发送端点。"""
         if any(ep.endpoint_id == endpoint.endpoint_id for ep in self._endpoints):
             logger.debug(
-                "SessionHandler 忽略重复 endpoint: session_id=%s endpoint_id=%s",
-                self._session_id, endpoint.endpoint_id,
+                "ServiceScopeHandler 忽略重复 endpoint: session_id=%s endpoint_id=%s",
+                self._service_id, endpoint.endpoint_id,
             )
             return
         self._endpoints.append(endpoint)
         logger.info(
-            "SessionHandler 添加 endpoint: session_id=%s endpoint_id=%s endpoint_count=%s",
-            self._session_id, endpoint.endpoint_id, len(self._endpoints),
+            "ServiceScopeHandler 添加 endpoint: session_id=%s endpoint_id=%s endpoint_count=%s",
+            self._service_id, endpoint.endpoint_id, len(self._endpoints),
         )
 
     def remove_endpoint(self, endpoint_id: str) -> bool:
@@ -87,8 +87,8 @@ class SessionHandler(ISessionHandler):
         """
         if len(self._endpoints) <= 1:
             logger.debug(
-                "SessionHandler 拒绝移除最后一个 endpoint: session_id=%s endpoint_id=%s",
-                self._session_id, endpoint_id,
+                "ServiceScopeHandler 拒绝移除最后一个 endpoint: session_id=%s endpoint_id=%s",
+                self._service_id, endpoint_id,
             )
             return False
         for i, ep in enumerate(self._endpoints):
@@ -100,8 +100,8 @@ class SessionHandler(ISessionHandler):
                     if eid != endpoint_id
                 }
                 logger.info(
-                    "SessionHandler 移除 endpoint: session_id=%s endpoint_id=%s remaining=%s",
-                    self._session_id, endpoint_id, len(self._endpoints),
+                    "ServiceScopeHandler 移除 endpoint: session_id=%s endpoint_id=%s remaining=%s",
+                    self._service_id, endpoint_id, len(self._endpoints),
                 )
                 return True
         return False
@@ -136,7 +136,7 @@ class SessionHandler(ISessionHandler):
 
         return best
 
-    async def handle_message(self, msg: SessionRequestWrapper) -> None:
+    async def handle_message(self, msg: ScopeRequestWrapper) -> None:
         sreq = msg.session_request
         # 会话内并发位：满则在此等待，不阻塞其它 session
         await self._sem.acquire()
@@ -144,7 +144,7 @@ class SessionHandler(ISessionHandler):
         if sreq.request_id:
             rid = sreq.request_id
             self._active_rids.add(rid)
-            await self._session_router.set_request_session(rid, self._session_id)
+            await self._session_router.set_request_session(rid, self._service_id)
 
         user_id = None
         raw = sreq.raw_msg
@@ -159,15 +159,15 @@ class SessionHandler(ISessionHandler):
                 await self._session_router.delete_request_session(rid)
             self._sem.release()
             logger.error(
-                "SessionHandler 无可用 endpoint, 丢弃消息: session_id=%s request_id=%s",
-                self._session_id, rid,
+                "ServiceScopeHandler 无可用 endpoint, 丢弃消息: session_id=%s request_id=%s",
+                self._service_id, rid,
             )
-            raise RuntimeError(f"SessionHandler {self._session_id} 无可用 endpoint")
+            raise RuntimeError(f"ServiceScopeHandler {self._service_id} 无可用 endpoint")
 
         logger.debug(
-            "SessionHandler 已获会话并发: session_id=%s request_id=%s "
+            "ServiceScopeHandler 已获会话并发: session_id=%s request_id=%s "
             "endpoint=%s 活跃rid数=%s",
-            self._session_id, rid, endpoint.endpoint_id, len(self._active_rids),
+            self._service_id, rid, endpoint.endpoint_id, len(self._active_rids),
         )
         try:
             await endpoint.send_message(msg)
@@ -177,6 +177,6 @@ class SessionHandler(ISessionHandler):
                 await self._session_router.delete_request_session(rid)
             self._sem.release()
             logger.debug(
-                "SessionHandler 释放会话并发: session_id=%s request_id=%s endpoint=%s",
-                self._session_id, rid, endpoint.endpoint_id,
+                "ServiceScopeHandler 释放会话并发: session_id=%s request_id=%s endpoint=%s",
+                self._service_id, rid, endpoint.endpoint_id,
             )
