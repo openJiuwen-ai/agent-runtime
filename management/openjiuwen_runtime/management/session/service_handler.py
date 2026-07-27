@@ -115,7 +115,7 @@ class ServiceHandler(IServiceHandler, ISendEndpoint):
         """ISendEndpoint.is_routable：接收侧死亡后置 False，重连成功后恢复 True。"""
         return self._routable
 
-    async def send_message(self, wrapper: SessionRequestWrapper) -> None:
+    async def send_message(self, wrapper: ScopeRequestWrapper) -> None:
         """ISendEndpoint.send_message：登记在途请求并发通道（不占服务额度）。
 
         由 ServiceScopeHandler 在取得 session 信号量后调用。此处
