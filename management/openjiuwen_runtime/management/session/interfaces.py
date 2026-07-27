@@ -278,7 +278,7 @@ class ISendEndpoint(Protocol):
         """端点是否可参与路由; 接收侧死亡后置 False, 重连成功后恢复 True。"""
         ...
 
-    async def send_message(self, wrapper: SessionRequestWrapper) -> None:
+    async def send_message(self, wrapper: ScopeRequestWrapper) -> None:
         """发送请求并追踪完成。SessionHandler 在获取信号量后调用此方法。"""
         ...
 
