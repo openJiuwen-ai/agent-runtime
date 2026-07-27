@@ -278,12 +278,67 @@ def test_build_va_message_packs_target_for_workflow_routing():
     }
 
 
-def test_a2a_message_target_routes_to_va_workflow_adapter(tmp_path):
-    va_root = Path(__file__).resolve().parents[3] / "versatile_adapter"
-    if str(va_root) not in sys.path:
-        sys.path.insert(0, str(va_root))
-
+def _load_versatile_runner():
+    """加载 VersatileAdapterRunner，用 append 避免模块重名风险。"""
+    va_root = str(Path(__file__).resolve().parents[3] / "versatile_adapter")
+    if va_root not in sys.path:
+        sys.path.append(va_root)
     from dispatcher.runner import VersatileAdapterRunner
+    return VersatileAdapterRunner
+
+
+def test_a2a_message_target_routes_to_a2a_gateway_adapter(tmp_path):
+    """VA_WORKFLOW_ADAPTER_TYPE=a2a_gateway（默认）时，type: a2a_gateway 的 adapter 能被路由匹配。"""
+    runner_cls = _load_versatile_runner()
+
+    config_path = tmp_path / "versatile_proxy.yaml"
+    config_path.write_text(
+        """
+adapters:
+  - name: default_controller
+    type: controller
+    url_template: "http://mock-host/v1/agents/agent-a/conversations/{conversation_id}"
+  - name: wf_wealth
+    type: a2a_gateway
+    a2a_gateway_base: "https://a2a-gateway.example.com"
+    agent_card_name: "WealthAgent"
+    url_template: "{a2a_gateway_base}/a2a/{agent_card_name}"
+    workflow_id: wf_wealth
+    intent: "理财推荐"
+""",
+        encoding="utf-8",
+    )
+    executor = _make_executor_with_va_stream([])
+    request = executor._test_remote_handler._build_va_message(
+        _VaRequestPayload(
+            query="查理财",
+            headers={},
+            body={"custom_data": {}},
+            params={},
+            conv_id=CONV_ID,
+            target={
+                "type": "workflow",
+                "intent": "理财推荐",
+                "workflow_id": "wf_wealth",
+            },
+        )
+    )
+
+    data_part = next(p for p in request.message.parts if p.WhichOneof("content") == "data")
+    target = MessageToDict(data_part.data)["target"]
+    runner = runner_cls(config_path=config_path)
+    cfg = runner._match_workflow(target)
+
+    assert cfg is not None
+    assert cfg.name == "wf_wealth"
+
+
+def test_a2a_message_target_routes_to_workflow_adapter(tmp_path, monkeypatch):
+    """VA_WORKFLOW_ADAPTER_TYPE=workflow 时，type: workflow 的 adapter 能被路由匹配。"""
+    runner_cls = _load_versatile_runner()
+
+    # VA_WORKFLOW_ADAPTER_TYPE 默认 a2a_gateway，测试 workflow 模式时改成 workflow
+    monkeypatch.setenv("VA_WORKFLOW_ADAPTER_TYPE", "workflow")
 
     config_path = tmp_path / "versatile_proxy.yaml"
     config_path.write_text(
@@ -318,7 +373,7 @@ adapters:
 
     data_part = next(p for p in request.message.parts if p.WhichOneof("content") == "data")
     target = MessageToDict(data_part.data)["target"]
-    runner = VersatileAdapterRunner(config_path=config_path)
+    runner = runner_cls(config_path=config_path)
     cfg = runner._match_workflow(target)
 
     assert cfg is not None
@@ -695,8 +750,14 @@ async def test_va_error_event_enqueues_failed_status_with_message(monkeypatch):
     va_events = [_va_failed()]
     executor, _task, _task_store = _make_executor_with_real_task(va_events)
 
+    call_count = [0]
+
     async def fake_agent_stream(**kwargs):
-        yield DelegateRequest(intent="查", task_description="查")
+        call_count[0] += 1
+        if call_count[0] == 1:
+            yield DelegateRequest(intent="查", task_description="查")
+        else:
+            yield ConversationEndEvent()
 
     monkeypatch.setattr("orchestrator.executor.agent_stream", fake_agent_stream)
 
@@ -760,8 +821,14 @@ async def test_va_failed_event_with_plain_text_error_is_forwarded(monkeypatch):
     event.status.message.CopyFrom(message)
     executor, _task, _task_store = _make_executor_with_real_task([event])
 
+    call_count = [0]
+
     async def fake_agent_stream(**kwargs):
-        yield DelegateRequest(intent="查", task_description="查")
+        call_count[0] += 1
+        if call_count[0] == 1:
+            yield DelegateRequest(intent="查", task_description="查")
+        else:
+            yield ConversationEndEvent()
 
     monkeypatch.setattr("orchestrator.executor.agent_stream", fake_agent_stream)
 
@@ -789,8 +856,14 @@ async def test_va_failed_event_without_payload_falls_back_to_generic_message(mon
     va_events = [_va_failed_event(error_payload=None)]
     executor, _task, _task_store = _make_executor_with_real_task(va_events)
 
+    call_count = [0]
+
     async def fake_agent_stream(**kwargs):
-        yield DelegateRequest(intent="查", task_description="查")
+        call_count[0] += 1
+        if call_count[0] == 1:
+            yield DelegateRequest(intent="查", task_description="查")
+        else:
+            yield ConversationEndEvent()
 
     monkeypatch.setattr("orchestrator.executor.agent_stream", fake_agent_stream)
 
@@ -817,8 +890,8 @@ async def test_va_failed_event_without_payload_falls_back_to_generic_message(mon
 
 
 @pytest.mark.asyncio
-async def test_va_failed_event_does_not_trigger_cascade(monkeypatch):
-    """VA FAILED 不应被当成成功完成 → 不该触发 cascade 续轮。"""
+async def test_va_failed_event_triggers_downgrade_reply(monkeypatch):
+    """VA FAILED 现在会触发降级回复（agent_stream 被调用第二次）。"""
     va_events = [_va_failed_event({"code": "103104", "message": "错"})]
     executor, _task, _task_store = _make_executor_with_real_task(va_events)
 
@@ -826,7 +899,10 @@ async def test_va_failed_event_does_not_trigger_cascade(monkeypatch):
 
     async def fake_agent_stream(**kwargs):
         call_count[0] += 1
-        yield DelegateRequest(intent="查", task_description="查")
+        if call_count[0] == 1:
+            yield DelegateRequest(intent="查", task_description="查")
+        else:
+            yield ConversationEndEvent()
 
     monkeypatch.setattr("orchestrator.executor.agent_stream", fake_agent_stream)
 
@@ -838,4 +914,4 @@ async def test_va_failed_event_does_not_trigger_cascade(monkeypatch):
         cascade_result=None,
     )
 
-    assert call_count[0] == 1, "VA FAILED 路径不应触发 cascade（agent_stream 不应被调用第二次）"
+    assert call_count[0] == 2, "VA FAILED 现在会触发降级回复（agent_stream 被调用第二次）"

@@ -309,6 +309,7 @@ class A2aVersatileExecutor(AgentExecutor):
         return {
             "trace_id": input_data.get("trace_id", ""),
             "conv_id": conv_id,
+            "agent_id": input_data.get("agent_id", ""),            
         }
 
     @staticmethod

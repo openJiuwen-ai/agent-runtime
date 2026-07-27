@@ -124,7 +124,7 @@ class TaskStateManager:
 
     async def finalize_completed(self, task_id: str, call_context: Any = None) -> None:
         task = await self.get_task(task_id, call_context)
-        if task and task.get("status_state") != "COMPLETED":
+        if task and task.get("status_state") not in ("COMPLETED", "FAILED"):
             task["status_state"] = "COMPLETED"
             await self.save_task(task_id, task, call_context)
             logger.debug(f"[Executor] Task 标记 COMPLETED：task={task_id}")
