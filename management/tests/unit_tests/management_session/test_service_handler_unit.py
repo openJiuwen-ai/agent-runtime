@@ -3,7 +3,7 @@
 
 import asyncio
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Optional, cast
+from typing import Any, Awaitable, Callable, Optional
 
 import pytest
 
@@ -32,6 +32,34 @@ class _P(IResponseParser):
         return data.get("t", data)
 
 
+class _Raw(IRequest):
+    """最小 IRequest 实现：携带 chat_session 标识（session_id）。"""
+
+    def __init__(self, session_id: str = "cs1", request_id: str = "r1") -> None:
+        self._session_id = session_id
+        self._request_id = request_id
+
+    @property
+    def request_id(self) -> Optional[str]:
+        return self._request_id
+
+    @property
+    def chat_id(self) -> Optional[str]:
+        return None
+
+    @property
+    def user_id(self) -> Optional[str]:
+        return None
+
+    @property
+    def bot_id(self) -> Optional[str]:
+        return None
+
+    @property
+    def session_id(self) -> Optional[str]:
+        return self._session_id
+
+
 class _Ch:
     def __init__(self) -> None:
         self.calls = 0
@@ -55,13 +83,13 @@ class _Ch:
         await on_request_complete(rid)
 
 
-def _sreq() -> ISessionRequest:
+def _sreq(session_id: str = "cs1") -> ISessionRequest:
     return SessionRequest(
         service_id="s1",
         concurrency=1,
         ttl=0,
         request_id="r1",
-        raw=cast(IRequest, object()),
+        raw=_Raw(session_id=session_id),
     )
 
 
@@ -80,10 +108,11 @@ async def test_one_inflight_decrements() -> None:
     assert h.available_concurrency == 1
     assert h.try_reserve_session_quota("s1", 1)
     assert h.available_concurrency == 0
-    # 消息经 ServiceScopeHandler（持有 [h] 作为 endpoint）路由到 ServiceHandler.send_message
-    sh = ServiceScopeHandler("s1", 1, [h], SessionRouter())
+    # ServiceScopeHandler 持有 [h] 作为 endpoint；chat_session cs1 绑定到 h 后发送
+    sh = ServiceScopeHandler("s1", 1, [h], SessionRouter(), reserve_per_pod=1)
+    sh.bind("cs1", h.id)
     w = ScopeRequestWrapper(
-        _sreq(), asyncio.Queue(), asyncio.get_running_loop().create_future()
+        _sreq(session_id="cs1"), asyncio.Queue(), asyncio.get_running_loop().create_future()
     )
     await sh.handle_message(w)
     assert h.inflight_requests == 0

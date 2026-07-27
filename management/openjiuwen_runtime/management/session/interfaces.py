@@ -84,6 +84,12 @@ class ISessionRequest(PriorityMessage):
 
     @property
     @abstractmethod
+    def session_id(self) -> Optional[str]:
+        """chat_session 标识（page session 或 IM 聊天会话），用于亲和路由。"""
+        pass
+
+    @property
+    @abstractmethod
     def session_concurrency(self) -> int:
         pass
 
@@ -421,4 +427,34 @@ class IServiceHandler(ABC):
 class IServiceScopeHandler(ABC):
     @abstractmethod
     async def handle_message(self, msg: "ScopeRequestWrapper") -> None:
-        pass
+        """向已绑定的端点发送请求（chat_session 亲和解析 + active 追踪）。
+
+        端点选择与并发位（semaphore）由编排层在调用前后完成（``acquire`` / ``pick_or_bind`` / ``bind``）。
+        """
+
+    @abstractmethod
+    async def acquire(self) -> None:
+        """获取 scope 并发位（活跃 chat_session 闸门）；满则在此阻塞。"""
+
+    @abstractmethod
+    def release(self) -> None:
+        """释放 scope 并发位（与 :meth:`acquire` 配对）。"""
+
+    @abstractmethod
+    def pick_or_bind(self, chat_session_id: Optional[str]) -> Optional["ISendEndpoint"]:
+        """选择端点：亲和端点（可路由）→ 首个 ``inflight<reserve_per_pod`` 的可路由端点（并绑定）。
+
+        都满 / 无端点 → 返回 ``None``（编排层据此触发扩容）。
+        """
+
+    @abstractmethod
+    def bind(self, chat_session_id: str, endpoint_id: str) -> None:
+        """记录 chat_session → endpoint_id 亲和（幂等）。"""
+
+    @abstractmethod
+    def unbind(self, chat_session_id: str) -> Optional[str]:
+        """解除 chat_session 亲和；返回其原先所在 endpoint_id（供调用方判空），无则 ``None``。"""
+
+    @abstractmethod
+    def is_empty(self) -> bool:
+        """无绑定 chat_session 且无端点（可从 registry 移除）。"""

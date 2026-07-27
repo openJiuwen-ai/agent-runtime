@@ -33,6 +33,12 @@ class SessionRequest(ISessionRequest):
         return self._service_id
 
     @property
+    def session_id(self) -> Optional[str]:
+        # chat_session 亲和标识：优先 raw.session_id，回退 user_id（与编排层兜底一致）
+        raw = self._raw
+        return getattr(raw, "session_id", None) or getattr(raw, "user_id", None)
+
+    @property
     def session_concurrency(self) -> int:
         return self._concurrency
 

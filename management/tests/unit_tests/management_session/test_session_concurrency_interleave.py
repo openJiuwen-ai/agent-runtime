@@ -1,13 +1,13 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
-"""同一 ServiceHandler 上多 session 交错并发：session 内限流，不阻塞其他 session。"""
+"""同一 ServiceHandler 上多 chat_session 交错并发：scope 内 semaphore 限流，不阻塞其他 scope。"""
 
 from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Optional, cast
+from typing import Any, Awaitable, Callable, Optional
 
 import pytest
 
@@ -36,8 +36,35 @@ class _P(IResponseParser):
         return data.get("t", data)
 
 
+class _Raw(IRequest):
+    """最小 IRequest 实现：携带 chat_session 标识（session_id）。"""
+
+    def __init__(self, session_id: str) -> None:
+        self._session_id = session_id
+
+    @property
+    def request_id(self) -> Optional[str]:
+        return None
+
+    @property
+    def chat_id(self) -> Optional[str]:
+        return None
+
+    @property
+    def user_id(self) -> Optional[str]:
+        return None
+
+    @property
+    def bot_id(self) -> Optional[str]:
+        return None
+
+    @property
+    def session_id(self) -> Optional[str]:
+        return self._session_id
+
+
 class HoldChannel:
-    """记录已进入 send 的请求（session 维），在 gate 释放前保持阻塞，用于观测并发。"""
+    """记录已进入 send 的请求，在 gate 释放前保持阻塞，用于观测并发。"""
 
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
@@ -75,14 +102,14 @@ class HoldChannel:
 
 
 def _wrap(
-    session_id: str, rid: str, cap: int, loop: asyncio.AbstractEventLoop
+    service_id: str, chat_session_id: str, rid: str, cap: int, loop: asyncio.AbstractEventLoop
 ) -> ScopeRequestWrapper:
     sreq: ISessionRequest = SessionRequest(
-        service_id=session_id,
+        service_id=service_id,
         concurrency=cap,
         ttl=0,
         request_id=rid,
-        raw=cast(IRequest, object()),
+        raw=_Raw(session_id=chat_session_id),
     )
     return ScopeRequestWrapper(sreq, asyncio.Queue(), loop.create_future())
 
@@ -90,8 +117,8 @@ def _wrap(
 @pytest.mark.asyncio
 async def test_session_cap_interleaves_other_sessions() -> None:
     """
-    11 条 s1、9 条 s2 同时进入：s1 并发度 10，故仅 10 条进入 send；
-    第 11 条在 session 层阻塞，s2 的 9 条仍可占满服务并发，共 19 条在 send 内等待 gate。
+    11 个 chat_session 打到 sh1（并发度 10）、9 个打到 sh2：各自 semaphore(10) 限流，
+    sh1 仅 10 个进入 send、第 11 个在 acquire 阻塞；sh2 的 9 个全部进入。共 19 个在 send 等待 gate。
     """
     ch = HoldChannel()
     p = _P()
@@ -104,19 +131,26 @@ async def test_session_cap_interleaves_other_sessions() -> None:
     )
     loop = asyncio.get_running_loop()
     cap = 10
-    # 解耦后：每 session 一个 ServiceScopeHandler（持有 [h] 作为 endpoint），各自 semaphore(cap)
     router = SessionRouter()
     assert h.try_reserve_session_quota("sess1", cap)
     assert h.try_reserve_session_quota("sess2", cap)
-    sh1 = ServiceScopeHandler("sess1", cap, [h], router)
-    sh2 = ServiceScopeHandler("sess2", cap, [h], router)
+    sh1 = ServiceScopeHandler("sess1", cap, [h], router, reserve_per_pod=cap)
+    sh2 = ServiceScopeHandler("sess2", cap, [h], router, reserve_per_pod=cap)
+
+    async def run(sh: ServiceScopeHandler, service_id: str, chat_session_id: str, rid: str) -> None:
+        # chat_session 先绑定到 h，再在 semaphore 保护下发送
+        sh.bind(chat_session_id, h.id)
+        await sh.acquire()
+        try:
+            await sh.handle_message(_wrap(service_id, chat_session_id, rid, cap, loop))
+        finally:
+            sh.release()
+
     tasks = []
     for i in range(11):
-        w = _wrap("sess1", f"s1-r{i}", cap, loop)
-        tasks.append(asyncio.create_task(sh1.handle_message(w)))
+        tasks.append(asyncio.create_task(run(sh1, "sess1", f"sess1-cs{i}", f"s1-r{i}")))
     for j in range(9):
-        w = _wrap("sess2", f"s2-r{j}", cap, loop)
-        tasks.append(asyncio.create_task(sh2.handle_message(w)))
+        tasks.append(asyncio.create_task(run(sh2, "sess2", f"sess2-cs{j}", f"s2-r{j}")))
     for _ in range(200):
         if ch.in_send == 19:
             break
