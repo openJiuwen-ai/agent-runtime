@@ -369,6 +369,34 @@ class IServiceHandler(ABC):
         """默认无实现；`ServiceHandler` 会注入，供无业务时按 `service_ttl` 转入 idle 池。"""
         return
 
+    def set_unhealthy_hook(
+            self, hook: Optional[Callable[[str, str], Awaitable[None]]]
+    ) -> None:
+        """默认无实现; ``ServiceHandler`` 会注入, 供 WSS 接收侧死亡后重连探测失败时
+        通知 ServiceManager 把本实例从池中摘除并删除底层 Pod, 让下一条消息路由到
+        其他健康 Pod (典型场景: agentserver event loop 被同步 tool 堵死,
+        WSS keepalive ping timeout 后无法恢复)。
+
+        约定 hook 签名: ``async def hook(service_id: str, reason: str) -> None``。
+        """
+        return
+
+    @property
+    def is_routable(self) -> bool:
+        """端点是否可参与路由; 接收侧死亡后置 False, 重连成功后恢复 True。
+        默认 True; ``ServiceHandler`` 会覆盖。"""
+        return True
+
+    async def on_receive_loop_died(self, reason: str) -> None:
+        """WSS 接收循环异常退出时回调: ServiceHandler 实现: 失败在飞请求 + 摘路由 + 重连探测。
+        1. 给所有在飞请求的 response_queue 写入 error chunk, 让 Access 立即拿到失败
+           而非等待 message_timeout 超时;
+        2. 置 ``is_routable = False``, 让路由层暂时跳过本端点, 新请求打到其他健康 Pod;
+        3. 后台一次性重连探测: 成功恢复 ``is_routable = True``; 失败触发
+           ``_unhealthy_hook`` → ``force_evict_unhealthy_service`` 删 Pod。
+        """
+        return
+
 
 class ISessionHandler(ABC):
     @abstractmethod

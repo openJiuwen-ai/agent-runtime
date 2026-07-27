@@ -329,10 +329,20 @@ class Access(IAccess):
                     to = self._config.message_timeout if self._config else 600
                     data = await asyncio.wait_for(response_queue.get(), timeout=to)
                 except asyncio.TimeoutError:
-                    # 等响应超时：结束迭代（业务上视为挂起/失败，由调用方处理）
+                    # 等响应超时: yield 一个 error chunk 给上游, 否则前端只能看到流静默结束。
+                    # 注意: 不能只 put 到 response_queue 后 break —— 此时 wait_for 已抛 TimeoutError
+                    # 退出, 没人再 get 这个 queue, chunk 会丢失。必须直接 yield。
                     logger.error(
                         "Access 等待下游响应超时: request_id=%s timeout=%s", rid, to
                     )
+                    try:
+                        chunk = self._build_timeout_error_chunk(session_request, rid, to)
+                        yield self._response_parser.response(chunk)
+                    except Exception as put_err:  # noqa: BLE001
+                        logger.error(
+                            "Access 超时 yield error chunk 失败: request_id=%s err=%s",
+                            rid, put_err, exc_info=True,
+                        )
                     break
                 logger.debug("Access 收到流式分片, request_id=%s", rid)
                 yield self._response_parser.response(data)
@@ -352,3 +362,35 @@ class Access(IAccess):
                 cleaned = await current_sm.try_cleanup_if_idle()
                 if cleaned:
                     logger.info("老化的 ServiceManager 已成功清理")
+
+    async def _put_timeout_error_chunk(
+            self,
+            response_queue: asyncio.Queue[Any],
+            session_request: ISessionRequest,
+            rid: str,
+            timeout: int,
+    ) -> None:
+        """写入一个超时 error chunk, 让前端立即拿到失败而非流静默结束。"""
+        chunk = self._build_timeout_error_chunk(session_request, rid, timeout)
+        await response_queue.put(chunk)
+
+    @staticmethod
+    def _build_timeout_error_chunk(
+            session_request: ISessionRequest,
+            rid: str,
+            timeout: int,
+    ) -> dict[str, Any]:
+        """构造一个超时 error chunk。
+
+        供 Access 等待下游响应超时时直接 ``yield`` 给上游, 避免前端只看到流静默结束。
+        """
+        channel_id = str(session_request.channel_id or "")
+        return {
+            "request_id": rid,
+            "channel_id": channel_id,
+            "is_complete": True,
+            "payload": {
+                "error": f"下游响应超时({timeout}s)",
+                "message": f"下游响应超时({timeout}s)",
+            },
+        }
