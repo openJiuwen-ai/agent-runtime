@@ -7,6 +7,8 @@ import json
 from datetime import datetime, timedelta
 from typing import Any, Optional, Protocol
 
+from sqlalchemy.exc import IntegrityError
+
 from openjiuwen_runtime.foundation.log import get_logger
 from .data_store import DataRecord, DataStore
 
@@ -117,10 +119,14 @@ class DbDataStore(DataStore):
             )
             logger.debug("[DbDataStore] write_insert namespace=%s key=%s", namespace, key)
             return
-        except Exception as e:
+        except IntegrityError as e:
             logger.debug("[DbDataStore] create_failed fallback to update: %s", e)
 
         existing = await self._db.get(self._table, filters)
+        if existing is None:
+            raise RuntimeError(
+                f"[DbDataStore] write_failed: record not found for update, namespace={namespace} key={key}"
+            )
         current = existing.to_dict() if hasattr(existing, "to_dict") else {}
         await self._db.update(
             self._table,
