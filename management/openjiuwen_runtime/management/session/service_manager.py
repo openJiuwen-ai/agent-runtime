@@ -802,6 +802,9 @@ class ServiceManager(IServiceManager):
             logger.error("创建服务实例失败 (factory): %s", e, exc_info=True)
             return None
         h.set_idle_pool_transition_hook(self._on_in_use_may_move_to_idle_pool)
+        # 注入 unhealthy hook; ServiceHandler.on_receive_loop_died 重连探测失败时回调,
+        # Manager 据此把本实例从池中摘除 + delete pod, 让后续消息路由到其他健康 Pod。
+        h.set_unhealthy_hook(self.force_evict_unhealthy_service)
         async with self._lock:
             self._deploying.add(h)
         try:
@@ -1029,6 +1032,95 @@ class ServiceManager(IServiceManager):
         if evicted:
             asyncio.get_running_loop().create_task(
                 self._safe_delete_handler(h)
+            )
+
+    # ==================== 不健康 Pod 主动摘除（重连探测失败时触发）====================
+
+    async def force_evict_unhealthy_service(
+            self, service_id: str, reason: str
+    ) -> None:
+        """主动摘除一个不健康的 ServiceHandler（由 ServiceHandler.on_receive_loop_died
+        重连探测失败时回调）。
+
+        与 ``_cleanup_dead_pods`` 的差异: 此处不依赖 K8s Pod 状态轮询, 而是由业务
+        通道异常（WSS 接收侧死亡后重连探测失败）直接触发; 适用于 agentserver event
+        loop 被同步 tool 堵死、WSS keepalive ping timeout 后无法恢复等场景。
+
+        流程 (与 ``_cleanup_dead_pods`` 一致, 复用同一套池/计时器/session 侧清理逻辑):
+        1. 锁内把 service_id 对应的 handler 从 in_use / idle 池摘除, 加入
+           ``_deleting_services`` 防止 stop/监控/缩容并发二次 delete;
+        2. 调 ``_service_router.delete_service_sessions`` 删除该 service 上所有
+           session 亲和映射, ``h.remove_session`` 归还并发并取消 in-flight rid;
+        3. 取消该实例上所有 session TTL 计时;
+        4. ``h.delete()``: 先关 WSS 长连接, 再 K8s delete pod; Deployment/ReplicaSet
+           会自动拉起新 pod, autoscale loop 会感知并加入 in_use 池;
+        5. 释放 ``_deleting_services`` 占位。
+
+        幂等: 若 service_id 已在 ``_deleting_services`` 中, 直接返回。
+        """
+        h_to_delete: Optional[IServiceHandler] = None
+        session_ids_to_clean: list[str] = []
+        async with self._lock:
+            if service_id in self._deleting_services:
+                logger.info(
+                    "跳过 force_evict: 实例已在删除中 service_id=%s", service_id,
+                )
+                return
+            # _find_service_handler 是同步方法, 不获取锁, 可在已持锁时调用
+            h = self._find_service_handler(service_id)
+            if h is None:
+                logger.info(
+                    "force_evict 未找到实例 (可能已被其他路径清理): service_id=%s",
+                    service_id,
+                )
+                return
+            self._deleting_services.add(service_id)
+            removed_in_use, removed_idle = self._remove_service_from_core_pools(service_id)
+            self._to_idle_timer_armed.discard(service_id)
+            self._excess_idle_timer_armed.discard(service_id)
+            logger.warning(
+                "不健康 Pod 主动摘除: service_id=%s reason=%s "
+                "removed_from_in_use=%s removed_from_idle=%s",
+                service_id, reason, removed_in_use, removed_idle,
+            )
+            h_to_delete = h
+            # 删除该 service 上所有 session 亲和映射; 与 open_session_ids 取并集,
+            # 兼容仅预留额度、尚未创建 SessionHandler 的 sticky
+            router_session_ids = await self._service_router.delete_service_sessions(service_id)
+            reserved = getattr(h, "_session_reserved", None)
+            sid_set: set[str] = set(h.open_session_ids())
+            if isinstance(reserved, dict):
+                sid_set.update(reserved.keys())
+            session_ids_to_clean = sorted(sid_set | set(router_session_ids))
+            for sid in session_ids_to_clean:
+                self._pending_expired_sessions.pop(sid, None)
+                try:
+                    await h.remove_session(sid)
+                except Exception as e:  # noqa: BLE001
+                    logger.error(
+                        "force_evict 移除 session 失败(忽略): service_id=%s session_id=%s err=%s",
+                        service_id, sid, e, exc_info=True,
+                    )
+
+        # 锁外: 取消 TTL 计时 + delete pod, 避免与 ServiceHandler.on_receive_loop_died
+        # 持锁调用形成死锁
+        if h_to_delete is not None:
+            for sid in session_ids_to_clean:
+                await self._timer.cancel_timer(f"sess:{sid}")
+            await self._cancel_in_use_to_idle_timer(service_id)
+            await self._cancel_excess_idle_timer(service_id)
+            try:
+                await h_to_delete.delete()
+            except Exception as e:  # noqa: BLE001
+                logger.error(
+                    "force_evict delete 失败: service_id=%s err=%s",
+                    service_id, e, exc_info=True,
+                )
+            finally:
+                async with self._lock:
+                    self._deleting_services.discard(service_id)
+            logger.warning(
+                "不健康 Pod 已完成摘除+delete: service_id=%s", service_id,
             )
 
     def _find_service_handler(self, service_id: str) -> Optional[IServiceHandler]:
@@ -1330,7 +1422,11 @@ class ServiceManager(IServiceManager):
     async def _pick_existing_locked(
         self, sreq, need: int, template_id: Optional[str]
     ) -> Optional[IServiceHandler]:  # noqa: ANN001
-        """在池中亲和或选实例。调用方须持有 self._lock。不 deploy。"""
+        """在池中亲和或选实例。调用方须持有 self._lock。不 deploy。
+
+        跳过 ``is_routable=False`` 的实例(接收侧已死亡、暂时摘路由), 避免选到 event
+        loop 被堵死但 K8s phase 仍 Running 的 Pod。
+        """
         session_id = sreq.session_id
 
         # 1) 亲和：该 session 已绑定到某 service，则复用
@@ -1357,6 +1453,14 @@ class ServiceManager(IServiceManager):
                 logger.debug(
                     "亲和失效: 路由表有记录但池无此实例, 已删映射 session_id=%s", session_id
                 )
+            elif not getattr(h, "is_routable", True):
+                # 亲和实例接收侧已死亡, 暂时摘除路由: 删亲和映射走选池/扩容, 让本条
+                # 请求路由到其他健康 Pod; 接收侧死亡的实例由后台重连探测决定去留。
+                await self._service_router.delete_session_service(session_id)
+                logger.info(
+                    "亲和实例接收侧已死亡, 摘除路由: session_id=%s service_id=%s",
+                    session_id, h.id,
+                )
             else:
                 # 从 idle 移到 in_use
                 if found_template_id is not None:
@@ -1377,9 +1481,11 @@ class ServiceManager(IServiceManager):
                 return h
 
         # 2) 新 session：在相同 template_id 组的 in_use/idle 中找实例
-        # 先在 in_use 池中查找
+        # 先在 in_use 池中查找（跳过接收侧已死亡/不可路由的实例）
         in_use_pool = self._in_use.get(template_id, {})
         for h in in_use_pool.values():
+            if not getattr(h, "is_routable", True):
+                continue
             if h.available_concurrency >= need:
                 logger.debug(
                     "选用 in_use 实例 (template_id=%s): service_id=%s avail=%s",
@@ -1390,6 +1496,8 @@ class ServiceManager(IServiceManager):
         # 再在 idle 池中查找
         idle_pool = self._idle.get(template_id, {})
         for h in list(idle_pool.values()):
+            if not getattr(h, "is_routable", True):
+                continue
             if h.available_concurrency >= need:
                 idle_pool.pop(h.id, None)
                 self._in_use.setdefault(template_id, {})[h.id] = h

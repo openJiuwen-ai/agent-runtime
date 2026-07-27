@@ -65,6 +65,15 @@ class ServiceHandler(IServiceHandler):
         self._closed = False
         # ServiceManager 注入: 每次 inflight 归零后被回调一次, Manager 据此推动到期 session 清理与 service_ttl 计时
         self._idle_pool_hook: Optional[Callable[[str], Awaitable[None]]] = None
+        # ServiceManager 注入: WSS 接收侧死亡后重连探测失败时回调,
+        # Manager 据此把本实例从 in_use / idle 池摘除 + 删除底层 Pod,
+        # 让下一条消息路由到其他健康 Pod (典型场景: agentserver event loop 被同步 tool 堵死,
+        # WSS keepalive ping timeout 后无法恢复)。
+        self._unhealthy_hook: Optional[Callable[[str, str], Awaitable[None]]] = None
+        # 接收侧死亡后置 False, 让 _pick_existing_locked 跳过本端点; 重连成功后恢复 True
+        self._routable: bool = True
+        # 后台一次性重连探测任务; 防止并发触发多次探测
+        self._reconnect_task: Optional[asyncio.Task[None]] = None
         # WebSocket 等通道在绑定后可拿到本实例与 IResponseParser，供接收循环多路分片
         if hasattr(self._channel, "bind_handler"):
             self._channel.bind_handler(self, self._parser)  # type: ignore[union-attr]
@@ -111,6 +120,11 @@ class ServiceHandler(IServiceHandler):
     def inflight_requests(self) -> int:
         return self._inflight
 
+    @property
+    def is_routable(self) -> bool:
+        """端点是否可参与路由; 接收侧死亡后置 False, 重连成功后恢复 True。"""
+        return self._routable
+
     def try_reserve_session_quota(self, session_id: str, quota: int) -> bool:
         """为尚未预留的 session 占用服务额度；已预留则幂等成功。非 async，供 ServiceManager 持锁调用。"""
         if session_id in self._session_reserved:
@@ -144,6 +158,108 @@ class ServiceHandler(IServiceHandler):
             hook: 回调函数，接收 service_id 参数。
         """
         self._idle_pool_hook = hook
+
+    def set_unhealthy_hook(
+            self, hook: Optional[Callable[[str, str], Awaitable[None]]]
+    ) -> None:
+        """设置不健康通知钩子（由 ServiceManager 调用，重连探测失败时回调一次）。
+
+        约定 hook 签名: ``async def hook(service_id: str, reason: str) -> None``。
+        ServiceManager 在收到回调后, 会把本实例从 in_use / idle 池摘除、删除该
+        实例上所有 session 亲和映射、并 delete 底层 pod, 让后续消息路由到其他
+        健康 Pod。
+        """
+        self._unhealthy_hook = hook
+
+    async def on_receive_loop_died(self, reason: str) -> None:
+        """WSS 接收循环异常退出时由 ``WSServiceMessageChannel._recv_loop`` 回调:
+        1. 给所有在飞请求的 ``response_queue`` 写入 error chunk, 让 Access 立即拿到失败
+           而非等待 ``message_timeout`` 超时;
+        2. 置 ``is_routable = False``, 让路由层暂时跳过本端点, 新请求打到其他健康 Pod;
+        3. 后台启动一次性重连探测 (复用原有 ``ensure_connected``):
+           - 成功 → 恢复 ``is_routable = True`` (重新加入路由);
+           - 失败 → 调 ``_unhealthy_hook`` 触发 ``force_evict_unhealthy_service`` 删 Pod。
+        """
+        if self._closed:
+            return
+        try:
+            await self._fail_inflight_requests(reason)
+        except Exception as e:  # noqa: BLE001
+            logger.error("fail_inflight_requests 失败: service_id=%s err=%s", self._id, e, exc_info=True)
+        if not self._routable:
+            return
+        self._routable = False
+        logger.warning(
+            "接收侧死亡, 暂时摘除路由: service_id=%s reason=%s",
+            self._id, reason,
+        )
+        if (self._reconnect_task is None or self._reconnect_task.done()) and not self._closed:
+            self._reconnect_task = asyncio.get_running_loop().create_task(
+                self._reconnect_or_evict(reason), name=f"wss-reconnect:{self._id}"
+            )
+
+    async def _fail_inflight_requests(self, reason: str) -> None:
+        """给所有在飞请求的 response_queue 写入一个 error chunk 并唤醒 send 协程。
+
+        复合条件: 仅当 ``wrapper.cancel`` 尚未完成时才写, 避免对已正常结束的请求
+        重复下发。先写 error chunk 再 ``cancel.set_result``, 让 Access 在收到
+        error chunk 后由 ``is_completed`` 终止迭代, 同时唤醒 ``await wrapper.cancel``
+        的 send 协程走 ``on_request_complete`` 归还并发。
+        """
+        rids = list(self._by_request.keys())
+        failed = 0
+        for rid in rids:
+            w = self._by_request.get(rid)
+            if w is None or w.cancel.done():
+                continue
+            sreq = w.session_request
+            channel_id = str(sreq.channel_id or "")
+            try:
+                await w.response_queue.put(
+                    {
+                        "request_id": rid,
+                        "channel_id": channel_id,
+                        "is_complete": True,
+                        "payload": {
+                            "error": f"下游通道已断开: {reason}",
+                            "message": f"下游通道已断开: {reason}",
+                        },
+                    }
+                )
+                if w.cancel and not w.cancel.done():
+                    w.cancel.set_result(None)
+                failed += 1
+            except Exception as e:  # noqa: BLE001
+                logger.error("fail_inflight 单请求失败: service_id=%s rid=%s err=%s", self._id, rid, e)
+        if failed:
+            logger.info(
+                "已 fail 在飞请求: service_id=%s count=%s reason=%s",
+                self._id, failed, reason,
+            )
+
+    async def _reconnect_or_evict(self, reason: str) -> None:
+        """后台一次性重连探测; 成功恢复可路由, 失败走 unhealthy_hook 删 Pod。"""
+        try:
+            await self._channel.ensure_connected()  # type: ignore[union-attr]
+        except asyncio.CancelledError:
+            return
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "重连探测失败, 触发删 Pod: service_id=%s reason=%s err=%s",
+                self._id, reason, e,
+            )
+            hook = self._unhealthy_hook
+            if hook is not None and not self._closed:
+                try:
+                    asyncio.get_running_loop().create_task(
+                        hook(self._id, f"reconnect failed after recv loop death: {reason}")
+                    )
+                except Exception as hook_err:  # noqa: BLE001
+                    logger.error("触发 unhealthy hook 失败: service_id=%s err=%s", self._id, hook_err)
+            return
+        # 重连成功: 恢复可路由
+        self._routable = True
+        logger.info("重连探测成功, 恢复可路由: service_id=%s", self._id)
 
     def has_session(self, session_id: str) -> bool:
         return session_id in self._sessions
@@ -276,6 +392,13 @@ class ServiceHandler(IServiceHandler):
             logger.debug("已通知 message_channel on_pod_ready")
 
     async def delete(self) -> None:
+        # 先停重连探测任务, 避免删 Pod 期间还在探测
+        t = self._reconnect_task
+        self._reconnect_task = None
+        if t and not t.done():
+            t.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await t
         # 先关长连接(WS)再删 Pod, 避免悬挂接收协程
         if hasattr(self._channel, "close"):
             with contextlib.suppress(Exception):

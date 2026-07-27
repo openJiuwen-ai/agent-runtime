@@ -185,7 +185,7 @@ class WSServiceMessageChannel:
         self._ws_url = _build_ws_url(str(host), self._port, self._path, self._use_tls)
         self._last_service_id = service_id
         logger.info("WSS 基址已就绪: service_id=%s url=%s", service_id, self._ws_url)
-        await self._ensure_connected()
+        await self.ensure_connected()
         logger.info("WSS 已在 deploy 后完成预建链: service_id=%s", service_id)
 
     async def close(self) -> None:
@@ -217,7 +217,12 @@ class WSServiceMessageChannel:
         self._default_parser = None
         logger.info("WSServiceMessageChannel 已关闭: last_service_id=%s", self._last_service_id)
 
-    async def _ensure_connected(self) -> None:
+    async def ensure_connected(self) -> None:
+        """显式建立 WebSocket 连接（若尚未建立或已断开）。
+
+        暴露为公共方法供 ``ServiceHandler._reconnect_or_evict`` 在接收侧死亡后
+        做重连探测调用; 内部仍带 ``_connect_lock`` 防并发重连。
+        """
         if not self._ws_url:
             raise RuntimeError(
                 "WebSocket URL 未就绪: 需先 K8s/Docker deploy 并成功 on_pod_ready"
@@ -273,12 +278,15 @@ class WSServiceMessageChannel:
         w = self._ws
         if w is None:
             return
+        # 接收侧异常退出原因; None 表示正常退出(主动 close/cancel), 不触发摘路由
+        died_reason: Optional[str] = None
         try:
             while not self._closed and w is not None and not _ws_is_closed(w):
                 try:
                     raw = await w.recv()
                 except (websockets.exceptions.ConnectionClosed, OSError) as e:
                     logger.error("WSS 接收已断开: %s", e, exc_info=True)
+                    died_reason = f"{type(e).__name__}: {e}"
                     break
                 data = _decode_ws_message(raw)
                 if data is None:
@@ -296,23 +304,37 @@ class WSServiceMessageChannel:
             raise
         except Exception as e:
             logger.error("WSS 接收循环异常: %s", e, exc_info=True)
+            died_reason = f"{type(e).__name__}: {e}"
         finally:
-            # 连接已断：清除 stale ws 引用，使下次 _ensure_connected 能重连。
-            # 不清除的话 _ws_is_closed 对 CLOSING 态可能返回 False，_ensure_connected
+            # 连接已断：清除 stale ws 引用，使下次 ensure_connected 能重连。
+            # 不清除的话 _ws_is_closed 对 CLOSING 态可能返回 False，ensure_connected
             # 会误判"连接正常"直接 return，导致永不重连（keepalive ping timeout 事故根因）。
             self._ws = None
             for ev in self._request_done.values():
                 if not ev.is_set():
                     ev.set()
-            # 唤醒所有卡在 `await wrapper.cancel` 的 send 协程：连接已断，响应永远不会
-            # 到达，必须主动 set_result 让 send 继续走到 on_request_complete → _inflight 归零，
-            # 否则 session TTL 到期时 inflight>0 无法移除绑定，亲和性反复路由到死实例。
-            for rid, cancel_fut in list(self._inflight_cancels.items()):
-                if not cancel_fut.done():
-                    try:
-                        cancel_fut.set_result(None)
-                    except asyncio.InvalidStateError:
-                        pass
+            if died_reason is not None and not self._closed:
+                # 接收侧异常退出: 交给 ServiceHandler 失败在飞请求 + 摘路由 + 重连探测。
+                # _fail_inflight_requests 会先写 error chunk 到 response_queue, 再
+                # set_result(wrapper.cancel) 唤醒 send 协程, 因此此处不再直接 set
+                # cancel future (避免在 error chunk 写入前提前唤醒 send 导致前端只见
+                # 流静默结束)。
+                try:
+                    await h.on_receive_loop_died(died_reason)
+                except Exception as hook_err:  # noqa: BLE001
+                    logger.error(
+                        "on_receive_loop_died 回调失败: %s", hook_err, exc_info=True,
+                    )
+            else:
+                # 正常退出(主动 close/cancel): 唤醒所有卡在 `await wrapper.cancel` 的
+                # send 协程, 让其走 on_request_complete → _inflight 归零, 否则 session
+                # TTL 到期时 inflight>0 无法移除绑定, 亲和性反复路由到死实例。
+                for rid, cancel_fut in list(self._inflight_cancels.items()):
+                    if not cancel_fut.done():
+                        try:
+                            cancel_fut.set_result(None)
+                        except asyncio.InvalidStateError:
+                            pass
 
     async def send(
             self,
@@ -335,7 +357,7 @@ class WSServiceMessageChannel:
         self._default_parser = response_parser
         self._last_service_id = service_id
         try:
-            await self._ensure_connected()
+            await self.ensure_connected()
         except Exception as e:
             logger.error("WSS 连接失败: %s", e, exc_info=True)
             await on_request_complete(rid)
