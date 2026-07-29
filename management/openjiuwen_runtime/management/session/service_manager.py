@@ -872,7 +872,7 @@ class ServiceManager(IServiceManager):
                 pod_name,
             )
             await h.handle_message(w)
-            logger.debug(
+            logger.info(
                 "已完成消息处理: service_id=%s session_id=%s request_id=%s pod=%s",
                 h.id,
                 session_id,
@@ -1688,7 +1688,7 @@ class ServiceManager(IServiceManager):
                     if leader_future is not None and not leader_future.done():
                         leader_future.set_result(admitted)
             if admitted is None:
-                return None
+                continue
             # 入池后下一轮再选池并绑定
 
         return None

@@ -12,6 +12,7 @@ import string
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
+import aiohttp
 from kubernetes_asyncio import client, config
 from kubernetes_asyncio.client.rest import ApiException
 
@@ -185,6 +186,16 @@ class K8sServiceHandler:
 
     _MAX_PREFIX_LEN = 47
     _NAME_INVALID_CHARS = re.compile(r"[^a-z0-9-]+")
+
+    # 读取 Pod 状态时对瞬时错误（apiserver 5xx/504、网络抖动、读超时）的有限次重试 + 指数退避。
+    # 目的：避免单次瞬时故障直接放弃整个 deploy；重试次数受限，持续故障仍会向上抛出。
+    _READINESS_TRANSIENT_MAX_RETRIES = 5
+    _READINESS_TRANSIENT_BACKOFF_BASE = 0.5  # 起始退避秒数
+    _READINESS_TRANSIENT_BACKOFF_CAP = 8.0  # 单次退避上限秒数
+    _TRANSIENT_API_STATUSES = (500, 502, 503, 504)  # apiserver 侧可重试的 HTTP 状态
+    # 瞬时错误重试的累计时间预算（秒）：独立于 ready_timeout，确保持续 apiserver 故障
+    # 不会撑满 ready_timeout（默认 300s）拖累请求路径；单次抖动仍能被完整吸收。
+    _READINESS_TRANSIENT_TOTAL_BUDGET = 30.0
 
     def __init__(
             self,
@@ -596,15 +607,93 @@ class K8sServiceHandler:
         finally:
             await api_client.close()
 
+    @staticmethod
+    def _is_transient_api_status(status: int) -> bool:
+        return status in K8sServiceHandler._TRANSIENT_API_STATUSES
+
+    async def _read_pod_with_retry(
+            self,
+            core: client.CoreV1Api,
+            pod_name: str,
+            loop: asyncio.AbstractEventLoop,
+            deadline: float,
+            transient_spent: List[float],
+    ) -> client.V1Pod:
+        """读取 Pod 状态；对瞬时错误（ApiException 5xx/504、网络抖动、读超时）有限次重试 + 指数退避。
+
+        - 单次轮询内瞬时错误最多重试 `_READINESS_TRANSIENT_MAX_RETRIES` 次，避免一次抖动放弃整个 deploy；
+        - 持续故障在重试耗尽后向上抛出；
+        - 退避时长受双重约束：整体 `ready_timeout` deadline（`remaining <= backoff` 即超时收口）
+          以及独立的瞬时错误总预算 `_READINESS_TRANSIENT_TOTAL_BUDGET`（累计重试耗时超此值即提前失败，
+          避免硬 apiserver 故障撑满 ready_timeout 拖累请求路径）。
+        - `transient_spent` 为单元素列表，跨多次轮询累计已花在瞬时重试上的时间（秒）。
+        """
+        retries = 0
+        max_retries = self._READINESS_TRANSIENT_MAX_RETRIES
+        budget = self._READINESS_TRANSIENT_TOTAL_BUDGET
+        while True:
+            try:
+                return await core.read_namespaced_pod(name=pod_name, namespace=self._namespace)
+            except ApiException as exc:
+                transient = self._is_transient_api_status(int(exc.status or 0))
+                if not transient or retries >= max_retries:
+                    raise
+                retries += 1
+                err_desc = f"ApiException status={exc.status} reason={exc.reason or ''}"
+            except (asyncio.TimeoutError, aiohttp.ClientError) as exc:
+                if retries >= max_retries:
+                    raise
+                retries += 1
+                err_desc = f"{type(exc).__name__}: {exc}"
+
+            backoff = min(
+                self._READINESS_TRANSIENT_BACKOFF_BASE * (2 ** (retries - 1)),
+                self._READINESS_TRANSIENT_BACKOFF_CAP,
+            )
+            # 约束 1：整体就绪 deadline（ready_timeout），剩余时间不足以再退避一次即按超时收口。
+            remaining = deadline - loop.time()
+            if remaining <= backoff:
+                logger.error(
+                    "K8s 读取 Pod 状态瞬时错误且剩余就绪时间不足 %.2fs，放弃重试: "
+                    "name=%s retries=%d/%d err=%s",
+                    backoff, pod_name, retries, max_retries, err_desc,
+                )
+                raise TimeoutError(
+                    f"Pod {pod_name} read transient failure exhausted readiness "
+                    f"deadline (retries={retries}/{max_retries}, {err_desc})"
+                )
+            # 约束 2：瞬时错误总预算（独立于 ready_timeout），持续 apiserver 故障提前失败，不拖累请求路径。
+            if transient_spent[0] + backoff >= budget:
+                logger.error(
+                    "K8s 读取 Pod 状态瞬时错误累计 %.2fs 达到预算上限 %.2fs，放弃重试: "
+                    "name=%s retries=%d/%d err=%s",
+                    transient_spent[0] + backoff, budget,
+                    pod_name, retries, max_retries, err_desc,
+                )
+                raise TimeoutError(
+                    f"Pod {pod_name} transient read errors exceeded total budget "
+                    f"{budget}s (spent={transient_spent[0] + backoff:.2f}s, "
+                    f"retries={retries}/{max_retries}, {err_desc})"
+                )
+            transient_spent[0] += backoff
+            logger.warning(
+                "K8s 读取 Pod 状态瞬时错误，%d/%d 次重试将在 %.2fs 后进行 "
+                "(累计退避 %.2fs/%.2fs): name=%s err=%s",
+                retries, max_retries, backoff, transient_spent[0], budget,
+                pod_name, err_desc,
+            )
+            await asyncio.sleep(backoff)
+
     async def _wait_running_ready(
             self, core: client.CoreV1Api, pod_name: str
     ) -> Tuple[str, Optional[str], Optional[str]]:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self._ready_timeout
+        transient_spent: List[float] = [0.0]  # 跨轮询累计的瞬时错误重试耗时（秒），受总预算约束
         last_reason = ""
 
         while True:
-            pod = await core.read_namespaced_pod(name=pod_name, namespace=self._namespace)
+            pod = await self._read_pod_with_retry(core, pod_name, loop, deadline, transient_spent)
             status = pod.status
             phase = (status.phase or "") if status else ""
 
