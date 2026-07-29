@@ -426,6 +426,32 @@ class ServiceManager(IServiceManager):
 
         return self._max_services
 
+    def _service_concurrency_for(self, template_id: Optional[str], sreq) -> int:  # noqa: ANN001
+        """取该 template 的单 Pod 并发上限（pod_concurrency = DB 列 service_concurrency）。
+
+        优先模板配置中的 ``service_concurrency``，缺失或无效则回退到 Manager 全局 ``self._service_concurrency``。
+        供 ``_pick_or_create`` 计算 ``reserve_per_pod = min(scope_concurrency, pod_concurrency)``。
+        """
+        template_config = self._get_template_config(template_id)
+        deploy_template = (
+            template_config if template_config else getattr(sreq, "service_template", None)
+        )
+        sc_raw = deploy_template.get("service_concurrency") if deploy_template else None
+        try:
+            return int(sc_raw) if sc_raw is not None else self._service_concurrency
+        except (TypeError, ValueError):
+            return self._service_concurrency
+
+    def reserve_per_pod_for(self, sreq) -> int:  # noqa: ANN001
+        """计算 reserve_per_pod = min(scope_concurrency, pod_concurrency)。
+
+        单 Pod 模式 = scope_concurrency（与改动前一致）；多 Pod 模式 = pod_concurrency（独占 Pod）。
+        供编排层（预留值、路由容量）与本类 ``_pick_or_create``（``need``）共用，保证一致。
+        """
+        template_id = sreq.service_template.get("template_id") if sreq.service_template else None
+        pod_concurrency = self._service_concurrency_for(template_id, sreq)
+        return max(1, min(int(sreq.session_concurrency), pod_concurrency))
+
     def _total_services_by_template(self, template_id: Optional[str]) -> int:
         """获取指定 template_id 的总实例数（in_use + idle + pending deploy + 缩容占位）。"""
         in_use_count = len(self._in_use.get(template_id, {}))
@@ -1209,11 +1235,13 @@ class ServiceManager(IServiceManager):
 
         注意：本方法自行获取/释放 ``self._lock``，调用方勿再持锁调用。
         """
-        need = max(1, int(sreq.session_concurrency))
         session_id = sreq.service_id
         template_id: Optional[str] = None
         if sreq.service_template:
             template_id = sreq.service_template.get("template_id")
+        # reserve_per_pod = min(scope_concurrency, pod_concurrency)：单/多 Pod 归一
+        # （单 Pod = scope_concurrency，与改动前一致；多 Pod = pod_concurrency，独占 Pod）
+        need = self.reserve_per_pod_for(sreq)
 
         # 冷启动占位后偶发竞态，允许有限次重试选池
         for _ in range(5):
