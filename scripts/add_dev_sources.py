@@ -11,8 +11,6 @@ DEFAULT_PKG_DIRS = [
     "management",
     "service",
     "server",
-    "applications/lowcode_agent",
-    "applications/ir_execution_service",
 ]
 
 # 配置映射
@@ -26,13 +24,6 @@ PACKAGE_CONFIGS = {
     "server": {
         "openjiuwen-runtime-foundation": {"path": "../foundation", "editable": True},
         "openjiuwen-runtime-management": {"path": "../management", "editable": True},
-    },
-    "applications/lowcode_agent": {
-        "openjiuwen-runtime-service": {"path": "../service", "editable": True}
-    },
-    "applications/ir_execution_service": {
-        "openjiuwen-runtime-foundation": {"path": "../foundation", "editable": True},
-        "openjiuwen-runtime-service": {"path": "../service", "editable": True},
     },
 }
 

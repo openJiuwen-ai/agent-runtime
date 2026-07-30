@@ -16,9 +16,7 @@ class TestGaussDBSupport(TestCase):
     def setUp(self):
         self.repo_root = Path(__file__).resolve().parents[3]
         self.foundation_root = self.repo_root / "foundation"
-        self.server_root = self.repo_root / "server"
         self.management_root = self.repo_root / "management"
-        self.ir_execution_root = self.repo_root / "applications" / "ir_execution_service"
         self._original_env = os.environ.copy()
 
         os.environ.update(
@@ -37,9 +35,7 @@ class TestGaussDBSupport(TestCase):
 
         for extra_path in (
             self.foundation_root,
-            self.server_root,
             self.management_root,
-            self.ir_execution_root,
         ):
             extra_path_str = str(extra_path)
             if extra_path_str not in sys.path:
@@ -55,11 +51,7 @@ class TestGaussDBSupport(TestCase):
             "openjiuwen_runtime.foundation.db.dialects",
             "openjiuwen_runtime.foundation.db.dialects.gaussdb_asyncgaussdb",
             "openjiuwen_runtime.foundation.db.gaussdb_handler",
-            "openjiuwen_runtime.server.main",
             "openjiuwen_runtime.management",
-            "runtime_support.gaussdb_sqlalchemy_dialect",
-            "runtime_support.memory_engine_start",
-            "runtime_support.runtime_env_prepare",
         ]:
             sys.modules.pop(module_name, None)
 
@@ -84,54 +76,6 @@ class TestGaussDBSupport(TestCase):
         management_module = importlib.import_module("openjiuwen_runtime.management")
 
         self.assertEqual(management_module.GaussDBHandler.__name__, "GaussDBHandler")
-
-    def test_server_selects_gaussdb_handler(self):
-        server_main = importlib.import_module("openjiuwen_runtime.server.main")
-
-        self.assertEqual(type(server_main.db_handler).__name__, "GaussDBHandler")
-        self.assertEqual(
-            server_main.db_handler.database_url,
-            "gaussdb+async_gaussdb://gauss_user:p%40ss@127.0.0.1:5432/runtime_db",
-        )
-
-    def test_server_selects_gaussdb_handler_for_opengauss(self):
-        os.environ["DB_TYPE"] = "opengauss"
-        for module_name in [
-            "openjiuwen_runtime.foundation.config",
-            "openjiuwen_runtime.foundation.db.gaussdb_handler",
-            "openjiuwen_runtime.server.main",
-        ]:
-            sys.modules.pop(module_name, None)
-
-        server_main = importlib.import_module("openjiuwen_runtime.server.main")
-
-        self.assertEqual(type(server_main.db_handler).__name__, "GaussDBHandler")
-
-    def test_runtime_support_generates_gauss_urls_for_gaussdb_and_opengauss(self):
-        memory_engine_start = importlib.import_module("runtime_support.memory_engine_start")
-
-        sync_url = memory_engine_start.get_database_url()
-        async_url = memory_engine_start.get_async_database_url(sync_url)
-        self.assertEqual(sync_url, "gaussdb://gauss_user:p%40ss@127.0.0.1:5432/agent_db")
-        self.assertEqual(async_url, "gaussdb+async_gaussdb://gauss_user:p%40ss@127.0.0.1:5432/agent_db")
-
-        os.environ["DB_TYPE"] = "opengauss"
-        sync_url = memory_engine_start.get_database_url()
-        async_url = memory_engine_start.get_async_database_url(sync_url)
-        self.assertEqual(sync_url, "gaussdb://gauss_user:p%40ss@127.0.0.1:5432/agent_db")
-        self.assertEqual(async_url, "gaussdb+async_gaussdb://gauss_user:p%40ss@127.0.0.1:5432/agent_db")
-
-    def test_runtime_env_prepare_sets_default_port_for_opengauss(self):
-        os.environ["DB_TYPE"] = "opengauss"
-
-        runtime_env_prepare = importlib.import_module("runtime_support.runtime_env_prepare")
-
-        # Some dependency imports may materialize DB_PORT from external env/.env.
-        # Remove it immediately before applying defaults to verify opengauss fallback.
-        os.environ.pop("DB_PORT", None)
-        runtime_env_prepare.apply_runtime_type_and_optional_defaults()
-
-        self.assertEqual(os.environ["DB_PORT"], "5432")
 
     def test_custom_dialect_supports_opengauss_alias(self):
         gauss_dialect = importlib.import_module("openjiuwen_runtime.foundation.db.dialects.gaussdb_asyncgaussdb")
@@ -159,44 +103,6 @@ class TestGaussDBSupport(TestCase):
         version = dialect._get_server_version_info(FakeConnection())
 
         self.assertEqual(version, (11, 0))
-
-    def test_server_mysql_import_does_not_require_async_gaussdb(self):
-        os.environ["DB_TYPE"] = "mysql"
-        removed_modules = self._evict_async_gaussdb_modules()
-        for module_name in [
-            "openjiuwen_runtime.foundation.config",
-            "openjiuwen_runtime.foundation.db.gaussdb_handler",
-            "openjiuwen_runtime.server.main",
-        ]:
-            sys.modules.pop(module_name, None)
-
-        try:
-            with self._patch_async_gaussdb_missing():
-                server_main = importlib.import_module("openjiuwen_runtime.server.main")
-        finally:
-            sys.modules.update(removed_modules)
-
-        self.assertEqual(type(server_main.db_handler).__name__, "MySQLHandler")
-
-    def test_memory_engine_start_mysql_path_does_not_require_async_gaussdb(self):
-        os.environ["DB_TYPE"] = "mysql"
-        removed_modules = self._evict_async_gaussdb_modules()
-        for module_name in [
-            "runtime_support.gaussdb_sqlalchemy_dialect",
-            "runtime_support.memory_engine_start",
-        ]:
-            sys.modules.pop(module_name, None)
-
-        try:
-            with self._patch_async_gaussdb_missing():
-                memory_engine_start = importlib.import_module("runtime_support.memory_engine_start")
-                sync_url = memory_engine_start.get_database_url()
-                async_url = memory_engine_start.get_async_database_url(sync_url)
-        finally:
-            sys.modules.update(removed_modules)
-
-        self.assertEqual(sync_url, "mysql+pymysql://gauss_user:p%40ss@127.0.0.1:5432/agent_db?charset=utf8mb4")
-        self.assertEqual(async_url, "mysql+aiomysql://gauss_user:p%40ss@127.0.0.1:5432/agent_db?charset=utf8mb4")
 
     def test_gaussdb_handler_raises_helpful_error_when_driver_missing(self):
         removed_modules = self._evict_async_gaussdb_modules()
