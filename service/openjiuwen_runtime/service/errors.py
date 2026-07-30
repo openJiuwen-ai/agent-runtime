@@ -1,0 +1,102 @@
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
+"""错误模型（设计 §12）。
+
+统一错误码 + FrameworkError 体系：中间件外层捕获后归一化为
+``ResponseEnvelope(ok=False, error_code, error_message)``，绝不裸 500。
+"""
+from __future__ import annotations
+
+from typing import Protocol, runtime_checkable
+
+
+class ErrorCode:
+    """错误码常量（字符串，便于序列化到 ResponseEnvelope.error_code）。"""
+
+    VALIDATION = "validation"
+    NOT_FOUND = "not_found"
+    CONFLICT = "conflict"
+    IDEMPOTENT = "idempotent"
+    TIMEOUT = "timeout"
+    LOCKED = "locked"
+    INTERNAL = "internal"
+
+
+class FrameworkError(Exception):
+    """框架统一异常基类。``code`` 为错误码，默认 internal。"""
+
+    code: str = ErrorCode.INTERNAL
+
+    def __init__(self, message: str = "", *, code: str | None = None) -> None:
+        super().__init__(message)
+        if code is not None:
+            self.code = code
+
+    @property
+    def message(self) -> str:
+        return self.args[0] if self.args else ""
+
+
+class ValidationError(FrameworkError):
+    """请求校验失败。"""
+
+    code = ErrorCode.VALIDATION
+
+
+class NotFoundError(FrameworkError):
+    """资源/路由未找到。"""
+
+    code = ErrorCode.NOT_FOUND
+
+
+class IdempotentConflict(FrameworkError):
+    """幂等冲突：重复 request_id 且 mode=reject。"""
+
+    code = ErrorCode.IDEMPOTENT
+
+
+class LockNotAcquired(FrameworkError):
+    """非阻塞抢锁失败（timeout=0）或等待超时抢不到。"""
+
+    code = ErrorCode.LOCKED
+
+
+class LockLost(FrameworkError):
+    """持锁期间续期失锁（被别人抢占或过期）。"""
+
+    code = ErrorCode.LOCKED
+
+
+class FrameworkTimeout(FrameworkError):
+    """handler 超时。"""
+
+    code = ErrorCode.TIMEOUT
+
+
+@runtime_checkable
+class _HasCode(Protocol):
+    code: str
+
+
+def exception_code(exc: BaseException) -> str:
+    """归一化任意异常为错误码：FrameworkError 取其 code，其余一律 internal。"""
+    if isinstance(exc, FrameworkError):
+        return exc.code
+    return ErrorCode.INTERNAL
+
+
+_HTTP_STATUS = {
+    ErrorCode.VALIDATION: 400,
+    ErrorCode.NOT_FOUND: 404,
+    ErrorCode.CONFLICT: 409,
+    ErrorCode.IDEMPOTENT: 409,
+    ErrorCode.LOCKED: 423,
+    ErrorCode.TIMEOUT: 504,
+    ErrorCode.INTERNAL: 500,
+}
+
+
+def http_status_for(code: str) -> int:
+    """错误码 → HTTP 状态码；未知码 fail-safe 返回 500。"""
+    return _HTTP_STATUS.get(code, 500)

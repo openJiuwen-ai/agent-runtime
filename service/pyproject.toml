@@ -10,6 +10,8 @@ requires-python = ">=3.11.4"
 dependencies = [
     "fastapi==0.115.11",
     "uvicorn[standard]==0.42.0",
+    "websockets>=14.0",
+    "redis>=5.0",
     "pydantic==2.11.7",
     "pydantic[email]==2.11.7",
     "pydantic-settings==2.5.2",
@@ -27,6 +29,8 @@ dev = [
     "pytest-asyncio==1.2.0",
     "pytest-mock==3.14.0",
     "ruff==0.9.10",
+    "httpx>=0.27",
+    "fakeredis>=2.20",
 ]
 
 [[tool.uv.index]]
@@ -38,5 +42,14 @@ exclude = ["*.egg-info", "tests"]
 include = ["openjiuwen_runtime*"]
 
 [tool.pytest.ini_options]
-testpaths = ["examples", "tests"]
+testpaths = ["tests"]
 pythonpath = ["."]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "unit: 单元测试（router/envelope/原语，fakeredis）",
+    "integration: 集成测试",
+    "system: 系统验收（REST/WS 适配器、多副本）",
+    "slow: 慢测试",
+    "async: 异步测试",
+]
