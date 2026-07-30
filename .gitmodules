@@ -1,4 +1,0 @@
-[submodule "agent-studio"]
-	path = agent-studio
-	url = https://gitcode.com/openJiuwen/agent-studio.git
-	branch = develop
