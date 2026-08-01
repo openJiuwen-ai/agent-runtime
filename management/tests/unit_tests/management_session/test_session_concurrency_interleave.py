@@ -138,13 +138,14 @@ async def test_session_cap_interleaves_other_sessions() -> None:
     sh2 = ServiceScopeHandler("sess2", cap, [h], router, reserve_per_pod=cap)
 
     async def run(sh: ServiceScopeHandler, service_id: str, chat_session_id: str, rid: str) -> None:
-        # chat_session 先绑定到 h，再在 semaphore 保护下发送
-        sh.bind(chat_session_id, h.id)
-        await sh.acquire()
+        # 先占用并发槽位（cap 闸门，满则阻塞），再绑定 chat_session 并在 semaphore 保护下发送；
+        # 顺序与 SessionRuntimeManager.handle_user_request 一致（acquire_slot 在 bind 之前）。
+        await sh.acquire_slot(chat_session_id)
         try:
+            sh.bind(chat_session_id, h.id)
             await sh.handle_message(_wrap(service_id, chat_session_id, rid, cap, loop))
         finally:
-            sh.release()
+            sh.release_slot(chat_session_id)
 
     tasks = []
     for i in range(11):

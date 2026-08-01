@@ -17,6 +17,7 @@ from openjiuwen_runtime.management.session.interfaces import (
     IRequest,
     IServiceInstanceFactory,
     IServiceHandler,
+    RawMessage,
     ScopeRequestWrapper,
 )
 from openjiuwen_runtime.management.session.models import MessageType
@@ -230,7 +231,6 @@ async def test_multi_pod_scales_to_two_pods() -> None:
         loop = asyncio.get_running_loop()
 
         async def one(csid: str, rid: str) -> None:
-            from openjiuwen_runtime.management.session.interfaces import RawMessage
             wrapper = ScopeRequestWrapper(_sreq("scope1", 4, csid, rid), asyncio.Queue(), loop.create_future())
             await rt.handle_user_request(RawMessage(MessageType.USER_REQUEST, wrapper))
 
@@ -257,7 +257,6 @@ async def test_single_pod_does_not_scale() -> None:
         loop = asyncio.get_running_loop()
 
         async def one(csid: str, rid: str) -> None:
-            from openjiuwen_runtime.management.session.interfaces import RawMessage
             wrapper = ScopeRequestWrapper(_sreq("scope1", 2, csid, rid), asyncio.Queue(), loop.create_future())
             await rt.handle_user_request(RawMessage(MessageType.USER_REQUEST, wrapper))
 
@@ -273,3 +272,130 @@ async def test_single_pod_does_not_scale() -> None:
         await asyncio.gather(*tasks)
     finally:
         await sm.stop()
+
+
+# ==================== 回归:扩容死锁(同 id 撞号)+ 并发扩容去重 ====================
+
+
+class _FixedIdFactory(_Factory):
+    """所有新建 handler 都用固定 service_id='11',用于复现同 id 撞号挤出。"""
+
+    async def new_service(
+        self, response_parser: IResponseParser, service_template: Optional[dict] = None
+    ) -> IServiceHandler:
+        h = ServiceHandler(
+            service_id="11",
+            total_concurrency=self._sc,
+            message_channel=self._ch,
+            response_parser=response_parser,
+            deploy_controller=NoOpDeployController(),
+            service_template=service_template,
+        )
+        self.handlers.append(h)
+        return h
+
+
+@pytest.mark.asyncio
+async def test_handle_user_request_no_deadlock_when_same_id_scale_evicts() -> None:
+    """回归 2026-07-30 P0 死锁。
+
+    扩容造出与池中同 id 的 Pod → ``_evacuate_same_id_locked`` 挤出旧 Pod →
+    ``_cleanup_displaced_handler`` → ``on_pod_removed`` 重入 ``SessionRuntimeManager._lock``。
+
+    修复前:``pick_or_create_pod`` 在 SRM ``_lock`` 内调用,``on_pod_removed`` 重入同一把
+            不可重入 asyncio.Lock → 永久自死锁(生产表现:40 分钟无路由、请求 300s 超时)。
+    修复后(方案 A):``pick_or_create_pod`` 移出 ``_lock``,``on_pod_removed`` 能正常拿锁 →
+            本测试在 5s 内完成。
+    """
+    ch = _HoldCh()
+    ch.gate.set()  # send 立即返回,避免 handle_message 阻塞干扰"死锁 vs 正常"判定
+    factory = _FixedIdFactory(ch, 2)
+    dq: PriorityDualAsyncQueues[QueueItem] = PriorityDualAsyncQueues(100, 1000)
+    sm = ServiceManager(
+        factory, dq, Timer(),
+        service_concurrency=2, min_idle_services=0, max_services=10,
+        autoscale_interval=0.2, service_idle_ttl=300, deploy_mode="subprocess",
+    )
+    rt = SessionRuntimeManager(Timer(), sm)
+    sm.set_session_runtime(rt)
+    await sm.init(_P())
+    await sm.start()
+    try:
+        # 预置 OLD '11':SM 层占满额度(逼 _pick_existing 跳过它)+ scope 层占满(逼 pick_or_bind 返回 None)
+        old = await factory.new_service(_P())
+        assert old.try_reserve_session_quota("sticky", 2)
+        # 预置 OLD '11' 进 in_use 池(SM 层占满额度逼 _pick_existing 跳过;无 public 注入 API,用 getattr 避免 protected-access 静态告警)
+        getattr(sm, "_in_use").setdefault(None, {})["11"] = old
+        sh = await rt.registry.get_or_create("scope1", 4, 2)  # max_parallel=4, rpp=2 → max_scope_pods=2
+        sh.add_endpoint(old)
+        sh.bind("cs_pre1", "11")
+        sh.bind("cs_pre2", "11")  # 占满 reserve_per_pod=2
+
+        loop = asyncio.get_running_loop()
+        wrapper = ScopeRequestWrapper(_sreq("scope1", 4, "cs_new", "r1"), asyncio.Queue(), loop.create_future())
+
+        # 修复前:扩容在 _lock 内 → evac → on_pod_removed 重入同一把不可重入锁 → 死锁;
+        #   wait_for 超时 cancel task,而 handle_user_request 的 except CancelledError 会吞掉 cancel
+        #   照常返回,但 cs_new 从未真正路由(send_log 空)——故用 send_log 判定,而非 in_use。
+        # 修复后:扩容移出 _lock,cs_new 正常路由到新 '11'(send_log 有记录)。
+        await asyncio.wait_for(
+            rt.handle_user_request(RawMessage(MessageType.USER_REQUEST, wrapper)),
+            timeout=5.0,
+        )
+        assert len(ch.send_log) >= 1, (
+            f"cs_new 未被路由——疑似扩容死锁(被 cancel 掩盖)。send_log={ch.send_log}"
+        )
+        assert sm.find_service_handler("11") is not old  # 旧 '11' 被挤出、新 '11' 入池
+    finally:
+        await sm.stop()
+
+
+@pytest.mark.asyncio
+async def test_same_scope_concurrent_scaleups_coalesce_into_one_deploy() -> None:
+    """方案 A 把扩容移出 ``_lock`` 后的并发扩容去重回归。
+
+    同一 scope 的并发扩容仍被 ``_pick_or_create`` 的 leader/follower 合并成一次 deploy,
+    且两个请求都成功路由、不重复 ``add_endpoint``。
+    """
+    rt, sm, factory, ch = await _build_runtime(pod_concurrency=2)
+    try:
+        ch.gate.set()
+        loop = asyncio.get_running_loop()
+
+        async def one(csid: str, rid: str) -> None:
+            # ttl=60:避免请求结束后 ttl=0 立即清理 scope,导致断言时 scopeA 已被 registry 移除
+            sreq = SessionRequest(
+                service_id="scopeA", concurrency=2, ttl=60, request_id=rid,
+                raw=_Raw(session_id=csid, request_id=rid),
+            )
+            wrapper = ScopeRequestWrapper(sreq, asyncio.Queue(), loop.create_future())
+            await rt.handle_user_request(RawMessage(MessageType.USER_REQUEST, wrapper))
+
+        # scope=2, pod=2 → reserve_per_pod=2, max_scope_pods=1:两个 chat_session 必须共用 1 个 Pod
+        await asyncio.wait_for(
+            asyncio.gather(one("cs1", "r1"), one("cs2", "r2")),
+            timeout=5.0,
+        )
+        assert len(factory.handlers) == 1, f"expected coalesced single deploy, got {len(factory.handlers)}"
+        sh = rt.registry.get("scopeA")
+        assert sh is not None and sh.endpoint_count == 1, "no duplicate add_endpoint"
+        assert len(ch.send_log) == 2
+    finally:
+        await sm.stop()
+
+
+@pytest.mark.asyncio
+async def test_factory_instance_id_is_uuid_despite_business_service_id_in_template() -> None:
+    """P1 回归:即便 service_template 带业务 service_id(请求冷启动路径会写入),
+    factory 造出的 ServiceHandler.id 也必须是 UUID,不得复用业务 id——否则同 scope 二次
+    冷启动会撞号、``_evacuate_same_id_locked`` 挤出正在干活的 Pod(叠加持锁扩容即为死锁导火索)。
+
+    gateway 侧 ``runtime_management_client._Factory`` 须遵守同一契约;本测试用 session SDK
+    的 ``_Factory`` 固化该契约,防止任何 factory 实现再把 template 的业务 id 当实例 id。
+    """
+    factory = _Factory(_HoldCh(), pod_concurrency=4)
+    h1 = await factory.new_service(_P(), service_template={"service_id": "11", "agent_id": "111"})
+    h2 = await factory.new_service(_P(), service_template={"service_id": "11", "agent_id": "111"})
+    assert h1.id != "11", f"实例 id 不应复用业务 service_id, got {h1.id}"
+    assert h2.id != "11", f"实例 id 不应复用业务 service_id, got {h2.id}"
+    assert h1.id != h2.id, "两次新建的实例 id 必须互不相同(UUID)"
