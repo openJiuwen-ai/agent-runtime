@@ -429,16 +429,19 @@ class IServiceScopeHandler(ABC):
     async def handle_message(self, msg: "ScopeRequestWrapper") -> None:
         """向已绑定的端点发送请求（chat_session 亲和解析 + active 追踪）。
 
-        端点选择与并发位（semaphore）由编排层在调用前后完成（``acquire`` / ``pick_or_bind`` / ``bind``）。
+        端点选择与并发位（semaphore）由编排层在调用前后完成（``acquire_slot`` / ``pick_or_bind`` / ``bind``）。
         """
 
     @abstractmethod
-    async def acquire(self) -> None:
-        """获取 scope 并发位（活跃 chat_session 闸门）；满则在此阻塞。"""
+    async def acquire_slot(self, chat_session_id: Optional[str]) -> bool:
+        """为 chat_session 获取 scope 并发位（活跃 chat_session 闸门）；满则在此阻塞。
+
+        chat_session_id 为空或该 chat_session 已绑定则不占用并发位，返回 False；成功获取返回 True。
+        """
 
     @abstractmethod
-    def release(self) -> None:
-        """释放 scope 并发位（与 :meth:`acquire` 配对）。"""
+    def release_slot(self, chat_session_id: Optional[str]) -> None:
+        """释放 chat_session 占用的 scope 并发位（与 :meth:`acquire_slot` 配对，幂等）。"""
 
     @abstractmethod
     def pick_or_bind(self, chat_session_id: Optional[str]) -> Optional["ISendEndpoint"]:

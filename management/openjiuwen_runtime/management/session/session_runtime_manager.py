@@ -166,7 +166,10 @@ class SessionRuntimeManager:
                     _wait, scope_id, chat_session_id,
                 )
             armed = False
+            need_scale = False
+            pod_handler: Optional[IServiceHandler] = None
             try:
+                # ---- 1st 锁内：路由决策 / 判定是否需要扩容 ----
                 async with self._lock:
                     # 锁内二次确认：同一 chat_session 的并发请求可能已绑定（gateway 通常串行化，
                     # 此为防御），若发现已绑定则归还多余槽位，避免重复占用。
@@ -174,23 +177,39 @@ class SessionRuntimeManager:
                         scope_handler.release_slot(chat_session_id)
                         _acquired = False
                     endpoint = scope_handler.pick_or_bind(chat_session_id)
-                    if endpoint is None:
-                        # 所有端点满 / 无端点 → 扩容（每次仅 +1 Pod；need = reserve_per_pod）
-                        # max_scope_pods 安全闸：达上限不再扩容
-                        if scope_handler.endpoint_count < scope_handler.max_scope_pods:
-                            pod_handler = await self._sm.pick_or_create_pod(sreq)
-                            if pod_handler is not None and pod_handler.try_reserve_session_quota(
-                                scope_id, reserve_per_pod
-                            ):
-                                scope_handler.add_endpoint(pod_handler)
-                                scope_handler.bind(chat_session_id, pod_handler.id)
-                                endpoint = pod_handler
-                            elif pod_handler is not None:
-                                # 预留失败：记录孤儿，锁外推动 in_use→idle 回收
-                                failed_to_reserve = pod_handler
-                                endpoint = None
-                            else:
-                                endpoint = None
+                    if endpoint is None and scope_handler.endpoint_count < scope_handler.max_scope_pods:
+                        # 所有端点满 / 无端点 → 需扩容（每次仅 +1 Pod；need = reserve_per_pod）
+                        # max_scope_pods 安全闸：达上限则 need_scale 保持 False（下方按 endpoint=None 失败）
+                        need_scale = True
+
+                # ---- 锁外扩容：切勿在持有 self._lock 时 await 这条会回调 on_pod_removed
+                #      （它要再次 acquire self._lock）的路径——asyncio.Lock 不可重入，会自死锁。
+                #      同 scope 并发扩容由 ServiceManager._pick_or_create 的 leader/follower 合并，
+                #      故移出锁不会引发重复 deploy。----
+                if need_scale:
+                    try:
+                        pod_handler = await self._sm.pick_or_create_pod(sreq)
+                    except Exception as e:  # noqa: BLE001
+                        logger.error("扩容失败: scope_id=%s err=%s", scope_id, e, exc_info=True)
+                        pod_handler = None
+                    # ---- 2nd 锁内：二次校验 + 登记新 endpoint ----
+                    if pod_handler is not None:
+                        async with self._lock:
+                            # 锁外窗口期间，并发请求可能已为该 chat_session 扩好并绑定
+                            if _acquired and scope_handler.is_chat_session_bound(chat_session_id):
+                                scope_handler.release_slot(chat_session_id)
+                                _acquired = False
+                            endpoint = scope_handler.pick_or_bind(chat_session_id)
+                            if endpoint is None:
+                                # 仍无可路由端点：登记刚扩出的 Pod（add_endpoint/bind 幂等）
+                                if pod_handler.try_reserve_session_quota(scope_id, reserve_per_pod):
+                                    scope_handler.add_endpoint(pod_handler)
+                                    scope_handler.bind(chat_session_id, pod_handler.id)
+                                    endpoint = pod_handler
+                                else:
+                                    # 预留失败：记录孤儿，锁外推动 in_use→idle 回收
+                                    failed_to_reserve = pod_handler
+                                    endpoint = None
 
                 if failed_to_reserve is not None:
                     # 预留失败的实例（含 pick_or_create_pod 新 deploy 的）：推动 in_use→idle 回收，
