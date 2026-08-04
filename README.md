@@ -79,7 +79,7 @@ agent-runtime/
 ### 1) Clone the repository
 
 ```bash
-git clone https://gitcode.com/openJiuwen/agent-runtime.git
+git clone https://github.com/openJiuwen-ai/agent-runtime.git
 cd agent-runtime
 ```
 
