@@ -1,32 +1,38 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
-"""App —— 对外入口（设计 §6.1、§7）。
+"""Public application entry point for the transport-neutral service runtime."""
 
-持有内部 ``MessageRouter``，构造时把 REST/WS 适配器挂到该 router；对外暴露
-``@app.handle`` / ``@app.stream`` / ``app.use`` / ``app.dispatch`` / ``app.asgi`` / ``app.run``。
-仅此层（及适配器）import fastapi/websockets，核心代码零 HTTP/WS 导入。
-"""
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 from fastapi import FastAPI
 from pydantic import BaseModel
 
 from ..context.system_context import SystemContext
 from ..envelope import Envelope
-from ..routing.router import MessageRouter
+from ..routing.handlers import (
+    FunctionMessageHandler,
+    FunctionStreamMessageHandler,
+    HandlerModule,
+    HandlerSpec,
+    MessageHandler,
+    StreamMessageHandler,
+)
 from ..routing.result import DispatchResult
-from .rest_adapter import mount_rest
+from ..routing.router import MessageRouter
+from ..security import OAuth2AccessControl
+from .rest_adapter import RestAdapter
 from .ws_adapter import mount_ws
 
 
 async def _ensure_sysctx_async(
-    fastapi_app: FastAPI, ctx_factory: Callable[[], SystemContext]
+    fastapi_app: FastAPI,
+    ctx_factory: Callable[[], SystemContext],
 ) -> SystemContext:
-    """取得当前 sysctx：lifespan 已建则复用，否则惰性建（兼容不跑 lifespan 的 httpx ASGITransport）。"""
+    """Return the lifespan context or lazily create one for ASGI transports."""
     sysctx = getattr(fastapi_app.state, "sysctx", None)
     if sysctx is None:
         sysctx = ctx_factory()
@@ -42,10 +48,10 @@ def _build_fastapi(
     enable_rest: bool,
     enable_ws: bool,
     title: str,
-) -> FastAPI:
+    oauth2: OAuth2AccessControl | None,
+) -> tuple[FastAPI, RestAdapter | None]:
     @asynccontextmanager
     async def lifespan(fastapi_app: FastAPI):
-        # 生产 / TestClient 走 lifespan：进程级 sysctx 在此创建与释放
         sysctx = ctx_factory()
         await sysctx.start()
         fastapi_app.state.sysctx = sysctx
@@ -59,15 +65,16 @@ def _build_fastapi(
     async def ensure(fastapi_app: FastAPI) -> SystemContext:
         return await _ensure_sysctx_async(fastapi_app, ctx_factory)
 
+    rest_adapter = None
     if enable_rest:
-        mount_rest(fastapi, router, prefix, ensure)
+        rest_adapter = RestAdapter(fastapi, router, prefix, ensure, oauth2)
     if enable_ws:
         mount_ws(fastapi, router, ensure)
-    return fastapi
+    return fastapi, rest_adapter
 
 
 class App:
-    """对外入口类。"""
+    """Compose handlers, middleware, transports, and process-level context."""
 
     def __init__(
         self,
@@ -77,49 +84,122 @@ class App:
         enable_rest: bool = True,
         enable_ws: bool = True,
         title: str = "service",
+        oauth2: OAuth2AccessControl | None = None,
     ) -> None:
         self._router = MessageRouter()
         self._ctx_factory = ctx_factory
         self._prefix = prefix.rstrip("/") if prefix else ""
-        self._fastapi = _build_fastapi(
-            self._router, ctx_factory, self._prefix, enable_rest, enable_ws, title
+        self._fastapi, self._rest_adapter = _build_fastapi(
+            self._router,
+            ctx_factory,
+            self._prefix,
+            enable_rest,
+            enable_ws,
+            title,
+            oauth2,
         )
 
-    # ------------------------------------------------------------ 注册委托
-    def handle(self, msg_type: str, *, request_model: type[BaseModel] | None = None):
-        """非流式 handler 装饰器（委托 router）。"""
-        return self._router.handle(msg_type, request_model=request_model)
+    def handle(
+        self,
+        msg_type: str,
+        *,
+        request_model: type[BaseModel] | None = None,
+        response_model: type[BaseModel] | None = None,
+        summary: str | None = None,
+        description: str | None = None,
+        tags: Iterable[str] | None = None,
+    ):
+        """Register an async function; shorthand for :meth:`register`."""
+        spec = HandlerSpec(
+            msg_type=msg_type,
+            request_model=request_model,
+            response_model=response_model,
+            summary=summary,
+            description=description,
+            tags=tuple(tags or ()),
+        )
 
-    def stream(self, msg_type: str, *, request_model: type[BaseModel] | None = None):
-        """流式 handler 装饰器（委托 router）。"""
-        return self._router.stream(msg_type, request_model=request_model)
+        def decorator(fn):
+            self.register(FunctionMessageHandler(spec, fn))
+            return fn
+
+        return decorator
+
+    def stream(
+        self,
+        msg_type: str,
+        *,
+        request_model: type[BaseModel] | None = None,
+        summary: str | None = None,
+        description: str | None = None,
+        tags: Iterable[str] | None = None,
+    ):
+        """Register an async generator; shorthand for :meth:`register`."""
+        spec = HandlerSpec(
+            msg_type=msg_type,
+            request_model=request_model,
+            summary=summary,
+            description=description,
+            tags=tuple(tags or ()),
+        )
+
+        def decorator(fn):
+            self.register(FunctionStreamMessageHandler(spec, fn))
+            return fn
+
+        return decorator
+
+    def register(
+        self,
+        handler: MessageHandler[Any] | StreamMessageHandler[Any],
+    ) -> "App":
+        """Register one reusable handler and expose it through enabled adapters."""
+        self._router.register(handler)
+        if self._rest_adapter is not None:
+            self._rest_adapter.register(handler)
+        return self
+
+    def register_all(
+        self,
+        handlers: Iterable[MessageHandler[Any] | StreamMessageHandler[Any]],
+    ) -> "App":
+        """Register multiple reusable handlers in order."""
+        for handler in handlers:
+            self.register(handler)
+        return self
+
+    def include(self, module: HandlerModule) -> "App":
+        """Include every handler contributed by a reusable handler module."""
+        handlers = getattr(module, "handlers", None)
+        if not callable(handlers):
+            raise TypeError("module must provide a handlers() method")
+        return self.register_all(handlers())
 
     def use(self, middleware) -> None:
-        """中间件（委托 router）。"""
+        """Register transport-neutral router middleware."""
         self._router.use(middleware)
 
-    # ------------------------------------------------------------ 派发
-    async def dispatch(self, env: Envelope, rctx: Any) -> DispatchResult:
-        """核心派发（传输无关）。适配器与直调共用此路径。"""
+    async def dispatch(self, env: Envelope[Any], rctx: Any) -> DispatchResult:
+        """Dispatch directly through the same router used by all adapters."""
         return await self._router.dispatch(env, rctx)
 
-    # ------------------------------------------------------------ 传输
     @property
     def asgi(self) -> FastAPI:
-        """底层 ASGI，供 TestClient/httpx 测试与 uvicorn 部署。"""
+        """Expose the underlying ASGI app for deployment and testing."""
         return self._fastapi
 
-    def run(self, host: str | None = None, port: int | None = None, **kwargs: Any) -> None:
-        """uvicorn 部署；多副本：不同端口起多实例，共享 redis。
-
-        host/port 缺省取自环境变量 ``OPENJIUWEN_SERVICE_HOST`` / ``OPENJIUWEN_SERVICE_PORT``；
-        显式传参则覆盖环境变量。
-        """
+    def run(
+        self,
+        host: str | None = None,
+        port: int | None = None,
+        **kwargs: Any,
+    ) -> None:
+        """Run with uvicorn, using ServiceConfig defaults when omitted."""
         import uvicorn
 
         from ..config import ServiceConfig
 
-        cfg = ServiceConfig.from_env()
-        host = cfg.host if host is None else host
-        port = cfg.port if port is None else port
+        config = ServiceConfig.from_env()
+        host = config.host if host is None else host
+        port = config.port if port is None else port
         uvicorn.run(self._fastapi, host=host, port=port, **kwargs)

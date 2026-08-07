@@ -5,6 +5,7 @@
 
 对外出口随子模块实现逐步充实（Envelope / App / SystemContext / 原语 / 错误类）。
 """
+
 from .envelope import Envelope, Metadata, ResponseEnvelope, StreamChunk
 from .config import ServiceConfig
 from .errors import (
@@ -30,6 +31,16 @@ from .context import (
     TypedAppContext,
 )
 from .context.primitives.idempotency import idempotency_guard
+from .routing.handlers import (
+    FunctionMessageHandler,
+    FunctionStreamMessageHandler,
+    HandlerModule,
+    HandlerRegistry,
+    HandlerSpec,
+    MessageHandler,
+    StreamMessageHandler,
+)
+from .security import OAuth2AccessControl
 from .server.app import App
 
 __version__ = "0.1.0"
@@ -62,8 +73,18 @@ __all__ = [
     "AuditLogger",
     "LoggingAuditLogger",
     "NoopAuditLogger",
+    # handlers
+    "HandlerSpec",
+    "MessageHandler",
+    "StreamMessageHandler",
+    "FunctionMessageHandler",
+    "FunctionStreamMessageHandler",
+    "HandlerRegistry",
+    "HandlerModule",
     # middleware
     "idempotency_guard",
+    # security
+    "OAuth2AccessControl",
     # server
     "App",
 ]
