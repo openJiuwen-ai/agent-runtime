@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 from typing import Any, Callable
 
 from fastapi import FastAPI
+from pydantic import BaseModel
 
 from ..context.system_context import SystemContext
 from ..envelope import Envelope
@@ -85,13 +86,13 @@ class App:
         )
 
     # ------------------------------------------------------------ 注册委托
-    def handle(self, msg_type: str):
+    def handle(self, msg_type: str, *, request_model: type[BaseModel] | None = None):
         """非流式 handler 装饰器（委托 router）。"""
-        return self._router.handle(msg_type)
+        return self._router.handle(msg_type, request_model=request_model)
 
-    def stream(self, msg_type: str):
+    def stream(self, msg_type: str, *, request_model: type[BaseModel] | None = None):
         """流式 handler 装饰器（委托 router）。"""
-        return self._router.stream(msg_type)
+        return self._router.stream(msg_type, request_model=request_model)
 
     def use(self, middleware) -> None:
         """中间件（委托 router）。"""

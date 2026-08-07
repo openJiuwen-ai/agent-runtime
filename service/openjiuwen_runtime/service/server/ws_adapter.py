@@ -15,7 +15,7 @@ from typing import Any, Awaitable, Callable
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from ..envelope import Envelope
-from ..routing.result import UnaryResult
+from ..routing.result import StreamResult, UnaryResult
 
 
 def _error_frame(message: str, code: str = "validation") -> str:
@@ -50,14 +50,25 @@ def mount_ws(
                         await ws.send_text(_error_frame("invalid envelope frame"))
                     continue
 
-                rctx = sysctx.for_request(env.metadata)
-                result = await router.dispatch(env, rctx)
-                if isinstance(result, UnaryResult):
-                    async with send_lock:
-                        await ws.send_text(json.dumps(result.response.to_dict(), ensure_ascii=False))
-                else:
-                    async for chunk in result.chunks:
+                rctx = sysctx.for_request(env)
+                result = None
+                try:
+                    result = await router.dispatch(env, rctx)
+                    if isinstance(result, UnaryResult):
                         async with send_lock:
-                            await ws.send_text(json.dumps(chunk.to_dict(), ensure_ascii=False))
+                            await ws.send_text(json.dumps(
+                                result.response.to_dict(), ensure_ascii=False
+                            ))
+                    else:
+                        async for chunk in result.chunks:
+                            async with send_lock:
+                                await ws.send_text(json.dumps(
+                                    chunk.to_dict(), ensure_ascii=False
+                                ))
+                finally:
+                    if isinstance(result, StreamResult):
+                        await result.aclose()
+                    else:
+                        await rctx.close()
         except WebSocketDisconnect:
             return

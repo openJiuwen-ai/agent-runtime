@@ -10,12 +10,22 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from typing import Any, AsyncIterator
 
+from pydantic import BaseModel, ValidationError as PydanticValidationError
+
 from ..envelope import Envelope, ResponseEnvelope, StreamChunk
-from ..errors import ErrorCode, FrameworkError, NotFoundError, ValidationError, exception_code
+from ..errors import (
+    DeadlineExceeded,
+    ErrorCode,
+    FrameworkError,
+    NotFoundError,
+    ValidationError,
+    exception_code,
+)
 from .handlers import Middleware
 from .result import DispatchResult, StreamResult, UnaryResult
 
@@ -29,6 +39,7 @@ _STREAM = "stream"
 class _Endpoint:
     handler: Any
     kind: str  # _UNARY | _STREAM
+    request_model: type[BaseModel] | None = None
 
 
 class MessageRouter:
@@ -39,20 +50,20 @@ class MessageRouter:
         self._middleware: list[Middleware] = []
 
     # ------------------------------------------------------------------ 注册
-    def handle(self, msg_type: str):
+    def handle(self, msg_type: str, *, request_model: type[BaseModel] | None = None):
         """非流式 handler 装饰器。"""
 
         def decorator(fn):
-            self._register(msg_type, fn, _UNARY)
+            self._register(msg_type, fn, _UNARY, request_model)
             return fn
 
         return decorator
 
-    def stream(self, msg_type: str):
+    def stream(self, msg_type: str, *, request_model: type[BaseModel] | None = None):
         """流式 handler 装饰器。"""
 
         def decorator(fn):
-            self._register(msg_type, fn, _STREAM)
+            self._register(msg_type, fn, _STREAM, request_model)
             return fn
 
         return decorator
@@ -68,7 +79,13 @@ class MessageRouter:
         """type → kind 视图（适配器据此区分流式/非流式）。"""
         return {t: ep.kind for t, ep in self._endpoints.items()}
 
-    def _register(self, msg_type: str, handler: Any, kind: str) -> None:
+    def _register(
+        self,
+        msg_type: str,
+        handler: Any,
+        kind: str,
+        request_model: type[BaseModel] | None,
+    ) -> None:
         if not msg_type:
             raise ValidationError("msg_type must be a non-empty string")
         existing = self._endpoints.get(msg_type)
@@ -77,7 +94,11 @@ class MessageRouter:
                 f"type {msg_type!r} already registered as {existing.kind}",
                 code=ErrorCode.CONFLICT,
             )
-        self._endpoints[msg_type] = _Endpoint(handler=handler, kind=kind)
+        self._endpoints[msg_type] = _Endpoint(
+            handler=handler,
+            kind=kind,
+            request_model=request_model,
+        )
 
     # ------------------------------------------------------------------ 派发
     async def dispatch(self, env: Envelope, rctx: Any) -> DispatchResult:
@@ -86,15 +107,25 @@ class MessageRouter:
             return UnaryResult(response=self._error_response(
                 env, NotFoundError(f"no handler registered for type {env.type!r}")))
 
-        core = self._build_core(endpoint)
-        chain = self._compose(self._middleware, core)
         try:
+            self._validate_request(endpoint, env)
+            core = self._build_core(endpoint)
+            chain = self._compose(self._middleware, core)
             return await chain(rctx, env)
         except FrameworkError as exc:
             return UnaryResult(response=self._error_response(env, exc))
         except Exception as exc:  # noqa: BLE001 - 归一化为 internal 错误信封
             logger.exception("dispatch failed: type=%s request_id=%s", env.type, env.metadata.request_id)
             return UnaryResult(response=self._error_response(env, FrameworkError(str(exc))))
+
+    @staticmethod
+    def _validate_request(endpoint: _Endpoint, env: Envelope[Any]) -> None:
+        if endpoint.request_model is None:
+            return
+        try:
+            env.rawdata = endpoint.request_model.model_validate(env.rawdata)
+        except PydanticValidationError as exc:
+            raise ValidationError(str(exc)) from exc
 
     # -------------------------------------------------------------- 核心组装
     def _build_core(self, endpoint: _Endpoint):
@@ -104,15 +135,16 @@ class MessageRouter:
 
     def _unary_core(self, handler):
         async def core(ctx, env):
-            result = await handler(ctx, env)
+            result = await self._await_with_lifecycle(lambda: handler(ctx, env), ctx)
             return UnaryResult(response=self._normalize_unary(result, env))
 
         return core
 
     def _stream_core(self, handler):
         async def core(ctx, env):
+            self._check_interrupted(ctx)
             ait = handler(ctx, env)  # async generator → async iterator（同步调用）
-            return StreamResult(chunks=self._wrap_stream(ait, env))
+            return StreamResult(chunks=self._wrap_stream(ait, env, ctx), context=ctx)
 
         return core
 
@@ -141,7 +173,9 @@ class MessageRouter:
         raise FrameworkError(
             f"unary handler must return dict or ResponseEnvelope, got {type(result).__name__}")
 
-    def _wrap_stream(self, ait: AsyncIterator, env: Envelope) -> AsyncIterator[StreamChunk]:
+    def _wrap_stream(
+        self, ait: AsyncIterator, env: Envelope, ctx: Any
+    ) -> AsyncIterator[StreamChunk]:
         """为流式 handler 的产物分配 sequence、置末帧 is_final；出错发末帧错误分片。"""
 
         async def gen():
@@ -149,16 +183,29 @@ class MessageRouter:
             it = ait.__aiter__()
             try:
                 try:
-                    nxt = await it.__anext__()
+                    nxt = await self._await_with_lifecycle(it.__anext__, ctx)
                 except StopAsyncIteration:
                     return
                 while True:
                     cur = nxt
                     try:
-                        nxt = await it.__anext__()
+                        nxt = await self._await_with_lifecycle(it.__anext__, ctx)
                     except StopAsyncIteration:
                         seq += 1
                         yield self._to_chunk(cur, seq, is_final=True, env=env)
+                        return
+                    except FrameworkError as exc:
+                        seq += 1
+                        yield self._to_chunk(cur, seq, is_final=False, env=env)
+                        seq += 1
+                        yield self._error_chunk(seq, env, exc)
+                        return
+                    except Exception as exc:  # noqa: BLE001
+                        logger.exception("stream handler failed: type=%s", env.type)
+                        seq += 1
+                        yield self._to_chunk(cur, seq, is_final=False, env=env)
+                        seq += 1
+                        yield self._error_chunk(seq, env, FrameworkError(str(exc)))
                         return
                     seq += 1
                     yield self._to_chunk(cur, seq, is_final=False, env=env)
@@ -171,6 +218,36 @@ class MessageRouter:
                 yield self._error_chunk(seq, env, FrameworkError(str(exc)))
 
         return gen()
+
+    async def _await_with_lifecycle(self, awaitable_factory, ctx: Any):
+        self._check_interrupted(ctx)
+        remaining = self._remaining_seconds(ctx)
+        if remaining is not None and remaining <= 0:
+            raise DeadlineExceeded("request deadline exceeded")
+        awaitable = awaitable_factory()
+        if remaining is None:
+            return await awaitable
+        timeout = asyncio.timeout(remaining)
+        try:
+            async with timeout:
+                return await awaitable
+        except TimeoutError as exc:
+            if timeout.expired():
+                raise DeadlineExceeded("request deadline exceeded") from exc
+            raise
+
+    @staticmethod
+    def _check_interrupted(ctx: Any) -> None:
+        check = getattr(ctx, "check_interrupted", None)
+        if callable(check):
+            check()
+
+    @staticmethod
+    def _remaining_seconds(ctx: Any) -> float | None:
+        remaining = getattr(ctx, "remaining_seconds", None)
+        if not callable(remaining):
+            return None
+        return remaining()
 
     @staticmethod
     def _to_chunk(item: Any, sequence: int, is_final: bool, env: Envelope) -> StreamChunk:

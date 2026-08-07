@@ -1,31 +1,34 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
-"""SystemContext / RequestContext（设计 §8）。
+"""SystemContext（设计 §8）。
 
 - 进程级 SystemContext（lifespan 创建/释放）：db / redis / settings / logger / 原语工厂。
-- 请求级 RequestContext（``for_request(metadata)`` 派生）：request_id 等 + lock_owner +
-  绑定 request_id 的 logger + 对进程级组件的引用；handler 只通过它访问能力。
+- 请求级 RequestContext 由 ``for_request(envelope)`` 派生。
 - 事务：``async with ctx.transaction() as s`` 取 SQLAlchemy session（多操作原子）。
 - 硬约束：handler 禁止读写模块级可变状态——无内存状态的多副本。
 """
 from __future__ import annotations
 
 import logging
+import math
 import socket
+import time
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, AsyncIterator, TypeVar, overload
 from uuid import uuid4
 
 import redis.asyncio
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import ServiceConfig
-from ..envelope import Metadata
-from ..errors import FrameworkError
-from .primitives.kv_store import KVStore
+from ..envelope import Envelope, Metadata
+from ..errors import DatabaseUnavailable, FrameworkError, RedisUnavailable
+from .audit import AuditEvent, AuditLogger, LoggingAuditLogger, NoopAuditLogger
+from .request_context import RequestContext
 
 _logger = logging.getLogger("openjiuwen_runtime.service")
+TRequest = TypeVar("TRequest")
 
 
 class SystemContext:
@@ -39,19 +42,69 @@ class SystemContext:
         *,
         key_prefix: str = "service",
         instance_id: str | None = None,
+        logger: logging.Logger | None = None,
+        audit_logger: AuditLogger | None = None,
+        audit: AuditLogger | None = None,
+        request_timeout_seconds: float | None = None,
         _owns_redis: bool = False,
     ) -> None:
         self.redis = redis
         self.db = db
         self.settings = settings
+        if request_timeout_seconds is None:
+            request_timeout_seconds = self._request_timeout_from_settings(settings)
+        if not math.isfinite(request_timeout_seconds) or request_timeout_seconds < 0:
+            raise ValueError("request_timeout_seconds must be a finite non-negative number")
+        self.request_timeout_seconds = float(request_timeout_seconds)
         self.key_prefix = key_prefix or ""
         self.instance_id = instance_id or f"{socket.gethostname()}:{uuid4().hex[:8]}"
+        self.logger = logger or _logger
+        if audit_logger is not None and audit is not None:
+            raise ValueError("audit_logger and audit cannot both be provided")
+        self.audit_logger: AuditLogger = (
+            audit_logger or audit or LoggingAuditLogger(self.logger)
+        )
         self._owns_redis = _owns_redis
         self._started = False
 
+    @staticmethod
+    def _request_timeout_from_settings(settings: Any) -> float:
+        default = ServiceConfig.from_env().request_timeout_seconds
+        if settings is None:
+            return default
+        if isinstance(settings, dict):
+            value = settings.get("request_timeout_seconds", default)
+        else:
+            value = getattr(settings, "request_timeout_seconds", default)
+        return float(value)
+
     # -------------------------------------------------------------- 命名空间
-    def _ns(self, suffix: str) -> str:
+    def namespace(self, suffix: str) -> str:
+        """Return the configured namespace for a service capability."""
         return f"{self.key_prefix}:{suffix}" if self.key_prefix else suffix
+
+    # -------------------------------------------------------------- 能力检查
+    def require_db(self) -> Any:
+        """Return the configured DB handler or raise a framework error."""
+        if self.db is None:
+            raise DatabaseUnavailable("database handler is not configured")
+        return self.db
+
+    def require_redis(self) -> Any:
+        """Return the configured Redis client or raise a framework error."""
+        if self.redis is None:
+            raise RedisUnavailable("redis client is not configured")
+        return self.redis
+
+    def set_audit_logger(self, audit_logger: AuditLogger | None) -> None:
+        """Replace the process audit sink; ``None`` selects a no-op sink."""
+        self.audit_logger = audit_logger or NoopAuditLogger()
+
+    set_audit = set_audit_logger
+
+    async def audit(self, event: AuditEvent) -> None:
+        """Write an audit event through the configured sink."""
+        await self.audit_logger.write(event)
 
     # -------------------------------------------------------------- 生命周期
     async def start(self) -> None:
@@ -71,35 +124,53 @@ class SystemContext:
         self._started = False
 
     # -------------------------------------------------------------- 请求上下文
-    def for_request(self, metadata: Metadata) -> "RequestContext":
+    @overload
+    def for_request(self, request: Envelope[TRequest]) -> RequestContext[TRequest]:
+        ...
+
+    @overload
+    def for_request(self, request: Metadata) -> RequestContext[Any]:
+        ...
+
+    def for_request(self, request: Envelope[TRequest] | Metadata) -> RequestContext[TRequest] | RequestContext[Any]:
+        """Create a request context from an envelope or legacy standalone metadata."""
+        if isinstance(request, Envelope):
+            envelope = request
+            metadata = request.metadata
+        elif isinstance(request, Metadata):
+            envelope = None
+            metadata = request
+        else:
+            raise TypeError("request must be an Envelope or Metadata")
+        deadline = None
+        if self.request_timeout_seconds > 0:
+            deadline = time.monotonic() + self.request_timeout_seconds
         return RequestContext(
             sysctx=self,
-            request_id=metadata.request_id,
-            user_id=metadata.user_id,
-            chat_id=metadata.chat_id,
-            session_id=metadata.session_id,
-            trace_id=metadata.trace_id,
-            bot_id=metadata.bot_id,
-            channel=metadata.channel,
+            envelope=envelope,
+            _metadata=metadata,
             lock_owner=f"{self.instance_id}:{uuid4().hex}",
-            logger=_logger,
+            logger=self.logger,
+            deadline=deadline,
         )
 
     # -------------------------------------------------------------- 事务
     @asynccontextmanager
-    async def transaction(self):
-        """多操作原子事务（独立 SQLAlchemy session，不改 foundation）。
+    async def transaction(self) -> AsyncIterator[AsyncSession]:
+        """Yield one SQLAlchemy session and commit or roll it back on exit.
 
-        ``db.session_factory`` 在 foundation ``SQLAlchemyHandler`` 上已暴露；未连接时为 None。
+        Request-level ``db_*`` operations remain independent DBHandler calls and
+        do not use the session yielded here.
         """
-        sf = getattr(self.db, "session_factory", None) if self.db is not None else None
-        if sf is None:
+        db = self.require_db()
+        sf = getattr(db, "session_factory", None)
+        if not callable(sf):
             raise FrameworkError("db has no session_factory; transaction() unavailable")
-        session = sf()
+        session: AsyncSession = sf()
         try:
             yield session
             await session.commit()
-        except Exception:
+        except BaseException:
             await session.rollback()
             raise
         finally:
@@ -125,71 +196,13 @@ class SystemContext:
         url = cfg.redis_url if redis_url is None else redis_url
         kp = cfg.key_prefix if key_prefix is None else key_prefix
         client = redis.asyncio.from_url(url, decode_responses=False)
-        return cls(redis=client, db=db, settings=settings,
-                   key_prefix=kp, _owns_redis=True)
+        return cls(
+            redis=client,
+            db=db,
+            settings=cfg if settings is None else settings,
+            key_prefix=kp,
+            _owns_redis=True,
+        )
 
 
-@dataclass
-class RequestContext:
-    """每条 Envelope 派生的请求级上下文；handler 经它访问所有能力。"""
-
-    sysctx: SystemContext
-    request_id: str
-    user_id: Optional[str] = None
-    chat_id: Optional[str] = None
-    session_id: Optional[str] = None
-    trace_id: Optional[str] = None
-    bot_id: Optional[str] = None
-    channel: Optional[str] = None
-    lock_owner: str = ""
-    logger: logging.Logger = field(default_factory=lambda: _logger)
-    _kv: Optional[KVStore] = field(default=None, repr=False, compare=False)
-    _idem: Any = field(default=None, repr=False, compare=False)
-    _queue: Any = field(default=None, repr=False, compare=False)
-    _pubsub: Any = field(default=None, repr=False, compare=False)
-
-    @property
-    def db(self) -> Any:
-        return self.sysctx.db
-
-    @property
-    def kv(self) -> KVStore:
-        """分布式字典 / 会话存储（顶替进程内 dict）。"""
-        if self._kv is None:
-            self._kv = KVStore(self.sysctx.redis, prefix=self.sysctx._ns("kv"))
-        return self._kv
-
-    @property
-    def idempotency(self):
-        """幂等：按 request_id 全局去重 / 结果回放。"""
-        if self._idem is None:
-            from .primitives.idempotency import Idempotency
-            self._idem = Idempotency(self.sysctx.redis, prefix=self.sysctx._ns("idem"))
-        return self._idem
-
-    @property
-    def queue(self):
-        """队列：跨副本有序、副本重启不丢（Redis Streams + 消费组）。"""
-        if self._queue is None:
-            from .primitives.stream_queue import StreamQueue
-            self._queue = StreamQueue(self.sysctx.redis, prefix=self.sysctx._ns("queue"))
-        return self._queue
-
-    @property
-    def pubsub(self):
-        """发布订阅：瞬时扇出（Redis Pub/Sub）。"""
-        if self._pubsub is None:
-            from .primitives.pubsub import PubSub
-            self._pubsub = PubSub(self.sysctx.redis, prefix=self.sysctx._ns("pubsub"))
-        return self._pubsub
-
-    def lock(self, key: str, *, ttl: float = 30, timeout: float = 0, renew_interval: float | None = None):
-        """分布式锁：``async with ctx.lock(key, ttl=..., timeout=...)``。"""
-        from .primitives.lock import DistributedLock
-        return DistributedLock(
-            self.sysctx.redis, key, owner=self.lock_owner, ttl=ttl, timeout=timeout,
-            prefix=self.sysctx._ns("lock"), renew_interval=renew_interval)
-
-    def transaction(self):
-        """多操作原子事务（委托 SystemContext）。"""
-        return self.sysctx.transaction()
+__all__ = ["RequestContext", "SystemContext"]

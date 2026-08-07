@@ -12,6 +12,7 @@ _ENVS = [
     "OPENJIUWEN_SERVICE_REDIS_URL",
     "OPENJIUWEN_SERVICE_REDIS_KEY_PREFIX",
     "OPENJIUWEN_SERVICE_TITLE",
+    "OPENJIUWEN_SERVICE_REQUEST_TIMEOUT_SECONDS",
 ]
 
 
@@ -25,6 +26,7 @@ def test_defaults_when_env_unset(monkeypatch):
     assert cfg.redis_url == "redis://localhost:6379/0"
     assert cfg.key_prefix == "service"
     assert cfg.title == "service"
+    assert cfg.request_timeout_seconds == 0
 
 
 @pytest.mark.unit
@@ -34,17 +36,27 @@ def test_reads_all_env_vars(monkeypatch):
     monkeypatch.setenv("OPENJIUWEN_SERVICE_REDIS_URL", "redis://cache.internal:6380/3")
     monkeypatch.setenv("OPENJIUWEN_SERVICE_REDIS_KEY_PREFIX", "prod-ns")
     monkeypatch.setenv("OPENJIUWEN_SERVICE_TITLE", "echo-app")
+    monkeypatch.setenv("OPENJIUWEN_SERVICE_REQUEST_TIMEOUT_SECONDS", "2.5")
     cfg = ServiceConfig.from_env()
     assert cfg.host == "127.0.0.1"
     assert cfg.port == 9999
     assert cfg.redis_url == "redis://cache.internal:6380/3"
     assert cfg.key_prefix == "prod-ns"
     assert cfg.title == "echo-app"
+    assert cfg.request_timeout_seconds == 2.5
 
 
 @pytest.mark.unit
 def test_invalid_port_fails_fast(monkeypatch):
     monkeypatch.setenv("OPENJIUWEN_SERVICE_PORT", "not-a-port")
+    with pytest.raises(ValueError):
+        ServiceConfig.from_env()
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("value", ["invalid", "-1", "nan", "inf"])
+def test_invalid_request_timeout_fails_fast(monkeypatch, value):
+    monkeypatch.setenv("OPENJIUWEN_SERVICE_REQUEST_TIMEOUT_SECONDS", value)
     with pytest.raises(ValueError):
         ServiceConfig.from_env()
 

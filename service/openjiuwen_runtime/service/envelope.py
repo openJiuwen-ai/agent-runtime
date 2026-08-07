@@ -10,7 +10,12 @@ float（直接 JSON 可序列化）；``rawdata`` 为任意 JSON 可序列化 di
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Generic, TypeVar
+
+from pydantic import BaseModel
+
+
+TRequest = TypeVar("TRequest")
 
 
 @dataclass
@@ -25,6 +30,7 @@ class Metadata:
     channel: str | None = None
     timestamp: float | None = None
     trace_id: str | None = None
+    instance_id: str | None = None
     extra: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -37,6 +43,7 @@ class Metadata:
             "channel": self.channel,
             "timestamp": self.timestamp,
             "trace_id": self.trace_id,
+            "instance_id": self.instance_id,
             "extra": dict(self.extra),
         }
 
@@ -51,29 +58,34 @@ class Metadata:
             channel=d.get("channel"),
             timestamp=d.get("timestamp"),
             trace_id=d.get("trace_id"),
+            instance_id=d.get("instance_id"),
             extra=dict(d.get("extra") or {}),
         )
 
 
 @dataclass
-class Envelope:
+class Envelope(Generic[TRequest]):
     """框架唯一入口消息结构。``type`` 既是路由键又是 REST 路径段。"""
 
     type: str
     metadata: Metadata
-    rawdata: dict
+    rawdata: TRequest
     version: str = "1"
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "type": self.type,
             "metadata": self.metadata.to_dict(),
-            "rawdata": self.rawdata,
+            "rawdata": (
+                self.rawdata.model_dump(mode="json")
+                if isinstance(self.rawdata, BaseModel)
+                else self.rawdata
+            ),
             "version": self.version,
         }
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "Envelope":
+    def from_dict(cls, d: dict[str, Any]) -> "Envelope[dict[str, Any]]":
         return cls(
             type=d["type"],
             metadata=Metadata.from_dict(d.get("metadata") or {}),
