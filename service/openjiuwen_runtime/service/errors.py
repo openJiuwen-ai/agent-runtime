@@ -6,6 +6,7 @@
 统一错误码 + FrameworkError 体系：中间件外层捕获后归一化为
 ``ResponseEnvelope(ok=False, error_code, error_message)``，绝不裸 500。
 """
+
 from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
@@ -25,6 +26,8 @@ class ErrorCode:
     DEADLINE_EXCEEDED = "deadline_exceeded"
     DATABASE_UNAVAILABLE = "database_unavailable"
     REDIS_UNAVAILABLE = "redis_unavailable"
+    CACHE_UNAVAILABLE = "cache_unavailable"
+    LOCK_BACKEND_UNAVAILABLE = "lock_backend_unavailable"
 
 
 class FrameworkError(Exception):
@@ -66,10 +69,24 @@ class LockNotAcquired(FrameworkError):
     code = ErrorCode.LOCKED
 
 
+class LockAcquireTimeout(LockNotAcquired):
+    """等待锁达到 ``wait_timeout``。"""
+
+
 class LockLost(FrameworkError):
     """持锁期间续期失锁（被别人抢占或过期）。"""
 
     code = ErrorCode.LOCKED
+
+
+class LockBackendUnavailable(FrameworkError):
+    """锁后端未配置或不具备请求声明的能力。"""
+
+    code = ErrorCode.LOCK_BACKEND_UNAVAILABLE
+
+
+class InvalidLockLease(LockLost):
+    """租约已失效、释放或凭证与后端状态不匹配。"""
 
 
 class FrameworkTimeout(FrameworkError):
@@ -102,6 +119,12 @@ class RedisUnavailable(FrameworkError):
     code = ErrorCode.REDIS_UNAVAILABLE
 
 
+class CacheUnavailable(FrameworkError):
+    """The cache is absent, closed, unreachable, or contains invalid data."""
+
+    code = ErrorCode.CACHE_UNAVAILABLE
+
+
 @runtime_checkable
 class _HasCode(Protocol):
     code: str
@@ -125,6 +148,8 @@ _HTTP_STATUS = {
     ErrorCode.DEADLINE_EXCEEDED: 504,
     ErrorCode.DATABASE_UNAVAILABLE: 503,
     ErrorCode.REDIS_UNAVAILABLE: 503,
+    ErrorCode.CACHE_UNAVAILABLE: 503,
+    ErrorCode.LOCK_BACKEND_UNAVAILABLE: 503,
     ErrorCode.INTERNAL: 500,
 }
 
