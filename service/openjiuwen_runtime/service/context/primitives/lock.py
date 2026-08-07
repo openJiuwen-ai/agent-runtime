@@ -7,6 +7,7 @@
 匹配才删/续），避免误删别人的锁。后台自动续期；续期失锁 → 退出时抛 ``LockLost``。
 ``timeout=0`` 非阻塞、抢不到抛 ``LockNotAcquired``。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -15,11 +16,64 @@ from typing import Any, Callable
 
 from redis.exceptions import WatchError
 
-from ...errors import LockLost, LockNotAcquired
+from ...errors import InvalidLockLease, LockLost, LockNotAcquired
+from ..locks.base import LockCredential
+from ..locks.backends.redis import RedisLockBackend as RedisLockBackend
 
 logger = logging.getLogger(__name__)
 
 _ACQUIRE_RETRY = 0.05  # 阻塞抢锁时的轮询间隔（秒）
+
+
+class ManagedDistributedLock:
+    """``ctx.lock()`` 的兼容包装，内部委托 ``LockManager.hold()``。"""
+
+    def __init__(
+        self,
+        manager: Any,
+        key: str,
+        *,
+        ttl: float = 30,
+        timeout: float = 0,
+        renew_interval: float | None = None,
+    ) -> None:
+        self._manager = manager
+        self._raw_key = key
+        self.key = manager.backend_key(key)
+        self._ttl = ttl
+        self._timeout = timeout
+        self._renew_ratio = renew_interval / ttl if renew_interval is not None else None
+        self._context_manager = None
+        self._lease = None
+
+    @property
+    def credential(self) -> LockCredential | None:
+        return self._lease.credential if self._lease is not None else None
+
+    async def __aenter__(self) -> "ManagedDistributedLock":
+        self._context_manager = self._manager.hold(
+            self._raw_key,
+            ttl=self._ttl,
+            wait_timeout=self._timeout,
+            auto_renew=True,
+            renew_ratio=self._renew_ratio,
+        )
+        self._lease = await self._context_manager.__aenter__()
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool:
+        if self._context_manager is None:
+            return False
+        return bool(await self._context_manager.__aexit__(exc_type, exc, tb))
+
+    async def renew_once(self) -> bool:
+        if self._lease is None:
+            raise InvalidLockLease(f"lock {self.key!r} has not been acquired")
+        try:
+            await self._lease.renew()
+            return True
+        except LockLost:
+            return False
 
 
 class DistributedLock:
@@ -42,7 +96,9 @@ class DistributedLock:
         self._owner = owner
         self._ttl_ms = int(ttl * 1000)
         self._timeout = timeout
-        self._renew_interval = renew_interval if renew_interval is not None else max(1.0, ttl / 3)
+        self._renew_interval = (
+            renew_interval if renew_interval is not None else max(1.0, ttl / 3)
+        )
         self._renew_task: asyncio.Task | None = None
         self._lost = False
         self._check_interrupted = check_interrupted
@@ -63,11 +119,14 @@ class DistributedLock:
                     break
                 if loop.time() >= deadline:
                     raise LockNotAcquired(
-                        f"could not acquire lock {self.key!r} within {self._timeout}s")
+                        f"could not acquire lock {self.key!r} within {self._timeout}s"
+                    )
                 await asyncio.sleep(_ACQUIRE_RETRY)
         else:
             if not await self._try_acquire():
-                raise LockNotAcquired(f"could not acquire lock {self.key!r} (non-blocking)")
+                raise LockNotAcquired(
+                    f"could not acquire lock {self.key!r} (non-blocking)"
+                )
         self._renew_task = asyncio.create_task(self._renew_loop())
         return self
 

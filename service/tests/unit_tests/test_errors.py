@@ -2,9 +2,11 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
 """错误模型：错误码、异常类、code 归一化与 HTTP 状态映射（设计 §12）。"""
+
 import pytest
 
 from openjiuwen_runtime.service.errors import (
+    CacheUnavailable,
     DatabaseUnavailable,
     DeadlineExceeded,
     ErrorCode,
@@ -40,9 +42,15 @@ def test_subclass_codes():
     assert DeadlineExceeded("x").code == ErrorCode.DEADLINE_EXCEEDED
     assert DatabaseUnavailable("x").code == ErrorCode.DATABASE_UNAVAILABLE
     assert RedisUnavailable("x").code == ErrorCode.REDIS_UNAVAILABLE
+    assert CacheUnavailable("x").code == ErrorCode.CACHE_UNAVAILABLE
     # 都是 FrameworkError 子类 → 中间件可统一捕获
-    for exc in (ValidationError(""), NotFoundError(""), IdempotentConflict(""),
-                LockNotAcquired(""), LockLost("")):
+    for exc in (
+        ValidationError(""),
+        NotFoundError(""),
+        IdempotentConflict(""),
+        LockNotAcquired(""),
+        LockLost(""),
+    ):
         assert isinstance(exc, FrameworkError)
 
 
@@ -73,6 +81,7 @@ def test_http_status_mapping():
     assert http_status_for(ErrorCode.DEADLINE_EXCEEDED) == 504
     assert http_status_for(ErrorCode.DATABASE_UNAVAILABLE) == 503
     assert http_status_for(ErrorCode.REDIS_UNAVAILABLE) == 503
+    assert http_status_for(ErrorCode.CACHE_UNAVAILABLE) == 503
     assert http_status_for(ErrorCode.INTERNAL) == 500
     # 未知 code → 500（fail-safe）
     assert http_status_for("totally-unknown") == 500
