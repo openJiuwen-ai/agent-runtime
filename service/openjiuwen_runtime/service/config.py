@@ -13,9 +13,11 @@
 | ``OPENJIUWEN_SERVICE_REDIS_URL`` | 协调用 redis 连接串 | ``redis://localhost:6379/0`` |
 | ``OPENJIUWEN_SERVICE_REDIS_KEY_PREFIX`` | redis 键命名空间前缀 | ``service`` |
 | ``OPENJIUWEN_SERVICE_TITLE`` | 服务标题（OpenAPI/日志） | ``service`` |
+| ``OPENJIUWEN_SERVICE_REQUEST_TIMEOUT_SECONDS`` | 请求超时秒数，0 表示不设置 deadline | ``0`` |
 """
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass
 
@@ -24,6 +26,7 @@ _DEFAULT_PORT = 8090
 _DEFAULT_REDIS_URL = "redis://localhost:6379/0"
 _DEFAULT_KEY_PREFIX = "service"
 _DEFAULT_TITLE = "service"
+_DEFAULT_REQUEST_TIMEOUT_SECONDS = 0.0
 
 
 @dataclass(frozen=True)
@@ -35,6 +38,11 @@ class ServiceConfig:
     redis_url: str = _DEFAULT_REDIS_URL
     key_prefix: str = _DEFAULT_KEY_PREFIX
     title: str = _DEFAULT_TITLE
+    request_timeout_seconds: float = _DEFAULT_REQUEST_TIMEOUT_SECONDS
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.request_timeout_seconds) or self.request_timeout_seconds < 0:
+            raise ValueError("request_timeout_seconds must be a finite non-negative number")
 
     @classmethod
     def from_env(cls) -> "ServiceConfig":
@@ -45,4 +53,8 @@ class ServiceConfig:
             redis_url=os.getenv("OPENJIUWEN_SERVICE_REDIS_URL", _DEFAULT_REDIS_URL),
             key_prefix=os.getenv("OPENJIUWEN_SERVICE_REDIS_KEY_PREFIX", _DEFAULT_KEY_PREFIX),
             title=os.getenv("OPENJIUWEN_SERVICE_TITLE", _DEFAULT_TITLE),
+            request_timeout_seconds=float(os.getenv(
+                "OPENJIUWEN_SERVICE_REQUEST_TIMEOUT_SECONDS",
+                str(_DEFAULT_REQUEST_TIMEOUT_SECONDS),
+            )),
         )

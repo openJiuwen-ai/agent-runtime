@@ -48,8 +48,11 @@ async def test_global_idx_across_two_replicas():
                            metadata=Metadata(request_id=f"r{i}"),
                            rawdata={"message": "hi"})
             rctx = ctx.for_request(env.metadata)              # 派生请求上下文
-            res = await app.dispatch(env, rctx)               # 非流式 → UnaryResult(ResponseEnvelope)
-            assert res.response.rawdata == {"echo": "hi", "idx": i + 1}   # 1,2,3,4 全局递增
+            try:
+                res = await app.dispatch(env, rctx)           # 非流式 → UnaryResult(ResponseEnvelope)
+                assert res.response.rawdata == {"echo": "hi", "idx": i + 1}   # 1,2,3,4 全局递增
+            finally:
+                await rctx.close()
     finally:
         await ctx_a.stop()
         await ctx_b.stop()

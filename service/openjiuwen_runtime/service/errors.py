@@ -21,6 +21,10 @@ class ErrorCode:
     TIMEOUT = "timeout"
     LOCKED = "locked"
     INTERNAL = "internal"
+    INTERRUPTED = "interrupted"
+    DEADLINE_EXCEEDED = "deadline_exceeded"
+    DATABASE_UNAVAILABLE = "database_unavailable"
+    REDIS_UNAVAILABLE = "redis_unavailable"
 
 
 class FrameworkError(Exception):
@@ -74,6 +78,30 @@ class FrameworkTimeout(FrameworkError):
     code = ErrorCode.TIMEOUT
 
 
+class Interrupted(FrameworkError):
+    """Request processing was interrupted explicitly."""
+
+    code = ErrorCode.INTERRUPTED
+
+
+class DeadlineExceeded(FrameworkError):
+    """The absolute request deadline has elapsed."""
+
+    code = ErrorCode.DEADLINE_EXCEEDED
+
+
+class DatabaseUnavailable(FrameworkError):
+    """The request requires a database handler that is not configured."""
+
+    code = ErrorCode.DATABASE_UNAVAILABLE
+
+
+class RedisUnavailable(FrameworkError):
+    """The request requires a Redis client that is not configured."""
+
+    code = ErrorCode.REDIS_UNAVAILABLE
+
+
 @runtime_checkable
 class _HasCode(Protocol):
     code: str
@@ -93,6 +121,10 @@ _HTTP_STATUS = {
     ErrorCode.IDEMPOTENT: 409,
     ErrorCode.LOCKED: 423,
     ErrorCode.TIMEOUT: 504,
+    ErrorCode.INTERRUPTED: 499,
+    ErrorCode.DEADLINE_EXCEEDED: 504,
+    ErrorCode.DATABASE_UNAVAILABLE: 503,
+    ErrorCode.REDIS_UNAVAILABLE: 503,
     ErrorCode.INTERNAL: 500,
 }
 

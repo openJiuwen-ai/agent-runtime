@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from typing import Any, Callable
 
 from redis.exceptions import WatchError
 
@@ -35,6 +35,7 @@ class DistributedLock:
         timeout: float = 0,
         prefix: str = "lock",
         renew_interval: float | None = None,
+        check_interrupted: Callable[[], None] | None = None,
     ) -> None:
         self._redis = redis
         self.key = f"{prefix}:{key}" if prefix else key
@@ -44,9 +45,12 @@ class DistributedLock:
         self._renew_interval = renew_interval if renew_interval is not None else max(1.0, ttl / 3)
         self._renew_task: asyncio.Task | None = None
         self._lost = False
+        self._check_interrupted = check_interrupted
 
     # -------------------------------------------------------------- 抢锁
     async def _try_acquire(self) -> bool:
+        if self._check_interrupted is not None:
+            self._check_interrupted()
         ok = await self._redis.set(self.key, self._owner, nx=True, px=self._ttl_ms)
         return bool(ok)
 

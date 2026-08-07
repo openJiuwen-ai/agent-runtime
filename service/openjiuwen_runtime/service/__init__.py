@@ -8,15 +8,27 @@
 from .envelope import Envelope, Metadata, ResponseEnvelope, StreamChunk
 from .config import ServiceConfig
 from .errors import (
+    DatabaseUnavailable,
+    DeadlineExceeded,
     ErrorCode,
     FrameworkError,
     IdempotentConflict,
     LockLost,
     LockNotAcquired,
     NotFoundError,
+    Interrupted,
+    RedisUnavailable,
     ValidationError,
 )
-from .context.system_context import RequestContext, SystemContext
+from .context import (
+    AuditEvent,
+    AuditLogger,
+    LoggingAuditLogger,
+    NoopAuditLogger,
+    RequestContext,
+    SystemContext,
+    TypedAppContext,
+)
 from .context.primitives.idempotency import idempotency_guard
 from .server.app import App
 
@@ -33,6 +45,10 @@ __all__ = [
     # errors
     "ErrorCode",
     "FrameworkError",
+    "Interrupted",
+    "DeadlineExceeded",
+    "DatabaseUnavailable",
+    "RedisUnavailable",
     "ValidationError",
     "NotFoundError",
     "IdempotentConflict",
@@ -41,6 +57,11 @@ __all__ = [
     # context
     "SystemContext",
     "RequestContext",
+    "TypedAppContext",
+    "AuditEvent",
+    "AuditLogger",
+    "LoggingAuditLogger",
+    "NoopAuditLogger",
     # middleware
     "idempotency_guard",
     # server

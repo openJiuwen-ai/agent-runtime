@@ -8,28 +8,34 @@ ctx 为 RequestContext（duck-typed，本模块仅作注解，运行期不强依
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, AsyncIterator, Awaitable, Callable, Protocol, Union, runtime_checkable
+from typing import TYPE_CHECKING, Any, AsyncIterator, Awaitable, Callable, Protocol, TypeVar, Union, runtime_checkable
 
 from ..envelope import Envelope, ResponseEnvelope, StreamChunk
 
 if TYPE_CHECKING:  # 仅注解用，避免运行期循环导入
-    from ..context.system_context import RequestContext
+    from ..context.request_context import RequestContext
+
+TRequest = TypeVar("TRequest")
 
 # handler 返回：dict（框架包成 ResponseEnvelope）或现成的 ResponseEnvelope
 UnaryReturn = Union[ResponseEnvelope, dict]
-Handler = Callable[[Any, Envelope], Awaitable[UnaryReturn]]
-StreamHandler = Callable[[Any, Envelope], AsyncIterator[StreamChunk]]
+Handler = Callable[[Any, Envelope[Any]], Awaitable[UnaryReturn]]
+StreamHandler = Callable[[Any, Envelope[Any]], AsyncIterator[StreamChunk]]
 
 # 中间件：洋葱模型，nxt 为链中下一步
-Middleware = Callable[[Any, Envelope, "Next"], Awaitable[Any]]
-Next = Callable[[Any, Envelope], Awaitable[Any]]
+Middleware = Callable[[Any, Envelope[Any], "Next"], Awaitable[Any]]
+Next = Callable[[Any, Envelope[Any]], Awaitable[Any]]
 
 
 @runtime_checkable
 class MessageHandler(Protocol):
     """非流式 handler 协议：``async (ctx, env) -> dict | ResponseEnvelope``。"""
 
-    async def __call__(self, ctx: "RequestContext", env: Envelope) -> UnaryReturn:  # pragma: no cover - 协议
+    async def __call__(
+        self,
+        ctx: "RequestContext[TRequest]",
+        env: Envelope[TRequest],
+    ) -> UnaryReturn:  # pragma: no cover - 协议
         ...
 
 
@@ -37,5 +43,9 @@ class MessageHandler(Protocol):
 class StreamMessageHandler(Protocol):
     """流式 handler 协议：``(ctx, env) -> AsyncIterator[StreamChunk]``。"""
 
-    def __call__(self, ctx: "RequestContext", env: Envelope) -> AsyncIterator[StreamChunk]:  # pragma: no cover - 协议
+    def __call__(
+        self,
+        ctx: "RequestContext[TRequest]",
+        env: Envelope[TRequest],
+    ) -> AsyncIterator[StreamChunk]:  # pragma: no cover - 协议
         ...

@@ -7,8 +7,14 @@ import logging
 import fakeredis.aioredis
 import pytest
 
+from openjiuwen_runtime.service import RequestContext as PublicRequestContext
+from openjiuwen_runtime.service import TypedAppContext
+from openjiuwen_runtime.service.context.request_context import RequestContext
+from openjiuwen_runtime.service.context.system_context import (
+    RequestContext as LegacyRequestContext,
+)
 from openjiuwen_runtime.service.context.system_context import SystemContext
-from openjiuwen_runtime.service.envelope import Metadata
+from openjiuwen_runtime.service.envelope import Envelope, Metadata
 
 
 @pytest.mark.unit
@@ -38,6 +44,55 @@ async def test_for_request_propagates_metadata_and_lock_owner():
         assert ctx.instance_id in rctx.lock_owner        # lock_owner 含 instance_id
     finally:
         await ctx.stop()
+
+
+@pytest.mark.unit
+def test_for_request_binds_complete_envelope_and_exposes_identifiers():
+    sysctx = SystemContext(instance_id="replica-a")
+    request = {"name": "typed"}
+    env = Envelope(
+        type="users/create",
+        metadata=Metadata(
+            request_id="r1",
+            user_id="u1",
+            chat_id="c1",
+            session_id="s1",
+            trace_id="t1",
+            bot_id="b1",
+            channel="rest",
+            instance_id="workflow-7",
+        ),
+        rawdata=request,
+    )
+
+    rctx = sysctx.for_request(env)
+
+    assert rctx.envelope is env
+    assert rctx.request is request
+    assert rctx.metadata is env.metadata
+    assert rctx.msg_type == "users/create"
+    assert rctx.request_id == "r1"
+    assert rctx.user_id == "u1"
+    assert rctx.chat_id == "c1"
+    assert rctx.session_id == "s1"
+    assert rctx.trace_id == "t1"
+    assert rctx.bot_id == "b1"
+    assert rctx.channel == "rest"
+    assert rctx.instance_id == "workflow-7"
+    assert rctx.replica_id == "replica-a"
+
+
+@pytest.mark.unit
+def test_namespace_applies_optional_key_prefix():
+    assert SystemContext(key_prefix="runtime").namespace("kv") == "runtime:kv"
+    assert SystemContext(key_prefix="").namespace("kv") == "kv"
+
+
+@pytest.mark.unit
+def test_request_context_imports_remain_compatible():
+    assert LegacyRequestContext is RequestContext
+    assert PublicRequestContext is RequestContext
+    assert TypedAppContext is RequestContext
 
 
 @pytest.mark.unit

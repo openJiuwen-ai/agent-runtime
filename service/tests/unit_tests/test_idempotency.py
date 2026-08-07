@@ -58,6 +58,7 @@ async def test_guard_reject_mode_runs_handler_once():
     assert res2.response.ok is False
     assert res2.response.error_code == "idempotent"      # 重复 → 拒绝
     assert len(calls) == 1                                # handler 只跑一次
+    await rctx.close()
     await ctx.stop()
 
 
@@ -81,4 +82,5 @@ async def test_guard_cache_mode_replays_result_without_rerunning():
     assert res2.response.ok is True
     assert res2.response.rawdata == {"pong": 1}           # 回放首次结果
     assert len(calls) == 1                                # handler 只跑一次
+    await rctx.close()
     await ctx.stop()

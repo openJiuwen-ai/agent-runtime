@@ -2,7 +2,10 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
 """Envelope / Metadata / ResponseEnvelope / StreamChunk 序列化往返与默认值单测。"""
+from datetime import datetime, timezone
+
 import pytest
+from pydantic import BaseModel
 
 from openjiuwen_runtime.service.envelope import (
     Envelope,
@@ -46,6 +49,34 @@ def test_metadata_extra_preserved():
     d = md.to_dict()
     assert d["extra"]["channel_id"] == "c9"
     assert Metadata.from_dict(d) == md
+
+
+@pytest.mark.unit
+def test_metadata_instance_id_preserved():
+    md = Metadata(request_id="r1", instance_id="workflow-7")
+    assert Metadata.from_dict(md.to_dict()).instance_id == "workflow-7"
+
+
+class _TypedRequest(BaseModel):
+    name: str
+    created_at: datetime
+
+
+@pytest.mark.unit
+def test_typed_envelope_serializes_pydantic_request_as_json_data():
+    request = _TypedRequest(
+        name="demo",
+        created_at=datetime(2026, 8, 6, 12, 30, tzinfo=timezone.utc),
+    )
+    env = Envelope(type="typed", metadata=Metadata(request_id="r1"), rawdata=request)
+
+    data = env.to_dict()
+
+    assert env.rawdata is request
+    assert data["rawdata"] == {
+        "name": "demo",
+        "created_at": "2026-08-06T12:30:00Z",
+    }
 
 
 @pytest.mark.unit
