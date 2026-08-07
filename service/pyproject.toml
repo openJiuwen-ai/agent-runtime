@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "OpenJiuwen Runtime"
 requires-python = ">=3.11.4"
 dependencies = [
+    "aiosqlite>=0.21.0,<1.0.0",
     "fastapi==0.115.11",
     "uvicorn[standard]==0.42.0",
     "websockets>=14.0",
@@ -15,6 +16,7 @@ dependencies = [
     "pydantic==2.11.7",
     "pydantic[email]==2.11.7",
     "pydantic-settings==2.5.2",
+    "python-multipart>=0.0.20",
     "greenlet>=3.3.1",
     "openjiuwen-runtime-foundation==0.1.0"
 ]

@@ -1,21 +1,16 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
-"""MessageRouter：type→handler 注册表 + 中间件链 + dispatch（设计 §6.3）。
+"""Message type registry, middleware chain, and transport-neutral dispatch."""
 
-- 注册表取代 if/elif：type → handler 的 O(1) 查表。
-- 唯一性约束：同一 type 重复注册抛错；同一 type 不能同时流式与非流式。
-- 中间件链：洋葱模型，先注册为外层；handler 是链尾。
-- v1 仅精确匹配，不做通配/前缀路由。
-"""
 from __future__ import annotations
 
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Iterable
 
-from pydantic import BaseModel, ValidationError as PydanticValidationError
+from pydantic import ValidationError as PydanticValidationError
 
 from ..envelope import Envelope, ResponseEnvelope, StreamChunk
 from ..errors import (
@@ -26,7 +21,16 @@ from ..errors import (
     ValidationError,
     exception_code,
 )
-from .handlers import Middleware
+from .handlers import (
+    FunctionMessageHandler,
+    FunctionStreamMessageHandler,
+    HandlerSpec,
+    MessageHandler,
+    Middleware,
+    StreamMessageHandler,
+    _make_spec,
+    _validate_handler,
+)
 from .result import DispatchResult, StreamResult, UnaryResult
 
 logger = logging.getLogger(__name__)
@@ -37,185 +41,304 @@ _STREAM = "stream"
 
 @dataclass
 class _Endpoint:
-    handler: Any
-    kind: str  # _UNARY | _STREAM
-    request_model: type[BaseModel] | None = None
+    handler: MessageHandler[Any] | StreamMessageHandler[Any]
+    kind: str
 
 
 class MessageRouter:
-    """App 内部实现，不对用户直接暴露。"""
+    """Map exact message types to handlers and execute the middleware chain."""
 
     def __init__(self) -> None:
         self._endpoints: dict[str, _Endpoint] = {}
         self._middleware: list[Middleware] = []
 
-    # ------------------------------------------------------------------ 注册
-    def handle(self, msg_type: str, *, request_model: type[BaseModel] | None = None):
-        """非流式 handler 装饰器。"""
-
-        def decorator(fn):
-            self._register(msg_type, fn, _UNARY, request_model)
-            return fn
-
-        return decorator
-
-    def stream(self, msg_type: str, *, request_model: type[BaseModel] | None = None):
-        """流式 handler 装饰器。"""
-
-        def decorator(fn):
-            self._register(msg_type, fn, _STREAM, request_model)
-            return fn
-
-        return decorator
-
-    def use(self, middleware: Middleware) -> None:
-        """注册中间件（先注册为外层）。"""
-        self._middleware.append(middleware)
-
-    def has(self, msg_type: str) -> bool:
-        return msg_type in self._endpoints
-
-    def kinds(self) -> dict[str, str]:
-        """type → kind 视图（适配器据此区分流式/非流式）。"""
-        return {t: ep.kind for t, ep in self._endpoints.items()}
-
-    def _register(
+    def handle(
         self,
         msg_type: str,
-        handler: Any,
-        kind: str,
-        request_model: type[BaseModel] | None,
-    ) -> None:
-        if not msg_type:
-            raise ValidationError("msg_type must be a non-empty string")
+        *,
+        request_model=None,
+        response_model=None,
+        summary: str | None = None,
+        description: str | None = None,
+        tags: Iterable[str] | None = None,
+    ):
+        """Register an async non-streaming function."""
+        spec = _make_spec(
+            msg_type,
+            request_model=request_model,
+            response_model=response_model,
+            summary=summary,
+            description=description,
+            tags=tags,
+        )
+
+        def decorator(fn):
+            self.register(FunctionMessageHandler(spec, fn))
+            return fn
+
+        return decorator
+
+    def stream(
+        self,
+        msg_type: str,
+        *,
+        request_model=None,
+        summary: str | None = None,
+        description: str | None = None,
+        tags: Iterable[str] | None = None,
+    ):
+        """Register an async-generator function."""
+        spec = _make_spec(
+            msg_type,
+            request_model=request_model,
+            summary=summary,
+            description=description,
+            tags=tags,
+        )
+
+        def decorator(fn):
+            self.register(FunctionStreamMessageHandler(spec, fn))
+            return fn
+
+        return decorator
+
+    def register(
+        self,
+        handler: MessageHandler[Any] | StreamMessageHandler[Any],
+    ) -> "MessageRouter":
+        """Register one object-oriented unary or streaming handler."""
+        _validate_handler(handler)
+        msg_type = handler.spec.msg_type
         existing = self._endpoints.get(msg_type)
         if existing is not None:
             raise FrameworkError(
                 f"type {msg_type!r} already registered as {existing.kind}",
                 code=ErrorCode.CONFLICT,
             )
-        self._endpoints[msg_type] = _Endpoint(
-            handler=handler,
-            kind=kind,
-            request_model=request_model,
-        )
+        kind = _STREAM if isinstance(handler, StreamMessageHandler) else _UNARY
+        self._endpoints[msg_type] = _Endpoint(handler=handler, kind=kind)
+        return self
 
-    # ------------------------------------------------------------------ 派发
-    async def dispatch(self, env: Envelope, rctx: Any) -> DispatchResult:
+    def register_all(
+        self,
+        handlers: Iterable[MessageHandler[Any] | StreamMessageHandler[Any]],
+    ) -> "MessageRouter":
+        for handler in handlers:
+            self.register(handler)
+        return self
+
+    def use(self, middleware: Middleware) -> None:
+        """Register middleware; the first registered middleware is outermost."""
+        self._middleware.append(middleware)
+
+    def has(self, msg_type: str) -> bool:
+        return msg_type in self._endpoints
+
+    def get(
+        self,
+        msg_type: str,
+    ) -> MessageHandler[Any] | StreamMessageHandler[Any] | None:
+        endpoint = self._endpoints.get(msg_type)
+        return endpoint.handler if endpoint is not None else None
+
+    def handlers(
+        self,
+    ) -> tuple[MessageHandler[Any] | StreamMessageHandler[Any], ...]:
+        return tuple(endpoint.handler for endpoint in self._endpoints.values())
+
+    def kinds(self) -> dict[str, str]:
+        return {
+            msg_type: endpoint.kind for msg_type, endpoint in self._endpoints.items()
+        }
+
+    async def dispatch(self, env: Envelope[Any], rctx: Any) -> DispatchResult:
         endpoint = self._endpoints.get(env.type)
         if endpoint is None:
-            return UnaryResult(response=self._error_response(
-                env, NotFoundError(f"no handler registered for type {env.type!r}")))
+            return UnaryResult(
+                response=self._error_response(
+                    env,
+                    NotFoundError(f"no handler registered for type {env.type!r}"),
+                )
+            )
 
         try:
-            self._validate_request(endpoint, env)
+            self._validate_request(endpoint.handler.spec, env)
             core = self._build_core(endpoint)
             chain = self._compose(self._middleware, core)
             return await chain(rctx, env)
         except FrameworkError as exc:
             return UnaryResult(response=self._error_response(env, exc))
-        except Exception as exc:  # noqa: BLE001 - 归一化为 internal 错误信封
-            logger.exception("dispatch failed: type=%s request_id=%s", env.type, env.metadata.request_id)
-            return UnaryResult(response=self._error_response(env, FrameworkError(str(exc))))
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "dispatch failed: type=%s request_id=%s",
+                env.type,
+                env.metadata.request_id,
+            )
+            return UnaryResult(
+                response=self._error_response(env, FrameworkError(str(exc)))
+            )
 
     @staticmethod
-    def _validate_request(endpoint: _Endpoint, env: Envelope[Any]) -> None:
-        if endpoint.request_model is None:
+    def _validate_request(spec: HandlerSpec, env: Envelope[Any]) -> None:
+        model = spec.request_model
+        if model is None:
             return
         try:
-            env.rawdata = endpoint.request_model.model_validate(env.rawdata)
+            env.rawdata = model.model_validate(env.rawdata)
         except PydanticValidationError as exc:
-            raise ValidationError(str(exc)) from exc
+            raise ValidationError(
+                f"invalid rawdata for type {spec.msg_type!r}: {exc}"
+            ) from exc
 
-    # -------------------------------------------------------------- 核心组装
     def _build_core(self, endpoint: _Endpoint):
         if endpoint.kind == _UNARY:
             return self._unary_core(endpoint.handler)
         return self._stream_core(endpoint.handler)
 
-    def _unary_core(self, handler):
+    def _unary_core(self, handler: MessageHandler[Any]):
         async def core(ctx, env):
-            result = await self._await_with_lifecycle(lambda: handler(ctx, env), ctx)
-            return UnaryResult(response=self._normalize_unary(result, env))
+            result = await self._await_with_lifecycle(
+                lambda: handler.handle(ctx, env),
+                ctx,
+            )
+            return UnaryResult(
+                response=self._normalize_unary(result, env, handler.spec)
+            )
 
         return core
 
-    def _stream_core(self, handler):
+    def _stream_core(self, handler: StreamMessageHandler[Any]):
         async def core(ctx, env):
             self._check_interrupted(ctx)
-            ait = handler(ctx, env)  # async generator → async iterator（同步调用）
-            return StreamResult(chunks=self._wrap_stream(ait, env, ctx), context=ctx)
+            iterator = handler.handle_stream(ctx, env)
+            return StreamResult(
+                chunks=self._wrap_stream(iterator, env, ctx),
+                context=ctx,
+            )
 
         return core
 
     @staticmethod
     def _compose(middlewares: list[Middleware], core):
         fn = core
-        for mw in reversed(middlewares):  # 先注册为外层
-            fn = MessageRouter._wrap_one(mw, fn)
+        for middleware in reversed(middlewares):
+            fn = MessageRouter._wrap_one(middleware, fn)
         return fn
 
     @staticmethod
-    def _wrap_one(mw, nxt):
+    def _wrap_one(middleware, nxt):
         async def wrapped(ctx, env):
-            return await mw(ctx, env, nxt)
+            return await middleware(ctx, env, nxt)
 
         return wrapped
 
-    # -------------------------------------------------------------- 归一化
     @staticmethod
-    def _normalize_unary(result: Any, env: Envelope) -> ResponseEnvelope:
+    def _normalize_unary(
+        result: Any,
+        env: Envelope[Any],
+        spec: HandlerSpec,
+    ) -> ResponseEnvelope:
         if isinstance(result, ResponseEnvelope):
+            result.rawdata = MessageRouter._validate_response(spec, result.rawdata)
             return result
         if isinstance(result, dict):
-            return ResponseEnvelope(type=env.type, metadata=env.metadata,
-                                     rawdata=result, ok=True)
+            return ResponseEnvelope(
+                type=env.type,
+                metadata=env.metadata,
+                rawdata=MessageRouter._validate_response(spec, result),
+                ok=True,
+            )
         raise FrameworkError(
-            f"unary handler must return dict or ResponseEnvelope, got {type(result).__name__}")
+            "unary handler must return dict or ResponseEnvelope, "
+            f"got {type(result).__name__}"
+        )
+
+    @staticmethod
+    def _validate_response(spec: HandlerSpec, rawdata: dict) -> dict:
+        model = spec.response_model
+        if model is None:
+            return rawdata
+        try:
+            value = model.model_validate(rawdata)
+        except Exception as exc:
+            raise FrameworkError(
+                f"invalid handler response for type {spec.msg_type!r}: {exc}"
+            ) from exc
+        return dict(value.model_dump(mode="python"))
 
     def _wrap_stream(
-        self, ait: AsyncIterator, env: Envelope, ctx: Any
+        self,
+        iterator: AsyncIterator,
+        env: Envelope[Any],
+        ctx: Any,
     ) -> AsyncIterator[StreamChunk]:
-        """为流式 handler 的产物分配 sequence、置末帧 is_final；出错发末帧错误分片。"""
+        """Assign sequence/final flags and preserve request lifecycle handling."""
 
         async def gen():
-            seq = 0
-            it = ait.__aiter__()
+            sequence = 0
+            stream = iterator.__aiter__()
             try:
                 try:
-                    nxt = await self._await_with_lifecycle(it.__anext__, ctx)
+                    next_item = await self._await_with_lifecycle(stream.__anext__, ctx)
                 except StopAsyncIteration:
                     return
                 while True:
-                    cur = nxt
+                    current = next_item
                     try:
-                        nxt = await self._await_with_lifecycle(it.__anext__, ctx)
+                        next_item = await self._await_with_lifecycle(
+                            stream.__anext__,
+                            ctx,
+                        )
                     except StopAsyncIteration:
-                        seq += 1
-                        yield self._to_chunk(cur, seq, is_final=True, env=env)
+                        sequence += 1
+                        yield self._to_chunk(
+                            current,
+                            sequence,
+                            is_final=True,
+                            env=env,
+                        )
                         return
                     except FrameworkError as exc:
-                        seq += 1
-                        yield self._to_chunk(cur, seq, is_final=False, env=env)
-                        seq += 1
-                        yield self._error_chunk(seq, env, exc)
+                        sequence += 1
+                        yield self._to_chunk(
+                            current,
+                            sequence,
+                            is_final=False,
+                            env=env,
+                        )
+                        sequence += 1
+                        yield self._error_chunk(sequence, env, exc)
                         return
                     except Exception as exc:  # noqa: BLE001
                         logger.exception("stream handler failed: type=%s", env.type)
-                        seq += 1
-                        yield self._to_chunk(cur, seq, is_final=False, env=env)
-                        seq += 1
-                        yield self._error_chunk(seq, env, FrameworkError(str(exc)))
+                        sequence += 1
+                        yield self._to_chunk(
+                            current,
+                            sequence,
+                            is_final=False,
+                            env=env,
+                        )
+                        sequence += 1
+                        yield self._error_chunk(
+                            sequence,
+                            env,
+                            FrameworkError(str(exc)),
+                        )
                         return
-                    seq += 1
-                    yield self._to_chunk(cur, seq, is_final=False, env=env)
+                    sequence += 1
+                    yield self._to_chunk(
+                        current,
+                        sequence,
+                        is_final=False,
+                        env=env,
+                    )
             except FrameworkError as exc:
-                seq += 1
-                yield self._error_chunk(seq, env, exc)
+                sequence += 1
+                yield self._error_chunk(sequence, env, exc)
             except Exception as exc:  # noqa: BLE001
                 logger.exception("stream handler failed: type=%s", env.type)
-                seq += 1
-                yield self._error_chunk(seq, env, FrameworkError(str(exc)))
+                sequence += 1
+                yield self._error_chunk(sequence, env, FrameworkError(str(exc)))
 
         return gen()
 
@@ -250,24 +373,57 @@ class MessageRouter:
         return remaining()
 
     @staticmethod
-    def _to_chunk(item: Any, sequence: int, is_final: bool, env: Envelope) -> StreamChunk:
+    def _to_chunk(
+        item: Any,
+        sequence: int,
+        is_final: bool,
+        env: Envelope[Any],
+    ) -> StreamChunk:
         if isinstance(item, StreamChunk):
-            return StreamChunk(sequence=sequence, is_final=is_final, metadata=env.metadata,
-                               rawdata=item.rawdata, error_code=item.error_code,
-                               error_message=item.error_message)
+            return StreamChunk(
+                sequence=sequence,
+                is_final=is_final,
+                metadata=env.metadata,
+                rawdata=item.rawdata,
+                error_code=item.error_code,
+                error_message=item.error_message,
+            )
         if isinstance(item, dict):
-            return StreamChunk(sequence=sequence, is_final=is_final, metadata=env.metadata,
-                               rawdata=item)
+            return StreamChunk(
+                sequence=sequence,
+                is_final=is_final,
+                metadata=env.metadata,
+                rawdata=item,
+            )
         raise FrameworkError(
-            f"stream handler must yield dict or StreamChunk, got {type(item).__name__}")
+            f"stream handler must yield dict or StreamChunk, got {type(item).__name__}"
+        )
 
-    # -------------------------------------------------------------- 错误信封
-    def _error_response(self, env: Envelope, exc: FrameworkError) -> ResponseEnvelope:
+    @staticmethod
+    def _error_response(
+        env: Envelope[Any],
+        exc: FrameworkError,
+    ) -> ResponseEnvelope:
         return ResponseEnvelope(
-            type=env.type, metadata=env.metadata, rawdata={},
-            ok=False, error_code=exception_code(exc), error_message=exc.message)
+            type=env.type,
+            metadata=env.metadata,
+            rawdata={},
+            ok=False,
+            error_code=exception_code(exc),
+            error_message=exc.message,
+        )
 
-    def _error_chunk(self, sequence: int, env: Envelope, exc: FrameworkError) -> StreamChunk:
+    @staticmethod
+    def _error_chunk(
+        sequence: int,
+        env: Envelope[Any],
+        exc: FrameworkError,
+    ) -> StreamChunk:
         return StreamChunk(
-            sequence=sequence, is_final=True, metadata=env.metadata, rawdata={},
-            error_code=exception_code(exc), error_message=exc.message)
+            sequence=sequence,
+            is_final=True,
+            metadata=env.metadata,
+            rawdata={},
+            error_code=exception_code(exc),
+            error_message=exc.message,
+        )
