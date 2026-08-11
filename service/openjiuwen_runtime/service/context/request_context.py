@@ -236,6 +236,21 @@ class RequestContext(Generic[TRequest]):
         """Return the configured DB handler after checking request state."""
         return self.require_db()
 
+    @property
+    def redis(self) -> Any:
+        """Return the shared asynchronous Redis client for this request.
+
+        The client is owned by :class:`SystemContext` and is only borrowed by
+        the request. Callers may use the complete ``redis.asyncio`` API, but
+        must not close the client from request or handler code.
+        """
+        return self.require_redis()
+
+    def require_redis(self) -> Any:
+        """Require the shared asynchronous Redis client for an active request."""
+        self.check_interrupted()
+        return self.sysctx.require_redis()
+
     def require_db(self) -> Any:
         """Require a DB handler for this active request."""
         self.check_interrupted()

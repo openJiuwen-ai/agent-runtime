@@ -509,6 +509,25 @@ sequenceDiagram
 - `ctx.settings`
 - `ctx.logger`
 
+`ctx.redis` 返回 `SystemContext` 持有的共享异步 Redis 客户端，适合在框架现有
+`kv`、`idempotency`、`queue`、`pubsub` 和 `lock` 原语无法覆盖业务需求时，直接使用
+`redis.asyncio` 的完整命令集：
+
+```python
+async def update_score(ctx, env):
+    await ctx.redis.hset(
+        f"user:{ctx.user_id}",
+        mapping={"score": ctx.request.score},
+    )
+    await ctx.redis.zadd("user:scores", {str(ctx.user_id): ctx.request.score})
+    return {"updated": True}
+```
+
+该客户端由 `SystemContext` 创建并在应用停止时统一关闭；Handler 和请求清理逻辑只借用
+它，不能调用 `close()` 或 `aclose()`。裸客户端不会自动添加服务、用户或 Bot
+命名空间，业务代码必须自行设计不会冲突的 Key。Redis 命令是异步 I/O，调用时必须
+使用 `await`；Pipeline 中的命令先同步入队，最终的 `execute()` 必须使用 `await`。
+
 如果需要事务，应使用框架提供的请求上下文事务入口，而不是在 Handler 内创建无法统一
 管理的连接。示例中的 `DemoUserStore` 为了便于运行，使用进程内字典和
 `asyncio.Lock`；它的数据会在进程退出后丢失，也不会在多个服务副本之间共享。

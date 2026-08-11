@@ -1,7 +1,7 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
-"""DB, transaction, audit, and lock capabilities on RequestContext."""
+"""DB, Redis, transaction, audit, and lock capabilities on RequestContext."""
 from __future__ import annotations
 
 import logging
@@ -164,6 +164,47 @@ async def test_db_helpers_check_request_state_and_missing_database():
     interrupted.interrupt("stop database work")
     with pytest.raises(Interrupted, match="stop database work"):
         await interrupted.db_count("users")
+
+
+@pytest.mark.unit
+async def test_request_context_exposes_shared_async_redis_client(mocker):
+    redis = fakeredis.aioredis.FakeRedis()
+    close_spy = mocker.spy(redis, "aclose")
+    sysctx = SystemContext(redis=redis)
+    first = sysctx.for_request(_env())
+    second = sysctx.for_request(_env())
+
+    assert first.redis is redis
+    assert first.require_redis() is redis
+    assert second.redis is redis
+
+    await first.redis.hset("user:1", mapping={"name": "Alice"})
+    await first.redis.zadd("user:scores", {"user:1": 10})
+
+    assert await second.redis.hget("user:1", "name") == b"Alice"
+    assert await second.redis.zscore("user:scores", "user:1") == 10
+
+    await first.close()
+    close_spy.assert_not_awaited()
+    assert await redis.ping() is True
+
+
+@pytest.mark.unit
+def test_request_context_redis_requires_configuration_and_active_request():
+    missing = SystemContext().for_request(_env())
+    with pytest.raises(RedisUnavailable):
+        _ = missing.redis
+    with pytest.raises(RedisUnavailable):
+        missing.require_redis()
+
+    redis = fakeredis.aioredis.FakeRedis()
+    interrupted = SystemContext(redis=redis).for_request(_env())
+    interrupted.interrupt("stop redis work")
+
+    with pytest.raises(Interrupted, match="stop redis work"):
+        _ = interrupted.redis
+    with pytest.raises(Interrupted, match="stop redis work"):
+        interrupted.require_redis()
 
 
 @pytest.mark.unit

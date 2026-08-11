@@ -85,3 +85,32 @@ def test_ws_echo_returns_idx():
         data = json.loads(ws.receive_text())
         assert data["ok"] is True
         assert data["rawdata"] == {"echo": "hi", "idx": 1}
+
+
+@pytest.mark.system
+async def test_rest_handler_can_use_raw_async_redis_commands():
+    redis = fakeredis.aioredis.FakeRedis()
+    app = App(lambda: SystemContext(redis=redis))
+
+    @app.handle("redis.profile")
+    async def save_profile(ctx, env: Envelope):
+        key = f"user:{ctx.user_id}"
+        await ctx.redis.hset(key, mapping=env.rawdata)
+        name = await ctx.redis.hget(key, "name")
+        return {"name": name.decode("utf-8")}
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app.asgi),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/api/redis.profile",
+            json={
+                "type": "redis.profile",
+                "metadata": {"request_id": "redis-1", "user_id": "user-1"},
+                "rawdata": {"name": "Alice"},
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["rawdata"] == {"name": "Alice"}
