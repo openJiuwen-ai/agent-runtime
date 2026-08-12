@@ -1,0 +1,241 @@
+import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { useRouter } from '../router';
+import { useAsync } from '../hooks/useAsync';
+import { InstanceApi } from '../services/api';
+
+type NavItem = {
+  key: string;
+  pathPrefix: string;
+  href: string;
+  label: string;
+  icon: React.ReactNode;
+  disabled?: boolean;
+  title?: string;
+  isActive?: (path: string) => boolean;
+};
+
+function isItemActive(item: NavItem, path: string): boolean {
+  if (item.isActive) return item.isActive(path);
+  return path === item.pathPrefix || path.startsWith(`${item.pathPrefix}/`);
+}
+
+export function Sidebar() {
+  const { t } = useTranslation();
+  const { path, navigate } = useRouter();
+
+  const { data: instancesPage } = useAsync(() => InstanceApi.list({ page: 1, page_size: 50 }), []);
+
+  const agentTemplateChildPaths = [
+    '/model-templates',
+    '/skill-whitelist-templates',
+    '/safety-guardrails',
+    '/extension-config-templates',
+  ];
+  const agentTemplateActive = agentTemplateChildPaths.some(
+    (p) => path === p || path.startsWith(`${p}/`),
+  );
+  const [agentTemplatesOpen, setAgentTemplatesOpen] = useState(agentTemplateActive);
+
+  useEffect(() => {
+    if (agentTemplateActive) setAgentTemplatesOpen(true);
+  }, [agentTemplateActive]);
+
+  const platformItems: NavItem[] = [
+    {
+      key: 'overview',
+      pathPrefix: '/overview',
+      href: '/overview',
+      label: t('nav.overview'),
+      icon: (
+        <svg className="w-4 h-4 nav-item__icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M3 13h2v8H3v-8zm6-6h2v14H9V7zm6 3h2v11h-2V10zm6-6h2v17h-2V4z" />
+        </svg>
+      ),
+    },
+    {
+      key: 'instances',
+      pathPrefix: '/instances',
+      href: '/instances',
+      label: t('nav.instances'),
+      icon: (
+        <svg className="w-4 h-4 nav-item__icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+          <circle cx="6" cy="6" r="2" />
+          <circle cx="18" cy="6" r="2" />
+          <circle cx="12" cy="18" r="2" />
+          <path strokeLinecap="round" strokeLinejoin="round" d="M6 8v3a2 2 0 002 2h8a2 2 0 002-2V8M12 13v3" />
+        </svg>
+      ),
+    },
+  ];
+
+  const agentTemplateItems: NavItem[] = [
+    {
+      key: 'model-templates',
+      pathPrefix: '/model-templates',
+      href: '/model-templates',
+      label: t('nav.modelTemplates'),
+      icon: (
+        <svg className="w-4 h-4 nav-item__icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M4 7l8-4 8 4-8 4-8-4zm0 6l8 4 8-4M4 19l8 4 8-4" />
+        </svg>
+      ),
+    },
+    {
+      key: 'skill-whitelist-templates',
+      pathPrefix: '/skill-whitelist-templates',
+      href: '/skill-whitelist-templates',
+      label: t('nav.skillWhitelistTemplates'),
+      icon: (
+        <svg className="w-4 h-4 nav-item__icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+        </svg>
+      ),
+    },
+    {
+      key: 'safety-guardrails',
+      pathPrefix: '/safety-guardrails',
+      href: '/safety-guardrails',
+      label: t('nav.safetyGuardrails'),
+      icon: (
+        <svg className="w-4 h-4 nav-item__icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M12 3l8 4v5c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V7l8-4z" />
+        </svg>
+      ),
+    },
+    {
+      key: 'extension-templates',
+      pathPrefix: '/extension-config-templates',
+      href: '/extension-config-templates',
+      label: t('nav.extensionTemplates'),
+      icon: (
+        <svg className="w-4 h-4 nav-item__icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M14 4l6 6m0 0l-6 6m6-6H4" />
+          <path strokeLinecap="round" strokeLinejoin="round" d="M4 20h7" />
+        </svg>
+      ),
+    },
+  ];
+
+  const configTopItems: NavItem[] = [
+    {
+      key: 'bots',
+      pathPrefix: '/bots',
+      href: '/bots',
+      label: t('nav.agentManagement'),
+      icon: (
+        <svg className="w-4 h-4 nav-item__icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 3h6m-3 0v3m-5 0h10a2 2 0 012 2v9a2 2 0 01-2 2H7a2 2 0 01-2-2V8a2 2 0 012-2zM9 13h.01M15 13h.01" />
+        </svg>
+      ),
+    },
+    {
+      key: 'service-config-templates',
+      pathPrefix: '/service-config-templates',
+      href: '/service-config-templates',
+      label: t('nav.serviceConfigTemplates'),
+      icon: (
+        <svg className="w-4 h-4 nav-item__icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01" />
+        </svg>
+      ),
+    },
+  ];
+
+  const iamIcon = (d: string) => (
+    <svg className="w-4 h-4 nav-item__icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+      <path strokeLinecap="round" strokeLinejoin="round" d={d} />
+    </svg>
+  );
+  const iamItems: NavItem[] = [
+    {
+      key: 'users',
+      pathPrefix: '/users',
+      href: '/users',
+      label: t('nav.users', '用户'),
+      icon: iamIcon('M15 19.5a3 3 0 00-6 0M12 11a3 3 0 100-6 3 3 0 000 6zM3 19.5a9 9 0 0118 0'),
+    },
+    {
+      key: 'orgs',
+      pathPrefix: '/orgs',
+      href: '/orgs',
+      label: t('nav.orgs', '组织'),
+      icon: iamIcon('M3 21h18M5 21V7l7-4 7 4v14M9 21v-4h6v4M9 10h.01M15 10h.01M9 13h.01M15 13h.01'),
+    },
+  ];
+
+  const renderItem = (item: NavItem, nested = false) => {
+    const active = isItemActive(item, path);
+    return (
+      <button
+        key={item.key}
+        onClick={() => {
+          if (item.disabled) return;
+          navigate(item.href);
+        }}
+        disabled={item.disabled}
+        title={item.title}
+        className={`nav-item ${nested ? 'nav-item--nested' : ''} ${active ? 'active' : ''}`}
+      >
+        {item.icon}
+        {item.label}
+      </button>
+    );
+  };
+
+  const instanceCount = instancesPage?.total ?? instancesPage?.items?.length ?? 0;
+
+  return (
+    <aside className="nav flex flex-col">
+      <div className="nav-group-title nav-group-title--uppercase">{t('nav.platform')}</div>
+      <div className="space-y-1">{platformItems.map((item) => renderItem(item))}</div>
+
+      <div className="nav-group-title nav-group-title--with-top-gap">{t('nav.config')}</div>
+      <div className="space-y-1">
+        <div className="nav-subgroup">
+          <button
+            type="button"
+            className={`nav-subgroup__toggle ${agentTemplateActive ? 'active' : ''}`}
+            onClick={() => setAgentTemplatesOpen((v) => !v)}
+            aria-expanded={agentTemplatesOpen}
+          >
+            <svg className="w-4 h-4 nav-item__icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
+            </svg>
+            <span className="nav-subgroup__label">{t('nav.agentConfigTemplates')}</span>
+            <svg
+              className={`w-3.5 h-3.5 nav-subgroup__chevron ${agentTemplatesOpen ? 'open' : ''}`}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+              strokeWidth={2}
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+            </svg>
+          </button>
+          {agentTemplatesOpen && (
+            <div className="nav-subgroup__children space-y-1">
+              {agentTemplateItems.map((item) => renderItem(item, true))}
+            </div>
+          )}
+        </div>
+        {configTopItems.map((item) => renderItem(item))}
+      </div>
+
+      <div className="nav-group-title nav-group-title--with-top-gap">{t('nav.iam', '身份与访问')}</div>
+      <div className="space-y-1">{iamItems.map((item) => renderItem(item))}</div>
+
+      <div className="flex-1" />
+      <div className="nav-footer">
+        <div className="nav-footer__row">
+          <span className="nav-footer__label">{t('overview.totalInstances')}</span>
+          <span className="nav-footer__value">{instanceCount}</span>
+        </div>
+        <div className="nav-footer__row">
+          <span className="nav-footer__label">manager</span>
+          <span className="nav-footer__value">v0.1.0</span>
+        </div>
+      </div>
+    </aside>
+  );
+}
