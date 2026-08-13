@@ -1226,7 +1226,8 @@ class ServiceManager(IServiceManager):
         1) 在相同 template_id 组的 in_use 池中找尚有服务级并发的实例
         2) 否则在 idle 池中唤醒一个有容量的实例
         3) 再否则在该 template_id 组的 max 允许下新 deploy（deploy 在锁外执行）
-           同一 session_id 仅允许一个 in-flight deploy；后来者 await 其结果再选池，
+           同一 session_id 仅允许一个 in-flight deploy；后来者 await 其结果并复用 leader
+           admit 的 Pod（不再基于全局容量重选，避免单 Pod 模式下重复扩容），
            避免惊群重复占满 max_services。
            缩容 delete 未完成前仍占用 max 名额（reclaim_occupancy）。
 
@@ -1263,15 +1264,23 @@ class ServiceManager(IServiceManager):
                         )
 
             if join_future is not None:
+                # follower：等待 leader 的冷启动结束。leader admit 成功时直接复用其 Pod，
+                # 不再基于全局 available_concurrency 重选——单 Pod 模式(scope≤pod)下编排层已为
+                # 该 scope 预留整块 reserve_per_pod，Pod 的全局 available_concurrency 随之归零，
+                # follower 重选会误判“无可用容量”而触发重复扩容（违反 max_scope_pods）。
+                leader_pod: Optional[IServiceHandler] = None
                 try:
-                    await join_future
+                    leader_pod = await join_future
                 except Exception:  # noqa: BLE001
+                    leader_pod = None
                     logger.debug(
                         "等待同 session 冷启动结束异常, session_id=%s",
                         session_id,
                         exc_info=True,
                     )
-                # leader 已 admit（或失败）；本轮重新选池，不再占 pending
+                if leader_pod is not None:
+                    return leader_pod
+                # leader deploy 失败(admitted=None)：本轮重新选池/重试，不再占 pending
                 continue
 
             if deploy_template is None:
