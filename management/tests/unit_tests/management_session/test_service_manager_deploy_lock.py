@@ -632,6 +632,82 @@ async def test_slow_reclaim_does_not_block_message_loop_user_route() -> None:
 
 
 @pytest.mark.asyncio
+async def test_follower_reuses_leader_pod_without_redeploy() -> None:
+    """单 Pod 模式(scope≤pod)下，follower 复用 leader 已 admit 的 Pod，不重复扩容。
+
+    复现条件：leader 已为该 scope 预留整块 reserve_per_pod，使 Pod 全局 available_concurrency
+    归零。旧逻辑 follower 醒来后基于全局容量重选——选不到该 Pod(avail=0<need)→ 误判容量不足
+    → 重复 deploy，违反 max_scope_pods(单 Pod 模式应恒为 1)。修复后 follower 直接复用 leader 的 Pod。
+    """
+    new_service_calls = 0
+
+    class Factory(IServiceInstanceFactory):
+        async def new_service(
+            self,
+            response_parser: IResponseParser,
+            service_template: Optional[Dict[str, Any]] = None,
+        ) -> IServiceHandler:
+            nonlocal new_service_calls
+            new_service_calls += 1
+            return ServiceHandler(
+                total_concurrency=10,
+                message_channel=_Ch(),  # type: ignore[arg-type]
+                response_parser=response_parser,
+                deploy_controller=NoOpDeployController(),
+                service_template=service_template,
+            )
+
+    factory = Factory()
+    dq: PriorityDualAsyncQueues[QueueItem] = PriorityDualAsyncQueues(8, 8)
+    sm = ServiceManager(
+        factory,
+        dq,
+        Timer(),
+        service_concurrency=10,
+        min_idle_services=0,
+        max_services=4,  # >1，确保“重复扩容”在模板级不被 max_services 拦下（才能暴露 bug）
+        service_idle_ttl=0,
+        pod_monitor_enabled=False,
+    )
+    await sm.init(_P())
+    sm._running = True  # noqa: SLF001
+    sm._in_use[None] = {}  # noqa: SLF001
+    sm._idle[None] = {}  # noqa: SLF001
+
+    # 模拟 leader 已 admit 的 Pod：为该 scope 预留整块 reserve_per_pod(=10)，全局余量归零
+    leader_pod = await factory.new_service(_P())
+    assert leader_pod.try_reserve_session_quota("S", 10)
+    assert leader_pod.available_concurrency == 0
+    sm._in_use[None][leader_pod.id] = leader_pod  # noqa: SLF001
+    n_after_leader = new_service_calls  # =1
+
+    # 模拟 leader 冷启动进行中：注册一个 pending 的 deploy waiter（follower 将 join 它）
+    fut: asyncio.Future = asyncio.get_running_loop().create_future()
+    sm._session_deploy_waiters["S"] = fut  # noqa: SLF001
+
+    sreq = SessionRequest(
+        service_id="S",
+        concurrency=10,  # scope_concurrency == pod_concurrency → 单 Pod 模式
+        ttl=0,
+        request_id="r1",
+        raw=cast(IRequest, object()),
+    )
+
+    # follower 进入：_pick_existing 因 leader_pod 全局 avail=0 落空 → join pending waiter
+    follower_task = asyncio.create_task(sm._pick_or_create(sreq))  # noqa: SLF001
+    await asyncio.sleep(0.05)  # 让 follower 确实挂到 await fut 上
+
+    # leader admit 完成，唤醒 follower
+    fut.set_result(leader_pod)
+    result = await asyncio.wait_for(follower_task, timeout=2.0)
+
+    assert result is leader_pod, "follower 应复用 leader 的 Pod，而非另起 deploy"
+    assert new_service_calls == n_after_leader, "follower 不应触发任何新 deploy"
+
+    await sm.stop()
+
+
+@pytest.mark.asyncio
 async def test_deploy_and_admit_displaces_same_service_id_and_deletes_old() -> None:
     """同名 service_id 再次入池时，须驱逐并 delete 旧 handler，避免 K8s 孤儿 Pod。"""
     deleted: list[str] = []

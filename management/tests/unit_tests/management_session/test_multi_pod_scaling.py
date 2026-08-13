@@ -274,6 +274,93 @@ async def test_single_pod_does_not_scale() -> None:
         await sm.stop()
 
 
+@pytest.mark.asyncio
+async def test_slow_cold_start_caps_followers_no_overfill() -> None:
+    """慢 deploy（K8s 冷启动真实形态）下，同 scope 突发请求复用 leader Pod 受 ``pod_concurrency-1``
+    上限约束：不重复扩容、单 Pod 不过填，超出 Pod 容量的请求直接失败（编排层 _fail 100001）。
+
+    场景：scope=4 / pod=2（reserve_per_pod=2, max_scope_pods=2），4 个 chat_session 同时冷启动。
+    leader 自身占 1 槽 + 至多 pod_concurrency-1=1 个 follower 复用同一 Pod（共 2 = reserve_per_pod），
+    其余 2 个超出容量 → 失败。最终只建 1 个 Pod、不过填（回归此前 follower 无条件复用导致
+    单 Pod 绑 4 个 chat_session 的过填缺陷）。
+    """
+    deploy_gate = asyncio.Event()
+    started = 0
+
+    class SlowDeploy:
+        resource_id = None
+
+        async def deploy(self) -> None:
+            nonlocal started
+            started += 1
+            await deploy_gate.wait()
+
+        async def delete(self) -> None:
+            return None
+
+    class _SlowFactory(_Factory):
+        async def new_service(
+            self, response_parser: IResponseParser, service_template: Optional[dict] = None
+        ) -> IServiceHandler:
+            h = ServiceHandler(
+                total_concurrency=self._sc,
+                message_channel=self._ch,
+                response_parser=response_parser,
+                deploy_controller=SlowDeploy(),
+                service_template=service_template,
+            )
+            self.handlers.append(h)
+            return h
+
+    ch = _HoldCh()
+    factory = _SlowFactory(ch, pod_concurrency=2)
+    dq: PriorityDualAsyncQueues[QueueItem] = PriorityDualAsyncQueues(100, 1000)
+    sm = ServiceManager(
+        factory, dq, Timer(), service_concurrency=2, min_idle_services=0,
+        max_services=10, autoscale_interval=0.2, service_idle_ttl=300, deploy_mode="subprocess",
+    )
+    rt = SessionRuntimeManager(Timer(), sm)
+    sm.set_session_runtime(rt)
+    await sm.init(_P())
+    await sm.start()
+    try:
+        loop = asyncio.get_running_loop()
+
+        async def one(csid: str, rid: str) -> None:
+            wrapper = ScopeRequestWrapper(_sreq("scope1", 4, csid, rid), asyncio.Queue(), loop.create_future())
+            await rt.handle_user_request(RawMessage(MessageType.USER_REQUEST, wrapper))
+
+        tasks = [asyncio.create_task(one(f"cs{i}", f"r{i}")) for i in range(4)]
+        # 等 leader 的 deploy 启动并阻塞，让 cs1..3 挂上同一 waiter
+        for _ in range(300):
+            if started >= 1:
+                break
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.15)  # 让 follower 确实挂到 await join_future 上
+        deploy_gate.set()  # 放行 deploy，leader admit 并唤醒 follower
+        # 成功的请求进入 send 阻塞在 gate（leader + 1 follower = 2）；超出的已 _fail 返回
+        for _ in range(300):
+            if len(ch.send_log) >= 2:
+                break
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.1)
+
+        # 只建 1 个 Pod：冷启动突发不重复扩容
+        assert len(factory.handlers) == 1, f"冷启动突发不应重复扩容: {len(factory.handlers)}"
+        # 不过填：成功的 chat_session 数 ≤ reserve_per_pod=2
+        sh = rt.registry.get("scope1")
+        assert sh is not None
+        overfill = [(eid, sh.endpoint_session_count(eid)) for eid in sh.endpoint_ids]
+        assert all(n <= 2 for _eid, n in overfill), f"单 Pod 过填: {overfill}"
+        # 仅 leader + 1 follower 成功，其余 2 个超出 Pod 容量被拒
+        assert len(ch.send_log) == 2, f"应仅有 2 个请求成功（其余失败）: send_log={ch.send_log}"
+
+        ch.gate.set()
+        await asyncio.gather(*tasks)
+    finally:
+        await sm.stop()
+
+
 # ==================== 回归:扩容死锁(同 id 撞号)+ 并发扩容去重 ====================
 
 
