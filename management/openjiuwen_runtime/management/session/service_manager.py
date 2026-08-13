@@ -118,10 +118,13 @@ class ServiceManager(IServiceManager):
         self._pending_deploys: dict[Optional[str], int] = {}
         # 目标入 idle 的 pending（预热/autoscale）；计入 min_idle，避免锁外 deploy 期间被再补一台
         self._pending_idle_deploys: dict[Optional[str], int] = {}
-        # 同 session_id 冷启动合并：leader 占 pending 并 deploy，后来者 await 同一 Future 再选池/绑定
+        # 同 session_id 冷启动合并：leader 占 pending 并 deploy，后来者 await 同一 Future 复用 leader Pod
         self._session_deploy_waiters: dict[
             str, asyncio.Future[Optional[IServiceHandler]]
         ] = {}
+        # 同 session 冷启动 follower 复用 leader Pod 的计数（按 session_id）：限制复用数 ≤
+        # pod_concurrency-1（leader 自身占 1 个并发槽），杜绝单 Pod 过填；deploy 收尾时清理。
+        self._session_followers_given: dict[str, int] = {}
         self._stop_completed: bool = False
         # 老化标记：当调用 update_config 时设置为 True，表示此 ServiceManager 待老化
         self._deprecated: bool = False
@@ -299,6 +302,7 @@ class ServiceManager(IServiceManager):
                     if not fut.done():
                         fut.set_result(None)
                 self._session_deploy_waiters.clear()
+                self._session_followers_given.clear()
             n_release = 0
             n_failed = 0
             for h in all_handlers:
@@ -1226,9 +1230,9 @@ class ServiceManager(IServiceManager):
         1) 在相同 template_id 组的 in_use 池中找尚有服务级并发的实例
         2) 否则在 idle 池中唤醒一个有容量的实例
         3) 再否则在该 template_id 组的 max 允许下新 deploy（deploy 在锁外执行）
-           同一 session_id 仅允许一个 in-flight deploy；后来者 await 其结果并复用 leader
-           admit 的 Pod（不再基于全局容量重选，避免单 Pod 模式下重复扩容），
-           避免惊群重复占满 max_services。
+           同一 session_id 仅允许一个 in-flight deploy；后来者 await 其结果并复用 leader admit
+           的 Pod（避免冷启动竞态重复扩容），复用数上限 pod_concurrency-1（leader 占 1），超出者
+           直接失败，杜绝单 Pod 过填，避免惊群重复占满 max_services。
            缩容 delete 未完成前仍占用 max 名额（reclaim_occupancy）。
 
         注：session 亲和（同 session 复用同一 Pod）由 ServiceScopeHandler（持有 endpoints）
@@ -1264,10 +1268,11 @@ class ServiceManager(IServiceManager):
                         )
 
             if join_future is not None:
-                # follower：等待 leader 的冷启动结束。leader admit 成功时直接复用其 Pod，
-                # 不再基于全局 available_concurrency 重选——单 Pod 模式(scope≤pod)下编排层已为
-                # 该 scope 预留整块 reserve_per_pod，Pod 的全局 available_concurrency 随之归零，
-                # follower 重选会误判“无可用容量”而触发重复扩容（违反 max_scope_pods）。
+                # follower：等待 leader 的冷启动结束并复用 leader admit 的 Pod。冷启动期间 leader 已为
+                # scope 预留整块 reserve_per_pod，Pod 全局 available_concurrency 归零——若 follower 走
+                # 重选（旧逻辑）会误判“无可用容量”而重复 deploy（违反 max_scope_pods），故直接复用。
+                # 但限制复用数：leader 自身占 1 个并发槽，Pod 硬容量为 pod_concurrency，故最多再容纳
+                # pod_concurrency-1 个 follower；超出者返回 None（编排层 _fail 拒绝），杜绝单 Pod 过填。
                 leader_pod: Optional[IServiceHandler] = None
                 try:
                     leader_pod = await join_future
@@ -1279,7 +1284,19 @@ class ServiceManager(IServiceManager):
                         exc_info=True,
                     )
                 if leader_pod is not None:
-                    return leader_pod
+                    pod_concurrency = self._service_concurrency_for(template_id, sreq)
+                    async with self._lock:
+                        given = self._session_followers_given.get(session_id, 0)
+                        # 含 leader 共 ≤ pod_concurrency：followers(given+1) + leader(1) ≤ pod_concurrency
+                        if given + 1 < pod_concurrency:
+                            self._session_followers_given[session_id] = given + 1
+                            return leader_pod
+                    logger.info(
+                        "follower 超出 leader Pod 并发容量, 拒绝复用: session_id=%s "
+                        "pod_concurrency=%s followers_given=%s",
+                        session_id, pod_concurrency, given,
+                    )
+                    return None
                 # leader deploy 失败(admitted=None)：本轮重新选池/重试，不再占 pending
                 continue
 
@@ -1300,6 +1317,7 @@ class ServiceManager(IServiceManager):
                         is leader_future
                     ):
                         self._session_deploy_waiters.pop(session_id, None)
+                        self._session_followers_given.pop(session_id, None)
                     if leader_future is not None and not leader_future.done():
                         leader_future.set_result(admitted)
             if admitted is None:

@@ -293,25 +293,29 @@ async def test_access_session_concurrency_interleave() -> None:
     acc, ch, sm = await _stack_holding(20, 10)
     try:
 
-        async def one(rid: str, cid: str) -> list[Any]:
+        async def one(rid: str, cid: str, sid: str) -> list[Any]:
             output = []
             async for x in acc.send_message(
                     cast(
                         IRequest,
-                        TRequest(request_id=rid, chat_id=cid, bot_id="b1", user_id="u1"),
+                        TRequest(request_id=rid, chat_id=cid, bot_id="b1", user_id="u1", session_id=sid),
                     )
             ):
                 output.append(x)
             return output
 
+        # 每个请求给独立 session_id（= 独立 chat_session）。SDK 的 scope 并发闸门按
+        # 「已绑定 chat_session 数」限流，其前提是网关保证「每 chat_session ≤1 inflight」
+        # （见 CLAUDE.md / GLOSSARY）。若共用 session_id，acquire_slot 会走「已绑定→不占槽」
+        # 路径绕过 semaphore，不属于被测契约。
         tasks: list[asyncio.Task[Any]] = []
         for i in range(11):
             tasks.append(
-                asyncio.create_task(one(f"r1-{i}", "c1"))
+                asyncio.create_task(one(f"r1-{i}", "c1", f"c1-s{i}"))
             )
         for j in range(9):
             tasks.append(
-                asyncio.create_task(one(f"r2-{j}", "c2"))
+                asyncio.create_task(one(f"r2-{j}", "c2", f"c2-s{j}"))
             )
         for _ in range(200):
             if ch.in_send == 19:
