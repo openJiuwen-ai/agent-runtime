@@ -13,9 +13,11 @@ from openjiuwen_runtime.service.errors import (
     FrameworkError,
     IdempotentConflict,
     Interrupted,
+    KubernetesUnavailable,
     LockLost,
     LockNotAcquired,
     NotFoundError,
+    PermissionDenied,
     RedisUnavailable,
     ValidationError,
     exception_code,
@@ -43,6 +45,8 @@ def test_subclass_codes():
     assert DatabaseUnavailable("x").code == ErrorCode.DATABASE_UNAVAILABLE
     assert RedisUnavailable("x").code == ErrorCode.REDIS_UNAVAILABLE
     assert CacheUnavailable("x").code == ErrorCode.CACHE_UNAVAILABLE
+    assert KubernetesUnavailable("x").code == ErrorCode.KUBERNETES_UNAVAILABLE
+    assert PermissionDenied("x").code == ErrorCode.FORBIDDEN
     # 都是 FrameworkError 子类 → 中间件可统一捕获
     for exc in (
         ValidationError(""),
@@ -82,6 +86,8 @@ def test_http_status_mapping():
     assert http_status_for(ErrorCode.DATABASE_UNAVAILABLE) == 503
     assert http_status_for(ErrorCode.REDIS_UNAVAILABLE) == 503
     assert http_status_for(ErrorCode.CACHE_UNAVAILABLE) == 503
+    assert http_status_for(ErrorCode.KUBERNETES_UNAVAILABLE) == 503
+    assert http_status_for(ErrorCode.FORBIDDEN) == 403
     assert http_status_for(ErrorCode.INTERNAL) == 500
     # 未知 code → 500（fail-safe）
     assert http_status_for("totally-unknown") == 500

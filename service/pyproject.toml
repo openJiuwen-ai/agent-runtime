@@ -25,6 +25,9 @@ dependencies = [
 etcd = [
     "aetcd==1.0.0a4",
 ]
+kubernetes = [
+    "kubernetes_asyncio==35.0.0",
+]
 
 [tool.uv]
 default-groups = ['dev']

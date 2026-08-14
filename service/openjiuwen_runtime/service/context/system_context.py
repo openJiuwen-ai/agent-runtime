@@ -31,8 +31,10 @@ from ..errors import (
     DatabaseUnavailable,
     FrameworkError,
     LockBackendUnavailable,
+    KubernetesUnavailable,
     RedisUnavailable,
 )
+from .kubernetes import KubernetesOperations
 from .audit import AuditEvent, AuditLogger, LoggingAuditLogger, NoopAuditLogger
 from .request_context import RequestContext
 
@@ -58,12 +60,14 @@ class SystemContext:
         lock_backend: Any = None,
         cache_backend: Any = None,
         cache: Any = None,
+        kubernetes: KubernetesOperations | None = None,
         table_definitions: Iterable[Any] | None = None,
         request_timeout_seconds: float | None = None,
         _owns_db: bool | None = None,
         _owns_redis: bool = False,
         _owns_lock_backend: bool | None = None,
         _owns_cache_backend: bool | None = None,
+        _owns_kubernetes: bool = False,
     ) -> None:
         self.redis = redis
         self.db = db
@@ -88,6 +92,7 @@ class SystemContext:
         if cache_backend is not None and cache is not None:
             raise ValueError("cache_backend and cache cannot both be provided")
         self.cache_backend = cache_backend if cache_backend is not None else cache
+        self.kubernetes = kubernetes
         self.table_definitions = tuple(table_definitions or ())
         self._owns_db = db is not None if _owns_db is None else bool(_owns_db)
         self._owns_redis = _owns_redis
@@ -102,6 +107,7 @@ class SystemContext:
             if _owns_cache_backend is None
             else bool(_owns_cache_backend)
         )
+        self._owns_kubernetes = bool(kubernetes is not None and _owns_kubernetes)
         self._started = False
         self._stopped = False
         self._active_resources: list[str] = []
@@ -141,6 +147,12 @@ class SystemContext:
             raise CacheUnavailable("cache backend is not configured")
         return self.cache_backend
 
+    def require_kubernetes(self) -> KubernetesOperations:
+        """Return configured Kubernetes operations or raise a framework error."""
+        if self.kubernetes is None:
+            raise KubernetesUnavailable("Kubernetes operations are not configured")
+        return self.kubernetes
+
     def set_db(self, db: Any, *, owned: bool = False) -> None:
         self.db = db
         self._owns_db = bool(db is not None and owned)
@@ -158,6 +170,15 @@ class SystemContext:
     def set_cache_backend(self, backend: Any, *, owned: bool = True) -> None:
         self.cache_backend = backend
         self._owns_cache_backend = bool(backend is not None and owned)
+
+    def set_kubernetes(
+        self,
+        kubernetes: KubernetesOperations | None,
+        *,
+        owned: bool = False,
+    ) -> None:
+        self.kubernetes = kubernetes
+        self._owns_kubernetes = bool(kubernetes is not None and owned)
 
     def set_audit_logger(self, audit_logger: AuditLogger | None) -> None:
         """Replace the process audit sink; ``None`` selects a no-op sink."""
@@ -197,6 +218,15 @@ class SystemContext:
                 if not await self._ping(self.redis):
                     raise RedisUnavailable("Redis readiness check failed")
 
+            if self.kubernetes is not None:
+                self._active_resources.append("kubernetes")
+                if self._owns_kubernetes:
+                    await self._call(self.kubernetes.start)
+                if not await self._ping(self.kubernetes):
+                    raise KubernetesUnavailable(
+                        "Kubernetes readiness check failed"
+                    )
+
             if self.lock_backend is not None:
                 self._active_resources.append("lock")
                 connect = getattr(self.lock_backend, "connect", None)
@@ -223,6 +253,7 @@ class SystemContext:
             resources = (
                 ("db", self.db),
                 ("redis", self.redis),
+                ("kubernetes", self.kubernetes),
                 ("lock", self.lock_backend),
                 ("cache", self.cache_backend),
             )
@@ -238,12 +269,18 @@ class SystemContext:
         statuses: dict[str, bool | None] = {
             "db": None,
             "redis": None,
+            "kubernetes": None,
             "lock": None,
             "cache": None,
         }
         checks = (
             ("db", self.db, self._db_ready),
             ("redis", self.redis, lambda: self._ping(self.redis)),
+            (
+                "kubernetes",
+                self.kubernetes,
+                lambda: self._ping(self.kubernetes),
+            ),
             ("lock", self.lock_backend, lambda: self._ping(self.lock_backend)),
             ("cache", self.cache_backend, lambda: self._ping(self.cache_backend)),
         )
@@ -260,7 +297,7 @@ class SystemContext:
     async def _stop_resources(self, *, suppress_errors: bool) -> None:
         errors: list[BaseException] = []
         active = set(self._active_resources)
-        for name in ("cache", "lock", "redis", "db"):
+        for name in ("cache", "lock", "kubernetes", "redis", "db"):
             if name not in active:
                 continue
             try:
@@ -285,6 +322,13 @@ class SystemContext:
             close = getattr(self.lock_backend, "close", None)
             if callable(close):
                 await self._call(close)
+            return
+        if (
+            name == "kubernetes"
+            and self.kubernetes is not None
+            and self._owns_kubernetes
+        ):
+            await self._call(self.kubernetes.close)
             return
         if name == "redis" and self.redis is not None and self._owns_redis:
             close = getattr(self.redis, "aclose", None) or getattr(
@@ -416,6 +460,7 @@ class SystemContext:
         etcd_client: Any = None,
         lock_backend: Any = None,
         cache_backend: Any = None,
+        kubernetes: KubernetesOperations | None = None,
         table_definitions: Iterable[Any] | None = None,
         instance_id: str | None = None,
         key_prefix: str | None = None,
@@ -443,6 +488,7 @@ class SystemContext:
             etcd_client=etcd_client,
             lock_backend=lock_backend,
             cache_backend=cache_backend,
+            kubernetes=kubernetes,
             table_definitions=table_definitions,
             instance_id=instance_id,
         )

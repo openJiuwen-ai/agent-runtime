@@ -24,6 +24,7 @@ from .primitives.kv_store import KVStore
 
 if TYPE_CHECKING:
     from .cache import Cache
+    from .kubernetes import KubernetesOperations
     from .locks import LockManager
     from .system_context import SystemContext
 
@@ -260,6 +261,11 @@ class RequestContext(Generic[TRequest]):
         """
         return self.require_redis()
 
+    @property
+    def kubernetes(self) -> KubernetesOperations:
+        """Return the shared Kubernetes operations for this request."""
+        return self.require_kubernetes()
+
     def require_redis(self) -> Any:
         """Require the shared asynchronous Redis client for an active request."""
         self.check_interrupted()
@@ -269,6 +275,11 @@ class RequestContext(Generic[TRequest]):
         """Require a DB handler for this active request."""
         self.check_interrupted()
         return self.sysctx.require_db()
+
+    def require_kubernetes(self) -> KubernetesOperations:
+        """Require shared Kubernetes operations for an active request."""
+        self.check_interrupted()
+        return self.sysctx.require_kubernetes()
 
     async def db_create(self, table_name: str, data: dict[str, Any]) -> Any:
         """Create a record using an independent DBHandler operation."""

@@ -162,6 +162,7 @@ def build_system_context(
     *,
     db: Any = None,
     redis: Any = None,
+    kubernetes: Any = None,
     etcd_client: Any = None,
     lock_backend: Any = None,
     cache_backend: Any = None,
@@ -191,6 +192,7 @@ def build_system_context(
         cache_resource = build_cache_backend(cfg, redis_client=redis_resource)
     return SystemContext(
         redis=redis_resource,
+        kubernetes=kubernetes,
         db=db_resource,
         settings=cfg,
         key_prefix=cfg.key_prefix,

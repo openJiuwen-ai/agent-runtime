@@ -108,6 +108,7 @@ async def test_system_builder_starts_sqlite_memory_resources_and_reports_readine
         assert await system.readiness() == {
             "db": True,
             "redis": None,
+            "kubernetes": None,
             "lock": True,
             "cache": True,
             "ready": True,
@@ -183,6 +184,17 @@ async def test_start_failure_closes_owned_resources_in_reverse_order():
         async def close(self):
             events.append("lock.close")
 
+    class Kubernetes:
+        async def start(self):
+            events.append("kubernetes.start")
+
+        async def ping(self):
+            events.append("kubernetes.ping")
+            return True
+
+        async def close(self):
+            events.append("kubernetes.close")
+
     class Cache:
         async def ping(self):
             events.append("cache.ping")
@@ -194,11 +206,13 @@ async def test_start_failure_closes_owned_resources_in_reverse_order():
     system = SystemContext(
         db=Db(),
         redis=Redis(),
+        kubernetes=Kubernetes(),
         lock_backend=Lock(),
         cache_backend=Cache(),
         settings=ServiceConfig(deploy_replicas=2),
         _owns_db=True,
         _owns_redis=True,
+        _owns_kubernetes=True,
         _owns_lock_backend=True,
         _owns_cache_backend=True,
     )
@@ -211,10 +225,13 @@ async def test_start_failure_closes_owned_resources_in_reverse_order():
         "db.connect",
         "db.ping",
         "redis.ping",
+        "kubernetes.start",
+        "kubernetes.ping",
         "lock.ping",
         "cache.ping",
         "cache.close",
         "lock.close",
+        "kubernetes.close",
         "redis.close",
         "db.close",
     ]
