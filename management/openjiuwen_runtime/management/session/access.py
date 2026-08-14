@@ -81,6 +81,9 @@ class Access(IAccess):
         self._shutdown_done: bool = False
         # 保护 update_config 的切换阶段，确保原子性
         self._update_lock = asyncio.Lock()
+        # 上一次热更新旧 SM 的后台清理任务；下次热更新前须 await 其完成，
+        # 禁止新旧 SM 并存（避免孤儿 Pod / 重复扩容）。
+        self._old_sm_cleanup_task: Optional[asyncio.Task] = None
 
     async def init(
             self,
@@ -164,30 +167,39 @@ class Access(IAccess):
             strategy: Optional[ISessionStrategy] = None,
     ) -> None:
         """运行时热更新配置。创建新的 ServiceManager，异步停止旧的 ServiceManager。
-        
-        使用优化的串行化策略：
-        - 在锁外并行创建和启动新 SM（最大化并发性能）
-        - 持锁时原子切换引用并清理旧 SM
-        - 虽然串行执行切换，但创建阶段可并行，总体延迟更低
-        
-        注意：由于 ServiceManager 是有状态的（包含运行中的服务实例），
-        必须保证切换的原子性，避免中间版本泄漏。
+
+        串行化：整个切换（含旧 SM 销毁等待）由 ``_update_lock`` 保护——若上一次切换的
+        旧 SM 尚未完成销毁，本次热更新会先等待其完成，禁止新旧 SM 并存（避免孤儿 Pod /
+        重复扩容）。注意：ServiceManager 有状态（含运行中的实例），切换必须原子，避免中间版本泄漏。
         """
-        # 阶段1：在锁外创建并启动新 SM（可与其他 update_config 的创建阶段并发）
-        logger.info("Access 开始热更新配置，正在创建新 ServiceManager...")
-        new_sm = await self._service_manager_factory()
-        await new_sm.init(self._response_parser)
-        await new_sm.start()
-        logger.info("新 ServiceManager 已启动，准备切换")
-        
-        # 阶段2：原子切换（持锁，但时间极短）
         async with self._update_lock:
-            # 读取当前的 ServiceManager
+            # 阶段0：等待上一次切换的旧 SM 完成销毁（禁止二次热更新）
+            if (
+                self._old_sm_cleanup_task is not None
+                and not self._old_sm_cleanup_task.done()
+            ):
+                logger.warning(
+                    "上一次配置切换的旧 ServiceManager 仍在销毁，等待其完成后再执行热更新"
+                )
+                try:
+                    await self._old_sm_cleanup_task
+                except Exception:  # noqa: BLE001
+                    logger.warning(
+                        "等待旧 ServiceManager 清理完成时异常", exc_info=True
+                    )
+                self._old_sm_cleanup_task = None
+
+            # 阶段1：创建并启动新 SM
+            logger.info("Access 开始热更新配置，正在创建新 ServiceManager...")
+            new_sm = await self._service_manager_factory()
+            await new_sm.init(self._response_parser)
+            await new_sm.start()
+            logger.info("新 ServiceManager 已启动，准备切换")
+
+            # 阶段2：原子切换（已持 _update_lock，整段串行）
             old_sm = self._service_manager
-            
-            # 切换到新的 ServiceManager
             self._service_manager = new_sm
-            
+
             # 更新配置
             if config:
                 self._config = config
@@ -195,14 +207,17 @@ class Access(IAccess):
                 self._strategy = strategy
             if session_config and self._strategy:
                 self._strategy.configure(session_config.concurrency, session_config.ttl)
-            
-            logger.info("Access 配置已热更新, strategy=%s", type(self._strategy).__name__ if self._strategy else None)
-        
-        # 阶段3：异步清理旧 SM（不持锁，不阻塞后续请求）
-        if old_sm:
-            asyncio.create_task(self._graceful_stop_old_service_manager(old_sm))
-        if old_sm:
-            asyncio.create_task(self._graceful_stop_old_service_manager(old_sm))
+
+            logger.info(
+                "Access 配置已热更新, strategy=%s",
+                type(self._strategy).__name__ if self._strategy else None,
+            )
+
+            # 阶段3：异步清理旧 SM（单任务，并记录以供下次热更新等待）
+            if old_sm:
+                self._old_sm_cleanup_task = asyncio.create_task(
+                    self._graceful_stop_old_service_manager(old_sm)
+                )
     
     async def _graceful_stop_old_service_manager(self, old_sm: IServiceManager) -> None:
         """优雅停止旧的 ServiceManager：先标记为 deprecated，然后尝试清理。
@@ -255,8 +270,16 @@ class Access(IAccess):
                 logger.warning("第 %d 次清理旧 ServiceManager 失败: %s", attempt + 1, e)
                 await asyncio.sleep(interval)
         
-        # 达到最大重试次数，强制停止
-        logger.warning("旧 ServiceManager 在 %d 次重试后仍未清理", max_retries)
+        # 达到最大重试次数仍无法按“空闲”清理：强制 stop 并删除其持有的 Pod，
+        # 避免 ServiceManager 与 Pod 泄漏（此前仅打日志 return，导致孤儿 Pod 残留）。
+        logger.warning(
+            "旧 ServiceManager 在 %d 次重试后仍未空闲清理，强制停止以释放其 Pod",
+            max_retries,
+        )
+        try:
+            await old_sm.stop()
+        except Exception as e:  # noqa: BLE001
+            logger.error("强制停止旧 ServiceManager 失败: %s", e, exc_info=True)
 
     async def send_message(self, msg: IRequest | ISessionRequest) -> AsyncIterator[Any]:
         # 1) 未 init 时直接失败并打 error
