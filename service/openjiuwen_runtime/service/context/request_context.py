@@ -2,6 +2,7 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
 """Request-scoped service context."""
+
 from __future__ import annotations
 
 import asyncio
@@ -17,11 +18,14 @@ from typing import TYPE_CHECKING, Any, Callable, Generic, TypeAlias, TypeVar
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..envelope import Envelope, Metadata
-from ..errors import DeadlineExceeded, FrameworkError, Interrupted
+from ..errors import CacheUnavailable, DeadlineExceeded, FrameworkError, Interrupted
 from .audit import AuditEvent
 from .primitives.kv_store import KVStore
 
 if TYPE_CHECKING:
+    from .cache import Cache
+    from .kubernetes import KubernetesOperations
+    from .locks import LockManager
     from .system_context import SystemContext
 
 
@@ -32,7 +36,9 @@ _logger = logging.getLogger("openjiuwen_runtime.service")
 class _RequestLogger(logging.Logger):
     """Logger carrying immutable request fields on every emitted record."""
 
-    def __init__(self, base: logging.Logger, request_id: str, trace_id: str | None) -> None:
+    def __init__(
+        self, base: logging.Logger, request_id: str, trace_id: str | None
+    ) -> None:
         super().__init__(base.name, level=logging.NOTSET)
         self.parent = base
         self.propagate = True
@@ -59,6 +65,7 @@ class _RequestLogger(logging.Logger):
         return super().makeRecord(
             name, level, fn, lno, msg, args, exc_info, func, bound_extra, sinfo
         )
+
     # pylint: enable=huawei-too-many-arguments
 
 
@@ -82,7 +89,11 @@ class RequestContext(Generic[TRequest]):
     _idem: Any = field(default=None, repr=False, compare=False)
     _queue: Any = field(default=None, repr=False, compare=False)
     _pubsub: Any = field(default=None, repr=False, compare=False)
-    _interrupt_reason: str | None = field(default=None, init=False, repr=False, compare=False)
+    _cache: Cache | None = field(default=None, repr=False, compare=False)
+    _locks: LockManager | None = field(default=None, repr=False, compare=False)
+    _interrupt_reason: str | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
     _cleanup_callbacks: list[CleanupCallback] = field(
         default_factory=list, init=False, repr=False, compare=False
     )
@@ -95,7 +106,9 @@ class RequestContext(Generic[TRequest]):
             raise ValueError("envelope or metadata is required")
         if self.deadline is not None:
             if not isinstance(self.deadline, (int, float)):
-                raise TypeError("deadline must be an absolute monotonic timestamp or None")
+                raise TypeError(
+                    "deadline must be an absolute monotonic timestamp or None"
+                )
             if not math.isfinite(self.deadline):
                 raise ValueError("deadline must be a finite monotonic timestamp")
         if not isinstance(self.logger, _RequestLogger):
@@ -119,7 +132,9 @@ class RequestContext(Generic[TRequest]):
     @property
     def msg_type(self) -> str:
         if self.envelope is None:
-            raise FrameworkError("message type is unavailable for a metadata-only context")
+            raise FrameworkError(
+                "message type is unavailable for a metadata-only context"
+            )
         return self.envelope.type
 
     @property
@@ -246,6 +261,11 @@ class RequestContext(Generic[TRequest]):
         """
         return self.require_redis()
 
+    @property
+    def kubernetes(self) -> KubernetesOperations:
+        """Return the shared Kubernetes operations for this request."""
+        return self.require_kubernetes()
+
     def require_redis(self) -> Any:
         """Require the shared asynchronous Redis client for an active request."""
         self.check_interrupted()
@@ -255,6 +275,11 @@ class RequestContext(Generic[TRequest]):
         """Require a DB handler for this active request."""
         self.check_interrupted()
         return self.sysctx.require_db()
+
+    def require_kubernetes(self) -> KubernetesOperations:
+        """Require shared Kubernetes operations for an active request."""
+        self.check_interrupted()
+        return self.sysctx.require_kubernetes()
 
     async def db_create(self, table_name: str, data: dict[str, Any]) -> Any:
         """Create a record using an independent DBHandler operation."""
@@ -342,28 +367,95 @@ class RequestContext(Generic[TRequest]):
             )
         return self._pubsub
 
+    @property
+    def cache(self) -> Cache:
+        """Return the request-scoped facade for the configured cache backend."""
+        self.check_interrupted()
+        if self._cache is None:
+            if self._close_task is not None:
+                raise CacheUnavailable("request context is already closing")
+            from .cache import Cache
+
+            self._cache = Cache(self.sysctx.require_cache())
+            self.add_cleanup(self._cache.close)
+        return self._cache
+
     def lock(
         self,
         key: str,
         *,
-        ttl: float = 30,
-        timeout: float = 0,
+        ttl: float | None = None,
+        timeout: float | None = None,
         renew_interval: float | None = None,
     ):
-        """Create a distributed lock bound to this request owner."""
-        from .primitives.lock import DistributedLock
+        """Create the legacy lock context manager through ``ctx.locks``."""
+        from .primitives.lock import ManagedDistributedLock
 
         self.check_interrupted()
-        return DistributedLock(
-            self.sysctx.require_redis(),
+        settings = self.sysctx.settings
+        if isinstance(settings, dict):
+            default_ttl = settings.get("lock_ttl_seconds", 30.0)
+            default_wait = settings.get("lock_wait_seconds", 0.0)
+        else:
+            default_ttl = getattr(settings, "lock_ttl_seconds", 30.0)
+            default_wait = getattr(settings, "lock_wait_seconds", 0.0)
+        return ManagedDistributedLock(
+            self.locks,
             key,
-            owner=self.lock_owner,
-            ttl=ttl,
-            timeout=timeout,
-            prefix=self.sysctx.namespace("lock"),
+            ttl=float(default_ttl if ttl is None else ttl),
+            timeout=float(default_wait if timeout is None else timeout),
             renew_interval=renew_interval,
-            check_interrupted=self.check_interrupted,
         )
+
+    @property
+    def locks(self) -> LockManager:
+        """Return the request-scoped lock manager."""
+        if self._locks is None:
+            from .locks import LockManager
+            from .locks.backends.redis import RedisLockBackend
+
+            backend = getattr(self.sysctx, "lock_backend", None)
+            if backend is None and self.sysctx.redis is not None:
+                backend = RedisLockBackend(
+                    self.sysctx.redis,
+                    prefix=self.sysctx.namespace("lock"),
+                    instance_id=self.instance_id,
+                    request_id=self.request_id,
+                )
+            settings = self.sysctx.settings
+            if isinstance(settings, dict):
+                default_ttl = settings.get("lock_ttl_seconds", 30.0)
+                default_wait = settings.get("lock_wait_seconds", 0.0)
+                renew_ratio = settings.get("lock_renew_ratio", 1 / 3)
+                release_timeout = settings.get("lock_release_timeout_seconds", 3.0)
+            else:
+                default_ttl = getattr(settings, "lock_ttl_seconds", 30.0)
+                default_wait = getattr(settings, "lock_wait_seconds", 0.0)
+                renew_ratio = getattr(settings, "lock_renew_ratio", 1 / 3)
+                release_timeout = getattr(settings, "lock_release_timeout_seconds", 3.0)
+            self._locks = LockManager(
+                backend,
+                cancel_event=self.cancel_event,
+                deadline=self.deadline,
+                check_interrupted=self.check_interrupted,
+                interrupt=self.interrupt,
+                default_ttl=float(default_ttl),
+                default_wait_timeout=float(default_wait),
+                renew_ratio=float(renew_ratio),
+                release_timeout=float(release_timeout),
+            )
+            self.add_cleanup(self._locks.close)
+        return self._locks
+
+    def require_locks(
+        self,
+        *,
+        distributed: bool = False,
+        fencing: bool = False,
+    ) -> LockManager:
+        """Require a lock backend with the declared capabilities."""
+        self.check_interrupted()
+        return self.locks.require(distributed=distributed, fencing=fencing)
 
     @asynccontextmanager
     async def transaction(self) -> AsyncIterator[AsyncSession]:
