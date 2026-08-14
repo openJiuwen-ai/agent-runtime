@@ -21,8 +21,16 @@ dependencies = [
     "openjiuwen-runtime-foundation==0.1.0"
 ]
 
+[project.optional-dependencies]
+etcd = [
+    "aetcd==1.0.0a4",
+]
+
 [tool.uv]
 default-groups = ['dev']
+
+[tool.uv.sources]
+openjiuwen-runtime-foundation = { path = "../foundation", editable = true }
 
 [dependency-groups]
 dev = [
