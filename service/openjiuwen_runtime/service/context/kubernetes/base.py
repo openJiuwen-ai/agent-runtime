@@ -15,6 +15,8 @@ class PodCreateSpec:
 
     name: str
     image: str
+    run_as_user: int | None = None
+    run_as_group: int | None = None
 
 
 @dataclass(frozen=True)

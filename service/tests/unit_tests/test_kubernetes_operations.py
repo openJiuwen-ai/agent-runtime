@@ -203,6 +203,31 @@ async def test_real_adapter_create_uses_restricted_pod_template():
 
 
 @pytest.mark.unit
+async def test_real_adapter_applies_optional_non_root_uid_and_gid():
+    client = pytest.importorskip("kubernetes_asyncio.client")
+    operations = KubernetesAsyncioOperations("demo")
+    operations._client_module = client
+    operations._core_api = SimpleNamespace(
+        create_namespaced_pod=AsyncMock(return_value=_pod()),
+    )
+
+    await operations.create_pod(
+        PodCreateSpec(
+            name="capability-pod-1",
+            image="demo:1",
+            run_as_user=999,
+            run_as_group=1000,
+        )
+    )
+
+    call = operations._core_api.create_namespaced_pod.await_args.kwargs
+    security = call["body"].spec.containers[0].security_context
+    assert security.run_as_non_root is True
+    assert security.run_as_user == 999
+    assert security.run_as_group == 1000
+
+
+@pytest.mark.unit
 async def test_real_adapter_start_falls_back_to_kubeconfig_once():
     pytest.importorskip("kubernetes_asyncio")
     from kubernetes_asyncio.config.config_exception import ConfigException
