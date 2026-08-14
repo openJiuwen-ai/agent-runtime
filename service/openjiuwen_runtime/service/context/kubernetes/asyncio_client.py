@@ -128,6 +128,8 @@ class KubernetesAsyncioOperations:
                 allow_privilege_escalation=False,
                 read_only_root_filesystem=False,
                 run_as_non_root=True,
+                run_as_user=spec.run_as_user,
+                run_as_group=spec.run_as_group,
                 seccomp_profile=client.V1SeccompProfile(type="RuntimeDefault"),
                 capabilities=client.V1Capabilities(drop=["ALL"]),
             ),
