@@ -28,6 +28,8 @@ class ErrorCode:
     REDIS_UNAVAILABLE = "redis_unavailable"
     CACHE_UNAVAILABLE = "cache_unavailable"
     LOCK_BACKEND_UNAVAILABLE = "lock_backend_unavailable"
+    KUBERNETES_UNAVAILABLE = "kubernetes_unavailable"
+    FORBIDDEN = "forbidden"
 
 
 class FrameworkError(Exception):
@@ -125,6 +127,18 @@ class CacheUnavailable(FrameworkError):
     code = ErrorCode.CACHE_UNAVAILABLE
 
 
+class KubernetesUnavailable(FrameworkError):
+    """Kubernetes operations are absent, closed, or unreachable."""
+
+    code = ErrorCode.KUBERNETES_UNAVAILABLE
+
+
+class PermissionDenied(FrameworkError):
+    """The caller or service identity lacks permission for an operation."""
+
+    code = ErrorCode.FORBIDDEN
+
+
 @runtime_checkable
 class _HasCode(Protocol):
     code: str
@@ -150,6 +164,8 @@ _HTTP_STATUS = {
     ErrorCode.REDIS_UNAVAILABLE: 503,
     ErrorCode.CACHE_UNAVAILABLE: 503,
     ErrorCode.LOCK_BACKEND_UNAVAILABLE: 503,
+    ErrorCode.KUBERNETES_UNAVAILABLE: 503,
+    ErrorCode.FORBIDDEN: 403,
     ErrorCode.INTERNAL: 500,
 }
 

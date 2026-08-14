@@ -3,12 +3,16 @@
 
 """SystemContext / RequestContext 单测（设计 §8）：进程级/请求级、start/stop、for_request、transaction。"""
 import logging
+from unittest.mock import AsyncMock
 
 import fakeredis.aioredis
 import pytest
 
-from openjiuwen_runtime.service import RequestContext as PublicRequestContext
-from openjiuwen_runtime.service import TypedAppContext
+from openjiuwen_runtime.service import (
+    KubernetesUnavailable,
+    RequestContext as PublicRequestContext,
+    TypedAppContext,
+)
 from openjiuwen_runtime.service.context.request_context import RequestContext
 from openjiuwen_runtime.service.context.system_context import (
     RequestContext as LegacyRequestContext,
@@ -175,3 +179,50 @@ def test_from_settings_builds_redis_from_env(monkeypatch):
     ctx = SystemContext.from_settings()
     assert ctx.redis is not None
     assert ctx._owns_redis is True        # 自建 → stop 时负责关闭
+
+
+@pytest.mark.unit
+async def test_kubernetes_capability_lifecycle_and_request_entry():
+    kubernetes = AsyncMock()
+    kubernetes.ping.return_value = True
+    ctx = SystemContext(kubernetes=kubernetes, _owns_kubernetes=True)
+
+    assert ctx.require_kubernetes() is kubernetes
+    request = ctx.for_request(Metadata(request_id="kubernetes-1"))
+    assert request.kubernetes is kubernetes
+
+    await ctx.start()
+    kubernetes.start.assert_awaited_once()
+    kubernetes.ping.assert_awaited_once()
+    assert await ctx.readiness() == {
+        "db": None,
+        "redis": None,
+        "kubernetes": True,
+        "lock": None,
+        "cache": None,
+        "ready": True,
+    }
+    await ctx.stop()
+    kubernetes.close.assert_awaited_once()
+
+
+@pytest.mark.unit
+async def test_external_kubernetes_capability_keeps_caller_ownership():
+    kubernetes = AsyncMock()
+    kubernetes.ping.return_value = True
+    ctx = SystemContext(kubernetes=kubernetes)
+
+    await ctx.start()
+    await ctx.stop()
+
+    kubernetes.start.assert_not_awaited()
+    kubernetes.close.assert_not_awaited()
+    kubernetes.ping.assert_awaited_once()
+
+
+@pytest.mark.unit
+def test_missing_kubernetes_capability_raises_unavailable():
+    ctx = SystemContext()
+
+    with pytest.raises(KubernetesUnavailable, match="not configured"):
+        ctx.require_kubernetes()

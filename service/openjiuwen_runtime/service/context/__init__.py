@@ -29,6 +29,14 @@ from .locks import (
     build_lock_backend,
     create_lock_backend,
 )
+from .kubernetes import (
+    FakeKubernetesOperations,
+    KubernetesAsyncioOperations,
+    KubernetesOperations,
+    PodCreateSpec,
+    PodDeleteResult,
+    PodSummary,
+)
 from .request_context import RequestContext, TypedAppContext
 from .system_context import SystemContext
 
@@ -59,6 +67,12 @@ __all__ = [
     "SystemContext",
     "TypedAppContext",
     "JsonCacheSerializer",
+    "FakeKubernetesOperations",
+    "KubernetesAsyncioOperations",
+    "KubernetesOperations",
+    "PodCreateSpec",
+    "PodDeleteResult",
+    "PodSummary",
     "build_cache_backend",
     "build_lock_backend",
     "create_cache_backend",
