@@ -3,7 +3,7 @@
 
 """SystemContext（设计 §8）。
 
-- 进程级 SystemContext（lifespan 创建/释放）：db / redis / settings / logger / 原语工厂。
+- 进程级 SystemContext（lifespan 创建/释放）：db / redis / settings / logger / 原语工厂 / 周期任务。
 - 请求级 RequestContext 由 ``for_request(envelope)`` 派生。
 - 事务：``async with ctx.transaction() as s`` 取 SQLAlchemy session（多操作原子）。
 - 硬约束：handler 禁止读写模块级可变状态——无内存状态的多副本。
@@ -18,7 +18,7 @@ import time
 from dataclasses import replace
 from inspect import isawaitable
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Iterable, TypeVar, overload
+from typing import TYPE_CHECKING, Any, AsyncIterator, Awaitable, Callable, Iterable, TypeVar, overload
 from uuid import uuid4
 
 from sqlalchemy import text
@@ -37,6 +37,9 @@ from ..errors import (
 from .kubernetes import KubernetesOperations
 from .audit import AuditEvent, AuditLogger, LoggingAuditLogger, NoopAuditLogger
 from .request_context import RequestContext
+
+if TYPE_CHECKING:
+    from .periodic.runner import JobRunner
 
 _logger = logging.getLogger("openjiuwen_runtime.service")
 TRequest = TypeVar("TRequest")
@@ -392,6 +395,30 @@ class SystemContext:
             raise LockBackendUnavailable(
                 "multi-replica deployment requires a distributed lock backend"
             )
+
+    # -------------------------------------------------------------- 周期任务
+    def create_single_leader_job(
+        self,
+        *,
+        name: str,
+        on_tick: Callable[[], Awaitable[None]],
+        interval_sec: int = 1,
+        gather_window_sec: float = 0.08,
+        lock_key: str = "",
+        run_on_start: bool = False,
+    ) -> "JobRunner":
+        """用本进程的 redis / instance_id 组装主备周期任务。"""
+        from .periodic import create_single_leader_job
+
+        return create_single_leader_job(
+            self,
+            name=name,
+            on_tick=on_tick,
+            interval_sec=interval_sec,
+            gather_window_sec=gather_window_sec,
+            lock_key=lock_key,
+            run_on_start=run_on_start,
+        )
 
     # -------------------------------------------------------------- 请求上下文
     @overload
