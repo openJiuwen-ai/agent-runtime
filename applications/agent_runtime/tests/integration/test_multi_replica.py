@@ -1,0 +1,373 @@
+# coding: utf-8
+"""多副本（双实例）专项用例：跨副本语义的确定性验证（离线，fakeredis）。
+
+进程内跑两个完整 App（各自 SystemContext + 全部后台 Job），共享同一
+FakeRedis / SQLite / FakeK8s —— 等价两个副本指向同一 Redis/DB/K8s。
+
+覆盖（对应 HLD「多副本无状态 + tick 级选主」承诺）：
+- 身份与共享态：instance_id 互异、A 写 B 读；
+- 准入闸门跨副本全局生效：并发突发不超收（LUA_WAITER_GATE / ROUTE_PLACE）；
+- deploy 锁跨副本竞争：部署窗口零重叠、占位清干净、输家复用暖 Pod；
+- PubSub 跨副本唤醒：A 排队、B touch 释放容量；
+- 幂等跨副本重放：同 request_id 落不同副本返回同结果；
+- 配置失效传播：B 改配置 → A 缓存即失效；
+- 选主互斥：每 (job, epoch) 恒一 winner、双实例均参选；
+- sweeper tick 互斥与并发收敛。
+
+注意（与单进程直觉的关键差异）：跨副本冷竞争时，deploy 锁输家清占位后
+重跑 ACQUIRE 只见赢家 in-use Pod → 自己再部署一个（max_pods 内），空 Pod
+经 empty-pod pass → idle_consider → reclaim 自愈。因此部署竞争类用例断言
+「窗口零重叠 + Pod ≤ max_pods + 占位清空」，不断言「恰好 1 个 Pod」。
+"""
+
+from __future__ import annotations
+
+import asyncio
+
+from tests.conftest import requires_lua
+from tests.integration._dual_harness import scope_of
+
+# ---------------------------------------------------------------- 基础
+
+
+@requires_lua
+async def test_two_instances_distinct_ids_shared_state(dual):
+    """双实例 instance_id 互异（RM 镜像 SM），A 路由的会话 B 可 touch。"""
+    a, b = dual.sysctx(0), dual.sysctx(1)
+    assert a.instance_id != b.instance_id
+    assert a.rm_sysctx.instance_id == a.instance_id
+    assert b.rm_sysctx.instance_id == b.instance_id
+
+    await dual.seed_template()
+    status, raw, body = await dual.post(0, "route", session_id="s1")
+    assert status == 200, body
+    assert raw["pod_id"].startswith("agentserver-")
+
+    status, raw, body = await dual.post(1, "touch", session_id="s1")
+    assert status == 200, body
+    assert raw == {"touched": True}
+
+
+@requires_lua
+async def test_route_alternating_replicas_affinity_single_session(dual):
+    """同 session 交替打到 A/B/A/B：亲和命中同一 Pod，scope 仅一会话。"""
+    await dual.seed_template()
+    pods = set()
+    for i in (0, 1, 0, 1):
+        status, raw, body = await dual.post(i, "route", session_id="s1")
+        assert status == 200, body
+        pods.add(raw["pod_id"])
+    assert len(pods) == 1
+
+    scope = scope_of()
+    assert await dual.redis.scard(
+        f"session_manager:scope:{scope}:sessions") == 1
+
+
+@requires_lua
+async def test_healthz_reports_instance(dual):
+    """/healthz 就绪探针返回各自 instance_id（K8s 探针 / e2e 实例观测用）。"""
+    for i, iid in ((0, "replica-a"), (1, "replica-b")):
+        status, body = await dual.healthz(i)
+        assert status == 200, body
+        assert body["ok"] is True
+        assert body["instance_id"] == iid
+
+
+# ---------------------------------------------------------------- 准入闸门（跨副本全局）
+
+
+@requires_lua
+async def test_cross_replica_burst_no_over_admission(dual):
+    """并发突发交替打 A/B：准入/排队闸门全局生效，不因双副本超收。
+
+    cc=2/pc=1（max_pods=2）：先串行放满 2 个会话，再 8 并发交替打 A/B ——
+    全部 scope_full → LUA_WAITER_GATE（max_waiters=2×cc=4）：恰好 4 入队
+    （3s 后 504 SCOPE_FULL_TIMEOUT）、4 快失败（503 SCOPE_QUEUE_FULL）。
+    """
+    await dual.seed_template(scope_concurrency=2, pod_concurrency=1)
+    for sid in ("s1", "s2"):
+        status, _, body = await dual.post(0, "route", session_id=sid)
+        assert status == 200, body
+    scope = scope_of()
+
+    async def _attempt(i):
+        status, _, body = await dual.post(i % 2, "route", session_id=f"burst-{i}")
+        return status, body.get("error_code")
+
+    outcomes = await asyncio.gather(*[_attempt(i) for i in range(8)])
+    ok = [o for o in outcomes if o[0] == 200]
+    queue_full = [o for o in outcomes if o == (503, "SCOPE_QUEUE_FULL")]
+    timeout = [o for o in outcomes if o == (504, "SCOPE_FULL_TIMEOUT")]
+    assert len(ok) == 0, outcomes               # scope 已满，突发全部不进
+    assert len(queue_full) == 4, outcomes       # max_waiters=4 之外的快失败
+    assert len(timeout) == 4, outcomes          # 入队者等待至 deadline
+    assert len(queue_full) + len(timeout) == 8
+
+    assert await dual.redis.scard(
+        f"session_manager:scope:{scope}:sessions") == 2
+    assert await dual.redis.scard(
+        f"session_manager:scope:{scope}:waiters") == 0
+    assert await dual.redis.scard(
+        f"resource_manager:resource:scope:{scope}:deploying") == 0
+
+
+# ---------------------------------------------------------------- deploy 锁（跨副本竞争）
+
+
+@requires_lua
+async def test_deploy_lock_serializes_cross_replica_deploys(dual):
+    """并发冷启动打到 A/B：per-scope deploy 锁串行化，窗口零重叠。
+
+    SlowFakeK8s deploy_delay=0.4s（deploy 全程持锁）。cc=4/pc=2 → 3 个并发
+    会话最多 2 个 Pod。断言：全部 200、部署窗口无交集、Pod ≤ max_pods、
+    占位清空。（跨副本冷竞争允许第 2 个 Pod —— 输家 retry 时赢家 Pod 为
+    in-use 不在 idle 池；这正是不断言「恰好 1 个 Pod」的原因。）
+    """
+    dual.k8s.deploy_delay = 0.4
+    await dual.seed_template(scope_concurrency=4, pod_concurrency=2)
+    scope = scope_of()
+
+    async def _route(i, sid):
+        status, _, body = await dual.post(i, "route", session_id=sid)
+        assert status == 200, body
+
+    # A/B 并发冷启动竞争（双副本同时 need_deploy 同一 scope）
+    await asyncio.gather(_route(0, "s1"), _route(1, "s2"))
+    # 竞争结束后 first-fit 复用已有 Pod（不再触发第 3 次部署）
+    await _route(0, "s3")
+
+    deployed = len(dual.k8s.deploy_log)
+    assert 1 <= deployed <= 2                    # max_pods=2 封顶
+    assert not dual.k8s.deploy_windows_overlap()
+    assert len(dual.k8s.pods) <= 2
+    assert await dual.redis.scard(
+        f"resource_manager:resource:scope:{scope}:deploying") == 0
+    # 3 会话全部落位（s3 first-fit 复用已有 Pod）
+    assert await dual.redis.scard(
+        f"session_manager:scope:{scope}:sessions") == 3
+
+
+@requires_lua
+async def test_deploy_loser_reuses_other_replicas_warm_pod(dual):
+    """他副本持 deploy 锁并部署**暖 Pod**（idle）：本侧占位→抢锁失败→
+    重试复用其暖 Pod，零部署、占位清干净（corner_cases:169 的 HTTP 版）。"""
+    from agent_runtime.resource_manager.orchestrator import _deploy_ver
+    from agent_runtime.resource_manager.state import ResourceState
+    from agent_runtime.util import now_ts
+
+    await dual.seed_template(scope_concurrency=3, pod_concurrency=2)
+    scope = scope_of()
+    rm_state = ResourceState(dual.redis)
+    template = await dual.sysctx(0).sm_config_store.resolve(scope, "grp", "bot")
+
+    await dual.redis.set(rm_state.k.lock_deploy(scope), "other-replica",
+                         nx=True, ex=30)
+
+    async def _finish_other_deploy():
+        await asyncio.sleep(0.6)
+        await rm_state.register_pod(
+            pod_id="pod-other", scope_id=scope,
+            pod_sse_url="http://10.42.0.9:8080/sse", pod_ip="10.42.0.9",
+            namespace="default",
+            deploy_ver=_deploy_ver(template.deploy_subset()),
+            deploy_token="other-token", idle_flag=True, now=now_ts())
+        await dual.redis.delete(rm_state.k.lock_deploy(scope))
+
+    task = asyncio.get_running_loop().create_task(_finish_other_deploy())
+    status, raw, body = await dual.post(0, "route", session_id="s1")
+    await task
+    assert status == 200, body
+    assert raw["pod_id"] == "pod-other"
+    assert len(dual.k8s.deploy_log) == 0                    # 本侧零部署
+    assert await dual.redis.scard(
+        f"resource_manager:resource:scope:{scope}:deploying") == 0
+
+
+# ---------------------------------------------------------------- PubSub 跨副本唤醒
+
+
+@requires_lua
+async def test_waiter_on_a_woken_by_touch_on_b(dual):
+    """A 上排队的等待者被 B 上的 touch 唤醒（Redis PubSub 跨副本生效）。
+
+    cc=1/pc=1：A 放 s1 占满 → A 发 s2（入队阻塞）→ 回拨 s1 过期 → B touch
+    s1 → LUA_TOUCH 惰性驱逐过期会话（touched=False）+ PUBLISH free →
+    s2 被唤醒占刚释放的额度。次序关键：必须先入队再回拨（route_place 自身
+    会惰性驱逐过期绑定，先回拨则 s2 直接落位不排队）。
+    """
+    await dual.seed_template(scope_concurrency=1, pod_concurrency=1)
+    scope = scope_of()
+    status, raw, body = await dual.post(0, "route", session_id="s1")
+    assert status == 200, body
+    pod1 = raw["pod_id"]
+
+    import time as _time
+    from agent_runtime.util import now_ts
+
+    t0 = _time.monotonic()
+    waiter = asyncio.create_task(dual.post(0, "route", session_id="s2"))
+    await asyncio.sleep(0.3)                    # 让 s2 入队并订阅
+    assert await dual.redis.scard(
+        f"session_manager:scope:{scope}:waiters") == 1
+
+    past = now_ts() - 1
+    await dual.redis.zadd("session_manager:session_expiry", {"s1": past})
+    await dual.redis.hset("session_manager:session:s1", "expiry", past)
+    status, raw, body = await dual.post(1, "touch", session_id="s1")
+    assert status == 200, body
+    assert raw == {"touched": False}            # 已过期：惰性驱逐
+
+    w_status, w_raw, w_body = await asyncio.wait_for(waiter, timeout=2.5)
+    assert w_status == 200, w_body
+    assert w_raw["pod_id"] == pod1              # 占刚释放的额度（同一 Pod）
+    elapsed = _time.monotonic() - t0
+    assert elapsed < 2.0, f"唤醒耗时 {elapsed:.2f}s（远小于 3s 超时）"
+
+    assert await dual.redis.scard(
+        f"session_manager:scope:{scope}:sessions") == 1
+    assert await dual.redis.scard(
+        f"session_manager:scope:{scope}:waiters") == 0
+
+
+# ---------------------------------------------------------------- 幂等 / 配置传播
+
+
+@requires_lua
+async def test_idempotent_replay_across_replicas(dual):
+    """同 request_id：A 首发、B 重放 → 响应一致、仅一会话（幂等态在 Redis）。"""
+    await dual.seed_template()
+    scope = scope_of()
+
+    status, first, body = await dual.post(
+        0, "route", session_id="s1", request_id="req-idem")
+    assert status == 200, body
+    status, second, body = await dual.post(
+        1, "route", session_id="s1", request_id="req-idem")
+    assert status == 200, body
+    assert second["pod_id"] == first["pod_id"]
+    assert second["pod_sse_url"] == first["pod_sse_url"]
+
+    assert await dual.redis.scard(
+        f"session_manager:scope:{scope}:sessions") == 1
+
+
+@requires_lua
+async def test_config_sync_on_b_invalidates_resolve_on_a(dual):
+    """B 上 config_sync（B 类变更）→ A 的 scope 缓存即失效、下次 resolve 见新值。
+
+    观察点用**新会话的路由**：touch 只刷新会话 HASH 里落位时存的 ttl，
+    不重新 resolve（见 orchestrator.touch），不能用它观察配置传播。
+    """
+    await dual.seed_template(session_ttl=60)
+    scope = scope_of()
+    status, _, body = await dual.post(0, "route", session_id="s1")
+    assert status == 200, body
+    cache_key = f"session_manager:scope:{scope}:config"
+    assert await dual.redis.exists(cache_key) == 1      # A 已暖缓存
+
+    status, _, body = await dual.post(
+        1, "config_sync",
+        rawdata={"kind": "template", "op": "update", "template_id": "tpl-1",
+                 "updates": {"session_ttl": 90}})
+    assert status == 200, body
+    assert await dual.redis.exists(cache_key) == 0      # 缓存已失效
+
+    from agent_runtime.util import now_ts
+
+    status, raw, body = await dual.post(0, "route", session_id="s2")
+    assert status == 200, body
+    expiry = await dual.redis.zscore("session_manager:session_expiry", "s2")
+    assert now_ts() + 80 <= int(expiry) <= now_ts() + 95   # 用了新 ttl=90
+    ttl = await dual.redis.hget("session_manager:session:s2", "session_ttl")
+    assert int(ttl) == 90
+
+
+# ---------------------------------------------------------------- 选主互斥
+
+
+@requires_lua
+async def test_single_leader_one_winner_per_epoch(dual):
+    """每 (job, epoch) 恒一 winner 且 ∈ candidates；双实例均参选。
+
+    确定性断言：winner∈candidates、candidates 并集含双实例（两副本都在
+    竞争）。winner 轮换（SRANDMEMBER 随机）只记录直方图不硬断言——5 个
+    epoch 内单侧概率 ~6%，硬断言会引入抖动（见用例文档注释）。
+    """
+    from tests.integration._dual_harness import REPLICA_IDS
+
+    sampled = await asyncio.gather(*[
+        dual.sample_election(job, duration=5.5, interval=0.2)
+        for job in ("sm_sweep", "rm_autoscale")])
+    for job, samples in zip(("sm_sweep", "rm_autoscale"), sampled):
+        epochs = {e: s for e, s in samples.items()
+                  if "winner" in s and "candidates" in s}
+        assert len(epochs) >= 3, f"{job} 采样 epoch 过少: {samples}"
+
+        candidates_union: set[str] = set()
+        winners: dict[str, int] = {}
+        for epoch, s in epochs.items():
+            assert s["winner"] in s["candidates"], (job, epoch, s)
+            candidates_union.update(s["candidates"])
+            winners[s["winner"]] = winners.get(s["winner"], 0) + 1
+
+        assert candidates_union == set(REPLICA_IDS), (job, candidates_union)
+        print(f"[election] {job}: winners={winners} epochs={len(epochs)}")
+
+
+@requires_lua
+async def test_sweeper_skips_when_other_replica_holds_tick(dual):
+    """他副本持 sweep 锁：本侧 sweep_once 直退（会话不动）；锁释放后补扫。"""
+    from agent_runtime.util import now_ts
+
+    await dual.seed_template()
+    scope = scope_of()
+    status, _, body = await dual.post(0, "route", session_id="s1")
+    assert status == 200, body
+    past = now_ts() - 999
+    await dual.redis.zadd("session_manager:session_expiry", {"s1": past})
+    await dual.redis.hset("session_manager:session:s1", "expiry", past)
+
+    lock_key = "session_manager:lock:sweep"
+    await dual.redis.set(lock_key, "replica-b", nx=True, ex=30)
+    await dual.sysctx(0).sm_sweeper.sweep_once()        # 抢锁失败直退
+    assert await dual.redis.scard(
+        f"session_manager:scope:{scope}:sessions") == 1  # 会话未被误扫
+
+    await dual.redis.delete(lock_key)
+    await dual.sysctx(0).sm_sweeper.sweep_once()        # 释放后补扫
+    assert await dual.redis.scard(
+        f"session_manager:scope:{scope}:sessions") == 0
+
+
+@requires_lua
+async def test_concurrent_sweepers_converge_clean(dual):
+    """A/B 两侧 sweep_once 并发 gather：无异常、全清、锁正常释放、无重复副作用。"""
+    from agent_runtime.util import now_ts
+
+    await dual.seed_template(scope_concurrency=4, pod_concurrency=2)
+    scope = scope_of()
+    for sid in ("s1", "s2", "s3"):
+        status, _, body = await dual.post(0, "route", session_id=sid)
+        assert status == 200, body
+
+    past = now_ts() - 999
+    for sid in ("s1", "s2", "s3"):
+        await dual.redis.zadd("session_manager:session_expiry", {sid: past})
+        await dual.redis.hset(f"session_manager:session:{sid}", "expiry", past)
+
+    registered_before = await dual.redis.scard(
+        "session_manager:pods:registered")
+    await asyncio.gather(
+        dual.sysctx(0).sm_sweeper.sweep_once(),
+        dual.sysctx(1).sm_sweeper.sweep_once(),
+    )
+
+    assert await dual.redis.scard(
+        f"session_manager:scope:{scope}:sessions") == 0
+    assert await dual.redis.zcard("session_manager:session_expiry") == 0
+    assert await dual.redis.exists("session_manager:lock:sweep") == 0
+    # 空扫不误删 Pod 登记（invariant 5）
+    assert await dual.redis.scard(
+        "session_manager:pods:registered") == registered_before
+    await asyncio.sleep(0.2)     # 让 fire-and-forget 的 idle_consider 跑完

@@ -1,0 +1,17 @@
+# 可选：NodePort Service，供集群外（宿主机）访问 Deployment 多副本 ——
+# e2e 多副本验收 / 压测的 LB 单入口（render_and_apply.sh --nodeport 启用）。
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: <<AGENT_RUNTIME_NAME>>-nodeport
+  namespace: <<NAMESPACE>>
+spec:
+  type: NodePort
+  ports:
+    - name: rest
+      port: 8091
+      targetPort: 8091
+      nodePort: <<AGENT_RUNTIME_NODE_PORT>>
+  selector:
+    app: <<AGENT_RUNTIME_NAME>>

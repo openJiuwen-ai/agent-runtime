@@ -1,0 +1,189 @@
+# agent-runtime 服务 K8s 部署模板（双尖括号大写变量占位，render_and_apply.sh 渲染）。
+# 形态（HLD §8）：多副本无状态 + ClusterIP Service 前置负载均衡；后台任务
+# 经 Redis 选主键全局单副本执行 —— 副本数只改 Deployment.spec.replicas。
+# 兼容 K8s v1.19（apps/v1 / rbac.authorization.k8s.io/v1 / core v1）。
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: <<AGENT_RUNTIME_NAME>>-sa
+  namespace: <<NAMESPACE>>
+---
+# RM 需要 CRUD AgentServer Pod（deploy/read/list/delete），与 gateway 的
+# agentserver-creator Role 同面；namespaced，不越权
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: <<AGENT_RUNTIME_NAME>>-agentserver-creator
+  namespace: <<NAMESPACE>>
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: <<AGENT_RUNTIME_NAME>>-agentserver-binding
+  namespace: <<NAMESPACE>>
+subjects:
+  - kind: ServiceAccount
+    name: <<AGENT_RUNTIME_NAME>>-sa
+    namespace: <<NAMESPACE>>
+roleRef:
+  kind: Role
+  name: <<AGENT_RUNTIME_NAME>>-agentserver-creator
+  apiGroup: rbac.authorization.k8s.io
+---
+# AgentServer Pod 拉起发生在 AGENTSERVER namespace（与 Service 自身 namespace
+# 可以不同）—— RBAC 是 namespaced 的，必须在目标 namespace 再授权一份
+# （否则 create_namespaced_pod 403 → DeployFailed → route 全部 NO_POD_AVAILABLE）
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: <<AGENT_RUNTIME_NAME>>-agentserver-creator
+  namespace: <<AGENT_RUNTIME_AGENTSERVER_NAMESPACE>>
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: <<AGENT_RUNTIME_NAME>>-agentserver-binding
+  namespace: <<AGENT_RUNTIME_AGENTSERVER_NAMESPACE>>
+subjects:
+  - kind: ServiceAccount
+    name: <<AGENT_RUNTIME_NAME>>-sa
+    namespace: <<NAMESPACE>>
+roleRef:
+  kind: Role
+  name: <<AGENT_RUNTIME_NAME>>-agentserver-creator
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: <<AGENT_RUNTIME_NAME>>
+  namespace: <<NAMESPACE>>
+  labels:
+    app: <<AGENT_RUNTIME_NAME>>
+spec:
+  replicas: <<AGENT_RUNTIME_REPLICAS>>
+  selector:
+    matchLabels:
+      app: <<AGENT_RUNTIME_NAME>>
+  template:
+    metadata:
+      labels:
+        app: <<AGENT_RUNTIME_NAME>>
+    spec:
+      serviceAccountName: <<AGENT_RUNTIME_NAME>>-sa
+      # 软反亲和：优先把副本分到不同节点；节点紧张时允许同节点（2 节点集群必需）
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - <<AGENT_RUNTIME_NAME>>
+                topologyKey: "kubernetes.io/hostname"
+      containers:
+        - name: agent-runtime
+          image: <<AGENT_RUNTIME_IMAGE>>
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: rest
+              containerPort: 8091
+          # 就绪/存活探针：lifespan 完成即 sysctx 就绪（Redis/DB 不可用起不来）
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: rest
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: rest
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: <<AGENT_RUNTIME_CPU_REQUEST>>
+              memory: <<AGENT_RUNTIME_MEMORY_REQUEST>>
+            limits:
+              cpu: <<AGENT_RUNTIME_CPU_LIMIT>>
+              memory: <<AGENT_RUNTIME_MEMORY_LIMIT>>
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+          env:
+            - name: AGENT_RUNTIME_MODE
+              value: "server"
+            - name: OPENJIUWEN_SERVICE_HOST
+              value: "0.0.0.0"
+            - name: OPENJIUWEN_SERVICE_PORT
+              value: "8091"
+            # 集群内 Redis / MySQL（ClusterIP Service DNS）
+            - name: OPENJIUWEN_SERVICE_REDIS_URL
+              value: "redis://<<AGENT_RUNTIME_REDIS_HOST>>:<<AGENT_RUNTIME_REDIS_PORT>>/<<AGENT_RUNTIME_REDIS_DB>>"
+            - name: OPENJIUWEN_SERVICE_REQUEST_TIMEOUT_SECONDS
+              value: "<<AGENT_RUNTIME_REQUEST_TIMEOUT>>"
+            - name: OPENJIUWEN_SERVICE_DB_TYPE
+              value: "mysql"
+            - name: OPENJIUWEN_SERVICE_DB_HOST
+              value: "<<AGENT_RUNTIME_MYSQL_HOST>>"
+            - name: OPENJIUWEN_SERVICE_DB_PORT
+              value: "<<AGENT_RUNTIME_MYSQL_PORT>>"
+            - name: OPENJIUWEN_SERVICE_DB_NAME
+              value: "<<AGENT_RUNTIME_MYSQL_DB>>"
+            - name: OPENJIUWEN_SERVICE_DB_USER
+              value: "<<AGENT_RUNTIME_MYSQL_USER>>"
+            - name: OPENJIUWEN_SERVICE_DB_PASSWORD
+              value: "<<AGENT_RUNTIME_MYSQL_PASSWORD>>"
+            # 红线：多副本来自本 Deployment 的 replicas；框架这项 >1 会因缺
+            # 分布式锁后端在启动时 fail-fast（SystemContext._validate_lock_capabilities），
+            # 必须保持 1 —— 跨副本互斥由服务自身的 Redis 选主键保证。
+            - name: OPENJIUWEN_SERVICE_DEPLOY_REPLICAS
+              value: "1"
+            # 空 kubeconfig → Pod 内走 in-cluster ServiceAccount
+            - name: AGENT_RUNTIME_KUBECONFIG
+              value: ""
+            # AgentServer Pod 拉起的目标 namespace（与 e2e/生产约定一致）
+            - name: AGENT_RUNTIME_DEFAULT_NAMESPACE
+              value: "<<AGENT_RUNTIME_AGENTSERVER_NAMESPACE>>"
+            # 等待队列超时（秒）。须显著小于模板 session_ttl：与 TTL 相近会出现
+            # 「等待者 deadline ≈ 会话到期」的碰撞（到期驱逐唤醒等待者,产生
+            # 200/503 混合而非干净 504——M7 经 LB 跑 M6 冒烟的真实教训）
+            - name: AGENT_RUNTIME_SCOPE_FULL_TIMEOUT
+              value: "<<AGENT_RUNTIME_SCOPE_FULL_TIMEOUT>>"
+            - name: AGENT_RUNTIME_LOG_LEVEL
+              value: "<<AGENT_RUNTIME_LOG_LEVEL>>"
+---
+# LB 入口：ClusterIP（gateway 在集群内经此访问；多副本由 kube-proxy 轮询）
+apiVersion: v1
+kind: Service
+metadata:
+  name: <<AGENT_RUNTIME_NAME>>
+  namespace: <<NAMESPACE>>
+spec:
+  selector:
+    app: <<AGENT_RUNTIME_NAME>>
+  ports:
+    - name: rest
+      port: 8091
+      targetPort: 8091
+  type: ClusterIP

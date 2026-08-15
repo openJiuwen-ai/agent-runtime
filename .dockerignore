@@ -1,0 +1,13 @@
+# 镜像构建排除（docker build 上下文 = 仓库根）
+# .venv/logs 由镜像内 uv sync / mkdir 自建；宿主文件属主 root 会破坏 appuser 写入
+**/.venv
+**/__pycache__
+**/*.pyc
+applications/agent_runtime/logs
+applications/agent_runtime/.env*
+applications/agent_runtime/.replicas.json
+applications/agent_runtime/.replicas.txt
+applications/agent_runtime/deploy/rendered
+.git
+**/.pytest_cache
+**/.mypy_cache

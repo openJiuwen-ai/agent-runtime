@@ -173,3 +173,16 @@ _HTTP_STATUS = {
 def http_status_for(code: str) -> int:
     """错误码 → HTTP 状态码；未知码 fail-safe 返回 500。"""
     return _HTTP_STATUS.get(code, 500)
+
+
+def register_http_status(mapping: dict[str, int]) -> None:
+    """注册业务错误码 → HTTP 状态码映射（应用侧业务错误码扩展点）。
+
+    应用可用自定义错误码（如 ``SCOPE_QUEUE_FULL``）构造 ``ResponseEnvelope(ok=False)``；
+    REST adapter 经 :func:`http_status_for` 查状态码，未注册的业务码会 fail-safe 成 500，
+    故应用在启动时把自身错误码映射注册进来。状态码取值须在 400–599。
+    """
+    for code, status in mapping.items():
+        if not 400 <= int(status) <= 599:
+            raise ValueError(f"invalid http status {status!r} for code {code!r}")
+        _HTTP_STATUS[code] = int(status)
