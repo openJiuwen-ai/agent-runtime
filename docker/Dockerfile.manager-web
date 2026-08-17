@@ -1,0 +1,32 @@
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+ARG VITE_PRODUCT_NAME=JiuwenSwarm
+ENV VITE_PRODUCT_NAME=${VITE_PRODUCT_NAME}
+
+RUN useradd --create-home --shell /bin/bash app
+
+WORKDIR /app/agent-runtime
+COPY . /app/agent-runtime/
+RUN chown -R app:app /app/agent-runtime
+
+# manager-web 入口在 manager_server 包内（console script: manager-web）
+RUN pip install -e "./foundation" \
+    -e "./applications/manager/manager_server" \
+    --no-cache-dir \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+USER app
+WORKDIR /app/agent-runtime/applications/manager/manager_web
+RUN npm install
+RUN npm run build
+
+# 本仓暂无 user_web：放空目录占位，满足 manager-web 对 --chat-dist 的存在性检查
+RUN mkdir -p /app/agent-runtime/applications/access/user_web/dist
+
+WORKDIR /app/agent-runtime
+ENV PATH=$PATH:/home/app/.local/bin
+ENV MANAGER_WEB_HOST=0.0.0.0
+
+EXPOSE 5273
+CMD ["manager-web"]

@@ -1,0 +1,21 @@
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+RUN useradd --create-home --shell /bin/bash app
+
+WORKDIR /app/agent-runtime
+COPY . /app/agent-runtime/
+RUN chown -R app:app /app/agent-runtime
+
+# foundation 与 manager-server 同仓源码安装（pip 不识别 [tool.uv.sources]）
+RUN pip install -e "./foundation" \
+    -e "./applications/manager/manager_server" \
+    --no-cache-dir \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+USER app
+WORKDIR /app/agent-runtime
+ENV PATH=$PATH:/home/app/.local/bin
+
+EXPOSE 8765 8766
+CMD ["manager-server"]
