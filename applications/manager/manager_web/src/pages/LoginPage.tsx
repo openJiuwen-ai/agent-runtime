@@ -1,15 +1,42 @@
-import { FormEvent, useState } from 'react';
+import { FormEvent, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../auth/AuthContext';
-import { ApiError } from '../services/api';
+import { ApiError, AuthApi, FederationConnection } from '../services/api';
 
 export function LoginPage() {
   const { t } = useTranslation();
-  const { login } = useAuth();
+  const { completeFederatedLogin, login } = useAuth();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [connections, setConnections] = useState<FederationConnection[]>([]);
+  const exchangeStarted = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void AuthApi.federationConnections()
+      .then((result) => {
+        if (!cancelled) setConnections(result.connections);
+      })
+      .catch(() => {
+        if (!cancelled) setConnections([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const code = new URLSearchParams(window.location.search).get('federation_code');
+    if (!code || exchangeStarted.current) return;
+    exchangeStarted.current = true;
+    setSubmitting(true);
+    window.history.replaceState({}, '', '/auth');
+    void completeFederatedLogin(code)
+      .catch(() => setError(t('auth.federationFailed')))
+      .finally(() => setSubmitting(false));
+  }, [completeFederatedLogin, t]);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -64,6 +91,26 @@ export function LoginPage() {
         <button className="btn primary mt-4" type="submit" disabled={submitting || !username || !password} style={{ width: '100%' }}>
           {submitting ? t('auth.loggingIn') : t('auth.login')}
         </button>
+
+        {connections.length > 0 && (
+          <div className="mt-4">
+            <div className="text-muted text-sm" style={{ textAlign: 'center' }}>
+              {t('auth.orFederated')}
+            </div>
+            {connections.map((connection) => (
+              <button
+                className="btn mt-3"
+                key={connection.connection_id}
+                onClick={() => AuthApi.beginFederatedLogin(connection.connection_id)}
+                type="button"
+                disabled={submitting}
+                style={{ width: '100%' }}
+              >
+                {t('auth.signInWith', { name: connection.name })}
+              </button>
+            ))}
+          </div>
+        )}
       </form>
     </div>
   );

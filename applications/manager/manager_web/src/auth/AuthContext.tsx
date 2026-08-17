@@ -13,6 +13,7 @@ interface AuthContextValue {
   user: AuthUser | null;
   ready: boolean;
   login: (username: string, password: string) => Promise<void>;
+  completeFederatedLogin: (code: string) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -79,6 +80,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     dispatch({ kind: 'signed-in', account });
   }, []);
 
+  const completeFederatedLogin = useCallback(async (code: string) => {
+    const account = await AuthApi.exchangeFederationCode(code);
+    dispatch({ kind: 'signed-in', account });
+  }, []);
+
   const logout = useCallback(async () => {
     await AuthApi.logout();
     dispatch({ kind: 'cleared' });
@@ -89,9 +95,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user: session.account,
       ready: session.bootstrapped,
       login,
+      completeFederatedLogin,
       logout,
     }),
-    [session.account, session.bootstrapped, login, logout],
+    [session.account, session.bootstrapped, login, completeFederatedLogin, logout],
   );
 
   return <ManagerSession.Provider value={sessionApi}>{children}</ManagerSession.Provider>;

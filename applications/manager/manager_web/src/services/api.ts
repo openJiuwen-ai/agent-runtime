@@ -235,6 +235,10 @@ export interface TokenResponse {
   expires_in: number;
   refresh_token: string;
 }
+export interface FederationConnection {
+  connection_id: string;
+  name: string;
+}
 
 // 认证全部走独立认证服务(经 /idp 反代)。claw_manager 不再有登录端点。
 export const AuthApi = {
@@ -255,6 +259,22 @@ export const AuthApi = {
       throw new ApiError(resp.status, detail);
     }
     const t = (await resp.json()) as TokenResponse;
+    setTokens(t.access_token, t.refresh_token);
+    return idpHttp<AuthUser>('/v1/auth/me');
+  },
+  federationConnections: () =>
+    idpHttp<{ connections: FederationConnection[] }>('/v1/auth/federation/connections'),
+  beginFederatedLogin: (connectionId: string): void => {
+    const connection = encodeURIComponent(connectionId);
+    window.location.assign(
+      `${IDP_BASE}/v1/auth/federation/${connection}/login?return_to=${encodeURIComponent('/auth')}`,
+    );
+  },
+  exchangeFederationCode: async (code: string): Promise<AuthUser> => {
+    const t = await idpHttp<TokenResponse>('/v1/auth/federation/exchange', {
+      method: 'POST',
+      body: { code },
+    });
     setTokens(t.access_token, t.refresh_token);
     return idpHttp<AuthUser>('/v1/auth/me');
   },

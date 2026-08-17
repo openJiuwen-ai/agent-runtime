@@ -23,6 +23,9 @@ from identity_center.models.identity_models import (
     APP_USER_TABLE_DEF,
     AUTH_IDENTITY_TABLE_DEF,
     AUTH_SESSION_TABLE_DEF,
+    FEDERATED_IDENTITY_TABLE_DEF,
+    FEDERATION_CONNECTION_TABLE_DEF,
+    FEDERATION_LOGIN_CODE_TABLE_DEF,
     NO_ORG_GROUP_ID,
     ORG_TABLE_DEF,
     USER_ORG_MEMBERSHIP_TABLE_DEF,
@@ -33,6 +36,9 @@ _log = get_logger(__name__)
 _APP_USER = APP_USER_TABLE_DEF.table_name
 _AUTH_IDENTITY = AUTH_IDENTITY_TABLE_DEF.table_name
 _AUTH_SESSION = AUTH_SESSION_TABLE_DEF.table_name
+_FEDERATED_IDENTITY = FEDERATED_IDENTITY_TABLE_DEF.table_name
+_FEDERATION_CONNECTION = FEDERATION_CONNECTION_TABLE_DEF.table_name
+_FEDERATION_LOGIN_CODE = FEDERATION_LOGIN_CODE_TABLE_DEF.table_name
 _ORG = ORG_TABLE_DEF.table_name
 _MEMBERSHIP = USER_ORG_MEMBERSHIP_TABLE_DEF.table_name
 _LOCAL = "local"
@@ -122,6 +128,14 @@ class OrgService:
             raise ValueError("cannot delete the reserved '无组织' org")
         if await self._h.get(_ORG, {"group_id": group_id}) is None:
             return False
+        bound_connections = await self._h.list_records(
+            _FEDERATION_CONNECTION,
+            {"group_id": group_id},
+            limit=1,
+            offset=0,
+        )
+        if bound_connections:
+            raise ValueError("cannot delete an org bound to a federation connection")
         await _delete_where(self._h, _MEMBERSHIP, {"group_id": group_id}, "id")
         # bot 可见性（org scope）在管理库,由 claw_manager 侧自行清理（跨库,不在此处理）。
         await self._h.delete(_ORG, {"group_id": group_id})
@@ -269,6 +283,8 @@ class UserService:
             return False
         await _delete_where(self._h, _AUTH_IDENTITY, {"user_id": user_id}, "id")
         await _delete_where(self._h, _AUTH_SESSION, {"user_id": user_id}, "refresh_token")
+        await _delete_where(self._h, _FEDERATION_LOGIN_CODE, {"user_id": user_id}, "code_hash")
+        await _delete_where(self._h, _FEDERATED_IDENTITY, {"user_id": user_id}, "id")
         await _delete_where(self._h, _MEMBERSHIP, {"user_id": user_id}, "id")
         await self._h.delete(_APP_USER, {"user_id": user_id})
         _log.info("[IAM] user.delete", user_id=user_id)

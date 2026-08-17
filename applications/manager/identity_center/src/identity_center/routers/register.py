@@ -5,12 +5,18 @@ from __future__ import annotations
 from fastapi import APIRouter, FastAPI
 
 from identity_center.routers.auth_routers import auth_router
+from identity_center.routers.federation_routers import federation_router
 from identity_center.routers.iam_routers import org_router, user_router
 
 
 def router_register(app: FastAPI) -> None:
     v1 = APIRouter(prefix="/v1")
     v1.include_router(auth_router, prefix="/auth", tags=["Auth"])
+    v1.include_router(
+        federation_router,
+        prefix="/auth/federation",
+        tags=["Auth · Federation"],
+    )
     v1.include_router(org_router, prefix="/orgs", tags=["Directory · Orgs"])
     v1.include_router(user_router, prefix="/users", tags=["Directory · Users"])
     app.include_router(v1)

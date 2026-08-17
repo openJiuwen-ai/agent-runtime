@@ -26,6 +26,14 @@ async def lifespan(application: FastAPI):
     await db_handler.connect()
     await init_all_tables(db_handler)
 
+    from openjiuwen_runtime.foundation.db.sqlalchemy_handler import SQLAlchemyHandler
+    from identity_center.core.federation import IdentityFederationService
+
+    if not isinstance(db_handler, SQLAlchemyHandler):
+        raise RuntimeError("identity federation requires a SQLAlchemy database handler")
+    federation_service = await IdentityFederationService.create(db_handler, settings)
+    application.state.federation_service = federation_service
+
     from identity_center.core.auth import seed_defaults
 
     await seed_defaults(db_handler)
@@ -45,6 +53,7 @@ async def lifespan(application: FastAPI):
         access_ttl=settings.access_ttl_seconds,
     )
     yield
+    await federation_service.close()
     await db_handler.disconnect()
     _log.info("shutdown")
 

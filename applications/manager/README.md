@@ -115,6 +115,65 @@ Vite 开发服务器已配置代理，`/api` → `8765`、`/idp` → `8770`（�
 > 若登录报 `/idp/v1/auth/token` 404，请确认 `identity-center` 已在 `8770` 端口运行，并重启 `npm run dev` 使代理配置生效。  
 `/web/invoke`、`/file-api` 依赖 Gateway / User Server，未启动时聊天相关功能不可用，管理面主体功能可正常使用。
 
+### 联合认证本地联调
+
+Manager 保留原有 OAuth2 密码登录和本地 JWT，同时支持通过可替换的联合
+认证 Provider 接入企业身份。仓库当前没有真实企业 IdP 配置，因此只提供一个
+默认关闭、显式标注为本地模拟的 Demo Provider。它用于验证完整应用链路，
+不接收或验证 SAML XML，不能作为生产 SAML 实现。
+
+启动身份中心前设置：
+
+```env
+IDENTITY_FEDERATION_DEMO_ENABLED=true
+# 通过 Vite 或 manager-web 的 /idp 同源代理访问时保持默认值
+IDENTITY_FEDERATION_PUBLIC_PATH_PREFIX=/idp
+# Demo 中映射为本地管理员的模拟企业用户组
+IDENTITY_FEDERATION_DEMO_ADMIN_GROUP=enterprise-admins
+```
+
+重启 `identity-center` 后，访问 `http://127.0.0.1:5273/auth`，登录框下方会出现
+`Enterprise Demo SSO` 入口。从模拟企业页面登录后，身份中心会：
+
+1. 根据受信的 `connection_id + issuer + external_subject` 查找外部身份；
+2. 首次登录时在一个数据库事务中创建本地虚拟组织、虚拟用户、外部身份映射和成员关系；
+3. 根据本地受信规则将 Provider 已验证的 Claim 映射为本地角色，并同步 `is_admin`；
+4. 重复登录复用同一个本地 `user_id`，更新展示名、已验证属性和当前权限；
+5. 若用户已不属于企业管理员组，下次登录会撤销其本地管理员权限；
+6. 向浏览器返回短时、一次性换码，再由前端换取与本地登录完全相同的 access JWT 和 refresh token。
+
+Demo 登录页的 `Groups` 输入 `employees` 会得到普通用户，输入
+`employees,enterprise-admins` 会得到管理员。这里模拟的是“Provider 已经验证过的企业
+用户组 Claim”；回调中任意附加 `is_admin=true` 或 `role=admin` 都不会被信任。生产
+SAML/OIDC Provider 必须先完成协议校验，再把验证后的 Claim 交给映射层。
+
+业务侧始终只消费身份中心签发的本地 JWT，不需要解析 SAML 或依赖具体企业
+协议。接入真实 SAML 时，应实现 Service Framework 提供的异步
+`FederationProvider` 接口，并完成签名、Issuer/Audience、`InResponseTo`、时间窗口和
+重放防护等验证；Manager 的本地身份映射、JWT 和前端业务页无需更换。
+
+联合认证新增的身份库表如下：
+
+| 表 | 职责 |
+|------|------|
+| `federation_connection` | 保存受信连接与本地组织的稳定绑定 |
+| `federated_identity` | 保存外部 Subject 到本地 `app_user.user_id` 的唯一映射 |
+| `federation_role_mapping` | 保存受信 Claim 精确值到本地角色的映射规则 |
+| `federation_login_state` | 保存有效期内的浏览器联合登录状态 |
+| `federation_login_code` | 保存一次性换码的 SHA-256，不保存换码明文 |
+
+`federation_connection` 中的组织绑定不允许通过普通组织删除接口破坏。虚拟用户仍是
+标准 `app_user`，因此可直接使用现有 `/me`、`/me/orgs`、前端角色分流及已挂载的
+Manager 权限守卫。
+
+身份库各类数据按职责分离：`app_user` 是本地用户和最终权限的唯一业务主体；
+`auth_identity` 只保存本地用户名/口令等认证凭据；`federated_identity` 只保存稳定的
+外部身份绑定和最近一次经 Provider 验证的属性；`org` 与 `user_org_membership` 管理本地
+组织目录；`auth_session` 管理可撤销的 refresh token；access JWT 自包含且不落库。
+联合认证不会把企业内部组织直接等同于平台任意 `group_id`，而是由
+`federation_connection` 明确绑定到一个受控的本地虚拟组织，避免企业目录命名与平台
+业务组织发生碰撞。
+
 ---
 
 ## 生产 / 集成模式（统一入口）
@@ -166,6 +225,9 @@ IDENTITY_REST_HOST=0.0.0.0
 IDENTITY_REST_PORT=8770
 IDENTITY_DB_TYPE=sqlite
 IDENTITY_SQLITE_PATH=identity.db
+IDENTITY_FEDERATION_DEMO_ENABLED=false
+IDENTITY_FEDERATION_PUBLIC_PATH_PREFIX=/idp
+IDENTITY_FEDERATION_DEMO_ADMIN_GROUP=enterprise-admins
 
 # 管理 API
 MANAGER_REST_HOST=0.0.0.0

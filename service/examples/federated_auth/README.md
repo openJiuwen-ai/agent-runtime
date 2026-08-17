@@ -1,6 +1,7 @@
 # Federated authentication example
 
-本模块展示如何把企业外部身份接入应用自己的 OAuth2 Authorization Code 流程，
+本示例展示如何使用 Service Framework 的正式联合认证契约，把企业外部身份接入
+应用自己的 OAuth2 Authorization Code 流程，
 并将外部身份稳定映射为本地虚拟组织和虚拟用户。它与
 `multi_handler_app.py` 组合后，可以直接从 Swagger UI 体验完整链路。
 
@@ -45,7 +46,24 @@ OAuth2 Bearer Token 负责应用内部“本次请求以哪个本地身份访问
 `organization_id` 表示本地身份和租户边界；企业部门、项目组、Runtime Group、Bot
 及 Agent 的映射属于更上层的授权和资源模型，不应在身份认证模块中隐式完成。
 
-## 2. 模块结构和职责
+## 2. 正式能力与示例实现
+
+联合认证的领域对象、异步 Provider/Store 契约和传输无关编排已经进入正式包：
+
+```text
+openjiuwen_runtime/service/auth/federation/
+├── domain.py
+├── provider.py
+├── identity_store.py
+├── coordinator.py
+└── errors.py
+```
+
+应用应从 `openjiuwen_runtime.service` 或
+`openjiuwen_runtime.service.auth.federation` 导入这些类型。正式包不依赖 FastAPI、
+SQLite、示例 OAuth2 Server 或任何具体企业协议。
+
+本目录只保留可运行演示及测试实现：
 
 ```text
 federated_auth/
@@ -62,11 +80,11 @@ federated_auth/
 
 | 文件 | 主要类型 | 职责 |
 | --- | --- | --- |
-| `domain.py` | `FederationConnection`, `ExternalIdentity`, `LocalPrincipal` | 定义 Provider、Store 和 OAuth2 之间共享的稳定领域对象 |
-| `provider.py` | `FederationProvider`, `DemoFederationProvider` | 抽象企业身份协议的开始登录和回调消费边界 |
-| `identity_store.py` | `FederatedIdentityStore`, `InMemoryFederatedIdentityStore` | 定义外部身份到本地 Principal 的映射接口，并提供单元测试实现 |
+| `domain.py` | 正式领域对象的兼容导入 | 兼容原有 example 导入；新代码应从正式 service 包导入 |
+| `provider.py` | `DemoFederationProvider` | 实现正式 `FederationProvider`，模拟企业身份回调 |
+| `identity_store.py` | `InMemoryFederatedIdentityStore` | 实现正式 `FederatedIdentityStore`，供单元测试使用 |
 | `database_identity_store.py` | `DatabaseFederatedIdentityStore` | 使用一个 SQLite 文件持久化虚拟组织、用户、外部身份和成员关系 |
-| `module.py` | `FederatedAuthModule` | 编排 Provider、Store 和 OAuth2 Server，并挂载联合登录路由 |
+| `module.py` | `FederatedAuthModule` | 使用正式 `FederationCoordinator`，并挂载示例 HTTP 登录路由 |
 | `oauth2_server.py` | `ExampleOAuth2AuthorizationServer` | 示例 Authorization Code、PKCE、访问令牌签发与校验 |
 | `demo_idp.py` | `DemoEnterpriseIdentityProvider` | 提供明确标注的本地企业 IdP 表单模拟器 |
 
@@ -75,9 +93,10 @@ federated_auth/
 ```mermaid
 flowchart TD
     App["multi_handler_app.py"]
-    Module["FederatedAuthModule"]
-    Provider["FederationProvider"]
-    Store["FederatedIdentityStore"]
+    Module["Example FederatedAuthModule"]
+    Coordinator["FederationCoordinator"]
+    Provider["FederationProvider contract"]
+    Store["FederatedIdentityStore contract"]
     OAuth["ExampleOAuth2AuthorizationServer"]
     IdP["DemoEnterpriseIdentityProvider"]
     SQLite["SQLite"]
@@ -86,17 +105,18 @@ flowchart TD
     App --> Module
     App --> OAuth
     App --> IdP
-    Module --> Provider
-    Module --> Store
+    Module --> Coordinator
     Module --> OAuth
+    Coordinator --> Provider
+    Coordinator --> Store
     Provider --> IdP
     Store --> SQLite
     OAuth --> Handler
 ```
 
-`FederatedAuthModule` 只依赖 `FederationProvider` 和
-`FederatedIdentityStore` 抽象，不依赖演示类。生产应用可以替换 Provider 和 Store
-实现，同时保留编排方式。
+`FederationCoordinator` 属于正式 Service Framework，只依赖异步
+`FederationProvider` 和 `FederatedIdentityStore` 契约。示例 HTTP 模块负责把浏览器
+跳转、表单回调和 OAuth2 Server 接到该编排器上；生产应用可以使用自己的传输适配层。
 
 ## 3. 核心领域对象
 
@@ -259,6 +279,9 @@ Provisioning，JIT）：
    - 更新展示名、邮箱、外部属性和最近登录时间；
 6. 返回 `LocalPrincipal`。
 
+正式编排器还会校验 Store 返回的 `LocalPrincipal.organization_id` 与连接绑定的
+`organization_id` 一致，防止错误的持久化实现把用户映射到其他本地组织。
+
 这保证同一个外部主体重复登录时，本地 `user_id` 稳定。以下改变会产生不同的外部
 身份键：
 
@@ -273,7 +296,11 @@ Provisioning，JIT）：
 
 ### 7.1 抽象接口
 
+该接口定义在正式 Service Framework 中：
+
 ```python
+from openjiuwen_runtime.service import FederatedIdentityStore
+
 class FederatedIdentityStore(ABC):
     async def resolve_or_create(
         self,
@@ -310,7 +337,7 @@ SQLite 实现接收**文件路径**，不是数据库 URL：
 ```python
 from pathlib import Path
 
-from federated_auth import DatabaseFederatedIdentityStore
+from examples.federated_auth import DatabaseFederatedIdentityStore
 
 store = DatabaseFederatedIdentityStore(
     Path("examples/federated_auth/.data/federated_auth.db")
@@ -400,15 +427,19 @@ erDiagram
 ```python
 from pathlib import Path
 
-from federated_auth import (
+from examples.federated_auth import (
     DatabaseFederatedIdentityStore,
     DemoEnterpriseIdentityProvider,
     DemoFederationProvider,
     ExampleOAuth2AuthorizationServer,
     FederatedAuthModule,
-    FederationConnection,
 )
-from openjiuwen_runtime.service import App, OAuth2AccessControl, SystemContext
+from openjiuwen_runtime.service import (
+    App,
+    FederationConnection,
+    OAuth2AccessControl,
+    SystemContext,
+)
 
 
 connection = FederationConnection(
@@ -454,8 +485,9 @@ FederatedAuthModule(
 DemoEnterpriseIdentityProvider().mount(app.asgi)
 ```
 
-组装中只有 `OAuth2AccessControl` 属于通用 Service Framework。Token 签发、用户映射
-和企业协议实现都属于应用层示例。
+`FederationConnection`、`FederationProvider`、`FederatedIdentityStore`、
+`FederationCoordinator` 和 `OAuth2AccessControl` 属于正式 Service Framework。
+本例的 Token 签发、SQLite 用户映射、HTTP 登录页面和企业协议模拟仍属于应用层示例。
 
 ## 10. OAuth2 示例实现的行为
 
@@ -494,9 +526,10 @@ DemoEnterpriseIdentityProvider().mount(app.asgi)
 ```python
 from collections.abc import Mapping
 
-from federated_auth.domain import ExternalIdentity, FederationConnection
-from federated_auth.provider import (
+from openjiuwen_runtime.service import (
+    ExternalIdentity,
     FederationAuthenticationResult,
+    FederationConnection,
     FederationProvider,
 )
 
@@ -545,8 +578,8 @@ class SamlFederationProvider(FederationProvider):
 只有在以上验证全部成功后，Provider 才能创建 `ExternalIdentity`。生产实现绝不能像
 `DemoFederationProvider` 一样直接相信浏览器提交的 `employee_id`、展示名或邮箱。
 
-Provider 返回标准化身份后，现有 `FederatedAuthModule`、Identity Store、OAuth2 完成
-流程和业务 Handler 无需感知 SAML XML。
+Provider 返回标准化身份后，正式 `FederationCoordinator`、Identity Store、OAuth2
+完成流程和业务 Handler 无需感知 SAML XML。
 
 ## 12. 安全边界
 
@@ -580,6 +613,7 @@ Provider 返回标准化身份后，现有 `FederatedAuthModule`、Identity Stor
 
 ```bash
 uv run pytest -q \
+  tests/unit_tests/test_federation_core.py \
   tests/unit_tests/test_federated_identity_store.py \
   tests/unit_tests/test_federated_oauth2.py
 ```
@@ -587,6 +621,7 @@ uv run pytest -q \
 覆盖内容包括：
 
 - 外部身份首次创建和稳定复用；
+- 正式编排器的异步 Provider/Store 边界；
 - issuer、connection 绑定校验；
 - Provider 到 LocalPrincipal 的标准化；
 - Authorization Code、PKCE 和一次性消费；

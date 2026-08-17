@@ -91,6 +91,18 @@ from .routing.handlers import (
     StreamMessageHandler,
 )
 from .security import OAuth2AccessControl
+from .auth import (
+    ExternalIdentity,
+    FederatedIdentityStore,
+    FederationAuthenticationResult,
+    FederationBindingError,
+    FederationConnection,
+    FederationCoordinator,
+    FederationError,
+    FederationProvider,
+    LocalPrincipal,
+    UnknownFederationConnection,
+)
 from .server.app import App
 
 __version__ = "0.1.0"
@@ -184,6 +196,16 @@ __all__ = [
     "idempotency_guard",
     # security
     "OAuth2AccessControl",
+    "ExternalIdentity",
+    "FederatedIdentityStore",
+    "FederationAuthenticationResult",
+    "FederationBindingError",
+    "FederationConnection",
+    "FederationCoordinator",
+    "FederationError",
+    "FederationProvider",
+    "LocalPrincipal",
+    "UnknownFederationConnection",
     # server
     "App",
 ]
