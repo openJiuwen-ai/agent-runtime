@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 import signal
 import subprocess
 import sys
@@ -12,6 +11,8 @@ import time
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+
+from manager_server.infrastructure.config import settings
 
 PKG_ROOT = Path(__file__).resolve().parents[2]
 UI_DIST = PKG_ROOT.parent / "manager_web" / "dist"
@@ -31,11 +32,10 @@ class ServiceLaunchPlan:
 
 
 def resolve_api_relay_url() -> str:
-    host = os.getenv("MANAGER_REST_HOST", "127.0.0.1")
+    host = settings.rest_host
     if host in {"0.0.0.0", "::"}:
         host = "127.0.0.1"
-    port = os.getenv("MANAGER_REST_PORT", "8765")
-    return f"http://{host}:{port}"
+    return f"http://{host}:{settings.rest_port}"
 
 
 def compose_launch_plan(profile: LaunchProfile) -> list[ServiceLaunchPlan]:
@@ -51,7 +51,7 @@ def compose_launch_plan(profile: LaunchProfile) -> list[ServiceLaunchPlan]:
                 f"manager web dist not found: {UI_DIST}; "
                 "run `npm run build` under applications/manager/manager_web first."
             )
-        relay = os.getenv("MANAGER_WEB_PROXY_TARGET", resolve_api_relay_url())
+        relay = settings.manager_web_proxy_target or resolve_api_relay_url()
         ui_argv = [
             py,
             "-m",
@@ -60,13 +60,11 @@ def compose_launch_plan(profile: LaunchProfile) -> list[ServiceLaunchPlan]:
             str(UI_DIST),
             "--proxy-target",
             relay,
+            "--host",
+            settings.manager_web_host,
+            "--port",
+            str(settings.manager_web_port),
         ]
-        web_host = os.getenv("MANAGER_WEB_HOST")
-        if web_host:
-            ui_argv.extend(["--host", web_host])
-        web_port = os.getenv("MANAGER_WEB_PORT")
-        if web_port:
-            ui_argv.extend(["--port", web_port])
         plan.append(ServiceLaunchPlan("manager-ui", ui_argv))
 
     return plan

@@ -42,7 +42,7 @@
     "daysAgo": "{{count}}d ago"
   },
   "brand": {
-    "title": "JiuwenClaw",
+    "title": "{{productName}}",
     "sub": "Claw Manager"
   },
   "nav": {
@@ -87,7 +87,7 @@
   },
   "topology": {
     "title": "Instance Management",
-    "subtitle": "Manage JiuwenClaw instances",
+    "subtitle": "Manage {{productName}} instances",
     "createInstance": "Create Instance",
     "provisionLocal": "Provision Locally",
     "instanceStatus": "Status",
@@ -601,7 +601,7 @@
     "tpl_service_config": "Service config"
   },
   "auth": {
-    "loginTitle": "JiuwenSwarm Manager Login",
+    "loginTitle": "{{productName}} Manager Login",
     "username": "Username",
     "password": "Password",
     "login": "Sign in",

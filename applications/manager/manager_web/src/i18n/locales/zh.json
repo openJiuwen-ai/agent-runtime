@@ -42,7 +42,7 @@
     "daysAgo": "{{count}}d 前"
   },
   "brand": {
-    "title": "JiuwenClaw",
+    "title": "{{productName}}",
     "sub": "Claw Manager"
   },
   "nav": {
@@ -87,7 +87,7 @@
   },
   "topology": {
     "title": "实例管理",
-    "subtitle": "管理 JiuwenClaw 实例",
+    "subtitle": "管理 {{productName}} 实例",
     "createInstance": "新建实例",
     "provisionLocal": "本地一键拉起",
     "instanceStatus": "实例状态",
@@ -601,7 +601,7 @@
     "tpl_service_config": "服务配置"
   },
   "auth": {
-    "loginTitle": "JiuwenSwarm 管理台登录",
+    "loginTitle": "{{productName}} 管理台登录",
     "username": "用户名",
     "password": "密码",
     "login": "登录",

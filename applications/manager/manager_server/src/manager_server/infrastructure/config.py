@@ -9,12 +9,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 def _resolve_env_files() -> tuple[str | Path, ...]:
-    """解析可用的 .env 路径（优先 cwd，兼容 venv 安装布局）。"""
-    candidates: list[Path] = [Path.cwd() / ".env"]
-    here = Path(__file__).resolve()
-    for depth in (5, 6):
-        candidates.append(here.parents[depth] / ".env")
-    return tuple(p for p in candidates if p.is_file())
+    """解析 applications/manager/.env（管理面统一配置文件）。"""
+    manager_dir = Path(__file__).resolve().parents[4]
+    env_file = manager_dir / ".env"
+    return (env_file,) if env_file.is_file() else ()
 
 
 class Settings(BaseSettings):
@@ -90,6 +88,27 @@ class Settings(BaseSettings):
     manager_ws_port: int = Field(
         default=8766, validation_alias="MANAGER_WS_PORT"
     )
+
+    # ---- 统一 Web 入口（manager-web）----
+    manager_web_host: str = Field(default="localhost", validation_alias="MANAGER_WEB_HOST")
+    manager_web_port: int = Field(default=5273, validation_alias="MANAGER_WEB_PORT")
+    manager_web_proxy_target: str = Field(
+        default="http://127.0.0.1:8765",
+        validation_alias="MANAGER_WEB_PROXY_TARGET",
+    )
+    manager_web_idp_target: str = Field(
+        default="http://127.0.0.1:8770",
+        validation_alias="MANAGER_WEB_IDP_TARGET",
+    )
+    manager_web_user_server_target: str = Field(
+        default="http://127.0.0.1:5174",
+        validation_alias="MANAGER_WEB_USER_SERVER_TARGET",
+    )
+    manager_web_gateway_sse: str = Field(
+        default="http://127.0.0.1:19001/web/invoke",
+        validation_alias="MANAGER_WEB_GATEWAY_SSE",
+    )
+    manager_web_log_level: str = Field(default="info", validation_alias="MANAGER_WEB_LOG_LEVEL")
 
     # ---- 资源服务器：验签认证服务(jiuwenclaw_identity)签发的 RS256 JWT ----
     identity_public_key_url: str = Field(

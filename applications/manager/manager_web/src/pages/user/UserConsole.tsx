@@ -5,6 +5,7 @@ import { ThemeToggle } from '../../components/ThemeToggle';
 import { useAuth } from '../../auth/AuthContext';
 import { useAsync } from '../../hooks/useAsync';
 import { Bot, MeApi, Org } from '../../services/api';
+import { getProductName } from '../../utils/env';
 
 // 内嵌聊天(web_enterprise)的基址：默认同源 /chat（webui nginx 以 base=/chat/ 同源提供 dist，
 // 不再指向 :5173，因而不会"localhost 拒绝访问"；其 SSE/file-api 走根路径，由 webui 反代到 web 后端）。
@@ -34,9 +35,9 @@ export function UserConsole() {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
       <header className="topbar" style={{ flexShrink: 0 }}>
         <div className="brand">
-          <img src="/logo.png" alt="JiuwenSwarm" className="brand-logo-img" />
+          <img src="/logo.png" alt={getProductName()} className="brand-logo-img" />
           <div className="brand-text">
-            <span className="brand-title">JiuwenSwarm</span>
+            <span className="brand-title">{t('brand.title')}</span>
             <span className="brand-sub">{t('userConsole.brandSub')}</span>
           </div>
         </div>

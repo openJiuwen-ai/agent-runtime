@@ -20,6 +20,7 @@ import { UsersPage } from './pages/iam/UsersPage';
 import { OrgsPage } from './pages/iam/OrgsPage';
 import { BotsPage } from './pages/iam/BotsPage';
 import { UserConsole } from './pages/user/UserConsole';
+import { getProductName } from './utils/env';
 
 interface ErrorBoundaryState {
   hasError: boolean;
@@ -131,7 +132,7 @@ function Shell() {
     <div className="shell">
       <header className="topbar">
         <div className="brand">
-          <img src="/logo.png" alt="JiuwenClaw" className="brand-logo-img" />
+          <img src="/logo.png" alt={getProductName()} className="brand-logo-img" />
           <div className="brand-text">
             <span className="brand-title">
               {t('brand.title')}

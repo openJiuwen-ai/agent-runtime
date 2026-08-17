@@ -9,11 +9,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 def _resolve_env_files() -> tuple[str | Path, ...]:
-    candidates: list[Path] = [Path.cwd() / ".env"]
-    here = Path(__file__).resolve()
-    for depth in (5, 6):
-        candidates.append(here.parents[depth] / ".env")
-    return tuple(p for p in candidates if p.is_file())
+    """解析 applications/manager/.env（管理面统一配置文件）。"""
+    manager_dir = Path(__file__).resolve().parents[4]
+    env_file = manager_dir / ".env"
+    return (env_file,) if env_file.is_file() else ()
 
 
 class Settings(BaseSettings):
