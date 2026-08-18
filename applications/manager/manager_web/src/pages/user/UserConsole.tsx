@@ -4,7 +4,7 @@ import { LanguageSwitcher } from '../../components/LanguageSwitcher';
 import { ThemeToggle } from '../../components/ThemeToggle';
 import { useAuth } from '../../auth/AuthContext';
 import { useAsync } from '../../hooks/useAsync';
-import { Bot, MeApi, Org } from '../../services/api';
+import { AgentTemplate, Org, UserConsoleApi } from '../../services/api';
 import { getProductName } from '../../utils/env';
 
 // 内嵌聊天(web_enterprise)的基址：默认同源 /chat（webui nginx 以 base=/chat/ 同源提供 dist，
@@ -15,7 +15,7 @@ const AUTH_EXPIRED_MESSAGE = 'jiuwenswarm:auth-expired';
 export function UserConsole() {
   const { t } = useTranslation();
   const { user, logout } = useAuth();
-  const { data: orgsData } = useAsync(() => MeApi.orgs(), []);
+  const { data: orgsData } = useAsync(() => UserConsoleApi.orgs(), []);
   const [orgId, setOrgId] = useState<string | null>(null);
   const orgs = orgsData?.orgs ?? [];
   const currentOrg = orgs.find((o) => o.group_id === orgId) ?? null;
@@ -81,17 +81,17 @@ function OrgPicker({ orgs, onPick }: { orgs: Org[]; onPick: (gid: string) => voi
 
 function OrgWorkspace({ org, userId, onSwitchOrg }: { org: Org; userId: string; onSwitchOrg: () => void }) {
   const { t } = useTranslation();
-  const { data: botsData, loading } = useAsync(() => MeApi.bots(org.group_id), [org.group_id]);
-  const [botId, setBotId] = useState<string | null>(null);
-  const bots = botsData?.bots ?? [];
-  const currentBot = bots.find((b) => b.bot_id === botId) ?? null;
+  const { data: agentsData, loading } = useAsync(() => UserConsoleApi.agents(org.group_id), [org.group_id]);
+  const [agentId, setAgentId] = useState<string | null>(null);
+  const agents = agentsData?.agents ?? [];
+  const currentAgent = agents.find((a) => (a.agent_id || a.template_id) === agentId) ?? null;
 
-  // 切组织后重置选中的 bot
-  useEffect(() => { setBotId(null); }, [org.group_id]);
+  // 切组织后重置选中的 agent
+  useEffect(() => { setAgentId(null); }, [org.group_id]);
 
   return (
     <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
-      {/* 左：组织信息 + bot 列表 */}
+      {/* 左：组织信息 + agent 列表 */}
       <aside style={{ width: 240, borderRight: '1px solid var(--border, #e5e7eb)', padding: 12, overflowY: 'auto', flexShrink: 0 }}>
         <div className="flex items-center justify-between mb-2">
           <div className="card-title" style={{ fontSize: 14 }}>{org.name}</div>
@@ -99,19 +99,19 @@ function OrgWorkspace({ org, userId, onSwitchOrg }: { org: Org; userId: string; 
         </div>
         <div className="nav-group-title nav-group-title--uppercase">{t('userConsole.availableBots')}</div>
         <div className="space-y-1">
-          {bots.map((b) => (
-            <button key={b.bot_id} className={`nav-item ${botId === b.bot_id ? 'active' : ''}`} onClick={() => setBotId(b.bot_id)}>
-              {b.name}
+          {agents.map((a) => (
+            <button key={a.agent_id || a.template_id} className={`nav-item ${agentId === (a.agent_id || a.template_id) ? 'active' : ''}`} onClick={() => setAgentId(a.agent_id || a.template_id)}>
+              {a.template_name}
             </button>
           ))}
-          {!loading && bots.length === 0 && <div className="text-xs text-muted" style={{ padding: 8 }}>{t('userConsole.noBots')}</div>}
+          {!loading && agents.length === 0 && <div className="text-xs text-muted" style={{ padding: 8 }}>{t('userConsole.noBots')}</div>}
         </div>
       </aside>
 
-      {/* 右：选中 bot 的工作区 */}
+      {/* 右：选中 agent 的工作区 */}
       <section style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex' }}>
-        {currentBot ? (
-          <BotWorkspace bot={currentBot} userId={userId} groupId={org.group_id} />
+        {currentAgent ? (
+          <AgentWorkspace agent={currentAgent} userId={userId} groupId={org.group_id} />
         ) : (
           <div className="flex items-center justify-center" style={{ flex: 1 }}>
             <div className="text-muted">{t('userConsole.pickBot')}</div>
@@ -155,7 +155,7 @@ function ChatLoading() {
 // 标签 → web_enterprise 视图(空串=默认聊天)
 const IFRAME_VIEW: Partial<Record<TabKey, string>> = { chat: '', schedule: 'schedule', skills: 'skills', memory: 'memory' };
 
-function BotWorkspace({ bot, userId, groupId }: { bot: Bot; userId: string; groupId: string }) {
+function AgentWorkspace({ agent, userId, groupId }: { agent: AgentTemplate; userId: string; groupId: string }) {
   const { t, i18n } = useTranslation();
   // 内嵌 iframe(web_enterprise)与父窗口不同源,语言状态独立 → 用 postMessage 同步语言
   const iframeRefs = useRef<Map<string, HTMLIFrameElement>>(new Map());
@@ -177,9 +177,10 @@ function BotWorkspace({ bot, userId, groupId }: { bot: Bot; userId: string; grou
   ];
 
   // (user_id, group_id, bot_id) 经 query 注入 user_web → extSettings 读取 → HTTP/SSE 透传 → Agent
+  // bot_id 传实例化 agent_id（运行时路由字段名未改）
   const baseQuery = useMemo(
-    () => new URLSearchParams({ user_id: userId, group_id: groupId, bot_id: bot.bot_id }).toString(),
-    [userId, groupId, bot.bot_id],
+    () => new URLSearchParams({ user_id: userId, group_id: groupId, bot_id: agent.agent_id || agent.template_id }).toString(),
+    [userId, groupId, agent.agent_id, agent.template_id],
   );
   const urlFor = (view: string) => (view ? `${CHAT_BASE}/?${baseQuery}&view=${view}` : `${CHAT_BASE}/?${baseQuery}`);
 
@@ -187,7 +188,7 @@ function BotWorkspace({ bot, userId, groupId }: { bot: Bot; userId: string; grou
   const [visited, setVisited] = useState<Set<TabKey>>(() => new Set<TabKey>(['chat']));
   const [loadedViews, setLoadedViews] = useState<Set<string>>(new Set());
 
-  // 切 bot/组织（baseQuery 变 → 所有 iframe key 变 → 重挂）→ 复位到聊天标签与加载态
+  // 切 agent/组织（baseQuery 变 → 所有 iframe key 变 → 重挂）→ 复位到聊天标签与加载态
   useEffect(() => {
     setTab('chat');
     setVisited(new Set<TabKey>(['chat']));
@@ -213,10 +214,10 @@ function BotWorkspace({ bot, userId, groupId }: { bot: Bot; userId: string; grou
           </button>
         ))}
         <div style={{ flex: 1 }} />
-        <span className="text-xs text-muted" style={{ alignSelf: 'center' }}>bot: <span className="mono">{bot.bot_id}</span></span>
+        <span className="text-xs text-muted" style={{ alignSelf: 'center' }}>agent: <span className="mono">{agent.agent_id || agent.template_id}</span></span>
       </div>
       <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
-        {/* iframe 标签常驻挂载（懒加载后不卸载）：切标签只隐藏、不重载不断连；切 bot → key 变 → 重挂重连 */}
+        {/* iframe 标签常驻挂载（懒加载后不卸载）：切标签只隐藏、不重载不断连；切 agent → key 变 → 重挂重连 */}
         {(['chat', 'schedule', 'skills', 'memory'] as TabKey[]).filter((k) => visited.has(k)).map((k) => {
           const view = IFRAME_VIEW[k] ?? '';
           return (

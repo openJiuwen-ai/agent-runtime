@@ -146,7 +146,7 @@ export function OrgsPage() {
           candidates={orgs
             .filter((o) => !roster?.has(o.group_id))
             .map((o) => ({ id: o.group_id, label: o.name, sub: o.group_id }))}
-          onConfirm={async (ids) => {
+          onConfirm={async ({ ids }) => {
             await InstanceBindingApi.bindOrgs(filterJid, ids);
             toast('success', t('success.saved'));
             setShowAdd(false);

@@ -18,7 +18,7 @@ import { AuthProvider, useAuth } from './auth/AuthContext';
 import { LoginPage } from './pages/LoginPage';
 import { UsersPage } from './pages/iam/UsersPage';
 import { OrgsPage } from './pages/iam/OrgsPage';
-import { BotsPage } from './pages/iam/BotsPage';
+import { AgentTemplatesPage } from './pages/templates/AgentTemplatesPage';
 import { UserConsole } from './pages/user/UserConsole';
 import { getProductName } from './utils/env';
 
@@ -88,12 +88,16 @@ function RouteView() {
   if (path === '/orgs') {
     return <OrgsPage />;
   }
-  if (path === '/bots') {
-    return <BotsPage />;
+  if (path === '/agent-templates') {
+    return <AgentTemplatesPage />;
   }
   const instanceAccess = matchRoute('/instances/:id/access', path);
   if (instanceAccess) {
     return <InstanceDetailPage instanceId={instanceAccess.id} tab="access" />;
+  }
+  const instanceResources = matchRoute('/instances/:id/resources', path);
+  if (instanceResources) {
+    return <InstanceDetailPage instanceId={instanceResources.id} tab="resources" />;
   }
   const instancePolicies = matchRoute('/instances/:id/policies', path);
   if (instancePolicies) {

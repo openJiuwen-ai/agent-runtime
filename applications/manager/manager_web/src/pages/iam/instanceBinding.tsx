@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Modal } from '../../components/Modal';
+import { HintTooltip } from '../../components/HintTooltip';
 import { ApiError, InstanceApi } from '../../services/api';
 import { InstanceSummary } from '../../types/instance';
 import { toast } from '../../stores/uiStore';
@@ -54,18 +55,27 @@ export function InstanceChips({ jids, instances }: { jids: string[]; instances: 
 
 export interface Candidate { id: string; label: string; sub?: string }
 
-/** 通用"添加到实例"选择器：候选（已排除在册者）搜索 + 多选 → onConfirm(ids)。 */
+export type AddToInstanceConfirmPayload = {
+  ids: string[];
+  expires_at: string | null;
+  login_policy: 'allow' | 'deny';
+};
+
+/** 通用"添加到实例"选择器：候选（已排除在册者）搜索 + 多选 + 可选过期时间/登录权限 → onConfirm。 */
 export function AddToInstanceModal({
-  title, candidates, onConfirm, onClose,
+  title, candidates, onConfirm, onClose, showExpiresAt = false,
 }: {
   title: string;
   candidates: Candidate[];
-  onConfirm: (ids: string[]) => Promise<void>;
+  onConfirm: (payload: AddToInstanceConfirmPayload) => Promise<void>;
   onClose: () => void;
+  showExpiresAt?: boolean;
 }) {
   const { t } = useTranslation();
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [q, setQ] = useState('');
+  const [expiresAt, setExpiresAt] = useState('');
+  const [loginPolicy, setLoginPolicy] = useState<'allow' | 'deny'>('allow');
   const [busy, setBusy] = useState(false);
   const filtered = useMemo(() => {
     const kw = q.trim().toLowerCase();
@@ -83,7 +93,11 @@ export function AddToInstanceModal({
   async function submit() {
     setBusy(true);
     try {
-      await onConfirm(Array.from(sel));
+      await onConfirm({
+        ids: Array.from(sel),
+        expires_at: expiresAt ? new Date(expiresAt).toISOString() : null,
+        login_policy: loginPolicy,
+      });
       onClose();
     } catch (e) {
       toast('danger', e instanceof ApiError ? e.detail : String(e));
@@ -125,6 +139,47 @@ export function AddToInstanceModal({
           <div className="text-xs text-muted">{t('iam.noCandidates', { defaultValue: '没有可添加的候选（都已在该实例）' })}</div>
         )}
       </div>
+      {showExpiresAt ? (
+        <>
+          <label className="block mt-3">
+            <span className="text-sm font-medium inline-flex items-center gap-1">
+              {t('instanceDetail.accessPanel.instance.loginPolicy', { defaultValue: '登录权限' })}
+              <HintTooltip
+                text={t('instanceDetail.accessPanel.instance.loginPolicyHint', {
+                  defaultValue: '拒绝优先级高于允许',
+                })}
+              />
+            </span>
+            <select
+              className="input mt-1 w-full"
+              value={loginPolicy}
+              onChange={(e) => setLoginPolicy(e.target.value === 'deny' ? 'deny' : 'allow')}
+            >
+              <option value="allow">
+                {t('instanceDetail.accessPanel.instance.loginAllow', { defaultValue: '允许' })}
+              </option>
+              <option value="deny">
+                {t('instanceDetail.accessPanel.instance.loginDeny', { defaultValue: '拒绝' })}
+              </option>
+            </select>
+          </label>
+          <label className="block mt-3">
+            <span className="text-sm font-medium">
+              {t('instanceDetail.accessPanel.instance.expiresAt', { defaultValue: '过期时间' })}
+            </span>
+            <input
+              type="datetime-local"
+              className="input mt-1 w-full cursor-pointer"
+              value={expiresAt}
+              onChange={(e) => setExpiresAt(e.target.value)}
+              onClick={(e) => (e.target as HTMLInputElement).showPicker?.()}
+            />
+            <div className="text-[11px] text-muted mt-1">
+              {t('instanceDetail.accessPanel.instance.expiresHint', { defaultValue: '留空表示永不过期' })}
+            </div>
+          </label>
+        </>
+      ) : null}
     </Modal>
   );
 }

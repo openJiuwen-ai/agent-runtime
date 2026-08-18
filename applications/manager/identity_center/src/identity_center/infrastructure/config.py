@@ -34,7 +34,6 @@ class Settings(BaseSettings):
     db_user: str = Field(default="root", validation_alias="IDENTITY_DB_USER")
     db_password: str = Field(default="root", validation_alias="IDENTITY_DB_PASSWORD")
     db_name: str = Field(default="identity", validation_alias="IDENTITY_DB_NAME")
-    pg_schema: str = Field(default="public", validation_alias="IDENTITY_PG_SCHEMA")
 
     # ---- JWT（RS256：私钥签发，资源服务器用公钥验签）----
     # 重构:统一去旧名 jiuwenclaw→openjiuwen;跨服务契约,manager_server 须用同一 issuer/audience 验签

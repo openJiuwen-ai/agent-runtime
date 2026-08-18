@@ -32,7 +32,6 @@ class Settings(BaseSettings):
     db_user: str = Field(default="root", validation_alias="MANAGER_DB_USER")
     db_password: str = Field(default="root", validation_alias="MANAGER_DB_PASSWORD")
     db_name: str = Field(default="manager", validation_alias="MANAGER_DB_NAME")
-    pg_schema: str = Field(default="public", validation_alias="MANAGER_PG_SCHEMA")
 
     manager_heartbeat_timeout_seconds: int = Field(
         default=120, validation_alias="MANAGER_HEARTBEAT_TIMEOUT_SECONDS"
@@ -118,7 +117,7 @@ class Settings(BaseSettings):
     jwt_issuer: str = Field(default="openjiuwen-identity", validation_alias="IDENTITY_JWT_ISSUER")
     jwt_audience: str = Field(default="openjiuwen", validation_alias="IDENTITY_JWT_AUDIENCE")
 
-    # ---- 本实例标识：仅用户态 /me/bots 用它把可见 bot 限定到"当前 gateway"。
+    # ---- 本实例标识：仅用户态 /user-console/agents 用它把可见 agent 限定到"当前 gateway"。
     # 每命名空间部署时与本命名空间 gateway 同值注入；管理端接口不用它(实例由路径显式指定)。
     jiuwenclaw_id: str = Field(default="", validation_alias="JIUWENCLAW_ID")
 

@@ -61,7 +61,7 @@ def _pg_handler_from_settings(cfg: Settings) -> PostgreSQLHandler:
             user=str(cfg.db_user).strip(),
             password=str(cfg.db_password),
             database=str(cfg.db_name).strip(),
-            schema=str(cfg.pg_schema).strip(),
+            schema="public",
         )
     except (TypeError, ValueError) as e:
         logger.exception(
@@ -108,6 +108,4 @@ def database_config_summary(cfg: Settings | None = None) -> dict[str, Any]:
             "port": active.db_port,
             "database": active.db_name,
         }
-    if db_type == "postgresql":
-        result["schema"] = active.pg_schema
     return result

@@ -1,7 +1,7 @@
 /** match_expr 树形可视化编辑与序列化（与 Gateway evaluate_match_expr 约定一致） */
 
 export type MatchField = 'group_id' | 'user_id' | 'bot_id';
-export type MatchOp = '==' | '!=';
+export type MatchOp = 'in' | 'not in';
 export type MatchCombineOp = 'and' | 'or';
 
 export const MATCH_FIELDS: MatchField[] = ['group_id', 'user_id', 'bot_id'];
@@ -14,7 +14,7 @@ export interface MatchCondNode {
   id: string;
   field: MatchField;
   op: MatchOp;
-  value: string;
+  values: string[];
 }
 
 export interface MatchGroupNode {
@@ -41,7 +41,7 @@ function newId(): string {
 }
 
 export function newCondNode(): MatchCondNode {
-  return { kind: 'cond', id: newId(), field: 'group_id', op: '==', value: '' };
+  return { kind: 'cond', id: newId(), field: 'group_id', op: 'in', values: [] };
 }
 
 export function newGroupNode(op: MatchCombineOp = 'or', children?: MatchNode[]): MatchGroupNode {
@@ -65,19 +65,45 @@ function unescapeSingleQuoted(value: string): string {
   return value.replace(/\\'/g, "'").replace(/\\\\/g, '\\');
 }
 
-const SINGLE_CONDITION =
+const SINGLE_CONDITION_IN =
+  /^\s*(group_id|user_id|bot_id)\s+(not\s+in|in)\s*\(\s*((?:'(?:\\'|[^'])*'(?:\s*,\s*)?)*)\s*\)\s*$/i;
+
+const SINGLE_CONDITION_LEGACY =
   /^\s*(group_id|user_id|bot_id)\s*(==|!=)\s*'((?:\\'|[^'])*)'\s*$/i;
 
+function parseValueList(raw: string): string[] {
+  const re = /'((?:\\'|[^'])*)'/g;
+  const values: string[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(raw)) !== null) {
+    values.push(unescapeSingleQuoted(m[1]));
+  }
+  return values;
+}
+
 function parseSingleCondition(text: string): MatchCondNode | null {
-  const m = text.trim().match(SINGLE_CONDITION);
-  if (!m) return null;
-  return {
-    kind: 'cond',
-    id: newId(),
-    field: m[1].toLowerCase() as MatchField,
-    op: m[2] as MatchOp,
-    value: unescapeSingleQuoted(m[3]),
-  };
+  const mIn = text.trim().match(SINGLE_CONDITION_IN);
+  if (mIn) {
+    const op = mIn[2].toLowerCase().replace(/\s+/g, ' ') as MatchOp;
+    return {
+      kind: 'cond',
+      id: newId(),
+      field: mIn[1].toLowerCase() as MatchField,
+      op,
+      values: parseValueList(mIn[3]),
+    };
+  }
+  const mLegacy = text.trim().match(SINGLE_CONDITION_LEGACY);
+  if (mLegacy) {
+    return {
+      kind: 'cond',
+      id: newId(),
+      field: mLegacy[1].toLowerCase() as MatchField,
+      op: mLegacy[2] === '==' ? 'in' : 'not in',
+      values: [unescapeSingleQuoted(mLegacy[3])],
+    };
+  }
+  return null;
 }
 
 function stripOuterParens(text: string): { inner: string; hadParens: boolean } {
@@ -231,8 +257,10 @@ export function parseMatchExpr(expr: string | null | undefined): MatchExprModel 
 }
 
 function serializeCondition(c: MatchCondNode): string | null {
-  if (!c.value.trim()) return null;
-  return `${c.field} ${c.op} '${escapeSingleQuoted(c.value.trim())}'`;
+  const vals = c.values.filter((v) => v.trim());
+  if (!vals.length) return null;
+  const list = vals.map((v) => `'${escapeSingleQuoted(v.trim())}'`).join(', ');
+  return `${c.field} ${c.op} (${list})`;
 }
 
 function serializeNode(node: MatchNode, isRoot: boolean): string | null {
@@ -254,8 +282,20 @@ export function serializeMatchExpr(model: MatchExprModel): string {
   return serializeNode(model.root, true) ?? '';
 }
 
+/** 将 API 的 match_expr（string / string[] / 空）规范为编辑器使用的字符串。 */
+export function matchExprToEditorString(expr: string | string[] | null | undefined): string {
+  if (expr == null) return '';
+  if (Array.isArray(expr)) {
+    const parts = expr.map((x) => String(x).trim()).filter(Boolean);
+    if (parts.length === 0) return '';
+    if (parts.length === 1) return parts[0];
+    return JSON.stringify(parts);
+  }
+  return String(expr).trim();
+}
+
 export function treeHasFilledCondition(node: MatchNode): boolean {
-  if (node.kind === 'cond') return !!node.value.trim();
+  if (node.kind === 'cond') return node.values.some((v) => v.trim());
   return node.children.some(treeHasFilledCondition);
 }
 

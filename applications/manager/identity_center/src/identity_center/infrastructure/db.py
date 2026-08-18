@@ -54,7 +54,7 @@ def _pg_handler_from_settings(cfg: Settings) -> PostgreSQLHandler:
         return PostgreSQLHandler(
             host=str(cfg.db_host).strip(), port=int(cfg.db_port),
             user=str(cfg.db_user).strip(), password=str(cfg.db_password),
-            database=str(cfg.db_name).strip(), schema=str(cfg.pg_schema).strip(),
+            database=str(cfg.db_name).strip(), schema="public",
         )
     except (TypeError, ValueError) as e:
         logger.exception("Invalid PostgreSQL config (IDENTITY_DB_*).")
