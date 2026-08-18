@@ -1231,8 +1231,8 @@ class ServiceManager(IServiceManager):
         2) 否则在 idle 池中唤醒一个有容量的实例
         3) 再否则在该 template_id 组的 max 允许下新 deploy（deploy 在锁外执行）
            同一 session_id 仅允许一个 in-flight deploy；后来者 await 其结果并复用 leader admit
-           的 Pod（避免冷启动竞态重复扩容），复用数上限 pod_concurrency-1（leader 占 1），超出者
-           直接失败，杜绝单 Pod 过填，避免惊群重复占满 max_services。
+           的 Pod（避免冷启动竞态重复扩容），复用数上限 pod_concurrency-1（leader 占 1）；超出者
+           不直接失败，而是重选/在 max_services 允许下继续扩容，杜绝单 Pod 过填的同时吃满会话组容量。
            缩容 delete 未完成前仍占用 max 名额（reclaim_occupancy）。
 
         注：session 亲和（同 session 复用同一 Pod）由 ServiceScopeHandler（持有 endpoints）
@@ -1291,12 +1291,14 @@ class ServiceManager(IServiceManager):
                         if given + 1 < pod_concurrency:
                             self._session_followers_given[session_id] = given + 1
                             return leader_pod
+                    # 单 Pod 已打满：不可再复用，但勿直接拒绝——继续选池/扩容，
+                    # 否则 max_services 尚有余量时也会批量 100001，新 Pod 槽位闲置。
                     logger.info(
-                        "follower 超出 leader Pod 并发容量, 拒绝复用: session_id=%s "
+                        "follower 超出 leader Pod 并发容量, 改走重选/扩容: session_id=%s "
                         "pod_concurrency=%s followers_given=%s",
                         session_id, pod_concurrency, given,
                     )
-                    return None
+                    continue
                 # leader deploy 失败(admitted=None)：本轮重新选池/重试，不再占 pending
                 continue
 
