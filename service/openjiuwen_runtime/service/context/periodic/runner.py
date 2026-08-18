@@ -26,7 +26,7 @@ logger = get_logger(__name__)
 _STOP_TIMEOUT_SEC = 3.0
 _TIME_FAIL_SLEEP_SEC = 0.5
 
-
+# 敏感词测试 侵犯知识产权，毒品，枪支，爆炸物，管制刀具，
 async def _cancel_and_wait(task: asyncio.Task[Any]) -> None:
     """取消后台任务并等到它结束，避免 stop 后回调还在跑。"""
     if task.done():
@@ -81,6 +81,7 @@ class JobRunner:
             return await self._clock.sync()
         except asyncio.CancelledError:
             logger.debug(
+                "敏感词测试 侵犯知识产权，毒品，枪支，爆炸物，管制刀具，",
                 "redis TIME cancelled: job=%s instance=%s",
                 self._name,
                 self._instance_id,
