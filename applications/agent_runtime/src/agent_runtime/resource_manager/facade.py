@@ -1,0 +1,54 @@
+# coding: utf-8
+"""ResourceManagerFacade：SM → RM 的进程内调用入口。
+
+方法与错误码契约见 SM 设计 §13.1 / RM 设计 §2：
+- acquire(scope_id, pod_spec, pool_config, request_id) → {pod_id, pod_sse_url}；
+  失败抛 MaxPodsReached / DeployFailed（SM route 捕获映射 NO_POD_AVAILABLE）。
+- idle_consider(pod_id, scope_id) → {transitioned_to_idle: bool}，幂等。
+- update_pool_config(scope_id, pool_config, pod_spec?) → {updated: bool}（config_sync 触发）。
+- cleanup(namespace?, label_selector?) → int（运维批删，经 SM 的 /cleanup 委托）。
+"""
+
+from __future__ import annotations
+
+from .orchestrator import ResourceOrchestrator
+
+
+class ResourceManagerFacade:
+    """供 session_manager 模块进程内调用的 RM 能力（薄封装，逻辑在 orchestrator）。"""
+
+    def __init__(self, orchestrator: ResourceOrchestrator) -> None:
+        self._orchestrator = orchestrator
+
+    async def acquire(
+        self,
+        scope_id: str,
+        pod_spec: dict,
+        pool_config: dict,
+        request_id: str = "",
+    ) -> dict[str, str]:
+        return await self._orchestrator.acquire(
+            scope_id=scope_id, pod_spec=pod_spec,
+            pool_config=pool_config, request_id=request_id,
+        )
+
+    async def idle_consider(self, pod_id: str, scope_id: str) -> dict[str, bool]:
+        return await self._orchestrator.idle_consider(pod_id=pod_id, scope_id=scope_id)
+
+    async def update_pool_config(
+        self,
+        scope_id: str,
+        pool_config: dict,
+        pod_spec: dict | None = None,
+    ) -> dict[str, bool]:
+        return await self._orchestrator.update_pool_config(
+            scope_id=scope_id, pool_config=pool_config, pod_spec=pod_spec,
+        )
+
+    async def cleanup(
+        self,
+        namespace: str | None = None,
+        label_selector: str | None = None,
+    ) -> int:
+        return await self._orchestrator.cleanup(namespace=namespace,
+                                                label_selector=label_selector)

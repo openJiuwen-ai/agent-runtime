@@ -122,3 +122,11 @@ dmypy.json
 
 # 本地 EDPAgent 子目录忽略
 applications/a2a_service/agents/EDPAgent/
+# agent-runtime 多副本部署/测试产物
+applications/agent_runtime/deploy/rendered/
+applications/agent_runtime/.replicas.json
+applications/agent_runtime/.replicas.txt
+applications/agent_runtime/logs/
+
+# 本地渲染实例（含真实密码）
+applications/agent_runtime/deploy/agent_runtime.env

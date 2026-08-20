@@ -1,0 +1,127 @@
+# coding: utf-8
+"""SM 对外 HTTP handler（对外仅 4 个端点，prefix /api/session）：
+
+- route        同步路由 + 占额度（幂等键 = metadata.request_id）
+- touch        保活 / EOS
+- config_sync  Claw Manager 配置下发（template / routing_rule）
+- cleanup      运维批删 Pod（handler 在 SM，委托 rm_facade.cleanup）
+
+服务对象（orchestrator / config_store / rm_facade）挂在 sysctx 上（main 注入），
+handler 无模块级可变状态。业务异常在此映射为带 retry_after 的错误信封。
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+from openjiuwen_runtime.service.envelope import Envelope, ResponseEnvelope
+
+from ..errors import AgentRuntimeError
+from ..util import now_ts
+
+logger = logging.getLogger("agent_runtime.session_manager")
+
+IDEMPOTENCY_WINDOW = 60  # route 结果缓存窗口（框架默认一致）
+
+
+def _services(ctx: Any) -> tuple[Any, Any, Any]:
+    """(orchestrator, config_store, rm_facade) —— 由 OrchestratorSystemContext 注入。"""
+    sysctx = ctx.sysctx
+    return sysctx.sm_orchestrator, sysctx.sm_config_store, sysctx.rm_facade
+
+
+def _error_envelope(env: Envelope, exc: AgentRuntimeError) -> ResponseEnvelope:
+    """业务异常 → 错误信封（error_code / error_message / retry_after）。"""
+    return ResponseEnvelope(
+        type=env.type,
+        metadata=env.metadata,
+        rawdata={},
+        ok=False,
+        error_code=exc.code,
+        error_message=str(exc),
+        retry_after=exc.retry_after,
+    )
+
+
+async def handle_route(ctx, env: Envelope) -> ResponseEnvelope | dict:
+    """POST /api/session/route：{pod_sse_url, pod_id}；幂等回放优先。"""
+    orchestrator, _, _ = _services(ctx)
+    metadata = env.metadata
+    session_id = metadata.session_id or ""
+    group_id = str((metadata.extra or {}).get("group_id") or "")
+    bot_id = metadata.bot_id or ""
+
+    guard = await ctx.idempotency.acquire(metadata.request_id, IDEMPOTENCY_WINDOW)
+    if not guard.acquired and guard.cached_result is not None:
+        logger.info("route idempotent replay: request_id=%s", metadata.request_id)
+        cached = guard.cached_result
+        return ResponseEnvelope(
+            type=env.type, metadata=env.metadata, rawdata=dict(cached.rawdata),
+            ok=True, retry_after=None,
+        )
+    try:
+        result = await orchestrator.route(
+            request_id=metadata.request_id,
+            session_id=session_id,
+            group_id=group_id,
+            bot_id=bot_id,
+            user_id=metadata.user_id,
+        )
+    except AgentRuntimeError as exc:
+        logger.warning("route failed: session=%s error=%s detail=%s",
+                       session_id, exc.code, exc)
+        return _error_envelope(env, exc)
+    response = ResponseEnvelope(
+        type=env.type, metadata=env.metadata, rawdata=result, ok=True,
+    )
+    if guard.acquired:
+        await guard.succeed(response)
+    return result
+
+
+async def handle_touch(ctx, env: Envelope) -> dict:
+    """POST /api/session/touch：{touched: bool}（False = 会话已过期/不存在）。"""
+    orchestrator, _, _ = _services(ctx)
+    try:
+        touched = await orchestrator.touch(env.metadata.session_id or "")
+    except AgentRuntimeError as exc:
+        return _error_envelope(env, exc)
+    return {"touched": touched}
+
+
+async def handle_config_sync(ctx, env: Envelope) -> dict:
+    """POST /api/session/config_sync：{ok, synced?, deleted?, affected_scopes?}。"""
+    _, config_store, _ = _services(ctx)
+    try:
+        result = await config_store.config_sync(dict(env.rawdata or {}))
+    except AgentRuntimeError as exc:
+        logger.warning("config_sync failed: kind=%s op=%s error=%s detail=%s",
+                       (env.rawdata or {}).get("kind"), (env.rawdata or {}).get("op"),
+                       exc.code, exc)
+        return _error_envelope(env, exc)
+    logger.info("config_sync ok: kind=%s op=%s result=%s at=%s",
+                (env.rawdata or {}).get("kind"), (env.rawdata or {}).get("op"),
+                result, now_ts())
+    return result
+
+
+async def handle_cleanup(ctx, env: Envelope) -> dict:
+    """POST /api/session/cleanup：运维批删 AgentServer Pod，委托 rm_facade。"""
+    _, _, rm_facade = _services(ctx)
+    rawdata = dict(env.rawdata or {})
+    namespace = rawdata.get("namespace") or None
+    label_selector = rawdata.get("label_selector") or None
+    try:
+        cleaned = await rm_facade.cleanup(namespace=namespace, label_selector=label_selector)
+    except AgentRuntimeError as exc:
+        return _error_envelope(env, exc)
+    return {"cleaned": cleaned}
+
+
+def register_handlers(app) -> None:
+    """把 4 个 handler 注册到 App（msg_type 即 REST 路径段 /api/session/{type}）。"""
+    app.handle("route", summary="同步路由 + 占额度")(handle_route)
+    app.handle("touch", summary="保活 / EOS，刷新老化")(handle_touch)
+    app.handle("config_sync", summary="配置下发（template / routing_rule）")(handle_config_sync)
+    app.handle("cleanup", summary="运维批删 AgentServer Pod")(handle_cleanup)

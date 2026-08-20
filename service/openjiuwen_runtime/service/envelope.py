@@ -96,7 +96,11 @@ class Envelope(Generic[TRequest]):
 
 @dataclass
 class ResponseEnvelope:
-    """统一响应信封（非流式）。失败一律 ``ok=False`` + error_code/error_message。"""
+    """统一响应信封（非流式）。失败一律 ``ok=False`` + error_code/error_message。
+
+    ``retry_after``（秒，可选）：过载类错误（如限流/排队超时）建议调用方的重试间隔；
+    其余错误省略（``None``，序列化时省略该字段）。
+    """
 
     type: str
     metadata: Metadata
@@ -104,10 +108,11 @@ class ResponseEnvelope:
     ok: bool
     error_code: str | None = None
     error_message: str | None = None
+    retry_after: int | None = None
     version: str = "1"
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        body = {
             "type": self.type,
             "metadata": self.metadata.to_dict(),
             "rawdata": self.rawdata,
@@ -116,9 +121,13 @@ class ResponseEnvelope:
             "error_message": self.error_message,
             "version": self.version,
         }
+        if self.retry_after is not None:
+            body["retry_after"] = self.retry_after
+        return body
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "ResponseEnvelope":
+        retry_after = d.get("retry_after")
         return cls(
             type=d["type"],
             metadata=Metadata.from_dict(d.get("metadata") or {}),
@@ -126,6 +135,7 @@ class ResponseEnvelope:
             ok=bool(d.get("ok", False)),
             error_code=d.get("error_code"),
             error_message=d.get("error_message"),
+            retry_after=int(retry_after) if retry_after is not None else None,
             version=d.get("version", "1"),
         )
 

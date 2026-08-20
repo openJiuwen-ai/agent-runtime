@@ -1,0 +1,239 @@
+# coding: utf-8
+"""RM 编排（RM 设计 §5.2 / §5.3）：acquire / idle_consider / update_pool_config / cleanup。
+
+acquire 决策：取暖 Pod 复用（deploy_ver 过滤）→ 无暖 Pod 未达 max_pods 选主
+deploy +1 → 达上限 MaxPodsReached。deploy 走 per-scope 锁串行（防并发超配）；
+他副本在 deploy 时本请求短暂等待后重跑 ACQUIRE 复用其成果。
+
+红线：错误路径必须清 deploying 占位（防 max_pods 永久虚高）。
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import time
+from typing import Any
+from uuid import uuid4
+
+from ..errors import DeployFailed, MaxPodsReached
+from ..spec_fields import DEPLOY_VER_FIELDS
+from ..util import fingerprint, now_ts
+from .k8s import K8sPodClient
+from .state import ResourceState
+
+logger = logging.getLogger("agent_runtime.resource_manager")
+
+ACQUIRE_IDEM_TTL = 60          # acquire 结果幂等缓存窗口
+DEPLOY_LOCK_TTL = 360          # per-scope deploy 锁（盖住 ready_timeout 300s + 余量）
+DEPLOY_WAIT_ON_BUSY = 0.3      # 他副本在 deploy 时的重试间隔
+
+
+def _deploy_ver(pod_spec: dict[str, Any]) -> str:
+    """pod_spec 的 deploy 子集指纹（与 SM Template.deploy_ver() 同一算法/字段，
+    两端必须一致——A 类版本过滤依赖它）。kubeconfig 不入指纹（B 类例外）。"""
+    return fingerprint({f: pod_spec.get(f) for f in DEPLOY_VER_FIELDS})
+
+
+class ResourceOrchestrator:
+    """RM 业务编排（无进程内可变状态；池状态在 Redis，物理态以 K8s 为准）。"""
+
+    def __init__(self, rm_state: ResourceState, k8s: K8sPodClient) -> None:
+        self.state = rm_state
+        self.k8s = k8s
+
+    # -------------------------------------------------------------- acquire
+
+    async def acquire(
+        self,
+        scope_id: str,
+        pod_spec: dict[str, Any],
+        pool_config: dict[str, Any],
+        request_id: str = "",
+    ) -> dict[str, str]:
+        """SM 现有 Pod 都满时调此扩 +1。返回 {pod_id, pod_sse_url}。
+
+        幂等：同 request_id 重试直接回放缓存结果，不重复 deploy。
+        """
+        if request_id and (cached := await self._idem_get(request_id)):
+            logger.info("acquire idempotent replay: request=%s", request_id)
+            return cached
+
+        deploy_ver = _deploy_ver(pod_spec)
+
+        # 首见 scope：缓存池参数 + pod_spec（autoscale 补位 deploy 时用）
+        if not await self.state.has_scope_config(scope_id):
+            await self.state.save_scope_config(
+                scope_id,
+                {
+                    "min_idle_pods": int(pool_config.get("min_idle_pods", 0)),
+                    "max_pods": int(pool_config.get("max_pods", 1)),
+                    "pod_ttl": int(pool_config.get("pod_ttl", 300)),
+                    "deploy_ver": deploy_ver,
+                    "pod_spec_json": json.dumps(pod_spec),
+                },
+            )
+
+        while True:
+            token = uuid4().hex
+            action, pod_id, sse_url = await self.state.acquire(scope_id, deploy_ver, token)
+
+            if action == "reuse":
+                result = {"pod_id": pod_id, "pod_sse_url": sse_url}
+                if request_id:
+                    await self._idem_put(request_id, result)
+                return result
+
+            if action == "max_reached":
+                await self.state.clear_deploy_token(scope_id, token)
+                raise MaxPodsReached(f"scope {scope_id} reached max_pods")
+
+            if action == "no_config":
+                # 首见建配置后重跑即可（上面已保证写入）
+                continue
+
+            # action == need_deploy：选主串行 deploy
+            lock_key = self.state.k.lock_deploy(scope_id)
+            lock_token = f"deploy-{token}"
+            if not await self.state.try_lock(lock_key, DEPLOY_LOCK_TTL, lock_token):
+                await self.state.clear_deploy_token(scope_id, token)
+                await asyncio.sleep(DEPLOY_WAIT_ON_BUSY)   # 他副本在 deploy，稍后复用其成果
+                continue
+            try:
+                pod_id, sse_url = await self._deploy_and_register(
+                    scope_id, pod_spec, deploy_ver, token, idle_flag=False
+                )
+            finally:
+                await self.state.unlock(lock_key, lock_token)
+
+            result = {"pod_id": pod_id, "pod_sse_url": sse_url}
+            if request_id:
+                await self._idem_put(request_id, result)
+            return result
+
+    async def _deploy_and_register(
+        self,
+        scope_id: str,
+        pod_spec: dict[str, Any],
+        deploy_ver: str,
+        deploy_token: str,
+        *,
+        idle_flag: bool,
+    ) -> tuple[str, str]:
+        """create + wait Ready + REGISTER。失败清占位后抛 DeployFailed（红线）。"""
+        try:
+            info = await self.k8s.deploy(pod_spec)
+        except Exception as exc:
+            await self.state.clear_deploy_token(scope_id, deploy_token)
+            if isinstance(exc, DeployFailed):
+                raise
+            raise DeployFailed(f"deploy error for scope {scope_id}: {exc}") from exc
+        sse_url = (
+            f"http://{info.pod_ip}:{pod_spec.get('sse_port', 8080)}"
+            f"{pod_spec.get('sse_path', '/sse')}"
+        )
+        await self.state.register_pod(
+            pod_id=info.pod_id,
+            scope_id=scope_id,
+            pod_sse_url=sse_url,
+            pod_ip=info.pod_ip,
+            namespace=info.namespace,
+            deploy_ver=deploy_ver,
+            deploy_token=deploy_token,
+            idle_flag=idle_flag,
+            now=now_ts(),
+        )
+        logger.info(
+            "deployed pod: scope=%s pod=%s ip=%s idle_flag=%s url=%s",
+            scope_id, info.pod_id, info.pod_ip, idle_flag, sse_url,
+        )
+        return info.pod_id, sse_url
+
+    # -------------------------------------------------------------- idle_consider
+
+    async def idle_consider(self, pod_id: str, scope_id: str) -> dict[str, bool]:
+        """该 scope 在该 Pod 上已无会话 → 转 idle 暖池（幂等）。"""
+        transitioned = await self.state.release(pod_id, scope_id, now_ts())
+        if transitioned:
+            await self.state.redis.hset(self.state.k.pod_info(pod_id), "phase", "idle")
+        return {"transitioned_to_idle": transitioned}
+
+    # -------------------------------------------------------------- update_pool_config
+
+    async def update_pool_config(
+        self,
+        scope_id: str,
+        pool_config: dict[str, Any],
+        pod_spec: dict[str, Any] | None = None,
+    ) -> dict[str, bool]:
+        """config_sync 主动刷新（场景 M）：HSET 覆盖（幂等），立即生效。
+
+        A 类变更附带 pod_spec：同时刷新 deploy_ver / pod_spec_json →
+        autoscale 补位的新暖 Pod 用新 deploy 字段。
+        """
+        mapping: dict[str, Any] = {
+            "min_idle_pods": int(pool_config.get("min_idle_pods", 0)),
+            "max_pods": int(pool_config.get("max_pods", 1)),
+            "pod_ttl": int(pool_config.get("pod_ttl", 300)),
+        }
+        if pod_spec is not None:
+            mapping["deploy_ver"] = _deploy_ver(pod_spec)
+            mapping["pod_spec_json"] = json.dumps(pod_spec)
+        await self.state.save_scope_config(scope_id, mapping)
+        logger.info("update_pool_config: scope=%s fields=%s", scope_id, sorted(mapping))
+        return {"updated": True}
+
+    # -------------------------------------------------------------- cleanup
+
+    async def cleanup(self, namespace: str | None, label_selector: str | None) -> int:
+        """运维批删（灾难恢复 / 重部署 / 清孤儿）。不操作 Redis 编排态；
+        被删 Pod 由 watch/reconcile 兜底发现（NotFound → PURGE + notify_pod_dead），
+        清完后 autoscale 重建 min_idle_pods。"""
+        from .models import POD_LABEL_SELECTOR
+
+        ns = namespace or self.k8s.default_namespace
+        selector = label_selector or POD_LABEL_SELECTOR
+        try:
+            pods = await self.k8s.list_pods(ns, selector)
+        except Exception as exc:  # noqa: BLE001
+            # namespace 不存在（404）→ 无可清资源，返回 0（与 cluster 级
+            # 凭据下「list 不存在 ns 得空列表」的行为对齐）；
+            # 403（RBAC 越权）等仍快速失败——静默清零会掩盖部署配错。
+            # 用 getattr(exc, "status") 判定，避免 local 模式引入 kubernetes_asyncio 依赖。
+            if getattr(exc, "status", None) == 404:
+                pods = []
+            else:
+                raise
+        cleaned = 0
+        for info in pods:
+            await self.k8s.delete(info.pod_id, ns)
+            cleaned += 1
+        logger.warning("cleanup: namespace=%s selector=%s cleaned=%d", ns, selector, cleaned)
+        return cleaned
+
+    # -------------------------------------------------------------- 幂等缓存
+
+    async def _idem_get(self, request_id: str) -> dict[str, str] | None:
+        key = f"{self.state.prefix}idem:{request_id}"
+        raw = await self.state.redis.get(key)
+        if not raw:
+            return None
+        text = raw.decode() if isinstance(raw, (bytes, bytearray)) else raw
+        try:
+            value = json.loads(text)
+        except ValueError:
+            return None
+        # 命中即续期（重试窗口内反复回放）
+        await self.state.redis.expire(key, ACQUIRE_IDEM_TTL)
+        return value
+
+    async def _idem_put(self, request_id: str, result: dict[str, str]) -> None:
+        await self.state.redis.set(
+            f"{self.state.prefix}idem:{request_id}",
+            json.dumps(result), ex=ACQUIRE_IDEM_TTL,
+        )
+
+
+def monotonic_now() -> float:  # 供 sweeper 测试注入时间
+    return time.monotonic()

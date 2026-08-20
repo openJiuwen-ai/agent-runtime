@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# agent-runtime 会话编排服务部署脚本（模式参考 runtime_capabilities/scripts/deploy.sh）。
+#
+# 用法：
+#   ./deploy.sh local   [env-file]   # 开发/测试：fakeredis + fake K8s + SQLite
+#   ./deploy.sh server  [env-file]   # 部署：真 Redis + MySQL + K8s（默认读 .env.production.local）
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -12,26 +17,19 @@ fi
 
 if [[ "${MODE}" == "local" ]]; then
     DEFAULT_ENV_FILE="${APP_DIR}/.env.development.local"
-    TEMPLATE_FILE="${APP_DIR}/runtime_capabilities.local.env.example"
 else
     DEFAULT_ENV_FILE="${APP_DIR}/.env.production.local"
-    TEMPLATE_FILE="${APP_DIR}/runtime_capabilities.server.env.example"
 fi
 
 ENV_FILE="${2:-${DEFAULT_ENV_FILE}}"
 if [[ ! -f "${ENV_FILE}" ]]; then
-    if [[ "${MODE}" == "local" && "${ENV_FILE}" == "${DEFAULT_ENV_FILE}" ]]; then
-        cp "${TEMPLATE_FILE}" "${ENV_FILE}"
-        echo "Created local configuration: ${ENV_FILE}"
-    else
-        echo "Environment file does not exist: ${ENV_FILE}" >&2
-        echo "Copy and edit the template first: ${TEMPLATE_FILE}" >&2
-        exit 2
-    fi
+    echo "Environment file does not exist: ${ENV_FILE}" >&2
+    echo "Copy agent_runtime.${MODE}.env.example to it and edit first." >&2
+    exit 2
 fi
 
 uv sync --project "${APP_DIR}" --extra "${MODE}"
 cd "${APP_DIR}"
-exec uv run --project "${APP_DIR}" --no-sync runtime-capabilities \
+exec uv run --project "${APP_DIR}" --no-sync agent-runtime \
     --mode "${MODE}" \
     --env-file "${ENV_FILE}"
