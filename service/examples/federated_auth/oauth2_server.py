@@ -19,7 +19,10 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
-from .domain import FederationConnection, LocalPrincipal
+from openjiuwen_runtime.service.auth.federation import (
+    FederationConnection,
+    LocalPrincipal,
+)
 
 
 class AccessToken(BaseModel):

@@ -5,7 +5,8 @@ from datetime import datetime
 import logging
 from typing import Optional, Any
 import json
-from sqlalchemy import Column, Integer, String, DateTime, JSON, Boolean, Float, create_engine, text, inspect, Index
+from sqlalchemy import Column, Integer, String, DateTime, JSON, Boolean, Float, text, inspect, Index
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy import select, update, delete, func
@@ -47,15 +48,24 @@ class SQLAlchemyHandler(DBHandler):
         # 关闭 aiosqlite 的 DEBUG 日志
         logging.getLogger("aiosqlite").setLevel(logging.WARNING)
         engine_kwargs = build_async_engine_kwargs(connect_args=self.connect_args)
+        database_url = make_url(self.database_url)
+        if (
+            database_url.get_backend_name() == "sqlite"
+            and database_url.database in {None, "", ":memory:"}
+        ):
+            # SQLAlchemy selects StaticPool for an in-memory SQLite database.
+            # QueuePool-only options are invalid for that pool implementation.
+            for option in ("pool_size", "max_overflow", "pool_timeout"):
+                engine_kwargs.pop(option, None)
         self.engine = create_async_engine(self.database_url, **engine_kwargs)
         self.session_factory = async_sessionmaker(
             self.engine, class_=AsyncSession, expire_on_commit=False
         )
         logger.info(
             "Database connected (pool_size=%s max_overflow=%s pool_timeout=%s)",
-            engine_kwargs["pool_size"],
-            engine_kwargs["max_overflow"],
-            engine_kwargs["pool_timeout"],
+            engine_kwargs.get("pool_size", "default"),
+            engine_kwargs.get("max_overflow", "default"),
+            engine_kwargs.get("pool_timeout", "default"),
         )
 
     async def disconnect(self) -> None:
@@ -67,6 +77,18 @@ class SQLAlchemyHandler(DBHandler):
     def get_engine(self) -> Any:
         """获取 SQLAlchemy AsyncEngine 实例."""
         return self.engine
+
+    def get_table(self, table_name: str) -> Any:
+        """Return the registered SQLAlchemy table for transactional operations.
+
+        High-level ``DBHandler`` CRUD methods intentionally own their sessions and
+        commits.  Applications that need several writes in one transaction can use
+        this table together with the handler's ``session_factory``.
+        """
+        model = self._table_models.get(table_name)
+        if model is None:
+            raise ValueError(f"Table {table_name} not initialized")
+        return model.__table__
 
     def _get_sqlalchemy_type(self, data_type: str, length: Optional[int] = None):
         """将数据类型字符串转换为 SQLAlchemy 类型"""
@@ -94,7 +116,6 @@ class SQLAlchemyHandler(DBHandler):
     def _get_dialect_name(self) -> str:
         if self.engine is not None:
             return self.engine.dialect.name
-        from sqlalchemy.engine import make_url
         return make_url(self.database_url).get_backend_name()
 
     def _quote_identifier(self, identifier: str) -> str:

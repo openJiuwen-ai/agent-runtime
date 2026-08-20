@@ -40,7 +40,7 @@ examples/
 | --- | --- |
 | `multi_handler_app.py` | 组装 `App`、OAuth2、联合认证模块和全部示例 Handler，并提供可运行入口 |
 | `custom_handlers.py` | 展示独立功能模块如何通过 `HandlerRegistry` 向宿主应用贡献 Handler |
-| `federated_auth/` | 联合身份标准化、本地虚拟身份映射、SQLite 存储和示例 OAuth2 服务 |
+| `federated_auth/` | 使用正式联合认证契约的 Demo Provider、SQLite Store 和示例 OAuth2 服务 |
 | `federated_auth/README.md` | 联合认证模块的详细设计、通信时序、安全边界与扩展方法 |
 
 ## 2. 整体架构
@@ -148,6 +148,10 @@ email: alice@enterprise.example
 
 Enterprise Demo SSO 只是本地交互模拟器，不解析或验证 SAML XML。完整边界见
 [`federated_auth/README.md`](federated_auth/README.md)。
+
+联合认证的正式领域对象、异步 Provider/Store 契约和传输无关编排位于
+`openjiuwen_runtime.service.auth.federation`。本目录中的 Demo IdP、OAuth2 Server 和
+SQLite Store 只用于演示，不会随正式认证能力被误认为生产实现。
 
 ## 4. 请求和响应协议
 

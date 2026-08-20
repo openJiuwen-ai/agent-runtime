@@ -105,6 +105,15 @@ class IdentityAuthService:
         _log.info("[Auth] login.ok", user_id=user_id, provider=provider)
         return await self._issue_for(user)
 
+    async def issue_for_user_id(self, user_id: str) -> dict[str, Any] | str:
+        """Issue the normal local token bundle for an already authenticated user."""
+        user = await self._h.get(_APP_USER, {"user_id": user_id})
+        if user is None:
+            return "bad_credentials"
+        if str(getattr(user, "status", "")) != "active":
+            return "disabled"
+        return await self._issue_for(user)
+
     async def refresh(self, refresh_token: str) -> dict[str, Any] | str:
         """用 refresh 换新 access（并轮换 refresh）。失败返回 ``"invalid_refresh"``。"""
         if not refresh_token:

@@ -12,9 +12,12 @@ from pathlib import Path
 from uuid import uuid4
 
 import aiosqlite
-
-from .domain import ExternalIdentity, FederationConnection, LocalPrincipal
-from .identity_store import FederatedIdentityStore
+from openjiuwen_runtime.service.auth.federation import (
+    ExternalIdentity,
+    FederatedIdentityStore,
+    FederationConnection,
+    LocalPrincipal,
+)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS virtual_organizations (
@@ -367,6 +370,7 @@ def _principal_from_row(row: aiosqlite.Row) -> LocalPrincipal:
         display_name=row["display_name"],
         email=row["email"],
         roles=(row["role"],),
+        auth_source="saml",
     )
 
 

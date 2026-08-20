@@ -48,6 +48,17 @@ class TestSQLiteHandler(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(handler.session_factory)
         await handler.disconnect()
 
+    async def test_get_table_returns_registered_sqlalchemy_table(self):
+        await self.handler.init_table(self.test_table_def)
+
+        table = self.handler.get_table(self.test_table_def.table_name)
+
+        self.assertEqual(table.name, self.test_table_def.table_name)
+
+    def test_get_table_rejects_unregistered_table(self):
+        with self.assertRaisesRegex(ValueError, "not initialized"):
+            self.handler.get_table("missing_table")
+
     async def test_init_table(self):
         """测试初始化表"""
         await self.handler.init_table(self.test_table_def)

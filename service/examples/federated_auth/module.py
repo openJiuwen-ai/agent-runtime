@@ -9,11 +9,15 @@ from collections.abc import Mapping
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, RedirectResponse
+from openjiuwen_runtime.service.auth.federation import (
+    FederatedIdentityStore,
+    FederationConnection,
+    FederationCoordinator,
+    FederationProvider,
+    UnknownFederationConnection,
+)
 
-from .domain import FederationConnection
-from .identity_store import FederatedIdentityStore
 from .oauth2_server import ExampleOAuth2AuthorizationServer, OAuth2FlowError
-from .provider import FederationProvider
 
 
 class FederatedAuthModule:
@@ -27,10 +31,12 @@ class FederatedAuthModule:
         oauth2_server: ExampleOAuth2AuthorizationServer,
         connections: Mapping[str, FederationConnection],
     ) -> None:
-        self._provider = provider
-        self._identity_store = identity_store
         self._oauth2_server = oauth2_server
-        self._connections = dict(connections)
+        self._coordinator = FederationCoordinator(
+            provider=provider,
+            identity_store=identity_store,
+            connections=connections,
+        )
 
     def mount(self, fastapi: FastAPI) -> None:
         """Mount browser redirect and callback routes on one FastAPI app."""
@@ -40,20 +46,16 @@ class FederatedAuthModule:
             connection_id: str,
             authorization_request_id: str,
         ):
-            connection = self._connections.get(connection_id)
-            if connection is None:
-                return JSONResponse(
-                    {"detail": "unknown federation connection"},
-                    status_code=404,
-                )
             try:
                 await self._oauth2_server.require_authorization_request(
                     authorization_request_id
                 )
-                login_url = await self._provider.begin_login(
-                    connection,
+                login_url = await self._coordinator.begin_login(
+                    connection_id,
                     authorization_request_id,
                 )
+            except UnknownFederationConnection as exc:
+                return JSONResponse({"detail": str(exc)}, status_code=404)
             except (OAuth2FlowError, ValueError) as exc:
                 return JSONResponse({"detail": str(exc)}, status_code=400)
             return RedirectResponse(login_url, status_code=303)
@@ -63,27 +65,26 @@ class FederatedAuthModule:
             tags=["federation"],
         )
         async def complete_federated_login(connection_id: str, request: Request):
-            connection = self._connections.get(connection_id)
-            if connection is None:
-                return JSONResponse(
-                    {"detail": "unknown federation connection"},
-                    status_code=404,
-                )
             form_data = await request.form()
             form = {key: str(value) for key, value in form_data.items()}
             try:
-                result = await self._provider.consume_callback(connection, form)
+                result = await self._coordinator.consume_callback(
+                    connection_id,
+                    form,
+                )
                 await self._oauth2_server.require_authorization_request(
                     result.authorization_request_id
                 )
-                principal = await self._identity_store.resolve_or_create(
-                    connection,
+                principal = await self._coordinator.resolve_or_create(
+                    connection_id,
                     result.identity,
                 )
                 redirect_url = await self._oauth2_server.complete_authorization(
                     result.authorization_request_id,
                     principal,
                 )
+            except UnknownFederationConnection as exc:
+                return JSONResponse({"detail": str(exc)}, status_code=404)
             except (OAuth2FlowError, ValueError) as exc:
                 return JSONResponse({"detail": str(exc)}, status_code=400)
             return RedirectResponse(redirect_url, status_code=303)

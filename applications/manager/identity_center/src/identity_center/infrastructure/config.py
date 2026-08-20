@@ -45,6 +45,28 @@ class Settings(BaseSettings):
     refresh_ttl_seconds: int = Field(default=7 * 24 * 3600, validation_alias="IDENTITY_REFRESH_TTL")
     # JWT 签名密钥落身份库(表 identity_jwt_signing_key,生成一次→落库→多副本读同一行)。
 
+    # ---- 联合认证（当前仓库仅提供显式开启的本地 Demo Provider）----
+    federation_demo_enabled: bool = Field(
+        default=False,
+        validation_alias="IDENTITY_FEDERATION_DEMO_ENABLED",
+    )
+    federation_public_path_prefix: str = Field(
+        default="/idp",
+        validation_alias="IDENTITY_FEDERATION_PUBLIC_PATH_PREFIX",
+    )
+    federation_request_ttl_seconds: int = Field(
+        default=300,
+        validation_alias="IDENTITY_FEDERATION_REQUEST_TTL",
+    )
+    federation_code_ttl_seconds: int = Field(
+        default=60,
+        validation_alias="IDENTITY_FEDERATION_CODE_TTL",
+    )
+    federation_demo_admin_group: str = Field(
+        default="enterprise-admins",
+        validation_alias="IDENTITY_FEDERATION_DEMO_ADMIN_GROUP",
+    )
+
     # ---- 引导播种 ----
     seed_admin: bool = Field(default=True, validation_alias="IDENTITY_SEED_ADMIN")
     seed_user1: bool = Field(default=True, validation_alias="IDENTITY_SEED_USER1")

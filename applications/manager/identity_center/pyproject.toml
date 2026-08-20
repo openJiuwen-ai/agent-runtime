@@ -23,11 +23,13 @@ dependencies = [
     "python-multipart>=0.0.9",
     # 重构:foundation 由 git 源(agent-runtime@develop)改为本仓源码,见 [tool.uv.sources]
     "openjiuwen-runtime-foundation",
+    "openjiuwen-runtime-service",
     "asyncpg>=0.29",
 ]
 
 [project.optional-dependencies]
 dev = [
+    "httpx>=0.27",
     "pytest>=9.0.2",
     "pytest-asyncio>=1.3.0",
     "ruff>=0.6",
@@ -39,6 +41,7 @@ identity-center = "identity_center.main:main"
 # 重构:foundation 改用本仓 editable 源码,不再从 gitcode 拉取
 [tool.uv.sources]
 openjiuwen-runtime-foundation = { path = "../../../foundation", editable = true }
+openjiuwen-runtime-service = { path = "../../../service", editable = true }
 
 [tool.setuptools.packages.find]
 where = ["src"]

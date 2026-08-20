@@ -1,60 +1,22 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
-"""Federated identity store contract and dictionary-backed test implementation."""
+"""Dictionary-backed test implementation of the formal federation store."""
 
 from __future__ import annotations
 
 import asyncio
-from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from uuid import uuid4
 
-from .domain import ExternalIdentity, FederationConnection, LocalPrincipal
+from openjiuwen_runtime.service.auth.federation import (
+    ExternalIdentity,
+    FederatedIdentityStore,
+    FederationConnection,
+    LocalPrincipal,
+)
 
 IdentityKey = tuple[str, str, str]
-
-
-class FederatedIdentityStore(ABC):
-    """Resolve validated external identities into stable local principals."""
-
-    @abstractmethod
-    async def resolve_or_create(
-        self,
-        connection: FederationConnection,
-        identity: ExternalIdentity,
-    ) -> LocalPrincipal:
-        """Return the existing principal or create its local shadow records."""
-        raise NotImplementedError
-
-    @abstractmethod
-    async def find(
-        self,
-        *,
-        connection_id: str,
-        issuer: str,
-        external_subject: str,
-    ) -> LocalPrincipal | None:
-        """Find a principal by its stable external identity key."""
-        raise NotImplementedError
-
-    @abstractmethod
-    async def close(self) -> None:
-        """Release resources owned by this store."""
-        raise NotImplementedError
-
-    @staticmethod
-    def validate_binding(
-        connection: FederationConnection,
-        identity: ExternalIdentity,
-    ) -> None:
-        """Ensure an identity can only be consumed by its trusted connection."""
-        if identity.connection_id != connection.connection_id:
-            raise ValueError(
-                "external identity connection_id does not match connection"
-            )
-        if identity.issuer != connection.issuer:
-            raise ValueError("external identity issuer does not match trusted issuer")
 
 
 @dataclass
@@ -157,4 +119,8 @@ def _principal(
         display_name=user.display_name,
         email=user.email,
         roles=(role,),
+        auth_source="saml",
     )
+
+
+__all__ = ["FederatedIdentityStore", "InMemoryFederatedIdentityStore"]
