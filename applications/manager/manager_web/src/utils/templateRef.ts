@@ -10,6 +10,21 @@ export const TEMPLATE_REF_SLOTS = [
   'service_config',
 ] as const;
 
+/** 模板引用编辑器展示的槽位（不含服务资源模板）。 */
+export const TEMPLATE_REF_EDITOR_SLOTS = [
+  'default_model',
+  'video_model',
+  'audio_model',
+  'vision_model',
+  'skill_whitelist',
+  'extension_config',
+] as const;
+
+export const MULTI_VALUE_TEMPLATE_REF_SLOTS = new Set<string>([
+  'skill_whitelist',
+  'extension_config',
+]);
+
 /** 各槽位至多一条引用：默认/视频/音频/视觉模型、服务配置。 */
 export const SINGLE_VALUE_TEMPLATE_REF_SLOTS = new Set<string>([
   'default_model',
@@ -36,6 +51,15 @@ export function findSingleValueTemplateRefViolation(
 }
 
 export type TemplateRefSlot = (typeof TEMPLATE_REF_SLOTS)[number];
+export type TemplateRefEditorSlot = (typeof TEMPLATE_REF_EDITOR_SLOTS)[number];
+
+export function isTemplateRefEditorSlot(slot: string): slot is TemplateRefEditorSlot {
+  return (TEMPLATE_REF_EDITOR_SLOTS as readonly string[]).includes(slot.trim());
+}
+
+export function isMultiValueTemplateRefSlot(slot: string): boolean {
+  return MULTI_VALUE_TEMPLATE_REF_SLOTS.has(slot.trim());
+}
 
 export type TemplateRefMap = Record<string, string[]>;
 

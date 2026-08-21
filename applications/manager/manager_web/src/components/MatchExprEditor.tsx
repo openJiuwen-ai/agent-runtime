@@ -19,6 +19,27 @@ import {
   type MatchNode,
   type MatchOp,
 } from '../utils/matchExpr';
+import { AgentTemplateApi, OrgApi, UserApi } from '../services/api';
+import { useAsync } from '../hooks/useAsync';
+
+interface SelectOption { id: string; label: string }
+
+function useFieldOptions(field: MatchField): SelectOption[] {
+  const { data: orgs } = useAsync(() => OrgApi.list(), []);
+  const { data: users } = useAsync(() => UserApi.list(), []);
+  const { data: agents } = useAsync(() => AgentTemplateApi.list(), []);
+
+  return useMemo(() => {
+    switch (field) {
+      case 'group_id':
+        return (orgs?.items ?? []).map((o) => ({ id: o.group_id, label: o.name || o.group_id }));
+      case 'user_id':
+        return (users?.items ?? []).map((u) => ({ id: u.user_id, label: u.display_name || u.user_id }));
+      case 'bot_id':
+        return (agents?.items ?? []).map((a) => ({ id: a.template_id, label: a.template_name || a.template_id }));
+    }
+  }, [field, orgs, users, agents]);
+}
 
 function TrashIcon() {
   return (
@@ -81,6 +102,75 @@ function OpNode({
   );
 }
 
+function MultiSelectDropdown({
+  options,
+  selected,
+  onChange,
+  placeholder,
+}: {
+  options: SelectOption[];
+  selected: string[];
+  onChange: (values: string[]) => void;
+  placeholder?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState('');
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  const filtered = useMemo(() => {
+    const kw = q.trim().toLowerCase();
+    return kw ? options.filter((o) => o.label.toLowerCase().includes(kw) || o.id.toLowerCase().includes(kw)) : options;
+  }, [options, q]);
+
+  const toggle = (id: string) => {
+    onChange(selected.includes(id) ? selected.filter((v) => v !== id) : [...selected, id]);
+  };
+
+  const selectedLabels = selected
+    .map((id) => options.find((o) => o.id === id)?.label ?? id)
+    .join(', ');
+
+  return (
+    <div ref={ref} className="relative flex-1 min-w-[8rem]">
+      <button
+        type="button"
+        className="input w-full !py-1 text-xs text-left truncate"
+        onClick={() => setOpen(!open)}
+      >
+        {selectedLabels || <span className="text-muted">{placeholder}</span>}
+      </button>
+      {open && (
+        <div className="absolute left-0 top-full mt-1 z-[9999] w-full min-w-[12rem] max-h-[200px] overflow-auto rounded border border-[var(--border)] bg-[var(--card)] shadow-lg">
+          <input
+            className="input w-full !border-0 !border-b !rounded-none !text-xs"
+            placeholder="搜索..."
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            autoFocus
+          />
+          {filtered.map((o) => (
+            <label key={o.id} className="flex items-center gap-2 px-2 py-1 hover:bg-[var(--bg-hover)] cursor-pointer text-xs">
+              <input type="checkbox" checked={selected.includes(o.id)} onChange={() => toggle(o.id)} />
+              <span className="truncate">{o.label}</span>
+              <span className="text-muted mono text-[10px] ml-auto shrink-0">{o.id.length > 12 ? o.id.slice(0, 12) + '…' : o.id}</span>
+            </label>
+          ))}
+          {filtered.length === 0 && <div className="px-2 py-2 text-xs text-muted">无匹配项</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ConditionLeaf({
   value,
   onChange,
@@ -95,12 +185,13 @@ function ConditionLeaf({
   onAddCondition: () => void;
 }) {
   const { t } = useTranslation();
+  const options = useFieldOptions(value.field);
   return (
     <div className="flex min-w-0 items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--card)] px-2.5 py-2 shadow-[inset_0_1px_0_var(--card-highlight)]">
       <select
-        className="select w-[6.5rem] shrink-0 !py-1 !text-xs"
+        className="select w-[5.5rem] shrink-0 !py-1 !text-xs"
         value={value.field}
-        onChange={(e) => onChange({ ...value, field: e.target.value as MatchField })}
+        onChange={(e) => onChange({ ...value, field: e.target.value as MatchField, values: [] })}
       >
         {MATCH_FIELDS.map((f) => (
           <option key={f} value={f}>
@@ -109,18 +200,18 @@ function ConditionLeaf({
         ))}
       </select>
       <select
-        className="select w-[3.75rem] shrink-0 !py-1 !text-xs"
+        className="select w-[5rem] shrink-0 !py-1 !text-xs"
         value={value.op}
         onChange={(e) => onChange({ ...value, op: e.target.value as MatchOp })}
       >
-        <option value="==">==</option>
-        <option value="!=">!=</option>
+        <option value="in">in</option>
+        <option value="not in">not in</option>
       </select>
-      <input
-        className="input flex-1 min-w-[6rem] !py-1 mono text-xs"
-        value={value.value}
+      <MultiSelectDropdown
+        options={options}
+        selected={value.values}
+        onChange={(values) => onChange({ ...value, values })}
         placeholder={t('policies.matchExpr.valuePlaceholder')}
-        onChange={(e) => onChange({ ...value, value: e.target.value })}
       />
       <button type="button" className="btn sm ghost shrink-0 !px-2" onClick={onAddCondition}>
         + {t('policies.matchExpr.addCondition')}

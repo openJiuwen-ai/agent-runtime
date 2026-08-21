@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -251,41 +250,40 @@ def create_manager_web_app(
 
 
 def main() -> None:
+    from manager_server.infrastructure.config import settings
+
     parser = argparse.ArgumentParser(description="Serve JiuwenClaw Manager Web static files.")
-    parser.add_argument("--host", default=os.getenv("MANAGER_WEB_HOST", "localhost"))
+    parser.add_argument("--host", default=settings.manager_web_host)
     parser.add_argument(
         "--port",
         type=int,
-        default=int(os.getenv("MANAGER_WEB_PORT", "5273")),
+        default=settings.manager_web_port,
     )
     parser.add_argument("--dist", default=str(_manager_web_dist()))
     parser.add_argument(
         "--proxy-target",
-        default=os.getenv("MANAGER_WEB_PROXY_TARGET", "http://127.0.0.1:8765"),
+        default=settings.manager_web_proxy_target,
         help="Claw Manager REST base URL for /api relay.",
     )
     parser.add_argument(
         "--idp-target",
-        default=os.getenv("MANAGER_WEB_IDP_TARGET", "http://127.0.0.1:8770"),
+        default=settings.manager_web_idp_target,
         help="Identity service base URL for /idp relay.",
     )
     parser.add_argument("--chat-dist", default=str(_user_web_dist()))
     parser.add_argument(
         "--user-server-target",
-        default=os.getenv("MANAGER_WEB_USER_SERVER_TARGET", "http://127.0.0.1:5174"),
+        default=settings.manager_web_user_server_target,
         help="User Server base URL for /file-api relay.",
     )
     parser.add_argument(
         "--gateway-sse",
-        default=os.getenv(
-            "MANAGER_WEB_GATEWAY_SSE",
-            "http://127.0.0.1:19001/web/invoke",
-        ),
+        default=settings.manager_web_gateway_sse,
         help="Gateway HTTP/SSE URL for /web/invoke relay.",
     )
     parser.add_argument(
         "--log-level",
-        default=os.getenv("MANAGER_WEB_LOG_LEVEL", "info"),
+        default=settings.manager_web_log_level,
     )
     args = parser.parse_args()
 

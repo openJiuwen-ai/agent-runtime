@@ -1,5 +1,5 @@
 """模板表定义：model_template、extension_config_template、skill_whitelist_template、
-service_config_template（id 自增主键；对外引用 template_id UUID）。
+service_config_template、agent_template（id 自增主键；对外引用 template_id UUID）。
 """
 
 from __future__ import annotations
@@ -155,6 +155,26 @@ SERVICE_CONFIG_TEMPLATE_TABLE_DEF = TableDefinition(
         ColumnDefinition("message_timeout", "integer", nullable=False, default=60),
         ColumnDefinition("session_concurrency", "integer", nullable=False, default=3),
         ColumnDefinition("session_ttl", "integer", nullable=False, default=60),
+        ColumnDefinition("enabled", "boolean", nullable=False, default=True),
+        ColumnDefinition("data", "json", nullable=True),
+        ColumnDefinition("created_at", "datetime", nullable=False),
+        ColumnDefinition("updated_at", "datetime", nullable=False),
+    ],
+    indexes=[
+        IndexDefinition(["template_id"], unique=True),
+    ],
+)
+
+# 原表名 bot。平台全局 Agent 模板目录（不带 jiuwenclaw_id）；对外业务键 template_id。
+AGENT_TEMPLATE_TABLE_DEF = TableDefinition(
+    table_name="agent_template",
+    columns=[
+        ColumnDefinition("id", "integer", primary_key=True, autoincrement=True, nullable=False),
+        ColumnDefinition("template_id", "string", length=100, nullable=False),
+        ColumnDefinition("template_name", "string", length=128, nullable=False),
+        ColumnDefinition("description", "string", length=512, nullable=True),
+        ColumnDefinition("agent_tags", "json", nullable=True),
+        ColumnDefinition("template_ref", "json", nullable=True),
         ColumnDefinition("enabled", "boolean", nullable=False, default=True),
         ColumnDefinition("data", "json", nullable=True),
         ColumnDefinition("created_at", "datetime", nullable=False),

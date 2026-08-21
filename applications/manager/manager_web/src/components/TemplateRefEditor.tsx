@@ -7,66 +7,17 @@ import {
   SkillWhitelistTemplateApi,
 } from '../services/api';
 import {
-  TEMPLATE_REF_SLOTS,
-  buildRefChain,
-  isSingleValueTemplateRefSlot,
-  newRefSegment,
-  newTemplateRefRow,
+  TEMPLATE_REF_EDITOR_SLOTS,
+  isMultiValueTemplateRefSlot,
+  isTemplateRefEditorSlot,
   parseRefChain,
-  serializeTemplateRef,
-  templateRefRowsFromMap,
-  type ParsedRefChain,
-  type RefSegment,
-  type RefSegmentMode,
+  type TemplateRefEditorSlot,
   type TemplateRefMap,
-  type TemplateRefSlotRow,
 } from '../utils/templateRef';
-import { LimitedTextInput } from './LimitedTextInput';
-
-/** 与 config_default_template_mapping.scope_id 及映射表达式键长度一致 */
-const MAPPING_SCOPE_ID_MAX_LENGTH = 512;
 
 export interface TemplateOption {
   template_id: string;
   label: string;
-}
-
-function TrashIcon() {
-  return (
-    <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden>
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-      />
-    </svg>
-  );
-}
-
-function DeleteIconButton({
-  label,
-  onClick,
-  onAccent = false,
-}: {
-  label: string;
-  onClick: () => void;
-  onAccent?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      className={
-        onAccent
-          ? 'btn sm ghost shrink-0 !border-transparent !px-2 !py-2 text-[var(--primary-foreground)] hover:!bg-black/10'
-          : 'btn sm ghost shrink-0 !border-transparent !px-2 !py-2 text-muted hover:!bg-[var(--bg-hover)] hover:!text-[var(--text)]'
-      }
-      onClick={onClick}
-      aria-label={label}
-      title={label}
-    >
-      <TrashIcon />
-    </button>
-  );
 }
 
 interface TemplateRefEditorProps {
@@ -86,212 +37,203 @@ export async function loadTemplateOptions(): Promise<Record<string, TemplateOpti
     ServiceConfigTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
   ]);
 
-  const modelItems = models.items ?? [];
   const toOpt = (id: string, name: string): TemplateOption => ({
     template_id: id,
     label: name ? `${name} (${id})` : id,
   });
 
-  const modelOptions = modelItems.map((m) => toOpt(m.template_id, m.template_name));
-  const modelSlots = ['default_model', 'video_model', 'audio_model', 'vision_model'] as const;
+  const modelOptions = (models.items ?? []).map((m) => toOpt(m.template_id, m.template_name));
   const bySlot: Record<string, TemplateOption[]> = {};
-
-  for (const slot of modelSlots) {
+  for (const slot of ['default_model', 'video_model', 'audio_model', 'vision_model'] as const) {
     bySlot[slot] = modelOptions;
   }
-
-  bySlot.skill_whitelist = (skills.items ?? []).map((t) =>
-    toOpt(t.template_id, t.template_name),
-  );
-  bySlot.extension_config = (extensions.items ?? []).map((t) =>
-    toOpt(t.template_id, t.template_name),
-  );
-  bySlot.service_config = (services.items ?? []).map((t) =>
-    toOpt(t.template_id, t.template_name),
-  );
-
+  bySlot.skill_whitelist = (skills.items ?? []).map((t) => toOpt(t.template_id, t.template_name));
+  bySlot.extension_config = (extensions.items ?? []).map((t) => toOpt(t.template_id, t.template_name));
+  bySlot.service_config = (services.items ?? []).map((t) => toOpt(t.template_id, t.template_name));
   return bySlot;
 }
 
-function RefSegmentEditor({
-  segment,
-  segmentIndex,
-  options,
-  onChange,
-  onRemove,
-  allowRemove,
-}: {
-  segment: RefSegment;
-  segmentIndex: number;
-  options: TemplateOption[];
-  onChange: (next: RefSegment) => void;
-  onRemove: () => void;
-  allowRemove: boolean;
-}) {
-  const { t } = useTranslation();
-
-  const setMode = (nextMode: RefSegmentMode) => {
-    onChange(newRefSegment(nextMode));
-  };
-
-  return (
-    <div className="flex items-center gap-2">
-      {segmentIndex > 0 ? (
-        <span className="shrink-0 w-[2.25rem] text-center text-[11px] font-medium uppercase text-muted">
-          {t('policies.templateRef.orLabel')}
-        </span>
-      ) : (
-        <span className="shrink-0 w-[2.25rem]" aria-hidden />
-      )}
-      <select
-        className="select w-[8.5rem] shrink-0"
-        value={segment.mode}
-        onChange={(e) => setMode(e.target.value as RefSegmentMode)}
-      >
-        <option value="template">{t('policies.templateRef.modeTemplate')}</option>
-        <option value="user">{t('policies.templateRef.modeUser')}</option>
-        <option value="group">{t('policies.templateRef.modeGroup')}</option>
-        <option value="bot">{t('policies.templateRef.modeBot')}</option>
-      </select>
-
-      <div className="flex-1 min-w-0">
-        {segment.mode === 'template' ? (
-          <select
-            className="select w-full"
-            value={segment.templateId}
-            onChange={(e) => onChange({ ...segment, mode: 'template', templateId: e.target.value })}
-          >
-            <option value="">{t('policies.templateRef.pickTemplate')}</option>
-            {options.map((opt) => (
-              <option key={opt.template_id} value={opt.template_id}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
-        ) : segment.mode === 'user' ? (
-          <LimitedTextInput
-            value={segment.userId}
-            maxLength={MAPPING_SCOPE_ID_MAX_LENGTH}
-            placeholder={t('policies.templateRef.userIdPlaceholder')}
-            onChange={(userId) => onChange({ ...segment, mode: 'user', userId })}
-          />
-        ) : segment.mode === 'group' ? (
-          <LimitedTextInput
-            value={segment.groupId}
-            maxLength={MAPPING_SCOPE_ID_MAX_LENGTH}
-            placeholder={t('policies.templateRef.groupIdPlaceholder')}
-            onChange={(groupId) => onChange({ ...segment, mode: 'group', groupId })}
-          />
-        ) : (
-          <LimitedTextInput
-            value={segment.botId}
-            maxLength={MAPPING_SCOPE_ID_MAX_LENGTH}
-            placeholder={t('policies.templateRef.botIdPlaceholder')}
-            onChange={(botId) => onChange({ ...segment, mode: 'bot', botId })}
-          />
-        )}
-      </div>
-
-      {allowRemove ? (
-        <DeleteIconButton
-          label={t('policies.templateRef.removeOrSegment')}
-          onClick={onRemove}
-        />
-      ) : null}
-    </div>
-  );
+function extractTemplateIds(refs: string[] | undefined): string[] {
+  if (!refs?.length) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const ref of refs) {
+    for (const segment of parseRefChain(ref).segments) {
+      const id = segment.mode === 'template' ? segment.templateId.trim() : '';
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      out.push(id);
+    }
+  }
+  return out;
 }
 
-function RefRowEditor({
-  index,
-  value,
+function editorValueFromMap(value: TemplateRefMap): Record<TemplateRefEditorSlot, string[]> {
+  const out = {} as Record<TemplateRefEditorSlot, string[]>;
+  for (const slot of TEMPLATE_REF_EDITOR_SLOTS) {
+    const ids = extractTemplateIds(value[slot]);
+    out[slot] = isMultiValueTemplateRefSlot(slot) ? ids : ids.slice(0, 1);
+  }
+  return out;
+}
+
+function extraSlotsFromMap(value: TemplateRefMap): TemplateRefMap {
+  const extra: TemplateRefMap = {};
+  for (const [slot, refs] of Object.entries(value)) {
+    if (!isTemplateRefEditorSlot(slot) && refs?.length) extra[slot] = refs;
+  }
+  return extra;
+}
+
+function serializeEditorValue(
+  editor: Record<TemplateRefEditorSlot, string[]>,
+  extra: TemplateRefMap,
+): TemplateRefMap {
+  const out: TemplateRefMap = { ...extra };
+  for (const slot of TEMPLATE_REF_EDITOR_SLOTS) {
+    const ids = editor[slot].map((id) => id.trim()).filter(Boolean);
+    if (ids.length) out[slot] = ids;
+    else delete out[slot];
+  }
+  return out;
+}
+
+function CheckboxSelect({
   options,
+  selected,
   onChange,
-  onRemove,
-  allowRemove,
 }: {
-  index: number;
-  value: string;
   options: TemplateOption[];
-  onChange: (next: string) => void;
-  onRemove: () => void;
-  allowRemove: boolean;
+  selected: string[];
+  onChange: (ids: string[]) => void;
 }) {
   const { t } = useTranslation();
-  const [chain, setChain] = useState<ParsedRefChain>(() => parseRefChain(value));
-  /** 避免将序列化结果（已去掉空 or 段）回写时冲掉编辑中的空段 */
-  const lastEmittedRef = useRef<string | undefined>(undefined);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [popoverEl, setPopoverEl] = useState<HTMLDivElement | null>(null);
+  const [open, setOpen] = useState(false);
+  const optionIds = useMemo(() => new Set(options.map((o) => o.template_id)), [options]);
+  const orphanIds = selected.filter((id) => !optionIds.has(id));
+  const labelById = useMemo(() => {
+    const map = new Map(options.map((o) => [o.template_id, o.label]));
+    for (const id of orphanIds) map.set(id, id);
+    return map;
+  }, [options, orphanIds]);
 
-  useEffect(() => {
-    if (lastEmittedRef.current !== undefined && value === lastEmittedRef.current) {
+  const positionPopover = useCallback(() => {
+    const trigger = triggerRef.current;
+    const el = popoverEl;
+    if (!trigger || !el) return;
+    const r = trigger.getBoundingClientRect();
+    const maxH = 224;
+    const spaceBelow = window.innerHeight - r.bottom;
+    const openUp = spaceBelow < Math.min(maxH, 160) && r.top > spaceBelow;
+    el.style.inset = 'auto';
+    el.style.margin = '0';
+    el.style.left = `${r.left}px`;
+    el.style.width = `${r.width}px`;
+    el.style.maxHeight = `${maxH}px`;
+    if (openUp) {
+      el.style.bottom = `${window.innerHeight - r.top + 4}px`;
+      el.style.top = 'auto';
+    } else {
+      el.style.top = `${r.bottom + 4}px`;
+      el.style.bottom = 'auto';
+    }
+  }, [popoverEl]);
+
+  const close = useCallback(() => {
+    const el = popoverEl;
+    if (el && 'hidePopover' in el) {
+      try {
+        (el as HTMLElement).hidePopover();
+      } catch {
+        /* already closed */
+      }
+    }
+    setOpen(false);
+  }, [popoverEl]);
+
+  const toggleOpen = () => {
+    const el = popoverEl;
+    if (el && 'showPopover' in el) {
+      if (open) close();
+      else {
+        positionPopover();
+        (el as HTMLElement).showPopover();
+        setOpen(true);
+      }
       return;
     }
-    lastEmittedRef.current = undefined;
-    setChain(parseRefChain(value));
-  }, [value]);
-
-  const applyChain = (next: ParsedRefChain) => {
-    setChain(next);
-    const serialized = buildRefChain(next);
-    lastEmittedRef.current = serialized;
-    onChange(serialized);
+    setOpen((v) => !v);
   };
 
-  const updateSegment = (segmentIndex: number, segment: RefSegment) => {
-    const segments = [...chain.segments];
-    segments[segmentIndex] = segment;
-    applyChain({ segments });
+  useEffect(() => {
+    if (popoverEl && 'showPopover' in popoverEl) {
+      popoverEl.setAttribute('popover', 'manual');
+    }
+  }, [popoverEl]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (triggerRef.current?.contains(target) || popoverEl?.contains(target)) return;
+      close();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') close();
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    window.addEventListener('resize', positionPopover);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', positionPopover);
+    };
+  }, [open, close, positionPopover, popoverEl]);
+
+  const toggle = (id: string) => {
+    onChange(selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id]);
   };
 
-  const addOrSegment = () => {
-    applyChain({ segments: [...chain.segments, newRefSegment('template')] });
-  };
-
-  const removeOrSegment = (segmentIndex: number) => {
-    const segments = chain.segments.filter((_, i) => i !== segmentIndex);
-    applyChain({
-      segments: segments.length ? segments : [newRefSegment('template')],
-    });
-  };
+  const display = selected.length
+    ? selected.map((id) => labelById.get(id) ?? id).join(', ')
+    : t('policies.templateRef.none');
+  const items = [...orphanIds.map((id) => ({ template_id: id, label: id })), ...options];
 
   return (
-    <div className="rounded-md border border-[var(--border)] bg-[var(--card)] shadow-[inset_0_1px_0_var(--card-highlight)]">
-      <div className="flex items-center gap-2 border-b border-[var(--border)] px-2.5 py-2">
-        <span
-          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--bg-muted)] text-[11px] font-semibold text-muted tabular-nums"
-          aria-hidden
-        >
-          {index}
-        </span>
-        <span className="text-xs text-muted">{t('policies.templateRef.refItem')}</span>
-        <div className="flex-1" />
-        {allowRemove ? (
-          <DeleteIconButton
-            label={t('policies.templateRef.removeRef')}
-            onClick={onRemove}
-          />
-        ) : null}
-      </div>
-
-      <div className="flex flex-col gap-2 px-2.5 py-2">
-        {chain.segments.map((segment, segmentIndex) => (
-          <RefSegmentEditor
-            key={segmentIndex}
-            segment={segment}
-            segmentIndex={segmentIndex}
-            options={options}
-            onChange={(next) => updateSegment(segmentIndex, next)}
-            onRemove={() => removeOrSegment(segmentIndex)}
-            allowRemove={chain.segments.length > 1}
-          />
-        ))}
-        <button
-          type="button"
-          className="btn sm ghost self-start border border-dashed border-[var(--border)] text-[11px]"
-          onClick={addOrSegment}
-        >
-          + {t('policies.templateRef.addOrSegment')}
-        </button>
+    <div className="relative">
+      <button
+        ref={triggerRef}
+        type="button"
+        className="select w-full text-left flex items-center justify-between gap-2"
+        onClick={toggleOpen}
+      >
+        <span className={selected.length ? 'truncate' : 'text-muted truncate'}>{display}</span>
+        <span className="text-muted text-xs shrink-0">{open ? '▲' : '▼'}</span>
+      </button>
+      <div
+        ref={setPopoverEl}
+        className="fixed z-[80] max-h-56 overflow-auto rounded-md border border-border bg-bg shadow-lg py-1"
+      >
+        {items.length === 0 ? (
+          <div className="px-3 py-2 text-xs text-muted">{t('policies.templateRef.noOptions')}</div>
+        ) : (
+          items.map((opt) => (
+            <label
+              key={opt.template_id}
+              className="flex items-center gap-2 px-3 py-2 hover:bg-bg-hover cursor-pointer text-sm"
+            >
+              <input
+                type="checkbox"
+                checked={selected.includes(opt.template_id)}
+                onChange={() => toggle(opt.template_id)}
+              />
+              <span className="truncate">{opt.label}</span>
+            </label>
+          ))
+        )}
       </div>
     </div>
   );
@@ -305,26 +247,24 @@ export function TemplateRefEditor({
   onChange,
 }: TemplateRefEditorProps) {
   const { t } = useTranslation();
-  const [rows, setRows] = useState<TemplateRefSlotRow[]>(() => templateRefRowsFromMap(value));
+  const [editor, setEditor] = useState(() => editorValueFromMap(value));
+  const extraSlotsRef = useRef<TemplateRefMap>(extraSlotsFromMap(value));
   const [templateOptions, setTemplateOptions] = useState<Record<string, TemplateOption[]>>({});
   const [loadingTemplates, setLoadingTemplates] = useState(false);
 
-  const usedSlots = useMemo(() => new Set(rows.map((r) => r.slot)), [rows]);
-
-  const emitChange = useCallback(
-    (nextRows: TemplateRefSlotRow[]) => {
-      setRows(nextRows);
-      onChange(serializeTemplateRef(nextRows));
+  const emit = useCallback(
+    (next: Record<TemplateRefEditorSlot, string[]>) => {
+      setEditor(next);
+      onChange(serializeEditorValue(next, extraSlotsRef.current));
     },
     [onChange],
   );
 
   useEffect(() => {
-    setRows((current) => {
-      if (JSON.stringify(serializeTemplateRef(current)) === JSON.stringify(value)) {
-        return current;
-      }
-      return templateRefRowsFromMap(value);
+    extraSlotsRef.current = extraSlotsFromMap(value);
+    setEditor((current) => {
+      const next = editorValueFromMap(value);
+      return JSON.stringify(current) === JSON.stringify(next) ? current : next;
     });
   }, [value]);
 
@@ -343,59 +283,8 @@ export function TemplateRefEditor({
     };
   }, []);
 
-  const addSlot = () => {
-    const nextSlot =
-      TEMPLATE_REF_SLOTS.find((s) => !usedSlots.has(s)) ?? TEMPLATE_REF_SLOTS[0];
-    emitChange([...rows, newTemplateRefRow(nextSlot)]);
-  };
-
-  const updateSlot = (key: string, slot: string) => {
-    emitChange(
-      rows.map((r) => {
-        if (r.key !== key) return r;
-        const next = { ...r, slot };
-        if (isSingleValueTemplateRefSlot(slot) && next.refs.length > 1) {
-          next.refs = [next.refs[0] ?? ''];
-        }
-        return next;
-      }),
-    );
-  };
-
-  const removeSlot = (key: string) => {
-    emitChange(rows.filter((r) => r.key !== key));
-  };
-
-  const addRef = (key: string) => {
-    emitChange(
-      rows.map((r) => {
-        if (r.key !== key) return r;
-        if (isSingleValueTemplateRefSlot(r.slot)) return r;
-        return { ...r, refs: [...r.refs, ''] };
-      }),
-    );
-  };
-
-  const updateRef = (slotKey: string, index: number, refValue: string) => {
-    emitChange(
-      rows.map((r) => {
-        if (r.key !== slotKey) return r;
-        const refs = [...r.refs];
-        refs[index] = refValue;
-        return { ...r, refs };
-      }),
-    );
-  };
-
-  const removeRef = (slotKey: string, index: number) => {
-    emitChange(
-      rows.map((r) => {
-        if (r.key !== slotKey) return r;
-        if (isSingleValueTemplateRefSlot(r.slot)) return r;
-        const refs = r.refs.filter((_, i) => i !== index);
-        return { ...r, refs: refs.length ? refs : [''] };
-      }),
-    );
+  const setSlotIds = (slot: TemplateRefEditorSlot, ids: string[]) => {
+    emit({ ...editor, [slot]: ids });
   };
 
   return (
@@ -411,78 +300,44 @@ export function TemplateRefEditor({
         <div className="text-[11px] text-muted mb-2">{t('policies.templateRef.loadingTemplates')}</div>
       )}
 
-      <div className="flex flex-col gap-3">
-        {rows.length === 0 ? (
-          <div className="text-sm text-muted py-2">{t('policies.templateRef.empty')}</div>
-        ) : (
-          rows.map((row) => {
-            const options = templateOptions[row.slot] ?? [];
-            const singleValue = isSingleValueTemplateRefSlot(row.slot);
-            return (
-              <div
-                key={row.key}
-                className="overflow-hidden rounded-lg border border-[var(--border)] shadow-sm"
-              >
-                <div className="flex items-center gap-3 border-b border-[var(--border)] bg-[var(--panel-strong)] px-3 py-2.5">
-                  <span className="shrink-0 text-xs font-semibold tracking-wide text-muted">
-                    {t('policies.templateRef.slot')}
-                  </span>
+      <div className="flex flex-col gap-2">
+        {TEMPLATE_REF_EDITOR_SLOTS.map((slot) => {
+          const options = templateOptions[slot] ?? [];
+          const selected = editor[slot] ?? [];
+          const multi = isMultiValueTemplateRefSlot(slot);
+          return (
+            <div key={slot} className="flex items-start gap-3">
+              <div className="w-40 shrink-0 pt-2 text-xs font-medium text-muted">
+                {t(`policies.templateRef.slots.${slot}`, { defaultValue: slot })}
+              </div>
+              <div className="min-w-0 flex-1">
+                {multi ? (
+                  <CheckboxSelect
+                    options={options}
+                    selected={selected}
+                    onChange={(ids) => setSlotIds(slot, ids)}
+                  />
+                ) : (
                   <select
-                    className="select min-w-0 flex-1"
-                    value={row.slot}
-                    onChange={(e) => updateSlot(row.key, e.target.value)}
+                    className="select w-full"
+                    value={selected[0] ?? ''}
+                    onChange={(e) => setSlotIds(slot, e.target.value ? [e.target.value] : [])}
                   >
-                    {TEMPLATE_REF_SLOTS.map((slot) => (
-                      <option
-                        key={slot}
-                        value={slot}
-                        disabled={usedSlots.has(slot) && row.slot !== slot}
-                      >
-                        {t(`policies.templateRef.slots.${slot}`, { defaultValue: slot })}
+                    <option value="">{t('policies.templateRef.none')}</option>
+                    {selected[0] && !options.some((o) => o.template_id === selected[0]) ? (
+                      <option value={selected[0]}>{selected[0]}</option>
+                    ) : null}
+                    {options.map((opt) => (
+                      <option key={opt.template_id} value={opt.template_id}>
+                        {opt.label}
                       </option>
                     ))}
                   </select>
-                  <DeleteIconButton
-                    label={t('policies.templateRef.removeSlot')}
-                    onAccent
-                    onClick={() => removeSlot(row.key)}
-                  />
-                </div>
-
-                <div className="flex flex-col gap-2 bg-[var(--bg-muted)] px-3 py-3">
-                  {row.refs.map((ref, index) => (
-                    <RefRowEditor
-                      key={`${row.key}-${index}`}
-                      index={index + 1}
-                      value={ref}
-                      options={options}
-                      onChange={(v) => updateRef(row.key, index, v)}
-                      onRemove={() => removeRef(row.key, index)}
-                      allowRemove={!singleValue}
-                    />
-                  ))}
-                  {!singleValue ? (
-                    <button
-                      type="button"
-                      className="btn sm ghost mt-0.5 self-start border border-dashed border-[var(--border)]"
-                      onClick={() => addRef(row.key)}
-                    >
-                      + {t('policies.templateRef.addRef')}
-                    </button>
-                  ) : (
-                    <div className="text-[11px] text-muted mt-0.5">
-                      {t('policies.templateRef.singleValueHint')}
-                    </div>
-                  )}
-                </div>
+                )}
               </div>
-            );
-          })
-        )}
-
-        <button type="button" className="btn sm primary self-start" onClick={addSlot}>
-          + {t('policies.templateRef.addSlot')}
-        </button>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

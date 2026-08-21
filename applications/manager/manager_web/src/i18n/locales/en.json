@@ -33,7 +33,9 @@
       "go": "Go",
       "jumpTo": "Jump to page",
       "nav": "Pagination"
-    }
+    },
+    "pleaseSelect": "Please select",
+    "updatedAt": "Updated At"
   },
   "time": {
     "secondsAgo": "{{count}}s ago",
@@ -42,26 +44,26 @@
     "daysAgo": "{{count}}d ago"
   },
   "brand": {
-    "title": "JiuwenClaw",
+    "title": "{{productName}}",
     "sub": "Claw Manager"
   },
   "nav": {
-    "platform": "Platform",
+    "platform": "Console",
     "overview": "Overview",
     "instances": "Instance Management",
-    "config": "Global Config",
+    "config": "Template Management",
     "agentConfigTemplates": "Agent Config Templates",
     "modelTemplates": "Models",
     "skillWhitelistTemplates": "Preset Skills",
     "safetyGuardrails": "Safety Guardrails",
-    "extensionTemplates": "Extensions",
-    "agentManagement": "Agent Management",
+    "extensionTemplates": "Extension Config",
+    "agentManagement": "Agent Templates",
     "serviceConfigTemplates": "Service Resource Templates",
     "policies": "Instance Policies",
-    "iam": "Identity & Access",
+    "iam": "Identity Center",
     "users": "Users",
     "orgs": "Orgs",
-    "bots": "Bots"
+    "bots": "Agent Templates"
   },
   "safetyGuardrails": {
     "title": "Safety Guardrails",
@@ -87,7 +89,7 @@
   },
   "topology": {
     "title": "Instance Management",
-    "subtitle": "Manage JiuwenClaw instances",
+    "subtitle": "Manage {{productName}} instances",
     "createInstance": "Create Instance",
     "provisionLocal": "Provision Locally",
     "instanceStatus": "Status",
@@ -133,20 +135,21 @@
     "extraData": "Extra Data (instance_info.data)",
     "editData": "Edit extra data",
     "tabs": {
-      "access": "Access Control",
+      "access": "Instance Access",
       "policies": "Policies",
       "config": "Global Config",
       "status": "Status Monitor",
       "tokenQuota": "Token Quota",
       "cost": "Cost Analytics",
-      "audit": "Business Audit"
+      "audit": "Business Audit",
+      "resources": "Instance Resources"
     },
     "placeholder": {
       "empty": "Coming soon"
     },
     "access": {
-      "title": "Access Control",
-      "subtitle": "Configure instance access authorization"
+      "title": "Instance Access",
+      "subtitle": "Configure who can enter this instance"
     },
     "tokenQuota": {
       "title": "Token Quota",
@@ -159,6 +162,86 @@
     "audit": {
       "title": "Business Audit",
       "subtitle": "View instance business audit logs"
+    },
+    "accessPanel": {
+      "tabs": {
+        "users": "Users",
+        "orgs": "Organizations"
+      },
+      "instance": {
+        "users": "Authorized Users",
+        "usersHint": "Only authorized users can log in to the instance",
+        "orgs": "Authorized Organizations",
+        "orgsHint": "Only members of authorized organizations can log in to the instance",
+        "addUsers": "Add Users",
+        "addOrgs": "Add Organizations",
+        "noUsers": "No authorized users",
+        "noOrgs": "No authorized organizations",
+        "searchUsersPlaceholder": "Search user ID, user name, granted by, login permission",
+        "searchOrgsPlaceholder": "Search organization ID, organization name, granted by, login permission",
+        "userName": "User Name",
+        "orgName": "Organization Name",
+        "grantedBy": "Granted By",
+        "loginPolicy": "Login Permission",
+        "loginPolicyHint": "Deny takes priority over allow",
+        "loginAllow": "Allow",
+        "loginDeny": "Deny",
+        "expiresAt": "Expires At",
+        "neverExpires": "Never expires",
+        "expiresHint": "Leave empty for no expiration",
+        "confirmRemoveUsers": "Remove {{n}} selected user(s) from this instance?",
+        "confirmRemoveOrgs": "Remove {{n}} selected organization(s) from this instance?"
+      }
+    },
+    "resourcePanel": {
+      "tabs": {
+        "agent": "Agent Resources",
+        "serviceResource": "Service Resources"
+      },
+      "agent": {
+        "title": "Agent Resources",
+        "subtitle": "Configure Agent resources on this instance and set the authorization scope",
+        "agentLabel": "Agent Template",
+        "agentInstance": "Agent Instance",
+        "agentTemplate": "Agent Template",
+        "scopeLabel": "Authorization Scope",
+        "scopeAll": "Available to all",
+        "grantedBy": "Granted By",
+        "expiresAt": "Expires At",
+        "neverExpires": "Never expires",
+        "searchPlaceholder": "Search resource ID/name/description, template ID/name, granted by",
+        "add": "Add Agent Template",
+        "editGrant": "Edit grant · {{name}}",
+        "grantHint": "Empty match_expr allows any provisioned user on this instance.",
+        "expiresHint": "Leave empty for no expiration",
+        "empty": "No Agent templates on this instance",
+        "confirmRemove": "Remove {{n}} selected Agent template(s) from this instance?",
+        "resourceId": "Resource ID",
+        "resourceName": "Resource Name",
+        "resourceNamePlaceholder": "Enter resource name",
+        "resourceDesc": "Resource Description",
+        "resourceDescPlaceholder": "Enter resource description (optional)"
+      },
+      "serviceResource": {
+        "title": "Service Resources",
+        "subtitle": "Configure service resources on this instance and set the authorization scope",
+        "template": "Service Resource Template",
+        "scopeLabel": "Authorization Scope",
+        "scopeAll": "Available to all",
+        "priority": "Priority",
+        "grantedBy": "Granted By",
+        "expiresAt": "Expires At",
+        "neverExpires": "Never expires",
+        "expiresHint": "Leave empty for no expiration",
+        "searchPlaceholder": "Search resource ID/name/description, template ID/name, granted by, priority",
+        "add": "Add Service Resource",
+        "editGrant": "Edit grant · {{name}}",
+        "empty": "No service resources on this instance",
+        "confirmRemove": "Remove {{n}} selected service resource(s) from this instance?",
+        "resourceId": "Resource ID",
+        "resourceName": "Resource Name",
+        "resourceDesc": "Resource Description"
+      }
     }
   },
   "instanceConfig": {
@@ -442,7 +525,9 @@
         "skill_whitelist": "Skill whitelist (skill_whitelist)",
         "extension_config": "Extension config (extension_config)",
         "service_config": "Service config (service_config)"
-      }
+      },
+      "none": "None",
+      "noOptions": "No templates available"
     },
     "service": {
       "new": "New Service Policy",
@@ -455,8 +540,8 @@
       "deleteBlockedByAgentPoliciesGeneric": "This service policy still has linked agent policies. Delete them first."
     },
     "matchExpr": {
-      "modeAll": "Match all",
-      "modeCustom": "Conditional",
+      "modeAll": "Available to all",
+      "modeCustom": "Partially available",
       "allHint": "Empty means match any user_id / group_id / bot_id.",
       "combineOp": "Combine with",
       "rootCombineHint": "How sibling conditions connect",
@@ -475,9 +560,9 @@
       "resetToVisual": "Reset to visual editor",
       "invalid": "Fill in at least one condition value",
       "fields": {
-        "group_id": "group_id",
-        "user_id": "user_id",
-        "bot_id": "bot_id"
+        "group_id": "Group",
+        "user_id": "User",
+        "bot_id": "Agent"
       }
     },
     "agent": {
@@ -510,7 +595,7 @@
   "iam": {
     "users": "User Management",
     "orgs": "Org Management",
-    "bots": "Bot Management",
+    "bots": "Agent Templates",
     "newUser": "New User",
     "batchNewUser": "Batch Create",
     "batchImport": "Import",
@@ -523,8 +608,8 @@
     "editUser": "Edit User",
     "newOrg": "New Org",
     "editOrg": "Edit Org",
-    "newBot": "New Bot",
-    "editBot": "Edit Bot",
+    "newBot": "New Agent Template",
+    "editBot": "Edit Agent Template",
     "displayName": "Display Name",
     "username": "Username (for login)",
     "password": "Password",
@@ -537,20 +622,20 @@
     "description": "Description",
     "groupId": "Group ID",
     "userId": "User ID",
-    "botId": "Bot ID",
+    "botId": "Template ID",
     "role": "Role",
     "belongOrgs": "Member of (multi-select; none = no org)",
     "noOrgs": "No orgs",
     "noUsers": "No users",
-    "noBots": "No bots",
-    "visibility": "Visibility (who can use this bot)",
-    "visibilityHint": "Empty = nobody. Check “Global” to allow everyone.",
+    "noBots": "No agent templates",
+    "visibility": "Authorization (who can use this Agent)",
+    "visibilityHint": "A request may use this Agent when match_expr hits. “Match all” = any provisioned user on this instance.",
     "globalAll": "Global (everyone)",
     "visibleOrgs": "Visible to these orgs",
     "visibleUsers": "Visible to these users",
     "confirmDeleteOrg": "Delete org “{{name}}”? (removes its memberships & visibility)",
     "confirmDeleteUser": "Delete user “{{name}}” ({{id}})?",
-    "confirmDeleteBot": "Delete bot “{{name}}”? (clears its visibility)",
+    "confirmDeleteBot": "Delete agent template \"{{name}}\"? Instance grants will also be removed.",
     "addUser": "Add users",
     "userPickerHint": "Pick an org on the left, check its users on the right, then click Add",
     "pickOrg": "Select org…",
@@ -587,9 +672,9 @@
     "botVisibilityHint": "Visibility is per-instance: pick an instance from the dropdown, then \"Edit visibility\" for the bot.",
     "globalAllOnInstance": "Global (everyone on this instance)",
     "noInstanceForVis": "No instances available; cannot set visibility.",
-    "visibilityAllInstancesHint": "Visibility is per-instance — edit it under a specific instance tab; here you only edit basic info.",
+    "visibilityAllInstancesHint": "Grants are per-instance — edit them under a specific instance tab; here you only edit basic info.",
     "tplBinding": "Template binding",
-    "tplBindingHint": "Bind a template per slot for this bot on this instance; leave \"None\" to inherit defaults.",
+    "tplBindingHint": "Bind a config template per slot for this Agent on this instance; leave \"None\" to inherit defaults.",
     "tplNone": "None",
     "tplNoOptions": "No templates",
     "tpl_default_model": "Default model",
@@ -598,10 +683,14 @@
     "tpl_vision_model": "Vision model",
     "tpl_skill_whitelist": "Skill whitelist",
     "tpl_extension_config": "Extension config",
-    "tpl_service_config": "Service config"
+    "tpl_service_config": "Service config",
+    "enabled": "Enabled",
+    "agentTags": "Tags",
+    "templateRef": "Template references",
+    "templateRefHint": "Config templates referenced by this Agent; unconfigured slots fall back to policy defaults."
   },
   "auth": {
-    "loginTitle": "JiuwenSwarm Manager Login",
+    "loginTitle": "{{productName}} Manager Login",
     "username": "Username",
     "password": "Password",
     "login": "Sign in",
@@ -621,10 +710,10 @@
     "brandSub": "Web Server",
     "myOrgs": "My Organizations",
     "pickOrgFirst": "Pick an organization to continue",
-    "availableBots": "Available Bots",
-    "noBots": "No bots available in this org",
+    "availableBots": "Available Agents",
+    "noBots": "No agents available in this org",
     "switchOrg": "Switch org",
-    "pickBot": "Select a bot",
+    "pickBot": "Select an agent",
     "noOrgs": "You have no organizations yet. Please contact an administrator.",
     "tabChat": "Chat",
     "tabSchedule": "Scheduled Tasks",
@@ -633,5 +722,21 @@
     "tabWip": "Coming soon…",
     "chatLoading": "Loading…",
     "chatLoadingSlow": "Taking longer than usual. Please wait…"
+  },
+  "agentTemplate": {
+    "title": "Agent Management",
+    "subtitle": "Maintain the platform Agent template catalog",
+    "new": "New Agent Template",
+    "edit": "Edit Agent Template",
+    "templateName": "Template Name",
+    "templateDescription": "Description",
+    "agentTags": "Tags",
+    "agentTagsHint": "Comma-separated, e.g. chat,ops",
+    "templateRef": "Template references",
+    "templateRefHint": "Config templates referenced by this Agent; unconfigured slots fall back to policy defaults.",
+    "searchPlaceholder": "Search template ID, name, description, or tags",
+    "updatedAt": "Updated",
+    "fieldRequired": "Please fill in {{field}}",
+    "deleteConfirm": "Delete agent template \"{{name}}\"? Instance grants will also be removed."
   }
 }

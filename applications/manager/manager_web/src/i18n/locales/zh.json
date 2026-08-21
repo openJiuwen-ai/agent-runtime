@@ -33,7 +33,9 @@
       "go": "跳转",
       "jumpTo": "跳转到页码",
       "nav": "分页导航"
-    }
+    },
+    "pleaseSelect": "请选择",
+    "updatedAt": "更新时间"
   },
   "time": {
     "secondsAgo": "{{count}}s 前",
@@ -42,26 +44,26 @@
     "daysAgo": "{{count}}d 前"
   },
   "brand": {
-    "title": "JiuwenClaw",
+    "title": "{{productName}}",
     "sub": "Claw Manager"
   },
   "nav": {
-    "platform": "平台",
+    "platform": "控制台",
     "overview": "总览",
     "instances": "实例管理",
-    "config": "全局配置",
+    "config": "模板管理",
     "agentConfigTemplates": "Agent配置模板",
     "modelTemplates": "模型",
     "skillWhitelistTemplates": "预置Skill",
     "safetyGuardrails": "安全护栏",
     "extensionTemplates": "扩展配置",
-    "agentManagement": "Agent管理",
+    "agentManagement": "Agent模板",
     "serviceConfigTemplates": "服务资源模板",
     "policies": "实例策略",
-    "iam": "身份与访问",
+    "iam": "身份中心",
     "users": "用户",
     "orgs": "组织",
-    "bots": "Bot"
+    "bots": "Agent模板"
   },
   "safetyGuardrails": {
     "title": "安全护栏",
@@ -87,7 +89,7 @@
   },
   "topology": {
     "title": "实例管理",
-    "subtitle": "管理 JiuwenClaw 实例",
+    "subtitle": "管理 {{productName}} 实例",
     "createInstance": "新建实例",
     "provisionLocal": "本地一键拉起",
     "instanceStatus": "实例状态",
@@ -133,20 +135,21 @@
     "extraData": "扩展数据 (instance_info.data)",
     "editData": "编辑扩展数据",
     "tabs": {
-      "access": "访问授权",
+      "access": "实例准入",
       "policies": "实例策略",
       "config": "全局配置",
       "status": "状态监控",
       "tokenQuota": "Token配额",
       "cost": "成本统计",
-      "audit": "业务审计"
+      "audit": "业务审计",
+      "resources": "实例资源"
     },
     "placeholder": {
       "empty": "功能开发中，敬请期待"
     },
     "access": {
-      "title": "访问授权",
-      "subtitle": "配置实例访问授权策略"
+      "title": "实例准入",
+      "subtitle": "配置谁可以进入本实例"
     },
     "tokenQuota": {
       "title": "Token配额",
@@ -159,6 +162,86 @@
     "audit": {
       "title": "业务审计",
       "subtitle": "查看实例业务审计日志"
+    },
+    "accessPanel": {
+      "tabs": {
+        "users": "用户",
+        "orgs": "组织"
+      },
+      "instance": {
+        "users": "已授权用户",
+        "usersHint": "授权用户才能登录到实例",
+        "orgs": "已授权组织",
+        "orgsHint": "授权组织的成员才能登录到实例",
+        "addUsers": "添加用户",
+        "addOrgs": "添加组织",
+        "noUsers": "暂无已授权用户",
+        "noOrgs": "暂无已授权组织",
+        "searchUsersPlaceholder": "搜索用户 ID、用户名称、授权人、登录权限",
+        "searchOrgsPlaceholder": "搜索组织 ID、组织名称、授权人、登录权限",
+        "userName": "用户名称",
+        "orgName": "组织名称",
+        "grantedBy": "授权人",
+        "loginPolicy": "登录权限",
+        "loginPolicyHint": "拒绝优先级高于允许",
+        "loginAllow": "允许",
+        "loginDeny": "拒绝",
+        "expiresAt": "过期时间",
+        "neverExpires": "永不过期",
+        "expiresHint": "留空表示永不过期",
+        "confirmRemoveUsers": "从本实例移除选中的 {{n}} 个用户？",
+        "confirmRemoveOrgs": "从本实例移除选中的 {{n}} 个组织？"
+      }
+    },
+    "resourcePanel": {
+      "tabs": {
+        "agent": "Agent 资源",
+        "serviceResource": "服务资源"
+      },
+      "agent": {
+        "title": "Agent 资源",
+        "subtitle": "在本实例上配置Agent资源，并配置授权范围",
+        "agentLabel": "Agent模板",
+        "agentInstance": "Agent实例",
+        "agentTemplate": "Agent模板",
+        "scopeLabel": "授权范围",
+        "scopeAll": "全员可用",
+        "grantedBy": "授权人",
+        "expiresAt": "过期时间",
+        "neverExpires": "永不过期",
+        "searchPlaceholder": "搜索资源 ID、资源名称、资源描述、模板 ID/名称、授权人",
+        "add": "添加Agent",
+        "editGrant": "编辑授权 · {{name}}",
+        "grantHint": "match_expr 为空表示该实例上已准入用户均可使用。",
+        "expiresHint": "留空表示永不过期",
+        "empty": "本实例尚未添加 Agent 模板",
+        "confirmRemove": "从本实例移除选中的 {{n}} 个 Agent 模板？",
+        "resourceId": "资源 ID",
+        "resourceName": "资源名称",
+        "resourceNamePlaceholder": "请输入资源名称",
+        "resourceDesc": "资源描述",
+        "resourceDescPlaceholder": "请输入资源描述（可选）"
+      },
+      "serviceResource": {
+        "title": "服务资源",
+        "subtitle": "在本实例上配置服务资源，并配置授权范围",
+        "template": "服务资源模板",
+        "scopeLabel": "授权范围",
+        "scopeAll": "全员可用",
+        "priority": "优先级",
+        "grantedBy": "授权人",
+        "expiresAt": "过期时间",
+        "neverExpires": "永不过期",
+        "expiresHint": "留空表示永不过期",
+        "searchPlaceholder": "搜索资源 ID、资源名称、资源描述、模板 ID/名称、授权人、优先级",
+        "add": "添加服务资源",
+        "editGrant": "编辑授权 · {{name}}",
+        "empty": "本实例尚未添加服务资源",
+        "confirmRemove": "从本实例移除选中的 {{n}} 个服务资源？",
+        "resourceId": "资源 ID",
+        "resourceName": "资源名称",
+        "resourceDesc": "资源描述"
+      }
     }
   },
   "instanceConfig": {
@@ -442,7 +525,9 @@
         "skill_whitelist": "Skill 白名单 (skill_whitelist)",
         "extension_config": "扩展配置 (extension_config)",
         "service_config": "服务配置 (service_config)"
-      }
+      },
+      "none": "不选择",
+      "noOptions": "暂无可选模板"
     },
     "service": {
       "new": "新建服务策略",
@@ -455,8 +540,8 @@
       "deleteBlockedByAgentPoliciesGeneric": "该服务策略下仍有关联的 Agent 策略，请先删除这些 Agent 策略后再删除服务策略。"
     },
     "matchExpr": {
-      "modeAll": "全部匹配",
-      "modeCustom": "条件匹配",
+      "modeAll": "全员可用",
+      "modeCustom": "部分可用",
       "allHint": "留空表示任意 user_id / group_id / bot_id 均命中。",
       "combineOp": "连接方式",
       "rootCombineHint": "同级条件之间的默认连接方式",
@@ -475,9 +560,9 @@
       "resetToVisual": "重置为可视化编辑",
       "invalid": "请至少填写一条匹配条件的值",
       "fields": {
-        "group_id": "group_id",
-        "user_id": "user_id",
-        "bot_id": "bot_id"
+        "group_id": "群组",
+        "user_id": "用户",
+        "bot_id": "Agent"
       }
     },
     "agent": {
@@ -510,7 +595,7 @@
   "iam": {
     "users": "用户管理",
     "orgs": "组织管理",
-    "bots": "Bot 管理",
+    "bots": "Agent 模板",
     "newUser": "新建用户",
     "batchNewUser": "批量新建",
     "batchImport": "确认导入",
@@ -523,8 +608,8 @@
     "editUser": "编辑用户",
     "newOrg": "新建组织",
     "editOrg": "编辑组织",
-    "newBot": "新建 Bot",
-    "editBot": "编辑 Bot",
+    "newBot": "新建 Agent 模板",
+    "editBot": "编辑 Agent 模板",
     "displayName": "显示名",
     "username": "用户名(登录用)",
     "password": "密码",
@@ -537,20 +622,20 @@
     "description": "描述",
     "groupId": "组织 ID",
     "userId": "用户 ID",
-    "botId": "Bot ID",
+    "botId": "模板 ID",
     "role": "角色",
     "belongOrgs": "所属组织(可多选;不选=无组织)",
     "noOrgs": "暂无组织",
     "noUsers": "暂无用户",
-    "noBots": "暂无 Bot",
-    "visibility": "可见性(谁能用这个 bot)",
-    "visibilityHint": "未配置 = 谁都看不到。勾选“全局可用”则所有人可用。",
+    "noBots": "暂无 Agent 模板",
+    "visibility": "授权（谁能用这个 Agent）",
+    "visibilityHint": "用 match_expr 判定当前请求是否可用。全部匹配 = 该实例上已准入用户均可用。",
     "globalAll": "全局可用(所有人)",
     "visibleOrgs": "对这些组织可见",
     "visibleUsers": "对这些用户可见",
     "confirmDeleteOrg": "删除组织「{{name}}」？(会解除其成员关系与可见性)",
     "confirmDeleteUser": "删除用户「{{name}}」({{id}})？",
-    "confirmDeleteBot": "删除 Bot「{{name}}」？(会清除其可见性配置)",
+    "confirmDeleteBot": "删除 Agent 模板「{{name}}」？(会清除其在各实例上的授权)",
     "addUser": "添加用户",
     "userPickerHint": "左边选组织,右边勾选其中的用户,再点「添加」",
     "pickOrg": "选择组织…",
@@ -587,9 +672,9 @@
     "botVisibilityHint": "可见范围按实例设置：在「实例」下拉选中实例后，对该 bot「编辑可见范围」。",
     "globalAllOnInstance": "全局（该实例全员可见）",
     "noInstanceForVis": "暂无实例，无法设置可见范围。",
-    "visibilityAllInstancesHint": "可见范围按实例设置，请到具体实例选项卡编辑；此处仅改基本信息。",
+    "visibilityAllInstancesHint": "授权按实例设置，请到具体实例选项卡编辑；此处仅改基本信息。",
     "tplBinding": "模板绑定",
-    "tplBindingHint": "给该 bot 在本实例上指定各槽位用哪个模板；留「无」则不绑（回落默认）。",
+    "tplBindingHint": "给该 Agent 模板在本实例上指定各槽位用哪个配置模板；留「无」则不绑（回落默认）。",
     "tplNone": "无",
     "tplNoOptions": "无可选模板",
     "tpl_default_model": "默认模型",
@@ -598,10 +683,14 @@
     "tpl_vision_model": "视觉模型",
     "tpl_skill_whitelist": "Skill 白名单",
     "tpl_extension_config": "扩展配置",
-    "tpl_service_config": "服务配置"
+    "tpl_service_config": "服务配置",
+    "enabled": "启用",
+    "agentTags": "标签",
+    "templateRef": "配置模板引用",
+    "templateRefHint": "本 Agent 模板引用的各槽位配置；未配置的槽位运行时回落策略默认。"
   },
   "auth": {
-    "loginTitle": "JiuwenSwarm 管理台登录",
+    "loginTitle": "{{productName}} 管理台登录",
     "username": "用户名",
     "password": "密码",
     "login": "登录",
@@ -621,10 +710,10 @@
     "brandSub": "Web Server",
     "myOrgs": "我的组织",
     "pickOrgFirst": "请先选择一个组织进入",
-    "availableBots": "可用 Bot",
-    "noBots": "该组织下暂无可用 Bot",
+    "availableBots": "可用 Agent",
+    "noBots": "该组织下暂无可用 Agent",
     "switchOrg": "切换组织",
-    "pickBot": "请选择一个 Bot",
+    "pickBot": "请选择一个 Agent",
     "noOrgs": "你还没有任何组织,请联系管理员",
     "tabChat": "聊天",
     "tabSchedule": "定时任务",
@@ -633,5 +722,21 @@
     "tabWip": "建设中…",
     "chatLoading": "正在加载…",
     "chatLoadingSlow": "加载较慢,请稍候…"
+  },
+  "agentTemplate": {
+    "title": "Agent 管理",
+    "subtitle": "维护平台 Agent 模板目录",
+    "new": "新建 Agent 模板",
+    "edit": "编辑 Agent 模板",
+    "templateName": "模板名称",
+    "templateDescription": "模板描述",
+    "agentTags": "标签",
+    "agentTagsHint": "逗号分隔，例如 chat,ops",
+    "templateRef": "配置模板引用",
+    "templateRefHint": "本 Agent 模板引用的各槽位配置；未配置的槽位运行时回落策略默认。",
+    "searchPlaceholder": "搜索模板 ID、模板名称、模板描述、标签",
+    "updatedAt": "修改时间",
+    "fieldRequired": "请填写{{field}}",
+    "deleteConfirm": "确认删除 Agent 模板「{{name}}」？会清除其在各实例上的授权。"
   }
 }

@@ -11,10 +11,13 @@ import { toast } from '../../stores/uiStore';
 import { InstancePoliciesPanel } from './instancePoliciesPanel/InstancePoliciesPanel';
 import { InstanceConfigPanel } from './instanceConfigPanel/InstanceConfigPanel';
 import { InstanceDetailPanel } from './instanceDetailPanel/instanceDetailPanel';
+import { InstanceAccessPanel } from './instanceAccessPanel/InstanceAccessPanel';
+import { InstanceResourcePanel } from './instanceResourcePanel/InstanceResourcePanel';
 import { InstancePlaceholderPanel } from './InstancePlaceholderPanel';
 
 export type InstancePageTab =
   | 'access'
+  | 'resources'
   | 'policies'
   | 'config'
   | 'status'
@@ -38,6 +41,7 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
 
   const mainTabs: { key: InstancePageTab; label: string; href: string; hidden?: boolean }[] = [
     { key: 'access', label: t('instanceDetail.tabs.access'), href: `/instances/${instanceId}/access` },
+    { key: 'resources', label: t('instanceDetail.tabs.resources'), href: `/instances/${instanceId}/resources` },
     { key: 'policies', label: t('instanceDetail.tabs.policies'), href: `/instances/${instanceId}/policies`, hidden: true },
     { key: 'config', label: t('instanceDetail.tabs.config'), href: `/instances/${instanceId}/config` },
     { key: 'status', label: t('instanceDetail.tabs.status'), href: `/instances/${instanceId}/status` },
@@ -113,12 +117,8 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
         </div>
 
         <div className="w-full min-w-0 shrink-0">
-          {tab === 'access' && (
-            <InstancePlaceholderPanel
-              titleKey="instanceDetail.access.title"
-              subtitleKey="instanceDetail.access.subtitle"
-            />
-          )}
+          {tab === 'access' && <InstanceAccessPanel instanceId={instanceId} />}
+          {tab === 'resources' && <InstanceResourcePanel instanceId={instanceId} />}
           {tab === 'policies' && <InstancePoliciesPanel instanceId={instanceId} />}
           {tab === 'config' && <InstanceConfigPanel instanceId={instanceId} />}
           {tab === 'status' && (

@@ -1,16 +1,70 @@
-"""模板 API 请求/响应模型：model_template、extension_config_template、skill_whitelist_template、service_config_template。"""
+"""模板 API 请求/响应模型。
+
+涵盖 model_template、extension_config_template、skill_whitelist_template、
+service_config_template、agent_template。
+"""
 
 from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+
+from manager_server.infrastructure.template_ref import (
+    normalize_template_ref,
+    normalize_template_ref_optional,
+)
 
 ModelTypeLiteral = Literal["default", "video", "audio", "vision"]
 ExtensionComponentLiteral = Literal["gateway", "agent_server"]
 ExtensionHookTypeLiteral = Literal["pre_request", "post_request", "error", "schedule"]
 ImagePullPolicyLiteral = Literal["Always", "IfNotPresent", "Never"]
 TemplateIdPath = Annotated[str, Field(min_length=1, max_length=100)]
+TemplateRefField = Annotated[dict[str, list[str]], BeforeValidator(normalize_template_ref)]
+OptionalTemplateRefField = Annotated[
+    dict[str, list[str]] | None,
+    BeforeValidator(normalize_template_ref_optional),
+]
+
+
+class AgentTemplateCreateBody(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    template_name: str = Field(..., min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=512)
+    agent_tags: list[str] | None = None
+    template_ref: TemplateRefField = Field(default_factory=dict)
+    enabled: bool = True
+    data: dict[str, Any] | None = None
+
+
+class AgentTemplateUpdateBody(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    template_name: str | None = Field(default=None, min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=512)
+    agent_tags: list[str] | None = None
+    template_ref: OptionalTemplateRefField = None
+    enabled: bool | None = None
+    data: dict[str, Any] | None = None
+
+
+class AgentTemplateListQuery(BaseModel):
+    """Agent 模板列表查询参数。"""
+
+    page: int = Field(1, ge=1)
+    page_size: int = Field(20, ge=1, le=200)
+    enabled: bool | None = None
+    search: str | None = Field(
+        default=None,
+        max_length=256,
+        description="按 template_id、template_name、description、agent_tags 模糊搜索",
+    )
+    sort_by: str | None = Field(
+        default=None,
+        description="排序字段：template_name、description、template_id、updated_at",
+    )
+    sort_order: str | None = Field(default=None, description="排序方向：asc、desc")
 
 
 class ModelTemplateCreateBody(BaseModel):

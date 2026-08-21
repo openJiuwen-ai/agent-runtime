@@ -9,8 +9,9 @@ from manager_server.manager_ws_server import ManagerWsServer
 
 from .application_config_routers import application_config_router
 from .config_effective_policy_routers import config_effective_policy_router
-from .iam_routers import bot_router, me_router
-from .instance_binding_routers import binding_router, gateway_lookup_router
+from .user_console_routers import user_console_router
+from .instance_access_routers import gateway_lookup_router, instance_grant_router
+from .instance_resource_routers import instance_resource_router
 from .instance_routers import instance_router
 from .template_routers import templates_router
 
@@ -21,15 +22,15 @@ INSTANCES_PREFIX = "/instances"
 
 def router_register(app: FastAPI) -> None:
     v1_router = APIRouter(prefix="/v1")
-    # 登录/用户/组织 已迁至独立认证服务(jiuwenclaw_identity);此处只留 bot 与"我可见的 bot"。
-    v1_router.include_router(bot_router, prefix="/bots", tags=["IAM Bots"])
-    v1_router.include_router(me_router, prefix="/me", tags=["Me"])
+    # 用户控制台：当前用户可见 Agent。
+    v1_router.include_router(user_console_router, prefix="/user-console", tags=["User Console"])
+    v1_router.include_router(templates_router, tags=["Templates"])
+    v1_router.include_router(instance_resource_router, tags=["Instance Resource"])
     v1_router.include_router(
         instance_router,
         prefix=INSTANCES_PREFIX,
         tags=["Instances"],
     )
-    v1_router.include_router(templates_router, tags=["Templates"])
     v1_router.include_router(
         application_config_router,
         prefix=INSTANCES_PREFIX,
@@ -40,14 +41,14 @@ def router_register(app: FastAPI) -> None:
         prefix=INSTANCES_PREFIX,
         tags=["Config Effective Policy"],
     )
-    # 实例 ↔ 用户/组织/bot 绑定（花名册加删、bot 可见范围）。
+    # 实例准入：用户/组织 ↔ 实例授权（instance_grant）。
     v1_router.include_router(
-        binding_router,
+        instance_grant_router,
         prefix=INSTANCES_PREFIX,
-        tags=["Instance Bindings"],
+        tags=["Instance Access"],
     )
-    # 反查：一批实体各绑了哪些实例（所属实例列）。
-    v1_router.include_router(gateway_lookup_router, tags=["Instance Bindings"])
+    # 反查：一批实体各授权了哪些实例。
+    v1_router.include_router(gateway_lookup_router, tags=["Instance Access"])
 
     @api_router.get("/health", tags=["System"])
     async def health_check() -> dict[str, str]:

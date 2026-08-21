@@ -69,7 +69,19 @@ export function Sidebar() {
     },
   ];
 
-  const agentTemplateItems: NavItem[] = [
+  const agentManagementItem: NavItem = {
+    key: 'agent-templates',
+    pathPrefix: '/agent-templates',
+    href: '/agent-templates',
+    label: t('nav.agentManagement'),
+    icon: (
+      <svg className="w-4 h-4 nav-item__icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M9 3h6m-3 0v3m-5 0h10a2 2 0 012 2v9a2 2 0 01-2 2H7a2 2 0 01-2-2V8a2 2 0 012-2zM9 13h.01M15 13h.01" />
+      </svg>
+    ),
+  };
+
+  const agentConfigTemplateItems: NavItem[] = [
     {
       key: 'model-templates',
       pathPrefix: '/model-templates',
@@ -119,17 +131,6 @@ export function Sidebar() {
 
   const configTopItems: NavItem[] = [
     {
-      key: 'bots',
-      pathPrefix: '/bots',
-      href: '/bots',
-      label: t('nav.agentManagement'),
-      icon: (
-        <svg className="w-4 h-4 nav-item__icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M9 3h6m-3 0v3m-5 0h10a2 2 0 012 2v9a2 2 0 01-2 2H7a2 2 0 01-2-2V8a2 2 0 012-2zM9 13h.01M15 13h.01" />
-        </svg>
-      ),
-    },
-    {
       key: 'service-config-templates',
       pathPrefix: '/service-config-templates',
       href: '/service-config-templates',
@@ -152,14 +153,14 @@ export function Sidebar() {
       key: 'users',
       pathPrefix: '/users',
       href: '/users',
-      label: t('nav.users', '用户'),
+      label: t('nav.users'),
       icon: iamIcon('M15 19.5a3 3 0 00-6 0M12 11a3 3 0 100-6 3 3 0 000 6zM3 19.5a9 9 0 0118 0'),
     },
     {
       key: 'orgs',
       pathPrefix: '/orgs',
       href: '/orgs',
-      label: t('nav.orgs', '组织'),
+      label: t('nav.orgs'),
       icon: iamIcon('M3 21h18M5 21V7l7-4 7 4v14M9 21v-4h6v4M9 10h.01M15 10h.01M9 13h.01M15 13h.01'),
     },
   ];
@@ -215,14 +216,15 @@ export function Sidebar() {
           </button>
           {agentTemplatesOpen && (
             <div className="nav-subgroup__children space-y-1">
-              {agentTemplateItems.map((item) => renderItem(item, true))}
+              {agentConfigTemplateItems.map((item) => renderItem(item, true))}
             </div>
           )}
         </div>
+        {renderItem(agentManagementItem)}
         {configTopItems.map((item) => renderItem(item))}
       </div>
 
-      <div className="nav-group-title nav-group-title--with-top-gap">{t('nav.iam', '身份与访问')}</div>
+      <div className="nav-group-title nav-group-title--with-top-gap">{t('nav.iam')}</div>
       <div className="space-y-1">{iamItems.map((item) => renderItem(item))}</div>
 
       <div className="flex-1" />

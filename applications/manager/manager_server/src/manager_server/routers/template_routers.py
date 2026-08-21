@@ -9,6 +9,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 
+from manager_server.core.template.agent_template import AgentTemplateService
 from manager_server.core.template.extension_config_template import (
     ExtensionConfigTemplateService,
 )
@@ -20,8 +21,12 @@ from manager_server.core.template.skill_whitelist_template import (
     SkillWhitelistTemplateService,
 )
 from manager_server.infrastructure.db import get_db_handler
+from manager_server.routers.deps import require_admin
 from manager_server.schemas.common_schemas import ResponseModel
 from manager_server.schemas.template_schemas import (
+    AgentTemplateCreateBody,
+    AgentTemplateListQuery,
+    AgentTemplateUpdateBody,
     ExtensionConfigTemplateCreateBody,
     ExtensionConfigTemplateListQuery,
     ExtensionConfigTemplateUpdateBody,
@@ -54,6 +59,78 @@ def _skill_whitelist_template_svc(handler: DBHandler) -> SkillWhitelistTemplateS
 
 def _service_config_template_svc(handler: DBHandler) -> ServiceConfigTemplateService:
     return ServiceConfigTemplateService(handler)
+
+
+def _agent_template_svc(handler: DBHandler) -> AgentTemplateService:
+    return AgentTemplateService(handler)
+
+
+# --- agent_template ---
+
+
+@templates_router.get("/agent-templates/", response_model=ResponseModel, dependencies=[Depends(require_admin)])
+async def list_agent_templates(
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+    query: Annotated[AgentTemplateListQuery, Query()],
+):
+    return ResponseModel(code=200, message="success", data=await _agent_template_svc(handler).list(query))
+
+
+@templates_router.post("/agent-templates/", response_model=ResponseModel, dependencies=[Depends(require_admin)])
+async def create_agent_template(
+    body: AgentTemplateCreateBody,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    try:
+        return ResponseModel(code=200, message="success", data=await _agent_template_svc(handler).create(body))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@templates_router.get(
+    "/agent-templates/{template_id}",
+    response_model=ResponseModel,
+    dependencies=[Depends(require_admin)],
+)
+async def get_agent_template(
+    template_id: TemplateIdPath,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    row = await _agent_template_svc(handler).get(template_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="agent_template not found")
+    return ResponseModel(code=200, message="success", data=row)
+
+
+@templates_router.patch(
+    "/agent-templates/{template_id}",
+    response_model=ResponseModel,
+    dependencies=[Depends(require_admin)],
+)
+async def update_agent_template(
+    template_id: TemplateIdPath,
+    body: AgentTemplateUpdateBody,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    row = await _agent_template_svc(handler).update(template_id, body)
+    if row is None:
+        raise HTTPException(status_code=404, detail="agent_template not found")
+    return ResponseModel(code=200, message="success", data=row)
+
+
+@templates_router.delete(
+    "/agent-templates/{template_id}",
+    response_model=ResponseModel,
+    dependencies=[Depends(require_admin)],
+)
+async def delete_agent_template(
+    template_id: TemplateIdPath,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    ok = await _agent_template_svc(handler).delete(template_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="agent_template not found")
+    return ResponseModel(code=200, message="success", data={"deleted": True})
 
 
 # --- model_template ---

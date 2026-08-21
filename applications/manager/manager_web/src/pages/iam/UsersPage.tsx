@@ -152,7 +152,7 @@ export function UsersPage() {
         <AddToInstanceModal
           title={t('iam.addToInstance', { defaultValue: '添加到 {{name}}', name: instName })}
           candidates={users.filter((u) => !roster?.has(u.user_id)).map((u) => ({ id: u.user_id, label: u.display_name, sub: u.user_id }))}
-          onConfirm={async (ids) => {
+          onConfirm={async ({ ids }) => {
             await InstanceBindingApi.bindUsers(filterJid, ids);
             toast('success', t('success.saved'));
             setShowAdd(false);

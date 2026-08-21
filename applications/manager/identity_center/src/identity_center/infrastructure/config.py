@@ -9,11 +9,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 def _resolve_env_files() -> tuple[str | Path, ...]:
-    candidates: list[Path] = [Path.cwd() / ".env"]
-    here = Path(__file__).resolve()
-    for depth in (5, 6):
-        candidates.append(here.parents[depth] / ".env")
-    return tuple(p for p in candidates if p.is_file())
+    """解析 applications/manager/.env（管理面统一配置文件）。"""
+    manager_dir = Path(__file__).resolve().parents[4]
+    env_file = manager_dir / ".env"
+    return (env_file,) if env_file.is_file() else ()
 
 
 class Settings(BaseSettings):
@@ -35,7 +34,6 @@ class Settings(BaseSettings):
     db_user: str = Field(default="root", validation_alias="IDENTITY_DB_USER")
     db_password: str = Field(default="root", validation_alias="IDENTITY_DB_PASSWORD")
     db_name: str = Field(default="identity", validation_alias="IDENTITY_DB_NAME")
-    pg_schema: str = Field(default="public", validation_alias="IDENTITY_PG_SCHEMA")
 
     # ---- JWT（RS256：私钥签发，资源服务器用公钥验签）----
     # 重构:统一去旧名 jiuwenclaw→openjiuwen;跨服务契约,manager_server 须用同一 issuer/audience 验签

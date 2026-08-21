@@ -217,9 +217,12 @@ manager-start web      # 仅 Web
 
 ## 常用环境变量
 
-可在仓库根目录创建 `.env`，各服务启动时自动读取：
+可在 `applications/manager/` 创建 `.env`（可复制 `.env.example`），各服务启动时自动读取：
 
 ```env
+# 产品主展示名（manager_web）
+VITE_PRODUCT_NAME=JiuwenSwarm
+
 # 身份中心
 IDENTITY_REST_HOST=0.0.0.0
 IDENTITY_REST_PORT=8770
@@ -244,6 +247,7 @@ MANAGER_WEB_PROXY_TARGET=http://127.0.0.1:8765
 MANAGER_WEB_IDP_TARGET=http://127.0.0.1:8770
 ```
 
+完整变量列表见 `applications/manager/.env.example`。
 ---
 
 ## 健康检查

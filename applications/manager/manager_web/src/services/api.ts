@@ -290,7 +290,7 @@ export const AuthApi = {
   },
 };
 
-// ---------- IAM（组织 / 用户 / bot）----------
+// ---------- IAM（组织 / 用户 / Agent 模板）----------
 
 export interface Org {
   group_id: string;
@@ -308,23 +308,41 @@ export interface IamUser {
   updated_at: string | null;
   group_ids?: string[];
 }
-export type BotScopeType = 'global' | 'org' | 'user';
-export interface BotVisibility {
+export type MatchExpr = string | string[];
+/** instance_agent_resource 表一行（授权即实例化）。 */
+export interface InstanceAgentResourceRecord {
   id: number;
   jiuwenclaw_id: string;
-  bot_id: string;
-  scope_type: BotScopeType;
-  scope_id: string;
-}
-export interface Bot {
-  bot_id: string;
-  name: string;
-  description: string | null;
-  status: string;
+  resource_id: string;
+  resource_name: string | null;
+  resource_desc: string | null;
+  ref_template_id: string;
+  match_expr: MatchExpr;
+  granted_by: string | null;
+  expires_at: string | null;
+  enabled: boolean;
+  data: Record<string, unknown> | null;
   created_at: string | null;
   updated_at: string | null;
-  visibility?: BotVisibility[];
 }
+export interface AgentTemplate {
+  id: number;
+  template_id: string;
+  template_name: string;
+  description: string | null;
+  agent_tags: string[] | null;
+  template_ref: Record<string, string[]>;
+  enabled: boolean;
+  data: Record<string, unknown> | null;
+  created_at: string | null;
+  updated_at: string | null;
+  resource_id?: string;
+  ref_template_id?: string;
+  /** 该模板关联的 instance_agent_resource 行 */
+  records?: InstanceAgentResourceRecord[];
+}
+/** @deprecated 使用 AgentTemplate */
+export type Bot = AgentTemplate;
 interface IamPaged<T> {
   items: T[];
   total: number;
@@ -367,62 +385,308 @@ export const UserApi = {
     }>('/v1/users/batch', { method: 'POST', body: { users } }),
 };
 
-export const BotApi = {
-  list: (page = 1, page_size = 200) => http<IamPaged<Bot>>('/v1/bots/', { query: { page, page_size } }),
-  get: (id: string) => http<Bot>(`/v1/bots/${encodeURIComponent(id)}`),
-  create: (body: { bot_id?: string; name: string; description?: string }) =>
-    http<Bot>('/v1/bots/', { method: 'POST', body }),
-  update: (id: string, body: { name?: string; description?: string; status?: string }) =>
-    http<Bot>(`/v1/bots/${encodeURIComponent(id)}`, { method: 'PATCH', body }),
-  remove: (id: string) => http<{ deleted: boolean }>(`/v1/bots/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+export const AgentTemplateApi = {
+  list: (params?: {
+    page?: number;
+    page_size?: number;
+    enabled?: boolean;
+    search?: string;
+    sort_by?: 'template_name' | 'description' | 'template_id' | 'updated_at';
+    sort_order?: 'asc' | 'desc';
+  }) => http<PageResult<AgentTemplate>>('/v1/agent-templates/', { query: params }),
+  get: (id: string) => http<AgentTemplate>(`/v1/agent-templates/${encodeURIComponent(id)}`),
+  create: (body: {
+    template_name: string;
+    description?: string;
+    agent_tags?: string[];
+    template_ref?: Record<string, string[]>;
+    enabled?: boolean;
+    data?: Record<string, unknown> | null;
+  }) => http<AgentTemplate>('/v1/agent-templates/', { method: 'POST', body }),
+  update: (
+    id: string,
+    body: {
+      template_name?: string;
+      description?: string;
+      agent_tags?: string[];
+      template_ref?: Record<string, string[]>;
+      enabled?: boolean;
+      data?: Record<string, unknown> | null;
+    },
+  ) => http<AgentTemplate>(`/v1/agent-templates/${encodeURIComponent(id)}`, { method: 'PATCH', body }),
+  remove: (id: string) =>
+    http<{ deleted: boolean }>(`/v1/agent-templates/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+};
+export const BotApi = AgentTemplateApi;
+
+// 某实例已实例化的 Agent（目录信息 + 该实例上的 instance_agent_resource）。
+export interface InstanceAgentResource extends AgentTemplate {
+  resource_id: string;
+  resource_name?: string | null;
+  resource_desc?: string | null;
+  /** 该 resource_id 下的 instance_agent_resource 行 */
+  records: InstanceAgentResourceRecord[];
+}
+
+/** 实例 Agent 资源（instance_agent_resource，admin）。 */
+export const InstanceAgentResourceApi = {
+  listInstanceAgentResources: (
+    jid: string,
+    params?: {
+      page?: number;
+      page_size?: number;
+      search?: string;
+      enabled?: boolean;
+      sort_by?: 'resource_id' | 'template_name' | 'granted_by' | 'expires_at' | 'enabled' | 'updated_at';
+      sort_order?: 'asc' | 'desc';
+    },
+  ) =>
+    http<PageResult<InstanceAgentResource>>(
+      `/v1/instances/${encodeURIComponent(jid)}/agent-resources`,
+      { query: params },
+    ),
+  create: (
+    jid: string,
+    body: {
+      ref_template_id: string;
+      match_exprs: MatchExpr[];
+      resource_name: string;
+      resource_desc?: string | null;
+      enabled?: boolean;
+      expires_at?: string | null;
+    },
+  ) =>
+    http<{ items: InstanceAgentResourceRecord[] }>(
+      `/v1/instances/${encodeURIComponent(jid)}/agent-resources`,
+      { method: 'POST', body },
+    ),
+  update: (
+    jid: string,
+    resourceId: string,
+    body: {
+      match_exprs: MatchExpr[];
+      resource_name: string;
+      resource_desc?: string | null;
+      enabled?: boolean;
+      expires_at?: string | null;
+    },
+  ) =>
+    http<{ items: InstanceAgentResourceRecord[] }>(
+      `/v1/instances/${encodeURIComponent(jid)}/agent-resources/${encodeURIComponent(resourceId)}`,
+      { method: 'PATCH', body },
+    ),
+  remove: (jid: string, resourceId: string) =>
+    http<{ removed: boolean }>(
+      `/v1/instances/${encodeURIComponent(jid)}/agent-resources/${encodeURIComponent(resourceId)}`,
+      { method: 'DELETE' },
+    ),
 };
 
-// bot 在某实例上的可见范围（一条 = scope_type + scope_id）。
-export interface BotScope {
-  scope_type: BotScopeType;
-  scope_id: string;
-}
-// 某实例已配置的 bot（bot 目录信息 + 该实例上的可见范围集合）。
-export interface InstanceBot extends Bot {
-  scopes: BotScope[];
+/** instance_service_resource 表一行（授权即实例化）。 */
+export interface InstanceServiceResourceRecord {
+  id: number;
+  jiuwenclaw_id: string;
+  resource_id: string;
+  resource_name: string;
+  resource_desc: string | null;
+  ref_template_id: string;
+  match_expr: MatchExpr;
+  priority: number;
+  granted_by: string | null;
+  expires_at: string | null;
+  enabled: boolean;
+  data: Record<string, unknown> | null;
+  created_at: string | null;
+  updated_at: string | null;
 }
 
-/** 实例(gateway) ↔ 用户/组织/bot 绑定（全部走管理 API /api，admin）。 */
+/** 某实例已授权的服务资源（模板信息 + records）。 */
+export interface InstanceServiceResource {
+  id: number;
+  template_id: string;
+  template_name: string;
+  description: string | null;
+  enabled: boolean;
+  resource_id: string;
+  resource_name: string | null;
+  resource_desc: string | null;
+  ref_template_id: string;
+  records: InstanceServiceResourceRecord[];
+}
+
+/** 实例服务资源（instance_service_resource，admin）。 */
+export const InstanceServiceResourceApi = {
+  listInstanceResources: (
+    jid: string,
+    params?: {
+      page?: number;
+      page_size?: number;
+      search?: string;
+      enabled?: boolean;
+      sort_by?:
+        | 'resource_id'
+        | 'resource_name'
+        | 'template_name'
+        | 'priority'
+        | 'granted_by'
+        | 'expires_at'
+        | 'enabled'
+        | 'updated_at';
+      sort_order?: 'asc' | 'desc';
+    },
+  ) =>
+    http<PageResult<InstanceServiceResource>>(
+      `/v1/instances/${encodeURIComponent(jid)}/service-resources`,
+      { query: params },
+    ),
+  create: (
+    jid: string,
+    body: {
+      ref_template_id: string;
+      match_exprs: MatchExpr[];
+      resource_name: string;
+      resource_desc?: string | null;
+      priority?: number;
+      enabled?: boolean;
+      expires_at?: string | null;
+    },
+  ) =>
+    http<{ items: InstanceServiceResourceRecord[] }>(
+      `/v1/instances/${encodeURIComponent(jid)}/service-resources`,
+      { method: 'POST', body },
+    ),
+  update: (
+    jid: string,
+    resourceId: string,
+    body: {
+      match_exprs: MatchExpr[];
+      resource_name: string;
+      resource_desc?: string | null;
+      priority?: number;
+      enabled?: boolean;
+      expires_at?: string | null;
+    },
+  ) =>
+    http<{ items: InstanceServiceResourceRecord[] }>(
+      `/v1/instances/${encodeURIComponent(jid)}/service-resources/${encodeURIComponent(resourceId)}`,
+      { method: 'PATCH', body },
+    ),
+  remove: (jid: string, resourceId: string) =>
+    http<{ removed: boolean }>(
+      `/v1/instances/${encodeURIComponent(jid)}/service-resources/${encodeURIComponent(resourceId)}`,
+      { method: 'DELETE' },
+    ),
+};
+
+/** 实例准入绑定 instance_grant 行。 */
+export type LoginPolicy = 'allow' | 'deny';
+
+export interface InstanceGrant {
+  id: number;
+  jiuwenclaw_id: string;
+  subject_type: 'user' | 'org' | string;
+  subject_id: string;
+  granted_by: string | null;
+  login_policy: LoginPolicy | string;
+  expires_at: string | null;
+  enabled: boolean;
+  data: Record<string, unknown> | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export type InstanceBindOptions = {
+  login_policy?: LoginPolicy;
+  expires_at?: string | null;
+  enabled?: boolean;
+};
+
+/** 实例(gateway) ↔ 用户/组织 绑定（instance_grant；全部走管理 API /api，admin）。 */
 export const InstanceBindingApi = {
   // 用户 ↔ 实例
-  listUsers: (jid: string) => http<{ user_ids: string[] }>(`/v1/instances/${encodeURIComponent(jid)}/users`),
-  bindUsers: (jid: string, ids: string[]) =>
-    http<{ added: string[]; skipped: string[] }>(`/v1/instances/${encodeURIComponent(jid)}/users`, { method: 'POST', body: { ids } }),
-  unbindUsers: (jid: string, ids: string[]) =>
-    http<{ removed: string[] }>(`/v1/instances/${encodeURIComponent(jid)}/users`, { method: 'DELETE', body: { ids } }),
-  // 组织 ↔ 实例
-  listOrgs: (jid: string) => http<{ group_ids: string[] }>(`/v1/instances/${encodeURIComponent(jid)}/orgs`),
-  bindOrgs: (jid: string, ids: string[]) =>
-    http<{ added: string[]; skipped: string[] }>(`/v1/instances/${encodeURIComponent(jid)}/orgs`, { method: 'POST', body: { ids } }),
-  unbindOrgs: (jid: string, ids: string[]) =>
-    http<{ removed: string[] }>(`/v1/instances/${encodeURIComponent(jid)}/orgs`, { method: 'DELETE', body: { ids } }),
-  // bot ↔ 实例（可见范围）
-  listBots: (jid: string) => http<{ bots: InstanceBot[] }>(`/v1/instances/${encodeURIComponent(jid)}/bots`),
-  setBotVisibility: (jid: string, botId: string, scopes: BotScope[]) =>
-    http<{ visibility: BotVisibility[] }>(
-      `/v1/instances/${encodeURIComponent(jid)}/bots/${encodeURIComponent(botId)}/visibility`,
-      { method: 'PUT', body: { scopes } },
+  listUsers: (jid: string) =>
+    http<{ items: InstanceGrant[]; user_ids: string[] }>(
+      `/v1/instances/${encodeURIComponent(jid)}/users`,
     ),
-  removeBot: (jid: string, botId: string) =>
-    http<{ removed: boolean }>(`/v1/instances/${encodeURIComponent(jid)}/bots/${encodeURIComponent(botId)}`, { method: 'DELETE' }),
+  bindUsers: (jid: string, ids: string[], options?: InstanceBindOptions) =>
+    http<{ added: string[]; skipped: string[] }>(`/v1/instances/${encodeURIComponent(jid)}/users`, {
+      method: 'POST',
+      body: {
+        ids,
+        login_policy: options?.login_policy ?? 'allow',
+        expires_at: options?.expires_at ?? null,
+        enabled: options?.enabled ?? true,
+      },
+    }),
+  updateUserGrant: (
+    jid: string,
+    userId: string,
+    body: {
+      enabled?: boolean;
+      login_policy?: LoginPolicy;
+      expires_at?: string | null;
+      clear_expires_at?: boolean;
+    },
+  ) =>
+    http<InstanceGrant>(
+      `/v1/instances/${encodeURIComponent(jid)}/users/${encodeURIComponent(userId)}`,
+      { method: 'PATCH', body },
+    ),
+  unbindUsers: (jid: string, ids: string[]) =>
+    http<{ removed: string[] }>(`/v1/instances/${encodeURIComponent(jid)}/users`, {
+      method: 'DELETE',
+      body: { ids },
+    }),
+  // 组织 ↔ 实例
+  listOrgs: (jid: string) =>
+    http<{ items: InstanceGrant[]; group_ids: string[] }>(
+      `/v1/instances/${encodeURIComponent(jid)}/orgs`,
+    ),
+  bindOrgs: (jid: string, ids: string[], options?: InstanceBindOptions) =>
+    http<{ added: string[]; skipped: string[] }>(`/v1/instances/${encodeURIComponent(jid)}/orgs`, {
+      method: 'POST',
+      body: {
+        ids,
+        login_policy: options?.login_policy ?? 'allow',
+        expires_at: options?.expires_at ?? null,
+        enabled: options?.enabled ?? true,
+      },
+    }),
+  updateOrgGrant: (
+    jid: string,
+    groupId: string,
+    body: {
+      enabled?: boolean;
+      login_policy?: LoginPolicy;
+      expires_at?: string | null;
+      clear_expires_at?: boolean;
+    },
+  ) =>
+    http<InstanceGrant>(
+      `/v1/instances/${encodeURIComponent(jid)}/orgs/${encodeURIComponent(groupId)}`,
+      { method: 'PATCH', body },
+    ),
+  unbindOrgs: (jid: string, ids: string[]) =>
+    http<{ removed: string[] }>(`/v1/instances/${encodeURIComponent(jid)}/orgs`, {
+      method: 'DELETE',
+      body: { ids },
+    }),
   // 反查：一批实体各绑了哪些实例（所属实例列，防 N+1）。逗号分隔单参数,对反代最稳。
   userGateways: (userIds: string[]) =>
-    http<{ bindings: Record<string, string[]> }>('/v1/user-gateways', { query: { user_ids: userIds.join(',') } }),
+    http<{ bindings: Record<string, string[]> }>('/v1/user-gateways', {
+      query: { user_ids: userIds.join(',') },
+    }),
   orgGateways: (groupIds: string[]) =>
-    http<{ bindings: Record<string, string[]> }>('/v1/org-gateways', { query: { group_ids: groupIds.join(',') } }),
-  botGateways: (botIds: string[]) =>
-    http<{ bindings: Record<string, string[]> }>('/v1/bot-gateways', { query: { bot_ids: botIds.join(',') } }),
+    http<{ bindings: Record<string, string[]> }>('/v1/org-gateways', {
+      query: { group_ids: groupIds.join(',') },
+    }),
 };
 
-// 当前登录用户视角（用户面）：组织来自认证服务,可见 bot 来自管理 API。
-export const MeApi = {
+// 当前登录用户视角（用户控制台）：组织来自认证服务，可见 Agent 来自管理 API。
+export const UserConsoleApi = {
   orgs: () => idpHttp<{ orgs: Org[] }>('/v1/auth/me/orgs'),
-  bots: (groupId: string) => http<{ bots: Bot[] }>('/v1/me/bots', { query: { group_id: groupId } }),
+  agents: (groupId: string) =>
+    http<{ agents: AgentTemplate[] }>('/v1/user-console/agents', { query: { group_id: groupId } }),
 };
 
 // ---------- Instances ----------
