@@ -258,6 +258,23 @@ class SQLAlchemyHandler(DBHandler):
     async def _get_session(self) -> AsyncSession:
         return self.session_factory()
 
+    @staticmethod
+    def _filter_condition(column: Any, value: Any) -> Any:
+        """Build a WHERE clause.
+
+        Scalar values use equality; list/tuple/set values use SQL ``IN (...)``.
+        """
+        if isinstance(value, (list, tuple, set)):
+            return column.in_(list(value))
+        return column == value
+
+    def _apply_filters(self, query: Any, model: Any, filters: dict) -> Any:
+        for key, value in filters.items():
+            query = query.where(
+                self._filter_condition(getattr(model, key), value)
+            )
+        return query
+
     async def create(self, table_name: str, data: dict) -> Any:
         logger.debug("Creating record: table=%s", table_name)
         model = self._table_models.get(table_name)
@@ -281,9 +298,7 @@ class SQLAlchemyHandler(DBHandler):
             raise ValueError(f"Table {table_name} not initialized")
 
         async with await self._get_session() as session:
-            query = select(model)
-            for key, value in filters.items():
-                query = query.where(getattr(model, key) == value)
+            query = self._apply_filters(select(model), model, filters)
             result = await session.execute(query)
             record = result.scalar_one_or_none()
             logger.debug("Record found: table=%s, found=%s", table_name, record is not None)
@@ -297,9 +312,7 @@ class SQLAlchemyHandler(DBHandler):
             raise ValueError(f"Table {table_name} not initialized")
 
         async with await self._get_session() as session:
-            query = update(model)
-            for key, value in filters.items():
-                query = query.where(getattr(model, key) == value)
+            query = self._apply_filters(update(model), model, filters)
             query = query.values(**data)
             await session.execute(query)
             await session.commit()
@@ -314,9 +327,7 @@ class SQLAlchemyHandler(DBHandler):
             raise ValueError(f"Table {table_name} not initialized")
 
         async with await self._get_session() as session:
-            query = delete(model)
-            for key, value in filters.items():
-                query = query.where(getattr(model, key) == value)
+            query = self._apply_filters(delete(model), model, filters)
             result = await session.execute(query)
             await session.commit()
             deleted = result.rowcount > 0
@@ -346,9 +357,8 @@ class SQLAlchemyHandler(DBHandler):
         async with await self._get_session() as session:
             query = select(model)
             if filters:
-                for key, value in filters.items():
-                    query = query.where(getattr(model, key) == value)
-            
+                query = self._apply_filters(query, model, filters)
+
             # 处理排序
             if order_by:
                 if isinstance(order_by, str):
@@ -388,8 +398,7 @@ class SQLAlchemyHandler(DBHandler):
 
         stmt = select(func.count()).select_from(model)
         if filters:
-            for key, value in filters.items():
-                stmt = stmt.where(getattr(model, key) == value)
+            stmt = self._apply_filters(stmt, model, filters)
 
         async with await self._get_session() as session:
             result = await session.execute(stmt)
