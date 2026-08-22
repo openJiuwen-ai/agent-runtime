@@ -12,6 +12,11 @@ import { getProductName } from '../../utils/env';
 const CHAT_BASE = (import.meta.env.VITE_CHAT_BASE_URL as string | undefined) || '/chat';
 const AUTH_EXPIRED_MESSAGE = 'jiuwenswarm:auth-expired';
 
+/** 用户控制台里实例化 Agent 的运行时标识；回退 template_id。 */
+function agentRuntimeId(agent: AgentTemplate): string {
+  return agent.resource_id || agent.template_id;
+}
+
 export function UserConsole() {
   const { t } = useTranslation();
   const { user, logout } = useAuth();
@@ -84,7 +89,7 @@ function OrgWorkspace({ org, userId, onSwitchOrg }: { org: Org; userId: string; 
   const { data: agentsData, loading } = useAsync(() => UserConsoleApi.agents(org.group_id), [org.group_id]);
   const [agentId, setAgentId] = useState<string | null>(null);
   const agents = agentsData?.agents ?? [];
-  const currentAgent = agents.find((a) => (a.agent_id || a.template_id) === agentId) ?? null;
+  const currentAgent = agents.find((a) => agentRuntimeId(a) === agentId) ?? null;
 
   // 切组织后重置选中的 agent
   useEffect(() => { setAgentId(null); }, [org.group_id]);
@@ -100,7 +105,7 @@ function OrgWorkspace({ org, userId, onSwitchOrg }: { org: Org; userId: string; 
         <div className="nav-group-title nav-group-title--uppercase">{t('userConsole.availableBots')}</div>
         <div className="space-y-1">
           {agents.map((a) => (
-            <button key={a.agent_id || a.template_id} className={`nav-item ${agentId === (a.agent_id || a.template_id) ? 'active' : ''}`} onClick={() => setAgentId(a.agent_id || a.template_id)}>
+            <button key={agentRuntimeId(a)} className={`nav-item ${agentId === agentRuntimeId(a) ? 'active' : ''}`} onClick={() => setAgentId(agentRuntimeId(a))}>
               {a.template_name}
             </button>
           ))}
@@ -177,10 +182,11 @@ function AgentWorkspace({ agent, userId, groupId }: { agent: AgentTemplate; user
   ];
 
   // (user_id, group_id, bot_id) 经 query 注入 user_web → extSettings 读取 → HTTP/SSE 透传 → Agent
-  // bot_id 传实例化 agent_id（运行时路由字段名未改）
+  // bot_id 传实例化 resource_id（运行时路由字段名未改）
+  const runtimeId = agentRuntimeId(agent);
   const baseQuery = useMemo(
-    () => new URLSearchParams({ user_id: userId, group_id: groupId, bot_id: agent.agent_id || agent.template_id }).toString(),
-    [userId, groupId, agent.agent_id, agent.template_id],
+    () => new URLSearchParams({ user_id: userId, group_id: groupId, bot_id: runtimeId }).toString(),
+    [userId, groupId, runtimeId],
   );
   const urlFor = (view: string) => (view ? `${CHAT_BASE}/?${baseQuery}&view=${view}` : `${CHAT_BASE}/?${baseQuery}`);
 
@@ -214,7 +220,7 @@ function AgentWorkspace({ agent, userId, groupId }: { agent: AgentTemplate; user
           </button>
         ))}
         <div style={{ flex: 1 }} />
-        <span className="text-xs text-muted" style={{ alignSelf: 'center' }}>agent: <span className="mono">{agent.agent_id || agent.template_id}</span></span>
+        <span className="text-xs text-muted" style={{ alignSelf: 'center' }}>agent: <span className="mono">{runtimeId}</span></span>
       </div>
       <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
         {/* iframe 标签常驻挂载（懒加载后不卸载）：切标签只隐藏、不重载不断连；切 agent → key 变 → 重挂重连 */}
