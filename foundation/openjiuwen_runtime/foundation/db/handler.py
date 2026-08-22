@@ -100,7 +100,7 @@ class DBHandler(ABC):
         
         Args:
             table_name: 表名
-            filters: 过滤条件
+            filters: 过滤条件；字段值为 list/tuple/set 时使用 SQL ``IN`` 语义
             limit: 返回数量限制
             offset: 偏移量
             
@@ -120,7 +120,8 @@ class DBHandler(ABC):
 
         Args:
             table_name: 表名
-            filters: 过滤条件；为 ``None`` 或空字典时表示全表计数
+            filters: 过滤条件；为 ``None`` 或空字典时表示全表计数；
+                字段值为 list/tuple/set 时使用 SQL ``IN`` 语义
 
         Returns:
             记录条数
