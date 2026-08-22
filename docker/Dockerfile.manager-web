@@ -1,6 +1,7 @@
 ARG BASE_IMAGE
 FROM ${BASE_IMAGE}
 
+ARG PIP_EXTRA_ARGS
 ARG VITE_PRODUCT_NAME=JiuwenSwarm
 ENV VITE_PRODUCT_NAME=${VITE_PRODUCT_NAME}
 
@@ -14,7 +15,7 @@ RUN chown -R app:app /app/agent-runtime
 RUN pip install -e "./foundation" \
     -e "./applications/manager/manager_server" \
     --no-cache-dir \
-    -i https://pypi.tuna.tsinghua.edu.cn/simple
+    ${PIP_EXTRA_ARGS}
 
 USER app
 WORKDIR /app/agent-runtime/applications/manager/manager_web
