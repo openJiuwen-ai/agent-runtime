@@ -27,6 +27,7 @@ import {
   normalizeTemplateRefFromApi,
   type TemplateRefMap,
 } from '../../../utils/templateRef';
+import { HintTooltip } from '../../../components/HintTooltip';
 
 /** 与 config_effective_agent_policy 表 ColumnDefinition length 一致 */
 const FIELD_MAX_LENGTH = {
@@ -63,7 +64,7 @@ const emptyForm: FormState = {
   priority: 0,
   match_expr: '',
   template_ref: {},
-  send_file_allowed: false,
+  send_file_allowed: true,
 };
 
 type AgentSortField =
@@ -151,7 +152,7 @@ export function AgentPoliciesTab({ instanceId }: { instanceId: string }) {
         priority: editing.priority,
         match_expr: editing.match_expr ?? '',
         template_ref: normalizeTemplateRefFromApi(editing.template_ref),
-        send_file_allowed: editing.send_file_allowed ?? false,
+        send_file_allowed: editing.send_file_allowed ?? true,
       });
     } else {
       setForm(emptyForm);
@@ -358,12 +359,19 @@ export function AgentPoliciesTab({ instanceId }: { instanceId: string }) {
                   />
                 </th>
                 <th>
-                  <TableColumnSort
-                    label={t('policies.global.priority')}
-                    value={sortBy === 'priority' ? sortOrder : ''}
-                    options={sortOptions}
-                    onChange={(value) => handleSortChange('priority', value)}
-                  />
+                  <div className="th-filter">
+                    <span className="th-filter__label inline-flex items-center gap-1">
+                      {t('policies.global.priority')}
+                      <HintTooltip text={t('policies.priorityHint')} />
+                    </span>
+                    <TableColumnSort
+                      iconOnly
+                      label={t('policies.global.priority')}
+                      value={sortBy === 'priority' ? sortOrder : ''}
+                      options={sortOptions}
+                      onChange={(value) => handleSortChange('priority', value)}
+                    />
+                  </div>
                 </th>
                 <th>
                   <TableColumnSort
@@ -560,7 +568,10 @@ export function AgentPoliciesTab({ instanceId }: { instanceId: string }) {
               />
             </div>
             <div className="min-w-0">
-              <FieldLabel required>{t('policies.global.priority')}</FieldLabel>
+              <div className="flex items-center gap-1">
+                <FieldLabel required>{t('policies.global.priority')}</FieldLabel>
+                <HintTooltip text={t('policies.priorityHint')} />
+              </div>
               <input
                 className="input w-full"
                 type="number"
