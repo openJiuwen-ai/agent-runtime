@@ -123,10 +123,10 @@
 ### 2.1 `ResourceManagerFacade.acquire(...)` —— 请求 Pod(取 scope 暖 Pod 或 deploy +1)
 - **in**:`{ scope_id:str, pod_spec:dict, pool_config:dict, request_id:str }`
   - `pod_spec` = deploy 字段子集(`agent_image`/`namespace`/`container_name`/`kubeconfig`/`readiness_*`/`nfs_*`/资源限额)+ **SSE 端口/路径**(⚠️ §13.1)。
-  - `pool_config` = per-scope 池参数(`min_idle_pods`/`max_pods`(SM 派生)/`pod_ttl`),RM 首 acquire 缓存为 `scope:config`(`pod_concurrency` 不入 RM;SM 自用作 per-Pod 容量闸门)。
+  - `pool_config` = per-scope 池参数(`min_idle_pods`/`max_pods`(SM 派生)/`pod_ttl`/`pod_concurrency`),RM 首 acquire 缓存为 `scope:config`。`pod_concurrency` **仅用于 deploy follower 等待室推导上限(pc-1)**——per-Pod 容量闸门仍在 SM 侧(`SCARD < pod_concurrency`),RM 不做容量叠加判定(红线不变)。
   - **out**:`{ pod_id:str, pod_sse_url:str }`
   - **错**(Facade 抛异常):`MaxPodsReached`(对应原 `MAX_PODS_REACHED`)、`DeployFailed`(对应原 `DEPLOY_FAILED`)、`ValidationError`(对应原 `VALIDATION`)。错误码语义不变,见 §7;SM 的 `route` handler 捕获后映射为自身对外 HTTP 响应。
-  - **语义**:按 `scope_id` 取 Pod——若 `scope:idle` 有暖 Pod 则复用,否则未达 `max_pods` → 选主 deploy +1,达 `max_pods` → `MaxPodsReached`。从 `scope:idle` 取暖 Pod 时**跳过 `deploy_ver` 不匹配当前 deploy 字段的**(A 类配置变更后的老版本暖 Pod 留在 idle 池按 `pod_ttl` 回收,不外发给新流量;见 HLD 场景 M / §2.2.1)。**config-agnostic**:不解析 `pod_spec` 语义,池参数经 `acquire` 传入并缓存于 `scope:config`。
+  - **语义**:按 `scope_id` 取 Pod——若 `scope:idle` 有暖 Pod 则复用,否则未达 `max_pods` → 选主 deploy +1,达 `max_pods` → `MaxPodsReached`。deploy 锁的**输家进 follower 等待室**(M8):原子闸门准入上限 `pod_concurrency-1`(leader 会话之外新 Pod 恰剩这些槽),overflow 严格快失败;等待有界(`ready_timeout`+余量),leader 失败(锁空闲且无进展)则 follower 直接失败**不接管**;检测到 leader 的 Pod 注册即**直接复用返回**(与 reuse 分支同构,SM 侧重跑仲裁)——RM 全程不读 SM 容量键。从 `scope:idle` 取暖 Pod 时**跳过 `deploy_ver` 不匹配当前 deploy 字段的**(A 类配置变更后的老版本暖 Pod 留在 idle 池按 `pod_ttl` 回收,不外发给新流量;见 HLD 场景 M / §2.2.1)。**config-agnostic**:不解析 `pod_spec` 语义,池参数经 `acquire` 传入并缓存于 `scope:config`。
 
 ### 2.2 `ResourceManagerFacade.idle_consider(...)` —— 该 scope 在该 Pod 上已无会话(⚠️ scope 级,修订)
 - **in**:`{ pod_id:str, scope_id:str }`
@@ -189,6 +189,7 @@
 | `resource:scope:{scope_id}:idle` | LUA_RELEASE `SADD` / LUA_REGISTER(idle_flag=true)`SADD` | autoscale / reclaim `SCARD` | reuse `SREM`(LUA_ACQUIRE)/ LUA_PURGE | 无 |
 | `resource:scope:{scope_id}:config` | 首 acquire `HSET` | LUA_ACQUIRE / autoscale / reclaim | 无(随 scope 生命周期,长期) | 无 |
 | `resource:scope:{scope_id}:deploying` | LUA_ACQUIRE(need_deploy)`SADD token` | LUA_ACQUIRE max_pods 判定 `SCARD` | LUA_REGISTER / deploy 失败 `SREM token` | 无(token 短命) |
+| `resource:scope:{scope_id}:deploy_followers` | LUA_DEPLOY_FOLLOWER_GATE `ZADD request_id→deadline` | follower 闸门 `ZCARD ≤ pc-1` | follower 退出 `ZREM` / 闸门 `ZREMRANGEBYSCORE`(过期兜底) | 无(成员短命) |
 | `resource:pods:all` | LUA_REGISTER `SADD` | 对账 / RM 冷启动 | LUA_PURGE `SREM` | 无 |
 | `lock:rm:*` | sweeper `SET NX EX` | sweeper 判定 | 自动过期 / 下 tick 覆盖 | 见 §5.4 |
 
@@ -212,7 +213,18 @@ Resource Manager **不查 config DB、不解析 template 语义**。所有部署
 
 ### 5.1 Lua 脚本(承担所有编排态变更,原子)
 
-> 脚本全集(5 个,实现与本文对齐):`LUA_ACQUIRE` / `LUA_REGISTER` / `LUA_RELEASE` / `LUA_PURGE`(核心 4 个,下文全文)+ `LUA_PLACEHOLDER`(实现期从 ACQUIRE 的占位逻辑抽出,供 autoscale 热备 deploy 专用——同样计入 max_pods 但**不碰 idle 池**,补位不该消耗既有暖 Pod)。
+> 脚本全集(6 个,实现与本文对齐):`LUA_ACQUIRE` / `LUA_REGISTER` / `LUA_RELEASE` / `LUA_PURGE`(核心 4 个,下文全文)+ `LUA_PLACEHOLDER`(实现期从 ACQUIRE 的占位逻辑抽出,供 autoscale 热备 deploy 专用——同样计入 max_pods 但**不碰 idle 池**,补位不该消耗既有暖 Pod)+ `LUA_DEPLOY_FOLLOWER_GATE`(M8:deploy 锁输家的等待室原子准入,ZSET+deadline,上限 `pod_concurrency-1`;先清过期成员再 ZADD 先行+超限自退——纪律同 SM 的 `LUA_WAITER_GATE`)。
+>
+> `LUA_DEPLOY_FOLLOWER_GATE(scope_id, follower_id, max_followers, deadline, now)` 全文:
+> ```
+> key = resource:scope:{scope_id}:deploy_followers
+> ZREMRANGEBYSCORE(key, -inf, now)      # 清过期成员(等待进程崩溃兜底,不泄漏)
+> ZADD(key, deadline, follower_id)     # 先行
+> if ZCARD(key) > max_followers:
+>     ZREM(key, follower_id)           # 超限自退
+>     return {false}
+> return {true}
+> ```
 
 **`LUA_ACQUIRE(scope_id, deploy_token, now)`** —— acquire 的原子核心:取 scope 暖 Pod 复用,或判定 need_deploy/max_reached(占位)。中途无并发插入(无 race)。
 ```
@@ -297,7 +309,13 @@ loop:
         # 选主串行 deploy:抢 lock:rm:deploy:{scope_id}(或经 autoscale 同一选主通道),
         # 保证同 scope 不会并发 deploy 超配;deploy 是重操作(K8s create+wait Ready),串行可接受。
         if not acquire_lock("lock:rm:deploy:" + scope_id, ex=deploy_timeout):
-            SREM deploying token; await short_sleep; continue        # 他副本在 deploy,稍后重跑 ACQUIRE 复用其成果
+            # 输家 → follower 等待室(M8):复用 leader 的 Pod,不再自建第 2 个空 Pod
+            SREM deploying token
+            out = await follow_leader(scope_id, pod_spec, pool_config, request_id)
+            idempotency.put(request_id, out); return out
+            # follow_leader 内部(见下):闸门准入(≤pc-1,overflow 快失败)→
+            # 轮询:新 Pod 注册 → 返回该 Pod;锁空闲无进展(leader 失败)→ 失败不接管;
+            # deadline(ready_timeout+余量)→ 失败;finally 必 ZREM 出室
         try:
             info = await k8s.deploy(pod_spec)                        # create + _wait_running_ready → pod_ip
             pod_id = info.pod_name
@@ -311,7 +329,7 @@ loop:
             release_lock("lock:rm:deploy:" + scope_id)
         continue                                                     # 重跑 ACQUIRE:新 Pod 必被取作暖 Pod 复用
 ```
-**并发安全**:`LUA_ACQUIRE` 单脚本原子(取暖 Pod + 移出 idle 不可分);`need_deploy` 走 `lock:rm:deploy:{scope_id}` 选主串行,避免并发 deploy 超配(SM spec §13.6 的"并发 acquire 超配"在此靠选主根治)。多个 `scope_id` 的 deploy 互不阻塞(按 scope 分锁)。
+**并发安全**:`LUA_ACQUIRE` 单脚本原子(取暖 Pod + 移出 idle 不可分);`need_deploy` 走 `lock:rm:deploy:{scope_id}` 选主串行,避免并发 deploy 超配(SM spec §13.6 的"并发 acquire 超配"在此靠选主根治)。多个 `scope_id` 的 deploy 互不阻塞(按 scope 分锁)。锁输家经 follower 等待室复用 leader 成果——准入原子(`LUA_DEPLOY_FOLLOWER_GATE`,上限 pc-1)、等待有界、退出必清成员;跨副本冷竞争不再产生自建空 Pod。
 
 ### 5.3 idle_consider(ResourceManagerFacade.idle_consider 方法)
 ```

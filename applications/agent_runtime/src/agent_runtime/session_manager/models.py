@@ -77,11 +77,16 @@ class Template:
         return fingerprint({name: getattr(self, name) for name in DEPLOY_VER_FIELDS})
 
     def pool_config(self) -> dict[str, Any]:
-        """acquire/update_pool_config 下发 RM 的池参数。"""
+        """acquire/update_pool_config 下发 RM 的池参数。
+
+        pod_concurrency 供 RM 的 deploy follower 等待室推导上限（pc-1）——
+        不参与 max_pods 判定（per-Pod 容量闸门仍在 SM 侧，红线不变）。
+        """
         return {
             "min_idle_pods": self.min_idle_pods,
             "max_pods": self.max_pods,
             "pod_ttl": self.pod_ttl,
+            "pod_concurrency": self.pod_concurrency,
         }
 
 

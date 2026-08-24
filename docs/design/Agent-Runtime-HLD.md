@@ -276,7 +276,7 @@ flowchart TD
     A2 -- 已达 --> MX
 ```
 
-**读图**:优先取该 scope idle 池里的暖 Pod(`SREM idle` 后返回)→ 无暖 Pod 且该 scope 未达 `max_pods` 则 per-`scope_id` 选主 deploy +1 → `LUA_REGISTER` 登记新 Pod 即返回 → 达 `max_pods`(含 `deploying` 占位)则 `MAX_PODS_REACHED`。deploy 走 **per-`scope_id` 选主串行**(防并发超配;他副本在 deploy 时本请求稍后重试即可复用其成果)。**config-agnostic**:RM 不解析 `pod_spec` 语义;一个 Pod 只服务一个 scope,容量由 SM 的 `SCARD < pod_concurrency` 闸门保证,RM 不做容量叠加判定。
+**读图**:优先取该 scope idle 池里的暖 Pod(`SREM idle` 后返回)→ 无暖 Pod 且该 scope 未达 `max_pods` 则 per-`scope_id` 选主 deploy +1 → `LUA_REGISTER` 登记新 Pod 即返回 → 达 `max_pods`(含 `deploying` 占位)则 `MAX_PODS_REACHED`。deploy 走 **per-`scope_id` 选主串行**(防并发超配;锁输家进 **follower 等待室**——原子准入上限 `pod_concurrency-1`、overflow 快失败、等待有界、leader 的 Pod 注册即直接复用、leader 失败则不接管直接失败)。**config-agnostic**:RM 不解析 `pod_spec` 语义;一个 Pod 只服务一个 scope,容量由 SM 的 `SCARD < pod_concurrency` 闸门保证,RM 不做容量叠加判定。
 
 #### 4.1.4 Resource Manager —— Pod 生命周期与自治回收(后台)
 
@@ -377,6 +377,7 @@ flowchart TB
         SI[("resource:scope:{scope}:idle<br/>SET: idle pod_id<br/>SCARD = min_idle 计数")]:::set
         SCFG[("resource:scope:{scope}:config<br/>HASH: min_idle_pods / max_pods / pod_ttl")]:::hash
         SD[("resource:scope:{scope}:deploying<br/>SET: deploy 占位 token<br/>(计入 max_pods)")]:::str
+        SDF[("resource:scope:{scope}:deploy_followers<br/>ZSET: request_id → deadline<br/>follower 等待室(≤ pc-1)")]:::zset
     end
 
     subgraph POD["pod_X"]
@@ -409,6 +410,7 @@ flowchart TB
 | `resource:scope:{scope_id}:idle` | SET | idle 的 pod_id | **SCARD = idle Pod 数**(autoscale / reclaim 闸门;acquire 从此取暖 Pod) |
 | `resource:scope:{scope_id}:config` | HASH | min_idle_pods / max_pods / pod_ttl | 首 acquire 存,后续读;config_sync 经 `update_pool_config` **主动刷新**(`autoscale_interval` 全局默认,不入) |
 | `resource:scope:{scope_id}:deploying` | SET | deploy 占位 token(uuid) | 计入 `max_pods` 判定(防并发 deploy 超配);register / 失败时清 |
+| `resource:scope:{scope_id}:deploy_followers` | ZSET | deploy 锁输家的 request_id → deadline | follower 等待室(M8):`ZCARD ≤ pod_concurrency-1`;检测 leader Pod 注册即复用;score=deadline 供闸门清崩溃遗留 |
 | `resource:pod:{pod_id}:info` | HASH | scope_id / pod_sse_url / pod_ip / namespace / phase / created_ts / deploy_ver | Pod 元信息;`scope_id` 标识所属池;`deploy_ver` 供 acquire 版本过滤(只发当前版本暖 Pod) |
 | `resource:pod:{pod_id}:idle_since` | STRING | idle 起始时间戳 | reclaim 计时(aged ≥ `pod_ttl` 回收) |
 | `resource:pods:all` | SET | 全部 pod_id | 孤儿对账 / 枚举 |

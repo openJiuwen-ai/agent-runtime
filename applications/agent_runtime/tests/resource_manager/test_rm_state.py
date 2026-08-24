@@ -157,3 +157,64 @@ async def test_known_scope_ids_scan(rm_state):
     await rm_state.save_scope_config("scopeA", {"max_pods": 1})
     await rm_state.save_scope_config("scopeB", {"max_pods": 2})
     assert await rm_state.known_scope_ids() == ["scopeA", "scopeB"]
+
+
+# ---------------------------------------------------------------- follower 等待室
+
+
+@requires_lua
+async def test_deploy_follower_gate_admits_up_to_cap(rm_state):
+    """准入上限 pc-1：第 max+1 个自退（ZADD 先行 + ZCARD 超限自退，原子）。"""
+    assert await rm_state.try_add_deploy_follower(
+        SCOPE, "f1", max_followers=1, deadline=NOW + 60, now=NOW) is True
+    assert await rm_state.try_add_deploy_follower(
+        SCOPE, "f2", max_followers=1, deadline=NOW + 60, now=NOW) is False
+    assert await rm_state.deploy_follower_count(SCOPE) == 1
+
+
+@requires_lua
+async def test_deploy_follower_gate_concurrent_burst_respects_cap(rm_state):
+    """并发同时准入不超过上限（回归形态：同 LUA_WAITER_GATE 的纪律）。"""
+    import asyncio
+
+    results = await asyncio.gather(*[
+        rm_state.try_add_deploy_follower(
+            SCOPE, f"f-{i}", max_followers=2, deadline=NOW + 60, now=NOW)
+        for i in range(6)
+    ])
+    assert results.count(True) == 2
+    assert await rm_state.deploy_follower_count(SCOPE) == 2
+
+
+@requires_lua
+async def test_deploy_follower_gate_purges_expired_members(rm_state):
+    """崩溃兜底：score=deadline 过期的成员在下次准入时被原子清掉，不占名额。"""
+    assert await rm_state.try_add_deploy_follower(
+        SCOPE, "f-dead", max_followers=1, deadline=NOW + 10, now=NOW) is True
+    # 时间前进到 f-dead 的 deadline 之后（进程崩溃遗留）
+    assert await rm_state.try_add_deploy_follower(
+        SCOPE, "f-new", max_followers=1, deadline=NOW + 100, now=NOW + 11) is True
+    assert await rm_state.deploy_follower_count(SCOPE) == 1
+
+
+@requires_lua
+async def test_remove_deploy_follower(rm_state):
+    """正常退出/错误路径退出清成员（finally 纪律）。"""
+    assert await rm_state.try_add_deploy_follower(
+        SCOPE, "f1", max_followers=1, deadline=NOW + 60, now=NOW) is True
+    await rm_state.remove_deploy_follower(SCOPE, "f1")
+    assert await rm_state.deploy_follower_count(SCOPE) == 0
+    await rm_state.remove_deploy_follower(SCOPE, "f1")   # 幂等
+
+
+@requires_lua
+async def test_lock_held(rm_state):
+    key = rm_state.k.lock_deploy(SCOPE)
+    assert await rm_state.lock_held(key) is False
+    await rm_state.redis.set(key, "leader", ex=30)
+    assert await rm_state.lock_held(key) is True
+
+
+@requires_lua
+async def test_pod_ids_lists_scope_pods(scope_pool):
+    assert await scope_pool.pod_ids(SCOPE) == ["pod_w"]

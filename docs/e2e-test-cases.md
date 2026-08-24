@@ -11,7 +11,7 @@
 
 | 层 | 入口 | 规模 | 依赖环境 | 退出码 |
 |---|---|---|---|---|
-| 进程内双实例 | `uv run pytest tests/integration/test_multi_replica.py` | 12 用例 | 无(离线,fakeredis) | pytest 标准 |
+| 进程内双实例 | `uv run pytest tests/integration/test_multi_replica.py` | 14 用例 | 无(离线,fakeredis) | pytest 标准 |
 | 集成冒烟(M6) | `./scripts/integration_smoke.sh` | 65 项断言 | 单实例 server 模式 + 真 Redis/MySQL/K8s | 0/1/2 |
 | 多副本 e2e(M7) | `uv run --no-sync python scripts/e2e_multi_replica.py` | 35 项断言 | K8s 多副本 + Service LB + 真 Redis | 0/1/2 |
 | 压测/浸泡 | `uv run --no-sync python scripts/load_test.py` | 3 场景 | 任意入口(建议 LB) | 0/1 |
@@ -288,7 +288,7 @@ config_sync **串行**;起点 FLUSHDB + TRUNCATE + 删残留 Pod。
 
 ---
 
-## 5. 进程内双实例:`tests/integration/test_multi_replica.py`(12 用例)
+## 5. 进程内双实例:`tests/integration/test_multi_replica.py`(14 用例)
 
 同进程两个完整 App(各自 SystemContext + 5 个后台 Job)共享一组
 fakeredis/SQLite/FakeK8s,`instance_id` 显式 `replica-a`/`replica-b`,
@@ -300,7 +300,7 @@ httpx ASGITransport 单事件循环并发驱动。**输入全部走完整 HTTP**
 | 1 | 身份与共享态 | route 经 A,touch 经 B | instance_id 互异且 RM 镜像;B touch 到 A 建的会话 `touched=true` |
 | 2 | 交替亲和 | 同 session A→B→A→B route | 恒同 Pod;SCARD=1 |
 | 3 | 跨副本突发不超收 | cc=2/pc=1 占满后 8 并发交替 A/B | 0×200;4×503 队列满 + 4×504 超时;终态 SCARD=2、waiters=0、deploying=0 |
-| 4 | deploy 锁串行化 | SlowFakeK8s(deploy 0.4s),A/B 并发冷启动 + 追加 s3 | 部署窗口**零重叠**;Pod ≤ max_pods=2;占位清空;s3 first-fit 复用 |
+| 4 | deploy 锁串行化 + follower 复用 | SlowFakeK8s(deploy 0.4s),A/B 并发冷启动 + 追加 s3 | 并发对**恰好 1 次部署**(输家进等待室复用同 Pod);pod1 满后 s3 才第 2 次部署;窗口零重叠;占位/等待室清空 |
 | 5 | 输家复用暖 Pod | 手持 deploy 锁 + 后台注册 idle Pod 后释放;A route | 返回他副本 Pod;本侧零部署;占位清空 |
 | 6 | 跨副本唤醒 | A 占满→A 排队→回拨过期→**B** touch | B 的 touch 返回 `touched=false`(惰性驱逐);A 的等待者 <2s 被唤醒并占释放额度 |
 | 7 | 幂等跨副本 | 同 request_id A 首发、B 重放 | 响应一致;仅一会话 |
@@ -309,6 +309,8 @@ httpx ASGITransport 单事件循环并发驱动。**输入全部走完整 HTTP**
 | 10 | sweeper 互斥 | 手持 lock:sweep 后 A sweep_once | 直退不误扫;锁释放后补扫完成 |
 | 11 | 并发收敛 | A/B sweep_once 并发 gather | 无异常;全部老化;锁正常释放;`pods:registered` 不变 |
 | 12 | /healthz | 分别 GET 两 App | 200 + 各自 instance_id |
+| 13 | follower 上限严格快失败 | cc=8/pc=2,4 并发冷启动(deploy 0.4s) | 2×200(同 Pod)+ 2×503 NO_POD_AVAILABLE(闸门拒);恰好 1 次部署;占位/等待室清空 |
+| 14 | leader 失败 follower 不接管 | deploy 慢速失败(0.5s 后抛),2 并发 | 双 503 NO_POD_AVAILABLE;占位/等待室全清 |
 
 ---
 
@@ -405,10 +407,11 @@ uv run --no-sync python scripts/load_test.py \
 1. **多副本冷突发**:并发冷启动时占位先封顶 `max_pods`,多余请求立即 503
    `NO_POD_AVAILABLE`(retry_after=1)而非排队——多副本 e2e 的 S4 已按此语义预填;
    压测 queued 场景冷启动期同样可见。不阻塞 M6 冒烟(部署参数对齐后经 LB 65/65)。
-2. **跨副本冷竞争双 Pod**:deploy 锁输家 retry 时赢家 Pod 为 in-use 不在 idle 池,
-   输家自建第 2 个 Pod(`max_pods` 内,空 Pod 经 empty-pod pass→idle_consider→reclaim
-   自愈)。测试断言「窗口零重叠 + Pod ≤ max_pods」,不断言「恰好 1 个 Pod」。
-   收紧需把 SM 容量感知下沉 RM(开放问题,见 handoff §十一.1)。
+2. ~~跨副本冷竞争双 Pod~~(**M8 已解决**):deploy 锁输家原会自建第 2 个空 Pod;
+   现进 **follower 等待室**——原子准入上限 `pod_concurrency-1`(overflow 严格快失败)、
+   等待有界(ready_timeout+余量)、leader 的 Pod 注册即直接复用、leader 失败不接管
+   直接失败(`LUA_DEPLOY_FOLLOWER_GATE`,ZSET+deadline 防崩溃泄漏)。
+   双实例用例 4 已收紧断言「冷竞争恰好 1 次部署」;实测冷启动尾延迟 30.5s→10.2s。
 3. **场景 N(半死探测)**:待 AgentServer 原生支持 `GET /health` 后补端到端
    (机制已有单测)。
 4. **config_sync 串行**:全局锁,任何脚本/客户端并发下发即 409 `CONFIG_SYNC_BUSY`。

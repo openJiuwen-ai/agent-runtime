@@ -38,6 +38,14 @@ class RMKeys:
         """SET: deploy 占位 token（计入 max_pods，防并发超配）。"""
         return f"{self.prefix}:resource:scope:{scope_id}:deploying"
 
+    def scope_deploy_followers(self, scope_id: str) -> str:
+        """ZSET: deploy follower（request_id → deadline 秒级时间戳）。
+
+        deploy 锁输家的等待室：ZCARD ≤ pod_concurrency-1（leader 会话之外
+        新 Pod 恰剩这些槽）；score=deadline 供闸门原子清理崩溃遗留。
+        """
+        return f"{self.prefix}:resource:scope:{scope_id}:deploy_followers"
+
     # ---- Pod 级
     def pod_info(self, pod_id: str) -> str:
         """HASH: scope_id / pod_sse_url / pod_ip / namespace / phase / created_ts / deploy_ver。"""
@@ -147,6 +155,26 @@ class ResourceState:
         """deploy 失败/放弃时清占位（错误路径必须清，防 max_pods 永久虚高）。"""
         await self.redis.srem(self.k.scope_deploying(scope_id), token)
 
+    # -------------------------------------------------------------- follower 等待室
+
+    async def try_add_deploy_follower(
+        self, scope_id: str, follower_id: str,
+        max_followers: int, deadline: int, now: int,
+    ) -> bool:
+        """LUA_DEPLOY_FOLLOWER_GATE：原子准入（先清过期 → ZADD → 超限自退）。"""
+        ret = await self.eval(
+            lua.LUA_DEPLOY_FOLLOWER_GATE,
+            scope_id, follower_id, max_followers, deadline, now,
+        )
+        return bool(ret and ret[0] == "true")
+
+    async def remove_deploy_follower(self, scope_id: str, follower_id: str) -> None:
+        """follower 退出等待室（错误路径必须清，防虚占 pc-1 名额）。"""
+        await self.redis.zrem(self.k.scope_deploy_followers(scope_id), follower_id)
+
+    async def deploy_follower_count(self, scope_id: str) -> int:
+        return to_int(await self.redis.zcard(self.k.scope_deploy_followers(scope_id)))
+
     # -------------------------------------------------------------- 池参数缓存
 
     async def load_scope_config(self, scope_id: str) -> dict[str, str]:
@@ -186,6 +214,11 @@ class ResourceState:
     async def pod_count(self, scope_id: str) -> int:
         return to_int(await self.redis.zcard(self.k.scope_pods(scope_id)))
 
+    async def pod_ids(self, scope_id: str) -> list[str]:
+        """该 scope 全部 pod_id（follower 检测 leader 注册进展用）。"""
+        members = await self.redis.zrange(self.k.scope_pods(scope_id), 0, -1)
+        return [s(m) for m in members]
+
     async def deploying_count(self, scope_id: str) -> int:
         return to_int(await self.redis.scard(self.k.scope_deploying(scope_id)))
 
@@ -218,6 +251,10 @@ class ResourceState:
     async def try_lock(self, key: str, ttl: int, token: str) -> bool:
         ok = await self.redis.set(key, token, nx=True, ex=ttl)
         return bool(ok)
+
+    async def lock_held(self, key: str) -> bool:
+        """锁是否被持有（follower 判 leader 已放弃/失败：锁空闲且无进展）。"""
+        return bool(await self.redis.get(key))
 
     async def unlock(self, key: str, token: str) -> None:
         await self.redis.eval(

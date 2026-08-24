@@ -20,14 +20,15 @@ from uuid import uuid4
 from ..errors import DeployFailed, MaxPodsReached
 from ..spec_fields import DEPLOY_VER_FIELDS
 from ..util import fingerprint, now_ts
-from .k8s import K8sPodClient
+from .k8s import DEFAULT_READY_TIMEOUT, K8sPodClient
 from .state import ResourceState
 
 logger = logging.getLogger("agent_runtime.resource_manager")
 
 ACQUIRE_IDEM_TTL = 60          # acquire 结果幂等缓存窗口
 DEPLOY_LOCK_TTL = 360          # per-scope deploy 锁（盖住 ready_timeout 300s + 余量）
-DEPLOY_WAIT_ON_BUSY = 0.3      # 他副本在 deploy 时的重试间隔
+DEPLOY_WAIT_ON_BUSY = 0.3      # follower 轮询间隔（原输家自旋间隔沿用）
+FOLLOWER_WAIT_MARGIN = 10      # follower 等待上界 = ready_timeout + 此余量（注册开销）
 
 
 def _deploy_ver(pod_spec: dict[str, Any]) -> str:
@@ -70,6 +71,7 @@ class ResourceOrchestrator:
                     "min_idle_pods": int(pool_config.get("min_idle_pods", 0)),
                     "max_pods": int(pool_config.get("max_pods", 1)),
                     "pod_ttl": int(pool_config.get("pod_ttl", 300)),
+                    "pod_concurrency": int(pool_config.get("pod_concurrency", 1)),
                     "deploy_ver": deploy_ver,
                     "pod_spec_json": json.dumps(pod_spec),
                 },
@@ -97,9 +99,16 @@ class ResourceOrchestrator:
             lock_key = self.state.k.lock_deploy(scope_id)
             lock_token = f"deploy-{token}"
             if not await self.state.try_lock(lock_key, DEPLOY_LOCK_TTL, lock_token):
+                # 输家：清占位 → 进 follower 等待室（上限 pc-1，overflow 严格
+                # 快失败），等 leader 的 Pod 注册后**直接复用**——RM 全程不读
+                # SM 的容量键（闸门归属不变），也修掉「输家自建第 2 个空 Pod」
+                # 的跨副本冷竞争浪费（见 handoff §十一.1 开放问题）
                 await self.state.clear_deploy_token(scope_id, token)
-                await asyncio.sleep(DEPLOY_WAIT_ON_BUSY)   # 他副本在 deploy，稍后复用其成果
-                continue
+                result = await self._follow_leader(
+                    scope_id, pod_spec, pool_config, request_id)
+                if request_id:
+                    await self._idem_put(request_id, result)
+                return result
             try:
                 pod_id, sse_url = await self._deploy_and_register(
                     scope_id, pod_spec, deploy_ver, token, idle_flag=False
@@ -111,6 +120,68 @@ class ResourceOrchestrator:
             if request_id:
                 await self._idem_put(request_id, result)
             return result
+
+    async def _follow_leader(
+        self,
+        scope_id: str,
+        pod_spec: dict[str, Any],
+        pool_config: dict[str, Any],
+        request_id: str,
+    ) -> dict[str, str]:
+        """deploy 锁输家的 follower 等待室：等 leader 的 Pod 注册后直接复用。
+
+        设计定案（M8，讨论见 e2e-test-cases §8.2 / handoff §十一.1）：
+        - 准入 = 原子闸门（ZSET+deadline），上限 ``pod_concurrency - 1``——
+          leader 会话之外新 Pod 恰剩这些槽；**overflow 严格快失败**；
+        - 等待有界（ready_timeout + 余量）；leader 失败（锁空闲且无进展）
+          → follower **不接管**直接失败（同镜像同环境大概率也失败）；
+        - 检测到新 Pod 注册（进展）→ 返回该 Pod，与 reuse 分支同构——
+          SM 侧重跑仲裁即可，RM 全程不读 SM 容量键（红线不破）。
+        """
+        pc = max(int(pool_config.get("pod_concurrency", 1)), 1)
+        max_followers = pc - 1
+        ready_timeout = int(pod_spec.get("ready_timeout") or DEFAULT_READY_TIMEOUT)
+        now = now_ts()
+        admitted = await self.state.try_add_deploy_follower(
+            scope_id, request_id, max_followers,
+            now + ready_timeout + FOLLOWER_WAIT_MARGIN, now,
+        )
+        if not admitted:
+            raise MaxPodsReached(
+                f"scope {scope_id} deploy followers full ({max_followers}); "
+                f"retry after leader registers")
+
+        pods_before = set(await self.state.pod_ids(scope_id))
+        deadline = time.monotonic() + ready_timeout + FOLLOWER_WAIT_MARGIN
+        lock_key = self.state.k.lock_deploy(scope_id)
+        try:
+            while True:
+                await asyncio.sleep(DEPLOY_WAIT_ON_BUSY)
+                new_pods = [p for p in await self.state.pod_ids(scope_id)
+                            if p not in pods_before]
+                if new_pods:
+                    for pod in new_pods:
+                        info = await self.state.pod_info(pod)
+                        if info.get("pod_sse_url"):
+                            logger.info(
+                                "acquire follower reuses leader pod: scope=%s "
+                                "pod=%s follower=%s", scope_id, pod, request_id)
+                            return {"pod_id": pod,
+                                    "pod_sse_url": info["pod_sse_url"]}
+                    # 新 Pod 已入池但 info 尚未可见（原子脚本内不存在此窗口，
+                    # 防御性兜底）：视为有进展，跳过失败判定等下一轮
+                    continue
+                if not await self.state.lock_held(lock_key):
+                    raise DeployFailed(
+                        f"scope {scope_id} leader deploy aborted; follower aborts")
+                if time.monotonic() >= deadline:
+                    raise MaxPodsReached(
+                        f"scope {scope_id} follower wait timeout "
+                        f"({ready_timeout + FOLLOWER_WAIT_MARGIN}s)")
+        finally:
+            # 错误路径双清纪律：follower 成员必须退出（防虚占 pc-1 名额）；
+            # 崩溃遗留由闸门的 ZREMRANGEBYSCORE(deadline) 兜底
+            await self.state.remove_deploy_follower(scope_id, request_id)
 
     async def _deploy_and_register(
         self,
