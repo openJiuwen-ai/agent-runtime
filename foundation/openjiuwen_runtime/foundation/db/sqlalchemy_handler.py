@@ -11,7 +11,7 @@ from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy import select, update, delete, func
 
 from ..log import get_logger
-from .engine_options import build_async_engine_kwargs
+from .engine_options import build_async_engine_kwargs, get_query_timeout_seconds
 from .handler import DBHandler
 from .table_def import TableDefinition, ColumnDefinition, IndexDefinition
 
@@ -51,11 +51,14 @@ class SQLAlchemyHandler(DBHandler):
         self.session_factory = async_sessionmaker(
             self.engine, class_=AsyncSession, expire_on_commit=False
         )
+        query_timeout = get_query_timeout_seconds()
         logger.info(
-            "Database connected (pool_size=%s max_overflow=%s pool_timeout=%s)",
+            "Database connected (pool_size=%s max_overflow=%s "
+            "pool_timeout=%s query_timeout=%s)",
             engine_kwargs["pool_size"],
             engine_kwargs["max_overflow"],
             engine_kwargs["pool_timeout"],
+            f"{query_timeout}s" if query_timeout is not None else "disabled",
         )
 
     async def disconnect(self) -> None:

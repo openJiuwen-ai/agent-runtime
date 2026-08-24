@@ -1,6 +1,7 @@
 from urllib.parse import quote
 
 from .dialects import ensure_async_gaussdb_installed, ensure_gaussdb_dialect_registered
+from .engine_options import get_query_timeout_seconds
 from .sqlalchemy_handler import SQLAlchemyHandler
 from ..config import settings
 
@@ -12,6 +13,17 @@ class GaussDBHandler(SQLAlchemyHandler):
     PostgreSQL asyncpg 适配器，并将底层 DB-API 替换为 async-gaussdb。
     """
 
+    def _prepare_db_timeout_args(self) -> dict:
+        """async-gaussdb（asyncpg 协议）：``statement_timeout`` + ``command_timeout``。"""
+        timeout = get_query_timeout_seconds()
+        if timeout is None:
+            return {}
+        timeout_ms = max(1, int(timeout * 1000))
+        return {
+            "command_timeout": timeout,
+            "server_settings": {"statement_timeout": str(timeout_ms)},
+        }
+
     def __init__(self):
         ensure_async_gaussdb_installed()
         ensure_gaussdb_dialect_registered()
@@ -21,4 +33,4 @@ class GaussDBHandler(SQLAlchemyHandler):
             f"gaussdb+async_gaussdb://{user}:{password}@"
             f"{settings.RUNTIME_DB_HOST}:{settings.RUNTIME_DB_PORT}/{settings.RUNTIME_DB_NAME}"
         )
-        super().__init__(database_url)
+        super().__init__(database_url, connect_args=self._prepare_db_timeout_args())

@@ -8,6 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from .engine_options import get_query_timeout_seconds
 from .sqlalchemy_handler import SQLAlchemyHandler
 from ..config import settings
 from ..log import get_logger
@@ -20,6 +21,16 @@ class MySQLHandler(SQLAlchemyHandler):
 
     连接参数可在构造函数中显式传入；未传入的字段使用 ``settings``（环境变量）中的值。
     """
+
+    def _prepare_db_timeout_args(self) -> dict:
+        """aiomysql 不支持 read/write_timeout；用服务端 ``MAX_EXECUTION_TIME``。"""
+        timeout = get_query_timeout_seconds()
+        if timeout is None:
+            return {}
+        timeout_ms = max(1, int(timeout * 1000))
+        return {
+            "init_command": f"SET SESSION MAX_EXECUTION_TIME={timeout_ms}",
+        }
 
     def __init__(
         self,
@@ -39,7 +50,7 @@ class MySQLHandler(SQLAlchemyHandler):
             f"mysql+aiomysql://{quote_plus(self.user or '')}:{quote_plus(self.password or '')}"
             f"@{self.host}:{self.port}/{self.database}"
         )
-        super().__init__(database_url)
+        super().__init__(database_url, connect_args=self._prepare_db_timeout_args())
 
     async def init_database(self) -> None:
         """初始化 MySQL 库（存在则跳过，不存在则创建）。"""
