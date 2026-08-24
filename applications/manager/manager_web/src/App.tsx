@@ -9,6 +9,7 @@ import { OverviewPage } from './pages/OverviewPage';
 import { InstanceListPage } from './pages/instance/InstanceListPage';
 import { InstanceDetailPage } from './pages/instance/InstanceDetailPage';
 import { ModelTemplatesPage } from './pages/templates/ModelTemplatesPage';
+import { EmbeddingTemplatesPage } from './pages/templates/EmbeddingTemplatesPage';
 import { ExtensionTemplatesPage } from './pages/templates/ExtensionTemplatesPage';
 import { SkillWhitelistTemplatesPage } from './pages/templates/SkillWhitelistTemplatesPage';
 import { ServiceConfigTemplatesPage } from './pages/templates/ServiceConfigTemplatesPage';
@@ -69,6 +70,9 @@ function RouteView() {
   }
   if (path === '/model-templates') {
     return <ModelTemplatesPage />;
+  }
+  if (path === '/embedding-templates') {
+    return <EmbeddingTemplatesPage />;
   }
   if (path === '/extension-config-templates') {
     return <ExtensionTemplatesPage />;

@@ -1,4 +1,5 @@
 from manager_server.core.template.agent_template import AgentTemplateService
+from manager_server.core.template.embedding_template import EmbeddingTemplateService
 from manager_server.core.template.extension_config_template import (
     ExtensionConfigTemplateService,
 )
@@ -13,6 +14,7 @@ from manager_server.core.template.skill_whitelist_template import (
 __all__ = (
     "AgentTemplateService",
     "ModelTemplateService",
+    "EmbeddingTemplateService",
     "ExtensionConfigTemplateService",
     "SkillWhitelistTemplateService",
     "ServiceConfigTemplateService",

@@ -54,6 +54,7 @@
     "config": "模板管理",
     "agentConfigTemplates": "Agent配置模板",
     "modelTemplates": "模型",
+    "embeddingTemplates": "Embedding 模板",
     "skillWhitelistTemplates": "预置Skill",
     "safetyGuardrails": "安全护栏",
     "extensionTemplates": "扩展配置",
@@ -361,6 +362,27 @@
     "retryCountMin": "重试次数不能小于 0",
     "deleteConfirm": "确认删除该模型模板？该模板可能被多个实例策略引用，请确认无副作用。"
   },
+  "embeddingTemplate": {
+    "title": "Embedding 模板",
+    "subtitle": "维护可复用的向量模型配置",
+    "new": "新建 Embedding 模板",
+    "edit": "编辑 Embedding 模板",
+    "templateName": "模板名称",
+    "templateDescription": "模板描述",
+    "embedTags": "Embedding 标签",
+    "embedTagsHint": "逗号分隔，例如 memory,task_memory",
+    "apiBase": "API Base",
+    "apiKey": "API Key",
+    "modelId": "模型 ID",
+    "modelProvider": "Provider",
+    "parameters": "请求参数",
+    "clientConfig": "客户端配置",
+    "data": "扩展数据",
+    "updatedAt": "修改时间",
+    "searchPlaceholder": "搜索模板 ID、名称、描述、Provider、模型 ID 或 API Base",
+    "fieldRequired": "请填写{{field}}",
+    "deleteConfirm": "确认删除该 Embedding 模板？该模板可能被多个实例策略引用，请确认无副作用。"
+  },
   "extensionTemplate": {
     "title": "扩展配置模板",
     "subtitle": "维护可在Agent处调用的扩展配置模板，支持调用定制化钩子函数",
@@ -518,13 +540,14 @@
       "singleValueHint": "该槽位仅允许配置一条引用",
       "singleValueOnly": "{{slot}} 仅允许配置一条引用",
       "slots": {
-        "default_model": "默认模型 (default_model)",
-        "video_model": "视频模型 (video_model)",
-        "audio_model": "音频模型 (audio_model)",
-        "vision_model": "视觉模型 (vision_model)",
-        "skill_whitelist": "Skill 白名单 (skill_whitelist)",
-        "extension_config": "扩展配置 (extension_config)",
-        "service_config": "服务配置 (service_config)"
+        "default_model": "默认模型",
+        "video_model": "视频模型",
+        "audio_model": "音频模型",
+        "vision_model": "视觉模型",
+        "embedding_model": "Embedding 模型",
+        "skill_whitelist": "Skill 白名单",
+        "extension_config": "扩展配置",
+        "service_config": "服务配置"
       },
       "none": "不选择",
       "noOptions": "暂无可选模板"

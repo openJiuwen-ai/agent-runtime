@@ -31,12 +31,14 @@ from manager_server.models.jid_template_ref_models import (
     JID_TEMPLATE_REF_TABLE_DEF,
 )
 from manager_server.models.template_models import (
+    EMBEDDING_TEMPLATE_TABLE_DEF,
     EXTENSION_CONFIG_TEMPLATE_TABLE_DEF,
     MODEL_TEMPLATE_TABLE_DEF,
     SERVICE_CONFIG_TEMPLATE_TABLE_DEF,
     SKILL_WHITELIST_TEMPLATE_TABLE_DEF,
 )
 from manager_server.schemas.template_slot_schemas import (
+    EMBEDDING_MODEL_SLOT,
     EXTENSION_CONFIG_SLOT,
     MODEL_TEMPLATE_SLOTS,
     SERVICE_CONFIG_SLOT,
@@ -77,6 +79,11 @@ TEMPLATE_KIND_SPECS: dict[str, TemplateKindSpec] = {
         table_name=MODEL_TEMPLATE_TABLE_DEF.table_name,
         slot_keys=MODEL_TEMPLATE_SLOTS,
     ),
+    "embedding_templates": TemplateKindSpec(
+        config_section="embedding_templates",
+        table_name=EMBEDDING_TEMPLATE_TABLE_DEF.table_name,
+        slot_keys=frozenset({EMBEDDING_MODEL_SLOT}),
+    ),
     "skill_whitelist_templates": TemplateKindSpec(
         config_section="skill_whitelist_templates",
         table_name=SKILL_WHITELIST_TEMPLATE_TABLE_DEF.table_name,
@@ -98,6 +105,7 @@ TEMPLATE_KIND_ORDER: tuple[str, ...] = tuple(TEMPLATE_KIND_SPECS.keys())
 
 _ROW_TO_OUT_MODULES: dict[str, str] = {
     "model_templates": "manager_server.core.template.model_template",
+    "embedding_templates": "manager_server.core.template.embedding_template",
     "skill_whitelist_templates": "manager_server.core.template.skill_whitelist_template",
     "extension_config_templates": "manager_server.core.template.extension_config_template",
     "service_config_templates": "manager_server.core.template.service_config_template",
