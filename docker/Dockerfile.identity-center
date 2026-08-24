@@ -9,8 +9,8 @@ WORKDIR /app/agent-runtime
 COPY . /app/agent-runtime/
 RUN chown -R app:app /app/agent-runtime
 
-# foundation 与 identity-center 同仓源码安装（pip 不识别 [tool.uv.sources]）
 RUN pip install -e "./foundation" \
+    -e "./service" \
     -e "./applications/manager/identity_center" \
     --no-cache-dir \
     ${PIP_EXTRA_ARGS}

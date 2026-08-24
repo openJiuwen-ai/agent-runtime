@@ -3,7 +3,6 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-# 重构:原 jiuwenclaw-identity,迁入 runtime 后改名为 identity-center
 name = "identity-center"
 version = "0.1.0"
 description = "JiuwenClaw identity / auth service (OAuth2 + JWT, standalone identity DB)"
@@ -21,7 +20,6 @@ dependencies = [
     "PyJWT>=2.8",
     "cryptography>=42.0",
     "python-multipart>=0.0.9",
-    # 重构:foundation 由 git 源(agent-runtime@develop)改为本仓源码,见 [tool.uv.sources]
     "openjiuwen-runtime-foundation",
     "openjiuwen-runtime-service",
     "asyncpg>=0.29",
@@ -38,7 +36,6 @@ dev = [
 [project.scripts]
 identity-center = "identity_center.main:main"
 
-# 重构:foundation 改用本仓 editable 源码,不再从 gitcode 拉取
 [tool.uv.sources]
 openjiuwen-runtime-foundation = { path = "../../../foundation", editable = true }
 openjiuwen-runtime-service = { path = "../../../service", editable = true }
