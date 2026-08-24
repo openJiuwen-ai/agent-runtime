@@ -12,6 +12,7 @@ from sqlalchemy import DateTime, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from .engine_options import get_query_timeout_seconds
 from .sqlalchemy_handler import SQLAlchemyHandler
 from .table_def import ColumnDefinition
 from ..log import get_logger
@@ -25,6 +26,17 @@ class PostgreSQLHandler(SQLAlchemyHandler):
     连接参数通过构造函数显式传入，拼装 ``postgresql+asyncpg://`` URL
     后委托给 :class:`SQLAlchemyHandler` 基类。
     """
+
+    def _prepare_db_timeout_args(self) -> dict:
+        """asyncpg：服务端 ``statement_timeout`` + 客户端 ``command_timeout``。"""
+        timeout = get_query_timeout_seconds()
+        if timeout is None:
+            return {}
+        timeout_ms = max(1, int(timeout * 1000))
+        return {
+            "command_timeout": timeout,
+            "server_settings": {"statement_timeout": str(timeout_ms)},
+        }
 
     def __init__(
         self,
@@ -46,11 +58,11 @@ class PostgreSQLHandler(SQLAlchemyHandler):
             f"@{host}:{port}/{database}"
         )
 
-        connect_args = {}
+        connect_args = self._prepare_db_timeout_args()
         if schema and schema.lower() != "public":
-            connect_args["server_settings"] = {
-                "search_path": schema
-            }
+            server_settings = dict(connect_args.get("server_settings") or {})
+            server_settings["search_path"] = schema
+            connect_args["server_settings"] = server_settings
 
         super().__init__(database_url, connect_args=connect_args)
 
