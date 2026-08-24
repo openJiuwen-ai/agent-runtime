@@ -161,13 +161,11 @@ FEDERATION_ROLE_MAPPING_TABLE_DEF = TableDefinition(
         ColumnDefinition("updated_at", "datetime", nullable=False),
     ],
     indexes=[
-        # 该唯一索引暂时注释掉：自动生成的索引名
-        # ix_federation_role_mapping_connection_id_claim_name_claim_value_local_role
-        # 超过 MySQL 标识符长度上限（64 字符），建表会报错。
-        # IndexDefinition(
-        #     ["connection_id", "claim_name", "claim_value", "local_role"],
-        #     unique=True,
-        # ),
+        IndexDefinition(
+            ["connection_id", "claim_name", "claim_value", "local_role"],
+            unique=True,
+            name="uq_federation_role_mapping_rule",
+        ),
         IndexDefinition(["connection_id"], unique=False),
     ],
 )

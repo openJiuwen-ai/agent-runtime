@@ -205,16 +205,27 @@ class SQLAlchemyHandler(DBHandler):
         return f"ix_{table_name}_{'_'.join(idx_def.columns)}"
 
     def _create_table_indexes(self, sync_conn, table_def: TableDefinition) -> None:
-        """通过 SQLAlchemy Index 创建索引，由方言层生成各数据库兼容的 DDL。"""
+        """创建缺失索引，不重复创建名称不同但定义等价的索引。"""
         inspector = inspect(sync_conn)
-        existing_indexes = {
-            idx["name"]
-            for idx in inspector.get_indexes(table_def.table_name)
+        inspected_indexes = inspector.get_indexes(table_def.table_name)
+        existing_names = {
+            idx["name"] for idx in inspected_indexes if idx.get("name")
+        }
+        existing_signatures = {
+            (
+                tuple(idx.get("column_names") or ()),
+                bool(idx.get("unique", False)),
+            )
+            for idx in inspected_indexes
         }
         table = self._table_models[table_def.table_name].__table__
         for idx_def in table_def.indexes:
             idx_name = self._build_index_name(table_def.table_name, idx_def)
-            if idx_name in existing_indexes:
+            idx_signature = (tuple(idx_def.columns), idx_def.unique)
+            if (
+                idx_name in existing_names
+                or idx_signature in existing_signatures
+            ):
                 continue
             index = Index(
                 idx_name,
@@ -227,9 +238,11 @@ class SQLAlchemyHandler(DBHandler):
                 table_def.table_name,
                 idx_name,
             )
+            existing_names.add(idx_name)
+            existing_signatures.add(idx_signature)
 
     async def init_table(self, table_def: TableDefinition) -> None:
-        """初始化表（存在则跳过，不存在则创建）"""
+        """初始化表，并幂等补齐声明但尚不存在的索引。"""
         logger.debug("Initializing table: table_name=%s", table_def.table_name)
         columns = []
         for col_def in table_def.columns:
@@ -265,13 +278,10 @@ class SQLAlchemyHandler(DBHandler):
 
         async with self.engine.begin() as conn:
             def init_sync(sync_conn):
-                inspector = inspect(sync_conn)
-                table_exists = table_def.table_name in inspector.get_table_names()
                 Base.metadata.create_all(
                     sync_conn, tables=[table.__table__]
                 )
-                if not table_exists:
-                    self._create_table_indexes(sync_conn, table_def)
+                self._create_table_indexes(sync_conn, table_def)
 
             await conn.run_sync(init_sync)
         logger.debug("Table initialized: table_name=%s", table_def.table_name)

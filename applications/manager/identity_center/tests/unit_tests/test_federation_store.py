@@ -54,6 +54,13 @@ async def _runtime(tmp_path):
     return handler, service
 
 
+def test_role_mapping_index_name_is_mysql_compatible():
+    unique_index = FEDERATION_ROLE_MAPPING_TABLE_DEF.indexes[0]
+
+    assert unique_index.name == "uq_federation_role_mapping_rule"
+    assert len(unique_index.name) <= 64
+
+
 def _query_value(url: str, name: str) -> str:
     values = parse_qs(urlsplit(url).query).get(name)
     assert values

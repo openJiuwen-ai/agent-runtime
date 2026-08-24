@@ -7,6 +7,8 @@ import os
 import tempfile
 import unittest
 
+from sqlalchemy import inspect
+
 from openjiuwen_runtime.foundation.db.sqlite_handler import SQLiteHandler
 from openjiuwen_runtime.foundation.db.table_def import (
     ColumnDefinition,
@@ -63,6 +65,101 @@ class TestSQLiteHandler(unittest.IsolatedAsyncioTestCase):
         """测试初始化表"""
         await self.handler.init_table(self.test_table_def)
         self.assertTrue(self.handler.is_table_registered("test_table"))
+
+    async def test_init_table_adds_missing_index_to_existing_table(self):
+        """已存在的表缺少声明索引时，仅补建该索引。"""
+        table_without_index = TableDefinition(
+            table_name="existing_table",
+            columns=[
+                ColumnDefinition("id", "integer", primary_key=True),
+                ColumnDefinition("name", "string", length=100, nullable=False),
+            ],
+        )
+        await self.handler.init_table(table_without_index)
+
+        table_with_index = TableDefinition(
+            table_name="existing_table",
+            columns=table_without_index.columns,
+            indexes=[
+                IndexDefinition(
+                    ["name"], unique=True, name="uq_existing_table_name"
+                )
+            ],
+        )
+        await self.handler.init_table(table_with_index)
+
+        async with self.handler.engine.connect() as conn:
+            indexes = await conn.run_sync(
+                lambda sync_conn: inspect(sync_conn).get_indexes("existing_table")
+            )
+        self.assertEqual(
+            {(index["name"], bool(index["unique"])) for index in indexes},
+            {("uq_existing_table_name", True)},
+        )
+
+    async def test_init_table_reuses_equivalent_index_with_legacy_name(self):
+        """等价索引即使名称不同，也不应重复创建。"""
+        legacy_definition = TableDefinition(
+            table_name="legacy_index_table",
+            columns=[
+                ColumnDefinition("id", "integer", primary_key=True),
+                ColumnDefinition("name", "string", length=100, nullable=False),
+            ],
+            indexes=[
+                IndexDefinition(["name"], unique=True, name="uq_legacy_name")
+            ],
+        )
+        await self.handler.init_table(legacy_definition)
+
+        current_definition = TableDefinition(
+            table_name="legacy_index_table",
+            columns=legacy_definition.columns,
+            indexes=[
+                IndexDefinition(["name"], unique=True, name="uq_current_name")
+            ],
+        )
+        await self.handler.init_table(current_definition)
+
+        async with self.handler.engine.connect() as conn:
+            indexes = await conn.run_sync(
+                lambda sync_conn: inspect(sync_conn).get_indexes("legacy_index_table")
+            )
+        self.assertEqual(
+            {index["name"] for index in indexes},
+            {"uq_legacy_name"},
+        )
+
+    async def test_init_table_does_not_treat_non_unique_index_as_unique(self):
+        """相同列的普通索引不能替代声明的唯一索引。"""
+        non_unique_definition = TableDefinition(
+            table_name="index_constraint_table",
+            columns=[
+                ColumnDefinition("id", "integer", primary_key=True),
+                ColumnDefinition("name", "string", length=100, nullable=False),
+            ],
+            indexes=[IndexDefinition(["name"], name="ix_non_unique_name")],
+        )
+        await self.handler.init_table(non_unique_definition)
+
+        unique_definition = TableDefinition(
+            table_name="index_constraint_table",
+            columns=non_unique_definition.columns,
+            indexes=[
+                IndexDefinition(["name"], unique=True, name="uq_unique_name")
+            ],
+        )
+        await self.handler.init_table(unique_definition)
+
+        async with self.handler.engine.connect() as conn:
+            indexes = await conn.run_sync(
+                lambda sync_conn: inspect(sync_conn).get_indexes(
+                    "index_constraint_table"
+                )
+            )
+        self.assertEqual(
+            {(index["name"], bool(index["unique"])) for index in indexes},
+            {("ix_non_unique_name", False), ("uq_unique_name", True)},
+        )
 
     async def test_create(self):
         """测试创建记录"""
