@@ -139,10 +139,10 @@ FEDERATED_IDENTITY_TABLE_DEF = TableDefinition(
         ColumnDefinition("last_login_at", "datetime", nullable=False),
     ],
     indexes=[
-        IndexDefinition(
-            ["connection_id", "issuer", "external_subject"],
-            unique=True,
-        ),
+        # IndexDefinition(
+        #     ["connection_id", "issuer", "external_subject"],
+        #     unique=True,
+        # ),
         IndexDefinition(["user_id"], unique=False),
     ],
 )
@@ -161,11 +161,11 @@ FEDERATION_ROLE_MAPPING_TABLE_DEF = TableDefinition(
         ColumnDefinition("updated_at", "datetime", nullable=False),
     ],
     indexes=[
-        IndexDefinition(
-            ["connection_id", "claim_name", "claim_value", "local_role"],
-            unique=True,
-            name="uq_federation_role_mapping_rule",
-        ),
+        # IndexDefinition(
+        #     ["connection_id", "claim_name", "claim_value", "local_role"],
+        #     unique=True,
+        #     name="uq_federation_role_mapping_rule",
+        # ),
         IndexDefinition(["connection_id"], unique=False),
     ],
 )
