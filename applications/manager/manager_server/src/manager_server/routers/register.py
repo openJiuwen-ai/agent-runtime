@@ -51,11 +51,8 @@ def router_register(app: FastAPI) -> None:
     v1_router.include_router(gateway_lookup_router, tags=["Instance Access"])
 
     @api_router.get("/health", tags=["System"])
-    async def health_check() -> dict[str, str | bool]:
-        return {
-            "status": "ok",
-            "allow_local_provision": settings.allow_local_provision,
-        }
+    async def health_check() -> dict[str, str]:
+        return {"status": "ok"}
 
     @api_router.get("/manager-ws/status", tags=["System"])
     async def manager_ws_status() -> dict:
