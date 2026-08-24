@@ -1,0 +1,65 @@
+# CLAUDE.md
+
+本仓库实现**会话编排服务**(旁路式:gateway 直连 AgentServer Pod,服务只做控制面)。**M0–M6 已全部完成**(含 server 模式真环境验收),维护期。
+
+## 文档体系与开发前必读(路径均相对本模块根)
+
+文档三分:`docs/design/`(设计论证与 Lua 全文)、`docs/spec/`(**模块规格,AI 向**:代码在哪/怎么协作/改哪里)、`docs/feature/`(改动史)。
+
+**文档同步义务(与代码改动同一提交完成):**
+- 改动涉及 spec 覆盖的内容(模块行为 / Redis 键 / Lua / 接口 / 配置 / 错误码)→ **同步更新对应 spec 文档**(`docs/spec/` 按模块对号入座)。
+- **较大改动**(新功能 / 行为变化 / 重构 / 里程碑)→ 按 `docs/feature/_TEMPLATE.md` 新建一份记录并登记其 README 索引;**小的修复(局部 bugfix、注释/文案)不用**。
+
+1. `docs/spec/README.md` —— spec 索引 + 一页纸架构(先读)
+2. `docs/spec/session-manager.md` / `docs/spec/resource-manager.md` / `docs/spec/service-core.md` —— 三模块规格(改代码前读对应模块);e2e 用例逐条说明见 `docs/spec/e2e-test-cases.md`(场景/输入/预期输出)
+3. `docs/design/Agent-Runtime-HLD.md` —— 架构总览 / 接口契约 / 场景 A–N / Redis 键表(**语义权威,冲突以它为准**;§9 实现与验收状态)
+4. `docs/design/session-manager-design.md` —— SM 详细设计(7 个 Lua 全文)
+5. `docs/design/resource-manager-design.md` —— RM 详细设计(6 个 Lua 全文)
+
+## 红线规则(违反即返工)
+
+
+## 测试
+
+```bash
+cd applications/agent_runtime
+uv sync --extra local
+uv run pytest                 # 114 个用例:状态层 Lua / config 层 / 组件全链路 / HTTP 冒烟 / corner case / 双实例多副本
+```
+
+- 构造 `ServiceManager` 必须传 `deploy_mode="subprocess"`(默认 k8s 会挂死测试)。
+- fakeredis 陷阱:消费组 id=`"0"` bug、pubsub 需共享 FakeServer、EVAL 内 PUBLISH 需实测。
+- 双实例测试(`tests/integration/test_multi_replica.py` + `_dual_harness.py`):同进程两 App 共享一组 fakeredis/SQLite/FakeK8s,httpx ASGITransport 单事件循环驱动;lifespan 必须先手动驱动(否则 RestAdapter 惰性二建 sysctx 绕过后台 Job)。
+- 旧 SDK 已知失败用例(非回归)见外层 jiuwenclaw 仓库 CLAUDE.md 末尾清单。
+
+### 集成冒烟(真环境,部署后回归)
+
+```bash
+cd applications/agent_runtime
+./scripts/integration_smoke.sh     # HLD 场景 A–L 端到端;会 FLUSHDB 目标 Redis DB(有防误刷保护)
+```
+
+- 参数/前置见 `--help` 与 README;场景 N 待 AgentServer 支持 `GET /health` 后补验。
+- 经多副本 LB 亦可跑(实测 65/65),前提:部署带 `AGENT_RUNTIME_SCOPE_FULL_TIMEOUT`(deploy 模板默认 8,**须显著小于模板 session_ttl**,否则等待者 deadline 与会话到期碰撞产生混合结果);排查实录见 `docs/spec/e2e-test-cases.md` §8.1。
+- cleanup 空目标必须用**无匹配 label_selector**,不得指向业务 ns(同 label 真实 AgentServer 会被误删)或不存在的 ns(in-cluster SA 对其 403 而非空列表)。
+
+### 多副本(真环境)
+
+```bash
+# 宿主机双进程(快速):8091/8092 共享 Redis/DB,选主键互斥竞争
+./scripts/deploy_replicas.sh 2 .env.production.local 8091
+# K8s 多副本 + Service LB(生产形态):deploy/ 目录(模板+Dockerfile+渲染部署)
+./deploy/render_and_apply.sh deploy/agent_runtime.env --nodeport
+# 多副本 e2e(真 LB 单入口,含 failover;单实例自动 DEGRADED)
+uv run --no-sync python scripts/e2e_multi_replica.py --base-url http://127.0.0.1:30091/api/session \
+    --redis-url redis://127.0.0.1:30001/2 --namespace default
+# 压测/浸泡(零依赖,场景化;无 FLUSHDB、不动 cleanup 端点)
+uv run --no-sync python scripts/load_test.py --base-url http://127.0.0.1:30091/api/session --duration 60
+```
+
+## 环境
+
+- Python 3.11–3.13;Redis 须开 AOF/RDB;DB 用 MySQL/PostgreSQL(禁 SQLite 回退——server 模式;local 模式调试可用)。
+- 框架:`service/openjiuwen_runtime/service`(App/Envelope/SystemContext);App 范式参考 `applications/echo/echo_server.py`(**不是** a2a_service)。
+- 部署:`applications/agent_runtime/scripts/deploy.sh local|server`(server 读 `.env.production.local`)。
+- 本仓库是嵌套 git 仓库(独立于外层 jiuwenclaw),提交分开做。

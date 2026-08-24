@@ -10,7 +10,8 @@
   DB（`service_config_template` / `routing_rule` 表）；跨模块只走 Facade，
   不直读对方 Redis key。
 - 设计文档：`docs/design/`（语义权威 = HLD；冲突以 HLD 为准）。
-- 代码说明：`docs/agent-runtime-code-guide.md`（模块结构 / 关键流程 / Lua 清单 / 测试与部署）。
+- 模块规格（AI 向）：`docs/spec/`（README 索引 / service-core / session-manager / resource-manager；代码在哪、怎么协作、改哪里）。
+- 改动史：`docs/feature/`（每次改动一份文档，见其 README 写作规范）。
 
 ## 运行
 
@@ -27,7 +28,7 @@ cp agent_runtime.server.env.example .env.production.local
 
 ## 测试
 
-> 全部 e2e 用例(场景/输入/预期输出)逐条说明:`docs/e2e-test-cases.md`。
+> 全部 e2e 用例(场景/输入/预期输出)逐条说明:`docs/spec/e2e-test-cases.md`。
 
 ```bash
 cd applications/agent_runtime
@@ -53,7 +54,7 @@ cd applications/agent_runtime
 - 经多副本 LB 亦可跑（实测 65/65）——前提：部署带
   `AGENT_RUNTIME_SCOPE_FULL_TIMEOUT`（deploy 模板已默认 8，须显著小于模板
   session_ttl，否则等待者 deadline 与会话到期碰撞产生混合结果）。
-  排查实录与 cleanup 空目标的三个坑见 `docs/e2e-test-cases.md` §8.1。
+  排查实录与 cleanup 空目标的三个坑见 `docs/spec/e2e-test-cases.md` §8.1。
 
 ## 多副本部署与测试（M7）
 
