@@ -274,7 +274,7 @@
       "ruleName": "规则名称",
       "ruleDescription": "规则描述",
       "pattern": "匹配正则表达式",
-      "patternPlaceholder": "例如 (?i)(api[_-]?key)\s*[:=]\s*\S+",
+      "patternPlaceholder": "例如 (?i)(api[_-]?key)\\s*[:=]\\s*\\S+",
       "replacement": "替换文本",
       "priority": "优先级",
       "priorityHint": "按优先级从大到小依次应用脱敏规则。",

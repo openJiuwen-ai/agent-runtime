@@ -1,4 +1,4 @@
-﻿"""配置生效策略与默认模板映射 CRUD API（按组网实例路径隔离）。"""
+"""配置生效策略与默认模板映射 CRUD API（按组网实例路径隔离）。"""
 
 from __future__ import annotations
 

@@ -274,7 +274,7 @@
       "ruleName": "Rule Name",
       "ruleDescription": "Description",
       "pattern": "Match Regex Pattern",
-      "patternPlaceholder": "e.g. (?i)(api[_-]?key)\s*[:=]\s*\S+",
+      "patternPlaceholder": "e.g. (?i)(api[_-]?key)\\s*[:=]\\s*\\S+",
       "replacement": "Replacement",
       "priority": "Priority",
       "priorityHint": "Masking rules are applied in descending priority order.",
