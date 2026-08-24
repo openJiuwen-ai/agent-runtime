@@ -219,7 +219,7 @@ function idpHttp<T>(path: string, opts: RequestOptions = {}): Promise<T> {
 // ---------- System ----------
 
 export const SystemApi = {
-  health: () => http<{ status: string }>('/health'),
+  health: () => http<{ status: string; allow_local_provision?: boolean }>('/health'),
   managerWsStatus: () => http<ManagerWsStatus>('/manager-ws/status'),
 };
 
