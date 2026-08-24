@@ -1007,6 +1007,7 @@ export const AgentPolicyApi = {
         | 'priority'
         | 'match_expr'
         | 'agent_id'
+        | 'workspace_dir'
         | 'updated_at';
       sort_order?: 'asc' | 'desc';
     }
