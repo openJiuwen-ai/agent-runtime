@@ -1063,7 +1063,16 @@ export const ChannelApi = {
 };
 
 export const LogMaskingRuleApi = {
-  list: (instanceId: string, params?: { enabled?: boolean }) =>
+  list: (
+    instanceId: string,
+    params?: {
+      enabled?: boolean;
+      source?: string;
+      search?: string;
+      sort_by?: 'rule_name' | 'description' | 'pattern' | 'replacement' | 'priority' | 'updated_at';
+      sort_order?: 'asc' | 'desc';
+    }
+  ) =>
     http<ListItemsResult<LogMaskingRule>>(`${instanceBase(instanceId)}/log-masking-rules`, {
       query: params,
     }),
