@@ -196,7 +196,6 @@ _PUSH_CONFIG_OP_MODULES = (
     "manager_server.core.template.extension_config_template",
     "manager_server.core.template.skill_whitelist_template",
     "manager_server.core.template.service_config_template",
-    "manager_server.core.application_config.channel_config",
     "manager_server.core.application_config.log_masking_rule",
     "manager_server.core.config_effective_policy.config_effective_service_policy",
     "manager_server.core.config_effective_policy.config_effective_global_policy",

@@ -247,26 +247,9 @@
   },
   "instanceConfig": {
     "tabs": {
-      "channel": "Channel",
       "logMasking": "日志脱敏",
       "logging": "日志级别",
       "permissions": "权限配置"
-    },
-    "channel": {
-      "register": "注册 Channel",
-      "channelId": "Channel ID",
-      "channelName": "Channel 名称",
-      "channelType": "Channel 类型",
-      "config": "配置 (JSON)",
-      "filterType": "按类型筛选",
-      "customType": "自定义类型",
-      "customTypePlaceholder": "输入 Channel 类型",
-      "initialStatus": "初始状态",
-      "statusActive": "active",
-      "statusInactive": "inactive",
-      "activate": "激活",
-      "deactivate": "停用",
-      "deleteConfirm": "确认删除该 Channel？将同步通知 Gateway。"
     },
     "logMasking": {
       "new": "新建脱敏规则",

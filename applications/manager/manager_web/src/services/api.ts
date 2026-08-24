@@ -34,8 +34,6 @@ import type {
   ServiceConfigTemplateUpdateBody,
   ProvisionLocalInstanceBody,
   ResponseModel,
-  ChannelConfig,
-  ChannelRegisterBody,
   LogMaskingRule,
   LogMaskingRuleCreateBody,
   LogMaskingRuleUpdateBody,
@@ -1038,30 +1036,6 @@ export const AgentPolicyApi = {
 function instanceBase(instanceId: string) {
   return `/v1/instances/${encodeURIComponent(instanceId)}`;
 }
-
-export const ChannelApi = {
-  list: (
-    instanceId: string,
-    params?: { channel_type?: string; status?: string }
-  ) =>
-    http<ListItemsResult<ChannelConfig>>(`${instanceBase(instanceId)}/channels`, { query: params }),
-  register: (instanceId: string, body: ChannelRegisterBody) =>
-    http<{ channel_id: string }>(`${instanceBase(instanceId)}/channels`, { method: 'POST', body }),
-  activate: (instanceId: string, channelId: string) =>
-    http<{ channel_id: string; status: string }>(
-      `${instanceBase(instanceId)}/channels/${encodeURIComponent(channelId)}/activate`,
-      { method: 'POST' }
-    ),
-  deactivate: (instanceId: string, channelId: string, body?: { graceful?: boolean; timeout?: number }) =>
-    http<{ channel_id: string; status: string }>(
-      `${instanceBase(instanceId)}/channels/${encodeURIComponent(channelId)}/deactivate`,
-      { method: 'POST', body: body ?? { graceful: true, timeout: 30 } }
-    ),
-  remove: (instanceId: string, channelId: string) =>
-    http<void>(`${instanceBase(instanceId)}/channels/${encodeURIComponent(channelId)}`, {
-      method: 'DELETE',
-    }),
-};
 
 export const LogMaskingRuleApi = {
   list: (

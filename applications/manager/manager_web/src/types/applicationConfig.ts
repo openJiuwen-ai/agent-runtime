@@ -1,24 +1,3 @@
-export interface ChannelConfig {
-  id: number;
-  channel_id: string;
-  channel_name: string;
-  channel_type: string;
-  bot_id: string;
-  config?: Record<string, unknown> | null;
-  status: string;
-  created_at?: string | null;
-  updated_at?: string | null;
-}
-
-export interface ChannelRegisterBody {
-  channel_id: string;
-  channel_name: string;
-  channel_type: string;
-  bot_id: string;
-  config?: Record<string, unknown>;
-  status: string;
-}
-
 export interface LogMaskingRule {
   id: number;
   jiuwenclaw_id: string;

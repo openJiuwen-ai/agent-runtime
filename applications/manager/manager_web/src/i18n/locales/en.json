@@ -247,26 +247,9 @@
   },
   "instanceConfig": {
     "tabs": {
-      "channel": "Channel",
       "logMasking": "Log Masking",
       "logging": "Log Levels",
       "permissions": "Permissions"
-    },
-    "channel": {
-      "register": "Register Channel",
-      "channelId": "Channel ID",
-      "channelName": "Channel Name",
-      "channelType": "Channel Type",
-      "config": "Config (JSON)",
-      "filterType": "Filter by type",
-      "customType": "Custom type",
-      "customTypePlaceholder": "Enter channel type",
-      "initialStatus": "Initial Status",
-      "statusActive": "active",
-      "statusInactive": "inactive",
-      "activate": "Activate",
-      "deactivate": "Deactivate",
-      "deleteConfirm": "Delete this channel? Gateway will be notified."
     },
     "logMasking": {
       "new": "New Rule",
