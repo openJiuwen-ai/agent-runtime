@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from hashlib import sha256
 from typing import Any
 from uuid import uuid4
 
@@ -74,17 +75,26 @@ class IdentityCenterFederatedIdentityStore(FederatedIdentityStore):
         issuer: str,
         external_subject: str,
     ) -> LocalPrincipal | None:
+        identity_key = _external_identity_key(
+            connection_id,
+            issuer,
+            external_subject,
+        )
         async with self._system_context.transaction() as session:
             identity_row = await _one_mapping(
                 session,
                 select(self._identities).where(
-                    self._identities.c.connection_id == connection_id,
-                    self._identities.c.issuer == issuer,
-                    self._identities.c.external_subject == external_subject,
+                    self._identities.c.identity_key == identity_key,
                 ),
             )
             if identity_row is None:
                 return None
+            _validate_identity_row(
+                identity_row,
+                connection_id=connection_id,
+                issuer=issuer,
+                external_subject=external_subject,
+            )
             connection_row = await _one_mapping(
                 session,
                 select(self._connections).where(
@@ -139,14 +149,24 @@ class IdentityCenterFederatedIdentityStore(FederatedIdentityStore):
             )
             is_admin = "admin" in roles
 
+            identity_key = _external_identity_key(
+                identity.connection_id,
+                identity.issuer,
+                identity.external_subject,
+            )
             identity_row = await _one_mapping(
                 session,
                 select(self._identities).where(
-                    self._identities.c.connection_id == identity.connection_id,
-                    self._identities.c.issuer == identity.issuer,
-                    self._identities.c.external_subject == identity.external_subject,
+                    self._identities.c.identity_key == identity_key,
                 ),
             )
+            if identity_row is not None:
+                _validate_identity_row(
+                    identity_row,
+                    connection_id=identity.connection_id,
+                    issuer=identity.issuer,
+                    external_subject=identity.external_subject,
+                )
             now = utc_now()
             if identity_row is None:
                 user_id = f"fuser_{uuid4().hex}"
@@ -165,6 +185,7 @@ class IdentityCenterFederatedIdentityStore(FederatedIdentityStore):
                         connection_id=identity.connection_id,
                         issuer=identity.issuer,
                         external_subject=identity.external_subject,
+                        identity_key=identity_key,
                         user_id=user_id,
                         attributes=identity.attributes,
                         first_login_at=now,
@@ -276,6 +297,37 @@ class IdentityCenterFederatedIdentityStore(FederatedIdentityStore):
 async def _one_mapping(session: Any, statement: Any) -> Any | None:
     result = await session.execute(statement)
     return result.mappings().one_or_none()
+
+
+def _external_identity_key(
+    connection_id: str,
+    issuer: str,
+    external_subject: str,
+) -> str:
+    """Build a compact, case-sensitive key for one verified external identity."""
+    digest = sha256()
+    for value in (connection_id, issuer, external_subject):
+        encoded = value.encode("utf-8")
+        digest.update(len(encoded).to_bytes(8, byteorder="big"))
+        digest.update(encoded)
+    return digest.hexdigest()
+
+
+def _validate_identity_row(
+    identity_row: Any,
+    *,
+    connection_id: str,
+    issuer: str,
+    external_subject: str,
+) -> None:
+    persisted_identity = (
+        str(identity_row["connection_id"]),
+        str(identity_row["issuer"]),
+        str(identity_row["external_subject"]),
+    )
+    requested_identity = (connection_id, issuer, external_subject)
+    if persisted_identity != requested_identity:
+        raise FederationBindingError("federated identity key collision")
 
 
 def _validate_connection_row(

@@ -157,7 +157,7 @@ SAML/OIDC Provider 必须先完成协议校验，再把验证后的 Claim 交给
 | 表 | 职责 |
 |------|------|
 | `federation_connection` | 保存受信连接与本地组织的稳定绑定 |
-| `federated_identity` | 保存外部 Subject 到本地 `app_user.user_id` 的唯一映射 |
+| `federated_identity` | 保存外部 Subject 到本地 `app_user.user_id` 的唯一映射；使用三个外部身份字段的稳定 SHA-256 摘要作为唯一键 |
 | `federation_role_mapping` | 保存受信 Claim 精确值到本地角色的映射规则 |
 | `federation_login_state` | 保存有效期内的浏览器联合登录状态 |
 | `federation_login_code` | 保存一次性换码的 SHA-256，不保存换码明文 |
@@ -170,6 +170,8 @@ Manager 权限守卫。
 `auth_identity` 只保存本地用户名/口令等认证凭据；`federated_identity` 只保存稳定的
 外部身份绑定和最近一次经 Provider 验证的属性；`org` 与 `user_org_membership` 管理本地
 组织目录；`auth_session` 管理可撤销的 refresh token；access JWT 自包含且不落库。
+外部身份摘要由 `connection_id`、`issuer`、`external_subject` 的原始 UTF-8 内容计算，
+原字段仍完整保存并在读取时复核，因此身份匹配不依赖数据库字符集或大小写排序规则。
 联合认证不会把企业内部组织直接等同于平台任意 `group_id`，而是由
 `federation_connection` 明确绑定到一个受控的本地虚拟组织，避免企业目录命名与平台
 业务组织发生碰撞。
