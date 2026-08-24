@@ -2,7 +2,7 @@
 
 - 日期:2026-08-18(M6 冒烟固化于 2026-08-15;M7 多副本补全于 2026-08-18)
 - 读者:执行/评审端到端验收的工程师
-- 配套:语义权威 = `design/Agent-Runtime-HLD.md`(§6 场景、§5 键表);脚本本体在
+- 配套:语义权威 = `../design/Agent-Runtime-HLD.md`(§6 场景、§5 键表);脚本本体在
   `applications/agent_runtime/scripts/`;本文回答"**每个 e2e 用例:场景、输入、预期输出**"。
 
 ---
