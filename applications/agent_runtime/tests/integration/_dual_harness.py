@@ -90,6 +90,10 @@ class SlowFakeK8sPodClient:
     def __getattr__(self, name):
         return getattr(self._inner, name)
 
+    def set_deploy_failures(self, count: int) -> None:
+        """写透内层 FakeK8s 的失败旋钮（__getattr__ 只代理读，不代理写）。"""
+        self._inner.deploy_failures = count
+
     async def deploy(self, pod_spec: dict):
         t0 = time.monotonic()
         if self.deploy_delay:

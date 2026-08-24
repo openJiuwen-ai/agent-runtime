@@ -45,7 +45,7 @@ src/agent_runtime/
     ├── orchestrator.py  acquire(取暖/选主 deploy/封顶)+ idle_consider
     │                    + update_pool_config + cleanup + 结果幂等缓存
     ├── state.py         RM Redis 键 schema 唯一出口
-    ├── lua_scripts.py   5 个 Lua 全文(见 §4)
+    ├── lua_scripts.py   6 个 Lua 全文(见 §4)
     ├── k8s.py           RealK8sPodClient(kubernetes_asyncio)/ FakeK8sPodClient
     │                    (deploy 等 Ready、409 重命名重试、判死归一化、/health 探测)
     ├── sweeper.py       autoscale / reclaim / watch(死 Pod+健康探测)/ reconcile
@@ -55,7 +55,7 @@ src/agent_runtime/
 scripts/deploy.sh                local|server 启动
 scripts/e2e_hld_acceptance.py    集成冒烟(场景 A–L,真环境)
 scripts/integration_smoke.sh     冒烟入口包装
-tests/                           106 个单测(见 §7)
+tests/                           114 个单测(见 §7)
 ```
 
 ## 3. 关键流程(读代码的切入点)
@@ -79,7 +79,8 @@ tests/                           106 个单测(见 §7)
   reuse(暖 Pod,deploy_ver 过滤)→ 返回
   max_reached → 抛 MaxPodsReached(SM 映射 503 NO_POD_AVAILABLE)
   need_deploy → 抢 lock:rm:deploy:{scope} 选主串行 deploy
-               (他副本持锁 → 0.3s 等待重试,复用其成果)
+               (输家 → follower 等待室:准入≤pc-1/overflow 快失败/等 leader
+                Pod 注册即复用/leader 失败不接管/等待有界)
 k8s.deploy:create + wait Ready(409 重命名重试;超时/镜像失败 → DeployFailed)
 错误路径必须清 deploying 占位(红线)
 ```
@@ -128,6 +129,7 @@ lock:config_sync 串行化(忙 → 409 CONFIG_SYNC_BUSY)
 | RM | `LUA_RELEASE` | idle_consider 转 idle 暖池(起 pod_ttl 计时) |
 | RM | `LUA_PURGE` | 清该 Pod 全部 RM key(返回其 scope) |
 | RM | `LUA_PLACEHOLDER` | autoscale 专用占位(计入 max_pods,不碰 idle 池) |
+| RM | `LUA_DEPLOY_FOLLOWER_GATE` | deploy 锁输家等待室原子准入(ZSET+deadline,≤pc-1;先清过期再 ZADD 先行+超限自退) |
 
 约定:脚本不传 KEYS(键由 `ARGV[1]` 前缀在脚本内拼);调用统一经各自 `state.py` 的 `eval()`。
 
@@ -143,7 +145,8 @@ session_manager:scope:{sid}:waiters               SET   等待队列(LUA_WAITER_
 session_manager:scope:{sid}:free                  PubSub 额度释放信号
 session_manager:pod:{scope}:{pod}:sessions|info   SET|HASH per-Pod 会话 / sse_url+deploy_ver
 session_manager:pods:registered                   SET   "{scope}:{pod}"(不变量 5)
-resource_manager:resource:scope:{sid}:pods|idle|config|deploying  ZSET|SET|HASH|SET
+resource_manager:resource:scope:{sid}:pods|idle|config|deploying|deploy_followers
+                                                     ZSET|SET|HASH|SET|ZSET(follower 等待室,≤pc-1)
 resource_manager:resource:pod:{pod}:info|idle_since|health_fails HASH|STR|STR
 resource_manager:resource:pods:all                SET   全部 pod_id(watch/reconcile 枚举)
 resource_manager:lock:rm:deploy:{sid}|autoscale|reclaim|watch|reconcile  选主/串行化锁
@@ -168,7 +171,7 @@ Facade 间以 Python 异常传播,handler 捕获后映射为错误信封。
 
 ```bash
 cd applications/agent_runtime
-uv sync --extra local && uv run pytest     # 106 用例,fakeredis+SQLite+FakeK8s
+uv sync --extra local && uv run pytest     # 114 用例,fakeredis+SQLite+FakeK8s
 ./scripts/integration_smoke.sh             # 真环境冒烟(场景 A–L;FLUSHDB 目标库,有防误刷)
 ```
 

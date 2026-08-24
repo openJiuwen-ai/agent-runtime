@@ -1,12 +1,16 @@
 # coding: utf-8
-"""Resource Manager 的 4 个 Lua 脚本（所有编排态变更，原子）。
+"""Resource Manager 的 6 个 Lua 脚本（所有编排态变更，原子）。
 
 约定同 SM：``ARGV[1]`` 恒为键前缀（``resource_manager:``）；返回扁平字符串数组。
 脚本清单（语义见 RM 设计 §5.1）：
 - LUA_ACQUIRE   取暖 Pod 复用（deploy_ver 过滤）/ 判 max_pods（含 deploying 占位）/ 占位
+- LUA_PLACEHOLDER  autoscale 专用占位（判 max_pods + SADD，不碰 idle 池）
 - LUA_REGISTER  deploy 成功登记（info / scope:pods / pods:all，清占位；热备入 idle）
 - LUA_RELEASE   idle_consider：转 idle 暖池 + 起 pod_ttl 计时（幂等）
 - LUA_PURGE     Pod 死亡 / reclaim 后清全部 RM key（幂等）
+- LUA_DEPLOY_FOLLOWER_GATE  deploy 锁输家的等待室原子准入（ZSET+deadline，
+  上限 pod_concurrency-1；先清过期成员再 ZADD 先行+超限自退——同
+  LUA_WAITER_GATE 纪律，禁止先查后加）
 """
 
 from __future__ import annotations
@@ -127,4 +131,26 @@ if scope then
 end
 redis.call('SREM', pfx .. 'resource:pods:all', pod)
 return {'ok', scope or ''}
+"""
+
+# Argv: prefix, scope_id, follower_id, max_followers, deadline, now
+# deploy 锁输家（follower）等待室原子准入。ZSET 以 deadline（秒级时间戳）为
+# score：先 ZREMRANGEBYSCORE 清过期成员（等待进程崩溃的兜底，不泄漏），
+# 再 ZADD 先行 + ZCARD 超限自退（并发同时到达也不会超收）。
+LUA_DEPLOY_FOLLOWER_GATE = r"""
+local pfx = ARGV[1]
+local scope = ARGV[2]
+local follower = ARGV[3]
+local max = tonumber(ARGV[4])
+local deadline = tonumber(ARGV[5])
+local now = tonumber(ARGV[6])
+
+local key = pfx .. 'resource:scope:' .. scope .. ':deploy_followers'
+redis.call('ZREMRANGEBYSCORE', key, '-inf', now)
+redis.call('ZADD', key, deadline, follower)
+if redis.call('ZCARD', key) > max then
+  redis.call('ZREM', key, follower)
+  return {'false'}
+end
+return {'true'}
 """

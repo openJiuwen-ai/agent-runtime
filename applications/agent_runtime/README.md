@@ -32,7 +32,7 @@ cp agent_runtime.server.env.example .env.production.local
 ```bash
 cd applications/agent_runtime
 uv sync --extra local      # 含 dev 组（fakeredis[lua]/pytest）
-uv run pytest              # 106 个用例：状态层 Lua / config 层 / 组件全链路 / HTTP 冒烟 / 双实例多副本
+uv run pytest              # 114 个用例：状态层 Lua / config 层 / 组件全链路 / HTTP 冒烟 / 双实例多副本
 ```
 
 ### 集成冒烟测试（真环境，M6 用例固化）

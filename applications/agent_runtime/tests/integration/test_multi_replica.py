@@ -96,9 +96,11 @@ async def test_cross_replica_burst_no_over_admission(dual):
         return status, body.get("error_code")
 
     outcomes = await asyncio.gather(*[_attempt(i) for i in range(8)])
-    ok = [o for o in outcomes if o[0] == 200]
-    queue_full = [o for o in outcomes if o == (503, "SCOPE_QUEUE_FULL")]
-    timeout = [o for o in outcomes if o == (504, "SCOPE_FULL_TIMEOUT")]
+    ok = [outcome for outcome in outcomes if outcome[0] == 200]
+    queue_full = [outcome for outcome in outcomes
+                  if outcome == (503, "SCOPE_QUEUE_FULL")]
+    timeout = [outcome for outcome in outcomes
+               if outcome == (504, "SCOPE_FULL_TIMEOUT")]
     assert len(ok) == 0, outcomes               # scope 已满，突发全部不进
     assert len(queue_full) == 4, outcomes       # max_waiters=4 之外的快失败
     assert len(timeout) == 4, outcomes          # 入队者等待至 deadline
@@ -117,35 +119,96 @@ async def test_cross_replica_burst_no_over_admission(dual):
 
 @requires_lua
 async def test_deploy_lock_serializes_cross_replica_deploys(dual):
-    """并发冷启动打到 A/B：per-scope deploy 锁串行化，窗口零重叠。
+    """并发冷启动打到 A/B：leader 部署、follower 等待复用——恰好 1 个 Pod。
 
-    SlowFakeK8s deploy_delay=0.4s（deploy 全程持锁）。cc=4/pc=2 → 3 个并发
-    会话最多 2 个 Pod。断言：全部 200、部署窗口无交集、Pod ≤ max_pods、
-    占位清空。（跨副本冷竞争允许第 2 个 Pod —— 输家 retry 时赢家 Pod 为
-    in-use 不在 idle 池；这正是不断言「恰好 1 个 Pod」的原因。）
+    SlowFakeK8s deploy_delay=0.4s（deploy 全程持锁）。cc=4/pc=2 →
+    follower 上限 pc-1=1：A/B 并发冷启动时输家进等待室，leader 的 Pod
+    注册后直接复用（不再自建第 2 个空 Pod——M8 修复的跨副本冷竞争浪费）；
+    pod1 满后 s3 才触发第 2 次部署。
     """
     dual.k8s.deploy_delay = 0.4
     await dual.seed_template(scope_concurrency=4, pod_concurrency=2)
     scope = scope_of()
 
     async def _route(i, sid):
-        status, _, body = await dual.post(i, "route", session_id=sid)
+        status, raw, body = await dual.post(i, "route", session_id=sid)
         assert status == 200, body
+        return raw
 
-    # A/B 并发冷启动竞争（双副本同时 need_deploy 同一 scope）
-    await asyncio.gather(_route(0, "s1"), _route(1, "s2"))
-    # 竞争结束后 first-fit 复用已有 Pod（不再触发第 3 次部署）
+    # A/B 并发冷启动竞争：1 个 leader + 1 个 follower，双方落同一 Pod
+    first, second = await asyncio.gather(_route(0, "s1"), _route(1, "s2"))
+    assert len(dual.k8s.deploy_log) == 1          # follower 复用，零额外部署
+    assert second["pod_id"] == first["pod_id"]
+
+    # pod1 已满（2/2）→ s3 才触发第 2 次部署
     await _route(0, "s3")
-
-    deployed = len(dual.k8s.deploy_log)
-    assert 1 <= deployed <= 2                    # max_pods=2 封顶
-    assert not dual.k8s.deploy_windows_overlap()
-    assert len(dual.k8s.pods) <= 2
+    assert len(dual.k8s.deploy_log) == 2
+    assert not dual.k8s.deploy_windows_overlap()   # 两次部署窗口无交集
     assert await dual.redis.scard(
         f"resource_manager:resource:scope:{scope}:deploying") == 0
-    # 3 会话全部落位（s3 first-fit 复用已有 Pod）
+    assert await dual.redis.zcard(
+        f"resource_manager:resource:scope:{scope}:deploy_followers") == 0
     assert await dual.redis.scard(
         f"session_manager:scope:{scope}:sessions") == 3
+
+
+@requires_lua
+async def test_deploy_follower_cap_strict_fast_fail(dual):
+    """follower 等待室满（pc-1）→ overflow 严格快失败，不部署不等待。
+
+    cc=8/pc=2 → max_pods=4（占位预算充足，4 个并发都能拿到占位），
+    follower 上限 pc-1=1：1 leader + 1 follower 成功（pod1 2/2 满），
+    第 3/4 个在闸门处 503 NO_POD_AVAILABLE 快失败。
+    """
+    dual.k8s.deploy_delay = 0.4
+    await dual.seed_template(scope_concurrency=8, pod_concurrency=2)
+    scope = scope_of()
+
+    async def _attempt(i):
+        status, _, body = await dual.post(i % 2, "route", session_id=f"cap-{i}")
+        return status, body.get("error_code")
+
+    outcomes = await asyncio.gather(*[_attempt(i) for i in range(4)])
+    ok = [outcome for outcome in outcomes if outcome[0] == 200]
+    fast_fail = [outcome for outcome in outcomes
+                 if outcome == (503, "NO_POD_AVAILABLE")]
+    assert len(ok) == 2, outcomes
+    assert len(fast_fail) == 2, outcomes
+    assert len(dual.k8s.deploy_log) == 1          # 恰好 1 次部署
+    assert await dual.redis.scard(
+        f"resource_manager:resource:scope:{scope}:deploying") == 0
+    assert await dual.redis.zcard(
+        f"resource_manager:resource:scope:{scope}:deploy_followers") == 0
+    assert await dual.redis.scard(
+        f"session_manager:scope:{scope}:sessions") == 2   # pod1 2/2 满
+
+
+@requires_lua
+async def test_follower_fails_when_leader_deploy_fails(dual):
+    """leader 部署失败（锁释放且无进展）→ follower 不接管，直接失败。
+
+    FakeK8s deploy_failures=1：leader 的 deploy 抛 DeployFailed（错误路径
+    清占位）。follower 轮询见锁空闲无进展 → 同样 503；占位/等待室全清。
+    """
+    # deploy_failures 是内层 FakeK8s 的旋钮（经 set_deploy_failures 写透）；
+    # 失败必须是「慢」的——瞬时失败时锁毫秒级释放，第二个请求会直接抢到
+    # 已释放的锁部署成功，根本不进 follower 等待室
+    dual.k8s.deploy_delay = 0.5
+    dual.k8s.set_deploy_failures(1)
+    await dual.seed_template(scope_concurrency=4, pod_concurrency=2)
+    scope = scope_of()
+
+    async def _attempt(i):
+        status, _, body = await dual.post(i % 2, "route", session_id=f"fail-{i}")
+        return status, body.get("error_code")
+
+    outcomes = await asyncio.gather(*[_attempt(i) for i in range(2)])
+    assert all(outcome == (503, "NO_POD_AVAILABLE")
+               for outcome in outcomes), outcomes
+    assert await dual.redis.scard(
+        f"resource_manager:resource:scope:{scope}:deploying") == 0
+    assert await dual.redis.zcard(
+        f"resource_manager:resource:scope:{scope}:deploy_followers") == 0
 
 
 @requires_lua
