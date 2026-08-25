@@ -169,20 +169,36 @@ async def log_masking_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(gateway_rule_mod, "ensure_db_handler", _ensure_db_handler)
     monkeypatch.setattr(gateway_rule_mod, "get_jiuwenclaw_id", lambda: jid)
 
-    async def _bridge_push_config_op(
+    async def _bridge_gateway_request(
         jiuwenclaw_id: str,
-        config: dict[str, Any],
+        method: str,
+        path: str,
+        business: dict[str, Any] | None = None,
         **_kwargs: Any,
     ) -> dict[str, Any]:
-        payload = config.get("log_masking_rule")
-        if payload is not None:
-            await gateway_rule_mod.apply_log_masking_rule(payload)
+        _ = jiuwenclaw_id
+        m = method.upper()
+        body = dict(business or {})
+        if m == "POST" and path == "/api/v1/log-masking-rules":
+            await gateway_rule_mod.apply_log_masking_rule(
+                {"op": "create", "rule": body}
+            )
+        elif m == "PATCH" and path.startswith("/api/v1/log-masking-rules/"):
+            rule_id = path.rsplit("/", 1)[-1]
+            await gateway_rule_mod.apply_log_masking_rule(
+                {"op": "update", "rule_id": rule_id, "updates": body}
+            )
+        elif m == "DELETE" and path.startswith("/api/v1/log-masking-rules/"):
+            rule_id = path.rsplit("/", 1)[-1]
+            await gateway_rule_mod.apply_log_masking_rule(
+                {"op": "delete", "rule_id": rule_id}
+            )
+        else:
+            raise AssertionError(f"unexpected gateway_request {m} {path}")
         return {"revision": "rev-integration", "success_flag": True}
 
-    monkeypatch.setattr(
-        "manager_server.core.application_config.log_masking_rule.push_config_op",
-        _bridge_push_config_op,
-    )
+    _lm = "manager_server.core.application_config.log_masking_rule"
+    monkeypatch.setattr(f"{_lm}.gateway_request", _bridge_gateway_request)
 
     from fastapi import FastAPI
 

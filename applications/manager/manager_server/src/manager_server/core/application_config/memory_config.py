@@ -8,7 +8,7 @@ from typing import Any
 
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 
-from manager_server.manager_ws_server.server import push_config_op
+from manager_server.manager_config_push import gateway_request
 
 _MEMORY_CONFIG_TABLE = "memory_config"
 
@@ -56,14 +56,6 @@ def _validate_memory_body(body: dict[str, Any]) -> None:
     forbidden = body.get("forbidden_memory_definition")
     if forbidden is not None and not isinstance(forbidden, dict):
         raise ValueError("memory.forbidden_memory_definition must be an object")
-
-
-async def push_memory_config_op(
-    jiuwenclaw_id: str,
-    payload: dict[str, Any],
-) -> dict[str, Any]:
-    """推送 memory 配置变更（``config.memory_config``）。"""
-    return await push_config_op(jiuwenclaw_id, {"memory_config": payload})
 
 
 class MemoryConfigService:
@@ -127,9 +119,11 @@ class MemoryConfigService:
             result = _row_to_dict(created)
 
         try:
-            await push_memory_config_op(
+            await gateway_request(
                 jiuwenclaw_id,
-                {"op": "upsert", "body": result.get("body")},
+                "PUT",
+                "/api/v1/memory",
+                {"body": result.get("body") or {}},
             )
         except Exception as exc:
             raise ValueError(f"failed to sync to gateway: {exc}") from exc
@@ -145,7 +139,7 @@ class MemoryConfigService:
             raise ValueError("memory config not found")
 
         try:
-            await push_memory_config_op(jiuwenclaw_id, {"op": "delete"})
+            await gateway_request(jiuwenclaw_id, "DELETE", "/api/v1/memory", {})
         except Exception as exc:
             raise ValueError(f"failed to sync to gateway: {exc}") from exc
 

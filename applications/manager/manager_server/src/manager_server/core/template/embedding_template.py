@@ -8,7 +8,8 @@ from openjiuwen_runtime.foundation.db.handler import DBHandler
 
 from manager_server.core.template.push_template_to_gateway import (
     assert_template_deletable,
-    push_template_to_referencing_gateways,
+    update_template_on_referencing_gateways,
+    delete_template_on_referencing_gateways,
 )
 from manager_server.infrastructure.common import resolve_order_by
 from manager_server.infrastructure.utils import iso_datetime, new_uuid4, utc_now
@@ -165,12 +166,11 @@ class EmbeddingTemplateService:
             return None
         if not updates:
             return row_to_out(existing)
-        await push_template_to_referencing_gateways(
+        await update_template_on_referencing_gateways(
             self._handler,
             "embedding_templates",
-            "update",
-            template_id=template_id,
-            updates=updates,
+            template_id,
+            updates,
         )
         row = await self._handler.update(
             _EMBEDDING_TEMPLATE_TABLE,
@@ -188,11 +188,10 @@ class EmbeddingTemplateService:
         await assert_template_deletable(
             self._handler, template_id, "embedding_templates"
         )
-        await push_template_to_referencing_gateways(
+        await delete_template_on_referencing_gateways(
             self._handler,
             "embedding_templates",
-            "delete",
-            template_id=template_id,
+            template_id,
         )
         return await self._handler.delete(
             _EMBEDDING_TEMPLATE_TABLE, {"template_id": template_id}

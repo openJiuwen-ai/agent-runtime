@@ -20,7 +20,7 @@ from manager_server.infrastructure.utils import (
     new_uuid4,
     utc_now,
 )
-from manager_server.manager_ws_server.server import push_config_op
+from manager_server.manager_config_push import gateway_request
 from manager_server.models.config_effective_policy_models import (
     CONFIG_EFFECTIVE_GLOBAL_POLICY_TABLE_DEF,
 )
@@ -38,8 +38,14 @@ from manager_server.schemas.config_effective_policy_schemas import (
 )
 
 _GLOBAL_POLICY_TABLE = CONFIG_EFFECTIVE_GLOBAL_POLICY_TABLE_DEF.table_name
+_GLOBAL_POLICY_PATH = "/api/v1/config-effective/global-policies"
 _LIST_ALL_CAP = 10_000
+_PUSH_DROP_KEYS = frozenset({"id", "created_at", "updated_at", "jiuwenclaw_id"})
 _ALLOWED_SORT_FIELDS = frozenset({"policy_name", "policy_desc", "priority", "updated_at"})
+
+
+def _clean_policy_for_create(policy: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in policy.items() if k not in _PUSH_DROP_KEYS}
 
 
 def _matches_search(row: Any, query: str) -> bool:
@@ -55,36 +61,11 @@ def _matches_search(row: Any, query: str) -> bool:
     return any(needle in field.lower() for field in fields)
 
 
-async def push_config_effective_global_policy_op(
-    jiuwenclaw_id: str,
-    op: str,
-    *,
-    policy: dict[str, Any] | None = None,
-    row_id: int | None = None,
-    updates: dict[str, Any] | None = None,
-    policies: list[dict[str, Any]] | None = None,
-) -> dict[str, Any]:
-    """推送全局兜底配置生效策略变更（``config.config_effective_global_policies``），返回 config.ack payload。"""
-    payload: dict[str, Any] = {"op": op}
-    if policy is not None:
-        payload["policy"] = policy
-    if row_id is not None:
-        payload["id"] = row_id
-    if updates is not None:
-        payload["updates"] = updates
-    if policies is not None:
-        payload["policies"] = policies
-    return await push_config_op(
-        jiuwenclaw_id,
-        {"config_effective_global_policies": payload},
-    )
-
-
 async def push_global_policies_sync_to_gateway(
     handler: DBHandler,
     jiuwenclaw_id: str,
 ) -> dict[str, Any]:
-    """Gateway 注册后：将 MDB 中该实例全部 Global 策略 bulk push 到 GDB（``op=sync``）。"""
+    """Gateway 注册后：将 MDB 中该实例全部 Global 策略 bulk push 到 GDB。"""
     jid = str(jiuwenclaw_id or "").strip()
     if not jid:
         raise ValueError("jiuwenclaw_id is required")
@@ -95,16 +76,23 @@ async def push_global_policies_sync_to_gateway(
         offset=0,
     )
     policies = [_row_to_out(row).model_dump(mode="json") for row in rows]
-    return await push_config_op(
-        jid,
-        {
-            "config_effective_global_policies": {
-                "op": "sync",
-                "policies": policies,
-                "skip_runtime_update": True,
-            }
-        },
-    )
+    last: dict[str, Any] | None = None
+    for idx, policy in enumerate(policies):
+        if not isinstance(policy, dict):
+            continue
+        last = await gateway_request(
+            jid,
+            "POST",
+            f"{_GLOBAL_POLICY_PATH}/",
+            _clean_policy_for_create(policy),
+            revision=f"sync-global-policy:{idx}",
+        )
+    return last or {
+        "revision": "sync-global-policy",
+        "success_flag": True,
+        "result": {"synced": 0},
+        "transport": "http",
+    }
 
 
 def _global_policy_pk(jiuwenclaw_id: str, policy_id: int) -> dict[str, Any]:
@@ -133,7 +121,7 @@ class ConfigEffectiveGlobalPolicyService:
 
     @staticmethod
     def _policy_dict_for_push(row: dict[str, Any], *, now: datetime) -> dict[str, Any]:
-        """构建经 WebSocket 下发给 Gateway 的 policy 对象（不含 id，由 Gateway 自增）。"""
+        """构建下发给 Gateway 的 policy 对象（不含 id，由 Gateway 自增）。"""
         return {
             "jiuwenclaw_id": row["jiuwenclaw_id"],
             "policy_id": row["policy_id"],
@@ -176,10 +164,11 @@ class ConfigEffectiveGlobalPolicyService:
             new_template_ref=row["template_ref"],
             skip_runtime_update=True,
         )
-        ack = await push_config_effective_global_policy_op(
+        ack = await gateway_request(
             normalized,
-            "create",
-            policy=self._policy_dict_for_push(row, now=now),
+            "POST",
+            f"{_GLOBAL_POLICY_PATH}/",
+            _clean_policy_for_create(self._policy_dict_for_push(row, now=now)),
         )
         ack_result = ack.get("result") if isinstance(ack, dict) else None
         row_id: int | None = None
@@ -294,11 +283,11 @@ class ConfigEffectiveGlobalPolicyService:
                 new_template_ref=updates["template_ref"],
                 skip_runtime_update=True,
             )
-        await push_config_effective_global_policy_op(
+        await gateway_request(
             normalized,
-            "update",
-            row_id=policy_id,
-            updates=updates,
+            "PATCH",
+            f"{_GLOBAL_POLICY_PATH}/{policy_id}",
+            dict(updates),
         )
         payload = dict(updates)
         payload["updated_at"] = utc_now()
@@ -329,10 +318,11 @@ class ConfigEffectiveGlobalPolicyService:
             new_template_ref={},
             skip_runtime_update=True,
         )
-        await push_config_effective_global_policy_op(
+        await gateway_request(
             normalized,
-            "delete",
-            row_id=policy_id,
+            "DELETE",
+            f"{_GLOBAL_POLICY_PATH}/{policy_id}",
+            {},
         )
         return await self._handler.delete(
             _GLOBAL_POLICY_TABLE, _global_policy_pk(normalized, policy_id)

@@ -97,7 +97,7 @@ async def test_push_log_masking_rules_sync_to_gateway():
     handler.list_records = AsyncMock(return_value=[row])
 
     with patch(
-        "manager_server.core.application_config.log_masking_rule.push_log_masking_rule_op",
+        "manager_server.core.application_config.log_masking_rule.gateway_request",
         new_callable=AsyncMock,
         return_value={"revision": "rev-1", "success_flag": True},
     ) as push_mock:
@@ -107,10 +107,12 @@ async def test_push_log_masking_rules_sync_to_gateway():
     push_mock.assert_awaited_once()
     args, kwargs = push_mock.await_args
     assert args[0] == "sp-sync"
-    assert args[1] == "sync"
-    assert len(kwargs["rules"]) == 1
-    assert kwargs["rules"][0]["rule_id"] == "builtin_email"
-    assert "id" not in kwargs["rules"][0]
+    assert args[1] == "POST"
+    assert args[2] == "/api/v1/log-masking-rules"
+    rule = args[3] if len(args) > 3 else kwargs.get("business")
+    assert rule["rule_id"] == "builtin_email"
+    assert "id" not in rule
+    assert "jiuwenclaw_id" not in rule
 
 
 @pytest.mark.asyncio
@@ -148,7 +150,7 @@ async def test_rest_create_always_sets_source_custom():
     )
 
     with patch(
-        "manager_server.core.application_config.log_masking_rule.push_log_masking_rule_op",
+        "manager_server.core.application_config.log_masking_rule.gateway_request",
         new_callable=AsyncMock,
         return_value={"revision": "rev-1", "success_flag": True},
     ):
@@ -188,15 +190,18 @@ async def test_rest_update_ignores_source_field():
     body.model_dump.return_value = {"enabled": False, "source": "builtin"}
 
     with patch(
-        "manager_server.core.application_config.log_masking_rule.push_log_masking_rule_op",
+        "manager_server.core.application_config.log_masking_rule.gateway_request",
         new_callable=AsyncMock,
         return_value={"revision": "rev-2", "success_flag": True},
     ) as push_mock:
         await svc.update("sp-rest", "custom-rule-1", body)
 
     push_mock.assert_awaited_once()
-    _, kwargs = push_mock.await_args
-    assert "source" not in kwargs["updates"]
+    args, kwargs = push_mock.await_args
+    assert args[1] == "PATCH"
+    assert args[2] == "/api/v1/log-masking-rules/custom-rule-1"
+    updates = args[3] if len(args) > 3 else kwargs.get("business")
+    assert "source" not in updates
     db_updates = handler.update.await_args.args[2]
     assert "source" not in db_updates
 

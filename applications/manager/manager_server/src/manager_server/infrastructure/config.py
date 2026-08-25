@@ -78,16 +78,6 @@ class Settings(BaseSettings):
         default="Ed25519", validation_alias="CLAWMANAGER_CONFIG_SIGN_ALG"
     )
 
-    manager_ws_enabled: bool = Field(
-        default=True, validation_alias="MANAGER_WS_ENABLED"
-    )
-    manager_ws_host: str = Field(
-        default="127.0.0.1", validation_alias="MANAGER_WS_HOST"
-    )
-    manager_ws_port: int = Field(
-        default=8766, validation_alias="MANAGER_WS_PORT"
-    )
-
     # ---- 统一 Web 入口（manager-web）----
     manager_web_host: str = Field(default="localhost", validation_alias="MANAGER_WEB_HOST")
     manager_web_port: int = Field(default=5273, validation_alias="MANAGER_WEB_PORT")

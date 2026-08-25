@@ -8,7 +8,7 @@ from typing import Any
 
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 
-from manager_server.manager_ws_server.server import push_config_op
+from manager_server.manager_config_push import gateway_request
 
 _LOGGING_CONFIG_TABLE = "logging_config"
 
@@ -45,14 +45,6 @@ def _row_to_dict(obj: Any) -> dict[str, Any]:
         "created_at": _format_ts(getattr(obj, "created_at", None)),
         "updated_at": _format_ts(getattr(obj, "updated_at", None)),
     }
-
-
-async def push_logging_config_op(
-    jiuwenclaw_id: str,
-    levels: dict[str, Any],
-) -> dict[str, Any]:
-    """推送 logging 配置变更（``config.logging_config``），返回 config.ack payload。"""
-    return await push_config_op(jiuwenclaw_id, {"logging_config": levels})
 
 
 class LoggingConfigService:
@@ -140,10 +132,11 @@ class LoggingConfigService:
             result = _row_to_dict(created)
 
         try:
-            await push_logging_config_op(
+            await gateway_request(
                 jiuwenclaw_id,
+                "PUT",
+                "/api/v1/logging",
                 {
-                    "op": "upsert",
                     "level": result["level"],
                     "console_level": result.get("console_level"),
                     "gateway": result.get("gateway"),
@@ -166,10 +159,7 @@ class LoggingConfigService:
             raise ValueError("logging config not found")
 
         try:
-            await push_logging_config_op(
-                jiuwenclaw_id,
-                {"op": "delete"},
-            )
+            await gateway_request(jiuwenclaw_id, "DELETE", "/api/v1/logging", {})
         except Exception as exc:
             raise ValueError(f"failed to sync to gateway: {exc}") from exc
 

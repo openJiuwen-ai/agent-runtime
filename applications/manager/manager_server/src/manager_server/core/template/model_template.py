@@ -8,7 +8,8 @@ from openjiuwen_runtime.foundation.db.handler import DBHandler
 
 from manager_server.core.template.push_template_to_gateway import (
     assert_template_deletable,
-    push_template_to_referencing_gateways,
+    update_template_on_referencing_gateways,
+    delete_template_on_referencing_gateways,
 )
 from manager_server.schemas.template_schemas import (
     ModelTemplateCreateBody,
@@ -199,12 +200,11 @@ class ModelTemplateService:
         if existing is None:
             return None
 
-        await push_template_to_referencing_gateways(
+        await update_template_on_referencing_gateways(
             self._handler,
             "model_templates",
-            "update",
-            template_id=template_id,
-            updates=updates,
+            template_id,
+            updates,
         )
         payload = dict(updates)
         payload["updated_at"] = utc_now()
@@ -224,11 +224,10 @@ class ModelTemplateService:
         await assert_template_deletable(
             self._handler, template_id, "model_templates"
         )
-        await push_template_to_referencing_gateways(
+        await delete_template_on_referencing_gateways(
             self._handler,
             "model_templates",
-            "delete",
-            template_id=template_id,
+            template_id,
         )
         return await self._handler.delete(
             _MODEL_TEMPLATE_TABLE, {"template_id": template_id}

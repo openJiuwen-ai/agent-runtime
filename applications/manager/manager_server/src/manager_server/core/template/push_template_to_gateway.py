@@ -11,16 +11,16 @@ from typing import Any
 
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 
+from manager_server.manager_config_push import (
+    gateway_request,
+    list_reachable_jiuwenclaw_ids,
+)
 from manager_server.infrastructure.template_ref import (
     normalize_template_ref,
     read_template_ref_from_row,
 )
 from manager_server.infrastructure.utils import utc_now
 from manager_server.infrastructure.logger import get_logger
-from manager_server.manager_ws_server.server import (
-    ManagerWsServer,
-    push_config_op,
-)
 from manager_server.models.config_effective_policy_models import (
     CONFIG_DEFAULT_TEMPLATE_MAPPING_TABLE_DEF,
     CONFIG_EFFECTIVE_AGENT_POLICY_TABLE_DEF,
@@ -103,6 +103,15 @@ TEMPLATE_KIND_SPECS: dict[str, TemplateKindSpec] = {
 
 TEMPLATE_KIND_ORDER: tuple[str, ...] = tuple(TEMPLATE_KIND_SPECS.keys())
 
+_TEMPLATE_HTTP_PATHS: dict[str, str] = {
+    "model_templates": "/api/v1/model-templates",
+    "embedding_templates": "/api/v1/embedding-templates",
+    "extension_config_templates": "/api/v1/extension-config-templates",
+    "skill_whitelist_templates": "/api/v1/skill-whitelist-templates",
+    "service_config_templates": "/api/v1/service-config-templates",
+}
+_PUSH_DROP_KEYS = frozenset({"id", "created_at", "updated_at", "jiuwenclaw_id"})
+
 _ROW_TO_OUT_MODULES: dict[str, str] = {
     "model_templates": "manager_server.core.template.model_template",
     "embedding_templates": "manager_server.core.template.embedding_template",
@@ -122,6 +131,94 @@ def _normalize_kind(kind: str) -> str:
             f"unknown template kind {kind!r}; expected one of {sorted(TEMPLATE_KIND_SPECS)}"
         )
     return normalized
+
+
+def _template_base_path(kind: str) -> str:
+    return _TEMPLATE_HTTP_PATHS[_normalize_kind(kind)]
+
+
+def _clean_template(template: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in template.items() if k not in _PUSH_DROP_KEYS}
+
+
+async def _create_template_on_gateway(
+    jiuwenclaw_id: str,
+    kind: str,
+    template: dict[str, Any],
+    **kwargs: Any,
+) -> dict[str, Any]:
+    section = _normalize_kind(kind)
+    return await gateway_request(
+        jiuwenclaw_id,
+        "POST",
+        _template_base_path(section),
+        _clean_template(template),
+        **kwargs,
+    )
+
+
+async def _update_template_on_gateway(
+    jiuwenclaw_id: str,
+    kind: str,
+    template_id: str,
+    updates: dict[str, Any],
+    **kwargs: Any,
+) -> dict[str, Any]:
+    section = _normalize_kind(kind)
+    tid = str(template_id or "").strip()
+    if not tid:
+        raise ValueError("template_id is required")
+    return await gateway_request(
+        jiuwenclaw_id,
+        "PATCH",
+        f"{_template_base_path(section)}/{tid}",
+        dict(updates),
+        **kwargs,
+    )
+
+
+async def _delete_template_on_gateway(
+    jiuwenclaw_id: str,
+    kind: str,
+    template_id: str,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    tid = str(template_id or "").strip()
+    if not tid:
+        raise ValueError("template_id is required")
+    return await gateway_request(
+        jiuwenclaw_id,
+        "DELETE",
+        f"{_template_base_path(kind)}/{tid}",
+        {},
+        **kwargs,
+    )
+
+
+async def _sync_templates_on_gateway(
+    jiuwenclaw_id: str,
+    kind: str,
+    templates: list[dict[str, Any]],
+    **kwargs: Any,
+) -> dict[str, Any]:
+    section = _normalize_kind(kind)
+    last: dict[str, Any] | None = None
+    for idx, tmpl in enumerate(templates):
+        if not isinstance(tmpl, dict):
+            continue
+        last = await _create_template_on_gateway(
+            jiuwenclaw_id,
+            section,
+            tmpl,
+            revision=f"sync-{section}:{idx}",
+            **kwargs,
+        )
+    return last or {
+        "revision": f"sync-{section}",
+        "success_flag": True,
+        "result": {"synced": 0},
+        "transport": "http",
+    }
 
 
 def extract_literal_template_ids_from_ref(ref: str) -> set[str]:
@@ -345,38 +442,26 @@ async def collect_referenced_jiuwenclaw_ids_for_template(
     return jids
 
 
-async def _connected_gateway_jiuwenclaw_ids() -> set[str]:
-    """当前已通过 manager_ws_server 建立长连接的 Gateway ``jiuwenclaw_id`` 集合。"""
-    server = ManagerWsServer.get_instance()
-    if server is None:
-        return set()
-    return set(await server.list_registered_jiuwenclaw_ids())
+async def _reachable_gateway_jiuwenclaw_ids(handler: DBHandler) -> set[str]:
+    """已上报 ``gateway_endpoint`` 的实例集合（HTTP 可达目标）。"""
+    return set(await list_reachable_jiuwenclaw_ids(handler))
 
 
-async def _push_template_config_op(
-    jiuwenclaw_id: str,
+async def _referencing_reachable_jids(
+    handler: DBHandler,
     kind: str,
-    op: str,
-    *,
-    template: dict[str, Any] | None = None,
-    template_id: str | None = None,
-    updates: dict[str, Any] | None = None,
-    templates: list[dict[str, Any]] | None = None,
-    skip_runtime_update: bool = False,
-) -> dict[str, Any]:
-    spec = TEMPLATE_KIND_SPECS[_normalize_kind(kind)]
-    payload: dict[str, Any] = {"op": op}
-    if template is not None:
-        payload["template"] = template
-    if template_id is not None:
-        payload["template_id"] = template_id
-    if updates is not None:
-        payload["updates"] = updates
-    if templates is not None:
-        payload["templates"] = templates
-    if skip_runtime_update:
-        payload["skip_runtime_update"] = True
-    return await push_config_op(jiuwenclaw_id, {spec.config_section: payload})
+    template_id: str,
+) -> list[str]:
+    """引用了该模板且已上报 endpoint 的 Gateway 列表。"""
+    normalized = _normalize_kind(kind)
+    tid = str(template_id or "").strip()
+    if not tid:
+        return []
+    jids = await collect_referenced_jiuwenclaw_ids_for_template(
+        handler, tid, normalized
+    )
+    reachable = await _reachable_gateway_jiuwenclaw_ids(handler)
+    return sorted(jid for jid in jids if jid in reachable)
 
 
 def _row_to_sync_payload(row: Any, *, row_to_out: RowToOutFn) -> dict[str, Any]:
@@ -412,7 +497,7 @@ async def sync_referenced_templates_to_gateway(
     handler: DBHandler,
     jiuwenclaw_id: str,
 ) -> dict[str, dict[str, Any]]:
-    """将某 Gateway 引用的全部模板类型 bulk 同步（``op=sync``）。"""
+    """将某 Gateway 引用的全部模板类型 bulk 同步到 Config Receiver。"""
     jid = str(jiuwenclaw_id or "").strip()
     if not jid:
         raise ValueError("jiuwenclaw_id is required")
@@ -424,47 +509,63 @@ async def sync_referenced_templates_to_gateway(
             handler, jid, normalized
         )
         templates = await _build_sync_payloads(handler, normalized, referenced_ids)
-        results[kind] = await _push_template_config_op(
-            jid, normalized, "sync", templates=templates
-        )
+        results[kind] = await _sync_templates_on_gateway(jid, normalized, templates)
     return results
 
 
-async def push_template_to_referencing_gateways(
+async def update_template_on_referencing_gateways(
     handler: DBHandler,
     kind: str,
-    op: str,
-    *,
-    template: dict[str, Any] | None = None,
-    template_id: str | None = None,
-    updates: dict[str, Any] | None = None,
+    template_id: str,
+    updates: dict[str, Any],
 ) -> None:
-    """向引用了该模板的 Gateway 推送单条变更。"""
+    """向引用了该模板的可达 Gateway PATCH 更新。"""
     normalized = _normalize_kind(kind)
-    tid = str(template_id or (template or {}).get("template_id") or "").strip()
+    tid = str(template_id or "").strip()
     if not tid:
         return
-    jids = await collect_referenced_jiuwenclaw_ids_for_template(handler, tid, normalized)
-    connected = await _connected_gateway_jiuwenclaw_ids()
-    for jid in sorted(jids):
-        if jid not in connected:
+    reachable = set(await _referencing_reachable_jids(handler, normalized, tid))
+    all_refs = await collect_referenced_jiuwenclaw_ids_for_template(
+        handler, tid, normalized
+    )
+    for jid in sorted(all_refs):
+        if jid not in reachable:
             logger.info(
-                "[push_template] skip disconnected gateway jiuwenclaw_id=%s "
-                "kind=%s op=%s template_id=%s",
+                "[push_template] skip unreachable gateway jiuwenclaw_id=%s "
+                "kind=%s action=update template_id=%s",
                 jid,
                 normalized,
-                op,
                 tid,
             )
             continue
-        await _push_template_config_op(
-            jid,
-            normalized,
-            op,
-            template=template,
-            template_id=template_id,
-            updates=updates,
-        )
+        await _update_template_on_gateway(jid, normalized, tid, updates)
+
+
+async def delete_template_on_referencing_gateways(
+    handler: DBHandler,
+    kind: str,
+    template_id: str,
+) -> None:
+    """向引用了该模板的可达 Gateway DELETE 模板。"""
+    normalized = _normalize_kind(kind)
+    tid = str(template_id or "").strip()
+    if not tid:
+        return
+    reachable = set(await _referencing_reachable_jids(handler, normalized, tid))
+    all_refs = await collect_referenced_jiuwenclaw_ids_for_template(
+        handler, tid, normalized
+    )
+    for jid in sorted(all_refs):
+        if jid not in reachable:
+            logger.info(
+                "[push_template] skip unreachable gateway jiuwenclaw_id=%s "
+                "kind=%s action=delete template_id=%s",
+                jid,
+                normalized,
+                tid,
+            )
+            continue
+        await _delete_template_on_gateway(jid, normalized, tid)
 
 
 def _ref_pk(jiuwenclaw_id: str, slot: str, template_id: str) -> dict[str, str]:
@@ -570,6 +671,7 @@ async def _apply_slot_pair_delta(
     Gateway 推送置于 Manager 引用计数更新之前：若推送失败则引用计数不变，重试时仍会
     触发 create/delete，避免「Manager 已记账、Gateway 缺模板」的不一致。
     """
+    _ = skip_runtime_update
     jid = str(jiuwenclaw_id or "").strip()
     if not jid or (not added and not removed):
         return
@@ -588,28 +690,16 @@ async def _apply_slot_pair_delta(
     for tid in sorted(affected_template_ids):
         before = before_totals[tid]
         after = before + tid_delta[tid]
-        if before <= 0 < after:
-            op = "create"
-        elif before > 0 >= after:
-            op = "delete"
-        else:
-            continue
         kind = await _resolve_template_kind(handler, tid)
         if kind is None:
             continue
-        if op == "create":
+        if before <= 0 < after:
             payloads = await _build_sync_payloads(handler, kind, {tid})
             if not payloads:
                 continue
-            await _push_template_config_op(
-                jid, kind, "create", template=payloads[0],
-                skip_runtime_update=skip_runtime_update,
-            )
-        else:
-            await _push_template_config_op(
-                jid, kind, "delete", template_id=tid,
-                skip_runtime_update=skip_runtime_update,
-            )
+            await _create_template_on_gateway(jid, kind, payloads[0])
+        elif before > 0 >= after:
+            await _delete_template_on_gateway(jid, kind, tid)
 
     now = utc_now()
     for slot, tid in removed:
@@ -770,7 +860,8 @@ __all__ = (
     "assert_template_deletable",
     "count_config_effective_policy_references_for_template",
     "sync_referenced_templates_to_gateway",
-    "push_template_to_referencing_gateways",
+    "update_template_on_referencing_gateways",
+    "delete_template_on_referencing_gateways",
     "sync_gateway_templates_after_template_ref_change",
     "sync_gateway_templates_after_mapping_change",
     "rebuild_jid_template_ref_for_gateway",

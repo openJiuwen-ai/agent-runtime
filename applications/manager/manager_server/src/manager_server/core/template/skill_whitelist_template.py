@@ -8,7 +8,8 @@ from openjiuwen_runtime.foundation.db.handler import DBHandler
 
 from manager_server.core.template.push_template_to_gateway import (
     assert_template_deletable,
-    push_template_to_referencing_gateways,
+    update_template_on_referencing_gateways,
+    delete_template_on_referencing_gateways,
 )
 from manager_server.infrastructure.common import resolve_order_by
 from manager_server.infrastructure.utils import iso_datetime, new_uuid4, utc_now
@@ -175,12 +176,11 @@ class SkillWhitelistTemplateService:
         if existing is None:
             return None
 
-        await push_template_to_referencing_gateways(
+        await update_template_on_referencing_gateways(
             self._handler,
             "skill_whitelist_templates",
-            "update",
-            template_id=template_id,
-            updates=updates,
+            template_id,
+            updates,
         )
         payload = dict(updates)
         payload["updated_at"] = utc_now()
@@ -198,10 +198,9 @@ class SkillWhitelistTemplateService:
         await assert_template_deletable(
             self._handler, template_id, "skill_whitelist_templates"
         )
-        await push_template_to_referencing_gateways(
+        await delete_template_on_referencing_gateways(
             self._handler,
             "skill_whitelist_templates",
-            "delete",
-            template_id=template_id,
+            template_id,
         )
         return await self._handler.delete(_TABLE, {"template_id": template_id})

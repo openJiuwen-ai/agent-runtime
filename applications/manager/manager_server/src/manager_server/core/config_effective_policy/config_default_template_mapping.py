@@ -21,7 +21,7 @@ from manager_server.infrastructure.utils import (
     strip_optional,
     utc_now,
 )
-from manager_server.manager_ws_server.server import push_config_op
+from manager_server.manager_config_push import gateway_request
 from manager_server.models.config_effective_policy_models import (
     CONFIG_DEFAULT_TEMPLATE_MAPPING_TABLE_DEF,
 )
@@ -34,7 +34,9 @@ from manager_server.schemas.config_effective_policy_schemas import (
 from manager_server.schemas.template_slot_schemas import MAPPING_SCOPE_TYPES
 
 _TEMPLATE_MAPPING_TABLE = CONFIG_DEFAULT_TEMPLATE_MAPPING_TABLE_DEF.table_name
+_MAPPING_PATH = "/api/v1/config-default-template-mappings"
 _LIST_ALL_CAP = 10_000
+_PUSH_DROP_KEYS = frozenset({"id", "created_at", "updated_at", "jiuwenclaw_id"})
 _ALLOWED_SORT_FIELDS = frozenset({
     "policy_name",
     "policy_desc",
@@ -45,6 +47,10 @@ _ALLOWED_SORT_FIELDS = frozenset({
     "template_id",
     "updated_at",
 })
+
+
+def _clean_mapping_for_create(mapping: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in mapping.items() if k not in _PUSH_DROP_KEYS}
 
 
 def _matches_search(row: Any, query: str) -> bool:
@@ -64,36 +70,11 @@ def _matches_search(row: Any, query: str) -> bool:
     return any(needle in field.lower() for field in fields)
 
 
-async def push_config_default_template_mapping_op(
-    jiuwenclaw_id: str,
-    op: str,
-    *,
-    mapping: dict[str, Any] | None = None,
-    row_id: int | None = None,
-    updates: dict[str, Any] | None = None,
-    mappings: list[dict[str, Any]] | None = None,
-) -> dict[str, Any]:
-    """推送默认模板映射变更（``config.config_default_template_mappings``），返回 config.ack payload。"""
-    payload: dict[str, Any] = {"op": op}
-    if mapping is not None:
-        payload["mapping"] = mapping
-    if row_id is not None:
-        payload["id"] = row_id
-    if updates is not None:
-        payload["updates"] = updates
-    if mappings is not None:
-        payload["mappings"] = mappings
-    return await push_config_op(
-        jiuwenclaw_id,
-        {"config_default_template_mappings": payload},
-    )
-
-
 async def push_template_mappings_sync_to_gateway(
     handler: DBHandler,
     jiuwenclaw_id: str,
 ) -> dict[str, Any]:
-    """Gateway 注册后：将 MDB 中该实例全部默认模板映射 bulk push 到 GDB（``op=sync``）。"""
+    """Gateway 注册后：将 MDB 中该实例全部默认模板映射 bulk push 到 GDB。"""
     jid = str(jiuwenclaw_id or "").strip()
     if not jid:
         raise ValueError("jiuwenclaw_id is required")
@@ -104,16 +85,23 @@ async def push_template_mappings_sync_to_gateway(
         offset=0,
     )
     mappings = [_row_to_out(row).model_dump(mode="json") for row in rows]
-    return await push_config_op(
-        jid,
-        {
-            "config_default_template_mappings": {
-                "op": "sync",
-                "mappings": mappings,
-                "skip_runtime_update": True,
-            }
-        },
-    )
+    last: dict[str, Any] | None = None
+    for idx, mapping in enumerate(mappings):
+        if not isinstance(mapping, dict):
+            continue
+        last = await gateway_request(
+            jid,
+            "POST",
+            f"{_MAPPING_PATH}/",
+            _clean_mapping_for_create(mapping),
+            revision=f"sync-mapping:{idx}",
+        )
+    return last or {
+        "revision": "sync-mapping",
+        "success_flag": True,
+        "result": {"synced": 0},
+        "transport": "http",
+    }
 
 
 def _mapping_pk(jiuwenclaw_id: str, mapping_id: int) -> dict[str, Any]:
@@ -159,7 +147,7 @@ class ConfigDefaultTemplateMappingService:
     def _mapping_dict_for_push(
         row: dict[str, Any], *, now: datetime
     ) -> dict[str, Any]:
-        """构建经 WebSocket 下发给 Gateway 的 mapping 对象（不含 id，由 Gateway 自增）。"""
+        """构建下发给 Gateway 的 mapping 对象（不含 id，由 Gateway 自增）。"""
         return {
             "jiuwenclaw_id": row["jiuwenclaw_id"],
             "policy_id": row["policy_id"],
@@ -209,10 +197,11 @@ class ConfigDefaultTemplateMappingService:
             new_template_id=body.template_id,
             skip_runtime_update=True,
         )
-        ack = await push_config_default_template_mapping_op(
+        ack = await gateway_request(
             normalized,
-            "create",
-            mapping=self._mapping_dict_for_push(row, now=now),
+            "POST",
+            f"{_MAPPING_PATH}/",
+            _clean_mapping_for_create(self._mapping_dict_for_push(row, now=now)),
         )
         ack_result = ack.get("result") if isinstance(ack, dict) else None
         mapping_id: int | None = None
@@ -350,11 +339,11 @@ class ConfigDefaultTemplateMappingService:
                 ),
                 skip_runtime_update=True,
             )
-        await push_config_default_template_mapping_op(
+        await gateway_request(
             normalized,
-            "update",
-            row_id=mapping_id,
-            updates=updates,
+            "PATCH",
+            f"{_MAPPING_PATH}/{mapping_id}",
+            dict(updates),
         )
         payload = dict(updates)
         payload["updated_at"] = utc_now()
@@ -387,10 +376,11 @@ class ConfigDefaultTemplateMappingService:
             new_template_id=None,
             skip_runtime_update=True,
         )
-        await push_config_default_template_mapping_op(
+        await gateway_request(
             normalized,
-            "delete",
-            row_id=mapping_id,
+            "DELETE",
+            f"{_MAPPING_PATH}/{mapping_id}",
+            {},
         )
         return await self._handler.delete(
             _TEMPLATE_MAPPING_TABLE, _mapping_pk(normalized, mapping_id)

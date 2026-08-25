@@ -237,7 +237,6 @@ IDENTITY_FEDERATION_DEMO_ADMIN_GROUP=enterprise-admins
 # 管理 API
 MANAGER_REST_HOST=0.0.0.0
 MANAGER_REST_PORT=8765
-MANAGER_WS_PORT=8766
 MANAGER_DB_TYPE=sqlite
 MANAGER_SQLITE_PATH=manager.db
 IDENTITY_PUBLIC_KEY_URL=http://127.0.0.1:8770/v1/auth/public_key
@@ -258,7 +257,6 @@ MANAGER_WEB_IDP_TARGET=http://127.0.0.1:8770
 |------|------|
 | 身份中心 API 文档 | http://127.0.0.1:8770/docs |
 | 管理 API 健康检查 | http://127.0.0.1:8765/api/health |
-| Manager WebSocket 状态 | http://127.0.0.1:8765/api/manager-ws/status |
 | 前端 | http://127.0.0.1:5273 |
 
 ---
@@ -268,7 +266,7 @@ MANAGER_WEB_IDP_TARGET=http://127.0.0.1:8770
 | 命令 | 说明 |
 |------|------|
 | `identity-center` | 启动身份中心 |
-| `manager-server` | 启动管理 API + WebSocket |
+| `manager-server` | 启动管理 API |
 | `manager-web` | 启动统一 Web 入口（静态资源 + 反向代理） |
 | `manager-start` | 一键启动 API + Web |
 | `npm run dev` | 前端开发模式（在 `manager_web/` 目录下） |
