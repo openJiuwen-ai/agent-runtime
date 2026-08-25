@@ -163,8 +163,10 @@ SM 侧 ctx,级联管理全部生命周期(框架 App 的 lifespan 只认一个 c
 
 - **双进程宿主机**:`scripts/deploy_replicas.sh N [env] [port]`(N 进程共 Redis/DB,`/healthz` 就绪轮询,trap 清理;local 模式 fail-fast)。
 - **K8s 生产形态**:`deploy/` 目录——`agent_runtime.template.yaml`(SA+Role×2+Deployment 多副本/反亲和//healthz 探针+ClusterIP Service LB)、可选 NodePort(30091)、`Dockerfile`(**build context=仓库根**,保 `../../foundation`/`../../service` 布局,`uv sync --frozen --extra server --no-dev`,logs/ 预建归 appuser)、`render_and_apply.sh`(env 渲染→apply,残留 `<<` 即 fail-fast)、`build_image.sh`。
+- **namespace 布局**:服务与 AgentServer 同 ns `agent-runtime-e2e`(`deploy/agent_runtime.env` 的 `NAMESPACE`;e2e_multi_replica 的 `--namespace` 即此 ns)。模板 RBAC 仍按「服务 ns + AgentServer 目标 ns」两份渲染——同 ns 时为重复授权,无害。
 - K8s 部署红线:
   - `OPENJIUWEN_SERVICE_DEPLOY_REPLICAS=1` 固定(副本数=Deployment replicas;框架该项 >1 会因缺分布式锁后端启动即失败)。
-  - RBAC 两份:服务 ns + AgentServer 目标 ns(缺则 create pod 403 → route 全 503)。
+  - RBAC 两份:服务 ns + AgentServer 目标 ns(缺则 create pod 403 → route 全 503;同 ns 部署时两份指向同一 ns)。
+  - 迁移 ns 时先删旧 ns 的 Deployment/Service(含 NodePort 30091 占用)再 apply 新 ns,避免双部署竞争选主与 NodePort 冲突。
   - Pod 内 MySQL 用户须授权 Pod CIDR(`'agent_runtime'@'10.244.%'`)。
   - server 模式硬要求:Redis 开 AOF/RDB;DB 用 MySQL/PostgreSQL。

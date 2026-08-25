@@ -52,7 +52,7 @@ cd applications/agent_runtime
 ./deploy/render_and_apply.sh deploy/agent_runtime.env --nodeport
 # 多副本 e2e(真 LB 单入口,含 failover;单实例自动 DEGRADED)
 uv run --no-sync python scripts/e2e_multi_replica.py --base-url http://127.0.0.1:30091/api/session \
-    --redis-url redis://127.0.0.1:30001/2 --namespace default
+    --redis-url redis://127.0.0.1:30001/2 --namespace agent-runtime-e2e
 # 压测/浸泡(零依赖,场景化;无 FLUSHDB、不动 cleanup 端点)
 uv run --no-sync python scripts/load_test.py --base-url http://127.0.0.1:30091/api/session --duration 60
 ```

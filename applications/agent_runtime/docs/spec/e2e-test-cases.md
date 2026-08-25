@@ -366,7 +366,7 @@ cp deploy/agent_runtime.env.example deploy/agent_runtime.env   # 改镜像/密�
 # ⑤ 多副本 e2e(35 项,含 failover)
 uv run --no-sync python scripts/e2e_multi_replica.py \
     --base-url http://127.0.0.1:30091/api/session \
-    --redis-url redis://127.0.0.1:30001/2 --namespace default
+    --redis-url redis://127.0.0.1:30001/2 --namespace agent-runtime-e2e
 
 # ⑥ 压测/浸泡
 uv run --no-sync python scripts/load_test.py \
