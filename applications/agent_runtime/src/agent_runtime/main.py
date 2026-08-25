@@ -92,7 +92,8 @@ def build_resources(
     db = build_db_handler(settings)
     if db is None:
         raise RuntimeError(
-            "agent-runtime server 模式必须配置 DB（OPENJIUWEN_SERVICE_DB_TYPE=mysql）"
+            "agent-runtime server 模式必须配置 DB"
+            "（OPENJIUWEN_SERVICE_DB_TYPE=mysql|postgresql）"
         )
     k8s = RealK8sPodClient(
         kubeconfig=arc.kubeconfig, default_namespace=arc.default_namespace

@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from .sqlalchemy_handler import SQLAlchemyHandler
 from .table_def import ColumnDefinition
+from .engine_options import get_command_timeout, get_connect_timeout
 from ..log import get_logger
 
 logger = get_logger(__name__)
@@ -72,13 +73,17 @@ class PostgreSQLHandler(SQLAlchemyHandler):
         因此先连 ``postgres`` 默认库查询 ``pg_database``。
         注意 CREATE DATABASE 不能在事务中执行，需 AUTOCOMMIT。
         """
-        # 连接系统默认postgres库
+        # 连接系统默认postgres库（建连/命令超时与主引擎同一兜底）
         url = make_url(self.database_url)
         server_url = url.set(database="postgres")
         temp_engine = create_async_engine(
             server_url.render_as_string(hide_password=False),
             echo=False,
             isolation_level="AUTOCOMMIT",
+            connect_args={
+                "timeout": get_connect_timeout(),
+                "command_timeout": get_command_timeout(),
+            },
         )
         try:
             async with temp_engine.connect() as conn:
@@ -105,6 +110,10 @@ class PostgreSQLHandler(SQLAlchemyHandler):
             server_url.render_as_string(hide_password=False),
             echo=False,
             isolation_level="AUTOCOMMIT",
+            connect_args={
+                "timeout": get_connect_timeout(),
+                "command_timeout": get_command_timeout(),
+            },
         )
         try:
             async with temp_engine.connect() as conn:

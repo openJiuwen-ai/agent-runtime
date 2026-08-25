@@ -71,7 +71,19 @@ def build_db_handler(settings: ServiceConfig | dict[str, Any] | Any) -> Any | No
             user=cfg.db_user,
             password=cfg.db_password,
         )
-    raise ValueError(f"unsupported db_type={cfg.db_type!r}; expected mysql|sqlite|none")
+    if cfg.db_type == "postgresql":
+        from openjiuwen_runtime.foundation.db import PostgreSQLHandler
+
+        return PostgreSQLHandler(
+            host=cfg.db_host or "127.0.0.1",
+            port=cfg.db_port,
+            database=cfg.db_name or "",
+            user=cfg.db_user or "",
+            password=cfg.db_password or "",
+        )
+    raise ValueError(
+        f"unsupported db_type={cfg.db_type!r}; expected mysql|postgresql|sqlite|none"
+    )
 
 
 def build_redis_client(settings: ServiceConfig | dict[str, Any] | Any) -> Any | None:

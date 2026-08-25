@@ -55,7 +55,8 @@ SM 侧 ctx,级联管理全部生命周期(框架 App 的 lifespan 只认一个 c
   `OPENJIUWEN_SERVICE_REDIS_HEALTH_CHECK_INTERVAL_SECONDS`(默认 30,空闲连接周期 PING 验活)、
   `OPENJIUWEN_SERVICE_REDIS_RETRY_ATTEMPTS`(默认 3,连接类错误指数退避重试)。
   本地 local 模式 fakeredis 不经此路径,不受影响。
-- **MySQL**(`foundation/db`:`RUNTIME_DB_CONNECT_TIMEOUT`/`DB_CONNECT_TIMEOUT`,默认 5s):aiomysql 建连超时(mysql 系 driver 自动注入,调用方显式 connect_args 优先);asyncpg 自带 60s 默认不注入。查询读超时 aiomysql 无参数,由请求级 deadline 兜底。
+- **MySQL**(`foundation/db`:`RUNTIME_DB_CONNECT_TIMEOUT`/`DB_CONNECT_TIMEOUT`,默认 5s):aiomysql 建连超时(mysql 系 driver 自动注入,调用方显式 connect_args 优先)。查询读超时 aiomysql 无参数,由请求级 deadline 兜底。
+- **PostgreSQL**(`DB_TYPE=postgresql` → `PostgreSQLHandler`,asyncpg 驱动;服务框架 bootstrap/ServiceConfig 已接入,必填校验同 mysql,默认端口 5432):建连 `timeout` 与命令 `command_timeout` 均注入——asyncpg 建连默认 60s、命令默认**无限制**,不注入则慢查询可永久挂起。`timeout` 复用 `RUNTIME_DB_CONNECT_TIMEOUT`(默认 5s);`command_timeout` 独立旋钮 `RUNTIME_DB_COMMAND_TIMEOUT`/`DB_COMMAND_TIMEOUT`(默认 30s,低于请求级 deadline)。`init_database` 的临时引擎(CREATE DATABASE/SCHEMA)同款注入。
 - **请求级总兜底**:`OPENJIUWEN_SERVICE_REQUEST_TIMEOUT_SECONDS`(部署模板 70s)经框架 router 的 `asyncio.timeout` 硬包全部 handler——redis/db 挂起最坏 70s 后取消该请求。
 - **启动 fail-fast**:框架 `SystemContext.start()` 的 readiness 探活(ping/SELECT 1)带 10s 上限,超时按失败处理(fail-fast 不变成 fail-hang)。
 
