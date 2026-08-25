@@ -27,6 +27,8 @@ from openjiuwen_runtime.service.config import ServiceConfig
 
 from . import errors as app_errors
 from .config import RM_KEY_PREFIX, SERVICE_PREFIX, SM_KEY_PREFIX, AgentRuntimeConfig
+from .debug_api import register_debug_api
+from .metrics import MetricsRegistry, request_metrics_middleware
 from .resource_manager.facade import ResourceManagerFacade
 from .resource_manager.k8s import FakeK8sPodClient, RealK8sPodClient
 from .resource_manager.orchestrator import ResourceOrchestrator
@@ -210,13 +212,65 @@ class OrchestratorSystemContext(SystemContext):
         except Exception:  # noqa: BLE001 - k8s 不可用只影响扩缩容，不阻断启动
             self.logger.exception("kubernetes client start failed (scale in/out degraded)")
         self._jobs = self._build_jobs()
+        interval_by_name = self._job_intervals()
         for job in self._jobs:
             await job.start()
+            self.logger.info(
+                "background job registered: name=%s interval_sec=%s tick_timeout_sec=%s",
+                job.name, interval_by_name.get(job.name, "?"),
+                TICK_TIMEOUTS.get(job.name),
+            )
+        self.logger.info(
+            "config summary: mode=%s namespace=%s sweep=%ss autoscale=%ss "
+            "reclaim=%ss watch=%ss reconcile=%ss scope_full_timeout=%ss "
+            "default_session_ttl=%ss kubeconfig=%s",
+            self.arc.mode, self.arc.default_namespace,
+            self.arc.sweep_interval, self.arc.autoscale_interval,
+            self.arc.reclaim_interval, self.arc.watch_interval,
+            self.arc.reconcile_interval, self.arc.scope_full_timeout,
+            self.arc.default_session_ttl,
+            "set" if self.arc.kubeconfig else "in-cluster",
+        )
         self.logger.info(
             "agent-runtime started: instance=%s mode=%s port=%s",
             self.instance_id, self.arc.mode,
             getattr(self.settings, "port", "?"),
         )
+
+    def _job_intervals(self) -> dict[str, int]:
+        """诊断用：job 名 → 调度间隔（arc）。"""
+        return {
+            "sm_sweep": self.arc.sweep_interval,
+            "rm_autoscale": self.arc.autoscale_interval,
+            "rm_reclaim": self.arc.reclaim_interval,
+            "rm_watch": self.arc.watch_interval,
+            "rm_reconcile": self.arc.reconcile_interval,
+        }
+
+    async def jobs_snapshot(self) -> list[dict[str, Any]]:
+        """诊断用：5 个后台任务的间隔/超时/计数器/当前 leader（/debug/overview）。"""
+        intervals = self._job_intervals()
+        out: list[dict[str, Any]] = []
+        for job in self._jobs:
+            entry: dict[str, Any] = dict(job.snapshot())
+            entry["interval_sec"] = intervals.get(job.name)
+            entry["tick_timeout_sec"] = TICK_TIMEOUTS.get(job.name)
+            # leader 身份：选主锁值 "{name}:{instance_id}:{uuid4}"（TTL=interval，
+            # tick 间隙可能瞬时缺 key → leader=None 属正常）
+            lock_key = f"agent_runtime:job:{job.name}"
+            token = await self.redis.get(lock_key)
+            if token:
+                token = token.decode() if isinstance(token, (bytes, bytearray)) else str(token)
+                leader = token.removeprefix(f"{job.name}:").rsplit(":", 1)[0]
+                entry["leader"] = {
+                    "instance_id": leader,
+                    "is_local": leader == self.instance_id,
+                    "ttl_sec": int(await self.redis.ttl(lock_key) or 0),
+                }
+            else:
+                entry["leader"] = None
+            out.append(entry)
+        return out
 
     async def stop(self) -> None:
         for job in self._jobs:
@@ -262,7 +316,12 @@ def create_app(
         )
 
     app = App(ctx_factory, prefix=SERVICE_PREFIX, enable_ws=False, title="agent-runtime")
+    # 请求汇总日志 + 指标（touch/cleanup 从此每请求一行；registry 供 /debug/stats）
+    registry = MetricsRegistry()
+    app.use(request_metrics_middleware(registry))
+    app.asgi.state.metrics = registry
     _register_healthz(app)
+    register_debug_api(app, registry=registry)
     register_handlers(app)
     return app
 
