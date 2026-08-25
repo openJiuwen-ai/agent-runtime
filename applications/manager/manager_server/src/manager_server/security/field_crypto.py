@@ -31,7 +31,6 @@ SENSITIVE_FIELDS: dict[str, list[str]] = {
     ],
     "service_config_templates": ["template.kubeconfig"],
     "extension_config_templates": ["template.hook_config", "template.custom_config"],
-    "channel_config": ["channel.config"],
     "skill_whitelist_templates": ["template.skill_source"],
 }
 

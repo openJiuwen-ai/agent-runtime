@@ -325,7 +325,7 @@ class ManagerWsServer:
     ) -> dict[str, Any]:
         """向指定 ``jiuwenclaw_id`` 的活跃 Gateway 连接推送 config.push 并等待 ack。
 
-        ``config`` 应为单 section 字典，例如 ``{"channel_config": {"op": "upsert", ...}}``。
+        ``config`` 应为单 section 字典，例如 ``{"logging_config": {"op": "upsert", ...}}``。
         ``jiuwenclaw_id`` 写入帧 payload 顶层，不混入 section body。
         默认仅推送给 ``service_type=gateway``，避免同实例下 agent_server 等进程重复写入 Gateway 库。
         """
