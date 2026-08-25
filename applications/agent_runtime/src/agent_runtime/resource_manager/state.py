@@ -7,12 +7,28 @@ SET/ZSET（SCARD/ZCARD），无独立计数器。
 
 from __future__ import annotations
 
+import hashlib
+import logging
+import time
 from typing import Any
 
 from ..util import s, to_int
 from . import lua_scripts as lua
 
 KEY_PREFIX = "resource_manager"
+
+logger = logging.getLogger("agent_runtime.resource_manager")
+
+# 单次 Lua eval 超过该时长告警（即 Redis 延迟探针；正常 <1ms）
+_SLOW_EVAL_MS = 200.0
+
+
+def _script_tag(script: str) -> str:
+    """Lua 源 → 常量名（诊断用；未知源返回 8 字符指纹）。"""
+    for name, value in vars(lua).items():
+        if name.startswith("LUA_") and value == script:
+            return name
+    return hashlib.md5(script.encode()).hexdigest()[:8]
 
 
 class RMKeys:
@@ -92,9 +108,28 @@ class ResourceState:
         return self.k.prefix + ":"
 
     async def eval(self, script: str, *args: Any) -> list[str]:
+        """统一 EVAL 出口（含异常留痕，见 session_manager.state.eval 同款策略）。
+
+        RM 各 Lua 正常必返回非空表，None/False 属真异常 → WARNING（acquire 的
+        no_config 兜底会掩盖它）；单次超 _SLOW_EVAL_MS → WARNING；常规仅 DEBUG。
+        """
+        t0 = time.monotonic()
         result = await self.redis.eval(script, 0, self.prefix, *args)
+        duration_ms = (time.monotonic() - t0) * 1000
+        if duration_ms > _SLOW_EVAL_MS:
+            logger.warning(
+                "lua eval slow: script=%s duration_ms=%.1f arg0=%s",
+                _script_tag(script), duration_ms, args[0] if args else "-",
+            )
         if result is None or result is False:
+            logger.warning(
+                "lua returned empty (anomaly): script=%s arg0=%s",
+                _script_tag(script), args[0] if args else "-",
+            )
             return []
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("lua eval: script=%s duration_ms=%.1f argc=%d",
+                         _script_tag(script), duration_ms, len(args))
         if isinstance(result, (list, tuple)):
             return [s(item) for item in result]
         return [s(result)]
@@ -245,6 +280,10 @@ class ResourceState:
 
     async def reset_health_fail(self, pod_id: str) -> None:
         await self.redis.delete(self.k.pod_health_fails(pod_id))
+
+    async def health_fails(self, pod_id: str) -> int:
+        """诊断只读：当前连续失败次数（/debug/scope 用）。"""
+        return to_int(await self.redis.get(self.k.pod_health_fails(pod_id)))
 
     # -------------------------------------------------------------- 选主锁
 

@@ -207,6 +207,29 @@ class ConfigStore:
         row = await self._db.get(TEMPLATE_TABLE, {"template_id": template_id})
         return template_from_row(row) if row is not None else None
 
+    async def list_templates(self, limit: int = 200) -> list[dict[str, Any]]:
+        """诊断只读：模板摘要（HLD 字段名；kubeconfig 等敏感列由 /debug 层脱敏）。"""
+        rows = await self._db.list_records(TEMPLATE_TABLE, limit=limit)
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            t = template_from_row(r)
+            if t is None:
+                continue
+            out.append({
+                "template_id": t.template_id,
+                "enabled": bool(t.enabled),
+                "agent_image": t.agent_image,
+                "namespace": t.namespace,
+                "scope_concurrency": t.scope_concurrency,
+                "session_ttl": t.session_ttl,
+                "pod_concurrency": t.pod_concurrency,
+                "max_pods": t.max_pods,
+                "min_idle_pods": t.min_idle_pods,
+                "pod_ttl": t.pod_ttl,
+                "kubeconfig": t.kubeconfig,
+            })
+        return out
+
     async def list_rules(self) -> list[dict[str, str]]:
         rows = await self._db.list_records(ROUTING_RULE_TABLE, limit=10_000)
         return [
@@ -226,7 +249,9 @@ class ConfigStore:
         """
         cached = await self._load_cache(scope_id)
         if cached is not None:
+            logger.debug("resolve cache hit: scope=%s", scope_id)
             return self._template_from_cache(cached)
+        logger.debug("resolve cache miss, reading db: scope=%s", scope_id)
 
         template = await self._resolve_from_db(group_id, bot_id)
         await self._write_cache(scope_id, template)
@@ -243,6 +268,10 @@ class ConfigStore:
                     template = await self.get_template(rule["template_id"])
                     if template is not None and template.enabled:
                         return template
+        logger.warning(
+            "resolve no matching rule/template: group_id=%r bot_id=%r rules=%d",
+            group_id, bot_id, len(rules),
+        )
         raise ConfigNotFound(
             f"no routing rule/template matches (group_id={group_id!r}, bot_id={bot_id!r})"
         )
@@ -584,12 +613,15 @@ class ConfigStore:
         """路由规则变更无法定位受影响 scope（缓存无 group/bot）→ 全量失效（resolve 便宜）。"""
         pattern = f"{self.state.prefix}scope:*:config"
         cursor = 0
+        deleted = 0
         while True:
             cursor, keys = await self.state.redis.scan(cursor, match=pattern, count=200)
             for key in keys:
                 await self.state.redis.delete(s(key))
+                deleted += 1
             if int(cursor or 0) == 0:
                 break
+        logger.info("scope resolve caches invalidated: deleted=%d", deleted)
 
 
 def _rule_from_payload(payload: dict[str, Any]) -> dict[str, str]:

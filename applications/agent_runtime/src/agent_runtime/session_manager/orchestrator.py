@@ -71,6 +71,7 @@ class SessionOrchestrator:
 
         template = await self.config.resolve(scope_id, group_id, bot_id)
         deadline = time.monotonic() + self.scope_full_timeout
+        t0 = time.monotonic()
         waitering = False  # 是否已进等待队列（异常路径要出队）
 
         try:
@@ -97,8 +98,10 @@ class SessionOrchestrator:
                         )
                         continue
                     logger.info(
-                        "route: session=%s scope=%s pod=%s action=%s",
+                        "route: session=%s scope=%s pod=%s action=%s "
+                        "request_id=%s duration_ms=%.1f",
                         session_id, scope_id, pod_id, action,
+                        request_id, (time.monotonic() - t0) * 1000,
                     )
                     return {"pod_sse_url": sse_url, "pod_id": pod_id}
 
@@ -127,6 +130,7 @@ class SessionOrchestrator:
         self, scope_id: str, template: Any, request_id: str
     ) -> tuple[str, str]:
         """调 RM 扩 +1 Pod；RM 异常映射为对外 NO_POD_AVAILABLE(503)。"""
+        t0 = time.monotonic()
         try:
             acquired = await self.rm.acquire(
                 scope_id=scope_id,
@@ -135,18 +139,30 @@ class SessionOrchestrator:
                 request_id=request_id,
             )
         except MaxPodsReached as exc:
-            # 达 max_pods：总容量已 ≥ scope 预算，只能等额度释放
+            # 达 max_pods：总容量已 ≥ scope 预算，只能等额度释放。
+            # 对外错误码粗化为 NO_POD_AVAILABLE——映射前留真因，客户端侧不可见
+            logger.warning(
+                "acquire mapped to NO_POD_AVAILABLE: scope=%s mapped_from=%s "
+                "request_id=%s detail=%s",
+                scope_id, exc.code, request_id, exc,
+            )
             raise NoPodAvailable(
                 f"scope {scope_id} reached max_pods={template.max_pods}",
                 retry_after=DEFAULT_RETRY_AFTER,
             ) from exc
         except DeployFailed as exc:
+            logger.warning(
+                "acquire mapped to NO_POD_AVAILABLE: scope=%s mapped_from=%s "
+                "request_id=%s detail=%s",
+                scope_id, exc.code, request_id, exc,
+            )
             raise NoPodAvailable(
                 f"deploy failed for scope {scope_id}: {exc}",
                 retry_after=DEFAULT_RETRY_AFTER,
             ) from exc
         logger.info(
-            "route acquired pod: scope=%s pod=%s", scope_id, acquired["pod_id"]
+            "route acquired pod: scope=%s pod=%s duration_ms=%.1f",
+            scope_id, acquired["pod_id"], (time.monotonic() - t0) * 1000,
         )
         return acquired["pod_id"], acquired["pod_sse_url"]
 
@@ -201,4 +217,6 @@ class SessionOrchestrator:
         touched, _ = await self.state.touch(
             session_id, now_ts(), self.default_session_ttl
         )
+        logger.debug("touch: session=%s touched=%s ttl=%d",
+                     session_id, touched, self.default_session_ttl)
         return touched
