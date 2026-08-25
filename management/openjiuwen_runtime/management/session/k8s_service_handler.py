@@ -360,7 +360,7 @@ class K8sServiceHandler:
                 _exec=client.V1ExecAction(
                     command=[
                         "python",
-                        "/app/jiuwenclaw/tools/ws_probe.py"
+                        "/app/jiuwenswarm/tools/ws_probe.py"
                     ]
                 ),
                 initial_delay_seconds=spec.readiness_initial_delay,
