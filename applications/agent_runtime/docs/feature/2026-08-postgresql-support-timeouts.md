@@ -29,7 +29,13 @@
 - 框架单测 207 passed 5 skipped(新增:engine kwargs 注入/显式优先/sqlite 不注入/
   build_db_handler 构造/必填校验/默认端口;原「PG 不注入」断言更新为新语义);
   应用测试 129 passed(存量零改动)。
-- 真环境未连 PG 集群(现场只有 MySQL);PG 路径验证到 handler 构造与 engine kwargs 层。
+- **真环境(集群 PG 16)**:server extra 补 asyncpg 后构建 `agent-runtime:pg-20260825`
+  部署,`AGENT_RUNTIME_DB_TYPE=postgresql` 全链路就绪(readiness db:true、框架自动
+  建表 service_config_template/routing_rule);集成冒烟阶段 1–9(种子/route/场景
+  A–L 前段)全部通过。阶段 10 起中断系集群存储故障(nfs-server Evicted → PG WAL
+  fdatasync PANIC),与代码无关,存储恢复后复跑即可。
+- 冒烟脚本同步支持 PG:`--db-type postgresql`(psql 落库校验 + clean_previous
+  清种子行——PG 唯一约束下重跑必须清表,MySQL 靠 TRUNCATE 的既有语义补齐 PG 侧)。
 
 ## 影响面
 
