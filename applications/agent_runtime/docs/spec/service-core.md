@@ -167,6 +167,7 @@ SM 侧 ctx,级联管理全部生命周期(框架 App 的 lifespan 只认一个 c
 - K8s 部署红线:
   - `OPENJIUWEN_SERVICE_DEPLOY_REPLICAS=1` 固定(副本数=Deployment replicas;框架该项 >1 会因缺分布式锁后端启动即失败)。
   - RBAC 两份:服务 ns + AgentServer 目标 ns(缺则 create pod 403 → route 全 503;同 ns 部署时两份指向同一 ns)。
+  - 本地 tag 镜像(无仓库)必须 `docker save | ssh <node> docker load` 分发到**每个可调度节点**——`imagePullPolicy=IfNotPresent` 拉不到本地 tag,缺镜像节点上 pod 直接 ErrImagePull;且每次构建**换新 tag**并同步 `AGENT_RUNTIME_IMAGE`(同 tag 节点不会重拉)。
   - 迁移 ns 时先删旧 ns 的 Deployment/Service(含 NodePort 30091 占用)再 apply 新 ns,避免双部署竞争选主与 NodePort 冲突。
   - Pod 内 MySQL 用户须授权 Pod CIDR(`'agent_runtime'@'10.244.%'`)。
   - server 模式硬要求:Redis 开 AOF/RDB;DB 用 MySQL/PostgreSQL。
