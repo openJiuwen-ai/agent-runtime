@@ -61,6 +61,26 @@ def test_role_mapping_index_name_is_mysql_compatible():
     assert len(unique_index.name) <= 64
 
 
+def test_federated_identity_index_is_mysql_compatible():
+    unique_index = FEDERATED_IDENTITY_TABLE_DEF.indexes[0]
+
+    assert unique_index.columns == ["identity_key"]
+    assert unique_index.unique is True
+    assert unique_index.name == "uq_federated_identity_subject"
+    assert len(unique_index.name) <= 64
+
+    column_lengths = {
+        column.name: column.length
+        for column in FEDERATED_IDENTITY_TABLE_DEF.columns
+    }
+    max_key_bytes = 0
+    for column_name in unique_index.columns:
+        column_length = column_lengths[column_name]
+        assert column_length is not None
+        max_key_bytes += column_length * 4
+    assert max_key_bytes <= 3072
+
+
 def _query_value(url: str, name: str) -> str:
     values = parse_qs(urlsplit(url).query).get(name)
     assert values
@@ -134,6 +154,31 @@ async def test_first_login_is_idempotent_and_code_is_one_time(tmp_path):
         assert (
             await handler.count_records(FEDERATION_LOGIN_CODE_TABLE_DEF.table_name, {})
             == 1
+        )
+    finally:
+        await service.close()
+        await handler.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_external_subject_matching_is_case_sensitive(tmp_path):
+    handler, service = await _runtime(tmp_path)
+    try:
+        _, uppercase = await _federated_login(
+            service,
+            employee_id="Employee-Case",
+            display_name="Uppercase Employee",
+        )
+        _, lowercase = await _federated_login(
+            service,
+            employee_id="employee-case",
+            display_name="Lowercase Employee",
+        )
+
+        assert uppercase.user_id != lowercase.user_id
+        assert (
+            await handler.count_records(FEDERATED_IDENTITY_TABLE_DEF.table_name, {})
+            == 2
         )
     finally:
         await service.close()

@@ -125,7 +125,9 @@ FEDERATION_CONNECTION_TABLE_DEF = TableDefinition(
     ],
 )
 
-# 稳定外部身份键。一个外部主体只映射一个本地用户；同一用户可绑定多个外部身份。
+# 稳定外部身份键。identity_key 是 connection_id、issuer、external_subject 的
+# 长度分隔 SHA-256 摘要，避免数据库索引长度和大小写排序规则改变身份匹配语义。
+# 一个外部主体只映射一个本地用户；同一用户可绑定多个外部身份。
 FEDERATED_IDENTITY_TABLE_DEF = TableDefinition(
     table_name="federated_identity",
     columns=[
@@ -133,6 +135,7 @@ FEDERATED_IDENTITY_TABLE_DEF = TableDefinition(
         ColumnDefinition("connection_id", "string", length=64, nullable=False),
         ColumnDefinition("issuer", "string", length=512, nullable=False),
         ColumnDefinition("external_subject", "string", length=256, nullable=False),
+        ColumnDefinition("identity_key", "string", length=64, nullable=False),
         ColumnDefinition("user_id", "string", length=64, nullable=False),
         ColumnDefinition("attributes", "json", nullable=False),
         ColumnDefinition("first_login_at", "datetime", nullable=False),
@@ -140,8 +143,9 @@ FEDERATED_IDENTITY_TABLE_DEF = TableDefinition(
     ],
     indexes=[
         IndexDefinition(
-            ["connection_id", "issuer", "external_subject"],
+            ["identity_key"],
             unique=True,
+            name="uq_federated_identity_subject",
         ),
         IndexDefinition(["user_id"], unique=False),
     ],
