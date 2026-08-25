@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
+  EmbeddingTemplateApi,
   ExtensionTemplateApi,
   ModelTemplateApi,
   ServiceConfigTemplateApi,
@@ -30,8 +31,9 @@ interface TemplateRefEditorProps {
 
 export async function loadTemplateOptions(): Promise<Record<string, TemplateOption[]>> {
   const pageSize = 200;
-  const [models, skills, extensions, services] = await Promise.all([
+  const [models, embeddings, skills, extensions, services] = await Promise.all([
     ModelTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
+    EmbeddingTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
     SkillWhitelistTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
     ExtensionTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
     ServiceConfigTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
@@ -47,6 +49,10 @@ export async function loadTemplateOptions(): Promise<Record<string, TemplateOpti
   for (const slot of ['default_model', 'video_model', 'audio_model', 'vision_model'] as const) {
     bySlot[slot] = modelOptions;
   }
+
+  bySlot.embedding_model = (embeddings.items ?? []).map((t) =>
+    toOpt(t.template_id, t.template_name),
+  );
   bySlot.skill_whitelist = (skills.items ?? []).map((t) => toOpt(t.template_id, t.template_name));
   bySlot.extension_config = (extensions.items ?? []).map((t) => toOpt(t.template_id, t.template_name));
   bySlot.service_config = (services.items ?? []).map((t) => toOpt(t.template_id, t.template_name));
@@ -306,8 +312,8 @@ export function TemplateRefEditor({
           const selected = editor[slot] ?? [];
           const multi = isMultiValueTemplateRefSlot(slot);
           return (
-            <div key={slot} className="flex items-start gap-3">
-              <div className="w-40 shrink-0 pt-2 text-xs font-medium text-muted">
+            <div key={slot} className="flex items-start gap-2">
+              <div className="w-32 shrink-0 pt-2 text-xs font-medium text-muted whitespace-nowrap">
                 {t(`policies.templateRef.slots.${slot}`, { defaultValue: slot })}
               </div>
               <div className="min-w-0 flex-1">

@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import threading
+import time
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
@@ -19,6 +20,17 @@ _RULE_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 _ALLOWED_SOURCES = frozenset({"builtin", "custom"})
 _MAX_SANITIZE_TEXT_LEN = 256 * 1024
 _LOG_MASKING_RULE_TABLE = "log_masking_rule"
+_PATTERN_PERF_SAMPLE_LIMIT_SEC = 0.05
+_PATTERN_PERF_PROBE_SAMPLES: tuple[str, ...] = (
+    ("x" * 19) + "z",
+    ("a" * 19) + "!",
+    "abc sample line with token=value",
+    ("b" * 28) + "!",
+    ('x="' * 30) + "password=",
+)
+_UNSAFE_WILDCARD_QUANTIFIER_RE = re.compile(
+    r"\(\.\*\)\*|\(\.\+\)\+|\(\.\*\)\+|\(\.\+\)\*"
+)
 _SENSITIVE_KW = (
     r"password|passwd|pwd|secret|token|api[_-]?key|access[_-]?token|"
     r"refresh[_-]?token|authorization|credential|private[_-]?key|user[_-]?id|userid"
@@ -91,16 +103,50 @@ def normalize_replacement(value: str | None) -> str:
     return text
 
 
-def validate_pattern(pattern: str) -> str:
+def validate_pattern_structure(pattern: str) -> None:
+    """静态拒绝明显 ReDoS 结构（如 ``(.*)*``）。"""
+    if _UNSAFE_WILDCARD_QUANTIFIER_RE.search(pattern):
+        raise ValueError(
+            "pattern contains unsafe nested wildcard quantifiers like (.*)*"
+        )
+
+
+def validate_pattern_performance(
+    pattern: re.Pattern[str],
+    *,
+    limit_sec: float = _PATTERN_PERF_SAMPLE_LIMIT_SEC,
+) -> None:
+    """拒绝在探测样例上过慢的自定义 pattern（防 ReDoS）。"""
+    for sample in _PATTERN_PERF_PROBE_SAMPLES:
+        t0 = time.perf_counter()
+        pattern.sub("***", sample)
+        elapsed = time.perf_counter() - t0
+        if elapsed > limit_sec:
+            raise ValueError(
+                "pattern too slow "
+                f"(>{limit_sec * 1000:.0f}ms on probe sample len={len(sample)})"
+            )
+
+
+def validate_pattern(
+    pattern: str,
+    *,
+    check_structure: bool = True,
+    check_performance: bool = True,
+) -> str:
     text = str(pattern or "").strip()
     if not text:
         raise ValueError("pattern is required")
     if len(text) > MAX_PATTERN_LENGTH:
         raise ValueError(f"pattern must be at most {MAX_PATTERN_LENGTH} chars")
     try:
-        re.compile(text)
+        compiled = re.compile(text)
     except re.error as exc:
         raise ValueError(f"invalid regex pattern: {exc}") from exc
+    if check_structure:
+        validate_pattern_structure(text)
+    if check_performance:
+        validate_pattern_performance(compiled)
     return text
 
 
@@ -183,6 +229,8 @@ class LogMaskingEngine:
         from .probes import maybe_emit_log_masking_probe_samples
 
         maybe_emit_log_masking_probe_samples(_logger)
+
+    reload_log_masking_rule = reload_log_masking_from_gateway_db
 
     @classmethod
     async def list_enabled_log_masking_rule_rows(

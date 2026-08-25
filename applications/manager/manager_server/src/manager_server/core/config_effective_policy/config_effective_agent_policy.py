@@ -48,6 +48,7 @@ _ALLOWED_SORT_FIELDS = frozenset({
     "priority",
     "match_expr",
     "agent_id",
+    "workspace_dir",
     "updated_at",
 })
 
@@ -66,6 +67,7 @@ def _matches_search(
         str(getattr(row, "policy_name", "") or ""),
         str(getattr(row, "policy_desc", "") or ""),
         str(getattr(row, "agent_id", "") or ""),
+        str(getattr(row, "workspace_dir", "") or ""),
         str(getattr(row, "service_policy_id", "") or ""),
         str(getattr(row, "priority", "") or ""),
         str(getattr(row, "match_expr", "") or ""),
@@ -99,6 +101,7 @@ async def push_config_effective_agent_policy_op(
     policy: dict[str, Any] | None = None,
     row_id: int | None = None,
     updates: dict[str, Any] | None = None,
+    policies: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """推送 Agent 层级配置生效策略变更（``config.config_effective_agent_policies``），返回 config.ack payload。"""
     payload: dict[str, Any] = {"op": op}
@@ -108,9 +111,38 @@ async def push_config_effective_agent_policy_op(
         payload["id"] = row_id
     if updates is not None:
         payload["updates"] = updates
+    if policies is not None:
+        payload["policies"] = policies
     return await push_config_op(
         jiuwenclaw_id,
         {"config_effective_agent_policies": payload},
+    )
+
+
+async def push_agent_policies_sync_to_gateway(
+    handler: DBHandler,
+    jiuwenclaw_id: str,
+) -> dict[str, Any]:
+    """Gateway 注册后：将 MDB 中该实例全部 Agent 策略 bulk push 到 GDB（``op=sync``）。"""
+    jid = str(jiuwenclaw_id or "").strip()
+    if not jid:
+        raise ValueError("jiuwenclaw_id is required")
+    rows = await handler.list_records(
+        _AGENT_POLICY_TABLE,
+        {"jiuwenclaw_id": jid},
+        limit=_LIST_ALL_CAP,
+        offset=0,
+    )
+    policies = [_row_to_out(row).model_dump(mode="json") for row in rows]
+    return await push_config_op(
+        jid,
+        {
+            "config_effective_agent_policies": {
+                "op": "sync",
+                "policies": policies,
+                "skip_runtime_update": True,
+            }
+        },
     )
 
 
@@ -126,11 +158,12 @@ def _row_to_out(row: Any) -> ConfigEffectiveAgentPolicyOut:
         policy_name=row.policy_name,
         policy_desc=row.policy_desc,
         agent_id=row.agent_id,
+        workspace_dir=row.workspace_dir,
         service_policy_id=row.service_policy_id,
         priority=row.priority,
         match_expr=row.match_expr,
         template_ref=read_template_ref_from_row(row),
-        send_file_allowed=bool(getattr(row, "send_file_allowed", False)),
+        send_file_allowed=bool(getattr(row, "send_file_allowed", True)),
         enabled=row.enabled,
         data=row.data,
         created_at=iso_datetime(row.created_at),
@@ -167,11 +200,12 @@ class ConfigEffectiveAgentPolicyService:
             "policy_name": row.get("policy_name"),
             "policy_desc": row.get("policy_desc"),
             "agent_id": row["agent_id"],
+            "workspace_dir": row.get("workspace_dir"),
             "service_policy_id": row["service_policy_id"],
             "priority": row.get("priority", 0),
             "match_expr": row.get("match_expr"),
             "template_ref": normalize_template_ref(row.get("template_ref")),
-            "send_file_allowed": bool(row.get("send_file_allowed", False)),
+            "send_file_allowed": bool(row.get("send_file_allowed", True)),
             "enabled": row.get("enabled", True),
             "data": row.get("data"),
             "created_at": iso_datetime(row.get("created_at") or now),
@@ -192,12 +226,14 @@ class ConfigEffectiveAgentPolicyService:
         now = utc_now()
         template_ref = normalize_template_ref(body.template_ref)
         validate_single_value_template_ref_slots(template_ref)
+        workspace_dir = body.workspace_dir.strip() if body.workspace_dir else None
         row = {
             "jiuwenclaw_id": normalized,
             "policy_id": new_uuid4(),
             "policy_name": body.policy_name,
             "policy_desc": body.policy_desc,
             "agent_id": body.agent_id.strip(),
+            "workspace_dir": workspace_dir,
             "service_policy_id": body.service_policy_id.strip(),
             "priority": body.priority,
             "match_expr": body.match_expr,
@@ -341,6 +377,12 @@ class ConfigEffectiveAgentPolicyService:
             updates["agent_id"] = updates["agent_id"].strip()
             if not updates["agent_id"]:
                 raise ValueError("agent_id cannot be empty")
+
+        if "workspace_dir" in updates:
+            raw_ws = updates["workspace_dir"]
+            updates["workspace_dir"] = (
+                raw_ws.strip() if isinstance(raw_ws, str) and raw_ws.strip() else None
+            )
 
         if "service_policy_id" in updates and updates["service_policy_id"] is not None:
             updates["service_policy_id"] = str(updates["service_policy_id"]).strip()

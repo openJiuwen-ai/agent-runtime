@@ -10,6 +10,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 
 from manager_server.core.template.agent_template import AgentTemplateService
+from manager_server.core.template.embedding_template import (
+    EmbeddingTemplateService,
+)
 from manager_server.core.template.extension_config_template import (
     ExtensionConfigTemplateService,
 )
@@ -27,6 +30,9 @@ from manager_server.schemas.template_schemas import (
     AgentTemplateCreateBody,
     AgentTemplateListQuery,
     AgentTemplateUpdateBody,
+    EmbeddingTemplateCreateBody,
+    EmbeddingTemplateListQuery,
+    EmbeddingTemplateUpdateBody,
     ExtensionConfigTemplateCreateBody,
     ExtensionConfigTemplateListQuery,
     ExtensionConfigTemplateUpdateBody,
@@ -47,6 +53,10 @@ templates_router = APIRouter()
 
 def _model_template_svc(handler: DBHandler) -> ModelTemplateService:
     return ModelTemplateService(handler)
+
+
+def _embedding_template_svc(handler: DBHandler) -> EmbeddingTemplateService:
+    return EmbeddingTemplateService(handler)
 
 
 def _extension_config_template_svc(handler: DBHandler) -> ExtensionConfigTemplateService:
@@ -205,6 +215,87 @@ async def delete_model_template(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not ok:
         raise HTTPException(status_code=404, detail="model template not found")
+    return ResponseModel(
+        code=200, message="success", data={"deleted": True, "template_id": template_id}
+    )
+
+
+# --- embedding_template ---
+
+
+@templates_router.post("/embedding-templates", response_model=ResponseModel)
+async def create_embedding_template(
+    body: EmbeddingTemplateCreateBody,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    svc = _embedding_template_svc(handler)
+    try:
+        data = await svc.create(body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ResponseModel(code=200, message="success", data=data.model_dump())
+
+
+@templates_router.get("/embedding-templates", response_model=ResponseModel)
+async def list_embedding_templates(
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+    query: Annotated[EmbeddingTemplateListQuery, Query()],
+):
+    svc = _embedding_template_svc(handler)
+    try:
+        data = await svc.list_templates(query)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ResponseModel(code=200, message="success", data=data)
+
+
+@templates_router.get("/embedding-templates/{template_id}", response_model=ResponseModel)
+async def get_embedding_template(
+    template_id: TemplateIdPath,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    svc = _embedding_template_svc(handler)
+    try:
+        row = await svc.get(template_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if row is None:
+        raise HTTPException(status_code=404, detail="embedding template not found")
+    return ResponseModel(code=200, message="success", data=row.model_dump())
+
+
+@templates_router.patch(
+    "/embedding-templates/{template_id}", response_model=ResponseModel
+)
+async def update_embedding_template(
+    template_id: TemplateIdPath,
+    body: EmbeddingTemplateUpdateBody,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    svc = _embedding_template_svc(handler)
+    try:
+        row = await svc.update(template_id, body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if row is None:
+        raise HTTPException(status_code=404, detail="embedding template not found")
+    return ResponseModel(code=200, message="success", data=row.model_dump())
+
+
+@templates_router.delete(
+    "/embedding-templates/{template_id}", response_model=ResponseModel
+)
+async def delete_embedding_template(
+    template_id: TemplateIdPath,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    svc = _embedding_template_svc(handler)
+    try:
+        ok = await svc.delete(template_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not ok:
+        raise HTTPException(status_code=404, detail="embedding template not found")
     return ResponseModel(
         code=200, message="success", data={"deleted": True, "template_id": template_id}
     )

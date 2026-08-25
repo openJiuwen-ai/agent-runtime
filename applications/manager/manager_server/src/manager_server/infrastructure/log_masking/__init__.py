@@ -17,6 +17,7 @@ from .probes import (
 reload_from_rows = LogMaskingEngine.reload_from_rows
 compile_masking_rows = LogMaskingEngine.compile_masking_rows
 reload_log_masking_from_gateway_db = LogMaskingEngine.reload_log_masking_from_gateway_db
+reload_log_masking_rule = LogMaskingEngine.reload_log_masking_rule
 
 __all__ = (
     "DEFAULT_REPLACEMENT",
@@ -26,6 +27,7 @@ __all__ = (
     "compile_masking_rows",
     "reload_from_rows",
     "reload_log_masking_from_gateway_db",
+    "reload_log_masking_rule",
     "emit_log_masking_probe_samples",
     "log_masking_probes_enabled",
     "maybe_emit_log_masking_probe_samples",
