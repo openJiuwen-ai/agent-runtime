@@ -1,5 +1,5 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
-"""日志脱敏规则：Manager DB + Gateway WS 推送。"""
+"""日志脱敏规则：Manager DB + Gateway HTTP 推送。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from openjiuwen_runtime.foundation.db.handler import DBHandler
 
 from manager_server.infrastructure.common import resolve_order_by
 from manager_server.infrastructure.utils import format_ts, new_uuid4, utc_now
-from manager_server.manager_ws_server.server import push_config_op
+from manager_server.manager_config_push import gateway_request
 from manager_server.models.application_config_models import LOG_MASKING_RULE_TABLE_DEF
 from manager_server.schemas.application_config_schemas import (
     LogMaskingRuleCreateBody,
@@ -48,6 +48,15 @@ _REST_LOG_MASKING_SOURCE = "custom"
 
 _TABLE = LOG_MASKING_RULE_TABLE_DEF.table_name
 _LIST_ALL_CAP = 10_000
+_GATEWAY_PUSH_DROP_KEYS = frozenset({"id", "created_at", "updated_at", "jiuwenclaw_id"})
+
+
+def _clean_for_gateway_push(payload: dict[str, Any]) -> dict[str, Any]:
+    clean: dict[str, Any] = {}
+    for key, value in payload.items():
+        if key not in _GATEWAY_PUSH_DROP_KEYS:
+            clean[key] = value
+    return clean
 _ALLOWED_SORT_FIELDS = frozenset({
     "rule_name",
     "description",
@@ -129,7 +138,7 @@ def _row_to_out(obj: Any) -> LogMaskingRuleOut:
 
 
 def _row_to_sync_payload(obj: Any) -> dict[str, Any]:
-    """WS ``sync`` 用：不含 ``id`` / 时间戳，Gateway 按 ``rule_id`` upsert。"""
+    """全量同步用：不含 ``id`` / 时间戳，Gateway 按 ``rule_id`` upsert。"""
     out = _row_to_out(obj)
     data = out.model_dump(mode="json")
     for key in ("id", "created_at", "updated_at"):
@@ -137,39 +146,33 @@ def _row_to_sync_payload(obj: Any) -> dict[str, Any]:
     return data
 
 
-async def push_log_masking_rule_op(
-    jiuwenclaw_id: str,
-    op: str,
-    *,
-    rule: dict[str, Any] | None = None,
-    rule_id: str | None = None,
-    updates: dict[str, Any] | None = None,
-    rules: list[dict[str, Any]] | None = None,
-) -> dict[str, Any]:
-    payload: dict[str, Any] = {"op": op}
-    if rule is not None:
-        payload["rule"] = rule
-    if rule_id is not None:
-        payload["rule_id"] = rule_id
-    if updates is not None:
-        payload["updates"] = updates
-    if rules is not None:
-        payload["rules"] = rules
-    return await push_config_op(jiuwenclaw_id, {"log_masking_rule": payload})
-
-
 async def push_log_masking_rules_sync_to_gateway(
     handler: DBHandler,
     jiuwenclaw_id: str,
 ) -> dict[str, Any]:
-    """Gateway 注册后：将 MDB 中该实例全部规则 bulk push 到 GDB（``op=sync``）。"""
+    """Gateway 注册后：将 MDB 中该实例全部规则 bulk push 到 GDB。"""
     jid = str(jiuwenclaw_id or "").strip()
     if not jid:
         raise ValueError("jiuwenclaw_id is required")
 
     rows = await handler.list_records(_TABLE, {"jiuwenclaw_id": jid})
     rules = [_row_to_sync_payload(row) for row in rows]
-    return await push_log_masking_rule_op(jid, "sync", rules=rules)
+    last: dict[str, Any] | None = None
+    for idx, rule in enumerate(rules):
+        clean = _clean_for_gateway_push(rule)
+        last = await gateway_request(
+            jid,
+            "POST",
+            "/api/v1/log-masking-rules",
+            clean,
+            revision=f"sync-log-masking:{idx}",
+        )
+    return last or {
+        "revision": "sync-log-masking",
+        "success_flag": True,
+        "result": {"synced": 0},
+        "transport": "http",
+    }
 
 
 class LogMaskingRuleService:
@@ -204,14 +207,8 @@ class LogMaskingRuleService:
             raise ValueError("failed to create log masking rule")
 
         try:
-            await push_log_masking_rule_op(
-                jid,
-                "create",
-                rule={
-                    **row_data,
-                    "created_at": format_ts(now),
-                    "updated_at": format_ts(now),
-                },
+            await gateway_request(
+                jid, "POST", "/api/v1/log-masking-rules", _clean_for_gateway_push(row_data)
             )
         except Exception as exc:
             await self._handler.delete(
@@ -296,8 +293,8 @@ class LogMaskingRuleService:
             updates["priority"] = int(updates["priority"])
 
         try:
-            await push_log_masking_rule_op(
-                jid, "update", rule_id=rid, updates=updates
+            await gateway_request(
+                jid, "PATCH", f"/api/v1/log-masking-rules/{rid}", dict(updates)
             )
         except Exception as exc:
             raise ValueError(f"failed to sync to gateway: {exc}") from exc
@@ -320,7 +317,9 @@ class LogMaskingRuleService:
             raise ValueError("log masking rule not found")
 
         try:
-            await push_log_masking_rule_op(jid, "delete", rule_id=rid)
+            await gateway_request(
+                jid, "DELETE", f"/api/v1/log-masking-rules/{rid}", {}
+            )
         except Exception as exc:
             raise ValueError(f"failed to sync to gateway: {exc}") from exc
 

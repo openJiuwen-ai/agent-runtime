@@ -9,7 +9,7 @@ from typing import Any
 
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 
-from manager_server.manager_ws_server.server import push_config_op
+from manager_server.manager_config_push import gateway_request
 
 _TASK_MEMORY_CONFIG_TABLE = "task_memory_config"
 
@@ -58,19 +58,6 @@ def _row_to_dict(obj: Any) -> dict[str, Any]:
         "created_at": _format_ts(getattr(obj, "created_at", None)),
         "updated_at": _format_ts(getattr(obj, "updated_at", None)),
     }
-
-
-async def push_task_memory_config_op(
-    jiuwenclaw_id: str,
-    op: str,
-    *,
-    task_memory: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """推送 task_memory 配置变更（``config.task_memory_config``），返回 config.ack payload。"""
-    payload: dict[str, Any] = {"op": op}
-    if task_memory is not None:
-        payload["task_memory"] = task_memory
-    return await push_config_op(jiuwenclaw_id, {"task_memory_config": payload})
 
 
 class TaskMemoryConfigService:
@@ -148,10 +135,12 @@ class TaskMemoryConfigService:
             result = _row_to_dict(created)
 
         try:
-            await push_task_memory_config_op(
+            # Gateway PUT /task-memory：扁平字段，不再包 op / task_memory
+            await gateway_request(
                 jiuwenclaw_id,
-                "upsert",
-                task_memory={
+                "PUT",
+                "/api/v1/task-memory",
+                {
                     "enabled": enabled,
                     "llm_model": llm_model,
                     "embedding_model": embedding_model,
@@ -190,7 +179,7 @@ class TaskMemoryConfigService:
             raise ValueError("task_memory config not found")
 
         try:
-            await push_task_memory_config_op(jiuwenclaw_id, "delete")
+            await gateway_request(jiuwenclaw_id, "DELETE", "/api/v1/task-memory", {})
         except Exception as exc:
             raise ValueError(f"failed to sync to gateway: {exc}") from exc
 

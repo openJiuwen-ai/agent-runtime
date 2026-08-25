@@ -25,16 +25,14 @@ from manager_server.core.config_effective_policy.config_effective_service_policy
 )
 from manager_server.core.instance.instance_service import (
     _LOG_MASKING_SEEDED_KEY,
+    get_instance_row,
     is_log_masking_seeded,
     merge_instance_data,
 )
+from manager_server.manager_config_push import gateway_request, resolve_gateway_endpoint
 from manager_server.core.template.push_template_to_gateway import (
     rebuild_jid_template_ref_for_gateway,
     sync_referenced_templates_to_gateway,
-)
-from manager_server.manager_ws_server.server import (
-    ManagerWsServer,
-    push_config_op,
 )
 from manager_server.models.config_effective_policy_models import (
     CONFIG_DEFAULT_TEMPLATE_MAPPING_TABLE_DEF,
@@ -213,44 +211,44 @@ async def purge_manager_instance_data(
     return deleted_counts
 
 
-async def _purge_gateway_via_ws(jiuwenclaw_id: str) -> bool:
-    server = ManagerWsServer.get_instance()
-    if server is None:
-        return False
-    client = await server.lookup_active_client(jiuwenclaw_id, service_type="gateway")
-    if client is None:
+async def _purge_gateway_via_http(jiuwenclaw_id: str) -> bool:
+    """有 gateway_endpoint 则 HTTP purge；否则返回 False（不抛错）。"""
+    from manager_server.infrastructure.db import get_db_handler
+
+    jid = str(jiuwenclaw_id or "").strip()
+    if not jid:
         return False
     try:
-        await push_config_op(
-            jiuwenclaw_id,
-            {
-                "instance_data_lifecycle": {
-                    "op": "purge",
-                    "skip_runtime_update": True,
-                }
-            },
+        row = await get_instance_row(get_db_handler(), jid)
+        if row is None or not resolve_gateway_endpoint(row):
+            return False
+        await gateway_request(
+            jid,
+            "POST",
+            "/api/v1/instance-data-lifecycle",
+            {"op": "purge"},
         )
         return True
     except ValueError:
         logger.warning(
-            "[InstanceDataLifecycle] gateway ws purge failed jiuwenclaw_id=%s",
-            jiuwenclaw_id,
+            "[InstanceDataLifecycle] gateway purge failed jiuwenclaw_id=%s",
+            jid,
             exc_info=True,
         )
         return False
 
 
 async def purge_gateway_instance_data(jiuwenclaw_id: str) -> dict[str, Any]:
-    """通过 WS 通知在线 Gateway 清理 GDB；未连接则跳过。"""
+    """通过 HTTP 通知 Gateway 清理 GDB；无 endpoint 则跳过。"""
     jid = str(jiuwenclaw_id or "").strip()
     if not jid:
         return {"purged": False}
 
-    if await _purge_gateway_via_ws(jid):
+    if await _purge_gateway_via_http(jid):
         return {"purged": True}
 
     logger.info(
-        "[InstanceDataLifecycle] gateway purge skipped jiuwenclaw_id=%s (not connected)",
+        "[InstanceDataLifecycle] gateway purge skipped jiuwenclaw_id=%s (no endpoint)",
         jid,
     )
     return {"purged": False}

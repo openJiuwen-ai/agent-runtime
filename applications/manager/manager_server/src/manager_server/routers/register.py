@@ -4,9 +4,6 @@ import os
 
 from fastapi import APIRouter, FastAPI
 
-from manager_server.infrastructure.config import settings
-from manager_server.manager_ws_server import ManagerWsServer
-
 from .application_config_routers import application_config_router
 from .config_effective_policy_routers import config_effective_policy_router
 from .user_console_routers import user_console_router
@@ -41,6 +38,7 @@ def router_register(app: FastAPI) -> None:
         prefix=INSTANCES_PREFIX,
         tags=["Config Effective Policy"],
     )
+
     # 实例准入：用户/组织 ↔ 实例授权（instance_grant）。
     v1_router.include_router(
         instance_grant_router,
@@ -56,22 +54,13 @@ def router_register(app: FastAPI) -> None:
 
     @api_router.get("/manager-ws/status", tags=["System"])
     async def manager_ws_status() -> dict:
-        server = ManagerWsServer.get_instance()
-        if server is None:
-            return {
-                "enabled": settings.manager_ws_enabled,
-                "running": False,
-                "registered_jiuwenclaw_ids": [],
-                "pid": os.getpid(),
-            }
-        registered = await server.list_registered_jiuwenclaw_ids()
+        """兼容旧前端：配置下发已改为 HTTP，WS 服务已移除。"""
         return {
-            "enabled": True,
-            "running": True,
-            "host": server.host,
-            "port": server.port,
-            "registered_jiuwenclaw_ids": registered,
+            "enabled": False,
+            "running": False,
+            "registered_jiuwenclaw_ids": [],
             "pid": os.getpid(),
+            "transport": "http",
         }
 
     api_router.include_router(v1_router)

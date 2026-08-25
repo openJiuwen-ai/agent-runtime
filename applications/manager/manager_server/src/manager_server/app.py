@@ -9,7 +9,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from manager_server import __version__
-from manager_server.infrastructure.config import settings
 from manager_server.infrastructure.db import create_db_handler, database_config_summary
 from manager_server.infrastructure.logger import configure_logging, get_logger
 from manager_server.models.table_init import init_all_tables
@@ -21,8 +20,6 @@ _log = get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
-    from manager_server.manager_ws_server import ManagerWsServer
-
     configure_logging()
     db_handler = create_db_handler()
     application.state.db_handler = db_handler
@@ -37,27 +34,10 @@ async def lifespan(application: FastAPI):
     set_manager_signing_key(await get_or_create_manager_signing_key(db_handler))
     stop = asyncio.Event()
     scan_task = asyncio.create_task(run_heartbeat_scan_loop(stop, db_handler))
-    if settings.manager_ws_enabled:
-        from manager_server.core.instance.instance_data_lifecycle import (
-            sync_data_to_gateway_on_register,
-        )
-
-        manager_ws_server = ManagerWsServer(
-            host=settings.manager_ws_host,
-            port=settings.manager_ws_port,
-            on_gateway_register=sync_data_to_gateway_on_register,
-        )
-        await manager_ws_server.start()
-        ManagerWsServer.set_instance(manager_ws_server)
     _log.info(
         "startup",
         version=__version__,
         db=database_config_summary(),
-        manager_ws=(
-            f"ws://{settings.manager_ws_host}:{settings.manager_ws_port}"
-            if settings.manager_ws_enabled
-            else None
-        ),
     )
     yield
     stop.set()
@@ -66,10 +46,6 @@ async def lifespan(application: FastAPI):
         await scan_task
     except asyncio.CancelledError:
         pass
-    manager_ws_server = ManagerWsServer.get_instance()
-    if manager_ws_server is not None:
-        ManagerWsServer.set_instance(None)
-        await manager_ws_server.stop()
     await db_handler.disconnect()
     _log.info("shutdown")
 

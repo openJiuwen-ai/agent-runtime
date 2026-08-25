@@ -8,7 +8,8 @@ from openjiuwen_runtime.foundation.db.handler import DBHandler
 
 from manager_server.core.template.push_template_to_gateway import (
     assert_template_deletable,
-    push_template_to_referencing_gateways,
+    update_template_on_referencing_gateways,
+    delete_template_on_referencing_gateways,
 )
 from manager_server.infrastructure.common import resolve_order_by
 from manager_server.infrastructure.utils import iso_datetime, new_uuid4, utc_now
@@ -228,12 +229,11 @@ class ServiceConfigTemplateService:
         if existing is None:
             return None
 
-        await push_template_to_referencing_gateways(
+        await update_template_on_referencing_gateways(
             self._handler,
             "service_config_templates",
-            "update",
-            template_id=template_id,
-            updates=updates,
+            template_id,
+            updates,
         )
         payload = dict(updates)
         payload["updated_at"] = utc_now()
@@ -251,10 +251,9 @@ class ServiceConfigTemplateService:
         await assert_template_deletable(
             self._handler, template_id, "service_config_templates"
         )
-        await push_template_to_referencing_gateways(
+        await delete_template_on_referencing_gateways(
             self._handler,
             "service_config_templates",
-            "delete",
-            template_id=template_id,
+            template_id,
         )
         return await self._handler.delete(_TABLE, {"template_id": template_id})

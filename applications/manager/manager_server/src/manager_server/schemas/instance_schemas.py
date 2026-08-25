@@ -48,6 +48,31 @@ class ProvisionLocalInstanceBody(BaseModel):
     description: str | None = None
 
 
+class GatewayRegisterBody(BaseModel):
+    """Gateway → Manager：HTTP 自注册。"""
+
+    service_type: str = Field(default="gateway")
+    jiuwenclaw_id: str | None = None
+    jiuwenclaw_name: str | None = None
+    k8s_namespace: str | None = None
+    enc_pubkey: str | None = None
+    enc_alg: str | None = "X25519"
+    enc_pubkey_fp: str | None = None
+    endpoint: str | None = None
+    version: str | None = None
+
+
+class GatewayHeartbeatBody(BaseModel):
+    """Gateway → Manager：HTTP 心跳（可刷新 ``data.gateway_endpoint``）。"""
+
+    jiuwenclaw_id: str = Field(..., min_length=1)
+    service_type: str = Field(default="gateway")
+    endpoint: str | None = None
+    version: str | None = None
+    seq: int | None = None
+    role: str | None = None
+
+
 class InstanceSummary(BaseModel):
     jiuwenclaw_id: str
     jiuwenclaw_name: str

@@ -1,12 +1,2 @@
-from .logging_config import push_logging_config_op
-from .task_memory_config import push_task_memory_config_op
-
-from .permissions_config import push_permissions_config_op
-from .memory_config import push_memory_config_op
-
-__all__ = (
-    "push_logging_config_op",
-    "push_task_memory_config_op",
-    "push_permissions_config_op",
-    "push_memory_config_op",
-)
+# Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+"""应用配置业务包（logging / memory / permissions / task-memory / log-masking）。"""

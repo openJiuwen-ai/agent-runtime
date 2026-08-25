@@ -26,7 +26,7 @@ pytestmark = pytest.mark.filterwarnings("ignore::sqlalchemy.exc.SAWarning")
 
 
 class _GatewayAckSimulator:
-    """模拟 Gateway config.ack，为策略/映射 create 分配自增 id。"""
+    """模拟 Gateway HTTP ack，为策略/映射 create 分配自增 id。"""
 
     def __init__(self) -> None:
         self._service_policy_id = 0
@@ -34,58 +34,57 @@ class _GatewayAckSimulator:
         self._global_policy_id = 0
         self._mapping_id = 0
 
-    async def push_config_op(
+    async def gateway_request(
         self,
         jiuwenclaw_id: str,
-        config: dict[str, Any],
+        method: str,
+        path: str,
+        business: dict[str, Any] | None = None,
         **_kwargs: Any,
     ) -> dict[str, Any]:
         _ = jiuwenclaw_id
-        if "config_effective_service_policies" in config:
-            payload = config["config_effective_service_policies"]
-            if payload.get("op") == "create":
+        _ = business
+        m = method.upper()
+        p = path.rstrip("/")
+        if m == "POST":
+            if p.endswith("service-policies"):
                 self._service_policy_id += 1
                 return {
                     "result": {"id": self._service_policy_id},
                     "revision": "rev-ut",
                     "success_flag": True,
+                    "transport": "http",
                 }
-        if "config_effective_agent_policies" in config:
-            payload = config["config_effective_agent_policies"]
-            if payload.get("op") == "create":
+            if p.endswith("agent-policies"):
                 self._agent_policy_id += 1
                 return {
                     "result": {"id": self._agent_policy_id},
                     "revision": "rev-ut",
                     "success_flag": True,
+                    "transport": "http",
                 }
-        if "config_effective_global_policies" in config:
-            payload = config["config_effective_global_policies"]
-            if payload.get("op") == "create":
+            if p.endswith("global-policies"):
                 self._global_policy_id += 1
                 return {
                     "result": {"id": self._global_policy_id},
                     "revision": "rev-ut",
                     "success_flag": True,
+                    "transport": "http",
                 }
-        if "config_default_template_mappings" in config:
-            payload = config["config_default_template_mappings"]
-            if payload.get("op") == "create":
+            if p.endswith("config-default-template-mappings"):
                 self._mapping_id += 1
                 return {
                     "result": {"id": self._mapping_id},
                     "revision": "rev-ut",
                     "success_flag": True,
+                    "transport": "http",
                 }
-        return {"revision": "rev-ut", "success_flag": True}
-
-    async def push_config_op_to_all(
-        self,
-        config: dict[str, Any],
-        **_kwargs: Any,
-    ) -> dict[str, Any]:
-        _ = config
-        return {"revision": "rev-ut", "success_flag": True}
+        return {
+            "revision": "rev-ut",
+            "success_flag": True,
+            "result": None,
+            "transport": "http",
+        }
 
 
 async def _open_sqlite(path: Path) -> SQLiteHandler:
@@ -190,21 +189,21 @@ class ManagerApiHarness:
         _require_http_ok(resp)
 
 
-_PUSH_CONFIG_OP_MODULES = (
-    "manager_server.manager_ws_server.server",
-    "manager_server.core.template.model_template",
-    "manager_server.core.template.extension_config_template",
-    "manager_server.core.template.skill_whitelist_template",
-    "manager_server.core.template.service_config_template",
+# gateway_request 在各业务模块中是本地绑定，需逐一 mock
+_GATEWAY_REQUEST_MODULES = (
+    "manager_server.manager_config_push.client",
+    "manager_server.manager_config_push",
+    "manager_server.core.application_config.logging_config",
+    "manager_server.core.application_config.task_memory_config",
+    "manager_server.core.application_config.permissions_config",
+    "manager_server.core.application_config.memory_config",
     "manager_server.core.application_config.log_masking_rule",
-    "manager_server.core.config_effective_policy.config_effective_service_policy",
-    "manager_server.core.config_effective_policy.config_effective_global_policy",
     "manager_server.core.config_effective_policy.config_effective_agent_policy",
+    "manager_server.core.config_effective_policy.config_effective_global_policy",
+    "manager_server.core.config_effective_policy.config_effective_service_policy",
     "manager_server.core.config_effective_policy.config_default_template_mapping",
-)
-
-_PUSH_CONFIG_OP_TO_ALL_MODULES = (
-    "manager_server.manager_ws_server.server",
+    "manager_server.core.template.push_template_to_gateway",
+    "manager_server.core.instance.instance_data_lifecycle",
 )
 
 
@@ -212,12 +211,10 @@ def _install_push_mocks(
     monkeypatch: pytest.MonkeyPatch,
     sim: _GatewayAckSimulator,
 ) -> None:
-    for mod in _PUSH_CONFIG_OP_MODULES:
-        monkeypatch.setattr(f"{mod}.push_config_op", sim.push_config_op, raising=False)
-    for mod in _PUSH_CONFIG_OP_TO_ALL_MODULES:
+    for mod in _GATEWAY_REQUEST_MODULES:
         monkeypatch.setattr(
-            f"{mod}.push_config_op_to_all",
-            sim.push_config_op_to_all,
+            f"{mod}.gateway_request",
+            sim.gateway_request,
             raising=False,
         )
 
