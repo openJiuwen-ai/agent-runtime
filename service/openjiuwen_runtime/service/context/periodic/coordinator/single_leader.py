@@ -157,7 +157,8 @@ class SingleLeaderCoordinator:
             return None
 
         self._lock.start_renew(token)
-        logger.info(
+        # 常态降 DEBUG（1Hz 任务每拍一条会刷屏）；选主异常仍走 WARNING
+        logger.debug(
             "single_leader claimed: epoch=%s instance=%s key=%s",
             epoch,
             iid,

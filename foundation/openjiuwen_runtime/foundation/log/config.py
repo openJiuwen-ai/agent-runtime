@@ -22,6 +22,56 @@ _STANDARD_LOG_FORMAT = (
 _STANDARD_LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
 _FILE_HANDLER_MAX_BYTES = 10485760
 _FILE_HANDLER_BACKUP_COUNT = 20
+# OPENJIUWEN_RUNTIME_LOG_FILE 取下列值 = 显式关闭文件 handler（stdout-only 形态，
+# K8s 等由平台采集 stdout 的部署用；容器内文件日志随 pod 生命周期丢失且无处导出）
+_LOG_FILE_DISABLED_MARKERS = frozenset({"disabled", "off", "none", "false"})
+_FILE_HANDLER_NAME = "file"
+
+
+def _log_file_disabled(explicit: Optional[str] = None) -> bool:
+    """判断是否显式关闭文件 handler（explicit 优先于环境变量）。"""
+    raw = explicit if explicit is not None else os.getenv(ENV_LOG_FILE, "")
+    return raw.strip().lower() in _LOG_FILE_DISABLED_MARKERS
+
+
+def _drop_file_handler(config: dict[str, Any]) -> dict[str, Any]:
+    """从 dictConfig 字典中移除 file handler（handlers / root.handlers / loggers 各处）。"""
+    handlers = config.get("handlers")
+    if not isinstance(handlers, dict) or _FILE_HANDLER_NAME not in handlers:
+        return config
+
+    patched = dict(config)
+
+    def _filter_list(entries: Any) -> Any:
+        if isinstance(entries, list):
+            return [e for e in entries if e != _FILE_HANDLER_NAME]
+        return entries
+
+    patched_handlers = dict(handlers)
+    patched_handlers.pop(_FILE_HANDLER_NAME)
+    patched["handlers"] = patched_handlers
+
+    root_cfg = config.get("root")
+    if isinstance(root_cfg, dict):
+        patched_root = dict(root_cfg)
+        patched_root["handlers"] = _filter_list(root_cfg.get("handlers"))
+        patched["root"] = patched_root
+
+    loggers_cfg = config.get("loggers")
+    if isinstance(loggers_cfg, dict):
+        patched_loggers = {}
+        for name, logger_cfg in loggers_cfg.items():
+            if isinstance(logger_cfg, dict) and _FILE_HANDLER_NAME in (
+                logger_cfg.get("handlers") or []
+            ):
+                item = dict(logger_cfg)
+                item["handlers"] = _filter_list(logger_cfg.get("handlers"))
+                patched_loggers[name] = item
+            else:
+                patched_loggers[name] = logger_cfg
+        patched["loggers"] = patched_loggers
+
+    return patched
 
 
 def get_config_path() -> Path:
@@ -126,22 +176,27 @@ def setup_logging(
 
     _reset_root_handlers()
 
+    disabled = _log_file_disabled(log_file)
     resolved_log_file: Optional[str] = None
     if os.path.exists(config_path):
         with open(config_path, "r", encoding="utf-8") as f:
             config = yaml.safe_load(f) or {}
-            config = _apply_log_file_override(config, log_file=log_file)
+            if disabled:
+                config = _drop_file_handler(config)
+            else:
+                config = _apply_log_file_override(config, log_file=log_file)
             logging.config.dictConfig(config)
-        resolved_log_file = _pick_log_file_override(log_file)
+        resolved_log_file = None if disabled else _pick_log_file_override(log_file)
     else:
         logging.basicConfig(
             level=logging.INFO,
             format=_STANDARD_LOG_FORMAT,
             datefmt=_STANDARD_LOG_DATEFMT,
         )
-        resolved_log_file = _pick_log_file_override(log_file)
-        if resolved_log_file:
-            _attach_fallback_file_handler(resolved_log_file)
+        if not disabled:
+            resolved_log_file = _pick_log_file_override(log_file)
+            if resolved_log_file:
+                _attach_fallback_file_handler(resolved_log_file)
 
     _config_loaded = True
     return resolved_log_file

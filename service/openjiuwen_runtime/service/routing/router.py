@@ -167,6 +167,14 @@ class MessageRouter:
             chain = self._compose(self._middleware, core)
             return await chain(rctx, env)
         except FrameworkError as exc:
+            # 服务端留痕：validation/not_found/deadline 等此前只回错误信封、零日志
+            logger.warning(
+                "dispatch framework error: type=%s request_id=%s code=%s detail=%s",
+                env.type,
+                env.metadata.request_id,
+                exception_code(exc),
+                exc,
+            )
             return UnaryResult(response=self._error_response(env, exc))
         except Exception as exc:  # noqa: BLE001
             logger.exception(
