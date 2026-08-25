@@ -143,17 +143,17 @@ spec:
             - name: OPENJIUWEN_SERVICE_REQUEST_TIMEOUT_SECONDS
               value: "<<AGENT_RUNTIME_REQUEST_TIMEOUT>>"
             - name: OPENJIUWEN_SERVICE_DB_TYPE
-              value: "mysql"
+              value: "<<AGENT_RUNTIME_DB_TYPE>>"
             - name: OPENJIUWEN_SERVICE_DB_HOST
-              value: "<<AGENT_RUNTIME_MYSQL_HOST>>"
+              value: "<<AGENT_RUNTIME_DB_HOST>>"
             - name: OPENJIUWEN_SERVICE_DB_PORT
-              value: "<<AGENT_RUNTIME_MYSQL_PORT>>"
+              value: "<<AGENT_RUNTIME_DB_PORT>>"
             - name: OPENJIUWEN_SERVICE_DB_NAME
-              value: "<<AGENT_RUNTIME_MYSQL_DB>>"
+              value: "<<AGENT_RUNTIME_DB_NAME>>"
             - name: OPENJIUWEN_SERVICE_DB_USER
-              value: "<<AGENT_RUNTIME_MYSQL_USER>>"
+              value: "<<AGENT_RUNTIME_DB_USER>>"
             - name: OPENJIUWEN_SERVICE_DB_PASSWORD
-              value: "<<AGENT_RUNTIME_MYSQL_PASSWORD>>"
+              value: "<<AGENT_RUNTIME_DB_PASSWORD>>"
             # 红线：多副本来自本 Deployment 的 replicas；框架这项 >1 会因缺
             # 分布式锁后端在启动时 fail-fast（SystemContext._validate_lock_capabilities），
             # 必须保持 1 —— 跨副本互斥由服务自身的 Redis 选主键保证。

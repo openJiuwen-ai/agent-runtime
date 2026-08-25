@@ -34,5 +34,6 @@
 ## 影响面
 
 - spec service-core.md 网络/IO 节与部署红线同步;main.py fail-fast 文案补 postgresql。
-- agent-runtime 切 PG:`OPENJIUWEN_SERVICE_DB_TYPE=postgresql` + DB_HOST/NAME/USER/PASSWORD
-  (端口可省),旋钮与 MySQL 共用。
+- agent-runtime 切 PG:K8s 部署改 `deploy/agent_runtime.env` 的 `AGENT_RUNTIME_DB_TYPE=postgresql`
+  (连接参数同组 `AGENT_RUNTIME_DB_*`,端口 5432 可省)后重新渲染;宿主机模式改
+  `OPENJIUWEN_SERVICE_DB_TYPE=postgresql` + DB_HOST/NAME/USER/PASSWORD,旋钮与 MySQL 共用。
