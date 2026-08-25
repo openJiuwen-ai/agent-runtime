@@ -172,6 +172,10 @@ spec:
               value: "<<AGENT_RUNTIME_SCOPE_FULL_TIMEOUT>>"
             - name: AGENT_RUNTIME_LOG_LEVEL
               value: "<<AGENT_RUNTIME_LOG_LEVEL>>"
+            # stdout 主形态：关闭容器内文件 handler（console 保留；日志采集走
+            # stdout——容器文件在 pod 重启/漂移后丢失且无处导出）
+            - name: OPENJIUWEN_RUNTIME_LOG_FILE
+              value: "disabled"
 ---
 # LB 入口：ClusterIP（gateway 在集群内经此访问；多副本由 kube-proxy 轮询）
 apiVersion: v1
