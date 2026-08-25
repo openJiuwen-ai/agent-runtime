@@ -20,10 +20,11 @@ dependencies = [
 local = [
     "fakeredis>=2.20",
 ]
-# server：部署环境（真 Redis / MySQL / K8s）
+# server：部署环境（真 Redis / MySQL 或 PostgreSQL / K8s）
 server = [
     "kubernetes_asyncio==35.0.0",
     "aiomysql>=0.2",
+    "asyncpg>=0.29",
     "httpx>=0.27",
 ]
 

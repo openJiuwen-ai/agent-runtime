@@ -67,6 +67,7 @@ IMAGE = "influxdb:1.8"            # 默认 :8086/health=200（readiness/watch �
 DB_DSN = {                        # 仅阶段 1 落库校验用（可选）
     "host": "127.0.0.1", "port": "30000",
     "user": "agent_runtime", "password": "agent_runtime_pw", "name": "agent_runtime",
+    "type": "mysql",              # mysql | postgresql（选择 mysql/psql 客户端）
 }
 
 MAIN = ""     # scope_id（main：cc=3 pc=2 → max_pods=2）
@@ -169,7 +170,15 @@ def build_templates() -> None:
 async def clean_previous(c: Client, r: aioredis.Redis) -> None:
     """清掉上一轮残留：Redis 编排态 + DB 配置表 + 验收命名空间的 Pod。"""
     await r.flushdb()
-    if shutil.which("mysql") is not None:
+    if DB_DSN.get("type") == "postgresql" and shutil.which("psql") is not None:
+        # PG：create 是裸 INSERT（唯一约束防重），重跑必须先清种子行
+        await asyncio.create_subprocess_exec(
+            "psql", f"-h{DB_DSN['host']}", f"-p{DB_DSN['port']}",
+            f"-U{DB_DSN['user']}", "-d", DB_DSN["name"], "-c",
+            "TRUNCATE service_config_template, routing_rule;",
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+            env={**os.environ, "PGPASSWORD": DB_DSN["password"]})
+    elif shutil.which("mysql") is not None:
         await asyncio.create_subprocess_exec(
             "mysql", f"-h{DB_DSN['host']}", f"-P{DB_DSN['port']}",
             f"-u{DB_DSN['user']}", f"-p{DB_DSN['password']}", "-e",
@@ -197,17 +206,32 @@ async def stage1_seed(c: Client, r) -> None:
             "kind": "routing_rule", "op": "create", "rule_id": rule_id,
             "group_id": group, "bot_id": "b", "template_id": tpl_id})
         check(f"config_sync rule {rule_id}", code == 200 and raw.get("ok") is True)
-    if shutil.which("mysql") is None:
-        skip("DB(service_config_template/routing_rule) 落库", "mysql 客户端不可用")
-        return
-    proc = await asyncio.create_subprocess_exec(
-        "mysql", f"-h{DB_DSN['host']}", f"-P{DB_DSN['port']}",
-        f"-u{DB_DSN['user']}", f"-p{DB_DSN['password']}", "-N", "-e",
-        f"USE {DB_DSN['name']}; SELECT COUNT(*) FROM service_config_template; "
-        "SELECT COUNT(*) FROM routing_rule;",
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
-    out, _ = await proc.communicate()
-    counts = [int(x) for x in out.decode().split()]
+    if DB_DSN.get("type") == "postgresql":
+        if shutil.which("psql") is None:
+            skip("DB(service_config_template/routing_rule) 落库", "psql 客户端不可用")
+            return
+        env = {**os.environ, "PGPASSWORD": DB_DSN["password"]}
+        proc = await asyncio.create_subprocess_exec(
+            "psql", f"-h{DB_DSN['host']}", f"-p{DB_DSN['port']}",
+            f"-U{DB_DSN['user']}", "-d", DB_DSN["name"], "-t", "-A", "-c",
+            "SELECT (SELECT COUNT(*) FROM service_config_template), "
+            "(SELECT COUNT(*) FROM routing_rule);",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            env=env)
+        out, _ = await proc.communicate()
+        counts = [int(x) for x in out.decode().strip().split("|")]
+    else:
+        if shutil.which("mysql") is None:
+            skip("DB(service_config_template/routing_rule) 落库", "mysql 客户端不可用")
+            return
+        proc = await asyncio.create_subprocess_exec(
+            "mysql", f"-h{DB_DSN['host']}", f"-P{DB_DSN['port']}",
+            f"-u{DB_DSN['user']}", f"-p{DB_DSN['password']}", "-N", "-e",
+            f"USE {DB_DSN['name']}; SELECT COUNT(*) FROM service_config_template; "
+            "SELECT COUNT(*) FROM routing_rule;",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        out, _ = await proc.communicate()
+        counts = [int(x) for x in out.decode().split()]
     check("DB(service_config_template/routing_rule) 落库", counts == [4, 4], str(counts))
 
 
@@ -516,6 +540,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--db-password", default=env("AGENT_RUNTIME_E2E_DB_PASSWORD",
                                                      "agent_runtime_pw"))
     parser.add_argument("--db-name", default=env("AGENT_RUNTIME_E2E_DB_NAME", "agent_runtime"))
+    parser.add_argument("--db-type", default=env("AGENT_RUNTIME_E2E_DB_TYPE", "mysql"),
+                        help="落库校验的客户端类型:mysql|postgresql")
     parser.add_argument("--force-flush", action="store_true",
                         help="目标 Redis DB 含外来 key 时仍强制 FLUSHDB（默认中止）")
     return parser.parse_args()
@@ -529,7 +555,8 @@ async def main() -> None:
     NS = args.namespace
     IMAGE = args.image
     DB_DSN = {"host": args.db_host, "port": args.db_port, "user": args.db_user,
-              "password": args.db_password, "name": args.db_name}
+              "password": args.db_password, "name": args.db_name,
+              "type": args.db_type}
     MAIN, FSCOPE = scope_id("e2e-main", "b"), scope_id("e2e-f", "b")
     WARM, BAD = scope_id("e2e-warm", "b"), scope_id("e2e-bad", "b")
     build_templates()
