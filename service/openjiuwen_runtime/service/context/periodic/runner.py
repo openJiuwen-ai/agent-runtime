@@ -54,6 +54,7 @@ class JobRunner:
         gather_window_sec: float = 0.0,
         run_on_start: bool = False,
         stop_timeout_sec: float = _STOP_TIMEOUT_SEC,
+        tick_timeout_sec: Optional[float] = None,
     ) -> None:
         self._name = name
         self._schedule = schedule
@@ -64,6 +65,13 @@ class JobRunner:
         self._gather_window_sec = max(float(gather_window_sec), 0.0)
         self._run_on_start = bool(run_on_start)
         self._stop_timeout_sec = float(stop_timeout_sec)
+        # 单次 tick 上限：None 不限制。防 on_tick 内某个 IO await 永久挂起
+        # 拖死整个循环（挂起不抛异常，except Exception 捕不到）。超时取消
+        # 本拍并记日志，下一拍重试；调用方须按 tick 内最重路径（如 deploy
+        # 等 ready_timeout）给足余量。
+        self._tick_timeout_sec = (
+            None if tick_timeout_sec is None else max(float(tick_timeout_sec), 0.001)
+        )
         self._stopped = asyncio.Event()
         self._task: Optional[asyncio.Task[Any]] = None
         self._last_now: Optional[float] = None
@@ -294,12 +302,26 @@ class JobRunner:
 
         ok = False
         aborted = False
+        timed_out = False
         t0 = time.monotonic()
         delay_ms = max(0.0, (now_v - planned_fire) * 1000)
         try:
-            finished = await self._invoke_on_tick()
+            if self._tick_timeout_sec is None:
+                finished = await self._invoke_on_tick()
+            else:
+                finished = await asyncio.wait_for(
+                    self._invoke_on_tick(), timeout=self._tick_timeout_sec
+                )
             ok = finished
             aborted = not finished
+        except asyncio.TimeoutError:
+            timed_out = True
+            logger.warning(
+                "on_tick timed out, aborted this tick: job=%s instance=%s timeout=%.3fs",
+                self._name,
+                self._instance_id,
+                self._tick_timeout_sec,
+            )
         except Exception:
             logger.exception(
                 "on_tick failed: job=%s instance=%s",
@@ -316,11 +338,13 @@ class JobRunner:
                     self._name,
                 )
             logger.info(
-                "tick done: job=%s instance=%s ok=%s aborted=%s delay_ms=%.1f duration_ms=%.1f",
+                "tick done: job=%s instance=%s ok=%s aborted=%s timed_out=%s "
+                "delay_ms=%.1f duration_ms=%.1f",
                 self._name,
                 self._instance_id,
                 ok,
                 aborted,
+                timed_out,
                 delay_ms,
                 duration_ms,
             )

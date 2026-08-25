@@ -14,6 +14,10 @@
 | ``OPENJIUWEN_SERVICE_REDIS_KEY_PREFIX`` | redis 键命名空间前缀 | ``service`` |
 | ``OPENJIUWEN_SERVICE_TITLE`` | 服务标题（OpenAPI/日志） | ``service`` |
 | ``OPENJIUWEN_SERVICE_REQUEST_TIMEOUT_SECONDS`` | 请求超时秒数，0 表示不设置 deadline | ``0`` |
+| ``OPENJIUWEN_SERVICE_REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS`` | redis 建连超时秒数，0 表示不限制 | ``3`` |
+| ``OPENJIUWEN_SERVICE_REDIS_SOCKET_TIMEOUT_SECONDS`` | redis 命令读写 socket 超时秒数，0 表示不限制 | ``5`` |
+| ``OPENJIUWEN_SERVICE_REDIS_HEALTH_CHECK_INTERVAL_SECONDS`` | redis 空闲连接周期性 PING 保活/验活间隔秒，0 关闭 | ``30`` |
+| ``OPENJIUWEN_SERVICE_REDIS_RETRY_ATTEMPTS`` | redis 连接类错误命令级重试次数，0 关闭 | ``3`` |
 """
 
 from __future__ import annotations
@@ -29,6 +33,10 @@ _DEFAULT_REDIS_URL = "redis://localhost:6379/0"
 _DEFAULT_KEY_PREFIX = "service"
 _DEFAULT_TITLE = "service"
 _DEFAULT_REQUEST_TIMEOUT_SECONDS = 0.0
+_DEFAULT_REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS = 3.0
+_DEFAULT_REDIS_SOCKET_TIMEOUT_SECONDS = 5.0
+_DEFAULT_REDIS_HEALTH_CHECK_INTERVAL_SECONDS = 30
+_DEFAULT_REDIS_RETRY_ATTEMPTS = 3
 _DEFAULT_LOCK_BACKEND = "auto"
 _DEFAULT_LOCK_KEY_PREFIX = "service:lock"
 _DEFAULT_LOCK_TTL_SECONDS = 30.0
@@ -55,6 +63,15 @@ class ServiceConfig:
     key_prefix: str = _DEFAULT_KEY_PREFIX
     title: str = _DEFAULT_TITLE
     request_timeout_seconds: float = _DEFAULT_REQUEST_TIMEOUT_SECONDS
+    # redis 网络兜底：0 表示关闭该项（socket 层无超时，恢复 redis-py 原生行为）
+    redis_socket_connect_timeout_seconds: float = (
+        _DEFAULT_REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS
+    )
+    redis_socket_timeout_seconds: float = _DEFAULT_REDIS_SOCKET_TIMEOUT_SECONDS
+    redis_health_check_interval_seconds: int = (
+        _DEFAULT_REDIS_HEALTH_CHECK_INTERVAL_SECONDS
+    )
+    redis_retry_attempts: int = _DEFAULT_REDIS_RETRY_ATTEMPTS
     lock_backend: str = _DEFAULT_LOCK_BACKEND
     lock_key_prefix: str = _DEFAULT_LOCK_KEY_PREFIX
     lock_ttl_seconds: float = _DEFAULT_LOCK_TTL_SECONDS
@@ -86,6 +103,18 @@ class ServiceConfig:
         self._validate_non_negative(
             "request_timeout_seconds", self.request_timeout_seconds
         )
+        self._validate_non_negative(
+            "redis_socket_connect_timeout_seconds",
+            self.redis_socket_connect_timeout_seconds,
+        )
+        self._validate_non_negative(
+            "redis_socket_timeout_seconds", self.redis_socket_timeout_seconds
+        )
+        self._validate_non_negative_int(
+            "redis_health_check_interval_seconds",
+            self.redis_health_check_interval_seconds,
+        )
+        self._validate_non_negative_int("redis_retry_attempts", self.redis_retry_attempts)
         object.__setattr__(self, "lock_backend", str(self.lock_backend).strip().lower())
         object.__setattr__(
             self, "cache_backend", str(self.cache_backend).strip().lower()
@@ -195,6 +224,11 @@ class ServiceConfig:
             raise ValueError(f"{name} must be a positive integer")
 
     @staticmethod
+    def _validate_non_negative_int(name: str, value: int) -> None:
+        if isinstance(value, bool) or int(value) != value or int(value) < 0:
+            raise ValueError(f"{name} must be a non-negative integer")
+
+    @staticmethod
     def _validate_choice(name: str, value: str, choices: set[str]) -> None:
         if str(value).strip().lower() not in choices:
             choices_text = ", ".join(sorted(choices))
@@ -227,6 +261,30 @@ class ServiceConfig:
                 os.getenv(
                     "OPENJIUWEN_SERVICE_REQUEST_TIMEOUT_SECONDS",
                     str(_DEFAULT_REQUEST_TIMEOUT_SECONDS),
+                )
+            ),
+            redis_socket_connect_timeout_seconds=float(
+                os.getenv(
+                    "OPENJIUWEN_SERVICE_REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS",
+                    str(_DEFAULT_REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS),
+                )
+            ),
+            redis_socket_timeout_seconds=float(
+                os.getenv(
+                    "OPENJIUWEN_SERVICE_REDIS_SOCKET_TIMEOUT_SECONDS",
+                    str(_DEFAULT_REDIS_SOCKET_TIMEOUT_SECONDS),
+                )
+            ),
+            redis_health_check_interval_seconds=int(
+                os.getenv(
+                    "OPENJIUWEN_SERVICE_REDIS_HEALTH_CHECK_INTERVAL_SECONDS",
+                    str(_DEFAULT_REDIS_HEALTH_CHECK_INTERVAL_SECONDS),
+                )
+            ),
+            redis_retry_attempts=int(
+                os.getenv(
+                    "OPENJIUWEN_SERVICE_REDIS_RETRY_ATTEMPTS",
+                    str(_DEFAULT_REDIS_RETRY_ATTEMPTS),
                 )
             ),
             lock_backend=os.getenv(

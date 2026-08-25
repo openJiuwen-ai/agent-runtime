@@ -33,6 +33,7 @@ def create_single_leader_job(
     gather_window_sec: float = 0.08,  # 开火前集合窗口：提前醒来报名，到整秒抽签
     lock_key: str = "",  # 执行锁 Redis key；空则用 lock:{name}
     run_on_start: bool = False,  # True 启动后立刻跑一轮（一般仅测试）
+    tick_timeout_sec: float | None = None,  # 单次 tick 上限；None 不限制（防 IO 挂死循环）
 ) -> JobRunner:
     """创建主备周期任务，返回可 start/stop 的 JobRunner。
 
@@ -66,4 +67,5 @@ def create_single_leader_job(
         clock=clock,
         gather_window_sec=gather,
         run_on_start=run_on_start,
+        tick_timeout_sec=tick_timeout_sec,
     )

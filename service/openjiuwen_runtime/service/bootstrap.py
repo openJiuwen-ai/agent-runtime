@@ -75,14 +75,37 @@ def build_db_handler(settings: ServiceConfig | dict[str, Any] | Any) -> Any | No
 
 
 def build_redis_client(settings: ServiceConfig | dict[str, Any] | Any) -> Any | None:
-    """Build a Redis client from the configured URL without pinging it."""
+    """Build a Redis client from the configured URL without pinging it.
+
+    网络抖动兜底（默认值来自 ``ServiceConfig``，0 关闭对应项）：
+    - ``socket_connect_timeout`` / ``socket_timeout``：建连与命令读写上限，
+      防 TCP 半开/黑洞时 await 永久挂起（redis-py 默认两者均无限制）；
+    - ``health_check_interval``：空闲连接周期性 PING，半开连接在使用前被发现；
+    - ``retry``：连接类错误命令级重试（指数退避），吸收秒级网络抖动。
+    """
     cfg = coerce_config(settings)
     if not should_bootstrap_redis(cfg):
         return None
     try:
         import redis.asyncio
+        from redis.asyncio.retry import Retry
+        from redis.backoff import ExponentialBackoff
+        from redis.exceptions import ConnectionError as RedisConnectionError
+        from redis.exceptions import TimeoutError as RedisTimeoutError
 
-        return redis.asyncio.from_url(cfg.redis_url, decode_responses=False)
+        kwargs: dict[str, Any] = {"decode_responses": False}
+        if cfg.redis_socket_connect_timeout_seconds > 0:
+            kwargs["socket_connect_timeout"] = cfg.redis_socket_connect_timeout_seconds
+        if cfg.redis_socket_timeout_seconds > 0:
+            kwargs["socket_timeout"] = cfg.redis_socket_timeout_seconds
+        if cfg.redis_health_check_interval_seconds > 0:
+            kwargs["health_check_interval"] = cfg.redis_health_check_interval_seconds
+        if cfg.redis_retry_attempts > 0:
+            kwargs["retry"] = Retry(
+                ExponentialBackoff(), retries=cfg.redis_retry_attempts
+            )
+            kwargs["retry_on_error"] = [RedisConnectionError, RedisTimeoutError]
+        return redis.asyncio.from_url(cfg.redis_url, **kwargs)
     except (
         Exception
     ) as exc:  # pragma: no cover - import failures are environment-specific

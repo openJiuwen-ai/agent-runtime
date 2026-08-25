@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import socket
@@ -43,6 +44,10 @@ if TYPE_CHECKING:
 
 _logger = logging.getLogger("openjiuwen_runtime.service")
 TRequest = TypeVar("TRequest")
+
+# 启动期 readiness 检查（ping/SELECT 1）上限：fail-fast 不变成 fail-hang。
+# 覆盖 db 建连初始化之外的纯探活等待；建连超时由各驱动自身 connect_timeout 兜底。
+_STARTUP_CHECK_TIMEOUT_SEC = 10.0
 
 
 class SystemContext:
@@ -213,19 +218,21 @@ class SystemContext:
                 if callable(init_table):
                     for table_definition in self.table_definitions:
                         await self._call(init_table, table_definition)
-                if not await self._db_ready():
+                if not await self._startup_check(self._db_ready(), "database"):
                     raise DatabaseUnavailable("database readiness check failed")
 
             if self.redis is not None:
                 self._active_resources.append("redis")
-                if not await self._ping(self.redis):
+                if not await self._startup_check(self._ping(self.redis), "redis"):
                     raise RedisUnavailable("Redis readiness check failed")
 
             if self.kubernetes is not None:
                 self._active_resources.append("kubernetes")
                 if self._owns_kubernetes:
                     await self._call(self.kubernetes.start)
-                if not await self._ping(self.kubernetes):
+                if not await self._startup_check(
+                    self._ping(self.kubernetes), "kubernetes"
+                ):
                     raise KubernetesUnavailable(
                         "Kubernetes readiness check failed"
                     )
@@ -235,13 +242,17 @@ class SystemContext:
                 connect = getattr(self.lock_backend, "connect", None)
                 if self._owns_lock_backend and callable(connect):
                     await self._call(connect)
-                if not await self._ping(self.lock_backend):
+                if not await self._startup_check(
+                    self._ping(self.lock_backend), "lock backend"
+                ):
                     raise LockBackendUnavailable("lock backend readiness check failed")
             self._validate_lock_capabilities()
 
             if self.cache_backend is not None:
                 self._active_resources.append("cache")
-                if not await self._ping(self.cache_backend):
+                if not await self._startup_check(
+                    self._ping(self.cache_backend), "cache backend"
+                ):
                     raise CacheUnavailable("cache backend readiness check failed")
             self._started = True
         except BaseException:
@@ -291,7 +302,11 @@ class SystemContext:
             if resource is None:
                 continue
             try:
-                statuses[name] = bool(await check())
+                statuses[name] = bool(
+                    await asyncio.wait_for(
+                        check(), timeout=_STARTUP_CHECK_TIMEOUT_SEC
+                    )
+                )
             except Exception:  # noqa: BLE001 - readiness reports failures
                 statuses[name] = False
         statuses["ready"] = all(value is not False for value in statuses.values())
@@ -373,6 +388,17 @@ class SystemContext:
         result = function(*args, **kwargs)
         return await result if isawaitable(result) else result
 
+    @staticmethod
+    async def _startup_check(awaitable: Any, resource: str) -> Any:
+        """启动期 readiness 探活加上限（超时抛 TimeoutError，fail-fast 不 fail-hang）。"""
+        try:
+            return await asyncio.wait_for(awaitable, timeout=_STARTUP_CHECK_TIMEOUT_SEC)
+        except asyncio.TimeoutError as exc:
+            raise TimeoutError(
+                f"{resource} readiness check timed out "
+                f"after {_STARTUP_CHECK_TIMEOUT_SEC}s"
+            ) from exc
+
     @classmethod
     async def _ping(cls, resource: Any) -> bool:
         if resource is None:
@@ -406,6 +432,7 @@ class SystemContext:
         gather_window_sec: float = 0.08,
         lock_key: str = "",
         run_on_start: bool = False,
+        tick_timeout_sec: float | None = None,
     ) -> "JobRunner":
         """用本进程的 redis / instance_id 组装主备周期任务。"""
         from .periodic import create_single_leader_job
@@ -418,6 +445,7 @@ class SystemContext:
             gather_window_sec=gather_window_sec,
             lock_key=lock_key,
             run_on_start=run_on_start,
+            tick_timeout_sec=tick_timeout_sec,
         )
 
     # -------------------------------------------------------------- 请求上下文

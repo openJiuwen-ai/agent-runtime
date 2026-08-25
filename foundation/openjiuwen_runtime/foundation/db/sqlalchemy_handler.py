@@ -12,7 +12,7 @@ from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy import select, update, delete, func
 
 from ..log import get_logger
-from .engine_options import build_async_engine_kwargs
+from .engine_options import build_async_engine_kwargs, get_connect_timeout
 from .handler import DBHandler
 from .table_def import TableDefinition, ColumnDefinition, IndexDefinition
 
@@ -47,8 +47,13 @@ class SQLAlchemyHandler(DBHandler):
         logger.info("Connecting to database")
         # 关闭 aiosqlite 的 DEBUG 日志
         logging.getLogger("aiosqlite").setLevel(logging.WARNING)
-        engine_kwargs = build_async_engine_kwargs(connect_args=self.connect_args)
         database_url = make_url(self.database_url)
+        connect_args = dict(self.connect_args or {})
+        if database_url.get_backend_name() == "mysql":
+            # aiomysql 默认建连无超时，网络黑洞时 connect 永久挂起；
+            # 调用方显式传值优先（setdefault）。
+            connect_args.setdefault("connect_timeout", get_connect_timeout())
+        engine_kwargs = build_async_engine_kwargs(connect_args=connect_args)
         if (
             database_url.get_backend_name() == "sqlite"
             and database_url.database in {None, "", ":memory:"}

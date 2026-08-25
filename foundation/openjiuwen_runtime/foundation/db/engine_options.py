@@ -16,6 +16,11 @@ DEFAULT_POOL_SIZE = 2
 DEFAULT_MAX_OVERFLOW = 20
 DEFAULT_POOL_TIMEOUT = 30
 
+# aiomysql 建连超时（秒）：防网络黑洞时建连永久挂起（aiomysql 默认无限制）。
+# 仅对 mysql 系驱动注入；asyncpg 自带 60s 默认命令超时，不注入。
+# 可通过 RUNTIME_DB_CONNECT_TIMEOUT / DB_CONNECT_TIMEOUT 覆盖。
+DEFAULT_CONNECT_TIMEOUT_SECONDS = 5
+
 
 def _int_env(*names: str, default: int) -> int:
     for name in names:
@@ -46,6 +51,14 @@ def get_pool_timeout() -> int:
         "RUNTIME_DB_POOL_TIMEOUT",
         "DB_POOL_TIMEOUT",
         default=DEFAULT_POOL_TIMEOUT,
+    )
+
+
+def get_connect_timeout() -> int:
+    return _int_env(
+        "RUNTIME_DB_CONNECT_TIMEOUT",
+        "DB_CONNECT_TIMEOUT",
+        default=DEFAULT_CONNECT_TIMEOUT_SECONDS,
     )
 
 
