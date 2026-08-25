@@ -127,8 +127,6 @@ function OrgWorkspace({ org, userId, onSwitchOrg }: { org: Org; userId: string; 
   );
 }
 
-type TabKey = 'chat' | 'schedule' | 'skills' | 'memory';
-
 /** 聊天 iframe 加载中的遮罩：大旋转图标 + 说明；加载偏慢再补一行提示。 */
 function ChatLoading() {
   const { t } = useTranslation();
@@ -157,29 +155,19 @@ function ChatLoading() {
   );
 }
 
-// 标签 → web_enterprise 视图(空串=默认聊天)
-const IFRAME_VIEW: Partial<Record<TabKey, string>> = { chat: '', schedule: 'schedule', skills: 'skills', memory: 'memory' };
-
 function AgentWorkspace({ agent, userId, groupId }: { agent: AgentTemplate; userId: string; groupId: string }) {
   const { t, i18n } = useTranslation();
-  // 内嵌 iframe(web_enterprise)与父窗口不同源,语言状态独立 → 用 postMessage 同步语言
-  const iframeRefs = useRef<Map<string, HTMLIFrameElement>>(new Map());
+  // 内嵌 iframe(web_enterprise)与父窗口可能不同源,语言状态独立 → 用 postMessage 同步语言
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const postLang = useCallback(
     (el: HTMLIFrameElement | null) =>
       el?.contentWindow?.postMessage({ type: 'jw-set-lang', lang: i18n.language.startsWith('en') ? 'en' : 'zh' }, '*'),
     [i18n.language],
   );
-  // 语言切换时,通知所有已加载的内嵌视图
+  // 语言切换时,通知已加载的内嵌用户面
   useEffect(() => {
-    iframeRefs.current.forEach((el) => postLang(el));
+    postLang(iframeRef.current);
   }, [postLang]);
-
-  const tabs: { key: TabKey; label: string }[] = [
-    { key: 'chat', label: t('userConsole.tabChat') },
-    { key: 'schedule', label: t('userConsole.tabSchedule') },
-    { key: 'skills', label: t('userConsole.tabSkills') },
-    { key: 'memory', label: t('userConsole.tabMemory') },
-  ];
 
   // (user_id, group_id, bot_id) 经 query 注入 user_web → extSettings 读取 → HTTP/SSE 透传 → Agent
   // bot_id 传实例化 resource_id（运行时路由字段名未改）
@@ -188,61 +176,31 @@ function AgentWorkspace({ agent, userId, groupId }: { agent: AgentTemplate; user
     () => new URLSearchParams({ user_id: userId, group_id: groupId, bot_id: runtimeId }).toString(),
     [userId, groupId, runtimeId],
   );
-  const urlFor = (view: string) => (view ? `${CHAT_BASE}/?${baseQuery}&view=${view}` : `${CHAT_BASE}/?${baseQuery}`);
+  const chatUrl = `${CHAT_BASE}/?${baseQuery}`;
+  const [loaded, setLoaded] = useState(false);
 
-  const [tab, setTab] = useState<TabKey>('chat');
-  const [visited, setVisited] = useState<Set<TabKey>>(() => new Set<TabKey>(['chat']));
-  const [loadedViews, setLoadedViews] = useState<Set<string>>(new Set());
-
-  // 切 agent/组织（baseQuery 变 → 所有 iframe key 变 → 重挂）→ 复位到聊天标签与加载态
+  // 切换 Agent 或组织后，新的 iframe 重新进入加载态。
   useEffect(() => {
-    setTab('chat');
-    setVisited(new Set<TabKey>(['chat']));
-    setLoadedViews(new Set());
+    setLoaded(false);
   }, [baseQuery]);
-
-  // 首次切到某个 iframe 标签 → 懒挂载（此后常驻，不再卸载）
-  useEffect(() => {
-    if (IFRAME_VIEW[tab] !== undefined) {
-      setVisited((p) => (p.has(tab) ? p : new Set(p).add(tab)));
-    }
-  }, [tab]);
-
-  const activeView = IFRAME_VIEW[tab];
-  const activeIsIframe = activeView !== undefined;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
       <div style={{ display: 'flex', gap: 4, padding: '8px 12px', borderBottom: '1px solid var(--border, #e5e7eb)', flexShrink: 0 }}>
-        {tabs.map((tb) => (
-          <button key={tb.key} className={`btn sm ${tab === tb.key ? 'primary' : 'ghost'}`} onClick={() => setTab(tb.key)}>
-            {tb.label}
-          </button>
-        ))}
+        <span className="btn sm primary">{t('userConsole.tabChat')}</span>
         <div style={{ flex: 1 }} />
         <span className="text-xs text-muted" style={{ alignSelf: 'center' }}>agent: <span className="mono">{runtimeId}</span></span>
       </div>
       <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
-        {/* iframe 标签常驻挂载（懒加载后不卸载）：切标签只隐藏、不重载不断连；切 agent → key 变 → 重挂重连 */}
-        {(['chat', 'schedule', 'skills', 'memory'] as TabKey[]).filter((k) => visited.has(k)).map((k) => {
-          const view = IFRAME_VIEW[k] ?? '';
-          return (
-            <iframe
-              key={`${baseQuery}|${view}`}
-              ref={(el) => { if (el) iframeRefs.current.set(view, el); else iframeRefs.current.delete(view); }}
-              src={urlFor(view)}
-              title={k}
-              onLoad={(e) => { setLoadedViews((p) => new Set(p).add(view)); postLang(e.currentTarget); }}
-              style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0, display: tab === k ? 'block' : 'none' }}
-            />
-          );
-        })}
-        {activeIsIframe && !loadedViews.has(activeView as string) && <ChatLoading />}
-        {!activeIsIframe && (
-          <div className="flex items-center justify-center" style={{ position: 'absolute', inset: 0 }}>
-            <div className="text-muted">{t('userConsole.tabWip')}</div>
-          </div>
-        )}
+        <iframe
+          key={baseQuery}
+          ref={iframeRef}
+          src={chatUrl}
+          title="chat"
+          onLoad={(e) => { setLoaded(true); postLang(e.currentTarget); }}
+          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0 }}
+        />
+        {!loaded && <ChatLoading />}
       </div>
     </div>
   );
