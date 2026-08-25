@@ -8,6 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from .engine_options import get_connect_timeout
 from .sqlalchemy_handler import SQLAlchemyHandler
 from ..config import settings
 from ..log import get_logger
@@ -54,6 +55,7 @@ class MySQLHandler(SQLAlchemyHandler):
         temp_engine = create_async_engine(
             server_url.render_as_string(hide_password=False),
             echo=False,
+            connect_args={"connect_timeout": get_connect_timeout()},
         )
         try:
             async with temp_engine.begin() as conn:

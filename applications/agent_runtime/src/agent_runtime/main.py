@@ -48,6 +48,21 @@ logger = logging.getLogger("agent_runtime")
 # 业务错误码 → HTTP 状态注册（幂等）
 app_errors.register_codes()
 
+# 各后台 job 单次 tick 上限（防 redis/k8s IO 抖动挂死 _run_forever 循环；
+# 正常 tick 远低于这些值，超时取消本拍记日志、下一拍重试）：
+# - sm_sweep：到期 evict（≤1000/拍）+ 空 Pod 扫描，纯 redis 快操作；
+# - rm_autoscale：最重路径为 deploy 等 Ready（ready_timeout 默认 300s，
+#   对齐 DEPLOY_LOCK_TTL=360 再留余量）；
+# - rm_reclaim / rm_watch / rm_reconcile：逐 Pod 的 k8s delete/get_pod/健康
+#   探测（httpx 3s/次），按 Pod 规模给足宽限。
+TICK_TIMEOUTS = {
+    "sm_sweep": 30,
+    "rm_autoscale": 370,
+    "rm_reclaim": 60,
+    "rm_watch": 300,
+    "rm_reconcile": 300,
+}
+
 
 def build_resources(
     settings: ServiceConfig, arc: AgentRuntimeConfig
@@ -156,26 +171,31 @@ class OrchestratorSystemContext(SystemContext):
             self.create_single_leader_job(
                 name="sm_sweep", on_tick=self.sm_sweeper.sweep_once,
                 interval_sec=arc.sweep_interval, lock_key="agent_runtime:job:sm_sweep",
+                tick_timeout_sec=TICK_TIMEOUTS["sm_sweep"],
             ),
             self.rm_sysctx.create_single_leader_job(
                 name="rm_autoscale", on_tick=self.rm_sweeper.autoscale_once,
                 interval_sec=arc.autoscale_interval,
                 lock_key="agent_runtime:job:rm_autoscale",
+                tick_timeout_sec=TICK_TIMEOUTS["rm_autoscale"],
             ),
             self.rm_sysctx.create_single_leader_job(
                 name="rm_reclaim", on_tick=self.rm_sweeper.reclaim_once,
                 interval_sec=arc.reclaim_interval,
                 lock_key="agent_runtime:job:rm_reclaim",
+                tick_timeout_sec=TICK_TIMEOUTS["rm_reclaim"],
             ),
             self.rm_sysctx.create_single_leader_job(
                 name="rm_watch", on_tick=self.rm_sweeper.watch_once,
                 interval_sec=arc.watch_interval,
                 lock_key="agent_runtime:job:rm_watch",
+                tick_timeout_sec=TICK_TIMEOUTS["rm_watch"],
             ),
             self.rm_sysctx.create_single_leader_job(
                 name="rm_reconcile", on_tick=self.rm_sweeper.reconcile_once,
                 interval_sec=arc.reconcile_interval,
                 lock_key="agent_runtime:job:rm_reconcile",
+                tick_timeout_sec=TICK_TIMEOUTS["rm_reconcile"],
             ),
         ]
         return jobs

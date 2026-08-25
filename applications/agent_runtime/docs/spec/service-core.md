@@ -21,15 +21,15 @@ SM 侧 ctx,级联管理全部生命周期(框架 App 的 lifespan 只认一个 c
 - 构造时同时建 **rm_sysctx**(同 redis/db,仅 `key_prefix` 不同:SM=`session_manager`,RM=`resource_manager`)。
 - `_bind_modules()`:先构造后绑定,破解 SM↔RM 循环引用——
   `SessionState`/`ResourceState` → `SessionManagerFacade`/`ResourceManagerFacade(ResourceOrchestrator)` → `ConfigStore(push_pool_config=rm_facade.update_pool_config)` → `SessionOrchestrator` → `SessionSweeper`/`ResourceSweeper`。
-- `_build_jobs()`:5 个后台任务,全部 `create_single_leader_job`(tick 级 Redis 选主锁,多副本全局单副本执行):
+- `_build_jobs()`:5 个后台任务,全部 `create_single_leader_job`(tick 级 Redis 选主锁,多副本全局单副本执行;`tick_timeout_sec` 取 `TICK_TIMEOUTS` 常量表——单次 tick 上限,防 redis/k8s IO 抖动挂死 `_run_forever` 循环,超时取消本拍记日志、下一拍重试):
 
-| 任务 | tick | 锁键(`agent_runtime:job:*`) | 动作 |
-|---|---|---|---|
-| sm_sweep | `sweep_interval`(1s) | `sm_sweep` | 到期 pass + 空 Pod pass |
-| rm_autoscale | `autoscale_interval`(1s) | `rm_autoscale` | min_idle 热备补位 |
-| rm_reclaim | `reclaim_interval`(1s) | `rm_reclaim` | idle 超 pod_ttl 回收 |
-| rm_watch | `watch_interval`(10s) | `rm_watch` | 死 Pod 判定 + 健康探测 |
-| rm_reconcile | `reconcile_interval`(30s) | `rm_reconcile` | 孤儿/stale 对账 |
+| 任务 | tick | tick 超时 | 锁键(`agent_runtime:job:*`) | 动作 |
+|---|---|---|---|---|
+| sm_sweep | `sweep_interval`(1s) | 30s | `sm_sweep` | 到期 pass + 空 Pod pass |
+| rm_autoscale | `autoscale_interval`(1s) | 370s(盖住 deploy ready_timeout 300 + DEPLOY_LOCK_TTL 360) | `rm_autoscale` | min_idle 热备补位 |
+| rm_reclaim | `reclaim_interval`(1s) | 60s | `rm_reclaim` | idle 超 pod_ttl 回收 |
+| rm_watch | `watch_interval`(10s) | 300s | `rm_watch` | 死 Pod 判定 + 健康探测 |
+| rm_reconcile | `reconcile_interval`(30s) | 300s | `rm_reconcile` | 孤儿/stale 对账 |
 
 - `start()` 顺序:super().start() → rm_sysctx.start() → k8s.start()(**失败仅降级扩缩容,不阻断启动**)→ 启动 5 个 job。`stop()` 逆序。
 - DB 表初始化:构造参数 `table_definitions=[SERVICE_CONFIG_TEMPLATE_TABLE_DEF, ROUTING_RULE_TABLE_DEF]`(表结构在 `config_store.py`)。
@@ -43,6 +43,20 @@ SM 侧 ctx,级联管理全部生命周期(框架 App 的 lifespan 只认一个 c
 
 进程就绪探针(K8s probe / deploy_replicas.sh 就绪轮询 / e2e 实例观测)。sysctx 未就绪 → 503;就绪返回 `{ok, instance_id}`。
 **坑**:模块顶部 `from __future__ import annotations` 下,FastAPI 经 `get_type_hints` 用模块全局解析注解——`Request` 必须顶层 import,函数内局部导入会被当成 query 参数(422)。
+
+## 网络/IO 抖动超时兜底(框架层,server 模式生效)
+
+本模块 redis/db 客户端均经框架构建,socket 级超时在构建点注入(网络黑洞/TCP 半开时 await 不再永久挂起):
+
+- **Redis**(`service/bootstrap.build_redis_client`,env 可调,0=关闭该项):
+  `OPENJIUWEN_SERVICE_REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS`(默认 3,建连)、
+  `OPENJIUWEN_SERVICE_REDIS_SOCKET_TIMEOUT_SECONDS`(默认 5,命令读写;本项目无 BLPOP 等长阻塞命令,短超时安全)、
+  `OPENJIUWEN_SERVICE_REDIS_HEALTH_CHECK_INTERVAL_SECONDS`(默认 30,空闲连接周期 PING 验活)、
+  `OPENJIUWEN_SERVICE_REDIS_RETRY_ATTEMPTS`(默认 3,连接类错误指数退避重试)。
+  本地 local 模式 fakeredis 不经此路径,不受影响。
+- **MySQL**(`foundation/db`:`RUNTIME_DB_CONNECT_TIMEOUT`/`DB_CONNECT_TIMEOUT`,默认 5s):aiomysql 建连超时(mysql 系 driver 自动注入,调用方显式 connect_args 优先);asyncpg 自带 60s 默认不注入。查询读超时 aiomysql 无参数,由请求级 deadline 兜底。
+- **请求级总兜底**:`OPENJIUWEN_SERVICE_REQUEST_TIMEOUT_SECONDS`(部署模板 70s)经框架 router 的 `asyncio.timeout` 硬包全部 handler——redis/db 挂起最坏 70s 后取消该请求。
+- **启动 fail-fast**:框架 `SystemContext.start()` 的 readiness 探活(ping/SELECT 1)带 10s 上限,超时按失败处理(fail-fast 不变成 fail-hang)。
 
 ## cli.py —— 命令行入口
 
