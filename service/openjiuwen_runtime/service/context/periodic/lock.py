@@ -102,7 +102,8 @@ class TickLock:
         if ok:
             self._lost = False
             self._lost_event.clear()
-            logger.info("tick lock acquired: key=%s token=%s", self._lock_key, tok)
+            # 常态降 DEBUG（1Hz 任务每拍一条会刷屏）；失锁/续期失败仍走 WARNING
+            logger.debug("tick lock acquired: key=%s token=%s", self._lock_key, tok)
             return tok
         logger.debug("tick lock miss: key=%s", self._lock_key)
         return None

@@ -12,7 +12,11 @@ from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy import select, update, delete, func
 
 from ..log import get_logger
-from .engine_options import build_async_engine_kwargs, get_connect_timeout
+from .engine_options import (
+    build_async_engine_kwargs,
+    get_command_timeout,
+    get_connect_timeout,
+)
 from .handler import DBHandler
 from .table_def import TableDefinition, ColumnDefinition, IndexDefinition
 
@@ -53,6 +57,11 @@ class SQLAlchemyHandler(DBHandler):
             # aiomysql 默认建连无超时，网络黑洞时 connect 永久挂起；
             # 调用方显式传值优先（setdefault）。
             connect_args.setdefault("connect_timeout", get_connect_timeout())
+        elif database_url.get_driver_name() == "asyncpg":
+            # asyncpg：建连 timeout 默认 60s、command_timeout 默认无限制——
+            # 均与 MySQL 兜底对齐收紧；调用方显式传值优先（setdefault）。
+            connect_args.setdefault("timeout", get_connect_timeout())
+            connect_args.setdefault("command_timeout", get_command_timeout())
         engine_kwargs = build_async_engine_kwargs(connect_args=connect_args)
         if (
             database_url.get_backend_name() == "sqlite"

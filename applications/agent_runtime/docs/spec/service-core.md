@@ -1,6 +1,6 @@
 # service-core 规格(组装 / 配置 / 错误码 / 字段分类 / 部署)
 
-> 覆盖 `src/agent_runtime/` 顶层 6 个文件:`main.py`、`cli.py`、`config.py`、`errors.py`、`spec_fields.py`、`util.py`。
+> 覆盖 `src/agent_runtime/` 顶层文件:`main.py`、`cli.py`、`config.py`、`errors.py`、`spec_fields.py`、`util.py`,及可观测性三件:`logsetup.py`(日志装配)、`metrics.py`(请求指标)、`debug_api.py`(诊断端点)。
 > SM/RM 模块内文件见 [session-manager.md](session-manager.md) / [resource-manager.md](resource-manager.md)。
 
 ## main.py —— 组装入口(唯一可运行的壳)
@@ -36,13 +36,14 @@ SM 侧 ctx,级联管理全部生命周期(框架 App 的 lifespan 只认一个 c
 
 ### create_app(settings, arc, *, resources=None, instance_id=None, own_resources=True)
 
-构造唯一 App(`prefix=/api/session`,`enable_ws=False`)+ `/healthz` + 4 个 handler。
+构造唯一 App(`prefix=/api/session`,`enable_ws=False`)+ `/healthz` + `/debug/*` + 4 个 handler;
+`app.use(request_metrics_middleware(registry))` 挂请求汇总中间件,registry 存 `app.asgi.state.metrics`(双实例测试各自独立)。
 `resources`/`instance_id`/`own_resources` 仅供多实例测试注入共享物理资源(`tests/integration/_dual_harness.py`);生产路径不传。
 
 ### /healthz(main.py:_register_healthz)
 
 进程就绪探针(K8s probe / deploy_replicas.sh 就绪轮询 / e2e 实例观测)。sysctx 未就绪 → 503;就绪返回 `{ok, instance_id}`。
-**坑**:模块顶部 `from __future__ import annotations` 下,FastAPI 经 `get_type_hints` 用模块全局解析注解——`Request` 必须顶层 import,函数内局部导入会被当成 query 参数(422)。
+**坑**:模块顶部 `from __future__ import annotations` 下,FastAPI 经 `get_type_hints` 用模块全局解析注解——`Request` 必须顶层 import,函数内局部导入会被当成 query 参数(422)。`debug_api.py` 同源坑见下。
 
 ## 网络/IO 抖动超时兜底(框架层,server 模式生效)
 
@@ -54,13 +55,58 @@ SM 侧 ctx,级联管理全部生命周期(框架 App 的 lifespan 只认一个 c
   `OPENJIUWEN_SERVICE_REDIS_HEALTH_CHECK_INTERVAL_SECONDS`(默认 30,空闲连接周期 PING 验活)、
   `OPENJIUWEN_SERVICE_REDIS_RETRY_ATTEMPTS`(默认 3,连接类错误指数退避重试)。
   本地 local 模式 fakeredis 不经此路径,不受影响。
-- **MySQL**(`foundation/db`:`RUNTIME_DB_CONNECT_TIMEOUT`/`DB_CONNECT_TIMEOUT`,默认 5s):aiomysql 建连超时(mysql 系 driver 自动注入,调用方显式 connect_args 优先);asyncpg 自带 60s 默认不注入。查询读超时 aiomysql 无参数,由请求级 deadline 兜底。
+- **MySQL**(`foundation/db`:`RUNTIME_DB_CONNECT_TIMEOUT`/`DB_CONNECT_TIMEOUT`,默认 5s):aiomysql 建连超时(mysql 系 driver 自动注入,调用方显式 connect_args 优先)。查询读超时 aiomysql 无参数,由请求级 deadline 兜底。
+- **PostgreSQL**(`DB_TYPE=postgresql` → `PostgreSQLHandler`,asyncpg 驱动;服务框架 bootstrap/ServiceConfig 已接入,必填校验同 mysql,默认端口 5432;K8s 部署经 `deploy/agent_runtime.env` 的 `AGENT_RUNTIME_DB_TYPE` 切换,连接参数同组 `AGENT_RUNTIME_DB_*`):建连 `timeout` 与命令 `command_timeout` 均注入——asyncpg 建连默认 60s、命令默认**无限制**,不注入则慢查询可永久挂起。`timeout` 复用 `RUNTIME_DB_CONNECT_TIMEOUT`(默认 5s);`command_timeout` 独立旋钮 `RUNTIME_DB_COMMAND_TIMEOUT`/`DB_COMMAND_TIMEOUT`(默认 30s,低于请求级 deadline)。`init_database` 的临时引擎(CREATE DATABASE/SCHEMA)同款注入。
 - **请求级总兜底**:`OPENJIUWEN_SERVICE_REQUEST_TIMEOUT_SECONDS`(部署模板 70s)经框架 router 的 `asyncio.timeout` 硬包全部 handler——redis/db 挂起最坏 70s 后取消该请求。
 - **启动 fail-fast**:框架 `SystemContext.start()` 的 readiness 探活(ping/SELECT 1)带 10s 上限,超时按失败处理(fail-fast 不变成 fail-hang)。
 
 ## cli.py —— 命令行入口
 
-`deploy.sh` 调用。参数:`--mode local|server`(必填)、`--env-file`(dotenv 先加载,`override=False`)、`--host`/`--port`(覆盖 `OPENJIUWEN_SERVICE_*`)。流程:load_dotenv → 设 `AGENT_RUNTIME_MODE` → basicConfig(`AGENT_RUNTIME_LOG_LEVEL`)→ `ServiceConfig.from_env()` + `AgentRuntimeConfig.from_env()` → `create_app` → uvicorn.run。
+`deploy.sh` 调用。参数:`--mode local|server`(必填)、`--env-file`(dotenv 先加载,`override=False`)、`--host`/`--port`(覆盖 `OPENJIUWEN_SERVICE_*`)。流程:load_dotenv → 设 `AGENT_RUNTIME_MODE` → 框架 import(其导入期 `setup_logging`→dictConfig 会重置 root,**任何更早的 basicConfig 都是死配置**)→ `logsetup.configure_logging()` 收口 → `ServiceConfig.from_env()` + `AgentRuntimeConfig.from_env()` → `create_app` → uvicorn.run(`log_level` 跟随 `AGENT_RUNTIME_LOG_LEVEL`)。
+
+## 可观测性(日志 / 诊断端点)
+
+三个文件:`logsetup.py`(日志装配)、`metrics.py`(请求指标 + 汇总中间件)、`debug_api.py`(/debug/* 端点)。
+
+### logsetup.py —— 日志装配
+
+- `configure_logging()`(仅 cli.py 调用;pytest 勿调——会改写 root handler):
+  1. 重放框架 `setup_logging()`(读取 `OPENJIUWEN_RUNTIME_LOG_FILE=disabled` 等);
+  2. `AGENT_RUNTIME_LOG_LEVEL` → root 级别;handler 级别**只放宽不收紧**(yaml 钉死的 INFO 不被覆盖,DEBUG 请求可穿透);非法值 WARNING 并回退 INFO;
+  3. `httpx`/`httpcore` → WARNING(健康探测刷屏降噪);
+  4. `install_request_context()`。
+- **请求关联**:contextvars + root 级 `_RequestContextFilter`/`_ContextFormatter`。请求处理期间的日志行尾部追加 `| request_id=… session_id=… endpoint=… instance=…`;后台任务行(无上下文)与原格式逐字节一致。中间件负责 set/reset(`metrics.py`)。
+- **stdout 主形态**:`OPENJIUWEN_RUNTIME_LOG_FILE=disabled|off|none|false` → 框架 `setup_logging` 从 dictConfig 三处(handlers/root/loggers)移除 file handler(K8s 模板已固定注入;容器文件随 pod 丢失且无处导出)。留空则维持文件 handler(宿主机调试可用)。
+
+### 日志契约(排障入口)
+
+- **每请求一行汇总**(INFO,`agent_runtime.metrics`):`request: endpoint= route outcome=ok error_code=- duration_ms=11.0 | request_id=…`——四个端点全覆盖(含 touch/cleanup),与 uvicorn access 行经 request_id 关联。
+- **每次 acquire 一行结果**(INFO):`acquire done: scope= … outcome=deployed pod=… duration_ms=…`。
+- **异常拍留痕**:handler 失败 WARNING+`exc_info`(异常链);`NO_POD_AVAILABLE` 粗化前记录真因(`mapped_from=MAX_PODS_REACHED|DEPLOY_FAILED`);框架 `FrameworkError`(validation/not_found/deadline)在 router 层补 WARNING。
+- **Redis 延迟探针**:两个 state.py 的 `eval()` 计时,>200ms WARNING(`lua eval slow`);Lua 返回空表属真异常 → WARNING(`lua returned empty (anomaly)`)。
+- **降噪**:框架 `tick lock acquired`/`single_leader claimed` 降 DEBUG;`tick done` 常态 DEBUG、异常/慢拍(>1s)/每 600 拍心跳保留 INFO。1Hz 三任务从 ~6 行/秒降到 INFO 下 ~0 行/秒。
+- **DEBUG 解锁明细**:lua eval 明细、k8s get/list/delete 耗时、touch 判定、resolve 缓存命中。
+
+### metrics.py —— 请求指标
+
+`MetricsRegistry`(挂 `app.asgi.state.metrics`):per-endpoint `{total, ok, error, by_error_code, p50/p95/max_ms}`(延迟窗口 deque 1024,读取时算分位)+ `recent_errors` 环形缓冲(200 条,新在前:`{ts, endpoint, error_code, request_id, session_id, duration_ms, detail}`)。`request_metrics_middleware` 经 `App.use()` 进 router 派发链(最外层),读 `UnaryResult.response.ok/error_code` 即客户端最终结果。
+
+### debug_api.py —— 诊断端点(全 GET、只读)
+
+挂裸 FastAPI(同 /healthz 模式,`register_debug_api(app, registry=registry)` 在 create_app 调用)。响应统一 `{ok, instance_id, generated_at, …}`;sysctx 未就绪 503、缺参 400、未知对象 404、内部异常 503 JSON+服务端堆栈;limit 夹取 [1,500]。**访问控制:默认开放**(靠网络边界,Service ClusterIP);输出统一 `redact()` 脱敏(敏感 key→`***`、URL 剥 userinfo、嵌套 JSON 字符串深入)。
+
+| 端点 | 内容 |
+|---|---|
+| `/debug/overview` | instance/mode/uptime/pid/python、脱敏配置摘要、`sysctx.readiness()`、5 个 job 的 interval/tick_timeout/JobRunner 计数快照/当前 leader(`GET agent_runtime:job:{name}` 解析 token;tick 间隙锁瞬时缺失 → leader=null 属正常) |
+| `/debug/session?session_id=` | 会话 HASH、ttl_remaining_s、所属 scope 等待队列/会话数/候选 Pod、绑定 Pod sse_url/deploy_ver |
+| `/debug/scope?scope_id=&limit=50` | RM:pod_count/idle/deploying/deploy_followers/scope_config(脱敏)/逐 Pod 详情(phase/ip/health_fails/idle_since);SM:waiters/session_count/候选 Pod/resolve 缓存 |
+| `/debug/scopes?limit=100` | `known_scope_ids()` 枚举 + 每 scope 一行摘要;total/truncated |
+| `/debug/config` | DB routing_rules + templates(脱敏 kubeconfig)+ Redis 缓存键计数 |
+| `/debug/stats` | registry.snapshot()(计数/分位/错误码分布)+ pid/uptime |
+| `/debug/recent_errors?limit=50` | 错误环形缓冲(新在前) |
+
+- **LB 后是 per-instance**:命中哪个副本就是哪个副本的数据,响应 `instance_id` 标识应答者;看指定副本直连 Pod IP。
+- **坑**(与 /healthz 同源):`Request`/`JSONResponse` 顶层 import;query 参数用 `request.query_params.get()` 读,**不在签名里声明**;`_debug_endpoint` 包装器**不用 functools.wraps**(会把内层 `(request, sysctx)` 注解复制给 FastAPI 解析,sysctx 会被当成 query 参数)。
 
 ## config.py —— AgentRuntimeConfig(本服务自有配置)
 
@@ -117,8 +163,11 @@ SM 侧 ctx,级联管理全部生命周期(框架 App 的 lifespan 只认一个 c
 
 - **双进程宿主机**:`scripts/deploy_replicas.sh N [env] [port]`(N 进程共 Redis/DB,`/healthz` 就绪轮询,trap 清理;local 模式 fail-fast)。
 - **K8s 生产形态**:`deploy/` 目录——`agent_runtime.template.yaml`(SA+Role×2+Deployment 多副本/反亲和//healthz 探针+ClusterIP Service LB)、可选 NodePort(30091)、`Dockerfile`(**build context=仓库根**,保 `../../foundation`/`../../service` 布局,`uv sync --frozen --extra server --no-dev`,logs/ 预建归 appuser)、`render_and_apply.sh`(env 渲染→apply,残留 `<<` 即 fail-fast)、`build_image.sh`。
+- **namespace 布局**:服务与 AgentServer 同 ns `agent-runtime-e2e`(`deploy/agent_runtime.env` 的 `NAMESPACE`;e2e_multi_replica 的 `--namespace` 即此 ns)。模板 RBAC 仍按「服务 ns + AgentServer 目标 ns」两份渲染——同 ns 时为重复授权,无害。
 - K8s 部署红线:
   - `OPENJIUWEN_SERVICE_DEPLOY_REPLICAS=1` 固定(副本数=Deployment replicas;框架该项 >1 会因缺分布式锁后端启动即失败)。
-  - RBAC 两份:服务 ns + AgentServer 目标 ns(缺则 create pod 403 → route 全 503)。
+  - RBAC 两份:服务 ns + AgentServer 目标 ns(缺则 create pod 403 → route 全 503;同 ns 部署时两份指向同一 ns)。
+  - 本地 tag 镜像(无仓库)必须 `docker save | ssh <node> docker load` 分发到**每个可调度节点**——`imagePullPolicy=IfNotPresent` 拉不到本地 tag,缺镜像节点上 pod 直接 ErrImagePull;且每次构建**换新 tag**并同步 `AGENT_RUNTIME_IMAGE`(同 tag 节点不会重拉)。
+  - 迁移 ns 时先删旧 ns 的 Deployment/Service(含 NodePort 30091 占用)再 apply 新 ns,避免双部署竞争选主与 NodePort 冲突。
   - Pod 内 MySQL 用户须授权 Pod CIDR(`'agent_runtime'@'10.244.%'`)。
   - server 模式硬要求:Redis 开 AOF/RDB;DB 用 MySQL/PostgreSQL。

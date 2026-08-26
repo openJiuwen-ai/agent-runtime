@@ -73,6 +73,10 @@ finally: 若仍在等待队列 → remove_waiter(异常路径出队)
 
 不变量 1:一个活跃会话同时存在于四处(session HASH + scope:sessions + pod:sessions + session_expiry)——EVICT/惰性回收四处同删 + PUBLISH free。
 
+`eval()` 统一出口带异常留痕(排障):Lua 返回空表属真异常 → WARNING(`route_place` 的 scope_full 兜底会掩盖);单次 >200ms → WARNING(`lua eval slow`,即 Redis 延迟探针);常规仅 DEBUG。
+
+**诊断只读方法**(/debug/* 用,无业务调用方):`session_hash(sid)`、`session_expiry_score(sid)`、`scope_session_count(sid)`(SCARD)、`scope_config_raw(sid)`(resolve 缓存原文)。
+
 ## lua_scripts.py —— 7 个 Lua
 
 | 脚本 | 一句话职责 |

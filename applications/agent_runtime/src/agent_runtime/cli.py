@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import logging
 import os
 from pathlib import Path
 from typing import Sequence
@@ -38,15 +37,15 @@ def main(argv: Sequence[str] | None = None) -> None:
     if args.port is not None:
         os.environ["OPENJIUWEN_SERVICE_PORT"] = str(args.port)
 
-    logging.basicConfig(
-        level=os.getenv("AGENT_RUNTIME_LOG_LEVEL", "INFO"),
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
-
     from openjiuwen_runtime.service.config import ServiceConfig
 
     from .config import AgentRuntimeConfig
+    from .logsetup import configure_logging
     from .main import create_app
+
+    # 日志收口必须在框架 import 之后（其导入期 setup_logging→dictConfig 会
+    # 重置 root，早于此的 basicConfig 均为死配置）。
+    configure_logging()
 
     settings = ServiceConfig.from_env()
     arc = AgentRuntimeConfig.from_env()
@@ -58,7 +57,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         application.asgi,
         host=settings.host,
         port=settings.port,
-        log_level="info",
+        log_level=os.getenv("AGENT_RUNTIME_LOG_LEVEL", "info").strip().lower(),
     )
 
 

@@ -58,7 +58,7 @@ from e2e_lib import (
 
 BASE = "http://127.0.0.1:30091/api/session"      # LB 单入口（NodePort）
 REDIS_URL = "redis://127.0.0.1:30001/2"
-DEPLOY_NS = "default"                            # agent-runtime Deployment 所在 ns
+DEPLOY_NS = "agent-runtime-e2e"                            # agent-runtime Deployment 所在 ns
 NS = "agent-runtime-e2e"                         # AgentServer Pod 所在 ns
 IMAGE = "influxdb:1.8"
 DB_DSN = {"host": "127.0.0.1", "port": "30000", "user": "agent_runtime",

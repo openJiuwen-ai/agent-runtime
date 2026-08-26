@@ -13,6 +13,7 @@ handler 无模块级可变状态。业务异常在此映射为带 retry_after �
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from openjiuwen_runtime.service.envelope import Envelope, ResponseEnvelope
@@ -44,6 +45,24 @@ def _error_envelope(env: Envelope, exc: AgentRuntimeError) -> ResponseEnvelope:
     )
 
 
+def _fail(
+    env: Envelope,
+    exc: AgentRuntimeError,
+    *,
+    endpoint: str,
+    duration_ms: float,
+    **fields: Any,
+) -> ResponseEnvelope:
+    """业务失败统一留痕（WARNING + 异常链堆栈）并回错误信封。"""
+    extras = "".join(f" {k}={v}" for k, v in fields.items() if v)
+    logger.warning(
+        "%s failed:%s error=%s duration_ms=%.1f detail=%s",
+        endpoint, extras, exc.code, duration_ms, exc,
+        exc_info=True,
+    )
+    return _error_envelope(env, exc)
+
+
 async def handle_route(ctx, env: Envelope) -> ResponseEnvelope | dict:
     """POST /api/session/route：{pod_sse_url, pod_id}；幂等回放优先。"""
     orchestrator, _, _ = _services(ctx)
@@ -60,6 +79,7 @@ async def handle_route(ctx, env: Envelope) -> ResponseEnvelope | dict:
             type=env.type, metadata=env.metadata, rawdata=dict(cached.rawdata),
             ok=True, retry_after=None,
         )
+    t0 = time.monotonic()
     try:
         result = await orchestrator.route(
             request_id=metadata.request_id,
@@ -69,9 +89,8 @@ async def handle_route(ctx, env: Envelope) -> ResponseEnvelope | dict:
             user_id=metadata.user_id,
         )
     except AgentRuntimeError as exc:
-        logger.warning("route failed: session=%s error=%s detail=%s",
-                       session_id, exc.code, exc)
-        return _error_envelope(env, exc)
+        return _fail(env, exc, endpoint="route", duration_ms=(time.monotonic() - t0) * 1000,
+                     session=session_id, request_id=metadata.request_id)
     response = ResponseEnvelope(
         type=env.type, metadata=env.metadata, rawdata=result, ok=True,
     )
@@ -83,26 +102,31 @@ async def handle_route(ctx, env: Envelope) -> ResponseEnvelope | dict:
 async def handle_touch(ctx, env: Envelope) -> dict:
     """POST /api/session/touch：{touched: bool}（False = 会话已过期/不存在）。"""
     orchestrator, _, _ = _services(ctx)
+    t0 = time.monotonic()
     try:
         touched = await orchestrator.touch(env.metadata.session_id or "")
     except AgentRuntimeError as exc:
-        return _error_envelope(env, exc)
+        return _fail(env, exc, endpoint="touch", duration_ms=(time.monotonic() - t0) * 1000,
+                     session=env.metadata.session_id or "",
+                     request_id=env.metadata.request_id)
     return {"touched": touched}
 
 
 async def handle_config_sync(ctx, env: Envelope) -> dict:
     """POST /api/session/config_sync：{ok, synced?, deleted?, affected_scopes?}。"""
     _, config_store, _ = _services(ctx)
+    t0 = time.monotonic()
     try:
         result = await config_store.config_sync(dict(env.rawdata or {}))
     except AgentRuntimeError as exc:
-        logger.warning("config_sync failed: kind=%s op=%s error=%s detail=%s",
-                       (env.rawdata or {}).get("kind"), (env.rawdata or {}).get("op"),
-                       exc.code, exc)
-        return _error_envelope(env, exc)
-    logger.info("config_sync ok: kind=%s op=%s result=%s at=%s",
+        return _fail(env, exc, endpoint="config_sync",
+                     duration_ms=(time.monotonic() - t0) * 1000,
+                     kind=(env.rawdata or {}).get("kind"),
+                     op=(env.rawdata or {}).get("op"),
+                     request_id=env.metadata.request_id)
+    logger.info("config_sync ok: kind=%s op=%s result=%s at=%s duration_ms=%.1f",
                 (env.rawdata or {}).get("kind"), (env.rawdata or {}).get("op"),
-                result, now_ts())
+                result, now_ts(), (time.monotonic() - t0) * 1000)
     return result
 
 
@@ -112,10 +136,16 @@ async def handle_cleanup(ctx, env: Envelope) -> dict:
     rawdata = dict(env.rawdata or {})
     namespace = rawdata.get("namespace") or None
     label_selector = rawdata.get("label_selector") or None
+    t0 = time.monotonic()
     try:
         cleaned = await rm_facade.cleanup(namespace=namespace, label_selector=label_selector)
     except AgentRuntimeError as exc:
-        return _error_envelope(env, exc)
+        return _fail(env, exc, endpoint="cleanup", duration_ms=(time.monotonic() - t0) * 1000,
+                     namespace=namespace or "-", label_selector=label_selector or "-",
+                     request_id=env.metadata.request_id)
+    logger.info("cleanup ok: namespace=%s label_selector=%s cleaned=%s duration_ms=%.1f",
+                namespace or "-", label_selector or "-", cleaned,
+                (time.monotonic() - t0) * 1000)
     return {"cleaned": cleaned}
 
 

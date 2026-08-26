@@ -15,6 +15,7 @@ import asyncio
 import logging
 import random
 import string
+import time
 from typing import Any
 
 import httpx
@@ -27,6 +28,7 @@ logger = logging.getLogger("agent_runtime.resource_manager")
 DEFAULT_READY_TIMEOUT = 300      # deploy 等 Ready 超时（秒）
 DEFAULT_READY_POLL_INTERVAL = 2  # 就绪轮询间隔（秒）
 DELETE_TIMEOUT = 60
+WAIT_READY_PROGRESS_SEC = 30    # _wait_ready 进度行间隔（最长 300s 不留空白）
 
 
 def _random_suffix(length: int = 5) -> str:
@@ -72,8 +74,14 @@ class K8sPodClient:
         try:
             async with httpx.AsyncClient(timeout=3.0) as client:
                 response = await client.get(f"http://{pod_ip}:{sse_port}/health")
+                if response.status_code != 200:
+                    logger.debug("health probe non-200: ip=%s port=%s status=%s",
+                                 pod_ip, sse_port, response.status_code)
                 return response.status_code == 200
-        except Exception:  # noqa: BLE001 - 探测失败即不健康
+        except Exception as exc:  # noqa: BLE001 - 探测失败即不健康
+            # 失败原因留痕（调用方 sweeper 有同节奏 WARNING，这里 DEBUG 补细节）
+            logger.debug("health probe error: ip=%s port=%s error=%s: %s",
+                         pod_ip, sse_port, type(exc).__name__, exc)
             return False
 
 
@@ -206,26 +214,48 @@ class RealK8sPodClient(K8sPodClient):
 
     async def _wait_ready(self, pod_id: str, namespace: str,
                           timeout: float, poll: float) -> PodDeployInfo:
-        deadline = asyncio.get_running_loop().time() + timeout
+        started = asyncio.get_running_loop().time()
+        deadline = started + timeout
+        next_progress_at = started + WAIT_READY_PROGRESS_SEC
         last_reason = ""
         while True:
             info = await self._read(pod_id, namespace)
+            now = asyncio.get_running_loop().time()
             if info is None:
                 raise DeployFailed(f"pod {pod_id} disappeared during deploy")
             if info.phase in ("Failed", "Succeeded"):
+                logger.warning(
+                    "k8s pod terminal phase during deploy: name=%s phase=%s "
+                    "reason=%s waited_s=%.1f",
+                    pod_id, info.phase, info.reason, now - started,
+                )
                 raise DeployFailed(
                     f"pod {pod_id} terminal phase {info.phase}: {info.reason}"
                 )
             if info.ready and info.pod_ip:
-                logger.info("k8s pod ready: name=%s pod_ip=%s", pod_id, info.pod_ip)
+                logger.info("k8s pod ready: name=%s pod_ip=%s waited_s=%.1f",
+                            pod_id, info.pod_ip, now - started)
                 return PodDeployInfo(pod_id=pod_id, namespace=namespace,
                                      pod_ip=info.pod_ip)
             last_reason = info.reason or info.phase
-            if asyncio.get_running_loop().time() >= deadline:
+            if now >= deadline:
+                logger.warning(
+                    "k8s pod not Ready in time: name=%s timeout=%ss "
+                    "phase=%s reason=%s",
+                    pod_id, timeout, info.phase, last_reason,
+                )
                 raise DeployFailed(
                     f"pod {pod_id} not Ready within {timeout}s "
                     f"(phase={info.phase!r}, reason={last_reason!r})"
                 )
+            if now >= next_progress_at:
+                # 最长 300s 的等待不留日志空白：周期性进度行（镜像拉取慢等可见）
+                logger.info(
+                    "k8s wait_ready progress: name=%s elapsed_s=%.0f "
+                    "phase=%s reason=%s",
+                    pod_id, now - started, info.phase, last_reason,
+                )
+                next_progress_at = now + WAIT_READY_PROGRESS_SEC
             await asyncio.sleep(poll)
 
     # -------------------------------------------------------------- 查询 / 删除
@@ -242,20 +272,30 @@ class RealK8sPodClient(K8sPodClient):
     async def get_pod(self, pod_id: str, namespace: str) -> PodInfo | None:
         if not self._loaded:
             await self.start()
-        return await self._read(pod_id, namespace)
+        t0 = time.monotonic()
+        result = await self._read(pod_id, namespace)
+        logger.debug("k8s get_pod: name=%s found=%s duration_ms=%.1f",
+                     pod_id, result is not None, (time.monotonic() - t0) * 1000)
+        return result
 
     async def list_pods(self, namespace: str, label_selector: str) -> list[PodInfo]:
         if not self._loaded:
             await self.start()
+        t0 = time.monotonic()
         result = await self._core.list_namespaced_pod(
             namespace=namespace, label_selector=label_selector
         )
-        return [_to_pod_info(item) for item in result.items]
+        pods = [_to_pod_info(item) for item in result.items]
+        logger.debug("k8s list_pods: namespace=%s selector=%s count=%d duration_ms=%.1f",
+                     namespace, label_selector, len(pods),
+                     (time.monotonic() - t0) * 1000)
+        return pods
 
     async def delete(self, pod_id: str, namespace: str) -> str:
         if not self._loaded:
             await self.start()
         c = self._client
+        t0 = time.monotonic()
         try:
             await self._core.delete_namespaced_pod(
                 name=pod_id, namespace=namespace,
@@ -265,6 +305,8 @@ class RealK8sPodClient(K8sPodClient):
             if getattr(exc, "status", None) != 404:
                 raise DeployFailed(f"k8s delete pod {pod_id} failed: {exc}") from exc
             logger.info("k8s pod already absent: name=%s", pod_id)
+        logger.debug("k8s delete_pod: name=%s duration_ms=%.1f",
+                     pod_id, (time.monotonic() - t0) * 1000)
         return pod_id
 
 

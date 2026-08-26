@@ -17,9 +17,15 @@ DEFAULT_MAX_OVERFLOW = 20
 DEFAULT_POOL_TIMEOUT = 30
 
 # aiomysql 建连超时（秒）：防网络黑洞时建连永久挂起（aiomysql 默认无限制）。
-# 仅对 mysql 系驱动注入；asyncpg 自带 60s 默认命令超时，不注入。
+# asyncpg 同用此值注入建连 timeout（asyncpg 默认 60s，与 MySQL 对齐收紧）。
 # 可通过 RUNTIME_DB_CONNECT_TIMEOUT / DB_CONNECT_TIMEOUT 覆盖。
 DEFAULT_CONNECT_TIMEOUT_SECONDS = 5
+
+# asyncpg 单条命令超时（秒）：asyncpg 默认无限制（command_timeout=None），
+# 慢查询/网络黑洞时语句可永久挂起。默认 30s：远大于本框架业务的任何合法
+# 查询，又低于请求级 deadline 兜底。可通过 RUNTIME_DB_COMMAND_TIMEOUT /
+# DB_COMMAND_TIMEOUT 覆盖。
+DEFAULT_COMMAND_TIMEOUT_SECONDS = 30
 
 
 def _int_env(*names: str, default: int) -> int:
@@ -59,6 +65,14 @@ def get_connect_timeout() -> int:
         "RUNTIME_DB_CONNECT_TIMEOUT",
         "DB_CONNECT_TIMEOUT",
         default=DEFAULT_CONNECT_TIMEOUT_SECONDS,
+    )
+
+
+def get_command_timeout() -> int:
+    return _int_env(
+        "RUNTIME_DB_COMMAND_TIMEOUT",
+        "DB_COMMAND_TIMEOUT",
+        default=DEFAULT_COMMAND_TIMEOUT_SECONDS,
     )
 
 

@@ -128,7 +128,9 @@ class ServiceConfig:
             self.cache_backend,
             {"memory", "redis", "none"},
         )
-        self._validate_choice("db_type", self.db_type, {"mysql", "sqlite", "none"})
+        self._validate_choice(
+            "db_type", self.db_type, {"mysql", "postgresql", "sqlite", "none"}
+        )
         self._validate_positive("lock_ttl_seconds", self.lock_ttl_seconds)
         self._validate_non_negative("lock_wait_seconds", self.lock_wait_seconds)
         self._validate_positive("lock_renew_ratio", self.lock_renew_ratio)
@@ -184,7 +186,7 @@ class ServiceConfig:
             raise ValueError(
                 "memory lock backend cannot be used with multiple replicas"
             )
-        if self.db_type == "mysql":
+        if self.db_type in ("mysql", "postgresql"):
             missing = []
             required_fields = (
                 ("db_host", self.db_host),
@@ -195,7 +197,9 @@ class ServiceConfig:
                 if not value:
                     missing.append(name)
             if missing:
-                raise ValueError(f"{', '.join(missing)} is required for db_type=mysql")
+                raise ValueError(
+                    f"{', '.join(missing)} is required for db_type={self.db_type}"
+                )
         if self.db_type == "sqlite" and not self.db_name:
             raise ValueError("db_name is required for db_type=sqlite")
 
@@ -354,7 +358,14 @@ class ServiceConfig:
             ),
             db_type=os.getenv("OPENJIUWEN_SERVICE_DB_TYPE", _DEFAULT_DB_TYPE).lower(),
             db_host=os.getenv("OPENJIUWEN_SERVICE_DB_HOST") or None,
-            db_port=int(os.getenv("OPENJIUWEN_SERVICE_DB_PORT", str(_DEFAULT_DB_PORT))),
+            # 端口默认随 db_type：mysql 3306 / postgresql 5432（显式设置优先）
+            db_port=int(os.getenv(
+                "OPENJIUWEN_SERVICE_DB_PORT",
+                "5432"
+                if os.getenv("OPENJIUWEN_SERVICE_DB_TYPE", _DEFAULT_DB_TYPE).lower()
+                == "postgresql"
+                else str(_DEFAULT_DB_PORT),
+            )),
             db_name=os.getenv("OPENJIUWEN_SERVICE_DB_NAME") or None,
             db_user=os.getenv("OPENJIUWEN_SERVICE_DB_USER") or None,
             db_password=os.getenv("OPENJIUWEN_SERVICE_DB_PASSWORD"),

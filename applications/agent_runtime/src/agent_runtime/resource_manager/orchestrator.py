@@ -29,6 +29,8 @@ ACQUIRE_IDEM_TTL = 60          # acquire 结果幂等缓存窗口
 DEPLOY_LOCK_TTL = 360          # per-scope deploy 锁（盖住 ready_timeout 300s + 余量）
 DEPLOY_WAIT_ON_BUSY = 0.3      # follower 轮询间隔（原输家自旋间隔沿用）
 FOLLOWER_WAIT_MARGIN = 10      # follower 等待上界 = ready_timeout + 此余量（注册开销）
+NO_CONFIG_LOOP_WARN = 5        # acquire 内 no_config 重跑超过该次数告警（正常 ≤1 次）
+FOLLOWER_PROGRESS_LOG_SEC = 5  # follower 轮询进度 DEBUG 行间隔
 
 
 def _deploy_ver(pod_spec: dict[str, Any]) -> str:
@@ -61,6 +63,9 @@ class ResourceOrchestrator:
             logger.info("acquire idempotent replay: request=%s", request_id)
             return cached
 
+        t0 = time.monotonic()
+        no_config_loops = 0
+        outcome = ""
         deploy_ver = _deploy_ver(pod_spec)
 
         # 首见 scope：缓存池参数 + pod_spec（autoscale 补位 deploy 时用）
@@ -77,49 +82,69 @@ class ResourceOrchestrator:
                 },
             )
 
-        while True:
-            token = uuid4().hex
-            action, pod_id, sse_url = await self.state.acquire(scope_id, deploy_ver, token)
-
-            if action == "reuse":
-                result = {"pod_id": pod_id, "pod_sse_url": sse_url}
-                if request_id:
-                    await self._idem_put(request_id, result)
-                return result
-
-            if action == "max_reached":
-                await self.state.clear_deploy_token(scope_id, token)
-                raise MaxPodsReached(f"scope {scope_id} reached max_pods")
-
-            if action == "no_config":
-                # 首见建配置后重跑即可（上面已保证写入）
-                continue
-
-            # action == need_deploy：选主串行 deploy
-            lock_key = self.state.k.lock_deploy(scope_id)
-            lock_token = f"deploy-{token}"
-            if not await self.state.try_lock(lock_key, DEPLOY_LOCK_TTL, lock_token):
-                # 输家：清占位 → 进 follower 等待室（上限 pc-1，overflow 严格
-                # 快失败），等 leader 的 Pod 注册后**直接复用**——RM 全程不读
-                # SM 的容量键（闸门归属不变），也修掉「输家自建第 2 个空 Pod」
-                # 的跨副本冷竞争浪费（见 handoff §十一.1 开放问题）
-                await self.state.clear_deploy_token(scope_id, token)
-                result = await self._follow_leader(
-                    scope_id, pod_spec, pool_config, request_id)
-                if request_id:
-                    await self._idem_put(request_id, result)
-                return result
-            try:
-                pod_id, sse_url = await self._deploy_and_register(
-                    scope_id, pod_spec, deploy_ver, token, idle_flag=False
+        try:
+            while True:
+                token = uuid4().hex
+                action, pod_id, sse_url = await self.state.acquire(
+                    scope_id, deploy_ver, token
                 )
-            finally:
-                await self.state.unlock(lock_key, lock_token)
 
-            result = {"pod_id": pod_id, "pod_sse_url": sse_url}
-            if request_id:
-                await self._idem_put(request_id, result)
-            return result
+                if action == "reuse":
+                    result = {"pod_id": pod_id, "pod_sse_url": sse_url}
+                    outcome = f"reuse pod={pod_id}"
+                    if request_id:
+                        await self._idem_put(request_id, result)
+                    return result
+
+                if action == "max_reached":
+                    await self.state.clear_deploy_token(scope_id, token)
+                    outcome = "max_reached"
+                    raise MaxPodsReached(f"scope {scope_id} reached max_pods")
+
+                if action == "no_config":
+                    # 首见建配置后重跑即可（上面已保证写入）
+                    no_config_loops += 1
+                    if no_config_loops > NO_CONFIG_LOOP_WARN:
+                        logger.warning(
+                            "acquire no_config loop: scope=%s iterations=%d",
+                            scope_id, no_config_loops,
+                        )
+                    continue
+
+                # action == need_deploy：选主串行 deploy
+                lock_key = self.state.k.lock_deploy(scope_id)
+                lock_token = f"deploy-{token}"
+                if not await self.state.try_lock(lock_key, DEPLOY_LOCK_TTL, lock_token):
+                    # 输家：清占位 → 进 follower 等待室（上限 pc-1，overflow 严格
+                    # 快失败），等 leader 的 Pod 注册后**直接复用**——RM 全程不读
+                    # SM 的容量键（闸门归属不变），也修掉「输家自建第 2 个空 Pod」
+                    # 的跨副本冷竞争浪费（见 handoff §十一.1 开放问题）
+                    await self.state.clear_deploy_token(scope_id, token)
+                    result = await self._follow_leader(
+                        scope_id, pod_spec, pool_config, request_id)
+                    outcome = f"follower_reuse pod={result.get('pod_id', '?')}"
+                    if request_id:
+                        await self._idem_put(request_id, result)
+                    return result
+                try:
+                    pod_id, sse_url = await self._deploy_and_register(
+                        scope_id, pod_spec, deploy_ver, token, idle_flag=False
+                    )
+                finally:
+                    await self.state.unlock(lock_key, lock_token)
+
+                result = {"pod_id": pod_id, "pod_sse_url": sse_url}
+                outcome = f"deployed pod={pod_id}"
+                if request_id:
+                    await self._idem_put(request_id, result)
+                return result
+        finally:
+            # 每次_acquire 一行结果（含失败路径；真因异常链由 handler/_follow_leader 留痕）
+            logger.info(
+                "acquire done: scope=%s request=%s outcome=%s duration_ms=%.1f",
+                scope_id, request_id or "-", outcome or "error",
+                (time.monotonic() - t0) * 1000,
+            )
 
     async def _follow_leader(
         self,
@@ -147,6 +172,10 @@ class ResourceOrchestrator:
             now + ready_timeout + FOLLOWER_WAIT_MARGIN, now,
         )
         if not admitted:
+            logger.warning(
+                "follower waiting room full: scope=%s follower=%s max_followers=%d",
+                scope_id, request_id, max_followers,
+            )
             raise MaxPodsReached(
                 f"scope {scope_id} deploy followers full ({max_followers}); "
                 f"retry after leader registers")
@@ -154,9 +183,23 @@ class ResourceOrchestrator:
         pods_before = set(await self.state.pod_ids(scope_id))
         deadline = time.monotonic() + ready_timeout + FOLLOWER_WAIT_MARGIN
         lock_key = self.state.k.lock_deploy(scope_id)
+        logger.info(
+            "follower waiting for leader deploy: scope=%s follower=%s "
+            "max_followers=%d ready_timeout=%s wait_cap_s=%d",
+            scope_id, request_id, max_followers, ready_timeout,
+            ready_timeout + FOLLOWER_WAIT_MARGIN,
+        )
+        waited_log_at = started = time.monotonic()
         try:
             while True:
                 await asyncio.sleep(DEPLOY_WAIT_ON_BUSY)
+                now_mono = time.monotonic()
+                if now_mono - waited_log_at >= FOLLOWER_PROGRESS_LOG_SEC:
+                    logger.debug(
+                        "follower still waiting: scope=%s follower=%s waited_s=%.0f",
+                        scope_id, request_id, now_mono - started,
+                    )
+                    waited_log_at = now_mono
                 new_pods = [p for p in await self.state.pod_ids(scope_id)
                             if p not in pods_before]
                 if new_pods:
@@ -172,9 +215,20 @@ class ResourceOrchestrator:
                     # 防御性兜底）：视为有进展，跳过失败判定等下一轮
                     continue
                 if not await self.state.lock_held(lock_key):
+                    logger.warning(
+                        "follower aborts, leader deploy aborted: scope=%s "
+                        "follower=%s waited_s=%.1f",
+                        scope_id, request_id, now_mono - started,
+                    )
                     raise DeployFailed(
                         f"scope {scope_id} leader deploy aborted; follower aborts")
-                if time.monotonic() >= deadline:
+                if now_mono >= deadline:
+                    logger.warning(
+                        "follower wait timeout: scope=%s follower=%s "
+                        "waited_s=%d ready_timeout=%s",
+                        scope_id, request_id,
+                        ready_timeout + FOLLOWER_WAIT_MARGIN, ready_timeout,
+                    )
                     raise MaxPodsReached(
                         f"scope {scope_id} follower wait timeout "
                         f"({ready_timeout + FOLLOWER_WAIT_MARGIN}s)")
@@ -193,12 +247,21 @@ class ResourceOrchestrator:
         idle_flag: bool,
     ) -> tuple[str, str]:
         """create + wait Ready + REGISTER。失败清占位后抛 DeployFailed（红线）。"""
+        t0 = time.monotonic()
         try:
             info = await self.k8s.deploy(pod_spec)
         except Exception as exc:
             await self.state.clear_deploy_token(scope_id, deploy_token)
             if isinstance(exc, DeployFailed):
+                logger.warning(
+                    "deploy failed: scope=%s duration_ms=%.1f detail=%s",
+                    scope_id, (time.monotonic() - t0) * 1000, exc,
+                )
                 raise
+            logger.exception(
+                "deploy error (mapped to DeployFailed): scope=%s duration_ms=%.1f",
+                scope_id, (time.monotonic() - t0) * 1000,
+            )
             raise DeployFailed(f"deploy error for scope {scope_id}: {exc}") from exc
         sse_url = (
             f"http://{info.pod_ip}:{pod_spec.get('sse_port', 8080)}"
@@ -216,8 +279,10 @@ class ResourceOrchestrator:
             now=now_ts(),
         )
         logger.info(
-            "deployed pod: scope=%s pod=%s ip=%s idle_flag=%s url=%s",
-            scope_id, info.pod_id, info.pod_ip, idle_flag, sse_url,
+            "deployed pod: scope=%s pod=%s ip=%s namespace=%s idle_flag=%s url=%s "
+            "duration_ms=%.1f",
+            scope_id, info.pod_id, info.pod_ip, info.namespace, idle_flag, sse_url,
+            (time.monotonic() - t0) * 1000,
         )
         return info.pod_id, sse_url
 
@@ -228,6 +293,8 @@ class ResourceOrchestrator:
         transitioned = await self.state.release(pod_id, scope_id, now_ts())
         if transitioned:
             await self.state.redis.hset(self.state.k.pod_info(pod_id), "phase", "idle")
+        logger.info("idle_consider: scope=%s pod=%s transitioned=%s",
+                    scope_id, pod_id, transitioned)
         return {"transitioned_to_idle": transitioned}
 
     # -------------------------------------------------------------- update_pool_config
@@ -294,6 +361,10 @@ class ResourceOrchestrator:
         try:
             value = json.loads(text)
         except ValueError:
+            logger.warning(
+                "idem cache corrupt, ignoring: request=%s raw_prefix=%r",
+                request_id, text[:80],
+            )
             return None
         # 命中即续期（重试窗口内反复回放）
         await self.state.redis.expire(key, ACQUIRE_IDEM_TTL)

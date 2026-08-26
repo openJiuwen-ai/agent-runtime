@@ -15,7 +15,10 @@ import time
 import pytest
 
 import openjiuwen_runtime.foundation.db.sqlalchemy_handler as sa_handler_mod
-from openjiuwen_runtime.foundation.db.engine_options import get_connect_timeout
+from openjiuwen_runtime.foundation.db.engine_options import (
+    get_command_timeout,
+    get_connect_timeout,
+)
 from openjiuwen_runtime.service import ServiceConfig, build_redis_client
 from openjiuwen_runtime.service.context.periodic.runner import JobRunner
 from openjiuwen_runtime.service.context.periodic.schedule.interval import (
@@ -133,7 +136,8 @@ async def test_mysql_explicit_connect_args_take_precedence(monkeypatch):
 
 
 @pytest.mark.unit
-async def test_non_mysql_backend_not_injected(monkeypatch):
+async def test_postgresql_engine_kwargs_include_timeouts(monkeypatch):
+    """asyncpg：建连 timeout + 命令 command_timeout 均注入（MySQL 同款兜底）。"""
     captured = _capture_engine_kwargs(monkeypatch)
 
     handler = sa_handler_mod.SQLAlchemyHandler(
@@ -141,7 +145,87 @@ async def test_non_mysql_backend_not_injected(monkeypatch):
     )
     await handler.connect()
 
-    assert "connect_timeout" not in captured["kwargs"]["connect_args"]
+    connect_args = captured["kwargs"]["connect_args"]
+    assert connect_args["timeout"] == get_connect_timeout()
+    assert connect_args["command_timeout"] == get_command_timeout()
+    # connect_timeout 是 mysql 系驱动专有 kwarg，不注入 asyncpg
+    assert "connect_timeout" not in connect_args
+
+
+@pytest.mark.unit
+async def test_postgresql_explicit_connect_args_take_precedence(monkeypatch):
+    captured = _capture_engine_kwargs(monkeypatch)
+
+    handler = sa_handler_mod.SQLAlchemyHandler(
+        "postgresql+asyncpg://user:pw@127.0.0.1:5432/svc",
+        connect_args={"timeout": 9},
+    )
+    await handler.connect()
+
+    connect_args = captured["kwargs"]["connect_args"]
+    assert connect_args["timeout"] == 9
+    assert connect_args["command_timeout"] == get_command_timeout()
+
+
+@pytest.mark.unit
+async def test_sqlite_backend_not_injected(monkeypatch):
+    captured = _capture_engine_kwargs(monkeypatch)
+
+    handler = sa_handler_mod.SQLAlchemyHandler("sqlite+aiosqlite:////tmp/svc.db")
+    await handler.connect()
+
+    connect_args = captured["kwargs"]["connect_args"]
+    assert "timeout" not in connect_args
+    assert "command_timeout" not in connect_args
+    assert "connect_timeout" not in connect_args
+
+
+@pytest.mark.unit
+def test_command_timeout_reads_from_env(monkeypatch):
+    monkeypatch.setenv("RUNTIME_DB_COMMAND_TIMEOUT", "17")
+    from openjiuwen_runtime.foundation.db.engine_options import get_command_timeout
+
+    assert get_command_timeout() == 17
+
+
+# ---------------------------------------------------------------- postgresql 接入
+
+
+@pytest.mark.unit
+def test_build_db_handler_postgresql():
+    """DB_TYPE=postgresql 经 bootstrap 构造 PostgreSQLHandler（无需 asyncpg 运行时）。"""
+    from openjiuwen_runtime.foundation.db import PostgreSQLHandler
+    from openjiuwen_runtime.service import ServiceConfig, build_db_handler
+
+    handler = build_db_handler(ServiceConfig(
+        db_type="postgresql", db_host="pg.example", db_name="svc",
+        db_user="svc", db_password="pw", db_port=5432,
+    ))
+    assert isinstance(handler, PostgreSQLHandler)
+    assert handler.database_url.startswith("postgresql+asyncpg://")
+    # 建连/命令超时在 connect() 时注入（见上方 engine kwargs 用例）
+
+
+@pytest.mark.unit
+def test_postgresql_config_requires_same_fields_as_mysql():
+    from openjiuwen_runtime.service import ServiceConfig
+
+    with pytest.raises(ValueError, match="db_host is required"):
+        ServiceConfig(db_type="postgresql", db_name="svc", db_user="svc")
+
+
+@pytest.mark.unit
+def test_postgresql_default_port_5432_mysql_3306(monkeypatch):
+    from openjiuwen_runtime.service import ServiceConfig
+
+    monkeypatch.delenv("OPENJIUWEN_SERVICE_DB_PORT", raising=False)
+    for field in ("DB_HOST", "DB_NAME", "DB_USER"):
+        monkeypatch.setenv(f"OPENJIUWEN_SERVICE_{field}", "x")
+    monkeypatch.setenv("OPENJIUWEN_SERVICE_DB_TYPE", "postgresql")
+    assert ServiceConfig.from_env().db_port == 5432
+
+    monkeypatch.setenv("OPENJIUWEN_SERVICE_DB_TYPE", "mysql")
+    assert ServiceConfig.from_env().db_port == 3306
 
 
 # ---------------------------------------------------------------- tick 超时

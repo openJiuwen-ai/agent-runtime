@@ -48,11 +48,20 @@ cd applications/agent_runtime
 ```bash
 # 宿主机双进程(快速):8091/8092 共享 Redis/DB,选主键互斥竞争
 ./scripts/deploy_replicas.sh 2 .env.production.local 8091
+
+# ---- 镜像构建(K8s 部署前置;build context=仓库根,Dockerfile 内 COPY foundation/ service/)----
+./deploy/build_image.sh agent-runtime:<新tag>                # 本地 tag
+./deploy/build_image.sh swr.cn-north-4.myhuaweicloud.com/openjiuwen/jiuwenclaw-agent-runtime-amd64:0.0.1 --push    # 推 SWR
+# 本地 tag 无仓库可拉,而模板 imagePullPolicy=IfNotPresent → 必须分发到**每个可调度节点**
+# (双节点都要:ecs-38b3-0001=192.168.1.64、ecs-38b3-0002=192.168.1.90 本机;反亲和会把副本分散过去):
+docker save agent-runtime:<tag> | ssh root@192.168.1.64 docker load    # 另一节点;本机 docker load 同理
+# 然后改 deploy/agent_runtime.env 的 AGENT_RUNTIME_IMAGE=<新tag>(每次构建换新 tag——同 tag 节点不会重拉)
+
 # K8s 多副本 + Service LB(生产形态):deploy/ 目录(模板+Dockerfile+渲染部署)
 ./deploy/render_and_apply.sh deploy/agent_runtime.env --nodeport
 # 多副本 e2e(真 LB 单入口,含 failover;单实例自动 DEGRADED)
 uv run --no-sync python scripts/e2e_multi_replica.py --base-url http://127.0.0.1:30091/api/session \
-    --redis-url redis://127.0.0.1:30001/2 --namespace default
+    --redis-url redis://127.0.0.1:30001/2 --namespace agent-runtime-e2e
 # 压测/浸泡(零依赖,场景化;无 FLUSHDB、不动 cleanup 端点)
 uv run --no-sync python scripts/load_test.py --base-url http://127.0.0.1:30091/api/session --duration 60
 ```

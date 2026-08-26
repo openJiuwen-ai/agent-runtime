@@ -7,12 +7,28 @@
 
 from __future__ import annotations
 
+import hashlib
+import logging
+import time
 from typing import Any
 
 from ..util import s, to_int
 from . import lua_scripts as lua
 
 KEY_PREFIX = "session_manager"
+
+logger = logging.getLogger("agent_runtime.session_manager")
+
+# 单次 Lua eval 超过该时长告警（即 Redis 延迟探针；正常 <1ms）
+_SLOW_EVAL_MS = 200.0
+
+
+def _script_tag(script: str) -> str:
+    """Lua 源 → 常量名（诊断用；未知源返回 8 字符指纹）。"""
+    for name, value in vars(lua).items():
+        if name.startswith("LUA_") and value == script:
+            return name
+    return hashlib.md5(script.encode()).hexdigest()[:8]
 
 
 class SMKeys:
@@ -103,10 +119,29 @@ class SessionState:
         return self.k.prefix + ":"
 
     async def eval(self, script: str, *args: Any) -> list[str]:
-        """统一 EVAL 出口：自动带键前缀，返回值逐元素转 str。"""
+        """统一 EVAL 出口：自动带键前缀，返回值逐元素转 str。
+
+        异常策略（防刷屏）：SM 各 Lua 正常必返回非空表，None/False 属真异常
+        → WARNING（route_place 的 scope_full 兜底会掩盖它，这里单独留痕）；
+        单次超 _SLOW_EVAL_MS → WARNING（Redis 延迟探针）；常规 eval 仅 DEBUG。
+        """
+        t0 = time.monotonic()
         result = await self.redis.eval(script, 0, self.prefix, *args)
+        duration_ms = (time.monotonic() - t0) * 1000
+        if duration_ms > _SLOW_EVAL_MS:
+            logger.warning(
+                "lua eval slow: script=%s duration_ms=%.1f arg0=%s",
+                _script_tag(script), duration_ms, args[0] if args else "-",
+            )
         if result is None or result is False:
+            logger.warning(
+                "lua returned empty (anomaly): script=%s arg0=%s",
+                _script_tag(script), args[0] if args else "-",
+            )
             return []
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("lua eval: script=%s duration_ms=%.1f argc=%d",
+                         _script_tag(script), duration_ms, len(args))
         if isinstance(result, (list, tuple)):
             return [s(item) for item in result]
         return [s(result)]
@@ -227,4 +262,29 @@ class SessionState:
             "return redis.call('DEL', KEYS[1]) else return 0 end",
             1, key, token,
         )
+
+    # -------------------------------------------------------------- 诊断只读（/debug/*）
+
+    async def session_hash(self, session_id: str) -> dict[str, str]:
+        """单会话 HASH（scope_id/pod_id/expiry/session_ttl）。"""
+        raw = await self.redis.hgetall(self.k.session(session_id))
+        return {s(k): s(v) for k, v in raw.items()}
+
+    async def session_expiry_score(self, session_id: str) -> float | None:
+        """全局到期 ZSET 中该会话的分值（到期时间戳；不在则 None）。"""
+        score = await self.redis.zscore(self.k.session_expiry(), session_id)
+        if score is None:
+            return None
+        try:
+            return float(score)
+        except (TypeError, ValueError):
+            return None
+
+    async def scope_session_count(self, scope_id: str) -> int:
+        return to_int(await self.redis.scard(self.k.scope_sessions(scope_id)))
+
+    async def scope_config_raw(self, scope_id: str) -> dict[str, str]:
+        """resolve 缓存 HASH 原文（诊断读；不经过 Template 解析）。"""
+        raw = await self.redis.hgetall(self.k.scope_config(scope_id))
+        return {s(k): s(v) for k, v in raw.items()}
 

@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 
@@ -15,11 +16,16 @@ SM_KEY_PREFIX = "session_manager"
 RM_KEY_PREFIX = "resource_manager"
 SERVICE_PREFIX = "/api/session"      # 唯一 App 的 prefix（端口 8091）
 
+logger = logging.getLogger("agent_runtime.config")
+
 
 def _env_int(name: str, default: int) -> int:
     try:
         return int(os.getenv(name, "") or default)
     except ValueError:
+        # env 手误（如 "1O"）静默回退默认值会掩盖部署配错——必须留痕
+        logger.warning("invalid int env, using default: name=%s raw=%r default=%s",
+                       name, os.getenv(name), default)
         return default
 
 
@@ -27,6 +33,8 @@ def _env_float(name: str, default: float) -> float:
     try:
         return float(os.getenv(name, "") or default)
     except ValueError:
+        logger.warning("invalid float env, using default: name=%s raw=%r default=%s",
+                       name, os.getenv(name), default)
         return default
 
 

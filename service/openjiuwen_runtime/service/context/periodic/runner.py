@@ -25,6 +25,9 @@ logger = get_logger(__name__)
 
 _STOP_TIMEOUT_SEC = 3.0
 _TIME_FAIL_SLEEP_SEC = 0.5
+# tick done 常态降为 DEBUG（1Hz 任务刷屏降噪）；异常拍与周期心跳仍打 INFO
+_TICK_HEARTBEAT_EVERY = 600        # 每 N 拍打一条 INFO 心跳（1Hz ≈ 10 分钟）
+_TICK_SLOW_MS = 1000.0             # 单拍超过该时长视为慢拍，提级 INFO
 
 
 async def _cancel_and_wait(task: asyncio.Task[Any]) -> None:
@@ -75,10 +78,38 @@ class JobRunner:
         self._stopped = asyncio.Event()
         self._task: Optional[asyncio.Task[Any]] = None
         self._last_now: Optional[float] = None
+        # 诊断计数器（只增不改语义；snapshot() 供 /debug 端点读取）
+        self._ticks = 0
+        self._ok_ticks = 0
+        self._error_ticks = 0
+        self._aborted_ticks = 0
+        self._timedout_ticks = 0
+        self._lock_misses = 0
+        self._last_tick_at: Optional[float] = None
+        self._last_duration_ms: Optional[float] = None
+        self._last_error: Optional[str] = None
 
     @property
     def name(self) -> str:
         return self._name
+
+    def snapshot(self) -> dict[str, Any]:
+        """只读计数快照（诊断端点用；非原子读，允许瞬时不一致）。"""
+        last_tick_at = self._last_tick_at
+        return {
+            "name": self._name,
+            "instance_id": self._instance_id,
+            "running": self._task is not None and not self._task.done(),
+            "ticks": self._ticks,
+            "ok_ticks": self._ok_ticks,
+            "error_ticks": self._error_ticks,
+            "aborted_ticks": self._aborted_ticks,
+            "timedout_ticks": self._timedout_ticks,
+            "lock_misses": self._lock_misses,
+            "last_tick_at": last_tick_at,
+            "last_duration_ms": self._last_duration_ms,
+            "last_error": self._last_error,
+        }
 
     def _now(self) -> float:
         return self._clock.now()
@@ -293,6 +324,7 @@ class JobRunner:
             planned_fire=planned_fire,
         )
         if claim is None:
+            self._lock_misses += 1
             logger.debug(
                 "job lock miss: job=%s instance=%s",
                 self._name,
@@ -303,6 +335,7 @@ class JobRunner:
         ok = False
         aborted = False
         timed_out = False
+        error_text: Optional[str] = None
         t0 = time.monotonic()
         delay_ms = max(0.0, (now_v - planned_fire) * 1000)
         try:
@@ -322,7 +355,8 @@ class JobRunner:
                 self._instance_id,
                 self._tick_timeout_sec,
             )
-        except Exception:
+        except Exception as exc:
+            error_text = f"{type(exc).__name__}: {exc}"
             logger.exception(
                 "on_tick failed: job=%s instance=%s",
                 self._name,
@@ -330,6 +364,18 @@ class JobRunner:
             )
         finally:
             duration_ms = (time.monotonic() - t0) * 1000
+            self._ticks += 1
+            self._last_tick_at = time.time()
+            self._last_duration_ms = duration_ms
+            self._last_error = error_text
+            if timed_out:
+                self._timedout_ticks += 1
+            elif error_text is not None:
+                self._error_ticks += 1
+            elif aborted:
+                self._aborted_ticks += 1
+            else:
+                self._ok_ticks += 1
             try:
                 await self._coordinator.release(claim)
             except Exception:
@@ -337,9 +383,18 @@ class JobRunner:
                     "release after tick failed: job=%s",
                     self._name,
                 )
-            logger.info(
+            # 常态 DEBUG（1Hz 任务降噪）；异常拍/慢拍/周期心跳保留 INFO
+            heartbeat = self._ticks % _TICK_HEARTBEAT_EVERY == 0
+            notable = (
+                not ok or aborted or timed_out or error_text is not None
+                or duration_ms > _TICK_SLOW_MS
+            )
+            log_tick_done = (
+                logger.info if notable or heartbeat else logger.debug
+            )
+            log_tick_done(
                 "tick done: job=%s instance=%s ok=%s aborted=%s timed_out=%s "
-                "delay_ms=%.1f duration_ms=%.1f",
+                "delay_ms=%.1f duration_ms=%.1f ticks=%d",
                 self._name,
                 self._instance_id,
                 ok,
@@ -347,4 +402,5 @@ class JobRunner:
                 timed_out,
                 delay_ms,
                 duration_ms,
+                self._ticks,
             )
