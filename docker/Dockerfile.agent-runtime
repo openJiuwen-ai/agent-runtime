@@ -17,7 +17,8 @@ RUN pip install -e "./foundation" \
 
 USER app
 WORKDIR /app/agent-runtime
-ENV PATH=$PATH:/home/app/.local/bin
+ENV PATH=$PATH:/home/app/.local/bin \
+    PYTHONUNBUFFERED=1
 
 EXPOSE 8091
 CMD ["agent-runtime", "--mode", "server"]
