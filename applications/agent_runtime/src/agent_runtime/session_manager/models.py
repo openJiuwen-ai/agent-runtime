@@ -1,11 +1,15 @@
 # coding: utf-8
-"""Session Manager 数据模型（template / scope 配置 / pod_spec 派生）。
+"""Session Manager 数据模型（template 业务视图 / pod_spec 派生）。
 
 template 字段定义见 HLD §3.1「数据结构定义」。DB 列名沿用 EE 兼容名：
 - scope_concurrency → DB ``session_concurrency``
 - pod_concurrency   → DB ``service_concurrency``
 - pod_ttl           → DB ``service_ttl``
 - min_idle_pods     → DB ``min_idle_services``
+
+scope 定义(scope_id/index/引用模板/路由规则集)由 config_sync 全量下发,
+见 ``routing.py``(RoutingScopeDef)与 ``routing_scope`` 表——不再由
+(group_id, bot_id) 二元组派生。
 """
 
 from __future__ import annotations
@@ -37,6 +41,8 @@ class Template:
     container_port: int = 8080
     sse_port: int = 8080                   # gateway 直连 Pod 的 SSE 端口
     sse_path: str = "/sse"
+    health_path: str = "/health"           # readiness 探针路径(真 AgentServer HTTP 入口为 /api/v1/health)
+    agent_env: dict[str, str] = field(default_factory=dict)  # Agent 容器 env 注入(AGENT_HTTP_* 等)
     image_pull_policy: str = "IfNotPresent"
     readiness_initial_delay: int = 5
     readiness_period: int = 5
@@ -88,40 +94,3 @@ class Template:
             "pod_ttl": self.pod_ttl,
             "pod_concurrency": self.pod_concurrency,
         }
-
-
-@dataclass(frozen=True)
-class ScopeConfig:
-    """resolve 的产物：template 业务参数（写进 ``scope:{scope_id}:config`` 缓存）。
-
-    Redis HASH 字段与 dataclass 字段一一对应（int 字段以 str 存储）。
-    """
-
-    scope_id: str
-    template_id: str
-    scope_concurrency: int
-    pod_concurrency: int
-    session_ttl: int
-    pod_ttl: int
-    min_idle_pods: int
-    max_pods: int
-    deploy_ver: str
-    ver: str = ""          # template 更新时间戳（观测用，不参与逻辑）
-
-    def to_hash(self) -> dict[str, str]:
-        return {k: str(v) for k, v in self.__dict__.items()}
-
-    @classmethod
-    def from_hash(cls, scope_id: str, h: dict[str, str]) -> "ScopeConfig":
-        return cls(
-            scope_id=scope_id,
-            template_id=h.get("template_id", ""),
-            scope_concurrency=int(h.get("scope_concurrency", 0)),
-            pod_concurrency=int(h.get("pod_concurrency", 1)),
-            session_ttl=int(h.get("session_ttl", 60)),
-            pod_ttl=int(h.get("pod_ttl", 300)),
-            min_idle_pods=int(h.get("min_idle_pods", 0)),
-            max_pods=int(h.get("max_pods", 1)),
-            deploy_ver=h.get("deploy_ver", ""),
-            ver=h.get("ver", ""),
-        )

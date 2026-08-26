@@ -222,7 +222,7 @@ async def test_deploy_loser_reuses_other_replicas_warm_pod(dual):
     await dual.seed_template(scope_concurrency=3, pod_concurrency=2)
     scope = scope_of()
     rm_state = ResourceState(dual.redis)
-    template = await dual.sysctx(0).sm_config_store.resolve(scope, "grp", "bot")
+    _, template = await dual.sysctx(0).sm_config_store.resolve("user", "grp", "bot")
 
     await dual.redis.set(rm_state.k.lock_deploy(scope), "other-replica",
                          nx=True, ex=30)
@@ -316,25 +316,30 @@ async def test_idempotent_replay_across_replicas(dual):
 
 
 @requires_lua
-async def test_config_sync_on_b_invalidates_resolve_on_a(dual):
-    """B 上 config_sync（B 类变更）→ A 的 scope 缓存即失效、下次 resolve 见新值。
+async def test_config_sync_on_b_takes_effect_on_a(dual):
+    """B 上 config_sync（B 类变更）→ 路由快照原子覆盖 → A 下次 route 见新值。
 
-    观察点用**新会话的路由**：touch 只刷新会话 HASH 里落位时存的 ttl，
+    快照是共享 Redis 单键（多副本同读），无失效传播环节;观察点用
+    **新会话的路由**：touch 只刷新会话 HASH 里落位时存的 ttl，
     不重新 resolve（见 orchestrator.touch），不能用它观察配置传播。
     """
     await dual.seed_template(session_ttl=60)
     scope = scope_of()
     status, _, body = await dual.post(0, "route", session_id="s1")
     assert status == 200, body
-    cache_key = f"session_manager:scope:{scope}:config"
-    assert await dual.redis.exists(cache_key) == 1      # A 已暖缓存
+    snapshot_key = "session_manager:routing:snapshot"
+    ver_before = await dual.get(snapshot_key)
 
     status, _, body = await dual.post(
         1, "config_sync",
-        rawdata={"kind": "template", "op": "update", "template_id": "tpl-1",
-                 "updates": {"session_ttl": 90}})
+        rawdata={"templates": [{"template_id": "tpl-1",
+                                "agent_image": "agentserver:1.0",
+                                "namespace": "default", "session_ttl": 90}],
+                 "scopes": [{"scope_id": scope, "index": 0,
+                             "template_id": "tpl-1", "routing_rules": []}]})
     assert status == 200, body
-    assert await dual.redis.exists(cache_key) == 0      # 缓存已失效
+    assert await dual.redis.exists(snapshot_key) == 1
+    assert await dual.get(snapshot_key) != ver_before   # 快照已覆盖
 
     from agent_runtime.util import now_ts
 

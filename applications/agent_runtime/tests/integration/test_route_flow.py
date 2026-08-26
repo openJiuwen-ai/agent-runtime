@@ -17,10 +17,10 @@ from agent_runtime.errors import (
     ScopeFullTimeout,
     ScopeQueueFull,
 )
-from agent_runtime.util import now_ts, scope_id_of
+from agent_runtime.util import now_ts
 from tests.conftest import requires_lua
 
-SCOPE = scope_id_of("grp", "bot")
+SCOPE = "scope-main"   # 与 conftest.seed_template 播种的 scope_id 一致
 
 
 # ---------------------------------------------------------------- 场景 B/C：route 全链路
@@ -327,7 +327,8 @@ async def test_route_idempotent_replay_via_handler_idempotency(runtime):
 
         def __init__(self, request_id):
             self.metadata = Metadata(request_id=request_id, session_id="sess_1",
-                                     bot_id="bot", extra={"group_id": "grp"})
+                                     user_id="user", bot_id="bot",
+                                     extra={"group_id": "grp"})
 
     ctx = _Ctx("req-idem-1")
     env = _Env("req-idem-1")

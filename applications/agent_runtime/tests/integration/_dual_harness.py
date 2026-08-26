@@ -29,9 +29,9 @@ from fakeredis.aioredis import FakeRedis
 
 from agent_runtime.config import AgentRuntimeConfig
 from agent_runtime.main import create_app
-from agent_runtime.util import scope_id_of
 
 REPLICA_IDS = ("replica-a", "replica-b")
+SEED_SCOPE = "scope-main"      # seed_template 播种的兜底 scope_id
 
 LIFESPAN_TIMEOUT = 10.0        # lifespan startup/shutdown 完成等待上限
 
@@ -157,12 +157,13 @@ class DualReplicas:
         return self.apps[i].asgi.state.sysctx
 
     def envelope(self, msg_type, *, session_id=None, group_id="grp", bot_id="bot",
-                 rawdata=None, request_id=None) -> dict:
+                 user_id="user", rawdata=None, request_id=None) -> dict:
         return {
             "type": msg_type,
             "metadata": {
                 "request_id": request_id or f"req-{uuid.uuid4().hex[:8]}",
                 "session_id": session_id,
+                "user_id": user_id,
                 "bot_id": bot_id,
                 "extra": {"group_id": group_id},
             },
@@ -194,9 +195,9 @@ class DualReplicas:
 
     # ------------------------------------------------------------ 播种 / 选主采样
 
-    async def seed_template(self, template_id="tpl-1", rule_id="rule-all",
+    async def seed_template(self, template_id="tpl-1", scope_id=SEED_SCOPE,
                             **overrides) -> None:
-        """经 B 的 HTTP config_sync 下发 template + 全量路由规则（串行）。"""
+        """经 B 的 HTTP config_sync 全量下发 template + 通配兜底 scope。"""
         template = {
             "agent_image": "agentserver:1.0",
             "namespace": "default",
@@ -209,13 +210,10 @@ class DualReplicas:
         }
         status, _, body = await self.post(
             1, "config_sync",
-            rawdata={"kind": "template", "op": "create",
-                     "template_id": template_id, "template": template})
-        assert status == 200, body
-        status, _, body = await self.post(
-            1, "config_sync",
-            rawdata={"kind": "routing_rule", "op": "create", "rule_id": rule_id,
-                     "group_id": "*", "bot_id": "*", "template_id": template_id})
+            rawdata={"templates": [{"template_id": template_id, **template}],
+                     "scopes": [{"scope_id": scope_id, "index": 0,
+                                 "template_id": template_id,
+                                 "routing_rules": []}]})
         assert status == 200, body
 
     async def sample_election(self, job: str, duration: float,
@@ -252,7 +250,7 @@ async def dual(tmp_path, monkeypatch):
     from openjiuwen_runtime.service.config import ServiceConfig
 
     from agent_runtime.session_manager.config_store import (
-        ROUTING_RULE_TABLE_DEF,
+        ROUTING_SCOPE_TABLE_DEF,
         SERVICE_CONFIG_TEMPLATE_TABLE_DEF,
     )
 
@@ -267,7 +265,7 @@ async def dual(tmp_path, monkeypatch):
     db = SQLiteHandler(str(tmp_path / "dual.db"))
     await db.connect()
     await db.init_table(SERVICE_CONFIG_TEMPLATE_TABLE_DEF)
-    await db.init_table(ROUTING_RULE_TABLE_DEF)
+    await db.init_table(ROUTING_SCOPE_TABLE_DEF)
     k8s = SlowFakeK8sPodClient(FakeK8sPodClient())
 
     dr = DualReplicas(settings, arc, redis, db, k8s)
@@ -280,5 +278,5 @@ async def dual(tmp_path, monkeypatch):
 
 
 def scope_of(group_id: str = "grp", bot_id: str = "bot") -> str:
-    """测试默认 (grp, bot) 的 scope_id。"""
-    return scope_id_of(group_id, bot_id)
+    """测试默认播种的 scope_id(通配兜底 scope,任意 group/bot 都命中它)。"""
+    return SEED_SCOPE

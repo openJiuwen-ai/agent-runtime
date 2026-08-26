@@ -7,7 +7,6 @@ stats/recent_errors 计数、sysctx 未就绪 503。模式仿 test_http_smoke.py
 
 from __future__ import annotations
 
-import hashlib
 import uuid
 
 from fastapi.testclient import TestClient
@@ -17,15 +16,17 @@ from agent_runtime.config import AgentRuntimeConfig
 from agent_runtime.main import create_app
 
 SECRET = "SUPERSECRET-KUBECONFIG"
+SCOPE_ID = "scope-debug"   # 播种的通配兜底 scope_id
 
 
 def _envelope(msg_type: str, *, session_id=None, group_id="grp", bot_id="bot",
-              rawdata=None):
+              user_id="user", rawdata=None):
     return {
         "type": msg_type,
         "metadata": {
             "request_id": f"req-{uuid.uuid4().hex[:8]}",
             "session_id": session_id,
+            "user_id": user_id,
             "bot_id": bot_id,
             "extra": {"group_id": group_id},
         },
@@ -55,23 +56,17 @@ TEMPLATE = {
 
 
 def _seed_and_route(client):
-    """config_sync 建 template + (*) 规则,再 route 一个会话,返回 (session_id, scope_id)。"""
+    """config_sync 全量下发 template + 通配兜底 scope,再 route 一个会话。"""
     client.post("/api/session/config_sync", json=_envelope(
         "config_sync", rawdata={
-            "kind": "template", "op": "create",
-            "template_id": "tpl-debug", **TEMPLATE,
-        }))
-    client.post("/api/session/config_sync", json=_envelope(
-        "config_sync", rawdata={
-            "kind": "routing_rule", "op": "create",
-            "rule_id": "rule-debug", "group_id": "*", "bot_id": "*",
-            "template_id": "tpl-debug",
+            "templates": [{"template_id": "tpl-debug", **TEMPLATE}],
+            "scopes": [{"scope_id": SCOPE_ID, "index": 0,
+                        "template_id": "tpl-debug", "routing_rules": []}],
         }))
     resp = client.post("/api/session/route", json=_envelope(
         "route", session_id="sess-debug", group_id="grp", bot_id="bot"))
     assert resp.status_code == 200, resp.text
-    scope_id = hashlib.md5(b"grp\x00bot").hexdigest()
-    return "sess-debug", scope_id
+    return "sess-debug", SCOPE_ID
 
 
 def test_debug_overview(tmp_path, monkeypatch):
@@ -156,9 +151,10 @@ def test_debug_config_redacts_kubeconfig(tmp_path, monkeypatch):
         tpl = next(t for t in resp.json()["templates"]
                    if t["template_id"] == "tpl-debug")
         assert tpl["kubeconfig"] == "***"
-        assert any(r["rule_id"] == "rule-debug"
-                   for r in resp.json()["routing_rules"])
-        assert resp.json()["redis"]["sm_resolve_cache_keys"] >= 1
+        assert any(s["scope_id"] == SCOPE_ID and s["routing_rules"] == []
+                   for s in resp.json()["routing_scopes"])
+        assert resp.json()["routing_snapshot"]["exists"] is True
+        assert resp.json()["routing_snapshot"]["scope_count"] >= 1
 
 
 def test_debug_stats_and_recent_errors(tmp_path, monkeypatch):

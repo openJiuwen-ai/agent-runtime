@@ -223,17 +223,23 @@ async def _session(request: Request, sysctx: Any) -> dict[str, Any]:
 
 @_debug_endpoint
 async def _scope(request: Request, sysctx: Any) -> dict[str, Any]:
-    """单 scope 池状态：RM 池/逐 Pod 详情 + SM 等待队列/缓存摘要。"""
+    """单 scope 池状态：RM 池/逐 Pod 详情 + SM 等待队列/路由定义。"""
     scope_id = (request.query_params.get("scope_id") or "").strip()
     if not scope_id:
         raise _DebugBadRequest("scope_id is required")
     limit = _clamp_limit(request, default=50, lo=1, hi=500)
     rm_state = sysctx.rm_sweeper.state
     sm_state = sysctx.sm_sweeper.state
+    config_store = sysctx.sm_config_store
 
+    snapshot = await config_store.routing_snapshot_view()
+    routing = next(
+        (s.to_payload() for s in snapshot.scopes if s.scope_id == scope_id), None
+    )
     cfg = await rm_state.load_scope_config(scope_id)
     has_any = cfg or await rm_state.pod_count(scope_id) > 0
-    if not has_any and not await sm_state.scope_session_count(scope_id):
+    if (not has_any and not await sm_state.scope_session_count(scope_id)
+            and routing is None):
         raise _DebugNotFound(f"scope not found: {scope_id}")
 
     pod_ids = await rm_state.pod_ids(scope_id)
@@ -264,7 +270,7 @@ async def _scope(request: Request, sysctx: Any) -> dict[str, Any]:
             "waiters": await sm_state.waiter_count(scope_id),
             "session_count": await sm_state.scope_session_count(scope_id),
             "candidate_pods": await sm_state.scope_pod_ids(scope_id),
-            "resolve_cache": redact(await sm_state.scope_config_raw(scope_id)),
+            "routing": routing,   # 快照里的定义（index/模板/规则）；不在快照为 None
         },
     }
 
@@ -295,25 +301,24 @@ async def _scopes(request: Request, sysctx: Any) -> dict[str, Any]:
 
 @_debug_endpoint
 async def _config(request: Request, sysctx: Any) -> dict[str, Any]:
-    """DB 配置（routing rules + templates，脱敏）+ Redis 缓存键计数。"""
+    """DB 配置（routing scopes + templates，脱敏）+ 路由快照观测。"""
     config_store = sysctx.sm_config_store
     sm_state = sysctx.sm_sweeper.state
     rm_state = sysctx.rm_sweeper.state
 
-    sm_cache_keys = 0
-    cursor = 0
-    pattern = f"{sm_state.prefix}scope:*:config"
-    while True:
-        cursor, keys = await sm_state.redis.scan(cursor, match=pattern, count=200)
-        sm_cache_keys += len(keys)
-        if int(cursor or 0) == 0:
-            break
+    snapshot_exists = bool(await sm_state.routing_snapshot_raw())
+    snapshot = await config_store.routing_snapshot_view()
 
     return {
-        "routing_rules": await config_store.list_rules(),
+        "routing_scopes": [s.to_payload() for s in await config_store.list_scopes()],
         "templates": redact(await config_store.list_templates()),
+        "routing_snapshot": {
+            "exists": snapshot_exists,
+            "ver": snapshot.ver,
+            "scope_count": len(snapshot.scopes),
+            "template_count": len(snapshot.templates),
+        },
         "redis": {
-            "sm_resolve_cache_keys": sm_cache_keys,
             "rm_scope_configs": len(await rm_state.known_scope_ids()),
             "rm_registered_pods": len(await rm_state.all_pod_ids()),
         },

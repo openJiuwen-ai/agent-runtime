@@ -16,7 +16,7 @@
      winner 直方图（轮换为 SRANDMEMBER 随机，只记录）
   S4 并发突发不超收（cc=2/pc=1：恰好 2 成功，503/504 分布，waiters 清空）
   S5 幂等跨副本重放（同 request_id 两打 LB → 响应一致）
-  S6 配置失效传播（config_sync 经 LB → scope 缓存 DEL → 新 route 见新值）
+  S6 配置传播（config_sync 经 LB → 路由快照覆盖 → 新 route 见新值）
   S7 failover：流量进行中 kubectl 删一个副本 Pod（优先当前 sm_sweep
      leader；instance_id 前缀 = Pod 名）→ 副本数恢复、新 instance_id 入选、
      选主不变量保持、错误率归零
@@ -47,10 +47,10 @@ from e2e_lib import (
     RESULTS,
     Client,
     check,
+    config_sync_payload,
     kubectl,
     pod_exists,
     redis_guard,
-    scope_id,
     skip,
     summary_and_exit,
     wait_until,
@@ -162,26 +162,30 @@ async def s1_seed(c: Client, r: aioredis.Redis) -> None:
             "mysql", f"-h{DB_DSN['host']}", f"-P{DB_DSN['port']}",
             f"-u{DB_DSN['user']}", f"-p{DB_DSN['password']}", "-e",
             f"USE {DB_DSN['name']}; SET FOREIGN_KEY_CHECKS=0; "
-            "TRUNCATE service_config_template; TRUNCATE routing_rule; "
+            "TRUNCATE service_config_template; TRUNCATE routing_scope; "
             "SET FOREIGN_KEY_CHECKS=1;",
             stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
     out = await kubectl("delete", "pod", "-n", NS, "-l",
                         "jiuwenclaw-component=agentserver", "--wait=false")
     print(f"-- 清理上一轮 Pod：{out.strip().splitlines()[-1][:60] if out.strip() else '无'}")
 
-    for tpl_id, tpl, group in (
-        ("tpl-mr", _template(), "mr-main"),
-        ("tpl-mr-f", _template(scope_concurrency=2, pod_concurrency=1), "mr-f"),
-    ):
-        code, _, body = await c.post("config_sync", group=group, rawdata={
-            "kind": "template", "op": "create",
-            "template_id": tpl_id, "template": tpl})
-        if not check(f"S1 模板 {tpl_id} 下发", code == 200, str(body)[:120]):
-            raise SystemExit(2)
-        code, _, body = await c.post("config_sync", group=group, rawdata={
-            "kind": "routing_rule", "op": "create", "rule_id": f"rule-{tpl_id}",
-            "group_id": group, "bot_id": BOT, "template_id": tpl_id})
-        check(f"S1 规则 rule-{tpl_id} 下发", code == 200, str(body)[:120])
+    payload = config_sync_payload(
+        templates=[
+            {"template_id": "tpl-mr", **_template()},
+            {"template_id": "tpl-mr-f",
+             **_template(scope_concurrency=2, pod_concurrency=1)},
+        ],
+        scopes=[
+            {"scope_id": "mr-main", "index": 0, "template_id": "tpl-mr",
+             "routing_rules": [{"expressions": [
+                 {"field": "group_id", "op": "in", "values": ["mr-main"]}]}]},
+            {"scope_id": "mr-f", "index": 1, "template_id": "tpl-mr-f",
+             "routing_rules": [{"expressions": [
+                 {"field": "group_id", "op": "in", "values": ["mr-f"]}]}]},
+        ])
+    code, _, body = await c.post("config_sync", group="mr-main", rawdata=payload)
+    if not check("S1 全量下发（2 模板 + 2 scope）", code == 200, str(body)[:120]):
+        raise SystemExit(2)
 
 
 async def s2_route_touch(c: Client, r: aioredis.Redis) -> str:
@@ -202,7 +206,7 @@ async def s2_route_touch(c: Client, r: aioredis.Redis) -> str:
     check("S2 touch 保活（经 LB，副本任意）",
           code == 200 and raw.get("touched") is True, str(raw))
 
-    scope = scope_id("mr-main", BOT)
+    scope = "mr-main"
     check("S2 scope 会话数为 1",
           await r.scard(f"session_manager:scope:{scope}:sessions") == 1)
     return pod1
@@ -243,7 +247,7 @@ async def s4_burst(c: Client, r: aioredis.Redis) -> None:
         code, _, body = await c.post("route", group="mr-f", bot=BOT, session_id=sid)
         if not check(f"S4 预填 {sid}", code == 200, str(body)[:120]):
             raise SystemExit(2)
-    scope = scope_id("mr-f", BOT)
+    scope = "mr-f"
 
     async def _attempt(i):
         code, _, body = await c.post("route", group="mr-f", bot=BOT,
@@ -279,7 +283,7 @@ async def s4_burst(c: Client, r: aioredis.Redis) -> None:
 
 async def s5_idempotent(c: Client, r: aioredis.Redis) -> None:
     print("\n== S5 幂等跨副本重放（同 request_id 两打 LB）==")
-    scope = scope_id("mr-main", BOT)
+    scope = "mr-main"
     before = await r.scard(f"session_manager:scope:{scope}:sessions")
     code, first, _ = await c.post("route", group="mr-main", bot=BOT,
                                   session_id="mr-idem", request_id="mr-req-idem")
@@ -295,16 +299,28 @@ async def s5_idempotent(c: Client, r: aioredis.Redis) -> None:
 
 
 async def s6_config_propagation(c: Client, r: aioredis.Redis) -> None:
-    print("\n== S6 配置失效传播（config_sync 经 LB → 缓存 DEL → 新 route 见新值）==")
-    scope = scope_id("mr-main", BOT)
-    cache_key = f"session_manager:scope:{scope}:config"
-    check("S6 前置：scope 缓存已暖", await r.exists(cache_key) == 1)
+    print("\n== S6 配置传播（config_sync 经 LB → 路由快照覆盖 → 新 route 见新值）==")
+    snapshot_key = "session_manager:routing:snapshot"
+    snap_before = await r.get(snapshot_key)
+    check("S6 前置：路由快照已存在", bool(snap_before))
 
     code, _, body = await c.post("config_sync", group="mr-main", rawdata={
-        "kind": "template", "op": "update", "template_id": "tpl-mr",
-        "updates": {"session_ttl": 120}})
+        "templates": [
+            {"template_id": "tpl-mr", **_template(), "session_ttl": 120},
+            {"template_id": "tpl-mr-f",
+             **_template(scope_concurrency=2, pod_concurrency=1)},
+        ],
+        "scopes": [
+            {"scope_id": "mr-main", "index": 0, "template_id": "tpl-mr",
+             "routing_rules": [{"expressions": [
+                 {"field": "group_id", "op": "in", "values": ["mr-main"]}]}]},
+            {"scope_id": "mr-f", "index": 1, "template_id": "tpl-mr-f",
+             "routing_rules": [{"expressions": [
+                 {"field": "group_id", "op": "in", "values": ["mr-f"]}]}]},
+        ]})
     check("S6 config_sync 更新成功", code == 200, str(body)[:120])
-    check("S6 scope 缓存已失效（跨副本）", await r.exists(cache_key) == 0)
+    check("S6 路由快照已覆盖（跨副本共享单键）",
+          await r.get(snapshot_key) not in (None, snap_before))
 
     code, _, body = await c.post("route", group="mr-main", bot=BOT,
                                  session_id="mr-s6")
@@ -415,7 +431,7 @@ async def main() -> None:
     IMAGE = args.image
     DB_DSN = {"host": args.db_host, "port": args.db_port, "user": args.db_user,
               "password": args.db_password, "name": args.db_name}
-    MAIN, FSCOPE = scope_id("mr-main", BOT), scope_id("mr-f", BOT)
+    MAIN, FSCOPE = "mr-main", "mr-f"    # scope_id 由 config_sync 下发(字面量)
 
     print(f"agent-runtime 多副本 e2e @ {time.strftime('%F %T')}")
     print(f"lb={BASE} redis={REDIS_URL} deploy_ns={DEPLOY_NS} agentserver_ns={NS}")

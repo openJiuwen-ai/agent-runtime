@@ -19,6 +19,8 @@ DEPLOY_FIELDS: tuple[str, ...] = (
     "container_port",
     "sse_port",
     "sse_path",
+    "health_path",          # readiness 探针路径(默认 /health;真 AgentServer 为 /api/v1/health)
+    "agent_env",            # Agent 容器注入的 env(如 AGENT_HTTP_ENABLED/HOST/PORT)
     "image_pull_policy",
     "readiness_initial_delay",
     "readiness_period",

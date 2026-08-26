@@ -1,6 +1,6 @@
 # session_manager(SM)规格
 
-> 会话编排:route/touch HTTP 端点、配置层(config_sync)、老化 sweeper。
+> 会话编排:route/touch HTTP 端点、配置层(config_sync 全量下发 + 路由匹配)、老化 sweeper。
 > **持唯一 App**(`/api/session`:8091),注册 4 个 handler。与 RM 互调只走进程内 Facade,**不直读 RM Redis key**。
 > Lua 全文:`lua_scripts.py` 与 `../design/session-manager-design.md` 双份,改时同步。
 
@@ -9,13 +9,14 @@
 | 文件 | 职责 |
 |---|---|
 | `handlers.py` | 4 个 HTTP handler(route/touch/config_sync/cleanup)+ 错误信封映射 |
-| `orchestrator.py` | route 主循环(resolve→Lua 仲裁→acquire→等待队列)+ touch |
+| `orchestrator.py` | route 主循环(匹配→Lua 仲裁→acquire→等待队列)+ touch |
 | `state.py` | SM Redis 键 schema 唯一出口 + Lua 调用封装(`SMKeys`/`SessionState`) |
 | `lua_scripts.py` | 7 个 Lua 全文 |
-| `config_store.py` | template/routing_rule DB 持久化 + resolve 缓存 + config_sync 编排 |
+| `routing.py` | 路由匹配纯函数:表达式/规则/scope 定义、wire 校验、快照(反)序列化、first-fit 匹配 |
+| `config_store.py` | template/routing_scope DB 持久化 + 路由快照 + config_sync 编排 |
 | `sweeper.py` | 到期 pass + 空 Pod pass(每 tick 选主) |
 | `facade.py` | `SessionManagerFacade`(RM→SM:notify_pod_dead / reconcile_pods) |
-| `models.py` | `Template` / `ScopeConfig` dataclass |
+| `models.py` | `Template` dataclass(字段/派生/pod_spec) |
 
 ## handlers.py —— 对外 4 端点
 
@@ -23,19 +24,21 @@
 |---|---|---|
 | POST /api/session/route | `handle_route` | 同步路由+占额度,返回 `{pod_sse_url, pod_id}`;**幂等键 = metadata.request_id**(框架 idempotency,窗口 60s,回放缓存结果) |
 | POST /api/session/touch | `handle_touch` | 保活/EOS,返回 `{touched}`;False=已过期/不存在(gateway 回退重新 route) |
-| POST /api/session/config_sync | `handle_config_sync` | 配置下发,委托 `ConfigStore.config_sync` |
+| POST /api/session/config_sync | `handle_config_sync` | 全量配置下发 `{templates, scopes}`,委托 `ConfigStore.config_sync` |
 | POST /api/session/cleanup | `handle_cleanup` | 运维批删 Pod,委托 `rm_facade.cleanup`(handler 在 SM,逻辑在 RM) |
 
-- 入参从 `Envelope.metadata`(session_id/group_id/bot_id/request_id)与 `rawdata` 取;`group_id` 在 `metadata.extra`。
+- 入参从 `Envelope.metadata`(session_id/user_id/group_id/bot_id/request_id)与 `rawdata` 取;`group_id` 在 `metadata.extra`,**user_id/group_id/bot_id/session_id 四项均必填非空**(orchestrator 校验,缺 → 400 VALIDATION)。
 - `AgentRuntimeError` 统一捕获 → `ResponseEnvelope(ok=False, error_code, error_message, retry_after)`。
 - handler 无模块级可变状态;服务对象从 `sysctx` 取(`main._bind_modules` 注入)。
 
 ## orchestrator.py —— route 主循环
 
-`SessionOrchestrator.route(request_id, session_id, group_id, bot_id)`:
+`SessionOrchestrator.route(request_id, session_id, group_id, bot_id, user_id)`:
 
 ```
-resolve(scope)(config_store:Redis 缓存→DB,规则优先级 精确>(g,*)>(*,b)>(*,*))
+四参非空校验(缺 → InvalidParams 400)
+→ resolve(user_id, group_id, bot_id)(config_store:读路由快照 first-fit 匹配)
+   返回 (scope_id, template);无匹配 → ConfigNotFound(503)
 → 循环 { LUA_ROUTE_PLACE 原子仲裁 → (action, pod_id):
      refresh/placed → 读 pod:info sse_url 返回(缺失=极端竞态被清,continue 重跑)
      scope_full     → _wait_for_capacity(场景 F)后重跑
@@ -58,16 +61,16 @@ finally: 若仍在等待队列 → remove_waiter(异常路径出队)
 |---|---|---|
 | `session:{sid}` | HASH | 亲和绑定:scope_id/pod_id/expiry/session_ttl |
 | `session_expiry` | ZSET | 到期时间戳(sweeper 到期 pass 扫它) |
+| `routing:snapshot` | STRING | **路由快照**:全部 scopes(规则/index)+ templates 的 JSON;resolve 唯一读源,config_sync 原子 SET 覆盖,缺失/损坏由首次 resolve 从 DB 重建 |
 | `scope:{sid}:sessions` | SET | 活跃 session;**SCARD = scope_concurrency 闸门** |
 | `scope:{sid}:pods` | ZSET | first-fit 候选(score=接入序;ZREM 即退出候选——软摘除/idle 通知都用它) |
 | `scope:{sid}:pod_seq` | STRING | 单调递增,pods 的 score 来源 |
-| `scope:{sid}:config` | HASH | resolve 缓存(策略字段 + `template_json`;config_sync 主动 DEL 失效) |
 | `scope:{sid}:waiters` | SET | 等待队列(LUA_WAITER_GATE 原子进出) |
 | `scope:{sid}:free` | PubSub | 额度释放信号(EVICT 发布/route 订阅) |
 | `pod:{scope}:{pod}:sessions` | SET | per-Pod 会话;**SCARD < pod_concurrency = per-Pod 容量闸门(SM 侧,RM 不强制)** |
 | `pod:{scope}:{pod}:info` | HASH | sse_url / deploy_ver |
 | `pod:{scope}:{pod}:idle_notified` | STR(NX EX 60) | 空 Pod 通知去重 |
-| `pods:registered` | SET | 全部 `"{scope}:{pod}"`(不变量:scope:pods ⊆ pods:registered) |
+| `pods:registered` | SET | 全部 `"{scope}:{pod}"`(不变量:scope:pods ⊆ pods:registered;**因此 scope_id 禁 `:`**——config_sync 入口正则校验) |
 | `pods:{pod}:scopes` | SET | Pod 被哪些 scope 引用(notify_pod_dead 反查) |
 | `lock:sweep` / `lock:config_sync` | STR(NX EX) | tick 级选主 / config_sync 串行化(TTL 60) |
 
@@ -75,7 +78,7 @@ finally: 若仍在等待队列 → remove_waiter(异常路径出队)
 
 `eval()` 统一出口带异常留痕(排障):Lua 返回空表属真异常 → WARNING(`route_place` 的 scope_full 兜底会掩盖);单次 >200ms → WARNING(`lua eval slow`,即 Redis 延迟探针);常规仅 DEBUG。
 
-**诊断只读方法**(/debug/* 用,无业务调用方):`session_hash(sid)`、`session_expiry_score(sid)`、`scope_session_count(sid)`(SCARD)、`scope_config_raw(sid)`(resolve 缓存原文)。
+**诊断只读方法**(/debug/* 用,无业务调用方):`session_hash(sid)`、`session_expiry_score(sid)`、`scope_session_count(sid)`(SCARD)、`routing_snapshot_raw()`(快照原文)。
 
 ## lua_scripts.py —— 7 个 Lua
 
@@ -91,27 +94,36 @@ finally: 若仍在等待队列 → remove_waiter(异常路径出队)
 
 约定:脚本不传 KEYS,`ARGV[1]`=键前缀,键在脚本内拼;返回扁平字符串数组(`SessionState.eval` 统一转 str)。
 
-## config_store.py —— 配置层
+## config_store.py —— 配置层(scope 重构版)
 
-**DB 表**(列名沿用 EE 兼容名,映射在 `_COLUMN_OF`):`service_config_template`(`min_idle_pods→min_idle_services`、`pod_concurrency→service_concurrency`、`pod_ttl→service_ttl`、`scope_concurrency→session_concurrency`)、`routing_rule`。表结构常量 `*_TABLE_DEF` 由 main 传给框架建表。
+**DB 表**(列名沿用 EE 兼容名,映射在 `_COLUMN_OF`):`service_config_template`(`min_idle_pods→min_idle_services`、`pod_concurrency→service_concurrency`、`pod_ttl→service_ttl`、`scope_concurrency→session_concurrency`)、`routing_scope`(`scope_id` unique / `match_index`(避 SQL 保留字 index) / `template_id` / `routing_rules` JSON)。表结构常量 `*_TABLE_DEF` 由 main 传给框架建表。旧 `routing_rule` 表已废弃(不再读写,老库残留无害)。
 
-**resolve(scope_id, group_id, bot_id)**:缓存(`scope:{sid}:config`)命中直接回;miss 读 DB(优先级 精确>(g,\*)>(\*,b)>(\*,\*),模板须 enabled)→ 回写缓存。缓存值 = ScopeConfig 字段 + `template_json`(deploy 子集,need_acquire 时零 DB)。无匹配 → `ConfigNotFound(503)`。
+**routing.py(纯函数)**:表达式求值语义——`in`/`not_in` 对字符串集合(空 values:in 恒假、not_in 恒真);规则内 AND(空 expressions 下发即拒);规则间 OR;**空 routing_rules = 通配兜底**;遍历按 `(index ASC, scope_id ASC)` **first-fit**;引用模板缺失/禁用的 scope 跳过落下一个。`SCOPE_ID_RE = ^[0-9A-Za-z._-]{1,128}$`(禁 `:`/`*`/空白——Redis 键与 `pods:registered` 切分依赖)。
 
-**config_sync(payload)**(场景 M):`{kind: template|routing_rule, op: create|update|delete|sync, ...}`
+**resolve(user_id, group_id, bot_id) → (scope_id, Template)**:读单键快照 `routing:snapshot`(1 GET;进程内按原文 memo 免重复解析)→ first-fit 匹配;快照缺失/损坏 → 从 DB 重建;无匹配 → `ConfigNotFound(503)`。
+
+**config_sync(payload)**(场景 M,全量快照式):`{templates: [...], scopes: [...]}`(旧 kind/op 协议 → 400)
 
 ```
+锁外校验(纯 CPU 400):kind/op 遗迹拒绝;templates/scopes 非 list;template 缺 template_id;
+  scope_id 字符集/index 非真 int(拒 bool)/引用不在本批模板集/规则空 expressions/
+  表达式 field|op 非法/values 非字符串数组/同批 scope_id 重复
+  缺通配 scope(无空规则项)→ 仅 WARNING 放行(响应 wildcard_present:false)
 lock:config_sync 串行化(忙→409 CONFIG_SYNC_BUSY,TTL 60)
-→ 写 DB(失败立即中止,不碰缓存、不推送——红线:DB 写失败不得刷新缓存)
-→ template 变更扩散 _propagate_template_change:
-   完成判定:受影响 scope 仍有「已日落待回收」中间态 Pod(在 pods:registered 不在候选集)→ 409 拒绝
-   逐字段 diff 判类(spec_fields):
-   A 类(deploy_ver 变)→ 软摘除(ZREM 老版本 Pod 出候选;存量会话不受影响)
-                       + 写新缓存 + 推 RM(新 deploy_ver/pod_spec → 新流量落新 Pod,自然滚动)
-   B 类(策略字段变)  → DEL 缓存 + 推池参数(不带 pod_spec),立即生效
-routing_rule 任何变更 → 无法定位受影响 scope(缓存无 group/bot)→ SCAN 全量 DEL 缓存(resolve 便宜)
+→ 读 DB 旧态(templates + scopes)
+→ diff:模板 changed_ids(_diff_class 沿用)/ 引用切换 ref_switched;
+  sunset_scopes = 有效模板 deploy_ver 前后不同(模板 A 类 或 scope 换引用且版本不同)的存活 scope
+→ 日落中间态检查(受影响 scope 有「在 pods:registered 不在候选集」的 Pod → 409;★先于写库,拒绝时零副作用)
+→ 写 DB(upsert incoming + delete 消失项;红线:任一失败立即中止,不 SET 快照、不推送)
+→ rebuild_snapshot()(DB 读回 → 原子 SET;B 类立即生效由此完成)
+→ eager 预热:每个存活 scope 推 push(sid, pool_config, deploy_subset)——必须带 pod_spec
+  (RM 才落 pod_spec_json/deploy_ver;autoscale 无请求预热 min_idle 的依赖)
+→ A 类日落:sunset_scopes 逐个 _soft_remove_stale_pods(ZREM 老版本 Pod 出候选)
+→ 删除处理:消失 scope 推 push(sid, {**旧模板池参数, min_idle_pods:0}, None)——停预热自然排空
+→ 响应 {ok, templates_synced/deleted, scopes_synced/deleted, affected_scopes, wildcard_present}
 ```
 
-`Template.deploy_ver()` / RM `_deploy_ver()` 同一算法(`util.fingerprint` + `DEPLOY_VER_FIELDS`)——A 类过滤两端一致的前提。
+幂等重放收敛(changed 空 → affected=[]);启动期 `main.start()` 调 `ensure_snapshot()` 无条件重建(消冷启动窗口);`Template.deploy_ver()` / RM `_deploy_ver()` 同一算法(`util.fingerprint` + `DEPLOY_VER_FIELDS`)——A 类过滤两端一致的前提。
 
 ## sweeper.py —— 老化扫描
 
@@ -127,11 +139,13 @@ routing_rule 任何变更 → 无法定位受影响 scope(缓存无 group/bot)�
 ## models.py
 
 - `Template`:template 行业务视图。派生:`max_pods = ⌈scope_concurrency/pod_concurrency⌉`(**派生值,不存储,不配置**);`deploy_subset()`=acquire 下发 RM 的 pod_spec;`deploy_ver()`=A 类指纹;`pool_config()`={min_idle_pods, max_pods, pod_ttl, pod_concurrency}(pod_concurrency 仅供 RM follower 等待室推导上限 pc-1)。
-- `ScopeConfig`:resolve 产物(scope:config 缓存的 HASH 字段一一对应)。
+- scope 定义(`RoutingScopeDef`/规则/表达式)在 `routing.py`,不再有 ScopeConfig(快照取代 per-scope 缓存)。
 
 ## 高频踩点
 
 - 改键名/Lua:HLD §5 键表、`state.py`、SM 详细设计三处同步。
 - 等待队列入队只准走 `LUA_WAITER_GATE`;「先查后加」已被真环境验收证伪。
 - config_sync 全局串行锁——e2e 脚本播种配置必须串行,并发即 409。
+- scope_id 禁 `:`(Redis 键与 `pods:registered` 的 `{scope}:{pod}` 切分依赖)——入口 `SCOPE_ID_RE` 强校验,新增拼键代码时勿破坏该前提。
+- config_sync 的 RM 推送**必须带 pod_spec**(eager 预热依赖 pod_spec_json;不带则 autoscale `skip_no_spec`,无请求 scope 永远不预热)。
 - 经多副本 LB 跑冒烟须设 `AGENT_RUNTIME_SCOPE_FULL_TIMEOUT`(显著小于 session_ttl),排查实录见 `e2e-test-cases.md` §8.1。

@@ -190,13 +190,14 @@ class ResourceSweeper:
         if not pod_ip:
             self._warn_probe_gap(pod_id, "pod_ip", info.get("scope_id", ""))
             return
-        # sse_port 不在 pod:info——从 scope:config 的 pod_spec_json 取
+        # sse_port/health_path 不在 pod:info——从 scope:config 的 pod_spec_json 取
         sse_port = await self._scope_sse_port(info.get("scope_id", ""))
         if not sse_port:
             self._warn_probe_gap(pod_id, "sse_port", info.get("scope_id", ""))
             return
+        health_path = await self._scope_health_path(info.get("scope_id", ""))
         self._probe_gap_warned.discard(pod_id)
-        if await self.k8s.probe_health(pod_ip, sse_port):
+        if await self.k8s.probe_health(pod_ip, sse_port, health_path):
             await self.state.reset_health_fail(pod_id)
             return
         fails = await self.state.bump_health_fail(pod_id)
@@ -228,6 +229,17 @@ class ResourceSweeper:
         except ValueError:
             return None
         return to_int(pod_spec.get("sse_port")) or None
+
+    async def _scope_health_path(self, scope_id: str) -> str:
+        """健康探测路径(与 readiness 同源,模板 health_path;缺省 /health)。"""
+        if not scope_id:
+            return "/health"
+        cfg = await self.state.load_scope_config(scope_id)
+        try:
+            pod_spec = json.loads(cfg.get("pod_spec_json") or "{}")
+        except ValueError:
+            return "/health"
+        return str(pod_spec.get("health_path") or "/health")
 
     # -------------------------------------------------------------- reconcile（L）
 

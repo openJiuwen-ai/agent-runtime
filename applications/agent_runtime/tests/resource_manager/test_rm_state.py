@@ -9,10 +9,9 @@ from __future__ import annotations
 
 import pytest
 
-from agent_runtime.util import scope_id_of
 from tests.conftest import requires_lua
 
-SCOPE = scope_id_of("grp", "bot")
+SCOPE = "grp-bot"   # scope_id 由 config_sync 下发,测试用字面量
 NOW = 1_000_000
 
 
@@ -118,6 +117,8 @@ async def test_register_pod_idle_flag(scope_pool):
 
 @requires_lua
 async def test_release_transitions_to_idle(scope_pool):
+    """在用 Pod（已被 acquire 弹出 idle 池）转 idle：入池 + 起新计时。"""
+    await scope_pool.redis.srem(scope_pool.k.scope_idle(SCOPE), "pod_w")
     ok = await scope_pool.release("pod_w", SCOPE, now=NOW + 30)
     assert ok is True
     assert await scope_pool.idle_since("pod_w") == NOW + 30
@@ -128,6 +129,35 @@ async def test_release_idempotent(scope_pool):
     await scope_pool.release("pod_w", SCOPE, now=NOW + 30)
     await scope_pool.release("pod_w", SCOPE, now=NOW + 40)  # 重复/延迟抵达无副作用
     assert await scope_pool.redis.scard(scope_pool.k.scope_idle(SCOPE)) == 1
+
+
+@requires_lua
+async def test_release_replay_does_not_refresh_idle_since(scope_pool):
+    """重复 release（reconcile stale 每 30s 重放 / idle_consider 去重重发）不得刷新
+    idle_since——否则 reclaim 的 aged≥pod_ttl 永不达成，空闲 Pod 永不回收
+    （真环境 2026-08-26 实测发现的存量缺陷：暖 Pod 被无限刷新计时）。
+    fixture 的 pod_w 注册即入 idle（idle_since=NOW），后续 release 全是重放。"""
+    for later in (NOW + 30, NOW + 60, NOW + 90):   # 周期重放
+        await scope_pool.release("pod_w", SCOPE, now=later)
+    assert await scope_pool.idle_since("pod_w") == NOW  # 计时保持首次转入时刻
+    # 被 acquire 弹出（SREM 出 idle 池）后再转 idle = 新空闲期，重新起计时
+    await scope_pool.redis.srem(scope_pool.k.scope_idle(SCOPE), "pod_w")
+    await scope_pool.release("pod_w", SCOPE, now=NOW + 120)
+    assert await scope_pool.idle_since("pod_w") == NOW + 120
+
+
+@requires_lua
+async def test_release_on_purged_pod_is_noop(scope_pool):
+    """已 PURGE 的 Pod（info 已清）不得被重放 release 复活成 idle 幽灵成员
+    （reconcile stale 的 view 快照与 PURGE 的 TOCTOU,2026-08-26 真环境实测）。"""
+    ok = await scope_pool.release("pod_w", SCOPE, now=NOW + 30)
+    assert ok is True
+    await scope_pool.purge("pod_w")                        # 模拟 reclaim/watch 先行回收
+    ok = await scope_pool.release("pod_w", SCOPE, now=NOW + 60)  # 迟到的重放
+    assert ok is False
+    assert not await scope_pool.redis.sismember(           # 未复活成幽灵成员
+        scope_pool.k.scope_idle(SCOPE), "pod_w")
+    assert await scope_pool.idle_since("pod_w") == 0       # 计时键未重建
 
 
 # ---------------------------------------------------------------- PURGE（场景 G/J/K 清理）

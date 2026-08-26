@@ -19,12 +19,13 @@ from agent_runtime.main import create_app
 
 
 def _envelope(msg_type: str, *, session_id=None, group_id="grp", bot_id="bot",
-              rawdata=None):
+              user_id="user", rawdata=None):
     return {
         "type": msg_type,
         "metadata": {
             "request_id": f"req-{uuid.uuid4().hex[:8]}",
             "session_id": session_id,
+            "user_id": user_id,
             "bot_id": bot_id,
             "extra": {"group_id": group_id},
         },
@@ -50,25 +51,23 @@ TEMPLATE = {
     "min_idle_pods": 0,
 }
 
+# 全量下发：模板 + 通配兜底 scope（空 routing_rules）
+FULL_SYNC = {
+    "templates": [{"template_id": "tpl-smoke", **TEMPLATE}],
+    "scopes": [{"scope_id": "scope-smoke", "index": 0,
+                "template_id": "tpl-smoke", "routing_rules": []}],
+}
+
 
 def test_http_all_four_endpoints(tmp_path, monkeypatch):
     client = _make_client(tmp_path, monkeypatch)
     with client:
-        # 1. config_sync：建 template + 全量路由规则
+        # 1. config_sync：全量下发 template + 通配兜底 scope
         created = client.post("/api/session/config_sync", json=_envelope(
-            "config_sync", rawdata={
-                "kind": "template", "op": "create",
-                "template_id": "tpl-smoke", "template": TEMPLATE,
-            }))
+            "config_sync", rawdata=FULL_SYNC))
         assert created.status_code == 200, created.text
         assert created.json()["rawdata"]["ok"] is True
-        ruled = client.post("/api/session/config_sync", json=_envelope(
-            "config_sync", rawdata={
-                "kind": "routing_rule", "op": "create",
-                "rule_id": "rule-all", "group_id": "*", "bot_id": "*",
-                "template_id": "tpl-smoke",
-            }))
-        assert ruled.status_code == 200
+        assert created.json()["rawdata"]["scopes_synced"] == 1
 
         # 2. route：占额度返回 pod_sse_url / pod_id
         routed = client.post("/api/session/route", json=_envelope(
@@ -98,6 +97,12 @@ def test_http_all_four_endpoints(tmp_path, monkeypatch):
         assert bad.status_code == 400
         assert bad.json()["error_code"] == "VALIDATION"
 
+        # 5b. 缺 user_id → 400 VALIDATION(四参必填)
+        bad_user = client.post("/api/session/route", json=_envelope(
+            "route", session_id="sess-x", user_id=None))
+        assert bad_user.status_code == 400
+        assert bad_user.json()["error_code"] == "VALIDATION"
+
         # 7. cleanup：批删 FakeK8s 里的 AgentServer Pod
         cleaned = client.post("/api/session/cleanup", json=_envelope(
             "cleanup", rawdata={"namespace": "default"}))
@@ -107,7 +112,7 @@ def test_http_all_four_endpoints(tmp_path, monkeypatch):
 
 def test_http_error_contract_corners(tmp_path, monkeypatch):
     """边界错误契约：touch 空 session → 400；cleanup 空目标 → cleaned=0；
-    config_sync 未知 kind → 400（不触发缓存失效副作用）。"""
+    旧 kind/op 协议载荷 → 400（明确拒绝，不触发任何副作用）。"""
     client = _make_client(tmp_path, monkeypatch)
     with client:
         bad_touch = client.post("/api/session/touch", json=_envelope(
@@ -120,25 +125,19 @@ def test_http_error_contract_corners(tmp_path, monkeypatch):
         assert empty.status_code == 200
         assert empty.json()["rawdata"]["cleaned"] == 0
 
-        bad_kind = client.post("/api/session/config_sync", json=_envelope(
+        legacy = client.post("/api/session/config_sync", json=_envelope(
             "config_sync", rawdata={"kind": "nope", "op": "create"}))
-        assert bad_kind.status_code == 400
-        assert bad_kind.json()["error_code"] == "VALIDATION"
+        assert legacy.status_code == 400
+        assert legacy.json()["error_code"] == "VALIDATION"
 
 
 def test_http_config_sync_busy_returns_409(tmp_path, monkeypatch):
     """串行化：锁被占 → 409 CONFIG_SYNC_BUSY（可重试）。"""
     client = _make_client(tmp_path, monkeypatch)
     with client:
-        # 先建一个模板使后续 update 有目标；再手工占锁
+        # 先建配置；再手工占锁后重发合法全量载荷 → 409
         client.post("/api/session/config_sync", json=_envelope(
-            "config_sync", rawdata={
-                "kind": "template", "op": "create",
-                "template_id": "tpl-1", "template": TEMPLATE,
-            }))
-        # 抢占串行化锁：借 route 链路外的原始 redis 不方便，直接再发一次会被
-        # 正常处理——改为在持锁场景下断言：通过两个并发请求难以稳定构造，
-        # 这里用 app 内 sysctx 直接 SET 锁键
+            "config_sync", rawdata=FULL_SYNC))
         sysctx = client.app.state.sysctx
         import asyncio
 
@@ -148,22 +147,21 @@ def test_http_config_sync_busy_returns_409(tmp_path, monkeypatch):
         )
         busy = client.post("/api/session/config_sync", json=_envelope(
             "config_sync", rawdata={
-                "kind": "template", "op": "update",
-                "template_id": "tpl-1", "updates": {"session_ttl": 90},
+                "templates": [{"template_id": "tpl-smoke", **TEMPLATE,
+                               "session_ttl": 90}],
+                "scopes": FULL_SYNC["scopes"],
             }))
         assert busy.status_code == 409
         assert busy.json()["error_code"] == "CONFIG_SYNC_BUSY"
 
 
-def test_http_route_without_any_rule_is_config_not_found(tmp_path, monkeypatch):
-    """无任何路由规则 → 503 CONFIG_NOT_FOUND（不可重试，无 retry_after）。"""
+def test_http_route_without_any_scope_is_config_not_found(tmp_path, monkeypatch):
+    """只下发模板、不下发任何 scope → 503 CONFIG_NOT_FOUND（不可重试）。"""
     client = _make_client(tmp_path, monkeypatch)
     with client:
         client.post("/api/session/config_sync", json=_envelope(
-            "config_sync", rawdata={
-                "kind": "template", "op": "create",
-                "template_id": "tpl-1", "template": TEMPLATE,
-            }))
+            "config_sync", rawdata={"templates": [
+                {"template_id": "tpl-1", **TEMPLATE}], "scopes": []}))
         no_cfg = client.post("/api/session/route", json=_envelope(
             "route", session_id="sess-x"))
         assert no_cfg.status_code == 503
@@ -179,15 +177,7 @@ def test_background_jobs_run(tmp_path, monkeypatch):
     application = create_app(settings, arc)
     with TestClient(application.asgi) as client:
         client.post("/api/session/config_sync", json=_envelope(
-            "config_sync", rawdata={
-                "kind": "template", "op": "create",
-                "template_id": "tpl-1", "template": TEMPLATE,
-            }))
-        client.post("/api/session/config_sync", json=_envelope(
-            "config_sync", rawdata={
-                "kind": "routing_rule", "op": "create", "rule_id": "r",
-                "group_id": "*", "bot_id": "*", "template_id": "tpl-1",
-            }))
+            "config_sync", rawdata=FULL_SYNC))
         client.post("/api/session/route", json=_envelope("route", session_id="s1"))
         time.sleep(2.2)     # 至少一个 sweep tick（RedisAlignedClock + 选主）
         # 会话仍活跃（touch 成功 = sweeper 没把它老化掉）

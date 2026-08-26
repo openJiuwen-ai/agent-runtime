@@ -80,6 +80,7 @@ def _envelope(msg_type, request_id, session_id, group_id):
         "metadata": {
             "request_id": request_id,
             "session_id": session_id,
+            "user_id": f"loaduser-{request_id}",
             "bot_id": "loadbot",
             "extra": {"group_id": group_id},
         },
@@ -154,64 +155,49 @@ def _print_report(title: str, snap: dict, window_sec: float) -> None:
 
 
 async def _seed(client: httpx.AsyncClient, base: str, run: str, args) -> list[dict]:
-    """播种本次 run 的模板 + 规则（config_sync 串行——并发会 409）。"""
-    rules = []
-    for gi in range(args.groups):
-        group = f"grp-{run}-{gi}"
-        if args.scenario == "queued":
-            tpl_id, tpl = f"tpl-{run}-q", _template(
-                "influxdb:1.8", args.scope_concurrency, args.pod_concurrency,
-                args.namespace)
-        else:
-            tpl_id, tpl = f"tpl-{run}-a", _template(
-                "influxdb:1.8", 50, 10, args.namespace)
-        if gi == 0:  # 每 run 只建一份模板；规则逐 group 一条
-            r = await client.post(f"{base}/config_sync", json={
-                "type": "config_sync",
-                "metadata": {"request_id": f"seed-{run}-tpl", "session_id": None,
-                             "bot_id": "loadbot", "extra": {"group_id": group}},
-                "rawdata": {"kind": "template", "op": "create",
-                            "template_id": tpl_id, "template": tpl},
-            }, timeout=args.timeout)
-            if r.status_code != 200:
-                print(f"[seed] template create failed: {r.status_code} {r.text[:200]}")
-                sys.exit(2)
-        rule = {"kind": "routing_rule", "op": "create",
-                "rule_id": f"rule-{run}-{gi}", "group_id": group,
-                "bot_id": "loadbot", "template_id": tpl_id}
-        r = await client.post(f"{base}/config_sync", json={
-            "type": "config_sync",
-            "metadata": {"request_id": f"seed-{run}-rule-{gi}", "session_id": None,
-                         "bot_id": "loadbot", "extra": {"group_id": group}},
-            "rawdata": rule,
-        }, timeout=args.timeout)
-        if r.status_code != 200:
-            print(f"[seed] rule create failed: {r.status_code} {r.text[:200]}")
-            sys.exit(2)
-        rules.append(rule)
-    return rules
+    """全量下发本次 run 的模板 + scope（快照式替换,一次请求）。"""
+    if args.scenario == "queued":
+        tpl_id, tpl = f"tpl-{run}-q", _template(
+            "influxdb:1.8", args.scope_concurrency, args.pod_concurrency,
+            args.namespace)
+    else:
+        tpl_id, tpl = f"tpl-{run}-a", _template(
+            "influxdb:1.8", 50, 10, args.namespace)
+    scopes = [
+        {"scope_id": f"scope-{run}-{gi}", "index": gi, "template_id": tpl_id,
+         "routing_rules": [{"expressions": [
+             {"field": "group_id", "op": "in",
+              "values": [f"grp-{run}-{gi}"]}]}]}
+        for gi in range(args.groups)
+    ]
+    r = await client.post(f"{base}/config_sync", json={
+        "type": "config_sync",
+        "metadata": {"request_id": f"seed-{run}", "session_id": None,
+                     "bot_id": "loadbot",
+                     "extra": {"group_id": f"grp-{run}-0"}},
+        "rawdata": {"templates": [{"template_id": tpl_id, **tpl}],
+                    "scopes": scopes},
+    }, timeout=args.timeout)
+    if r.status_code != 200:
+        print(f"[seed] config_sync failed: {r.status_code} {r.text[:200]}")
+        sys.exit(2)
+    return scopes
 
 
 async def _cleanup_config(client: httpx.AsyncClient, base: str, run: str,
-                          rules: list[dict], tpl_ids: list[str]) -> None:
-    for rule in rules:
-        await client.post(f"{base}/config_sync", json={
-            "type": "config_sync",
-            "metadata": {"request_id": f"clean-{run}-{rule['rule_id']}",
-                         "session_id": None, "bot_id": "loadbot",
-                         "extra": {"group_id": rule["group_id"]}},
-            "rawdata": {"kind": "routing_rule", "op": "delete",
-                        "rule_id": rule["rule_id"]},
-        })
-    for tpl_id in tpl_ids:
-        await client.post(f"{base}/config_sync", json={
-            "type": "config_sync",
-            "metadata": {"request_id": f"clean-{run}-{tpl_id}", "session_id": None,
-                         "bot_id": "loadbot", "extra": {"group_id": "x"}},
-            "rawdata": {"kind": "template", "op": "delete",
-                        "template_id": tpl_id},
-        })
-    print(f"[cleanup] 已删除本次 run 的 {len(rules)} 条规则 / {len(tpl_ids)} 个模板；"
+                          scopes: list[dict], tpl_ids: list[str]) -> None:
+    """清掉本次 run 播种的配置。
+
+    播种是快照式全量替换——播种时已清掉历史配置,此刻服务里的配置
+    只属于本 run,因此清空全量(templates/scopes 皆空)等价于只删本 run。
+    """
+    await client.post(f"{base}/config_sync", json={
+        "type": "config_sync",
+        "metadata": {"request_id": f"clean-{run}", "session_id": None,
+                     "bot_id": "loadbot", "extra": {"group_id": "x"}},
+        "rawdata": {"templates": [], "scopes": []},
+    })
+    print(f"[cleanup] 已清空本次 run 的 {len(scopes)} 个 scope / {len(tpl_ids)} 个模板；"
           f"会话与 AgentServer Pod 留待 TTL 老化（不动 cleanup 端点）")
 
 
@@ -285,7 +271,7 @@ async def main() -> int:
           "服务端每排队请求持一条 Redis pubsub 连接，注意 maxclients")
 
     stats = Stats()
-    rules: list[dict] = []
+    scopes: list[dict] = []
     tpl_ids: list[str] = []
     async with httpx.AsyncClient() as client:
         # 上线检查
@@ -295,9 +281,9 @@ async def main() -> int:
         print(f"[load] target online: {probe.json()}")
 
         if not args.no_seed:
-            rules = await _seed(client, base, run, args)
-            tpl_ids = sorted({r["template_id"] for r in rules})
-            print(f"[seed] {len(rules)} rules → templates {tpl_ids}")
+            scopes = await _seed(client, base, run, args)
+            tpl_ids = sorted({s["template_id"] for s in scopes})
+            print(f"[seed] {len(scopes)} scopes → templates {tpl_ids}")
 
         bucket = _TokenBucket(args.rps) if args.rps > 0 else None
         t_start = time.monotonic()
@@ -327,8 +313,8 @@ async def main() -> int:
         await asyncio.gather(*workers, return_exceptions=True)
         elapsed = max(time.monotonic() - warmup_until, 1e-6)
 
-        if args.cleanup == "config" and rules:
-            await _cleanup_config(client, base, run, rules, tpl_ids)
+        if args.cleanup == "config" and scopes:
+            await _cleanup_config(client, base, run, scopes, tpl_ids)
 
     snap = stats.snapshot()
     _print_report("final", snap, elapsed)

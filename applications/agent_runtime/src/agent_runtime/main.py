@@ -35,7 +35,7 @@ from .resource_manager.orchestrator import ResourceOrchestrator
 from .resource_manager.state import ResourceState
 from .resource_manager.sweeper import ResourceSweeper
 from .session_manager.config_store import (
-    ROUTING_RULE_TABLE_DEF,
+    ROUTING_SCOPE_TABLE_DEF,
     SERVICE_CONFIG_TEMPLATE_TABLE_DEF,
     ConfigStore,
 )
@@ -120,7 +120,7 @@ class OrchestratorSystemContext(SystemContext):
             db=db,
             settings=settings,
             key_prefix=SM_KEY_PREFIX,
-            table_definitions=[SERVICE_CONFIG_TEMPLATE_TABLE_DEF, ROUTING_RULE_TABLE_DEF],
+            table_definitions=[SERVICE_CONFIG_TEMPLATE_TABLE_DEF, ROUTING_SCOPE_TABLE_DEF],
             instance_id=instance_id,
             _owns_db=owns_resources,
             _owns_redis=owns_resources,
@@ -208,6 +208,12 @@ class OrchestratorSystemContext(SystemContext):
     async def start(self) -> None:
         await super().start()
         await self.rm_sysctx.start()
+        # 启动即重建路由快照（消除首次 route 的冷启动窗口；失败降级到首次 route 重建）
+        try:
+            await self.sm_config_store.ensure_snapshot()
+        except Exception:  # noqa: BLE001
+            self.logger.exception("routing snapshot rebuild failed at startup "
+                                  "(defer to first route)")
         try:
             await self.k8s.start()
         except Exception:  # noqa: BLE001 - k8s 不可用只影响扩缩容，不阻断启动

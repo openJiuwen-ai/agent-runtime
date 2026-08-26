@@ -11,8 +11,8 @@
   reclaim 只回收 excess（保护最早 idle 的 min_idle 个）、autoscale 封顶
   max_pods、pod_spec 缺失/损坏跳过、watch 无 pod_ip / 无 sse_port 不误杀；
 - 判死枚举 normalize_phase 优先级矩阵；
-- config 层：路由规则优先级（精确 > (g,*) > (*,b) > (*,*)）、禁用模板落空回退、
-  模板删除失效 scope 缓存、规则 update 不存在报 400。
+- config 层：index 优先级 first-fit 匹配矩阵、禁用模板落空回退、模板移除后
+  scope 不再命中。
 """
 
 from __future__ import annotations
@@ -25,10 +25,10 @@ from agent_runtime.errors import ConfigNotFound, InvalidParams, NoPodAvailable
 from agent_runtime.resource_manager.k8s import normalize_phase
 from agent_runtime.resource_manager.models import PodInfo
 from agent_runtime.resource_manager.orchestrator import _deploy_ver
-from agent_runtime.util import now_ts, scope_id_of
+from agent_runtime.util import now_ts
 from tests.conftest import requires_lua
 
-SCOPE = scope_id_of("grp", "bot")
+SCOPE = "scope-main"   # 与 conftest.seed_template 播种的 scope_id 一致
 
 
 # ---------------------------------------------------------------- SM 编排分支
@@ -36,17 +36,24 @@ SCOPE = scope_id_of("grp", "bot")
 
 @requires_lua
 async def test_route_and_touch_reject_missing_params(runtime):
-    """参数校验分支：session/group/bot 任一为空 → InvalidParams(400)。"""
+    """参数校验分支：session/group/bot/user 任一为空 → InvalidParams(400)。"""
     await runtime.seed_template()
     with pytest.raises(InvalidParams):
         await runtime.orchestrator.route(
-            request_id="r1", session_id="", group_id="grp", bot_id="bot")
+            request_id="r1", session_id="", group_id="grp", bot_id="bot",
+            user_id="u")
     with pytest.raises(InvalidParams):
         await runtime.orchestrator.route(
-            request_id="r2", session_id="s", group_id="", bot_id="bot")
+            request_id="r2", session_id="s", group_id="", bot_id="bot",
+            user_id="u")
     with pytest.raises(InvalidParams):
         await runtime.orchestrator.route(
-            request_id="r3", session_id="s", group_id="grp", bot_id="")
+            request_id="r3", session_id="s", group_id="grp", bot_id="",
+            user_id="u")
+    with pytest.raises(InvalidParams):
+        await runtime.orchestrator.route(
+            request_id="r4", session_id="s", group_id="grp", bot_id="bot",
+            user_id="")
     with pytest.raises(InvalidParams):
         await runtime.orchestrator.touch("")
 
@@ -67,11 +74,20 @@ async def test_route_after_pod_death_cleanup_deploys_new(runtime):
 async def test_session_moving_scope_recycles_active_binding(runtime):
     """同 session_id 路由到新 scope（活跃未过期）：旧 scope 绑定被就地回收
     （LUA_ROUTE_PLACE 分支 3，scope 变化路径），新 scope 正常部署。"""
-    await runtime.seed_template()                      # rule-all(*,*) → tpl-1
-    await runtime.config_store.config_sync(
-        {"kind": "routing_rule", "op": "create", "rule_id": "r-ga",
-         "group_id": "ga", "bot_id": "*", "template_id": "tpl-1"})
-    scope2 = scope_id_of("ga", "bot")
+    await runtime.seed_template()                      # 通配兜底 scope → tpl-1
+    # 追加一个按 group 命中的 scope(index 0 优先于兜底)
+    await runtime.config_store.config_sync({
+        "templates": [{"template_id": "tpl-1", "agent_image": "agentserver:1.0",
+                       "namespace": "default"}],
+        "scopes": [
+            {"scope_id": "scope-ga", "index": 0, "template_id": "tpl-1",
+             "routing_rules": [{"expressions": [
+                 {"field": "group_id", "op": "in", "values": ["ga"]}]}]},
+            {"scope_id": SCOPE, "index": 100, "template_id": "tpl-1",
+             "routing_rules": []},
+        ],
+    })
+    scope2 = "scope-ga"
 
     first = await runtime.route("sess_1", group_id="grp", request_id="req-move-1")
     second = await runtime.route("sess_1", group_id="ga",
@@ -156,7 +172,7 @@ async def test_touch_falls_back_to_default_ttl(runtime):
 async def test_acquire_idempotent_replay_does_not_redeploy(runtime):
     """同 request_id 重试 acquire：回放缓存结果，零重复部署。"""
     await runtime.seed_template()
-    template = await runtime.config_store.resolve(SCOPE, "grp", "bot")
+    _, template = await runtime.config_store.resolve("user", "grp", "bot")
     kwargs = dict(scope_id=SCOPE, pod_spec=template.deploy_subset(),
                   pool_config=template.pool_config(), request_id="acq-1")
     first = await runtime.rm_facade.acquire(**kwargs)
@@ -170,7 +186,7 @@ async def test_acquire_waits_out_deploy_lock_and_reuses(runtime):
     """他副本持 per-scope deploy 锁：本侧占位 → 抢锁失败短暂等待 →
    锁释放 + 暖 Pod 就绪 → 复用其成果（零部署、占位清干净）。"""
     await runtime.seed_template()
-    template = await runtime.config_store.resolve(SCOPE, "grp", "bot")
+    _, template = await runtime.config_store.resolve("user", "grp", "bot")
     lock_key = runtime.rm_state.k.lock_deploy(SCOPE)
     assert await runtime.rm_state.redis.set(
         lock_key, "other-replica", nx=True, ex=30)
@@ -282,68 +298,83 @@ def test_normalize_phase_priority_matrix():
 
 
 @requires_lua
-async def test_resolve_rule_priority_wildcards(runtime):
-    """规则优先级：精确 > (group,*) > (*,bot) > (*,*)。"""
-    await runtime.seed_template(template_id="tpl-star")           # rule-all(*,*)
-    for tid in ("tpl-g", "tpl-b"):
-        await runtime.config_store.config_sync(
-            {"kind": "template", "op": "create", "template_id": tid,
-             "template": {"agent_image": f"a:{tid}", "namespace": "default"}})
-    for rule in ({"rule_id": "rg", "group_id": "gg", "bot_id": "*",
-                  "template_id": "tpl-g"},
-                 {"rule_id": "rb", "group_id": "*", "bot_id": "bb",
-                  "template_id": "tpl-b"}):
-        await runtime.config_store.config_sync(
-            {"kind": "routing_rule", "op": "create", **rule})
+async def test_resolve_index_priority_first_fit_matrix(runtime):
+    """index 从小到大 first-fit 矩阵:index 顺序 / AND / not_in / 通配兜底。"""
+    await runtime.config_store.config_sync({
+        "templates": [
+            {"template_id": "tpl-vip", "agent_image": "a:vip",
+             "namespace": "default", "session_ttl": 61},
+            {"template_id": "tpl-ban", "agent_image": "a:ban",
+             "namespace": "default", "session_ttl": 62},
+            {"template_id": "tpl-fb", "agent_image": "a:fb",
+             "namespace": "default", "session_ttl": 63},
+        ],
+        "scopes": [
+            # index 0:vip = user 白名单 AND group 白名单 AND bot 不在黑名单
+            {"scope_id": "s-vip", "index": 0, "template_id": "tpl-vip",
+             "routing_rules": [{"expressions": [
+                 {"field": "user_id", "op": "in", "values": ["u-admin"]},
+                 {"field": "group_id", "op": "in", "values": ["gg"]},
+                 {"field": "bot_id", "op": "not_in", "values": ["bb-banned"]},
+             ]}]},
+            # index 10:ban 组命中但 user 在封禁名单 → 不命中
+            {"scope_id": "s-ban", "index": 10, "template_id": "tpl-ban",
+             "routing_rules": [{"expressions": [
+                 {"field": "group_id", "op": "in", "values": ["gg"]},
+                 {"field": "user_id", "op": "not_in", "values": ["u-banned"]},
+             ]}]},
+            # index 100:通配兜底
+            {"scope_id": "s-fb", "index": 100, "template_id": "tpl-fb",
+             "routing_rules": []},
+        ],
+    })
 
-    async def _resolve(group, bot):
-        return (await runtime.config_store.resolve(
-            scope_id_of(group, bot), group, bot)).template_id
+    async def _hit(user, group, bot):
+        scope_id, template = await runtime.config_store.resolve(user, group, bot)
+        return scope_id, template.template_id
 
-    assert await _resolve("gg", "bb") == "tpl-g"      # (group,*) 击败 (*,bot)
-    assert await _resolve("xx", "bb") == "tpl-b"      # (*,bot) 击败 (*,*)
-    assert await _resolve("xx", "yy") == "tpl-star"   # (*,*) 兜底
+    # 三表达式全真 → vip
+    assert await _hit("u-admin", "gg", "bb") == ("s-vip", "tpl-vip")
+    # bot 被拉黑 → 落到 s-ban(group 命中且 user 未封禁)
+    assert await _hit("u-admin", "gg", "bb-banned") == ("s-ban", "tpl-ban")
+    # user 被封禁 → s-ban 不命中 → 通配兜底
+    assert await _hit("u-banned", "gg", "bb") == ("s-fb", "tpl-fb")
+    # 无任何规则命中 → 兜底
+    assert await _hit("u-x", "gx", "bx") == ("s-fb", "tpl-fb")
 
 
 @requires_lua
 async def test_resolve_skips_disabled_template_and_falls_back(runtime):
-    """enabled=False 的模板视为未命中 → 落到下一优先级规则。"""
-    await runtime.seed_template(template_id="tpl-ok")
-    await runtime.config_store.config_sync(
-        {"kind": "template", "op": "create", "template_id": "tpl-off",
-         "template": {"agent_image": "a:off", "namespace": "default",
-                      "enabled": False}})
-    await runtime.config_store.config_sync(
-        {"kind": "routing_rule", "op": "create", "rule_id": "r-exact",
-         "group_id": "gg", "bot_id": "bb", "template_id": "tpl-off"})
-
-    resolved = await runtime.config_store.resolve(scope_id_of("gg", "bb"), "gg", "bb")
-    assert resolved.template_id == "tpl-ok"           # 禁用 → 落到 (*,*)
+    """enabled=False 的模板视为未命中 → 落到下一个 index 的 scope。"""
+    await runtime.config_store.config_sync({
+        "templates": [
+            {"template_id": "tpl-off", "agent_image": "a:off",
+             "namespace": "default", "enabled": False},
+            {"template_id": "tpl-ok", "agent_image": "a:ok",
+             "namespace": "default"},
+        ],
+        "scopes": [
+            {"scope_id": "s-off", "index": 0, "template_id": "tpl-off",
+             "routing_rules": []},
+            {"scope_id": "s-ok", "index": 100, "template_id": "tpl-ok",
+             "routing_rules": []},
+        ],
+    })
+    scope_id, template = await runtime.config_store.resolve("u", "g", "b")
+    assert (scope_id, template.template_id) == ("s-ok", "tpl-ok")
 
 
 @requires_lua
-async def test_template_delete_invalidates_cached_scope(runtime):
-    """模板删除 → 引用它的 scope 缓存失效 → 下一次 route CONFIG_NOT_FOUND。"""
+async def test_template_removed_from_payload_scope_stops_matching(runtime):
+    """全量下发移除模板与 scope → 下一次 route CONFIG_NOT_FOUND。"""
     await runtime.seed_template()
-    await runtime.route("sess_1")                     # populate scope cache
-    assert await runtime.sm_state.redis.exists(
-        runtime.sm_state.k.scope_config(SCOPE))
+    await runtime.route("sess_1")
 
     result = await runtime.config_store.config_sync(
-        {"kind": "template", "op": "delete", "template_id": "tpl-1"})
+        {"templates": [], "scopes": []})
 
-    assert result["deleted"] == 1
-    assert await runtime.sm_state.redis.exists(
-        runtime.sm_state.k.scope_config(SCOPE)) == 0
+    assert result["templates_deleted"] == 1 and result["scopes_deleted"] == 1
     with pytest.raises(ConfigNotFound):
         await runtime.orchestrator.route(
             request_id="r-after-del", session_id="sess_2",
-            group_id="grp", bot_id="bot")
-
-
-async def test_routing_rule_update_nonexistent_rejected(runtime):
-    """规则 update 目标不存在 → InvalidParams(400)，不做全量失效。"""
-    with pytest.raises(InvalidParams):
-        await runtime.config_store.config_sync(
-            {"kind": "routing_rule", "op": "update", "rule_id": "ghost",
-             "updates": {"group_id": "x"}})
+            group_id="grp", bot_id="bot", user_id="u")

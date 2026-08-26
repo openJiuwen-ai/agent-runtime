@@ -1,9 +1,13 @@
 # coding: utf-8
-"""agent-runtime 公共小工具（时间 / scope 派生 / bytes 解码）。"""
+"""agent-runtime 公共小工具（时间 / 指纹 / bytes 解码）。
+
+scope_id 不再在此派生——由 config_sync 全量下发（见 session_manager/routing.py）。
+"""
 
 from __future__ import annotations
 
 import hashlib
+import json
 import time
 from typing import Any
 
@@ -13,18 +17,17 @@ def now_ts() -> int:
     return int(time.time())
 
 
-def scope_id_of(group_id: str, bot_id: str) -> str:
-    """scope_id = md5(group_id + '\\x00' + bot_id)。
-
-    \\x00 分隔符防撞号：否则 (ab,c) 与 (a,bc) 会派生出同一 scope（HLD §7.5）。
-    """
-    return hashlib.md5(f"{group_id}\x00{bot_id}".encode()).hexdigest()
-
-
 def fingerprint(fields: dict[str, Any]) -> str:
-    """字典字段的确定性 hash 指纹（deploy_ver 用）：按 key 排序后 md5。"""
-    canonical = ",".join(
-        f"{k}={fields[k]!r}" for k in sorted(fields) if fields[k] is not None
+    """字典字段的确定性 hash 指纹（deploy_ver 用）：过滤 None 后按键序规范化
+    JSON 序列化再 md5。
+
+    **嵌套 dict（如 agent_env）必须键序无关**——DB JSON 列回读会重排键序，
+    repr(dict) 对键序敏感会导致同一模板算出不同 deploy_ver（2026-08-26 真环境
+    实测：SM 传入的 want_ver 与池内 Pod 版本永不相等，暖 Pod 复用被跳过）。
+    """
+    canonical = json.dumps(
+        {k: fields[k] for k in fields if fields[k] is not None},
+        sort_keys=True, ensure_ascii=False, default=str,
     )
     return hashlib.md5(canonical.encode()).hexdigest()[:16]
 

@@ -9,7 +9,6 @@ redis_guard 的前缀白名单）必须同步两个使用方的行为预期。
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import time
 import uuid
 
@@ -22,9 +21,23 @@ RESULTS: list[tuple[str, bool, str]] = []
 # （session_manager:/resource_manager: 业务键 + agent_runtime:job:* 框架选主键）
 OWN_PREFIXES = ("session_manager:", "resource_manager:", "agent_runtime:")
 
+# 播种的通配兜底 scope_id（scope 由 config_sync 下发,不再由 (group,bot) 派生）
+SEED_SCOPE = "e2e-main-scope"
+
 
 def scope_id(group: str, bot: str) -> str:
-    return hashlib.md5(f"{group}\x00{bot}".encode()).hexdigest()
+    """播种的兜底 scope_id（通配,任意 group/bot 命中它）。参数仅为兼容旧签名。"""
+    return SEED_SCOPE
+
+
+def config_sync_payload(templates: list[dict],
+                        scopes: list[dict] | None = None) -> dict:
+    """构造 config_sync 全量载荷;scopes 缺省 = 一个通配兜底 scope 指向首个模板。"""
+    if scopes is None:
+        scopes = [{"scope_id": SEED_SCOPE, "index": 0,
+                   "template_id": templates[0]["template_id"],
+                   "routing_rules": []}]
+    return {"templates": templates, "scopes": scopes}
 
 
 def check(name: str, ok: bool, detail: str = "") -> bool:
@@ -53,12 +66,13 @@ def summary_and_exit() -> int:
 
 
 def envelope(msg_type: str, *, session_id=None, group="e2e-main", bot="b",
-             rawdata=None, request_id=None):
+             user="e2e-user", rawdata=None, request_id=None):
     return {
         "type": msg_type,
         "metadata": {
             "request_id": request_id or f"req-{uuid.uuid4().hex[:10]}",
             "session_id": session_id,
+            "user_id": user,
             "bot_id": bot,
             "extra": {"group_id": group},
         },
@@ -74,11 +88,11 @@ class Client:
         self.base = base.rstrip("/")
 
     async def post(self, msg_type: str, *, session_id=None, group="e2e-main",
-                   bot="b", rawdata=None, request_id=None):
+                   bot="b", user="e2e-user", rawdata=None, request_id=None):
         resp = await self.http.post(
             f"{self.base}/{msg_type}",
             json=envelope(msg_type, session_id=session_id, group=group, bot=bot,
-                          rawdata=rawdata, request_id=request_id),
+                          user=user, rawdata=rawdata, request_id=request_id),
         )
         try:
             body = resp.json()

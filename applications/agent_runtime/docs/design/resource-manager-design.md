@@ -261,10 +261,12 @@ if idle_flag:
 return {pod_id, pod_sse_url}
 ```
 
-**`LUA_RELEASE(pod_id, scope_id, now)`** —— `idle_consider` 的原子核心:Pod 转入 `scope:idle` 暖池。重复调用幂等(`SADD`/`SET` 天然幂等)。
+**`LUA_RELEASE(pod_id, scope_id, now)`** —— `idle_consider` 的原子核心:Pod 转入 `scope:idle` 暖池。**仅在首次转入时起 `idle_since` 计时**(`SADD` 返回 1 = 新转入);重复调用(reconcile stale 每 30s 重放 / idle_consider 去重重发)幂等且**不得刷新计时**——否则 reclaim 的 `aged≥pod_ttl` 永不达成,空闲 Pod 永不回收(2026-08-26 真环境实测发现的存量缺陷)。被 acquire 弹出(SREM 出 idle)后再转 idle 属新空闲期,重新计时。**已 PURGE 的 Pod(info 已清)直接 no-op**——防 reconcile view 快照与 PURGE 的 TOCTOU 把已回收 Pod 复活成 idle 幽灵成员(虚增 idle 计数且永不被回收)。
 ```
-SADD resource:scope:{scope_id}:idle {pod_id}
-SET resource:pod:{pod_id}:idle_since {now}
+if EXISTS resource:pod:{pod_id}:info == 0:      # 已 PURGE → no-op
+    return {transitioned_to_idle:false}
+if SADD resource:scope:{scope_id}:idle {pod_id} == 1:
+    SET resource:pod:{pod_id}:idle_since {now}
 return {transitioned_to_idle:true}
 ```
 

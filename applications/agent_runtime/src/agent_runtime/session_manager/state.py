@@ -63,9 +63,9 @@ class SMKeys:
         """STRING: 单调递增计数，scope:pods 的 score 来源。"""
         return f"{self.prefix}:scope:{scope_id}:pod_seq"
 
-    def scope_config(self, scope_id: str) -> str:
-        """HASH: resolve 缓存（config_sync 主动 DEL 失效）。"""
-        return f"{self.prefix}:scope:{scope_id}:config"
+    def routing_snapshot(self) -> str:
+        """STRING: 路由快照（scopes+templates 的 JSON；config_sync 原子 SET 覆盖）。"""
+        return f"{self.prefix}:routing:snapshot"
 
     def scope_waiters(self, scope_id: str) -> str:
         """SET: 等待中的 request_id。SCARD < max_waiters = 等待队列上限（场景 F）。"""
@@ -283,8 +283,14 @@ class SessionState:
     async def scope_session_count(self, scope_id: str) -> int:
         return to_int(await self.redis.scard(self.k.scope_sessions(scope_id)))
 
-    async def scope_config_raw(self, scope_id: str) -> dict[str, str]:
-        """resolve 缓存 HASH 原文（诊断读；不经过 Template 解析）。"""
-        raw = await self.redis.hgetall(self.k.scope_config(scope_id))
-        return {s(k): s(v) for k, v in raw.items()}
+    # -------------------------------------------------------------- 路由快照
+
+    async def routing_snapshot_raw(self) -> str:
+        """读快照 JSON 原文（空串 = 无快照，调用方走 DB 重建）。"""
+        raw = await self.redis.get(self.k.routing_snapshot())
+        return s(raw)
+
+    async def write_routing_snapshot(self, text: str) -> None:
+        """原子 SET 覆盖快照（config_sync / 重建路径唯一写点）。"""
+        await self.redis.set(self.k.routing_snapshot(), text)
 

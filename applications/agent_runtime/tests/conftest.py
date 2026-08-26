@@ -49,14 +49,14 @@ async def db_handler(tmp_path):
     from openjiuwen_runtime.foundation.db import SQLiteHandler
 
     from agent_runtime.session_manager.config_store import (
-        ROUTING_RULE_TABLE_DEF,
+        ROUTING_SCOPE_TABLE_DEF,
         SERVICE_CONFIG_TEMPLATE_TABLE_DEF,
     )
 
     handler = SQLiteHandler(str(tmp_path / "test.db"))
     await handler.connect()
     await handler.init_table(SERVICE_CONFIG_TEMPLATE_TABLE_DEF)
-    await handler.init_table(ROUTING_RULE_TABLE_DEF)
+    await handler.init_table(ROUTING_SCOPE_TABLE_DEF)
     yield handler
     await handler.disconnect()
 
@@ -100,8 +100,9 @@ class Runtime:
             orchestrator=self.rm_orchestrator,
         )
 
-    async def seed_template(self, template_id="tpl-1", **overrides) -> None:
-        """下发一个 template + 全量路由规则（* → tpl）。"""
+    async def seed_template(self, template_id="tpl-1", scope_id="scope-main",
+                            **overrides) -> None:
+        """全量下发一个 template + 一个通配兜底 scope（空 routing_rules）。"""
         template = {
             "agent_image": "agentserver:1.0",
             "namespace": "default",
@@ -112,19 +113,18 @@ class Runtime:
             "min_idle_pods": 0,
             **overrides,
         }
-        await self.config_store.config_sync(
-            {"kind": "template", "op": "create", "template_id": template_id,
-             "template": template}
-        )
-        await self.config_store.config_sync(
-            {"kind": "routing_rule", "op": "create", "rule_id": "rule-all",
-             "group_id": "*", "bot_id": "*", "template_id": template_id}
-        )
+        await self.config_store.config_sync({
+            "templates": [{"template_id": template_id, **template}],
+            "scopes": [{"scope_id": scope_id, "index": 0,
+                        "template_id": template_id, "routing_rules": []}],
+        })
 
-    async def route(self, session_id, group_id="grp", bot_id="bot", request_id=None):
+    async def route(self, session_id, group_id="grp", bot_id="bot",
+                    user_id="user", request_id=None):
         return await self.orchestrator.route(
             request_id=request_id or f"req-{session_id}",
             session_id=session_id, group_id=group_id, bot_id=bot_id,
+            user_id=user_id,
         )
 
 
