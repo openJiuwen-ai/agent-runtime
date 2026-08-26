@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import pytest
 
-from agent_runtime.util import now_ts, scope_id_of
+from agent_runtime.util import now_ts
 from tests.conftest import requires_lua
 
-SCOPE = scope_id_of("grp", "bot")
+SCOPE = "grp-bot"   # scope_id 由 config_sync 下发,测试用字面量
 NOW = 1_000_000
 
 
@@ -247,13 +247,16 @@ async def test_register_pod_writes_three_places(sm_state):
     assert "pod_9" in ids and "pod_10" in ids
 
 
-# ---------------------------------------------------------------- scope_id 派生
+# ---------------------------------------------------------------- scope_id 校验(config_sync 入口)
 
 
-def test_scope_id_separator_prevents_collision():
-    """\\x00 分隔符防撞号：(ab,c) 与 (a,bc) 必须是不同 scope（HLD §7.5）。"""
-    assert scope_id_of("ab", "c") != scope_id_of("a", "bc")
-    assert scope_id_of("a", "b") == scope_id_of("a", "b")
+def test_scope_id_charset_rejects_separator():
+    """scope_id 禁 ':' 等——Redis 键与 pods:registered 的 "{scope}:{pod}" 切分依赖。"""
+    from agent_runtime.errors import InvalidParams
+    from agent_runtime.session_manager.routing import parse_scope
+
+    with pytest.raises(InvalidParams):
+        parse_scope({"scope_id": "a:b", "index": 0, "template_id": "t"}, {"t"})
 
 
 def test_now_ts_monotonic_seconds():

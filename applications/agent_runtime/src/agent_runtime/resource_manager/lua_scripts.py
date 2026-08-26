@@ -110,9 +110,21 @@ local pod = ARGV[2]
 local scope = ARGV[3]
 local now = ARGV[4]
 
--- 幂等：SADD/SET 天然幂等；重复/延迟抵达无副作用
-redis.call('SADD', pfx .. 'resource:scope:' .. scope .. ':idle', pod)
-redis.call('SET', pfx .. 'resource:pod:' .. pod .. ':idle_since', now)
+-- 已 PURGE 的 Pod（info 已清）不得被重放 release 复活成 idle 幽灵成员：
+-- reconcile stale 的 view 快照与 PURGE 存在 TOCTOU（先枚举、后被回收、再重放
+-- SADD），idle_consider 的 fire-and-forget 同理。幽灵成员会虚增 idle 计数
+-- （autoscale 少预热）且永不被回收（idle_since 缺失，reclaim 跳过）。
+if redis.call('EXISTS', pfx .. 'resource:pod:' .. pod .. ':info') == 0 then
+  return {'false'}
+end
+
+-- 幂等：仅在**首次转入** idle 池时起 pod_ttl 计时（SADD 返回 1 = 新转入）。
+-- 重复/延迟抵达的 release（reconcile stale 周期重放、idle_consider 去重重发）
+-- 不得刷新 idle_since——否则 reclaim 的 aged≥pod_ttl 永不达成，空闲 Pod 永不回收。
+-- 被 acquire 弹出（SREM 出 idle）后再转 idle 属新空闲期，重新计时（语义不变）。
+if redis.call('SADD', pfx .. 'resource:scope:' .. scope .. ':idle', pod) == 1 then
+  redis.call('SET', pfx .. 'resource:pod:' .. pod .. ':idle_since', now)
+end
 return {'true'}
 """
 

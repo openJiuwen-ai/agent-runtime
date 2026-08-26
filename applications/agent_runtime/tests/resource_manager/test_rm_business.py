@@ -6,10 +6,10 @@ from __future__ import annotations
 
 import pytest
 
-from agent_runtime.util import now_ts, scope_id_of
+from agent_runtime.util import now_ts
 from tests.conftest import requires_lua
 
-SCOPE = scope_id_of("grp", "bot")
+SCOPE = "scope-main"   # 与 conftest.seed_template 播种的 scope_id 一致(route 落此 scope)
 
 
 async def _deploy_one(runtime) -> str:

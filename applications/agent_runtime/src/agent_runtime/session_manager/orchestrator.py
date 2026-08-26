@@ -22,7 +22,7 @@ from ..errors import (
     ScopeFullTimeout,
     ScopeQueueFull,
 )
-from ..util import now_ts, scope_id_of
+from ..util import now_ts
 from .config_store import ConfigStore
 from .state import SessionState
 
@@ -62,14 +62,14 @@ class SessionOrchestrator:
         user_id: str | None = None,
     ) -> dict[str, str]:
         """同步路由 + 占额度（关键路径）。返回 {pod_sse_url, pod_id}。"""
-        if not (session_id and group_id and bot_id):
+        if not (session_id and group_id and bot_id and user_id):
             raise InvalidParams(
-                f"route requires session_id/group_id/bot_id, got session_id={session_id!r} "
-                f"group_id={group_id!r} bot_id={bot_id!r}"
+                f"route requires session_id/group_id/bot_id/user_id, got "
+                f"session_id={session_id!r} group_id={group_id!r} "
+                f"bot_id={bot_id!r} user_id={user_id!r}"
             )
-        scope_id = scope_id_of(group_id, bot_id)
-
-        template = await self.config.resolve(scope_id, group_id, bot_id)
+        # 路由匹配：按 (index, scope_id) 序 first-fit 命中下发 scope（快照求值）
+        scope_id, template = await self.config.resolve(user_id, group_id, bot_id)
         deadline = time.monotonic() + self.scope_full_timeout
         t0 = time.monotonic()
         waitering = False  # 是否已进等待队列（异常路径要出队）

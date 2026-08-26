@@ -1,20 +1,23 @@
 # coding: utf-8
-"""Config 层（SM 设计 §4）：template / routing_rule 持久化 + resolve + config_sync。
+"""Config 层（scope 重构版）：template / routing_scope 持久化 + 快照 + config_sync。
 
 - 存储在共享 DB（config system-of-record），表 ``service_config_template`` /
-  ``routing_rule``（列名沿用 EE 兼容名，见 models.py 模块注释）；
-- ``resolve(group_id, bot_id)``：route 热路径的配置解析，Redis ``scope:config``
-  缓存，miss 读 DB（精确匹配优先，``*`` 兜底）；
-- ``config_sync``：Claw Manager 下发入口（场景 M）——写 DB → 逐字段 diff →
-  A 类（deploy 子集变更）软摘除老版本 Pod + 推 RM；B 类 DEL 缓存；
+  ``routing_scope``（scope_id / match_index / template_id / routing_rules JSON）；
+- ``resolve(user_id, group_id, bot_id)``：route 热路径的路由解析——读 Redis
+  单键快照 ``routing:snapshot``（scopes+templates 全量 JSON），进程内按
+  (index ASC, scope_id ASC) first-fit 求值；快照缺失/损坏 → 从 DB 重建；
+- ``config_sync``：Claw Manager 全量下发入口（场景 M）——``{templates, scopes}``
+  快照式替换（旧 kind/op 增量协议已废弃）。锁内编排：校验 → 日落中间态检查
+  （先于写库,拒绝时零副作用）→ 写 DB → 重建快照 → 逐 scope 推 RM 池参数
+  （**始终带 pod_spec**——无请求 scope 的 min_idle 预热依赖它）→ A 类软摘除
+  老版本 Pod → 被删 scope 推 min_idle=0 自然排空。
   全程持 ``lock:config_sync`` 串行化（忙 → 409 CONFIG_SYNC_BUSY）。
 
-红线：写 DB 失败立即中止，不得 DEL 缓存、不得推送（防 cache 脏刷新）。
+红线：写 DB 失败立即中止，不得 SET 快照、不得推送（防 last-known-good 被污染）。
 """
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
@@ -27,6 +30,17 @@ from openjiuwen_runtime.foundation.db.table_def import (
 from ..errors import ConfigNotFound, ConfigSyncBusy, InvalidParams
 from ..util import now_ts, s
 from .models import POLICY_FIELDS, Template
+from .routing import (
+    RoutingScopeDef,
+    RoutingSnapshot,
+    build_snapshot,
+    has_wildcard_scope,
+    match_scope,
+    parse_rule,
+    parse_scope,
+    snapshot_from_json,
+    snapshot_to_json,
+)
 from .state import SessionState
 
 logger = logging.getLogger("agent_runtime.session_manager")
@@ -34,7 +48,7 @@ logger = logging.getLogger("agent_runtime.session_manager")
 TENANT_ID = ""  # v1 单租户；列保留为 EE 兼容
 
 TEMPLATE_TABLE = "service_config_template"
-ROUTING_RULE_TABLE = "routing_rule"
+ROUTING_SCOPE_TABLE = "routing_scope"
 
 SERVICE_CONFIG_TEMPLATE_TABLE_DEF = TableDefinition(
     table_name=TEMPLATE_TABLE,
@@ -52,6 +66,9 @@ SERVICE_CONFIG_TEMPLATE_TABLE_DEF = TableDefinition(
         ColumnDefinition("port_name", "string", length=64, nullable=False, default="http"),
         ColumnDefinition("sse_port", "integer", nullable=False, default=8080),
         ColumnDefinition("sse_path", "string", length=128, nullable=False, default="/sse"),
+        ColumnDefinition("health_path", "string", length=128, nullable=False,
+                         default="/health"),
+        ColumnDefinition("agent_env", "json", nullable=True),
         ColumnDefinition("image_pull_policy", "string", length=64, nullable=False,
                          default="IfNotPresent"),
         ColumnDefinition("kubeconfig", "string", length=512, nullable=True),
@@ -79,15 +96,17 @@ SERVICE_CONFIG_TEMPLATE_TABLE_DEF = TableDefinition(
     ],
 )
 
-ROUTING_RULE_TABLE_DEF = TableDefinition(
-    table_name=ROUTING_RULE_TABLE,
+ROUTING_SCOPE_TABLE_DEF = TableDefinition(
+    table_name=ROUTING_SCOPE_TABLE,
     columns=[
         ColumnDefinition("id", "integer", primary_key=True, autoincrement=True),
         ColumnDefinition("jiuwenclaw_id", "string", length=64, nullable=False, default=""),
-        ColumnDefinition("rule_id", "string", length=100, nullable=False, unique=True),
-        ColumnDefinition("group_id", "string", length=128, nullable=False),
-        ColumnDefinition("bot_id", "string", length=128, nullable=False),
+        ColumnDefinition("scope_id", "string", length=128, nullable=False, unique=True),
+        # 列名不用 index（SQL 保留字）
+        ColumnDefinition("match_index", "integer", nullable=False, default=0),
         ColumnDefinition("template_id", "string", length=100, nullable=False),
+        # 结构化规则原样落库（wire 格式；空列表/NULL = 通配 scope）
+        ColumnDefinition("routing_rules", "json", nullable=True),
         ColumnDefinition("created_at", "datetime", nullable=False),
         ColumnDefinition("updated_at", "datetime", nullable=False),
     ],
@@ -105,6 +124,8 @@ _COLUMN_OF: dict[str, str] = {
     "container_port": "container_port",
     "sse_port": "sse_port",
     "sse_path": "sse_path",
+    "health_path": "health_path",
+    "agent_env": "agent_env",
     "image_pull_policy": "image_pull_policy",
     "kubeconfig": "kubeconfig",
     "readiness_initial_delay": "readiness_initial_delay",
@@ -147,6 +168,11 @@ def template_from_row(row: Any) -> Template:
         if field_name in _INT_FIELDS and value is not None:
             value = int(value)
         kwargs[field_name] = value
+    # 老行/NULL 防御:agent_env 非 dict → 空表;health_path 空 → 默认
+    if not isinstance(kwargs.get("agent_env"), dict):
+        kwargs["agent_env"] = {}
+    if not kwargs.get("health_path"):
+        kwargs["health_path"] = "/health"
     return Template(**kwargs)
 
 
@@ -176,10 +202,37 @@ def template_from_payload(template_id: str, payload: dict[str, Any]) -> Template
             continue
         if field in payload and payload[field] is not None:
             value = payload[field]
+            if field == "agent_env":
+                if not isinstance(value, dict) or any(
+                        not isinstance(k, str) or not isinstance(v, (str, int, float, bool))
+                        for k, v in value.items()):
+                    raise InvalidParams(
+                        "agent_env must be an object mapping string keys to "
+                        f"scalar values, got {value!r}"
+                    )
+                value = {k: str(v) for k, v in value.items()}
             kwargs[field] = int(value) if field in _INT_FIELDS else value
         else:
             kwargs[field] = getattr(defaults, field)
     return Template(**kwargs)
+
+
+def _scope_from_row(row: Any) -> RoutingScopeDef | None:
+    """routing_scope 行 → RoutingScopeDef；行损坏（手改 DB 等）跳过并告警。"""
+    try:
+        rules_raw = getattr(row, "routing_rules", None) or []
+        return RoutingScopeDef(
+            scope_id=s(getattr(row, "scope_id")),
+            index=int(getattr(row, "match_index") or 0),
+            template_id=s(getattr(row, "template_id")),
+            rules=tuple(parse_rule(item) for item in rules_raw),
+        )
+    except Exception:  # noqa: BLE001 - 读路径对坏行容错（写路径已强校验）
+        logger.warning(
+            "routing_scope row corrupt, skipped: scope_id=%r",
+            getattr(row, "scope_id", "?"), exc_info=True,
+        )
+        return None
 
 
 # 池参数推送回调：config_sync → rm_facade.update_pool_config(scope_id, pool, pod_spec?)
@@ -189,7 +242,7 @@ CONFIG_SYNC_LOCK_TTL = 60  # 串行化锁 TTL（处理超时上限）
 
 
 class ConfigStore:
-    """template / routing_rule 的 DB 存取 + resolve 缓存 + config_sync 编排。"""
+    """template / routing_scope 的 DB 存取 + 路由快照 + config_sync 编排。"""
 
     def __init__(
         self,
@@ -200,6 +253,9 @@ class ConfigStore:
         self._db = db
         self.state = sm_state
         self._push = push_pool_config
+        # 进程内快照 memo：原始串相等则复用已解析对象（route 热路径零 json.loads）
+        self._snapshot_raw: str | None = None
+        self._snapshot: RoutingSnapshot | None = None
 
     # -------------------------------------------------------------- 读路径
 
@@ -230,115 +286,84 @@ class ConfigStore:
             })
         return out
 
-    async def list_rules(self) -> list[dict[str, str]]:
-        rows = await self._db.list_records(ROUTING_RULE_TABLE, limit=10_000)
-        return [
-            {
-                "rule_id": s(getattr(r, "rule_id")),
-                "group_id": s(getattr(r, "group_id")),
-                "bot_id": s(getattr(r, "bot_id")),
-                "template_id": s(getattr(r, "template_id")),
-            }
-            for r in rows
-        ]
+    async def list_scopes(self, limit: int = 100_000) -> list[RoutingScopeDef]:
+        """全部 scope 定义（快照重建 / /debug 用；坏行跳过）。"""
+        rows = await self._db.list_records(ROUTING_SCOPE_TABLE, limit=limit)
+        out: list[RoutingScopeDef] = []
+        for r in rows:
+            scope = _scope_from_row(r)
+            if scope is not None:
+                out.append(scope)
+        return out
 
-    async def resolve(self, scope_id: str, group_id: str, bot_id: str) -> Template:
-        """(group_id, bot_id) → template：缓存命中直接返回；miss 读 DB 并回写缓存。
+    async def resolve(
+        self, user_id: str | None, group_id: str, bot_id: str
+    ) -> tuple[str, Template]:
+        """(user_id, group_id, bot_id) → (scope_id, Template)。
 
-        无匹配（或模板禁用/不存在）→ ConfigNotFound(503)。缓存由 config_sync 主动失效。
+        读单键快照求值（index 升序 first-fit）；无匹配 → ConfigNotFound(503)。
         """
-        cached = await self._load_cache(scope_id)
-        if cached is not None:
-            logger.debug("resolve cache hit: scope=%s", scope_id)
-            return self._template_from_cache(cached)
-        logger.debug("resolve cache miss, reading db: scope=%s", scope_id)
-
-        template = await self._resolve_from_db(group_id, bot_id)
-        await self._write_cache(scope_id, template)
-        return template
-
-    async def _resolve_from_db(self, group_id: str, bot_id: str) -> Template:
-        rules = await self.list_rules()
-        # 优先级：精确 > (group, *) > (*, bot) > (*, *)
-        for want_group, want_bot in (
-            (group_id, bot_id), (group_id, "*"), ("*", bot_id), ("*", "*")
-        ):
-            for rule in rules:
-                if rule["group_id"] == want_group and rule["bot_id"] == want_bot:
-                    template = await self.get_template(rule["template_id"])
-                    if template is not None and template.enabled:
-                        return template
-        logger.warning(
-            "resolve no matching rule/template: group_id=%r bot_id=%r rules=%d",
-            group_id, bot_id, len(rules),
+        snapshot = await self._load_snapshot()
+        scope = match_scope(snapshot, user_id, group_id, bot_id)
+        if scope is None:
+            logger.warning(
+                "resolve no matching scope: user_id=%r group_id=%r bot_id=%r scopes=%d",
+                user_id, group_id, bot_id, len(snapshot.scopes),
+            )
+            raise ConfigNotFound(
+                f"no routing scope matches (user_id={user_id!r}, "
+                f"group_id={group_id!r}, bot_id={bot_id!r})"
+            )
+        logger.debug(
+            "resolve matched: scope=%s template=%s index=%d",
+            scope.scope_id, scope.template_id, scope.index,
         )
-        raise ConfigNotFound(
-            f"no routing rule/template matches (group_id={group_id!r}, bot_id={bot_id!r})"
+        return scope.scope_id, snapshot.templates[scope.template_id]
+
+    # -------------------------------------------------------------- 路由快照
+
+    async def _load_snapshot(self) -> RoutingSnapshot:
+        """读快照：memo 命中直接回；缺失/损坏 → DB 重建（冷启动自愈）。"""
+        raw = await self.state.routing_snapshot_raw()
+        if raw:
+            if self._snapshot is not None and raw == self._snapshot_raw:
+                return self._snapshot
+            try:
+                snapshot = snapshot_from_json(raw)
+            except ValueError:
+                logger.warning("routing snapshot corrupt, rebuilding from db")
+            else:
+                self._snapshot_raw, self._snapshot = raw, snapshot
+                return snapshot
+        return await self.rebuild_snapshot()
+
+    async def rebuild_snapshot(self) -> RoutingSnapshot:
+        """DB → 快照 → 原子 SET（config_sync / 冷启动重建的唯一写点）。"""
+        templates = await self._all_templates()
+        scopes = await self.list_scopes()
+        snapshot = build_snapshot(scopes, templates, ver=now_ts())
+        text = snapshot_to_json(snapshot)
+        await self.state.write_routing_snapshot(text)
+        self._snapshot_raw, self._snapshot = text, snapshot
+        logger.info(
+            "routing snapshot rebuilt: templates=%d scopes=%d ver=%s",
+            len(snapshot.templates), len(snapshot.scopes), snapshot.ver,
         )
+        return snapshot
 
-    # -------------------------------------------------------------- 缓存
+    async def ensure_snapshot(self) -> RoutingSnapshot:
+        """启动期无条件重建（消除 lifespan 后首次 route 的冷启动窗口）。"""
+        return await self.rebuild_snapshot()
 
-    async def _load_cache(self, scope_id: str) -> dict[str, str] | None:
-        raw = await self.state.redis.hgetall(self.state.k.scope_config(scope_id))
-        if not raw:
-            return None
-        h = {s(k): s(v) for k, v in raw.items()}
-        template_id = h.get("template_id")
-        if not template_id:
-            return None
-        # 缓存行携带完整 template JSON（deploy 子集在 need_acquire 时要用）
-        return h
-
-    async def _write_cache(self, scope_id: str, template: Template) -> None:
-        """缓存 = ScopeConfig 字段 + template JSON（一次 HSET，读路径零 DB）。"""
-        from .models import ScopeConfig  # 局部 import 避免环
-
-        cfg = ScopeConfig(
-            scope_id=scope_id,
-            template_id=template.template_id,
-            scope_concurrency=template.scope_concurrency,
-            pod_concurrency=template.pod_concurrency,
-            session_ttl=template.session_ttl,
-            pod_ttl=template.pod_ttl,
-            min_idle_pods=template.min_idle_pods,
-            max_pods=template.max_pods,
-            deploy_ver=template.deploy_ver(),
-            ver=str(now_ts()),
-        )
-        mapping = cfg.to_hash()
-        mapping["template_json"] = json.dumps(template.deploy_subset())
-        await self.state.redis.hset(
-            self.state.k.scope_config(scope_id),
-            mapping={k: v for k, v in mapping.items()},
-        )
-
-    def _template_from_cache(self, h: dict[str, str]) -> Template:
-        """缓存 → Template 视图（策略字段 + deploy 子集即可，元信息不缓存）。"""
-        payload = json.loads(h.get("template_json") or "{}")
-        payload.update({
-            "template_id": h.get("template_id", ""),
-            "scope_concurrency": int(h.get("scope_concurrency", 0)),
-            "pod_concurrency": int(h.get("pod_concurrency", 1)),
-            "session_ttl": int(h.get("session_ttl", 60)),
-            "pod_ttl": int(h.get("pod_ttl", 300)),
-            "min_idle_pods": int(h.get("min_idle_pods", 0)),
-        })
-        return template_from_payload(h.get("template_id", ""), payload)
-
-    async def invalidate_cache(self, scope_id: str) -> None:
-        """B 类失效：DEL 缓存，下次 route 重新 resolve。"""
-        await self.state.redis.delete(self.state.k.scope_config(scope_id))
+    async def routing_snapshot_view(self) -> RoutingSnapshot:
+        """诊断只读（/debug 用）：当前生效快照（缺失会触发重建）。"""
+        return await self._load_snapshot()
 
     # -------------------------------------------------------------- config_sync
 
     async def config_sync(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """处理一次配置下发（场景 M）。返回 {ok, synced?, deleted?}。"""
-        kind = str(payload.get("kind") or "")
-        op = str(payload.get("op") or "")
-        if kind not in ("template", "routing_rule"):
-            raise InvalidParams(f"unknown kind={kind!r}")
-        if op not in ("create", "update", "delete", "sync"):
-            raise InvalidParams(f"unknown op={op!r}")
+        """处理一次全量配置下发（场景 M）。返回统计 + affected_scopes。"""
+        templates_in, scopes_in, wildcard = self._parse_payload(payload)
 
         token = f"cfgsync-{now_ts()}"
         if not await self.state.try_lock(
@@ -346,81 +371,171 @@ class ConfigStore:
         ):
             raise ConfigSyncBusy("a previous config_sync is still in progress")
         try:
-            return await self._config_sync_locked(kind, op, payload)
+            return await self._config_sync_locked(templates_in, scopes_in, wildcard)
         finally:
             await self.state.unlock(self.state.k.lock_config_sync(), token)
 
+    @staticmethod
+    def _parse_payload(
+        payload: dict[str, Any],
+    ) -> tuple[dict[str, Template], dict[str, RoutingScopeDef], bool]:
+        """锁外校验（纯 CPU，确定性 400）。返回 (templates_in, scopes_in, 通配存在)。"""
+        if not isinstance(payload, dict):
+            raise InvalidParams("config_sync payload must be an object")
+        if "kind" in payload or "op" in payload:
+            raise InvalidParams(
+                "legacy kind/op payload no longer supported; "
+                "send {templates: [...], scopes: [...]} full snapshot"
+            )
+        templates_raw = payload.get("templates")
+        scopes_raw = payload.get("scopes")
+        if not isinstance(templates_raw, list) or not isinstance(scopes_raw, list):
+            raise InvalidParams("templates and scopes must both be lists")
+
+        templates_in: dict[str, Template] = {}
+        for item in templates_raw:
+            if not isinstance(item, dict):
+                raise InvalidParams("template item must be an object")
+            tid = str(item.get("template_id") or "")
+            if not tid:
+                raise InvalidParams("template item missing template_id")
+            if tid in templates_in:
+                raise InvalidParams(f"duplicate template_id {tid!r}")
+            templates_in[tid] = template_from_payload(tid, item)
+
+        scopes_in: dict[str, RoutingScopeDef] = {}
+        for item in scopes_raw:
+            scope = parse_scope(item, set(templates_in))
+            if scope.scope_id in scopes_in:
+                raise InvalidParams(f"duplicate scope_id {scope.scope_id!r}")
+            scopes_in[scope.scope_id] = scope
+
+        wildcard = has_wildcard_scope(scopes_in.values())
+        if not wildcard:
+            logger.warning(
+                "config_sync payload has NO wildcard scope (empty routing_rules); "
+                "unmatched requests will get CONFIG_NOT_FOUND"
+            )
+        return templates_in, scopes_in, wildcard
+
     async def _config_sync_locked(
-        self, kind: str, op: str, payload: dict[str, Any]
+        self,
+        templates_in: dict[str, Template],
+        scopes_in: dict[str, RoutingScopeDef],
+        wildcard: bool,
     ) -> dict[str, Any]:
-        if kind == "template":
-            return await self._sync_template(op, payload)
-        return await self._sync_routing_rule(op, payload)
+        # ---- 旧态（DB system-of-record）
+        old_templates = {t.template_id: t for t in await self._all_templates()}
+        old_scopes = {scope.scope_id: scope for scope in await self.list_scopes()}
 
-    # ---- template
-
-    async def _sync_template(self, op: str, payload: dict[str, Any]) -> dict[str, Any]:
-        if op == "sync":
-            templates = payload.get("templates") or []
-            if not isinstance(templates, list):
-                raise InvalidParams("templates must be a list")
-            old_by_id = {t.template_id: t for t in await self._all_templates()}
-            # 全量同步：以数组为准（增删改）
-            incoming: dict[str, Template] = {}
-            for item in templates:
-                tid = str(item.get("template_id") or "")
-                if not tid:
-                    raise InvalidParams("template item missing template_id")
-                incoming[tid] = template_from_payload(tid, item.get("template") or item)
-            synced = deleted = 0
-            for tid, template in incoming.items():
-                await self._upsert_template(template)
-                synced += 1
-            for tid in set(old_by_id) - set(incoming):
-                await self._db.delete(TEMPLATE_TABLE, {"template_id": tid})
-                deleted += 1
-            affected = await self._propagate_template_change(
-                incoming, old_by_id
-            )
-            return {"ok": True, "synced": synced, "deleted": deleted, "affected_scopes": affected}
-
-        template_id = str(payload.get("template_id") or "")
-        if not template_id:
-            raise InvalidParams("template_id is required")
-
-        if op == "create":
-            template = template_from_payload(
-                template_id, payload.get("template") or payload
-            )
-            await self._db.create(TEMPLATE_TABLE, row_from_template(template))
-            return {"ok": True, "synced": 1, "deleted": 0, "affected_scopes": []}
-
-        if op == "delete":
-            old = await self.get_template(template_id)
-            ok = await self._db.delete(TEMPLATE_TABLE, {"template_id": template_id})
-            if ok and old is not None:
-                # 模板删除：引用它的 scope 缓存失效（下次 resolve → CONFIG_NOT_FOUND）
-                affected = await self._cached_scopes_of_templates({template_id})
-                for scope_id in affected:
-                    await self.invalidate_cache(scope_id)
-                return {"ok": True, "synced": 0, "deleted": 1, "affected_scopes": affected}
-            return {"ok": True, "synced": 0, "deleted": 0, "affected_scopes": []}
-
-        # op == update：老值（DB 现行行）与新值（payload）进程内逐字段 diff
-        old = await self.get_template(template_id)
-        if old is None:
-            raise InvalidParams(f"template {template_id!r} not found")
-        updates = payload.get("updates") or {}
-        if not isinstance(updates, dict):
-            raise InvalidParams("updates must be an object")
-        new = template_from_payload(
-            template_id, {**{f: getattr(old, f) for f in _COLUMN_OF}, **updates}
+        # ---- diff：模板变更集 / 引用切换 / 需日落的 scope
+        changed_ids = {
+            tid for tid, new in templates_in.items()
+            if tid not in old_templates
+            or self._diff_class(new, old_templates[tid]) != "none"
+        }
+        ref_switched = {
+            sid for sid, scope in scopes_in.items()
+            if sid in old_scopes and old_scopes[sid].template_id != scope.template_id
+        }
+        # 日落判定 = 该 scope 的「有效模板」deploy_ver 前后不同（引用切换或模板 A 类变更）
+        sunset_scopes: list[str] = []
+        for sid, scope in scopes_in.items():
+            old_scope = old_scopes.get(sid)
+            if old_scope is None:
+                continue  # 新 scope，无存量 Pod
+            new_tpl = templates_in[scope.template_id]
+            old_ref = old_templates.get(old_scope.template_id)
+            if old_ref is None:
+                sunset_scopes.append(sid)  # 旧引用模板行缺失（防御）：按 A 类处理
+            elif old_ref.template_id == new_tpl.template_id:
+                if self._diff_class(new_tpl, old_ref) == "A":
+                    sunset_scopes.append(sid)
+            elif new_tpl.deploy_ver() != old_ref.deploy_ver():
+                sunset_scopes.append(sid)  # 引用切换且 deploy_ver 变
+        affected = sorted(
+            {sid for sid, scope in scopes_in.items() if scope.template_id in changed_ids}
+            | ref_switched
         )
-        await self._db.update(
-            TEMPLATE_TABLE, {"template_id": template_id}, row_from_template_for_update(new)
-        )
-        affected = await self._propagate_template_change({template_id: new}, {template_id: old})
-        return {"ok": True, "synced": 1, "deleted": 0, "affected_scopes": affected}
+
+        # ---- 日落中间态检查（★先于写库：拒绝时 DB/Redis 均未动；沿用 M 期语义，
+        #      对全部受影响 scope 生效——pending 意味着上一轮日落尚未回收完毕）
+        for sid in affected:
+            pending = await self._sunset_pending_pods(sid)
+            if pending:
+                raise ConfigSyncBusy(
+                    f"scope {sid} still has sunset pods pending reclaim: {pending}"
+                )
+
+        # ---- 写 DB（快照式替换；红线：任一失败立即上抛，不动快照、不推送）
+        for template in templates_in.values():
+            await self._upsert_template(template)
+        for tid in set(old_templates) - set(templates_in):
+            await self._db.delete(TEMPLATE_TABLE, {"template_id": tid})
+        for scope in scopes_in.values():
+            await self._upsert_scope(scope)
+        for sid in set(old_scopes) - set(scopes_in):
+            await self._db.delete(ROUTING_SCOPE_TABLE, {"scope_id": sid})
+
+        # ---- 重建快照（DB 读回最终态 → 原子 SET；B 类立即生效由此完成）
+        await self.rebuild_snapshot()
+
+        # ---- 扩散①：eager 预热——每个存活 scope 推池参数 + pod_spec（必须带 spec，
+        #      RM 才会落 pod_spec_json/deploy_ver，autoscale 才能无请求预热 min_idle）
+        for sid, scope in scopes_in.items():
+            template = templates_in[scope.template_id]
+            await self._push_or_warn(sid, template.pool_config(), template.deploy_subset())
+
+        # ---- 扩散②：A 类日落——软摘除老版本 Pod（ZREM 出候选集，不接新流量；
+        #      存量会话亲和不受影响，空闲老 Pod 由 reclaim 按 pod_ttl 回收）
+        for sid in sunset_scopes:
+            scope = scopes_in[sid]
+            new_ver = templates_in[scope.template_id].deploy_ver()
+            removed = await self._soft_remove_stale_pods(sid, new_ver)
+            logger.info(
+                "config_sync A-class sunset: scope=%s removed_pods=%s new_ver=%s",
+                sid, removed, new_ver,
+            )
+
+        # ---- 扩散③：被删 scope → 推 min_idle=0（停预热自然排空；存量会话到期止）
+        for sid in sorted(set(old_scopes) - set(scopes_in)):
+            old_tpl = old_templates.get(old_scopes[sid].template_id)
+            pool = (
+                {**old_tpl.pool_config(), "min_idle_pods": 0}
+                if old_tpl is not None
+                else {"min_idle_pods": 0, "max_pods": 1, "pod_ttl": 300}
+            )
+            await self._push_or_warn(sid, pool, None)
+
+        return {
+            "ok": True,
+            "templates_synced": len(templates_in),
+            "templates_deleted": len(set(old_templates) - set(templates_in)),
+            "scopes_synced": len(scopes_in),
+            "scopes_deleted": len(set(old_scopes) - set(scopes_in)),
+            "affected_scopes": affected,
+            "wildcard_present": wildcard,
+        }
+
+    async def _push_or_warn(
+        self,
+        scope_id: str,
+        pool: dict[str, Any],
+        pod_spec: dict[str, Any] | None,
+    ) -> None:
+        """推 RM 池参数；失败仅告警不中止（DB/快照已一致，下次下发或首见 acquire 收敛）。"""
+        if self._push is None:
+            return
+        try:
+            await self._push(scope_id, pool, pod_spec)
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "push pool config failed (scope=%s fields=%s) -- "
+                "warm-up deferred to next config_sync/first acquire",
+                scope_id, sorted(pool),
+            )
+
+    # ---- template DB 存取
 
     async def _upsert_template(self, template: Template) -> None:
         if await self.get_template(template.template_id) is not None:
@@ -436,62 +551,25 @@ class ConfigStore:
         rows = await self._db.list_records(TEMPLATE_TABLE, limit=10_000)
         return [template_from_row(r) for r in rows]
 
-    # ---- 变更扩散（diff / A-B 类 / 推送；仅 update/sync 路径调用）
+    # ---- scope DB 存取
 
-    async def _propagate_template_change(
-        self,
-        new_by_id: dict[str, Template],
-        old_by_id: dict[str, Template],
-    ) -> list[str]:
-        """对每个变更 template：找引用它的 scope，按 A/B 类扩散（场景 M）。
-
-        返回受影响 scope 列表。写 DB 已完成（调用方保证），此处只做缓存/软摘除/推送。
-        """
-        changed_ids = {
-            tid
-            for tid, new in new_by_id.items()
-            if tid not in old_by_id or self._diff_class(new, old_by_id[tid]) != "none"
+    async def _upsert_scope(self, scope: RoutingScopeDef) -> None:
+        row = {
+            "jiuwenclaw_id": TENANT_ID,
+            "scope_id": scope.scope_id,
+            "match_index": scope.index,
+            "template_id": scope.template_id,
+            "routing_rules": scope.to_payload()["routing_rules"],
+            "updated_at": _utcnow(),
         }
-        if not changed_ids:
-            return []
+        existing = await self._db.get(ROUTING_SCOPE_TABLE, {"scope_id": scope.scope_id})
+        if existing is not None:
+            await self._db.update(ROUTING_SCOPE_TABLE, {"scope_id": scope.scope_id}, row)
+        else:
+            row["created_at"] = _utcnow()
+            await self._db.create(ROUTING_SCOPE_TABLE, row)
 
-        # 完成判定：受影响 scope 若仍有「已日落待回收」的中间态 Pod → 拒绝本次下发
-        affected = await self._cached_scopes_of_templates(changed_ids)
-        for scope_id in affected:
-            pending = await self._sunset_pending_pods(scope_id)
-            if pending:
-                raise ConfigSyncBusy(
-                    f"scope {scope_id} still has sunset pods pending reclaim: {pending}"
-                )
-
-        for scope_id in affected:
-            # 该 scope 当前生效的新模板（按缓存 template_id → DB 新行；缓存可能已失效）
-            h = {s(k): s(v) for k, v in
-                 (await self.state.redis.hgetall(self.state.k.scope_config(scope_id))).items()}
-            template = new_by_id.get(h.get("template_id", ""))
-            if template is None:
-                # 模板被删除 / 不在本次变更集：直接失效缓存
-                await self.invalidate_cache(scope_id)
-                continue
-
-            old = old_by_id.get(template.template_id)
-            diff_class = self._diff_class(template, old) if old else "none"
-            if diff_class == "A":
-                # A 类：软摘除老版本 Pod（ZREM 出候选集，不接新流量；存量会话不受影响）
-                removed = await self._soft_remove_stale_pods(scope_id, template.deploy_ver())
-                logger.info(
-                    "config_sync A-class sunset: scope=%s removed_pods=%s new_ver=%s",
-                    scope_id, removed, template.deploy_ver(),
-                )
-                await self._write_cache(scope_id, template)
-                if self._push:
-                    await self._push(scope_id, template.pool_config(), template.deploy_subset())
-            else:
-                # B 类（或新增引用）：DEL 缓存 + 推池参数，立即生效
-                await self.invalidate_cache(scope_id)
-                if self._push:
-                    await self._push(scope_id, template.pool_config(), None)
-        return affected
+    # ---- 变更扩散辅助（沿用 M 期机制）
 
     @staticmethod
     def _diff_class(new: Template, old: Template | None) -> str:
@@ -503,25 +581,6 @@ class ConfigStore:
         return "B" if any(
             getattr(new, f) != getattr(old, f) for f in POLICY_FIELDS
         ) else "none"
-
-    async def _cached_scopes_of_templates(self, template_ids: set[str]) -> list[str]:
-        """扫 scope:config 缓存，返回 template_id 命中变更集的 scope 列表。"""
-        if not template_ids:
-            return []
-        pattern = f"{self.state.prefix}scope:*:config"
-        cursor = 0
-        scopes: list[str] = []
-        while True:
-            cursor, keys = await self.state.redis.scan(cursor, match=pattern, count=200)
-            for key in keys:
-                parts = s(key).split(":")
-                scope_id = parts[-2]
-                tid = s(await self.state.redis.hget(s(key), "template_id"))
-                if tid in template_ids:
-                    scopes.append(scope_id)
-            if int(cursor or 0) == 0:
-                break
-        return sorted(set(scopes))
 
     async def _soft_remove_stale_pods(self, scope_id: str, new_deploy_ver: str) -> list[str]:
         """把 deploy_ver 不匹配的 Pod ZREM 出 scope:pods 候选集（与 idle_consider 同款机制）。"""
@@ -542,96 +601,3 @@ class ConfigStore:
             for entry in registered
             if entry.startswith(prefix) and entry[len(prefix):] not in in_candidates
         ]
-
-    # ---- routing_rule
-
-    async def _sync_routing_rule(self, op: str, payload: dict[str, Any]) -> dict[str, Any]:
-        if op == "sync":
-            rules = payload.get("rules") or []
-            if not isinstance(rules, list):
-                raise InvalidParams("rules must be a list")
-            existing = {r["rule_id"]: r for r in await self.list_rules()}
-            incoming: dict[str, dict[str, str]] = {}
-            for item in rules:
-                rule = _rule_from_payload(item)
-                incoming[rule["rule_id"]] = rule
-            now = _utcnow()
-            for rule in incoming.values():
-                row = {**rule, "jiuwenclaw_id": TENANT_ID,
-                       "created_at": now, "updated_at": now}
-                if rule["rule_id"] in existing:
-                    await self._db.update(
-                        ROUTING_RULE_TABLE, {"rule_id": rule["rule_id"]}, row
-                    )
-                else:
-                    await self._db.create(ROUTING_RULE_TABLE, row)
-            for rule_id in set(existing) - set(incoming):
-                await self._db.delete(ROUTING_RULE_TABLE, {"rule_id": rule_id})
-            await self._invalidate_all_scope_caches()
-            return {"ok": True, "synced": len(incoming),
-                    "deleted": len(set(existing) - set(incoming)), "affected_scopes": []}
-
-        rule_id = str(payload.get("rule_id") or "")
-        if not rule_id:
-            raise InvalidParams("rule_id is required")
-
-        if op == "create":
-            rule = _rule_from_payload(payload)
-            now = _utcnow()
-            await self._db.create(
-                ROUTING_RULE_TABLE,
-                {**rule, "jiuwenclaw_id": TENANT_ID,
-                 "created_at": now, "updated_at": now},
-            )
-            await self._invalidate_all_scope_caches()
-            return {"ok": True, "synced": 1, "deleted": 0, "affected_scopes": []}
-
-        if op == "delete":
-            await self._db.delete(ROUTING_RULE_TABLE, {"rule_id": rule_id})
-            await self._invalidate_all_scope_caches()
-            return {"ok": True, "synced": 0, "deleted": 1, "affected_scopes": []}
-
-        # op == update
-        updates = payload.get("updates") or {}
-        row = await self._db.get(ROUTING_RULE_TABLE, {"rule_id": rule_id})
-        if row is None:
-            raise InvalidParams(f"routing rule {rule_id!r} not found")
-        merged = {
-            "rule_id": rule_id,
-            "group_id": updates.get("group_id", s(getattr(row, "group_id"))),
-            "bot_id": updates.get("bot_id", s(getattr(row, "bot_id"))),
-            "template_id": updates.get("template_id", s(getattr(row, "template_id"))),
-        }
-        await self._db.update(
-            ROUTING_RULE_TABLE, {"rule_id": rule_id},
-            {**merged, "updated_at": _utcnow()},
-        )
-        await self._invalidate_all_scope_caches()
-        return {"ok": True, "synced": 1, "deleted": 0, "affected_scopes": []}
-
-    async def _invalidate_all_scope_caches(self) -> None:
-        """路由规则变更无法定位受影响 scope（缓存无 group/bot）→ 全量失效（resolve 便宜）。"""
-        pattern = f"{self.state.prefix}scope:*:config"
-        cursor = 0
-        deleted = 0
-        while True:
-            cursor, keys = await self.state.redis.scan(cursor, match=pattern, count=200)
-            for key in keys:
-                await self.state.redis.delete(s(key))
-                deleted += 1
-            if int(cursor or 0) == 0:
-                break
-        logger.info("scope resolve caches invalidated: deleted=%d", deleted)
-
-
-def _rule_from_payload(payload: dict[str, Any]) -> dict[str, str]:
-    rule_id = str(payload.get("rule_id") or "")
-    group_id = str(payload.get("group_id") or "")
-    bot_id = str(payload.get("bot_id") or "")
-    template_id = str(payload.get("template_id") or "")
-    if not (rule_id and group_id and bot_id and template_id):
-        raise InvalidParams(
-            f"routing rule requires rule_id/group_id/bot_id/template_id, got {payload!r}"
-        )
-    return {"rule_id": rule_id, "group_id": group_id,
-            "bot_id": bot_id, "template_id": template_id}

@@ -77,16 +77,18 @@ flowchart TB
 
 | 术语 | 含义 |
 |---|---|
-| **group_id** | 群组标识。与 bot_id 一起构成 scope 资源域。 |
-| **bot_id** | 机器人标识(该群组中的机器人账号)。与 group_id 一起经 `md5` 派生 `scope_id`。 |
-| **scope_id** | `md5(group_id + bot_id)`,一个 (群, 机器人) 的资源域标识,记作 `scope_A`。 |
+| **user_id** | 用户标识。与 group_id / bot_id 一起作为路由表达式左值。 |
+| **group_id** | 群组标识(经 `metadata.extra` 传递)。路由表达式左值之一。 |
+| **bot_id** | 机器人标识(该群组中的机器人账号)。路由表达式左值之一。 |
+| **scope_id** | 资源域标识,记作 `scope_A`。由 config_sync 下发(`routing_scope` 行),不再从 (group_id, bot_id) 派生;请求经路由规则匹配命中 scope(§3.1)。 |
+| **index** | scope 的匹配序号:请求按 (index 升序, scope_id 升序) first-fit 首个命中即止。 |
 | **pod_id** | 一个 AgentServer Pod 实例标识,记作 `pod_1`。 |
 | **session_id** | 一次用户会话(chat_session),路由/亲和/老化的最小单位,记作 `sess_1`。 |
 | **亲和** | 同一 session_id 始终路由到同一 Pod(粘性),直到老化。 |
 | **scope_concurrency** | 一个 scope_id 同时允许的活跃会话数上限。 |
 | **pod_concurrency** | SM 的 per-Pod 容量闸门输入(`SCARD < pod_concurrency`);RM 不强制。 |
 | **pod_ttl** | idle Pod 至 reclaim 的等待秒数。 |
-| **min_idle_pods** | per-`scope_id` 的最小热备 Pod 数。 |
+| **min_idle_pods** | per-`scope_id` 的最小热备 Pod 数(config_sync 主动推 RM,**无请求即预热**)。 |
 | **max_pods** | 单个 scope 的最大 Pod 数,派生 = `⌈scope_concurrency / pod_concurrency⌉`,SM 经 `pool_config` 传入 RM。 |
 
 > **示例配置**(本文场景统一):`scope_concurrency=3`、`pod_concurrency=2` → `max_pods(最多 Pod 数)=⌈scope_concurrency/pod_concurrency⌉=⌈3/2⌉=2`、`session_ttl=60s`、`scope_full_timeout=30s`。
@@ -99,13 +101,13 @@ flowchart TB
 
 | 端点 | 入参 | 出参 | 说明 |
 |---|---|---|---|
-| `POST /api/session/route` | `metadata`:session_id / user_id / group_id / bot_id | `{ pod_sse_url, pod_id }` | 同步路由 + 占额度(关键路径) |
+| `POST /api/session/route` | `metadata`:session_id / user_id / group_id / bot_id(**四项均必填非空**) | `{ pod_sse_url, pod_id }` | 同步路由 + 占额度(关键路径);按路由规则匹配 scope(§3.1 匹配语义) |
 | `POST /api/session/touch` | `metadata`:session_id | `{ touched:bool }` | 保活 / EOS,刷新老化 |
-| `POST /api/session/config_sync` | `{ op, kind, ... }` | `{ ok, synced?, deleted? }` | Claw Manager 下发配置(template/路由规则) |
+| `POST /api/session/config_sync` | `{ templates:[...], scopes:[...] }`(全量快照) | `{ ok, templates_synced/deleted, scopes_synced/deleted, affected_scopes, wildcard_present }` | Claw Manager 全量下发配置(模板列表 + scope 列表);旧 `kind/op` 增量协议已废弃(400) |
 | `POST /api/session/cleanup` | `{ namespace?, label_selector? }` | `{ cleaned:int }` | 运维批量清 Pod(灾难恢复 / 重新部署),handler 在 Session Manager、委托 `rm_facade.cleanup()` |
 
 - `group_id` 经 `metadata.extra` 传递;`metadata.request_id` 兼作幂等键。
-- `route` 典型错误:容量满超时(504)、无可用 Pod(503)、无配置(503)、参数错(400);过载响应带 `Retry-After` + `error_code`。
+- `route` 典型错误:容量满超时(504)、无可用 Pod(503)、无匹配 scope(503)、参数错(400);过载响应带 `Retry-After` + `error_code`。
 
 > **`route` 内部调 `rm_facade.acquire` 时传的两个关键参数**:
 >
@@ -133,35 +135,50 @@ flowchart TB
 | `container_name` | str | 容器名 |
 | `container_port` | int | 容器端口 |
 | `sse_port` | int | SSE 端口(gateway 直连 Pod) |
-| `sse_path` | str | SSE 路径 |
+| `sse_path` | str | SSE 路径(真 AgentServer HTTP 入口为 `/api/v1/events/stream`) |
+| `health_path` | str | 健康端点路径(readiness 探针与 RM 场景 N 探测共用;默认 `/health`,真 AgentServer 为 `/api/v1/health`) |
+| `agent_env` | dict | Agent 容器 env 注入(如 `AGENT_HTTP_ENABLED/AGENT_HTTP_HOST/AGENT_HTTP_PORT`——真 AgentServer 需以此开启 HTTP 入口并绑 0.0.0.0) |
 | `kubeconfig` | str? | K8s 认证(可选,默认用集群内 ServiceAccount) |
 | `readiness_*` / `nfs_*` / 资源限额 | — | deploy 子集(就绪探针 / 存储 / CPU / 内存) |
 
 > `max_pods` 不在 template 里——它是派生值 `⌈scope_concurrency / pod_concurrency⌉`,SM 派生后经 `pool_config` 传 RM。`autoscale_interval` 也不在 template——它是全局默认(0.5s)。
 
-**`routing_rule`**(v1 最小):(group_id, bot_id) → template_id 映射。
+**`routing_scope`**(config_sync 下发,持久化到 DB 表 `routing_scope`):scope 定义 = `scope_id + index + template_id + routing_rules`,scope↔模板多对一。
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `rule_id` | str | 规则唯一标识 |
-| `group_id` | str | 匹配的群组 ID(通配 `*` 表示全部) |
-| `bot_id` | str | 匹配的机器人 ID(通配 `*` 表示全部) |
-| `template_id` | str | 命中后使用的 template |
+| `scope_id` | str | 资源域标识。字符集 `[0-9A-Za-z._-]`(≤128)——内嵌 Redis 键名与 `pods:registered` 的 `"{scope}:{pod}"` 条目,禁 `:`、`*`、空白 |
+| `index` | int | 匹配序号;请求按 (index 升序, scope_id 升序) first-fit |
+| `template_id` | str | 引用的 template(必须在本批模板列表内;多个 scope 可引用同一模板) |
+| `routing_rules` | list | 路由规则集,规则间 **OR**;**空列表 = 通配兜底 scope**(命中一切) |
 
-> resolve 规则:`(group_id, bot_id)` 精确优先,`*` 兜底;user_id 粒度策略留 follow-up。
+路由规则(rule)与表达式(expression)结构:
 
-**`config_sync` 入参完整 schema**:
+```
+routing_rules: [                       # 多条规则之间 OR
+  { "expressions": [                   # 一条规则内多表达式 AND(空 expressions 下发校验拒绝)
+      { "field": "user_id|group_id|bot_id",
+        "op":    "in|not_in",
+        "values": ["v1", "v2"] }       # 字符串集合;空 values:in 恒假、not_in 恒真
+  ]}
+]
+```
 
-| `kind` | `op` | 需要的字段 | 说明 |
-|---|---|---|---|
-| `template` | `create` | `template_id`, `template`(完整结构) | 新建 template |
-| | `update` | `template_id`, `updates`(部分字段) | 更新 template 的部分字段 |
-| | `delete` | `template_id` | 删除;引用它的 `scope:config` 失效 |
-| | `sync` | `templates`(数组,全量) | 全量同步(增删改);以数组为准 |
-| `routing_rule` | `create` | `rule_id`, `group_id`, `bot_id`, `template_id` | 新建路由规则 |
-| | `update` | `rule_id`, `updates`(部分字段) | 更新 |
-| | `delete` | `rule_id` | 删除 |
-| | `sync` | `rules`(数组,全量) | 全量同步 |
+**匹配语义**(resolve 权威定义):请求属性 (user_id, group_id, bot_id) 对 scopes 按 `(index ASC, scope_id ASC)` 排序遍历,**首个命中的 scope 即止**(first-fit);scope 命中 = 空 routing_rules(通配)或任一规则为真(OR);规则为真 = 全部表达式为真(AND);表达式 = 属性值 `in`/`not in` 集合。引用模板缺失或 `enabled=False` 的 scope 视为不命中,继续落下一个。**下发方保证含一个空规则的通配 scope 兜底**;服务端缺失时仅 WARNING 放行,运行时无匹配 → 503 `CONFIG_NOT_FOUND`。
+
+**`config_sync` 入参完整 schema**(全量快照式,一次请求同时携带两个列表;旧 `kind/op` 协议 400 拒绝):
+
+```json
+{
+  "templates": [ {"template_id": "...", "...template 字段": ...} ],
+  "scopes":    [ {"scope_id": "...", "index": 0, "template_id": "...",
+                  "routing_rules": [ ... ]} ]
+}
+```
+
+- 语义:**以数组为准的全量替换**(upsert 全部 + 删除消失项);幂等重放收敛(affected_scopes 为空)。
+- 校验(400 VALIDATION):`templates`/`scopes` 非 list;template 缺 `template_id`;scope_id 字符集非法;`index` 非整数;scope 引用不在本批模板集内的 template;规则空 `expressions`;表达式 field/op 非法或 values 非字符串数组;同批 scope_id 重复。
+- 每次成功下发都会:重建路由快照(§5.1 `routing:snapshot`)、对每个存活 scope 推 RM 池参数 + pod_spec(**eager 预热**:autoscale 下一拍即预热 min_idle)、对被删 scope 推 `min_idle=0`(自然排空)。
 
 **错误响应体**(所有非 2xx):
 
@@ -320,8 +337,9 @@ flowchart TB
         direction TB
         SS[("scope:scope_A:sessions<br/>SET: 活跃 session_id<br/>SCARD = scope 并发闸门")]:::set
         SP[("scope:scope_A:pods<br/>ZSET: pod_id → 接入序<br/>(first-fit 按序遍历)")]:::zset
-        SCFG[("scope:scope_A:config<br/>HASH: 并发/ttl/max_pods 缓存<br/>(config 失效)")]:::hash
     end
+
+    SNAP[("routing:snapshot<br/>STRING: 路由快照 JSON<br/>(scopes+templates,config_sync 原子覆盖)")]:::hash
 
     subgraph POD1["pod_1 @ scope_A"]
         PS[("pod:scope_A:pod_1:sessions<br/>SET: 该 Pod 上的 session_id<br/>SCARD &lt; pod_concurrency = 容量闸门")]:::set
@@ -356,7 +374,7 @@ flowchart TB
 | `session:{session_id}` | HASH | scope_id / pod_id / expiry / session_ttl | 单会话亲和绑定;route 写、touch 读续期、evict 删 |
 | `scope:{scope_id}:sessions` | SET | 该 scope 活跃 session_id | **SCARD = scope 活跃数 = scope_concurrency 闸门** |
 | `scope:{scope_id}:pods` | ZSET | pod_id(score=接入序) | 该 scope 的 Pod 候选集,first-fit 按序遍历;sweeper ZREM 使 Pod 退出候选 |
-| `scope:{scope_id}:config` | HASH | scope_concurrency / session_ttl / pod_concurrency / max_pods / min_idle_pods / pod_ttl / template_id / ver | resolve 的 Redis 缓存;config_sync 主动 DEL 失效 |
+| `routing:snapshot` | STRING | 全部 scopes(含规则/索引)+ templates 的 JSON | **路由快照**:resolve 的唯一读源(route 每请求 1 GET,进程内按原文 memo 免重复解析);config_sync 写 DB 后原子 SET 覆盖,缺失/损坏由首次 resolve 从 DB 重建 |
 | `scope:{scope_id}:waiters` | SET | 等待中的 request_id | **等待队列上限 max_waiters**(满了快失败 503;入队经 `LUA_WAITER_GATE` 原子闸门:SADD 先行 + 超限自退,并发不超收,稳态 SCARD ≤ max_waiters) |
 | `scope:{scope_id}:free` | PubSub | —(无持久值) | 额度释放信号(evict PUBLISH、阻塞 route SUBSCRIBE) |
 | `pod:{scope_id}:{pod_id}:sessions` | SET | 该(scope, Pod)上的 session_id | **SCARD < pod_concurrency = Pod 容量闸门** |
@@ -408,7 +426,7 @@ flowchart TB
 |---|---|---|---|
 | `resource:scope:{scope_id}:pods` | ZSET | pod_id(score=创建序) | 该 scope 全部 Pod(in_use ∪ idle);`ZCARD` 参与 `max_pods` 判定 |
 | `resource:scope:{scope_id}:idle` | SET | idle 的 pod_id | **SCARD = idle Pod 数**(autoscale / reclaim 闸门;acquire 从此取暖 Pod) |
-| `resource:scope:{scope_id}:config` | HASH | min_idle_pods / max_pods / pod_ttl | 首 acquire 存,后续读;config_sync 经 `update_pool_config` **主动刷新**(`autoscale_interval` 全局默认,不入) |
+| `resource:scope:{scope_id}:config` | HASH | min_idle_pods / max_pods / pod_ttl / pod_concurrency / deploy_ver / pod_spec_json | config_sync 对**每个存活 scope 主动写入/刷新**(带 pod_spec——无请求 scope 的 autoscale 预热依赖 pod_spec_json);首 acquire 也会兜底写入;被删 scope 推 `min_idle=0` 停预热自然排空 |
 | `resource:scope:{scope_id}:deploying` | SET | deploy 占位 token(uuid) | 计入 `max_pods` 判定(防并发 deploy 超配);register / 失败时清 |
 | `resource:scope:{scope_id}:deploy_followers` | ZSET | deploy 锁输家的 request_id → deadline | follower 等待室(M8):`ZCARD ≤ pod_concurrency-1`;检测 leader Pod 注册即复用;score=deadline 供闸门清崩溃遗留 |
 | `resource:pod:{pod_id}:info` | HASH | scope_id / pod_sse_url / pod_ip / namespace / phase / created_ts / deploy_ver | Pod 元信息;`scope_id` 标识所属池;`deploy_ver` 供 acquire 版本过滤(只发当前版本暖 Pod) |
@@ -442,7 +460,7 @@ flowchart TB
 | J | 死 Pod 探测清理 | K8s Watch 探测 | 清 Redis+K8s + 通知 SM | 故障自愈(RM 侧) |
 | K | reclaim 自治回收 | 空闲超 pod_ttl | 周期扫 idle 池回收(ZREM 堵 route 直选) | 低峰自动缩容 |
 | L | 孤儿 Pod 对账 | idle_consider 丢失/漂移 | RM 每 30s `reconcile_pods` 把 SM 已不用的 Pod 移入 idle / reclaim | 消除孤儿,不误杀 |
-| M | 配置热更新 | config_sync 下发 | A 类(deploy 字段)日落老 Pod / B 类(策略参数)只调参、立即生效 | 配置变更不中断服务 |
+| M | 配置热更新 | config_sync 全量下发 {templates, scopes} | A 类(deploy 字段/换引用)日落老 Pod / B 类(策略参数)快照覆盖立即生效 / 删除 scope 自然排空 / eager 预热 min_idle | 配置变更不中断服务 |
 | N | 半死 Pod 检测 | Pod Running 但 SSE 服务不通 | RM 周期探测 AgentServer 健康 SSE 端点,判死清理 | 旁路架构下的数据面健康兜底 |
 
 ### 6.2 详细场景(含 Redis 状态变化)
@@ -456,8 +474,8 @@ sequenceDiagram
     participant SM as Session Manager
     participant R as Redis
     participant Pod as Pod (pod_1)
-    GW->>SM: POST /route {sess_1, grp, bot}
-    SM->>SM: scope_id = md5(grp+bot) = scope_A
+    GW->>SM: POST /route {sess_1, user, grp, bot}
+    SM->>SM: 路由匹配(快照 first-fit)→ scope_id = scope_A
     SM->>R: HGETALL session:sess_1
     R-->>SM: {scope_id=scope_A, pod_id=pod_1, expiry=T, session_ttl=60}
     Note over SM: 亲和命中 & expiry>now → 仅续期<br/>不重抢额度、不换 Pod
@@ -690,8 +708,8 @@ sequenceDiagram
 
 > 价值:**故障自愈**——Pod 挂了立即回收所有粘在它上的会话,受影响用户重新 route 即被分配到健康 Pod,不留孤儿状态。
 
-#### 场景 H:min_idle 热备 —— 空闲预建 Pod
-**前置**:某 `scope_A` 的 `min_idle_pods=1`,当前该 scope idle 池为空(所有 Pod 在用)。autoscale 每全局 `autoscale_interval` 默认(0.5s)检查,抢 `lock:rm:autoscale`(per-scope)。
+#### 场景 H:min_idle 热备 —— 空闲预建 Pod(配置驱动,无需请求)
+**前置**:某 `scope_A` 的 `min_idle_pods=1`,当前该 scope idle 池为空(所有 Pod 在用或尚未有请求)。autoscale 每全局 `autoscale_interval`(默认 1s)检查,抢 `lock:rm:autoscale`(per-scope)。**config_sync 已对该 scope 主动写入 RM scope config(含 pod_spec)**——因此**从未被请求过的 scope 也会被预热**(eager:下发即预备热备,见场景 M)。
 
 ```mermaid
 sequenceDiagram
@@ -843,8 +861,8 @@ sequenceDiagram
 
 > 价值:**消除孤儿 Pod**——`idle_consider` 丢失 / SM 重启漂移导致的「RM 仍持有 Pod、SM 已不用」由周期对账兜底移入 idle / reclaim。**只删 SM 已 `ZREM` 的对**(SM 不再 route 到它),不误杀有活跃会话的 Pod。经 Facade、不读 SM 模块 key(SM 读自身前缀返回 `stale`)。
 
-#### 场景 M:配置热更新 —— A 类日落老 Pod / B 类只调策略
-**前置**:Claw Manager 经 `config_sync` 下发 template 更新(可能是镜像升级,也可能只是调参)。
+#### 场景 M:配置热更新 —— 全量下发 / A 类日落老 Pod / B 类只调策略 / 无请求预热
+**前置**:Claw Manager 经 `config_sync` **全量下发** `{templates, scopes}`(快照式替换;旧 `kind/op` 增量协议已废弃,400 拒绝)。
 
 **总原则:新值对增量生效;存量不驱逐、自然过渡(grandfathered)。** 改"Pod 长什么样"→ 老 Pod 日落换血;改"怎么管流量 / 池"→ 只调策略,老 Pod 原地继续服务。
 
@@ -854,17 +872,20 @@ sequenceDiagram
     participant SM as Session Manager
     participant R as Redis
     participant RM as Resource Manager
-    CM->>SM: POST /config_sync {template 更新}
-    SM->>SM: 写 DB + 与 DB 老行逐字段 diff(deploy_ver 对比)
-    alt A 类(deploy_ver 变,镜像等 deploy 字段)
+    CM->>SM: POST /config_sync {templates, scopes}(全量)
+    SM->>SM: 锁外校验(400)→ 抢 lock:config_sync(忙→409)
+    SM->>SM: 读 DB 旧态 → 模板/scope diff → 日落中间态检查(先于写库)
+    SM->>SM: 写 DB(upsert 全部 + 删消失项;失败即中止,不动快照/不推送)
+    SM->>R: 重建路由快照(原子 SET routing:snapshot;B 类立即生效由此完成)
+    SM->>RM: 对每个存活 scope update_pool_config(池参数 + pod_spec)<br/>★eager 预热:autoscale 下一拍即预热 min_idle(无需任何请求)
+    opt A 类(有效模板 deploy_ver 变:模板变更或 scope 换引用)
         SM->>R: ZREM 老版本 Pod 出 scope:pods 候选集(软摘除)
-        SM->>RM: rm_facade.update_pool_config(池参数 + 新 deploy 字段)
         Note over RM: autoscale 新暖 Pod 用新镜像<br/>acquire 取暖 Pod 跳过老版本
         Note over R: 存量会话粘老 Pod 直至老化<br/>老 Pod 排空 → idle → 按 pod_ttl 回收
-    else B 类(池参数 / 策略)
-        SM->>R: DEL scope:config(下次 route 重 resolve)
-        SM->>RM: rm_facade.update_pool_config(新池参数)
-        Note over RM: autoscale / reclaim 立即用新值
+    end
+    opt scope 从下发列表消失(删除)
+        SM->>RM: update_pool_config(min_idle=0)
+        Note over RM: 停止预热;存量会话到期止<br/>空闲 Pod 按 pod_ttl 自然排空(不强制驱逐)
     end
 ```
 
@@ -891,23 +912,25 @@ sequenceDiagram
 | `max_pods`(派生) | 下次 route / acquire;调小→不再扩,存量按 `pod_ttl` 自然回收 |
 | `kubeconfig` | RM 的 deploy 凭证,只影响新 deploy 操作,不影响运行中 Pod(**虽在 deploy 子集但例外**) |
 
-**变更检测**:config_sync 处理时,SM 手里同时有老值(DB 现行 template 行)和新值(下发 payload),**进程内逐字段 diff**(不在热路径上)。`deploy_ver` = A 类字段的 hash 指纹——新旧 `deploy_ver` 不等即 A 类变更(字段级 diff 供审计 / 决策明细)。`max_pods` 是派生值,随 `scope_concurrency`/`pod_concurrency` 自动涵盖。
+**变更检测**:config_sync 处理时,SM 手里同时有老值(DB 现行 template/routing_scope 行)和新值(下发 payload),**进程内逐字段 diff**(不在热路径上)。`deploy_ver` = A 类字段的 hash 指纹——新旧 `deploy_ver` 不等即 A 类变更(字段级 diff 供审计 / 决策明细)。`max_pods` 是派生值,随 `scope_concurrency`/`pod_concurrency` 自动涵盖。**受影响 scope 从 DB scope 表确定性求出**(引用变更模板的 scope ∪ 引用切换的 scope),不再依赖缓存反查。**scope 的"有效模板" A 类判定**:模板自身 deploy_ver 变、或 scope 换引用模板且新旧模板 deploy_ver 不同,都按 A 类日落该 scope 的老 Pod。
 
 **A 类日落机制(保证新流量不落老 Pod):**
-1. **SM 侧软摘除**:`pod:info` 记录 `deploy_ver`(注册 Pod 时的指纹);config_sync 对比新旧 `deploy_ver` 不等 → 反查受影响 scope → 把 `deploy_ver` 不匹配的 Pod **ZREM 出 `scope:pods` 候选集**(与 `idle_consider` 同款机制)——即刻退出 first-fit,**不再接任何新 session**。存量会话不受影响(亲和续期直读 session HASH,不查候选集),继续粘在老 Pod 直至老化。
+1. **SM 侧软摘除**:`pod:info` 记录 `deploy_ver`(注册 Pod 时的指纹);config_sync 对比新旧 `deploy_ver` 不等 → 定位受影响 scope → 把 `deploy_ver` 不匹配的 Pod **ZREM 出 `scope:pods` 候选集**(与 `idle_consider` 同款机制)——即刻退出 first-fit,**不再接任何新 session**。存量会话不受影响(亲和续期直读 session HASH,不查候选集),继续粘在老 Pod 直至老化。
 2. **RM 侧版本过滤**:`acquire` 从 `scope:idle` 取暖 Pod 时**跳过 `deploy_ver` 不匹配的**(老镜像暖 Pod 留在 idle 池按 `pod_ttl` 回收,不外发给新流量);`update_pool_config` 推送同时刷新 RM 缓存的 deploy 字段 → autoscale 补位的暖 Pod 用**新镜像**。
 3. **判定粒度是 deploy 子集指纹**:只改 B 类参数时 `deploy_ver` 不变,不触发日落,老 Pod 继续接新流量(避免任何配置变更都引发全量重部署)。
 
-**B 类推送**:SM 经 **`rm_facade.update_pool_config(scope_id, pool_config)`** 把新池参数(`min_idle_pods` / `max_pods` / `pod_ttl`)主动推给 RM,RM 覆盖 `resource:scope:{scope_id}:config`(HSET 幂等)——autoscale / reclaim **立即**按新值执行(不再只等下次 acquire)。
+**B 类推送 / eager 预热**:SM 经 **`rm_facade.update_pool_config(scope_id, pool_config, pod_spec)`** 把池参数 + deploy 子集主动推给 RM,RM 覆盖 `resource:scope:{scope_id}:config`(HSET 幂等)——autoscale / reclaim **立即**按新值执行。**config_sync 对每个存活 scope 都推(始终带 pod_spec)**:RM 侧只有带 pod_spec 才会落 `pod_spec_json`/`deploy_ver`,autoscale 才能无请求预热 min_idle——这是"配置驱动预热"(下发即预备热备,无需首个请求触发)的实现核心。
+
+**scope 删除(从下发列表消失)**:推 `min_idle=0` 停止预热;存量会话**不强制驱逐**(亲和续期到 TTL 自然到期);空闲 Pod 由 reclaim(aged ≥ pod_ttl)自然排空。RM 侧 scope config 键残留无害(复活时推送覆盖)。
 
 **镜像升级路径**(A 类变更的落地):默认**自然滚动**——老 Pod 无新会话 → 存量老化排空 → idle → 按 `pod_ttl` 回收;新流量 first-fit 只剩 / acquire 只发新镜像 Pod。需快速切换时用运维 **`cleanup` 批删 + autoscale 重建**(强制,中断存量会话)。
 
 **串行化与并发控制**:服务是多副本 + LB,两次 `config_sync` 可能落到**不同副本并发执行**(diff / 日落 / 推送互相交错)。处理:
 1. **分布式锁串行**:`config_sync` 全程持 `lock:config_sync`(SET NX EX,EX = 处理超时上限);抢不到 → 返回 **409 `CONFIG_SYNC_BUSY`**(可重试,带 `Retry-After`),不排队。
-2. **完成判定含老 Pod 日落**:上一次热更新**未完全完成前拒绝下一次**——完成 = 处理流程结束 + 受影响 scope **无"已日落待回收"的 Pod**(SM 侧判定:`pods:registered` 中属于该 scope、但已不在 `scope:pods` 候选集里的 Pod 即中间态残留;全部回收后 `notify_pod_dead` 清注册,中间态清零)。
-3. **写 DB 失败防护**:写 DB 失败 → 立即中止,**不得 `DEL scope:config`、不得推送**(防 cache 脏刷新——对应真实 bug:DB 写异常后缓存被脏数据刷新)。
+2. **完成判定含老 Pod 日落**:上一次热更新**未完全完成前拒绝下一次**——完成 = 处理流程结束 + 受影响 scope **无"已日落待回收"的 Pod**(SM 侧判定:`pods:registered` 中属于该 scope、但已不在 `scope:pods` 候选集里的 Pod 即中间态残留;全部回收后 `notify_pod_dead` 清注册,中间态清零)。**检查先于写 DB**:拒绝时 DB/Redis 均未被改动。
+3. **写 DB 失败防护**:写 DB 失败 → 立即中止,**不得 SET 路由快照、不得推送**(运行时继续用 last-known-good 快照;对应真实 bug教训:DB 写异常后缓存被脏数据刷新)。DB 无事务,部分写入时快照未动、服务面无感,下次成功下发收敛。
 
-> 价值:**配置变更不中断服务**——A 类(镜像等)通过软摘除 + 版本过滤实现自然滚动,新流量只走新 Pod、存量会话无感;B 类(策略参数)经主动推送立即生效、老 Pod 原地复用;串行化 + 日落完成判定保证并发下发不交错。
+> 价值:**配置变更不中断服务**——A 类(镜像等)通过软摘除 + 版本过滤实现自然滚动,新流量只走新 Pod、存量会话无感;B 类(策略参数)经路由快照原子覆盖 + 主动推送立即生效、老 Pod 原地复用;**eager 预热让每个 scope 在下发后即拥有 min_idle 热备**(无需首个请求);串行化 + 日落完成判定保证并发下发不交错。
 
 #### 场景 N:半死 Pod 检测 —— AgentServer 健康 SSE 端点 + RM 周期探测
 **前置**:`pod_2` 在 K8s 侧 Running/Ready,但其 SSE 服务 hang 死 / 不响应(进程死锁、事件循环阻塞、连接堆积)。**K8s Watch 看不到这种半死**——bypass 架构下 SM/gateway 直连数据面,控制面里只有 RM 管物理面,因此**半死检测归 RM**。
@@ -952,7 +975,9 @@ sequenceDiagram
 对外的四个接口(`route` / `touch` / `config_sync` / `cleanup`)用什么凭证(mTLS 或 token)、是否允许本次调用,由底层**服务框架 `openjiuwen_runtime.service` 统一把关**(`link_auth` + adapter 中间件),本服务只声明各接口的调用方约束:`config_sync` 只许 Claw Manager 调、`cleanup` 只许运维调。SM 与 RM 之间的调用是同进程函数调用,不经过网络框架,因此不需要鉴权。
 
 ### 7.5 输入校验 —— 通用校验框架做,本服务只补自己特有的
-接口入参的常规校验(字符集合法、长度不超、非空、数值在合理范围)由**服务框架在进入 handler 之前统一拦掉**,handler 不必重复实现。本服务只补一条框架管不到的:用 `(group_id, bot_id)` 算 `scope_id` 时,中间插一个特殊分隔符再做 md5(`md5(group_id + '\x00' + bot_id)`),避免 `(群=ab,机器人=c)` 与 `(群=a,机器人=bc)` 算出同一个 scope——这些字段会直接拼进 Redis 键名,一旦撞号,两个不同的群 / 机器人就会混进同一个资源域。
+接口入参的常规校验(字符集合法、长度不超、非空、数值在合理范围)由**服务框架在进入 handler 之前统一拦掉**,handler 不必重复实现。本服务只补框架管不到的两条:
+1. `scope_id` 由 config_sync 下发,服务端在入口强校验字符集 `[0-9A-Za-z._-]{1,128}`——它会直接拼进 Redis 键名(`scope:{scope_id}:*`)与 `pods:registered` 的 `"{scope}:{pod}"` 条目(按首个 `:` 切分),含 `:`/`*`/空白会破坏键解析与切分唯一性;
+2. `route` 四参(session_id/user_id/group_id/bot_id)非空在 orchestrator 补校验(user_id/group_id 经信封可选传递,框架拦不到空串语义)。
 
 ### 7.6 状态持久化 —— 重启不丢编排态,清库属灾难
 所有运行时状态(会话亲和、额度占用、Pod 池)都放在 Redis,不在进程内存。因此 Redis **必须开持久化(AOF / RDB)**,服务重启后状态原样还在,无需重建。但 Redis 被整体清空(flush)属于灾难——会话和 TTL 同时丢失,不在自动恢复范围内;这时 K8s 里还活着的旧 Pod 会变成没人管的"孤儿",靠 RM 的周期对账慢慢发现并按 `pod_ttl` 回收。所以部署上禁止清库,也不提供"列出所有 Pod"的接口。

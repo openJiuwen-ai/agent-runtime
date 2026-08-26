@@ -69,19 +69,22 @@ class K8sPodClient:
     async def list_pods(self, namespace: str, label_selector: str) -> list[PodInfo]:
         raise NotImplementedError
 
-    async def probe_health(self, pod_ip: str, sse_port: int) -> bool:
-        """场景 N：探测 AgentServer 健康端点 GET http://{pod_ip}:{sse_port}/health。"""
+    async def probe_health(self, pod_ip: str, sse_port: int,
+                           health_path: str = "/health") -> bool:
+        """场景 N：探测 AgentServer 健康端点 GET http://{pod_ip}:{sse_port}{health_path}。"""
         try:
             async with httpx.AsyncClient(timeout=3.0) as client:
-                response = await client.get(f"http://{pod_ip}:{sse_port}/health")
+                response = await client.get(
+                    f"http://{pod_ip}:{sse_port}{health_path or '/health'}")
                 if response.status_code != 200:
-                    logger.debug("health probe non-200: ip=%s port=%s status=%s",
-                                 pod_ip, sse_port, response.status_code)
+                    logger.debug("health probe non-200: ip=%s port=%s path=%s status=%s",
+                                 pod_ip, sse_port, health_path, response.status_code)
                 return response.status_code == 200
         except Exception as exc:  # noqa: BLE001 - 探测失败即不健康
             # 失败原因留痕（调用方 sweeper 有同节奏 WARNING，这里 DEBUG 补细节）
-            logger.debug("health probe error: ip=%s port=%s error=%s: %s",
-                         pod_ip, sse_port, type(exc).__name__, exc)
+            logger.debug("health probe error: ip=%s port=%s path=%s error=%s: %s",
+                         pod_ip, sse_port, health_path,
+                         type(exc).__name__, exc)
             return False
 
 
@@ -187,18 +190,27 @@ class RealK8sPodClient(K8sPodClient):
         if container_port != sse_port:
             ports.append(c.V1ContainerPort(name="http", container_port=container_port))
 
-        # AgentServer 固定约定：SSE 端口提供 GET /health（场景 N）
+        # AgentServer 固定约定：SSE 端口提供健康端点（默认 /health，模板可覆盖——
+        # 真 AgentServer HTTP 入口为 /api/v1/health）
         probe = c.V1Probe(
-            http_get=c.V1HTTPGetAction(path="/health", port=sse_port),
+            http_get=c.V1HTTPGetAction(path=spec.get("health_path") or "/health",
+                                       port=sse_port),
             initial_delay_seconds=int(spec.get("readiness_initial_delay") or 5),
             period_seconds=int(spec.get("readiness_period") or 5),
         )
+
+        # Agent 容器 env 注入（模板 agent_env，如 AGENT_HTTP_ENABLED/HOST/PORT）
+        env = [
+            c.V1EnvVar(name=str(k), value=str(v))
+            for k, v in (spec.get("agent_env") or {}).items()
+        ] or None
 
         container = c.V1Container(
             name=spec.get("container_name") or "agent",
             image=spec.get("agent_image") or "",
             image_pull_policy=spec.get("image_pull_policy") or "IfNotPresent",
             ports=ports,
+            env=env,
             volume_mounts=mounts or None,
             resources=resources,
             readiness_probe=probe,
@@ -397,7 +409,8 @@ class FakeK8sPodClient(K8sPodClient):
             return PodInfo(**{**info.__dict__, "ready": False})
         return info
 
-    async def probe_health(self, pod_ip: str, sse_port: int) -> bool:
+    async def probe_health(self, pod_ip: str, sse_port: int,
+                           health_path: str = "/health") -> bool:
         return pod_ip not in self.unhealthy_pods
 
 

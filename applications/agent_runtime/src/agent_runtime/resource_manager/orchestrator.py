@@ -246,16 +246,33 @@ class ResourceOrchestrator:
         *,
         idle_flag: bool,
     ) -> tuple[str, str]:
-        """create + wait Ready + REGISTER。失败清占位后抛 DeployFailed（红线）。"""
+        """create + wait Ready + REGISTER。失败清占位后抛 DeployFailed（红线）。
+
+        红线含 CancelledError（优雅停机会取消在飞的 autoscale/route tick）：
+        except Exception 接不住 BaseException，占位泄漏会把池永久堵死
+        （真环境 2026-08-26 实测：两次停机各泄一个 warm 占位 → max_pods 虚满）。
+        """
         t0 = time.monotonic()
         try:
             info = await self.k8s.deploy(pod_spec)
-        except Exception as exc:
-            await self.state.clear_deploy_token(scope_id, deploy_token)
+        except BaseException as exc:   # noqa: BLE001 - 占位清理红线含取消路径
+            try:
+                await self.state.clear_deploy_token(scope_id, deploy_token)
+            except Exception:  # noqa: BLE001 - 清理失败不掩盖原始异常
+                logger.exception(
+                    "clear deploying token failed during aborted deploy: "
+                    "scope=%s token=%s", scope_id, deploy_token,
+                )
             if isinstance(exc, DeployFailed):
                 logger.warning(
                     "deploy failed: scope=%s duration_ms=%.1f detail=%s",
                     scope_id, (time.monotonic() - t0) * 1000, exc,
+                )
+                raise
+            if isinstance(exc, asyncio.CancelledError):
+                logger.warning(
+                    "deploy cancelled (shutdown?), token cleared: scope=%s "
+                    "duration_ms=%.1f", scope_id, (time.monotonic() - t0) * 1000,
                 )
                 raise
             logger.exception(

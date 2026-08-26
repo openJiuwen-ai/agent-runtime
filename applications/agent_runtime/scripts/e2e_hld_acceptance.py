@@ -19,6 +19,7 @@ AgentServer 原生支持 GET /health 后补验（单测已覆盖）。
 场景 → 步骤映射：
   A 亲和续期 / B first-fit / C 扩 Pod   → 阶段 2（main scope 真实 deploy 2 个 Pod）
   M 配置热更新（B 类 + A 类）           → 阶段 3（pod_ttl 热更）/ 阶段 10（deploy 字段日落）
+  H0 无请求预热（配置驱动）             → 阶段 1（零 Pod 基线）/ 阶段 1b（下发后即预热 min_idle）
   D 老化回收 / E 保活                   → 阶段 4（session_ttl 到期 → idle 暖池）
   K reclaim 自治                        → 阶段 5（回拨 idle_since，真删 K8s Pod）
   I acquire deploy 失败分支             → 阶段 6（不可拉镜像 → NO_POD_AVAILABLE + 占位清）
@@ -53,7 +54,6 @@ from e2e_lib import (  # noqa: F401 (check/skip/envelope 供各 stage 直接用)
     envelope,
     kubectl,
     redis_guard,
-    scope_id,
     skip,
     wait_until,
 )
@@ -147,12 +147,32 @@ def template(**overrides) -> dict:
 
 
 TPL = {}
-RULES = [
-    ("rule-main", "e2e-main", "tpl-e2e"),
-    ("rule-f", "e2e-f", "tpl-f"),
-    ("rule-warm", "e2e-warm", "tpl-warm"),
-    ("rule-bad", "e2e-bad", "tpl-bad"),
+# (scope_id, template_id, [命中的 group_id 集合])——scope 由 config_sync 下发,
+# 按 group_id 路由;不播种通配兜底,使「未知 group → CONFIG_NOT_FOUND」可验收
+SCOPES_DEF = [
+    ("e2e-main", "tpl-e2e", ["e2e-main"]),
+    ("e2e-f", "tpl-f", ["e2e-f"]),
+    ("e2e-warm", "tpl-warm", ["e2e-warm"]),
+    ("e2e-bad", "tpl-bad", ["e2e-bad"]),
 ]
+
+
+def full_sync_payload(tpl_overrides: dict | None = None) -> dict:
+    """config_sync 全量载荷:4 模板 + 4 scope(按 group 路由)。
+
+    tpl_overrides: {template_id: {字段: 新值}} —— B/A 类热更新阶段复用。
+    """
+    templates = [
+        {"template_id": tid, **tpl, **(tpl_overrides or {}).get(tid, {})}
+        for tid, tpl in TPL.items()
+    ]
+    scopes = [
+        {"scope_id": sid, "index": i, "template_id": tid,
+         "routing_rules": [{"expressions": [
+             {"field": "group_id", "op": "in", "values": groups}]}]}
+        for i, (sid, tid, groups) in enumerate(SCOPES_DEF)
+    ]
+    return {"templates": templates, "scopes": scopes}
 
 
 def build_templates() -> None:
@@ -175,7 +195,7 @@ async def clean_previous(c: Client, r: aioredis.Redis) -> None:
         await asyncio.create_subprocess_exec(
             "psql", f"-h{DB_DSN['host']}", f"-p{DB_DSN['port']}",
             f"-U{DB_DSN['user']}", "-d", DB_DSN["name"], "-c",
-            "TRUNCATE service_config_template, routing_rule;",
+            "TRUNCATE service_config_template, routing_scope;",
             stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
             env={**os.environ, "PGPASSWORD": DB_DSN["password"]})
     elif shutil.which("mysql") is not None:
@@ -184,7 +204,7 @@ async def clean_previous(c: Client, r: aioredis.Redis) -> None:
             f"-u{DB_DSN['user']}", f"-p{DB_DSN['password']}", "-e",
             f"USE {DB_DSN['name']}; "
             "SET FOREIGN_KEY_CHECKS=0; TRUNCATE service_config_template; "
-            "TRUNCATE routing_rule; SET FOREIGN_KEY_CHECKS=1;",
+            "TRUNCATE routing_scope; SET FOREIGN_KEY_CHECKS=1;",
             stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
     out = await kubectl("delete", "pod", "-n", NS, "-l",
                         "jiuwenclaw-component=agentserver", "--wait=false")
@@ -194,45 +214,67 @@ async def clean_previous(c: Client, r: aioredis.Redis) -> None:
 # ---------------------------------------------------------------- 阶段
 
 async def stage1_seed(c: Client, r) -> None:
-    print("\n== 阶段 1：config_sync 下发模板 + 路由规则（含 DB 落库）==")
-    for tpl_id, tpl in TPL.items():
-        code, raw, body = await c.post("config_sync", rawdata={
-            "kind": "template", "op": "create",
-            "template_id": tpl_id, "template": tpl})
-        check(f"config_sync create {tpl_id}", code == 200 and raw.get("ok") is True,
-              json.dumps(body, ensure_ascii=False)[:200])
-    for rule_id, group, tpl_id in RULES:
-        code, raw, body = await c.post("config_sync", rawdata={
-            "kind": "routing_rule", "op": "create", "rule_id": rule_id,
-            "group_id": group, "bot_id": "b", "template_id": tpl_id})
-        check(f"config_sync rule {rule_id}", code == 200 and raw.get("ok") is True)
+    print("\n== 阶段 1：config_sync 全量下发模板 + scope（含 DB 落库）==")
+    # 前置观察：清场后（无任何配置）集群零 AgentServer Pod——配置驱动预热的基线
+    async def no_pods() -> bool:
+        out = await kubectl("get", "pods", "-n", NS, "-l",
+                            "jiuwenclaw-component=agentserver", "--no-headers")
+        return not out.strip() or "No resources found" in out
+    check("H0-无配置时零 AgentServer Pod（不因服务启动而拉起）",
+          await wait_until(no_pods, 30, 2))
+    check("H0-无路由快照（配置未下发）",
+          not await r.exists("session_manager:routing:snapshot"))
+
+    code, raw, body = await c.post("config_sync", rawdata=full_sync_payload())
+    check("config_sync 全量下发（4 模板 + 4 scope）",
+          code == 200 and raw.get("ok") is True
+          and raw.get("templates_synced") == 4 and raw.get("scopes_synced") == 4,
+          json.dumps(body, ensure_ascii=False)[:200])
+    snap = await r.get("session_manager:routing:snapshot")
+    check("M-路由快照已写入 Redis（routing:snapshot）", bool(snap),
+          f"len={len(snap or '')}")
     if DB_DSN.get("type") == "postgresql":
         if shutil.which("psql") is None:
-            skip("DB(service_config_template/routing_rule) 落库", "psql 客户端不可用")
+            skip("DB(service_config_template/routing_scope) 落库", "psql 客户端不可用")
             return
         env = {**os.environ, "PGPASSWORD": DB_DSN["password"]}
         proc = await asyncio.create_subprocess_exec(
             "psql", f"-h{DB_DSN['host']}", f"-p{DB_DSN['port']}",
             f"-U{DB_DSN['user']}", "-d", DB_DSN["name"], "-t", "-A", "-c",
             "SELECT (SELECT COUNT(*) FROM service_config_template), "
-            "(SELECT COUNT(*) FROM routing_rule);",
+            "(SELECT COUNT(*) FROM routing_scope);",
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
             env=env)
         out, _ = await proc.communicate()
         counts = [int(x) for x in out.decode().strip().split("|")]
     else:
         if shutil.which("mysql") is None:
-            skip("DB(service_config_template/routing_rule) 落库", "mysql 客户端不可用")
+            skip("DB(service_config_template/routing_scope) 落库", "mysql 客户端不可用")
             return
         proc = await asyncio.create_subprocess_exec(
             "mysql", f"-h{DB_DSN['host']}", f"-P{DB_DSN['port']}",
             f"-u{DB_DSN['user']}", f"-p{DB_DSN['password']}", "-N", "-e",
             f"USE {DB_DSN['name']}; SELECT COUNT(*) FROM service_config_template; "
-            "SELECT COUNT(*) FROM routing_rule;",
+            "SELECT COUNT(*) FROM routing_scope;",
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
         out, _ = await proc.communicate()
         counts = [int(x) for x in out.decode().split()]
-    check("DB(service_config_template/routing_rule) 落库", counts == [4, 4], str(counts))
+    check("DB(service_config_template/routing_scope) 落库", counts == [4, 4], str(counts))
+
+
+async def stage1b_warm_up_without_request(c: Client, r) -> None:
+    print("\n== 阶段 1b：无请求预热（config_sync → autoscale 预备 min_idle 热备）==")
+    # 此刻除播种外无任何 route；tpl-warm 的 scope（min_idle=1）应被 autoscale 预热
+    async def warm_ready() -> bool:
+        return await r.scard(f"resource_manager:resource:scope:{WARM}:idle") >= 1
+    ok = await wait_until(warm_ready, 60, 2)
+    idle = await r.smembers(f"resource_manager:resource:scope:{WARM}:idle")
+    check("H0-config_sync 后零 route → autoscale 预热 min_idle=1 热备 Pod",
+          ok and len(idle) == 1, str(idle))
+    if idle:
+        pod = next(iter(idle))
+        check("H0-热备 Pod 真实存在于 K8s（配置驱动,无请求拉起）",
+              await pod_exists(pod), pod)
 
 
 async def stage2_route_abc(c: Client, r) -> dict:
@@ -298,18 +340,18 @@ async def stage2_route_abc(c: Client, r) -> dict:
 
 async def stage3_mb_hot_update(c: Client, r) -> None:
     print("\n== 阶段 3：场景 M（B 类）—— pod_ttl 热更新立即生效 ==")
-    code, raw, _ = await c.post("config_sync", rawdata={
-        "kind": "template", "op": "update", "template_id": "tpl-e2e",
-        "updates": {"pod_ttl": 120}})
-    check("M-B config_sync update 成功", code == 200 and raw.get("ok") is True)
+    snap_before = await r.get("session_manager:routing:snapshot")
+    code, raw, _ = await c.post("config_sync", rawdata=full_sync_payload(
+        {"tpl-e2e": {"pod_ttl": 120}}))
+    check("M-B config_sync 全量更新成功", code == 200 and raw.get("ok") is True)
     await asyncio.sleep(1)
     cfg = await r.hgetall(f"resource_manager:resource:scope:{MAIN}:config")
     check("M-B RM 池参数缓存立即刷新 pod_ttl=120（update_pool_config 推送）",
           cfg.get("pod_ttl") == "120", str({k: v for k, v in cfg.items()
                                             if k in ("pod_ttl", "max_pods")}))
-    sm_cfg_exists = await r.exists(f"session_manager:scope:{MAIN}:config")
-    check("M-B SM resolve 缓存已失效（DEL，下一次 route 重新 resolve）",
-          not sm_cfg_exists, f"exists={sm_cfg_exists}")
+    snap_after = await r.get("session_manager:routing:snapshot")
+    check("M-B 路由快照已覆盖（下一次 route 即见新值）",
+          bool(snap_after) and snap_after != snap_before)
 
 
 async def stage4_aging(c: Client, r, state: dict) -> None:
@@ -444,10 +486,9 @@ async def stage10_ma_sunset(c: Client, r) -> None:
     cfg_key = f"resource_manager:resource:scope:{WARM}:config"
     ver_before = await r.hget(cfg_key, "deploy_ver")
     # A 类字段（readiness_period ∈ DEPLOY_VER_FIELDS）
-    code, raw, _ = await c.post("config_sync", rawdata={
-        "kind": "template", "op": "update", "template_id": "tpl-warm",
-        "updates": {"readiness_period": 7}})
-    check("M-A config_sync update（A 类）成功", code == 200 and raw.get("ok") is True)
+    code, raw, _ = await c.post("config_sync", rawdata=full_sync_payload(
+        {"tpl-warm": {"readiness_period": 7}}))
+    check("M-A config_sync 全量更新（A 类）成功", code == 200 and raw.get("ok") is True)
     await asyncio.sleep(1)
     ver_after = await r.hget(cfg_key, "deploy_ver")
     check("M-A RM scope:config deploy_ver 已变（新 Pod 用新 deploy 字段）",
@@ -495,11 +536,16 @@ async def stage12_reconcile_cleanup(c: Client, r) -> None:
 async def stage13_error_contract(c: Client, r) -> None:
     print("\n== 阶段 13：边界错误契约（真服务 HTTP 映射）==")
     code, raw, body = await c.post("route", session_id="s-norule", group="e2e-no-such-group")
-    check("无匹配路由规则 → 503 CONFIG_NOT_FOUND（不可重试，无 retry_after）",
+    check("无匹配 scope（未播通配兜底）→ 503 CONFIG_NOT_FOUND（不可重试，无 retry_after）",
           code == 503 and body.get("error_code") == "CONFIG_NOT_FOUND"
           and "retry_after" not in body, f"{code} {body.get('error_code')}")
     code, raw, body = await c.post("route", session_id=None, group="e2e-main")
     check("route 缺 session_id → 400 VALIDATION",
+          code == 400 and body.get("error_code") == "VALIDATION",
+          f"{code} {body.get('error_code')}")
+    code, raw, body = await c.post("route", session_id="s-nouser", group="e2e-main",
+                                   user=None)
+    check("route 缺 user_id → 400 VALIDATION",
           code == 400 and body.get("error_code") == "VALIDATION",
           f"{code} {body.get('error_code')}")
     code, raw, body = await c.post("touch", session_id=None)
@@ -507,7 +553,7 @@ async def stage13_error_contract(c: Client, r) -> None:
           code == 400 and body.get("error_code") == "VALIDATION")
     code, raw, body = await c.post("config_sync",
                                    rawdata={"kind": "nope", "op": "create"})
-    check("config_sync 未知 kind → 400 VALIDATION",
+    check("config_sync 旧 kind/op 协议 → 400 VALIDATION",
           code == 400 and body.get("error_code") == "VALIDATION")
     # 空目标 = 匹配不到任何 Pod 的 label selector（确定性为 0）。三个坑的结论：
     # 1) 不存在的 ns：in-cluster SA 的 namespaced RBAC 返回 403 而非空列表
@@ -557,8 +603,8 @@ async def main() -> None:
     DB_DSN = {"host": args.db_host, "port": args.db_port, "user": args.db_user,
               "password": args.db_password, "name": args.db_name,
               "type": args.db_type}
-    MAIN, FSCOPE = scope_id("e2e-main", "b"), scope_id("e2e-f", "b")
-    WARM, BAD = scope_id("e2e-warm", "b"), scope_id("e2e-bad", "b")
+    MAIN, FSCOPE = "e2e-main", "e2e-f"     # scope_id 由 config_sync 下发(字面量)
+    WARM, BAD = "e2e-warm", "e2e-bad"
     build_templates()
 
     print(f"agent-runtime 集成冒烟测试 @ {time.strftime('%F %T')}")
@@ -574,6 +620,7 @@ async def main() -> None:
             await clean_previous(c, r)
 
             await stage1_seed(c, r)
+            await stage1b_warm_up_without_request(c, r)
             state = await stage2_route_abc(c, r)
             await stage3_mb_hot_update(c, r)
             await stage4_aging(c, r, state)

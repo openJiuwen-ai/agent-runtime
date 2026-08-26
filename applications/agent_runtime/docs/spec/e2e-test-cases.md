@@ -33,8 +33,9 @@
   "metadata": {
     "request_id": "req-<uuid>",        // 必填;幂等键(60s 窗口)
     "session_id": "s1",                // route/touch 必填
+    "user_id": "u1",                   // route 必填(四参非空校验)
     "bot_id": "b",
-    "extra": {"group_id": "e2e-main"}  // route 必填;决定 scope
+    "extra": {"group_id": "e2e-main"}  // route 必填;路由表达式左值
   },
   "rawdata": {}                        // config_sync/cleanup 的载荷在此
 }
@@ -57,7 +58,7 @@
 ### 2.3 Redis 真相源(e2e 直接断言的键)
 
 - `session_manager:scope:{sid}:sessions`(SET,SCARD=scope 闸门)/`:pods`(ZSET,first-fit 候选)
-  /`:waiters`(SET)/`:config`(HASH,resolve 缓存)
+  /`:waiters`(SET);`session_manager:routing:snapshot`(STRING,路由快照)
 - `session_manager:session:{sid}`(HASH)/`session_expiry`(ZSET)/`pods:registered`(SET)
 - `resource_manager:resource:scope:{sid}:pods|idle|config|deploying`
 - `resource_manager:resource:pods:all`、`resource:pod:{pod}:idle_since`
@@ -81,7 +82,8 @@
   (`:8086/health`=200,满足 readiness/watch 探测契约)。
 - 起点清理:FLUSHDB + TRUNCATE 两张配置表 + 删验收 ns 的 agentserver Pod。
 
-播种模板(阶段 1,经 config_sync **串行**下发——全局锁,并发即 409):
+播种模板与 scope(阶段 1,经 config_sync **全量**下发 `{templates, scopes}` 一次请求;
+全局锁,并发即 409):
 
 | 模板 | 关键参数 | 用途 |
 |---|---|---|
@@ -90,7 +92,8 @@
 | `tpl-warm` | cc=2 pc=1 min_idle=1 ttl=90 | 热备(H)与 A 类日落(M) |
 | `tpl-bad` | `agent_image=agent-runtime-e2e-missing:1` ready_timeout=25 | deploy 失败(I) |
 
-规则:`(e2e-main|e2e-f|e2e-warm|e2e-bad, bot=b)` 各绑一模板;
+scope:`e2e-main|e2e-f|e2e-warm|e2e-bad` 各按 `group_id in [...]` 规则绑一模板
+(**不播通配兜底**——使「未知 group → CONFIG_NOT_FOUND」可验收);
 可选 DB 落库校验(mysql 客户端在场时两表各 4 行,否则 SKIP)。
 
 ### 3.1 阶段与用例(场景 → 输入 → 预期)
@@ -99,7 +102,9 @@
 
 | # | 场景 | 输入 | 预期输出/断言 |
 |---|---|---|---|
-| 1 | —(种子) | 4×config_sync(template create)+4×(rule create) | 全部 200;DB 行数 [4,4](可选) |
+| 1a | H0 零 Pod 基线 | —(清场后,配置未下发) | ns 内零 agentserver Pod;`routing:snapshot` 不存在(服务启动不拉 Pod) |
+| 1 | —(种子) | 1×config_sync 全量 `{templates:4, scopes:4}` | 200,`templates_synced=4 scopes_synced=4`;`routing:snapshot` 已写;DB 行数 [4,4](可选) |
+| 1b | H0 无请求预热 | —(种子后,零 route) | ~autoscale tick 后 `resource:scope:e2e-warm:idle` 有 1 热备 Pod 且真实存在于 K8s(**配置驱动预热**) |
 | 2 | C 首次部署 | `route(s1, e2e-main)` | 200,`pod_id` 以 `agentserver-` 开头,耗时≈一次 deploy |
 | 3 | C 物理真象 | —(上一步的 pod) | `kubectl get pod` 存在且 Ready |
 | 4 | C SSE 直连地址 | — | `pod_sse_url` 以 `http://` 开头(指向 Pod IP) |
@@ -118,9 +123,9 @@
 
 | # | 输入 | 预期 |
 |---|---|---|
-| 15 | `config_sync update tpl-e2e {pod_ttl:120}` | 200 `ok=true` |
+| 15 | config_sync 全量(tpl-e2e `pod_ttl:120`) | 200 `ok=true` |
 | 16 | —(1s 后) | RM `scope:config` 的 `pod_ttl`="120"(update_pool_config 主动推送) |
-| 17 | — | SM `scope:{MAIN}:config` 已 DEL(下次 route 重新 resolve) |
+| 17 | — | `routing:snapshot` 已原子覆盖(下次 route 即见新值) |
 
 **阶段 4:D 老化回收**(回拨 s1–s3 的 `session_expiry`/`expiry` 到过去,5 项)
 
@@ -177,7 +182,7 @@
 
 | # | 输入 | 预期 |
 |---|---|---|
-| 41 | `config_sync update tpl-warm {readiness_period:7}`(A 类) | 200 `ok=true` |
+| 41 | config_sync 全量(tpl-warm `readiness_period:7`,A 类) | 200 `ok=true` |
 | 42 | — | RM `scope:config` 的 `deploy_ver` 改变(新 Pod 用新 deploy 字段) |
 | 43 | — | SM 候选集 ZREM 软摘除(老 Pod 不接新流量,自然回收) |
 
@@ -197,10 +202,10 @@
 
 | # | 输入 | 预期 |
 |---|---|---|
-| 48 | `route(无规则 group)` | 503 `CONFIG_NOT_FOUND`,**无** `retry_after` |
-| 49 | `route(session_id=null)` | 400 `VALIDATION` |
+| 48 | `route(无匹配 scope 的 group)` | 503 `CONFIG_NOT_FOUND`,**无** `retry_after` |
+| 49 | `route(session_id=null)` / `route(user_id=null)` | 400 `VALIDATION`(四参非空) |
 | 50 | `touch(session_id=null)` | 400 `VALIDATION` |
-| 51 | `config_sync(kind="nope")` | 400 `VALIDATION` |
+| 51 | `config_sync(kind="nope")`(旧 kind/op 协议) | 400 `VALIDATION` |
 | 52 | `cleanup(验收ns, label_selector=无匹配)` | 200 `cleaned=0`(空目标须用无匹配 selector,见 §8.1) |
 
 > 断言逐条 `check()` 记名,汇总 65 项(个别为条件性/可选 SKIP,计入通过)。
@@ -227,8 +232,8 @@
 **S0 前置 + 副本普查门**(5 项):LB `/healthz` 200 / Redis AOF / kubectl /
 双 namespace 就绪 / 防误刷守卫;普查到 ≥2 实例 → 完整模式。
 
-**S1 经 LB 播种**(4 项):`tpl-mr`(cc=3/pc=2)+`tpl-mr-f`(cc=2/pc=1)两模板两规则,
-config_sync **串行**;起点 FLUSHDB + TRUNCATE + 删残留 Pod。
+**S1 经 LB 播种**(1 项):`tpl-mr`(cc=3/pc=2)+`tpl-mr-f`(cc=2/pc=1)两模板 +
+`mr-main`/`mr-f` 两 scope(group 规则),config_sync **全量一次**;起点 FLUSHDB + TRUNCATE + 删残留 Pod。
 
 **S2 经 LB 基础流**(5 项):
 
@@ -266,13 +271,13 @@ config_sync **串行**;起点 FLUSHDB + TRUNCATE + 删残留 Pod。
 | 1 | 同 `request_id="mr-req-idem"` 两次 route(LB 可能落不同副本) | 两次响应完全一致(幂等态在共享 Redis) |
 | 2 | — | 会话数恰好 +1 |
 
-**S6 配置失效传播**(4 项):
+**S6 配置传播**(4 项):
 
 | # | 输入 | 预期 |
 |---|---|---|
-| 1 | 前置 | scope 缓存已暖(exists=1) |
-| 2 | `config_sync update tpl-mr {session_ttl:120}` 经 LB | 200 |
-| 3 | — | `scope:{MAIN}:config` 已 DEL(任意副本改,全副本失效) |
+| 1 | 前置 | `routing:snapshot` 已存在 |
+| 2 | config_sync 全量(tpl-mr `session_ttl:120`)经 LB | 200 |
+| 3 | — | `routing:snapshot` 已原子覆盖(共享单键,任意副本改,全副本下一读即新值) |
 | 4 | 更新后 `route(mr-s6)` | 200 且新会话 expiry−now ∈ [100,130](用了新 ttl) |
 
 **S7 failover**(4 项):背景流量(route/touch 循环,错误只计数不判死)进行中——

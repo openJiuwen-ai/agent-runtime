@@ -29,14 +29,16 @@ claw mgr ──config_sync──►   ├─ session_manager   持 App,4 个 HTT
 数据面(本服务全程旁路):gateway ◄──SSE──► AgentServer Pod(route 返回 pod_sse_url)
 ```
 
-- 状态分层:**编排态在 Redis**(键前缀见下)、**配置在 DB**(`service_config_template` / `routing_rule` 表)、**Pod 物理态以 K8s 为唯一真相源**。
+- **scope 由 config_sync 全量下发**(`{templates, scopes}` 快照式;scope = scope_id/index/引用模板/路由规则集,scope↔模板多对一)。route 按 `(index ASC, scope_id ASC)` **first-fit** 匹配规则(规则间 OR、表达式 `user_id|group_id|bot_id in/not_in 集合` 间 AND;空规则 = 通配兜底)。匹配读 Redis 单键**路由快照**(`routing:snapshot`,config_sync 原子覆盖)。
+- **无请求预热**:config_sync 对每个存活 scope 主动写 RM 池配置(带 pod_spec)→ autoscale(1s)即预热 min_idle 热备 Pod;scope 被删 → min_idle=0 自然排空。
+- 状态分层:**编排态在 Redis**(键前缀见下)、**配置在 DB**(`service_config_template` / `routing_scope` 表)、**Pod 物理态以 K8s 为唯一真相源**。
 - 多副本无状态;后台任务经 Redis 选主锁(`agent_runtime:job:*`)全局单副本执行写操作。
 - 所有编排态变更走 Lua(EVAL 原子);脚本不传 KEYS,`ARGV[1]` 为键前缀,键名在脚本内拼——调用统一经各模块 `state.py` 的 `eval()`。
 
 ## Redis 键前缀总览(逐键明细见各模块 spec)
 
 ```
-session_manager:…    SM 编排态(会话四处/scope 闸门/等待队列/候选集/注册表)
+session_manager:…    SM 编排态(会话四处/scope 闸门/等待队列/候选集/注册表/路由快照)
 resource_manager:…   RM 编排态(per-scope Pod 池/idle 暖池/deploy 占位/follower 等待室/选主锁)
 agent_runtime:job:…  后台任务选主锁(main.py:_build_jobs 注册)
 ```
@@ -45,7 +47,7 @@ agent_runtime:job:…  后台任务选主锁(main.py:_build_jobs 注册)
 
 ```bash
 cd applications/agent_runtime
-uv sync --extra local && uv run pytest   # 114 用例(fakeredis+SQLite+FakeK8s)
+uv sync --extra local && uv run pytest   # 150 用例(fakeredis+SQLite+FakeK8s)
 ./scripts/integration_smoke.sh           # 真环境冒烟(场景 A–L;FLUSHDB 目标库,有防误刷)
 ./scripts/deploy_replicas.sh 2 .env.production.local 8091   # 宿主机双进程
 ./deploy/render_and_apply.sh deploy/agent_runtime.env --nodeport  # K8s 生产形态
