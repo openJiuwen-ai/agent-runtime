@@ -150,21 +150,22 @@ flowchart TB
 | `scope_id` | str | 资源域标识。字符集 `[0-9A-Za-z._-]`(≤128)——内嵌 Redis 键名与 `pods:registered` 的 `"{scope}:{pod}"` 条目,禁 `:`、`*`、空白 |
 | `index` | int | 匹配序号;请求按 (index 升序, scope_id 升序) first-fit |
 | `template_id` | str | 引用的 template(必须在本批模板列表内;多个 scope 可引用同一模板) |
-| `routing_rules` | list | 路由规则集,规则间 **OR**;**空列表 = 通配兜底 scope**(命中一切) |
+| `routing_rules` | str | **布尔表达式字符串**,条件经 `and`/`or` 与括号任意组合;**null/空串/纯空白 = 通配兜底 scope**(命中一切) |
 
-路由规则(rule)与表达式(expression)结构:
+表达式语法:
 
 ```
-routing_rules: [                       # 多条规则之间 OR
-  { "expressions": [                   # 一条规则内多表达式 AND(空 expressions 下发校验拒绝)
-      { "field": "user_id|group_id|bot_id",
-        "op":    "in|not_in",
-        "values": ["v1", "v2"] }       # 字符串集合;空 values:in 恒假、not_in 恒真
-  ]}
-]
+group_id not in ('g1', 'g2') and (user_id in ('admin', 'user1') or bot_id in ('b1'))
+
+条件     := field ('not'? 'in') '(' [值 {',' 值} [',']] ')'
+表达式   := 条件经 and/or 与括号组合;优先级 条件 > and > or(同 SQL/Python)
+field    := user_id | group_id | bot_id(固定小写枚举)
+值        := 单引号串('' 加倍或 \' 转义引号,\\ 转义反斜杠;空列表 ():in 恒假、not_in 恒真)
+关键字   := and / or / in / not(大小写不敏感);不支持一元 not
+上限     := 长度 ≤ 8000,括号嵌套 ≤ 32
 ```
 
-**匹配语义**(resolve 权威定义):请求属性 (user_id, group_id, bot_id) 对 scopes 按 `(index ASC, scope_id ASC)` 排序遍历,**首个命中的 scope 即止**(first-fit);scope 命中 = 空 routing_rules(通配)或任一规则为真(OR);规则为真 = 全部表达式为真(AND);表达式 = 属性值 `in`/`not in` 集合。引用模板缺失或 `enabled=False` 的 scope 视为不命中,继续落下一个。**下发方保证含一个空规则的通配 scope 兜底**;服务端缺失时仅 WARNING 放行,运行时无匹配 → 503 `CONFIG_NOT_FOUND`。
+**匹配语义**(resolve 权威定义):请求属性 (user_id, group_id, bot_id) 对 scopes 按 `(index ASC, scope_id ASC)` 排序遍历,**首个命中的 scope 即止**(first-fit);scope 命中 = 空 routing_rules(通配)或表达式求值为真;条件求值 = 属性值(缺省 `""`)`in`/`not in` 值集合。引用模板缺失或 `enabled=False` 的 scope 视为不命中,继续落下一个。**下发方保证含一个空表达式的通配 scope 兜底**;服务端缺失时仅 WARNING 放行,运行时无匹配 → 503 `CONFIG_NOT_FOUND`。
 
 **`config_sync` 入参完整 schema**(全量快照式,一次请求同时携带两个列表;旧 `kind/op` 协议 400 拒绝):
 
@@ -172,12 +173,12 @@ routing_rules: [                       # 多条规则之间 OR
 {
   "templates": [ {"template_id": "...", "...template 字段": ...} ],
   "scopes":    [ {"scope_id": "...", "index": 0, "template_id": "...",
-                  "routing_rules": [ ... ]} ]
+                  "routing_rules": "user_id in ('admin') or group_id not in ('g1')"} ]
 }
 ```
 
 - 语义:**以数组为准的全量替换**(upsert 全部 + 删除消失项);幂等重放收敛(affected_scopes 为空)。
-- 校验(400 VALIDATION):`templates`/`scopes` 非 list;template 缺 `template_id`;scope_id 字符集非法;`index` 非整数;scope 引用不在本批模板集内的 template;规则空 `expressions`;表达式 field/op 非法或 values 非字符串数组;同批 scope_id 重复。
+- 校验(400 VALIDATION):`templates`/`scopes` 非 list;template 缺 `template_id`;scope_id 字符集非法;`index` 非整数;scope 引用不在本批模板集内的 template;`routing_rules` 非字符串(含旧结构化 list 格式);表达式语法错误(未知字段/裸 `not`/悬空括号/未引号值/超长或超深);同批 scope_id 重复。
 - 每次成功下发都会:重建路由快照(§5.1 `routing:snapshot`)、对每个存活 scope 推 RM 池参数 + pod_spec(**eager 预热**:autoscale 下一拍即预热 min_idle)、对被删 scope 推 `min_idle=0`(自然排空)。
 
 **错误响应体**(所有非 2xx):

@@ -177,11 +177,9 @@ async def s1_seed(c: Client, r: aioredis.Redis) -> None:
         ],
         scopes=[
             {"scope_id": "mr-main", "index": 0, "template_id": "tpl-mr",
-             "routing_rules": [{"expressions": [
-                 {"field": "group_id", "op": "in", "values": ["mr-main"]}]}]},
+             "routing_rules": "group_id in ('mr-main')"},
             {"scope_id": "mr-f", "index": 1, "template_id": "tpl-mr-f",
-             "routing_rules": [{"expressions": [
-                 {"field": "group_id", "op": "in", "values": ["mr-f"]}]}]},
+             "routing_rules": "group_id in ('mr-f')"},
         ])
     code, _, body = await c.post("config_sync", group="mr-main", rawdata=payload)
     if not check("S1 全量下发（2 模板 + 2 scope）", code == 200, str(body)[:120]):
@@ -312,11 +310,9 @@ async def s6_config_propagation(c: Client, r: aioredis.Redis) -> None:
         ],
         "scopes": [
             {"scope_id": "mr-main", "index": 0, "template_id": "tpl-mr",
-             "routing_rules": [{"expressions": [
-                 {"field": "group_id", "op": "in", "values": ["mr-main"]}]}]},
+             "routing_rules": "group_id in ('mr-main')"},
             {"scope_id": "mr-f", "index": 1, "template_id": "tpl-mr-f",
-             "routing_rules": [{"expressions": [
-                 {"field": "group_id", "op": "in", "values": ["mr-f"]}]}]},
+             "routing_rules": "group_id in ('mr-f')"},
         ]})
     check("S6 config_sync 更新成功", code == 200, str(body)[:120])
     check("S6 路由快照已覆盖（跨副本共享单键）",

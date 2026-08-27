@@ -12,7 +12,7 @@
 | `orchestrator.py` | route 主循环(匹配→Lua 仲裁→acquire→等待队列)+ touch |
 | `state.py` | SM Redis 键 schema 唯一出口 + Lua 调用封装(`SMKeys`/`SessionState`) |
 | `lua_scripts.py` | 7 个 Lua 全文 |
-| `routing.py` | 路由匹配纯函数:表达式/规则/scope 定义、wire 校验、快照(反)序列化、first-fit 匹配 |
+| `routing.py` | 路由匹配纯函数:routing_rules 表达式解析(词法+递归下降)/scope 定义、wire 校验、快照(反)序列化、first-fit 匹配 |
 | `config_store.py` | template/routing_scope DB 持久化 + 路由快照 + config_sync 编排 |
 | `sweeper.py` | 到期 pass + 空 Pod pass(每 tick 选主) |
 | `facade.py` | `SessionManagerFacade`(RM→SM:notify_pod_dead / reconcile_pods) |
@@ -98,7 +98,7 @@ finally: 若仍在等待队列 → remove_waiter(异常路径出队)
 
 **DB 表**(列名沿用 EE 兼容名,映射在 `_COLUMN_OF`):`service_config_template`(`min_idle_pods→min_idle_services`、`pod_concurrency→service_concurrency`、`pod_ttl→service_ttl`、`scope_concurrency→session_concurrency`)、`routing_scope`(`scope_id` unique / `match_index`(避 SQL 保留字 index) / `template_id` / `routing_rules` JSON)。表结构常量 `*_TABLE_DEF` 由 main 传给框架建表。旧 `routing_rule` 表已废弃(不再读写,老库残留无害)。
 
-**routing.py(纯函数)**:表达式求值语义——`in`/`not_in` 对字符串集合(空 values:in 恒假、not_in 恒真);规则内 AND(空 expressions 下发即拒);规则间 OR;**空 routing_rules = 通配兜底**;遍历按 `(index ASC, scope_id ASC)` **first-fit**;引用模板缺失/禁用的 scope 跳过落下一个。`SCOPE_ID_RE = ^[0-9A-Za-z._-]{1,128}$`(禁 `:`/`*`/空白——Redis 键与 `pods:registered` 切分依赖)。
+**routing.py(纯函数)**:`routing_rules` 是**布尔表达式字符串**——条件 `field in|not in ('v1', 'v2')` 经 `and`/`or` 与括号任意组合;优先级 条件 > and > or;关键字大小写不敏感,字段名固定小写枚举(user_id/group_id/bot_id);值单引号串(`''` 加倍或 `\'`/`\\` 转义);空值列表 `()` → in 恒假、not_in 恒真;不支持一元 `not`;上限长度 8000、括号嵌套 32。**空 routing_rules(null/空串/纯空白)= 通配兜底**;遍历按 `(index ASC, scope_id ASC)` **first-fit**;引用模板缺失/禁用的 scope 跳过落下一个。解析器 = 词法(`_TOKEN_RE`)+ 递归下降(`_Parser`:or_expr → and_expr → primary),产物为表达式树(`MatchExpression` 叶 / `AndNode` / `OrNode`),存于 `RoutingScopeDef.rule`(与原始串 `expr` 成对,后者是 wire/DB/快照载体)。`SCOPE_ID_RE = ^[0-9A-Za-z._-]{1,128}$`(禁 `:`/`*`/空白——Redis 键与 `pods:registered` 切分依赖)。
 
 **resolve(user_id, group_id, bot_id) → (scope_id, Template)**:读单键快照 `routing:snapshot`(1 GET;进程内按原文 memo 免重复解析)→ first-fit 匹配;快照缺失/损坏 → 从 DB 重建;无匹配 → `ConfigNotFound(503)`。
 
@@ -106,9 +106,10 @@ finally: 若仍在等待队列 → remove_waiter(异常路径出队)
 
 ```
 锁外校验(纯 CPU 400):kind/op 遗迹拒绝;templates/scopes 非 list;template 缺 template_id;
-  scope_id 字符集/index 非真 int(拒 bool)/引用不在本批模板集/规则空 expressions/
-  表达式 field|op 非法/values 非字符串数组/同批 scope_id 重复
-  缺通配 scope(无空规则项)→ 仅 WARNING 放行(响应 wildcard_present:false)
+  scope_id 字符集/index 非真 int(拒 bool)/引用不在本批模板集/routing_rules 非字符串
+  (含旧结构化 list 格式)/表达式语法错误(未知字段、裸 not、悬空括号、未引号值、
+  超长 >8000 或嵌套 >32)/同批 scope_id 重复
+  缺通配 scope(无空表达式项)→ 仅 WARNING 放行(响应 wildcard_present:false)
 lock:config_sync 串行化(忙→409 CONFIG_SYNC_BUSY,TTL 60)
 → 读 DB 旧态(templates + scopes)
 → diff:模板 changed_ids(_diff_class 沿用)/ 引用切换 ref_switched;
@@ -139,7 +140,7 @@ lock:config_sync 串行化(忙→409 CONFIG_SYNC_BUSY,TTL 60)
 ## models.py
 
 - `Template`:template 行业务视图。派生:`max_pods = ⌈scope_concurrency/pod_concurrency⌉`(**派生值,不存储,不配置**);`deploy_subset()`=acquire 下发 RM 的 pod_spec;`deploy_ver()`=A 类指纹;`pool_config()`={min_idle_pods, max_pods, pod_ttl, pod_concurrency}(pod_concurrency 仅供 RM follower 等待室推导上限 pc-1)。
-- scope 定义(`RoutingScopeDef`/规则/表达式)在 `routing.py`,不再有 ScopeConfig(快照取代 per-scope 缓存)。
+- scope 定义(`RoutingScopeDef`/表达式树)在 `routing.py`,不再有 ScopeConfig(快照取代 per-scope 缓存)。
 
 ## 高频踩点
 

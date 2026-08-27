@@ -61,7 +61,7 @@ def _seed_and_route(client):
         "config_sync", rawdata={
             "templates": [{"template_id": "tpl-debug", **TEMPLATE}],
             "scopes": [{"scope_id": SCOPE_ID, "index": 0,
-                        "template_id": "tpl-debug", "routing_rules": []}],
+                        "template_id": "tpl-debug", "routing_rules": ""}],
         }))
     resp = client.post("/api/session/route", json=_envelope(
         "route", session_id="sess-debug", group_id="grp", bot_id="bot"))
@@ -151,7 +151,7 @@ def test_debug_config_redacts_kubeconfig(tmp_path, monkeypatch):
         tpl = next(t for t in resp.json()["templates"]
                    if t["template_id"] == "tpl-debug")
         assert tpl["kubeconfig"] == "***"
-        assert any(s["scope_id"] == SCOPE_ID and s["routing_rules"] == []
+        assert any(s["scope_id"] == SCOPE_ID and s["routing_rules"] == ""
                    for s in resp.json()["routing_scopes"])
         assert resp.json()["routing_snapshot"]["exists"] is True
         assert resp.json()["routing_snapshot"]["scope_count"] >= 1

@@ -336,7 +336,7 @@ async def test_config_sync_on_b_takes_effect_on_a(dual):
                                 "agent_image": "agentserver:1.0",
                                 "namespace": "default", "session_ttl": 90}],
                  "scopes": [{"scope_id": scope, "index": 0,
-                             "template_id": "tpl-1", "routing_rules": []}]})
+                             "template_id": "tpl-1", "routing_rules": ""}]})
     assert status == 200, body
     assert await dual.redis.exists(snapshot_key) == 1
     assert await dual.get(snapshot_key) != ver_before   # 快照已覆盖

@@ -24,7 +24,7 @@
 ```bash
 cd applications/agent_runtime
 uv sync --extra local
-uv run pytest                 # 157 个用例:状态层 Lua / 路由匹配纯函数 / config 层 / 组件全链路 / HTTP 冒烟 / corner case / 双实例多副本 / 停机韧性
+uv run pytest                 # 191 个用例:状态层 Lua / 路由匹配纯函数(含表达式解析) / config 层 / 组件全链路 / HTTP 冒烟 / corner case / 双实例多副本 / 停机韧性
 ```
 
 - 构造 `ServiceManager` 必须传 `deploy_mode="subprocess"`(默认 k8s 会挂死测试)。

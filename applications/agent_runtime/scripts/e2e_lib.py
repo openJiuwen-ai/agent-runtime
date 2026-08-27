@@ -36,7 +36,7 @@ def config_sync_payload(templates: list[dict],
     if scopes is None:
         scopes = [{"scope_id": SEED_SCOPE, "index": 0,
                    "template_id": templates[0]["template_id"],
-                   "routing_rules": []}]
+                   "routing_rules": ""}]
     return {"templates": templates, "scopes": scopes}
 
 

@@ -12,7 +12,7 @@
 | 层 | 入口 | 规模 | 依赖环境 | 退出码 |
 |---|---|---|---|---|
 | 进程内双实例 | `uv run pytest tests/integration/test_multi_replica.py` | 14 用例 | 无(离线,fakeredis) | pytest 标准 |
-| 集成冒烟(M6) | `./scripts/integration_smoke.sh` | 74 项断言 | 单实例 server 模式 + 真 Redis/MySQL/K8s | 0/1/2 |
+| 集成冒烟(M6) | `./scripts/integration_smoke.sh` | 75 项断言 | 单实例 server 模式 + 真 Redis/MySQL/K8s | 0/1/2 |
 | 多副本 e2e(M7) | `uv run --no-sync python scripts/e2e_multi_replica.py` | 35 项断言 | K8s 多副本 + Service LB + 真 Redis | 0/1/2 |
 | 压测/浸泡 | `uv run --no-sync python scripts/load_test.py` | 3 场景 | 任意入口(建议 LB) | 0/1 |
 
@@ -73,7 +73,7 @@
 
 ---
 
-## 3. 集成冒烟(M6):`scripts/e2e_hld_acceptance.py`(74 项)
+## 3. 集成冒烟(M6):`scripts/e2e_hld_acceptance.py`(75 项)
 
 ### 3.0 环境与模板矩阵
 
@@ -93,8 +93,9 @@
 | `tpl-bad` | `agent_image=agent-runtime-e2e-missing:1` ready_timeout=25 | deploy 失败(I) |
 | `tpl-nat` | cc=2 pc=2 session_ttl=15 pod_ttl=20 min_idle=0 | **自然老化专用**(阶段 5b,短 TTL 零回拨) |
 
-scope:`e2e-main|e2e-f|e2e-warm|e2e-bad|e2e-nat` 各按 `group_id in [...]` 规则绑一模板
-(**不播通配兜底**——使「未知 group → CONFIG_NOT_FOUND」可验收);
+scope:`e2e-main|e2e-f|e2e-warm|e2e-bad|e2e-nat` 各按 `routing_rules` 表达式串绑一模板
+(e2e-main 故意带 or 支 `group_id in ('e2e-main') or user_id in ('e2e-vip')` 验收混合表达式;
+其余单条件 `group_id in (...)`;**不播通配兜底**——使「未知属性组合 → CONFIG_NOT_FOUND」可验收);
 可选 DB 落库校验(mysql/psql 客户端在场时两表各 5 行,否则 SKIP)。
 
 ### 3.1 阶段与用例(场景 → 输入 → 预期)
@@ -119,6 +120,7 @@ scope:`e2e-main|e2e-f|e2e-warm|e2e-bad|e2e-nat` 各按 `group_id in [...]` 规�
 | 12 | E 保活 | `touch(s1)`(间隔≥1.2s) | 200 `touched=true`;`session_expiry` 分数增大 |
 | 13 | E 未命中 | `touch(nope)` | 200 `touched=false` |
 | 14 | 幂等 | 同 `request_id` 两次 `route(s3)` | 两次 `pod_id` 一致;SCARD 仍=3(不重抢额度) |
+| 14b | C 表达式 or 支 | `route(s-vip, e2e-no-such-group, user=e2e-vip)` | 200 且有 `pod_id`——group 不命中但 user 白名单 or 支命中 e2e-main(新表达式格式验收) |
 
 **阶段 3:M(B 类)pod_ttl 热更新**(3 项)
 
@@ -227,7 +229,7 @@ scope:`e2e-main|e2e-f|e2e-warm|e2e-bad|e2e-nat` 各按 `group_id in [...]` 规�
 | 51 | `config_sync(kind="nope")`(旧 kind/op 协议) | 400 `VALIDATION` |
 | 52 | `cleanup(验收ns, label_selector=无匹配)` | 200 `cleaned=0`(空目标须用无匹配 selector,见 §8.1) |
 
-> 断言逐条 `check()` 记名,汇总 74 项(个别为条件性/可选 SKIP,计入通过)。
+> 断言逐条 `check()` 记名,汇总 75 项(个别为条件性/可选 SKIP,计入通过)。
 > **注意**:M6 冒烟回归请对**单实例**执行——多副本后端冷突发语义不同(见 §6)。
 
 ---
@@ -375,7 +377,7 @@ uv sync --extra local && uv run pytest tests/integration/test_multi_replica.py -
 
 # ② M6 冒烟(单实例)
 ./scripts/deploy_replicas.sh 1 .env.production.local 8091   # 保持运行
-./scripts/integration_smoke.sh                              # 74 项
+./scripts/integration_smoke.sh                              # 75 项
 
 # ③ 宿主机双进程(观察选主互斥)
 ./scripts/deploy_replicas.sh 2 .env.production.local 8091

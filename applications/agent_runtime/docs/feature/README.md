@@ -17,7 +17,8 @@
 
 | 日期 | 文档 | 一句话 |
 |---|---|---|
-| 2026-08 | [scope 重构:config_sync 全量下发 + 规则化路由匹配 + 无请求预热](2026-08-scope-based-routing-config-sync.md) | scope 改下发制(index first-fit/规则 OR·表达式 AND/user_id 维度)、路由快照单键、config_sync 即预热 min_idle |
+| 2026-08 | [routing_rules 改布尔表达式字符串](2026-08-routing-rules-expression-string.md) | 条件间任意 and/or+括号(固定「规则 OR·表达式 AND」作废)、递归下降解析、空串=通配 |
+| 2026-08 | [scope 重构:config_sync 全量下发 + 规则化路由匹配 + 无请求预热](2026-08-scope-based-routing-config-sync.md) | scope 改下发制(index first-fit/规则 OR·表达式 AND/user_id 维度)、路由快照单键、config_sync 即预热 min_idle(规则格式已被表达式串取代) |
 | 2026-08 | [生产可观测性:日志体系 + /debug 诊断端点](2026-08-production-observability.md) | LOG_LEVEL 起效、请求关联、每请求一行汇总、框架降噪(6行/秒→0)、7 个只读诊断端点+脱敏 |
 | 2026-08 | [网络/IO 抖动超时兜底](2026-08-network-io-timeout-hardening.md) | redis socket 5s/建连 3s+重试、MySQL 建连 5s、sweeper tick 上限,挂死循环不再静默 |
 | 2026-08 | [M8 deploy 锁输家改 follower 等待室](2026-08-M8-deploy-lock-follower-waitroom.md) | 跨副本冷竞争零多余 Pod,冷启动尾延迟 30.5s→10.2s |

@@ -147,19 +147,20 @@ def template(**overrides) -> dict:
 
 
 TPL = {}
-# (scope_id, template_id, [命中的 group_id 集合])——scope 由 config_sync 下发,
-# 按 group_id 路由;不播种通配兜底,使「未知 group → CONFIG_NOT_FOUND」可验收
+# (scope_id, template_id, routing_rules 表达式串)——scope 由 config_sync 下发;
+# 不播种通配兜底,使「未知属性组合 → CONFIG_NOT_FOUND」可验收。
+# e2e-main 故意带 or 用户白名单支:验收 and/or 任意组合的表达式路由(新 wire 格式)。
 SCOPES_DEF = [
-    ("e2e-main", "tpl-e2e", ["e2e-main"]),
-    ("e2e-f", "tpl-f", ["e2e-f"]),
-    ("e2e-warm", "tpl-warm", ["e2e-warm"]),
-    ("e2e-bad", "tpl-bad", ["e2e-bad"]),
-    ("e2e-nat", "tpl-nat", ["e2e-nat"]),   # 自然老化专用(短 TTL,零回拨)
+    ("e2e-main", "tpl-e2e", "group_id in ('e2e-main') or user_id in ('e2e-vip')"),
+    ("e2e-f", "tpl-f", "group_id in ('e2e-f')"),
+    ("e2e-warm", "tpl-warm", "group_id in ('e2e-warm')"),
+    ("e2e-bad", "tpl-bad", "group_id in ('e2e-bad')"),
+    ("e2e-nat", "tpl-nat", "group_id in ('e2e-nat')"),   # 自然老化专用(短 TTL,零回拨)
 ]
 
 
 def full_sync_payload(tpl_overrides: dict | None = None) -> dict:
-    """config_sync 全量载荷:4 模板 + 4 scope(按 group 路由)。
+    """config_sync 全量载荷:模板集 + scope 集(routing_rules 表达式串)。
 
     tpl_overrides: {template_id: {字段: 新值}} —— B/A 类热更新阶段复用。
     """
@@ -168,10 +169,8 @@ def full_sync_payload(tpl_overrides: dict | None = None) -> dict:
         for tid, tpl in TPL.items()
     ]
     scopes = [
-        {"scope_id": sid, "index": i, "template_id": tid,
-         "routing_rules": [{"expressions": [
-             {"field": "group_id", "op": "in", "values": groups}]}]}
-        for i, (sid, tid, groups) in enumerate(SCOPES_DEF)
+        {"scope_id": sid, "index": i, "template_id": tid, "routing_rules": expr}
+        for i, (sid, tid, expr) in enumerate(SCOPES_DEF)
     ]
     return {"templates": templates, "scopes": scopes}
 
@@ -344,6 +343,12 @@ async def stage2_route_abc(c: Client, r) -> dict:
     check("route 幂等回放（同 request_id 同结果，不重抢额度）",
           first.get("pod_id") == second.get("pod_id")
           and await r.scard(f"session_manager:scope:{MAIN}:sessions") == 3)
+    # 表达式 or 支:group 不在任何 scope,但 user 在 e2e-main 白名单 → 命中 MAIN
+    code, raw_vip, _ = await c.post("route", session_id="s-vip",
+                                    group="e2e-no-such-group", user="e2e-vip")
+    check("route 表达式 or 支（user 白名单跨 group 命中 e2e-main）",
+          code == 200 and raw_vip.get("pod_id"),
+          f"{code} {str(raw_vip)[:80]}")
     return state
 
 

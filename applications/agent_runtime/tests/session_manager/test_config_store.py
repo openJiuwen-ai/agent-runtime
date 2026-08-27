@@ -22,30 +22,35 @@ def _tpl(template_id: str, **overrides) -> dict:
 
 
 def _scope(scope_id: str, template_id: str, index: int = 0,
-           rules: list | None = None) -> dict:
+           expr: str | None = None) -> dict:
     return {"scope_id": scope_id, "index": index,
-            "template_id": template_id, "routing_rules": rules or []}
+            "template_id": template_id, "routing_rules": expr or ""}
 
 
 # -------------------------------------------------------------- resolve / 快照
 
 @requires_lua
 async def test_resolve_matches_rule_and_returns_scope_id(runtime):
-    """规则命中的 scope 返回 (scope_id, Template);不再产生 per-scope 缓存键。"""
+    """表达式命中的 scope 返回 (scope_id, Template);不再产生 per-scope 缓存键。
+
+    表达式含 and/or/括号/not in 任意组合(新 wire 格式的核心语义)。
+    """
     await runtime.config_store.config_sync(_payload(
         [_tpl("tpl-vip"), _tpl("tpl-fb")],
         [
-            _scope("vip", "tpl-vip", index=0, rules=[
-                {"expressions": [{"field": "group_id", "op": "in",
-                                  "values": ["ga"]}]},
-            ]),
+            _scope("vip", "tpl-vip", index=0, expr=(
+                "user_id in ('u1') or "
+                "(group_id in ('ga') and bot_id not in ('banned'))"
+            )),
             _scope("fallback", "tpl-fb", index=100),
         ],
     ))
-    scope_id, template = await runtime.config_store.resolve("u1", "ga", "bot")
-    assert scope_id == "vip" and template.template_id == "tpl-vip"
-    # 通配兜底
     scope_id, template = await runtime.config_store.resolve("u1", "other", "bot")
+    assert scope_id == "vip" and template.template_id == "tpl-vip"     # or 左支
+    scope_id, template = await runtime.config_store.resolve("u2", "ga", "bot")
+    assert scope_id == "vip"                                          # or 右支(and)
+    # 通配兜底:and 右支 bot 被排除且左支不命中
+    scope_id, template = await runtime.config_store.resolve("u2", "ga", "banned")
     assert scope_id == "fallback" and template.template_id == "tpl-fb"
     # 旧 per-scope resolve 缓存键不复存在
     keys = await runtime.sm_state.redis.keys(
@@ -58,9 +63,7 @@ async def test_resolve_no_match_raises_config_not_found(runtime):
     """无通配 scope 且规则不命中 → ConfigNotFound(503)。"""
     await runtime.config_store.config_sync(_payload(
         [_tpl("tpl-1")],
-        [_scope("scoped", "tpl-1", rules=[
-            {"expressions": [{"field": "bot_id", "op": "in", "values": ["b1"]}]},
-        ])],
+        [_scope("scoped", "tpl-1", expr="bot_id in ('b1')")],
     ))
     with pytest.raises(ConfigNotFound):
         await runtime.config_store.resolve("u1", "g", "b-other")
@@ -84,14 +87,8 @@ async def test_index_order_first_fit(runtime):
     await runtime.config_store.config_sync(_payload(
         [_tpl("tpl-a"), _tpl("tpl-b")],
         [
-            _scope("precise", "tpl-b", index=10, rules=[
-                {"expressions": [{"field": "user_id", "op": "in",
-                                  "values": ["u-admin"]}]},
-            ]),
-            _scope("broad", "tpl-a", index=1, rules=[
-                {"expressions": [{"field": "group_id", "op": "in",
-                                  "values": ["ga", "gb"]}]},
-            ]),
+            _scope("precise", "tpl-b", index=10, expr="user_id in ('u-admin')"),
+            _scope("broad", "tpl-a", index=1, expr="group_id in ('ga', 'gb')"),
         ],
     ))
     # u-admin 命中 precise?不——broad(index=1)在前且 g∈{ga,gb} 先命中
@@ -150,6 +147,13 @@ async def test_config_sync_validation_errors(runtime):
     with pytest.raises(InvalidParams):   # 重复 scope_id
         await store.config_sync(_payload(
             [_tpl("t")], [_scope("s", "t"), _scope("s", "t")]))
+    with pytest.raises(InvalidParams):   # 表达式语法错误(锁外校验,DB/Redis 未动)
+        await store.config_sync(_payload(
+            [_tpl("t")], [_scope("s", "t", expr="user_id in ('a' and")]))
+    with pytest.raises(InvalidParams):   # 旧结构化格式(list)已废弃
+        await store.config_sync(_payload(
+            [_tpl("t")], [{"scope_id": "s", "index": 0, "template_id": "t",
+                           "routing_rules": [{"expressions": []}]}]))
 
 
 @requires_lua
@@ -158,10 +162,7 @@ async def test_config_sync_missing_wildcard_warns_but_applies(runtime, caplog):
     with caplog.at_level("WARNING", logger="agent_runtime.session_manager"):
         result = await runtime.config_store.config_sync(_payload(
             [_tpl("t")],
-            [_scope("s", "t", rules=[
-                {"expressions": [{"field": "group_id", "op": "in",
-                                  "values": ["g"]}]},
-            ])],
+            [_scope("s", "t", expr="group_id in ('g')")],
         ))
     assert result["ok"] is True and result["wildcard_present"] is False
     assert any("NO wildcard scope" in r.message for r in caplog.records)

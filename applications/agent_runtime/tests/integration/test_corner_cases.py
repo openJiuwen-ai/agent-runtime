@@ -81,10 +81,9 @@ async def test_session_moving_scope_recycles_active_binding(runtime):
                        "namespace": "default"}],
         "scopes": [
             {"scope_id": "scope-ga", "index": 0, "template_id": "tpl-1",
-             "routing_rules": [{"expressions": [
-                 {"field": "group_id", "op": "in", "values": ["ga"]}]}]},
+             "routing_rules": "group_id in ('ga')"},
             {"scope_id": SCOPE, "index": 100, "template_id": "tpl-1",
-             "routing_rules": []},
+             "routing_rules": ""},
         ],
     })
     scope2 = "scope-ga"
@@ -312,20 +311,16 @@ async def test_resolve_index_priority_first_fit_matrix(runtime):
         "scopes": [
             # index 0:vip = user 白名单 AND group 白名单 AND bot 不在黑名单
             {"scope_id": "s-vip", "index": 0, "template_id": "tpl-vip",
-             "routing_rules": [{"expressions": [
-                 {"field": "user_id", "op": "in", "values": ["u-admin"]},
-                 {"field": "group_id", "op": "in", "values": ["gg"]},
-                 {"field": "bot_id", "op": "not_in", "values": ["bb-banned"]},
-             ]}]},
+             "routing_rules": (
+                 "user_id in ('u-admin') and group_id in ('gg') "
+                 "and bot_id not in ('bb-banned')"
+             )},
             # index 10:ban 组命中但 user 在封禁名单 → 不命中
             {"scope_id": "s-ban", "index": 10, "template_id": "tpl-ban",
-             "routing_rules": [{"expressions": [
-                 {"field": "group_id", "op": "in", "values": ["gg"]},
-                 {"field": "user_id", "op": "not_in", "values": ["u-banned"]},
-             ]}]},
+             "routing_rules": "group_id in ('gg') and user_id not in ('u-banned')"},
             # index 100:通配兜底
             {"scope_id": "s-fb", "index": 100, "template_id": "tpl-fb",
-             "routing_rules": []},
+             "routing_rules": ""},
         ],
     })
 
@@ -355,9 +350,9 @@ async def test_resolve_skips_disabled_template_and_falls_back(runtime):
         ],
         "scopes": [
             {"scope_id": "s-off", "index": 0, "template_id": "tpl-off",
-             "routing_rules": []},
+             "routing_rules": ""},
             {"scope_id": "s-ok", "index": 100, "template_id": "tpl-ok",
-             "routing_rules": []},
+             "routing_rules": ""},
         ],
     })
     scope_id, template = await runtime.config_store.resolve("u", "g", "b")

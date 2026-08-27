@@ -1,18 +1,24 @@
 # coding: utf-8
-"""路由匹配纯函数层(scope 重构):表达式/规则/scope 定义 + 快照(反)序列化。
+"""路由匹配纯函数层(scope 重构):routing_rules 表达式解析/scope 定义 + 快照(反)序列化。
 
 匹配语义(权威定义,见 docs/spec/session-manager.md):
-- 表达式 = field(user_id|bot_id|group_id) op(in|not_in) values(字符串集合);
-  ``in`` → 值 ∈ values;``not_in`` → 值 ∉ values;空 values:in 恒假、not_in 恒真;
-- 规则(rule)= expressions 全真(AND);空 expressions 在下发校验时即拒绝;
-- scope 命中 = 空 routing_rules(通配兜底)或任一规则为真(OR);
+- routing_rules = 布尔表达式**字符串**,条件经 and/or 与括号任意组合:
+  ``group_id not in ('g1', 'g2') and (user_id in ('admin') or bot_id in ('b1'))``;
+  优先级:条件 > and > or(与 SQL/Python 一致),括号显式分组;
+  关键字 and/or/in/not 大小写不敏感;字段名是固定小写枚举;
+- 条件 = field(user_id|bot_id|group_id) op(in|not in) ('v1', 'v2', ...);
+  ``in`` → 值 ∈ values;``not_in`` → 值 ∉ values;空 values ():in 恒假、not_in 恒真;
+- scope 命中 = 空 routing_rules(null/空串/纯空白 → 通配兜底)或表达式为真;
 - 遍历:scopes 按 (index ASC, scope_id ASC) 排序,first-fit 首个命中即止;
 - 引用模板缺失/禁用的 scope 视为不命中,继续落下一个(防御,正常不该发生);
 - 无匹配 → ConfigNotFound(503)。
 
-本模块零 Redis/DB 依赖(仅 import Template),可独立单测;
-wire 载荷解析(parse_*)的校验失败抛 InvalidParams(400),
-快照反序列化(snapshot_from_json)针对的是运行时自有数据,损坏抛 ValueError。
+解析失败(未知字段/裸 `not`/悬空括号/未引号值……)在 config_sync 下发校验时
+即拒(InvalidParams 400);快照反序列化(snapshot_from_json)针对运行时自有
+数据,损坏抛 ValueError。表达式上限:长度 8000、括号嵌套 32(防御性,正常
+scope 表达式远小于此)。
+
+本模块零 Redis/DB 依赖(仅 import Template),可独立单测。
 """
 
 from __future__ import annotations
@@ -26,7 +32,6 @@ from ..errors import InvalidParams
 from .models import Template
 
 VALID_FIELDS = frozenset({"user_id", "group_id", "bot_id"})
-VALID_OPS = frozenset({"in", "not_in"})
 
 # scope_id 内嵌 Redis 键名(scope:{sid}:*)与 pods:registered 的 "{scope}:{pod}"
 # 条目(按首个 ':' 切分),因此禁 ':';禁 '*'(SCAN 通配符)、空格与任何非 ASCII。
@@ -39,7 +44,7 @@ _TEMPLATE_DEFAULTS = Template(template_id="")
 
 @dataclass(frozen=True)
 class MatchExpression:
-    """单条匹配表达式:field op values。"""
+    """条件叶子:field op values(结构求值用;wire 载体是表达式字符串)。"""
 
     field: str
     op: str
@@ -53,34 +58,53 @@ class MatchExpression:
 
 
 @dataclass(frozen=True)
-class RoutingRule:
-    """一条路由规则:expressions 之间 AND。"""
+class AndNode:
+    """AND 分支:children 全真才真。"""
 
-    expressions: tuple[MatchExpression, ...]
+    children: tuple["BoolNode", ...]
 
     def matches(self, attrs: dict[str, str]) -> bool:
-        return all(e.matches(attrs) for e in self.expressions)
+        return all(c.matches(attrs) for c in self.children)
+
+
+@dataclass(frozen=True)
+class OrNode:
+    """OR 分支:任一 child 为真即真。"""
+
+    children: tuple["BoolNode", ...]
+
+    def matches(self, attrs: dict[str, str]) -> bool:
+        return any(c.matches(attrs) for c in self.children)
+
+
+# 表达式树节点:条件叶子或 and/or 分支(解析产物,scope 上以 expr 原串存储)
+BoolNode = MatchExpression | AndNode | OrNode
 
 
 @dataclass(frozen=True)
 class RoutingScopeDef:
-    """一个下发 scope:scope_id / index / 引用模板 / 规则集(OR)。"""
+    """一个下发 scope:scope_id / index / 引用模板 / routing_rules 表达式。
+
+    ``expr`` 是 wire/DB/快照的存储载体(原始字符串,空 = 通配);
+    ``rule`` 是它的解析产物(通配时 None)——二者由构造方(解析入口)保证一致。
+    """
 
     scope_id: str
     index: int
     template_id: str
-    rules: tuple[RoutingRule, ...]
+    expr: str
+    rule: BoolNode | None
 
     def matches(self, user_id: str | None, group_id: str | None, bot_id: str | None) -> bool:
-        """空规则 = 通配;否则任一规则为真(OR)。user_id None → ""(防御)。"""
-        if not self.rules:
+        """空表达式 = 通配;否则求值表达式树。user_id None → ""(防御)。"""
+        if self.rule is None:
             return True
         attrs = {
             "user_id": user_id or "",
             "group_id": group_id or "",
             "bot_id": bot_id or "",
         }
-        return any(r.matches(attrs) for r in self.rules)
+        return self.rule.matches(attrs)
 
     def to_payload(self) -> dict[str, Any]:
         """wire 格式视图(/debug 与快照序列化共用)。"""
@@ -88,13 +112,7 @@ class RoutingScopeDef:
             "scope_id": self.scope_id,
             "index": self.index,
             "template_id": self.template_id,
-            "routing_rules": [
-                {"expressions": [
-                    {"field": e.field, "op": e.op, "values": sorted(e.values)}
-                    for e in rule.expressions
-                ]}
-                for rule in self.rules
-            ],
+            "routing_rules": self.expr,
         }
 
 
@@ -111,41 +129,186 @@ class RoutingSnapshot:
     scopes: tuple[RoutingScopeDef, ...]
 
 
-# -------------------------------------------------------------- wire 解析(config_sync 入口)
+# -------------------------------------------------------------- 表达式字符串解析(config_sync 入口)
 
-def parse_expression(payload: Any) -> MatchExpression:
-    """wire 表达式 → MatchExpression;非法 → InvalidParams。"""
-    if not isinstance(payload, dict):
-        raise InvalidParams(f"match expression must be an object, got {payload!r}")
-    field_name = str(payload.get("field") or "")
-    op = str(payload.get("op") or "")
-    values = payload.get("values")
-    if field_name not in VALID_FIELDS:
-        raise InvalidParams(
-            f"expression field must be one of {sorted(VALID_FIELDS)}, got {field_name!r}"
-        )
-    if op not in VALID_OPS:
-        raise InvalidParams(
-            f"expression op must be one of {sorted(VALID_OPS)}, got {op!r}"
-        )
-    if not isinstance(values, list) or any(not isinstance(v, str) for v in values):
-        raise InvalidParams(
-            f"expression values must be a list of strings (field={field_name!r})"
-        )
-    return MatchExpression(field=field_name, op=op, values=frozenset(values))
+# 防御上限:正常 scope 表达式(几十个条件)远小于此
+MAX_EXPR_LEN = 8000
+MAX_EXPR_DEPTH = 32
+
+_KEYWORDS = frozenset({"and", "or", "not", "in"})
+
+# 词法:空白 | 括号/逗号 | 裸词(字段名/关键字,大小写不敏感) | 单引号串
+# (串内 ``''`` 加倍与 ``\'``/``\\`` 反斜杠转义;其他 ``\x`` 保留字面)
+_TOKEN_RE = re.compile(
+    r"\s+"
+    r"|(?P<lparen>\()"
+    r"|(?P<rparen>\))"
+    r"|(?P<comma>,)"
+    r"|(?P<word>[A-Za-z_][A-Za-z0-9_-]*)"
+    r"|(?P<str>'(?:[^'\\]|\\.|'')*')"
+)
 
 
-def parse_rule(payload: Any) -> RoutingRule:
-    """wire 规则 → RoutingRule;空 expressions 拒绝(通配请用空 routing_rules)。"""
-    if not isinstance(payload, dict):
-        raise InvalidParams(f"routing rule must be an object, got {payload!r}")
-    expressions = payload.get("expressions")
-    if not isinstance(expressions, list) or not expressions:
+def _unquote(token: str) -> str:
+    r"""剥外层引号并解转义('' → ';\' 与 \\ → 字面;其他反斜杠组合保留原样)。"""
+    body = token[1:-1]
+    out: list[str] = []
+    i, n = 0, len(body)
+    while i < n:
+        ch = body[i]
+        if ch == "\\" and i + 1 < n and body[i + 1] in ("\\", "'"):
+            out.append(body[i + 1])
+            i += 2
+        elif ch == "'":  # '' 加倍(词法保证成对出现)
+            out.append("'")
+            i += 2
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
+
+
+class _Parser:
+    """递归下降:or_expr → and_expr → primary(括号|条件);and 绑定紧于 or。"""
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.tokens = self._tokenize(text)
+        self.pos = 0
+        self.depth = 0
+
+    @staticmethod
+    def _tokenize(text: str) -> list[tuple[str, Any]]:
+        tokens: list[tuple[str, Any]] = []
+        i = 0
+        while i < len(text):
+            m = _TOKEN_RE.match(text, i)
+            if m is None:
+                raise InvalidParams(
+                    f"routing_rules invalid character {text[i]!r} at offset {i}: {text!r}"
+                )
+            i = m.end()
+            kind = m.lastgroup
+            if kind is None:
+                continue  # 空白
+            tokens.append(
+                ("value", _unquote(m.group())) if kind == "str" else (kind, m.group())
+            )
+        return tokens
+
+    # ---- 基础设施
+
+    def _peek(self) -> tuple[str, Any]:
+        if self.pos < len(self.tokens):
+            return self.tokens[self.pos]
+        return ("end", None)
+
+    def _fail(self, reason: str) -> InvalidParams:
+        return InvalidParams(f"routing_rules parse error: {reason} (expr={self.text!r})")
+
+    def _take_keyword(self, word: str) -> bool:
+        """消费大小写不敏感的关键字;不匹配则不动。"""
+        kind, value = self._peek()
+        if kind == "word" and str(value).lower() == word:
+            self.pos += 1
+            return True
+        return False
+
+    # ---- 文法
+
+    def parse(self) -> BoolNode:
+        node = self._or_expr()
+        kind, value = self._peek()
+        if kind != "end":
+            raise self._fail(f"unexpected {value!r} after complete expression")
+        return node
+
+    def _or_expr(self) -> BoolNode:
+        children = [self._and_expr()]
+        while self._take_keyword("or"):
+            children.append(self._and_expr())
+        return children[0] if len(children) == 1 else OrNode(tuple(children))
+
+    def _and_expr(self) -> BoolNode:
+        children = [self._primary()]
+        while self._take_keyword("and"):
+            children.append(self._primary())
+        return children[0] if len(children) == 1 else AndNode(tuple(children))
+
+    def _primary(self) -> BoolNode:
+        kind, value = self._peek()
+        if kind == "lparen":
+            self.pos += 1
+            self.depth += 1
+            if self.depth > MAX_EXPR_DEPTH:
+                raise self._fail(f"parentheses nested deeper than {MAX_EXPR_DEPTH}")
+            node = self._or_expr()
+            self.depth -= 1
+            kind, value = self._peek()
+            if kind != "rparen":
+                raise self._fail(f"expected ')' but got {value!r}")
+            self.pos += 1
+            return node
+        if kind == "word":
+            return self._condition()
+        raise self._fail(f"expected a condition or '(' but got {value!r}")
+
+    def _condition(self) -> MatchExpression:
+        _, field_name = self._peek()
+        self.pos += 1
+        lowered = str(field_name).lower()
+        if lowered in _KEYWORDS:
+            raise self._fail(
+                f"keyword {field_name!r} cannot start a condition "
+                "(only 'not in' is supported, not unary 'not')"
+            )
+        if field_name not in VALID_FIELDS:
+            raise self._fail(
+                f"unknown field {field_name!r} (valid fields: {sorted(VALID_FIELDS)})"
+            )
+        op = "not_in" if self._take_keyword("not") else "in"
+        if not self._take_keyword("in"):
+            kind, value = self._peek()
+            raise self._fail(
+                f"expected 'in' or 'not in' after field {field_name!r} but got {value!r}"
+            )
+        kind, value = self._peek()
+        if kind != "lparen":
+            raise self._fail(f"expected '(' value list after {field_name!r} but got {value!r}")
+        self.pos += 1
+        values: list[str] = []
+        kind, value = self._peek()
+        if kind == "rparen":  # 空列表 ():in 恒假、not_in 恒真
+            self.pos += 1
+            return MatchExpression(field_name, op, frozenset())
+        while True:
+            kind, value = self._peek()
+            if kind != "value":
+                raise self._fail(f"expected a quoted string value but got {value!r}")
+            self.pos += 1
+            values.append(str(value))
+            kind, value = self._peek()
+            if kind == "rparen":
+                self.pos += 1
+                return MatchExpression(field_name, op, frozenset(values))
+            if kind != "comma":
+                raise self._fail(f"expected ',' or ')' in value list but got {value!r}")
+            self.pos += 1
+            if self._peek()[0] == "rparen":  # 容忍尾逗号
+                self.pos += 1
+                return MatchExpression(field_name, op, frozenset(values))
+
+
+def parse_routing_expr(text: str) -> BoolNode:
+    """routing_rules 表达式字符串 → 表达式树;非法 → InvalidParams。
+
+    非空校验由调用方负责(空串 = 通配,不是解析错误)。
+    """
+    if len(text) > MAX_EXPR_LEN:
         raise InvalidParams(
-            "routing rule requires a non-empty 'expressions' list "
-            "(use empty routing_rules for the wildcard scope)"
+            f"routing_rules longer than {MAX_EXPR_LEN} chars: {len(text)}"
         )
-    return RoutingRule(expressions=tuple(parse_expression(e) for e in expressions))
+    return _Parser(text).parse()
 
 
 def parse_scope(payload: Any, known_template_ids: set[str]) -> RoutingScopeDef:
@@ -169,22 +332,32 @@ def parse_scope(payload: Any, known_template_ids: set[str]) -> RoutingScopeDef:
             f"scope {scope_id!r} references unknown template {template_id!r} "
             "(template must be in the same payload)"
         )
-    rules_raw = payload.get("routing_rules")
-    if rules_raw is None:
-        rules_raw = []
-    if not isinstance(rules_raw, list):
-        raise InvalidParams(f"scope {scope_id!r} routing_rules must be a list")
+    expr_raw = payload.get("routing_rules")
+    if expr_raw is None:
+        expr_raw = ""
+    if not isinstance(expr_raw, str):
+        raise InvalidParams(
+            f"scope {scope_id!r} routing_rules must be a boolean expression string "
+            "(or null/empty for the wildcard scope), e.g. "
+            "\"user_id in ('admin') or group_id not in ('g1')\", got "
+            f"{type(expr_raw).__name__}: {expr_raw!r}"
+        )
+    try:
+        rule = parse_routing_expr(expr_raw) if expr_raw.strip() else None
+    except InvalidParams as exc:
+        raise InvalidParams(f"scope {scope_id!r}: {exc}") from exc
     return RoutingScopeDef(
         scope_id=scope_id,
         index=index,
         template_id=template_id,
-        rules=tuple(parse_rule(r) for r in rules_raw),
+        expr=expr_raw,
+        rule=rule,
     )
 
 
 def has_wildcard_scope(scopes: Iterable[RoutingScopeDef]) -> bool:
-    """是否存在空规则(通配)scope——下发方应保证有,服务端缺失仅告警。"""
-    return any(not s.rules for s in scopes)
+    """是否存在空表达式(通配)scope——下发方应保证有,服务端缺失仅告警。"""
+    return any(s.rule is None for s in scopes)
 
 
 # -------------------------------------------------------------- 匹配(route 热路径)
@@ -244,7 +417,7 @@ def build_snapshot(
 
 
 def snapshot_to_json(snapshot: RoutingSnapshot) -> str:
-    """快照 → 确定性 JSON(sort_keys + values 排序,同配置同串)。"""
+    """快照 → 确定性 JSON(sort_keys;routing_rules 按原始串存储,同配置同串)。"""
     return json.dumps(
         {
             "ver": snapshot.ver,
@@ -260,6 +433,21 @@ def snapshot_to_json(snapshot: RoutingSnapshot) -> str:
 
 def snapshot_from_json(text: str) -> RoutingSnapshot:
     """JSON → 快照;结构损坏抛 ValueError(调用方触发 DB 重建)。"""
+
+    def scope_item(item: Any) -> RoutingScopeDef:
+        expr = item.get("routing_rules")
+        if expr is None:
+            expr = ""
+        if not isinstance(expr, str):
+            raise ValueError(f"routing_rules must be a string, got {type(expr).__name__}")
+        return RoutingScopeDef(
+            scope_id=str(item["scope_id"]),
+            index=int(item["index"]),
+            template_id=str(item["template_id"]),
+            expr=expr,
+            rule=parse_routing_expr(expr) if expr.strip() else None,
+        )
+
     try:
         data = json.loads(text)
         ver = int(data["ver"])
@@ -268,24 +456,7 @@ def snapshot_from_json(text: str) -> RoutingSnapshot:
             for tid, t in dict(data["templates"]).items()
         }
         scopes = tuple(sorted(
-            (
-                RoutingScopeDef(
-                    scope_id=str(item["scope_id"]),
-                    index=int(item["index"]),
-                    template_id=str(item["template_id"]),
-                    rules=tuple(
-                        RoutingRule(expressions=tuple(
-                            MatchExpression(
-                                field=str(e["field"]),
-                                op=str(e["op"]),
-                                values=frozenset(str(v) for v in e["values"]),
-                            ) for e in rule["expressions"]
-                        ))
-                        for rule in (item.get("routing_rules") or [])
-                    ),
-                )
-                for item in list(data["scopes"])
-            ),
+            (scope_item(item) for item in list(data["scopes"])),
             key=lambda s: (s.index, s.scope_id),
         ))
     except Exception as exc:  # noqa: BLE001 - 结构损坏统一转 ValueError

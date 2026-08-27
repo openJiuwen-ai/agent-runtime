@@ -36,7 +36,7 @@ from .routing import (
     build_snapshot,
     has_wildcard_scope,
     match_scope,
-    parse_rule,
+    parse_routing_expr,
     parse_scope,
     snapshot_from_json,
     snapshot_to_json,
@@ -220,12 +220,19 @@ def template_from_payload(template_id: str, payload: dict[str, Any]) -> Template
 def _scope_from_row(row: Any) -> RoutingScopeDef | None:
     """routing_scope 行 → RoutingScopeDef；行损坏（手改 DB 等）跳过并告警。"""
     try:
-        rules_raw = getattr(row, "routing_rules", None) or []
+        expr_raw = getattr(row, "routing_rules", None)
+        if expr_raw is None:
+            expr_raw = ""
+        if not isinstance(expr_raw, str):
+            raise ValueError(
+                f"routing_rules must be a string expression, got {type(expr_raw).__name__}"
+            )
         return RoutingScopeDef(
             scope_id=s(getattr(row, "scope_id")),
             index=int(getattr(row, "match_index") or 0),
             template_id=s(getattr(row, "template_id")),
-            rules=tuple(parse_rule(item) for item in rules_raw),
+            expr=expr_raw,
+            rule=parse_routing_expr(expr_raw) if expr_raw.strip() else None,
         )
     except Exception:  # noqa: BLE001 - 读路径对坏行容错（写路径已强校验）
         logger.warning(
@@ -559,7 +566,8 @@ class ConfigStore:
             "scope_id": scope.scope_id,
             "match_index": scope.index,
             "template_id": scope.template_id,
-            "routing_rules": scope.to_payload()["routing_rules"],
+            # 原始表达式串(空 = 通配);JSON 列存标量字符串
+            "routing_rules": scope.expr,
             "updated_at": _utcnow(),
         }
         existing = await self._db.get(ROUTING_SCOPE_TABLE, {"scope_id": scope.scope_id})
