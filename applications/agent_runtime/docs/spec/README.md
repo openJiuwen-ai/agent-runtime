@@ -47,7 +47,7 @@ agent_runtime:job:…  后台任务选主锁(main.py:_build_jobs 注册)
 
 ```bash
 cd applications/agent_runtime
-uv sync --extra local && uv run pytest   # 150 用例(fakeredis+SQLite+FakeK8s)
+uv sync --extra local && uv run pytest   # 157 用例(fakeredis+SQLite+FakeK8s)
 ./scripts/integration_smoke.sh           # 真环境冒烟(场景 A–L;FLUSHDB 目标库,有防误刷)
 ./scripts/deploy_replicas.sh 2 .env.production.local 8091   # 宿主机双进程
 ./deploy/render_and_apply.sh deploy/agent_runtime.env --nodeport  # K8s 生产形态

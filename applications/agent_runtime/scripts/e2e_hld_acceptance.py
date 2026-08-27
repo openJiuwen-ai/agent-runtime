@@ -154,6 +154,7 @@ SCOPES_DEF = [
     ("e2e-f", "tpl-f", ["e2e-f"]),
     ("e2e-warm", "tpl-warm", ["e2e-warm"]),
     ("e2e-bad", "tpl-bad", ["e2e-bad"]),
+    ("e2e-nat", "tpl-nat", ["e2e-nat"]),   # 自然老化专用(短 TTL,零回拨)
 ]
 
 
@@ -184,6 +185,9 @@ def build_templates() -> None:
                              min_idle_pods=1, session_ttl=90),
         "tpl-bad": template(agent_image="agent-runtime-e2e-missing:1",
                             image_pull_policy="Always", ready_timeout=25),
+        # 自然老化专用:短 TTL + min_idle=0(回收无保护)——阶段 5b 零回拨真等
+        "tpl-nat": template(scope_concurrency=2, pod_concurrency=2,
+                            session_ttl=15, pod_ttl=20, min_idle_pods=0),
     })
 
 
@@ -226,9 +230,9 @@ async def stage1_seed(c: Client, r) -> None:
           not await r.exists("session_manager:routing:snapshot"))
 
     code, raw, body = await c.post("config_sync", rawdata=full_sync_payload())
-    check("config_sync 全量下发（4 模板 + 4 scope）",
+    check("config_sync 全量下发（5 模板 + 5 scope）",
           code == 200 and raw.get("ok") is True
-          and raw.get("templates_synced") == 4 and raw.get("scopes_synced") == 4,
+          and raw.get("templates_synced") == 5 and raw.get("scopes_synced") == 5,
           json.dumps(body, ensure_ascii=False)[:200])
     snap = await r.get("session_manager:routing:snapshot")
     check("M-路由快照已写入 Redis（routing:snapshot）", bool(snap),
@@ -243,10 +247,15 @@ async def stage1_seed(c: Client, r) -> None:
             f"-U{DB_DSN['user']}", "-d", DB_DSN["name"], "-t", "-A", "-c",
             "SELECT (SELECT COUNT(*) FROM service_config_template), "
             "(SELECT COUNT(*) FROM routing_scope);",
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             env=env)
-        out, _ = await proc.communicate()
-        counts = [int(x) for x in out.decode().strip().split("|")]
+        out, err = await proc.communicate()
+        text = out.decode().strip()
+        if not text:
+            check("DB(service_config_template/routing_scope) 落库", False,
+                  f"psql 空输出 rc={proc.returncode} err={err.decode()[:200]}")
+            return
+        counts = [int(x) for x in text.split("|")]
     else:
         if shutil.which("mysql") is None:
             skip("DB(service_config_template/routing_scope) 落库", "mysql 客户端不可用")
@@ -259,7 +268,7 @@ async def stage1_seed(c: Client, r) -> None:
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
         out, _ = await proc.communicate()
         counts = [int(x) for x in out.decode().split()]
-    check("DB(service_config_template/routing_scope) 落库", counts == [4, 4], str(counts))
+    check("DB(service_config_template/routing_scope) 落库", counts == [5, 5], str(counts))
 
 
 async def stage1b_warm_up_without_request(c: Client, r) -> None:
@@ -403,6 +412,41 @@ async def stage5_reclaim(c: Client, r, state: dict) -> None:
     check("K-notify_pod_dead 已清 SM 注册", len(reg) == 0, str(reg))
 
 
+async def stage5b_natural_drain(c: Client, r) -> None:
+    """自然老化全链路(零回拨,真等 TTL)——2026-08-26 缺陷①(idle_since 被周期
+    重放刷新,reclaim 永不触发)的回归网:阶段 4/5 的回拨加速跳过了「计时自然
+    累积」这条路径,本阶段用短 TTL 模板(tpl-nat: session_ttl=15/pod_ttl=20/
+    min_idle=0)不回拨走完 route→到期→idle→reclaim 全程。"""
+    print("\n== 阶段 5b：自然老化(零回拨,真等 TTL)==")
+    code, raw, _ = await c.post("route", session_id="nat1", group="e2e-nat")
+    check("5b-nat1 首会话 deploy", code == 200 and raw.get("pod_id"), str(raw)[:120])
+    if code != 200:
+        return
+    pod = raw["pod_id"]
+
+    async def session_gone() -> bool:
+        return not await r.exists("session_manager:session:nat1")
+    ok = await wait_until(session_gone, 40, 2, "session 自然到期")
+    check("5b-D 会话自然到期被 sweeper 回收(真等 session_ttl=15,未回拨)", ok)
+    check("5b-D scope 活跃会话清空",
+          await r.scard("session_manager:scope:e2e-nat:sessions") == 0)
+
+    async def in_idle() -> bool:
+        return pod in await r.smembers("resource_manager:resource:scope:e2e-nat:idle")
+    ok = await wait_until(in_idle, 20, 2, "空 Pod 转 idle")
+    check("5b-空 Pod pass → 转 idle 暖池", ok)
+    since = await r.get(f"resource_manager:resource:pod:{pod}:idle_since")
+    check("5b-idle_since 计时起点存在", bool(since), str(since))
+
+    # min_idle=0 → 无保护;真等 pod_ttl=20 后 reclaim 必须触发(缺陷①在场则永不)
+    async def reclaimed() -> bool:
+        return pod not in await r.smembers("resource_manager:resource:pods:all")
+    ok = await wait_until(reclaimed, 45, 2, "自然回收")
+    k8s_gone = not await pod_exists(pod)
+    check("5b-K idle 计时自然累积满 pod_ttl → reclaim(真删 K8s + PURGE)",
+          ok and k8s_gone, f"purged={ok} k8s_gone={k8s_gone}")
+
+
 async def stage6_deploy_failure(c: Client, r) -> None:
     print("\n== 阶段 6：场景 I —— deploy 失败分支（镜像不可拉）==")
     t0 = time.monotonic()
@@ -507,6 +551,59 @@ async def stage11_half_dead(c: Client, r, state: dict) -> None:
     skip("场景 N（连续 2 次 /health 失败判半死）",
          "待 AgentServer 原生支持 GET /health 后补验"
          "（单测已覆盖：tests/resource_manager/test_rm_business.py）")
+
+
+async def stage11b_invariants(c: Client, r) -> None:
+    """内部不变量巡检——2026-08-26 缺陷②④⑤的回归网(在 cleanup 清场前执行):
+    ② PURGE/重放 release 的 TOCTOU 幽灵 → idle ⊆ pods:all 且成员必有 idle_since;
+    ④ fingerprint 键序敏感 → 快照模板 deploy_ver 必须与 RM cfg 一致(暖复用前提);
+    ⑤ 停机取消泄漏占位 → 静息态 deploying 必须全空。"""
+    print("\n== 阶段 11b:内部不变量巡检 ==")
+    all_pods = await r.smembers("resource_manager:resource:pods:all")
+    ghosts, missing_since, scopes = [], [], set()
+    async for key in r.scan_iter(match="resource_manager:resource:scope:*:idle",
+                                 count=100):
+        scope = key.split(":")[3]
+        scopes.add(scope)
+        for pod in await r.smembers(key):
+            if pod not in all_pods:
+                ghosts.append(f"{scope}:{pod}")
+            if not await r.get(f"resource_manager:resource:pod:{pod}:idle_since"):
+                missing_since.append(f"{scope}:{pod}")
+    check("IV-idle ⊆ pods:all(无幽灵成员,缺陷②网)", not ghosts, str(ghosts))
+    check("IV-idle 成员必有 idle_since 计时", not missing_since, str(missing_since))
+
+    leaks = []
+    async for key in r.scan_iter(match="resource_manager:resource:scope:*:deploying",
+                                 count=100):
+        if await r.scard(key):
+            leaks.append(key)
+    check("IV-静息时 deploying 占位全空(缺陷⑤网)", not leaks, str(leaks))
+
+    import pathlib
+    import sys
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
+    from agent_runtime.resource_manager.orchestrator import _deploy_ver
+    from agent_runtime.session_manager.routing import snapshot_from_json
+
+    mismatch = []
+    snap = snapshot_from_json(await r.get("session_manager:routing:snapshot"))
+    for scope in sorted(scopes):
+        cfg = await r.hgetall(f"resource_manager:resource:scope:{scope}:config")
+        try:
+            spec = json.loads(cfg.get("pod_spec_json") or "{}")
+        except ValueError:
+            spec = {}
+        if spec and _deploy_ver(spec) != cfg.get("deploy_ver"):
+            mismatch.append(f"{scope}:cfg 不自洽")
+            continue
+        snap_scope = next((s for s in snap.scopes if s.scope_id == scope), None)
+        if (spec and snap_scope is not None
+                and snap.templates[snap_scope.template_id].deploy_ver()
+                != cfg.get("deploy_ver")):
+            mismatch.append(f"{scope}:快照≠RM")
+    check("IV-快照模板 deploy_ver == RM cfg(暖复用前提,缺陷④网)",
+          not mismatch, str(mismatch))
 
 
 async def stage12_reconcile_cleanup(c: Client, r) -> None:
@@ -625,12 +722,14 @@ async def main() -> None:
             await stage3_mb_hot_update(c, r)
             await stage4_aging(c, r, state)
             await stage5_reclaim(c, r, state)
+            await stage5b_natural_drain(c, r)
             await stage6_deploy_failure(c, r)
             await stage7_queue(c, r)
             state.update(await stage8_warm(c, r))
             await stage9_dead_pod(c, r, state)
             await stage10_ma_sunset(c, r)
             await stage11_half_dead(c, r, state)
+            await stage11b_invariants(c, r)
             await stage12_reconcile_cleanup(c, r)
             await stage13_error_contract(c, r)
     finally:
