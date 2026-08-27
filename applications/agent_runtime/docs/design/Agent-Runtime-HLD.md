@@ -138,6 +138,8 @@ flowchart TB
 | `sse_path` | str | SSE 路径(真 AgentServer HTTP 入口为 `/api/v1/events/stream`) |
 | `health_path` | str | 健康端点路径(readiness 探针与 RM 场景 N 探测共用;默认 `/health`,真 AgentServer 为 `/api/v1/health`) |
 | `agent_env` | dict | Agent 容器 env 注入(如 `AGENT_HTTP_ENABLED/AGENT_HTTP_HOST/AGENT_HTTP_PORT`——真 AgentServer 需以此开启 HTTP 入口并绑 0.0.0.0) |
+| `agent_host_path_mounts` / `agent_configmap_mounts` / `agent_pvc_mounts` | list[dict]? | 主 agent 容器卷挂载(A 类;规范形与校验见 `mounts.py` 与 `docs/spec/session-manager.md`;`None`/空 = 无挂载。sidecar 容器另有同款 `host_path_mounts`/`configmap_mounts`/`pvc_mounts` 子字段) |
+| `sidecars` | list[dict]? | 同 Pod sidecar 容器规格列表(A 类;通用机制,首个用户 jiuwenbox:特权 + SYS_ADMIN/NET_ADMIN + cgroup hostPath + TCP 8321 探针,agent 经 `127.0.0.1:port` 访问;`None`/空 = 无 sidecar。规范形与校验规则见 `sidecars.py` 与 `docs/spec/session-manager.md`) |
 | `kubeconfig` | str? | K8s 认证(可选,默认用集群内 ServiceAccount) |
 | `readiness_*` / `nfs_*` / 资源限额 | — | deploy 子集(就绪探针 / 存储 / CPU / 内存) |
 
@@ -178,7 +180,7 @@ field    := user_id | group_id | bot_id(固定小写枚举)
 ```
 
 - 语义:**以数组为准的全量替换**(upsert 全部 + 删除消失项);幂等重放收敛(affected_scopes 为空)。
-- 校验(400 VALIDATION):`templates`/`scopes` 非 list;template 缺 `template_id`;scope_id 字符集非法;`index` 非整数;scope 引用不在本批模板集内的 template;`routing_rules` 非字符串(含旧结构化 list 格式);表达式语法错误(未知字段/裸 `not`/悬空括号/未引号值/超长或超深);同批 scope_id 重复。
+- 校验(400 VALIDATION):`templates`/`scopes` 非 list;template 缺 `template_id`;scope_id 字符集非法;`index` 非整数;scope 引用不在本批模板集内的 template;`routing_rules` 非字符串(含旧结构化 list 格式);表达式语法错误(未知字段/裸 `not`/悬空括号/未引号值/超长或超深);同批 scope_id 重复;`sidecars` 非 list/单项缺 `name`/`image`/name 非 DNS-1123/容器名重复或撞 `container_name`/port 撞 `sse_port`·`container_port`·兄弟 sidecar/env 非 str→scalar/未知键/设 `readiness_probe_type` 而无 `port`/hostPath 挂载非绝对路径或坏 `host_path_type`/超 8 条;卷挂载(主容器三字段与 sidecar 子字段)非 list/mount_path 非绝对/ConfigMap·PVC 名非法/`sub_path`·`items[].path` 非相对路径/`items` 项缺 key 或 path/未知键/同容器 mount_path 重复或撞 `nfs_mount_path`。
 - 每次成功下发都会:重建路由快照(§5.1 `routing:snapshot`)、对每个存活 scope 推 RM 池参数 + pod_spec(**eager 预热**:autoscale 下一拍即预热 min_idle)、对被删 scope 推 `min_idle=0`(自然排空)。
 
 **错误响应体**(所有非 2xx):

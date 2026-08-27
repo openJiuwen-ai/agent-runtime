@@ -12,7 +12,7 @@
 | 层 | 入口 | 规模 | 依赖环境 | 退出码 |
 |---|---|---|---|---|
 | 进程内双实例 | `uv run pytest tests/integration/test_multi_replica.py` | 14 用例 | 无(离线,fakeredis) | pytest 标准 |
-| 集成冒烟(M6) | `./scripts/integration_smoke.sh` | 75 项断言 | 单实例 server 模式 + 真 Redis/MySQL/K8s | 0/1/2 |
+| 集成冒烟(M6) | `./scripts/integration_smoke.sh`(sidecar 阶段加 `--with-sidecar`) | 75 项断言(+5) | 单实例 server 模式 + 真 Redis/MySQL/K8s | 0/1/2 |
 | 多副本 e2e(M7) | `uv run --no-sync python scripts/e2e_multi_replica.py` | 35 项断言 | K8s 多副本 + Service LB + 真 Redis | 0/1/2 |
 | 压测/浸泡 | `uv run --no-sync python scripts/load_test.py` | 3 场景 | 任意入口(建议 LB) | 0/1 |
 
@@ -73,7 +73,7 @@
 
 ---
 
-## 3. 集成冒烟(M6):`scripts/e2e_hld_acceptance.py`(75 项)
+## 3. 集成冒烟(M6):`scripts/e2e_hld_acceptance.py`(75 项;`--with-sidecar` 时 +5 项 → 80)
 
 ### 3.0 环境与模板矩阵
 
@@ -92,6 +92,7 @@
 | `tpl-warm` | cc=2 pc=1 min_idle=1 ttl=90 | 热备(H)与 A 类日落(M) |
 | `tpl-bad` | `agent_image=agent-runtime-e2e-missing:1` ready_timeout=25 | deploy 失败(I) |
 | `tpl-nat` | cc=2 pc=2 session_ttl=15 pod_ttl=20 min_idle=0 | **自然老化专用**(阶段 5b,短 TTL 零回拨) |
+| `tpl-box` | cc=2 pc=1 pod_ttl=3600 + `sidecars=[box-standin]`(仅 `--with-sidecar` 下发) | **sidecar 多容器**(阶段 2b);pod_ttl 加大让 box Pod 全程长存,否则中途被自然回收会使阶段 4/5 的注册表计数(`--with-sidecar` 时 +1)随时序漂移 |
 
 scope:`e2e-main|e2e-f|e2e-warm|e2e-bad|e2e-nat` 各按 `routing_rules` 表达式串绑一模板
 (e2e-main 故意带 or 支 `group_id in ('e2e-main') or user_id in ('e2e-vip')` 验收混合表达式;
@@ -105,7 +106,7 @@ scope:`e2e-main|e2e-f|e2e-warm|e2e-bad|e2e-nat` 各按 `routing_rules` 表达式
 | # | 场景 | 输入 | 预期输出/断言 |
 |---|---|---|---|
 | 1a | H0 零 Pod 基线 | —(清场后,配置未下发) | ns 内零 agentserver Pod;`routing:snapshot` 不存在(服务启动不拉 Pod) |
-| 1 | —(种子) | 1×config_sync 全量 `{templates:5, scopes:5}` | 200,`templates_synced=5 scopes_synced=5`;`routing:snapshot` 已写;DB 行数 [5,5](可选) |
+| 1 | —(种子) | 1×config_sync 全量 `{templates:N, scopes:N}`(基础 N=5;`--with-sidecar` 时 6) | 200,`templates_synced=scopes_synced=N`;`routing:snapshot` 已写;DB 行数 [N,N](可选) |
 | 1b | H0 无请求预热 | —(种子后,零 route) | ~autoscale tick 后 `resource:scope:e2e-warm:idle` 有 1 热备 Pod 且真实存在于 K8s(**配置驱动预热**) |
 | 2 | C 首次部署 | `route(s1, e2e-main)` | 200,`pod_id` 以 `agentserver-` 开头,耗时≈一次 deploy |
 | 3 | C 物理真象 | —(上一步的 pod) | `kubectl get pod` 存在且 Ready |
@@ -120,7 +121,22 @@ scope:`e2e-main|e2e-f|e2e-warm|e2e-bad|e2e-nat` 各按 `routing_rules` 表达式
 | 12 | E 保活 | `touch(s1)`(间隔≥1.2s) | 200 `touched=true`;`session_expiry` 分数增大 |
 | 13 | E 未命中 | `touch(nope)` | 200 `touched=false` |
 | 14 | 幂等 | 同 `request_id` 两次 `route(s3)` | 两次 `pod_id` 一致;SCARD 仍=3(不重抢额度) |
-| 14b | C 表达式 or 支 | `route(s-vip, e2e-no-such-group, user=e2e-vip)` | 200 且有 `pod_id`——group 不命中但 user 白名单 or 支命中 e2e-main(新表达式格式验收) |
+
+**阶段 2b:sidecar 多容器**(5 项,仅 `--with-sidecar` 时执行/计数):tpl-box 的 sidecar 为
+**influxdb:1.8 替身改绑 8096**(`INFLUXDB_HTTP_BIND_ADDRESS=:8096` + `INFLUXDB_BIND_ADDRESS=:8098`
+——主容器已占 8086,同 Pod 共享网络命名空间必须错开端口;RPC 8088 不错开则双实例抢绑 →
+sidecar CrashLoop,2026-08-27 真环境实测)+ TCP readiness + ConfigMap subPath 挂载
+(`e2e-box-cm` 的 `policy.yaml` 单 key 挂到 `/etc/box/policy.yaml`);非特权——验证多容器渲染/
+readiness 门控/挂载链路,特权/cgroup hostPath 属 jiuwenbox 真镜像验收范畴
+(`--sidecar-image <jiuwenbox 镜像>`,需 namespace 允许特权容器):
+
+| # | 场景 | 输入 | 预期输出/断言 |
+|---|---|---|---|
+| 2b-1 | ConfigMap 资源就绪 | `kubectl create configmap e2e-box-cm`(幂等) | created/AlreadyExists(重跑可重入) |
+| 2b-2 | C 双容器部署 | `route(s-box, e2e-box)` | 200,`pod_id` 以 `agentserver-` 开头(deploy 等待**全部容器** Ready 才返回) |
+| 2b-3 | C 多容器真象 | —(上一步的 pod) | `kubectl get pod -o jsonpath={.spec.containers[*].name}` 含 `agent` 与 `box-standin` |
+| 2b-4 | C sidecar readiness 门控 | — | 返回的 `pod_sse_url` 已可用——TCP 探针(8096)通过是 Pod Ready 的前置 |
+| 2b-5 | C ConfigMap subPath 真挂载 | `kubectl exec -c box-standin -- cat /etc/box/policy.yaml` | 内容为 CM 播种的 `e2e-box-policy-standin`(挂载真实生效,非仅 spec 渲染) |
 
 **阶段 3:M(B 类)pod_ttl 热更新**(3 项)
 
@@ -137,7 +153,7 @@ scope:`e2e-main|e2e-f|e2e-warm|e2e-bad|e2e-nat` 各按 `routing_rules` 表达式
 | 18 | 时间回拨(加速,不真睡 TTL) | 30s 内 `scope:sessions` 清空(sweeper 1s tick) |
 | 19 | — | 会话四处全清(session HASH/expiry/pod 集/scope 集) |
 | 20 | — | 空 Pod pass → idle_consider → RM `idle` 暖池 2 个 |
-| 21 | — | 不变量 5:`pods:registered` 仍 2 个(待 RM 回收后清) |
+| 21 | — | 不变量 5:`pods:registered` 仍 2 个(`--with-sidecar` 时 3,box Pod 长存;待 RM 回收后清) |
 | 22 | — | 两个 Pod `phase`="idle" |
 
 **阶段 5:K reclaim**(回拨 `idle_since` 到 pod_ttl 之前,4 项)
@@ -146,7 +162,7 @@ scope:`e2e-main|e2e-f|e2e-warm|e2e-bad|e2e-nat` 各按 `routing_rules` 表达式
 |---|---|---|
 | 23 | `idle_since=now-121` | 20s 内 idle 池清空(reclaim 1s tick) |
 | 24–25 | 每个 Pod | K8s 真删(`kubectl` NotFound)+ RM `pods:all` PURGE |
-| 26 | — | notify_pod_dead 已清 `pods:registered`(归零) |
+| 26 | — | notify_pod_dead 已清 `pods:registered`(归零;`--with-sidecar` 时剩 1,box Pod 阶段 12 cleanup 统一清) |
 
 **阶段 5b:自然老化全链路(零回拨,5 项)**——tpl-nat(session_ttl=15/pod_ttl=20/min_idle=0),
 不回拨任何时间,真等 TTL 走完 D→K;2026-08-26 缺陷①(idle_since 周期刷新致永不回收)的回归网:
@@ -218,6 +234,15 @@ scope:`e2e-main|e2e-f|e2e-warm|e2e-bad|e2e-nat` 各按 `routing_rules` 表达式
 | 45 | `cleanup(namespace=验收ns)` | 200 `cleaned≥0`;kubectl 该 ns 无 agentserver Pod |
 | 46 | —(12s 后) | watch/reconcile 兜底清空 Redis RM 编排态 |
 | 47 | — | `session_manager:pod:*` 注册态全清 |
+
+**阶段 12b:表达式 or 支(清场后确定性验证,1 项)**:原位置在阶段 2 尾,但彼时 e2e-main 已被
+s1–s3 占满(cc=3),or 支 route 只能排队 504——原断言仅在「部署慢、会话先过期」时序下碰巧
+200(2026-08-27 快跑实测暴露,镜像预分发后快跑必现);移到阶段 12 清场后(Pod/会话全空、配置
+仍在)e2e-main 空闲,确定性 200:
+
+| # | 场景 | 输入 | 预期输出/断言 |
+|---|---|---|---|
+| 12b-1 | C 表达式 or 支 | `route(s-vip, e2e-no-such-group, user=e2e-vip)` | 200 且 `pod_id` 以 `agentserver-` 开头——group 不命中但 user 白名单 or 支命中 e2e-main |
 
 **阶段 13:错误契约**(5 项)
 
@@ -377,7 +402,8 @@ uv sync --extra local && uv run pytest tests/integration/test_multi_replica.py -
 
 # ② M6 冒烟(单实例)
 ./scripts/deploy_replicas.sh 1 .env.production.local 8091   # 保持运行
-./scripts/integration_smoke.sh                              # 75 项
+./scripts/integration_smoke.sh                              # 75 项(基础);
+./scripts/integration_smoke.sh --with-sidecar                # +5 项 sidecar 阶段
 
 # ③ 宿主机双进程(观察选主互斥)
 ./scripts/deploy_replicas.sh 2 .env.production.local 8091

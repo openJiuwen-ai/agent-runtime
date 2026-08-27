@@ -346,3 +346,224 @@ async def test_db_write_failure_skips_snapshot_and_push(runtime, db_handler, mon
         ))
     assert await runtime.sm_state.routing_snapshot_raw() == snapshot_before
     assert runtime.pool_pushes == []
+
+
+# -------------------------------------------------------------- sidecars(多容器)
+
+_SIDECAR = {
+    "name": "jiuwenbox",
+    "image": "jiuwenbox-amd64:0.0.1",
+    "port": 8321,
+    "env": {"JIUWENBOX_LISTEN": "tcp://0.0.0.0:8321"},
+    "privileged": True,
+    "capabilities_add": ["SYS_ADMIN", "NET_ADMIN"],
+    "seccomp_unconfined": True,
+    "apparmor_unconfined": True,
+    "host_path_mounts": [
+        {"host_path": "/sys/fs/cgroup", "mount_path": "/sys/fs/cgroup"},
+    ],
+    "readiness_probe_type": "tcp",
+}
+
+
+@requires_lua
+async def test_config_sync_persists_and_roundtrips_sidecars(runtime):
+    """sidecars 下发 → DB(JSON 列) → get_template 回读 = 规范形(默认键填满)。"""
+    await runtime.config_store.config_sync(_payload(
+        [_tpl("tpl-box", sidecars=[_SIDECAR])],
+        [_scope(SCOPE, "tpl-box")],
+    ))
+    t = await runtime.config_store.get_template("tpl-box")
+    assert t.sidecars == [{
+        "name": "jiuwenbox",
+        "image": "jiuwenbox-amd64:0.0.1",
+        "port": 8321,
+        "env": {"JIUWENBOX_LISTEN": "tcp://0.0.0.0:8321"},
+        "image_pull_policy": "IfNotPresent",
+        "cpu_request": None, "memory_request": None,
+        "cpu_limit": None, "memory_limit": None,
+        "privileged": True,
+        "capabilities_add": ["SYS_ADMIN", "NET_ADMIN"],
+        "capabilities_drop": [],
+        "seccomp_unconfined": True,
+        "apparmor_unconfined": True,
+        "run_as_user": None, "run_as_group": None,
+        "host_path_mounts": [{"host_path": "/sys/fs/cgroup",
+                              "mount_path": "/sys/fs/cgroup",
+                              "read_only": False, "host_path_type": None}],
+        "configmap_mounts": [], "pvc_mounts": [],
+        "readiness_probe_type": "tcp",
+        "readiness_path": "/health",
+        "readiness_initial_delay": 5,
+        "readiness_period": 10,
+        "readiness_timeout_seconds": 3,
+    }]
+    # deploy_subset 携带 sidecars;json 可序列化(RM 缓存 pod_spec_json 用)
+    subset = t.deploy_subset()
+    import json
+    assert subset["sidecars"] == t.sidecars
+    assert json.loads(json.dumps(subset))["sidecars"][0]["name"] == "jiuwenbox"
+    # pool 推送同样携带
+    assert runtime.pool_pushes and runtime.pool_pushes[-1][2] is not None
+    assert runtime.pool_pushes[-1][2]["sidecars"] == t.sidecars
+
+
+@requires_lua
+async def test_config_sync_rejects_invalid_sidecars_without_side_effect(runtime):
+    """坏 sidecars → InvalidParams 400;锁外校验零副作用(DB 无行)。"""
+    bad = dict(_SIDECAR, capabilites_add=["SYS_ADMIN"])  # 拼错键
+    with pytest.raises(InvalidParams, match="unknown keys"):
+        await runtime.config_store.config_sync(_payload(
+            [_tpl("tpl-bad", sidecars=[bad])],
+            [_scope(SCOPE, "tpl-bad")],
+        ))
+    assert await runtime.config_store.get_template("tpl-bad") is None
+
+
+@requires_lua
+async def test_config_sync_sidecars_change_triggers_a_class_sunset(runtime):
+    """sidecar 变更(镜像升级)是 A 类:软摘除老 Pod + 新 route 扩新版本。"""
+    await runtime.seed_template(sidecars=[_SIDECAR])
+    await runtime.route("sess_1")
+    assert await runtime.sm_state.scope_pod_ids(SCOPE)
+
+    runtime.pool_pushes.clear()
+    await runtime.config_store.config_sync(_payload(
+        [_tpl("tpl-1", sidecars=[dict(_SIDECAR, image="jiuwenbox-amd64:0.0.2")])],
+        [_scope(SCOPE, "tpl-1")],
+    ))
+    assert await runtime.sm_state.scope_pod_ids(SCOPE) == []  # 软摘除
+    cfg = await runtime.rm_state.load_scope_config(SCOPE)
+    assert cfg.get("deploy_ver")
+    result = await runtime.route("sess_2")
+    assert await runtime.sm_state.pod_deploy_ver(SCOPE, result["pod_id"]) == \
+        cfg["deploy_ver"]
+    # FakeK8s 收到的新 pod_spec 带新 sidecar 镜像
+    assert runtime.k8s.deployed_specs[-1]["sidecars"][0]["image"] == \
+        "jiuwenbox-amd64:0.0.2"
+
+
+@requires_lua
+async def test_config_sync_sidecars_removal_triggers_a_class_sunset(runtime):
+    """有 → 无(去掉 sidecars)同样 A 类日落(指纹回退到无 sidecar 形态)。"""
+    await runtime.seed_template(sidecars=[_SIDECAR])
+    await runtime.route("sess_1")
+    assert await runtime.sm_state.scope_pod_ids(SCOPE)
+
+    await runtime.config_store.config_sync(_payload(
+        [_tpl("tpl-1")],
+        [_scope(SCOPE, "tpl-1")],
+    ))
+    assert await runtime.sm_state.scope_pod_ids(SCOPE) == []  # 软摘除
+    result = await runtime.route("sess_2")
+    assert runtime.k8s.deployed_specs[-1]["sidecars"] is None
+
+
+def test_template_from_row_normalizes_sidecars():
+    """DB 行兜底:sidecars None/[]/坏值 → Template.sidecars 统一 None。"""
+    from types import SimpleNamespace
+
+    from agent_runtime.session_manager.config_store import (
+        _COLUMN_OF,
+        template_from_row,
+    )
+
+    def _row(sidecars_value):
+        base = {column: None for column in _COLUMN_OF.values()}
+        base.update(agent_image="img:1", sidecars=sidecars_value)
+        return SimpleNamespace(**base)
+
+    assert template_from_row(_row(None)).sidecars is None
+    assert template_from_row(_row([])).sidecars is None
+    assert template_from_row(_row("garbage")).sidecars is None
+    assert template_from_row(_row([{"garbage": 1}])).sidecars is None
+    assert template_from_row(_row([dict(_SIDECAR)])).sidecars is not None
+
+
+@requires_lua
+async def test_route_and_pool_push_carry_sidecars_end_to_end(runtime):
+    """端到端:seed(sidecars) → route → FakeK8s 收到的 pod_spec 含规范形 sidecars。"""
+    from agent_runtime.sidecars import validate_sidecars
+
+    await runtime.seed_template(sidecars=[_SIDECAR])
+    result = await runtime.route("sess-e2e")
+    assert result["pod_id"]
+
+    canonical = validate_sidecars([_SIDECAR], container_name="agent",
+                                  sse_port=8080, container_port=8080)
+    # FakeK8s 录制:deploy 真正收到 sidecars
+    assert runtime.k8s.deployed_specs, "FakeK8s.deployed_specs 未录制"
+    assert runtime.k8s.deployed_specs[0]["sidecars"] == canonical
+    # RM scope:config 缓存的 pod_spec_json 同样携带
+    cfg = await runtime.rm_state.load_scope_config(SCOPE)
+    import json
+    cached = json.loads(cfg["pod_spec_json"])
+    assert cached["sidecars"] == canonical
+
+
+@requires_lua
+async def test_config_sync_roundtrips_agent_and_sidecar_mounts(runtime):
+    """主容器三种挂载 + sidecar cm/pvc 下发 → DB JSON 列回读 = 规范形。"""
+    await runtime.config_store.config_sync(_payload(
+        [_tpl("tpl-mnt",
+              agent_host_path_mounts=[{"host_path": "/host/c", "mount_path": "/etc/host"}],
+              agent_configmap_mounts=[{"config_map_name": "agent-cm",
+                                       "mount_path": "/etc/agent/config.yaml",
+                                       "sub_path": "config.yaml"}],
+              agent_pvc_mounts=[{"claim_name": "agent-data", "mount_path": "/data"}],
+              sidecars=[dict(_SIDECAR,
+                             configmap_mounts=[{"config_map_name": "box-policy",
+                                                "mount_path": "/etc/box/policy.yaml",
+                                                "sub_path": "policy.yaml"}])])],
+        [_scope(SCOPE, "tpl-mnt")],
+    ))
+    t = await runtime.config_store.get_template("tpl-mnt")
+    assert t.agent_host_path_mounts == [
+        {"host_path": "/host/c", "mount_path": "/etc/host",
+         "read_only": False, "host_path_type": None}]
+    assert t.agent_configmap_mounts[0]["sub_path"] == "config.yaml"
+    assert t.agent_configmap_mounts[0]["read_only"] is True
+    assert t.agent_pvc_mounts == [{"claim_name": "agent-data",
+                                   "mount_path": "/data", "read_only": False}]
+    assert t.sidecars[0]["configmap_mounts"][0]["config_map_name"] == "box-policy"
+    # deploy_subset 携带三列表,整体 json 可序列化
+    subset = t.deploy_subset()
+    import json
+    json.loads(json.dumps(subset))
+    assert subset["agent_pvc_mounts"] == t.agent_pvc_mounts
+
+
+@requires_lua
+async def test_config_sync_agent_mount_change_is_a_class(runtime):
+    """主容器挂载变更(A 类):软摘除老 Pod(挂载烘焙进 Pod,同 sidecars 语义)。"""
+    await runtime.seed_template(agent_configmap_mounts=[
+        {"config_map_name": "cm-1", "mount_path": "/cfg"}])
+    await runtime.route("sess_1")
+    assert await runtime.sm_state.scope_pod_ids(SCOPE)
+    await runtime.config_store.config_sync(_payload(
+        [_tpl("tpl-1", agent_configmap_mounts=[
+            {"config_map_name": "cm-2", "mount_path": "/cfg"}])],
+        [_scope(SCOPE, "tpl-1")],
+    ))
+    assert await runtime.sm_state.scope_pod_ids(SCOPE) == []
+
+
+def test_template_from_row_normalizes_agent_mounts():
+    """DB 行兜底:三种主容器挂载坏值 → None(同 sidecars 单点归一)。"""
+    from types import SimpleNamespace
+
+    from agent_runtime.session_manager.config_store import (
+        _COLUMN_OF,
+        template_from_row,
+    )
+
+    def _row(**kw):
+        base = {column: None for column in _COLUMN_OF.values()}
+        base.update(agent_image="img:1", **kw)
+        return SimpleNamespace(**base)
+
+    assert template_from_row(_row(agent_pvc_mounts="garbage")).agent_pvc_mounts is None
+    assert template_from_row(_row(agent_pvc_mounts=[])).agent_pvc_mounts is None
+    assert template_from_row(
+        _row(agent_pvc_mounts=[{"claim_name": "p", "mount_path": "/v"}])
+    ).agent_pvc_mounts == [{"claim_name": "p", "mount_path": "/v", "read_only": False}]

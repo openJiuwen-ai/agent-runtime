@@ -74,6 +74,9 @@ MAIN = ""     # scope_id（main：cc=3 pc=2 → max_pods=2）
 FSCOPE = ""   # （f：cc=2 pc=1 → max_pods=2，满 + 队列）
 WARM = ""     # （warm：min_idle=1）
 BAD = ""      # （bad：不可拉镜像，deploy 失败分支）
+BOX = ""      # （box：sidecar 多容器；--with-sidecar 时启用）
+WITH_SIDECAR = False
+SIDECAR_IMAGE = ""   # sidecar 替身镜像（默认与主镜像同款 influxdb:1.8 改端口）
 
 
 async def pod_exists(pod_id: str) -> bool:
@@ -158,6 +161,35 @@ SCOPES_DEF = [
     ("e2e-nat", "tpl-nat", "group_id in ('e2e-nat')"),   # 自然老化专用(短 TTL,零回拨)
 ]
 
+# sidecar 替身（--with-sidecar）：influxdb:1.8 改绑 8096——主容器已占 8086，
+# 同 Pod 共享网络命名空间必须错开端口；**RPC 端口 8088 也必须错开**（influxdb
+# 双实例同 Pod 会抢 127.0.0.1:8088 → sidecar CrashLoop，2026-08-27 真环境实测）；
+# TCP readiness 真实可过（8096 监听即 Ready）。非特权无挂载：验证多容器渲染 +
+# readiness 门控；特权/cgroup 挂载属 jiuwenbox 真镜像验收范畴（需集群允许特权容器）。
+SIDECAR_STANDIN_PORT = 8096
+
+
+def _sidecar_standin() -> dict:
+    return {
+        "name": "box-standin",
+        "image": SIDECAR_IMAGE,
+        "port": SIDECAR_STANDIN_PORT,
+        "env": {
+            "INFLUXDB_HTTP_BIND_ADDRESS": f":{SIDECAR_STANDIN_PORT}",
+            "INFLUXDB_BIND_ADDRESS": ":8098",  # 错开 RPC 8088(同 Pod netns 共享)
+        },
+        # ConfigMap subPath 单 key 挂载(老 SDK config.yaml 同款形态):
+        # 阶段 2b 先 kubectl create configmap,exec 验证容器内文件内容
+        "configmap_mounts": [{
+            "config_map_name": "e2e-box-cm",
+            "mount_path": "/etc/box/policy.yaml",
+            "sub_path": "policy.yaml",
+        }],
+        "readiness_probe_type": "tcp",
+        "readiness_initial_delay": 5,
+        "readiness_period": 5,
+    }
+
 
 def full_sync_payload(tpl_overrides: dict | None = None) -> dict:
     """config_sync 全量载荷:模板集 + scope 集(routing_rules 表达式串)。
@@ -188,6 +220,15 @@ def build_templates() -> None:
         "tpl-nat": template(scope_concurrency=2, pod_concurrency=2,
                             session_ttl=15, pod_ttl=20, min_idle_pods=0),
     })
+    if WITH_SIDECAR:
+        # pod_ttl=3600:box Pod 全程长存——否则可能在阶段 5~12 之间被自然回收,
+        # 使 D-不变量5 / K-notify 的注册表计数随时序漂移(2026-08-27 实测)
+        TPL["tpl-box"] = template(scope_concurrency=2, pod_concurrency=1,
+                                  pod_ttl=3600,
+                                  sidecars=[_sidecar_standin()])
+        # 幂等:build_templates 可能被热更新阶段再次调用
+        if not any(sid == "e2e-box" for sid, _, _ in SCOPES_DEF):
+            SCOPES_DEF.append(("e2e-box", "tpl-box", "group_id in ('e2e-box')"))
 
 
 async def clean_previous(c: Client, r: aioredis.Redis) -> None:
@@ -229,9 +270,11 @@ async def stage1_seed(c: Client, r) -> None:
           not await r.exists("session_manager:routing:snapshot"))
 
     code, raw, body = await c.post("config_sync", rawdata=full_sync_payload())
-    check("config_sync 全量下发（5 模板 + 5 scope）",
+    n_tpl, n_scope = len(TPL), len(SCOPES_DEF)
+    check(f"config_sync 全量下发（{n_tpl} 模板 + {n_scope} scope）",
           code == 200 and raw.get("ok") is True
-          and raw.get("templates_synced") == 5 and raw.get("scopes_synced") == 5,
+          and raw.get("templates_synced") == n_tpl
+          and raw.get("scopes_synced") == n_scope,
           json.dumps(body, ensure_ascii=False)[:200])
     snap = await r.get("session_manager:routing:snapshot")
     check("M-路由快照已写入 Redis（routing:snapshot）", bool(snap),
@@ -267,7 +310,8 @@ async def stage1_seed(c: Client, r) -> None:
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
         out, _ = await proc.communicate()
         counts = [int(x) for x in out.decode().split()]
-    check("DB(service_config_template/routing_scope) 落库", counts == [5, 5], str(counts))
+    check("DB(service_config_template/routing_scope) 落库",
+          counts == [len(TPL), len(SCOPES_DEF)], str(counts))
 
 
 async def stage1b_warm_up_without_request(c: Client, r) -> None:
@@ -343,13 +387,45 @@ async def stage2_route_abc(c: Client, r) -> dict:
     check("route 幂等回放（同 request_id 同结果，不重抢额度）",
           first.get("pod_id") == second.get("pod_id")
           and await r.scard(f"session_manager:scope:{MAIN}:sessions") == 3)
-    # 表达式 or 支:group 不在任何 scope,但 user 在 e2e-main 白名单 → 命中 MAIN
-    code, raw_vip, _ = await c.post("route", session_id="s-vip",
-                                    group="e2e-no-such-group", user="e2e-vip")
-    check("route 表达式 or 支（user 白名单跨 group 命中 e2e-main）",
-          code == 200 and raw_vip.get("pod_id"),
-          f"{code} {str(raw_vip)[:80]}")
+    # 表达式 or 支（user 白名单跨 group 命中 e2e-main）在阶段 12b 验证：
+    # 此处 e2e-main 已被 s1–s3 占满（cc=3），or 支 route 只会排队 504——
+    # 原位置仅在「部署慢、s1 先过期」的时序下碰巧 200（2026-08-27 快跑实测 504）。
     return state
+
+
+async def stage2b_sidecar(c: Client, r) -> None:
+    """sidecar 多容器(--with-sidecar 专用):双容器 Pod + readiness 门控 + ConfigMap 挂载。"""
+    if not WITH_SIDECAR:
+        return
+    print("\n== 阶段 2b：sidecar 多容器 —— 双容器 Pod / readiness 门控 / ConfigMap ==")
+    # ConfigMap 资源(幂等:重跑已存在即视为就绪)
+    cm_out = await kubectl("create", "configmap", "e2e-box-cm", "-n", NS,
+                           "--from-literal=policy.yaml=e2e-box-policy-standin")
+    check("BOX-ConfigMap e2e-box-cm 就绪（create 幂等）",
+          "AlreadyExists" in cm_out or "created" in cm_out or "configmap" in cm_out.lower(),
+          cm_out.strip().splitlines()[-1][:60] if cm_out.strip() else "")
+    t0 = time.monotonic()
+    code, raw, _ = await c.post("route", session_id="s-box", group="e2e-box")
+    ok = code == 200 and raw.get("pod_id", "").startswith("agentserver-")
+    check("BOX-route 部署双容器 Pod（等全容器 Ready）", ok,
+          f"{code} {raw} ({time.monotonic()-t0:.0f}s)")
+    if not ok:
+        return
+    pod_id = raw["pod_id"]
+    out = await kubectl("get", "pod", "-n", NS, pod_id, "-o",
+                        "jsonpath={.spec.containers[*].name}")
+    names = out.split()
+    check("BOX-Pod 内含 sidecar 容器（agent + box-standin）",
+          "agent" in names and "box-standin" in names, out.strip())
+    # sidecar readiness 参与 Pod Ready:route 返回即 TCP 探针已过(8096 在监听)
+    check("BOX-sidecar readiness 门控（Ready 后才返回 sse_url）",
+          raw.get("pod_sse_url", "").startswith("http://"),
+          raw.get("pod_sse_url", ""))
+    # ConfigMap subPath 真挂载:容器内读出 CM 内容
+    out = await kubectl("exec", "-n", NS, pod_id, "-c", "box-standin",
+                        "--", "cat", "/etc/box/policy.yaml")
+    check("BOX-ConfigMap subPath 挂载内容可见（/etc/box/policy.yaml）",
+          "e2e-box-policy-standin" in out, out.strip()[:60])
 
 
 async def stage3_mb_hot_update(c: Client, r) -> None:
@@ -387,8 +463,9 @@ async def stage4_aging(c: Client, r, state: dict) -> None:
     check("D-空 Pod pass → idle_consider → RM idle 暖池 2 个",
           len(idle) == 2, str(idle))
     reg = await r.smembers("session_manager:pods:registered")
+    # --with-sidecar: box Pod(pod_ttl=3600 长存)也在注册表,期望 +1
     check("D-不变量 5：pods:registered 仍持有（待 RM 回收后清）",
-          len(reg) == 2, str(reg))
+          len(reg) == 2 + (1 if WITH_SIDECAR else 0), str(reg))
     phases = [await r.hget(f"resource_manager:resource:pod:{p}:info", "phase")
               for p in idle]
     check("D-Pod phase=idle", set(phases) == {"idle"}, str(phases))
@@ -414,7 +491,9 @@ async def stage5_reclaim(c: Client, r, state: dict) -> None:
         check(f"K-Pod {p[:30]}… K8s 已删 + RM PURGE", k8s_gone and purged,
               f"k8s_gone={k8s_gone} purged={purged}")
     reg = await r.smembers("session_manager:pods:registered")
-    check("K-notify_pod_dead 已清 SM 注册", len(reg) == 0, str(reg))
+    # --with-sidecar: box Pod 未参与本阶段回收,仍注册(阶段 12 cleanup 统一清)
+    check("K-notify_pod_dead 已清 SM 注册",
+          len(reg) == (1 if WITH_SIDECAR else 0), str(reg))
 
 
 async def stage5b_natural_drain(c: Client, r) -> None:
@@ -635,6 +714,20 @@ async def stage12_reconcile_cleanup(c: Client, r) -> None:
     check("L-SM Pod 注册态全清", not sm_keys, str(sm_keys[:5]))
 
 
+async def stage12b_or_branch(c: Client, r) -> None:
+    """表达式 or 支(阶段 12 清场后):e2e-main 此时空闲,or 支命中可确定性 200。
+
+    原位置(阶段 2 尾)被 s1–s3 占满 cc=3,or 支 route 只能排队 504——只有
+    「部署慢、会话先过期」的时序下碰巧 200(2026-08-27 快跑实测暴露)。
+    """
+    print("\n== 阶段 12b：表达式 or 支（清场后确定性验证）==")
+    code, raw_vip, _ = await c.post("route", session_id="s-vip",
+                                    group="e2e-no-such-group", user="e2e-vip")
+    check("route 表达式 or 支（user 白名单跨 group 命中 e2e-main）",
+          code == 200 and raw_vip.get("pod_id", "").startswith("agentserver-"),
+          f"{code} {str(raw_vip)[:80]}")
+
+
 async def stage13_error_contract(c: Client, r) -> None:
     print("\n== 阶段 13：边界错误契约（真服务 HTTP 映射）==")
     code, raw, body = await c.post("route", session_id="s-norule", group="e2e-no-such-group")
@@ -682,6 +775,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--namespace", default=env("AGENT_RUNTIME_E2E_NAMESPACE",
                                                    "agent-runtime-e2e"))
     parser.add_argument("--image", default=env("AGENT_RUNTIME_E2E_IMAGE", "influxdb:1.8"))
+    parser.add_argument("--with-sidecar", action="store_true",
+                        default=env("AGENT_RUNTIME_E2E_WITH_SIDECAR", "") == "1",
+                        help="追加 sidecar 多容器阶段（替身=influxdb 改端口 8096，"
+                             "tcp 探针；真 jiuwenbox 镜像用 --sidecar-image）")
+    parser.add_argument("--sidecar-image", default=None,
+                        help="sidecar 镜像（默认复用 --image 作替身）")
     parser.add_argument("--db-host", default=env("AGENT_RUNTIME_E2E_DB_HOST", "127.0.0.1"))
     parser.add_argument("--db-port", default=env("AGENT_RUNTIME_E2E_DB_PORT", "30000"))
     parser.add_argument("--db-user", default=env("AGENT_RUNTIME_E2E_DB_USER", "agent_runtime"))
@@ -697,6 +796,7 @@ def _parse_args() -> argparse.Namespace:
 
 async def main() -> None:
     global BASE, REDIS_URL, NS, IMAGE, DB_DSN, MAIN, FSCOPE, WARM, BAD
+    global BOX, WITH_SIDECAR, SIDECAR_IMAGE
     args = _parse_args()
     BASE = args.base_url.rstrip("/")
     REDIS_URL = args.redis_url
@@ -707,10 +807,13 @@ async def main() -> None:
               "type": args.db_type}
     MAIN, FSCOPE = "e2e-main", "e2e-f"     # scope_id 由 config_sync 下发(字面量)
     WARM, BAD = "e2e-warm", "e2e-bad"
+    BOX, WITH_SIDECAR = "e2e-box", bool(args.with_sidecar)
+    SIDECAR_IMAGE = args.sidecar_image or IMAGE
     build_templates()
 
     print(f"agent-runtime 集成冒烟测试 @ {time.strftime('%F %T')}")
-    print(f"service={BASE} redis={REDIS_URL} ns={NS} image={IMAGE}")
+    print(f"service={BASE} redis={REDIS_URL} ns={NS} image={IMAGE}"
+          + (f" sidecar={SIDECAR_IMAGE}" if WITH_SIDECAR else ""))
 
     r = aioredis.from_url(REDIS_URL, decode_responses=True)
     try:
@@ -724,6 +827,7 @@ async def main() -> None:
             await stage1_seed(c, r)
             await stage1b_warm_up_without_request(c, r)
             state = await stage2_route_abc(c, r)
+            await stage2b_sidecar(c, r)
             await stage3_mb_hot_update(c, r)
             await stage4_aging(c, r, state)
             await stage5_reclaim(c, r, state)
@@ -736,6 +840,7 @@ async def main() -> None:
             await stage11_half_dead(c, r, state)
             await stage11b_invariants(c, r)
             await stage12_reconcile_cleanup(c, r)
+            await stage12b_or_branch(c, r)
             await stage13_error_contract(c, r)
     finally:
         await r.aclose()

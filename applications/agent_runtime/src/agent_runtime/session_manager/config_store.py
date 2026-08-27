@@ -28,6 +28,8 @@ from openjiuwen_runtime.foundation.db.table_def import (
 )
 
 from ..errors import ConfigNotFound, ConfigSyncBusy, InvalidParams
+from ..mounts import validate_agent_mounts
+from ..sidecars import validate_sidecars
 from ..util import now_ts, s
 from .models import POLICY_FIELDS, Template
 from .routing import (
@@ -83,6 +85,12 @@ SERVICE_CONFIG_TEMPLATE_TABLE_DEF = TableDefinition(
         ColumnDefinition("agent_memory_request", "string", length=32, nullable=True),
         ColumnDefinition("agent_cpu_limit", "string", length=32, nullable=True),
         ColumnDefinition("agent_memory_limit", "string", length=32, nullable=True),
+        # 同 Pod sidecar 容器列表(规范形 list[dict];存量库需先手工 ALTER 补列)
+        ColumnDefinition("sidecars", "json", nullable=True),
+        # 主 agent 容器卷挂载(与 sidecar 挂载同款规范形;存量库同样先 ALTER)
+        ColumnDefinition("agent_host_path_mounts", "json", nullable=True),
+        ColumnDefinition("agent_configmap_mounts", "json", nullable=True),
+        ColumnDefinition("agent_pvc_mounts", "json", nullable=True),
         ColumnDefinition("min_idle_services", "integer", nullable=False, default=0),
         ColumnDefinition("service_concurrency", "integer", nullable=False, default=2),
         ColumnDefinition("service_ttl", "integer", nullable=False, default=300),
@@ -139,6 +147,10 @@ _COLUMN_OF: dict[str, str] = {
     "agent_memory_request": "agent_memory_request",
     "agent_cpu_limit": "agent_cpu_limit",
     "agent_memory_limit": "agent_memory_limit",
+    "sidecars": "sidecars",
+    "agent_host_path_mounts": "agent_host_path_mounts",
+    "agent_configmap_mounts": "agent_configmap_mounts",
+    "agent_pvc_mounts": "agent_pvc_mounts",
     "min_idle_pods": "min_idle_services",
     "pod_concurrency": "service_concurrency",
     "pod_ttl": "service_ttl",
@@ -168,7 +180,8 @@ def template_from_row(row: Any) -> Template:
         if field_name in _INT_FIELDS and value is not None:
             value = int(value)
         kwargs[field_name] = value
-    # 老行/NULL 防御:agent_env 非 dict → 空表;health_path 空 → 默认
+    # 老行/NULL 防御:agent_env 非 dict → 空表;health_path 空 → 默认;
+    # sidecars 坏值/空 → None 的兜底在 Template.__post_init__(normalize_sidecars)
     if not isinstance(kwargs.get("agent_env"), dict):
         kwargs["agent_env"] = {}
     if not kwargs.get("health_path"):
@@ -214,6 +227,24 @@ def template_from_payload(template_id: str, payload: dict[str, Any]) -> Template
             kwargs[field] = int(value) if field in _INT_FIELDS else value
         else:
             kwargs[field] = getattr(defaults, field)
+    # sidecars 严格校验(fail-fast 400;跨字段冲突 = 撞主容器名/撞 agent 端口)。
+    # 空列表与 None 统一归一为 None(deploy_ver 指纹稳定,见 sidecars.py)。
+    sse_port = int(kwargs.get("sse_port") or 8080)
+    kwargs["sidecars"] = validate_sidecars(
+        kwargs.pop("sidecars", None),
+        container_name=str(kwargs.get("container_name") or "agent"),
+        sse_port=sse_port,
+        container_port=int(kwargs.get("container_port") or sse_port),
+    )
+    # 主容器三种卷挂载校验(规范形;mount_path 重复/撞 nfs_mount_path → 400)
+    (kwargs["agent_host_path_mounts"],
+     kwargs["agent_configmap_mounts"],
+     kwargs["agent_pvc_mounts"]) = validate_agent_mounts(
+        kwargs.pop("agent_host_path_mounts", None),
+        kwargs.pop("agent_configmap_mounts", None),
+        kwargs.pop("agent_pvc_mounts", None),
+        nfs_mount_path=kwargs.get("nfs_mount_path"),
+    )
     return Template(**kwargs)
 
 
