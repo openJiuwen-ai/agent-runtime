@@ -251,6 +251,8 @@ class InstanceGrantService:
         for r in await self._h.list_records(
             _TABLE, {"subject_type": subject_type}, limit=_CAP, offset=0
         ):
+            if not _active(r):
+                continue
             eid = str(_g(r, "subject_id"))
             if eid in out:
                 out[eid].append(str(_g(r, "jiuwenclaw_id")))
