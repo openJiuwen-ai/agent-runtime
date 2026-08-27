@@ -42,7 +42,7 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
   const mainTabs: { key: InstancePageTab; label: string; href: string; hidden?: boolean }[] = [
     { key: 'access', label: t('instanceDetail.tabs.access'), href: `/instances/${instanceId}/access` },
     { key: 'resources', label: t('instanceDetail.tabs.resources'), href: `/instances/${instanceId}/resources` },
-    { key: 'policies', label: t('instanceDetail.tabs.policies'), href: `/instances/${instanceId}/policies`, hidden: true },
+    { key: 'policies', label: t('instanceDetail.tabs.policies'), href: `/instances/${instanceId}/policies` },
     { key: 'config', label: t('instanceDetail.tabs.config'), href: `/instances/${instanceId}/config` },
     { key: 'status', label: t('instanceDetail.tabs.status'), href: `/instances/${instanceId}/status` },
     { key: 'tokenQuota', label: t('instanceDetail.tabs.tokenQuota'), href: `/instances/${instanceId}/token-quota` },
