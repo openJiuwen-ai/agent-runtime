@@ -44,8 +44,24 @@ import type {
 } from '../types';
 
 // 平台管理 API(claw_manager) 与 认证/目录 API(独立认证服务) 两个反代前缀。
-const API_BASE = (import.meta.env.VITE_API_BASE ?? '/api').replace(/\/$/, '');
-const IDP_BASE = (import.meta.env.VITE_IDP_BASE ?? '/idp').replace(/\/$/, '');
+function browserSafeBase(value: string | undefined, fallback: string): string {
+  const candidate = (value ?? fallback).trim().replace(/\/$/, '');
+  // API 请求必须经过 Manager Web 的同源反代；Kubernetes Service DNS 对浏览器不可见。
+  if (candidate === fallback || candidate.startsWith(`${fallback}/`)) return candidate;
+  if (typeof window !== 'undefined') {
+    try {
+      const url = new URL(candidate, window.location.origin);
+      if (url.origin === window.location.origin && (url.pathname === fallback || url.pathname.startsWith(`${fallback}/`))) {
+        return url.pathname.replace(/\/$/, '') || fallback;
+      }
+    } catch { /* 回退到同源前缀 */ }
+    return fallback;
+  }
+  return candidate;
+}
+
+const API_BASE = browserSafeBase(import.meta.env.VITE_API_BASE, '/api');
+const IDP_BASE = browserSafeBase(import.meta.env.VITE_IDP_BASE, '/idp');
 
 // ---------- 认证 token（access JWT + refresh，localStorage 持久化）----------
 const ACCESS_KEY = 'openjiuwen_access_token';
@@ -157,10 +173,18 @@ async function tryRefresh(): Promise<boolean> {
   }
 }
 
+function resolveRequestUrl(base: string, path: string, query: string): string {
+  // 浏览器永远只能访问当前 Manager Web 的同源反代；Kubernetes Service DNS
+  // 只允许由 Manager Web/Vite 服务端使用，绝不能泄漏到浏览器。
+  if (typeof window === 'undefined') return `${base}${path}${query}`;
+  const prefix = base.includes('/idp') ? '/idp' : '/api';
+  return `${window.location.origin}${prefix}${path}${query}`;
+}
+
 async function requestCore<T>(
   base: string, path: string, opts: RequestOptions, unwrap: boolean, retried = false,
 ): Promise<T> {
-  const url = `${base}${path}${buildQuery(opts.query)}`;
+  const url = resolveRequestUrl(base, path, buildQuery(opts.query));
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
   const init: RequestInit = { method: opts.method ?? 'GET', headers };
@@ -683,11 +707,22 @@ export const InstanceBindingApi = {
     }),
 };
 
-// 当前登录用户视角（用户控制台）：组织来自认证服务，可见 Agent 来自管理 API。
+export interface UserGateway {
+  jiuwenclaw_id: string;
+  jiuwenclaw_name: string;
+  status: string;
+  group_id: string;
+  gateway_endpoint: string | null;
+}
+
+// 当前登录用户视角：身份来自 JWT，Manager 只返回该用户获授权的组网与 Agent。
 export const UserConsoleApi = {
   orgs: () => idpHttp<{ orgs: Org[] }>('/v1/auth/me/orgs'),
-  agents: (groupId: string) =>
-    http<{ agents: AgentTemplate[] }>('/v1/user-console/agents', { query: { group_id: groupId } }),
+  gateways: () => http<{ gateways: UserGateway[] }>('/v1/user-console/gateways'),
+  agents: (groupId: string, jiuwenclawId: string) =>
+    http<{ agents: AgentTemplate[] }>('/v1/user-console/agents', {
+      query: { group_id: groupId, jiuwenclaw_id: jiuwenclawId },
+    }),
 };
 
 // ---------- Instances ----------
@@ -708,9 +743,9 @@ export const InstanceApi = {
     sort_by?: 'jiuwenclaw_name' | 'status' | 'last_heartbeat' | 'k8s_namespace' | 'updated_at';
     sort_order?: 'asc' | 'desc';
   }) =>
-    http<InstancePageRaw>('/v1/instances/', { query: params }),
+    http<InstancePageRaw>('/v1/instances', { query: params }),
   get: (id: string) => http<InstanceDetail>(`/v1/instances/${encodeURIComponent(id)}`),
-  create: (body: CreateInstanceBody) => http<InstanceSummary>('/v1/instances/', { method: 'POST', body }),
+  create: (body: CreateInstanceBody) => http<InstanceSummary>('/v1/instances', { method: 'POST', body }),
   provisionLocal: (body: ProvisionLocalInstanceBody) =>
     http<Record<string, unknown>>('/v1/instances/provision-local', { method: 'POST', body }),
   update: (id: string, body: { data?: Record<string, unknown> }) =>
