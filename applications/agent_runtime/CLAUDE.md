@@ -24,7 +24,7 @@
 ```bash
 cd applications/agent_runtime
 uv sync --extra local
-uv run pytest                 # 150 个用例:状态层 Lua / 路由匹配纯函数 / config 层 / 组件全链路 / HTTP 冒烟 / corner case / 双实例多副本
+uv run pytest                 # 157 个用例:状态层 Lua / 路由匹配纯函数 / config 层 / 组件全链路 / HTTP 冒烟 / corner case / 双实例多副本 / 停机韧性
 ```
 
 - 构造 `ServiceManager` 必须传 `deploy_mode="subprocess"`(默认 k8s 会挂死测试)。
@@ -40,6 +40,10 @@ cd applications/agent_runtime
 ```
 
 - 参数/前置见 `--help` 与 README;场景 N 待 AgentServer 支持 `GET /health` 后补验。
+- **发布门禁:发版前必须用真实 AgentServer 镜像跑一遍**(2026-08-26 教训:influxdb 替身与代码共享同一契约假设,探测路径/env/路径前缀类缺陷在替身世界里不可见):
+  `./scripts/integration_smoke.sh --image swr.cn-north-4.myhuaweicloud.com/openjiuwen/jiuwenclaw-agentserver-amd64:<tag>`
+  (替身 influxdb:1.8 仅用于快速回归;真镜像跑时模板由脚本播种,契约参数 health_path=/api/v1/health、sse_path=/api/v1/events/stream、agent_env 三件套须与 e2e_hld_acceptance.py 的 build_templates 一致)
+- 冒烟内置回归网:阶段 1b(无请求预热)、阶段 5b(自然老化零回拨)、阶段 11b(内部不变量巡检:idle⊆pods:all / idle_since 存在 / 静息 deploying=0 / 快照 deploy_ver==RM cfg)——2026-08-26 真环境实测缺陷①②④⑤的固化。
 - 经多副本 LB 亦可跑(实测 65/65),前提:部署带 `AGENT_RUNTIME_SCOPE_FULL_TIMEOUT`(deploy 模板默认 8,**须显著小于模板 session_ttl**,否则等待者 deadline 与会话到期碰撞产生混合结果);排查实录见 `docs/spec/e2e-test-cases.md` §8.1。
 - cleanup 空目标必须用**无匹配 label_selector**,不得指向业务 ns(同 label 真实 AgentServer 会被误删)或不存在的 ns(in-cluster SA 对其 403 而非空列表)。
 

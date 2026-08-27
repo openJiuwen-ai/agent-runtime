@@ -145,6 +145,27 @@ autoscale 预热真实 AgentServer(~12s Ready,此前无限循环已根治)→ ro
 `http://<pod_ip>:8080/api/v1/events/stream` → 同 session 亲和复访同 Pod → session_ttl
 到期老化 → 空闲回收/热备补齐自稳。单测 152 全绿。
 
+## 测试补强落地(2026-08-27,复盘五项)
+
+针对「替身镜像冻结契约假设 / 加速手法短路真实机制 / 生命周期边界零覆盖」三类根因:
+
+1. **fingerprint 键序无关单测**(`tests/test_util.py`,3 用例):嵌套 dict 打乱键序
+   (模拟 MySQL JSON 列回读)指纹必须不变——缺陷④回归网。
+2. **停机韧性单测**(`tests/resource_manager/test_resilience.py`,2 用例):慢速
+   FakeK8s 制造取消窗口,autoscale 部署中途 cancel → 占位必清、锁必释,下一拍
+   补位成功——缺陷⑤回归网。
+3. **冒烟阶段 5b 自然老化**(5 项):tpl-nat(session_ttl=15/pod_ttl=20/min_idle=0)
+   **零回拨**真等 TTL 走完 D→K 全链路——缺陷①回归网(在场则"计时自然累积满
+   pod_ttl→reclaim"永不成立,当场 FAIL)。
+4. **冒烟阶段 11b 不变量巡检**(4 项,cleanup 前):idle⊆pods:all 且成员必有
+   idle_since / 静息 deploying=0 / 快照模板 deploy_ver==RM cfg 且 cfg 内自洽——
+   缺陷②④⑤回归网。
+5. **真镜像发布门禁**(约定,记入 CLAUDE.md):发版前用真实 AgentServer 镜像跑
+   `integration_smoke.sh --image <真镜像>`;influxdb 替身仅留快速回归。
+
+验证:pytest **157/157**;真环境冒烟(PG 后端)**74/74**(新增 5b/11b 全过,
+psql 落库校验分支补了空输出诊断)。
+
 ## 影响面
 
 - 文档同步:HLD(§2.3 名词/§3.1 契约与匹配语义/§5.1-5.2 键表/场景 H·M/§7.5)、

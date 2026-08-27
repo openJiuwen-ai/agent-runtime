@@ -12,7 +12,7 @@
 | 层 | 入口 | 规模 | 依赖环境 | 退出码 |
 |---|---|---|---|---|
 | 进程内双实例 | `uv run pytest tests/integration/test_multi_replica.py` | 14 用例 | 无(离线,fakeredis) | pytest 标准 |
-| 集成冒烟(M6) | `./scripts/integration_smoke.sh` | 65 项断言 | 单实例 server 模式 + 真 Redis/MySQL/K8s | 0/1/2 |
+| 集成冒烟(M6) | `./scripts/integration_smoke.sh` | 74 项断言 | 单实例 server 模式 + 真 Redis/MySQL/K8s | 0/1/2 |
 | 多副本 e2e(M7) | `uv run --no-sync python scripts/e2e_multi_replica.py` | 35 项断言 | K8s 多副本 + Service LB + 真 Redis | 0/1/2 |
 | 压测/浸泡 | `uv run --no-sync python scripts/load_test.py` | 3 场景 | 任意入口(建议 LB) | 0/1 |
 
@@ -73,7 +73,7 @@
 
 ---
 
-## 3. 集成冒烟(M6):`scripts/e2e_hld_acceptance.py`(65 项)
+## 3. 集成冒烟(M6):`scripts/e2e_hld_acceptance.py`(74 项)
 
 ### 3.0 环境与模板矩阵
 
@@ -91,10 +91,11 @@
 | `tpl-f` | cc=2 pc=1 | 容量满/队列(F) |
 | `tpl-warm` | cc=2 pc=1 min_idle=1 ttl=90 | 热备(H)与 A 类日落(M) |
 | `tpl-bad` | `agent_image=agent-runtime-e2e-missing:1` ready_timeout=25 | deploy 失败(I) |
+| `tpl-nat` | cc=2 pc=2 session_ttl=15 pod_ttl=20 min_idle=0 | **自然老化专用**(阶段 5b,短 TTL 零回拨) |
 
-scope:`e2e-main|e2e-f|e2e-warm|e2e-bad` 各按 `group_id in [...]` 规则绑一模板
+scope:`e2e-main|e2e-f|e2e-warm|e2e-bad|e2e-nat` 各按 `group_id in [...]` 规则绑一模板
 (**不播通配兜底**——使「未知 group → CONFIG_NOT_FOUND」可验收);
-可选 DB 落库校验(mysql 客户端在场时两表各 4 行,否则 SKIP)。
+可选 DB 落库校验(mysql/psql 客户端在场时两表各 5 行,否则 SKIP)。
 
 ### 3.1 阶段与用例(场景 → 输入 → 预期)
 
@@ -103,7 +104,7 @@ scope:`e2e-main|e2e-f|e2e-warm|e2e-bad` 各按 `group_id in [...]` 规则绑一�
 | # | 场景 | 输入 | 预期输出/断言 |
 |---|---|---|---|
 | 1a | H0 零 Pod 基线 | —(清场后,配置未下发) | ns 内零 agentserver Pod;`routing:snapshot` 不存在(服务启动不拉 Pod) |
-| 1 | —(种子) | 1×config_sync 全量 `{templates:4, scopes:4}` | 200,`templates_synced=4 scopes_synced=4`;`routing:snapshot` 已写;DB 行数 [4,4](可选) |
+| 1 | —(种子) | 1×config_sync 全量 `{templates:5, scopes:5}` | 200,`templates_synced=5 scopes_synced=5`;`routing:snapshot` 已写;DB 行数 [5,5](可选) |
 | 1b | H0 无请求预热 | —(种子后,零 route) | ~autoscale tick 后 `resource:scope:e2e-warm:idle` 有 1 热备 Pod 且真实存在于 K8s(**配置驱动预热**) |
 | 2 | C 首次部署 | `route(s1, e2e-main)` | 200,`pod_id` 以 `agentserver-` 开头,耗时≈一次 deploy |
 | 3 | C 物理真象 | —(上一步的 pod) | `kubectl get pod` 存在且 Ready |
@@ -144,6 +145,16 @@ scope:`e2e-main|e2e-f|e2e-warm|e2e-bad` 各按 `group_id in [...]` 规则绑一�
 | 23 | `idle_since=now-121` | 20s 内 idle 池清空(reclaim 1s tick) |
 | 24–25 | 每个 Pod | K8s 真删(`kubectl` NotFound)+ RM `pods:all` PURGE |
 | 26 | — | notify_pod_dead 已清 `pods:registered`(归零) |
+
+**阶段 5b:自然老化全链路(零回拨,5 项)**——tpl-nat(session_ttl=15/pod_ttl=20/min_idle=0),
+不回拨任何时间,真等 TTL 走完 D→K;2026-08-26 缺陷①(idle_since 周期刷新致永不回收)的回归网:
+
+| # | 输入 | 预期 |
+|---|---|---|
+| 5b-1 | `route(nat1, e2e-nat)` | 200 首会话 deploy |
+| 5b-2 | 真等 session_ttl=15(不回拨) | sweeper 自然到期回收,`scope:sessions` 清空 |
+| 5b-3 | — | 空 Pod pass → 转 idle 暖池,`idle_since` 计时起点存在 |
+| 5b-4 | 真等 pod_ttl=20(不回拨) | 计时自然累积满 → reclaim 真删(K8s NotFound + PURGE) |
 
 **阶段 6:I deploy 失败**(2 项)
 
@@ -189,6 +200,14 @@ scope:`e2e-main|e2e-f|e2e-warm|e2e-bad` 各按 `group_id in [...]` 规则绑一�
 **阶段 11:N 半死探测**(1 项 SKIP):AgentServer 镜像对 `GET /health` 返回 426,
 暂缓端到端(单测已覆盖:`tests/resource_manager/test_rm_business.py`)。
 
+**阶段 11b:内部不变量巡检(4 项)**——2026-08-26 缺陷②④⑤的回归网(cleanup 清场前执行):
+
+| # | 断言 | 预期(缺陷网) |
+|---|---|---|
+| IV-1 | `idle ⊆ pods:all` 且 idle 成员必有 `idle_since` | 无幽灵成员(缺陷②:TOCTOU 复活) |
+| IV-2 | 静息时各 scope `deploying` SCARD=0 | 无泄漏占位(缺陷⑤:停机取消) |
+| IV-3 | 快照模板 `deploy_ver()` == RM cfg `deploy_ver` 且 cfg 内 pod_spec 自洽 | SM/RM 两端同指纹(缺陷④:暖复用前提) |
+
 **阶段 12:L 对账 + cleanup**(4 项)
 
 | # | 输入 | 预期 |
@@ -208,7 +227,7 @@ scope:`e2e-main|e2e-f|e2e-warm|e2e-bad` 各按 `group_id in [...]` 规则绑一�
 | 51 | `config_sync(kind="nope")`(旧 kind/op 协议) | 400 `VALIDATION` |
 | 52 | `cleanup(验收ns, label_selector=无匹配)` | 200 `cleaned=0`(空目标须用无匹配 selector,见 §8.1) |
 
-> 断言逐条 `check()` 记名,汇总 65 项(个别为条件性/可选 SKIP,计入通过)。
+> 断言逐条 `check()` 记名,汇总 74 项(个别为条件性/可选 SKIP,计入通过)。
 > **注意**:M6 冒烟回归请对**单实例**执行——多副本后端冷突发语义不同(见 §6)。
 
 ---
@@ -356,7 +375,7 @@ uv sync --extra local && uv run pytest tests/integration/test_multi_replica.py -
 
 # ② M6 冒烟(单实例)
 ./scripts/deploy_replicas.sh 1 .env.production.local 8091   # 保持运行
-./scripts/integration_smoke.sh                              # 65 项
+./scripts/integration_smoke.sh                              # 74 项
 
 # ③ 宿主机双进程(观察选主互斥)
 ./scripts/deploy_replicas.sh 2 .env.production.local 8091
