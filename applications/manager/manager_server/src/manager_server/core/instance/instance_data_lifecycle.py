@@ -30,6 +30,9 @@ from manager_server.core.instance.instance_service import (
     merge_instance_data,
 )
 from manager_server.manager_config_push import gateway_request, resolve_gateway_endpoint
+from manager_server.core.template.push_agent_template_to_gateway import (
+    push_agent_resources_sync_to_gateway,
+)
 from manager_server.core.template.push_template_to_gateway import (
     rebuild_jid_template_ref_for_gateway,
     sync_referenced_templates_to_gateway,
@@ -109,6 +112,16 @@ async def sync_data_to_gateway_on_register(
     except Exception:
         logger.warning(
             "[GatewayBootstrap] template sync failed jiuwenclaw_id=%s",
+            jid,
+            exc_info=True,
+        )
+        raise
+
+    try:
+        results["agent_resources"] = await push_agent_resources_sync_to_gateway(handler, jid)
+    except Exception:
+        logger.warning(
+            "[GatewayBootstrap] agent resource sync failed jiuwenclaw_id=%s",
             jid,
             exc_info=True,
         )
