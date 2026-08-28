@@ -207,6 +207,13 @@ class RealK8sPodClient(K8sPodClient):
     # -------------------------------------------------------------- deploy
 
     async def deploy(self, pod_spec: dict[str, Any]) -> PodDeployInfo:
+        """create + wait Ready。契约：**任何失败/取消路径不得留下已建物理 Pod**。
+
+        create 成功后 `_wait_ready` 超时/终态/取消 → 先 best-effort 删除该
+        Pod 再抛（DeployFailed 携带 pod_id/namespace 供上层兜底）；不删的话
+        该 Pod 不在 Redis `pods:all`（未 REGISTER），watch/reconcile 只做
+        Redis→K8s 单向对账，孤儿将无人认领、无上界累积。
+        """
         await self.start()
         namespace = pod_spec.get("namespace") or self.default_namespace
         timeout = int(pod_spec.get("ready_timeout") or DEFAULT_READY_TIMEOUT)
@@ -224,7 +231,22 @@ class RealK8sPodClient(K8sPodClient):
                     logger.warning("k8s pod name conflict, retrying: name=%s", pod_id)
                     continue
                 raise DeployFailed(f"k8s create pod failed: {exc}") from exc
-            return await self._wait_ready(pod_id, namespace, timeout, poll)
+            try:
+                return await self._wait_ready(pod_id, namespace, timeout, poll)
+            except BaseException as exc:  # noqa: BLE001 - 物理清理红线含取消路径
+                for attr, val in (("pod_id", pod_id), ("namespace", namespace)):
+                    try:
+                        setattr(exc, attr, val)
+                    except Exception:  # noqa: BLE001 - 部分异常不可设属性
+                        pass
+                try:
+                    await self.delete(pod_id, namespace)
+                except Exception:  # noqa: BLE001 - 清理失败不掩盖原始异常
+                    logger.warning(
+                        "orphan pod cleanup after failed deploy failed: "
+                        "name=%s namespace=%s", pod_id, namespace,
+                    )
+                raise
         raise DeployFailed("k8s create pod failed: name conflicts exhausted")
 
     # -------------------------------------------------------------- sidecar 渲染
@@ -547,7 +569,10 @@ class FakeK8sPodClient(K8sPodClient):
 
     - ``unready_pods`` / ``dead_pods`` / ``unhealthy_pods``：pod_id 集合，模拟
       NotReady / 判死状态 / SSE 健康探测失败（场景 N）。
-    - ``deploy_failures``：连续 deploy 失败次数（模拟 DeployFailed 分支）。
+    - ``deploy_failures``：连续 deploy 失败次数（create 前失败，无物理残留）。
+    - ``fail_after_create``：create 成功但永不 Ready 的次数——Pod 留在集群、
+      DeployFailed 携带 pod_id/namespace（真 K8s 的超时/取消形态，考验上层
+      「失败路径不留孤儿」的兜底删除）。
     """
 
     def __init__(self, default_namespace: str = "default") -> None:
@@ -557,6 +582,7 @@ class FakeK8sPodClient(K8sPodClient):
         self.dead_pods: set[str] = set()
         self.unhealthy_pods: set[str] = set()
         self.deploy_failures = 0
+        self.fail_after_create = 0
         self.deleted: list[str] = []
         self.deployed_specs: list[dict[str, Any]] = []       # deploy 收到的 pod_spec 录制(断言用)
         self._ip_counter = 0
@@ -575,6 +601,14 @@ class FakeK8sPodClient(K8sPodClient):
             pod_ip=pod_ip,
             labels={POD_LABEL_KEY: POD_LABEL_VALUE, "app": pod_id},
         )
+        if self.fail_after_create > 0:
+            self.fail_after_create -= 1
+            self.unready_pods.add(pod_id)
+            exc = DeployFailed(
+                f"simulated: pod {pod_id} created but never Ready within timeout"
+            )
+            exc.pod_id, exc.namespace = pod_id, namespace
+            raise exc
         return PodDeployInfo(pod_id=pod_id, namespace=namespace, pod_ip=pod_ip)
 
     async def delete(self, pod_id: str, namespace: str) -> str:

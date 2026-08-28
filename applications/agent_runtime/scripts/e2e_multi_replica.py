@@ -265,14 +265,14 @@ async def s4_burst(c: Client, r: aioredis.Redis) -> None:
     wkey = f"session_manager:scope:{scope}:waiters"
 
     async def _drained() -> bool:          # 真 async 闭包（lambda 里协程==0 恒 False）
-        return await r.scard(wkey) == 0
+        return await r.zcard(wkey) == 0
 
     drained = await wait_until(_drained, timeout=45, interval=2,
                                desc="waiters drained")
-    members = await r.smembers(wkey) if not drained else set()
+    members = await r.zrange(wkey, 0, -1) if not drained else set()
     check("S4 waiters 清空", drained,
           f"残留成员（应为其 request_id）：{sorted(members)[:5]}")
-    check("S4 占位清空", await r.scard(
+    check("S4 占位清空", await r.zcard(
         f"resource_manager:resource:scope:{scope}:deploying") == 0)
 
 

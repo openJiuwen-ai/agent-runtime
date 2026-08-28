@@ -154,6 +154,7 @@ class OrchestratorSystemContext(SystemContext):
         self.sm_config_store = ConfigStore(
             self.db, sm_state,
             push_pool_config=self.rm_facade.update_pool_config,
+            known_rm_scopes=self.rm_facade.known_scope_ids,
         )
         self.sm_orchestrator = SessionOrchestrator(
             sm_state,

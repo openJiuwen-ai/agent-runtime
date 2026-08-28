@@ -84,6 +84,12 @@ class Template:
                       "agent_pvc_mounts"):
             kind = field.replace("agent_", "", 1)
             object.__setattr__(self, field, normalize_mounts(getattr(self, field), kind))
+        # 路径字段归一：缺前导 '/' 的值会拼出 "http://ip:8080api/..."（端口段
+        # 粘连路径，httpx 直接抛非法端口 → 健康 Pod 被探死无限重部署）
+        for field in ("sse_path", "health_path"):
+            value = getattr(self, field) or ""
+            if value and not value.startswith("/"):
+                object.__setattr__(self, field, f"/{value}")
 
     # -------------------------------------------------------------- 派生
 

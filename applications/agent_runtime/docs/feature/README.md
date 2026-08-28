@@ -17,6 +17,7 @@
 
 | 日期 | 文档 | 一句话 |
 |---|---|---|
+| 2026-08 | [全量审计 → e2e 实锤 → 修复:16 项缺陷闭环](2026-08-27-audit-e2e-repro-fixes.md) | 五维审计 40 假设→16 条实锤用例(零回拨零改键)→12 组机制修复:等待/占位 deadline 化、暖池版本感知、409 日落按版本判定、探测参数随 Pod 烘焙、失败路径清孤儿、门禁契约参数 |
 | 2026-08 | [Template 扩展 sidecars + _build_pod_body 多容器](2026-08-sidecar-containers.md) | 通用 sidecar JSON 列(首个用户 jiuwenbox)、默认 None+归一的指纹抹平(存量 deploy_ver 零变化)、SM fail-fast 校验/RM DeployFailed 冲突兜底、存量库先 ALTER 后发版 |
 | 2026-08 | [routing_rules 改布尔表达式字符串](2026-08-routing-rules-expression-string.md) | 条件间任意 and/or+括号(固定「规则 OR·表达式 AND」作废)、递归下降解析、空串=通配 |
 | 2026-08 | [scope 重构:config_sync 全量下发 + 规则化路由匹配 + 无请求预热](2026-08-scope-based-routing-config-sync.md) | scope 改下发制(index first-fit/规则 OR·表达式 AND/user_id 维度)、路由快照单键、config_sync 即预热 min_idle(规则格式已被表达式串取代) |

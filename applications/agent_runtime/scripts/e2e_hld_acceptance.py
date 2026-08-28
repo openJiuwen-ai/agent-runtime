@@ -77,6 +77,10 @@ BAD = ""      # （bad：不可拉镜像，deploy 失败分支）
 BOX = ""      # （box：sidecar 多容器；--with-sidecar 时启用）
 WITH_SIDECAR = False
 SIDECAR_IMAGE = ""   # sidecar 替身镜像（默认与主镜像同款 influxdb:1.8 改端口）
+# 契约参数（真镜像门禁三件套：health_path / sse_path / agent_env）
+HEALTH_PATH = "/health"
+SSE_PATH = "/sse"
+AGENT_ENV = None
 
 
 async def pod_exists(pod_id: str) -> bool:
@@ -136,7 +140,12 @@ def template(**overrides) -> dict:
         "agent_image": IMAGE,
         "namespace": NS,
         "sse_port": 8086,
-        "sse_path": "/sse",
+        "sse_path": SSE_PATH,
+        # 探测/readiness 契约参数(与 RM probe 同源;真 AgentServer 为
+        # /api/v1/health——替身 influxdb 沿用默认 /health,发布门禁跑真镜像时
+        # 必须显式传 --health-path/--sse-path/--agent-env,否则 readiness 永不
+        # 通过,阶段 2 起全红)
+        "health_path": HEALTH_PATH,
         "image_pull_policy": "IfNotPresent",
         "scope_concurrency": 3,
         "pod_concurrency": 2,
@@ -145,6 +154,8 @@ def template(**overrides) -> dict:
         "min_idle_pods": 0,
         "ready_timeout": 240,
     }
+    if AGENT_ENV:
+        base["agent_env"] = AGENT_ENV
     base.update(overrides)
     return base
 
@@ -540,7 +551,7 @@ async def stage6_deploy_failure(c: Client, r) -> None:
           code == 503 and body.get("error_code") == "NO_POD_AVAILABLE",
           f"{code} {body.get('error_code')} ({took:.0f}s, ready_timeout=25)")
     check("I-红线：错误路径 deploying 占位已清",
-          await r.scard(f"resource_manager:resource:scope:{BAD}:deploying") == 0)
+          await r.zcard(f"resource_manager:resource:scope:{BAD}:deploying") == 0)
 
 
 async def stage7_queue(c: Client, r) -> None:
@@ -563,7 +574,7 @@ async def stage7_queue(c: Client, r) -> None:
           len(full_timeout) >= 2, str([b.get("error_code") for _, _, b in results]))
     await asyncio.sleep(1)
     check("F-等待者全部出队（finally 清理）",
-          await r.scard(f"session_manager:scope:{FSCOPE}:waiters") == 0)
+          await r.zcard(f"session_manager:scope:{FSCOPE}:waiters") == 0)
 
 
 async def stage8_warm(c: Client, r) -> dict:
@@ -657,12 +668,29 @@ async def stage11b_invariants(c: Client, r) -> None:
     check("IV-idle ⊆ pods:all(无幽灵成员,缺陷②网)", not ghosts, str(ghosts))
     check("IV-idle 成员必有 idle_since 计时", not missing_since, str(missing_since))
 
-    leaks = []
-    async for key in r.scan_iter(match="resource_manager:resource:scope:*:deploying",
-                                 count=100):
-        if await r.scard(key):
-            leaks.append(key)
-    check("IV-静息时 deploying 占位全空(缺陷⑤网)", not leaks, str(leaks))
+    # deploying 已迁 ZSET(占位 deadline 化):「静息全空」是**收敛断言**而非
+    # 单次快照——min_idle≥1 的 scope 在 autoscale 驱动下随时有 ~10-12s 的
+    # 在途预热占位,快照会误报(2026-08-28 实测)。真泄漏(进程崩后未清的
+    # 占位)永不收敛,有界等待后仍非空 → FAIL,牙齿不变。
+    async def _deploying_remaining() -> list[str]:
+        remaining = []
+        async for key in r.scan_iter(
+                match="resource_manager:resource:scope:*:deploying", count=100):
+            try:
+                count = await r.zcard(key)
+            except Exception:               # 老库残留 SET 型键(升级未清库)
+                count = await r.scard(key)
+            if count:
+                remaining.append(key)
+        return remaining
+
+    async def _drained() -> bool:           # 真 async 闭包(lambda 里协程==0 恒 False)
+        return not await _deploying_remaining()
+
+    drained = await wait_until(_drained, timeout=40, interval=2,
+                               desc="deploying drained")
+    check("IV-静息时 deploying 占位全空(缺陷⑤网)", drained,
+          str(await _deploying_remaining()))
 
     import pathlib
     import sys
@@ -775,6 +803,14 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--namespace", default=env("AGENT_RUNTIME_E2E_NAMESPACE",
                                                    "agent-runtime-e2e"))
     parser.add_argument("--image", default=env("AGENT_RUNTIME_E2E_IMAGE", "influxdb:1.8"))
+    parser.add_argument("--health-path", default=env("AGENT_RUNTIME_E2E_HEALTH_PATH", "/health"),
+                        help="模板 health_path(readiness 与场景 N 探测同源;"
+                             "真 AgentServer 为 /api/v1/health)")
+    parser.add_argument("--sse-path", default=env("AGENT_RUNTIME_E2E_SSE_PATH", "/sse"),
+                        help="模板 sse_path(真 AgentServer 为 /api/v1/events/stream)")
+    parser.add_argument("--agent-env", default=env("AGENT_RUNTIME_E2E_AGENT_ENV", None),
+                        help="模板 agent_env 的 JSON 对象(真 AgentServer 需 "
+                             "AGENT_HTTP_ENABLED/HOST/PORT 三件套开 HTTP 入口)")
     parser.add_argument("--with-sidecar", action="store_true",
                         default=env("AGENT_RUNTIME_E2E_WITH_SIDECAR", "") == "1",
                         help="追加 sidecar 多容器阶段（替身=influxdb 改端口 8096，"
@@ -796,12 +832,20 @@ def _parse_args() -> argparse.Namespace:
 
 async def main() -> None:
     global BASE, REDIS_URL, NS, IMAGE, DB_DSN, MAIN, FSCOPE, WARM, BAD
-    global BOX, WITH_SIDECAR, SIDECAR_IMAGE
+    global BOX, WITH_SIDECAR, SIDECAR_IMAGE, HEALTH_PATH, SSE_PATH, AGENT_ENV
     args = _parse_args()
     BASE = args.base_url.rstrip("/")
     REDIS_URL = args.redis_url
     NS = args.namespace
     IMAGE = args.image
+    HEALTH_PATH = args.health_path
+    SSE_PATH = args.sse_path
+    if args.agent_env:
+        AGENT_ENV = json.loads(args.agent_env)
+        if not isinstance(AGENT_ENV, dict):
+            raise SystemExit("--agent-env 必须是 JSON 对象")
+    else:
+        AGENT_ENV = None
     DB_DSN = {"host": args.db_host, "port": args.db_port, "user": args.db_user,
               "password": args.db_password, "name": args.db_name,
               "type": args.db_type}

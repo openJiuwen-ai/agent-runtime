@@ -52,3 +52,11 @@ class ResourceManagerFacade:
     ) -> int:
         return await self._orchestrator.cleanup(namespace=namespace,
                                                 label_selector=label_selector)
+
+    async def known_scope_ids(self) -> list[str]:
+        """RM 已知的全部 scope（scope:config 键枚举）。
+
+        config_sync 的「被删 scope drain 收敛」依赖：DB 删行后即失忆，RM 侧
+        config 键仍在才是幻影预热的真源（见 ConfigStore 扩散③）。
+        """
+        return await self._orchestrator.known_scope_ids()

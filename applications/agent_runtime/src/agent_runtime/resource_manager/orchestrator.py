@@ -246,15 +246,35 @@ class ResourceOrchestrator:
         *,
         idle_flag: bool,
     ) -> tuple[str, str]:
-        """create + wait Ready + REGISTER。失败清占位后抛 DeployFailed（红线）。
+        """create + wait Ready + REGISTER。任一步失败：清占位 + 清物理 Pod 后上抛。
 
         红线含 CancelledError（优雅停机会取消在飞的 autoscale/route tick）：
         except Exception 接不住 BaseException，占位泄漏会把池永久堵死
         （真环境 2026-08-26 实测：两次停机各泄一个 warm 占位 → max_pods 虚满）。
+        REGISTER 同样在保护内——注册步失败（Redis 抖动/取消）不清占位一样虚占
+        max_pods。物理清理：k8s.deploy 失败/取消可能在集群里留下已建 Pod
+        （DeployFailed 契约携带 pod_id/namespace），此处兜底删除防孤儿。
         """
         t0 = time.monotonic()
         try:
             info = await self.k8s.deploy(pod_spec)
+            sse_url = (
+                f"http://{info.pod_ip}:{pod_spec.get('sse_port', 8080)}"
+                f"{pod_spec.get('sse_path', '/sse')}"
+            )
+            await self.state.register_pod(
+                pod_id=info.pod_id,
+                scope_id=scope_id,
+                pod_sse_url=sse_url,
+                pod_ip=info.pod_ip,
+                namespace=info.namespace,
+                deploy_ver=deploy_ver,
+                deploy_token=deploy_token,
+                idle_flag=idle_flag,
+                now=now_ts(),
+                sse_port=int(pod_spec.get("sse_port") or 8080),
+                health_path=str(pod_spec.get("health_path") or "/health"),
+            )
         except BaseException as exc:   # noqa: BLE001 - 占位清理红线含取消路径
             try:
                 await self.state.clear_deploy_token(scope_id, deploy_token)
@@ -263,6 +283,16 @@ class ResourceOrchestrator:
                     "clear deploying token failed during aborted deploy: "
                     "scope=%s token=%s", scope_id, deploy_token,
                 )
+            orphan = getattr(exc, "pod_id", "")
+            if orphan:
+                try:
+                    await self.k8s.delete(
+                        orphan, getattr(exc, "namespace", "") or "default"
+                    )
+                except Exception:  # noqa: BLE001 - 尽力而为，孤儿交由运维 cleanup
+                    logger.exception(
+                        "orphan pod cleanup failed: pod=%s", orphan,
+                    )
             if isinstance(exc, DeployFailed):
                 logger.warning(
                     "deploy failed: scope=%s duration_ms=%.1f detail=%s",
@@ -280,21 +310,6 @@ class ResourceOrchestrator:
                 scope_id, (time.monotonic() - t0) * 1000,
             )
             raise DeployFailed(f"deploy error for scope {scope_id}: {exc}") from exc
-        sse_url = (
-            f"http://{info.pod_ip}:{pod_spec.get('sse_port', 8080)}"
-            f"{pod_spec.get('sse_path', '/sse')}"
-        )
-        await self.state.register_pod(
-            pod_id=info.pod_id,
-            scope_id=scope_id,
-            pod_sse_url=sse_url,
-            pod_ip=info.pod_ip,
-            namespace=info.namespace,
-            deploy_ver=deploy_ver,
-            deploy_token=deploy_token,
-            idle_flag=idle_flag,
-            now=now_ts(),
-        )
         logger.info(
             "deployed pod: scope=%s pod=%s ip=%s namespace=%s idle_flag=%s url=%s "
             "duration_ms=%.1f",
@@ -369,6 +384,10 @@ class ResourceOrchestrator:
 
     # -------------------------------------------------------------- 幂等缓存
 
+    async def known_scope_ids(self) -> list[str]:
+        """RM 已知 scope 枚举（facade 出口；config_sync drain 收敛用）。"""
+        return await self.state.known_scope_ids()
+
     async def _idem_get(self, request_id: str) -> dict[str, str] | None:
         key = f"{self.state.prefix}idem:{request_id}"
         raw = await self.state.redis.get(key)
@@ -382,6 +401,17 @@ class ResourceOrchestrator:
                 "idem cache corrupt, ignoring: request=%s raw_prefix=%r",
                 request_id, text[:80],
             )
+            return None
+        # 存活校验：缓存的 Pod 可能已被 watch/reclaim 判死 PURGE——回放死 Pod
+        # 会在 SM 侧复活注册并持续喂死地址给重试客户端。判死则弃缓存走全新
+        # acquire（成功后覆盖写回）。
+        pod_id = value.get("pod_id", "")
+        if pod_id and not await self.state.pod_info(pod_id):
+            logger.warning(
+                "acquire idem cache stale (pod purged), ignoring: request=%s pod=%s",
+                request_id, pod_id,
+            )
+            await self.state.redis.delete(key)
             return None
         # 命中即续期（重试窗口内反复回放）
         await self.state.redis.expire(key, ACQUIRE_IDEM_TTL)

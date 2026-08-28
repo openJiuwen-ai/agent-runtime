@@ -89,7 +89,10 @@ class Runtime:
             self.pool_pushes.append((scope_id, pool, pod_spec))
             await self.rm_facade.update_pool_config(scope_id, pool, pod_spec)
 
-        self.config_store = ConfigStore(db, self.sm_state, push_pool_config=_push)
+        self.config_store = ConfigStore(
+            db, self.sm_state, push_pool_config=_push,
+            known_rm_scopes=self.rm_facade.known_scope_ids,
+        )
         self.orchestrator = SessionOrchestrator(
             self.sm_state, self.config_store, self.rm_facade,
             scope_full_timeout=scope_full_timeout,

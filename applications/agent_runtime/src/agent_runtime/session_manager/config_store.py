@@ -207,7 +207,12 @@ def row_from_template_for_update(t: Template) -> dict[str, Any]:
 
 
 def template_from_payload(template_id: str, payload: dict[str, Any]) -> Template:
-    """config_sync 下发的 template dict → Template（未给字段用默认值）。"""
+    """config_sync 下发的 template dict → Template（未给字段用默认值）。
+
+    int 字段严格校验（畸形值 400，不裸抛 ValueError 破坏 400 契约）；
+    策略字段做语义下界校验（0/负值是拒绝服务配置：pod_concurrency=0 会
+    部满 max_pods 个必然用不上的 Pod 后永久 scope_full）。
+    """
     defaults = Template(template_id=template_id)
     kwargs: dict[str, Any] = {"template_id": template_id}
     for field in _COLUMN_OF:
@@ -224,9 +229,21 @@ def template_from_payload(template_id: str, payload: dict[str, Any]) -> Template
                         f"scalar values, got {value!r}"
                     )
                 value = {k: str(v) for k, v in value.items()}
-            kwargs[field] = int(value) if field in _INT_FIELDS else value
+            elif field in _INT_FIELDS:
+                if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+                    raise InvalidParams(
+                        f"template field {field} must be an integer, got {value!r}"
+                    )
+                try:
+                    value = int(value)
+                except ValueError as exc:
+                    raise InvalidParams(
+                        f"template field {field} must be an integer, got {value!r}"
+                    ) from exc
+            kwargs[field] = value
         else:
             kwargs[field] = getattr(defaults, field)
+    _validate_policy_fields(template_id, kwargs)
     # sidecars 严格校验(fail-fast 400;跨字段冲突 = 撞主容器名/撞 agent 端口)。
     # 空列表与 None 统一归一为 None(deploy_ver 指纹稳定,见 sidecars.py)。
     sse_port = int(kwargs.get("sse_port") or 8080)
@@ -275,8 +292,37 @@ def _scope_from_row(row: Any) -> RoutingScopeDef | None:
 
 # 池参数推送回调：config_sync → rm_facade.update_pool_config(scope_id, pool, pod_spec?)
 PoolConfigPush = Callable[[str, dict[str, Any], dict[str, Any] | None], Awaitable[None]]
+# RM 已知 scope 枚举回调：config_sync → rm_facade.known_scope_ids()
+# （被删 scope 的 drain 收敛依赖它——DB old_scopes 在删除后即失忆，RM 侧
+#  config 键仍在才是「幻影预热还在发生」的真源）
+KnownRmScopes = Callable[[], Awaitable[list[str]]]
 
 CONFIG_SYNC_LOCK_TTL = 60  # 串行化锁 TTL（处理超时上限）
+
+# 策略字段下界（0/负值 = 拒绝服务配置，见 template_from_payload docstring）
+_POLICY_MINIMUMS = {
+    "scope_concurrency": 1,
+    "pod_concurrency": 1,
+    "session_ttl": 1,
+    "pod_ttl": 1,
+    "min_idle_pods": 0,
+    "ready_timeout": 1,
+}
+
+
+def _validate_policy_fields(template_id: str, kwargs: dict[str, Any]) -> None:
+    problems: list[str] = []
+    for field, minimum in _POLICY_MINIMUMS.items():
+        value = kwargs.get(field)
+        if isinstance(value, int) and value < minimum:
+            problems.append(f"{field}={value} < {minimum}")
+    sse_port = kwargs.get("sse_port")
+    if isinstance(sse_port, int) and sse_port and not (1 <= sse_port <= 65535):
+        problems.append(f"sse_port={sse_port} out of range")
+    if problems:
+        raise InvalidParams(
+            f"template {template_id!r} policy fields invalid: {'; '.join(problems)}"
+        )
 
 
 class ConfigStore:
@@ -287,10 +333,12 @@ class ConfigStore:
         db: Any,
         sm_state: SessionState,
         push_pool_config: PoolConfigPush | None = None,
+        known_rm_scopes: KnownRmScopes | None = None,
     ) -> None:
         self._db = db
         self.state = sm_state
         self._push = push_pool_config
+        self._known_rm_scopes = known_rm_scopes
         # 进程内快照 memo：原始串相等则复用已解析对象（route 热路径零 json.loads）
         self._snapshot_raw: str | None = None
         self._snapshot: RoutingSnapshot | None = None
@@ -466,7 +514,7 @@ class ConfigStore:
         old_templates = {t.template_id: t for t in await self._all_templates()}
         old_scopes = {scope.scope_id: scope for scope in await self.list_scopes()}
 
-        # ---- diff：模板变更集 / 引用切换 / 需日落的 scope
+        # ---- diff：模板变更集 / 引用切换
         changed_ids = {
             tid for tid, new in templates_in.items()
             if tid not in old_templates
@@ -476,30 +524,20 @@ class ConfigStore:
             sid for sid, scope in scopes_in.items()
             if sid in old_scopes and old_scopes[sid].template_id != scope.template_id
         }
-        # 日落判定 = 该 scope 的「有效模板」deploy_ver 前后不同（引用切换或模板 A 类变更）
-        sunset_scopes: list[str] = []
-        for sid, scope in scopes_in.items():
-            old_scope = old_scopes.get(sid)
-            if old_scope is None:
-                continue  # 新 scope，无存量 Pod
-            new_tpl = templates_in[scope.template_id]
-            old_ref = old_templates.get(old_scope.template_id)
-            if old_ref is None:
-                sunset_scopes.append(sid)  # 旧引用模板行缺失（防御）：按 A 类处理
-            elif old_ref.template_id == new_tpl.template_id:
-                if self._diff_class(new_tpl, old_ref) == "A":
-                    sunset_scopes.append(sid)
-            elif new_tpl.deploy_ver() != old_ref.deploy_ver():
-                sunset_scopes.append(sid)  # 引用切换且 deploy_ver 变
         affected = sorted(
             {sid for sid, scope in scopes_in.items() if scope.template_id in changed_ids}
             | ref_switched
         )
 
         # ---- 日落中间态检查（★先于写库：拒绝时 DB/Redis 均未动；沿用 M 期语义，
-        #      对全部受影响 scope 生效——pending 意味着上一轮日落尚未回收完毕）
+        #      对全部受影响 scope 生效）。判定**按版本**：registered∖candidates
+        #      同时是 idle_consider 的合法中间态（HLD §5.1），只有其中
+        #      deploy_ver ≠ 新版本的才是真「日落待回收」——按集合形状判定会把
+        #      正常空闲 Pod 误当日落遗留，min_idle≥1 时（底数保护永不回收）
+        #      变成配置面永久 409。
         for sid in affected:
-            pending = await self._sunset_pending_pods(sid)
+            new_ver = templates_in[scopes_in[sid].template_id].deploy_ver()
+            pending = await self._sunset_pending_pods(sid, new_ver)
             if pending:
                 raise ConfigSyncBusy(
                     f"scope {sid} still has sunset pods pending reclaim: {pending}"
@@ -524,20 +562,32 @@ class ConfigStore:
             template = templates_in[scope.template_id]
             await self._push_or_warn(sid, template.pool_config(), template.deploy_subset())
 
-        # ---- 扩散②：A 类日落——软摘除老版本 Pod（ZREM 出候选集，不接新流量；
-        #      存量会话亲和不受影响，空闲老 Pod 由 reclaim 按 pod_ttl 回收）
-        for sid in sunset_scopes:
-            scope = scopes_in[sid]
+        # ---- 扩散②：候选集版本收敛（声明式，非 one-shot）——对**每个**存活
+        #      scope 把 deploy_ver ≠ 当前版本的 Pod ZREM 出候选集（不接新流量；
+        #      存量会话亲和不受影响，旧版 idle Pod 由 reclaim 版本感知回收）。
+        #      不再由 diff 驱动：写 DB 后中途失败/同载荷重试时 diff==none 会
+        #      跳过软摘除，旧版 Pod 将无限期继续接新流量——每拍重算则天然收敛。
+        for sid, scope in scopes_in.items():
             new_ver = templates_in[scope.template_id].deploy_ver()
             removed = await self._soft_remove_stale_pods(sid, new_ver)
-            logger.info(
-                "config_sync A-class sunset: scope=%s removed_pods=%s new_ver=%s",
-                sid, removed, new_ver,
-            )
+            if removed:
+                logger.info(
+                    "config_sync version convergence: scope=%s removed_pods=%s "
+                    "new_ver=%s", sid, removed, new_ver,
+                )
 
-        # ---- 扩散③：被删 scope → 推 min_idle=0（停预热自然排空；存量会话到期止）
-        for sid in sorted(set(old_scopes) - set(scopes_in)):
-            old_tpl = old_templates.get(old_scopes[sid].template_id)
+        # ---- 扩散③：被删 scope → 推 min_idle=0（停预热自然排空；存量会话到期止）。
+        #      目标集 = RM 已知 scope ∪ DB 旧 scope − 本批 payload：RM config 键
+        #      是幻影预热的真源，DB old_scopes 删行后即失忆——只看 DB 的话，
+        #      一次推送失败（滚动重启中断）后该 scope 的 min_idle=0 永远补不上。
+        rm_known: set[str] = set()
+        if self._known_rm_scopes is not None:
+            try:
+                rm_known = set(await self._known_rm_scopes())
+            except Exception:  # noqa: BLE001 - 枚举失败退回 DB 视图
+                logger.exception("known_rm_scopes failed, falling back to db diff")
+        for sid in sorted((rm_known | set(old_scopes)) - set(scopes_in)):
+            old_tpl = old_templates.get(old_scopes[sid].template_id) if sid in old_scopes else None
             pool = (
                 {**old_tpl.pool_config(), "min_idle_pods": 0}
                 if old_tpl is not None
@@ -630,13 +680,24 @@ class ConfigStore:
                 removed.append(pod_id)
         return removed
 
-    async def _sunset_pending_pods(self, scope_id: str) -> list[str]:
-        """中间态判定：在 pods:registered 属于该 scope、但已不在 scope:pods 候选集的 Pod。"""
+    async def _sunset_pending_pods(self, scope_id: str, new_deploy_ver: str) -> list[str]:
+        """日落中间态判定：registered∖candidates 中 deploy_ver ≠ 新版本的 Pod。
+
+        registered∖candidates 也是 idle_consider 的合法中间态（其 Pod 版本
+        与当前一致），不计入；版本不同才是「已软摘除、待 reclaim 回收」的
+        真日落遗留。info 已缺失的条目（幽灵）无法归因，不计入。
+        """
         registered = await self.state.registered_pods()
         prefix = f"{scope_id}:"
         in_candidates = set(await self.state.scope_pod_ids(scope_id))
-        return [
-            entry[len(prefix):]
-            for entry in registered
-            if entry.startswith(prefix) and entry[len(prefix):] not in in_candidates
-        ]
+        pending: list[str] = []
+        for entry in registered:
+            if not entry.startswith(prefix):
+                continue
+            pod_id = entry[len(prefix):]
+            if pod_id in in_candidates:
+                continue
+            ver = await self.state.pod_deploy_ver(scope_id, pod_id)
+            if ver and ver != new_deploy_ver:
+                pending.append(pod_id)
+        return pending
