@@ -32,7 +32,6 @@ import type {
   ServiceConfigTemplate,
   ServiceConfigTemplateCreateBody,
   ServiceConfigTemplateUpdateBody,
-  ProvisionLocalInstanceBody,
   ResponseModel,
   LogMaskingRule,
   LogMaskingRuleCreateBody,
@@ -758,8 +757,6 @@ export const InstanceApi = {
     http<InstancePageRaw>('/v1/instances', { query: params }),
   get: (id: string) => http<InstanceDetail>(`/v1/instances/${encodeURIComponent(id)}`),
   create: (body: CreateInstanceBody) => http<InstanceSummary>('/v1/instances', { method: 'POST', body }),
-  provisionLocal: (body: ProvisionLocalInstanceBody) =>
-    http<Record<string, unknown>>('/v1/instances/provision-local', { method: 'POST', body }),
   update: (id: string, body: { data?: Record<string, unknown> }) =>
     http<InstanceDetail>(`/v1/instances/${encodeURIComponent(id)}`, { method: 'PATCH', body }),
   remove: (id: string, force = false) =>

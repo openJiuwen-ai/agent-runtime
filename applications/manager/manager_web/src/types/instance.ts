@@ -32,12 +32,6 @@ export interface CreateInstanceBody {
   management_api_base?: string;
 }
 
-export interface ProvisionLocalInstanceBody {
-  jiuwenclaw_name?: string;
-  creator_id?: string;
-  description?: string;
-}
-
 export interface ManagerWsStatus {
   enabled: boolean;
   running: boolean;

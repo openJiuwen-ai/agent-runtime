@@ -16,11 +16,9 @@ import {
 } from '../../components/TableColumnSort';
 import { TableColumnFilter } from '../../components/TableColumnFilter';
 import { formatTime, relativeTime } from '../../utils/format';
-import { getAllowLocalProvision } from '../../utils/env';
 import { toast } from '../../stores/uiStore';
 import { ApiError } from '../../services/api';
 import { CreateInstanceModal } from './modal/CreateInstanceModal';
-import { ProvisionLocalModal } from './modal/ProvisionLocalModal';
 
 type ViewMode = 'brief' | 'list';
 
@@ -332,7 +330,6 @@ export function InstanceListPage() {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [viewMode, setViewMode] = useState<ViewMode>(() => readViewMode());
   const [createOpen, setCreateOpen] = useState(false);
-  const [provisionOpen, setProvisionOpen] = useState(false);
 
   const sortOptions = useMemo(
     () => [
@@ -366,8 +363,6 @@ export function InstanceListPage() {
   const apiSortBy = viewMode === 'brief' ? 'updated_at' : sortBy || undefined;
   const apiSortOrder =
     viewMode === 'brief' ? 'desc' : sortBy ? sortOrder : undefined;
-
-  const allowLocalProvision = getAllowLocalProvision();
 
   const instances = useAsync(
     () =>
@@ -414,11 +409,6 @@ export function InstanceListPage() {
             <button className="btn sm" onClick={refresh}>
               {t('common.refresh')}
             </button>
-            {allowLocalProvision && (
-              <button className="btn sm" onClick={() => setProvisionOpen(true)}>
-                {t('topology.provisionLocal')}
-              </button>
-            )}
             <button className="btn primary sm" onClick={() => setCreateOpen(true)}>
               + {t('topology.createInstance')}
             </button>
@@ -477,16 +467,6 @@ export function InstanceListPage() {
           refresh();
         }}
       />
-      {allowLocalProvision && (
-        <ProvisionLocalModal
-          open={provisionOpen}
-          onClose={() => setProvisionOpen(false)}
-          onProvisioned={() => {
-            setProvisionOpen(false);
-            refresh();
-          }}
-        />
-      )}
     </>
   );
 }

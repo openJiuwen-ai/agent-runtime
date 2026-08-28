@@ -40,14 +40,6 @@ class InstanceUpdateBody(BaseModel):
     data: dict[str, Any] | None = None
 
 
-class ProvisionLocalInstanceBody(BaseModel):
-    """本地拉起 Gateway + AgentServer（需 MANAGER_ALLOW_LOCAL_PROVISION=true）。"""
-
-    jiuwenclaw_name: str = Field(default="local-instance", max_length=128)
-    creator_id: str = Field(default="system", max_length=64)
-    description: str | None = None
-
-
 class GatewayRegisterBody(BaseModel):
     """Gateway → Manager：HTTP 自注册。"""
 

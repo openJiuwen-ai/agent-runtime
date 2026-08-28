@@ -92,7 +92,6 @@
     "title": "实例管理",
     "subtitle": "管理 {{productName}} 实例",
     "createInstance": "新建实例",
-    "provisionLocal": "本地一键拉起",
     "instanceStatus": "实例状态",
     "namespace": "命名空间",
     "group": "Group",
@@ -126,9 +125,7 @@
     "managementApiBase": "Management API 基地址",
     "creatorId": "创建人 ID",
     "groupId": "Group ID",
-    "spaceId": "Space ID",
-    "provisionLocalTitle": "本地拉起一套 Gateway + AgentServer",
-    "provisionLocalDesc": "适用于 MANAGER_ALLOW_LOCAL_PROVISION=true 的本地开发模式"
+    "spaceId": "Space ID"
   },
   "instanceDetail": {
     "title": "实例详情",

@@ -92,7 +92,6 @@
     "title": "Instance Management",
     "subtitle": "Manage {{productName}} instances",
     "createInstance": "Create Instance",
-    "provisionLocal": "Provision Locally",
     "instanceStatus": "Status",
     "namespace": "Namespace",
     "group": "Group",
@@ -126,9 +125,7 @@
     "managementApiBase": "Management API Base",
     "creatorId": "Creator ID",
     "groupId": "Group ID",
-    "spaceId": "Space ID",
-    "provisionLocalTitle": "Provision Gateway + AgentServer locally",
-    "provisionLocalDesc": "Requires MANAGER_ALLOW_LOCAL_PROVISION=true"
+    "spaceId": "Space ID"
   },
   "instanceDetail": {
     "title": "Instance Detail",

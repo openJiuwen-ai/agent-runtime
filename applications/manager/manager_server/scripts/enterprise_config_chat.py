@@ -214,7 +214,7 @@ def _parse_args() -> argparse.Namespace:
     src.add_argument(
         "--provision-json",
         type=Path,
-        help="provision-local 响应 JSON（读取 data.ports.web）",
+        help="含 ports.web 的 JSON（读取 data.ports.web 或 ports.web）",
     )
     src.add_argument("--ws-url", help="完整 WebSocket URL，如 ws://host:19001/ws")
     return p.parse_args()

@@ -424,14 +424,10 @@ class InstanceService:
         from manager_server.core.instance.instance_data_lifecycle import (
             purge_instance_all_data,
         )
-        from manager_server.core.instance.instance_provisioner import (
-            terminate_local_if_present,
-        )
 
         row = await get_instance_row(self._handler, jiuwenclaw_id)
         if row is None:
             return False
-        await terminate_local_if_present(self._handler, jiuwenclaw_id)
         try:
             await purge_instance_all_data(self._handler, jiuwenclaw_id)
         except Exception:

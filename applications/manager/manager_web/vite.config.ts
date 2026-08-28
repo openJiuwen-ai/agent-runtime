@@ -1,12 +1,9 @@
-import { defineConfig, loadEnv } from 'vite'
+import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
 
-export default defineConfig(({ mode }) => {
+export default defineConfig(() => {
   const envDir = path.resolve(__dirname, '..')
-  const env = loadEnv(mode, envDir, '')
-  const allowLocalProvision =
-    env.VITE_MANAGER_ALLOW_LOCAL_PROVISION ?? env.MANAGER_ALLOW_LOCAL_PROVISION ?? 'false'
   const managerTarget = process.env.MANAGER_WEB_PROXY_TARGET || 'http://127.0.0.1:8765'
   const idpTarget = process.env.MANAGER_WEB_IDP_TARGET || 'http://127.0.0.1:8770'
   const userWebTarget = process.env.MANAGER_WEB_USER_WEB_TARGET || 'http://127.0.0.1:5173'
@@ -17,9 +14,6 @@ export default defineConfig(({ mode }) => {
 
   return {
     envDir,
-    define: {
-      'import.meta.env.VITE_MANAGER_ALLOW_LOCAL_PROVISION': JSON.stringify(allowLocalProvision),
-    },
     plugins: [react()],
     resolve: {
       alias: {

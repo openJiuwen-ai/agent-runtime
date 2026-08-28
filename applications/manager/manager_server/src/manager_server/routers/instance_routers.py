@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 from openjiuwen_runtime.foundation.security.link_auth import build_token
 
-from manager_server.core.instance import InstanceService, provision_local_jiuwenclaw
+from manager_server.core.instance import InstanceService
 from manager_server.core.instance.instance_service import (
     apply_gateway_ws_heartbeat,
     register_gateway_via_ws,
@@ -29,7 +29,6 @@ from manager_server.schemas.instance_schemas import (
     GatewayRegisterBody,
     InstanceListQuery,
     InstanceUpdateBody,
-    ProvisionLocalInstanceBody,
 )
 from manager_server.security.keys import store_instance_enc_pubkey
 from manager_server.security.sign_provider import get_manager_signing_key
@@ -90,28 +89,6 @@ def _build_request_volume_summary(bv: dict) -> dict:
         "active_pods": _request_volume_value(bv, "pods_in_use"),
         "idle_pods": _request_volume_value(bv, "pods_idle"),
     }
-
-
-@instance_router.post("/provision-local", response_model=ResponseModel)
-async def provision_local_instance(
-    body: ProvisionLocalInstanceBody,
-    handler: Annotated[DBHandler, Depends(get_db_handler)],
-):
-    try:
-        data = await provision_local_jiuwenclaw(
-            handler,
-            settings,
-            jiuwenclaw_name=body.jiuwenclaw_name,
-            creator_id=body.creator_id,
-            description=body.description,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-    except FileExistsError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return ResponseModel(code=200, message="success", data=data)
 
 
 @instance_router.post("/register", response_model=ResponseModel)

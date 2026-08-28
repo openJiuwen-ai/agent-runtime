@@ -2,8 +2,8 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """按 IAM：``agent_template`` + ``instance_agent_resource`` 写入演示数据。
 
-前置：已完成 ``provision-local``，Manager 已启动（默认 ``http://127.0.0.1:8765``），
-且目标实例 Gateway 可达。Agent 资源写入会经 Manager 推送到 Gateway。
+前置：目标实例已在 Manager 注册且 Gateway 可达；Manager 已启动（默认 ``http://127.0.0.1:8765``）。
+Agent 资源写入会经 Manager 推送到 Gateway。
 
 执行顺序：
 
@@ -646,7 +646,7 @@ def _parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "jiuwenclaw_id",
-        help="provision-local 返回的 jiuwenclaw_id",
+        help="目标实例 jiuwenclaw_id",
     )
     p.add_argument(
         "--manager-base",
