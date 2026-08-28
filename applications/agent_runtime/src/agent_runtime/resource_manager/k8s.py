@@ -61,11 +61,15 @@ def _render_volume_mounts(
         host_path: list[dict[str, Any]] | None = None,
         config_map: list[dict[str, Any]] | None = None,
         pvc: list[dict[str, Any]] | None = None,
+        pvc_seen: dict[str, str] | None = None,
 ) -> tuple[list[Any], list[Any]]:
     """规范形挂载列表 → (Pod 级 volumes, 容器 volume_mounts)。
 
     规范形由 mounts.py 校验/归一(RM 侧 normalize 兜底脏缓存);owner=容器名、
     idx=容器序号(sidecar 从 0,主容器固定 0,容器名唯一保证卷名不撞)。
+    pvc_seen: 跨容器共享的 claim→卷名登记簿;同 claim 的 PVC 只建一个卷,
+    主容器与 sidecar 的 volumeMounts 都引用它(对齐 gateway 写法,防 kubelet
+    挂第二个同 claim 卷时死锁/超时)。None=不做去重(兼容单容器调用)。
     """
     volumes: list[Any] = []
     mounts: list[Any] = []
@@ -94,13 +98,20 @@ def _render_volume_mounts(
                     name=volume_name, mount_path=m["mount_path"],
                     sub_path=m["sub_path"], read_only=m["read_only"],
                 ))
-            else:
-                volumes.append(c.V1Volume(
-                    name=volume_name,
-                    persistent_volume_claim=(
-                        c.V1PersistentVolumeClaimVolumeSource(
-                            claim_name=m["claim_name"], read_only=m["read_only"])),
-                ))
+            else:  # pvc: 同 claim 跨容器只建一个共享卷,主+sidecar 都引用它
+                claim = m["claim_name"]
+                if pvc_seen is not None and claim in pvc_seen:
+                    volume_name = pvc_seen[claim]
+                else:
+                    volume_name = _scoped_volume_name("pvc", owner, idx, mi)
+                    volumes.append(c.V1Volume(
+                        name=volume_name,
+                        persistent_volume_claim=(
+                            c.V1PersistentVolumeClaimVolumeSource(
+                                claim_name=claim, read_only=m["read_only"])),
+                    ))
+                    if pvc_seen is not None:
+                        pvc_seen[claim] = volume_name
                 mounts.append(c.V1VolumeMount(
                     name=volume_name, mount_path=m["mount_path"],
                     read_only=m["read_only"],
@@ -289,7 +300,8 @@ class RealK8sPodClient(K8sPodClient):
         )
 
     def _build_sidecar_container(
-            self, c: Any, sc: dict[str, Any], idx: int,
+            self, c: Any, sc: dict[str, Any], idx: int, *,
+            pvc_seen: dict[str, str] | None = None,
     ) -> tuple[Any, list[Any], dict[str, str]]:
         """单个 sidecar(规范形,见 sidecars.py)→ (V1Container, 挂载卷, Pod annotation)。"""
         volumes, mounts = _render_volume_mounts(
@@ -297,6 +309,7 @@ class RealK8sPodClient(K8sPodClient):
             host_path=sc["host_path_mounts"],
             config_map=sc["configmap_mounts"],
             pvc=sc["pvc_mounts"],
+            pvc_seen=pvc_seen,
         )
         resources = None
         if any(sc[f] for f in ("cpu_request", "memory_request",
@@ -347,6 +360,7 @@ class RealK8sPodClient(K8sPodClient):
         # 主 agent 容器卷挂载(hostPath/ConfigMap/PVC;脏缓存 normalize 兜底,
         # 规范形见 mounts.py;无挂载时零增量——与历史一致)
         agent_owner = spec.get("container_name") or "agent"
+        pvc_seen: dict[str, str] = {}  # 同 claim 的 PVC 跨容器共享一个卷(主+sidecar)
         agent_volumes, agent_mounts = _render_volume_mounts(
             c, agent_owner, 0,
             host_path=normalize_mounts(spec.get("agent_host_path_mounts"),
@@ -354,6 +368,7 @@ class RealK8sPodClient(K8sPodClient):
             config_map=normalize_mounts(spec.get("agent_configmap_mounts"),
                                         "configmap_mounts"),
             pvc=normalize_mounts(spec.get("agent_pvc_mounts"), "pvc_mounts"),
+            pvc_seen=pvc_seen,
         )
         volumes.extend(agent_volumes)
         mounts.extend(agent_mounts)
@@ -393,6 +408,12 @@ class RealK8sPodClient(K8sPodClient):
             for k, v in (spec.get("agent_env") or {}).items()
         ] or None
 
+        # 主容器 securityContext(有则设:run_as_user/run_as_group;无则不设,走镜像默认)
+        sec_kwargs: dict[str, Any] = {}
+        if spec.get("run_as_user") is not None:
+            sec_kwargs["run_as_user"] = int(spec["run_as_user"])
+        if spec.get("run_as_group") is not None:
+            sec_kwargs["run_as_group"] = int(spec["run_as_group"])
         container = c.V1Container(
             name=spec.get("container_name") or "agent",
             image=spec.get("agent_image") or "",
@@ -402,6 +423,8 @@ class RealK8sPodClient(K8sPodClient):
             volume_mounts=mounts or None,
             resources=resources,
             readiness_probe=probe,
+            **({"security_context": c.V1SecurityContext(**sec_kwargs)}
+               if sec_kwargs else {}),
         )
 
         # ---- sidecar 容器(通用机制,规范形见 sidecars.py;无 sidecars 时零改动:
@@ -422,7 +445,7 @@ class RealK8sPodClient(K8sPodClient):
                 raise DeployFailed(f"pod spec sidecars invalid: {conflict}")
             for idx, sc in enumerate(sidecars):
                 sc_container, sc_volumes, sc_annotations = (
-                    self._build_sidecar_container(c, sc, idx))
+                    self._build_sidecar_container(c, sc, idx, pvc_seen=pvc_seen))
                 sidecar_containers.append(sc_container)
                 volumes.extend(sc_volumes)
                 annotations.update(sc_annotations)
@@ -435,7 +458,8 @@ class RealK8sPodClient(K8sPodClient):
                                     annotations=annotations or None),
             spec=c.V1PodSpec(containers=[container, *sidecar_containers],
                              restart_policy="Always",
-                             volumes=volumes or None),
+                             volumes=volumes or None,
+                             node_name=(spec.get("node_name") or None)),
         )
 
     async def _wait_ready(self, pod_id: str, namespace: str,
