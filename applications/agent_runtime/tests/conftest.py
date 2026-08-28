@@ -102,7 +102,7 @@ class Runtime:
 
     async def seed_template(self, template_id="tpl-1", scope_id="scope-main",
                             **overrides) -> None:
-        """全量下发一个 template + 一个通配兜底 scope（空 routing_rules）。"""
+        """全量下发一个 template + 一个通配兜底 scope（空 routing_rules 表达式）。"""
         template = {
             "agent_image": "agentserver:1.0",
             "namespace": "default",
@@ -116,7 +116,7 @@ class Runtime:
         await self.config_store.config_sync({
             "templates": [{"template_id": template_id, **template}],
             "scopes": [{"scope_id": scope_id, "index": 0,
-                        "template_id": template_id, "routing_rules": []}],
+                        "template_id": template_id, "routing_rules": ""}],
         })
 
     async def route(self, session_id, group_id="grp", bot_id="bot",

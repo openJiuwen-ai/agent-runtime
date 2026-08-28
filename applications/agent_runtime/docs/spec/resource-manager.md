@@ -93,9 +93,11 @@
 - `start()`:先 `load_incluster_config()`(**同步函数,不可 await**——await 会 TypeError→in-cluster 必挂,M7 修复),ConfigException 再 `await load_kubeconfig()`。
 - `deploy(pod_spec)`:pod_id = `{pod_name}-{随机10}-{随机5}`(**K8s 随机 Pod 名,严禁业务 id 当实例 id——历史死锁根因**);409 名字冲突重命名重试至多 3 次;`_wait_ready` 轮询至 Ready+有 podIP(每 30s 一条 INFO 进度行,终态/超时 WARNING 带 waited_s),终态(Failed/Succeeded)/消失/超时 → DeployFailed;`get_pod`/`list_pods`/`delete` 带 DEBUG 耗时;`probe_health` 异常原因 DEBUG 留痕(调用方 sweeper 同节奏 WARNING)。
 - `_build_pod_body`:label `{jiuwenclaw-component: agentserver, app: pod_id}`;NFS 卷挂载;资源 requests/limits;sse_port 必开(名 `sse`),container_port≠sse_port 加 `http`;**模板 `agent_env` 注入容器 env**(真 AgentServer 需 `AGENT_HTTP_ENABLED/HOST/PORT` 开 HTTP 入口);readiness probe = `GET {health_path:-/health}:sse_port`;restart_policy=Always。`probe_health`(场景 N)与 readiness 同源取 `health_path`(sweeper 从 scope:config 的 pod_spec_json 读)。
+- `_build_pod_body` **多容器(pod_spec.sidecars,规范形见 `sidecars.py`)**:入口 `normalize_sidecars` 兜底(pod_spec 可能来自 Redis 缓存脏数据,坏项静默丢弃);`find_sidecar_conflict`(撞主容器名/撞 agent 端口)→ **DeployFailed**(fail-fast,防 agent 经 127.0.0.1 连错进程);每项经 `_build_sidecar_container` 渲染 V1Container——端口纯声明性**无名**(sidecar 只被同 Pod 127.0.0.1 访问,不进 Service)、独立 resources、security_context(privileged/caps/seccomp/run_as)、apparmor unconfined 落 **Pod annotation**、tcp/http readiness 探针;`containers=[主容器, *sidecars]`,无 sidecars 时 annotations=None、单容器——**与历史逐字节一致**。sidecar readiness 参与 Pod Ready → `_wait_ready` 天然等 sidecar 就绪(慢启动 sidecar 需调大模板 ready_timeout)。
+- **卷挂载渲染(`mounts.py` 规范形,主容器与 sidecar 共用 `_render_volume_mounts`)**:hostPath/ConfigMap/PVC 三种;卷名 `_scoped_volume_name(prefix, 容器名净化, 容器idx, 挂载idx)`,前缀 `hp-`/`cm-`/`pvc-`,≤63 防撞,与主容器 NFS 卷名 `{pod_id}-nfs` 天然不撞(容器名唯一保证跨容器不撞);ConfigMap 支持 `sub_path`(单 key 挂到文件)与 `items`(V1KeyToPath);主容器三字段 `agent_host_path_mounts`/`agent_configmap_mounts`/`agent_pvc_mounts` 与 sidecar 子字段同款;RM 入口 `normalize_mounts` 兜底脏缓存;无挂载时零增量(与历史一致)。
 - `normalize_phase`:deletion→Terminating;容器 waiting reason(ImagePullBackOff/CrashLoopBackOff/…)优先于 phase。
 
-**FakeK8sPodClient**(local/单测):deploy 立即 Ready;可编程 `unready_pods`/`dead_pods`/`unhealthy_pods`/`deploy_failures` 模拟异常分支。
+**FakeK8sPodClient**(local/单测):deploy 立即 Ready;可编程 `unready_pods`/`dead_pods`/`unhealthy_pods`/`deploy_failures` 模拟异常分支;`deployed_specs` 录制每次 deploy 收到的 pod_spec(断言 pod_spec 端到端透传,如 sidecars)。
 
 `probe_health(pod_ip, sse_port)`:`GET http://{pod_ip}:{sse_port}/health`,3s 超时,非 200/异常即不健康(K8sPodClient 基类默认实现,Real/Fake 共用)。
 

@@ -165,9 +165,7 @@ async def _seed(client: httpx.AsyncClient, base: str, run: str, args) -> list[di
             "influxdb:1.8", 50, 10, args.namespace)
     scopes = [
         {"scope_id": f"scope-{run}-{gi}", "index": gi, "template_id": tpl_id,
-         "routing_rules": [{"expressions": [
-             {"field": "group_id", "op": "in",
-              "values": [f"grp-{run}-{gi}"]}]}]}
+         "routing_rules": f"group_id in ('grp-{run}-{gi}')"}
         for gi in range(args.groups)
     ]
     r = await client.post(f"{base}/config_sync", json={

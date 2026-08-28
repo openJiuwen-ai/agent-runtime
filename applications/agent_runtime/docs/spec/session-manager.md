@@ -12,7 +12,7 @@
 | `orchestrator.py` | route 主循环(匹配→Lua 仲裁→acquire→等待队列)+ touch |
 | `state.py` | SM Redis 键 schema 唯一出口 + Lua 调用封装(`SMKeys`/`SessionState`) |
 | `lua_scripts.py` | 7 个 Lua 全文 |
-| `routing.py` | 路由匹配纯函数:表达式/规则/scope 定义、wire 校验、快照(反)序列化、first-fit 匹配 |
+| `routing.py` | 路由匹配纯函数:routing_rules 表达式解析(词法+递归下降)/scope 定义、wire 校验、快照(反)序列化、first-fit 匹配 |
 | `config_store.py` | template/routing_scope DB 持久化 + 路由快照 + config_sync 编排 |
 | `sweeper.py` | 到期 pass + 空 Pod pass(每 tick 选主) |
 | `facade.py` | `SessionManagerFacade`(RM→SM:notify_pod_dead / reconcile_pods) |
@@ -96,9 +96,17 @@ finally: 若仍在等待队列 → remove_waiter(异常路径出队)
 
 ## config_store.py —— 配置层(scope 重构版)
 
-**DB 表**(列名沿用 EE 兼容名,映射在 `_COLUMN_OF`):`service_config_template`(`min_idle_pods→min_idle_services`、`pod_concurrency→service_concurrency`、`pod_ttl→service_ttl`、`scope_concurrency→session_concurrency`)、`routing_scope`(`scope_id` unique / `match_index`(避 SQL 保留字 index) / `template_id` / `routing_rules` JSON)。表结构常量 `*_TABLE_DEF` 由 main 传给框架建表。旧 `routing_rule` 表已废弃(不再读写,老库残留无害)。
+**DB 表**(列名沿用 EE 兼容名,映射在 `_COLUMN_OF`):`service_config_template`(`min_idle_pods→min_idle_services`、`pod_concurrency→service_concurrency`、`pod_ttl→service_ttl`、`scope_concurrency→session_concurrency`;另有 JSON 列 `agent_env`、`sidecars`、`agent_host_path_mounts`、`agent_configmap_mounts`、`agent_pvc_mounts`)、`routing_scope`(`scope_id` unique / `match_index`(避 SQL 保留字 index) / `template_id` / `routing_rules` JSON)。表结构常量 `*_TABLE_DEF` 由 main 传给框架建表。旧 `routing_rule` 表已废弃(不再读写,老库残留无害)。**`sidecars` 与三个挂载列为后期新增:存量库须先手工 ALTER 再发版**(`ALTER TABLE service_config_template ADD COLUMN sidecars JSON NULL;` 等,框架建表只 create_all 不补列;`agent_env`/`health_path` 同款义务)。
 
-**routing.py(纯函数)**:表达式求值语义——`in`/`not_in` 对字符串集合(空 values:in 恒假、not_in 恒真);规则内 AND(空 expressions 下发即拒);规则间 OR;**空 routing_rules = 通配兜底**;遍历按 `(index ASC, scope_id ASC)` **first-fit**;引用模板缺失/禁用的 scope 跳过落下一个。`SCOPE_ID_RE = ^[0-9A-Za-z._-]{1,128}$`(禁 `:`/`*`/空白——Redis 键与 `pods:registered` 切分依赖)。
+**sidecars.py(顶层共享模块,SM 校验与 RM 渲染共用;与 spec_fields 同款先例)**:通用 sidecar 容器列表(单 JSON 列),每项一个容器规格 dict,jiuwenbox 是第一个使用者(与主 agent 容器同 Pod、共享网络命名空间,agent 经 `127.0.0.1:port` 访问)。单项 schema(规范形填满全部默认键,列表按 name 升序):`name`(必,DNS-1123 ≤63,≠ `container_name` 且 Pod 内唯一)、`image`(必,≤512)、`port`?(≠ `sse_port`/`container_port`/兄弟 sidecar;探针目标)、`env`(同 agent_env 规则 str→scalar)、`image_pull_policy`(默认 IfNotPresent)、`cpu/memory_request/limit`、`privileged`/`capabilities_add|drop`/`seccomp_unconfined`/`apparmor_unconfined`(apparmor 经 Pod annotation 表达)/`run_as_user|group`、`host_path_mounts`/`configmap_mounts`/`pvc_mounts`(见 mounts.py)、`readiness_probe_type`("tcp"|"http",设了必须有 port)/`readiness_path`(默认 /health)/`readiness_initial_delay|period|timeout_seconds`(默认 5/10/3);列表 ≤8 条;**未知键 400 拒绝**(安全敏感面,拼错键不得静默吞)。**指纹不变式(★)**:`Template.sidecars` 默认 `None`、`__post_init__` 经 `normalize_sidecars` 把空列表/坏值归一为 None——`util.fingerprint` 只滤 None,以 `[]` 为默认会使全部存量模板 deploy_ver 变化(全量伪 A 类日落);"显式给默认值"与"省略键"、下发顺序重排、DB JSON 键序重排必须同指纹(规范形 + name 排序保证)。
+
+**mounts.py(顶层共享模块,主容器与 sidecar 挂载共用)**:三种卷挂载的规范形/校验/归一,主 agent 容器经 Template 三字段(`agent_host_path_mounts`/`agent_configmap_mounts`/`agent_pvc_mounts`),sidecar 经各自子字段,同一套谓词。单项 schema(规范形填满默认键 + 按 `mount_path` 升序——挂载顺序无语义):
+- hostPath:`{host_path(必,绝对), mount_path(必,绝对), read_only=False, host_path_type?∈7 枚举}`;
+- ConfigMap(沿老 SDK ConfigMapMount):`{config_map_name(必,k8s 资源名), mount_path(必,绝对), sub_path?(相对路径,单 key 挂到文件), items?=[{key,path}](按 key 排序), read_only=True}`;
+- PVC:`{claim_name(必,k8s 资源名), mount_path(必,绝对), read_only=False}`。
+同一容器内 `mount_path` 不得重复(主容器含 NFS 挂载点一起查)→ 400。指纹不变式同 sidecars(默认 None + 空归一 None + 排序)。
+
+**routing.py(纯函数)**:`routing_rules` 是**布尔表达式字符串**——条件 `field in|not in ('v1', 'v2')` 经 `and`/`or` 与括号任意组合;优先级 条件 > and > or;关键字大小写不敏感,字段名固定小写枚举(user_id/group_id/bot_id);值单引号串(`''` 加倍或 `\'`/`\\` 转义);空值列表 `()` → in 恒假、not_in 恒真;不支持一元 `not`;上限长度 8000、括号嵌套 32。**空 routing_rules(null/空串/纯空白)= 通配兜底**;遍历按 `(index ASC, scope_id ASC)` **first-fit**;引用模板缺失/禁用的 scope 跳过落下一个。解析器 = 词法(`_TOKEN_RE`)+ 递归下降(`_Parser`:or_expr → and_expr → primary),产物为表达式树(`MatchExpression` 叶 / `AndNode` / `OrNode`),存于 `RoutingScopeDef.rule`(与原始串 `expr` 成对,后者是 wire/DB/快照载体)。`SCOPE_ID_RE = ^[0-9A-Za-z._-]{1,128}$`(禁 `:`/`*`/空白——Redis 键与 `pods:registered` 切分依赖)。
 
 **resolve(user_id, group_id, bot_id) → (scope_id, Template)**:读单键快照 `routing:snapshot`(1 GET;进程内按原文 memo 免重复解析)→ first-fit 匹配;快照缺失/损坏 → 从 DB 重建;无匹配 → `ConfigNotFound(503)`。
 
@@ -106,9 +114,11 @@ finally: 若仍在等待队列 → remove_waiter(异常路径出队)
 
 ```
 锁外校验(纯 CPU 400):kind/op 遗迹拒绝;templates/scopes 非 list;template 缺 template_id;
-  scope_id 字符集/index 非真 int(拒 bool)/引用不在本批模板集/规则空 expressions/
-  表达式 field|op 非法/values 非字符串数组/同批 scope_id 重复
-  缺通配 scope(无空规则项)→ 仅 WARNING 放行(响应 wildcard_present:false)
+  scope_id 字符集/index 非真 int(拒 bool)/引用不在本批模板集/routing_rules 非字符串
+  (含旧结构化 list 格式)/表达式语法错误(未知字段、裸 not、悬空括号、未引号值、
+  超长 >8000 或嵌套 >32)/同批 scope_id 重复;sidecars 严格校验(template_from_payload
+  循环后调 sidecars.validate_sidecars:单项规范形 + 撞主容器名/撞 agent 端口;空列表→None)
+  缺通配 scope(无空表达式项)→ 仅 WARNING 放行(响应 wildcard_present:false)
 lock:config_sync 串行化(忙→409 CONFIG_SYNC_BUSY,TTL 60)
 → 读 DB 旧态(templates + scopes)
 → diff:模板 changed_ids(_diff_class 沿用)/ 引用切换 ref_switched;
@@ -139,7 +149,7 @@ lock:config_sync 串行化(忙→409 CONFIG_SYNC_BUSY,TTL 60)
 ## models.py
 
 - `Template`:template 行业务视图。派生:`max_pods = ⌈scope_concurrency/pod_concurrency⌉`(**派生值,不存储,不配置**);`deploy_subset()`=acquire 下发 RM 的 pod_spec;`deploy_ver()`=A 类指纹;`pool_config()`={min_idle_pods, max_pods, pod_ttl, pod_concurrency}(pod_concurrency 仅供 RM follower 等待室推导上限 pc-1)。
-- scope 定义(`RoutingScopeDef`/规则/表达式)在 `routing.py`,不再有 ScopeConfig(快照取代 per-scope 缓存)。
+- scope 定义(`RoutingScopeDef`/表达式树)在 `routing.py`,不再有 ScopeConfig(快照取代 per-scope 缓存)。
 
 ## 高频踩点
 

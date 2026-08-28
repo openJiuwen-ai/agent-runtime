@@ -18,6 +18,8 @@ import math
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..mounts import normalize_mounts
+from ..sidecars import normalize_sidecars
 from ..spec_fields import DEPLOY_VER_FIELDS, POLICY_FIELDS  # noqa: F401 - 字段分类定义
 from ..util import fingerprint
 
@@ -55,6 +57,16 @@ class Template:
     agent_memory_request: str | None = None
     agent_cpu_limit: str | None = None
     agent_memory_limit: str | None = None
+    # 同 Pod sidecar 容器列表(A 类字段,通用机制,jiuwenbox 是第一个使用者;
+    # 规范形与校验见 sidecars.py)。None 与 [] 统一归一为 None——fingerprint
+    # 只滤 None,若以 [] 为默认会使全部存量模板 deploy_ver 变化 → 全量 A 类
+    # 日落,不可接受(见 __post_init__ 的 normalize_sidecars)。
+    sidecars: list[dict[str, Any]] | None = None
+    # 主 agent 容器卷挂载(A 类;规范形与校验见 mounts.py,与 sidecar 挂载同款;
+    # 空列表/坏值同样归一为 None 保指纹稳定)
+    agent_host_path_mounts: list[dict[str, Any]] | None = None
+    agent_configmap_mounts: list[dict[str, Any]] | None = None
+    agent_pvc_mounts: list[dict[str, Any]] | None = None
     # deploy 凭证（B 类例外：只影响新 deploy，不日落）
     kubeconfig: str | None = None
     # 元信息
@@ -63,6 +75,15 @@ class Template:
     enabled: bool = True
     message_timeout: int = 600
     data: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        # 空列表/坏值 → None;逐项规范形 + 排序(指纹/DB/快照三处形态唯一)。
+        # payload/DB 行/快照 JSON/测试手搓全部构造路径收敛于此。
+        object.__setattr__(self, "sidecars", normalize_sidecars(self.sidecars))
+        for field in ("agent_host_path_mounts", "agent_configmap_mounts",
+                      "agent_pvc_mounts"):
+            kind = field.replace("agent_", "", 1)
+            object.__setattr__(self, field, normalize_mounts(getattr(self, field), kind))
 
     # -------------------------------------------------------------- 派生
 

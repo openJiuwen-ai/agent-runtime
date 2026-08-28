@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import re
 import string
 import time
 from typing import Any
@@ -21,6 +22,8 @@ from typing import Any
 import httpx
 
 from ..errors import DeployFailed
+from ..mounts import normalize_mounts
+from ..sidecars import find_sidecar_conflict, normalize_sidecars
 from .models import POD_LABEL_KEY, POD_LABEL_VALUE, PodDeployInfo, PodInfo
 
 logger = logging.getLogger("agent_runtime.resource_manager")
@@ -33,6 +36,76 @@ WAIT_READY_PROGRESS_SEC = 30    # _wait_ready 进度行间隔（最长 300s 不�
 
 def _random_suffix(length: int = 5) -> str:
     return "".join(random.choices(string.ascii_lowercase + string.digits, k=length))
+
+
+_HOSTPATH_NAME_RE = re.compile(r"[^a-z0-9-]+")
+
+
+def _scoped_volume_name(prefix: str, name: str, idx: int, mount_idx: int) -> str:
+    """容器挂载卷名:{prefix} 前缀 + 容器名净化 + 双索引后缀,防同 Pod 多容器
+    多挂载撞名(沿老 SDK K8sServiceHandler 约定);DNS-1123,整体 ≤63。
+    前缀:hp-(hostPath)/cm-(ConfigMap)/pvc-(PVC),与主容器 NFS 卷名
+    ``{pod_id}-nfs`` 天然不撞。"""
+    sanitized = _HOSTPATH_NAME_RE.sub("-", (name or "").lower()).strip("-") or f"c{idx}"
+    suffix = f"-{idx}-{mount_idx}"
+    return f"{prefix}-{sanitized[:63 - len(prefix) - 1 - len(suffix)]}{suffix}"
+
+
+def _host_path_volume_name(name: str, idx: int, mount_idx: int) -> str:
+    """hostPath 卷名(兼容旧名,等同 _scoped_volume_name('hp', ...))。"""
+    return _scoped_volume_name("hp", name, idx, mount_idx)
+
+
+def _render_volume_mounts(
+        c: Any, owner: str, idx: int, *,
+        host_path: list[dict[str, Any]] | None = None,
+        config_map: list[dict[str, Any]] | None = None,
+        pvc: list[dict[str, Any]] | None = None,
+) -> tuple[list[Any], list[Any]]:
+    """规范形挂载列表 → (Pod 级 volumes, 容器 volume_mounts)。
+
+    规范形由 mounts.py 校验/归一(RM 侧 normalize 兜底脏缓存);owner=容器名、
+    idx=容器序号(sidecar 从 0,主容器固定 0,容器名唯一保证卷名不撞)。
+    """
+    volumes: list[Any] = []
+    mounts: list[Any] = []
+    for prefix, mlist in (("hp", host_path), ("cm", config_map), ("pvc", pvc)):
+        for mi, m in enumerate(mlist or []):
+            volume_name = _scoped_volume_name(prefix, owner, idx, mi)
+            if prefix == "hp":
+                volumes.append(c.V1Volume(
+                    name=volume_name,
+                    host_path=c.V1HostPathVolumeSource(
+                        path=m["host_path"], type=m["host_path_type"]),
+                ))
+                mounts.append(c.V1VolumeMount(
+                    name=volume_name, mount_path=m["mount_path"],
+                    read_only=m["read_only"],
+                ))
+            elif prefix == "cm":
+                items = ([c.V1KeyToPath(key=e["key"], path=e["path"])
+                          for e in m["items"]] if m["items"] else None)
+                volumes.append(c.V1Volume(
+                    name=volume_name,
+                    config_map=c.V1ConfigMapVolumeSource(
+                        name=m["config_map_name"], items=items),
+                ))
+                mounts.append(c.V1VolumeMount(
+                    name=volume_name, mount_path=m["mount_path"],
+                    sub_path=m["sub_path"], read_only=m["read_only"],
+                ))
+            else:
+                volumes.append(c.V1Volume(
+                    name=volume_name,
+                    persistent_volume_claim=(
+                        c.V1PersistentVolumeClaimVolumeSource(
+                            claim_name=m["claim_name"], read_only=m["read_only"])),
+                ))
+                mounts.append(c.V1VolumeMount(
+                    name=volume_name, mount_path=m["mount_path"],
+                    read_only=m["read_only"],
+                ))
+    return volumes, mounts
 
 
 def normalize_phase(phase: str, deletion: bool, container_waiting_reasons: list[str]) -> str:
@@ -154,6 +227,85 @@ class RealK8sPodClient(K8sPodClient):
             return await self._wait_ready(pod_id, namespace, timeout, poll)
         raise DeployFailed("k8s create pod failed: name conflicts exhausted")
 
+    # -------------------------------------------------------------- sidecar 渲染
+
+    @staticmethod
+    def _build_sidecar_security_context(c: Any, sc: dict[str, Any]) -> Any | None:
+        """sidecar 安全上下文(移植老 SDK _build_security_context 精简版):
+        privileged/caps/seccomp/run_as_;apparmor 走 Pod annotation(调用方收集)。"""
+        capabilities = None
+        if sc["capabilities_add"] or sc["capabilities_drop"]:
+            capabilities = c.V1Capabilities(
+                add=sc["capabilities_add"] or None,
+                drop=sc["capabilities_drop"] or None,
+            )
+        kwargs = {
+            "privileged": True if sc["privileged"] else None,
+            "capabilities": capabilities,
+            "seccomp_profile": (c.V1SeccompProfile(type="Unconfined")
+                                if sc["seccomp_unconfined"] else None),
+            "run_as_user": sc["run_as_user"],
+            "run_as_group": sc["run_as_group"],
+        }
+        if all(value is None for value in kwargs.values()):
+            return None
+        return c.V1SecurityContext(**kwargs)
+
+    @staticmethod
+    def _build_sidecar_probe(c: Any, sc: dict[str, Any]) -> Any:
+        """tcp → V1TCPSocketAction;http → V1HTTPGetAction(readiness_path)。"""
+        common = {
+            "initial_delay_seconds": sc["readiness_initial_delay"],
+            "period_seconds": sc["readiness_period"],
+            "timeout_seconds": sc["readiness_timeout_seconds"],
+        }
+        if sc["readiness_probe_type"] == "tcp":
+            return c.V1Probe(tcp_socket=c.V1TCPSocketAction(port=sc["port"]), **common)
+        return c.V1Probe(
+            http_get=c.V1HTTPGetAction(path=sc["readiness_path"], port=sc["port"]),
+            **common,
+        )
+
+    def _build_sidecar_container(
+            self, c: Any, sc: dict[str, Any], idx: int,
+    ) -> tuple[Any, list[Any], dict[str, str]]:
+        """单个 sidecar(规范形,见 sidecars.py)→ (V1Container, 挂载卷, Pod annotation)。"""
+        volumes, mounts = _render_volume_mounts(
+            c, sc["name"], idx,
+            host_path=sc["host_path_mounts"],
+            config_map=sc["configmap_mounts"],
+            pvc=sc["pvc_mounts"],
+        )
+        resources = None
+        if any(sc[f] for f in ("cpu_request", "memory_request",
+                               "cpu_limit", "memory_limit")):
+            resources = c.V1ResourceRequirements(
+                requests={k: v for k, v in (
+                    ("cpu", sc["cpu_request"]), ("memory", sc["memory_request"]),
+                ) if v} or None,
+                limits={k: v for k, v in (
+                    ("cpu", sc["cpu_limit"]), ("memory", sc["memory_limit"]),
+                ) if v} or None,
+            )
+        container = c.V1Container(
+            name=sc["name"],
+            image=sc["image"],
+            image_pull_policy=sc["image_pull_policy"] or "IfNotPresent",
+            # 端口纯声明性(无名,消灭端口名撞号类 bug):sidecar 只被同 Pod
+            # 127.0.0.1 访问,不进 Service,gateway 仍直连 Pod IP 的 sse_port
+            ports=[c.V1ContainerPort(container_port=sc["port"])] if sc["port"] else None,
+            env=[c.V1EnvVar(name=k, value=v) for k, v in sc["env"].items()] or None,
+            volume_mounts=mounts or None,
+            resources=resources,
+            security_context=self._build_sidecar_security_context(c, sc),
+            readiness_probe=(self._build_sidecar_probe(c, sc)
+                             if sc["readiness_probe_type"] else None),
+        )
+        # apparmor unconfined 只能以 Pod annotation 表达(老 SDK 同款)
+        annotations = ({f"container.apparmor.security.beta.kubernetes.io/{sc['name']}":
+                        "unconfined"} if sc["apparmor_unconfined"] else {})
+        return container, volumes, annotations
+
     def _build_pod_body(self, pod_id: str, spec: dict[str, Any]) -> Any:
         c = self._client
         labels = {POD_LABEL_KEY: POD_LABEL_VALUE, "app": pod_id}
@@ -169,6 +321,20 @@ class RealK8sPodClient(K8sPodClient):
             mounts.append(c.V1VolumeMount(
                 name=volume_name, mount_path=spec.get("nfs_mount_path") or "/data",
             ))
+
+        # 主 agent 容器卷挂载(hostPath/ConfigMap/PVC;脏缓存 normalize 兜底,
+        # 规范形见 mounts.py;无挂载时零增量——与历史一致)
+        agent_owner = spec.get("container_name") or "agent"
+        agent_volumes, agent_mounts = _render_volume_mounts(
+            c, agent_owner, 0,
+            host_path=normalize_mounts(spec.get("agent_host_path_mounts"),
+                                       "host_path_mounts"),
+            config_map=normalize_mounts(spec.get("agent_configmap_mounts"),
+                                        "configmap_mounts"),
+            pvc=normalize_mounts(spec.get("agent_pvc_mounts"), "pvc_mounts"),
+        )
+        volumes.extend(agent_volumes)
+        mounts.extend(agent_mounts)
 
         resources = None
         if any(spec.get(f) for f in ("agent_cpu_request", "agent_memory_request",
@@ -215,12 +381,38 @@ class RealK8sPodClient(K8sPodClient):
             resources=resources,
             readiness_probe=probe,
         )
+
+        # ---- sidecar 容器(通用机制,规范形见 sidecars.py;无 sidecars 时零改动:
+        # annotations=None、containers=[container] 与历史逐字节一致)
+        annotations: dict[str, str] = {}
+        sidecar_containers: list[Any] = []
+        # pod_spec 可能来自 Redis pod_spec_json 缓存(旧版本写入/手改):
+        # normalize 兜底坏项,但端口/容器名冲突 fail-fast(防 Pod 建出来
+        # agent 经 127.0.0.1 连错进程)
+        sidecars = normalize_sidecars(spec.get("sidecars"))
+        if sidecars:
+            conflict = find_sidecar_conflict(
+                sidecars,
+                spec.get("container_name") or "agent",
+                sse_port, container_port,
+            )
+            if conflict:
+                raise DeployFailed(f"pod spec sidecars invalid: {conflict}")
+            for idx, sc in enumerate(sidecars):
+                sc_container, sc_volumes, sc_annotations = (
+                    self._build_sidecar_container(c, sc, idx))
+                sidecar_containers.append(sc_container)
+                volumes.extend(sc_volumes)
+                annotations.update(sc_annotations)
+
         return c.V1Pod(
             api_version="v1",
             kind="Pod",
             metadata=c.V1ObjectMeta(name=pod_id, namespace=spec.get("namespace")
-                                    or self.default_namespace, labels=labels),
-            spec=c.V1PodSpec(containers=[container], restart_policy="Always",
+                                    or self.default_namespace, labels=labels,
+                                    annotations=annotations or None),
+            spec=c.V1PodSpec(containers=[container, *sidecar_containers],
+                             restart_policy="Always",
                              volumes=volumes or None),
         )
 
@@ -366,9 +558,11 @@ class FakeK8sPodClient(K8sPodClient):
         self.unhealthy_pods: set[str] = set()
         self.deploy_failures = 0
         self.deleted: list[str] = []
+        self.deployed_specs: list[dict[str, Any]] = []       # deploy 收到的 pod_spec 录制(断言用)
         self._ip_counter = 0
 
     async def deploy(self, pod_spec: dict[str, Any]) -> PodDeployInfo:
+        self.deployed_specs.append(dict(pod_spec))
         if self.deploy_failures > 0:
             self.deploy_failures -= 1
             raise DeployFailed("simulated deploy failure")

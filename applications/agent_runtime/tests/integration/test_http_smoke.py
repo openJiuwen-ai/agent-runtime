@@ -55,7 +55,7 @@ TEMPLATE = {
 FULL_SYNC = {
     "templates": [{"template_id": "tpl-smoke", **TEMPLATE}],
     "scopes": [{"scope_id": "scope-smoke", "index": 0,
-                "template_id": "tpl-smoke", "routing_rules": []}],
+                "template_id": "tpl-smoke", "routing_rules": ""}],
 }
 
 

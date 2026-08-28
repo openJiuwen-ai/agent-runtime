@@ -31,6 +31,10 @@ DEPLOY_FIELDS: tuple[str, ...] = (
     "agent_memory_request",
     "agent_cpu_limit",
     "agent_memory_limit",
+    "sidecars",             # 同 Pod sidecar 容器列表(通用;首个用户 jiuwenbox)
+    "agent_host_path_mounts",   # 主容器 hostPath 挂载(规范形见 mounts.py)
+    "agent_configmap_mounts",   # 主容器 ConfigMap 挂载
+    "agent_pvc_mounts",         # 主容器 PVC 挂载
 )
 
 # deploy 指纹涵盖字段（deploy 子集 + ready 超时参数——影响 deploy 行为与版本）

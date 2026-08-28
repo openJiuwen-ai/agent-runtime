@@ -213,7 +213,7 @@ class DualReplicas:
             rawdata={"templates": [{"template_id": template_id, **template}],
                      "scopes": [{"scope_id": scope_id, "index": 0,
                                  "template_id": template_id,
-                                 "routing_rules": []}]})
+                                 "routing_rules": ""}]})
         assert status == 200, body
 
     async def sample_election(self, job: str, duration: float,
