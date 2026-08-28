@@ -14,6 +14,9 @@ from __future__ import annotations
 DEPLOY_FIELDS: tuple[str, ...] = (
     "agent_image",
     "namespace",
+    "node_name",
+    "run_as_user",
+    "run_as_group",
     "pod_name",
     "container_name",
     "container_port",

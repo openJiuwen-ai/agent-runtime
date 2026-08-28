@@ -38,6 +38,9 @@ class Template:
     # deploy 子集（A 类）
     agent_image: str = ""
     namespace: str = "default"
+    node_name: str | None = None
+    run_as_user: int | None = None
+    run_as_group: int | None = None
     pod_name: str = "agentserver"          # Pod 名前缀（pod_id = 前缀-随机后缀）
     container_name: str = "agent"
     container_port: int = 8080

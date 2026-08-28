@@ -62,6 +62,9 @@ SERVICE_CONFIG_TEMPLATE_TABLE_DEF = TableDefinition(
         ColumnDefinition("description", "string", length=512, nullable=True),
         ColumnDefinition("agent_image", "string", length=512, nullable=False),
         ColumnDefinition("namespace", "string", length=128, nullable=False, default="default"),
+        ColumnDefinition("node_name", "string", length=128, nullable=True),
+        ColumnDefinition("run_as_user", "integer", nullable=True),
+        ColumnDefinition("run_as_group", "integer", nullable=True),
         ColumnDefinition("pod_name", "string", length=128, nullable=False, default="agentserver"),
         ColumnDefinition("container_name", "string", length=128, nullable=False, default="agent"),
         ColumnDefinition("container_port", "integer", nullable=False, default=8080),
@@ -127,6 +130,9 @@ _COLUMN_OF: dict[str, str] = {
     "description": "description",
     "agent_image": "agent_image",
     "namespace": "namespace",
+    "node_name": "node_name",
+    "run_as_user": "run_as_user",
+    "run_as_group": "run_as_group",
     "pod_name": "pod_name",
     "container_name": "container_name",
     "container_port": "container_port",
@@ -165,6 +171,7 @@ _INT_FIELDS = frozenset({
     "container_port", "sse_port", "readiness_initial_delay", "readiness_period",
     "ready_timeout", "ready_poll_interval", "min_idle_pods", "pod_concurrency",
     "pod_ttl", "scope_concurrency", "session_ttl", "message_timeout",
+    "run_as_user", "run_as_group",
 })
 
 
