@@ -113,7 +113,7 @@ npm run dev
 Vite 开发服务器已配置代理，`/api` → `8765`、`/idp` → `8770`（会自动去掉 `/idp` 前缀）。
 
 > 若登录报 `/idp/v1/auth/token` 404，请确认 `identity-center` 已在 `8770` 端口运行，并重启 `npm run dev` 使代理配置生效。  
-`/web/invoke`、`/file-api` 依赖 Gateway / User Server，未启动时聊天相关功能不可用，管理面主体功能可正常使用。
+`/chat`、`/ws`、`/gateway-api`、`/file-api` 和 `/share-api` 依赖 User Web / Gateway，未启动时用户面功能不可用，管理面主体功能可正常使用。
 
 ### 联合认证本地联调
 
@@ -180,12 +180,13 @@ Manager 权限守卫。
 
 ## 生产 / 集成模式（统一入口）
 
-构建静态资源后，由 `manager-web` 提供单一 HTTP 入口（默认 `5273`），统一转发 `/api`、`/idp` 等请求。
+构建静态资源后，由 `manager-web` 提供单一 HTTP 入口（默认 `5273`）。User Web 保持独立进程，通过 `/chat/` 在同源 iframe 中呈现。
 
 ```bash
-# 构建前端（完整集成还需构建 user_web）
-cd applications/access/user_web && npm install && npm run build
-cd ../../manager/manager_web && npm install && npm run build
+# 构建 Manager 前端
+cd applications/manager/manager_web
+npm install
+npm run build
 cd ../../..
 
 # 启动后端（需先激活虚拟环境）
@@ -196,7 +197,9 @@ manager-server
 manager-web \
   --host 127.0.0.1 --port 5273 \
   --dist applications/manager/manager_web/dist \
-  --chat-dist applications/access/user_web/dist
+  --user-web-target http://127.0.0.1:5173 \
+  --gateway-ws-target http://127.0.0.1:19000 \
+  --gateway-http-target http://127.0.0.1:19002
 ```
 
 `5273` 为外部唯一入口：
@@ -205,7 +208,10 @@ manager-web \
 - `/chat/` — 同源 User Web iframe
 - `/api` — 转发至 Manager API（`8765`）
 - `/idp` — 转发至身份中心（`8770`）
-- `/web/invoke`、`/file-api` — 转发至 Gateway / User Server
+- `/ws` — 转发至 Gateway WebSocket（默认 `19000`）
+- `/gateway-api`、`/file-api`、`/share-api` — 转发至 Gateway Web HTTP（默认 `19002`）
+
+Gateway HTTP 使用独立的 `/gateway-api` 前缀，避免与 Manager API 的 `/api/v1/*` 发生路由冲突。
 
 也可一键启动 API + 已构建的 Web（需先 `npm run build`）：
 
@@ -246,6 +252,9 @@ MANAGER_WEB_HOST=127.0.0.1
 MANAGER_WEB_PORT=5273
 MANAGER_WEB_PROXY_TARGET=http://127.0.0.1:8765
 MANAGER_WEB_IDP_TARGET=http://127.0.0.1:8770
+MANAGER_WEB_USER_WEB_TARGET=http://127.0.0.1:5173
+MANAGER_WEB_GATEWAY_HTTP_TARGET=http://127.0.0.1:19002
+MANAGER_WEB_GATEWAY_WS_TARGET=http://127.0.0.1:19000
 ```
 
 完整变量列表见 `applications/manager/.env.example`。
