@@ -31,8 +31,9 @@ cd ../../..
   --gateway-http-target http://127.0.0.1:19002
 ```
 
-5273 是唯一外部入口：`/auth`、`/user`、`/manager` 由 Manager SPA 提供，
-`/chat/` 反向代理独立 User Web 并作为同源 iframe。登录和退出均由外层统一管理。
+5273 是唯一外部入口：`/auth`、`/user`、`/manager` 由 Manager SPA 提供。
+普通用户登录后由 `/user` 页面级跳转到 `/chat/`；`/chat/` 同源反向代理独立
+User Web，User Web 根据登录账号的授权自动选择组织、组网和 Agent，不再使用 iframe。
 `/api` 转发 Manager Server，`/idp` 转发 Identity Center，`/ws` 转发
 Gateway WebSocket，`/gateway-api`、`/file-api`、`/share-api` 转发 Gateway Web HTTP。
 独立的 `/gateway-api` 前缀用于避免与 Manager `/api/v1/*` 冲突。

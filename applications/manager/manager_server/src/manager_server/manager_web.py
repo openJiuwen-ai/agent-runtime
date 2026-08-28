@@ -285,11 +285,14 @@ def create_manager_web_app(
             methods=["GET", "HEAD", "OPTIONS"],
         )
         async def chat_static(request: Request, tail: str) -> Response:
-            if (
-                tail in ("", "index.html")
-                and request.headers.get("sec-fetch-dest", "").lower() == "document"
-            ):
-                return RedirectResponse("/auth", status_code=302)
+            if tail in ("", "index.html") and request.headers.get(
+                "sec-fetch-dest", ""
+            ).lower() in ("document", "iframe"):
+                auth_error = await _authorize_web_request(request, idp_url)
+                if auth_error is not None:
+                    if request.headers.get("sec-fetch-dest", "").lower() == "document":
+                        return RedirectResponse("/auth", status_code=302)
+                    return auth_error
             return await _relay(
                 request,
                 _join_url(user_web_url, tail),
