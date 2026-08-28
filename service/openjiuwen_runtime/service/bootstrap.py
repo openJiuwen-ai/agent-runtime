@@ -106,6 +106,9 @@ def build_redis_client(settings: ServiceConfig | dict[str, Any] | Any) -> Any | 
         from redis.exceptions import TimeoutError as RedisTimeoutError
 
         kwargs: dict[str, Any] = {"decode_responses": False}
+        # REDIS_PASSWORD 从 Secret envFrom 注入，不在 redis_url（明文） 里
+        if cfg.redis_password:
+            kwargs["password"] = cfg.redis_password
         if cfg.redis_socket_connect_timeout_seconds > 0:
             kwargs["socket_connect_timeout"] = cfg.redis_socket_connect_timeout_seconds
         if cfg.redis_socket_timeout_seconds > 0:
