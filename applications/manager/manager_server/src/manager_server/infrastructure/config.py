@@ -89,13 +89,17 @@ class Settings(BaseSettings):
         default="http://127.0.0.1:8770",
         validation_alias="MANAGER_WEB_IDP_TARGET",
     )
-    manager_web_user_server_target: str = Field(
-        default="http://127.0.0.1:5174",
-        validation_alias="MANAGER_WEB_USER_SERVER_TARGET",
+    manager_web_user_web_target: str = Field(
+        default="http://127.0.0.1:5173",
+        validation_alias="MANAGER_WEB_USER_WEB_TARGET",
     )
-    manager_web_gateway_sse: str = Field(
-        default="http://127.0.0.1:19001/web/invoke",
-        validation_alias="MANAGER_WEB_GATEWAY_SSE",
+    manager_web_gateway_http_target: str = Field(
+        default="http://127.0.0.1:19002",
+        validation_alias="MANAGER_WEB_GATEWAY_HTTP_TARGET",
+    )
+    manager_web_gateway_ws_target: str = Field(
+        default="http://127.0.0.1:19000",
+        validation_alias="MANAGER_WEB_GATEWAY_WS_TARGET",
     )
     manager_web_log_level: str = Field(default="info", validation_alias="MANAGER_WEB_LOG_LEVEL")
 

@@ -70,10 +70,22 @@ let accessToken: string | null = localStorage.getItem(ACCESS_KEY);
 let refreshToken: string | null = localStorage.getItem(REFRESH_KEY);
 let unauthorizedHandler: (() => void) | null = null;
 
+function syncAccessCookie(access: string | null): void {
+  const secure = window.location.protocol === 'https:' ? '; Secure' : '';
+  if (access) {
+    document.cookie = `${ACCESS_KEY}=${encodeURIComponent(access)}; Path=/; SameSite=Strict${secure}`;
+  } else {
+    document.cookie = `${ACCESS_KEY}=; Path=/; Max-Age=0; SameSite=Strict${secure}`;
+  }
+}
+
+syncAccessCookie(accessToken);
+
 export function setTokens(access: string | null, refresh?: string | null): void {
   accessToken = access;
   if (access) localStorage.setItem(ACCESS_KEY, access);
   else localStorage.removeItem(ACCESS_KEY);
+  syncAccessCookie(access);
   if (refresh !== undefined) {
     refreshToken = refresh;
     if (refresh) localStorage.setItem(REFRESH_KEY, refresh);

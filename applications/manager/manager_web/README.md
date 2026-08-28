@@ -19,18 +19,23 @@ Claw Manager 管理面 Web 前端。技术栈与 `jiuwenclaw/web` 完全对齐�
 ## 统一入口启动
 
 ```bash
-cd applications/access/user_web && npm install && npm run build
-cd ../../manager/manager_web && npm install && npm run build
+cd applications/manager/manager_web
+npm install
+npm run build
 cd ../../..
 .venv/bin/manager-web \
   --host 127.0.0.1 --port 5273 \
   --dist applications/manager/manager_web/dist \
-  --chat-dist applications/access/user_web/dist
+  --user-web-target http://127.0.0.1:5173 \
+  --gateway-ws-target http://127.0.0.1:19000 \
+  --gateway-http-target http://127.0.0.1:19002
 ```
 
 5273 是唯一外部入口：`/auth`、`/user`、`/manager` 由 Manager SPA 提供，
-`/chat/` 是同源 User Web iframe。登录和退出均由外层统一管理，不存在第二套
-User Web 登录态。`/api`、`/idp`、`/web/invoke` 和 `/file-api` 由统一入口转发。
+`/chat/` 反向代理独立 User Web 并作为同源 iframe。登录和退出均由外层统一管理。
+`/api` 转发 Manager Server，`/idp` 转发 Identity Center，`/ws` 转发
+Gateway WebSocket，`/gateway-api`、`/file-api`、`/share-api` 转发 Gateway Web HTTP。
+独立的 `/gateway-api` 前缀用于避免与 Manager `/api/v1/*` 冲突。
 
 `npm run dev` 仍可用于单独调试 Manager 前端；集成验证应使用上面的统一入口。
 

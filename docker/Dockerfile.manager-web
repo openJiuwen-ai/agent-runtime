@@ -22,9 +22,6 @@ WORKDIR /app/agent-runtime/applications/manager/manager_web
 RUN npm install
 RUN npm run build
 
-# 本仓暂无 user_web：放空目录占位，满足 manager-web 对 --chat-dist 的存在性检查
-RUN mkdir -p /app/agent-runtime/applications/access/user_web/dist
-
 WORKDIR /app/agent-runtime
 ENV PATH=$PATH:/home/app/.local/bin
 ENV MANAGER_WEB_HOST=0.0.0.0
