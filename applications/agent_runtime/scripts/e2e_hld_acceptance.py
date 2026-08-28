@@ -176,19 +176,16 @@ SCOPES_DEF = [
 # 同 Pod 共享网络命名空间必须错开端口；**RPC 端口 8088 也必须错开**（influxdb
 # 双实例同 Pod 会抢 127.0.0.1:8088 → sidecar CrashLoop，2026-08-27 真环境实测）；
 # TCP readiness 真实可过（8096 监听即 Ready）。非特权无挂载：验证多容器渲染 +
-# readiness 门控；特权/cgroup 挂载属 jiuwenbox 真镜像验收范畴（需集群允许特权容器）。
+# readiness 门控。
+# --sidecar-image 指定真 jiuwenbox 镜像时切完整 jiuwenbox 规格（特权四件套 +
+# cgroup hostPath + 8321）。注意 JIUWENBOX_LISTEN 必须 http:// scheme——0.0.6s
+# 实测 tcp:// 被拒（"expected 'http' or 'unix'"，EE 旧默认 tcp:// 系旧版行为）。
 SIDECAR_STANDIN_PORT = 8096
 
 
 def _sidecar_standin() -> dict:
-    return {
+    common = {
         "name": "box-standin",
-        "image": SIDECAR_IMAGE,
-        "port": SIDECAR_STANDIN_PORT,
-        "env": {
-            "INFLUXDB_HTTP_BIND_ADDRESS": f":{SIDECAR_STANDIN_PORT}",
-            "INFLUXDB_BIND_ADDRESS": ":8098",  # 错开 RPC 8088(同 Pod netns 共享)
-        },
         # ConfigMap subPath 单 key 挂载(老 SDK config.yaml 同款形态):
         # 阶段 2b 先 kubectl create configmap,exec 验证容器内文件内容
         "configmap_mounts": [{
@@ -200,6 +197,28 @@ def _sidecar_standin() -> dict:
         "readiness_initial_delay": 5,
         "readiness_period": 5,
     }
+    if SIDECAR_IMAGE != IMAGE:   # 真 jiuwenbox 镜像:完整规格
+        return {**common,
+                "image": SIDECAR_IMAGE,
+                "port": 8321,
+                "env": {"JIUWENBOX_LISTEN": "http://0.0.0.0:8321"},
+                "privileged": True,
+                "capabilities_add": ["SYS_ADMIN", "NET_ADMIN"],
+                "seccomp_unconfined": True,
+                "apparmor_unconfined": True,
+                "host_path_mounts": [{
+                    "host_path": "/sys/fs/cgroup",
+                    "mount_path": "/sys/fs/cgroup",
+                    "host_path_type": "Directory",
+                }],
+                }
+    return {**common,           # influxdb 替身:错开 8086 与 RPC 8088
+            "image": SIDECAR_IMAGE,
+            "port": SIDECAR_STANDIN_PORT,
+            "env": {
+                "INFLUXDB_HTTP_BIND_ADDRESS": f":{SIDECAR_STANDIN_PORT}",
+                "INFLUXDB_BIND_ADDRESS": ":8098",
+            }}
 
 
 def full_sync_payload(tpl_overrides: dict | None = None) -> dict:
