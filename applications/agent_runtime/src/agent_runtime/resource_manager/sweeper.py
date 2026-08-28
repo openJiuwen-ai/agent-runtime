@@ -76,13 +76,18 @@ class ResourceSweeper:
 
     async def _autoscale_scope(self, scope_id: str) -> str:
         """单 scope 补位判定；返回结果标签（聚合进 tick 汇总日志）。"""
+        await self.state.reap_expired_deploying(scope_id)   # 崩溃遗留占位自愈
         cfg = await self.state.load_scope_config(scope_id)
         min_idle = to_int(cfg.get("min_idle_pods"))
         max_pods = to_int(cfg.get("max_pods"), 1)
         if min_idle <= 0:
             return "skip_min_idle0"
+        # 暖池计数**只认当前版本**：A 类变更后旧版本 idle Pod 永不可能被
+        # acquire 复用（want_ver 过滤），不能用它满足 min_idle——否则暖池
+        # 被旧版钉死，新流量每波冷部署（旧版 Pod 由 reclaim 按版本回收）
         idle = await self.state.idle_pods(scope_id)
-        if len(idle) >= min_idle:
+        warm = await self._current_version_idle(scope_id, cfg, idle)
+        if len(warm) >= min_idle:
             return "skip_warm"
         total = await self.state.pod_count(scope_id) + await self.state.deploying_count(scope_id)
         if total >= max_pods:
@@ -121,6 +126,23 @@ class ResourceSweeper:
 
     # -------------------------------------------------------------- reclaim（K）
 
+    async def _current_version_idle(
+        self, scope_id: str, cfg: dict[str, str], idle: list[str]
+    ) -> list[str]:
+        """idle 池中 deploy_ver 与 scope 当前配置一致的 Pod（可复用的真热备）。
+
+        配置无 deploy_ver（legacy/手写）时视全部为当前版本（保守兼容）。
+        """
+        current = cfg.get("deploy_ver") or ""
+        if not current:
+            return idle
+        warm: list[str] = []
+        for pod_id in idle:
+            info = await self.state.pod_info(pod_id)
+            if info.get("deploy_ver") == current:
+                warm.append(pod_id)
+        return warm
+
     async def reclaim_once(self) -> None:
         token = uuid4().hex
         if not await self.state.try_lock(self.state.k.lock_reclaim(), 2, token):
@@ -135,12 +157,17 @@ class ResourceSweeper:
                 min_idle = to_int(cfg.get("min_idle_pods"))
                 pod_ttl = to_int(cfg.get("pod_ttl"), 300)
                 idle = await self.state.idle_pods(scope_id)
-                if len(idle) <= min_idle:
+                # 版本感知的 excess：min_idle 底数只保护「当前版本」的 idle Pod
+                # （按转 idle 先后取最早 min_idle 个）；旧版本 idle Pod 永不可
+                # 复用（acquire want_ver 过滤），恒为 excess——否则 A 类变更后
+                # 旧暖 Pod 被底数永久保护，暖池钉死旧版且蹲占 max_pods 槽位
+                warm = await self._current_version_idle(scope_id, cfg, idle)
+                stale = sorted(set(idle) - set(warm))
+                if not stale and len(idle) <= min_idle:
                     continue
-                # 保护最早转入 idle 的 min_idle 个（保底热备），回收 excess
                 aged = {p: await self.state.idle_since(p) for p in idle}
-                ranked = sorted(idle, key=lambda p: aged[p])
-                excess = ranked[min_idle:]
+                ranked_warm = sorted(warm, key=lambda p: aged[p])
+                excess = stale + ranked_warm[min_idle:]
                 for pod_id in excess:
                     if aged[pod_id] and now - aged[pod_id] >= pod_ttl:
                         await self._reclaim_pod(pod_id, scope_id)
@@ -185,17 +212,25 @@ class ResourceSweeper:
                      pods, dead, (time.monotonic() - t0) * 1000)
 
     async def _health_probe(self, pod_id: str, info: dict[str, str]) -> None:
-        """场景 N：K8s Running/Ready 但 SSE hang 死只能靠此探测发现。"""
+        """场景 N：K8s Running/Ready 但 SSE hang 死只能靠此探测发现。
+
+        探测参数**优先取 Pod 自己烘焙的**（REGISTER 时随 Pod 落 info）；
+        A 类变更后 scope 当前配置已换代，拿新参数探老 Pod 会把带活跃会话的
+        存量 Pod 误判半死（违背日落承诺）。旧 Pod（info 无这些字段）回退
+        scope 当前配置。
+        """
         pod_ip = info.get("pod_ip", "")
         if not pod_ip:
             self._warn_probe_gap(pod_id, "pod_ip", info.get("scope_id", ""))
             return
-        # sse_port/health_path 不在 pod:info——从 scope:config 的 pod_spec_json 取
-        sse_port = await self._scope_sse_port(info.get("scope_id", ""))
+        # Pod 自有契约参数 → 回退 scope 当前配置（pod:info 未记 sse_port/health_path 的存量 Pod）
+        sse_port = to_int(info.get("sse_port")) or await self._scope_sse_port(
+            info.get("scope_id", ""))
         if not sse_port:
             self._warn_probe_gap(pod_id, "sse_port", info.get("scope_id", ""))
             return
-        health_path = await self._scope_health_path(info.get("scope_id", ""))
+        health_path = info.get("health_path") or await self._scope_health_path(
+            info.get("scope_id", ""))
         self._probe_gap_warned.discard(pod_id)
         if await self.k8s.probe_health(pod_ip, sse_port, health_path):
             await self.state.reset_health_fail(pod_id)

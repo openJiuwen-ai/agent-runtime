@@ -13,8 +13,9 @@
 - LUA_SWEEP_IDLE_NOTIFY  空 Pod pass 原子核心：SCARD==0 判定 + NX 去重 + ZREM 退出候选
 - LUA_REGISTER_POD       acquire 成功后登记新 Pod（三处注册同写 + 接入序）
 - LUA_CLEANUP_POD        notify_pod_dead 清该 (scope,pod) 的全部注册
-- LUA_WAITER_GATE        场景 F 等待队列原子入队（SADD 先行 + SCARD 超限自退；
-                          M6 真环境验收发现的并发竞态修复，见 SM 设计 §8.2）
+- LUA_WAITER_GATE        场景 F 等待队列原子入队（ZSET + deadline：先清过期成员
+                          再 ZADD 先行 + ZCARD 超限自退；M6 竞态修复 + 崩溃遗留
+                          自清，见 SM 设计 §8.2 与 DEPLOY_FOLLOWER_GATE 同款纪律）
 """
 
 from __future__ import annotations
@@ -39,14 +40,18 @@ local flat = redis.call('HGETALL', skey)
 if #flat > 0 then
   local m = {}
   for i = 1, #flat, 2 do m[flat[i]] = flat[i + 1] end
-  -- 2. 亲和命中且未过期 → 仅续期，不重抢额度、不换 Pod（场景 A）
-  if m['scope_id'] == scope and tonumber(m['expiry']) > now then
+  -- 2. 亲和命中且未过期 → 仅续期，不重抢额度、不换 Pod（场景 A）。
+  --    前提：Pod 注册仍在（info 存在）。notify_pod_dead 的清理窗口内新落的
+  --    会话若继续 refresh，只会对着已删的 sse_url 无限自旋——且每圈续期
+  --    expiry，sweeper 永远收不走。判死绑定 → 惰性回收，走重新放置。
+  if m['scope_id'] == scope and tonumber(m['expiry']) > now
+     and redis.call('EXISTS', pfx .. 'pod:' .. scope .. ':' .. m['pod_id'] .. ':info') == 1 then
     redis.call('HSET', skey, 'expiry', expiry, 'session_ttl', sttl)
     redis.call('ZADD', pfx .. 'session_expiry', expiry, sid)
     return {'refresh', m['pod_id']}
   end
-  -- 3. 已过期 / scope 变化 → 惰性回收旧绑定（内联 EVICT；不触发 idle_consider，
-  --    空 Pod 回收统一交 sweeper 空 Pod pass）
+  -- 3. 已过期 / scope 变化 / Pod 注册已消失 → 惰性回收旧绑定（内联 EVICT；
+  --    不触发 idle_consider，空 Pod 回收统一交 sweeper 空 Pod pass）
   local old_scope, old_pod = m['scope_id'], m['pod_id']
   redis.call('SREM', pfx .. 'scope:' .. old_scope .. ':sessions', sid)
   redis.call('SREM', pfx .. 'pod:' .. old_scope .. ':' .. old_pod .. ':sessions', sid)
@@ -200,17 +205,22 @@ redis.call('SREM', pfx .. 'pods:' .. pod .. ':scopes', scope)
 return {'ok'}
 """
 
-# Argv: prefix, scope_id, request_id, max_waiters —— 场景 F 有界等待队列原子入队
-# （SADD 先行 + SCARD 超限自退：堵「先查后加」在并发同时到达时都读到旧计数的竞态）
+# Argv: prefix, scope_id, request_id, max_waiters, deadline, now
+# 场景 F 有界等待队列原子入队。ZSET 以 deadline（秒级时间戳）为 score：
+# 先 ZREMRANGEBYSCORE 清过期成员（等待进程崩溃/断连的兜底，名额不泄漏），
+# 再 ZADD 先行 + ZCARD 超限自退（堵「先查后加」并发竞态）。
 LUA_WAITER_GATE = r"""
 local pfx = ARGV[1]
 local scope = ARGV[2]
 local waiter = ARGV[3]
 local max_waiters = tonumber(ARGV[4])
+local deadline = tonumber(ARGV[5])
+local now = tonumber(ARGV[6])
 local key = pfx .. 'scope:' .. scope .. ':waiters'
-redis.call('SADD', key, waiter)
-if redis.call('SCARD', key) > max_waiters then
-  redis.call('SREM', key, waiter)
+redis.call('ZREMRANGEBYSCORE', key, '-inf', now)
+redis.call('ZADD', key, deadline, waiter)
+if redis.call('ZCARD', key) > max_waiters then
+  redis.call('ZREM', key, waiter)
   return {'false'}
 end
 return {'true'}

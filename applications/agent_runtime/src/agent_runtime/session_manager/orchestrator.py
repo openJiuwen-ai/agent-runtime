@@ -72,57 +72,63 @@ class SessionOrchestrator:
         scope_id, template = await self.config.resolve(user_id, group_id, bot_id)
         deadline = time.monotonic() + self.scope_full_timeout
         t0 = time.monotonic()
-        waitering = False  # 是否已进等待队列（异常路径要出队）
 
-        try:
-            while True:
-                now = now_ts()
-                action, pod_id = await self.state.route_place(
-                    session_id=session_id,
-                    scope_id=scope_id,
-                    expiry_ts=now + template.session_ttl,
-                    session_ttl=template.session_ttl,
-                    scope_concurrency=template.scope_concurrency,
-                    pod_concurrency=template.pod_concurrency,
-                    max_pods=template.max_pods,
-                    now=now,
-                )
+        while True:
+            now = now_ts()
+            action, pod_id = await self.state.route_place(
+                session_id=session_id,
+                scope_id=scope_id,
+                expiry_ts=now + template.session_ttl,
+                session_ttl=template.session_ttl,
+                scope_concurrency=template.scope_concurrency,
+                pod_concurrency=template.pod_concurrency,
+                max_pods=template.max_pods,
+                now=now,
+            )
 
-                if action in ("refresh", "placed"):
-                    sse_url = await self.state.pod_sse_url(scope_id, pod_id)
-                    if not sse_url:
-                        # 极端竞态：Pod 刚被 notify_pod_dead 清理——重跑即可
-                        logger.warning(
-                            "route: pod info missing, retrying: scope=%s pod=%s "
-                            "session=%s action=%s", scope_id, pod_id, session_id, action,
-                        )
-                        continue
-                    logger.info(
-                        "route: session=%s scope=%s pod=%s action=%s "
-                        "request_id=%s duration_ms=%.1f",
-                        session_id, scope_id, pod_id, action,
-                        request_id, (time.monotonic() - t0) * 1000,
+            if action in ("refresh", "placed"):
+                sse_url = await self.state.pod_sse_url(scope_id, pod_id)
+                if not sse_url:
+                    # 极端竞态：Pod 刚被 notify_pod_dead 清理。ROUTE_PLACE 的
+                    # refresh 分支有 info 存活守卫，下一轮会惰性回收死绑定并
+                    # 重新放置（continue 不构成自旋）
+                    logger.warning(
+                        "route: pod info missing, retrying: scope=%s pod=%s "
+                        "session=%s action=%s", scope_id, pod_id, session_id, action,
                     )
-                    return {"pod_sse_url": sse_url, "pod_id": pod_id}
-
-                if action == "scope_full":
-                    await self._wait_for_capacity(
-                        scope_id, request_id, deadline, template
-                    )
-                    waitering = False
-                    continue  # 被唤醒后重跑 Lua；原子 admit 是唯一仲裁，败者重 wait
-
-                # action == "need_acquire"：现有 Pod 全满且未达 max_pods → RM 扩 +1
-                pod_id, sse_url = await self._acquire_pod(
-                    scope_id, template, request_id
+                    continue
+                logger.info(
+                    "route: session=%s scope=%s pod=%s action=%s "
+                    "request_id=%s duration_ms=%.1f",
+                    session_id, scope_id, pod_id, action,
+                    request_id, (time.monotonic() - t0) * 1000,
                 )
-                await self.state.register_pod(
-                    scope_id, pod_id, sse_url, template.deploy_ver()
+                return {"pod_sse_url": sse_url, "pod_id": pod_id}
+
+            if action == "scope_full":
+                await self._wait_for_capacity(
+                    scope_id, request_id, deadline, template,
+                    re_arbitrate=lambda: self.state.route_place(
+                        session_id=session_id,
+                        scope_id=scope_id,
+                        expiry_ts=now_ts() + template.session_ttl,
+                        session_ttl=template.session_ttl,
+                        scope_concurrency=template.scope_concurrency,
+                        pod_concurrency=template.pod_concurrency,
+                        max_pods=template.max_pods,
+                        now=now_ts(),
+                    ),
                 )
-                # 重跑 ROUTE_PLACE：新 Pod 必被 first-fit 选中
-        finally:
-            if waitering:
-                await self.state.remove_waiter(scope_id, request_id)
+                continue  # 信号唤醒或仲裁转机；外层重跑 Lua 走提交路径
+
+            # action == "need_acquire"：现有 Pod 全满且未达 max_pods → RM 扩 +1
+            pod_id, sse_url = await self._acquire_pod(
+                scope_id, template, request_id
+            )
+            await self.state.register_pod(
+                scope_id, pod_id, sse_url, template.deploy_ver()
+            )
+            # 重跑 ROUTE_PLACE：新 Pod 必被 first-fit 选中
 
     # -------------------------------------------------------------- 内部
 
@@ -167,11 +173,20 @@ class SessionOrchestrator:
         return acquired["pod_id"], acquired["pod_sse_url"]
 
     async def _wait_for_capacity(
-        self, scope_id: str, request_id: str, deadline: float, template: Any
+        self,
+        scope_id: str,
+        request_id: str,
+        deadline: float,
+        template: Any,
+        *,
+        re_arbitrate: Any = None,
     ) -> None:
         """场景 F：有界等待。队列满 → 503 快失败；超 deadline → 504；否则等 free 信号。
 
-        订阅 + ≤500ms 安全轮询双保险（兜「publish 早于 subscribe」的丢失）。
+        订阅 + ≤500ms 安全轮询双保险（兜「publish 早于 subscribe」的丢信号窗口）：
+        等待者成员资格**全程保持**（入队一次、退出时删一次——中途删/加的空窗
+        会让 max_waiters 上限漏收）；轮询超时无信号时经 ``re_arbitrate`` 就地
+        重跑 ROUTE_PLACE，非 scope_full 即返回（调用方外层再跑一次走提交路径）。
         """
         max_waiters = 2 * max(template.scope_concurrency, 1)
         if time.monotonic() >= deadline:
@@ -179,8 +194,11 @@ class SessionOrchestrator:
                 f"scope {scope_id} full: waited over {self.scope_full_timeout}s",
                 retry_after=DEFAULT_RETRY_AFTER,
             )
-        # 原子入队（SADD 先行 + 超限自退）：并发同时到达也不会超收
-        if not await self.state.try_add_waiter(scope_id, request_id, max_waiters):
+        # 原子入队（ZSET + deadline：清过期成员 + ZADD 先行 + 超限自退）
+        deadline_wall = now_ts() + int(self.scope_full_timeout)
+        if not await self.state.try_add_waiter(
+            scope_id, request_id, max_waiters, deadline_wall
+        ):
             waiters = await self.state.waiter_count(scope_id)
             raise ScopeQueueFull(
                 f"scope {scope_id} waiter queue full ({waiters}/{max_waiters})",
@@ -198,11 +216,13 @@ class SessionOrchestrator:
                         f"scope {scope_id} full: waited over {self.scope_full_timeout}s",
                         retry_after=DEFAULT_RETRY_AFTER,
                     )
-                message = await pubsub.get_message(
-                    timeout=min(0.5, remaining)
-                )
+                message = await pubsub.get_message(timeout=min(0.5, remaining))
                 if message and message.get("type") == "message":
-                    return  # 有人释放额度，重跑 Lua 仲裁
+                    return          # 信号唤醒：外层重跑仲裁
+                if re_arbitrate is not None:
+                    action, _ = await re_arbitrate()
+                    if action != "scope_full":
+                        return      # 轮询兜底仲裁转机（丢信号/状态已变）
         finally:
             await self.state.remove_waiter(scope_id, request_id)
             await pubsub.unsubscribe(channel)

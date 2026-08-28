@@ -311,13 +311,20 @@ async def test_config_sync_busy_rejects_concurrent(runtime):
 
 @requires_lua
 async def test_config_sync_rejects_when_sunset_pending(runtime):
-    """日落中间态:受影响 scope 有待回收 Pod → 409,且 DB 未被改动(检查先于写库)。"""
+    """日落中间态:受影响 scope 有待回收 Pod → 409,且 DB 未被改动(检查先于写库)。
+
+    中间态的判据是**版本**(registered∖candidates 且 deploy_ver ≠ 新版本):
+    当前版本的空闲 Pod 属 idle_consider 合法中间态,不得拒绝(回归见
+    tests/integration/test_audit_repro.py C1a/C1b)。此处按真实日落残留形态
+    构造——软摘除一个版本不匹配的 Pod。
+    """
     await runtime.seed_template()
     await runtime.route("sess_1")
-    # 手工制造中间态:Pod 在 pods:registered 但不在 scope:pods(已软摘除待回收)
-    await runtime.sm_state.redis.zrem(
-        runtime.sm_state.k.scope_pods(SCOPE),
-        (await runtime.sm_state.registered_pods())[0].split(":", 1)[1],
+    pod_id = (await runtime.sm_state.registered_pods())[0].split(":", 1)[1]
+    # 真实日落残留形态:软摘除(ZREM 候选)+ pod:info 记旧版本号
+    await runtime.sm_state.redis.zrem(runtime.sm_state.k.scope_pods(SCOPE), pod_id)
+    await runtime.sm_state.redis.hset(
+        runtime.sm_state.k.pod_info(SCOPE, pod_id), "deploy_ver", "stale-ver-x",
     )
     with pytest.raises(ConfigSyncBusy):
         await runtime.config_store.config_sync(_payload(

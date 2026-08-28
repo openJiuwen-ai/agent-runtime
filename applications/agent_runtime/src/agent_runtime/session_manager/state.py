@@ -12,7 +12,7 @@ import logging
 import time
 from typing import Any
 
-from ..util import s, to_int
+from ..util import now_ts, s, to_int
 from . import lua_scripts as lua
 
 KEY_PREFIX = "session_manager"
@@ -68,7 +68,11 @@ class SMKeys:
         return f"{self.prefix}:routing:snapshot"
 
     def scope_waiters(self, scope_id: str) -> str:
-        """SET: 等待中的 request_id。SCARD < max_waiters = 等待队列上限（场景 F）。"""
+        """ZSET: 等待中的 request_id → deadline（秒级时间戳）。
+
+        ZCARD < max_waiters = 等待队列上限（场景 F）；score=deadline 供闸门
+        原子清理崩溃遗留（等待进程消失后名额不永久占用）。
+        """
         return f"{self.prefix}:scope:{scope_id}:waiters"
 
     def scope_free_channel(self, scope_id: str) -> str:
@@ -232,23 +236,36 @@ class SessionState:
     # -------------------------------------------------------------- 等待队列（场景 F）
 
     async def waiter_count(self, scope_id: str) -> int:
-        return to_int(await self.redis.scard(self.k.scope_waiters(scope_id)))
+        return to_int(await self.redis.zcard(self.k.scope_waiters(scope_id)))
 
     async def try_add_waiter(self, scope_id: str, request_id: str,
-                             max_waiters: int) -> bool:
-        """原子入队（LUA_WAITER_GATE）：SADD 先行 + SCARD 超限自退。
+                             max_waiters: int, deadline_ts: int,
+                             *, margin_sec: int = 5) -> bool:
+        """原子入队（LUA_WAITER_GATE）：ZSET + deadline。
 
-        「先查后加」在并发同时到达时都会读到旧计数而全部入队（M6 验收发现的
-        竞态）；SADD/SCARD/SREM 必须同一脚本内原子完成。
+        - 先清过期成员（score ≤ now）：等待进程崩溃/断连的遗留名额自愈，
+          不永久占用 max_waiters；
+        - 再 ZADD 先行 + ZCARD 超限自退：「先查后加」在并发同时到达时都会
+          读到旧计数而全部入队（M6 验收发现的竞态），必须同一脚本原子完成。
+
+        deadline_ts 为该请求等待预算的墙钟时间戳（秒）；margin 覆盖
+        scope_full_timeout 与入队时点之间的间隙。
         """
-        ret = await self.eval(lua.LUA_WAITER_GATE, scope_id, request_id, max_waiters)
+        now = now_ts()
+        ret = await self.eval(
+            lua.LUA_WAITER_GATE,
+            scope_id, request_id, max_waiters, int(deadline_ts) + margin_sec, now,
+        )
         return bool(ret and ret[0] == "true")
 
     async def add_waiter(self, scope_id: str, request_id: str) -> None:
-        await self.redis.sadd(self.k.scope_waiters(scope_id), request_id)
+        """测试/诊断直塞：deadline 取远未来（+1h），不参与崩溃自清语义。"""
+        await self.redis.zadd(
+            self.k.scope_waiters(scope_id), {request_id: now_ts() + 3600}
+        )
 
     async def remove_waiter(self, scope_id: str, request_id: str) -> None:
-        await self.redis.srem(self.k.scope_waiters(scope_id), request_id)
+        await self.redis.zrem(self.k.scope_waiters(scope_id), request_id)
 
     async def try_lock(self, key: str, ttl: int, token: str) -> bool:
         """SET NX EX 抢锁（tick 级选主 / config_sync 串行化）。"""

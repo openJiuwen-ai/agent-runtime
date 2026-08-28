@@ -24,11 +24,14 @@
 | `idle_consider(pod_id, scope_id)` | `{transitioned_to_idle}`,幂等 |
 | `update_pool_config(scope_id, pool_config, pod_spec?)` | `{updated}`(config_sync 触发) |
 | `cleanup(namespace?, label_selector?)` | `cleaned: int`(运维批删) |
+| `known_scope_ids()` | RM 已知 scope 枚举(SCAN scope:config;config_sync 的被删 scope drain 收敛用——RM config 键是幻影预热的真源) |
 
 ## orchestrator.py —— acquire 决策树
 
 ```
-幂等缓存(request_id,键 resource_manager:idem:{rid},TTL 60,命中续期)
+幂等缓存(request_id,键 resource_manager:idem:{rid},TTL 60,命中续期;
+  ★存活校验:缓存 Pod 已被 PURGE(watch/reclaim 判死)→ 弃缓存清键走全新
+  acquire——回放死 Pod 会在 SM 侧复活注册并持续喂死地址给重试客户端)
 → 首见 scope:缓存池参数 + pod_spec_json 到 resource:scope:{sid}:config
 → 循环 { LUA_ACQUIRE → (action, pod_id, sse_url):
      reuse        → 直接返回(deploy_ver 过滤后的暖 Pod,已弹出 idle 池)
@@ -39,7 +42,7 @@
                     输家 → 清占位 → _follow_leader(follower 等待室) }
 ```
 
-`_deploy_and_register`:`k8s.deploy(pod_spec)`(create+wait Ready)→ 拼 `pod_sse_url = http://{pod_ip}:{sse_port}{sse_path}` → `LUA_REGISTER`。**失败必须清 deploying 占位再抛 DeployFailed(红线:防 max_pods 永久虚高)**。
+`_deploy_and_register`:`k8s.deploy(pod_spec)`(create+wait Ready)→ 拼 `pod_sse_url = http://{pod_ip}:{sse_port}{sse_path}` → `LUA_REGISTER`(带 sse_port/health_path,Pod 烘焙自己的探测契约)。**deploy 与 REGISTER 都在 `except BaseException` 保护内**(红线:占位清理含取消路径;REGISTER 步失败不清占位一样虚占 max_pods);异常若携带 pod_id/namespace(k8s.deploy 契约)→ 兜底 `k8s.delete` 防孤儿物理 Pod。
 
 `_follow_leader`(M8,deploy 锁输家的等待室):
 - 准入走 `LUA_DEPLOY_FOLLOWER_GATE` 原子闸门,上限 `pod_concurrency - 1`(leader 会话之外新 Pod 恰剩这些槽);overflow 严格快失败 MaxPodsReached。
@@ -58,9 +61,9 @@
 | `resource:scope:{sid}:pods` | ZSET | 该 scope 全部 Pod(in_use ∪ idle);**ZCARD+deploying SCARD 参与 max_pods 判定** |
 | `resource:scope:{sid}:idle` | SET | idle 暖池;acquire 从此取暖 Pod |
 | `resource:scope:{sid}:config` | HASH | min_idle_pods/max_pods/pod_ttl/pod_concurrency/deploy_ver/pod_spec_json。**config_sync 对每个存活 scope 主动写入/刷新(带 pod_spec)——无请求 scope 的 min_idle 预热依赖它**;首 acquire 兜底写入;被删 scope 推 min_idle=0 停预热自然排空 |
-| `resource:scope:{sid}:deploying` | SET | deploy 占位 token(计入 max_pods,防并发超配) |
+| `resource:scope:{sid}:deploying` | ZSET | deploy 占位 token→deadline 秒级 score(计入 max_pods,防并发超配;闸门/autoscale 按 deadline 原子清崩溃遗留——硬崩后进程内清理不存在,占位不得永久虚占容量) |
 | `resource:scope:{sid}:deploy_followers` | ZSET | follower 等待室(request_id→deadline 秒级 score;闸门按 deadline 原子清过期) |
-| `resource:pod:{pod}:info` | HASH | scope_id/pod_sse_url/pod_ip/namespace/phase/created_ts/deploy_ver |
+| `resource:pod:{pod}:info` | HASH | scope_id/pod_sse_url/pod_ip/namespace/phase/created_ts/deploy_ver/**sse_port/health_path**(Pod 自己烘焙的探测契约;A 类变更后 scope 当前配置已换代,watch 探测必须用 Pod 自己的参数,否则存量老 Pod 被探错路径误杀) |
 | `resource:pod:{pod}:idle_since` | STR | idle 起始(reclaim 计时);存在 ⟺ 在 idle 池 |
 | `resource:pod:{pod}:health_fails` | STR | 健康探测连续失败次数(场景 N) |
 | `resource:pods:all` | SET | 全部 pod_id(watch/reconcile 枚举) |
@@ -76,9 +79,9 @@
 
 | 脚本 | 一句话职责 |
 |---|---|
-| `LUA_ACQUIRE` | 取暖 Pod 复用(**跳过 deploy_ver 不匹配**——A 类变更后老版本暖 Pod 不外发,按 pod_ttl 自然回收)→ 无匹配判 max_pods(ZCARD pods + SCARD deploying)→ 占位 SADD deploying → need_deploy |
-| `LUA_PLACEHOLDER` | autoscale 专用占位(判 max_pods + SADD,**不碰 idle 池**——补位不该消耗暖 Pod) |
-| `LUA_REGISTER` | deploy 成功登记:pod:info / scope:pods / pods:all 同写,清占位;idle_flag=1(热备)入 idle 池 |
+| `LUA_ACQUIRE` | 取暖 Pod 复用(**跳过 deploy_ver 不匹配**——A 类变更后老版本暖 Pod 不外发,由 reclaim 版本感知回收)→ 无匹配判 max_pods(ZCARD pods + ZCARD deploying)→ 占位 ZADD deploying(score=deadline,先清过期) → need_deploy |
+| `LUA_PLACEHOLDER` | autoscale 专用占位(判 max_pods + ZADD,**不碰 idle 池**——补位不该消耗暖 Pod;同款 deadline 自清) |
+| `LUA_REGISTER` | deploy 成功登记:pod:info(含 sse_port/health_path)/ scope:pods / pods:all 同写,清占位;idle_flag=1(热备)入 idle 池 |
 | `LUA_RELEASE` | idle_consider:转 idle 暖池,**仅首次转入(SADD=1)起 pod_ttl 计时**;周期重放(reconcile stale/idle_consider 去重重发)不刷新计时——否则空闲 Pod 永不回收;acquire 弹出后再转 idle 重新计时;**已 PURGE 的 Pod(info 已清)no-op**(防 TOCTOU 幽灵成员) |
 | `LUA_PURGE` | Pod 死亡/reclaim 后清全部 RM key(返回其 scope_id;幂等) |
 | `LUA_DEPLOY_FOLLOWER_GATE` | follower 等待室原子准入:先 `ZREMRANGEBYSCORE` 清过期 → ZADD 先行 → ZCARD 超限自退(纪律同 LUA_WAITER_GATE,禁止先查后加) |
@@ -91,15 +94,15 @@
 
 **RealK8sPodClient**(kubernetes_asyncio):
 - `start()`:先 `load_incluster_config()`(**同步函数,不可 await**——await 会 TypeError→in-cluster 必挂,M7 修复),ConfigException 再 `await load_kubeconfig()`。
-- `deploy(pod_spec)`:pod_id = `{pod_name}-{随机10}-{随机5}`(**K8s 随机 Pod 名,严禁业务 id 当实例 id——历史死锁根因**);409 名字冲突重命名重试至多 3 次;`_wait_ready` 轮询至 Ready+有 podIP(每 30s 一条 INFO 进度行,终态/超时 WARNING 带 waited_s),终态(Failed/Succeeded)/消失/超时 → DeployFailed;`get_pod`/`list_pods`/`delete` 带 DEBUG 耗时;`probe_health` 异常原因 DEBUG 留痕(调用方 sweeper 同节奏 WARNING)。
+- `deploy(pod_spec)`:pod_id = `{pod_name}-{随机10}-{随机5}`(**K8s 随机 Pod 名,严禁业务 id 当实例 id——历史死锁根因**);409 名字冲突重命名重试至多 3 次;`_wait_ready` 轮询至 Ready+有 podIP(每 30s 一条 INFO 进度行,终态/超时 WARNING 带 waited_s),终态(Failed/Succeeded)/消失/超时 → DeployFailed;**create 之后的任何失败/取消先 best-effort 删除该 Pod 再抛,DeployFailed 携带 pod_id/namespace 属性供上层兜底**(契约:失败路径不留孤儿物理 Pod——未 REGISTER 的 Pod 不在 pods:all,watch/reconcile 只做 Redis→K8s 单向对账,孤儿无人认领);`get_pod`/`list_pods`/`delete` 带 DEBUG 耗时;`probe_health` 异常原因 DEBUG 留痕(调用方 sweeper 同节奏 WARNING)。
 - `_build_pod_body`:label `{jiuwenclaw-component: agentserver, app: pod_id}`;NFS 卷挂载;资源 requests/limits;sse_port 必开(名 `sse`),container_port≠sse_port 加 `http`;**模板 `agent_env` 注入容器 env**(真 AgentServer 需 `AGENT_HTTP_ENABLED/HOST/PORT` 开 HTTP 入口);readiness probe = `GET {health_path:-/health}:sse_port`;restart_policy=Always。`probe_health`(场景 N)与 readiness 同源取 `health_path`(sweeper 从 scope:config 的 pod_spec_json 读)。
 - `_build_pod_body` **多容器(pod_spec.sidecars,规范形见 `sidecars.py`)**:入口 `normalize_sidecars` 兜底(pod_spec 可能来自 Redis 缓存脏数据,坏项静默丢弃);`find_sidecar_conflict`(撞主容器名/撞 agent 端口)→ **DeployFailed**(fail-fast,防 agent 经 127.0.0.1 连错进程);每项经 `_build_sidecar_container` 渲染 V1Container——端口纯声明性**无名**(sidecar 只被同 Pod 127.0.0.1 访问,不进 Service)、独立 resources、security_context(privileged/caps/seccomp/run_as)、apparmor unconfined 落 **Pod annotation**、tcp/http readiness 探针;`containers=[主容器, *sidecars]`,无 sidecars 时 annotations=None、单容器——**与历史逐字节一致**。sidecar readiness 参与 Pod Ready → `_wait_ready` 天然等 sidecar 就绪(慢启动 sidecar 需调大模板 ready_timeout)。
 - **卷挂载渲染(`mounts.py` 规范形,主容器与 sidecar 共用 `_render_volume_mounts`)**:hostPath/ConfigMap/PVC 三种;卷名 `_scoped_volume_name(prefix, 容器名净化, 容器idx, 挂载idx)`,前缀 `hp-`/`cm-`/`pvc-`,≤63 防撞,与主容器 NFS 卷名 `{pod_id}-nfs` 天然不撞(容器名唯一保证跨容器不撞);ConfigMap 支持 `sub_path`(单 key 挂到文件)与 `items`(V1KeyToPath);主容器三字段 `agent_host_path_mounts`/`agent_configmap_mounts`/`agent_pvc_mounts` 与 sidecar 子字段同款;RM 入口 `normalize_mounts` 兜底脏缓存;无挂载时零增量(与历史一致)。
 - `normalize_phase`:deletion→Terminating;容器 waiting reason(ImagePullBackOff/CrashLoopBackOff/…)优先于 phase。
 
-**FakeK8sPodClient**(local/单测):deploy 立即 Ready;可编程 `unready_pods`/`dead_pods`/`unhealthy_pods`/`deploy_failures` 模拟异常分支;`deployed_specs` 录制每次 deploy 收到的 pod_spec(断言 pod_spec 端到端透传,如 sidecars)。
+**FakeK8sPodClient**(local/单测):deploy 立即 Ready;可编程 `unready_pods`/`dead_pods`/`unhealthy_pods`/`deploy_failures`(create 前失败,无物理残留)/`fail_after_create`(create 成功但永不 Ready——Pod 留在集群、DeployFailed 携带 pod_id,考验上层兜底删除)模拟异常分支;`deployed_specs` 录制每次 deploy 收到的 pod_spec(断言 pod_spec 端到端透传,如 sidecars)。
 
-`probe_health(pod_ip, sse_port)`:`GET http://{pod_ip}:{sse_port}/health`,3s 超时,非 200/异常即不健康(K8sPodClient 基类默认实现,Real/Fake 共用)。
+`probe_health(pod_ip, sse_port, health_path="/health")`:`GET http://{pod_ip}:{sse_port}{health_path}`,3s 超时,非 200/异常即不健康(K8sPodClient 基类默认实现,Real/Fake 共用;调用方 sweeper 按 Pod 自己的 info 参数传,回退 scope 当前配置)。
 
 ## models.py
 
@@ -113,9 +116,9 @@
 
 | 任务 | 周期/锁 | 逻辑 |
 |---|---|---|
-| `autoscale_once`(场景 H) | 1s / lock:rm:autoscale | 遍历 `known_scope_ids()`(SCAN scope:config):idle < min_idle_pods 且 pods+deploying < max_pods → `LUA_PLACEHOLDER` 占位 → 抢 deploy 锁 → `_deploy_and_register(idle_flag=True)` 热备入池;pod_spec 取 scope:config 缓存(A 类变更后为新值)。**config_sync 会主动写每个存活 scope 的 config(带 pod_spec)→ 从未被请求过的 scope 也会被预热(eager,下发即预备热备)** |
-| `reclaim_once`(场景 K) | 1s / lock:rm:reclaim | idle 超 min_idle 底数的 excess 中 `aged ≥ pod_ttl` → `_purge_and_notify`(K8s delete → LUA_PURGE → notify_pod_dead);保护最早入 idle 的 min_idle 个(保底热备)。**scope 被删除时 config_sync 推 min_idle=0 → 本任务把其空闲 Pod 按 pod_ttl 自然排空(存量会话到期止,不强制驱逐)** |
-| `watch_once`(场景 J/N) | 10s / lock:rm:watch(TTL 15) | 遍历 pods:all:get_pod 为 None 或 phase∈DEAD → 清理;Running 但 `probe_health` **连续 2 次失败**(health_fails 阈值,防瞬时抖动误杀)→ 半死清理;成功清零计数。sse_port 从 scope:config 的 pod_spec_json 取 |
+| `autoscale_once`(场景 H) | 1s / lock:rm:autoscale | 先 `reap_expired_deploying`(崩溃遗留占位自愈)再遍历 `known_scope_ids()`(SCAN scope:config):**当前版本** idle < min_idle_pods(版本感知——A 类变更后旧版 idle Pod 永不可能被复用,不能拿来满足 min_idle,否则暖池被旧版钉死)且 pods+deploying < max_pods → `LUA_PLACEHOLDER` 占位 → 抢 deploy 锁 → `_deploy_and_register(idle_flag=True)` 热备入池;pod_spec 取 scope:config 缓存(A 类变更后为新值)。**config_sync 会主动写每个存活 scope 的 config(带 pod_spec)→ 从未被请求过的 scope 也会被预热(eager,下发即预备热备)** |
+| `reclaim_once`(场景 K) | 1s / lock:rm:reclaim | excess = 旧版本 idle Pod(**恒为 excess**——acquire want_ver 过滤后永不可复用,若受底数保护则暖池钉死旧版+蹲占 max_pods)+ 当前版本 idle 超出 min_idle 的部分(按转 idle 先后);excess 中 `aged ≥ pod_ttl` → `_purge_and_notify`(K8s delete → LUA_PURGE → notify_pod_dead);底数只保护当前版本最早入 idle 的 min_idle 个(保底热备)。**scope 被删除时 config_sync 推 min_idle=0 → 本任务把其空闲 Pod 按 pod_ttl 自然排空(存量会话到期止,不强制驱逐)** |
+| `watch_once`(场景 J/N) | 10s / lock:rm:watch(TTL 15) | 遍历 pods:all:get_pod 为 None 或 phase∈DEAD → 清理;Running 但 `probe_health` **连续 2 次失败**(health_fails 阈值,防瞬时抖动误杀)→ 半死清理;成功清零计数。**探测参数优先取 Pod 自己 info 烘焙的 sse_port/health_path**(A 类变更后存量老 Pod 用旧契约探测;旧 Pod 无字段时回退 scope:config 的 pod_spec_json) |
 | `reconcile_once`(场景 L) | 30s / lock:rm:reconcile(TTL 60) | ① Redis 有 K8s 无 → PURGE+notify;② RM 持有但 SM 候选集已无的 stale Pod(经 `sm_facade.reconcile_pods`,Facade 单向)→ `LUA_RELEASE` 转 idle 按 pod_ttl 回收 |
 
 `_purge_and_notify(pod_id)` 三步(K8s delete 若还在 → LUA_PURGE → notify_pod_dead);全幂等,单步失败仅记录(30s reconcile 兜底);PURGE 失败 `logger.exception` + 成功 INFO `pod purged`(三步可审计)。
@@ -124,7 +127,7 @@
 
 ## 高频踩点
 
-- 错误路径必须清占位(deploy 失败 → SREM deploying);follower 路径还要清 deploy_followers 成员——**双清纪律**。
+- 错误路径必须清占位(deploy/REGISTER 任一步失败 → ZREM deploying,保护含 CancelledError);follower 路径还要清 deploy_followers 成员;k8s.deploy 失败若已建 Pod → 兜底物理删除——**三清纪律(占位/成员/物理 Pod)**。
 - 跨副本冷竞争:follower 等待室保证并发冷启动「恰好 1 次部署」;测试断言「窗口零重叠 + Pod ≤ max_pods」,多后端冷突发 NO_POD_AVAILABLE 快失败属预期。
 - cleanup 空目标必须用**无匹配 label_selector**(业务 ns 同 label 会误删真实 AgentServer;不存在 ns 在 in-cluster SA 下 403 而非空列表)。
 - 框架 `load_incluster_config` 是同步函数(已修);`kubernetes_asyncio` 仅 server extra 依赖,local 模式不得 import(判定用 `getattr(exc, "status")`)。

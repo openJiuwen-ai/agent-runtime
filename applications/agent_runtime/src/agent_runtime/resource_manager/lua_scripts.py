@@ -4,23 +4,29 @@
 约定同 SM：``ARGV[1]`` 恒为键前缀（``resource_manager:``）；返回扁平字符串数组。
 脚本清单（语义见 RM 设计 §5.1）：
 - LUA_ACQUIRE   取暖 Pod 复用（deploy_ver 过滤）/ 判 max_pods（含 deploying 占位）/ 占位
-- LUA_PLACEHOLDER  autoscale 专用占位（判 max_pods + SADD，不碰 idle 池）
+- LUA_PLACEHOLDER  autoscale 专用占位（判 max_pods + 占位，不碰 idle 池）
 - LUA_REGISTER  deploy 成功登记（info / scope:pods / pods:all，清占位；热备入 idle）
 - LUA_RELEASE   idle_consider：转 idle 暖池 + 起 pod_ttl 计时（幂等）
 - LUA_PURGE     Pod 死亡 / reclaim 后清全部 RM key（幂等）
 - LUA_DEPLOY_FOLLOWER_GATE  deploy 锁输家的等待室原子准入（ZSET+deadline，
   上限 pod_concurrency-1；先清过期成员再 ZADD 先行+超限自退——同
   LUA_WAITER_GATE 纪律，禁止先查后加）
+
+占位（deploying）与等待队列同为 **ZSET + deadline** 语义：score = 占位过期
+时间戳，闸门先 ZREMRANGEBYSCORE 清崩溃遗留（进程硬崩时进程内清理不存在，
+必须由下一次闸门/周期任务自愈），再 ZADD 先行 + ZCARD 超限自退。
 """
 
 from __future__ import annotations
 
-# Argv: prefix, scope_id, deploy_ver, deploy_token
+# Argv: prefix, scope_id, deploy_ver, deploy_token, deadline, now
 LUA_ACQUIRE = r"""
 local pfx = ARGV[1]
 local scope = ARGV[2]
 local want_ver = ARGV[3]
 local token = ARGV[4]
+local deadline = tonumber(ARGV[5])
+local now = tonumber(ARGV[6])
 
 local cfg_key = pfx .. 'resource:scope:' .. scope .. ':config'
 local max_pods = tonumber(redis.call('HGET', cfg_key, 'max_pods'))
@@ -28,8 +34,11 @@ if max_pods == nil then
   return {'no_config', '', ''}
 end
 
+local dep_key = pfx .. 'resource:scope:' .. scope .. ':deploying'
+redis.call('ZREMRANGEBYSCORE', dep_key, '-inf', now)
+
 -- 1. 取该 scope 暖 Pod 复用；跳过 deploy_ver 不匹配的（A 类变更后老版本暖 Pod
---    留在 idle 池按 pod_ttl 回收，不外发给新流量，场景 M）
+--    由 reclaim 按版本感知回收，不外发给新流量，场景 M）
 local idle_key = pfx .. 'resource:scope:' .. scope .. ':idle'
 local idle = redis.call('SMEMBERS', idle_key)
 for _, pod in ipairs(idle) do
@@ -44,38 +53,42 @@ end
 
 -- 2. 无匹配暖 Pod：判 max_pods（含 deploying 占位，防并发超配）
 local total = redis.call('ZCARD', pfx .. 'resource:scope:' .. scope .. ':pods')
-           + redis.call('SCARD', pfx .. 'resource:scope:' .. scope .. ':deploying')
+           + redis.call('ZCARD', dep_key)
 if total >= max_pods then
   return {'max_reached', '', ''}
 end
 
--- 3. 占位 deploy_token（register / 失败时清）
-redis.call('SADD', pfx .. 'resource:scope:' .. scope .. ':deploying', token)
+-- 3. 占位 deploy_token（score=deadline：崩溃遗留由下一拍闸门自清）
+redis.call('ZADD', dep_key, deadline, token)
 return {'need_deploy', '', ''}
 """
 
-# Argv: prefix, scope_id, deploy_token
-# autoscale 专用占位：判 max_pods（含 deploying 占位）+ SADD 占位，**不碰 idle 池**
+# Argv: prefix, scope_id, deploy_token, deadline, now
+# autoscale 专用占位：判 max_pods（含 deploying 占位）+ 占位，**不碰 idle 池**
 # （LUA_ACQUIRE 的 reuse 分支会把匹配暖 Pod 弹出 idle，热备补位不该消耗暖池）。
 LUA_PLACEHOLDER = r"""
 local pfx = ARGV[1]
 local scope = ARGV[2]
 local token = ARGV[3]
+local deadline = tonumber(ARGV[4])
+local now = tonumber(ARGV[5])
 local max_pods = tonumber(redis.call('HGET', pfx .. 'resource:scope:' .. scope .. ':config', 'max_pods'))
 if max_pods == nil then
   return {'no_config'}
 end
+local dep_key = pfx .. 'resource:scope:' .. scope .. ':deploying'
+redis.call('ZREMRANGEBYSCORE', dep_key, '-inf', now)
 local total = redis.call('ZCARD', pfx .. 'resource:scope:' .. scope .. ':pods')
-           + redis.call('SCARD', pfx .. 'resource:scope:' .. scope .. ':deploying')
+           + redis.call('ZCARD', dep_key)
 if total >= max_pods then
   return {'max_reached'}
 end
-redis.call('SADD', pfx .. 'resource:scope:' .. scope .. ':deploying', token)
+redis.call('ZADD', dep_key, deadline, token)
 return {'need_deploy'}
 """
 
 # Argv: prefix, pod_id, scope_id, pod_sse_url, pod_ip, namespace, deploy_ver,
-#       deploy_token, idle_flag(0/1), now
+#       deploy_token, idle_flag(0/1), now, sse_port, health_path
 LUA_REGISTER = r"""
 local pfx = ARGV[1]
 local pod = ARGV[2]
@@ -87,14 +100,19 @@ local ver = ARGV[7]
 local token = ARGV[8]
 local idle_flag = ARGV[9]
 local now = ARGV[10]
+local sse_port = ARGV[11]
+local health_path = ARGV[12]
 
+-- sse_port/health_path 随 Pod 烘焙记录：A 类变更后 scope 当前配置已换代，
+-- 健康探测（场景 N）必须用 Pod 自己的契约参数打它，否则存量老 Pod 会被
+-- 探错路径误判半死（违背日落「存量会话不受影响」承诺）
 redis.call('HSET', pfx .. 'resource:pod:' .. pod .. ':info',
            'scope_id', scope, 'pod_sse_url', url, 'pod_ip', ip,
            'namespace', ns, 'deploy_ver', ver, 'phase', 'created',
-           'created_ts', now)
+           'created_ts', now, 'sse_port', sse_port, 'health_path', health_path)
 redis.call('ZADD', pfx .. 'resource:scope:' .. scope .. ':pods', now, pod)
 redis.call('SADD', pfx .. 'resource:pods:all', pod)
-redis.call('SREM', pfx .. 'resource:scope:' .. scope .. ':deploying', token)
+redis.call('ZREM', pfx .. 'resource:scope:' .. scope .. ':deploying', token)
 if idle_flag == '1' then
   -- 热备 Pod：入 idle 池（满足不变量 5；reclaim 以 min_idle 底数保护，不起回收计时判定）
   redis.call('SADD', pfx .. 'resource:scope:' .. scope .. ':idle', pod)

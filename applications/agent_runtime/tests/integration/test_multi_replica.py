@@ -108,9 +108,9 @@ async def test_cross_replica_burst_no_over_admission(dual):
 
     assert await dual.redis.scard(
         f"session_manager:scope:{scope}:sessions") == 2
-    assert await dual.redis.scard(
+    assert await dual.redis.zcard(
         f"session_manager:scope:{scope}:waiters") == 0
-    assert await dual.redis.scard(
+    assert await dual.redis.zcard(
         f"resource_manager:resource:scope:{scope}:deploying") == 0
 
 
@@ -144,7 +144,7 @@ async def test_deploy_lock_serializes_cross_replica_deploys(dual):
     await _route(0, "s3")
     assert len(dual.k8s.deploy_log) == 2
     assert not dual.k8s.deploy_windows_overlap()   # 两次部署窗口无交集
-    assert await dual.redis.scard(
+    assert await dual.redis.zcard(
         f"resource_manager:resource:scope:{scope}:deploying") == 0
     assert await dual.redis.zcard(
         f"resource_manager:resource:scope:{scope}:deploy_followers") == 0
@@ -175,7 +175,7 @@ async def test_deploy_follower_cap_strict_fast_fail(dual):
     assert len(ok) == 2, outcomes
     assert len(fast_fail) == 2, outcomes
     assert len(dual.k8s.deploy_log) == 1          # 恰好 1 次部署
-    assert await dual.redis.scard(
+    assert await dual.redis.zcard(
         f"resource_manager:resource:scope:{scope}:deploying") == 0
     assert await dual.redis.zcard(
         f"resource_manager:resource:scope:{scope}:deploy_followers") == 0
@@ -205,7 +205,7 @@ async def test_follower_fails_when_leader_deploy_fails(dual):
     outcomes = await asyncio.gather(*[_attempt(i) for i in range(2)])
     assert all(outcome == (503, "NO_POD_AVAILABLE")
                for outcome in outcomes), outcomes
-    assert await dual.redis.scard(
+    assert await dual.redis.zcard(
         f"resource_manager:resource:scope:{scope}:deploying") == 0
     assert await dual.redis.zcard(
         f"resource_manager:resource:scope:{scope}:deploy_followers") == 0
@@ -243,7 +243,7 @@ async def test_deploy_loser_reuses_other_replicas_warm_pod(dual):
     assert status == 200, body
     assert raw["pod_id"] == "pod-other"
     assert len(dual.k8s.deploy_log) == 0                    # 本侧零部署
-    assert await dual.redis.scard(
+    assert await dual.redis.zcard(
         f"resource_manager:resource:scope:{scope}:deploying") == 0
 
 
@@ -271,7 +271,7 @@ async def test_waiter_on_a_woken_by_touch_on_b(dual):
     t0 = _time.monotonic()
     waiter = asyncio.create_task(dual.post(0, "route", session_id="s2"))
     await asyncio.sleep(0.3)                    # 让 s2 入队并订阅
-    assert await dual.redis.scard(
+    assert await dual.redis.zcard(
         f"session_manager:scope:{scope}:waiters") == 1
 
     past = now_ts() - 1
@@ -289,7 +289,7 @@ async def test_waiter_on_a_woken_by_touch_on_b(dual):
 
     assert await dual.redis.scard(
         f"session_manager:scope:{scope}:sessions") == 1
-    assert await dual.redis.scard(
+    assert await dual.redis.zcard(
         f"session_manager:scope:{scope}:waiters") == 0
 
 

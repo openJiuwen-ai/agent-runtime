@@ -40,16 +40,18 @@
 → resolve(user_id, group_id, bot_id)(config_store:读路由快照 first-fit 匹配)
    返回 (scope_id, template);无匹配 → ConfigNotFound(503)
 → 循环 { LUA_ROUTE_PLACE 原子仲裁 → (action, pod_id):
-     refresh/placed → 读 pod:info sse_url 返回(缺失=极端竞态被清,continue 重跑)
+     refresh/placed → 读 pod:info sse_url 返回(缺失=极端竞态被清,continue 重跑;
+                     refresh 分支有 info 存活守卫,下一轮惰性回收死绑定重新放置,不构成自旋)
      scope_full     → _wait_for_capacity(场景 F)后重跑
      need_acquire   → rm_facade.acquire(扩+1)→ state.register_pod → 重跑(新 Pod 必被 first-fit 选中) }
-finally: 若仍在等待队列 → remove_waiter(异常路径出队)
 ```
 
 `_wait_for_capacity`(场景 F 有界等待):
 - `max_waiters = 2 * scope_concurrency`;过 deadline(`scope_full_timeout`)→ 504 ScopeFullTimeout。
-- **入队只走 `LUA_WAITER_GATE` 原子闸门**(SADD 先行+超限自退);满 → 503 ScopeQueueFull 快失败。
-- 订阅 `scope:{sid}:free` PubSub + ≤500ms 安全轮询双保险(兜 publish 早于 subscribe 的丢失);收到信号即出队重跑 Lua——**原子 admit 是唯一仲裁,败者重 wait**。
+- **入队只走 `LUA_WAITER_GATE` 原子闸门**(ZSET+deadline:先清过期成员再 ZADD 先行+超限自退);满 → 503 ScopeQueueFull 快失败。
+- **等待者成员资格全程保持**(入队一次、退出删一次;中途删/加的空窗会让 max_waiters 上限漏收)。
+- 订阅 `scope:{sid}:free` PubSub + ≤500ms 安全轮询双保险(兜 publish 早于 subscribe 的丢失):
+  收到信号 → 返回重跑;**轮询超时无信号 → 经 re_arbitrate 就地重跑 ROUTE_PLACE**,非 scope_full 即返回——原子 admit 是唯一仲裁,丢信号后 ~0.5s 内仍能拿到空闲额度而非空等满 30s。
 
 `_acquire_pod`:`MaxPodsReached`/`DeployFailed` → 映射 `NoPodAvailable(503, retry_after=1)`。
 
@@ -65,7 +67,7 @@ finally: 若仍在等待队列 → remove_waiter(异常路径出队)
 | `scope:{sid}:sessions` | SET | 活跃 session;**SCARD = scope_concurrency 闸门** |
 | `scope:{sid}:pods` | ZSET | first-fit 候选(score=接入序;ZREM 即退出候选——软摘除/idle 通知都用它) |
 | `scope:{sid}:pod_seq` | STRING | 单调递增,pods 的 score 来源 |
-| `scope:{sid}:waiters` | SET | 等待队列(LUA_WAITER_GATE 原子进出) |
+| `scope:{sid}:waiters` | ZSET | 等待队列(request_id → deadline 秒级时间戳;LUA_WAITER_GATE 原子进出;score=deadline 供闸门清理崩溃遗留——等待进程消失后名额不永久占用) |
 | `scope:{sid}:free` | PubSub | 额度释放信号(EVICT 发布/route 订阅) |
 | `pod:{scope}:{pod}:sessions` | SET | per-Pod 会话;**SCARD < pod_concurrency = per-Pod 容量闸门(SM 侧,RM 不强制)** |
 | `pod:{scope}:{pod}:info` | HASH | sse_url / deploy_ver |
@@ -84,13 +86,13 @@ finally: 若仍在等待队列 → remove_waiter(异常路径出队)
 
 | 脚本 | 一句话职责 |
 |---|---|
-| `LUA_ROUTE_PLACE` | route 原子核心:亲和续期→惰性回收旧绑定→scope 闸门(SCARD)→first-fit(接入序)→达 max_pods 则 scope_full / 否则 need_acquire→原子提交四处同写(复用时清 idle_notified) |
+| `LUA_ROUTE_PLACE` | route 原子核心:亲和续期(**前提 pod:info 存在**——注册已被清的绑定判死,惰性回收后走重新放置;否则 notify_pod_dead 窗口内新落的会话会无限自旋且每圈续期 expiry)→惰性回收旧绑定→scope 闸门(SCARD)→first-fit(接入序)→达 max_pods 则 scope_full / 否则 need_acquire→原子提交四处同写(复用时清 idle_notified) |
 | `LUA_EVICT` | session 移除**唯一原语**(四处同删 + PUBLISH free 唤醒等待者;返回 scope/pod/remaining;幂等 noop) |
 | `LUA_TOUCH` | 保活续期;已过期当场惰性 evict;ttl 就地读 session HASH(不依赖 scope:config) |
 | `LUA_SWEEP_IDLE_NOTIFY` | 空 Pod 判定(SCARD==0)+ 60s NX 去重 + ZREM 退出候选(堵 reclaim 窗口内 route 直选的竞态 A) |
 | `LUA_REGISTER_POD` | acquire 成功登记:三处注册(scope:pods/pod:info/pods:registered)+ 接入序 + pods:{pod}:scopes |
 | `LUA_CLEANUP_POD` | notify_pod_dead 清该 (scope,pod) 全部注册(会话 evict 由调用方先行) |
-| `LUA_WAITER_GATE` | 等待队列原子入队(SADD 先行 + SCARD 超限自退)——**禁止改回「先 SCARD 再 SADD」**(M6 验收发现的并发超收事故) |
+| `LUA_WAITER_GATE` | 等待队列原子入队(ZREMRANGEBYSCORE 清过期 + ZADD 先行 + ZCARD 超限自退)——**禁止改回「先查后加」**(M6 验收发现的并发超收事故);ZSET+deadline 使崩溃遗留名额自清 |
 
 约定:脚本不传 KEYS,`ARGV[1]`=键前缀,键在脚本内拼;返回扁平字符串数组(`SessionState.eval` 统一转 str)。
 
@@ -117,19 +119,26 @@ finally: 若仍在等待队列 → remove_waiter(异常路径出队)
   scope_id 字符集/index 非真 int(拒 bool)/引用不在本批模板集/routing_rules 非字符串
   (含旧结构化 list 格式)/表达式语法错误(未知字段、裸 not、悬空括号、未引号值、
   超长 >8000 或嵌套 >32)/同批 scope_id 重复;sidecars 严格校验(template_from_payload
-  循环后调 sidecars.validate_sidecars:单项规范形 + 撞主容器名/撞 agent 端口;空列表→None)
+  循环后调 sidecars.validate_sidecars:单项规范形 + 撞主容器名/撞 agent 端口;空列表→None);
+  int 字段严格校验(畸形 "abc" → 400,不裸抛 ValueError 成 500);
+  策略字段下界(cc/pc/ttl ≥1、min_idle ≥0、sse_port 域)——0 值是拒绝服务配置
   缺通配 scope(无空表达式项)→ 仅 WARNING 放行(响应 wildcard_present:false)
 lock:config_sync 串行化(忙→409 CONFIG_SYNC_BUSY,TTL 60)
 → 读 DB 旧态(templates + scopes)
-→ diff:模板 changed_ids(_diff_class 沿用)/ 引用切换 ref_switched;
-  sunset_scopes = 有效模板 deploy_ver 前后不同(模板 A 类 或 scope 换引用且版本不同)的存活 scope
-→ 日落中间态检查(受影响 scope 有「在 pods:registered 不在候选集」的 Pod → 409;★先于写库,拒绝时零副作用)
+→ diff:模板 changed_ids(_diff_class 沿用)/ 引用切换 ref_switched → affected
+→ 日落中间态检查(★先于写库,拒绝时零副作用;★按版本判定:registered∖candidates
+  且 deploy_ver ≠ 新版本的才是真日落残留——该集合差同时是 idle_consider 合法
+  中间态,按形状判定会误拒正常空闲 Pod,min_idle≥1 时变配置面永久 409)
 → 写 DB(upsert incoming + delete 消失项;红线:任一失败立即中止,不 SET 快照、不推送)
 → rebuild_snapshot()(DB 读回 → 原子 SET;B 类立即生效由此完成)
 → eager 预热:每个存活 scope 推 push(sid, pool_config, deploy_subset)——必须带 pod_spec
   (RM 才落 pod_spec_json/deploy_ver;autoscale 无请求预热 min_idle 的依赖)
-→ A 类日落:sunset_scopes 逐个 _soft_remove_stale_pods(ZREM 老版本 Pod 出候选)
-→ 删除处理:消失 scope 推 push(sid, {**旧模板池参数, min_idle_pods:0}, None)——停预热自然排空
+→ 候选集版本收敛(声明式,非 one-shot):对**每个**存活 scope 把 deploy_ver ≠ 当前版本的
+  Pod ZREM 出候选——不由 diff 驱动,写 DB 后中途失败/同载荷重试(diff==none)也每拍
+  重算,旧版 Pod 不会无限期接新流量
+→ 删除处理:目标集 = **RM 已知 scope(known_rm_scopes 回调)∪ DB 旧 scope** − 本批;
+  推 push(sid, {**旧模板池参数, min_idle_pods:0}, None)——RM config 键是幻影预热的
+  真源,只看 DB(删行后失忆)的话一次推送失败后 min_idle=0 永远补不上
 → 响应 {ok, templates_synced/deleted, scopes_synced/deleted, affected_scopes, wildcard_present}
 ```
 
@@ -148,7 +157,7 @@ lock:config_sync 串行化(忙→409 CONFIG_SYNC_BUSY,TTL 60)
 
 ## models.py
 
-- `Template`:template 行业务视图。派生:`max_pods = ⌈scope_concurrency/pod_concurrency⌉`(**派生值,不存储,不配置**);`deploy_subset()`=acquire 下发 RM 的 pod_spec;`deploy_ver()`=A 类指纹;`pool_config()`={min_idle_pods, max_pods, pod_ttl, pod_concurrency}(pod_concurrency 仅供 RM follower 等待室推导上限 pc-1)。
+- `Template`:template 行业务视图。派生:`max_pods = ⌈scope_concurrency/pod_concurrency⌉`(**派生值,不存储,不配置**);`deploy_subset()`=acquire 下发 RM 的 pod_spec;`deploy_ver()`=A 类指纹;`pool_config()`={min_idle_pods, max_pods, pod_ttl, pod_concurrency}(pod_concurrency 仅供 RM follower 等待室推导上限 pc-1)。`__post_init__` 归一:sse_path/health_path 补前导 `/`(缺失会拼出 `http://ip:8080api/...` 非法 URL→健康 Pod 被探死循环)、sidecars/mounts 空归一 None(指纹不变式)。
 - scope 定义(`RoutingScopeDef`/表达式树)在 `routing.py`,不再有 ScopeConfig(快照取代 per-scope 缓存)。
 
 ## 高频踩点

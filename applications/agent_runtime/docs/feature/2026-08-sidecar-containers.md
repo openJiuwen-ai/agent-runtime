@@ -81,7 +81,8 @@ ALTER TABLE service_config_template ADD COLUMN agent_pvc_mounts JSON NULL;
   - 手工验证:curl config_sync 下发**兜底 scope(空 routing_rules)+ sidecar 模板**(`min_idle_pods=1`)→ autoscale 无请求预热拉起 Pod `agentserver-box-*`,**2 容器(`agent`+`jiuwenbox`)2/2 Running 零重启**,sidecar 渲染含无名端口 8096/TCP 探针/env 注入;`route` 经兜底 scope 复用该 Pod 返回 `pod_sse_url`。
   - 全量冒烟:**78/78 PASS**(75 基础 + 3 sidecar 阶段)。首轮 74/78,4 失败复盘:①DB 落库计数 [5,5] 硬编码、②D-不变量5 `len(reg)==2`、③K-notify `len(reg)==0` 未做 `--with-sidecar` 感知(box Pod 加入注册表),④**既有缺陷**:表达式 or 支检查原在阶段 2 尾,彼时 e2e-main 已被 s1–s3 占满(cc=3),or 支 route 必然排队 504——原断言仅在「部署慢、会话先过期」时序下碰巧 200,镜像预分发后的快跑必现失败(与 sidecar 无关,系 routing_rules 表达式改动引入的时序脆弱点);修复=计数动态化/sidecar 感知 + tpl-box `pod_ttl=3600` 长存消除中途回收竞态 + or 支检查移至新增阶段 12b(清场后确定性 200)。
   - 替身镜像真环境缺陷(已修进脚本):同 Pod 双 influxdb 实例抢绑 RPC 端口 `127.0.0.1:8088` → sidecar CrashLoop;`_sidecar_standin` 补 `INFLUXDB_BIND_ADDRESS=:8098`。
-- 遗留:真 jiuwenbox 镜像(privileged + cgroup hostPath)验收待镜像可用后以 `--sidecar-image` 补跑;多副本 e2e(`e2e_multi_replica.py`)未在本轮范围。
+- 遗留:多副本 e2e(`e2e_multi_replica.py`)未在本轮范围。
+- **真 jiuwenbox 镜像闭环(2026-08-28)**:`jiuwenclaw-sandbox-amd64:0.0.6s` 手工验证(Pod 2/2 Running,特权/caps/seccomp/apparmor 全落地,cgroup hostPath 可见 cgroup.controllers,PVC 容器内写入节点后端落盘,agent 容器经 `127.0.0.1:8321` 得到 MCP 服务 HTTP 应答)+ 全量冒烟 **80/80 PASS**(`--sidecar-image` 真镜像模式:sidecar 切完整 jiuwenbox 规格,特权四件套 + cgroup hostPath + 8321)。**关键契约:该版本 `JIUWENBOX_LISTEN` 只接受 `http://`/`unix://` scheme,`tcp://`(EE 旧默认)启动即拒——真环境实测教训**。
 - PVC 真环境补验(同日完成):本环境 nfs-provisioner 不供给(PVC 挂起无事件),改用**手动 hostPath PV + 空 storageClassName PVC** 绑定(nodeAffinity 指向可调度节点 0001——master 带 NoSchedule 污点,PV 亲和误指 master 时 Pod 永久 Pending「volume node affinity conflict」;PV nodeAffinity **不可变**,改亲和须删 PV/PVC 重建);全量样例(主容器 cm/hp/pvc + sidecar cm/hp/pvc 六挂载)Pod 2/2 Running,双容器 ConfigMap 内容可读、双 PVC 容器内写入在节点后端目录真实落盘。
 
 ## 挂载增量验证(2026-08-27 同日真环境)

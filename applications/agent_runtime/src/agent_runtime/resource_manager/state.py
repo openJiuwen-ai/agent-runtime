@@ -12,12 +12,16 @@ import logging
 import time
 from typing import Any
 
-from ..util import s, to_int
+from ..util import now_ts, s, to_int
 from . import lua_scripts as lua
 
 KEY_PREFIX = "resource_manager"
 
 logger = logging.getLogger("agent_runtime.resource_manager")
+
+# deploying 占位 deadline（对齐 orchestrator 的 DEPLOY_LOCK_TTL=360：
+# 盖住 ready_timeout 300s + 余量；崩溃遗留经此窗口自愈）
+DEPLOY_TOKEN_TTL = 360
 
 # 单次 Lua eval 超过该时长告警（即 Redis 延迟探针；正常 <1ms）
 _SLOW_EVAL_MS = 200.0
@@ -51,7 +55,11 @@ class RMKeys:
         return f"{self.prefix}:resource:scope:{scope_id}:config"
 
     def scope_deploying(self, scope_id: str) -> str:
-        """SET: deploy 占位 token（计入 max_pods，防并发超配）。"""
+        """ZSET: deploy 占位 token → deadline（秒级时间戳）。
+
+        计入 max_pods（防并发超配）；score=deadline 供闸门原子清理崩溃遗留
+        （进程硬崩后进程内清理不存在，占位不得永久虚占 max_pods）。
+        """
         return f"{self.prefix}:resource:scope:{scope_id}:deploying"
 
     def scope_deploy_followers(self, scope_id: str) -> str:
@@ -142,8 +150,14 @@ class ResourceState:
         """LUA_ACQUIRE：返回 (action, pod_id, pod_sse_url)。
 
         action ∈ reuse（取暖 Pod）/ need_deploy（已占位）/ max_reached / no_config。
+        占位 deadline = now + DEPLOY_TOKEN_TTL（对齐 deploy 锁窗口，崩溃遗留
+        由下一次闸门 ZREMRANGEBYSCORE 自清）。
         """
-        ret = await self.eval(lua.LUA_ACQUIRE, scope_id, deploy_ver, deploy_token)
+        now = now_ts()
+        ret = await self.eval(
+            lua.LUA_ACQUIRE, scope_id, deploy_ver, deploy_token,
+            now + DEPLOY_TOKEN_TTL, now,
+        )
         return (
             ret[0] if ret else "no_config",
             ret[1] if len(ret) > 1 else "",
@@ -161,11 +175,19 @@ class ResourceState:
         deploy_token: str,
         idle_flag: bool,
         now: int,
+        *,
+        sse_port: int | None = None,
+        health_path: str = "",
     ) -> None:
-        """LUA_REGISTER：deploy 成功后登记（清 deploying 占位；idle_flag=热备入 idle 池）。"""
+        """LUA_REGISTER：deploy 成功后登记（清 deploying 占位；idle_flag=热备入 idle 池）。
+
+        sse_port/health_path 随 Pod 烘焙进 info——健康探测按 Pod 自己的契约
+        参数进行（A 类变更后 scope 当前配置已换代，不能拿新参数探老 Pod）。
+        """
         await self.eval(
             lua.LUA_REGISTER, pod_id, scope_id, pod_sse_url, pod_ip,
             namespace, deploy_ver, deploy_token, "1" if idle_flag else "0", now,
+            int(sse_port) if sse_port else "", health_path,
         )
 
     async def release(self, pod_id: str, scope_id: str, now: int) -> bool:
@@ -179,16 +201,23 @@ class ResourceState:
         return ret[1] if len(ret) > 1 else ""
 
     async def deploy_placeholder(self, scope_id: str, deploy_token: str) -> str:
-        """LUA_PLACEHOLDER：autoscale 专用占位（不碰 idle 池）。
-
-        返回 need_deploy / max_reached / no_config。
-        """
-        ret = await self.eval(lua.LUA_PLACEHOLDER, scope_id, deploy_token)
+        """LUA_PLACEHOLDER：autoscale 专用占位（不碰 idle 池；deadline 同 acquire）。"""
+        now = now_ts()
+        ret = await self.eval(
+            lua.LUA_PLACEHOLDER, scope_id, deploy_token,
+            now + DEPLOY_TOKEN_TTL, now,
+        )
         return ret[0] if ret else "no_config"
 
     async def clear_deploy_token(self, scope_id: str, token: str) -> None:
         """deploy 失败/放弃时清占位（错误路径必须清，防 max_pods 永久虚高）。"""
-        await self.redis.srem(self.k.scope_deploying(scope_id), token)
+        await self.redis.zrem(self.k.scope_deploying(scope_id), token)
+
+    async def reap_expired_deploying(self, scope_id: str) -> int:
+        """清过期的 deploying 占位（score ≤ now）：崩溃遗留自愈，返回清除数。"""
+        return to_int(await self.redis.zremrangebyscore(
+            self.k.scope_deploying(scope_id), "-inf", now_ts()
+        ))
 
     # -------------------------------------------------------------- follower 等待室
 
@@ -255,7 +284,7 @@ class ResourceState:
         return [s(m) for m in members]
 
     async def deploying_count(self, scope_id: str) -> int:
-        return to_int(await self.redis.scard(self.k.scope_deploying(scope_id)))
+        return to_int(await self.redis.zcard(self.k.scope_deploying(scope_id)))
 
     async def known_scope_ids(self) -> list[str]:
         """扫全部 scope:config 键（autoscale / reclaim 的 per-scope 遍历源）。"""

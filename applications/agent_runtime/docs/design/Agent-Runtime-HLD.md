@@ -378,7 +378,7 @@ flowchart TB
 | `scope:{scope_id}:sessions` | SET | 该 scope 活跃 session_id | **SCARD = scope 活跃数 = scope_concurrency 闸门** |
 | `scope:{scope_id}:pods` | ZSET | pod_id(score=接入序) | 该 scope 的 Pod 候选集,first-fit 按序遍历;sweeper ZREM 使 Pod 退出候选 |
 | `routing:snapshot` | STRING | 全部 scopes(含规则/索引)+ templates 的 JSON | **路由快照**:resolve 的唯一读源(route 每请求 1 GET,进程内按原文 memo 免重复解析);config_sync 写 DB 后原子 SET 覆盖,缺失/损坏由首次 resolve 从 DB 重建 |
-| `scope:{scope_id}:waiters` | SET | 等待中的 request_id | **等待队列上限 max_waiters**(满了快失败 503;入队经 `LUA_WAITER_GATE` 原子闸门:SADD 先行 + 超限自退,并发不超收,稳态 SCARD ≤ max_waiters) |
+| `scope:{scope_id}:waiters` | ZSET | 等待中的 request_id → deadline(秒级时间戳) | **等待队列上限 max_waiters**(满了快失败 503;入队经 `LUA_WAITER_GATE` 原子闸门:先按 deadline 清崩溃遗留,再 ZADD 先行 + 超限自退,并发不超收,稳态 ZCARD ≤ max_waiters;score=deadline 使等待进程崩溃后名额自清不永久占用) |
 | `scope:{scope_id}:free` | PubSub | —(无持久值) | 额度释放信号(evict PUBLISH、阻塞 route SUBSCRIBE) |
 | `pod:{scope_id}:{pod_id}:sessions` | SET | 该(scope, Pod)上的 session_id | **SCARD < pod_concurrency = Pod 容量闸门** |
 | `pod:{scope_id}:{pod_id}:info` | HASH | sse_url / deploy_ver | Pod 的 SSE 地址(route 返回它给 gateway);`deploy_ver` = deploy 子集指纹(config_sync 日落判定用) |
@@ -397,7 +397,7 @@ flowchart TB
         SP[("resource:scope:{scope}:pods<br/>ZSET: pod_id → 创建序<br/>(该 scope 全部 Pod = in_use ∪ idle)")]:::zset
         SI[("resource:scope:{scope}:idle<br/>SET: idle pod_id<br/>SCARD = min_idle 计数")]:::set
         SCFG[("resource:scope:{scope}:config<br/>HASH: min_idle_pods / max_pods / pod_ttl")]:::hash
-        SD[("resource:scope:{scope}:deploying<br/>SET: deploy 占位 token<br/>(计入 max_pods)")]:::str
+        SD[("resource:scope:{scope}:deploying<br/>ZSET: deploy 占位 token → deadline<br/>(计入 max_pods;崩溃遗留按 deadline 自清)")]:::str
         SDF[("resource:scope:{scope}:deploy_followers<br/>ZSET: request_id → deadline<br/>follower 等待室(≤ pc-1)")]:::zset
     end
 
@@ -430,7 +430,7 @@ flowchart TB
 | `resource:scope:{scope_id}:pods` | ZSET | pod_id(score=创建序) | 该 scope 全部 Pod(in_use ∪ idle);`ZCARD` 参与 `max_pods` 判定 |
 | `resource:scope:{scope_id}:idle` | SET | idle 的 pod_id | **SCARD = idle Pod 数**(autoscale / reclaim 闸门;acquire 从此取暖 Pod) |
 | `resource:scope:{scope_id}:config` | HASH | min_idle_pods / max_pods / pod_ttl / pod_concurrency / deploy_ver / pod_spec_json | config_sync 对**每个存活 scope 主动写入/刷新**(带 pod_spec——无请求 scope 的 autoscale 预热依赖 pod_spec_json);首 acquire 也会兜底写入;被删 scope 推 `min_idle=0` 停预热自然排空 |
-| `resource:scope:{scope_id}:deploying` | SET | deploy 占位 token(uuid) | 计入 `max_pods` 判定(防并发 deploy 超配);register / 失败时清 |
+| `resource:scope:{scope_id}:deploying` | ZSET | deploy 占位 token(uuid) → deadline(秒级时间戳) | 计入 `max_pods` 判定(防并发 deploy 超配);register / 失败时清;score=deadline 供闸门/autoscale 原子清崩溃遗留(硬崩后占位不永久虚占容量) |
 | `resource:scope:{scope_id}:deploy_followers` | ZSET | deploy 锁输家的 request_id → deadline | follower 等待室(M8):`ZCARD ≤ pod_concurrency-1`;检测 leader Pod 注册即复用;score=deadline 供闸门清崩溃遗留 |
 | `resource:pod:{pod_id}:info` | HASH | scope_id / pod_sse_url / pod_ip / namespace / phase / created_ts / deploy_ver | Pod 元信息;`scope_id` 标识所属池;`deploy_ver` 供 acquire 版本过滤(只发当前版本暖 Pod) |
 | `resource:pod:{pod_id}:idle_since` | STRING | idle 起始时间戳 | reclaim 计时(aged ≥ `pod_ttl` 回收) |
@@ -938,7 +938,7 @@ sequenceDiagram
 #### 场景 N:半死 Pod 检测 —— AgentServer 健康 SSE 端点 + RM 周期探测
 **前置**:`pod_2` 在 K8s 侧 Running/Ready,但其 SSE 服务 hang 死 / 不响应(进程死锁、事件循环阻塞、连接堆积)。**K8s Watch 看不到这种半死**——bypass 架构下 SM/gateway 直连数据面,控制面里只有 RM 管物理面,因此**半死检测归 RM**。
 
-**机制**:AgentServer 在 SSE 端口上提供**健康检查端点**(`GET /health`,固定约定,复用 `sse_port`);RM 的后台探测任务(复用死 Pod 探测的选主,见场景 J)对 `pods:all` 里每个 Pod **周期探测**(默认 10s,与轮询同频)该端点——**连续失败达阈值(默认 2 次)判半死,按死 Pod 处理**:`LUA_PURGE` + K8s `delete` + `sm_facade.notify_pod_dead`(触发场景 G 清洗)。连续失败阈值防瞬时抖动误杀;探测恢复则无动作(半死期间该 Pod 本就不该接新流量,由 gateway 侧超时兜底)。
+**机制**:AgentServer 在 SSE 端口上提供**健康检查端点**(路径 = 模板 `health_path`,默认 `/health`,真 AgentServer 为 `/api/v1/health`;复用 `sse_port`);RM 的后台探测任务(复用死 Pod 探测的选主,见场景 J)对 `pods:all` 里每个 Pod **周期探测**(默认 10s,与轮询同频)该端点——**探测参数取 Pod 自己 REGISTER 时烘焙的 sse_port/health_path**(存 `pod:info`;A 类变更后 scope 当前配置已换代,拿新参数探老 Pod 会误杀带活跃会话的存量 Pod,违背日落承诺;旧 Pod 无字段时回退 scope 当前配置)——**连续失败达阈值(默认 2 次)判半死,按死 Pod 处理**:`LUA_PURGE` + K8s `delete` + `sm_facade.notify_pod_dead`(触发场景 G 清洗)。连续失败阈值防瞬时抖动误杀;探测恢复则无动作(半死期间该 Pod 本就不该接新流量,由 gateway 侧超时兜底)。
 
 ```mermaid
 sequenceDiagram
@@ -946,7 +946,7 @@ sequenceDiagram
     participant Pod2 as Pod(pod_2, Running 但 SSE hang)
     participant R as Redis
     participant SM as Session Manager
-    Note over RM: 每 10s 对 pods:all 逐个探测 GET http://pod_ip:sse_port/health
+    Note over RM: 每 10s 对 pods:all 逐个探测 GET http://pod_ip:sse_port{health_path}(按 Pod 自己烘焙的参数)
     RM->>Pod2: 健康探测(第 1 次)
     Pod2--xRM: 超时 / 无响应
     RM->>Pod2: 健康探测(第 2 次,隔 10s)
