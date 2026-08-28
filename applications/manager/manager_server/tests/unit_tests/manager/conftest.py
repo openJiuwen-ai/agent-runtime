@@ -203,7 +203,9 @@ _GATEWAY_REQUEST_MODULES = (
     "manager_server.core.config_effective_policy.config_effective_service_policy",
     "manager_server.core.config_effective_policy.config_default_template_mapping",
     "manager_server.core.template.push_template_to_gateway",
+    "manager_server.core.template.push_agent_template_to_gateway",
     "manager_server.core.instance.instance_data_lifecycle",
+    "manager_server.core.instance_resource.instance_agent_resource_service",
 )
 
 

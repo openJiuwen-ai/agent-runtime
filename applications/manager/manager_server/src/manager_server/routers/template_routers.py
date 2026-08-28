@@ -24,7 +24,6 @@ from manager_server.core.template.skill_whitelist_template import (
     SkillWhitelistTemplateService,
 )
 from manager_server.infrastructure.db import get_db_handler
-from manager_server.routers.deps import require_admin
 from manager_server.schemas.common_schemas import ResponseModel
 from manager_server.schemas.template_schemas import (
     AgentTemplateCreateBody,
@@ -78,7 +77,7 @@ def _agent_template_svc(handler: DBHandler) -> AgentTemplateService:
 # --- agent_template ---
 
 
-@templates_router.get("/agent-templates/", response_model=ResponseModel, dependencies=[Depends(require_admin)])
+@templates_router.get("/agent-templates/", response_model=ResponseModel)
 async def list_agent_templates(
     handler: Annotated[DBHandler, Depends(get_db_handler)],
     query: Annotated[AgentTemplateListQuery, Query()],
@@ -86,7 +85,7 @@ async def list_agent_templates(
     return ResponseModel(code=200, message="success", data=await _agent_template_svc(handler).list(query))
 
 
-@templates_router.post("/agent-templates/", response_model=ResponseModel, dependencies=[Depends(require_admin)])
+@templates_router.post("/agent-templates/", response_model=ResponseModel)
 async def create_agent_template(
     body: AgentTemplateCreateBody,
     handler: Annotated[DBHandler, Depends(get_db_handler)],
@@ -100,7 +99,6 @@ async def create_agent_template(
 @templates_router.get(
     "/agent-templates/{template_id}",
     response_model=ResponseModel,
-    dependencies=[Depends(require_admin)],
 )
 async def get_agent_template(
     template_id: TemplateIdPath,
@@ -115,7 +113,6 @@ async def get_agent_template(
 @templates_router.patch(
     "/agent-templates/{template_id}",
     response_model=ResponseModel,
-    dependencies=[Depends(require_admin)],
 )
 async def update_agent_template(
     template_id: TemplateIdPath,
@@ -131,7 +128,6 @@ async def update_agent_template(
 @templates_router.delete(
     "/agent-templates/{template_id}",
     response_model=ResponseModel,
-    dependencies=[Depends(require_admin)],
 )
 async def delete_agent_template(
     template_id: TemplateIdPath,

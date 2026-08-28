@@ -30,7 +30,11 @@ from manager_server.models.config_effective_policy_models import (
 from manager_server.models.jid_template_ref_models import (
     JID_TEMPLATE_REF_TABLE_DEF,
 )
+from manager_server.models.instance_resource_models import (
+    INSTANCE_AGENT_RESOURCE_TABLE_DEF,
+)
 from manager_server.models.template_models import (
+    AGENT_TEMPLATE_TABLE_DEF,
     EMBEDDING_TEMPLATE_TABLE_DEF,
     EXTENSION_CONFIG_TEMPLATE_TABLE_DEF,
     MODEL_TEMPLATE_TABLE_DEF,
@@ -274,6 +278,42 @@ def extract_template_ids_from_template_ref(
     return {tid for slot, tid in pairs if slot in slot_keys}
 
 
+async def _count_slot_pairs_from_agent_resources(
+    handler: DBHandler,
+    jiuwenclaw_id: str,
+) -> Counter[tuple[str, str]]:
+    """每个 ``resource_id`` 对其 ``agent_template.template_ref`` 贡献一组 slot 引用。"""
+    counter: Counter[tuple[str, str]] = Counter()
+    rows = await handler.list_records(
+        INSTANCE_AGENT_RESOURCE_TABLE_DEF.table_name,
+        {"jiuwenclaw_id": jiuwenclaw_id},
+        limit=_LIST_ALL_CAP,
+        offset=0,
+    )
+    seen: set[tuple[str, str]] = set()
+    for row in rows:
+        template_id = str(getattr(row, "ref_template_id", "") or "").strip()
+        resource_id = str(getattr(row, "resource_id", "") or "").strip()
+        if not template_id or not resource_id:
+            continue
+        dedupe_key = (template_id, resource_id)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        tpl_row = await handler.get(
+            AGENT_TEMPLATE_TABLE_DEF.table_name,
+            {"template_id": template_id},
+        )
+        if tpl_row is None:
+            continue
+        counter.update(
+            slot_template_pairs_from_template_ref(
+                read_template_ref_from_row(tpl_row)
+            )
+        )
+    return counter
+
+
 async def _count_slot_pairs_for_gateway(
     handler: DBHandler,
     jiuwenclaw_id: str,
@@ -305,6 +345,7 @@ async def _count_slot_pairs_for_gateway(
                     read_template_ref_from_row(row)
                 )
             )
+    counter.update(await _count_slot_pairs_from_agent_resources(handler, jiuwenclaw_id))
     return counter
 
 
