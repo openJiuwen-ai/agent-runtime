@@ -110,6 +110,12 @@ class Settings(BaseSettings):
     # ---- 本实例标识：仅用户态 /user-console/agents 用它把可见 agent 限定到"当前 gateway"。
     # 每命名空间部署时与本命名空间 gateway 同值注入；管理端接口不用它(实例由路径显式指定)。
     jiuwenclaw_id: str = Field(default="", validation_alias="JIUWENCLAW_ID")
+    agent_runtime_endpoint: str = Field(
+        default="", validation_alias="AGENT_RUNTIME_ENDPOINT"
+    )
+    agent_runtime_sync_timeout: float = Field(
+        default=10.0, validation_alias="AGENT_RUNTIME_SYNC_TIMEOUT"
+    )
 
     @property
     def host(self) -> str:

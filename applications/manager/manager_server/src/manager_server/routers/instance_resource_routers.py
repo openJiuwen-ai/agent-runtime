@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 
 from manager_server.core.instance_resource import InstanceAgentResourceService, InstanceServiceResourceService
+from manager_server.core.instance_resource.runtime_config_sync import sync_runtime_config
 from manager_server.infrastructure.db import get_db_handler
 from manager_server.infrastructure.jiuwenclaw_id import validate_jiuwenclaw_id
 from manager_server.routers.deps import require_admin
@@ -76,19 +77,14 @@ async def create_instance_agent_resource(
 ):
     jid = await _jid(handler, jiuwenclaw_id)
     try:
-        return _ok({
-            "items": await InstanceAgentResourceService(handler).create_resource(
-                jid,
-                body.ref_template_id,
-                body.match_exprs,
-                resource_name=body.resource_name,
-                resource_desc=body.resource_desc,
-                granted_by=_granted_by(user),
-                enabled=body.enabled,
-                expires_at=body.expires_at,
-                data=body.data,
-            )
-        })
+        items = await InstanceAgentResourceService(handler).create_resource(
+            jid, body.ref_template_id, body.match_exprs,
+            resource_name=body.resource_name, resource_desc=body.resource_desc,
+            granted_by=_granted_by(user), enabled=body.enabled,
+            expires_at=body.expires_at, data=body.data,
+        )
+        await sync_runtime_config(handler, jid)
+        return _ok({"items": items})
     except (ValueError, LookupError) as e:
         raise _map_write_error(e) from e
 
@@ -106,19 +102,14 @@ async def update_instance_agent_resource(
 ):
     jid = await _jid(handler, jiuwenclaw_id)
     try:
-        return _ok({
-            "items": await InstanceAgentResourceService(handler).replace_resource(
-                jid,
-                resource_id,
-                body.match_exprs,
-                resource_name=body.resource_name,
-                resource_desc=body.resource_desc,
-                granted_by=_granted_by(user),
-                enabled=body.enabled,
-                expires_at=body.expires_at,
-                data=body.data,
-            )
-        })
+        items = await InstanceAgentResourceService(handler).replace_resource(
+            jid, resource_id, body.match_exprs,
+            resource_name=body.resource_name, resource_desc=body.resource_desc,
+            granted_by=_granted_by(user), enabled=body.enabled,
+            expires_at=body.expires_at, data=body.data,
+        )
+        await sync_runtime_config(handler, jid)
+        return _ok({"items": items})
     except (ValueError, LookupError) as e:
         raise _map_write_error(e) from e
 
@@ -132,6 +123,7 @@ async def remove_instance_agent_resource(jiuwenclaw_id: str, resource_id: str, h
     removed = await InstanceAgentResourceService(handler).remove_resource(jid, resource_id)
     if not removed:
         raise HTTPException(status_code=404, detail="instance agent resource not found")
+    await sync_runtime_config(handler, jid)
     return _ok({"removed": True})
 
 
@@ -166,20 +158,14 @@ async def create_instance_service_resource(
 ):
     jid = await _jid(handler, jiuwenclaw_id)
     try:
-        return _ok({
-            "items": await InstanceServiceResourceService(handler).create_resource(
-                jid,
-                body.ref_template_id,
-                body.match_exprs,
-                resource_name=body.resource_name,
-                resource_desc=body.resource_desc,
-                priority=body.priority,
-                granted_by=_granted_by(user),
-                enabled=body.enabled,
-                expires_at=body.expires_at,
-                data=body.data,
-            )
-        })
+        items = await InstanceServiceResourceService(handler).create_resource(
+            jid, body.ref_template_id, body.match_exprs,
+            resource_name=body.resource_name, resource_desc=body.resource_desc,
+            priority=body.priority, granted_by=_granted_by(user),
+            enabled=body.enabled, expires_at=body.expires_at, data=body.data,
+        )
+        await sync_runtime_config(handler, jid)
+        return _ok({"items": items})
     except (ValueError, LookupError) as e:
         raise _map_write_error(e) from e
 
@@ -197,20 +183,14 @@ async def update_instance_service_resource(
 ):
     jid = await _jid(handler, jiuwenclaw_id)
     try:
-        return _ok({
-            "items": await InstanceServiceResourceService(handler).replace_resource(
-                jid,
-                resource_id,
-                body.match_exprs,
-                resource_name=body.resource_name,
-                resource_desc=body.resource_desc,
-                priority=body.priority,
-                granted_by=_granted_by(user),
-                enabled=body.enabled,
-                expires_at=body.expires_at,
-                data=body.data,
-            )
-        })
+        items = await InstanceServiceResourceService(handler).replace_resource(
+            jid, resource_id, body.match_exprs,
+            resource_name=body.resource_name, resource_desc=body.resource_desc,
+            priority=body.priority, granted_by=_granted_by(user),
+            enabled=body.enabled, expires_at=body.expires_at, data=body.data,
+        )
+        await sync_runtime_config(handler, jid)
+        return _ok({"items": items})
     except (ValueError, LookupError) as e:
         raise _map_write_error(e) from e
 
@@ -224,4 +204,5 @@ async def remove_instance_service_resource(jiuwenclaw_id: str, resource_id: str,
     removed = await InstanceServiceResourceService(handler).remove_resource(jid, resource_id)
     if not removed:
         raise HTTPException(status_code=404, detail="instance service resource not found")
+    await sync_runtime_config(handler, jid)
     return _ok({"removed": True})

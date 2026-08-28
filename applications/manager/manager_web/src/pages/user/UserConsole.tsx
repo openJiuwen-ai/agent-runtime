@@ -4,13 +4,14 @@ import { LanguageSwitcher } from '../../components/LanguageSwitcher';
 import { ThemeToggle } from '../../components/ThemeToggle';
 import { useAuth } from '../../auth/AuthContext';
 import { useAsync } from '../../hooks/useAsync';
-import { AgentTemplate, Org, UserConsoleApi } from '../../services/api';
+import { AgentTemplate, Org, UserConsoleApi, UserGateway } from '../../services/api';
 import { getProductName } from '../../utils/env';
 
 // 内嵌聊天(web_enterprise)的基址：默认同源 /chat（webui nginx 以 base=/chat/ 同源提供 dist，
 // 不再指向 :5173，因而不会"localhost 拒绝访问"；其 SSE/file-api 走根路径，由 webui 反代到 web 后端）。
 const CHAT_BASE = (import.meta.env.VITE_CHAT_BASE_URL as string | undefined) || '/chat';
 const AUTH_EXPIRED_MESSAGE = 'jiuwenswarm:auth-expired';
+const USER_CONTEXT_KEY = 'jiuwenswarm:user-context';
 
 /** 用户控制台里实例化 Agent 的运行时标识；回退 template_id。 */
 function agentRuntimeId(agent: AgentTemplate): string {
@@ -21,9 +22,24 @@ export function UserConsole() {
   const { t } = useTranslation();
   const { user, logout } = useAuth();
   const { data: orgsData } = useAsync(() => UserConsoleApi.orgs(), []);
+  const { data: gatewaysData, loading: gatewaysLoading } = useAsync(() => UserConsoleApi.gateways(), []);
   const [orgId, setOrgId] = useState<string | null>(null);
+  const [gatewayId, setGatewayId] = useState<string | null>(() => sessionStorage.getItem('jw_user_gateway_id'));
+  const saveGateway = useCallback((gateway: UserGateway) => {
+    setGatewayId(gateway.jiuwenclaw_id);
+    sessionStorage.setItem('jw_user_gateway_id', gateway.jiuwenclaw_id);
+    sessionStorage.setItem(USER_CONTEXT_KEY, JSON.stringify({ user_id: user?.user_id ?? '', gateway_id: gateway.jiuwenclaw_id, gateway_endpoint: gateway.gateway_endpoint }));
+  }, [user?.user_id]);
+  const gateways = gatewaysData?.gateways ?? [];
   const orgs = orgsData?.orgs ?? [];
   const currentOrg = orgs.find((o) => o.group_id === orgId) ?? null;
+  const currentGateway = gateways.find((g) => g.jiuwenclaw_id === gatewayId) ?? null;
+  useEffect(() => {
+    if (!gatewayId && gateways.length === 1) {
+      setGatewayId(gateways[0].jiuwenclaw_id);
+      saveGateway(gateways[0]);
+    }
+  }, [gatewayId, gateways, saveGateway]);
 
   // iframe 与统一外壳同源；会话失效由外壳统一退出，User Web 不再展示第二套登录页。
   useEffect(() => {
@@ -55,14 +71,29 @@ export function UserConsole() {
       </header>
 
       <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
-        {!currentOrg ? (
+        {!currentGateway ? (
+          <GatewayPicker gateways={gateways} loading={gatewaysLoading} onPick={(id) => { const gateway = gateways.find((item) => item.jiuwenclaw_id === id); if (gateway) saveGateway(gateway); }} />
+        ) : !currentOrg ? (
           <OrgPicker orgs={orgs} onPick={setOrgId} />
         ) : (
-          <OrgWorkspace org={currentOrg} userId={user?.user_id ?? ''} onSwitchOrg={() => setOrgId(null)} />
+          <OrgWorkspace org={currentOrg} gateway={currentGateway} userId={user?.user_id ?? ''} onSwitchOrg={() => setOrgId(null)} onSwitchGateway={() => { setGatewayId(null); sessionStorage.removeItem('jw_user_gateway_id'); sessionStorage.removeItem(USER_CONTEXT_KEY); setOrgId(null); }} />
         )}
       </div>
     </div>
   );
+}
+
+function GatewayPicker({ gateways, loading, onPick }: { gateways: UserGateway[]; loading: boolean; onPick: (id: string) => void }) {
+  return <div style={{ flex: 1, overflow: 'auto', padding: '20px 24px' }}>
+    <h2 className="card-title mb-1">选择组网</h2>
+    <p className="text-sm text-muted mb-3">登录用户只能看到管理面授权的组网。</p>
+    {loading ? <div className="text-muted">加载中...</div> : gateways.length === 0 ? <div className="text-muted">暂无可用组网</div> :
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>{gateways.map((g) =>
+        <button key={g.jiuwenclaw_id} className="card" style={{ width: 260, textAlign: 'left', cursor: 'pointer' }} onClick={() => onPick(g.jiuwenclaw_id)}>
+          <div className="card-title">{g.jiuwenclaw_name}</div><div className="text-xs text-muted mono">{g.jiuwenclaw_id}</div>
+          <div className="text-xs text-muted">{g.status} · {g.gateway_endpoint || 'endpoint 未注册'}</div>
+        </button>)}</div>}
+  </div>;
 }
 
 function OrgPicker({ orgs, onPick }: { orgs: Org[]; onPick: (gid: string) => void }) {
@@ -84,9 +115,9 @@ function OrgPicker({ orgs, onPick }: { orgs: Org[]; onPick: (gid: string) => voi
   );
 }
 
-function OrgWorkspace({ org, userId, onSwitchOrg }: { org: Org; userId: string; onSwitchOrg: () => void }) {
+function OrgWorkspace({ org, gateway, userId, onSwitchOrg, onSwitchGateway }: { org: Org; gateway: UserGateway; userId: string; onSwitchOrg: () => void; onSwitchGateway: () => void }) {
   const { t } = useTranslation();
-  const { data: agentsData, loading } = useAsync(() => UserConsoleApi.agents(org.group_id), [org.group_id]);
+  const { data: agentsData, loading } = useAsync(() => UserConsoleApi.agents(org.group_id, gateway.jiuwenclaw_id), [org.group_id, gateway.jiuwenclaw_id]);
   const [agentId, setAgentId] = useState<string | null>(null);
   const agents = agentsData?.agents ?? [];
   const currentAgent = agents.find((a) => agentRuntimeId(a) === agentId) ?? null;
@@ -100,7 +131,7 @@ function OrgWorkspace({ org, userId, onSwitchOrg }: { org: Org; userId: string; 
       <aside style={{ width: 240, borderRight: '1px solid var(--border, #e5e7eb)', padding: 12, overflowY: 'auto', flexShrink: 0 }}>
         <div className="flex items-center justify-between mb-2">
           <div className="card-title" style={{ fontSize: 14 }}>{org.name}</div>
-          <button className="btn ghost sm" onClick={onSwitchOrg}>{t('userConsole.switchOrg')}</button>
+          <button className="btn ghost sm" onClick={onSwitchOrg}>{t('userConsole.switchOrg')}</button><button className="btn ghost sm" onClick={onSwitchGateway}>切换组网</button>
         </div>
         <div className="nav-group-title nav-group-title--uppercase">{t('userConsole.availableBots')}</div>
         <div className="space-y-1">
@@ -116,7 +147,7 @@ function OrgWorkspace({ org, userId, onSwitchOrg }: { org: Org; userId: string; 
       {/* 右：选中 agent 的工作区 */}
       <section style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex' }}>
         {currentAgent ? (
-          <AgentWorkspace agent={currentAgent} userId={userId} groupId={org.group_id} />
+          <AgentWorkspace agent={currentAgent} userId={userId} groupId={org.group_id} gatewayId={gateway.jiuwenclaw_id} />
         ) : (
           <div className="flex items-center justify-center" style={{ flex: 1 }}>
             <div className="text-muted">{t('userConsole.pickBot')}</div>
@@ -155,7 +186,7 @@ function ChatLoading() {
   );
 }
 
-function AgentWorkspace({ agent, userId, groupId }: { agent: AgentTemplate; userId: string; groupId: string }) {
+function AgentWorkspace({ agent, userId, groupId, gatewayId }: { agent: AgentTemplate; userId: string; groupId: string; gatewayId: string }) {
   const { t, i18n } = useTranslation();
   // 内嵌 iframe(web_enterprise)与父窗口可能不同源,语言状态独立 → 用 postMessage 同步语言
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -173,8 +204,8 @@ function AgentWorkspace({ agent, userId, groupId }: { agent: AgentTemplate; user
   // bot_id 传实例化 resource_id（运行时路由字段名未改）
   const runtimeId = agentRuntimeId(agent);
   const baseQuery = useMemo(
-    () => new URLSearchParams({ user_id: userId, group_id: groupId, bot_id: runtimeId }).toString(),
-    [userId, groupId, runtimeId],
+    () => new URLSearchParams({ user_id: userId, group_id: groupId, bot_id: runtimeId, gateway_id: gatewayId }).toString(),
+    [userId, groupId, runtimeId, gatewayId],
   );
   const chatUrl = `${CHAT_BASE}/?${baseQuery}`;
   const [loaded, setLoaded] = useState(false);
