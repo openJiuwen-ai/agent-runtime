@@ -1,4 +1,4 @@
-import { Component, ReactNode } from 'react';
+import { Component, ReactNode, useEffect } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Sidebar } from './components/Sidebar';
@@ -20,7 +20,6 @@ import { LoginPage } from './pages/LoginPage';
 import { UsersPage } from './pages/iam/UsersPage';
 import { OrgsPage } from './pages/iam/OrgsPage';
 import { AgentTemplatesPage } from './pages/templates/AgentTemplatesPage';
-import { UserConsole } from './pages/user/UserConsole';
 import { getProductName } from './utils/env';
 
 interface ErrorBoundaryState {
@@ -179,7 +178,7 @@ function UserMenu() {
   );
 }
 
-/** 已登录用户的默认落地页:管理员→/manager,普通用户→/user。 */
+/** 已登录用户的默认落地页:管理员→/manager,普通用户→/user（随后进入同源 User Web）。 */
 function roleHome(isAdmin: boolean): string {
   return isAdmin ? '/manager' : '/user';
 }
@@ -205,6 +204,18 @@ function RootRedirect() {
   return <Navigate to={user ? roleHome(user.is_admin) : '/auth'} replace />;
 }
 
+/**
+ * /chat 由 Manager Web 后端同源代理 User Web，不能使用 SPA 内部 Navigate。
+ * 保留 /user 作为角色落地地址，避免认证回调和已有书签失效。
+ */
+function UserWebRedirect() {
+  const { t } = useTranslation();
+  useEffect(() => {
+    window.location.replace('/chat/');
+  }, []);
+  return <div className="flex items-center justify-center h-screen text-muted">{t('auth.loading')}</div>;
+}
+
 function Gate() {
   const { t } = useTranslation();
   const { ready } = useAuth();
@@ -226,8 +237,15 @@ function Gate() {
           </RequireAuth>
         }
       />
-      {/* 用户面 */}
-      <Route path="/user/*" element={<RequireAuth><UserConsole /></RequireAuth>} />
+      {/* 用户面：通过页面级跳转进入同源 /chat，不再套 Manager Web iframe。 */}
+      <Route
+        path="/user/*"
+        element={
+          <RequireAuth>
+            <UserWebRedirect />
+          </RequireAuth>
+        }
+      />
       {/* 根/未知 → 按角色落地 */}
       <Route path="*" element={<RootRedirect />} />
     </Routes>

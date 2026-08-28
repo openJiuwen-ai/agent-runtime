@@ -199,7 +199,7 @@ async def test_manager_api_internal_redirect_is_resolved_by_proxy(
 
 
 @pytest.mark.asyncio
-async def test_manager_web_proxies_user_web_as_same_origin_iframe(
+async def test_manager_web_proxies_authenticated_user_web_as_same_origin_page(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -208,6 +208,9 @@ async def test_manager_web_proxies_user_web_as_same_origin_iframe(
     captured: list[str] = []
 
     async def upstream(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/auth/me":
+            assert request.headers.get("authorization") == "Bearer valid-token"
+            return httpx.Response(200, json={"user_id": "u1"})
         captured.append(str(request.url))
         return httpx.Response(200, text="user-web")
 
@@ -216,28 +219,34 @@ async def test_manager_web_proxies_user_web_as_same_origin_iframe(
 
     monkeypatch.setattr("manager_server.manager_web.httpx.AsyncClient", client_factory)
     async with original_client(
-        transport=httpx.ASGITransport(app=app), base_url="http://manager-web"
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://manager-web",
+        cookies={"openjiuwen_access_token": "valid-token"},
     ) as client:
-        iframe = await client.get(
+        page = await client.get(
             "/chat/?user_id=u1&bot_id=b1",
-            headers={"sec-fetch-dest": "iframe"},
+            headers={"sec-fetch-dest": "document"},
         )
         asset = await client.get("/chat/assets/chat.js")
-        standalone = await client.get(
+
+    async with original_client(
+        transport=httpx.ASGITransport(app=app), base_url="http://manager-web"
+    ) as anonymous_client:
+        anonymous = await anonymous_client.get(
             "/chat/?user_id=u1",
             headers={"sec-fetch-dest": "document"},
             follow_redirects=False,
         )
 
-    assert iframe.status_code == 200
-    assert iframe.text == "user-web"
+    assert page.status_code == 200
+    assert page.text == "user-web"
     assert asset.text == "user-web"
     assert captured == [
         "http://user-web:5173/?user_id=u1&bot_id=b1",
         "http://user-web:5173/assets/chat.js",
     ]
-    assert standalone.status_code == 302
-    assert standalone.headers["location"] == "/auth"
+    assert anonymous.status_code == 302
+    assert anonymous.headers["location"] == "/auth"
 
 
 @pytest.mark.asyncio

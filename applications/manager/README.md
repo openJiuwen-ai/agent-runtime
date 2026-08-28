@@ -108,7 +108,7 @@ npm run dev
 | 用户名 | 密码 | 角色 | 用途 |
 |--------|------|------|------|
 | `admin` | `admin` | 管理员 | 登录管理面（`/manager`），可进行实例、模板、策略等配置 |
-| `user1` | `user1` | 普通用户 | 登录用户端（`/user`），无管理权限 |
+| `user1` | `user1` | 普通用户 | 登录用户端（`/user` 跳转至同源 `/chat/`），无管理权限 |
 
 Vite 开发服务器已配置代理，`/api` → `8765`、`/idp` → `8770`（会自动去掉 `/idp` 前缀）。
 
@@ -180,7 +180,7 @@ Manager 权限守卫。
 
 ## 生产 / 集成模式（统一入口）
 
-构建静态资源后，由 `manager-web` 提供单一 HTTP 入口（默认 `5273`）。User Web 保持独立进程，通过 `/chat/` 在同源 iframe 中呈现。
+构建静态资源后，由 `manager-web` 提供单一 HTTP 入口（默认 `5273`）。User Web 保持独立进程，通过同源 `/chat/` 直接呈现，不使用 iframe。
 
 ```bash
 # 构建 Manager 前端
@@ -204,8 +204,8 @@ manager-web \
 
 `5273` 为外部唯一入口：
 
-- `/auth`、`/user`、`/manager` — Manager SPA
-- `/chat/` — 同源 User Web iframe
+- `/auth`、`/user`、`/manager` — Manager SPA；普通用户访问 `/user` 后跳转到 `/chat/`
+- `/chat/` — 经身份校验的同源 User Web 页面
 - `/api` — 转发至 Manager API（`8765`）
 - `/idp` — 转发至身份中心（`8770`）
 - `/ws` — 转发至 Gateway WebSocket（默认 `19000`）
