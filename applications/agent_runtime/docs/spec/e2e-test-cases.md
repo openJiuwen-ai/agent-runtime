@@ -201,13 +201,16 @@ sidecar 镜像随 `--sidecar-image` 分流:真 jiuwenbox 用 8321 + `JIUWENBOX_L
 > 探针类型、sidecar 资源限额/run_as_user、nfs_* 挂载未覆盖(见 §8.3)。
 > **已知真实缺陷(2026-08-28 双真镜像门禁实测,PVC 写回读 FAIL)**:agentserver 真镜像以
 > uid=1000(app) 运行,PVC 后端目录 root:root 0755 → `/var/lib/agent` 写入 Permission denied
-> (替身 influxdb 以 root 跑、sidecar 特权,均掩盖此问题)。当前 Template schema 无 pod 级
-> fsGroup、主容器不渲染 securityContext(sidecar 才有 run_as_user)——修法需产品决策,修前
-> 门禁该项保持红。**考证与决策(2026-08-28)**:老体系靠部署脚本对存储后端 `chown 1000:1000/
+> (替身 influxdb 以 root 跑、sidecar 特权,均掩盖此问题)。Template schema 无 pod 级
+> fsGroup(修法需产品决策,修前门禁该项保持红);主容器 securityContext 已具备
+> `run_as_user/group` 字段(026450be,默认 None 不渲染——但**改 uid 不改卷属主**,单靠它
+> 治不了本缺陷)。**考证与决策(2026-08-28)**:老体系靠部署脚本对存储后端 `chown 1000:1000/
 > chmod 777` 预属主(NFS/hostPath 的 volume plugin 均不做 fsGroup 属主管理——Pod spec 层
 > 解决不了);`fs_group` 字段方案曾同日实现并真环境验证(渲染生效,但 hostPath backend 卷
 > 穿透不到目录属主),按需求方决定**整体回退暂缓**——本环境现阶段解法为存储侧预属主
 > (运维手段,同老体系),详见 feature/2026-08-e2e-full-mounts-stage.md。
+> run_as_user/group 与 node_name 系 deploy tool 联调引入的合法 A 类能力(2026-08-29 决策
+> 确认),真环境生效实证仍列 §8.3 缺口。
 
 **阶段 3:M(B 类)pod_ttl 热更新**(前置:阶段 2 结束,s1–s3 活跃、2 Pod 在役;3 项)
 
@@ -620,6 +623,9 @@ uv run --no-sync python scripts/load_test.py \
   可达性、readiness `http` 探针类型真环境、多 sidecar(>1)形态。
 - sidecar 细粒度规格:资源限额(cpu/memory request/limit)、`run_as_user/group`、
   `capabilities_drop`——schema/渲染已支持,e2e 零覆盖。
+- 主容器 pod 落位字段(026450be 引入):`run_as_user/group`(容器内 `id -u` 生效实证)、
+  `node_name`(Pod 实际落指定节点)——渲染层已有单测(`test_k8s_pod_body.py`),真环境
+  生效零覆盖;`PVC 同 claim 跨容器去重`(主/sidecar 共享一卷)同此。
 - `nfs_server/nfs_path/nfs_mount_path` 挂载:e2e 零覆盖(需 NFS 环境决策)。
 
 **B. 已确认存在、复现需确定性时序或产品决策(P1/P2 遗留)**

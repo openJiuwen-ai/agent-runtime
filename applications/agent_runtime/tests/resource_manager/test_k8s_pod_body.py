@@ -266,3 +266,107 @@ def test_host_path_volume_name_rules(name, idx, mount_idx, expected):
     assert out == expected
     assert len(out) <= 63
     assert out == out.lower()
+
+
+# ---------------------------------------------- 主容器 securityContext / node_name
+
+def test_build_pod_body_main_security_context(client):
+    """主容器 run_as_user/run_as_group → securityContext;未给则不设键(镜像 USER 生效)。"""
+    spec = _base_spec(run_as_user=1000, run_as_group=1000)
+    main = client._build_pod_body("pod-1", spec).kwargs["spec"].kwargs[
+        "containers"][0].kwargs
+    assert main["security_context"].kwargs == {
+        "run_as_user": 1000, "run_as_group": 1000}
+    # 只给 user 不给 group:半渲染
+    main = client._build_pod_body(
+        "pod-1", _base_spec(run_as_user=1000)).kwargs["spec"].kwargs[
+        "containers"][0].kwargs
+    assert main["security_context"].kwargs == {"run_as_user": 1000}
+    # 默认:不设键(与历史 Pod 零差异)
+    main = client._build_pod_body(
+        "pod-1", _base_spec()).kwargs["spec"].kwargs["containers"][0].kwargs
+    assert "security_context" not in main
+
+
+def test_build_pod_body_node_name(client):
+    """node_name → V1PodSpec.node_name(绕调度器点名绑节点);未给/空串归 None。"""
+    pod = client._build_pod_body("pod-1", _base_spec(node_name="ecs-38b3-0001"))
+    assert pod.kwargs["spec"].kwargs["node_name"] == "ecs-38b3-0001"
+    pod = client._build_pod_body("pod-1", _base_spec())
+    assert pod.kwargs["spec"].kwargs["node_name"] is None
+    pod = client._build_pod_body("pod-1", _base_spec(node_name=""))
+    assert pod.kwargs["spec"].kwargs["node_name"] is None
+
+
+# -------------------------------------------------------------- PVC 同 claim 去重
+
+def _spec_with_pvcs(client, main_pvc, sc_pvc):
+    """主容器 + jiuwenbox sidecar 各带 pvc_mounts 的 spec(均走规范形校验)。"""
+    from agent_runtime.mounts import validate_agent_mounts
+    from agent_runtime.sidecars import validate_sidecars
+
+    hp, cm, pvc = validate_agent_mounts([], [], main_pvc, nfs_mount_path="/nfs")
+    sc = dict(JIUWENBOX, pvc_mounts=sc_pvc)
+    sidecars = validate_sidecars([sc], container_name="agent",
+                                 sse_port=8086, container_port=8086)
+    return _base_spec(nfs_mount_path="/nfs", agent_pvc_mounts=pvc,
+                      sidecars=sidecars)
+
+
+def test_build_pod_body_pvc_same_claim_shared_across_containers(client):
+    """同 claim PVC 跨主/sidecar:只建一个共享卷,sidecar 复用主容器卷名。"""
+    spec = _spec_with_pvcs(
+        client,
+        [{"claim_name": "shared-data", "mount_path": "/data"}],
+        [{"claim_name": "shared-data", "mount_path": "/var/lib/box"}])
+    ps = client._build_pod_body("pod-1", spec).kwargs["spec"].kwargs
+    pvc_vols = [v for v in ps["volumes"] if "persistent_volume_claim" in v.kwargs]
+    assert len(pvc_vols) == 1                            # 去重:同 claim 一卷
+    assert pvc_vols[0].kwargs["name"] == "pvc-agent-0-0"  # 首现=主容器(idx 0)
+    assert pvc_vols[0].kwargs["persistent_volume_claim"].kwargs == {
+        "claim_name": "shared-data", "read_only": False}
+    # sidecar 不再有自己前缀的 pvc 卷,mount 引用主容器卷名
+    assert "pvc-jiuwenbox-0-0" not in [v.kwargs["name"] for v in ps["volumes"]]
+    main_mounts = {m.kwargs["mount_path"]: m.kwargs
+                   for m in ps["containers"][0].kwargs["volume_mounts"]}
+    box_mounts = {m.kwargs["mount_path"]: m.kwargs
+                  for m in ps["containers"][1].kwargs["volume_mounts"]}
+    assert main_mounts["/data"]["name"] == "pvc-agent-0-0"
+    assert box_mounts["/var/lib/box"]["name"] == "pvc-agent-0-0"
+
+
+def test_build_pod_body_pvc_different_claims_not_deduped(client):
+    """异 claim 不误伤:各建各卷、各引用各卷名。"""
+    spec = _spec_with_pvcs(
+        client,
+        [{"claim_name": "agent-data", "mount_path": "/data"}],
+        [{"claim_name": "box-data", "mount_path": "/var/lib/box"}])
+    ps = client._build_pod_body("pod-1", spec).kwargs["spec"].kwargs
+    vols = {v.kwargs["name"]: v.kwargs for v in ps["volumes"]}
+    assert set(vols) >= {"pvc-agent-0-0", "pvc-jiuwenbox-0-0"}
+    box_mounts = {m.kwargs["mount_path"]: m.kwargs
+                  for m in ps["containers"][1].kwargs["volume_mounts"]}
+    assert box_mounts["/var/lib/box"]["name"] == "pvc-jiuwenbox-0-0"
+
+
+def test_build_pod_body_pvc_shared_claim_read_only_first_wins(client):
+    """卷级 read_only 取首现容器(主容器先渲染);mount 级保留各自值。
+
+    kubelet 语义:卷源 readOnly=True 时该 claim 的所有挂载实际只读——
+    sidecar 想要 rw 会被静默压成 ro。锁定现状(若日后语义收紧应改 400)。
+    """
+    spec = _spec_with_pvcs(
+        client,
+        [{"claim_name": "shared-data", "mount_path": "/data", "read_only": True}],
+        [{"claim_name": "shared-data", "mount_path": "/var/lib/box",
+          "read_only": False}])
+    ps = client._build_pod_body("pod-1", spec).kwargs["spec"].kwargs
+    pvc_vol = [v for v in ps["volumes"]
+               if "persistent_volume_claim" in v.kwargs][0]
+    assert pvc_vol.kwargs["persistent_volume_claim"].kwargs["read_only"] is True
+    main_mounts = {m.kwargs["mount_path"]: m.kwargs
+                   for m in ps["containers"][0].kwargs["volume_mounts"]}
+    box_mounts = {m.kwargs["mount_path"]: m.kwargs
+                  for m in ps["containers"][1].kwargs["volume_mounts"]}
+    assert main_mounts["/data"]["read_only"] is True
+    assert box_mounts["/var/lib/box"]["read_only"] is False  # mount 级原样

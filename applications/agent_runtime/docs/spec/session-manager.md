@@ -121,7 +121,10 @@
   超长 >8000 或嵌套 >32)/同批 scope_id 重复;sidecars 严格校验(template_from_payload
   循环后调 sidecars.validate_sidecars:单项规范形 + 撞主容器名/撞 agent 端口;空列表→None);
   int 字段严格校验(畸形 "abc" → 400,不裸抛 ValueError 成 500);
-  策略字段下界(cc/pc/ttl ≥1、min_idle ≥0、sse_port 域)——0 值是拒绝服务配置
+  策略字段下界(cc/pc/ttl ≥1、min_idle ≥0、sse_port 域)——0 值是拒绝服务配置;
+  pod 落位字段校验(run_as_user/group ≥0——对齐 sidecars.py 先例;node_name
+  hostname 形态 ≤253——坏值 Pod 永久 Pending 挂满 ready_timeout 才暴露;
+  node_name 空串归一 None 同未设)
   缺通配 scope(无空表达式项)→ 仅 WARNING 放行(响应 wildcard_present:false)
 lock:config_sync 串行化(忙→409 CONFIG_SYNC_BUSY,TTL 60)
 → 读 DB 旧态(templates + scopes)
@@ -157,7 +160,7 @@ lock:config_sync 串行化(忙→409 CONFIG_SYNC_BUSY,TTL 60)
 
 ## models.py
 
-- `Template`:template 行业务视图。派生:`max_pods = ⌈scope_concurrency/pod_concurrency⌉`(**派生值,不存储,不配置**);`deploy_subset()`=acquire 下发 RM 的 pod_spec;`deploy_ver()`=A 类指纹;`pool_config()`={min_idle_pods, max_pods, pod_ttl, pod_concurrency}(pod_concurrency 仅供 RM follower 等待室推导上限 pc-1)。`__post_init__` 归一:sse_path/health_path 补前导 `/`(缺失会拼出 `http://ip:8080api/...` 非法 URL→健康 Pod 被探死循环)、sidecars/mounts 空归一 None(指纹不变式)。
+- `Template`:template 行业务视图。派生:`max_pods = ⌈scope_concurrency/pod_concurrency⌉`(**派生值,不存储,不配置**);`deploy_subset()`=acquire 下发 RM 的 pod_spec;`deploy_ver()`=A 类指纹;`pool_config()`={min_idle_pods, max_pods, pod_ttl, pod_concurrency}(pod_concurrency 仅供 RM follower 等待室推导上限 pc-1)。A 类 pod 落位字段 `node_name`/`run_as_user`/`run_as_group`(默认 `None`:不进指纹——存量模板 deploy_ver 不因字段引入漂移;RM 渲染侧 `None`=不绑节点/不设 securityContext,走镜像默认)。`__post_init__` 归一:sse_path/health_path 补前导 `/`(缺失会拼出 `http://ip:8080api/...` 非法 URL→健康 Pod 被探死循环)、sidecars/mounts 空归一 None(指纹不变式)。
 - scope 定义(`RoutingScopeDef`/表达式树)在 `routing.py`,不再有 ScopeConfig(快照取代 per-scope 缓存)。
 
 ## 高频踩点

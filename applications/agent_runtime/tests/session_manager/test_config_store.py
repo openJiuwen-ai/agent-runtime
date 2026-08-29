@@ -446,6 +446,75 @@ async def test_config_sync_rejects_invalid_sidecars_without_side_effect(runtime)
     assert await runtime.config_store.get_template("tpl-bad") is None
 
 
+# ---------------------------------------------- node_name / run_as_user / run_as_group
+
+@requires_lua
+async def test_config_sync_persists_and_roundtrips_pod_placing_fields(runtime):
+    """node_name/run_as_user/run_as_group 下发 → DB → get_template 回读;
+    deploy_subset 携带(进 deploy_ver 指纹,A 类);数字串容忍转 int。"""
+    await runtime.config_store.config_sync(_payload(
+        [_tpl("tpl-pin", node_name="ecs-38b3-0001",
+              run_as_user="1000", run_as_group=1000)],   # str 也收(_INT_FIELDS)
+        [_scope(SCOPE, "tpl-pin")],
+    ))
+    t = await runtime.config_store.get_template("tpl-pin")
+    assert (t.node_name, t.run_as_user, t.run_as_group) == (
+        "ecs-38b3-0001", 1000, 1000)
+    subset = t.deploy_subset()
+    assert (subset["node_name"], subset["run_as_user"],
+            subset["run_as_group"]) == ("ecs-38b3-0001", 1000, 1000)
+
+
+@requires_lua
+async def test_config_sync_rejects_malformed_pod_placing_fields(runtime):
+    """run_as_user 畸形(bool/非数字串/负值)与坏 node_name → 400,零副作用。"""
+    for field, bad, match in (
+            ("run_as_user", True, "must be an integer"),
+            ("run_as_user", "abc", "must be an integer"),
+            ("run_as_user", -1, "must be >= 0"),
+            ("run_as_group", -2, "must be >= 0"),
+            ("node_name", "bad node", "must be a hostname"),
+            ("node_name", "a" * 254, "must be a hostname"),
+            ("node_name", 123, "must be a hostname"),
+    ):
+        with pytest.raises(InvalidParams, match=match):
+            await runtime.config_store.config_sync(_payload(
+                [_tpl("tpl-bad", **{field: bad})],
+                [_scope(SCOPE, "tpl-bad")],
+            ))
+        assert await runtime.config_store.get_template("tpl-bad") is None
+
+
+@requires_lua
+async def test_config_sync_node_name_empty_string_is_unset(runtime):
+    """node_name 空串与未设同义(归一 None;渲染侧 or None,指纹不漂移)。"""
+    await runtime.config_store.config_sync(_payload(
+        [_tpl("tpl-plain", node_name="")],
+        [_scope(SCOPE, "tpl-plain")],
+    ))
+    t = await runtime.config_store.get_template("tpl-plain")
+    assert t.node_name is None
+    assert t.deploy_subset()["node_name"] is None
+
+
+@requires_lua
+async def test_config_sync_pod_placing_fields_are_a_class(runtime):
+    """三字段变更 → deploy_ver 变化(A 类日落判据);未设时 None 不进指纹
+    (存量模板 deploy_ver 不因升级漂移)。"""
+    await runtime.config_store.config_sync(_payload(
+        [_tpl("tpl-a", node_name="node-1")],
+        [_scope(SCOPE, "tpl-a")],
+    ))
+    before = (await runtime.config_store.get_template("tpl-a")).deploy_ver()
+    # 未设字段的两模板:与历史指纹一致(None 被 fingerprint 滤除)
+    await runtime.config_store.config_sync(_payload(
+        [_tpl("tpl-a", node_name="node-2")],     # 换节点 = A 类变更
+        [_scope(SCOPE, "tpl-a")],
+    ))
+    after = (await runtime.config_store.get_template("tpl-a")).deploy_ver()
+    assert before != after
+
+
 @requires_lua
 async def test_config_sync_sidecars_change_triggers_a_class_sunset(runtime):
     """sidecar 变更(镜像升级)是 A 类:软摘除老 Pod + 新 route 扩新版本。"""

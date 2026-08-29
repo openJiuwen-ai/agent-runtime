@@ -54,6 +54,9 @@ SM 侧 ctx,级联管理全部生命周期(框架 App 的 lifespan 只认一个 c
   `OPENJIUWEN_SERVICE_REDIS_SOCKET_TIMEOUT_SECONDS`(默认 5,命令读写;本项目无 BLPOP 等长阻塞命令,短超时安全)、
   `OPENJIUWEN_SERVICE_REDIS_HEALTH_CHECK_INTERVAL_SECONDS`(默认 30,空闲连接周期 PING 验活)、
   `OPENJIUWEN_SERVICE_REDIS_RETRY_ATTEMPTS`(默认 3,连接类错误指数退避重试)。
+  **密码**:`REDIS_PASSWORD`(裸名,无 `OPENJIUWEN_SERVICE_` 前缀——deploy tool 从 Secret
+  envFrom 注入约定;2026-08-28 引入)非空时作为客户端 `password` kwarg 注入,避免明文进
+  `OPENJIUWEN_SERVICE_REDIS_URL`;**同设时 kwarg 覆盖 URL 内嵌密码**。
   **Cluster 支持**:`OPENJIUWEN_SERVICE_REDIS_URL` 用 `redis+cluster://`(TLS 用 `rediss+cluster://`)
   scheme 即构造集群客户端(`RedisCluster.from_url`,一种子节点即可,拓扑自发现;cluster 只有
   db 0,URL 带库号会在构建点直接报配置错误)。多键 Lua 的同槽前提由键前缀 hash tag 保证。

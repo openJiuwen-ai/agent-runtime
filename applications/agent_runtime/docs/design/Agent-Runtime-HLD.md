@@ -132,6 +132,8 @@ flowchart TB
 | `min_idle_pods` | int | 该 scope 最少热备 Pod 数 |
 | `agent_image` | str | AgentServer 容器镜像 |
 | `namespace` | str | K8s 命名空间 |
+| `node_name` | str? | 节点绑定(A 类;渲染为 `V1PodSpec.nodeName` 绕过调度器点名上机,deploy tool 镜像预载场景用。`None` = 不绑定;空串同 `None`。坏值 → Pod 永久 Pending 挂满 ready_timeout,入口按 hostname 形态 ≤253 校验) |
+| `run_as_user` / `run_as_group` | int? | 主容器进程 UID/GID(A 类;渲染为 `securityContext.runAsUser/runAsGroup`,覆盖镜像 `USER` 指令,用于对齐存储卷属主。`None` = 走镜像默认。**不改变卷文件属主**——PVC 写权限根治仍是存储侧预属主,见 `e2e-test-cases.md` 真实缺陷②;≥0 入口校验) |
 | `container_name` | str | 容器名 |
 | `container_port` | int | 容器端口 |
 | `sse_port` | int | SSE 端口(gateway 直连 Pod) |
