@@ -33,8 +33,9 @@ AgentServer 原生支持 GET /health 后补验（单测已覆盖）。
   L 孤儿对账 + cleanup 运维端点         → 阶段 12（Redis↔K8s 一致性 + 批删）
 
 注意：脚本会 FLUSHDB 目标 Redis DB（干净起点）。若 DB 中存在非
-session_manager:/resource_manager: 前缀的 key，视为指错库，直接中止
-（除非显式传 --force-flush）。请用独立的 DB 编号。
+{session_manager}:/{resource_manager}: 前缀的 key，视为指错库，直接中止
+（除非显式传 --force-flush）。请用独立的 DB 编号（cluster 部署无库号概念，
+只能整集群 FLUSH，务必专用）。
 """
 
 from __future__ import annotations
@@ -60,6 +61,7 @@ from e2e_lib import (  # noqa: F401 (check/skip/envelope 供各 stage 直接用)
     skip,
     wait_until,
 )
+from e2e_lib import RM_PREFIX, SM_PREFIX
 from e2e_lib import pod_exists as _lib_pod_exists
 
 # 由 CLI 参数注入（默认值见 _parse_args；main() 里回填全局）
@@ -378,7 +380,7 @@ async def stage1_seed(c: Client, r) -> None:
     check("H0-无配置时零 AgentServer Pod（不因服务启动而拉起）",
           await wait_until(no_pods, 30, 2))
     check("H0-无路由快照（配置未下发）",
-          not await r.exists("session_manager:routing:snapshot"))
+          not await r.exists(f"{SM_PREFIX}routing:snapshot"))
 
     code, raw, body = await c.post("config_sync", rawdata=full_sync_payload())
     n_tpl, n_scope = len(TPL), len(SCOPES_DEF)
@@ -387,7 +389,7 @@ async def stage1_seed(c: Client, r) -> None:
           and raw.get("templates_synced") == n_tpl
           and raw.get("scopes_synced") == n_scope,
           json.dumps(body, ensure_ascii=False)[:200])
-    snap = await r.get("session_manager:routing:snapshot")
+    snap = await r.get(f"{SM_PREFIX}routing:snapshot")
     check("M-路由快照已写入 Redis（routing:snapshot）", bool(snap),
           f"len={len(snap or '')}")
     if DB_DSN.get("type") == "postgresql":
@@ -429,11 +431,11 @@ async def stage1b_warm_up_without_request(c: Client, r) -> None:
     print("\n== 阶段 1b：无请求预热（config_sync → autoscale 预备 min_idle 热备）==")
     # 此刻除播种外无任何 route；tpl-warm 的 scope（min_idle=1）应被 autoscale 预热
     async def warm_ready() -> bool:
-        return await r.scard(f"resource_manager:resource:scope:{WARM}:idle") >= 1
+        return await r.scard(f"{RM_PREFIX}resource:scope:{WARM}:idle") >= 1
     # --with-mounts:同窗并发预热两个 min_idle scope(warm+mnt),首拉镜像时
     # 60s 偏紧,提到 90s
     ok = await wait_until(warm_ready, 90, 2)
-    idle = await r.smembers(f"resource_manager:resource:scope:{WARM}:idle")
+    idle = await r.smembers(f"{RM_PREFIX}resource:scope:{WARM}:idle")
     check("H0-config_sync 后零 route → autoscale 预热 min_idle=1 热备 Pod",
           ok and len(idle) == 1, str(idle))
     if idle:
@@ -457,19 +459,19 @@ async def stage2_route_abc(c: Client, r) -> dict:
     check("C-新 Pod 存在于 K8s 且 Ready", await pod_exists(pod1), pod1)
     check("C-pod_sse_url 指向 Pod IP",
           raw.get("pod_sse_url", "").startswith("http://"), raw.get("pod_sse_url", ""))
-    check("C-RM 池 ZCARD=1", await r.zcard(f"resource_manager:resource:scope:{MAIN}:pods") == 1)
+    check("C-RM 池 ZCARD=1", await r.zcard(f"{RM_PREFIX}resource:scope:{MAIN}:pods") == 1)
 
     code, raw2, _ = await c.post("route", session_id="s1")
     check("A-同 session 再 route 返回原 Pod（零冷启动）",
           code == 200 and raw2["pod_id"] == pod1)
     check("A-SM scope:sessions 仍只有 1 个会话",
-          await r.scard(f"session_manager:scope:{MAIN}:sessions") == 1)
+          await r.scard(f"{SM_PREFIX}scope:{MAIN}:sessions") == 1)
 
     code, raw3, _ = await c.post("route", session_id="s2")
     check("B-s2 first-fit 打包进 pod1（2/2 满）",
           code == 200 and raw3["pod_id"] == pod1)
     check("B-per-Pod 容量闸门 SCARD=2",
-          await r.scard(f"session_manager:pod:{MAIN}:{pod1}:sessions") == 2)
+          await r.scard(f"{SM_PREFIX}pod:{MAIN}:{pod1}:sessions") == 2)
 
     t0 = time.monotonic()
     code, raw4, _ = await c.post("route", session_id="s3")
@@ -478,13 +480,13 @@ async def stage2_route_abc(c: Client, r) -> dict:
     if ok:
         state["pod2"] = raw4["pod_id"]
         check("C-SM 候选集 2 个 Pod（接入序）",
-              await r.zcard(f"session_manager:scope:{MAIN}:pods") == 2)
+              await r.zcard(f"{SM_PREFIX}scope:{MAIN}:pods") == 2)
 
     # E：touch 保活（远端到期时间被刷新）
-    before = await r.zscore("session_manager:session_expiry", "s1")
+    before = await r.zscore(f"{SM_PREFIX}session_expiry", "s1")
     await asyncio.sleep(1.2)
     code, raw5, _ = await c.post("touch", session_id="s1")
-    after = await r.zscore("session_manager:session_expiry", "s1")
+    after = await r.zscore(f"{SM_PREFIX}session_expiry", "s1")
     check("E-touch 保活刷新到期时间",
           code == 200 and raw5.get("touched") is True and after > before,
           f"{before:.0f} → {after:.0f}")
@@ -499,7 +501,7 @@ async def stage2_route_abc(c: Client, r) -> dict:
     _, second, _ = await c.post("route", session_id="s3", request_id=req_id)
     check("route 幂等回放（同 request_id 同结果，不重抢额度）",
           first.get("pod_id") == second.get("pod_id")
-          and await r.scard(f"session_manager:scope:{MAIN}:sessions") == 3)
+          and await r.scard(f"{SM_PREFIX}scope:{MAIN}:sessions") == 3)
     # 表达式 or 支（user 白名单跨 group 命中 e2e-main）在阶段 12b 验证：
     # 此处 e2e-main 已被 s1–s3 占满（cc=3），or 支 route 只会排队 504——
     # 原位置仅在「部署慢、s1 先过期」的时序下碰巧 200（2026-08-27 快跑实测 504）。
@@ -688,9 +690,9 @@ async def stage2c_mounts(c: Client, r) -> None:
     # 全量规格 Pod 能否 Ready 本身就是被验命题——PVC 未 Bound / apparmor 不被
     # 节点接受 / CM 缺失都会卡在这里(而不是 route 超时后一片红)
     async def warm_ready() -> bool:
-        return await r.scard(f"resource_manager:resource:scope:{MNT}:idle") >= 1
+        return await r.scard(f"{RM_PREFIX}resource:scope:{MNT}:idle") >= 1
     ok = await wait_until(warm_ready, 120, 2)
-    warm = await r.smembers(f"resource_manager:resource:scope:{MNT}:idle")
+    warm = await r.smembers(f"{RM_PREFIX}resource:scope:{MNT}:idle")
     check("MNT-全量规格暖 Pod 无请求预热 Ready（PVC/特权/挂载齐备）",
           ok and len(warm) >= 1, str(sorted(warm))[:120])
     if not ok:
@@ -834,16 +836,16 @@ async def stage2c_mounts(c: Client, r) -> None:
 
 async def stage3_mb_hot_update(c: Client, r) -> None:
     print("\n== 阶段 3：场景 M（B 类）—— pod_ttl 热更新立即生效 ==")
-    snap_before = await r.get("session_manager:routing:snapshot")
+    snap_before = await r.get(f"{SM_PREFIX}routing:snapshot")
     code, raw, _ = await c.post("config_sync", rawdata=full_sync_payload(
         {"tpl-e2e": {"pod_ttl": 120}}))
     check("M-B config_sync 全量更新成功", code == 200 and raw.get("ok") is True)
     await asyncio.sleep(1)
-    cfg = await r.hgetall(f"resource_manager:resource:scope:{MAIN}:config")
+    cfg = await r.hgetall(f"{RM_PREFIX}resource:scope:{MAIN}:config")
     check("M-B RM 池参数缓存立即刷新 pod_ttl=120（update_pool_config 推送）",
           cfg.get("pod_ttl") == "120", str({k: v for k, v in cfg.items()
                                             if k in ("pod_ttl", "max_pods")}))
-    snap_after = await r.get("session_manager:routing:snapshot")
+    snap_after = await r.get(f"{SM_PREFIX}routing:snapshot")
     check("M-B 路由快照已覆盖（下一次 route 即见新值）",
           bool(snap_after) and snap_after != snap_before)
 
@@ -853,50 +855,50 @@ async def stage4_aging(c: Client, r, state: dict) -> None:
     # 回拨 s1..s3 到期时间到过去（加速；不真睡 TTL）
     past = time.time() - 5
     for sid in ("s1", "s2", "s3"):
-        await r.zadd("session_manager:session_expiry", {sid: past})
-        await r.hset(f"session_manager:session:{sid}", "expiry", int(past))
+        await r.zadd(f"{SM_PREFIX}session_expiry", {sid: past})
+        await r.hset(f"{SM_PREFIX}session:{sid}", "expiry", int(past))
 
     async def drained() -> bool:
-        return await r.scard(f"session_manager:scope:{MAIN}:sessions") == 0
+        return await r.scard(f"{SM_PREFIX}scope:{MAIN}:sessions") == 0
     ok = await wait_until(drained, 30, 2, "sessions drained")
     check("D-到期 pass：scope:sessions 清空（sweeper 每 1s）", ok)
     sessions_left = [s for s in ("s1", "s2", "s3")
-                     if await r.exists(f"session_manager:session:{s}")]
+                     if await r.exists(f"{SM_PREFIX}session:{s}")]
     check("D-会话四处全清", not sessions_left, str(sessions_left))
-    idle = await r.smembers(f"resource_manager:resource:scope:{MAIN}:idle")
+    idle = await r.smembers(f"{RM_PREFIX}resource:scope:{MAIN}:idle")
     check("D-空 Pod pass → idle_consider → RM idle 暖池 2 个",
           len(idle) == 2, str(idle))
-    reg = await r.smembers("session_manager:pods:registered")
+    reg = await r.smembers(f"{SM_PREFIX}pods:registered")
     # --with-sidecar: box Pod(pod_ttl=3600 长存)也在注册表,期望 +1;
     # --with-mounts: mnt Pod(2c 已 route,pod_ttl=3600 长存)同理再 +1
     check("D-不变量 5：pods:registered 仍持有（待 RM 回收后清）",
           len(reg) == 2 + (1 if WITH_SIDECAR else 0) + (1 if WITH_MOUNTS else 0),
           str(reg))
-    phases = [await r.hget(f"resource_manager:resource:pod:{p}:info", "phase")
+    phases = [await r.hget(f"{RM_PREFIX}resource:pod:{p}:info", "phase")
               for p in idle]
     check("D-Pod phase=idle", set(phases) == {"idle"}, str(phases))
 
 
 async def stage5_reclaim(c: Client, r, state: dict) -> None:
     print("\n== 阶段 5：场景 K —— idle 超 pod_ttl → reclaim（真删 K8s Pod）==")
-    pods = await r.smembers(f"resource_manager:resource:scope:{MAIN}:idle")
+    pods = await r.smembers(f"{RM_PREFIX}resource:scope:{MAIN}:idle")
     if not pods:
         check("K-前置：存在 idle Pod", False, "无 idle Pod")
         return
     past = int(time.time()) - 121   # pod_ttl=120（阶段 3 已热更）；int 秒级（to_int 契约）
     for p in pods:
-        await r.set(f"resource_manager:resource:pod:{p}:idle_since", past)
+        await r.set(f"{RM_PREFIX}resource:pod:{p}:idle_since", past)
 
     async def reclaimed() -> bool:
-        return await r.scard(f"resource_manager:resource:scope:{MAIN}:idle") == 0
+        return await r.scard(f"{RM_PREFIX}resource:scope:{MAIN}:idle") == 0
     ok = await wait_until(reclaimed, 20, 2)
     check("K-reclaim（每 1s tick）清空 idle 池", ok)
     for p in pods:
         k8s_gone = not await pod_exists(p)
-        purged = not await r.sismember("resource_manager:resource:pods:all", p)
+        purged = not await r.sismember(f"{RM_PREFIX}resource:pods:all", p)
         check(f"K-Pod {p[:30]}… K8s 已删 + RM PURGE", k8s_gone and purged,
               f"k8s_gone={k8s_gone} purged={purged}")
-    reg = await r.smembers("session_manager:pods:registered")
+    reg = await r.smembers(f"{SM_PREFIX}pods:registered")
     # --with-sidecar: box Pod 未参与本阶段回收,仍注册(阶段 12 cleanup 统一清);
     # --with-mounts: mnt Pod 同理
     check("K-notify_pod_dead 已清 SM 注册",
@@ -917,22 +919,22 @@ async def stage5b_natural_drain(c: Client, r) -> None:
     pod = raw["pod_id"]
 
     async def session_gone() -> bool:
-        return not await r.exists("session_manager:session:nat1")
+        return not await r.exists(f"{SM_PREFIX}session:nat1")
     ok = await wait_until(session_gone, 40, 2, "session 自然到期")
     check("5b-D 会话自然到期被 sweeper 回收(真等 session_ttl=15,未回拨)", ok)
     check("5b-D scope 活跃会话清空",
-          await r.scard("session_manager:scope:e2e-nat:sessions") == 0)
+          await r.scard(f"{SM_PREFIX}scope:e2e-nat:sessions") == 0)
 
     async def in_idle() -> bool:
-        return pod in await r.smembers("resource_manager:resource:scope:e2e-nat:idle")
+        return pod in await r.smembers(f"{RM_PREFIX}resource:scope:e2e-nat:idle")
     ok = await wait_until(in_idle, 20, 2, "空 Pod 转 idle")
     check("5b-空 Pod pass → 转 idle 暖池", ok)
-    since = await r.get(f"resource_manager:resource:pod:{pod}:idle_since")
+    since = await r.get(f"{RM_PREFIX}resource:pod:{pod}:idle_since")
     check("5b-idle_since 计时起点存在", bool(since), str(since))
 
     # min_idle=0 → 无保护;真等 pod_ttl=20 后 reclaim 必须触发(缺陷①在场则永不)
     async def reclaimed() -> bool:
-        return pod not in await r.smembers("resource_manager:resource:pods:all")
+        return pod not in await r.smembers(f"{RM_PREFIX}resource:pods:all")
     ok = await wait_until(reclaimed, 45, 2, "自然回收")
     k8s_gone = not await pod_exists(pod)
     check("5b-K idle 计时自然累积满 pod_ttl → reclaim(真删 K8s + PURGE)",
@@ -948,7 +950,7 @@ async def stage6_deploy_failure(c: Client, r) -> None:
           code == 503 and body.get("error_code") == "NO_POD_AVAILABLE",
           f"{code} {body.get('error_code')} ({took:.0f}s, ready_timeout=25)")
     check("I-红线：错误路径 deploying 占位已清",
-          await r.zcard(f"resource_manager:resource:scope:{BAD}:deploying") == 0)
+          await r.zcard(f"{RM_PREFIX}resource:scope:{BAD}:deploying") == 0)
 
 
 async def stage7_queue(c: Client, r) -> None:
@@ -971,7 +973,7 @@ async def stage7_queue(c: Client, r) -> None:
           len(full_timeout) >= 2, str([b.get("error_code") for _, _, b in results]))
     await asyncio.sleep(1)
     check("F-等待者全部出队（finally 清理）",
-          await r.zcard(f"session_manager:scope:{FSCOPE}:waiters") == 0)
+          await r.zcard(f"{SM_PREFIX}scope:{FSCOPE}:waiters") == 0)
 
 
 async def stage8_warm(c: Client, r) -> dict:
@@ -984,9 +986,9 @@ async def stage8_warm(c: Client, r) -> dict:
     state["w1_pod"] = raw["pod_id"]
 
     async def warm_ready() -> bool:
-        return await r.scard(f"resource_manager:resource:scope:{WARM}:idle") >= 1
+        return await r.scard(f"{RM_PREFIX}resource:scope:{WARM}:idle") >= 1
     ok = await wait_until(warm_ready, 30, 2)
-    idle = await r.smembers(f"resource_manager:resource:scope:{WARM}:idle")
+    idle = await r.smembers(f"{RM_PREFIX}resource:scope:{WARM}:idle")
     check("H-autoscale（1s tick）补位热备 idle=1", ok and len(idle) == 1, str(idle))
     if idle:
         warm_pod = next(iter(idle))
@@ -1006,20 +1008,20 @@ async def stage9_dead_pod(c: Client, r, state: dict) -> None:
     check("G-手动删除在用 Pod（模拟宿主机宕机）", "deleted" in out, out.strip()[:80])
 
     async def purged() -> bool:
-        return not await r.sismember("resource_manager:resource:pods:all", pod)
+        return not await r.sismember(f"{RM_PREFIX}resource:pods:all", pod)
     ok = await wait_until(purged, 40, 3, "watch purge")
     check("J-watch（10s tick）发现 NotFound → PURGE", ok)
     code, raw, _ = await c.post("touch", session_id="w1", group="e2e-warm")
     check("G-notify_pod_dead 清洗会话：touch w1 → touched=false",
           raw.get("touched") is False, str(raw))
-    reg = await r.smembers("session_manager:pods:registered")
+    reg = await r.smembers(f"{SM_PREFIX}pods:registered")
     check("G-SM 注册三处已清",
           all(not m.startswith(f"{WARM}:{pod}") for m in reg), str(reg))
 
 
 async def stage10_ma_sunset(c: Client, r) -> None:
     print("\n== 阶段 10：场景 M（A 类）—— deploy 字段变更 → 软摘除 + 版本过滤 ==")
-    cfg_key = f"resource_manager:resource:scope:{WARM}:config"
+    cfg_key = f"{RM_PREFIX}resource:scope:{WARM}:config"
     ver_before = await r.hget(cfg_key, "deploy_ver")
     # A 类字段（readiness_period ∈ DEPLOY_VER_FIELDS）
     code, raw, _ = await c.post("config_sync", rawdata=full_sync_payload(
@@ -1031,8 +1033,8 @@ async def stage10_ma_sunset(c: Client, r) -> None:
           ver_before and ver_after and ver_before != ver_after,
           f"{(ver_before or '')[:8]}… → {(ver_after or '')[:8]}…")
     # warm scope 候选集被 ZREM 软摘除（老 Pod 不接新流量，等自然回收）
-    warm_pod = await r.smembers(f"resource_manager:resource:scope:{WARM}:idle")
-    scores = [await r.zscore(f"session_manager:scope:{WARM}:pods", p) for p in warm_pod]
+    warm_pod = await r.smembers(f"{RM_PREFIX}resource:scope:{WARM}:idle")
+    scores = [await r.zscore(f"{SM_PREFIX}scope:{WARM}:pods", p) for p in warm_pod]
     zrem = all(score is None for score in scores)
     check("M-A SM 候选集 ZREM 软摘除（老 Pod 不接新流量）",
           not warm_pod or zrem, f"idle={warm_pod or '∅'}")
@@ -1051,16 +1053,16 @@ async def stage11b_invariants(c: Client, r) -> None:
     ④ fingerprint 键序敏感 → 快照模板 deploy_ver 必须与 RM cfg 一致(暖复用前提);
     ⑤ 停机取消泄漏占位 → 静息态 deploying 必须全空。"""
     print("\n== 阶段 11b:内部不变量巡检 ==")
-    all_pods = await r.smembers("resource_manager:resource:pods:all")
+    all_pods = await r.smembers(f"{RM_PREFIX}resource:pods:all")
     ghosts, missing_since, scopes = [], [], set()
-    async for key in r.scan_iter(match="resource_manager:resource:scope:*:idle",
+    async for key in r.scan_iter(match=f"{RM_PREFIX}resource:scope:*:idle",
                                  count=100):
         scope = key.split(":")[3]
         scopes.add(scope)
         for pod in await r.smembers(key):
             if pod not in all_pods:
                 ghosts.append(f"{scope}:{pod}")
-            if not await r.get(f"resource_manager:resource:pod:{pod}:idle_since"):
+            if not await r.get(f"{RM_PREFIX}resource:pod:{pod}:idle_since"):
                 missing_since.append(f"{scope}:{pod}")
     check("IV-idle ⊆ pods:all(无幽灵成员,缺陷②网)", not ghosts, str(ghosts))
     check("IV-idle 成员必有 idle_since 计时", not missing_since, str(missing_since))
@@ -1072,7 +1074,7 @@ async def stage11b_invariants(c: Client, r) -> None:
     async def _deploying_remaining() -> list[str]:
         remaining = []
         async for key in r.scan_iter(
-                match="resource_manager:resource:scope:*:deploying", count=100):
+                match=f"{RM_PREFIX}resource:scope:*:deploying", count=100):
             try:
                 count = await r.zcard(key)
             except Exception:               # 老库残留 SET 型键(升级未清库)
@@ -1096,9 +1098,9 @@ async def stage11b_invariants(c: Client, r) -> None:
     from agent_runtime.session_manager.routing import snapshot_from_json
 
     mismatch = []
-    snap = snapshot_from_json(await r.get("session_manager:routing:snapshot"))
+    snap = snapshot_from_json(await r.get(f"{SM_PREFIX}routing:snapshot"))
     for scope in sorted(scopes):
-        cfg = await r.hgetall(f"resource_manager:resource:scope:{scope}:config")
+        cfg = await r.hgetall(f"{RM_PREFIX}resource:scope:{scope}:config")
         try:
             spec = json.loads(cfg.get("pod_spec_json") or "{}")
         except ValueError:
@@ -1118,7 +1120,7 @@ async def stage11b_invariants(c: Client, r) -> None:
 async def stage12_reconcile_cleanup(c: Client, r) -> None:
     print("\n== 阶段 12：场景 L —— Redis↔K8s 一致性 + cleanup 运维端点 ==")
     # 一致性：RM 登记的每个 Pod 在 K8s 都存在（反向孤儿由 cleanup 收口）
-    all_pods = await r.smembers("resource_manager:resource:pods:all")
+    all_pods = await r.smembers(f"{RM_PREFIX}resource:pods:all")
     drift = []
     for p in all_pods:
         if not await pod_exists(p):
@@ -1137,7 +1139,7 @@ async def stage12_reconcile_cleanup(c: Client, r) -> None:
           and not any(p in out for p in all_pods),
           f"cleaned={cleaned}; kubectl: {out.strip().splitlines()[-1][:60]}")
     await asyncio.sleep(12)   # 等 watch/reconcile 兜底清 Redis
-    left = await r.smembers("resource_manager:resource:pods:all")
+    left = await r.smembers(f"{RM_PREFIX}resource:pods:all")
     # cleanup 只删物理 Pod;watch(≤10s)PURGE 后 min_idle scope 的 autoscale
     # 会重建热备(新 pod_id)。牙齿=「cleanup 前的存量 Pod 全部经 NotFound
     # 路径收敛」,重建者应全是 min_idle 暖 Pod——旧「恒零」断言在同 watch
@@ -1145,7 +1147,7 @@ async def stage12_reconcile_cleanup(c: Client, r) -> None:
     rebuilt = sorted(set(left) - set(all_pods))
     check("L-watch/reconcile 兜底清空 Redis 编排态（存量 Pod 全收敛）",
           not (set(all_pods) & set(left)), f"rebuilt_by_autoscale={rebuilt}")
-    sm_keys = await r.keys("session_manager:pod:*")
+    sm_keys = await r.keys(f"{SM_PREFIX}pod:*")
     check("L-SM Pod 注册态全清", not sm_keys, str(sm_keys[:5]))
 
 

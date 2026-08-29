@@ -25,3 +25,4 @@
 | 2026-08 | [生产可观测性:日志体系 + /debug 诊断端点](2026-08-production-observability.md) | LOG_LEVEL 起效、请求关联、每请求一行汇总、框架降噪(6行/秒→0)、7 个只读诊断端点+脱敏 |
 | 2026-08 | [网络/IO 抖动超时兜底](2026-08-network-io-timeout-hardening.md) | redis socket 5s/建连 3s+重试、MySQL 建连 5s、sweeper tick 上限,挂死循环不再静默 |
 | 2026-08 | [M8 deploy 锁输家改 follower 等待室](2026-08-M8-deploy-lock-follower-waitroom.md) | 跨副本冷竞争零多余 Pod,冷启动尾延迟 30.5s→10.2s |
+| 2026-08 | [Redis Cluster 兼容](2026-08-redis-cluster.md) | 键前缀 hash tag 同槽 + `redis+cluster://` 客户端 + EVAL 路由锚;真 cluster 11/11 验证 |

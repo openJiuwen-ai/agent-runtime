@@ -62,21 +62,23 @@
 
 ### 2.3 Redis 真相源(e2e 直接断言的键)
 
-- `session_manager:scope:{sid}:sessions`(SET,SCARD=scope 闸门)/`:pods`(ZSET,first-fit 候选)
+- `{session_manager}:scope:{sid}:sessions`(SET,SCARD=scope 闸门)/`:pods`(ZSET,first-fit 候选)
   /`:waiters`(**ZSET**,score=deadline;2026-08-28 起 SET→ZSET,断言用 ZCARD);
-  `session_manager:routing:snapshot`(STRING,路由快照)
-- `session_manager:session:{sid}`(HASH)/`session_expiry`(ZSET)/`pods:registered`(SET)
-- `resource_manager:resource:scope:{sid}:pods|idle|config|deploying`(deploying 为 **ZSET**,
+  `{session_manager}:routing:snapshot`(STRING,路由快照)
+- `{session_manager}:session:{sid}`(HASH)/`session_expiry`(ZSET)/`pods:registered`(SET)
+- `{resource_manager}:resource:scope:{sid}:pods|idle|config|deploying`(deploying 为 **ZSET**,
   score=deadline,断言用 ZCARD)
-- `resource_manager:resource:pods:all`、`resource:pod:{pod}:idle_since`
-- `agent_runtime:job:*:winner:{epoch}` / `:candidates:{epoch}`(选主元数据,TTL≈3s)
+- `{resource_manager}:resource:pods:all`、`resource:pod:{pod}:idle_since`
+- `{agent_runtime:job:*}:winner:{epoch}` / `:candidates:{epoch}`(选主元数据,TTL≈3s)
 
 ### 2.4 前置自检与防误刷(两个 e2e 脚本共享 `e2e_lib`)
 
 - 服务/LB 在线(`/healthz` 或 `/docs` 200)、Redis `PING` + `aof_enabled=1`、kubectl 可用、
   专用 namespace 存在(缺则自动创建)。
-- **FLUSHDB 防误刷**:目标 Redis DB 存在 `session_manager:`/`resource_manager:`/`agent_runtime:`
-  之外前缀的 key 即视为指错库,**中止**(除非显式 `--force-flush`)。务必独立 DB 编号。
+- **FLUSHDB 防误刷**:目标 Redis DB 存在 `{session_manager}:`/`{resource_manager}:`/`agent_runtime:`
+  (选主执行锁)/`{agent_runtime:`(选主抽签键,hash tag 同槽)之外前缀的 key 即视为指错库,
+  **中止**(除非显式 `--force-flush`)。务必独立 DB 编号(cluster 部署无库号概念,只能整集群
+  FLUSH,更须专用)。
 
 ---
 
@@ -321,7 +323,7 @@ sidecar 镜像随 `--sidecar-image` 分流:真 jiuwenbox 用 8321 + `JIUWENBOX_L
 | 44 | 一致性巡检 | `pods:all` 每个 Pod 在 K8s 均存在(无漂移) |
 | 45 | `cleanup(namespace=验收ns)` | 200 `cleaned≥0`;被删的存量 Pod 从 ns 消失(批删含 deploy 失败遗留的孤儿;**不断言 ns 恒零**——min_idle scope 的 autoscale 重建热备与即时采样竞速,「No resources found」与 H0 配置驱动预热自相矛盾;`--with-mounts` 时双 min_idle scope 同 watch tick 一起重建,旧恒零断言必闪红,2026-08-28 改) |
 | 46 | —(12s 后) | watch/reconcile 兜底清空 Redis RM 编排态:**cleanup 前的存量 Pod 全部经 NotFound 路径收敛**(重建者=新 pod_id 的 min_idle 暖 Pod,详情列出 rebuilt_by_autoscale;旧「恒零」断言语义同 #45 已改) |
-| 47 | — | `session_manager:pod:*` 注册态全清 |
+| 47 | — | `{session_manager}:pod:*` 注册态全清 |
 
 **阶段 12b:表达式 or 支(清场后确定性验证,1 项)**:原位置在阶段 2 尾,但彼时 e2e-main 已被
 s1–s3 占满(cc=3),or 支 route 只能排队 504——原断言仅在「部署慢、会话先过期」时序下碰巧
@@ -355,7 +357,7 @@ s1–s3 占满(cc=3),or 支 route 只能排队 504——原断言仅在「部署
 
 - **真 LB 单入口**:K8s Deployment 多副本 + ClusterIP/NodePort Service
   (默认 `http://127.0.0.1:30091/api/session`);脚本不打多地址。
-- 实例身份从 Redis 选主键反查:`agent_runtime:job:{job}:candidates:{epoch}`(SET,成员=
+- 实例身份从 Redis 选主键反查:`{agent_runtime:job:{job}}:candidates:{epoch}`(SET,成员=
   instance_id)与 `:winner:{epoch}`(SET NX,值=instance_id);后台 ElectionCensus
   以 0.3s 轮询采样(元数据 TTL≈3s)。
 - 前置:Redis(默认 DB 2)、kubectl(需 deployment ns + agentserver ns 权限)、
@@ -537,7 +539,7 @@ uv sync --extra local && uv run pytest tests/integration/test_multi_replica.py -
 
 # ③ 宿主机双进程(观察选主互斥)
 ./scripts/deploy_replicas.sh 2 .env.production.local 8091
-redis-cli -p 30001 -n 1 --scan --pattern 'agent_runtime:job:*:winner:*'
+redis-cli -p 30001 -n 1 --scan --pattern '{agent_runtime:job:*}:winner:*'
 
 # ④ K8s 多副本部署(生产形态)
 ./deploy/build_image.sh agent-runtime:smoke

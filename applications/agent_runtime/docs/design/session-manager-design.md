@@ -244,6 +244,10 @@
 ### 5.1 Lua 脚本(承担所有 runtime 状态变更,原子)
 
 > 脚本全集(7 个,实现与本文对齐):`LUA_ROUTE_PLACE` / `LUA_EVICT` / `LUA_TOUCH` / `LUA_SWEEP_IDLE_NOTIFY`(核心 4 个,下文全文)+ `LUA_REGISTER_POD`(acquire 成功登记,§5.2)+ `LUA_CLEANUP_POD`(notify_pod_dead 清注册,§2.3)+ `LUA_WAITER_GATE`(等待队列原子入队,§8.2;实现期补充)。
+>
+> **调用约定(2026-08-29 cluster 兼容)**:键名在脚本内由 `ARGV[1]`(键前缀
+> `{session_manager}:`,hash tag)拼出;调用侧把前缀同时声明为 `KEYS[1]` 作路由锚
+> (集群客户端据此把 EVAL 路由到 tag 归属节点;单实例无影响)。下文伪码从简省略。
 
 **`LUA_ROUTE_PLACE(session_id, scope_id, expiry_ts, session_ttl, scope_concurrency, pod_concurrency, max_pods, now)`** —— route 的原子核心:一次脚本内完成"亲和续期 / 惰性回收 / scope 闸门 / first-fit 选 Pod / 提交",中途无其它请求插入(无 race)。`session_ttl` 随亲和写入 session HASH,供 TOUCH 就地读取(不依赖 scope:config)。
 ```

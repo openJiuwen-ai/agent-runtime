@@ -86,10 +86,13 @@ class SingleLeaderCoordinator:
         return self._lock.lost_event
 
     def _candidates_key(self, epoch: int) -> str:
-        return f"{self._lock_key}:candidates:{epoch}"
+        # hash tag({lock_key})：Redis Cluster 下 candidates 与 winner 落同一
+        # slot，抽签 Lua 的双键 EVAL 才能通过 cluster 客户端的同槽校验；
+        # 单实例下 {} 无语义。执行锁键本身保持原样（单键操作无需同槽）。
+        return f"{{{self._lock_key}}}:candidates:{epoch}"
 
     def _winner_key(self, epoch: int) -> str:
-        return f"{self._lock_key}:winner:{epoch}"
+        return f"{{{self._lock_key}}}:winner:{epoch}"
 
     async def _enroll(self, cand_key: str, instance_id: str) -> None:
         await self._redis.eval(

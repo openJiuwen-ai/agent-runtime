@@ -24,8 +24,13 @@ from __future__ import annotations
 
 import asyncio
 
+from agent_runtime.config import RM_KEY_PREFIX, SM_KEY_PREFIX
 from tests.conftest import requires_lua
 from tests.integration._dual_harness import scope_of
+
+# 键前缀取自 config 常量（带 hash tag），断言不硬编码字面键名
+SM = f"{SM_KEY_PREFIX}:"
+RM = f"{RM_KEY_PREFIX}:"
 
 # ---------------------------------------------------------------- 基础
 
@@ -61,7 +66,7 @@ async def test_route_alternating_replicas_affinity_single_session(dual):
 
     scope = scope_of()
     assert await dual.redis.scard(
-        f"session_manager:scope:{scope}:sessions") == 1
+        f"{SM}scope:{scope}:sessions") == 1
 
 
 @requires_lua
@@ -107,11 +112,11 @@ async def test_cross_replica_burst_no_over_admission(dual):
     assert len(queue_full) + len(timeout) == 8
 
     assert await dual.redis.scard(
-        f"session_manager:scope:{scope}:sessions") == 2
+        f"{SM}scope:{scope}:sessions") == 2
     assert await dual.redis.zcard(
-        f"session_manager:scope:{scope}:waiters") == 0
+        f"{SM}scope:{scope}:waiters") == 0
     assert await dual.redis.zcard(
-        f"resource_manager:resource:scope:{scope}:deploying") == 0
+        f"{RM}resource:scope:{scope}:deploying") == 0
 
 
 # ---------------------------------------------------------------- deploy 锁（跨副本竞争）
@@ -145,11 +150,11 @@ async def test_deploy_lock_serializes_cross_replica_deploys(dual):
     assert len(dual.k8s.deploy_log) == 2
     assert not dual.k8s.deploy_windows_overlap()   # 两次部署窗口无交集
     assert await dual.redis.zcard(
-        f"resource_manager:resource:scope:{scope}:deploying") == 0
+        f"{RM}resource:scope:{scope}:deploying") == 0
     assert await dual.redis.zcard(
-        f"resource_manager:resource:scope:{scope}:deploy_followers") == 0
+        f"{RM}resource:scope:{scope}:deploy_followers") == 0
     assert await dual.redis.scard(
-        f"session_manager:scope:{scope}:sessions") == 3
+        f"{SM}scope:{scope}:sessions") == 3
 
 
 @requires_lua
@@ -176,11 +181,11 @@ async def test_deploy_follower_cap_strict_fast_fail(dual):
     assert len(fast_fail) == 2, outcomes
     assert len(dual.k8s.deploy_log) == 1          # 恰好 1 次部署
     assert await dual.redis.zcard(
-        f"resource_manager:resource:scope:{scope}:deploying") == 0
+        f"{RM}resource:scope:{scope}:deploying") == 0
     assert await dual.redis.zcard(
-        f"resource_manager:resource:scope:{scope}:deploy_followers") == 0
+        f"{RM}resource:scope:{scope}:deploy_followers") == 0
     assert await dual.redis.scard(
-        f"session_manager:scope:{scope}:sessions") == 2   # pod1 2/2 满
+        f"{SM}scope:{scope}:sessions") == 2   # pod1 2/2 满
 
 
 @requires_lua
@@ -206,9 +211,9 @@ async def test_follower_fails_when_leader_deploy_fails(dual):
     assert all(outcome == (503, "NO_POD_AVAILABLE")
                for outcome in outcomes), outcomes
     assert await dual.redis.zcard(
-        f"resource_manager:resource:scope:{scope}:deploying") == 0
+        f"{RM}resource:scope:{scope}:deploying") == 0
     assert await dual.redis.zcard(
-        f"resource_manager:resource:scope:{scope}:deploy_followers") == 0
+        f"{RM}resource:scope:{scope}:deploy_followers") == 0
 
 
 @requires_lua
@@ -244,7 +249,7 @@ async def test_deploy_loser_reuses_other_replicas_warm_pod(dual):
     assert raw["pod_id"] == "pod-other"
     assert len(dual.k8s.deploy_log) == 0                    # 本侧零部署
     assert await dual.redis.zcard(
-        f"resource_manager:resource:scope:{scope}:deploying") == 0
+        f"{RM}resource:scope:{scope}:deploying") == 0
 
 
 # ---------------------------------------------------------------- PubSub 跨副本唤醒
@@ -272,11 +277,11 @@ async def test_waiter_on_a_woken_by_touch_on_b(dual):
     waiter = asyncio.create_task(dual.post(0, "route", session_id="s2"))
     await asyncio.sleep(0.3)                    # 让 s2 入队并订阅
     assert await dual.redis.zcard(
-        f"session_manager:scope:{scope}:waiters") == 1
+        f"{SM}scope:{scope}:waiters") == 1
 
     past = now_ts() - 1
-    await dual.redis.zadd("session_manager:session_expiry", {"s1": past})
-    await dual.redis.hset("session_manager:session:s1", "expiry", past)
+    await dual.redis.zadd(f"{SM}session_expiry", {"s1": past})
+    await dual.redis.hset(f"{SM}session:s1", "expiry", past)
     status, raw, body = await dual.post(1, "touch", session_id="s1")
     assert status == 200, body
     assert raw == {"touched": False}            # 已过期：惰性驱逐
@@ -288,9 +293,9 @@ async def test_waiter_on_a_woken_by_touch_on_b(dual):
     assert elapsed < 2.0, f"唤醒耗时 {elapsed:.2f}s（远小于 3s 超时）"
 
     assert await dual.redis.scard(
-        f"session_manager:scope:{scope}:sessions") == 1
+        f"{SM}scope:{scope}:sessions") == 1
     assert await dual.redis.zcard(
-        f"session_manager:scope:{scope}:waiters") == 0
+        f"{SM}scope:{scope}:waiters") == 0
 
 
 # ---------------------------------------------------------------- 幂等 / 配置传播
@@ -312,7 +317,7 @@ async def test_idempotent_replay_across_replicas(dual):
     assert second["pod_sse_url"] == first["pod_sse_url"]
 
     assert await dual.redis.scard(
-        f"session_manager:scope:{scope}:sessions") == 1
+        f"{SM}scope:{scope}:sessions") == 1
 
 
 @requires_lua
@@ -327,7 +332,7 @@ async def test_config_sync_on_b_takes_effect_on_a(dual):
     scope = scope_of()
     status, _, body = await dual.post(0, "route", session_id="s1")
     assert status == 200, body
-    snapshot_key = "session_manager:routing:snapshot"
+    snapshot_key = f"{SM}routing:snapshot"
     ver_before = await dual.get(snapshot_key)
 
     status, _, body = await dual.post(
@@ -345,9 +350,9 @@ async def test_config_sync_on_b_takes_effect_on_a(dual):
 
     status, raw, body = await dual.post(0, "route", session_id="s2")
     assert status == 200, body
-    expiry = await dual.redis.zscore("session_manager:session_expiry", "s2")
+    expiry = await dual.redis.zscore(f"{SM}session_expiry", "s2")
     assert now_ts() + 80 <= int(expiry) <= now_ts() + 95   # 用了新 ttl=90
-    ttl = await dual.redis.hget("session_manager:session:s2", "session_ttl")
+    ttl = await dual.redis.hget(f"{SM}session:s2", "session_ttl")
     assert int(ttl) == 90
 
 
@@ -393,19 +398,19 @@ async def test_sweeper_skips_when_other_replica_holds_tick(dual):
     status, _, body = await dual.post(0, "route", session_id="s1")
     assert status == 200, body
     past = now_ts() - 999
-    await dual.redis.zadd("session_manager:session_expiry", {"s1": past})
-    await dual.redis.hset("session_manager:session:s1", "expiry", past)
+    await dual.redis.zadd(f"{SM}session_expiry", {"s1": past})
+    await dual.redis.hset(f"{SM}session:s1", "expiry", past)
 
-    lock_key = "session_manager:lock:sweep"
+    lock_key = f"{SM}lock:sweep"
     await dual.redis.set(lock_key, "replica-b", nx=True, ex=30)
     await dual.sysctx(0).sm_sweeper.sweep_once()        # 抢锁失败直退
     assert await dual.redis.scard(
-        f"session_manager:scope:{scope}:sessions") == 1  # 会话未被误扫
+        f"{SM}scope:{scope}:sessions") == 1  # 会话未被误扫
 
     await dual.redis.delete(lock_key)
     await dual.sysctx(0).sm_sweeper.sweep_once()        # 释放后补扫
     assert await dual.redis.scard(
-        f"session_manager:scope:{scope}:sessions") == 0
+        f"{SM}scope:{scope}:sessions") == 0
 
 
 @requires_lua
@@ -421,21 +426,21 @@ async def test_concurrent_sweepers_converge_clean(dual):
 
     past = now_ts() - 999
     for sid in ("s1", "s2", "s3"):
-        await dual.redis.zadd("session_manager:session_expiry", {sid: past})
-        await dual.redis.hset(f"session_manager:session:{sid}", "expiry", past)
+        await dual.redis.zadd(f"{SM}session_expiry", {sid: past})
+        await dual.redis.hset(f"{SM}session:{sid}", "expiry", past)
 
     registered_before = await dual.redis.scard(
-        "session_manager:pods:registered")
+        f"{SM}pods:registered")
     await asyncio.gather(
         dual.sysctx(0).sm_sweeper.sweep_once(),
         dual.sysctx(1).sm_sweeper.sweep_once(),
     )
 
     assert await dual.redis.scard(
-        f"session_manager:scope:{scope}:sessions") == 0
-    assert await dual.redis.zcard("session_manager:session_expiry") == 0
-    assert await dual.redis.exists("session_manager:lock:sweep") == 0
+        f"{SM}scope:{scope}:sessions") == 0
+    assert await dual.redis.zcard(f"{SM}session_expiry") == 0
+    assert await dual.redis.exists(f"{SM}lock:sweep") == 0
     # 空扫不误删 Pod 登记（invariant 5）
     assert await dual.redis.scard(
-        "session_manager:pods:registered") == registered_before
+        f"{SM}pods:registered") == registered_before
     await asyncio.sleep(0.2)     # 让 fire-and-forget 的 idle_consider 跑完

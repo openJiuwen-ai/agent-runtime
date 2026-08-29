@@ -121,7 +121,7 @@ class RoutingSnapshot:
     """路由快照:全部模板 + 已按 (index, scope_id) 排序的 scope 集。
 
     config_sync 写 DB 后整体重建并原子 SET 到
-    ``session_manager:routing:snapshot``;route 热路径读它求值,零 DB。
+    ``{session_manager}:routing:snapshot``;route 热路径读它求值,零 DB。
     """
 
     ver: int

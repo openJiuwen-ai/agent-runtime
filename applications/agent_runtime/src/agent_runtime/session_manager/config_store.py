@@ -30,7 +30,7 @@ from openjiuwen_runtime.foundation.db.table_def import (
 from ..errors import ConfigNotFound, ConfigSyncBusy, InvalidParams
 from ..mounts import validate_agent_mounts
 from ..sidecars import validate_sidecars
-from ..util import now_ts, s
+from ..util import key_unsafe, now_ts, s
 from .models import POLICY_FIELDS, Template
 from .routing import (
     RoutingScopeDef,
@@ -281,6 +281,12 @@ def _scope_from_row(row: Any) -> RoutingScopeDef | None:
         if not isinstance(expr_raw, str):
             raise ValueError(
                 f"routing_rules must be a string expression, got {type(expr_raw).__name__}"
+            )
+        if key_unsafe(getattr(row, "scope_id", "")):
+            # scope_id 进多处键名：含 {/} 破坏 hash tag 同槽性，按坏行跳过
+            raise ValueError(
+                f"scope_id must not contain '{{' or '}}': "
+                f"{getattr(row, 'scope_id', None)!r}"
             )
         return RoutingScopeDef(
             scope_id=s(getattr(row, "scope_id")),

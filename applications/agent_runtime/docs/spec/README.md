@@ -38,10 +38,14 @@ claw mgr ──config_sync──►   ├─ session_manager   持 App,4 个 HTT
 ## Redis 键前缀总览(逐键明细见各模块 spec)
 
 ```
-session_manager:…    SM 编排态(会话四处/scope 闸门/等待队列/候选集/注册表/路由快照)
-resource_manager:…   RM 编排态(per-scope Pod 池/idle 暖池/deploy 占位/follower 等待室/选主锁)
-agent_runtime:job:…  后台任务选主锁(main.py:_build_jobs 注册)
+{session_manager}:…    SM 编排态(会话四处/scope 闸门/等待队列/候选集/注册表/路由快照)
+{resource_manager}:…   RM 编排态(per-scope Pod 池/idle 暖池/deploy 占位/follower 等待室/选主锁)
+agent_runtime:job:…    后台任务选主执行锁(main.py:_build_jobs 注册)
+{agent_runtime:job:…}:winner/candidates:…  选主抽签键(与执行锁同底,hash tag 同槽)
 ```
+
+> 前缀带 `{}` = Redis Cluster **hash tag**:模块键域同槽,多键 Lua 在 cluster 下保持原子;
+> 单实例下无语义。背景见 `docs/feature/2026-08-redis-cluster.md`。
 
 ## 测试与部署(速查)
 
