@@ -2,7 +2,9 @@
 
 - 日期:2026-08-18(M6 冒烟固化于 2026-08-15;M7 多副本补全于 2026-08-18;
   2026-08-27 起各阶段补「前置/内部状态变迁/留白」用于人工审遗漏;
-  2026-08-28 补 §5.2 审计实锤回归网 16 用例、键类型 ZSET 迁移同步)
+  2026-08-28 补 §5.2 审计实锤回归网 16 用例、键类型 ZSET 迁移同步;
+  2026-08-28 补阶段 0m/2c 全量真实规格(--with-mounts,主容器三挂载+PVC 预置+
+  sidecar 完整规格逐字段断言)、阶段 12 清空断言语义修正)
 - 读者:执行/评审端到端验收的工程师
 - 配套:语义权威 = `../design/Agent-Runtime-HLD.md`(§6 场景、§5 键表);脚本本体在
   `applications/agent_runtime/scripts/`;本文回答"**每个 e2e 用例:场景、输入、预期输出**"。
@@ -15,7 +17,7 @@
 |---|---|---|---|---|
 | 进程内双实例 | `uv run pytest tests/integration/test_multi_replica.py` | 14 用例 | 无(离线,fakeredis) | pytest 标准 |
 | **审计实锤回归网** | `uv run pytest tests/integration/test_audit_repro.py` | 16 用例 | 无(离线,fakeredis) | pytest 标准 |
-| 集成冒烟(M6) | `./scripts/integration_smoke.sh`(sidecar 阶段加 `--with-sidecar`) | 75 项断言(+5) | 单实例 server 模式 + 真 Redis/MySQL/K8s | 0/1/2 |
+| 集成冒烟(M6) | `./scripts/integration_smoke.sh`(sidecar 阶段加 `--with-sidecar`,全量规格加 `--with-mounts`) | 75 项断言(+5/+24) | 单实例 server 模式 + 真 Redis/MySQL/K8s | 0/1/2 |
 | 多副本 e2e(M7) | `uv run --no-sync python scripts/e2e_multi_replica.py` | 35 项断言 | K8s 多副本 + Service LB + 真 Redis | 0/1/2 |
 | 压测/浸泡 | `uv run --no-sync python scripts/load_test.py` | 3 场景 | 任意入口(建议 LB) | 0/1 |
 
@@ -78,7 +80,7 @@
 
 ---
 
-## 3. 集成冒烟(M6):`scripts/e2e_hld_acceptance.py`(75 项;`--with-sidecar` 时 +5 项 → 80)
+## 3. 集成冒烟(M6):`scripts/e2e_hld_acceptance.py`(75 项;`--with-sidecar` 时 +5 项 → 80;`--with-mounts` 时 +24 项 → 99,与 sidecar 叠加 + 带 `--agent-env` 共 105——2026-08-28 双真镜像门禁实测 104/105,唯一 FAIL 为真镜像 uid=1000 写 root 属主 PVC 被拒的真实缺陷,见阶段 2c 留白)
 
 ### 3.0 环境与模板矩阵
 
@@ -98,23 +100,38 @@
 | `tpl-bad` | `agent_image=agent-runtime-e2e-missing:1` ready_timeout=25 | deploy 失败(I) |
 | `tpl-nat` | cc=2 pc=2 session_ttl=15 pod_ttl=20 min_idle=0 | **自然老化专用**(阶段 5b,短 TTL 零回拨) |
 | `tpl-box` | cc=2 pc=1 pod_ttl=3600 + `sidecars=[box-standin]`(仅 `--with-sidecar` 下发) | **sidecar 多容器**(阶段 2b);pod_ttl 加大让 box Pod 全程长存,否则中途被自然回收会使阶段 4/5 的注册表计数(`--with-sidecar` 时 +1)随时序漂移 |
+| `tpl-mnt` | cc=3 pc=2 session_ttl=60 pod_ttl=3600 **min_idle=1** ready_timeout=240 + 显式 `container_port=8086`/`readiness 5s/5s`/`pod_name=agentserver-mnt` + 主容器 **cm/hp/pvc 三挂载** + `sidecars=[jiuwenbox 完整规格]`(仅 `--with-mounts` 下发) | **全量真实规格**(阶段 0m/2c):对齐真实 config_sync 请求形状;min_idle=1 → stage1 下发后 autoscale 即预热(暖 Pod 不进 SM 注册表,2c route 前不可见);pod_ttl=3600 长存,阶段 4/5 计数再 +1 |
 
 scope:`e2e-main|e2e-f|e2e-warm|e2e-bad|e2e-nat` 各按 `routing_rules` 表达式串绑一模板
 (e2e-main 故意带 or 支 `group_id in ('e2e-main') or user_id in ('e2e-vip')` 验收混合表达式;
-其余单条件 `group_id in (...)`;**不播通配兜底**——使「未知属性组合 → CONFIG_NOT_FOUND」可验收);
-可选 DB 落库校验(mysql/psql 客户端在场时两表各 5 行,否则 SKIP)。
+其余单条件 `group_id in (...)`;**不播通配兜底**——使「未知属性组合 → CONFIG_NOT_FOUND」可验收;
+`--with-mounts` 时追加 `e2e-mnt`(表达式 `group_id in ('e2e-mnt')`,**不照搬真实请求的空串
+通配**——通配兜底会打掉 CONFIG_NOT_FOUND 验收));
+可选 DB 落库校验(mysql/psql 客户端在场时两表行数=模板/scope 数,否则 SKIP)。
 
 ### 3.1 阶段与用例(场景 → 输入 → 预期)
 
 **阶段 0 前置自检**(5 项):服务在线 200 / Redis AOF=1 / kubectl 可用 / ns 就绪 / 防误刷守卫通过。
+
+**阶段 0m:全量规格资源预置**(5 项,仅 `--with-mounts` 时执行;位于前置自检之后、清场之前——
+预置失败返回 False,在 FLUSHDB/删 Pod 等破坏性动作**之前**中止,退出码 2):
+
+| # | 场景 | 输入 | 预期输出/断言 |
+|---|---|---|---|
+| 0m-1~2 | ConfigMap 资源就绪 | `kubectl create configmap agent-config-cm / box-policy-cm`(幂等,subPath key 逐字等于 `config.yaml`/`policy.yaml`;已存在则复用,内容不断言播种值——阶段 2c 按 CM 当前值比对) | created/AlreadyExists |
+| 0m-3 | 获取可调度节点 | `kubectl get nodes -o json` 取首个 Ready 且无 NoSchedule/NoExecute 污点者 | 非空(PV nodeAffinity 钉可调度节点;误指污点 master → Pod 永久 Pending「volume node affinity conflict」且 PV 亲和不可变,2026-08-28 手工补验教训) |
+| 0m-4 | 双 PVC 预置 | **「已 Bound 即复用,缺失才静态供给」**:PVC 已存在且 Bound → 直接复用(顺手清自己的孤儿 e2e-* PV);缺失 → `kubectl apply -f -`(hostPath PV + 空 storageClassName PVC + `volumeName` 预绑);存在但 Pending → 删后重建 | 预置成功(2026-08-28 真环境实测:ns 里已有真实实验留下的 agent-data-pvc→pv-agent-data 手工对,`volumeName` 不可变,盲目 apply 必 Invalid——复用既绑也更贴近生产:PVC 由谁供给不归模板管) |
+| 0m-5 | 双 PVC Bound | 轮询 ≤30s;卡 Released(PVC 曾删而 PV claimRef 钉死)→ `patch pv claimRef=null` 兜底重等 | 两 PVC phase=Bound |
+
+> CM/PVC 跨轮复用不清理(create/复用幂等);宿主 `/mnt/host-test` 由 hostPath `DirectoryOrCreate` 自建,无需预置。
 
 **阶段 1–2:播种 + 首次部署/亲和/打包/保活/幂等**(前置:清场后的空集群、空快照)
 
 | # | 场景 | 前置状态 | 输入 | 预期输出/内部状态变迁 | 
 |---|---|---|---|---|
 | 1a | H0 零 Pod 基线 | FLUSHDB+TRUNCATE+删 ns Pod 后,配置未下发 | — | ns 内零 agentserver Pod;`routing:snapshot` 不存在(服务启动不拉 Pod——启动期不依赖配置) |
-| 1 | —(种子) | 1a 之后 | 1×config_sync 全量 `{templates:N, scopes:N}`(基础 N=5;`--with-sidecar` 时 6) | 200,`templates_synced=scopes_synced=N`;写 DB→原子 SET 快照→逐 scope 推 RM config(带 pod_spec);DB 行数 [N,N](可选) |
-| 1b | H0 无请求预热 | 种子后,零 route | —(等待 ≤30s) | autoscale(1s tick)为 e2e-warm 部署 1 个热备:`resource:scope:e2e-warm:idle`=1 且 K8s 真实存在(**配置驱动预热**;暖 Pod 不进 SM 候选集,不经任何请求) |
+| 1 | —(种子) | 1a 之后 | 1×config_sync 全量 `{templates:N, scopes:N}`(基础 N=5;`--with-sidecar` +1;`--with-mounts` 再 +1,可叠加) | 200,`templates_synced=scopes_synced=N`;写 DB→原子 SET 快照→逐 scope 推 RM config(带 pod_spec);DB 行数 [N,N](可选) |
+| 1b | H0 无请求预热 | 种子后,零 route | —(等待 ≤90s;`--with-mounts` 时同窗并发预热两个 min_idle scope) | autoscale(1s tick)为 e2e-warm 部署 1 个热备:`resource:scope:e2e-warm:idle`=1 且 K8s 真实存在(**配置驱动预热**;暖 Pod 不进 SM 候选集,不经任何请求;`--with-mounts` 时 e2e-mnt 暖 Pod 同理,断言在阶段 2c) |
 | 2 | C 首次部署 | e2e-main 空(无候选 Pod) | `route(s1, e2e-main)` | 200,`pod_id` 以 `agentserver-` 开头,耗时≈一次 deploy(含 K8s create+等 Ready;内部:SM 候选空→need_acquire→RM deploy→REGISTER 入候选→重跑仲裁 placed) |
 | 3 | C 物理真象 | 上一步返回的 pod | — | `kubectl get pod` 存在且 Ready(控制面声称的 Pod 真实存在) |
 | 4 | C SSE 直连地址 | 同上 | — | `pod_sse_url` 以 `http://` 开头、host=Pod IP、端口/路径来自模板(替身为 :8086/sse) |
@@ -149,6 +166,47 @@ readiness 门控/挂载链路;`--sidecar-image <真 jiuwenbox 镜像>` 时 sidec
 | 2b-4 | C sidecar readiness 门控 | — | 返回的 `pod_sse_url` 已可用——TCP 探针(8096)通过是 Pod Ready 的前置 |
 | 2b-5 | C ConfigMap subPath 真挂载 | `kubectl exec -c box-standin -- cat /etc/box/policy.yaml` | 内容为 CM 播种的 `e2e-box-policy-standin`(挂载真实生效,非仅 spec 渲染) |
 
+**阶段 2c:全量真实规格**(19 项 +`--agent-env` 时 1 项,仅 `--with-mounts` 时执行):tpl-mnt 按
+**真实 config_sync 请求形状**逐字段复刻(主容器 cm/hp/pvc 三挂载 + 显式 `container_port=8086`
+/`readiness 5s/5s`/`pod_name=agentserver-mnt` + sidecar jiuwenbox 完整规格:特权四件套 +
+8321 + cm/hp/pvc 三挂载 + TCP 探针),2026-08-28 双真镜像手工全量验证(feature 记录)的 e2e 化。
+sidecar 镜像随 `--sidecar-image` 分流:真 jiuwenbox 用 8321 + `JIUWENBOX_LISTEN`,替身 influxdb
+错开 8096/8098——**特权四件套与三挂载两种模式都下发**(渲染路径不依赖镜像,默认替身跑即可断言);
+注意其 ConfigMap 引用 `box-policy-cm`(阶段 0m 预置),**不是** 2b 的 `e2e-box-cm`(后者被
+`--with-sidecar` 门控,单独开 `--with-mounts` 时不存在):
+
+| # | 场景 | 输入 | 预期输出/断言 |
+|---|---|---|---|
+| 2c-1 | H0 全量规格预热 | —(等 ≤120s) | `scope:e2e-mnt:idle`≥1 且 Pod Ready——PVC 未 Bound/apparmor 被拒/CM 缺失都卡在此(而非 route 超时后一片红) |
+| 2c-2 | C 零冷启动复用 | `route(s-mnt, e2e-mnt)` | 200 且 `pod_id` ∈ 阶段 2c-1 暖池集合(全量规格暖 Pod 被复用,不冷启) |
+| 2c-3 | 双容器真象 | `kubectl get pod -o json` | 容器名集合 = `{agent, jiuwenbox}`(≠ 2b 的 box-standin) |
+| 2c-4 | 显式 container_port | — | 主容器 ports 含 `containerPort=8086`(=sse_port → 单端口声明 `sse`) |
+| 2c-5~7 | 主容器三挂载渲染 | — | volumeMounts:`/etc/agent/config.yaml`(subPath=config.yaml)/`/mnt/host-test`(readOnly=true)/`/var/lib/agent` 各就位 |
+| 2c-8 | 主容器 readiness | — | httpGet path=模板 health_path、port=8086、initialDelay/period=5/5 |
+| 2c-9 | agent_env 注入 | —(仅 `--agent-env` 时断言) | 主容器 env 逐项 == 模板 agent_env(真镜像三件套 AGENT_HTTP_*) |
+| 2c-10 | sidecar 特权三件套 | — | securityContext:privileged=true、capabilities.add={SYS_ADMIN,NET_ADMIN}、seccompProfile=Unconfined |
+| 2c-11 | sidecar apparmor | — | Pod annotation `container.apparmor.security.beta.kubernetes.io/jiuwenbox=unconfined` |
+| 2c-12 | 卷全景 | — | Pod volumes 按内容断言:2 ConfigMap + 2 hostPath(/mnt/host-test、/sys/fs/cgroup)+ 2 PVC 各就位 |
+| 2c-13 | sidecar TCP 探针 | — | tcpSocket port=8321(真)/8096(替身)、5s/5s |
+| 2c-14~17 | 主容器 exec 实证 | `cat`/`ls -d`/`touch`/`sh -c 'echo>…&&cat'` | CM 内容可见;hostPath 目录存在(DirectoryOrCreate);`/mnt/host-test` 写入被拒(Read-only file system);`/var/lib/agent` PVC 可写回读 |
+| 2c-18~20 | sidecar exec 实证 | 同上四连(-c jiuwenbox) | `policy.yaml` 内容可见;`/sys/fs/cgroup` 宿主 cgroup 可见;`/var/lib/jiuwenbox` PVC 可写回读 |
+
+> 前置:阶段 0m 资源预置通过;tpl-mnt 已随阶段 1 下发(min_idle=1,暖 Pod 应已存在)。
+> 内部状态变迁:route 命中暖 Pod → SM 注册(此后 mnt Pod 进 `pods:registered`,阶段 4/5 计数 +1)
+> → Pod 全生命周期经历阶段 4 老化/11b 巡检/12 cleanup(全量卷+特权 Pod 不被误杀是白赚的回归面)。
+> 留白:exec 类断言依赖镜像内有 shell/cat/ls(真 jiuwenbox 无 shell 时如实 FAIL——本身即真实场景
+> 信息);探测契约 A 类变更矩阵(health_path/sse_port 变更后老 Pod)仍归真镜像门禁;readiness http
+> 探针类型、sidecar 资源限额/run_as_user、nfs_* 挂载未覆盖(见 §8.3)。
+> **已知真实缺陷(2026-08-28 双真镜像门禁实测,PVC 写回读 FAIL)**:agentserver 真镜像以
+> uid=1000(app) 运行,PVC 后端目录 root:root 0755 → `/var/lib/agent` 写入 Permission denied
+> (替身 influxdb 以 root 跑、sidecar 特权,均掩盖此问题)。当前 Template schema 无 pod 级
+> fsGroup、主容器不渲染 securityContext(sidecar 才有 run_as_user)——修法需产品决策,修前
+> 门禁该项保持红。**考证与决策(2026-08-28)**:老体系靠部署脚本对存储后端 `chown 1000:1000/
+> chmod 777` 预属主(NFS/hostPath 的 volume plugin 均不做 fsGroup 属主管理——Pod spec 层
+> 解决不了);`fs_group` 字段方案曾同日实现并真环境验证(渲染生效,但 hostPath backend 卷
+> 穿透不到目录属主),按需求方决定**整体回退暂缓**——本环境现阶段解法为存储侧预属主
+> (运维手段,同老体系),详见 feature/2026-08-e2e-full-mounts-stage.md。
+
 **阶段 3:M(B 类)pod_ttl 热更新**(前置:阶段 2 结束,s1–s3 活跃、2 Pod 在役;3 项)
 
 | # | 输入 | 预期(内部状态变迁) |
@@ -166,7 +224,7 @@ readiness 门控/挂载链路;`--sidecar-image <真 jiuwenbox 镜像>` 时 sidec
 | 18 | 时间回拨(加速,不真睡 TTL) | 30s 内 `scope:sessions` 清空(sweeper 1s tick 扫 `session_expiry` 到期集→逐个 EVICT+PUBLISH free) |
 | 19 | — | 会话四处全清(session HASH/expiry/pod 集/scope 集) |
 | 20 | — | 空 Pod pass → idle_consider → RM `idle` 暖池 2 个(空闲 Pod 回暖池等待回收/复用) |
-| 21 | — | 不变量 5:`pods:registered` 仍 2 个(`--with-sidecar` 时 3,box Pod 长存;待 RM 回收后清) |
+| 21 | — | 不变量 5:`pods:registered` 仍 2 个(`--with-sidecar` 时 3,box Pod 长存;`--with-mounts` 时再 +1,mnt Pod 2c 已 route;待 RM 回收后清) |
 | 22 | — | 两个 Pod `phase`="idle" |
 
 > 留白:回拨掩盖「写入路径的 expiry 数值/单位错误」类缺陷(回拨直接改写终值)——自然写入-到期链路仅阶段 5b 覆盖(tpl-nat);touch 续期与到期竞态(恰好临界续期)未覆盖。
@@ -177,7 +235,7 @@ readiness 门控/挂载链路;`--sidecar-image <真 jiuwenbox 镜像>` 时 sidec
 |---|---|---|
 | 23 | `idle_since=now-121` | 20s 内 idle 池清空(reclaim 1s tick:excess 且 aged≥pod_ttl → K8s delete+PURGE+notify) |
 | 24–25 | 每个 Pod | K8s 真删(`kubectl` NotFound)+ RM `pods:all` PURGE(物理与编排态双清) |
-| 26 | — | notify_pod_dead 已清 `pods:registered`(归零;`--with-sidecar` 时剩 1,box Pod 阶段 12 cleanup 统一清) |
+| 26 | — | notify_pod_dead 已清 `pods:registered`(归零;`--with-sidecar` 时剩 1,`--with-mounts` 时再 +1,长存 Pod 阶段 12 cleanup 统一清) |
 
 > 留白:min_idle 底数保护下的「不回收」正路径未在此验(阶段 8 只验补位);reclaim 与 acquire 复用的 TOCTOU(回收判定后 Pod 被复用)未覆盖(审计网 C 系外,属已知 P1 遗留,见 feature 记录遗留清单)。
 
@@ -261,8 +319,8 @@ readiness 门控/挂载链路;`--sidecar-image <真 jiuwenbox 镜像>` 时 sidec
 | # | 输入 | 预期(内部状态变迁) |
 |---|---|---|
 | 44 | 一致性巡检 | `pods:all` 每个 Pod 在 K8s 均存在(无漂移) |
-| 45 | `cleanup(namespace=验收ns)` | 200 `cleaned≥0`;kubectl 该 ns 无 agentserver Pod(批删含 deploy 失败遗留的孤儿) |
-| 46 | —(12s 后) | watch/reconcile 兜底清空 Redis RM 编排态(被删 Pod 由 NotFound 路径收敛) |
+| 45 | `cleanup(namespace=验收ns)` | 200 `cleaned≥0`;被删的存量 Pod 从 ns 消失(批删含 deploy 失败遗留的孤儿;**不断言 ns 恒零**——min_idle scope 的 autoscale 重建热备与即时采样竞速,「No resources found」与 H0 配置驱动预热自相矛盾;`--with-mounts` 时双 min_idle scope 同 watch tick 一起重建,旧恒零断言必闪红,2026-08-28 改) |
+| 46 | —(12s 后) | watch/reconcile 兜底清空 Redis RM 编排态:**cleanup 前的存量 Pod 全部经 NotFound 路径收敛**(重建者=新 pod_id 的 min_idle 暖 Pod,详情列出 rebuilt_by_autoscale;旧「恒零」断言语义同 #45 已改) |
 | 47 | — | `session_manager:pod:*` 注册态全清 |
 
 **阶段 12b:表达式 or 支(清场后确定性验证,1 项)**:原位置在阶段 2 尾,但彼时 e2e-main 已被
@@ -555,6 +613,12 @@ uv run --no-sync python scripts/load_test.py \
   deadline 模拟,真进程硬崩 + 重启收敛未覆盖。
 - 依赖故障注入:Redis 运行中闪断、DB 不可达时的 route/config_sync/启动降级、
   K8s API 5xx/超时、create 409 名字冲突——全部零覆盖。
+- 真实配置形状的**镜像侧行为**(2026-08-28 阶段 0m/2c 已把配置渲染与挂载链路
+  自动化,替身即可断言;仍留):真 jiuwenbox 镜像内无 shell 时 exec 类断言的
+  可达性、readiness `http` 探针类型真环境、多 sidecar(>1)形态。
+- sidecar 细粒度规格:资源限额(cpu/memory request/limit)、`run_as_user/group`、
+  `capabilities_drop`——schema/渲染已支持,e2e 零覆盖。
+- `nfs_server/nfs_path/nfs_mount_path` 挂载:e2e 零覆盖(需 NFS 环境决策)。
 
 **B. 已确认存在、复现需确定性时序或产品决策(P1/P2 遗留)**
 - reclaim 与 acquire 复用的 TOCTOU(在用 Pod 被物理删):两轮审计确认,
