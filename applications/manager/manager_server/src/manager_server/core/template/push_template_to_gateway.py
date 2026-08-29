@@ -31,12 +31,14 @@ from manager_server.models.template_models import (
     AGENT_TEMPLATE_TABLE_DEF,
     EMBEDDING_TEMPLATE_TABLE_DEF,
     EXTENSION_CONFIG_TEMPLATE_TABLE_DEF,
+    MCP_TEMPLATE_TABLE_DEF,
     MODEL_TEMPLATE_TABLE_DEF,
     SKILL_WHITELIST_TEMPLATE_TABLE_DEF,
 )
 from manager_server.schemas.template_slot_schemas import (
     EMBEDDING_MODEL_SLOT,
     EXTENSION_CONFIG_SLOT,
+    MCP_SLOT,
     MODEL_TEMPLATE_SLOTS,
     SKILL_WHITELIST_SLOT,
 )
@@ -80,6 +82,11 @@ TEMPLATE_KIND_SPECS: dict[str, TemplateKindSpec] = {
         table_name=EXTENSION_CONFIG_TEMPLATE_TABLE_DEF.table_name,
         slot_keys=frozenset({EXTENSION_CONFIG_SLOT}),
     ),
+    "mcp_templates": TemplateKindSpec(
+        config_section="mcp_templates",
+        table_name=MCP_TEMPLATE_TABLE_DEF.table_name,
+        slot_keys=frozenset({MCP_SLOT}),
+    ),
 }
 
 TEMPLATE_KIND_ORDER: tuple[str, ...] = tuple(TEMPLATE_KIND_SPECS.keys())
@@ -89,6 +96,7 @@ _TEMPLATE_HTTP_PATHS: dict[str, str] = {
     "embedding_templates": "/api/v1/embedding-templates",
     "extension_config_templates": "/api/v1/extension-config-templates",
     "skill_whitelist_templates": "/api/v1/skill-whitelist-templates",
+    "mcp_templates": "/api/v1/mcp-templates",
 }
 _PUSH_DROP_KEYS = frozenset({"id", "created_at", "updated_at", "jiuwenclaw_id"})
 
@@ -97,6 +105,7 @@ _ROW_TO_OUT_MODULES: dict[str, str] = {
     "embedding_templates": "manager_server.core.template.embedding_template",
     "skill_whitelist_templates": "manager_server.core.template.skill_whitelist_template",
     "extension_config_templates": "manager_server.core.template.extension_config_template",
+    "mcp_templates": "manager_server.core.template.mcp_template",
 }
 
 RowToSyncFn = Callable[[Any], dict[str, Any]]

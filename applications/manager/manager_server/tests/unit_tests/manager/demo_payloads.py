@@ -218,6 +218,25 @@ def skill_whitelist_templates() -> list[tuple[str, dict[str, Any]]]:
     ]
 
 
+def mcp_templates() -> list[tuple[str, dict[str, Any]]]:
+    return [
+        (
+            "M1",
+            {
+                "template_name": "Demo MCP Server",
+                "description": "HTTP MCP for demo tools",
+                "mcp_entry": {
+                    "name": "demo-tools",
+                    "transport": "http",
+                    "url": "http://127.0.0.1:9000/mcp",
+                },
+                "enabled": True,
+                "data": {"demo": "m1"},
+            },
+        ),
+    ]
+
+
 def service_config_templates() -> list[tuple[str, dict[str, Any]]]:
     base = demo_agent_server_base()
     return [

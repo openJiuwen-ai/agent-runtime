@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 import re
 
 from croniter import croniter
-from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field, field_validator, model_validator
 
 from manager_server.schemas.safe_text import SafeTextMixin
 
@@ -437,7 +437,108 @@ class SkillWhitelistTemplateOut(BaseModel):
 
 
 # 与库表类型上限一致：integer → 有符号 32 位
-_SERVICE_INT_MAX = 2_147_483_647
+__VALID_MCP_TRANSPORTS = frozenset({
+    "stdio",
+    "sse",
+    "http",
+    "streamable-http",
+    "streamable_http",
+})
+
+
+def validate_mcp_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    """校验 MCP 模板内的 ``mcp_entry``（对齐 servers[] 结构，但不保留条目级 enabled）。
+
+    企业模板开关只认模板行 ``enabled``；``mcp_entry.enabled`` 若传入则丢弃，避免双开关。
+    """
+    if not isinstance(entry, dict):
+        raise ValueError("mcp_entry must be a JSON object")
+    normalized = dict(entry)
+    normalized.pop("enabled", None)
+    name = str(normalized.get("name", "")).strip()
+    if not name:
+        raise ValueError("mcp_entry.name is required")
+    transport = str(normalized.get("transport", "")).strip().lower()
+    if transport not in _VALID_MCP_TRANSPORTS:
+        raise ValueError(
+            "mcp_entry.transport must be one of: "
+            + ", ".join(sorted(_VALID_MCP_TRANSPORTS))
+        )
+    if transport == "stdio":
+        command = str(normalized.get("command", "")).strip()
+        if not command:
+            raise ValueError("mcp_entry.command is required for stdio transport")
+    else:
+        url = str(normalized.get("url", "")).strip()
+        if not url:
+            raise ValueError("mcp_entry.url is required for remote MCP transport")
+    normalized["name"] = name
+    normalized["transport"] = transport
+    return normalized
+
+
+class McpTemplateCreateBody(SafeTextMixin):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    template_name: str = Field(..., min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=512)
+    mcp_entry: dict[str, Any]
+    enabled: bool = True
+    data: dict[str, Any] | None = None
+
+    @field_validator("mcp_entry")
+    @classmethod
+    def _validate_mcp_entry(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_mcp_entry(value)
+
+
+class McpTemplateUpdateBody(SafeTextMixin):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    template_name: str | None = Field(default=None, min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=512)
+    mcp_entry: dict[str, Any] | None = None
+    enabled: bool | None = None
+    data: dict[str, Any] | None = None
+
+    @field_validator("mcp_entry")
+    @classmethod
+    def _validate_mcp_entry(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        if value is None:
+            return None
+        return validate_mcp_entry(value)
+
+
+class McpTemplateListQuery(BaseModel):
+    page: int = Field(1, ge=1)
+    page_size: int = Field(20, ge=1, le=200)
+    enabled: bool | None = None
+    search: str | None = Field(
+        default=None,
+        description="按 template_id、template_name、description、mcp_entry.name 模糊搜索",
+    )
+    sort_by: str | None = Field(
+        default=None,
+        description="排序字段：template_name、description、updated_at",
+    )
+    sort_order: str | None = Field(default=None, description="排序方向：asc、desc")
+
+
+class McpTemplateOut(BaseModel):
+    id: int
+    template_id: str
+    template_name: str
+    description: str | None
+    mcp_entry: dict[str, Any]
+    enabled: bool
+    data: dict[str, Any] | None
+    created_at: str | None
+    updated_at: str | None
+
+
+# 与库表类型上限一致：integer → 有符号 32 位；autoscale_interval → DECIMAL(10,3)
+
+SERVICE_INT_MAX = 2_147_483_647
 
 # K8s resource quantity：CPU 如 500m / 2 / 0.5；内存须带单位 Ki/Mi/Gi/K/M/G
 _K8S_CPU_RE = re.compile(r"^(?:(?:0|[1-9]\d*)(?:\.\d+)?|\.\d+)m?$")

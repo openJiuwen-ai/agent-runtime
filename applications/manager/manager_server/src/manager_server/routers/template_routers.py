@@ -1,5 +1,6 @@
 """模板 CRUD API：model_template、extension_config_template、skill_whitelist_template、
-service_config_template（全局；服务配置同步 Runtime，其余可下发 Gateway）、agent_template。
+?? CRUD API?model_template?extension_config_template?skill_whitelist_template?
+mcp_template?service_config_template?????????? Runtime?????? Gateway??agent_template?
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from manager_server.core.template.embedding_template import (
 from manager_server.core.template.extension_config_template import (
     ExtensionConfigTemplateService,
 )
+from manager_server.core.template.mcp_template import McpTemplateService
 from manager_server.core.template.model_template import ModelTemplateService
 from manager_server.core.template.service_config_template import (
     ServiceConfigTemplateService,
@@ -35,6 +37,9 @@ from manager_server.schemas.template_schemas import (
     ExtensionConfigTemplateCreateBody,
     ExtensionConfigTemplateListQuery,
     ExtensionConfigTemplateUpdateBody,
+    McpTemplateCreateBody,
+    McpTemplateListQuery,
+    McpTemplateUpdateBody,
     ModelTemplateCreateBody,
     ModelTemplateListQuery,
     ModelTemplateUpdateBody,
@@ -64,6 +69,10 @@ def _extension_config_template_svc(handler: DBHandler) -> ExtensionConfigTemplat
 
 def _skill_whitelist_template_svc(handler: DBHandler) -> SkillWhitelistTemplateService:
     return SkillWhitelistTemplateService(handler)
+
+
+def _mcp_template_svc(handler: DBHandler) -> McpTemplateService:
+    return McpTemplateService(handler)
 
 
 def _service_config_template_svc(handler: DBHandler) -> ServiceConfigTemplateService:
@@ -458,6 +467,89 @@ async def delete_skill_whitelist_template(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not ok:
         raise HTTPException(status_code=404, detail="skill whitelist template not found")
+    return ResponseModel(
+        code=200, message="success", data={"deleted": True, "template_id": template_id}
+    )
+
+
+# --- mcp_template ---
+
+
+@templates_router.post("/mcp-templates", response_model=ResponseModel)
+async def create_mcp_template(
+    body: McpTemplateCreateBody,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    svc = _mcp_template_svc(handler)
+    try:
+        data = await svc.create(body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ResponseModel(code=200, message="success", data=data.model_dump())
+
+
+@templates_router.get("/mcp-templates", response_model=ResponseModel)
+async def list_mcp_templates(
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+    query: Annotated[McpTemplateListQuery, Query()],
+):
+    svc = _mcp_template_svc(handler)
+    try:
+        data = await svc.list_templates(query)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ResponseModel(code=200, message="success", data=data)
+
+
+@templates_router.get(
+    "/mcp-templates/{template_id}", response_model=ResponseModel
+)
+async def get_mcp_template(
+    template_id: TemplateIdPath,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    svc = _mcp_template_svc(handler)
+    try:
+        row = await svc.get(template_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if row is None:
+        raise HTTPException(status_code=404, detail="mcp template not found")
+    return ResponseModel(code=200, message="success", data=row.model_dump())
+
+
+@templates_router.patch(
+    "/mcp-templates/{template_id}", response_model=ResponseModel
+)
+async def update_mcp_template(
+    template_id: TemplateIdPath,
+    body: McpTemplateUpdateBody,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    svc = _mcp_template_svc(handler)
+    try:
+        row = await svc.update(template_id, body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if row is None:
+        raise HTTPException(status_code=404, detail="mcp template not found")
+    return ResponseModel(code=200, message="success", data=row.model_dump())
+
+
+@templates_router.delete(
+    "/mcp-templates/{template_id}", response_model=ResponseModel
+)
+async def delete_mcp_template(
+    template_id: TemplateIdPath,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    svc = _mcp_template_svc(handler)
+    try:
+        ok = await svc.delete(template_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not ok:
+        raise HTTPException(status_code=404, detail="mcp template not found")
     return ResponseModel(
         code=200, message="success", data={"deleted": True, "template_id": template_id}
     )
