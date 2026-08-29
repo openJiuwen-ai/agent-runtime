@@ -17,6 +17,18 @@ def now_ts() -> int:
     return int(time.time())
 
 
+def key_unsafe(value: Any) -> bool:
+    """标识符是否含 ``{``/``}``——不可进入 Redis 键名。
+
+    键前缀的 hash tag（如 ``{session_manager}:``）靠**第一对**花括号定槽：
+    外部标识符（scope_id/session_id 等）若自带 ``}``，会提前截断 tag、把
+    该标识符的键甩到别的 slot，Redis Cluster 下多键 Lua 直接跨槽报错。
+    入口处（orchestrator.route/touch、config_store 行解析）据此拒绝。
+    """
+    text = s(value)
+    return "{" in text or "}" in text
+
+
 def fingerprint(fields: dict[str, Any]) -> str:
     """字典字段的确定性 hash 指纹（deploy_ver 用）：过滤 None 后按键序规范化
     JSON 序列化再 md5。

@@ -2,8 +2,10 @@
 """Session Manager 的 7 个 Lua 脚本（所有 runtime 状态变更，原子）。
 
 约定：
-- 脚本不传 KEYS（键在脚本内由 ``prefix`` 动态拼出；单实例 Redis 无 cluster 限制）；
-- ``ARGV[1]`` 恒为键前缀（如 ``session_manager:``）；
+- 脚本不传 KEYS（键在脚本内由 ``prefix`` 动态拼出）；前缀自带 hash tag
+  （``{session_manager}:``），Redis Cluster 下整个 SM 键域同槽——脚本访问的
+  必是本节点键，多键原子语义在 cluster 分片下依然成立；
+- ``ARGV[1]`` 恒为键前缀（如 ``{session_manager}:``）；
 - 返回值为扁平字符串数组（真实 client 返回 bytes，由调用方解码）。
 
 脚本清单（语义见 SM 设计 §5.1，逐条对齐）：

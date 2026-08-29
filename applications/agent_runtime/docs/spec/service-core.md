@@ -18,7 +18,7 @@
 
 SM 侧 ctx,级联管理全部生命周期(框架 App 的 lifespan 只认一个 ctx_factory——返回本类):
 
-- 构造时同时建 **rm_sysctx**(同 redis/db,仅 `key_prefix` 不同:SM=`session_manager`,RM=`resource_manager`)。
+- 构造时同时建 **rm_sysctx**(同 redis/db,仅 `key_prefix` 不同:SM=`{session_manager}`,RM=`{resource_manager}`;前缀带 Redis Cluster hash tag,模块键域同槽,详见 `docs/feature/2026-08-redis-cluster.md`)。
 - `_bind_modules()`:先构造后绑定,破解 SM↔RM 循环引用——
   `SessionState`/`ResourceState` → `SessionManagerFacade`/`ResourceManagerFacade(ResourceOrchestrator)` → `ConfigStore(push_pool_config=rm_facade.update_pool_config)` → `SessionOrchestrator` → `SessionSweeper`/`ResourceSweeper`。
 - `_build_jobs()`:5 个后台任务,全部 `create_single_leader_job`(tick 级 Redis 选主锁,多副本全局单副本执行;`tick_timeout_sec` 取 `TICK_TIMEOUTS` 常量表——单次 tick 上限,防 redis/k8s IO 抖动挂死 `_run_forever` 循环,超时取消本拍记日志、下一拍重试):
@@ -54,6 +54,9 @@ SM 侧 ctx,级联管理全部生命周期(框架 App 的 lifespan 只认一个 c
   `OPENJIUWEN_SERVICE_REDIS_SOCKET_TIMEOUT_SECONDS`(默认 5,命令读写;本项目无 BLPOP 等长阻塞命令,短超时安全)、
   `OPENJIUWEN_SERVICE_REDIS_HEALTH_CHECK_INTERVAL_SECONDS`(默认 30,空闲连接周期 PING 验活)、
   `OPENJIUWEN_SERVICE_REDIS_RETRY_ATTEMPTS`(默认 3,连接类错误指数退避重试)。
+  **Cluster 支持**:`OPENJIUWEN_SERVICE_REDIS_URL` 用 `redis+cluster://`(TLS 用 `rediss+cluster://`)
+  scheme 即构造集群客户端(`RedisCluster.from_url`,一种子节点即可,拓扑自发现;cluster 只有
+  db 0,URL 带库号会在构建点直接报配置错误)。多键 Lua 的同槽前提由键前缀 hash tag 保证。
   本地 local 模式 fakeredis 不经此路径,不受影响。
 - **MySQL**(`foundation/db`:`RUNTIME_DB_CONNECT_TIMEOUT`/`DB_CONNECT_TIMEOUT`,默认 5s):aiomysql 建连超时(mysql 系 driver 自动注入,调用方显式 connect_args 优先)。查询读超时 aiomysql 无参数,由请求级 deadline 兜底。
 - **PostgreSQL**(`DB_TYPE=postgresql` → `PostgreSQLHandler`,asyncpg 驱动;服务框架 bootstrap/ServiceConfig 已接入,必填校验同 mysql,默认端口 5432;K8s 部署经 `deploy/agent_runtime.env` 的 `AGENT_RUNTIME_DB_TYPE` 切换,连接参数同组 `AGENT_RUNTIME_DB_*`):建连 `timeout` 与命令 `command_timeout` 均注入——asyncpg 建连默认 60s、命令默认**无限制**,不注入则慢查询可永久挂起。`timeout` 复用 `RUNTIME_DB_CONNECT_TIMEOUT`(默认 5s);`command_timeout` 独立旋钮 `RUNTIME_DB_COMMAND_TIMEOUT`/`DB_COMMAND_TIMEOUT`(默认 30s,低于请求级 deadline)。`init_database` 的临时引擎(CREATE DATABASE/SCHEMA)同款注入。

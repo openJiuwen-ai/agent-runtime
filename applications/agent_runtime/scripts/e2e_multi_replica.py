@@ -55,6 +55,7 @@ from e2e_lib import (
     summary_and_exit,
     wait_until,
 )
+from e2e_lib import RM_PREFIX, SM_PREFIX
 
 BASE = "http://127.0.0.1:30091/api/session"      # LB 单入口（NodePort）
 REDIS_URL = "redis://127.0.0.1:30001/2"
@@ -206,7 +207,7 @@ async def s2_route_touch(c: Client, r: aioredis.Redis) -> str:
 
     scope = "mr-main"
     check("S2 scope 会话数为 1",
-          await r.scard(f"session_manager:scope:{scope}:sessions") == 1)
+          await r.scard(f"{SM_PREFIX}scope:{scope}:sessions") == 1)
     return pod1
 
 
@@ -261,8 +262,8 @@ async def s4_burst(c: Client, r: aioredis.Redis) -> None:
           f"queue_full={len(queue_full)} timeout={len(timeout)}"
           f"（等待 scope_full_timeout 后 504 属预期）")
     check("S4 终态不超收", await r.scard(
-        f"session_manager:scope:{scope}:sessions") == 2)
-    wkey = f"session_manager:scope:{scope}:waiters"
+        f"{SM_PREFIX}scope:{scope}:sessions") == 2)
+    wkey = f"{SM_PREFIX}scope:{scope}:waiters"
 
     async def _drained() -> bool:          # 真 async 闭包（lambda 里协程==0 恒 False）
         return await r.zcard(wkey) == 0
@@ -273,7 +274,7 @@ async def s4_burst(c: Client, r: aioredis.Redis) -> None:
     check("S4 waiters 清空", drained,
           f"残留成员（应为其 request_id）：{sorted(members)[:5]}")
     check("S4 占位清空", await r.zcard(
-        f"resource_manager:resource:scope:{scope}:deploying") == 0)
+        f"{RM_PREFIX}resource:scope:{scope}:deploying") == 0)
 
 
 # ---------------------------------------------------------------- S5 幂等
@@ -282,14 +283,14 @@ async def s4_burst(c: Client, r: aioredis.Redis) -> None:
 async def s5_idempotent(c: Client, r: aioredis.Redis) -> None:
     print("\n== S5 幂等跨副本重放（同 request_id 两打 LB）==")
     scope = "mr-main"
-    before = await r.scard(f"session_manager:scope:{scope}:sessions")
+    before = await r.scard(f"{SM_PREFIX}scope:{scope}:sessions")
     code, first, _ = await c.post("route", group="mr-main", bot=BOT,
                                   session_id="mr-idem", request_id="mr-req-idem")
     code2, second, _ = await c.post("route", group="mr-main", bot=BOT,
                                     session_id="mr-idem", request_id="mr-req-idem")
     check("S5 两次响应一致", code == code2 == 200 and first == second,
           f"{first.get('pod_id')} / {second.get('pod_id')}")
-    after = await r.scard(f"session_manager:scope:{scope}:sessions")
+    after = await r.scard(f"{SM_PREFIX}scope:{scope}:sessions")
     check("S5 会话数不增（幂等态共享）", after == before + 1, f"{before} → {after}")
 
 
@@ -298,7 +299,7 @@ async def s5_idempotent(c: Client, r: aioredis.Redis) -> None:
 
 async def s6_config_propagation(c: Client, r: aioredis.Redis) -> None:
     print("\n== S6 配置传播（config_sync 经 LB → 路由快照覆盖 → 新 route 见新值）==")
-    snapshot_key = "session_manager:routing:snapshot"
+    snapshot_key = f"{SM_PREFIX}routing:snapshot"
     snap_before = await r.get(snapshot_key)
     check("S6 前置：路由快照已存在", bool(snap_before))
 
@@ -321,7 +322,7 @@ async def s6_config_propagation(c: Client, r: aioredis.Redis) -> None:
     code, _, body = await c.post("route", group="mr-main", bot=BOT,
                                  session_id="mr-s6")
     check("S6 更新后新 route 成功", code == 200, str(body)[:120])
-    expiry = await r.zscore("session_manager:session_expiry", "mr-s6")
+    expiry = await r.zscore(f"{SM_PREFIX}session_expiry", "mr-s6")
     now = int(time.time())
     check("S6 新会话用新 ttl=120", now + 100 <= int(expiry) <= now + 130,
           f"expiry-now={int(expiry) - now}")
@@ -404,7 +405,7 @@ async def s7_failover(c: Client, r: aioredis.Redis, census: ElectionCensus,
 
 async def s8_consistency(r: aioredis.Redis) -> None:
     print("\n== S8 一致性收尾（RM pods:all ⊆ K8s）==")
-    pods = await r.smembers("resource_manager:resource:pods:all")
+    pods = await r.smembers(f"{RM_PREFIX}resource:pods:all")
     missing = []
     for p in pods:
         pod_id = p.decode() if isinstance(p, bytes) else p

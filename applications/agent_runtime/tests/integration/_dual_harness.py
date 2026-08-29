@@ -227,13 +227,13 @@ class DualReplicas:
         deadline = time.monotonic() + duration
         while time.monotonic() < deadline:
             async for key in self.redis.scan_iter(
-                    match=f"agent_runtime:job:{job}:winner:*", count=100):
+                    match=f"{{agent_runtime:job:{job}}}:winner:*", count=100):
                 epoch = self._s(key).rsplit(":", 1)[-1]
                 val = await self.redis.get(key)
                 if val is not None:
                     samples.setdefault(epoch, {})["winner"] = self._s(val)
             async for key in self.redis.scan_iter(
-                    match=f"agent_runtime:job:{job}:candidates:*", count=100):
+                    match=f"{{agent_runtime:job:{job}}}:candidates:*", count=100):
                 epoch = self._s(key).rsplit(":", 1)[-1]
                 members = await self.redis.smembers(key)
                 if members:

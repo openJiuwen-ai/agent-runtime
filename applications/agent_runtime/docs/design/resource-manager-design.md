@@ -40,7 +40,7 @@
 | 单 Pod 容量上限 | 由 Resource Manager 负责 | ✅ **per-scope 独立 Pod 池**:一个 Pod 只服务一个 scope(单 scope 占 Pod),无跨 scope 共享;容量由 Session Manager 的 `SCARD(pod:{scope_id}:{pod_id}:sessions) < pod_concurrency` 闸门保证,Resource Manager **不维护 `reserves` HASH**。 |
 | `idle_consider` 语义 | `{pod_id}` → `{transitioned_to_idle:bool}` | ⚠️**修订为 scope 级**:`{pod_id, scope_id}` → `{transitioned_to_idle:bool}`。单 scope 占 Pod,Pod 上该 scope 0 session 即转入 `scope:idle` 暖池。 |
 | `notify_pod_dead` 覆盖范围 | 待确认是否覆盖回收 | ✅ **确认覆盖死亡 + reclaim 两种**:Pod 物理死亡(K8s Watch/轮询探测)与 idle→reclaim(主动回收)均经 `notify_pod_dead` 通知 Session Manager 清注册。 |
-| 状态真相源 | 未定(分水岭) | ✅ **拍板**:Pod 编排语义态(idle/info)在**共享 Redis**(同一实例,前缀 `resource_manager:`,与 SM 前缀隔离);Pod 物理态(存在/健康/pod_ip/sse_url)以 **K8s 为唯一真相源**,K8s Watch 驱动 Redis 对账。 |
+| 状态真相源 | 未定(分水岭) | ✅ **拍板**:Pod 编排语义态(idle/info)在**共享 Redis**(同一实例,前缀 `{resource_manager}:`,与 SM 前缀隔离);Pod 物理态(存在/健康/pod_ip/sse_url)以 **K8s 为唯一真相源**,K8s Watch 驱动 Redis 对账。 |
 | Pod idle 转换一致性 | 未定 | ✅ **拍板**:主路径 = Session Manager scope 级 `idle_consider`(单 scope 占 Pod,Pod 释放即转 idle);**周期对账兜底**(RM 经 Facade `reconcile_pods` 每 30s 查 SM,SM 不再 route 的 stale Pod → 按 `pod_ttl` 回收;不读 SM 模块 key)。Session Manager `idle_consider` 时已**原子 `ZREM scope:{scope_id}:pods`**,保证 reclaim 窗口内 SM 不再 route 新 session 到该 Pod。 |
 
 > **模块协调契约(Facade 边界)**:两模块共享同一 Redis 实例,但**跨模块数据交换只走进程内 Facade 方法**,不直接读对方 Redis key(模块硬边界)。原四条 REST(`acquire`/`idle_consider`/`notify_pod_dead`/`reconcile_pods`)改为 Facade 方法。**作废**原"SM/RM 须配不同 Redis 进程或不同 DB 号"硬要求(同进程同信任域)。
@@ -155,7 +155,7 @@
 
 ## 3. Redis 状态模型(编排语义态)
 
-前缀:业务 key 以 `resource:` 开头;框架 `SystemContext.key_prefix` 设为 `resource_manager`(完整 key = `resource_manager:resource:...`)。**共享 Redis 实例**(`key_prefix=resource_manager`,与 Session Manager(`session_manager:`)**前缀隔离**,见 §10;合并后同一实例,原"不同进程/不同 DB 号"硬要求作废,见 §10)。**所有计数派生自集合(SCARD),不另设计数器 → 无漂移、崩溃安全。**
+前缀:业务 key 以 `resource:` 开头;框架 `SystemContext.key_prefix` 设为 `{resource_manager}`(完整 key = `{resource_manager}:resource:...`;前缀整体为 Redis Cluster **hash tag**,模块键域同槽,多键 Lua 在 cluster 下保持原子)。**共享 Redis 实例**(`key_prefix={resource_manager}`,与 Session Manager(`{session_manager}:`)**前缀隔离**,见 §10;合并后同一实例,原"不同进程/不同 DB 号"硬要求作废,见 §10)。**所有计数派生自集合(SCARD),不另设计数器 → 无漂移、崩溃安全。**
 
 | 键 | 类型 | 内容 | 作用 |
 |---|---|---|---|

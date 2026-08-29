@@ -12,6 +12,7 @@ import asyncio
 
 import pytest
 
+from agent_runtime.config import SM_KEY_PREFIX
 from agent_runtime.errors import (
     NoPodAvailable,
     ScopeFullTimeout,
@@ -314,7 +315,7 @@ async def test_route_idempotent_replay_via_handler_idempotency(runtime):
             from openjiuwen_runtime.service.context.primitives.idempotency import Idempotency
 
             self.idempotency = Idempotency(
-                runtime.redis, prefix="session_manager:idem"
+                runtime.redis, prefix=f"{SM_KEY_PREFIX}:idem"
             )
 
         @property

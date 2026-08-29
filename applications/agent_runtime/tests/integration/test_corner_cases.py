@@ -56,6 +56,13 @@ async def test_route_and_touch_reject_missing_params(runtime):
             user_id="")
     with pytest.raises(InvalidParams):
         await runtime.orchestrator.touch("")
+    # session_id 进键名:含 {/} 破坏 Redis Cluster hash tag 同槽性 → 拒绝
+    with pytest.raises(InvalidParams, match="must not contain"):
+        await runtime.orchestrator.route(
+            request_id="r5", session_id="s{bad", group_id="grp", bot_id="bot",
+            user_id="u")
+    with pytest.raises(InvalidParams, match="must not contain"):
+        await runtime.orchestrator.touch("s}bad")
 
 
 @requires_lua

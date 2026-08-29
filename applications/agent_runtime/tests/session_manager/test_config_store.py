@@ -69,6 +69,25 @@ async def test_resolve_no_match_raises_config_not_found(runtime):
         await runtime.config_store.resolve("u1", "g", "b-other")
 
 
+def test_scope_row_with_braces_skipped(caplog):
+    """手改 DB 造出含 {/} 的 scope_id(写路径有白名单挡不住直改)→ 行按损坏
+    跳过并告警——{/} 会截断键前缀的 hash tag,破坏 Redis Cluster 同槽性。"""
+    from agent_runtime.session_manager.config_store import _scope_from_row
+
+    class _Row:  # 手改 DB 造出的坏行
+        scope_id = "bad}scope"
+        match_index = 1
+        template_id = "tpl-1"
+        routing_rules = ""
+
+    with caplog.at_level("WARNING"):
+        assert _scope_from_row(_Row()) is None
+    assert any(
+        "row corrupt" in rec.message and "bad}scope" in rec.message
+        for rec in caplog.records
+    )
+
+
 @requires_lua
 async def test_resolve_rebuilds_snapshot_after_flush(runtime):
     """快照被清(冷启动/FLUSH)→ 首次 resolve 从 DB 重建,结果一致。"""

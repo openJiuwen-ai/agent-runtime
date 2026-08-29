@@ -57,7 +57,7 @@
 
 `touch(session_id)`:LUA_TOUCH;不存在/已过期返回 False。
 
-## state.py —— SM 键表(`SMKeys`,全部含 `session_manager:` 前缀)
+## state.py —— SM 键表(`SMKeys`,全部含 `{session_manager}:` 前缀,带 cluster hash tag)
 
 | 键 | 类型 | 语义 |
 |---|---|---|

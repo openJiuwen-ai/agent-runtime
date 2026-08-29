@@ -29,7 +29,7 @@
 ## orchestrator.py —— acquire 决策树
 
 ```
-幂等缓存(request_id,键 resource_manager:idem:{rid},TTL 60,命中续期;
+幂等缓存(request_id,键 {resource_manager}:idem:{rid},TTL 60,命中续期;
   ★存活校验:缓存 Pod 已被 PURGE(watch/reclaim 判死)→ 弃缓存清键走全新
   acquire——回放死 Pod 会在 SM 侧复活注册并持续喂死地址给重试客户端)
 → 首见 scope:缓存池参数 + pod_spec_json 到 resource:scope:{sid}:config
@@ -54,7 +54,7 @@
 `update_pool_config`:HSET 覆盖池参数;A 类变更附带 pod_spec 时同时刷 deploy_ver/pod_spec_json(autoscale 补位用新 deploy 字段)。
 `cleanup`:K8s list+delete,**不操作 Redis 编排态**(被删 Pod 由 watch/reconcile 兜底发现);ns 404 容忍为 cleaned=0,**403 保持 fail-fast**(静默清零会掩盖部署配错)。
 
-## state.py —— RM 键表(`RMKeys`,前缀 `resource_manager:`,业务键再带 `resource:` 段)
+## state.py —— RM 键表(`RMKeys`,前缀 `{resource_manager}:`,业务键再带 `resource:` 段)
 
 | 键 | 类型 | 语义 |
 |---|---|---|
