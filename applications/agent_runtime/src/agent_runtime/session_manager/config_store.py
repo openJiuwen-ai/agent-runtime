@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
@@ -251,6 +252,9 @@ def template_from_payload(template_id: str, payload: dict[str, Any]) -> Template
         else:
             kwargs[field] = getattr(defaults, field)
     _validate_policy_fields(template_id, kwargs)
+    if kwargs.get("node_name") == "":
+        kwargs["node_name"] = None   # 空串与未设同义(渲染侧 or None;指纹同)
+    _validate_pod_placing_fields(template_id, kwargs)
     # sidecars 严格校验(fail-fast 400;跨字段冲突 = 撞主容器名/撞 agent 端口)。
     # 空列表与 None 统一归一为 None(deploy_ver 指纹稳定,见 sidecars.py)。
     sse_port = int(kwargs.get("sse_port") or 8080)
@@ -336,6 +340,33 @@ def _validate_policy_fields(template_id: str, kwargs: dict[str, Any]) -> None:
         raise InvalidParams(
             f"template {template_id!r} policy fields invalid: {'; '.join(problems)}"
         )
+
+
+# 节点名按宽松 hostname 形态(字母/数字/'-'/'.';K8s 节点名 = DNS subdomain,
+# 云厂商 FQDN 形态带 '.',不宜收紧到 DNS label)
+_NODE_NAME_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$")
+
+
+def _validate_pod_placing_fields(template_id: str, kwargs: dict[str, Any]) -> None:
+    """A 类容器身份/节点绑定字段(run_as_user/group、node_name)校验。
+
+    负 uid 与坏节点名都要到 K8s API 侧才失败(后者 Pod 永久 Pending 挂满
+    ready_timeout,错误对下发方不可见)——提前到 config_sync 锁外,确定性 400。
+    对齐 sidecars.py 对 sidecar run_as_user 的 minimum=0 先例。
+    """
+    for field in ("run_as_user", "run_as_group"):
+        value = kwargs.get(field)
+        if isinstance(value, int) and value < 0:
+            raise InvalidParams(
+                f"template {template_id!r} {field}={value} must be >= 0")
+    node_name = kwargs.get("node_name")
+    if node_name is not None and (
+            not isinstance(node_name, str)
+            or len(node_name) > 253
+            or not _NODE_NAME_RE.fullmatch(node_name)):
+        raise InvalidParams(
+            f"template {template_id!r} node_name={node_name!r} must be a "
+            "hostname (letters/digits/'-'/'.'; no spaces), <=253 chars")
 
 
 class ConfigStore:

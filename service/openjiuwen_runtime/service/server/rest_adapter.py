@@ -7,11 +7,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 from contextlib import suppress
 from typing import Any, Awaitable, Callable, Literal
 
 from fastapi import FastAPI, Request, Security
+from fastapi.exceptions import RequestValidationError
+from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, SkipValidation, create_model
 
@@ -21,6 +24,8 @@ from ..routing.handlers import MessageHandler, StreamMessageHandler
 from ..routing.result import StreamResult, UnaryResult
 from ..routing.router import MessageRouter
 from ..security import OAuth2AccessControl
+
+logger = logging.getLogger(__name__)
 
 
 class MetadataBody(BaseModel):
@@ -92,6 +97,36 @@ async def _dispatch_with_disconnect(
                 await dispatch_task
 
 
+async def _on_request_validation_error(
+    request: Request, exc: RequestValidationError,
+) -> JSONResponse:
+    """前置校验失败（422）留痕；响应经框架默认 handler 原样返回（契约不变）。
+
+    信封体模型被 FastAPI 拒绝时请求**未进 router**——无请求汇总行、无上下文
+    尾巴，本行是该请求唯一的日志证据。request_id 尽力从原始 body 抢救（信封
+    未过校验时可能缺失）；errors 只取 loc/msg 摘要（ctx/input 可能巨大或带敏
+    感字段，全文在 422 响应体里客户端自己可见）。
+    """
+    body = getattr(exc, "body", None)
+    request_id = ""
+    if isinstance(body, dict):
+        metadata = body.get("metadata")
+        if isinstance(metadata, dict):
+            request_id = str(metadata.get("request_id") or "")
+    errors = exc.errors() or []
+    summary = "; ".join(
+        f"{'.'.join(str(loc) for loc in e.get('loc') or ())}: {e.get('msg', '?')}"
+        for e in errors[:3]
+    ) or "no details"
+    if len(errors) > 3:
+        summary += f" (+{len(errors) - 3} more)"
+    logger.warning(
+        "request validation failed: path=%s request_id=%s detail=%s",
+        request.url.path, request_id or "-", summary,
+    )
+    return await request_validation_exception_handler(request, exc)
+
+
 class RestAdapter:
     """Mount registered handlers as explicit FastAPI POST operations."""
 
@@ -109,6 +144,10 @@ class RestAdapter:
         self._ensure_sysctx = ensure_sysctx
         self._oauth2 = oauth2
         self._registered: set[str] = set()
+        # 前置校验失败（422）默认零日志；挂留痕 handler（响应委托框架默认实现）
+        self._fastapi.add_exception_handler(
+            RequestValidationError, _on_request_validation_error,
+        )
 
     def register(
         self,
@@ -184,6 +223,11 @@ class RestAdapter:
         try:
             env = Envelope.from_dict(body.model_dump(mode="python", warnings=False))
         except (KeyError, TypeError, ValueError) as exc:
+            # 二层防御（体模型已过校验，正常不可达）：同样零日志不可接受
+            logger.warning(
+                "envelope construction failed: path=%s error=%s: %s",
+                request.url.path, type(exc).__name__, exc,
+            )
             return _error_json("", ErrorCode.VALIDATION, f"invalid envelope: {exc}")
 
         sysctx = await self._ensure_sysctx(self._fastapi)

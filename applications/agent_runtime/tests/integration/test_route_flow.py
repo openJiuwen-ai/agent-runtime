@@ -9,6 +9,7 @@ pod_concurrency=2 → max_pods=2、session_ttl=60。
 from __future__ import annotations
 
 import asyncio
+import logging
 
 import pytest
 
@@ -152,11 +153,15 @@ async def test_route_wakeup_on_capacity_release(runtime):
 
 
 @requires_lua
-async def test_touch_refresh_and_missing(runtime):
+async def test_touch_refresh_and_missing(runtime, caplog):
     await runtime.seed_template()
     await runtime.route("sess_1")
-    assert await runtime.orchestrator.touch("sess_1") is True
-    assert await runtime.orchestrator.touch("nope") is False
+    with caplog.at_level(logging.INFO, logger="agent_runtime.session_manager"):
+        assert await runtime.orchestrator.touch("sess_1") is True
+        assert await runtime.orchestrator.touch("nope") is False
+    # 未命中必须 INFO 留痕（生产排障入口）；命中不得刷 INFO（保活高频）
+    missed = [r for r in caplog.records if "touch missed" in r.getMessage()]
+    assert len(missed) == 1 and "nope" in missed[0].getMessage()
 
 
 # ---------------------------------------------------------------- 场景 D：老化回收链
