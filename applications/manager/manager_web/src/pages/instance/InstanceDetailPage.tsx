@@ -42,7 +42,7 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
   const mainTabs: { key: InstancePageTab; label: string; href: string; hidden?: boolean }[] = [
     { key: 'access', label: t('instanceDetail.tabs.access'), href: `/instances/${instanceId}/access` },
     { key: 'resources', label: t('instanceDetail.tabs.resources'), href: `/instances/${instanceId}/resources` },
-    { key: 'policies', label: t('instanceDetail.tabs.policies'), href: `/instances/${instanceId}/policies` },
+    { key: 'policies', label: t('instanceDetail.tabs.policies'), href: `/instances/${instanceId}/policies`, hidden: true },
     { key: 'config', label: t('instanceDetail.tabs.config'), href: `/instances/${instanceId}/config` },
     { key: 'status', label: t('instanceDetail.tabs.status'), href: `/instances/${instanceId}/status` },
     { key: 'tokenQuota', label: t('instanceDetail.tabs.tokenQuota'), href: `/instances/${instanceId}/token-quota` },
@@ -98,7 +98,12 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
                 {instanceId}
               </div>
             </div>
-            {instance.data?.status && <StatusBadge status={instance.data.status} />}
+            {instance.data?.gateway_status && (
+              <StatusBadge status={instance.data.gateway_status} />
+            )}
+            {instance.data?.runtime_status && (
+              <StatusBadge status={instance.data.runtime_status} />
+            )}
           </div>
 
           <div className="tabs-bar max-w-full shrink-0 self-center overflow-x-auto lg:justify-self-center">

@@ -7,98 +7,70 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
+def _norm_host(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip().rstrip("/")
+    return text or None
+
+
 class CreateInstanceBody(BaseModel):
-    jiuwenclaw_name: str = Field(..., max_length=128)
-    description: str | None = None
-    k8s_master_host: str
-    k8s_auth_type: str
-    k8s_auth_config: dict[str, Any]
-    k8s_namespace: str
-    resource_quota: dict[str, Any] | None = None
-    creator_id: str = Field(default="system", max_length=64)
-    group_id: str = Field(default="default", max_length=64)
+    jiuwenclaw_name: str = Field(..., min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=4096)
+    namespace: str = Field(default="default", max_length=64)
     space_id: str = Field(default="default", max_length=64)
-    # 指向网关侧 agent_client_rest 根地址，如 http://127.0.0.1:18080（与 config.yaml extensions.agent_client_rest 一致）
-    management_api_base: str | None = None
+    created_by: str = Field(default="system", max_length=64)
+    gateway_config_host: str = Field(..., min_length=1, max_length=512)
+    runtime_config_host: str = Field(..., min_length=1, max_length=512)
+    data: dict[str, Any] | None = None
 
 
 class InstanceUpdateBody(BaseModel):
     """更新 instance_info（未传字段不修改）。
 
-    ``status`` / ``last_heartbeat`` 由 Gateway WebSocket 心跳维护，不可通过本接口修改。
+    Gateway/Runtime 的 status 与 last_alive 由 Manager 探活维护，不可通过本接口修改。
     """
 
     jiuwenclaw_name: str | None = Field(default=None, max_length=128)
     description: str | None = Field(default=None, max_length=4096)
-    k8s_master_host: str | None = Field(default=None, max_length=256)
-    k8s_auth_type: str | None = Field(default=None, max_length=32)
-    k8s_auth_config: dict[str, Any] | None = None
-    k8s_namespace: str | None = Field(default=None, max_length=64)
-    resource_quota: dict[str, Any] | None = None
-    group_id: str | None = Field(default=None, max_length=64)
+    namespace: str | None = Field(default=None, max_length=64)
     space_id: str | None = Field(default=None, max_length=64)
+    gateway_config_host: str | None = Field(default=None, max_length=512)
+    runtime_config_host: str | None = Field(default=None, max_length=512)
     data: dict[str, Any] | None = None
-
-
-class ProvisionLocalInstanceBody(BaseModel):
-    """本地拉起 Gateway + AgentServer（需 MANAGER_ALLOW_LOCAL_PROVISION=true）。"""
-
-    jiuwenclaw_name: str = Field(default="local-instance", max_length=128)
-    creator_id: str = Field(default="system", max_length=64)
-    description: str | None = None
-
-
-class GatewayRegisterBody(BaseModel):
-    """Gateway → Manager：HTTP 自注册。"""
-
-    service_type: str = Field(default="gateway")
-    jiuwenclaw_id: str | None = None
-    jiuwenclaw_name: str | None = None
-    k8s_namespace: str | None = None
-    enc_pubkey: str | None = None
-    enc_alg: str | None = "X25519"
-    enc_pubkey_fp: str | None = None
-    endpoint: str | None = None
-    version: str | None = None
-
-
-class GatewayHeartbeatBody(BaseModel):
-    """Gateway → Manager：HTTP 心跳（可刷新 ``data.gateway_endpoint``）。"""
-
-    jiuwenclaw_id: str = Field(..., min_length=1)
-    service_type: str = Field(default="gateway")
-    endpoint: str | None = None
-    version: str | None = None
-    seq: int | None = None
-    role: str | None = None
+    updated_by: str | None = Field(default=None, max_length=64)
 
 
 class InstanceSummary(BaseModel):
     jiuwenclaw_id: str
     jiuwenclaw_name: str
-    status: str
-    k8s_namespace: str
-    group_id: str
+    namespace: str
     space_id: str
+    gateway_config_host: str
+    gateway_status: str
+    gateway_last_alive: str | None = None
+    runtime_config_host: str
+    runtime_status: str
+    runtime_last_alive: str | None = None
     created_at: str | None = None
-    last_heartbeat: str | None = None
     updated_at: str | None = None
 
 
 class InstanceListQuery(BaseModel):
     page: int = Field(1, ge=1)
     page_size: int = Field(20, ge=1, le=200)
-    status: str | None = None
+    gateway_status: str | None = None
+    runtime_status: str | None = None
     search: str | None = Field(
         default=None,
         max_length=256,
-        description="按实例名称、实例 ID、状态、命名空间模糊搜索",
+        description="按实例名称、实例 ID、命名空间、Gateway/Runtime 状态模糊搜索",
     )
     sort_by: str | None = Field(
         default=None,
         description=(
-            "排序字段：jiuwenclaw_name、status、last_heartbeat、"
-            "k8s_namespace、updated_at"
+            "排序字段：jiuwenclaw_name、gateway_status、gateway_last_alive、"
+            "runtime_status、runtime_last_alive、namespace、updated_at"
         ),
     )
     sort_order: str | None = Field(default=None, description="排序方向：asc、desc")
@@ -106,7 +78,6 @@ class InstanceListQuery(BaseModel):
 
 class InstanceDetail(InstanceSummary):
     description: str | None
-    k8s_master_host: str
-    k8s_auth_type: str
-    resource_quota: dict[str, Any] | None
     data: dict[str, Any] | None
+    created_by: str
+    updated_by: str | None = None

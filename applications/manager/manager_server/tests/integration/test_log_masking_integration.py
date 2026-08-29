@@ -102,16 +102,18 @@ async def _create_instance_row(
         {
             "jiuwenclaw_id": jiuwenclaw_id,
             "jiuwenclaw_name": "integration-test",
-            "creator_id": "tester",
             "description": None,
-            "k8s_master_host": "127.0.0.1",
-            "k8s_auth_type": "none",
-            "k8s_auth_config": "{}",
-            "k8s_namespace": "default",
-            "status": "online",
+            "namespace": "default",
+            "gateway_config_host": "http://127.0.0.1:18080",
+            "gateway_status": "online",
+            "runtime_config_host": "http://127.0.0.1:18081",
+            "runtime_status": "pending",
             "data": data,
+            "space_id": "default",
             "created_at": now,
+            "created_by": "tester",
             "updated_at": now,
+            "updated_by": "tester",
         },
     )
 
@@ -237,7 +239,7 @@ async def test_mdb_gdb_align_after_bootstrap_and_create(
 async def test_bootstrap_seed_once_sets_log_masking_seeded_flag(
     log_masking_harness: LogMaskingIntegrationHarness,
 ):
-    """Gateway 注册 bootstrap：仅首次 seed；``log_masking_seeded=true`` 后不再 seed。"""
+    """Gateway 上线 bootstrap：仅首次 seed；``log_masking_seeded=true`` 后不再 seed。"""
     h = log_masking_harness
     await _create_instance_row(h.manager_handler, h.jiuwenclaw_id)
 

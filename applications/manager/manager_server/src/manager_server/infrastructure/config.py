@@ -33,35 +33,10 @@ class Settings(BaseSettings):
     db_password: str = Field(default="root", validation_alias="MANAGER_DB_PASSWORD")
     db_name: str = Field(default="manager", validation_alias="MANAGER_DB_NAME")
 
-    manager_heartbeat_timeout_seconds: int = Field(
-        default=120, validation_alias="MANAGER_HEARTBEAT_TIMEOUT_SECONDS"
-    )
+    # Manager 周期探活 Gateway/Runtime 健康检查的间隔（秒）
     MANAGER_HEARTBEAT_SCAN_INTERVAL_SECONDS: int = Field(
         default=60, validation_alias="MANAGER_HEARTBEAT_SCAN_INTERVAL_SECONDS"
     )
-    allow_local_provision: bool = Field(
-        default=False, validation_alias="MANAGER_ALLOW_LOCAL_PROVISION"
-    )
-    provision_workspace_root: str = Field(
-        default=".claw_provisioned_instances",
-        validation_alias="CLAWMANAGER_PROVISION_WORKSPACE_ROOT",
-    )
-    provision_python: str | None = Field(
-        default=None, validation_alias="CLAWMANAGER_PROVISION_PYTHON"
-    )
-    provision_pythonpath: str | None = Field(
-        default=None, validation_alias="CLAWMANAGER_PROVISION_PYTHONPATH"
-    )
-    provision_repo_root: str | None = Field(
-        default=None, validation_alias="CLAWMANAGER_PROVISION_REPO_ROOT"
-    )
-    provision_extension_dirs: str | None = Field(
-        default=None, validation_alias="CLAWMANAGER_PROVISION_EXTENSION_DIRS"
-    )
-    instance_config_template: str | None = Field(
-        default=None, validation_alias="CLAWMANAGER_INSTANCE_CONFIG_TEMPLATE"
-    )
-
     # ========== 配置下发字段级加密（信封加密，密钥握手分发） ==========
     config_enc_enabled: bool = Field(
         default=False, validation_alias="CLAWMANAGER_CONFIG_ENC_ENABLED"

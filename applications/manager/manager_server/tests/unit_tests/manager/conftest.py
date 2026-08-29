@@ -116,6 +116,8 @@ class ManagerApiHarness:
 
     @staticmethod
     def instances_url(suffix: str = "") -> str:
+        if not suffix:
+            return "/api/v1/instances/"
         return f"/api/v1/instances{suffix}"
 
     def scoped_url(self, path: str) -> str:
@@ -219,6 +221,21 @@ def _install_push_mocks(
             sim.gateway_request,
             raising=False,
         )
+
+    async def _noop_require_hosts(**_kwargs: Any) -> None:
+        return None
+
+    async def _fake_runtime_identity(_host: str, **_kwargs: Any) -> dict[str, str]:
+        return {"namespace": "default"}
+
+    monkeypatch.setattr(
+        "manager_server.core.instance.instance_service.require_config_hosts_reachable",
+        _noop_require_hosts,
+    )
+    monkeypatch.setattr(
+        "manager_server.core.instance.runtime_identity.fetch_runtime_identity_from_health",
+        _fake_runtime_identity,
+    )
 
 
 @pytest_asyncio.fixture

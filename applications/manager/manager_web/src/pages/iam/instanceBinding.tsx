@@ -32,7 +32,7 @@ export function InstanceFilter({
       <option value="">{t('iam.allInstances', { defaultValue: '全部实例' })}</option>
       {instances.map((i) => (
         <option key={i.jiuwenclaw_id} value={i.jiuwenclaw_id}>
-          {i.jiuwenclaw_name}（{i.k8s_namespace}）
+          {i.jiuwenclaw_name}（{i.namespace}）
         </option>
       ))}
     </select>

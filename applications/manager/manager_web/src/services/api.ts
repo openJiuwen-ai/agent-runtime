@@ -32,7 +32,6 @@ import type {
   ServiceConfigTemplate,
   ServiceConfigTemplateCreateBody,
   ServiceConfigTemplateUpdateBody,
-  ProvisionLocalInstanceBody,
   ResponseModel,
   LogMaskingRule,
   LogMaskingRuleCreateBody,
@@ -722,8 +721,9 @@ export const InstanceBindingApi = {
 export interface UserGateway {
   jiuwenclaw_id: string;
   jiuwenclaw_name: string;
-  status: string;
-  group_id: string;
+  gateway_status: string;
+  runtime_status?: string;
+  space_id?: string;
   gateway_endpoint: string | null;
 }
 
@@ -750,16 +750,22 @@ export const InstanceApi = {
   list: (params?: {
     page?: number;
     page_size?: number;
-    status?: string;
+    gateway_status?: string;
+    runtime_status?: string;
     search?: string;
-    sort_by?: 'jiuwenclaw_name' | 'status' | 'last_heartbeat' | 'k8s_namespace' | 'updated_at';
+    sort_by?:
+      | 'jiuwenclaw_name'
+      | 'gateway_status'
+      | 'runtime_status'
+      | 'gateway_last_alive'
+      | 'runtime_last_alive'
+      | 'namespace'
+      | 'updated_at';
     sort_order?: 'asc' | 'desc';
   }) =>
-    http<InstancePageRaw>('/v1/instances', { query: params }),
+    http<InstancePageRaw>('/v1/instances/', { query: params }),
   get: (id: string) => http<InstanceDetail>(`/v1/instances/${encodeURIComponent(id)}`),
-  create: (body: CreateInstanceBody) => http<InstanceSummary>('/v1/instances', { method: 'POST', body }),
-  provisionLocal: (body: ProvisionLocalInstanceBody) =>
-    http<Record<string, unknown>>('/v1/instances/provision-local', { method: 'POST', body }),
+  create: (body: CreateInstanceBody) => http<InstanceSummary>('/v1/instances/', { method: 'POST', body }),
   update: (id: string, body: { data?: Record<string, unknown> }) =>
     http<InstanceDetail>(`/v1/instances/${encodeURIComponent(id)}`, { method: 'PATCH', body }),
   remove: (id: string, force = false) =>

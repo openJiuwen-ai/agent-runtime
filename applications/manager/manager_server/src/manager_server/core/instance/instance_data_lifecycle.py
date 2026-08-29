@@ -93,14 +93,18 @@ async def sync_data_to_gateway_on_register(
     handler: DBHandler,
     jiuwenclaw_id: str,
 ) -> dict[str, Any]:
-    """Gateway 注册成功后：按固定顺序向 GDB 全量同步 Manager 权威配置。
+    """向 Gateway 全量同步 Manager 权威配置。
+
+    典型触发：``gateway_status`` 从 pending/offline → online
+    （见 ``maybe_full_sync_gateway_on_online``）。
 
     顺序说明：
     1. 模板（策略/映射依赖）
-    2. 全局 / Service / Agent 策略（Agent 依赖 Service）
-    3. 默认模板映射
-    4. 日志脱敏规则
-    5. 重建 Manager 侧 jid_template_ref 索引
+    2. Agent 资源
+    3. 全局 / Service / Agent 策略（Agent 依赖 Service）
+    4. 默认模板映射
+    5. 日志脱敏规则
+    6. 重建 Manager 侧 jid_template_ref 索引
     """
     jid = str(jiuwenclaw_id or "").strip()
     if not jid:

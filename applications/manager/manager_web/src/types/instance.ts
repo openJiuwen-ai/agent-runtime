@@ -1,41 +1,34 @@
 export interface InstanceSummary {
   jiuwenclaw_id: string;
   jiuwenclaw_name: string;
-  status: string;
-  k8s_namespace: string;
-  group_id: string;
+  namespace: string;
   space_id: string;
+  gateway_config_host: string;
+  gateway_status: string;
+  gateway_last_alive?: string | null;
+  runtime_config_host: string;
+  runtime_status: string;
+  runtime_last_alive?: string | null;
   created_at?: string | null;
-  last_heartbeat?: string | null;
   updated_at?: string | null;
 }
 
 export interface InstanceDetail extends InstanceSummary {
   description?: string | null;
-  k8s_master_host: string;
-  k8s_auth_type: string;
-  resource_quota?: Record<string, unknown> | null;
   data?: Record<string, unknown> | null;
+  created_by: string;
+  updated_by?: string | null;
 }
 
 export interface CreateInstanceBody {
   jiuwenclaw_name: string;
   description?: string;
-  k8s_master_host: string;
-  k8s_auth_type: string;
-  k8s_auth_config: Record<string, unknown>;
-  k8s_namespace: string;
-  resource_quota?: Record<string, unknown> | null;
-  creator_id?: string;
-  group_id?: string;
+  namespace?: string;
   space_id?: string;
-  management_api_base?: string;
-}
-
-export interface ProvisionLocalInstanceBody {
-  jiuwenclaw_name?: string;
-  creator_id?: string;
-  description?: string;
+  created_by?: string;
+  gateway_config_host: string;
+  runtime_config_host: string;
+  data?: Record<string, unknown>;
 }
 
 export interface ManagerWsStatus {
