@@ -8,7 +8,7 @@
 ``workspace_dir`` 模板（如 ``${group_id}::${bot_id}``、``${user_id}``），与 Runtime 转发前
 写入 ``AgentRequest`` 的行为一致。
 
-前置：目标实例已注册；已用 ``enterprise_config_demo_data_config.py`` 写入演示策略
+前置：目标实例已创建；已用 ``enterprise_config_demo_data_config.py`` 写入演示策略
 （含 Agent 策略 ``workspace_dir``）。数据库连接与 Gateway 进程一致，由
 ``manager_ws_client.infrastructure.db.Database`` 按 ``GATEWAY_*`` / ``.env`` 解析
 （支持 sqlite / mysql），脚本侧无需再传数据目录。

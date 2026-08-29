@@ -1,4 +1,4 @@
-"""Gateway 注册时 log_masking bootstrap（``log_masking_seeded`` 仅 seed 一次）。"""
+"""Gateway 上线 bootstrap：log_masking（``log_masking_seeded`` 仅 seed 一次）。"""
 
 from __future__ import annotations
 

@@ -56,6 +56,8 @@ def create_app() -> FastAPI:
         description="JiuwenClaw EE 管理平面（Claw Manager）",
         version=__version__,
         lifespan=lifespan,
+        # 关闭尾斜杠自动 307：经 manager-web / Ingress 反代时 Location 会泄漏集群内网 DNS
+        redirect_slashes=False,
     )
     application.add_middleware(
         CORSMiddleware,

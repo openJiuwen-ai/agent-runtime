@@ -33,9 +33,7 @@ class Settings(BaseSettings):
     db_password: str = Field(default="root", validation_alias="MANAGER_DB_PASSWORD")
     db_name: str = Field(default="manager", validation_alias="MANAGER_DB_NAME")
 
-    manager_heartbeat_timeout_seconds: int = Field(
-        default=120, validation_alias="MANAGER_HEARTBEAT_TIMEOUT_SECONDS"
-    )
+    # Manager 周期探活 Gateway/Runtime 健康检查的间隔（秒）
     MANAGER_HEARTBEAT_SCAN_INTERVAL_SECONDS: int = Field(
         default=60, validation_alias="MANAGER_HEARTBEAT_SCAN_INTERVAL_SECONDS"
     )

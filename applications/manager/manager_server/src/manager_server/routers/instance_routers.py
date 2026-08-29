@@ -1,23 +1,16 @@
 """实例管理 API（路径与设计文档 4.1 对齐）。
 
-含 Gateway 出站：HTTP 注册 / 心跳（写入 ``instance_info.data.gateway_endpoint``）。
+Gateway / Runtime 存活由 Manager 周期探活 ``*_config_host`` 健康检查确认。
 """
 
 from __future__ import annotations
 
-from base64 import b64encode
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from openjiuwen_runtime.foundation.db.handler import DBHandler
-from openjiuwen_runtime.foundation.security.link_auth import build_token
 
 from manager_server.core.instance import InstanceService
-from manager_server.core.instance.instance_service import (
-    apply_gateway_ws_heartbeat,
-    register_gateway_via_ws,
-)
-from manager_server.infrastructure.config import settings
 from manager_server.infrastructure.db import get_db_handler
 from manager_server.core.instance.pod_status_cache import (
     get_pod_status_snapshot,
@@ -25,23 +18,15 @@ from manager_server.core.instance.pod_status_cache import (
 from manager_server.schemas.common_schemas import ResponseModel
 from manager_server.schemas.instance_schemas import (
     CreateInstanceBody,
-    GatewayHeartbeatBody,
-    GatewayRegisterBody,
     InstanceListQuery,
     InstanceUpdateBody,
 )
-from manager_server.security.keys import store_instance_enc_pubkey
-from manager_server.security.sign_provider import get_manager_signing_key
 
 instance_router = APIRouter()
 
 
 def _svc(handler: DBHandler) -> InstanceService:
     return InstanceService(handler)
-
-
-def _b64(raw: bytes) -> str:
-    return b64encode(raw).decode("ascii")
 
 
 def _request_volume_value(bv: dict, key: str, legacy_key: str | None = None) -> int:
@@ -91,104 +76,16 @@ def _build_request_volume_summary(bv: dict) -> dict:
     }
 
 
-@instance_router.post("/register", response_model=ResponseModel)
-async def gateway_http_register(
-    body: GatewayRegisterBody,
-    handler: Annotated[DBHandler, Depends(get_db_handler)],
-):
-    """Gateway → Manager：HTTP 注册，返回 register.ack + link_token。"""
-    st = str(body.service_type or "").strip().lower()
-    if st and st != "gateway":
-        raise HTTPException(status_code=400, detail="only service_type=gateway accepted")
-    payload = body.model_dump(exclude_none=True)
-    try:
-        jiuwenclaw_id = await register_gateway_via_ws(
-            handler, payload, manager_id="default"
-        )
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=400, detail=f"register failed: {exc}") from exc
-
-    enc_pubkey = str(body.enc_pubkey or "").strip()
-    if enc_pubkey:
-        try:
-            await store_instance_enc_pubkey(
-                handler,
-                jiuwenclaw_id,
-                enc_pubkey,
-                enc_alg=str(body.enc_alg or "X25519"),
-                fingerprint=str(body.enc_pubkey_fp or "") or None,
-            )
-        except Exception:  # noqa: BLE001
-            pass
-
-    if body.endpoint:
-        await apply_gateway_ws_heartbeat(
-            handler,
-            jiuwenclaw_id=jiuwenclaw_id,
-            manager_id="default",
-            endpoint=str(body.endpoint).strip(),
-            version=body.version,
-        )
-
-    data: dict[str, Any] = {
-        "manager_id": "default",
-        "jiuwenclaw_id": jiuwenclaw_id,
-    }
-    signing_key = get_manager_signing_key()
-    if signing_key is not None:
-        data.update(
-            {
-                "sign_pubkey": _b64(signing_key.public_raw),
-                "sign_alg": "Ed25519",
-                "key_version": signing_key.key_version,
-                "sign_pubkey_fp": signing_key.fingerprint,
-            }
-        )
-        try:
-            token = build_token(
-                service_id="default",
-                service_type="manager",
-                private_b64=_b64(signing_key.private_raw),
-                public_b64=_b64(signing_key.public_raw),
-            )
-            if token:
-                data["link_token"] = token
-        except Exception:  # noqa: BLE001
-            pass
-    return ResponseModel(code=200, message="success", data=data)
-
-
-@instance_router.post("/heartbeat", response_model=ResponseModel)
-async def gateway_http_heartbeat(
-    body: GatewayHeartbeatBody,
-    handler: Annotated[DBHandler, Depends(get_db_handler)],
-):
-    """Gateway → Manager：心跳 + 刷新 ``data.gateway_endpoint``。"""
-    ok = await apply_gateway_ws_heartbeat(
-        handler,
-        jiuwenclaw_id=body.jiuwenclaw_id,
-        manager_id="default",
-        endpoint=(body.endpoint or "").strip() or None,
-        version=body.version,
-    )
-    if not ok:
-        raise HTTPException(status_code=404, detail="instance not found")
-    data: dict[str, Any] = {
-        "status": "ok",
-        "jiuwenclaw_id": body.jiuwenclaw_id,
-    }
-    if body.seq is not None:
-        data["seq"] = body.seq
-    return ResponseModel(code=200, message="success", data=data)
-
-
 @instance_router.post("/", response_model=ResponseModel)
 async def create_instance(
     body: CreateInstanceBody,
     handler: Annotated[DBHandler, Depends(get_db_handler)],
 ):
     svc = _svc(handler)
-    data = await svc.create(body)
+    try:
+        data = await svc.create(body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return ResponseModel(code=200, message="success", data=data)
 
 
@@ -281,7 +178,7 @@ async def get_instance_pods(
             "stale": True,
             "snapshot_age_seconds": None,
             "jiuwenclaw_id": jiuwenclaw_id,
-            "namespace": getattr(instance, "k8s_namespace", None) or settings.k8s_namespace,
+            "namespace": getattr(instance, "namespace", None) or "default",
             "total": 0,
             "running": 0,
             "failed": 0,

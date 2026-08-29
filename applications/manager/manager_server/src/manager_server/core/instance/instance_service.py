@@ -1,11 +1,10 @@
-"""实例纳管与 Gateway WebSocket 心跳。"""
+"""实例纳管与 Gateway / Runtime 心跳。"""
 
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, Literal
 
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 
@@ -19,20 +18,46 @@ from manager_server.schemas.instance_schemas import (
     InstanceUpdateBody,
 )
 from manager_server.models.instance_models import INSTANCE_INFO_TABLE_DEF
+from manager_server.core.instance.config_host_probe import (
+    require_config_hosts_reachable,
+)
 
 logger = logging.getLogger(__name__)
 
 _INSTANCE_TABLE = INSTANCE_INFO_TABLE_DEF.table_name
 _LOG_MASKING_SEEDED_KEY = "log_masking_seeded"
 
+ServiceSide = Literal["gateway", "runtime"]
+
 _ALLOWED_INSTANCE_SORT_FIELDS = frozenset({
     "jiuwenclaw_name",
-    "status",
-    "last_heartbeat",
-    "k8s_namespace",
+    "namespace",
+    "gateway_status",
+    "gateway_last_alive",
+    "runtime_status",
+    "runtime_last_alive",
     "updated_at",
 })
 _DEFAULT_INSTANCE_ORDER_BY: list[tuple[str, bool]] = [("updated_at", True)]
+
+_MAX_JIUWENCLAW_ID_ATTEMPTS = 10
+_HOST_MAX_LEN = 512
+_NAMESPACE_MAX_LEN = 64
+
+# gateway_status 从这些状态切到 online 时触发全量配置下发
+_GATEWAY_STATUS_NEEDS_FULL_SYNC = frozenset({"pending", "offline"})
+
+
+def _norm_namespace(value: str | None) -> str:
+    text = str(value or "").strip()
+    return (text[:_NAMESPACE_MAX_LEN] if text else "default")
+
+
+def _norm_host(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip().rstrip("/")
+    return text[:_HOST_MAX_LEN] if text else None
 
 
 def _matches_instance_search(row: Any, query: str) -> bool:
@@ -42,8 +67,9 @@ def _matches_instance_search(row: Any, query: str) -> bool:
     fields = [
         str(getattr(row, "jiuwenclaw_id", "") or ""),
         str(getattr(row, "jiuwenclaw_name", "") or ""),
-        str(getattr(row, "status", "") or ""),
-        str(getattr(row, "k8s_namespace", "") or ""),
+        str(getattr(row, "gateway_status", "") or ""),
+        str(getattr(row, "runtime_status", "") or ""),
+        str(getattr(row, "namespace", "") or ""),
     ]
     return any(needle in field.lower() for field in fields)
 
@@ -52,15 +78,32 @@ def _instance_row_to_summary(row: Any) -> dict:
     summary = InstanceSummary(
         jiuwenclaw_id=row.jiuwenclaw_id,
         jiuwenclaw_name=row.jiuwenclaw_name,
-        status=row.status,
-        k8s_namespace=row.k8s_namespace,
-        group_id=row.group_id,
+        namespace=getattr(row, "namespace", None) or "default",
         space_id=row.space_id,
+        gateway_config_host=str(getattr(row, "gateway_config_host", "") or ""),
+        gateway_status=row.gateway_status,
+        gateway_last_alive=iso_datetime(
+            getattr(row, "gateway_last_alive", None)
+        ),
+        runtime_config_host=str(getattr(row, "runtime_config_host", "") or ""),
+        runtime_status=row.runtime_status,
+        runtime_last_alive=iso_datetime(
+            getattr(row, "runtime_last_alive", None)
+        ),
         created_at=iso_datetime(row.created_at),
-        last_heartbeat=iso_datetime(getattr(row, "last_heartbeat", None)),
         updated_at=iso_datetime(getattr(row, "updated_at", None)),
     )
     return summary.model_dump()
+
+
+def _instance_row_to_detail(row: Any) -> InstanceDetail:
+    return InstanceDetail(
+        **_instance_row_to_summary(row),
+        description=row.description,
+        data=row.data if isinstance(row.data, dict) else row.data,
+        created_by=row.created_by,
+        updated_by=getattr(row, "updated_by", None),
+    )
 
 
 def _instance_data_dict(row: Any | None) -> dict[str, Any]:
@@ -77,33 +120,22 @@ async def is_log_masking_seeded(handler: DBHandler, jiuwenclaw_id: str) -> bool:
     return bool(_instance_data_dict(row).get(_LOG_MASKING_SEEDED_KEY))
 
 
-def dumps_auth_config(cfg: dict) -> str:
-    return json.dumps(cfg, ensure_ascii=False, separators=(",", ":"))
-
-
 async def create_instance_row(handler: DBHandler, row_data: dict[str, Any]) -> Any:
     now = utc_now()
     payload = dict(row_data)
     payload.setdefault("created_at", now)
     payload.setdefault("updated_at", now)
-    payload.setdefault("last_heartbeat", None)
+    payload.setdefault("namespace", "default")
+    payload.setdefault("gateway_status", "pending")
+    payload.setdefault("gateway_last_alive", None)
+    payload.setdefault("runtime_status", "pending")
+    payload.setdefault("runtime_last_alive", None)
+    payload.setdefault("space_id", "default")
     return await handler.create(_INSTANCE_TABLE, payload)
 
 
 async def get_instance_row(handler: DBHandler, jiuwenclaw_id: str) -> Any | None:
     return await handler.get(_INSTANCE_TABLE, {"jiuwenclaw_id": jiuwenclaw_id})
-
-
-_MAX_JIUWENCLAW_ID_ATTEMPTS = 10
-_JIUWENCLAW_NAME_MAX_LEN = 128
-_K8S_NAMESPACE_MAX_LEN = 64
-
-
-def _strip_payload_field(payload: dict[str, Any], key: str, *, max_len: int) -> str | None:
-    val = str(payload.get(key) or "").strip()
-    if not val:
-        return None
-    return val[:max_len]
 
 
 async def generate_unique_jiuwenclaw_id(handler: DBHandler) -> str:
@@ -119,7 +151,7 @@ async def bootstrap_gateway_log_masking(
     handler: DBHandler,
     jiuwenclaw_id: str,
 ) -> None:
-    """Gateway WS 注册：首次 MDB builtin 种子 + bulk push 到 GDB（``op=sync``）。"""
+    """Gateway 首次上线：MDB builtin 种子 + bulk push 到 GDB（``op=sync``）。"""
     jid = str(jiuwenclaw_id or "").strip()
     if not jid:
         return
@@ -145,7 +177,7 @@ async def bootstrap_gateway_log_masking(
                 )
         sync_ack = await push_log_masking_rules_sync_to_gateway(handler, jid)
         logger.info(
-            "[Instance] log_masking_rule sync on gateway register jiuwenclaw_id=%s "
+            "[Instance] log_masking_rule sync on gateway online jiuwenclaw_id=%s "
             "revision=%s",
             jid,
             sync_ack.get("revision"),
@@ -158,129 +190,148 @@ async def bootstrap_gateway_log_masking(
         )
 
 
-async def register_gateway_via_ws(
+def _resolve_service_side(service_type: str | None) -> ServiceSide:
+    st = str(service_type or "gateway").strip().lower()
+    if st in ("", "gateway"):
+        return "gateway"
+    if st == "runtime":
+        return "runtime"
+    raise ValueError(f"unsupported service_type: {service_type!r}")
+
+
+async def maybe_full_sync_gateway_on_online(
     handler: DBHandler,
-    payload: dict[str, Any],
-    *,
-    manager_id: str = "default",
-) -> str:
-    """Gateway WS 注册：复用已有 ``jiuwenclaw_id`` 或分配新 id 并写入 ``instance_info``。"""
-    _ = manager_id
-    payload_jiuwenclaw_id = str(payload.get("jiuwenclaw_id") or "").strip()
-    now = utc_now()
-
-    if payload_jiuwenclaw_id:
-        existing = await get_instance_row(handler, payload_jiuwenclaw_id)
-        if existing is not None:
-            updates: dict[str, Any] = {"status": "online", "updated_at": now}
-            name = _strip_payload_field(
-                payload, "jiuwenclaw_name", max_len=_JIUWENCLAW_NAME_MAX_LEN
-            )
-            namespace = _strip_payload_field(
-                payload, "k8s_namespace", max_len=_K8S_NAMESPACE_MAX_LEN
-            )
-            if name:
-                updates["jiuwenclaw_name"] = name
-            if namespace:
-                updates["k8s_namespace"] = namespace
-            await handler.update(
-                _INSTANCE_TABLE,
-                {"jiuwenclaw_id": payload_jiuwenclaw_id},
-                updates,
-            )
-            return payload_jiuwenclaw_id
-        jiuwenclaw_id = payload_jiuwenclaw_id
-    else:
-        jiuwenclaw_id = await generate_unique_jiuwenclaw_id(handler)
-
-    jiuwenclaw_name = _strip_payload_field(
-        payload, "jiuwenclaw_name", max_len=_JIUWENCLAW_NAME_MAX_LEN
-    ) or f"gateway-{jiuwenclaw_id[-8:]}"
-    k8s_namespace = _strip_payload_field(
-        payload, "k8s_namespace", max_len=_K8S_NAMESPACE_MAX_LEN
-    ) or "default"
-    await create_instance_row(
-        handler,
-        {
-            "jiuwenclaw_id": jiuwenclaw_id,
-            "jiuwenclaw_name": jiuwenclaw_name,
-            "creator_id": "manager-ws",
-            "description": None,
-            "k8s_master_host": "manager-ws",
-            "k8s_auth_type": "none",
-            "k8s_auth_config": dumps_auth_config({}),
-            "k8s_namespace": k8s_namespace,
-            "status": "online",
-            "resource_quota": None,
-            "data": None,
-            "group_id": "default",
-            "space_id": "default",
-        },
-    )
-    return jiuwenclaw_id
-
-
-async def apply_gateway_ws_heartbeat(
-    handler: DBHandler,
-    *,
     jiuwenclaw_id: str,
-    manager_id: str = "default",
-    endpoint: str | None = None,
-    version: str | None = None,
-) -> bool:
-    """Gateway 经 Manager WebSocket 上报心跳，刷新 ``instance_info.status`` 与 ``last_heartbeat``。"""
-    _ = manager_id
-    jid = str(jiuwenclaw_id or "").strip()
-    if not jid:
-        return False
-    if await get_instance_row(handler, jid) is None:
-        return False
-    now = utc_now()
-    updates: dict[str, Any] = {
-        "status": "online",
-        "last_heartbeat": now,
-        "updated_at": now,
-    }
-    if endpoint or version:
-        row = await get_instance_row(handler, jid)
-        merged = dict(getattr(row, "data", None) or {}) if row is not None else {}
-        if endpoint:
-            merged["gateway_endpoint"] = endpoint
-        if version:
-            merged["gateway_version"] = version
-        updates["data"] = merged
-    await handler.update(_INSTANCE_TABLE, {"jiuwenclaw_id": jid}, updates)
-    return True
+    *,
+    previous_gateway_status: str | None,
+) -> None:
+    """``gateway_status`` 从 pending/offline → online 时全量下发配置。
 
-
-async def mark_instance_offline(handler: DBHandler, jiuwenclaw_id: str) -> None:
-    """Gateway WS 断开或心跳超时后，将实例标记为 offline。"""
+    失败只记日志，不影响心跳 / 状态更新本身。
+    """
+    prev = str(previous_gateway_status or "").strip().lower()
+    if prev not in _GATEWAY_STATUS_NEEDS_FULL_SYNC:
+        return
     jid = str(jiuwenclaw_id or "").strip()
     if not jid:
         return
+
+    from manager_server.manager_config_push.endpoint import resolve_gateway_endpoint
+    from manager_server.core.instance.instance_data_lifecycle import (
+        sync_data_to_gateway_on_register,
+    )
+
     row = await get_instance_row(handler, jid)
     if row is None:
         return
+    if not resolve_gateway_endpoint(row):
+        logger.info(
+            "[Instance] skip full sync on online: no gateway_config_host "
+            "jiuwenclaw_id=%s prev_status=%s",
+            jid,
+            prev,
+        )
+        return
+    try:
+        await sync_data_to_gateway_on_register(handler, jid)
+        logger.info(
+            "[Instance] full sync after gateway online jiuwenclaw_id=%s "
+            "prev_status=%s",
+            jid,
+            prev,
+        )
+    except Exception:
+        logger.warning(
+            "[Instance] full sync failed after gateway online jiuwenclaw_id=%s "
+            "prev_status=%s",
+            jid,
+            prev,
+            exc_info=True,
+        )
+
+
+async def apply_health_probe_result(
+    handler: DBHandler,
+    *,
+    jiuwenclaw_id: str,
+    service_type: str = "gateway",
+    alive: bool,
+) -> bool:
+    """根据 Manager 主动探活结果更新对应侧 status / last_alive。
+
+    - alive：置 online，刷新 last_alive；Gateway 从 pending/offline → online 时全量下发
+    - 失败：仅当当前为 online 时置 offline；pending 保持不变
+    """
+    jid = str(jiuwenclaw_id or "").strip()
+    if not jid:
+        return False
+    row = await get_instance_row(handler, jid)
+    if row is None:
+        return False
+    side = _resolve_service_side(service_type)
+    status_key = f"{side}_status"
+    prev_status = str(getattr(row, status_key, "") or "")
     now = utc_now()
-    await handler.update(
-        _INSTANCE_TABLE,
-        {"jiuwenclaw_id": jid},
-        {"status": "offline", "updated_at": now},
+
+    if alive:
+        updates: dict[str, Any] = {
+            status_key: "online",
+            f"{side}_last_alive": now,
+            "updated_at": now,
+            "updated_by": "health-probe",
+        }
+        await handler.update(_INSTANCE_TABLE, {"jiuwenclaw_id": jid}, updates)
+        if side == "gateway":
+            await maybe_full_sync_gateway_on_online(
+                handler,
+                jid,
+                previous_gateway_status=prev_status,
+            )
+        return True
+
+    if prev_status == "online":
+        await handler.update(
+            _INSTANCE_TABLE,
+            {"jiuwenclaw_id": jid},
+            {
+                status_key: "offline",
+                "updated_at": now,
+                "updated_by": "health-probe",
+            },
+        )
+        return True
+
+
+async def mark_instance_offline(
+    handler: DBHandler,
+    jiuwenclaw_id: str,
+    *,
+    side: ServiceSide = "gateway",
+) -> None:
+    """将对应侧标记为 offline（探活失败时也可直接调用）。"""
+    await apply_health_probe_result(
+        handler,
+        jiuwenclaw_id=jiuwenclaw_id,
+        service_type=side,
+        alive=False,
     )
 
 
 async def list_instance_rows(
     handler: DBHandler,
     *,
-    status: str | None,
+    gateway_status: str | None = None,
+    runtime_status: str | None = None,
     offset: int,
     limit: int,
     sort_by: str | None = None,
     sort_order: str | None = None,
 ) -> tuple[Sequence[Any], int]:
     filters: dict[str, Any] = {}
-    if status:
-        filters["status"] = status
+    if gateway_status:
+        filters["gateway_status"] = gateway_status
+    if runtime_status:
+        filters["runtime_status"] = runtime_status
     total = await handler.count_records(_INSTANCE_TABLE, filters)
     order_by = resolve_order_by(
         sort_by,
@@ -300,7 +351,6 @@ async def list_instance_rows(
 
 async def delete_instance_row(handler: DBHandler, jiuwenclaw_id: str) -> None:
     await handler.delete(_INSTANCE_TABLE, {"jiuwenclaw_id": jiuwenclaw_id})
-    # 解绑销毁：一并删除该实例的 Gateway 加密公钥（心跳超时下线不走此路径）。
     from manager_server.security.keys import delete_instance_enc_pubkey
 
     await delete_instance_enc_pubkey(handler, jiuwenclaw_id)
@@ -309,7 +359,7 @@ async def delete_instance_row(handler: DBHandler, jiuwenclaw_id: str) -> None:
 async def merge_instance_data(
     handler: DBHandler, jiuwenclaw_id: str, patch: dict
 ) -> Any | None:
-    """仅合并写入 ``instance_info.data`` JSON 列（供 provision 等内部调用）。"""
+    """仅合并写入 ``instance_info.data`` JSON 列。"""
     row = await get_instance_row(handler, jiuwenclaw_id)
     if row is None:
         return None
@@ -319,7 +369,7 @@ async def merge_instance_data(
     return await handler.update(
         _INSTANCE_TABLE,
         {"jiuwenclaw_id": jiuwenclaw_id},
-        {"data": merged, "updated_at": now},
+        {"data": merged, "updated_at": now, "updated_by": "system"},
     )
 
 
@@ -329,26 +379,70 @@ class InstanceService:
 
     async def create(self, body: CreateInstanceBody) -> dict:
         jiuwenclaw_id = await generate_unique_jiuwenclaw_id(self._handler)
-        data_dict: dict | None = None
-        if body.management_api_base and str(body.management_api_base).strip():
-            data_dict = {"management_api_base": str(body.management_api_base).strip().rstrip("/")}
+        gateway_host = _norm_host(body.gateway_config_host)
+        runtime_host = _norm_host(body.runtime_config_host)
+        if not gateway_host:
+            raise ValueError("gateway_config_host is required")
+        if not runtime_host:
+            raise ValueError("runtime_config_host is required")
+        await require_config_hosts_reachable(
+            gateway_config_host=gateway_host,
+            runtime_config_host=runtime_host,
+        )
+        namespace = _norm_namespace(body.namespace)
         row_data = {
             "jiuwenclaw_id": jiuwenclaw_id,
-            "jiuwenclaw_name": body.jiuwenclaw_name,
-            "creator_id": body.creator_id,
+            "jiuwenclaw_name": body.jiuwenclaw_name.strip(),
             "description": body.description,
-            "k8s_master_host": body.k8s_master_host,
-            "k8s_auth_type": body.k8s_auth_type,
-            "k8s_auth_config": dumps_auth_config(body.k8s_auth_config),
-            "k8s_namespace": body.k8s_namespace,
-            "status": "online",
-            "resource_quota": body.resource_quota,
-            "data": data_dict,
-            "group_id": body.group_id,
-            "space_id": body.space_id,
+            "namespace": namespace,
+            "gateway_config_host": gateway_host,
+            "gateway_status": "pending",
+            "runtime_config_host": runtime_host,
+            "runtime_status": "pending",
+            "data": body.data,
+            "space_id": (body.space_id or "default").strip() or "default",
+            "created_by": (body.created_by or "system").strip() or "system",
+            "updated_by": (body.created_by or "system").strip() or "system",
         }
         row = await create_instance_row(self._handler, row_data)
-        return {"jiuwenclaw_id": jiuwenclaw_id, "status": getattr(row, "status", "online")}
+
+        if gateway_host:
+            # 创建时已探活成功：立即置 online（不等待周期扫描）
+            await apply_health_probe_result(
+                self._handler,
+                jiuwenclaw_id=jiuwenclaw_id,
+                service_type="gateway",
+                alive=True,
+            )
+            row = await get_instance_row(self._handler, jiuwenclaw_id) or row
+
+        if runtime_host:
+            from manager_server.core.instance.runtime_identity import (
+                fetch_runtime_identity_from_health,
+            )
+
+            try:
+                # 仅校验 Runtime 可达
+                await fetch_runtime_identity_from_health(runtime_host)
+            except ValueError:
+                await delete_instance_row(self._handler, jiuwenclaw_id)
+                raise
+            await apply_health_probe_result(
+                self._handler,
+                jiuwenclaw_id=jiuwenclaw_id,
+                service_type="runtime",
+                alive=True,
+            )
+            row = await get_instance_row(self._handler, jiuwenclaw_id) or row
+
+        return {
+            "jiuwenclaw_id": jiuwenclaw_id,
+            "namespace": getattr(row, "namespace", namespace),
+            "gateway_config_host": getattr(row, "gateway_config_host", gateway_host),
+            "gateway_status": getattr(row, "gateway_status", "pending"),
+            "runtime_config_host": getattr(row, "runtime_config_host", runtime_host),
+            "runtime_status": getattr(row, "runtime_status", "pending"),
+        }
 
     async def list_instances(self, query: InstanceListQuery) -> dict:
         page = max(query.page, 1)
@@ -361,8 +455,10 @@ class InstanceService:
             default_order_by=_DEFAULT_INSTANCE_ORDER_BY,
         )
         filters: dict[str, Any] = {}
-        if query.status:
-            filters["status"] = query.status
+        if query.gateway_status:
+            filters["gateway_status"] = query.gateway_status
+        if query.runtime_status:
+            filters["runtime_status"] = query.runtime_status
 
         if search_query:
             rows = await self._handler.list_records(
@@ -386,7 +482,8 @@ class InstanceService:
         offset = (page - 1) * page_size
         rows, total = await list_instance_rows(
             self._handler,
-            status=query.status,
+            gateway_status=query.gateway_status,
+            runtime_status=query.runtime_status,
             offset=offset,
             limit=page_size,
             sort_by=query.sort_by,
@@ -403,22 +500,7 @@ class InstanceService:
         row = await get_instance_row(self._handler, jiuwenclaw_id)
         if row is None:
             return None
-        return InstanceDetail(
-            jiuwenclaw_id=row.jiuwenclaw_id,
-            jiuwenclaw_name=row.jiuwenclaw_name,
-            status=row.status,
-            k8s_namespace=row.k8s_namespace,
-            group_id=row.group_id,
-            space_id=row.space_id,
-            created_at=iso_datetime(row.created_at),
-            last_heartbeat=iso_datetime(getattr(row, "last_heartbeat", None)),
-            updated_at=iso_datetime(getattr(row, "updated_at", None)),
-            description=row.description,
-            k8s_master_host=row.k8s_master_host,
-            k8s_auth_type=row.k8s_auth_type,
-            resource_quota=row.resource_quota,
-            data=row.data,
-        )
+        return _instance_row_to_detail(row)
 
     async def delete(self, jiuwenclaw_id: str) -> bool:
         from manager_server.core.instance.instance_data_lifecycle import (
@@ -454,21 +536,36 @@ class InstanceService:
         strip_fields = (
             "jiuwenclaw_name",
             "description",
-            "k8s_master_host",
-            "k8s_auth_type",
-            "k8s_namespace",
-            "group_id",
+            "namespace",
             "space_id",
+            "updated_by",
         )
         for field in strip_fields:
             if field in updates and updates[field] is not None:
                 updates[field] = str(updates[field]).strip()
-        if "k8s_auth_config" in updates and updates["k8s_auth_config"] is not None:
-            if not isinstance(updates["k8s_auth_config"], dict):
-                raise ValueError("k8s_auth_config must be an object")
-            updates["k8s_auth_config"] = dumps_auth_config(updates["k8s_auth_config"])
+        if "namespace" in updates and updates["namespace"] is not None:
+            updates["namespace"] = _norm_namespace(updates["namespace"])
+        if "gateway_config_host" in updates:
+            updates["gateway_config_host"] = _norm_host(updates["gateway_config_host"])
+        if "runtime_config_host" in updates:
+            updates["runtime_config_host"] = _norm_host(updates["runtime_config_host"])
+
+        await require_config_hosts_reachable(
+            gateway_config_host=(
+                updates["gateway_config_host"]
+                if "gateway_config_host" in updates
+                else None
+            ),
+            runtime_config_host=(
+                updates["runtime_config_host"]
+                if "runtime_config_host" in updates
+                else None
+            ),
+        )
 
         updates["updated_at"] = utc_now()
+        if not updates.get("updated_by"):
+            updates["updated_by"] = "api"
         if await self._handler.update(
             _INSTANCE_TABLE, {"jiuwenclaw_id": jid}, updates
         ) is None:

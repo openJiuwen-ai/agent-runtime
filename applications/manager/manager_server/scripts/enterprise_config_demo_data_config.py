@@ -2,7 +2,7 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """按 IAM：``agent_template`` + ``instance_agent_resource`` 写入演示数据。
 
-前置：目标实例已在 Manager 注册且 Gateway 可达；Manager 已启动（默认 ``http://127.0.0.1:8765``）。
+前置：目标实例已在 Manager 创建且 Gateway 可达；Manager 已启动（默认 ``http://127.0.0.1:8765``）。
 Agent 资源写入会经 Manager 推送到 Gateway。
 
 执行顺序：

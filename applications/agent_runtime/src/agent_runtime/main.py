@@ -335,11 +335,11 @@ def create_app(
 
 
 def _register_healthz(app: App) -> None:
-    """GET /healthz：进程就绪探针（K8s 探针 / 多进程就绪轮询 / e2e 实例观测）。
+    """GET /healthz：进程就绪探针（K8s 探针 / 多进程就绪轮询 / Manager 探活）。
 
     lifespan 完成即 sysctx 就绪（启动期 fail-fast：Redis/DB 不可用直接起不来），
     因此「state.sysctx 存在」== 进程可服务；未就绪返回 503。
-    附带 instance_id 便于经 LB 观测后端实例身份。
+    附带 instance_id / namespace / pod_name，供 Manager 手动绑定回写（不下发 jiuwenclaw_id）。
 
     注：main.py 顶部有 ``from __future__ import annotations``，字符串注解经
     ``get_type_hints`` 用**模块全局**解析 —— Request 必须顶层导入，函数内
@@ -351,4 +351,31 @@ def _register_healthz(app: App) -> None:
         sysctx = getattr(request.app.state, "sysctx", None)
         if sysctx is None:
             return JSONResponse(status_code=503, content={"ok": False})
-        return {"ok": True, "instance_id": sysctx.instance_id}
+        return {
+            "ok": True,
+            "instance_id": sysctx.instance_id,
+            "service_type": "runtime",
+            **_collect_runtime_identity(),
+        }
+
+
+def _collect_runtime_identity() -> dict[str, Any]:
+    """采集 Runtime 所在 K8s namespace 与当前 Pod 名（非 K8s 时 namespace=default）。"""
+    import os
+
+    ns = (os.getenv("NAMESPACE") or "").strip()
+    if not ns:
+        sa_ns = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+        try:
+            with open(sa_ns, encoding="utf-8") as f:
+                ns = f.read().strip()
+        except OSError:
+            ns = ""
+    if not ns:
+        ns = (os.getenv("AGENT_RUNTIME_DEFAULT_NAMESPACE") or "default").strip() or "default"
+    pod = (os.getenv("HOSTNAME") or "").strip()
+    return {
+        "namespace": ns,
+        "pod_name": [pod] if pod else [],
+        "hostname": pod or None,
+    }

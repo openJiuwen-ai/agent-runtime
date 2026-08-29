@@ -65,8 +65,17 @@ async def list_my_gateways(handler: _Handler, user: _CurUser):
         rows.append({
             "jiuwenclaw_id": jid,
             "jiuwenclaw_name": str(getattr(row, "jiuwenclaw_name", jid) or jid),
-            "status": str(getattr(row, "status", "unknown") or "unknown"),
-            "group_id": str(getattr(row, "group_id", "") or ""),
-            "gateway_endpoint": str(data.get("gateway_endpoint") or "").strip() or None,
+            "gateway_status": str(
+                getattr(row, "gateway_status", "unknown") or "unknown"
+            ),
+            "runtime_status": str(
+                getattr(row, "runtime_status", "unknown") or "unknown"
+            ),
+            "space_id": str(getattr(row, "space_id", "") or ""),
+            "gateway_endpoint": (
+                str(getattr(row, "gateway_config_host", None) or "").strip()
+                or str(data.get("gateway_endpoint") or "").strip()
+                or None
+            ),
         })
     return _ok({"gateways": rows})
