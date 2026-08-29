@@ -41,8 +41,8 @@ cd applications/agent_runtime
 
 - 参数/前置见 `--help` 与 README;场景 N 待 AgentServer 支持 `GET /health` 后补验。
 - **发布门禁:发版前必须用真实 AgentServer 镜像跑一遍**(2026-08-26 教训:influxdb 替身与代码共享同一契约假设,探测路径/env/路径前缀类缺陷在替身世界里不可见):
-  `./scripts/integration_smoke.sh --image swr.cn-north-4.myhuaweicloud.com/openjiuwen/jiuwenclaw-agentserver-amd64:<tag> --health-path /api/v1/health --sse-path /api/v1/events/stream --agent-env '{"AGENT_HTTP_ENABLED":"true","AGENT_HTTP_HOST":"0.0.0.0","AGENT_HTTP_PORT":"8080"}'`
-  (冒烟脚本参数直通 e2e_hld_acceptance.py;替身 influxdb:1.8 仅用于快速回归,默认契约 /health+8086;真镜像门禁必须带三件套契约参数——脚本模板的 health_path/sse_path/agent_env 由这三个参数注入,漏带则 readiness 永不通过、阶段 2 起全红)
+  `./scripts/integration_smoke.sh --image swr.cn-north-4.myhuaweicloud.com/openjiuwen/jiuwenclaw-agentserver-amd64:<tag> --sidecar-image swr.cn-north-4.myhuaweicloud.com/openjiuwen/jiuwenclaw-sandbox-amd64:<tag> --health-path /api/v1/health --sse-path /api/v1/events/stream --agent-env '{"AGENT_HTTP_ENABLED":"true","AGENT_HTTP_HOST":"0.0.0.0","AGENT_HTTP_PORT":"8086"}' --with-sidecar --with-mounts`
+  (冒烟脚本参数直通 e2e_hld_acceptance.py;替身 influxdb:1.8 仅用于快速回归,默认契约 /health+8086;真镜像门禁必须带三件套契约参数——脚本模板的 health_path/sse_path/agent_env 由这三个参数注入,漏带则 readiness 永不通过、阶段 2 起全红;`--with-sidecar --sidecar-image` 开双真镜像 sidecar 全规格,`--with-mounts` 开全量真实规格阶段——主容器 cm/hp/pvc 三挂载 + PVC 静态预置 + 逐字段断言,2026-08-28 起为门禁标配)
 - 冒烟内置回归网:阶段 1b(无请求预热)、阶段 5b(自然老化零回拨)、阶段 11b(内部不变量巡检:idle⊆pods:all / idle_since 存在 / 静息 deploying=0 / 快照 deploy_ver==RM cfg)——2026-08-26 真环境实测缺陷①②④⑤的固化。
 - 经多副本 LB 亦可跑(实测 65/65),前提:部署带 `AGENT_RUNTIME_SCOPE_FULL_TIMEOUT`(deploy 模板默认 8,**须显著小于模板 session_ttl**,否则等待者 deadline 与会话到期碰撞产生混合结果);排查实录见 `docs/spec/e2e-test-cases.md` §8.1。
 - cleanup 空目标必须用**无匹配 label_selector**,不得指向业务 ns(同 label 真实 AgentServer 会被误删)或不存在的 ns(in-cluster SA 对其 403 而非空列表)。

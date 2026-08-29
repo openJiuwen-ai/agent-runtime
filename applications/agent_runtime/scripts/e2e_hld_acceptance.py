@@ -10,7 +10,10 @@ AgentServer 原生支持 GET /health 后补验（单测已覆盖）。
 - kubectl 已配置集群权限；验收 Pod 专用命名空间默认 agent-runtime-e2e；
 - 验收镜像默认 influxdb:1.8（默认 :8086/health=200，满足 readiness/watch
   探测契约；AgentServer 支持 /health 后可换回真镜像）；
-- mysql 客户端 + 只读权限（可选，仅校验配置落库；缺失自动 SKIP）。
+- mysql 客户端 + 只读权限（可选，仅校验配置落库；缺失自动 SKIP）；
+- --with-mounts（全量真实规格阶段，默认关）：kubectl 凭据需可创建 namespace
+  级 ConfigMap/PVC 与 cluster 级 PV（hostPath 静态供给），节点需接受 apparmor
+  annotation（运行时未启用 AppArmor 时 Pod 创建即失败——如实暴露）。
 
 用法（在 applications/agent_runtime 下）：
     uv run --no-sync python scripts/e2e_hld_acceptance.py [--参数]
@@ -77,6 +80,8 @@ BAD = ""      # （bad：不可拉镜像，deploy 失败分支）
 BOX = ""      # （box：sidecar 多容器；--with-sidecar 时启用）
 WITH_SIDECAR = False
 SIDECAR_IMAGE = ""   # sidecar 替身镜像（默认与主镜像同款 influxdb:1.8 改端口）
+MNT = ""      # （mnt：主+sidecar 三种挂载全量真实规格；--with-mounts 时启用）
+WITH_MOUNTS = False
 # 契约参数（真镜像门禁三件套：health_path / sse_path / agent_env）
 HEALTH_PATH = "/health"
 SSE_PATH = "/sse"
@@ -221,6 +226,53 @@ def _sidecar_standin() -> dict:
             }}
 
 
+# ---- 全量真实规格(--with-mounts)资源名/路径约定:对齐真实 config_sync 请求的
+# 引用名(agent-config-cm/box-policy-cm/agent-data-pvc/box-data-pvc)。CM 与静态
+# PV/PVC 由 stage0 预置;宿主 /mnt/host-test 由 kubelet DirectoryOrCreate 自建。
+MNT_AGENT_CM = "agent-config-cm"
+MNT_BOX_CM = "box-policy-cm"
+MNT_AGENT_PVC = "agent-data-pvc"
+MNT_BOX_PVC = "box-data-pvc"
+MNT_AGENT_PV = "e2e-agent-data-pv"
+MNT_BOX_PV = "e2e-box-data-pv"
+MNT_HOST_PATH = "/mnt/host-test"
+
+
+def _jiuwenbox_spec() -> dict:
+    """tpl-mnt 的 sidecar:完整 jiuwenbox 规格(三种挂载 + 特权四件套)。
+
+    与 _sidecar_standin 的关键差异:不引用 --with-sidecar 门控的 e2e-box-cm
+    (该 CM 只在 stage2b 创建,--with-mounts 单独开时缺失 →
+    CreateContainerConfigError 永不 Ready),改用 stage0 无条件预置的
+    box-policy-cm。特权四件套替身模式也带——挂载与 securityContext 渲染
+    不依赖镜像,默认替身跑即可断言;真镜像门禁验证真契约。
+    """
+    real = SIDECAR_IMAGE != IMAGE
+    return {
+        "name": "jiuwenbox",          # 与真实请求一致;≠ agent,过容器名冲突校验
+        "image": SIDECAR_IMAGE,
+        "port": 8321 if real else SIDECAR_STANDIN_PORT,
+        "env": ({"JIUWENBOX_LISTEN": "http://0.0.0.0:8321"} if real
+                else {"INFLUXDB_HTTP_BIND_ADDRESS": f":{SIDECAR_STANDIN_PORT}",
+                      "INFLUXDB_BIND_ADDRESS": ":8098"}),
+        "privileged": True,
+        "capabilities_add": ["SYS_ADMIN", "NET_ADMIN"],
+        "seccomp_unconfined": True,
+        "apparmor_unconfined": True,
+        "configmap_mounts": [{"config_map_name": MNT_BOX_CM,
+                              "mount_path": "/etc/box/policy.yaml",
+                              "sub_path": "policy.yaml"}],
+        "host_path_mounts": [{"host_path": "/sys/fs/cgroup",
+                              "mount_path": "/sys/fs/cgroup",
+                              "host_path_type": "Directory"}],
+        "pvc_mounts": [{"claim_name": MNT_BOX_PVC,
+                        "mount_path": "/var/lib/jiuwenbox"}],
+        "readiness_probe_type": "tcp",
+        "readiness_initial_delay": 5,
+        "readiness_period": 5,
+    }
+
+
 def full_sync_payload(tpl_overrides: dict | None = None) -> dict:
     """config_sync 全量载荷:模板集 + scope 集(routing_rules 表达式串)。
 
@@ -259,6 +311,35 @@ def build_templates() -> None:
         # 幂等:build_templates 可能被热更新阶段再次调用
         if not any(sid == "e2e-box" for sid, _, _ in SCOPES_DEF):
             SCOPES_DEF.append(("e2e-box", "tpl-box", "group_id in ('e2e-box')"))
+    if WITH_MOUNTS:
+        # 全量真实规格:对齐真实 config_sync 请求(主容器 cm/hp/pvc 三挂载 +
+        # 显式 container_port/readiness 参数 + sidecar jiuwenbox 完整规格)。
+        # 全部走 overrides,**绝不进 template() base**——否则全部模板
+        # deploy_ver 变化 → 全量 A 类日落,stage3 直接 409。
+        # min_idle=1:stage1 下发后 autoscale(1s tick)即预热(暖 Pod 不写 SM
+        # pods:registered,2c route 前对其余阶段不可见);pod_ttl=3600 全程
+        # 长存,与 tpl-box 同款(跨 scope 计数断言 +1 处理)。
+        TPL["tpl-mnt"] = template(
+            template_name="主+sidecar 双镜像·三种挂载全量样例",
+            pod_name="agentserver-mnt", container_name="agent",
+            container_port=8086,             # 显式下发(=sse_port;此前从未覆盖)
+            scope_concurrency=3, pod_concurrency=2,
+            session_ttl=60, pod_ttl=3600, min_idle_pods=1, ready_timeout=240,
+            readiness_initial_delay=5, readiness_period=5,
+            agent_configmap_mounts=[{
+                "config_map_name": MNT_AGENT_CM,
+                "mount_path": "/etc/agent/config.yaml",
+                "sub_path": "config.yaml"}],
+            agent_host_path_mounts=[{
+                "host_path": MNT_HOST_PATH, "mount_path": MNT_HOST_PATH,
+                "host_path_type": "DirectoryOrCreate", "read_only": True}],
+            agent_pvc_mounts=[{
+                "claim_name": MNT_AGENT_PVC, "mount_path": "/var/lib/agent"}],
+            sidecars=[_jiuwenbox_spec()])
+        # 幂等 + 表达式非通配:SCOPES_DEF 故意不播通配,保住 stage13 的
+        # CONFIG_NOT_FOUND 验收(真实请求的空串通配形态不可照搬)
+        if not any(sid == MNT or sid == "e2e-mnt" for sid, _, _ in SCOPES_DEF):
+            SCOPES_DEF.append(("e2e-mnt", "tpl-mnt", "group_id in ('e2e-mnt')"))
 
 
 async def clean_previous(c: Client, r: aioredis.Redis) -> None:
@@ -349,7 +430,9 @@ async def stage1b_warm_up_without_request(c: Client, r) -> None:
     # 此刻除播种外无任何 route；tpl-warm 的 scope（min_idle=1）应被 autoscale 预热
     async def warm_ready() -> bool:
         return await r.scard(f"resource_manager:resource:scope:{WARM}:idle") >= 1
-    ok = await wait_until(warm_ready, 60, 2)
+    # --with-mounts:同窗并发预热两个 min_idle scope(warm+mnt),首拉镜像时
+    # 60s 偏紧,提到 90s
+    ok = await wait_until(warm_ready, 90, 2)
     idle = await r.smembers(f"resource_manager:resource:scope:{WARM}:idle")
     check("H0-config_sync 后零 route → autoscale 预热 min_idle=1 热备 Pod",
           ok and len(idle) == 1, str(idle))
@@ -458,6 +541,297 @@ async def stage2b_sidecar(c: Client, r) -> None:
           "e2e-box-policy-standin" in out, out.strip()[:60])
 
 
+# ------------------------------------------------- 全量真实规格(--with-mounts)
+
+def _pv_pvc_yaml(pv: str, pvc: str, node: str, host_dir: str) -> str:
+    """静态供给清单:hostPath PV(钉节点) + 空 storageClassName PVC(volumeName 预绑)。
+
+    nfs-provisioner 不供给(2026-08 实测),动态 StorageClass 不可用——与手工
+    补验同款绕过;host_dir 由 hostPath type=DirectoryOrCreate 自建。PVC 不写
+    namespace(由 apply -n 注入;PV 是 cluster 级,忽略 -n)。
+    """
+    return f"""apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: {pv}
+  labels: {{app: agent-runtime-e2e-mounts}}
+spec:
+  capacity: {{storage: 1Gi}}
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  hostPath: {{path: {host_dir}, type: DirectoryOrCreate}}
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: kubernetes.io/hostname
+          operator: In
+          values: [{node}]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {pvc}
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: ""
+  volumeName: {pv}
+  resources: {{requests: {{storage: 1Gi}}}}
+"""
+
+
+async def _schedulable_node() -> str:
+    """首个可调度节点(Ready 且无 NoSchedule/NoExecute 污点)——静态供给 PV 的
+    nodeAffinity 钉这里。误指 master(带污点)会让 Pod 永久 Pending
+    「volume node affinity conflict」,而 PV 亲和不可变只能删了重建
+    (2026-08-28 手工补验教训,见 feature 记录)。"""
+    out = await kubectl("get", "nodes", "-o", "json")
+    try:
+        nodes = json.loads(out).get("items", [])
+    except ValueError:
+        return ""
+    for n in nodes:
+        conditions = {c.get("type"): c.get("status")
+                      for c in n.get("status", {}).get("conditions", [])}
+        if conditions.get("Ready") != "True":
+            continue
+        taints = n.get("spec", {}).get("taints") or []
+        if any(t.get("effect") in ("NoSchedule", "NoExecute") for t in taints):
+            continue
+        return n.get("metadata", {}).get("name", "")
+    return ""
+
+
+async def _ensure_pvc(pvc: str, pv: str, node: str, host_dir: str) -> bool:
+    """单对 PVC 就绪——「已 Bound 即复用,缺失才静态供给」。
+
+    2026-08-28 真环境实测:ns 里可能有真实实验/运维按自己方式预置的同名 PVC
+    (当时撞上 agent-data-pvc→pv-agent-data 手工对),而 volumeName 不可变,
+    盲目 apply 自己的清单必 Invalid。复用既绑 PVC 也更贴近生产——PVC 由谁
+    供给本就不归模板管。存在但 Pending(无主)→ 删后按我们的清单重建。
+    """
+    out = await kubectl("get", "pvc", "-n", NS, pvc,
+                        "-o", "jsonpath={.status.phase}")
+    if "Bound" in out:
+        # 复用既绑:顺手清掉我们自己的孤儿 PV(Available 无 claimRef,安全)
+        pv_out = await kubectl("get", "pv", pv, "-o", "jsonpath={.status.phase}")
+        if pv_out.strip() == "Available":
+            await kubectl("delete", "pv", pv, "--wait=false")
+        return True
+    if "NotFound" not in out:
+        await kubectl("delete", "pvc", "-n", NS, pvc)   # Pending 无负载,安全
+    apply_out = await kubectl("apply", "-n", NS, "-f", "-",
+                              stdin=_pv_pvc_yaml(pv, pvc, node, host_dir))
+    return ("created" in apply_out or "configured" in apply_out
+            or "unchanged" in apply_out) and "error" not in apply_out.lower()
+
+
+async def stage0_provision_mounts() -> bool:
+    """全量规格前置资源:2 ConfigMap + 2 PVC 就绪(Bound)。
+
+    返回 False = 预置失败(main 在 clean_previous 的 FLUSHDB/删 Pod 等
+    破坏性动作**之前**中止)。CM/PVC 跨轮复用不清理(create/复用幂等)。
+    """
+    print("\n== 阶段 0：全量规格资源预置（ConfigMap / PVC）==")
+    # ConfigMap(subPath key 名必须逐字等于 config.yaml/policy.yaml;
+    # 已存在则复用——内容由阶段 2c 按 CM 当前值比对断言,不假设播种值)
+    cm_out = await kubectl("create", "configmap", MNT_AGENT_CM, "-n", NS,
+                           "--from-literal=config.yaml=e2e-agent-config-v1")
+    ok_cm1 = check("MNT-ConfigMap agent-config-cm 就绪（create 幂等）",
+                   "AlreadyExists" in cm_out or "created" in cm_out,
+                   cm_out.strip()[:60])
+    cm_out = await kubectl("create", "configmap", MNT_BOX_CM, "-n", NS,
+                           "--from-literal=policy.yaml=e2e-box-policy-v1")
+    ok_cm2 = check("MNT-ConfigMap box-policy-cm 就绪（create 幂等）",
+                   "AlreadyExists" in cm_out or "created" in cm_out,
+                   cm_out.strip()[:60])
+
+    node = await _schedulable_node()
+    ok_node = check("MNT-获取可调度节点（静态供给时 PV 钉节点,避污点 master）",
+                    bool(node), node[:60])
+    if not (ok_cm1 and ok_cm2 and ok_node):
+        return False
+    ok_apply = True
+    for pvc, pv, host_dir in (
+            (MNT_AGENT_PVC, MNT_AGENT_PV, "/mnt/agent-runtime-e2e/agent-data"),
+            (MNT_BOX_PVC, MNT_BOX_PV, "/mnt/agent-runtime-e2e/box-data")):
+        ok_apply &= await _ensure_pvc(pvc, pv, node, host_dir)
+    if not check("MNT-双 PVC 预置（已 Bound 复用 / 缺失静态供给）", ok_apply):
+        return False
+
+    async def both_bound() -> bool:
+        out = await kubectl("get", "pvc", "-n", NS, MNT_AGENT_PVC, MNT_BOX_PVC,
+                            "-o", "jsonpath={.items[*].status.phase}")
+        return out.split() == ["Bound", "Bound"]
+    bound = await wait_until(both_bound, 30, 2)
+    if not bound:
+        # Released 陷阱:PVC 曾被删而 PV claimRef 钉死旧引用 → 永不再 Bind;
+        # 清 claimRef 后重等(静态供给标准解法)
+        for pv in (MNT_AGENT_PV, MNT_BOX_PV):
+            await kubectl("patch", "pv", pv, "--type", "merge",
+                          "-p", '{"spec":{"claimRef":null}}')
+        bound = await wait_until(both_bound, 30, 2)
+    return check("MNT-双 PVC 均 Bound", bound)
+
+
+async def stage2c_mounts(c: Client, r) -> None:
+    """全量真实规格(--with-mounts 专用):真实 config_sync 形状的 e2e 化——
+    主容器三种挂载 + 显式 container_port/readiness 参数 + sidecar jiuwenbox
+    完整规格,逐字段断言 + 容器内 exec 实证(2026-08-28 双真镜像手工全量
+    验证记录在 docs/feature/2026-08-sidecar-containers.md)。"""
+    if not WITH_MOUNTS:
+        return
+    print("\n== 阶段 2c：全量真实规格 —— 三种挂载 / 特权四件套 / 逐字段断言 ==")
+
+    # 90s HTTP 超时 < 冷部署:先等 autoscale 暖池(stage1 下发即预热,min_idle=1)。
+    # 全量规格 Pod 能否 Ready 本身就是被验命题——PVC 未 Bound / apparmor 不被
+    # 节点接受 / CM 缺失都会卡在这里(而不是 route 超时后一片红)
+    async def warm_ready() -> bool:
+        return await r.scard(f"resource_manager:resource:scope:{MNT}:idle") >= 1
+    ok = await wait_until(warm_ready, 120, 2)
+    warm = await r.smembers(f"resource_manager:resource:scope:{MNT}:idle")
+    check("MNT-全量规格暖 Pod 无请求预热 Ready（PVC/特权/挂载齐备）",
+          ok and len(warm) >= 1, str(sorted(warm))[:120])
+    if not ok:
+        return
+
+    t0 = time.monotonic()
+    code, raw, _ = await c.post("route", session_id="s-mnt", group=MNT)
+    pod_id = str(raw.get("pod_id", ""))
+    check("MNT-route s-mnt 复用暖 Pod（全量规格零冷启动）",
+          code == 200 and pod_id in warm,
+          f"{code} {pod_id} ({time.monotonic()-t0:.0f}s)")
+    if code != 200 or not pod_id:
+        return
+
+    # ---- Pod spec 逐字段断言(K8s API 形状为 camelCase;探针 port 可能序列化
+    # 成数字或字符串,int() 归一;特权断言只打在 sidecar——主容器无
+    # securityContext 渲染,只读性体现在 volumeMounts.readOnly)
+    out = await kubectl("get", "pod", "-n", NS, pod_id, "-o", "json")
+    try:
+        spec = json.loads(out)
+    except ValueError:
+        check("MNT-Pod JSON 可解析", False, out.strip()[:120])
+        return
+    containers = {ct.get("name"): ct
+                  for ct in spec.get("spec", {}).get("containers", [])}
+    check("MNT-双容器（agent + jiuwenbox）",
+          set(containers) == {"agent", "jiuwenbox"}, str(sorted(containers)))
+    agent_ct = containers.get("agent") or {}
+    box_ct = containers.get("jiuwenbox") or {}
+
+    ports = [int(p.get("containerPort", 0)) for p in agent_ct.get("ports") or []]
+    check("MNT-主容器显式 container_port=8086（=sse_port → 单端口声明）",
+          8086 in ports, str(agent_ct.get("ports")))
+
+    mounts = {m.get("mountPath"): m
+              for m in agent_ct.get("volumeMounts") or []}
+    check("MNT-主容器 ConfigMap subPath 挂载（/etc/agent/config.yaml）",
+          (mounts.get("/etc/agent/config.yaml") or {}).get("subPath")
+          == "config.yaml",
+          str(mounts.get("/etc/agent/config.yaml")))
+    check("MNT-主容器 hostPath 挂载 readOnly（/mnt/host-test）",
+          (mounts.get(MNT_HOST_PATH) or {}).get("readOnly") is True,
+          str(mounts.get(MNT_HOST_PATH)))
+    check("MNT-主容器 PVC 挂载（/var/lib/agent）",
+          "/var/lib/agent" in mounts, str(sorted(mounts)))
+
+    probe = agent_ct.get("readinessProbe") or {}
+    http_get = probe.get("httpGet") or {}
+    try:
+        probe_port = int(http_get.get("port", 0))
+    except (TypeError, ValueError):
+        probe_port = -1
+    check("MNT-主容器 readiness 探针（health_path + 8086 + 5s/5s）",
+          http_get.get("path") == HEALTH_PATH and probe_port == 8086
+          and probe.get("initialDelaySeconds") == 5
+          and probe.get("periodSeconds") == 5, str(probe))
+    if AGENT_ENV:
+        env = {e.get("name"): e.get("value")
+               for e in agent_ct.get("env") or []}
+        check("MNT-主容器 agent_env 注入逐项可见",
+              all(env.get(k) == str(v) for k, v in AGENT_ENV.items()), str(env))
+
+    sc = box_ct.get("securityContext") or {}
+    caps = (sc.get("capabilities") or {}).get("add") or []
+    check("MNT-sidecar 特权三件套（privileged + SYS_ADMIN/NET_ADMIN + Unconfined seccomp）",
+          sc.get("privileged") is True and set(caps) == {"SYS_ADMIN", "NET_ADMIN"}
+          and (sc.get("seccompProfile") or {}).get("type") == "Unconfined",
+          str(sc))
+    anno = (spec.get("metadata") or {}).get("annotations") or {}
+    check("MNT-sidecar apparmor annotation（Pod 级 unconfined）",
+          anno.get("container.apparmor.security.beta.kubernetes.io/jiuwenbox")
+          == "unconfined", str(anno))
+
+    # 卷全景按内容断言(卷名是内部实现细节,引用的 CM/hostPath/PVC 才是契约)
+    vols = spec.get("spec", {}).get("volumes") or []
+    cm_names = {v["configMap"]["name"] for v in vols if v.get("configMap")}
+    hp_paths = {v["hostPath"]["path"] for v in vols if v.get("hostPath")}
+    pvc_names = {v["persistentVolumeClaim"]["claimName"]
+                 for v in vols if v.get("persistentVolumeClaim")}
+    check("MNT-卷全景（2 ConfigMap + 2 hostPath + 2 PVC 各就位）",
+          {MNT_AGENT_CM, MNT_BOX_CM} <= cm_names
+          and {MNT_HOST_PATH, "/sys/fs/cgroup"} <= hp_paths
+          and {MNT_AGENT_PVC, MNT_BOX_PVC} <= pvc_names,
+          f"cm={sorted(cm_names)} hp={sorted(hp_paths)} pvc={sorted(pvc_names)}")
+
+    box_probe = box_ct.get("readinessProbe") or {}
+    box_tcp = box_probe.get("tcpSocket") or {}
+    try:
+        box_port = int(box_tcp.get("port", 0))
+    except (TypeError, ValueError):
+        box_port = -1
+    expect_box_port = 8321 if SIDECAR_IMAGE != IMAGE else SIDECAR_STANDIN_PORT
+    check("MNT-sidecar TCP readiness 探针（5s/5s）",
+          box_port == expect_box_port
+          and box_probe.get("initialDelaySeconds") == 5
+          and box_probe.get("periodSeconds") == 5, str(box_probe))
+
+    # ---- exec 实证:挂载不止出现在 spec 里,容器内要真看得见/写得进
+    # (真镜像无 shell 时 exec 失败 = 如实暴露的真实场景信息,不吞)
+    # CM 内容与「CM 当前值」比对而非播种值——预置的 CM 可能来自真实实验
+    # (2026-08-28 实测 ns 里已有 agent-config-cm),挂载正确性=内容一致
+    cm_val = (await kubectl("get", "configmap", MNT_AGENT_CM, "-n", NS,
+                            "-o", "jsonpath={.data.config\\.yaml}")).strip()
+    out = await kubectl("exec", "-n", NS, pod_id, "-c", "agent", "--",
+                        "cat", "/etc/agent/config.yaml")
+    check("MNT-主容器 ConfigMap 内容可见（cat /etc/agent/config.yaml）",
+          bool(cm_val) and out.strip() == cm_val,
+          f"cm={cm_val[:40]!r} pod={out.strip()[:40]!r}")
+    out = await kubectl("exec", "-n", NS, pod_id, "-c", "agent", "--",
+                        "ls", "-d", MNT_HOST_PATH)
+    check("MNT-主容器 hostPath 目录存在（DirectoryOrCreate 由 kubelet 建）",
+          MNT_HOST_PATH in out, out.strip()[:60])
+    out = await kubectl("exec", "-n", NS, pod_id, "-c", "agent", "--",
+                        "sh", "-c", f"touch {MNT_HOST_PATH}/ro 2>&1")
+    check("MNT-主容器 hostPath read_only=true → 写入被拒",
+          "Read-only file system" in out, out.strip()[:80])
+    out = await kubectl("exec", "-n", NS, pod_id, "-c", "agent", "--",
+                        "sh", "-c",
+                        "echo mnt-probe > /var/lib/agent/probe"
+                        " && cat /var/lib/agent/probe")
+    check("MNT-主容器 PVC 可写回读（agent-data-pvc）",
+          "mnt-probe" in out, out.strip()[:60])
+    cm_val = (await kubectl("get", "configmap", MNT_BOX_CM, "-n", NS,
+                            "-o", "jsonpath={.data.policy\\.yaml}")).strip()
+    out = await kubectl("exec", "-n", NS, pod_id, "-c", "jiuwenbox", "--",
+                        "cat", "/etc/box/policy.yaml")
+    check("MNT-sidecar ConfigMap 内容可见（cat /etc/box/policy.yaml）",
+          bool(cm_val) and out.strip() == cm_val,
+          f"cm={cm_val[:40]!r} pod={out.strip()[:40]!r}")
+    out = await kubectl("exec", "-n", NS, pod_id, "-c", "jiuwenbox", "--",
+                        "ls", "/sys/fs/cgroup")
+    check("MNT-sidecar 宿主 cgroup 可见（ls /sys/fs/cgroup）",
+          bool(out.strip()), out.strip()[:60])
+    out = await kubectl("exec", "-n", NS, pod_id, "-c", "jiuwenbox", "--",
+                        "sh", "-c",
+                        "echo box-probe > /var/lib/jiuwenbox/probe"
+                        " && cat /var/lib/jiuwenbox/probe")
+    check("MNT-sidecar PVC 可写回读（box-data-pvc）",
+          "box-probe" in out, out.strip()[:60])
+
+
 async def stage3_mb_hot_update(c: Client, r) -> None:
     print("\n== 阶段 3：场景 M（B 类）—— pod_ttl 热更新立即生效 ==")
     snap_before = await r.get("session_manager:routing:snapshot")
@@ -493,9 +867,11 @@ async def stage4_aging(c: Client, r, state: dict) -> None:
     check("D-空 Pod pass → idle_consider → RM idle 暖池 2 个",
           len(idle) == 2, str(idle))
     reg = await r.smembers("session_manager:pods:registered")
-    # --with-sidecar: box Pod(pod_ttl=3600 长存)也在注册表,期望 +1
+    # --with-sidecar: box Pod(pod_ttl=3600 长存)也在注册表,期望 +1;
+    # --with-mounts: mnt Pod(2c 已 route,pod_ttl=3600 长存)同理再 +1
     check("D-不变量 5：pods:registered 仍持有（待 RM 回收后清）",
-          len(reg) == 2 + (1 if WITH_SIDECAR else 0), str(reg))
+          len(reg) == 2 + (1 if WITH_SIDECAR else 0) + (1 if WITH_MOUNTS else 0),
+          str(reg))
     phases = [await r.hget(f"resource_manager:resource:pod:{p}:info", "phase")
               for p in idle]
     check("D-Pod phase=idle", set(phases) == {"idle"}, str(phases))
@@ -521,9 +897,11 @@ async def stage5_reclaim(c: Client, r, state: dict) -> None:
         check(f"K-Pod {p[:30]}… K8s 已删 + RM PURGE", k8s_gone and purged,
               f"k8s_gone={k8s_gone} purged={purged}")
     reg = await r.smembers("session_manager:pods:registered")
-    # --with-sidecar: box Pod 未参与本阶段回收,仍注册(阶段 12 cleanup 统一清)
+    # --with-sidecar: box Pod 未参与本阶段回收,仍注册(阶段 12 cleanup 统一清);
+    # --with-mounts: mnt Pod 同理
     check("K-notify_pod_dead 已清 SM 注册",
-          len(reg) == (1 if WITH_SIDECAR else 0), str(reg))
+          len(reg) == (1 if WITH_SIDECAR else 0) + (1 if WITH_MOUNTS else 0),
+          str(reg))
 
 
 async def stage5b_natural_drain(c: Client, r) -> None:
@@ -751,12 +1129,22 @@ async def stage12_reconcile_cleanup(c: Client, r) -> None:
     cleaned = raw.get("cleaned", -1)
     out = await kubectl("get", "pods", "-n", NS, "-l",
                         "jiuwenclaw-component=agentserver")
+    # 牙齿=「被删的 Pod 从 K8s 消失」,不断言 ns 恒零——min_idle scope
+    # (e2e-warm 常开,--with-mounts 再加 e2e-mnt)的 autoscale 重建热备会与
+    # 本即时采样竞速,「No resources found」与 H0 配置驱动预热自相矛盾
     check("cleanup 运维批删（含 deploy 失败遗留的孤儿 Pod）",
-          code == 200 and cleaned >= 0 and ("No resources found" in out),
+          code == 200 and cleaned >= 0
+          and not any(p in out for p in all_pods),
           f"cleaned={cleaned}; kubectl: {out.strip().splitlines()[-1][:60]}")
     await asyncio.sleep(12)   # 等 watch/reconcile 兜底清 Redis
     left = await r.smembers("resource_manager:resource:pods:all")
-    check("L-watch/reconcile 兜底清空 Redis 编排态", not left, str(left))
+    # cleanup 只删物理 Pod;watch(≤10s)PURGE 后 min_idle scope 的 autoscale
+    # 会重建热备(新 pod_id)。牙齿=「cleanup 前的存量 Pod 全部经 NotFound
+    # 路径收敛」,重建者应全是 min_idle 暖 Pod——旧「恒零」断言在同 watch
+    # tick 双 scope 一起重建的时序下会闪红(2026-08-28 分析)
+    rebuilt = sorted(set(left) - set(all_pods))
+    check("L-watch/reconcile 兜底清空 Redis 编排态（存量 Pod 全收敛）",
+          not (set(all_pods) & set(left)), f"rebuilt_by_autoscale={rebuilt}")
     sm_keys = await r.keys("session_manager:pod:*")
     check("L-SM Pod 注册态全清", not sm_keys, str(sm_keys[:5]))
 
@@ -836,6 +1224,12 @@ def _parse_args() -> argparse.Namespace:
                              "tcp 探针；真 jiuwenbox 镜像用 --sidecar-image）")
     parser.add_argument("--sidecar-image", default=None,
                         help="sidecar 镜像（默认复用 --image 作替身）")
+    parser.add_argument("--with-mounts", action="store_true",
+                        default=env("AGENT_RUNTIME_E2E_WITH_MOUNTS", "") == "1",
+                        help="追加全量真实规格阶段（主容器 cm/hp/pvc 三挂载 + "
+                             "sidecar jiuwenbox 完整规格 + 显式 container_port；"
+                             "自动预置 ConfigMap 与静态 hostPath PV/PVC，"
+                             "需 PV 创建权限）")
     parser.add_argument("--db-host", default=env("AGENT_RUNTIME_E2E_DB_HOST", "127.0.0.1"))
     parser.add_argument("--db-port", default=env("AGENT_RUNTIME_E2E_DB_PORT", "30000"))
     parser.add_argument("--db-user", default=env("AGENT_RUNTIME_E2E_DB_USER", "agent_runtime"))
@@ -852,6 +1246,7 @@ def _parse_args() -> argparse.Namespace:
 async def main() -> None:
     global BASE, REDIS_URL, NS, IMAGE, DB_DSN, MAIN, FSCOPE, WARM, BAD
     global BOX, WITH_SIDECAR, SIDECAR_IMAGE, HEALTH_PATH, SSE_PATH, AGENT_ENV
+    global MNT, WITH_MOUNTS
     args = _parse_args()
     BASE = args.base_url.rstrip("/")
     REDIS_URL = args.redis_url
@@ -871,17 +1266,22 @@ async def main() -> None:
     MAIN, FSCOPE = "e2e-main", "e2e-f"     # scope_id 由 config_sync 下发(字面量)
     WARM, BAD = "e2e-warm", "e2e-bad"
     BOX, WITH_SIDECAR = "e2e-box", bool(args.with_sidecar)
+    MNT, WITH_MOUNTS = "e2e-mnt", bool(args.with_mounts)
     SIDECAR_IMAGE = args.sidecar_image or IMAGE
     build_templates()
 
     print(f"agent-runtime 集成冒烟测试 @ {time.strftime('%F %T')}")
     print(f"service={BASE} redis={REDIS_URL} ns={NS} image={IMAGE}"
-          + (f" sidecar={SIDECAR_IMAGE}" if WITH_SIDECAR else ""))
+          + (f" sidecar={SIDECAR_IMAGE}" if WITH_SIDECAR else "")
+          + (" with-mounts" if WITH_MOUNTS else ""))
 
     r = aioredis.from_url(REDIS_URL, decode_responses=True)
     try:
         if not await preflight(r, args.force_flush):
             print("\n===== 前置自检未通过，中止 =====")
+            raise SystemExit(2)
+        if WITH_MOUNTS and not await stage0_provision_mounts():
+            print("\n===== 全量规格资源预置未通过，中止（未执行清场）=====")
             raise SystemExit(2)
         async with httpx.AsyncClient(timeout=90.0) as http:
             c = Client(http, BASE)
@@ -891,6 +1291,7 @@ async def main() -> None:
             await stage1b_warm_up_without_request(c, r)
             state = await stage2_route_abc(c, r)
             await stage2b_sidecar(c, r)
+            await stage2c_mounts(c, r)
             await stage3_mb_hot_update(c, r)
             await stage4_aging(c, r, state)
             await stage5_reclaim(c, r, state)

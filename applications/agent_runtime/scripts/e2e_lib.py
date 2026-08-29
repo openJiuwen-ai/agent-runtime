@@ -110,11 +110,13 @@ class Client:
             return None
 
 
-async def kubectl(*args: str) -> str:
+async def kubectl(*args: str, stdin: str | None = None) -> str:
+    """kubectl 子进程；stdin 提供 `apply -f -` 的清单内容（PV/PVC 无命令式子命令）。"""
     proc = await asyncio.create_subprocess_exec(
         "kubectl", *args,
+        stdin=asyncio.subprocess.PIPE if stdin is not None else None,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
-    out, _ = await proc.communicate()
+    out, _ = await proc.communicate(stdin.encode() if stdin is not None else None)
     return out.decode()
 
 
