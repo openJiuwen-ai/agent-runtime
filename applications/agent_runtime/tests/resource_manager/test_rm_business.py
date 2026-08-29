@@ -4,8 +4,12 @@ cleanup / update_pool_config。FakeK8s 可编程状态驱动。"""
 
 from __future__ import annotations
 
+import asyncio
+import logging
+
 import pytest
 
+from agent_runtime.resource_manager import orchestrator as rm_orch
 from agent_runtime.util import now_ts
 from tests.conftest import requires_lua
 
@@ -134,17 +138,21 @@ async def test_reconcile_purges_pod_absent_in_k8s(runtime):
 
 
 @requires_lua
-async def test_cleanup_deletes_by_label_selector(runtime):
+async def test_cleanup_deletes_by_label_selector(runtime, caplog):
     """cleanup 按 label 批删物理 Pod，不动 Redis 编排态（清完 autoscale 重建）。"""
     await runtime.seed_template(min_idle_pods=1)
-    pod_a = await _deploy_one(runtime)
+    await _deploy_one(runtime)
     await runtime.rm_sweeper.autoscale_once()           # 再建一个热备
     pods_before = set(await runtime.rm_state.all_pod_ids())
     assert len(pods_before) == 2
 
-    cleaned = await runtime.rm_facade.cleanup()
+    with caplog.at_level(logging.INFO, logger="agent_runtime.resource_manager"):
+        cleaned = await runtime.rm_facade.cleanup()
     assert cleaned == 2
     assert set(runtime.k8s.deleted) == pods_before
+    # 逐 Pod 留痕：批删中途中断时能看到删到哪
+    per_pod = [r for r in caplog.records if "cleanup deleted pod" in r.getMessage()]
+    assert len(per_pod) == 2
     # Redis 编排态未被动（watch/reconcile 兜底清理）
     assert set(await runtime.rm_state.all_pod_ids()) == pods_before
     await runtime.rm_sweeper.reconcile_once()           # K8s 已无 → 对账清掉
@@ -176,6 +184,42 @@ class _ListBoomK8s:
 
 
 @requires_lua
+@requires_lua
+async def test_follower_progress_and_reuse_logged(runtime, monkeypatch, caplog):
+    """follower 等待室：进度行 INFO 可见（限频），leader Pod 注册后复用留痕。
+
+    ready_timeout 最长 300s——INFO 下这段等待不能是日志空白（部署风暴期
+    正是最需要观测的窗口）。直接驱动 _follow_leader：锁被 leader 持有、
+    中途注册新 Pod，验证进度行 + 复用行都在 INFO 级。
+    """
+    await runtime.seed_template()
+    # 压缩节奏：轮询 10ms、进度行 0 间隔立即打
+    monkeypatch.setattr(rm_orch, "DEPLOY_WAIT_ON_BUSY", 0.01)
+    monkeypatch.setattr(rm_orch, "FOLLOWER_PROGRESS_LOG_SEC", 0)
+    # leader 正在部署：持有 deploy 锁（follower 不会判 leader 已放弃）
+    lock_key = runtime.rm_state.k.lock_deploy(SCOPE)
+    assert await runtime.rm_state.try_lock(lock_key, 60, "leader-token")
+
+    task = asyncio.create_task(runtime.rm_orchestrator._follow_leader(
+        SCOPE, {"ready_timeout": 5}, {"pod_concurrency": 2}, "req-fp",
+    ))
+    with caplog.at_level(logging.INFO, logger="agent_runtime.resource_manager"):
+        await asyncio.sleep(0.05)        # 数轮轮询 → 至少一条进度行
+        await runtime.rm_state.register_pod(
+            pod_id="leader-pod", scope_id=SCOPE,
+            pod_sse_url="http://1.2.3.4:8080/sse", pod_ip="1.2.3.4",
+            namespace="default", deploy_ver="v1", deploy_token="tok",
+            idle_flag=False, now=now_ts(), sse_port=8080, health_path="/health",
+        )
+        result = await asyncio.wait_for(task, timeout=5)
+        assert result["pod_id"] == "leader-pod"
+
+        messages = [r.getMessage() for r in caplog.records]
+        progress = [m for m in messages if "follower still waiting" in m]
+        assert progress and "follower=req-fp" in progress[0]
+        assert any("acquire follower reuses leader pod" in m for m in messages)
+
+
 async def test_cleanup_namespace_missing_returns_zero(runtime):
     """cleanup 目标 namespace 不存在（404）→ 容忍为 cleaned=0。
 

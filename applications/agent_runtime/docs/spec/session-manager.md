@@ -55,7 +55,7 @@
 
 `_acquire_pod`:`MaxPodsReached`/`DeployFailed` → 映射 `NoPodAvailable(503, retry_after=1)`。
 
-`touch(session_id)`:LUA_TOUCH;不存在/已过期返回 False。
+`touch(session_id)`:LUA_TOUCH;不存在/已过期返回 False(此时 INFO `touch missed: session=…` 留痕——gateway 回退重新 route 的排障入口;命中仅 DEBUG)。
 
 ## state.py —— SM 键表(`SMKeys`,全部含 `{session_manager}:` 前缀,带 cluster hash tag)
 

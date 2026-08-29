@@ -3,7 +3,13 @@
 
 from __future__ import annotations
 
-from agent_runtime.metrics import MetricsRegistry
+import asyncio
+import logging
+import time as _time
+from types import SimpleNamespace
+
+from agent_runtime import metrics
+from agent_runtime.metrics import MetricsRegistry, request_metrics_middleware
 
 
 def test_counters_and_error_buckets():
@@ -51,3 +57,52 @@ def test_recent_errors_capacity_and_order():
     assert [e["request_id"] for e in errors] == ["r4", "r3", "r2"]  # 新在前
     assert reg.recent_errors(limit=1)[0]["request_id"] == "r4"
     assert reg.recent_errors(limit=0) == []
+
+
+# ---------------------------------------------------------------- 中间件汇总/慢请求
+
+class _FakeClock:
+    """假单调钟：nxt 内推进模拟处理耗时（真 sleep 会拖慢测试）。"""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def install(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            metrics, "time",
+            SimpleNamespace(monotonic=lambda: self.now, time=_time.time),
+        )
+
+
+def _drive_middleware(clock, advance_s: float):
+    """走一遍中间件：nxt 推进假钟 advance_s 后成功返回。"""
+    middleware = request_metrics_middleware(MetricsRegistry())
+    env = SimpleNamespace(type="route",
+                          metadata=SimpleNamespace(request_id="r1", session_id="s1"))
+    ctx = SimpleNamespace(sysctx=SimpleNamespace(instance_id="i1"))
+
+    async def nxt(ctx_, env_):
+        clock.now += advance_s
+        return SimpleNamespace(response=SimpleNamespace(
+            ok=True, error_code=None, error_message=""))
+
+    return asyncio.run(middleware(ctx, env, nxt))
+
+
+def test_middleware_slow_request_warning(monkeypatch, caplog):
+    """超阈值 → INFO 汇总 + WARNING 分诊行；阈值内 → 只有汇总。"""
+    clock = _FakeClock()
+    clock.install(monkeypatch)
+    with caplog.at_level(logging.INFO, logger="agent_runtime.metrics"):
+        result = _drive_middleware(clock, advance_s=metrics._SLOW_REQUEST_MS / 1000 + 1)
+        assert result.response.ok is True
+        messages = [r.getMessage() for r in caplog.records]
+        assert any("request: endpoint=route outcome=ok" in m for m in messages)
+        assert any("request slow: endpoint=route outcome=ok" in m for m in messages)
+
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="agent_runtime.metrics"):
+        _drive_middleware(clock, advance_s=0.1)
+        messages = [r.getMessage() for r in caplog.records]
+        assert any("request: endpoint=route" in m for m in messages)
+        assert not any("request slow" in m for m in messages)

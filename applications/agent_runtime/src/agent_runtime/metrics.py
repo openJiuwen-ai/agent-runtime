@@ -28,6 +28,9 @@ logger = logging.getLogger("agent_runtime.metrics")
 _LATENCY_WINDOW = 1024        # 每端点保留的最近延迟样本数（分位数窗口）
 _ERROR_CAPACITY = 200         # recent_errors 环形容量
 _DETAIL_MAX = 300             # 错误 detail 截断长度
+# 请求慢分诊阈值：热路径 ms 级；scope_full 有界等待与冷部署会合法超阈——
+# 本行只作"值得看一眼"的分诊入口，精确语义以汇总行的 duration_ms 为准
+_SLOW_REQUEST_MS = 2000.0
 
 
 @dataclass
@@ -174,6 +177,15 @@ def request_metrics_middleware(
                 error_code or "-",
                 duration_ms,
             )
+            if duration_ms > _SLOW_REQUEST_MS:
+                # 慢请求分诊行（上下文尾巴仍绑定，request_id/session_id 可关联）
+                logger.warning(
+                    "request slow: endpoint=%s outcome=%s duration_ms=%.1f "
+                    "threshold_ms=%.0f",
+                    getattr(env, "type", "?"),
+                    "ok" if ok else "error",
+                    duration_ms, _SLOW_REQUEST_MS,
+                )
             registry.observe_request(
                 endpoint=getattr(env, "type", "?"),
                 ok=ok,

@@ -246,6 +246,12 @@ class SessionOrchestrator:
         touched, _ = await self.state.touch(
             session_id, now_ts(), self.default_session_ttl
         )
-        logger.debug("touch: session=%s touched=%s ttl=%d",
-                     session_id, touched, self.default_session_ttl)
+        if touched:
+            logger.debug("touch: session=%s touched=%s ttl=%d",
+                         session_id, touched, self.default_session_ttl)
+        else:
+            # 未命中=会话已过期/不存在，gateway 将回退重新 route——生产 INFO 下
+            # 必须可见（过期风暴的排障入口）；命中路径保持 DEBUG 防保活刷屏
+            logger.info("touch missed: session=%s ttl=%d",
+                        session_id, self.default_session_ttl)
         return touched

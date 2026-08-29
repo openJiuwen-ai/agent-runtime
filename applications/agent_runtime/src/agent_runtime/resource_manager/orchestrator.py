@@ -30,7 +30,7 @@ DEPLOY_LOCK_TTL = 360          # per-scope deploy 锁（盖住 ready_timeout 300
 DEPLOY_WAIT_ON_BUSY = 0.3      # follower 轮询间隔（原输家自旋间隔沿用）
 FOLLOWER_WAIT_MARGIN = 10      # follower 等待上界 = ready_timeout + 此余量（注册开销）
 NO_CONFIG_LOOP_WARN = 5        # acquire 内 no_config 重跑超过该次数告警（正常 ≤1 次）
-FOLLOWER_PROGRESS_LOG_SEC = 5  # follower 轮询进度 DEBUG 行间隔
+FOLLOWER_PROGRESS_LOG_SEC = 5  # follower 轮询进度 INFO 行间隔（限频）
 
 
 def _deploy_ver(pod_spec: dict[str, Any]) -> str:
@@ -195,7 +195,9 @@ class ResourceOrchestrator:
                 await asyncio.sleep(DEPLOY_WAIT_ON_BUSY)
                 now_mono = time.monotonic()
                 if now_mono - waited_log_at >= FOLLOWER_PROGRESS_LOG_SEC:
-                    logger.debug(
+                    # 进度行 INFO：ready_timeout 最长 300s，INFO 下这段等待
+                    # 不能是日志空白（部署风暴期正是最需要观测的窗口）
+                    logger.info(
                         "follower still waiting: scope=%s follower=%s waited_s=%.0f",
                         scope_id, request_id, now_mono - started,
                     )
@@ -379,6 +381,9 @@ class ResourceOrchestrator:
         for info in pods:
             await self.k8s.delete(info.pod_id, ns)
             cleaned += 1
+            # 逐 Pod 留痕：批删中途中断（单个 delete 失败上抛）时能看到删到哪；
+            # 低频运维操作，无刷屏风险（k8s.delete 自身明细在 DEBUG）
+            logger.info("cleanup deleted pod: pod=%s namespace=%s", info.pod_id, ns)
         logger.warning("cleanup: namespace=%s selector=%s cleaned=%d", ns, selector, cleaned)
         return cleaned
 

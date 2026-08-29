@@ -87,11 +87,14 @@ SM 侧 ctx,级联管理全部生命周期(框架 App 的 lifespan 只认一个 c
 ### 日志契约(排障入口)
 
 - **每请求一行汇总**(INFO,`agent_runtime.metrics`):`request: endpoint= route outcome=ok error_code=- duration_ms=11.0 | request_id=…`——四个端点全覆盖(含 touch/cleanup),与 uvicorn access 行经 request_id 关联。
+- **慢请求分诊**(WARNING,同 logger):汇总后 `duration_ms` 超 `_SLOW_REQUEST_MS`(2s)补 `request slow: endpoint= …`——scope_full 有界等待与冷部署会合法超阈,本行只作"值得看一眼"入口,精确语义以汇总行 duration_ms 为准。
+- **touch 未命中 INFO**(`touch missed: session=…`):会话过期/gateway 回退重新 route 的排障入口;命中保持 DEBUG(保活高频防刷屏)。
+- **前置校验失败留痕**(WARNING,框架 RestAdapter):信封体模型被 FastAPI 拒绝(422)时请求**未进 router**——无汇总行/上下文尾巴,`request validation failed: path= request_id= detail=`(request_id 尽力从原始 body 抢救,errors 只取 loc/msg 摘要)是该请求唯一日志证据;响应体保持 FastAPI 默认形状不变。
 - **每次 acquire 一行结果**(INFO):`acquire done: scope= … outcome=deployed pod=… duration_ms=…`。
 - **异常拍留痕**:handler 失败 WARNING+`exc_info`(异常链);`NO_POD_AVAILABLE` 粗化前记录真因(`mapped_from=MAX_PODS_REACHED|DEPLOY_FAILED`);框架 `FrameworkError`(validation/not_found/deadline)在 router 层补 WARNING。
 - **Redis 延迟探针**:两个 state.py 的 `eval()` 计时,>200ms WARNING(`lua eval slow`);Lua 返回空表属真异常 → WARNING(`lua returned empty (anomaly)`)。
 - **降噪**:框架 `tick lock acquired`/`single_leader claimed` 降 DEBUG;`tick done` 常态 DEBUG、异常/慢拍(>1s)/每 600 拍心跳保留 INFO。1Hz 三任务从 ~6 行/秒降到 INFO 下 ~0 行/秒。
-- **DEBUG 解锁明细**:lua eval 明细、k8s get/list/delete 耗时、touch 判定、resolve 缓存命中。
+- **DEBUG 解锁明细**:lua eval 明细、k8s get/list/delete 耗时、touch 命中明细、resolve 缓存命中。
 
 ### metrics.py —— 请求指标
 
