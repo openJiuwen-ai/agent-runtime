@@ -10,6 +10,7 @@ from openjiuwen_runtime.foundation.db.handler import DBHandler
 
 from manager_server.core.template.agent_template import AgentTemplateService, agent_template_out
 from manager_server.core.template.push_agent_template_to_gateway import (
+    build_agent_resource_gateway_payload,
     delete_agent_resource_from_gateway,
     sync_agent_resource_to_gateway,
 )
@@ -147,7 +148,7 @@ class InstanceAgentResourceService:
             data=data,
         )
 
-    async def replace_resource(
+    async def update_resource(
         self,
         jiuwenclaw_id: str,
         resource_id: str,
@@ -225,18 +226,19 @@ class InstanceAgentResourceService:
         existing_desc = str(_g(existing[0], "resource_desc") or "").strip() if existing else ""
         resolved_name = (resource_name or "").strip() or existing_name or None
         resolved_desc = (resource_desc or "").strip() or existing_desc or None
-        if normalized_resource_id:
-            await _delete_where(self._h, _GRANT, target_filters, "id")
+
         seen: set[str] = set()
+        grant_rows: list[dict[str, Any]] = []
+        gateway_grants: list[dict[str, Any]] = []
         now = utc_now()
+        granted_by_norm = strip_optional(granted_by)
         for raw in match_exprs:
             expr = canonicalize_match_expr(raw)
             key = match_key(expr)
             if key in seen:
                 continue
             seen.add(key)
-            await self._h.create(
-                _GRANT,
+            grant_rows.append(
                 {
                     "jiuwenclaw_id": jiuwenclaw_id,
                     "resource_id": resolved_resource_id,
@@ -244,28 +246,51 @@ class InstanceAgentResourceService:
                     "resource_desc": resolved_desc,
                     "ref_template_id": template_id,
                     "match_expr": expr,
-                    "granted_by": strip_optional(granted_by),
+                    "granted_by": granted_by_norm,
                     "expires_at": expires_at,
                     "enabled": enabled,
                     "data": data,
                     "created_at": now,
                     "updated_at": now,
-                },
+                }
             )
-            await auto_bind_from_match_expr(self._h, jiuwenclaw_id, expr)
-        _log.info(
-            "[InstanceResource] instance_agent_resource.write",
-            jiuwenclaw_id=jiuwenclaw_id,
-            template_id=template_id,
-            resource_id=resolved_resource_id,
-            n=len(seen),
-        )
+            gateway_grants.append(
+                {
+                    "match_expr": expr if expr is not None else [],
+                    "granted_by": granted_by_norm,
+                    "enabled": enabled,
+                    "expires_at": iso_datetime(expires_at),
+                    "data": data,
+                }
+            )
+
+        # 先推 Gateway，成功后再写 Manager，避免 Manager 有数据而 Gateway 缺失
         await sync_agent_resource_to_gateway(
             self._h,
             jiuwenclaw_id,
             resolved_resource_id,
             template_id,
             was_first_for_template=was_first_for_template,
+            resource_payload=build_agent_resource_gateway_payload(
+                resource_id=resolved_resource_id,
+                ref_template_id=template_id,
+                resource_name=resolved_name,
+                resource_desc=resolved_desc,
+                grants=gateway_grants,
+            ),
+        )
+
+        if normalized_resource_id:
+            await _delete_where(self._h, _GRANT, target_filters, "id")
+        for row in grant_rows:
+            await self._h.create(_GRANT, row)
+            await auto_bind_from_match_expr(self._h, jiuwenclaw_id, row["match_expr"])
+        _log.info(
+            "[InstanceResource] instance_agent_resource.write",
+            jiuwenclaw_id=jiuwenclaw_id,
+            template_id=template_id,
+            resource_id=resolved_resource_id,
+            n=len(seen),
         )
         return await self.list_grants(template_id, jiuwenclaw_id)
 
@@ -275,7 +300,32 @@ class InstanceAgentResourceService:
             return False
         filters = {"jiuwenclaw_id": jiuwenclaw_id, "resource_id": rid}
         rows = await self._h.list_records(_GRANT, filters, limit=_CAP, offset=0)
-        ref_template_id = str(_g(rows[0], "ref_template_id") or "") if rows else ""
+        if not rows:
+            return False
+        ref_template_id = str(_g(rows[0], "ref_template_id") or "")
+        remaining_after = 0
+        if ref_template_id:
+            sibling_rows = await self._h.list_records(
+                _GRANT,
+                {"jiuwenclaw_id": jiuwenclaw_id, "ref_template_id": ref_template_id},
+                limit=_CAP,
+                offset=0,
+            )
+            remaining_ids = {
+                str(_g(r, "resource_id") or "").strip()
+                for r in sibling_rows
+                if _g(r, "resource_id")
+            }
+            remaining_ids.discard(rid)
+            remaining_after = len(remaining_ids)
+
+        await delete_agent_resource_from_gateway(
+            self._h,
+            jiuwenclaw_id,
+            rid,
+            ref_template_id=ref_template_id,
+            remaining_resources_after=remaining_after,
+        )
         for r in rows:
             await self._h.delete(_GRANT, {"id": _g(r, "id")})
         _log.info(
@@ -284,14 +334,7 @@ class InstanceAgentResourceService:
             resource_id=rid,
             rows=len(rows),
         )
-        if rows:
-            await delete_agent_resource_from_gateway(
-                self._h,
-                jiuwenclaw_id,
-                rid,
-                ref_template_id=ref_template_id,
-            )
-        return len(rows) > 0
+        return True
 
     async def remove_from_instance(
         self, jiuwenclaw_id: str, template_id: str, *, resource_id: str | None = None
@@ -305,6 +348,31 @@ class InstanceAgentResourceService:
             rid = str(_g(r, "resource_id") or "").strip()
             if rid:
                 grouped[rid] = str(_g(r, "ref_template_id") or "")
+
+        # 按模板统计删除前的 resource 集合，推 Gateway 时传入删除后剩余数
+        all_for_template = await self._h.list_records(
+            _GRANT,
+            {"jiuwenclaw_id": jiuwenclaw_id, "ref_template_id": template_id},
+            limit=_CAP,
+            offset=0,
+        )
+        all_ids = {
+            str(_g(r, "resource_id") or "").strip()
+            for r in all_for_template
+            if _g(r, "resource_id")
+        }
+        for rid, ref_template_id in grouped.items():
+            remaining_ids = set(all_ids)
+            remaining_ids.discard(rid)
+            await delete_agent_resource_from_gateway(
+                self._h,
+                jiuwenclaw_id,
+                rid,
+                ref_template_id=ref_template_id,
+                remaining_resources_after=len(remaining_ids),
+            )
+            all_ids.discard(rid)
+
         for r in rows:
             await self._h.delete(_GRANT, {"id": _g(r, "id")})
         _log.info(
@@ -314,13 +382,6 @@ class InstanceAgentResourceService:
             resource_id=resource_id,
             rows=len(rows),
         )
-        for rid, ref_template_id in grouped.items():
-            await delete_agent_resource_from_gateway(
-                self._h,
-                jiuwenclaw_id,
-                rid,
-                ref_template_id=ref_template_id,
-            )
         return len(rows) > 0
 
     async def delete_by_template(self, template_id: str) -> None:

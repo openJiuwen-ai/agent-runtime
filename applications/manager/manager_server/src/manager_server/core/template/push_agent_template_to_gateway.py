@@ -87,11 +87,29 @@ async def _build_agent_resource_payload(
                 "data": _g(row, "data"),
             }
         )
+    return build_agent_resource_gateway_payload(
+        resource_id=rid,
+        ref_template_id=str(_g(primary, "ref_template_id") or ""),
+        resource_name=_g(primary, "resource_name"),
+        resource_desc=_g(primary, "resource_desc"),
+        grants=grants,
+    )
+
+
+def build_agent_resource_gateway_payload(
+    *,
+    resource_id: str,
+    ref_template_id: str,
+    resource_name: Any,
+    resource_desc: Any,
+    grants: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """构造下发 Gateway 的 agent resource payload（不依赖 Manager 已落库）。"""
     return {
-        "resource_id": rid,
-        "ref_template_id": str(_g(primary, "ref_template_id") or ""),
-        "resource_name": _g(primary, "resource_name"),
-        "resource_desc": _g(primary, "resource_desc"),
+        "resource_id": str(resource_id or "").strip(),
+        "ref_template_id": str(ref_template_id or "").strip(),
+        "resource_name": resource_name,
+        "resource_desc": resource_desc,
         "grants": grants,
     }
 
@@ -194,8 +212,13 @@ async def sync_agent_resource_to_gateway(
     template_id: str,
     *,
     was_first_for_template: bool | None = None,
+    resource_payload: dict[str, Any] | None = None,
 ) -> None:
-    """创建/更新 instance_agent_resource 后，向 Gateway 推送 agent 模板、引用模板与授权行。"""
+    """向 Gateway 推送 agent 模板、引用模板与授权行。
+
+    调用方应在 Manager 落库前调用；``resource_payload`` 可直接传入待写内容，
+    避免依赖尚未写入的 Manager 行。
+    """
     jid = str(jiuwenclaw_id or "").strip()
     tid = str(template_id or "").strip()
     rid = str(resource_id or "").strip()
@@ -208,7 +231,9 @@ async def sync_agent_resource_to_gateway(
 
     if was_first_for_template is None:
         was_first_for_template = (
-            await _count_distinct_resources_for_template(handler, jid, tid) == 1
+            await _count_distinct_resources_for_template(handler, jid, tid) == 0
+            if resource_payload is not None
+            else await _count_distinct_resources_for_template(handler, jid, tid) == 1
         )
 
     template_ref = read_template_ref_from_row(tpl_row)
@@ -227,7 +252,7 @@ async def sync_agent_resource_to_gateway(
         _clean_agent_template(tpl_row),
         revision=f"agent-resource:{rid}:template",
     )
-    payload = await _build_agent_resource_payload(handler, jid, rid)
+    payload = resource_payload or await _build_agent_resource_payload(handler, jid, rid)
     await _upsert_agent_resource_on_gateway(
         jid,
         payload,
@@ -247,8 +272,13 @@ async def delete_agent_resource_from_gateway(
     resource_id: str,
     *,
     ref_template_id: str,
+    remaining_resources_after: int | None = None,
 ) -> None:
-    """删除 instance_agent_resource 后，从 Gateway 移除授权；必要时清理 agent 模板与引用模板。"""
+    """从 Gateway 移除授权；必要时清理 agent 模板与引用模板。
+
+    调用方应在 Manager 删库前调用。若尚未删库，须传入删除后仍剩余的
+    ``remaining_resources_after``（不含当前 resource）。
+    """
     jid = str(jiuwenclaw_id or "").strip()
     rid = str(resource_id or "").strip()
     tid = str(ref_template_id or "").strip()
@@ -264,7 +294,10 @@ async def delete_agent_resource_from_gateway(
     if not tid:
         return
 
-    remaining = await _count_distinct_resources_for_template(handler, jid, tid)
+    if remaining_resources_after is None:
+        remaining = await _count_distinct_resources_for_template(handler, jid, tid)
+    else:
+        remaining = max(0, int(remaining_resources_after))
     if remaining > 0:
         logger.info(
             "[push_agent_template] resource removed jiuwenclaw_id=%s resource_id=%s "
@@ -366,6 +399,7 @@ async def push_agent_resources_sync_to_gateway(
 
 
 __all__ = (
+    "build_agent_resource_gateway_payload",
     "delete_agent_resource_from_gateway",
     "push_agent_resources_sync_to_gateway",
     "sync_agent_resource_to_gateway",
