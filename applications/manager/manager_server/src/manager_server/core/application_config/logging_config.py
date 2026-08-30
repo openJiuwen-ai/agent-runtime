@@ -89,6 +89,43 @@ class LoggingConfigService:
         )
 
         if existing is not None:
+            gateway_body = {
+                "level": level,
+                "console_level": (
+                    console_level
+                    if console_level is not None
+                    else getattr(existing, "console_level", None)
+                ),
+                "gateway": gateway if gateway is not None else getattr(existing, "gateway", None),
+                "channel": channel if channel is not None else getattr(existing, "channel", None),
+                "agent_server": (
+                    agent_server
+                    if agent_server is not None
+                    else getattr(existing, "agent_server", None)
+                ),
+                "full": full if full is not None else getattr(existing, "full", None),
+            }
+        else:
+            gateway_body = {
+                "level": level,
+                "console_level": console_level,
+                "gateway": gateway,
+                "channel": channel,
+                "agent_server": agent_server,
+                "full": full,
+            }
+
+        try:
+            await gateway_request(
+                jiuwenclaw_id,
+                "PUT",
+                "/api/v1/logging",
+                gateway_body,
+            )
+        except Exception as exc:
+            raise ValueError(f"failed to sync to gateway: {exc}") from exc
+
+        if existing is not None:
             update_data: dict[str, Any] = {
                 "level": level,
                 "updated_at": now,
@@ -111,44 +148,23 @@ class LoggingConfigService:
             )
             if updated is None:
                 raise ValueError("failed to update logging config")
+            return _row_to_dict(updated)
 
-            result = _row_to_dict(updated)
-        else:
-            row_data = {
-                "jiuwenclaw_id": jiuwenclaw_id,
-                "level": level,
-                "console_level": console_level,
-                "gateway": gateway,
-                "channel": channel,
-                "agent_server": agent_server,
-                "full": full,
-                "created_at": now,
-                "updated_at": now,
-            }
-            created = await self._handler.create(_LOGGING_CONFIG_TABLE, row_data)
-            if created is None:
-                raise ValueError("failed to create logging config")
-
-            result = _row_to_dict(created)
-
-        try:
-            await gateway_request(
-                jiuwenclaw_id,
-                "PUT",
-                "/api/v1/logging",
-                {
-                    "level": result["level"],
-                    "console_level": result.get("console_level"),
-                    "gateway": result.get("gateway"),
-                    "channel": result.get("channel"),
-                    "agent_server": result.get("agent_server"),
-                    "full": result.get("full"),
-                },
-            )
-        except Exception as exc:
-            raise ValueError(f"failed to sync to gateway: {exc}") from exc
-
-        return result
+        row_data = {
+            "jiuwenclaw_id": jiuwenclaw_id,
+            "level": level,
+            "console_level": console_level,
+            "gateway": gateway,
+            "channel": channel,
+            "agent_server": agent_server,
+            "full": full,
+            "created_at": now,
+            "updated_at": now,
+        }
+        created = await self._handler.create(_LOGGING_CONFIG_TABLE, row_data)
+        if created is None:
+            raise ValueError("failed to create logging config")
+        return _row_to_dict(created)
 
     async def delete(self, jiuwenclaw_id: str) -> None:
         existing = await self._handler.get(

@@ -68,6 +68,16 @@ class PermissionsConfigService:
             {"jiuwenclaw_id": jiuwenclaw_id},
         )
 
+        try:
+            await gateway_request(
+                jiuwenclaw_id,
+                "PUT",
+                "/api/v1/permissions",
+                {"body": body},
+            )
+        except Exception as exc:
+            raise ValueError(f"failed to sync to gateway: {exc}") from exc
+
         if existing is not None:
             update_data: dict[str, Any] = {
                 "body": body,
@@ -82,33 +92,20 @@ class PermissionsConfigService:
             )
             if updated is None:
                 raise ValueError("failed to update permissions config")
-            result = _row_to_dict(updated)
-        else:
-            row_data = {
-                "jiuwenclaw_id": jiuwenclaw_id,
-                "body": body,
-                "source": source,
-                "revision": 1,
-                "created_at": now,
-                "updated_at": now,
-            }
-            created = await self._handler.create(_PERMISSIONS_CONFIG_TABLE, row_data)
-            if created is None:
-                raise ValueError("failed to create permissions config")
-            result = _row_to_dict(created)
+            return _row_to_dict(updated)
 
-        try:
-            # body 为 permissions 内容，不再包 op
-            await gateway_request(
-                jiuwenclaw_id,
-                "PUT",
-                "/api/v1/permissions",
-                {"body": result.get("body") or {}},
-            )
-        except Exception as exc:
-            raise ValueError(f"failed to sync to gateway: {exc}") from exc
-
-        return result
+        row_data = {
+            "jiuwenclaw_id": jiuwenclaw_id,
+            "body": body,
+            "source": source,
+            "revision": 1,
+            "created_at": now,
+            "updated_at": now,
+        }
+        created = await self._handler.create(_PERMISSIONS_CONFIG_TABLE, row_data)
+        if created is None:
+            raise ValueError("failed to create permissions config")
+        return _row_to_dict(created)
 
     async def delete(self, jiuwenclaw_id: str) -> None:
         existing = await self._handler.get(

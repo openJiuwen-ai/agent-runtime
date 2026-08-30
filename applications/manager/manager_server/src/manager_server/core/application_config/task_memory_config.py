@@ -89,6 +89,51 @@ class TaskMemoryConfigService:
 
         now = utc_now()
         if existing is not None:
+            gateway_body = {
+                "enabled": enabled,
+                "llm_model": llm_model if llm_model != "" else str(getattr(existing, "llm_model", "") or ""),
+                "embedding_model": (
+                    embedding_model
+                    if embedding_model != ""
+                    else str(getattr(existing, "embedding_model", "") or "")
+                ),
+                "api_key": api_key if api_key != "" else str(getattr(existing, "api_key", "") or ""),
+                "api_base": api_base if api_base != "" else str(getattr(existing, "api_base", "") or ""),
+                "retrieval_algo": (
+                    retrieval_algo
+                    if retrieval_algo is not None
+                    else str(getattr(existing, "retrieval_algo", "") or "")
+                ),
+                "summary_algo": (
+                    summary_algo
+                    if summary_algo is not None
+                    else str(getattr(existing, "summary_algo", "") or "")
+                ),
+                "updated_at": _format_ts(now),
+            }
+        else:
+            gateway_body = {
+                "enabled": enabled,
+                "llm_model": llm_model,
+                "embedding_model": embedding_model,
+                "api_key": api_key,
+                "api_base": api_base,
+                "retrieval_algo": retrieval_algo or "",
+                "summary_algo": summary_algo or "",
+                "updated_at": _format_ts(now),
+            }
+
+        try:
+            await gateway_request(
+                jiuwenclaw_id,
+                "PUT",
+                "/api/v1/task-memory",
+                gateway_body,
+            )
+        except Exception as exc:
+            raise ValueError(f"failed to sync to gateway: {exc}") from exc
+
+        if existing is not None:
             update_data: dict[str, Any] = {
                 "enabled": enabled,
                 "updated_at": now,
@@ -112,48 +157,24 @@ class TaskMemoryConfigService:
             )
             if updated is None:
                 raise ValueError("failed to update task_memory config")
+            return _row_to_dict(updated)
 
-            result = _row_to_dict(updated)
-        else:
-            row_data = {
-                "jiuwenclaw_id": jiuwenclaw_id,
-                "enabled": enabled,
-                "llm_model": llm_model,
-                "embedding_model": embedding_model,
-                "api_key": api_key,
-                "api_base": api_base,
-                "retrieval_algo": retrieval_algo or "",
-                "summary_algo": summary_algo or "",
-                "created_at": now,
-                "updated_at": now,
-            }
-
-            created = await self._handler.create(_TASK_MEMORY_CONFIG_TABLE, row_data)
-            if created is None:
-                raise ValueError("failed to create task_memory config")
-
-            result = _row_to_dict(created)
-
-        try:
-            # Gateway PUT /task-memory：扁平字段，不再包 op / task_memory
-            await gateway_request(
-                jiuwenclaw_id,
-                "PUT",
-                "/api/v1/task-memory",
-                {
-                    "enabled": enabled,
-                    "llm_model": llm_model,
-                    "embedding_model": embedding_model,
-                    "api_key": api_key,
-                    "api_base": api_base,
-                    "retrieval_algo": retrieval_algo or "",
-                    "summary_algo": summary_algo or "",
-                    "updated_at": _format_ts(now),
-                },
-            )
-        except Exception as exc:
-            raise ValueError(f"failed to sync to gateway: {exc}") from exc
-        return result
+        row_data = {
+            "jiuwenclaw_id": jiuwenclaw_id,
+            "enabled": enabled,
+            "llm_model": llm_model,
+            "embedding_model": embedding_model,
+            "api_key": api_key,
+            "api_base": api_base,
+            "retrieval_algo": retrieval_algo or "",
+            "summary_algo": summary_algo or "",
+            "created_at": now,
+            "updated_at": now,
+        }
+        created = await self._handler.create(_TASK_MEMORY_CONFIG_TABLE, row_data)
+        if created is None:
+            raise ValueError("failed to create task_memory config")
+        return _row_to_dict(created)
 
     async def get(
         self,

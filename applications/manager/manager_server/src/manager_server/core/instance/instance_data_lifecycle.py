@@ -11,18 +11,6 @@ from manager_server.core.application_config.log_masking_rule import (
     push_log_masking_rules_sync_to_gateway,
     seed_builtin_log_masking_rules,
 )
-from manager_server.core.config_effective_policy.config_default_template_mapping import (
-    push_template_mappings_sync_to_gateway,
-)
-from manager_server.core.config_effective_policy.config_effective_agent_policy import (
-    push_agent_policies_sync_to_gateway,
-)
-from manager_server.core.config_effective_policy.config_effective_global_policy import (
-    push_global_policies_sync_to_gateway,
-)
-from manager_server.core.config_effective_policy.config_effective_service_policy import (
-    push_service_policies_sync_to_gateway,
-)
 from manager_server.core.instance.instance_service import (
     _LOG_MASKING_SEEDED_KEY,
     get_instance_row,
@@ -36,12 +24,6 @@ from manager_server.core.template.push_agent_template_to_gateway import (
 from manager_server.core.template.push_template_to_gateway import (
     rebuild_jid_template_ref_for_gateway,
     sync_referenced_templates_to_gateway,
-)
-from manager_server.models.config_effective_policy_models import (
-    CONFIG_DEFAULT_TEMPLATE_MAPPING_TABLE_DEF,
-    CONFIG_EFFECTIVE_AGENT_POLICY_TABLE_DEF,
-    CONFIG_EFFECTIVE_GLOBAL_POLICY_TABLE_DEF,
-    CONFIG_EFFECTIVE_SERVICE_POLICY_TABLE_DEF,
 )
 from manager_server.models.jid_template_ref_models import (
     JID_TEMPLATE_REF_TABLE_DEF,
@@ -57,13 +39,6 @@ from manager_server.models.application_config_models import (
 logger = logging.getLogger(__name__)
 
 _LIST_ALL_CAP = 10_000
-
-_MANAGER_POLICY_TABLES = (
-    CONFIG_EFFECTIVE_GLOBAL_POLICY_TABLE_DEF.table_name,
-    CONFIG_EFFECTIVE_SERVICE_POLICY_TABLE_DEF.table_name,
-    CONFIG_EFFECTIVE_AGENT_POLICY_TABLE_DEF.table_name,
-    CONFIG_DEFAULT_TEMPLATE_MAPPING_TABLE_DEF.table_name,
-)
 
 _MANAGER_INSTANCE_TABLES = (
     LOG_MASKING_RULE_TABLE_DEF.table_name,
@@ -99,12 +74,10 @@ async def sync_data_to_gateway_on_register(
     （见 ``maybe_full_sync_gateway_on_online``）。
 
     顺序说明：
-    1. 模板（策略/映射依赖）
+    1. 模板（Agent 资源依赖）
     2. Agent 资源
-    3. 全局 / Service / Agent 策略（Agent 依赖 Service）
-    4. 默认模板映射
-    5. 日志脱敏规则
-    6. 重建 Manager 侧 jid_template_ref 索引
+    3. 日志脱敏规则
+    4. 重建 Manager 侧 jid_template_ref 索引
     """
     jid = str(jiuwenclaw_id or "").strip()
     if not jid:
@@ -132,10 +105,6 @@ async def sync_data_to_gateway_on_register(
         raise
 
     for name, push_fn, before_fn in (
-        ("global_policies", push_global_policies_sync_to_gateway, None),
-        ("service_policies", push_service_policies_sync_to_gateway, None),
-        ("agent_policies", push_agent_policies_sync_to_gateway, None),
-        ("template_mappings", push_template_mappings_sync_to_gateway, None),
         (
             "log_masking_rule",
             push_log_masking_rules_sync_to_gateway,
@@ -177,8 +146,6 @@ def _delete_pk_for_row(table: str, row: Any, jiuwenclaw_id: str) -> dict[str, An
             "slot": getattr(row, "slot"),
             "template_id": getattr(row, "template_id"),
         }
-    if table in _MANAGER_POLICY_TABLES:
-        return {"id": getattr(row, "id"), "jiuwenclaw_id": jiuwenclaw_id}
     return {"id": getattr(row, "id")}
 
 
@@ -211,7 +178,7 @@ async def purge_manager_instance_data(
         return {}
 
     deleted_counts: dict[str, int] = {}
-    for table in (*_MANAGER_POLICY_TABLES, *_MANAGER_INSTANCE_TABLES):
+    for table in _MANAGER_INSTANCE_TABLES:
         count = await _purge_table_rows(handler, table, jid)
         if count:
             deleted_counts[table] = count

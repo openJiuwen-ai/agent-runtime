@@ -10,6 +10,7 @@ from openjiuwen_runtime.foundation.db.handler import DBHandler
 
 from manager_server.core.template.service_config_template import ServiceConfigTemplateService
 from manager_server.core.instance_access import auto_bind_from_match_expr
+from manager_server.core.instance_resource.runtime_config_sync import sync_runtime_config
 from manager_server.infrastructure.common import resolve_order_by
 from manager_server.infrastructure.logger import get_logger
 from manager_server.infrastructure.match_expr import canonicalize_match_expr
@@ -143,7 +144,7 @@ class InstanceServiceResourceService:
             data=data,
         )
 
-    async def replace_resource(
+    async def update_resource(
         self,
         jiuwenclaw_id: str,
         resource_id: str,
@@ -185,6 +186,29 @@ class InstanceServiceResourceService:
             data=data,
         )
 
+    async def _list_instance_rows(self, jiuwenclaw_id: str) -> list[Any]:
+        return await self._h.list_records(
+            _GRANT,
+            {"jiuwenclaw_id": jiuwenclaw_id},
+            limit=_CAP,
+            offset=0,
+        )
+
+    @staticmethod
+    def _project_upsert(
+        current: list[Any],
+        resource_id: str,
+        new_rows: list[dict[str, Any]],
+    ) -> list[Any]:
+        rid = str(resource_id).strip()
+        kept = [row for row in current if str(_g(row, "resource_id") or "").strip() != rid]
+        return [*kept, *new_rows]
+
+    @staticmethod
+    def _project_without(current: list[Any], resource_id: str) -> list[Any]:
+        rid = str(resource_id).strip()
+        return [row for row in current if str(_g(row, "resource_id") or "").strip() != rid]
+
     async def _write_grants(
         self,
         jiuwenclaw_id: str,
@@ -218,18 +242,18 @@ class InstanceServiceResourceService:
         resolved_desc = (resource_desc or "").strip() or existing_desc or None
         if not resolved_name:
             raise ValueError("resource_name is required")
-        if normalized_resource_id:
-            await _delete_where(self._h, _GRANT, target_filters, "id")
+
         seen: set[str] = set()
+        grant_rows: list[dict[str, Any]] = []
         now = utc_now()
+        granted_by_norm = strip_optional(granted_by)
         for raw in match_exprs:
             expr = canonicalize_match_expr(raw)
             key = match_key(expr)
             if key in seen:
                 continue
             seen.add(key)
-            await self._h.create(
-                _GRANT,
+            grant_rows.append(
                 {
                     "jiuwenclaw_id": jiuwenclaw_id,
                     "resource_id": resolved_resource_id,
@@ -238,15 +262,30 @@ class InstanceServiceResourceService:
                     "ref_template_id": template_id,
                     "match_expr": expr,
                     "priority": int(priority),
-                    "granted_by": strip_optional(granted_by),
+                    "granted_by": granted_by_norm,
                     "expires_at": expires_at,
                     "enabled": enabled,
                     "data": data,
                     "created_at": now,
                     "updated_at": now,
-                },
+                }
             )
-            await auto_bind_from_match_expr(self._h, jiuwenclaw_id, expr)
+
+        # 先 sync Runtime（目标态），成功后再写 Manager
+        current = await self._list_instance_rows(jiuwenclaw_id)
+        projected = self._project_upsert(current, resolved_resource_id, grant_rows)
+        try:
+            await sync_runtime_config(
+                self._h, jiuwenclaw_id, resource_rows=projected
+            )
+        except Exception as exc:
+            raise ValueError(f"failed to sync to runtime: {exc}") from exc
+
+        if normalized_resource_id:
+            await _delete_where(self._h, _GRANT, target_filters, "id")
+        for row in grant_rows:
+            await self._h.create(_GRANT, row)
+            await auto_bind_from_match_expr(self._h, jiuwenclaw_id, row["match_expr"])
         _log.info(
             "[InstanceResource] instance_service_resource.write",
             jiuwenclaw_id=jiuwenclaw_id,
@@ -262,6 +301,18 @@ class InstanceServiceResourceService:
             return False
         filters = {"jiuwenclaw_id": jiuwenclaw_id, "resource_id": rid}
         rows = await self._h.list_records(_GRANT, filters, limit=_CAP, offset=0)
+        if not rows:
+            return False
+
+        current = await self._list_instance_rows(jiuwenclaw_id)
+        projected = self._project_without(current, rid)
+        try:
+            await sync_runtime_config(
+                self._h, jiuwenclaw_id, resource_rows=projected
+            )
+        except Exception as exc:
+            raise ValueError(f"failed to sync to runtime: {exc}") from exc
+
         for r in rows:
             await self._h.delete(_GRANT, {"id": _g(r, "id")})
         _log.info(
@@ -270,7 +321,7 @@ class InstanceServiceResourceService:
             resource_id=rid,
             rows=len(rows),
         )
-        return len(rows) > 0
+        return True
 
     async def remove_from_instance(
         self, jiuwenclaw_id: str, template_id: str, *, resource_id: str | None = None
@@ -279,6 +330,27 @@ class InstanceServiceResourceService:
         if resource_id:
             filters["resource_id"] = resource_id
         rows = await self._h.list_records(_GRANT, filters, limit=_CAP, offset=0)
+        if not rows:
+            return False
+
+        remove_ids = {
+            str(_g(r, "resource_id") or "").strip()
+            for r in rows
+            if _g(r, "resource_id")
+        }
+        current = await self._list_instance_rows(jiuwenclaw_id)
+        projected = [
+            row
+            for row in current
+            if str(_g(row, "resource_id") or "").strip() not in remove_ids
+        ]
+        try:
+            await sync_runtime_config(
+                self._h, jiuwenclaw_id, resource_rows=projected
+            )
+        except Exception as exc:
+            raise ValueError(f"failed to sync to runtime: {exc}") from exc
+
         for r in rows:
             await self._h.delete(_GRANT, {"id": _g(r, "id")})
         _log.info(
@@ -288,7 +360,7 @@ class InstanceServiceResourceService:
             resource_id=resource_id,
             rows=len(rows),
         )
-        return len(rows) > 0
+        return True
 
     async def delete_by_template(self, template_id: str) -> None:
         await _delete_where(self._h, _GRANT, {"ref_template_id": template_id}, "id")

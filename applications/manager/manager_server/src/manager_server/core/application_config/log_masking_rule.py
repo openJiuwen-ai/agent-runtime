@@ -187,7 +187,7 @@ class LogMaskingRuleService:
         jid = str(jiuwenclaw_id).strip()
         rule_id = normalize_rule_id(new_uuid4())
         now = utc_now()
-        row_data = {
+        created_payload = {
             "jiuwenclaw_id": jid,
             "rule_id": rule_id,
             "rule_name": body.rule_name.strip(),
@@ -202,19 +202,16 @@ class LogMaskingRuleService:
             "updated_at": now,
         }
 
-        created = await self._handler.create(_TABLE, row_data)
-        if created is None:
-            raise ValueError("failed to create log masking rule")
-
         try:
             await gateway_request(
-                jid, "POST", "/api/v1/log-masking-rules", _clean_for_gateway_push(row_data)
+                jid, "POST", "/api/v1/log-masking-rules", _clean_for_gateway_push(created_payload)
             )
         except Exception as exc:
-            await self._handler.delete(
-                _TABLE, {"jiuwenclaw_id": jid, "rule_id": rule_id}
-            )
             raise ValueError(f"failed to sync to gateway: {exc}") from exc
+
+        created = await self._handler.create(_TABLE, created_payload)
+        if created is None:
+            raise ValueError("failed to create log masking rule")
 
         return _row_to_out(created)
 
