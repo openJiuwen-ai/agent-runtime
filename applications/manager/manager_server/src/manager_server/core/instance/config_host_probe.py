@@ -9,8 +9,8 @@ import httpx
 
 Side = Literal["gateway", "runtime"]
 
-# Gateway Config Receiver：``GET /api/v1/health``（manager_config_receiver）
-_GATEWAY_HEALTH_PATH = "/api/v1/health"
+# Gateway Config Receiver：``GET /api/health``（manager_config_receiver）
+_GATEWAY_HEALTH_PATH = "/api/health"
 # Agent Runtime：``GET /healthz``（agent_runtime main._register_healthz）
 _RUNTIME_HEALTH_PATH = "/healthz"
 
@@ -29,7 +29,7 @@ async def probe_config_host(
 ) -> None:
     """对配置下发基址做健康检查；不通则抛 ``ValueError``。
 
-    - gateway → ``{base}/api/v1/health``，期望 HTTP 200
+    - gateway → ``{base}/api/health``，期望 HTTP 200
     - runtime → ``{base}/healthz``，期望 HTTP 200 且 ``ok`` 不为 false
     """
     base = str(base_url or "").strip().rstrip("/")

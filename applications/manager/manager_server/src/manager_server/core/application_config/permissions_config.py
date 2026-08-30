@@ -35,6 +35,34 @@ def _row_to_dict(obj: Any) -> dict[str, Any]:
     }
 
 
+async def push_permissions_config_sync_to_gateway(
+    handler: DBHandler,
+    jiuwenclaw_id: str,
+) -> dict[str, Any]:
+    """全量同步：将 Manager MDB 中该实例 permissions 配置 PUT 到 Gateway。"""
+    jid = str(jiuwenclaw_id or "").strip()
+    if not jid:
+        raise ValueError("jiuwenclaw_id is required")
+
+    row = await handler.get(_PERMISSIONS_CONFIG_TABLE, {"jiuwenclaw_id": jid})
+    if row is None:
+        return {
+            "success_flag": True,
+            "result": {"synced": False},
+            "transport": "http",
+        }
+    body = getattr(row, "body", None)
+    gateway_body = {
+        "body": dict(body) if isinstance(body, dict) else (body or {}),
+    }
+    return await gateway_request(
+        jid,
+        "PUT",
+        "/api/v1/permissions",
+        gateway_body,
+    )
+
+
 class PermissionsConfigService:
     """Permissions 配置服务：封装数据库操作和 Gateway 推送。"""
 

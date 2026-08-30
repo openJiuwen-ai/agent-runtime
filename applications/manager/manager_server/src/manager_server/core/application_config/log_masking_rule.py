@@ -165,10 +165,8 @@ async def push_log_masking_rules_sync_to_gateway(
             "POST",
             "/api/v1/log-masking-rules",
             clean,
-            revision=f"sync-log-masking:{idx}",
         )
     return last or {
-        "revision": "sync-log-masking",
         "success_flag": True,
         "result": {"synced": 0},
         "transport": "http",

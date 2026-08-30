@@ -11,6 +11,18 @@ from manager_server.core.application_config.log_masking_rule import (
     push_log_masking_rules_sync_to_gateway,
     seed_builtin_log_masking_rules,
 )
+from manager_server.core.application_config.logging_config import (
+    push_logging_config_sync_to_gateway,
+)
+from manager_server.core.application_config.memory_config import (
+    push_memory_config_sync_to_gateway,
+)
+from manager_server.core.application_config.permissions_config import (
+    push_permissions_config_sync_to_gateway,
+)
+from manager_server.core.application_config.task_memory_config import (
+    push_task_memory_config_sync_to_gateway,
+)
 from manager_server.core.instance.instance_service import (
     _LOG_MASKING_SEEDED_KEY,
     get_instance_row,
@@ -76,7 +88,7 @@ async def sync_data_to_gateway_on_register(
     顺序说明：
     1. 模板（Agent 资源依赖）
     2. Agent 资源
-    3. 日志脱敏规则
+    3. 应用配置（logging / task-memory / permissions / memory / 日志脱敏）
     4. 重建 Manager 侧 jid_template_ref 索引
     """
     jid = str(jiuwenclaw_id or "").strip()
@@ -105,6 +117,10 @@ async def sync_data_to_gateway_on_register(
         raise
 
     for name, push_fn, before_fn in (
+        ("logging", push_logging_config_sync_to_gateway, None),
+        ("task_memory", push_task_memory_config_sync_to_gateway, None),
+        ("permissions", push_permissions_config_sync_to_gateway, None),
+        ("memory", push_memory_config_sync_to_gateway, None),
         (
             "log_masking_rule",
             push_log_masking_rules_sync_to_gateway,

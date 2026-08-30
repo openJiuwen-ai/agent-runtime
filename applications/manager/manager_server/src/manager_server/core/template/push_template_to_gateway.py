@@ -198,11 +198,9 @@ async def _sync_templates_on_gateway(
             jiuwenclaw_id,
             section,
             tmpl,
-            revision=f"sync-{section}:{idx}",
             **kwargs,
         )
     return last or {
-        "revision": f"sync-{section}",
         "success_flag": True,
         "result": {"synced": 0},
         "transport": "http",

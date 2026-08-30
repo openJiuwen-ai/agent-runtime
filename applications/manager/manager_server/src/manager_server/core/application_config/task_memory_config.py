@@ -60,6 +60,42 @@ def _row_to_dict(obj: Any) -> dict[str, Any]:
     }
 
 
+def _row_to_gateway_body(obj: Any) -> dict[str, Any]:
+    return {
+        "enabled": bool(getattr(obj, "enabled", False)),
+        "llm_model": str(getattr(obj, "llm_model", "") or ""),
+        "embedding_model": str(getattr(obj, "embedding_model", "") or ""),
+        "api_key": str(getattr(obj, "api_key", "") or ""),
+        "api_base": str(getattr(obj, "api_base", "") or ""),
+        "retrieval_algo": str(getattr(obj, "retrieval_algo", "") or "") or None,
+        "summary_algo": str(getattr(obj, "summary_algo", "") or "") or None,
+    }
+
+
+async def push_task_memory_config_sync_to_gateway(
+    handler: DBHandler,
+    jiuwenclaw_id: str,
+) -> dict[str, Any]:
+    """全量同步：将 Manager MDB 中该实例 task_memory 配置 PUT 到 Gateway。"""
+    jid = str(jiuwenclaw_id or "").strip()
+    if not jid:
+        raise ValueError("jiuwenclaw_id is required")
+
+    row = await handler.get(_TASK_MEMORY_CONFIG_TABLE, {"jiuwenclaw_id": jid})
+    if row is None:
+        return {
+            "success_flag": True,
+            "result": {"synced": False},
+            "transport": "http",
+        }
+    return await gateway_request(
+        jid,
+        "PUT",
+        "/api/v1/task-memory",
+        _row_to_gateway_body(row),
+    )
+
+
 class TaskMemoryConfigService:
     """TaskMemory 配置服务类：封装数据库操作和 Gateway 推送逻辑。"""
 

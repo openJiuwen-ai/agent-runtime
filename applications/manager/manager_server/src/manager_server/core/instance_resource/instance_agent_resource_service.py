@@ -71,6 +71,30 @@ def match_key(expr: Any) -> str:
     return json.dumps(canonicalize_match_expr(expr), ensure_ascii=False, separators=(",", ":"))
 
 
+def merge_match_exprs(match_exprs: list[Any]) -> Any:
+    """将多个 match_expr 合并为可入库的单一 JSON 值（多条件为 OR 列表）。"""
+    parts: list[str] = []
+    seen: set[str] = set()
+    for raw in match_exprs:
+        expr = canonicalize_match_expr(raw)
+        if expr == []:
+            return []
+        if isinstance(expr, list):
+            items = expr
+        else:
+            items = [str(expr)]
+        for item in items:
+            text = str(item).strip()
+            if not text:
+                continue
+            key = match_key(text)
+            if key in seen:
+                continue
+            seen.add(key)
+            parts.append(text)
+    return canonicalize_match_expr(parts)
+
+
 def grant_expired(expires_at: Any) -> bool:
     if expires_at is None:
         return False
@@ -227,42 +251,23 @@ class InstanceAgentResourceService:
         resolved_name = (resource_name or "").strip() or existing_name or None
         resolved_desc = (resource_desc or "").strip() or existing_desc or None
 
-        seen: set[str] = set()
-        grant_rows: list[dict[str, Any]] = []
-        gateway_grants: list[dict[str, Any]] = []
+        merged_expr = merge_match_exprs(match_exprs)
         now = utc_now()
         granted_by_norm = strip_optional(granted_by)
-        for raw in match_exprs:
-            expr = canonicalize_match_expr(raw)
-            key = match_key(expr)
-            if key in seen:
-                continue
-            seen.add(key)
-            grant_rows.append(
-                {
-                    "jiuwenclaw_id": jiuwenclaw_id,
-                    "resource_id": resolved_resource_id,
-                    "resource_name": resolved_name,
-                    "resource_desc": resolved_desc,
-                    "ref_template_id": template_id,
-                    "match_expr": expr,
-                    "granted_by": granted_by_norm,
-                    "expires_at": expires_at,
-                    "enabled": enabled,
-                    "data": data,
-                    "created_at": now,
-                    "updated_at": now,
-                }
-            )
-            gateway_grants.append(
-                {
-                    "match_expr": expr if expr is not None else [],
-                    "granted_by": granted_by_norm,
-                    "enabled": enabled,
-                    "expires_at": iso_datetime(expires_at),
-                    "data": data,
-                }
-            )
+        grant_row = {
+            "jiuwenclaw_id": jiuwenclaw_id,
+            "resource_id": resolved_resource_id,
+            "resource_name": resolved_name,
+            "resource_desc": resolved_desc,
+            "ref_template_id": template_id,
+            "match_expr": merged_expr,
+            "granted_by": granted_by_norm,
+            "expires_at": expires_at,
+            "enabled": enabled,
+            "data": data,
+            "created_at": now,
+            "updated_at": now,
+        }
 
         # 先推 Gateway，成功后再写 Manager，避免 Manager 有数据而 Gateway 缺失
         await sync_agent_resource_to_gateway(
@@ -276,21 +281,24 @@ class InstanceAgentResourceService:
                 ref_template_id=template_id,
                 resource_name=resolved_name,
                 resource_desc=resolved_desc,
-                grants=gateway_grants,
+                match_expr=merged_expr,
+                granted_by=granted_by_norm,
+                enabled=enabled,
+                expires_at=iso_datetime(expires_at),
+                data=data,
             ),
         )
 
         if normalized_resource_id:
             await _delete_where(self._h, _GRANT, target_filters, "id")
-        for row in grant_rows:
-            await self._h.create(_GRANT, row)
-            await auto_bind_from_match_expr(self._h, jiuwenclaw_id, row["match_expr"])
+        await self._h.create(_GRANT, grant_row)
+        await auto_bind_from_match_expr(self._h, jiuwenclaw_id, merged_expr)
         _log.info(
             "[InstanceResource] instance_agent_resource.write",
             jiuwenclaw_id=jiuwenclaw_id,
             template_id=template_id,
             resource_id=resolved_resource_id,
-            n=len(seen),
+            n=1,
         )
         return await self.list_grants(template_id, jiuwenclaw_id)
 

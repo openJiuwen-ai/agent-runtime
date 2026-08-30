@@ -58,6 +58,34 @@ def _validate_memory_body(body: dict[str, Any]) -> None:
         raise ValueError("memory.forbidden_memory_definition must be an object")
 
 
+async def push_memory_config_sync_to_gateway(
+    handler: DBHandler,
+    jiuwenclaw_id: str,
+) -> dict[str, Any]:
+    """全量同步：将 Manager MDB 中该实例 memory 配置 PUT 到 Gateway。"""
+    jid = str(jiuwenclaw_id or "").strip()
+    if not jid:
+        raise ValueError("jiuwenclaw_id is required")
+
+    row = await handler.get(_MEMORY_CONFIG_TABLE, {"jiuwenclaw_id": jid})
+    if row is None:
+        return {
+            "success_flag": True,
+            "result": {"synced": False},
+            "transport": "http",
+        }
+    body = getattr(row, "body", None)
+    gateway_body = {
+        "body": dict(body) if isinstance(body, dict) else (body or {}),
+    }
+    return await gateway_request(
+        jid,
+        "PUT",
+        "/api/v1/memory",
+        gateway_body,
+    )
+
+
 class MemoryConfigService:
     """Memory 配置服务：封装数据库操作和 Gateway 推送。"""
 

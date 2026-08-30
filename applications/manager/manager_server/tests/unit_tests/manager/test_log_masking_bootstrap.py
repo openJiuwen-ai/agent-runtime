@@ -37,7 +37,7 @@ async def test_bootstrap_skips_seed_when_already_seeded():
         patch(
             "manager_server.core.application_config.log_masking_rule.push_log_masking_rules_sync_to_gateway",
             new_callable=AsyncMock,
-            return_value={"revision": "1"},
+            return_value={"success_flag": True},
         ) as sync_mock,
         patch(
             "manager_server.core.instance.instance_service.merge_instance_data",
@@ -65,7 +65,7 @@ async def test_bootstrap_seeds_once_and_sets_flag():
         patch(
             "manager_server.core.application_config.log_masking_rule.push_log_masking_rules_sync_to_gateway",
             new_callable=AsyncMock,
-            return_value={"revision": "1"},
+            return_value={"success_flag": True},
         ),
         patch(
             "manager_server.core.instance.instance_service.merge_instance_data",
