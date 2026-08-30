@@ -8,7 +8,6 @@ import { Modal } from '../../components/Modal';
 import { JsonField, tryParseJson, useInvalidJsonChecker } from '../../components/JsonField';
 import { safeStringify } from '../../utils/format';
 import { toast } from '../../stores/uiStore';
-import { InstancePoliciesPanel } from './instancePoliciesPanel/InstancePoliciesPanel';
 import { InstanceConfigPanel } from './instanceConfigPanel/InstanceConfigPanel';
 import { InstanceDetailPanel } from './instanceDetailPanel/instanceDetailPanel';
 import { InstanceAccessPanel } from './instanceAccessPanel/InstanceAccessPanel';
@@ -18,7 +17,6 @@ import { InstancePlaceholderPanel } from './InstancePlaceholderPanel';
 export type InstancePageTab =
   | 'access'
   | 'resources'
-  | 'policies'
   | 'config'
   | 'status'
   | 'tokenQuota'
@@ -39,18 +37,15 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
   const [editText, setEditText] = useState('');
   const checkJson = useInvalidJsonChecker();
 
-  const mainTabs: { key: InstancePageTab; label: string; href: string; hidden?: boolean }[] = [
+  const mainTabs: { key: InstancePageTab; label: string; href: string }[] = [
     { key: 'access', label: t('instanceDetail.tabs.access'), href: `/instances/${instanceId}/access` },
     { key: 'resources', label: t('instanceDetail.tabs.resources'), href: `/instances/${instanceId}/resources` },
-    { key: 'policies', label: t('instanceDetail.tabs.policies'), href: `/instances/${instanceId}/policies`, hidden: true },
     { key: 'config', label: t('instanceDetail.tabs.config'), href: `/instances/${instanceId}/config` },
     { key: 'status', label: t('instanceDetail.tabs.status'), href: `/instances/${instanceId}/status` },
     { key: 'tokenQuota', label: t('instanceDetail.tabs.tokenQuota'), href: `/instances/${instanceId}/token-quota` },
     { key: 'cost', label: t('instanceDetail.tabs.cost'), href: `/instances/${instanceId}/cost` },
     { key: 'audit', label: t('instanceDetail.tabs.audit'), href: `/instances/${instanceId}/audit` },
   ];
-
-  const visibleTabs = mainTabs.filter((it) => !it.hidden);
 
   const handleOpenEdit = () => {
     setEditText(safeStringify(instance.data?.data ?? {}, 2));
@@ -107,7 +102,7 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
           </div>
 
           <div className="tabs-bar max-w-full shrink-0 self-center overflow-x-auto lg:justify-self-center">
-            {visibleTabs.map((it) => (
+            {mainTabs.map((it) => (
               <button
                 key={it.key}
                 onClick={() => navigate(it.href)}
@@ -124,7 +119,6 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
         <div className="w-full min-w-0 shrink-0">
           {tab === 'access' && <InstanceAccessPanel instanceId={instanceId} />}
           {tab === 'resources' && <InstanceResourcePanel instanceId={instanceId} />}
-          {tab === 'policies' && <InstancePoliciesPanel instanceId={instanceId} />}
           {tab === 'config' && <InstanceConfigPanel instanceId={instanceId} />}
           {tab === 'status' && (
             <InstanceDetailPanel

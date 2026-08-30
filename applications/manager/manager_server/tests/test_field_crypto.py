@@ -81,9 +81,9 @@ def test_has_sensitive():
 
 
 def test_unregistered_section_passthrough():
-    body = {"op": "create", "mapping": {"scope_type": "user", "scope_id": "u1"}}
+    body = {"op": "create", "template": {"name": "x"}}
     enc_body, fields = encrypt_sensitive_fields(
-        "config_default_template_mappings", body, new_dek()
+        "unknown_section_name", body, new_dek()
     )
     assert fields == []
     assert enc_body == body

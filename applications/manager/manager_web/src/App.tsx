@@ -102,10 +102,6 @@ function RouteView() {
   if (instanceResources) {
     return <InstanceDetailPage instanceId={instanceResources.id} tab="resources" />;
   }
-  const instancePolicies = matchRoute('/instances/:id/policies', path);
-  if (instancePolicies) {
-    return <InstanceDetailPage instanceId={instancePolicies.id} tab="policies" />;
-  }
   const instanceConfig = matchRoute('/instances/:id/config', path);
   if (instanceConfig) {
     return <InstanceDetailPage instanceId={instanceConfig.id} tab="config" />;

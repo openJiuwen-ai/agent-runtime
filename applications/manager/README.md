@@ -5,7 +5,7 @@
 | 目录 | 说明 | 默认端口 |
 |------|------|----------|
 | `identity_center/` | 认证中心（OAuth2 / JWT、用户与组织） | `8770` |
-| `manager_server/` | 管理 API（实例、模板、策略等）+ Manager WebSocket | REST `8765`、WS `8766` |
+| `manager_server/` | 管理 API（实例、模板等）+ Manager WebSocket | REST `8765`、WS `8766` |
 | `manager_web/` | 管理面 Web 前端（React + Vite） | `5273` |
 
 本地开发时，**先启动身份中心，再启动管理 API，最后启动前端**。
@@ -107,7 +107,7 @@ npm run dev
 
 | 用户名 | 密码 | 角色 | 用途 |
 |--------|------|------|------|
-| `admin` | `admin` | 管理员 | 登录管理面（`/manager`），可进行实例、模板、策略等配置 |
+| `admin` | `admin` | 管理员 | 登录管理面（`/manager`），可进行实例、模板等配置 |
 | `user1` | `user1` | 普通用户 | 登录用户端（`/user` 跳转至同源 `/chat/`），无管理权限 |
 
 Vite 开发服务器已配置代理，`/api` → `8765`、`/idp` → `8770`（会自动去掉 `/idp` 前缀）。

@@ -60,7 +60,6 @@
     "extensionTemplates": "扩展配置",
     "agentManagement": "Agent模板",
     "serviceConfigTemplates": "服务资源模板",
-    "policies": "实例策略",
     "iam": "身份中心",
     "users": "用户",
     "orgs": "组织",
@@ -102,7 +101,6 @@
     "agentServer": "AgentServer",
     "otherService": "其他服务",
     "viewDetail": "详情",
-    "managePolicies": "策略管理",
     "noServices": "暂未发现 Gateway / AgentServer 服务（等待探活）",
     "lastAlive": "最近探活",
     "lastUpdated": "最近更新",
@@ -137,7 +135,6 @@
     "editData": "编辑扩展数据",
     "tabs": {
       "access": "实例准入",
-      "policies": "实例策略",
       "config": "全局配置",
       "status": "状态监控",
       "tokenQuota": "Token配额",
@@ -354,7 +351,7 @@
     "timeoutMin": "超时需大于 0",
     "retryCountMin": "重试次数不能小于 0",
     "unsafeText": "{{field}} 含有非法 HTML/脚本或疑似 SQL 注入内容，请修改后重试",
-    "deleteConfirm": "确认删除该模型模板？该模板可能被多个实例策略引用，请确认无副作用。"
+    "deleteConfirm": "确认删除该模型模板？该模板可能被多个实例资源引用，请确认无副作用。"
   },
   "embeddingTemplate": {
     "title": "Embedding 模板",
@@ -377,7 +374,7 @@
     "fieldRequired": "请填写{{field}}",
     "apiBaseInvalid": "API Base 须为合法的 http(s) URL，例如 https://api.example.com/v1",
     "unsafeText": "{{field}} 含有非法 HTML/脚本或疑似 SQL 注入内容，请修改后重试",
-    "deleteConfirm": "确认删除该 Embedding 模板？该模板可能被多个实例策略引用，请确认无副作用。"
+    "deleteConfirm": "确认删除该 Embedding 模板？该模板可能被多个实例资源引用，请确认无副作用。"
   },
   "extensionTemplate": {
     "title": "扩展配置模板",
@@ -426,7 +423,7 @@
     "fieldRequired": "请填写{{field}}",
     "skillSourceInvalid": "Skill来源须为合法的 http(s) URL，例如 https://skillhub.example.com/",
     "unsafeText": "{{field}} 含有非法 HTML/脚本或疑似 SQL 注入内容，请修改后重试",
-    "deleteConfirm": "确认删除该 Skill 白名单模板？该模板可能被多个实例策略引用，请确认无副作用。"
+    "deleteConfirm": "确认删除该 Skill 白名单模板？该模板可能被多个实例资源引用，请确认无副作用。"
   },
   "serviceConfigTemplate": {
     "title": "服务配置模板",
@@ -482,45 +479,10 @@
     "sectionNfs": "NFS存储",
     "sectionResources": "资源配额",
     "sectionPool": "动态池与超时",
-    "deleteConfirm": "确认删除该服务配置模板？该模板可能被多个实例策略引用，请确认无副作用。"
+    "deleteConfirm": "确认删除该服务配置模板？该模板可能被多个实例资源引用，请确认无副作用。"
   },
   "policies": {
-    "title": "实例策略",
-    "selectInstance": "选择实例",
-    "noInstanceHint": "暂无实例，请先在「实例管理」中新建",
-    "tabs": {
-      "mapping": "默认模板映射",
-      "global": "全局兜底",
-      "service": "服务层级",
-      "agent": "Agent 层级"
-    },
-    "mapping": {
-      "new": "新建映射",
-      "searchPlaceholder": "搜索策略 ID、策略名称、策略描述、作用域类型、作用域 ID、槽位、模板 ID 或优先级",
-      "templateType": "模板类型",
-      "templateTypeHint": "default_model / video_model / audio_model / vision_model / skill_whitelist / channel / service_resource",
-      "templateId": "Template ID",
-      "template": "模板",
-      "templateUnavailable": "当前模板不可用",
-      "slotUnavailable": "当前槽位不可用",
-      "scopeType": "作用域类型",
-      "scopeId": "作用域 ID",
-      "scopeTypes": {
-        "user": "用户",
-        "group": "群组",
-        "bot": "机器人"
-      },
-      "priority": "优先级"
-    },
-    "global": {
-      "new": "新建全局策略",
-      "priority": "优先级",
-      "templateRef": "模板引用",
-      "updatedAt": "修改时间",
-      "searchPlaceholder": "搜索策略 ID、策略名称、策略描述或优先级"
-    },
     "fieldRequired": "请填写{{field}}",
-    "priorityHint": "按优先级从大到小匹配，同优先级按修改时间从大到小匹配。只取第一条匹配到的策略应用。",
     "templateRef": {
       "title": "模板引用",
       "slot": "槽位",
@@ -557,16 +519,6 @@
       "none": "不选择",
       "noOptions": "暂无可选模板"
     },
-    "service": {
-      "new": "新建服务策略",
-      "serviceId": "服务 ID",
-      "serviceIdHint": "用于路由到 AgentServer。可填固定服务ID（如 sales_pool_v1），或使用占位符 ${user_id}/${group_id}/${bot_id}拼接（如 ${group_id}::${bot_id}）。",
-      "serviceIdInvalid": "服务 ID 含 $ 时仅允许 ${user_id}、${group_id}、${bot_id} 占位符",
-      "matchExpr": "匹配表达式",
-      "searchPlaceholder": "搜索策略 ID、策略名称、策略描述、服务 ID、优先级或匹配表达式",
-      "deleteBlockedByAgentPolicies": "该服务策略下仍有 {{count}} 条关联的 Agent 策略，请先删除这些 Agent 策略后再删除服务策略。",
-      "deleteBlockedByAgentPoliciesGeneric": "该服务策略下仍有关联的 Agent 策略，请先删除这些 Agent 策略后再删除服务策略。"
-    },
     "matchExpr": {
       "modeAll": "全员可用",
       "modeCustom": "部分可用",
@@ -592,25 +544,7 @@
         "user_id": "用户",
         "bot_id": "Agent"
       }
-    },
-    "agent": {
-      "new": "新建 Agent 策略",
-      "searchPlaceholder": "搜索策略 ID、策略名称、策略描述、Agent ID、工作空间目录、关联服务策略、优先级或匹配表达式",
-      "agentId": "Agent ID",
-      "agentIdHint": "用于路由到 Agent 实例。可填固定 Agent ID（如 default_agent_id），或使用占位符 ${user_id}/${group_id}/${bot_id}拼接（如 agent_${user_id}）。",
-      "workspaceDir": "工作空间目录",
-      "workspaceDirHint": "决定Agent数据落盘目录。可填固定值（如 default_workspace），或使用占位符 ${user_id}/${group_id}/${bot_id}拼接（如${group_id}${bot_id}${user_id}）。留空则默认 ${group_id}${bot_id}${user_id}。",
-      "routingIdInvalid": "路由标识占位符不合法，仅允许 ${user_id}/${group_id}/${bot_id}",
-      "servicePolicyId": "关联服务策略",
-      "pickServicePolicy": "请选择服务策略",
-      "loadingServicePolicies": "正在加载服务策略…",
-      "servicePolicyUnavailable": "当前策略不可用",
-      "sendFileAllowed": "允许agent发送生成的文件给用户"
-    },
-    "deleteConfirm": "确认删除该策略？删除后将立即影响 Gateway 的配置生效。",
-    "policyId": "策略 ID",
-    "policyName": "策略名称",
-    "policyDesc": "策略描述"
+    }
   },
   "errors": {
     "loadFailed": "加载失败：{{detail}}",
