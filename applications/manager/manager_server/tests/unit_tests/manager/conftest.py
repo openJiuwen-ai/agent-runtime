@@ -41,7 +41,6 @@ class _GatewayAckSimulator:
         _ = method
         _ = path
         return {
-            "revision": "rev-ut",
             "success_flag": True,
             "result": None,
             "transport": "http",

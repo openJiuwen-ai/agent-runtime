@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -14,23 +13,17 @@ from manager_server.manager_config_push.endpoint import require_gateway_endpoint
 logger = get_logger(__name__)
 
 
-def revision_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
 async def gateway_request(
     jiuwenclaw_id: str,
     method: str,
     path: str,
     business: dict[str, Any] | None = None,
     *,
-    revision: str | None = None,
     timeout: float = 30.0,
 ) -> dict[str, Any]:
     """向 Gateway Config Receiver 发一次同步写请求。
 
-    ``path`` 为绝对路径，如 ``/api/v1/logging``；``business`` 为业务字段
-    （不含 ``revision``）。请求体 = ``{revision, **business}``。
+    ``path`` 为绝对路径，如 ``/api/v1/logging``；``business`` 为业务字段 JSON。
     """
     jid = str(jiuwenclaw_id or "").strip()
     if not jid:
@@ -39,8 +32,7 @@ async def gateway_request(
         raise ValueError(f"path must start with /: {path!r}")
 
     endpoint = await require_gateway_endpoint(jid)
-    rev = revision or revision_now()
-    payload = {"revision": rev, **dict(business or {})}
+    payload = dict(business or {})
 
     url = f"{endpoint}{path}"
     try:
@@ -51,8 +43,6 @@ async def gateway_request(
             f"gateway HTTP push failed jiuwenclaw_id={jid!r} url={url}: {exc}"
         ) from exc
 
-    if resp.status_code == 503:
-        raise ValueError(f"gateway standby (503) jiuwenclaw_id={jid!r}; retry later")
     if resp.status_code >= 400:
         detail = resp.text[:500]
         try:
@@ -79,7 +69,6 @@ async def gateway_request(
         "[ManagerConfigPush] ok jiuwenclaw_id=%s %s %s", jid, method.upper(), path
     )
     return {
-        "revision": rev,
         "success_flag": True,
         "result": result,
         "transport": "http",

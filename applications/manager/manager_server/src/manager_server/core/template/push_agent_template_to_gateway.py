@@ -75,24 +75,31 @@ async def _build_agent_resource_payload(
     if not rows:
         raise ValueError(f"instance agent resource not found: {rid}")
     primary = rows[0]
-    grants: list[dict[str, Any]] = []
+    exprs: list[Any] = []
     for row in rows:
         expr = _g(row, "match_expr")
-        grants.append(
-            {
-                "match_expr": expr if expr is not None else [],
-                "granted_by": _g(row, "granted_by"),
-                "enabled": bool(_g(row, "enabled", True)),
-                "expires_at": iso_datetime(_g(row, "expires_at")),
-                "data": _g(row, "data"),
-            }
-        )
+        if expr is None or expr == [] or expr == "":
+            continue
+        if isinstance(expr, list):
+            exprs.extend(expr)
+        else:
+            exprs.append(expr)
+    if not exprs:
+        match_expr: Any = []
+    elif len(exprs) == 1:
+        match_expr = exprs[0]
+    else:
+        match_expr = exprs
     return build_agent_resource_gateway_payload(
         resource_id=rid,
         ref_template_id=str(_g(primary, "ref_template_id") or ""),
         resource_name=_g(primary, "resource_name"),
         resource_desc=_g(primary, "resource_desc"),
-        grants=grants,
+        match_expr=match_expr,
+        granted_by=_g(primary, "granted_by"),
+        enabled=bool(_g(primary, "enabled", True)),
+        expires_at=iso_datetime(_g(primary, "expires_at")),
+        data=_g(primary, "data"),
     )
 
 
@@ -102,38 +109,41 @@ def build_agent_resource_gateway_payload(
     ref_template_id: str,
     resource_name: Any,
     resource_desc: Any,
-    grants: list[dict[str, Any]],
+    match_expr: Any = None,
+    granted_by: Any = None,
+    enabled: bool = True,
+    expires_at: Any = None,
+    data: Any = None,
 ) -> dict[str, Any]:
-    """构造下发 Gateway 的 agent resource payload（不依赖 Manager 已落库）。"""
+    """构造下发 Gateway 的 agent resource payload（字段对齐 Manager 行，无 jiuwenclaw_id）。"""
     return {
         "resource_id": str(resource_id or "").strip(),
         "ref_template_id": str(ref_template_id or "").strip(),
         "resource_name": resource_name,
         "resource_desc": resource_desc,
-        "grants": grants,
+        "match_expr": [] if match_expr is None else match_expr,
+        "granted_by": granted_by,
+        "enabled": bool(enabled),
+        "expires_at": expires_at,
+        "data": data,
     }
 
 
 async def _upsert_agent_template_on_gateway(
     jiuwenclaw_id: str,
     template: dict[str, Any],
-    *,
-    revision: str | None = None,
 ) -> None:
     await gateway_request(
         jiuwenclaw_id,
         "POST",
         _AGENT_TEMPLATE_PATH,
         template,
-        revision=revision,
     )
 
 
 async def _delete_agent_template_on_gateway(
     jiuwenclaw_id: str,
     template_id: str,
-    *,
-    revision: str | None = None,
 ) -> None:
     tid = str(template_id or "").strip()
     if not tid:
@@ -143,30 +153,24 @@ async def _delete_agent_template_on_gateway(
         "DELETE",
         f"{_AGENT_TEMPLATE_PATH}/{tid}",
         {},
-        revision=revision,
     )
 
 
 async def _upsert_agent_resource_on_gateway(
     jiuwenclaw_id: str,
     payload: dict[str, Any],
-    *,
-    revision: str | None = None,
 ) -> None:
     await gateway_request(
         jiuwenclaw_id,
         "POST",
         _AGENT_RESOURCE_PATH,
         payload,
-        revision=revision,
     )
 
 
 async def _delete_agent_resource_on_gateway(
     jiuwenclaw_id: str,
     resource_id: str,
-    *,
-    revision: str | None = None,
 ) -> None:
     rid = str(resource_id or "").strip()
     if not rid:
@@ -176,7 +180,6 @@ async def _delete_agent_resource_on_gateway(
         "DELETE",
         f"{_AGENT_RESOURCE_PATH}/{rid}",
         {},
-        revision=revision,
     )
 
 
@@ -201,7 +204,6 @@ async def _ensure_referenced_templates_on_gateway(
                 jiuwenclaw_id,
                 kind,
                 tmpl,
-                revision=f"agent-resource-ref:{kind}:{idx}",
             )
 
 
@@ -250,13 +252,11 @@ async def sync_agent_resource_to_gateway(
     await _upsert_agent_template_on_gateway(
         jid,
         _clean_agent_template(tpl_row),
-        revision=f"agent-resource:{rid}:template",
     )
     payload = resource_payload or await _build_agent_resource_payload(handler, jid, rid)
     await _upsert_agent_resource_on_gateway(
         jid,
         payload,
-        revision=f"agent-resource:{rid}",
     )
     logger.info(
         "[push_agent_template] synced resource jiuwenclaw_id=%s resource_id=%s template_id=%s",
@@ -288,7 +288,6 @@ async def delete_agent_resource_from_gateway(
     await _delete_agent_resource_on_gateway(
         jid,
         rid,
-        revision=f"agent-resource-delete:{rid}",
     )
 
     if not tid:
@@ -322,7 +321,6 @@ async def delete_agent_resource_from_gateway(
     await _delete_agent_template_on_gateway(
         jid,
         tid,
-        revision=f"agent-template-delete:{tid}",
     )
     logger.info(
         "[push_agent_template] removed resource and agent_template "
@@ -373,7 +371,6 @@ async def push_agent_resources_sync_to_gateway(
         await _upsert_agent_template_on_gateway(
             jid,
             _clean_agent_template(tpl_row),
-            revision=f"sync-agent-template:{tid}",
         )
         synced_templates += 1
 
@@ -383,12 +380,10 @@ async def push_agent_resources_sync_to_gateway(
         await _upsert_agent_resource_on_gateway(
             jid,
             payload,
-            revision=f"sync-agent-resource:{idx}",
         )
         synced_resources += 1
 
     return {
-        "revision": "sync-agent-resources",
         "success_flag": True,
         "result": {
             "agent_templates": synced_templates,

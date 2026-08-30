@@ -99,11 +99,11 @@ async def test_push_log_masking_rules_sync_to_gateway():
     with patch(
         "manager_server.core.application_config.log_masking_rule.gateway_request",
         new_callable=AsyncMock,
-        return_value={"revision": "rev-1", "success_flag": True},
+        return_value={"success_flag": True},
     ) as push_mock:
         ack = await push_log_masking_rules_sync_to_gateway(handler, "sp-sync")
 
-    assert ack["revision"] == "rev-1"
+    assert ack["success_flag"] is True
     push_mock.assert_awaited_once()
     args, kwargs = push_mock.await_args
     assert args[0] == "sp-sync"
@@ -152,7 +152,7 @@ async def test_rest_create_always_sets_source_custom():
     with patch(
         "manager_server.core.application_config.log_masking_rule.gateway_request",
         new_callable=AsyncMock,
-        return_value={"revision": "rev-1", "success_flag": True},
+        return_value={"success_flag": True},
     ):
         out = await svc.create("sp-rest", body)
 
@@ -192,7 +192,7 @@ async def test_rest_update_ignores_source_field():
     with patch(
         "manager_server.core.application_config.log_masking_rule.gateway_request",
         new_callable=AsyncMock,
-        return_value={"revision": "rev-2", "success_flag": True},
+        return_value={"success_flag": True},
     ) as push_mock:
         await svc.update("sp-rest", "custom-rule-1", body)
 

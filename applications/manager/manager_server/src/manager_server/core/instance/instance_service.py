@@ -178,9 +178,9 @@ async def bootstrap_gateway_log_masking(
         sync_ack = await push_log_masking_rules_sync_to_gateway(handler, jid)
         logger.info(
             "[Instance] log_masking_rule sync on gateway online jiuwenclaw_id=%s "
-            "revision=%s",
+            "success=%s",
             jid,
-            sync_ack.get("revision"),
+            sync_ack.get("success_flag"),
         )
     except Exception:
         logger.warning(

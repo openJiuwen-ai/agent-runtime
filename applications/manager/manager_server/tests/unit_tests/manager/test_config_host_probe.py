@@ -33,7 +33,7 @@ async def test_probe_gateway_ok():
     ):
         await probe_config_host("http://gw.example:8080", side="gateway")
 
-    client.get.assert_awaited_once_with("http://gw.example:8080/api/v1/health")
+    client.get.assert_awaited_once_with("http://gw.example:8080/api/health")
 
 
 @pytest.mark.asyncio

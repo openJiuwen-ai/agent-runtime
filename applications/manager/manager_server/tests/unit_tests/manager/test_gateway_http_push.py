@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import inspect
 
-from manager_server.manager_config_push import gateway_request, revision_now
+from manager_server.manager_config_push import gateway_request
 from manager_server.manager_config_push.client import gateway_request as client_gateway_request
 
 
@@ -17,11 +17,6 @@ def test_gateway_request_exported() -> None:
     assert "method" in sig.parameters
     assert "path" in sig.parameters
     assert "business" in sig.parameters
-    assert "revision" in sig.parameters
+    assert "revision" not in sig.parameters
     assert "enc_section" not in sig.parameters
     assert "enc_wrap" not in sig.parameters
-
-
-def test_revision_now_is_callable() -> None:
-    assert callable(revision_now)
-    assert isinstance(revision_now(), str)

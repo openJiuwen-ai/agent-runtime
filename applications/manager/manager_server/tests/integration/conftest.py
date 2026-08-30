@@ -195,7 +195,7 @@ async def log_masking_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             )
         else:
             raise AssertionError(f"unexpected gateway_request {m} {path}")
-        return {"revision": "rev-integration", "success_flag": True}
+        return {"success_flag": True}
 
     _lm = "manager_server.core.application_config.log_masking_rule"
     monkeypatch.setattr(f"{_lm}.gateway_request", _bridge_gateway_request)

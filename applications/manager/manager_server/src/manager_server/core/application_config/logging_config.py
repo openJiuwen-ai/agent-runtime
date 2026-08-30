@@ -47,6 +47,41 @@ def _row_to_dict(obj: Any) -> dict[str, Any]:
     }
 
 
+def _row_to_gateway_body(obj: Any) -> dict[str, Any]:
+    return {
+        "level": getattr(obj, "level", "INFO") or "INFO",
+        "console_level": getattr(obj, "console_level", None),
+        "gateway": getattr(obj, "gateway", None),
+        "channel": getattr(obj, "channel", None),
+        "agent_server": getattr(obj, "agent_server", None),
+        "full": getattr(obj, "full", None),
+    }
+
+
+async def push_logging_config_sync_to_gateway(
+    handler: DBHandler,
+    jiuwenclaw_id: str,
+) -> dict[str, Any]:
+    """全量同步：将 Manager MDB 中该实例 logging 配置 PUT 到 Gateway。"""
+    jid = str(jiuwenclaw_id or "").strip()
+    if not jid:
+        raise ValueError("jiuwenclaw_id is required")
+
+    row = await handler.get(_LOGGING_CONFIG_TABLE, {"jiuwenclaw_id": jid})
+    if row is None:
+        return {
+            "success_flag": True,
+            "result": {"synced": False},
+            "transport": "http",
+        }
+    return await gateway_request(
+        jid,
+        "PUT",
+        "/api/v1/logging",
+        _row_to_gateway_body(row),
+    )
+
+
 class LoggingConfigService:
     """Logging 配置服务类：封装数据库操作和 Gateway 推送逻辑。"""
 
