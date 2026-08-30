@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from openjiuwen_runtime.foundation.db.utils import is_mysql
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 
 from manager_server.infrastructure.config import Settings
@@ -92,7 +93,7 @@ def _materialize_instance_config(
 
     # 支持通过环境变量配置数据库类型
     db_type = os.getenv("JIUWENCLAW_GATEWAY_DB_TYPE", "mysql").strip().lower()
-    if db_type == "mysql":
+    if is_mysql(db_type):
         db["db_type"] = "mysql"
         db["db"] = {
             "host": os.getenv("DB_HOST", os.getenv("JIUWENCLAW_GATEWAY_DB_HOST", "localhost")),
@@ -134,7 +135,7 @@ def _child_env_common(
     out["JIUWENCLAW_GATEWAY_DB_TYPE"] = db_type
     out["AGENT_CLIENT_DB_TYPE"] = db_type
     out["MANAGER_WS_CLIENT_DB_TYPE"] = db_type
-    if db_type == "mysql":
+    if is_mysql(db_type):
         host = os.getenv("DB_HOST", os.getenv("JIUWENCLAW_GATEWAY_DB_HOST", "localhost"))
         port = os.getenv("DB_PORT", os.getenv("JIUWENCLAW_GATEWAY_DB_PORT", "3306"))
         user = os.getenv("DB_USER", os.getenv("JIUWENCLAW_GATEWAY_DB_USER", "root"))

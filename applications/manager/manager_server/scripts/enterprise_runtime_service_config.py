@@ -143,10 +143,12 @@ def _bootstrap_modules() -> tuple[Any, Any, Any, Any, Any]:
 
 async def _ensure_gateway_database(database: Any) -> None:
     """与 Gateway / enterprise_config 读库相同：经 ``Database.ensure_ready`` 连接。"""
+    from openjiuwen_runtime.foundation.db.utils import is_sqlite
+
     await database.ensure_ready(log_prefix="enterprise_runtime_verify")
     summary = database.config_summary()
     logger.info("[db] gateway database ready: %s", summary)
-    if summary.get("db_type") == "sqlite":
+    if is_sqlite(summary.get("db_type")):
         sqlite_path = Path(str(summary.get("sqlite_path", "")))
         if not sqlite_path.is_file():
             logger.warning("[db] sqlite 文件不存在: %s", sqlite_path)

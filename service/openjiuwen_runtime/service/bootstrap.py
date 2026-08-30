@@ -80,6 +80,7 @@ def build_db_handler(settings: ServiceConfig | dict[str, Any] | Any) -> Any | No
             database=cfg.db_name or "",
             user=cfg.db_user or "",
             password=cfg.db_password or "",
+            schema=cfg.pg_schema or "public",
         )
     raise ValueError(
         f"unsupported db_type={cfg.db_type!r}; expected mysql|postgresql|sqlite|none"

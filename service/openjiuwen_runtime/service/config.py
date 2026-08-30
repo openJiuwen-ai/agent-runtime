@@ -97,6 +97,7 @@ class ServiceConfig:
     db_name: str | None = None
     db_user: str | None = None
     db_password: str | None = None
+    pg_schema: str = "public"
 
     def __post_init__(self) -> None:
         self._validate_port("port", self.port)
@@ -371,6 +372,7 @@ class ServiceConfig:
             db_name=os.getenv("OPENJIUWEN_SERVICE_DB_NAME") or None,
             db_user=os.getenv("OPENJIUWEN_SERVICE_DB_USER") or None,
             db_password=os.getenv("OPENJIUWEN_SERVICE_DB_PASSWORD"),
+            pg_schema=os.getenv("OPENJIUWEN_SERVICE_PG_SCHEMA", "public"),
         )
 
     @property
