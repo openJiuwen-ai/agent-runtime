@@ -20,6 +20,8 @@ _CAP = 100_000
 
 
 def _g(row: Any, key: str, default: Any = None) -> Any:
+    if isinstance(row, dict):
+        return row.get(key, default)
     return getattr(row, key, default)
 
 
@@ -130,12 +132,25 @@ def service_template_payload(row: Any) -> dict[str, Any]:
     }
 
 
-async def build_runtime_config(handler: DBHandler, jiuwenclaw_id: str) -> dict[str, list[dict[str, Any]]]:
-    """将实例 Service Resource 全量投影为 Runtime templates/scopes。"""
-    resources = await handler.list_records(
-        INSTANCE_SERVICE_RESOURCE_TABLE_DEF.table_name,
-        {"jiuwenclaw_id": jiuwenclaw_id}, limit=_CAP, offset=0,
-    )
+async def build_runtime_config(
+    handler: DBHandler,
+    jiuwenclaw_id: str,
+    *,
+    resource_rows: list[Any] | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    """将实例 Service Resource 全量投影为 Runtime templates/scopes。
+
+    ``resource_rows`` 可传入尚未落库的投影行，用于「先 sync 再写库」。
+    """
+    if resource_rows is None:
+        resources = await handler.list_records(
+            INSTANCE_SERVICE_RESOURCE_TABLE_DEF.table_name,
+            {"jiuwenclaw_id": jiuwenclaw_id},
+            limit=_CAP,
+            offset=0,
+        )
+    else:
+        resources = resource_rows
     templates: dict[str, dict[str, Any]] = {}
     scopes: list[dict[str, Any]] = []
     grouped: dict[str, list[Any]] = {}
@@ -145,14 +160,22 @@ async def build_runtime_config(handler: DBHandler, jiuwenclaw_id: str) -> dict[s
             grouped.setdefault(rid, []).append(resource)
 
     for rid, grants in grouped.items():
-        active = [row for row in grants if bool(_g(row, "enabled", True)) and not _is_expired(_g(row, "expires_at"))]
+        active = [
+            row
+            for row in grants
+            if bool(_g(row, "enabled", True)) and not _is_expired(_g(row, "expires_at"))
+        ]
         if not active:
             continue
         primary = max(active, key=lambda row: int(_g(row, "priority", 0) or 0))
         service_id = str(_g(primary, "ref_template_id") or "").strip()
-        service = await handler.get(
-            SERVICE_CONFIG_TEMPLATE_TABLE_DEF.table_name, {"template_id": service_id}
-        ) if service_id else None
+        service = (
+            await handler.get(
+                SERVICE_CONFIG_TEMPLATE_TABLE_DEF.table_name, {"template_id": service_id}
+            )
+            if service_id
+            else None
+        )
         if service is None or not bool(_g(service, "enabled", True)):
             _log.warning("runtime sync skipped resource without enabled service template: %s", rid)
             continue
@@ -160,31 +183,55 @@ async def build_runtime_config(handler: DBHandler, jiuwenclaw_id: str) -> dict[s
         rules: list[dict[str, Any]] = []
         for row in active:
             rules.extend(_match_expr_to_runtime_rules(_g(row, "match_expr")))
-        scopes.append({
-            "scope_id": _scope_id(rid),
-            "index": -int(_g(primary, "priority", 0) or 0),
-            "template_id": service_id,
-            "routing_rules": rules,
-        })
+        scopes.append(
+            {
+                "scope_id": _scope_id(rid),
+                "index": -int(_g(primary, "priority", 0) or 0),
+                "template_id": service_id,
+                "routing_rules": rules,
+            }
+        )
     return {"templates": list(templates.values()), "scopes": scopes}
 
 
-async def sync_runtime_config(handler: DBHandler, jiuwenclaw_id: str) -> dict[str, Any]:
+async def sync_runtime_config(
+    handler: DBHandler,
+    jiuwenclaw_id: str,
+    *,
+    resource_rows: list[Any] | None = None,
+) -> dict[str, Any]:
+    """向 Runtime 全量同步 Service Resource 投影。
+
+    调用方应在 Manager 落库前传入 ``resource_rows``（目标态），避免 Manager/Runtime 不一致。
+    """
     endpoint = settings.agent_runtime_endpoint.strip().rstrip("/")
     if not endpoint:
         _log.info("AGENT_RUNTIME_ENDPOINT not configured; runtime sync skipped")
         return {"skipped": True}
-    rawdata = await build_runtime_config(handler, jiuwenclaw_id)
-    envelope = {"type": "config_sync", "metadata": {
-        "request_id": f"manager-{uuid.uuid4().hex}", "session_id": None,
-        "user_id": "manager", "bot_id": "manager", "extra": {"group_id": jiuwenclaw_id},
-    }, "rawdata": rawdata}
+    rawdata = await build_runtime_config(
+        handler, jiuwenclaw_id, resource_rows=resource_rows
+    )
+    envelope = {
+        "type": "config_sync",
+        "metadata": {
+            "request_id": f"manager-{uuid.uuid4().hex}",
+            "session_id": None,
+            "user_id": "manager",
+            "bot_id": "manager",
+            "extra": {"group_id": jiuwenclaw_id},
+        },
+        "rawdata": rawdata,
+    }
     async with httpx.AsyncClient(timeout=settings.agent_runtime_sync_timeout) as client:
         response = await client.post(f"{endpoint}/api/session/config_sync", json=envelope)
     response.raise_for_status()
     body = response.json()
     if isinstance(body, dict) and body.get("ok") is False:
         raise ValueError(body.get("error_message") or "agent runtime config sync failed")
-    _log.info("runtime config synced", jiuwenclaw_id=jiuwenclaw_id,
-              templates=len(rawdata["templates"]), scopes=len(rawdata["scopes"]))
+    _log.info(
+        "runtime config synced",
+        jiuwenclaw_id=jiuwenclaw_id,
+        templates=len(rawdata["templates"]),
+        scopes=len(rawdata["scopes"]),
+    )
     return body if isinstance(body, dict) else {"ok": True}
