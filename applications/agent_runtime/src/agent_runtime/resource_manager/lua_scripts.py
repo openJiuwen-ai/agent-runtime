@@ -1,7 +1,8 @@
 # coding: utf-8
 """Resource Manager 的 6 个 Lua 脚本（所有编排态变更，原子）。
 
-约定同 SM：``ARGV[1]`` 恒为键前缀（``resource_manager:``）；返回扁平字符串数组。
+约定同 SM：``ARGV[1]`` 恒为键前缀（``{resource_manager}:``，hash tag 使 cluster
+下全键域同槽）；返回扁平字符串数组。
 脚本清单（语义见 RM 设计 §5.1）：
 - LUA_ACQUIRE   取暖 Pod 复用（deploy_ver 过滤）/ 判 max_pods（含 deploying 占位）/ 占位
 - LUA_PLACEHOLDER  autoscale 专用占位（判 max_pods + 占位，不碰 idle 池）

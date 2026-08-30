@@ -8,7 +8,17 @@
 
 from __future__ import annotations
 
-from agent_runtime.util import fingerprint
+from agent_runtime.util import fingerprint, key_unsafe
+
+
+def test_key_unsafe_detects_braces():
+    """键安全校验:{/} 会截断 hash tag 定槽,含其一即不安全(空/普通串安全)。"""
+    assert key_unsafe("s{bad")
+    assert key_unsafe("s}bad")
+    assert key_unsafe("{scope}")
+    assert not key_unsafe("")
+    assert not key_unsafe("webhttp_24397e931841")
+    assert not key_unsafe("scope-main:grp/bot")
 
 
 def test_fingerprint_nested_dict_key_order_insensitive():

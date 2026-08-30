@@ -34,7 +34,7 @@ flowchart TB
       RN["…… 副本 N"]
     end
     DB[("DB<br/>配置")]
-    REDIS[("Redis(共享状态)<br/>session_manager: / resource_manager:")]
+    REDIS[("Redis(共享状态)<br/>{session_manager}: / {resource_manager}:")]
     K8s[("K8s API<br/>")]
     POD["AgentServer Pod<br/>SSE 端点"]
 
@@ -132,6 +132,8 @@ flowchart TB
 | `min_idle_pods` | int | 该 scope 最少热备 Pod 数 |
 | `agent_image` | str | AgentServer 容器镜像 |
 | `namespace` | str | K8s 命名空间 |
+| `node_name` | str? | 节点绑定(A 类;渲染为 `V1PodSpec.nodeName` 绕过调度器点名上机,deploy tool 镜像预载场景用。`None` = 不绑定;空串同 `None`。坏值 → Pod 永久 Pending 挂满 ready_timeout,入口按 hostname 形态 ≤253 校验) |
+| `run_as_user` / `run_as_group` | int? | 主容器进程 UID/GID(A 类;渲染为 `securityContext.runAsUser/runAsGroup`,覆盖镜像 `USER` 指令,用于对齐存储卷属主。`None` = 走镜像默认。**不改变卷文件属主**——PVC 写权限根治仍是存储侧预属主,见 `e2e-test-cases.md` 真实缺陷②;≥0 入口校验) |
 | `container_name` | str | 容器名 |
 | `container_port` | int | 容器端口 |
 | `sse_port` | int | SSE 端口(gateway 直连 Pod) |
@@ -325,7 +327,15 @@ flowchart LR
 
 ## 5. Redis 状态设计(运行态)
 
-两个模块 **均无进程内状态**,运行态在 **Redis**(前缀 `session_manager:` / `resource_manager:` 隔离,见 §8)。
+两个模块 **均无进程内状态**,运行态在 **Redis**(前缀 `{session_manager}:` / `{resource_manager}:` 隔离,见 §8)。
+
+> **Redis Cluster 兼容(2026-08-29)**:两个前缀整体为 **hash tag**(`{xxx}`),模块全部键
+> 落同一 slot——多键 Lua 的原子语义在 cluster 分片下保持成立;选主抽签键为
+> `{agent_runtime:job:<job>}:winner/candidates:{epoch}`(同槽),执行锁键
+> `agent_runtime:job:<job>` 不变(单键操作)。连接串用 `redis+cluster://` scheme 构造
+> 集群客户端(cluster 只有 db 0)。`state.eval` 把 prefix 同时声明为 `KEYS[1]`(路由锚,
+> 防 `numkeys=0` 随机路由到非归属节点)。单实例/哨兵下 `{}` 无语义,同一套键名兼容两种
+> 部署;背景与验证见 `docs/feature/2026-08-redis-cluster.md`。
 
 ### 5.1 Session Manager(prefix `session:`)
 
@@ -369,7 +379,7 @@ flowchart TB
 >
 > **无进程内状态**:Session Manager 不持有任何进程内可变状态;所有键懒创建,**进程重启不丢状态**(全在 Redis/DB)。
 
-**SM Redis 键一览**(前缀 `session_manager:`):
+**SM Redis 键一览**(前缀 `{session_manager}:`):
 
 | 键 | 类型 | 内容 | 用途 |
 |---|---|---|---|
@@ -389,7 +399,7 @@ flowchart TB
 
 ### 5.2 Resource Manager(prefix `resource:`)
 
-Resource Manager 编排语义态(idle/info)在 **Redis**(前缀 `resource_manager:`);所有计数派生自 SET/ZSET(SCARD / ZCARD),无独立计数器。
+Resource Manager 编排语义态(idle/info)在 **Redis**(前缀 `{resource_manager}:`);所有计数派生自 SET/ZSET(SCARD / ZCARD),无独立计数器。
 
 ```mermaid
 flowchart TB
@@ -423,7 +433,7 @@ flowchart TB
 >
 > **模块边界(经 Facade,不读对方 key)**:Resource Manager reclaim / 对账**均不读** Session Manager 模块的 key(协调全经进程内 Facade;虽用一个 Redis 实例,但跨模块数据只走 Facade 方法)。reclaim 安全靠 SM→RM 单向契约:SM 发 `idle_consider` 前**原子 `ZREM scope:pods`**,该 Pod 即刻退出 route 候选,reclaim 窗口内 SM 不再 route 新 session 上去。`idle_consider` 丢失 / SM 重启漂移由 RM 每 30s 经 Facade `sm_facade.reconcile_pods` 对账兜底(场景 L)。
 
-**RM Redis 键一览**(前缀 `resource_manager:`):
+**RM Redis 键一览**(前缀 `{resource_manager}:`):
 
 | 键 | 类型 | 内容 | 用途 |
 |---|---|---|---|
@@ -826,7 +836,7 @@ sequenceDiagram
     RM-)SW: sm_facade.notify_pod_dead {pod_1}(触发场景 G 清 SM 注册)
 ```
 
-> 注:图中 `SMR` / `RMR` 是**同一个 Redis 实例的两个前缀**(`session_manager:` / `resource_manager:`)。
+> 注:图中 `SMR` / `RMR` 是**同一个 Redis 实例的两个前缀**(`{session_manager}:` / `{resource_manager}:`)。
 
 | 阶段 | 触发 | 动作 |
 |---|---|---|
@@ -855,7 +865,7 @@ sequenceDiagram
     Note over RM: pod_1 进 idle 池 → 按 pod_ttl 回收(场景 K)
 ```
 
-> 注:图中 `SMR` / `RMR` 是**同一个 Redis 实例的两个前缀**(`session_manager:` / `resource_manager:`)。
+> 注:图中 `SMR` / `RMR` 是**同一个 Redis 实例的两个前缀**(`{session_manager}:` / `{resource_manager}:`)。
 
 | 步骤 | 判定 | 结果 |
 |---|---|---|

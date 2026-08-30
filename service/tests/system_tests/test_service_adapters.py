@@ -4,6 +4,7 @@
 """适配器集成测试：REST SSE 流式 / 错误状态、WS 流式、REST 幂等。覆盖 echo 验收之外的路径。"""
 import json
 import asyncio
+import logging
 
 import fakeredis.aioredis
 import httpx
@@ -120,6 +121,41 @@ async def test_rest_error_returns_non_200_with_error_envelope():
         assert body["ok"] is False
         assert body["error_code"] == "validation"
         assert "nope" in body["error_message"]
+
+
+# ---------- REST 前置校验失败（422，未进 router）----------
+@pytest.mark.system
+async def test_rest_envelope_validation_422_logs_and_keeps_default_body(caplog):
+    """信封体模型被 FastAPI 前置拒绝 → 422 默认响应形状不变 + WARNING 留痕。
+
+    该层失败不进 router（无请求汇总行/上下文尾巴），adapter 的 WARNING 是
+    唯一日志证据；request_id 尽力从原始 body 抢救。
+    """
+    adapter_logger = "openjiuwen_runtime.service.server.rest_adapter"
+    app = _build_stream_app()
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app.asgi),
+                                 base_url="http://test") as client:
+        with caplog.at_level(logging.WARNING, logger=adapter_logger):
+            r = await client.post("/api/count", json={"type": "count"})
+        assert r.status_code == 422
+        assert "detail" in r.json()          # FastAPI 默认响应形状不变
+        warned = [rec for rec in caplog.records
+                  if "request validation failed" in rec.getMessage()]
+        assert len(warned) == 1
+        assert "path=/api/count" in warned[0].getMessage()
+        assert "request_id=-" in warned[0].getMessage()   # 无从抢救
+
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger=adapter_logger):
+            # metadata 合法但缺 rawdata → request_id 应被抢救出来
+            r2 = await client.post("/api/count", json={
+                "type": "count", "metadata": {"request_id": "rid-422"},
+            })
+        assert r2.status_code == 422
+        warned2 = [rec for rec in caplog.records
+                   if "request validation failed" in rec.getMessage()]
+        assert len(warned2) == 1
+        assert "request_id=rid-422" in warned2[0].getMessage()
 
 
 # ---------- WebSocket 流式 ----------

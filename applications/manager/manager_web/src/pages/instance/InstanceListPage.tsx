@@ -16,19 +16,18 @@ import {
 } from '../../components/TableColumnSort';
 import { TableColumnFilter } from '../../components/TableColumnFilter';
 import { formatTime, relativeTime } from '../../utils/format';
-import { getAllowLocalProvision } from '../../utils/env';
 import { toast } from '../../stores/uiStore';
 import { ApiError } from '../../services/api';
 import { CreateInstanceModal } from './modal/CreateInstanceModal';
-import { ProvisionLocalModal } from './modal/ProvisionLocalModal';
 
 type ViewMode = 'brief' | 'list';
 
 type InstanceSortField =
   | 'jiuwenclaw_name'
-  | 'status'
-  | 'last_heartbeat'
-  | 'k8s_namespace'
+  | 'gateway_status'
+  | 'runtime_status'
+  | 'gateway_last_alive'
+  | 'namespace'
   | 'updated_at';
 
 const VIEW_MODE_STORAGE_KEY = 'claw_manager_instance_view';
@@ -65,14 +64,15 @@ function InstanceTopoCard({
           <div>
             <div className="topo-hero__name">
               {instance.jiuwenclaw_name}
-              <StatusBadge status={instance.status} />
+              <StatusBadge status={instance.gateway_status} />
+              <StatusBadge status={instance.runtime_status} />
             </div>
             <div className="topo-hero__id">{instance.jiuwenclaw_id}</div>
           </div>
         </div>
         <div className="topo-hero__meta">
           <span className="pill subtle muted">
-            {t('topology.namespace')}: <span className="mono text-text">{instance.k8s_namespace}</span>
+            {t('topology.namespace')}: <span className="mono text-text">{instance.namespace}</span>
           </span>
           <div className="flex items-center gap-1">
             <button className="btn sm" onClick={() => navigate(`/instances/${instance.jiuwenclaw_id}`)}>
@@ -94,12 +94,12 @@ function InstanceTopoCard({
         </div>
         <div className="topo-gateway__meta">
           <span className="topo-gateway__meta-item">
-            <span>{t('topology.lastHeartbeat')}</span>
+            <span>{t('topology.lastAlive')}</span>
             <span
               className="mono"
-              title={instance.last_heartbeat ? formatTime(instance.last_heartbeat) : undefined}
+              title={instance.gateway_last_alive ? formatTime(instance.gateway_last_alive) : undefined}
             >
-              {relativeTime(instance.last_heartbeat)}
+              {relativeTime(instance.gateway_last_alive)}
             </span>
             <span aria-hidden>，</span>
             <span>{t('topology.lastUpdated')}</span>
@@ -180,37 +180,45 @@ function InstanceListTable({
                 </th>
                 <th className="whitespace-nowrap">
                   <div className="th-filter">
-                    <span className="th-filter__label">{t('topology.instanceStatus')}</span>
+                    <span className="th-filter__label">{t('topology.gatewayStatus')}</span>
                     <TableColumnSort
                       iconOnly
-                      label={t('topology.instanceStatus')}
-                      value={sortBy === 'status' ? sortOrder : ''}
+                      label={t('topology.gatewayStatus')}
+                      value={sortBy === 'gateway_status' ? sortOrder : ''}
                       options={sortOptions}
-                      onChange={(value) => onSortChange('status', value)}
+                      onChange={(value) => onSortChange('gateway_status', value)}
                     />
                     <TableColumnFilter
                       iconOnly
-                      label={t('topology.instanceStatus')}
+                      label={t('topology.gatewayStatus')}
                       value={statusFilter}
                       options={statusFilterOptions}
                       onChange={onStatusFilterChange}
                     />
                   </div>
                 </th>
+                <th className="whitespace-nowrap">
+                  <TableColumnSort
+                    label={t('topology.runtimeStatus')}
+                    value={sortBy === 'runtime_status' ? sortOrder : ''}
+                    options={sortOptions}
+                    onChange={(value) => onSortChange('runtime_status', value)}
+                  />
+                </th>
                 <th className="whitespace-nowrap min-w-[10.5rem]">
                   <TableColumnSort
-                    label={t('topology.lastHeartbeat')}
-                    value={sortBy === 'last_heartbeat' ? sortOrder : ''}
+                    label={t('topology.lastAlive')}
+                    value={sortBy === 'gateway_last_alive' ? sortOrder : ''}
                     options={sortOptions}
-                    onChange={(value) => onSortChange('last_heartbeat', value)}
+                    onChange={(value) => onSortChange('gateway_last_alive', value)}
                   />
                 </th>
                 <th className="whitespace-nowrap">
                   <TableColumnSort
                     label={t('topology.namespace')}
-                    value={sortBy === 'k8s_namespace' ? sortOrder : ''}
+                    value={sortBy === 'namespace' ? sortOrder : ''}
                     options={sortOptions}
-                    onChange={(value) => onSortChange('k8s_namespace', value)}
+                    onChange={(value) => onSortChange('namespace', value)}
                   />
                 </th>
                 <th className="whitespace-nowrap min-w-[10.5rem]">
@@ -227,7 +235,7 @@ function InstanceListTable({
             <tbody>
               {items.length === 0 ? (
                 <tr>
-                  <td colSpan={6}>
+                  <td colSpan={7}>
                     <Empty text={t('common.empty')} />
                   </td>
                 </tr>
@@ -239,10 +247,15 @@ function InstanceListTable({
                       <div className="mono text-[11px] text-muted break-all">{instance.jiuwenclaw_id}</div>
                     </td>
                     <td>
-                      <StatusBadge status={instance.status} />
+                      <StatusBadge status={instance.gateway_status} />
                     </td>
-                    <td className="mono text-[11px] whitespace-nowrap">{formatTime(instance.last_heartbeat)}</td>
-                    <td className="mono text-[11px]">{instance.k8s_namespace || '-'}</td>
+                    <td>
+                      <StatusBadge status={instance.runtime_status} />
+                    </td>
+                    <td className="mono text-[11px] whitespace-nowrap">
+                      {formatTime(instance.gateway_last_alive)}
+                    </td>
+                    <td className="mono text-[11px]">{instance.namespace || '-'}</td>
                     <td className="mono text-[11px] whitespace-nowrap">{formatTime(instance.updated_at)}</td>
                     <td>
                       <div className="flex items-center gap-1">
@@ -332,7 +345,6 @@ export function InstanceListPage() {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [viewMode, setViewMode] = useState<ViewMode>(() => readViewMode());
   const [createOpen, setCreateOpen] = useState(false);
-  const [provisionOpen, setProvisionOpen] = useState(false);
 
   const sortOptions = useMemo(
     () => [
@@ -367,14 +379,12 @@ export function InstanceListPage() {
   const apiSortOrder =
     viewMode === 'brief' ? 'desc' : sortBy ? sortOrder : undefined;
 
-  const allowLocalProvision = getAllowLocalProvision();
-
   const instances = useAsync(
     () =>
       InstanceApi.list({
         page,
         page_size: pageSize,
-        status: statusFilter || undefined,
+        gateway_status: statusFilter || undefined,
         search: searchQuery,
         sort_by: apiSortBy,
         sort_order: apiSortOrder,
@@ -414,11 +424,6 @@ export function InstanceListPage() {
             <button className="btn sm" onClick={refresh}>
               {t('common.refresh')}
             </button>
-            {allowLocalProvision && (
-              <button className="btn sm" onClick={() => setProvisionOpen(true)}>
-                {t('topology.provisionLocal')}
-              </button>
-            )}
             <button className="btn primary sm" onClick={() => setCreateOpen(true)}>
               + {t('topology.createInstance')}
             </button>
@@ -477,16 +482,6 @@ export function InstanceListPage() {
           refresh();
         }}
       />
-      {allowLocalProvision && (
-        <ProvisionLocalModal
-          open={provisionOpen}
-          onClose={() => setProvisionOpen(false)}
-          onProvisioned={() => {
-            setProvisionOpen(false);
-            refresh();
-          }}
-        />
-      )}
     </>
   );
 }

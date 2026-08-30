@@ -95,6 +95,13 @@ def build_redis_client(settings: ServiceConfig | dict[str, Any] | Any) -> Any | 
       防 TCP 半开/黑洞时 await 永久挂起（redis-py 默认两者均无限制）；
     - ``health_check_interval``：空闲连接周期性 PING，半开连接在使用前被发现；
     - ``retry``：连接类错误命令级重试（指数退避），吸收秒级网络抖动。
+
+    URL scheme 决定客户端形态：
+    - ``redis://`` / ``rediss://``：单实例/哨兵（普通客户端）；
+    - ``redis+cluster://`` / ``rediss+cluster://``：Redis Cluster（集群客户端，
+      给一个种子节点即可，拓扑经 CLUSTER SLOTS 自发现；cluster 只有 db 0，
+      URL 带库号属配置错误，此处快速失败）。多键 Lua 的同槽前提由各模块
+      键前缀的 hash tag 保证（如 ``{session_manager}:``），与此构造无关。
     """
     cfg = coerce_config(settings)
     if not should_bootstrap_redis(cfg):
@@ -121,11 +128,35 @@ def build_redis_client(settings: ServiceConfig | dict[str, Any] | Any) -> Any | 
                 ExponentialBackoff(), retries=cfg.redis_retry_attempts
             )
             kwargs["retry_on_error"] = [RedisConnectionError, RedisTimeoutError]
-        return redis.asyncio.from_url(cfg.redis_url, **kwargs)
+        url = cfg.redis_url
+        lowered = url.lower()
+        if lowered.startswith("redis+cluster://") or lowered.startswith(
+            "rediss+cluster://"
+        ):
+            return _build_redis_cluster_client(url, kwargs)
+        return redis.asyncio.from_url(url, **kwargs)
     except (
         Exception
     ) as exc:  # pragma: no cover - import failures are environment-specific
         raise RedisUnavailable(f"cannot create Redis client: {exc}") from exc
+
+
+def _build_redis_cluster_client(url: str, kwargs: dict[str, Any]) -> Any:
+    """``redis+cluster://`` → 集群客户端（scheme 归一化 + db 快速失败）。"""
+    from urllib.parse import parse_qs, urlparse
+
+    from redis.asyncio.cluster import RedisCluster
+
+    normalized = url.replace("+cluster", "", 1)
+    parsed = urlparse(normalized)
+    db_path = parsed.path.strip("/")
+    db_query = (parse_qs(parsed.query).get("db") or ["0"])[0]
+    if db_path not in ("", "0") or str(db_query) not in ("0",):
+        raise RedisUnavailable(
+            "redis cluster URL must not select a db (cluster mode has only db 0): "
+            f"{url}"
+        )
+    return RedisCluster.from_url(normalized, **kwargs)
 
 
 def build_lock_backend(

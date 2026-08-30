@@ -12,8 +12,10 @@ import logging
 import os
 from dataclasses import dataclass
 
-SM_KEY_PREFIX = "session_manager"
-RM_KEY_PREFIX = "resource_manager"
+# 键前缀带 Redis Cluster hash tag（{xxx}）：cluster 下模块键域同槽，多键 Lua
+# 保持原子；单实例/哨兵下 {} 无语义。须与两模块 state.KEY_PREFIX 一致。
+SM_KEY_PREFIX = "{session_manager}"
+RM_KEY_PREFIX = "{resource_manager}"
 SERVICE_PREFIX = "/api/session"      # 唯一 App 的 prefix（端口 8091）
 
 logger = logging.getLogger("agent_runtime.config")

@@ -17,6 +17,8 @@
 
 | 日期 | 文档 | 一句话 |
 |---|---|---|
+| 2026-08 | [Template 扩展 pod 落位字段 + PVC 同 claim 去重](2026-08-pod-placing-fields.md) | node_name/run_as_user/group(A 类,默认 None 指纹零漂移;联调决策 2026-08-29 确认,与 fs_group 回退不冲突)+ pvc_seen 跨容器共享卷;收尾补校验(≥0/hostname/空串归一)与 9 用例 |
+| 2026-08 | [e2e 全量真实规格阶段(--with-mounts)](2026-08-e2e-full-mounts-stage.md) | 三挂载/PVC「已 Bound 复用缺失供给」/特权四件套逐字段断言;抓到真镜像 uid=1000 写 root 属主 PVC 被拒(OPEN)+ volumeName 不可变撞环境预置(已修);双真镜像门禁 104/105 |
 | 2026-08 | [全量审计 → e2e 实锤 → 修复:16 项缺陷闭环](2026-08-27-audit-e2e-repro-fixes.md) | 五维审计 40 假设→16 条实锤用例(零回拨零改键)→12 组机制修复:等待/占位 deadline 化、暖池版本感知、409 日落按版本判定、探测参数随 Pod 烘焙、失败路径清孤儿、门禁契约参数 |
 | 2026-08 | [Template 扩展 sidecars + _build_pod_body 多容器](2026-08-sidecar-containers.md) | 通用 sidecar JSON 列(首个用户 jiuwenbox)、默认 None+归一的指纹抹平(存量 deploy_ver 零变化)、SM fail-fast 校验/RM DeployFailed 冲突兜底、存量库先 ALTER 后发版 |
 | 2026-08 | [routing_rules 改布尔表达式字符串](2026-08-routing-rules-expression-string.md) | 条件间任意 and/or+括号(固定「规则 OR·表达式 AND」作废)、递归下降解析、空串=通配 |
@@ -24,3 +26,4 @@
 | 2026-08 | [生产可观测性:日志体系 + /debug 诊断端点](2026-08-production-observability.md) | LOG_LEVEL 起效、请求关联、每请求一行汇总、框架降噪(6行/秒→0)、7 个只读诊断端点+脱敏 |
 | 2026-08 | [网络/IO 抖动超时兜底](2026-08-network-io-timeout-hardening.md) | redis socket 5s/建连 3s+重试、MySQL 建连 5s、sweeper tick 上限,挂死循环不再静默 |
 | 2026-08 | [M8 deploy 锁输家改 follower 等待室](2026-08-M8-deploy-lock-follower-waitroom.md) | 跨副本冷竞争零多余 Pod,冷启动尾延迟 30.5s→10.2s |
+| 2026-08 | [Redis Cluster 兼容](2026-08-redis-cluster.md) | 键前缀 hash tag 同槽 + `redis+cluster://` 客户端 + EVAL 路由锚;真 cluster 11/11 验证 |

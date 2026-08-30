@@ -18,7 +18,7 @@
 
 SM 侧 ctx,级联管理全部生命周期(框架 App 的 lifespan 只认一个 ctx_factory——返回本类):
 
-- 构造时同时建 **rm_sysctx**(同 redis/db,仅 `key_prefix` 不同:SM=`session_manager`,RM=`resource_manager`)。
+- 构造时同时建 **rm_sysctx**(同 redis/db,仅 `key_prefix` 不同:SM=`{session_manager}`,RM=`{resource_manager}`;前缀带 Redis Cluster hash tag,模块键域同槽,详见 `docs/feature/2026-08-redis-cluster.md`)。
 - `_bind_modules()`:先构造后绑定,破解 SM↔RM 循环引用——
   `SessionState`/`ResourceState` → `SessionManagerFacade`/`ResourceManagerFacade(ResourceOrchestrator)` → `ConfigStore(push_pool_config=rm_facade.update_pool_config)` → `SessionOrchestrator` → `SessionSweeper`/`ResourceSweeper`。
 - `_build_jobs()`:5 个后台任务,全部 `create_single_leader_job`(tick 级 Redis 选主锁,多副本全局单副本执行;`tick_timeout_sec` 取 `TICK_TIMEOUTS` 常量表——单次 tick 上限,防 redis/k8s IO 抖动挂死 `_run_forever` 循环,超时取消本拍记日志、下一拍重试):
@@ -54,6 +54,12 @@ SM 侧 ctx,级联管理全部生命周期(框架 App 的 lifespan 只认一个 c
   `OPENJIUWEN_SERVICE_REDIS_SOCKET_TIMEOUT_SECONDS`(默认 5,命令读写;本项目无 BLPOP 等长阻塞命令,短超时安全)、
   `OPENJIUWEN_SERVICE_REDIS_HEALTH_CHECK_INTERVAL_SECONDS`(默认 30,空闲连接周期 PING 验活)、
   `OPENJIUWEN_SERVICE_REDIS_RETRY_ATTEMPTS`(默认 3,连接类错误指数退避重试)。
+  **密码**:`REDIS_PASSWORD`(裸名,无 `OPENJIUWEN_SERVICE_` 前缀——deploy tool 从 Secret
+  envFrom 注入约定;2026-08-28 引入)非空时作为客户端 `password` kwarg 注入,避免明文进
+  `OPENJIUWEN_SERVICE_REDIS_URL`;**同设时 kwarg 覆盖 URL 内嵌密码**。
+  **Cluster 支持**:`OPENJIUWEN_SERVICE_REDIS_URL` 用 `redis+cluster://`(TLS 用 `rediss+cluster://`)
+  scheme 即构造集群客户端(`RedisCluster.from_url`,一种子节点即可,拓扑自发现;cluster 只有
+  db 0,URL 带库号会在构建点直接报配置错误)。多键 Lua 的同槽前提由键前缀 hash tag 保证。
   本地 local 模式 fakeredis 不经此路径,不受影响。
 - **MySQL**(`foundation/db`:`RUNTIME_DB_CONNECT_TIMEOUT`/`DB_CONNECT_TIMEOUT`,默认 5s):aiomysql 建连超时(mysql 系 driver 自动注入,调用方显式 connect_args 优先)。查询读超时 aiomysql 无参数,由请求级 deadline 兜底。
 - **PostgreSQL**(`DB_TYPE=postgresql` → `PostgreSQLHandler`,asyncpg 驱动;服务框架 bootstrap/ServiceConfig 已接入,必填校验同 mysql,默认端口 5432;K8s 部署经 `deploy/agent_runtime.env` 的 `AGENT_RUNTIME_DB_TYPE` 切换,连接参数同组 `AGENT_RUNTIME_DB_*`):建连 `timeout` 与命令 `command_timeout` 均注入——asyncpg 建连默认 60s、命令默认**无限制**,不注入则慢查询可永久挂起。`timeout` 复用 `RUNTIME_DB_CONNECT_TIMEOUT`(默认 5s);`command_timeout` 独立旋钮 `RUNTIME_DB_COMMAND_TIMEOUT`/`DB_COMMAND_TIMEOUT`(默认 30s,低于请求级 deadline)。`init_database` 的临时引擎(CREATE DATABASE/SCHEMA)同款注入。
@@ -81,11 +87,14 @@ SM 侧 ctx,级联管理全部生命周期(框架 App 的 lifespan 只认一个 c
 ### 日志契约(排障入口)
 
 - **每请求一行汇总**(INFO,`agent_runtime.metrics`):`request: endpoint= route outcome=ok error_code=- duration_ms=11.0 | request_id=…`——四个端点全覆盖(含 touch/cleanup),与 uvicorn access 行经 request_id 关联。
+- **慢请求分诊**(WARNING,同 logger):汇总后 `duration_ms` 超 `_SLOW_REQUEST_MS`(2s)补 `request slow: endpoint= …`——scope_full 有界等待与冷部署会合法超阈,本行只作"值得看一眼"入口,精确语义以汇总行 duration_ms 为准。
+- **touch 未命中 INFO**(`touch missed: session=…`):会话过期/gateway 回退重新 route 的排障入口;命中保持 DEBUG(保活高频防刷屏)。
+- **前置校验失败留痕**(WARNING,框架 RestAdapter):信封体模型被 FastAPI 拒绝(422)时请求**未进 router**——无汇总行/上下文尾巴,`request validation failed: path= request_id= detail=`(request_id 尽力从原始 body 抢救,errors 只取 loc/msg 摘要)是该请求唯一日志证据;响应体保持 FastAPI 默认形状不变。
 - **每次 acquire 一行结果**(INFO):`acquire done: scope= … outcome=deployed pod=… duration_ms=…`。
 - **异常拍留痕**:handler 失败 WARNING+`exc_info`(异常链);`NO_POD_AVAILABLE` 粗化前记录真因(`mapped_from=MAX_PODS_REACHED|DEPLOY_FAILED`);框架 `FrameworkError`(validation/not_found/deadline)在 router 层补 WARNING。
 - **Redis 延迟探针**:两个 state.py 的 `eval()` 计时,>200ms WARNING(`lua eval slow`);Lua 返回空表属真异常 → WARNING(`lua returned empty (anomaly)`)。
 - **降噪**:框架 `tick lock acquired`/`single_leader claimed` 降 DEBUG;`tick done` 常态 DEBUG、异常/慢拍(>1s)/每 600 拍心跳保留 INFO。1Hz 三任务从 ~6 行/秒降到 INFO 下 ~0 行/秒。
-- **DEBUG 解锁明细**:lua eval 明细、k8s get/list/delete 耗时、touch 判定、resolve 缓存命中。
+- **DEBUG 解锁明细**:lua eval 明细、k8s get/list/delete 耗时、touch 命中明细、resolve 缓存命中。
 
 ### metrics.py —— 请求指标
 

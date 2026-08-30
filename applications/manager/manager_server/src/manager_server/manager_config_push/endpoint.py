@@ -1,5 +1,5 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-"""解析 Gateway HTTP 入口（``instance_info.data.gateway_endpoint``）。"""
+"""解析 Gateway HTTP 入口（``instance_info.gateway_config_host``）。"""
 
 from __future__ import annotations
 
@@ -11,11 +11,18 @@ from manager_server.core.instance.instance_service import get_instance_row, list
 
 
 def resolve_gateway_endpoint(row: Any) -> str | None:
+    """解析 Gateway 配置下发基址。
+
+    优先读正式列 ``gateway_config_host``；兼容旧数据 ``data.gateway_endpoint``。
+    """
+    host = str(getattr(row, "gateway_config_host", None) or "").strip().rstrip("/")
+    if host:
+        return host
     data = getattr(row, "data", None)
-    if not isinstance(data, dict):
-        return None
-    ep = str(data.get("gateway_endpoint") or "").strip().rstrip("/")
-    return ep or None
+    if isinstance(data, dict):
+        ep = str(data.get("gateway_endpoint") or "").strip().rstrip("/")
+        return ep or None
+    return None
 
 
 async def require_gateway_endpoint(jiuwenclaw_id: str) -> str:
@@ -27,8 +34,8 @@ async def require_gateway_endpoint(jiuwenclaw_id: str) -> str:
     endpoint = resolve_gateway_endpoint(row)
     if not endpoint:
         raise ValueError(
-            f"no gateway_endpoint for jiuwenclaw_id={jiuwenclaw_id!r}; "
-            "gateway must register/heartbeat with endpoint"
+            f"no gateway_config_host for jiuwenclaw_id={jiuwenclaw_id!r}; "
+            "set gateway_config_host on the instance"
         )
     return endpoint
 
@@ -41,7 +48,12 @@ async def list_reachable_jiuwenclaw_ids(
     from manager_server.infrastructure.db import get_db_handler
 
     h = handler or get_db_handler()
-    rows, _ = await list_instance_rows(h, status=status, offset=0, limit=10_000)
+    rows, _ = await list_instance_rows(
+        h,
+        gateway_status=status,
+        offset=0,
+        limit=10_000,
+    )
     out: list[str] = []
     for row in rows:
         jid = str(getattr(row, "jiuwenclaw_id", "") or "").strip()

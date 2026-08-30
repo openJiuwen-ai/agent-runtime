@@ -1,8 +1,12 @@
 # coding: utf-8
 """Resource Manager Redis 键 schema + 状态门面（HLD §5.2 / RM 设计 §3）。
 
-前缀 ``resource_manager:``，业务键再带 ``resource:`` 段。所有计数派生自
+前缀 ``{resource_manager}:``，业务键再带 ``resource:`` 段。所有计数派生自
 SET/ZSET（SCARD/ZCARD），无独立计数器。
+
+前缀整体包在花括号里 = Redis Cluster **hash tag**：RM 全部键落同一 slot，
+多键 Lua 的原子语义在 cluster 分片下保持成立；单实例/哨兵/fakeredis 下
+``{}`` 无语义，同一套键名兼容两种部署（对齐 SM 侧 session_manager.state）。
 """
 
 from __future__ import annotations
@@ -15,7 +19,8 @@ from typing import Any
 from ..util import now_ts, s, to_int
 from . import lua_scripts as lua
 
-KEY_PREFIX = "resource_manager"
+# hash tag 语义见模块 docstring
+KEY_PREFIX = "{resource_manager}"
 
 logger = logging.getLogger("agent_runtime.resource_manager")
 
@@ -122,7 +127,9 @@ class ResourceState:
         no_config 兜底会掩盖它）；单次超 _SLOW_EVAL_MS → WARNING；常规仅 DEBUG。
         """
         t0 = time.monotonic()
-        result = await self.redis.eval(script, 0, self.prefix, *args)
+        # KEYS[1] 声明 prefix 作路由锚（cluster 路由到 tag 归属节点），脚本
+        # 体内仍取 ARGV[1]——同 session_manager.state.eval 的实测结论
+        result = await self.redis.eval(script, 1, self.prefix, self.prefix, *args)
         duration_ms = (time.monotonic() - t0) * 1000
         if duration_ms > _SLOW_EVAL_MS:
             logger.warning(
@@ -287,17 +294,24 @@ class ResourceState:
         return to_int(await self.redis.zcard(self.k.scope_deploying(scope_id)))
 
     async def known_scope_ids(self) -> list[str]:
-        """扫全部 scope:config 键（autoscale / reclaim 的 per-scope 遍历源）。"""
+        """扫全部 scope:config 键（autoscale / reclaim 的 per-scope 遍历源）。
+
+        cluster 客户端的 SCAN 默认扫全部主节点，游标返回 {节点: 游标} dict
+        （单实例/fakeredis 返回 int）——两者都要全部归零才算扫尽。
+        """
         pattern = f"{self.prefix}resource:scope:*:config"
         scope_ids: list[str] = []
-        cursor = 0
+        cursor: Any = 0
         while True:
             cursor, keys = await self.redis.scan(cursor, match=pattern, count=200)
             for key in keys:
-                # resource_manager:resource:scope:{scope_id}:config → scope_id
+                # {resource_manager}:resource:scope:{scope_id}:config → scope_id
                 parts = s(key).split(":")
                 scope_ids.append(parts[-2])
-            if to_int(cursor) == 0:
+            if isinstance(cursor, dict):
+                if not any(to_int(c) for c in cursor.values()):
+                    break
+            elif to_int(cursor) == 0:
                 break
         return sorted(set(scope_ids))
 

@@ -15,11 +15,20 @@ import uuid
 import httpx
 import redis.asyncio as aioredis
 
+from agent_runtime.config import RM_KEY_PREFIX, SM_KEY_PREFIX
+
 RESULTS: list[tuple[str, bool, str]] = []
 
-# 防误刷：目标 DB 只允许本服务前缀
-# （session_manager:/resource_manager: 业务键 + agent_runtime:job:* 框架选主键）
-OWN_PREFIXES = ("session_manager:", "resource_manager:", "agent_runtime:")
+# 键前缀取自服务常量（带 Redis Cluster hash tag），脚本断言不硬编码字面键名
+SM_PREFIX = f"{SM_KEY_PREFIX}:"
+RM_PREFIX = f"{RM_KEY_PREFIX}:"
+
+# 防误刷：目标 DB 只允许本服务前缀（{session_manager}:/{resource_manager}:
+# 业务键 + agent_runtime:job:* 选主执行锁 + {agent_runtime:job:*}:winner/
+# candidates 带同槽 tag 的抽签键）
+OWN_PREFIXES = (
+    SM_PREFIX, RM_PREFIX, "agent_runtime:", "{agent_runtime:",
+)
 
 # 播种的通配兜底 scope_id（scope 由 config_sync 下发,不再由 (group,bot) 派生）
 SEED_SCOPE = "e2e-main-scope"
@@ -110,11 +119,13 @@ class Client:
             return None
 
 
-async def kubectl(*args: str) -> str:
+async def kubectl(*args: str, stdin: str | None = None) -> str:
+    """kubectl 子进程；stdin 提供 `apply -f -` 的清单内容（PV/PVC 无命令式子命令）。"""
     proc = await asyncio.create_subprocess_exec(
         "kubectl", *args,
+        stdin=asyncio.subprocess.PIPE if stdin is not None else None,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
-    out, _ = await proc.communicate()
+    out, _ = await proc.communicate(stdin.encode() if stdin is not None else None)
     return out.decode()
 
 
@@ -183,17 +194,18 @@ class ElectionCensus:
         while not self._stop.is_set():
             try:
                 async for key in self.r.scan_iter(
-                        match="agent_runtime:job:*:winner:*", count=200):
+                        match="{agent_runtime:job:*}:winner:*", count=200):
                     parts = str(key).split(":")
-                    job, epoch = parts[2], parts[-1]
+                    # {agent_runtime:job:<job>}:winner:<epoch> → job 去掉 tag 尾巴
+                    job, epoch = parts[2].rstrip("}"), parts[-1]
                     val = await self.r.get(key)
                     if val is not None:
                         self.samples.setdefault((job, epoch), {})[
                             "winner"] = val.decode() if isinstance(val, bytes) else val
                 async for key in self.r.scan_iter(
-                        match="agent_runtime:job:*:candidates:*", count=200):
+                        match="{agent_runtime:job:*}:candidates:*", count=200):
                     parts = str(key).split(":")
-                    job, epoch = parts[2], parts[-1]
+                    job, epoch = parts[2].rstrip("}"), parts[-1]
                     members = await self.r.smembers(key)
                     if members:
                         iids = {m.decode() if isinstance(m, bytes) else m

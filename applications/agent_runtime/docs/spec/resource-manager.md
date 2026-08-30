@@ -29,7 +29,7 @@
 ## orchestrator.py —— acquire 决策树
 
 ```
-幂等缓存(request_id,键 resource_manager:idem:{rid},TTL 60,命中续期;
+幂等缓存(request_id,键 {resource_manager}:idem:{rid},TTL 60,命中续期;
   ★存活校验:缓存 Pod 已被 PURGE(watch/reclaim 判死)→ 弃缓存清键走全新
   acquire——回放死 Pod 会在 SM 侧复活注册并持续喂死地址给重试客户端)
 → 首见 scope:缓存池参数 + pod_spec_json 到 resource:scope:{sid}:config
@@ -48,13 +48,14 @@
 - 准入走 `LUA_DEPLOY_FOLLOWER_GATE` 原子闸门,上限 `pod_concurrency - 1`(leader 会话之外新 Pod 恰剩这些槽);overflow 严格快失败 MaxPodsReached。
 - 等待有界:`ready_timeout + 10s` 余量;轮询 `resource:scope:{sid}:pods` 出现新 Pod 且 pod:info 有 sse_url → **直接复用返回**(与 reuse 分支同构,SM 侧重跑仲裁即可)。
 - leader 失败判定:deploy 锁空闲且无新 Pod → `DeployFailed`(**follower 不接管**——同镜像同环境大概率也失败);deadline 到 → MaxPodsReached。
+- 等待期进度行:每 `FOLLOWER_PROGRESS_LOG_SEC`(5s)一条 INFO `follower still waiting: scope= follower= waited_s=`——ready_timeout 最长 300s,INFO 下不留日志空白(部署风暴期的观测窗口);复用成功另有一条 INFO `acquire follower reuses leader pod`。
 - 错误路径双清:占位 + follower 成员都进 finally;崩溃遗留由闸门 `ZREMRANGEBYSCORE(deadline)` 兜底。
 
 `idle_consider`:`LUA_RELEASE` 转 idle 暖池(起 pod_ttl 计时)+ pod:info.phase=idle;幂等。
 `update_pool_config`:HSET 覆盖池参数;A 类变更附带 pod_spec 时同时刷 deploy_ver/pod_spec_json(autoscale 补位用新 deploy 字段)。
-`cleanup`:K8s list+delete,**不操作 Redis 编排态**(被删 Pod 由 watch/reconcile 兜底发现);ns 404 容忍为 cleaned=0,**403 保持 fail-fast**(静默清零会掩盖部署配错)。
+`cleanup`:K8s list+delete,**不操作 Redis 编排态**(被删 Pod 由 watch/reconcile 兜底发现);ns 404 容忍为 cleaned=0,**403 保持 fail-fast**(静默清零会掩盖部署配错);逐 Pod 一条 INFO `cleanup deleted pod: pod= namespace=`(批删中途中断时可见删到哪;k8s.delete 自身明细在 DEBUG)+ 结尾 WARNING 聚合。
 
-## state.py —— RM 键表(`RMKeys`,前缀 `resource_manager:`,业务键再带 `resource:` 段)
+## state.py —— RM 键表(`RMKeys`,前缀 `{resource_manager}:`,业务键再带 `resource:` 段)
 
 | 键 | 类型 | 语义 |
 |---|---|---|
@@ -97,7 +98,8 @@
 - `deploy(pod_spec)`:pod_id = `{pod_name}-{随机10}-{随机5}`(**K8s 随机 Pod 名,严禁业务 id 当实例 id——历史死锁根因**);409 名字冲突重命名重试至多 3 次;`_wait_ready` 轮询至 Ready+有 podIP(每 30s 一条 INFO 进度行,终态/超时 WARNING 带 waited_s),终态(Failed/Succeeded)/消失/超时 → DeployFailed;**create 之后的任何失败/取消先 best-effort 删除该 Pod 再抛,DeployFailed 携带 pod_id/namespace 属性供上层兜底**(契约:失败路径不留孤儿物理 Pod——未 REGISTER 的 Pod 不在 pods:all,watch/reconcile 只做 Redis→K8s 单向对账,孤儿无人认领);`get_pod`/`list_pods`/`delete` 带 DEBUG 耗时;`probe_health` 异常原因 DEBUG 留痕(调用方 sweeper 同节奏 WARNING)。
 - `_build_pod_body`:label `{jiuwenclaw-component: agentserver, app: pod_id}`;NFS 卷挂载;资源 requests/limits;sse_port 必开(名 `sse`),container_port≠sse_port 加 `http`;**模板 `agent_env` 注入容器 env**(真 AgentServer 需 `AGENT_HTTP_ENABLED/HOST/PORT` 开 HTTP 入口);readiness probe = `GET {health_path:-/health}:sse_port`;restart_policy=Always。`probe_health`(场景 N)与 readiness 同源取 `health_path`(sweeper 从 scope:config 的 pod_spec_json 读)。
 - `_build_pod_body` **多容器(pod_spec.sidecars,规范形见 `sidecars.py`)**:入口 `normalize_sidecars` 兜底(pod_spec 可能来自 Redis 缓存脏数据,坏项静默丢弃);`find_sidecar_conflict`(撞主容器名/撞 agent 端口)→ **DeployFailed**(fail-fast,防 agent 经 127.0.0.1 连错进程);每项经 `_build_sidecar_container` 渲染 V1Container——端口纯声明性**无名**(sidecar 只被同 Pod 127.0.0.1 访问,不进 Service)、独立 resources、security_context(privileged/caps/seccomp/run_as)、apparmor unconfined 落 **Pod annotation**、tcp/http readiness 探针;`containers=[主容器, *sidecars]`,无 sidecars 时 annotations=None、单容器——**与历史逐字节一致**。sidecar readiness 参与 Pod Ready → `_wait_ready` 天然等 sidecar 就绪(慢启动 sidecar 需调大模板 ready_timeout)。
-- **卷挂载渲染(`mounts.py` 规范形,主容器与 sidecar 共用 `_render_volume_mounts`)**:hostPath/ConfigMap/PVC 三种;卷名 `_scoped_volume_name(prefix, 容器名净化, 容器idx, 挂载idx)`,前缀 `hp-`/`cm-`/`pvc-`,≤63 防撞,与主容器 NFS 卷名 `{pod_id}-nfs` 天然不撞(容器名唯一保证跨容器不撞);ConfigMap 支持 `sub_path`(单 key 挂到文件)与 `items`(V1KeyToPath);主容器三字段 `agent_host_path_mounts`/`agent_configmap_mounts`/`agent_pvc_mounts` 与 sidecar 子字段同款;RM 入口 `normalize_mounts` 兜底脏缓存;无挂载时零增量(与历史一致)。
+- **卷挂载渲染(`mounts.py` 规范形,主容器与 sidecar 共用 `_render_volume_mounts`)**:hostPath/ConfigMap/PVC 三种;卷名 `_scoped_volume_name(prefix, 容器名净化, 容器idx, 挂载idx)`,前缀 `hp-`/`cm-`/`pvc-`,≤63 防撞,与主容器 NFS 卷名 `{pod_id}-nfs` 天然不撞(容器名唯一保证跨容器不撞);**PVC 同 claim 跨容器去重**:`_build_pod_body` 以 `pvc_seen` 登记簿贯穿主容器与 sidecars,同 claim 只建**一个**共享卷(卷名取首现容器,主容器先渲染),后继容器的 volumeMount 复用该卷名——对齐 gateway 写法,防 kubelet 挂第二个同 claim 卷死锁/超时;卷级 `read_only` 取首现值(kubelet 语义:卷源 ro 压 mount 级 rw,主 ro + sidecar rw 组合下 sidecar 实际只读);ConfigMap 支持 `sub_path`(单 key 挂到文件)与 `items`(V1KeyToPath);主容器三字段 `agent_host_path_mounts`/`agent_configmap_mounts`/`agent_pvc_mounts` 与 sidecar 子字段同款;RM 入口 `normalize_mounts` 兜底脏缓存;无挂载时零增量(与历史一致)。
+- `_build_pod_body` **pod 落位字段**:模板 `node_name` → `V1PodSpec.node_name`(绕调度器点名绑节点,`None`/空串不设);`run_as_user`/`run_as_group` → 主容器 `securityContext.runAsUser/runAsGroup`(覆盖镜像 `USER`;给了才设,`None` 不设键——与历史 Pod 零差异;sidecar 的同名字段早有,这是主容器对齐)。
 - `normalize_phase`:deletion→Terminating;容器 waiting reason(ImagePullBackOff/CrashLoopBackOff/…)优先于 phase。
 
 **FakeK8sPodClient**(local/单测):deploy 立即 Ready;可编程 `unready_pods`/`dead_pods`/`unhealthy_pods`/`deploy_failures`(create 前失败,无物理残留)/`fail_after_create`(create 成功但永不 Ready——Pod 留在集群、DeployFailed 携带 pod_id,考验上层兜底删除)模拟异常分支;`deployed_specs` 录制每次 deploy 收到的 pod_spec(断言 pod_spec 端到端透传,如 sidecars)。

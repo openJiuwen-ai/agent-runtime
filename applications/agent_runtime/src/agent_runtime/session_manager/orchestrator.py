@@ -22,7 +22,7 @@ from ..errors import (
     ScopeFullTimeout,
     ScopeQueueFull,
 )
-from ..util import now_ts
+from ..util import key_unsafe, now_ts
 from .config_store import ConfigStore
 from .state import SessionState
 
@@ -67,6 +67,11 @@ class SessionOrchestrator:
                 f"route requires session_id/group_id/bot_id/user_id, got "
                 f"session_id={session_id!r} group_id={group_id!r} "
                 f"bot_id={bot_id!r} user_id={user_id!r}"
+            )
+        if key_unsafe(session_id):
+            # session_id 进键名（session:{sid}）：含 {/} 会破坏 hash tag 同槽性
+            raise InvalidParams(
+                f"session_id must not contain '{{' or '}}': {session_id!r}"
             )
         # 路由匹配：按 (index, scope_id) 序 first-fit 命中下发 scope（快照求值）
         scope_id, template = await self.config.resolve(user_id, group_id, bot_id)
@@ -234,9 +239,19 @@ class SessionOrchestrator:
         """保活 / EOS：刷新老化计时；已过期/不存在返回 False（gateway 回退重新 route）。"""
         if not session_id:
             raise InvalidParams("touch requires session_id")
+        if key_unsafe(session_id):
+            raise InvalidParams(
+                f"session_id must not contain '{{' or '}}': {session_id!r}"
+            )
         touched, _ = await self.state.touch(
             session_id, now_ts(), self.default_session_ttl
         )
-        logger.debug("touch: session=%s touched=%s ttl=%d",
-                     session_id, touched, self.default_session_ttl)
+        if touched:
+            logger.debug("touch: session=%s touched=%s ttl=%d",
+                         session_id, touched, self.default_session_ttl)
+        else:
+            # 未命中=会话已过期/不存在，gateway 将回退重新 route——生产 INFO 下
+            # 必须可见（过期风暴的排障入口）；命中路径保持 DEBUG 防保活刷屏
+            logger.info("touch missed: session=%s ttl=%d",
+                        session_id, self.default_session_ttl)
         return touched

@@ -1,8 +1,12 @@
 # coding: utf-8
 """Session Manager Redis 键 schema（HLD §5.1 / SM 设计 §3）。
 
-前缀 ``session_manager:``（sm_sysctx.key_prefix）。本模块是 SM 侧 redis 键名的
+前缀 ``{session_manager}:``（sm_sysctx.key_prefix）。本模块是 SM 侧 redis 键名的
 唯一出口：所有键名构造集中在此，Lua 脚本里只拿 ``prefix`` 拼 key。
+
+前缀整体包在花括号里 = Redis Cluster **hash tag**：SM 全部键（跨 scope/跨 Pod/
+全局 ZSET）落同一 slot，多键 Lua 的原子语义在 cluster 分片下保持成立。
+单实例/哨兵/fakeredis 下 ``{}`` 无语义，键名照常工作——同一套键名兼容两种部署。
 """
 
 from __future__ import annotations
@@ -15,7 +19,9 @@ from typing import Any
 from ..util import now_ts, s, to_int
 from . import lua_scripts as lua
 
-KEY_PREFIX = "session_manager"
+# hash tag 语义见模块 docstring；scope_id 等外部标识符禁止含 {/}（否则
+# 破坏同槽性，入口校验见 orchestrator/config_store）
+KEY_PREFIX = "{session_manager}"
 
 logger = logging.getLogger("agent_runtime.session_manager")
 
@@ -130,7 +136,11 @@ class SessionState:
         单次超 _SLOW_EVAL_MS → WARNING（Redis 延迟探针）；常规 eval 仅 DEBUG。
         """
         t0 = time.monotonic()
-        result = await self.redis.eval(script, 0, self.prefix, *args)
+        # KEYS[1] 声明 prefix：cluster 客户端据此把 EVAL 路由到 hash tag 的
+        # 归属节点（numkeys=0 会被随机路由，脚本摸到非本节点键即报
+        # "non local key"，真环境 20/30 复现）；脚本体内仍取 ARGV[1]。
+        # 单实例/fakeredis 下多声明一个不访问的 KEYS 无任何影响。
+        result = await self.redis.eval(script, 1, self.prefix, self.prefix, *args)
         duration_ms = (time.monotonic() - t0) * 1000
         if duration_ms > _SLOW_EVAL_MS:
             logger.warning(

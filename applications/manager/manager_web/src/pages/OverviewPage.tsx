@@ -28,7 +28,7 @@ export function OverviewPage() {
     const items = instances.data?.items ?? [];
     const map = { ok: 0, warn: 0, danger: 0, muted: 0 };
     for (const it of items) {
-      const s = (it.status ?? '').toLowerCase();
+      const s = (it.gateway_status ?? '').toLowerCase();
       if (['online', 'ready', 'running'].includes(s) || s === 'active') map.ok += 1;
       else if (['pending', 'restarting', 'starting'].includes(s)) map.warn += 1;
       else if (['offline', 'failed', 'error'].includes(s)) map.danger += 1;
@@ -164,9 +164,9 @@ export function OverviewPage() {
             <thead>
               <tr>
                 <th>name</th>
-                <th>{t('topology.instanceStatus')}</th>
+                <th>{t('topology.gatewayStatus')}</th>
                 <th>{t('topology.namespace')}</th>
-                <th>{t('topology.group')}</th>
+                <th>{t('topology.space')}</th>
               </tr>
             </thead>
             <tbody>
@@ -180,9 +180,9 @@ export function OverviewPage() {
                     <div className="text-text-strong font-medium">{it.jiuwenclaw_name}</div>
                     <div className="text-[11px] text-muted mono">{it.jiuwenclaw_id}</div>
                   </td>
-                  <td><StatusBadge status={it.status} /></td>
-                  <td className="mono text-xs">{it.k8s_namespace}</td>
-                  <td><span className="tag">{it.group_id}</span></td>
+                  <td><StatusBadge status={it.gateway_status} /></td>
+                  <td className="mono text-xs">{it.namespace}</td>
+                  <td><span className="tag">{it.space_id}</span></td>
                 </tr>
               ))}
             </tbody>

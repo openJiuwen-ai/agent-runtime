@@ -8,7 +8,7 @@
 ``workspace_dir`` 模板（如 ``${group_id}::${bot_id}``、``${user_id}``），与 Runtime 转发前
 写入 ``AgentRequest`` 的行为一致。
 
-前置：已完成 ``provision-local``、``enterprise_config_demo_data_config.py`` 写入演示策略
+前置：目标实例已创建；已用 ``enterprise_config_demo_data_config.py`` 写入演示策略
 （含 Agent 策略 ``workspace_dir``）。数据库连接与 Gateway 进程一致，由
 ``manager_ws_client.infrastructure.db.Database`` 按 ``GATEWAY_*`` / ``.env`` 解析
 （支持 sqlite / mysql），脚本侧无需再传数据目录。
@@ -371,7 +371,7 @@ def _parse_args() -> argparse.Namespace:
         "jiuwenclaw_id",
         nargs="?",
         default="",
-        help="provision-local 返回的 jiuwenclaw_id（positional，建议放在命令末尾；可与 --provision-json 二选一）",
+        help="目标实例 jiuwenclaw_id（positional，建议放在命令末尾；可与 --provision-json 二选一）",
     )
     p.add_argument("--group-id", default="g_demo_sales", help="企业策略 group_id")
     p.add_argument("--bot-id", default="bot_main", help="企业策略 bot_id")
@@ -379,7 +379,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--provision-json",
         type=Path,
-        help="provision-local 响应 JSON（读取 jiuwenclaw_id）",
+        help="含 jiuwenclaw_id 的 JSON 文件（读取 jiuwenclaw_id）",
     )
     p.add_argument(
         "--all-scenarios",

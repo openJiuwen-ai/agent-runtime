@@ -247,10 +247,10 @@ def service_config_templates() -> list[tuple[str, dict[str, Any]]]:
 def instance_create_body(*, jiuwenclaw_name: str = "ut-demo-instance") -> dict[str, Any]:
     return {
         "jiuwenclaw_name": jiuwenclaw_name,
-        "creator_id": "ut-tester",
+        "created_by": "ut-tester",
         "description": "manager API unit test instance",
-        "k8s_master_host": "127.0.0.1",
-        "k8s_auth_type": "none",
-        "k8s_auth_config": {},
-        "k8s_namespace": "default",
+        "namespace": "default",
+        "space_id": "default",
+        "gateway_config_host": "http://127.0.0.1:18080",
+        "runtime_config_host": "http://127.0.0.1:18081",
     }
