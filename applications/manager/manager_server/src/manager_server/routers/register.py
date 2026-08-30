@@ -5,7 +5,6 @@ import os
 from fastapi import APIRouter, FastAPI
 
 from .application_config_routers import application_config_router
-from .config_effective_policy_routers import config_effective_policy_router
 from .user_console_routers import user_console_router
 from .instance_access_routers import gateway_lookup_router, instance_grant_router
 from .instance_resource_routers import instance_resource_router
@@ -32,11 +31,6 @@ def router_register(app: FastAPI) -> None:
         application_config_router,
         prefix=INSTANCES_PREFIX,
         tags=["Application Config"],
-    )
-    v1_router.include_router(
-        config_effective_policy_router,
-        prefix=INSTANCES_PREFIX,
-        tags=["Config Effective Policy"],
     )
 
     # 实例准入：用户/组织 ↔ 实例授权（instance_grant）。

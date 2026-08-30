@@ -1,4 +1,4 @@
-"""按配置生效策略引用关系，将各类模板定向下发到 Gateway。"""
+"""按 Agent 资源模板引用关系，将各类模板定向下发到 Gateway。"""
 
 from __future__ import annotations
 
@@ -21,12 +21,6 @@ from manager_server.infrastructure.template_ref import (
 )
 from manager_server.infrastructure.utils import utc_now
 from manager_server.infrastructure.logger import get_logger
-from manager_server.models.config_effective_policy_models import (
-    CONFIG_DEFAULT_TEMPLATE_MAPPING_TABLE_DEF,
-    CONFIG_EFFECTIVE_AGENT_POLICY_TABLE_DEF,
-    CONFIG_EFFECTIVE_GLOBAL_POLICY_TABLE_DEF,
-    CONFIG_EFFECTIVE_SERVICE_POLICY_TABLE_DEF,
-)
 from manager_server.models.jid_template_ref_models import (
     JID_TEMPLATE_REF_TABLE_DEF,
 )
@@ -56,16 +50,6 @@ _OR_SPLIT_PATTERN = re.compile(r"\s+or\s+", flags=re.IGNORECASE)
 _MAPPING_DIM_PATTERN = re.compile(r"^\$\{(user|group)::([^}]+)\}$", re.IGNORECASE)
 
 _JID_TEMPLATE_REF_TABLE = JID_TEMPLATE_REF_TABLE_DEF.table_name
-_MAPPING_TABLE = CONFIG_DEFAULT_TEMPLATE_MAPPING_TABLE_DEF.table_name
-_GLOBAL_POLICY_TABLE = CONFIG_EFFECTIVE_GLOBAL_POLICY_TABLE_DEF.table_name
-_SERVICE_POLICY_TABLE = CONFIG_EFFECTIVE_SERVICE_POLICY_TABLE_DEF.table_name
-_AGENT_POLICY_TABLE = CONFIG_EFFECTIVE_AGENT_POLICY_TABLE_DEF.table_name
-
-_POLICY_TABLES = (
-    _GLOBAL_POLICY_TABLE,
-    _SERVICE_POLICY_TABLE,
-    _AGENT_POLICY_TABLE,
-)
 
 
 @dataclass(frozen=True)
@@ -242,7 +226,7 @@ def extract_literal_template_ids_from_ref(ref: str) -> set[str]:
 
 
 def slot_template_pairs_from_template_ref(template_ref: Any) -> set[tuple[str, str]]:
-    """单条策略 ``template_ref`` 贡献的 ``(slot, template_id)`` 集合（每条策略每对至多计一次）。"""
+    """单条 ``template_ref`` 贡献的 ``(slot, template_id)`` 集合（每条引用每对至多计一次）。"""
     refs = normalize_template_ref(template_ref) if template_ref else {}
     out: set[tuple[str, str]] = set()
     for slot, raw_list in refs.items():
@@ -253,17 +237,6 @@ def slot_template_pairs_from_template_ref(template_ref: Any) -> set[tuple[str, s
             for tid in extract_literal_template_ids_from_ref(str(raw)):
                 out.add((slot_name, tid))
     return out
-
-
-def slot_template_pair_from_mapping(
-    template_type: str,
-    template_id: str,
-) -> set[tuple[str, str]]:
-    slot = str(template_type or "").strip()
-    tid = str(template_id or "").strip()
-    if slot and tid:
-        return {(slot, tid)}
-    return set()
 
 
 def extract_template_ids_from_template_ref(
@@ -318,35 +291,7 @@ async def _count_slot_pairs_for_gateway(
     handler: DBHandler,
     jiuwenclaw_id: str,
 ) -> Counter[tuple[str, str]]:
-    counter: Counter[tuple[str, str]] = Counter()
-    mapping_rows = await handler.list_records(
-        _MAPPING_TABLE,
-        {"jiuwenclaw_id": jiuwenclaw_id},
-        limit=_LIST_ALL_CAP,
-        offset=0,
-    )
-    for row in mapping_rows:
-        counter.update(
-            slot_template_pair_from_mapping(
-                str(getattr(row, "template_type", "") or ""),
-                str(getattr(row, "template_id", "") or ""),
-            )
-        )
-    for table in _POLICY_TABLES:
-        rows = await handler.list_records(
-            table,
-            {"jiuwenclaw_id": jiuwenclaw_id},
-            limit=_LIST_ALL_CAP,
-            offset=0,
-        )
-        for row in rows:
-            counter.update(
-                slot_template_pairs_from_template_ref(
-                    read_template_ref_from_row(row)
-                )
-            )
-    counter.update(await _count_slot_pairs_from_agent_resources(handler, jiuwenclaw_id))
-    return counter
+    return await _count_slot_pairs_from_agent_resources(handler, jiuwenclaw_id)
 
 
 async def _slot_pairs_for_gateway(
@@ -364,7 +309,7 @@ async def collect_referenced_template_ids_for_gateway(
     jiuwenclaw_id: str,
     kind: str,
 ) -> set[str]:
-    """汇总某 Gateway 在配置生效策略中引用的某类模板 ``template_id``。"""
+    """汇总某 Gateway 在 Agent 资源模板引用中引用的某类模板 ``template_id``。"""
     jid = str(jiuwenclaw_id or "").strip()
     if not jid:
         return set()
@@ -413,47 +358,45 @@ async def _list_active_jid_template_ref_rows(
     return matched
 
 
-async def _scan_policy_references_for_template(
+async def _scan_agent_resource_references_for_template(
     handler: DBHandler,
     template_id: str,
     *,
     slot_keys: frozenset[str],
 ) -> tuple[set[str], int]:
-    """全表扫描策略/映射，返回引用的 Gateway 集合与引用条数（索引未建立时回退）。"""
+    """扫描 Agent 资源引用，返回引用的 Gateway 集合与引用条数（索引未建立时回退）。"""
     jids: set[str] = set()
     count = 0
-    mapping_rows = await handler.list_records(
-        _MAPPING_TABLE,
-        {"template_id": template_id},
+    resource_rows = await handler.list_records(
+        INSTANCE_AGENT_RESOURCE_TABLE_DEF.table_name,
+        {},
         limit=_LIST_ALL_CAP,
         offset=0,
     )
-    for row in mapping_rows:
-        template_type = str(getattr(row, "template_type", "") or "").strip()
-        if template_type not in slot_keys:
+    seen: set[tuple[str, str, str]] = set()
+    for row in resource_rows:
+        ref_template_id = str(getattr(row, "ref_template_id", "") or "").strip()
+        resource_id = str(getattr(row, "resource_id", "") or "").strip()
+        jid = str(getattr(row, "jiuwenclaw_id", "") or "").strip()
+        if not ref_template_id or not resource_id or not jid:
+            continue
+        dedupe_key = (jid, ref_template_id, resource_id)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        tpl_row = await handler.get(
+            AGENT_TEMPLATE_TABLE_DEF.table_name,
+            {"template_id": ref_template_id},
+        )
+        if tpl_row is None:
+            continue
+        if template_id not in extract_template_ids_from_template_ref(
+            read_template_ref_from_row(tpl_row),
+            slot_keys=slot_keys,
+        ):
             continue
         count += 1
-        jid = str(getattr(row, "jiuwenclaw_id", "") or "").strip()
-        if jid:
-            jids.add(jid)
-
-    for table in _POLICY_TABLES:
-        rows = await handler.list_records(
-            table,
-            {},
-            limit=_LIST_ALL_CAP,
-            offset=0,
-        )
-        for row in rows:
-            if template_id not in extract_template_ids_from_template_ref(
-                read_template_ref_from_row(row),
-                slot_keys=slot_keys,
-            ):
-                continue
-            count += 1
-            jid = str(getattr(row, "jiuwenclaw_id", "") or "").strip()
-            if jid:
-                jids.add(jid)
+        jids.add(jid)
     return jids, count
 
 
@@ -462,7 +405,7 @@ async def collect_referenced_jiuwenclaw_ids_for_template(
     template_id: str,
     kind: str,
 ) -> set[str]:
-    """查找在 ``jid_template_ref`` 或策略/映射中引用了指定 ``template_id`` 的全部 ``jiuwenclaw_id``。"""
+    """查找在 ``jid_template_ref`` 或 Agent 资源中引用了指定 ``template_id`` 的全部 ``jiuwenclaw_id``。"""
     lookup = await _resolve_template_ref_lookup(handler, template_id, kind)
     if lookup is None:
         return set()
@@ -477,7 +420,7 @@ async def collect_referenced_jiuwenclaw_ids_for_template(
             if jid:
                 jids.add(jid)
         return jids
-    jids, _ = await _scan_policy_references_for_template(
+    jids, _ = await _scan_agent_resource_references_for_template(
         handler, tid, slot_keys=slot_keys
     )
     return jids
@@ -768,36 +711,11 @@ async def sync_gateway_templates_after_template_ref_change(
     )
 
 
-async def sync_gateway_templates_after_mapping_change(
-    handler: DBHandler,
-    jiuwenclaw_id: str,
-    *,
-    old_template_type: str | None,
-    old_template_id: str | None,
-    new_template_type: str | None,
-    new_template_id: str | None,
-    skip_runtime_update: bool = False,
-) -> None:
-    old_pairs = slot_template_pair_from_mapping(
-        old_template_type or "", old_template_id or ""
-    )
-    new_pairs = slot_template_pair_from_mapping(
-        new_template_type or "", new_template_id or ""
-    )
-    await _apply_slot_pair_delta(
-        handler,
-        jiuwenclaw_id,
-        added=new_pairs - old_pairs,
-        removed=old_pairs - new_pairs,
-        skip_runtime_update=skip_runtime_update,
-    )
-
-
 async def rebuild_jid_template_ref_for_gateway(
     handler: DBHandler,
     jiuwenclaw_id: str,
 ) -> None:
-    """从全部策略与默认模板映射重建某 Gateway 的 ``jid_template_ref`` 索引。"""
+    """从 Agent 资源模板引用重建某 Gateway 的 ``jid_template_ref`` 索引。"""
     jid = str(jiuwenclaw_id or "").strip()
     if not jid:
         return
@@ -863,7 +781,7 @@ async def count_config_effective_policy_references_for_template(
     template_id: str,
     kind: str,
 ) -> int:
-    """统计配置生效策略与默认模板映射对指定 ``template_id`` 的引用条数。"""
+    """统计 Agent 资源模板引用对指定 ``template_id`` 的引用条数。"""
     lookup = await _resolve_template_ref_lookup(handler, template_id, kind)
     if lookup is None:
         return 0
@@ -873,7 +791,7 @@ async def count_config_effective_policy_references_for_template(
             handler, tid, slot_keys=slot_keys
         )
         return sum(int(getattr(row, "ref_count", 0) or 0) for row in rows)
-    _, count = await _scan_policy_references_for_template(
+    _, count = await _scan_agent_resource_references_for_template(
         handler, tid, slot_keys=slot_keys
     )
     return count
@@ -884,7 +802,7 @@ async def assert_template_deletable(
     template_id: str,
     kind: str,
 ) -> None:
-    """删除模板前校验：若仍被配置生效策略引用则拒绝删除。"""
+    """删除模板前校验：若仍被 Agent 资源模板引用则拒绝删除。"""
     ref_count = await count_config_effective_policy_references_for_template(
         handler,
         template_id,
@@ -892,8 +810,8 @@ async def assert_template_deletable(
     )
     if ref_count > 0:
         raise ValueError(
-            f"cannot delete template: {ref_count} config effective policy "
-            "reference(s) exist, remove template references from policies first"
+            f"cannot delete template: {ref_count} template "
+            "reference(s) exist, remove references from agent templates first"
         )
 
 
@@ -904,6 +822,5 @@ __all__ = (
     "update_template_on_referencing_gateways",
     "delete_template_on_referencing_gateways",
     "sync_gateway_templates_after_template_ref_change",
-    "sync_gateway_templates_after_mapping_change",
     "rebuild_jid_template_ref_for_gateway",
 )

@@ -26,13 +26,7 @@ pytestmark = pytest.mark.filterwarnings("ignore::sqlalchemy.exc.SAWarning")
 
 
 class _GatewayAckSimulator:
-    """模拟 Gateway HTTP ack，为策略/映射 create 分配自增 id。"""
-
-    def __init__(self) -> None:
-        self._service_policy_id = 0
-        self._agent_policy_id = 0
-        self._global_policy_id = 0
-        self._mapping_id = 0
+    """模拟 Gateway HTTP ack。"""
 
     async def gateway_request(
         self,
@@ -44,41 +38,8 @@ class _GatewayAckSimulator:
     ) -> dict[str, Any]:
         _ = jiuwenclaw_id
         _ = business
-        m = method.upper()
-        p = path.rstrip("/")
-        if m == "POST":
-            if p.endswith("service-policies"):
-                self._service_policy_id += 1
-                return {
-                    "result": {"id": self._service_policy_id},
-                    "revision": "rev-ut",
-                    "success_flag": True,
-                    "transport": "http",
-                }
-            if p.endswith("agent-policies"):
-                self._agent_policy_id += 1
-                return {
-                    "result": {"id": self._agent_policy_id},
-                    "revision": "rev-ut",
-                    "success_flag": True,
-                    "transport": "http",
-                }
-            if p.endswith("global-policies"):
-                self._global_policy_id += 1
-                return {
-                    "result": {"id": self._global_policy_id},
-                    "revision": "rev-ut",
-                    "success_flag": True,
-                    "transport": "http",
-                }
-            if p.endswith("config-default-template-mappings"):
-                self._mapping_id += 1
-                return {
-                    "result": {"id": self._mapping_id},
-                    "revision": "rev-ut",
-                    "success_flag": True,
-                    "transport": "http",
-                }
+        _ = method
+        _ = path
         return {
             "revision": "rev-ut",
             "success_flag": True,
@@ -200,10 +161,6 @@ _GATEWAY_REQUEST_MODULES = (
     "manager_server.core.application_config.permissions_config",
     "manager_server.core.application_config.memory_config",
     "manager_server.core.application_config.log_masking_rule",
-    "manager_server.core.config_effective_policy.config_effective_agent_policy",
-    "manager_server.core.config_effective_policy.config_effective_global_policy",
-    "manager_server.core.config_effective_policy.config_effective_service_policy",
-    "manager_server.core.config_effective_policy.config_default_template_mapping",
     "manager_server.core.template.push_template_to_gateway",
     "manager_server.core.template.push_agent_template_to_gateway",
     "manager_server.core.instance.instance_data_lifecycle",
