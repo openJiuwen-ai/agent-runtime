@@ -51,8 +51,6 @@ async def gateway_request(
             f"gateway HTTP push failed jiuwenclaw_id={jid!r} url={url}: {exc}"
         ) from exc
 
-    if resp.status_code == 503:
-        raise ValueError(f"gateway standby (503) jiuwenclaw_id={jid!r}; retry later")
     if resp.status_code >= 400:
         detail = resp.text[:500]
         try:
