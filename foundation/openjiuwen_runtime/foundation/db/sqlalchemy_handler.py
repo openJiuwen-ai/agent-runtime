@@ -5,7 +5,7 @@ from datetime import datetime
 import logging
 from typing import Optional, Any
 import json
-from sqlalchemy import Column, Integer, String, DateTime, JSON, Boolean, Float, text, inspect, Index
+from sqlalchemy import Column, Integer, String, DateTime, JSON, Boolean, Float, Text, text, inspect, Index
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
@@ -106,12 +106,21 @@ class SQLAlchemyHandler(DBHandler):
 
     def _get_sqlalchemy_type(self, data_type: str, length: Optional[int] = None):
         """将数据类型字符串转换为 SQLAlchemy 类型"""
+        key = data_type.lower()
+        # 大文本族：mysql 用 MEDIUMTEXT/LONGTEXT 变体（分别 16MB / 4GB），
+        # 其余方言（pg/sqlite/...）用 Text（pg TEXT 无界、sqlite TEXT 无界）。
+        if key in ("mediumtext", "longtext"):
+            if self._get_dialect_name() == "mysql":
+                from sqlalchemy.dialects.mysql import MEDIUMTEXT, LONGTEXT
+
+                return LONGTEXT if key == "longtext" else MEDIUMTEXT
+            return Text
         type_map = {
             "integer": Integer,
             "int": Integer,
             "string": String,
             "str": String,
-            "text": String,
+            "text": Text,
             "datetime": DateTime,
             "json": JSON,
             "boolean": Boolean,
@@ -122,7 +131,7 @@ class SQLAlchemyHandler(DBHandler):
             "number": Float,
             "real": Float,
         }
-        sa_type = type_map.get(data_type.lower(), String)
+        sa_type = type_map.get(key, String)
         if sa_type == String and length:
             return String(length)
         return sa_type
@@ -142,10 +151,16 @@ class SQLAlchemyHandler(DBHandler):
         data_type = col_def.data_type.lower()
         if data_type in {"integer", "int"}:
             return "INTEGER"
-        if data_type in {"string", "str", "text"}:
+        if data_type in {"string", "str"}:
             if col_def.length:
                 return f"VARCHAR({col_def.length})"
             return "VARCHAR"
+        if data_type in {"mediumtext", "longtext"}:
+            if self._get_dialect_name() == "mysql":
+                return "LONGTEXT" if data_type == "longtext" else "MEDIUMTEXT"
+            return "TEXT"
+        if data_type == "text":
+            return "TEXT"
         if data_type == "datetime":
             return "DATETIME"
         if data_type == "json":

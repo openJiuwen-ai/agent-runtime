@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     db_user: str = Field(default="root", validation_alias="MANAGER_DB_USER")
     db_password: str = Field(default="root", validation_alias="MANAGER_DB_PASSWORD")
     db_name: str = Field(default="manager", validation_alias="MANAGER_DB_NAME")
+    pg_schema: str = Field(default="public", validation_alias="MANAGER_PG_SCHEMA")
 
     # Manager 周期探活 Gateway/Runtime 健康检查的间隔（秒）
     MANAGER_HEARTBEAT_SCAN_INTERVAL_SECONDS: int = Field(

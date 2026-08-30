@@ -26,6 +26,8 @@ import math
 import os
 from dataclasses import dataclass
 
+from openjiuwen_runtime.foundation.db.utils import is_postgresql, is_sqlite
+
 
 _DEFAULT_HOST = "0.0.0.0"
 _DEFAULT_PORT = 8090
@@ -97,6 +99,7 @@ class ServiceConfig:
     db_name: str | None = None
     db_user: str | None = None
     db_password: str | None = None
+    pg_schema: str = "public"
 
     def __post_init__(self) -> None:
         self._validate_port("port", self.port)
@@ -201,7 +204,7 @@ class ServiceConfig:
                 raise ValueError(
                     f"{', '.join(missing)} is required for db_type={self.db_type}"
                 )
-        if self.db_type == "sqlite" and not self.db_name:
+        if is_sqlite(self.db_type) and not self.db_name:
             raise ValueError("db_name is required for db_type=sqlite")
 
     @staticmethod
@@ -364,13 +367,15 @@ class ServiceConfig:
             db_port=int(os.getenv(
                 "OPENJIUWEN_SERVICE_DB_PORT",
                 "5432"
-                if os.getenv("OPENJIUWEN_SERVICE_DB_TYPE", _DEFAULT_DB_TYPE).lower()
-                == "postgresql"
+                if is_postgresql(
+                    os.getenv("OPENJIUWEN_SERVICE_DB_TYPE", _DEFAULT_DB_TYPE)
+                )
                 else str(_DEFAULT_DB_PORT),
             )),
             db_name=os.getenv("OPENJIUWEN_SERVICE_DB_NAME") or None,
             db_user=os.getenv("OPENJIUWEN_SERVICE_DB_USER") or None,
             db_password=os.getenv("OPENJIUWEN_SERVICE_DB_PASSWORD"),
+            pg_schema=os.getenv("OPENJIUWEN_SERVICE_PG_SCHEMA", "public"),
         )
 
     @property

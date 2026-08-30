@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from openjiuwen_runtime.foundation.db.utils import is_mysql, is_postgresql, is_sqlite
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 from openjiuwen_runtime.foundation.db.mysql_handler import MySQLHandler
 from openjiuwen_runtime.foundation.db.postgresql_handler import PostgreSQLHandler
@@ -61,7 +62,7 @@ def _pg_handler_from_settings(cfg: Settings) -> PostgreSQLHandler:
             user=str(cfg.db_user).strip(),
             password=str(cfg.db_password),
             database=str(cfg.db_name).strip(),
-            schema="public",
+            schema=str(cfg.pg_schema).strip() or "public",
         )
     except (TypeError, ValueError) as e:
         logger.exception(
@@ -79,11 +80,11 @@ def create_db_handler(cfg: Settings | None = None) -> DBHandler:
     db_type = str(active.db_type or "").strip().lower() or "sqlite"
     logger.info("Using database: %s", db_type)
 
-    if db_type == "sqlite":
+    if is_sqlite(db_type):
         _db_handler = _sqlite_handler_from_settings(active)
-    elif db_type == "mysql":
+    elif is_mysql(db_type):
         _db_handler = _mysql_handler_from_settings(active)
-    elif db_type in ("postgresql", "postgres", "pg"):
+    elif is_postgresql(db_type):
         _db_handler = _pg_handler_from_settings(active)
     else:
         raise ValueError(
@@ -96,7 +97,7 @@ def create_db_handler(cfg: Settings | None = None) -> DBHandler:
 def database_config_summary(cfg: Settings | None = None) -> dict[str, Any]:
     active = cfg or settings
     db_type = str(active.db_type or "").strip().lower() or "sqlite"
-    if db_type == "sqlite":
+    if is_sqlite(db_type):
         result = {
             "db_type": db_type,
             "sqlite_path": active.sqlite_path,

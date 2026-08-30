@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from openjiuwen_runtime.foundation.db.utils import is_mysql, is_postgresql, is_sqlite
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 from openjiuwen_runtime.foundation.db.mysql_handler import MySQLHandler
 from openjiuwen_runtime.foundation.db.postgresql_handler import PostgreSQLHandler
@@ -54,7 +55,7 @@ def _pg_handler_from_settings(cfg: Settings) -> PostgreSQLHandler:
         return PostgreSQLHandler(
             host=str(cfg.db_host).strip(), port=int(cfg.db_port),
             user=str(cfg.db_user).strip(), password=str(cfg.db_password),
-            database=str(cfg.db_name).strip(), schema="public",
+            database=str(cfg.db_name).strip(), schema=str(cfg.pg_schema).strip() or "public",
         )
     except (TypeError, ValueError) as e:
         logger.exception("Invalid PostgreSQL config (IDENTITY_DB_*).")
@@ -66,11 +67,11 @@ def create_db_handler(cfg: Settings | None = None) -> DBHandler:
     active = cfg or settings
     db_type = str(active.db_type or "").strip().lower() or "sqlite"
     logger.info("Using identity database: %s", db_type)
-    if db_type == "sqlite":
+    if is_sqlite(db_type):
         _db_handler = _sqlite_handler_from_settings(active)
-    elif db_type == "mysql":
+    elif is_mysql(db_type):
         _db_handler = _mysql_handler_from_settings(active)
-    elif db_type in ("postgresql", "postgres", "pg"):
+    elif is_postgresql(db_type):
         _db_handler = _pg_handler_from_settings(active)
     else:
         raise ValueError(f"Unsupported db_type: {db_type}. Use sqlite/mysql/postgresql.")
@@ -80,6 +81,6 @@ def create_db_handler(cfg: Settings | None = None) -> DBHandler:
 def database_config_summary(cfg: Settings | None = None) -> dict[str, Any]:
     active = cfg or settings
     db_type = str(active.db_type or "").strip().lower() or "sqlite"
-    if db_type == "sqlite":
+    if is_sqlite(db_type):
         return {"db_type": db_type, "sqlite_path": active.sqlite_path}
     return {"db_type": db_type, "host": active.db_host, "port": active.db_port, "database": active.db_name}
