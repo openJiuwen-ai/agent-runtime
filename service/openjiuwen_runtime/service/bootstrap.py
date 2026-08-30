@@ -15,6 +15,12 @@ from dataclasses import fields
 from typing import Any
 from uuid import uuid4
 
+from openjiuwen_runtime.foundation.db.utils import (
+    is_mysql,
+    is_postgresql,
+    is_sqlite,
+)
+
 from .config import ServiceConfig
 from .context.cache.factory import build_cache_backend as _build_cache_backend
 from .context.locks.factory import build_lock_backend as _build_lock_backend
@@ -57,11 +63,11 @@ def build_db_handler(settings: ServiceConfig | dict[str, Any] | Any) -> Any | No
     cfg = coerce_config(settings)
     if cfg.db_type == "none":
         return None
-    if cfg.db_type == "sqlite":
+    if is_sqlite(cfg.db_type):
         from openjiuwen_runtime.foundation.db import SQLiteHandler
 
         return SQLiteHandler(cfg.db_name or ":memory:")
-    if cfg.db_type == "mysql":
+    if is_mysql(cfg.db_type):
         from openjiuwen_runtime.foundation.db import MySQLHandler
 
         return MySQLHandler(
@@ -71,7 +77,7 @@ def build_db_handler(settings: ServiceConfig | dict[str, Any] | Any) -> Any | No
             user=cfg.db_user,
             password=cfg.db_password,
         )
-    if cfg.db_type == "postgresql":
+    if is_postgresql(cfg.db_type):
         from openjiuwen_runtime.foundation.db import PostgreSQLHandler
 
         return PostgreSQLHandler(
