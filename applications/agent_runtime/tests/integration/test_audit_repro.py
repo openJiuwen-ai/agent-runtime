@@ -64,16 +64,18 @@ def _tpl(template_id: str = "tpl-1", **overrides) -> dict:
 
 def _sync_payload(template: dict | None = None, scope_ids=(SCOPE,),
                   template_ids=None) -> dict:
-    """全量下发载荷:每个 scope 一个同构条目(空 routing_rules = 通配兜底)。"""
+    """全量下发载荷(三段式):每个 scope 一个同构条目(空 routing_rules = 通配兜底)。"""
+    from tests.conftest import split_sync_payload
+
     template = template or _tpl()
     tids = list(template_ids) if template_ids is not None else [template["template_id"]]
-    return {
-        "templates": [template],
-        "scopes": [
+    return split_sync_payload(
+        [template],
+        [
             {"scope_id": sid, "index": i, "template_id": tids[i], "routing_rules": ""}
             for i, sid in enumerate(scope_ids)
         ],
-    }
+    )
 
 
 async def _natural_idle(runtime: Runtime, session: str = "sess_1",
@@ -475,15 +477,17 @@ async def test_C11_deleted_scope_drain_converges_after_push_failure(runtime):
     注入:drain 推送(pool 无 spec 且 min_idle=0)失败一次,模拟滚动重启时
     扩散③中断;此后同载荷再 sync 不含该 scope(old_scopes 已无它)。
     """
-    two_scopes = {
-        "templates": [_tpl(), _tpl("tpl-aux", min_idle_pods=1)],
-        "scopes": [
+    from tests.conftest import split_sync_payload
+
+    two_scopes = split_sync_payload(
+        [_tpl(), _tpl("tpl-aux", min_idle_pods=1)],
+        [
             {"scope_id": SCOPE, "index": 0, "template_id": "tpl-1",
              "routing_rules": ""},
             {"scope_id": "scope-aux", "index": 1, "template_id": "tpl-aux",
              "routing_rules": ""},
         ],
-    }
+    )
     await runtime.config_store.config_sync(two_scopes)
 
     orig_push = runtime.config_store._push

@@ -25,7 +25,7 @@
 |---|---|---|
 | POST /api/session/route | `handle_route` | 同步路由+占额度,返回 `{pod_sse_url, pod_id}`;**幂等键 = metadata.request_id**(框架 idempotency,窗口 60s,回放缓存结果) |
 | POST /api/session/touch | `handle_touch` | 保活/EOS,返回 `{touched}`;False=已过期/不存在(gateway 回退重新 route) |
-| POST /api/session/config_sync | `handle_config_sync` | 全量配置下发 `{containers, templates, scopes}`(三段式;过渡期双收 legacy `{templates, scopes}` 内联形态),委托 `ConfigStore.config_sync` |
+| POST /api/session/config_sync | `handle_config_sync` | 全量配置下发 `{containers, templates, scopes}`(三段式**独占**;无 containers 键的 legacy 内联载荷 → 400),委托 `ConfigStore.config_sync` |
 | POST /api/session/cleanup | `handle_cleanup` | 运维批删 Pod,委托 `rm_facade.cleanup`(handler 在 SM,逻辑在 RM) |
 
 - 入参从 `Envelope.metadata`(session_id/user_id/group_id/bot_id/request_id)与 `rawdata` 取;`group_id` 在 `metadata.extra`,**user_id/group_id/bot_id/session_id 四项均必填非空**(orchestrator 校验,缺 → 400 VALIDATION)。
@@ -101,7 +101,7 @@
 
 **DB 表**(列名沿用 EE 兼容名,映射在 `_COLUMN_OF`):`service_config_template`(`min_idle_pods→min_idle_services`、`pod_concurrency→service_concurrency`、`pod_ttl→service_ttl`、`scope_concurrency→session_concurrency`;另有 JSON 列 `agent_env`、`sidecars`、`agent_host_path_mounts`、`agent_configmap_mounts`、`agent_pvc_mounts` + 三段式新列 `main_container_id`(string 100)/`sidecar_container_ids`(JSON)/`volumes`(JSON))、**`service_config_container`**(容器规格表,15 列:`container_id` unique ≤100、`name`/`image`/`image_pull_policy` 标量 + `ports`/`env`/`env_from`/`resources`/`volume_mounts`/`security_context`/`readiness_probe` 七个内部规范形 JSON 段落列;框架 init_table 自动建,无需手工 DDL)、`routing_scope`(`scope_id` unique / `match_index`(避 SQL 保留字 index) / `template_id` / `routing_rules` JSON)。表结构常量 `*_TABLE_DEF` 由 main 传给框架建表。旧 `routing_rule` 表已废弃(不再读写,老库残留无害)。**模板表三段式三列为后期新增:存量库须先手工 ALTER 再发版**(`ALTER TABLE service_config_template ADD COLUMN main_container_id VARCHAR(100) NULL; ADD COLUMN sidecar_container_ids JSON NULL; ADD COLUMN volumes JSON NULL;`,框架建表只 create_all 不补列;`sidecars`/挂载列/`agent_env`/`health_path` 同款义务)。
 
-**行形态双轨**(`template_from_row(row, containers)`):行有真值 `main_container_id` → 三段式新形态(模板级列 + 容器行 + volumes join 水合;**任一引用容器行缺失 → WARNING + 整模板跳过**,绝不静默丢单个 sidecar——那会隐形改 deploy_ver;引用它的 scope 视为不命中落兜底);否则 → legacy 内联列路径(旧行,行为逐字节保留)。新形态写行(`row_from_template_split`)只写模板级列 + 引用列 + volumes + `agent_image: ""` 死值(该列 NOT NULL 无默认,create/update 都写,防转换残留误导诊断);legacy 写行(`row_from_template`)显式清空三段式三列(update 不写会残留旧引用 → 误按新形态水合)。
+**行形态双轨(仅读路径)**(`template_from_row(row, containers)`):行有真值 `main_container_id` → 三段式形态(模板级列 + 容器行 + volumes join 水合;**任一引用容器行缺失 → WARNING + 整模板跳过**,绝不静默丢单个 sidecar——那会隐形改 deploy_ver;引用它的 scope 视为不命中落兜底);否则 → legacy 内联列路径(**读兼容:升级后重放前的存量旧行**;wire 已收紧,legacy 写路径已删,新写入一律三段式形态)。新形态写行(`row_from_template_split`)只写模板级列 + 引用列 + volumes + `agent_image: ""` 死值(该列 NOT NULL 无默认,create/update 都写,防转换残留误导诊断)。
 
 **sidecars.py(顶层共享模块,SM 校验与 RM 渲染共用;与 spec_fields 同款先例)**:通用 sidecar 容器列表(单 JSON 列),每项一个容器规格 dict,jiuwenbox 是第一个使用者(与主 agent 容器同 Pod、共享网络命名空间,agent 经 `127.0.0.1:port` 访问)。单项 schema(规范形填满全部默认键,列表按 name 升序):`name`(必,DNS-1123 ≤63,≠ `container_name` 且 Pod 内唯一)、`image`(必,≤512)、`port`?(≠ `sse_port`/`container_port`/兄弟 sidecar;探针目标)、`env`(同 agent_env 规则 str→scalar)、`image_pull_policy`(默认 IfNotPresent)、`cpu/memory_request/limit`、`privileged`/`capabilities_add|drop`/`seccomp_unconfined`/`apparmor_unconfined`(apparmor 经 Pod annotation 表达)/`run_as_user|group`、`host_path_mounts`/`configmap_mounts`/`pvc_mounts`(见 mounts.py)、`readiness_probe_type`("tcp"|"http",设了必须有 port)/`readiness_path`(默认 /health)/`readiness_initial_delay|period|timeout_seconds`(默认 5/10/3)/`env_from`(envFrom 引用,`canonical_env_from` 规范形——**条件键:None/[] 省略**,区别于其他显式存 None 的键,为保存量 sidecar 指纹);列表 ≤8 条;**未知键 400 拒绝**(安全敏感面,拼错键不得静默吞)。**指纹不变式(★)**:`Template.sidecars` 默认 `None`、`__post_init__` 经 `normalize_sidecars` 把空列表/坏值归一为 None——`util.fingerprint` 只滤 None,以 `[]` 为默认会使全部存量模板 deploy_ver 变化(全量伪 A 类日落);"显式给默认值"与"省略键"、下发顺序重排、DB JSON 键序重排必须同指纹(规范形 + name 排序保证)。
 
@@ -120,21 +120,23 @@
 
 **resolve(user_id, group_id, bot_id) → (scope_id, Template)**:读单键快照 `routing:snapshot`(1 GET;进程内按原文 memo 免重复解析)→ first-fit 匹配;快照缺失/损坏 → 从 DB 重建;无匹配 → `ConfigNotFound(503)`。
 
-**config_sync(payload)**(场景 M,全量快照式):`{containers: [...], templates: [...], scopes: [...]}` 三段式(旧 kind/op 协议 → 400;无 `containers` 键且模板无 `main_container_id` → legacy 内联路径,过渡期双收)
+**config_sync(payload)**(场景 M,全量快照式):`{containers: [...], templates: [...], scopes: [...]}` 三段式**独占**(无 `containers` 键 → 400;旧 kind/op 协议 → 400)
 
 ```
-锁外校验(纯 CPU 400):kind/op 遗迹拒绝;templates/scopes 非 list;
-  三段式形态一致(payload 有 containers 段 ⇔ 模板有 main_container_id;mixed——
-  引用键与 legacy 内联容器键并存 → 400,防半迁移下发静默生效);
+锁外校验(纯 CPU 400):kind/op 遗迹拒绝;缺 containers 键(legacy 内联载荷,
+  2026-08-31 收紧后拒绝);templates/scopes 非 list;
+  模板缺 main_container_id → 400;mixed(引用键与 legacy 内联容器键并存)
+  → 400,防半迁移下发静默生效;
   容器段:container_id 空/>100/同批重复/未被任何模板引用/同 id 双角色(main+sidecar)
   → 400;逐项按角色 parse_container_spec(见上);
   模板段:缺 template_id/同批重复;引用不在本批 containers;sidecar 引用重复;
-  volumes join(悬挂引用/未挂载卷/多源/NFS 规则);legacy 路径 sidecars 严格校验不变;
-  int 字段严格校验(畸形 "abc" → 400,不裸抛 ValueError 成 500);
+  volumes join(悬挂引用/未挂载卷/多源/NFS 规则);
+  int 字段严格校验(畸形 "abc" → 400,不裸抛 ValueError 成 500;
+  容器级端口/runAs/探针为 K8s 严格 int——数字串不再容忍);
   策略字段下界(cc/pc/ttl ≥1、min_idle ≥0、sse_port 域)——0 值是拒绝服务配置;
-  pod 落位字段校验(run_as_user/group ≥0——对齐 sidecars.py 先例;node_name
-  hostname 形态 ≤253——坏值 Pod 永久 Pending 挂满 ready_timeout 才暴露;
-  node_name 空串归一 None 同未设)
+  pod 落位字段校验(run_as_user/group ≥0;nodeName hostname 形态 ≤253——
+  坏值 Pod 永久 Pending 挂满 ready_timeout 才暴露;空串归一 None 同未设;
+  snake 双形态 node_name → 400,用 K8s 拼写 nodeName)
   scope 段同前(scope_id 字符集/index 拒 bool/引用不在本批模板集/routing_rules
   表达式串语法/重复);缺通配 scope → 仅 WARNING 放行(响应 wildcard_present:false)
 lock:config_sync 串行化(忙→409 CONFIG_SYNC_BUSY,TTL 60)
@@ -143,9 +145,9 @@ lock:config_sync 串行化(忙→409 CONFIG_SYNC_BUSY,TTL 60)
 → 日落中间态检查(★先于写库,拒绝时零副作用;★按版本判定:registered∖candidates
   且 deploy_ver ≠ 新版本的才是真日落残留——该集合差同时是 idle_consider 合法
   中间态,按形状判定会误拒正常空闲 Pod,min_idle≥1 时变配置面永久 409)
-→ 写 DB(顺序:先 upsert 容器(模板引用永不悬挂)→ upsert/delete 模板(按形态选
-  行构造)→ upsert/delete scopes → GC 容器(container_id ∉ 本批 → 删;legacy
-  重放 ⇒ 容器行清空、模板回内联);红线:任一失败立即中止,不 SET 快照、不推送)
+→ 写 DB(顺序:先 upsert 容器(模板引用永不悬挂)→ upsert/delete 模板(三段式
+  形态行)→ upsert/delete scopes → GC 容器(container_id ∉ 本批 → 删;空全量
+  ⇒ 容器行清空);红线:任一失败立即中止,不 SET 快照、不推送)
 → rebuild_snapshot()(DB 读回 → 原子 SET;B 类立即生效由此完成)
 → eager 预热:每个存活 scope 推 push(sid, pool_config, deploy_subset)——必须带 pod_spec
   (RM 才落 pod_spec_json/deploy_ver;autoscale 无请求预热 min_idle 的依赖)

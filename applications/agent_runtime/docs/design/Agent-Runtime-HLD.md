@@ -103,7 +103,7 @@ flowchart TB
 |---|---|---|---|
 | `POST /api/session/route` | `metadata`:session_id / user_id / group_id / bot_id(**四项均必填非空**) | `{ pod_sse_url, pod_id }` | 同步路由 + 占额度(关键路径);按路由规则匹配 scope(§3.1 匹配语义) |
 | `POST /api/session/touch` | `metadata`:session_id | `{ touched:bool }` | 保活 / EOS,刷新老化 |
-| `POST /api/session/config_sync` | `{ containers:[...], templates:[...], scopes:[...] }`(三段式全量快照;过渡期双收 legacy `{templates, scopes}` 内联形态) | `{ ok, templates_synced/deleted, containers_synced/deleted, scopes_synced/deleted, affected_scopes, wildcard_present }` | Claw Manager 全量下发配置(容器列表 + 模板列表 + scope 列表;模板只持容器引用,容器规格集中一张表);旧 `kind/op` 增量协议已废弃(400) |
+| `POST /api/session/config_sync` | `{ containers:[...], templates:[...], scopes:[...] }`(三段式全量快照,**独占**——无 containers 键的 legacy 内联载荷 400) | `{ ok, templates_synced/deleted, containers_synced/deleted, scopes_synced/deleted, affected_scopes, wildcard_present }` | Claw Manager 全量下发配置(容器列表 + 模板列表 + scope 列表;模板只持容器引用,容器规格集中一张表);旧 `kind/op` 增量协议已废弃(400) |
 | `POST /api/session/cleanup` | `{ namespace?, label_selector? }` | `{ cleaned:int }` | 运维批量清 Pod(灾难恢复 / 重新部署),handler 在 Session Manager、委托 `rm_facade.cleanup()` |
 
 - `group_id` 经 `metadata.extra` 传递;`metadata.request_id` 兼作幂等键。
@@ -187,7 +187,7 @@ field    := user_id | group_id | bot_id(固定小写枚举)
 
 **匹配语义**(resolve 权威定义):请求属性 (user_id, group_id, bot_id) 对 scopes 按 `(index ASC, scope_id ASC)` 排序遍历,**首个命中的 scope 即止**(first-fit);scope 命中 = 空 routing_rules(通配)或表达式求值为真;条件求值 = 属性值(缺省 `""`)`in`/`not in` 值集合。引用模板缺失或 `enabled=False` 的 scope 视为不命中,继续落下一个。**下发方保证含一个空表达式的通配 scope 兜底**;服务端缺失时仅 WARNING 放行,运行时无匹配 → 503 `CONFIG_NOT_FOUND`。
 
-**`config_sync` 入参完整 schema**(三段式全量快照,一次请求同时携带三个列表;旧 `kind/op` 协议 400 拒绝;无 `containers` 键且模板无 `main_container_id` → legacy 内联形态,过渡期双收):
+**`config_sync` 入参完整 schema**(三段式全量快照,一次请求同时携带三个列表,**独占**;旧 `kind/op` 协议与无 `containers` 键的 legacy 内联载荷均 400 拒绝):
 
 ```json
 {
@@ -212,7 +212,7 @@ field    := user_id | group_id | bot_id(固定小写枚举)
 ```
 
 - 语义:**以数组为准的全量替换**(upsert 全部 + 删除消失项;容器以本批为集 GC);幂等重放收敛(affected_scopes 为空)。
-- 校验(400 VALIDATION,锁外零副作用):`templates`/`scopes` 非 list;**形态不一致**(payload 有 containers 段 ⇔ 模板有 `main_container_id`;mixed——引用键与 legacy 内联容器键并存);container_id 空/>100/同批重复/未被引用/双角色;容器逐项按角色校验(见 `container` 结构表;未知键/越角色键/不可表示字段);模板引用不在本批 containers;sidecar 引用重复/>8;volumes(重复卷名/多源/无源/悬挂挂载/未挂载卷/`subPath` 非 configMap/NFS 逾界);模板级 int 严格/策略下界/`nodeName` hostname;scope_id 字符集/`index` 拒 bool/引用不在本批模板集/`routing_rules` 表达式语法/同批重复(语法细则见上文)。
+- 校验(400 VALIDATION,锁外零副作用):缺 `containers` 键(legacy 内联载荷);`templates`/`scopes` 非 list;模板缺 `main_container_id`;**mixed**(引用键与 legacy 内联容器键并存);container_id 空/>100/同批重复/未被引用/双角色;容器逐项按角色校验(见 `container` 结构表;未知键/越角色键/不可表示字段);模板引用不在本批 containers;sidecar 引用重复/>8;volumes(重复卷名/多源/无源/悬挂挂载/未挂载卷/`subPath` 非 configMap/NFS 逾界);模板级 int 严格/策略下界/`nodeName` hostname;scope_id 字符集/`index` 拒 bool/引用不在本批模板集/`routing_rules` 表达式语法/同批重复(语法细则见上文)。
 - 每次成功下发都会:重建路由快照(§5.1 `routing:snapshot`)、对每个存活 scope 推 RM 池参数 + pod_spec(**eager 预热**:autoscale 下一拍即预热 min_idle)、对被删 scope 推 `min_idle=0`(自然排空)。
 
 **错误响应体**(所有非 2xx):

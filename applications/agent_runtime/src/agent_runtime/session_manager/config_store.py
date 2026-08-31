@@ -9,8 +9,8 @@
   单键快照 ``routing:snapshot``（scopes+templates 全量 JSON），进程内按
   (index ASC, scope_id ASC) first-fit 求值；快照缺失/损坏 → 从 DB 重建；
 - ``config_sync``：Claw Manager 全量下发入口（场景 M）——``{containers,
-  templates, scopes}`` 三段式快照式替换(过渡期双收 legacy ``{templates,
-  scopes}`` 内联形态;旧 kind/op 增量协议已废弃)。锁内编排：校验 → 日落中间态检查
+  templates, scopes}`` 三段式快照式替换(wire 独占,legacy 内联载荷 400;
+  旧 kind/op 增量协议已废弃)。锁内编排：校验 → 日落中间态检查
   （先于写库,拒绝时零副作用）→ 写 DB → 重建快照 → 逐 scope 推 RM 池参数
   （**始终带 pod_spec**——无请求 scope 的 min_idle 预热依赖它）→ A 类软摘除
   老版本 Pod → 被删 scope 推 min_idle=0 自然排空。
@@ -33,7 +33,6 @@ from openjiuwen_runtime.foundation.db.table_def import (
 )
 
 from ..errors import ConfigNotFound, ConfigSyncBusy, InvalidParams
-from ..mounts import validate_agent_mounts
 from ..sidecars import validate_sidecars
 from ..util import key_unsafe, now_ts, s
 from .container_spec import (
@@ -302,27 +301,6 @@ def _template_from_split_row(row: Any, main_cid: str,
     return Template(**kwargs)
 
 
-def row_from_template(t: Template) -> dict[str, Any]:
-    now = _utcnow()
-    row = {column: getattr(t, field) for field, column in _COLUMN_OF.items()}
-    row["jiuwenclaw_id"] = TENANT_ID
-    # legacy 形态显式清空三段式列(update 不写会残留旧引用 → 误按新形态水合)
-    row["main_container_id"] = None
-    row["sidecar_container_ids"] = None
-    row["volumes"] = None
-    row["created_at"] = now
-    row["updated_at"] = now
-    return row
-
-
-def row_from_template_for_update(t: Template) -> dict[str, Any]:
-    """update 用行：不带 created_at / id（保留原创建时间与自增主键）。"""
-    row = row_from_template(t)
-    row.pop("created_at", None)
-    row.pop("id", None)
-    return row
-
-
 def row_from_template_split(
         t: Template,
         main_container_id: str,
@@ -344,69 +322,6 @@ def row_from_template_split(
         list(sidecar_container_ids) if sidecar_container_ids else None)
     row["volumes"] = volumes_column
     return row
-
-
-def template_from_payload(template_id: str, payload: dict[str, Any]) -> Template:
-    """config_sync 下发的 template dict → Template（未给字段用默认值）。
-
-    int 字段严格校验（畸形值 400，不裸抛 ValueError 破坏 400 契约）；
-    策略字段做语义下界校验（0/负值是拒绝服务配置：pod_concurrency=0 会
-    部满 max_pods 个必然用不上的 Pod 后永久 scope_full）。
-    """
-    defaults = Template(template_id=template_id)
-    kwargs: dict[str, Any] = {"template_id": template_id}
-    for field in _COLUMN_OF:
-        if field == "template_id":
-            continue
-        if field in payload and payload[field] is not None:
-            value = payload[field]
-            if field == "agent_env":
-                if not isinstance(value, dict) or any(
-                        not isinstance(k, str) or not isinstance(v, (str, int, float, bool))
-                        for k, v in value.items()):
-                    raise InvalidParams(
-                        "agent_env must be an object mapping string keys to "
-                        f"scalar values, got {value!r}"
-                    )
-                value = {k: str(v) for k, v in value.items()}
-            elif field in _INT_FIELDS:
-                if isinstance(value, bool) or not isinstance(value, (int, float, str)):
-                    raise InvalidParams(
-                        f"template field {field} must be an integer, got {value!r}"
-                    )
-                try:
-                    value = int(value)
-                except ValueError as exc:
-                    raise InvalidParams(
-                        f"template field {field} must be an integer, got {value!r}"
-                    ) from exc
-            kwargs[field] = value
-        else:
-            kwargs[field] = getattr(defaults, field)
-    _validate_policy_fields(template_id, kwargs)
-    if kwargs.get("node_name") == "":
-        kwargs["node_name"] = None   # 空串与未设同义(渲染侧 or None;指纹同)
-    _validate_pod_placing_fields(template_id, kwargs)
-    # sidecars 严格校验(fail-fast 400;跨字段冲突 = 撞主容器名/撞 agent 端口)。
-    # 空列表与 None 统一归一为 None(deploy_ver 指纹稳定,见 sidecars.py)。
-    sse_port = int(kwargs.get("sse_port") or 8080)
-    kwargs["sidecars"] = validate_sidecars(
-        kwargs.pop("sidecars", None),
-        container_name=str(kwargs.get("container_name") or "agent"),
-        sse_port=sse_port,
-        container_port=int(kwargs.get("container_port") or sse_port),
-    )
-    # 主容器三种卷挂载校验(规范形;mount_path 重复/撞 nfs_mount_path → 400)
-    (kwargs["agent_host_path_mounts"],
-     kwargs["agent_configmap_mounts"],
-     kwargs["agent_pvc_mounts"]) = validate_agent_mounts(
-        kwargs.pop("agent_host_path_mounts", None),
-        kwargs.pop("agent_configmap_mounts", None),
-        kwargs.pop("agent_pvc_mounts", None),
-        nfs_mount_path=kwargs.get("nfs_mount_path"),
-    )
-    return Template(**kwargs)
-
 
 def template_from_split_payload(
         template_id: str,
@@ -579,7 +494,8 @@ class ParsedSync:
     scopes: dict[str, RoutingScopeDef]
     wildcard: bool
 
-# 策略字段下界（0/负值 = 拒绝服务配置，见 template_from_payload docstring）
+# 策略字段下界（0/负值 = 拒绝服务配置：pod_concurrency=0 会部满 max_pods 个
+# 必然用不上的 Pod 后永久 scope_full）
 _POLICY_MINIMUMS = {
     "scope_concurrency": 1,
     "pod_concurrency": 1,
@@ -778,9 +694,10 @@ class ConfigStore:
     def _parse_payload(payload: dict[str, Any]) -> ParsedSync:
         """锁外校验（纯 CPU，确定性 400，写库零副作用）。
 
-        双收:payload 无 ``containers`` 键 → 全部模板走 legacy 内联路径
-        (过渡期兼容,逐字节保留);有 ``containers`` 键 → 三段式,全部模板
-        必须是引用形态(与 legacy 并存 = mixed → 400,防半迁移下发静默生效)。
+        只收三段式(wire 独占,2026-08-31 收紧:legacy 内联载荷 → 400——
+        契约单一形态,不存在「该发哪种」的歧义;DB 旧行的读兼容水合仍在,
+        见 template_from_row)。全部模板必须是引用形态(缺 main_container_id
+        / 引用键与内联容器键并存 → 400,防半迁移下发静默生效)。
         """
         if not isinstance(payload, dict):
             raise InvalidParams("config_sync payload must be an object")
@@ -790,14 +707,19 @@ class ConfigStore:
                 "send {containers: [...], templates: [...], scopes: [...]} "
                 "full snapshot"
             )
+        if "containers" not in payload:
+            raise InvalidParams(
+                "config_sync requires the three-part contract "
+                "{containers, templates, scopes}; legacy inline templates "
+                "are no longer accepted"
+            )
         templates_raw = payload.get("templates")
         scopes_raw = payload.get("scopes")
         if not isinstance(templates_raw, list) or not isinstance(scopes_raw, list):
             raise InvalidParams("templates and scopes must both be lists")
         containers_raw = payload.get("containers")
 
-        # ---- 阶段 1:浅扫模板(定形态 / 收引用),不构造
-        split_form = containers_raw is not None
+        # ---- 阶段 1:浅扫模板(收引用),不构造
         main_refs: dict[str, str] = {}        # tid → main_container_id
         sidecar_refs: dict[str, list[str]] = {}
         for item in templates_raw:
@@ -806,20 +728,14 @@ class ConfigStore:
             tid = str(item.get("template_id") or "")
             if not tid:
                 raise InvalidParams("template item missing template_id")
-            has_ref = item.get("main_container_id") is not None
-            if has_ref != split_form:
+            main_cid = item.get("main_container_id")
+            if not isinstance(main_cid, str) or not main_cid.strip():
                 raise InvalidParams(
-                    f"template {tid!r} form mismatch: payload "
-                    + ("has a containers section but the template has no "
-                       "main_container_id" if split_form else
-                       "has main_container_id but no containers section")
+                    f"template {tid!r} requires a non-empty main_container_id "
+                    "referencing an entry in the containers section"
                 )
-            if split_form:
-                main_refs[tid] = item["main_container_id"]
-                sidecar_refs[tid] = list(item.get("sidecar_container_ids") or [])
-
-        if not split_form:
-            containers_raw = []
+            main_refs[tid] = main_cid
+            sidecar_refs[tid] = list(item.get("sidecar_container_ids") or [])
 
         # ---- 阶段 2:容器逐项按角色校验(角色 = 引用位置;未引用/双角色 → 400)
         main_ids, sidecar_ids = set(main_refs.values()), set().union(
@@ -857,28 +773,20 @@ class ConfigStore:
                 f"{missing}"
             )
 
-        # ---- 阶段 3:构造模板(legacy 路径 / 三段式路径)
+        # ---- 阶段 3:构造模板
         templates_in: dict[str, TemplateSync] = {}
         for item in templates_raw:
             tid = str(item.get("template_id") or "")
             if tid in templates_in:
                 raise InvalidParams(f"duplicate template_id {tid!r}")
-            if split_form:
-                template, volumes = template_from_split_payload(
-                    tid, item, container_specs)
-                templates_in[tid] = TemplateSync(
-                    template=template,
-                    main_container_id=main_refs[tid],
-                    sidecar_container_ids=tuple(sidecar_refs[tid]) or None,
-                    volumes_column=volumes_to_column(volumes),
-                )
-            else:
-                templates_in[tid] = TemplateSync(
-                    template=template_from_payload(tid, item),
-                    main_container_id=None,
-                    sidecar_container_ids=None,
-                    volumes_column=None,
-                )
+            template, volumes = template_from_split_payload(
+                tid, item, container_specs)
+            templates_in[tid] = TemplateSync(
+                template=template,
+                main_container_id=main_refs[tid],
+                sidecar_container_ids=tuple(sidecar_refs[tid]) or None,
+                volumes_column=volumes_to_column(volumes),
+            )
 
         scopes_in: dict[str, RoutingScopeDef] = {}
         for item in scopes_raw:
@@ -943,14 +851,11 @@ class ConfigStore:
 
         # ---- 写 DB（快照式替换；红线：任一失败立即上抛，不动快照、不推送）。
         #      顺序:先容器后模板(模板引用永不悬挂)→ scopes → GC 容器
-        #      (container_id ∉ 本批 → 删;legacy 重放 ⇒ 容器行清空、模板回内联)。
+        #      (container_id ∉ 本批 → 删;空全量 ⇒ 容器行清空)。
         for cid, row in parsed.container_rows.items():
             await self._upsert_container(cid, row)
         for tid, ts in parsed.templates.items():
-            if ts.main_container_id is not None:
-                await self._upsert_template_split(tid, ts)
-            else:
-                await self._upsert_template(ts.template)
+            await self._upsert_template_split(tid, ts)
         for tid in set(old_templates) - set(templates_in):
             await self._db.delete(TEMPLATE_TABLE, {"template_id": tid})
         for scope in scopes_in.values():
@@ -1035,19 +940,6 @@ class ConfigStore:
             )
 
     # ---- template / container DB 存取
-
-    async def _upsert_template(self, template: Template) -> None:
-        """legacy 形态行(全列)。存在性按原始行判定(不水合,免容器表读)。"""
-        existing = await self._db.get(
-            TEMPLATE_TABLE, {"template_id": template.template_id})
-        if existing is not None:
-            await self._db.update(
-                TEMPLATE_TABLE,
-                {"template_id": template.template_id},
-                row_from_template_for_update(template),
-            )
-        else:
-            await self._db.create(TEMPLATE_TABLE, row_from_template(template))
 
     async def _upsert_template_split(self, template_id: str,
                                      ts: TemplateSync) -> None:

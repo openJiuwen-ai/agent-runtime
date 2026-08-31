@@ -196,48 +196,30 @@ class DualReplicas:
     # ------------------------------------------------------------ 播种 / 选主采样
 
     async def seed_template(self, template_id="tpl-1", scope_id=SEED_SCOPE,
-                            *, split=False, **overrides) -> None:
+                            **overrides) -> None:
         """经 B 的 HTTP config_sync 全量下发 template + 通配兜底 scope。
 
-        split=True 走三段式契约(容器段 + 引用形态模板),覆盖双实例下的
-        新形态水合/快照/推送;默认 legacy 内联(过渡期双收回归)。
+        模板用 legacy 内联拼写 + conftest.split_sync_payload 转三段式
+        (wire 独占;转换器做值级等价转换)。
         """
-        if split:
-            payload = {
-                "containers": [{
-                    "container_id": f"c-{template_id}-main",
-                    "name": "agent", "image": "agentserver:1.0",
-                    "ports": [{"name": "sse", "containerPort": 8080}],
-                }],
-                "templates": [{
-                    "template_id": template_id,
-                    "main_container_id": f"c-{template_id}-main",
-                    "namespace": "default",
-                    "scope_concurrency": 3, "pod_concurrency": 2,
-                    "session_ttl": 60, "pod_ttl": 300, "min_idle_pods": 0,
-                    **overrides,
-                }],
-                "scopes": [{"scope_id": scope_id, "index": 0,
-                            "template_id": template_id, "routing_rules": ""}],
-            }
-        else:
-            template = {
-                "agent_image": "agentserver:1.0",
-                "namespace": "default",
-                "scope_concurrency": 3,
-                "pod_concurrency": 2,
-                "session_ttl": 60,
-                "pod_ttl": 300,
-                "min_idle_pods": 0,
-                **overrides,
-            }
-            payload = {
-                "templates": [{"template_id": template_id, **template}],
-                "scopes": [{"scope_id": scope_id, "index": 0,
-                            "template_id": template_id,
-                            "routing_rules": ""}],
-            }
-        status, _, body = await self.post(1, "config_sync", rawdata=payload)
+        from tests.conftest import split_sync_payload
+
+        template = {
+            "agent_image": "agentserver:1.0",
+            "namespace": "default",
+            "scope_concurrency": 3,
+            "pod_concurrency": 2,
+            "session_ttl": 60,
+            "pod_ttl": 300,
+            "min_idle_pods": 0,
+            **overrides,
+        }
+        status, _, body = await self.post(
+            1, "config_sync",
+            rawdata=split_sync_payload(
+                [{"template_id": template_id, **template}],
+                [{"scope_id": scope_id, "index": 0,
+                  "template_id": template_id, "routing_rules": ""}]))
         assert status == 200, body
 
     async def sample_election(self, job: str, duration: float,

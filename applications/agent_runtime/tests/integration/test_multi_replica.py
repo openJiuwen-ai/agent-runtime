@@ -336,13 +336,15 @@ async def test_config_sync_on_b_takes_effect_on_a(dual):
     snapshot_key = f"{SM}routing:snapshot"
     ver_before = await dual.get(snapshot_key)
 
+    from tests.conftest import split_sync_payload
+
     status, _, body = await dual.post(
         1, "config_sync",
-        rawdata={"templates": [{"template_id": "tpl-1",
-                                "agent_image": "agentserver:1.0",
-                                "namespace": "default", "session_ttl": 90}],
-                 "scopes": [{"scope_id": scope, "index": 0,
-                             "template_id": "tpl-1", "routing_rules": ""}]})
+        rawdata=split_sync_payload(
+            [{"template_id": "tpl-1", "agent_image": "agentserver:1.0",
+              "namespace": "default", "session_ttl": 90}],
+            [{"scope_id": scope, "index": 0,
+              "template_id": "tpl-1", "routing_rules": ""}]))
     assert status == 200, body
     assert await dual.redis.exists(snapshot_key) == 1
     assert await dual.get(snapshot_key) != ver_before   # 快照已覆盖
@@ -453,7 +455,7 @@ async def test_concurrent_sweepers_converge_clean(dual):
 async def test_split_contract_sync_on_b_routes_on_a(dual):
     """三段式契约经 B 下发(容器表落库+新形态模板行)→ A 水合同一快照路由成功,
     且 RM cfg 的 deploy_ver 与快照一致(暖复用前提,阶段 11b 同款不变量)。"""
-    await dual.seed_template(split=True)
+    await dual.seed_template()
     scope = scope_of()
     status, raw, body = await dual.post(0, "route", session_id="sp1")
     assert status == 200, body

@@ -57,12 +57,14 @@ TEMPLATE = {
 
 def _seed_and_route(client):
     """config_sync 全量下发 template + 通配兜底 scope,再 route 一个会话。"""
+    from tests.conftest import split_sync_payload
+
     client.post("/api/session/config_sync", json=_envelope(
-        "config_sync", rawdata={
-            "templates": [{"template_id": "tpl-debug", **TEMPLATE}],
-            "scopes": [{"scope_id": SCOPE_ID, "index": 0,
-                        "template_id": "tpl-debug", "routing_rules": ""}],
-        }))
+        "config_sync", rawdata=split_sync_payload(
+            [{"template_id": "tpl-debug", **TEMPLATE}],
+            [{"scope_id": SCOPE_ID, "index": 0,
+              "template_id": "tpl-debug", "routing_rules": ""}],
+        )))
     resp = client.post("/api/session/route", json=_envelope(
         "route", session_id="sess-debug", group_id="grp", bot_id="bot"))
     assert resp.status_code == 200, resp.text

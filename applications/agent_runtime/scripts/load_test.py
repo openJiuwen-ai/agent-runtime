@@ -205,7 +205,7 @@ async def _cleanup_config(client: httpx.AsyncClient, base: str, run: str,
         "type": "config_sync",
         "metadata": {"request_id": f"clean-{run}", "session_id": None,
                      "bot_id": "loadbot", "extra": {"group_id": "x"}},
-        "rawdata": {"templates": [], "scopes": []},
+        "rawdata": {"containers": [], "templates": [], "scopes": []},
     })
     print(f"[cleanup] 已清空本次 run 的 {len(scopes)} 个 scope / {len(tpl_ids)} 个模板；"
           f"会话与 AgentServer Pod 留待 TTL 老化（不动 cleanup 端点）")
