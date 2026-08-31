@@ -72,6 +72,11 @@ def _check_resource_name(value: Any, where: str, key: str) -> str:
     return value
 
 
+def check_resource_name(value: Any, where: str) -> str:
+    """公开别名:K8s 资源名校验(ConfigMap/Secret/PVC 名共用,envFrom ref 复用)。"""
+    return _check_resource_name(value, where, "name")
+
+
 def _unknown_keys(item: dict, kind: str, where: str) -> None:
     unknown = set(item) - _MOUNT_KEYS_BY_TYPE[kind]
     if unknown:

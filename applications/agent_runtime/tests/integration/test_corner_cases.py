@@ -83,16 +83,18 @@ async def test_session_moving_scope_recycles_active_binding(runtime):
     （LUA_ROUTE_PLACE 分支 3，scope 变化路径），新 scope 正常部署。"""
     await runtime.seed_template()                      # 通配兜底 scope → tpl-1
     # 追加一个按 group 命中的 scope(index 0 优先于兜底)
-    await runtime.config_store.config_sync({
-        "templates": [{"template_id": "tpl-1", "agent_image": "agentserver:1.0",
-                       "namespace": "default"}],
-        "scopes": [
+    from tests.conftest import split_sync_payload
+
+    await runtime.config_store.config_sync(split_sync_payload(
+        [{"template_id": "tpl-1", "agent_image": "agentserver:1.0",
+          "namespace": "default"}],
+        [
             {"scope_id": "scope-ga", "index": 0, "template_id": "tpl-1",
              "routing_rules": "group_id in ('ga')"},
             {"scope_id": SCOPE, "index": 100, "template_id": "tpl-1",
              "routing_rules": ""},
         ],
-    })
+    ))
     scope2 = "scope-ga"
 
     first = await runtime.route("sess_1", group_id="grp", request_id="req-move-1")
@@ -306,8 +308,10 @@ def test_normalize_phase_priority_matrix():
 @requires_lua
 async def test_resolve_index_priority_first_fit_matrix(runtime):
     """index 从小到大 first-fit 矩阵:index 顺序 / AND / not_in / 通配兜底。"""
-    await runtime.config_store.config_sync({
-        "templates": [
+    from tests.conftest import split_sync_payload
+
+    await runtime.config_store.config_sync(split_sync_payload(
+        [
             {"template_id": "tpl-vip", "agent_image": "a:vip",
              "namespace": "default", "session_ttl": 61},
             {"template_id": "tpl-ban", "agent_image": "a:ban",
@@ -315,7 +319,7 @@ async def test_resolve_index_priority_first_fit_matrix(runtime):
             {"template_id": "tpl-fb", "agent_image": "a:fb",
              "namespace": "default", "session_ttl": 63},
         ],
-        "scopes": [
+        [
             # index 0:vip = user 白名单 AND group 白名单 AND bot 不在黑名单
             {"scope_id": "s-vip", "index": 0, "template_id": "tpl-vip",
              "routing_rules": (
@@ -329,7 +333,7 @@ async def test_resolve_index_priority_first_fit_matrix(runtime):
             {"scope_id": "s-fb", "index": 100, "template_id": "tpl-fb",
              "routing_rules": ""},
         ],
-    })
+    ))
 
     async def _hit(user, group, bot):
         scope_id, template = await runtime.config_store.resolve(user, group, bot)
@@ -348,20 +352,22 @@ async def test_resolve_index_priority_first_fit_matrix(runtime):
 @requires_lua
 async def test_resolve_skips_disabled_template_and_falls_back(runtime):
     """enabled=False 的模板视为未命中 → 落到下一个 index 的 scope。"""
-    await runtime.config_store.config_sync({
-        "templates": [
+    from tests.conftest import split_sync_payload
+
+    await runtime.config_store.config_sync(split_sync_payload(
+        [
             {"template_id": "tpl-off", "agent_image": "a:off",
              "namespace": "default", "enabled": False},
             {"template_id": "tpl-ok", "agent_image": "a:ok",
              "namespace": "default"},
         ],
-        "scopes": [
+        [
             {"scope_id": "s-off", "index": 0, "template_id": "tpl-off",
              "routing_rules": ""},
             {"scope_id": "s-ok", "index": 100, "template_id": "tpl-ok",
              "routing_rules": ""},
         ],
-    })
+    ))
     scope_id, template = await runtime.config_store.resolve("u", "g", "b")
     assert (scope_id, template.template_id) == ("s-ok", "tpl-ok")
 
@@ -373,7 +379,7 @@ async def test_template_removed_from_payload_scope_stops_matching(runtime):
     await runtime.route("sess_1")
 
     result = await runtime.config_store.config_sync(
-        {"templates": [], "scopes": []})
+        {"containers": [], "templates": [], "scopes": []})
 
     assert result["templates_deleted"] == 1 and result["scopes_deleted"] == 1
     with pytest.raises(ConfigNotFound):

@@ -36,6 +36,7 @@ from .resource_manager.state import ResourceState
 from .resource_manager.sweeper import ResourceSweeper
 from .session_manager.config_store import (
     ROUTING_SCOPE_TABLE_DEF,
+    SERVICE_CONFIG_CONTAINER_TABLE_DEF,
     SERVICE_CONFIG_TEMPLATE_TABLE_DEF,
     ConfigStore,
 )
@@ -120,7 +121,9 @@ class OrchestratorSystemContext(SystemContext):
             db=db,
             settings=settings,
             key_prefix=SM_KEY_PREFIX,
-            table_definitions=[SERVICE_CONFIG_TEMPLATE_TABLE_DEF, ROUTING_SCOPE_TABLE_DEF],
+            table_definitions=[SERVICE_CONFIG_TEMPLATE_TABLE_DEF,
+                               SERVICE_CONFIG_CONTAINER_TABLE_DEF,
+                               ROUTING_SCOPE_TABLE_DEF],
             instance_id=instance_id,
             _owns_db=owns_resources,
             _owns_redis=owns_resources,

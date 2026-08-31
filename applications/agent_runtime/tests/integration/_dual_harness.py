@@ -197,7 +197,13 @@ class DualReplicas:
 
     async def seed_template(self, template_id="tpl-1", scope_id=SEED_SCOPE,
                             **overrides) -> None:
-        """经 B 的 HTTP config_sync 全量下发 template + 通配兜底 scope。"""
+        """经 B 的 HTTP config_sync 全量下发 template + 通配兜底 scope。
+
+        模板用 legacy 内联拼写 + conftest.split_sync_payload 转三段式
+        (wire 独占;转换器做值级等价转换)。
+        """
+        from tests.conftest import split_sync_payload
+
         template = {
             "agent_image": "agentserver:1.0",
             "namespace": "default",
@@ -210,10 +216,10 @@ class DualReplicas:
         }
         status, _, body = await self.post(
             1, "config_sync",
-            rawdata={"templates": [{"template_id": template_id, **template}],
-                     "scopes": [{"scope_id": scope_id, "index": 0,
-                                 "template_id": template_id,
-                                 "routing_rules": ""}]})
+            rawdata=split_sync_payload(
+                [{"template_id": template_id, **template}],
+                [{"scope_id": scope_id, "index": 0,
+                  "template_id": template_id, "routing_rules": ""}]))
         assert status == 200, body
 
     async def sample_election(self, job: str, duration: float,
@@ -251,6 +257,7 @@ async def dual(tmp_path, monkeypatch):
 
     from agent_runtime.session_manager.config_store import (
         ROUTING_SCOPE_TABLE_DEF,
+        SERVICE_CONFIG_CONTAINER_TABLE_DEF,
         SERVICE_CONFIG_TEMPLATE_TABLE_DEF,
     )
 
@@ -265,6 +272,7 @@ async def dual(tmp_path, monkeypatch):
     db = SQLiteHandler(str(tmp_path / "dual.db"))
     await db.connect()
     await db.init_table(SERVICE_CONFIG_TEMPLATE_TABLE_DEF)
+    await db.init_table(SERVICE_CONFIG_CONTAINER_TABLE_DEF)
     await db.init_table(ROUTING_SCOPE_TABLE_DEF)
     k8s = SlowFakeK8sPodClient(FakeK8sPodClient())
 

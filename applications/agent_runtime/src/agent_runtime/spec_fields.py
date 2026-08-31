@@ -24,6 +24,7 @@ DEPLOY_FIELDS: tuple[str, ...] = (
     "sse_path",
     "health_path",          # readiness 探针路径(默认 /health;真 AgentServer 为 /api/v1/health)
     "agent_env",            # Agent 容器注入的 env(如 AGENT_HTTP_ENABLED/HOST/PORT)
+    "agent_env_from",       # envFrom 引用(secretRef/configMapRef;None 不进指纹——存量零扰动)
     "image_pull_policy",
     "readiness_initial_delay",
     "readiness_period",

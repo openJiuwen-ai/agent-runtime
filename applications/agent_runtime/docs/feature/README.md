@@ -17,6 +17,7 @@
 
 | 日期 | 文档 | 一句话 |
 |---|---|---|
+| 2026-08 | [容器表拆分 + config_sync 三段式契约(K8s 原生形态)](2026-08-container-table-split.md) | 容器规格归一 `service_config_container`(模板持引用)+ volumes/volumeMounts 分离 + **envFrom(secretRef/configMapRef)支持**;wire 三段式**独占**;同值必同 deploy_ver(395 用例 + 真环境 e2e 80/80) |
 | 2026-08 | [诊断端点更名 /debug → /visualization](2026-08-visualization-endpoints-rename.md) | 对外名称去敏感化,行为零变化;模块/标识符/路由/测试/文档全量同步,306 用例通过 |
 | 2026-08 | [Template 扩展 pod 落位字段 + PVC 同 claim 去重](2026-08-pod-placing-fields.md) | node_name/run_as_user/group(A 类,默认 None 指纹零漂移;联调决策 2026-08-29 确认,与 fs_group 回退不冲突)+ pvc_seen 跨容器共享卷;收尾补校验(≥0/hostname/空串归一)与 9 用例 |
 | 2026-08 | [e2e 全量真实规格阶段(--with-mounts)](2026-08-e2e-full-mounts-stage.md) | 三挂载/PVC「已 Bound 复用缺失供给」/特权四件套逐字段断言;抓到真镜像 uid=1000 写 root 属主 PVC 被拒(OPEN)+ volumeName 不可变撞环境预置(已修);双真镜像门禁 104/105 |

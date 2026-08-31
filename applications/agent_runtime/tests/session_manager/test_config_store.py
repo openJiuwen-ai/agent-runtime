@@ -4,16 +4,19 @@ eager 预热推送 / A-B 类扩散 / 409 / 红线（场景 M）。"""
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import pytest
 
 from agent_runtime.errors import ConfigNotFound, ConfigSyncBusy, InvalidParams
-from tests.conftest import requires_lua
+from tests.conftest import requires_lua, split_sync_payload
 
 SCOPE = "scope-main"
 
 
 def _payload(templates: list[dict], scopes: list[dict]) -> dict:
-    return {"templates": templates, "scopes": scopes}
+    """legacy 内联模板构造 → 三段式载荷(wire 独占;转换器见 conftest)。"""
+    return split_sync_payload(templates, scopes)
 
 
 def _tpl(template_id: str, **overrides) -> dict:
@@ -324,7 +327,7 @@ async def test_config_sync_busy_rejects_concurrent(runtime):
     )
     with pytest.raises(ConfigSyncBusy):
         await runtime.config_store.config_sync(
-            {"templates": [_tpl("x")], "scopes": [_scope("s", "x")]}
+            _payload([_tpl("x")], [_scope("s", "x")])
         )
 
 
@@ -436,13 +439,17 @@ async def test_config_sync_persists_and_roundtrips_sidecars(runtime):
 
 @requires_lua
 async def test_config_sync_rejects_invalid_sidecars_without_side_effect(runtime):
-    """坏 sidecars → InvalidParams 400;锁外校验零副作用(DB 无行)。"""
-    bad = dict(_SIDECAR, capabilites_add=["SYS_ADMIN"])  # 拼错键
+    """坏 sidecar 容器(拼错键)→ InvalidParams 400;锁外校验零副作用(DB 无行)。"""
     with pytest.raises(InvalidParams, match="unknown keys"):
-        await runtime.config_store.config_sync(_payload(
-            [_tpl("tpl-bad", sidecars=[bad])],
-            [_scope(SCOPE, "tpl-bad")],
-        ))
+        await runtime.config_store.config_sync({
+            "containers": [
+                _main_container(),
+                {"container_id": "c-bad-sc", "name": "box", "image": "x:1",
+                 "securityContext": {"capabilitesAdd": ["SYS_ADMIN"]}},  # 拼错键
+            ],
+            "templates": [_split_tpl("tpl-bad", sidecars=["c-bad-sc"])],
+            "scopes": [_scope(SCOPE, "tpl-bad")],
+        })
     assert await runtime.config_store.get_template("tpl-bad") is None
 
 
@@ -450,11 +457,12 @@ async def test_config_sync_rejects_invalid_sidecars_without_side_effect(runtime)
 
 @requires_lua
 async def test_config_sync_persists_and_roundtrips_pod_placing_fields(runtime):
-    """node_name/run_as_user/run_as_group 下发 → DB → get_template 回读;
-    deploy_subset 携带(进 deploy_ver 指纹,A 类);数字串容忍转 int。"""
+    """nodeName/runAsUser/runAsGroup 下发 → DB → get_template 回读;
+    deploy_subset 携带(进 deploy_ver 指纹,A 类)。wire 为 K8s 严格 int
+    (数字串不再容忍——legacy 内联时代的 _INT_FIELDS 宽容随收紧移除)。"""
     await runtime.config_store.config_sync(_payload(
         [_tpl("tpl-pin", node_name="ecs-38b3-0001",
-              run_as_user="1000", run_as_group=1000)],   # str 也收(_INT_FIELDS)
+              run_as_user=1000, run_as_group=1000)],
         [_scope(SCOPE, "tpl-pin")],
     ))
     t = await runtime.config_store.get_template("tpl-pin")
@@ -471,8 +479,8 @@ async def test_config_sync_rejects_malformed_pod_placing_fields(runtime):
     for field, bad, match in (
             ("run_as_user", True, "must be an integer"),
             ("run_as_user", "abc", "must be an integer"),
-            ("run_as_user", -1, "must be >= 0"),
-            ("run_as_group", -2, "must be >= 0"),
+            ("run_as_user", -1, "must be an integer"),
+            ("run_as_group", -2, "must be an integer"),
             ("node_name", "bad node", "must be a hostname"),
             ("node_name", "a" * 254, "must be a hostname"),
             ("node_name", 123, "must be a hostname"),
@@ -662,3 +670,284 @@ def test_template_from_row_normalizes_agent_mounts():
     assert template_from_row(
         _row(agent_pvc_mounts=[{"claim_name": "p", "mount_path": "/v"}])
     ).agent_pvc_mounts == [{"claim_name": "p", "mount_path": "/v", "read_only": False}]
+
+
+# -------------------------------------------------------------- 三段式契约(容器表拆分)
+
+def _main_container(container_id="c-main-1", **overrides) -> dict:
+    return {"container_id": container_id, "name": "agent",
+            "image": "agentserver:1.0",
+            "ports": [{"name": "sse", "containerPort": 8086}],
+            "imagePullPolicy": "IfNotPresent", **overrides}
+
+
+def _split_tpl(template_id, main_cid="c-main-1", sidecars=None, **overrides):
+    return {"template_id": template_id, "main_container_id": main_cid,
+            "sidecar_container_ids": sidecars or [],
+            "namespace": "default", **overrides}
+
+
+def _split_payload(containers, templates, scopes=None):
+    return {"containers": containers, "templates": templates,
+            "scopes": scopes if scopes is not None else [
+                {"scope_id": "scope-main", "index": 0,
+                 "template_id": templates[0]["template_id"],
+                 "routing_rules": ""}]}
+
+
+@requires_lua
+async def test_split_contract_deploy_ver_identical_to_inline(runtime):
+    """★承重:三段式水合 Template == 逐字段等价的内联构造 → deploy_ver/快照
+    JSON 逐字节相等。内联腿改为直接构造 Template(wire 层已收紧,legacy
+    载荷不可再下发;双路径等价性在 2026-08-31 收紧前经实测锁定)。"""
+    from agent_runtime.session_manager.models import Template
+    from agent_runtime.session_manager.routing import template_to_json
+    from agent_runtime.sidecars import validate_sidecars
+
+    # 三段式下发(含 sidecar + env + 资源 + 探针 + 挂载)
+    containers = [
+        _main_container(
+            env=[{"name": "K", "value": "v"}],
+            resources={"requests": {"cpu": "500m"}},
+            securityContext={"runAsUser": 1000},
+            readinessProbe={"httpGet": {"path": "/api/v1/health"},
+                            "periodSeconds": 7},
+            volumeMounts=[{"name": "cfg", "mountPath": "/etc/agent"}]),
+        {"container_id": "c-box-1", "name": "jiuwenbox", "image": "box:1",
+         "ports": [{"containerPort": 8321}], "securityContext": {"privileged": True},
+         "volumeMounts": [{"name": "hp", "mountPath": "/m"}]},
+    ]
+    templates = [_split_tpl(
+        "tpl-x", sidecars=["c-box-1"],
+        volumes=[{"name": "cfg", "configMap": {"name": "agent-cm"}},
+                 {"name": "hp", "hostPath": {"path": "/h"}}])]
+    await runtime.config_store.config_sync(
+        _split_payload(containers, templates))
+    split_template = await runtime.config_store.get_template("tpl-x")
+    assert split_template is not None
+
+    # 逐字段等价的内联构造(等值基准)
+    inline_template = Template(
+        template_id="tpl-x",
+        agent_image="agentserver:1.0", sse_port=8086, container_port=8086,
+        agent_env={"K": "v"}, agent_cpu_request="500m", run_as_user=1000,
+        health_path="/api/v1/health", readiness_period=7,
+        agent_configmap_mounts=[{
+            "config_map_name": "agent-cm", "mount_path": "/etc/agent",
+            "sub_path": None, "items": None, "read_only": True}],
+        sidecars=validate_sidecars([{
+            "name": "jiuwenbox", "image": "box:1", "port": 8321,
+            "privileged": True,
+            "host_path_mounts": [{"host_path": "/h", "mount_path": "/m",
+                                  "read_only": False, "host_path_type": None}]}],
+            container_name="agent", sse_port=8086, container_port=8086),
+    )
+    assert split_template.deploy_ver() == inline_template.deploy_ver()
+    assert template_to_json(split_template) == template_to_json(inline_template)
+
+
+@requires_lua
+async def test_split_sync_persists_rows_and_routes(runtime):
+    """三段式落库:模板行只持引用与 volumes,容器行齐;route 正常出 sse_url。"""
+    result = await runtime.config_store.config_sync(_split_payload(
+        [_main_container()], [_split_tpl("tpl-s")]))
+    assert result["containers_synced"] == 1
+    assert result["containers_deleted"] == 0
+
+    from agent_runtime.session_manager.config_store import (
+        CONTAINER_TABLE, TEMPLATE_TABLE)
+    row = await runtime.db.get(TEMPLATE_TABLE, {"template_id": "tpl-s"})
+    assert row.main_container_id == "c-main-1"
+    assert row.sidecar_container_ids is None          # 空列表归一 None
+    assert row.volumes is None
+    assert row.agent_image == ""                      # legacy 列死值
+    crow = await runtime.db.get(CONTAINER_TABLE, {"container_id": "c-main-1"})
+    assert crow is not None and crow.image == "agentserver:1.0"
+
+    outcome = await runtime.route("s1")
+    assert outcome["pod_sse_url"].startswith("http://")
+
+
+@requires_lua
+async def test_container_image_change_updates_deploy_ver(runtime):
+    """容器镜像变更 → A 类(deploy_ver 变化 + 新 pod_spec 推送)。"""
+    await runtime.config_store.config_sync(_split_payload(
+        [_main_container()], [_split_tpl("tpl-a")]))
+    old = await runtime.config_store.get_template("tpl-a")
+    await runtime.config_store.config_sync(_split_payload(
+        [_main_container(image="agentserver:2.0")], [_split_tpl("tpl-a")]))
+    new = await runtime.config_store.get_template("tpl-a")
+    assert new.deploy_ver() != old.deploy_ver()
+    assert new.agent_image == "agentserver:2.0"
+    # 最后一拍推送带新 pod_spec(RM 侧 pod_spec_json/deploy_ver 收敛)
+    scope_id, pool, pod_spec = runtime.pool_pushes[-1]
+    assert pod_spec["agent_image"] == "agentserver:2.0"
+
+
+@requires_lua
+async def test_container_gc_removes_unreferenced_rows(runtime):
+    """全量替换语义:本批未出现的容器行被删(containers_deleted 计数)。"""
+    from agent_runtime.session_manager.config_store import CONTAINER_TABLE
+
+    containers = [_main_container(), _main_container("c-unused")]
+    # c-unused 未被引用 → 整个 payload 400(零副作用)
+    with pytest.raises(InvalidParams, match=r"not referenced"):
+        await runtime.config_store.config_sync(_split_payload(
+            containers, [_split_tpl("tpl-g")]))
+
+    containers = [_main_container(),
+                  {"container_id": "c-box-9", "name": "box9", "image": "b:1"}]
+    await runtime.config_store.config_sync(_split_payload(
+        containers, [_split_tpl("tpl-g", sidecars=["c-box-9"])]))
+    # 再下发去掉 sidecar 引用 → c-box-9 被 GC
+    result = await runtime.config_store.config_sync(_split_payload(
+        [_main_container()], [_split_tpl("tpl-g")]))
+    assert result["containers_deleted"] == 1
+    assert await runtime.db.get(
+        CONTAINER_TABLE, {"container_id": "c-box-9"}) is None
+
+
+@requires_lua
+async def test_container_shared_across_templates(runtime):
+    """同容器 + 同卷被多模板引用:各 hydration 正确,行唯一。"""
+    containers = [
+        _main_container(volumeMounts=[{"name": "hp", "mountPath": "/m"}]),
+        {"container_id": "c-s", "name": "sharer", "image": "s:1"},
+    ]
+    volumes = [{"name": "hp", "hostPath": {"path": "/h"}}]
+    templates = [
+        _split_tpl("tpl-1", sidecars=["c-s"], volumes=volumes),
+        _split_tpl("tpl-2", main_cid="c-main-1", sidecars=["c-s"],
+                   volumes=volumes),
+    ]
+    await runtime.config_store.config_sync(_split_payload(containers, templates))
+    for tid in ("tpl-1", "tpl-2"):
+        t = await runtime.config_store.get_template(tid)
+        assert t is not None
+        assert t.agent_host_path_mounts == [
+            {"host_path": "/h", "mount_path": "/m", "read_only": False,
+             "host_path_type": None}]
+        assert [sc["name"] for sc in t.sidecars] == ["sharer"]
+
+
+@requires_lua
+async def test_split_form_rejections_zero_side_effect(runtime):
+    """legacy 载荷/mixed/悬挂引用/双角色/缺引用键 → 400 且 DB/快照零变化。"""
+    from agent_runtime.session_manager.config_store import CONTAINER_TABLE
+
+    await runtime.seed_template("tpl-base", scope_id="scope-main")
+    snapshot_before = await runtime.redis.get(
+        runtime.sm_state.k.routing_snapshot())
+    templates_before = await runtime.db.list_records(
+        "service_config_template", limit=100)
+    containers_before = await runtime.db.list_records(CONTAINER_TABLE, limit=100)
+
+    # legacy 内联载荷(wire 独占收紧后拒绝;空载荷同样要求三键)
+    with pytest.raises(InvalidParams, match=r"three-part contract"):
+        await runtime.config_store.config_sync(
+            {"templates": [_tpl("tpl-m")], "scopes": [_scope(SCOPE, "tpl-m")]})
+    with pytest.raises(InvalidParams, match=r"three-part contract"):
+        await runtime.config_store.config_sync(
+            {"templates": [], "scopes": []})
+    with pytest.raises(InvalidParams, match=r"mixes container references"):
+        await runtime.config_store.config_sync(_split_payload(
+            [_main_container()],
+            [{"template_id": "tpl-m", "main_container_id": "c-main-1",
+              "agent_image": "leak:1"}]))
+    with pytest.raises(InvalidParams, match=r"not present in the payload"):
+        await runtime.config_store.config_sync(_split_payload(
+            [], [_split_tpl("tpl-m", main_cid="c-ghost")]))
+    with pytest.raises(InvalidParams, match=r"both main and sidecar"):
+        await runtime.config_store.config_sync(_split_payload(
+            [_main_container()],
+            [_split_tpl("tpl-m", sidecars=["c-main-1"])]))
+    # containers 段在但模板缺 main_container_id → 400
+    with pytest.raises(InvalidParams, match=r"requires a non-empty main_container_id"):
+        await runtime.config_store.config_sync({
+            "containers": [_main_container()],
+            "templates": [_tpl("tpl-m")],
+            "scopes": [_scope(SCOPE, "tpl-m")]})
+
+    assert await runtime.redis.get(
+        runtime.sm_state.k.routing_snapshot()) == snapshot_before
+    after = await runtime.db.list_records(
+        "service_config_template", limit=100)
+    assert len(after) == len(templates_before)
+    containers_after = await runtime.db.list_records(CONTAINER_TABLE, limit=100)
+    assert {c.container_id for c in containers_after} \
+        == {c.container_id for c in containers_before}
+
+
+@requires_lua
+async def test_new_form_row_with_missing_container_skipped(runtime):
+    """引用损坏(容器行缺失)→ 整模板跳过,get_template None,引用 scope 不命中。"""
+    from agent_runtime.session_manager.config_store import (
+        ROUTING_SCOPE_TABLE, TEMPLATE_TABLE)
+
+    await runtime.seed_template("tpl-ok", scope_id="scope-ok")
+    # 直插一条引用幽灵容器的新形态行(手删 DB/GC 误删形态)+ 指向它的 scope
+    await runtime.db.create(TEMPLATE_TABLE, {
+        "template_id": "tpl-ghost", "jiuwenclaw_id": "",
+        "template_name": "", "agent_image": "", "namespace": "default",
+        "pod_name": "agentserver", "container_name": "agent",
+        "container_port": 8080, "port_name": "http", "sse_port": 8080,
+        "sse_path": "/sse", "health_path": "/health",
+        "image_pull_policy": "IfNotPresent",
+        "readiness_initial_delay": 5, "readiness_period": 5,
+        "ready_timeout": 300, "ready_poll_interval": 2,
+        "session_concurrency": 3, "service_concurrency": 2,
+        "service_ttl": 300, "session_ttl": 60, "min_idle_services": 0,
+        "message_timeout": 600, "enabled": True,
+        "main_container_id": "c-missing", "sidecar_container_ids": None,
+        "volumes": None,
+        "created_at": datetime.utcnow(), "updated_at": datetime.utcnow(),
+    })
+    await runtime.db.create(ROUTING_SCOPE_TABLE, {
+        "jiuwenclaw_id": "", "scope_id": "scope-ghost", "match_index": -1,
+        "template_id": "tpl-ghost", "routing_rules": "user_id in ('ghost-u')",
+        "created_at": datetime.utcnow(), "updated_at": datetime.utcnow(),
+    })
+    await runtime.config_store.rebuild_snapshot()
+    assert await runtime.config_store.get_template("tpl-ghost") is None
+    # 指向幽灵模板的 scope 被跳过 → 落到通配兜底(tpl-ok 正常)。
+    # 若坏模板未被跳过,快照携带空镜像模板会路由出不可部署的 Pod。
+    _, template = await runtime.config_store.resolve("ghost-u", "g", "b")
+    assert template.template_id == "tpl-ok"
+
+
+@requires_lua
+@requires_lua
+async def test_legacy_payload_rejected_after_split_rows(runtime):
+    """wire 独占:legacy 内联载荷 → 400,已落库的新形态行原样保留。"""
+    from agent_runtime.session_manager.config_store import CONTAINER_TABLE
+
+    await runtime.config_store.config_sync(_split_payload(
+        [_main_container()], [_split_tpl("tpl-d")]))
+    assert await runtime.db.get(
+        CONTAINER_TABLE, {"container_id": "c-main-1"}) is not None
+
+    with pytest.raises(InvalidParams, match=r"three-part contract"):
+        await runtime.config_store.config_sync(
+            {"templates": [_tpl("tpl-d", agent_image="agentserver:9.9")],
+             "scopes": [_scope(SCOPE, "tpl-d")]})
+    # 拒绝零副作用:容器行与模板行都未被改动
+    assert await runtime.db.get(
+        CONTAINER_TABLE, {"container_id": "c-main-1"}) is not None
+    t = await runtime.config_store.get_template("tpl-d")
+    assert t is not None and t.agent_image == "agentserver:1.0"
+
+
+@requires_lua
+async def test_split_template_node_name_wire_alias(runtime):
+    """nodeName(K8s 拼写)→ node_name 生效;snake 双形态 → 400(防静默二义)。
+
+    2026-08-31 真实踩点:运维脚本切三段式时 nodeName 被静默丢弃、节点绑定
+    失效——K8s 拼写键必须有显式翻译与测试。
+    """
+    await runtime.config_store.config_sync(_split_payload(
+        [_main_container()], [_split_tpl("tpl-nn", nodeName="arm-master")]))
+    t = await runtime.config_store.get_template("tpl-nn")
+    assert t is not None and t.node_name == "arm-master"
+    with pytest.raises(InvalidParams, match=r"k8s wire spelling"):
+        await runtime.config_store.config_sync(_split_payload(
+            [_main_container()], [_split_tpl("tpl-nn2", node_name="arm-master")]))

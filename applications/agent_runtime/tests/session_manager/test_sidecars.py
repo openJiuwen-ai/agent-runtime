@@ -309,3 +309,82 @@ def test_sidecar_rejects_bad_configmap_mount():
         _validate([{"name": "box", "image": "x:1",
                     "configmap_mounts": [{"config_map_name": "Bad!",
                                           "mount_path": "/cfg"}]}])
+
+
+# -------------------------------------------------------------- envFrom(引用注入)
+
+def test_env_from_canonical_matrix():
+    from agent_runtime.sidecars import canonical_env_from
+    # 合法形态 → 规范形(prefix 恒存、ref 填满 name/optional)
+    assert canonical_env_from(None, "e") is None
+    assert canonical_env_from([], "e") is None
+    assert canonical_env_from(
+        [{"secret_ref": {"name": "agent-secret"}}], "e") == [
+            {"prefix": None, "secret_ref": {"name": "agent-secret", "optional": False}}]
+    assert canonical_env_from(
+        [{"prefix": "DB_", "config_map_ref": {"name": "cm-1", "optional": True}}], "e") == [
+            {"prefix": "DB_", "config_map_ref": {"name": "cm-1", "optional": True}}]
+
+
+@pytest.mark.parametrize("value,match", [
+    ("x", r"list"),
+    ([42], r"object"),
+    ([{}], r"exactly one"),
+    ([{"secret_ref": {"name": "s"}, "config_map_ref": {"name": "c"}}], r"exactly one"),
+    ([{"prefix": "P", "unknown": 1}], r"unknown keys"),
+    ([{"secret_ref": "s"}], r"object"),
+    ([{"secret_ref": {}}], r"resource name"),
+    ([{"secret_ref": {"name": "Bad_Name"}}], r"resource name"),
+    ([{"secret_ref": {"name": "s", "extra": 1}}], r"unknown keys"),
+    ([{"secret_ref": {"name": "s", "optional": "yes"}}], r"boolean"),
+    ([{"prefix": "", "secret_ref": {"name": "s"}}], r"prefix"),
+    ([{"prefix": "1A", "secret_ref": {"name": "s"}}], r"prefix"),
+    ([{"prefix": 5, "secret_ref": {"name": "s"}}], r"prefix"),
+])
+def test_env_from_rejections(value, match):
+    from agent_runtime.sidecars import canonical_env_from
+    with pytest.raises(InvalidParams, match=match):
+        canonical_env_from(value, "env_from")
+
+
+def test_sidecar_env_from_is_conditional_key():
+    """env_from 有值才出现(None/[] 省略键)——存量 sidecar 指纹零扰动的机制固化。"""
+    base = {"name": "box", "image": "x:1"}
+    for absent in (None, []):
+        sc = _validate([dict(base, env_from=absent)])
+        assert "env_from" not in sc[0]
+    sc = _validate([dict(base, env_from=[{"secret_ref": {"name": "s"}}])])
+    assert sc[0]["env_from"] == [
+        {"prefix": None, "secret_ref": {"name": "s", "optional": False}}]
+
+
+def test_env_from_absent_keeps_deploy_ver_byte_identical():
+    """envFrom 缺省:deploy_ver 与增补 agent_env_from 字段前逐字节相等。
+
+    常量为 2026-08-31 增补 envFrom 前的实测值(红线直接证据):
+    存量模板(主容器缺省/sidecar 规范形/env+镜像组合)不被伪 A 类日落。
+    """
+    assert Template(template_id="x").deploy_ver() == "026cfcf9a6b31721"
+    sc = _validate([{"name": "jiuwenbox", "image": "box:1", "port": 8321,
+                     "env": {"A": "b"},
+                     "host_path_mounts": [{"host_path": "/h", "mount_path": "/m"}]}])
+    assert Template(template_id="x", sidecars=sc).deploy_ver() == "0e250e15b2040867"
+    assert Template(template_id="x", agent_env={"K": "v"},
+                    agent_image="img:1").deploy_ver() == "6670556a43eff884"
+    # [] 归一 None → 与缺省同指纹
+    assert (Template(template_id="x", agent_env_from=[])
+            .deploy_ver() == Template(template_id="x").deploy_ver())
+
+
+def test_env_from_changes_deploy_ver():
+    """带 envFrom → 指纹变化 = 正确的 A 类日落(env 烘焙进 Pod)。"""
+    plain = Template(template_id="x")
+    main = Template(template_id="x", agent_env_from=[
+        {"config_map_ref": {"name": "cm-1"}}])
+    assert main.deploy_ver() != plain.deploy_ver()
+
+    sc_plain = _validate([{"name": "box", "image": "x:1"}])
+    sc_env = _validate([{"name": "box", "image": "x:1",
+                         "env_from": [{"secret_ref": {"name": "s"}}]}])
+    assert (Template(template_id="x", sidecars=sc_env).deploy_ver()
+            != Template(template_id="x", sidecars=sc_plain).deploy_ver())

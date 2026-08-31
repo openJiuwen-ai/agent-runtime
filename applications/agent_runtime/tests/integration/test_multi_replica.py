@@ -23,6 +23,7 @@ FakeRedis / SQLite / FakeK8s —— 等价两个副本指向同一 Redis/DB/K8s�
 from __future__ import annotations
 
 import asyncio
+import json
 
 from agent_runtime.config import RM_KEY_PREFIX, SM_KEY_PREFIX
 from tests.conftest import requires_lua
@@ -335,13 +336,15 @@ async def test_config_sync_on_b_takes_effect_on_a(dual):
     snapshot_key = f"{SM}routing:snapshot"
     ver_before = await dual.get(snapshot_key)
 
+    from tests.conftest import split_sync_payload
+
     status, _, body = await dual.post(
         1, "config_sync",
-        rawdata={"templates": [{"template_id": "tpl-1",
-                                "agent_image": "agentserver:1.0",
-                                "namespace": "default", "session_ttl": 90}],
-                 "scopes": [{"scope_id": scope, "index": 0,
-                             "template_id": "tpl-1", "routing_rules": ""}]})
+        rawdata=split_sync_payload(
+            [{"template_id": "tpl-1", "agent_image": "agentserver:1.0",
+              "namespace": "default", "session_ttl": 90}],
+            [{"scope_id": scope, "index": 0,
+              "template_id": "tpl-1", "routing_rules": ""}]))
     assert status == 200, body
     assert await dual.redis.exists(snapshot_key) == 1
     assert await dual.get(snapshot_key) != ver_before   # 快照已覆盖
@@ -444,3 +447,28 @@ async def test_concurrent_sweepers_converge_clean(dual):
     assert await dual.redis.scard(
         f"{SM}pods:registered") == registered_before
     await asyncio.sleep(0.2)     # 让 fire-and-forget 的 idle_consider 跑完
+
+
+# ---------------------------------------------------------------- 三段式契约(容器表拆分)
+
+@requires_lua
+async def test_split_contract_sync_on_b_routes_on_a(dual):
+    """三段式契约经 B 下发(容器表落库+新形态模板行)→ A 水合同一快照路由成功,
+    且 RM cfg 的 deploy_ver 与快照一致(暖复用前提,阶段 11b 同款不变量)。"""
+    await dual.seed_template()
+    scope = scope_of()
+    status, raw, body = await dual.post(0, "route", session_id="sp1")
+    assert status == 200, body
+    assert raw["pod_id"].startswith("agentserver-")
+
+    # 阶段 11b 同款不变量:快照模板 deploy_ver == RM cfg(暖复用前提)
+    from agent_runtime.resource_manager.orchestrator import _deploy_ver
+    from agent_runtime.session_manager.routing import snapshot_from_json
+
+    cfg_raw = await dual.redis.hgetall(f"{RM}resource:scope:{scope}:config")
+    cfg = {k.decode() if isinstance(k, bytes) else k:
+           v.decode() if isinstance(v, bytes) else v
+           for k, v in cfg_raw.items()}
+    assert _deploy_ver(json.loads(cfg["pod_spec_json"])) == cfg.get("deploy_ver")
+    snap = snapshot_from_json(await dual.get(f"{SM}routing:snapshot"))
+    assert snap.templates["tpl-1"].deploy_ver() == cfg.get("deploy_ver")
