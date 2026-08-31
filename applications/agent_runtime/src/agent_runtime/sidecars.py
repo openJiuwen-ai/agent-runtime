@@ -23,6 +23,7 @@ from .mounts import (
     canonical_configmap_mounts,
     canonical_host_path_mounts,
     canonical_pvc_mounts,
+    check_resource_name,
     find_mount_path_conflicts,
 )
 
@@ -31,11 +32,13 @@ SIDECAR_NAME_RE = re.compile(r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$")
 SIDECAR_MAX = 8  # 单 Pod sidecar 条数上限(防御性,当前用户只需 1)
 _PROBE_TYPES = frozenset({"tcp", "http"})
 _MAX_IMAGE_LEN = 512
+# envFrom prefix:K8s env 变量名前缀(C_IDENTIFIER 前缀语义)
+_ENV_PREFIX_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 # 单项合法键(_canonical_sidecar 拒未知键:sidecar 是安全敏感面,
 # 拼错的 capabilities_add 被静默吞掉 = "看似有特权实际没有"的运行期疑难)
 _SIDECAR_KEYS = frozenset({
-    "name", "image", "port", "env", "image_pull_policy",
+    "name", "image", "port", "env", "env_from", "image_pull_policy",
     "cpu_request", "memory_request", "cpu_limit", "memory_limit",
     "privileged", "capabilities_add", "capabilities_drop",
     "seccomp_unconfined", "apparmor_unconfined", "run_as_user", "run_as_group",
@@ -43,6 +46,70 @@ _SIDECAR_KEYS = frozenset({
     "readiness_probe_type", "readiness_path",
     "readiness_initial_delay", "readiness_period", "readiness_timeout_seconds",
 })
+
+_ENV_FROM_ITEM_KEYS = frozenset({"prefix", "secret_ref", "config_map_ref"})
+_ENV_FROM_REF_KEYS = frozenset({"secret_ref", "config_map_ref"})
+
+
+def canonical_env_from(value: Any, where: str) -> Optional[list[dict[str, Any]]]:
+    """envFrom → 内部规范形(secretRef/configMapRef 引用,值不落模板)。
+
+    输入(内部 snake 形态;K8s wire 的 camelCase envFrom 由
+    session_manager/container_spec.py 翻译后再进来):
+    ``[{prefix?, secret_ref|config_map_ref: {name, optional?}}]``
+    规范形:``[{prefix: str|None, <ref>: {name, optional}}]``;None/[] → None。
+
+    sidecar 规范形以**条件键**携带 ``env_from``(None 省略键)——与其他
+    显式存 None 的键不同:env_from 是后加的,显式存 None 会改全部存量
+    sidecar 的指纹 → 伪 A 类日落。
+    """
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        raise InvalidParams(
+            f"{where} must be a list of envFrom sources, got {value!r}")
+    if not value:
+        return None
+    out: list[dict[str, Any]] = []
+    for i, item in enumerate(value):
+        item_where = f"{where}[{i}]"
+        if not isinstance(item, dict):
+            raise InvalidParams(f"{item_where} must be an object, got {item!r}")
+        unknown = set(item) - _ENV_FROM_ITEM_KEYS
+        if unknown:
+            raise InvalidParams(
+                f"{item_where} unknown keys {sorted(unknown)}; allowed: "
+                f"{sorted(_ENV_FROM_ITEM_KEYS)}")
+        refs = [k for k in _ENV_FROM_REF_KEYS if item.get(k) is not None]
+        if len(refs) != 1:
+            raise InvalidParams(
+                f"{item_where} requires exactly one of secret_ref/config_map_ref, "
+                f"got {item!r}")
+        ref_key = refs[0]
+        ref = item[ref_key]
+        if not isinstance(ref, dict):
+            raise InvalidParams(
+                f"{item_where}.{ref_key} must be an object, got {ref!r}")
+        ref_unknown = set(ref) - {"name", "optional"}
+        if ref_unknown:
+            raise InvalidParams(
+                f"{item_where}.{ref_key} unknown keys {sorted(ref_unknown)}; "
+                "allowed: ['name', 'optional']")
+        name = check_resource_name(ref.get("name"), f"{item_where}.{ref_key}")
+        optional = ref.get("optional", False)
+        if not isinstance(optional, bool):
+            raise InvalidParams(
+                f"{item_where}.{ref_key}.optional must be a boolean, "
+                f"got {optional!r}")
+        prefix = item.get("prefix")
+        if prefix is not None and (
+                not isinstance(prefix, str) or not _ENV_PREFIX_RE.match(prefix)):
+            raise InvalidParams(
+                f"{item_where}.prefix must be an env-var-name prefix "
+                f"(letters/digits/'_', leading letter or '_'), got {prefix!r}")
+        out.append({"prefix": prefix,
+                    ref_key: {"name": name, "optional": optional}})
+    return out
 
 
 def _canonical_env(value: Any, where: str) -> dict[str, str]:
@@ -140,8 +207,10 @@ def _canonical_sidecar(item: Any, where: str) -> dict[str, Any]:
     run_as_group = item.get("run_as_group")
     if run_as_group is not None:
         run_as_group = _canonical_int(run_as_group, where, "run_as_group", minimum=0)
+    # envFrom:None/[] 归一 None(条件键,见 canonical_env_from docstring)
+    env_from = canonical_env_from(item.get("env_from"), f"{where}.env_from")
 
-    return {
+    result = {
         "name": name,
         "image": image,
         "port": port,
@@ -193,6 +262,10 @@ def _canonical_sidecar(item: Any, where: str) -> dict[str, Any]:
             item.get("readiness_timeout_seconds") if item.get("readiness_timeout_seconds") is not None else 3,
             where, "readiness_timeout_seconds", minimum=1, maximum=300),
     }
+    # env_from 条件键:有值才出现(存量 sidecar 指纹零扰动)
+    if env_from is not None:
+        result["env_from"] = env_from
+    return result
 
 
 def _sorted_canonical(items: list[dict[str, Any]]) -> list[dict[str, Any]]:

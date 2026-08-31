@@ -48,6 +48,11 @@ class Template:
     sse_path: str = "/sse"
     health_path: str = "/health"           # readiness 探针路径(真 AgentServer HTTP 入口为 /api/v1/health)
     agent_env: dict[str, str] = field(default_factory=dict)  # Agent 容器 env 注入(AGENT_HTTP_* 等)
+    # envFrom 引用(K8s EnvFromSource 内部规范形:[{prefix?, secret_ref|config_map_ref:
+    # {name, optional}}])。缺省 None 被 fingerprint 滤除 → 存量模板指纹零扰动;
+    # 值变化 = 正确的 A 类日落(env 烘焙进 Pod)。仅新契约(config_sync containers
+    # 形态)可下发;legacy 内联 payload 不接此字段。
+    agent_env_from: list[dict[str, Any]] | None = None
     image_pull_policy: str = "IfNotPresent"
     readiness_initial_delay: int = 5
     readiness_period: int = 5
@@ -93,6 +98,9 @@ class Template:
             value = getattr(self, field) or ""
             if value and not value.startswith("/"):
                 object.__setattr__(self, field, f"/{value}")
+        # envFrom 空列表归一 None(指纹滤 None;[] 不入库不入快照)
+        if self.agent_env_from == []:
+            object.__setattr__(self, "agent_env_from", None)
 
     # -------------------------------------------------------------- 派生
 

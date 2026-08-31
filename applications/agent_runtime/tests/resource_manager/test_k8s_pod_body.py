@@ -54,6 +54,7 @@ def _fake_client_module() -> SimpleNamespace:
         "V1EnvVar", "V1SecurityContext", "V1Capabilities", "V1SeccompProfile",
         "V1HostPathVolumeSource", "V1ConfigMapVolumeSource", "V1KeyToPath",
         "V1PersistentVolumeClaimVolumeSource",
+        "V1EnvFromSource", "V1SecretEnvSource", "V1ConfigMapEnvSource",
     )
     return SimpleNamespace(**{name: _V1 for name in names})
 
@@ -370,3 +371,59 @@ def test_build_pod_body_pvc_shared_claim_read_only_first_wins(client):
                   for m in ps["containers"][1].kwargs["volume_mounts"]}
     assert main_mounts["/data"]["read_only"] is True
     assert box_mounts["/var/lib/box"]["read_only"] is False  # mount 级原样
+
+
+# -------------------------------------------------------------- envFrom 渲染
+
+def test_build_pod_body_renders_main_env_from(client):
+    """主容器 envFrom:secretRef/configMapRef/prefix/optional 逐字段透传。"""
+    spec = _base_spec(agent_env_from=[
+        {"prefix": "DB_", "secret_ref": {"name": "agent-secret", "optional": True}},
+        {"config_map_ref": {"name": "agent-cm", "optional": False}},
+    ])
+    pod = client._build_pod_body("pod-1", spec)
+    main = pod.kwargs["spec"].kwargs["containers"][0].kwargs
+    env_from = main["env_from"]
+    assert len(env_from) == 2
+    assert env_from[0].kwargs["prefix"] == "DB_"
+    assert env_from[0].kwargs["secret_ref"].kwargs == {
+        "name": "agent-secret", "optional": True}
+    assert env_from[1].kwargs["prefix"] is None
+    assert env_from[1].kwargs["config_map_ref"].kwargs == {
+        "name": "agent-cm", "optional": False}
+
+
+def test_build_pod_body_main_env_from_absent_is_none(client):
+    """无 envFrom:env_from=None(与历史行为逐字节一致)。"""
+    pod = client._build_pod_body("pod-1", _base_spec())
+    main = pod.kwargs["spec"].kwargs["containers"][0].kwargs
+    assert main["env_from"] is None
+
+
+def test_build_pod_body_renders_sidecar_env_from(client):
+    box = dict(JIUWENBOX, env_from=[
+        {"secret_ref": {"name": "box-secret"}}])
+    spec = _base_spec(sidecars=_sidecars([box]))
+    pod = client._build_pod_body("pod-1", spec)
+    box_container = pod.kwargs["spec"].kwargs["containers"][1].kwargs
+    assert box_container["env_from"][0].kwargs["prefix"] is None
+    assert box_container["env_from"][0].kwargs["secret_ref"].kwargs == {
+        "name": "box-secret", "optional": False}
+    # 主容器不受 sidecar envFrom 影响
+    assert pod.kwargs["spec"].kwargs["containers"][0].kwargs["env_from"] is None
+
+
+def test_render_env_from_tolerates_corrupt_cache(client):
+    """脏缓存防御:坏项(非 dict/双 ref/无 name)跳过,全坏 → None。"""
+    from agent_runtime.resource_manager.k8s import _render_env_from
+    c = client._client
+    assert _render_env_from(c, None) is None
+    assert _render_env_from(c, []) is None
+    out = _render_env_from(c, [
+        42,                                                        # 非 dict
+        {"secret_ref": {"name": "s"}, "config_map_ref": {"name": "c"}},  # 双 ref
+        {"secret_ref": {"name": ""}},                              # 空 name
+        {"secret_ref": {"name": "ok"}}])                           # 唯一合法
+    assert out is not None and len(out) == 1
+    assert out[0].kwargs["secret_ref"].kwargs == {"name": "ok", "optional": False}
+    assert _render_env_from(c, [{"secret_ref": {"name": ""}}]) is None

@@ -119,6 +119,41 @@ def _render_volume_mounts(
     return volumes, mounts
 
 
+def _render_env_from(c: Any, env_from: list[dict[str, Any]] | None) -> list[Any] | None:
+    """内部 envFrom 规范形 → V1EnvFromSource 列表(主/sidecar 共用)。
+
+    脏缓存防御(pod_spec 可能来自 Redis 旧缓存/手改):坏项跳过不抛;
+    值 None/空 → None(容器不设 envFrom,与历史行为逐字节一致)。
+    """
+    if not env_from:
+        return None
+    out: list[Any] = []
+    for item in env_from:
+        if not isinstance(item, dict):
+            continue
+        secret_ref = item.get("secret_ref")
+        config_map_ref = item.get("config_map_ref")
+        if not (isinstance(secret_ref, dict) ^ isinstance(config_map_ref, dict)):
+            continue
+        prefix = item.get("prefix")
+        kwargs: dict[str, Any] = {
+            "prefix": prefix if isinstance(prefix, str) else None}
+        if isinstance(secret_ref, dict):
+            name = secret_ref.get("name")
+            if not isinstance(name, str) or not name:
+                continue
+            kwargs["secret_ref"] = c.V1SecretEnvSource(
+                name=name, optional=bool(secret_ref.get("optional")))
+        else:
+            name = config_map_ref.get("name")
+            if not isinstance(name, str) or not name:
+                continue
+            kwargs["config_map_ref"] = c.V1ConfigMapEnvSource(
+                name=name, optional=bool(config_map_ref.get("optional")))
+        out.append(c.V1EnvFromSource(**kwargs))
+    return out or None
+
+
 def normalize_phase(phase: str, deletion: bool, container_waiting_reasons: list[str]) -> str:
     """归一化 Pod 状态（移植 compute_pod_status 的判定优先级，精简版）。"""
     if deletion:
@@ -330,6 +365,7 @@ class RealK8sPodClient(K8sPodClient):
             # 127.0.0.1 访问,不进 Service,gateway 仍直连 Pod IP 的 sse_port
             ports=[c.V1ContainerPort(container_port=sc["port"])] if sc["port"] else None,
             env=[c.V1EnvVar(name=k, value=v) for k, v in sc["env"].items()] or None,
+            env_from=_render_env_from(c, sc.get("env_from")),
             volume_mounts=mounts or None,
             resources=resources,
             security_context=self._build_sidecar_security_context(c, sc),
@@ -407,6 +443,8 @@ class RealK8sPodClient(K8sPodClient):
             c.V1EnvVar(name=str(k), value=str(v))
             for k, v in (spec.get("agent_env") or {}).items()
         ] or None
+        # envFrom 引用注入（secretRef/configMapRef；None = 不设，历史行为不变）
+        env_from = _render_env_from(c, spec.get("agent_env_from"))
 
         # 主容器 securityContext(有则设:run_as_user/run_as_group;无则不设,走镜像默认)
         sec_kwargs: dict[str, Any] = {}
@@ -420,6 +458,7 @@ class RealK8sPodClient(K8sPodClient):
             image_pull_policy=spec.get("image_pull_policy") or "IfNotPresent",
             ports=ports,
             env=env,
+            env_from=env_from,
             volume_mounts=mounts or None,
             resources=resources,
             readiness_probe=probe,
