@@ -39,14 +39,15 @@ def scope_id(group: str, bot: str) -> str:
     return SEED_SCOPE
 
 
-def config_sync_payload(templates: list[dict],
+def config_sync_payload(containers: list[dict], templates: list[dict],
                         scopes: list[dict] | None = None) -> dict:
-    """构造 config_sync 全量载荷;scopes 缺省 = 一个通配兜底 scope 指向首个模板。"""
+    """构造 config_sync 全量载荷(三段式契约:containers/templates/scopes);
+    scopes 缺省 = 一个通配兜底 scope 指向首个模板。"""
     if scopes is None:
         scopes = [{"scope_id": SEED_SCOPE, "index": 0,
                    "template_id": templates[0]["template_id"],
                    "routing_rules": ""}]
-    return {"templates": templates, "scopes": scopes}
+    return {"containers": containers, "templates": templates, "scopes": scopes}
 
 
 def check(name: str, ok: bool, detail: str = "") -> bool:

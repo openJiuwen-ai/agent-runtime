@@ -100,16 +100,30 @@ def _parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def _template(**overrides) -> dict:
+def _main_container(container_id: str) -> dict:
+    """主容器 wire dict(三段式契约,K8s 形态;与旧内联同值:sse 8086)。"""
+    return {
+        "container_id": container_id,
+        "name": "agent",
+        "image": IMAGE,
+        "ports": [{"name": "sse", "containerPort": 8086}],
+        "imagePullPolicy": "IfNotPresent",
+    }
+
+
+def _template(main_cid: str, **overrides) -> dict:
     base = {
-        "agent_image": IMAGE, "namespace": NS, "sse_port": 8086,
-        "sse_path": "/sse", "image_pull_policy": "IfNotPresent",
+        "main_container_id": main_cid,
+        "namespace": NS, "sse_path": "/sse",
         "scope_concurrency": 3, "pod_concurrency": 2,
         "session_ttl": 90, "pod_ttl": 300, "min_idle_pods": 0,
         "ready_timeout": 240,
     }
     base.update(overrides)
     return base
+
+
+_CONTAINERS = [_main_container("c-tpl-mr"), _main_container("c-tpl-mr-f")]
 
 
 # ---------------------------------------------------------------- S0 前置
@@ -171,10 +185,11 @@ async def s1_seed(c: Client, r: aioredis.Redis) -> None:
     print(f"-- 清理上一轮 Pod：{out.strip().splitlines()[-1][:60] if out.strip() else '无'}")
 
     payload = config_sync_payload(
+        containers=_CONTAINERS,
         templates=[
-            {"template_id": "tpl-mr", **_template()},
+            {"template_id": "tpl-mr", **_template("c-tpl-mr")},
             {"template_id": "tpl-mr-f",
-             **_template(scope_concurrency=2, pod_concurrency=1)},
+             **_template("c-tpl-mr-f", scope_concurrency=2, pod_concurrency=1)},
         ],
         scopes=[
             {"scope_id": "mr-main", "index": 0, "template_id": "tpl-mr",
@@ -304,10 +319,11 @@ async def s6_config_propagation(c: Client, r: aioredis.Redis) -> None:
     check("S6 前置：路由快照已存在", bool(snap_before))
 
     code, _, body = await c.post("config_sync", group="mr-main", rawdata={
+        "containers": _CONTAINERS,
         "templates": [
-            {"template_id": "tpl-mr", **_template(), "session_ttl": 120},
+            {"template_id": "tpl-mr", **_template("c-tpl-mr"), "session_ttl": 120},
             {"template_id": "tpl-mr-f",
-             **_template(scope_concurrency=2, pod_concurrency=1)},
+             **_template("c-tpl-mr-f", scope_concurrency=2, pod_concurrency=1)},
         ],
         "scopes": [
             {"scope_id": "mr-main", "index": 0, "template_id": "tpl-mr",

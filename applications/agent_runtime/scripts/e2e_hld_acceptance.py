@@ -140,20 +140,34 @@ async def preflight(r: aioredis.Redis, force_flush: bool) -> bool:
     return ok
 
 
-# ---------------------------------------------------------------- 模板
+# ---------------------------------------------------------------- 模板(三段式契约)
 
-def template(**overrides) -> dict:
+def main_container(container_id: str, **overrides) -> dict:
+    """主容器 wire dict(K8s 形态;每模板独立 container_id,容器差异化不打扰兄弟)。
+
+    与旧内联契约同值:sse 端口 8086 / probe(HEALTH_PATH, 5s/5s) / IfNotPresent。
+    """
     base = {
-        "agent_image": IMAGE,
+        "container_id": container_id,
+        "name": "agent",
+        "image": IMAGE,
+        "ports": [{"name": "sse", "containerPort": 8086}],
+        "imagePullPolicy": "IfNotPresent",
+        "readinessProbe": {"httpGet": {"path": HEALTH_PATH, "port": 8086},
+                           "initialDelaySeconds": 5, "periodSeconds": 5},
+    }
+    if AGENT_ENV:
+        base["env"] = [{"name": k, "value": v} for k, v in AGENT_ENV.items()]
+    base.update(overrides)
+    return base
+
+
+def template(main_cid: str, **overrides) -> dict:
+    """模板级 wire dict(Pod 级/策略字段 + 容器引用;容器字段一律在 containers 段)。"""
+    base = {
+        "main_container_id": main_cid,
         "namespace": NS,
-        "sse_port": 8086,
         "sse_path": SSE_PATH,
-        # 探测/readiness 契约参数(与 RM probe 同源;真 AgentServer 为
-        # /api/v1/health——替身 influxdb 沿用默认 /health,发布门禁跑真镜像时
-        # 必须显式传 --health-path/--sse-path/--agent-env,否则 readiness 永不
-        # 通过,阶段 2 起全红)
-        "health_path": HEALTH_PATH,
-        "image_pull_policy": "IfNotPresent",
         "scope_concurrency": 3,
         "pod_concurrency": 2,
         "session_ttl": 30,
@@ -161,13 +175,12 @@ def template(**overrides) -> dict:
         "min_idle_pods": 0,
         "ready_timeout": 240,
     }
-    if AGENT_ENV:
-        base["agent_env"] = AGENT_ENV
     base.update(overrides)
     return base
 
 
-TPL = {}
+TPL: dict[str, dict] = {}            # template_id → 模板级 dict
+CONTAINERS: dict[str, dict] = {}     # container_id → 容器 wire dict
 # (scope_id, template_id, routing_rules 表达式串)——scope 由 config_sync 下发;
 # 不播种通配兜底,使「未知属性组合 → CONFIG_NOT_FOUND」可验收。
 # e2e-main 故意带 or 用户白名单支:验收 and/or 任意组合的表达式路由(新 wire 格式)。
@@ -191,42 +204,42 @@ SIDECAR_STANDIN_PORT = 8096
 
 
 def _sidecar_standin() -> dict:
+    """box-standin 容器 wire dict(K8s 形态;cm 挂载经 volumeMounts 引用
+    模板 volumes 的 box-policy 卷——CM 由阶段 2b 预置)。"""
     common = {
+        "container_id": "c-box-standin",
         "name": "box-standin",
         # ConfigMap subPath 单 key 挂载(老 SDK config.yaml 同款形态):
         # 阶段 2b 先 kubectl create configmap,exec 验证容器内文件内容
-        "configmap_mounts": [{
-            "config_map_name": "e2e-box-cm",
-            "mount_path": "/etc/box/policy.yaml",
-            "sub_path": "policy.yaml",
-        }],
-        "readiness_probe_type": "tcp",
-        "readiness_initial_delay": 5,
-        "readiness_period": 5,
+        "volumeMounts": [{"name": "box-policy", "mountPath": "/etc/box/policy.yaml",
+                          "subPath": "policy.yaml"}],
+        "readinessProbe": {"tcpSocket": {"port": SIDECAR_STANDIN_PORT},
+                           "initialDelaySeconds": 5, "periodSeconds": 5},
     }
     if SIDECAR_IMAGE != IMAGE:   # 真 jiuwenbox 镜像:完整规格
         return {**common,
                 "image": SIDECAR_IMAGE,
-                "port": 8321,
-                "env": {"JIUWENBOX_LISTEN": "http://0.0.0.0:8321"},
-                "privileged": True,
-                "capabilities_add": ["SYS_ADMIN", "NET_ADMIN"],
-                "seccomp_unconfined": True,
-                "apparmor_unconfined": True,
-                "host_path_mounts": [{
-                    "host_path": "/sys/fs/cgroup",
-                    "mount_path": "/sys/fs/cgroup",
-                    "host_path_type": "Directory",
-                }],
+                "ports": [{"containerPort": 8321}],
+                "env": [{"name": "JIUWENBOX_LISTEN",
+                         "value": "http://0.0.0.0:8321"}],
+                "securityContext": {
+                    "privileged": True,
+                    "capabilities": {"add": ["SYS_ADMIN", "NET_ADMIN"]},
+                    "seccompProfile": {"type": "Unconfined"},
+                    "appArmorProfile": {"type": "Unconfined"}},
                 }
     return {**common,           # influxdb 替身:错开 8086 与 RPC 8088
             "image": SIDECAR_IMAGE,
-            "port": SIDECAR_STANDIN_PORT,
-            "env": {
-                "INFLUXDB_HTTP_BIND_ADDRESS": f":{SIDECAR_STANDIN_PORT}",
-                "INFLUXDB_BIND_ADDRESS": ":8098",
-            }}
+            "ports": [{"containerPort": SIDECAR_STANDIN_PORT}],
+            "env": [
+                {"name": "INFLUXDB_HTTP_BIND_ADDRESS",
+                 "value": f":{SIDECAR_STANDIN_PORT}"},
+                {"name": "INFLUXDB_BIND_ADDRESS", "value": ":8098"},
+            ]}
 
+
+# --with-sidecar 模板卷(与容器分离,K8s spec.volumes 同构)
+STANDIN_VOLUMES = [{"name": "box-policy", "configMap": {"name": "e2e-box-cm"}}]
 
 # ---- 全量真实规格(--with-mounts)资源名/路径约定:对齐真实 config_sync 请求的
 # 引用名(agent-config-cm/box-policy-cm/agent-data-pvc/box-data-pvc)。CM 与静态
@@ -238,10 +251,15 @@ MNT_BOX_PVC = "box-data-pvc"
 MNT_AGENT_PV = "e2e-agent-data-pv"
 MNT_BOX_PV = "e2e-box-data-pv"
 MNT_HOST_PATH = "/mnt/host-test"
+# envFrom 引用资源(stage0 预置;--with-mounts 全规格阶段断言 Pod spec envFrom)
+MNT_AGENT_SECRET = "e2e-agent-secret"
+MNT_AGENT_ENV_CM = "e2e-agent-env-cm"
+MNT_BOX_ENV_CM = "e2e-box-env-cm"
 
 
-def _jiuwenbox_spec() -> dict:
-    """tpl-mnt 的 sidecar:完整 jiuwenbox 规格(三种挂载 + 特权四件套)。
+def _jiuwenbox_container() -> dict:
+    """tpl-mnt 的 sidecar 容器 wire dict:完整 jiuwenbox 规格(三种挂载 +
+    特权四件套 + envFrom)。挂载引用模板 volumes(见 MNT_VOLUMES)。
 
     与 _sidecar_standin 的关键差异:不引用 --with-sidecar 门控的 e2e-box-cm
     (该 CM 只在 stage2b 创建,--with-mounts 单独开时缺失 →
@@ -250,36 +268,71 @@ def _jiuwenbox_spec() -> dict:
     不依赖镜像,默认替身跑即可断言;真镜像门禁验证真契约。
     """
     real = SIDECAR_IMAGE != IMAGE
+    port = 8321 if real else SIDECAR_STANDIN_PORT
     return {
+        "container_id": "c-jiuwenbox",
         "name": "jiuwenbox",          # 与真实请求一致;≠ agent,过容器名冲突校验
         "image": SIDECAR_IMAGE,
-        "port": 8321 if real else SIDECAR_STANDIN_PORT,
-        "env": ({"JIUWENBOX_LISTEN": "http://0.0.0.0:8321"} if real
-                else {"INFLUXDB_HTTP_BIND_ADDRESS": f":{SIDECAR_STANDIN_PORT}",
-                      "INFLUXDB_BIND_ADDRESS": ":8098"}),
-        "privileged": True,
-        "capabilities_add": ["SYS_ADMIN", "NET_ADMIN"],
-        "seccomp_unconfined": True,
-        "apparmor_unconfined": True,
-        "configmap_mounts": [{"config_map_name": MNT_BOX_CM,
-                              "mount_path": "/etc/box/policy.yaml",
-                              "sub_path": "policy.yaml"}],
-        "host_path_mounts": [{"host_path": "/sys/fs/cgroup",
-                              "mount_path": "/sys/fs/cgroup",
-                              "host_path_type": "Directory"}],
-        "pvc_mounts": [{"claim_name": MNT_BOX_PVC,
-                        "mount_path": "/var/lib/jiuwenbox"}],
-        "readiness_probe_type": "tcp",
-        "readiness_initial_delay": 5,
-        "readiness_period": 5,
+        "ports": [{"containerPort": port}],
+        "env": ([{"name": "JIUWENBOX_LISTEN", "value": "http://0.0.0.0:8321"}]
+                if real else [
+                    {"name": "INFLUXDB_HTTP_BIND_ADDRESS",
+                     "value": f":{SIDECAR_STANDIN_PORT}"},
+                    {"name": "INFLUXDB_BIND_ADDRESS", "value": ":8098"}]),
+        "envFrom": [{"configMapRef": {"name": MNT_BOX_ENV_CM}}],
+        "securityContext": {
+            "privileged": True,
+            "capabilities": {"add": ["SYS_ADMIN", "NET_ADMIN"]},
+            "seccompProfile": {"type": "Unconfined"},
+            "appArmorProfile": {"type": "Unconfined"}},
+        "volumeMounts": [
+            {"name": "box-policy", "mountPath": "/etc/box/policy.yaml",
+             "subPath": "policy.yaml"},
+            {"name": "box-cgroup", "mountPath": "/sys/fs/cgroup"},
+            {"name": "box-data", "mountPath": "/var/lib/jiuwenbox"},
+        ],
+        "readinessProbe": {"tcpSocket": {"port": port},
+                           "initialDelaySeconds": 5, "periodSeconds": 5},
     }
 
 
-def full_sync_payload(tpl_overrides: dict | None = None) -> dict:
-    """config_sync 全量载荷:模板集 + scope 集(routing_rules 表达式串)。
+# tpl-mnt 模板卷(hostPath/PVC/ConfigMap/NFS 之外的卷源齐全;cm 挂载缺省 readOnly=true、
+# hp/PVC 缺省 false——与旧内联 fused 形态默认一致,见 container_spec.fuse_mounts)
+MNT_VOLUMES = [
+    {"name": "agent-cm", "configMap": {"name": MNT_AGENT_CM}},
+    {"name": "agent-host",
+     "hostPath": {"path": MNT_HOST_PATH, "type": "DirectoryOrCreate"}},
+    {"name": "agent-data", "persistentVolumeClaim": {"claimName": MNT_AGENT_PVC}},
+    {"name": "box-policy", "configMap": {"name": MNT_BOX_CM}},
+    {"name": "box-cgroup",
+     "hostPath": {"path": "/sys/fs/cgroup", "type": "Directory"}},
+    {"name": "box-data", "persistentVolumeClaim": {"claimName": MNT_BOX_PVC}},
+]
 
-    tpl_overrides: {template_id: {字段: 新值}} —— B/A 类热更新阶段复用。
+
+def _merge_container(base: dict, override: dict) -> dict:
+    """容器热更新覆盖(dict 值一层深合并,probe 覆盖 periodSeconds 不丢 path)。"""
+    out = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = {**out[key], **value}
+        else:
+            out[key] = value
+    return out
+
+
+def full_sync_payload(tpl_overrides: dict | None = None,
+                      container_overrides: dict | None = None) -> dict:
+    """config_sync 全量载荷(三段式):containers + templates + scopes。
+
+    tpl_overrides: {template_id: {模板级字段: 新值}} —— B 类热更新复用;
+    container_overrides: {container_id: {容器字段: 新值}} —— A 类热更新复用
+    (readiness_period 等容器级字段自容器表拆分后走这里)。
     """
+    containers = [
+        _merge_container(c, (container_overrides or {}).get(cid, {}))
+        for cid, c in CONTAINERS.items()
+    ]
     templates = [
         {"template_id": tid, **tpl, **(tpl_overrides or {}).get(tid, {})}
         for tid, tpl in TPL.items()
@@ -288,56 +341,66 @@ def full_sync_payload(tpl_overrides: dict | None = None) -> dict:
         {"scope_id": sid, "index": i, "template_id": tid, "routing_rules": expr}
         for i, (sid, tid, expr) in enumerate(SCOPES_DEF)
     ]
-    return {"templates": templates, "scopes": scopes}
+    return {"containers": containers, "templates": templates, "scopes": scopes}
 
 
 def build_templates() -> None:
     TPL.clear()
+    CONTAINERS.clear()
+    for tid in ("tpl-e2e", "tpl-f", "tpl-warm", "tpl-nat"):
+        CONTAINERS[f"c-{tid}"] = main_container(f"c-{tid}")
+    CONTAINERS["c-tpl-bad"] = main_container(
+        "c-tpl-bad", image="agent-runtime-e2e-missing:1",
+        imagePullPolicy="Always")
     TPL.update({
-        "tpl-e2e": template(),
-        "tpl-f": template(scope_concurrency=2, pod_concurrency=1),
-        "tpl-warm": template(scope_concurrency=2, pod_concurrency=1,
-                             min_idle_pods=1, session_ttl=90),
-        "tpl-bad": template(agent_image="agent-runtime-e2e-missing:1",
-                            image_pull_policy="Always", ready_timeout=25),
+        "tpl-e2e": template("c-tpl-e2e"),
+        "tpl-f": template("c-tpl-f", scope_concurrency=2, pod_concurrency=1),
+        "tpl-warm": template("c-tpl-warm", scope_concurrency=2,
+                             pod_concurrency=1, min_idle_pods=1,
+                             session_ttl=90),
+        "tpl-bad": template("c-tpl-bad", ready_timeout=25),
         # 自然老化专用:短 TTL + min_idle=0(回收无保护)——阶段 5b 零回拨真等
-        "tpl-nat": template(scope_concurrency=2, pod_concurrency=2,
+        "tpl-nat": template("c-tpl-nat", scope_concurrency=2, pod_concurrency=2,
                             session_ttl=15, pod_ttl=20, min_idle_pods=0),
     })
     if WITH_SIDECAR:
         # pod_ttl=3600:box Pod 全程长存——否则可能在阶段 5~12 之间被自然回收,
         # 使 D-不变量5 / K-notify 的注册表计数随时序漂移(2026-08-27 实测)
-        TPL["tpl-box"] = template(scope_concurrency=2, pod_concurrency=1,
-                                  pod_ttl=3600,
-                                  sidecars=[_sidecar_standin()])
+        CONTAINERS["c-tpl-box"] = main_container("c-tpl-box")
+        CONTAINERS["c-box-standin"] = _sidecar_standin()
+        TPL["tpl-box"] = template(
+            "c-tpl-box", scope_concurrency=2, pod_concurrency=1, pod_ttl=3600,
+            sidecar_container_ids=["c-box-standin"], volumes=STANDIN_VOLUMES)
         # 幂等:build_templates 可能被热更新阶段再次调用
         if not any(sid == "e2e-box" for sid, _, _ in SCOPES_DEF):
             SCOPES_DEF.append(("e2e-box", "tpl-box", "group_id in ('e2e-box')"))
     if WITH_MOUNTS:
         # 全量真实规格:对齐真实 config_sync 请求(主容器 cm/hp/pvc 三挂载 +
-        # 显式 container_port/readiness 参数 + sidecar jiuwenbox 完整规格)。
-        # 全部走 overrides,**绝不进 template() base**——否则全部模板
-        # deploy_ver 变化 → 全量 A 类日落,stage3 直接 409。
+        # envFrom 引用注入 + sidecar jiuwenbox 完整规格)。容器差异化全部走
+        # 独立 container(c-tpl-mnt/c-jiuwenbox),**绝不改共享基线**——
+        # 否则全部模板 deploy_ver 变化 → 全量 A 类日落,stage3 直接 409。
         # min_idle=1:stage1 下发后 autoscale(1s tick)即预热(暖 Pod 不写 SM
         # pods:registered,2c route 前对其余阶段不可见);pod_ttl=3600 全程
         # 长存,与 tpl-box 同款(跨 scope 计数断言 +1 处理)。
+        CONTAINERS["c-tpl-mnt"] = main_container(
+            "c-tpl-mnt",
+            envFrom=[{"prefix": "E2E_", "secretRef": {"name": MNT_AGENT_SECRET}},
+                     {"configMapRef": {"name": MNT_AGENT_ENV_CM}}],
+            volumeMounts=[
+                {"name": "agent-cm", "mountPath": "/etc/agent/config.yaml",
+                 "subPath": "config.yaml"},
+                {"name": "agent-host", "mountPath": MNT_HOST_PATH,
+                 "readOnly": True},
+                {"name": "agent-data", "mountPath": "/var/lib/agent"},
+            ])
+        CONTAINERS["c-jiuwenbox"] = _jiuwenbox_container()
         TPL["tpl-mnt"] = template(
+            "c-tpl-mnt",
             template_name="主+sidecar 双镜像·三种挂载全量样例",
-            pod_name="agentserver-mnt", container_name="agent",
-            container_port=8086,             # 显式下发(=sse_port;此前从未覆盖)
+            pod_name="agentserver-mnt",
             scope_concurrency=3, pod_concurrency=2,
             session_ttl=60, pod_ttl=3600, min_idle_pods=1, ready_timeout=240,
-            readiness_initial_delay=5, readiness_period=5,
-            agent_configmap_mounts=[{
-                "config_map_name": MNT_AGENT_CM,
-                "mount_path": "/etc/agent/config.yaml",
-                "sub_path": "config.yaml"}],
-            agent_host_path_mounts=[{
-                "host_path": MNT_HOST_PATH, "mount_path": MNT_HOST_PATH,
-                "host_path_type": "DirectoryOrCreate", "read_only": True}],
-            agent_pvc_mounts=[{
-                "claim_name": MNT_AGENT_PVC, "mount_path": "/var/lib/agent"}],
-            sidecars=[_jiuwenbox_spec()])
+            sidecar_container_ids=["c-jiuwenbox"], volumes=MNT_VOLUMES)
         # 幂等 + 表达式非通配:SCOPES_DEF 故意不播通配,保住 stage13 的
         # CONFIG_NOT_FOUND 验收(真实请求的空串通配形态不可照搬)
         if not any(sid == MNT or sid == "e2e-mnt" for sid, _, _ in SCOPES_DEF):
@@ -352,7 +415,8 @@ async def clean_previous(c: Client, r: aioredis.Redis) -> None:
         await asyncio.create_subprocess_exec(
             "psql", f"-h{DB_DSN['host']}", f"-p{DB_DSN['port']}",
             f"-U{DB_DSN['user']}", "-d", DB_DSN["name"], "-c",
-            "TRUNCATE service_config_template, routing_scope;",
+            "TRUNCATE service_config_template, service_config_container, "
+            "routing_scope;",
             stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
             env={**os.environ, "PGPASSWORD": DB_DSN["password"]})
     elif shutil.which("mysql") is not None:
@@ -361,6 +425,7 @@ async def clean_previous(c: Client, r: aioredis.Redis) -> None:
             f"-u{DB_DSN['user']}", f"-p{DB_DSN['password']}", "-e",
             f"USE {DB_DSN['name']}; "
             "SET FOREIGN_KEY_CHECKS=0; TRUNCATE service_config_template; "
+            "TRUNCATE service_config_container; "
             "TRUNCATE routing_scope; SET FOREIGN_KEY_CHECKS=1;",
             stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
     out = await kubectl("delete", "pod", "-n", NS, "-l",
@@ -401,6 +466,7 @@ async def stage1_seed(c: Client, r) -> None:
             "psql", f"-h{DB_DSN['host']}", f"-p{DB_DSN['port']}",
             f"-U{DB_DSN['user']}", "-d", DB_DSN["name"], "-t", "-A", "-c",
             "SELECT (SELECT COUNT(*) FROM service_config_template), "
+            "(SELECT COUNT(*) FROM service_config_container), "
             "(SELECT COUNT(*) FROM routing_scope);",
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             env=env)
@@ -419,12 +485,13 @@ async def stage1_seed(c: Client, r) -> None:
             "mysql", f"-h{DB_DSN['host']}", f"-P{DB_DSN['port']}",
             f"-u{DB_DSN['user']}", f"-p{DB_DSN['password']}", "-N", "-e",
             f"USE {DB_DSN['name']}; SELECT COUNT(*) FROM service_config_template; "
+            "SELECT COUNT(*) FROM service_config_container; "
             "SELECT COUNT(*) FROM routing_scope;",
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
         out, _ = await proc.communicate()
         counts = [int(x) for x in out.decode().split()]
-    check("DB(service_config_template/routing_scope) 落库",
-          counts == [len(TPL), len(SCOPES_DEF)], str(counts))
+    check("DB(service_config_template/service_config_container/routing_scope) 落库",
+          counts == [len(TPL), len(CONTAINERS), len(SCOPES_DEF)], str(counts))
 
 
 async def stage1b_warm_up_without_request(c: Client, r) -> None:
@@ -648,11 +715,29 @@ async def stage0_provision_mounts() -> bool:
     ok_cm2 = check("MNT-ConfigMap box-policy-cm 就绪（create 幂等）",
                    "AlreadyExists" in cm_out or "created" in cm_out,
                    cm_out.strip()[:60])
+    # envFrom 引用资源:主容器 secretRef + configMapRef、sidecar configMapRef
+    # (引用名进 Pod spec,内容不落模板——envFrom 的引用语义实证)
+    sec_out = await kubectl("create", "secret", "generic", MNT_AGENT_SECRET,
+                            "-n", NS,
+                            "--from-literal=api-token=e2e-agent-secret-v1")
+    ok_sec = check("MNT-Secret e2e-agent-secret 就绪（envFrom secretRef）",
+                   "AlreadyExists" in sec_out or "created" in sec_out,
+                   sec_out.strip()[:60])
+    cm_out = await kubectl("create", "configmap", MNT_AGENT_ENV_CM, "-n", NS,
+                           "--from-literal=agent-cm-key=e2e-agent-env-v1")
+    ok_cm3 = check("MNT-ConfigMap e2e-agent-env-cm 就绪（envFrom configMapRef）",
+                   "AlreadyExists" in cm_out or "created" in cm_out,
+                   cm_out.strip()[:60])
+    cm_out = await kubectl("create", "configmap", MNT_BOX_ENV_CM, "-n", NS,
+                           "--from-literal=box-cm-key=e2e-box-env-v1")
+    ok_cm4 = check("MNT-ConfigMap e2e-box-env-cm 就绪（sidecar envFrom）",
+                   "AlreadyExists" in cm_out or "created" in cm_out,
+                   cm_out.strip()[:60])
 
     node = await _schedulable_node()
     ok_node = check("MNT-获取可调度节点（静态供给时 PV 钉节点,避污点 master）",
                     bool(node), node[:60])
-    if not (ok_cm1 and ok_cm2 and ok_node):
+    if not (ok_cm1 and ok_cm2 and ok_sec and ok_cm3 and ok_cm4 and ok_node):
         return False
     ok_apply = True
     for pvc, pv, host_dir in (
@@ -754,6 +839,24 @@ async def stage2c_mounts(c: Client, r) -> None:
                for e in agent_ct.get("env") or []}
         check("MNT-主容器 agent_env 注入逐项可见",
               all(env.get(k) == str(v) for k, v in AGENT_ENV.items()), str(env))
+
+    # envFrom 引用注入(引用名进 Pod spec;prefix 透传)
+    agent_env_from = agent_ct.get("envFrom") or []
+    agent_refs = sorted(
+        (ef.get("secretRef") or ef.get("configMapRef") or {}).get("name", "")
+        for ef in agent_env_from)
+    agent_prefixes = {ef.get("prefix") for ef in agent_env_from}
+    check("MNT-主容器 envFrom 引用（secretRef + configMapRef）",
+          agent_refs == sorted([MNT_AGENT_SECRET, MNT_AGENT_ENV_CM]),
+          str(agent_env_from))
+    check("MNT-主容器 envFrom prefix 透传（E2E_）",
+          agent_prefixes == {"E2E_"}, str(agent_prefixes))
+    box_env_from = box_ct.get("envFrom") or []
+    box_refs = sorted(
+        (ef.get("secretRef") or ef.get("configMapRef") or {}).get("name", "")
+        for ef in box_env_from)
+    check("MNT-sidecar envFrom 引用（configMapRef）",
+          box_refs == [MNT_BOX_ENV_CM], str(box_env_from))
 
     sc = box_ct.get("securityContext") or {}
     caps = (sc.get("capabilities") or {}).get("add") or []
@@ -1023,9 +1126,10 @@ async def stage10_ma_sunset(c: Client, r) -> None:
     print("\n== 阶段 10：场景 M（A 类）—— deploy 字段变更 → 软摘除 + 版本过滤 ==")
     cfg_key = f"{RM_PREFIX}resource:scope:{WARM}:config"
     ver_before = await r.hget(cfg_key, "deploy_ver")
-    # A 类字段（readiness_period ∈ DEPLOY_VER_FIELDS）
+    # A 类字段(readiness_period ∈ DEPLOY_VER_FIELDS;容器表拆分后走容器覆盖)
     code, raw, _ = await c.post("config_sync", rawdata=full_sync_payload(
-        {"tpl-warm": {"readiness_period": 7}}))
+        container_overrides={"c-tpl-warm": {
+            "readinessProbe": {"periodSeconds": 7}}}))
     check("M-A config_sync 全量更新（A 类）成功", code == 200 and raw.get("ok") is True)
     await asyncio.sleep(1)
     ver_after = await r.hget(cfg_key, "deploy_ver")

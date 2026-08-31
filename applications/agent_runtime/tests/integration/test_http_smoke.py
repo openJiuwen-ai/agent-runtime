@@ -41,8 +41,15 @@ def _make_client(tmp_path, monkeypatch):
     return TestClient(application.asgi)
 
 
+# 三段式契约(K8s 形态):容器段 + 模板段(只持引用)+ 通配兜底 scope
+CONTAINER = {
+    "container_id": "c-smoke-main",
+    "name": "agent",
+    "image": "agentserver:smoke",
+    "ports": [{"name": "sse", "containerPort": 8080}],
+}
 TEMPLATE = {
-    "agent_image": "agentserver:smoke",
+    "main_container_id": "c-smoke-main",
     "namespace": "default",
     "scope_concurrency": 3,
     "pod_concurrency": 2,
@@ -51,8 +58,9 @@ TEMPLATE = {
     "min_idle_pods": 0,
 }
 
-# 全量下发：模板 + 通配兜底 scope（空 routing_rules）
+# 全量下发：容器 + 模板 + 通配兜底 scope（空 routing_rules）
 FULL_SYNC = {
+    "containers": [CONTAINER],
     "templates": [{"template_id": "tpl-smoke", **TEMPLATE}],
     "scopes": [{"scope_id": "scope-smoke", "index": 0,
                 "template_id": "tpl-smoke", "routing_rules": ""}],
@@ -147,6 +155,7 @@ def test_http_config_sync_busy_returns_409(tmp_path, monkeypatch):
         )
         busy = client.post("/api/session/config_sync", json=_envelope(
             "config_sync", rawdata={
+                "containers": FULL_SYNC["containers"],
                 "templates": [{"template_id": "tpl-smoke", **TEMPLATE,
                                "session_ttl": 90}],
                 "scopes": FULL_SYNC["scopes"],
@@ -160,7 +169,8 @@ def test_http_route_without_any_scope_is_config_not_found(tmp_path, monkeypatch)
     client = _make_client(tmp_path, monkeypatch)
     with client:
         client.post("/api/session/config_sync", json=_envelope(
-            "config_sync", rawdata={"templates": [
+            "config_sync", rawdata={"containers": [CONTAINER],
+                                    "templates": [
                 {"template_id": "tpl-1", **TEMPLATE}], "scopes": []}))
         no_cfg = client.post("/api/session/route", json=_envelope(
             "route", session_id="sess-x"))

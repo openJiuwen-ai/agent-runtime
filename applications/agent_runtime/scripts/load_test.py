@@ -88,12 +88,20 @@ def _envelope(msg_type, request_id, session_id, group_id):
     }
 
 
-def _template(agent_image, scope_cc, pod_cc, namespace):
+def _main_container(container_id, agent_image):
     return {
-        "agent_image": agent_image,
-        "namespace": namespace,
+        "container_id": container_id,
+        "name": "agent",
+        "image": agent_image,
         # influxdb:1.8 的 /health 在 8086（e2e 同款替代 AgentServer）
-        "sse_port": 8086,
+        "ports": [{"name": "sse", "containerPort": 8086}],
+    }
+
+
+def _template(main_cid, scope_cc, pod_cc, namespace):
+    return {
+        "main_container_id": main_cid,
+        "namespace": namespace,
         "scope_concurrency": scope_cc,
         "pod_concurrency": pod_cc,
         "session_ttl": 120,
@@ -155,14 +163,17 @@ def _print_report(title: str, snap: dict, window_sec: float) -> None:
 
 
 async def _seed(client: httpx.AsyncClient, base: str, run: str, args) -> list[dict]:
-    """全量下发本次 run 的模板 + scope（快照式替换,一次请求）。"""
+    """全量下发本次 run 的容器 + 模板 + scope（快照式替换,一次请求;
+    容器 id 带 run 前缀,多轮压测不撞唯一约束）。"""
     if args.scenario == "queued":
-        tpl_id, tpl = f"tpl-{run}-q", _template(
-            "influxdb:1.8", args.scope_concurrency, args.pod_concurrency,
-            args.namespace)
+        tpl_id = f"tpl-{run}-q"
+        cid = f"c-{run}-q"
+        tpl = _template(cid, args.scope_concurrency, args.pod_concurrency,
+                        args.namespace)
     else:
-        tpl_id, tpl = f"tpl-{run}-a", _template(
-            "influxdb:1.8", 50, 10, args.namespace)
+        tpl_id = f"tpl-{run}-a"
+        cid = f"c-{run}-a"
+        tpl = _template(cid, 50, 10, args.namespace)
     scopes = [
         {"scope_id": f"scope-{run}-{gi}", "index": gi, "template_id": tpl_id,
          "routing_rules": f"group_id in ('grp-{run}-{gi}')"}
@@ -173,7 +184,8 @@ async def _seed(client: httpx.AsyncClient, base: str, run: str, args) -> list[di
         "metadata": {"request_id": f"seed-{run}", "session_id": None,
                      "bot_id": "loadbot",
                      "extra": {"group_id": f"grp-{run}-0"}},
-        "rawdata": {"templates": [{"template_id": tpl_id, **tpl}],
+        "rawdata": {"containers": [_main_container(cid, "influxdb:1.8")],
+                    "templates": [{"template_id": tpl_id, **tpl}],
                     "scopes": scopes},
     }, timeout=args.timeout)
     if r.status_code != 200:
