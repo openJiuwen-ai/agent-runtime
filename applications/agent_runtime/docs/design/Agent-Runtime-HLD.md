@@ -103,7 +103,7 @@ flowchart TB
 |---|---|---|---|
 | `POST /api/session/route` | `metadata`:session_id / user_id / group_id / bot_id(**四项均必填非空**) | `{ pod_sse_url, pod_id }` | 同步路由 + 占额度(关键路径);按路由规则匹配 scope(§3.1 匹配语义) |
 | `POST /api/session/touch` | `metadata`:session_id | `{ touched:bool }` | 保活 / EOS,刷新老化 |
-| `POST /api/session/config_sync` | `{ templates:[...], scopes:[...] }`(全量快照) | `{ ok, templates_synced/deleted, scopes_synced/deleted, affected_scopes, wildcard_present }` | Claw Manager 全量下发配置(模板列表 + scope 列表);旧 `kind/op` 增量协议已废弃(400) |
+| `POST /api/session/config_sync` | `{ containers:[...], templates:[...], scopes:[...] }`(三段式全量快照;过渡期双收 legacy `{templates, scopes}` 内联形态) | `{ ok, templates_synced/deleted, containers_synced/deleted, scopes_synced/deleted, affected_scopes, wildcard_present }` | Claw Manager 全量下发配置(容器列表 + 模板列表 + scope 列表;模板只持容器引用,容器规格集中一张表);旧 `kind/op` 增量协议已废弃(400) |
 | `POST /api/session/cleanup` | `{ namespace?, label_selector? }` | `{ cleaned:int }` | 运维批量清 Pod(灾难恢复 / 重新部署),handler 在 Session Manager、委托 `rm_facade.cleanup()` |
 
 - `group_id` 经 `metadata.extra` 传递;`metadata.request_id` 兼作幂等键。
@@ -121,31 +121,47 @@ flowchart TB
 **`pod_sse_url`**:`http://{pod_ip}:{sse_port}/{sse_path}`
 - `pod_ip` = K8s deploy 返回的 Pod IP;`sse_port` / `sse_path` = template 配置(pod_spec 组成部分)。
 
-**`template`**(config_sync 下发,持久化到 DB 表 `service_config_template`):
+**`template`**(config_sync 三段式下发,持久化到 DB 表 `service_config_template`;**容器配置以引用形态集中到 `container` 结构**——主容器 1 条 `main_container_id` + sidecar 列表 `sidecar_container_ids`,Pod 级卷定义 `volumes` 也在模板):
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
+| `template_id` / `template_name` / `description` / `enabled` / `data` | — | 元信息(`enabled=False` 的模板路由不解析) |
+| `namespace` | str | K8s 命名空间(Pod 级) |
+| `nodeName` | str? | 节点绑定(A 类;渲染为 `V1PodSpec.nodeName` 绕过调度器点名上机,deploy tool 镜像预载场景用。`None` = 不绑定;空串同 `None`。坏值 → Pod 永久 Pending 挂满 ready_timeout,入口按 hostname 形态 ≤253 校验) |
+| `pod_name` | str | Pod 名前缀(pod_id = 前缀-随机后缀,默认 `agentserver`) |
+| `volumes` | list[dict]? | **Pod 级卷定义**(K8s `spec.volumes` 同构,见下) |
+| `main_container_id` | str | 主容器引用(必须在本批 containers 内) |
+| `sidecar_container_ids` | list[str]? | sidecar 容器引用列表(≤8,必须在本批 containers 内;与主容器引用不得同 id) |
+| `sse_path` | str | SSE 路径(网关契约,真 AgentServer HTTP 入口为 `/api/v1/events/stream`;默认 `/sse`) |
+| `kubeconfig` | str? | K8s 认证(可选,默认用集群内 ServiceAccount;deploy 凭证,**不进 deploy_ver 指纹**) |
+| `ready_timeout` / `ready_poll_interval` | int | deploy 等 Ready 的超时/轮询间隔(默认 300s/2s) |
 | `scope_concurrency` | int | 该 scope 最大活跃会话数(scope 闸门) |
 | `pod_concurrency` | int | 单 Pod 最大并发(SCARD 闸门) |
 | `session_ttl` | int(秒) | 会话保活超时,未 touch 则老化 |
 | `pod_ttl` | int(秒) | idle Pod 至 reclaim 的等待 |
 | `min_idle_pods` | int | 该 scope 最少热备 Pod 数 |
-| `agent_image` | str | AgentServer 容器镜像 |
-| `namespace` | str | K8s 命名空间 |
-| `node_name` | str? | 节点绑定(A 类;渲染为 `V1PodSpec.nodeName` 绕过调度器点名上机,deploy tool 镜像预载场景用。`None` = 不绑定;空串同 `None`。坏值 → Pod 永久 Pending 挂满 ready_timeout,入口按 hostname 形态 ≤253 校验) |
-| `run_as_user` / `run_as_group` | int? | 主容器进程 UID/GID(A 类;渲染为 `securityContext.runAsUser/runAsGroup`,覆盖镜像 `USER` 指令,用于对齐存储卷属主。`None` = 走镜像默认。**不改变卷文件属主**——PVC 写权限根治仍是存储侧预属主,见 `e2e-test-cases.md` 真实缺陷②;≥0 入口校验) |
-| `container_name` | str | 容器名 |
-| `container_port` | int | 容器端口 |
-| `sse_port` | int | SSE 端口(gateway 直连 Pod) |
-| `sse_path` | str | SSE 路径(真 AgentServer HTTP 入口为 `/api/v1/events/stream`) |
-| `health_path` | str | 健康端点路径(readiness 探针与 RM 场景 N 探测共用;默认 `/health`,真 AgentServer 为 `/api/v1/health`) |
-| `agent_env` | dict | Agent 容器 env 注入(如 `AGENT_HTTP_ENABLED/AGENT_HTTP_HOST/AGENT_HTTP_PORT`——真 AgentServer 需以此开启 HTTP 入口并绑 0.0.0.0) |
-| `agent_host_path_mounts` / `agent_configmap_mounts` / `agent_pvc_mounts` | list[dict]? | 主 agent 容器卷挂载(A 类;规范形与校验见 `mounts.py` 与 `docs/spec/session-manager.md`;`None`/空 = 无挂载。sidecar 容器另有同款 `host_path_mounts`/`configmap_mounts`/`pvc_mounts` 子字段) |
-| `sidecars` | list[dict]? | 同 Pod sidecar 容器规格列表(A 类;通用机制,首个用户 jiuwenbox:特权 + SYS_ADMIN/NET_ADMIN + cgroup hostPath + TCP 8321 探针,agent 经 `127.0.0.1:port` 访问;`None`/空 = 无 sidecar。规范形与校验规则见 `sidecars.py` 与 `docs/spec/session-manager.md`) |
-| `kubeconfig` | str? | K8s 认证(可选,默认用集群内 ServiceAccount) |
-| `readiness_*` / `nfs_*` / 资源限额 | — | deploy 子集(就绪探针 / 存储 / CPU / 内存) |
+| `message_timeout` | int | 数据面 SSE 读写超时语义(gateway 侧使用) |
 
-> `max_pods` 不在 template 里——它是派生值 `⌈scope_concurrency / pod_concurrency⌉`,SM 派生后经 `pool_config` 传 RM。`autoscale_interval` 也不在 template——它是全局默认(0.5s)。
+**`container`**(config_sync 三段式下发,持久化到 DB 表 `service_config_container`;wire 字段名与结构**对齐 K8s 原生 container 规范**——K8s 派生字段用 K8s API 同名 camelCase,业务键 `container_id` 为本仓 snake_case;角色 = 模板引用位置,主容器/sidecar 同一 schema、键白名单与默认值按角色收敛):
+
+| 字段 | 类型 | 说明(主容器 / sidecar 差异) |
+|---|---|---|
+| `container_id` | str | 业务键(≤100,同批唯一;**未被任何模板引用 → 400**;同 id 双角色 → 400) |
+| `name` | str | 容器名(DNS-1123 ≤63;主容器缺省 `agent`;sidecar 必填且不得撞主容器名/兄弟 sidecar) |
+| `image` | str | 镜像(必填非空 ≤512) |
+| `imagePullPolicy` | str | 默认 `IfNotPresent` |
+| `ports` | list | 主容器**必须有 `name="sse"` 端口**(gateway 直连契约;缺省 8080),可另有一个 `name="http"`(无则容器端口 = sse 端口);sidecar 至多 1 个**无名**端口(纯声明,不进 Service;≠ 主容器 sse/http 端口与兄弟 sidecar) |
+| `env` | list[{name,value}] | K8s 列表形态;name 重复/value 非 str → 400(内部归一为 dict) |
+| `envFrom` | list[{prefix?, secretRef?/configMapRef?}] | **envFrom 引用注入**(K8s EnvFromSource 完整形态;每项恰一 ref,`{name, optional?}`,prefix 为 env 变量名前缀;`[]`/缺省 = 无。密钥以引用名下发,**值不落模板/快照/pod_spec**) |
+| `resources` | {requests?, limits?} | 嵌套 `{cpu, memory}` 量纲字符串;缺省 None |
+| `volumeMounts` | list[{name, mountPath, subPath?, readOnly?}] | 按名引用模板 `volumes`(悬挂引用 → 400;`subPath` 仅 configMap 卷;`readOnly` 缺省按内部规范:configMap→true、hostPath/PVC→false) |
+| `securityContext` | dict | 主容器只许 `runAsUser`/`runAsGroup`(≥0,`None` = 走镜像默认;**不改变卷文件属主**——PVC 写权限根治仍是存储侧预属主,见 `e2e-test-cases.md` 真实缺陷②);sidecar 另有 `privileged`、`capabilities{add,drop}`、`seccompProfile`/`appArmorProfile`(type ∈ {Unconfined, RuntimeDefault};appArmor 渲染为 Pod annotation) |
+| `readinessProbe` | dict | 主容器恒 `httpGet{path(=health_path), port(=sse 端口)}` + `initialDelaySeconds`/`periodSeconds`(缺省 5/5;`tcpSocket`/`timeoutSeconds` → 400);sidecar `tcpSocket`/`httpGet` 二选一可缺省(缺省 5/**10**/3,period 差异不得跨角色套用),`timeoutSeconds` 1..300 |
+| —(不可表示即拒绝) | — | `command`/`args`/端口 `protocol`/nfs 卷 `readOnly:true`/`Localhost` profile 等 K8s 字段内部表达不了 → **400,绝不静默丢弃**(防"看似有特权实际没有") |
+
+**`volumes`**(模板级,K8s `spec.volumes` 同构):`[{name(DNS-1123,模板内唯一), 恰一源}]`;源 = `hostPath{path, type?}` / `configMap{name, items?=[{key,path}]}` / `persistentVolumeClaim{claimName}` / `nfs{server, path?}`(NFS 仅主容器、至多一个挂载)。**未被任何容器挂载的卷 → 400**;同卷多容器共享天然成立(PVC 同 claim 跨容器单卷去重由 RM 渲染保证)。
+
+> 内部实现注:水合后仍是扁平 `Template`(字段名 `agent_image`/`agent_env`/`sse_port`/`health_path`/`sidecars` 等,即快照与 RM `pod_spec` 契约,见 `docs/spec/session-manager.md` §models)——**同值必同 deploy_ver**(三段式与 legacy 内联逐字节等价,承重断言固化)。`max_pods` 不在 template 里——它是派生值 `⌈scope_concurrency / pod_concurrency⌉`;`autoscale_interval` 是全局默认(0.5s)。
 
 **`routing_scope`**(config_sync 下发,持久化到 DB 表 `routing_scope`):scope 定义 = `scope_id + index + template_id + routing_rules`,scope↔模板多对一。
 
@@ -171,18 +187,32 @@ field    := user_id | group_id | bot_id(固定小写枚举)
 
 **匹配语义**(resolve 权威定义):请求属性 (user_id, group_id, bot_id) 对 scopes 按 `(index ASC, scope_id ASC)` 排序遍历,**首个命中的 scope 即止**(first-fit);scope 命中 = 空 routing_rules(通配)或表达式求值为真;条件求值 = 属性值(缺省 `""`)`in`/`not in` 值集合。引用模板缺失或 `enabled=False` 的 scope 视为不命中,继续落下一个。**下发方保证含一个空表达式的通配 scope 兜底**;服务端缺失时仅 WARNING 放行,运行时无匹配 → 503 `CONFIG_NOT_FOUND`。
 
-**`config_sync` 入参完整 schema**(全量快照式,一次请求同时携带两个列表;旧 `kind/op` 协议 400 拒绝):
+**`config_sync` 入参完整 schema**(三段式全量快照,一次请求同时携带三个列表;旧 `kind/op` 协议 400 拒绝;无 `containers` 键且模板无 `main_container_id` → legacy 内联形态,过渡期双收):
 
 ```json
 {
-  "templates": [ {"template_id": "...", "...template 字段": ...} ],
-  "scopes":    [ {"scope_id": "...", "index": 0, "template_id": "...",
-                  "routing_rules": "user_id in ('admin') or group_id not in ('g1')"} ]
+  "containers": [ {"container_id": "c-main-1", "name": "agent", "image": "...",
+                   "ports": [{"name": "sse", "containerPort": 8086}],
+                   "env": [{"name": "K", "value": "v"}],
+                   "envFrom": [{"prefix": "DB_", "secretRef": {"name": "agent-secret"}}],
+                   "resources": {"requests": {"cpu": "500m"}},
+                   "volumeMounts": [{"name": "data", "mountPath": "/var/lib/agent"}],
+                   "securityContext": {"runAsUser": 1000},
+                   "readinessProbe": {"httpGet": {"path": "/api/v1/health", "port": 8086},
+                                       "periodSeconds": 5}} ],
+  "templates":  [ {"template_id": "tpl-1", "main_container_id": "c-main-1",
+                   "sidecar_container_ids": ["c-box-1"],
+                   "volumes": [{"name": "data", "persistentVolumeClaim":
+                                 {"claimName": "agent-data-pvc"}}],
+                   "namespace": "agent-ns", "pod_name": "agentserver",
+                   "scope_concurrency": 3, "pod_concurrency": 2, "...": "..."} ],
+  "scopes":     [ {"scope_id": "...", "index": 0, "template_id": "tpl-1",
+                   "routing_rules": "user_id in ('admin') or group_id not in ('g1')"} ]
 }
 ```
 
-- 语义:**以数组为准的全量替换**(upsert 全部 + 删除消失项);幂等重放收敛(affected_scopes 为空)。
-- 校验(400 VALIDATION):`templates`/`scopes` 非 list;template 缺 `template_id`;scope_id 字符集非法;`index` 非整数;scope 引用不在本批模板集内的 template;`routing_rules` 非字符串(含旧结构化 list 格式);表达式语法错误(未知字段/裸 `not`/悬空括号/未引号值/超长或超深);同批 scope_id 重复;`sidecars` 非 list/单项缺 `name`/`image`/name 非 DNS-1123/容器名重复或撞 `container_name`/port 撞 `sse_port`·`container_port`·兄弟 sidecar/env 非 str→scalar/未知键/设 `readiness_probe_type` 而无 `port`/hostPath 挂载非绝对路径或坏 `host_path_type`/超 8 条;卷挂载(主容器三字段与 sidecar 子字段)非 list/mount_path 非绝对/ConfigMap·PVC 名非法/`sub_path`·`items[].path` 非相对路径/`items` 项缺 key 或 path/未知键/同容器 mount_path 重复或撞 `nfs_mount_path`。
+- 语义:**以数组为准的全量替换**(upsert 全部 + 删除消失项;容器以本批为集 GC);幂等重放收敛(affected_scopes 为空)。
+- 校验(400 VALIDATION,锁外零副作用):`templates`/`scopes` 非 list;**形态不一致**(payload 有 containers 段 ⇔ 模板有 `main_container_id`;mixed——引用键与 legacy 内联容器键并存);container_id 空/>100/同批重复/未被引用/双角色;容器逐项按角色校验(见 `container` 结构表;未知键/越角色键/不可表示字段);模板引用不在本批 containers;sidecar 引用重复/>8;volumes(重复卷名/多源/无源/悬挂挂载/未挂载卷/`subPath` 非 configMap/NFS 逾界);模板级 int 严格/策略下界/`nodeName` hostname;scope_id 字符集/`index` 拒 bool/引用不在本批模板集/`routing_rules` 表达式语法/同批重复(语法细则见上文)。
 - 每次成功下发都会:重建路由快照(§5.1 `routing:snapshot`)、对每个存活 scope 推 RM 池参数 + pod_spec(**eager 预热**:autoscale 下一拍即预热 min_idle)、对被删 scope 推 `min_idle=0`(自然排空)。
 
 **错误响应体**(所有非 2xx):
@@ -473,7 +503,7 @@ flowchart TB
 | J | 死 Pod 探测清理 | K8s Watch 探测 | 清 Redis+K8s + 通知 SM | 故障自愈(RM 侧) |
 | K | reclaim 自治回收 | 空闲超 pod_ttl | 周期扫 idle 池回收(ZREM 堵 route 直选) | 低峰自动缩容 |
 | L | 孤儿 Pod 对账 | idle_consider 丢失/漂移 | RM 每 30s `reconcile_pods` 把 SM 已不用的 Pod 移入 idle / reclaim | 消除孤儿,不误杀 |
-| M | 配置热更新 | config_sync 全量下发 {templates, scopes} | A 类(deploy 字段/换引用)日落老 Pod / B 类(策略参数)快照覆盖立即生效 / 删除 scope 自然排空 / eager 预热 min_idle | 配置变更不中断服务 |
+| M | 配置热更新 | config_sync 全量下发 {containers, templates, scopes}(三段式) | A 类(deploy 字段/换引用)日落老 Pod / B 类(策略参数)快照覆盖立即生效 / 删除 scope 自然排空 / eager 预热 min_idle | 配置变更不中断服务 |
 | N | 半死 Pod 检测 | Pod Running 但 SSE 服务不通 | RM 周期探测 AgentServer 健康 SSE 端点,判死清理 | 旁路架构下的数据面健康兜底 |
 
 ### 6.2 详细场景(含 Redis 状态变化)
@@ -875,7 +905,7 @@ sequenceDiagram
 > 价值:**消除孤儿 Pod**——`idle_consider` 丢失 / SM 重启漂移导致的「RM 仍持有 Pod、SM 已不用」由周期对账兜底移入 idle / reclaim。**只删 SM 已 `ZREM` 的对**(SM 不再 route 到它),不误杀有活跃会话的 Pod。经 Facade、不读 SM 模块 key(SM 读自身前缀返回 `stale`)。
 
 #### 场景 M:配置热更新 —— 全量下发 / A 类日落老 Pod / B 类只调策略 / 无请求预热
-**前置**:Claw Manager 经 `config_sync` **全量下发** `{templates, scopes}`(快照式替换;旧 `kind/op` 增量协议已废弃,400 拒绝)。
+**前置**:Claw Manager 经 `config_sync` **全量下发** `{containers, templates, scopes}`(三段式快照替换;旧 `kind/op` 增量协议已废弃,400 拒绝)。
 
 **总原则:新值对增量生效;存量不驱逐、自然过渡(grandfathered)。** 改"Pod 长什么样"→ 老 Pod 日落换血;改"怎么管流量 / 池"→ 只调策略,老 Pod 原地继续服务。
 
@@ -885,7 +915,7 @@ sequenceDiagram
     participant SM as Session Manager
     participant R as Redis
     participant RM as Resource Manager
-    CM->>SM: POST /config_sync {templates, scopes}(全量)
+    CM->>SM: POST /config_sync {containers, templates, scopes}(全量)
     SM->>SM: 锁外校验(400)→ 抢 lock:config_sync(忙→409)
     SM->>SM: 读 DB 旧态 → 模板/scope diff → 日落中间态检查(先于写库)
     SM->>SM: 写 DB(upsert 全部 + 删消失项;失败即中止,不动快照/不推送)

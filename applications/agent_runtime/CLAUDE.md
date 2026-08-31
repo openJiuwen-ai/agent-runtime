@@ -24,7 +24,7 @@
 ```bash
 cd applications/agent_runtime
 uv sync --extra local
-uv run pytest                 # 306 个用例:状态层 Lua / 路由匹配纯函数(含表达式解析) / config 层 / 组件全链路(含 sidecars 多容器与卷挂载) / HTTP 冒烟 / corner case / 双实例多副本 / 停机韧性 / 审计实锤回归(test_audit_repro)
+uv run pytest                 # 394 个用例:状态层 Lua / 路由匹配纯函数(含表达式解析) / config 层(含三段式契约与容器表水合) / 容器规范形(container_spec) / envFrom / 组件全链路(含 sidecars 多容器与卷挂载) / HTTP 冒烟 / corner case / 双实例多副本 / 停机韧性 / 审计实锤回归(test_audit_repro)
 ```
 
 - 构造 `ServiceManager` 必须传 `deploy_mode="subprocess"`(默认 k8s 会挂死测试)。
@@ -73,6 +73,7 @@ uv run --no-sync python scripts/load_test.py --base-url http://127.0.0.1:30091/a
 ## 环境
 
 - Python 3.11–3.13;Redis 须开 AOF/RDB(单实例/哨兵 `redis://`,**Redis Cluster 用 `redis+cluster://`**,键前缀已 hash tag 同槽化,见 `docs/feature/2026-08-redis-cluster.md`;cluster 无库号,URL 禁带 `/N`);DB 用 MySQL/PostgreSQL(禁 SQLite 回退——server 模式;local 模式调试可用)。
+- **存量库升级须先手工 ALTER 模板表三列再发版**(容器表 `service_config_container` 自动建):`main_container_id VARCHAR(100) NULL` / `sidecar_container_ids JSON NULL` / `volumes JSON NULL`——框架建表只 create_all 不补列;发布顺序与 rolling upgrade 风险见 `docs/feature/2026-08-container-table-split.md`。
 - 框架:`service/openjiuwen_runtime/service`(App/Envelope/SystemContext);App 范式参考 `applications/echo/echo_server.py`(**不是** a2a_service)。
 - 部署:`applications/agent_runtime/scripts/deploy.sh local|server`(server 读 `.env.production.local`)。
 - 本仓库是嵌套 git 仓库(独立于外层 jiuwenclaw),提交分开做。
