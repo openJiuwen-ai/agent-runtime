@@ -1,5 +1,5 @@
 # coding: utf-8
-"""诊断端点（/debug/*）冒烟：local 模式全链路（fakeredis + SQLite + FakeK8s）。
+"""诊断端点（/visualization/*）冒烟：local 模式全链路（fakeredis + SQLite + FakeK8s）。
 
 覆盖：overview（含 jobs 计数器）、session/scope/scopes 状态读、config 脱敏、
 stats/recent_errors 计数、sysctx 未就绪 503。模式仿 test_http_smoke.py。
@@ -69,10 +69,10 @@ def _seed_and_route(client):
     return "sess-debug", SCOPE_ID
 
 
-def test_debug_overview(tmp_path, monkeypatch):
+def test_visualization_overview(tmp_path, monkeypatch):
     client = _make_client(tmp_path, monkeypatch)
     with client:
-        resp = client.get("/debug/overview")
+        resp = client.get("/visualization/overview")
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert body["ok"] is True
@@ -87,20 +87,20 @@ def test_debug_overview(tmp_path, monkeypatch):
             assert "leader" in job  # 可能为 None（tick 间隙锁瞬时缺失）
 
 
-def test_debug_overview_redacts_kubeconfig(tmp_path, monkeypatch):
+def test_visualization_overview_redacts_kubeconfig(tmp_path, monkeypatch):
     monkeypatch.setenv("AGENT_RUNTIME_KUBECONFIG", "/super/secret/kube/path")
     client = _make_client(tmp_path, monkeypatch)
     with client:
-        body = client.get("/debug/overview").json()
+        body = client.get("/visualization/overview").json()
         assert body["config"]["kubeconfig"] == "***"
 
 
-def test_debug_session_found_and_404(tmp_path, monkeypatch):
+def test_visualization_session_found_and_404(tmp_path, monkeypatch):
     client = _make_client(tmp_path, monkeypatch)
     with client:
         session_id, scope_id = _seed_and_route(client)
 
-        resp = client.get("/debug/session", params={"session_id": session_id})
+        resp = client.get("/visualization/session", params={"session_id": session_id})
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert body["session"]["scope_id"] == scope_id
@@ -111,16 +111,16 @@ def test_debug_session_found_and_404(tmp_path, monkeypatch):
 
         # 未知会话 → 404；缺参 → 400
         assert client.get(
-            "/debug/session", params={"session_id": "nope"}).status_code == 404
-        assert client.get("/debug/session").status_code == 400
+            "/visualization/session", params={"session_id": "nope"}).status_code == 404
+        assert client.get("/visualization/session").status_code == 400
 
 
-def test_debug_scope_and_scopes(tmp_path, monkeypatch):
+def test_visualization_scope_and_scopes(tmp_path, monkeypatch):
     client = _make_client(tmp_path, monkeypatch)
     with client:
         _, scope_id = _seed_and_route(client)
 
-        resp = client.get("/debug/scope", params={"scope_id": scope_id})
+        resp = client.get("/visualization/scope", params={"scope_id": scope_id})
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert body["rm"]["pod_count"] >= 1
@@ -132,20 +132,20 @@ def test_debug_scope_and_scopes(tmp_path, monkeypatch):
         assert SECRET not in resp.text  # scope_config 的 pod_spec_json 已脱敏
 
         assert client.get(
-            "/debug/scope", params={"scope_id": "noscope"}).status_code == 404
-        assert client.get("/debug/scope").status_code == 400
+            "/visualization/scope", params={"scope_id": "noscope"}).status_code == 404
+        assert client.get("/visualization/scope").status_code == 400
 
-        resp = client.get("/debug/scopes")
+        resp = client.get("/visualization/scopes")
         assert resp.status_code == 200
         listed = resp.json()["scopes"]
         assert any(s["scope_id"] == scope_id and s["pods"] >= 1 for s in listed)
 
 
-def test_debug_config_redacts_kubeconfig(tmp_path, monkeypatch):
+def test_visualization_config_redacts_kubeconfig(tmp_path, monkeypatch):
     client = _make_client(tmp_path, monkeypatch)
     with client:
         _seed_and_route(client)
-        resp = client.get("/debug/config")
+        resp = client.get("/visualization/config")
         assert resp.status_code == 200
         assert SECRET not in resp.text
         tpl = next(t for t in resp.json()["templates"]
@@ -157,7 +157,7 @@ def test_debug_config_redacts_kubeconfig(tmp_path, monkeypatch):
         assert resp.json()["routing_snapshot"]["scope_count"] >= 1
 
 
-def test_debug_stats_and_recent_errors(tmp_path, monkeypatch):
+def test_visualization_stats_and_recent_errors(tmp_path, monkeypatch):
     client = _make_client(tmp_path, monkeypatch)
     with client:
         # 一个失败 route（缺 session_id → VALIDATION 400）→ 计数进 registry
@@ -165,21 +165,21 @@ def test_debug_stats_and_recent_errors(tmp_path, monkeypatch):
             "route", session_id="", group_id="grp", bot_id="bot"))
         assert resp.status_code == 400
 
-        stats = client.get("/debug/stats").json()
+        stats = client.get("/visualization/stats").json()
         assert stats["ok"] is True
         endpoint = stats["endpoints"]["route"]
         assert endpoint["error"] >= 1
         assert endpoint["by_error_code"]["VALIDATION"] >= 1
         assert endpoint["total"] >= 1
 
-        errors = client.get("/debug/recent_errors").json()["errors"]
+        errors = client.get("/visualization/recent_errors").json()["errors"]
         assert errors and errors[0]["error_code"] == "VALIDATION"
         assert errors[0]["request_id"]
 
 
-def test_debug_503_when_sysctx_not_ready(tmp_path, monkeypatch):
+def test_visualization_503_when_sysctx_not_ready(tmp_path, monkeypatch):
     """不进 lifespan（无 with）→ sysctx 缺失 → 503 JSON（镜像 healthz 行为）。"""
     client = _make_client(tmp_path, monkeypatch)
-    resp = client.get("/debug/overview")
+    resp = client.get("/visualization/overview")
     assert resp.status_code == 503
     assert resp.json()["ok"] is False

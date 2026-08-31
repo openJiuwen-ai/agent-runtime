@@ -107,7 +107,7 @@ class RoutingScopeDef:
         return self.rule.matches(attrs)
 
     def to_payload(self) -> dict[str, Any]:
-        """wire 格式视图(/debug 与快照序列化共用)。"""
+        """wire 格式视图(/visualization 与快照序列化共用)。"""
         return {
             "scope_id": self.scope_id,
             "index": self.index,

@@ -290,7 +290,7 @@ class SessionState:
             1, key, token,
         )
 
-    # -------------------------------------------------------------- 诊断只读（/debug/*）
+    # -------------------------------------------------------------- 诊断只读（/visualization/*）
 
     async def session_hash(self, session_id: str) -> dict[str, str]:
         """单会话 HASH（scope_id/pod_id/expiry/session_ttl）。"""

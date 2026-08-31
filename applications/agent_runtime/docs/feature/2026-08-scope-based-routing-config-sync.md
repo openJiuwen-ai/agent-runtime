@@ -68,8 +68,8 @@
   `routing_snapshot` 键;**`util.py`**:删 `scope_id_of`;**`orchestrator.py`**:四参校验 +
   `resolve(user,group,bot)` 新签名;**`handlers.py`**:config_sync 日志改记载荷规模;
   **`main.py`**:表定义替换 + `start()` 里 `ensure_snapshot()`(失败降级首次 route 重建);
-  **`debug_api.py`**:/debug/config 出 `routing_scopes` + `routing_snapshot` 观测,
-  /debug/scope 的 `sm.resolve_cache` → `sm.routing`(快照内定义)。
+  **`visualization_api.py`**:/visualization/config 出 `routing_scopes` + `routing_snapshot` 观测,
+  /visualization/scope 的 `sm.resolve_cache` → `sm.routing`(快照内定义)。
 - **RM 与全部 Lua 零改动**:scope_id 全程是 opaque 字符串;预热靠 config_sync 主动写
   `resource:scope:{sid}:config`(autoscale 1s tick 即补热备)——这是 gap 2 的最小闭合。
 - Lua/Redis 键兼容性:`scope:{sid}:*` 键形不变;scope_id 从 md5 hex 变为下发字符串,

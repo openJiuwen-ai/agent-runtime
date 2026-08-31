@@ -27,7 +27,7 @@ from openjiuwen_runtime.service.config import ServiceConfig
 
 from . import errors as app_errors
 from .config import RM_KEY_PREFIX, SERVICE_PREFIX, SM_KEY_PREFIX, AgentRuntimeConfig
-from .debug_api import register_debug_api
+from .visualization_api import register_visualization_api
 from .metrics import MetricsRegistry, request_metrics_middleware
 from .resource_manager.facade import ResourceManagerFacade
 from .resource_manager.k8s import FakeK8sPodClient, RealK8sPodClient
@@ -256,7 +256,7 @@ class OrchestratorSystemContext(SystemContext):
         }
 
     async def jobs_snapshot(self) -> list[dict[str, Any]]:
-        """诊断用：5 个后台任务的间隔/超时/计数器/当前 leader（/debug/overview）。"""
+        """诊断用：5 个后台任务的间隔/超时/计数器/当前 leader（/visualization/overview）。"""
         intervals = self._job_intervals()
         out: list[dict[str, Any]] = []
         for job in self._jobs:
@@ -324,12 +324,12 @@ def create_app(
         )
 
     app = App(ctx_factory, prefix=SERVICE_PREFIX, enable_ws=False, title="agent-runtime")
-    # 请求汇总日志 + 指标（touch/cleanup 从此每请求一行；registry 供 /debug/stats）
+    # 请求汇总日志 + 指标（touch/cleanup 从此每请求一行；registry 供 /visualization/stats）
     registry = MetricsRegistry()
     app.use(request_metrics_middleware(registry))
     app.asgi.state.metrics = registry
     _register_healthz(app)
-    register_debug_api(app, registry=registry)
+    register_visualization_api(app, registry=registry)
     register_handlers(app)
     return app
 

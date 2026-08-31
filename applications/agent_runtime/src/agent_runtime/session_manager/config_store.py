@@ -394,7 +394,7 @@ class ConfigStore:
         return template_from_row(row) if row is not None else None
 
     async def list_templates(self, limit: int = 200) -> list[dict[str, Any]]:
-        """诊断只读：模板摘要（HLD 字段名；kubeconfig 等敏感列由 /debug 层脱敏）。"""
+        """诊断只读：模板摘要（HLD 字段名；kubeconfig 等敏感列由 /visualization 层脱敏）。"""
         rows = await self._db.list_records(TEMPLATE_TABLE, limit=limit)
         out: list[dict[str, Any]] = []
         for r in rows:
@@ -417,7 +417,7 @@ class ConfigStore:
         return out
 
     async def list_scopes(self, limit: int = 100_000) -> list[RoutingScopeDef]:
-        """全部 scope 定义（快照重建 / /debug 用；坏行跳过）。"""
+        """全部 scope 定义（快照重建 / /visualization 用；坏行跳过）。"""
         rows = await self._db.list_records(ROUTING_SCOPE_TABLE, limit=limit)
         out: list[RoutingScopeDef] = []
         for r in rows:
@@ -486,7 +486,7 @@ class ConfigStore:
         return await self.rebuild_snapshot()
 
     async def routing_snapshot_view(self) -> RoutingSnapshot:
-        """诊断只读（/debug 用）：当前生效快照（缺失会触发重建）。"""
+        """诊断只读（/visualization 用）：当前生效快照（缺失会触发重建）。"""
         return await self._load_snapshot()
 
     # -------------------------------------------------------------- config_sync

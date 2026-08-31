@@ -99,4 +99,4 @@ ALTER TABLE service_config_template ADD COLUMN agent_pvc_mounts JSON NULL;
 - 遗留开放问题:
   - RM 场景 N 只探 agent sse_port,sidecar 崩溃靠 kubelet 原地重启(Pod NotReady 但 agent 健康时 RM 不 purge)——后续可在 watch 加 sidecar tcp 探测;
   - manager 侧(manager_server schema/API/前端)尚未支持 sidecars 字段,manager 链路打通待后续任务;
-  - `/debug` 模板摘要不展示 sidecars(诊断需求出现时再加"sidecar 数"摘要字段)。
+  - `/visualization` 模板摘要不展示 sidecars(诊断需求出现时再加"sidecar 数"摘要字段)。
