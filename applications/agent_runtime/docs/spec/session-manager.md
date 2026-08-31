@@ -80,7 +80,7 @@
 
 `eval()` 统一出口带异常留痕(排障):Lua 返回空表属真异常 → WARNING(`route_place` 的 scope_full 兜底会掩盖);单次 >200ms → WARNING(`lua eval slow`,即 Redis 延迟探针);常规仅 DEBUG。
 
-**诊断只读方法**(/debug/* 用,无业务调用方):`session_hash(sid)`、`session_expiry_score(sid)`、`scope_session_count(sid)`(SCARD)、`routing_snapshot_raw()`(快照原文)。
+**诊断只读方法**(/visualization/* 用,无业务调用方):`session_hash(sid)`、`session_expiry_score(sid)`、`scope_session_count(sid)`(SCARD)、`routing_snapshot_raw()`(快照原文)。
 
 ## lua_scripts.py —— 7 个 Lua
 

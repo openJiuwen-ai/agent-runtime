@@ -78,7 +78,7 @@ class JobRunner:
         self._stopped = asyncio.Event()
         self._task: Optional[asyncio.Task[Any]] = None
         self._last_now: Optional[float] = None
-        # 诊断计数器（只增不改语义；snapshot() 供 /debug 端点读取）
+        # 诊断计数器（只增不改语义；snapshot() 供 /visualization 端点读取）
         self._ticks = 0
         self._ok_ticks = 0
         self._error_ticks = 0

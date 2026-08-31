@@ -1,6 +1,6 @@
 # service-core 规格(组装 / 配置 / 错误码 / 字段分类 / 部署)
 
-> 覆盖 `src/agent_runtime/` 顶层文件:`main.py`、`cli.py`、`config.py`、`errors.py`、`spec_fields.py`、`util.py`,及可观测性三件:`logsetup.py`(日志装配)、`metrics.py`(请求指标)、`debug_api.py`(诊断端点)。
+> 覆盖 `src/agent_runtime/` 顶层文件:`main.py`、`cli.py`、`config.py`、`errors.py`、`spec_fields.py`、`util.py`,及可观测性三件:`logsetup.py`(日志装配)、`metrics.py`(请求指标)、`visualization_api.py`(可视化端点)。
 > SM/RM 模块内文件见 [session-manager.md](session-manager.md) / [resource-manager.md](resource-manager.md)。
 
 ## main.py —— 组装入口(唯一可运行的壳)
@@ -36,14 +36,14 @@ SM 侧 ctx,级联管理全部生命周期(框架 App 的 lifespan 只认一个 c
 
 ### create_app(settings, arc, *, resources=None, instance_id=None, own_resources=True)
 
-构造唯一 App(`prefix=/api/session`,`enable_ws=False`)+ `/healthz` + `/debug/*` + 4 个 handler;
+构造唯一 App(`prefix=/api/session`,`enable_ws=False`)+ `/healthz` + `/visualization/*` + 4 个 handler;
 `app.use(request_metrics_middleware(registry))` 挂请求汇总中间件,registry 存 `app.asgi.state.metrics`(双实例测试各自独立)。
 `resources`/`instance_id`/`own_resources` 仅供多实例测试注入共享物理资源(`tests/integration/_dual_harness.py`);生产路径不传。
 
 ### /healthz(main.py:_register_healthz)
 
 进程就绪探针(K8s probe / deploy_replicas.sh 就绪轮询 / e2e 实例观测)。sysctx 未就绪 → 503;就绪返回 `{ok, instance_id}`。
-**坑**:模块顶部 `from __future__ import annotations` 下,FastAPI 经 `get_type_hints` 用模块全局解析注解——`Request` 必须顶层 import,函数内局部导入会被当成 query 参数(422)。`debug_api.py` 同源坑见下。
+**坑**:模块顶部 `from __future__ import annotations` 下,FastAPI 经 `get_type_hints` 用模块全局解析注解——`Request` 必须顶层 import,函数内局部导入会被当成 query 参数(422)。`visualization_api.py` 同源坑见下。
 
 ## 网络/IO 抖动超时兜底(框架层,server 模式生效)
 
@@ -70,9 +70,9 @@ SM 侧 ctx,级联管理全部生命周期(框架 App 的 lifespan 只认一个 c
 
 `deploy.sh` 调用。参数:`--mode local|server`(必填)、`--env-file`(dotenv 先加载,`override=False`)、`--host`/`--port`(覆盖 `OPENJIUWEN_SERVICE_*`)。流程:load_dotenv → 设 `AGENT_RUNTIME_MODE` → 框架 import(其导入期 `setup_logging`→dictConfig 会重置 root,**任何更早的 basicConfig 都是死配置**)→ `logsetup.configure_logging()` 收口 → `ServiceConfig.from_env()` + `AgentRuntimeConfig.from_env()` → `create_app` → uvicorn.run(`log_level` 跟随 `AGENT_RUNTIME_LOG_LEVEL`)。
 
-## 可观测性(日志 / 诊断端点)
+## 可观测性(日志 / 可视化端点)
 
-三个文件:`logsetup.py`(日志装配)、`metrics.py`(请求指标 + 汇总中间件)、`debug_api.py`(/debug/* 端点)。
+三个文件:`logsetup.py`(日志装配)、`metrics.py`(请求指标 + 汇总中间件)、`visualization_api.py`(/visualization/* 端点)。
 
 ### logsetup.py —— 日志装配
 
@@ -100,22 +100,22 @@ SM 侧 ctx,级联管理全部生命周期(框架 App 的 lifespan 只认一个 c
 
 `MetricsRegistry`(挂 `app.asgi.state.metrics`):per-endpoint `{total, ok, error, by_error_code, p50/p95/max_ms}`(延迟窗口 deque 1024,读取时算分位)+ `recent_errors` 环形缓冲(200 条,新在前:`{ts, endpoint, error_code, request_id, session_id, duration_ms, detail}`)。`request_metrics_middleware` 经 `App.use()` 进 router 派发链(最外层),读 `UnaryResult.response.ok/error_code` 即客户端最终结果。
 
-### debug_api.py —— 诊断端点(全 GET、只读)
+### visualization_api.py —— 可视化端点(全 GET、只读;前缀 2026-08 由 /debug 更名)
 
-挂裸 FastAPI(同 /healthz 模式,`register_debug_api(app, registry=registry)` 在 create_app 调用)。响应统一 `{ok, instance_id, generated_at, …}`;sysctx 未就绪 503、缺参 400、未知对象 404、内部异常 503 JSON+服务端堆栈;limit 夹取 [1,500]。**访问控制:默认开放**(靠网络边界,Service ClusterIP);输出统一 `redact()` 脱敏(敏感 key→`***`、URL 剥 userinfo、嵌套 JSON 字符串深入)。
+挂裸 FastAPI(同 /healthz 模式,`register_visualization_api(app, registry=registry)` 在 create_app 调用)。响应统一 `{ok, instance_id, generated_at, …}`;sysctx 未就绪 503、缺参 400、未知对象 404、内部异常 503 JSON+服务端堆栈;limit 夹取 [1,500]。**访问控制:默认开放**(靠网络边界,Service ClusterIP);输出统一 `redact()` 脱敏(敏感 key→`***`、URL 剥 userinfo、嵌套 JSON 字符串深入)。
 
 | 端点 | 内容 |
 |---|---|
-| `/debug/overview` | instance/mode/uptime/pid/python、脱敏配置摘要、`sysctx.readiness()`、5 个 job 的 interval/tick_timeout/JobRunner 计数快照/当前 leader(`GET agent_runtime:job:{name}` 解析 token;tick 间隙锁瞬时缺失 → leader=null 属正常) |
-| `/debug/session?session_id=` | 会话 HASH、ttl_remaining_s、所属 scope 等待队列/会话数/候选 Pod、绑定 Pod sse_url/deploy_ver |
-| `/debug/scope?scope_id=&limit=50` | RM:pod_count/idle/deploying/deploy_followers/scope_config(脱敏)/逐 Pod 详情(phase/ip/health_fails/idle_since);SM:waiters/session_count/候选 Pod/resolve 缓存 |
-| `/debug/scopes?limit=100` | `known_scope_ids()` 枚举 + 每 scope 一行摘要;total/truncated |
-| `/debug/config` | DB routing_rules + templates(脱敏 kubeconfig)+ Redis 缓存键计数 |
-| `/debug/stats` | registry.snapshot()(计数/分位/错误码分布)+ pid/uptime |
-| `/debug/recent_errors?limit=50` | 错误环形缓冲(新在前) |
+| `/visualization/overview` | instance/mode/uptime/pid/python、脱敏配置摘要、`sysctx.readiness()`、5 个 job 的 interval/tick_timeout/JobRunner 计数快照/当前 leader(`GET agent_runtime:job:{name}` 解析 token;tick 间隙锁瞬时缺失 → leader=null 属正常) |
+| `/visualization/session?session_id=` | 会话 HASH、ttl_remaining_s、所属 scope 等待队列/会话数/候选 Pod、绑定 Pod sse_url/deploy_ver |
+| `/visualization/scope?scope_id=&limit=50` | RM:pod_count/idle/deploying/deploy_followers/scope_config(脱敏)/逐 Pod 详情(phase/ip/health_fails/idle_since);SM:waiters/session_count/候选 Pod/resolve 缓存 |
+| `/visualization/scopes?limit=100` | `known_scope_ids()` 枚举 + 每 scope 一行摘要;total/truncated |
+| `/visualization/config` | DB routing_rules + templates(脱敏 kubeconfig)+ Redis 缓存键计数 |
+| `/visualization/stats` | registry.snapshot()(计数/分位/错误码分布)+ pid/uptime |
+| `/visualization/recent_errors?limit=50` | 错误环形缓冲(新在前) |
 
 - **LB 后是 per-instance**:命中哪个副本就是哪个副本的数据,响应 `instance_id` 标识应答者;看指定副本直连 Pod IP。
-- **坑**(与 /healthz 同源):`Request`/`JSONResponse` 顶层 import;query 参数用 `request.query_params.get()` 读,**不在签名里声明**;`_debug_endpoint` 包装器**不用 functools.wraps**(会把内层 `(request, sysctx)` 注解复制给 FastAPI 解析,sysctx 会被当成 query 参数)。
+- **坑**(与 /healthz 同源):`Request`/`JSONResponse` 顶层 import;query 参数用 `request.query_params.get()` 读,**不在签名里声明**;`_visualization_endpoint` 包装器**不用 functools.wraps**(会把内层 `(request, sysctx)` 注解复制给 FastAPI 解析,sysctx 会被当成 query 参数)。
 
 ## config.py —— AgentRuntimeConfig(本服务自有配置)
 

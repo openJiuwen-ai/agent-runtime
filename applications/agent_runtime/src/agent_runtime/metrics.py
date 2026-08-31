@@ -1,5 +1,5 @@
 # coding: utf-8
-"""进程内请求指标注册表 + 请求汇总日志中间件（/debug/stats 数据源）。
+"""进程内请求指标注册表 + 请求汇总日志中间件（/visualization/stats 数据源）。
 
 设计要点：
 

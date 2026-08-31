@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 
-from agent_runtime.debug_api import redact
+from agent_runtime.visualization_api import redact
 from agent_runtime.logsetup import (
     _ContextFormatter,
     _RequestContextFilter,

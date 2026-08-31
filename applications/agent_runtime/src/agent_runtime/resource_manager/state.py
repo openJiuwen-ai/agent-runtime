@@ -325,7 +325,7 @@ class ResourceState:
         await self.redis.delete(self.k.pod_health_fails(pod_id))
 
     async def health_fails(self, pod_id: str) -> int:
-        """诊断只读：当前连续失败次数（/debug/scope 用）。"""
+        """诊断只读：当前连续失败次数（/visualization/scope 用）。"""
         return to_int(await self.redis.get(self.k.pod_health_fails(pod_id)))
 
     # -------------------------------------------------------------- 选主锁

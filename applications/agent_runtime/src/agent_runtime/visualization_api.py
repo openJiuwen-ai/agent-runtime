@@ -1,5 +1,7 @@
 # coding: utf-8
-"""调试诊断只读端点（GET /debug/*，与 /healthz 同款裸 FastAPI 路由）。
+"""可视化只读端点（GET /visualization/*，与 /healthz 同款裸 FastAPI 路由）。
+
+前缀 2026-08 由 /debug 更名（对外名称去敏感化，行为零变化）。
 
 定位问题用：实例/依赖/后台任务总览、单会话与 scope 池的 Redis 状态、DB 配置、
 进程内请求统计与最近错误。全部**只读**，不写任何 Redis/DB/K8s 状态。
@@ -29,7 +31,7 @@ from typing import Any, Callable
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
-logger = logging.getLogger("agent_runtime.debug")
+logger = logging.getLogger("agent_runtime.visualization")
 
 # redact(): key（小写后）含下列标记 → 值打码
 SECRET_KEY_MARKERS = ("password", "secret", "token", "kubeconfig",
@@ -93,7 +95,7 @@ def _sysctx_or_503(request: Request) -> Any:
     return getattr(request.app.state, "sysctx", None)
 
 
-def _debug_endpoint(func: Callable[..., Any]) -> Callable[..., Any]:
+def _visualization_endpoint(func: Callable[..., Any]) -> Callable[..., Any]:
     """统一错误面：任何异常 → 503 JSON + 服务端堆栈（绝不裸 500）。
 
     注意：**不用 functools.wraps**——wraps 会把内层 (request, sysctx) 的
@@ -112,18 +114,18 @@ def _debug_endpoint(func: Callable[..., Any]) -> Callable[..., Any]:
             content.setdefault("instance_id", sysctx.instance_id)
             content.setdefault("generated_at", round(time.time(), 3))
             return content
-        except _DebugNotFound as exc:
+        except _VisualizationNotFound as exc:
             return JSONResponse(
                 status_code=404,
                 content={"ok": False, "detail": str(exc)},
             )
-        except _DebugBadRequest as exc:
+        except _VisualizationBadRequest as exc:
             return JSONResponse(
                 status_code=400,
                 content={"ok": False, "detail": str(exc)},
             )
         except Exception as exc:  # noqa: BLE001
-            logger.exception("debug endpoint failed: path=%s", request.url.path)
+            logger.exception("visualization endpoint failed: path=%s", request.url.path)
             return JSONResponse(
                 status_code=503,
                 content={"ok": False,
@@ -135,18 +137,18 @@ def _debug_endpoint(func: Callable[..., Any]) -> Callable[..., Any]:
     return wrapper
 
 
-class _DebugNotFound(Exception):
+class _VisualizationNotFound(Exception):
     pass
 
 
-class _DebugBadRequest(Exception):
+class _VisualizationBadRequest(Exception):
     pass
 
 
 # ---------------------------------------------------------------- 端点实现
 
 
-@_debug_endpoint
+@_visualization_endpoint
 async def _overview(request: Request, sysctx: Any) -> dict[str, Any]:
     """实例总览：版本/配置摘要（脱敏）+ 依赖 readiness + 后台任务与 leader。"""
     arc = sysctx.arc
@@ -184,16 +186,16 @@ async def _overview(request: Request, sysctx: Any) -> dict[str, Any]:
     }
 
 
-@_debug_endpoint
+@_visualization_endpoint
 async def _session(request: Request, sysctx: Any) -> dict[str, Any]:
     """单会话状态：HASH / 到期 / 所属 scope 等待队列 / 绑定 Pod。"""
     session_id = (request.query_params.get("session_id") or "").strip()
     if not session_id:
-        raise _DebugBadRequest("session_id is required")
+        raise _VisualizationBadRequest("session_id is required")
     sm_state = sysctx.sm_sweeper.state
     data = await sm_state.session_hash(session_id)
     if not data:
-        raise _DebugNotFound(f"session not found: {session_id}")
+        raise _VisualizationNotFound(f"session not found: {session_id}")
     scope_id = data.get("scope_id", "")
     pod_id = data.get("pod_id", "")
     score = await sm_state.session_expiry_score(session_id)
@@ -221,12 +223,12 @@ async def _session(request: Request, sysctx: Any) -> dict[str, Any]:
     return payload
 
 
-@_debug_endpoint
+@_visualization_endpoint
 async def _scope(request: Request, sysctx: Any) -> dict[str, Any]:
     """单 scope 池状态：RM 池/逐 Pod 详情 + SM 等待队列/路由定义。"""
     scope_id = (request.query_params.get("scope_id") or "").strip()
     if not scope_id:
-        raise _DebugBadRequest("scope_id is required")
+        raise _VisualizationBadRequest("scope_id is required")
     limit = _clamp_limit(request, default=50, lo=1, hi=500)
     rm_state = sysctx.rm_sweeper.state
     sm_state = sysctx.sm_sweeper.state
@@ -240,7 +242,7 @@ async def _scope(request: Request, sysctx: Any) -> dict[str, Any]:
     has_any = cfg or await rm_state.pod_count(scope_id) > 0
     if (not has_any and not await sm_state.scope_session_count(scope_id)
             and routing is None):
-        raise _DebugNotFound(f"scope not found: {scope_id}")
+        raise _VisualizationNotFound(f"scope not found: {scope_id}")
 
     pod_ids = await rm_state.pod_ids(scope_id)
     idle = set(await rm_state.idle_pods(scope_id))
@@ -275,7 +277,7 @@ async def _scope(request: Request, sysctx: Any) -> dict[str, Any]:
     }
 
 
-@_debug_endpoint
+@_visualization_endpoint
 async def _scopes(request: Request, sysctx: Any) -> dict[str, Any]:
     """全部 scope 枚举（SCAN）+ 每 scope 一行摘要。"""
     limit = _clamp_limit(request, default=100, lo=1, hi=500)
@@ -299,7 +301,7 @@ async def _scopes(request: Request, sysctx: Any) -> dict[str, Any]:
     }
 
 
-@_debug_endpoint
+@_visualization_endpoint
 async def _config(request: Request, sysctx: Any) -> dict[str, Any]:
     """DB 配置（routing scopes + templates，脱敏）+ 路由快照观测。"""
     config_store = sysctx.sm_config_store
@@ -325,7 +327,7 @@ async def _config(request: Request, sysctx: Any) -> dict[str, Any]:
     }
 
 
-@_debug_endpoint
+@_visualization_endpoint
 async def _stats(request: Request, sysctx: Any) -> dict[str, Any]:
     """进程内请求统计（per-endpoint 计数 / 延迟分位 / 错误码分布）。"""
     snapshot = request.app.state.metrics.snapshot()
@@ -333,7 +335,7 @@ async def _stats(request: Request, sysctx: Any) -> dict[str, Any]:
     return snapshot
 
 
-@_debug_endpoint
+@_visualization_endpoint
 async def _recent_errors(request: Request, sysctx: Any) -> dict[str, Any]:
     """最近错误环形缓冲（新在前；单进程视角）。"""
     limit = _clamp_limit(request, default=50, lo=1, hi=200)
@@ -343,13 +345,13 @@ async def _recent_errors(request: Request, sysctx: Any) -> dict[str, Any]:
 # ---------------------------------------------------------------- 注册
 
 
-def register_debug_api(app: Any, *, registry: Any) -> None:
-    """把 /debug/* 挂到 App 的裸 FastAPI 上（create_app 里调用，紧邻 healthz）。"""
+def register_visualization_api(app: Any, *, registry: Any) -> None:
+    """把 /visualization/* 挂到 App 的裸 FastAPI 上（create_app 里调用，紧邻 healthz）。"""
     asgi = app.asgi
-    asgi.get("/debug/overview", summary="diagnostics: instance overview")(_overview)
-    asgi.get("/debug/session", summary="diagnostics: one session state")(_session)
-    asgi.get("/debug/scope", summary="diagnostics: one scope pool state")(_scope)
-    asgi.get("/debug/scopes", summary="diagnostics: all scopes summary")(_scopes)
-    asgi.get("/debug/config", summary="diagnostics: db config + redis caches")(_config)
-    asgi.get("/debug/stats", summary="diagnostics: request metrics")(_stats)
-    asgi.get("/debug/recent_errors", summary="diagnostics: recent errors")(_recent_errors)
+    asgi.get("/visualization/overview", summary="diagnostics: instance overview")(_overview)
+    asgi.get("/visualization/session", summary="diagnostics: one session state")(_session)
+    asgi.get("/visualization/scope", summary="diagnostics: one scope pool state")(_scope)
+    asgi.get("/visualization/scopes", summary="diagnostics: all scopes summary")(_scopes)
+    asgi.get("/visualization/config", summary="diagnostics: db config + redis caches")(_config)
+    asgi.get("/visualization/stats", summary="diagnostics: request metrics")(_stats)
+    asgi.get("/visualization/recent_errors", summary="diagnostics: recent errors")(_recent_errors)

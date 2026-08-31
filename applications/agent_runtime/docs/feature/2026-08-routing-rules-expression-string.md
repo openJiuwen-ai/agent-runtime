@@ -66,6 +66,6 @@ list 行按坏行跳过并告警,首发 config_sync 全量下发即覆盖)。
 - 文档:HLD §config_sync 契约(routing_scope 字段表/表达式语法/匹配语义/校验清单)、
   `spec/session-manager.md`、`spec/e2e-test-cases.md`(14b,74→75 项)。
 - **Manager 侧联动**:下发方须同步改为表达式字符串(本仓库只做服务端)。
-- 无 Redis 键/Lua/接口签名变化;`/debug` 的 scope 视图 `routing_rules` 由 list 变 string。
+- 无 Redis 键/Lua/接口签名变化;`/visualization` 的 scope 视图 `routing_rules` 由 list 变 string。
 - 前作 [scope 重构](2026-08-scope-based-routing-config-sync.md) 的「规则 OR/表达式
   AND」格式自此作废。

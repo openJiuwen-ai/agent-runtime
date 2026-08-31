@@ -74,7 +74,7 @@
 
 计数全部派生自 SCARD/ZCARD,无独立计数器。
 
-`eval()` 统一出口带异常留痕(同 SM:空表异常 WARNING、>200ms 慢 eval WARNING、常规 DEBUG)。**诊断只读方法**:`health_fails(pod_id)`(/debug/scope 用)。
+`eval()` 统一出口带异常留痕(同 SM:空表异常 WARNING、>200ms 慢 eval WARNING、常规 DEBUG)。**诊断只读方法**:`health_fails(pod_id)`(/visualization/scope 用)。
 
 ## lua_scripts.py —— 6 个 Lua
 
