@@ -50,12 +50,14 @@ async def db_handler(tmp_path):
 
     from agent_runtime.session_manager.config_store import (
         ROUTING_SCOPE_TABLE_DEF,
+        SERVICE_CONFIG_CONTAINER_TABLE_DEF,
         SERVICE_CONFIG_TEMPLATE_TABLE_DEF,
     )
 
     handler = SQLiteHandler(str(tmp_path / "test.db"))
     await handler.connect()
     await handler.init_table(SERVICE_CONFIG_TEMPLATE_TABLE_DEF)
+    await handler.init_table(SERVICE_CONFIG_CONTAINER_TABLE_DEF)
     await handler.init_table(ROUTING_SCOPE_TABLE_DEF)
     yield handler
     await handler.disconnect()
@@ -76,6 +78,7 @@ class Runtime:
 
         self.redis = redis_client
         self.k8s = k8s
+        self.db = db
         self.sm_state = SessionState(redis_client)
         self.rm_state = ResourceState(redis_client)
 

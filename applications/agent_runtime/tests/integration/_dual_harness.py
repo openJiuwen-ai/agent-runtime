@@ -196,24 +196,48 @@ class DualReplicas:
     # ------------------------------------------------------------ 播种 / 选主采样
 
     async def seed_template(self, template_id="tpl-1", scope_id=SEED_SCOPE,
-                            **overrides) -> None:
-        """经 B 的 HTTP config_sync 全量下发 template + 通配兜底 scope。"""
-        template = {
-            "agent_image": "agentserver:1.0",
-            "namespace": "default",
-            "scope_concurrency": 3,
-            "pod_concurrency": 2,
-            "session_ttl": 60,
-            "pod_ttl": 300,
-            "min_idle_pods": 0,
-            **overrides,
-        }
-        status, _, body = await self.post(
-            1, "config_sync",
-            rawdata={"templates": [{"template_id": template_id, **template}],
-                     "scopes": [{"scope_id": scope_id, "index": 0,
-                                 "template_id": template_id,
-                                 "routing_rules": ""}]})
+                            *, split=False, **overrides) -> None:
+        """经 B 的 HTTP config_sync 全量下发 template + 通配兜底 scope。
+
+        split=True 走三段式契约(容器段 + 引用形态模板),覆盖双实例下的
+        新形态水合/快照/推送;默认 legacy 内联(过渡期双收回归)。
+        """
+        if split:
+            payload = {
+                "containers": [{
+                    "container_id": f"c-{template_id}-main",
+                    "name": "agent", "image": "agentserver:1.0",
+                    "ports": [{"name": "sse", "containerPort": 8080}],
+                }],
+                "templates": [{
+                    "template_id": template_id,
+                    "main_container_id": f"c-{template_id}-main",
+                    "namespace": "default",
+                    "scope_concurrency": 3, "pod_concurrency": 2,
+                    "session_ttl": 60, "pod_ttl": 300, "min_idle_pods": 0,
+                    **overrides,
+                }],
+                "scopes": [{"scope_id": scope_id, "index": 0,
+                            "template_id": template_id, "routing_rules": ""}],
+            }
+        else:
+            template = {
+                "agent_image": "agentserver:1.0",
+                "namespace": "default",
+                "scope_concurrency": 3,
+                "pod_concurrency": 2,
+                "session_ttl": 60,
+                "pod_ttl": 300,
+                "min_idle_pods": 0,
+                **overrides,
+            }
+            payload = {
+                "templates": [{"template_id": template_id, **template}],
+                "scopes": [{"scope_id": scope_id, "index": 0,
+                            "template_id": template_id,
+                            "routing_rules": ""}],
+            }
+        status, _, body = await self.post(1, "config_sync", rawdata=payload)
         assert status == 200, body
 
     async def sample_election(self, job: str, duration: float,
@@ -251,6 +275,7 @@ async def dual(tmp_path, monkeypatch):
 
     from agent_runtime.session_manager.config_store import (
         ROUTING_SCOPE_TABLE_DEF,
+        SERVICE_CONFIG_CONTAINER_TABLE_DEF,
         SERVICE_CONFIG_TEMPLATE_TABLE_DEF,
     )
 
@@ -265,6 +290,7 @@ async def dual(tmp_path, monkeypatch):
     db = SQLiteHandler(str(tmp_path / "dual.db"))
     await db.connect()
     await db.init_table(SERVICE_CONFIG_TEMPLATE_TABLE_DEF)
+    await db.init_table(SERVICE_CONFIG_CONTAINER_TABLE_DEF)
     await db.init_table(ROUTING_SCOPE_TABLE_DEF)
     k8s = SlowFakeK8sPodClient(FakeK8sPodClient())
 

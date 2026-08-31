@@ -386,6 +386,7 @@ def test_C8_refresh_survives_pod_info_cleanup():
             from agent_runtime.resource_manager.k8s import FakeK8sPodClient
             from agent_runtime.session_manager.config_store import (
                 ROUTING_SCOPE_TABLE_DEF,
+                SERVICE_CONFIG_CONTAINER_TABLE_DEF,
                 SERVICE_CONFIG_TEMPLATE_TABLE_DEF,
             )
             from tests.conftest import Runtime
@@ -393,6 +394,7 @@ def test_C8_refresh_survives_pod_info_cleanup():
             db = SQLiteHandler(os.path.join(tempfile.mkdtemp(), "c8.db"))
             await db.connect()
             await db.init_table(SERVICE_CONFIG_TEMPLATE_TABLE_DEF)
+            await db.init_table(SERVICE_CONFIG_CONTAINER_TABLE_DEF)
             await db.init_table(ROUTING_SCOPE_TABLE_DEF)
             redis = FakeRedis()
             runtime = Runtime(db, redis, FakeK8sPodClient())
