@@ -63,7 +63,13 @@ class ResourceSweeper:
         outcomes: dict[str, int] = {}
         try:
             for scope_id in await self.state.known_scope_ids():
-                outcome = await self._autoscale_scope(scope_id)
+                # per-scope 隔离：单 scope 瞬时异常（Redis/内部错误）不中止整拍，
+                # 其余 scope 照常补位（否则遍历顺序靠后者被饿死）
+                try:
+                    outcome = await self._autoscale_scope(scope_id)
+                except Exception:  # noqa: BLE001 - per-scope 隔离，下拍重试
+                    logger.exception("autoscale scope failed: scope=%s", scope_id)
+                    outcome = "scope_error"
                 outcomes[outcome] = outcomes.get(outcome, 0) + 1
         finally:
             await self.state.unlock(self.state.k.lock_autoscale(), token)
@@ -160,26 +166,29 @@ class ResourceSweeper:
             now = now_ts()
             for scope_id in await self.state.known_scope_ids():
                 scopes += 1
-                cfg = await self.state.load_scope_config(scope_id)
-                min_idle = to_int(cfg.get("min_idle_pods"))
-                pod_ttl = to_int(cfg.get("pod_ttl"), 300)
-                idle = await self.state.idle_pods(scope_id)
-                # 版本+代次感知的 excess：min_idle 底数只保护「当前版本且当前
-                # 代次」的 idle Pod（按转 idle 先后取最早 min_idle 个）；旧版本/
-                # 旧代次 idle Pod 永不可复用（acquire want_ver+generation 过滤），
-                # 恒为 excess——否则 A 类变更或 config_refresh 后旧暖 Pod 被底数
-                # 永久保护，暖池钉死旧版且蹲占 max_pods 槽位
-                warm = await self._current_version_idle(scope_id, cfg, idle)
-                stale = sorted(set(idle) - set(warm))
-                if not stale and len(idle) <= min_idle:
-                    continue
-                aged = {p: await self.state.idle_since(p) for p in idle}
-                ranked_warm = sorted(warm, key=lambda p: aged[p])
-                excess = stale + ranked_warm[min_idle:]
-                for pod_id in excess:
-                    if aged[pod_id] and now - aged[pod_id] >= pod_ttl:
-                        await self._reclaim_pod(pod_id, scope_id)
-                        reclaimed += 1
+                try:
+                    cfg = await self.state.load_scope_config(scope_id)
+                    min_idle = to_int(cfg.get("min_idle_pods"))
+                    pod_ttl = to_int(cfg.get("pod_ttl"), 300)
+                    idle = await self.state.idle_pods(scope_id)
+                    # 版本+代次感知的 excess：min_idle 底数只保护「当前版本且当前
+                    # 代次」的 idle Pod（按转 idle 先后取最早 min_idle 个）；旧版本/
+                    # 旧代次 idle Pod 永不可复用（acquire want_ver+generation 过滤），
+                    # 恒为 excess——否则 A 类变更或 config_refresh 后旧暖 Pod 被底数
+                    # 永久保护，暖池钉死旧版且蹲占 max_pods 槽位
+                    warm = await self._current_version_idle(scope_id, cfg, idle)
+                    stale = sorted(set(idle) - set(warm))
+                    if not stale and len(idle) <= min_idle:
+                        continue
+                    aged = {p: await self.state.idle_since(p) for p in idle}
+                    ranked_warm = sorted(warm, key=lambda p: aged[p])
+                    excess = stale + ranked_warm[min_idle:]
+                    for pod_id in excess:
+                        if aged[pod_id] and now - aged[pod_id] >= pod_ttl:
+                            await self._reclaim_pod(pod_id, scope_id)
+                            reclaimed += 1
+                except Exception:  # noqa: BLE001 - per-scope 隔离，下拍重试
+                    logger.exception("reclaim scope failed: scope=%s", scope_id)
         finally:
             await self.state.unlock(self.state.k.lock_reclaim(), token)
         logger.debug("reclaim tick: scopes=%d reclaimed=%d duration_ms=%.0f",
@@ -197,27 +206,36 @@ class ResourceSweeper:
         if not await self.state.try_lock(self.state.k.lock_watch(), WATCH_LOCK_TTL, token):
             return
         t0 = time.monotonic()
-        pods = dead = purged = 0
+        pods = dead = failed = 0
         try:
             for pod_id in await self.state.all_pod_ids():
                 pods += 1
-                info = await self.state.pod_info(pod_id)
-                if not info:
-                    continue
-                pod = await self.k8s.get_pod(pod_id, info.get("namespace", "default"))
-                if pod is None or pod.phase in DEAD_POD_STATUSES:
-                    logger.warning(
-                        "dead pod detected: pod=%s phase=%s reason=%s",
-                        pod_id, pod.phase if pod else "NotFound", pod.reason if pod else "",
-                    )
-                    dead += 1
-                    await self._purge_and_notify(pod_id)
-                    continue
-                await self._health_probe(pod_id, info)
+                # per-Pod 隔离：单 Pod 的 get_pod/info 异常不中止整拍——
+                # all_pod_ids 是 sorted 确定序，上抛会使排序在后的 Pod
+                # 永远得不到健康探测（半死 Pod 盲区）
+                try:
+                    info = await self.state.pod_info(pod_id)
+                    if not info:
+                        continue
+                    pod = await self.k8s.get_pod(
+                        pod_id, info.get("namespace", "default"))
+                    if pod is None or pod.phase in DEAD_POD_STATUSES:
+                        logger.warning(
+                            "dead pod detected: pod=%s phase=%s reason=%s",
+                            pod_id, pod.phase if pod else "NotFound",
+                            pod.reason if pod else "",
+                        )
+                        dead += 1
+                        await self._purge_and_notify(pod_id)
+                        continue
+                    await self._health_probe(pod_id, info)
+                except Exception:  # noqa: BLE001 - per-Pod 隔离，下拍重试
+                    failed += 1
+                    logger.exception("watch probe failed: pod=%s", pod_id)
         finally:
             await self.state.unlock(self.state.k.lock_watch(), token)
-        logger.debug("watch tick: pods=%d dead=%d duration_ms=%.0f",
-                     pods, dead, (time.monotonic() - t0) * 1000)
+        logger.debug("watch tick: pods=%d dead=%d failed=%d duration_ms=%.0f",
+                     pods, dead, failed, (time.monotonic() - t0) * 1000)
 
     async def _health_probe(self, pod_id: str, info: dict[str, str]) -> None:
         """场景 N：K8s Running/Ready 但 SSE hang 死只能靠此探测发现。
@@ -291,39 +309,59 @@ class ResourceSweeper:
         if not await self.state.try_lock(self.state.k.lock_reconcile(), RECONCILE_LOCK_TTL, token):
             return
         t0 = time.monotonic()
-        orphans = stale = 0
+        orphans = stale = failed = 0
         view: list[dict[str, str]] = []
         try:
             # 1. Redis↔K8s：Redis 记录的 Pod 在 K8s 已不存在 → 清理（Watch 兜底）
             for pod_id in await self.state.all_pod_ids():
-                info = await self.state.pod_info(pod_id)
-                if not info:
-                    continue
-                pod = await self.k8s.get_pod(pod_id, info.get("namespace", "default"))
-                if pod is None:
-                    logger.warning("orphan pod (absent in k8s): pod=%s", pod_id)
-                    orphans += 1
-                    await self._purge_and_notify(pod_id)
+                # per-Pod 隔离（同 watch_once：sorted 确定序，单点异常不得饿死后续）
+                try:
+                    info = await self.state.pod_info(pod_id)
+                    if not info:
+                        continue
+                    pod = await self.k8s.get_pod(
+                        pod_id, info.get("namespace", "default"))
+                    if pod is None:
+                        logger.warning("orphan pod (absent in k8s): pod=%s", pod_id)
+                        orphans += 1
+                        await self._purge_and_notify(pod_id)
+                except Exception:  # noqa: BLE001 - per-Pod 隔离，下拍重试
+                    failed += 1
+                    logger.exception("reconcile orphan check failed: pod=%s", pod_id)
 
             # 2. RM↔SM：RM 持有但 SM 已不 route 的 stale Pod → 转 idle（按 pod_ttl 回收）
             for pod_id in await self.state.all_pod_ids():
-                scope_id = await self.state.pod_scope(pod_id)
+                try:
+                    scope_id = await self.state.pod_scope(pod_id)
+                except Exception:  # noqa: BLE001 - per-Pod 隔离
+                    failed += 1
+                    logger.exception("reconcile pod_scope failed: pod=%s", pod_id)
+                    continue
                 if scope_id:
                     view.append({"pod_id": pod_id, "scope_id": scope_id})
             if not view or self.sm is None:
                 return
-            result = await self.sm.reconcile_pods(view)
+            try:
+                result = await self.sm.reconcile_pods(view)
+            except Exception:  # noqa: BLE001 - Facade 整体失败：本拍跳过，下拍重试
+                logger.exception("reconcile_pods (sm facade) failed, skip this tick")
+                return
             now = now_ts()
             for entry in result.get("stale", []):
-                await self.state.release(entry["pod_id"], entry["scope_id"], now)
-                stale += 1
-                logger.info("reconcile stale pod → idle: pod=%s scope=%s",
-                            entry["pod_id"], entry["scope_id"])
+                try:
+                    await self.state.release(entry["pod_id"], entry["scope_id"], now)
+                    stale += 1
+                    logger.info("reconcile stale pod → idle: pod=%s scope=%s",
+                                entry["pod_id"], entry["scope_id"])
+                except Exception:  # noqa: BLE001 - per-Pod 隔离
+                    failed += 1
+                    logger.exception("reconcile stale release failed: pod=%s",
+                                     entry.get("pod_id"))
         finally:
             await self.state.unlock(self.state.k.lock_reconcile(), token)
             logger.debug(
-                "reconcile tick: pods=%d orphans=%d stale=%d duration_ms=%.0f",
-                len(view), orphans, stale, (time.monotonic() - t0) * 1000,
+                "reconcile tick: pods=%d orphans=%d stale=%d failed=%d duration_ms=%.0f",
+                len(view), orphans, stale, failed, (time.monotonic() - t0) * 1000,
             )
 
     # -------------------------------------------------------------- 清理

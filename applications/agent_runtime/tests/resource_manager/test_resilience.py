@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 
 import pytest
 
 from agent_runtime.errors import DeployFailed
+from agent_runtime.resource_manager import orchestrator as rm_orch_module
 from agent_runtime.resource_manager.orchestrator import ResourceOrchestrator
 from agent_runtime.resource_manager.sweeper import ResourceSweeper
 from agent_runtime.util import now_ts
@@ -155,3 +157,76 @@ async def test_purge_skipped_when_k8s_delete_fails_then_retries(rm_state, k8s):
     assert not await rm_state.pod_info("pod-purge-1")
     assert k8s.deleted == ["pod-purge-1"]
     assert spy.dead_notifications == ["pod-purge-1"]
+
+
+@requires_lua
+async def test_acquire_no_config_is_bounded(rm_state, k8s, monkeypatch):
+    """config 键被并发删/残缺时 no_config 重跑必须有界+退避——不得热自旋挂死
+    （排障表现为「acquire 卡死」）。"""
+    monkeypatch.setattr(rm_orch_module, "NO_CONFIG_MAX_LOOPS", 3)
+    monkeypatch.setattr(rm_orch_module, "NO_CONFIG_BACKOFF_SEC", 0.01)
+    orchestrator = ResourceOrchestrator(rm_state, k8s)
+
+    async def _always_configured(scope_id):  # 欺骗首见检查（不落 config）
+        return True
+
+    monkeypatch.setattr(rm_state, "has_scope_config", _always_configured)
+    t0 = time.monotonic()
+    with pytest.raises(DeployFailed, match="no pool config"):
+        await orchestrator.acquire(
+            SCOPE, {"agent_image": "agentserver:1.0"},
+            {"max_pods": 2}, request_id="req-nc",
+        )
+    assert time.monotonic() - t0 < 2, "no_config 重跑应有界退出"
+
+
+@requires_lua
+async def test_watch_isolates_per_pod_failure(rm_state, k8s, monkeypatch):
+    """逐 Pod 隔离：all_pod_ids 是 sorted 确定序，首个 Pod 的 get_pod 异常
+    不得中止整拍——否则次个 Pod 永远得不到判死清理（半死 Pod 盲区）。"""
+    sweeper = ResourceSweeper(rm_state, k8s, sm_facade=_SpySM())
+    for pod_id, ip in (("pod-a", "10.42.0.1"), ("pod-b", "10.42.0.2")):
+        await rm_state.register_pod(
+            pod_id=pod_id, scope_id=SCOPE,
+            pod_sse_url=f"http://{ip}:8080/sse", pod_ip=ip,
+            namespace="default", deploy_ver="ver1", deploy_token=f"tok-{pod_id}",
+            idle_flag=True, now=now_ts(), sse_port=8080, health_path="/health",
+        )
+    k8s.dead_pods.add("pod-b")
+    original = k8s.get_pod
+
+    async def _get_pod(pod_id, namespace):
+        if pod_id == "pod-a":
+            raise RuntimeError("simulated apiserver hiccup")
+        return await original(pod_id, namespace)
+
+    monkeypatch.setattr(k8s, "get_pod", _get_pod)
+    await sweeper.watch_once()
+
+    assert await rm_state.pod_ids(SCOPE) == ["pod-a"]        # b 清理、a 保留待下拍
+    assert sweeper.sm.dead_notifications == ["pod-b"]
+
+
+@requires_lua
+async def test_autoscale_isolates_per_scope_failure(rm_state, k8s, nat_cfg, monkeypatch):
+    """per-scope 隔离：一个 scope 的瞬时异常不得中止其余 scope 的热备补位。"""
+    orchestrator = ResourceOrchestrator(rm_state, k8s)
+    sweeper = ResourceSweeper(rm_state, k8s, orchestrator=orchestrator,
+                              sm_facade=None)
+    for sid in ("scope-a", "scope-b"):
+        await rm_state.save_scope_config(sid, {
+            "min_idle_pods": 1, "max_pods": 2, "pod_ttl": 300,
+            "deploy_ver": "ver1", "pod_spec_json": json.dumps(nat_cfg),
+        })
+    original = rm_state.load_scope_config
+
+    async def _load(scope_id):
+        if scope_id == "scope-a":
+            raise RuntimeError("simulated redis error")
+        return await original(scope_id)
+
+    monkeypatch.setattr(rm_state, "load_scope_config", _load)
+    await sweeper.autoscale_once()
+
+    assert len(await rm_state.idle_pods("scope-b")) == 1     # 健康 scope 照常补位
+    assert await rm_state.idle_pods("scope-a") == []

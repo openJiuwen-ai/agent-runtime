@@ -37,7 +37,8 @@
 → 循环 { LUA_ACQUIRE → (action, pod_id, sse_url):
      reuse        → 直接返回(deploy_ver+generation 过滤后的暖 Pod,已弹出 idle 池)
      max_reached  → 清占位 → MaxPodsReached
-     no_config    → continue(上面已写配置)
+     no_config    → 退避 0.2s 重跑;有界(NO_CONFIG_MAX_LOOPS=5,超限 DeployFailed
+                    ——config 被并发删/残缺的真异常态不得热自旋挂死)
      need_deploy  → 抢 lock:rm:deploy:{scope}(TTL 360,盖住 ready_timeout 300+余量):
                     赢家 → _deploy_and_register(idle_flag=False)
                     输家 → 清占位 → _follow_leader(follower 等待室) }
@@ -118,7 +119,7 @@
 
 ## sweeper.py —— 四个后台任务
 
-均 per-scope 操作、不读 SM Redis key、各自带 tick 级选主锁(调度由 main 注入):
+均 per-scope 操作、不读 SM Redis key、各自带 tick 级选主锁(调度由 main 注入)。**逐项异常隔离(2026-09 健壮性加固)**:autoscale/reclaim 的 per-scope 循环、watch/reconcile 的 per-Pod 循环各自 try/except(记日志 + failed/scope_error 计数,下拍重试)——`known_scope_ids`/`all_pod_ids` 均为 sorted 确定序,单点异常上抛会使排序靠后的 scope/Pod 永远得不到处理(半死 Pod 探测盲区);`sm_facade.reconcile_pods` 整体失败本拍跳过。CancelledError 不在隔离范围(停机语义)。
 
 | 任务 | 周期/锁 | 逻辑 |
 |---|---|---|
