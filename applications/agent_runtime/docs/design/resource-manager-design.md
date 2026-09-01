@@ -126,7 +126,7 @@
   - `pool_config` = per-scope 池参数(`min_idle_pods`/`max_pods`(SM 派生)/`pod_ttl`/`pod_concurrency`),RM 首 acquire 缓存为 `scope:config`。`pod_concurrency` **仅用于 deploy follower 等待室推导上限(pc-1)**——per-Pod 容量闸门仍在 SM 侧(`SCARD < pod_concurrency`),RM 不做容量叠加判定(红线不变)。
   - **out**:`{ pod_id:str, pod_sse_url:str }`
   - **错**(Facade 抛异常):`MaxPodsReached`(对应原 `MAX_PODS_REACHED`)、`DeployFailed`(对应原 `DEPLOY_FAILED`)、`ValidationError`(对应原 `VALIDATION`)。错误码语义不变,见 §7;SM 的 `route` handler 捕获后映射为自身对外 HTTP 响应。
-  - **语义**:按 `scope_id` 取 Pod——若 `scope:idle` 有暖 Pod 则复用,否则未达 `max_pods` → 选主 deploy +1,达 `max_pods` → `MaxPodsReached`。deploy 锁的**输家进 follower 等待室**(M8):原子闸门准入上限 `pod_concurrency-1`(leader 会话之外新 Pod 恰剩这些槽),overflow 严格快失败;等待有界(`ready_timeout`+余量),leader 失败(锁空闲且无进展)则 follower 直接失败**不接管**;检测到 leader 的 Pod 注册即**直接复用返回**(与 reuse 分支同构,SM 侧重跑仲裁)——RM 全程不读 SM 容量键。从 `scope:idle` 取暖 Pod 时**跳过 `deploy_ver` 不匹配当前 deploy 字段的**(A 类配置变更后的老版本暖 Pod 留在 idle 池按 `pod_ttl` 回收,不外发给新流量;见 HLD 场景 M / §2.2.1)。**config-agnostic**:不解析 `pod_spec` 语义,池参数经 `acquire` 传入并缓存于 `scope:config`。
+  - **语义**:按 `scope_id` 取 Pod——若 `scope:idle` 有暖 Pod 则复用,否则未达 `max_pods` → 选主 deploy +1,达 `max_pods` → `MaxPodsReached`。deploy 锁的**输家进 follower 等待室**(M8):原子闸门准入上限 `pod_concurrency-1`(leader 会话之外新 Pod 恰剩这些槽),overflow 严格快失败;等待有界(`ready_timeout`+余量),leader 失败(锁空闲且无进展)则 follower 直接失败**不接管**;检测到 leader 的 Pod 注册即**直接复用返回**(与 reuse 分支同构,SM 侧重跑仲裁)——RM 全程不读 SM 容量键。从 `scope:idle` 取暖 Pod 时**跳过 `deploy_ver` 或 `generation` 不匹配当前配置的**(A 类配置变更后的老版本暖 Pod、config_refresh 后的老代次暖 Pod 均留在 idle 池按 `pod_ttl` 回收,不外发给新流量;见 HLD 场景 M / M-R / §2.2.1 / §2.2.2)。**config-agnostic**:不解析 `pod_spec` 语义,池参数经 `acquire` 传入并缓存于 `scope:config`。
 
 ### 2.2 `ResourceManagerFacade.idle_consider(...)` —— 该 scope 在该 Pod 上已无会话(⚠️ scope 级,修订)
 - **in**:`{ pod_id:str, scope_id:str }`
@@ -137,9 +137,15 @@
 - **in**:`{ scope_id:str, pool_config:dict, pod_spec?:dict }`
   - `pool_config` = per-scope 池参数(`min_idle_pods`/`max_pods`(SM 派生)/`pod_ttl`);**A 类变更**(deploy 子集变更,新旧 `deploy_ver` 不等)时附带 `pod_spec` deploy 字段。
 - **out**:`{ updated:bool }`
-- **语义**:`HSET` 覆盖 `resource:scope:{scope_id}:config`(**幂等**,与 `acquire` 首建同款写入);A 类变更时**同时更新进程内 deploy 字段缓存**(仅 deploy 用,非编排态)。
-- **效果**:autoscale / reclaim **立即**按新池参数执行(不再只等下次 acquire);`acquire` 的后续 deploy 用新 deploy 字段,且取暖 Pod 跳过 `deploy_ver` 不匹配的(§2.1)。
+- **语义**:`HSET` 覆盖 `resource:scope:{scope_id}:config`(**幂等**,与 `acquire` 首建同款写入);A 类变更时**同时更新进程内 deploy 字段缓存**(仅 deploy 用,非编排态)。**mapping 永不含 `generation`**——代次只经 `bump_generation`(§2.2.2)单调递增,推送永不重置。
+- **效果**:autoscale / reclaim **立即**按新池参数执行(不再只等下次 acquire);`acquire` 的后续 deploy 用新 deploy 字段,且取暖 Pod 跳过 `deploy_ver` 或 `generation` 不匹配的(§2.1)。
 - **触发**:Session Manager 的 `config_sync` 处理流程(SM spec §4.3;语义权威见 HLD §6.2 场景 M「配置热更新」)。
+
+### 2.2.2 `ResourceManagerFacade.bump_generation(...)` —— 代次日落标记(config_refresh 触发)
+- **in**:`{ scope_id:str }` → **out**:`generation:int`(自增后的新代次)
+- **语义**:`HINCRBY resource:scope:{scope_id}:config generation 1`(原子自增;缺省键从 1 起)。**唯一写点**——`update_pool_config` 与首 acquire 的 HSET 均不含该字段。
+- **效果**:现有 Pod 的 `generation` 全部落后于 config → `LUA_ACQUIRE` 不再复用其 idle 暖 Pod、`_current_version_idle` 判 stale(reclaim 恒 excess 按 `pod_ttl` 回收)、autoscale 的 warm 底数归零(触发按缓存 pod_spec 重建)。"当前版本"判定 = **`deploy_ver` 相等 ∧ `generation` 相等**;两侧同为缺省(空串)视为一致——从未刷新过的 scope 零行为变化。
+- **触发**:Session Manager 的 `config_refresh` 处理流程(强制刷新,场景 M-R;SM spec §4.3b;语义权威见 HLD §6.2 场景 M-R)。
 
 ### 2.3 `POST /api/session/cleanup` —— 运维批删(对应现 `cleanup_all_agentserver_pods`)
 - **in**:`{ namespace?:str, label_selector?:str }`
@@ -159,11 +165,11 @@
 
 | 键 | 类型 | 内容 | 作用 |
 |---|---|---|---|
-| `resource:pod:{pod_id}:info` | HASH | `scope_id`, `pod_sse_url`, `pod_ip`, `namespace`, `phase`(created/idle/deleting), `created_ts`, `deploy_ver` | Pod 元信息;`scope_id` 标识所属 Pod 池;`deploy_ver` = 该 Pod deploy 子集 hash 指纹,acquire 版本过滤用(A 类变更后跳过老版本暖 Pod,§2.1 / §2.2.1) |
+| `resource:pod:{pod_id}:info` | HASH | `scope_id`, `pod_sse_url`, `pod_ip`, `namespace`, `phase`(created/idle/deleting), `created_ts`, `deploy_ver`, `sse_port`, `health_path`, `generation` | Pod 元信息;`scope_id` 标识所属 Pod 池;`deploy_ver` = 该 Pod deploy 子集 hash 指纹,acquire 版本过滤用(A 类变更后跳过老版本暖 Pod,§2.1 / §2.2.1);`generation` = 注册时刻代次烙印(REGISTER 服务端读 scope:config,config_refresh 日落判定用,§2.2.2) |
 | `resource:pod:{pod_id}:idle_since` | STRING | Pod 转入 idle 的时间戳 | idle→reclaim 计时(reclaim sweeper 判定) |
 | `resource:scope:{scope_id}:pods` | **ZSET** | `pod_id`(score=`created_ts`) | 该 scope 的全部 Pod 集(in_use ∪ idle);ZSET 保创建序 |
 | `resource:scope:{scope_id}:idle` | SET | idle 的 `pod_id` | `SCARD` 对比 `min_idle_pods`(autoscale 闸门);excess 计 `pod_ttl` 回收 |
-| `resource:scope:{scope_id}:config` | HASH | `min_idle_pods`, `max_pods`, `pod_ttl` | 首 acquire 存(config_sync 时经 `update_pool_config` **主动刷新**,§2.2.1),后续读;**不含 `pod_concurrency`**(SM 自用作 per-Pod 容量闸门,RM 不强制);`autoscale_interval` 全局默认,不入此 HASH |
+| `resource:scope:{scope_id}:config` | HASH | `min_idle_pods`, `max_pods`, `pod_ttl`, `pod_spec_json`, `deploy_ver`, `generation` | 首 acquire 存(config_sync 时经 `update_pool_config` **主动刷新**,§2.2.1),后续读;**不含 `pod_concurrency`**(SM 自用作 per-Pod 容量闸门,RM 不强制);`generation` 唯一写点 = config_refresh 的 HINCRBY(§2.2.2),推送不重置;`autoscale_interval` 全局默认,不入此 HASH |
 | `resource:scope:{scope_id}:deploying` | SET | deploy 占位 token(uuid) | max_pods 判定含此(防并发超配);register/失败时清 |
 | `resource:pods:all` | SET | 全部 `pod_id` | 对账 / RM 冷启动枚举 |
 | `lock:rm:deploy:{scope_id}` | STRING(`SET NX EX`) | 选主标记 | per-`scope_id` deploy 串行(防并发 deploy 超配) |
@@ -231,8 +237,12 @@ Resource Manager **不查 config DB、不解析 template 语义**。所有部署
 cfg = HGETALL(resource:scope:{scope_id}:config)                  # max_pods
 if cfg 为空: return {action:"no_config"}                          # 首次 acquire 应由 handler 先建 config
 
-# 1. 取 scope 暖 Pod 复用
-pod_id = SPOP(resource:scope:{scope_id}:idle)
+# 1. 取 scope 暖 Pod 复用(跳过 deploy_ver 或 generation 不匹配的——A 类变更后
+#    老版本、config_refresh 后老代次的暖 Pod 由 reclaim 回收,不外发新流量)
+cfg_gen = HGET(resource:scope:{scope_id}:config, "generation") or ""
+pod_id = SPOP(resource:scope:{scope_id}:idle
+              where HGET(resource:pod:{pod_id}:info, "deploy_ver") == want_ver
+              and (HGET(resource:pod:{pod_id}:info, "generation") or "") == cfg_gen)
 if pod_id:
     DEL resource:pod:{pod_id}:idle_since
     return {action:"reuse", pod_id, pod_sse_url:HGET(resource:pod:{pod_id}:info, "pod_sse_url")}
@@ -249,9 +259,12 @@ return {action:"need_deploy"}
 
 **`LUA_REGISTER(pod_id, scope_id, pod_sse_url, pod_ip, namespace, deploy_token, idle_flag, now)`** —— deploy 成功后登记新 Pod(原子):一次性写 info/scope:pods/pods:all,清 deploying 占位。`idle_flag=true`(autoscale 暖备)则入 `scope:idle`。
 ```
+gen = HGET(resource:scope:{scope_id}:config, "generation") or ""   # 代次烙印(服务端读,
+                                                                   # 与 bump 原子排队——deploy
+                                                                   # 中途刷新不误伤新注册 Pod)
 HSET resource:pod:{pod_id}:info scope_id {scope_id}
            pod_sse_url {pod_sse_url} pod_ip {pod_ip} namespace {namespace}
-           phase "created" created_ts {now}
+           phase "created" created_ts {now} generation {gen}
 ZADD resource:scope:{scope_id}:pods {now} {pod_id}
 SADD resource:pods:all {pod_id}
 SREM resource:scope:{scope_id}:deploying {deploy_token}      # 清占位
@@ -345,7 +358,7 @@ loop:
 
 | 任务 | 触发/周期 | 选主锁 | 流程 |
 |---|---|---|---|
-| **autoscale**(min_idle 热备) | 每全局 `autoscale_interval` 默认(0.5s) | `lock:rm:autoscale`(EX ≈ 2×interval) | per-`scope_id`:`SCARD(scope:idle) < min_idle_pods` 且 `ZCARD(scope:pods)+SCARD(scope:deploying) < max_pods` → 占位 deploy + `LUA_REGISTER(idle_flag=true)`(入 `scope:idle`;reclaim sweeper 以 min_idle 底数保护,见 §5.4.1) |
+| **autoscale**(min_idle 热备) | 每全局 `autoscale_interval` 默认(0.5s) | `lock:rm:autoscale`(EX ≈ 2×interval) | per-`scope_id`:暖池计数**只认当前版本+代次**(`_current_version_idle`:`deploy_ver` ∧ `generation` 均与 `scope:config` 一致)且 `< min_idle_pods`,且 `ZCARD(scope:pods)+ZCARD(scope:deploying) < max_pods` → 占位 deploy + `LUA_REGISTER(idle_flag=true)`(入 `scope:idle`;reclaim sweeper 以 min_idle 底数保护,见 §5.4.1)。**config_refresh 后老代暖 Pod 不算底数 → 立即重建** |
 | **reclaim** | 每 1s | `lock:rm:reclaim`(EX 2s) | 见 §5.4.1(自治 reclaim,**无前置对账**;安全靠 SM `ZREM`) |
 | **死 Pod 探测** | K8s Watch 长连 + 10s 轮询兜底 | Watch 每副本订阅(通知幂等);轮询发现+删除选主 `lock:rm:watch` | `monitor_pods_status` + Watch 事件 → `FAILED`/`NotFound`/`DELETED` → `LUA_PURGE` + K8s `delete`(若还在)+ `notify_pod_dead`(经 `sm_facade.notify_pod_dead`)。判死枚举:`Terminating`/`Failed`/`CrashLoopBackOff`/`ImagePullBackOff`/`ErrImagePull`/`InvalidImageName`;`Pending` 不判死 |
 | **半死 Pod 健康探测**(HLD 场景 N) | 10s(与轮询同频,复用 `lock:rm:watch` 选主) | 同上 | 对 `pods:all` 每个 Pod 探测 `GET http://{pod_ip}:{sse_port}/health`(AgentServer 固定约定端点);**连续 2 次失败判半死**,按死 Pod 处理(`LUA_PURGE` + K8s `delete` + `notify_pod_dead`)。连续阈值防瞬时抖动误杀;探测恢复无动作。K8s Running/Ready 但 SSE hang 死只能靠此探测发现(K8s Watch 看不到) |
@@ -357,8 +370,12 @@ loop:
   for scope_id in 所有 scope:
     min_idle = HGET(scope:config, min_idle_pods); pod_ttl = HGET(scope:config, pod_ttl)
     idle_pods = SMEMBERS(resource:scope:{scope_id}:idle)
-    # 不动 min_idle 底数:只考虑 idle 数 > min_idle 的部分
-    excess = idle_pods 排除最早 min_idle 个(保底热备)
+    # 版本+代次感知的 excess:min_idle 底数只保护「当前版本且当前代次」的 idle Pod
+    # (按转 idle 先后取最早 min_idle 个);老版本(A 类变更后)/老代次
+    # (config_refresh 后)的 idle Pod 恒为 excess——否则旧暖 Pod 被底数永久
+    # 保护,暖池钉死旧版且蹲占 max_pods 槽位
+    warm = idle_pods 中 deploy_ver ∧ generation 均与 scope:config 一致者
+    excess = (idle_pods - warm) + warm 排除最早 min_idle 个
     for pod_id in excess:
         if now - int(GET(resource:pod:{pod_id}:idle_since)) < pod_ttl: continue   # 未到期
         # 无前置对账(不读 SM):reclaim 安全性由 SM 侧 ZREM 契约保证(见下)

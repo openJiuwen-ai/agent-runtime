@@ -232,7 +232,18 @@
 | **A 类**(deploy 子集,除 `kubeconfig`) | `agent_image` / `namespace` / `container_name` / `container_port` / `sse_port` / `sse_path` / `readiness_*` / `nfs_*` / 资源限额 | 日落老 Pod(SM `ZREM` 软摘除 + RM acquire 版本过滤);存量不驱逐——镜像升级 = 自然滚动(老 Pod 排空老化回收)或运维 `cleanup` 批删重建 |
 | **B 类** | `scope_concurrency` / `pod_concurrency` / `session_ttl` / `pod_ttl` / `min_idle_pods` / `max_pods` / `kubeconfig` | 不日落:`DEL scope:config` + `update_pool_config` 推 RM 立即生效;调小 → 存量不驱逐,自然回落 |
 
-**串行化与并发控制**(多副本 + LB 下两次 config_sync 可能并发):①全程持分布式锁 `lock:config_sync`(SET NX EX);抢不到 → **409 `CONFIG_SYNC_BUSY`**(可重试,带 `Retry-After`),不排队。②**上一次未完全完成前拒绝下一次**——完成 = 处理流程结束 + 受影响 scope 无"已日落待回收"的 Pod(判定:`pods:registered` 中属于该 scope、但已不在 `scope:pods` 候选集的 Pod 即中间态残留;全部回收后 `notify_pod_dead` 清注册)。③**写 DB 失败 → 立即中止,不得 DEL cache、不得推送**(防 cache 脏刷新)。详见 HLD 场景 M。
+**串行化与并发控制**(多副本 + LB 下两次 config_sync 可能并发):①全程持分布式锁 `lock:config_sync`(SET NX EX);抢不到 → **409 `CONFIG_SYNC_BUSY`**(可重试,带 `Retry-After`),不排队。**`config_refresh` 与之共用此锁**(双向互斥)。②**上一次未完全完成前拒绝下一次**——完成 = 处理流程结束 + 受影响 scope 无"已日落待回收"的 Pod(判定:`pods:registered` 中属于该 scope、但已不在 `scope:pods` 候选集的 Pod 即中间态残留;全部回收后 `notify_pod_dead` 清注册)。③**写 DB 失败 → 立即中止,不得 DEL cache、不得推送**(防 cache 脏刷新)。详见 HLD 场景 M。
+
+### 4.3b config_refresh 处理流程(强制刷新,场景 M-R)
+
+**入口**:`POST /api/session/config_refresh`,**无载荷**(rawdata 非空 → 400);与 config_sync 共用 `lock:config_sync`(忙 → 409 `CONFIG_SYNC_BUSY`)。效果 = **不改任何配置**,全部存活 scope 的现有 Pod 优雅日落并按存量配置重建:
+
+1. 枚举 DB 存活 scope(幻影 scope 归扩散③ drain 路径;模板缺失的悬挂 scope 跳过 + WARNING);
+2. 每 scope 三步,**顺序红线 bump → ZREM**("ZREM 而未 bump"会造出永久蹲占 max_pods 的搁浅态):① `rm_facade.bump_generation(scope_id)`(严格,失败上抛);② `update_pool_config` 重推池参数 + pod_spec(值未变,确保 RM 缓存就绪;失败仅告警);③ 候选集全量 `ZREM` 软摘除(严格);
+3. 不写 DB、不动路由快照;日落收敛与重建全部复用既有后台任务(存量会话亲和保持 → 空 Pod 转 idle → reclaim 代次感知回收 → autoscale 按缓存 pod_spec 重建,新 Pod 烙新代次);
+4. **非幂等但收敛**(每次调用 = 一轮全量日落重建);config_sync 的日落中间态守卫**不扩展**看 generation(老代 Pod 版本与当前配置相等 → 不可见 → B 类下发不 409;A 类照旧 409 到排空完成)。
+
+详见 HLD §6.2 场景 M-R(含运营注意:容量挤压 / 长会话上限 / 滚动升级混布)。
 
 ### 4.4 pod_spec 提取
 - `route` 触发 `acquire` 时,从 template 行提取 **deploy 子集**(镜像 / namespace / kubeconfig / readiness / NFS / 资源限额),与 **池参数**(`min_idle_pods`/`pod_ttl`)+ 派生的 `max_pods`打包成 `pool_config`,随 `scope_id` 下发 Resource Manager。
@@ -305,6 +316,12 @@
 existing = HGETALL(session:{session_id})
 if not existing: return nil                            # 已被清理(并发 evict / 双重调用),幂等返回 nil
 scope_id, pod_id = existing.scope_id, existing.pod_id
+
+# 残骸自卫:哈希存在但缺 scope_id/pod_id(外部直改键造出的半成品)→ 只能自清
+# 自身两处(无法定位 scope/pod 集合),返回 rubble 标记(调用侧 WARNING)。绝不能
+# 上抛——单坏键会让到期 pass 每 tick 死在同一 sid 上(崩溃循环 = 会话永不过期)。
+if scope_id == nil or pod_id == nil:
+    ZREM session_expiry session_id; DEL session:{session_id}; return {rubble}
 
 # 从两个集合移除(维护不变量 1:每 session 恰在一个 Pod)+ 清亲和 HASH + 清全局到期记录
 SREM scope:{scope_id}:sessions session_id
@@ -573,8 +590,8 @@ runtime 态全在内存态 Redis;**Redis flush / 重启(无 AOF/RDB)→ 会话�
 ```
 agent-runtime/management/openjiuwen_runtime/management/session_manager/
   __init__.py
-  app.py              # App 构造 + 注册 handler(route/touch/config_sync/cleanup;notify_pod_dead/reconcile_pods 已降级为 Facade)
-  handlers.py         # route / touch / config_sync / cleanup 四个 handler(cleanup 委托 rm_facade.cleanup)
+  app.py              # App 构造 + 注册 handler(route/touch/config_sync/config_refresh/cleanup;notify_pod_dead/reconcile_pods 已降级为 Facade)
+  handlers.py         # route / touch / config_sync / config_refresh / cleanup 五个 handler(cleanup 委托 rm_facade.cleanup)
   orchestrator.py     # route 编排(resolve→闸门→选 Pod→rm_facade.acquire)
   state.py            # Redis 键 schema + 不变量(封装 ctx.redis 唯一出口)
   lua_scripts.py      # LUA_ROUTE_PLACE / LUA_EVICT / LUA_TOUCH / LUA_SWEEP_IDLE_NOTIFY 文本
@@ -624,7 +641,8 @@ agent-runtime/applications/orchestrator/   # 【合并壳】合并服务的唯�
    - **`ResourceManagerFacade.acquire`** 入参 `{ scope_id, pod_spec, pool_config, request_id }`;出参 `{pod_id, pod_sse_url}`。失败抛 `MaxPodsReached` / `DeployFailed` / `ValidationError` 异常,由 `route` handler 捕获映射为对外 HTTP `NO_POD_AVAILABLE`(§2.1)。
    - **单 scope 占 Pod**:RM 按 `scope_id` 独立建池;容量由 SM 的 `SCARD < pod_concurrency` 闸门保证,RM 不强制、无 reserves HASH。
    - **`ResourceManagerFacade.idle_consider` 为 scope 级**:入参 `{pod_id, scope_id}`,出参 `{transitioned_to_idle:bool}`,幂等(`HDEL` 天然幂等)。单 scope 占 Pod,释放即 idle。
-   - **`ResourceManagerFacade.update_pool_config`**(config_sync 触发,见 §4.3):入参 `{ scope_id, pool_config }`(A 类变更时附带 `pod_spec` deploy 字段);出参 `{ updated:bool }`。HSET 覆盖 RM 侧 `resource:scope:{scope_id}:config`(**幂等**);RM 的 autoscale/reclaim **立即**用新池参数,A 类变更同时刷新 RM 缓存的 deploy 字段(后续 deploy 用新值)。详见 RM spec §2.2.1。
+   - **`ResourceManagerFacade.update_pool_config`**(config_sync 触发,见 §4.3):入参 `{ scope_id, pool_config }`(A 类变更时附带 `pod_spec` deploy 字段);出参 `{ updated:bool }`。HSET 覆盖 RM 侧 `resource:scope:{scope_id}:config`(**幂等**;mapping 永不含 `generation`,代次只经 `bump_generation` 单调递增);RM 的 autoscale/reclaim **立即**用新池参数,A 类变更同时刷新 RM 缓存的 deploy 字段(后续 deploy 用新值)。详见 RM spec §2.2.1。
+   - **`ResourceManagerFacade.bump_generation`**(config_refresh 触发,场景 M-R,见 §4.3b):入参 `{ scope_id }`,出参 `generation:int`。`HINCRBY` RM 侧 `resource:scope:{scope_id}:config` 的 `generation`(原子自增,唯一写点)→ 现有 Pod 的代次全部落后 → RM acquire 过滤 / reclaim 判 stale / autoscale 重建。详见 RM spec §2.2.2 与 HLD §6.2 场景 M-R。
    - **pod 不可用信号(含死亡 + 回收)+ 自治 reclaim**:✅ `SessionManagerFacade.notify_pod_dead` 覆盖回收(idle→reclaim)与死亡两种。**RM reclaim 自治(不读 SM 模块 key,经 Facade 边界)**:RM 按 `idle_since` 自治 `if now - idle_since >= pod_ttl: k8s.delete + LUA_PURGE + sm_facade.notify_pod_dead`。安全性靠 SM→RM 单向契约:SM `LUA_SWEEP_IDLE_NOTIFY` 发 `idle_consider` 前原子 `ZREM scope:pods`,该 Pod 即刻退出 first-fit 候选,reclaim 窗口内 route 不再直选新 session 上去(堵竞态 A)。**`idle_consider` 丢失 / SM 重启漂移** 由 RM 侧孤儿对账 sweeper 经 Facade `sm_facade.reconcile_pods` 兜底(见下条)。详见 RM spec §5.4.1 / §5.4.2。SM 侧 `notify_pod_dead` 清注册逻辑不变(§5.3)。
    - **冷恢复**:合并服务共享 Redis 开 AOF/RDB,跨重启编排态不丢,SM 无需从 RM 重建 pod 注册;**不提供 `list_pods` / 枚举 Pod 端点**。Redis flush 不在恢复目标。详见 §9.3 / RM spec §5.5。
    - **周期对账 Facade `SessionManagerFacade.reconcile_pods`(2026-08-10 新增,合并后从 REST 改进程内 Facade)**:SM 暴露 `reconcile_pods(view)`(§2.5),RM 每 30s 经 Facade 调用,消除「RM 持有 Pod、SM 已不用」的孤儿 Pod(`idle_consider` 丢失 / SM 重启漂移)。SM 对入参每个 (pod,scope) 查 `scope:{scope_id}:pods` 成员资格,非成员返回 `stale`;RM 将 stale Pod 移入 idle → 按 `pod_ttl` 回收。**只读、单向**(RM 不直读 SM Redis,跨模块只走 Facade)。

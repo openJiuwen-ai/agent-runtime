@@ -36,7 +36,7 @@ SM 侧 ctx,级联管理全部生命周期(框架 App 的 lifespan 只认一个 c
 
 ### create_app(settings, arc, *, resources=None, instance_id=None, own_resources=True)
 
-构造唯一 App(`prefix=/api/session`,`enable_ws=False`)+ `/healthz` + `/visualization/*` + 4 个 handler;
+构造唯一 App(`prefix=/api/session`,`enable_ws=False`)+ `/healthz` + `/visualization/*` + 5 个 handler;
 `app.use(request_metrics_middleware(registry))` 挂请求汇总中间件,registry 存 `app.asgi.state.metrics`(双实例测试各自独立)。
 `resources`/`instance_id`/`own_resources` 仅供多实例测试注入共享物理资源(`tests/integration/_dual_harness.py`);生产路径不传。
 
@@ -86,7 +86,7 @@ SM 侧 ctx,级联管理全部生命周期(框架 App 的 lifespan 只认一个 c
 
 ### 日志契约(排障入口)
 
-- **每请求一行汇总**(INFO,`agent_runtime.metrics`):`request: endpoint= route outcome=ok error_code=- duration_ms=11.0 | request_id=…`——四个端点全覆盖(含 touch/cleanup),与 uvicorn access 行经 request_id 关联。
+- **每请求一行汇总**(INFO,`agent_runtime.metrics`):`request: endpoint= route outcome=ok error_code=- duration_ms=11.0 | request_id=…`——五个端点全覆盖(含 touch/config_refresh/cleanup),与 uvicorn access 行经 request_id 关联。
 - **慢请求分诊**(WARNING,同 logger):汇总后 `duration_ms` 超 `_SLOW_REQUEST_MS`(2s)补 `request slow: endpoint= …`——scope_full 有界等待与冷部署会合法超阈,本行只作"值得看一眼"入口,精确语义以汇总行 duration_ms 为准。
 - **touch 未命中 INFO**(`touch missed: session=…`):会话过期/gateway 回退重新 route 的排障入口;命中保持 DEBUG(保活高频防刷屏)。
 - **前置校验失败留痕**(WARNING,框架 RestAdapter):信封体模型被 FastAPI 拒绝(422)时请求**未进 router**——无汇总行/上下文尾巴,`request validation failed: path= request_id= detail=`(request_id 尽力从原始 body 抢救,errors 只取 loc/msg 摘要)是该请求唯一日志证据;响应体保持 FastAPI 默认形状不变。
@@ -147,7 +147,7 @@ SM 侧 ctx,级联管理全部生命周期(框架 App 的 lifespan 只认一个 c
 | `NO_POD_AVAILABLE` | 503 | ✅ | acquire 失败(MaxPodsReached/DeployFailed 在 SM 侧映射而来) |
 | `CONFIG_NOT_FOUND` | 503 | ❌ | resolve 无匹配规则/模板禁用 |
 | `VALIDATION` | 400 | ❌ | 参数错 |
-| `CONFIG_SYNC_BUSY` | 409 | — | 上一次热更新未完成 / 日落待回收中间态 Pod |
+| `CONFIG_SYNC_BUSY` | 409 | — | 上一次热更新未完成 / 日落待回收中间态 Pod / `lock:config_sync` 被 config_sync 或 config_refresh 占用 |
 
 - `retry_after` 仅过载类携带(秒);Facade 间以 Python 异常传播,handler 捕获后映射为 `ResponseEnvelope(ok=False, error_code, retry_after)`。
 - `MAX_PODS_REACHED` / `DEPLOY_FAILED` 是 RM Facade 内部异常,SM route 捕获后统一映射 `NO_POD_AVAILABLE`,不对外。

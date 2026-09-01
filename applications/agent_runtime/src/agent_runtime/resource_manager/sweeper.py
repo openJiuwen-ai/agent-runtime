@@ -82,9 +82,10 @@ class ResourceSweeper:
         max_pods = to_int(cfg.get("max_pods"), 1)
         if min_idle <= 0:
             return "skip_min_idle0"
-        # 暖池计数**只认当前版本**：A 类变更后旧版本 idle Pod 永不可能被
-        # acquire 复用（want_ver 过滤），不能用它满足 min_idle——否则暖池
-        # 被旧版钉死，新流量每波冷部署（旧版 Pod 由 reclaim 按版本回收）
+        # 暖池计数**只认当前版本+代次**：A 类变更后旧版本、config_refresh 后
+        # 旧代次的 idle Pod 永不可能被 acquire 复用（want_ver+generation 过滤），
+        # 不能用它满足 min_idle——否则暖池被旧版钉死，新流量每波冷部署
+        # （旧版/旧代 Pod 由 reclaim 按版本/代次感知回收）
         idle = await self.state.idle_pods(scope_id)
         warm = await self._current_version_idle(scope_id, cfg, idle)
         if len(warm) >= min_idle:
@@ -129,17 +130,23 @@ class ResourceSweeper:
     async def _current_version_idle(
         self, scope_id: str, cfg: dict[str, str], idle: list[str]
     ) -> list[str]:
-        """idle 池中 deploy_ver 与 scope 当前配置一致的 Pod（可复用的真热备）。
+        """idle 池中 deploy_ver 且 generation 均与 scope 当前配置一致的 Pod（真热备）。
 
-        配置无 deploy_ver（legacy/手写）时视全部为当前版本（保守兼容）。
+        配置无 deploy_ver（legacy/手写）时视全部为当前版本（保守兼容）；
+        generation 两侧同为缺省（空串）亦视为一致——从未刷新过的 scope 零行为
+        变化。config_refresh 后老代次 idle Pod 恒为 excess（reclaim 回收），
+        autoscale warm 底数归零（触发重建）。
         """
         current = cfg.get("deploy_ver") or ""
         if not current:
             return idle
+        generation = cfg.get("generation") or ""
         warm: list[str] = []
         for pod_id in idle:
             info = await self.state.pod_info(pod_id)
-            if info.get("deploy_ver") == current:
+            if info.get("deploy_ver") == current and (
+                info.get("generation") or ""
+            ) == generation:
                 warm.append(pod_id)
         return warm
 
@@ -157,10 +164,11 @@ class ResourceSweeper:
                 min_idle = to_int(cfg.get("min_idle_pods"))
                 pod_ttl = to_int(cfg.get("pod_ttl"), 300)
                 idle = await self.state.idle_pods(scope_id)
-                # 版本感知的 excess：min_idle 底数只保护「当前版本」的 idle Pod
-                # （按转 idle 先后取最早 min_idle 个）；旧版本 idle Pod 永不可
-                # 复用（acquire want_ver 过滤），恒为 excess——否则 A 类变更后
-                # 旧暖 Pod 被底数永久保护，暖池钉死旧版且蹲占 max_pods 槽位
+                # 版本+代次感知的 excess：min_idle 底数只保护「当前版本且当前
+                # 代次」的 idle Pod（按转 idle 先后取最早 min_idle 个）；旧版本/
+                # 旧代次 idle Pod 永不可复用（acquire want_ver+generation 过滤），
+                # 恒为 excess——否则 A 类变更或 config_refresh 后旧暖 Pod 被底数
+                # 永久保护，暖池钉死旧版且蹲占 max_pods 槽位
                 warm = await self._current_version_idle(scope_id, cfg, idle)
                 stale = sorted(set(idle) - set(warm))
                 if not stale and len(idle) <= min_idle:

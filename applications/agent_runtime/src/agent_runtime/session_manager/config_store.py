@@ -15,6 +15,10 @@
   （**始终带 pod_spec**——无请求 scope 的 min_idle 预热依赖它）→ A 类软摘除
   老版本 Pod → 被删 scope 推 min_idle=0 自然排空。
   全程持 ``lock:config_sync`` 串行化（忙 → 409 CONFIG_SYNC_BUSY）。
+- ``config_refresh``：强制刷新（场景 M-R，无载荷）——不改任何配置，全部
+  存活 scope 的现有 Pod 优雅日落并按存量配置重建。与 config_sync 共用锁；
+  每 scope 三步：代次 +1（RM scope:config 的 generation，HINCRBY 唯一写点）
+  → 重推池参数+pod_spec（值未变）→ 候选集全量软摘除。
 
 红线：写 DB 失败立即中止，不得 SET 快照、不得推送（防 last-known-good 被污染）。
 """
@@ -472,6 +476,9 @@ PoolConfigPush = Callable[[str, dict[str, Any], dict[str, Any] | None], Awaitabl
 # （被删 scope 的 drain 收敛依赖它——DB old_scopes 在删除后即失忆，RM 侧
 #  config 键仍在才是「幻影预热还在发生」的真源）
 KnownRmScopes = Callable[[], Awaitable[list[str]]]
+# RM 代次日落回调：config_refresh → rm_facade.bump_generation(scope_id)
+# （HINCRBY 原子自增，返回新代次）
+GenerationBump = Callable[[str], Awaitable[int]]
 
 CONFIG_SYNC_LOCK_TTL = 60  # 串行化锁 TTL（处理超时上限）
 
@@ -557,11 +564,13 @@ class ConfigStore:
         sm_state: SessionState,
         push_pool_config: PoolConfigPush | None = None,
         known_rm_scopes: KnownRmScopes | None = None,
+        bump_generation: GenerationBump | None = None,
     ) -> None:
         self._db = db
         self.state = sm_state
         self._push = push_pool_config
         self._known_rm_scopes = known_rm_scopes
+        self._bump_generation = bump_generation
         # 进程内快照 memo：原始串相等则复用已解析对象（route 热路径零 json.loads）
         self._snapshot_raw: str | None = None
         self._snapshot: RoutingSnapshot | None = None
@@ -687,6 +696,31 @@ class ConfigStore:
             raise ConfigSyncBusy("a previous config_sync is still in progress")
         try:
             return await self._config_sync_locked(parsed)
+        finally:
+            await self.state.unlock(self.state.k.lock_config_sync(), token)
+
+    async def config_refresh(self, rawdata: dict[str, Any] | None = None) -> dict[str, Any]:
+        """强制刷新（场景 M-R，无载荷）：全 scope 现有 Pod 优雅日落 + 按存量配置重建。
+
+        不写 DB、不动路由快照、不改配置值；效果 = 每 scope 代次 +1（老 Pod 即刻
+        退出候选集，存量会话亲和不受影响；空 Pod 转 idle 后按 pod_ttl 由 reclaim
+        回收，autoscale 按各 scope min_idle 用缓存 pod_spec 重建）。与 config_sync
+        共用 ``lock:config_sync`` 串行（忙 → 409 CONFIG_SYNC_BUSY）。非幂等但收敛：
+        每次调用 = 一轮全量日落重建，成功后勿自动重试。
+        """
+        if rawdata:
+            raise InvalidParams(
+                "config_refresh takes no payload; send config via config_sync"
+            )
+        if self._bump_generation is None:
+            raise RuntimeError("config_refresh requires the bump_generation callback")
+        token = f"cfgrefresh-{now_ts()}"
+        if not await self.state.try_lock(
+            self.state.k.lock_config_sync(), CONFIG_SYNC_LOCK_TTL, token
+        ):
+            raise ConfigSyncBusy("a config_sync or config_refresh is in progress")
+        try:
+            return await self._config_refresh_locked()
         finally:
             await self.state.unlock(self.state.k.lock_config_sync(), token)
 
@@ -939,6 +973,49 @@ class ConfigStore:
                 scope_id, sorted(pool),
             )
 
+    async def _config_refresh_locked(self) -> dict[str, Any]:
+        """锁内的强制刷新编排：逐 scope bump → push → 全量软摘除。
+
+        只遍历 DB 存活 scope（幻影 scope 归 config_sync 扩散③的 drain 路径）。
+        顺序红线 **bump 先于 ZREM**：唯一危险序是「ZREM 而未 bump」——老 Pod 被
+        摘却仍是当前代次 warm Pod → min_idle 底数保护 → 永久蹲占 max_pods 且
+        不触发重建；bump 在前的任何中途失败形态都收敛于「老 Pod 暂时继续接新
+        流量」，锁过期后重试即收敛，不存在搁浅态。
+        """
+        templates = {t.template_id: t for t in await self._all_templates()}
+        generations: dict[str, int] = {}
+        pods_sunset = 0
+        for scope in await self.list_scopes():
+            template = templates.get(scope.template_id)
+            if template is None:
+                # 悬挂引用（模板行损坏/被并发删）跳过不刷，与 match_scope 容错同款
+                logger.warning(
+                    "config_refresh skip scope (template missing/corrupt): "
+                    "scope=%s template=%s", scope.scope_id, scope.template_id,
+                )
+                continue
+            # ① 代次日落（严格：失败上抛中止——该 scope 尚未摘除，重试收敛）
+            generations[scope.scope_id] = await self._bump_generation(scope.scope_id)
+            # ② 重推池参数 + pod_spec（值未变，确保 RM 缓存/预热就绪；失败仅告警：
+            #    刷新不改配置，scope:config 旧值与欲写值相同，良性）
+            await self._push_or_warn(
+                scope.scope_id, template.pool_config(), template.deploy_subset()
+            )
+            # ③ 候选集全量软摘除（严格：失败上抛；从此刻起老 Pod 不接新会话）
+            removed = await self._soft_remove_all_pods(scope.scope_id)
+            pods_sunset += len(removed)
+            if removed:
+                logger.info(
+                    "config_refresh sunset: scope=%s generation=%d pods=%s",
+                    scope.scope_id, generations[scope.scope_id], removed,
+                )
+        return {
+            "ok": True,
+            "scopes_refreshed": len(generations),
+            "pods_sunset": pods_sunset,
+            "generations": generations,
+        }
+
     # ---- template / container DB 存取
 
     async def _upsert_template_split(self, template_id: str,
@@ -1031,6 +1108,17 @@ class ConfigStore:
             if await self.state.pod_deploy_ver(scope_id, pod_id) != new_deploy_ver:
                 await self.state.redis.zrem(self.state.k.scope_pods(scope_id), pod_id)
                 removed.append(pod_id)
+        return removed
+
+    async def _soft_remove_all_pods(self, scope_id: str) -> list[str]:
+        """ZREM 该 scope 候选集全部成员（config_refresh 软摘除，不按版本过滤）。
+
+        仅统计 SM 候选集内成员；从未被 route 过的 RM 暖 Pod 不在候选集、不计数，
+        但同样被代次日落（acquire 的 generation 过滤不复用它）。
+        """
+        removed = await self.state.scope_pod_ids(scope_id)
+        for pod_id in removed:
+            await self.state.redis.zrem(self.state.k.scope_pods(scope_id), pod_id)
         return removed
 
     async def _sunset_pending_pods(self, scope_id: str, new_deploy_ver: str) -> list[str]:

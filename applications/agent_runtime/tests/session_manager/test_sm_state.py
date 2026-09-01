@@ -261,3 +261,21 @@ def test_scope_id_charset_rejects_separator():
 
 def test_now_ts_monotonic_seconds():
     assert isinstance(now_ts(), int)
+
+
+@requires_lua
+async def test_evict_rubble_hash_self_heals_not_crashes(sm_state, caplog):
+    """残骸自卫(2026-09-01 真环境实锤断网):外部直改键造出仅剩 expiry 的半成品
+    哈希(zadd+hset 回拨落在已自然驱逐的会话上)→ EVICT 不得上抛(否则 sweeper
+    到期 pass 每 tick 死在同一 sid,会话永不过期),应自清两处 + WARNING 留痕。
+    """
+    import logging as _logging
+
+    await sm_state.redis.hset(sm_state.k.session("s-rubble"), "expiry", 1)
+    await sm_state.redis.zadd(sm_state.k.session_expiry(), {"s-rubble": 1})
+    with caplog.at_level(_logging.WARNING, logger="agent_runtime.session_manager"):
+        result = await sm_state.evict("s-rubble")   # 旧实现此处 ResponseError
+    assert result is None
+    assert await sm_state.redis.exists(sm_state.k.session("s-rubble")) == 0
+    assert await sm_state.redis.zscore(sm_state.k.session_expiry(), "s-rubble") is None
+    assert any("rubble" in r.getMessage() for r in caplog.records)

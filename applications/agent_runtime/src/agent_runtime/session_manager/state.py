@@ -186,6 +186,13 @@ class SessionState:
         ret = await self.eval(lua.LUA_EVICT, session_id)
         if not ret or ret[0] == "noop":
             return None
+        if ret[0] == "rubble":
+            # 残骸已自清（缺 scope/pod 的半成品哈希）——留痕供排障定位外部直改源
+            logger.warning(
+                "evict rubble session (hash missing scope/pod): session=%s",
+                session_id,
+            )
+            return None
         return {"scope_id": ret[1], "pod_id": ret[2], "remaining": ret[3]}
 
     async def touch(self, session_id: str, now: int, default_ttl: int = 60) -> tuple[bool, str]:

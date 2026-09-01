@@ -56,7 +56,8 @@ class RMKeys:
         return f"{self.prefix}:resource:scope:{scope_id}:idle"
 
     def scope_config(self, scope_id: str) -> str:
-        """HASH: min_idle_pods / max_pods / pod_ttl / pod_spec(json) / deploy_ver。"""
+        """HASH: min_idle_pods / max_pods / pod_ttl / pod_spec(json) / deploy_ver /
+        generation（config_refresh 的代次日落标记，唯一写点 = bump_generation）。"""
         return f"{self.prefix}:resource:scope:{scope_id}:config"
 
     def scope_deploying(self, scope_id: str) -> str:
@@ -77,7 +78,8 @@ class RMKeys:
 
     # ---- Pod 级
     def pod_info(self, pod_id: str) -> str:
-        """HASH: scope_id / pod_sse_url / pod_ip / namespace / phase / created_ts / deploy_ver。"""
+        """HASH: scope_id / pod_sse_url / pod_ip / namespace / phase / created_ts /
+        deploy_ver / sse_port / health_path / generation（注册时刻代次烙印）。"""
         return f"{self.prefix}:resource:pod:{pod_id}:info"
 
     def pod_idle_since(self, pod_id: str) -> str:
@@ -256,6 +258,16 @@ class ResourceState:
         await self.redis.hset(
             self.k.scope_config(scope_id), mapping={k_: str(v) for k_, v in mapping.items()}
         )
+
+    async def bump_generation(self, scope_id: str) -> int:
+        """scope 代次 +1（HINCRBY 原子自增），返回新代次。
+
+        config_refresh 的日落标记唯一写点：save_scope_config 的 mapping 永不含
+        generation（config_sync 推送不重置代次，只单调递增）。缺省键从 1 起。
+        """
+        return to_int(await self.redis.hincrby(
+            self.k.scope_config(scope_id), "generation", 1
+        ))
 
     async def has_scope_config(self, scope_id: str) -> bool:
         return to_int(

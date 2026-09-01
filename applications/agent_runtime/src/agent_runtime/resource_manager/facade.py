@@ -6,6 +6,7 @@
   失败抛 MaxPodsReached / DeployFailed（SM route 捕获映射 NO_POD_AVAILABLE）。
 - idle_consider(pod_id, scope_id) → {transitioned_to_idle: bool}，幂等。
 - update_pool_config(scope_id, pool_config, pod_spec?) → {updated: bool}（config_sync 触发）。
+- bump_generation(scope_id) → int（config_refresh 触发的代次日落，新代次返回值）。
 - cleanup(namespace?, label_selector?) → int（运维批删，经 SM 的 /cleanup 委托）。
 """
 
@@ -44,6 +45,10 @@ class ResourceManagerFacade:
         return await self._orchestrator.update_pool_config(
             scope_id=scope_id, pool_config=pool_config, pod_spec=pod_spec,
         )
+
+    async def bump_generation(self, scope_id: str) -> int:
+        """config_refresh 触发：scope 代次 +1（HINCRBY 原子），返回新代次。"""
+        return await self._orchestrator.bump_generation(scope_id=scope_id)
 
     async def cleanup(
         self,
