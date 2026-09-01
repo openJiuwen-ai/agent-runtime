@@ -386,3 +386,65 @@ async def test_template_removed_from_payload_scope_stops_matching(runtime):
         await runtime.orchestrator.route(
             request_id="r-after-del", session_id="sess_2",
             group_id="grp", bot_id="bot", user_id="u")
+
+
+@requires_lua
+async def test_need_acquire_respects_total_route_budget(
+        db_handler, redis_client, k8s, monkeypatch):
+    """单次 route 总预算契约:scope_full_timeout 覆盖排队+扩容+重仲裁全链——
+    acquire 慢于预算时,下一圈主循环必须 504 ScopeFullTimeout,不得无限等。"""
+    from tests.conftest import Runtime
+
+    runtime = Runtime(db_handler, redis_client, k8s, scope_full_timeout=0.2)
+    await runtime.seed_template(scope_concurrency=1, pod_concurrency=1,
+                                max_pods=2)
+    real_acquire = runtime.rm_facade.acquire
+
+    async def _slow_acquire(**kwargs):
+        await asyncio.sleep(0.5)                  # deploy 慢于总预算
+        return await real_acquire(**kwargs)
+
+    monkeypatch.setattr(runtime.rm_facade, "acquire", _slow_acquire)
+    from agent_runtime.errors import ScopeFullTimeout
+    with pytest.raises(ScopeFullTimeout, match="budget"):
+        await runtime.route("sess-budget")
+    # 一次 acquire 的成果仍在(重试同 request_id 走幂等回放/暖池即可放置)
+    assert await runtime.rm_state.pod_count("scope-main") == 1
+
+
+@requires_lua
+async def test_wait_for_capacity_finally_preserves_original_error(
+        db_handler, redis_client, k8s, monkeypatch):
+    """_wait_for_capacity 收尾逐级保护:remove_waiter 抛错不得吞掉原始
+    ScopeFullTimeout(用户将拿 500 而非 504),也不得跳过 pubsub aclose。"""
+    from agent_runtime.errors import ScopeFullTimeout
+    from tests.conftest import Runtime
+
+    runtime = Runtime(db_handler, redis_client, k8s, scope_full_timeout=0.1)
+    await runtime.seed_template(scope_concurrency=1, pod_concurrency=1,
+                                max_pods=1)
+    await runtime.route("sess-occupied")          # 占满唯一 Pod 与额度
+
+    async def _boom(*args, **kwargs):
+        raise RuntimeError("redis flaky on cleanup")
+
+    monkeypatch.setattr(runtime.sm_state, "remove_waiter", _boom)
+    real_pubsub = runtime.redis.pubsub
+    closed = []
+
+    def _pubsub():
+        ps = real_pubsub()
+        real_aclose = ps.aclose
+
+        async def _aclose():
+            closed.append(True)
+            await real_aclose()
+
+        ps.aclose = _aclose
+        return ps
+
+    monkeypatch.setattr(runtime.redis, "pubsub", _pubsub)
+
+    with pytest.raises(ScopeFullTimeout):         # 不是 RuntimeError
+        await runtime.route("sess-waiting")
+    assert closed, "pubsub 必须仍被 aclose(连接不泄漏)"

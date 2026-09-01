@@ -54,8 +54,9 @@
 | error_code | HTTP | retry_after | 语义 |
 |---|---|---|---|
 | `SCOPE_QUEUE_FULL` | 503 | ✅ | 等待队列满,快失败 |
-| `SCOPE_FULL_TIMEOUT` | 504 | ✅ | 队列内等待超时 |
+| `SCOPE_FULL_TIMEOUT` | 504 | ✅ | 队列内等待超时(2026-09 起语义为单次 route 总预算,need_acquire 慢于预算同款 504) |
 | `NO_POD_AVAILABLE` | 503 | ✅ | acquire 失败(MaxPodsReached/DeployFailed 映射) |
+| `STATE_UNAVAILABLE` | 503 | ✅ | 状态后端(Redis/DB)连接级故障,handler 层翻译(2026-09;真环境注入手段有限,单测 `test_infra_faults.py` 覆盖) |
 | `CONFIG_NOT_FOUND` | 503 | ❌ | 无匹配规则/模板禁用 |
 | `VALIDATION` | 400 | ❌ | 参数错(含 config_refresh 带载荷) |
 | `CONFIG_SYNC_BUSY` | 409 | — | 上次热更新未完成/日落待回收;`lock:config_sync` 被 config_sync 或 config_refresh 占用 |

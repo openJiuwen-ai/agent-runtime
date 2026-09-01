@@ -6,6 +6,12 @@ route 主循环：幂等回放（handler 层）→ resolve → LUA_ROUTE_PLACE �
 - scope_full：有界等待队列（场景 F）——队列满快失败 503，队列内等 free 信号，
   超 scope_full_timeout → 504；
 - need_acquire：调 rm_facade.acquire 扩 +1 Pod → register_pod 登记候选集 → 重跑。
+
+**单次 route 总预算 = scope_full_timeout**（2026-09 契约修正：覆盖排队 + 扩容
++ 重新仲裁全链，主循环每圈校验）：need_acquire 分支一轮可触发完整 deploy
+（ready_timeout 默认 300s），无总预算时单请求可阻塞远超「有界等待」的承诺且
+期间持续扩 Pod。冷启动相容性：超预算 504 后 RM acquire 仍在后台完成并落
+idem 缓存（TTL 60s），gateway 同 request_id 重试即幂等回放结果。
 """
 
 from __future__ import annotations
@@ -29,7 +35,7 @@ from .state import SessionState
 logger = logging.getLogger("agent_runtime.session_manager")
 
 # 过载参数（SM 设计 §7 默认表；可被 settings 覆盖）
-DEFAULT_SCOPE_FULL_TIMEOUT = 30.0     # scope 满（队列内）阻塞上限
+DEFAULT_SCOPE_FULL_TIMEOUT = 30.0     # 单次 route 总预算（排队+扩容+重仲裁全链）
 DEFAULT_RETRY_AFTER = 1               # 过载响应建议重试间隔（秒）
 
 
@@ -79,6 +85,17 @@ class SessionOrchestrator:
         t0 = time.monotonic()
 
         while True:
+            # 总预算：scope_full_timeout 覆盖**全链**（排队 + acquire + 重新仲裁），
+            # 每圈校验。need_acquire 一轮可触发完整 deploy（ready_timeout 默认
+            # 300s），无总预算时单请求可阻塞远超「有界等待」承诺且持续扩 Pod；
+            # 超预算 504 后 RM acquire 照常完成并落 idem 缓存，同 request_id
+            # 重试幂等回放（见模块 docstring）。
+            if time.monotonic() >= deadline:
+                raise ScopeFullTimeout(
+                    f"scope {scope_id} route budget exhausted "
+                    f"({self.scope_full_timeout}s, acquire included)",
+                    retry_after=DEFAULT_RETRY_AFTER,
+                )
             now = now_ts()
             action, pod_id = await self.state.route_place(
                 session_id=session_id,
@@ -229,9 +246,22 @@ class SessionOrchestrator:
                     if action != "scope_full":
                         return      # 轮询兜底仲裁转机（丢信号/状态已变）
         finally:
-            await self.state.remove_waiter(scope_id, request_id)
-            await pubsub.unsubscribe(channel)
-            await pubsub.aclose()
+            # 逐级保护：首步抛错不得吞掉原始 ScopeFullTimeout/ScopeQueueFull
+            # （用户将拿 500 而非 504/503），也不得跳过 pubsub 的
+            # unsubscribe/aclose（Redis 抖动时连接泄漏）
+            try:
+                await self.state.remove_waiter(scope_id, request_id)
+            except Exception:  # noqa: BLE001 - 收尾失败只留痕
+                logger.exception("remove_waiter failed: scope=%s request=%s",
+                                 scope_id, request_id)
+            try:
+                await pubsub.unsubscribe(channel)
+            except Exception:  # noqa: BLE001
+                logger.exception("pubsub unsubscribe failed: scope=%s", scope_id)
+            try:
+                await pubsub.aclose()
+            except Exception:  # noqa: BLE001
+                logger.exception("pubsub aclose failed: scope=%s", scope_id)
 
     # -------------------------------------------------------------- touch
 

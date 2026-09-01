@@ -224,15 +224,17 @@ field    := user_id | group_id | bot_id(固定小写枚举)
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `ok` | bool | 固定 `false` |
-| `error_code` | str | `SCOPE_FULL_TIMEOUT` / `SCOPE_QUEUE_FULL` / `NO_POD_AVAILABLE` / `CONFIG_NOT_FOUND` / `MAX_PODS_REACHED` / `DEPLOY_FAILED` / `CONFIG_SYNC_BUSY` / `VALIDATION` |
+| `error_code` | str | `SCOPE_FULL_TIMEOUT` / `SCOPE_QUEUE_FULL` / `NO_POD_AVAILABLE` / `CONFIG_NOT_FOUND` / `MAX_PODS_REACHED` / `DEPLOY_FAILED` / `CONFIG_SYNC_BUSY` / `STATE_UNAVAILABLE` / `VALIDATION` |
 | `error_message` | str | 人类可读描述 |
-| `retry_after` | int?(秒) | 仅过载类(`SCOPE_QUEUE_FULL` / `SCOPE_FULL_TIMEOUT` / `NO_POD_AVAILABLE`)返回;其它省略 |
+| `retry_after` | int?(秒) | 仅过载类(`SCOPE_QUEUE_FULL` / `SCOPE_FULL_TIMEOUT` / `NO_POD_AVAILABLE`)与 `STATE_UNAVAILABLE` 返回;其它省略 |
+
+`STATE_UNAVAILABLE`(503,2026-09):状态后端(Redis/DB)**连接级**故障在 handler 层统一翻译(redis ConnectionError/TimeoutError、sqlalchemy Operational/Interface/DisconnectionError)——区别于 internal 500:暂态可重试,LB/客户端重试语义依赖这一区分。Lua 逻辑错/DB schema 错仍走 500。
 
 **过载参数**:
 
 | 参数 | 默认 | 含义 |
 |---|---|---|
-| `scope_full_timeout` | 30s | scope 满(队列内)阻塞上限,超则 504 `SCOPE_FULL_TIMEOUT` |
+| `scope_full_timeout` | 30s | **单次 route 总预算**(2026-09 契约修正:覆盖排队+扩容+重仲裁全链,主循环每圈校验),超则 504 `SCOPE_FULL_TIMEOUT`;扩容(acquire/deploy)慢于预算时同 request_id 重试走幂等回放 |
 | `max_waiters` | 2 × `scope_concurrency` | 每 scope 等待队列上限,超限快失败 503 `SCOPE_QUEUE_FULL` |
 | `session_ttl` | 60s(template) | 会话保活窗口;超时未 touch 则老化回收 |
 

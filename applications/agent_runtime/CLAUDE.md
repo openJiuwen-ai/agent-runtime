@@ -24,7 +24,7 @@
 ```bash
 cd applications/agent_runtime
 uv sync --extra local
-uv run pytest                 # 415 个用例:状态层 Lua(含 EVICT 残骸自卫) / 路由匹配纯函数(含表达式解析) / config 层(含三段式契约与容器表水合、config_refresh 强制刷新) / 容器规范形(container_spec) / envFrom / 组件全链路(含 sidecars 多容器与卷挂载) / HTTP 冒烟 / corner case / 双实例多副本 / 停机韧性 / 审计实锤回归(test_audit_repro) / 强制刷新自然老化(test_force_refresh)
+uv run pytest                 # 437 个用例:状态层 Lua(含 EVICT/TOUCH/ROUTE_PLACE 残骸自卫) / 路由匹配纯函数(含表达式解析) / config 层(含三段式契约与容器表水合、config_refresh 强制刷新、写库单事务+锁看门狗) / 容器规范形(container_spec) / envFrom / 组件全链路(含 sidecars 多容器与卷挂载) / HTTP 冒烟 / corner case / 双实例多副本 / 停机韧性 / 审计实锤回归(test_audit_repro) / 强制刷新自然老化(test_force_refresh) / 健壮性故障注入(test_k8s_io_timeouts / test_infra_faults / test_main_lifecycle,见 docs/feature/2026-09-robustness-hardening.md)
 ```
 
 - 构造 `ServiceManager` 必须传 `deploy_mode="subprocess"`(默认 k8s 会挂死测试)。

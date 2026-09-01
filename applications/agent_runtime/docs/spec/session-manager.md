@@ -43,7 +43,13 @@
 四参非空校验(缺 → InvalidParams 400)
 → resolve(user_id, group_id, bot_id)(config_store:读路由快照 first-fit 匹配)
    返回 (scope_id, template);无匹配 → ConfigNotFound(503)
-→ 循环 { LUA_ROUTE_PLACE 原子仲裁 → (action, pod_id):
+→ 循环 { **总预算校验(2026-09 契约修正:deadline=now+scope_full_timeout,每圈
+     monotonic 复核——scope_full_timeout 语义升级为「单次 route 总预算,覆盖
+     排队+扩容+重仲裁全链」;need_acquire 一轮可触发完整 deploy(ready_timeout
+     默认 300s),无总预算时单请求可阻塞远超有界等待承诺且持续扩 Pod;超预算
+     → 504 ScopeFullTimeout,RM acquire 照常完成并落 idem 缓存(TTL 60s),
+     gateway 同 request_id 重试即幂等回放)**
+     LUA_ROUTE_PLACE 原子仲裁 → (action, pod_id):
      refresh/placed → 读 pod:info sse_url 返回(缺失=极端竞态被清,continue 重跑;
                      refresh 分支有 info 存活守卫,下一轮惰性回收死绑定重新放置,不构成自旋)
      scope_full     → _wait_for_capacity(场景 F)后重跑
@@ -53,6 +59,7 @@
 `_wait_for_capacity`(场景 F 有界等待):
 - `max_waiters = 2 * scope_concurrency`;过 deadline(`scope_full_timeout`)→ 504 ScopeFullTimeout。
 - **入队只走 `LUA_WAITER_GATE` 原子闸门**(ZSET+deadline:先清过期成员再 ZADD 先行+超限自退);满 → 503 ScopeQueueFull 快失败。
+- **finally 逐级保护(2026-09 加固)**:`remove_waiter → unsubscribe → aclose` 三步各自 try/except——首步抛错(Redis 抖动)不得吞掉原始 ScopeFullTimeout/ScopeQueueFull(用户将拿 500 而非 504/503),也不得跳过 pubsub 收尾(连接泄漏)。
 - **等待者成员资格全程保持**(入队一次、退出删一次;中途删/加的空窗会让 max_waiters 上限漏收)。
 - 订阅 `scope:{sid}:free` PubSub + ≤500ms 安全轮询双保险(兜 publish 早于 subscribe 的丢失):
   收到信号 → 返回重跑;**轮询超时无信号 → 经 re_arbitrate 就地重跑 ROUTE_PLACE**,非 scope_full 即返回——原子 admit 是唯一仲裁,丢信号后 ~0.5s 内仍能拿到空闲额度而非空等满 30s。
