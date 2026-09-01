@@ -279,16 +279,23 @@ class Runtime:
         self.sm_facade = SessionManagerFacade(self.sm_state)
         self.rm_orchestrator = ResourceOrchestrator(self.rm_state, k8s)
         self.rm_facade = ResourceManagerFacade(self.rm_orchestrator)
-        # 池参数推送记录（断言 config_sync 是否推 RM 用）
+        # 池参数推送记录（断言 config_sync / config_refresh 是否推 RM 用）
         self.pool_pushes: list[tuple[str, dict, dict | None]] = []
+        # 代次 bump 记录（断言 config_refresh 是否逐 scope bump 用）
+        self.gen_bumps: list[str] = []
 
         async def _push(scope_id, pool, pod_spec):
             self.pool_pushes.append((scope_id, pool, pod_spec))
             await self.rm_facade.update_pool_config(scope_id, pool, pod_spec)
 
+        async def _bump(scope_id):
+            self.gen_bumps.append(scope_id)
+            return await self.rm_facade.bump_generation(scope_id)
+
         self.config_store = ConfigStore(
             db, self.sm_state, push_pool_config=_push,
             known_rm_scopes=self.rm_facade.known_scope_ids,
+            bump_generation=_bump,
         )
         self.orchestrator = SessionOrchestrator(
             self.sm_state, self.config_store, self.rm_facade,

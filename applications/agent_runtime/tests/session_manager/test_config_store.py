@@ -951,3 +951,135 @@ async def test_split_template_node_name_wire_alias(runtime):
     with pytest.raises(InvalidParams, match=r"k8s wire spelling"):
         await runtime.config_store.config_sync(_split_payload(
             [_main_container()], [_split_tpl("tpl-nn2", node_name="arm-master")]))
+
+
+# -------------------------------------------------------------- config_refresh(场景 M-R)
+
+@requires_lua
+async def test_config_refresh_sunsets_candidates_and_bumps_generation(runtime):
+    """强制刷新:全 scope 候选集清空 + RM 代次 +1;配置零变化。"""
+    await runtime.seed_template(agent_image="agentserver:1.0")
+    await runtime.route("sess_1")
+    assert await runtime.sm_state.scope_pod_ids(SCOPE)
+
+    result = await runtime.config_store.config_refresh()
+    assert result["ok"] is True
+    assert result["scopes_refreshed"] == 1
+    assert result["pods_sunset"] == 1
+    assert result["generations"] == {SCOPE: 1}
+    assert runtime.gen_bumps == [SCOPE]
+    # 候选集软摘除;RM config 代次落地
+    assert await runtime.sm_state.scope_pod_ids(SCOPE) == []
+    cfg = await runtime.rm_state.load_scope_config(SCOPE)
+    assert cfg.get("generation") == "1"
+    # 配置本身未动(deploy_ver 与 seed 时一致)
+    old_cfg = await runtime.rm_state.load_scope_config(SCOPE)
+    assert old_cfg.get("deploy_ver")
+    t = await runtime.config_store.get_template("tpl-1")
+    assert t is not None and t.agent_image == "agentserver:1.0"
+
+
+@requires_lua
+async def test_config_refresh_preserves_session_affinity(runtime):
+    """刷新后存量会话亲和不变:同 session route 回同 Pod、touch 仍 True。"""
+    await runtime.seed_template()
+    first = await runtime.route("sess_1")
+    await runtime.config_store.config_refresh()
+    # 亲和续期直读 session HASH,不查候选集 → 老 Pod 继续服务存量会话
+    again = await runtime.route("sess_1")
+    assert again["pod_id"] == first["pod_id"]
+    assert await runtime.orchestrator.touch("sess_1") is True
+
+
+@requires_lua
+async def test_config_refresh_rejects_payload(runtime):
+    """无载荷契约:rawdata 非空 → 400 VALIDATION,且零副作用。"""
+    await runtime.seed_template()
+    with pytest.raises(InvalidParams, match=r"takes no payload"):
+        await runtime.config_store.config_refresh({"templates": []})
+    # 零副作用:锁未被遗留、代次未动
+    assert runtime.gen_bumps == []
+    assert await runtime.sm_state.redis.exists(
+        runtime.sm_state.k.lock_config_sync()) == 0
+    cfg = await runtime.rm_state.load_scope_config(SCOPE)
+    assert cfg.get("generation") is None
+
+
+@requires_lua
+async def test_config_refresh_busy_conflicts_with_config_sync_lock(runtime):
+    """与 config_sync 共用锁:锁被占 → 双向 409 CONFIG_SYNC_BUSY。"""
+    await runtime.seed_template()
+    await runtime.sm_state.redis.set(
+        runtime.sm_state.k.lock_config_sync(), "held-by-other", ex=30
+    )
+    with pytest.raises(ConfigSyncBusy):
+        await runtime.config_store.config_refresh()
+
+
+@requires_lua
+async def test_config_refresh_empty_db_is_noop(runtime):
+    """无 scope → 空 noop 响应(不 bump 不摘除)。"""
+    result = await runtime.config_store.config_refresh()
+    assert result == {"ok": True, "scopes_refreshed": 0,
+                      "pods_sunset": 0, "generations": {}}
+    assert runtime.gen_bumps == []
+
+
+@requires_lua
+async def test_config_refresh_touches_neither_db_nor_snapshot(runtime):
+    """刷新不写 DB 不动快照;重推池参数(值与 seed 相同,带 pod_spec)。"""
+    await runtime.seed_template()
+    await runtime.route("sess_1")
+    snapshot_before = await runtime.sm_state.routing_snapshot_raw()
+    templates_before = await runtime.config_store.list_templates()
+    scopes_before = await runtime.config_store.list_scopes()
+
+    runtime.pool_pushes.clear()
+    await runtime.config_store.config_refresh()
+
+    assert await runtime.sm_state.routing_snapshot_raw() == snapshot_before
+    assert await runtime.config_store.list_templates() == templates_before
+    assert await runtime.config_store.list_scopes() == scopes_before
+    # 重推带 pod_spec(RM 缓存就绪,autoscale 可按存量 spec 重建)
+    assert runtime.pool_pushes and runtime.pool_pushes[-1][0] == SCOPE
+    assert runtime.pool_pushes[-1][2] is not None
+
+
+@requires_lua
+async def test_config_refresh_skips_scope_with_missing_template(runtime, caplog):
+    """悬挂引用 scope(模板行被直删)→ 跳过不刷,WARNING 留痕。"""
+    import logging as _logging
+
+    await runtime.seed_template()
+    # 直删模板行造悬挂引用(写路径造不出来;模板缺失时 list 水合返回 None)
+    await runtime.db.delete(
+        "service_config_template", {"template_id": "tpl-1"})
+    with caplog.at_level(_logging.WARNING,
+                         logger="agent_runtime.session_manager"):
+        result = await runtime.config_store.config_refresh()
+    assert result["scopes_refreshed"] == 0
+    assert SCOPE not in result["generations"]
+    assert runtime.gen_bumps == []
+    assert any("template missing" in r.getMessage() for r in caplog.records)
+
+
+@requires_lua
+async def test_config_sync_not_blocked_by_refresh_sunset_pods(runtime):
+    """守卫语义钉死:config_refresh 的老代 Pod(版本相同、候选集外)对
+    config_sync 日落中间态守卫不可见 → 后续同版本/B 类下发不 409。
+
+    老代 Pod 回收由 reclaim 的代次感知保证(见 test_force_refresh.py R1),
+    配置面不得因刷新残留长时间 409(同 C1a/C1b 病理)。
+    """
+    await runtime.seed_template(agent_image="agentserver:1.0")
+    await runtime.route("sess_1")
+    await runtime.config_store.config_refresh()
+    # 刷新残留:registered∖candidates 的老代 Pod,版本与当前配置一致
+    registered = await runtime.sm_state.registered_pods()
+    assert registered   # 老 Pod 仍在(会话还活着)
+    # B 类下发(同 deploy_ver)不被阻塞
+    result = await runtime.config_store.config_sync(_payload(
+        [_tpl("tpl-1", agent_image="agentserver:1.0", session_ttl=99)],
+        [_scope(SCOPE, "tpl-1")],
+    ))
+    assert result["ok"] is True

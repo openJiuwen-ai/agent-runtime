@@ -2,7 +2,7 @@
 """agent-runtime 服务组装（唯一可运行壳的核心）。
 
 一个进程、一个 App（prefix /api/session）、两个模块：
-- session_manager（持 App，注册 4 个 HTTP handler）
+- session_manager（持 App，注册 5 个 HTTP handler）
 - resource_manager（无 App/端口/prefix，纯进程内 Facade + 后台任务）
 
 两个 SystemContext 指向**同一 Redis + 同一 DB**，仅 key_prefix 不同：
@@ -158,6 +158,7 @@ class OrchestratorSystemContext(SystemContext):
             self.db, sm_state,
             push_pool_config=self.rm_facade.update_pool_config,
             known_rm_scopes=self.rm_facade.known_scope_ids,
+            bump_generation=self.rm_facade.bump_generation,
         )
         self.sm_orchestrator = SessionOrchestrator(
             sm_state,
@@ -307,7 +308,7 @@ def create_app(
     instance_id: str | None = None,
     own_resources: bool = True,
 ) -> App:
-    """构造唯一 App（/api/session）并注册 4 个对外 handler。
+    """构造唯一 App（/api/session）并注册 5 个对外 handler。
 
     resources / instance_id / own_resources 供多实例测试注入共享物理资源
     （同一 redis/db/k8s、显式 instance_id、不重复持有资源生命周期）；

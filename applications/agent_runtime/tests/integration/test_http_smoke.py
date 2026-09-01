@@ -3,7 +3,7 @@
 
 FastAPI TestClient 驱动 lifespan → OrchestratorSystemContext.start() 拉起
 SM/RM 两套上下文与全部 JobRunner；local 模式资源（fakeredis + SQLite +
-FakeK8s）。验证 4 个对外端点与错误码契约（HLD §3.1）。
+FakeK8s）。验证 5 个对外端点与错误码契约（HLD §3.1）。
 """
 
 from __future__ import annotations
@@ -67,7 +67,7 @@ FULL_SYNC = {
 }
 
 
-def test_http_all_four_endpoints(tmp_path, monkeypatch):
+def test_http_all_five_endpoints(tmp_path, monkeypatch):
     client = _make_client(tmp_path, monkeypatch)
     with client:
         # 1. config_sync：全量下发 template + 通配兜底 scope
@@ -110,6 +110,25 @@ def test_http_all_four_endpoints(tmp_path, monkeypatch):
             "route", session_id="sess-x", user_id=None))
         assert bad_user.status_code == 400
         assert bad_user.json()["error_code"] == "VALIDATION"
+
+        # 6. config_refresh：强制刷新（无载荷）→ 老候选全摘、亲和不动、新会话扩新 Pod
+        refreshed = client.post("/api/session/config_refresh", json=_envelope(
+            "config_refresh"))
+        assert refreshed.status_code == 200, refreshed.text
+        rb = refreshed.json()["rawdata"]
+        assert rb["ok"] is True
+        assert rb["scopes_refreshed"] == 1
+        assert rb["pods_sunset"] >= 1
+        assert rb["generations"] == {"scope-smoke": 1}
+        # 存量会话亲和不受影响（老 Pod 继续服务到自然到期）
+        still = client.post("/api/session/touch", json=_envelope(
+            "touch", session_id="sess-smoke-1"))
+        assert still.json()["rawdata"] == {"touched": True}
+        # 新会话：候选集已空 → 冷部署新 Pod（带新代次）
+        new_route = client.post("/api/session/route", json=_envelope(
+            "route", session_id="sess-smoke-2"))
+        assert new_route.status_code == 200, new_route.text
+        assert new_route.json()["rawdata"]["pod_id"].startswith("agentserver-")
 
         # 7. cleanup：批删 FakeK8s 里的 AgentServer Pod
         cleaned = client.post("/api/session/cleanup", json=_envelope(
@@ -160,6 +179,37 @@ def test_http_config_sync_busy_returns_409(tmp_path, monkeypatch):
                                "session_ttl": 90}],
                 "scopes": FULL_SYNC["scopes"],
             }))
+        assert busy.status_code == 409
+        assert busy.json()["error_code"] == "CONFIG_SYNC_BUSY"
+
+
+def test_http_config_refresh_rejects_payload(tmp_path, monkeypatch):
+    """无载荷契约：config_refresh rawdata 非空 → 400 VALIDATION（带配置请走 config_sync）。"""
+    client = _make_client(tmp_path, monkeypatch)
+    with client:
+        client.post("/api/session/config_sync", json=_envelope(
+            "config_sync", rawdata=FULL_SYNC))
+        bad = client.post("/api/session/config_refresh", json=_envelope(
+            "config_refresh", rawdata={"templates": []}))
+        assert bad.status_code == 400
+        assert bad.json()["error_code"] == "VALIDATION"
+
+
+def test_http_config_refresh_busy_returns_409(tmp_path, monkeypatch):
+    """与 config_sync 共用锁：锁被占 → 409 CONFIG_SYNC_BUSY（可重试）。"""
+    client = _make_client(tmp_path, monkeypatch)
+    with client:
+        client.post("/api/session/config_sync", json=_envelope(
+            "config_sync", rawdata=FULL_SYNC))
+        sysctx = client.app.state.sysctx
+        import asyncio
+
+        asyncio.get_event_loop_policy().new_event_loop().run_until_complete(
+            sysctx.redis.set(sysctx.sm_config_store.state.k.lock_config_sync(),
+                             "held", ex=30)
+        )
+        busy = client.post("/api/session/config_refresh", json=_envelope(
+            "config_refresh"))
         assert busy.status_code == 409
         assert busy.json()["error_code"] == "CONFIG_SYNC_BUSY"
 

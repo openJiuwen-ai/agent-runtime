@@ -342,7 +342,8 @@ class ResourceOrchestrator:
         """config_sync 主动刷新（场景 M）：HSET 覆盖（幂等），立即生效。
 
         A 类变更附带 pod_spec：同时刷新 deploy_ver / pod_spec_json →
-        autoscale 补位的新暖 Pod 用新 deploy 字段。
+        autoscale 补位的新暖 Pod 用新 deploy 字段。mapping 永不含 generation
+        ——代次只经 bump_generation 单调递增，config_sync 推送不重置。
         """
         mapping: dict[str, Any] = {
             "min_idle_pods": int(pool_config.get("min_idle_pods", 0)),
@@ -355,6 +356,16 @@ class ResourceOrchestrator:
         await self.state.save_scope_config(scope_id, mapping)
         logger.info("update_pool_config: scope=%s fields=%s", scope_id, sorted(mapping))
         return {"updated": True}
+
+    async def bump_generation(self, scope_id: str) -> int:
+        """config_refresh 的代次日落（facade 出口）：scope 代次 +1，返回新代次。
+
+        效果：现有 Pod 的 generation 全部落后于 config → LUA_ACQUIRE 不再复用、
+        _current_version_idle 判 stale（reclaim 按 pod_ttl 回收、autoscale 重建）。
+        """
+        generation = await self.state.bump_generation(scope_id)
+        logger.info("bump_generation: scope=%s generation=%d", scope_id, generation)
+        return generation
 
     # -------------------------------------------------------------- cleanup
 

@@ -286,3 +286,99 @@ async def test_update_pool_config_with_pod_spec_refreshes_deploy_ver(runtime):
     cfg = await runtime.rm_state.load_scope_config(SCOPE)
     assert cfg["deploy_ver"] != old_ver
     assert "agentserver:9.0" in cfg["pod_spec_json"]
+
+
+# ---------------------------------------------------------------- generation(场景 M-R)
+
+@requires_lua
+async def test_bump_generation_monotonic(runtime):
+    """代次 HINCRBY 单调递增;config_sync 式推送(update_pool_config)不重置。"""
+    await runtime.seed_template()
+    await runtime.route("sess_1")                      # 建 scope:config
+
+    assert await runtime.rm_facade.bump_generation(SCOPE) == 1
+    assert await runtime.rm_facade.bump_generation(SCOPE) == 2
+    await runtime.rm_facade.update_pool_config(
+        SCOPE, {"min_idle_pods": 1, "max_pods": 5, "pod_ttl": 120})
+    cfg = await runtime.rm_state.load_scope_config(SCOPE)
+    assert cfg.get("generation") == "2"                # 推送未重置
+    assert await runtime.rm_facade.bump_generation(SCOPE) == 3
+
+
+@requires_lua
+async def test_register_stamps_current_generation(runtime):
+    """REGISTER 服务端烙印:cfg 无 generation → 空串;bump 后部署 → 新代次。"""
+    await runtime.seed_template(min_idle_pods=1)
+    await runtime.rm_sweeper.autoscale_once()
+    (p1,) = await runtime.rm_state.idle_pods(SCOPE)
+    assert (await runtime.rm_state.pod_info(p1)).get("generation") == ""
+
+    await runtime.rm_facade.bump_generation(SCOPE)
+    await runtime.rm_sweeper.autoscale_once()           # 老代不再算 warm → 补位
+    pods = await runtime.rm_state.all_pod_ids()
+    cfg_gen = (await runtime.rm_state.load_scope_config(SCOPE))["generation"]
+    gens = {(await runtime.rm_state.pod_info(p)).get("generation")
+            for p in pods}
+    assert gens == {"", cfg_gen}                       # 老代空串 + 新代烙印
+
+
+@requires_lua
+async def test_acquire_reuses_matching_generation_pod(runtime):
+    """正向对照:未 bump 时同 spec acquire 复用既有暖 Pod(防过度过滤回归)。"""
+    await runtime.seed_template(min_idle_pods=1)
+    await runtime.rm_sweeper.autoscale_once()
+    (warm_pod,) = await runtime.rm_state.idle_pods(SCOPE)
+
+    import json as _json
+    cfg = await runtime.rm_state.load_scope_config(SCOPE)
+    result = await runtime.rm_orchestrator.acquire(
+        SCOPE, _json.loads(cfg["pod_spec_json"]),
+        {"min_idle_pods": 1, "max_pods": 2, "pod_ttl": 300}, "req-gen-ok",
+    )
+    assert result["pod_id"] == warm_pod
+    assert len(runtime.k8s.deployed_specs) == 1        # 无新部署
+
+
+@requires_lua
+async def test_acquire_skips_stale_generation_idle_pod(runtime):
+    """bump 后老代暖 Pod 不被复用:同 spec acquire → 新部署,新 Pod 烙新代。"""
+    await runtime.seed_template(min_idle_pods=1)
+    await runtime.rm_sweeper.autoscale_once()
+    (old_pod,) = await runtime.rm_state.idle_pods(SCOPE)
+
+    await runtime.rm_facade.bump_generation(SCOPE)
+    import json as _json
+    cfg = await runtime.rm_state.load_scope_config(SCOPE)
+    result = await runtime.rm_orchestrator.acquire(
+        SCOPE, _json.loads(cfg["pod_spec_json"]),
+        {"min_idle_pods": 1, "max_pods": 2, "pod_ttl": 300}, "req-gen-stale",
+    )
+    assert result["pod_id"] != old_pod                 # 老代被跳过
+    assert len(runtime.k8s.deployed_specs) == 2        # 发生了新部署
+    assert (await runtime.rm_state.pod_info(result["pod_id"])
+            )["generation"] == cfg["generation"]
+    # 老代暖 Pod 弹回 idle(未被消费),由 reclaim 按代次回收
+    assert old_pod in await runtime.rm_state.idle_pods(SCOPE)
+
+
+@requires_lua
+async def test_current_version_idle_splits_by_generation(runtime):
+    """reclaim/autoscale 的代次感知:老代 idle 恒 excess(aged≥pod_ttl 回收),
+    新代 warm 受 min_idle 底数保护;小 TTL 自然老化,不回拨不直改键。"""
+    import asyncio
+
+    await runtime.seed_template(min_idle_pods=1, pod_ttl=1)
+    await runtime.rm_sweeper.autoscale_once()
+    (old_pod,) = await runtime.rm_state.idle_pods(SCOPE)
+
+    await runtime.rm_facade.bump_generation(SCOPE)
+    await runtime.rm_sweeper.autoscale_once()           # 补位新代暖 Pod
+    new_pods = [p for p in await runtime.rm_state.all_pod_ids() if p != old_pod]
+    assert len(new_pods) == 1
+
+    await asyncio.sleep(1.2)                            # 真等过 pod_ttl=1
+    await runtime.rm_sweeper.reclaim_once()
+    # 只回收老代;新代 warm 受底数保护
+    assert old_pod not in await runtime.rm_state.all_pod_ids()
+    assert new_pods[0] in await runtime.rm_state.all_pod_ids()
+    assert old_pod in runtime.k8s.deleted

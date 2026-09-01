@@ -4,9 +4,10 @@
 约定同 SM：``ARGV[1]`` 恒为键前缀（``{resource_manager}:``，hash tag 使 cluster
 下全键域同槽）；返回扁平字符串数组。
 脚本清单（语义见 RM 设计 §5.1）：
-- LUA_ACQUIRE   取暖 Pod 复用（deploy_ver 过滤）/ 判 max_pods（含 deploying 占位）/ 占位
+- LUA_ACQUIRE   取暖 Pod 复用（deploy_ver + generation 过滤）/ 判 max_pods（含 deploying 占位）/ 占位
 - LUA_PLACEHOLDER  autoscale 专用占位（判 max_pods + 占位，不碰 idle 池）
-- LUA_REGISTER  deploy 成功登记（info / scope:pods / pods:all，清占位；热备入 idle）
+- LUA_REGISTER  deploy 成功登记（info / scope:pods / pods:all，清占位；热备入 idle；
+                generation 服务端烙印注册时刻 scope 当前代次）
 - LUA_RELEASE   idle_consider：转 idle 暖池 + 起 pod_ttl 计时（幂等）
 - LUA_PURGE     Pod 死亡 / reclaim 后清全部 RM key（幂等）
 - LUA_DEPLOY_FOLLOWER_GATE  deploy 锁输家的等待室原子准入（ZSET+deadline，
@@ -38,13 +39,17 @@ end
 local dep_key = pfx .. 'resource:scope:' .. scope .. ':deploying'
 redis.call('ZREMRANGEBYSCORE', dep_key, '-inf', now)
 
--- 1. 取该 scope 暖 Pod 复用；跳过 deploy_ver 不匹配的（A 类变更后老版本暖 Pod
---    由 reclaim 按版本感知回收，不外发给新流量，场景 M）
+-- 1. 取该 scope 暖 Pod 复用；跳过 deploy_ver 或 generation 不匹配的（A 类变更
+--    后老版本暖 Pod、config_refresh 后老代次暖 Pod 均由 reclaim 按版本/代次
+--    感知回收，不外发给新流量，场景 M / M-R）
+local cfg_gen = redis.call('HGET', cfg_key, 'generation') or ''
 local idle_key = pfx .. 'resource:scope:' .. scope .. ':idle'
 local idle = redis.call('SMEMBERS', idle_key)
 for _, pod in ipairs(idle) do
-  local ver = redis.call('HGET', pfx .. 'resource:pod:' .. pod .. ':info', 'deploy_ver')
-  if ver == want_ver then
+  local info_key = pfx .. 'resource:pod:' .. pod .. ':info'
+  local ver = redis.call('HGET', info_key, 'deploy_ver')
+  local gen = redis.call('HGET', info_key, 'generation') or ''
+  if ver == want_ver and gen == cfg_gen then
     redis.call('SREM', idle_key, pod)
     redis.call('DEL', pfx .. 'resource:pod:' .. pod .. ':idle_since')
     local url = redis.call('HGET', pfx .. 'resource:pod:' .. pod .. ':info', 'pod_sse_url')
@@ -107,10 +112,17 @@ local health_path = ARGV[12]
 -- sse_port/health_path 随 Pod 烘焙记录：A 类变更后 scope 当前配置已换代，
 -- 健康探测（场景 N）必须用 Pod 自己的契约参数打它，否则存量老 Pod 会被
 -- 探错路径误判半死（违背日落「存量会话不受影响」承诺）
+-- generation 服务端烙印（注册时刻 scope:config 的当前代次，config_refresh
+-- 的 HINCRBY 日落标记）：注册与 bump 在 Redis 单线程上原子排队——deploy
+-- 中途发生刷新时，晚于 bump 注册的 Pod 天然属新代，不会被误日落（刷新不
+-- 改配置，该 Pod 的 pod_spec 本就与当前配置一致）
+local gen = redis.call('HGET', pfx .. 'resource:scope:' .. scope .. ':config',
+                       'generation') or ''
 redis.call('HSET', pfx .. 'resource:pod:' .. pod .. ':info',
            'scope_id', scope, 'pod_sse_url', url, 'pod_ip', ip,
            'namespace', ns, 'deploy_ver', ver, 'phase', 'created',
-           'created_ts', now, 'sse_port', sse_port, 'health_path', health_path)
+           'created_ts', now, 'sse_port', sse_port, 'health_path', health_path,
+           'generation', gen)
 redis.call('ZADD', pfx .. 'resource:scope:' .. scope .. ':pods', now, pod)
 redis.call('SADD', pfx .. 'resource:pods:all', pod)
 redis.call('ZREM', pfx .. 'resource:scope:' .. scope .. ':deploying', token)
