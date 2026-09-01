@@ -265,6 +265,13 @@
 # 1. 读现有亲和绑定(若该 session_id 之前 route 过)
 1. existing = HGETALL(session:{session_id})
 
+# 1b. 残骸自卫(2026-09,同 LUA_EVICT):哈希存在但缺 scope_id/pod_id/expiry
+#     (外部直改键的半成品)→ 自清两处后**落穿走全新放置**(亲和信息已不可信,
+#     不 return rubble)。绝不能上抛或拿 nil 做比较——Lua runtime error 会让
+#     该会话 route 永久 500。
+1b. if existing 且 existing.scope_id/pod_id/expiry 任一为 nil:
+      ZREM session_expiry session_id; DEL session:{session_id}; 落穿到 4
+
 # 2. 亲和命中且未过期 → 仅续期,返回原 Pod。
 #    不重新抢额度:chat_session 粒度模型下,额度在首次 route 已占用,持续到 TTL 老化;
 #    同一 chat_session 的后续请求只刷新老化计时,不重复扣 scope/Pod 容量。
@@ -342,6 +349,12 @@ return {scope_id, pod_id, remaining}
 ```
 existing = HGETALL(session:{session_id})
 if not existing: return {touched:false}                # 会话不存在 → gateway 应回退重新 route
+
+# 残骸自卫(2026-09,同 LUA_EVICT):缺 scope_id/pod_id/expiry 的半成品哈希 →
+# 自清两处返回不存在。绝不能上抛或拿 nil 比较——Lua runtime error 会让该会话
+# touch 永久 500。
+if existing.scope_id/pod_id/expiry 任一为 nil:
+      ZREM session_expiry session_id; DEL session:{session_id}; return {touched:false}
 
 # 惰性兜底:访问即校验 liveness;已过期则当场 evict,不等 sweeper 下一 tick。
 if existing.expiry <= now:

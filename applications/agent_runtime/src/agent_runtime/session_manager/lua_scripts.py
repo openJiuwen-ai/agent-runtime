@@ -42,32 +42,40 @@ local flat = redis.call('HGETALL', skey)
 if #flat > 0 then
   local m = {}
   for i = 1, #flat, 2 do m[flat[i]] = flat[i + 1] end
-  -- 2. 亲和命中且未过期 → 仅续期，不重抢额度、不换 Pod（场景 A）。
+  -- 2. 残骸自卫（同 LUA_EVICT）：哈希存在但缺 scope_id/pod_id/expiry（外部
+  --    直改键的半成品）→ 自清两处后**落穿走全新放置**（亲和信息已不可信，
+  --    不 return rubble——下方 tonumber(m['expiry']) 对 nil 的比较是 Lua
+  --    runtime error，会让该会话 route 永久 500）。
+  if m['scope_id'] == nil or m['pod_id'] == nil or m['expiry'] == nil then
+    redis.call('ZREM', pfx .. 'session_expiry', sid)
+    redis.call('DEL', skey)
+  -- 3. 亲和命中且未过期 → 仅续期，不重抢额度、不换 Pod（场景 A）。
   --    前提：Pod 注册仍在（info 存在）。notify_pod_dead 的清理窗口内新落的
   --    会话若继续 refresh，只会对着已删的 sse_url 无限自旋——且每圈续期
   --    expiry，sweeper 永远收不走。判死绑定 → 惰性回收，走重新放置。
-  if m['scope_id'] == scope and tonumber(m['expiry']) > now
+  elseif m['scope_id'] == scope and tonumber(m['expiry']) > now
      and redis.call('EXISTS', pfx .. 'pod:' .. scope .. ':' .. m['pod_id'] .. ':info') == 1 then
     redis.call('HSET', skey, 'expiry', expiry, 'session_ttl', sttl)
     redis.call('ZADD', pfx .. 'session_expiry', expiry, sid)
     return {'refresh', m['pod_id']}
-  end
-  -- 3. 已过期 / scope 变化 / Pod 注册已消失 → 惰性回收旧绑定（内联 EVICT；
+  -- 4. 已过期 / scope 变化 / Pod 注册已消失 → 惰性回收旧绑定（内联 EVICT；
   --    不触发 idle_consider，空 Pod 回收统一交 sweeper 空 Pod pass）
-  local old_scope, old_pod = m['scope_id'], m['pod_id']
-  redis.call('SREM', pfx .. 'scope:' .. old_scope .. ':sessions', sid)
-  redis.call('SREM', pfx .. 'pod:' .. old_scope .. ':' .. old_pod .. ':sessions', sid)
-  redis.call('ZREM', pfx .. 'session_expiry', sid)
-  redis.call('DEL', skey)
-  redis.call('PUBLISH', pfx .. 'scope:' .. old_scope .. ':free', '1')
+  else
+    local old_scope, old_pod = m['scope_id'], m['pod_id']
+    redis.call('SREM', pfx .. 'scope:' .. old_scope .. ':sessions', sid)
+    redis.call('SREM', pfx .. 'pod:' .. old_scope .. ':' .. old_pod .. ':sessions', sid)
+    redis.call('ZREM', pfx .. 'session_expiry', sid)
+    redis.call('DEL', skey)
+    redis.call('PUBLISH', pfx .. 'scope:' .. old_scope .. ':free', '1')
+  end
 end
 
--- 4. scope 闸门：SCARD 即活跃 chat_session 数
+-- 5. scope 闸门：SCARD 即活跃 chat_session 数
 if redis.call('SCARD', pfx .. 'scope:' .. scope .. ':sessions') >= scope_cc then
   return {'scope_full', ''}
 end
 
--- 5. first-fit 按接入序取首个有空位的 Pod
+-- 6. first-fit 按接入序取首个有空位的 Pod
 local pods = redis.call('ZRANGE', pfx .. 'scope:' .. scope .. ':pods', 0, -1)
 local chosen = ''
 for _, pod in ipairs(pods) do
@@ -77,7 +85,7 @@ for _, pod in ipairs(pods) do
   end
 end
 
--- 6. 现有 Pod 都满：达 max_pods → scope_full；否则 need_acquire（handler 调 RM）
+-- 7. 现有 Pod 都满：达 max_pods → scope_full；否则 need_acquire（handler 调 RM）
 if chosen == '' then
   if #pods >= max_pods then
     return {'scope_full', ''}
@@ -85,7 +93,7 @@ if chosen == '' then
   return {'need_acquire', ''}
 end
 
--- 7. 原子提交：同写四处；复用 Pod 时清 idle_notified（空标记失效）
+-- 8. 原子提交：同写四处；复用 Pod 时清 idle_notified（空标记失效）
 redis.call('SADD', pfx .. 'scope:' .. scope .. ':sessions', sid)
 redis.call('SADD', pfx .. 'pod:' .. scope .. ':' .. chosen .. ':sessions', sid)
 redis.call('HSET', skey, 'scope_id', scope, 'pod_id', chosen,
@@ -143,6 +151,16 @@ if #flat == 0 then
 end
 local m = {}
 for i = 1, #flat, 2 do m[flat[i]] = flat[i + 1] end
+
+-- 残骸自卫（同 LUA_EVICT）：缺 scope_id/pod_id/expiry 的半成品哈希（外部直改
+-- 键）→ 自清两处并返回不存在（gateway 回退重新 route）。绝不能上抛——下方
+-- tonumber(m['expiry']) <= now 对 nil 的比较是 Lua runtime error（EVAL 抛
+-- ResponseError），该会话 touch 将永久 500。
+if m['scope_id'] == nil or m['pod_id'] == nil or m['expiry'] == nil then
+  redis.call('ZREM', pfx .. 'session_expiry', sid)
+  redis.call('DEL', skey)
+  return {'false', ''}
+end
 
 -- 惰性兜底：已过期则当场 evict，不等 sweeper
 if tonumber(m['expiry']) <= now then

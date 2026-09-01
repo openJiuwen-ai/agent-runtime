@@ -279,3 +279,44 @@ async def test_evict_rubble_hash_self_heals_not_crashes(sm_state, caplog):
     assert await sm_state.redis.exists(sm_state.k.session("s-rubble")) == 0
     assert await sm_state.redis.zscore(sm_state.k.session_expiry(), "s-rubble") is None
     assert any("rubble" in r.getMessage() for r in caplog.records)
+
+
+@requires_lua
+async def test_touch_rubble_hash_self_heals_not_crashes(sm_state):
+    """残骸自卫扩到 TOUCH:半成品哈希(缺 scope_id/pod_id/expiry 任一)不得
+    Lua runtime error(旧实现 tonumber(nil) <= now → ResponseError,该会话
+    touch 永久 500),应自清两处返回 (False, '')。"""
+    # 变体一:只有 scope_id(缺 pod_id/expiry)
+    await sm_state.redis.hset(sm_state.k.session("s-rubble-t1"), "scope_id", SCOPE)
+    await sm_state.redis.zadd(sm_state.k.session_expiry(), {"s-rubble-t1": 1})
+    touched, pod = await sm_state.touch("s-rubble-t1", now=now_ts())
+    assert (touched, pod) == (False, "")
+    assert await sm_state.redis.exists(sm_state.k.session("s-rubble-t1")) == 0
+    assert await sm_state.redis.zscore(sm_state.k.session_expiry(), "s-rubble-t1") is None
+
+    # 变体二:scope_id/pod_id 齐但缺 expiry(nil 比较是旧实现的另一个炸点)
+    await sm_state.redis.hset(sm_state.k.session("s-rubble-t2"),
+                              mapping={"scope_id": SCOPE, "pod_id": "pod_9"})
+    touched, pod = await sm_state.touch("s-rubble-t2", now=now_ts())
+    assert (touched, pod) == (False, "")
+    assert await sm_state.redis.exists(sm_state.k.session("s-rubble-t2")) == 0
+
+
+@requires_lua
+async def test_route_place_rubble_hash_self_heals_not_crashes(sm_state):
+    """残骸自卫扩到 ROUTE_PLACE:半成品哈希自清后**落穿走全新放置**(不 return
+    rubble);旧实现 nil 拼接/nil 比较会让该会话 route 永久 500。"""
+    await sm_state.register_pod(SCOPE, "pod_rp", "http://10.0.0.9:8080/sse", "verX")
+    # 半成品:scope_id 对但缺 pod_id 与 expiry
+    await sm_state.redis.hset(sm_state.k.session("s-rubble-rp"), "scope_id", SCOPE)
+    await sm_state.redis.zadd(sm_state.k.session_expiry(), {"s-rubble-rp": 1})
+
+    action, pod = await sm_state.route_place(
+        "s-rubble-rp", SCOPE, expiry_ts=now_ts() + 60, session_ttl=60,
+        scope_concurrency=3, pod_concurrency=2, max_pods=2, now=now_ts())
+    assert action == "placed", "残骸清掉后必须正常全新放置"
+    assert pod == "pod_rp"
+    # 落穿的提交覆盖写全四字段(半成品被治好)
+    info = await sm_state.redis.hgetall(sm_state.k.session("s-rubble-rp"))
+    assert info[b"scope_id"] == SCOPE.encode() and info[b"pod_id"] == b"pod_rp"
+    assert b"expiry" in info and b"session_ttl" in info
