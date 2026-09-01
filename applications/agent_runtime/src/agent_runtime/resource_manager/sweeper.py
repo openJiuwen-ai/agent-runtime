@@ -331,14 +331,19 @@ class ResourceSweeper:
     async def _purge_and_notify(self, pod_id: str) -> None:
         """三步清理：K8s delete（若还在）→ LUA_PURGE → notify_pod_dead（触发场景 G）。
 
-        幂等：PURGE / delete(NotFound) / notify 都是幂等操作。
+        幂等：PURGE / delete(NotFound) / notify 都是幂等操作。**delete 非 404
+        失败时本拍整体放弃**（记录留在 pods:all，watch/reconcile 下拍重试）——
+        若继续 PURGE，存活的物理 Pod 会脱离 Redis 枚举源，而对账只做 Redis→K8s
+        单向，之后没有任何任务会重试删它（孤儿无上界累积）。
         """
         info = await self.state.pod_info(pod_id)
         if info:
             try:
                 await self.k8s.delete(pod_id, info.get("namespace", "default"))
-            except Exception:  # noqa: BLE001 - 清理尽力而为，PURGE 仍继续
-                logger.exception("k8s delete failed during purge: pod=%s", pod_id)
+            except Exception:  # noqa: BLE001 - 本拍放弃，下拍重试（见 docstring）
+                logger.exception(
+                    "k8s delete failed during purge, skip this tick: pod=%s", pod_id)
+                return
         try:
             scope_id = await self.state.purge(pod_id)
         except Exception:  # noqa: BLE001 - PURGE 失败：watch/reconcile 下拍兜底重试

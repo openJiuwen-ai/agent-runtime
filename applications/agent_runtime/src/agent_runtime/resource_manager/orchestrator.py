@@ -21,6 +21,7 @@ from ..errors import DeployFailed, MaxPodsReached
 from ..spec_fields import DEPLOY_VER_FIELDS
 from ..util import fingerprint, now_ts
 from .k8s import DEFAULT_READY_TIMEOUT, K8sPodClient
+from .models import PodDeployInfo
 from .state import ResourceState
 
 logger = logging.getLogger("agent_runtime.resource_manager")
@@ -255,9 +256,13 @@ class ResourceOrchestrator:
         （真环境 2026-08-26 实测：两次停机各泄一个 warm 占位 → max_pods 虚满）。
         REGISTER 同样在保护内——注册步失败（Redis 抖动/取消）不清占位一样虚占
         max_pods。物理清理：k8s.deploy 失败/取消可能在集群里留下已建 Pod
-        （DeployFailed 契约携带 pod_id/namespace），此处兜底删除防孤儿。
+        （DeployFailed 契约携带 pod_id/namespace），此处兜底删除防孤儿；
+        **register 步失败时异常不带 pod_id 属性——用已到手的 info 兜底删除**
+        （物理 Pod 已建 Ready，不删就成 pods:all 之外的孤儿：watch/reconcile
+        只做 Redis→K8s 单向对账，无人认领、无上界累积）。
         """
         t0 = time.monotonic()
+        info: PodDeployInfo | None = None
         try:
             info = await self.k8s.deploy(pod_spec)
             sse_url = (
@@ -285,12 +290,12 @@ class ResourceOrchestrator:
                     "clear deploying token failed during aborted deploy: "
                     "scope=%s token=%s", scope_id, deploy_token,
                 )
-            orphan = getattr(exc, "pod_id", "")
+            orphan = getattr(exc, "pod_id", "") or (info.pod_id if info else "")
+            orphan_ns = (getattr(exc, "namespace", "")
+                         or (info.namespace if info else "") or "default")
             if orphan:
                 try:
-                    await self.k8s.delete(
-                        orphan, getattr(exc, "namespace", "") or "default"
-                    )
+                    await self.k8s.delete(orphan, orphan_ns)
                 except Exception:  # noqa: BLE001 - 尽力而为，孤儿交由运维 cleanup
                     logger.exception(
                         "orphan pod cleanup failed: pod=%s", orphan,

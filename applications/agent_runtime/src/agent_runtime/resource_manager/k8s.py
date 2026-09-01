@@ -666,6 +666,8 @@ class FakeK8sPodClient(K8sPodClient):
     - ``fail_after_create``：create 成功但永不 Ready 的次数——Pod 留在集群、
       DeployFailed 携带 pod_id/namespace（真 K8s 的超时/取消形态，考验上层
       「失败路径不留孤儿」的兜底删除）。
+    - ``delete_failures``：连续 delete 失败次数（非 404 形态，考验 PURGE 的
+      delete 门槛——失败时本拍不得 PURGE，留待下拍重试）。
     """
 
     def __init__(self, default_namespace: str = "default") -> None:
@@ -676,6 +678,7 @@ class FakeK8sPodClient(K8sPodClient):
         self.unhealthy_pods: set[str] = set()
         self.deploy_failures = 0
         self.fail_after_create = 0
+        self.delete_failures = 0
         self.deleted: list[str] = []
         self.deployed_specs: list[dict[str, Any]] = []       # deploy 收到的 pod_spec 录制(断言用)
         self._ip_counter = 0
@@ -705,6 +708,9 @@ class FakeK8sPodClient(K8sPodClient):
         return PodDeployInfo(pod_id=pod_id, namespace=namespace, pod_ip=pod_ip)
 
     async def delete(self, pod_id: str, namespace: str) -> str:
+        if self.delete_failures > 0:
+            self.delete_failures -= 1
+            raise DeployFailed(f"simulated delete failure: {pod_id}")
         self.pods.pop((namespace, pod_id), None)
         self.deleted.append(pod_id)
         return pod_id

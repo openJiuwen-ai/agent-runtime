@@ -14,11 +14,23 @@ import json
 
 import pytest
 
+from agent_runtime.errors import DeployFailed
 from agent_runtime.resource_manager.orchestrator import ResourceOrchestrator
 from agent_runtime.resource_manager.sweeper import ResourceSweeper
+from agent_runtime.util import now_ts
 from tests.conftest import requires_lua
 
 SCOPE = "scope-resilience"
+
+
+class _SpySM:
+    """notify_pod_dead 侦听（断言场景 G 通知链）。"""
+
+    def __init__(self) -> None:
+        self.dead_notifications: list[str] = []
+
+    async def notify_pod_dead(self, pod_id: str) -> None:
+        self.dead_notifications.append(pod_id)
 
 
 class _SlowK8s:
@@ -97,3 +109,49 @@ async def test_redeploy_after_cancel_succeeds(rm_state, k8s, nat_cfg):
     assert len(await rm_state.idle_pods(SCOPE)) == 1            # 热备入池
     assert await rm_state.deploying_count(SCOPE) == 0
     assert await rm_state.pod_count(SCOPE) == 1
+
+
+@requires_lua
+async def test_register_failure_deletes_orphan_pod(rm_state, k8s, nat_cfg, monkeypatch):
+    """REGISTER 步失败（Redis 异常不带 pod_id 属性）：物理 Pod 已建且 Ready，
+    必须用已到手的 info 兜底删除——否则成 pods:all 之外的孤儿（watch/reconcile
+    只做 Redis→K8s 单向对账，无人认领、无上界累积）。"""
+    orchestrator = ResourceOrchestrator(rm_state, k8s)
+
+    async def _register_boom(**kwargs):
+        raise RuntimeError("simulated redis outage during REGISTER")
+
+    monkeypatch.setattr(rm_state, "register_pod", _register_boom)
+    with pytest.raises(DeployFailed):
+        await orchestrator._deploy_and_register(
+            SCOPE, nat_cfg, "ver1", "tok-1", idle_flag=True)
+
+    assert len(k8s.deleted) == 1, "register 失败后未用 info 兜底删除物理 Pod"
+    assert not k8s.pods, "假集群里不应残留孤儿 Pod"
+
+
+@requires_lua
+async def test_purge_skipped_when_k8s_delete_fails_then_retries(rm_state, k8s):
+    """delete 非 404 失败：本拍不得 PURGE（记录一清，存活 Pod 就脱离 Redis
+    枚举源成孤儿）；恢复后下拍重试才清、通知恰一次。"""
+    sweeper = ResourceSweeper(rm_state, k8s, sm_facade=_SpySM())
+    await rm_state.register_pod(
+        pod_id="pod-purge-1", scope_id=SCOPE,
+        pod_sse_url="http://10.42.0.9:8080/sse", pod_ip="10.42.0.9",
+        namespace="default", deploy_ver="ver1", deploy_token="tok-purge",
+        idle_flag=True, now=now_ts(), sse_port=8080, health_path="/health",
+    )
+    spy = sweeper.sm
+
+    k8s.delete_failures = 1
+    await sweeper._purge_and_notify("pod-purge-1")
+    assert await rm_state.pod_ids(SCOPE) == ["pod-purge-1"]    # RM 记录未清
+    assert await rm_state.pod_info("pod-purge-1")               # info 仍在
+    assert spy.dead_notifications == []                         # 未误通知
+    assert k8s.deleted == []                                    # 物理删除未成功
+
+    await sweeper._purge_and_notify("pod-purge-1")              # 下拍重试
+    assert await rm_state.pod_ids(SCOPE) == []
+    assert not await rm_state.pod_info("pod-purge-1")
+    assert k8s.deleted == ["pod-purge-1"]
+    assert spy.dead_notifications == ["pod-purge-1"]
