@@ -244,13 +244,18 @@ def service_config_templates() -> list[tuple[str, dict[str, Any]]]:
     ]
 
 
-def instance_create_body(*, jiuwenclaw_name: str = "ut-demo-instance") -> dict[str, Any]:
+def instance_create_body(
+    *,
+    jiuwenclaw_name: str = "ut-demo-instance",
+    gateway_config_host: str = "http://127.0.0.1:18080",
+    runtime_config_host: str = "http://127.0.0.1:18081",
+) -> dict[str, Any]:
     return {
         "jiuwenclaw_name": jiuwenclaw_name,
         "created_by": "ut-tester",
         "description": "manager API unit test instance",
         "namespace": "default",
         "space_id": "default",
-        "gateway_config_host": "http://127.0.0.1:18080",
-        "runtime_config_host": "http://127.0.0.1:18081",
+        "gateway_config_host": gateway_config_host,
+        "runtime_config_host": runtime_config_host,
     }
