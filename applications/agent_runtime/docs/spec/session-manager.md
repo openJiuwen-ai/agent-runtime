@@ -31,6 +31,8 @@
 
 - 入参从 `Envelope.metadata`(session_id/user_id/group_id/bot_id/request_id)与 `rawdata` 取;`group_id` 在 `metadata.extra`,**user_id/group_id/bot_id/session_id 四项均必填非空**(orchestrator 校验,缺 → 400 VALIDATION)。
 - `AgentRuntimeError` 统一捕获 → `ResponseEnvelope(ok=False, error_code, error_message, retry_after)`。
+- **基础设施连接级异常 → 503 STATE_UNAVAILABLE**(2026-09 健壮性加固):`_INFRA_EXCEPTIONS`(redis ConnectionError/TimeoutError + sqlalchemy OperationalError/InterfaceError/DisconnectionError,**防御式 import**——传递依赖缺失回退空元组;有意不含 redis ResponseError/sqlalchemy ProgrammingError,那是 500 该暴露的真 bug)在 5 个 handler 各并一档 except(route 含幂等闸 acquire),经 `_infra_fail` 翻译为 `StateUnavailable(retry_after=1)`——Redis/DB 抖动是暂态,500 语义不可重试会错杀 LB/客户端重试。
+- **幂等缓存写失败不吞成功响应**:route 成功后 `guard.succeed` 抛错仅 exception 留痕、照常返回结果(代价 = 60s 窗口内同 request_id 重放重跑 route,会话亲和续期本身幂等)。
 - handler 无模块级可变状态;服务对象从 `sysctx` 取(`main._bind_modules` 注入)。
 
 ## orchestrator.py —— route 主循环

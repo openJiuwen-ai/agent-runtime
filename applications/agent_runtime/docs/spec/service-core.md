@@ -148,6 +148,7 @@ SM 侧 ctx,级联管理全部生命周期(框架 App 的 lifespan 只认一个 c
 | `CONFIG_NOT_FOUND` | 503 | ❌ | resolve 无匹配规则/模板禁用 |
 | `VALIDATION` | 400 | ❌ | 参数错 |
 | `CONFIG_SYNC_BUSY` | 409 | — | 上一次热更新未完成 / 日落待回收中间态 Pod / `lock:config_sync` 被 config_sync 或 config_refresh 占用 |
+| `STATE_UNAVAILABLE` | 503 | ✅ | 状态后端(Redis/DB)连接级故障,handler 层翻译(`handlers._INFRA_EXCEPTIONS`);区别于 internal 500——暂态可重试 |
 
 - `retry_after` 仅过载类携带(秒);Facade 间以 Python 异常传播,handler 捕获后映射为 `ResponseEnvelope(ok=False, error_code, retry_after)`。
 - `MAX_PODS_REACHED` / `DEPLOY_FAILED` 是 RM Facade 内部异常,SM route 捕获后统一映射 `NO_POD_AVAILABLE`,不对外。
