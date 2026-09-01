@@ -503,8 +503,17 @@ class ServiceManager(IServiceManager):
             try:
                 item: QueueItem = await self._q.get()
             except RuntimeError:
-                logger.debug("双队列 get 因关闭退出 message_loop")
-                break
+                if self._q.closed:
+                    logger.debug("双队列 get 因关闭退出 message_loop")
+                    break
+                # 队列未关闭却抛 RuntimeError：意外异常（历史上曾因双队列双侧同窗口
+                # 就绪竞态误抛，导致消费循环永久退出、后续请求全部超时）。
+                # 不允许一条意外异常让整个路由停摆；退避后继续消费。
+                logger.error(
+                    "message_loop get 意外异常(双队列未关闭), 退避后继续消费", exc_info=True
+                )
+                await asyncio.sleep(0.1)
+                continue
             except asyncio.CancelledError:
                 logger.debug("message_loop 被取消")
                 break
