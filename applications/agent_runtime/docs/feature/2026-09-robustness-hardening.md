@@ -39,7 +39,7 @@
 ## 验证
 
 - 单测:pytest **415 → 437**(全部通过;每条修复配 1 个故障注入用例,含:register 失败不留孤儿、delete 失败不 PURGE 下拍重试、整批回滚、看门狗续期/并发 409/uuid token、Redis 断连 503 信封、幂等写失败不吞成功、残骸落穿放置、no_config 有界、逐 Pod/逐 scope 隔离、connect 各恰一次、rm stop 抛错不断链、route 总预算、finally 不吞原始异常)
-- 真环境:发布门禁冒烟(integration_smoke.sh 三件套)待随本批发版执行(见"影响面")
+- 真环境门禁(2026-09-01,真镜像 agentserver/sandbox 0.0.9s + 三件套契约 + `--with-sidecar --with-mounts` 全量阶段):**121/121 PASS**。过程实录:首版 C8(队列预算拍平当总预算)**88/100——12 处 FAIL 全部成簇于冷部署路径 504**(部署模板 8s 队列预算 vs 真镜像 15-25s Ready),门禁如实抓出设计缺陷 → 改推导式总预算后复跑全绿。门禁自身的价值实证。
 - Redis Cluster:C6 只改 Lua 逻辑不动键名/KEYS/ARGV,hash tag 同槽不受影响;如需复核跑 `scripts/verify_redis_cluster.py`
 
 ## 影响面
