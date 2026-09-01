@@ -17,7 +17,7 @@
 |---|---|---|---|---|
 | 进程内双实例 | `uv run pytest tests/integration/test_multi_replica.py` | 14 用例 | 无(离线,fakeredis) | pytest 标准 |
 | **审计实锤回归网** | `uv run pytest tests/integration/test_audit_repro.py` | 16 用例 | 无(离线,fakeredis) | pytest 标准 |
-| 集成冒烟(M6) | `./scripts/integration_smoke.sh`(sidecar 阶段加 `--with-sidecar`,全量规格加 `--with-mounts`) | 75 项断言(+5/+24) | 单实例 server 模式 + 真 Redis/MySQL/K8s | 0/1/2 |
+| 集成冒烟(M6) | `./scripts/integration_smoke.sh`(sidecar 阶段加 `--with-sidecar`,全量规格加 `--with-mounts`) | 121 项断言(全规格形态;2026-09-01 真镜像 0.0.9s 门禁 121/121) | 单实例 server 模式 + 真 Redis/MySQL/K8s | 0/1/2 |
 | 多副本 e2e(M7) | `uv run --no-sync python scripts/e2e_multi_replica.py` | 35 项断言 | K8s 多副本 + Service LB + 真 Redis | 0/1/2 |
 | 压测/浸泡 | `uv run --no-sync python scripts/load_test.py` | 3 场景 | 任意入口(建议 LB) | 0/1 |
 
@@ -30,7 +30,7 @@
 
 ### 2.1 请求信封(全部用例的输入格式)
 
-四个对外端点均为 `POST /api/session/{route|touch|config_sync|cleanup}`,请求体:
+五个对外端点均为 `POST /api/session/{route|touch|config_sync|config_refresh|cleanup}`,请求体:
 
 ```json
 {
@@ -42,11 +42,11 @@
     "bot_id": "b",
     "extra": {"group_id": "e2e-main"}  // route 必填;路由表达式左值
   },
-  "rawdata": {}                        // config_sync/cleanup 的载荷在此
+  "rawdata": {}                        // config_sync/cleanup 的载荷在此(config_refresh 必须为空)
 }
 ```
 
-成功响应 `rawdata` 携带业务字段(`pod_id`/`pod_sse_url`/`touched`/`ok`/`cleaned`);
+成功响应 `rawdata` 携带业务字段(`pod_id`/`pod_sse_url`/`touched`/`ok`/`scopes_refreshed`/`cleaned`);
 失败响应顶层 `error_code`(+可重试错误带 `retry_after`)。
 
 ### 2.2 错误码契约(断言依据)
@@ -57,8 +57,8 @@
 | `SCOPE_FULL_TIMEOUT` | 504 | ✅ | 队列内等待超时 |
 | `NO_POD_AVAILABLE` | 503 | ✅ | acquire 失败(MaxPodsReached/DeployFailed 映射) |
 | `CONFIG_NOT_FOUND` | 503 | ❌ | 无匹配规则/模板禁用 |
-| `VALIDATION` | 400 | ❌ | 参数错 |
-| `CONFIG_SYNC_BUSY` | 409 | — | 上次热更新未完成/日落待回收 |
+| `VALIDATION` | 400 | ❌ | 参数错(含 config_refresh 带载荷) |
+| `CONFIG_SYNC_BUSY` | 409 | — | 上次热更新未完成/日落待回收;`lock:config_sync` 被 config_sync 或 config_refresh 占用 |
 
 ### 2.3 Redis 真相源(e2e 直接断言的键)
 
@@ -115,7 +115,7 @@ scope:`e2e-main|e2e-f|e2e-warm|e2e-bad|e2e-nat` 各按 `routing_rules` 表达式
 
 **阶段 0 前置自检**(5 项):服务在线 200 / Redis AOF=1 / kubectl 可用 / ns 就绪 / 防误刷守卫通过。
 
-**阶段 0m:全量规格资源预置**(5 项,仅 `--with-mounts` 时执行;位于前置自检之后、清场之前——
+**阶段 0m:全量规格资源预置**(6 项,仅 `--with-mounts` 时执行;位于前置自检之后、清场之前——
 预置失败返回 False,在 FLUSHDB/删 Pod 等破坏性动作**之前**中止,退出码 2):
 
 | # | 场景 | 输入 | 预期输出/断言 |
@@ -123,7 +123,8 @@ scope:`e2e-main|e2e-f|e2e-warm|e2e-bad|e2e-nat` 各按 `routing_rules` 表达式
 | 0m-1~2 | ConfigMap 资源就绪 | `kubectl create configmap agent-config-cm / box-policy-cm`(幂等,subPath key 逐字等于 `config.yaml`/`policy.yaml`;已存在则复用,内容不断言播种值——阶段 2c 按 CM 当前值比对) | created/AlreadyExists |
 | 0m-3 | 获取可调度节点 | `kubectl get nodes -o json` 取首个 Ready 且无 NoSchedule/NoExecute 污点者 | 非空(PV nodeAffinity 钉可调度节点;误指污点 master → Pod 永久 Pending「volume node affinity conflict」且 PV 亲和不可变,2026-08-28 手工补验教训) |
 | 0m-4 | 双 PVC 预置 | **「已 Bound 即复用,缺失才静态供给」**:PVC 已存在且 Bound → 直接复用(顺手清自己的孤儿 e2e-* PV);缺失 → `kubectl apply -f -`(hostPath PV + 空 storageClassName PVC + `volumeName` 预绑);存在但 Pending → 删后重建 | 预置成功(2026-08-28 真环境实测:ns 里已有真实实验留下的 agent-data-pvc→pv-agent-data 手工对,`volumeName` 不可变,盲目 apply 必 Invalid——复用既绑也更贴近生产:PVC 由谁供给不归模板管) |
-| 0m-5 | 双 PVC Bound | 轮询 ≤30s;卡 Released(PVC 曾删而 PV claimRef 钉死)→ `patch pv claimRef=null` 兜底重等 | 两 PVC phase=Bound |
+| 0m-5 | hostPath 数据目录放权 | **按各 PVC 实绑 PV 反查 hostPath**(复用既绑手工对时路径不由我们决定——2026-09-01 实测 agent-data-pvc→pv-agent-data→/mnt/pv-agent-data;自建 PV 的清单目录一并放,幂等),在节点上 `mkdir -p && chmod 0777`(本机直跑/远端 ssh passwordless) | 无错误(kubelet `DirectoryOrCreate` 建的是 root:root 0755,真镜像主容器多为非 root 用户,不放权则 2c 的 PVC 写入实证被目录权限挡——2026-09-01 真镜像门禁实测;替身 influxdb 以 root 跑故历史无感。失败仅记录不中止,2c 带证据说话) |
+| 0m-6 | 双 PVC Bound | 轮询 ≤30s;卡 Released(PVC 曾删而 PV claimRef 钉死)→ `patch pv claimRef=null` 兜底重等 | 两 PVC phase=Bound |
 
 > CM/PVC 跨轮复用不清理(create/复用幂等);宿主 `/mnt/host-test` 由 hostPath `DirectoryOrCreate` 自建,无需预置。
 
@@ -185,6 +186,7 @@ sidecar 镜像随 `--sidecar-image` 分流:真 jiuwenbox 用 8321 + `JIUWENBOX_L
 | 2c-4 | 显式 container_port | — | 主容器 ports 含 `containerPort=8086`(=sse_port → 单端口声明 `sse`) |
 | 2c-5~7 | 主容器三挂载渲染 | — | volumeMounts:`/etc/agent/config.yaml`(subPath=config.yaml)/`/mnt/host-test`(readOnly=true)/`/var/lib/agent` 各就位 |
 | 2c-8 | 主容器 readiness | — | httpGet path=模板 health_path、port=8086、initialDelay/period=5/5 |
+| 2c-8b | 主容器 envFrom 渲染 | — | secretRef(e2e-agent-secret,**prefix=E2E_**)+ configMapRef(e2e-agent-env-cm,**无 prefix**)逐条透传——载荷故意一有一无,验证 prefix 可选(2026-09-01 修正:旧断言「全部有 prefix」与载荷自相矛盾,恒 FAIL);sidecar configMapRef(e2e-box-env-cm) |
 | 2c-9 | agent_env 注入 | —(仅 `--agent-env` 时断言) | 主容器 env 逐项 == 模板 agent_env(真镜像三件套 AGENT_HTTP_*) |
 | 2c-10 | sidecar 特权三件套 | — | securityContext:privileged=true、capabilities.add={SYS_ADMIN,NET_ADMIN}、seccompProfile=Unconfined |
 | 2c-11 | sidecar apparmor | — | Pod annotation `container.apparmor.security.beta.kubernetes.io/jiuwenbox=unconfined` |
@@ -222,17 +224,17 @@ sidecar 镜像随 `--sidecar-image` 分流:真 jiuwenbox 用 8321 + `JIUWENBOX_L
 
 > 留白:B 类仅验 pod_ttl 一个字段;session_ttl/scope_concurrency/pod_concurrency 的 B 类生效路径未逐字段验(部分由审计网 C1a 与 §5 S6 覆盖)。B 类调小低于现活跃数的回收语义未覆盖(存量超限不驱逐,只老化回落)。
 
-**阶段 4:D 老化回收**(前置:s1–s3 活跃、2 Pod 在役、pod_ttl 已热更为 120;**加速手法:回拨 `session_expiry`/`expiry` 到过去**——自然到期版本见阶段 5b;5 项)
+**阶段 4:D 老化回收**(前置:s1–s3 活跃、2 Pod 在役、pod_ttl 已热更为 120;**自然到期,零回拨/零直改键**(2026-09-01 改):tpl-e2e `session_ttl=30`,真等到期;5 项)
 
 | # | 输入 | 预期(内部状态变迁) |
 |---|---|---|
-| 18 | 时间回拨(加速,不真睡 TTL) | 30s 内 `scope:sessions` 清空(sweeper 1s tick 扫 `session_expiry` 到期集→逐个 EVICT+PUBLISH free) |
+| 18 | —(自然到期,阶段 2 落位起 ≤45s) | `scope:sessions` 清空(sweeper 1s tick 扫 `session_expiry` 到期集→逐个 EVICT+PUBLISH free) |
 | 19 | — | 会话四处全清(session HASH/expiry/pod 集/scope 集) |
 | 20 | — | 空 Pod pass → idle_consider → RM `idle` 暖池 2 个(空闲 Pod 回暖池等待回收/复用) |
 | 21 | — | 不变量 5:`pods:registered` 仍 2 个(`--with-sidecar` 时 3,box Pod 长存;`--with-mounts` 时再 +1,mnt Pod 2c 已 route;待 RM 回收后清) |
 | 22 | — | 两个 Pod `phase`="idle" |
 
-> 留白:回拨掩盖「写入路径的 expiry 数值/单位错误」类缺陷(回拨直接改写终值)——自然写入-到期链路仅阶段 5b 覆盖(tpl-nat);touch 续期与到期竞态(恰好临界续期)未覆盖。
+> 2026-09-01 实测教训(原回拨手法的缺陷):回拨用 zadd+hset 直改,`hset` 落在已被自然驱逐(DEL)的会话上会重建出**仅剩 `expiry` 的残骸哈希**——LUA_EVICT 对其崩溃循环(单坏键 = sweeper 到期 pass 永久瘫痪,D/5b/K 全链连锁失败);服务侧已加残骸自卫(LUA_EVICT 自清 + WARNING),e2e 侧改自然到期。touch 续期与到期竞态(恰好临界续期)未覆盖。
 
 **阶段 5:K reclaim**(前置:阶段 4 结束,2 Pod 在 idle 池、pod_ttl=120;**加速手法:回拨 `idle_since` 到 pod_ttl 之前**;4 项)
 
@@ -306,6 +308,21 @@ sidecar 镜像随 `--sidecar-image` 分流:真 jiuwenbox 用 8321 + `JIUWENBOX_L
 
 > 留白:老 Pod 带**活跃会话**的日落存活(存量会话亲和不受影响——审计网 C3 从探测参数侧覆盖)、软摘除中途失败后同载荷重试的补跑(审计网 C12)、health_path/sse_port 这类影响探测契约的 A 类变更(冒烟沿用同 path/port,变更后探测参数随 Pod 的行为需真镜像门禁)。
 
+**阶段 10b:M-R 强制刷新**(前置:阶段 10 结束;先在 e2e-main route 一个会话保住候选集与亲和载体;8 项)
+
+| # | 输入 | 预期(内部状态变迁) |
+|---|---|---|
+| 10b-1 | `route(s-refresh, e2e-main)` | 200,pod_id 非空(亲和断言载体) |
+| 10b-2 | `POST config_refresh`(无载荷) | 200 `{ok, scopes_refreshed=全 scope 数, generations 覆盖全部 scope 且 ≥1}` |
+| 10b-3 | — | 每个 scope 的 RM `scope:config` 出现非空 `generation` 字段 |
+| 10b-4 | — | 全部 scope 的 SM `scope:{sid}:pods` ZCARD=0(全量软摘除) |
+| 10b-5 | `route(s-refresh)`(同 session) | 200 且 pod_id 不变(存量会话亲和保持,不查候选集) |
+| 10b-6 | —(≤120s) | e2e-warm 出现新代暖 Pod:idle 池中其 `pod:info.generation == scope:config.generation`(autoscale 用缓存 pod_spec 重建) |
+| 10b-7 | — | `pods:all` 出现刷新前不存在的 pod_id(真实新部署;用集合差而非基数——老代 Pod 被 reclaim 并发回收,计数比较天然竞态) |
+| 10b-8 | — | e2e-warm idle 池存在代次落后成员(老代排空态;**不等待 pod_ttl 回收**——全链自然回收由进程内 R1 小 TTL 用例覆盖) |
+
+> 阶段 10(刚做完 A 类变更)与 10b 串行无冲突:A 类老 Pod 同时 stale 于版本与代次,reclaim 双重命中。
+
 **阶段 11:N 半死探测**(1 项 SKIP):AgentServer 镜像对 `GET /health` 返回 426,
 暂缓端到端(单测已覆盖:`tests/resource_manager/test_rm_business.py`)。
 
@@ -337,7 +354,7 @@ s1–s3 占满(cc=3),or 支 route 只能排队 504——原断言仅在「部署
 |---|---|---|---|
 | 12b-1 | C 表达式 or 支 | `route(s-vip, e2e-no-such-group, user=e2e-vip)` | 200 且 `pod_id` 以 `agentserver-` 开头——group 不命中但 user 白名单 or 支命中 e2e-main |
 
-**阶段 13:错误契约**(前置:配置在、会话/Pod 已清场;5 项)
+**阶段 13:错误契约**(前置:配置在、会话/Pod 已清场;6 项)
 
 | # | 输入 | 预期 |
 |---|---|---|
@@ -345,11 +362,12 @@ s1–s3 占满(cc=3),or 支 route 只能排队 504——原断言仅在「部署
 | 49 | `route(session_id=null)` / `route(user_id=null)` | 400 `VALIDATION`(四参非空) |
 | 50 | `touch(session_id=null)` | 400 `VALIDATION` |
 | 51 | `config_sync(kind="nope")`(旧 kind/op 协议) | 400 `VALIDATION` |
+| 51b | `config_refresh(rawdata={"templates":[]})`(无载荷契约) | 400 `VALIDATION` |
 | 52 | `cleanup(验收ns, label_selector=无匹配)` | 200 `cleaned=0`(空目标须用无匹配 selector,见 §8.1) |
 
 > 留白:config_sync 载荷深层的畸形矩阵(int 字段非数值/0 值策略字段/scope 引用缺失模板)在审计网 C10a/C10b 覆盖(冒烟只验协议层 kind/op 遗迹);CONFIG_SYNC_BUSY 409 的日落中间态语义在审计网 C1 覆盖。
 
-> 断言逐条 `check()` 记名,汇总 75 项(个别为条件性/可选 SKIP,计入通过)。
+> 断言逐条 `check()` 记名,全规格形态(`--with-sidecar --with-mounts`,真 agentserver/sandbox 镜像)实测 **121 项,2026-09-01 门禁 121/121**(个别为条件性/可选 SKIP,计入通过)。
 > **注意**:M6 冒烟回归请对**单实例**执行——多副本后端冷突发语义不同(见 §6)。
 
 ---
@@ -497,6 +515,17 @@ FakeK8s 忽略探测参数的保真度缺口(按 (ip,port,path) 判定——2026
 > 门禁层可见;C9 的硬崩形态(kill -9 遗留 waiter)在本层用过期 deadline 模拟,
 > 真进程硬崩的端到端未覆盖;reclaim 与 acquire 的 TOCTOU(在用 Pod 被回收)两轮
 > 审计均确认存在但确定性复现需真时序,列为已知 P1 遗留(feature 记录遗留清单)。
+
+### 5.3 强制刷新自然老化网:`tests/integration/test_force_refresh.py`(4 用例)
+
+方法论同审计网(真实业务流 + 小 TTL 自然到期,禁回拨/直改键),覆盖 config_refresh(场景 M-R)的全链日落闭环:
+
+| # | 场景 | 前置状态 | 输入/时序 | 预期 |
+|---|---|---|---|---|
+| R1 | 全量自然周期 | min_idle=1/session_ttl=1/pod_ttl=2,route 建会话 | config_refresh → 亲和再验 → 自然到期 → 真等过 pod_ttl → reclaim/autoscale | 候选集清空+代次=1;同 session 回同 Pod;老 Pod 被 reclaim(出 pods:all、K8s 删、SM 清注册);新暖 Pod `generation == cfg.generation` |
+| R2 | 重复刷新收敛 | min_idle=1/pod_ttl=1 | 刷新→补位→回收→再刷新→再补位(交错,max_pods=2 内) | 代次 1→2 递增;终态仅最新代 warm Pod 存活 |
+| R3 | 刷新后下发守卫 | 会话在老代 Pod 上,刷新后自然转 idle | B 类下发 → A 类下发(409)→ 回收后 A 类下发 | B 类放行;A 类按日落中间态 409(守卫按版本、不看代次);老代回收后 A 类 200 |
+| R4 | 重建用存量 spec | min_idle=1,autoscale 暖 Pod | config_refresh → autoscale | 重建部署的 pod_spec 与 RM 缓存逐字段一致(配置零变化,仅换代) |
 
 ---
 

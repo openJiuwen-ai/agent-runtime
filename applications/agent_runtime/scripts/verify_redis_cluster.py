@@ -151,6 +151,35 @@ async def verify(url: str, wipe: bool) -> int:
     check("RM: known_scope_ids 扫出两个 scope(SCAN dict 游标)",
           {"v-scope", "v-scope-2"} <= set(scopes), str(scopes))
 
+    # [4b] 代次日落(config_refresh,场景 M-R):REGISTER 烙印 + ACQUIRE 过滤
+    await rm.register_pod(
+        pod_id="v-pod-r1", scope_id="v-scope",
+        pod_sse_url="http://127.0.0.1:8086", pod_ip="127.0.0.1",
+        namespace="default", deploy_ver="v-ver-1", deploy_token="v-tok-1",
+        idle_flag=True, now=now_ts(), sse_port=8086, health_path="/health",
+    )
+    action, pod, _ = await rm.acquire("v-scope", "v-ver-1", "v-tok-2")
+    check("RM: 同版本同代暖 Pod 被 reuse(正向对照)", action == "reuse", action)
+    await rm.release("v-pod-r1", "v-scope", now_ts())   # 放回 idle,保住对照前提
+    gen = await rm.bump_generation("v-scope")
+    check("RM: bump_generation HINCRBY 自增", gen == 1, str(gen))
+    pod_gen = await client.hget(rm.k.pod_info("v-pod-r1"), "generation")
+    check("RM: REGISTER 烙印注册当时代次(bump 前注册 → 空)",
+          pod_gen in (b"", "", None), repr(pod_gen))
+    await rm.register_pod(
+        pod_id="v-pod-r2", scope_id="v-scope",
+        pod_sse_url="http://127.0.0.1:8087", pod_ip="127.0.0.1",
+        namespace="default", deploy_ver="v-ver-1", deploy_token="v-tok-2",
+        idle_flag=True, now=now_ts(), sse_port=8086, health_path="/health",
+    )
+    pod2_gen = await client.hget(rm.k.pod_info("v-pod-r2"), "generation")
+    check("RM: bump 后 REGISTER 烙新代(服务端读取)",
+          pod2_gen in (b"1", "1"), repr(pod2_gen))
+    # 老代 r1 被过滤、新代 r2 被选中(EVAL 内 HGET generation,跨槽安全)
+    action, pod, _ = await rm.acquire("v-scope", "v-ver-1", "v-tok-3")
+    check("RM: bump 后 acquire 跳过老代、选中新代暖 Pod",
+          action == "reuse" and pod == "v-pod-r2", f"{action}/{pod}")
+
     # 收尾
     if wipe:
         await _wipe_own_keys(client)

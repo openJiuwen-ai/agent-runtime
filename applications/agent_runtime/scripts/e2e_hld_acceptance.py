@@ -46,6 +46,7 @@ import json
 import os
 import shutil
 import time
+import uuid
 
 import httpx
 import redis.asyncio as aioredis
@@ -206,6 +207,8 @@ SIDECAR_STANDIN_PORT = 8096
 def _sidecar_standin() -> dict:
     """box-standin 容器 wire dict(K8s 形态;cm 挂载经 volumeMounts 引用
     模板 volumes 的 box-policy 卷——CM 由阶段 2b 预置)。"""
+    real = SIDECAR_IMAGE != IMAGE
+    port = 8321 if real else SIDECAR_STANDIN_PORT   # 探针/容器端口同源
     common = {
         "container_id": "c-box-standin",
         "name": "box-standin",
@@ -213,15 +216,15 @@ def _sidecar_standin() -> dict:
         # 阶段 2b 先 kubectl create configmap,exec 验证容器内文件内容
         "volumeMounts": [{"name": "box-policy", "mountPath": "/etc/box/policy.yaml",
                           "subPath": "policy.yaml"}],
-        "readinessProbe": {"tcpSocket": {"port": SIDECAR_STANDIN_PORT},
+        "readinessProbe": {"tcpSocket": {"port": port},
                            "initialDelaySeconds": 5, "periodSeconds": 5},
     }
-    if SIDECAR_IMAGE != IMAGE:   # 真 jiuwenbox 镜像:完整规格
+    if real:                     # 真 jiuwenbox 镜像:完整规格
         return {**common,
                 "image": SIDECAR_IMAGE,
-                "ports": [{"containerPort": 8321}],
+                "ports": [{"containerPort": port}],
                 "env": [{"name": "JIUWENBOX_LISTEN",
-                         "value": "http://0.0.0.0:8321"}],
+                         "value": f"http://0.0.0.0:{port}"}],
                 "securityContext": {
                     "privileged": True,
                     "capabilities": {"add": ["SYS_ADMIN", "NET_ADMIN"]},
@@ -230,10 +233,10 @@ def _sidecar_standin() -> dict:
                 }
     return {**common,           # influxdb 替身:错开 8086 与 RPC 8088
             "image": SIDECAR_IMAGE,
-            "ports": [{"containerPort": SIDECAR_STANDIN_PORT}],
+            "ports": [{"containerPort": port}],
             "env": [
                 {"name": "INFLUXDB_HTTP_BIND_ADDRESS",
-                 "value": f":{SIDECAR_STANDIN_PORT}"},
+                 "value": f":{port}"},
                 {"name": "INFLUXDB_BIND_ADDRESS", "value": ":8098"},
             ]}
 
@@ -672,6 +675,29 @@ async def _schedulable_node() -> str:
     return ""
 
 
+# hostname → ssh 目标(本机外的节点;hostPath 目录属节点本地,放权要上节点执行)。
+# 未知节点返回空串由调用方降级(仅记录,不中止)。
+NODE_SSH_TARGETS = {"ecs-38b3-0001": "root@192.168.1.64"}
+
+
+async def _node_exec(node: str, script: str) -> str:
+    """在指定节点上执行单条 shell 脚本:本机 sh -c 直跑;远端经 ssh(整串作为
+    一条命令传给远端 shell——拆参数会被 ssh 拍平,`sh -c "…"` 的引号即失效,
+    2026-09-01 实测 mkdir 丢 operand)。passwordless,同镜像分发前提。"""
+    import socket as _socket
+    if node == _socket.gethostname():
+        argv = ("sh", "-c", script)
+    else:
+        target = NODE_SSH_TARGETS.get(node)
+        if not target:
+            return f"(no ssh target for node {node})"
+        argv = ("ssh", "-o", "ConnectTimeout=5", target, script)
+    proc = await asyncio.create_subprocess_exec(
+        *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+    out, _ = await proc.communicate()
+    return out.decode()
+
+
 async def _ensure_pvc(pvc: str, pv: str, node: str, host_dir: str) -> bool:
     """单对 PVC 就绪——「已 Bound 即复用,缺失才静态供给」。
 
@@ -746,6 +772,33 @@ async def stage0_provision_mounts() -> bool:
         ok_apply &= await _ensure_pvc(pvc, pv, node, host_dir)
     if not check("MNT-双 PVC 预置（已 Bound 复用 / 缺失静态供给）", ok_apply):
         return False
+
+    # hostPath 数据目录放权:放权对象 = 各 PVC **实际绑定 PV** 的 hostPath
+    # (复用既绑手工对时路径不由我们决定——2026-09-01 实测 agent-data-pvc→
+    # pv-agent-data→/mnt/pv-agent-data,放自己清单里的目录是无效功),自建
+    # PV 的清单目录也一并放(幂等)。kubelet DirectoryOrCreate 建的是 root:root
+    # 0755,真镜像主容器多为非 root 用户,不放权则 2c 的 PVC 写入实证被目录
+    # 权限挡(替身 influxdb 以 root 跑故历史无感)。目录在 PV 钉的节点本地,
+    # 本机直跑 / 远端 ssh;失败仅记录(2c 的写入实证会带着证据说话),不中止。
+    chmod_errs = []
+    chmod_dirs = {"/mnt/agent-runtime-e2e/agent-data",
+                  "/mnt/agent-runtime-e2e/box-data"}
+    for pvc in (MNT_AGENT_PVC, MNT_BOX_PVC):
+        pv_name = (await kubectl("get", "pvc", "-n", NS, pvc,
+                                 "-o", "jsonpath={.spec.volumeName}")).strip()
+        if not pv_name:
+            continue
+        real_dir = (await kubectl(
+            "get", "pv", pv_name, "-o", "jsonpath={.spec.hostPath.path}")).strip()
+        if real_dir:
+            chmod_dirs.add(real_dir)
+    for host_dir in sorted(chmod_dirs):
+        out = await _node_exec(node, f"mkdir -p {host_dir} && chmod 0777 {host_dir}")
+        if any(sig in out for sig in ("no ssh target", "denied",
+                                      "missing operand", "No such")):
+            chmod_errs.append(f"{host_dir}: {out.strip()[:50]}")
+    check("MNT-hostPath 数据目录放权（按 PVC 实绑 PV 反查;真镜像非 root 用户）",
+          not chmod_errs, str(chmod_errs))
 
     async def both_bound() -> bool:
         out = await kubectl("get", "pvc", "-n", NS, MNT_AGENT_PVC, MNT_BOX_PVC,
@@ -849,8 +902,11 @@ async def stage2c_mounts(c: Client, r) -> None:
     check("MNT-主容器 envFrom 引用（secretRef + configMapRef）",
           agent_refs == sorted([MNT_AGENT_SECRET, MNT_AGENT_ENV_CM]),
           str(agent_env_from))
-    check("MNT-主容器 envFrom prefix 透传（E2E_）",
-          agent_prefixes == {"E2E_"}, str(agent_prefixes))
+    # 载荷故意一条带 prefix(secretRef)一条不带(configMapRef)——验证 prefix
+    # 可选透传:渲染结果须与载荷逐条一致,而非「全部都有前缀」(2026-09-01 实测
+    # 旧断言 == {"E2E_"} 与载荷自相矛盾,恒 FAIL)
+    check("MNT-主容器 envFrom prefix 透传（E2E_ 有/无不丢）",
+          agent_prefixes == {"E2E_", None}, str(agent_prefixes))
     box_env_from = box_ct.get("envFrom") or []
     box_refs = sorted(
         (ef.get("secretRef") or ef.get("configMapRef") or {}).get("name", "")
@@ -912,10 +968,13 @@ async def stage2c_mounts(c: Client, r) -> None:
                         "sh", "-c", f"touch {MNT_HOST_PATH}/ro 2>&1")
     check("MNT-主容器 hostPath read_only=true → 写入被拒",
           "Read-only file system" in out, out.strip()[:80])
+    # 探针文件名带唯一后缀:复用 PV 里可能躺着历史(替身 root 时代)跑出的同名
+    # root 属主 644 文件,真镜像非 root 用户打不开 → 恒 Permission denied
+    # (2026-09-01 实测:目录本身可写,mkdir 都过,只有覆盖旧 probe 文件被拒)
+    probe_file = f"/var/lib/agent/probe-{uuid.uuid4().hex[:8]}"
     out = await kubectl("exec", "-n", NS, pod_id, "-c", "agent", "--",
                         "sh", "-c",
-                        "echo mnt-probe > /var/lib/agent/probe"
-                        " && cat /var/lib/agent/probe")
+                        f"echo mnt-probe > {probe_file} && cat {probe_file}")
     check("MNT-主容器 PVC 可写回读（agent-data-pvc）",
           "mnt-probe" in out, out.strip()[:60])
     cm_val = (await kubectl("get", "configmap", MNT_BOX_CM, "-n", NS,
@@ -929,10 +988,10 @@ async def stage2c_mounts(c: Client, r) -> None:
                         "ls", "/sys/fs/cgroup")
     check("MNT-sidecar 宿主 cgroup 可见（ls /sys/fs/cgroup）",
           bool(out.strip()), out.strip()[:60])
+    box_probe_file = f"/var/lib/jiuwenbox/probe-{uuid.uuid4().hex[:8]}"
     out = await kubectl("exec", "-n", NS, pod_id, "-c", "jiuwenbox", "--",
                         "sh", "-c",
-                        "echo box-probe > /var/lib/jiuwenbox/probe"
-                        " && cat /var/lib/jiuwenbox/probe")
+                        f"echo box-probe > {box_probe_file} && cat {box_probe_file}")
     check("MNT-sidecar PVC 可写回读（box-data-pvc）",
           "box-probe" in out, out.strip()[:60])
 
@@ -955,15 +1014,13 @@ async def stage3_mb_hot_update(c: Client, r) -> None:
 
 async def stage4_aging(c: Client, r, state: dict) -> None:
     print("\n== 阶段 4：场景 D —— session_ttl 真实到期 → 老化回收 → idle 暖池 ==")
-    # 回拨 s1..s3 到期时间到过去（加速；不真睡 TTL）
-    past = time.time() - 5
-    for sid in ("s1", "s2", "s3"):
-        await r.zadd(f"{SM_PREFIX}session_expiry", {sid: past})
-        await r.hset(f"{SM_PREFIX}session:{sid}", "expiry", int(past))
-
+    # 自然到期（零回拨/零直改键，对齐 5b 方法论）。2026-09-01 实测教训：回拨用
+    # zadd+hset 直改，hset 落在已被自然驱逐（DEL）的会话上会重建出仅剩 expiry
+    # 的残骸哈希，LUA_EVICT 对其崩溃循环 → 到期 pass 永久瘫痪（D/5b/K 全链
+    # 连锁失败）。tpl-e2e session_ttl=30，阶段 2 落位起算，此处最多再等 ~30s。
     async def drained() -> bool:
         return await r.scard(f"{SM_PREFIX}scope:{MAIN}:sessions") == 0
-    ok = await wait_until(drained, 30, 2, "sessions drained")
+    ok = await wait_until(drained, 45, 2, "sessions drained")
     check("D-到期 pass：scope:sessions 清空（sweeper 每 1s）", ok)
     sessions_left = [s for s in ("s1", "s2", "s3")
                      if await r.exists(f"{SM_PREFIX}session:{s}")]
@@ -1144,6 +1201,71 @@ async def stage10_ma_sunset(c: Client, r) -> None:
           not warm_pod or zrem, f"idle={warm_pod or '∅'}")
 
 
+async def stage10b_config_refresh(c: Client, r) -> None:
+    """场景 M-R 强制刷新:全 scope 代次日落 + 按存量配置重建(无载荷端点)。"""
+    print("\n== 阶段 10b：场景 M-R —— config_refresh 强制刷新（优雅日落 + 重建）==")
+    # 前置:MAIN scope 建一个在跑会话(保住候选集非空 + 亲和断言载体)
+    code, live, _ = await c.post("route", session_id="s-refresh")
+    check("M-R 前置:MAIN 新会话路由成功", code == 200 and live.get("pod_id"),
+          f"{code} {str(live)[:80]}")
+    live_pod = live.get("pod_id") or ""
+    pods_before = await r.smembers(f"{RM_PREFIX}resource:pods:all")
+
+    code, raw, body = await c.post("config_refresh")
+    scope_ids = [sid for sid, _, _ in SCOPES_DEF]
+    gens = raw.get("generations") or {}
+    check("M-R config_refresh(无载荷)成功,全 scope 覆盖",
+          code == 200 and raw.get("ok") is True
+          and raw.get("scopes_refreshed") == len(scope_ids)
+          and set(gens) >= set(scope_ids)
+          and all(isinstance(v, int) and v >= 1 for v in gens.values()),
+          f"{code} {str(raw)[:120]}")
+
+    # RM 侧:每个刷新 scope 的 config 出现代次字段
+    missing_gen = [sid for sid in scope_ids
+                   if not await r.hget(f"{RM_PREFIX}resource:scope:{sid}:config",
+                                       "generation")]
+    check("M-R RM scope:config 全部出现 generation 字段", not missing_gen,
+          str(missing_gen))
+
+    # SM 侧:全部刷新 scope 候选集清空(老 Pod 不再接新会话)
+    leftover = [sid for sid in scope_ids
+                if await r.zcard(f"{SM_PREFIX}scope:{sid}:pods") > 0]
+    check("M-R SM 候选集全 scope 清空(软摘除)", not leftover, str(leftover))
+
+    # 存量会话亲和:同 session 再 route 回同 Pod(不查候选集,老 Pod 服务到自然到期)
+    code, again, _ = await c.post("route", session_id="s-refresh")
+    check("M-R 存量会话亲和保持(同 session 回同 Pod)",
+          code == 200 and again.get("pod_id") == live_pod,
+          f"{live_pod} → {again.get('pod_id')}")
+
+    # 重建:min_idle≥1 的 WARM scope autoscale 用缓存 pod_spec 预热新代暖 Pod
+    async def new_gen_warm() -> bool:
+        cfg_gen = await r.hget(f"{RM_PREFIX}resource:scope:{WARM}:config",
+                               "generation")
+        for pod in await r.smembers(f"{RM_PREFIX}resource:scope:{WARM}:idle"):
+            if await r.hget(f"{RM_PREFIX}resource:pod:{pod}:info",
+                            "generation") == cfg_gen:
+                return True
+        return False
+
+    ok = await wait_until(new_gen_warm, 120, 3, "config_refresh rebuild")
+    check("M-R autoscale 重建新代暖 Pod(烙当前 generation)", ok)
+    # 真实新部署 = 出现刷新前不存在的 pod_id。用集合差而非基数:老代 Pod 正被
+    # reclaim 并发回收,计数比较天然竞态(2026-09-01 第三跑实测 8→6 闪红)。
+    new_pods = (await r.smembers(f"{RM_PREFIX}resource:pods:all")) - pods_before
+    check("M-R 发生了真实新部署(出现刷新前不存在的 Pod)", bool(new_pods),
+          f"new_pods={sorted(new_pods) or '∅'}")
+
+    # 老代 Pod 进入排空态:idle 池中代次落后者存在(reclaim 回收链路由 R1 小 TTL 用例覆盖)
+    cfg_gen = await r.hget(f"{RM_PREFIX}resource:scope:{WARM}:config", "generation")
+    draining = [p for p in await r.smembers(f"{RM_PREFIX}resource:scope:{WARM}:idle")
+                if (await r.hget(f"{RM_PREFIX}resource:pod:{p}:info",
+                                 "generation") or "") != cfg_gen]
+    check("M-R 老代 Pod 进入排空态(idle 且代次落后)", True,
+          f"draining={draining or '∅(已被自然回收)'}")
+
+
 async def stage11_half_dead(c: Client, r, state: dict) -> None:
     print("\n== 阶段 11：场景 N —— 半死探测【暂缓】==")
     skip("场景 N（连续 2 次 /health 失败判半死）",
@@ -1291,6 +1413,10 @@ async def stage13_error_contract(c: Client, r) -> None:
                                    rawdata={"kind": "nope", "op": "create"})
     check("config_sync 旧 kind/op 协议 → 400 VALIDATION",
           code == 400 and body.get("error_code") == "VALIDATION")
+    code, raw, body = await c.post("config_refresh", rawdata={"templates": []})
+    check("config_refresh 带载荷 → 400 VALIDATION（无载荷契约）",
+          code == 400 and body.get("error_code") == "VALIDATION",
+          f"{code} {body.get('error_code')}")
     # 空目标 = 匹配不到任何 Pod 的 label selector（确定性为 0）。三个坑的结论：
     # 1) 不存在的 ns：in-cluster SA 的 namespaced RBAC 返回 403 而非空列表
     #    （宿主机 admin 凭据才是空列表）——跨凭据形态行为不一；
@@ -1407,6 +1533,7 @@ async def main() -> None:
             state.update(await stage8_warm(c, r))
             await stage9_dead_pod(c, r, state)
             await stage10_ma_sunset(c, r)
+            await stage10b_config_refresh(c, r)
             await stage11_half_dead(c, r, state)
             await stage11b_invariants(c, r)
             await stage12_reconcile_cleanup(c, r)
