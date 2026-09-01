@@ -108,6 +108,15 @@ local m = {}
 for i = 1, #flat, 2 do m[flat[i]] = flat[i + 1] end
 local scope, pod = m['scope_id'], m['pod_id']
 
+-- 残骸自卫：哈希存在但缺 scope_id/pod_id（外部直改键造出的半成品）→ 只能
+-- 自清自身两处（无法定位 scope/pod 集合）。绝不能上抛——单坏键会让到期 pass
+-- 每 tick 死在同一 sid 上（崩溃循环 = 会话永不过期、空 Pod 永不转 idle）。
+if scope == nil or pod == nil then
+  redis.call('ZREM', pfx .. 'session_expiry', sid)
+  redis.call('DEL', skey)
+  return {'rubble', '', '', '0'}
+end
+
 -- 四处同删（不变量 1）
 redis.call('SREM', pfx .. 'scope:' .. scope .. ':sessions', sid)
 redis.call('SREM', pfx .. 'pod:' .. scope .. ':' .. pod .. ':sessions', sid)
