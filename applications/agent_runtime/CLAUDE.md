@@ -74,6 +74,7 @@ uv run --no-sync python scripts/load_test.py --base-url http://127.0.0.1:30091/a
 
 - Python 3.11–3.13;Redis 须开 AOF/RDB(单实例/哨兵 `redis://`,**Redis Cluster 用 `redis+cluster://`**,键前缀已 hash tag 同槽化,见 `docs/feature/2026-08-redis-cluster.md`;cluster 无库号,URL 禁带 `/N`);DB 用 MySQL/PostgreSQL(禁 SQLite 回退——server 模式;local 模式调试可用)。
 - **存量库升级须先手工 ALTER 模板表三列再发版**(容器表 `service_config_container` 自动建):`main_container_id VARCHAR(100) NULL` / `sidecar_container_ids JSON NULL` / `volumes JSON NULL`——框架建表只 create_all 不补列;发布顺序与 rolling upgrade 风险见 `docs/feature/2026-08-container-table-split.md`。
+- **routing_scope 新增 `enabled`/`expires_at` 同款义务**:存量库须 `ALTER TABLE routing_scope ADD COLUMN expires_at DATETIME NULL; ADD COLUMN enabled BOOLEAN NOT NULL DEFAULT TRUE;`(见 `docs/feature/2026-09-routing-scope-enabled-expires.md`)。
 - 框架:`service/openjiuwen_runtime/service`(App/Envelope/SystemContext);App 范式参考 `applications/echo/echo_server.py`(**不是** a2a_service)。
 - 部署:`applications/agent_runtime/scripts/deploy.sh local|server`(server 读 `.env.production.local`)。
 - 本仓库是嵌套 git 仓库(独立于外层 jiuwenclaw),提交分开做。

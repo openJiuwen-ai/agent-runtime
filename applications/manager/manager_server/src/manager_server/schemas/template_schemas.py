@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 import re
 
 from croniter import croniter
-from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field
 
 from manager_server.schemas.safe_text import SafeTextMixin
 
@@ -436,9 +436,8 @@ class SkillWhitelistTemplateOut(BaseModel):
     updated_at: str | None
 
 
-# 与库表类型上限一致：integer → 有符号 32 位；autoscale_interval → DECIMAL(10,3)
+# 与库表类型上限一致：integer → 有符号 32 位
 _SERVICE_INT_MAX = 2_147_483_647
-_SERVICE_DECIMAL_MAX = 9_999_999.999
 
 # K8s resource quantity：CPU 如 500m / 2 / 0.5；内存须带单位 Ki/Mi/Gi/K/M/G
 _K8S_CPU_RE = re.compile(r"^(?:(?:0|[1-9]\d*)(?:\.\d+)?|\.\d+)m?$")
@@ -559,47 +558,47 @@ class ServiceConfigTemplateCreateBody(SafeTextMixin):
 
     template_name: str = Field(..., min_length=1, max_length=128)
     description: str | None = Field(default=None, max_length=512)
-    agent_image: str = Field(..., min_length=1, max_length=512)
+    agent_image: str = Field(default="", max_length=512)
     namespace: str = Field(default="default", max_length=128)
-    pod_name: str | None = Field(default=None, max_length=128)
-    container_name: str = Field(..., min_length=1, max_length=128)
-    container_port: int = Field(..., ge=1, le=65535)
+    node_name: str | None = Field(default=None, max_length=128)
+    run_as_user: int | None = Field(default=None, ge=0, le=_SERVICE_INT_MAX)
+    run_as_group: int | None = Field(default=None, ge=0, le=_SERVICE_INT_MAX)
+    pod_name: str = Field(default="agentserver", max_length=128)
+    container_name: str = Field(default="agent", min_length=1, max_length=128)
+    container_port: int = Field(default=8080, ge=1, le=65535)
     port_name: str = Field(default="http", max_length=64)
+    sse_port: int = Field(default=8080, ge=1, le=65535)
+    sse_path: str = Field(default="/sse", max_length=128)
+    health_path: str = Field(default="/health", max_length=128)
+    agent_env: dict[str, str] | None = None
     image_pull_policy: ImagePullPolicyLiteral = Field(default="IfNotPresent")
-    replicas: int = Field(default=1, ge=1, le=_SERVICE_INT_MAX)
     kubeconfig: str | None = Field(default=None, max_length=512)
-    agent_runtime: str | None = Field(default=None, max_length=128)
-    readiness_initial_delay: int = Field(default=10, ge=0, le=_SERVICE_INT_MAX)
+    readiness_initial_delay: int = Field(default=5, ge=0, le=_SERVICE_INT_MAX)
     readiness_period: int = Field(default=5, ge=1, le=_SERVICE_INT_MAX)
     ready_timeout: int = Field(default=300, ge=1, le=_SERVICE_INT_MAX)
-    ready_poll_interval: int = Field(default=5, ge=1, le=_SERVICE_INT_MAX)
+    ready_poll_interval: int = Field(default=2, ge=1, le=_SERVICE_INT_MAX)
     nfs_server: str | None = Field(default=None, max_length=256)
-    nfs_path: NfsExportPath = "/"
+    nfs_path: OptionalUnixAbsPath = None
     nfs_mount_path: OptionalUnixAbsPath = None
     agent_cpu_request: K8sCpuQuantity = None
     agent_memory_request: K8sMemoryQuantity = None
     agent_cpu_limit: K8sCpuQuantity = None
     agent_memory_limit: K8sMemoryQuantity = None
-    jiuwenbox_cpu_request: K8sCpuQuantity = None
-    jiuwenbox_memory_request: K8sMemoryQuantity = None
-    jiuwenbox_cpu_limit: K8sCpuQuantity = None
-    jiuwenbox_memory_limit: K8sMemoryQuantity = None
-    min_idle_services: int = Field(default=1, ge=0, le=_SERVICE_INT_MAX)
-    max_services: int = Field(default=20, ge=1, le=_SERVICE_INT_MAX)
-    service_concurrency: int = Field(default=10, ge=1, le=_SERVICE_INT_MAX)
-    service_ttl: int = Field(default=180, ge=1, le=_SERVICE_INT_MAX)
-    autoscale_interval: float = Field(default=5, gt=0, le=_SERVICE_DECIMAL_MAX)
-    message_timeout: int = Field(default=60, ge=1, le=_SERVICE_INT_MAX)
-    session_concurrency: int = Field(default=10, ge=1, le=_SERVICE_INT_MAX)
+    sidecars: list[dict[str, Any]] | None = None
+    agent_host_path_mounts: list[dict[str, Any]] | None = None
+    agent_configmap_mounts: list[dict[str, Any]] | None = None
+    agent_pvc_mounts: list[dict[str, Any]] | None = None
+    main_container_id: str | None = Field(default=None, max_length=100)
+    sidecar_container_ids: list[str] | None = None
+    volumes: list[dict[str, Any]] | None = None
+    min_idle_services: int = Field(default=0, ge=0, le=_SERVICE_INT_MAX)
+    service_concurrency: int = Field(default=2, ge=1, le=_SERVICE_INT_MAX)
+    service_ttl: int = Field(default=300, ge=1, le=_SERVICE_INT_MAX)
+    message_timeout: int = Field(default=600, ge=1, le=_SERVICE_INT_MAX)
+    session_concurrency: int = Field(default=3, ge=1, le=_SERVICE_INT_MAX)
     session_ttl: int = Field(default=60, ge=1, le=_SERVICE_INT_MAX)
     enabled: bool = True
     data: dict[str, Any] | None = None
-
-    @model_validator(mode="after")
-    def _validate_pool_range(self) -> ServiceConfigTemplateCreateBody:
-        if self.min_idle_services > self.max_services:
-            raise ValueError("min_idle_services must be <= max_services")
-        return self
 
 
 class ServiceConfigTemplateUpdateBody(SafeTextMixin):
@@ -607,16 +606,21 @@ class ServiceConfigTemplateUpdateBody(SafeTextMixin):
 
     template_name: str | None = Field(default=None, min_length=1, max_length=128)
     description: str | None = Field(default=None, max_length=512)
-    agent_image: str | None = Field(default=None, min_length=1, max_length=512)
+    agent_image: str | None = Field(default=None, max_length=512)
     namespace: str | None = Field(default=None, max_length=128)
+    node_name: str | None = Field(default=None, max_length=128)
+    run_as_user: int | None = Field(default=None, ge=0, le=_SERVICE_INT_MAX)
+    run_as_group: int | None = Field(default=None, ge=0, le=_SERVICE_INT_MAX)
     pod_name: str | None = Field(default=None, max_length=128)
     container_name: str | None = Field(default=None, min_length=1, max_length=128)
     container_port: int | None = Field(default=None, ge=1, le=65535)
     port_name: str | None = Field(default=None, max_length=64)
+    sse_port: int | None = Field(default=None, ge=1, le=65535)
+    sse_path: str | None = Field(default=None, max_length=128)
+    health_path: str | None = Field(default=None, max_length=128)
+    agent_env: dict[str, str] | None = None
     image_pull_policy: ImagePullPolicyLiteral | None = None
-    replicas: int | None = Field(default=None, ge=1, le=_SERVICE_INT_MAX)
     kubeconfig: str | None = Field(default=None, max_length=512)
-    agent_runtime: str | None = Field(default=None, max_length=128)
     readiness_initial_delay: int | None = Field(default=None, ge=0, le=_SERVICE_INT_MAX)
     readiness_period: int | None = Field(default=None, ge=1, le=_SERVICE_INT_MAX)
     ready_timeout: int | None = Field(default=None, ge=1, le=_SERVICE_INT_MAX)
@@ -628,32 +632,21 @@ class ServiceConfigTemplateUpdateBody(SafeTextMixin):
     agent_memory_request: K8sMemoryQuantity = None
     agent_cpu_limit: K8sCpuQuantity = None
     agent_memory_limit: K8sMemoryQuantity = None
-    jiuwenbox_cpu_request: K8sCpuQuantity = None
-    jiuwenbox_memory_request: K8sMemoryQuantity = None
-    jiuwenbox_cpu_limit: K8sCpuQuantity = None
-    jiuwenbox_memory_limit: K8sMemoryQuantity = None
+    sidecars: list[dict[str, Any]] | None = None
+    agent_host_path_mounts: list[dict[str, Any]] | None = None
+    agent_configmap_mounts: list[dict[str, Any]] | None = None
+    agent_pvc_mounts: list[dict[str, Any]] | None = None
+    main_container_id: str | None = Field(default=None, max_length=100)
+    sidecar_container_ids: list[str] | None = None
+    volumes: list[dict[str, Any]] | None = None
     min_idle_services: int | None = Field(default=None, ge=0, le=_SERVICE_INT_MAX)
-    max_services: int | None = Field(default=None, ge=1, le=_SERVICE_INT_MAX)
     service_concurrency: int | None = Field(default=None, ge=1, le=_SERVICE_INT_MAX)
     service_ttl: int | None = Field(default=None, ge=1, le=_SERVICE_INT_MAX)
-    autoscale_interval: float | None = Field(
-        default=None, gt=0, le=_SERVICE_DECIMAL_MAX
-    )
     message_timeout: int | None = Field(default=None, ge=1, le=_SERVICE_INT_MAX)
     session_concurrency: int | None = Field(default=None, ge=1, le=_SERVICE_INT_MAX)
     session_ttl: int | None = Field(default=None, ge=1, le=_SERVICE_INT_MAX)
     enabled: bool | None = None
     data: dict[str, Any] | None = None
-
-    @model_validator(mode="after")
-    def _validate_pool_range(self) -> ServiceConfigTemplateUpdateBody:
-        if (
-            self.min_idle_services is not None
-            and self.max_services is not None
-            and self.min_idle_services > self.max_services
-        ):
-            raise ValueError("min_idle_services must be <= max_services")
-        return self
 
 
 class ServiceConfigTemplateListQuery(BaseModel):
@@ -676,34 +669,40 @@ class ServiceConfigTemplateOut(BaseModel):
     description: str | None
     agent_image: str
     namespace: str
-    pod_name: str | None
+    node_name: str | None
+    run_as_user: int | None
+    run_as_group: int | None
+    pod_name: str
     container_name: str
     container_port: int
     port_name: str
+    sse_port: int
+    sse_path: str
+    health_path: str
+    agent_env: dict[str, Any] | None
     image_pull_policy: str
-    replicas: int
     kubeconfig: str | None
-    agent_runtime: str | None
     readiness_initial_delay: int
     readiness_period: int
     ready_timeout: int
     ready_poll_interval: int
     nfs_server: str | None
-    nfs_path: str
+    nfs_path: str | None
     nfs_mount_path: str | None
     agent_cpu_request: str | None
     agent_memory_request: str | None
     agent_cpu_limit: str | None
     agent_memory_limit: str | None
-    jiuwenbox_cpu_request: str | None
-    jiuwenbox_memory_request: str | None
-    jiuwenbox_cpu_limit: str | None
-    jiuwenbox_memory_limit: str | None
+    sidecars: list[dict[str, Any]] | None
+    agent_host_path_mounts: list[dict[str, Any]] | None
+    agent_configmap_mounts: list[dict[str, Any]] | None
+    agent_pvc_mounts: list[dict[str, Any]] | None
+    main_container_id: str | None
+    sidecar_container_ids: list[str] | None
+    volumes: list[dict[str, Any]] | None
     min_idle_services: int
-    max_services: int
     service_concurrency: int
     service_ttl: int
-    autoscale_interval: float
     message_timeout: int
     session_concurrency: int
     session_ttl: int

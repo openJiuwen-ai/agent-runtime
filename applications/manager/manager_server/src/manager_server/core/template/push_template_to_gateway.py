@@ -32,14 +32,12 @@ from manager_server.models.template_models import (
     EMBEDDING_TEMPLATE_TABLE_DEF,
     EXTENSION_CONFIG_TEMPLATE_TABLE_DEF,
     MODEL_TEMPLATE_TABLE_DEF,
-    SERVICE_CONFIG_TEMPLATE_TABLE_DEF,
     SKILL_WHITELIST_TEMPLATE_TABLE_DEF,
 )
 from manager_server.schemas.template_slot_schemas import (
     EMBEDDING_MODEL_SLOT,
     EXTENSION_CONFIG_SLOT,
     MODEL_TEMPLATE_SLOTS,
-    SERVICE_CONFIG_SLOT,
     SKILL_WHITELIST_SLOT,
 )
 
@@ -82,11 +80,6 @@ TEMPLATE_KIND_SPECS: dict[str, TemplateKindSpec] = {
         table_name=EXTENSION_CONFIG_TEMPLATE_TABLE_DEF.table_name,
         slot_keys=frozenset({EXTENSION_CONFIG_SLOT}),
     ),
-    "service_config_templates": TemplateKindSpec(
-        config_section="service_config_templates",
-        table_name=SERVICE_CONFIG_TEMPLATE_TABLE_DEF.table_name,
-        slot_keys=frozenset({SERVICE_CONFIG_SLOT}),
-    ),
 }
 
 TEMPLATE_KIND_ORDER: tuple[str, ...] = tuple(TEMPLATE_KIND_SPECS.keys())
@@ -96,7 +89,6 @@ _TEMPLATE_HTTP_PATHS: dict[str, str] = {
     "embedding_templates": "/api/v1/embedding-templates",
     "extension_config_templates": "/api/v1/extension-config-templates",
     "skill_whitelist_templates": "/api/v1/skill-whitelist-templates",
-    "service_config_templates": "/api/v1/service-config-templates",
 }
 _PUSH_DROP_KEYS = frozenset({"id", "created_at", "updated_at", "jiuwenclaw_id"})
 
@@ -105,7 +97,6 @@ _ROW_TO_OUT_MODULES: dict[str, str] = {
     "embedding_templates": "manager_server.core.template.embedding_template",
     "skill_whitelist_templates": "manager_server.core.template.skill_whitelist_template",
     "extension_config_templates": "manager_server.core.template.extension_config_template",
-    "service_config_templates": "manager_server.core.template.service_config_template",
 }
 
 RowToSyncFn = Callable[[Any], dict[str, Any]]

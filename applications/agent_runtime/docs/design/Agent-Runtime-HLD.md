@@ -164,7 +164,7 @@ flowchart TB
 
 > 内部实现注:水合后仍是扁平 `Template`(字段名 `agent_image`/`agent_env`/`sse_port`/`health_path`/`sidecars` 等,即快照与 RM `pod_spec` 契约,见 `docs/spec/session-manager.md` §models)——**同值必同 deploy_ver**(三段式与 legacy 内联逐字节等价,承重断言固化)。`max_pods` 不在 template 里——它是派生值 `⌈scope_concurrency / pod_concurrency⌉`;`autoscale_interval` 是全局默认(0.5s)。
 
-**`routing_scope`**(config_sync 下发,持久化到 DB 表 `routing_scope`):scope 定义 = `scope_id + index + template_id + routing_rules`,scope↔模板多对一。
+**`routing_scope`**(config_sync 下发,持久化到 DB 表 `routing_scope`):scope 定义 = `scope_id + index + template_id + routing_rules + enabled + expires_at`,scope↔模板多对一。
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
@@ -172,6 +172,8 @@ flowchart TB
 | `index` | int | 匹配序号;请求按 (index 升序, scope_id 升序) first-fit |
 | `template_id` | str | 引用的 template(必须在本批模板列表内;多个 scope 可引用同一模板) |
 | `routing_rules` | str | **布尔表达式字符串**,条件经 `and`/`or` 与括号任意组合;**null/空串/纯空白 = 通配兜底 scope**(命中一切) |
+| `enabled` | bool | 默认 `true`;`false` 时不参与路由匹配与 eager 预热(仍落库/进快照,与模板 `enabled` 同款语义) |
+| `expires_at` | datetime? | 可选过期时间(ISO-8601);到点后视为不生效(`null` = 永不过期)。route 热路径按墙钟判定,无需再 sync |
 
 表达式语法:
 
@@ -186,7 +188,7 @@ field    := user_id | group_id | bot_id(固定小写枚举)
 上限     := 长度 ≤ 8000,括号嵌套 ≤ 32
 ```
 
-**匹配语义**(resolve 权威定义):请求属性 (user_id, group_id, bot_id) 对 scopes 按 `(index ASC, scope_id ASC)` 排序遍历,**首个命中的 scope 即止**(first-fit);scope 命中 = 空 routing_rules(通配)或表达式求值为真;条件求值 = 属性值(缺省 `""`)`in`/`not in` 值集合。引用模板缺失或 `enabled=False` 的 scope 视为不命中,继续落下一个。**下发方保证含一个空表达式的通配 scope 兜底**;服务端缺失时仅 WARNING 放行,运行时无匹配 → 503 `CONFIG_NOT_FOUND`。
+**匹配语义**(resolve 权威定义):请求属性 (user_id, group_id, bot_id) 对 scopes 按 `(index ASC, scope_id ASC)` 排序遍历,**首个命中的 scope 即止**(first-fit);scope 命中 = 空 routing_rules(通配)或表达式求值为真;条件求值 = 属性值(缺省 `""`)`in`/`not in` 值集合。引用模板缺失或 `enabled=False` 的 scope、以及 scope 自身 `enabled=False` / `expires_at` 已过期的,均视为不命中,继续落下一个。**下发方保证含一个空表达式的通配 scope 兜底**(通配判定只计生效中的 scope);服务端缺失时仅 WARNING 放行,运行时无匹配 → 503 `CONFIG_NOT_FOUND`。
 
 **`config_sync` 入参完整 schema**(三段式全量快照,一次请求同时携带三个列表,**独占**;旧 `kind/op` 协议与无 `containers` 键的 legacy 内联载荷均 400 拒绝):
 
@@ -208,13 +210,14 @@ field    := user_id | group_id | bot_id(固定小写枚举)
                    "namespace": "agent-ns", "pod_name": "agentserver",
                    "scope_concurrency": 3, "pod_concurrency": 2, "...": "..."} ],
   "scopes":     [ {"scope_id": "...", "index": 0, "template_id": "tpl-1",
-                   "routing_rules": "user_id in ('admin') or group_id not in ('g1')"} ]
+                   "routing_rules": "user_id in ('admin') or group_id not in ('g1')",
+                   "enabled": true, "expires_at": null} ]
 }
 ```
 
 - 语义:**以数组为准的全量替换**(upsert 全部 + 删除消失项;容器以本批为集 GC);幂等重放收敛(affected_scopes 为空)。
-- 校验(400 VALIDATION,锁外零副作用):缺 `containers` 键(legacy 内联载荷);`templates`/`scopes` 非 list;模板缺 `main_container_id`;**mixed**(引用键与 legacy 内联容器键并存);container_id 空/>100/同批重复/未被引用/双角色;容器逐项按角色校验(见 `container` 结构表;未知键/越角色键/不可表示字段);模板引用不在本批 containers;sidecar 引用重复/>8;volumes(重复卷名/多源/无源/悬挂挂载/未挂载卷/`subPath` 非 configMap/NFS 逾界);模板级 int 严格/策略下界/`nodeName` hostname;scope_id 字符集/`index` 拒 bool/引用不在本批模板集/`routing_rules` 表达式语法/同批重复(语法细则见上文)。
-- 每次成功下发都会:重建路由快照(§5.1 `routing:snapshot`)、对每个存活 scope 推 RM 池参数 + pod_spec(**eager 预热**:autoscale 下一拍即预热 min_idle)、对被删 scope 推 `min_idle=0`(自然排空)。
+- 校验(400 VALIDATION,锁外零副作用):缺 `containers` 键(legacy 内联载荷);`templates`/`scopes` 非 list;模板缺 `main_container_id`;**mixed**(引用键与 legacy 内联容器键并存);container_id 空/>100/同批重复/未被引用/双角色;容器逐项按角色校验(见 `container` 结构表;未知键/越角色键/不可表示字段);模板引用不在本批 containers;sidecar 引用重复/>8;volumes(重复卷名/多源/无源/悬挂挂载/未挂载卷/`subPath` 非 configMap/NFS 逾界);模板级 int 严格/策略下界/`nodeName` hostname;scope_id 字符集/`index` 拒 bool/引用不在本批模板集/`routing_rules` 表达式语法/`enabled` 须 bool/`expires_at` ISO-8601 或 null/同批重复(语法细则见上文)。
+- 每次成功下发都会:重建路由快照(§5.1 `routing:snapshot`)、对每个**生效中** scope 推 RM 池参数 + pod_spec(**eager 预热**:autoscale 下一拍即预热 min_idle)、对禁用/过期 scope 与被删 scope 推 `min_idle=0`(自然排空)。
 
 **错误响应体**(所有非 2xx):
 

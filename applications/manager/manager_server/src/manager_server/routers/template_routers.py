@@ -1,5 +1,5 @@
 """模板 CRUD API：model_template、extension_config_template、skill_whitelist_template、
-service_config_template（全局模板，变更同步至所有已连接 Gateway）。
+service_config_template（全局；服务配置同步 Runtime，其余可下发 Gateway）、agent_template。
 """
 
 from __future__ import annotations

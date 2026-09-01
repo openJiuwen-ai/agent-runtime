@@ -4,7 +4,8 @@
 - 存储在共享 DB（config system-of-record），表 ``service_config_template`` /
   ``service_config_container``（容器规格，三段式契约;模板持 main_container_id +
   sidecar_container_ids 引用与 Pod 级 volumes,见 ``container_spec.py``）/
-  ``routing_scope``（scope_id / match_index / template_id / routing_rules JSON）；
+  ``routing_scope``（scope_id / match_index / template_id / routing_rules /
+  enabled / expires_at）；
 - ``resolve(user_id, group_id, bot_id)``：route 热路径的路由解析——读 Redis
   单键快照 ``routing:snapshot``（scopes+templates 全量 JSON），进程内按
   (index ASC, scope_id ASC) first-fit 求值；快照缺失/损坏 → 从 DB 重建；
@@ -28,7 +29,6 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
 from openjiuwen_runtime.foundation.db.table_def import (
@@ -38,7 +38,7 @@ from openjiuwen_runtime.foundation.db.table_def import (
 
 from ..errors import ConfigNotFound, ConfigSyncBusy, InvalidParams
 from ..sidecars import validate_sidecars
-from ..util import key_unsafe, now_ts, s
+from ..util import key_unsafe, now_ts, parse_datetime, s, utc_now
 from .container_spec import (
     MAIN_ROLE,
     SIDECAR_ROLE,
@@ -146,6 +146,8 @@ ROUTING_SCOPE_TABLE_DEF = TableDefinition(
         ColumnDefinition("template_id", "string", length=100, nullable=False),
         # 结构化规则原样落库（wire 格式；空列表/NULL = 通配 scope）
         ColumnDefinition("routing_rules", "json", nullable=True),
+        ColumnDefinition("expires_at", "datetime", nullable=True),
+        ColumnDefinition("enabled", "boolean", nullable=False, default=True),
         ColumnDefinition("created_at", "datetime", nullable=False),
         ColumnDefinition("updated_at", "datetime", nullable=False),
     ],
@@ -218,10 +220,6 @@ _SPLIT_REFERENCE_KEYS = frozenset(
 # 模板级 wire 键别名:K8s 派生字段用 K8s 拼写(nodeName);snake 双形态拒绝
 # (防静默二义——两个拼写同时给不同值无法仲裁,fail-fast)
 _TEMPLATE_WIRE_ALIASES = {"node_name": "nodeName"}
-
-
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def template_from_row(row: Any,
@@ -455,12 +453,16 @@ def _scope_from_row(row: Any) -> RoutingScopeDef | None:
                 f"scope_id must not contain '{{' or '}}': "
                 f"{getattr(row, 'scope_id', None)!r}"
             )
+        enabled_raw = getattr(row, "enabled", True)
+        enabled = True if enabled_raw is None else bool(enabled_raw)
         return RoutingScopeDef(
             scope_id=s(getattr(row, "scope_id")),
             index=int(getattr(row, "match_index") or 0),
             template_id=s(getattr(row, "template_id")),
             expr=expr_raw,
             rule=parse_routing_expr(expr_raw) if expr_raw.strip() else None,
+            enabled=enabled,
+            expires_at=parse_datetime(getattr(row, "expires_at", None)),
         )
     except Exception:  # noqa: BLE001 - 读路径对坏行容错（写路径已强校验）
         logger.warning(
@@ -904,18 +906,26 @@ class ConfigStore:
         # ---- 重建快照（DB 读回最终态 → 原子 SET；B 类立即生效由此完成）
         await self.rebuild_snapshot()
 
-        # ---- 扩散①：eager 预热——每个存活 scope 推池参数 + pod_spec（必须带 spec，
-        #      RM 才会落 pod_spec_json/deploy_ver，autoscale 才能无请求预热 min_idle）
+        # ---- 扩散①：eager 预热——每个生效中的 scope 推池参数 + pod_spec；
+        #      禁用/过期 scope 推 min_idle=0 停预热(与被删 scope 同款自然排空)。
+        #      带 pod_spec 时 RM 才会落 pod_spec_json/deploy_ver，autoscale 才能
+        #      无请求预热 min_idle。
         for sid, scope in scopes_in.items():
             template = templates_in[scope.template_id]
+            if not scope.is_active():
+                pool = {**template.pool_config(), "min_idle_pods": 0}
+                await self._push_or_warn(sid, pool, None)
+                continue
             await self._push_or_warn(sid, template.pool_config(), template.deploy_subset())
 
-        # ---- 扩散②：候选集版本收敛（声明式，非 one-shot）——对**每个**存活
+        # ---- 扩散②：候选集版本收敛（声明式，非 one-shot）——对**每个生效中**
         #      scope 把 deploy_ver ≠ 当前版本的 Pod ZREM 出候选集（不接新流量；
         #      存量会话亲和不受影响，旧版 idle Pod 由 reclaim 版本感知回收）。
         #      不再由 diff 驱动：写 DB 后中途失败/同载荷重试时 diff==none 会
         #      跳过软摘除，旧版 Pod 将无限期继续接新流量——每拍重算则天然收敛。
         for sid, scope in scopes_in.items():
+            if not scope.is_active():
+                continue
             new_ver = templates_in[scope.template_id].deploy_ver()
             removed = await self._soft_remove_stale_pods(sid, new_ver)
             if removed:
@@ -1026,11 +1036,11 @@ class ConfigStore:
             ts.sidecar_container_ids, ts.volumes_column)
         existing = await self._db.get(TEMPLATE_TABLE, {"template_id": template_id})
         if existing is not None:
-            row["updated_at"] = _utcnow()
+            row["updated_at"] = utc_now()
             await self._db.update(TEMPLATE_TABLE, {"template_id": template_id}, row)
         else:
-            row["created_at"] = _utcnow()
-            row["updated_at"] = _utcnow()
+            row["created_at"] = utc_now()
+            row["updated_at"] = utc_now()
             await self._db.create(TEMPLATE_TABLE, row)
 
     async def _all_templates(
@@ -1060,13 +1070,13 @@ class ConfigStore:
         if existing is not None:
             row = dict(row)
             row["jiuwenclaw_id"] = TENANT_ID
-            row["updated_at"] = _utcnow()
+            row["updated_at"] = utc_now()
             await self._db.update(CONTAINER_TABLE, {"container_id": container_id}, row)
         else:
             row = dict(row)
             row["jiuwenclaw_id"] = TENANT_ID
-            row["created_at"] = _utcnow()
-            row["updated_at"] = _utcnow()
+            row["created_at"] = utc_now()
+            row["updated_at"] = utc_now()
             await self._db.create(CONTAINER_TABLE, row)
 
     # ---- scope DB 存取
@@ -1079,13 +1089,15 @@ class ConfigStore:
             "template_id": scope.template_id,
             # 原始表达式串(空 = 通配);JSON 列存标量字符串
             "routing_rules": scope.expr,
-            "updated_at": _utcnow(),
+            "enabled": bool(scope.enabled),
+            "expires_at": scope.expires_at,
+            "updated_at": utc_now(),
         }
         existing = await self._db.get(ROUTING_SCOPE_TABLE, {"scope_id": scope.scope_id})
         if existing is not None:
             await self._db.update(ROUTING_SCOPE_TABLE, {"scope_id": scope.scope_id}, row)
         else:
-            row["created_at"] = _utcnow()
+            row["created_at"] = utc_now()
             await self._db.create(ROUTING_SCOPE_TABLE, row)
 
     # ---- 变更扩散辅助（沿用 M 期机制）

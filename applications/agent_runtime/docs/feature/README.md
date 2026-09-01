@@ -18,6 +18,7 @@
 | 日期 | 文档 | 一句话 |
 |---|---|---|
 | 2026-09 | [config_refresh 强制刷新(代次日落)](2026-09-config-refresh-generation.md) | 新增无载荷端点 `POST /api/session/config_refresh`:RM `generation` 代次(HINCRBY 唯一写点 + REGISTER 服务端烙印)驱动全 scope Pod 优雅日落并按存量配置重建;"当前版本"判定收紧为 ver∧gen,与 config_sync 共用锁(409);415 用例 + 真镜像门禁 e2e 121/121 + 真 cluster 16/16;连带修 LUA_EVICT 残骸自卫与四处 e2e 脚本缺陷 |
+| 2026-09 | [routing_scope 增加 enabled / expires_at](2026-09-routing-scope-enabled-expires.md) | scope 禁用与过期落库;route 墙钟过滤 + 未生效停预热;存量库须 ALTER |
 | 2026-08 | [容器表拆分 + config_sync 三段式契约(K8s 原生形态)](2026-08-container-table-split.md) | 容器规格归一 `service_config_container`(模板持引用)+ volumes/volumeMounts 分离 + **envFrom(secretRef/configMapRef)支持**;wire 三段式**独占**;同值必同 deploy_ver(395 用例 + 真环境 e2e 80/80) |
 | 2026-08 | [诊断端点更名 /debug → /visualization](2026-08-visualization-endpoints-rename.md) | 对外名称去敏感化,行为零变化;模块/标识符/路由/测试/文档全量同步,306 用例通过 |
 | 2026-08 | [Template 扩展 pod 落位字段 + PVC 同 claim 去重](2026-08-pod-placing-fields.md) | node_name/run_as_user/group(A 类,默认 None 指纹零漂移;联调决策 2026-08-29 确认,与 fs_group 回退不冲突)+ pvc_seen 跨容器共享卷;收尾补校验(≥0/hostname/空串归一)与 9 用例 |

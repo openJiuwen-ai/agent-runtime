@@ -1,4 +1,11 @@
-"""Manager instance resources -> Agent Runtime template/scope full sync."""
+"""Manager instance resources -> Agent Runtime template/scope full sync.
+
+对齐 Runtime ``config_sync`` 三段式独占契约
+``{containers, templates, scopes}``：
+- 模板只持引用键 + 模板级字段（禁止与内联容器键 mixed）；
+- ``nodeName`` 用 K8s wire 拼写；
+- ``routing_rules`` 为布尔表达式字符串（非结构化 list）。
+"""
 from __future__ import annotations
 
 import ast
@@ -12,11 +19,32 @@ from openjiuwen_runtime.foundation.db.handler import DBHandler
 
 from manager_server.infrastructure.config import settings
 from manager_server.infrastructure.logger import get_logger
+from manager_server.infrastructure.utils import iso_datetime
 from manager_server.models.instance_resource_models import INSTANCE_SERVICE_RESOURCE_TABLE_DEF
 from manager_server.models.template_models import SERVICE_CONFIG_TEMPLATE_TABLE_DEF
 
 _log = get_logger(__name__)
 _CAP = 100_000
+
+# 与 Runtime TEMPLATE_LEVEL_FIELDS + 引用键对齐（不含内联容器列）
+_TEMPLATE_WIRE_KEYS = (
+    "template_id",
+    "template_name",
+    "description",
+    "enabled",
+    "namespace",
+    "pod_name",
+    "sse_path",
+    "ready_timeout",
+    "ready_poll_interval",
+    "kubeconfig",
+    "scope_concurrency",
+    "pod_concurrency",
+    "session_ttl",
+    "pod_ttl",
+    "min_idle_pods",
+    "message_timeout",
+)
 
 
 def _g(row: Any, key: str, default: Any = None) -> Any:
@@ -86,7 +114,7 @@ def _node_to_rules(node: ast.AST) -> list[dict[str, Any]]:
     raise ValueError("unsupported runtime scope match expression")
 
 
-def _match_expr_to_runtime_rules(value: Any) -> list[dict[str, Any]]:
+def _match_expr_to_rule_groups(value: Any) -> list[dict[str, Any]]:
     if value in (None, [], ""):
         return []
     texts = value if isinstance(value, list) else [value]
@@ -96,40 +124,231 @@ def _match_expr_to_runtime_rules(value: Any) -> list[dict[str, Any]]:
     return rules
 
 
-def service_template_payload(row: Any) -> dict[str, Any]:
+def _escape_expr_value(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("'", "\\'")
+
+
+def _expr_atom(field: str, op: str, values: list[str]) -> str:
+    joined = ", ".join(f"'{_escape_expr_value(v)}'" for v in values)
+    if op == "not_in":
+        return f"{field} not in ({joined})"
+    return f"{field} in ({joined})"
+
+
+def rule_groups_to_routing_rules(rules: list[dict[str, Any]]) -> str:
+    """结构化 match 组 → Runtime routing_rules 表达式字符串。
+
+    组内 expressions 为 and，组间为 or；空 → 通配空串。
+    多组 or 时，含 and 的组加括号保证优先级。
+    """
+    groups: list[str] = []
+    group_needs_paren: list[bool] = []
+    for rule in rules:
+        exprs = rule.get("expressions") if isinstance(rule, dict) else None
+        if not isinstance(exprs, list) or not exprs:
+            continue
+        parts: list[str] = []
+        for item in exprs:
+            if not isinstance(item, dict):
+                continue
+            field = str(item.get("field") or "")
+            op = str(item.get("op") or "in")
+            values = item.get("values")
+            if not field or not isinstance(values, list) or not values:
+                continue
+            parts.append(_expr_atom(field, op, [str(v) for v in values]))
+        if not parts:
+            continue
+        groups.append(" and ".join(parts))
+        group_needs_paren.append(len(parts) > 1)
+    if not groups:
+        return ""
+    if len(groups) == 1:
+        return groups[0]
+    rendered: list[str] = []
+    for text, need_paren in zip(groups, group_needs_paren, strict=True):
+        rendered.append(f"({text})" if need_paren else text)
+    return " or ".join(rendered)
+
+
+def _env_to_wire(env: Any) -> list[dict[str, str]] | None:
+    if isinstance(env, list):
+        out: list[dict[str, str]] = []
+        for item in env:
+            if not isinstance(item, dict) or item.get("name") is None:
+                continue
+            out.append({"name": str(item["name"]), "value": "" if item.get("value") is None else str(item["value"])})
+        return out or None
+    if isinstance(env, dict):
+        return [{"name": str(k), "value": "" if v is None else str(v)} for k, v in env.items()] or None
+    return None
+
+
+def _synthesize_main_container(row: Any, container_id: str) -> dict[str, Any]:
+    """无 data.config_sync.containers 时，由模板内联列合成主容器 wire。"""
     data = _g(row, "data") if isinstance(_g(row, "data"), dict) else {}
-    return {
-        "template_id": str(_g(row, "template_id")),
+    sse_port = int(
+        _g(row, "sse_port") or data.get("sse_port") or _g(row, "container_port") or 8080
+    )
+    health_path = str(
+        _g(row, "health_path") or data.get("health_path") or "/api/v1/health"
+    )
+    wire: dict[str, Any] = {
+        "container_id": container_id,
+        "name": str(_g(row, "container_name") or "agent"),
+        "image": str(_g(row, "agent_image") or ""),
+        "imagePullPolicy": str(_g(row, "image_pull_policy") or "IfNotPresent"),
+        "ports": [{"name": "sse", "containerPort": sse_port}],
+        "readinessProbe": {
+            "httpGet": {"path": health_path, "port": sse_port},
+            "initialDelaySeconds": int(_g(row, "readiness_initial_delay") or 5),
+            "periodSeconds": int(_g(row, "readiness_period") or 5),
+        },
+    }
+    env = _env_to_wire(_g(row, "agent_env") or data.get("agent_env"))
+    if env:
+        wire["env"] = env
+    sc: dict[str, Any] = {}
+    if _g(row, "run_as_user") is not None:
+        sc["runAsUser"] = int(_g(row, "run_as_user"))
+    if _g(row, "run_as_group") is not None:
+        sc["runAsGroup"] = int(_g(row, "run_as_group"))
+    if sc:
+        wire["securityContext"] = sc
+    resources: dict[str, Any] = {}
+    requests: dict[str, str] = {}
+    limits: dict[str, str] = {}
+    if _g(row, "agent_cpu_request"):
+        requests["cpu"] = str(_g(row, "agent_cpu_request"))
+    if _g(row, "agent_memory_request"):
+        requests["memory"] = str(_g(row, "agent_memory_request"))
+    if _g(row, "agent_cpu_limit"):
+        limits["cpu"] = str(_g(row, "agent_cpu_limit"))
+    if _g(row, "agent_memory_limit"):
+        limits["memory"] = str(_g(row, "agent_memory_limit"))
+    if requests:
+        resources["requests"] = requests
+    if limits:
+        resources["limits"] = limits
+    if resources:
+        wire["resources"] = resources
+    return wire
+
+
+def _stored_containers(row: Any) -> list[dict[str, Any]]:
+    data = _g(row, "data")
+    if not isinstance(data, dict):
+        return []
+    sync = data.get("config_sync")
+    if not isinstance(sync, dict):
+        return []
+    containers = sync.get("containers")
+    if not isinstance(containers, list):
+        return []
+    return [c for c in containers if isinstance(c, dict) and c.get("container_id")]
+
+
+def service_template_wire(row: Any) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
+    """模板行 → (split 形态 template wire, containers)。
+
+    无法凑齐引用容器时返回 None（调用方跳过并告警）。
+    """
+    tid = str(_g(row, "template_id") or "")
+    if not tid:
+        return None
+
+    containers = list(_stored_containers(row))
+    by_id = {str(c["container_id"]): c for c in containers}
+
+    main_cid = _g(row, "main_container_id")
+    sidecar_ids = _g(row, "sidecar_container_ids")
+    if not isinstance(sidecar_ids, list):
+        sidecar_ids = []
+    sidecar_ids = [str(x) for x in sidecar_ids if isinstance(x, str) and x.strip()]
+
+    if not (isinstance(main_cid, str) and main_cid.strip()):
+        main_cid = f"c-{tid}-main"
+        if main_cid not in by_id:
+            by_id[main_cid] = _synthesize_main_container(row, main_cid)
+            containers = list(by_id.values())
+    elif main_cid not in by_id:
+        by_id[main_cid] = _synthesize_main_container(row, main_cid)
+        containers = list(by_id.values())
+
+    missing_sidecars = [cid for cid in sidecar_ids if cid not in by_id]
+    if missing_sidecars:
+        _log.warning(
+            "runtime sync skip template %s: missing sidecar containers %s "
+            "(save full containers via Manager edit page / import)",
+            tid,
+            missing_sidecars,
+        )
+        return None
+
+    if not str(by_id[main_cid].get("image") or "").strip() and not str(
+        _g(row, "agent_image") or ""
+    ).strip():
+        _log.warning("runtime sync skip template %s: empty main container image", tid)
+        return None
+
+    # 若合成后 image 仍空，回填行上的 agent_image
+    if not str(by_id[main_cid].get("image") or "").strip():
+        by_id[main_cid] = {**by_id[main_cid], "image": str(_g(row, "agent_image") or "")}
+
+    referenced = {main_cid, *sidecar_ids}
+    used_containers = [by_id[cid] for cid in referenced if cid in by_id]
+
+    data = _g(row, "data") if isinstance(_g(row, "data"), dict) else {}
+    wire: dict[str, Any] = {
+        "template_id": tid,
         "template_name": str(_g(row, "template_name") or ""),
         "description": str(_g(row, "description") or ""),
-        "agent_image": str(_g(row, "agent_image") or ""),
+        "enabled": bool(_g(row, "enabled", True)),
         "namespace": str(_g(row, "namespace") or "default"),
         "pod_name": str(_g(row, "pod_name") or "agentserver"),
-        "container_name": str(_g(row, "container_name") or "agent"),
-        "container_port": int(_g(row, "container_port") or 8080),
-        "sse_port": int(data.get("sse_port") or _g(row, "container_port") or 8080),
-        "sse_path": str(data.get("sse_path") or "/api/v1/events/stream"),
-        "health_path": str(data.get("health_path") or "/api/v1/health"),
-        "agent_env": data.get("agent_env") if isinstance(data.get("agent_env"), dict) else {},
-        "image_pull_policy": str(_g(row, "image_pull_policy") or "IfNotPresent"),
+        "sse_path": str(
+            _g(row, "sse_path") or data.get("sse_path") or "/api/v1/events/stream"
+        ),
+        "ready_timeout": int(_g(row, "ready_timeout") or 300),
+        "ready_poll_interval": int(_g(row, "ready_poll_interval") or 2),
         "scope_concurrency": int(_g(row, "session_concurrency") or 3),
         "pod_concurrency": int(_g(row, "service_concurrency") or 2),
         "session_ttl": int(_g(row, "session_ttl") or 60),
         "pod_ttl": int(_g(row, "service_ttl") or 300),
         "min_idle_pods": int(_g(row, "min_idle_services") or 0),
-        "readiness_initial_delay": int(_g(row, "readiness_initial_delay") or 5),
-        "readiness_period": int(_g(row, "readiness_period") or 5),
-        "ready_timeout": int(_g(row, "ready_timeout") or 300),
-        "ready_poll_interval": int(_g(row, "ready_poll_interval") or 2),
-        "nfs_server": _g(row, "nfs_server"), "nfs_path": _g(row, "nfs_path"),
-        "nfs_mount_path": _g(row, "nfs_mount_path"), "kubeconfig": _g(row, "kubeconfig"),
-        "agent_cpu_request": _g(row, "agent_cpu_request"),
-        "agent_memory_request": _g(row, "agent_memory_request"),
-        "agent_cpu_limit": _g(row, "agent_cpu_limit"),
-        "agent_memory_limit": _g(row, "agent_memory_limit"),
         "message_timeout": int(_g(row, "message_timeout") or 600),
-        "enabled": bool(_g(row, "enabled", True)), "data": data,
+        "main_container_id": main_cid,
     }
+    node_name = _g(row, "node_name")
+    if isinstance(node_name, str) and node_name.strip():
+        wire["nodeName"] = node_name.strip()
+    kubeconfig = _g(row, "kubeconfig")
+    if kubeconfig:
+        wire["kubeconfig"] = kubeconfig
+    if sidecar_ids:
+        wire["sidecar_container_ids"] = sidecar_ids
+    volumes = _g(row, "volumes")
+    if isinstance(volumes, list) and volumes:
+        wire["volumes"] = volumes
+
+    # 仅保留白名单键，杜绝 mixed
+    allowed = set(_TEMPLATE_WIRE_KEYS) | {
+        "main_container_id",
+        "sidecar_container_ids",
+        "volumes",
+        "nodeName",
+    }
+    wire = {k: v for k, v in wire.items() if k in allowed}
+    return wire, used_containers
+
+
+# 兼容旧测试 / 调用方名称
+def service_template_payload(row: Any) -> dict[str, Any]:
+    """已废弃路径：返回 split 模板 wire（无 containers）。优先用 service_template_wire。"""
+    result = service_template_wire(row)
+    if result is None:
+        return {"template_id": str(_g(row, "template_id") or ""), "enabled": False}
+    return result[0]
 
 
 async def build_runtime_config(
@@ -138,7 +357,7 @@ async def build_runtime_config(
     *,
     resource_rows: list[Any] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
-    """将实例 Service Resource 全量投影为 Runtime templates/scopes。
+    """将实例 Service Resource 全量投影为 Runtime ``{containers, templates, scopes}``。
 
     ``resource_rows`` 可传入尚未落库的投影行，用于「先 sync 再写库」。
     """
@@ -151,7 +370,9 @@ async def build_runtime_config(
         )
     else:
         resources = resource_rows
+
     templates: dict[str, dict[str, Any]] = {}
+    containers_by_id: dict[str, dict[str, Any]] = {}
     scopes: list[dict[str, Any]] = []
     grouped: dict[str, list[Any]] = {}
     for resource in resources:
@@ -177,21 +398,45 @@ async def build_runtime_config(
             else None
         )
         if service is None or not bool(_g(service, "enabled", True)):
-            _log.warning("runtime sync skipped resource without enabled service template: %s", rid)
+            _log.warning(
+                "runtime sync skipped resource without enabled service template: %s", rid
+            )
             continue
-        templates[service_id] = service_template_payload(service)
-        rules: list[dict[str, Any]] = []
+
+        wired = service_template_wire(service)
+        if wired is None:
+            _log.warning(
+                "runtime sync skipped resource %s: template %s cannot form split payload",
+                rid,
+                service_id,
+            )
+            continue
+        tpl_wire, tpl_containers = wired
+        templates[service_id] = tpl_wire
+        for container in tpl_containers:
+            cid = str(container.get("container_id") or "")
+            if cid:
+                containers_by_id[cid] = container
+
+        rule_groups: list[dict[str, Any]] = []
         for row in active:
-            rules.extend(_match_expr_to_runtime_rules(_g(row, "match_expr")))
+            rule_groups.extend(_match_expr_to_rule_groups(_g(row, "match_expr")))
         scopes.append(
             {
                 "scope_id": _scope_id(rid),
                 "index": -int(_g(primary, "priority", 0) or 0),
                 "template_id": service_id,
-                "routing_rules": rules,
+                "routing_rules": rule_groups_to_routing_rules(rule_groups),
+                "enabled": bool(_g(primary, "enabled", True)),
+                "expires_at": iso_datetime(_g(primary, "expires_at")),
             }
         )
-    return {"templates": list(templates.values()), "scopes": scopes}
+
+    return {
+        "containers": list(containers_by_id.values()),
+        "templates": list(templates.values()),
+        "scopes": scopes,
+    }
 
 
 async def sync_runtime_config(
@@ -231,6 +476,7 @@ async def sync_runtime_config(
     _log.info(
         "runtime config synced",
         jiuwenclaw_id=jiuwenclaw_id,
+        containers=len(rawdata["containers"]),
         templates=len(rawdata["templates"]),
         scopes=len(rawdata["scopes"]),
     )

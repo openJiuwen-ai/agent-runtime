@@ -8,10 +8,9 @@ export const TEMPLATE_REF_SLOTS = [
   'embedding_model',
   'skill_whitelist',
   'extension_config',
-  'service_config',
 ] as const;
 
-/** 模板引用编辑器展示的槽位（不含服务资源模板）。 */
+/** 模板引用编辑器展示的槽位。 */
 export const TEMPLATE_REF_EDITOR_SLOTS = [
   'default_model',
   'video_model',
@@ -27,14 +26,13 @@ export const MULTI_VALUE_TEMPLATE_REF_SLOTS = new Set<string>([
   'extension_config',
 ]);
 
-/** 各槽位至多一条引用：默认/视频/音频/视觉/Embedding 模型、服务配置。 */
+/** 各槽位至多一条引用：默认/视频/音频/视觉/Embedding 模型。 */
 export const SINGLE_VALUE_TEMPLATE_REF_SLOTS = new Set<string>([
   'default_model',
   'video_model',
   'audio_model',
   'vision_model',
   'embedding_model',
-  'service_config',
 ]);
 
 export function isSingleValueTemplateRefSlot(slot: string): boolean {
@@ -105,7 +103,7 @@ function clampSingleValueSlotRefs(slot: string, refs: string[]): string[] {
   return [refs[0]];
 }
 
-/** 将 API 返回的 template_ref 规范为 { slot: string[] }。 */
+/** 将 API 返回的 template_ref 规范为 { slot: string[] }；丢弃已废弃的 service_config。 */
 export function normalizeTemplateRefFromApi(
   raw: Record<string, string | string[]> | null | undefined,
 ): TemplateRefMap {
@@ -113,7 +111,7 @@ export function normalizeTemplateRefFromApi(
   const out: TemplateRefMap = {};
   for (const [key, value] of Object.entries(raw)) {
     const slot = key.trim();
-    if (!slot) continue;
+    if (!slot || slot === 'service_config') continue;
     const refs = clampSingleValueSlotRefs(slot, normalizeSlotRefs(value));
     if (refs.length) out[slot] = refs;
   }

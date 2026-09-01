@@ -11,6 +11,7 @@
 - scope 命中 = 空 routing_rules(null/空串/纯空白 → 通配兜底)或表达式为真;
 - 遍历:scopes 按 (index ASC, scope_id ASC) 排序,first-fit 首个命中即止;
 - 引用模板缺失/禁用的 scope 视为不命中,继续落下一个(防御,正常不该发生);
+- scope 自身 ``enabled=False`` 或 ``expires_at`` 已过期视为不命中,继续落下一个;
 - 无匹配 → ConfigNotFound(503)。
 
 解析失败(未知字段/裸 `not`/悬空括号/未引号值……)在 config_sync 下发校验时
@@ -26,9 +27,11 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, fields
+from datetime import datetime
 from typing import Any, Iterable
 
 from ..errors import InvalidParams
+from ..util import as_utc_naive, parse_datetime, utc_now
 from .models import Template
 
 VALID_FIELDS = frozenset({"user_id", "group_id", "bot_id"})
@@ -87,6 +90,7 @@ class RoutingScopeDef:
 
     ``expr`` 是 wire/DB/快照的存储载体(原始字符串,空 = 通配);
     ``rule`` 是它的解析产物(通配时 None)——二者由构造方(解析入口)保证一致。
+    ``enabled`` / ``expires_at`` 控制生效:禁用或过期的 scope 不参与匹配与预热。
     """
 
     scope_id: str
@@ -94,6 +98,17 @@ class RoutingScopeDef:
     template_id: str
     expr: str
     rule: BoolNode | None
+    enabled: bool = True
+    expires_at: datetime | None = None
+
+    def is_active(self, now: datetime | None = None) -> bool:
+        """enabled 且未过期才生效(expires_at=None = 永不过期)。"""
+        if not self.enabled:
+            return False
+        if self.expires_at is None:
+            return True
+        current = as_utc_naive(now) if now is not None else utc_now()
+        return self.expires_at > current
 
     def matches(self, user_id: str | None, group_id: str | None, bot_id: str | None) -> bool:
         """空表达式 = 通配;否则求值表达式树。user_id None → ""(防御)。"""
@@ -113,6 +128,10 @@ class RoutingScopeDef:
             "index": self.index,
             "template_id": self.template_id,
             "routing_rules": self.expr,
+            "enabled": self.enabled,
+            "expires_at": (
+                self.expires_at.isoformat() if self.expires_at is not None else None
+            ),
         }
 
 
@@ -346,18 +365,31 @@ def parse_scope(payload: Any, known_template_ids: set[str]) -> RoutingScopeDef:
         rule = parse_routing_expr(expr_raw) if expr_raw.strip() else None
     except InvalidParams as exc:
         raise InvalidParams(f"scope {scope_id!r}: {exc}") from exc
+    enabled = payload.get("enabled", True)
+    if not isinstance(enabled, bool):
+        raise InvalidParams(
+            f"scope {scope_id!r} enabled must be a boolean, got {enabled!r}"
+        )
+    try:
+        expires_at = parse_datetime(
+            payload.get("expires_at"), field=f"scope {scope_id!r}.expires_at"
+        )
+    except ValueError as exc:
+        raise InvalidParams(str(exc)) from exc
     return RoutingScopeDef(
         scope_id=scope_id,
         index=index,
         template_id=template_id,
         expr=expr_raw,
         rule=rule,
+        enabled=enabled,
+        expires_at=expires_at,
     )
 
 
 def has_wildcard_scope(scopes: Iterable[RoutingScopeDef]) -> bool:
-    """是否存在空表达式(通配)scope——下发方应保证有,服务端缺失仅告警。"""
-    return any(s.rule is None for s in scopes)
+    """是否存在生效中的空表达式(通配)scope——下发方应保证有,服务端缺失仅告警。"""
+    return any(s.rule is None and s.is_active() for s in scopes)
 
 
 # -------------------------------------------------------------- 匹配(route 热路径)
@@ -367,9 +399,13 @@ def match_scope(
     user_id: str | None,
     group_id: str | None,
     bot_id: str | None,
+    *,
+    now: datetime | None = None,
 ) -> RoutingScopeDef | None:
-    """按 (index, scope_id) 序 first-fit;模板缺失/禁用的 scope 跳过。"""
+    """按 (index, scope_id) 序 first-fit;禁用/过期 scope 与模板缺失/禁用跳过。"""
     for scope in snapshot.scopes:
+        if not scope.is_active(now):
+            continue
         template = snapshot.templates.get(scope.template_id)
         if template is None or not template.enabled:
             continue
@@ -440,12 +476,18 @@ def snapshot_from_json(text: str) -> RoutingSnapshot:
             expr = ""
         if not isinstance(expr, str):
             raise ValueError(f"routing_rules must be a string, got {type(expr).__name__}")
+        enabled = item.get("enabled", True)
+        if not isinstance(enabled, bool):
+            raise ValueError(f"enabled must be a boolean, got {type(enabled).__name__}")
+        expires_at = parse_datetime(item.get("expires_at"))
         return RoutingScopeDef(
             scope_id=str(item["scope_id"]),
             index=int(item["index"]),
             template_id=str(item["template_id"]),
             expr=expr,
             rule=parse_routing_expr(expr) if expr.strip() else None,
+            enabled=enabled,
+            expires_at=expires_at,
         )
 
     try:
