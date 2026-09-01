@@ -40,7 +40,7 @@ flowchart TB
 
     GW -- "route / touch" --> LB
     CM -- "config_sync" --> LB
-    OPS -- "cleanup" --> LB
+    OPS -- "config_refresh / cleanup" --> LB
     LB --> R1
     LB --> R2
     LB --> RN
@@ -57,7 +57,7 @@ flowchart TB
 
 - **分布式形态**:**多副本无状态**(编排态全在共享 Redis、配置在 DB、Pod 物理态以 K8s 为准),前置**负载均衡**,水平扩展 = 加副本;后台任务(sweeper / autoscale / reclaim / K8s Watch / 孤儿对账)经 Redis 选主锁,**全局单副本执行写操作**,多副本安全。
 - **配置面**:Claw Manager →(LB)→ Session Manager(`config_sync`)→ DB。
-- **控制面**:Gateway 每请求经 LB 调本服务(`route` / `touch`);Claw Manager 下发配置(`config_sync`);运维 / HA 批量清 Pod(`cleanup`)。Pod 的 deploy / 扩缩由服务内的 Resource Manager 模块自治承担。
+- **控制面**:Gateway 每请求经 LB 调本服务(`route` / `touch`);Claw Manager 下发配置(`config_sync`);运维强制刷新(`config_refresh`,场景 M-R)/ 批量清 Pod(`cleanup`)。Pod 的 deploy / 扩缩由服务内的 Resource Manager 模块自治承担。
 - **物理面**:Resource Manager ↔ K8s(deploy/delete/watch),Pod 存在/健康/pod_ip/sse_url 以 K8s 为唯一真相源。
 - **数据面**:Gateway ↔ Pod 直连(两 Manager 全程旁路,不转发消息)。
 - **旁路信号**:Gateway → Session Manager(`touch` 保活/结束)。
@@ -104,6 +104,7 @@ flowchart TB
 | `POST /api/session/route` | `metadata`:session_id / user_id / group_id / bot_id(**四项均必填非空**) | `{ pod_sse_url, pod_id }` | 同步路由 + 占额度(关键路径);按路由规则匹配 scope(§3.1 匹配语义) |
 | `POST /api/session/touch` | `metadata`:session_id | `{ touched:bool }` | 保活 / EOS,刷新老化 |
 | `POST /api/session/config_sync` | `{ containers:[...], templates:[...], scopes:[...] }`(三段式全量快照,**独占**——无 containers 键的 legacy 内联载荷 400) | `{ ok, templates_synced/deleted, containers_synced/deleted, scopes_synced/deleted, affected_scopes, wildcard_present }` | Claw Manager 全量下发配置(容器列表 + 模板列表 + scope 列表;模板只持容器引用,容器规格集中一张表);旧 `kind/op` 增量协议已废弃(400) |
+| `POST /api/session/config_refresh` | **无载荷**(rawdata 非空 → 400) | `{ ok, scopes_refreshed, pods_sunset, generations }` | 强制刷新(场景 M-R):全部存活 scope 的现有 Pod 优雅日落并**按存量配置重建**——代次 +1(软摘除,不接新会话;存量会话自然跑完)、reclaim 按 pod_ttl 回收老代、autoscale 按缓存 pod_spec 重建;不写 DB 不动快照;与 config_sync 共用锁(忙 → 409) |
 | `POST /api/session/cleanup` | `{ namespace?, label_selector? }` | `{ cleaned:int }` | 运维批量清 Pod(灾难恢复 / 重新部署),handler 在 Session Manager、委托 `rm_facade.cleanup()` |
 
 - `group_id` 经 `metadata.extra` 传递;`metadata.request_id` 兼作幂等键。
@@ -220,7 +221,7 @@ field    := user_id | group_id | bot_id(固定小写枚举)
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `ok` | bool | 固定 `false` |
-| `error_code` | str | `SCOPE_FULL_TIMEOUT` / `SCOPE_QUEUE_FULL` / `NO_POD_AVAILABLE` / `CONFIG_NOT_FOUND` / `MAX_PODS_REACHED` / `DEPLOY_FAILED` / `VALIDATION` |
+| `error_code` | str | `SCOPE_FULL_TIMEOUT` / `SCOPE_QUEUE_FULL` / `NO_POD_AVAILABLE` / `CONFIG_NOT_FOUND` / `MAX_PODS_REACHED` / `DEPLOY_FAILED` / `CONFIG_SYNC_BUSY` / `VALIDATION` |
 | `error_message` | str | 人类可读描述 |
 | `retry_after` | int?(秒) | 仅过载类(`SCOPE_QUEUE_FULL` / `SCOPE_FULL_TIMEOUT` / `NO_POD_AVAILABLE`)返回;其它省略 |
 
@@ -469,10 +470,10 @@ flowchart TB
 |---|---|---|---|
 | `resource:scope:{scope_id}:pods` | ZSET | pod_id(score=创建序) | 该 scope 全部 Pod(in_use ∪ idle);`ZCARD` 参与 `max_pods` 判定 |
 | `resource:scope:{scope_id}:idle` | SET | idle 的 pod_id | **SCARD = idle Pod 数**(autoscale / reclaim 闸门;acquire 从此取暖 Pod) |
-| `resource:scope:{scope_id}:config` | HASH | min_idle_pods / max_pods / pod_ttl / pod_concurrency / deploy_ver / pod_spec_json | config_sync 对**每个存活 scope 主动写入/刷新**(带 pod_spec——无请求 scope 的 autoscale 预热依赖 pod_spec_json);首 acquire 也会兜底写入;被删 scope 推 `min_idle=0` 停预热自然排空 |
+| `resource:scope:{scope_id}:config` | HASH | min_idle_pods / max_pods / pod_ttl / pod_concurrency / deploy_ver / pod_spec_json / generation | config_sync 对**每个存活 scope 主动写入/刷新**(带 pod_spec——无请求 scope 的 autoscale 预热依赖 pod_spec_json;**不含 generation**——代次只经 config_refresh 的 HINCRBY 单调递增,推送永不重置);首 acquire 也会兜底写入;被删 scope 推 `min_idle=0` 停预热自然排空 |
 | `resource:scope:{scope_id}:deploying` | ZSET | deploy 占位 token(uuid) → deadline(秒级时间戳) | 计入 `max_pods` 判定(防并发 deploy 超配);register / 失败时清;score=deadline 供闸门/autoscale 原子清崩溃遗留(硬崩后占位不永久虚占容量) |
 | `resource:scope:{scope_id}:deploy_followers` | ZSET | deploy 锁输家的 request_id → deadline | follower 等待室(M8):`ZCARD ≤ pod_concurrency-1`;检测 leader Pod 注册即复用;score=deadline 供闸门清崩溃遗留 |
-| `resource:pod:{pod_id}:info` | HASH | scope_id / pod_sse_url / pod_ip / namespace / phase / created_ts / deploy_ver | Pod 元信息;`scope_id` 标识所属池;`deploy_ver` 供 acquire 版本过滤(只发当前版本暖 Pod) |
+| `resource:pod:{pod_id}:info` | HASH | scope_id / pod_sse_url / pod_ip / namespace / phase / created_ts / deploy_ver / sse_port / health_path / generation | Pod 元信息;`scope_id` 标识所属池;`deploy_ver` 供 acquire 版本过滤(只发当前版本暖 Pod);`generation` 为注册时刻代次烙印(REGISTER 在 Redis 服务端读 scope:config,与 bump 原子排队——config_refresh 的日落判定用) |
 | `resource:pod:{pod_id}:idle_since` | STRING | idle 起始时间戳 | reclaim 计时(aged ≥ `pod_ttl` 回收) |
 | `resource:pods:all` | SET | 全部 pod_id | 孤儿对账 / 枚举 |
 | `lock:rm:deploy:{scope_id}` | STRING(NX EX) | 选主标记 | per-scope deploy 串行(防并发 deploy 超配) |
@@ -504,6 +505,7 @@ flowchart TB
 | K | reclaim 自治回收 | 空闲超 pod_ttl | 周期扫 idle 池回收(ZREM 堵 route 直选) | 低峰自动缩容 |
 | L | 孤儿 Pod 对账 | idle_consider 丢失/漂移 | RM 每 30s `reconcile_pods` 把 SM 已不用的 Pod 移入 idle / reclaim | 消除孤儿,不误杀 |
 | M | 配置热更新 | config_sync 全量下发 {containers, templates, scopes}(三段式) | A 类(deploy 字段/换引用)日落老 Pod / B 类(策略参数)快照覆盖立即生效 / 删除 scope 自然排空 / eager 预热 min_idle | 配置变更不中断服务 |
+| M-R | 强制刷新 | `POST /api/session/config_refresh`(无载荷) | 全 scope 代次(generation)+1 → 老代 Pod 软摘除 + acquire 过滤 + reclaim 回收;autoscale 按存量配置重建 | 不改配置全量重建 Pod(配置漂移自愈),不中断存量会话 |
 | N | 半死 Pod 检测 | Pod Running 但 SSE 服务不通 | RM 周期探测 AgentServer 健康 SSE 端点,判死清理 | 旁路架构下的数据面健康兜底 |
 
 ### 6.2 详细场景(含 Redis 状态变化)
@@ -969,11 +971,38 @@ sequenceDiagram
 **镜像升级路径**(A 类变更的落地):默认**自然滚动**——老 Pod 无新会话 → 存量老化排空 → idle → 按 `pod_ttl` 回收;新流量 first-fit 只剩 / acquire 只发新镜像 Pod。需快速切换时用运维 **`cleanup` 批删 + autoscale 重建**(强制,中断存量会话)。
 
 **串行化与并发控制**:服务是多副本 + LB,两次 `config_sync` 可能落到**不同副本并发执行**(diff / 日落 / 推送互相交错)。处理:
-1. **分布式锁串行**:`config_sync` 全程持 `lock:config_sync`(SET NX EX,EX = 处理超时上限);抢不到 → 返回 **409 `CONFIG_SYNC_BUSY`**(可重试,带 `Retry-After`),不排队。
+1. **分布式锁串行**:`config_sync` 全程持 `lock:config_sync`(SET NX EX,EX = 处理超时上限);抢不到 → 返回 **409 `CONFIG_SYNC_BUSY`**(可重试,带 `Retry-After`),不排队。**`config_refresh` 与之共用此锁**(双向互斥,同忙等语义)。
 2. **完成判定含老 Pod 日落**:上一次热更新**未完全完成前拒绝下一次**——完成 = 处理流程结束 + 受影响 scope **无"已日落待回收"的 Pod**(SM 侧判定:`pods:registered` 中属于该 scope、但已不在 `scope:pods` 候选集里的 Pod 即中间态残留;全部回收后 `notify_pod_dead` 清注册,中间态清零)。**检查先于写 DB**:拒绝时 DB/Redis 均未被改动。
 3. **写 DB 失败防护**:写 DB 失败 → 立即中止,**不得 SET 路由快照、不得推送**(运行时继续用 last-known-good 快照;对应真实 bug教训:DB 写异常后缓存被脏数据刷新)。DB 无事务,部分写入时快照未动、服务面无感,下次成功下发收敛。
 
 > 价值:**配置变更不中断服务**——A 类(镜像等)通过软摘除 + 版本过滤实现自然滚动,新流量只走新 Pod、存量会话无感;B 类(策略参数)经路由快照原子覆盖 + 主动推送立即生效、老 Pod 原地复用;**eager 预热让每个 scope 在下发后即拥有 min_idle 热备**(无需首个请求);串行化 + 日落完成判定保证并发下发不交错。
+
+#### 场景 M-R:强制刷新 —— 全 scope Pod 优雅日落并按存量配置重建
+
+**动机**:Pod 实际状态可能与配置**漂移**——configMap/PVC 内容变化、密钥轮换、怀疑 Pod 状态异常——这些不在 `deploy_ver` 指纹覆盖内(指纹只覆盖 deploy 字段子集)。强制刷新 = **不改任何配置**,让所有 scope 的现有 Pod 走一轮完整日落重建。
+
+**机制:代次(generation)日落标记**。日落判定从 "`deploy_ver` 相等" 收紧为 "`deploy_ver` 相等 **∧** `generation` 相等":
+- `resource:scope:{scope_id}:config` 新增 `generation` 字段,**唯一写点 = config_refresh 的 HINCRBY**(原子自增;config_sync 推送的 HSET mapping 永不含它,代次只单调递增)。
+- `resource:pod:{pod_id}:info` 的 `generation` 在 REGISTER 时由 **Lua 服务端**读 scope:config 当前值烙印——注册与 bump 在 Redis 单线程上原子排队,消除"Python 读旧写旧"竞态(deploy 中途发生刷新时,晚于 bump 注册的 Pod 天然属新代,不被误日落)。
+- **缺省兼容**:两侧都缺(`'' == ''`)→ 判当前(从未刷新过的 scope 零行为变化);cfg 有而 Pod 没有(升级前存量 Pod)→ 判 stale(刷新即日落,正是预期)。
+
+**处理流程**(锁内,与 config_sync 互斥):
+1. rawdata 非空 → 400(无载荷契约;带配置请走 config_sync);
+2. 逐 DB 存活 scope(幻影 scope 归扩散③ drain 路径,不处理;模板缺失的悬挂 scope 跳过 + WARNING):**① HINCRBY generation(严格,失败上抛)→ ② 重推池参数 + pod_spec(值未变,确保 RM 缓存就绪;失败仅告警)→ ③ 候选集全量 ZREM 软摘除(严格)**;
+3. **顺序红线 bump → ZREM**:唯一危险序是"ZREM 而未 bump"——老 Pod 被摘却仍是当前代次 warm Pod → min_idle 底数保护 → 永久蹲占 max_pods 且不触发重建;bump 在前的任何中途失败都收敛于"老 Pod 暂时继续接新流量",锁过期后重试即收敛。
+
+**日落收敛**(刷新返回后,全部复用既有后台任务,与 A 类日落同构):
+- 老 Pod 即刻退出 first-fit(不接新会话);存量会话亲和续期直读 session HASH,继续用老 Pod 到自然到期;
+- 空 Pod 经 sm_sweep / reconcile 转 idle → reclaim 按"代次感知"把老代 idle 恒判 excess → aged ≥ pod_ttl → K8s delete + PURGE + notify_pod_dead;
+- autoscale 的 warm 底数按 "ver ∧ gen" 匹配 → 归零 < min_idle → 用缓存 pod_spec_json 重建(**配置零变化,仅换代**)。
+
+**守卫交互**(config_sync 的日落中间态 409 判定**不扩展**看 generation):老代 Pod 的 deploy_ver 与当前配置相等 → 对守卫不可见 → 刷新后 B 类 / 同版本下发不 409(老代回收由 reclaim 代次感知保证);A 类变更(换版本)照旧可见 → 排空完成前 409(与 M 期 A-叠-A 行为一致,防不可归因混合态)。
+
+**运营注意**:
+- **非幂等但收敛**:每次调用 = 一轮全量日落重建;成功后勿自动重试(仅失败时人工重试,重试安全)。
+- **舰队级容量挤压**:max_pods 判定含老代 Pod,排空期(≈ reconcile 30s + pod_ttl + 会话排空)新会话可能 `max_reached` → 503。与 M-A 同机制但**全 scope 同时**发生——低峰执行,或先 B 类调小 pod_ttl → 刷新 → 排空后恢复。**不**通过改 max_pods 口径排除老代(违背物理封顶语义,瞬时超配)。
+- **长会话硬上限**:日落 Pod 上会话的实际存活 ≈ reconcile 30s + pod_ttl(与 M-A 一致);运营前提 pod_ttl ≥ 最长会话时长。
+- **滚动升级混布窗口**:旧版本副本无代次判定,可能 reuse 老代暖 Pod——升级完成后再执行刷新。
 
 #### 场景 N:半死 Pod 检测 —— AgentServer 健康 SSE 端点 + RM 周期探测
 **前置**:`pod_2` 在 K8s 侧 Running/Ready,但其 SSE 服务 hang 死 / 不响应(进程死锁、事件循环阻塞、连接堆积)。**K8s Watch 看不到这种半死**——bypass 架构下 SM/gateway 直连数据面,控制面里只有 RM 管物理面,因此**半死检测归 RM**。
@@ -1015,7 +1044,7 @@ sequenceDiagram
 当某个 scope 的活跃会话已达上限,新请求不直接失败,而是进一个**有界的等待队列**(容量约 `2 × scope_concurrency`),等别人释放额度;队列也满了就**立即返回 503**(带 `Retry-After`),不拖着占用连接。等到 `scope_full_timeout`(默认 30s)还没轮到,返回 504。gateway 拿到"可重试"的错误码后,用**指数退避 + 随机抖动**重试——每次等更久、再叠加一个随机量,把一大批同时被拒的请求在时间上摊开,避免它们同一瞬间又一起涌回来把服务打爆(即"重试风暴")。
 
 ### 7.4 认证授权 —— 谁能调哪个接口,由服务框架统一把关
-对外的四个接口(`route` / `touch` / `config_sync` / `cleanup`)用什么凭证(mTLS 或 token)、是否允许本次调用,由底层**服务框架 `openjiuwen_runtime.service` 统一把关**(`link_auth` + adapter 中间件),本服务只声明各接口的调用方约束:`config_sync` 只许 Claw Manager 调、`cleanup` 只许运维调。SM 与 RM 之间的调用是同进程函数调用,不经过网络框架,因此不需要鉴权。
+对外的五个接口(`route` / `touch` / `config_sync` / `config_refresh` / `cleanup`)用什么凭证(mTLS 或 token)、是否允许本次调用,由底层**服务框架 `openjiuwen_runtime.service` 统一把关**(`link_auth` + adapter 中间件),本服务只声明各接口的调用方约束:`config_sync` 只许 Claw Manager 调、`config_refresh` 只许运维(或 Claw Manager)调、`cleanup` 只许运维调。SM 与 RM 之间的调用是同进程函数调用,不经过网络框架,因此不需要鉴权。
 
 ### 7.5 输入校验 —— 通用校验框架做,本服务只补自己特有的
 接口入参的常规校验(字符集合法、长度不超、非空、数值在合理范围)由**服务框架在进入 handler 之前统一拦掉**,handler 不必重复实现。本服务只补框架管不到的两条:

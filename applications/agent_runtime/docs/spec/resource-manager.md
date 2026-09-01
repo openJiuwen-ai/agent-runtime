@@ -22,7 +22,8 @@
 |---|---|
 | `acquire(scope_id, pod_spec, pool_config, request_id)` | `{pod_id, pod_sse_url}`;失败抛 `MaxPodsReached`/`DeployFailed`(SM 映射 503 NO_POD_AVAILABLE) |
 | `idle_consider(pod_id, scope_id)` | `{transitioned_to_idle}`,幂等 |
-| `update_pool_config(scope_id, pool_config, pod_spec?)` | `{updated}`(config_sync 触发) |
+| `update_pool_config(scope_id, pool_config, pod_spec?)` | `{updated}`(config_sync 触发;mapping **永不含 generation**) |
+| `bump_generation(scope_id)` | `generation: int`(config_refresh 触发的代次日落,HINCRBY 原子自增,唯一写点) |
 | `cleanup(namespace?, label_selector?)` | `cleaned: int`(运维批删) |
 | `known_scope_ids()` | RM 已知 scope 枚举(SCAN scope:config;config_sync 的被删 scope drain 收敛用——RM config 键是幻影预热的真源) |
 
@@ -34,7 +35,7 @@
   acquire——回放死 Pod 会在 SM 侧复活注册并持续喂死地址给重试客户端)
 → 首见 scope:缓存池参数 + pod_spec_json 到 resource:scope:{sid}:config
 → 循环 { LUA_ACQUIRE → (action, pod_id, sse_url):
-     reuse        → 直接返回(deploy_ver 过滤后的暖 Pod,已弹出 idle 池)
+     reuse        → 直接返回(deploy_ver+generation 过滤后的暖 Pod,已弹出 idle 池)
      max_reached  → 清占位 → MaxPodsReached
      no_config    → continue(上面已写配置)
      need_deploy  → 抢 lock:rm:deploy:{scope}(TTL 360,盖住 ready_timeout 300+余量):
@@ -52,7 +53,8 @@
 - 错误路径双清:占位 + follower 成员都进 finally;崩溃遗留由闸门 `ZREMRANGEBYSCORE(deadline)` 兜底。
 
 `idle_consider`:`LUA_RELEASE` 转 idle 暖池(起 pod_ttl 计时)+ pod:info.phase=idle;幂等。
-`update_pool_config`:HSET 覆盖池参数;A 类变更附带 pod_spec 时同时刷 deploy_ver/pod_spec_json(autoscale 补位用新 deploy 字段)。
+`update_pool_config`:HSET 覆盖池参数;A 类变更附带 pod_spec 时同时刷 deploy_ver/pod_spec_json(autoscale 补位用新 deploy 字段);**mapping 永不含 generation——代次只经 `bump_generation` 单调递增,推送永不重置**。
+`bump_generation`:HINCRBY `scope:config.generation`;现有 Pod 代次全部落后 → LUA_ACQUIRE 过滤 / `_current_version_idle` 判 stale / autoscale 重建(场景 M-R,SM 的 config_refresh 触发)。"当前版本"判定 = **deploy_ver 相等 ∧ generation 相等**;两侧同缺(空串)视为一致——从未刷新过的 scope 零行为变化。
 `cleanup`:K8s list+delete,**不操作 Redis 编排态**(被删 Pod 由 watch/reconcile 兜底发现);ns 404 容忍为 cleaned=0,**403 保持 fail-fast**(静默清零会掩盖部署配错);逐 Pod 一条 INFO `cleanup deleted pod: pod= namespace=`(批删中途中断时可见删到哪;k8s.delete 自身明细在 DEBUG)+ 结尾 WARNING 聚合。
 
 ## state.py —— RM 键表(`RMKeys`,前缀 `{resource_manager}:`,业务键再带 `resource:` 段)
@@ -61,10 +63,10 @@
 |---|---|---|
 | `resource:scope:{sid}:pods` | ZSET | 该 scope 全部 Pod(in_use ∪ idle);**ZCARD+deploying SCARD 参与 max_pods 判定** |
 | `resource:scope:{sid}:idle` | SET | idle 暖池;acquire 从此取暖 Pod |
-| `resource:scope:{sid}:config` | HASH | min_idle_pods/max_pods/pod_ttl/pod_concurrency/deploy_ver/pod_spec_json。**config_sync 对每个存活 scope 主动写入/刷新(带 pod_spec)——无请求 scope 的 min_idle 预热依赖它**;首 acquire 兜底写入;被删 scope 推 min_idle=0 停预热自然排空 |
+| `resource:scope:{sid}:config` | HASH | min_idle_pods/max_pods/pod_ttl/pod_concurrency/deploy_ver/pod_spec_json/**generation**(config_refresh 的代次日落标记,**唯一写点 = HINCRBY**,config_sync 推送永不重置)。**config_sync 对每个存活 scope 主动写入/刷新(带 pod_spec)——无请求 scope 的 min_idle 预热依赖它**;首 acquire 兜底写入;被删 scope 推 min_idle=0 停预热自然排空 |
 | `resource:scope:{sid}:deploying` | ZSET | deploy 占位 token→deadline 秒级 score(计入 max_pods,防并发超配;闸门/autoscale 按 deadline 原子清崩溃遗留——硬崩后进程内清理不存在,占位不得永久虚占容量) |
 | `resource:scope:{sid}:deploy_followers` | ZSET | follower 等待室(request_id→deadline 秒级 score;闸门按 deadline 原子清过期) |
-| `resource:pod:{pod}:info` | HASH | scope_id/pod_sse_url/pod_ip/namespace/phase/created_ts/deploy_ver/**sse_port/health_path**(Pod 自己烘焙的探测契约;A 类变更后 scope 当前配置已换代,watch 探测必须用 Pod 自己的参数,否则存量老 Pod 被探错路径误杀) |
+| `resource:pod:{pod}:info` | HASH | scope_id/pod_sse_url/pod_ip/namespace/phase/created_ts/deploy_ver/**sse_port/health_path**(Pod 自己烘焙的探测契约;A 类变更后 scope 当前配置已换代,watch 探测必须用 Pod 自己的参数,否则存量老 Pod 被探错路径误杀)/**generation**(注册时刻代次烙印,REGISTER 服务端读 scope:config——与 bump 原子排队,deploy 中途刷新不误伤晚注册的新 Pod) |
 | `resource:pod:{pod}:idle_since` | STR | idle 起始(reclaim 计时);存在 ⟺ 在 idle 池 |
 | `resource:pod:{pod}:health_fails` | STR | 健康探测连续失败次数(场景 N) |
 | `resource:pods:all` | SET | 全部 pod_id(watch/reconcile 枚举) |
@@ -80,9 +82,9 @@
 
 | 脚本 | 一句话职责 |
 |---|---|
-| `LUA_ACQUIRE` | 取暖 Pod 复用(**跳过 deploy_ver 不匹配**——A 类变更后老版本暖 Pod 不外发,由 reclaim 版本感知回收)→ 无匹配判 max_pods(ZCARD pods + ZCARD deploying)→ 占位 ZADD deploying(score=deadline,先清过期) → need_deploy |
+| `LUA_ACQUIRE` | 取暖 Pod 复用(**跳过 deploy_ver 或 generation 不匹配**——A 类变更后老版本、config_refresh 后老代次暖 Pod 不外发,由 reclaim 版本/代次感知回收)→ 无匹配判 max_pods(ZCARD pods + ZCARD deploying)→ 占位 ZADD deploying(score=deadline,先清过期) → need_deploy |
 | `LUA_PLACEHOLDER` | autoscale 专用占位(判 max_pods + ZADD,**不碰 idle 池**——补位不该消耗暖 Pod;同款 deadline 自清) |
-| `LUA_REGISTER` | deploy 成功登记:pod:info(含 sse_port/health_path)/ scope:pods / pods:all 同写,清占位;idle_flag=1(热备)入 idle 池 |
+| `LUA_REGISTER` | deploy 成功登记:pod:info(含 sse_port/health_path + **generation 服务端烙印**——读注册时刻 scope:config 当前代次)/ scope:pods / pods:all 同写,清占位;idle_flag=1(热备)入 idle 池 |
 | `LUA_RELEASE` | idle_consider:转 idle 暖池,**仅首次转入(SADD=1)起 pod_ttl 计时**;周期重放(reconcile stale/idle_consider 去重重发)不刷新计时——否则空闲 Pod 永不回收;acquire 弹出后再转 idle 重新计时;**已 PURGE 的 Pod(info 已清)no-op**(防 TOCTOU 幽灵成员) |
 | `LUA_PURGE` | Pod 死亡/reclaim 后清全部 RM key(返回其 scope_id;幂等) |
 | `LUA_DEPLOY_FOLLOWER_GATE` | follower 等待室原子准入:先 `ZREMRANGEBYSCORE` 清过期 → ZADD 先行 → ZCARD 超限自退(纪律同 LUA_WAITER_GATE,禁止先查后加) |
@@ -118,8 +120,8 @@
 
 | 任务 | 周期/锁 | 逻辑 |
 |---|---|---|
-| `autoscale_once`(场景 H) | 1s / lock:rm:autoscale | 先 `reap_expired_deploying`(崩溃遗留占位自愈)再遍历 `known_scope_ids()`(SCAN scope:config):**当前版本** idle < min_idle_pods(版本感知——A 类变更后旧版 idle Pod 永不可能被复用,不能拿来满足 min_idle,否则暖池被旧版钉死)且 pods+deploying < max_pods → `LUA_PLACEHOLDER` 占位 → 抢 deploy 锁 → `_deploy_and_register(idle_flag=True)` 热备入池;pod_spec 取 scope:config 缓存(A 类变更后为新值)。**config_sync 会主动写每个存活 scope 的 config(带 pod_spec)→ 从未被请求过的 scope 也会被预热(eager,下发即预备热备)** |
-| `reclaim_once`(场景 K) | 1s / lock:rm:reclaim | excess = 旧版本 idle Pod(**恒为 excess**——acquire want_ver 过滤后永不可复用,若受底数保护则暖池钉死旧版+蹲占 max_pods)+ 当前版本 idle 超出 min_idle 的部分(按转 idle 先后);excess 中 `aged ≥ pod_ttl` → `_purge_and_notify`(K8s delete → LUA_PURGE → notify_pod_dead);底数只保护当前版本最早入 idle 的 min_idle 个(保底热备)。**scope 被删除时 config_sync 推 min_idle=0 → 本任务把其空闲 Pod 按 pod_ttl 自然排空(存量会话到期止,不强制驱逐)** |
+| `autoscale_once`(场景 H) | 1s / lock:rm:autoscale | 先 `reap_expired_deploying`(崩溃遗留占位自愈)再遍历 `known_scope_ids()`(SCAN scope:config):**当前版本+代次** idle < min_idle_pods(`_current_version_idle`:deploy_ver ∧ generation 均与 scope:config 一致——A 类变更后旧版、config_refresh 后老代次 idle Pod 永不可能被复用,不能拿来满足 min_idle,否则暖池被旧版钉死)且 pods+deploying < max_pods → `LUA_PLACEHOLDER` 占位 → 抢 deploy 锁 → `_deploy_and_register(idle_flag=True)` 热备入池;pod_spec 取 scope:config 缓存(A 类变更后为新值;刷新后同值仅换代)。**config_sync 会主动写每个存活 scope 的 config(带 pod_spec)→ 从未被请求过的 scope 也会被预热(eager,下发即预备热备)** |
+| `reclaim_once`(场景 K) | 1s / lock:rm:reclaim | excess = 旧版本/老代次 idle Pod(**恒为 excess**——acquire want_ver+generation 过滤后永不可复用,若受底数保护则暖池钉死旧版+蹲占 max_pods)+ 当前版本代次 idle 超出 min_idle 的部分(按转 idle 先后);excess 中 `aged ≥ pod_ttl` → `_purge_and_notify`(K8s delete → LUA_PURGE → notify_pod_dead);底数只保护当前版本代次最早入 idle 的 min_idle 个(保底热备)。**scope 被删除时 config_sync 推 min_idle=0 → 本任务把其空闲 Pod 按 pod_ttl 自然排空(存量会话到期止,不强制驱逐)** |
 | `watch_once`(场景 J/N) | 10s / lock:rm:watch(TTL 15) | 遍历 pods:all:get_pod 为 None 或 phase∈DEAD → 清理;Running 但 `probe_health` **连续 2 次失败**(health_fails 阈值,防瞬时抖动误杀)→ 半死清理;成功清零计数。**探测参数优先取 Pod 自己 info 烘焙的 sse_port/health_path**(A 类变更后存量老 Pod 用旧契约探测;旧 Pod 无字段时回退 scope:config 的 pod_spec_json) |
 | `reconcile_once`(场景 L) | 30s / lock:rm:reconcile(TTL 60) | ① Redis 有 K8s 无 → PURGE+notify;② RM 持有但 SM 候选集已无的 stale Pod(经 `sm_facade.reconcile_pods`,Facade 单向)→ `LUA_RELEASE` 转 idle 按 pod_ttl 回收 |
 

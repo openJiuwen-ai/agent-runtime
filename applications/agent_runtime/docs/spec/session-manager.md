@@ -1,14 +1,14 @@
 # session_manager(SM)规格
 
-> 会话编排:route/touch HTTP 端点、配置层(config_sync 全量下发 + 路由匹配)、老化 sweeper。
-> **持唯一 App**(`/api/session`:8091),注册 4 个 handler。与 RM 互调只走进程内 Facade,**不直读 RM Redis key**。
+> 会话编排:route/touch HTTP 端点、配置层(config_sync 全量下发 + config_refresh 强制刷新 + 路由匹配)、老化 sweeper。
+> **持唯一 App**(`/api/session`:8091),注册 5 个 handler。与 RM 互调只走进程内 Facade,**不直读 RM Redis key**。
 > Lua 全文:`lua_scripts.py` 与 `../design/session-manager-design.md` 双份,改时同步。
 
 ## 文件一览
 
 | 文件 | 职责 |
 |---|---|
-| `handlers.py` | 4 个 HTTP handler(route/touch/config_sync/cleanup)+ 错误信封映射 |
+| `handlers.py` | 5 个 HTTP handler(route/touch/config_sync/config_refresh/cleanup)+ 错误信封映射 |
 | `orchestrator.py` | route 主循环(匹配→Lua 仲裁→acquire→等待队列)+ touch |
 | `state.py` | SM Redis 键 schema 唯一出口 + Lua 调用封装(`SMKeys`/`SessionState`) |
 | `lua_scripts.py` | 7 个 Lua 全文 |
@@ -19,13 +19,14 @@
 | `facade.py` | `SessionManagerFacade`(RM→SM:notify_pod_dead / reconcile_pods) |
 | `models.py` | `Template` dataclass(字段/派生/pod_spec) |
 
-## handlers.py —— 对外 4 端点
+## handlers.py —— 对外 5 端点
 
 | 端点 | handler | 行为 |
 |---|---|---|
 | POST /api/session/route | `handle_route` | 同步路由+占额度,返回 `{pod_sse_url, pod_id}`;**幂等键 = metadata.request_id**(框架 idempotency,窗口 60s,回放缓存结果) |
 | POST /api/session/touch | `handle_touch` | 保活/EOS,返回 `{touched}`;False=已过期/不存在(gateway 回退重新 route) |
 | POST /api/session/config_sync | `handle_config_sync` | 全量配置下发 `{containers, templates, scopes}`(三段式**独占**;无 containers 键的 legacy 内联载荷 → 400),委托 `ConfigStore.config_sync` |
+| POST /api/session/config_refresh | `handle_config_refresh` | 强制刷新(场景 M-R,**无载荷**;rawdata 非空 → 400),委托 `ConfigStore.config_refresh` |
 | POST /api/session/cleanup | `handle_cleanup` | 运维批删 Pod,委托 `rm_facade.cleanup`(handler 在 SM,逻辑在 RM) |
 
 - 入参从 `Envelope.metadata`(session_id/user_id/group_id/bot_id/request_id)与 `rawdata` 取;`group_id` 在 `metadata.extra`,**user_id/group_id/bot_id/session_id 四项均必填非空**(orchestrator 校验,缺 → 400 VALIDATION)。
@@ -88,7 +89,7 @@
 | 脚本 | 一句话职责 |
 |---|---|
 | `LUA_ROUTE_PLACE` | route 原子核心:亲和续期(**前提 pod:info 存在**——注册已被清的绑定判死,惰性回收后走重新放置;否则 notify_pod_dead 窗口内新落的会话会无限自旋且每圈续期 expiry)→惰性回收旧绑定→scope 闸门(SCARD)→first-fit(接入序)→达 max_pods 则 scope_full / 否则 need_acquire→原子提交四处同写(复用时清 idle_notified) |
-| `LUA_EVICT` | session 移除**唯一原语**(四处同删 + PUBLISH free 唤醒等待者;返回 scope/pod/remaining;幂等 noop) |
+| `LUA_EVICT` | session 移除**唯一原语**(四处同删 + PUBLISH free 唤醒等待者;返回 scope/pod/remaining;幂等 noop;**残骸自卫**:哈希缺 scope/pod(外部直改键半成品)→ 自清两处返回 rubble,调用侧 WARNING——单坏键不得使到期 pass 崩溃循环) |
 | `LUA_TOUCH` | 保活续期;已过期当场惰性 evict;ttl 就地读 session HASH(不依赖 scope:config) |
 | `LUA_SWEEP_IDLE_NOTIFY` | 空 Pod 判定(SCARD==0)+ 60s NX 去重 + ZREM 退出候选(堵 reclaim 窗口内 route 直选的竞态 A) |
 | `LUA_REGISTER_POD` | acquire 成功登记:三处注册(scope:pods/pod:info/pods:registered)+ 接入序 + pods:{pod}:scopes |
@@ -161,6 +162,22 @@ lock:config_sync 串行化(忙→409 CONFIG_SYNC_BUSY,TTL 60)
 ```
 
 幂等重放收敛(changed 空 → affected=[]);启动期 `main.start()` 调 `ensure_snapshot()` 无条件重建(消冷启动窗口);`Template.deploy_ver()` / RM `_deploy_ver()` 同一算法(`util.fingerprint` + `DEPLOY_VER_FIELDS`)——A 类过滤两端一致的前提。
+
+**config_refresh(rawdata)**(场景 M-R,无载荷):rawdata 非空 → `InvalidParams(400)`;**与 config_sync 共用 `lock:config_sync`**(双向互斥,忙 → 409 CONFIG_SYNC_BUSY)
+
+```
+锁内逐 DB 存活 scope(幻影 scope 归扩散③ drain;模板缺失的悬挂 scope 跳过+WARNING):
+  ① bump_generation(sid)(rm_facade → HINCRBY scope:config generation;严格,失败上抛)
+  ② _push_or_warn(sid, pool_config, deploy_subset)(值未变,确保 RM 缓存就绪;失败仅告警——良性)
+  ③ _soft_remove_all_pods(sid)(候选集全量 ZREM,不按版本过滤;严格)
+→ 响应 {ok, scopes_refreshed, pods_sunset, generations}
+```
+
+- **顺序红线 bump → ZREM**:"ZREM 而未 bump"会造出"被摘却仍是当前代次 warm"的搁浅态(min_idle 底数保护 → 永久蹲占 max_pods 且不重建);bump 在前的任何中途失败都收敛于"老 Pod 暂时继续接新流量",重试即收敛。
+- 不写 DB、不动路由快照;日落收敛/重建全复用既有后台任务(reclaim 代次感知回收 + autoscale 按缓存 pod_spec 重建,见 resource-manager spec)。
+- `pods_sunset` 只计 SM 候选集摘除量(未入候选的 RM 暖 Pod 不计但同样被代次日落)。
+- **非幂等但收敛**(每次调用 = 一轮全量日落重建,成功后勿自动重试);config_sync 的日落中间态守卫**不扩展**看 generation——老代 Pod 版本与当前配置相等 → 对守卫不可见 → B 类/同版本下发不 409;A 类(换版本)照旧 409 到排空完成(与 M 期 A-叠-A 一致)。
+- 构造注入:`ConfigStore(..., bump_generation=rm_facade.bump_generation)`(`main._bind_modules`)。
 
 ## sweeper.py —— 老化扫描
 

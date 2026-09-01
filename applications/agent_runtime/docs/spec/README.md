@@ -10,7 +10,7 @@
 |---|---|---|
 | 本文件 | 架构一页纸 + 键前缀总览 + 测试/部署入口 | 先读 |
 | [service-core.md](service-core.md) | 组装(main)/CLI/配置(`AGENT_RUNTIME_*`)/错误码契约/字段分类/工具/部署 | 改装配、配置、错误契约、部署时 |
-| [session-manager.md](session-manager.md) | SM:route/touch/config_sync/cleanup 编排、7 个 Lua、SM 键表 | 改会话编排/配置层时 |
+| [session-manager.md](session-manager.md) | SM:route/touch/config_sync/config_refresh/cleanup 编排、7 个 Lua、SM 键表 | 改会话编排/配置层时 |
 | [resource-manager.md](resource-manager.md) | RM:acquire/后台任务/K8s 适配、6 个 Lua、RM 键表 | 改 Pod 池/扩缩容/清理时 |
 | [e2e-test-cases.md](e2e-test-cases.md) | 全部 e2e 用例的场景/输入/预期输出 | 写或跑 e2e 时 |
 | `../design/Agent-Runtime-HLD.md` | 架构总览/接口契约/场景 A–N/Redis 键表(语义权威) | 语义不确定时 |
@@ -23,9 +23,9 @@
 
 ```
 gateway ──route/touch──► agent-runtime(uvicorn)
-claw mgr ──config_sync──►   ├─ session_manager   持 App,4 个 HTTP handler
-运维    ──cleanup──────►    └─ resource_manager  无 App,纯 Facade + 后台任务
-                            两模块共享同一 Redis(前缀隔离)+ 同一 DB,互调只走进程内 Facade
+claw mgr ──config_sync──►   ├─ session_manager   持 App,5 个 HTTP handler
+运维    ──config_refresh─►  └─ resource_manager  无 App,纯 Facade + 后台任务
+       └─cleanup───────►      两模块共享同一 Redis(前缀隔离)+ 同一 DB,互调只走进程内 Facade
 数据面(本服务全程旁路):gateway ◄──SSE──► AgentServer Pod(route 返回 pod_sse_url)
 ```
 
