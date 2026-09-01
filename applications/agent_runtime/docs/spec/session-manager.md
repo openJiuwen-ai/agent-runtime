@@ -43,12 +43,15 @@
 四参非空校验(缺 → InvalidParams 400)
 → resolve(user_id, group_id, bot_id)(config_store:读路由快照 first-fit 匹配)
    返回 (scope_id, template);无匹配 → ConfigNotFound(503)
-→ 循环 { **总预算校验(2026-09 契约修正:deadline=now+scope_full_timeout,每圈
-     monotonic 复核——scope_full_timeout 语义升级为「单次 route 总预算,覆盖
-     排队+扩容+重仲裁全链」;need_acquire 一轮可触发完整 deploy(ready_timeout
-     默认 300s),无总预算时单请求可阻塞远超有界等待承诺且持续扩 Pod;超预算
-     → 504 ScopeFullTimeout,RM acquire 照常完成并落 idem 缓存(TTL 60s),
-     gateway 同 request_id 重试即幂等回放)**
+→ 循环 { **总预算校验(2026-09 契约修正:total_deadline = now + scope_full_timeout
+     + template.ready_timeout + ROUTE_BUDGET_MARGIN_SEC(10s),每圈 monotonic 复核。
+     总预算封的是 need_acquire 的无上界循环(一轮可触发完整 deploy,ready_timeout
+     量级;无总预算时单请求可阻塞 max_pods×ready_timeout 且持续扩 Pod)。★推导式
+     而非拍平复用队列预算——部署模板 scope_full_timeout=8 是按队列语义调的值,
+     真镜像冷部署 15-25s 会让首个请求必 504(2026-09-01 真环境门禁实测教训);
+     排队等待 deadline 仍为 scope_full_timeout(场景 F 语义不变)。超预算 → 504
+     ScopeFullTimeout,RM acquire 照常完成并落 idem 缓存(TTL 60s),gateway 同
+     request_id 重试即幂等回放)**
      LUA_ROUTE_PLACE 原子仲裁 → (action, pod_id):
      refresh/placed → 读 pod:info sse_url 返回(缺失=极端竞态被清,continue 重跑;
                      refresh 分支有 info 存活守卫,下一轮惰性回收死绑定重新放置,不构成自旋)

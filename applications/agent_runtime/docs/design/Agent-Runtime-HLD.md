@@ -234,7 +234,7 @@ field    := user_id | group_id | bot_id(固定小写枚举)
 
 | 参数 | 默认 | 含义 |
 |---|---|---|
-| `scope_full_timeout` | 30s | **单次 route 总预算**(2026-09 契约修正:覆盖排队+扩容+重仲裁全链,主循环每圈校验),超则 504 `SCOPE_FULL_TIMEOUT`;扩容(acquire/deploy)慢于预算时同 request_id 重试走幂等回放 |
+| `scope_full_timeout` | 30s | scope 满(队列内)阻塞上限,超则 504 `SCOPE_FULL_TIMEOUT`。2026-09 起**另有推导式单次 route 总预算** = `scope_full_timeout + ready_timeout + 10s 余量`(主循环每圈校验,封 need_acquire 无上界循环;不拍平复用队列预算——真镜像冷部署 15-25s 会让队列语义的 8s 必 504);超总预算同款 504,acquire 慢于预算时同 request_id 重试走幂等回放 |
 | `max_waiters` | 2 × `scope_concurrency` | 每 scope 等待队列上限,超限快失败 503 `SCOPE_QUEUE_FULL` |
 | `session_ttl` | 60s(template) | 会话保活窗口;超时未 touch 则老化回收 |
 

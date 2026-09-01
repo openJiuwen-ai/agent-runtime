@@ -391,17 +391,20 @@ async def test_template_removed_from_payload_scope_stops_matching(runtime):
 @requires_lua
 async def test_need_acquire_respects_total_route_budget(
         db_handler, redis_client, k8s, monkeypatch):
-    """单次 route 总预算契约:scope_full_timeout 覆盖排队+扩容+重仲裁全链——
-    acquire 慢于预算时,下一圈主循环必须 504 ScopeFullTimeout,不得无限等。"""
+    """单次 route 总预算契约:总预算 = scope_full_timeout + ready_timeout + 余量
+    (推导式,队列预算不拍平复用——真环境门禁实测冷部署 15-25s 会让队列语义的
+    8s 预算必 504)。acquire 慢于总预算时,下一圈主循环必须 504,不得无限等。"""
+    from agent_runtime.session_manager import orchestrator as sm_orch_module
     from tests.conftest import Runtime
 
-    runtime = Runtime(db_handler, redis_client, k8s, scope_full_timeout=0.2)
+    monkeypatch.setattr(sm_orch_module, "ROUTE_BUDGET_MARGIN_SEC", 0.0)
+    runtime = Runtime(db_handler, redis_client, k8s, scope_full_timeout=0.05)
     await runtime.seed_template(scope_concurrency=1, pod_concurrency=1,
-                                max_pods=2)
+                                max_pods=2, ready_timeout=1)
     real_acquire = runtime.rm_facade.acquire
 
     async def _slow_acquire(**kwargs):
-        await asyncio.sleep(0.5)                  # deploy 慢于总预算
+        await asyncio.sleep(1.3)                  # deploy 慢于总预算(1.05s)
         return await real_acquire(**kwargs)
 
     monkeypatch.setattr(runtime.rm_facade, "acquire", _slow_acquire)

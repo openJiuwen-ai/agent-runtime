@@ -25,7 +25,7 @@
 | 7+8 | C5 | `_INFRA_EXCEPTIONS`(redis 连接级 + sqlalchemy 连接级)→ 503 `STATE_UNAVAILABLE`(retry_after=1);`guard.succeed` 失败不吞成功响应 | **app 层翻译,不动共享框架**(框架同服务 echo 应用);**有意收窄**——redis ResponseError(Lua 逻辑错)/ProgrammingError(schema 错)仍 500,那是该暴露的真 bug;防御式 import 兜传递依赖缺失 |
 | 9 | C6 | LUA_TOUCH/ROUTE_PLACE 补 EVICT 式残骸自卫(guard 集合 scope_id/pod_id/**expiry**) | 复核发现 expiry 缺失同样触发 "compare nil with number",只修 scope/pod 是修一半;ROUTE_PLACE 自清后**落穿**全新放置(不 return rubble);不改键名,cluster 同槽不受影响 |
 | 6+12 | C7 | rm_sysctx 显式 `_owns_db/_owns_redis=False`;stop() 逐步兜底对称化 | 框架缺省"传了 db 即拥有"→ 二次 connect(旧池泄漏)+ dispose 共享 engine;非拥有态保留双前缀 readiness 探活 |
-| 14 | C8 | route 主循环每圈总预算校验(复用 `scope_full_timeout`,不新增配置项);`_wait_for_capacity` finally 三连 await 逐级保护 | **契约变更(已获批)**:`scope_full_timeout` 从"队列内阻塞上限"升级为"单次 route 总预算(排队+扩容+重仲裁)";现实基线是生产本就有框架 70s 请求级兜底,本修把上限提前(部署模板 8s)并给出正确的 `SCOPE_FULL_TIMEOUT` 504 而非通用 timeout;分离两预算留作开放问题 |
+| 14 | C8 | route 主循环每圈**推导式总预算**校验(`scope_full_timeout + template.ready_timeout + ROUTE_BUDGET_MARGIN_SEC(10s)`);`_wait_for_capacity` finally 三连 await 逐级保护 | **契约变更(已获批:need_acquire 加总时限)**。首版直接复用 `scope_full_timeout` 当总预算,**真环境门禁实测否决**(88/100:部署模板 8s 是队列语义的值,真镜像冷部署 15-25s → 首个请求必 504)——改为推导式:总预算封 need_acquire 无上界循环而非冷启动本身,排队 deadline 语义不变、不新增配置项;超预算 504 后 RM acquire 照常完成落 idem 缓存,同 request_id 重试幂等回放 |
 
 **C8 冷启动相容性论证**:超预算 504 后 RM `acquire` 照常完成并落 idem 缓存(TTL 60s),gateway 同 request_id 重试即幂等回放结果——不浪费已完成的部署。
 
@@ -49,5 +49,4 @@
 **遗留开放问题(本轮明确不做)**:
 - /healthz 依赖感知(Redis/DB 失联摘流)与 cleanup/config_sync 端点防护——涉及部署形态与安全边界,另行排期;
 - `_purge_and_notify` 的 notify 链:PURGE 成功 + notify 失败时死绑定残留到会话自然到期(reconcile 遍历源看不到已 PURGE 的 Pod);闭环需 notify 前移到 PURGE 之前(幂等性允许),属行为重排;
-- P3 清单约 40 条(幂等闸静默放行、eval 空表兜底成 scope_full、list 静默截断、等待队列深度/饱和度指标缺口、故障注入测试其余 9 类缺失场景、`_probe_gap_warned` 键不匹配、probe_health 连接池、锁/超时常量统一推导等);
-- route"排队预算"与"总预算"分离的双旋钮。
+- P3 清单约 40 条(幂等闸静默放行、eval 空表兜底成 scope_full、list 静默截断、等待队列深度/饱和度指标缺口、故障注入测试其余 9 类缺失场景、`_probe_gap_warned` 键不匹配、probe_health 连接池、锁/超时常量统一推导等)。
