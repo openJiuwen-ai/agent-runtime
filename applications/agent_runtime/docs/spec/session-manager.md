@@ -141,15 +141,24 @@
   scope 段同前(scope_id 字符集/index 拒 bool/引用不在本批模板集/routing_rules
   表达式串语法/enabled 须 bool/expires_at ISO-8601 或 null/重复);缺通配 scope
   → 仅 WARNING 放行(响应 wildcard_present:false;通配只计生效中的空表达式)
-lock:config_sync 串行化(忙→409 CONFIG_SYNC_BUSY,TTL 60)
+lock:config_sync 串行化(忙→409 CONFIG_SYNC_BUSY;基线 TTL 60 + **看门狗续期**:
+  周期 TTL//3 经 SessionState.refresh_lock(Lua compare-and-EXPIRE,同 unlock 守卫
+  纪律)续期,持有上限 CONFIG_SYNC_MAX_HOLD_SEC=600(防失控 sync 变永久锁);锁内
+  含日落判定/全量 DB 读写/逐 scope 推送,规模大可超基线——不续期则锁过期后多副本
+  并发进入,GC 可能删对方刚写的容器行;token 用 uuid(秒级时间戳会同秒撞 token
+  经 compare-and-del 误删他人锁);续期发现锁丢失 → ERROR 停止续期、本批跑完
+  (DB 单事务收敛);unlock 失败只记日志,不把成功变 500/不吞原异常)
 → 读 DB 旧态(containers + templates(双形态水合) + scopes)
 → diff:模板 changed_ids(_diff_class 沿用)/ 引用切换 ref_switched → affected
 → 日落中间态检查(★先于写库,拒绝时零副作用;★按版本判定:registered∖candidates
   且 deploy_ver ≠ 新版本的才是真日落残留——该集合差同时是 idle_consider 合法
   中间态,按形状判定会误拒正常空闲 Pod,min_idle≥1 时变配置面永久 409)
-→ 写 DB(顺序:先 upsert 容器(模板引用永不悬挂)→ upsert/delete 模板(三段式
-  形态行)→ upsert/delete scopes → GC 容器(container_id ∉ 本批 → 删;空全量
-  ⇒ 容器行清空);红线:任一失败立即中止,不 SET 快照、不推送)
+→ 写 DB(**单事务全有或全无**——`_db_session()`(=handler session_factory)+
+  `_upsert_row_tx/_delete_tx`(get_table Core 原语);多步独立提交的中途失败会留
+  半同步 DB,重启 ensure_snapshot 把混合态固化成路由快照;顺序:先 upsert 容器
+  (模板引用永不悬挂)→ upsert/delete 模板(三段式形态行)→ upsert/delete scopes
+  → GC 容器(container_id ∉ 本批 → 删;空全量 ⇒ 容器行清空);红线保持:事务
+  先于快照/推送,失败上抛时零 Redis 副作用)
 → rebuild_snapshot()(DB 读回 → 原子 SET;B 类立即生效由此完成)
 → eager 预热:每个**生效中** scope 推 push(sid, pool_config, deploy_subset)——必须带
   pod_spec(RM 才落 pod_spec_json/deploy_ver;autoscale 无请求预热 min_idle 的依赖);

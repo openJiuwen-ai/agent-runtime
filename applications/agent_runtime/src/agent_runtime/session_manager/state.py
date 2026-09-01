@@ -297,6 +297,18 @@ class SessionState:
             1, key, token,
         )
 
+    async def refresh_lock(self, key: str, ttl: int, token: str) -> bool:
+        """看门狗续期（仅持有者，Lua 防误续他人锁）；返回是否仍持有。
+
+        不引入新键（对既有锁键 EXPIRE），Redis Cluster 同槽纪律不受影响。
+        """
+        ok = await self.redis.eval(
+            "if redis.call('GET', KEYS[1]) == ARGV[1] then "
+            "return redis.call('EXPIRE', KEYS[1], ARGV[2]) else return 0 end",
+            1, key, token, ttl,
+        )
+        return bool(ok)
+
     # -------------------------------------------------------------- 诊断只读（/visualization/*）
 
     async def session_hash(self, session_id: str) -> dict[str, str]:

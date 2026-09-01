@@ -26,10 +26,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
+import time
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable
+from typing import Any, AsyncIterator, Awaitable, Callable
+from uuid import uuid4
+
+from sqlalchemy import delete, insert, select, update
 
 from openjiuwen_runtime.foundation.db.table_def import (
     ColumnDefinition,
@@ -225,6 +231,21 @@ _SPLIT_REFERENCE_KEYS = frozenset(
 # 模板级 wire 键别名:K8s 派生字段用 K8s 拼写(nodeName);snake 双形态拒绝
 # (防静默二义——两个拼写同时给不同值无法仲裁,fail-fast)
 _TEMPLATE_WIRE_ALIASES = {"node_name": "nodeName"}
+
+
+def _scope_row(scope: RoutingScopeDef) -> dict[str, Any]:
+    """scope → DB 行（时间戳由 _upsert_row_tx 统一处理；enabled/expires_at
+    为 2026-09 routing-scope 扩展字段，随三段式载荷透传）。"""
+    return {
+        "jiuwenclaw_id": TENANT_ID,
+        "scope_id": scope.scope_id,
+        "match_index": scope.index,
+        "template_id": scope.template_id,
+        # 原始表达式串(空 = 通配);JSON 列存标量字符串
+        "routing_rules": scope.expr,
+        "enabled": bool(scope.enabled),
+        "expires_at": scope.expires_at,
+    }
 
 
 def template_from_row(row: Any,
@@ -487,7 +508,9 @@ KnownRmScopes = Callable[[], Awaitable[list[str]]]
 # （HINCRBY 原子自增，返回新代次）
 GenerationBump = Callable[[str], Awaitable[int]]
 
-CONFIG_SYNC_LOCK_TTL = 60  # 串行化锁 TTL（处理超时上限）
+CONFIG_SYNC_LOCK_TTL = 60  # 串行化锁基线 TTL（看门狗按 TTL//3 续期——锁内工作
+                           # 含日落判定/全量 DB 读写/逐 scope 推送，规模大可超基线）
+CONFIG_SYNC_MAX_HOLD_SEC = 600  # 锁持有上限（防看门狗把失控 sync 变成永久锁）
 
 
 @dataclass(frozen=True)
@@ -695,16 +718,8 @@ class ConfigStore:
     async def config_sync(self, payload: dict[str, Any]) -> dict[str, Any]:
         """处理一次全量配置下发（场景 M）。返回统计 + affected_scopes。"""
         parsed = self._parse_payload(payload)
-
-        token = f"cfgsync-{now_ts()}"
-        if not await self.state.try_lock(
-            self.state.k.lock_config_sync(), CONFIG_SYNC_LOCK_TTL, token
-        ):
-            raise ConfigSyncBusy("a previous config_sync is still in progress")
-        try:
+        async with self._serialized("config_sync"):
             return await self._config_sync_locked(parsed)
-        finally:
-            await self.state.unlock(self.state.k.lock_config_sync(), token)
 
     async def config_refresh(self, rawdata: dict[str, Any] | None = None) -> dict[str, Any]:
         """强制刷新（场景 M-R，无载荷）：全 scope 现有 Pod 优雅日落 + 按存量配置重建。
@@ -721,15 +736,65 @@ class ConfigStore:
             )
         if self._bump_generation is None:
             raise RuntimeError("config_refresh requires the bump_generation callback")
-        token = f"cfgrefresh-{now_ts()}"
-        if not await self.state.try_lock(
-            self.state.k.lock_config_sync(), CONFIG_SYNC_LOCK_TTL, token
-        ):
-            raise ConfigSyncBusy("a config_sync or config_refresh is in progress")
-        try:
+        async with self._serialized("config_refresh"):
             return await self._config_refresh_locked()
+
+    @asynccontextmanager
+    async def _serialized(self, label: str) -> AsyncIterator[None]:
+        """config_sync / config_refresh 共用的串行化锁 + 看门狗续期。
+
+        基线 TTL 60s 只够常态；锁内含日落判定（逐 affected scope 逐 Pod
+        round-trip）、全量 DB 读写、逐 scope 推送——scope/Pod 规模大时可超
+        基线，锁过期即多副本并发进入（交错写库，GC 可能删掉对方刚写的容器行
+        → 模板悬挂）。看门狗周期 ``TTL//3`` 续期，持有上限
+        ``CONFIG_SYNC_MAX_HOLD_SEC``（防失控 sync 变永久锁）；续期发现 token
+        失配（锁已丢失）→ ERROR 停止续期，本批工作照常跑完（全量快照语义下
+        DB 单事务收敛，残留风险见 feature doc）。token 用 uuid——秒级时间戳
+        会因同秒并发撞 token 而经 compare-and-del 误删他人锁。
+        """
+        key = self.state.k.lock_config_sync()
+        token = f"{label}-{uuid4().hex}"
+        if not await self.state.try_lock(key, CONFIG_SYNC_LOCK_TTL, token):
+            raise ConfigSyncBusy(f"a previous {label} is still in progress")
+        watchdog = asyncio.create_task(
+            self._lock_watchdog(key, token), name=f"{label}-lock-watchdog")
+        try:
+            yield
         finally:
-            await self.state.unlock(self.state.k.lock_config_sync(), token)
+            watchdog.cancel()
+            try:
+                await watchdog
+            except asyncio.CancelledError:
+                pass
+            except Exception:  # noqa: BLE001 - 看门狗收割失败不掩盖主流程异常
+                logger.warning("lock watchdog teardown failed", exc_info=True)
+            try:
+                await self.state.unlock(key, token)
+            except Exception:  # noqa: BLE001 - unlock 失败不把成功变 500/不吞原异常
+                logger.exception("config sync lock unlock failed: key=%s", key)
+
+    async def _lock_watchdog(self, key: str, token: str) -> None:
+        """周期性续期串行化锁（仅持有者；任何失败只记日志，绝不抛进主流程）。"""
+        period = max(1, CONFIG_SYNC_LOCK_TTL // 3)
+        deadline = time.monotonic() + CONFIG_SYNC_MAX_HOLD_SEC
+        while time.monotonic() < deadline:
+            await asyncio.sleep(period)
+            try:
+                if not await self.state.refresh_lock(
+                        key, CONFIG_SYNC_LOCK_TTL, token):
+                    logger.error(
+                        "config sync lock lost (token mismatch or expired "
+                        "before renewal): serialization no longer guaranteed "
+                        "for the running batch")
+                    return
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - 单次续期失败下个周期再试
+                logger.exception("config sync lock renewal failed")
+        logger.error(
+            "config sync lock hold exceeded %ss, watchdog stops renewing",
+            CONFIG_SYNC_MAX_HOLD_SEC,
+        )
 
     @staticmethod
     def _parse_payload(payload: dict[str, Any]) -> ParsedSync:
@@ -890,23 +955,43 @@ class ConfigStore:
                     f"scope {sid} still has sunset pods pending reclaim: {pending}"
                 )
 
-        # ---- 写 DB（快照式替换；红线：任一失败立即上抛，不动快照、不推送）。
+        # ---- 写 DB（快照式替换，**单事务全有或全无**：多步独立提交的中途失败会
+        #      留下半同步 DB，重启后 ensure_snapshot 把混合态固化成路由快照——
+        #      被删 scope 复活/模板版本混杂/判定漂移且极难追溯）。
         #      顺序:先容器后模板(模板引用永不悬挂)→ scopes → GC 容器
         #      (container_id ∉ 本批 → 删;空全量 ⇒ 容器行清空)。
-        for cid, row in parsed.container_rows.items():
-            await self._upsert_container(cid, row)
-        for tid, ts in parsed.templates.items():
-            await self._upsert_template_split(tid, ts)
-        for tid in set(old_templates) - set(templates_in):
-            await self._db.delete(TEMPLATE_TABLE, {"template_id": tid})
-        for scope in scopes_in.values():
-            await self._upsert_scope(scope)
-        for sid in set(old_scopes) - set(scopes_in):
-            await self._db.delete(ROUTING_SCOPE_TABLE, {"scope_id": sid})
+        #      红线保持:事务先于快照重建/推送,失败上抛时零 Redis 副作用。
         containers_deleted = 0
-        for cid in set(old_containers) - set(parsed.container_rows):
-            if await self._db.delete(CONTAINER_TABLE, {"container_id": cid}):
-                containers_deleted += 1
+        async with await self._db_session() as session:
+            try:
+                for cid, row in parsed.container_rows.items():
+                    await self._upsert_row_tx(
+                        session, CONTAINER_TABLE, "container_id", cid,
+                        {**row, "jiuwenclaw_id": TENANT_ID})
+                for tid, ts in parsed.templates.items():
+                    await self._upsert_row_tx(
+                        session, TEMPLATE_TABLE, "template_id", tid,
+                        row_from_template_split(
+                            ts.template, ts.main_container_id,
+                            ts.sidecar_container_ids, ts.volumes_column))
+                for tid in set(old_templates) - set(templates_in):
+                    await self._delete_tx(
+                        session, TEMPLATE_TABLE, "template_id", tid)
+                for scope in scopes_in.values():
+                    await self._upsert_row_tx(
+                        session, ROUTING_SCOPE_TABLE, "scope_id", scope.scope_id,
+                        _scope_row(scope))
+                for sid in set(old_scopes) - set(scopes_in):
+                    await self._delete_tx(
+                        session, ROUTING_SCOPE_TABLE, "scope_id", sid)
+                for cid in set(old_containers) - set(parsed.container_rows):
+                    if await self._delete_tx(
+                            session, CONTAINER_TABLE, "container_id", cid):
+                        containers_deleted += 1
+                await session.commit()
+            except BaseException:
+                await session.rollback()
+                raise
 
         # ---- 重建快照（DB 读回最终态 → 原子 SET；B 类立即生效由此完成）
         await self.rebuild_snapshot()
@@ -1033,20 +1118,44 @@ class ConfigStore:
 
     # ---- template / container DB 存取
 
-    async def _upsert_template_split(self, template_id: str,
-                                     ts: TemplateSync) -> None:
-        """三段式形态行(模板级列 + 引用列 + volumes 列;容器行已先行落库)。"""
-        row = row_from_template_split(
-            ts.template, ts.main_container_id,
-            ts.sidecar_container_ids, ts.volumes_column)
-        existing = await self._db.get(TEMPLATE_TABLE, {"template_id": template_id})
-        if existing is not None:
-            row["updated_at"] = utc_now()
-            await self._db.update(TEMPLATE_TABLE, {"template_id": template_id}, row)
+    # ---- 事务写原语（config_sync 专用；读路径仍走 DBHandler 高层 CRUD）
+
+    async def _db_session(self) -> Any:
+        """共享 DB 的事务 session（get_table + session_factory 的单事务多写用法，
+        语义等同框架 SystemContext.transaction()——ConfigStore 不持有 sysctx）。"""
+        return self._db.session_factory()
+
+    async def _upsert_row_tx(
+        self, session: Any, table_name: str, key_col: str,
+        key_val: str, row: dict[str, Any],
+    ) -> None:
+        """单事务内的 upsert（存在性判定 → Core update/insert）。
+
+        时间戳与高层 CRUD 语义对齐：created_at 仅首次写入，updated_at 每次刷。
+        Core insert 对缺省列自动应用 ORM 级 Column default（框架 init_table 落的
+        默认值），跨 SQLite/MySQL/PG 一致。
+        """
+        table = self._db.get_table(table_name)
+        result = await session.execute(
+            select(table.c[key_col]).where(table.c[key_col] == key_val))
+        exists = result.first() is not None
+        now = utc_now()
+        if exists:
+            await session.execute(
+                update(table).where(table.c[key_col] == key_val)
+                .values(**{**row, "updated_at": now}))
         else:
-            row["created_at"] = utc_now()
-            row["updated_at"] = utc_now()
-            await self._db.create(TEMPLATE_TABLE, row)
+            await session.execute(
+                insert(table).values(**{**row, "created_at": now, "updated_at": now}))
+
+    async def _delete_tx(
+        self, session: Any, table_name: str, key_col: str, key_val: str,
+    ) -> bool:
+        """单事务内的按键删除（rowcount>0 供容器 GC 计数）。"""
+        table = self._db.get_table(table_name)
+        result = await session.execute(
+            delete(table).where(table.c[key_col] == key_val))
+        return bool(result.rowcount)
 
     async def _all_templates(
             self, containers: dict[str, dict[str, Any]] | None = None,
@@ -1069,41 +1178,6 @@ class ConfigStore:
             for spec in (container_spec_from_row(r) for r in rows)
             if spec is not None and spec.get("container_id")
         }
-
-    async def _upsert_container(self, container_id: str, row: dict[str, Any]) -> None:
-        existing = await self._db.get(CONTAINER_TABLE, {"container_id": container_id})
-        if existing is not None:
-            row = dict(row)
-            row["jiuwenclaw_id"] = TENANT_ID
-            row["updated_at"] = utc_now()
-            await self._db.update(CONTAINER_TABLE, {"container_id": container_id}, row)
-        else:
-            row = dict(row)
-            row["jiuwenclaw_id"] = TENANT_ID
-            row["created_at"] = utc_now()
-            row["updated_at"] = utc_now()
-            await self._db.create(CONTAINER_TABLE, row)
-
-    # ---- scope DB 存取
-
-    async def _upsert_scope(self, scope: RoutingScopeDef) -> None:
-        row = {
-            "jiuwenclaw_id": TENANT_ID,
-            "scope_id": scope.scope_id,
-            "match_index": scope.index,
-            "template_id": scope.template_id,
-            # 原始表达式串(空 = 通配);JSON 列存标量字符串
-            "routing_rules": scope.expr,
-            "enabled": bool(scope.enabled),
-            "expires_at": scope.expires_at,
-            "updated_at": utc_now(),
-        }
-        existing = await self._db.get(ROUTING_SCOPE_TABLE, {"scope_id": scope.scope_id})
-        if existing is not None:
-            await self._db.update(ROUTING_SCOPE_TABLE, {"scope_id": scope.scope_id}, row)
-        else:
-            row["created_at"] = utc_now()
-            await self._db.create(ROUTING_SCOPE_TABLE, row)
 
     # ---- 变更扩散辅助（沿用 M 期机制）
 
