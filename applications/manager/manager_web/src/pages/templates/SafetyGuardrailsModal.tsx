@@ -145,7 +145,6 @@ export function SafetyGuardrailsModal({ open, template, onClose, onSaved }: Prop
             />
           </div>
         </div>
-        <p className="text-[11px] text-muted">{t('safetyGuardrails.intro')}</p>
         <PermissionsBodyEditor form={form} onChange={setForm} />
       </div>
     </Modal>

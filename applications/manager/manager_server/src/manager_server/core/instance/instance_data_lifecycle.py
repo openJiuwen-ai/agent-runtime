@@ -17,9 +17,6 @@ from manager_server.core.application_config.logging_config import (
 from manager_server.core.application_config.memory_config import (
     push_memory_config_sync_to_gateway,
 )
-from manager_server.core.application_config.permissions_config import (
-    push_permissions_config_sync_to_gateway,
-)
 from manager_server.core.application_config.task_memory_config import (
     push_task_memory_config_sync_to_gateway,
 )
@@ -84,10 +81,13 @@ async def sync_data_to_gateway_on_register(
     （见 ``maybe_full_sync_gateway_on_online``）。
 
     顺序说明：
-    1. 模板（Agent 资源依赖）
-    2. Agent 资源
-    3. 应用配置（logging / task-memory / permissions / memory / 日志脱敏）
+    1. 模板（含 permissions_template；Agent 资源依赖）
+    2. Agent 资源（template_ref.permissions 绑定安全护栏）
+    3. 应用配置（logging / task-memory / memory / 日志脱敏）
     4. 重建 Manager 侧 jid_template_ref 索引
+
+    注：实例级 ``permissions_config`` 已废弃，企业权限走 ``permissions_template``，
+    由步骤 1/2 随模板与 Agent 资源下发，不再单独 push。
     """
     jid = str(jiuwenclaw_id or "").strip()
     if not jid:
@@ -117,7 +117,6 @@ async def sync_data_to_gateway_on_register(
     for name, push_fn, before_fn in (
         ("logging", push_logging_config_sync_to_gateway, None),
         ("task_memory", push_task_memory_config_sync_to_gateway, None),
-        ("permissions", push_permissions_config_sync_to_gateway, None),
         ("memory", push_memory_config_sync_to_gateway, None),
         (
             "log_masking_rule",

@@ -1,5 +1,5 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-"""全量同步应下发 logging / permissions / memory / task-memory。"""
+"""全量同步应下发 logging / memory / task-memory（permissions 走模板，不单独 push）。"""
 
 from __future__ import annotations
 
@@ -41,11 +41,6 @@ async def test_sync_data_pushes_application_configs():
             return_value=ack,
         ) as task_memory_mock,
         patch(
-            "manager_server.core.instance.instance_data_lifecycle.push_permissions_config_sync_to_gateway",
-            new_callable=AsyncMock,
-            return_value=ack,
-        ) as permissions_mock,
-        patch(
             "manager_server.core.instance.instance_data_lifecycle.push_memory_config_sync_to_gateway",
             new_callable=AsyncMock,
             return_value=ack,
@@ -68,12 +63,11 @@ async def test_sync_data_pushes_application_configs():
 
     logging_mock.assert_awaited_once_with(handler, "jid-app")
     task_memory_mock.assert_awaited_once_with(handler, "jid-app")
-    permissions_mock.assert_awaited_once_with(handler, "jid-app")
     memory_mock.assert_awaited_once_with(handler, "jid-app")
     assert "logging" in results
     assert "task_memory" in results
-    assert "permissions" in results
     assert "memory" in results
+    assert "permissions" not in results
 
 
 @pytest.mark.asyncio
