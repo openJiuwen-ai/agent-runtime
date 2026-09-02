@@ -68,7 +68,20 @@
   "safetyGuardrails": {
     "title": "安全护栏",
     "subtitle": "配置 Agent 安全护栏策略",
-    "empty": "功能开发中，敬请期待"
+    "empty": "暂无安全护栏模板",
+    "new": "新建安全护栏模板",
+    "edit": "编辑安全护栏模板",
+    "searchPlaceholder": "搜索模板 ID、名称、描述",
+    "templateName": "模板名称",
+    "templateDescription": "模板描述",
+    "updatedAt": "更新时间",
+    "bodyEnabled": "策略已启用",
+    "bodyDisabled": "策略已禁用",
+    "permissionModeTag": "模式：{{value}}",
+    "deleteConfirm": "确认删除该安全护栏模板？",
+    "fieldRequired": "请填写{{field}}",
+    "unsafeText": "{{field}}含有不安全内容",
+    "intro": "配置与 config.yaml permissions 对齐：启用开关、permission_mode、工具权限、规则与文件路径。保存后作为可复用的安全护栏模板。"
   },
   "connection": {
     "ok": "已连接",
@@ -289,37 +302,51 @@
       "sections": {
         "general": "基础设置",
         "tools": "工具权限",
-        "rules": "Shell 规则",
-        "fileGuard": "文件路径",
-        "advanced": "高级"
+        "rules": "规则",
+        "fileGuard": "文件路径"
       },
       "resetToYaml": "删除托管配置",
       "deleteConfirm": "确认删除 Manager 托管的 permissions 配置？Gateway 将回退到 config.yaml。",
       "deleted": "已删除托管配置，Gateway 将回退到 config.yaml",
       "enabled": "启用权限管控",
-      "defaults": "未列明工具的默认动作",
-      "defaultsHint": "allow / ask / deny，对 tools 中未单独配置的工具生效",
-      "denyGuidanceMessage": "拒绝提示文案",
-      "denyGuidanceMessageHint": "工具被拒绝时展示给用户的说明（可选）",
+      "permissionMode": "权限模式 (permission_mode)",
+      "permissionModeHint": "normal：LOW/MEDIUM→allow，HIGH/CRITICAL→ask；strict：MEDIUM→ask，CRITICAL→deny",
+      "modes": {
+        "normal": "normal",
+        "strict": "strict"
+      },
+      "defaults": "未列明工具的默认动作 (defaults.*)",
+      "defaultsHint": "工具未在「工具权限」中单独配置、且未命中规则时使用",
       "toolName": "工具名称",
+      "toolNameRequired": "请填写工具名称",
       "action": "动作",
+      "actions": {
+        "allow": "允许",
+        "ask": "询问",
+        "deny": "拒绝"
+      },
       "newTool": "添加工具权限",
       "editTool": "编辑工具权限",
-      "toolsHint": "整工具级 allow / ask / deny，优先级高于 Shell 规则",
+      "toolsHint": "整工具级允许 / 询问 / 拒绝",
       "ruleId": "规则 ID",
+      "ruleIdRequired": "请填写规则 ID",
+      "ruleConfig": "配置",
       "rulePattern": "匹配模式",
-      "newRule": "添加 Shell 规则",
-      "editRule": "编辑 Shell 规则",
-      "rulesHint": "仅匹配 shell 命令文本；action 为 allow 或 deny",
-      "fileGuardWorkspace": "Workspace",
-      "fileGuardRwEnabled": "Workspace 内默认放行读写",
-      "fileGuardGlobal": "Global 白名单 (JSON)",
-      "fileGuardTrustedExec": "可信执行目录 (JSON 数组)",
-      "fileGuardToolBindings": "Tool Bindings (JSON)",
-      "exampleTag": "示例模板",
-      "commandIntent": "命令意图抽取",
-      "commandIntentEnabled": "启用命令意图抽取",
-      "commandIntentTimeout": "超时（秒）"
+      "rulePatternRequired": "请填写匹配模式",
+      "ruleTools": "适用工具",
+      "ruleToolsHint": "逗号分隔，例如 bash, mcp_exec_command, create_terminal",
+      "ruleSeverity": "严重级别",
+      "severities": {
+        "LOW": "LOW",
+        "MEDIUM": "MEDIUM",
+        "HIGH": "HIGH",
+        "CRITICAL": "CRITICAL"
+      },
+      "newRule": "添加规则",
+      "editRule": "编辑规则",
+      "rulesHint": "与 config.yaml rules 对齐：id、tools、pattern、severity",
+      "fileGuardJson": "file_guard (JSON)",
+      "fileGuardJsonHint": "整块 file_guard 配置，字段与 config.yaml 一致（enabled / defaults / workspace / paths 等）"
     }
   },
   "modelTemplate": {
@@ -554,7 +581,8 @@
         "vision_model": "视觉模型",
         "embedding_model": "Embedding 模型",
         "skill_whitelist": "Skill 白名单",
-        "extension_config": "扩展配置"
+        "extension_config": "扩展配置",
+        "permissions": "安全护栏"
       },
       "none": "不选择",
       "noOptions": "暂无可选模板"
@@ -688,6 +716,7 @@
     "tpl_vision_model": "视觉模型",
     "tpl_skill_whitelist": "Skill 白名单",
     "tpl_extension_config": "扩展配置",
+    "tpl_permissions": "安全护栏",
     "enabled": "启用",
     "agentTags": "标签",
     "templateRef": "配置模板引用",

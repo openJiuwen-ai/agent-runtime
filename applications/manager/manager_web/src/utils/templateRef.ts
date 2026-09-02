@@ -8,6 +8,7 @@ export const TEMPLATE_REF_SLOTS = [
   'embedding_model',
   'skill_whitelist',
   'extension_config',
+  'permissions',
 ] as const;
 
 /** 模板引用编辑器展示的槽位。 */
@@ -19,6 +20,7 @@ export const TEMPLATE_REF_EDITOR_SLOTS = [
   'embedding_model',
   'skill_whitelist',
   'extension_config',
+  'permissions',
 ] as const;
 
 export const MULTI_VALUE_TEMPLATE_REF_SLOTS = new Set<string>([
@@ -26,13 +28,14 @@ export const MULTI_VALUE_TEMPLATE_REF_SLOTS = new Set<string>([
   'extension_config',
 ]);
 
-/** 各槽位至多一条引用：默认/视频/音频/视觉/Embedding 模型。 */
+/** 各槽位至多一条引用：默认/视频/音频/视觉/Embedding 模型、安全护栏。 */
 export const SINGLE_VALUE_TEMPLATE_REF_SLOTS = new Set<string>([
   'default_model',
   'video_model',
   'audio_model',
   'vision_model',
   'embedding_model',
+  'permissions',
 ]);
 
 export function isSingleValueTemplateRefSlot(slot: string): boolean {

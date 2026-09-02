@@ -140,6 +140,28 @@ export interface SkillWhitelistTemplateCreateBody {
 
 export type SkillWhitelistTemplateUpdateBody = Partial<SkillWhitelistTemplateCreateBody>;
 
+export interface PermissionsTemplate {
+  id: number;
+  template_id: string;
+  template_name: string;
+  description?: string | null;
+  enabled: boolean;
+  body: Record<string, unknown>;
+  data?: Record<string, unknown> | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface PermissionsTemplateCreateBody {
+  template_name: string;
+  description?: string;
+  enabled?: boolean;
+  body: Record<string, unknown>;
+  data?: Record<string, unknown>;
+}
+
+export type PermissionsTemplateUpdateBody = Partial<PermissionsTemplateCreateBody>;
+
 export interface ServiceConfigTemplate {
   id: number;
   template_id: string;

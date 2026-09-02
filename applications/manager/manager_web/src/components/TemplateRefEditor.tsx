@@ -4,6 +4,7 @@ import {
   EmbeddingTemplateApi,
   ExtensionTemplateApi,
   ModelTemplateApi,
+  PermissionsTemplateApi,
   SkillWhitelistTemplateApi,
 } from '../services/api';
 import {
@@ -30,11 +31,12 @@ interface TemplateRefEditorProps {
 
 export async function loadTemplateOptions(): Promise<Record<string, TemplateOption[]>> {
   const pageSize = 200;
-  const [models, embeddings, skills, extensions] = await Promise.all([
+  const [models, embeddings, skills, extensions, permissions] = await Promise.all([
     ModelTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
     EmbeddingTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
     SkillWhitelistTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
     ExtensionTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
+    PermissionsTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
   ]);
 
   const toOpt = (id: string, name: string): TemplateOption => ({
@@ -53,6 +55,7 @@ export async function loadTemplateOptions(): Promise<Record<string, TemplateOpti
   );
   bySlot.skill_whitelist = (skills.items ?? []).map((t) => toOpt(t.template_id, t.template_name));
   bySlot.extension_config = (extensions.items ?? []).map((t) => toOpt(t.template_id, t.template_name));
+  bySlot.permissions = (permissions.items ?? []).map((t) => toOpt(t.template_id, t.template_name));
   return bySlot;
 }
 

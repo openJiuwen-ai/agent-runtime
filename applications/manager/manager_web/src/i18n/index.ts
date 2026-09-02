@@ -16,8 +16,13 @@ void i18n
       zh: { translation: zh },
       en: { translation: en },
     },
+    lng: 'zh',
     fallbackLng: 'zh',
     supportedLngs: ['zh', 'en'],
+    detection: {
+      order: ['localStorage'],
+      caches: ['localStorage'],
+    },
     interpolation: { escapeValue: false, defaultVariables: { productName } },
   });
 
