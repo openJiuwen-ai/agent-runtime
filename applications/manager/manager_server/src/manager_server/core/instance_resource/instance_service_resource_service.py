@@ -11,6 +11,10 @@ from openjiuwen_runtime.foundation.db.handler import DBHandler
 from manager_server.core.template.service_config_template import ServiceConfigTemplateService
 from manager_server.core.instance_access import auto_bind_from_match_expr
 from manager_server.core.instance_resource.runtime_config_sync import sync_runtime_config
+from manager_server.core.template.push_template_to_runtime import (
+    record_service_template_ref_on_runtime,
+    unrecord_service_template_ref_on_runtime,
+)
 from manager_server.infrastructure.common import resolve_order_by
 from manager_server.infrastructure.logger import get_logger
 from manager_server.infrastructure.match_expr import canonicalize_match_expr
@@ -271,8 +275,16 @@ class InstanceServiceResourceService:
                 }
             )
 
-        # 先 sync Runtime（目标态），成功后再写 Manager
+        # 先 sync Runtime（目标态），成功后再写 Manager / 引用索引
         current = await self._list_instance_rows(jiuwenclaw_id)
+        before_resource_ids: set[str] = set()
+        for r in current:
+            if str(_g(r, "ref_template_id") or "").strip() != template_id:
+                continue
+            rid = str(_g(r, "resource_id") or "").strip()
+            if rid:
+                before_resource_ids.add(rid)
+        is_new_resource = resolved_resource_id not in before_resource_ids
         projected = self._project_upsert(current, resolved_resource_id, grant_rows)
         try:
             await sync_runtime_config(
@@ -286,6 +298,10 @@ class InstanceServiceResourceService:
         for row in grant_rows:
             await self._h.create(_GRANT, row)
             await auto_bind_from_match_expr(self._h, jiuwenclaw_id, row["match_expr"])
+        if is_new_resource:
+            await record_service_template_ref_on_runtime(
+                self._h, jiuwenclaw_id, template_id
+            )
         _log.info(
             "[InstanceResource] instance_service_resource.write",
             jiuwenclaw_id=jiuwenclaw_id,
@@ -306,6 +322,7 @@ class InstanceServiceResourceService:
 
         current = await self._list_instance_rows(jiuwenclaw_id)
         projected = self._project_without(current, rid)
+        ref_template_id = str(_g(rows[0], "ref_template_id") or "").strip()
         try:
             await sync_runtime_config(
                 self._h, jiuwenclaw_id, resource_rows=projected
@@ -315,6 +332,10 @@ class InstanceServiceResourceService:
 
         for r in rows:
             await self._h.delete(_GRANT, {"id": _g(r, "id")})
+        if ref_template_id:
+            await unrecord_service_template_ref_on_runtime(
+                self._h, jiuwenclaw_id, ref_template_id
+            )
         _log.info(
             "[InstanceResource] instance_service_resource.remove",
             jiuwenclaw_id=jiuwenclaw_id,
@@ -338,6 +359,15 @@ class InstanceServiceResourceService:
             for r in rows
             if _g(r, "resource_id")
         }
+        # 每个 resource 对其 ref_template_id 贡献一条索引；按 (resource, template) 去重后扣减。
+        unrecord_pairs = {
+            (
+                str(_g(r, "resource_id") or "").strip(),
+                str(_g(r, "ref_template_id") or "").strip(),
+            )
+            for r in rows
+            if _g(r, "resource_id") and _g(r, "ref_template_id")
+        }
         current = await self._list_instance_rows(jiuwenclaw_id)
         projected = [
             row
@@ -353,6 +383,10 @@ class InstanceServiceResourceService:
 
         for r in rows:
             await self._h.delete(_GRANT, {"id": _g(r, "id")})
+        for _rid, tid in sorted(unrecord_pairs):
+            await unrecord_service_template_ref_on_runtime(
+                self._h, jiuwenclaw_id, tid
+            )
         _log.info(
             "[InstanceResource] instance_service_resource.remove_from_instance",
             jiuwenclaw_id=jiuwenclaw_id,

@@ -111,11 +111,14 @@
     "group": "Group",
     "space": "Space",
     "gateway": "Gateway",
+    "runtime": "Runtime",
     "agentServer": "AgentServer",
     "otherService": "其他服务",
     "viewDetail": "详情",
     "noServices": "暂未发现 Gateway / AgentServer 服务（等待探活）",
     "lastAlive": "最近探活",
+    "gatewayLastAlive": "Gateway 最近探活",
+    "runtimeLastAlive": "Runtime 最近探活",
     "lastUpdated": "最近更新",
     "endpoint": "Endpoint",
     "version": "版本",
@@ -123,9 +126,9 @@
     "filterStatus": "按状态过滤",
     "instanceName": "实例名称",
     "modifiedAt": "修改时间",
-    "viewBrief": "简略视图",
-    "viewDetailed": "详细视图",
-    "searchPlaceholder": "搜索实例名称、实例 ID、状态、命名空间"
+    "viewBrief": "卡片视图",
+    "viewList": "列表视图",
+    "searchPlaceholder": "搜索实例名称、实例 ID、状态"
   },
   "instanceForm": {
     "name": "实例名称",

@@ -26,6 +26,7 @@ from manager_server.models.jid_template_ref_models import (
 )
 from manager_server.models.instance_resource_models import (
     INSTANCE_AGENT_RESOURCE_TABLE_DEF,
+    INSTANCE_SERVICE_RESOURCE_TABLE_DEF,
 )
 from manager_server.models.template_models import (
     AGENT_TEMPLATE_TABLE_DEF,
@@ -40,6 +41,7 @@ from manager_server.schemas.template_slot_schemas import (
     EXTENSION_CONFIG_SLOT,
     MODEL_TEMPLATE_SLOTS,
     PERMISSIONS_SLOT,
+    SERVICE_CONFIG_SLOT,
     SKILL_WHITELIST_SLOT,
 )
 
@@ -60,6 +62,8 @@ class TemplateKindSpec:
     table_name: str
     slot_keys: frozenset[str]
 
+
+AGENT_TEMPLATES_KIND = "agent_templates"
 
 TEMPLATE_KIND_SPECS: dict[str, TemplateKindSpec] = {
     "model_templates": TemplateKindSpec(
@@ -87,9 +91,19 @@ TEMPLATE_KIND_SPECS: dict[str, TemplateKindSpec] = {
         table_name=EXTENSION_CONFIG_TEMPLATE_TABLE_DEF.table_name,
         slot_keys=frozenset({EXTENSION_CONFIG_SLOT}),
     ),
+    # Agent 模板：被 instance_agent_resource.ref_template_id 引用，不走 jid_template_ref slot。
+    AGENT_TEMPLATES_KIND: TemplateKindSpec(
+        config_section=AGENT_TEMPLATES_KIND,
+        table_name=AGENT_TEMPLATE_TABLE_DEF.table_name,
+        slot_keys=frozenset(),
+    ),
 }
 
+# 普通模板在前，agent 在后：全量 sync 时先落嵌套依赖，再落 agent 模板本身。
 TEMPLATE_KIND_ORDER: tuple[str, ...] = tuple(TEMPLATE_KIND_SPECS.keys())
+ORDINARY_TEMPLATE_KIND_ORDER: tuple[str, ...] = tuple(
+    kind for kind in TEMPLATE_KIND_ORDER if kind != AGENT_TEMPLATES_KIND
+)
 
 _TEMPLATE_HTTP_PATHS: dict[str, str] = {
     "model_templates": "/api/v1/model-templates",
@@ -97,6 +111,7 @@ _TEMPLATE_HTTP_PATHS: dict[str, str] = {
     "extension_config_templates": "/api/v1/extension-config-templates",
     "skill_whitelist_templates": "/api/v1/skill-whitelist-templates",
     "permissions_templates": "/api/v1/permissions-templates",
+    AGENT_TEMPLATES_KIND: "/api/v1/agent-templates",
 }
 _PUSH_DROP_KEYS = frozenset({"id", "created_at", "updated_at", "jiuwenclaw_id"})
 
@@ -106,6 +121,7 @@ _ROW_TO_OUT_MODULES: dict[str, str] = {
     "skill_whitelist_templates": "manager_server.core.template.skill_whitelist_template",
     "permissions_templates": "manager_server.core.template.permissions_template",
     "extension_config_templates": "manager_server.core.template.extension_config_template",
+    AGENT_TEMPLATES_KIND: "manager_server.core.template.agent_template",
 }
 
 RowToSyncFn = Callable[[Any], dict[str, Any]]
@@ -285,11 +301,40 @@ async def _count_slot_pairs_from_agent_resources(
     return counter
 
 
+async def _count_slot_pairs_from_service_resources(
+    handler: DBHandler,
+    jiuwenclaw_id: str,
+) -> Counter[tuple[str, str]]:
+    """每个 ``resource_id`` 对其 ``ref_template_id`` 贡献一条 ``service_config`` 引用。"""
+    counter: Counter[tuple[str, str]] = Counter()
+    rows = await handler.list_records(
+        INSTANCE_SERVICE_RESOURCE_TABLE_DEF.table_name,
+        {"jiuwenclaw_id": jiuwenclaw_id},
+        limit=_LIST_ALL_CAP,
+        offset=0,
+    )
+    seen: set[tuple[str, str]] = set()
+    for row in rows:
+        template_id = str(getattr(row, "ref_template_id", "") or "").strip()
+        resource_id = str(getattr(row, "resource_id", "") or "").strip()
+        if not template_id or not resource_id:
+            continue
+        dedupe_key = (template_id, resource_id)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        counter[(SERVICE_CONFIG_SLOT, template_id)] += 1
+    return counter
+
+
 async def _count_slot_pairs_for_gateway(
     handler: DBHandler,
     jiuwenclaw_id: str,
 ) -> Counter[tuple[str, str]]:
-    return await _count_slot_pairs_from_agent_resources(handler, jiuwenclaw_id)
+    """合并 Gateway 普通模板引用与 Runtime 服务配置引用（同表、不同 slot）。"""
+    counter = await _count_slot_pairs_from_agent_resources(handler, jiuwenclaw_id)
+    counter.update(await _count_slot_pairs_from_service_resources(handler, jiuwenclaw_id))
+    return counter
 
 
 async def _slot_pairs_for_gateway(
@@ -307,13 +352,82 @@ async def collect_referenced_template_ids_for_gateway(
     jiuwenclaw_id: str,
     kind: str,
 ) -> set[str]:
-    """汇总某 Gateway 在 Agent 资源模板引用中引用的某类模板 ``template_id``。"""
+    """汇总某 Gateway 需要同步的某类模板 ``template_id``。
+
+    普通模板：从 Agent 资源绑定的 ``agent_template.template_ref`` 抽取。
+    Agent 模板：从 ``instance_agent_resource.ref_template_id`` 抽取。
+    """
     jid = str(jiuwenclaw_id or "").strip()
     if not jid:
         return set()
-    spec = TEMPLATE_KIND_SPECS[_normalize_kind(kind)]
+    normalized = _normalize_kind(kind)
+    if normalized == AGENT_TEMPLATES_KIND:
+        return await _agent_template_ids_bound_on_gateway(handler, jid)
+    spec = TEMPLATE_KIND_SPECS[normalized]
     pairs = await _slot_pairs_for_gateway(handler, jid, slot_keys=spec.slot_keys)
     return {tid for _, tid in pairs}
+
+
+async def _agent_template_ids_bound_on_gateway(
+    handler: DBHandler,
+    jiuwenclaw_id: str,
+) -> set[str]:
+    rows = await handler.list_records(
+        INSTANCE_AGENT_RESOURCE_TABLE_DEF.table_name,
+        {"jiuwenclaw_id": jiuwenclaw_id},
+        limit=_LIST_ALL_CAP,
+        offset=0,
+    )
+    out: set[str] = set()
+    for row in rows:
+        tid = str(getattr(row, "ref_template_id", "") or "").strip()
+        if tid:
+            out.add(tid)
+    return out
+
+
+async def _jiuwenclaw_ids_binding_agent_template(
+    handler: DBHandler,
+    template_id: str,
+) -> set[str]:
+    tid = str(template_id or "").strip()
+    if not tid:
+        return set()
+    rows = await handler.list_records(
+        INSTANCE_AGENT_RESOURCE_TABLE_DEF.table_name,
+        {"ref_template_id": tid},
+        limit=_LIST_ALL_CAP,
+        offset=0,
+    )
+    out: set[str] = set()
+    for row in rows:
+        jid = str(getattr(row, "jiuwenclaw_id", "") or "").strip()
+        if jid:
+            out.add(jid)
+    return out
+
+
+async def _count_agent_template_resource_references(
+    handler: DBHandler,
+    template_id: str,
+) -> int:
+    """统计绑定了指定 agent 模板的 distinct ``(jiuwenclaw_id, resource_id)`` 数。"""
+    tid = str(template_id or "").strip()
+    if not tid:
+        return 0
+    rows = await handler.list_records(
+        INSTANCE_AGENT_RESOURCE_TABLE_DEF.table_name,
+        {"ref_template_id": tid},
+        limit=_LIST_ALL_CAP,
+        offset=0,
+    )
+    seen: set[tuple[str, str]] = set()
+    for row in rows:
+        jid = str(getattr(row, "jiuwenclaw_id", "") or "").strip()
+        rid = str(getattr(row, "resource_id", "") or "").strip()
+        if jid and rid:
+            seen.add((jid, rid))
+    return len(seen)
 
 
 async def _resolve_template_ref_lookup(
@@ -325,7 +439,11 @@ async def _resolve_template_ref_lookup(
     tid = str(template_id or "").strip()
     if not tid:
         return None
-    spec = TEMPLATE_KIND_SPECS[_normalize_kind(kind)]
+    normalized = _normalize_kind(kind)
+    if normalized == AGENT_TEMPLATES_KIND:
+        # Agent 模板不进 jid_template_ref；引用只看 instance_agent_resource。
+        return tid, frozenset(), False
+    spec = TEMPLATE_KIND_SPECS[normalized]
     indexed = (
         await handler.count_records(_JID_TEMPLATE_REF_TABLE, {"template_id": tid})
     ) > 0
@@ -403,8 +521,16 @@ async def collect_referenced_jiuwenclaw_ids_for_template(
     template_id: str,
     kind: str,
 ) -> set[str]:
-    """查找在 ``jid_template_ref`` 或 Agent 资源中引用了指定 ``template_id`` 的全部 ``jiuwenclaw_id``。"""
-    lookup = await _resolve_template_ref_lookup(handler, template_id, kind)
+    """查找引用了指定 ``template_id`` 的全部 ``jiuwenclaw_id``。
+
+    普通模板：``jid_template_ref`` 或扫描 Agent 资源的 ``template_ref``。
+    Agent 模板：``instance_agent_resource.ref_template_id``。
+    """
+    normalized = _normalize_kind(kind)
+    if normalized == AGENT_TEMPLATES_KIND:
+        return await _jiuwenclaw_ids_binding_agent_template(handler, template_id)
+
+    lookup = await _resolve_template_ref_lookup(handler, template_id, normalized)
     if lookup is None:
         return set()
     tid, slot_keys, use_index = lookup
@@ -447,7 +573,11 @@ async def _referencing_reachable_jids(
 
 
 def _row_to_sync_payload(row: Any, *, row_to_out: RowToOutFn) -> dict[str, Any]:
-    data = row_to_out(row).model_dump(mode="json")
+    out = row_to_out(row)
+    if hasattr(out, "model_dump"):
+        data = out.model_dump(mode="json")
+    else:
+        data = dict(out)
     for key in ("id", "created_at", "updated_at"):
         data.pop(key, None)
     return data
@@ -456,7 +586,9 @@ def _row_to_sync_payload(row: Any, *, row_to_out: RowToOutFn) -> dict[str, Any]:
 def _resolve_row_to_sync(kind: str) -> RowToSyncFn:
     normalized = _normalize_kind(kind)
     module = importlib.import_module(_ROW_TO_OUT_MODULES[normalized])
-    row_to_out = module.row_to_out
+    row_to_out = getattr(module, "row_to_out", None) or getattr(
+        module, "agent_template_out"
+    )
     return lambda row: _row_to_sync_payload(row, row_to_out=row_to_out)
 
 
@@ -501,7 +633,10 @@ async def update_template_on_referencing_gateways(
     template_id: str,
     updates: dict[str, Any],
 ) -> None:
-    """向引用了该模板的可达 Gateway PATCH 更新。"""
+    """向引用了该模板的可达 Gateway PATCH 更新。
+
+    Agent 模板若变更 ``template_ref``，额外对每个引用实例做嵌套普通模板增量同步。
+    """
     normalized = _normalize_kind(kind)
     tid = str(template_id or "").strip()
     if not tid:
@@ -510,6 +645,21 @@ async def update_template_on_referencing_gateways(
     all_refs = await collect_referenced_jiuwenclaw_ids_for_template(
         handler, tid, normalized
     )
+
+    old_template_ref: Any | None = None
+    new_template_ref = updates.get("template_ref")
+    if (
+        normalized == AGENT_TEMPLATES_KIND
+        and "template_ref" in updates
+        and new_template_ref is not None
+    ):
+        existing = await handler.get(
+            AGENT_TEMPLATE_TABLE_DEF.table_name, {"template_id": tid}
+        )
+        old_template_ref = (
+            read_template_ref_from_row(existing) if existing is not None else {}
+        )
+
     for jid in sorted(all_refs):
         if jid not in reachable:
             logger.info(
@@ -521,6 +671,13 @@ async def update_template_on_referencing_gateways(
             )
             continue
         await _update_template_on_gateway(jid, normalized, tid, updates)
+        if old_template_ref is not None:
+            await sync_gateway_templates_after_template_ref_change(
+                handler,
+                jid,
+                old_template_ref=old_template_ref,
+                new_template_ref=new_template_ref,
+            )
 
 
 async def delete_template_on_referencing_gateways(
@@ -632,7 +789,8 @@ async def _snapshot_template_totals(
 
 
 async def _resolve_template_kind(handler: DBHandler, template_id: str) -> str | None:
-    for kind in TEMPLATE_KIND_ORDER:
+    """解析嵌套普通模板的 kind（不含 agent_templates）。"""
+    for kind in ORDINARY_TEMPLATE_KIND_ORDER:
         spec = TEMPLATE_KIND_SPECS[kind]
         row = await handler.get(spec.table_name, {"template_id": template_id})
         if row is not None:
@@ -713,7 +871,10 @@ async def rebuild_jid_template_ref_for_gateway(
     handler: DBHandler,
     jiuwenclaw_id: str,
 ) -> None:
-    """从 Agent 资源模板引用重建某 Gateway 的 ``jid_template_ref`` 索引。"""
+    """从 Agent / Service 资源引用重建某实例的 ``jid_template_ref`` 索引。
+
+    Gateway 普通模板槽位与 Runtime ``service_config`` 槽位同表共存。
+    """
     jid = str(jiuwenclaw_id or "").strip()
     if not jid:
         return
@@ -779,8 +940,16 @@ async def count_config_effective_policy_references_for_template(
     template_id: str,
     kind: str,
 ) -> int:
-    """统计 Agent 资源模板引用对指定 ``template_id`` 的引用条数。"""
-    lookup = await _resolve_template_ref_lookup(handler, template_id, kind)
+    """统计对指定 ``template_id`` 的引用条数。
+
+    普通模板：Agent 资源 ``template_ref`` / ``jid_template_ref``。
+    Agent 模板：``instance_agent_resource`` 绑定数。
+    """
+    normalized = _normalize_kind(kind)
+    if normalized == AGENT_TEMPLATES_KIND:
+        return await _count_agent_template_resource_references(handler, template_id)
+
+    lookup = await _resolve_template_ref_lookup(handler, template_id, normalized)
     if lookup is None:
         return 0
     tid, slot_keys, use_index = lookup
@@ -795,12 +964,58 @@ async def count_config_effective_policy_references_for_template(
     return count
 
 
+async def ensure_referenced_templates_on_gateway(
+    handler: DBHandler,
+    jiuwenclaw_id: str,
+    template_ref: Any,
+) -> None:
+    """确保 ``template_ref`` 中的普通模板已存在于 Gateway（不调整引用计数）。"""
+    pairs = slot_template_pairs_from_template_ref(template_ref)
+    if not pairs:
+        return
+    by_kind: dict[str, set[str]] = {}
+    for _slot, tid in pairs:
+        kind = await _resolve_template_kind(handler, tid)
+        if kind is None:
+            continue
+        by_kind.setdefault(kind, set()).add(tid)
+    for kind, template_ids in sorted(by_kind.items()):
+        payloads = await _build_sync_payloads(handler, kind, template_ids)
+        for tmpl in payloads:
+            await _create_template_on_gateway(jiuwenclaw_id, kind, tmpl)
+
+
+async def upsert_agent_template_on_gateway(
+    handler: DBHandler,
+    jiuwenclaw_id: str,
+    template_id: str,
+) -> None:
+    """将单个 agent 模板 POST 到 Gateway（create/upsert 语义）。"""
+    tid = str(template_id or "").strip()
+    if not tid:
+        raise ValueError("template_id is required")
+    payloads = await _build_sync_payloads(handler, AGENT_TEMPLATES_KIND, {tid})
+    if not payloads:
+        raise ValueError(f"agent_template not found: {tid}")
+    await _create_template_on_gateway(jiuwenclaw_id, AGENT_TEMPLATES_KIND, payloads[0])
+
+
+async def delete_agent_template_on_gateway(
+    jiuwenclaw_id: str,
+    template_id: str,
+) -> None:
+    """从 Gateway 删除单个 agent 模板。"""
+    await _delete_template_on_gateway(
+        jiuwenclaw_id, AGENT_TEMPLATES_KIND, template_id
+    )
+
+
 async def assert_template_deletable(
     handler: DBHandler,
     template_id: str,
     kind: str,
 ) -> None:
-    """删除模板前校验：若仍被 Agent 资源模板引用则拒绝删除。"""
+    """删除模板前校验：若仍被 Agent 资源 / 模板引用则拒绝删除。"""
     ref_count = await count_config_effective_policy_references_for_template(
         handler,
         template_id,
@@ -814,11 +1029,19 @@ async def assert_template_deletable(
 
 
 __all__ = (
+    "AGENT_TEMPLATES_KIND",
+    "ORDINARY_TEMPLATE_KIND_ORDER",
+    "TEMPLATE_KIND_ORDER",
+    "TEMPLATE_KIND_SPECS",
     "assert_template_deletable",
     "count_config_effective_policy_references_for_template",
+    "delete_agent_template_on_gateway",
+    "delete_template_on_referencing_gateways",
+    "ensure_referenced_templates_on_gateway",
+    "rebuild_jid_template_ref_for_gateway",
+    "slot_template_pairs_from_template_ref",
+    "sync_gateway_templates_after_template_ref_change",
     "sync_referenced_templates_to_gateway",
     "update_template_on_referencing_gateways",
-    "delete_template_on_referencing_gateways",
-    "sync_gateway_templates_after_template_ref_change",
-    "rebuild_jid_template_ref_for_gateway",
+    "upsert_agent_template_on_gateway",
 )

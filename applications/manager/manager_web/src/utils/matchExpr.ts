@@ -5,6 +5,8 @@ export type MatchOp = 'in' | 'not in';
 export type MatchCombineOp = 'and' | 'or';
 
 export const MATCH_FIELDS: MatchField[] = ['group_id', 'user_id', 'bot_id'];
+/** Agent 资源授权范围：仅群组 / 用户。 */
+export const AGENT_RESOURCE_MATCH_FIELDS: MatchField[] = ['group_id', 'user_id'];
 
 /** 组嵌套深度：0=根层，1=子层（括号内）；最多 2 层组 */
 export const MAX_GROUP_DEPTH = 1;
@@ -299,11 +301,32 @@ export function treeHasFilledCondition(node: MatchNode): boolean {
   return node.children.some(treeHasFilledCondition);
 }
 
-export function validateMatchExprModel(model: MatchExprModel): string | null {
+export function validateMatchExprModel(
+  model: MatchExprModel,
+  allowedFields: MatchField[] = MATCH_FIELDS,
+): string | null {
   if (model.mode === 'all') return null;
-  if (model.raw?.trim()) return null;
+  if (model.raw?.trim()) {
+    const raw = model.raw.trim();
+    const allowed = new Set(allowedFields);
+    // 粗检：raw 里出现未授权字段名则拒绝（服务端仍会再校验）
+    for (const field of MATCH_FIELDS) {
+      if (!allowed.has(field) && new RegExp(`\\b${field}\\b`).test(raw)) {
+        return 'match expr field not allowed';
+      }
+    }
+    return null;
+  }
   if (!treeHasFilledCondition(model.root)) {
     return 'match expr condition value required';
+  }
+  const allowed = new Set(allowedFields);
+  const walk = (node: MatchNode): boolean => {
+    if (node.kind === 'cond') return allowed.has(node.field);
+    return node.children.every(walk);
+  };
+  if (!walk(model.root)) {
+    return 'match expr field not allowed';
   }
   return null;
 }

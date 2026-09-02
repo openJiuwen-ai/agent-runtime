@@ -15,6 +15,7 @@ import {
   matchExprToEditorString,
   parseMatchExpr,
   validateMatchExprModel,
+  AGENT_RESOURCE_MATCH_FIELDS,
 } from '../../../utils/matchExpr';
 import { formatTime } from '../../../utils/format';
 import { Empty } from '../../../components/Empty';
@@ -208,7 +209,7 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
       toast('warn', t('policies.fieldRequired', { field: t('instanceDetail.resourcePanel.agent.resourceName') }));
       return;
     }
-    const err = validateMatchExprModel(parseMatchExpr(matchExpr));
+    const err = validateMatchExprModel(parseMatchExpr(matchExpr), AGENT_RESOURCE_MATCH_FIELDS);
     if (err) {
       toast('danger', t('policies.matchExpr.invalid'));
       return;
@@ -439,7 +440,7 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
                     toast('warn', t('policies.fieldRequired', { field: t('instanceDetail.resourcePanel.agent.resourceName') }));
                     return;
                   }
-                  const err = validateMatchExprModel(parseMatchExpr(addMatchExpr));
+                  const err = validateMatchExprModel(parseMatchExpr(addMatchExpr), AGENT_RESOURCE_MATCH_FIELDS);
                   if (err) { toast('danger', t('policies.matchExpr.invalid')); return; }
                   setBusy(true);
                   try {
@@ -514,7 +515,11 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
           <label className="block mb-3">
             <FieldLabel>{t('instanceDetail.resourcePanel.agent.scopeLabel')}</FieldLabel>
             <div className="mt-1">
-              <MatchExprEditor value={addMatchExpr} onChange={setAddMatchExpr} />
+              <MatchExprEditor
+                value={addMatchExpr}
+                onChange={setAddMatchExpr}
+                allowedFields={AGENT_RESOURCE_MATCH_FIELDS}
+              />
             </div>
           </label>
           <label className="block">
@@ -574,7 +579,12 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
           <label className="block mb-3">
             <FieldLabel>{t('instanceDetail.resourcePanel.agent.scopeLabel')}</FieldLabel>
             <div className="mt-1">
-              <MatchExprEditor key={`${editing.template_id}:${editing.resource_id}`} value={matchExpr} onChange={setMatchExpr} />
+              <MatchExprEditor
+                key={`${editing.template_id}:${editing.resource_id}`}
+                value={matchExpr}
+                onChange={setMatchExpr}
+                allowedFields={AGENT_RESOURCE_MATCH_FIELDS}
+              />
             </div>
           </label>
           <label className="block mb-3">
