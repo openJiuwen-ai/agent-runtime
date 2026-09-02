@@ -1,4 +1,8 @@
-"""Gateway 模板引用索引表 ``jid_template_ref``（MDB）。"""
+"""Gateway / Runtime 模板引用索引表 ``jid_template_ref``（MDB）。
+
+Gateway 普通模板用 ``template_ref`` 槽位（如 default_model）；
+Runtime 服务配置用 ``slot=service_config``，与前者同表共存。
+"""
 
 from __future__ import annotations
 

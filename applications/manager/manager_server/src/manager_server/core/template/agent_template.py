@@ -65,6 +65,10 @@ def agent_template_out(row: Any) -> dict[str, Any]:
     }
 
 
+# 与其它模板模块对齐，供 push_template_to_gateway 通过 row_to_out 解析。
+row_to_out = agent_template_out
+
+
 class AgentTemplateService:
     """Agent 模板目录 CRUD。"""
 
@@ -138,9 +142,10 @@ class AgentTemplateService:
         return created
 
     async def update(self, template_id: str, body: AgentTemplateUpdateBody) -> dict[str, Any] | None:
-        if await self._h.get(_AGENT_TPL, {"template_id": template_id}) is None:
+        existing = await self._h.get(_AGENT_TPL, {"template_id": template_id})
+        if existing is None:
             return None
-        updates: dict[str, Any] = {"updated_at": utc_now()}
+        updates: dict[str, Any] = {}
         if body.template_name is not None:
             updates["template_name"] = body.template_name
         if body.description is not None:
@@ -153,7 +158,25 @@ class AgentTemplateService:
             updates["enabled"] = body.enabled
         if body.data is not None:
             updates["data"] = body.data
-        await self._h.update(_AGENT_TPL, {"template_id": template_id}, updates)
+
+        if not updates:
+            return agent_template_out(existing)
+
+        from manager_server.core.template.push_template_to_gateway import (
+            AGENT_TEMPLATES_KIND,
+            update_template_on_referencing_gateways,
+        )
+
+        # 先推 Gateway，成功后再写 Manager
+        await update_template_on_referencing_gateways(
+            self._h,
+            AGENT_TEMPLATES_KIND,
+            template_id,
+            updates,
+        )
+        payload = dict(updates)
+        payload["updated_at"] = utc_now()
+        await self._h.update(_AGENT_TPL, {"template_id": template_id}, payload)
         return await self.get(template_id)
 
     async def delete(self, template_id: str) -> bool:
@@ -161,6 +184,7 @@ class AgentTemplateService:
             return False
         from manager_server.core.instance_resource import InstanceAgentResourceService
 
+        # 先清实例授权（remove_resource 路径会卸 Gateway；此处按模板批量清 MDB 行）。
         await InstanceAgentResourceService(self._h).delete_by_template(template_id)
         await self._h.delete(_AGENT_TPL, {"template_id": template_id})
         _log.info("[Template] agent_template.delete", template_id=template_id)

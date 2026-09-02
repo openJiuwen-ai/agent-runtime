@@ -12,6 +12,8 @@ import json
 from typing import Any, Iterator
 
 ALLOWED_MATCH_NAMES = frozenset({"user_id", "group_id", "bot_id"})
+# Agent 资源授权范围仅用户 / 群组，不允许按 agent（bot_id）匹配。
+AGENT_RESOURCE_MATCH_NAMES = frozenset({"user_id", "group_id"})
 
 _INVALID_PREFIX = "invalid match_expr: "
 
@@ -62,17 +64,27 @@ def match_expr_is_unconditional(value: Any) -> bool:
     return not any(marker in canon for marker in ("==", "!=", " in "))
 
 
-def validate_match_expr(value: Any) -> Any:
+def validate_match_expr(
+    value: Any,
+    *,
+    allowed_names: frozenset[str] | None = None,
+) -> Any:
     """校验并返回规范后的 ``match_expr``；不合规则抛 ``ValueError``（``invalid match_expr: …``）。"""
+    names = allowed_names if allowed_names is not None else ALLOWED_MATCH_NAMES
     canon = canonicalize_match_expr(value)
     if canon == []:
         return []
     if isinstance(canon, list):
         for item in canon:
-            _validate_expr_string(item)
+            _validate_expr_string(item, allowed_names=names)
         return canon
-    _validate_expr_string(str(canon))
+    _validate_expr_string(str(canon), allowed_names=names)
     return canon
+
+
+def validate_agent_resource_match_expr(value: Any) -> Any:
+    """Agent 资源授权范围：仅允许 ``user_id`` / ``group_id``（禁止 ``bot_id``）。"""
+    return validate_match_expr(value, allowed_names=AGENT_RESOURCE_MATCH_NAMES)
 
 
 def evaluate_match_expr(
@@ -117,13 +129,17 @@ def iter_equality_binds(value: Any) -> Iterator[tuple[str, str]]:
         yield from _iter_eq_binds(tree.body)
 
 
-def _validate_expr_string(text: str) -> None:
+def _validate_expr_string(
+    text: str,
+    *,
+    allowed_names: frozenset[str] = ALLOWED_MATCH_NAMES,
+) -> None:
     try:
         tree = ast.parse(text, mode="eval")
     except SyntaxError as exc:
         raise ValueError(f"{_INVALID_PREFIX}syntax error") from exc
     try:
-        _Validator().visit(tree)
+        _Validator(allowed_names).visit(tree)
     except ValueError:
         raise
     except Exception as exc:
@@ -132,13 +148,16 @@ def _validate_expr_string(text: str) -> None:
 
 def _eval_expr_string(text: str, ctx: dict[str, str]) -> bool:
     tree = ast.parse(text, mode="eval")
-    _Validator().visit(tree)
+    _Validator(ALLOWED_MATCH_NAMES).visit(tree)
     return bool(_eval_node(tree.body, ctx))
 
 
 class _Validator(ast.NodeVisitor):
     # ast.NodeVisitor 约定方法名为 visit_<NodeType>（非 snake_case），不可改名。
     # pylint: disable=huawei-invalid-name
+
+    def __init__(self, allowed_names: frozenset[str] = ALLOWED_MATCH_NAMES) -> None:
+        self._allowed_names = allowed_names
 
     def generic_visit(self, node: ast.AST) -> None:
         if not isinstance(
@@ -164,7 +183,7 @@ class _Validator(ast.NodeVisitor):
         super().generic_visit(node)
 
     def visit_Name(self, node: ast.Name) -> None:  # noqa: N802
-        if node.id not in ALLOWED_MATCH_NAMES:
+        if node.id not in self._allowed_names:
             raise ValueError(f"{_INVALID_PREFIX}unknown name")
         self.generic_visit(node)
 

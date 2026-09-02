@@ -294,6 +294,15 @@ class ServiceConfigTemplateService:
         )
         if row is None:
             return None
+
+        # Runtime config_sync 从 MDB 读模板，须先落库再按引用重推。
+        from manager_server.core.template.push_template_to_runtime import (
+            update_service_template_on_referencing_runtimes,
+        )
+
+        await update_service_template_on_referencing_runtimes(
+            self._handler, template_id
+        )
         return row_to_out(row)
 
     async def delete(self, template_id: str) -> bool:

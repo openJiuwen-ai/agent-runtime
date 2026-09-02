@@ -27,8 +27,6 @@ export function InstanceDetailPanel({ instance, onOpenEdit, onRefresh }: Props) 
             <div className="card-title">{t('instanceDetail.connectivity')}</div>
           </div>
           <div className="text-xs grid grid-cols-[7.5em_1fr] gap-y-2 gap-x-2 mono">
-            <div className="text-muted">namespace</div>
-            <div>{d?.namespace ?? '-'}</div>
             <div className="text-muted">gateway host</div>
             <div className="truncate" title={d?.gateway_config_host ?? ''}>
               {d?.gateway_config_host ?? '-'}
@@ -48,23 +46,21 @@ export function InstanceDetailPanel({ instance, onOpenEdit, onRefresh }: Props) 
             <div className="text-muted">gateway</div>
             <div className="flex items-center gap-2">
               {d?.gateway_status ? <StatusBadge status={d.gateway_status} /> : '-'}
-              <span className="mono text-muted">{relativeTime(d?.gateway_last_alive)}</span>
+              <span className="mono text-muted" title={relativeTime(d?.gateway_last_alive)}>
+                {formatTime(d?.gateway_last_alive)}
+              </span>
             </div>
             <div className="text-muted">runtime</div>
             <div className="flex items-center gap-2">
               {d?.runtime_status ? <StatusBadge status={d.runtime_status} /> : '-'}
-              <span className="mono text-muted">{relativeTime(d?.runtime_last_alive)}</span>
+              <span className="mono text-muted" title={relativeTime(d?.runtime_last_alive)}>
+                {formatTime(d?.runtime_last_alive)}
+              </span>
             </div>
-            <div className="text-muted">space</div>
-            <div className="mono">{d?.space_id ?? '-'}</div>
             <div className="text-muted">created</div>
-            <div className="mono">
-              {formatTime(d?.created_at)} ({d?.created_by ?? '-'})
-            </div>
+            <div className="mono">{formatTime(d?.created_at)}</div>
             <div className="text-muted">updated</div>
-            <div className="mono">
-              {formatTime(d?.updated_at)} ({d?.updated_by ?? '-'})
-            </div>
+            <div className="mono">{formatTime(d?.updated_at)}</div>
             <div className="text-muted">description</div>
             <div>{d?.description ?? '-'}</div>
           </div>

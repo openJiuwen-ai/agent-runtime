@@ -3,7 +3,6 @@ import { useTranslation } from 'react-i18next';
 import { useAsync } from '../../hooks/useAsync';
 import { useRouter } from '../../router';
 import { InstanceApi, ApiError } from '../../services/api';
-import { StatusBadge } from '../../components/StatusBadge';
 import { Modal } from '../../components/Modal';
 import { JsonField, tryParseJson, useInvalidJsonChecker } from '../../components/JsonField';
 import { safeStringify } from '../../utils/format';
@@ -93,12 +92,6 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
                 {instanceId}
               </div>
             </div>
-            {instance.data?.gateway_status && (
-              <StatusBadge status={instance.data.gateway_status} />
-            )}
-            {instance.data?.runtime_status && (
-              <StatusBadge status={instance.data.runtime_status} />
-            )}
           </div>
 
           <div className="tabs-bar max-w-full shrink-0 self-center overflow-x-auto lg:justify-self-center">

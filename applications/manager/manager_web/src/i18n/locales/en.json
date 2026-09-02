@@ -111,11 +111,14 @@
     "group": "Group",
     "space": "Space",
     "gateway": "Gateway",
+    "runtime": "Runtime",
     "agentServer": "AgentServer",
     "otherService": "Other",
     "viewDetail": "Detail",
     "noServices": "No Gateway / AgentServer yet (awaiting health probe)",
     "lastAlive": "Last alive",
+    "gatewayLastAlive": "Gateway last probe",
+    "runtimeLastAlive": "Runtime last probe",
     "lastUpdated": "Last updated",
     "endpoint": "Endpoint",
     "version": "Version",
@@ -123,9 +126,9 @@
     "filterStatus": "Filter by status",
     "instanceName": "Instance Name",
     "modifiedAt": "Modified At",
-    "viewBrief": "Brief view",
-    "viewDetailed": "Detailed view",
-    "searchPlaceholder": "Search instance name, ID, status, or namespace"
+    "viewBrief": "Card view",
+    "viewList": "List view",
+    "searchPlaceholder": "Search instance name, ID, or status"
   },
   "instanceForm": {
     "name": "Instance Name",

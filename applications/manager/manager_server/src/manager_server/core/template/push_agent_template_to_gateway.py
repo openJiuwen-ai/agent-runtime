@@ -1,4 +1,8 @@
-"""实例 Agent 资源变更时，将 agent_template / 引用模板 / instance_agent_resource 定向下发到 Gateway。"""
+"""实例 Agent 资源变更时，编排 agent 模板 / 嵌套普通模板 / resource 下发到 Gateway。
+
+agent 模板本身的 CRUD 推送见 ``push_template_to_gateway``（``agent_templates`` kind）。
+本模块只负责 ``instance_agent_resource`` 生命周期，以及授权时连带推送模板。
+"""
 
 from __future__ import annotations
 
@@ -6,13 +10,12 @@ from typing import Any
 
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 
-from manager_server.core.template.agent_template import agent_template_out
 from manager_server.core.template.push_template_to_gateway import (
     _apply_slot_pair_delta,
-    _build_sync_payloads,
-    _create_template_on_gateway,
-    _resolve_template_kind,
+    delete_agent_template_on_gateway,
+    ensure_referenced_templates_on_gateway,
     slot_template_pairs_from_template_ref,
+    upsert_agent_template_on_gateway,
 )
 from manager_server.infrastructure.logger import get_logger
 from manager_server.infrastructure.template_ref import read_template_ref_from_row
@@ -27,21 +30,11 @@ _LIST_ALL_CAP = 10_000
 _GRANT = INSTANCE_AGENT_RESOURCE_TABLE_DEF.table_name
 _AGENT_TPL = AGENT_TEMPLATE_TABLE_DEF.table_name
 
-_AGENT_TEMPLATE_PATH = "/api/v1/agent-templates"
 _AGENT_RESOURCE_PATH = "/api/v1/instance-agent-resources"
-_PUSH_DROP_KEYS = frozenset({"id", "created_at", "updated_at", "jiuwenclaw_id"})
 
 
 def _g(row: Any, key: str, default: Any = None) -> Any:
     return getattr(row, key, default)
-
-
-def _clean_payload(data: dict[str, Any]) -> dict[str, Any]:
-    return {k: v for k, v in data.items() if k not in _PUSH_DROP_KEYS}
-
-
-def _clean_agent_template(row: Any) -> dict[str, Any]:
-    return _clean_payload(agent_template_out(row))
 
 
 async def _count_distinct_resources_for_template(
@@ -129,33 +122,6 @@ def build_agent_resource_gateway_payload(
     }
 
 
-async def _upsert_agent_template_on_gateway(
-    jiuwenclaw_id: str,
-    template: dict[str, Any],
-) -> None:
-    await gateway_request(
-        jiuwenclaw_id,
-        "POST",
-        _AGENT_TEMPLATE_PATH,
-        template,
-    )
-
-
-async def _delete_agent_template_on_gateway(
-    jiuwenclaw_id: str,
-    template_id: str,
-) -> None:
-    tid = str(template_id or "").strip()
-    if not tid:
-        return
-    await gateway_request(
-        jiuwenclaw_id,
-        "DELETE",
-        f"{_AGENT_TEMPLATE_PATH}/{tid}",
-        {},
-    )
-
-
 async def _upsert_agent_resource_on_gateway(
     jiuwenclaw_id: str,
     payload: dict[str, Any],
@@ -181,30 +147,6 @@ async def _delete_agent_resource_on_gateway(
         f"{_AGENT_RESOURCE_PATH}/{rid}",
         {},
     )
-
-
-async def _ensure_referenced_templates_on_gateway(
-    handler: DBHandler,
-    jiuwenclaw_id: str,
-    template_ref: Any,
-) -> None:
-    pairs = slot_template_pairs_from_template_ref(template_ref)
-    if not pairs:
-        return
-    by_kind: dict[str, set[str]] = {}
-    for _slot, tid in pairs:
-        kind = await _resolve_template_kind(handler, tid)
-        if kind is None:
-            continue
-        by_kind.setdefault(kind, set()).add(tid)
-    for kind, template_ids in sorted(by_kind.items()):
-        payloads = await _build_sync_payloads(handler, kind, template_ids)
-        for idx, tmpl in enumerate(payloads):
-            await _create_template_on_gateway(
-                jiuwenclaw_id,
-                kind,
-                tmpl,
-            )
 
 
 async def sync_agent_resource_to_gateway(
@@ -247,17 +189,11 @@ async def sync_agent_resource_to_gateway(
             removed=set(),
         )
     else:
-        await _ensure_referenced_templates_on_gateway(handler, jid, template_ref)
+        await ensure_referenced_templates_on_gateway(handler, jid, template_ref)
 
-    await _upsert_agent_template_on_gateway(
-        jid,
-        _clean_agent_template(tpl_row),
-    )
+    await upsert_agent_template_on_gateway(handler, jid, tid)
     payload = resource_payload or await _build_agent_resource_payload(handler, jid, rid)
-    await _upsert_agent_resource_on_gateway(
-        jid,
-        payload,
-    )
+    await _upsert_agent_resource_on_gateway(jid, payload)
     logger.info(
         "[push_agent_template] synced resource jiuwenclaw_id=%s resource_id=%s template_id=%s",
         jid,
@@ -285,10 +221,7 @@ async def delete_agent_resource_from_gateway(
     if not jid or not rid:
         return
 
-    await _delete_agent_resource_on_gateway(
-        jid,
-        rid,
-    )
+    await _delete_agent_resource_on_gateway(jid, rid)
 
     if not tid:
         return
@@ -318,10 +251,7 @@ async def delete_agent_resource_from_gateway(
                 read_template_ref_from_row(tpl_row)
             ),
         )
-    await _delete_agent_template_on_gateway(
-        jid,
-        tid,
-    )
+    await delete_agent_template_on_gateway(jid, tid)
     logger.info(
         "[push_agent_template] removed resource and agent_template "
         "jiuwenclaw_id=%s resource_id=%s template_id=%s",
@@ -335,7 +265,11 @@ async def push_agent_resources_sync_to_gateway(
     handler: DBHandler,
     jiuwenclaw_id: str,
 ) -> dict[str, Any]:
-    """Gateway 注册后：bulk 同步该实例全部 Agent 资源及相关模板。"""
+    """Gateway 注册后：bulk 同步该实例全部 Agent 资源及相关模板。
+
+    嵌套普通模板通常已由 ``sync_referenced_templates_to_gateway`` 推送；
+    这里仍 ensure + upsert agent 模板，以便本函数可单独调用。
+    """
     jid = str(jiuwenclaw_id or "").strip()
     if not jid:
         raise ValueError("jiuwenclaw_id is required")
@@ -363,24 +297,18 @@ async def push_agent_resources_sync_to_gateway(
         tpl_row = await handler.get(_AGENT_TPL, {"template_id": tid})
         if tpl_row is None:
             continue
-        await _ensure_referenced_templates_on_gateway(
+        await ensure_referenced_templates_on_gateway(
             handler,
             jid,
             read_template_ref_from_row(tpl_row),
         )
-        await _upsert_agent_template_on_gateway(
-            jid,
-            _clean_agent_template(tpl_row),
-        )
+        await upsert_agent_template_on_gateway(handler, jid, tid)
         synced_templates += 1
 
     synced_resources = 0
-    for idx, rid in enumerate(resource_ids):
+    for rid in resource_ids:
         payload = await _build_agent_resource_payload(handler, jid, rid)
-        await _upsert_agent_resource_on_gateway(
-            jid,
-            payload,
-        )
+        await _upsert_agent_resource_on_gateway(jid, payload)
         synced_resources += 1
 
     return {
