@@ -17,6 +17,7 @@
 
 | 日期 | 文档 | 一句话 |
 |---|---|---|
+| 2026-09 | [模板表策略四列改名(wire 术语统一)](2026-09-template-table-runtime-terms.md) | `min_idle_pods`/`pod_concurrency`/`pod_ttl`/`scope_concurrency` DB 列名与 wire 同名,`_COLUMN_OF` identity 化;wire 契约与 manager 侧零改动;存量库须 RENAME COLUMN |
 | 2026-09 | [config_refresh 强制刷新(代次日落)](2026-09-config-refresh-generation.md) | 新增无载荷端点 `POST /api/session/config_refresh`:RM `generation` 代次(HINCRBY 唯一写点 + REGISTER 服务端烙印)驱动全 scope Pod 优雅日落并按存量配置重建;"当前版本"判定收紧为 ver∧gen,与 config_sync 共用锁(409);415 用例 + 真镜像门禁 e2e 121/121 + 真 cluster 16/16;连带修 LUA_EVICT 残骸自卫与四处 e2e 脚本缺陷 |
 | 2026-09 | [routing_scope 增加 enabled / expires_at](2026-09-routing-scope-enabled-expires.md) | scope 禁用与过期落库;route 墙钟过滤 + 未生效停预热;存量库须 ALTER |
 | 2026-08 | [容器表拆分 + config_sync 三段式契约(K8s 原生形态)](2026-08-container-table-split.md) | 容器规格归一 `service_config_container`(模板持引用)+ volumes/volumeMounts 分离 + **envFrom(secretRef/configMapRef)支持**;wire 三段式**独占**;同值必同 deploy_ver(395 用例 + 真环境 e2e 80/80) |

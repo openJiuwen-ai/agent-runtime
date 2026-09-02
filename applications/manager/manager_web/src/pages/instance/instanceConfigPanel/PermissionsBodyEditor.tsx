@@ -1,34 +1,37 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ApiError, PermissionsApi } from '../../../services/api';
 import { Empty } from '../../../components/Empty';
-import { ConfirmDialog } from '../../../components/ConfirmDialog';
 import { Modal } from '../../../components/Modal';
-import { JsonField, useInvalidJsonChecker } from '../../../components/JsonField';
+import { JsonField } from '../../../components/JsonField';
 import { toast } from '../../../stores/uiStore';
 import { truncate } from '../../../utils/format';
 import type {
   PermissionAction,
-  PermissionRuleAction,
+  PermissionMode,
   PermissionRuleEntry,
+  PermissionSeverity,
   PermissionToolEntry,
   PermissionsFormState,
 } from '../../../types';
-import {
-  createDefaultPermissionsFormState,
-  permissionsBodyToFormState,
-  permissionsFormStateToBody,
-  stripExampleLabel,
-} from './permissionsForm';
+import { stripExampleLabel } from './permissionsForm';
 
-type SectionKey = 'general' | 'tools' | 'rules' | 'fileGuard' | 'advanced';
-
-interface Props {
-  instanceId: string;
-}
+type SectionKey = 'general' | 'tools' | 'rules' | 'fileGuard';
 
 const PERMISSION_ACTIONS: PermissionAction[] = ['allow', 'ask', 'deny'];
-const RULE_ACTIONS: PermissionRuleAction[] = ['allow', 'deny'];
+const PERMISSION_MODES: PermissionMode[] = ['normal', 'strict'];
+const SEVERITIES: PermissionSeverity[] = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
+
+function permissionActionLabel(action: PermissionAction, t: (key: string) => string): string {
+  return t(`instanceConfig.permissions.actions.${action}`);
+}
+
+function permissionModeLabel(mode: PermissionMode, t: (key: string) => string): string {
+  return t(`instanceConfig.permissions.modes.${mode}`);
+}
+
+function severityLabel(severity: PermissionSeverity, t: (key: string) => string): string {
+  return t(`instanceConfig.permissions.severities.${severity}`);
+}
 
 function emptyToolRow(): PermissionToolEntry {
   return { key: `tool-${Date.now()}-${Math.random()}`, name: '', action: 'ask' };
@@ -38,23 +41,47 @@ function emptyRuleRow(): PermissionRuleEntry {
   return {
     key: `rule-${Date.now()}-${Math.random()}`,
     id: '',
-    description: '',
+    tools: [],
     pattern: '',
-    action: 'allow',
+    severity: 'LOW',
   };
 }
 
-export function PermissionsTab({ instanceId }: Props) {
-  const { t } = useTranslation();
-  const checkJson = useInvalidJsonChecker();
+function ruleConfigSummary(row: PermissionRuleEntry, t: (key: string) => string): string {
+  const parts: string[] = [];
+  if (row.pattern) parts.push(`${t('instanceConfig.permissions.rulePattern')}: ${row.pattern}`);
+  if (row.tools.length > 0) {
+    parts.push(`${t('instanceConfig.permissions.ruleTools')}: ${row.tools.join(', ')}`);
+  }
+  parts.push(`${t('instanceConfig.permissions.ruleSeverity')}: ${severityLabel(row.severity, t)}`);
+  return parts.join(' · ');
+}
 
+function parseToolsInput(text: string): string[] {
+  return text
+    .split(/[,，\n]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+export function validatePermissionsFormJson(
+  form: PermissionsFormState,
+  checkJson: (text: string) => string | null,
+  t: (key: string) => string,
+): string | null {
+  const err = checkJson(stripExampleLabel(form.fileGuardJson));
+  if (err) return `${t('instanceConfig.permissions.sections.fileGuard')}: ${err}`;
+  return null;
+}
+
+interface Props {
+  form: PermissionsFormState;
+  onChange: (next: PermissionsFormState) => void;
+}
+
+export function PermissionsBodyEditor({ form, onChange }: Props) {
+  const { t } = useTranslation();
   const [section, setSection] = useState<SectionKey>('general');
-  const [form, setForm] = useState<PermissionsFormState>(() => createDefaultPermissionsFormState());
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [hasRemoteConfig, setHasRemoteConfig] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [deleteOpen, setDeleteOpen] = useState(false);
 
   const [toolModalOpen, setToolModalOpen] = useState(false);
   const [editingTool, setEditingTool] = useState<PermissionToolEntry | null>(null);
@@ -63,80 +90,10 @@ export function PermissionsTab({ instanceId }: Props) {
   const [ruleModalOpen, setRuleModalOpen] = useState(false);
   const [editingRule, setEditingRule] = useState<PermissionRuleEntry | null>(null);
   const [ruleForm, setRuleForm] = useState<PermissionRuleEntry>(emptyRuleRow());
-
-  const reload = useCallback(async () => {
-    setLoading(true);
-    setLoadError(null);
-    try {
-      const data = await PermissionsApi.get(instanceId);
-      setForm(permissionsBodyToFormState(data.body ?? {}));
-      setHasRemoteConfig(true);
-    } catch (e) {
-      if (e instanceof ApiError && e.status === 404) {
-        setForm(createDefaultPermissionsFormState());
-        setHasRemoteConfig(false);
-      } else {
-        setLoadError(e instanceof ApiError ? e.detail : (e as Error).message);
-      }
-    } finally {
-      setLoading(false);
-    }
-  }, [instanceId]);
-
-  useEffect(() => {
-    void reload();
-  }, [reload]);
+  const [ruleToolsText, setRuleToolsText] = useState('');
 
   const updateForm = <K extends keyof PermissionsFormState>(key: K, value: PermissionsFormState[K]) => {
-    setForm((prev) => ({ ...prev, [key]: value }));
-  };
-
-  const validateJsonFields = (): string | null => {
-    const fields: Array<[string, string]> = [
-      [t('instanceConfig.permissions.fileGuardGlobal'), form.fileGuardGlobalJson],
-      [t('instanceConfig.permissions.fileGuardTrustedExec'), form.fileGuardTrustedExecJson],
-      [t('instanceConfig.permissions.fileGuardToolBindings'), form.fileGuardToolBindingsJson],
-    ];
-    for (const [label, value] of fields) {
-      const err = checkJson(stripExampleLabel(value));
-      if (err) return `${label}: ${err}`;
-    }
-    return null;
-  };
-
-  const save = async () => {
-    const jsonErr = validateJsonFields();
-    if (jsonErr) {
-      toast('danger', jsonErr);
-      return;
-    }
-    setSaving(true);
-    try {
-      await PermissionsApi.upsert(instanceId, permissionsFormStateToBody(form));
-      setHasRemoteConfig(true);
-      toast('success', t('success.saved'));
-    } catch (e) {
-      toast(
-        'danger',
-        t('errors.saveFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message })
-      );
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const removeConfig = async () => {
-    try {
-      await PermissionsApi.remove(instanceId);
-      setForm(createDefaultPermissionsFormState());
-      setHasRemoteConfig(false);
-      toast('success', t('instanceConfig.permissions.deleted'));
-    } catch (e) {
-      toast(
-        'danger',
-        t('errors.deleteFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message })
-      );
-    }
+    onChange({ ...form, [key]: value });
   };
 
   const openToolModal = (row?: PermissionToolEntry) => {
@@ -152,7 +109,7 @@ export function PermissionsTab({ instanceId }: Props) {
 
   const submitTool = () => {
     if (!toolForm.name.trim()) {
-      toast('warn', t('instanceConfig.permissions.toolName'));
+      toast('warn', t('instanceConfig.permissions.toolNameRequired'));
       return;
     }
     if (editingTool) {
@@ -169,28 +126,31 @@ export function PermissionsTab({ instanceId }: Props) {
   const openRuleModal = (row?: PermissionRuleEntry) => {
     if (row) {
       setEditingRule(row);
-      setRuleForm({ ...row });
+      setRuleForm({ ...row, tools: [...row.tools] });
+      setRuleToolsText(row.tools.join(', '));
     } else {
       setEditingRule(null);
       setRuleForm(emptyRuleRow());
+      setRuleToolsText('');
     }
     setRuleModalOpen(true);
   };
 
   const submitRule = () => {
     if (!ruleForm.id.trim()) {
-      toast('warn', t('instanceConfig.permissions.ruleId'));
+      toast('warn', t('instanceConfig.permissions.ruleIdRequired'));
       return;
     }
     if (!ruleForm.pattern.trim()) {
-      toast('warn', t('instanceConfig.permissions.rulePattern'));
+      toast('warn', t('instanceConfig.permissions.rulePatternRequired'));
       return;
     }
-    const next = {
+    const next: PermissionRuleEntry = {
       ...ruleForm,
       id: ruleForm.id.trim(),
       pattern: ruleForm.pattern.trim(),
-      description: ruleForm.description.trim(),
+      tools: parseToolsInput(ruleToolsText),
+      severity: ruleForm.severity,
     };
     if (editingRule) {
       updateForm(
@@ -208,40 +168,10 @@ export function PermissionsTab({ instanceId }: Props) {
     { key: 'tools', label: t('instanceConfig.permissions.sections.tools') },
     { key: 'rules', label: t('instanceConfig.permissions.sections.rules') },
     { key: 'fileGuard', label: t('instanceConfig.permissions.sections.fileGuard') },
-    { key: 'advanced', label: t('instanceConfig.permissions.sections.advanced') },
   ];
-
-  if (loading) {
-    return <div className="p-4 text-sm text-muted">{t('common.loading')}</div>;
-  }
-
-  if (loadError) {
-    return (
-      <div className="p-4 text-sm text-danger">
-        {t('errors.loadFailed', { detail: loadError })}
-        <button className="btn sm ml-2" onClick={() => void reload()}>
-          {t('common.refresh')}
-        </button>
-      </div>
-    );
-  }
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex items-center gap-2 flex-wrap">
-        <button className="btn sm" onClick={() => void reload()}>
-          {t('common.refresh')}
-        </button>
-        {hasRemoteConfig && (
-          <button className="btn sm danger" onClick={() => setDeleteOpen(true)}>
-            {t('instanceConfig.permissions.resetToYaml')}
-          </button>
-        )}
-        <button className="btn primary sm" onClick={() => void save()} disabled={saving}>
-          {saving ? t('common.loading') : t('common.save')}
-        </button>
-      </div>
-
       <div className="tabs-bar overflow-x-auto">
         {sections.map((it) => (
           <button
@@ -267,30 +197,41 @@ export function PermissionsTab({ instanceId }: Props) {
               <span>{t('instanceConfig.permissions.enabled')}</span>
             </label>
           </div>
+          <div className="md:col-span-2">
+            <label className="label">{t('instanceConfig.permissions.permissionMode')}</label>
+            <div className="flex flex-wrap gap-2 mt-1">
+              {PERMISSION_MODES.map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  className={`btn sm ${form.permissionMode === mode ? 'primary' : 'ghost'}`}
+                  onClick={() => updateForm('permissionMode', mode)}
+                >
+                  {permissionModeLabel(mode, t)}
+                </button>
+              ))}
+            </div>
+            <p className="text-[11px] text-muted mt-1">{t('instanceConfig.permissions.permissionModeHint')}</p>
+          </div>
           <div>
             <label className="label">{t('instanceConfig.permissions.defaults')}</label>
             <select
               className="select"
-              value={form.defaults}
-              onChange={(e) => updateForm('defaults', e.target.value as PermissionAction)}
+              value={form.defaults['*'] ?? 'allow'}
+              onChange={(e) =>
+                updateForm('defaults', {
+                  ...form.defaults,
+                  '*': e.target.value as PermissionAction,
+                })
+              }
             >
               {PERMISSION_ACTIONS.map((action) => (
                 <option key={action} value={action}>
-                  {action}
+                  {permissionActionLabel(action, t)}
                 </option>
               ))}
             </select>
             <p className="text-[11px] text-muted mt-1">{t('instanceConfig.permissions.defaultsHint')}</p>
-          </div>
-          <div className="md:col-span-2">
-            <label className="label">{t('instanceConfig.permissions.denyGuidanceMessage')}</label>
-            <textarea
-              className="textarea"
-              rows={3}
-              value={form.denyGuidanceMessage}
-              onChange={(e) => updateForm('denyGuidanceMessage', e.target.value)}
-              placeholder={t('instanceConfig.permissions.denyGuidanceMessageHint')}
-            />
           </div>
         </div>
       )}
@@ -320,7 +261,7 @@ export function PermissionsTab({ instanceId }: Props) {
                     <tr key={row.key}>
                       <td className="mono text-sm">{row.name}</td>
                       <td>
-                        <span className="tag">{row.action}</span>
+                        <span className="tag">{permissionActionLabel(row.action, t)}</span>
                       </td>
                       <td>
                         <div className="flex items-center gap-1">
@@ -361,23 +302,17 @@ export function PermissionsTab({ instanceId }: Props) {
                 <thead>
                   <tr>
                     <th>{t('instanceConfig.permissions.ruleId')}</th>
-                    <th>{t('instanceConfig.permissions.rulePattern')}</th>
-                    <th>{t('instanceConfig.permissions.action')}</th>
-                    <th>{t('common.detail')}</th>
+                    <th>{t('instanceConfig.permissions.ruleConfig')}</th>
                     <th>{t('common.actions')}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {form.rules.map((row) => (
                     <tr key={row.key}>
-                      <td className="mono text-xs">{row.id}</td>
-                      <td className="mono text-[11px] text-muted" title={row.pattern}>
-                        {truncate(row.pattern, 48)}
+                      <td className="mono text-xs whitespace-nowrap">{row.id}</td>
+                      <td className="text-xs text-muted max-w-[28rem]" title={ruleConfigSummary(row, t)}>
+                        {truncate(ruleConfigSummary(row, t), 96)}
                       </td>
-                      <td>
-                        <span className="tag">{row.action}</span>
-                      </td>
-                      <td className="text-xs text-muted">{truncate(row.description, 40)}</td>
                       <td>
                         <div className="flex items-center gap-1">
                           <button className="btn sm ghost" type="button" onClick={() => openRuleModal(row)}>
@@ -402,68 +337,14 @@ export function PermissionsTab({ instanceId }: Props) {
       )}
 
       {section === 'fileGuard' && (
-        <div className="card grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="md:col-span-2 text-sm font-medium">{t('instanceConfig.permissions.fileGuardWorkspace')}</div>
-          <div className="md:col-span-2">
-            <label className="flex items-center gap-2 cursor-pointer border border-border rounded-md px-3 py-2 w-fit hover:bg-bg-hover">
-              <input
-                type="checkbox"
-                checked={form.fileGuardWorkspaceRwEnabled}
-                onChange={(e) => updateForm('fileGuardWorkspaceRwEnabled', e.target.checked)}
-              />
-              <span>{t('instanceConfig.permissions.fileGuardRwEnabled')}</span>
-            </label>
-          </div>
-          <div className="md:col-span-2">
-            <JsonField
-              label={t('instanceConfig.permissions.fileGuardGlobal')}
-              value={form.fileGuardGlobalJson}
-              onChange={(v) => updateForm('fileGuardGlobalJson', v)}
-              rows={6}
-            />
-          </div>
-          <div className="md:col-span-2">
-            <JsonField
-              label={t('instanceConfig.permissions.fileGuardTrustedExec')}
-              value={form.fileGuardTrustedExecJson}
-              onChange={(v) => updateForm('fileGuardTrustedExecJson', v)}
-              rows={4}
-            />
-          </div>
-          <div className="md:col-span-2">
-            <JsonField
-              label={t('instanceConfig.permissions.fileGuardToolBindings')}
-              value={form.fileGuardToolBindingsJson}
-              onChange={(v) => updateForm('fileGuardToolBindingsJson', v)}
-              rows={6}
-            />
-          </div>
-        </div>
-      )}
-
-      {section === 'advanced' && (
-        <div className="card grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="md:col-span-2 text-sm font-medium">{t('instanceConfig.permissions.commandIntent')}</div>
-          <div>
-            <label className="flex items-center gap-2 cursor-pointer border border-border rounded-md px-3 py-2 w-fit hover:bg-bg-hover">
-              <input
-                type="checkbox"
-                checked={form.commandIntentEnabled}
-                onChange={(e) => updateForm('commandIntentEnabled', e.target.checked)}
-              />
-              <span>{t('instanceConfig.permissions.commandIntentEnabled')}</span>
-            </label>
-          </div>
-          <div>
-            <label className="label">{t('instanceConfig.permissions.commandIntentTimeout')}</label>
-            <input
-              className="input"
-              type="number"
-              min={1}
-              value={form.commandIntentTimeout}
-              onChange={(e) => updateForm('commandIntentTimeout', Number(e.target.value) || 15)}
-            />
-          </div>
+        <div className="card">
+          <JsonField
+            label={t('instanceConfig.permissions.fileGuardJson')}
+            value={form.fileGuardJson}
+            onChange={(v) => updateForm('fileGuardJson', v)}
+            rows={16}
+          />
+          <p className="text-[11px] text-muted mt-2">{t('instanceConfig.permissions.fileGuardJsonHint')}</p>
         </div>
       )}
 
@@ -501,7 +382,7 @@ export function PermissionsTab({ instanceId }: Props) {
             >
               {PERMISSION_ACTIONS.map((action) => (
                 <option key={action} value={action}>
-                  {action}
+                  {permissionActionLabel(action, t)}
                 </option>
               ))}
             </select>
@@ -535,15 +416,15 @@ export function PermissionsTab({ instanceId }: Props) {
             />
           </div>
           <div>
-            <label className="label">{t('instanceConfig.permissions.action')}</label>
+            <label className="label">{t('instanceConfig.permissions.ruleSeverity')}</label>
             <select
               className="select"
-              value={ruleForm.action}
-              onChange={(e) => setRuleForm((s) => ({ ...s, action: e.target.value as PermissionRuleAction }))}
+              value={ruleForm.severity}
+              onChange={(e) => setRuleForm((s) => ({ ...s, severity: e.target.value as PermissionSeverity }))}
             >
-              {RULE_ACTIONS.map((action) => (
-                <option key={action} value={action}>
-                  {action}
+              {SEVERITIES.map((severity) => (
+                <option key={severity} value={severity}>
+                  {severityLabel(severity, t)}
                 </option>
               ))}
             </select>
@@ -558,23 +439,17 @@ export function PermissionsTab({ instanceId }: Props) {
             />
           </div>
           <div className="md:col-span-2">
-            <label className="label">{t('common.detail')}</label>
+            <label className="label">{t('instanceConfig.permissions.ruleTools')}</label>
             <input
-              className="input"
-              value={ruleForm.description}
-              onChange={(e) => setRuleForm((s) => ({ ...s, description: e.target.value }))}
+              className="input mono text-xs"
+              value={ruleToolsText}
+              onChange={(e) => setRuleToolsText(e.target.value)}
+              placeholder="bash, mcp_exec_command, create_terminal"
             />
+            <p className="text-[11px] text-muted mt-1">{t('instanceConfig.permissions.ruleToolsHint')}</p>
           </div>
         </div>
       </Modal>
-
-      <ConfirmDialog
-        open={deleteOpen}
-        message={t('instanceConfig.permissions.deleteConfirm')}
-        danger
-        onConfirm={() => void removeConfig()}
-        onClose={() => setDeleteOpen(false)}
-      />
     </div>
   );
 }

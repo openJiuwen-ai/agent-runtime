@@ -27,7 +27,8 @@ export interface LogMaskingRuleCreateBody {
 export type LogMaskingRuleUpdateBody = Partial<LogMaskingRuleCreateBody>;
 
 export type PermissionAction = 'allow' | 'ask' | 'deny';
-export type PermissionRuleAction = 'allow' | 'deny';
+export type PermissionMode = 'normal' | 'strict';
+export type PermissionSeverity = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 
 export interface PermissionToolEntry {
   key: string;
@@ -35,40 +36,28 @@ export interface PermissionToolEntry {
   action: PermissionAction;
 }
 
+/** 与 config.yaml permissions.rules[*] 对齐 */
 export interface PermissionRuleEntry {
   key: string;
   id: string;
-  description: string;
+  tools: string[];
   pattern: string;
-  action: PermissionRuleAction;
+  severity: PermissionSeverity;
 }
 
 export interface PermissionsFormState {
   enabled: boolean;
-  defaults: PermissionAction;
-  denyGuidanceMessage: string;
+  schema: string;
+  permissionMode: PermissionMode;
+  /** config.yaml defaults，如 { '*': 'allow' } */
+  defaults: Record<string, PermissionAction>;
   tools: PermissionToolEntry[];
   rules: PermissionRuleEntry[];
-  approvalOverrides: unknown[];
   ownerScopes: Record<string, unknown>;
+  denyGuidanceMessage: string;
   externalDirectory?: Record<string, unknown>;
-  commandIntentEnabled: boolean;
-  commandIntentTimeout: number;
-  commandIntentExtraBody: Record<string, unknown>;
-  fileGuardWorkspaceRwEnabled: boolean;
-  fileGuardGlobalJson: string;
-  fileGuardTrustedExecJson: string;
-  fileGuardToolBindingsJson: string;
-}
-
-export interface PermissionsConfig {
-  id?: number;
-  jiuwenclaw_id: string;
-  body: Record<string, unknown>;
-  source?: string;
-  revision?: number;
-  created_at?: string | null;
-  updated_at?: string | null;
+  /** 整块 file_guard JSON，与 config.yaml 字段一致 */
+  fileGuardJson: string;
 }
 
 export interface ListItemsResult<T> {

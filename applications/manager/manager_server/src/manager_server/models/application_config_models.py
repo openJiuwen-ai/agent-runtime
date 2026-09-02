@@ -75,22 +75,6 @@ _TASK_MEMORY_CONFIG_TABLE_DEF = TableDefinition(
     ],
 )
 
-PERMISSIONS_CONFIG_TABLE_DEF = TableDefinition(
-    table_name="permissions_config",
-    columns=[
-        ColumnDefinition("id", "integer", primary_key=True, autoincrement=True, nullable=False),
-        ColumnDefinition("jiuwenclaw_id", "string", length=64, nullable=False),
-        ColumnDefinition("body", "json", nullable=True),
-        ColumnDefinition("source", "string", length=16, nullable=False, default="manager"),
-        ColumnDefinition("revision", "integer", nullable=False, default=1),
-        ColumnDefinition("created_at", "datetime", nullable=False),
-        ColumnDefinition("updated_at", "datetime", nullable=False),
-    ],
-    indexes=[
-        IndexDefinition(["jiuwenclaw_id"], unique=True),
-    ],
-)
-
 _MEMORY_CONFIG_TABLE_DEF = TableDefinition(
     table_name="memory_config",
     columns=[
