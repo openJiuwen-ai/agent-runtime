@@ -80,8 +80,7 @@
     "permissionModeTag": "Mode: {{value}}",
     "deleteConfirm": "Delete this safety guardrail template?",
     "fieldRequired": "Please fill in {{field}}",
-    "unsafeText": "{{field}} contains unsafe content",
-    "intro": "Aligned with config.yaml permissions: enable switch, permission_mode, tool permissions, rules, and file paths. Save as a reusable template."
+    "unsafeText": "{{field}} contains unsafe content"
   },
   "connection": {
     "ok": "Connected",
@@ -348,8 +347,7 @@
       "newRule": "Add rule",
       "editRule": "Edit rule",
       "rulesHint": "Aligned with config.yaml rules: id, tools, pattern, severity",
-      "fileGuardJson": "file_guard (JSON)",
-      "fileGuardJsonHint": "Full file_guard object matching config.yaml (enabled / defaults / workspace / paths, etc.)"
+      "fileGuardJson": "file_guard (JSON)"
     }
   },
   "modelTemplate": {

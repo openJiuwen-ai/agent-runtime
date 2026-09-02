@@ -80,8 +80,7 @@
     "permissionModeTag": "模式：{{value}}",
     "deleteConfirm": "确认删除该安全护栏模板？",
     "fieldRequired": "请填写{{field}}",
-    "unsafeText": "{{field}}含有不安全内容",
-    "intro": "配置与 config.yaml permissions 对齐：启用开关、permission_mode、工具权限、规则与文件路径。保存后作为可复用的安全护栏模板。"
+    "unsafeText": "{{field}}含有不安全内容"
   },
   "connection": {
     "ok": "已连接",
@@ -348,8 +347,7 @@
       "newRule": "添加规则",
       "editRule": "编辑规则",
       "rulesHint": "与 config.yaml rules 对齐：id、tools、pattern、severity",
-      "fileGuardJson": "file_guard (JSON)",
-      "fileGuardJsonHint": "整块 file_guard 配置，字段与 config.yaml 一致（enabled / defaults / workspace / paths 等）"
+      "fileGuardJson": "file_guard (JSON)"
     }
   },
   "modelTemplate": {
