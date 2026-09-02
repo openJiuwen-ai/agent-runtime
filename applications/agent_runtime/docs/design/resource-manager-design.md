@@ -9,9 +9,9 @@
 
 - **`scope_id`** = `md5(group_id + bot_id)`,Scope 标识(对应 SDK `ServiceScope`,字段名 `service_id`;见 SDK `GLOSSARY.md` §1)。本文统一用 `scope_id`。**Pod 池按 `scope_id` 分组**,每个 scope 一个独立 Pod 池,一个 Pod 只服务一个 scope。
   - **`pod_id`** = Pod 实例标识(= SDK `ServiceHandler.id`;**Resource Manager 对外契约历史字段名 `endpoint_id`,本文统一用 `pod_id`,实现时 `endpoint_id`↔`pod_id` 做别名**)。
-  - **`pod_concurrency`** = 单 Pod 总并发上限(DB legacy `service_concurrency`);Session Manager 的 template 输入(per-scope 独占 Pod,SM 以 `SCARD < pod_concurrency` 闸门保证容量,Resource Manager 不强制)。
-  - **`pod_ttl`** = idle Pod 至 reclaim 的等待秒数(DB legacy `service_ttl`)。
-  - **`min_idle_pods`** = per-`scope_id` 的最小热备 Pod 数(DB legacy `min_idle_services`)。
+  - **`pod_concurrency`** = 单 Pod 总并发上限;Session Manager 的 template 输入(per-scope 独占 Pod,SM 以 `SCARD < pod_concurrency` 闸门保证容量,Resource Manager 不强制)。
+  - **`pod_ttl`** = idle Pod 至 reclaim 的等待秒数。
+  - **`min_idle_pods`** = per-`scope_id` 的最小热备 Pod 数。
   - **`max_pods`** = 单个 scope 的最大 Pod 数,**派生** = `⌈scope_concurrency / pod_concurrency⌉`,SM 经 `pool_config` 传入。
 
 ---
