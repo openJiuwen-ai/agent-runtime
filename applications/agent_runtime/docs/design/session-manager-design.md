@@ -202,7 +202,7 @@
 ### 4.1 存储(shared DB = config system-of-record)
 - **template 实体**:共享 DB 表 `service_config_template`(沿用 EE `SERVICE_CONFIG_TEMPLATE_TABLE_DEF`)。
   - **主键**:`(jiuwenclaw_id, template_id)`(jiuwenclaw_id 保留为租户键)。
-  - **关键列**(本文用概念名;概念↔DB 列映射见 SDK `GLOSSARY.md` §3):`scope_concurrency`(DB `session_concurrency`)、`pod_concurrency`(DB `service_concurrency`)、`session_ttl`、`pod_ttl`(DB `service_ttl`)、`max_pods`(派生,即 `max_pods`)、`min_idle_pods`(DB `min_idle_services`)、`message_timeout`;deploy 子集 `pod_spec`:`agent_image`/`namespace`/`container_name`/`container_port`/`kubeconfig`/`readiness_*`/`nfs_*`/资源限额 + `pod_ttl`。完整列定义见 EE `_build_row_from_template`。
+  - **关键列**(DB 列名与概念名同名,2026-09 起 wire 术语统一;曾用 EE 兼容名见 `docs/feature/2026-09-template-table-runtime-terms.md`):`scope_concurrency`、`pod_concurrency`、`session_ttl`、`pod_ttl`、`max_pods`(派生,即 `max_pods`)、`min_idle_pods`、`message_timeout`;deploy 子集 `pod_spec`:`agent_image`/`namespace`/`container_name`/`container_port`/`kubeconfig`/`readiness_*`/`nfs_*`/资源限额 + `pod_ttl`。完整列定义见 `_COLUMN_OF`(`config_store.py`)。
   - 近原样复用 `packages/jiuwenclaw-ee/.../template/service_config_template.py` 的 `_build_row_from_template` / `_upsert_service_config_template_from_sync` / `_sync_service_config_templates_records` / `delete_service_config_template`。
   - 改动点:原代码按 `(jiuwenclaw_id, template_id)` 存**每实例本地库**;改为**所有 Session Manager 副本 + Claw Manager 共享同一 DB**。
 - **routing_rule(路由规则)**:resolve 的 `(group_id, bot_id, user_id) → template_id` 匹配依据。表结构完整定义留 follow-up(§13.3);**v1 最小实现** = 一张 `(jiuwenclaw_id, group_id, bot_id, template_id)` 映射表(忽略 user_id 精细策略),`config_sync kind=routing_rule` 增删改它。
