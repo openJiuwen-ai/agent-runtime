@@ -31,11 +31,13 @@ def _tpl(template_id: str, **overrides) -> Template:
 
 
 def _scope(scope_id: str, index: int, template_id: str = "tpl",
-           expr: str = "") -> RoutingScopeDef:
+           expr: str = "", *, enabled: bool = True,
+           expires_at=None) -> RoutingScopeDef:
     """expr → RoutingScopeDef(与生产构造路径一致:解析串并同时保存原串)。"""
     return RoutingScopeDef(
         scope_id=scope_id, index=index, template_id=template_id, expr=expr,
         rule=parse_routing_expr(expr) if expr.strip() else None,
+        enabled=enabled, expires_at=expires_at,
     )
 
 
@@ -230,10 +232,95 @@ def test_match_scope_skips_disabled_and_missing_template():
     assert hit is not None and hit.scope_id == "s-ok"
 
 
+def test_match_scope_skips_disabled_and_expired_scope():
+    """scope 自身 enabled=False / expires_at 已过期不命中,继续落下一个。"""
+    from datetime import datetime, timedelta
+
+    now = datetime(2026, 9, 1, 12, 0, 0)
+    disabled = _scope("s-off", 0, enabled=False)
+    expired = _scope(
+        "s-exp", 1, expires_at=now - timedelta(seconds=1),
+    )
+    future = _scope(
+        "s-ok", 2, expires_at=now + timedelta(hours=1),
+    )
+    snap = build_snapshot(
+        [disabled, expired, future], [_tpl("tpl")], 1,
+    )
+    hit = match_scope(snap, "u", "g", "b", now=now)
+    assert hit is not None and hit.scope_id == "s-ok"
+    # 无 now 时用墙钟:远过去的 expires_at 不应命中
+    ancient = _scope(
+        "s-ancient", 0, expires_at=datetime(2000, 1, 1, 0, 0, 0),
+    )
+    assert match_scope(
+        build_snapshot([ancient], [_tpl("tpl")], 1), "u", "g", "b",
+    ) is None
+
+
 def test_match_scope_no_match_returns_none():
     scoped = _scope("s", 0, expr="group_id in ('g1')")
     snap = build_snapshot([scoped], [_tpl("tpl")], 1)
     assert match_scope(snap, "u", "g2", "b") is None
+
+
+def test_has_wildcard_ignores_inactive_scopes():
+    assert not has_wildcard_scope([_scope("fb", 0, enabled=False)])
+    assert has_wildcard_scope([_scope("fb", 0)])
+
+
+def test_parse_scope_enabled_and_expires_at():
+    from datetime import datetime
+
+    tids = {"tpl"}
+    scope = parse_scope(
+        {
+            "scope_id": "s",
+            "index": 0,
+            "template_id": "tpl",
+            "routing_rules": "",
+            "enabled": False,
+            "expires_at": "2026-09-01T12:00:00Z",
+        },
+        tids,
+    )
+    assert scope.enabled is False
+    assert scope.expires_at == datetime(2026, 9, 1, 12, 0, 0)
+    assert scope.to_payload()["enabled"] is False
+    assert scope.to_payload()["expires_at"] == "2026-09-01T12:00:00"
+
+    with pytest.raises(InvalidParams, match="enabled"):
+        parse_scope(
+            {"scope_id": "s", "index": 0, "template_id": "tpl",
+             "enabled": "yes"},
+            tids,
+        )
+    with pytest.raises(InvalidParams, match="expires_at"):
+        parse_scope(
+            {"scope_id": "s", "index": 0, "template_id": "tpl",
+             "expires_at": "not-a-date"},
+            tids,
+        )
+
+
+def test_snapshot_roundtrips_enabled_expires_at():
+    from datetime import datetime
+
+    scope = _scope(
+        "s", 0, expires_at=datetime(2026, 9, 1, 12, 0, 0), enabled=True,
+    )
+    text = snapshot_to_json(build_snapshot([scope], [_tpl("tpl")], 7))
+    restored = snapshot_from_json(text)
+    assert restored.scopes[0].enabled is True
+    assert restored.scopes[0].expires_at == datetime(2026, 9, 1, 12, 0, 0)
+    # 旧快照无字段 → 默认生效
+    legacy = snapshot_from_json(
+        '{"ver":1,"templates":{"tpl":{"template_id":"tpl"}},'
+        '"scopes":[{"scope_id":"fb","index":0,"template_id":"tpl",'
+        '"routing_rules":""}]}'
+    )
+    assert legacy.scopes[0].enabled is True
+    assert legacy.scopes[0].expires_at is None
 
 
 # -------------------------------------------------------------- wire 校验(parse_scope)

@@ -97,10 +97,15 @@ async def test_instance_list_sort_by_name(manager_api: ManagerApiHarness):
     h = manager_api
     created_ids: list[str] = []
     try:
-        for name in ("ut-sort-aaa", "ut-sort-zzz"):
+        for idx, name in enumerate(("ut-sort-aaa", "ut-sort-zzz")):
+            base = 20000 + idx * 100
             create_resp = await h.http.post(
                 h.instances_url(),
-                json=instance_create_body(jiuwenclaw_name=name),
+                json=instance_create_body(
+                    jiuwenclaw_name=name,
+                    gateway_config_host=f"http://127.0.0.1:{base}",
+                    runtime_config_host=f"http://127.0.0.1:{base + 1}",
+                ),
             )
             assert create_resp.status_code == 200
             created_ids.append(create_resp.json()["data"]["jiuwenclaw_id"])
@@ -158,3 +163,104 @@ async def test_instance_patch_not_found(manager_api: ManagerApiHarness):
         json={"description": "noop"},
     )
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_instance_create_rejects_duplicate_gateway_config_host(
+    manager_api: ManagerApiHarness,
+):
+    h = manager_api
+    body = instance_create_body(jiuwenclaw_name="ut-host-dup-gateway-a")
+    create_resp = await h.http.post(h.instances_url(), json=body)
+    assert create_resp.status_code == 200
+    jid = create_resp.json()["data"]["jiuwenclaw_id"]
+    try:
+        dup_resp = await h.http.post(
+            h.instances_url(),
+            json=instance_create_body(
+                jiuwenclaw_name="ut-host-dup-gateway-b",
+            ),
+        )
+        assert dup_resp.status_code == 400
+        assert "gateway_config_host already in use" in dup_resp.json()["detail"]
+    finally:
+        await h.http.delete(h.instances_url(f"/{jid}"))
+
+
+@pytest.mark.asyncio
+async def test_instance_create_rejects_duplicate_runtime_config_host(
+    manager_api: ManagerApiHarness,
+):
+    h = manager_api
+    body = instance_create_body(jiuwenclaw_name="ut-host-dup-runtime-a")
+    create_resp = await h.http.post(h.instances_url(), json=body)
+    assert create_resp.status_code == 200
+    jid = create_resp.json()["data"]["jiuwenclaw_id"]
+    try:
+        dup_body = instance_create_body(jiuwenclaw_name="ut-host-dup-runtime-b")
+        dup_body["gateway_config_host"] = "http://127.0.0.1:28080"
+        dup_resp = await h.http.post(h.instances_url(), json=dup_body)
+        assert dup_resp.status_code == 400
+        assert "runtime_config_host already in use" in dup_resp.json()["detail"]
+    finally:
+        await h.http.delete(h.instances_url(f"/{jid}"))
+
+
+@pytest.mark.asyncio
+async def test_instance_create_allows_cross_column_config_host(
+    manager_api: ManagerApiHarness,
+):
+    h = manager_api
+    body = instance_create_body(jiuwenclaw_name="ut-host-cross-col-a")
+    create_resp = await h.http.post(h.instances_url(), json=body)
+    assert create_resp.status_code == 200
+    first_jid = create_resp.json()["data"]["jiuwenclaw_id"]
+    existing_gateway = body["gateway_config_host"]
+    second_jid = ""
+    try:
+        dup_body = instance_create_body(jiuwenclaw_name="ut-host-cross-col-b")
+        dup_body["gateway_config_host"] = "http://127.0.0.1:28080"
+        dup_body["runtime_config_host"] = existing_gateway
+        dup_resp = await h.http.post(h.instances_url(), json=dup_body)
+        assert dup_resp.status_code == 200
+        second_jid = dup_resp.json()["data"]["jiuwenclaw_id"]
+    finally:
+        await h.http.delete(h.instances_url(f"/{first_jid}"))
+        if second_jid:
+            await h.http.delete(h.instances_url(f"/{second_jid}"))
+
+
+@pytest.mark.asyncio
+async def test_instance_update_rejects_duplicate_config_host(
+    manager_api: ManagerApiHarness,
+):
+    h = manager_api
+    first_body = instance_create_body(jiuwenclaw_name="ut-host-update-a")
+    first_resp = await h.http.post(h.instances_url(), json=first_body)
+    assert first_resp.status_code == 200
+    first_jid = first_resp.json()["data"]["jiuwenclaw_id"]
+
+    second_body = instance_create_body(jiuwenclaw_name="ut-host-update-b")
+    second_body["gateway_config_host"] = "http://127.0.0.1:38080"
+    second_body["runtime_config_host"] = "http://127.0.0.1:38081"
+    second_resp = await h.http.post(h.instances_url(), json=second_body)
+    assert second_resp.status_code == 200
+    second_jid = second_resp.json()["data"]["jiuwenclaw_id"]
+    try:
+        patch_resp = await h.http.patch(
+            h.instances_url(f"/{second_jid}"),
+            json={"gateway_config_host": first_body["gateway_config_host"]},
+        )
+        assert patch_resp.status_code == 400
+        assert "gateway_config_host already in use" in patch_resp.json()["detail"]
+
+        keep_resp = await h.http.patch(
+            h.instances_url(f"/{second_jid}"),
+            json={
+                "gateway_config_host": second_body["gateway_config_host"] + "/",
+            },
+        )
+        assert keep_resp.status_code == 200
+    finally:
+        await h.http.delete(h.instances_url(f"/{first_jid}"))
+        await h.http.delete(h.instances_url(f"/{second_jid}"))

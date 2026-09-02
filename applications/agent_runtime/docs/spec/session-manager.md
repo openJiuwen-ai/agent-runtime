@@ -100,7 +100,7 @@
 
 ## config_store.py —— 配置层(scope 重构版)
 
-**DB 表**(列名沿用 EE 兼容名,映射在 `_COLUMN_OF`):`service_config_template`(`min_idle_pods→min_idle_services`、`pod_concurrency→service_concurrency`、`pod_ttl→service_ttl`、`scope_concurrency→session_concurrency`;另有 JSON 列 `agent_env`、`sidecars`、`agent_host_path_mounts`、`agent_configmap_mounts`、`agent_pvc_mounts` + 三段式新列 `main_container_id`(string 100)/`sidecar_container_ids`(JSON)/`volumes`(JSON))、**`service_config_container`**(容器规格表,15 列:`container_id` unique ≤100、`name`/`image`/`image_pull_policy` 标量 + `ports`/`env`/`env_from`/`resources`/`volume_mounts`/`security_context`/`readiness_probe` 七个内部规范形 JSON 段落列;框架 init_table 自动建,无需手工 DDL)、`routing_scope`(`scope_id` unique / `match_index`(避 SQL 保留字 index) / `template_id` / `routing_rules` JSON)。表结构常量 `*_TABLE_DEF` 由 main 传给框架建表。旧 `routing_rule` 表已废弃(不再读写,老库残留无害)。**模板表三段式三列为后期新增:存量库须先手工 ALTER 再发版**(`ALTER TABLE service_config_template ADD COLUMN main_container_id VARCHAR(100) NULL; ADD COLUMN sidecar_container_ids JSON NULL; ADD COLUMN volumes JSON NULL;`,框架建表只 create_all 不补列;`sidecars`/挂载列/`agent_env`/`health_path` 同款义务)。
+**DB 表**(列名沿用 EE 兼容名,映射在 `_COLUMN_OF`):`service_config_template`(`min_idle_pods→min_idle_services`、`pod_concurrency→service_concurrency`、`pod_ttl→service_ttl`、`scope_concurrency→session_concurrency`;另有 JSON 列 `agent_env`、`sidecars`、`agent_host_path_mounts`、`agent_configmap_mounts`、`agent_pvc_mounts` + 三段式新列 `main_container_id`(string 100)/`sidecar_container_ids`(JSON)/`volumes`(JSON))、**`service_config_container`**(容器规格表,15 列:`container_id` unique ≤100、`name`/`image`/`image_pull_policy` 标量 + `ports`/`env`/`env_from`/`resources`/`volume_mounts`/`security_context`/`readiness_probe` 七个内部规范形 JSON 段落列;框架 init_table 自动建,无需手工 DDL)、`routing_scope`(`scope_id` unique / `match_index`(避 SQL 保留字 index) / `template_id` / `routing_rules` JSON / `enabled` bool 默认 true / `expires_at` datetime 可空)。表结构常量 `*_TABLE_DEF` 由 main 传给框架建表。旧 `routing_rule` 表已废弃(不再读写,老库残留无害)。**模板表三段式三列为后期新增:存量库须先手工 ALTER 再发版**(`ALTER TABLE service_config_template ADD COLUMN main_container_id VARCHAR(100) NULL; ADD COLUMN sidecar_container_ids JSON NULL; ADD COLUMN volumes JSON NULL;`,框架建表只 create_all 不补列;`sidecars`/挂载列/`agent_env`/`health_path` 同款义务)。**routing_scope 的 `enabled`/`expires_at` 同为后期新增:存量库须** `ALTER TABLE routing_scope ADD COLUMN expires_at DATETIME NULL; ADD COLUMN enabled BOOLEAN NOT NULL DEFAULT TRUE;`(方言类型按 MySQL/PG 调整)。
 
 **行形态双轨(仅读路径)**(`template_from_row(row, containers)`):行有真值 `main_container_id` → 三段式形态(模板级列 + 容器行 + volumes join 水合;**任一引用容器行缺失 → WARNING + 整模板跳过**,绝不静默丢单个 sidecar——那会隐形改 deploy_ver;引用它的 scope 视为不命中落兜底);否则 → legacy 内联列路径(**读兼容:升级后重放前的存量旧行**;wire 已收紧,legacy 写路径已删,新写入一律三段式形态)。新形态写行(`row_from_template_split`)只写模板级列 + 引用列 + volumes + `agent_image: ""` 死值(该列 NOT NULL 无默认,create/update 都写,防转换残留误导诊断)。
 
@@ -117,7 +117,7 @@
 - **卷 join(K8s spec.volumes 同构)**:模板级 `volumes`(每卷恰一源:hostPath/configMap/persistentVolumeClaim/nfs;卷名 DNS-1123 唯一)+ 容器 `volumeMounts` 按名引用;`fuse_mounts` 重建内部 fused 挂载(mounts.py 规范形,指纹承重)。源类型规则:悬挂引用/未挂载卷 → 400;`subPath` 仅 configMap;`readOnly` 缺省按内部规范(cm→**true**、hp/pvc→false);NFS 仅主容器至多一个且不支持 readOnly=true。
 - 投影:`main_template_kwargs`(主容器 22 个 Template 容器级 kwargs,挂载过 `validate_agent_mounts`)与 `sidecar_wire_input`(交 `validate_sidecars` 幂等再规范化,跨字段冲突免费)——**同值必同 deploy_ver**(`test_split_contract_deploy_ver_identical_to_inline` 承重)。
 
-**routing.py(纯函数)**:`routing_rules` 是**布尔表达式字符串**——条件 `field in|not in ('v1', 'v2')` 经 `and`/`or` 与括号任意组合;优先级 条件 > and > or;关键字大小写不敏感,字段名固定小写枚举(user_id/group_id/bot_id);值单引号串(`''` 加倍或 `\'`/`\\` 转义);空值列表 `()` → in 恒假、not_in 恒真;不支持一元 `not`;上限长度 8000、括号嵌套 32。**空 routing_rules(null/空串/纯空白)= 通配兜底**;遍历按 `(index ASC, scope_id ASC)` **first-fit**;引用模板缺失/禁用的 scope 跳过落下一个。解析器 = 词法(`_TOKEN_RE`)+ 递归下降(`_Parser`:or_expr → and_expr → primary),产物为表达式树(`MatchExpression` 叶 / `AndNode` / `OrNode`),存于 `RoutingScopeDef.rule`(与原始串 `expr` 成对,后者是 wire/DB/快照载体)。`SCOPE_ID_RE = ^[0-9A-Za-z._-]{1,128}$`(禁 `:`/`*`/空白——Redis 键与 `pods:registered` 切分依赖)。
+**routing.py(纯函数)**:`routing_rules` 是**布尔表达式字符串**——条件 `field in|not in ('v1', 'v2')` 经 `and`/`or` 与括号任意组合;优先级 条件 > and > or;关键字大小写不敏感,字段名固定小写枚举(user_id/group_id/bot_id);值单引号串(`''` 加倍或 `\'`/`\\` 转义);空值列表 `()` → in 恒假、not_in 恒真;不支持一元 `not`;上限长度 8000、括号嵌套 32。**空 routing_rules(null/空串/纯空白)= 通配兜底**;遍历按 `(index ASC, scope_id ASC)` **first-fit**;引用模板缺失/禁用的 scope、以及 scope 自身 `enabled=False` / `expires_at` 已过期(墙钟判定,`null`=永不过期)的,跳过落下一个。通配告警只计生效中的空表达式 scope。解析器 = 词法(`_TOKEN_RE`)+ 递归下降(`_Parser`:or_expr → and_expr → primary),产物为表达式树(`MatchExpression` 叶 / `AndNode` / `OrNode`),存于 `RoutingScopeDef.rule`(与原始串 `expr` 成对,后者是 wire/DB/快照载体)。`SCOPE_ID_RE = ^[0-9A-Za-z._-]{1,128}$`(禁 `:`/`*`/空白——Redis 键与 `pods:registered` 切分依赖)。
 
 **resolve(user_id, group_id, bot_id) → (scope_id, Template)**:读单键快照 `routing:snapshot`(1 GET;进程内按原文 memo 免重复解析)→ first-fit 匹配;快照缺失/损坏 → 从 DB 重建;无匹配 → `ConfigNotFound(503)`。
 
@@ -139,7 +139,8 @@
   坏值 Pod 永久 Pending 挂满 ready_timeout 才暴露;空串归一 None 同未设;
   snake 双形态 node_name → 400,用 K8s 拼写 nodeName)
   scope 段同前(scope_id 字符集/index 拒 bool/引用不在本批模板集/routing_rules
-  表达式串语法/重复);缺通配 scope → 仅 WARNING 放行(响应 wildcard_present:false)
+  表达式串语法/enabled 须 bool/expires_at ISO-8601 或 null/重复);缺通配 scope
+  → 仅 WARNING 放行(响应 wildcard_present:false;通配只计生效中的空表达式)
 lock:config_sync 串行化(忙→409 CONFIG_SYNC_BUSY,TTL 60)
 → 读 DB 旧态(containers + templates(双形态水合) + scopes)
 → diff:模板 changed_ids(_diff_class 沿用)/ 引用切换 ref_switched → affected
@@ -150,9 +151,10 @@ lock:config_sync 串行化(忙→409 CONFIG_SYNC_BUSY,TTL 60)
   形态行)→ upsert/delete scopes → GC 容器(container_id ∉ 本批 → 删;空全量
   ⇒ 容器行清空);红线:任一失败立即中止,不 SET 快照、不推送)
 → rebuild_snapshot()(DB 读回 → 原子 SET;B 类立即生效由此完成)
-→ eager 预热:每个存活 scope 推 push(sid, pool_config, deploy_subset)——必须带 pod_spec
-  (RM 才落 pod_spec_json/deploy_ver;autoscale 无请求预热 min_idle 的依赖)
-→ 候选集版本收敛(声明式,非 one-shot):对**每个**存活 scope 把 deploy_ver ≠ 当前版本的
+→ eager 预热:每个**生效中** scope 推 push(sid, pool_config, deploy_subset)——必须带
+  pod_spec(RM 才落 pod_spec_json/deploy_ver;autoscale 无请求预热 min_idle 的依赖);
+  禁用/过期 scope 推 min_idle=0 停预热(与被删同款)
+→ 候选集版本收敛(声明式,非 one-shot):对**每个生效中** scope 把 deploy_ver ≠ 当前版本的
   Pod ZREM 出候选——不由 diff 驱动,写 DB 后中途失败/同载荷重试(diff==none)也每拍
   重算,旧版 Pod 不会无限期接新流量
 → 删除处理:目标集 = **RM 已知 scope(known_rm_scopes 回调)∪ DB 旧 scope** − 本批;

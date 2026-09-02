@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAsync } from '../../hooks/useAsync';
 import { useListSearch } from '../../hooks/useListSearch';
@@ -14,9 +14,15 @@ import {
   type ColumnSortValue,
 } from '../../components/TableColumnSort';
 import { ListSearchInput } from '../../components/ListSearchInput';
-import { ServiceConfigTemplateModal } from './ServiceConfigTemplateModal';
 import { toast } from '../../stores/uiStore';
 import { formatTime, truncate } from '../../utils/format';
+import { useRouter } from '../../router';
+import {
+  downloadJson,
+  exportFilename,
+  exportTemplateRawdata,
+  parseConfigSyncImport,
+} from '../../utils/serviceConfigExport';
 
 type ServiceConfigTemplateSortField =
   | 'template_name'
@@ -26,6 +32,7 @@ type ServiceConfigTemplateSortField =
 
 export function ServiceConfigTemplatesPage() {
   const { t } = useTranslation();
+  const { navigate } = useRouter();
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const { searchInput, setSearchInput, searchQuery } = useListSearch();
@@ -71,16 +78,73 @@ export function ServiceConfigTemplatesPage() {
   );
 
   const [items, setItems] = useState<ServiceConfigTemplate[]>([]);
-  const [modalOpen, setModalOpen] = useState(false);
-  const [editing, setEditing] = useState<ServiceConfigTemplate | null>(null);
   const [delTarget, setDelTarget] = useState<ServiceConfigTemplate | null>(null);
   const [togglingId, setTogglingId] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
+  const importInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (data?.items) {
       setItems(data.items);
     }
   }, [data]);
+
+  const handleExport = (row: ServiceConfigTemplate) => {
+    try {
+      downloadJson(exportFilename(row), exportTemplateRawdata(row));
+      toast('success', t('serviceConfigTemplate.exportOk'));
+    } catch (e) {
+      toast(
+        'danger',
+        t('serviceConfigTemplate.exportFailed', {
+          detail: e instanceof Error ? e.message : String(e),
+        }),
+      );
+    }
+  };
+
+  const handleImportFile = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      void (async () => {
+        setImporting(true);
+        try {
+          const text = String(reader.result ?? '');
+          const parsed = JSON.parse(text) as unknown;
+          const { body, templateCount } = parseConfigSyncImport(parsed);
+          await ServiceConfigTemplateApi.create(body);
+          toast(
+            'success',
+            templateCount > 1
+              ? t('serviceConfigTemplate.importOkFirstOfMany', { count: templateCount })
+              : t('serviceConfigTemplate.importOk'),
+          );
+          void reload();
+        } catch (err) {
+          toast(
+            'danger',
+            t('serviceConfigTemplate.importFailed', {
+              detail:
+                err instanceof ApiError
+                  ? err.detail
+                  : err instanceof Error
+                    ? err.message
+                    : String(err),
+            }),
+          );
+        } finally {
+          setImporting(false);
+        }
+      })();
+    };
+    reader.onerror = () => {
+      toast('danger', t('serviceConfigTemplate.importFailed', { detail: 'read error' }));
+    };
+    reader.readAsText(file, 'UTF-8');
+  };
 
   const toggleEnabled = async (row: ServiceConfigTemplate, enabled: boolean) => {
     if (togglingId) return;
@@ -127,12 +191,23 @@ export function ServiceConfigTemplatesPage() {
           <button className="btn sm" onClick={() => void reload()}>
             {t('common.refresh')}
           </button>
+          <input
+            ref={importInputRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={handleImportFile}
+          />
+          <button
+            className="btn sm"
+            disabled={importing}
+            onClick={() => importInputRef.current?.click()}
+          >
+            {importing ? t('common.loading') : t('serviceConfigTemplate.import')}
+          </button>
           <button
             className="btn primary sm"
-            onClick={() => {
-              setEditing(null);
-              setModalOpen(true);
-            }}
+            onClick={() => navigate('/service-config-templates/new')}
           >
             + {t('serviceConfigTemplate.new')}
           </button>
@@ -197,7 +272,7 @@ export function ServiceConfigTemplatesPage() {
                     onChange={(value) => handleSortChange('updated_at', value)}
                   />
                 </th>
-                <th className="whitespace-nowrap min-w-[9.5rem]">{t('common.actions')}</th>
+                <th className="whitespace-nowrap min-w-[12rem]">{t('common.actions')}</th>
               </tr>
             </thead>
             <tbody>
@@ -230,16 +305,18 @@ export function ServiceConfigTemplatesPage() {
                     />
                   </td>
                   <td className="mono text-[11px] text-muted whitespace-nowrap">{formatTime(row.updated_at)}</td>
-                  <td className="whitespace-nowrap min-w-[9.5rem]">
+                  <td className="whitespace-nowrap min-w-[12rem]">
                     <div className="flex items-center gap-1">
                       <button
                         className="btn sm ghost"
-                        onClick={() => {
-                          setEditing(row);
-                          setModalOpen(true);
-                        }}
+                        onClick={() =>
+                          navigate(`/service-config-templates/${encodeURIComponent(row.template_id)}`)
+                        }
                       >
                         {t('common.edit')}
+                      </button>
+                      <button className="btn sm ghost" onClick={() => handleExport(row)}>
+                        {t('serviceConfigTemplate.export')}
                       </button>
                       <button className="btn sm danger" onClick={() => setDelTarget(row)}>
                         {t('common.delete')}
@@ -267,16 +344,6 @@ export function ServiceConfigTemplatesPage() {
       )}
       </div>
       </div>
-
-      <ServiceConfigTemplateModal
-        open={modalOpen}
-        template={editing}
-        onClose={() => setModalOpen(false)}
-        onSaved={() => {
-          setModalOpen(false);
-          void reload();
-        }}
-      />
 
       <ConfirmDialog
         open={!!delTarget}

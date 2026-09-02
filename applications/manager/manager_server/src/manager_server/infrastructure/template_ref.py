@@ -57,7 +57,10 @@ def _normalize_slot_refs(raw: Any) -> list[str]:
 
 
 def normalize_template_ref(value: Any) -> dict[str, list[str]]:
-    """将 ``template_ref`` 规范为 ``{slot: [ref_string, ...]}``；空值键省略。"""
+    """将 ``template_ref`` 规范为 ``{slot: [ref_string, ...]}``；空值键省略。
+
+    丢弃已废弃的 ``service_config`` 槽位（服务配置改由 Runtime 同步）。
+    """
     if value is None:
         return {}
     if not isinstance(value, dict):
@@ -65,7 +68,7 @@ def normalize_template_ref(value: Any) -> dict[str, list[str]]:
     out: dict[str, list[str]] = {}
     for key, raw in value.items():
         slot = str(key).strip()
-        if not slot:
+        if not slot or slot == "service_config":
             continue
         refs = _normalize_slot_refs(raw)
         if refs:
@@ -77,7 +80,7 @@ def normalize_template_ref(value: Any) -> dict[str, list[str]]:
 def validate_single_value_template_ref_slots(
     template_ref: dict[str, list[str]],
 ) -> None:
-    """校验单值槽位（默认/视频/音频/视觉模型、服务配置）至多一条引用。"""
+    """校验单值槽位（默认/视频/音频/视觉/Embedding 模型）至多一条引用。"""
     for slot, refs in template_ref.items():
         if slot not in SINGLE_VALUE_TEMPLATE_REF_SLOTS:
             continue

@@ -13,21 +13,19 @@ _MODEL_TEMPLATE_SLOTS: tuple[str, ...] = (
 
 SKILL_WHITELIST_SLOT = "skill_whitelist"
 EXTENSION_CONFIG_SLOT = "extension_config"
-SERVICE_CONFIG_SLOT = "service_config"
 EMBEDDING_MODEL_SLOT = "embedding_model"
 
 _TEMPLATE_REF_SLOTS: tuple[str, ...] = (
     *_MODEL_TEMPLATE_SLOTS,
     SKILL_WHITELIST_SLOT,
     EXTENSION_CONFIG_SLOT,
-    SERVICE_CONFIG_SLOT,
     EMBEDDING_MODEL_SLOT,
 )
 
 MODEL_TEMPLATE_SLOTS: frozenset[str] = frozenset(_MODEL_TEMPLATE_SLOTS)
 TEMPLATE_REF_SLOTS: frozenset[str] = frozenset(_TEMPLATE_REF_SLOTS)
 SINGLE_VALUE_TEMPLATE_REF_SLOTS: frozenset[str] = frozenset(
-    (*_MODEL_TEMPLATE_SLOTS, SERVICE_CONFIG_SLOT, EMBEDDING_MODEL_SLOT)
+    (*_MODEL_TEMPLATE_SLOTS, EMBEDDING_MODEL_SLOT)
 )
 
 DefaultTemplateMappingTypeLiteral = Literal[
@@ -37,7 +35,6 @@ DefaultTemplateMappingTypeLiteral = Literal[
     "vision_model",
     "skill_whitelist",
     "extension_config",
-    "service_config",
     "embedding_model",
 ]
 
@@ -48,7 +45,6 @@ __all__ = (
     "MODEL_TEMPLATE_SLOTS",
     "SKILL_WHITELIST_SLOT",
     "EXTENSION_CONFIG_SLOT",
-    "SERVICE_CONFIG_SLOT",
     "EMBEDDING_MODEL_SLOT",
     "SINGLE_VALUE_TEMPLATE_REF_SLOTS",
     "TEMPLATE_REF_SLOTS",

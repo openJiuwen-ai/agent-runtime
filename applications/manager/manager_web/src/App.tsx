@@ -13,6 +13,7 @@ import { EmbeddingTemplatesPage } from './pages/templates/EmbeddingTemplatesPage
 import { ExtensionTemplatesPage } from './pages/templates/ExtensionTemplatesPage';
 import { SkillWhitelistTemplatesPage } from './pages/templates/SkillWhitelistTemplatesPage';
 import { ServiceConfigTemplatesPage } from './pages/templates/ServiceConfigTemplatesPage';
+import { ServiceConfigTemplateEditPage } from './pages/templates/ServiceConfigTemplateEditPage';
 import { SafetyGuardrailsPage } from './pages/templates/SafetyGuardrailsPage';
 import { matchRoute, RouterProvider, useRouter } from './router';
 import { AuthProvider, useAuth } from './auth/AuthContext';
@@ -84,6 +85,13 @@ function RouteView() {
   }
   if (path === '/service-config-templates') {
     return <ServiceConfigTemplatesPage />;
+  }
+  if (path === '/service-config-templates/new') {
+    return <ServiceConfigTemplateEditPage />;
+  }
+  const serviceConfigEdit = matchRoute('/service-config-templates/:templateId', path);
+  if (serviceConfigEdit) {
+    return <ServiceConfigTemplateEditPage templateId={serviceConfigEdit.templateId} />;
   }
   if (path === '/users') {
     return <UsersPage />;

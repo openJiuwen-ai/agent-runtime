@@ -4,7 +4,7 @@ eager 预热推送 / A-B 类扩散 / 409 / 红线（场景 M）。"""
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -25,9 +25,11 @@ def _tpl(template_id: str, **overrides) -> dict:
 
 
 def _scope(scope_id: str, template_id: str, index: int = 0,
-           expr: str | None = None) -> dict:
-    return {"scope_id": scope_id, "index": index,
+           expr: str | None = None, **extra) -> dict:
+    body = {"scope_id": scope_id, "index": index,
             "template_id": template_id, "routing_rules": expr or ""}
+    body.update(extra)
+    return body
 
 
 # -------------------------------------------------------------- resolve / 快照
@@ -143,6 +145,41 @@ async def test_config_sync_full_replace_and_validation(runtime):
     assert (await store.get_template("b")).agent_image == "img:b2"
     remaining = {s.scope_id: s for s in await store.list_scopes()}
     assert set(remaining) == {"s-b"} and remaining["s-b"].index == 7
+
+
+@requires_lua
+async def test_config_sync_persists_scope_enabled_expires_and_skips_on_resolve(runtime):
+    """routing_scope.enabled / expires_at 落库;禁用与过期不参与 resolve。"""
+    store = runtime.config_store
+    now = datetime.now(timezone.utc)
+    past = (now - timedelta(hours=1)).isoformat().replace("+00:00", "Z")
+    future = (now + timedelta(days=1)).isoformat().replace("+00:00", "Z")
+    await store.config_sync(_payload(
+        [_tpl("tpl-1"), _tpl("tpl-fb")],
+        [
+            _scope("s-off", "tpl-1", index=0, enabled=False),
+            _scope("s-exp", "tpl-1", index=1, expires_at=past),
+            _scope("s-ok", "tpl-1", index=2, expires_at=future,
+                   expr="user_id in ('u-ok')"),
+            _scope("fallback", "tpl-fb", index=100),
+        ],
+    ))
+    by_id = {s.scope_id: s for s in await store.list_scopes()}
+    assert by_id["s-off"].enabled is False
+    assert by_id["s-exp"].expires_at is not None
+    assert by_id["s-ok"].enabled is True and by_id["s-ok"].expires_at is not None
+
+    scope_id, _ = await store.resolve("u-ok", "g", "b")
+    assert scope_id == "s-ok"
+    scope_id, _ = await store.resolve("other", "g", "b")
+    assert scope_id == "fallback"
+
+    # 禁用/过期 scope 推 min_idle=0,不带 pod_spec(不预热)
+    pushed = {sid: (pool, spec) for sid, pool, spec in runtime.pool_pushes}
+    assert pushed["s-off"][0]["min_idle_pods"] == 0
+    assert pushed["s-off"][1] is None
+    assert pushed["s-exp"][0]["min_idle_pods"] == 0
+    assert pushed["s-ok"][1] is not None
 
 
 @requires_lua

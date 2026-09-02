@@ -60,6 +60,52 @@ def _norm_host(value: str | None) -> str | None:
     return text[:_HOST_MAX_LEN] if text else None
 
 
+async def _find_config_host_conflict(
+    handler: DBHandler,
+    host: str,
+    *,
+    column: str,
+    exclude_jiuwenclaw_id: str | None = None,
+) -> Any | None:
+    """若 host 已被其它实例同列 config_host 占用则返回冲突行。"""
+    normalized = _norm_host(host)
+    if not normalized:
+        return None
+    exclude = str(exclude_jiuwenclaw_id or "").strip() or None
+    rows = await handler.list_records(
+        _INSTANCE_TABLE,
+        {column: normalized},
+        limit=10,
+        offset=0,
+    )
+    for row in rows:
+        jid = str(getattr(row, "jiuwenclaw_id", "") or "")
+        if exclude and jid == exclude:
+            continue
+        return row
+    return None
+
+
+async def _assert_config_host_available(
+    handler: DBHandler,
+    host: str,
+    *,
+    column: str,
+    exclude_jiuwenclaw_id: str | None = None,
+) -> None:
+    conflict = await _find_config_host_conflict(
+        handler,
+        host,
+        column=column,
+        exclude_jiuwenclaw_id=exclude_jiuwenclaw_id,
+    )
+    if conflict is not None:
+        raise ValueError(
+            f"{column} already in use by instance "
+            f"{getattr(conflict, 'jiuwenclaw_id', '')}"
+        )
+
+
 def _matches_instance_search(row: Any, query: str) -> bool:
     needle = query.strip().lower()
     if not needle:
@@ -385,6 +431,16 @@ class InstanceService:
             raise ValueError("gateway_config_host is required")
         if not runtime_host:
             raise ValueError("runtime_config_host is required")
+        await _assert_config_host_available(
+            self._handler,
+            gateway_host,
+            column="gateway_config_host",
+        )
+        await _assert_config_host_available(
+            self._handler,
+            runtime_host,
+            column="runtime_config_host",
+        )
         await require_config_hosts_reachable(
             gateway_config_host=gateway_host,
             runtime_config_host=runtime_host,
@@ -530,7 +586,8 @@ class InstanceService:
         updates = body.model_dump(exclude_unset=True)
         if not updates:
             return await self.get(jid)
-        if await get_instance_row(self._handler, jid) is None:
+        row = await get_instance_row(self._handler, jid)
+        if row is None:
             return None
 
         strip_fields = (
@@ -549,6 +606,29 @@ class InstanceService:
             updates["gateway_config_host"] = _norm_host(updates["gateway_config_host"])
         if "runtime_config_host" in updates:
             updates["runtime_config_host"] = _norm_host(updates["runtime_config_host"])
+
+        if "gateway_config_host" in updates:
+            gateway_host = updates["gateway_config_host"]
+            if gateway_host and _norm_host(
+                getattr(row, "gateway_config_host", None)
+            ) != gateway_host:
+                await _assert_config_host_available(
+                    self._handler,
+                    gateway_host,
+                    column="gateway_config_host",
+                    exclude_jiuwenclaw_id=jid,
+                )
+        if "runtime_config_host" in updates:
+            runtime_host = updates["runtime_config_host"]
+            if runtime_host and _norm_host(
+                getattr(row, "runtime_config_host", None)
+            ) != runtime_host:
+                await _assert_config_host_available(
+                    self._handler,
+                    runtime_host,
+                    column="runtime_config_host",
+                    exclude_jiuwenclaw_id=jid,
+                )
 
         await require_config_hosts_reachable(
             gateway_config_host=(
