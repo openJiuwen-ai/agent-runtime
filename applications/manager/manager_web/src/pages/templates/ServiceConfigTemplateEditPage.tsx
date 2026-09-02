@@ -3,6 +3,9 @@
  * 1) 模板级：namespace/nodeName/pod/volumes/池策略/sse_path…
  * 2) AgentServer 主容器
  * 3) Sandbox sidecar 容器
+ * 两个容器页签为同一套「容器通用配置」字段（ports / securityContext / readinessProbe /
+ * resources / env / envFrom / volumeMounts），仅默认值与必填校验不同；
+ * 主容器须含 name=sse 端口（Runtime 路由依赖）。
  * 保存时写入 Manager 模板列 + data.config_sync.containers（供导入导出往返）。
  */
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
@@ -21,13 +24,14 @@ import type {
 
 type Section = 'template' | 'agentserver' | 'sandbox';
 
-type AgentForm = {
+/** 容器通用配置（主容器 / Sandbox 同一字段集，K8s wire 对齐） */
+type ContainerForm = {
   container_id: string;
   name: string;
   image: string;
   image_pull_policy: string;
-  sse_port: number;
-  http_port: string;
+  /** JSON 数组，形如 [{"name":"sse","containerPort":8766}]；主容器须含 name=sse */
+  ports_json: string;
   env_text: string;
   env_from_json: string;
   cpu_request: string;
@@ -35,32 +39,14 @@ type AgentForm = {
   cpu_limit: string;
   memory_limit: string;
   volume_mounts_json: string;
-  run_as_user: string;
-  run_as_group: string;
-  health_path: string;
-  readiness_initial_delay: number;
-  readiness_period: number;
-};
-
-type SandboxForm = {
-  container_id: string;
-  name: string;
-  image: string;
-  image_pull_policy: string;
-  port: string;
-  env_text: string;
-  env_from_json: string;
-  cpu_request: string;
-  memory_request: string;
-  cpu_limit: string;
-  memory_limit: string;
-  volume_mounts_json: string;
+  /* ---- securityContext ---- */
   run_as_user: string;
   run_as_group: string;
   privileged: boolean;
   capabilities_add: string;
   seccomp_type: string;
   apparmor_type: string;
+  /* ---- readinessProbe ---- */
   probe_type: 'tcpSocket' | 'httpGet';
   probe_port: number;
   probe_path: string;
@@ -90,53 +76,60 @@ type TemplateForm = {
 
 const INT32_MAX = 2_147_483_647;
 
-const emptyAgent = (): AgentForm => ({
-  container_id: 'c-agentserver',
-  name: 'jiuwenclaw-agentserver',
-  image: '',
-  image_pull_policy: 'IfNotPresent',
-  sse_port: 8766,
-  http_port: '',
-  env_text: '',
-  env_from_json: '',
-  cpu_request: '',
-  memory_request: '',
-  cpu_limit: '',
-  memory_limit: '',
-  volume_mounts_json: '',
-  run_as_user: '',
-  run_as_group: '',
-  health_path: '/api/v1/health',
-  readiness_initial_delay: 5,
-  readiness_period: 5,
-});
-
-const emptySandbox = (): SandboxForm => ({
-  container_id: 'c-jiuwenbox',
-  name: 'jiuwenbox',
-  image: '',
-  image_pull_policy: 'IfNotPresent',
-  port: '8321',
-  env_text: '',
-  env_from_json: '',
-  cpu_request: '',
-  memory_request: '',
-  cpu_limit: '',
-  memory_limit: '',
-  volume_mounts_json: '',
-  run_as_user: '',
-  run_as_group: '',
-  privileged: false,
-  capabilities_add: '',
-  seccomp_type: '',
-  apparmor_type: '',
-  probe_type: 'tcpSocket',
-  probe_port: 8321,
-  probe_path: '/health',
-  readiness_initial_delay: 10,
-  readiness_period: 5,
-  readiness_timeout: 3,
-});
+const emptyContainer = (role: 'agent' | 'sandbox'): ContainerForm =>
+  role === 'agent'
+    ? {
+        container_id: 'c-agentserver',
+        name: 'jiuwenclaw-agentserver',
+        image: '',
+        image_pull_policy: 'IfNotPresent',
+        ports_json: '[{"name":"sse","containerPort":8766}]',
+        env_text: '',
+        env_from_json: '',
+        cpu_request: '',
+        memory_request: '',
+        cpu_limit: '',
+        memory_limit: '',
+        volume_mounts_json: '',
+        run_as_user: '',
+        run_as_group: '',
+        privileged: false,
+        capabilities_add: '',
+        seccomp_type: '',
+        apparmor_type: '',
+        probe_type: 'httpGet',
+        probe_port: 8766,
+        probe_path: '/api/v1/health',
+        readiness_initial_delay: 5,
+        readiness_period: 5,
+        readiness_timeout: 3,
+      }
+    : {
+        container_id: 'c-jiuwenbox',
+        name: 'jiuwenbox',
+        image: '',
+        image_pull_policy: 'IfNotPresent',
+        ports_json: '[{"containerPort":8321}]',
+        env_text: '',
+        env_from_json: '',
+        cpu_request: '',
+        memory_request: '',
+        cpu_limit: '',
+        memory_limit: '',
+        volume_mounts_json: '',
+        run_as_user: '',
+        run_as_group: '',
+        privileged: false,
+        capabilities_add: '',
+        seccomp_type: '',
+        apparmor_type: '',
+        probe_type: 'tcpSocket',
+        probe_port: 8321,
+        probe_path: '/health',
+        readiness_initial_delay: 10,
+        readiness_period: 5,
+        readiness_timeout: 3,
+      };
 
 const emptyTemplate = (): TemplateForm => ({
   template_name: '',
@@ -234,6 +227,20 @@ function envToMap(list?: { name: string; value: string }[]): Record<string, stri
   return out;
 }
 
+/** 从 ports 数组提取指定命名端口（如 name=sse）的 containerPort */
+function extractNamedPort(
+  ports: Record<string, unknown>[] | undefined,
+  portName: string,
+): number | undefined {
+  for (const p of ports ?? []) {
+    if (p && p.name === portName) {
+      const n = Number(p.containerPort ?? p.container_port);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+  }
+  return undefined;
+}
+
 function FieldLabel({ children, required }: { children: ReactNode; required?: boolean }) {
   return (
     <label className="label">
@@ -261,66 +268,26 @@ function SectionCard({ title, hint, children }: { title: string; hint?: string; 
   );
 }
 
-function containerFromRecord(raw: Record<string, unknown> | undefined, role: 'agent'): AgentForm;
-function containerFromRecord(raw: Record<string, unknown> | undefined, role: 'sandbox'): SandboxForm;
+/** 卡内分组小标题（securityContext / readinessProbe 等） */
+function GroupLabel({ children }: { children: ReactNode }) {
+  return (
+    <div className="md:col-span-2 mt-2 border-t pt-2 text-[12px] font-semibold uppercase tracking-wide text-muted">
+      {children}
+    </div>
+  );
+}
+
 function containerFromRecord(
   raw: Record<string, unknown> | undefined,
   role: 'agent' | 'sandbox',
-): AgentForm | SandboxForm {
-  if (role === 'agent') {
-    const form = emptyAgent();
-    if (!raw) return form;
-    form.container_id = String(raw.container_id ?? form.container_id);
-    form.name = String(raw.name ?? form.name);
-    form.image = String(raw.image ?? '');
-    form.image_pull_policy = String(raw.imagePullPolicy ?? raw.image_pull_policy ?? 'IfNotPresent');
-    const ports = Array.isArray(raw.ports) ? raw.ports : [];
-    for (const p of ports) {
-      if (!p || typeof p !== 'object') continue;
-      const port = p as Record<string, unknown>;
-      const n = Number(port.containerPort ?? port.container_port);
-      if (port.name === 'sse' && Number.isFinite(n)) form.sse_port = n;
-      if (port.name === 'http' && Number.isFinite(n)) form.http_port = String(n);
-    }
-    form.env_text = formatEnv(raw.env);
-    form.env_from_json = formatJson(raw.envFrom ?? raw.env_from);
-    form.volume_mounts_json = formatJson(raw.volumeMounts ?? raw.volume_mounts);
-    const res = (raw.resources as Record<string, unknown> | undefined) ?? {};
-    const req = (res.requests as Record<string, unknown> | undefined) ?? {};
-    const lim = (res.limits as Record<string, unknown> | undefined) ?? {};
-    form.cpu_request = req.cpu != null ? String(req.cpu) : '';
-    form.memory_request = req.memory != null ? String(req.memory) : '';
-    form.cpu_limit = lim.cpu != null ? String(lim.cpu) : '';
-    form.memory_limit = lim.memory != null ? String(lim.memory) : '';
-    const sc = (raw.securityContext ?? raw.security_context) as Record<string, unknown> | undefined;
-    if (sc) {
-      form.run_as_user = sc.runAsUser != null ? String(sc.runAsUser) : '';
-      form.run_as_group = sc.runAsGroup != null ? String(sc.runAsGroup) : '';
-    }
-    const probe = (raw.readinessProbe ?? raw.readiness_probe) as Record<string, unknown> | undefined;
-    if (probe) {
-      const http = (probe.httpGet ?? probe.http_get) as Record<string, unknown> | undefined;
-      if (http?.path != null) form.health_path = String(http.path);
-      if (http?.port != null && Number.isFinite(Number(http.port))) {
-        form.sse_port = Number(http.port);
-      }
-      if (probe.initialDelaySeconds != null) {
-        form.readiness_initial_delay = Number(probe.initialDelaySeconds);
-      }
-      if (probe.periodSeconds != null) form.readiness_period = Number(probe.periodSeconds);
-    }
-    return form;
-  }
-
-  const form = emptySandbox();
+): ContainerForm {
+  const form = emptyContainer(role);
   if (!raw) return form;
   form.container_id = String(raw.container_id ?? form.container_id);
   form.name = String(raw.name ?? form.name);
   form.image = String(raw.image ?? '');
   form.image_pull_policy = String(raw.imagePullPolicy ?? raw.image_pull_policy ?? 'IfNotPresent');
-  const ports = Array.isArray(raw.ports) ? raw.ports : [];
-  const first = ports[0] as Record<string, unknown> | undefined;
-  if (first?.containerPort != null) form.port = String(first.containerPort);
+  form.ports_json = formatJson(raw.ports ?? raw.ports_json);
   form.env_text = formatEnv(raw.env);
   form.env_from_json = formatJson(raw.envFrom ?? raw.env_from);
   form.volume_mounts_json = formatJson(raw.volumeMounts ?? raw.volume_mounts);
@@ -349,11 +316,11 @@ function containerFromRecord(
     if (probe.tcpSocket || probe.tcp_socket) {
       form.probe_type = 'tcpSocket';
       const tcp = (probe.tcpSocket ?? probe.tcp_socket) as Record<string, unknown>;
-      if (tcp.port != null) form.probe_port = Number(tcp.port);
+      if (tcp.port != null && Number.isFinite(Number(tcp.port))) form.probe_port = Number(tcp.port);
     } else if (probe.httpGet || probe.http_get) {
       form.probe_type = 'httpGet';
       const http = (probe.httpGet ?? probe.http_get) as Record<string, unknown>;
-      if (http.port != null) form.probe_port = Number(http.port);
+      if (http.port != null && Number.isFinite(Number(http.port))) form.probe_port = Number(http.port);
       if (http.path != null) form.probe_path = String(http.path);
     }
     if (probe.initialDelaySeconds != null) {
@@ -367,8 +334,8 @@ function containerFromRecord(
 
 function hydrateFromTemplateRow(row: ServiceConfigTemplate): {
   template: TemplateForm;
-  agent: AgentForm;
-  sandbox: SandboxForm;
+  agent: ContainerForm;
+  sandbox: ContainerForm;
   scopes: Record<string, unknown>[];
   sourceTemplateId?: string;
 } {
@@ -414,17 +381,18 @@ function hydrateFromTemplateRow(row: ServiceConfigTemplate): {
   };
 
   let agent = containerFromRecord(agentRaw, 'agent');
-  let sandbox = containerFromRecord(sandboxRaw, 'sandbox');
+  const sandbox = containerFromRecord(sandboxRaw, 'sandbox');
 
   // 无 stored containers 时用模板内联列回填主容器
   if (!agentRaw) {
+    const fallbackPort = row.sse_port || row.container_port || 8080;
     agent = {
       ...agent,
       container_id: row.main_container_id || agent.container_id,
       name: row.container_name || agent.name,
       image: row.agent_image || '',
       image_pull_policy: row.image_pull_policy || 'IfNotPresent',
-      sse_port: row.sse_port || row.container_port || 8080,
+      ports_json: JSON.stringify([{ name: 'sse', containerPort: fallbackPort }]),
       env_text: formatEnv(row.agent_env),
       cpu_request: row.agent_cpu_request ?? '',
       memory_request: row.agent_memory_request ?? '',
@@ -432,7 +400,9 @@ function hydrateFromTemplateRow(row: ServiceConfigTemplate): {
       memory_limit: row.agent_memory_limit ?? '',
       run_as_user: row.run_as_user != null ? String(row.run_as_user) : '',
       run_as_group: row.run_as_group != null ? String(row.run_as_group) : '',
-      health_path: row.health_path || '/api/v1/health',
+      probe_type: 'httpGet',
+      probe_port: fallbackPort,
+      probe_path: row.health_path || '/api/v1/health',
       readiness_initial_delay: row.readiness_initial_delay,
       readiness_period: row.readiness_period,
     };
@@ -451,114 +421,327 @@ function hydrateFromTemplateRow(row: ServiceConfigTemplate): {
   };
 }
 
-function buildAgentWire(agent: AgentForm, env: { name: string; value: string }[] | undefined, envFrom?: Record<string, unknown>[], mounts?: Record<string, unknown>[]) {
-  const ports: Record<string, unknown>[] = [
-    { name: 'sse', containerPort: agent.sse_port },
-  ];
-  const httpPort = parseOptionalInt(agent.http_port);
-  if (httpPort != null && !Number.isNaN(httpPort)) {
-    ports.push({ name: 'http', containerPort: httpPort });
-  }
-  const wire: Record<string, unknown> = {
-    container_id: agent.container_id.trim(),
-    name: agent.name.trim(),
-    image: agent.image.trim(),
-    imagePullPolicy: agent.image_pull_policy || 'IfNotPresent',
-    ports,
-  };
-  if (env?.length) wire.env = env;
-  if (envFrom?.length) wire.envFrom = envFrom;
-  if (mounts?.length) wire.volumeMounts = mounts;
-  const resources: Record<string, unknown> = {};
-  const requests: Record<string, string> = {};
-  const limits: Record<string, string> = {};
-  if (agent.cpu_request.trim()) requests.cpu = agent.cpu_request.trim();
-  if (agent.memory_request.trim()) requests.memory = agent.memory_request.trim();
-  if (agent.cpu_limit.trim()) limits.cpu = agent.cpu_limit.trim();
-  if (agent.memory_limit.trim()) limits.memory = agent.memory_limit.trim();
-  if (Object.keys(requests).length) resources.requests = requests;
-  if (Object.keys(limits).length) resources.limits = limits;
-  if (Object.keys(resources).length) wire.resources = resources;
-  const runAsUser = parseOptionalInt(agent.run_as_user);
-  const runAsGroup = parseOptionalInt(agent.run_as_group);
-  if (runAsUser != null || runAsGroup != null) {
-    wire.securityContext = {
-      ...(runAsUser != null && !Number.isNaN(runAsUser) ? { runAsUser } : {}),
-      ...(runAsGroup != null && !Number.isNaN(runAsGroup) ? { runAsGroup } : {}),
-    };
-  }
-  wire.readinessProbe = {
-    httpGet: { path: agent.health_path.trim() || '/health', port: agent.sse_port },
-    initialDelaySeconds: agent.readiness_initial_delay,
-    periodSeconds: agent.readiness_period,
-  };
-  return wire;
-}
-
-function buildSandboxWire(
-  sandbox: SandboxForm,
+function buildContainerWire(
+  form: ContainerForm,
   env: { name: string; value: string }[] | undefined,
-  envFrom?: Record<string, unknown>[],
-  mounts?: Record<string, unknown>[],
+  envFrom: Record<string, unknown>[] | undefined,
+  mounts: Record<string, unknown>[] | undefined,
+  ports: Record<string, unknown>[] | undefined,
 ) {
   const wire: Record<string, unknown> = {
-    container_id: sandbox.container_id.trim(),
-    name: sandbox.name.trim(),
-    image: sandbox.image.trim(),
-    imagePullPolicy: sandbox.image_pull_policy || 'IfNotPresent',
+    container_id: form.container_id.trim(),
+    name: form.name.trim(),
+    image: form.image.trim(),
+    imagePullPolicy: form.image_pull_policy || 'IfNotPresent',
   };
-  const port = parseOptionalInt(sandbox.port);
-  if (port != null && !Number.isNaN(port)) {
-    wire.ports = [{ containerPort: port }];
-  }
+  if (ports?.length) wire.ports = ports;
   if (env?.length) wire.env = env;
   if (envFrom?.length) wire.envFrom = envFrom;
   if (mounts?.length) wire.volumeMounts = mounts;
   const resources: Record<string, unknown> = {};
   const requests: Record<string, string> = {};
   const limits: Record<string, string> = {};
-  if (sandbox.cpu_request.trim()) requests.cpu = sandbox.cpu_request.trim();
-  if (sandbox.memory_request.trim()) requests.memory = sandbox.memory_request.trim();
-  if (sandbox.cpu_limit.trim()) limits.cpu = sandbox.cpu_limit.trim();
-  if (sandbox.memory_limit.trim()) limits.memory = sandbox.memory_limit.trim();
+  if (form.cpu_request.trim()) requests.cpu = form.cpu_request.trim();
+  if (form.memory_request.trim()) requests.memory = form.memory_request.trim();
+  if (form.cpu_limit.trim()) limits.cpu = form.cpu_limit.trim();
+  if (form.memory_limit.trim()) limits.memory = form.memory_limit.trim();
   if (Object.keys(requests).length) resources.requests = requests;
   if (Object.keys(limits).length) resources.limits = limits;
   if (Object.keys(resources).length) wire.resources = resources;
 
   const sc: Record<string, unknown> = {};
-  const runAsUser = parseOptionalInt(sandbox.run_as_user);
-  const runAsGroup = parseOptionalInt(sandbox.run_as_group);
+  const runAsUser = parseOptionalInt(form.run_as_user);
+  const runAsGroup = parseOptionalInt(form.run_as_group);
   if (runAsUser != null && !Number.isNaN(runAsUser)) sc.runAsUser = runAsUser;
   if (runAsGroup != null && !Number.isNaN(runAsGroup)) sc.runAsGroup = runAsGroup;
-  if (sandbox.privileged) sc.privileged = true;
-  const caps = sandbox.capabilities_add
+  if (form.privileged) sc.privileged = true;
+  const caps = form.capabilities_add
     .split(/[,;\s]+/)
     .map((s) => s.trim())
     .filter(Boolean);
   if (caps.length) sc.capabilities = { add: caps };
-  if (sandbox.seccomp_type.trim()) {
-    sc.seccompProfile = { type: sandbox.seccomp_type.trim() };
+  if (form.seccomp_type.trim()) {
+    sc.seccompProfile = { type: form.seccomp_type.trim() };
   }
-  if (sandbox.apparmor_type.trim()) {
-    sc.appArmorProfile = { type: sandbox.apparmor_type.trim() };
+  if (form.apparmor_type.trim()) {
+    sc.appArmorProfile = { type: form.apparmor_type.trim() };
   }
   if (Object.keys(sc).length) wire.securityContext = sc;
 
   const probe: Record<string, unknown> = {
-    initialDelaySeconds: sandbox.readiness_initial_delay,
-    periodSeconds: sandbox.readiness_period,
-    timeoutSeconds: sandbox.readiness_timeout,
+    initialDelaySeconds: form.readiness_initial_delay,
+    periodSeconds: form.readiness_period,
+    timeoutSeconds: form.readiness_timeout,
   };
-  if (sandbox.probe_type === 'httpGet') {
+  if (form.probe_type === 'httpGet') {
     probe.httpGet = {
-      path: sandbox.probe_path.trim() || '/health',
-      port: sandbox.probe_port,
+      path: form.probe_path.trim() || '/health',
+      port: form.probe_port,
     };
   } else {
-    probe.tcpSocket = { port: sandbox.probe_port };
+    probe.tcpSocket = { port: form.probe_port };
   }
   wire.readinessProbe = probe;
   return wire;
+}
+
+/** 容器通用配置字段组（主容器 / Sandbox 页签共用） */
+function ContainerFields({
+  form,
+  update,
+  imageLabelKey,
+  portsPlaceholder,
+}: {
+  form: ContainerForm;
+  update: <K extends keyof ContainerForm>(k: K, v: ContainerForm[K]) => void;
+  imageLabelKey: string;
+  portsPlaceholder: string;
+}) {
+  const { t } = useTranslation();
+  return (
+    <>
+      <div>
+        <FieldLabel required>{t('serviceConfigTemplate.containerId')}</FieldLabel>
+        <LimitedTextInput
+          value={form.container_id}
+          maxLength={100}
+          onChange={(v) => update('container_id', v)}
+        />
+      </div>
+      <div>
+        <FieldLabel required>{t('serviceConfigTemplate.containerName')}</FieldLabel>
+        <LimitedTextInput
+          value={form.name}
+          maxLength={128}
+          onChange={(v) => update('name', v)}
+        />
+      </div>
+      <div className="md:col-span-2">
+        <FieldLabel required>{t(imageLabelKey)}</FieldLabel>
+        <LimitedTextInput
+          value={form.image}
+          maxLength={512}
+          onChange={(v) => update('image', v)}
+        />
+      </div>
+      <div>
+        <label className="label">{t('serviceConfigTemplate.imagePullPolicy')}</label>
+        <select
+          className="select"
+          value={form.image_pull_policy}
+          onChange={(e) => update('image_pull_policy', e.target.value)}
+        >
+          <option value="IfNotPresent">IfNotPresent</option>
+          <option value="Always">Always</option>
+          <option value="Never">Never</option>
+        </select>
+      </div>
+      <div className="md:col-span-2">
+        <label className="label">{t('serviceConfigTemplate.ports')}</label>
+        <textarea
+          className="input min-h-[4.5rem] font-mono text-[12px]"
+          placeholder={portsPlaceholder}
+          value={form.ports_json}
+          onChange={(e) => update('ports_json', e.target.value)}
+        />
+        <div className="text-[11px] text-muted mt-1">{t('serviceConfigTemplate.portsHint')}</div>
+      </div>
+
+      <GroupLabel>{t('serviceConfigTemplate.securityContextGroup')}</GroupLabel>
+      <div>
+        <label className="label">{t('serviceConfigTemplate.runAsUser')}</label>
+        <input
+          className="input"
+          type="number"
+          min={0}
+          value={form.run_as_user}
+          onChange={(e) => update('run_as_user', e.target.value)}
+        />
+      </div>
+      <div>
+        <label className="label">{t('serviceConfigTemplate.runAsGroup')}</label>
+        <input
+          className="input"
+          type="number"
+          min={0}
+          value={form.run_as_group}
+          onChange={(e) => update('run_as_group', e.target.value)}
+        />
+      </div>
+      <div className="flex items-end gap-2 pb-1">
+        <label className="label flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={form.privileged}
+            onChange={(e) => update('privileged', e.target.checked)}
+          />
+          {t('serviceConfigTemplate.privileged')}
+        </label>
+      </div>
+      <div>
+        <label className="label">{t('serviceConfigTemplate.capabilitiesAdd')}</label>
+        <input
+          className="input"
+          placeholder="SYS_ADMIN, NET_ADMIN"
+          value={form.capabilities_add}
+          onChange={(e) => update('capabilities_add', e.target.value)}
+        />
+      </div>
+      <div>
+        <label className="label">{t('serviceConfigTemplate.seccompType')}</label>
+        <select
+          className="select"
+          value={form.seccomp_type}
+          onChange={(e) => update('seccomp_type', e.target.value)}
+        >
+          <option value="">—</option>
+          <option value="Unconfined">Unconfined</option>
+          <option value="RuntimeDefault">RuntimeDefault</option>
+        </select>
+      </div>
+      <div>
+        <label className="label">{t('serviceConfigTemplate.apparmorType')}</label>
+        <select
+          className="select"
+          value={form.apparmor_type}
+          onChange={(e) => update('apparmor_type', e.target.value)}
+        >
+          <option value="">—</option>
+          <option value="Unconfined">Unconfined</option>
+          <option value="RuntimeDefault">RuntimeDefault</option>
+        </select>
+      </div>
+
+      <GroupLabel>{t('serviceConfigTemplate.readinessProbeGroup')}</GroupLabel>
+      <div>
+        <label className="label">{t('serviceConfigTemplate.probeType')}</label>
+        <select
+          className="select"
+          value={form.probe_type}
+          onChange={(e) => update('probe_type', e.target.value as ContainerForm['probe_type'])}
+        >
+          <option value="tcpSocket">tcpSocket</option>
+          <option value="httpGet">httpGet</option>
+        </select>
+      </div>
+      <div>
+        <label className="label">{t('serviceConfigTemplate.probePort')}</label>
+        <input
+          className="input"
+          type="number"
+          min={1}
+          max={65535}
+          value={form.probe_port}
+          onChange={(e) => update('probe_port', Number(e.target.value))}
+        />
+      </div>
+      {form.probe_type === 'httpGet' && (
+        <div>
+          <label className="label">{t('serviceConfigTemplate.healthPath')}</label>
+          <input
+            className="input"
+            value={form.probe_path}
+            onChange={(e) => update('probe_path', e.target.value)}
+          />
+        </div>
+      )}
+      <div>
+        <label className="label">{t('serviceConfigTemplate.readinessInitialDelay')}</label>
+        <input
+          className="input"
+          type="number"
+          min={0}
+          value={form.readiness_initial_delay}
+          onChange={(e) => update('readiness_initial_delay', Number(e.target.value))}
+        />
+      </div>
+      <div>
+        <label className="label">{t('serviceConfigTemplate.readinessPeriod')}</label>
+        <input
+          className="input"
+          type="number"
+          min={1}
+          value={form.readiness_period}
+          onChange={(e) => update('readiness_period', Number(e.target.value))}
+        />
+      </div>
+      <div>
+        <label className="label">{t('serviceConfigTemplate.probeTimeout')}</label>
+        <input
+          className="input"
+          type="number"
+          min={1}
+          max={300}
+          value={form.readiness_timeout}
+          onChange={(e) => update('readiness_timeout', Number(e.target.value))}
+        />
+      </div>
+
+      <div>
+        <label className="label">{t('serviceConfigTemplate.cpuRequest')}</label>
+        <input
+          className="input"
+          placeholder="500m"
+          value={form.cpu_request}
+          onChange={(e) => update('cpu_request', e.target.value)}
+        />
+      </div>
+      <div>
+        <label className="label">{t('serviceConfigTemplate.memoryRequest')}</label>
+        <input
+          className="input"
+          placeholder="512Mi"
+          value={form.memory_request}
+          onChange={(e) => update('memory_request', e.target.value)}
+        />
+      </div>
+      <div>
+        <label className="label">{t('serviceConfigTemplate.cpuLimit')}</label>
+        <input
+          className="input"
+          placeholder="2"
+          value={form.cpu_limit}
+          onChange={(e) => update('cpu_limit', e.target.value)}
+        />
+      </div>
+      <div>
+        <label className="label">{t('serviceConfigTemplate.memoryLimit')}</label>
+        <input
+          className="input"
+          placeholder="2Gi"
+          value={form.memory_limit}
+          onChange={(e) => update('memory_limit', e.target.value)}
+        />
+      </div>
+      <div className="md:col-span-2">
+        <label className="label">{t('serviceConfigTemplate.agentEnv')}</label>
+        <textarea
+          className="input min-h-[5rem] font-mono text-[12px]"
+          placeholder={'KEY=value'}
+          value={form.env_text}
+          onChange={(e) => update('env_text', e.target.value)}
+        />
+      </div>
+      <div className="md:col-span-2">
+        <label className="label">{t('serviceConfigTemplate.envFrom')}</label>
+        <textarea
+          className="input min-h-[4.5rem] font-mono text-[12px]"
+          placeholder='[{"secretRef":{"name":"jiuwenclaw-secret-configmap"}}]'
+          value={form.env_from_json}
+          onChange={(e) => update('env_from_json', e.target.value)}
+        />
+      </div>
+      <div className="md:col-span-2">
+        <label className="label">{t('serviceConfigTemplate.volumeMounts')}</label>
+        <textarea
+          className="input min-h-[5rem] font-mono text-[12px]"
+          placeholder='[{"name":"data","mountPath":"/root/.jiuwenswarm"}]'
+          value={form.volume_mounts_json}
+          onChange={(e) => update('volume_mounts_json', e.target.value)}
+        />
+      </div>
+    </>
+  );
 }
 
 export function ServiceConfigTemplateEditPage({ templateId }: { templateId?: string }) {
@@ -570,16 +753,16 @@ export function ServiceConfigTemplateEditPage({ templateId }: { templateId?: str
   const [loading, setLoading] = useState(!isNew);
   const [saving, setSaving] = useState(false);
   const [template, setTemplate] = useState<TemplateForm>(emptyTemplate);
-  const [agent, setAgent] = useState<AgentForm>(emptyAgent);
-  const [sandbox, setSandbox] = useState<SandboxForm>(emptySandbox);
+  const [agent, setAgent] = useState<ContainerForm>(() => emptyContainer('agent'));
+  const [sandbox, setSandbox] = useState<ContainerForm>(() => emptyContainer('sandbox'));
   const [scopes, setScopes] = useState<Record<string, unknown>[]>([]);
   const [sourceTemplateId, setSourceTemplateId] = useState<string | undefined>();
 
   useEffect(() => {
     if (isNew) {
       setTemplate(emptyTemplate());
-      setAgent(emptyAgent());
-      setSandbox(emptySandbox());
+      setAgent(emptyContainer('agent'));
+      setSandbox(emptyContainer('sandbox'));
       setScopes([]);
       setSourceTemplateId(undefined);
       setLoading(false);
@@ -626,9 +809,9 @@ export function ServiceConfigTemplateEditPage({ templateId }: { templateId?: str
 
   const updateTpl = <K extends keyof TemplateForm>(k: K, v: TemplateForm[K]) =>
     setTemplate((s) => ({ ...s, [k]: v }));
-  const updateAgent = <K extends keyof AgentForm>(k: K, v: AgentForm[K]) =>
+  const updateAgent = <K extends keyof ContainerForm>(k: K, v: ContainerForm[K]) =>
     setAgent((s) => ({ ...s, [k]: v }));
-  const updateSandbox = <K extends keyof SandboxForm>(k: K, v: SandboxForm[K]) =>
+  const updateSandbox = <K extends keyof ContainerForm>(k: K, v: ContainerForm[K]) =>
     setSandbox((s) => ({ ...s, [k]: v }));
 
   const submit = async () => {
@@ -660,32 +843,34 @@ export function ServiceConfigTemplateEditPage({ templateId }: { templateId?: str
       setSection('template');
       return;
     }
-    if (agent.health_path.trim() && !isValidUnixAbsPath(agent.health_path.trim())) {
+    if (
+      agent.probe_type === 'httpGet' &&
+      agent.probe_path.trim() &&
+      !isValidUnixAbsPath(agent.probe_path.trim())
+    ) {
       toast('warn', t('serviceConfigTemplate.pathInvalid', { field: t('serviceConfigTemplate.healthPath') }));
       setSection('agentserver');
       return;
     }
 
-    for (const [value, labelKey] of [
-      [agent.cpu_request, 'agentCpuRequest'],
-      [agent.cpu_limit, 'agentCpuLimit'],
-      [sandbox.cpu_request, 'sandboxCpuRequest'],
-      [sandbox.cpu_limit, 'sandboxCpuLimit'],
-    ] as const) {
-      if (!isValidK8sCpu(value)) {
-        toast('warn', t('serviceConfigTemplate.cpuQuantityInvalid', { field: t(`serviceConfigTemplate.${labelKey}`) }));
-        return;
+    for (const container of [agent, sandbox]) {
+      for (const [value, labelKey] of [
+        [container.cpu_request, 'cpuRequest'],
+        [container.cpu_limit, 'cpuLimit'],
+      ] as const) {
+        if (!isValidK8sCpu(value)) {
+          toast('warn', t('serviceConfigTemplate.cpuQuantityInvalid', { field: t(`serviceConfigTemplate.${labelKey}`) }));
+          return;
+        }
       }
-    }
-    for (const [value, labelKey] of [
-      [agent.memory_request, 'agentMemoryRequest'],
-      [agent.memory_limit, 'agentMemoryLimit'],
-      [sandbox.memory_request, 'sandboxMemoryRequest'],
-      [sandbox.memory_limit, 'sandboxMemoryLimit'],
-    ] as const) {
-      if (!isValidK8sMemory(value)) {
-        toast('warn', t('serviceConfigTemplate.memoryQuantityInvalid', { field: t(`serviceConfigTemplate.${labelKey}`) }));
-        return;
+      for (const [value, labelKey] of [
+        [container.memory_request, 'memoryRequest'],
+        [container.memory_limit, 'memoryLimit'],
+      ] as const) {
+        if (!isValidK8sMemory(value)) {
+          toast('warn', t('serviceConfigTemplate.memoryQuantityInvalid', { field: t(`serviceConfigTemplate.${labelKey}`) }));
+          return;
+        }
       }
     }
 
@@ -711,11 +896,15 @@ export function ServiceConfigTemplateEditPage({ templateId }: { templateId?: str
     const sandboxEnvFrom = parseJsonArray(sandbox.env_from_json);
     const agentMounts = parseJsonArray(agent.volume_mounts_json);
     const sandboxMounts = parseJsonArray(sandbox.volume_mounts_json);
+    const agentPorts = parseJsonArray(agent.ports_json);
+    const sandboxPorts = parseJsonArray(sandbox.ports_json);
     for (const [parsed, labelKey, sec] of [
       [agentEnvFrom, 'envFrom', 'agentserver'],
       [sandboxEnvFrom, 'envFrom', 'sandbox'],
       [agentMounts, 'volumeMounts', 'agentserver'],
       [sandboxMounts, 'volumeMounts', 'sandbox'],
+      [agentPorts, 'ports', 'agentserver'],
+      [sandboxPorts, 'ports', 'sandbox'],
     ] as const) {
       if (!parsed.ok) {
         toast('warn', t('serviceConfigTemplate.jsonArrayInvalid', { field: t(`serviceConfigTemplate.${labelKey}`) }));
@@ -724,7 +913,23 @@ export function ServiceConfigTemplateEditPage({ templateId }: { templateId?: str
       }
     }
     // 循环内 return 无法收窄联合类型，这里再判一次供 TS 使用 .value
-    if (!agentEnvFrom.ok || !sandboxEnvFrom.ok || !agentMounts.ok || !sandboxMounts.ok) return;
+    if (
+      !agentEnvFrom.ok ||
+      !sandboxEnvFrom.ok ||
+      !agentMounts.ok ||
+      !sandboxMounts.ok ||
+      !agentPorts.ok ||
+      !sandboxPorts.ok
+    ) {
+      return;
+    }
+
+    const ssePort = extractNamedPort(agentPorts.value, 'sse');
+    if (ssePort == null) {
+      toast('warn', t('serviceConfigTemplate.ssePortRequired'));
+      setSection('agentserver');
+      return;
+    }
 
     const unsafe = findUnsafeTextField([
       { label: t('serviceConfigTemplate.templateName'), value: template.template_name },
@@ -739,12 +944,19 @@ export function ServiceConfigTemplateEditPage({ templateId }: { templateId?: str
       return;
     }
 
-    const agentWire = buildAgentWire(agent, agentEnv.value, agentEnvFrom.value, agentMounts.value);
-    const sandboxWire = buildSandboxWire(
+    const agentWire = buildContainerWire(
+      agent,
+      agentEnv.value,
+      agentEnvFrom.value,
+      agentMounts.value,
+      agentPorts.value,
+    );
+    const sandboxWire = buildContainerWire(
       sandbox,
       sandboxEnv.value,
       sandboxEnvFrom.value,
       sandboxMounts.value,
+      sandboxPorts.value,
     );
     const runAsUser = parseOptionalInt(agent.run_as_user);
     const runAsGroup = parseOptionalInt(agent.run_as_group);
@@ -759,11 +971,14 @@ export function ServiceConfigTemplateEditPage({ templateId }: { templateId?: str
       run_as_group: runAsGroup != null && !Number.isNaN(runAsGroup) ? runAsGroup : null,
       pod_name: template.pod_name.trim() || 'agentserver',
       container_name: agent.name.trim() || 'agent',
-      container_port: agent.sse_port,
+      container_port: ssePort,
       port_name: 'sse',
-      sse_port: agent.sse_port,
+      sse_port: ssePort,
       sse_path: template.sse_path.trim() || '/api/v1/events/stream',
-      health_path: agent.health_path.trim() || '/api/v1/health',
+      health_path:
+        agent.probe_type === 'httpGet'
+          ? agent.probe_path.trim() || '/api/v1/health'
+          : undefined,
       agent_env: envToMap(agentEnv.value),
       image_pull_policy: (agent.image_pull_policy || 'IfNotPresent') as
         | 'Always'
@@ -1041,176 +1256,12 @@ export function ServiceConfigTemplateEditPage({ templateId }: { templateId?: str
           title={t('serviceConfigTemplate.tabAgentServer')}
           hint={t('serviceConfigTemplate.tabAgentServerHint')}
         >
-          <div>
-            <FieldLabel required>{t('serviceConfigTemplate.containerId')}</FieldLabel>
-            <LimitedTextInput
-              value={agent.container_id}
-              maxLength={100}
-              onChange={(v) => updateAgent('container_id', v)}
-            />
-          </div>
-          <div>
-            <FieldLabel required>{t('serviceConfigTemplate.containerName')}</FieldLabel>
-            <LimitedTextInput
-              value={agent.name}
-              maxLength={128}
-              onChange={(v) => updateAgent('name', v)}
-            />
-          </div>
-          <div className="md:col-span-2">
-            <FieldLabel required>{t('serviceConfigTemplate.agentImage')}</FieldLabel>
-            <LimitedTextInput
-              value={agent.image}
-              maxLength={512}
-              onChange={(v) => updateAgent('image', v)}
-            />
-          </div>
-          <div>
-            <label className="label">{t('serviceConfigTemplate.imagePullPolicy')}</label>
-            <select
-              className="select"
-              value={agent.image_pull_policy}
-              onChange={(e) => updateAgent('image_pull_policy', e.target.value)}
-            >
-              <option value="IfNotPresent">IfNotPresent</option>
-              <option value="Always">Always</option>
-              <option value="Never">Never</option>
-            </select>
-          </div>
-          <div>
-            <label className="label">{t('serviceConfigTemplate.ssePort')}</label>
-            <input
-              className="input"
-              type="number"
-              min={1}
-              max={65535}
-              value={agent.sse_port}
-              onChange={(e) => updateAgent('sse_port', Number(e.target.value))}
-            />
-          </div>
-          <div>
-            <label className="label">{t('serviceConfigTemplate.httpPort')}</label>
-            <input
-              className="input"
-              type="number"
-              min={1}
-              max={65535}
-              placeholder="optional"
-              value={agent.http_port}
-              onChange={(e) => updateAgent('http_port', e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="label">{t('serviceConfigTemplate.healthPath')}</label>
-            <input
-              className="input"
-              value={agent.health_path}
-              onChange={(e) => updateAgent('health_path', e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="label">{t('serviceConfigTemplate.readinessInitialDelay')}</label>
-            <input
-              className="input"
-              type="number"
-              min={0}
-              value={agent.readiness_initial_delay}
-              onChange={(e) => updateAgent('readiness_initial_delay', Number(e.target.value))}
-            />
-          </div>
-          <div>
-            <label className="label">{t('serviceConfigTemplate.readinessPeriod')}</label>
-            <input
-              className="input"
-              type="number"
-              min={1}
-              value={agent.readiness_period}
-              onChange={(e) => updateAgent('readiness_period', Number(e.target.value))}
-            />
-          </div>
-          <div>
-            <label className="label">{t('serviceConfigTemplate.runAsUser')}</label>
-            <input
-              className="input"
-              type="number"
-              min={0}
-              value={agent.run_as_user}
-              onChange={(e) => updateAgent('run_as_user', e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="label">{t('serviceConfigTemplate.runAsGroup')}</label>
-            <input
-              className="input"
-              type="number"
-              min={0}
-              value={agent.run_as_group}
-              onChange={(e) => updateAgent('run_as_group', e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="label">{t('serviceConfigTemplate.agentCpuRequest')}</label>
-            <input
-              className="input"
-              placeholder="500m"
-              value={agent.cpu_request}
-              onChange={(e) => updateAgent('cpu_request', e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="label">{t('serviceConfigTemplate.agentMemoryRequest')}</label>
-            <input
-              className="input"
-              placeholder="512Mi"
-              value={agent.memory_request}
-              onChange={(e) => updateAgent('memory_request', e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="label">{t('serviceConfigTemplate.agentCpuLimit')}</label>
-            <input
-              className="input"
-              placeholder="2"
-              value={agent.cpu_limit}
-              onChange={(e) => updateAgent('cpu_limit', e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="label">{t('serviceConfigTemplate.agentMemoryLimit')}</label>
-            <input
-              className="input"
-              placeholder="2Gi"
-              value={agent.memory_limit}
-              onChange={(e) => updateAgent('memory_limit', e.target.value)}
-            />
-          </div>
-          <div className="md:col-span-2">
-            <label className="label">{t('serviceConfigTemplate.agentEnv')}</label>
-            <textarea
-              className="input min-h-[5rem] font-mono text-[12px]"
-              placeholder={'KEY=value'}
-              value={agent.env_text}
-              onChange={(e) => updateAgent('env_text', e.target.value)}
-            />
-          </div>
-          <div className="md:col-span-2">
-            <label className="label">{t('serviceConfigTemplate.envFrom')}</label>
-            <textarea
-              className="input min-h-[4.5rem] font-mono text-[12px]"
-              placeholder='[{"secretRef":{"name":"jiuwenclaw-secret-configmap"}}]'
-              value={agent.env_from_json}
-              onChange={(e) => updateAgent('env_from_json', e.target.value)}
-            />
-          </div>
-          <div className="md:col-span-2">
-            <label className="label">{t('serviceConfigTemplate.volumeMounts')}</label>
-            <textarea
-              className="input min-h-[5rem] font-mono text-[12px]"
-              placeholder='[{"name":"data","mountPath":"/root/.jiuwenswarm"}]'
-              value={agent.volume_mounts_json}
-              onChange={(e) => updateAgent('volume_mounts_json', e.target.value)}
-            />
-          </div>
+          <ContainerFields
+            form={agent}
+            update={updateAgent}
+            imageLabelKey="serviceConfigTemplate.agentImage"
+            portsPlaceholder='[{"name":"sse","containerPort":8766}]'
+          />
         </SectionCard>
       )}
 
@@ -1219,242 +1270,12 @@ export function ServiceConfigTemplateEditPage({ templateId }: { templateId?: str
           title={t('serviceConfigTemplate.tabSandbox')}
           hint={t('serviceConfigTemplate.tabSandboxHint')}
         >
-          <div>
-            <FieldLabel required>{t('serviceConfigTemplate.containerId')}</FieldLabel>
-            <LimitedTextInput
-              value={sandbox.container_id}
-              maxLength={100}
-              onChange={(v) => updateSandbox('container_id', v)}
-            />
-          </div>
-          <div>
-            <FieldLabel required>{t('serviceConfigTemplate.containerName')}</FieldLabel>
-            <LimitedTextInput
-              value={sandbox.name}
-              maxLength={128}
-              onChange={(v) => updateSandbox('name', v)}
-            />
-          </div>
-          <div className="md:col-span-2">
-            <FieldLabel required>{t('serviceConfigTemplate.sandboxImage')}</FieldLabel>
-            <LimitedTextInput
-              value={sandbox.image}
-              maxLength={512}
-              onChange={(v) => updateSandbox('image', v)}
-            />
-          </div>
-          <div>
-            <label className="label">{t('serviceConfigTemplate.imagePullPolicy')}</label>
-            <select
-              className="select"
-              value={sandbox.image_pull_policy}
-              onChange={(e) => updateSandbox('image_pull_policy', e.target.value)}
-            >
-              <option value="IfNotPresent">IfNotPresent</option>
-              <option value="Always">Always</option>
-              <option value="Never">Never</option>
-            </select>
-          </div>
-          <div>
-            <label className="label">{t('serviceConfigTemplate.sandboxPort')}</label>
-            <input
-              className="input"
-              type="number"
-              min={1}
-              max={65535}
-              value={sandbox.port}
-              onChange={(e) => updateSandbox('port', e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="label">{t('serviceConfigTemplate.probeType')}</label>
-            <select
-              className="select"
-              value={sandbox.probe_type}
-              onChange={(e) =>
-                updateSandbox('probe_type', e.target.value as SandboxForm['probe_type'])
-              }
-            >
-              <option value="tcpSocket">tcpSocket</option>
-              <option value="httpGet">httpGet</option>
-            </select>
-          </div>
-          <div>
-            <label className="label">{t('serviceConfigTemplate.probePort')}</label>
-            <input
-              className="input"
-              type="number"
-              min={1}
-              max={65535}
-              value={sandbox.probe_port}
-              onChange={(e) => updateSandbox('probe_port', Number(e.target.value))}
-            />
-          </div>
-          {sandbox.probe_type === 'httpGet' && (
-            <div>
-              <label className="label">{t('serviceConfigTemplate.healthPath')}</label>
-              <input
-                className="input"
-                value={sandbox.probe_path}
-                onChange={(e) => updateSandbox('probe_path', e.target.value)}
-              />
-            </div>
-          )}
-          <div>
-            <label className="label">{t('serviceConfigTemplate.readinessInitialDelay')}</label>
-            <input
-              className="input"
-              type="number"
-              min={0}
-              value={sandbox.readiness_initial_delay}
-              onChange={(e) => updateSandbox('readiness_initial_delay', Number(e.target.value))}
-            />
-          </div>
-          <div>
-            <label className="label">{t('serviceConfigTemplate.readinessPeriod')}</label>
-            <input
-              className="input"
-              type="number"
-              min={1}
-              value={sandbox.readiness_period}
-              onChange={(e) => updateSandbox('readiness_period', Number(e.target.value))}
-            />
-          </div>
-          <div>
-            <label className="label">{t('serviceConfigTemplate.probeTimeout')}</label>
-            <input
-              className="input"
-              type="number"
-              min={1}
-              max={300}
-              value={sandbox.readiness_timeout}
-              onChange={(e) => updateSandbox('readiness_timeout', Number(e.target.value))}
-            />
-          </div>
-          <div className="flex items-end gap-2 pb-1">
-            <label className="label flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={sandbox.privileged}
-                onChange={(e) => updateSandbox('privileged', e.target.checked)}
-              />
-              {t('serviceConfigTemplate.privileged')}
-            </label>
-          </div>
-          <div>
-            <label className="label">{t('serviceConfigTemplate.capabilitiesAdd')}</label>
-            <input
-              className="input"
-              placeholder="SYS_ADMIN, NET_ADMIN"
-              value={sandbox.capabilities_add}
-              onChange={(e) => updateSandbox('capabilities_add', e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="label">{t('serviceConfigTemplate.seccompType')}</label>
-            <select
-              className="select"
-              value={sandbox.seccomp_type}
-              onChange={(e) => updateSandbox('seccomp_type', e.target.value)}
-            >
-              <option value="">—</option>
-              <option value="Unconfined">Unconfined</option>
-              <option value="RuntimeDefault">RuntimeDefault</option>
-            </select>
-          </div>
-          <div>
-            <label className="label">{t('serviceConfigTemplate.apparmorType')}</label>
-            <select
-              className="select"
-              value={sandbox.apparmor_type}
-              onChange={(e) => updateSandbox('apparmor_type', e.target.value)}
-            >
-              <option value="">—</option>
-              <option value="Unconfined">Unconfined</option>
-              <option value="RuntimeDefault">RuntimeDefault</option>
-            </select>
-          </div>
-          <div>
-            <label className="label">{t('serviceConfigTemplate.runAsUser')}</label>
-            <input
-              className="input"
-              type="number"
-              min={0}
-              value={sandbox.run_as_user}
-              onChange={(e) => updateSandbox('run_as_user', e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="label">{t('serviceConfigTemplate.runAsGroup')}</label>
-            <input
-              className="input"
-              type="number"
-              min={0}
-              value={sandbox.run_as_group}
-              onChange={(e) => updateSandbox('run_as_group', e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="label">{t('serviceConfigTemplate.sandboxCpuRequest')}</label>
-            <input
-              className="input"
-              placeholder="250m"
-              value={sandbox.cpu_request}
-              onChange={(e) => updateSandbox('cpu_request', e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="label">{t('serviceConfigTemplate.sandboxMemoryRequest')}</label>
-            <input
-              className="input"
-              placeholder="256Mi"
-              value={sandbox.memory_request}
-              onChange={(e) => updateSandbox('memory_request', e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="label">{t('serviceConfigTemplate.sandboxCpuLimit')}</label>
-            <input
-              className="input"
-              placeholder="1"
-              value={sandbox.cpu_limit}
-              onChange={(e) => updateSandbox('cpu_limit', e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="label">{t('serviceConfigTemplate.sandboxMemoryLimit')}</label>
-            <input
-              className="input"
-              placeholder="1Gi"
-              value={sandbox.memory_limit}
-              onChange={(e) => updateSandbox('memory_limit', e.target.value)}
-            />
-          </div>
-          <div className="md:col-span-2">
-            <label className="label">{t('serviceConfigTemplate.agentEnv')}</label>
-            <textarea
-              className="input min-h-[5rem] font-mono text-[12px]"
-              placeholder={'KEY=value'}
-              value={sandbox.env_text}
-              onChange={(e) => updateSandbox('env_text', e.target.value)}
-            />
-          </div>
-          <div className="md:col-span-2">
-            <label className="label">{t('serviceConfigTemplate.envFrom')}</label>
-            <textarea
-              className="input min-h-[4.5rem] font-mono text-[12px]"
-              value={sandbox.env_from_json}
-              onChange={(e) => updateSandbox('env_from_json', e.target.value)}
-            />
-          </div>
-          <div className="md:col-span-2">
-            <label className="label">{t('serviceConfigTemplate.volumeMounts')}</label>
-            <textarea
-              className="input min-h-[5rem] font-mono text-[12px]"
-              value={sandbox.volume_mounts_json}
-              onChange={(e) => updateSandbox('volume_mounts_json', e.target.value)}
-            />
-          </div>
+          <ContainerFields
+            form={sandbox}
+            update={updateSandbox}
+            imageLabelKey="serviceConfigTemplate.sandboxImage"
+            portsPlaceholder='[{"containerPort":8321}]'
+          />
         </SectionCard>
       )}
       </div>

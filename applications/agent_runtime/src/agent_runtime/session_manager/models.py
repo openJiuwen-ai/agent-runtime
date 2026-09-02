@@ -1,11 +1,9 @@
 # coding: utf-8
 """Session Manager 数据模型（template 业务视图 / pod_spec 派生）。
 
-template 字段定义见 HLD §3.1「数据结构定义」。DB 列名沿用 EE 兼容名：
-- scope_concurrency → DB ``session_concurrency``
-- pod_concurrency   → DB ``service_concurrency``
-- pod_ttl           → DB ``service_ttl``
-- min_idle_pods     → DB ``min_idle_services``
+template 字段定义见 HLD §3.1「数据结构定义」。DB 列名与 wire 术语同名
+(2026-09 起统一;曾用 EE 兼容名 session_concurrency/service_concurrency/
+service_ttl/min_idle_services,存量库须 RENAME COLUMN)。
 
 scope 定义(scope_id/index/引用模板/路由规则集)由 config_sync 全量下发,
 见 ``routing.py``(RoutingScopeDef)与 ``routing_scope`` 表——不再由

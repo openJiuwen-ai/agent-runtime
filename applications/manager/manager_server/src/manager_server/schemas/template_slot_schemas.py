@@ -15,6 +15,7 @@ SKILL_WHITELIST_SLOT = "skill_whitelist"
 EXTENSION_CONFIG_SLOT = "extension_config"
 MCP_SLOT = "mcp"
 EMBEDDING_MODEL_SLOT = "embedding_model"
+PERMISSIONS_SLOT = "permissions"
 
 _TEMPLATE_REF_SLOTS: tuple[str, ...] = (
     *_MODEL_TEMPLATE_SLOTS,
@@ -22,12 +23,13 @@ _TEMPLATE_REF_SLOTS: tuple[str, ...] = (
     EXTENSION_CONFIG_SLOT,
     MCP_SLOT,
     EMBEDDING_MODEL_SLOT,
+    PERMISSIONS_SLOT,
 )
 
 MODEL_TEMPLATE_SLOTS: frozenset[str] = frozenset(_MODEL_TEMPLATE_SLOTS)
 TEMPLATE_REF_SLOTS: frozenset[str] = frozenset(_TEMPLATE_REF_SLOTS)
 SINGLE_VALUE_TEMPLATE_REF_SLOTS: frozenset[str] = frozenset(
-    (*_MODEL_TEMPLATE_SLOTS, EMBEDDING_MODEL_SLOT)
+    (*_MODEL_TEMPLATE_SLOTS, EMBEDDING_MODEL_SLOT, PERMISSIONS_SLOT)
 )
 
 DefaultTemplateMappingTypeLiteral = Literal[
@@ -39,6 +41,7 @@ DefaultTemplateMappingTypeLiteral = Literal[
     "extension_config",
     "mcp",
     "embedding_model",
+    "permissions",
 ]
 
 MappingScopeTypeLiteral = Literal["user", "group", "bot"]
@@ -50,6 +53,7 @@ __all__ = (
     "EXTENSION_CONFIG_SLOT",
     "MCP_SLOT",
     "EMBEDDING_MODEL_SLOT",
+    "PERMISSIONS_SLOT",
     "SINGLE_VALUE_TEMPLATE_REF_SLOTS",
     "TEMPLATE_REF_SLOTS",
     "DefaultTemplateMappingTypeLiteral",

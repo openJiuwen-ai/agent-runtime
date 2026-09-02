@@ -2,9 +2,8 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { LogMaskingTab } from './LogMaskingTab';
 import { LoggingTab } from './LoggingTab';
-import { PermissionsTab } from './PermissionsTab';
 
-type ConfigTabKey = 'logMasking' | 'logging' | 'permissions';
+type ConfigTabKey = 'logMasking' | 'logging';
 
 interface Props {
   instanceId: string;
@@ -17,7 +16,6 @@ export function InstanceConfigPanel({ instanceId }: Props) {
   const tabs: { key: ConfigTabKey; label: string }[] = [
     { key: 'logMasking', label: t('instanceConfig.tabs.logMasking') },
     { key: 'logging', label: t('instanceConfig.tabs.logging') },
-    { key: 'permissions', label: t('instanceConfig.tabs.permissions') },
   ];
 
   return (
@@ -37,7 +35,6 @@ export function InstanceConfigPanel({ instanceId }: Props) {
       <div>
         {tab === 'logMasking' && <LogMaskingTab instanceId={instanceId} />}
         {tab === 'logging' && <LoggingTab instanceId={instanceId} />}
-        {tab === 'permissions' && <PermissionsTab instanceId={instanceId} />}
       </div>
     </div>
   );

@@ -39,28 +39,20 @@ async def push_permissions_config_sync_to_gateway(
     handler: DBHandler,
     jiuwenclaw_id: str,
 ) -> dict[str, Any]:
-    """全量同步：将 Manager MDB 中该实例 permissions 配置 PUT 到 Gateway。"""
+    """全量同步 permissions（已废弃）。
+
+    企业策略已迁到 ``permissions_template`` 槽位，Manager 不再维护实例级
+    ``permissions_config`` 表；保留本入口以兼容 bootstrap 调用链。
+    """
+    _ = handler
     jid = str(jiuwenclaw_id or "").strip()
     if not jid:
         raise ValueError("jiuwenclaw_id is required")
-
-    row = await handler.get(_PERMISSIONS_CONFIG_TABLE, {"jiuwenclaw_id": jid})
-    if row is None:
-        return {
-            "success_flag": True,
-            "result": {"synced": False},
-            "transport": "http",
-        }
-    body = getattr(row, "body", None)
-    gateway_body = {
-        "body": dict(body) if isinstance(body, dict) else (body or {}),
+    return {
+        "success_flag": True,
+        "result": {"synced": False, "skipped": "permissions_template"},
+        "transport": "http",
     }
-    return await gateway_request(
-        jid,
-        "PUT",
-        "/api/v1/permissions",
-        gateway_body,
-    )
 
 
 class PermissionsConfigService:

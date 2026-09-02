@@ -16,6 +16,9 @@ import type {
   SkillWhitelistTemplate,
   SkillWhitelistTemplateCreateBody,
   SkillWhitelistTemplateUpdateBody,
+  PermissionsTemplate,
+  PermissionsTemplateCreateBody,
+  PermissionsTemplateUpdateBody,
   ServiceConfigTemplate,
   ServiceConfigTemplateCreateBody,
   ServiceConfigTemplateUpdateBody,
@@ -26,7 +29,6 @@ import type {
   ListItemsResult,
   LoggingConfig,
   LoggingConfigUpsertBody,
-  PermissionsConfig,
 } from '../types';
 
 // 平台管理 API(claw_manager) 与 认证/目录 API(独立认证服务) 两个反代前缀。
@@ -886,6 +888,31 @@ export const SkillWhitelistTemplateApi = {
     ),
 };
 
+export const PermissionsTemplateApi = {
+  list: (params?: {
+    page?: number;
+    page_size?: number;
+    enabled?: boolean;
+    search?: string;
+    sort_by?: 'template_name' | 'description' | 'updated_at';
+    sort_order?: 'asc' | 'desc';
+  }) => http<PageResult<PermissionsTemplate>>('/v1/permissions-templates', { query: params }),
+  get: (id: string) =>
+    http<PermissionsTemplate>(`/v1/permissions-templates/${encodeURIComponent(id)}`),
+  create: (body: PermissionsTemplateCreateBody) =>
+    http<PermissionsTemplate>('/v1/permissions-templates', { method: 'POST', body }),
+  update: (id: string, body: PermissionsTemplateUpdateBody) =>
+    http<PermissionsTemplate>(`/v1/permissions-templates/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body,
+    }),
+  remove: (id: string) =>
+    http<{ deleted: boolean; template_id: string }>(
+      `/v1/permissions-templates/${encodeURIComponent(id)}`,
+      { method: 'DELETE' }
+    ),
+};
+
 export const ServiceConfigTemplateApi = {
   list: (params?: {
     page?: number;
@@ -946,17 +973,6 @@ export const LogMaskingRuleApi = {
     http<void>(`${instanceBase(instanceId)}/log-masking-rules/${encodeURIComponent(ruleId)}`, {
       method: 'DELETE',
     }),
-};
-
-export const PermissionsApi = {
-  get: (instanceId: string) => http<PermissionsConfig>(`${instanceBase(instanceId)}/permissions`),
-  upsert: (instanceId: string, body: Record<string, unknown>) =>
-    http<PermissionsConfig>(`${instanceBase(instanceId)}/permissions`, {
-      method: 'PUT',
-      body: { body },
-    }),
-  remove: (instanceId: string) =>
-    http<void>(`${instanceBase(instanceId)}/permissions`, { method: 'DELETE' }),
 };
 
 export const LoggingApi = {

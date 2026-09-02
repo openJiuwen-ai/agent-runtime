@@ -122,10 +122,13 @@ SERVICE_CONFIG_TEMPLATE_TABLE_DEF = TableDefinition(
         ColumnDefinition("main_container_id", "string", length=100, nullable=True),
         ColumnDefinition("sidecar_container_ids", "json", nullable=True),
         ColumnDefinition("volumes", "json", nullable=True),
-        ColumnDefinition("min_idle_services", "integer", nullable=False, default=0),
-        ColumnDefinition("service_concurrency", "integer", nullable=False, default=2),
-        ColumnDefinition("service_ttl", "integer", nullable=False, default=300),
-        ColumnDefinition("session_concurrency", "integer", nullable=False, default=3),
+        # 四列 2026-09 起与 wire 术语同名(曾用 EE 兼容名 min_idle_services/
+        # service_concurrency/service_ttl/session_concurrency;存量库须先手工
+        # RENAME COLUMN,见 CLAUDE.md 环境节)。
+        ColumnDefinition("min_idle_pods", "integer", nullable=False, default=0),
+        ColumnDefinition("pod_concurrency", "integer", nullable=False, default=2),
+        ColumnDefinition("pod_ttl", "integer", nullable=False, default=300),
+        ColumnDefinition("scope_concurrency", "integer", nullable=False, default=3),
         ColumnDefinition("session_ttl", "integer", nullable=False, default=60),
         ColumnDefinition("message_timeout", "integer", nullable=False, default=600),
         ColumnDefinition("enabled", "boolean", nullable=False, default=True),
@@ -187,10 +190,12 @@ _COLUMN_OF: dict[str, str] = {
     "agent_host_path_mounts": "agent_host_path_mounts",
     "agent_configmap_mounts": "agent_configmap_mounts",
     "agent_pvc_mounts": "agent_pvc_mounts",
-    "min_idle_pods": "min_idle_services",
-    "pod_concurrency": "service_concurrency",
-    "pod_ttl": "service_ttl",
-    "scope_concurrency": "session_concurrency",
+    # 2026-09 起四列与 wire 术语同名(identity 映射;曾为 EE 兼容名
+    # min_idle_services/service_concurrency/service_ttl/session_concurrency)。
+    "min_idle_pods": "min_idle_pods",
+    "pod_concurrency": "pod_concurrency",
+    "pod_ttl": "pod_ttl",
+    "scope_concurrency": "scope_concurrency",
     "session_ttl": "session_ttl",
     "message_timeout": "message_timeout",
     "enabled": "enabled",

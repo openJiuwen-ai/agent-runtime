@@ -33,6 +33,7 @@ from manager_server.models.template_models import (
     EXTENSION_CONFIG_TEMPLATE_TABLE_DEF,
     MCP_TEMPLATE_TABLE_DEF,
     MODEL_TEMPLATE_TABLE_DEF,
+    PERMISSIONS_TEMPLATE_TABLE_DEF,
     SKILL_WHITELIST_TEMPLATE_TABLE_DEF,
 )
 from manager_server.schemas.template_slot_schemas import (
@@ -40,6 +41,7 @@ from manager_server.schemas.template_slot_schemas import (
     EXTENSION_CONFIG_SLOT,
     MCP_SLOT,
     MODEL_TEMPLATE_SLOTS,
+    PERMISSIONS_SLOT,
     SKILL_WHITELIST_SLOT,
 )
 
@@ -77,6 +79,11 @@ TEMPLATE_KIND_SPECS: dict[str, TemplateKindSpec] = {
         table_name=SKILL_WHITELIST_TEMPLATE_TABLE_DEF.table_name,
         slot_keys=frozenset({SKILL_WHITELIST_SLOT}),
     ),
+    "permissions_templates": TemplateKindSpec(
+        config_section="permissions_templates",
+        table_name=PERMISSIONS_TEMPLATE_TABLE_DEF.table_name,
+        slot_keys=frozenset({PERMISSIONS_SLOT}),
+    ),
     "extension_config_templates": TemplateKindSpec(
         config_section="extension_config_templates",
         table_name=EXTENSION_CONFIG_TEMPLATE_TABLE_DEF.table_name,
@@ -96,6 +103,7 @@ _TEMPLATE_HTTP_PATHS: dict[str, str] = {
     "embedding_templates": "/api/v1/embedding-templates",
     "extension_config_templates": "/api/v1/extension-config-templates",
     "skill_whitelist_templates": "/api/v1/skill-whitelist-templates",
+    "permissions_templates": "/api/v1/permissions-templates",
     "mcp_templates": "/api/v1/mcp-templates",
 }
 _PUSH_DROP_KEYS = frozenset({"id", "created_at", "updated_at", "jiuwenclaw_id"})
@@ -104,6 +112,7 @@ _ROW_TO_OUT_MODULES: dict[str, str] = {
     "model_templates": "manager_server.core.template.model_template",
     "embedding_templates": "manager_server.core.template.embedding_template",
     "skill_whitelist_templates": "manager_server.core.template.skill_whitelist_template",
+    "permissions_templates": "manager_server.core.template.permissions_template",
     "extension_config_templates": "manager_server.core.template.extension_config_template",
     "mcp_templates": "manager_server.core.template.mcp_template",
 }
