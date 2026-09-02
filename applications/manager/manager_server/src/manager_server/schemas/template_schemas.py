@@ -1,7 +1,7 @@
 """模板 API 请求/响应模型。
 
 涵盖 model_template、extension_config_template、skill_whitelist_template、
-service_config_template、agent_template。
+permissions_template、service_config_template、agent_template。
 """
 
 from __future__ import annotations
@@ -431,6 +431,58 @@ class SkillWhitelistTemplateOut(BaseModel):
     skill_version: str
     skill_source: str
     enabled: bool
+    data: dict[str, Any] | None
+    created_at: str | None
+    updated_at: str | None
+
+
+class PermissionsTemplateCreateBody(SafeTextMixin):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    template_name: str = Field(..., min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=512)
+    enabled: bool = True
+    body: dict[str, Any] = Field(
+        ...,
+        description=(
+            "完整 permissions 段，结构与 config.yaml::permissions 一致"
+        ),
+    )
+    data: dict[str, Any] | None = None
+
+
+class PermissionsTemplateUpdateBody(SafeTextMixin):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    template_name: str | None = Field(default=None, min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=512)
+    enabled: bool | None = None
+    body: dict[str, Any] | None = None
+    data: dict[str, Any] | None = None
+
+
+class PermissionsTemplateListQuery(BaseModel):
+    page: int = Field(1, ge=1)
+    page_size: int = Field(20, ge=1, le=200)
+    enabled: bool | None = None
+    search: str | None = Field(
+        default=None,
+        description="按 template_id、template_name、description 模糊搜索",
+    )
+    sort_by: str | None = Field(
+        default=None,
+        description="排序字段：template_name、description、updated_at",
+    )
+    sort_order: str | None = Field(default=None, description="排序方向：asc、desc")
+
+
+class PermissionsTemplateOut(BaseModel):
+    id: int
+    template_id: str
+    template_name: str
+    description: str | None
+    enabled: bool
+    body: dict[str, Any]
     data: dict[str, Any] | None
     created_at: str | None
     updated_at: str | None

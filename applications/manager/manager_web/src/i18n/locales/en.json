@@ -68,7 +68,20 @@
   "safetyGuardrails": {
     "title": "Safety Guardrails",
     "subtitle": "Configure Agent safety guardrail policies",
-    "empty": "Coming soon"
+    "empty": "No safety guardrail templates yet",
+    "new": "New Safety Guardrail Template",
+    "edit": "Edit Safety Guardrail Template",
+    "searchPlaceholder": "Search template ID, name, or description",
+    "templateName": "Template Name",
+    "templateDescription": "Description",
+    "updatedAt": "Updated",
+    "bodyEnabled": "Policy enabled",
+    "bodyDisabled": "Policy disabled",
+    "permissionModeTag": "Mode: {{value}}",
+    "deleteConfirm": "Delete this safety guardrail template?",
+    "fieldRequired": "Please fill in {{field}}",
+    "unsafeText": "{{field}} contains unsafe content",
+    "intro": "Aligned with config.yaml permissions: enable switch, permission_mode, tool permissions, rules, and file paths. Save as a reusable template."
   },
   "connection": {
     "ok": "Connected",
@@ -289,37 +302,51 @@
       "sections": {
         "general": "General",
         "tools": "Tool Permissions",
-        "rules": "Shell Rules",
-        "fileGuard": "File Guard",
-        "advanced": "Advanced"
+        "rules": "Rules",
+        "fileGuard": "File Paths"
       },
       "resetToYaml": "Remove managed config",
       "deleteConfirm": "Remove Manager-managed permissions? Gateway will fall back to config.yaml.",
       "deleted": "Managed config removed; Gateway will fall back to config.yaml",
       "enabled": "Enable permission control",
-      "defaults": "Default action for unlisted tools",
-      "defaultsHint": "allow / ask / deny for tools not listed below",
-      "denyGuidanceMessage": "Deny guidance message",
-      "denyGuidanceMessageHint": "Optional message shown when a tool is denied",
+      "permissionMode": "Permission mode (permission_mode)",
+      "permissionModeHint": "normal: LOW/MEDIUM→allow, HIGH/CRITICAL→ask; strict: MEDIUM→ask, CRITICAL→deny",
+      "modes": {
+        "normal": "normal",
+        "strict": "strict"
+      },
+      "defaults": "Default action for unlisted tools (defaults.*)",
+      "defaultsHint": "Used when a tool is not listed under Tool Permissions and no rule matches",
       "toolName": "Tool name",
+      "toolNameRequired": "Please enter a tool name",
       "action": "Action",
+      "actions": {
+        "allow": "Allow",
+        "ask": "Ask",
+        "deny": "Deny"
+      },
       "newTool": "Add tool permission",
       "editTool": "Edit tool permission",
-      "toolsHint": "Tool-level allow / ask / deny; overrides shell rules",
+      "toolsHint": "Tool-level allow / ask / deny",
       "ruleId": "Rule ID",
+      "ruleIdRequired": "Please enter a rule ID",
+      "ruleConfig": "Configuration",
       "rulePattern": "Match pattern",
-      "newRule": "Add shell rule",
-      "editRule": "Edit shell rule",
-      "rulesHint": "Matches shell command text only; action is allow or deny",
-      "fileGuardWorkspace": "Workspace",
-      "fileGuardRwEnabled": "Allow read/write inside workspace by default",
-      "fileGuardGlobal": "Global whitelist (JSON)",
-      "fileGuardTrustedExec": "Trusted exec directories (JSON array)",
-      "fileGuardToolBindings": "Tool bindings (JSON)",
-      "exampleTag": "Example",
-      "commandIntent": "Command intent",
-      "commandIntentEnabled": "Enable command intent extraction",
-      "commandIntentTimeout": "Timeout (seconds)"
+      "rulePatternRequired": "Please enter a match pattern",
+      "ruleTools": "Tools",
+      "ruleToolsHint": "Comma-separated, e.g. bash, mcp_exec_command, create_terminal",
+      "ruleSeverity": "Severity",
+      "severities": {
+        "LOW": "LOW",
+        "MEDIUM": "MEDIUM",
+        "HIGH": "HIGH",
+        "CRITICAL": "CRITICAL"
+      },
+      "newRule": "Add rule",
+      "editRule": "Edit rule",
+      "rulesHint": "Aligned with config.yaml rules: id, tools, pattern, severity",
+      "fileGuardJson": "file_guard (JSON)",
+      "fileGuardJsonHint": "Full file_guard object matching config.yaml (enabled / defaults / workspace / paths, etc.)"
     }
   },
   "modelTemplate": {
@@ -554,7 +581,8 @@
         "vision_model": "Vision model",
         "embedding_model": "Embedding model",
         "skill_whitelist": "Skill whitelist",
-        "extension_config": "Extension config"
+        "extension_config": "Extension config",
+        "permissions": "Safety guardrails"
       },
       "none": "None",
       "noOptions": "No templates available"

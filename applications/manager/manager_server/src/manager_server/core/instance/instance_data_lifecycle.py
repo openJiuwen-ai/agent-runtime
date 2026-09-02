@@ -43,7 +43,6 @@ from manager_server.models.jid_template_ref_models import (
 from manager_server.models.application_config_models import (
     LOG_MASKING_RULE_TABLE_DEF,
     LOGGING_CONFIG_TABLE_DEF,
-    PERMISSIONS_CONFIG_TABLE_DEF,
     _MEMORY_CONFIG_TABLE_DEF,
     _TASK_MEMORY_CONFIG_TABLE_DEF,
 )
@@ -56,7 +55,6 @@ _MANAGER_INSTANCE_TABLES = (
     LOG_MASKING_RULE_TABLE_DEF.table_name,
     LOGGING_CONFIG_TABLE_DEF.table_name,
     _TASK_MEMORY_CONFIG_TABLE_DEF.table_name,
-    PERMISSIONS_CONFIG_TABLE_DEF.table_name,
     _MEMORY_CONFIG_TABLE_DEF.table_name,
 )
 

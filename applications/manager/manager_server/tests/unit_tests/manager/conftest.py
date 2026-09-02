@@ -157,7 +157,6 @@ _GATEWAY_REQUEST_MODULES = (
     "manager_server.manager_config_push",
     "manager_server.core.application_config.logging_config",
     "manager_server.core.application_config.task_memory_config",
-    "manager_server.core.application_config.permissions_config",
     "manager_server.core.application_config.memory_config",
     "manager_server.core.application_config.log_masking_rule",
     "manager_server.core.template.push_template_to_gateway",
