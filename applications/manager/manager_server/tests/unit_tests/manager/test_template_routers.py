@@ -9,6 +9,7 @@ from conftest import ManagerApiHarness
 from demo_payloads import (
     extension_config_templates,
     model_templates,
+    mcp_templates,
     service_config_templates,
     skill_whitelist_templates,
 )
@@ -19,6 +20,7 @@ _TEMPLATE_CASES = [
     ("/model-templates", model_templates()[0][1]),
     ("/extension-config-templates", extension_config_templates()[0][1]),
     ("/skill-whitelist-templates", skill_whitelist_templates()[0][1]),
+    ("/mcp-templates", mcp_templates()[0][1]),
     ("/service-config-templates", service_config_templates()[0][1]),
 ]
 

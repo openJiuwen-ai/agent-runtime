@@ -155,6 +155,31 @@ PERMISSIONS_TEMPLATE_TABLE_DEF = TableDefinition(
 
 # 容器规格目录（与 Runtime service_config_container 对齐；平台全局，不带 jiuwenclaw_id）。
 # 段落 JSON 列为内部规范形（snake 键）；模板经 main_container_id / sidecar_container_ids 引用。
+
+MCP_TEMPLATE_TABLE_DEF = TableDefinition(
+    table_name="mcp_template",
+    columns=[
+        ColumnDefinition(
+            "id",
+            "integer",
+            primary_key=True,
+            autoincrement=True,
+            nullable=False,
+        ),
+        ColumnDefinition("template_id", "string", length=100, nullable=False),
+        ColumnDefinition("template_name", "string", length=128, nullable=False),
+        ColumnDefinition("description", "string", length=512, nullable=True),
+        ColumnDefinition("mcp_entry", "json", nullable=False),
+        ColumnDefinition("enabled", "boolean", nullable=False, default=True),
+        ColumnDefinition("data", "json", nullable=True),
+        ColumnDefinition("created_at", "datetime", nullable=False),
+        ColumnDefinition("updated_at", "datetime", nullable=False),
+    ],
+    indexes=[
+        IndexDefinition(["template_id"], unique=True),
+    ],
+)
+
 SERVICE_CONFIG_CONTAINER_TABLE_DEF = TableDefinition(
     table_name="service_config_container",
     columns=[

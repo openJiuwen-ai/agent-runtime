@@ -3,6 +3,7 @@ from manager_server.core.template.embedding_template import EmbeddingTemplateSer
 from manager_server.core.template.extension_config_template import (
     ExtensionConfigTemplateService,
 )
+from manager_server.core.template.mcp_template import McpTemplateService
 from manager_server.core.template.model_template import ModelTemplateService
 from manager_server.core.template.permissions_template import (
     PermissionsTemplateService,
@@ -20,6 +21,7 @@ __all__ = (
     "EmbeddingTemplateService",
     "ExtensionConfigTemplateService",
     "PermissionsTemplateService",
+    "McpTemplateService",
     "SkillWhitelistTemplateService",
     "ServiceConfigTemplateService",
 )
