@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, createContext } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   MATCH_FIELDS,
@@ -24,10 +24,17 @@ import { useAsync } from '../hooks/useAsync';
 
 interface SelectOption { id: string; label: string }
 
+const MatchFieldsContext = createContext<MatchField[]>(MATCH_FIELDS);
+
 function useFieldOptions(field: MatchField): SelectOption[] {
+  const allowedFields = useContext(MatchFieldsContext);
   const { data: orgs } = useAsync(() => OrgApi.list(), []);
   const { data: users } = useAsync(() => UserApi.list(), []);
-  const { data: agents } = useAsync(() => AgentTemplateApi.list(), []);
+  const loadAgents = allowedFields.includes('bot_id');
+  const { data: agents } = useAsync(
+    () => (loadAgents ? AgentTemplateApi.list() : Promise.resolve({ items: [] as { template_id: string; template_name?: string }[] })),
+    [loadAgents],
+  );
 
   return useMemo(() => {
     switch (field) {
@@ -185,6 +192,12 @@ function ConditionLeaf({
   onAddCondition: () => void;
 }) {
   const { t } = useTranslation();
+  const allowedFields = useContext(MatchFieldsContext);
+  const fieldOptions = useMemo(() => {
+    // 已有非法字段时仍展示当前值，便于用户改成合法字段
+    if (allowedFields.includes(value.field)) return allowedFields;
+    return [...allowedFields, value.field];
+  }, [allowedFields, value.field]);
   const options = useFieldOptions(value.field);
   return (
     <div className="flex min-w-0 items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--card)] px-2.5 py-2 shadow-[inset_0_1px_0_var(--card-highlight)]">
@@ -193,7 +206,7 @@ function ConditionLeaf({
         value={value.field}
         onChange={(e) => onChange({ ...value, field: e.target.value as MatchField, values: [] })}
       >
-        {MATCH_FIELDS.map((f) => (
+        {fieldOptions.map((f) => (
           <option key={f} value={f}>
             {t(`policies.matchExpr.fields.${f}`)}
           </option>
@@ -513,10 +526,20 @@ function layoutStructureKey(root: MatchGroupNode): string {
 interface MatchExprEditorProps {
   value: string;
   onChange: (value: string) => void;
+  /** 可选字段；默认 group/user/bot。Agent 资源传 user/group 即可。 */
+  allowedFields?: MatchField[];
 }
 
-export function MatchExprEditor({ value, onChange }: MatchExprEditorProps) {
+export function MatchExprEditor({
+  value,
+  onChange,
+  allowedFields = MATCH_FIELDS,
+}: MatchExprEditorProps) {
   const { t } = useTranslation();
+  const fields = useMemo(
+    () => (allowedFields.length > 0 ? allowedFields : MATCH_FIELDS),
+    [allowedFields],
+  );
   const [model, setModel] = useState<MatchExprModel>(() => parseMatchExpr(value));
   const lastEmittedRef = useRef(value);
 
@@ -552,51 +575,53 @@ export function MatchExprEditor({ value, onChange }: MatchExprEditorProps) {
   };
 
   return (
-    <div className="flex flex-col gap-2">
-      <select
-        className="select w-full max-w-xs"
-        value={model.mode}
-        onChange={(e) => setMode(e.target.value as MatchExprMode)}
-      >
-        <option value="all">{t('policies.matchExpr.modeAll')}</option>
-        <option value="custom">{t('policies.matchExpr.modeCustom')}</option>
-      </select>
+    <MatchFieldsContext.Provider value={fields}>
+      <div className="flex flex-col gap-2">
+        <select
+          className="select w-full max-w-xs"
+          value={model.mode}
+          onChange={(e) => setMode(e.target.value as MatchExprMode)}
+        >
+          <option value="all">{t('policies.matchExpr.modeAll')}</option>
+          <option value="custom">{t('policies.matchExpr.modeCustom')}</option>
+        </select>
 
-      {model.mode === 'all' ? (
-        <div className="text-[11px] text-muted">{t('policies.matchExpr.allHint')}</div>
-      ) : model.raw ? (
-        <div className="flex flex-col gap-2">
-          <div className="text-[11px] text-muted">{t('policies.matchExpr.rawHint')}</div>
-          <textarea
-            className="input min-h-[72px] mono text-xs"
-            value={model.raw}
-            onChange={(e) => emit({ ...model, raw: e.target.value })}
+        {model.mode === 'all' ? (
+          <div className="text-[11px] text-muted">{t('policies.matchExpr.allHint')}</div>
+        ) : model.raw ? (
+          <div className="flex flex-col gap-2">
+            <div className="text-[11px] text-muted">{t('policies.matchExpr.rawHint')}</div>
+            <textarea
+              className="input min-h-[72px] mono text-xs"
+              value={model.raw}
+              onChange={(e) => emit({ ...model, raw: e.target.value })}
+            />
+            <button
+              type="button"
+              className="btn sm ghost self-start"
+              onClick={() => emit(parseMatchExpr(model.raw))}
+            >
+              {t('policies.matchExpr.resetToVisual')}
+            </button>
+          </div>
+        ) : (
+          <MindMapGroup
+            group={model.root}
+            root={model.root}
+            depth={0}
+            isRoot
+            layoutKey={structureKey}
+            onChangeRoot={(root) => emit({ ...model, mode: 'custom', root, raw: undefined })}
           />
-          <button
-            type="button"
-            className="btn sm ghost self-start"
-            onClick={() => emit(parseMatchExpr(model.raw))}
-          >
-            {t('policies.matchExpr.resetToVisual')}
-          </button>
-        </div>
-      ) : (
-        <MindMapGroup
-          group={model.root}
-          root={model.root}
-          depth={0}
-          isRoot
-          layoutKey={structureKey}
-          onChangeRoot={(root) => emit({ ...model, mode: 'custom', root, raw: undefined })}
-        />
-      )}
+        )}
 
-      {model.mode === 'custom' && preview ? (
-        <div className="rounded-md border border-dashed border-[var(--border)] bg-[var(--bg-muted)] px-2.5 py-2">
-          <div className="text-[11px] text-muted mb-1">{t('policies.matchExpr.preview')}</div>
-          <code className="block text-[11px] mono text-muted break-all">{preview}</code>
-        </div>
-      ) : null}
-    </div>
+        {model.mode === 'custom' && preview ? (
+          <div className="rounded-md border border-dashed border-[var(--border)] bg-[var(--bg-muted)] px-2.5 py-2">
+            <div className="text-[11px] text-muted mb-1">{t('policies.matchExpr.preview')}</div>
+            <code className="block text-[11px] mono text-muted break-all">{preview}</code>
+          </div>
+        ) : null}
+      </div>
+    </MatchFieldsContext.Provider>
   );
 }

@@ -27,7 +27,7 @@ type InstanceSortField =
   | 'gateway_status'
   | 'runtime_status'
   | 'gateway_last_alive'
-  | 'namespace'
+  | 'runtime_last_alive'
   | 'updated_at';
 
 const VIEW_MODE_STORAGE_KEY = 'claw_manager_instance_view';
@@ -53,64 +53,59 @@ function InstanceTopoCard({
   const [confirmDel, setConfirmDel] = useState(false);
 
   return (
-    <div className="topo-group w-full min-w-0">
-      <div className="topo-hero">
-        <div className="topo-hero__title">
-          <div className="brand-logo" aria-hidden>
+    <div className="instance-card">
+      <div className="instance-card__header">
+        <div className="instance-card__identity min-w-0">
+          <div className="brand-logo shrink-0" aria-hidden>
             <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M9 17h6m-3-3v3M7 8h10M5 5h14a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2z" />
             </svg>
           </div>
-          <div>
-            <div className="topo-hero__name">
+          <div className="min-w-0">
+            <div className="instance-card__name truncate" title={instance.jiuwenclaw_name}>
               {instance.jiuwenclaw_name}
-              <StatusBadge status={instance.gateway_status} />
-              <StatusBadge status={instance.runtime_status} />
             </div>
-            <div className="topo-hero__id">{instance.jiuwenclaw_id}</div>
-          </div>
-        </div>
-        <div className="topo-hero__meta">
-          <span className="pill subtle muted">
-            {t('topology.namespace')}: <span className="mono text-text">{instance.namespace}</span>
-          </span>
-          <div className="flex items-center gap-1">
-            <button className="btn sm" onClick={() => navigate(`/instances/${instance.jiuwenclaw_id}`)}>
-              {t('topology.viewDetail')}
-            </button>
-            <button className="btn sm danger" onClick={() => setConfirmDel(true)}>
-              {t('common.delete')}
-            </button>
+            <div className="instance-card__id mono truncate" title={instance.jiuwenclaw_id}>
+              {instance.jiuwenclaw_id}
+            </div>
           </div>
         </div>
       </div>
 
-      <div className="topo-gateway">
-        <div className="topo-gateway__title">
-          <svg className="w-4 h-4 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.8}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M3 12h18M3 6h18M3 18h18" />
-          </svg>
-          {t('topology.gateway')}
-        </div>
-        <div className="topo-gateway__meta">
-          <span className="topo-gateway__meta-item">
-            <span>{t('topology.lastAlive')}</span>
-            <span
-              className="mono"
-              title={instance.gateway_last_alive ? formatTime(instance.gateway_last_alive) : undefined}
-            >
-              {relativeTime(instance.gateway_last_alive)}
-            </span>
-            <span aria-hidden>，</span>
-            <span>{t('topology.lastUpdated')}</span>
-            <span
-              className="mono"
-              title={instance.updated_at ? formatTime(instance.updated_at) : undefined}
-            >
-              {relativeTime(instance.updated_at)}
-            </span>
+      <div className="instance-card__status">
+        <div className="instance-card__status-row">
+          <span className="instance-card__status-label">
+            {t('topology.gateway')}
+            <StatusBadge status={instance.gateway_status} />
+          </span>
+          <span
+            className="instance-card__probe mono"
+            title={instance.gateway_last_alive ? formatTime(instance.gateway_last_alive) : undefined}
+          >
+            {t('topology.lastAlive')} {relativeTime(instance.gateway_last_alive)}
           </span>
         </div>
+        <div className="instance-card__status-row">
+          <span className="instance-card__status-label">
+            {t('topology.runtime')}
+            <StatusBadge status={instance.runtime_status} />
+          </span>
+          <span
+            className="instance-card__probe mono"
+            title={instance.runtime_last_alive ? formatTime(instance.runtime_last_alive) : undefined}
+          >
+            {t('topology.lastAlive')} {relativeTime(instance.runtime_last_alive)}
+          </span>
+        </div>
+      </div>
+
+      <div className="instance-card__actions">
+        <button className="btn sm" onClick={() => navigate(`/instances/${instance.jiuwenclaw_id}`)}>
+          {t('topology.viewDetail')}
+        </button>
+        <button className="btn sm danger" onClick={() => setConfirmDel(true)}>
+          {t('common.delete')}
+        </button>
       </div>
 
       <ConfirmDialog
@@ -207,18 +202,18 @@ function InstanceListTable({
                 </th>
                 <th className="whitespace-nowrap min-w-[10.5rem]">
                   <TableColumnSort
-                    label={t('topology.lastAlive')}
+                    label={t('topology.gatewayLastAlive')}
                     value={sortBy === 'gateway_last_alive' ? sortOrder : ''}
                     options={sortOptions}
                     onChange={(value) => onSortChange('gateway_last_alive', value)}
                   />
                 </th>
-                <th className="whitespace-nowrap">
+                <th className="whitespace-nowrap min-w-[10.5rem]">
                   <TableColumnSort
-                    label={t('topology.namespace')}
-                    value={sortBy === 'namespace' ? sortOrder : ''}
+                    label={t('topology.runtimeLastAlive')}
+                    value={sortBy === 'runtime_last_alive' ? sortOrder : ''}
                     options={sortOptions}
-                    onChange={(value) => onSortChange('namespace', value)}
+                    onChange={(value) => onSortChange('runtime_last_alive', value)}
                   />
                 </th>
                 <th className="whitespace-nowrap min-w-[10.5rem]">
@@ -255,7 +250,9 @@ function InstanceListTable({
                     <td className="mono text-[11px] whitespace-nowrap">
                       {formatTime(instance.gateway_last_alive)}
                     </td>
-                    <td className="mono text-[11px]">{instance.namespace || '-'}</td>
+                    <td className="mono text-[11px] whitespace-nowrap">
+                      {formatTime(instance.runtime_last_alive)}
+                    </td>
                     <td className="mono text-[11px] whitespace-nowrap">{formatTime(instance.updated_at)}</td>
                     <td>
                       <div className="flex items-center gap-1">
@@ -317,13 +314,13 @@ function ViewModeToggle({
         onClick={() => onChange('brief')}
       >
         <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} aria-hidden>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h10M4 18h16" />
+          <path strokeLinecap="round" strokeLinejoin="round" d="M4 5h7v7H4V5zm9 0h7v7h-7V5zM4 14h7v7H4v-7zm9 0h7v7h-7v-7z" />
         </svg>
       </button>
       <button
         type="button"
         className={`tab ${value === 'list' ? 'active' : ''}`}
-        title={t('topology.viewDetailed')}
+        title={t('topology.viewList')}
         aria-pressed={value === 'list'}
         onClick={() => onChange('list')}
       >
@@ -453,7 +450,7 @@ export function InstanceListPage() {
               <Empty text={t('overview.noInstances')} />
             </div>
           ) : (
-            <div className="flex w-full min-w-0 flex-col gap-4">
+            <div className="instance-card-grid">
               {instances.data.items.map((it) => (
                 <InstanceTopoCard key={it.jiuwenclaw_id} instance={it} onChanged={refresh} />
               ))}

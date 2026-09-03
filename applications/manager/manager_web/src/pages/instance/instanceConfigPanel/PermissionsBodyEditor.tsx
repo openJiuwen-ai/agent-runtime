@@ -344,7 +344,6 @@ export function PermissionsBodyEditor({ form, onChange }: Props) {
             onChange={(v) => updateForm('fileGuardJson', v)}
             rows={16}
           />
-          <p className="text-[11px] text-muted mt-2">{t('instanceConfig.permissions.fileGuardJsonHint')}</p>
         </div>
       )}
 

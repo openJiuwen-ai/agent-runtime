@@ -80,8 +80,7 @@
     "permissionModeTag": "Mode: {{value}}",
     "deleteConfirm": "Delete this safety guardrail template?",
     "fieldRequired": "Please fill in {{field}}",
-    "unsafeText": "{{field}} contains unsafe content",
-    "intro": "Aligned with config.yaml permissions: enable switch, permission_mode, tool permissions, rules, and file paths. Save as a reusable template."
+    "unsafeText": "{{field}} contains unsafe content"
   },
   "connection": {
     "ok": "Connected",
@@ -111,11 +110,14 @@
     "group": "Group",
     "space": "Space",
     "gateway": "Gateway",
+    "runtime": "Runtime",
     "agentServer": "AgentServer",
     "otherService": "Other",
     "viewDetail": "Detail",
     "noServices": "No Gateway / AgentServer yet (awaiting health probe)",
     "lastAlive": "Last alive",
+    "gatewayLastAlive": "Gateway last probe",
+    "runtimeLastAlive": "Runtime last probe",
     "lastUpdated": "Last updated",
     "endpoint": "Endpoint",
     "version": "Version",
@@ -123,9 +125,9 @@
     "filterStatus": "Filter by status",
     "instanceName": "Instance Name",
     "modifiedAt": "Modified At",
-    "viewBrief": "Brief view",
-    "viewDetailed": "Detailed view",
-    "searchPlaceholder": "Search instance name, ID, status, or namespace"
+    "viewBrief": "Card view",
+    "viewList": "List view",
+    "searchPlaceholder": "Search instance name, ID, or status"
   },
   "instanceForm": {
     "name": "Instance Name",
@@ -345,8 +347,7 @@
       "newRule": "Add rule",
       "editRule": "Edit rule",
       "rulesHint": "Aligned with config.yaml rules: id, tools, pattern, severity",
-      "fileGuardJson": "file_guard (JSON)",
-      "fileGuardJsonHint": "Full file_guard object matching config.yaml (enabled / defaults / workspace / paths, etc.)"
+      "fileGuardJson": "file_guard (JSON)"
     }
   },
   "modelTemplate": {

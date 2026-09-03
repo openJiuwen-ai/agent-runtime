@@ -16,6 +16,8 @@ EXTENSION_CONFIG_SLOT = "extension_config"
 MCP_SLOT = "mcp"
 EMBEDDING_MODEL_SLOT = "embedding_model"
 PERMISSIONS_SLOT = "permissions"
+# 服务配置不进 agent ``template_ref``；仅用于 ``jid_template_ref.slot`` 区分 Runtime 映射。
+SERVICE_CONFIG_SLOT = "service_config"
 
 _TEMPLATE_REF_SLOTS: tuple[str, ...] = (
     *_MODEL_TEMPLATE_SLOTS,
@@ -54,6 +56,7 @@ __all__ = (
     "MCP_SLOT",
     "EMBEDDING_MODEL_SLOT",
     "PERMISSIONS_SLOT",
+    "SERVICE_CONFIG_SLOT",
     "SINGLE_VALUE_TEMPLATE_REF_SLOTS",
     "TEMPLATE_REF_SLOTS",
     "DefaultTemplateMappingTypeLiteral",

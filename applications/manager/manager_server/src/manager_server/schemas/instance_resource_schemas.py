@@ -7,16 +7,20 @@ from typing import Annotated, Any
 
 from pydantic import BaseModel, BeforeValidator, Field
 
-from manager_server.infrastructure.match_expr import validate_match_expr
+from manager_server.infrastructure.match_expr import (
+    validate_agent_resource_match_expr,
+    validate_match_expr,
+)
 
 MatchExprField = Annotated[Any, BeforeValidator(validate_match_expr)]
+AgentMatchExprField = Annotated[Any, BeforeValidator(validate_agent_resource_match_expr)]
 
 
 class CreateInstanceAgentResourceBody(BaseModel):
     """在实例上新增 Agent 资源（生成 resource_id）。"""
 
     ref_template_id: str = Field(..., min_length=1, max_length=100)
-    match_exprs: list[MatchExprField] = Field(..., min_length=1)
+    match_exprs: list[AgentMatchExprField] = Field(..., min_length=1)
     resource_name: str = Field(..., min_length=1, max_length=128)
     resource_desc: str | None = Field(default=None, max_length=512)
     enabled: bool = True
@@ -27,7 +31,7 @@ class CreateInstanceAgentResourceBody(BaseModel):
 class UpdateInstanceAgentResourceBody(BaseModel):
     """按 resource_id 整份覆盖 Agent 资源。"""
 
-    match_exprs: list[MatchExprField] = Field(..., min_length=1)
+    match_exprs: list[AgentMatchExprField] = Field(..., min_length=1)
     resource_name: str = Field(..., min_length=1, max_length=128)
     resource_desc: str | None = Field(default=None, max_length=512)
     enabled: bool = True
