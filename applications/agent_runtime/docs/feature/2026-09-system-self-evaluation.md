@@ -100,14 +100,31 @@ LLM_BASE_URL/LLM_API_KEY/LLM_MODEL/LLM_TIMEOUT/POD_BUDGET`,默认全空=纯规�
 - 单测:新增 `tests/evaluation/` 51 例(规则逐条触发/不触发边界、LLM 三态与
   解析降级与白名单、state 键形/TTL/报告容量、collector 缓冲/清单/采样、
   evaluator 全链路)+ `tests/integration/test_visualization_api.py` 异步用例
-  (history/evaluation/stats.scopes 直接驱动 on_tick)。全量 **494 passed**
-  (原 442 + 52);唯一确定性改动 jobs==5→7。
-- 真环境:verify_redis_cluster.py 新增 [5] eval 键域(计数/采样/报告回读);
-  e2e 冒烟新增阶段 13c(jobs 注册与 ok_ticks/scopes 容量字段/history 采样/
-  evaluation 报告限窗轮询 + 凭证泄漏检查)。真 cluster 门禁 **19/19 PASS**
-  (2026-09-03,3 主 redis:7,含 eval 三项);真镜像冒烟含 13c 的门禁结果
-  见本篇后续回填(当前卡点:存量 PG 库 schema 停旧版,缺历次 ALTER,待
-  迁移后重跑)。
+  (history/evaluation/stats.scopes 直接驱动 on_tick)。全量 **495 passed**
+  (原 442 + 53,含快照只读纪律用例);唯一确定性改动 jobs==5→7。
+- 真环境(2026-09-03,全部通过):
+  - **verify_redis_cluster 真 3 主 cluster 19/19 PASS**(16 存量 + eval 三项:
+    计数聚合/采样回读/报告落盘);
+  - **真镜像发布门禁 126/126 PASS**(三件套契约参数 + --with-sidecar
+    --with-mounts,AgentServer/sandbox 0.0.11s,agent-runtime:eval-20260904
+    双副本经 NodePort LB;含阶段 13c 全五项:7 job 注册与 ok_ticks/scopes
+    容量闸门字段/history 采样字段齐全/evaluation 报告 llm=disabled
+    findings=6/无凭证泄漏)。
+  - 门禁过程实锤并处置三件事:
+    1. **采样只读纪律(设计缺陷,门禁抓出)**:首版 sys_sample 经
+       `routing_snapshot_view()` 在快照缺失时从 DB 重建并回写 → 冒烟 FLUSHDB
+       后快照"复活"+eager 预热拉 Pod,违反 H0「服务自身不拉起」(前置跑
+       124/126,H0×2 挂)。修复:collector 直读原始快照
+       (`routing_snapshot_raw`),缺失/损坏跳拍返回空清单,新增用例
+       「快照缺失不得回写」;修复后全绿。
+    2. **存量 PG 库迁移**:`agent_runtime` 库停在 pg-20260825 时代,按各
+       feature 篇目文档义务执行 12 条 ALTER(策略四列 RENAME×4 + node_name/
+       run_as_user/run_as_group + 容器拆分三列 + routing_scope.expires_at/
+       enabled;模板表 0 行零数据风险)。
+    3. **共享 ns 干扰**:共享集群上另一 runtime 实例(0.0.9s 旧配置)持续向
+       agent-runtime-e2e 部署热备 Pod,污染 H0 的 ns 级 Pod 计数;e2e 换独立
+       ns `agent-runtime-e2e-wmq`(AGENT_RUNTIME_AGENTSERVER_NAMESPACE)后
+       全绿——多团队共享集群时 AgentServer ns 应按人隔离。
 - 内存估算:30s×24h=2880 点/scope ≈370KB/scope/日;50 scope ≈18MB 单槽,可接受。
 
 ## 影响面

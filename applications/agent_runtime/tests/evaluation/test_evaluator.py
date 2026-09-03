@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
 
 from fakeredis.aioredis import FakeRedis
 
@@ -18,6 +17,7 @@ from agent_runtime.session_manager.models import Template
 from agent_runtime.session_manager.routing import (
     RoutingScopeDef,
     RoutingSnapshot,
+    snapshot_to_json,
 )
 from agent_runtime.session_manager.state import SessionState
 
@@ -33,13 +33,9 @@ async def _make_evaluator(llm: LLMClient):
                             expr="", rule=None)
     snapshot = RoutingSnapshot(
         ver=1, templates={"t1": tpl}, scopes=(scope,))
-
-    async def _view():
-        return snapshot
-    store = SimpleNamespace(routing_snapshot_view=_view)
+    await sm_state.write_routing_snapshot(snapshot_to_json(snapshot))
     collector = EvaluationCollector(
         eval_state=eval_state, sm_state=sm_state, rm_state=rm_state,
-        config_store=store,
     )
     await redis.hset("{resource_manager}:resource:scope:s1:config",
                      mapping={"min_idle_pods": "5"})

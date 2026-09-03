@@ -3,8 +3,6 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 from fakeredis.aioredis import FakeRedis
 
 from agent_runtime.evaluation.collector import (
@@ -19,7 +17,11 @@ from agent_runtime.evaluation.state import EvaluationState
 from agent_runtime.resource_manager.state import ResourceState
 from agent_runtime.session_manager.state import SessionState
 from agent_runtime.session_manager.models import Template
-from agent_runtime.session_manager.routing import RoutingSnapshot, RoutingScopeDef
+from agent_runtime.session_manager.routing import (
+    RoutingSnapshot,
+    RoutingScopeDef,
+    snapshot_to_json,
+)
 
 
 # ------------------------------------------------------------ 缓冲
@@ -61,24 +63,28 @@ def test_buffer_never_raises_on_bad_input():
 # ------------------------------------------------------------ 采集器
 
 
-def _snapshot(templates: dict, scopes: list):
-    """routing_snapshot_view 的异步桩(生产实现是 async)。"""
+async def _seed_snapshot(redis, templates: dict, scopes: list):
+    """把快照 JSON 落进 fakeredis(生产读路径:routing_snapshot_raw)。"""
     snap = RoutingSnapshot(ver=1, templates=templates, scopes=tuple(scopes))
-
-    async def view():
-        return snap
-    return view
+    await SessionState(redis).write_routing_snapshot(snapshot_to_json(snap))
 
 
 async def _make_collector(redis):
     sm_state = SessionState(redis)
     rm_state = ResourceState(redis)
     eval_state = EvaluationState(redis)
-    store = SimpleNamespace(routing_snapshot_view=None)
     return EvaluationCollector(
         eval_state=eval_state, sm_state=sm_state, rm_state=rm_state,
-        config_store=store,
     )
+
+
+async def test_scope_inventory_no_snapshot_returns_empty_without_rebuild():
+    """快照缺失 → 空清单,且**不得回写快照键**(只读纪律,H0 契约)。"""
+    redis = FakeRedis()
+    collector = await _make_collector(redis)
+    assert await collector.scope_inventory() == []
+    # 关键断言:没有经 DB 重建路径把快照写回 Redis
+    assert await collector.sm.routing_snapshot_raw() == ""
 
 
 async def test_scope_inventory_union_and_phases():
@@ -89,8 +95,7 @@ async def test_scope_inventory_union_and_phases():
                              expr="", rule=None)
     disabled = RoutingScopeDef(scope_id="s-off", index=1, template_id="t1",
                                expr="", rule=None, enabled=False)
-    collector.config.routing_snapshot_view = _snapshot(
-        {"t1": tpl}, [active, disabled])
+    await _seed_snapshot(redis, {"t1": tpl}, [active, disabled])
 
     # s-active 推 RM config → active;s-off 在快照禁用 → disabled;
     # s-ghost 只在 RM(config_sync drain 收敛推过 min_idle=0)→ orphan
@@ -112,7 +117,7 @@ async def test_scope_inventory_union_and_phases():
     assert rows["s-active"]["phase"] == PHASE_ACTIVE
     assert rows["s-off"]["phase"] == PHASE_DISABLED
     assert rows["s-ghost"]["phase"] == PHASE_ORPHAN_RM
-    assert rows["s-active"]["template"] is tpl
+    assert rows["s-active"]["template"].template_id == tpl.template_id
 
 
 async def test_scope_inventory_missing_rm_config():
@@ -121,7 +126,7 @@ async def test_scope_inventory_missing_rm_config():
     tpl = Template(template_id="t1")
     scope = RoutingScopeDef(scope_id="s1", index=0, template_id="t1",
                             expr="", rule=None)
-    collector.config.routing_snapshot_view = _snapshot({"t1": tpl}, [scope])
+    await _seed_snapshot(redis, {"t1": tpl}, [scope])
     rows = await collector.scope_inventory()
     assert rows[0]["phase"] == PHASE_MISSING_RM_CFG
 
@@ -132,7 +137,7 @@ async def test_sample_once_writes_counters_snapshot():
     tpl = Template(template_id="t1", min_idle_pods=1)
     scope = RoutingScopeDef(scope_id="s1", index=0, template_id="t1",
                             expr="", rule=None)
-    collector.config.routing_snapshot_view = _snapshot({"t1": tpl}, [scope])
+    await _seed_snapshot(redis, {"t1": tpl}, [scope])
     await redis.hset("{resource_manager}:resource:scope:s1:config",
                      mapping={"min_idle_pods": "1"})
     await collector.state.bump_counters("s1", {"route_total": 7, "route_ok": 7})

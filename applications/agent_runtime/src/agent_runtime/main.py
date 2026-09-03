@@ -200,7 +200,6 @@ class OrchestratorSystemContext(SystemContext):
         self.eval_telemetry = telemetry
         self.eval_collector = EvaluationCollector(
             eval_state=eval_state, sm_state=sm_state, rm_state=rm_state,
-            config_store=self.sm_config_store,
         )
         self.evaluator = Evaluator(
             collector=self.eval_collector, llm=LLMClient.from_arc(self.arc),

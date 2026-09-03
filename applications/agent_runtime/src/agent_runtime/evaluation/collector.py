@@ -21,6 +21,7 @@ import time
 from collections import OrderedDict
 from typing import Any
 
+from ..session_manager.routing import RoutingSnapshot, snapshot_from_json
 from ..util import now_ts
 from .state import EvaluationState
 
@@ -128,7 +129,13 @@ class ScopeTelemetryBuffer:
 
 
 class EvaluationCollector:
-    """scope 清单 + 周期采样(sys_sample job 的 on_tick)。"""
+    """scope 清单 + 周期采样(sys_sample job 的 on_tick)。
+
+    **快照只读纪律**:清单/采样读原始路由快照(``routing_snapshot_raw``),
+    缺失或损坏 → 本拍返回空清单——**绝不走 ``routing_snapshot_view()``**,
+    那会在快照缺失时从 DB 重建并回写 Redis + eager 预热拉起暖备 Pod,
+    破坏 H0「服务自身不因运行拉起 Pod」契约(2026-09-03 真环境门禁实测)。
+    """
 
     def __init__(
         self,
@@ -136,14 +143,23 @@ class EvaluationCollector:
         eval_state: EvaluationState,
         sm_state: Any,                 # SessionState(只读访问器)
         rm_state: Any,                 # ResourceState(只读访问器)
-        config_store: Any,             # ConfigStore(routing_snapshot_view)
     ) -> None:
         self.state = eval_state
         self.sm = sm_state
         self.rm = rm_state
-        self.config = config_store
 
     # -------------------------------------------------------------- scope 清单
+
+    async def _snapshot(self) -> RoutingSnapshot | None:
+        """只读快照;缺失/损坏 → None(调用方跳拍,不触发 DB 重建)。"""
+        raw = await self.sm.routing_snapshot_raw()
+        if not raw:
+            return None
+        try:
+            return snapshot_from_json(raw)
+        except ValueError:
+            logger.warning("eval snapshot corrupt, skip this tick")
+            return None
 
     async def scope_inventory(self) -> list[dict[str, Any]]:
         """RM 已知 scope ∪ 路由快照 scope 的并集清单(visualization/评估共用)。
@@ -151,9 +167,12 @@ class EvaluationCollector:
         每行:{scope_id, phase, routing(快照定义或 None), template(快照模板或
         None), rm_config(RM config HASH 或空 dict), pods/idle/deploying,
         session_count}。phase 见模块头常量。(waiters 已随 2026-09 场景 F
-        快失败拆除的等待队列移除)
+        快失败拆除的等待队列移除)快照缺失 → 空清单(配置未下发/刚清库;
+        RM 孤儿判定同样失效,下拍再试)。
         """
-        snapshot = await self.config.routing_snapshot_view()
+        snapshot = await self._snapshot()
+        if snapshot is None:
+            return []
         rm_ids = set(await self.rm.known_scope_ids())
         snap_scopes = {sc.scope_id: sc for sc in snapshot.scopes}
 

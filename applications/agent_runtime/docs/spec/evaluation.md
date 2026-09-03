@@ -14,7 +14,7 @@ findings → 可选 LLM 叠加分析 → 报告只读产出(`/visualization/eval
 | 文件 | 职责 |
 |---|---|
 | `src/agent_runtime/evaluation/state.py` | Redis 门面(全单键命令):计数 HINCRBY/采样 ZADD/报告 SET+ZADD;键表见下 |
-| `src/agent_runtime/evaluation/collector.py` | `ScopeTelemetryBuffer`(热路径内存缓冲,drain-清零)+ `EvaluationCollector`(scope 清单/sampling) |
+| `src/agent_runtime/evaluation/collector.py` | `ScopeTelemetryBuffer`(热路径内存缓冲,drain-清零)+ `EvaluationCollector`(scope 清单/sampling;**快照只读**:直读 `routing_snapshot_raw`,缺失/损坏跳拍返回空清单,绝不走 `routing_snapshot_view()` 触发 DB 重建——2026-09-03 真环境门禁 H0 实锤的设计缺陷修复) |
 | `src/agent_runtime/evaluation/rules.py` | 纯函数规则引擎(静态 7 + 动态 5;快失败适配);`Finding`/`ScopeConfigView`/`RuleThresholds` 数据类 |
 | `src/agent_runtime/evaluation/llm.py` | OpenAI 兼容 client(短连接、transport 可注入测试)+ prompt 白名单构造 + `parse_llm_analysis` 防御解析 |
 | `src/agent_runtime/evaluation/evaluator.py` | `evaluate_once` 编排:清单→规则→LLM(可选)→报告落盘 |
