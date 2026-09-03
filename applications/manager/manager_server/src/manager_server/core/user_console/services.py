@@ -19,6 +19,11 @@ from manager_server.models.instance_resource_models import INSTANCE_AGENT_RESOUR
 _GRANT = INSTANCE_AGENT_RESOURCE_TABLE_DEF.table_name
 _AGENT_TPL = "agent_template"
 _CAP = 100_000
+_NO_ORG_GROUP_ID = "__none__"
+
+
+class GroupAccessDeniedError(ValueError):
+    """The requested organization context is outside the verified JWT claims."""
 
 
 def _g(row: Any, key: str, default: Any = None) -> Any:
@@ -37,9 +42,17 @@ class UserConsoleService:
         jiuwenclaw_id: str = "",
         is_admin: bool = False,
     ) -> list[dict[str, Any]]:
+        group_id = str(group_id or "").strip()
+        member_groups = {
+            str(item).strip() for item in (groups or []) if str(item).strip()
+        }
+        if not is_admin:
+            no_org_allowed = group_id == _NO_ORG_GROUP_ID and not member_groups
+            member_group_allowed = group_id in member_groups
+            if not no_org_allowed and not member_group_allowed:
+                raise GroupAccessDeniedError("group access denied")
         if not jiuwenclaw_id:
             return []
-        member_groups = set(groups or [])
         if not is_admin and not await self._instance_grants.is_admitted(
             jiuwenclaw_id, user_id, member_groups
         ):
@@ -72,4 +85,4 @@ class UserConsoleService:
         return out
 
 
-__all__ = ("UserConsoleService",)
+__all__ = ("GroupAccessDeniedError", "UserConsoleService")

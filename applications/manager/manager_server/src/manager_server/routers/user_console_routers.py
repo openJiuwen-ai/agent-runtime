@@ -8,10 +8,10 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 
-from manager_server.core.user_console import UserConsoleService
+from manager_server.core.user_console import GroupAccessDeniedError, UserConsoleService
 from manager_server.core.instance_access import InstanceGrantService
 from manager_server.core.instance_access.instance_grant_service import SUBJECT_ORG, SUBJECT_USER
 from manager_server.infrastructure.config import settings
@@ -35,11 +35,14 @@ async def list_my_agents(
     handler: _Handler, user: _CurUser, group_id: str = Query(...),
     jiuwenclaw_id: str | None = Query(default=None),
 ):
-    agents = await UserConsoleService(handler).list_visible_agents(
-        getattr(user, "user_id"), group_id, getattr(user, "groups", []),
-        jiuwenclaw_id=(jiuwenclaw_id or settings.jiuwenclaw_id),
-        is_admin=bool(getattr(user, "is_admin", False)),
-    )
+    try:
+        agents = await UserConsoleService(handler).list_visible_agents(
+            getattr(user, "user_id"), group_id, getattr(user, "groups", []),
+            jiuwenclaw_id=(jiuwenclaw_id or settings.jiuwenclaw_id),
+            is_admin=bool(getattr(user, "is_admin", False)),
+        )
+    except GroupAccessDeniedError as exc:
+        raise HTTPException(status_code=403, detail="group access denied") from exc
     return _ok({"agents": agents})
 
 
