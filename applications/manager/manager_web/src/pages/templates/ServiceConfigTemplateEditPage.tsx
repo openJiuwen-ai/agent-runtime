@@ -5,7 +5,8 @@
  * 3) Sandbox sidecar 容器
  * 两个容器页签为同一套「容器通用配置」字段（ports / securityContext / readinessProbe /
  * resources / env / envFrom / volumeMounts），仅默认值与必填校验不同；
- * 主容器须含 name=sse 端口（Runtime 路由依赖）。
+ * 主容器须含 name=sse 端口（Runtime 路由依赖），且探针恒 httpGet、
+ * 不带 timeoutSeconds（Runtime container_spec 对二者直接 400）。
  * 保存时写入 Manager 模板列 + data.config_sync.containers（供导入导出往返）。
  */
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
@@ -313,10 +314,14 @@ function containerFromRecord(
   }
   const probe = (raw.readinessProbe ?? raw.readiness_probe) as Record<string, unknown> | undefined;
   if (probe) {
+    // 主容器探针恒 httpGet 且禁带 timeoutSeconds（Runtime 拒收）；
+    // 存量脏数据（旧版保存写入的）在此自愈，不再回填进表单
     if (probe.tcpSocket || probe.tcp_socket) {
-      form.probe_type = 'tcpSocket';
-      const tcp = (probe.tcpSocket ?? probe.tcp_socket) as Record<string, unknown>;
-      if (tcp.port != null && Number.isFinite(Number(tcp.port))) form.probe_port = Number(tcp.port);
+      if (role !== 'agent') {
+        form.probe_type = 'tcpSocket';
+        const tcp = (probe.tcpSocket ?? probe.tcp_socket) as Record<string, unknown>;
+        if (tcp.port != null && Number.isFinite(Number(tcp.port))) form.probe_port = Number(tcp.port);
+      }
     } else if (probe.httpGet || probe.http_get) {
       form.probe_type = 'httpGet';
       const http = (probe.httpGet ?? probe.http_get) as Record<string, unknown>;
@@ -327,7 +332,9 @@ function containerFromRecord(
       form.readiness_initial_delay = Number(probe.initialDelaySeconds);
     }
     if (probe.periodSeconds != null) form.readiness_period = Number(probe.periodSeconds);
-    if (probe.timeoutSeconds != null) form.readiness_timeout = Number(probe.timeoutSeconds);
+    if (role !== 'agent' && probe.timeoutSeconds != null) {
+      form.readiness_timeout = Number(probe.timeoutSeconds);
+    }
   }
   return form;
 }
@@ -423,6 +430,7 @@ function hydrateFromTemplateRow(row: ServiceConfigTemplate): {
 
 function buildContainerWire(
   form: ContainerForm,
+  role: 'agent' | 'sandbox',
   env: { name: string; value: string }[] | undefined,
   envFrom: Record<string, unknown>[] | undefined,
   mounts: Record<string, unknown>[] | undefined,
@@ -468,32 +476,36 @@ function buildContainerWire(
   }
   if (Object.keys(sc).length) wire.securityContext = sc;
 
+  // Runtime 主容器探针不变式：恒 httpGet、禁带 timeoutSeconds（带了 config_sync 必
+  // 400，container_spec 直接拒收）；tcpSocket 与 timeoutSeconds 仅 Sandbox 可下发
   const probe: Record<string, unknown> = {
     initialDelaySeconds: form.readiness_initial_delay,
     periodSeconds: form.readiness_period,
-    timeoutSeconds: form.readiness_timeout,
   };
-  if (form.probe_type === 'httpGet') {
+  if (role === 'sandbox' && form.probe_type === 'tcpSocket') {
+    probe.tcpSocket = { port: form.probe_port };
+  } else {
     probe.httpGet = {
       path: form.probe_path.trim() || '/health',
       port: form.probe_port,
     };
-  } else {
-    probe.tcpSocket = { port: form.probe_port };
   }
+  if (role === 'sandbox') probe.timeoutSeconds = form.readiness_timeout;
   wire.readinessProbe = probe;
   return wire;
 }
 
-/** 容器通用配置字段组（主容器 / Sandbox 页签共用） */
+/** 容器通用配置字段组（主容器 / Sandbox 页签共用；主容器探针恒 httpGet 无超时） */
 function ContainerFields({
   form,
   update,
+  role,
   imageLabelKey,
   portsPlaceholder,
 }: {
   form: ContainerForm;
   update: <K extends keyof ContainerForm>(k: K, v: ContainerForm[K]) => void;
+  role: 'agent' | 'sandbox';
   imageLabelKey: string;
   portsPlaceholder: string;
 }) {
@@ -617,12 +629,18 @@ function ContainerFields({
         <label className="label">{t('serviceConfigTemplate.probeType')}</label>
         <select
           className="select"
-          value={form.probe_type}
+          value={role === 'agent' ? 'httpGet' : form.probe_type}
+          disabled={role === 'agent'}
           onChange={(e) => update('probe_type', e.target.value as ContainerForm['probe_type'])}
         >
           <option value="tcpSocket">tcpSocket</option>
           <option value="httpGet">httpGet</option>
         </select>
+        {role === 'agent' && (
+          <div className="text-[11px] text-muted mt-1">
+            {t('serviceConfigTemplate.probeTypeMainHint')}
+          </div>
+        )}
       </div>
       <div>
         <label className="label">{t('serviceConfigTemplate.probePort')}</label>
@@ -667,14 +685,20 @@ function ContainerFields({
       </div>
       <div>
         <label className="label">{t('serviceConfigTemplate.probeTimeout')}</label>
-        <input
-          className="input"
-          type="number"
-          min={1}
-          max={300}
-          value={form.readiness_timeout}
-          onChange={(e) => update('readiness_timeout', Number(e.target.value))}
-        />
+        {role === 'sandbox' ? (
+          <input
+            className="input"
+            type="number"
+            min={1}
+            max={300}
+            value={form.readiness_timeout}
+            onChange={(e) => update('readiness_timeout', Number(e.target.value))}
+          />
+        ) : (
+          <div className="text-[11px] text-muted py-2">
+            {t('serviceConfigTemplate.probeTimeoutMainHint')}
+          </div>
+        )}
       </div>
 
       <div>
@@ -946,6 +970,7 @@ export function ServiceConfigTemplateEditPage({ templateId }: { templateId?: str
 
     const agentWire = buildContainerWire(
       agent,
+      'agent',
       agentEnv.value,
       agentEnvFrom.value,
       agentMounts.value,
@@ -953,6 +978,7 @@ export function ServiceConfigTemplateEditPage({ templateId }: { templateId?: str
     );
     const sandboxWire = buildContainerWire(
       sandbox,
+      'sandbox',
       sandboxEnv.value,
       sandboxEnvFrom.value,
       sandboxMounts.value,
@@ -1259,6 +1285,7 @@ export function ServiceConfigTemplateEditPage({ templateId }: { templateId?: str
           <ContainerFields
             form={agent}
             update={updateAgent}
+            role="agent"
             imageLabelKey="serviceConfigTemplate.agentImage"
             portsPlaceholder='[{"name":"sse","containerPort":8766}]'
           />
@@ -1273,6 +1300,7 @@ export function ServiceConfigTemplateEditPage({ templateId }: { templateId?: str
           <ContainerFields
             form={sandbox}
             update={updateSandbox}
+            role="sandbox"
             imageLabelKey="serviceConfigTemplate.sandboxImage"
             portsPlaceholder='[{"containerPort":8321}]'
           />
