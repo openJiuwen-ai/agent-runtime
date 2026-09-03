@@ -13,6 +13,7 @@ class LogMaskingRuleCreateBody(BaseModel):
     pattern: str = Field(..., min_length=1)
     replacement: str | None = Field(default=None, max_length=64)
     priority: int = 0
+    with_fingerprint: bool = False
     enabled: bool = True
     data: dict[str, Any] | None = None
 
@@ -23,6 +24,7 @@ class LogMaskingRuleUpdateBody(BaseModel):
     pattern: str | None = None
     replacement: str | None = Field(default=None, max_length=64)
     priority: int | None = None
+    with_fingerprint: bool | None = None
     enabled: bool | None = None
     data: dict[str, Any] | None = None
 
@@ -55,6 +57,7 @@ class LogMaskingRuleOut(BaseModel):
     pattern: str
     replacement: str
     priority: int
+    with_fingerprint: bool = False
     source: str
     enabled: bool
     data: dict[str, Any] | None

@@ -56,6 +56,7 @@ interface FormState {
   pattern: string;
   replacement: string;
   priority: number;
+  with_fingerprint: boolean;
 }
 
 const emptyForm: FormState = {
@@ -64,6 +65,7 @@ const emptyForm: FormState = {
   pattern: '',
   replacement: '******',
   priority: 0,
+  with_fingerprint: false,
 };
 
 export function LogMaskingTab({ instanceId }: { instanceId: string }) {
@@ -127,6 +129,7 @@ export function LogMaskingTab({ instanceId }: { instanceId: string }) {
         pattern: clipField(editing.pattern, FIELD_MAX_LENGTH.pattern),
         replacement: clipField(editing.replacement, FIELD_MAX_LENGTH.replacement),
         priority: editing.priority,
+        with_fingerprint: Boolean(editing.with_fingerprint),
       });
     } else {
       setForm(emptyForm);
@@ -158,6 +161,7 @@ export function LogMaskingTab({ instanceId }: { instanceId: string }) {
       pattern: form.pattern.trim(),
       replacement: form.replacement.trim(),
       priority: form.priority,
+      with_fingerprint: form.with_fingerprint,
       ...(!editing ? { enabled: true } : {}),
     };
 
@@ -283,6 +287,12 @@ export function LogMaskingTab({ instanceId }: { instanceId: string }) {
                       />
                     </th>
                     <th>
+                      <span className="inline-flex items-center gap-1">
+                        {t('instanceConfig.logMasking.withFingerprint')}
+                        <HintTooltip text={t('instanceConfig.logMasking.withFingerprintHint')} />
+                      </span>
+                    </th>
+                    <th>
                       <TableColumnFilter
                         label={t('instanceConfig.logMasking.source')}
                         value={sourceFilter}
@@ -322,7 +332,7 @@ export function LogMaskingTab({ instanceId }: { instanceId: string }) {
                 <tbody>
                   {items.length === 0 ? (
                     <tr>
-                      <td colSpan={9}>
+                      <td colSpan={10}>
                         <Empty text={t('common.empty')} />
                       </td>
                     </tr>
@@ -347,6 +357,9 @@ export function LogMaskingTab({ instanceId }: { instanceId: string }) {
                           {truncate(row.pattern, 40)}
                         </td>
                         <td className="mono text-xs whitespace-nowrap">{row.replacement}</td>
+                        <td className="whitespace-nowrap">
+                          {row.with_fingerprint ? t('common.yes') : t('common.no')}
+                        </td>
                         <td className="whitespace-nowrap">
                           <span className={`tag ${row.source}`}>{t(`instanceConfig.logMasking.source_${row.source}`, row.source)}</span>
                         </td>
@@ -453,6 +466,19 @@ export function LogMaskingTab({ instanceId }: { instanceId: string }) {
               maxLength={FIELD_MAX_LENGTH.replacement}
               onChange={(v) => update('replacement', v)}
             />
+          </div>
+          <div className="md:col-span-2">
+            <div className="flex items-center gap-2">
+              <Switch
+                checked={form.with_fingerprint}
+                onChange={(checked) => update('with_fingerprint', checked)}
+                aria-label={t('instanceConfig.logMasking.withFingerprint')}
+              />
+              <span className="inline-flex items-center gap-1 text-sm">
+                {t('instanceConfig.logMasking.withFingerprint')}
+                <HintTooltip text={t('instanceConfig.logMasking.withFingerprintHint')} />
+              </span>
+            </div>
           </div>
         </div>
       </Modal>
