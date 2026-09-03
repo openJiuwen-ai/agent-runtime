@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAsync } from '../../hooks/useAsync';
+import { useFormDirty } from '../../hooks/useFormDirty';
 import { useRouter } from '../../router';
 import { InstanceApi, ApiError } from '../../services/api';
-import { Modal } from '../../components/Modal';
+import { Modal, ModalCancelButton } from '../../components/Modal';
 import { JsonField, tryParseJson, useInvalidJsonChecker } from '../../components/JsonField';
 import { safeStringify } from '../../utils/format';
 import { toast } from '../../stores/uiStore';
@@ -35,6 +36,7 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
   const [editOpen, setEditOpen] = useState(false);
   const [editText, setEditText] = useState('');
   const checkJson = useInvalidJsonChecker();
+  const { markClean, isDirty } = useFormDirty(editOpen);
 
   const mainTabs: { key: InstancePageTab; label: string; href: string }[] = [
     { key: 'access', label: t('instanceDetail.tabs.access'), href: `/instances/${instanceId}/access` },
@@ -47,7 +49,9 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
   ];
 
   const handleOpenEdit = () => {
-    setEditText(safeStringify(instance.data?.data ?? {}, 2));
+    const next = safeStringify(instance.data?.data ?? {}, 2);
+    setEditText(next);
+    markClean(next);
     setEditOpen(true);
   };
 
@@ -145,12 +149,11 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
         open={editOpen}
         title={t('instanceDetail.editData')}
         onClose={() => setEditOpen(false)}
+        dirty={isDirty(editText)}
         size="lg"
         footer={
           <>
-            <button className="btn ghost" onClick={() => setEditOpen(false)}>
-              {t('common.cancel')}
-            </button>
+            <ModalCancelButton />
             <button className="btn primary" onClick={submitData}>
               {t('common.save')}
             </button>

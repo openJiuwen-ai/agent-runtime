@@ -1,8 +1,9 @@
 import { ChangeEvent, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import * as XLSX from 'xlsx';
-import { Modal } from '../../components/Modal';
+import { Modal, ModalCancelButton } from '../../components/Modal';
 import { useAsync } from '../../hooks/useAsync';
+import { useFormDirty } from '../../hooks/useFormDirty';
 import { ApiError, IamUser, InstanceBindingApi, NO_ORG_GROUP_ID, Org, OrgApi, UserApi } from '../../services/api';
 import { toast } from '../../stores/uiStore';
 import { AddToInstanceModal, InstanceChips, InstanceFilter, instanceName, useInstances } from './instanceBinding';
@@ -255,9 +256,10 @@ function BatchImportModal({
       open
       title={t('iam.batchNewUser')}
       onClose={onClose}
+      dirty={rows.length > 0 && !result}
       footer={
         <>
-          <button className="btn" onClick={onClose}>{t('common.close')}</button>
+          <ModalCancelButton className="btn">{t('common.close')}</ModalCancelButton>
           <button
             className="btn primary"
             style={{ marginLeft: 8 }}
@@ -330,6 +332,7 @@ function BatchImportModal({
 function UserModal({ user, orgs, onClose, onSaved }: { user: IamUser | null; orgs: Org[]; onClose: () => void; onSaved: () => void }) {
   const { t } = useTranslation();
   const isEdit = !!user;
+  const { markClean, isDirty } = useFormDirty(true);
   const [displayName, setDisplayName] = useState(user?.display_name ?? '');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -341,10 +344,24 @@ function UserModal({ user, orgs, onClose, onSaved }: { user: IamUser | null; org
   const realOrgs = orgs.filter((o) => o.group_id !== NO_ORG_GROUP_ID);
 
   useEffect(() => {
-    if (user) {
-      UserApi.get(user.user_id).then((d) => setSelectedOrgs(new Set(d.group_ids ?? []))).catch(() => undefined);
-    }
-  }, [user]);
+    const base = {
+      displayName: user?.display_name ?? '',
+      username: '',
+      password: '',
+      isAdmin: user?.is_admin ?? false,
+      status: user?.status ?? 'active',
+      orgs: [] as string[],
+    };
+    markClean(base);
+    if (!user) return;
+    UserApi.get(user.user_id)
+      .then((d) => {
+        const orgIds = [...(d.group_ids ?? [])].sort();
+        setSelectedOrgs(new Set(orgIds));
+        markClean({ ...base, orgs: orgIds });
+      })
+      .catch(() => undefined);
+  }, [user, markClean]);
 
   function toggleOrg(gid: string) {
     setSelectedOrgs((prev) => {
@@ -378,15 +395,24 @@ function UserModal({ user, orgs, onClose, onSaved }: { user: IamUser | null; org
   }
 
   const canSave = displayName.trim() && (isEdit || (username.trim() && password));
+  const draft = {
+    displayName,
+    username,
+    password,
+    isAdmin,
+    status,
+    orgs: [...selectedOrgs].sort(),
+  };
 
   return (
     <Modal
       open
       title={isEdit ? t('iam.editUser') : t('iam.newUser')}
       onClose={onClose}
+      dirty={isDirty(draft)}
       footer={
         <>
-          <button className="btn" onClick={onClose}>{t('common.cancel')}</button>
+          <ModalCancelButton className="btn" />
           <button className="btn primary" style={{ marginLeft: 8 }} disabled={busy || !canSave} onClick={save}>{t('common.save')}</button>
         </>
       }

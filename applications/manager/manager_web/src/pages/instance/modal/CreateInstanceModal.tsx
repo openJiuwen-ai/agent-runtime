@@ -1,7 +1,8 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Modal } from '../../../components/Modal';
+import { Modal, ModalCancelButton } from '../../../components/Modal';
 import { LimitedTextInput } from '../../../components/LimitedTextInput';
+import { useFormDirty } from '../../../hooks/useFormDirty';
 import { InstanceApi, ApiError } from '../../../services/api';
 import { toast } from '../../../stores/uiStore';
 import { findUnsafeTextField } from '../../../utils/safeText';
@@ -39,6 +40,7 @@ function FieldLabel({ children, required }: { children: ReactNode; required?: bo
 
 export function CreateInstanceModal({ open, onClose, onCreated }: Props) {
   const { t } = useTranslation();
+  const { markClean, isDirty } = useFormDirty(open);
 
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -46,12 +48,28 @@ export function CreateInstanceModal({ open, onClose, onCreated }: Props) {
   const [runtimeConfigHost, setRuntimeConfigHost] = useState(DEFAULT_RUNTIME_CONFIG_HOST);
   const [saving, setSaving] = useState(false);
 
-  const reset = () => {
-    setName('');
-    setDescription('');
-    setGatewayConfigHost(DEFAULT_GATEWAY_CONFIG_HOST);
-    setRuntimeConfigHost(DEFAULT_RUNTIME_CONFIG_HOST);
+  const draft = { name, description, gatewayConfigHost, runtimeConfigHost };
+
+  const applyDefaults = () => {
+    const next = {
+      name: '',
+      description: '',
+      gatewayConfigHost: DEFAULT_GATEWAY_CONFIG_HOST,
+      runtimeConfigHost: DEFAULT_RUNTIME_CONFIG_HOST,
+    };
+    setName(next.name);
+    setDescription(next.description);
+    setGatewayConfigHost(next.gatewayConfigHost);
+    setRuntimeConfigHost(next.runtimeConfigHost);
+    markClean(next);
   };
+
+  useEffect(() => {
+    if (!open) return;
+    applyDefaults();
+    // intentionally only when open flips true / remounts
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   const submit = async () => {
     const requiredChecks: { label: string; invalid: boolean }[] = [
@@ -93,7 +111,7 @@ export function CreateInstanceModal({ open, onClose, onCreated }: Props) {
         runtime_config_host: runtimeConfigHost.trim().slice(0, FIELD_MAX_LENGTH.runtime_config_host),
       });
       toast('success', t('success.created'));
-      reset();
+      applyDefaults();
       onCreated();
     } catch (e) {
       toast('danger', t('errors.saveFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
@@ -107,12 +125,11 @@ export function CreateInstanceModal({ open, onClose, onCreated }: Props) {
       open={open}
       title={t('topology.createInstance')}
       onClose={onClose}
+      dirty={isDirty(draft)}
       size="md"
       footer={
         <>
-          <button className="btn ghost" onClick={onClose}>
-            {t('common.cancel')}
-          </button>
+          <ModalCancelButton />
           <button className="btn primary" onClick={submit} disabled={saving}>
             {saving ? t('common.loading') : t('common.submit')}
           </button>

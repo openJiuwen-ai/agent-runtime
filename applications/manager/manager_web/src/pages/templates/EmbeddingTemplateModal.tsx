@@ -1,7 +1,8 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { LimitedTextInput } from '../../components/LimitedTextInput';
-import { Modal } from '../../components/Modal';
+import { Modal, ModalCancelButton } from '../../components/Modal';
+import { useFormDirty } from '../../hooks/useFormDirty';
 import { ApiError, EmbeddingTemplateApi } from '../../services/api';
 import { toast } from '../../stores/uiStore';
 import type {
@@ -62,25 +63,26 @@ function FieldLabel({ children, required }: { children: ReactNode; required?: bo
 
 export function EmbeddingTemplateModal({ open, template, onClose, onSaved }: Props) {
   const { t } = useTranslation();
+  const { markClean, isDirty } = useFormDirty(open);
   const [form, setForm] = useState<FormState>(empty);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!open) return;
-    setForm(
-      template
-        ? {
-            template_name: template.template_name,
-            description: template.description ?? '',
-            embed_tags: toCommaList(template.embed_tags),
-            api_base: template.api_base,
-            api_key: template.api_key,
-            model_id: template.model_id,
-            model_provider: DEFAULT_MODEL_PROVIDER,
-          }
-        : empty,
-    );
-  }, [open, template]);
+    const next: FormState = template
+      ? {
+          template_name: template.template_name,
+          description: template.description ?? '',
+          embed_tags: toCommaList(template.embed_tags),
+          api_base: template.api_base,
+          api_key: template.api_key,
+          model_id: template.model_id,
+          model_provider: DEFAULT_MODEL_PROVIDER,
+        }
+      : empty;
+    setForm(next);
+    markClean(next);
+  }, [open, template, markClean]);
 
   const update = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setForm((current) => ({ ...current, [key]: value }));
@@ -155,10 +157,11 @@ export function EmbeddingTemplateModal({ open, template, onClose, onSaved }: Pro
       open={open}
       title={template ? t('embeddingTemplate.edit') : t('embeddingTemplate.new')}
       onClose={onClose}
+      dirty={isDirty(form)}
       size="lg"
       footer={
         <>
-          <button className="btn ghost" onClick={onClose}>{t('common.cancel')}</button>
+          <ModalCancelButton />
           <button className="btn primary" onClick={submit} disabled={saving}>
             {saving ? t('common.loading') : t('common.save')}
           </button>

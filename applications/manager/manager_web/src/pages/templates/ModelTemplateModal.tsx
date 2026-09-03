@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Modal } from '../../components/Modal';
+import { Modal, ModalCancelButton } from '../../components/Modal';
 import { JsonField, tryParseJson, useInvalidJsonChecker } from '../../components/JsonField';
 import { LimitedTextInput } from '../../components/LimitedTextInput';
+import { useFormDirty } from '../../hooks/useFormDirty';
 import { ModelTemplateApi, ApiError } from '../../services/api';
 import { toast } from '../../stores/uiStore';
 import { fromCommaList, safeStringify, toCommaList } from '../../utils/format';
@@ -110,6 +111,7 @@ const empty: FormState = {
 export function ModelTemplateModal({ open, template, onClose, onSaved }: Props) {
   const { t } = useTranslation();
   const checkJson = useInvalidJsonChecker();
+  const { markClean, isDirty } = useFormDirty(open);
   const [form, setForm] = useState<FormState>(empty);
   const [saving, setSaving] = useState(false);
   const [typeOpen, setTypeOpen] = useState(false);
@@ -117,32 +119,31 @@ export function ModelTemplateModal({ open, template, onClose, onSaved }: Props) 
 
   useEffect(() => {
     if (!open) return;
-    if (template) {
-      const types = template.model_type ?? [];
-      setForm({
-        template_name: clipField(template.template_name, FIELD_MAX_LENGTH.template_name),
-        description: clipField(template.description ?? '', FIELD_MAX_LENGTH.description),
-        model_type: types,
-        model_tags: toCommaList(template.model_tags),
-        api_base: clipField(template.api_base, FIELD_MAX_LENGTH.api_base),
-        api_key: clipField(template.api_key, FIELD_MAX_LENGTH.api_key),
-        model_id: clipField(template.model_id, FIELD_MAX_LENGTH.model_id),
-        model_provider: clipField(
-          normalizeModelProvider(template.model_provider),
-          FIELD_MAX_LENGTH.model_provider,
-        ),
-        parameters: safeStringify(template.parameters ?? {}, 2),
-        timeout: template.timeout,
-        retry_count: template.retry_count,
-        enable_streaming: template.enable_streaming,
-        enable_function_calling: template.enable_function_calling,
-        verify_ssl: template.verify_ssl,
-      });
-    } else {
-      setForm(empty);
-    }
+    const next: FormState = template
+      ? {
+          template_name: clipField(template.template_name, FIELD_MAX_LENGTH.template_name),
+          description: clipField(template.description ?? '', FIELD_MAX_LENGTH.description),
+          model_type: template.model_type ?? [],
+          model_tags: toCommaList(template.model_tags),
+          api_base: clipField(template.api_base, FIELD_MAX_LENGTH.api_base),
+          api_key: clipField(template.api_key, FIELD_MAX_LENGTH.api_key),
+          model_id: clipField(template.model_id, FIELD_MAX_LENGTH.model_id),
+          model_provider: clipField(
+            normalizeModelProvider(template.model_provider),
+            FIELD_MAX_LENGTH.model_provider,
+          ),
+          parameters: safeStringify(template.parameters ?? {}, 2),
+          timeout: template.timeout,
+          retry_count: template.retry_count,
+          enable_streaming: template.enable_streaming,
+          enable_function_calling: template.enable_function_calling,
+          verify_ssl: template.verify_ssl,
+        }
+      : empty;
+    setForm(next);
+    markClean(next);
     setTypeOpen(false);
-  }, [open, template]);
+  }, [open, template, markClean]);
 
   useEffect(() => {
     if (!typeOpen) return;
@@ -252,12 +253,11 @@ export function ModelTemplateModal({ open, template, onClose, onSaved }: Props) 
       open={open}
       title={template ? t('modelTemplate.edit') : t('modelTemplate.new')}
       onClose={onClose}
+      dirty={isDirty(form)}
       size="lg"
       footer={
         <>
-          <button className="btn ghost" onClick={onClose}>
-            {t('common.cancel')}
-          </button>
+          <ModalCancelButton />
           <button className="btn primary" onClick={submit} disabled={saving}>
             {saving ? t('common.loading') : t('common.save')}
           </button>

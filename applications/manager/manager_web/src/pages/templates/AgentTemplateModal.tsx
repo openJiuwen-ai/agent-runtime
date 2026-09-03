@@ -1,8 +1,9 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Modal } from '../../components/Modal';
+import { Modal, ModalCancelButton } from '../../components/Modal';
 import { TemplateRefEditor } from '../../components/TemplateRefEditor';
 import { LimitedTextInput } from '../../components/LimitedTextInput';
+import { useFormDirty } from '../../hooks/useFormDirty';
 import { AgentTemplate, AgentTemplateApi, ApiError } from '../../services/api';
 import { toast } from '../../stores/uiStore';
 import { fromCommaList, toCommaList } from '../../utils/format';
@@ -49,22 +50,23 @@ const empty: FormState = {
 
 export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) {
   const { t } = useTranslation();
+  const { markClean, isDirty } = useFormDirty(open);
   const [form, setForm] = useState<FormState>(empty);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!open) return;
-    if (template) {
-      setForm({
-        template_name: template.template_name.slice(0, FIELD_MAX_LENGTH.template_name),
-        description: (template.description ?? '').slice(0, FIELD_MAX_LENGTH.description),
-        agent_tags: toCommaList(template.agent_tags),
-        template_ref: normalizeTemplateRefFromApi(template.template_ref),
-      });
-    } else {
-      setForm(empty);
-    }
-  }, [open, template]);
+    const next: FormState = template
+      ? {
+          template_name: template.template_name.slice(0, FIELD_MAX_LENGTH.template_name),
+          description: (template.description ?? '').slice(0, FIELD_MAX_LENGTH.description),
+          agent_tags: toCommaList(template.agent_tags),
+          template_ref: normalizeTemplateRefFromApi(template.template_ref),
+        }
+      : empty;
+    setForm(next);
+    markClean(next);
+  }, [open, template, markClean]);
 
   const update = <K extends keyof FormState>(k: K, v: FormState[K]) =>
     setForm((s) => ({ ...s, [k]: v }));
@@ -112,12 +114,11 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
       open={open}
       title={template ? t('agentTemplate.edit') : t('agentTemplate.new')}
       onClose={onClose}
+      dirty={isDirty(form)}
       size="lg"
       footer={
         <>
-          <button className="btn ghost" onClick={onClose}>
-            {t('common.cancel')}
-          </button>
+          <ModalCancelButton />
           <button className="btn primary" onClick={() => void submit()} disabled={saving}>
             {saving ? t('common.loading') : t('common.save')}
           </button>

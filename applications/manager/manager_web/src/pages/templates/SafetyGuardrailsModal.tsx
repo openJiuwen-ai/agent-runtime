@@ -1,8 +1,9 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Modal } from '../../components/Modal';
+import { Modal, ModalCancelButton } from '../../components/Modal';
 import { LimitedTextInput } from '../../components/LimitedTextInput';
 import { useInvalidJsonChecker } from '../../components/JsonField';
+import { useFormDirty } from '../../hooks/useFormDirty';
 import { PermissionsTemplateApi, ApiError } from '../../services/api';
 import { toast } from '../../stores/uiStore';
 import { findUnsafeTextField } from '../../utils/safeText';
@@ -50,6 +51,7 @@ function FieldLabel({ children, required }: { children: ReactNode; required?: bo
 export function SafetyGuardrailsModal({ open, template, onClose, onSaved }: Props) {
   const { t } = useTranslation();
   const checkJson = useInvalidJsonChecker();
+  const { markClean, isDirty } = useFormDirty(open);
   const [templateName, setTemplateName] = useState('');
   const [description, setDescription] = useState('');
   const [form, setForm] = useState<PermissionsFormState>(() => createDefaultPermissionsFormState());
@@ -57,16 +59,20 @@ export function SafetyGuardrailsModal({ open, template, onClose, onSaved }: Prop
 
   useEffect(() => {
     if (!open) return;
-    if (template) {
-      setTemplateName(clipField(template.template_name, FIELD_MAX_LENGTH.template_name));
-      setDescription(clipField(template.description ?? '', FIELD_MAX_LENGTH.description));
-      setForm(permissionsBodyToFormState(template.body ?? {}));
-    } else {
-      setTemplateName('');
-      setDescription('');
-      setForm(createDefaultPermissionsFormState());
-    }
-  }, [open, template]);
+    const nextName = template
+      ? clipField(template.template_name, FIELD_MAX_LENGTH.template_name)
+      : '';
+    const nextDesc = template
+      ? clipField(template.description ?? '', FIELD_MAX_LENGTH.description)
+      : '';
+    const nextForm = template
+      ? permissionsBodyToFormState(template.body ?? {})
+      : createDefaultPermissionsFormState();
+    setTemplateName(nextName);
+    setDescription(nextDesc);
+    setForm(nextForm);
+    markClean({ templateName: nextName, description: nextDesc, form: nextForm });
+  }, [open, template, markClean]);
 
   const submit = async () => {
     if (!templateName.trim()) {
@@ -114,12 +120,11 @@ export function SafetyGuardrailsModal({ open, template, onClose, onSaved }: Prop
       open={open}
       title={template ? t('safetyGuardrails.edit') : t('safetyGuardrails.new')}
       onClose={onClose}
+      dirty={isDirty({ templateName, description, form })}
       size="lg"
       footer={
         <>
-          <button className="btn ghost" onClick={onClose}>
-            {t('common.cancel')}
-          </button>
+          <ModalCancelButton />
           <button className="btn primary" onClick={() => void submit()} disabled={saving}>
             {saving ? t('common.loading') : t('common.save')}
           </button>

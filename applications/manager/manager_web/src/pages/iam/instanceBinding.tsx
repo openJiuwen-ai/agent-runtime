@@ -1,8 +1,9 @@
 /** 实例(gateway)绑定管理的共享 UI（用户/组织页复用）：实例下拉、所属实例 chips、添加选择器。 */
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Modal } from '../../components/Modal';
+import { Modal, ModalCancelButton } from '../../components/Modal';
 import { HintTooltip } from '../../components/HintTooltip';
+import { useFormDirty } from '../../hooks/useFormDirty';
 import { ApiError, InstanceApi } from '../../services/api';
 import { InstanceSummary } from '../../types/instance';
 import { toast } from '../../stores/uiStore';
@@ -72,6 +73,7 @@ export function AddToInstanceModal({
   showExpiresAt?: boolean;
 }) {
   const { t } = useTranslation();
+  const { markClean, isDirty } = useFormDirty(true);
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [q, setQ] = useState('');
   const [expiresAt, setExpiresAt] = useState('');
@@ -81,6 +83,16 @@ export function AddToInstanceModal({
     const kw = q.trim().toLowerCase();
     return kw ? candidates.filter((c) => c.label.toLowerCase().includes(kw) || c.id.toLowerCase().includes(kw)) : candidates;
   }, [candidates, q]);
+
+  useEffect(() => {
+    markClean({ ids: [] as string[], expiresAt: '', loginPolicy: 'allow' as const });
+  }, [markClean]);
+
+  const draft = {
+    ids: [...sel].sort(),
+    expiresAt,
+    loginPolicy,
+  };
 
   function toggle(id: string) {
     setSel((prev) => {
@@ -111,9 +123,10 @@ export function AddToInstanceModal({
       open
       title={title}
       onClose={onClose}
+      dirty={isDirty(draft)}
       footer={
         <>
-          <button className="btn" onClick={onClose}>{t('common.cancel')}</button>
+          <ModalCancelButton className="btn" />
           <button className="btn primary" style={{ marginLeft: 8 }} disabled={busy || sel.size === 0} onClick={submit}>
             {t('common.confirm', { defaultValue: '确定' })}{sel.size ? `（${sel.size}）` : ''}
           </button>
