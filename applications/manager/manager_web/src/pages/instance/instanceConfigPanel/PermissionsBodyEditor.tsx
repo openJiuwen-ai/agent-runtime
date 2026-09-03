@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Empty } from '../../../components/Empty';
-import { Modal } from '../../../components/Modal';
+import { Modal, ModalCancelButton } from '../../../components/Modal';
 import { JsonField } from '../../../components/JsonField';
+import { useFormDirty } from '../../../hooks/useFormDirty';
 import { toast } from '../../../stores/uiStore';
 import { truncate } from '../../../utils/format';
 import type {
@@ -86,24 +87,23 @@ export function PermissionsBodyEditor({ form, onChange }: Props) {
   const [toolModalOpen, setToolModalOpen] = useState(false);
   const [editingTool, setEditingTool] = useState<PermissionToolEntry | null>(null);
   const [toolForm, setToolForm] = useState<PermissionToolEntry>(emptyToolRow());
+  const { markClean: markToolClean, isDirty: isToolDirty } = useFormDirty(toolModalOpen);
 
   const [ruleModalOpen, setRuleModalOpen] = useState(false);
   const [editingRule, setEditingRule] = useState<PermissionRuleEntry | null>(null);
   const [ruleForm, setRuleForm] = useState<PermissionRuleEntry>(emptyRuleRow());
   const [ruleToolsText, setRuleToolsText] = useState('');
+  const { markClean: markRuleClean, isDirty: isRuleDirty } = useFormDirty(ruleModalOpen);
 
   const updateForm = <K extends keyof PermissionsFormState>(key: K, value: PermissionsFormState[K]) => {
     onChange({ ...form, [key]: value });
   };
 
   const openToolModal = (row?: PermissionToolEntry) => {
-    if (row) {
-      setEditingTool(row);
-      setToolForm({ ...row });
-    } else {
-      setEditingTool(null);
-      setToolForm(emptyToolRow());
-    }
+    const next = row ? { ...row } : emptyToolRow();
+    setEditingTool(row ?? null);
+    setToolForm(next);
+    markToolClean(next);
     setToolModalOpen(true);
   };
 
@@ -124,15 +124,14 @@ export function PermissionsBodyEditor({ form, onChange }: Props) {
   };
 
   const openRuleModal = (row?: PermissionRuleEntry) => {
-    if (row) {
-      setEditingRule(row);
-      setRuleForm({ ...row, tools: [...row.tools] });
-      setRuleToolsText(row.tools.join(', '));
-    } else {
-      setEditingRule(null);
-      setRuleForm(emptyRuleRow());
-      setRuleToolsText('');
-    }
+    const nextForm = row
+      ? { ...row, tools: [...row.tools] }
+      : emptyRuleRow();
+    const nextTools = row ? row.tools.join(', ') : '';
+    setEditingRule(row ?? null);
+    setRuleForm(nextForm);
+    setRuleToolsText(nextTools);
+    markRuleClean({ form: nextForm, toolsText: nextTools });
     setRuleModalOpen(true);
   };
 
@@ -351,11 +350,10 @@ export function PermissionsBodyEditor({ form, onChange }: Props) {
         open={toolModalOpen}
         title={editingTool ? t('instanceConfig.permissions.editTool') : t('instanceConfig.permissions.newTool')}
         onClose={() => setToolModalOpen(false)}
+        dirty={isToolDirty(toolForm)}
         footer={
           <>
-            <button className="btn ghost" type="button" onClick={() => setToolModalOpen(false)}>
-              {t('common.cancel')}
-            </button>
+            <ModalCancelButton />
             <button className="btn primary" type="button" onClick={submitTool}>
               {t('common.ok')}
             </button>
@@ -393,12 +391,11 @@ export function PermissionsBodyEditor({ form, onChange }: Props) {
         open={ruleModalOpen}
         title={editingRule ? t('instanceConfig.permissions.editRule') : t('instanceConfig.permissions.newRule')}
         onClose={() => setRuleModalOpen(false)}
+        dirty={isRuleDirty({ form: ruleForm, toolsText: ruleToolsText })}
         size="lg"
         footer={
           <>
-            <button className="btn ghost" type="button" onClick={() => setRuleModalOpen(false)}>
-              {t('common.cancel')}
-            </button>
+            <ModalCancelButton />
             <button className="btn primary" type="button" onClick={submitRule}>
               {t('common.ok')}
             </button>

@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Modal } from '../../../components/Modal';
+import { Modal, ModalCancelButton } from '../../../components/Modal';
 import { MatchExprEditor } from '../../../components/MatchExprEditor';
 import { useAsync } from '../../../hooks/useAsync';
+import { useFormDirty } from '../../../hooks/useFormDirty';
 import {
   ApiError,
   InstanceServiceResource,
@@ -154,6 +155,18 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
   const [matchExpr, setMatchExpr] = useState('');
   const [editExpiresAt, setEditExpiresAt] = useState('');
   const [busy, setBusy] = useState(false);
+  const { markClean: markAddClean, isDirty: isAddDirty } = useFormDirty(showAdd);
+  const { markClean: markEditClean, isDirty: isEditDirty } = useFormDirty(!!editing);
+
+  const addDraft = {
+    addTemplateId,
+    addResourceName,
+    addResourceDesc,
+    addPriority,
+    addMatchExpr,
+    addExpiresAt,
+  };
+  const editDraft = { editResourceName, editResourceDesc, editPriority, matchExpr, editExpiresAt };
 
   useEffect(() => {
     setChecked(new Set());
@@ -165,30 +178,60 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
   }, [searchQuery]);
 
   useEffect(() => {
+    if (!showAdd) return;
+    markAddClean({
+      addTemplateId: '',
+      addResourceName: '',
+      addResourceDesc: '',
+      addPriority: 0,
+      addMatchExpr: '',
+      addExpiresAt: '',
+    });
+    setAddTemplateId('');
+    setAddResourceName('');
+    setAddResourceDesc('');
+    setAddPriority(0);
+    setAddMatchExpr('');
+    setAddExpiresAt('');
+  }, [showAdd, markAddClean]);
+
+  useEffect(() => {
     if (editing) {
-      setMatchExpr(recordsToEditorString(editing.records ?? []));
+      const nextMatch = recordsToEditorString(editing.records ?? []);
       const first = primaryRecord(editing);
-      setEditResourceName(
-        clipField(first?.resource_name ?? editing.resource_name ?? '', FIELD_MAX_LENGTH.resource_name),
+      const nextName = clipField(
+        first?.resource_name ?? editing.resource_name ?? '',
+        FIELD_MAX_LENGTH.resource_name,
       );
-      setEditResourceDesc(
-        clipField(first?.resource_desc ?? editing.resource_desc ?? '', FIELD_MAX_LENGTH.resource_desc),
+      const nextDesc = clipField(
+        first?.resource_desc ?? editing.resource_desc ?? '',
+        FIELD_MAX_LENGTH.resource_desc,
       );
-      setEditPriority(first?.priority ?? 0);
+      const nextPriority = first?.priority ?? 0;
+      let nextExpires = '';
       if (first?.expires_at) {
         const d = new Date(first.expires_at);
-        const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
-        setEditExpiresAt(local);
-      } else {
-        setEditExpiresAt('');
+        nextExpires = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
       }
+      setMatchExpr(nextMatch);
+      setEditResourceName(nextName);
+      setEditResourceDesc(nextDesc);
+      setEditPriority(nextPriority);
+      setEditExpiresAt(nextExpires);
+      markEditClean({
+        editResourceName: nextName,
+        editResourceDesc: nextDesc,
+        editPriority: nextPriority,
+        matchExpr: nextMatch,
+        editExpiresAt: nextExpires,
+      });
     } else {
       setEditResourceName('');
       setEditResourceDesc('');
       setEditPriority(0);
       setEditExpiresAt('');
     }
-  }, [editing, instanceId]);
+  }, [editing, instanceId, markEditClean]);
 
   const candidates = catalog.map((b) => ({
     id: b.template_id,
@@ -510,11 +553,10 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
           size="lg"
           title={t(`${sr}.add`)}
           onClose={() => setShowAdd(false)}
+          dirty={isAddDirty(addDraft)}
           footer={
             <>
-              <button className="btn" onClick={() => setShowAdd(false)}>
-                {t('common.cancel')}
-              </button>
+              <ModalCancelButton className="btn" />
               <button
                 className="btn primary"
                 style={{ marginLeft: 8 }}
@@ -650,11 +692,10 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
           size="lg"
           title={t(`${sr}.editGrant`, { name: editing.resource_name || editing.template_name })}
           onClose={() => setEditing(null)}
+          dirty={isEditDirty(editDraft)}
           footer={
             <>
-              <button className="btn" onClick={() => setEditing(null)}>
-                {t('common.cancel')}
-              </button>
+              <ModalCancelButton className="btn" />
               <button
                 className="btn primary"
                 style={{ marginLeft: 8 }}

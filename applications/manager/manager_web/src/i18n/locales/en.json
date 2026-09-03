@@ -24,6 +24,9 @@
     "sortDefault": "Default",
     "filter": "Filter",
     "confirm": "Confirm",
+    "unsavedTitle": "Discard unsaved changes?",
+    "unsavedMessage": "You have unsaved changes. Closing will discard them. Continue?",
+    "unsavedDiscard": "Discard",
     "submit": "Submit",
     "pagination": {
       "total": "total {{total}} items",

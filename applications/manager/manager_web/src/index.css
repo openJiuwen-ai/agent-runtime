@@ -1080,6 +1080,9 @@ button, input, textarea, select { font: inherit; color: inherit; }
     backdrop-filter: blur(4px);
     animation: rise 0.2s var(--ease-out);
   }
+  .modal-confirm-mask {
+    z-index: 70;
+  }
   .modal-panel {
     position: relative;
     width: 100%;

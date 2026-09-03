@@ -24,6 +24,9 @@
     "sortDefault": "默认",
     "filter": "筛选",
     "confirm": "确认",
+    "unsavedTitle": "放弃未保存的修改？",
+    "unsavedMessage": "当前内容尚未保存，关闭后修改将丢失。确定要关闭吗？",
+    "unsavedDiscard": "放弃并关闭",
     "submit": "提交",
     "pagination": {
       "total": "共 {{total}} 条",

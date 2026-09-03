@@ -1,8 +1,9 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Modal } from '../../components/Modal';
+import { Modal, ModalCancelButton } from '../../components/Modal';
 import { JsonField, tryParseJson, useInvalidJsonChecker } from '../../components/JsonField';
 import { LimitedTextInput } from '../../components/LimitedTextInput';
+import { useFormDirty } from '../../hooks/useFormDirty';
 import { ExtensionTemplateApi, ApiError } from '../../services/api';
 import { toast } from '../../stores/uiStore';
 import { safeStringify } from '../../utils/format';
@@ -101,24 +102,25 @@ function buildHookConfig(form: FormState): HookConfig {
 export function ExtensionTemplateModal({ open, template, onClose, onSaved }: Props) {
   const { t } = useTranslation();
   const checkJson = useInvalidJsonChecker();
+  const { markClean, isDirty } = useFormDirty(open);
   const [form, setForm] = useState<FormState>(empty);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!open) return;
-    if (template) {
-      setForm({
-        template_name: clipField(template.template_name, FIELD_MAX_LENGTH.template_name),
-        description: clipField(template.description ?? '', FIELD_MAX_LENGTH.description),
-        component: clipField(template.component, FIELD_MAX_LENGTH.component),
-        hook_type: clipField(template.hook_type, FIELD_MAX_LENGTH.hook_type),
-        ...hookConfigToForm(template.hook_config),
-        custom_config: safeStringify(template.custom_config ?? {}, 2),
-      });
-    } else {
-      setForm(empty);
-    }
-  }, [open, template]);
+    const next: FormState = template
+      ? {
+          template_name: clipField(template.template_name, FIELD_MAX_LENGTH.template_name),
+          description: clipField(template.description ?? '', FIELD_MAX_LENGTH.description),
+          component: clipField(template.component, FIELD_MAX_LENGTH.component),
+          hook_type: clipField(template.hook_type, FIELD_MAX_LENGTH.hook_type),
+          ...hookConfigToForm(template.hook_config),
+          custom_config: safeStringify(template.custom_config ?? {}, 2),
+        }
+      : empty;
+    setForm(next);
+    markClean(next);
+  }, [open, template, markClean]);
 
   const update = <K extends keyof FormState>(k: K, v: FormState[K]) =>
     setForm((s) => ({ ...s, [k]: v }));
@@ -202,12 +204,11 @@ export function ExtensionTemplateModal({ open, template, onClose, onSaved }: Pro
       open={open}
       title={template ? t('extensionTemplate.edit') : t('extensionTemplate.new')}
       onClose={onClose}
+      dirty={isDirty(form)}
       size="lg"
       footer={
         <>
-          <button className="btn ghost" onClick={onClose}>
-            {t('common.cancel')}
-          </button>
+          <ModalCancelButton />
           <button className="btn primary" onClick={submit} disabled={saving}>
             {saving ? t('common.loading') : t('common.save')}
           </button>

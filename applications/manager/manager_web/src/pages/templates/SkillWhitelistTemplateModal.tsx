@@ -1,7 +1,8 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Modal } from '../../components/Modal';
+import { Modal, ModalCancelButton } from '../../components/Modal';
 import { LimitedTextInput } from '../../components/LimitedTextInput';
+import { useFormDirty } from '../../hooks/useFormDirty';
 import { SkillWhitelistTemplateApi, ApiError } from '../../services/api';
 import { toast } from '../../stores/uiStore';
 import { findUnsafeTextField } from '../../utils/safeText';
@@ -59,23 +60,24 @@ const empty: FormState = {
 
 export function SkillWhitelistTemplateModal({ open, template, onClose, onSaved }: Props) {
   const { t } = useTranslation();
+  const { markClean, isDirty } = useFormDirty(open);
   const [form, setForm] = useState<FormState>(empty);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!open) return;
-    if (template) {
-      setForm({
-        template_name: clipField(template.template_name, FIELD_MAX_LENGTH.template_name),
-        description: clipField(template.description ?? '', FIELD_MAX_LENGTH.description),
-        skill_id: clipField(template.skill_id, FIELD_MAX_LENGTH.skill_id),
-        skill_version: clipField(template.skill_version, FIELD_MAX_LENGTH.skill_version),
-        skill_source: clipField(template.skill_source, FIELD_MAX_LENGTH.skill_source),
-      });
-    } else {
-      setForm(empty);
-    }
-  }, [open, template]);
+    const next: FormState = template
+      ? {
+          template_name: clipField(template.template_name, FIELD_MAX_LENGTH.template_name),
+          description: clipField(template.description ?? '', FIELD_MAX_LENGTH.description),
+          skill_id: clipField(template.skill_id, FIELD_MAX_LENGTH.skill_id),
+          skill_version: clipField(template.skill_version, FIELD_MAX_LENGTH.skill_version),
+          skill_source: clipField(template.skill_source, FIELD_MAX_LENGTH.skill_source),
+        }
+      : empty;
+    setForm(next);
+    markClean(next);
+  }, [open, template, markClean]);
 
   const update = <K extends keyof FormState>(k: K, v: FormState[K]) =>
     setForm((s) => ({ ...s, [k]: v }));
@@ -136,12 +138,11 @@ export function SkillWhitelistTemplateModal({ open, template, onClose, onSaved }
       open={open}
       title={template ? t('skillWhitelistTemplate.edit') : t('skillWhitelistTemplate.new')}
       onClose={onClose}
+      dirty={isDirty(form)}
       size="lg"
       footer={
         <>
-          <button className="btn ghost" onClick={onClose}>
-            {t('common.cancel')}
-          </button>
+          <ModalCancelButton />
           <button className="btn primary" onClick={submit} disabled={saving}>
             {saving ? t('common.loading') : t('common.save')}
           </button>

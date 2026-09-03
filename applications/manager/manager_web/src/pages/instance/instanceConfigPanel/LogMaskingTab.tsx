@@ -6,9 +6,10 @@ import { useListSearch } from '../../../hooks/useListSearch';
 import type { LogMaskingRule } from '../../../types';
 import { Empty } from '../../../components/Empty';
 import { ConfirmDialog } from '../../../components/ConfirmDialog';
-import { Modal } from '../../../components/Modal';
+import { Modal, ModalCancelButton } from '../../../components/Modal';
 import { LimitedTextInput } from '../../../components/LimitedTextInput';
 import { Switch } from '../../../components/Switch';
+import { useFormDirty } from '../../../hooks/useFormDirty';
 import { TableColumnFilter } from '../../../components/TableColumnFilter';
 import {
   TableColumnSort,
@@ -82,6 +83,7 @@ export function LogMaskingTab({ instanceId }: { instanceId: string }) {
   const [items, setItems] = useState<LogMaskingRule[]>([]);
   const [saving, setSaving] = useState(false);
   const [togglingId, setTogglingId] = useState<string | null>(null);
+  const { markClean, isDirty } = useFormDirty(modalOpen);
 
   const sortOptions = useMemo(
     () => [
@@ -122,19 +124,19 @@ export function LogMaskingTab({ instanceId }: { instanceId: string }) {
 
   useEffect(() => {
     if (!modalOpen) return;
-    if (editing) {
-      setForm({
-        rule_name: clipField(editing.rule_name, FIELD_MAX_LENGTH.rule_name),
-        description: clipField(editing.description ?? '', FIELD_MAX_LENGTH.description),
-        pattern: clipField(editing.pattern, FIELD_MAX_LENGTH.pattern),
-        replacement: clipField(editing.replacement, FIELD_MAX_LENGTH.replacement),
-        priority: editing.priority,
-        with_fingerprint: Boolean(editing.with_fingerprint),
-      });
-    } else {
-      setForm(emptyForm);
-    }
-  }, [modalOpen, editing]);
+    const next: FormState = editing
+      ? {
+          rule_name: clipField(editing.rule_name, FIELD_MAX_LENGTH.rule_name),
+          description: clipField(editing.description ?? '', FIELD_MAX_LENGTH.description),
+          pattern: clipField(editing.pattern, FIELD_MAX_LENGTH.pattern),
+          replacement: clipField(editing.replacement, FIELD_MAX_LENGTH.replacement),
+          priority: editing.priority,
+          with_fingerprint: Boolean(editing.with_fingerprint),
+        }
+      : emptyForm;
+    setForm(next);
+    markClean(next);
+  }, [modalOpen, editing, markClean]);
 
   const update = <K extends keyof FormState>(k: K, v: FormState[K]) =>
     setForm((s) => ({ ...s, [k]: v }));
@@ -402,12 +404,11 @@ export function LogMaskingTab({ instanceId }: { instanceId: string }) {
         open={modalOpen}
         title={editing ? t('instanceConfig.logMasking.edit') : t('instanceConfig.logMasking.new')}
         onClose={() => setModalOpen(false)}
+        dirty={isDirty(form)}
         size="lg"
         footer={
           <>
-            <button className="btn ghost" onClick={() => setModalOpen(false)}>
-              {t('common.cancel')}
-            </button>
+            <ModalCancelButton />
             <button className="btn primary" onClick={submit} disabled={saving}>
               {saving ? t('common.loading') : t('common.save')}
             </button>

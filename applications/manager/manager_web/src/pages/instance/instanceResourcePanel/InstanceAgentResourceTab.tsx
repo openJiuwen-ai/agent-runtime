@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Modal } from '../../../components/Modal';
+import { Modal, ModalCancelButton } from '../../../components/Modal';
 import { MatchExprEditor } from '../../../components/MatchExprEditor';
 import { useAsync } from '../../../hooks/useAsync';
+import { useFormDirty } from '../../../hooks/useFormDirty';
 import {
   InstanceAgentResourceRecord,
   InstanceAgentResourceApi,
@@ -139,6 +140,11 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
   const [matchExpr, setMatchExpr] = useState('');
   const [editExpiresAt, setEditExpiresAt] = useState('');
   const [busy, setBusy] = useState(false);
+  const { markClean: markAddClean, isDirty: isAddDirty } = useFormDirty(showAdd);
+  const { markClean: markEditClean, isDirty: isEditDirty } = useFormDirty(!!editing);
+
+  const addDraft = { addAgentId, addResourceName, addResourceDesc, addMatchExpr, addExpiresAt };
+  const editDraft = { editResourceName, editResourceDesc, matchExpr, editExpiresAt };
 
   useEffect(() => {
     setChecked(new Set());
@@ -150,28 +156,54 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
   }, [searchQuery]);
 
   useEffect(() => {
+    if (!showAdd) return;
+    markAddClean({
+      addAgentId: '',
+      addResourceName: '',
+      addResourceDesc: '',
+      addMatchExpr: '',
+      addExpiresAt: '',
+    });
+    setAddAgentId('');
+    setAddResourceName('');
+    setAddResourceDesc('');
+    setAddMatchExpr('');
+    setAddExpiresAt('');
+  }, [showAdd, markAddClean]);
+
+  useEffect(() => {
     if (editing) {
-      setMatchExpr(recordsToEditorString(editing.records ?? []));
+      const nextMatch = recordsToEditorString(editing.records ?? []);
       const first = (editing.records ?? [])[0];
-      setEditResourceName(
-        clipField(first?.resource_name ?? editing.resource_name ?? '', FIELD_MAX_LENGTH.resource_name),
+      const nextName = clipField(
+        first?.resource_name ?? editing.resource_name ?? '',
+        FIELD_MAX_LENGTH.resource_name,
       );
-      setEditResourceDesc(
-        clipField(first?.resource_desc ?? editing.resource_desc ?? '', FIELD_MAX_LENGTH.resource_desc),
+      const nextDesc = clipField(
+        first?.resource_desc ?? editing.resource_desc ?? '',
+        FIELD_MAX_LENGTH.resource_desc,
       );
+      let nextExpires = '';
       if (first?.expires_at) {
         const d = new Date(first.expires_at);
-        const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
-        setEditExpiresAt(local);
-      } else {
-        setEditExpiresAt('');
+        nextExpires = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
       }
+      setMatchExpr(nextMatch);
+      setEditResourceName(nextName);
+      setEditResourceDesc(nextDesc);
+      setEditExpiresAt(nextExpires);
+      markEditClean({
+        editResourceName: nextName,
+        editResourceDesc: nextDesc,
+        matchExpr: nextMatch,
+        editExpiresAt: nextExpires,
+      });
     } else {
       setEditResourceName('');
       setEditResourceDesc('');
       setEditExpiresAt('');
     }
-  }, [editing, instanceId]);
+  }, [editing, instanceId, markEditClean]);
 
   const candidates = catalog.map((b) => ({ id: b.template_id, label: b.template_name, sub: b.template_id }));
 
@@ -424,9 +456,10 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
           size="lg"
           title={t('instanceDetail.resourcePanel.agent.add')}
           onClose={() => setShowAdd(false)}
+          dirty={isAddDirty(addDraft)}
           footer={
             <>
-              <button className="btn" onClick={() => setShowAdd(false)}>{t('common.cancel')}</button>
+              <ModalCancelButton className="btn" />
               <button
                 className="btn primary"
                 style={{ marginLeft: 8 }}
@@ -542,9 +575,10 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
           size="lg"
           title={t('instanceDetail.resourcePanel.agent.editGrant', { name: editing.template_name })}
           onClose={() => setEditing(null)}
+          dirty={isEditDirty(editDraft)}
           footer={
             <>
-              <button className="btn" onClick={() => setEditing(null)}>{t('common.cancel')}</button>
+              <ModalCancelButton className="btn" />
               <button className="btn primary" style={{ marginLeft: 8 }} disabled={busy} onClick={() => void saveInstanceAgentResource()}>
                 {t('common.save')}
               </button>

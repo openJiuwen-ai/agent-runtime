@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Modal } from '../../components/Modal';
+import { Modal, ModalCancelButton } from '../../components/Modal';
 import { useAsync } from '../../hooks/useAsync';
+import { useFormDirty } from '../../hooks/useFormDirty';
 import { ApiError, IamUser, InstanceBindingApi, NO_ORG_GROUP_ID, Org, OrgApi, UserApi } from '../../services/api';
 import { toast } from '../../stores/uiStore';
 import { AddToInstanceModal, InstanceChips, InstanceFilter, instanceName, useInstances } from './instanceBinding';
@@ -249,9 +250,17 @@ function MembersModal({ org, onClose }: { org: Org; onClose: () => void }) {
 
 function OrgModal({ org, onClose, onSaved }: { org: Org | null; onClose: () => void; onSaved: () => void }) {
   const { t } = useTranslation();
+  const { markClean, isDirty } = useFormDirty(true);
   const [name, setName] = useState(org?.name ?? '');
   const [status, setStatus] = useState(org?.status ?? 'active');
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    const next = { name: org?.name ?? '', status: org?.status ?? 'active' };
+    setName(next.name);
+    setStatus(next.status);
+    markClean(next);
+  }, [org, markClean]);
 
   async function save() {
     setBusy(true);
@@ -272,9 +281,10 @@ function OrgModal({ org, onClose, onSaved }: { org: Org | null; onClose: () => v
       open
       title={org ? t('iam.editOrg') : t('iam.newOrg')}
       onClose={onClose}
+      dirty={isDirty({ name, status })}
       footer={
         <>
-          <button className="btn" onClick={onClose}>{t('common.cancel')}</button>
+          <ModalCancelButton className="btn" />
           <button className="btn primary" style={{ marginLeft: 8 }} disabled={busy || !name.trim()} onClick={save}>{t('common.save')}</button>
         </>
       }
