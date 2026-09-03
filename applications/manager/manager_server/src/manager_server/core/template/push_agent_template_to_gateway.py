@@ -15,6 +15,7 @@ from manager_server.core.template.push_template_to_gateway import (
     delete_agent_template_on_gateway,
     ensure_referenced_templates_on_gateway,
     slot_template_pairs_from_template_ref,
+    sync_gateway_templates_after_template_ref_change,
     upsert_agent_template_on_gateway,
 )
 from manager_server.infrastructure.logger import get_logger
@@ -149,6 +150,63 @@ async def _delete_agent_resource_on_gateway(
     )
 
 
+
+async def _bound_jiuwenclaw_ids_for_agent_template(
+    handler: DBHandler,
+    template_id: str,
+) -> list[str]:
+    tid = str(template_id or "").strip()
+    if not tid:
+        return []
+    rows = await handler.list_records(
+        _GRANT,
+        {"ref_template_id": tid},
+        limit=_LIST_ALL_CAP,
+        offset=0,
+    )
+    jids: set[str] = set()
+    for row in rows:
+        jid = str(_g(row, "jiuwenclaw_id") or "").strip()
+        if jid:
+            jids.add(jid)
+    return sorted(jids)
+
+
+async def sync_agent_template_ref_change_to_bound_gateways(
+    handler: DBHandler,
+    template_id: str,
+    *,
+    old_template_ref: Any,
+    new_template_ref: Any,
+    agent_template_payload: dict[str, Any] | None = None,
+) -> None:
+    """Agent 模板 `template_ref` 变更后：向已绑定实例推引用增量、ensure 补齐并 upsert agent。
+
+    用于「只改挂载、不重绑资源」的日常路径，保证 `extension_config` 等槽位落到 Gateway。
+    `agent_template_payload` 保留兼容；实际 upsert 以 Manager 库行为准。
+    """
+    del agent_template_payload  # 兼容旧调用方；Gateway upsert 读库
+    tid = str(template_id or "").strip()
+    if not tid:
+        return
+    for jid in await _bound_jiuwenclaw_ids_for_agent_template(handler, tid):
+        await sync_gateway_templates_after_template_ref_change(
+            handler,
+            jid,
+            old_template_ref=old_template_ref,
+            new_template_ref=new_template_ref,
+        )
+        # delta 在 jid_template_ref 已有计数时可能跳过 create；ensure 覆盖 Gateway 缺行。
+        await ensure_referenced_templates_on_gateway(handler, jid, new_template_ref)
+        await upsert_agent_template_on_gateway(handler, jid, tid)
+        logger.info(
+            "[push_agent_template] synced template_ref change "
+            "jiuwenclaw_id=%s template_id=%s",
+            jid,
+            tid,
+        )
+
+
 async def sync_agent_resource_to_gateway(
     handler: DBHandler,
     jiuwenclaw_id: str,
@@ -188,8 +246,9 @@ async def sync_agent_resource_to_gateway(
             added=slot_template_pairs_from_template_ref(template_ref),
             removed=set(),
         )
-    else:
-        await ensure_referenced_templates_on_gateway(handler, jid, template_ref)
+    # 首次绑定的 delta 在引用计数已 >0 时会跳过 create；无论首次/重绑都 ensure，
+    # 按 template_ref（含 extension_config）把引用模板 create/补齐到 Gateway。
+    await ensure_referenced_templates_on_gateway(handler, jid, template_ref)
 
     await upsert_agent_template_on_gateway(handler, jid, tid)
     payload = resource_payload or await _build_agent_resource_payload(handler, jid, rid)
@@ -326,4 +385,5 @@ __all__ = (
     "delete_agent_resource_from_gateway",
     "push_agent_resources_sync_to_gateway",
     "sync_agent_resource_to_gateway",
+    "sync_agent_template_ref_change_to_bound_gateways",
 )

@@ -146,11 +146,20 @@ def _row_to_sync_payload(obj: Any) -> dict[str, Any]:
     return data
 
 
+def _is_rule_already_exists_error(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return "already exists" in text or "rule_id already exists" in text
+
+
 async def push_log_masking_rules_sync_to_gateway(
     handler: DBHandler,
     jiuwenclaw_id: str,
 ) -> dict[str, Any]:
-    """Gateway 注册后：将 MDB 中该实例全部规则 bulk push 到 GDB。"""
+    """Gateway 注册后：将 MDB 中该实例全部规则 bulk push 到 GDB。
+
+    期望 Gateway POST 按 ``rule_id`` upsert；若旧 Gateway 仍对已存在规则
+    返回 ``already exists``，则回退 PATCH，保证全量 sync 幂等。
+    """
     jid = str(jiuwenclaw_id or "").strip()
     if not jid:
         raise ValueError("jiuwenclaw_id is required")
@@ -158,17 +167,36 @@ async def push_log_masking_rules_sync_to_gateway(
     rows = await handler.list_records(_TABLE, {"jiuwenclaw_id": jid})
     rules = [_row_to_sync_payload(row) for row in rows]
     last: dict[str, Any] | None = None
-    for idx, rule in enumerate(rules):
+    synced = 0
+    for rule in rules:
         clean = _clean_for_gateway_push(rule)
-        last = await gateway_request(
-            jid,
-            "POST",
-            "/api/v1/log-masking-rules",
-            clean,
-        )
+        rid = str(clean.get("rule_id") or "").strip()
+        try:
+            last = await gateway_request(
+                jid,
+                "POST",
+                "/api/v1/log-masking-rules",
+                clean,
+            )
+        except Exception as exc:
+            if not rid or not _is_rule_already_exists_error(exc):
+                raise
+            # 旧 Gateway create 非幂等：改为 PATCH 覆盖字段
+            patch_body = {
+                key: value
+                for key, value in clean.items()
+                if key != "rule_id"
+            }
+            last = await gateway_request(
+                jid,
+                "PATCH",
+                f"/api/v1/log-masking-rules/{rid}",
+                patch_body,
+            )
+        synced += 1
     return last or {
         "success_flag": True,
-        "result": {"synced": 0},
+        "result": {"synced": synced},
         "transport": "http",
     }
 

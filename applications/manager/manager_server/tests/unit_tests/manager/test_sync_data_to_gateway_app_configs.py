@@ -68,6 +68,69 @@ async def test_sync_data_pushes_application_configs():
     assert "task_memory" in results
     assert "memory" in results
     assert "permissions" not in results
+    assert results.get("jid_template_ref_rebuilt") is True
+
+
+@pytest.mark.asyncio
+async def test_sync_rebuilds_jid_even_when_log_masking_fails():
+    """应用配置失败时仍重建 jid_template_ref，再向上抛错。"""
+    from manager_server.core.instance.instance_data_lifecycle import (
+        sync_data_to_gateway_on_register,
+    )
+
+    handler = AsyncMock()
+    ack = {"success_flag": True, "result": {"synced": True}, "transport": "http"}
+    rebuild = AsyncMock()
+
+    with (
+        patch(
+            "manager_server.core.instance.instance_data_lifecycle.sync_referenced_templates_to_gateway",
+            new_callable=AsyncMock,
+            return_value={"model": ack},
+        ),
+        patch(
+            "manager_server.core.instance.instance_data_lifecycle.push_agent_resources_sync_to_gateway",
+            new_callable=AsyncMock,
+            return_value=ack,
+        ),
+        patch(
+            "manager_server.core.instance.instance_data_lifecycle.push_logging_config_sync_to_gateway",
+            new_callable=AsyncMock,
+            return_value=ack,
+        ),
+        patch(
+            "manager_server.core.instance.instance_data_lifecycle.push_task_memory_config_sync_to_gateway",
+            new_callable=AsyncMock,
+            return_value=ack,
+        ),
+        patch(
+            "manager_server.core.instance.instance_data_lifecycle.push_permissions_config_sync_to_gateway",
+            new_callable=AsyncMock,
+            return_value=ack,
+        ),
+        patch(
+            "manager_server.core.instance.instance_data_lifecycle.push_memory_config_sync_to_gateway",
+            new_callable=AsyncMock,
+            return_value=ack,
+        ),
+        patch(
+            "manager_server.core.instance.instance_data_lifecycle.push_log_masking_rules_sync_to_gateway",
+            new_callable=AsyncMock,
+            side_effect=ValueError("rule_id already exists: 'builtin_cn_id_card'"),
+        ),
+        patch(
+            "manager_server.core.instance.instance_data_lifecycle._seed_log_masking_if_needed",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "manager_server.core.instance.instance_data_lifecycle.rebuild_jid_template_ref_for_gateway",
+            rebuild,
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="log_masking_rule"):
+            await sync_data_to_gateway_on_register(handler, "jid-app")
+
+    rebuild.assert_awaited_once_with(handler, "jid-app")
 
 
 @pytest.mark.asyncio

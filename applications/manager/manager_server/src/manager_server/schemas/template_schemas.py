@@ -591,6 +591,7 @@ class McpTemplateOut(BaseModel):
 # 与库表类型上限一致：integer → 有符号 32 位；autoscale_interval → DECIMAL(10,3)
 
 SERVICE_INT_MAX = 2_147_483_647
+_SERVICE_INT_MAX = SERVICE_INT_MAX
 
 # K8s resource quantity：CPU 如 500m / 2 / 0.5；内存须带单位 Ki/Mi/Gi/K/M/G
 _K8S_CPU_RE = re.compile(r"^(?:(?:0|[1-9]\d*)(?:\.\d+)?|\.\d+)m?$")

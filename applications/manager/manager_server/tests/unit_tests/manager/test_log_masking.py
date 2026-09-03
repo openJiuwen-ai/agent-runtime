@@ -116,6 +116,51 @@ async def test_push_log_masking_rules_sync_to_gateway():
 
 
 @pytest.mark.asyncio
+async def test_push_log_masking_rules_falls_back_to_patch_on_already_exists():
+    from manager_server.core.application_config.log_masking_rule import (
+        push_log_masking_rules_sync_to_gateway,
+    )
+
+    row = SimpleNamespace(
+        id=1,
+        jiuwenclaw_id="sp-sync",
+        rule_id="builtin_cn_id_card",
+        rule_name="身份证",
+        description=None,
+        pattern=r"\d{17}[\dXx]",
+        replacement="******",
+        priority=10,
+        source="builtin",
+        enabled=True,
+        data=None,
+        created_at=None,
+        updated_at=None,
+    )
+    handler = MagicMock()
+    handler.list_records = AsyncMock(return_value=[row])
+
+    async def _gateway(jid, method, path, body=None):
+        if method == "POST":
+            raise ValueError("rule_id already exists: 'builtin_cn_id_card'")
+        return {"success_flag": True, "result": {"rule_id": "builtin_cn_id_card"}}
+
+    with patch(
+        "manager_server.core.application_config.log_masking_rule.gateway_request",
+        new_callable=AsyncMock,
+        side_effect=_gateway,
+    ) as push_mock:
+        ack = await push_log_masking_rules_sync_to_gateway(handler, "sp-sync")
+
+    assert ack["success_flag"] is True
+    assert push_mock.await_count == 2
+    assert push_mock.await_args_list[0].args[1] == "POST"
+    assert push_mock.await_args_list[1].args[1] == "PATCH"
+    assert push_mock.await_args_list[1].args[2] == (
+        "/api/v1/log-masking-rules/builtin_cn_id_card"
+    )
+
+
+@pytest.mark.asyncio
 async def test_rest_create_always_sets_source_custom():
     from manager_server.core.application_config.log_masking_rule import (
         LogMaskingRuleService,

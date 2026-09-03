@@ -114,6 +114,9 @@ async def sync_data_to_gateway_on_register(
         )
         raise
 
+    # 应用配置失败不应阻断 jid_template_ref 重建：模板/Agent 已推完时，
+    # 缺索引只影响后续增量推送，但整段 abort 会让引用索引长期缺失。
+    app_config_errors: dict[str, str] = {}
     for name, push_fn, before_fn in (
         ("logging", push_logging_config_sync_to_gateway, None),
         ("task_memory", push_task_memory_config_sync_to_gateway, None),
@@ -128,14 +131,15 @@ async def sync_data_to_gateway_on_register(
             if before_fn is not None:
                 await before_fn(handler, jid)
             results[name] = await push_fn(handler, jid)
-        except Exception:
+        except Exception as exc:
             logger.warning(
-                "[GatewayBootstrap] %s sync failed jiuwenclaw_id=%s",
+                "[GatewayBootstrap] %s sync failed jiuwenclaw_id=%s (continue)",
                 name,
                 jid,
                 exc_info=True,
             )
-            raise
+            app_config_errors[name] = str(exc)
+            results[name] = {"success_flag": False, "error": str(exc)}
 
     try:
         await rebuild_jid_template_ref_for_gateway(handler, jid)
@@ -147,6 +151,20 @@ async def sync_data_to_gateway_on_register(
             exc_info=True,
         )
         raise
+
+    if app_config_errors:
+        results["app_config_errors"] = app_config_errors
+        logger.warning(
+            "[GatewayBootstrap] completed with app_config errors "
+            "jiuwenclaw_id=%s errors=%s",
+            jid,
+            app_config_errors,
+        )
+        # 模板/Agent/jid 已尽量完成；仍抛错让调用方感知应用配置未齐
+        first_name, first_err = next(iter(app_config_errors.items()))
+        raise RuntimeError(
+            f"gateway bootstrap app_config failed: {first_name}: {first_err}"
+        )
 
     logger.info("[GatewayBootstrap] completed jiuwenclaw_id=%s sections=%s", jid, list(results))
     return results

@@ -687,6 +687,10 @@ async def update_template_on_referencing_gateways(
                 old_template_ref=old_template_ref,
                 new_template_ref=new_template_ref,
             )
+            # delta 可能因引用计数跳过 create；ensure 补齐 extension_config 等嵌套模板。
+            await ensure_referenced_templates_on_gateway(
+                handler, jid, new_template_ref
+            )
 
 
 async def delete_template_on_referencing_gateways(
