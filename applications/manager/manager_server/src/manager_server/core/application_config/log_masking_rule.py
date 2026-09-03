@@ -19,7 +19,7 @@ from manager_server.schemas.application_config_schemas import (
 )
 from manager_server.infrastructure.log_masking.engine import (
     DEFAULT_REPLACEMENT,
-    LogMaskingEngine,
+    compiled_default_rules,
     normalize_replacement,
     normalize_rule_id,
     validate_pattern,
@@ -36,11 +36,12 @@ def _builtin_seed_rows(jiuwenclaw_id: str) -> list[dict]:
             "pattern": rule.pattern.pattern,
             "replacement": rule.replacement,
             "priority": rule.priority,
+            "with_fingerprint": bool(rule.with_fingerprint),
             "source": "builtin",
             "enabled": True,
             "data": None,
         }
-        for rule in LogMaskingEngine.compiled_default_rules()
+        for rule in compiled_default_rules()
     ]
 
 
@@ -129,6 +130,7 @@ def _row_to_out(obj: Any) -> LogMaskingRuleOut:
         pattern=str(getattr(obj, "pattern", "")),
         replacement=str(getattr(obj, "replacement", "") or DEFAULT_REPLACEMENT),
         priority=int(getattr(obj, "priority", 0) or 0),
+        with_fingerprint=bool(getattr(obj, "with_fingerprint", False)),
         source=str(getattr(obj, "source", "custom")),
         enabled=bool(getattr(obj, "enabled", True)),
         data=getattr(obj, "data", None),
@@ -193,6 +195,7 @@ class LogMaskingRuleService:
             "pattern": validate_pattern(body.pattern),
             "replacement": normalize_replacement(body.replacement),
             "priority": int(body.priority),
+            "with_fingerprint": bool(body.with_fingerprint),
             "source": _REST_LOG_MASKING_SOURCE,
             "enabled": bool(body.enabled),
             "data": body.data,
@@ -286,6 +289,8 @@ class LogMaskingRuleService:
         updates.pop("source", None)
         if "priority" in updates and updates["priority"] is not None:
             updates["priority"] = int(updates["priority"])
+        if "with_fingerprint" in updates and updates["with_fingerprint"] is not None:
+            updates["with_fingerprint"] = bool(updates["with_fingerprint"])
 
         try:
             await gateway_request(

@@ -7,6 +7,7 @@ export interface LogMaskingRule {
   pattern: string;
   replacement: string;
   priority: number;
+  with_fingerprint: boolean;
   source: string;
   enabled: boolean;
   data?: Record<string, unknown> | null;
@@ -20,6 +21,7 @@ export interface LogMaskingRuleCreateBody {
   pattern: string;
   replacement?: string;
   priority?: number;
+  with_fingerprint?: boolean;
   enabled?: boolean;
   data?: Record<string, unknown>;
 }

@@ -49,6 +49,10 @@ async def test_seed_builtin_log_masking_rules_writes_missing_rows():
 
     assert created == len(seeds)
     assert handler.create.await_count == len(seeds)
+    by_id = {row["rule_id"]: row for row in seeds}
+    assert by_id["builtin_email"]["with_fingerprint"] is False
+    assert by_id["builtin_kv_sensitive"]["with_fingerprint"] is True
+    assert handler.create.await_count == len(seeds)
     created_rule_ids = {call.args[1]["rule_id"] for call in handler.create.await_args_list}
     assert "builtin_kv_sensitive" in created_rule_ids
     assert all(call.args[1]["source"] == "builtin" for call in handler.create.await_args_list)
@@ -157,8 +161,71 @@ async def test_rest_create_always_sets_source_custom():
         out = await svc.create("sp-rest", body)
 
     assert out.source == "custom"
+    assert out.with_fingerprint is False
     create_payload = handler.create.await_args.args[1]
     assert create_payload["source"] == "custom"
+    assert create_payload["with_fingerprint"] is False
+
+
+@pytest.mark.asyncio
+async def test_rest_create_and_patch_with_fingerprint():
+    from manager_server.core.application_config.log_masking_rule import (
+        LogMaskingRuleService,
+    )
+    from manager_server.schemas.application_config_schemas import (
+        LogMaskingRuleCreateBody,
+        LogMaskingRuleUpdateBody,
+    )
+
+    created_row = SimpleNamespace(
+        id=1,
+        jiuwenclaw_id="sp-rest",
+        rule_id="custom-rule-fp",
+        rule_name="fp-rule",
+        description=None,
+        pattern=r"token=\S+",
+        replacement="******",
+        priority=5,
+        with_fingerprint=True,
+        source="custom",
+        enabled=True,
+        data=None,
+        created_at=None,
+        updated_at=None,
+    )
+    handler = MagicMock()
+    handler.create = AsyncMock(return_value=created_row)
+    handler.get = AsyncMock(return_value=created_row)
+    handler.update = AsyncMock(
+        return_value=SimpleNamespace(**{**created_row.__dict__, "with_fingerprint": False})
+    )
+
+    svc = LogMaskingRuleService(handler)
+    with patch(
+        "manager_server.core.application_config.log_masking_rule.gateway_request",
+        new_callable=AsyncMock,
+        return_value={"success_flag": True},
+    ):
+        out = await svc.create(
+            "sp-rest",
+            LogMaskingRuleCreateBody(
+                rule_name="fp-rule",
+                pattern=r"token=\S+",
+                priority=5,
+                with_fingerprint=True,
+            ),
+        )
+        assert out.with_fingerprint is True
+        assert handler.create.await_args.args[1]["with_fingerprint"] is True
+
+        patched = await svc.update(
+            "sp-rest",
+            "custom-rule-fp",
+            LogMaskingRuleUpdateBody(with_fingerprint=False),
+        )
+    assert patched is not None
+    assert patched.with_fingerprint is False
+    assert handler.update.await_args.args[2]["with_fingerprint"] is False
 
 
 @pytest.mark.asyncio

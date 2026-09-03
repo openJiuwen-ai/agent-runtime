@@ -274,6 +274,8 @@
       "priority": "Priority",
       "priorityHint": "Masking rules are applied in descending priority order.",
       "priorityInvalid": "Please enter a valid priority",
+      "withFingerprint": "With fingerprint",
+      "withFingerprintHint": "When on, masked values include an irreversible fingerprint for correlating the same secret across logs; when off, only the replacement text is used.",
       "source": "Source",
       "source_builtin": "Builtin",
       "source_custom": "Custom",

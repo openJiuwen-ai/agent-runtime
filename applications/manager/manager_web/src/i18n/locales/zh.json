@@ -274,6 +274,8 @@
       "priority": "优先级",
       "priorityHint": "按优先级从大到小依次应用脱敏规则。",
       "priorityInvalid": "请填写有效的优先级",
+      "withFingerprint": "附带指纹",
+      "withFingerprintHint": "开启后脱敏结果会附带不可逆指纹，便于在日志中关联同一敏感值；关闭则仅使用替换文本。",
       "source": "来源",
       "source_builtin": "内置",
       "source_custom": "自定义",
