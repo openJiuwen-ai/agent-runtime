@@ -121,6 +121,8 @@
 
 均 per-scope 操作、不读 SM Redis key、各自带 tick 级选主锁(调度由 main 注入)。**逐项异常隔离(2026-09 健壮性加固)**:autoscale/reclaim 的 per-scope 循环、watch/reconcile 的 per-Pod 循环各自 try/except(记日志 + failed/scope_error 计数,下拍重试)——`known_scope_ids`/`all_pod_ids` 均为 sorted 确定序,单点异常上抛会使排序靠后的 scope/Pod 永远得不到处理(半死 Pod 探测盲区);`sm_facade.reconcile_pods` 整体失败本拍跳过。CancelledError 不在隔离范围(停机语义)。
 
+**评估事件埋点(2026-09)**:`ResourceSweeper`/`ResourceOrchestrator` 构造器 keyword-only `event_sink=None`/`telemetry=None`(main 注入 EvaluationState.bump_event / ScopeTelemetryBuffer)。状态变迁事件直写 `{agent_runtime:eval}:ct:scope:{sid}`:`ev_autoscale_deployed`/`ev_autoscale_deploy_error`(autoscale 两返回点)、`ev_reclaimed`(_reclaim_pod)、`ev_pod_dead`(watch 判死/半死探测/reconcile 孤儿三处调用点,**不在 _purge_and_notify 内发**——reclaim 也走它,防重复计数);skip_* 不写。acquire 的 per-request outcome(reuse/deployed/follower_reuse/max_reached/error)走内存缓冲(高频)。埋点 try/except 包裹绝不反噬业务;RM 不感知 eval 键名(对齐 ConfigStore(push_pool_config=…) 回调注入先例)。RM 自身键表**无变化**。
+
 | 任务 | 周期/锁 | 逻辑 |
 |---|---|---|
 | `autoscale_once`(场景 H) | 1s / lock:rm:autoscale | 先 `reap_expired_deploying`(崩溃遗留占位自愈)再遍历 `known_scope_ids()`(SCAN scope:config):**当前版本+代次** idle < min_idle_pods(`_current_version_idle`:deploy_ver ∧ generation 均与 scope:config 一致——A 类变更后旧版、config_refresh 后老代次 idle Pod 永不可能被复用,不能拿来满足 min_idle,否则暖池被旧版钉死)且 pods+deploying < max_pods → `LUA_PLACEHOLDER` 占位 → 抢 deploy 锁 → `_deploy_and_register(idle_flag=True)` 热备入池;pod_spec 取 scope:config 缓存(A 类变更后为新值;刷新后同值仅换代)。**config_sync 会主动写每个存活 scope 的 config(带 pod_spec)→ 从未被请求过的 scope 也会被预热(eager,下发即预备热备)** |

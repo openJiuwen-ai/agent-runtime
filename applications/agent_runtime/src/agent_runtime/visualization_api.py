@@ -4,7 +4,9 @@
 前缀 2026-08 由 /debug 更名（对外名称去敏感化，行为零变化）。
 
 定位问题用：实例/依赖/后台任务总览、单会话与 scope 池的 Redis 状态、DB 配置、
-进程内请求统计与最近错误。全部**只读**，不写任何 Redis/DB/K8s 状态。
+进程内请求统计与最近错误、per-scope 历史趋势采样与系统评估报告（后两者与
+stats.scopes 段为 2026-09 自评估数据层视图，读 Redis、全局视角）。全部**只读**，
+不写任何 Redis/DB/K8s 状态。
 
 访问控制：默认开放（与业务端点一致，靠网络边界——Service ClusterIP 仅集群内
 可达）。输出对 secrets 脱敏（redact()：敏感 key → "***"，URL 剥 userinfo）。
@@ -172,6 +174,10 @@ async def _overview(request: Request, sysctx: Any) -> dict[str, Any]:
             "watch_interval": arc.watch_interval,
             "reconcile_interval": arc.reconcile_interval,
             "default_session_ttl": arc.default_session_ttl,
+            "eval_sample_interval": arc.eval_sample_interval,
+            "eval_interval": arc.eval_interval,
+            "eval_llm_enabled": bool(arc.eval_llm_base_url and arc.eval_llm_model),
+            "eval_pod_budget": arc.eval_pod_budget,
             "kubeconfig": arc.kubeconfig,
             "service_host": getattr(settings, "host", None),
             "service_port": getattr(settings, "port", None),
@@ -223,7 +229,7 @@ async def _session(request: Request, sysctx: Any) -> dict[str, Any]:
 
 @_visualization_endpoint
 async def _scope(request: Request, sysctx: Any) -> dict[str, Any]:
-    """单 scope 池状态：RM 池/逐 Pod 详情 + SM 会话/路由定义。"""
+    """单 scope 池状态：RM 池/逐 Pod 详情 + SM 容量闸门/会话/路由定义。"""
     scope_id = (request.query_params.get("scope_id") or "").strip()
     if not scope_id:
         raise _VisualizationBadRequest("scope_id is required")
@@ -233,13 +239,15 @@ async def _scope(request: Request, sysctx: Any) -> dict[str, Any]:
     config_store = sysctx.sm_config_store
 
     snapshot = await config_store.routing_snapshot_view()
-    routing = next(
-        (s.to_payload() for s in snapshot.scopes if s.scope_id == scope_id), None
+    scope_def = next(
+        (s for s in snapshot.scopes if s.scope_id == scope_id), None
     )
+    routing = scope_def.to_payload() if scope_def else None
+    template = snapshot.templates.get(scope_def.template_id) if scope_def else None
     cfg = await rm_state.load_scope_config(scope_id)
     has_any = cfg or await rm_state.pod_count(scope_id) > 0
-    if (not has_any and not await sm_state.scope_session_count(scope_id)
-            and routing is None):
+    session_count = await sm_state.scope_session_count(scope_id)
+    if (not has_any and not session_count and routing is None):
         raise _VisualizationNotFound(f"scope not found: {scope_id}")
 
     pod_ids = await rm_state.pod_ids(scope_id)
@@ -254,8 +262,43 @@ async def _scope(request: Request, sysctx: Any) -> dict[str, Any]:
             "idle_since": await rm_state.idle_since(pod_id) or None,
             **redact(info),
         })
+    # 生效分类(collector 同款规则;单 scope 详情不整表扫描)
+    if scope_def is None:
+        phase = "orphan_rm"
+    elif not scope_def.is_active() or template is None or not template.enabled:
+        phase = "disabled"
+    elif not cfg:
+        phase = "missing_rm_cfg"
+    else:
+        phase = "active"
+    # SM 容量闸门(模板策略字段 + 派生值;orchestrator.py 同式)。
+    # 2026-09 场景 F 快失败后无等待队列:max_waiters/waiter_utilization 已废,
+    # route 总预算 = ready_timeout + ROUTE_BUDGET_MARGIN_SEC(10)
+    capacity: dict[str, Any] | None = None
+    if template is not None:
+        scope_concurrency = template.scope_concurrency
+        capacity = {
+            "template_id": scope_def.template_id,
+            "template_enabled": bool(template.enabled),
+            "scope_enabled": bool(scope_def.enabled),
+            "expires_at": routing["expires_at"] if routing else None,
+            "scope_concurrency": scope_concurrency,
+            "pod_concurrency": template.pod_concurrency,
+            "session_ttl": template.session_ttl,
+            "pod_ttl": template.pod_ttl,
+            "min_idle_pods": template.min_idle_pods,
+            "max_pods": template.max_pods,   # ⌈sc/pc⌉(Template 派生)
+            "session_utilization": (
+                round(session_count / scope_concurrency, 3)
+                if scope_concurrency else None
+            ),
+            "route_budget_sec": round(
+                float(template.ready_timeout or 0) + 10.0, 1
+            ),
+        }
     return {
         "scope_id": scope_id,
+        "phase": phase,
         "rm": {
             "pod_count": await rm_state.pod_count(scope_id),
             "idle_count": len(idle),
@@ -267,8 +310,9 @@ async def _scope(request: Request, sysctx: Any) -> dict[str, Any]:
             "truncated": len(pod_ids) > limit,
         },
         "sm": {
-            "session_count": await sm_state.scope_session_count(scope_id),
+            "session_count": session_count,
             "candidate_pods": await sm_state.scope_pod_ids(scope_id),
+            "capacity": capacity,     # 生效容量闸门(None=快照无此 scope 的孤儿)
             "routing": routing,   # 快照里的定义（index/模板/规则）；不在快照为 None
         },
     }
@@ -276,25 +320,43 @@ async def _scope(request: Request, sysctx: Any) -> dict[str, Any]:
 
 @_visualization_endpoint
 async def _scopes(request: Request, sysctx: Any) -> dict[str, Any]:
-    """全部 scope 枚举（SCAN）+ 每 scope 一行摘要。"""
+    """全部 scope 清单（RM 键 ∪ 路由快照）+ 每 scope 一行容量摘要。
+
+    2026-09 起：摘要补 SM 侧容量字段（scope_concurrency/session_count/phase/
+    template 归属）——scope 重构后这些只在模板列表可见，容量推导链
+    （max_pods=⌈sc/pc⌉）在 scope 维度断了，本端点补齐。行读放大 ~5 读/scope，
+    大规模部署调小 limit。
+    """
     limit = _clamp_limit(request, default=100, lo=1, hi=500)
-    rm_state = sysctx.rm_sweeper.state
-    scope_ids = await rm_state.known_scope_ids()
+    rows = await sysctx.eval_collector.scope_inventory()
     scopes = []
-    for scope_id in scope_ids[:limit]:
-        cfg = await rm_state.load_scope_config(scope_id)
+    for row in rows[:limit]:
+        routing, template = row.get("routing"), row.get("template")
         scopes.append({
-            "scope_id": scope_id,
-            "pods": await rm_state.pod_count(scope_id),
-            "idle": len(await rm_state.idle_pods(scope_id)),
-            "deploying": await rm_state.deploying_count(scope_id),
-            "max_pods": cfg.get("max_pods"),
-            "min_idle_pods": cfg.get("min_idle_pods"),
+            "scope_id": row["scope_id"],
+            "phase": row["phase"],
+            "template_id": routing.template_id if routing else None,
+            "scope_enabled": routing.enabled if routing else None,
+            "expires_at": (
+                routing.expires_at.isoformat()
+                if routing is not None and routing.expires_at is not None else None
+            ),
+            "pods": row["pods"],
+            "idle": row["idle"],
+            "deploying": row["deploying"],
+            "session_count": row["session_count"],
+            "max_pods": template.max_pods if template
+            else row["rm_config"].get("max_pods"),
+            "min_idle_pods": template.min_idle_pods if template
+            else row["rm_config"].get("min_idle_pods"),
+            "scope_concurrency": template.scope_concurrency if template else None,
+            "pod_concurrency": template.pod_concurrency if template else None,
+            "session_ttl": template.session_ttl if template else None,
         })
     return {
         "scopes": scopes,
-        "total": len(scope_ids),
-        "truncated": len(scope_ids) > limit,
+        "total": len(rows),
+        "truncated": len(rows) > limit,
     }
 
 
@@ -326,10 +388,31 @@ async def _config(request: Request, sysctx: Any) -> dict[str, Any]:
 
 @_visualization_endpoint
 async def _stats(request: Request, sysctx: Any) -> dict[str, Any]:
-    """进程内请求统计（per-endpoint 计数 / 延迟分位 / 错误码分布）。"""
+    """请求统计：per-endpoint（本进程视角）+ per-scope（Redis 全副本聚合）。
+
+    scopes 段是 2026-09 自评估数据层的只读视图：route/acquire 计数与扩缩容
+    事件经每副本 5s 批量 flush 到 ``{agent_runtime:eval}:ct:scope:{sid}``，
+    任意副本读到的都是全局聚合——与 endpoints 段（命中实例视角）不同。
+    """
     snapshot = request.app.state.metrics.snapshot()
     snapshot["pid"] = os.getpid()
+    snapshot["scopes"] = await _scope_counters(sysctx)
     return snapshot
+
+
+async def _scope_counters(sysctx: Any) -> dict[str, dict[str, int]]:
+    """全 scope 计数聚合（枚举源 = RM 已知 ∪ 快照 scope，不 SCAN eval 键）。"""
+    snapshot = await sysctx.sm_config_store.routing_snapshot_view()
+    scope_ids = sorted(
+        set(await sysctx.rm_sweeper.state.known_scope_ids())
+        | {s.scope_id for s in snapshot.scopes}
+    )
+    out: dict[str, dict[str, int]] = {}
+    for scope_id in scope_ids:
+        counters = await sysctx.eval_state.read_counters(scope_id)
+        if counters:
+            out[scope_id] = counters
+    return out
 
 
 @_visualization_endpoint
@@ -337,6 +420,49 @@ async def _recent_errors(request: Request, sysctx: Any) -> dict[str, Any]:
     """最近错误环形缓冲（新在前；单进程视角）。"""
     limit = _clamp_limit(request, default=50, lo=1, hi=200)
     return {"errors": request.app.state.metrics.recent_errors(limit)}
+
+
+@_visualization_endpoint
+async def _history(request: Request, sysctx: Any) -> dict[str, Any]:
+    """单 scope 历史趋势采样（sys_sample 30s 一拍；窗口默认 1h，新在前）。
+
+    数据在 Redis（25h TTL）——重启不丢、全局一致；points 字段为紧凑短键
+    （t/p/i/d/s/w/rt/ef/eq/en/ad/ar/rc/dd，语义见 evaluation/state.py）。
+    """
+    scope_id = (request.query_params.get("scope_id") or "").strip()
+    if not scope_id:
+        raise _VisualizationBadRequest("scope_id is required")
+    try:
+        window_sec = int(request.query_params.get("window_sec", "3600"))
+    except ValueError:
+        window_sec = 3600
+    window_sec = max(60, min(86400, window_sec))
+    limit = _clamp_limit(request, default=240, lo=1, hi=1440)
+    since = time.time() - window_sec
+    points = await sysctx.eval_state.samples(scope_id, since, limit=limit)
+    return {
+        "scope_id": scope_id,
+        "window_sec": window_sec,
+        "points": list(reversed(points)),   # 新在前
+        "counters_current": await sysctx.eval_state.read_counters(scope_id),
+    }
+
+
+@_visualization_endpoint
+async def _evaluation(request: Request, sysctx: Any) -> dict[str, Any]:
+    """系统评估报告（sys_eval job 周期产出；**全局视角**，读 Redis）。
+
+    latest 为完整报告（findings/trend/caveats）；history 为瘦身条目（去
+    findings 只留 summary）。无报告（评估间隔未到/从未跑过）返回
+    latest=null——正常态不 404。LLM 段只含 status/model/latency，无凭证。
+    """
+    limit = _clamp_limit(request, default=10, lo=1, hi=50)
+    latest = await sysctx.eval_state.latest_report()
+    history = await sysctx.eval_state.list_reports(limit)
+    return {
+        "latest": redact(latest) if latest else None,
+        "history": redact(history),
+    }
 
 
 # ---------------------------------------------------------------- 注册
@@ -352,3 +478,5 @@ def register_visualization_api(app: Any, *, registry: Any) -> None:
     asgi.get("/visualization/config", summary="diagnostics: db config + redis caches")(_config)
     asgi.get("/visualization/stats", summary="diagnostics: request metrics")(_stats)
     asgi.get("/visualization/recent_errors", summary="diagnostics: recent errors")(_recent_errors)
+    asgi.get("/visualization/history", summary="diagnostics: per-scope trend samples")(_history)
+    asgi.get("/visualization/evaluation", summary="diagnostics: system evaluation report")(_evaluation)

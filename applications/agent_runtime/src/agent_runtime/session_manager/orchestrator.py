@@ -23,6 +23,7 @@ import time
 from typing import Any
 
 from ..errors import (
+    AgentRuntimeError,
     DEFAULT_RETRY_AFTER,
     DeployFailed,
     InvalidParams,
@@ -50,11 +51,13 @@ class SessionOrchestrator:
         rm_facade: Any,                      # ResourceManagerFacade（进程内）
         *,
         default_session_ttl: int = 60,
+        telemetry: Any = None,               # ScopeTelemetryBuffer(评估计数;None=旧测试)
     ) -> None:
         self.state = sm_state
         self.config = config_store
         self.rm = rm_facade
         self.default_session_ttl = default_session_ttl
+        self.telemetry = telemetry
 
     # -------------------------------------------------------------- route
 
@@ -90,78 +93,91 @@ class SessionOrchestrator:
         total_deadline = time.monotonic() + total_budget
         t0 = time.monotonic()
 
-        while True:
-            # 总预算：need_acquire 一轮可触发完整 deploy（ready_timeout 量级），
-            # 无总预算时单请求可阻塞 max_pods×ready_timeout 且持续扩 Pod。
-            if time.monotonic() >= total_deadline:
-                # 对外粗化 NO_POD_AVAILABLE（acquire 侧惯例，映射前留真因）——
-                # 预算只在 need_acquire 路径耗尽，语义即「预算内未扩出 Pod」
-                logger.warning(
-                    "route: total budget exhausted: scope=%s request_id=%s "
-                    "budget=%.0fs (ready_timeout=%ss + margin %.0fs)",
-                    scope_id, request_id, total_budget,
-                    template.ready_timeout, ROUTE_BUDGET_MARGIN_SEC,
-                )
-                raise NoPodAvailable(
-                    f"scope {scope_id} route budget exhausted "
-                    f"({total_budget:.0f}s = ready_timeout "
-                    f"{template.ready_timeout}s + margin, acquire included)",
-                    retry_after=DEFAULT_RETRY_AFTER,
-                )
-            now = now_ts()
-            action, pod_id = await self.state.route_place(
-                session_id=session_id,
-                scope_id=scope_id,
-                expiry_ts=now + template.session_ttl,
-                session_ttl=template.session_ttl,
-                scope_concurrency=template.scope_concurrency,
-                pod_concurrency=template.pod_concurrency,
-                max_pods=template.max_pods,
-                now=now,
-            )
-
-            if action in ("refresh", "placed"):
-                sse_url = await self.state.pod_sse_url(scope_id, pod_id)
-                if not sse_url:
-                    # 极端竞态：Pod 刚被 notify_pod_dead 清理。ROUTE_PLACE 的
-                    # refresh 分支有 info 存活守卫，下一轮会惰性回收死绑定并
-                    # 重新放置（continue 不构成自旋）
+        # per-scope 评估计数(resolve 之后 scope 已知;纯内存,绝不反噬业务)
+        route_ok = False
+        route_code: str | None = None
+        try:
+            while True:
+                # 总预算：need_acquire 一轮可触发完整 deploy（ready_timeout 量级），
+                # 无总预算时单请求可阻塞 max_pods×ready_timeout 且持续扩 Pod。
+                if time.monotonic() >= total_deadline:
+                    # 对外粗化 NO_POD_AVAILABLE（acquire 侧惯例，映射前留真因）——
+                    # 预算只在 need_acquire 路径耗尽，语义即「预算内未扩出 Pod」
                     logger.warning(
-                        "route: pod info missing, retrying: scope=%s pod=%s "
-                        "session=%s action=%s", scope_id, pod_id, session_id, action,
+                        "route: total budget exhausted: scope=%s request_id=%s "
+                        "budget=%.0fs (ready_timeout=%ss + margin %.0fs)",
+                        scope_id, request_id, total_budget,
+                        template.ready_timeout, ROUTE_BUDGET_MARGIN_SEC,
                     )
-                    continue
-                logger.info(
-                    "route: session=%s scope=%s pod=%s action=%s "
-                    "request_id=%s duration_ms=%.1f",
-                    session_id, scope_id, pod_id, action,
-                    request_id, (time.monotonic() - t0) * 1000,
-                )
-                return {"pod_sse_url": sse_url, "pod_id": pod_id}
-
-            if action == "scope_full":
-                # 场景 F 快失败：Lua 闸门即唯一仲裁，被拒者毫秒级返回。
-                # DEBUG 足矣——metrics 中间件每请求已带 error_code=SCOPE_FULL
-                # 的 INFO 汇总，过载风暴下此处再 INFO 会双份刷屏
-                logger.debug(
-                    "route: scope full, fast-fail: scope=%s request=%s "
-                    "scope_concurrency=%d",
-                    scope_id, request_id, template.scope_concurrency,
-                )
-                raise ScopeFull(
-                    f"scope {scope_id} at concurrency limit "
-                    f"({template.scope_concurrency})",
-                    retry_after=DEFAULT_RETRY_AFTER,
+                    raise NoPodAvailable(
+                        f"scope {scope_id} route budget exhausted "
+                        f"({total_budget:.0f}s = ready_timeout "
+                        f"{template.ready_timeout}s + margin, acquire included)",
+                        retry_after=DEFAULT_RETRY_AFTER,
+                    )
+                now = now_ts()
+                action, pod_id = await self.state.route_place(
+                    session_id=session_id,
+                    scope_id=scope_id,
+                    expiry_ts=now + template.session_ttl,
+                    session_ttl=template.session_ttl,
+                    scope_concurrency=template.scope_concurrency,
+                    pod_concurrency=template.pod_concurrency,
+                    max_pods=template.max_pods,
+                    now=now,
                 )
 
-            # action == "need_acquire"：现有 Pod 全满且未达 max_pods → RM 扩 +1
-            pod_id, sse_url = await self._acquire_pod(
-                scope_id, template, request_id
-            )
-            await self.state.register_pod(
-                scope_id, pod_id, sse_url, template.deploy_ver()
-            )
-            # 重跑 ROUTE_PLACE：新 Pod 必被 first-fit 选中
+                if action in ("refresh", "placed"):
+                    sse_url = await self.state.pod_sse_url(scope_id, pod_id)
+                    if not sse_url:
+                        # 极端竞态：Pod 刚被 notify_pod_dead 清理。ROUTE_PLACE 的
+                        # refresh 分支有 info 存活守卫，下一轮会惰性回收死绑定并
+                        # 重新放置（continue 不构成自旋）
+                        logger.warning(
+                            "route: pod info missing, retrying: scope=%s pod=%s "
+                            "session=%s action=%s", scope_id, pod_id, session_id, action,
+                        )
+                        continue
+                    logger.info(
+                        "route: session=%s scope=%s pod=%s action=%s "
+                        "request_id=%s duration_ms=%.1f",
+                        session_id, scope_id, pod_id, action,
+                        request_id, (time.monotonic() - t0) * 1000,
+                    )
+                    route_ok = True
+                    return {"pod_sse_url": sse_url, "pod_id": pod_id}
+
+                if action == "scope_full":
+                    # 场景 F 快失败：Lua 闸门即唯一仲裁，被拒者毫秒级返回。
+                    # DEBUG 足矣——metrics 中间件每请求已带 error_code=SCOPE_FULL
+                    # 的 INFO 汇总，过载风暴下此处再 INFO 会双份刷屏
+                    logger.debug(
+                        "route: scope full, fast-fail: scope=%s request=%s "
+                        "scope_concurrency=%d",
+                        scope_id, request_id, template.scope_concurrency,
+                    )
+                    raise ScopeFull(
+                        f"scope {scope_id} at concurrency limit "
+                        f"({template.scope_concurrency})",
+                        retry_after=DEFAULT_RETRY_AFTER,
+                    )
+
+                # action == "need_acquire"：现有 Pod 全满且未达 max_pods → RM 扩 +1
+                if self.telemetry is not None:
+                    self.telemetry.observe_acquire(scope_id, "need_acquire")
+                pod_id, sse_url = await self._acquire_pod(
+                    scope_id, template, request_id
+                )
+                await self.state.register_pod(
+                    scope_id, pod_id, sse_url, template.deploy_ver()
+                )
+                # 重跑 ROUTE_PLACE：新 Pod 必被 first-fit 选中
+        except AgentRuntimeError as exc:
+            route_code = exc.code
+            raise
+        finally:
+            if self.telemetry is not None:
+                self.telemetry.observe_route(scope_id, route_ok, route_code)
 
     # -------------------------------------------------------------- 内部
 

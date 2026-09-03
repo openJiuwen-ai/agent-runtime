@@ -21,6 +21,15 @@ SERVICE_PREFIX = "/api/session"      # 唯一 App 的 prefix（端口 8091）
 logger = logging.getLogger("agent_runtime.config")
 
 
+def _env_float(name: str, default: float) -> float:
+    """float 型 env(评估 LLM 超时用;场景 F 快失败时随 scope_full_timeout
+    被删,评估层引入后恢复)。"""
+    try:
+        return float(os.getenv(name, "") or default)
+    except ValueError:
+        return default
+
+
 def _env_int(name: str, default: int) -> int:
     try:
         return int(os.getenv(name, "") or default)
@@ -46,6 +55,14 @@ class AgentRuntimeConfig:
     reconcile_interval: int = 30               # RM：孤儿对账
     # route 行为
     default_session_ttl: int = 60
+    # 系统自评估（docs/spec/evaluation.md）：采样/评估两 job + LLM 分析（默认禁用）
+    eval_sample_interval: int = 30             # sys_sample：趋势采样间隔（下限钳 5s）
+    eval_interval: int = 300                   # sys_eval：评估报告间隔（下限钳 30s）
+    eval_llm_base_url: str = ""                # OpenAI 兼容端点；与 model 均非空才启用
+    eval_llm_api_key: str = ""                 # 可空（内网免鉴权端点）；绝不进日志/报告
+    eval_llm_model: str = ""
+    eval_llm_timeout: float = 60.0             # 须 < TICK_TIMEOUTS.sys_eval
+    eval_pod_budget: int = 0                   # 集群 AgentServer Pod 预算；0=预算规则关闭
 
     @classmethod
     def from_env(cls) -> "AgentRuntimeConfig":
@@ -59,4 +76,11 @@ class AgentRuntimeConfig:
             watch_interval=_env_int("AGENT_RUNTIME_WATCH_INTERVAL", 10),
             reconcile_interval=_env_int("AGENT_RUNTIME_RECONCILE_INTERVAL", 30),
             default_session_ttl=_env_int("AGENT_RUNTIME_DEFAULT_SESSION_TTL", 60),
+            eval_sample_interval=_env_int("AGENT_RUNTIME_EVAL_SAMPLE_INTERVAL", 30),
+            eval_interval=_env_int("AGENT_RUNTIME_EVAL_INTERVAL", 300),
+            eval_llm_base_url=(os.getenv("AGENT_RUNTIME_EVAL_LLM_BASE_URL") or "").strip(),
+            eval_llm_api_key=os.getenv("AGENT_RUNTIME_EVAL_LLM_API_KEY") or "",
+            eval_llm_model=(os.getenv("AGENT_RUNTIME_EVAL_LLM_MODEL") or "").strip(),
+            eval_llm_timeout=_env_float("AGENT_RUNTIME_EVAL_LLM_TIMEOUT", 60.0),
+            eval_pod_budget=_env_int("AGENT_RUNTIME_EVAL_POD_BUDGET", 0),
         )
