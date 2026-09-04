@@ -379,7 +379,9 @@ loop:
     for pod_id in excess:
         if now - int(GET(resource:pod:{pod_id}:idle_since)) < pod_ttl: continue   # 未到期
         # 无前置对账(不读 SM):reclaim 安全性由 SM 侧 ZREM 契约保证(见下)
-        k8s.delete(pod_id)
+        # delete 非 404 失败 → 本拍整体放弃(下拍重试):PURGE 一旦清掉记录,
+        # 存活物理 Pod 就脱离 pods:all 枚举源,对账只做 Redis→K8s 单向,无人再删
+        if not k8s.delete_ok_or_404(pod_id): continue
         redis.eval(LUA_PURGE, pod_id)
         sm_facade.notify_pod_dead(pod_id)                  # 覆盖 reclaim 场景,清 SM 注册
 ```

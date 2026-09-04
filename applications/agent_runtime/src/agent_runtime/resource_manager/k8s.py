@@ -30,7 +30,13 @@ logger = logging.getLogger("agent_runtime.resource_manager")
 
 DEFAULT_READY_TIMEOUT = 300      # deploy 等 Ready 超时（秒）
 DEFAULT_READY_POLL_INTERVAL = 2  # 就绪轮询间隔（秒）
-DELETE_TIMEOUT = 60
+# 单次 K8s API 调用超时（秒）。kubernetes_asyncio 不传 _request_timeout 时
+# aiohttp ClientTimeout 全 None（连库默认都覆盖掉），API server/网络挂起会
+# 无限悬挂并逐级拖死 deploy/get/delete 与上层 HTTP route——所有调用必须带上界。
+CREATE_TIMEOUT = 30   # create（建 Pod 载荷重，最宽的读类上界）
+READ_TIMEOUT = 10     # 单 Pod read（_wait_ready 轮询间隔 2s，10s 充裕）
+LIST_TIMEOUT = 15     # namespace 级 list
+DELETE_TIMEOUT = 60   # delete（含驱逐收敛，物理操作最宽）
 WAIT_READY_PROGRESS_SEC = 30    # _wait_ready 进度行间隔（最长 300s 不留空白）
 
 
@@ -220,33 +226,42 @@ class RealK8sPodClient(K8sPodClient):
         self._core: Any = None         # CoreV1Api
         self._api_client: Any = None
         self._loaded = False
+        self._lifecycle_lock = asyncio.Lock()
 
     async def start(self) -> None:
-        if self._core is not None:
-            return
-        try:
-            from kubernetes_asyncio import client, config
-            from kubernetes_asyncio.config.config_exception import ConfigException
-        except Exception as exc:  # pragma: no cover - 环境缺依赖
-            raise DeployFailed(f"kubernetes_asyncio unavailable: {exc}") from exc
-        try:
+        # 并发 deploy 首开窗口（多请求同时冷启动）：锁内双检保证只建一个
+        # ApiClient——无锁时两路各建一个，其一泄漏（连接/fd 不 close）。
+        async with self._lifecycle_lock:
+            if self._core is not None:
+                return
             try:
-                # kubernetes_asyncio：load_incluster_config 是**同步**函数
-                # （await 它会 TypeError→DeployFailed，in-cluster 部署必挂；
-                # load_kube_config 才是协程）
-                config.load_incluster_config()
-            except ConfigException:
-                await config.load_kube_config(config_file=self.kubeconfig)
-            self._api_client = client.ApiClient()
-            self._client = client
-            self._core = client.CoreV1Api(self._api_client)
-            self._loaded = True
-        except Exception as exc:
-            raise DeployFailed(f"cannot init kubernetes client: {exc}") from exc
+                from kubernetes_asyncio import client, config
+                from kubernetes_asyncio.config.config_exception import ConfigException
+            except Exception as exc:  # pragma: no cover - 环境缺依赖
+                raise DeployFailed(f"kubernetes_asyncio unavailable: {exc}") from exc
+            try:
+                try:
+                    # kubernetes_asyncio：load_incluster_config 是**同步**函数
+                    # （await 它会 TypeError→DeployFailed，in-cluster 部署必挂；
+                    # load_kube_config 才是协程）
+                    config.load_incluster_config()
+                except ConfigException:
+                    await config.load_kube_config(config_file=self.kubeconfig)
+                self._api_client = client.ApiClient()
+                self._client = client
+                self._core = client.CoreV1Api(self._api_client)
+                self._loaded = True
+            except Exception as exc:
+                raise DeployFailed(f"cannot init kubernetes client: {exc}") from exc
 
     async def close(self) -> None:
-        core, api_client = self._core, self._api_client
-        self._core = self._api_client = self._client = None
+        # 锁内只做引用摘除（快照 + 置空 + 复位 _loaded），网络收尾放锁外——
+        # 持锁等 close() 会饿死并发 start()。在飞调用持旧引用继续，底层连接
+        # 池被关时由各调用点的快照 None 检查/异常分支归一为 DeployFailed。
+        async with self._lifecycle_lock:
+            api_client = self._api_client
+            self._core = self._api_client = self._client = None
+            self._loaded = False
         if api_client is not None:
             await api_client.close()
 
@@ -261,6 +276,9 @@ class RealK8sPodClient(K8sPodClient):
         Redis→K8s 单向对账，孤儿将无人认领、无上界累积。
         """
         await self.start()
+        core = self._core
+        if core is None:  # start() 后仍为 None = 与 close() 的关停竞态
+            raise DeployFailed("k8s client closed")
         namespace = pod_spec.get("namespace") or self.default_namespace
         timeout = int(pod_spec.get("ready_timeout") or DEFAULT_READY_TIMEOUT)
         poll = float(pod_spec.get("ready_poll_interval") or DEFAULT_READY_POLL_INTERVAL)
@@ -271,7 +289,8 @@ class RealK8sPodClient(K8sPodClient):
             logger.info("k8s create pod: name=%s namespace=%s image=%s",
                         pod_id, namespace, pod_spec.get("agent_image"))
             try:
-                await self._core.create_namespaced_pod(namespace=namespace, body=body)
+                await core.create_namespaced_pod(
+                    namespace=namespace, body=body, _request_timeout=CREATE_TIMEOUT)
             except Exception as exc:
                 if getattr(exc, "status", None) == 409:
                     logger.warning("k8s pod name conflict, retrying: name=%s", pod_id)
@@ -550,8 +569,12 @@ class RealK8sPodClient(K8sPodClient):
     # -------------------------------------------------------------- 查询 / 删除
 
     async def _read(self, pod_id: str, namespace: str) -> PodInfo | None:
+        core = self._core
+        if core is None:  # close() 摘走引用（停机竞态），不裸抛 AttributeError
+            raise DeployFailed("k8s client closed")
         try:
-            pod = await self._core.read_namespaced_pod(name=pod_id, namespace=namespace)
+            pod = await core.read_namespaced_pod(
+                name=pod_id, namespace=namespace, _request_timeout=READ_TIMEOUT)
         except Exception as exc:
             if getattr(exc, "status", None) == 404:
                 return None
@@ -570,9 +593,13 @@ class RealK8sPodClient(K8sPodClient):
     async def list_pods(self, namespace: str, label_selector: str) -> list[PodInfo]:
         if not self._loaded:
             await self.start()
+        core = self._core
+        if core is None:
+            raise DeployFailed("k8s client closed")
         t0 = time.monotonic()
-        result = await self._core.list_namespaced_pod(
-            namespace=namespace, label_selector=label_selector
+        result = await core.list_namespaced_pod(
+            namespace=namespace, label_selector=label_selector,
+            _request_timeout=LIST_TIMEOUT,
         )
         pods = [_to_pod_info(item) for item in result.items]
         logger.debug("k8s list_pods: namespace=%s selector=%s count=%d duration_ms=%.1f",
@@ -583,12 +610,15 @@ class RealK8sPodClient(K8sPodClient):
     async def delete(self, pod_id: str, namespace: str) -> str:
         if not self._loaded:
             await self.start()
-        c = self._client
+        core, c = self._core, self._client
+        if core is None or c is None:
+            raise DeployFailed("k8s client closed")
         t0 = time.monotonic()
         try:
-            await self._core.delete_namespaced_pod(
+            await core.delete_namespaced_pod(
                 name=pod_id, namespace=namespace,
                 body=c.V1DeleteOptions(grace_period_seconds=0),
+                _request_timeout=DELETE_TIMEOUT,
             )
         except Exception as exc:
             if getattr(exc, "status", None) != 404:
@@ -636,6 +666,8 @@ class FakeK8sPodClient(K8sPodClient):
     - ``fail_after_create``：create 成功但永不 Ready 的次数——Pod 留在集群、
       DeployFailed 携带 pod_id/namespace（真 K8s 的超时/取消形态，考验上层
       「失败路径不留孤儿」的兜底删除）。
+    - ``delete_failures``：连续 delete 失败次数（非 404 形态，考验 PURGE 的
+      delete 门槛——失败时本拍不得 PURGE，留待下拍重试）。
     """
 
     def __init__(self, default_namespace: str = "default") -> None:
@@ -646,6 +678,7 @@ class FakeK8sPodClient(K8sPodClient):
         self.unhealthy_pods: set[str] = set()
         self.deploy_failures = 0
         self.fail_after_create = 0
+        self.delete_failures = 0
         self.deleted: list[str] = []
         self.deployed_specs: list[dict[str, Any]] = []       # deploy 收到的 pod_spec 录制(断言用)
         self._ip_counter = 0
@@ -675,6 +708,9 @@ class FakeK8sPodClient(K8sPodClient):
         return PodDeployInfo(pod_id=pod_id, namespace=namespace, pod_ip=pod_ip)
 
     async def delete(self, pod_id: str, namespace: str) -> str:
+        if self.delete_failures > 0:
+            self.delete_failures -= 1
+            raise DeployFailed(f"simulated delete failure: {pod_id}")
         self.pods.pop((namespace, pod_id), None)
         self.deleted.append(pod_id)
         return pod_id

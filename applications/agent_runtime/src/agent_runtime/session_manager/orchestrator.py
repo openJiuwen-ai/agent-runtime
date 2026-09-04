@@ -6,6 +6,15 @@ route 主循环：幂等回放（handler 层）→ resolve → LUA_ROUTE_PLACE �
 - scope_full：有界等待队列（场景 F）——队列满快失败 503，队列内等 free 信号，
   超 scope_full_timeout → 504；
 - need_acquire：调 rm_facade.acquire 扩 +1 Pod → register_pod 登记候选集 → 重跑。
+
+**单次 route 总预算（2026-09 契约修正）**：need_acquire 分支一轮可触发完整
+deploy（ready_timeout 默认 300s），无总预算时单请求可阻塞远超「有界等待」的
+承诺且期间持续扩 Pod——主循环以**推导式总预算**（`scope_full_timeout +
+template.ready_timeout + 余量`）每圈校验，超则 504。**不复用队列预算当总预算**
+（真环境门禁实测教训：部署模板 `scope_full_timeout=8` 是按队列语义调的值，
+冷部署 15-25s 会让首个请求必 504）；排队等待 deadline 仍为 `scope_full_timeout`
+（场景 F 语义不变）。冷启动相容性：超预算 504 后 RM acquire 仍在后台完成并落
+idem 缓存（TTL 60s），gateway 同 request_id 重试即幂等回放结果。
 """
 
 from __future__ import annotations
@@ -30,6 +39,7 @@ logger = logging.getLogger("agent_runtime.session_manager")
 
 # 过载参数（SM 设计 §7 默认表；可被 settings 覆盖）
 DEFAULT_SCOPE_FULL_TIMEOUT = 30.0     # scope 满（队列内）阻塞上限
+ROUTE_BUDGET_MARGIN_SEC = 10.0        # 总预算推导余量（acquire 收尾/仲裁重跑）
 DEFAULT_RETRY_AFTER = 1               # 过载响应建议重试间隔（秒）
 
 
@@ -75,10 +85,35 @@ class SessionOrchestrator:
             )
         # 路由匹配：按 (index, scope_id) 序 first-fit 命中下发 scope（快照求值）
         scope_id, template = await self.config.resolve(user_id, group_id, bot_id)
+        # 两个不同语义的 deadline：
+        # - deadline（排队）：scope_full_timeout，场景 F 队列内等待上限，语义不变；
+        # - total_deadline（总预算）：排队 + 扩容 + 重仲裁全链 = scope_full_timeout
+        #   + ready_timeout + 余量。**不把队列预算直接当总预算用**——部署模板
+        #   scope_full_timeout=8 是按队列语义调的（须显著小于 session_ttl），真
+        #   镜像冷部署 15-25s 会让首个请求必 504（2026-09-01 真环境门禁实测）。
+        #   总预算封的是 need_acquire 无上界循环，非冷启动本身。
         deadline = time.monotonic() + self.scope_full_timeout
+        total_budget = (
+            self.scope_full_timeout
+            + float(template.ready_timeout or 0)
+            + ROUTE_BUDGET_MARGIN_SEC
+        )
+        total_deadline = time.monotonic() + total_budget
         t0 = time.monotonic()
 
         while True:
+            # 总预算：need_acquire 一轮可触发完整 deploy（ready_timeout 量级），
+            # 无总预算时单请求可阻塞 max_pods×ready_timeout 且持续扩 Pod；
+            # 超预算 504 后 RM acquire 照常完成并落 idem 缓存，同 request_id
+            # 重试幂等回放（见模块 docstring）。
+            if time.monotonic() >= total_deadline:
+                raise ScopeFullTimeout(
+                    f"scope {scope_id} route budget exhausted "
+                    f"({total_budget:.0f}s = scope_full_timeout "
+                    f"{self.scope_full_timeout}s + ready_timeout "
+                    f"{template.ready_timeout}s + margin, acquire included)",
+                    retry_after=DEFAULT_RETRY_AFTER,
+                )
             now = now_ts()
             action, pod_id = await self.state.route_place(
                 session_id=session_id,
@@ -229,9 +264,22 @@ class SessionOrchestrator:
                     if action != "scope_full":
                         return      # 轮询兜底仲裁转机（丢信号/状态已变）
         finally:
-            await self.state.remove_waiter(scope_id, request_id)
-            await pubsub.unsubscribe(channel)
-            await pubsub.aclose()
+            # 逐级保护：首步抛错不得吞掉原始 ScopeFullTimeout/ScopeQueueFull
+            # （用户将拿 500 而非 504/503），也不得跳过 pubsub 的
+            # unsubscribe/aclose（Redis 抖动时连接泄漏）
+            try:
+                await self.state.remove_waiter(scope_id, request_id)
+            except Exception:  # noqa: BLE001 - 收尾失败只留痕
+                logger.exception("remove_waiter failed: scope=%s request=%s",
+                                 scope_id, request_id)
+            try:
+                await pubsub.unsubscribe(channel)
+            except Exception:  # noqa: BLE001
+                logger.exception("pubsub unsubscribe failed: scope=%s", scope_id)
+            try:
+                await pubsub.aclose()
+            except Exception:  # noqa: BLE001
+                logger.exception("pubsub aclose failed: scope=%s", scope_id)
 
     # -------------------------------------------------------------- touch
 

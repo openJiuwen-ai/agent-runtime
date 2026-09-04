@@ -18,7 +18,7 @@
 
 SM 侧 ctx,级联管理全部生命周期(框架 App 的 lifespan 只认一个 ctx_factory——返回本类):
 
-- 构造时同时建 **rm_sysctx**(同 redis/db,仅 `key_prefix` 不同:SM=`{session_manager}`,RM=`{resource_manager}`;前缀带 Redis Cluster hash tag,模块键域同槽,详见 `docs/feature/2026-08-redis-cluster.md`)。
+- 构造时同时建 **rm_sysctx**(同 redis/db,仅 `key_prefix` 不同:SM=`{session_manager}`,RM=`{resource_manager}`;前缀带 Redis Cluster hash tag,模块键域同槽,详见 `docs/feature/2026-08-redis-cluster.md`)。**rm_sysctx 必须显式 `_owns_db=False, _owns_redis=False`**(2026-09 加固):框架缺省语义是「传了 db 即拥有」——不传则 `start()` 对共享 DB handler 二次 `init_database()+connect()`(重建 engine、旧池泄漏一条连接),`stop()` 会 dispose SM ctx 还在用的共享 engine;非拥有态仍保留 db readiness/redis ping 双前缀健康检查。
 - `_bind_modules()`:先构造后绑定,破解 SM↔RM 循环引用——
   `SessionState`/`ResourceState` → `SessionManagerFacade`/`ResourceManagerFacade(ResourceOrchestrator)` → `ConfigStore(push_pool_config=rm_facade.update_pool_config)` → `SessionOrchestrator` → `SessionSweeper`/`ResourceSweeper`。
 - `_build_jobs()`:5 个后台任务,全部 `create_single_leader_job`(tick 级 Redis 选主锁,多副本全局单副本执行;`tick_timeout_sec` 取 `TICK_TIMEOUTS` 常量表——单次 tick 上限,防 redis/k8s IO 抖动挂死 `_run_forever` 循环,超时取消本拍记日志、下一拍重试):
@@ -31,8 +31,8 @@ SM 侧 ctx,级联管理全部生命周期(框架 App 的 lifespan 只认一个 c
 | rm_watch | `watch_interval`(10s) | 300s | `rm_watch` | 死 Pod 判定 + 健康探测 |
 | rm_reconcile | `reconcile_interval`(30s) | 300s | `rm_reconcile` | 孤儿/stale 对账 |
 
-- `start()` 顺序:super().start() → rm_sysctx.start() → k8s.start()(**失败仅降级扩缩容,不阻断启动**)→ 启动 5 个 job。`stop()` 逆序。
-- DB 表初始化:构造参数 `table_definitions=[SERVICE_CONFIG_TEMPLATE_TABLE_DEF, ROUTING_RULE_TABLE_DEF]`(表结构在 `config_store.py`)。
+- `start()` 顺序:super().start() → rm_sysctx.start() → k8s.start()(**失败仅降级扩缩容,不阻断启动**)→ 启动 5 个 job。`stop()` 逆序且**逐步兜底**(2026-09 加固:jobs/k8s/rm_sysctx/super().stop() 每段独立 try/except,单组件停机失败只留痕不阻断其余资源回收——连接泄漏比单点报错难排查)。
+- DB 表初始化:构造参数 `table_definitions=[SERVICE_CONFIG_TEMPLATE_TABLE_DEF, SERVICE_CONFIG_CONTAINER_TABLE_DEF, ROUTING_SCOPE_TABLE_DEF]`(表结构在 `config_store.py`)。
 
 ### create_app(settings, arc, *, resources=None, instance_id=None, own_resources=True)
 
@@ -148,6 +148,7 @@ SM 侧 ctx,级联管理全部生命周期(框架 App 的 lifespan 只认一个 c
 | `CONFIG_NOT_FOUND` | 503 | ❌ | resolve 无匹配规则/模板禁用 |
 | `VALIDATION` | 400 | ❌ | 参数错 |
 | `CONFIG_SYNC_BUSY` | 409 | — | 上一次热更新未完成 / 日落待回收中间态 Pod / `lock:config_sync` 被 config_sync 或 config_refresh 占用 |
+| `STATE_UNAVAILABLE` | 503 | ✅ | 状态后端(Redis/DB)连接级故障,handler 层翻译(`handlers._INFRA_EXCEPTIONS`);区别于 internal 500——暂态可重试 |
 
 - `retry_after` 仅过载类携带(秒);Facade 间以 Python 异常传播,handler 捕获后映射为 `ResponseEnvelope(ok=False, error_code, retry_after)`。
 - `MAX_PODS_REACHED` / `DEPLOY_FAILED` 是 RM Facade 内部异常,SM route 捕获后统一映射 `NO_POD_AVAILABLE`,不对外。

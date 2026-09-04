@@ -21,6 +21,7 @@ from ..errors import DeployFailed, MaxPodsReached
 from ..spec_fields import DEPLOY_VER_FIELDS
 from ..util import fingerprint, now_ts
 from .k8s import DEFAULT_READY_TIMEOUT, K8sPodClient
+from .models import PodDeployInfo
 from .state import ResourceState
 
 logger = logging.getLogger("agent_runtime.resource_manager")
@@ -29,7 +30,8 @@ ACQUIRE_IDEM_TTL = 60          # acquire 结果幂等缓存窗口
 DEPLOY_LOCK_TTL = 360          # per-scope deploy 锁（盖住 ready_timeout 300s + 余量）
 DEPLOY_WAIT_ON_BUSY = 0.3      # follower 轮询间隔（原输家自旋间隔沿用）
 FOLLOWER_WAIT_MARGIN = 10      # follower 等待上界 = ready_timeout + 此余量（注册开销）
-NO_CONFIG_LOOP_WARN = 5        # acquire 内 no_config 重跑超过该次数告警（正常 ≤1 次）
+NO_CONFIG_MAX_LOOPS = 5        # acquire 内 no_config 重跑上限（真异常态有界，防热自旋）
+NO_CONFIG_BACKOFF_SEC = 0.2    # no_config 重跑退避（正常首见建配置后 1 次即过）
 FOLLOWER_PROGRESS_LOG_SEC = 5  # follower 轮询进度 INFO 行间隔（限频）
 
 
@@ -102,13 +104,22 @@ class ResourceOrchestrator:
                     raise MaxPodsReached(f"scope {scope_id} reached max_pods")
 
                 if action == "no_config":
-                    # 首见建配置后重跑即可（上面已保证写入）
+                    # 首见建配置后重跑即可（上面已保证写入）；真异常态（config 键
+                    # 被并发删/FLUSHDB/残缺）必须有界+退避——否则单请求热自旋到
+                    # 永久卡死，排障表现为「acquire 挂死」
                     no_config_loops += 1
-                    if no_config_loops > NO_CONFIG_LOOP_WARN:
-                        logger.warning(
-                            "acquire no_config loop: scope=%s iterations=%d",
-                            scope_id, no_config_loops,
+                    if no_config_loops >= NO_CONFIG_MAX_LOOPS:
+                        raise DeployFailed(
+                            f"scope {scope_id} has no pool config after "
+                            f"{no_config_loops} attempts "
+                            f"(config deleted or corrupt?)"
                         )
+                    if no_config_loops > 1:
+                        logger.warning(
+                            "acquire no_config retry: scope=%s attempt=%d/%d",
+                            scope_id, no_config_loops, NO_CONFIG_MAX_LOOPS,
+                        )
+                    await asyncio.sleep(NO_CONFIG_BACKOFF_SEC)
                     continue
 
                 # action == need_deploy：选主串行 deploy
@@ -255,9 +266,13 @@ class ResourceOrchestrator:
         （真环境 2026-08-26 实测：两次停机各泄一个 warm 占位 → max_pods 虚满）。
         REGISTER 同样在保护内——注册步失败（Redis 抖动/取消）不清占位一样虚占
         max_pods。物理清理：k8s.deploy 失败/取消可能在集群里留下已建 Pod
-        （DeployFailed 契约携带 pod_id/namespace），此处兜底删除防孤儿。
+        （DeployFailed 契约携带 pod_id/namespace），此处兜底删除防孤儿；
+        **register 步失败时异常不带 pod_id 属性——用已到手的 info 兜底删除**
+        （物理 Pod 已建 Ready，不删就成 pods:all 之外的孤儿：watch/reconcile
+        只做 Redis→K8s 单向对账，无人认领、无上界累积）。
         """
         t0 = time.monotonic()
+        info: PodDeployInfo | None = None
         try:
             info = await self.k8s.deploy(pod_spec)
             sse_url = (
@@ -285,12 +300,12 @@ class ResourceOrchestrator:
                     "clear deploying token failed during aborted deploy: "
                     "scope=%s token=%s", scope_id, deploy_token,
                 )
-            orphan = getattr(exc, "pod_id", "")
+            orphan = getattr(exc, "pod_id", "") or (info.pod_id if info else "")
+            orphan_ns = (getattr(exc, "namespace", "")
+                         or (info.namespace if info else "") or "default")
             if orphan:
                 try:
-                    await self.k8s.delete(
-                        orphan, getattr(exc, "namespace", "") or "default"
-                    )
+                    await self.k8s.delete(orphan, orphan_ns)
                 except Exception:  # noqa: BLE001 - 尽力而为，孤儿交由运维 cleanup
                     logger.exception(
                         "orphan pod cleanup failed: pod=%s", orphan,

@@ -3,6 +3,8 @@
 
 错误码契约见 HLD §3.1「错误响应体」：
 - 过载类（SCOPE_QUEUE_FULL / SCOPE_FULL_TIMEOUT / NO_POD_AVAILABLE）带 retry_after，可重试；
+- STATE_UNAVAILABLE（503）＝状态后端（Redis/DB）连接级故障，带 retry_after 可重试——
+  区别于 internal 500（不可重试），LB/客户端重试语义依赖这一区分；
 - CONFIG_NOT_FOUND / VALIDATION 不可重试；
 - CONFIG_SYNC_BUSY（409）为串行化拒绝，可稍后重试。
 
@@ -28,6 +30,7 @@ class ErrorCode:
     CONFIG_NOT_FOUND = "CONFIG_NOT_FOUND"          # 503：resolve 无匹配配置
     VALIDATION = "VALIDATION"                      # 400：参数错
     CONFIG_SYNC_BUSY = "CONFIG_SYNC_BUSY"          # 409：上一次配置热更新未完成
+    STATE_UNAVAILABLE = "STATE_UNAVAILABLE"        # 503：状态后端（Redis/DB）连接级故障
     # RM Facade 异常（SM route 捕获后统一映射 NO_POD_AVAILABLE）
     MAX_PODS_REACHED = "MAX_PODS_REACHED"
     DEPLOY_FAILED = "DEPLOY_FAILED"
@@ -41,6 +44,7 @@ HTTP_STATUS_MAP = {
     ErrorCode.CONFIG_NOT_FOUND: 503,
     ErrorCode.VALIDATION: 400,
     ErrorCode.CONFIG_SYNC_BUSY: 409,
+    ErrorCode.STATE_UNAVAILABLE: 503,
     ErrorCode.MAX_PODS_REACHED: 503,
     ErrorCode.DEPLOY_FAILED: 503,
 }
@@ -90,6 +94,12 @@ class InvalidParams(AgentRuntimeError):
 
 class ConfigSyncBusy(AgentRuntimeError):
     code = ErrorCode.CONFIG_SYNC_BUSY
+
+
+class StateUnavailable(AgentRuntimeError):
+    """Redis/DB 连接级故障（handler 层翻译，见 handlers._INFRA_EXCEPTIONS）。"""
+
+    code = ErrorCode.STATE_UNAVAILABLE
 
 
 # ---- RM Facade（进程内异常，SM 捕获映射）

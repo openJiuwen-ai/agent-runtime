@@ -128,7 +128,10 @@ class OrchestratorSystemContext(SystemContext):
             _owns_db=owns_resources,
             _owns_redis=owns_resources,
         )
-        # RM ctx：共享 redis/db（不重复持有），仅前缀不同
+        # RM ctx：共享 redis/db（不重复持有），仅前缀不同。_owns_db=False 必须
+        # 显式传：框架缺省语义是「传了 db 即拥有」——不传则 start() 会对共享
+        # DB handler 二次 init_database()+connect()（重建 engine、旧池泄漏一条
+        # 连接），stop() 会 dispose 掉 SM ctx 还在用的共享 engine。
         self.rm_sysctx = SystemContext(
             redis=redis_client,
             db=db,
@@ -136,6 +139,8 @@ class OrchestratorSystemContext(SystemContext):
             key_prefix=RM_KEY_PREFIX,
             instance_id=self.instance_id,
             logger=self.logger,
+            _owns_db=False,
+            _owns_redis=False,
         )
         self.arc = arc
         self.k8s = k8s
@@ -285,6 +290,9 @@ class OrchestratorSystemContext(SystemContext):
         return out
 
     async def stop(self) -> None:
+        # 逐步兜底：任一组件停机失败只留痕，不阻断其余资源回收（滚动重启时
+        # 连接泄漏比单点报错更难排查）。顺序：jobs（先停调度）→ k8s → rm → sm
+        # （sm 持有共享 redis/db 的正主生命周期）。
         for job in self._jobs:
             try:
                 await job.stop()
@@ -295,8 +303,14 @@ class OrchestratorSystemContext(SystemContext):
             await self.k8s.close()
         except Exception:  # noqa: BLE001
             self.logger.exception("kubernetes client close failed")
-        await self.rm_sysctx.stop()
-        await super().stop()
+        try:
+            await self.rm_sysctx.stop()
+        except Exception:  # noqa: BLE001
+            self.logger.exception("rm sysctx stop failed")
+        try:
+            await super().stop()
+        except Exception:  # noqa: BLE001
+            self.logger.exception("sm sysctx stop failed")
         self.logger.info("agent-runtime stopped: instance=%s", self.instance_id)
 
 

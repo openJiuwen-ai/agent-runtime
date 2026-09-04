@@ -31,6 +31,8 @@
 
 - 入参从 `Envelope.metadata`(session_id/user_id/group_id/bot_id/request_id)与 `rawdata` 取;`group_id` 在 `metadata.extra`,**user_id/group_id/bot_id/session_id 四项均必填非空**(orchestrator 校验,缺 → 400 VALIDATION)。
 - `AgentRuntimeError` 统一捕获 → `ResponseEnvelope(ok=False, error_code, error_message, retry_after)`。
+- **基础设施连接级异常 → 503 STATE_UNAVAILABLE**(2026-09 健壮性加固):`_INFRA_EXCEPTIONS`(redis ConnectionError/TimeoutError + sqlalchemy OperationalError/InterfaceError/DisconnectionError,**防御式 import**——传递依赖缺失回退空元组;有意不含 redis ResponseError/sqlalchemy ProgrammingError,那是 500 该暴露的真 bug)在 5 个 handler 各并一档 except(route 含幂等闸 acquire),经 `_infra_fail` 翻译为 `StateUnavailable(retry_after=1)`——Redis/DB 抖动是暂态,500 语义不可重试会错杀 LB/客户端重试。
+- **幂等缓存写失败不吞成功响应**:route 成功后 `guard.succeed` 抛错仅 exception 留痕、照常返回结果(代价 = 60s 窗口内同 request_id 重放重跑 route,会话亲和续期本身幂等)。
 - handler 无模块级可变状态;服务对象从 `sysctx` 取(`main._bind_modules` 注入)。
 
 ## orchestrator.py —— route 主循环
@@ -41,7 +43,16 @@
 四参非空校验(缺 → InvalidParams 400)
 → resolve(user_id, group_id, bot_id)(config_store:读路由快照 first-fit 匹配)
    返回 (scope_id, template);无匹配 → ConfigNotFound(503)
-→ 循环 { LUA_ROUTE_PLACE 原子仲裁 → (action, pod_id):
+→ 循环 { **总预算校验(2026-09 契约修正:total_deadline = now + scope_full_timeout
+     + template.ready_timeout + ROUTE_BUDGET_MARGIN_SEC(10s),每圈 monotonic 复核。
+     总预算封的是 need_acquire 的无上界循环(一轮可触发完整 deploy,ready_timeout
+     量级;无总预算时单请求可阻塞 max_pods×ready_timeout 且持续扩 Pod)。★推导式
+     而非拍平复用队列预算——部署模板 scope_full_timeout=8 是按队列语义调的值,
+     真镜像冷部署 15-25s 会让首个请求必 504(2026-09-01 真环境门禁实测教训);
+     排队等待 deadline 仍为 scope_full_timeout(场景 F 语义不变)。超预算 → 504
+     ScopeFullTimeout,RM acquire 照常完成并落 idem 缓存(TTL 60s),gateway 同
+     request_id 重试即幂等回放)**
+     LUA_ROUTE_PLACE 原子仲裁 → (action, pod_id):
      refresh/placed → 读 pod:info sse_url 返回(缺失=极端竞态被清,continue 重跑;
                      refresh 分支有 info 存活守卫,下一轮惰性回收死绑定重新放置,不构成自旋)
      scope_full     → _wait_for_capacity(场景 F)后重跑
@@ -51,6 +62,7 @@
 `_wait_for_capacity`(场景 F 有界等待):
 - `max_waiters = 2 * scope_concurrency`;过 deadline(`scope_full_timeout`)→ 504 ScopeFullTimeout。
 - **入队只走 `LUA_WAITER_GATE` 原子闸门**(ZSET+deadline:先清过期成员再 ZADD 先行+超限自退);满 → 503 ScopeQueueFull 快失败。
+- **finally 逐级保护(2026-09 加固)**:`remove_waiter → unsubscribe → aclose` 三步各自 try/except——首步抛错(Redis 抖动)不得吞掉原始 ScopeFullTimeout/ScopeQueueFull(用户将拿 500 而非 504/503),也不得跳过 pubsub 收尾(连接泄漏)。
 - **等待者成员资格全程保持**(入队一次、退出删一次;中途删/加的空窗会让 max_waiters 上限漏收)。
 - 订阅 `scope:{sid}:free` PubSub + ≤500ms 安全轮询双保险(兜 publish 早于 subscribe 的丢失):
   收到信号 → 返回重跑;**轮询超时无信号 → 经 re_arbitrate 就地重跑 ROUTE_PLACE**,非 scope_full 即返回——原子 admit 是唯一仲裁,丢信号后 ~0.5s 内仍能拿到空闲额度而非空等满 30s。
@@ -88,9 +100,9 @@
 
 | 脚本 | 一句话职责 |
 |---|---|
-| `LUA_ROUTE_PLACE` | route 原子核心:亲和续期(**前提 pod:info 存在**——注册已被清的绑定判死,惰性回收后走重新放置;否则 notify_pod_dead 窗口内新落的会话会无限自旋且每圈续期 expiry)→惰性回收旧绑定→scope 闸门(SCARD)→first-fit(接入序)→达 max_pods 则 scope_full / 否则 need_acquire→原子提交四处同写(复用时清 idle_notified) |
+| `LUA_ROUTE_PLACE` | route 原子核心:**残骸自卫(2026-09,同 EVICT:缺 scope_id/pod_id/expiry 的半成品哈希自清两处后落穿全新放置——nil 比较/nil 拼接是 Lua runtime error,该会话 route 永久 500)**→亲和续期(**前提 pod:info 存在**——注册已被清的绑定判死,惰性回收后走重新放置;否则 notify_pod_dead 窗口内新落的会话会无限自旋且每圈续期 expiry)→惰性回收旧绑定→scope 闸门(SCARD)→first-fit(接入序)→达 max_pods 则 scope_full / 否则 need_acquire→原子提交四处同写(复用时清 idle_notified) |
 | `LUA_EVICT` | session 移除**唯一原语**(四处同删 + PUBLISH free 唤醒等待者;返回 scope/pod/remaining;幂等 noop;**残骸自卫**:哈希缺 scope/pod(外部直改键半成品)→ 自清两处返回 rubble,调用侧 WARNING——单坏键不得使到期 pass 崩溃循环) |
-| `LUA_TOUCH` | 保活续期;已过期当场惰性 evict;ttl 就地读 session HASH(不依赖 scope:config) |
+| `LUA_TOUCH` | 保活续期;**残骸自卫(2026-09,同 EVICT:缺 scope_id/pod_id/expiry 自清返回 False,不得 Lua runtime error)**;已过期当场惰性 evict;ttl 就地读 session HASH(不依赖 scope:config) |
 | `LUA_SWEEP_IDLE_NOTIFY` | 空 Pod 判定(SCARD==0)+ 60s NX 去重 + ZREM 退出候选(堵 reclaim 窗口内 route 直选的竞态 A) |
 | `LUA_REGISTER_POD` | acquire 成功登记:三处注册(scope:pods/pod:info/pods:registered)+ 接入序 + pods:{pod}:scopes |
 | `LUA_CLEANUP_POD` | notify_pod_dead 清该 (scope,pod) 全部注册(会话 evict 由调用方先行) |
@@ -141,15 +153,24 @@
   scope 段同前(scope_id 字符集/index 拒 bool/引用不在本批模板集/routing_rules
   表达式串语法/enabled 须 bool/expires_at ISO-8601 或 null/重复);缺通配 scope
   → 仅 WARNING 放行(响应 wildcard_present:false;通配只计生效中的空表达式)
-lock:config_sync 串行化(忙→409 CONFIG_SYNC_BUSY,TTL 60)
+lock:config_sync 串行化(忙→409 CONFIG_SYNC_BUSY;基线 TTL 60 + **看门狗续期**:
+  周期 TTL//3 经 SessionState.refresh_lock(Lua compare-and-EXPIRE,同 unlock 守卫
+  纪律)续期,持有上限 CONFIG_SYNC_MAX_HOLD_SEC=600(防失控 sync 变永久锁);锁内
+  含日落判定/全量 DB 读写/逐 scope 推送,规模大可超基线——不续期则锁过期后多副本
+  并发进入,GC 可能删对方刚写的容器行;token 用 uuid(秒级时间戳会同秒撞 token
+  经 compare-and-del 误删他人锁);续期发现锁丢失 → ERROR 停止续期、本批跑完
+  (DB 单事务收敛);unlock 失败只记日志,不把成功变 500/不吞原异常)
 → 读 DB 旧态(containers + templates(双形态水合) + scopes)
 → diff:模板 changed_ids(_diff_class 沿用)/ 引用切换 ref_switched → affected
 → 日落中间态检查(★先于写库,拒绝时零副作用;★按版本判定:registered∖candidates
   且 deploy_ver ≠ 新版本的才是真日落残留——该集合差同时是 idle_consider 合法
   中间态,按形状判定会误拒正常空闲 Pod,min_idle≥1 时变配置面永久 409)
-→ 写 DB(顺序:先 upsert 容器(模板引用永不悬挂)→ upsert/delete 模板(三段式
-  形态行)→ upsert/delete scopes → GC 容器(container_id ∉ 本批 → 删;空全量
-  ⇒ 容器行清空);红线:任一失败立即中止,不 SET 快照、不推送)
+→ 写 DB(**单事务全有或全无**——`_db_session()`(=handler session_factory)+
+  `_upsert_row_tx/_delete_tx`(get_table Core 原语);多步独立提交的中途失败会留
+  半同步 DB,重启 ensure_snapshot 把混合态固化成路由快照;顺序:先 upsert 容器
+  (模板引用永不悬挂)→ upsert/delete 模板(三段式形态行)→ upsert/delete scopes
+  → GC 容器(container_id ∉ 本批 → 删;空全量 ⇒ 容器行清空);红线保持:事务
+  先于快照/推送,失败上抛时零 Redis 副作用)
 → rebuild_snapshot()(DB 读回 → 原子 SET;B 类立即生效由此完成)
 → eager 预热:每个**生效中** scope 推 push(sid, pool_config, deploy_subset)——必须带
   pod_spec(RM 才落 pod_spec_json/deploy_ver;autoscale 无请求预热 min_idle 的依赖);

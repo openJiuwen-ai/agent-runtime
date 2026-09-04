@@ -470,15 +470,17 @@ JSON
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `ok` | bool | 固定 `false` |
-| `error_code` | str | `SCOPE_FULL_TIMEOUT` / `SCOPE_QUEUE_FULL` / `NO_POD_AVAILABLE` / `CONFIG_NOT_FOUND` / `MAX_PODS_REACHED` / `DEPLOY_FAILED` / `CONFIG_SYNC_BUSY` / `VALIDATION` |
+| `error_code` | str | `SCOPE_FULL_TIMEOUT` / `SCOPE_QUEUE_FULL` / `NO_POD_AVAILABLE` / `CONFIG_NOT_FOUND` / `MAX_PODS_REACHED` / `DEPLOY_FAILED` / `CONFIG_SYNC_BUSY` / `STATE_UNAVAILABLE` / `VALIDATION` |
 | `error_message` | str | 人类可读描述 |
-| `retry_after` | int?(秒) | 仅过载类(`SCOPE_QUEUE_FULL` / `SCOPE_FULL_TIMEOUT` / `NO_POD_AVAILABLE`)返回;其它省略 |
+| `retry_after` | int?(秒) | 仅过载类(`SCOPE_QUEUE_FULL` / `SCOPE_FULL_TIMEOUT` / `NO_POD_AVAILABLE`)与 `STATE_UNAVAILABLE` 返回;其它省略 |
+
+`STATE_UNAVAILABLE`(503,2026-09):状态后端(Redis/DB)**连接级**故障在 handler 层统一翻译(redis ConnectionError/TimeoutError、sqlalchemy Operational/Interface/DisconnectionError)——区别于 internal 500:暂态可重试,LB/客户端重试语义依赖这一区分。Lua 逻辑错/DB schema 错仍走 500。
 
 **过载参数**:
 
 | 参数 | 默认 | 含义 |
 |---|---|---|
-| `scope_full_timeout` | 30s | scope 满(队列内)阻塞上限,超则 504 `SCOPE_FULL_TIMEOUT` |
+| `scope_full_timeout` | 30s | scope 满(队列内)阻塞上限,超则 504 `SCOPE_FULL_TIMEOUT`。2026-09 起**另有推导式单次 route 总预算** = `scope_full_timeout + ready_timeout + 10s 余量`(主循环每圈校验,封 need_acquire 无上界循环;不拍平复用队列预算——真镜像冷部署 15-25s 会让队列语义的 8s 必 504);超总预算同款 504,acquire 慢于预算时同 request_id 重试走幂等回放 |
 | `max_waiters` | 2 × `scope_concurrency` | 每 scope 等待队列上限,超限快失败 503 `SCOPE_QUEUE_FULL` |
 | `session_ttl` | 60s(template) | 会话保活窗口;超时未 touch 则老化回收 |
 

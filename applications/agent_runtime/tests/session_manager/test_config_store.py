@@ -395,23 +395,120 @@ async def test_config_sync_rejects_when_sunset_pending(runtime):
 
 
 @requires_lua
+def _flaky_write_factory(db_handler, fail_on_write: int):
+    """包装 session_factory:第 fail_on_write 次**写语句**(Insert/Update/Delete)
+    抛 OperationalError——注入点在事务内部,考验回滚与红线(读语句放行)。"""
+    from sqlalchemy import Delete, Insert, Update
+    from sqlalchemy.exc import OperationalError
+
+    real_factory = db_handler.session_factory
+    state = {"writes": 0}
+
+    def _factory():
+        session = real_factory()
+        real_execute = session.execute
+
+        async def _execute(*args, **kwargs):
+            stmt = args[0] if args else kwargs.get("statement")
+            if isinstance(stmt, (Insert, Update, Delete)):
+                state["writes"] += 1
+                if state["writes"] == fail_on_write:
+                    raise OperationalError(
+                        "simulated db outage", None, RuntimeError("conn lost"))
+            return await real_execute(*args, **kwargs)
+
+        session.execute = _execute
+        return session
+
+    return _factory
+
+
 async def test_db_write_failure_skips_snapshot_and_push(runtime, db_handler, monkeypatch):
-    """红线:写 DB 失败 → 立即中止,不得 SET 快照、不得推送。"""
+    """红线:写 DB 失败 → 事务回滚立即中止,不得 SET 快照、不得推送。"""
     await runtime.seed_template()
     snapshot_before = await runtime.sm_state.routing_snapshot_raw()
     runtime.pool_pushes.clear()
 
-    async def _boom(*args, **kwargs):
-        raise RuntimeError("db down")
-
-    monkeypatch.setattr(db_handler, "update", _boom)
-    with pytest.raises(RuntimeError):
+    monkeypatch.setattr(db_handler, "session_factory",
+                        _flaky_write_factory(db_handler, fail_on_write=1))
+    from sqlalchemy.exc import OperationalError
+    with pytest.raises(OperationalError):
         await runtime.config_store.config_sync(_payload(
             [_tpl("tpl-1", session_ttl=200)],
             [_scope(SCOPE, "tpl-1")],
         ))
     assert await runtime.sm_state.routing_snapshot_raw() == snapshot_before
     assert runtime.pool_pushes == []
+    template = await runtime.config_store.get_template("tpl-1")
+    assert template.session_ttl == 60, "首写已提交(未回滚)才会出现 200"
+
+
+@requires_lua
+async def test_config_sync_db_failure_rolls_back_whole_batch(
+        runtime, db_handler, monkeypatch):
+    """单事务全有或全无:批量中途失败 → 三表全部回滚(新行不存在、被删行还在),
+    移除注入后同载荷重放收敛——重启 ensure_snapshot 无混合态可固化。"""
+    await runtime.seed_template()
+    runtime.pool_pushes.clear()
+
+    monkeypatch.setattr(db_handler, "session_factory",
+                        _flaky_write_factory(db_handler, fail_on_write=2))
+    from sqlalchemy.exc import OperationalError
+    new_payload = _payload(
+        [_tpl("tpl-1"), _tpl("tpl-2", agent_image="agentserver:2.0")],
+        [_scope(SCOPE, "tpl-1"), _scope("scope-new", "tpl-2", index=5)],
+    )
+    with pytest.raises(OperationalError):
+        await runtime.config_store.config_sync(new_payload)
+
+    # 半同步 DB 不存在:新模板/新容器/新 scope 全未落,旧 scope 未被删
+    assert await runtime.config_store.get_template("tpl-2") is None
+    assert set(await runtime.config_store._all_containers()) == {"c-tpl-1"}
+    assert {s.scope_id for s in await runtime.config_store.list_scopes()} == {SCOPE}
+    assert runtime.pool_pushes == []
+
+    monkeypatch.undo()                           # 移除注入,同载荷重放
+    result = await runtime.config_store.config_sync(new_payload)
+    assert result["ok"] is True and result["scopes_synced"] == 2
+    assert {s.scope_id for s in await runtime.config_store.list_scopes()} == {
+        SCOPE, "scope-new"}
+
+
+@requires_lua
+async def test_config_sync_lock_watchdog_renews(
+        db_handler, redis_client, sm_state, monkeypatch):
+    """锁看门狗:锁内工作超过基线 TTL 时按周期续期维持互斥(期间并发 sync
+    409),结束释放;token 为 uuid 形态(同秒时间戳撞 token 误删窗口不存在)。"""
+    import asyncio
+
+    from agent_runtime.session_manager import config_store as cs_module
+    from agent_runtime.session_manager.config_store import ConfigStore
+
+    pushes: list[str] = []
+    delay = {"sec": 0.0}
+
+    async def _push(scope_id, pool, pod_spec):
+        pushes.append(scope_id)
+        await asyncio.sleep(delay["sec"])
+
+    store = ConfigStore(db_handler, sm_state, push_pool_config=_push,
+                        known_rm_scopes=None, bump_generation=None)
+    monkeypatch.setattr(cs_module, "CONFIG_SYNC_LOCK_TTL", 2)
+    await store.config_sync(_payload([_tpl("tpl-1")], [_scope(SCOPE, "tpl-1")]))
+
+    delay["sec"] = 3.0                           # 锁内工作 3s > 基线 TTL 2s
+    lock_key = sm_state.k.lock_config_sync()
+    task = asyncio.create_task(store.config_sync(_payload(
+        [_tpl("tpl-1", session_ttl=120)], [_scope(SCOPE, "tpl-1")])))
+    await asyncio.sleep(2.5)
+    assert await redis_client.exists(lock_key) == 1, "看门狗未续期,锁已过期"
+    token = (await redis_client.get(lock_key)).decode()
+    assert token.startswith("config_sync-") and len(token) > 40   # uuid 形态
+    with pytest.raises(ConfigSyncBusy):          # 期间并发 sync 被拒
+        await store.config_sync(_payload([_tpl("tpl-x")], [_scope("s-x", "tpl-x")]))
+    await task
+    assert await redis_client.exists(lock_key) == 0
+    assert len(pushes) == 2
 
 
 # -------------------------------------------------------------- sidecars(多容器)

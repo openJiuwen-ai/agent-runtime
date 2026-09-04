@@ -19,12 +19,37 @@ from typing import Any
 
 from openjiuwen_runtime.service.envelope import Envelope, ResponseEnvelope
 
-from ..errors import AgentRuntimeError
+from ..errors import AgentRuntimeError, StateUnavailable
 from ..util import now_ts
 
 logger = logging.getLogger("agent_runtime.session_manager")
 
 IDEMPOTENCY_WINDOW = 60  # route 结果缓存窗口（框架默认一致）
+
+# 基础设施**连接级**异常 → 503 STATE_UNAVAILABLE（retry_after=1，可重试）。
+# 有意收窄：redis ResponseError（Lua 逻辑错/坏脚本）与 sqlalchemy
+# ProgrammingError（schema 错）不在其中——那是 internal 500 该暴露的真 bug。
+# redis/sqlalchemy 是传递依赖（经框架引入），缺失时回退空元组
+# （local 极简安装不致 import 崩，except 空元组永不命中、退回框架兜底）。
+_INFRA_EXCEPTIONS: tuple[type[BaseException], ...] = ()
+try:  # pragma: no cover - 取决于安装形态
+    from redis.exceptions import ConnectionError as _RedisConnError
+    from redis.exceptions import TimeoutError as _RedisTimeoutError
+
+    _INFRA_EXCEPTIONS += (_RedisConnError, _RedisTimeoutError)
+except ImportError:
+    pass
+try:  # pragma: no cover - 取决于安装形态
+    from sqlalchemy.exc import (
+        DisconnectionError as _SqlDisconnectionError,
+        InterfaceError as _SqlInterfaceError,
+        OperationalError as _SqlOperationalError,
+    )
+
+    _INFRA_EXCEPTIONS += (
+        _SqlOperationalError, _SqlInterfaceError, _SqlDisconnectionError)
+except ImportError:
+    pass
 
 
 def _services(ctx: Any) -> tuple[Any, Any, Any]:
@@ -64,6 +89,21 @@ def _fail(
     return _error_envelope(env, exc)
 
 
+def _infra_fail(
+    env: Envelope, exc: BaseException, *, endpoint: str,
+    duration_ms: float, **fields: Any,
+) -> ResponseEnvelope:
+    """基础设施连接级故障 → 503 STATE_UNAVAILABLE（可重试），而非 internal 500。
+
+    Redis/DB 抖动是暂态：500 语义上不可重试，LB/客户端会放弃本可成功的重试。
+    """
+    translated = StateUnavailable(
+        f"state backend unavailable: {type(exc).__name__}: {exc}",
+        retry_after=1,
+    )
+    return _fail(env, translated, endpoint=endpoint, duration_ms=duration_ms, **fields)
+
+
 async def handle_route(ctx, env: Envelope) -> ResponseEnvelope | dict:
     """POST /api/session/route：{pod_sse_url, pod_id}；幂等回放优先。"""
     orchestrator, _, _ = _services(ctx)
@@ -72,7 +112,14 @@ async def handle_route(ctx, env: Envelope) -> ResponseEnvelope | dict:
     group_id = str((metadata.extra or {}).get("group_id") or "")
     bot_id = metadata.bot_id or ""
 
-    guard = await ctx.idempotency.acquire(metadata.request_id, IDEMPOTENCY_WINDOW)
+    t0 = time.monotonic()
+    try:
+        guard = await ctx.idempotency.acquire(
+            metadata.request_id, IDEMPOTENCY_WINDOW)
+    except _INFRA_EXCEPTIONS as exc:
+        return _infra_fail(env, exc, endpoint="route",
+                           duration_ms=(time.monotonic() - t0) * 1000,
+                           session=session_id, request_id=metadata.request_id)
     if not guard.acquired and guard.cached_result is not None:
         logger.info("route idempotent replay: request_id=%s", metadata.request_id)
         cached = guard.cached_result
@@ -80,7 +127,6 @@ async def handle_route(ctx, env: Envelope) -> ResponseEnvelope | dict:
             type=env.type, metadata=env.metadata, rawdata=dict(cached.rawdata),
             ok=True, retry_after=None,
         )
-    t0 = time.monotonic()
     try:
         result = await orchestrator.route(
             request_id=metadata.request_id,
@@ -92,11 +138,23 @@ async def handle_route(ctx, env: Envelope) -> ResponseEnvelope | dict:
     except AgentRuntimeError as exc:
         return _fail(env, exc, endpoint="route", duration_ms=(time.monotonic() - t0) * 1000,
                      session=session_id, request_id=metadata.request_id)
+    except _INFRA_EXCEPTIONS as exc:
+        return _infra_fail(env, exc, endpoint="route",
+                           duration_ms=(time.monotonic() - t0) * 1000,
+                           session=session_id, request_id=metadata.request_id)
     response = ResponseEnvelope(
         type=env.type, metadata=env.metadata, rawdata=result, ok=True,
     )
     if guard.acquired:
-        await guard.succeed(response)
+        try:
+            await guard.succeed(response)
+        except Exception:  # noqa: BLE001 - 幂等缓存写失败不吞成功响应
+            # 代价仅是 60s 窗口内同 request_id 重放会重跑 route（会话亲和续期，
+            # 本身幂等），优于把已成功的路由结果变成 500
+            logger.exception(
+                "idempotency cache write failed, response still returned: "
+                "request_id=%s", metadata.request_id,
+            )
     return result
 
 
@@ -110,6 +168,11 @@ async def handle_touch(ctx, env: Envelope) -> dict:
         return _fail(env, exc, endpoint="touch", duration_ms=(time.monotonic() - t0) * 1000,
                      session=env.metadata.session_id or "",
                      request_id=env.metadata.request_id)
+    except _INFRA_EXCEPTIONS as exc:
+        return _infra_fail(env, exc, endpoint="touch",
+                           duration_ms=(time.monotonic() - t0) * 1000,
+                           session=env.metadata.session_id or "",
+                           request_id=env.metadata.request_id)
     return {"touched": touched}
 
 
@@ -125,6 +188,12 @@ async def handle_config_sync(ctx, env: Envelope) -> dict:
                      templates=len((env.rawdata or {}).get("templates") or []),
                      scopes=len((env.rawdata or {}).get("scopes") or []),
                      request_id=env.metadata.request_id)
+    except _INFRA_EXCEPTIONS as exc:
+        return _infra_fail(env, exc, endpoint="config_sync",
+                           duration_ms=(time.monotonic() - t0) * 1000,
+                           templates=len((env.rawdata or {}).get("templates") or []),
+                           scopes=len((env.rawdata or {}).get("scopes") or []),
+                           request_id=env.metadata.request_id)
     logger.info("config_sync ok: result=%s at=%s duration_ms=%.1f",
                 result, now_ts(), (time.monotonic() - t0) * 1000)
     return result
@@ -145,6 +214,10 @@ async def handle_config_refresh(ctx, env: Envelope) -> dict:
         return _fail(env, exc, endpoint="config_refresh",
                      duration_ms=(time.monotonic() - t0) * 1000,
                      request_id=env.metadata.request_id)
+    except _INFRA_EXCEPTIONS as exc:
+        return _infra_fail(env, exc, endpoint="config_refresh",
+                           duration_ms=(time.monotonic() - t0) * 1000,
+                           request_id=env.metadata.request_id)
     logger.info("config_refresh ok: result=%s duration_ms=%.1f",
                 result, (time.monotonic() - t0) * 1000)
     return result
@@ -163,6 +236,11 @@ async def handle_cleanup(ctx, env: Envelope) -> dict:
         return _fail(env, exc, endpoint="cleanup", duration_ms=(time.monotonic() - t0) * 1000,
                      namespace=namespace or "-", label_selector=label_selector or "-",
                      request_id=env.metadata.request_id)
+    except _INFRA_EXCEPTIONS as exc:
+        return _infra_fail(env, exc, endpoint="cleanup",
+                           duration_ms=(time.monotonic() - t0) * 1000,
+                           namespace=namespace or "-", label_selector=label_selector or "-",
+                           request_id=env.metadata.request_id)
     logger.info("cleanup ok: namespace=%s label_selector=%s cleaned=%s duration_ms=%.1f",
                 namespace or "-", label_selector or "-", cleaned,
                 (time.monotonic() - t0) * 1000)
