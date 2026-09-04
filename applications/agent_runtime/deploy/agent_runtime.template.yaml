@@ -165,11 +165,6 @@ spec:
             # AgentServer Pod 拉起的目标 namespace（与 e2e/生产约定一致）
             - name: AGENT_RUNTIME_DEFAULT_NAMESPACE
               value: "<<AGENT_RUNTIME_AGENTSERVER_NAMESPACE>>"
-            # 等待队列超时（秒）。须显著小于模板 session_ttl：与 TTL 相近会出现
-            # 「等待者 deadline ≈ 会话到期」的碰撞（到期驱逐唤醒等待者,产生
-            # 200/503 混合而非干净 504——M7 经 LB 跑 M6 冒烟的真实教训）
-            - name: AGENT_RUNTIME_SCOPE_FULL_TIMEOUT
-              value: "<<AGENT_RUNTIME_SCOPE_FULL_TIMEOUT>>"
             - name: AGENT_RUNTIME_LOG_LEVEL
               value: "<<AGENT_RUNTIME_LOG_LEVEL>>"
             # stdout 主形态：关闭容器内文件 handler（console 保留；日志采集走

@@ -99,7 +99,7 @@
 ### 2.1 `POST /api/session/route` —— 同步路由 + 占额度(关键路径)
 - **in**:路由上下文 `(session_id, user_id, group_id, bot_id)` 经 `metadata`/`metadata.extra`;rawdata 无业务字段
 - **out**:`{ pod_sse_url:str, pod_id:str }`
-- **错**:`SCOPE_FULL_TIMEOUT`(504)、`NO_POD_AVAILABLE`(503)、`CONFIG_NOT_FOUND`(503)、`VALIDATION`(400)
+- **错**:`SCOPE_FULL`(503,容量满快失败,2026-09 起)、`NO_POD_AVAILABLE`(503)、`CONFIG_NOT_FOUND`(503)、`VALIDATION`(400)
 
 ### 2.2 `POST /api/session/touch` —— 保活 / EOS(刷新 TTL)
 - **in**:`session_id` 经 `metadata`
@@ -154,7 +154,6 @@
 | `pod:{scope_id}:{pod_id}:idle_notified` | STRING(`SET NX EX 60`) | 去重标记 | 空 Pod 通知 Resource 的 60s 去重;placement 时 `DEL` |
 | `pods:registered` | SET | `"{scope_id}:{pod_id}"` 全量 | sweeper 空 Pod pass 枚举(全局) |
 | `pods:{pod_id}:scopes` | SET | 该 Pod 被哪些 scope 引用 | notify_pod_dead 反查受影响 scope |
-| `scope:{scope_id}:free` | **Pub/Sub channel** | —(无持久值) | EVICT `PUBLISH` 唤醒 / route `wait_free` `SUBSCRIBE`(额度释放信号) |
 | `lock:sweep` | STRING(`SET NX EX 2`) | 选主标记 | sweeper tick 级选主(全局单副本扫描) |
 
 **不变量(由 Lua 原子维护;崩溃/重启不破坏,因状态全在 Redis)**:
@@ -170,7 +169,7 @@
 - **`session_expiry` 是全局 ZSET(非 per-scope)**:sweeper 一次 `ZRANGEBYSCORE` 扫全库到期项,配合 tick 级选主锁,全局只有一个副本执行,无需按 scope 分片扫描。
 - **`idle_notified` 是独立 STRING 键(非 `pod:info` 的 HASH 字段)**:去重需要 `SET NX EX 60` 的原子语义,HASH 字段无 NX+EX;独立键还能自然过期重试。
 - **`pods:{pod_id}:scopes` 反查表**:**一 Pod 恰属一 scope**(per-`scope_id` 独立 Pod 池,无跨 scope 共享);`notify_pod_dead` 到来时据此反查受影响 scope 逐个清洗,故需 pod→scopes 反向索引。
-- **不变量 3 的含义**:`max_pods = ceil(scope_concurrency / pod_concurrency)` 是单个 scope 的 Pod 数上限,防一个 scope 无限扩 Pod;达上限后总容量已 ≥ scope 预算,新请求只能等额度释放(scope_full),不再 acquire。
+- **不变量 3 的含义**:`max_pods = ceil(scope_concurrency / pod_concurrency)` 是单个 scope 的 Pod 数上限,防一个 scope 无限扩 Pod;达上限后总容量已 ≥ scope 预算,新请求立即 503 `SCOPE_FULL` 快失败(scope_full),不再 acquire。
 
 **键的生命周期(谁建 / 谁读 / 谁删 / TTL)**:
 
@@ -187,7 +186,6 @@
 | `pod:{scope_id}:{pod_id}:idle_notified` | sweeper `SET NX EX 60` | sweeper `SET NX` 判定 | ROUTE_PLACE 复用 `DEL`;notify `DEL pod:*` | **60s** |
 | `pods:registered` | register_pod `SADD` | sweeper 空 Pod pass `SMEMBERS` | notify_pod_dead `SREM` | 无 |
 | `pods:{pod_id}:scopes` | register_pod `SADD` | notify_pod_dead `SMEMBERS` | notify_pod_dead `SREM` | 无 |
-| `scope:{scope_id}:free` | —(pubsub,无持久) | route `wait_free` `SUBSCRIBE` | —(瞬时) | — |
 | `lock:sweep` | sweeper `SET NX EX 2` | sweeper 判定 | 自动过期 / 下 tick 覆盖 | **2s** |
 | route 幂等缓存 | `ctx.idempotency.put` | route `ctx.idempotency.get` | 框架按 window 过期 | **框架默认 60s** |
 
@@ -254,7 +252,7 @@
 
 ### 5.1 Lua 脚本(承担所有 runtime 状态变更,原子)
 
-> 脚本全集(7 个,实现与本文对齐):`LUA_ROUTE_PLACE` / `LUA_EVICT` / `LUA_TOUCH` / `LUA_SWEEP_IDLE_NOTIFY`(核心 4 个,下文全文)+ `LUA_REGISTER_POD`(acquire 成功登记,§5.2)+ `LUA_CLEANUP_POD`(notify_pod_dead 清注册,§2.3)+ `LUA_WAITER_GATE`(等待队列原子入队,§8.2;实现期补充)。
+> 脚本全集(6 个,实现与本文对齐):`LUA_ROUTE_PLACE` / `LUA_EVICT` / `LUA_TOUCH` / `LUA_SWEEP_IDLE_NOTIFY`(核心 4 个,下文全文)+ `LUA_REGISTER_POD`(acquire 成功登记,§5.2)+ `LUA_CLEANUP_POD`(notify_pod_dead 清注册,§2.3)。(`LUA_WAITER_GATE` 等待队列闸门已随 2026-09 场景 F 快失败拆除,历史见 §8.2/feature 文档。)
 >
 > **调用约定(2026-08-29 cluster 兼容)**:键名在脚本内由 `ARGV[1]`(键前缀
 > `{session_manager}:`,hash tag)拼出;调用侧把前缀同时声明为 `KEYS[1]` 作路由锚
@@ -282,7 +280,6 @@
 
 # 3. 惰性兜底:绑定存在但已过期,或 group/bot 变了导致 scope_id 不同 → 先回收旧绑定。
 #    "惰性"= 在访问当场发现 session 已死就立即清理,不等 sweeper 下一 tick。
-#    EVICT 内部会 PUBLISH 旧 scope 的 free,唤醒其上等额度的 route。
 #    空在此处不触发 idle_consider(统一交 sweeper 空 Pod pass,见 §5.4)。
 3. if existing:
       内部走 EVICT 逻辑(用 existing.scope_id/pod_id)
@@ -337,11 +334,8 @@ ZREM session_expiry session_id
 DEL session:{session_id}
 
 remaining = SCARD(pod:{scope_id}:{pod_id}:sessions)   # 该 Pod 剩余 session 数(观测/调试用)
-
-# 唤醒该 scope 上因额度满而阻塞的 route(route 的 wait_free 订阅此 channel)。
-# 注意:不在此触发 idle_consider——空 Pod 回收统一由 sweeper 空 Pod pass 驱动(§5.4),
+# 注意:不触发 idle_consider——空 Pod 回收统一由 sweeper 空 Pod pass 驱动(§5.4),
 # 避免 evict 的每条调用路径都重复 idle_consider 逻辑与去重判断。
-PUBLISH scope:{scope_id}:free "1"
 return {scope_id, pod_id, remaining}
 ```
 
@@ -388,18 +382,6 @@ return {touched:true}
 ```
 > 竞态 A(route 直选复用)由本脚本的原子 `ZREM scope:pods` 堵——该 Pod 即刻退出 first-fit 候选,reclaim 窗口内 route 不再选。完整论证见 §13.1 / RM spec §5.4.1。
 
-**`LUA_WAITER_GATE(scope_id, request_id, max_waiters)`** —— 等待队列原子入队(§8.2 场景 F;实现期补充)。设计初稿为「先 `SCARD` 再 `SADD`」两步,M6 真环境验收发现并发同时到达的请求都会读到旧计数而**全部入队**,`max_waiters` 上限失效(超收);改为单脚本原子完成:
-```
-# SADD 先行 + SCARD 超限自退:同批并发请求在 Redis 单线程内串行执行本脚本,
-# 后到者看到含自己的真实计数,超出上限即自退并快失败。
-1. SADD scope:{scope_id}:waiters request_id
-2. if SCARD(scope:{scope_id}:waiters) > max_waiters:
-      SREM scope:{scope_id}:waiters request_id
-      return {admitted:false}            # → 503 SCOPE_QUEUE_FULL(不阻塞)
-   return {admitted:true}                # → SUBSCRIBE free 等 scope_full_timeout
-```
-> 注意顺序语义:SADD 在前意味着**瞬时 SCARD 可能短暂达到 max_waiters+N**(N=并发批大小),但每个超限者立即自退,稳态下 `SCARD ≤ max_waiters` 恒成立;被拒请求 ms 级返回,不占连接。回归用例:`test_route_concurrent_burst_respects_queue_cap`。
-
 ### 5.2 route 编排(handler)
 ```
 # scope_id 派生(SDK 字段名为 service_id):md5(group_id+bot_id);同一 (group_id,bot_id) 的所有请求落同一 scope。
@@ -414,7 +396,6 @@ scope_config = resolve(scope_id, group_id, bot_id, user_id)
 # 容量数学(见术语表):pod_concurrency = 单 Pod 满载容量(per-scope 独占);max_pods = 本 scope 的 Pod 数上限。
 max_pods = ceil(scope_config.scope_concurrency / scope_config.pod_concurrency)
 
-deadline = now + scope_full_timeout                                   # scope 满时阻塞等待的上限,默认 30s
 pod_spec = extract_pod_spec(scope_config.template)                    # acquire 时下发给 Resource Manager 的部署子集
 
 loop:
@@ -432,10 +413,7 @@ loop:
         return out
 
     if result.action == "scope_full":
-        # scope 额度满:原子入队(LUA_WAITER_GATE:SADD 先行 + 超限自退,见 §5.1/§8.2);被拒 → 快失败 SCOPE_QUEUE_FULL。
-        if now >= deadline: raise SCOPE_FULL_TIMEOUT(504)             # 超 deadline → 504
-        await wait_free(scope_id, deadline)                        # SUBSCRIBE scope:{scope_id}:free + ≤500ms 安全轮询
-        continue                                                      # 唤醒后重跑 Lua;原子 admit 是唯一仲裁,败者重 wait
+        raise SCOPE_FULL(503, retry_after=1)                          # 场景 F 快失败(2026-09):不排队不订阅,背压交 gateway 退避
 
     if result.action == "need_acquire":
         # 现有 Pod 都满且未达 max_pods:调 resource_manager 扩 +1 Pod(经进程内 rm_facade)。
@@ -447,7 +425,7 @@ loop:
         # deploy_ver = 本次 acquire 所用 deploy 子集的 hash 指纹,注册时记入 pod:info;config_sync A 类变更据此判定日落(§4.3)。
         continue                                                      # 重跑 ROUTE_PLACE(新 Pod 必被 first-fit 选中)
 ```
-**阻塞语义**:`scope_full` 时 `wait_free` = `SUBSCRIBE scope:{scope_id}:free` + 每 ≤500ms 安全轮询(兜"publish 早于 subscribe"的丢失),至 deadline → 504。唤醒后重跑 Lua,Lua 的原子 admit 是唯一仲裁,多等待者并发安全(败者重 wait)。
+**快失败语义**(2026-09 起):`scope_full` 时 Lua 闸门即唯一仲裁,被拒者毫秒级 503 返回——无等待队列、无 pubsub 订阅、拒绝路径零 Redis 写入。历史的有界等待(pubsub 唤醒 + 安全轮询双保险)已整体拆除,见 docs/feature/2026-09-scope-full-fastfail.md。
 
 ### 5.3 touch / notify_pod_dead
 - **touch**:直接 `redis.eval(LUA_TOUCH, session_id, now)`(惰性 evict 由脚本内处理;空 Pod 回收交 sweeper)。
@@ -492,7 +470,6 @@ loop:
 | 计数无漂移 | SCARD 派生,无独立计数器 |
 | 崩溃安全 | 崩溃只可能"已 commit 已返回"或"未 commit";无 detached 占位;未清理 session 由 sweeper 老化回收 |
 | TTL 正确 | 惰性(访问校验)+ 主动(sweeper)双层,互相兜底盲区 |
-| 阻塞唤醒不丢 | pubsub 唤醒 + 安全轮询双保险 |
 | 幂等 | `route` 包在框架 `ctx.idempotency`(key=request_id)内,重放返回缓存结果不重复抢额度 |
 | 无空 Pod 泄漏 | 空 Pod 回收只在 sweeper 扫 `pods:registered` 统一驱动,覆盖 evict / 惰性 / 孤儿 Pod 全部成因,≤1 tick 内考虑回收 |
 | reclaim 窗口内无新 session | `LUA_SWEEP_IDLE_NOTIFY` 发 `idle_consider` 前**原子 `ZREM scope:pods`**,该 Pod 即刻退出 first-fit 候选;route 的 `LUA_ROUTE_PLACE` 不再选中 → RM 自治 reclaim 期间 SM 不会 route 新 session 上去(竞态 A) |
@@ -501,28 +478,24 @@ loop:
 
 ## 7. 错误码与边界
 
-- `SCOPE_FULL_TIMEOUT`(504):scope 闸门阻塞至 deadline(队列内等待者)。
-- `SCOPE_QUEUE_FULL`(503):scope 等待队列已满,**快失败不阻塞**(见 §8)。
+- `SCOPE_FULL`(503):scope 闸门(活跃会话达 scope_concurrency,或 Pod 全满且达 max_pods),**立即快失败不阻塞**(2026-09 起替代原 504/队列满两码)。
 - `NO_POD_AVAILABLE`(503):Resource `acquire` 失败(`MAX_SERVICES_REACHED` / `DEPLOY_FAILED`)。
 - `CONFIG_NOT_FOUND`(503):resolve 无匹配 template。
 - `VALIDATION`(400):缺 `session_id` / `group_id` / `bot_id`。
 - 边界:`scope_concurrency=0` → 全部 `scope_full` → 504。
 
-> **过载信号契约**:过载类响应(`SCOPE_QUEUE_FULL` / `SCOPE_FULL_TIMEOUT` / `NO_POD_AVAILABLE`)均带 `Retry-After`(秒)+ `error_code`;gateway 据此判"可重试 vs 不可重试"与退避节奏(`CONFIG_NOT_FOUND` / `VALIDATION` 不可重试)。详见 §8。
+> **过载信号契约**:过载类响应(`SCOPE_FULL` / `NO_POD_AVAILABLE`)均带 `Retry-After`(秒)+ `error_code`;gateway 据此判"可重试 vs 不可重试"与退避节奏(`CONFIG_NOT_FOUND` / `VALIDATION` 不可重试)。详见 §8。
 - single-pod 模式(`scope_concurrency ≤ pod_concurrency`,`max_pods=1`):一个 Pod 即可容纳全部额度,`need_acquire` 至多触发一次,行为与改动前一致。
 
 **可调参数默认值**(均在 `applications/session_manager/config.py`,可按 template 覆盖):
 
 | 参数 | 默认 | 含义 |
 |---|---|---|
-| `scope_full_timeout` | 30s | scope 满时(队列内)route 阻塞上限,超则 504 |
-| `max_waiters` | 2×scope_concurrency | 每 scope 等待队列上限,超限快失败 `SCOPE_QUEUE_FULL`(见 §8) |
 | `sweeper_tick` | 1s | sweeper 扫描周期 |
 | `lock:sweep` TTL | 2s | sweeper tick 选主锁(tick=1s 留余量) |
 | `idle_notified` TTL | 60s | 空 Pod 通知去重窗口,过期可重试 |
 | `default_session_ttl` | 60s | session HASH 缺 `session_ttl` 字段时的兜底(正常不触发;与 template `session_ttl` 默认一致) |
 | `scope:{scope_id}:config` TTL | 无 | 显式失效(config_sync `DEL`),不走 TTL |
-| `wait_free` 安全轮询 | ≤500ms | pubsub 丢信号时的兜底重查周期 |
 | idempotency window | 60s | 框架 `ctx.idempotency` 默认(route 结果缓存) |
 
 ---
@@ -536,19 +509,16 @@ loop:
 
 | `error_code` | HTTP | 可重试 | 含义 |
 |---|---|---|---|
-| `SCOPE_QUEUE_FULL` | 503 | ✅ | 等待队列已满,快失败(不阻塞) |
-| `SCOPE_FULL_TIMEOUT` | 504 | ✅ | 队列内等待至 deadline 仍无额度 |
+| `SCOPE_FULL` | 503 | ✅ | scope 满/达总容量,立即快失败(2026-09 起) |
 | `NO_POD_AVAILABLE` | 503 | ✅ | Resource 部署失败(infra 暂时) |
 | `CONFIG_NOT_FOUND` | 503 | ❌ | 无匹配配置(永久,重试无意义) |
 | `VALIDATION` | 400 | ❌ | 参数错 |
 
-> gateway 必须**读 `error_code`,不能只看状态码**:`CONFIG_NOT_FOUND` 与 `SCOPE_QUEUE_FULL` 都是 503,语义相反。
+> gateway 必须**读 `error_code`,不能只看状态码**:`CONFIG_NOT_FOUND` 与 `SCOPE_FULL` 都是 503,语义相反。
 
-### 8.2 SM 侧(v1):有界等待队列 + 快失败
-- 每 scope 维护等待者上限 `max_waiters`(默认 `2 × scope_concurrency`,见 §7 默认表)。
-- `route` 收到 Lua 返回 `scope_full` 后:**经 `LUA_WAITER_GATE`(§5.1)原子入队**——SADD 先行、超限自退, admitted → `wait_free` 等 `scope_full_timeout`;**被拒 → 立即 503 `SCOPE_QUEUE_FULL` + `Retry-After`,不阻塞**(每拒一个 ms 级、不占连接)。
-- 入队必须是原子闸门:实现初稿的「先 SCARD 判数再 SADD」在并发同时到达时都读到旧计数而全部入队(超收,M6 真环境验收场景 F 发现的竞态);SADD 先行 + 超限自退后稳态 `SCARD ≤ max_waiters` 恒成立。
-- 效果:突发 N 个超额请求 → 最多 `max_waiters` 个占连接等待,其余 ms 级快失败;**资源占用被硬上限封顶**,不随突发线性增长。SM 因此能扛住突发而不耗尽连接/协程。
+### 8.2 SM 侧:容量满立即快失败(2026-09 起)
+- `route` 收到 Lua 返回 `scope_full` → **立即 503 `SCOPE_FULL` + `Retry-After`**:不排队、不订阅、不占连接,拒绝路径零额外 Redis 资源——资源占用天然封顶在"每请求一条短命令"。
+- 历史:v1 为「有界等待队列 + 快失败」(等待者 ZSET + `LUA_WAITER_GATE` 原子闸门 + pubsub 唤醒),因 redis-py asyncio `RedisCluster` 无 pubsub 实现且等待资源占用与控制面定位不匹配而整体拆除;拆除前该机制的竞态修复(M6 超收/C7 丢唤醒/C9 幽灵名额)记录于 docs/feature/2026-08-27-audit-e2e-repro-fixes.md,缺陷面随机制消失。
 
 ### 8.3 gateway 侧(本设计仅定义契约;实现属 gateway EE,不在本服务范围)
 - 读 `error_code`:仅可重试类才重试。
@@ -560,10 +530,9 @@ loop:
 固定延迟重试会让被拒的 N 个请求在**同一时刻**再次打到 SM → 周期性尖峰 → SM 反复过载、无法恢复(重试风暴)。`random(0, window)` 把重试摊开;attempt 增大 → 窗口变宽 → 摊得更散 → 每秒到达 SM 的重试 ≤ 准入率(`scope_concurrency / session_ttl`),系统必然收敛。
 
 ### 8.5 突发示例
-1000 个新会话同时到来、`scope_concurrency=100`:`scope:sessions` 1→100(100 过闸,部分触发扩 Pod);其余 900 命中 `SCOPE_QUEUE_FULL` / `SCOPE_FULL` → SM ms 级回 503 + `Retry-After`;gateway full-jitter 退避 → 重试被打散 → SM 每秒只受 ~准入率个新请求,平缓收敛;预算耗尽者给"稍后再试"。
+1000 个新会话同时到来、`scope_concurrency=100`:`scope:sessions` 1→100(100 过闸,部分触发扩 Pod);其余 900 命中 `SCOPE_FULL` → SM ms 级回 503 + `Retry-After`;gateway full-jitter 退避 → 重试被打散 → SM 每秒只受 ~准入率个新请求,平缓收敛;预算耗尽者给"稍后再试"。
 
 ### 8.6 follow-up(非 v1)
-- `BLPOP` 令牌队列替代 pubsub 广播(每释放一额度只唤醒一个,彻底去惊群);
 - `acquire` 异步化(不阻塞请求至 deploy 完成);
 - gateway 盲粗粒度限流(防病态洪峰打满连接 accept)。
 
@@ -638,11 +607,11 @@ agent-runtime/applications/orchestrator/   # 【合并壳】合并服务的唯�
 ## 12. 测试策略
 
 - **单元(fakeredis)**:`LUA_ROUTE_PLACE`(affinity-refresh / 惰性 evict / `scope_full` / first-fit 顺序 / `need_acquire` / `max_pods` 封顶 / 复用 Pod 清 idle_notified / **`ZREM scope:pods` 后该 Pod 不被 first-fit 选中**)、`LUA_EVICT`、`LUA_TOUCH`、`LUA_SWEEP_IDLE_NOTIFY`(**空 Pod pass 原子性:SCARD==0 + SET NX + ZREM 单脚本** / **非空 Pod 不通知不 ZREM** / **60s 去重**)、sweeper(到期 pass + 空 Pod pass,含孤儿 Pod)、错误码映射、config_sync op。
-  - ⚠️ 已知陷阱(memory):fakeredis 消费组 id=`"0"` bug、pubsub 需共享 FakeServer;ZSET/EVAL/Lua 在 fakeredis 可用,`PUBLISH` 在 EVAL 内可用,需验证;不支持则相关用例移到真 Redis 层。
+  - ⚠️ 已知陷阱(memory):fakeredis 消费组 id=`"0"` bug;ZSET/EVAL/Lua 在 fakeredis 可用;不支持则相关用例移到真 Redis 层。
   - ⚠️ `ctx.redis`(M0 框架扩展)需配 fakeredis 验证 handler 经它读写跨"副本"可见。
 - **组件(直接调 Facade + stub 对方 Facade)**:`route` 全链路(resolve→闸门→选 Pod→`rm_facade.acquire`)、`touch` 续期、`notify_pod_dead` 反查清洗、`config_sync` 写库 + 失效;RM 孤儿对账 sweeper 调真实 `sm_facade`。sysctx 惰性建(进程内构造不跑 lifespan,需手动 start/stop)。
 - **并发/容量**:突发新 session 测 `scope_full`→504 + 经 acquire 扩 Pod;多 Pod first-fit 分布;亲和粘性;老化回收 + `idle_consider`;single-pod 模式行为不变。**reclaim 窗口安全**:ZREM 后 route 不选该 Pod;**`idle_consider` 丢失自愈**:经 60s `idle_notified` 过期重发,且 RM 侧孤儿对账 sweeper `reconcile_pods` 兜底将 stale Pod 移入 idle。
-- **集成(真 Redis,CI)**:Lua 原子性、sweeper 跨副本选主(多 worker)、pubsub 唤醒、共享 DB 多副本 resolve 一致。
+- **集成(真 Redis,CI)**:Lua 原子性、sweeper 跨副本选主(多 worker)、共享 DB 多副本 resolve 一致。
 
 ---
 
@@ -661,7 +630,7 @@ agent-runtime/applications/orchestrator/   # 【合并壳】合并服务的唯�
    - **周期对账 Facade `SessionManagerFacade.reconcile_pods`(2026-08-10 新增,合并后从 REST 改进程内 Facade)**:SM 暴露 `reconcile_pods(view)`(§2.5),RM 每 30s 经 Facade 调用,消除「RM 持有 Pod、SM 已不用」的孤儿 Pod(`idle_consider` 丢失 / SM 重启漂移)。SM 对入参每个 (pod,scope) 查 `scope:{scope_id}:pods` 成员资格,非成员返回 `stale`;RM 将 stale Pod 移入 idle → 按 `pod_ttl` 回收。**只读、单向**(RM 不直读 SM Redis,跨模块只走 Facade)。
 2. **resolve 匹配算法**:`(group_id, bot_id, user_id) → template_id` 的 template_ref / service_policy 精确匹配逻辑,从现有 gateway 路由定位并移植——留实现计划。
 3. **routing_rule schema**:`config_sync` 的 `kind=routing_rule` 数据结构——留实现计划(部分新增)。
-4. **scope_full_timeout**:作为 Session Manager 配置项,默认 30s(可按 template 覆盖)。
+4. ~~**scope_full_timeout**~~:已随 2026-09 场景 F 快失败移除(等待机制不复存在)。
 5. **idempotency in-flight 语义**:依赖框架 `ctx.idempotency` 对在途 request_id 的处理,实现阶段验证。
 6. **并发 acquire 可能轻微超配**:同一 scope 多个 route 同时 `need_acquire` → 各自调 Resource `acquire` → 部署多个 Pod(first-fit 只用一个,余者空置待 sweeper idle_consider 回收)。自愈但浪费一次 deploy。若需避免,可加 per-scope acquire 分布式锁合流——留 follow-up,非正确性问题。
 7. **routing_rule 完整 service_policy**:v1 最小映射表已定(§4.1);user_id 精细策略 / template_ref 规则留 follow-up。

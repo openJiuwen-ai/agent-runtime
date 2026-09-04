@@ -9,9 +9,9 @@
 | 文件 | 职责 |
 |---|---|
 | `handlers.py` | 5 个 HTTP handler(route/touch/config_sync/config_refresh/cleanup)+ 错误信封映射 |
-| `orchestrator.py` | route 主循环(匹配→Lua 仲裁→acquire→等待队列)+ touch |
+| `orchestrator.py` | route 主循环(匹配→Lua 仲裁→acquire)+ touch |
 | `state.py` | SM Redis 键 schema 唯一出口 + Lua 调用封装(`SMKeys`/`SessionState`) |
-| `lua_scripts.py` | 7 个 Lua 全文 |
+| `lua_scripts.py` | 6 个 Lua 全文 |
 | `routing.py` | 路由匹配纯函数:routing_rules 表达式解析(词法+递归下降)/scope 定义、wire 校验、快照(反)序列化、first-fit 匹配 |
 | `config_store.py` | template/service_config_container/routing_scope DB 持久化 + 路由快照 + config_sync 编排 |
 | `container_spec.py` | 容器规范形层:K8s 形态 wire 解析/校验 + volumes×volumeMounts join + 主/sidecar 投影(SM 私有纯函数) |
@@ -43,29 +43,20 @@
 四参非空校验(缺 → InvalidParams 400)
 → resolve(user_id, group_id, bot_id)(config_store:读路由快照 first-fit 匹配)
    返回 (scope_id, template);无匹配 → ConfigNotFound(503)
-→ 循环 { **总预算校验(2026-09 契约修正:total_deadline = now + scope_full_timeout
-     + template.ready_timeout + ROUTE_BUDGET_MARGIN_SEC(10s),每圈 monotonic 复核。
+→ 循环 { **总预算校验:total_deadline = now + template.ready_timeout
+     + ROUTE_BUDGET_MARGIN_SEC(10s),每圈 monotonic 复核。
      总预算封的是 need_acquire 的无上界循环(一轮可触发完整 deploy,ready_timeout
-     量级;无总预算时单请求可阻塞 max_pods×ready_timeout 且持续扩 Pod)。★推导式
-     而非拍平复用队列预算——部署模板 scope_full_timeout=8 是按队列语义调的值,
-     真镜像冷部署 15-25s 会让首个请求必 504(2026-09-01 真环境门禁实测教训);
-     排队等待 deadline 仍为 scope_full_timeout(场景 F 语义不变)。超预算 → 504
-     ScopeFullTimeout,RM acquire 照常完成并落 idem 缓存(TTL 60s),gateway 同
-     request_id 重试即幂等回放)**
+     量级;无总预算时单请求可阻塞 max_pods×ready_timeout 且持续扩 Pod)。超预算 →
+     503 NoPodAvailable(acquire 侧粗化惯例,WARNING 留真因;2026-09 场景 F 快失败
+     后队列预算分量已拆除),RM acquire 照常完成并落 idem 缓存(TTL 60s),gateway
+     同 request_id 重试即幂等回放**
      LUA_ROUTE_PLACE 原子仲裁 → (action, pod_id):
      refresh/placed → 读 pod:info sse_url 返回(缺失=极端竞态被清,continue 重跑;
                      refresh 分支有 info 存活守卫,下一轮惰性回收死绑定重新放置,不构成自旋)
-     scope_full     → _wait_for_capacity(场景 F)后重跑
+     scope_full     → 立即 raise ScopeFull(503, retry_after=1)——场景 F 快失败
+                     (2026-09):不排队不订阅,Lua 闸门即唯一仲裁,被拒者毫秒级返回
      need_acquire   → rm_facade.acquire(扩+1)→ state.register_pod → 重跑(新 Pod 必被 first-fit 选中) }
 ```
-
-`_wait_for_capacity`(场景 F 有界等待):
-- `max_waiters = 2 * scope_concurrency`;过 deadline(`scope_full_timeout`)→ 504 ScopeFullTimeout。
-- **入队只走 `LUA_WAITER_GATE` 原子闸门**(ZSET+deadline:先清过期成员再 ZADD 先行+超限自退);满 → 503 ScopeQueueFull 快失败。
-- **finally 逐级保护(2026-09 加固)**:`remove_waiter → unsubscribe → aclose` 三步各自 try/except——首步抛错(Redis 抖动)不得吞掉原始 ScopeFullTimeout/ScopeQueueFull(用户将拿 500 而非 504/503),也不得跳过 pubsub 收尾(连接泄漏)。
-- **等待者成员资格全程保持**(入队一次、退出删一次;中途删/加的空窗会让 max_waiters 上限漏收)。
-- 订阅 `scope:{sid}:free` PubSub + ≤500ms 安全轮询双保险(兜 publish 早于 subscribe 的丢失):
-  收到信号 → 返回重跑;**轮询超时无信号 → 经 re_arbitrate 就地重跑 ROUTE_PLACE**,非 scope_full 即返回——原子 admit 是唯一仲裁,丢信号后 ~0.5s 内仍能拿到空闲额度而非空等满 30s。
 
 `_acquire_pod`:`MaxPodsReached`/`DeployFailed` → 映射 `NoPodAvailable(503, retry_after=1)`。
 
@@ -81,8 +72,6 @@
 | `scope:{sid}:sessions` | SET | 活跃 session;**SCARD = scope_concurrency 闸门** |
 | `scope:{sid}:pods` | ZSET | first-fit 候选(score=接入序;ZREM 即退出候选——软摘除/idle 通知都用它) |
 | `scope:{sid}:pod_seq` | STRING | 单调递增,pods 的 score 来源 |
-| `scope:{sid}:waiters` | ZSET | 等待队列(request_id → deadline 秒级时间戳;LUA_WAITER_GATE 原子进出;score=deadline 供闸门清理崩溃遗留——等待进程消失后名额不永久占用) |
-| `scope:{sid}:free` | PubSub | 额度释放信号(EVICT 发布/route 订阅) |
 | `pod:{scope}:{pod}:sessions` | SET | per-Pod 会话;**SCARD < pod_concurrency = per-Pod 容量闸门(SM 侧,RM 不强制)** |
 | `pod:{scope}:{pod}:info` | HASH | sse_url / deploy_ver |
 | `pod:{scope}:{pod}:idle_notified` | STR(NX EX 60) | 空 Pod 通知去重 |
@@ -90,23 +79,22 @@
 | `pods:{pod}:scopes` | SET | Pod 被哪些 scope 引用(notify_pod_dead 反查) |
 | `lock:sweep` / `lock:config_sync` | STR(NX EX) | tick 级选主 / config_sync 串行化(TTL 60) |
 
-不变量 1:一个活跃会话同时存在于四处(session HASH + scope:sessions + pod:sessions + session_expiry)——EVICT/惰性回收四处同删 + PUBLISH free。
+不变量 1:一个活跃会话同时存在于四处(session HASH + scope:sessions + pod:sessions + session_expiry)——EVICT/惰性回收四处同删。
 
 `eval()` 统一出口带异常留痕(排障):Lua 返回空表属真异常 → WARNING(`route_place` 的 scope_full 兜底会掩盖);单次 >200ms → WARNING(`lua eval slow`,即 Redis 延迟探针);常规仅 DEBUG。
 
 **诊断只读方法**(/visualization/* 用,无业务调用方):`session_hash(sid)`、`session_expiry_score(sid)`、`scope_session_count(sid)`(SCARD)、`routing_snapshot_raw()`(快照原文)。
 
-## lua_scripts.py —— 7 个 Lua
+## lua_scripts.py —— 6 个 Lua
 
 | 脚本 | 一句话职责 |
 |---|---|
 | `LUA_ROUTE_PLACE` | route 原子核心:**残骸自卫(2026-09,同 EVICT:缺 scope_id/pod_id/expiry 的半成品哈希自清两处后落穿全新放置——nil 比较/nil 拼接是 Lua runtime error,该会话 route 永久 500)**→亲和续期(**前提 pod:info 存在**——注册已被清的绑定判死,惰性回收后走重新放置;否则 notify_pod_dead 窗口内新落的会话会无限自旋且每圈续期 expiry)→惰性回收旧绑定→scope 闸门(SCARD)→first-fit(接入序)→达 max_pods 则 scope_full / 否则 need_acquire→原子提交四处同写(复用时清 idle_notified) |
-| `LUA_EVICT` | session 移除**唯一原语**(四处同删 + PUBLISH free 唤醒等待者;返回 scope/pod/remaining;幂等 noop;**残骸自卫**:哈希缺 scope/pod(外部直改键半成品)→ 自清两处返回 rubble,调用侧 WARNING——单坏键不得使到期 pass 崩溃循环) |
+| `LUA_EVICT` | session 移除**唯一原语**(四处同删;返回 scope/pod/remaining;幂等 noop;**残骸自卫**:哈希缺 scope/pod(外部直改键半成品)→ 自清两处返回 rubble,调用侧 WARNING——单坏键不得使到期 pass 崩溃循环) |
 | `LUA_TOUCH` | 保活续期;**残骸自卫(2026-09,同 EVICT:缺 scope_id/pod_id/expiry 自清返回 False,不得 Lua runtime error)**;已过期当场惰性 evict;ttl 就地读 session HASH(不依赖 scope:config) |
 | `LUA_SWEEP_IDLE_NOTIFY` | 空 Pod 判定(SCARD==0)+ 60s NX 去重 + ZREM 退出候选(堵 reclaim 窗口内 route 直选的竞态 A) |
 | `LUA_REGISTER_POD` | acquire 成功登记:三处注册(scope:pods/pod:info/pods:registered)+ 接入序 + pods:{pod}:scopes |
 | `LUA_CLEANUP_POD` | notify_pod_dead 清该 (scope,pod) 全部注册(会话 evict 由调用方先行) |
-| `LUA_WAITER_GATE` | 等待队列原子入队(ZREMRANGEBYSCORE 清过期 + ZADD 先行 + ZCARD 超限自退)——**禁止改回「先查后加」**(M6 验收发现的并发超收事故);ZSET+deadline 使崩溃遗留名额自清 |
 
 约定:脚本不传 KEYS,`ARGV[1]`=键前缀,键在脚本内拼;返回扁平字符串数组(`SessionState.eval` 统一转 str)。
 
@@ -221,8 +209,6 @@ lock:config_sync 串行化(忙→409 CONFIG_SYNC_BUSY;基线 TTL 60 + **看门�
 ## 高频踩点
 
 - 改键名/Lua:HLD §5 键表、`state.py`、SM 详细设计三处同步。
-- 等待队列入队只准走 `LUA_WAITER_GATE`;「先查后加」已被真环境验收证伪。
 - config_sync 全局串行锁——e2e 脚本播种配置必须串行,并发即 409。
 - scope_id 禁 `:`(Redis 键与 `pods:registered` 的 `{scope}:{pod}` 切分依赖)——入口 `SCOPE_ID_RE` 强校验,新增拼键代码时勿破坏该前提。
 - config_sync 的 RM 推送**必须带 pod_spec**(eager 预热依赖 pod_spec_json;不带则 autoscale `skip_no_spec`,无请求 scope 永远不预热)。
-- 经多副本 LB 跑冒烟须设 `AGENT_RUNTIME_SCOPE_FULL_TIMEOUT`(显著小于 session_ttl),排查实录见 `e2e-test-cases.md` §8.1。

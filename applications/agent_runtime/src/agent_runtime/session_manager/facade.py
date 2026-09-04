@@ -2,7 +2,7 @@
 """SessionManagerFacade：RM → SM 的进程内调用入口（SM 设计 §2.3 / §2.5）。
 
 - notify_pod_dead(pod_id)：Pod 死亡 / reclaim 两种场景都经此清洗（场景 G）——
-  逐 session evict（释放额度 + 唤醒等待者）→ 清该 Pod 全部 SM 注册；幂等。
+  逐 session evict（释放额度）→ 清该 Pod 全部 SM 注册；幂等。
 - reconcile_pods(view)：孤儿对账（场景 L）——SM 对每个 (pod, scope) 查
   scope:pods 成员资格，非成员 = SM 已不用 → stale；只读、幂等、单向。
 """
@@ -31,7 +31,7 @@ class SessionManagerFacade:
         invalidated: list[str] = []
         for scope_id in await self.state.pod_scopes(pod_id):
             for session_id in await self.state.pod_session_ids(scope_id, pod_id):
-                await self.state.evict(session_id)   # 原子：四处同删 + PUBLISH free
+                await self.state.evict(session_id)   # 原子：四处同删
                 invalidated.append(session_id)
             await self.state.cleanup_pod(scope_id, pod_id)
         if invalidated:

@@ -11,7 +11,7 @@
   [0] 环境自证：旧式双键 EVAL 必炸（证明目标是真 cluster，防假绿）
   [1] bootstrap：``redis+cluster://`` 构造集群客户端；URL 带库号快速失败
   [2] 选主协调器：抽签（winner/candidates 经 hash tag 同槽）
-  [3] SM 状态层：route_place / register_pod / touch / evict / 等待队列
+  [3] SM 状态层：route_place / register_pod / touch / evict
   [4] RM 状态层：acquire / scope 配置 / known_scope_ids（SCAN dict 游标）
 
 用法（applications/agent_runtime 下）：
@@ -129,10 +129,6 @@ async def verify(url: str, wipe: bool) -> int:
     evicted = await sm.evict("v-s1")
     check("SM: evict 四处同删", evicted is not None
           and evicted.get("scope_id") == "v-scope")
-    queued = await sm.try_add_waiter("v-scope", "v-req-1", max_waiters=5,
-                                     deadline_ts=now + 30)
-    check("SM: 等待队列原子入队", queued is True)
-    await sm.remove_waiter("v-scope", "v-req-1")
 
     # [4] RM 状态层
     rm = ResourceState(client)

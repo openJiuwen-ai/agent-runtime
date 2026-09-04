@@ -2,8 +2,8 @@
 """pytest 共享 fixtures：fakeredis + SM/RM 状态门面。
 
 fakeredis 注意事项（CLAUDE.md 陷阱清单）：
-- pubsub 需共享同一 FakeRedis 实例（本文件所有门面共享同一 client）；
-- EVAL 内 PUBLISH 依赖 lupa（fakeredis[lua]）；缺失时相关用例自动 skip。
+- 所有门面必须共享同一 FakeRedis 实例（共享状态语义）；
+- EVAL（Lua）依赖 lupa（fakeredis[lua]）；缺失时相关用例自动 skip。
 """
 
 from __future__ import annotations
@@ -261,7 +261,7 @@ class Runtime:
     """组件全链路装配：SM（orchestrator/sweeper/facade/config_store）+ RM
     （orchestrator/sweeper/facade）+ FakeK8s，共享一个 fakeredis。"""
 
-    def __init__(self, db, redis_client, k8s, *, scope_full_timeout: float = 30.0):
+    def __init__(self, db, redis_client, k8s):
         from agent_runtime.resource_manager.facade import ResourceManagerFacade
         from agent_runtime.resource_manager.orchestrator import ResourceOrchestrator
         from agent_runtime.resource_manager.sweeper import ResourceSweeper
@@ -299,7 +299,6 @@ class Runtime:
         )
         self.orchestrator = SessionOrchestrator(
             self.sm_state, self.config_store, self.rm_facade,
-            scope_full_timeout=scope_full_timeout,
         )
         self.sm_sweeper = SessionSweeper(self.sm_state, self.rm_facade)
         self.rm_sweeper = ResourceSweeper(

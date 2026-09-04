@@ -140,20 +140,20 @@ async def test_route_lazy_evict_expired_binding(sm_state, placed):
 
 
 @requires_lua
-async def test_route_lazy_evict_publishes_free_signal(sm_state, placed):
-    """惰性回收旧 scope 绑定时 PUBLISH 旧 scope 的 free 通道（唤醒等待者）。"""
+async def test_teardown_clean_no_waiter_or_free_keys(sm_state, placed):
+    """拆除净空回归（2026-09 场景 F 快失败）：evict / touch 惰性驱逐 /
+    route 惰性回收后不得创建 waiters ZSET 或 free 通道类键。"""
     await placed()
-    pubsub = sm_state.redis.pubsub()
-    await pubsub.subscribe(sm_state.k.scope_free_channel(SCOPE))
-    try:
-        await sm_state.route_place("sess_1", SCOPE, NOW + 200, 60, 3, 2, 2, NOW + 100)
-        message = await pubsub.get_message(timeout=1)  # subscribe 确认帧
-        while message and message["type"] != "message":
-            message = await pubsub.get_message(timeout=1)
-        assert message is not None and message["data"] == b"1"
-    finally:
-        await pubsub.unsubscribe(sm_state.k.scope_free_channel(SCOPE))
-        await pubsub.aclose()
+    # touch 惰性驱逐路径
+    await sm_state.touch("sess_1", now=NOW + 100, default_ttl=60)
+    # route 惰性回收 + 重新放置路径
+    await sm_state.route_place("sess_1", SCOPE, NOW + 200, 60, 3, 2, 2, NOW + 100)
+    # evict 路径
+    await sm_state.register_pod(SCOPE, "pod_2", "http://10.0.0.2:8080/sse", "ver1")
+    await sm_state.route_place("sess_2", SCOPE, NOW + 60, 60, 3, 2, 2, NOW)
+    await sm_state.evict("sess_2")
+    assert await sm_state.redis.keys("*:waiters") == []
+    assert await sm_state.redis.keys("*:free") == []
 
 
 # ---------------------------------------------------------------- EVICT

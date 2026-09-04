@@ -5,7 +5,7 @@
 本文件专测边界与异常分支：
 
 - SM 编排：参数校验、Pod 清洗后立即 route 的恢复、会话跨 scope 迁移（活跃绑定
-  回收）、touch 惰性 evict 唤醒等待者、SM/RM 瞬时漂移 → MaxPodsReached 映射
+  回收）、SM/RM 瞬时漂移 → MaxPodsReached 映射
   NO_POD_AVAILABLE、touch 缺 session_ttl 字段回退默认 TTL；
 - RM：acquire 幂等回放零重复部署、他副本持 deploy 锁时等待并复用其成果、
   reclaim 只回收 excess（保护最早 idle 的 min_idle 个）、autoscale 封顶
@@ -111,31 +111,6 @@ async def test_session_moving_scope_recycles_active_binding(runtime):
     pod_field = binding.get("pod_id") or binding.get(b"pod_id")
     pod_field = pod_field.decode() if isinstance(pod_field, bytes) else pod_field
     assert pod_field == second["pod_id"]
-
-
-@requires_lua
-async def test_touch_expired_session_evicts_and_wakes_waiter(runtime):
-    """touch 已过期会话：返回 False + 惰性 evict + PUBLISH free →
-   阻塞中的 route 被唤醒并占到刚释放的额度（touch 侧唤醒集成）。"""
-    await runtime.seed_template(scope_concurrency=1, pod_concurrency=1)
-    first = await runtime.route("sess_1")
-    runtime.orchestrator.scope_full_timeout = 5
-
-    async def _expire_and_touch():
-        await asyncio.sleep(0.3)
-        past = now_ts() - 1
-        await runtime.sm_state.redis.zadd(
-            runtime.sm_state.k.session_expiry(), {"sess_1": past})
-        await runtime.sm_state.redis.hset(
-            runtime.sm_state.k.session("sess_1"), "expiry", past)
-        assert await runtime.orchestrator.touch("sess_1") is False
-
-    task = asyncio.get_running_loop().create_task(_expire_and_touch())
-    result = await runtime.route("sess_2")            # 阻塞 → 被 touch 唤醒
-    await task
-    assert result["pod_id"] == first["pod_id"]
-    assert await runtime.sm_state.redis.exists(
-        runtime.sm_state.k.session("sess_1")) == 0
 
 
 @requires_lua
@@ -391,63 +366,25 @@ async def test_template_removed_from_payload_scope_stops_matching(runtime):
 @requires_lua
 async def test_need_acquire_respects_total_route_budget(
         db_handler, redis_client, k8s, monkeypatch):
-    """单次 route 总预算契约:总预算 = scope_full_timeout + ready_timeout + 余量
-    (推导式,队列预算不拍平复用——真环境门禁实测冷部署 15-25s 会让队列语义的
-    8s 预算必 504)。acquire 慢于总预算时,下一圈主循环必须 504,不得无限等。"""
+    """单次 route 总预算契约:总预算 = ready_timeout + 余量(推导式;2026-09
+    场景 F 快失败后队列预算分量已拆除)。acquire 慢于总预算时,下一圈主循环
+    必须立即 503(粗化 NO_POD_AVAILABLE,WARNING 留真因),不得无限等。"""
     from agent_runtime.session_manager import orchestrator as sm_orch_module
     from tests.conftest import Runtime
 
     monkeypatch.setattr(sm_orch_module, "ROUTE_BUDGET_MARGIN_SEC", 0.0)
-    runtime = Runtime(db_handler, redis_client, k8s, scope_full_timeout=0.05)
+    runtime = Runtime(db_handler, redis_client, k8s)
     await runtime.seed_template(scope_concurrency=1, pod_concurrency=1,
                                 max_pods=2, ready_timeout=1)
     real_acquire = runtime.rm_facade.acquire
 
     async def _slow_acquire(**kwargs):
-        await asyncio.sleep(1.3)                  # deploy 慢于总预算(1.05s)
+        await asyncio.sleep(1.3)                  # deploy 慢于总预算(1.0s)
         return await real_acquire(**kwargs)
 
     monkeypatch.setattr(runtime.rm_facade, "acquire", _slow_acquire)
-    from agent_runtime.errors import ScopeFullTimeout
-    with pytest.raises(ScopeFullTimeout, match="budget"):
+    from agent_runtime.errors import NoPodAvailable
+    with pytest.raises(NoPodAvailable, match="budget"):
         await runtime.route("sess-budget")
     # 一次 acquire 的成果仍在(重试同 request_id 走幂等回放/暖池即可放置)
     assert await runtime.rm_state.pod_count("scope-main") == 1
-
-
-@requires_lua
-async def test_wait_for_capacity_finally_preserves_original_error(
-        db_handler, redis_client, k8s, monkeypatch):
-    """_wait_for_capacity 收尾逐级保护:remove_waiter 抛错不得吞掉原始
-    ScopeFullTimeout(用户将拿 500 而非 504),也不得跳过 pubsub aclose。"""
-    from agent_runtime.errors import ScopeFullTimeout
-    from tests.conftest import Runtime
-
-    runtime = Runtime(db_handler, redis_client, k8s, scope_full_timeout=0.1)
-    await runtime.seed_template(scope_concurrency=1, pod_concurrency=1,
-                                max_pods=1)
-    await runtime.route("sess-occupied")          # 占满唯一 Pod 与额度
-
-    async def _boom(*args, **kwargs):
-        raise RuntimeError("redis flaky on cleanup")
-
-    monkeypatch.setattr(runtime.sm_state, "remove_waiter", _boom)
-    real_pubsub = runtime.redis.pubsub
-    closed = []
-
-    def _pubsub():
-        ps = real_pubsub()
-        real_aclose = ps.aclose
-
-        async def _aclose():
-            closed.append(True)
-            await real_aclose()
-
-        ps.aclose = _aclose
-        return ps
-
-    monkeypatch.setattr(runtime.redis, "pubsub", _pubsub)
-
-    with pytest.raises(ScopeFullTimeout):         # 不是 RuntimeError
-        await runtime.route("sess-waiting")
-    assert closed, "pubsub 必须仍被 aclose(连接不泄漏)"

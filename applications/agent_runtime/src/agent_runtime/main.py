@@ -169,7 +169,6 @@ class OrchestratorSystemContext(SystemContext):
             sm_state,
             self.sm_config_store,
             self.rm_facade,
-            scope_full_timeout=self.arc.scope_full_timeout,
             default_session_ttl=self.arc.default_session_ttl,
         )
         self.sm_sweeper = SessionSweeper(sm_state, self.rm_facade)
@@ -239,12 +238,12 @@ class OrchestratorSystemContext(SystemContext):
             )
         self.logger.info(
             "config summary: mode=%s namespace=%s sweep=%ss autoscale=%ss "
-            "reclaim=%ss watch=%ss reconcile=%ss scope_full_timeout=%ss "
+            "reclaim=%ss watch=%ss reconcile=%ss "
             "default_session_ttl=%ss kubeconfig=%s",
             self.arc.mode, self.arc.default_namespace,
             self.arc.sweep_interval, self.arc.autoscale_interval,
             self.arc.reclaim_interval, self.arc.watch_interval,
-            self.arc.reconcile_interval, self.arc.scope_full_timeout,
+            self.arc.reconcile_interval,
             self.arc.default_session_ttl,
             "set" if self.arc.kubeconfig else "in-cluster",
         )

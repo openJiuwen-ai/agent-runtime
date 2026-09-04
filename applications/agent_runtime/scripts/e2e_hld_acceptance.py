@@ -26,7 +26,7 @@ AgentServer 原生支持 GET /health 后补验（单测已覆盖）。
   D 老化回收 / E 保活                   → 阶段 4（session_ttl 到期 → idle 暖池）
   K reclaim 自治                        → 阶段 5（回拨 idle_since，真删 K8s Pod）
   I acquire deploy 失败分支             → 阶段 6（不可拉镜像 → NO_POD_AVAILABLE + 占位清）
-  F 容量满（队列 + 快失败/超时）        → 阶段 7（并发 5 请求 → 503 + 504）
+  F 容量满（快失败）                    → 阶段 7（并发 5 请求 → 2×200 + 3×503 SCOPE_FULL）
   H min_idle 热备                       → 阶段 8（autoscale 预建热备 Pod）
   G 死 Pod 会话清洗 / J 死 Pod 探测     → 阶段 9（kubectl 删 Pod → watch 兜底 → 会话失效）
   N 半死探测                            → 【暂缓】待 AgentServer 原生支持 GET /health
@@ -573,8 +573,8 @@ async def stage2_route_abc(c: Client, r) -> dict:
           first.get("pod_id") == second.get("pod_id")
           and await r.scard(f"{SM_PREFIX}scope:{MAIN}:sessions") == 3)
     # 表达式 or 支（user 白名单跨 group 命中 e2e-main）在阶段 12b 验证：
-    # 此处 e2e-main 已被 s1–s3 占满（cc=3），or 支 route 只会排队 504——
-    # 原位置仅在「部署慢、s1 先过期」的时序下碰巧 200（2026-08-27 快跑实测 504）。
+    # 此处 e2e-main 已被 s1–s3 占满（cc=3），or 支 route 只会 503 SCOPE_FULL
+    # 快失败——原位置仅在「部署慢、s1 先过期」的时序下碰巧 200。
     return state
 
 
@@ -1114,26 +1114,26 @@ async def stage6_deploy_failure(c: Client, r) -> None:
 
 
 async def stage7_queue(c: Client, r) -> None:
-    print("\n== 阶段 7：场景 F —— 容量满：等待队列 + 快失败/超时 ==")
+    print("\n== 阶段 7：场景 F —— 容量满：立即快失败（2026-09 起 SCOPE_FULL）==")
     for sid in ("f1", "f2"):                       # 2 Pod 全满（cc=2, pc=1, max=2）
         code, raw, _ = await c.post("route", session_id=sid, group="e2e-f")
         check(f"F-部署并占满 {sid}", code == 200 and raw.get("pod_id"), str(raw)[:120])
     t0 = time.monotonic()
+    # 5 并发：f1/f2 亲和续期（200）+ 3 个新会话撞 scope 闸门（503 SCOPE_FULL）
     results = await asyncio.gather(*[
-        c.post("route", session_id=f"f-over-{i}", group="e2e-f") for i in range(5)])
-    codes = [code for code, _, _ in results]
-    queue_full = [b for code, _, b in results if code == 503
-                  and b.get("error_code") == "SCOPE_QUEUE_FULL"]
-    full_timeout = [b for code, _, b in results if code == 504
-                    and b.get("error_code") == "SCOPE_FULL_TIMEOUT"]
+        c.post("route", session_id=sid, group="e2e-f")
+        for sid in ("f1", "f2", "f-over-0", "f-over-1", "f-over-2")])
     took = time.monotonic() - t0
-    check("F-队列满（max_waiters=2×cc=4）→ 快失败 503 SCOPE_QUEUE_FULL",
-          len(queue_full) >= 1, f"codes={codes} ({took:.0f}s)")
-    check("F-队列内等待 → 超时 504 SCOPE_FULL_TIMEOUT",
-          len(full_timeout) >= 2, str([b.get("error_code") for _, _, b in results]))
-    await asyncio.sleep(1)
-    check("F-等待者全部出队（finally 清理）",
-          await r.zcard(f"{SM_PREFIX}scope:{FSCOPE}:waiters") == 0)
+    ok = [raw for code, raw, _ in results if code == 200]
+    rejected = [(code, b.get("error_code")) for code, _, b in results if code != 200]
+    check("F-并发 5 = 恰好 2×200（亲和续期）+ 3×503 SCOPE_FULL",
+          len(ok) == 2 and rejected == [(503, "SCOPE_FULL")] * 3,
+          str([(code, b.get("error_code")) for code, _, b in results]))
+    check("F-快失败不等待（<1s）", took < 1.0, f"{took:.2f}s")
+    check("F-过载响应带 retry_after",
+          all(b.get("retry_after") for _, _, b in results if b.get("error_code")))
+    check("F-拆除净空：无 waiters 键",
+          not await r.keys(f"{SM_PREFIX}scope:{FSCOPE}:waiters"))
 
 
 async def stage8_warm(c: Client, r) -> dict:
@@ -1380,8 +1380,9 @@ async def stage12_reconcile_cleanup(c: Client, r) -> None:
 async def stage12b_or_branch(c: Client, r) -> None:
     """表达式 or 支(阶段 12 清场后):e2e-main 此时空闲,or 支命中可确定性 200。
 
-    原位置(阶段 2 尾)被 s1–s3 占满 cc=3,or 支 route 只能排队 504——只有
-    「部署慢、会话先过期」的时序下碰巧 200(2026-08-27 快跑实测暴露)。
+    原位置(阶段 2 尾)被 s1–s3 占满 cc=3,or 支 route 只能 503 SCOPE_FULL
+    快失败——只有「部署慢、会话先过期」的时序下碰巧 200(2026-08-27 快跑
+    实测暴露,时为排队 504;2026-09 起为快失败)。
     """
     print("\n== 阶段 12b：表达式 or 支（清场后确定性验证）==")
     code, raw_vip, _ = await c.post("route", session_id="s-vip",

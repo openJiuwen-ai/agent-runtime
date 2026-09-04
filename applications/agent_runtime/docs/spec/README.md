@@ -10,11 +10,11 @@
 |---|---|---|
 | 本文件 | 架构一页纸 + 键前缀总览 + 测试/部署入口 | 先读 |
 | [service-core.md](service-core.md) | 组装(main)/CLI/配置(`AGENT_RUNTIME_*`)/错误码契约/字段分类/工具/部署 | 改装配、配置、错误契约、部署时 |
-| [session-manager.md](session-manager.md) | SM:route/touch/config_sync/config_refresh/cleanup 编排、7 个 Lua、SM 键表 | 改会话编排/配置层时 |
+| [session-manager.md](session-manager.md) | SM:route/touch/config_sync/config_refresh/cleanup 编排、6 个 Lua、SM 键表 | 改会话编排/配置层时 |
 | [resource-manager.md](resource-manager.md) | RM:acquire/后台任务/K8s 适配、6 个 Lua、RM 键表 | 改 Pod 池/扩缩容/清理时 |
 | [e2e-test-cases.md](e2e-test-cases.md) | 全部 e2e 用例的场景/输入/预期输出 | 写或跑 e2e 时 |
 | `../design/Agent-Runtime-HLD.md` | 架构总览/接口契约/场景 A–N/Redis 键表(语义权威) | 语义不确定时 |
-| `../design/session-manager-design.md` | SM 详细设计(7 个 Lua 全文) | 深挖 SM 设计动机 |
+| `../design/session-manager-design.md` | SM 详细设计(6 个 Lua 全文) | 深挖 SM 设计动机 |
 | `../design/resource-manager-design.md` | RM 详细设计(6 个 Lua 全文) | 深挖 RM 设计动机 |
 
 ## 一页纸架构
@@ -38,7 +38,7 @@ claw mgr ──config_sync──►   ├─ session_manager   持 App,5 个 HTT
 ## Redis 键前缀总览(逐键明细见各模块 spec)
 
 ```
-{session_manager}:…    SM 编排态(会话四处/scope 闸门/等待队列/候选集/注册表/路由快照)
+{session_manager}:…    SM 编排态(会话四处/scope 闸门/候选集/注册表/路由快照)
 {resource_manager}:…   RM 编排态(per-scope Pod 池/idle 暖池/deploy 占位/follower 等待室/选主锁)
 agent_runtime:job:…    后台任务选主执行锁(main.py:_build_jobs 注册)
 {agent_runtime:job:…}:winner/candidates:…  选主抽签键(与执行锁同底,hash tag 同槽)

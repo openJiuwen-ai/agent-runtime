@@ -24,11 +24,11 @@
 ```bash
 cd applications/agent_runtime
 uv sync --extra local
-uv run pytest                 # 442 个用例:状态层 Lua(含 EVICT/TOUCH/ROUTE_PLACE 残骸自卫) / 路由匹配纯函数(含表达式解析) / config 层(含三段式契约与容器表水合、config_refresh 强制刷新、写库单事务+锁看门狗) / 容器规范形(container_spec) / envFrom / 组件全链路(含 sidecars 多容器与卷挂载) / HTTP 冒烟 / corner case / 双实例多副本 / 停机韧性 / 审计实锤回归(test_audit_repro) / 强制刷新自然老化(test_force_refresh) / 健壮性故障注入(test_k8s_io_timeouts / test_infra_faults / test_main_lifecycle,见 docs/feature/2026-09-robustness-hardening.md)
+uv run pytest                 # 433 个用例:状态层 Lua(含 EVICT/TOUCH/ROUTE_PLACE 残骸自卫) / 路由匹配纯函数(含表达式解析) / config 层(含三段式契约与容器表水合、config_refresh 强制刷新、写库单事务+锁看门狗) / 容器规范形(container_spec) / envFrom / 组件全链路(含 sidecars 多容器与卷挂载) / HTTP 冒烟 / corner case / 双实例多副本 / 停机韧性 / 审计实锤回归(test_audit_repro) / 强制刷新自然老化(test_force_refresh) / 健壮性故障注入(test_k8s_io_timeouts / test_infra_faults / test_main_lifecycle,见 docs/feature/2026-09-robustness-hardening.md)
 ```
 
 - 构造 `ServiceManager` 必须传 `deploy_mode="subprocess"`(默认 k8s 会挂死测试)。
-- fakeredis 陷阱:消费组 id=`"0"` bug、pubsub 需共享 FakeServer、EVAL 内 PUBLISH 需实测。
+- fakeredis 陷阱:消费组 id=`"0"` bug;所有门面共享同一 client;EVAL(Lua)依赖 lupa,缺失自动 skip。
 - 双实例测试(`tests/integration/test_multi_replica.py` + `_dual_harness.py`):同进程两 App 共享一组 fakeredis/SQLite/FakeK8s,httpx ASGITransport 单事件循环驱动;lifespan 必须先手动驱动(否则 RestAdapter 惰性二建 sysctx 绕过后台 Job)。
 - 旧 SDK 已知失败用例(非回归)见外层 jiuwenclaw 仓库 CLAUDE.md 末尾清单。
 
@@ -44,7 +44,7 @@ cd applications/agent_runtime
   `./scripts/integration_smoke.sh --image swr.cn-north-4.myhuaweicloud.com/openjiuwen/jiuwenclaw-agentserver-amd64:<tag> --sidecar-image swr.cn-north-4.myhuaweicloud.com/openjiuwen/jiuwenclaw-sandbox-amd64:<tag> --health-path /api/v1/health --sse-path /api/v1/events/stream --agent-env '{"AGENT_HTTP_ENABLED":"true","AGENT_HTTP_HOST":"0.0.0.0","AGENT_HTTP_PORT":"8086"}' --with-sidecar --with-mounts`
   (冒烟脚本参数直通 e2e_hld_acceptance.py;替身 influxdb:1.8 仅用于快速回归,默认契约 /health+8086;真镜像门禁必须带三件套契约参数——脚本模板的 health_path/sse_path/agent_env 由这三个参数注入,漏带则 readiness 永不通过、阶段 2 起全红;`--with-sidecar --sidecar-image` 开双真镜像 sidecar 全规格,`--with-mounts` 开全量真实规格阶段——主容器 cm/hp/pvc 三挂载 + PVC 静态预置 + 逐字段断言,2026-08-28 起为门禁标配)
 - 冒烟内置回归网:阶段 1b(无请求预热)、阶段 5b(自然老化零回拨)、阶段 11b(内部不变量巡检:idle⊆pods:all / idle_since 存在 / 静息 deploying=0 / 快照 deploy_ver==RM cfg)——2026-08-26 真环境实测缺陷①②④⑤的固化。
-- 经多副本 LB 亦可跑(实测 65/65),前提:部署带 `AGENT_RUNTIME_SCOPE_FULL_TIMEOUT`(deploy 模板默认 8,**须显著小于模板 session_ttl**,否则等待者 deadline 与会话到期碰撞产生混合结果);排查实录见 `docs/spec/e2e-test-cases.md` §8.1。
+- 经多副本 LB 亦可跑(实测 65/65);历史排查实录见 `docs/spec/e2e-test-cases.md` §8.1。
 - cleanup 空目标必须用**无匹配 label_selector**,不得指向业务 ns(同 label 真实 AgentServer 会被误删)或不存在的 ns(in-cluster SA 对其 403 而非空列表)。
 
 ### 多副本(真环境)

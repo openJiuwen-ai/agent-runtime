@@ -16,9 +16,9 @@
 - C4  deploy 失败/取消在 K8s 留孤儿物理 Pod(无 K8s→Redis 对账)
 - C5  REGISTER 步失败泄漏 deploying 占位(register 在占位清理保护之外)
 - C6  死 Pod 幂等回放复活(idem 续期 + REGISTER_POD 无存活校验)
-- C7  等待者丢唤醒窗口(宣称的 ≤500ms 安全轮询未实现)
+- C7  等待者丢唤醒窗口(已随 2026-09 场景 F 快失败拆除,等待机制不复存在)
 - C8  route refresh 无限自旋(notify_pod_dead 窗口内新落的会话永久热循环)
-- C9  waiters 无 deadline 自清(崩溃副本遗留名额永久占用)
+- C9  waiters 无 deadline 自清(已随 2026-09 场景 F 快失败拆除)
 - C10 config_sync 校验缺口(int 畸形 500 / 0 值策略字段放行)
 - C11 被删 scope 的 min_idle=0 推送失败后永不收敛(幻影 scope 烧容量)
 - C12 同载荷重试跳过日落软摘除(部分失败后旧版 Pod 继续接新流量)
@@ -35,12 +35,10 @@ from agent_runtime.errors import (
     DeployFailed,
     InvalidParams,
     NoPodAvailable,
-    ScopeFullTimeout,
 )
 from agent_runtime.resource_manager.k8s import FakeK8sPodClient
 from agent_runtime.resource_manager.models import POD_LABEL_SELECTOR
 from agent_runtime.session_manager.config_store import ConfigStore
-from agent_runtime.util import now_ts
 from tests.conftest import Runtime, requires_lua
 
 SCOPE = "scope-main"
@@ -325,41 +323,6 @@ async def test_C6_dead_pod_not_replayed_to_retrying_client(runtime):
     assert r2["pod_id"] != dead_pod, "死 Pod 经幂等缓存复活并回放 = C6 实锤"
 
 
-# -------------------------------------------------------------- C7:等待者丢唤醒
-
-@requires_lua
-async def test_C7_lost_wake_signal_recovered_by_poll(runtime, monkeypatch):
-    """C7:free 信号早于 subscribe 发布(丢失)→ 安全轮询应兜底重新仲裁。
-
-    调度注入:让释放(evict,PUBLISH free)恰好发生在 subscribe 完成之前——
-    真实并发里天然存在的窗口;实现宣称的「≤500ms 安全轮询双保险」应使
-    等待者在 ~0.5s 内重新仲裁成功,而不是空等满 scope_full_timeout。
-    """
-    await runtime.seed_template(scope_concurrency=1, pod_concurrency=1)
-    runtime.orchestrator.scope_full_timeout = 2.0
-    await runtime.route("sess_1")            # 占满(1/1)
-
-    real_pubsub = runtime.redis.pubsub
-
-    class _PubsubProxy:
-        def __init__(self, inner):
-            self._inner = inner
-
-        async def subscribe(self, channel):
-            await runtime.sm_state.evict("sess_1")   # 注入:先释放(PUBLISH 丢失)
-            await self._inner.subscribe(channel)
-
-        def __getattr__(self, name):
-            return getattr(self._inner, name)
-
-    monkeypatch.setattr(runtime.redis, "pubsub", lambda: _PubsubProxy(real_pubsub()))
-    try:
-        result = await asyncio.wait_for(runtime.route("sess_2"), timeout=1.5)
-        assert result["pod_id"], "丢信号后无兜底仲裁,等待者空等至超时 = C7 实锤"
-    finally:
-        monkeypatch.undo()
-
-
 # -------------------------------------------------------------- C8:refresh 自旋
 
 @requires_lua
@@ -426,26 +389,6 @@ def test_C8_refresh_survives_pod_info_cleanup():
     assert not thread.is_alive(), \
         "refresh 分支无限热循环:连 5s 硬超时都无法终止(事件循环被饿死)= C8 实锤"
     assert box.get("result"), f"路由未正常返回:{box}"
-
-
-# -------------------------------------------------------------- C9:waiters 无自清
-
-@requires_lua
-async def test_C9_crashed_waiter_ghosts_do_not_hijack_queue(runtime):
-    """C9:崩溃副本遗留的 waiter 名额应可自清(对照 deploy_followers 的 deadline)。
-
-    幽灵经真实闸门入队(LUA_WAITER_GATE),此后无任何清理路径——新请求应能
-    正常入队等待(504),而不是被永久 503 SCOPE_QUEUE_FULL。
-    """
-    await runtime.seed_template(scope_concurrency=1, pod_concurrency=1)
-    await runtime.route("sess_1")            # 占满
-    # 幽灵经真实闸门入队,deadline 已过期(崩溃副本遗留 1 个等待周期以上)
-    assert await runtime.sm_state.try_add_waiter(SCOPE, "ghost-1", 2, now_ts() - 10)
-    assert await runtime.sm_state.try_add_waiter(SCOPE, "ghost-2", 2, now_ts() - 10)
-    runtime.orchestrator.scope_full_timeout = 0.5
-
-    with pytest.raises(ScopeFullTimeout):    # 期望:能入队、等满超时(504)
-        await runtime.route("sess_2", request_id="req-live")
 
 
 # -------------------------------------------------------------- C10:校验缺口

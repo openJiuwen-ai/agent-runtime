@@ -2,7 +2,7 @@
 """agent-runtime 业务错误码与异常。
 
 错误码契约见 HLD §3.1「错误响应体」：
-- 过载类（SCOPE_QUEUE_FULL / SCOPE_FULL_TIMEOUT / NO_POD_AVAILABLE）带 retry_after，可重试；
+- 过载类（SCOPE_FULL / NO_POD_AVAILABLE）带 retry_after，可重试；
 - STATE_UNAVAILABLE（503）＝状态后端（Redis/DB）连接级故障，带 retry_after 可重试——
   区别于 internal 500（不可重试），LB/客户端重试语义依赖这一区分；
 - CONFIG_NOT_FOUND / VALIDATION 不可重试；
@@ -24,8 +24,7 @@ class ErrorCode:
     """agent-runtime 业务错误码（字符串，序列化进 ResponseEnvelope.error_code）。"""
 
     # SM 对外
-    SCOPE_FULL_TIMEOUT = "SCOPE_FULL_TIMEOUT"      # 504：scope 满，队列内等待超时
-    SCOPE_QUEUE_FULL = "SCOPE_QUEUE_FULL"          # 503：等待队列满，快失败
+    SCOPE_FULL = "SCOPE_FULL"                      # 503：scope 满，立即快失败
     NO_POD_AVAILABLE = "NO_POD_AVAILABLE"          # 503：acquire 失败（封顶/部署失败）
     CONFIG_NOT_FOUND = "CONFIG_NOT_FOUND"          # 503：resolve 无匹配配置
     VALIDATION = "VALIDATION"                      # 400：参数错
@@ -38,8 +37,7 @@ class ErrorCode:
 
 # 业务错误码 → HTTP 状态（HLD §3.1）。VALIDATION 复用框架小写码即可，这里注册大写契约码。
 HTTP_STATUS_MAP = {
-    ErrorCode.SCOPE_FULL_TIMEOUT: 504,
-    ErrorCode.SCOPE_QUEUE_FULL: 503,
+    ErrorCode.SCOPE_FULL: 503,
     ErrorCode.NO_POD_AVAILABLE: 503,
     ErrorCode.CONFIG_NOT_FOUND: 503,
     ErrorCode.VALIDATION: 400,
@@ -53,6 +51,11 @@ HTTP_STATUS_MAP = {
 def register_codes() -> None:
     """把业务错误码的 HTTP 状态映射注册进框架（幂等，import/启动时调用一次）。"""
     register_http_status(HTTP_STATUS_MAP)
+
+
+# 过载响应建议重试间隔（秒）。原与队列等待参数同住 orchestrator，2026-09
+# 场景 F 快失败改造后归属错误契约（三个过载类的默认值）。
+DEFAULT_RETRY_AFTER = 1
 
 
 # ---------------------------------------------------------------- 异常基类
@@ -72,12 +75,15 @@ class AgentRuntimeError(FrameworkError):
 # ---- SM 对外
 
 
-class ScopeFullTimeout(AgentRuntimeError):
-    code = ErrorCode.SCOPE_FULL_TIMEOUT
+class ScopeFull(AgentRuntimeError):
+    """scope 满（闸门：scope_concurrency 或 max_pods×pod_concurrency 预算）。
 
+    场景 F 快失败（2026-09）：不排队、不订阅，立即 503 + retry_after；背压
+    责任在 gateway（SM 设计 §8.3 指数退避契约不变）。有界等待已整体拆除，
+    见 docs/feature/2026-09-scope-full-fastfail.md。
+    """
 
-class ScopeQueueFull(AgentRuntimeError):
-    code = ErrorCode.SCOPE_QUEUE_FULL
+    code = ErrorCode.SCOPE_FULL
 
 
 class NoPodAvailable(AgentRuntimeError):

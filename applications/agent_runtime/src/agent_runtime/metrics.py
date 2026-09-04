@@ -28,7 +28,7 @@ logger = logging.getLogger("agent_runtime.metrics")
 _LATENCY_WINDOW = 1024        # 每端点保留的最近延迟样本数（分位数窗口）
 _ERROR_CAPACITY = 200         # recent_errors 环形容量
 _DETAIL_MAX = 300             # 错误 detail 截断长度
-# 请求慢分诊阈值：热路径 ms 级；scope_full 有界等待与冷部署会合法超阈——
+# 请求慢分诊阈值：热路径 ms 级；冷部署（ready_timeout 量级）会合法超阈——
 # 本行只作"值得看一眼"的分诊入口，精确语义以汇总行的 duration_ms 为准
 _SLOW_REQUEST_MS = 2000.0
 

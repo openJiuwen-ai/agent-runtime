@@ -16,22 +16,22 @@ def test_counters_and_error_buckets():
     reg = MetricsRegistry()
     reg.observe_request(endpoint="route", ok=True, error_code=None, duration_ms=5)
     reg.observe_request(endpoint="route", ok=True, error_code=None, duration_ms=7)
-    reg.observe_request(endpoint="route", ok=False, error_code="SCOPE_FULL_TIMEOUT",
-                        duration_ms=30000, request_id="r1", session_id="s1",
-                        detail="waited")
+    reg.observe_request(endpoint="route", ok=False, error_code="SCOPE_FULL",
+                        duration_ms=5, request_id="r1", session_id="s1",
+                        detail="full")
     reg.observe_request(endpoint="touch", ok=True, error_code=None, duration_ms=1)
 
     snap = reg.snapshot()
     assert snap["requests"] == {"total": 4, "ok": 3, "error": 1}
     route = snap["endpoints"]["route"]
     assert route["total"] == 3 and route["ok"] == 2 and route["error"] == 1
-    assert route["by_error_code"] == {"SCOPE_FULL_TIMEOUT": 1}
-    assert route["max_ms"] == 30000
+    assert route["by_error_code"] == {"SCOPE_FULL": 1}
+    assert route["max_ms"] == 7
     assert "touch" in snap["endpoints"]
 
     errors = reg.recent_errors()
     assert len(errors) == 1
-    assert errors[0]["error_code"] == "SCOPE_FULL_TIMEOUT"
+    assert errors[0]["error_code"] == "SCOPE_FULL"
     assert errors[0]["request_id"] == "r1" and errors[0]["session_id"] == "s1"
 
 
