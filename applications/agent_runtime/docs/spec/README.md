@@ -14,6 +14,7 @@
 | [resource-manager.md](resource-manager.md) | RM:acquire/后台任务/K8s 适配、6 个 Lua、RM 键表 | 改 Pod 池/扩缩容/清理时 |
 | [evaluation.md](evaluation.md) | 自评估:采样/评估两 job、`{agent_runtime:eval}` 键表、规则清单、LLM 降级矩阵 | 改自评估/趋势/报告时 |
 | [e2e-test-cases.md](e2e-test-cases.md) | 全部 e2e 用例的场景/输入/预期输出 | 写或跑 e2e 时 |
+| `../api/config-plane-api.md` | 配置面对外接口文档(config_sync/config_refresh/visualization:字段表+curl+真实返回示例) | 给调用方(Claw Manager/运维/可视化前端)交付接口契约时 |
 | `../design/Agent-Runtime-HLD.md` | 架构总览/接口契约/场景 A–N/Redis 键表(语义权威) | 语义不确定时 |
 | `../design/session-manager-design.md` | SM 详细设计(6 个 Lua 全文) | 深挖 SM 设计动机 |
 | `../design/resource-manager-design.md` | RM 详细设计(6 个 Lua 全文) | 深挖 RM 设计动机 |
