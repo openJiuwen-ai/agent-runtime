@@ -13,9 +13,11 @@ from identity_center.routers.deps import require_admin
 from identity_center.schemas.iam_schemas import (
     AddMembersBody,
     OrgCreateBody,
+    OrgListQuery,
     OrgUpdateBody,
     SetMembershipBody,
     UserCreateBody,
+    UserListQuery,
     UsersBatchCreateBody,
     UserUpdateBody,
 )
@@ -32,14 +34,24 @@ org_router = APIRouter(dependencies=[Depends(require_admin)])
 
 
 @org_router.get("/")
-async def list_orgs(handler: _Handler, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=200)):
-    return await OrgService(handler).list(page, page_size)
+async def list_orgs(
+    handler: _Handler,
+    query: Annotated[OrgListQuery, Query()],
+):
+    return await OrgService(handler).list(
+        query.page,
+        query.page_size,
+        search=query.search,
+        status=query.status,
+        sort_by=query.sort_by,
+        sort_order=query.sort_order,
+    )
 
 
 @org_router.post("/")
 async def create_org(body: OrgCreateBody, handler: _Handler):
     try:
-        return await OrgService(handler).create(body.group_id, body.name)
+        return await OrgService(handler).create(body.group_id, body.display_name)
     except ValueError as e:
         raise _bad(e) from e
 
@@ -54,7 +66,7 @@ async def get_org(group_id: str, handler: _Handler):
 
 @org_router.patch("/{group_id}")
 async def update_org(group_id: str, body: OrgUpdateBody, handler: _Handler):
-    org = await OrgService(handler).update(group_id, body.name, body.status)
+    org = await OrgService(handler).update(group_id, body.display_name, body.status)
     if org is None:
         raise HTTPException(status_code=404, detail="org not found")
     return org
@@ -98,8 +110,19 @@ user_router = APIRouter(dependencies=[Depends(require_admin)])
 
 
 @user_router.get("/")
-async def list_users(handler: _Handler, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=200)):
-    return await UserService(handler).list(page, page_size)
+async def list_users(
+    handler: _Handler,
+    query: Annotated[UserListQuery, Query()],
+):
+    return await UserService(handler).list(
+        query.page,
+        query.page_size,
+        search=query.search,
+        status=query.status,
+        is_admin=query.is_admin,
+        sort_by=query.sort_by,
+        sort_order=query.sort_order,
+    )
 
 
 @user_router.post("/")
@@ -125,7 +148,9 @@ async def batch_create_users(body: UsersBatchCreateBody, handler: _Handler):
     orgs_page = await OrgService(handler).list(1, 200)
     orgs = orgs_page.get("items", []) if isinstance(orgs_page, dict) else []
     valid_ids = {org["group_id"] for org in orgs}
-    name_to_id = {org["name"]: org["group_id"] for org in orgs if org.get("name")}
+    name_to_id = {
+        org["display_name"]: org["group_id"] for org in orgs if org.get("display_name")
+    }
 
     results: list[dict[str, Any]] = []
     ok_count = 0

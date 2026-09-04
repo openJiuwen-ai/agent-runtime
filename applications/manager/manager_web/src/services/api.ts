@@ -319,7 +319,7 @@ export const AuthApi = {
 
 export interface Org {
   group_id: string;
-  name: string;
+  display_name: string;
   status: string;
   created_at: string | null;
   updated_at: string | null;
@@ -376,9 +376,19 @@ interface IamPaged<T> {
 }
 
 export const OrgApi = {
-  list: (page = 1, page_size = 200) => idpHttp<IamPaged<Org>>('/v1/orgs/', { query: { page, page_size } }),
-  create: (body: { group_id?: string; name: string }) => idpHttp<Org>('/v1/orgs/', { method: 'POST', body }),
-  update: (gid: string, body: { name?: string; status?: string }) =>
+  list: (params?: {
+    page?: number;
+    page_size?: number;
+    search?: string;
+    status?: string;
+    sort_by?: 'group_id' | 'display_name' | 'status' | 'created_at' | 'updated_at';
+    sort_order?: 'asc' | 'desc';
+  }) =>
+    idpHttp<IamPaged<Org>>('/v1/orgs/', {
+      query: { page: 1, page_size: 200, ...params },
+    }),
+  create: (body: { group_id?: string; display_name: string }) => idpHttp<Org>('/v1/orgs/', { method: 'POST', body }),
+  update: (gid: string, body: { display_name?: string; status?: string }) =>
     idpHttp<Org>(`/v1/orgs/${encodeURIComponent(gid)}`, { method: 'PATCH', body }),
   remove: (gid: string) => idpHttp<{ deleted: boolean }>(`/v1/orgs/${encodeURIComponent(gid)}`, { method: 'DELETE' }),
   listMembers: (gid: string) => idpHttp<{ users: IamUser[] }>(`/v1/orgs/${encodeURIComponent(gid)}/members`),
@@ -392,7 +402,18 @@ export const OrgApi = {
 export const NO_ORG_GROUP_ID = '__none__';
 
 export const UserApi = {
-  list: (page = 1, page_size = 200) => idpHttp<IamPaged<IamUser>>('/v1/users/', { query: { page, page_size } }),
+  list: (params?: {
+    page?: number;
+    page_size?: number;
+    search?: string;
+    status?: string;
+    is_admin?: boolean;
+    sort_by?: 'user_id' | 'display_name' | 'is_admin' | 'status' | 'created_at' | 'updated_at';
+    sort_order?: 'asc' | 'desc';
+  }) =>
+    idpHttp<IamPaged<IamUser>>('/v1/users/', {
+      query: { page: 1, page_size: 200, ...params },
+    }),
   get: (id: string) => idpHttp<IamUser>(`/v1/users/${encodeURIComponent(id)}`),
   create: (body: { user_id?: string; display_name: string; is_admin?: boolean; username: string; password: string }) =>
     idpHttp<IamUser>('/v1/users/', { method: 'POST', body }),
@@ -753,6 +774,12 @@ export const InstanceApi = {
     sort_order?: 'asc' | 'desc';
   }) =>
     http<InstancePageRaw>('/v1/instances/', { query: params }),
+  /** 立即探活所有实例的 Gateway / Runtime，刷新 online/offline 状态。 */
+  probeHealth: () =>
+    http<{ probed: number; alive: number; dead: number; skipped: number }>(
+      '/v1/instances/health-probe',
+      { method: 'POST' },
+    ),
   get: (id: string) => http<InstanceDetail>(`/v1/instances/${encodeURIComponent(id)}`),
   create: (body: CreateInstanceBody) => http<InstanceSummary>('/v1/instances/', { method: 'POST', body }),
   update: (id: string, body: { data?: Record<string, unknown> }) =>

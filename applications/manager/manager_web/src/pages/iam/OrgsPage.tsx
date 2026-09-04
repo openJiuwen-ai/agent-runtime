@@ -1,162 +1,260 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { ConfirmDialog } from '../../components/ConfirmDialog';
+import { Empty } from '../../components/Empty';
+import { ListSearchInput } from '../../components/ListSearchInput';
 import { Modal, ModalCancelButton } from '../../components/Modal';
+import { Pagination } from '../../components/Pagination';
+import { TableColumnFilter } from '../../components/TableColumnFilter';
+import {
+  TableColumnSort,
+  type ColumnSortValue,
+} from '../../components/TableColumnSort';
 import { useAsync } from '../../hooks/useAsync';
 import { useFormDirty } from '../../hooks/useFormDirty';
-import { ApiError, IamUser, InstanceBindingApi, NO_ORG_GROUP_ID, Org, OrgApi, UserApi } from '../../services/api';
+import { useListSearch } from '../../hooks/useListSearch';
+import { ApiError, IamUser, NO_ORG_GROUP_ID, Org, OrgApi, UserApi } from '../../services/api';
 import { toast } from '../../stores/uiStore';
-import { AddToInstanceModal, InstanceChips, InstanceFilter, instanceName, useInstances } from './instanceBinding';
+import { formatTime } from '../../utils/format';
+
+type OrgSortField = 'group_id' | 'display_name' | 'status' | 'updated_at';
 
 export function OrgsPage() {
   const { t } = useTranslation();
-  const { data, loading, reload } = useAsync(() => OrgApi.list(), []);
-  const instances = useInstances();
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const { searchInput, setSearchInput, searchQuery } = useListSearch();
+  const [statusFilter, setStatusFilter] = useState('');
+  const [sortBy, setSortBy] = useState<OrgSortField | ''>('');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [editing, setEditing] = useState<Org | null | undefined>(undefined); // undefined=关闭, null=新建
-  const [managing, setManaging] = useState<Org | null>(null); // 正在管理成员的组织
-  const [showAdd, setShowAdd] = useState(false);
-  const [filterJid, setFilterJid] = useState('');
-  const [roster, setRoster] = useState<Set<string> | null>(null);
-  const [bindings, setBindings] = useState<Record<string, string[]>>({});
-  const [checked, setChecked] = useState<Set<string>>(new Set());
-  const orgs = data?.items ?? [];
-  const orgIdsKey = orgs.map((o) => o.group_id).join(',');
+  const [managing, setManaging] = useState<Org | null>(null);
+  const [delTarget, setDelTarget] = useState<Org | null>(null);
+
+  const sortOptions = useMemo(
+    () => [
+      { value: 'asc' as const, label: t('common.sortAsc') },
+      { value: 'desc' as const, label: t('common.sortDesc') },
+      { value: '' as const, label: t('common.sortDefault') },
+    ],
+    [t],
+  );
+
+  const handleSortChange = (field: OrgSortField, value: ColumnSortValue) => {
+    if (value === '') {
+      setSortBy('');
+      setSortOrder('asc');
+    } else {
+      setSortBy(field);
+      setSortOrder(value);
+    }
+    setPage(1);
+  };
 
   useEffect(() => {
-    setChecked(new Set());
-    if (filterJid) {
-      InstanceBindingApi.listOrgs(filterJid).then((r) => setRoster(new Set(r.group_ids))).catch(() => setRoster(new Set()));
-    } else {
-      setRoster(null);
-      if (orgs.length) {
-        InstanceBindingApi.orgGateways(orgs.map((o) => o.group_id)).then((r) => setBindings(r.bindings)).catch(() => setBindings({}));
-      }
-    }
-  }, [filterJid, orgIdsKey]); // eslint-disable-line react-hooks/exhaustive-deps
+    setPage(1);
+  }, [searchQuery]);
 
-  // 无组织(__none__)也是合法可见性范围,同普通组织一样可绑定实例
-  const shown = filterJid && roster ? orgs.filter((o) => roster.has(o.group_id)) : orgs;
+  const { data, loading, error, reload } = useAsync(
+    () =>
+      OrgApi.list({
+        page,
+        page_size: pageSize,
+        search: searchQuery,
+        status: statusFilter || undefined,
+        sort_by: sortBy || undefined,
+        sort_order: sortBy ? sortOrder : undefined,
+      }),
+    [page, pageSize, searchQuery, statusFilter, sortBy, sortOrder],
+  );
 
-  function reloadRoster() {
-    if (filterJid) InstanceBindingApi.listOrgs(filterJid).then((r) => setRoster(new Set(r.group_ids))).catch(() => undefined);
-  }
-
-  async function onDelete(o: Org) {
-    if (!window.confirm(t('iam.confirmDeleteOrg', { name: o.name }))) return;
-    try {
-      await OrgApi.remove(o.group_id);
-      toast('success', t('success.deleted'));
-      reload();
-    } catch (e) {
-      toast('danger', e instanceof ApiError ? e.detail : String(e));
-    }
-  }
-
-  function toggleCheck(id: string) {
-    setChecked((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
-  }
-  function toggleAll() {
-    setChecked((prev) => (prev.size === shown.length ? new Set() : new Set(shown.map((o) => o.group_id))));
-  }
-
-  async function onRemoveFromInstance() {
-    const ids = Array.from(checked);
-    if (!ids.length || !filterJid) return;
-    const name = instanceName(instances, filterJid);
-    if (!window.confirm(t('iam.confirmRemoveFromInstance', { defaultValue: '从实例「{{name}}」移除选中的 {{n}} 项？', name, n: ids.length }))) return;
-    try {
-      await InstanceBindingApi.unbindOrgs(filterJid, ids);
-      toast('success', t('success.saved'));
-      setChecked(new Set());
-      reloadRoster();
-    } catch (e) {
-      toast('danger', e instanceof ApiError ? e.detail : String(e));
-    }
-  }
-
-  const inInstanceMode = !!filterJid;
-  const cols = inInstanceMode ? 5 : 6;
-  const instName = filterJid ? instanceName(instances, filterJid) : '';
+  const items = data?.items ?? [];
 
   return (
-    <div className="page">
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="card-title">{t('iam.orgs')}</h2>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <InstanceFilter instances={instances} value={filterJid} onChange={setFilterJid} />
-          {inInstanceMode && (
-            <>
-              <button className="btn danger" disabled={checked.size === 0} onClick={onRemoveFromInstance}>
-                {t('iam.removeFromInstance', { defaultValue: '移除出 {{name}}', name: instName })}{checked.size ? `（${checked.size}）` : ''}
-              </button>
-              <button className="btn" onClick={() => setShowAdd(true)}>
-                {t('iam.addToInstance', { defaultValue: '添加到 {{name}}', name: instName })}
-              </button>
-            </>
+    <>
+      <div className="flex min-w-0 flex-col gap-4">
+        <div className="page-header w-full min-w-0 flex-wrap items-start gap-y-3">
+          <div className="min-w-[7.5rem] max-w-[12rem] shrink-0 sm:max-w-[16rem]">
+            <div className="page-title truncate" title={t('iam.orgs')}>
+              {t('iam.orgs')}
+            </div>
+            <div className="page-subtitle truncate" title={t('iam.orgsSubtitle')}>
+              {t('iam.orgsSubtitle')}
+            </div>
+          </div>
+          <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
+            <ListSearchInput
+              value={searchInput}
+              onChange={setSearchInput}
+              placeholder={t('iam.orgsSearchPlaceholder')}
+              className="basis-full sm:basis-auto"
+            />
+            <button className="btn sm" onClick={() => void reload()}>
+              {t('common.refresh')}
+            </button>
+            <button className="btn primary sm" onClick={() => setEditing(null)}>
+              + {t('iam.newOrg')}
+            </button>
+          </div>
+        </div>
+
+        <div className="flex w-full min-w-0 shrink-0 flex-col gap-4">
+          <div className="card !p-0">
+            {loading ? (
+              <div className="p-4 text-sm text-muted">{t('common.loading')}</div>
+            ) : error ? (
+              <div className="p-4 text-sm text-danger">{t('errors.loadFailed', { detail: error })}</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="table w-max min-w-full">
+                  <thead>
+                    <tr>
+                      <th className="w-[25rem] max-w-[25rem]">
+                        <TableColumnSort
+                          label={t('iam.groupId')}
+                          value={sortBy === 'group_id' ? sortOrder : ''}
+                          options={sortOptions}
+                          onChange={(value) => handleSortChange('group_id', value)}
+                        />
+                      </th>
+                      <th>
+                        <TableColumnSort
+                          label={t('iam.displayName')}
+                          value={sortBy === 'display_name' ? sortOrder : ''}
+                          options={sortOptions}
+                          onChange={(value) => handleSortChange('display_name', value)}
+                        />
+                      </th>
+                      <th>
+                        <div className="th-filter">
+                          <span className="th-filter__label">{t('iam.status')}</span>
+                          <TableColumnSort
+                            iconOnly
+                            label={t('iam.status')}
+                            value={sortBy === 'status' ? sortOrder : ''}
+                            options={sortOptions}
+                            onChange={(value) => handleSortChange('status', value)}
+                          />
+                          <TableColumnFilter
+                            iconOnly
+                            label={t('iam.status')}
+                            value={statusFilter}
+                            options={[
+                              { value: '', label: t('common.all') },
+                              { value: 'active', label: t('common.enabled') },
+                              { value: 'disabled', label: t('common.disabled') },
+                            ]}
+                            onChange={(value) => {
+                              setStatusFilter(value);
+                              setPage(1);
+                            }}
+                          />
+                        </div>
+                      </th>
+                      <th>
+                        <TableColumnSort
+                          label={t('common.updatedAt')}
+                          value={sortBy === 'updated_at' ? sortOrder : ''}
+                          options={sortOptions}
+                          onChange={(value) => handleSortChange('updated_at', value)}
+                        />
+                      </th>
+                      <th className="whitespace-nowrap min-w-[9.5rem]">{t('common.actions')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {items.length === 0 ? (
+                      <tr>
+                        <td colSpan={5}>
+                          <Empty text={t('common.empty')} />
+                        </td>
+                      </tr>
+                    ) : (
+                      items.map((o) => (
+                        <tr key={o.group_id}>
+                          <td
+                            className="mono text-[11px] text-muted w-[25rem] max-w-[25rem] break-all"
+                            title={o.group_id}
+                          >
+                            {o.group_id}
+                          </td>
+                          <td className="text-text-strong font-medium break-words">{o.display_name}</td>
+                          <td className="whitespace-nowrap">
+                            {o.status === 'active' ? t('common.enabled') : t('common.disabled')}
+                          </td>
+                          <td className="mono text-[11px] text-muted whitespace-nowrap">
+                            {formatTime(o.updated_at)}
+                          </td>
+                          <td className="whitespace-nowrap min-w-[9.5rem]">
+                            <div className="flex items-center gap-1">
+                              <button className="btn sm" onClick={() => setManaging(o)}>
+                                {t('iam.members')}
+                              </button>
+                              <button className="btn sm ghost" onClick={() => setEditing(o)}>
+                                {t('common.edit')}
+                              </button>
+                              <button className="btn sm danger" onClick={() => setDelTarget(o)}>
+                                {t('common.delete')}
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {data && (
+            <Pagination
+              page={page}
+              pageSize={pageSize}
+              total={data.total ?? data.items.length}
+              onChange={(p, ps) => {
+                setPage(p);
+                setPageSize(ps);
+              }}
+            />
           )}
-          <button className="btn primary" onClick={() => setEditing(null)}>{t('iam.newOrg')}</button>
         </div>
       </div>
-      <div className="card">
-        <table className="table" style={{ width: '100%' }}>
-          <thead>
-            <tr>
-              <th style={{ width: 32 }}>
-                <input type="checkbox" checked={shown.length > 0 && checked.size === shown.length} onChange={toggleAll} />
-              </th>
-              <th>{t('iam.groupId')}</th>
-              <th>{t('iam.name')}</th>
-              <th>{t('iam.status')}</th>
-              {!inInstanceMode && <th>{t('iam.belongInstances', { defaultValue: '所属实例' })}</th>}
-              <th>{t('common.actions')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {shown.map((o) => (
-              <tr key={o.group_id}>
-                <td><input type="checkbox" checked={checked.has(o.group_id)} onChange={() => toggleCheck(o.group_id)} /></td>
-                <td className="mono text-xs">{o.group_id}</td>
-                <td>{o.name}</td>
-                <td>{o.status}</td>
-                {!inInstanceMode && <td><InstanceChips jids={bindings[o.group_id] ?? []} instances={instances} /></td>}
-                <td style={{ textAlign: 'right' }}>
-                  <button className="btn sm" onClick={() => setManaging(o)}>{t('iam.members')}</button>
-                  <button className="btn sm" style={{ marginLeft: 6 }} onClick={() => setEditing(o)}>{t('common.edit')}</button>
-                  <button className="btn sm danger" style={{ marginLeft: 6 }} onClick={() => onDelete(o)}>{t('common.delete')}</button>
-                </td>
-              </tr>
-            ))}
-            {!loading && shown.length === 0 && (
-              <tr><td colSpan={cols} className="text-muted">{t('iam.noOrgs')}</td></tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+
       {editing !== undefined && (
-        <OrgModal org={editing} onClose={() => setEditing(undefined)} onSaved={() => { setEditing(undefined); reload(); }} />
-      )}
-      {managing && (
-        <MembersModal org={managing} onClose={() => setManaging(null)} />
-      )}
-      {showAdd && filterJid && (
-        <AddToInstanceModal
-          title={t('iam.addToInstance', { defaultValue: '添加到 {{name}}', name: instName })}
-          candidates={orgs
-            .filter((o) => !roster?.has(o.group_id))
-            .map((o) => ({ id: o.group_id, label: o.name, sub: o.group_id }))}
-          onConfirm={async ({ ids }) => {
-            await InstanceBindingApi.bindOrgs(filterJid, ids);
-            toast('success', t('success.saved'));
-            setShowAdd(false);
-            reloadRoster();
+        <OrgModal
+          org={editing}
+          onClose={() => setEditing(undefined)}
+          onSaved={() => {
+            setEditing(undefined);
+            void reload();
           }}
-          onClose={() => setShowAdd(false)}
         />
       )}
-    </div>
+      {managing && <MembersModal org={managing} onClose={() => setManaging(null)} />}
+
+      <ConfirmDialog
+        open={!!delTarget}
+        message={t('iam.confirmDeleteOrg', { name: delTarget?.display_name ?? '' })}
+        danger
+        onConfirm={async () => {
+          if (!delTarget) return;
+          try {
+            await OrgApi.remove(delTarget.group_id);
+            toast('success', t('success.deleted'));
+            void reload();
+          } catch (e) {
+            toast(
+              'danger',
+              t('errors.deleteFailed', {
+                detail: e instanceof ApiError ? e.detail : (e as Error).message,
+              }),
+            );
+          }
+        }}
+        onClose={() => setDelTarget(null)}
+      />
+    </>
   );
 }
 
@@ -208,11 +306,10 @@ function MembersModal({ org, onClose }: { org: Org; onClose: () => void }) {
   return (
     <Modal
       open
-      title={`${t('iam.members')} · ${org.name}`}
+      title={`${t('iam.members')} · ${org.display_name}`}
       onClose={onClose}
       footer={<button className="btn primary" onClick={onClose}>{t('common.close')}</button>}
     >
-      {/* 当前成员 */}
       <label className="label">{t('iam.currentMembers')} ({members.length})</label>
       <div style={{ maxHeight: 200, overflow: 'auto', border: '1px solid var(--border, #ddd)', borderRadius: 6, padding: 8 }}>
         {members.map((u) => (
@@ -226,7 +323,6 @@ function MembersModal({ org, onClose }: { org: Org; onClose: () => void }) {
         {!loading && members.length === 0 && <div className="text-xs text-muted">{t('iam.noMembers')}</div>}
       </div>
 
-      {/* 添加成员（搜索全部用户） */}
       {readOnly ? (
         <div className="text-xs text-muted" style={{ marginTop: 12 }}>{t('iam.noOrgReadonly')}</div>
       ) : (
@@ -251,13 +347,13 @@ function MembersModal({ org, onClose }: { org: Org; onClose: () => void }) {
 function OrgModal({ org, onClose, onSaved }: { org: Org | null; onClose: () => void; onSaved: () => void }) {
   const { t } = useTranslation();
   const { markClean, isDirty } = useFormDirty(true);
-  const [name, setName] = useState(org?.name ?? '');
+  const [displayName, setDisplayName] = useState(org?.display_name ?? '');
   const [status, setStatus] = useState(org?.status ?? 'active');
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    const next = { name: org?.name ?? '', status: org?.status ?? 'active' };
-    setName(next.name);
+    const next = { displayName: org?.display_name ?? '', status: org?.status ?? 'active' };
+    setDisplayName(next.displayName);
     setStatus(next.status);
     markClean(next);
   }, [org, markClean]);
@@ -265,8 +361,8 @@ function OrgModal({ org, onClose, onSaved }: { org: Org | null; onClose: () => v
   async function save() {
     setBusy(true);
     try {
-      if (org) await OrgApi.update(org.group_id, { name, status });
-      else await OrgApi.create({ name });
+      if (org) await OrgApi.update(org.group_id, { display_name: displayName, status });
+      else await OrgApi.create({ display_name: displayName });
       toast('success', t('success.saved'));
       onSaved();
     } catch (e) {
@@ -276,21 +372,24 @@ function OrgModal({ org, onClose, onSaved }: { org: Org | null; onClose: () => v
     }
   }
 
+  const draft = { displayName, status };
+  const canSave = !!displayName.trim();
+
   return (
     <Modal
       open
       title={org ? t('iam.editOrg') : t('iam.newOrg')}
       onClose={onClose}
-      dirty={isDirty({ name, status })}
+      dirty={isDirty(draft)}
       footer={
         <>
           <ModalCancelButton className="btn" />
-          <button className="btn primary" style={{ marginLeft: 8 }} disabled={busy || !name.trim()} onClick={save}>{t('common.save')}</button>
+          <button className="btn primary" style={{ marginLeft: 8 }} disabled={busy || !canSave} onClick={save}>{t('common.save')}</button>
         </>
       }
     >
-      <label className="label">{t('iam.name')}</label>
-      <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
+      <label className="label">{t('iam.displayName')}</label>
+      <input className="input" value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
       {org && (
         <>
           <label className="label" style={{ marginTop: 12 }}>{t('iam.status')}</label>

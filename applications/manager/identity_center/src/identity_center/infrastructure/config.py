@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     jwt_audience: str = Field(default="openjiuwen", validation_alias="IDENTITY_JWT_AUDIENCE")
     access_ttl_seconds: int = Field(default=1800, validation_alias="IDENTITY_ACCESS_TTL")
     refresh_ttl_seconds: int = Field(default=7 * 24 * 3600, validation_alias="IDENTITY_REFRESH_TTL")
-    # JWT 签名密钥落身份库(表 identity_jwt_signing_key,生成一次→落库→多副本读同一行)。
+    # JWT 签名密钥落身份库(表 auth_jwt_signing_key,生成一次→落库→多副本读同一行)。
 
     # ---- 联合认证（当前仓库仅提供显式开启的本地 Demo Provider）----
     federation_demo_enabled: bool = Field(

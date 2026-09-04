@@ -140,11 +140,12 @@ class IdentityFederationService:
                     request_id=request_id,
                     connection_id=connection_id,
                     return_to=safe_return_to,
-                    created_at=now,
                     expires_at=now
                     + timedelta(
                         seconds=self._settings.federation_request_ttl_seconds
                     ),
+                    created_at=now,
+                    updated_at=now,
                 )
             )
         try:
@@ -258,9 +259,10 @@ class IdentityFederationService:
                 insert(self._code_table).values(
                     code_hash=_hash_code(code),
                     user_id=user_id,
-                    created_at=now,
                     expires_at=now
                     + timedelta(seconds=self._settings.federation_code_ttl_seconds),
+                    created_at=now,
+                    updated_at=now,
                 )
             )
         return code

@@ -149,6 +149,14 @@ async def test_instance_list_sort_by_name(manager_api: ManagerApiHarness):
 
 
 @pytest.mark.asyncio
+async def test_instance_health_probe(manager_api: ManagerApiHarness):
+    resp = await manager_api.http.post(manager_api.instances_url("/health-probe"))
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert {"probed", "alive", "dead", "skipped"} <= set(data)
+
+
+@pytest.mark.asyncio
 async def test_instance_get_not_found(manager_api: ManagerApiHarness):
     resp = await manager_api.http.get(
         manager_api.instances_url("/sp-does-not-exist"),

@@ -9,7 +9,7 @@ import {
   LoginPolicy,
   UserApi,
 } from '../../../services/api';
-import { AddToInstanceModal } from '../../iam/instanceBinding';
+import { AddToInstanceModal } from './instanceBinding';
 import { toast } from '../../../stores/uiStore';
 import { Empty } from '../../../components/Empty';
 import { Pagination } from '../../../components/Pagination';

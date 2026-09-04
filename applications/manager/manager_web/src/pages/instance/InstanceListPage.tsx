@@ -134,8 +134,10 @@ function InstanceListTable({
   sortOrder,
   sortOptions,
   onSortChange,
-  statusFilter,
-  onStatusFilterChange,
+  gatewayStatusFilter,
+  onGatewayStatusFilterChange,
+  runtimeStatusFilter,
+  onRuntimeStatusFilterChange,
 }: {
   items: InstanceSummary[];
   onChanged: () => void;
@@ -143,8 +145,10 @@ function InstanceListTable({
   sortOrder: 'asc' | 'desc';
   sortOptions: { value: ColumnSortValue; label: string }[];
   onSortChange: (field: InstanceSortField, value: ColumnSortValue) => void;
-  statusFilter: string;
-  onStatusFilterChange: (value: string) => void;
+  gatewayStatusFilter: string;
+  onGatewayStatusFilterChange: (value: string) => void;
+  runtimeStatusFilter: string;
+  onRuntimeStatusFilterChange: (value: string) => void;
 }) {
   const { t } = useTranslation();
   const { navigate } = useRouter();
@@ -186,19 +190,30 @@ function InstanceListTable({
                     <TableColumnFilter
                       iconOnly
                       label={t('topology.gatewayStatus')}
-                      value={statusFilter}
+                      value={gatewayStatusFilter}
                       options={statusFilterOptions}
-                      onChange={onStatusFilterChange}
+                      onChange={onGatewayStatusFilterChange}
                     />
                   </div>
                 </th>
                 <th className="whitespace-nowrap">
-                  <TableColumnSort
-                    label={t('topology.runtimeStatus')}
-                    value={sortBy === 'runtime_status' ? sortOrder : ''}
-                    options={sortOptions}
-                    onChange={(value) => onSortChange('runtime_status', value)}
-                  />
+                  <div className="th-filter">
+                    <span className="th-filter__label">{t('topology.runtimeStatus')}</span>
+                    <TableColumnSort
+                      iconOnly
+                      label={t('topology.runtimeStatus')}
+                      value={sortBy === 'runtime_status' ? sortOrder : ''}
+                      options={sortOptions}
+                      onChange={(value) => onSortChange('runtime_status', value)}
+                    />
+                    <TableColumnFilter
+                      iconOnly
+                      label={t('topology.runtimeStatus')}
+                      value={runtimeStatusFilter}
+                      options={statusFilterOptions}
+                      onChange={onRuntimeStatusFilterChange}
+                    />
+                  </div>
                 </th>
                 <th className="whitespace-nowrap min-w-[10.5rem]">
                   <TableColumnSort
@@ -335,13 +350,15 @@ function ViewModeToggle({
 export function InstanceListPage() {
   const { t } = useTranslation();
   const { searchInput, setSearchInput, searchQuery } = useListSearch();
-  const [statusFilter, setStatusFilter] = useState<string>('');
+  const [gatewayStatusFilter, setGatewayStatusFilter] = useState<string>('');
+  const [runtimeStatusFilter, setRuntimeStatusFilter] = useState<string>('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [sortBy, setSortBy] = useState<InstanceSortField | ''>('');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [viewMode, setViewMode] = useState<ViewMode>(() => readViewMode());
   const [createOpen, setCreateOpen] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   const sortOptions = useMemo(
     () => [
@@ -352,8 +369,13 @@ export function InstanceListPage() {
     [t],
   );
 
-  const handleStatusFilterChange = (value: string) => {
-    setStatusFilter(value);
+  const handleGatewayStatusFilterChange = (value: string) => {
+    setGatewayStatusFilter(value);
+    setPage(1);
+  };
+
+  const handleRuntimeStatusFilterChange = (value: string) => {
+    setRuntimeStatusFilter(value);
     setPage(1);
   };
 
@@ -381,16 +403,46 @@ export function InstanceListPage() {
       InstanceApi.list({
         page,
         page_size: pageSize,
-        gateway_status: statusFilter || undefined,
+        gateway_status: gatewayStatusFilter || undefined,
+        runtime_status: runtimeStatusFilter || undefined,
         search: searchQuery,
         sort_by: apiSortBy,
         sort_order: apiSortOrder,
       }),
-    [statusFilter, page, pageSize, searchQuery, sortBy, sortOrder, viewMode]
+    [
+      gatewayStatusFilter,
+      runtimeStatusFilter,
+      page,
+      pageSize,
+      searchQuery,
+      sortBy,
+      sortOrder,
+      viewMode,
+    ],
   );
 
   const refresh = () => {
     void instances.reload();
+  };
+
+  const handleRefresh = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      try {
+        await InstanceApi.probeHealth();
+      } catch (e) {
+        toast(
+          'warn',
+          t('topology.probeFailed', {
+            detail: e instanceof ApiError ? e.detail : (e as Error).message,
+          }),
+        );
+      }
+      await instances.reload();
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   const handleViewModeChange = (mode: ViewMode) => {
@@ -418,8 +470,12 @@ export function InstanceListPage() {
               className="basis-full sm:basis-auto"
             />
             <ViewModeToggle value={viewMode} onChange={handleViewModeChange} />
-            <button className="btn sm" onClick={refresh}>
-              {t('common.refresh')}
+            <button
+              className="btn sm"
+              disabled={refreshing}
+              onClick={() => void handleRefresh()}
+            >
+              {refreshing ? t('common.loading') : t('common.refresh')}
             </button>
             <button className="btn primary sm" onClick={() => setCreateOpen(true)}>
               + {t('topology.createInstance')}
@@ -442,8 +498,10 @@ export function InstanceListPage() {
               sortOrder={sortOrder}
               sortOptions={sortOptions}
               onSortChange={handleSortChange}
-              statusFilter={statusFilter}
-              onStatusFilterChange={handleStatusFilterChange}
+              gatewayStatusFilter={gatewayStatusFilter}
+              onGatewayStatusFilterChange={handleGatewayStatusFilterChange}
+              runtimeStatusFilter={runtimeStatusFilter}
+              onRuntimeStatusFilterChange={handleRuntimeStatusFilterChange}
             />
           ) : !instances.data || instances.data.items.length === 0 ? (
             <div className="card">

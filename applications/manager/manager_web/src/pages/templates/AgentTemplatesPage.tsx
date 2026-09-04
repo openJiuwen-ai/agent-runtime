@@ -105,7 +105,7 @@ export function AgentTemplatesPage() {
     <>
       <div className="flex min-w-0 flex-col gap-4">
         <div className="page-header w-full min-w-0 flex-wrap items-start gap-y-3">
-          <div className="min-w-[7.5rem] max-w-[12rem] shrink-0 sm:max-w-[16rem]">
+          <div className="min-w-[7.5rem] max-w-[20rem] shrink-0 sm:max-w-[32rem]">
             <div className="page-title truncate" title={t('agentTemplate.title')}>
               {t('agentTemplate.title')}
             </div>

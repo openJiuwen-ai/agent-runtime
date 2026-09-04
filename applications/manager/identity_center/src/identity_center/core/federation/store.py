@@ -22,12 +22,12 @@ from openjiuwen_runtime.service import (
 
 from identity_center.infrastructure.utils import utc_now
 from identity_center.models.identity_models import (
-    APP_USER_TABLE_DEF,
     FEDERATED_IDENTITY_TABLE_DEF,
     FEDERATION_CONNECTION_TABLE_DEF,
     FEDERATION_ROLE_MAPPING_TABLE_DEF,
-    ORG_TABLE_DEF,
-    USER_ORG_MEMBERSHIP_TABLE_DEF,
+    IDENTITY_ORG_TABLE_DEF,
+    IDENTITY_USER_TABLE_DEF,
+    IDENTITY_USER_ORG_MEMBERSHIP_TABLE_DEF,
 )
 
 
@@ -39,9 +39,9 @@ class IdentityCenterFederatedIdentityStore(FederatedIdentityStore):
             raise TypeError("federated identity store requires a SQLAlchemy DB handler")
         self._handler = handler
         self._system_context = SystemContext(db=handler)
-        self._users = handler.get_table(APP_USER_TABLE_DEF.table_name)
-        self._orgs = handler.get_table(ORG_TABLE_DEF.table_name)
-        self._memberships = handler.get_table(USER_ORG_MEMBERSHIP_TABLE_DEF.table_name)
+        self._users = handler.get_table(IDENTITY_USER_TABLE_DEF.table_name)
+        self._orgs = handler.get_table(IDENTITY_ORG_TABLE_DEF.table_name)
+        self._memberships = handler.get_table(IDENTITY_USER_ORG_MEMBERSHIP_TABLE_DEF.table_name)
         self._connections = handler.get_table(
             FEDERATION_CONNECTION_TABLE_DEF.table_name
         )
@@ -190,6 +190,8 @@ class IdentityCenterFederatedIdentityStore(FederatedIdentityStore):
                         attributes=identity.attributes,
                         first_login_at=now,
                         last_login_at=now,
+                        created_at=now,
+                        updated_at=now,
                     )
                 )
                 await session.execute(
@@ -197,6 +199,7 @@ class IdentityCenterFederatedIdentityStore(FederatedIdentityStore):
                         user_id=user_id,
                         group_id=connection.organization_id,
                         created_at=now,
+                        updated_at=now,
                     )
                 )
             else:
@@ -221,7 +224,11 @@ class IdentityCenterFederatedIdentityStore(FederatedIdentityStore):
                 await session.execute(
                     update(self._identities)
                     .where(self._identities.c.id == identity_row["id"])
-                    .values(attributes=identity.attributes, last_login_at=now)
+                    .values(
+                        attributes=identity.attributes,
+                        last_login_at=now,
+                        updated_at=now,
+                    )
                 )
                 membership = await _one_mapping(
                     session,
@@ -236,6 +243,7 @@ class IdentityCenterFederatedIdentityStore(FederatedIdentityStore):
                             user_id=user_id,
                             group_id=connection.organization_id,
                             created_at=now,
+                            updated_at=now,
                         )
                     )
 
@@ -283,7 +291,7 @@ class IdentityCenterFederatedIdentityStore(FederatedIdentityStore):
             await session.execute(
                 insert(self._orgs).values(
                     group_id=connection.organization_id,
-                    name=connection.organization_name,
+                    display_name=connection.organization_name,
                     status="active",
                     created_at=now,
                     updated_at=now,

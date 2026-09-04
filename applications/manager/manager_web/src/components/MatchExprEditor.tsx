@@ -39,7 +39,7 @@ function useFieldOptions(field: MatchField): SelectOption[] {
   return useMemo(() => {
     switch (field) {
       case 'group_id':
-        return (orgs?.items ?? []).map((o) => ({ id: o.group_id, label: o.name || o.group_id }));
+        return (orgs?.items ?? []).map((o) => ({ id: o.group_id, label: o.display_name || o.group_id }));
       case 'user_id':
         return (users?.items ?? []).map((u) => ({ id: u.user_id, label: u.display_name || u.user_id }));
       case 'bot_id':

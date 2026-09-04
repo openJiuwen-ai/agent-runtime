@@ -10,7 +10,7 @@ import {
   Org,
   OrgApi,
 } from '../../../services/api';
-import { AddToInstanceModal } from '../../iam/instanceBinding';
+import { AddToInstanceModal } from './instanceBinding';
 import { toast } from '../../../stores/uiStore';
 import { Empty } from '../../../components/Empty';
 import { Pagination } from '../../../components/Pagination';
@@ -151,7 +151,7 @@ export function InstanceOrgsTab({ instanceId }: Props) {
       matchKw(
         [
           o.group_id,
-          o.name,
+          o.display_name,
           o.grant.granted_by ?? '',
           o.grant.login_policy ?? 'allow',
           o.grant.enabled ? 'enabled' : 'disabled',
@@ -169,7 +169,7 @@ export function InstanceOrgsTab({ instanceId }: Props) {
     return [...rows].sort((a, b) => {
       switch (sortBy) {
         case 'name':
-          return compareText(a.name || a.group_id, b.name || b.group_id, order);
+          return compareText(a.display_name || a.group_id, b.display_name || b.group_id, order);
         case 'granted_by':
           return compareText(a.grant.granted_by ?? '', b.grant.granted_by ?? '', order);
         case 'login_policy':
@@ -222,7 +222,7 @@ export function InstanceOrgsTab({ instanceId }: Props) {
 
   const candidates = allOrgs
     .filter((o) => !boundOrgIds.has(o.group_id))
-    .map((o) => ({ id: o.group_id, label: o.name, sub: o.group_id }));
+    .map((o) => ({ id: o.group_id, label: o.display_name, sub: o.group_id }));
 
   return (
     <div className="flex min-w-0 flex-col gap-4">
@@ -467,7 +467,7 @@ function OrgRow({
         <input type="checkbox" checked={checked} onChange={onToggle} />
       </td>
       <td className="align-top">
-        <div className="text-text-strong font-medium break-words">{org.name}</div>
+        <div className="text-text-strong font-medium break-words">{org.display_name}</div>
         <div className="text-[11px] text-muted mono break-all" title={org.group_id}>
           {org.group_id}
         </div>

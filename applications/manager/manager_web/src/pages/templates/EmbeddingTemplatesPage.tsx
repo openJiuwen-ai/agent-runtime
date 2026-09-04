@@ -106,7 +106,7 @@ export function EmbeddingTemplatesPage() {
     <>
       <div className="flex min-w-0 flex-col gap-4">
         <div className="page-header w-full min-w-0 flex-wrap items-start gap-y-3">
-          <div className="min-w-[7.5rem] max-w-[16rem] shrink-0">
+          <div className="min-w-[7.5rem] max-w-[20rem] shrink-0 sm:max-w-[32rem]">
             <div className="page-title truncate">{t('embeddingTemplate.title')}</div>
             <div className="page-subtitle truncate">{t('embeddingTemplate.subtitle')}</div>
           </div>
