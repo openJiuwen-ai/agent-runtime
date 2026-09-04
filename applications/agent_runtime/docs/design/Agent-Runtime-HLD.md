@@ -219,6 +219,252 @@ field    := user_id | group_id | bot_id(固定小写枚举)
 - 校验(400 VALIDATION,锁外零副作用):缺 `containers` 键(legacy 内联载荷);`templates`/`scopes` 非 list;模板缺 `main_container_id`;**mixed**(引用键与 legacy 内联容器键并存);container_id 空/>100/同批重复/未被引用/双角色;容器逐项按角色校验(见 `container` 结构表;未知键/越角色键/不可表示字段);模板引用不在本批 containers;sidecar 引用重复/>8;volumes(重复卷名/多源/无源/悬挂挂载/未挂载卷/`subPath` 非 configMap/NFS 逾界);模板级 int 严格/策略下界/`nodeName` hostname;scope_id 字符集/`index` 拒 bool/引用不在本批模板集/`routing_rules` 表达式语法/`enabled` 须 bool/`expires_at` ISO-8601 或 null/同批重复(语法细则见上文)。
 - 每次成功下发都会:重建路由快照(§5.1 `routing:snapshot`)、对每个**生效中** scope 推 RM 池参数 + pod_spec(**eager 预热**:autoscale 下一拍即预热 min_idle)、对禁用/过期 scope 与被删 scope 推 `min_idle=0`(自然排空)。
 
+**curl 调用示例**(Envelope 包装:`type` 须为端点名、`metadata.request_id` 必填(兼幂等键)、三段式载荷在 `rawdata`;带 K8s pod 内探测的脚本版本见 `scripts/config_sync_seed.sh`。示例载荷要点:主容器探针恒 `httpGet` 且**无** `timeoutSeconds`/sidecar `tcpSocket` + 特权三件套/模板只持容器引用与 `volumes`/空 `routing_rules` = 通配兜底 scope):
+
+```bash
+curl -s -X POST "http://127.0.0.1:8091/api/session/config_sync" \
+  -H "Content-Type: application/json" \
+  -d @- <<'JSON'
+{
+  "type": "config_sync",
+  "metadata": {
+    "request_id": "cfg-20260903-001",
+    "user_id": "ops",
+    "bot_id": "ops",
+    "extra": {
+      "group_id": "ops"
+    }
+  },
+  "version": "1",
+  "rawdata": {
+    "containers": [
+      {
+        "container_id": "c-agentserver",
+        "name": "jiuwenclaw-agentserver",
+        "image": "swr.cn-north-4.myhuaweicloud.com/openjiuwen/jiuwenclaw-agentserver-amd64:0.0.10s",
+        "imagePullPolicy": "IfNotPresent",
+        "ports": [
+          {
+            "name": "sse",
+            "containerPort": 8766
+          }
+        ],
+        "envFrom": [
+          {
+            "secretRef": {
+              "name": "jiuwenclaw-secret-configmap"
+            }
+          },
+          {
+            "configMapRef": {
+              "name": "jiuwenclaw-agentserver-env"
+            }
+          }
+        ],
+        "securityContext": {
+          "runAsUser": 0,
+          "runAsGroup": 0
+        },
+        "readinessProbe": {
+          "httpGet": {
+            "path": "/api/v1/health",
+            "port": 8766
+          },
+          "initialDelaySeconds": 5,
+          "periodSeconds": 10
+        },
+        "volumeMounts": [
+          {
+            "name": "hp-code",
+            "mountPath": "/app/jiuwenswarm"
+          },
+          {
+            "name": "hp-rt-foundation",
+            "mountPath": "/usr/local/lib/python3.11/site-packages/openjiuwen_runtime/foundation"
+          },
+          {
+            "name": "hp-rt-management",
+            "mountPath": "/usr/local/lib/python3.11/site-packages/openjiuwen_runtime/management"
+          },
+          {
+            "name": "hp-openjiuwen",
+            "mountPath": "/usr/local/lib/python3.11/site-packages/openjiuwen"
+          },
+          {
+            "name": "gw-config",
+            "mountPath": "/root/.jiuwenswarm/config/config.yaml",
+            "subPath": "config.yaml"
+          },
+          {
+            "name": "gw-envfile",
+            "mountPath": "/root/.jiuwenswarm/config/.env",
+            "subPath": ".env"
+          },
+          {
+            "name": "data",
+            "mountPath": "/root/.jiuwenswarm"
+          }
+        ]
+      },
+      {
+        "container_id": "c-jiuwenbox",
+        "name": "jiuwenbox",
+        "image": "swr.cn-north-4.myhuaweicloud.com/openjiuwen/jiuwenclaw-sandbox-amd64:0.0.10s",
+        "imagePullPolicy": "IfNotPresent",
+        "ports": [
+          {
+            "containerPort": 8321
+          }
+        ],
+        "env": [
+          {
+            "name": "JIUWENBOX_LISTEN",
+            "value": "http://0.0.0.0:8321"
+          },
+          {
+            "name": "JIUWENBOX_POLICY_PATH",
+            "value": "/usr/local/lib/python3.11/site-packages/jiuwenbox/configs/enterprise-policy.yaml"
+          },
+          {
+            "name": "TZ",
+            "value": "Asia/Shanghai"
+          }
+        ],
+        "securityContext": {
+          "privileged": true,
+          "capabilities": {
+            "add": [
+              "SYS_ADMIN",
+              "NET_ADMIN"
+            ]
+          },
+          "seccompProfile": {
+            "type": "Unconfined"
+          },
+          "appArmorProfile": {
+            "type": "Unconfined"
+          }
+        },
+        "readinessProbe": {
+          "tcpSocket": {
+            "port": 8321
+          },
+          "initialDelaySeconds": 10,
+          "periodSeconds": 5
+        },
+        "volumeMounts": [
+          {
+            "name": "hp-cgroup",
+            "mountPath": "/sys/fs/cgroup"
+          },
+          {
+            "name": "hp-jiuwenbox",
+            "mountPath": "/usr/local/lib/python3.11/site-packages/jiuwenbox"
+          },
+          {
+            "name": "data",
+            "mountPath": "/home/app/.jiuwenswarm"
+          }
+        ]
+      }
+    ],
+    "templates": [
+      {
+        "template_id": "default",
+        "template_name": "default",
+        "main_container_id": "c-agentserver",
+        "sidecar_container_ids": [
+          "c-jiuwenbox"
+        ],
+        "pod_name": "jiuwenclaw-agentserver",
+        "namespace": "wmq",
+        "nodeName": "ecs-38b3-0002",
+        "sse_path": "/api/v1/events/stream",
+        "scope_concurrency": 3,
+        "pod_concurrency": 2,
+        "session_ttl": 60,
+        "pod_ttl": 3600,
+        "min_idle_pods": 1,
+        "ready_timeout": 240,
+        "volumes": [
+          {
+            "name": "hp-code",
+            "hostPath": {
+              "path": "/root/wangxin/jiuwenswarm",
+              "type": "Directory"
+            }
+          },
+          {
+            "name": "hp-rt-foundation",
+            "hostPath": {
+              "path": "/root/wangxin/agent-runtime/foundation/openjiuwen_runtime/foundation",
+              "type": "Directory"
+            }
+          },
+          {
+            "name": "hp-rt-management",
+            "hostPath": {
+              "path": "/root/wangxin/agent-runtime/management/openjiuwen_runtime/management",
+              "type": "Directory"
+            }
+          },
+          {
+            "name": "hp-openjiuwen",
+            "hostPath": {
+              "path": "/root/wangxin/agent-core/openjiuwen",
+              "type": "Directory"
+            }
+          },
+          {
+            "name": "gw-config",
+            "configMap": {
+              "name": "jiuwenclaw-gateway-config"
+            }
+          },
+          {
+            "name": "gw-envfile",
+            "configMap": {
+              "name": "jiuwenclaw-gateway-envfile"
+            }
+          },
+          {
+            "name": "data",
+            "persistentVolumeClaim": {
+              "claimName": "jiuwenclaw-pvc"
+            }
+          },
+          {
+            "name": "hp-cgroup",
+            "hostPath": {
+              "path": "/sys/fs/cgroup",
+              "type": "Directory"
+            }
+          },
+          {
+            "name": "hp-jiuwenbox",
+            "hostPath": {
+              "path": "/root/wangxin/jiuwenswarm/jiuwenbox/src/jiuwenbox",
+              "type": "Directory"
+            }
+          }
+        ]
+      }
+    ],
+    "scopes": [
+      {
+        "scope_id": "default",
+        "index": 100,
+        "template_id": "default",
+        "routing_rules": ""
+      }
+    ]
+  }
+}
+JSON
+```
+
+成功响应(`rawdata` 内):`{"ok": true, "templates_synced": 1, "templates_deleted": 0, "containers_synced": 2, "containers_deleted": 0, "scopes_synced": 1, "scopes_deleted": 0, "affected_scopes": ["default"], "wildcard_present": true}`;幂等重放收敛为 `affected_scopes: []`。同一份三段式 JSON(root 即 `rawdata` 内容)也可直接经 Manager Web「服务配置模板 → 导入」落库。
+
 **错误响应体**(所有非 2xx):
 
 | 字段 | 类型 | 说明 |
