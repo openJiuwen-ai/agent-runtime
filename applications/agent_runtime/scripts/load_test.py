@@ -9,8 +9,8 @@
 - 全程只经 HTTP API，不碰 Redis/DB/K8s；
 - 不 FLUSHDB、默认不调 cleanup 端点（它会删目标 namespace 下全部
   AgentServer Pod）——模板/规则/会话按 run-id 命名空间化，靠 TTL 老化；
-- queued 场景错误直方图中出现 SCOPE_QUEUE_FULL / SCOPE_FULL_TIMEOUT 属
-  预期（排队路径被刻意打到），只报告不判败。
+- queued 场景错误直方图中出现 503 SCOPE_FULL 属预期（容量满快失败路径被
+  刻意打到），只报告不判败。
 
 用法示例：
   uv run --no-sync python scripts/load_test.py \
@@ -41,7 +41,7 @@ def _parse_args() -> argparse.Namespace:
                    help="单入口（LB 或实例），含 /api/session 前缀")
     p.add_argument("--scenario", choices=["route", "route_touch", "queued"],
                    default="route",
-                   help="route=纯路由；route_touch=路由+保活；queued=小容量模板刻意排队")
+                   help="route=纯路由；route_touch=路由+保活；queued=小容量模板刻意打满（503 快失败路径）")
     p.add_argument("--concurrency", type=int, default=4, help="并发 worker 数")
     p.add_argument("--rps", type=float, default=0,
                    help="目标速率（开环令牌桶）；0=闭环（各 worker 全速）")
@@ -277,8 +277,8 @@ async def main() -> int:
     print(f"[load] run={run} scenario={args.scenario} concurrency={args.concurrency} "
           f"rps={args.rps or 'closed-loop'} duration={args.duration}s "
           f"warmup={args.warmup}s target={base}")
-    print("[load] 注意：queued 场景的 SCOPE_QUEUE_FULL/SCOPE_FULL_TIMEOUT 属预期排队路径；"
-          "服务端每排队请求持一条 Redis pubsub 连接，注意 maxclients")
+    print("[load] 注意：queued 场景的 503 SCOPE_FULL 属预期容量满快失败路径；"
+          "只报告不判败")
 
     stats = Stats()
     scopes: list[dict] = []

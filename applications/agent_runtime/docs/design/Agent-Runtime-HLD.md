@@ -91,7 +91,7 @@ flowchart TB
 | **min_idle_pods** | per-`scope_id` 的最小热备 Pod 数(config_sync 主动推 RM,**无请求即预热**)。 |
 | **max_pods** | 单个 scope 的最大 Pod 数,派生 = `⌈scope_concurrency / pod_concurrency⌉`,SM 经 `pool_config` 传入 RM。 |
 
-> **示例配置**(本文场景统一):`scope_concurrency=3`、`pod_concurrency=2` → `max_pods(最多 Pod 数)=⌈scope_concurrency/pod_concurrency⌉=⌈3/2⌉=2`、`session_ttl=60s`、`scope_full_timeout=30s`。
+> **示例配置**(本文场景统一):`scope_concurrency=3`、`pod_concurrency=2` → `max_pods(最多 Pod 数)=⌈scope_concurrency/pod_concurrency⌉=⌈3/2⌉=2`、`session_ttl=60s`。
 
 ---
 
@@ -108,7 +108,7 @@ flowchart TB
 | `POST /api/session/cleanup` | `{ namespace?, label_selector? }` | `{ cleaned:int }` | 运维批量清 Pod(灾难恢复 / 重新部署),handler 在 Session Manager、委托 `rm_facade.cleanup()` |
 
 - `group_id` 经 `metadata.extra` 传递;`metadata.request_id` 兼作幂等键。
-- `route` 典型错误:容量满超时(504)、无可用 Pod(503)、无匹配 scope(503)、参数错(400);过载响应带 `Retry-After` + `error_code`。
+- `route` 典型错误:容量满(503)、无可用 Pod(503)、无匹配 scope(503)、参数错(400);过载响应带 `Retry-After` + `error_code`。
 
 > **`route` 内部调 `rm_facade.acquire` 时传的两个关键参数**:
 >
@@ -470,9 +470,9 @@ JSON
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `ok` | bool | 固定 `false` |
-| `error_code` | str | `SCOPE_FULL_TIMEOUT` / `SCOPE_QUEUE_FULL` / `NO_POD_AVAILABLE` / `CONFIG_NOT_FOUND` / `MAX_PODS_REACHED` / `DEPLOY_FAILED` / `CONFIG_SYNC_BUSY` / `STATE_UNAVAILABLE` / `VALIDATION` |
+| `error_code` | str | `SCOPE_FULL` / `NO_POD_AVAILABLE` / `CONFIG_NOT_FOUND` / `MAX_PODS_REACHED` / `DEPLOY_FAILED` / `CONFIG_SYNC_BUSY` / `STATE_UNAVAILABLE` / `VALIDATION` |
 | `error_message` | str | 人类可读描述 |
-| `retry_after` | int?(秒) | 仅过载类(`SCOPE_QUEUE_FULL` / `SCOPE_FULL_TIMEOUT` / `NO_POD_AVAILABLE`)与 `STATE_UNAVAILABLE` 返回;其它省略 |
+| `retry_after` | int?(秒) | 仅过载类(`SCOPE_FULL` / `NO_POD_AVAILABLE`)与 `STATE_UNAVAILABLE` 返回;其它省略 |
 
 `STATE_UNAVAILABLE`(503,2026-09):状态后端(Redis/DB)**连接级**故障在 handler 层统一翻译(redis ConnectionError/TimeoutError、sqlalchemy Operational/Interface/DisconnectionError)——区别于 internal 500:暂态可重试,LB/客户端重试语义依赖这一区分。Lua 逻辑错/DB schema 错仍走 500。
 
@@ -480,8 +480,8 @@ JSON
 
 | 参数 | 默认 | 含义 |
 |---|---|---|
-| `scope_full_timeout` | 30s | scope 满(队列内)阻塞上限,超则 504 `SCOPE_FULL_TIMEOUT`。2026-09 起**另有推导式单次 route 总预算** = `scope_full_timeout + ready_timeout + 10s 余量`(主循环每圈校验,封 need_acquire 无上界循环;不拍平复用队列预算——真镜像冷部署 15-25s 会让队列语义的 8s 必 504);超总预算同款 504,acquire 慢于预算时同 request_id 重试走幂等回放 |
-| `max_waiters` | 2 × `scope_concurrency` | 每 scope 等待队列上限,超限快失败 503 `SCOPE_QUEUE_FULL` |
+| `route 总预算` | `ready_timeout` + 10s 余量 | 推导式单次 route 上限(主循环每圈校验,封 need_acquire 无上界循环;2026-09 场景 F 快失败后队列分量已拆除);超预算 503 `NO_POD_AVAILABLE`(acquire 侧粗化惯例,WARNING 留真因),acquire 慢于预算时同 request_id 重试走幂等回放 |
+| `retry_after` | 1s | 过载 503(`SCOPE_FULL`/`NO_POD_AVAILABLE`)响应携带的建议重试间隔 |
 | `session_ttl` | 60s(template) | 会话保活窗口;超时未 touch 则老化回收 |
 
 ---
@@ -506,28 +506,23 @@ flowchart TD
     A2{"scope 活跃会话数<br/>已达上限?"}
     A3{"现有 Pod 中<br/>有空闲槽位?"}
     A4{"Pod 数已达<br/>上限 max_pods?"}
-    W{"30s 内有人<br/>释放额度?"}
     RA["返回原 Pod,续期<br/>(场景 A)"]
     RB["首个有空位 Pod,占额度返回<br/>(场景 B)"]
     RC["调 Resource 扩 +1 Pod,<br/>占额度返回(场景 C)"]
-    RF["阻塞等待额度释放<br/>(场景 F)"]
-    R504["504 SCOPE_FULL_TIMEOUT"]
+    R503["503 SCOPE_FULL + Retry-After<br/>(场景 F 快失败)"]
 
     S --> A1
     A1 -- 是 --> RA
     A1 -- 否 --> CLR --> A2
     A2 -- 否 --> A3
-    A2 -- 是(满) --> RF
+    A2 -- 是(满) --> R503
     A3 -- 有 --> RB
     A3 -- 无 --> A4
     A4 -- 未达 --> RC
-    A4 -- 已达 --> RF
-    RF --> W
-    W -- 是(被唤醒) --> A2
-    W -- 否(超时) --> R504
+    A4 -- 已达 --> R503
 ```
 
-**读图**:亲和优先(零成本续期)→ 准入(满则排队等,超时 504)→ 有空位直接占 → 无空位且未达 Pod 上限则扩 → 占额度走原子提交,不超发。
+**读图**:亲和优先(零成本续期)→ 准入(满则立即 503 快失败,2026-09 起无等待队列)→ 有空位直接占 → 无空位且未达 Pod 上限则扩 → 占额度走原子提交,不超发。
 
 #### 4.1.2 Session Manager —— 老化与回收 / 保活 / 故障清洗
 
@@ -554,7 +549,7 @@ flowchart TD
 ```
 
 - **保活(touch)**:会话存在且未过期 → 刷新老化计时(`touched=true`);否则 `touched=false`,网关回退重新 route。
-- **故障清洗(notify_pod_dead)**:Pod 不可用 → 找出其上所有会话逐个解绑(释放额度,唤醒等待者)→ 清除该 Pod 全部注册 → 返回受影响会话列表。
+- **故障清洗(notify_pod_dead)**:Pod 不可用 → 找出其上所有会话逐个解绑(释放额度)→ 清除该 Pod 全部注册 → 返回受影响会话列表。
 
 #### 4.1.3 Resource Manager —— acquire 决策主流程(请求路径)
 
@@ -670,8 +665,6 @@ flowchart TB
 | `scope:{scope_id}:sessions` | SET | 该 scope 活跃 session_id | **SCARD = scope 活跃数 = scope_concurrency 闸门** |
 | `scope:{scope_id}:pods` | ZSET | pod_id(score=接入序) | 该 scope 的 Pod 候选集,first-fit 按序遍历;sweeper ZREM 使 Pod 退出候选 |
 | `routing:snapshot` | STRING | 全部 scopes(含规则/索引)+ templates 的 JSON | **路由快照**:resolve 的唯一读源(route 每请求 1 GET,进程内按原文 memo 免重复解析);config_sync 写 DB 后原子 SET 覆盖,缺失/损坏由首次 resolve 从 DB 重建 |
-| `scope:{scope_id}:waiters` | ZSET | 等待中的 request_id → deadline(秒级时间戳) | **等待队列上限 max_waiters**(满了快失败 503;入队经 `LUA_WAITER_GATE` 原子闸门:先按 deadline 清崩溃遗留,再 ZADD 先行 + 超限自退,并发不超收,稳态 ZCARD ≤ max_waiters;score=deadline 使等待进程崩溃后名额自清不永久占用) |
-| `scope:{scope_id}:free` | PubSub | —(无持久值) | 额度释放信号(evict PUBLISH、阻塞 route SUBSCRIBE) |
 | `pod:{scope_id}:{pod_id}:sessions` | SET | 该(scope, Pod)上的 session_id | **SCARD < pod_concurrency = Pod 容量闸门** |
 | `pod:{scope_id}:{pod_id}:info` | HASH | sse_url / deploy_ver | Pod 的 SSE 地址(route 返回它给 gateway);`deploy_ver` = deploy 子集指纹(config_sync 日落判定用) |
 | `pod:{scope_id}:{pod_id}:idle_notified` | STRING(NX EX 60) | 去重标记 | 空 Pod 通知 RM 回收的 60s 去重;placement 时 DEL |
@@ -748,7 +741,7 @@ flowchart TB
 | C | 无亲和 + 无空位 | 新会话,现有 Pod 全满 | 调 Resource 扩 +1 Pod | 按需弹性 |
 | D | 老化与回收 | 会话 TTL 到期 | 解绑 → Pod 空 → 回收 | 低峰自动缩容 |
 | E | 保活 | gateway 周期保活 | 刷新 TTL | 阻止活跃会话老化 |
-| F | 容量满 | 活跃会话达上限 | 队列未满→排队等(超时 504);队列满(≥max_waiters)→快失败 503 | 背压不雪崩 |
+| F | 容量满 | 活跃会话达上限 | 立即 503 `SCOPE_FULL` + retry_after(快失败,不排队不订阅) | 背压不雪崩(gateway 退避) |
 | G | Pod 异常死亡 | Resource 通知 | 清洗受影响会话 | 故障自愈 |
 | H | min_idle 热备 | 空闲时 autoscale | 预建热备 Pod | 新请求零部署等待 |
 | I | RM acquire | SM 现有 Pod 都满时调 acquire | 取该 scope idle 暖 Pod 复用,或 deploy +1,或达 max_pods 返回 503 | 按需给 scope 配 Pod,暖 Pod 零部署 |
@@ -896,7 +889,6 @@ sequenceDiagram
     SW->>R: DEL session:sess_1
     SW->>R: SCARD pod:scope_A:pod_1:sessions
     R-->>SW: 0  (Pod 空了)
-    SW->>R: PUBLISH scope:scope_A:free "1"
     Note over SW,R: 空 Pod pass:LUA_SWEEP_IDLE_NOTIFY 原子<br/>(SCARD==0 + SET NX + ZREM scope:pods)
     SW->>R: ZREM scope:scope_A:pods pod_1  (原子内,退出 route 候选)
     SW-)RM: rm_facade.idle_consider {pod_1, scope_A}(fire-and-forget)
@@ -941,8 +933,8 @@ sequenceDiagram
 
 **Redis 状态变化**:`session:sess_1.expiry` 与 `session_expiry` 的 score 续期;**scope/Pod 集合不变**(额度不增减)。若会话已过期/不存在 → `{touched:false}`,gateway 应回退重新 `route`。
 
-#### 场景 F:容量满 —— 队列等待或快失败
-**前置**:`scope_A` 活跃会话已达 3(上限),新 `sess_4` 到来。每 scope 等待队列上限 `max_waiters`(默认 `2×scope_concurrency=6`)。
+#### 场景 F:容量满 —— 立即快失败(2026-09 起)
+**前置**:`scope_A` 活跃会话已达 3(上限),新 `sess_4` 到来。
 
 ```mermaid
 sequenceDiagram
@@ -950,28 +942,15 @@ sequenceDiagram
     participant SM as Session Manager
     participant R as Redis
     GW->>SM: POST /route {sess_4}
-    SM->>R: SCARD scope:scope_A:sessions
-    R-->>SM: 3   (>= scope_concurrency=3 → scope_full)
-    SM->>R: LUA_WAITER_GATE(SADD waiters + SCARD 超限自退,原子)
-    alt SCARD > max_waiters(队列满,自退)
-        SM-->>GW: 503 SCOPE_QUEUE_FULL + Retry-After(快失败,不进队列、不占连接)
-    else admitted → 进队列等
-        SM->>R: SUBSCRIBE scope:scope_A:free(+ ≤500ms 安全轮询)
-        alt 30s 内有人释放
-            R-->>SM: PUBLISH scope:scope_A:free(某 evict 发出)
-            SM->>R: SREM scope:scope_A:waiters sess_4
-            SM->>SM: 重跑选 Pod → 占刚释放的额度
-            SM-->>GW: {pod_sse_url, pod_id}
-        else 超 30s 仍满
-            SM->>R: SREM scope:scope_A:waiters sess_4
-            SM-->>GW: 504 SCOPE_FULL_TIMEOUT
-        end
-    end
+    SM->>R: LUA_ROUTE_PLACE(SCARD 闸门,原子)
+    R-->>SM: scope_full  (3 >= scope_concurrency=3)
+    SM-->>GW: 503 SCOPE_FULL + retry_after(毫秒级快失败)
+    Note over GW: 指数退避 + 随机抖动后重试(§7.3)
 ```
 
-**Redis 状态变化**:`scope:scope_A:waiters` 是等待队列(SET,入队/出队均原子:入队经 `LUA_WAITER_GATE` SADD 先行 + 超限自退,出队 SREM);`scope:scope_A:free` 是 pubsub 通道(额度释放信号,由 evict 发布、route 订阅)。等待期间无额度写入;被唤醒后才走场景 B/C 的写入。
+**Redis 状态变化**:无(闸门在 `LUA_ROUTE_PLACE` 原子内只读判定,拒绝路径零写入——无等待队列键、无 pubsub 通道)。有界等待队列(2026-08 及之前)已整体拆除:redis-py asyncio `RedisCluster` 无 pubsub 实现,且控制面背压已由 gateway 退避承担,见 `docs/feature/2026-09-scope-full-fastfail.md`。
 
-> 价值:**背压**而非雪崩——容量满时进有界队列(不随突发无限增长);队列满则快失败 503(不占连接),队列内超时则 504;gateway 据错误码退避重试。
+> 价值:**背压**而非雪崩——容量满立即拒绝(不占连接、不排队、零额外 Redis 资源);gateway 拿到可重试错误码后指数退避,把重试在时间上摊开。
 
 #### 场景 G:Pod 异常死亡 —— notify_pod_dead 清洗
 **前置**:`pod_2` 崩溃(上有 `sess_3`),Resource Manager 探测到 → 通知 Session Manager。
@@ -991,7 +970,6 @@ sequenceDiagram
     SM->>R: SREM pod:scope_A:pod_2:sessions sess_3
     SM->>R: ZREM session_expiry sess_3
     SM->>R: DEL session:sess_3
-    SM->>R: PUBLISH scope:scope_A:free "1"(额度释放,唤醒 F 中的等待者)
     Note over SM,R: 清理 pod_2 注册(三处)
     SM->>R: ZREM scope:scope_A:pods pod_2
     SM->>R: DEL pod:scope_A:pod_2:* (sessions/info/idle_notified)
@@ -1000,7 +978,7 @@ sequenceDiagram
     SM-->>RM: {invalidated:[sess_3]}   (gateway 可据此提示受影响用户重连)
 ```
 
-**Redis 状态变化**:受影响会话(`sess_3`)从四处清除;`pod_2` 从三处注册表清除;`scope:scope_A:free` 发布释放信号。
+**Redis 状态变化**:受影响会话(`sess_3`)从四处清除;`pod_2` 从三处注册表清除。
 
 > 价值:**故障自愈**——Pod 挂了立即回收所有粘在它上的会话,受影响用户重新 route 即被分配到健康 Pod,不留孤儿状态。
 
@@ -1292,7 +1270,7 @@ sequenceDiagram
 网络抖动时 gateway 会重试同一个请求(携带相同的 `request_id`)。服务用 `request_id` 作幂等键把结果记下,重试一来直接回上次的答,**不会因为重试就多占一份额度、多建一个 Pod**。另外 `idle_consider`(标记 Pod 空闲)和 `notify_pod_dead`(清死 Pod 注册)这两种操作本身就"做一遍和做多遍结果一样",丢了重发也安全(SM、RM 各用各自的前缀存幂等键,同一个 `request_id` 不会串)。
 
 ### 7.3 过载保护 —— 流量超容量时排队,而不是把后端打爆
-当某个 scope 的活跃会话已达上限,新请求不直接失败,而是进一个**有界的等待队列**(容量约 `2 × scope_concurrency`),等别人释放额度;队列也满了就**立即返回 503**(带 `Retry-After`),不拖着占用连接。等到 `scope_full_timeout`(默认 30s)还没轮到,返回 504。gateway 拿到"可重试"的错误码后,用**指数退避 + 随机抖动**重试——每次等更久、再叠加一个随机量,把一大批同时被拒的请求在时间上摊开,避免它们同一瞬间又一起涌回来把服务打爆(即"重试风暴")。
+当某个 scope 的活跃会话已达上限,新请求**立即返回 503 `SCOPE_FULL`**(带 `Retry-After`),不拖着占用连接、不排队(2026-09 起快失败——有界等待队列已拆除:redis-py asyncio `RedisCluster` 无 pubsub 实现,且等待资源占用与控制面定位不匹配,见 docs/feature/2026-09-scope-full-fastfail.md)。gateway 拿到“可重试”的错误码后,用**指数退避 + 随机抖动**重试——每次等更久、再叠加一个随机量,把一大批同时被拒的请求在时间上摊开,避免它们同一瞬间又一起涌回来把服务打爆(即“重试风暴”)。
 
 ### 7.4 认证授权 —— 谁能调哪个接口,由服务框架统一把关
 对外的五个接口(`route` / `touch` / `config_sync` / `config_refresh` / `cleanup`)用什么凭证(mTLS 或 token)、是否允许本次调用,由底层**服务框架 `openjiuwen_runtime.service` 统一把关**(`link_auth` + adapter 中间件),本服务只声明各接口的调用方约束:`config_sync` 只许 Claw Manager 调、`config_refresh` 只许运维(或 Claw Manager)调、`cleanup` 只许运维调。SM 与 RM 之间的调用是同进程函数调用,不经过网络框架,因此不需要鉴权。
@@ -1331,7 +1309,7 @@ AgentServer Pod 会崩溃、被驱逐或卡死。RM 靠两道防线保证它最�
 
 M6(server 模式)已完成开发与真环境端到端验收,实现与本文的差异记录如下(语义以本文为准,差异处本文已同步修订):
 
-- **`LUA_WAITER_GATE`(§5.1 键表 / §6.2 场景 F)**:实现期补充的第 7 个 SM Lua 脚本。初稿「先 SCARD 再 SADD」的入队判定在并发同时到达时全部读到旧计数而超收(真环境验收场景 F 发现的竞态),改为原子闸门后稳态 `SCARD ≤ max_waiters` 恒成立。全文见 SM 设计 §5.1。
+- **`LUA_WAITER_GATE`(§5.1 键表 / §6.2 场景 F)**:实现期补充的第 7 个 SM Lua 脚本。初稿「先 SCARD 再 SADD」的入队判定在并发同时到达时全部读到旧计数而超收(真环境验收场景 F 发现的竞态),改为原子闸门后稳态 `SCARD ≤ max_waiters` 恒成立。全文见 SM 设计 §5.1。**(2026-09:已随场景 F 快失败改造整体拆除,连同 waiters 键/free 通道,见 §9.2)**
 - **场景 N(半死 Pod 健康探测)**:机制已实现且有单测覆盖;端到端验收**暂缓**——当前 AgentServer 镜像在 SSE 端口对 `GET /health` 返回 426(要求协议升级),不满足 §6.2 场景 N 的固定约定,待 AgentServer 原生支持后补验。
 - 场景 A–L 已在真 Redis + MySQL + K8s 环境端到端验收通过(用例固化为 `applications/agent_runtime/scripts/e2e_hld_acceptance.py`,经 `scripts/integration_smoke.sh` 调用,可作部署后回归)。
 
@@ -1339,9 +1317,19 @@ M6(server 模式)已完成开发与真环境端到端验收,实现与本文的�
 
 §8「多副本无状态 + 前置 LB」承诺已全链路落地并验收:
 
-- **进程内双实例确定性测试**(12 用例,`tests/integration/test_multi_replica.py`):同进程两 App 共享一组资源,覆盖跨副本闸门不超收、deploy 锁窗口零重叠、PubSub 跨副本唤醒、幂等跨副本重放、配置失效传播、每 (job,epoch) 恒一选主、sweeper 互斥。套件 104 用例日常全跑。
+- **进程内双实例确定性测试**(12 用例,`tests/integration/test_multi_replica.py`):同进程两 App 共享一组资源,覆盖跨副本闸门不超收、deploy 锁窗口零重叠、幂等跨副本重放、配置失效传播、每 (job,epoch) 恒一选主、sweeper 互斥(PubSub 跨副本唤醒用例已随 2026-09 场景 F 拆除移除)。套件日常全跑。
 - **真 LB 多副本 e2e**(35 项,`scripts/e2e_multi_replica.py`):K8s 2 副本 + ClusterIP/NodePort Service 单入口,实例身份从选主键反查;含 **failover**(流量中删副本 Pod → Deployment 恢复 + 选主接管 + 错误率归零)。<2 实例自动 DEGRADED(专项 SKIP,退出码 0)。
 - **部署形态**:`deploy/`(Deployment 多副本/反亲和 + `/healthz` 探针 + SA/RBAC×2 + Service LB,`render_and_apply.sh` 渲染部署)+ Dockerfile;宿主机 `deploy_replicas.sh` 多进程。<br>**红线**:`OPENJIUWEN_SERVICE_DEPLOY_REPLICAS` 保持 1(副本数=Deployment replicas);RBAC 须覆盖 AgentServer 目标 namespace。
 - **压测/浸泡**:`scripts/load_test.py`(route/route_touch/queued 三场景,分位数+错误直方图;真 LB 实测 ~540rps p50≈5ms 零错误)。
+
+### 9.2 场景 F 快失败改造(2026-09 更新)
+
+有界等待队列(等待者 ZSET + free pubsub 通道 + `LUA_WAITER_GATE`)已**整体拆除**,场景 F 改为立即 503 `SCOPE_FULL`(带 retry_after):
+
+- **动机**:redis-py 7.x `redis.asyncio.cluster.RedisCluster` 无 pubsub 实现,`redis+cluster://` 部署下等待路径必然 `AttributeError`;且既有验证矩阵(单实例 e2e/fakeredis 单测)从未覆盖「真集群客户端 + 等待路径」组合。
+- **错误码**:`SCOPE_FULL_TIMEOUT`(504)/`SCOPE_QUEUE_FULL`(503)删除,统一为 `SCOPE_FULL`(503);route 总预算超限改粗化 `NO_POD_AVAILABLE`(503,WARNING 留真因),504 自此不再出现。
+- **配置**:`scope_full_timeout`/`AGENT_RUNTIME_SCOPE_FULL_TIMEOUT` 删除(存量部署 env 残留无害);总预算推导改为 `ready_timeout + 10s 余量`。
+- **净空**:SM Lua 6 个(删 `LUA_WAITER_GATE`);EVICT/TOUCH/ROUTE_PLACE 内 3 处 `PUBLISH :free` 移除;键表删 `scope:{sid}:waiters`/`scope:{sid}:free`(存量部署残留键无 TTL 但无害,可一次性清理);visualization 响应删 `waiters` 字段。
+- 全记录见 `docs/feature/2026-09-scope-full-fastfail.md`。
 - **实现补充**:新增 `GET /healthz`(探针/就绪轮询/实例观测);`create_app` 支持注入共享资源(`resources`/`instance_id`/`own_resources`);修复 in-cluster 模式 `load_incluster_config` 误 await(同步函数,M6 只验过 kubeconfig 路径未暴露)。
 - **已知语义差异**:多副本冷突发时并发请求可拿到 `NO_POD_AVAILABLE` 快失败(占位封顶,`retry_after=1` 重试),非超收;M6 冒烟回归建议对单实例执行。

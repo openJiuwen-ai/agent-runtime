@@ -31,15 +31,6 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-def _env_float(name: str, default: float) -> float:
-    try:
-        return float(os.getenv(name, "") or default)
-    except ValueError:
-        logger.warning("invalid float env, using default: name=%s raw=%r default=%s",
-                       name, os.getenv(name), default)
-        return default
-
-
 @dataclass(frozen=True)
 class AgentRuntimeConfig:
     """本服务自有配置。"""
@@ -54,7 +45,6 @@ class AgentRuntimeConfig:
     watch_interval: int = 10                   # RM：死 Pod 轮询 + 健康探测
     reconcile_interval: int = 30               # RM：孤儿对账
     # route 行为
-    scope_full_timeout: float = 30.0           # scope 满（队列内）阻塞上限
     default_session_ttl: int = 60
 
     @classmethod
@@ -68,6 +58,5 @@ class AgentRuntimeConfig:
             reclaim_interval=_env_int("AGENT_RUNTIME_RECLAIM_INTERVAL", 1),
             watch_interval=_env_int("AGENT_RUNTIME_WATCH_INTERVAL", 10),
             reconcile_interval=_env_int("AGENT_RUNTIME_RECONCILE_INTERVAL", 30),
-            scope_full_timeout=_env_float("AGENT_RUNTIME_SCOPE_FULL_TIMEOUT", 30.0),
             default_session_ttl=_env_int("AGENT_RUNTIME_DEFAULT_SESSION_TTL", 60),
         )

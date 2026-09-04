@@ -11,8 +11,8 @@
 - LUA_RELEASE   idle_consider：转 idle 暖池 + 起 pod_ttl 计时（幂等）
 - LUA_PURGE     Pod 死亡 / reclaim 后清全部 RM key（幂等）
 - LUA_DEPLOY_FOLLOWER_GATE  deploy 锁输家的等待室原子准入（ZSET+deadline，
-  上限 pod_concurrency-1；先清过期成员再 ZADD 先行+超限自退——同
-  LUA_WAITER_GATE 纪律，禁止先查后加）
+  上限 pod_concurrency-1；先清过期成员再 ZADD 先行+超限自退——原子闸门
+  纪律，禁止先查后加）
 
 占位（deploying）与等待队列同为 **ZSET + deadline** 语义：score = 占位过期
 时间戳，闸门先 ZREMRANGEBYSCORE 清崩溃遗留（进程硬崩时进程内清理不存在，

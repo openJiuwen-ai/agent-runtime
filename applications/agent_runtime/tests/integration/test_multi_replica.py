@@ -6,9 +6,9 @@ FakeRedis / SQLite / FakeK8s —— 等价两个副本指向同一 Redis/DB/K8s�
 
 覆盖（对应 HLD「多副本无状态 + tick 级选主」承诺）：
 - 身份与共享态：instance_id 互异、A 写 B 读；
-- 准入闸门跨副本全局生效：并发突发不超收（LUA_WAITER_GATE / ROUTE_PLACE）；
+- 准入闸门跨副本全局生效：并发突发不超收（ROUTE_PLACE 原子仲裁，2026-09
+  起超收面为立即 503 SCOPE_FULL 快失败）；
 - deploy 锁跨副本竞争：部署窗口零重叠、占位清干净、输家复用暖 Pod；
-- PubSub 跨副本唤醒：A 排队、B touch 释放容量；
 - 幂等跨副本重放：同 request_id 落不同副本返回同结果；
 - 配置失效传播：B 改配置 → A 缓存即失效；
 - 选主互斥：每 (job, epoch) 恒一 winner、双实例均参选；
@@ -85,11 +85,11 @@ async def test_healthz_reports_instance(dual):
 
 @requires_lua
 async def test_cross_replica_burst_no_over_admission(dual):
-    """并发突发交替打 A/B：准入/排队闸门全局生效，不因双副本超收。
+    """并发突发交替打 A/B：准入闸门（Lua 原子仲裁）全局生效，不因双副本超收。
 
-    cc=2/pc=1（max_pods=2）：先串行放满 2 个会话，再 8 并发交替打 A/B ——
-    全部 scope_full → LUA_WAITER_GATE（max_waiters=2×cc=4）：恰好 4 入队
-    （3s 后 504 SCOPE_FULL_TIMEOUT）、4 快失败（503 SCOPE_QUEUE_FULL）。
+    cc=2/pc=1（max_pods=2）：先串行放满 2 个会话，再 8 并发交替打 A/B——
+    亲和续期的 2 个返回 200，其余全部撞 scope 闸门 → 立即 503 SCOPE_FULL
+    快失败（2026-09 起场景 F 无等待队列），零等待、零额外 Redis 写。
     """
     await dual.seed_template(scope_concurrency=2, pod_concurrency=1)
     for sid in ("s1", "s2"):
@@ -97,25 +97,27 @@ async def test_cross_replica_burst_no_over_admission(dual):
         assert status == 200, body
     scope = scope_of()
 
-    async def _attempt(i):
-        status, _, body = await dual.post(i % 2, "route", session_id=f"burst-{i}")
+    async def _attempt(sid):
+        status, _, body = await dual.post(0 if sid in ("s1", "s2") else 1,
+                                          "route", session_id=sid)
         return status, body.get("error_code")
 
-    outcomes = await asyncio.gather(*[_attempt(i) for i in range(8)])
+    # 8 并发：s1/s2 亲和续期（200）+ 6 个新会话（撞闸门 → SCOPE_FULL）
+    outcomes = await asyncio.gather(*[
+        _attempt(sid) for sid in ("s1", "s2", *(f"burst-{i}" for i in range(6)))
+    ])
     ok = [outcome for outcome in outcomes if outcome[0] == 200]
-    queue_full = [outcome for outcome in outcomes
-                  if outcome == (503, "SCOPE_QUEUE_FULL")]
-    timeout = [outcome for outcome in outcomes
-               if outcome == (504, "SCOPE_FULL_TIMEOUT")]
-    assert len(ok) == 0, outcomes               # scope 已满，突发全部不进
-    assert len(queue_full) == 4, outcomes       # max_waiters=4 之外的快失败
-    assert len(timeout) == 4, outcomes          # 入队者等待至 deadline
-    assert len(queue_full) + len(timeout) == 8
+    rejected = [outcome for outcome in outcomes
+                if outcome == (503, "SCOPE_FULL")]
+    assert len(ok) == 2, outcomes               # 恰好亲和续期的 2 个
+    assert len(rejected) == 6, outcomes         # 其余全部立即快失败
+    assert len(ok) + len(rejected) == 8
 
     assert await dual.redis.scard(
         f"{SM}scope:{scope}:sessions") == 2
-    assert await dual.redis.zcard(
-        f"{SM}scope:{scope}:waiters") == 0
+    # 拆除净空：无等待队列键、无部署占位
+    assert await dual.redis.keys(
+        f"{SM}scope:{scope}:waiters") == []
     assert await dual.redis.zcard(
         f"{RM}resource:scope:{scope}:deploying") == 0
 
@@ -251,52 +253,6 @@ async def test_deploy_loser_reuses_other_replicas_warm_pod(dual):
     assert len(dual.k8s.deploy_log) == 0                    # 本侧零部署
     assert await dual.redis.zcard(
         f"{RM}resource:scope:{scope}:deploying") == 0
-
-
-# ---------------------------------------------------------------- PubSub 跨副本唤醒
-
-
-@requires_lua
-async def test_waiter_on_a_woken_by_touch_on_b(dual):
-    """A 上排队的等待者被 B 上的 touch 唤醒（Redis PubSub 跨副本生效）。
-
-    cc=1/pc=1：A 放 s1 占满 → A 发 s2（入队阻塞）→ 回拨 s1 过期 → B touch
-    s1 → LUA_TOUCH 惰性驱逐过期会话（touched=False）+ PUBLISH free →
-    s2 被唤醒占刚释放的额度。次序关键：必须先入队再回拨（route_place 自身
-    会惰性驱逐过期绑定，先回拨则 s2 直接落位不排队）。
-    """
-    await dual.seed_template(scope_concurrency=1, pod_concurrency=1)
-    scope = scope_of()
-    status, raw, body = await dual.post(0, "route", session_id="s1")
-    assert status == 200, body
-    pod1 = raw["pod_id"]
-
-    import time as _time
-    from agent_runtime.util import now_ts
-
-    t0 = _time.monotonic()
-    waiter = asyncio.create_task(dual.post(0, "route", session_id="s2"))
-    await asyncio.sleep(0.3)                    # 让 s2 入队并订阅
-    assert await dual.redis.zcard(
-        f"{SM}scope:{scope}:waiters") == 1
-
-    past = now_ts() - 1
-    await dual.redis.zadd(f"{SM}session_expiry", {"s1": past})
-    await dual.redis.hset(f"{SM}session:s1", "expiry", past)
-    status, raw, body = await dual.post(1, "touch", session_id="s1")
-    assert status == 200, body
-    assert raw == {"touched": False}            # 已过期：惰性驱逐
-
-    w_status, w_raw, w_body = await asyncio.wait_for(waiter, timeout=2.5)
-    assert w_status == 200, w_body
-    assert w_raw["pod_id"] == pod1              # 占刚释放的额度（同一 Pod）
-    elapsed = _time.monotonic() - t0
-    assert elapsed < 2.0, f"唤醒耗时 {elapsed:.2f}s（远小于 3s 超时）"
-
-    assert await dual.redis.scard(
-        f"{SM}scope:{scope}:sessions") == 1
-    assert await dual.redis.zcard(
-        f"{SM}scope:{scope}:waiters") == 0
 
 
 # ---------------------------------------------------------------- 幂等 / 配置传播

@@ -33,7 +33,7 @@ cp agent_runtime.server.env.example .env.production.local
 ```bash
 cd applications/agent_runtime
 uv sync --extra local      # 含 dev 组（fakeredis[lua]/pytest）
-uv run pytest              # 114 个用例：状态层 Lua / config 层 / 组件全链路 / HTTP 冒烟 / 双实例多副本
+uv run pytest              # 433 个用例：状态层 Lua / config 层 / 组件全链路 / HTTP 冒烟 / 双实例多副本
 ```
 
 ### 集成冒烟测试（真环境，M6 用例固化）
@@ -51,9 +51,7 @@ cd applications/agent_runtime
 - **会 FLUSHDB 目标 Redis DB**（干净起点）：检测到非本服务前缀的外来 key 即中止
   （`--force-flush` 才放行），务必用独立 DB 编号。
 - 退出码：0 全过 / 1 有失败 / 2 前置自检未过，可直接接入 CI。
-- 经多副本 LB 亦可跑（实测 65/65）——前提：部署带
-  `AGENT_RUNTIME_SCOPE_FULL_TIMEOUT`（deploy 模板已默认 8，须显著小于模板
-  session_ttl，否则等待者 deadline 与会话到期碰撞产生混合结果）。
+- 经多副本 LB 亦可跑（实测 65/65）。
   排查实录与 cleanup 空目标的三个坑见 `docs/spec/e2e-test-cases.md` §8.1。
 
 ## 多副本部署与测试（M7）
@@ -62,9 +60,9 @@ cd applications/agent_runtime
 
 ### 进程内双实例测试（日常 pytest，离线）
 
-`tests/integration/test_multi_replica.py`（12 用例）：同进程两个完整 App 共享
+`tests/integration/test_multi_replica.py`（14 用例）：同进程两个完整 App 共享
 同一 fakeredis/SQLite/FakeK8s，确定性验证跨副本语义——准入闸门全局不超收、
-deploy 锁窗口零重叠、PubSub 跨副本唤醒、幂等跨副本重放、配置失效传播、
+deploy 锁窗口零重叠、幂等跨副本重放、配置失效传播、
 每 (job,epoch) 恒一选主、sweeper 互斥。随 `uv run pytest` 一起跑。
 
 ### 宿主机多进程（快速联调）
@@ -109,8 +107,8 @@ uv run --no-sync python scripts/load_test.py --base-url http://127.0.0.1:30091/a
     --scenario route_touch --concurrency 8 --rps 100 --duration 3600 --report-interval 300
 ```
 
-场景 `route` / `route_touch` / `queued`（刻意排队，SCOPE_QUEUE_FULL /
-SCOPE_FULL_TIMEOUT 属预期）；输出 p50/p90/p99/max、吞吐、错误码直方图；
+场景 `route` / `route_touch` / `queued`（刻意打满小容量模板，503 SCOPE_FULL
+快失败属预期）；输出 p50/p90/p99/max、吞吐、错误码直方图；
 长 `--duration` 即浸泡（周期增量报告）。全程无 FLUSHDB、默认不调 cleanup
 端点，资源按 run-id 命名空间化靠 TTL 老化。
 
@@ -118,7 +116,7 @@ SCOPE_FULL_TIMEOUT 属预期）；输出 p50/p90/p99/max、吞吐、错误码直
 
 ```
 src/agent_runtime/
-  errors.py            业务错误码契约（SCOPE_QUEUE_FULL / SCOPE_FULL_TIMEOUT / ...）
+  errors.py            业务错误码契约（SCOPE_FULL / NO_POD_AVAILABLE / ...）
   util.py              scope_id 派生 / deploy 指纹 / bytes 解码
   spec_fields.py       template 字段分类（A 类 deploy 子集 / B 类策略）
   config.py            AGENT_RUNTIME_* 环境变量
@@ -137,6 +135,6 @@ tests/                 单测（状态层/config 层）+ 组件全链路 + HTTP 
 | D 老化回收 / E 保活 / G 死 Pod 清洗 | `tests/integration/test_route_flow.py` |
 | H min_idle 热备 / I acquire / J 死 Pod 探测 | `tests/integration/test_route_flow.py`、`tests/resource_manager/test_rm_business.py` |
 | K reclaim / L 孤儿对账 / M 配置热更新 / N 半死探测 | `tests/resource_manager/test_rm_business.py`、`tests/session_manager/test_config_store.py` |
-| 多副本语义（选主互斥 / 跨副本闸门与唤醒 / failover） | `tests/integration/test_multi_replica.py`、`scripts/e2e_multi_replica.py` |
+| 多副本语义（选主互斥 / 跨副本闸门 / failover） | `tests/integration/test_multi_replica.py`、`scripts/e2e_multi_replica.py` |
 
 真 K8s / 真 Redis 单实例端到端（M6 冒烟）与真 LB 多副本端到端（M7）均已脚本化，见上。

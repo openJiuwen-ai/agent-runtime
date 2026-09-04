@@ -16,7 +16,7 @@ import logging
 import time
 from typing import Any
 
-from ..util import now_ts, s, to_int
+from ..util import s, to_int
 from . import lua_scripts as lua
 
 # hash tag 语义见模块 docstring；scope_id 等外部标识符禁止含 {/}（否则
@@ -73,18 +73,6 @@ class SMKeys:
         """STRING: 路由快照（scopes+templates 的 JSON；config_sync 原子 SET 覆盖）。"""
         return f"{self.prefix}:routing:snapshot"
 
-    def scope_waiters(self, scope_id: str) -> str:
-        """ZSET: 等待中的 request_id → deadline（秒级时间戳）。
-
-        ZCARD < max_waiters = 等待队列上限（场景 F）；score=deadline 供闸门
-        原子清理崩溃遗留（等待进程消失后名额不永久占用）。
-        """
-        return f"{self.prefix}:scope:{scope_id}:waiters"
-
-    def scope_free_channel(self, scope_id: str) -> str:
-        """PubSub 通道：额度释放信号（EVICT 发布 / 阻塞 route 订阅）。"""
-        return f"{self.prefix}:scope:{scope_id}:free"
-
     # ---- Pod 注册三处（不变量 5：scope:pods ⊆ pods:registered）
     def pod_info(self, scope_id: str, pod_id: str) -> str:
         """HASH: sse_url / deploy_ver。"""
@@ -123,7 +111,7 @@ class SessionState:
         self.redis = redis
         self.k = keys or SMKeys()
 
-    # 保留给需要 raw client 的场景（pubsub 订阅）
+    # 键前缀（含尾冒号）：eval 的 KEYS[1]/ARGV[1]，Redis Cluster 的 EVAL 路由锚
     @property
     def prefix(self) -> str:
         return self.k.prefix + ":"
@@ -173,7 +161,11 @@ class SessionState:
         max_pods: int,
         now: int,
     ) -> tuple[str, str]:
-        """返回 (action, pod_id)。action ∈ refresh/placed/scope_full/need_acquire。"""
+        """返回 (action, pod_id)。action ∈ refresh/placed/scope_full/need_acquire。
+
+        空/异常返回兜底 "scope_full"（fail-closed，eval 层 WARNING 留痕）——
+        场景 F 快失败后该兜底对外表现为立即 503 SCOPE_FULL。
+        """
         ret = await self.eval(
             lua.LUA_ROUTE_PLACE,
             session_id, scope_id, expiry_ts, session_ttl,
@@ -249,40 +241,6 @@ class SessionState:
         """到期 pass：全局到期集合中已过期的 session（最多 limit 个）。"""
         members = await self.redis.zrangebyscore(self.k.session_expiry(), "-inf", now)
         return [s(m) for m in members[:limit]]
-
-    # -------------------------------------------------------------- 等待队列（场景 F）
-
-    async def waiter_count(self, scope_id: str) -> int:
-        return to_int(await self.redis.zcard(self.k.scope_waiters(scope_id)))
-
-    async def try_add_waiter(self, scope_id: str, request_id: str,
-                             max_waiters: int, deadline_ts: int,
-                             *, margin_sec: int = 5) -> bool:
-        """原子入队（LUA_WAITER_GATE）：ZSET + deadline。
-
-        - 先清过期成员（score ≤ now）：等待进程崩溃/断连的遗留名额自愈，
-          不永久占用 max_waiters；
-        - 再 ZADD 先行 + ZCARD 超限自退：「先查后加」在并发同时到达时都会
-          读到旧计数而全部入队（M6 验收发现的竞态），必须同一脚本原子完成。
-
-        deadline_ts 为该请求等待预算的墙钟时间戳（秒）；margin 覆盖
-        scope_full_timeout 与入队时点之间的间隙。
-        """
-        now = now_ts()
-        ret = await self.eval(
-            lua.LUA_WAITER_GATE,
-            scope_id, request_id, max_waiters, int(deadline_ts) + margin_sec, now,
-        )
-        return bool(ret and ret[0] == "true")
-
-    async def add_waiter(self, scope_id: str, request_id: str) -> None:
-        """测试/诊断直塞：deadline 取远未来（+1h），不参与崩溃自清语义。"""
-        await self.redis.zadd(
-            self.k.scope_waiters(scope_id), {request_id: now_ts() + 3600}
-        )
-
-    async def remove_waiter(self, scope_id: str, request_id: str) -> None:
-        await self.redis.zrem(self.k.scope_waiters(scope_id), request_id)
 
     async def try_lock(self, key: str, ttl: int, token: str) -> bool:
         """SET NX EX 抢锁（tick 级选主 / config_sync 串行化）。"""

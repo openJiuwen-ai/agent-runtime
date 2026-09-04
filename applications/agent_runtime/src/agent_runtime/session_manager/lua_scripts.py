@@ -1,5 +1,5 @@
 # coding: utf-8
-"""Session Manager 的 7 个 Lua 脚本（所有 runtime 状态变更，原子）。
+"""Session Manager 的 6 个 Lua 脚本（所有 runtime 状态变更，原子）。
 
 约定：
 - 脚本不传 KEYS（键在脚本内由 ``prefix`` 动态拼出）；前缀自带 hash tag
@@ -10,14 +10,11 @@
 
 脚本清单（语义见 SM 设计 §5.1，逐条对齐）：
 - LUA_ROUTE_PLACE        route 原子核心：亲和续期 / 惰性回收 / 闸门 / first-fit / 提交
-- LUA_EVICT              session 移除唯一原语（四处同删 + 唤醒等待者）
+- LUA_EVICT              session 移除唯一原语（四处同删）
 - LUA_TOUCH              保活续期（惰性 evict 兜底；ttl 就地读 session HASH）
 - LUA_SWEEP_IDLE_NOTIFY  空 Pod pass 原子核心：SCARD==0 判定 + NX 去重 + ZREM 退出候选
 - LUA_REGISTER_POD       acquire 成功后登记新 Pod（三处注册同写 + 接入序）
 - LUA_CLEANUP_POD        notify_pod_dead 清该 (scope,pod) 的全部注册
-- LUA_WAITER_GATE        场景 F 等待队列原子入队（ZSET + deadline：先清过期成员
-                          再 ZADD 先行 + ZCARD 超限自退；M6 竞态修复 + 崩溃遗留
-                          自清，见 SM 设计 §8.2 与 DEPLOY_FOLLOWER_GATE 同款纪律）
 """
 
 from __future__ import annotations
@@ -66,7 +63,6 @@ if #flat > 0 then
     redis.call('SREM', pfx .. 'pod:' .. old_scope .. ':' .. old_pod .. ':sessions', sid)
     redis.call('ZREM', pfx .. 'session_expiry', sid)
     redis.call('DEL', skey)
-    redis.call('PUBLISH', pfx .. 'scope:' .. old_scope .. ':free', '1')
   end
 end
 
@@ -132,8 +128,6 @@ redis.call('ZREM', pfx .. 'session_expiry', sid)
 redis.call('DEL', skey)
 
 local remaining = redis.call('SCARD', pfx .. 'pod:' .. scope .. ':' .. pod .. ':sessions')
--- 唤醒该 scope 上因额度满阻塞的 route（不在此触发 idle_consider，交 sweeper）
-redis.call('PUBLISH', pfx .. 'scope:' .. scope .. ':free', '1')
 return {'evicted', scope, pod, tostring(remaining)}
 """
 
@@ -168,7 +162,6 @@ if tonumber(m['expiry']) <= now then
   redis.call('SREM', pfx .. 'pod:' .. m['scope_id'] .. ':' .. m['pod_id'] .. ':sessions', sid)
   redis.call('ZREM', pfx .. 'session_expiry', sid)
   redis.call('DEL', skey)
-  redis.call('PUBLISH', pfx .. 'scope:' .. m['scope_id'] .. ':free', '1')
   return {'false', ''}
 end
 
@@ -232,25 +225,4 @@ redis.call('DEL', pfx .. 'pod:' .. scope .. ':' .. pod .. ':idle_notified')
 redis.call('SREM', pfx .. 'pods:registered', scope .. ':' .. pod)
 redis.call('SREM', pfx .. 'pods:' .. pod .. ':scopes', scope)
 return {'ok'}
-"""
-
-# Argv: prefix, scope_id, request_id, max_waiters, deadline, now
-# 场景 F 有界等待队列原子入队。ZSET 以 deadline（秒级时间戳）为 score：
-# 先 ZREMRANGEBYSCORE 清过期成员（等待进程崩溃/断连的兜底，名额不泄漏），
-# 再 ZADD 先行 + ZCARD 超限自退（堵「先查后加」并发竞态）。
-LUA_WAITER_GATE = r"""
-local pfx = ARGV[1]
-local scope = ARGV[2]
-local waiter = ARGV[3]
-local max_waiters = tonumber(ARGV[4])
-local deadline = tonumber(ARGV[5])
-local now = tonumber(ARGV[6])
-local key = pfx .. 'scope:' .. scope .. ':waiters'
-redis.call('ZREMRANGEBYSCORE', key, '-inf', now)
-redis.call('ZADD', key, deadline, waiter)
-if redis.call('ZCARD', key) > max_waiters then
-  redis.call('ZREM', key, waiter)
-  return {'false'}
-end
-return {'true'}
 """

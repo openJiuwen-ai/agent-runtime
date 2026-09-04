@@ -4,14 +4,14 @@
 同一事件循环里跑两个完整 App（各自 SystemContext + 全部后台 Job），共享
 **同一** FakeRedis / SQLiteHandler / FakeK8s —— 等价于两个副本指向同一
 Redis/DB/K8s，用于确定性地验证跨副本逻辑（选主互斥、deploy 锁竞争、
-PubSub 跨副本唤醒、幂等重放、配置失效传播……）。
+幂等重放、配置失效传播……）。
 
 要点（开发交接文档「多副本踩点」）：
 - httpx.ASGITransport 不发 lifespan 事件，而 RestAdapter 每请求经
   ``_ensure_sysctx_async`` 惰性建 ctx —— 必须先手动驱动 lifespan，否则
   每 App 悄悄建出第二个 ctx，绕过后台 Job 启停。``asgi_lifespan`` 即为此。
 - 两个 TestClient 不可行（各自事件循环共享一个 FakeRedis 会破坏
-  loop 绑定的 pubsub future）→ 单事件循环 + ASGITransport。
+  client 的事件循环绑定）→ 单事件循环 + ASGITransport。
 - 共享资源由 harness 独占 connect/disconnect，App 侧
   ``own_resources=False``（避免双 start 双 connect / 双 stop 双 close）。
 """
@@ -263,8 +263,7 @@ async def dual(tmp_path, monkeypatch):
 
     monkeypatch.setenv("AGENT_RUNTIME_SQLITE_PATH", str(tmp_path / "dual.db"))
     settings = ServiceConfig.from_env()
-    # 短等待上限：排队类用例快速走到 504，缩短墙钟
-    arc = AgentRuntimeConfig(mode="local", scope_full_timeout=3.0)
+    arc = AgentRuntimeConfig(mode="local")
 
     from agent_runtime.resource_manager.k8s import FakeK8sPodClient
 

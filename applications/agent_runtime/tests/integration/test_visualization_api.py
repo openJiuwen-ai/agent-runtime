@@ -108,7 +108,6 @@ def test_visualization_session_found_and_404(tmp_path, monkeypatch):
         assert body["session"]["scope_id"] == scope_id
         assert body["session"]["pod_id"]
         assert body["ttl_remaining_s"] >= 0
-        assert body["scope"]["waiters"] == 0
         assert body["pod"]["sse_url"]
 
         # 未知会话 → 404；缺参 → 400

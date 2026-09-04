@@ -204,7 +204,7 @@ async def test_deploy_follower_gate_admits_up_to_cap(rm_state):
 
 @requires_lua
 async def test_deploy_follower_gate_concurrent_burst_respects_cap(rm_state):
-    """并发同时准入不超过上限（回归形态：同 LUA_WAITER_GATE 的纪律）。"""
+    """并发同时准入不超过上限（回归形态：原子闸门纪律——先加后查上限）。"""
     import asyncio
 
     results = await asyncio.gather(*[

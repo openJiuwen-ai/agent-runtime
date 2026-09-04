@@ -87,7 +87,7 @@ SM 侧 ctx,级联管理全部生命周期(框架 App 的 lifespan 只认一个 c
 ### 日志契约(排障入口)
 
 - **每请求一行汇总**(INFO,`agent_runtime.metrics`):`request: endpoint= route outcome=ok error_code=- duration_ms=11.0 | request_id=…`——五个端点全覆盖(含 touch/config_refresh/cleanup),与 uvicorn access 行经 request_id 关联。
-- **慢请求分诊**(WARNING,同 logger):汇总后 `duration_ms` 超 `_SLOW_REQUEST_MS`(2s)补 `request slow: endpoint= …`——scope_full 有界等待与冷部署会合法超阈,本行只作"值得看一眼"入口,精确语义以汇总行 duration_ms 为准。
+- **慢请求分诊**(WARNING,同 logger):汇总后 `duration_ms` 超 `_SLOW_REQUEST_MS`(2s)补 `request slow: endpoint= …`——冷部署(ready_timeout 量级)会合法超阈,本行只作"值得看一眼"入口,精确语义以汇总行 duration_ms 为准。
 - **touch 未命中 INFO**(`touch missed: session=…`):会话过期/gateway 回退重新 route 的排障入口;命中保持 DEBUG(保活高频防刷屏)。
 - **前置校验失败留痕**(WARNING,框架 RestAdapter):信封体模型被 FastAPI 拒绝(422)时请求**未进 router**——无汇总行/上下文尾巴,`request validation failed: path= request_id= detail=`(request_id 尽力从原始 body 抢救,errors 只取 loc/msg 摘要)是该请求唯一日志证据;响应体保持 FastAPI 默认形状不变。
 - **每次 acquire 一行结果**(INFO):`acquire done: scope= … outcome=deployed pod=… duration_ms=…`。
@@ -107,8 +107,8 @@ SM 侧 ctx,级联管理全部生命周期(框架 App 的 lifespan 只认一个 c
 | 端点 | 内容 |
 |---|---|
 | `/visualization/overview` | instance/mode/uptime/pid/python、脱敏配置摘要、`sysctx.readiness()`、5 个 job 的 interval/tick_timeout/JobRunner 计数快照/当前 leader(`GET agent_runtime:job:{name}` 解析 token;tick 间隙锁瞬时缺失 → leader=null 属正常) |
-| `/visualization/session?session_id=` | 会话 HASH、ttl_remaining_s、所属 scope 等待队列/会话数/候选 Pod、绑定 Pod sse_url/deploy_ver |
-| `/visualization/scope?scope_id=&limit=50` | RM:pod_count/idle/deploying/deploy_followers/scope_config(脱敏)/逐 Pod 详情(phase/ip/health_fails/idle_since);SM:waiters/session_count/候选 Pod/resolve 缓存 |
+| `/visualization/session?session_id=` | 会话 HASH、ttl_remaining_s、所属 scope 会话数/候选 Pod、绑定 Pod sse_url/deploy_ver |
+| `/visualization/scope?scope_id=&limit=50` | RM:pod_count/idle/deploying/deploy_followers/scope_config(脱敏)/逐 Pod 详情(phase/ip/health_fails/idle_since);SM:session_count/候选 Pod/resolve 缓存 |
 | `/visualization/scopes?limit=100` | `known_scope_ids()` 枚举 + 每 scope 一行摘要;total/truncated |
 | `/visualization/config` | DB routing_rules + templates(脱敏 kubeconfig)+ Redis 缓存键计数 |
 | `/visualization/stats` | registry.snapshot()(计数/分位/错误码分布)+ pid/uptime |
@@ -131,7 +131,6 @@ SM 侧 ctx,级联管理全部生命周期(框架 App 的 lifespan 只认一个 c
 | reclaim_interval | `AGENT_RUNTIME_RECLAIM_INTERVAL` | 1 | RM:idle 回收 |
 | watch_interval | `AGENT_RUNTIME_WATCH_INTERVAL` | 10 | RM:死 Pod+健康探测 |
 | reconcile_interval | `AGENT_RUNTIME_RECONCILE_INTERVAL` | 30 | RM:对账 |
-| scope_full_timeout | `AGENT_RUNTIME_SCOPE_FULL_TIMEOUT` | 30.0 | 等待队列阻塞上限(**部署须显著小于 session_ttl**,否则等待者 deadline 与会话到期碰撞) |
 | default_session_ttl | `AGENT_RUNTIME_DEFAULT_SESSION_TTL` | 60 | touch 兜底 ttl |
 
 常量:`SM_KEY_PREFIX="session_manager"`、`RM_KEY_PREFIX="resource_manager"`、`SERVICE_PREFIX="/api/session"`。
@@ -142,8 +141,7 @@ SM 侧 ctx,级联管理全部生命周期(框架 App 的 lifespan 只认一个 c
 
 | 码 | HTTP | retry_after | 场景 |
 |---|---|---|---|
-| `SCOPE_QUEUE_FULL` | 503 | ✅ | 等待队列满,快失败 |
-| `SCOPE_FULL_TIMEOUT` | 504 | ✅ | 队列内等待超时 |
+| `SCOPE_FULL` | 503 | ✅ | scope 满/达总容量,立即快失败(2026-09 起) |
 | `NO_POD_AVAILABLE` | 503 | ✅ | acquire 失败(MaxPodsReached/DeployFailed 在 SM 侧映射而来) |
 | `CONFIG_NOT_FOUND` | 503 | ❌ | resolve 无匹配规则/模板禁用 |
 | `VALIDATION` | 400 | ❌ | 参数错 |

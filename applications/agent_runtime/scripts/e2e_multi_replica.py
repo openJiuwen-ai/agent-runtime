@@ -14,7 +14,7 @@
   S2 经 LB route/touch/亲和（真实 deploy，kubectl 验证 Pod）
   S3 选主互斥：每 (job, epoch) 恒一 winner 且 ∈ candidates；双实例参选；
      winner 直方图（轮换为 SRANDMEMBER 随机，只记录）
-  S4 并发突发不超收（cc=2/pc=1：恰好 2 成功，503/504 分布，waiters 清空）
+  S4 并发突发不超收（cc=2/pc=1：恰好 2×200 亲和续期，其余 503 SCOPE_FULL 快失败）
   S5 幂等跨副本重放（同 request_id 两打 LB → 响应一致）
   S6 配置传播（config_sync 经 LB → 路由快照覆盖 → 新 route 见新值）
   S7 failover：流量进行中 kubectl 删一个副本 Pod（优先当前 sm_sweep
@@ -263,31 +263,24 @@ async def s4_burst(c: Client, r: aioredis.Redis) -> None:
             raise SystemExit(2)
     scope = "mr-f"
 
-    async def _attempt(i):
+    async def _attempt(sid):
         code, _, body = await c.post("route", group="mr-f", bot=BOT,
-                                     session_id=f"mr-burst-{i}")
+                                     session_id=sid)
         return code, body.get("error_code")
 
-    outcomes = await asyncio.gather(*[_attempt(i) for i in range(8)])
+    # 8 并发：mr-f1/f2 亲和续期（200）+ 6 个新会话撞 scope 闸门（SCOPE_FULL）
+    outcomes = await asyncio.gather(*[
+        _attempt(sid) for sid in ("mr-f1", "mr-f2",
+                                  *(f"mr-burst-{i}" for i in range(6)))])
     ok200 = [o for o in outcomes if o[0] == 200]
-    queue_full = [o for o in outcomes if o == (503, "SCOPE_QUEUE_FULL")]
-    timeout = [o for o in outcomes if o == (504, "SCOPE_FULL_TIMEOUT")]
-    check("S4 突发零成功（scope 已满，闸门全局生效）", len(ok200) == 0, str(outcomes))
-    check("S4 快失败 + 排队超时覆盖其余", len(queue_full) + len(timeout) == 8,
-          f"queue_full={len(queue_full)} timeout={len(timeout)}"
-          f"（等待 scope_full_timeout 后 504 属预期）")
+    rejected = [o for o in outcomes if o == (503, "SCOPE_FULL")]
+    check("S4 恰好 2×200（亲和续期，闸门全局生效）", len(ok200) == 2, str(outcomes))
+    check("S4 其余全部 503 SCOPE_FULL 快失败（2026-09 起无等待队列）",
+          len(rejected) == 6, str(outcomes))
     check("S4 终态不超收", await r.scard(
         f"{SM_PREFIX}scope:{scope}:sessions") == 2)
-    wkey = f"{SM_PREFIX}scope:{scope}:waiters"
-
-    async def _drained() -> bool:          # 真 async 闭包（lambda 里协程==0 恒 False）
-        return await r.zcard(wkey) == 0
-
-    drained = await wait_until(_drained, timeout=45, interval=2,
-                               desc="waiters drained")
-    members = await r.zrange(wkey, 0, -1) if not drained else set()
-    check("S4 waiters 清空", drained,
-          f"残留成员（应为其 request_id）：{sorted(members)[:5]}")
+    check("S4 拆除净空：无 waiters 键", not await r.keys(
+        f"{SM_PREFIX}scope:{scope}:waiters"))
     check("S4 占位清空", await r.zcard(
         f"{RM_PREFIX}resource:scope:{scope}:deploying") == 0)
 

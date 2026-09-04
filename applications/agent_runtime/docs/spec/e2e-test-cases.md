@@ -16,7 +16,7 @@
 | 层 | 入口 | 规模 | 依赖环境 | 退出码 |
 |---|---|---|---|---|
 | 进程内双实例 | `uv run pytest tests/integration/test_multi_replica.py` | 14 用例 | 无(离线,fakeredis) | pytest 标准 |
-| **审计实锤回归网** | `uv run pytest tests/integration/test_audit_repro.py` | 16 用例 | 无(离线,fakeredis) | pytest 标准 |
+| **审计实锤回归网** | `uv run pytest tests/integration/test_audit_repro.py` | 14 用例 | 无(离线,fakeredis) | pytest 标准 |
 | 集成冒烟(M6) | `./scripts/integration_smoke.sh`(sidecar 阶段加 `--with-sidecar`,全量规格加 `--with-mounts`) | 121 项断言(全规格形态;2026-09-01 真镜像 0.0.9s 门禁 121/121) | 单实例 server 模式 + 真 Redis/MySQL/K8s | 0/1/2 |
 | 多副本 e2e(M7) | `uv run --no-sync python scripts/e2e_multi_replica.py` | 35 项断言 | K8s 多副本 + Service LB + 真 Redis | 0/1/2 |
 | 压测/浸泡 | `uv run --no-sync python scripts/load_test.py` | 3 场景 | 任意入口(建议 LB) | 0/1 |
@@ -53,8 +53,7 @@
 
 | error_code | HTTP | retry_after | 语义 |
 |---|---|---|---|
-| `SCOPE_QUEUE_FULL` | 503 | ✅ | 等待队列满,快失败 |
-| `SCOPE_FULL_TIMEOUT` | 504 | ✅ | 队列内等待超时(2026-09 起另有推导式总预算 `scope_full_timeout+ready_timeout+10s`,need_acquire 无上界循环同款 504;冷部署不受队列预算误伤) |
+| `SCOPE_FULL` | 503 | ✅ | scope 满/达总容量,立即快失败(2026-09 起;原 503 队列满/504 等待超时两码已随等待队列拆除;总预算超限同属过载,粗化为 NO_POD_AVAILABLE) |
 | `NO_POD_AVAILABLE` | 503 | ✅ | acquire 失败(MaxPodsReached/DeployFailed 映射) |
 | `STATE_UNAVAILABLE` | 503 | ✅ | 状态后端(Redis/DB)连接级故障,handler 层翻译(2026-09;真环境注入手段有限,单测 `test_infra_faults.py` 覆盖) |
 | `CONFIG_NOT_FOUND` | 503 | ❌ | 无匹配规则/模板禁用 |
@@ -63,8 +62,7 @@
 
 ### 2.3 Redis 真相源(e2e 直接断言的键)
 
-- `{session_manager}:scope:{sid}:sessions`(SET,SCARD=scope 闸门)/`:pods`(ZSET,first-fit 候选)
-  /`:waiters`(**ZSET**,score=deadline;2026-08-28 起 SET→ZSET,断言用 ZCARD);
+- `{session_manager}:scope:{sid}:sessions`(SET,SCARD=scope 闸门)/`:pods`(ZSET,first-fit 候选);
   `{session_manager}:routing:snapshot`(STRING,路由快照)
 - `{session_manager}:session:{sid}`(HASH)/`session_expiry`(ZSET)/`pods:registered`(SET)
 - `{resource_manager}:resource:scope:{sid}:pods|idle|config|deploying`(deploying 为 **ZSET**,
@@ -229,7 +227,7 @@ sidecar 镜像随 `--sidecar-image` 分流:真 jiuwenbox 用 8321 + `JIUWENBOX_L
 
 | # | 输入 | 预期(内部状态变迁) |
 |---|---|---|
-| 18 | —(自然到期,阶段 2 落位起 ≤45s) | `scope:sessions` 清空(sweeper 1s tick 扫 `session_expiry` 到期集→逐个 EVICT+PUBLISH free) |
+| 18 | —(自然到期,阶段 2 落位起 ≤45s) | `scope:sessions` 清空(sweeper 1s tick 扫 `session_expiry` 到期集→逐个 EVICT) |
 | 19 | — | 会话四处全清(session HASH/expiry/pod 集/scope 集) |
 | 20 | — | 空 Pod pass → idle_consider → RM `idle` 暖池 2 个(空闲 Pod 回暖池等待回收/复用) |
 | 21 | — | 不变量 5:`pods:registered` 仍 2 个(`--with-sidecar` 时 3,box Pod 长存;`--with-mounts` 时再 +1,mnt Pod 2c 已 route;待 RM 回收后清) |
@@ -267,16 +265,16 @@ sidecar 镜像随 `--sidecar-image` 分流:真 jiuwenbox 用 8321 + `JIUWENBOX_L
 
 > 留白:create 成功但不 Ready 的失败形态(审计网 C4a)与取消中途形态(C4b)在替身镜像下不可构造(不可拉镜像 create 后立即 Pending,走同一条超时路径但物理清理断言需 FakeK8s);物理孤儿 Pod 的兜底删除未在此断言。
 
-**阶段 7:F 容量满/队列**(前置:e2e-f(cc=2/pc=1)空闲;max_waiters=2×cc=4;5 项)
+**阶段 7:F 容量满快失败**(前置:e2e-f(cc=2/pc=1)空闲;5 项;2026-09 起无等待队列)
 
 | # | 输入 | 预期(内部状态变迁) |
 |---|---|---|
 | 29–30 | `route(f1/f2, e2e-f)` 串行 | 各 200,2 Pod 占满(scope 额度 2/2) |
-| 31 | 5 并发 `route(f-over-0..4)` | ≥1 个 503 `SCOPE_QUEUE_FULL`(队列满快失败:LUA_WAITER_GATE 先清过期再 ZADD 先行+超限自退) |
-| 32 | 同上 | ≥2 个 504 `SCOPE_FULL_TIMEOUT`(队列内等待至 deadline;信号唤醒或 0.5s 轮询重仲裁均以 route_place 为唯一仲裁) |
-| 33 | — | `scope:{FSCOPE}:waiters` ZCARD=0(等待者 finally 出队) |
+| 31 | 5 并发 `route(f1,f2,f-over-0..2)`(前 2 个为亲和续期) | **恰好 2×200(亲和续期)+ 3×503 `SCOPE_FULL`**(Lua 闸门毫秒级拒新会话;用亲和续期凑 200 是为冷突发下确定性——并发冷 `need_acquire` 输家得 NO_POD_AVAILABLE 而非 SCOPE_FULL) |
+| 32 | 同上 | 5 并发总耗时 <1s(无等待);拒绝响应均带 `retry_after` |
+| 33 | — | `scope:{FSCOPE}:waiters` 键不存在(2026-09 拆除净空:拒绝路径零写入) |
 
-> 留白:丢唤醒窗口(publish 早于 subscribe)与崩溃遗留 waiter 的 deadline 自清在审计网 C7/C9 覆盖(需确定性时序注入);evict 唤醒等待者后「被唤醒者抢到/抢不到」两种落点未分别断言。
+> 历史:2026-08 版阶段 7 断言 503 队列满 + 504 等待超时,随等待队列拆除作废(见 §8.1 历史化记录与 docs/feature/2026-09-scope-full-fastfail.md)。
 
 **阶段 8:H min_idle 热备**(前置:e2e-warm(min_idle=1)、阶段 1b 已预热 1 个、w1 未路由;3 项)
 
@@ -347,9 +345,9 @@ sidecar 镜像随 `--sidecar-image` 分流:真 jiuwenbox 用 8321 + `JIUWENBOX_L
 | 47 | — | `{session_manager}:pod:*` 注册态全清 |
 
 **阶段 12b:表达式 or 支(清场后确定性验证,1 项)**:原位置在阶段 2 尾,但彼时 e2e-main 已被
-s1–s3 占满(cc=3),or 支 route 只能排队 504——原断言仅在「部署慢、会话先过期」时序下碰巧
-200(2026-08-27 快跑实测暴露,镜像预分发后快跑必现);移到阶段 12 清场后(Pod/会话全空、配置
-仍在)e2e-main 空闲,确定性 200:
+s1–s3 占满(cc=3),or 支 route 只能被 503 快失败拒绝——原断言仅在「部署慢、会话先过期」时序下
+碰巧 200(2026-08-27 快跑实测暴露,时为排队 504;2026-09 起为快失败);移到阶段 12 清场后
+(Pod/会话全空、配置仍在)e2e-main 空闲,确定性 200:
 
 | # | 场景 | 输入 | 预期输出/断言 |
 |---|---|---|---|
@@ -418,10 +416,10 @@ s1–s3 占满(cc=3),or 支 route 只能排队 504——原断言仅在「部署
 | # | 输入 | 预期 |
 |---|---|---|
 | 1–2 | 串行 `route(mr-f1/mr-f2)` | 各 200,占满 |
-| 3 | 8 并发 `route(mr-burst-*)` 经 LB | **0 个 200**(闸门跨副本全局生效) |
-| 4 | 同上 | 4×503 `SCOPE_QUEUE_FULL` + 4×504 `SCOPE_FULL_TIMEOUT`(max_waiters=4;30s 超时属预期) |
+| 3 | 8 并发 `route(mr-f1,mr-f2,mr-burst-0..5)` 经 LB(前 2 个亲和续期) | **恰好 2×200 + 6×503 `SCOPE_FULL`**(闸门跨副本全局生效;2026-09 起无等待队列) |
+| 4 | 同上 | 拒绝均带 retry_after;总耗时 <1s |
 | 5 | — | `scope:sessions` SCARD=2(不超收) |
-| 6 | —(≤45s 轮询) | waiters 清空(ZCARD=0;残留时打印成员便于定位) |
+| 6 | — | `scope:{scope}:waiters` 键不存在(拆除净空) |
 | 7 | — | `deploying` ZCARD=0(占位清空) |
 
 **S5 幂等跨副本重放**(2 项):
@@ -466,20 +464,19 @@ httpx ASGITransport 单事件循环并发驱动。**输入全部走完整 HTTP**
 |---|---|---|---|
 | 1 | 身份与共享态 | route 经 A,touch 经 B | instance_id 互异且 RM 镜像;B touch 到 A 建的会话 `touched=true` |
 | 2 | 交替亲和 | 同 session A→B→A→B route | 恒同 Pod;SCARD=1 |
-| 3 | 跨副本突发不超收 | cc=2/pc=1 占满后 8 并发交替 A/B | 0×200;4×503 队列满 + 4×504 超时;终态 SCARD=2、waiters=0、deploying=0 |
+| 3 | 跨副本突发不超收 | cc=2/pc=1 占满后 8 并发(2 亲和续期+6 新)交替 A/B | 恰好 2×200 + 6×503 SCOPE_FULL 快失败;终态 SCARD=2、无 waiters 键、deploying=0 |
 | 4 | deploy 锁串行化 + follower 复用 | SlowFakeK8s(deploy 0.4s),A/B 并发冷启动 + 追加 s3 | 并发对**恰好 1 次部署**(输家进等待室复用同 Pod);pod1 满后 s3 才第 2 次部署;窗口零重叠;占位/等待室清空 |
 | 5 | 输家复用暖 Pod | 手持 deploy 锁 + 后台注册 idle Pod 后释放;A route | 返回他副本 Pod;本侧零部署;占位清空 |
-| 6 | 跨副本唤醒 | A 占满→A 排队→回拨过期→**B** touch | B 的 touch 返回 `touched=false`(惰性驱逐);A 的等待者 <2s 被唤醒并占释放额度 |
-| 7 | 幂等跨副本 | 同 request_id A 首发、B 重放 | 响应一致;仅一会话 |
-| 8 | 配置失效传播 | B 改 session_ttl,A 再 route 新会话 | 缓存即 DEL;新会话 expiry=now+90 |
-| 9 | 单选主验证 | 采样 sm_sweep/rm_autoscale 5.5s | 每 epoch winner∈candidates;candidates 并集=双实例(winner 轮换仅记录) |
-| 10 | sweeper 互斥 | 手持 lock:sweep 后 A sweep_once | 直退不误扫;锁释放后补扫完成 |
-| 11 | 并发收敛 | A/B sweep_once 并发 gather | 无异常;全部老化;锁正常释放;`pods:registered` 不变 |
-| 12 | /healthz | 分别 GET 两 App | 200 + 各自 instance_id |
-| 13 | follower 上限严格快失败 | cc=8/pc=2,4 并发冷启动(deploy 0.4s) | 2×200(同 Pod)+ 2×503 NO_POD_AVAILABLE(闸门拒);恰好 1 次部署;占位/等待室清空 |
-| 14 | leader 失败 follower 不接管 | deploy 慢速失败(0.5s 后抛),2 并发 | 双 503 NO_POD_AVAILABLE;占位/等待室全清 |
+| 6 | 幂等跨副本 | 同 request_id A 首发、B 重放 | 响应一致;仅一会话 |
+| 7 | 配置失效传播 | B 改 session_ttl,A 再 route 新会话 | 缓存即 DEL;新会话 expiry=now+90 |
+| 8 | 单选主验证 | 采样 sm_sweep/rm_autoscale 5.5s | 每 epoch winner∈candidates;candidates 并集=双实例(winner 轮换仅记录) |
+| 9 | sweeper 互斥 | 手持 lock:sweep 后 A sweep_once | 直退不误扫;锁释放后补扫完成 |
+| 10 | 并发收敛 | A/B sweep_once 并发 gather | 无异常;全部老化;锁正常释放;`pods:registered` 不变 |
+| 11 | /healthz | 分别 GET 两 App | 200 + 各自 instance_id |
+| 12 | follower 上限严格快失败 | cc=8/pc=2,4 并发冷启动(deploy 0.4s) | 2×200(同 Pod)+ 2×503 NO_POD_AVAILABLE(闸门拒);恰好 1 次部署;占位/等待室清空 |
+| 13 | leader 失败 follower 不接管 | deploy 慢速失败(0.5s 后抛),2 并发 | 双 503 NO_POD_AVAILABLE;占位/等待室全清 |
 
-### 5.2 审计实锤回归网:`tests/integration/test_audit_repro.py`(16 用例)
+### 5.2 审计实锤回归网:`tests/integration/test_audit_repro.py`(14 用例;C7/C9 已随 2026-09 场景 F 快失败拆除——等待机制不存在,缺陷面消失)
 
 2026-08-27 全量审计(五维:状态层原子性/停机并发/外部契约/测试缺口/业务语义)产出
 ~40 条假设,先以本套用例**实锤**再修(16/16 全部成立;修复后全绿转回归网)。
@@ -502,19 +499,17 @@ FakeK8s 忽略探测参数的保真度缺口(按 (ip,port,path) 判定——2026
 | C4b | deploy 取消不留物理孤儿(C4) | 替身在 create 后卡在等 Ready 窗口 | 0.3s 后 cancel(优雅停机语义) | Redis 占位清(⑤)+ 物理 Pod 清(deploy 层清理契约) |
 | C5 | REGISTER 步失败不占容量(C5) | max_pods=2/pod_concurrency=1;注入 REGISTER 步抛错一次 | 三连 route(第 1 个触发注错) | 第 3 个会话仍能扩到 2 个真实 Pod——注册步失败不得永久虚占 max_pods |
 | C6 | 死 Pod 不回放(C6) | 会话 Pod 经 watch 判死 PURGE(注册全清) | 同 `request_id` 重试 route(网关幂等重试语义) | 拿到**新** Pod——idem 命中须校验存活,不得复活死 Pod 喂死地址 |
-| C7 | 丢唤醒后轮询重仲裁(C7) | scope 满(cc=1),sess_2 入队等待 | 注入:释放信号恰在 subscribe 完成前发布(天然并发窗口) | ≤0.5s 轮询重仲裁拿到空闲额度,而非空等满 2s 后 504 |
 | C8 | 亲和 Pod 被清后换绑(C8) | 按 notify_pod_dead 真实顺序驱动窗口:evict 已枚举会话→窗口内新会话落上该 Pod→cleanup 收口(info 已清) | 再 route 该会话(线程+硬 join 有界 5s) | 2s 内换绑新 Pod——refresh 须有存活守卫,不得无限自旋(每圈续期 expiry 的绝症) |
-| C9 | 幽灵 waiter 自清(C9) | scope 满;经真实闸门塞 2 个 **deadline 已过期**的幽灵 waiter(模拟崩溃副本遗留) | 新请求 route | 能入队、等满 0.5s 得 504——而非被永久 503 SCOPE_QUEUE_FULL |
 | C10a | 畸形 int 400(C10) | 配置在 | config_sync `session_ttl="abc"` | 400 VALIDATION——int 畸形不得裸抛 ValueError 成 500 |
-| C10b | 0 值策略字段拒绝(C10) | 配置在 | config_sync `pod_concurrency=0` | 400 VALIDATION——0 值是拒绝服务配置(满 max_pods 个必用不上的 Pod 后永久 scope_full) |
+| C10b | 0 值策略字段拒绝(C10) | 配置在 | config_sync `pod_concurrency=0` | 400 VALIDATION——0 值是拒绝服务配置(满 max_pods 个必用不上的 Pod 后每个 route 恒 503 SCOPE_FULL) |
 | C11 | 幻影 scope 收敛(C11) | 双 scope 下发;注入 drain 推送(min_idle=0 无 spec)失败一次(模拟滚动重启中断扩散③) | 删 scope 后 2×(sync+autoscale) | 幻影 scope 零 Pod——drain 目标集以 RM 已知 scope 为真源,重试必补推 |
 | C12 | 重试补跑软摘除(C12) | 会话在老版本 Pod 上;注入软摘除步失败一次(写 DB 后) | 同载荷重试 config_sync + route 新会话 | 新会话不落旧版本 Pod——候选集版本收敛是声明式每拍重算,不由 diff 驱动 |
 | C13 | 路径归一(C13) | — | config_sync `sse_path="api/v1/stream"`(缺前导 /) | URL `port=8080` 可解析且 path=/api/v1/stream——缺 / 会拼出 `http://ip:8080api/...` 非法端口 → 健康 Pod 被探死循环 |
 
 > **本层留白(需真环境/真镜像)**:C3/C4/C13 的替身保真度依赖可编程 K8s 双打——
 > 真 K8s 的删除异步性、CrashLoopBackOff 判死、真 AgentServer 的 health 契约仍只在
-> 门禁层可见;C9 的硬崩形态(kill -9 遗留 waiter)在本层用过期 deadline 模拟,
-> 真进程硬崩的端到端未覆盖;reclaim 与 acquire 的 TOCTOU(在用 Pod 被回收)两轮
+> 门禁层可见;硬崩遗留(RM deploy 占位)在本层用 deadline 过期模拟,真进程硬崩的
+> 端到端未覆盖(SM waiter 面 2026-09 已拆除);reclaim 与 acquire 的 TOCTOU(在用 Pod 被回收)两轮
 > 审计均确认存在但确定性复现需真时序,列为已知 P1 遗留(feature 记录遗留清单)。
 
 ### 5.3 强制刷新自然老化网:`tests/integration/test_force_refresh.py`(4 用例)
@@ -536,13 +531,12 @@ FakeK8s 忽略探测参数的保真度缺口(按 (ip,port,path) 判定——2026
 |---|---|---|
 | `route` | 每 scope 50 并发容量,8 会话/scope 轮转 route | 全 200;p50/p90/p99 报告;冷启动 max≈deploy 等待 |
 | `route_touch` | 同上 + 半数请求 touch 保活 | 同上(实测 2 副本 LB:16186 请求**零错误**,p50 7.3ms,p99 24.3ms) |
-| `queued` | cc=2/pc=2 小容量模板 | 直方图出现 `SCOPE_QUEUE_FULL`/`SCOPE_FULL_TIMEOUT` **属预期**(排队路径被刻意打到),只报告不判败 |
+| `queued` | cc=2/pc=2 小容量模板 | 直方图出现 503 `SCOPE_FULL` **属预期**(容量满快失败路径被刻意打到),只报告不判败 |
 
 - 速率:闭环(并发全速)或开环(`--rps` 令牌桶);`--duration` 长 → 浸泡
   (`--report-interval` 周期增量报告);Ctrl-C 优雅部分报告。
 - 安全边界:全程只走 HTTP,无 FLUSHDB、默认不调 cleanup 端点(会删 ns 下全部
   AgentServer Pod);模板/规则/组按 run-id 命名空间化,靠 TTL 老化。
-- 服务侧注意:每排队请求持一条 Redis pubsub 连接(`maxclients` 默认 10k)。
 
 ---
 
@@ -595,7 +589,7 @@ uv run --no-sync python scripts/load_test.py \
 
 ## 8. 已知语义差异与暂缓项
 
-### 8.1 「经多副本 LB 跑 M6 冒烟 63/65」排查实录(2026-08-18,已全部修复)
+### 8.1 「经多副本 LB 跑 M6 冒烟 63/65」排查实录(2026-08-18,已全部修复;**2026-09 历史化**——第 1 条的等待队列机制已随场景 F 快失败整体拆除,该变量/碰撞问题不复存在;第 2 条 cleanup 403/404 语义仍有效)
 
 两处失败当初被初步归因为「多副本冷突发语义」,**深入排查后证明均另有根因**——
 都是「该集群部署与单实例环境的配置差异」,修复后经 LB 稳定 **65/65**:
@@ -644,8 +638,8 @@ uv run --no-sync python scripts/load_test.py \
   (§5.2 C3 在替身层已覆盖逻辑,真 AgentServer 契约须真镜像门禁)。
 - deploy 失败/取消的物理孤儿在真 K8s 的清理(§5.2 C4 为替身双打;真 K8s 的
   删除异步性、节点驱逐形态未覆盖)。
-- 进程硬崩(kill -9)遗留的端到端自愈:waiter/占位 deadline 在本层以过期
-  deadline 模拟,真进程硬崩 + 重启收敛未覆盖。
+- 进程硬崩(kill -9)遗留的端到端自愈:RM deploy 占位 deadline 在本层以过期
+  deadline 模拟,真进程硬崩 + 重启收敛未覆盖(SM waiter 面 2026-09 已拆除)。
 - 依赖故障注入:Redis 运行中闪断、DB 不可达时的 route/config_sync/启动降级、
   K8s API 5xx/超时、create 409 名字冲突——全部零覆盖。
 - 真实配置形状的**镜像侧行为**(2026-08-28 阶段 0m/2c 已把配置渲染与挂载链路
@@ -662,11 +656,11 @@ uv run --no-sync python scripts/load_test.py \
 - reclaim 与 acquire 复用的 TOCTOU(在用 Pod 被物理删):两轮审计确认,
   LUA_RELEASE/PURGE 无「仍在 idle」守卫;确定性复现需真时序。
 - route 全程不重 resolve:config_sync 与长 route 并发时按旧 scope/模板仲裁、
-  对已删 scope 白等满超时。
+  对已删 scope 按旧快照仲裁一次(route 已无等待面,窗口=单次请求,2026-09 起)。
 - B 类调小(session/cc)低于现活跃数的回收语义:存量超限不驱逐只老化回落,
   行为未固化无断言。
 - 停机预算:uvicorn 无 `timeout_graceful_shutdown` + 30s 宽限 vs 300s 在飞请求
-  ——优雅停机可能整体跳过(占位/等待已 deadline 自愈,锁内中断仍依赖 finally)。
+  ——优雅停机可能整体跳过(占位 deadline 自愈,锁内中断仍依赖 finally;SM 等待已拆除,在飞面仅剩 acquire)。
 
 **C. 加速手法残留(与「零回拨」硬标准的差距)**
 - 冒烟阶段 4(D 老化)与阶段 5(K reclaim 主体)仍回拨 expiry/idle_since——

@@ -171,7 +171,6 @@ async def _overview(request: Request, sysctx: Any) -> dict[str, Any]:
             "reclaim_interval": arc.reclaim_interval,
             "watch_interval": arc.watch_interval,
             "reconcile_interval": arc.reconcile_interval,
-            "scope_full_timeout": arc.scope_full_timeout,
             "default_session_ttl": arc.default_session_ttl,
             "kubeconfig": arc.kubeconfig,
             "service_host": getattr(settings, "host", None),
@@ -188,7 +187,7 @@ async def _overview(request: Request, sysctx: Any) -> dict[str, Any]:
 
 @_visualization_endpoint
 async def _session(request: Request, sysctx: Any) -> dict[str, Any]:
-    """单会话状态：HASH / 到期 / 所属 scope 等待队列 / 绑定 Pod。"""
+    """单会话状态：HASH / 到期 / 所属 scope 会话数 / 绑定 Pod。"""
     session_id = (request.query_params.get("session_id") or "").strip()
     if not session_id:
         raise _VisualizationBadRequest("session_id is required")
@@ -209,7 +208,6 @@ async def _session(request: Request, sysctx: Any) -> dict[str, Any]:
     if scope_id:
         payload["scope"] = {
             "scope_id": scope_id,
-            "waiters": await sm_state.waiter_count(scope_id),
             "session_count": await sm_state.scope_session_count(scope_id),
             "candidate_pods": await sm_state.scope_pod_ids(scope_id),
         }
@@ -225,7 +223,7 @@ async def _session(request: Request, sysctx: Any) -> dict[str, Any]:
 
 @_visualization_endpoint
 async def _scope(request: Request, sysctx: Any) -> dict[str, Any]:
-    """单 scope 池状态：RM 池/逐 Pod 详情 + SM 等待队列/路由定义。"""
+    """单 scope 池状态：RM 池/逐 Pod 详情 + SM 会话/路由定义。"""
     scope_id = (request.query_params.get("scope_id") or "").strip()
     if not scope_id:
         raise _VisualizationBadRequest("scope_id is required")
@@ -269,7 +267,6 @@ async def _scope(request: Request, sysctx: Any) -> dict[str, Any]:
             "truncated": len(pod_ids) > limit,
         },
         "sm": {
-            "waiters": await sm_state.waiter_count(scope_id),
             "session_count": await sm_state.scope_session_count(scope_id),
             "candidate_pods": await sm_state.scope_pod_ids(scope_id),
             "routing": routing,   # 快照里的定义（index/模板/规则）；不在快照为 None

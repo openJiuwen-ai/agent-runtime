@@ -10,14 +10,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 import pytest
 
 from agent_runtime.config import SM_KEY_PREFIX
 from agent_runtime.errors import (
+    ErrorCode,
+    HTTP_STATUS_MAP,
     NoPodAvailable,
-    ScopeFullTimeout,
-    ScopeQueueFull,
+    ScopeFull,
 )
 from agent_runtime.util import now_ts
 from tests.conftest import requires_lua
@@ -66,87 +68,26 @@ async def test_route_packs_first_fit_then_scales_out(runtime):
 
 
 @requires_lua
-async def test_route_max_pods_maps_no_pod_available(runtime):
-    """4 个会话（scope_cc=3 满）→ 第 4 个排队超时；scope_cc=4/max=2 时扩满后 503。"""
+async def test_route_scope_full_at_max_pods_fast_fail(runtime):
+    """场景 F（2026-09 快失败）：Pod 全满 + 达 max_pods → scope_full →
+    立即 503 ScopeFull（带 retry_after），不等待、不留 waiters 键。"""
     await runtime.seed_template(scope_concurrency=4, pod_concurrency=2)  # max_pods=2
     await runtime.route("sess_1")
     await runtime.route("sess_2")   # pod_1 满
     await runtime.route("sess_3")   # 扩 pod_2
     await runtime.route("sess_4")   # pod_2 满（2/2）
-    # 第 5 个：Pod 全满 + 达 max_pods → scope_full → 队列等待 → 504
-    runtime.orchestrator.scope_full_timeout = 0.2
-    with pytest.raises(ScopeFullTimeout):
+    # 第 5 个：Pod 全满 + 达 max_pods → scope_full → 立即 503（无等待）
+    t0 = time.monotonic()
+    with pytest.raises(ScopeFull) as exc_info:
         await runtime.route("sess_5")
-
-
-# ---------------------------------------------------------------- 场景 F：队列
-
-
-@requires_lua
-async def test_route_queue_full_fast_fail(runtime):
-    """等待队列满（≥ 2×scope_concurrency）→ 快失败 503，不阻塞。"""
-    await runtime.seed_template(scope_concurrency=1, pod_concurrency=1)
-    await runtime.route("sess_1")                       # scope 满（1/1）
-    # 手工塞满等待队列（max_waiters = 2）
-    for waiter in ("w1", "w2"):
-        await runtime.sm_state.add_waiter(SCOPE, waiter)
-    runtime.orchestrator.scope_full_timeout = 5
-    with pytest.raises(ScopeQueueFull):
-        await runtime.route("sess_2", request_id="req-w3")
-
-
-@requires_lua
-async def test_route_waits_then_times_out(runtime):
-    """队列未满 → 阻塞等待至 deadline → 504 SCOPE_FULL_TIMEOUT。"""
-    await runtime.seed_template(scope_concurrency=1, pod_concurrency=1)
-    await runtime.route("sess_1")
-    runtime.orchestrator.scope_full_timeout = 0.3
-    with pytest.raises(ScopeFullTimeout):
-        await runtime.route("sess_2")
-    # 等待者已出队（finally 清理）
-    assert await runtime.sm_state.waiter_count(SCOPE) == 0
-
-
-@requires_lua
-async def test_route_concurrent_burst_respects_queue_cap(runtime):
-    """回归（M6 验收发现）：并发同时到达的等待请求不得超过 max_waiters。
-
-    旧实现「先 SCARD 再 SADD」：同时到达的请求都读到旧计数 → 全部入队，
-    上限失效。LUA_WAITER_GATE（SADD 先行 + SCARD 超限自退）必须原子。
-    """
-    await runtime.seed_template(scope_concurrency=1, pod_concurrency=1)
-    await runtime.route("sess_1")                       # scope 满（1/1），max_waiters=2
-    runtime.orchestrator.scope_full_timeout = 0.3
-
-    async def _attempt(i):
-        try:
-            await runtime.route(f"sess_burst_{i}", request_id=f"req-burst-{i}")
-            return None
-        except (ScopeQueueFull, ScopeFullTimeout) as exc:
-            return type(exc).__name__
-
-    outcomes = await asyncio.gather(*[_attempt(i) for i in range(5)])
-    # 队列上限 2：至少 1 个快失败 SCOPE_QUEUE_FULL；其余要么排队超时
-    assert outcomes.count("ScopeQueueFull") >= 1, outcomes
-    assert all(o in (None, "ScopeQueueFull", "ScopeFullTimeout") for o in outcomes)
-    assert await runtime.sm_state.waiter_count(SCOPE) == 0   # 全部出队
-
-
-@requires_lua
-async def test_route_wakeup_on_capacity_release(runtime):
-    """额度释放（evict PUBLISH free）唤醒等待者 → 占刚释放的额度（场景 F 左分支）。"""
-    await runtime.seed_template(scope_concurrency=1, pod_concurrency=1)
-    first = await runtime.route("sess_1")
-    runtime.orchestrator.scope_full_timeout = 5
-
-    async def _release_later():
-        await asyncio.sleep(0.3)
-        await runtime.sm_state.evict("sess_1")
-
-    releaser = asyncio.get_running_loop().create_task(_release_later())
-    result = await runtime.route("sess_2")              # 阻塞 → 被唤醒 → 占额度
-    await releaser
-    assert result["pod_id"] == first["pod_id"]          # 复用原 Pod（有空位）
+    assert time.monotonic() - t0 < 1.0          # 快失败：Lua 闸门毫秒级返回
+    assert exc_info.value.retry_after == 1
+    assert exc_info.value.code == ErrorCode.SCOPE_FULL
+    assert HTTP_STATUS_MAP[ErrorCode.SCOPE_FULL] == 503   # 错误码契约
+    # 拆除净空：不创建等待队列键
+    assert await runtime.sm_state.redis.keys(
+        f"{SM_KEY_PREFIX}:scope:{SCOPE}:waiters"
+    ) == []
 
 
 # ---------------------------------------------------------------- 场景 E：touch

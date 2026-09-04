@@ -17,6 +17,7 @@
 
 | 日期 | 文档 | 一句话 |
 |---|---|---|
+| 2026-09 | [场景 F 快失败:拆除有界等待队列](2026-09-scope-full-fastfail.md) | scope 满→立即 503 `SCOPE_FULL`(删 504/队列满两码);根因 redis-py asyncio `RedisCluster` 无 pubsub;waiter ZSET/free 通道/LUA_WAITER_GATE/`AGENT_RUNTIME_SCOPE_FULL_TIMEOUT` 全链拆除;总预算改 `ready_timeout+余量`、超限粗化 NO_POD_AVAILABLE;433 用例 |
 | 2026-09 | [模板表策略四列改名(wire 术语统一)](2026-09-template-table-runtime-terms.md) | `min_idle_pods`/`pod_concurrency`/`pod_ttl`/`scope_concurrency` DB 列名与 wire 同名,`_COLUMN_OF` identity 化;wire 契约与 manager 侧零改动;存量库须 RENAME COLUMN |
 | 2026-09 | [健壮性加固(三路审阅 14 项)](2026-09-robustness-hardening.md) | 封堵孤儿 Pod×2(REGISTER 失败 info 兜底删 / delete 失败不 PURGE)、config_sync 写库单事务+锁看门狗、K8s 调用 per-call 超时+start/close 并发保护、Redis/DB 连接级异常→503 `STATE_UNAVAILABLE`、TOUCH/ROUTE_PLACE 残骸自卫、rm_sysctx 所有权、route 总预算(推导式:队列+ready_timeout+余量,门禁 88/100 否决拍平复用)、后台循环逐项隔离;437 用例(每条修复配故障注入)+真镜像门禁 121/121 |
 | 2026-09 | [config_refresh 强制刷新(代次日落)](2026-09-config-refresh-generation.md) | 新增无载荷端点 `POST /api/session/config_refresh`:RM `generation` 代次(HINCRBY 唯一写点 + REGISTER 服务端烙印)驱动全 scope Pod 优雅日落并按存量配置重建;"当前版本"判定收紧为 ver∧gen,与 config_sync 共用锁(409);415 用例 + 真镜像门禁 e2e 121/121 + 真 cluster 16/16;连带修 LUA_EVICT 残骸自卫与四处 e2e 脚本缺陷 |
