@@ -1,58 +1,11 @@
-/** 实例(gateway)绑定管理的共享 UI（用户/组织页复用）：实例下拉、所属实例 chips、添加选择器。 */
+/** 实例访问面板复用的「添加到实例」选择器。 */
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Modal, ModalCancelButton } from '../../components/Modal';
-import { HintTooltip } from '../../components/HintTooltip';
-import { useFormDirty } from '../../hooks/useFormDirty';
-import { ApiError, InstanceApi } from '../../services/api';
-import { InstanceSummary } from '../../types/instance';
-import { toast } from '../../stores/uiStore';
-
-/** 拉取实例列表（下拉候选 / id→名字映射）。 */
-export function useInstances(): InstanceSummary[] {
-  const [instances, setInstances] = useState<InstanceSummary[]>([]);
-  useEffect(() => {
-    InstanceApi.list({ page: 1, page_size: 200 })
-      .then((r) => setInstances(r.items))
-      .catch(() => undefined);
-  }, []);
-  return instances;
-}
-
-export function instanceName(instances: InstanceSummary[], jid: string): string {
-  return instances.find((i) => i.jiuwenclaw_id === jid)?.jiuwenclaw_name || jid;
-}
-
-/** 实例筛选下拉：'' = 全部实例。 */
-export function InstanceFilter({
-  instances, value, onChange,
-}: { instances: InstanceSummary[]; value: string; onChange: (v: string) => void }) {
-  const { t } = useTranslation();
-  return (
-    <select className="input" style={{ width: 200 }} value={value} onChange={(e) => onChange(e.target.value)}>
-      <option value="">{t('iam.allInstances', { defaultValue: '全部实例' })}</option>
-      {instances.map((i) => (
-        <option key={i.jiuwenclaw_id} value={i.jiuwenclaw_id}>
-          {i.jiuwenclaw_name}（{i.namespace}）
-        </option>
-      ))}
-    </select>
-  );
-}
-
-/** "所属实例"列：chips + 溢出（+N，hover 看全）。 */
-export function InstanceChips({ jids, instances }: { jids: string[]; instances: InstanceSummary[] }) {
-  if (!jids || jids.length === 0) return <span className="text-xs text-muted">—</span>;
-  const names = jids.map((j) => instanceName(instances, j));
-  const shown = names.slice(0, 2);
-  const rest = names.length - shown.length;
-  return (
-    <span style={{ display: 'inline-flex', gap: 4, flexWrap: 'wrap' }}>
-      {shown.map((n, i) => <span key={i} className="badge">{n}</span>)}
-      {rest > 0 && <span className="badge" title={names.join('、')}>+{rest}</span>}
-    </span>
-  );
-}
+import { Modal, ModalCancelButton } from '../../../components/Modal';
+import { HintTooltip } from '../../../components/HintTooltip';
+import { useFormDirty } from '../../../hooks/useFormDirty';
+import { ApiError } from '../../../services/api';
+import { toast } from '../../../stores/uiStore';
 
 export interface Candidate { id: string; label: string; sub?: string }
 

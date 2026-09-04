@@ -130,7 +130,8 @@
     "modifiedAt": "修改时间",
     "viewBrief": "卡片视图",
     "viewList": "列表视图",
-    "searchPlaceholder": "搜索实例名称、实例 ID、状态"
+    "searchPlaceholder": "搜索实例名称、实例 ID、状态",
+    "probeFailed": "探活失败：{{detail}}"
   },
   "instanceForm": {
     "name": "实例名称",
@@ -388,7 +389,7 @@
   },
   "embeddingTemplate": {
     "title": "Embedding 模板",
-    "subtitle": "维护可复用的向量模型配置",
+    "subtitle": "维护向量模型模板",
     "new": "新建 Embedding 模板",
     "edit": "编辑 Embedding 模板",
     "templateName": "模板名称",
@@ -459,8 +460,8 @@
     "deleteConfirm": "确认删除该 Skill 白名单模板？该模板可能被多个实例资源引用，请确认无副作用。"
   },
   "serviceConfigTemplate": {
-    "title": "服务配置模板",
-    "subtitle": "维护AgentServer容器运行和会话参数模板，供Gateway Runtime启动AgentServer和管理会话使用",
+    "title": "服务资源模板",
+    "subtitle": "维护AgentServer会话参数和容器运行模板",
     "new": "新建服务配置模板",
     "edit": "编辑服务配置模板",
     "editSubtitle": "按 HLD 三段式配置：模板级策略 + AgentServer 主容器 + Sandbox sidecar",
@@ -635,15 +636,19 @@
   },
   "iam": {
     "users": "用户管理",
+    "usersSubtitle": "管理用户与角色",
+    "usersSearchPlaceholder": "搜索用户 ID、显示名",
     "orgs": "组织管理",
+    "orgsSubtitle": "管理组织与成员归属",
+    "orgsSearchPlaceholder": "搜索组织 ID、显示名",
     "bots": "Agent 模板",
     "newUser": "新建用户",
     "batchNewUser": "批量新建",
     "batchImport": "确认导入",
     "batchDownloadTemplate": "下载模板",
-    "batchHint": "上传 .xlsx/.csv。列：username、password、display_name、is_admin、orgs。无效组织自动忽略（→ 无组织）。",
+    "batchHint": "上传 .xlsx/.csv。列：username、password、display_name、is_admin、orgs。username 仅允许英文字母/数字/下划线/连字符。无效组织自动忽略（→ 无组织）。",
     "batchPreview": "预览（{{n}} 行）",
-    "batchInvalid": "{{n}} 行无效（缺用户名/密码）",
+    "batchInvalid": "{{n}} 行无效（缺用户名/密码，或用户名含非法字符）",
     "batchNoPwd": "无密码",
     "batchSummary": "共 {{total}}，成功 {{ok}}，失败 {{failed}}",
     "editUser": "编辑用户",
@@ -653,6 +658,8 @@
     "editBot": "编辑 Agent 模板",
     "displayName": "显示名",
     "username": "用户名(登录用)",
+    "usernameHint": "仅英文字母、数字、下划线和连字符；同时作为用户 ID",
+    "idCharsetInvalid": "{{field}}仅允许英文字母、数字、下划线和连字符",
     "password": "密码",
     "resetPassword": "重置密码(留空不改)",
     "admin": "管理员",
@@ -662,6 +669,7 @@
     "name": "名称",
     "description": "描述",
     "groupId": "组织 ID",
+    "groupIdHint": "可选；留空自动生成。仅英文字母、数字、下划线和连字符",
     "userId": "用户 ID",
     "botId": "模板 ID",
     "role": "角色",
@@ -765,8 +773,8 @@
     "chatLoadingSlow": "加载较慢,请稍候…"
   },
   "agentTemplate": {
-    "title": "Agent 管理",
-    "subtitle": "维护平台 Agent 模板目录",
+    "title": "Agent模板",
+    "subtitle": "维护可复用的Agent定义模板，供实例绑定使用",
     "new": "新建 Agent 模板",
     "edit": "编辑 Agent 模板",
     "templateName": "模板名称",

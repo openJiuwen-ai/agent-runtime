@@ -130,7 +130,8 @@
     "modifiedAt": "Modified At",
     "viewBrief": "Card view",
     "viewList": "List view",
-    "searchPlaceholder": "Search instance name, ID, or status"
+    "searchPlaceholder": "Search instance name, ID, or status",
+    "probeFailed": "Health probe failed: {{detail}}"
   },
   "instanceForm": {
     "name": "Instance Name",
@@ -388,7 +389,7 @@
   },
   "embeddingTemplate": {
     "title": "Embedding Templates",
-    "subtitle": "Maintain reusable embedding model configurations",
+    "subtitle": "Maintain embedding model templates",
     "new": "New Embedding Template",
     "edit": "Edit Embedding Template",
     "templateName": "Template Name",
@@ -459,8 +460,8 @@
     "deleteConfirm": "Delete this skill whitelist template? It may be referenced by instance resources."
   },
   "serviceConfigTemplate": {
-    "title": "Service Config Templates",
-    "subtitle": "Maintain AgentServer container runtime and session parameter templates for Gateway Runtime to start AgentServer and manage sessions",
+    "title": "Service Resource Templates",
+    "subtitle": "Maintain AgentServer session parameters and container runtime templates",
     "new": "New Template",
     "edit": "Edit Template",
     "editSubtitle": "HLD three-part config: template policy + AgentServer main + Sandbox sidecar",
@@ -635,15 +636,19 @@
   },
   "iam": {
     "users": "User Management",
+    "usersSubtitle": "Manage users and roles",
+    "usersSearchPlaceholder": "Search user ID or display name",
     "orgs": "Org Management",
+    "orgsSubtitle": "Manage organizations and membership",
+    "orgsSearchPlaceholder": "Search organization ID or display name",
     "bots": "Agent Templates",
     "newUser": "New User",
     "batchNewUser": "Batch Create",
     "batchImport": "Import",
     "batchDownloadTemplate": "Download Template",
-    "batchHint": "Upload .xlsx/.csv. Columns: username, password, display_name, is_admin, orgs. Invalid orgs are ignored (→ no org).",
+    "batchHint": "Upload .xlsx/.csv. Columns: username, password, display_name, is_admin, orgs. Username: letters/digits/underscore/hyphen only. Invalid orgs are ignored (→ no org).",
     "batchPreview": "Preview ({{n}} rows)",
-    "batchInvalid": "{{n}} invalid (missing username/password)",
+    "batchInvalid": "{{n}} invalid (missing username/password, or username has invalid characters)",
     "batchNoPwd": "no password",
     "batchSummary": "Total {{total}}, succeeded {{ok}}, failed {{failed}}",
     "editUser": "Edit User",
@@ -653,6 +658,8 @@
     "editBot": "Edit Agent Template",
     "displayName": "Display Name",
     "username": "Username (for login)",
+    "usernameHint": "Letters, digits, underscore and hyphen only; also used as user ID",
+    "idCharsetInvalid": "{{field}} may only contain letters, digits, underscore and hyphen",
     "password": "Password",
     "resetPassword": "Reset password (blank = keep)",
     "admin": "Admin",
@@ -662,6 +669,7 @@
     "name": "Name",
     "description": "Description",
     "groupId": "Group ID",
+    "groupIdHint": "Optional; auto-generated if blank. Letters, digits, underscore and hyphen only",
     "userId": "User ID",
     "botId": "Template ID",
     "role": "Role",
@@ -764,8 +772,8 @@
     "chatLoadingSlow": "Taking longer than usual. Please wait…"
   },
   "agentTemplate": {
-    "title": "Agent Management",
-    "subtitle": "Maintain the platform Agent template catalog",
+    "title": "Agent Templates",
+    "subtitle": "Maintain reusable Agent definition templates for instance binding",
     "new": "New Agent Template",
     "edit": "Edit Agent Template",
     "templateName": "Template Name",

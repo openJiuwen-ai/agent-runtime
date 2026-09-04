@@ -18,22 +18,22 @@ from identity_center.infrastructure.config import settings
 from identity_center.infrastructure.logger import get_logger
 from identity_center.infrastructure.utils import utc_now
 from identity_center.models.identity_models import (
-    APP_USER_TABLE_DEF,
     AUTH_IDENTITY_TABLE_DEF,
     AUTH_SESSION_TABLE_DEF,
+    IDENTITY_ORG_TABLE_DEF,
+    IDENTITY_USER_TABLE_DEF,
     NO_ORG_GROUP_ID,
-    ORG_TABLE_DEF,
-    USER_ORG_MEMBERSHIP_TABLE_DEF,
+    IDENTITY_USER_ORG_MEMBERSHIP_TABLE_DEF,
 )
 from identity_center.security.tokens import issue_access_token
 
 _log = get_logger(__name__)
 
-_APP_USER = APP_USER_TABLE_DEF.table_name
+_IDENTITY_USER = IDENTITY_USER_TABLE_DEF.table_name
 _AUTH_IDENTITY = AUTH_IDENTITY_TABLE_DEF.table_name
 _AUTH_SESSION = AUTH_SESSION_TABLE_DEF.table_name
-_ORG = ORG_TABLE_DEF.table_name
-_MEMBERSHIP = USER_ORG_MEMBERSHIP_TABLE_DEF.table_name
+_IDENTITY_ORG = IDENTITY_ORG_TABLE_DEF.table_name
+_MEMBERSHIP = IDENTITY_USER_ORG_MEMBERSHIP_TABLE_DEF.table_name
 
 _DEFAULT_PROVIDER = "local"
 _CAP = 1000
@@ -74,8 +74,9 @@ class IdentityAuthService:
             {
                 "refresh_token": refresh,
                 "user_id": user_id,
-                "created_at": now,
                 "expires_at": now + timedelta(seconds=int(settings.refresh_ttl_seconds)),
+                "created_at": now,
+                "updated_at": now,
             },
         )
         return {
@@ -97,7 +98,7 @@ class IdentityAuthService:
         if not user_id:
             _log.info("[Auth] login.fail", username=username.strip(), reason="bad_credentials")
             return "bad_credentials"
-        user = await self._h.get(_APP_USER, {"user_id": user_id})
+        user = await self._h.get(_IDENTITY_USER, {"user_id": user_id})
         if user is None:
             return "bad_credentials"
         if str(getattr(user, "status", "")) != "active":
@@ -107,7 +108,7 @@ class IdentityAuthService:
 
     async def issue_for_user_id(self, user_id: str) -> dict[str, Any] | str:
         """Issue the normal local token bundle for an already authenticated user."""
-        user = await self._h.get(_APP_USER, {"user_id": user_id})
+        user = await self._h.get(_IDENTITY_USER, {"user_id": user_id})
         if user is None:
             return "bad_credentials"
         if str(getattr(user, "status", "")) != "active":
@@ -128,7 +129,7 @@ class IdentityAuthService:
             if utc_now() > expires_at:
                 await self._h.delete(_AUTH_SESSION, {"refresh_token": refresh_token})
                 return "invalid_refresh"
-        user = await self._h.get(_APP_USER, {"user_id": getattr(sess, "user_id", None)})
+        user = await self._h.get(_IDENTITY_USER, {"user_id": getattr(sess, "user_id", None)})
         if user is None or str(getattr(user, "status", "")) != "active":
             await self._h.delete(_AUTH_SESSION, {"refresh_token": refresh_token})
             return "invalid_refresh"
@@ -141,31 +142,40 @@ class IdentityAuthService:
             await self._h.delete(_AUTH_SESSION, {"refresh_token": refresh_token})
 
     async def get_user(self, user_id: str) -> Any | None:
-        return await self._h.get(_APP_USER, {"user_id": user_id})
+        return await self._h.get(_IDENTITY_USER, {"user_id": user_id})
 
     async def list_my_orgs(self, user_id: str) -> list[dict[str, Any]]:
         """自己所属真实组织；仅当不属于任何真实组织时,才附"无组织"入口。"""
         gids = await self._load_groups(user_id)
         out: list[dict[str, Any]] = []
         for gid in gids:
-            org = await self._h.get(_ORG, {"group_id": gid})
+            org = await self._h.get(_IDENTITY_ORG, {"group_id": gid})
             if org is not None and str(getattr(org, "status", "")) == "active":
-                out.append({"group_id": gid, "name": getattr(org, "name", None)})
+                out.append({"group_id": gid, "display_name": getattr(org, "display_name", None)})
         if not out:
-            none_org = await self._h.get(_ORG, {"group_id": NO_ORG_GROUP_ID})
+            none_org = await self._h.get(_IDENTITY_ORG, {"group_id": NO_ORG_GROUP_ID})
             if none_org is not None:
-                out.append({"group_id": NO_ORG_GROUP_ID, "name": getattr(none_org, "name", None)})
+                out.append({
+                    "group_id": NO_ORG_GROUP_ID,
+                    "display_name": getattr(none_org, "display_name", None),
+                })
         return out
 
 
 # ----------------------- 播种 -----------------------
-async def _ensure_org(handler: DBHandler, group_id: str, name: str) -> None:
-    if await handler.get(_ORG, {"group_id": group_id}) is not None:
+async def _ensure_org(handler: DBHandler, group_id: str, display_name: str) -> None:
+    if await handler.get(_IDENTITY_ORG, {"group_id": group_id}) is not None:
         return
     now = utc_now()
     await handler.create(
-        _ORG,
-        {"group_id": group_id, "name": name, "status": "active", "created_at": now, "updated_at": now},
+        _IDENTITY_ORG,
+        {
+            "group_id": group_id,
+            "display_name": display_name,
+            "status": "active",
+            "created_at": now,
+            "updated_at": now,
+        },
     )
 
 
@@ -173,11 +183,11 @@ async def _ensure_local_user(
     handler: DBHandler, *, user_id: str, display_name: str, is_admin: bool,
     username: str, password: str,
 ) -> None:
-    if await handler.get(_APP_USER, {"user_id": user_id}) is not None:
+    if await handler.get(_IDENTITY_USER, {"user_id": user_id}) is not None:
         return
     now = utc_now()
     await handler.create(
-        _APP_USER,
+        _IDENTITY_USER,
         {"user_id": user_id, "display_name": display_name, "is_admin": is_admin,
          "status": "active", "created_at": now, "updated_at": now},
     )

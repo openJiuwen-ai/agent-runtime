@@ -4,7 +4,7 @@ k8s 多副本天然一致(DB 即共享密钥库,无需 Secret 同步)。私钥�
 access JWT);公钥经 ``/v1/auth/public_key`` 暴露,供资源服务器本地验签。
 
 > 落库范式参考 claw_manager 既有的 `get_or_create_manager_signing_key`,但**表/库/
-> 算法均独立**(本表 `identity_jwt_signing_key`、RSA PEM 文本),函数名 `get_or_create_
+> 算法均独立**(本表 `auth_jwt_signing_key`、RSA PEM 文本),函数名 `get_or_create_
 > jwt_signing_key` 以示区分。
 """
 
@@ -19,12 +19,12 @@ from openjiuwen_runtime.foundation.db.handler import DBHandler
 
 from identity_center.infrastructure.logger import get_logger
 from identity_center.infrastructure.utils import utc_now
-from identity_center.models.identity_models import IDENTITY_JWT_SIGNING_KEY_TABLE_DEF
+from identity_center.models.identity_models import AUTH_JWT_SIGNING_KEY_TABLE_DEF
 
 _log = get_logger(__name__)
 
-_TABLE = IDENTITY_JWT_SIGNING_KEY_TABLE_DEF.table_name
-_SINGLETON_ID = "default"
+_TABLE = AUTH_JWT_SIGNING_KEY_TABLE_DEF.table_name
+_SINGLETON_KEY_ID = "default"
 _ALG = "RS256"
 _VERSION = "v1"
 
@@ -66,7 +66,7 @@ def _row_to_key(row: object) -> JwtSigningKey:
 
 async def get_or_create_jwt_signing_key(handler: DBHandler) -> JwtSigningKey:
     """读取 JWT 签名密钥;不存在则生成 RSA-2048 并落库(单例,幂等,并发安全)。"""
-    existing = await handler.get(_TABLE, {"id": _SINGLETON_ID})
+    existing = await handler.get(_TABLE, {"key_id": _SINGLETON_KEY_ID})
     if existing is not None:
         return _row_to_key(existing)
 
@@ -77,7 +77,7 @@ async def get_or_create_jwt_signing_key(handler: DBHandler) -> JwtSigningKey:
         await handler.create(
             _TABLE,
             {
-                "id": _SINGLETON_ID,
+                "key_id": _SINGLETON_KEY_ID,
                 "sign_alg": _ALG,
                 "private_key": priv_pem.decode("utf-8"),
                 "public_key": pub_pem.decode("utf-8"),
@@ -90,7 +90,7 @@ async def get_or_create_jwt_signing_key(handler: DBHandler) -> JwtSigningKey:
         _log.info("[jwt] generated & persisted RS256 signing key", version=_VERSION, fp=fingerprint[:16])
     except Exception:  # noqa: BLE001
         # 并发下另一副本可能抢先建好 → 回读返回那一行(保证全副本同一密钥)。
-        again = await handler.get(_TABLE, {"id": _SINGLETON_ID})
+        again = await handler.get(_TABLE, {"key_id": _SINGLETON_KEY_ID})
         if again is not None:
             return _row_to_key(again)
         raise

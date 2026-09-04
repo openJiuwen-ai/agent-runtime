@@ -157,24 +157,54 @@ SAML/OIDC Provider 必须先完成协议校验，再把验证后的 Claim 交给
 | 表 | 职责 |
 |------|------|
 | `federation_connection` | 保存受信连接与本地组织的稳定绑定 |
-| `federated_identity` | 保存外部 Subject 到本地 `app_user.user_id` 的唯一映射；使用三个外部身份字段的稳定 SHA-256 摘要作为唯一键 |
+| `federated_identity` | 保存外部 Subject 到本地 `identity_user.user_id` 的唯一映射；使用三个外部身份字段的稳定 SHA-256 摘要作为唯一键 |
 | `federation_role_mapping` | 保存受信 Claim 精确值到本地角色的映射规则 |
 | `federation_login_state` | 保存有效期内的浏览器联合登录状态 |
 | `federation_login_code` | 保存一次性换码的 SHA-256，不保存换码明文 |
 
 `federation_connection` 中的组织绑定不允许通过普通组织删除接口破坏。虚拟用户仍是
-标准 `app_user`，因此可直接使用现有 `/me`、`/me/orgs`、前端角色分流及已挂载的
+标准 `identity_user`，因此可直接使用现有 `/me`、`/me/orgs`、前端角色分流及已挂载的
 Manager 权限守卫。
 
-身份库各类数据按职责分离：`app_user` 是本地用户和最终权限的唯一业务主体；
+身份库各类数据按职责分离：`identity_user` 是本地用户和最终权限的唯一业务主体；
 `auth_identity` 只保存本地用户名/口令等认证凭据；`federated_identity` 只保存稳定的
-外部身份绑定和最近一次经 Provider 验证的属性；`org` 与 `user_org_membership` 管理本地
+外部身份绑定和最近一次经 Provider 验证的属性；`identity_org` 与 `identity_user_org_membership` 管理本地
 组织目录；`auth_session` 管理可撤销的 refresh token；access JWT 自包含且不落库。
 外部身份摘要由 `connection_id`、`issuer`、`external_subject` 的原始 UTF-8 内容计算，
 原字段仍完整保存并在读取时复核，因此身份匹配不依赖数据库字符集或大小写排序规则。
 联合认证不会把企业内部组织直接等同于平台任意 `group_id`，而是由
 `federation_connection` 明确绑定到一个受控的本地虚拟组织，避免企业目录命名与平台
 业务组织发生碰撞。
+
+> **存量库升级**：框架只 `create_all` / 补列，不改主键与表名。涉及身份表时请按需手工执行：
+>
+> ```sql
+> -- 1) 旧表名迁移（若仍是 app_user / org / iam_*）
+> ALTER TABLE app_user RENAME TO identity_user;
+> ALTER TABLE org RENAME TO identity_org;
+> ALTER TABLE iam_user RENAME TO identity_user;
+> ALTER TABLE iam_org RENAME TO identity_org;
+> ALTER TABLE iam_user_org_membership RENAME TO identity_user_org_membership;
+>
+> -- 2) 自增主键 id（SQLite 需重建表；MySQL / PostgreSQL 示例）
+> -- MySQL:
+> ALTER TABLE identity_user ADD COLUMN id BIGINT NOT NULL AUTO_INCREMENT UNIQUE FIRST;
+> ALTER TABLE identity_user DROP PRIMARY KEY, ADD PRIMARY KEY (id), ADD UNIQUE KEY uq_identity_user_user_id (user_id);
+> ALTER TABLE identity_org ADD COLUMN id BIGINT NOT NULL AUTO_INCREMENT UNIQUE FIRST;
+> ALTER TABLE identity_org DROP PRIMARY KEY, ADD PRIMARY KEY (id), ADD UNIQUE KEY uq_identity_org_group_id (group_id);
+> -- PostgreSQL:
+> ALTER TABLE identity_user ADD COLUMN id BIGSERIAL;
+> ALTER TABLE identity_user DROP CONSTRAINT identity_user_pkey;
+> ALTER TABLE identity_user ADD PRIMARY KEY (id);
+> ALTER TABLE identity_user ADD CONSTRAINT uq_identity_user_user_id UNIQUE (user_id);
+> ALTER TABLE identity_org ADD COLUMN id BIGSERIAL;
+> ALTER TABLE identity_org DROP CONSTRAINT identity_org_pkey;
+> ALTER TABLE identity_org ADD PRIMARY KEY (id);
+> ALTER TABLE identity_org ADD CONSTRAINT uq_identity_org_group_id UNIQUE (group_id);
+> ```
+>
+> -- 3) identity_org.name → display_name（若列仍叫 name）
+> ALTER TABLE identity_org RENAME COLUMN name TO display_name;
 
 ---
 

@@ -15,6 +15,7 @@ from manager_server.infrastructure.db import get_db_handler
 from manager_server.core.instance.pod_status_cache import (
     get_pod_status_snapshot,
 )
+from manager_server.schedulers.heartbeat_scanner import scan_instance_health_once
 from manager_server.schemas.common_schemas import ResponseModel
 from manager_server.schemas.instance_schemas import (
     CreateInstanceBody,
@@ -97,6 +98,15 @@ async def list_instances(
     svc = _svc(handler)
     data = await svc.list_instances(query)
     return ResponseModel(code=200, message="success", data=data)
+
+
+@instance_router.post("/health-probe", response_model=ResponseModel)
+async def probe_instance_health(
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    """立即对所有实例的 Gateway / Runtime 做一轮探活，更新 online/offline。"""
+    stats = await scan_instance_health_once(handler)
+    return ResponseModel(code=200, message="success", data=stats)
 
 
 @instance_router.patch("/{jiuwenclaw_id}", response_model=ResponseModel)

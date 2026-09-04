@@ -18,12 +18,12 @@ from identity_center.core.iam.services import OrgService, UserService
 from identity_center.infrastructure.config import Settings
 from identity_center.infrastructure.utils import utc_now
 from identity_center.models.identity_models import (
-    APP_USER_TABLE_DEF,
+    IDENTITY_USER_TABLE_DEF,
     FEDERATED_IDENTITY_TABLE_DEF,
     FEDERATION_LOGIN_CODE_TABLE_DEF,
     FEDERATION_ROLE_MAPPING_TABLE_DEF,
-    ORG_TABLE_DEF,
-    USER_ORG_MEMBERSHIP_TABLE_DEF,
+    IDENTITY_ORG_TABLE_DEF,
+    IDENTITY_USER_ORG_MEMBERSHIP_TABLE_DEF,
 )
 from identity_center.models.table_init import init_all_tables
 from identity_center.security.jwt_keys import load_signing_key
@@ -137,16 +137,16 @@ async def test_first_login_is_idempotent_and_code_is_one_time(tmp_path):
         assert repeated.display_name == "Enterprise Alice Updated"
         assert repeated.roles == ("member",)
 
-        assert await handler.count_records(APP_USER_TABLE_DEF.table_name, {}) == 1
+        assert await handler.count_records(IDENTITY_USER_TABLE_DEF.table_name, {}) == 1
         assert (
             await handler.count_records(FEDERATED_IDENTITY_TABLE_DEF.table_name, {})
             == 1
         )
         assert (
-            await handler.count_records(USER_ORG_MEMBERSHIP_TABLE_DEF.table_name, {})
+            await handler.count_records(IDENTITY_USER_ORG_MEMBERSHIP_TABLE_DEF.table_name, {})
             == 1
         )
-        assert await handler.count_records(ORG_TABLE_DEF.table_name, {}) == 1
+        assert await handler.count_records(IDENTITY_ORG_TABLE_DEF.table_name, {}) == 1
         assert (
             await handler.count_records(FEDERATION_ROLE_MAPPING_TABLE_DEF.table_name, {})
             == 1
@@ -197,7 +197,7 @@ async def test_verified_group_grants_admin_and_next_login_can_revoke_it(tmp_path
         )
         assert administrator.roles == ("admin", "member")
         user = await handler.get(
-            APP_USER_TABLE_DEF.table_name,
+            IDENTITY_USER_TABLE_DEF.table_name,
             {"user_id": administrator.user_id},
         )
         assert user is not None
@@ -213,7 +213,7 @@ async def test_verified_group_grants_admin_and_next_login_can_revoke_it(tmp_path
         assert ordinary_user.user_id == administrator.user_id
         assert ordinary_user.roles == ("member",)
         user = await handler.get(
-            APP_USER_TABLE_DEF.table_name,
+            IDENTITY_USER_TABLE_DEF.table_name,
             {"user_id": ordinary_user.user_id},
         )
         assert user is not None
@@ -266,7 +266,7 @@ async def test_provisioning_failure_rolls_back_org_user_and_mapping(
         colliding_user_id = "fuser_collision"
         now = utc_now()
         await handler.create(
-            APP_USER_TABLE_DEF.table_name,
+            IDENTITY_USER_TABLE_DEF.table_name,
             {
                 "user_id": colliding_user_id,
                 "display_name": "Existing User",
@@ -296,14 +296,14 @@ async def test_provisioning_failure_rolls_back_org_user_and_mapping(
                 ),
             )
 
-        assert await handler.count_records(APP_USER_TABLE_DEF.table_name, {}) == 1
-        assert await handler.count_records(ORG_TABLE_DEF.table_name, {}) == 0
+        assert await handler.count_records(IDENTITY_USER_TABLE_DEF.table_name, {}) == 1
+        assert await handler.count_records(IDENTITY_ORG_TABLE_DEF.table_name, {}) == 0
         assert (
             await handler.count_records(FEDERATED_IDENTITY_TABLE_DEF.table_name, {})
             == 0
         )
         assert (
-            await handler.count_records(USER_ORG_MEMBERSHIP_TABLE_DEF.table_name, {})
+            await handler.count_records(IDENTITY_USER_ORG_MEMBERSHIP_TABLE_DEF.table_name, {})
             == 0
         )
     finally:
@@ -327,16 +327,16 @@ async def test_iam_preserves_connection_org_and_cleans_deleted_virtual_user(
             await OrgService(handler).delete("federated-enterprise-demo")
 
         assert await UserService(handler).delete(principal.user_id) is True
-        assert await handler.count_records(APP_USER_TABLE_DEF.table_name, {}) == 0
+        assert await handler.count_records(IDENTITY_USER_TABLE_DEF.table_name, {}) == 0
         assert (
             await handler.count_records(FEDERATED_IDENTITY_TABLE_DEF.table_name, {})
             == 0
         )
         assert (
-            await handler.count_records(USER_ORG_MEMBERSHIP_TABLE_DEF.table_name, {})
+            await handler.count_records(IDENTITY_USER_ORG_MEMBERSHIP_TABLE_DEF.table_name, {})
             == 0
         )
-        assert await handler.count_records(ORG_TABLE_DEF.table_name, {}) == 1
+        assert await handler.count_records(IDENTITY_ORG_TABLE_DEF.table_name, {}) == 1
 
         _, recreated = await _federated_login(
             service,

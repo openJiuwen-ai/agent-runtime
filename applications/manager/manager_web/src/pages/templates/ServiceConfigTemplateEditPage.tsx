@@ -1080,7 +1080,7 @@ export function ServiceConfigTemplateEditPage({ templateId }: { templateId?: str
           >
             ←
           </button>
-          <div className="min-w-0 max-w-full flex-1 sm:max-w-[16rem] sm:flex-none">
+          <div className="min-w-0 max-w-full flex-1 sm:max-w-[32rem] sm:flex-none">
             <div className="page-title truncate" title={pageTitle}>
               {pageTitle}
             </div>

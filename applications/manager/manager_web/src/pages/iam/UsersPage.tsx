@@ -1,168 +1,311 @@
-import { ChangeEvent, useEffect, useState } from 'react';
+import { ChangeEvent, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import * as XLSX from 'xlsx';
+import { ConfirmDialog } from '../../components/ConfirmDialog';
+import { Empty } from '../../components/Empty';
+import { ListSearchInput } from '../../components/ListSearchInput';
 import { Modal, ModalCancelButton } from '../../components/Modal';
+import { Pagination } from '../../components/Pagination';
+import { TableColumnFilter } from '../../components/TableColumnFilter';
+import {
+  TableColumnSort,
+  type ColumnSortValue,
+} from '../../components/TableColumnSort';
 import { useAsync } from '../../hooks/useAsync';
 import { useFormDirty } from '../../hooks/useFormDirty';
-import { ApiError, IamUser, InstanceBindingApi, NO_ORG_GROUP_ID, Org, OrgApi, UserApi } from '../../services/api';
+import { useListSearch } from '../../hooks/useListSearch';
+import { ApiError, IamUser, NO_ORG_GROUP_ID, Org, OrgApi, UserApi } from '../../services/api';
 import { toast } from '../../stores/uiStore';
-import { AddToInstanceModal, InstanceChips, InstanceFilter, instanceName, useInstances } from './instanceBinding';
+import { formatTime } from '../../utils/format';
+import { isValidIdentityId, sanitizeIdentityIdInput } from '../../utils/identityId';
+
+type UserSortField = 'user_id' | 'display_name' | 'is_admin' | 'status' | 'updated_at';
 
 export function UsersPage() {
   const { t } = useTranslation();
-  const { data, loading, reload } = useAsync(() => UserApi.list(), []);
-  const { data: orgsData } = useAsync(() => OrgApi.list(), []);
-  const instances = useInstances();
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const { searchInput, setSearchInput, searchQuery } = useListSearch();
+  const [statusFilter, setStatusFilter] = useState('');
+  const [roleFilter, setRoleFilter] = useState(''); // '' | 'true' | 'false'
+  const [sortBy, setSortBy] = useState<UserSortField | ''>('');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [editing, setEditing] = useState<IamUser | null | undefined>(undefined);
   const [showBatch, setShowBatch] = useState(false);
-  const [showAdd, setShowAdd] = useState(false);
-  const [filterJid, setFilterJid] = useState('');
-  const [roster, setRoster] = useState<Set<string> | null>(null); // 模式二：某实例花名册 user_ids
-  const [bindings, setBindings] = useState<Record<string, string[]>>({}); // 模式一：所属实例
-  const [checked, setChecked] = useState<Set<string>>(new Set());
-  const users = data?.items ?? [];
+  const [delTarget, setDelTarget] = useState<IamUser | null>(null);
+
+  const { data: orgsData } = useAsync(() => OrgApi.list(), []);
   const orgs = orgsData?.items ?? [];
-  const userIdsKey = users.map((u) => u.user_id).join(',');
 
-  // 切实例/换用户：载入 roster（模式二）或 所属实例（模式一）
-  useEffect(() => {
-    setChecked(new Set());
-    if (filterJid) {
-      InstanceBindingApi.listUsers(filterJid).then((r) => setRoster(new Set(r.user_ids))).catch(() => setRoster(new Set()));
+  const sortOptions = useMemo(
+    () => [
+      { value: 'asc' as const, label: t('common.sortAsc') },
+      { value: 'desc' as const, label: t('common.sortDesc') },
+      { value: '' as const, label: t('common.sortDefault') },
+    ],
+    [t],
+  );
+
+  const handleSortChange = (field: UserSortField, value: ColumnSortValue) => {
+    if (value === '') {
+      setSortBy('');
+      setSortOrder('asc');
     } else {
-      setRoster(null);
-      if (users.length) {
-        InstanceBindingApi.userGateways(users.map((u) => u.user_id)).then((r) => setBindings(r.bindings)).catch(() => setBindings({}));
-      }
+      setSortBy(field);
+      setSortOrder(value);
     }
-  }, [filterJid, userIdsKey]); // eslint-disable-line react-hooks/exhaustive-deps
+    setPage(1);
+  };
 
-  const shown = filterJid && roster ? users.filter((u) => roster.has(u.user_id)) : users;
+  useEffect(() => {
+    setPage(1);
+  }, [searchQuery]);
 
-  function reloadRoster() {
-    if (filterJid) InstanceBindingApi.listUsers(filterJid).then((r) => setRoster(new Set(r.user_ids))).catch(() => undefined);
-  }
+  const { data, loading, error, reload } = useAsync(
+    () =>
+      UserApi.list({
+        page,
+        page_size: pageSize,
+        search: searchQuery,
+        status: statusFilter || undefined,
+        is_admin: roleFilter === '' ? undefined : roleFilter === 'true',
+        sort_by: sortBy || undefined,
+        sort_order: sortBy ? sortOrder : undefined,
+      }),
+    [page, pageSize, searchQuery, statusFilter, roleFilter, sortBy, sortOrder],
+  );
 
-  async function onDelete(u: IamUser) {
-    if (!window.confirm(t('iam.confirmDeleteUser', { name: u.display_name, id: u.user_id }))) return;
-    try {
-      await UserApi.remove(u.user_id);
-      toast('success', t('success.deleted'));
-      reload();
-    } catch (e) {
-      toast('danger', e instanceof ApiError ? e.detail : String(e));
-    }
-  }
-
-  function toggleCheck(id: string) {
-    setChecked((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
-  }
-  function toggleAll() {
-    setChecked((prev) => (prev.size === shown.length ? new Set() : new Set(shown.map((u) => u.user_id))));
-  }
-
-  async function onRemoveFromInstance() {
-    const ids = Array.from(checked);
-    if (!ids.length || !filterJid) return;
-    const name = instanceName(instances, filterJid);
-    if (!window.confirm(t('iam.confirmRemoveFromInstance', { defaultValue: '从实例「{{name}}」移除选中的 {{n}} 项？', name, n: ids.length }))) return;
-    try {
-      await InstanceBindingApi.unbindUsers(filterJid, ids);
-      toast('success', t('success.saved'));
-      setChecked(new Set());
-      reloadRoster();
-    } catch (e) {
-      toast('danger', e instanceof ApiError ? e.detail : String(e));
-    }
-  }
-
-  const inInstanceMode = !!filterJid;
-  const cols = inInstanceMode ? 6 : 7;
-  const instName = filterJid ? instanceName(instances, filterJid) : '';
+  const items = data?.items ?? [];
 
   return (
-    <div className="page">
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="card-title">{t('iam.users')}</h2>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <InstanceFilter instances={instances} value={filterJid} onChange={setFilterJid} />
-          {inInstanceMode && (
-            <>
-              <button className="btn danger" disabled={checked.size === 0} onClick={onRemoveFromInstance}>
-                {t('iam.removeFromInstance', { defaultValue: '移除出 {{name}}', name: instName })}{checked.size ? `（${checked.size}）` : ''}
-              </button>
-              <button className="btn" onClick={() => setShowAdd(true)}>
-                {t('iam.addToInstance', { defaultValue: '添加到 {{name}}', name: instName })}
-              </button>
-            </>
+    <>
+      <div className="flex min-w-0 flex-col gap-4">
+        <div className="page-header w-full min-w-0 flex-wrap items-start gap-y-3">
+          <div className="min-w-[7.5rem] max-w-[12rem] shrink-0 sm:max-w-[16rem]">
+            <div className="page-title truncate" title={t('iam.users')}>
+              {t('iam.users')}
+            </div>
+            <div className="page-subtitle truncate" title={t('iam.usersSubtitle')}>
+              {t('iam.usersSubtitle')}
+            </div>
+          </div>
+          <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
+            <ListSearchInput
+              value={searchInput}
+              onChange={setSearchInput}
+              placeholder={t('iam.usersSearchPlaceholder')}
+              className="basis-full sm:basis-auto"
+            />
+            <button className="btn sm" onClick={() => void reload()}>
+              {t('common.refresh')}
+            </button>
+            <button className="btn sm" onClick={() => setShowBatch(true)}>
+              {t('iam.batchNewUser')}
+            </button>
+            <button className="btn primary sm" onClick={() => setEditing(null)}>
+              + {t('iam.newUser')}
+            </button>
+          </div>
+        </div>
+
+        <div className="flex w-full min-w-0 shrink-0 flex-col gap-4">
+          <div className="card !p-0">
+            {loading ? (
+              <div className="p-4 text-sm text-muted">{t('common.loading')}</div>
+            ) : error ? (
+              <div className="p-4 text-sm text-danger">{t('errors.loadFailed', { detail: error })}</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="table w-max min-w-full">
+                  <thead>
+                    <tr>
+                      <th className="w-[25rem] max-w-[25rem]">
+                        <TableColumnSort
+                          label={t('iam.userId')}
+                          value={sortBy === 'user_id' ? sortOrder : ''}
+                          options={sortOptions}
+                          onChange={(value) => handleSortChange('user_id', value)}
+                        />
+                      </th>
+                      <th>
+                        <TableColumnSort
+                          label={t('iam.displayName')}
+                          value={sortBy === 'display_name' ? sortOrder : ''}
+                          options={sortOptions}
+                          onChange={(value) => handleSortChange('display_name', value)}
+                        />
+                      </th>
+                      <th>
+                        <div className="th-filter">
+                          <span className="th-filter__label">{t('iam.role')}</span>
+                          <TableColumnSort
+                            iconOnly
+                            label={t('iam.role')}
+                            value={sortBy === 'is_admin' ? sortOrder : ''}
+                            options={sortOptions}
+                            onChange={(value) => handleSortChange('is_admin', value)}
+                          />
+                          <TableColumnFilter
+                            iconOnly
+                            label={t('iam.role')}
+                            value={roleFilter}
+                            options={[
+                              { value: '', label: t('common.all') },
+                              { value: 'true', label: t('iam.roleAdmin') },
+                              { value: 'false', label: t('iam.roleUser') },
+                            ]}
+                            onChange={(value) => {
+                              setRoleFilter(value);
+                              setPage(1);
+                            }}
+                          />
+                        </div>
+                      </th>
+                      <th>
+                        <div className="th-filter">
+                          <span className="th-filter__label">{t('iam.status')}</span>
+                          <TableColumnSort
+                            iconOnly
+                            label={t('iam.status')}
+                            value={sortBy === 'status' ? sortOrder : ''}
+                            options={sortOptions}
+                            onChange={(value) => handleSortChange('status', value)}
+                          />
+                          <TableColumnFilter
+                            iconOnly
+                            label={t('iam.status')}
+                            value={statusFilter}
+                            options={[
+                              { value: '', label: t('common.all') },
+                              { value: 'active', label: t('common.enabled') },
+                              { value: 'disabled', label: t('common.disabled') },
+                            ]}
+                            onChange={(value) => {
+                              setStatusFilter(value);
+                              setPage(1);
+                            }}
+                          />
+                        </div>
+                      </th>
+                      <th>
+                        <TableColumnSort
+                          label={t('common.updatedAt')}
+                          value={sortBy === 'updated_at' ? sortOrder : ''}
+                          options={sortOptions}
+                          onChange={(value) => handleSortChange('updated_at', value)}
+                        />
+                      </th>
+                      <th className="whitespace-nowrap min-w-[9.5rem]">{t('common.actions')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {items.length === 0 ? (
+                      <tr>
+                        <td colSpan={6}>
+                          <Empty text={t('common.empty')} />
+                        </td>
+                      </tr>
+                    ) : (
+                      items.map((u) => (
+                        <tr key={u.user_id}>
+                          <td
+                            className="mono text-[11px] text-muted w-[25rem] max-w-[25rem] break-all"
+                            title={u.user_id}
+                          >
+                            {u.user_id}
+                          </td>
+                          <td className="text-text-strong font-medium break-words">{u.display_name}</td>
+                          <td className="whitespace-nowrap">
+                            {u.is_admin ? (
+                              <span className="badge">{t('iam.roleAdmin')}</span>
+                            ) : (
+                              t('iam.roleUser')
+                            )}
+                          </td>
+                          <td className="whitespace-nowrap">
+                            {u.status === 'active' ? t('common.enabled') : t('common.disabled')}
+                          </td>
+                          <td className="mono text-[11px] text-muted whitespace-nowrap">
+                            {formatTime(u.updated_at)}
+                          </td>
+                          <td className="whitespace-nowrap min-w-[9.5rem]">
+                            <div className="flex items-center gap-1">
+                              <button className="btn sm ghost" onClick={() => setEditing(u)}>
+                                {t('common.edit')}
+                              </button>
+                              <button className="btn sm danger" onClick={() => setDelTarget(u)}>
+                                {t('common.delete')}
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {data && (
+            <Pagination
+              page={page}
+              pageSize={pageSize}
+              total={data.total ?? data.items.length}
+              onChange={(p, ps) => {
+                setPage(p);
+                setPageSize(ps);
+              }}
+            />
           )}
-          <button className="btn" onClick={() => setShowBatch(true)}>{t('iam.batchNewUser')}</button>
-          <button className="btn primary" onClick={() => setEditing(null)}>{t('iam.newUser')}</button>
         </div>
       </div>
-      <div className="card">
-        <table className="table" style={{ width: '100%' }}>
-          <thead>
-            <tr>
-              <th style={{ width: 32 }}>
-                <input type="checkbox" checked={shown.length > 0 && checked.size === shown.length} onChange={toggleAll} />
-              </th>
-              <th>{t('iam.userId')}</th>
-              <th>{t('iam.displayName')}</th>
-              <th>{t('iam.role')}</th>
-              <th>{t('iam.status')}</th>
-              {!inInstanceMode && <th>{t('iam.belongInstances', { defaultValue: '所属实例' })}</th>}
-              <th>{t('common.actions')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {shown.map((u) => (
-              <tr key={u.user_id}>
-                <td><input type="checkbox" checked={checked.has(u.user_id)} onChange={() => toggleCheck(u.user_id)} /></td>
-                <td className="mono text-xs">{u.user_id}</td>
-                <td>{u.display_name}</td>
-                <td>{u.is_admin ? <span className="badge">{t('iam.roleAdmin')}</span> : t('iam.roleUser')}</td>
-                <td>{u.status}</td>
-                {!inInstanceMode && <td><InstanceChips jids={bindings[u.user_id] ?? []} instances={instances} /></td>}
-                <td style={{ textAlign: 'right' }}>
-                  <button className="btn sm" onClick={() => setEditing(u)}>{t('common.edit')}</button>
-                  <button className="btn sm danger" style={{ marginLeft: 6 }} onClick={() => onDelete(u)}>{t('common.delete')}</button>
-                </td>
-              </tr>
-            ))}
-            {!loading && shown.length === 0 && <tr><td colSpan={cols} className="text-muted">{t('iam.noUsers')}</td></tr>}
-          </tbody>
-        </table>
-      </div>
+
       {editing !== undefined && (
-        <UserModal user={editing} orgs={orgs} onClose={() => setEditing(undefined)} onSaved={() => { setEditing(undefined); reload(); }} />
+        <UserModal
+          user={editing}
+          orgs={orgs}
+          onClose={() => setEditing(undefined)}
+          onSaved={() => {
+            setEditing(undefined);
+            void reload();
+          }}
+        />
       )}
       {showBatch && (
         <BatchImportModal
-          targetJid={filterJid}
-          targetName={instName}
           onClose={() => setShowBatch(false)}
-          onDone={() => { reload(); reloadRoster(); }}
-        />
-      )}
-      {showAdd && filterJid && (
-        <AddToInstanceModal
-          title={t('iam.addToInstance', { defaultValue: '添加到 {{name}}', name: instName })}
-          candidates={users.filter((u) => !roster?.has(u.user_id)).map((u) => ({ id: u.user_id, label: u.display_name, sub: u.user_id }))}
-          onConfirm={async ({ ids }) => {
-            await InstanceBindingApi.bindUsers(filterJid, ids);
-            toast('success', t('success.saved'));
-            setShowAdd(false);
-            reloadRoster();
+          onDone={() => {
+            void reload();
           }}
-          onClose={() => setShowAdd(false)}
         />
       )}
-    </div>
+
+      <ConfirmDialog
+        open={!!delTarget}
+        message={t('iam.confirmDeleteUser', {
+          name: delTarget?.display_name ?? '',
+          id: delTarget?.user_id ?? '',
+        })}
+        danger
+        onConfirm={async () => {
+          if (!delTarget) return;
+          try {
+            await UserApi.remove(delTarget.user_id);
+            toast('success', t('success.deleted'));
+            void reload();
+          } catch (e) {
+            toast(
+              'danger',
+              t('errors.deleteFailed', {
+                detail: e instanceof ApiError ? e.detail : (e as Error).message,
+              }),
+            );
+          }
+        }}
+        onClose={() => setDelTarget(null)}
+      />
+    </>
   );
 }
 
@@ -178,8 +321,8 @@ function parseBool(v: unknown): boolean {
 }
 
 function BatchImportModal({
-  targetJid, targetName, onClose, onDone,
-}: { targetJid: string; targetName: string; onClose: () => void; onDone: () => void }) {
+  onClose, onDone,
+}: { onClose: () => void; onDone: () => void }) {
   const { t } = useTranslation();
   const [rows, setRows] = useState<BatchRow[]>([]);
   const [fileName, setFileName] = useState('');
@@ -226,24 +369,16 @@ function BatchImportModal({
     else reader.readAsArrayBuffer(f);
   }
 
-  const invalidCount = rows.filter((r) => !r.username || !r.password).length;
+  const invalidCount = rows.filter(
+    (r) => !r.username || !r.password || !isValidIdentityId(r.username),
+  ).length;
 
   async function submit() {
     setBusy(true);
     try {
       const res = await UserApi.batchCreate(rows);
       setResult(res);
-      if (res.summary.ok > 0) {
-        // 当前选中了某实例：把成功创建的用户补绑到该实例（跨服务两步：identity 建 → manager 绑）。
-        if (targetJid) {
-          const ids = res.results.filter((r) => r.ok && r.user_id).map((r) => r.user_id as string);
-          if (ids.length) {
-            try { await InstanceBindingApi.bindUsers(targetJid, ids); }
-            catch (e) { toast('danger', `${t('iam.bindInstanceFailed', { defaultValue: '加入实例失败' })}: ${e instanceof ApiError ? e.detail : String(e)}`); }
-          }
-        }
-        onDone();
-      }
+      if (res.summary.ok > 0) onDone();
     } catch (e) {
       toast('danger', e instanceof ApiError ? e.detail : String(e));
     } finally {
@@ -276,13 +411,6 @@ function BatchImportModal({
         <input type="file" accept=".xlsx,.csv" onChange={onFile} />
       </div>
       <div className="text-xs text-muted" style={{ marginBottom: 8 }}>{t('iam.batchHint')}</div>
-      {targetJid
-        ? <div className="text-xs" style={{ marginBottom: 8, color: '#2d7d46' }}>
-            {t('iam.batchWillJoin', { defaultValue: '将同时加入实例：{{name}}', name: targetName })}
-          </div>
-        : <div className="text-xs text-muted" style={{ marginBottom: 8 }}>
-            {t('iam.batchNoInstance', { defaultValue: '未选实例：仅创建用户，暂不加入任何实例（可选实例后再添加）' })}
-          </div>}
       {fileName && <div className="text-xs" style={{ marginBottom: 6 }}>{fileName}</div>}
 
       {rows.length > 0 && !result && (
@@ -296,8 +424,8 @@ function BatchImportModal({
               <thead><tr><th>{t('iam.username')}</th><th>{t('iam.displayName')}</th><th>{t('iam.admin')}</th><th>{t('iam.belongOrgs')}</th></tr></thead>
               <tbody>
                 {rows.map((r, i) => (
-                  <tr key={i} style={!r.username || !r.password ? { background: 'rgba(192,57,43,0.08)' } : undefined}>
-                    <td>{r.username || '—'}{!r.password && <span style={{ color: '#c0392b' }}> ·{t('iam.batchNoPwd')}</span>}</td>
+                  <tr key={i} style={!r.username || !r.password || !isValidIdentityId(r.username) ? { background: 'rgba(192,57,43,0.08)' } : undefined}>
+                    <td>{r.username || '—'}{!r.password && <span style={{ color: '#c0392b' }}> ·{t('iam.batchNoPwd')}</span>}{!!r.username && !isValidIdentityId(r.username) && <span style={{ color: '#c0392b' }}> ·{t('iam.idCharsetInvalid', { field: t('iam.username') })}</span>}</td>
                     <td>{r.display_name || r.username}</td>
                     <td>{r.is_admin ? '✓' : ''}</td>
                     <td className="mono text-xs">{(r.orgs || []).join(', ')}</td>
@@ -372,6 +500,12 @@ function UserModal({ user, orgs, onClose, onSaved }: { user: IamUser | null; org
   }
 
   async function save() {
+    if (!isEdit) {
+      if (!isValidIdentityId(username)) {
+        toast('warn', t('iam.idCharsetInvalid', { field: t('iam.username') }));
+        return;
+      }
+    }
     setBusy(true);
     try {
       let uid = user?.user_id;
@@ -381,7 +515,7 @@ function UserModal({ user, orgs, onClose, onSaved }: { user: IamUser | null; org
           ...(password ? { password } : {}),
         });
       } else {
-        const created = await UserApi.create({ display_name: displayName, username, password, is_admin: isAdmin });
+        const created = await UserApi.create({ display_name: displayName, username: username.trim(), password, is_admin: isAdmin });
         uid = created.user_id;
       }
       if (uid) await UserApi.setOrgs(uid, Array.from(selectedOrgs));
@@ -394,7 +528,7 @@ function UserModal({ user, orgs, onClose, onSaved }: { user: IamUser | null; org
     }
   }
 
-  const canSave = displayName.trim() && (isEdit || (username.trim() && password));
+  const canSave = displayName.trim() && (isEdit || (isValidIdentityId(username) && password));
   const draft = {
     displayName,
     username,
@@ -423,7 +557,13 @@ function UserModal({ user, orgs, onClose, onSaved }: { user: IamUser | null; org
       {!isEdit && (
         <>
           <label className="label" style={{ marginTop: 12 }}>{t('iam.username')}</label>
-          <input className="input" value={username} onChange={(e) => setUsername(e.target.value)} />
+          <input
+            className="input mono"
+            value={username}
+            maxLength={64}
+            onChange={(e) => setUsername(sanitizeIdentityIdInput(e.target.value))}
+          />
+          <div className="text-xs text-muted" style={{ marginTop: 4 }}>{t('iam.usernameHint')}</div>
         </>
       )}
 
@@ -450,7 +590,7 @@ function UserModal({ user, orgs, onClose, onSaved }: { user: IamUser | null; org
         {realOrgs.map((o) => (
           <label key={o.group_id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '2px 0' }}>
             <input type="checkbox" checked={selectedOrgs.has(o.group_id)} onChange={() => toggleOrg(o.group_id)} />
-            {o.name} <span className="text-xs text-muted mono">{o.group_id}</span>
+            {o.display_name} <span className="text-xs text-muted mono">{o.group_id}</span>
           </label>
         ))}
         {realOrgs.length === 0 && <div className="text-xs text-muted">{t('iam.noOrgs')}</div>}
