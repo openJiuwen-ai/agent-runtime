@@ -17,6 +17,7 @@ App 的 lifespan 只认一个 ctx_factory——返回 sm_sysctx，其余生命�
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -29,6 +30,15 @@ from . import errors as app_errors
 from .config import RM_KEY_PREFIX, SERVICE_PREFIX, SM_KEY_PREFIX, AgentRuntimeConfig
 from .visualization_api import register_visualization_api
 from .metrics import MetricsRegistry, request_metrics_middleware
+from .evaluation.collector import (
+    FLUSH_INTERVAL_SEC,
+    FLUSH_TIMEOUT_SEC,
+    EvaluationCollector,
+    ScopeTelemetryBuffer,
+)
+from .evaluation.evaluator import Evaluator
+from .evaluation.llm import LLMClient
+from .evaluation.state import EvaluationState
 from .resource_manager.facade import ResourceManagerFacade
 from .resource_manager.k8s import FakeK8sPodClient, RealK8sPodClient
 from .resource_manager.orchestrator import ResourceOrchestrator
@@ -64,6 +74,11 @@ TICK_TIMEOUTS = {
     "rm_reclaim": 60,
     "rm_watch": 300,
     "rm_reconcile": 300,
+    # sys_sample：逐 scope 单键读写,快操作
+    "sys_sample": 30,
+    # sys_eval：LLM timeout(默认 60s,eval_llm_timeout 可调但须小于此值)
+    # + 规则计算 + 采样窗口读,120 留余量
+    "sys_eval": 120,
 }
 
 
@@ -154,9 +169,13 @@ class OrchestratorSystemContext(SystemContext):
         sm_state = SessionState(self.redis)
         rm_state = ResourceState(self.redis)
 
+        # 评估域:计数缓冲(热路径内存)+ 采集器 + 评估器(键前缀独立 hash tag)
+        eval_state = EvaluationState(self.redis)
+        telemetry = ScopeTelemetryBuffer()
+
         self.sm_facade = SessionManagerFacade(sm_state)
 
-        rm_orchestrator = ResourceOrchestrator(rm_state, self.k8s)
+        rm_orchestrator = ResourceOrchestrator(rm_state, self.k8s, telemetry=telemetry)
         self.rm_facade = ResourceManagerFacade(rm_orchestrator)
 
         self.sm_config_store = ConfigStore(
@@ -170,11 +189,23 @@ class OrchestratorSystemContext(SystemContext):
             self.sm_config_store,
             self.rm_facade,
             default_session_ttl=self.arc.default_session_ttl,
+            telemetry=telemetry,
         )
         self.sm_sweeper = SessionSweeper(sm_state, self.rm_facade)
         self.rm_sweeper = ResourceSweeper(
             rm_state, self.k8s, self.sm_facade, orchestrator=rm_orchestrator,
+            event_sink=eval_state.bump_event,
         )
+        self.eval_state = eval_state
+        self.eval_telemetry = telemetry
+        self.eval_collector = EvaluationCollector(
+            eval_state=eval_state, sm_state=sm_state, rm_state=rm_state,
+        )
+        self.evaluator = Evaluator(
+            collector=self.eval_collector, llm=LLMClient.from_arc(self.arc),
+            state=eval_state, arc=self.arc, instance_id=self.instance_id,
+        )
+        self._telemetry_task: asyncio.Task | None = None
 
     def _build_jobs(self) -> list[Any]:
         """全部后台任务（tick 级选主锁；多副本全局单副本执行写操作）。"""
@@ -209,6 +240,19 @@ class OrchestratorSystemContext(SystemContext):
                 lock_key="agent_runtime:job:rm_reconcile",
                 tick_timeout_sec=TICK_TIMEOUTS["rm_reconcile"],
             ),
+            # 系统自评估(sys_eval 全局单副本产报告,任意副本可读):
+            self.create_single_leader_job(
+                name="sys_sample", on_tick=self.eval_collector.sample_once,
+                interval_sec=max(arc.eval_sample_interval, 5),
+                lock_key="agent_runtime:job:sys_sample",
+                tick_timeout_sec=TICK_TIMEOUTS["sys_sample"],
+            ),
+            self.create_single_leader_job(
+                name="sys_eval", on_tick=self.evaluator.evaluate_once,
+                interval_sec=max(arc.eval_interval, 30),
+                lock_key="agent_runtime:job:sys_eval",
+                tick_timeout_sec=TICK_TIMEOUTS["sys_eval"],
+            ),
         ]
         return jobs
 
@@ -236,15 +280,24 @@ class OrchestratorSystemContext(SystemContext):
                 job.name, interval_by_name.get(job.name, "?"),
                 TICK_TIMEOUTS.get(job.name),
             )
+        # 计数缓冲 flusher:每副本独立(选主 job 会漏非 leader 副本的缓冲),
+        # drain → 同槽 HINCRBY 批量聚合;失败留到下轮(计数只延后不丢)
+        self._telemetry_task = asyncio.create_task(
+            self._telemetry_flush_loop(), name="eval-telemetry-flush"
+        )
         self.logger.info(
             "config summary: mode=%s namespace=%s sweep=%ss autoscale=%ss "
             "reclaim=%ss watch=%ss reconcile=%ss "
-            "default_session_ttl=%ss kubeconfig=%s",
+            "default_session_ttl=%ss eval_sample=%ss eval=%ss eval_llm=%s "
+            "kubeconfig=%s",
             self.arc.mode, self.arc.default_namespace,
             self.arc.sweep_interval, self.arc.autoscale_interval,
             self.arc.reclaim_interval, self.arc.watch_interval,
             self.arc.reconcile_interval,
             self.arc.default_session_ttl,
+            self.arc.eval_sample_interval, self.arc.eval_interval,
+            "enabled" if (self.arc.eval_llm_base_url and self.arc.eval_llm_model)
+            else "disabled",
             "set" if self.arc.kubeconfig else "in-cluster",
         )
         self.logger.info(
@@ -261,10 +314,31 @@ class OrchestratorSystemContext(SystemContext):
             "rm_reclaim": self.arc.reclaim_interval,
             "rm_watch": self.arc.watch_interval,
             "rm_reconcile": self.arc.reconcile_interval,
+            "sys_sample": self.arc.eval_sample_interval,
+            "sys_eval": self.arc.eval_interval,
         }
 
+    async def _telemetry_flush_loop(self) -> None:
+        """每副本一个:route/acquire 计数缓冲 → Redis 聚合(5s 批量)。"""
+        while True:
+            await asyncio.sleep(FLUSH_INTERVAL_SEC)
+            try:
+                await asyncio.wait_for(
+                    self._flush_telemetry_once(), timeout=FLUSH_TIMEOUT_SEC
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - 留到下轮(计数只延后不丢)
+                self.logger.exception("telemetry flush failed, retry next round")
+
+    async def _flush_telemetry_once(self) -> None:
+        drained = self.eval_telemetry.drain()
+        for scope_id, deltas in drained.items():
+            if deltas:
+                await self.eval_state.bump_counters(scope_id, deltas)
+
     async def jobs_snapshot(self) -> list[dict[str, Any]]:
-        """诊断用：5 个后台任务的间隔/超时/计数器/当前 leader（/visualization/overview）。"""
+        """诊断用：7 个后台任务的间隔/超时/计数器/当前 leader（/visualization/overview）。"""
         intervals = self._job_intervals()
         out: list[dict[str, Any]] = []
         for job in self._jobs:
@@ -298,6 +372,22 @@ class OrchestratorSystemContext(SystemContext):
             except Exception:  # noqa: BLE001
                 self.logger.exception("job stop failed: %s", job)
         self._jobs = []
+        if self._telemetry_task is not None:
+            self._telemetry_task.cancel()
+            try:
+                await self._telemetry_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:  # noqa: BLE001
+                self.logger.exception("telemetry flush task failed on cancel")
+            self._telemetry_task = None
+        # 终结 drain:停机前把缓冲余量尽量落 Redis(失败只留痕,计数延后无害)
+        try:
+            await asyncio.wait_for(
+                self._flush_telemetry_once(), timeout=FLUSH_TIMEOUT_SEC
+            )
+        except Exception:  # noqa: BLE001
+            self.logger.exception("final telemetry drain failed")
         try:
             await self.k8s.close()
         except Exception:  # noqa: BLE001

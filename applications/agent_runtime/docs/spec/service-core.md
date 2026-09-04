@@ -21,7 +21,7 @@ SM 侧 ctx,级联管理全部生命周期(框架 App 的 lifespan 只认一个 c
 - 构造时同时建 **rm_sysctx**(同 redis/db,仅 `key_prefix` 不同:SM=`{session_manager}`,RM=`{resource_manager}`;前缀带 Redis Cluster hash tag,模块键域同槽,详见 `docs/feature/2026-08-redis-cluster.md`)。**rm_sysctx 必须显式 `_owns_db=False, _owns_redis=False`**(2026-09 加固):框架缺省语义是「传了 db 即拥有」——不传则 `start()` 对共享 DB handler 二次 `init_database()+connect()`(重建 engine、旧池泄漏一条连接),`stop()` 会 dispose SM ctx 还在用的共享 engine;非拥有态仍保留 db readiness/redis ping 双前缀健康检查。
 - `_bind_modules()`:先构造后绑定,破解 SM↔RM 循环引用——
   `SessionState`/`ResourceState` → `SessionManagerFacade`/`ResourceManagerFacade(ResourceOrchestrator)` → `ConfigStore(push_pool_config=rm_facade.update_pool_config)` → `SessionOrchestrator` → `SessionSweeper`/`ResourceSweeper`。
-- `_build_jobs()`:5 个后台任务,全部 `create_single_leader_job`(tick 级 Redis 选主锁,多副本全局单副本执行;`tick_timeout_sec` 取 `TICK_TIMEOUTS` 常量表——单次 tick 上限,防 redis/k8s IO 抖动挂死 `_run_forever` 循环,超时取消本拍记日志、下一拍重试):
+- `_build_jobs()`:7 个后台任务,全部 `create_single_leader_job`(tick 级 Redis 选主锁,多副本全局单副本执行;`tick_timeout_sec` 取 `TICK_TIMEOUTS` 常量表——单次 tick 上限,防 redis/k8s IO 抖动挂死 `_run_forever` 循环,超时取消本拍记日志、下一拍重试):
 
 | 任务 | tick | tick 超时 | 锁键(`agent_runtime:job:*`) | 动作 |
 |---|---|---|---|---|
@@ -30,8 +30,14 @@ SM 侧 ctx,级联管理全部生命周期(框架 App 的 lifespan 只认一个 c
 | rm_reclaim | `reclaim_interval`(1s) | 60s | `rm_reclaim` | idle 超 pod_ttl 回收 |
 | rm_watch | `watch_interval`(10s) | 300s | `rm_watch` | 死 Pod 判定 + 健康探测 |
 | rm_reconcile | `reconcile_interval`(30s) | 300s | `rm_reconcile` | 孤儿/stale 对账 |
+| sys_sample | `eval_sample_interval`(30s,钳 5) | 30s | `sys_sample` | 自评估:per-scope 池态+计数快照采样(spec/evaluation.md) |
+| sys_eval | `eval_interval`(300s,钳 30) | 120s(盖住 LLM timeout 60) | `sys_eval` | 自评估:规则引擎(+可选 LLM)产报告落 Redis |
 
-- `start()` 顺序:super().start() → rm_sysctx.start() → k8s.start()(**失败仅降级扩缩容,不阻断启动**)→ 启动 5 个 job。`stop()` 逆序且**逐步兜底**(2026-09 加固:jobs/k8s/rm_sysctx/super().stop() 每段独立 try/except,单组件停机失败只留痕不阻断其余资源回收——连接泄漏比单点报错难排查)。
+另有**非选主**任务 telemetry flusher(2026-09):`start()` 起、每副本一个,5s
+周期 drain 热路径计数缓冲 → `{agent_runtime:eval}:ct:scope:{sid}` HINCRBY
+(10s 超时防御,失败留到下轮);`stop()` cancel + 终结 drain。
+
+- `start()` 顺序:super().start() → rm_sysctx.start() → k8s.start()(**失败仅降级扩缩容,不阻断启动**)→ 启动 7 个 job + telemetry flusher。`stop()` 逆序且**逐步兜底**(2026-09 加固:jobs/k8s/rm_sysctx/super().stop() 每段独立 try/except,单组件停机失败只留痕不阻断其余资源回收——连接泄漏比单点报错难排查)。
 - DB 表初始化:构造参数 `table_definitions=[SERVICE_CONFIG_TEMPLATE_TABLE_DEF, SERVICE_CONFIG_CONTAINER_TABLE_DEF, ROUTING_SCOPE_TABLE_DEF]`(表结构在 `config_store.py`)。
 
 ### create_app(settings, arc, *, resources=None, instance_id=None, own_resources=True)
@@ -106,13 +112,15 @@ SM 侧 ctx,级联管理全部生命周期(框架 App 的 lifespan 只认一个 c
 
 | 端点 | 内容 |
 |---|---|
-| `/visualization/overview` | instance/mode/uptime/pid/python、脱敏配置摘要、`sysctx.readiness()`、5 个 job 的 interval/tick_timeout/JobRunner 计数快照/当前 leader(`GET agent_runtime:job:{name}` 解析 token;tick 间隙锁瞬时缺失 → leader=null 属正常) |
+| `/visualization/overview` | instance/mode/uptime/pid/python、脱敏配置摘要(含 eval 四项:sample_interval/interval/llm enabled/pod_budget)、`sysctx.readiness()`、7 个 job 的 interval/tick_timeout/JobRunner 计数快照/当前 leader(`GET agent_runtime:job:{name}` 解析 token;tick 间隙锁瞬时缺失 → leader=null 属正常) |
 | `/visualization/session?session_id=` | 会话 HASH、ttl_remaining_s、所属 scope 会话数/候选 Pod、绑定 Pod sse_url/deploy_ver |
-| `/visualization/scope?scope_id=&limit=50` | RM:pod_count/idle/deploying/deploy_followers/scope_config(脱敏)/逐 Pod 详情(phase/ip/health_fails/idle_since);SM:session_count/候选 Pod/resolve 缓存 |
-| `/visualization/scopes?limit=100` | `known_scope_ids()` 枚举 + 每 scope 一行摘要;total/truncated |
-| `/visualization/config` | DB routing_rules + templates(脱敏 kubeconfig)+ Redis 缓存键计数 |
-| `/visualization/stats` | registry.snapshot()(计数/分位/错误码分布)+ pid/uptime |
+| `/visualization/scope?scope_id=&limit=50` | RM:pod_count/idle/deploying/deploy_followers/scope_config(脱敏)/逐 Pod 详情(phase/ip/health_fails/idle_since);SM:session_count/候选 Pod/`capacity` 容量闸门子对象(scope_concurrency/pod_concurrency/session_ttl/pod_ttl/min_idle_pods/派生 max_pods/session_utilization/route_budget_sec=ready_timeout+10)与路由定义;顶层 phase(active/disabled/orphan_rm/missing_rm_cfg) |
+| `/visualization/scopes?limit=100` | scope 清单 = RM 键 ∪ 路由快照(2026-09)+ 每 scope 一行摘要(pods/idle/deploying/session_count/max_pods/min_idle_pods + phase/template_id/scope_enabled/expires_at/scope_concurrency/pod_concurrency/session_ttl);total/truncated |
+| `/visualization/config` | DB routing_scopes + templates(脱敏 kubeconfig)+ 路由快照 ver/scope_count/template_count + Redis 缓存键计数 |
+| `/visualization/stats` | registry.snapshot()(计数/分位/错误码分布,命中实例视角)+ pid/uptime + `scopes` 段(2026-09:per-scope route/acquire/事件计数,**Redis 全副本聚合**视角) |
 | `/visualization/recent_errors?limit=50` | 错误环形缓冲(新在前) |
+| `/visualization/history?scope_id=&window_sec=3600&limit=240` | 单 scope 历史趋势采样(sys_sample 30s 一拍,25h TTL;新在前;数据在 Redis 重启不丢;limit 钳 [1,1440]) |
+| `/visualization/evaluation?limit=10` | 系统评估报告 latest+history(sys_eval 周期产出;**全局视角**读 Redis;无报告 latest=null 属正常态;llm 段只含 status/model/latency 无凭证) |
 
 - **LB 后是 per-instance**:命中哪个副本就是哪个副本的数据,响应 `instance_id` 标识应答者;看指定副本直连 Pod IP。
 - **坑**(与 /healthz 同源):`Request`/`JSONResponse` 顶层 import;query 参数用 `request.query_params.get()` 读,**不在签名里声明**;`_visualization_endpoint` 包装器**不用 functools.wraps**(会把内层 `(request, sysctx)` 注解复制给 FastAPI 解析,sysctx 会被当成 query 参数)。
@@ -132,6 +140,13 @@ SM 侧 ctx,级联管理全部生命周期(框架 App 的 lifespan 只认一个 c
 | watch_interval | `AGENT_RUNTIME_WATCH_INTERVAL` | 10 | RM:死 Pod+健康探测 |
 | reconcile_interval | `AGENT_RUNTIME_RECONCILE_INTERVAL` | 30 | RM:对账 |
 | default_session_ttl | `AGENT_RUNTIME_DEFAULT_SESSION_TTL` | 60 | touch 兜底 ttl |
+| eval_sample_interval | `AGENT_RUNTIME_EVAL_SAMPLE_INTERVAL` | 30 | sys_sample 采样间隔(钳 5;spec/evaluation.md) |
+| eval_interval | `AGENT_RUNTIME_EVAL_INTERVAL` | 300 | sys_eval 评估间隔(钳 30) |
+| eval_llm_base_url | `AGENT_RUNTIME_EVAL_LLM_BASE_URL` | 空 | OpenAI 兼容端点;**与 model 均非空才启用** |
+| eval_llm_api_key | `AGENT_RUNTIME_EVAL_LLM_API_KEY` | 空 | 可空(内网免鉴权);绝不进日志/报告 |
+| eval_llm_model | `AGENT_RUNTIME_EVAL_LLM_MODEL` | 空 | 模型名 |
+| eval_llm_timeout | `AGENT_RUNTIME_EVAL_LLM_TIMEOUT` | 60.0 | < TICK_TIMEOUTS.sys_eval=120 |
+| eval_pod_budget | `AGENT_RUNTIME_EVAL_POD_BUDGET` | 0 | 集群 Pod 预算;0=预算规则关闭 |
 
 常量:`SM_KEY_PREFIX="session_manager"`、`RM_KEY_PREFIX="resource_manager"`、`SERVICE_PREFIX="/api/session"`。
 

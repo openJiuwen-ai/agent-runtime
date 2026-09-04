@@ -39,6 +39,12 @@
 
 `SessionOrchestrator.route(request_id, session_id, group_id, bot_id, user_id)`:
 
+**评估埋点(2026-09)**:构造器 keyword-only `telemetry=None`(main 注入
+`ScopeTelemetryBuffer`);route 在 resolve 后 try/finally 记 per-scope 结果计数
+(ok/error_code),need_acquire 分支单独计数——纯内存零 Redis 往返,每副本
+5s 批量 flush 聚合到 `{agent_runtime:eval}:ct:scope:{sid}`(spec/evaluation.md)。
+touch 不分桶(无容量信号,HGET 反查 scope 热路径加一跳,不做)。
+
 ```
 四参非空校验(缺 → InvalidParams 400)
 → resolve(user_id, group_id, bot_id)(config_store:读路由快照 first-fit 匹配)
