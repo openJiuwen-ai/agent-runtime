@@ -118,6 +118,52 @@ def test_parse_severity_fallback():
     assert out["additional_findings"][0]["severity"] == "info"
 
 
+@pytest.mark.asyncio
+async def test_analyze_disable_thinking_switch():
+    """disable_thinking=1 → 请求带 vLLM chat_template_kwargs 关思考;默认不带。"""
+    seen: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [
+            {"message": {"content": "{\"summary\": \"ok\"}"}}]})
+
+    transport = httpx.MockTransport(handler)
+    on = LLMClient(base_url="http://llm.test/v1", model="m",
+                   transport=transport, disable_thinking=True)
+    assert (await on.analyze({"service": {}})).status == "ok"
+    assert seen[-1]["chat_template_kwargs"] == {"enable_thinking": False}
+
+    off = LLMClient(base_url="http://llm.test/v1", model="m", transport=transport)
+    assert (await off.analyze({"service": {}})).status == "ok"
+    assert "chat_template_kwargs" not in seen[-1]
+
+
+@pytest.mark.asyncio
+async def test_analyze_max_tokens_env():
+    """推理模型 reasoning 计入 max_tokens 预算:env 可抬(默认 1024 不变)。"""
+    seen: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [
+            {"message": {"content": "{\"summary\": \"ok\"}"}}]})
+
+    client = LLMClient(base_url="http://llm.test/v1", model="m",
+                       transport=httpx.MockTransport(handler), max_tokens=16384)
+    assert (await client.analyze({"service": {}})).status == "ok"
+    assert seen[-1]["max_tokens"] == 16384
+
+
+def test_from_arc_plumbs_disable_thinking(monkeypatch):
+    monkeypatch.setenv("AGENT_RUNTIME_EVAL_LLM_BASE_URL", "http://x/v1")
+    monkeypatch.setenv("AGENT_RUNTIME_EVAL_LLM_MODEL", "m")
+    monkeypatch.setenv("AGENT_RUNTIME_EVAL_LLM_DISABLE_THINKING", "true")
+    assert LLMClient.from_arc(AgentRuntimeConfig.from_env()).disable_thinking
+    monkeypatch.setenv("AGENT_RUNTIME_EVAL_LLM_DISABLE_THINKING", "0")
+    assert not LLMClient.from_arc(AgentRuntimeConfig.from_env()).disable_thinking
+
+
 def test_build_prompt_whitelist_and_truncation():
     payload = {
         "service": {"scope_full_timeout": 30, "evil": "x"},

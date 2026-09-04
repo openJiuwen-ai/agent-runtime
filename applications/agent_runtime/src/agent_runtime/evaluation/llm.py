@@ -70,12 +70,16 @@ class LLMClient:
         model: str = "",
         timeout: float = 60.0,
         transport: Any = None,       # httpx transport 注入口(测试 MockTransport)
+        disable_thinking: bool = False,
+        max_tokens: int = 1024,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
         self.timeout = timeout
         self._transport = transport
+        self.disable_thinking = bool(disable_thinking)
+        self.max_tokens = int(max_tokens)
 
     @classmethod
     def from_arc(cls, arc: Any) -> "LLMClient":
@@ -85,6 +89,8 @@ class LLMClient:
             api_key=getattr(arc, "eval_llm_api_key", "") or "",
             model=getattr(arc, "eval_llm_model", "") or "",
             timeout=float(getattr(arc, "eval_llm_timeout", 60.0) or 60.0),
+            disable_thinking=bool(getattr(arc, "eval_llm_disable_thinking", False)),
+            max_tokens=int(getattr(arc, "eval_llm_max_tokens", 1024) or 1024),
         )
 
     @property
@@ -104,21 +110,29 @@ class LLMClient:
         t0 = time.monotonic()
         try:
             headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+            request_body: dict[str, Any] = {
+                "model": self.model,
+                "messages": [
+                    {"role": "system", "content": _SYSTEM_PROMPT},
+                    {"role": "user", "content": user_text},
+                ],
+                "temperature": 0.2,
+                "max_tokens": self.max_tokens,
+            }
+            if self.disable_thinking:
+                # 推理模型(GLM 系,vLLM 部署):reasoning 计入 max_tokens 预算,
+                # 预算被吃空 → content 为空 → 解析必败(实测 GLM-5.3 reasoning
+                # 1.7~2.2 万字符)。vLLM 的 chat_template_kwargs 开关是否被执行
+                # 取决于服务端模板——不开时改用 max_tokens 兜底;OpenAI 官方等
+                # 非 vLLM 端点不识此键,故 opt-in。
+                request_body["chat_template_kwargs"] = {"enable_thinking": False}
             async with httpx.AsyncClient(
                 timeout=self.timeout, transport=self._transport
             ) as client:
                 resp = await client.post(
                     f"{self.base_url}/chat/completions",
                     headers=headers,
-                    json={
-                        "model": self.model,
-                        "messages": [
-                            {"role": "system", "content": _SYSTEM_PROMPT},
-                            {"role": "user", "content": user_text},
-                        ],
-                        "temperature": 0.2,
-                        "max_tokens": 1024,
-                    },
+                    json=request_body,
                 )
                 resp.raise_for_status()
                 data = resp.json()

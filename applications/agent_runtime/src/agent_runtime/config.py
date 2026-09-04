@@ -27,6 +27,8 @@ def _env_float(name: str, default: float) -> float:
     try:
         return float(os.getenv(name, "") or default)
     except ValueError:
+        logger.warning("invalid float env, using default: name=%s raw=%r default=%s",
+                       name, os.getenv(name), default)
         return default
 
 
@@ -38,6 +40,13 @@ def _env_int(name: str, default: int) -> int:
         logger.warning("invalid int env, using default: name=%s raw=%r default=%s",
                        name, os.getenv(name), default)
         return default
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = (os.getenv(name) or "").strip().lower()
+    if not raw:
+        return default
+    return raw in ("1", "true", "yes", "on")
 
 
 @dataclass(frozen=True)
@@ -62,6 +71,13 @@ class AgentRuntimeConfig:
     eval_llm_api_key: str = ""                 # 可空（内网免鉴权端点）；绝不进日志/报告
     eval_llm_model: str = ""
     eval_llm_timeout: float = 60.0             # 须 < TICK_TIMEOUTS.sys_eval
+    eval_llm_disable_thinking: bool = False    # 推理模型(GLM 等)关思考：reasoning
+                                               # 计入 max_tokens 预算会吃空
+                                               # content；vLLM chat_template_kwargs
+                                               # 开关，非 vLLM 端点勿开
+    eval_llm_max_tokens: int = 1024            # 推理模型预算须盖住 reasoning+答案
+                                               # （实测 GLM-5.3 需 ~16k；常规模型
+                                               # 默认值够）
     eval_pod_budget: int = 0                   # 集群 AgentServer Pod 预算；0=预算规则关闭
 
     @classmethod
@@ -82,5 +98,9 @@ class AgentRuntimeConfig:
             eval_llm_api_key=os.getenv("AGENT_RUNTIME_EVAL_LLM_API_KEY") or "",
             eval_llm_model=(os.getenv("AGENT_RUNTIME_EVAL_LLM_MODEL") or "").strip(),
             eval_llm_timeout=_env_float("AGENT_RUNTIME_EVAL_LLM_TIMEOUT", 60.0),
+            eval_llm_disable_thinking=_env_bool(
+                "AGENT_RUNTIME_EVAL_LLM_DISABLE_THINKING"),
+            eval_llm_max_tokens=_env_int(
+                "AGENT_RUNTIME_EVAL_LLM_MAX_TOKENS", 1024),
             eval_pod_budget=_env_int("AGENT_RUNTIME_EVAL_POD_BUDGET", 0),
         )
