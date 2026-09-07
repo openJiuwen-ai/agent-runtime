@@ -1,18 +1,10 @@
 ARG BASE_IMAGE
-FROM ${BASE_IMAGE}
+ARG IMAGE_VERSION
+FROM ${BASE_IMAGE}:${IMAGE_VERSION}
 
-ARG PIP_EXTRA_ARGS
+ARG PIP_EXTRA_ARGS="-i https://mirrors.aliyun.com/pypi/simple/"
 
-RUN useradd --create-home --shell /bin/bash app
-
-WORKDIR /app/agent-runtime
-COPY . /app/agent-runtime/
-RUN chown -R app:app /app/agent-runtime
-
-RUN pip install -e "./foundation" \
-    -e "./service" \
-    -e "./applications/agent_runtime[server]" \
-    --no-cache-dir \
+RUN uv pip install --system  -e "./applications/agent_runtime[server]" \
     ${PIP_EXTRA_ARGS}
 
 USER app

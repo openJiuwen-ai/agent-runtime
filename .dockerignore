@@ -3,6 +3,7 @@
 **/.venv
 **/__pycache__
 **/*.pyc
+**/node_modules
 applications/agent_runtime/logs
 applications/agent_runtime/.env*
 applications/agent_runtime/.replicas.json

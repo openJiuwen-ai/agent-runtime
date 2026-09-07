@@ -4,13 +4,12 @@ FROM ${BASE_IMAGE}:${IMAGE_VERSION}
 
 ARG PIP_EXTRA_ARGS="-i https://mirrors.aliyun.com/pypi/simple/"
 
-
-RUN uv pip install --system -e "./applications/manager/manager_server" \
+RUN uv pip install --system -e "./applications/manager/identity_center" \
     ${PIP_EXTRA_ARGS}
 
 USER app
 WORKDIR /app/agent-runtime
 ENV PATH=$PATH:/home/app/.local/bin
 
-EXPOSE 8765 8766
-CMD ["manager-server"]
+EXPOSE 8770
+CMD ["identity-center"]
