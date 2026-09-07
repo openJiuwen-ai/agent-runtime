@@ -12,7 +12,9 @@
 | [service-core.md](service-core.md) | 组装(main)/CLI/配置(`AGENT_RUNTIME_*`)/错误码契约/字段分类/工具/部署 | 改装配、配置、错误契约、部署时 |
 | [session-manager.md](session-manager.md) | SM:route/touch/config_sync/config_refresh/cleanup 编排、6 个 Lua、SM 键表 | 改会话编排/配置层时 |
 | [resource-manager.md](resource-manager.md) | RM:acquire/后台任务/K8s 适配、6 个 Lua、RM 键表 | 改 Pod 池/扩缩容/清理时 |
+| [evaluation.md](evaluation.md) | 自评估:采样/评估两 job、`{agent_runtime:eval}` 键表、规则清单、LLM 降级矩阵 | 改自评估/趋势/报告时 |
 | [e2e-test-cases.md](e2e-test-cases.md) | 全部 e2e 用例的场景/输入/预期输出 | 写或跑 e2e 时 |
+| `../api/config-plane-api.md` | 配置面对外接口文档(config_sync/config_refresh/visualization:字段表+curl+真实返回示例) | 给调用方(Claw Manager/运维/可视化前端)交付接口契约时 |
 | `../design/Agent-Runtime-HLD.md` | 架构总览/接口契约/场景 A–N/Redis 键表(语义权威) | 语义不确定时 |
 | `../design/session-manager-design.md` | SM 详细设计(6 个 Lua 全文) | 深挖 SM 设计动机 |
 | `../design/resource-manager-design.md` | RM 详细设计(6 个 Lua 全文) | 深挖 RM 设计动机 |
@@ -40,7 +42,8 @@ claw mgr ──config_sync──►   ├─ session_manager   持 App,5 个 HTT
 ```
 {session_manager}:…    SM 编排态(会话四处/scope 闸门/候选集/注册表/路由快照)
 {resource_manager}:…   RM 编排态(per-scope Pod 池/idle 暖池/deploy 占位/follower 等待室/选主锁)
-agent_runtime:job:…    后台任务选主执行锁(main.py:_build_jobs 注册)
+{agent_runtime:eval}:… 自评估域(per-scope 计数 HASH/趋势采样 ZSET/评估报告;2026-09,见 evaluation.md)
+agent_runtime:job:…    后台任务选主执行锁(main.py:_build_jobs 注册,7 个)
 {agent_runtime:job:…}:winner/candidates:…  选主抽签键(与执行锁同底,hash tag 同槽)
 ```
 
@@ -51,7 +54,7 @@ agent_runtime:job:…    后台任务选主执行锁(main.py:_build_jobs 注册)
 
 ```bash
 cd applications/agent_runtime
-uv sync --extra local && uv run pytest   # 157 用例(fakeredis+SQLite+FakeK8s)
+uv sync --extra local && uv run pytest   # 495 用例(fakeredis+SQLite+FakeK8s)
 ./scripts/integration_smoke.sh           # 真环境冒烟(场景 A–L;FLUSHDB 目标库,有防误刷)
 ./scripts/deploy_replicas.sh 2 .env.production.local 8091   # 宿主机双进程
 ./deploy/render_and_apply.sh deploy/agent_runtime.env --nodeport  # K8s 生产形态

@@ -44,14 +44,26 @@ class ResourceSweeper:
         *,
         orchestrator: ResourceOrchestrator | None = None,
         health_fail_threshold: int = HEALTH_FAIL_THRESHOLD,
+        event_sink=None,             # 评估事件上报 async (scope_id, field, by=1);None=旧测试
     ) -> None:
         self.state = rm_state
         self.k8s = k8s
         self.sm = sm_facade
         self.orchestrator = orchestrator or ResourceOrchestrator(rm_state, k8s)
         self.health_fail_threshold = health_fail_threshold
+        self.event_sink = event_sink
         # 数据缺失告警去重（仅影响日志，不参与业务判定）
         self._probe_gap_warned: set[str] = set()
+
+    async def _emit(self, scope_id: str, field: str) -> None:
+        """状态变迁事件上报(扩缩容/判死;低频直写)。埋点绝不反噬业务。"""
+        if self.event_sink is None:
+            return
+        try:
+            await self.event_sink(scope_id, field)
+        except Exception:  # noqa: BLE001
+            logger.exception("eval event sink failed: scope=%s field=%s",
+                             scope_id, field)
 
     # -------------------------------------------------------------- autoscale（H）
 
@@ -126,9 +138,11 @@ class ResourceSweeper:
             )
         except Exception:  # noqa: BLE001 - sweeper 自愈路径，记录不中断
             logger.exception("autoscale deploy failed: scope=%s", scope_id)
+            await self._emit(scope_id, "ev_autoscale_deploy_error")
             return "deploy_error"
         finally:
             await self.state.unlock(lock_key, lock_token)
+        await self._emit(scope_id, "ev_autoscale_deployed")
         return "deployed"
 
     # -------------------------------------------------------------- reclaim（K）
@@ -197,6 +211,7 @@ class ResourceSweeper:
     async def _reclaim_pod(self, pod_id: str, scope_id: str) -> None:
         logger.info("reclaim idle pod: scope=%s pod=%s", scope_id, pod_id)
         await self._purge_and_notify(pod_id)
+        await self._emit(scope_id, "ev_reclaimed")
 
     # -------------------------------------------------------------- watch（J/N）
 
@@ -227,6 +242,7 @@ class ResourceSweeper:
                         )
                         dead += 1
                         await self._purge_and_notify(pod_id)
+                        await self._emit(info.get("scope_id", ""), "ev_pod_dead")
                         continue
                     await self._health_probe(pod_id, info)
                 except Exception:  # noqa: BLE001 - per-Pod 隔离，下拍重试
@@ -268,6 +284,7 @@ class ResourceSweeper:
         if fails >= self.health_fail_threshold:
             logger.warning("half-dead pod judged dead: pod=%s fails=%d", pod_id, fails)
             await self._purge_and_notify(pod_id)
+            await self._emit(info.get("scope_id", ""), "ev_pod_dead")
 
     def _warn_probe_gap(self, pod_id: str, missing: str, scope_id: str) -> None:
         """探测数据缺失（探测被静默跳过的隐患）：按 pod 去重告警一次。"""
@@ -325,6 +342,7 @@ class ResourceSweeper:
                         logger.warning("orphan pod (absent in k8s): pod=%s", pod_id)
                         orphans += 1
                         await self._purge_and_notify(pod_id)
+                        await self._emit(info.get("scope_id", ""), "ev_pod_dead")
                 except Exception:  # noqa: BLE001 - per-Pod 隔离，下拍重试
                     failed += 1
                     logger.exception("reconcile orphan check failed: pod=%s", pod_id)

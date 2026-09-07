@@ -609,7 +609,8 @@ flowchart LR
 > **Redis Cluster 兼容(2026-08-29)**:两个前缀整体为 **hash tag**(`{xxx}`),模块全部键
 > 落同一 slot——多键 Lua 的原子语义在 cluster 分片下保持成立;选主抽签键为
 > `{agent_runtime:job:<job>}:winner/candidates:{epoch}`(同槽),执行锁键
-> `agent_runtime:job:<job>` 不变(单键操作)。连接串用 `redis+cluster://` scheme 构造
+> `agent_runtime:job:<job>` 不变(单键操作)。自评估域前缀 `{agent_runtime:eval}`(§5.3,
+> 2026-09)同款单槽 tag、全单键命令无 Lua。连接串用 `redis+cluster://` scheme 构造
 > 集群客户端(cluster 只有 db 0)。`state.eval` 把 prefix 同时声明为 `KEYS[1]`(路由锚,
 > 防 `numkeys=0` 随机路由到非归属节点)。单实例/哨兵下 `{}` 无语义,同一套键名兼容两种
 > 部署;背景与验证见 `docs/feature/2026-08-redis-cluster.md`。
@@ -725,6 +726,20 @@ flowchart TB
 | `lock:rm:reclaim` | STRING(NX EX) | 选主标记 | reclaim tick 级选主 |
 | `lock:rm:reconcile` | STRING(NX EX) | 选主标记 | 孤儿对账 sweeper 选主 |
 | `lock:rm:watch` | STRING(NX EX) | 选主标记 | K8s Watch + 死 Pod 轮询 + 健康 SSE 探测(场景 N)选主 |
+
+### 5.3 系统自评估(prefix `{agent_runtime:eval}:`,2026-09)
+
+评估数据域(非编排态;spec 见 `docs/spec/evaluation.md`):route/acquire 热路径计数经每副本
+内存缓冲 5s 批量聚合,RM 后台状态变迁直写;sys_sample(30s)采样池态+计数快照落 ZSET,
+sys_eval(300s)跑确定性规则(+可选 LLM 分析)产报告。**全单键命令、零 Lua**;报告只读
+产出,不改任何配置(建议人审后经 Manager config_sync 应用)。
+
+| 键 | 类型 | TTL | 语义 |
+|---|---|---|---|
+| `sample:scope:{sid}` | ZSET(member=紧凑 JSON,score=秒) | 25h(每采样刷新) | per-scope 趋势采样(t/p/i/d/s/w + 计数快照差分源) |
+| `ct:scope:{sid}` | HASH | 25h(每次写刷新) | per-scope 全副本聚合计数(route_*/acq_*/ev_*) |
+| `report:latest` | STRING | 无 TTL | 最近评估报告(findings/trend/caveats) |
+| `report:history` | ZSET(瘦身条目) | 30d(保 200) | 报告历史(只留 summary) |
 
 ---
 
@@ -1311,6 +1326,9 @@ M6(server 模式)已完成开发与真环境端到端验收,实现与本文的�
 
 - **`LUA_WAITER_GATE`(§5.1 键表 / §6.2 场景 F)**:实现期补充的第 7 个 SM Lua 脚本。初稿「先 SCARD 再 SADD」的入队判定在并发同时到达时全部读到旧计数而超收(真环境验收场景 F 发现的竞态),改为原子闸门后稳态 `SCARD ≤ max_waiters` 恒成立。全文见 SM 设计 §5.1。**(2026-09:已随场景 F 快失败改造整体拆除,连同 waiters 键/free 通道,见 §9.2)**
 - **场景 N(半死 Pod 健康探测)**:机制已实现且有单测覆盖;端到端验收**暂缓**——当前 AgentServer 镜像在 SSE 端口对 `GET /health` 返回 426(要求协议升级),不满足 §6.2 场景 N 的固定约定,待 AgentServer 原生支持后补验。
+- **系统自评估(§5.3,2026-09)**:evaluation 子包 + sys_sample/sys_eval 两选主 job +
+  `/visualization/{history,evaluation}` 端点已实现,单测 51 例 + 集成用例全绿;真环境
+  冒烟阶段 13c 已固化(e2e_hld_acceptance.py),门禁结果见 feature 篇目。
 - 场景 A–L 已在真 Redis + MySQL + K8s 环境端到端验收通过(用例固化为 `applications/agent_runtime/scripts/e2e_hld_acceptance.py`,经 `scripts/integration_smoke.sh` 调用,可作部署后回归)。
 
 ### 9.1 多副本验收(2026-08-18 更新,M7)

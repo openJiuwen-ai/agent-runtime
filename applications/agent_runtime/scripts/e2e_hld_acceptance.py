@@ -1430,6 +1430,76 @@ async def stage13_error_contract(c: Client, r) -> None:
           code == 200 and raw.get("cleaned") == 0, str(raw))
 
 
+async def stage13c_evaluation(c: Client, r) -> None:
+    """系统自评估数据层（2026-09）：两 job + 三个可视化端点（真环境）。
+
+    牙齿与等待窗:sys_sample 默认 30s、sys_eval 默认 300s——间隔从 overview
+    配置摘要现读,PASS 判据 = eval_interval+60s（上限 330s,冒烟部署建议
+    AGENT_RUNTIME_EVAL_INTERVAL=15 加速）内轮询到 latest 报告;llm.status
+    ∈ {disabled, ok}（真环境可能配了 LLM）;响应不得泄漏 API_KEY。只调小
+    interval env、不回拨任何指针（e2e 红线）。
+    """
+    print("\n== 阶段 13c：自评估 —— sys_sample/sys_eval + 可视化端点 ==")
+    root = c.base.rsplit("/api/session", 1)[0]
+
+    async def vis(path: str) -> tuple[int, dict]:
+        resp = await c.http.get(f"{root}{path}", timeout=30.0)
+        try:
+            body = resp.json()
+        except Exception:
+            body = {}
+        return resp.status_code, body
+
+    # 1) 两 job 已注册且至少跑过一拍（overview 是全局看板,任意副本应答）
+    code, overview = await vis("/visualization/overview")
+    jobs = {j.get("name"): j for j in overview.get("jobs", [])
+            if isinstance(j, dict)}
+    check("13c-overview 含 sys_sample/sys_eval 且 ok_ticks≥1",
+          code == 200 and {"sys_sample", "sys_eval"} <= set(jobs)
+          and jobs.get("sys_sample", {}).get("ok_ticks", 0) >= 1,
+          f"sample_ok={jobs.get('sys_sample', {}).get('ok_ticks')}")
+
+    # 2) scope 摘要含 SM 容量字段（scope 重构后观测补齐）
+    code, scopes = await vis("/visualization/scopes")
+    row = next((s for s in scopes.get("scopes", []) if s.get("scope_id") == MAIN),
+               None)
+    check("13c-scopes 摘要含容量闸门字段（sc/session_count）",
+          code == 200 and row is not None
+          and row.get("scope_concurrency") == 3 and row.get("max_pods") == 2
+          and "session_count" in row, str(row)[:100])
+
+    # 3) 历史趋势:采样 30s cadence,45s 内必有数据点
+    async def has_points() -> bool:
+        _, hist = await vis(f"/visualization/history?scope_id={MAIN}")
+        return bool(hist.get("points"))
+    ok = await wait_until(has_points, timeout=45, interval=3)
+    _, hist = await vis(f"/visualization/history?scope_id={MAIN}")
+    point = (hist.get("points") or [{}])[0]
+    check("13c-history 采样落盘（窗口内 points≥1 且字段齐全）",
+          ok and {"t", "p", "i", "s"} <= set(point), str(point)[:80])
+
+    # 4) 评估报告:间隔现读,限窗轮询(不依赖部署 env 假设)
+    eval_interval = int(overview.get("config", {}).get("eval_interval") or 300)
+    budget = min(eval_interval + 60, 330)
+
+    async def has_report() -> bool:
+        _, ev = await vis("/visualization/evaluation")
+        return bool(ev.get("latest"))
+    ok = await wait_until(has_report, timeout=budget, interval=5)
+    _, ev = await vis("/visualization/evaluation")
+    latest = ev.get("latest") or {}
+    llm_status = (latest.get("llm") or {}).get("status")
+    check("13c-evaluation 报告产出（llm ∈ {disabled,ok};findings 为 list）",
+          ok and llm_status in ("disabled", "ok")
+          and isinstance(latest.get("findings"), list)
+          and (latest.get("summary") or {}).get("active", 0) >= 1,
+          f"interval={eval_interval}s llm={llm_status} "
+          f"findings={len(latest.get('findings') or [])}")
+    text = str(latest).lower()
+    check("13c-evaluation 报告无凭证泄漏（无 api_key/Bearer 字样）",
+          ok and "api_key" not in text and "bearer" not in text, "")
+
+
 # ---------------------------------------------------------------- 入口
 
 def _parse_args() -> argparse.Namespace:
@@ -1540,6 +1610,7 @@ async def main() -> None:
             await stage12_reconcile_cleanup(c, r)
             await stage12b_or_branch(c, r)
             await stage13_error_contract(c, r)
+            await stage13c_evaluation(c, r)
     finally:
         await r.aclose()
 

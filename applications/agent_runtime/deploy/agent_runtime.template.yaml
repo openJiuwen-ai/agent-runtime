@@ -167,6 +167,20 @@ spec:
               value: "<<AGENT_RUNTIME_AGENTSERVER_NAMESPACE>>"
             - name: AGENT_RUNTIME_LOG_LEVEL
               value: "<<AGENT_RUNTIME_LOG_LEVEL>>"
+            # ---- 系统自评估（2026-09;默认全空 = 纯规则评估,无 LLM 外呼）----
+            # 采样/评估两 job 间隔(秒);LLM 三项(base_url+model 均非空才启用,
+            # api_key 可空=内网免鉴权端点);pod_budget=集群 AgentServer Pod
+            # 预算(0=预算规则关闭)。详见 docs/spec/evaluation.md
+            - name: AGENT_RUNTIME_EVAL_SAMPLE_INTERVAL
+              value: "<<AGENT_RUNTIME_EVAL_SAMPLE_INTERVAL>>"
+            - name: AGENT_RUNTIME_EVAL_INTERVAL
+              value: "<<AGENT_RUNTIME_EVAL_INTERVAL>>"
+            - name: AGENT_RUNTIME_EVAL_LLM_BASE_URL
+              value: "<<AGENT_RUNTIME_EVAL_LLM_BASE_URL>>"
+            - name: AGENT_RUNTIME_EVAL_LLM_API_KEY
+              value: "<<AGENT_RUNTIME_EVAL_LLM_API_KEY>>"
+            - name: AGENT_RUNTIME_EVAL_LLM_MODEL
+              value: "<<AGENT_RUNTIME_EVAL_LLM_MODEL>>"
             # stdout 主形态：关闭容器内文件 handler（console 保留；日志采集走
             # stdout——容器文件在 pod 重启/漂移后丢失且无处导出）
             - name: OPENJIUWEN_RUNTIME_LOG_FILE

@@ -13,6 +13,8 @@
   [2] 选主协调器：抽签（winner/candidates 经 hash tag 同槽）
   [3] SM 状态层：route_place / register_pod / touch / evict
   [4] RM 状态层：acquire / scope 配置 / known_scope_ids（SCAN dict 游标）
+  [5] 评估域（2026-09）：计数 HINCRBY / 采样 ZADD / 报告 SET+ZADD
+      （``{agent_runtime:eval}`` 单槽 tag；全单键命令，无 Lua）
 
 用法（applications/agent_runtime 下）：
   uv run --no-sync python scripts/verify_redis_cluster.py \
@@ -51,9 +53,10 @@ def check(name: bool | None, ok: bool, detail: str = "") -> None:
 
 
 async def _wipe_own_keys(client: Any) -> int:
-    """清本脚本前缀键（幂等起点/收尾；只碰 SM/RM 两个 tag 前缀）。"""
+    """清本脚本前缀键（幂等起点/收尾；只碰 SM/RM/eval 三个 tag 前缀）。"""
     n = 0
-    for pattern in ("{session_manager}:*", "{resource_manager}:*"):
+    for pattern in ("{session_manager}:*", "{resource_manager}:*",
+                    "{agent_runtime:eval}:*"):
         async for key in client.scan_iter(match=pattern, count=200):
             await client.delete(key)
             n += 1
@@ -175,6 +178,26 @@ async def verify(url: str, wipe: bool) -> int:
     action, pod, _ = await rm.acquire("v-scope", "v-ver-1", "v-tok-3")
     check("RM: bump 后 acquire 跳过老代、选中新代暖 Pod",
           action == "reuse" and pod == "v-pod-r2", f"{action}/{pod}")
+
+    # [5] 评估域(2026-09 自评估;{agent_runtime:eval} hash tag 单槽,零 Lua)
+    from agent_runtime.evaluation.state import EvaluationState
+
+    ev = EvaluationState(client)
+    await ev.bump_counters("v-scope", {"route_total": 2, "route_ok": 2})
+    await ev.bump_counters("v-scope", {"route_total": 1})
+    counters = await ev.read_counters("v-scope")
+    check("eval: 计数 HINCRBY 聚合(可交换,多副本双写安全)",
+          counters.get("route_total") == 3, str(counters.get("route_total")))
+    await ev.add_sample("v-scope", now, {"t": now, "s": 1, "i": 0})
+    points = await ev.samples("v-scope", now - 1)
+    check("eval: 采样 ZADD/ZRANGEBYSCORE 回读", len(points) == 1
+          and points[0].get("s") == 1, f"{len(points)} points")
+    await ev.write_report({"generated_at": now, "instance_id": "v",
+                           "llm": {"status": "disabled"},
+                           "summary": {"findings_total": 0}, "findings": []})
+    latest = await ev.latest_report()
+    check("eval: 报告 SET/ZADD 落盘回读", latest is not None
+          and latest.get("instance_id") == "v")
 
     # 收尾
     if wipe:

@@ -44,9 +44,16 @@ def _deploy_ver(pod_spec: dict[str, Any]) -> str:
 class ResourceOrchestrator:
     """RM 业务编排（无进程内可变状态；池状态在 Redis，物理态以 K8s 为准）。"""
 
-    def __init__(self, rm_state: ResourceState, k8s: K8sPodClient) -> None:
+    def __init__(
+        self,
+        rm_state: ResourceState,
+        k8s: K8sPodClient,
+        *,
+        telemetry: Any = None,           # ScopeTelemetryBuffer(评估计数;None=旧测试)
+    ) -> None:
         self.state = rm_state
         self.k8s = k8s
+        self.telemetry = telemetry
 
     # -------------------------------------------------------------- acquire
 
@@ -156,6 +163,12 @@ class ResourceOrchestrator:
                 scope_id, request_id or "-", outcome or "error",
                 (time.monotonic() - t0) * 1000,
             )
+            if self.telemetry is not None:
+                # 归一化首词(reuse/deployed/follower_reuse/max_reached;error 路径
+                # outcome 空 → "error");缓冲侧再映射 HASH 字段
+                self.telemetry.observe_acquire(
+                    scope_id, outcome.split()[0] if outcome else "error"
+                )
 
     async def _follow_leader(
         self,
