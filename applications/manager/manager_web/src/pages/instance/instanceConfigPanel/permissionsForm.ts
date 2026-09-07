@@ -123,6 +123,7 @@ export function createPermissionToolEntry(name: string, action: PermissionAction
 export function createDefaultPermissionsFormState(): PermissionsFormState {
   return {
     enabled: true,
+    skillAuthorizationEnabled: false,
     schema: 'tiered_policy',
     permissionMode: 'normal',
     defaults: { '*': 'allow' },
@@ -137,6 +138,7 @@ export function createDefaultPermissionsFormState(): PermissionsFormState {
 
 export function permissionsBodyToFormState(body: Record<string, unknown>): PermissionsFormState {
   const defaults = createDefaultPermissionsFormState();
+  const skillAuthorization = asRecord(body.skill_authorization);
   const toolsRaw = asRecord(body.tools);
   const tools: PermissionToolEntry[] = Object.entries(toolsRaw).map(([name, action]) => ({
     key: nextKey('tool'),
@@ -160,6 +162,7 @@ export function permissionsBodyToFormState(body: Record<string, unknown>): Permi
 
   return {
     enabled: body.enabled !== false,
+    skillAuthorizationEnabled: body.enabled !== false && skillAuthorization.enabled === true,
     schema: typeof body.schema === 'string' && body.schema.trim() ? body.schema.trim() : defaults.schema,
     permissionMode: asPermissionMode(body.permission_mode),
     defaults: defaultsFromBody(body.defaults),
@@ -203,6 +206,7 @@ export function permissionsFormStateToBody(form: PermissionsFormState): Record<s
 
   const body: Record<string, unknown> = {
     enabled: form.enabled,
+    skill_authorization: { enabled: form.enabled && form.skillAuthorizationEnabled },
     schema: form.schema || 'tiered_policy',
     permission_mode: form.permissionMode,
     defaults,

@@ -317,6 +317,8 @@
       "deleteConfirm": "确认删除 Manager 托管的 permissions 配置？Gateway 将回退到 config.yaml。",
       "deleted": "已删除托管配置，Gateway 将回退到 config.yaml",
       "enabled": "启用权限管控",
+      "skillAuthorizationEnabled": "启用技能动态授权",
+      "skillAuthorizationHint": "加载技能时，根据 SKILL.md 中声明的权限动态请求用户授权；需先启用权限管控",
       "permissionMode": "权限模式 (permission_mode)",
       "permissionModeHint": "normal：LOW/MEDIUM→allow，HIGH/CRITICAL→ask；strict：MEDIUM→ask，CRITICAL→deny",
       "modes": {

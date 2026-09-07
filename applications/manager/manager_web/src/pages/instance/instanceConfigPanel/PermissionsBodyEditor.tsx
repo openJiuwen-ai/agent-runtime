@@ -191,10 +191,34 @@ export function PermissionsBodyEditor({ form, onChange }: Props) {
               <input
                 type="checkbox"
                 checked={form.enabled}
-                onChange={(e) => updateForm('enabled', e.target.checked)}
+                onChange={(e) =>
+                  onChange({
+                    ...form,
+                    enabled: e.target.checked,
+                    skillAuthorizationEnabled: e.target.checked && form.skillAuthorizationEnabled,
+                  })
+                }
               />
               <span>{t('instanceConfig.permissions.enabled')}</span>
             </label>
+          </div>
+          <div className="md:col-span-2">
+            <label
+              className={`flex items-center gap-2 border border-border rounded-md px-3 py-2 w-fit ${
+                form.enabled ? 'cursor-pointer hover:bg-bg-hover' : 'cursor-not-allowed opacity-60'
+              }`}
+            >
+              <input
+                type="checkbox"
+                checked={form.skillAuthorizationEnabled}
+                disabled={!form.enabled}
+                onChange={(e) => updateForm('skillAuthorizationEnabled', e.target.checked)}
+              />
+              <span>{t('instanceConfig.permissions.skillAuthorizationEnabled')}</span>
+            </label>
+            <p className="text-[11px] text-muted mt-1">
+              {t('instanceConfig.permissions.skillAuthorizationHint')}
+            </p>
           </div>
           <div className="md:col-span-2">
             <label className="label">{t('instanceConfig.permissions.permissionMode')}</label>
