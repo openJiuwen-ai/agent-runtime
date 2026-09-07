@@ -46,7 +46,13 @@ export async function loadTemplateOptions(): Promise<Record<string, TemplateOpti
 
   const modelOptions = (models.items ?? []).map((m) => toOpt(m.template_id, m.template_name));
   const bySlot: Record<string, TemplateOption[]> = {};
-  for (const slot of ['default_model', 'video_model', 'audio_model', 'vision_model'] as const) {
+  for (const slot of [
+    'default_model',
+    'video_model',
+    'audio_model',
+    'vision_model',
+    'image_gen_model',
+  ] as const) {
     bySlot[slot] = modelOptions;
   }
 
