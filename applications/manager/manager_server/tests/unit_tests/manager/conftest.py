@@ -99,7 +99,7 @@ class ManagerApiHarness:
         if path.startswith((
             "/model-templates",
             "/extension-config-templates",
-            "/skill-whitelist-templates",
+            "/skill-prebuilt-templates",
             "/service-config-templates",
         )):
             url = self.templates_url(path)
@@ -113,7 +113,7 @@ class ManagerApiHarness:
         if path.startswith((
             "/model-templates",
             "/extension-config-templates",
-            "/skill-whitelist-templates",
+            "/skill-prebuilt-templates",
             "/service-config-templates",
         )):
             url = self.templates_url(path)
@@ -127,7 +127,7 @@ class ManagerApiHarness:
         if path.startswith((
             "/model-templates",
             "/extension-config-templates",
-            "/skill-whitelist-templates",
+            "/skill-prebuilt-templates",
             "/service-config-templates",
         )):
             url = self.templates_url(path)
@@ -141,7 +141,7 @@ class ManagerApiHarness:
         if path.startswith((
             "/model-templates",
             "/extension-config-templates",
-            "/skill-whitelist-templates",
+            "/skill-prebuilt-templates",
             "/service-config-templates",
         )):
             url = self.templates_url(path)

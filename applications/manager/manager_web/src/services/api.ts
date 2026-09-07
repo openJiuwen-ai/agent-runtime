@@ -13,9 +13,9 @@ import type {
   ModelTemplateCreateBody,
   ModelTemplateUpdateBody,
   PageResult,
-  SkillWhitelistTemplate,
-  SkillWhitelistTemplateCreateBody,
-  SkillWhitelistTemplateUpdateBody,
+  SkillPrebuiltTemplate,
+  SkillPrebuiltTemplateCreateBody,
+  SkillPrebuiltTemplateUpdateBody,
   PermissionsTemplate,
   PermissionsTemplateCreateBody,
   PermissionsTemplateUpdateBody,
@@ -882,35 +882,37 @@ export const ExtensionTemplateApi = {
     ),
 };
 
-export const SkillWhitelistTemplateApi = {
+export const SkillPrebuiltTemplateApi = {
   list: (params?: {
     page?: number;
     page_size?: number;
     enabled?: boolean;
     skill_id?: string;
-    skill_source?: string;
+    package_url?: string;
+    source_id?: string;
     search?: string;
     sort_by?:
       | 'template_name'
       | 'description'
-      | 'skill_source'
+      | 'package_url'
       | 'skill_id'
-      | 'skill_version'
+      | 'source_id'
+      | 'version_id'
       | 'updated_at';
     sort_order?: 'asc' | 'desc';
-  }) => http<PageResult<SkillWhitelistTemplate>>('/v1/skill-whitelist-templates', { query: params }),
+  }) => http<PageResult<SkillPrebuiltTemplate>>('/v1/skill-prebuilt-templates', { query: params }),
   get: (id: string) =>
-    http<SkillWhitelistTemplate>(`/v1/skill-whitelist-templates/${encodeURIComponent(id)}`),
-  create: (body: SkillWhitelistTemplateCreateBody) =>
-    http<SkillWhitelistTemplate>('/v1/skill-whitelist-templates', { method: 'POST', body }),
-  update: (id: string, body: SkillWhitelistTemplateUpdateBody) =>
-    http<SkillWhitelistTemplate>(`/v1/skill-whitelist-templates/${encodeURIComponent(id)}`, {
+    http<SkillPrebuiltTemplate>(`/v1/skill-prebuilt-templates/${encodeURIComponent(id)}`),
+  create: (body: SkillPrebuiltTemplateCreateBody) =>
+    http<SkillPrebuiltTemplate>('/v1/skill-prebuilt-templates', { method: 'POST', body }),
+  update: (id: string, body: SkillPrebuiltTemplateUpdateBody) =>
+    http<SkillPrebuiltTemplate>(`/v1/skill-prebuilt-templates/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       body,
     }),
   remove: (id: string) =>
     http<{ deleted: boolean; template_id: string }>(
-      `/v1/skill-whitelist-templates/${encodeURIComponent(id)}`,
+      `/v1/skill-prebuilt-templates/${encodeURIComponent(id)}`,
       { method: 'DELETE' }
     ),
 };
@@ -1009,3 +1011,4 @@ export const LoggingApi = {
   remove: (instanceId: string) =>
     http<void>(`${instanceBase(instanceId)}/logging`, { method: 'DELETE' }),
 };
+

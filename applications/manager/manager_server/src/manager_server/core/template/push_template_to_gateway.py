@@ -35,7 +35,7 @@ from manager_server.models.template_models import (
     MCP_TEMPLATE_TABLE_DEF,
     MODEL_TEMPLATE_TABLE_DEF,
     PERMISSIONS_TEMPLATE_TABLE_DEF,
-    SKILL_WHITELIST_TEMPLATE_TABLE_DEF,
+    SKILL_PREBUILT_TEMPLATE_TABLE_DEF,
 )
 from manager_server.schemas.template_slot_schemas import (
     EMBEDDING_MODEL_SLOT,
@@ -44,7 +44,7 @@ from manager_server.schemas.template_slot_schemas import (
     MODEL_TEMPLATE_SLOTS,
     PERMISSIONS_SLOT,
     SERVICE_CONFIG_SLOT,
-    SKILL_WHITELIST_SLOT,
+    SKILL_PREBUILT_SLOT,
 )
 
 logger = get_logger(__name__)
@@ -78,10 +78,10 @@ TEMPLATE_KIND_SPECS: dict[str, TemplateKindSpec] = {
         table_name=EMBEDDING_TEMPLATE_TABLE_DEF.table_name,
         slot_keys=frozenset({EMBEDDING_MODEL_SLOT}),
     ),
-    "skill_whitelist_templates": TemplateKindSpec(
-        config_section="skill_whitelist_templates",
-        table_name=SKILL_WHITELIST_TEMPLATE_TABLE_DEF.table_name,
-        slot_keys=frozenset({SKILL_WHITELIST_SLOT}),
+    "skill_prebuilt_templates": TemplateKindSpec(
+        config_section="skill_prebuilt_templates",
+        table_name=SKILL_PREBUILT_TEMPLATE_TABLE_DEF.table_name,
+        slot_keys=frozenset({SKILL_PREBUILT_SLOT}),
     ),
     "permissions_templates": TemplateKindSpec(
         config_section="permissions_templates",
@@ -116,7 +116,7 @@ _TEMPLATE_HTTP_PATHS: dict[str, str] = {
     "model_templates": "/api/v1/model-templates",
     "embedding_templates": "/api/v1/embedding-templates",
     "extension_config_templates": "/api/v1/extension-config-templates",
-    "skill_whitelist_templates": "/api/v1/skill-whitelist-templates",
+    "skill_prebuilt_templates": "/api/v1/skill-prebuilt-templates",
     "permissions_templates": "/api/v1/permissions-templates",
     "mcp_templates": "/api/v1/mcp-templates",
     AGENT_TEMPLATES_KIND: "/api/v1/agent-templates",
@@ -126,7 +126,7 @@ _PUSH_DROP_KEYS = frozenset({"id", "created_at", "updated_at", "jiuwenclaw_id"})
 _ROW_TO_OUT_MODULES: dict[str, str] = {
     "model_templates": "manager_server.core.template.model_template",
     "embedding_templates": "manager_server.core.template.embedding_template",
-    "skill_whitelist_templates": "manager_server.core.template.skill_whitelist_template",
+    "skill_prebuilt_templates": "manager_server.core.template.skill_prebuilt_template",
     "permissions_templates": "manager_server.core.template.permissions_template",
     "extension_config_templates": "manager_server.core.template.extension_config_template",
     "mcp_templates": "manager_server.core.template.mcp_template",

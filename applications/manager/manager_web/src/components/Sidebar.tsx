@@ -29,7 +29,7 @@ export function Sidebar() {
   const agentTemplateChildPaths = [
     '/model-templates',
     '/embedding-templates',
-    '/skill-whitelist-templates',
+    '/skill-prebuilt-templates',
     '/safety-guardrails',
     '/extension-config-templates',
   ];
@@ -109,9 +109,9 @@ export function Sidebar() {
       ),
     },
     {
-      key: 'skill-whitelist-templates',
-      pathPrefix: '/skill-whitelist-templates',
-      href: '/skill-whitelist-templates',
+      key: 'skill-prebuilt-templates',
+      pathPrefix: '/skill-prebuilt-templates',
+      href: '/skill-prebuilt-templates',
       label: t('nav.skillWhitelistTemplates'),
       icon: (
         <svg className="w-4 h-4 nav-item__icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>

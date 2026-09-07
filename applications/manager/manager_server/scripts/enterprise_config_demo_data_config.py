@@ -121,7 +121,7 @@ class ManagerClient:
             "/model-templates",
             "/embedding-templates",
             "/extension-config-templates",
-            "/skill-whitelist-templates",
+            "/skill-prebuilt-templates",
             "/service-config-templates",
             "/agent-templates",
         )
@@ -364,7 +364,7 @@ def _extension_config_templates() -> list[tuple[str, dict[str, Any]]]:
     ]
 
 
-def _skill_whitelist_templates() -> list[tuple[str, dict[str, Any]]]:
+def _skill_prebuilt_templates() -> list[tuple[str, dict[str, Any]]]:
     return [
         (
             "W1 销售组-天气 Skill",
@@ -372,8 +372,7 @@ def _skill_whitelist_templates() -> list[tuple[str, dict[str, Any]]]:
                 "template_name": "销售组-天气 Skill",
                 "description": "允许 search/weather",
                 "skill_id": "search/weather",
-                "skill_version": "1.2.0",
-                "skill_source": "https://skillhub.example.com/",
+                "package_url": "https://artifacts.example.com/skills/weather-1.2.0.zip",
                 "enabled": True,
                 "data": {"demo": "w1"},
             },
@@ -384,8 +383,7 @@ def _skill_whitelist_templates() -> list[tuple[str, dict[str, Any]]]:
                 "template_name": "销售组-CRM Skill",
                 "description": "允许 crm/lead_lookup",
                 "skill_id": "crm/lead_lookup",
-                "skill_version": "2.0.1",
-                "skill_source": "https://skillhub.example.com/",
+                "package_url": "https://artifacts.example.com/skills/crm-2.0.1.zip",
                 "enabled": True,
                 "data": {"demo": "w2"},
             },
@@ -394,10 +392,9 @@ def _skill_whitelist_templates() -> list[tuple[str, dict[str, Any]]]:
             "W3 兜底 Skill",
             {
                 "template_name": "兜底 Skill",
-                "description": "Fallback Agent 最小 Skill 白名单",
+                "description": "Fallback Agent 最小预置 Skill",
                 "skill_id": "search/weather",
-                "skill_version": "1.0.0",
-                "skill_source": "https://skillhub.example.com/",
+                "package_url": "https://artifacts.example.com/skills/weather-1.0.0.zip",
                 "enabled": True,
                 "data": {"demo": "w3"},
             },
@@ -441,7 +438,7 @@ def seed_demo_config(client: ManagerClient) -> dict[str, Any]:
         "model_templates": {},
         "embedding_templates": {},
         "extension_config_templates": {},
-        "skill_whitelist_templates": {},
+        "skill_prebuilt_templates": {},
         "service_config_templates": {},
         "agent_templates": {},
         "agent_resources": {},
@@ -480,14 +477,14 @@ def seed_demo_config(client: ManagerClient) -> dict[str, Any]:
         logger.info("  [%s] %s -> template_id=%s", key, label, tid)
     e1, e2, e3, e4 = extension_ids
 
-    logger.info("[4/7] 创建 skill-whitelist-templates（W1–W3）")
+    logger.info("[4/7] 创建 skill-prebuilt-templates（W1–W3）")
     whitelist_ids: list[str] = []
-    for label, body in _skill_whitelist_templates():
-        row = client.post("/skill-whitelist-templates", body)
-        tid = _require_template_id(row, "/skill-whitelist-templates")
+    for label, body in _skill_prebuilt_templates():
+        row = client.post("/skill-prebuilt-templates", body)
+        tid = _require_template_id(row, "/skill-prebuilt-templates")
         whitelist_ids.append(tid)
         key = f"w{len(whitelist_ids)}"
-        result["skill_whitelist_templates"][key] = tid
+        result["skill_prebuilt_templates"][key] = tid
         logger.info("  [%s] %s -> template_id=%s", key, label, tid)
     w1, w2, w3 = whitelist_ids
 
@@ -517,7 +514,7 @@ def seed_demo_config(client: ManagerClient) -> dict[str, Any]:
                     "video_model": [m1],
                     "audio_model": [m1],
                     "embedding_model": [b3],
-                    "skill_whitelist": [w1],
+                    "skill_prebuilt": [w1],
                     "extension_config": [e3],
                 },
                 "enabled": True,
@@ -537,7 +534,7 @@ def seed_demo_config(client: ManagerClient) -> dict[str, Any]:
                     "video_model": [m1],
                     "audio_model": [m1],
                     "embedding_model": [b2],
-                    "skill_whitelist": [w1, w2],
+                    "skill_prebuilt": [w1, w2],
                     "extension_config": [e1, e2],
                 },
                 "enabled": True,
@@ -557,7 +554,7 @@ def seed_demo_config(client: ManagerClient) -> dict[str, Any]:
                     "video_model": [m1],
                     "audio_model": [m1],
                     "embedding_model": [b1],
-                    "skill_whitelist": [w3],
+                    "skill_prebuilt": [w3],
                     "extension_config": [e4],
                 },
                 "enabled": True,

@@ -11,8 +11,8 @@ from manager_server.core.template.permissions_template import (
 from manager_server.core.template.service_config_template import (
     ServiceConfigTemplateService,
 )
-from manager_server.core.template.skill_whitelist_template import (
-    SkillWhitelistTemplateService,
+from manager_server.core.template.skill_prebuilt_template import (
+    SkillPrebuiltTemplateService,
 )
 
 __all__ = (
@@ -22,6 +22,6 @@ __all__ = (
     "ExtensionConfigTemplateService",
     "PermissionsTemplateService",
     "McpTemplateService",
-    "SkillWhitelistTemplateService",
+    "SkillPrebuiltTemplateService",
     "ServiceConfigTemplateService",
 )

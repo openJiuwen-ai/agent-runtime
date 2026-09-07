@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAsync } from '../../hooks/useAsync';
 import { useListSearch } from '../../hooks/useListSearch';
-import { SkillWhitelistTemplateApi, ApiError } from '../../services/api';
-import type { SkillWhitelistTemplate } from '../../types';
+import { SkillPrebuiltTemplateApi, ApiError } from '../../services/api';
+import type { SkillPrebuiltTemplate } from '../../types';
 import { Empty } from '../../components/Empty';
 import { Pagination } from '../../components/Pagination';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
@@ -14,25 +14,26 @@ import {
   type ColumnSortValue,
 } from '../../components/TableColumnSort';
 import { ListSearchInput } from '../../components/ListSearchInput';
-import { SkillWhitelistTemplateModal } from './SkillWhitelistTemplateModal';
+import { SkillPrebuiltTemplateModal } from './SkillPrebuiltTemplateModal';
 import { toast } from '../../stores/uiStore';
 import { formatTime, truncate } from '../../utils/format';
 
-type SkillWhitelistTemplateSortField =
+type SkillPrebuiltTemplateSortField =
   | 'template_name'
   | 'description'
-  | 'skill_source'
+  | 'package_url'
   | 'skill_id'
-  | 'skill_version'
+  | 'source_id'
+  | 'version_id'
   | 'updated_at';
 
-export function SkillWhitelistTemplatesPage() {
+export function SkillPrebuiltTemplatesPage() {
   const { t } = useTranslation();
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const { searchInput, setSearchInput, searchQuery } = useListSearch();
   const [enabledFilter, setEnabledFilter] = useState<string>('');
-  const [sortBy, setSortBy] = useState<SkillWhitelistTemplateSortField | ''>('');
+  const [sortBy, setSortBy] = useState<SkillPrebuiltTemplateSortField | ''>('');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
 
   const sortOptions = useMemo(
@@ -44,7 +45,7 @@ export function SkillWhitelistTemplatesPage() {
     [t],
   );
 
-  const handleSortChange = (field: SkillWhitelistTemplateSortField, value: ColumnSortValue) => {
+  const handleSortChange = (field: SkillPrebuiltTemplateSortField, value: ColumnSortValue) => {
     if (value === '') {
       setSortBy('');
       setSortOrder('asc');
@@ -61,7 +62,7 @@ export function SkillWhitelistTemplatesPage() {
 
   const { data, loading, error, reload } = useAsync(
     () =>
-      SkillWhitelistTemplateApi.list({
+      SkillPrebuiltTemplateApi.list({
         page,
         page_size: pageSize,
         search: searchQuery,
@@ -72,10 +73,10 @@ export function SkillWhitelistTemplatesPage() {
     [page, pageSize, searchQuery, enabledFilter, sortBy, sortOrder]
   );
 
-  const [items, setItems] = useState<SkillWhitelistTemplate[]>([]);
+  const [items, setItems] = useState<SkillPrebuiltTemplate[]>([]);
   const [modalOpen, setModalOpen] = useState(false);
-  const [editing, setEditing] = useState<SkillWhitelistTemplate | null>(null);
-  const [delTarget, setDelTarget] = useState<SkillWhitelistTemplate | null>(null);
+  const [editing, setEditing] = useState<SkillPrebuiltTemplate | null>(null);
+  const [delTarget, setDelTarget] = useState<SkillPrebuiltTemplate | null>(null);
   const [togglingId, setTogglingId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -84,7 +85,7 @@ export function SkillWhitelistTemplatesPage() {
     }
   }, [data]);
 
-  const toggleEnabled = async (row: SkillWhitelistTemplate, enabled: boolean) => {
+  const toggleEnabled = async (row: SkillPrebuiltTemplate, enabled: boolean) => {
     if (togglingId) return;
     const previous = row.enabled;
     setItems((list) =>
@@ -92,7 +93,7 @@ export function SkillWhitelistTemplatesPage() {
     );
     setTogglingId(row.template_id);
     try {
-      await SkillWhitelistTemplateApi.update(row.template_id, { enabled });
+      await SkillPrebuiltTemplateApi.update(row.template_id, { enabled });
       if (enabledFilter !== '' && enabled !== (enabledFilter === 'true')) {
         setItems((list) => list.filter((item) => item.template_id !== row.template_id));
       }
@@ -170,10 +171,10 @@ export function SkillWhitelistTemplatesPage() {
                 </th>
                 <th>
                   <TableColumnSort
-                    label={t('skillWhitelistTemplate.skillSource')}
-                    value={sortBy === 'skill_source' ? sortOrder : ''}
+                    label={t('skillWhitelistTemplate.packageUrl')}
+                    value={sortBy === 'package_url' ? sortOrder : ''}
                     options={sortOptions}
-                    onChange={(value) => handleSortChange('skill_source', value)}
+                    onChange={(value) => handleSortChange('package_url', value)}
                   />
                 </th>
                 <th>
@@ -186,10 +187,10 @@ export function SkillWhitelistTemplatesPage() {
                 </th>
                 <th>
                   <TableColumnSort
-                    label={t('skillWhitelistTemplate.skillVersion')}
-                    value={sortBy === 'skill_version' ? sortOrder : ''}
+                    label={t('skillWhitelistTemplate.versionId')}
+                    value={sortBy === 'version_id' ? sortOrder : ''}
                     options={sortOptions}
-                    onChange={(value) => handleSortChange('skill_version', value)}
+                    onChange={(value) => handleSortChange('version_id', value)}
                   />
                 </th>
                 <th>
@@ -236,13 +237,17 @@ export function SkillWhitelistTemplatesPage() {
                   <td className="text-[11px] text-muted max-w-[14rem]" title={row.description ?? undefined}>
                     {row.description ? truncate(row.description, 48) : '—'}
                   </td>
-                  <td className="mono text-[11px] text-muted max-w-[12rem]" title={row.skill_source}>
-                    {row.skill_source ? truncate(row.skill_source, 36) : '—'}
+                  <td className="mono text-[11px] text-muted max-w-[12rem]" title={row.package_url || row.source_id || undefined}>
+                    {row.source_id
+                      ? truncate(`${row.source_id}@${row.version_id || ''}`, 36)
+                      : row.package_url
+                        ? truncate(String(row.package_url), 36)
+                        : '—'}
                   </td>
                   <td className="mono text-xs min-w-[10rem] max-w-[18rem] break-all align-top text-text-strong" title={row.skill_id}>
                     {row.skill_id}
                   </td>
-                  <td className="mono text-xs whitespace-nowrap">{row.skill_version}</td>
+                  <td className="mono text-xs whitespace-nowrap">{row.version_id || '—'}</td>
                   <td className="whitespace-nowrap">
                     <Switch
                       checked={row.enabled}
@@ -290,7 +295,7 @@ export function SkillWhitelistTemplatesPage() {
       </div>
       </div>
 
-      <SkillWhitelistTemplateModal
+      <SkillPrebuiltTemplateModal
         open={modalOpen}
         template={editing}
         onClose={() => setModalOpen(false)}
@@ -307,7 +312,7 @@ export function SkillWhitelistTemplatesPage() {
         onConfirm={async () => {
           if (!delTarget) return;
           try {
-            await SkillWhitelistTemplateApi.remove(delTarget.template_id);
+            await SkillPrebuiltTemplateApi.remove(delTarget.template_id);
             toast('success', t('success.deleted'));
             void reload();
           } catch (e) {

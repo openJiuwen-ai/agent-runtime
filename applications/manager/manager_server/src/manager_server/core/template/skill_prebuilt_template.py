@@ -1,4 +1,4 @@
-"""Skill 白名单模板 skill_whitelist_template 业务逻辑。"""
+"""预置技能模板 skill_prebuilt_template 业务逻辑。"""
 
 from __future__ import annotations
 
@@ -13,24 +13,31 @@ from manager_server.core.template.push_template_to_gateway import (
 )
 from manager_server.infrastructure.common import resolve_order_by
 from manager_server.infrastructure.utils import iso_datetime, new_uuid4, utc_now
-from manager_server.models.template_models import SKILL_WHITELIST_TEMPLATE_TABLE_DEF
+from manager_server.models.template_models import SKILL_PREBUILT_TEMPLATE_TABLE_DEF
 from manager_server.schemas.template_schemas import (
-    SkillWhitelistTemplateCreateBody,
-    SkillWhitelistTemplateListQuery,
-    SkillWhitelistTemplateOut,
-    SkillWhitelistTemplateUpdateBody,
+    SkillPrebuiltTemplateCreateBody,
+    SkillPrebuiltTemplateListQuery,
+    SkillPrebuiltTemplateOut,
+    SkillPrebuiltTemplateUpdateBody,
 )
 
-_TABLE = SKILL_WHITELIST_TEMPLATE_TABLE_DEF.table_name
+_TABLE = SKILL_PREBUILT_TEMPLATE_TABLE_DEF.table_name
+_KIND = "skill_prebuilt_templates"
 _LIST_ALL_CAP = 10_000
 _ALLOWED_SORT_FIELDS = frozenset({
     "template_name",
     "description",
-    "skill_source",
+    "package_url",
     "skill_id",
-    "skill_version",
+    "source_id",
+    "version_id",
     "updated_at",
 })
+
+
+def _package_url_of(body: Any) -> str | None:
+    value = (getattr(body, "package_url", None) or "").strip() or None
+    return value
 
 
 def _matches_search(row: Any, query: str) -> bool:
@@ -41,22 +48,25 @@ def _matches_search(row: Any, query: str) -> bool:
         str(getattr(row, "template_id", "") or ""),
         str(getattr(row, "template_name", "") or ""),
         str(getattr(row, "description", "") or ""),
-        str(getattr(row, "skill_source", "") or ""),
+        str(getattr(row, "package_url", "") or ""),
         str(getattr(row, "skill_id", "") or ""),
-        str(getattr(row, "skill_version", "") or ""),
+        str(getattr(row, "source_id", "") or ""),
+        str(getattr(row, "version_id", "") or ""),
     ]
     return any(needle in field.lower() for field in fields)
 
 
-def row_to_out(row: Any) -> SkillWhitelistTemplateOut:
-    return SkillWhitelistTemplateOut(
+def row_to_out(row: Any) -> SkillPrebuiltTemplateOut:
+    package_url = getattr(row, "package_url", None)
+    return SkillPrebuiltTemplateOut(
         id=row.id,
         template_id=str(row.template_id),
         template_name=row.template_name,
         description=row.description,
         skill_id=row.skill_id,
-        skill_version=row.skill_version,
-        skill_source=row.skill_source,
+        package_url=package_url,
+        source_id=getattr(row, "source_id", None),
+        version_id=getattr(row, "version_id", None),
         enabled=row.enabled,
         data=row.data,
         created_at=iso_datetime(row.created_at),
@@ -64,29 +74,30 @@ def row_to_out(row: Any) -> SkillWhitelistTemplateOut:
     )
 
 
-class SkillWhitelistTemplateService:
+class SkillPrebuiltTemplateService:
     def __init__(self, handler: DBHandler) -> None:
         self._handler = handler
 
     @staticmethod
     def _build_row_for_create(
-        body: SkillWhitelistTemplateCreateBody, *, template_id: str
+        body: SkillPrebuiltTemplateCreateBody, *, template_id: str
     ) -> dict[str, Any]:
         return {
             "template_id": template_id,
             "template_name": body.template_name,
             "description": body.description,
             "skill_id": body.skill_id,
-            "skill_version": body.skill_version,
-            "skill_source": body.skill_source,
+            "package_url": _package_url_of(body),
+            "source_id": (body.source_id or "").strip() or None,
+            "version_id": (body.version_id or "").strip() or None,
             "enabled": body.enabled,
             "data": body.data,
         }
 
     async def create(
         self,
-        body: SkillWhitelistTemplateCreateBody,
-    ) -> SkillWhitelistTemplateOut:
+        body: SkillPrebuiltTemplateCreateBody,
+    ) -> SkillPrebuiltTemplateOut:
         template_uuid = new_uuid4()
         row = self._build_row_for_create(body, template_id=template_uuid)
         now = utc_now()
@@ -96,7 +107,7 @@ class SkillWhitelistTemplateService:
         created = await self._handler.create(_TABLE, payload)
         return row_to_out(created)
 
-    async def get(self, template_id: str) -> SkillWhitelistTemplateOut | None:
+    async def get(self, template_id: str) -> SkillPrebuiltTemplateOut | None:
         row = await self._handler.get(_TABLE, {"template_id": template_id})
         if row is None:
             return None
@@ -104,7 +115,7 @@ class SkillWhitelistTemplateService:
 
     async def list_templates(
         self,
-        query: SkillWhitelistTemplateListQuery,
+        query: SkillPrebuiltTemplateListQuery,
     ) -> dict[str, Any]:
         page = max(query.page, 1)
         page_size = min(max(query.page_size, 1), 200)
@@ -115,6 +126,7 @@ class SkillWhitelistTemplateService:
         order_by = resolve_order_by(
             query.sort_by, query.sort_order, allowed_sort_fields=_ALLOWED_SORT_FIELDS
         )
+
         search_query = (query.search or "").strip()
         if search_query:
             rows = await self._handler.list_records(
@@ -141,8 +153,10 @@ class SkillWhitelistTemplateService:
 
         if query.skill_id is not None:
             filters["skill_id"] = query.skill_id
-        if query.skill_source is not None:
-            filters["skill_source"] = query.skill_source
+        if query.package_url is not None:
+            filters["package_url"] = query.package_url
+        if query.source_id is not None:
+            filters["source_id"] = query.source_id
 
         offset = (page - 1) * page_size
         rows = await self._handler.list_records(
@@ -164,9 +178,13 @@ class SkillWhitelistTemplateService:
     async def update(
         self,
         template_id: str,
-        body: SkillWhitelistTemplateUpdateBody,
-    ) -> SkillWhitelistTemplateOut | None:
+        body: SkillPrebuiltTemplateUpdateBody,
+    ) -> SkillPrebuiltTemplateOut | None:
         updates = body.model_dump(exclude_unset=True)
+
+        for key in ("source_id", "version_id", "package_url"):
+            if key in updates and updates[key] == "":
+                updates[key] = None
 
         if not updates:
             row = await self._handler.get(_TABLE, {"template_id": template_id})
@@ -176,9 +194,31 @@ class SkillWhitelistTemplateService:
         if existing is None:
             return None
 
+        merged = {
+            "skill_id": updates.get("skill_id", existing.skill_id),
+            "package_url": updates.get(
+                "package_url", getattr(existing, "package_url", None)
+            ),
+            "source_id": updates.get(
+                "source_id", getattr(existing, "source_id", None)
+            ),
+            "version_id": updates.get(
+                "version_id", getattr(existing, "version_id", None)
+            ),
+        }
+        SkillPrebuiltTemplateCreateBody.model_validate(
+            {
+                "template_name": "x",
+                "skill_id": merged["skill_id"],
+                "package_url": merged.get("package_url"),
+                "source_id": merged.get("source_id"),
+                "version_id": merged.get("version_id"),
+            }
+        )
+
         await update_template_on_referencing_gateways(
             self._handler,
-            "skill_whitelist_templates",
+            _KIND,
             template_id,
             updates,
         )
@@ -196,11 +236,12 @@ class SkillWhitelistTemplateService:
         if row is None:
             return False
         await assert_template_deletable(
-            self._handler, template_id, "skill_whitelist_templates"
+            self._handler, template_id, _KIND
         )
         await delete_template_on_referencing_gateways(
             self._handler,
-            "skill_whitelist_templates",
+            _KIND,
             template_id,
         )
         return await self._handler.delete(_TABLE, {"template_id": template_id})
+
