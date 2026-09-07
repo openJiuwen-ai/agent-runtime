@@ -114,31 +114,34 @@ export interface ExtensionConfigTemplateCreateBody {
 
 export type ExtensionConfigTemplateUpdateBody = Partial<ExtensionConfigTemplateCreateBody>;
 
-export interface SkillWhitelistTemplate {
+export interface SkillPrebuiltTemplate {
   id: number;
   template_id: string;
   template_name: string;
   description?: string | null;
   skill_id: string;
-  skill_version: string;
-  skill_source: string;
+  package_url?: string | null;
+  source_id?: string | null;
+  version_id?: string | null;
   enabled: boolean;
   data?: Record<string, unknown> | null;
   created_at?: string | null;
   updated_at?: string | null;
 }
 
-export interface SkillWhitelistTemplateCreateBody {
+export interface SkillPrebuiltTemplateCreateBody {
   template_name: string;
   description?: string;
   skill_id: string;
-  skill_version: string;
-  skill_source: string;
+  package_url?: string;
+  source_id?: string;
+  version_id?: string;
   enabled?: boolean;
   data?: Record<string, unknown>;
 }
 
-export type SkillWhitelistTemplateUpdateBody = Partial<SkillWhitelistTemplateCreateBody>;
+export type SkillPrebuiltTemplateUpdateBody = Partial<SkillPrebuiltTemplateCreateBody>;
+
 
 export interface PermissionsTemplate {
   id: number;

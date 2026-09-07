@@ -6,7 +6,7 @@ export const TEMPLATE_REF_SLOTS = [
   'audio_model',
   'vision_model',
   'embedding_model',
-  'skill_whitelist',
+  'skill_prebuilt',
   'extension_config',
   'permissions',
 ] as const;
@@ -18,13 +18,13 @@ export const TEMPLATE_REF_EDITOR_SLOTS = [
   'audio_model',
   'vision_model',
   'embedding_model',
-  'skill_whitelist',
+  'skill_prebuilt',
   'extension_config',
   'permissions',
 ] as const;
 
 export const MULTI_VALUE_TEMPLATE_REF_SLOTS = new Set<string>([
-  'skill_whitelist',
+  'skill_prebuilt',
   'extension_config',
 ]);
 

@@ -84,7 +84,7 @@ _DEMO_SCENARIO_EXPECTATIONS: dict[str, dict[str, Any]] = {
             "audio_model": "M1 兜底-经济型 (gpt-4o-mini)",
         },
         "embedding_model": "B3 VIP 向量模型",
-        "skill_whitelist": "W1 销售组-天气 Skill",
+        "skill_prebuilt": "W1 销售组-天气 Skill",
         "extension_config": "E3 Agent Server 错误恢复",
         "note": "bot_id=R_VIP → agent_template A_VIP.template_ref（仅字面 template_id）",
     },
@@ -96,7 +96,7 @@ _DEMO_SCENARIO_EXPECTATIONS: dict[str, dict[str, Any]] = {
             "audio_model": "M1 兜底-经济型 (gpt-4o-mini)",
         },
         "embedding_model": "B2 销售组向量模型",
-        "skill_whitelist": "W1 + W2",
+        "skill_prebuilt": "W1 + W2",
         "extension_config": "E1 + E2",
         "note": "bot_id=R_SALES → agent_template A_SALES.template_ref",
     },
@@ -108,7 +108,7 @@ _DEMO_SCENARIO_EXPECTATIONS: dict[str, dict[str, Any]] = {
             "audio_model": "M1 兜底-经济型 (gpt-4o-mini)",
         },
         "embedding_model": "B1 兜底向量模型",
-        "skill_whitelist": "W3 兜底 Skill",
+        "skill_prebuilt": "W3 兜底 Skill",
         "extension_config": "E4 Gateway 定时清理",
         "note": "bot_id=R_FALLBACK → agent_template A_FALLBACK.template_ref",
     },
@@ -125,9 +125,9 @@ def _log_demo_expectation(scenario: str) -> None:
     if hint.get("note"):
         logger.info("[expect] 说明: %s", hint["note"])
     logger.info(
-        "[expect] embedding_model=%s; skill_whitelist=%s; extension_config=%s",
+        "[expect] embedding_model=%s; skill_prebuilt=%s; extension_config=%s",
         hint.get("embedding_model"),
-        hint["skill_whitelist"],
+        hint["skill_prebuilt"],
         hint["extension_config"],
     )
     logger.info(

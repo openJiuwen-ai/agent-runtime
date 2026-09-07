@@ -11,7 +11,7 @@ from demo_payloads import (
     model_templates,
     mcp_templates,
     service_config_templates,
-    skill_whitelist_templates,
+    skill_prebuilt_templates,
 )
 
 pytestmark = pytest.mark.unit
@@ -19,7 +19,7 @@ pytestmark = pytest.mark.unit
 _TEMPLATE_CASES = [
     ("/model-templates", model_templates()[0][1]),
     ("/extension-config-templates", extension_config_templates()[0][1]),
-    ("/skill-whitelist-templates", skill_whitelist_templates()[0][1]),
+    ("/skill-prebuilt-templates", skill_prebuilt_templates()[0][1]),
     ("/mcp-templates", mcp_templates()[0][1]),
     ("/service-config-templates", service_config_templates()[0][1]),
 ]

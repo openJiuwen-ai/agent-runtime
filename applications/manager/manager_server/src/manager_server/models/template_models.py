@@ -1,5 +1,5 @@
 """模板表定义：model_template、embedding_template、extension_config_template、
-skill_whitelist_template、permissions_template、service_config_container、service_config_template、
+skill_prebuilt_template、permissions_template、service_config_container、service_config_template、
 agent_template（id 自增主键；对外引用 template_id / container_id UUID）。
 """
 
@@ -103,8 +103,8 @@ EXTENSION_CONFIG_TEMPLATE_TABLE_DEF = TableDefinition(
     ],
 )
 
-SKILL_WHITELIST_TEMPLATE_TABLE_DEF = TableDefinition(
-    table_name="skill_whitelist_template",
+SKILL_PREBUILT_TEMPLATE_TABLE_DEF = TableDefinition(
+    table_name="skill_prebuilt_template",
     columns=[
         ColumnDefinition(
             "id",
@@ -117,8 +117,9 @@ SKILL_WHITELIST_TEMPLATE_TABLE_DEF = TableDefinition(
         ColumnDefinition("template_name", "string", length=128, nullable=False),
         ColumnDefinition("description", "string", length=512, nullable=True),
         ColumnDefinition("skill_id", "string", length=512, nullable=False),
-        ColumnDefinition("skill_version", "string", length=64, nullable=False),
-        ColumnDefinition("skill_source", "string", length=2048, nullable=False),
+        ColumnDefinition("package_url", "string", length=2048, nullable=True),
+        ColumnDefinition("source_id", "string", length=64, nullable=True),
+        ColumnDefinition("version_id", "string", length=128, nullable=True),
         ColumnDefinition("enabled", "boolean", nullable=False, default=True),
         ColumnDefinition("data", "json", nullable=True),
         ColumnDefinition("created_at", "datetime", nullable=False),
@@ -128,6 +129,8 @@ SKILL_WHITELIST_TEMPLATE_TABLE_DEF = TableDefinition(
         IndexDefinition(["template_id"], unique=True),
     ],
 )
+
+# 兼容旧符号名
 
 PERMISSIONS_TEMPLATE_TABLE_DEF = TableDefinition(
     table_name="permissions_template",

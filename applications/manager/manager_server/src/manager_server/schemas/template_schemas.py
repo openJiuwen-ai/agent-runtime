@@ -1,6 +1,6 @@
 """模板 API 请求/响应模型。
 
-涵盖 model_template、extension_config_template、skill_whitelist_template、
+涵盖 model_template、extension_config_template、skill_prebuilt_template、
 permissions_template、service_config_template、agent_template。
 """
 
@@ -381,55 +381,82 @@ class ExtensionConfigTemplateOut(BaseModel):
     updated_at: str | None
 
 
-class SkillWhitelistTemplateCreateBody(SafeTextMixin):
+class SkillPrebuiltTemplateCreateBody(SafeTextMixin):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     template_name: str = Field(..., min_length=1, max_length=128)
     description: str | None = Field(default=None, max_length=512)
     skill_id: str = Field(..., min_length=1, max_length=512)
-    skill_version: str = Field(..., min_length=1, max_length=64)
-    skill_source: SkillSourceUrl
+    package_url: SkillSourceUrl | None = None
+    source_id: str | None = Field(default=None, max_length=64)
+    version_id: str | None = Field(default=None, max_length=128)
     enabled: bool = True
     data: dict[str, Any] | None = None
 
+    @model_validator(mode="after")
+    def _require_install_path(self) -> SkillPrebuiltTemplateCreateBody:
+        package_url = (self.package_url or "").strip()
+        source_id = (self.source_id or "").strip()
+        version_id = (self.version_id or "").strip()
+        if source_id and version_id:
+            return self
+        if source_id or version_id:
+            raise ValueError(
+                "invalid_template: provider path requires source_id and version_id"
+            )
+        if package_url:
+            return self
+        raise ValueError(
+            "invalid_template: cannot infer install path from fields"
+        )
 
-class SkillWhitelistTemplateUpdateBody(SafeTextMixin):
+
+class SkillPrebuiltTemplateUpdateBody(SafeTextMixin):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     template_name: str | None = Field(default=None, min_length=1, max_length=128)
     description: str | None = Field(default=None, max_length=512)
     skill_id: str | None = Field(default=None, min_length=1, max_length=512)
-    skill_version: str | None = Field(default=None, min_length=1, max_length=64)
-    skill_source: SkillSourceUrl | None = None
+    package_url: SkillSourceUrl | None = None
+    source_id: str | None = Field(default=None, max_length=64)
+    version_id: str | None = Field(default=None, max_length=128)
     enabled: bool | None = None
     data: dict[str, Any] | None = None
 
 
-class SkillWhitelistTemplateListQuery(BaseModel):
+class SkillPrebuiltTemplateListQuery(BaseModel):
     page: int = Field(1, ge=1)
     page_size: int = Field(20, ge=1, le=200)
     enabled: bool | None = None
     skill_id: str | None = Field(default=None, max_length=512)
-    skill_source: str | None = Field(default=None, max_length=2048)
+    package_url: str | None = Field(default=None, max_length=2048)
+    source_id: str | None = Field(default=None, max_length=64)
     search: str | None = Field(
         default=None,
-        description="按 template_id、template_name、description、skill_source、skill_id、skill_version 模糊搜索",
+        description=(
+            "按 template_id、template_name、description、package_url、"
+            "skill_id、source_id、version_id 模糊搜索"
+        ),
     )
     sort_by: str | None = Field(
         default=None,
-        description="排序字段：template_name、description、skill_source、skill_id、skill_version、updated_at",
+        description=(
+            "排序字段：template_name、description、package_url、skill_id、"
+            "source_id、version_id、updated_at"
+        ),
     )
     sort_order: str | None = Field(default=None, description="排序方向：asc、desc")
 
 
-class SkillWhitelistTemplateOut(BaseModel):
+class SkillPrebuiltTemplateOut(BaseModel):
     id: int
     template_id: str
     template_name: str
     description: str | None
     skill_id: str
-    skill_version: str
-    skill_source: str
+    package_url: str | None = None
+    source_id: str | None = None
+    version_id: str | None = None
     enabled: bool
     data: dict[str, Any] | None
     created_at: str | None

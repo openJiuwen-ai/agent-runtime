@@ -59,7 +59,7 @@ def _normalize_slot_refs(raw: Any) -> list[str]:
 def normalize_template_ref(value: Any) -> dict[str, list[str]]:
     """将 ``template_ref`` 规范为 ``{slot: [ref_string, ...]}``；空值键省略。
 
-    丢弃已废弃的 ``service_config`` 槽位（服务配置改由 Runtime 同步）。
+    丢弃已废弃的 ``service_config``、``skill_whitelist`` 槽位。
     """
     if value is None:
         return {}
@@ -68,7 +68,7 @@ def normalize_template_ref(value: Any) -> dict[str, list[str]]:
     out: dict[str, list[str]] = {}
     for key, raw in value.items():
         slot = str(key).strip()
-        if not slot or slot == "service_config":
+        if not slot or slot in ("service_config", "skill_whitelist"):
             continue
         refs = _normalize_slot_refs(raw)
         if refs:

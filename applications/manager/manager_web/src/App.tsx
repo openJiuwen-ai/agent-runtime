@@ -11,7 +11,7 @@ import { InstanceDetailPage } from './pages/instance/InstanceDetailPage';
 import { ModelTemplatesPage } from './pages/templates/ModelTemplatesPage';
 import { EmbeddingTemplatesPage } from './pages/templates/EmbeddingTemplatesPage';
 import { ExtensionTemplatesPage } from './pages/templates/ExtensionTemplatesPage';
-import { SkillWhitelistTemplatesPage } from './pages/templates/SkillWhitelistTemplatesPage';
+import { SkillPrebuiltTemplatesPage } from './pages/templates/SkillPrebuiltTemplatesPage';
 import { ServiceConfigTemplatesPage } from './pages/templates/ServiceConfigTemplatesPage';
 import { ServiceConfigTemplateEditPage } from './pages/templates/ServiceConfigTemplateEditPage';
 import { SafetyGuardrailsPage } from './pages/templates/SafetyGuardrailsPage';
@@ -77,8 +77,8 @@ function RouteView() {
   if (path === '/extension-config-templates') {
     return <ExtensionTemplatesPage />;
   }
-  if (path === '/skill-whitelist-templates') {
-    return <SkillWhitelistTemplatesPage />;
+  if (path === '/skill-prebuilt-templates') {
+    return <SkillPrebuiltTemplatesPage />;
   }
   if (path === '/safety-guardrails') {
     return <SafetyGuardrailsPage />;

@@ -11,7 +11,7 @@ _MODEL_TEMPLATE_SLOTS: tuple[str, ...] = (
     "vision_model",
 )
 
-SKILL_WHITELIST_SLOT = "skill_whitelist"
+SKILL_PREBUILT_SLOT = "skill_prebuilt"
 EXTENSION_CONFIG_SLOT = "extension_config"
 MCP_SLOT = "mcp"
 EMBEDDING_MODEL_SLOT = "embedding_model"
@@ -21,7 +21,7 @@ SERVICE_CONFIG_SLOT = "service_config"
 
 _TEMPLATE_REF_SLOTS: tuple[str, ...] = (
     *_MODEL_TEMPLATE_SLOTS,
-    SKILL_WHITELIST_SLOT,
+    SKILL_PREBUILT_SLOT,
     EXTENSION_CONFIG_SLOT,
     MCP_SLOT,
     EMBEDDING_MODEL_SLOT,
@@ -39,7 +39,7 @@ DefaultTemplateMappingTypeLiteral = Literal[
     "video_model",
     "audio_model",
     "vision_model",
-    "skill_whitelist",
+    "skill_prebuilt",
     "extension_config",
     "mcp",
     "embedding_model",
@@ -51,7 +51,7 @@ MAPPING_SCOPE_TYPES: frozenset[str] = frozenset({"user", "group", "bot"})
 
 __all__ = (
     "MODEL_TEMPLATE_SLOTS",
-    "SKILL_WHITELIST_SLOT",
+    "SKILL_PREBUILT_SLOT",
     "EXTENSION_CONFIG_SLOT",
     "MCP_SLOT",
     "EMBEDDING_MODEL_SLOT",

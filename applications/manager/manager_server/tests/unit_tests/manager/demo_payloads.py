@@ -177,7 +177,7 @@ def extension_config_templates() -> list[tuple[str, dict[str, Any]]]:
     ]
 
 
-def skill_whitelist_templates() -> list[tuple[str, dict[str, Any]]]:
+def skill_prebuilt_templates() -> list[tuple[str, dict[str, Any]]]:
     return [
         (
             "W1",
@@ -185,8 +185,7 @@ def skill_whitelist_templates() -> list[tuple[str, dict[str, Any]]]:
                 "template_name": "销售组-天气 Skill",
                 "description": "销售通道允许 search/weather",
                 "skill_id": "search/weather",
-                "skill_version": "1.2.0",
-                "skill_source": "https://skillhub.example.com/",
+                "package_url": "https://artifacts.example.com/skills/weather-1.2.0.zip",
                 "enabled": True,
                 "data": {"demo": "w1"},
             },
@@ -197,8 +196,7 @@ def skill_whitelist_templates() -> list[tuple[str, dict[str, Any]]]:
                 "template_name": "销售组-CRM Skill",
                 "description": "销售通道允许 crm/lead_lookup",
                 "skill_id": "crm/lead_lookup",
-                "skill_version": "2.0.1",
-                "skill_source": "https://skillhub.example.com/",
+                "package_url": "https://artifacts.example.com/skills/crm-2.0.1.zip",
                 "enabled": True,
                 "data": {"demo": "w2"},
             },
@@ -207,15 +205,27 @@ def skill_whitelist_templates() -> list[tuple[str, dict[str, Any]]]:
             "W3",
             {
                 "template_name": "全局兜底 Skill",
-                "description": "未命中服务策略时的最小 Skill 白名单",
+                "description": "未命中服务策略时的最小预置 Skill",
                 "skill_id": "search/weather",
-                "skill_version": "1.0.0",
-                "skill_source": "https://skillhub.example.com/",
+                "package_url": "https://artifacts.example.com/skills/weather-1.0.0.zip",
                 "enabled": True,
                 "data": {"demo": "w3"},
             },
         ),
+        (
+            "W4",
+            {
+                "template_name": "SPI 预置 Skill",
+                "description": "provider 路径示例",
+                "skill_id": "crm/lead_lookup",
+                "source_id": "skillhub",
+                "version_id": "2.0.1",
+                "enabled": True,
+                "data": {"demo": "w4"},
+            },
+        ),
     ]
+
 
 
 def mcp_templates() -> list[tuple[str, dict[str, Any]]]:

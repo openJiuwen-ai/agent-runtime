@@ -5,7 +5,7 @@ import {
   ExtensionTemplateApi,
   ModelTemplateApi,
   PermissionsTemplateApi,
-  SkillWhitelistTemplateApi,
+  SkillPrebuiltTemplateApi,
 } from '../services/api';
 import {
   TEMPLATE_REF_EDITOR_SLOTS,
@@ -34,7 +34,7 @@ export async function loadTemplateOptions(): Promise<Record<string, TemplateOpti
   const [models, embeddings, skills, extensions, permissions] = await Promise.all([
     ModelTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
     EmbeddingTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
-    SkillWhitelistTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
+    SkillPrebuiltTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
     ExtensionTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
     PermissionsTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
   ]);
@@ -53,7 +53,7 @@ export async function loadTemplateOptions(): Promise<Record<string, TemplateOpti
   bySlot.embedding_model = (embeddings.items ?? []).map((t) =>
     toOpt(t.template_id, t.template_name),
   );
-  bySlot.skill_whitelist = (skills.items ?? []).map((t) => toOpt(t.template_id, t.template_name));
+  bySlot.skill_prebuilt = (skills.items ?? []).map((t) => toOpt(t.template_id, t.template_name));
   bySlot.extension_config = (extensions.items ?? []).map((t) => toOpt(t.template_id, t.template_name));
   bySlot.permissions = (permissions.items ?? []).map((t) => toOpt(t.template_id, t.template_name));
   return bySlot;
