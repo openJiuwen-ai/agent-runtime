@@ -5,7 +5,10 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from manager_server.schemas.template_schemas import SkillPrebuiltTemplateCreateBody
+from manager_server.schemas.template_schemas import (
+    SkillPrebuiltTemplateCreateBody,
+    SkillPrebuiltTemplateUpdateBody,
+)
 
 
 def test_url_mode_accepts_package_url() -> None:
@@ -60,3 +63,15 @@ def test_provider_preferred_when_both_present() -> None:
     )
     assert body.source_id == "skillhub"
     assert body.package_url is not None
+
+
+def test_update_blank_package_url_becomes_none() -> None:
+    """编辑 SPI 模板时前端会把空 URL 打成 ''，不得触发 min_length=1。"""
+    body = SkillPrebuiltTemplateUpdateBody(
+        template_name="employment-rights-team",
+        skill_id="c0f2e4ba2d7d4cb2b6050de03b92db5b",
+        source_id="swarmskillhub",
+        version_id="v1.0.0",
+        package_url="",
+    )
+    assert body.package_url is None
