@@ -132,7 +132,7 @@
 
 `_purge_and_notify(pod_id)` 三步(K8s delete 若还在 → LUA_PURGE → notify_pod_dead);全幂等。**delete 非 404 失败 → 本拍整体放弃**(记录留在 pods:all,watch/reconcile 下拍重试——若继续 PURGE,存活物理 Pod 脱离 Redis 枚举源成孤儿:对账只做 Redis→K8s 单向);PURGE/notify 失败仅记录(下拍兜底);PURGE 失败 `logger.exception` + 成功 INFO `pod purged`(三步可审计)。
 
-日志纪律:四个 `*_once` 每拍一条 DEBUG 汇总(计数聚合 + duration,如 `autoscale tick: scopes=N skip_warm=N deployed=N`),仅真正动作用 INFO;`_health_probe` 数据缺失(pod_ip/sse_port 空 → 探测被静默跳过)按 pod 去重 WARNING(`_probe_gap_warned`,仅诊断用进程内集合)。
+日志纪律:四个 `*_once` 每拍一条 DEBUG 汇总(计数聚合 + duration,如 `autoscale tick: scopes=N skip_warm=N deployed=N`),仅真正动作用 INFO;**决策留痕(2026-09-08 观测增强)**:autoscale 每 scope 决策标签**变化时**(含首拍,进程内 `_autoscale_state` 去重)一条 INFO `autoscale decision: scope= -→skip_warm warm=N min_idle=N idle_total=N`(skip_max/deployed 另带 `total=/max_pods=`;稳态零输出,skip_warm↔skip_max↔deployed 翻转全程可回放);reclaim excess 成员变化一条 INFO `reclaim pending: scope= excess=N pending=N oldest_age=Ns pod_ttl=Ns pods=`,清空后下一拍收敛 `excess=0`——「为什么没补位/没回收」只看日志,不必重推。`_health_probe` 数据缺失(pod_ip/sse_port 空 → 探测被静默跳过)按 pod 去重 WARNING(`_probe_gap_warned`,仅诊断用进程内集合)。
 
 ## 高频踩点
 

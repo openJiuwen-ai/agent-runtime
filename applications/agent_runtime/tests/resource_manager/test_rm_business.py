@@ -382,3 +382,55 @@ async def test_current_version_idle_splits_by_generation(runtime):
     assert old_pod not in await runtime.rm_state.all_pod_ids()
     assert new_pods[0] in await runtime.rm_state.all_pod_ids()
     assert old_pod in runtime.k8s.deleted
+
+
+# ---------------------------------------------------------------- 决策留痕日志
+
+
+@requires_lua
+async def test_autoscale_decision_logged_on_change(runtime, caplog):
+    """决策留痕:状态变化(含首拍)INFO 带决策上下文;稳态重复零输出。
+
+    autoscale 1s tick 重复判定不能逐拍刷屏,但 skip_warm↔skip_max↔deployed
+    的翻转必须可回放(「为什么不补位」类排障入口)。
+    """
+    await runtime.seed_template(min_idle_pods=1)
+    with caplog.at_level(logging.INFO, logger="agent_runtime.resource_manager"):
+        await runtime.rm_sweeper.autoscale_once()   # 首拍 → deployed
+        await runtime.rm_sweeper.autoscale_once()   # 补位后 → skip_warm(变化)
+        await runtime.rm_sweeper.autoscale_once()   # 稳态重复 → 零输出
+    lines = [r.getMessage() for r in caplog.records
+             if "autoscale decision" in r.getMessage()]
+    assert len(lines) == 2
+    assert "deployed" in lines[0] and "min_idle=1" in lines[0]
+    assert "skip_warm" in lines[1] and "warm=1" in lines[1]
+
+
+@requires_lua
+async def test_reclaim_pending_logged_and_converges(runtime, caplog):
+    """待回收留痕:excess 未到龄打 pending 行(带 pod_ttl/年龄);到龄走
+    _reclaim_pod 自有回收日志;清空后下一拍收敛 excess=0。"""
+    await runtime.seed_template(pod_ttl=50)
+    pod_id = await _deploy_one(runtime)
+    await runtime.sm_state.evict("sess_1")
+    await runtime.sm_state.sweep_idle_notify(SCOPE, pod_id)
+    await runtime.rm_sweeper.reconcile_once()          # 空 Pod → idle 池
+
+    with caplog.at_level(logging.INFO, logger="agent_runtime.resource_manager"):
+        await runtime.rm_sweeper.reclaim_once()        # age=0 未到龄
+    lines = [r.getMessage() for r in caplog.records
+             if "reclaim pending" in r.getMessage()]
+    assert len(lines) == 1
+    assert "excess=1" in lines[0] and "pending=1" in lines[0]
+    assert "pod_ttl=50" in lines[0]
+
+    await runtime.rm_state.redis.set(                  # 老化到龄(不回拨指针)
+        runtime.rm_state.k.pod_idle_since(pod_id), now_ts() - 51
+    )
+    with caplog.at_level(logging.INFO, logger="agent_runtime.resource_manager"):
+        await runtime.rm_sweeper.reclaim_once()        # 到龄 → 回收
+        await runtime.rm_sweeper.reclaim_once()        # 空池 → 收敛 excess=0
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("reclaim idle pod" in m for m in messages)
+    assert any("reclaim pending" in m and "excess=0" in m for m in messages)
+    assert pod_id not in await runtime.rm_state.all_pod_ids()

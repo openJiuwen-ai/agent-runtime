@@ -703,6 +703,16 @@ class ConfigStore:
             "routing snapshot rebuilt: templates=%d scopes=%d ver=%s",
             len(snapshot.templates), len(snapshot.scopes), snapshot.ver,
         )
+        # 生效策略参数逐模板留痕：排障对账「配置页 vs 运行时」（如 pc 实际
+        # 生效值）只看这行，不必再从 max_followers 等间接证据反推
+        for tid, tpl in sorted(snapshot.templates.items()):
+            logger.info(
+                "snapshot template: id=%s sc=%d pc=%d min_idle=%d "
+                "session_ttl=%ds pod_ttl=%ds max_pods=%d",
+                tid, tpl.scope_concurrency, tpl.pod_concurrency,
+                tpl.min_idle_pods, tpl.session_ttl, tpl.pod_ttl,
+                tpl.max_pods,
+            )
         return snapshot
 
     async def ensure_snapshot(self) -> RoutingSnapshot:

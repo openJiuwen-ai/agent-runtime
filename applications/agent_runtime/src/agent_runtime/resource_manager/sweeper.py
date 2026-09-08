@@ -54,6 +54,10 @@ class ResourceSweeper:
         self.event_sink = event_sink
         # 数据缺失告警去重（仅影响日志，不参与业务判定）
         self._probe_gap_warned: set[str] = set()
+        # 决策留痕状态记忆（仅影响日志）：per-scope 上一拍决策标签 / 待回收
+        # excess 签名。状态变化才 INFO——稳态每秒重复判定零噪音
+        self._autoscale_state: dict[str, str] = {}
+        self._reclaim_state: dict[str, tuple] = {}
 
     async def _emit(self, scope_id: str, field: str) -> None:
         """状态变迁事件上报(扩缩容/判死;低频直写)。埋点绝不反噬业务。"""
@@ -94,12 +98,26 @@ class ResourceSweeper:
 
     async def _autoscale_scope(self, scope_id: str) -> str:
         """单 scope 补位判定；返回结果标签（聚合进 tick 汇总日志）。"""
+        label, ctx = await self._autoscale_decide(scope_id)
+        # 决策留痕：仅状态变化（含首拍）INFO——排障时 skip_warm↔skip_max↔
+        # deployed 的翻转全程可回放，稳态每秒重复判定零噪音
+        prev = self._autoscale_state.get(scope_id)
+        if prev != label:
+            logger.info(
+                "autoscale decision: scope=%s %s→%s %s",
+                scope_id, prev or "-", label, ctx,
+            )
+            self._autoscale_state[scope_id] = label
+        return label
+
+    async def _autoscale_decide(self, scope_id: str) -> tuple[str, str]:
+        """补位判定主体；返回 (结果标签, 观测上下文 k=v 串)。"""
         await self.state.reap_expired_deploying(scope_id)   # 崩溃遗留占位自愈
         cfg = await self.state.load_scope_config(scope_id)
         min_idle = to_int(cfg.get("min_idle_pods"))
         max_pods = to_int(cfg.get("max_pods"), 1)
         if min_idle <= 0:
-            return "skip_min_idle0"
+            return "skip_min_idle0", f"min_idle={min_idle}"
         # 暖池计数**只认当前版本+代次**：A 类变更后旧版本、config_refresh 后
         # 旧代次的 idle Pod 永不可能被 acquire 复用（want_ver+generation 过滤），
         # 不能用它满足 min_idle——否则暖池被旧版钉死，新流量每波冷部署
@@ -107,18 +125,22 @@ class ResourceSweeper:
         idle = await self.state.idle_pods(scope_id)
         warm = await self._current_version_idle(scope_id, cfg, idle)
         if len(warm) >= min_idle:
-            return "skip_warm"
+            return "skip_warm", (
+                f"warm={len(warm)} min_idle={min_idle} idle_total={len(idle)}"
+            )
         total = await self.state.pod_count(scope_id) + await self.state.deploying_count(scope_id)
         if total >= max_pods:
-            return "skip_max"
+            return "skip_max", (
+                f"warm={len(warm)} min_idle={min_idle} total={total} max_pods={max_pods}"
+            )
         # 热备 deploy 用缓存的 pod_spec（config_sync A 类变更后为新值）
         try:
             pod_spec = json.loads(cfg.get("pod_spec_json") or "{}")
         except ValueError:
             logger.warning("autoscale: scope=%s has invalid pod_spec_json, skip", scope_id)
-            return "skip_bad_spec"
+            return "skip_bad_spec", ""
         if not pod_spec:
-            return "skip_no_spec"
+            return "skip_no_spec", ""
         deploy_ver = cfg.get("deploy_ver") or _deploy_ver(pod_spec)
         lock_key = self.state.k.lock_deploy(scope_id)
         lock_token = f"autoscale-{uuid4().hex}"
@@ -128,10 +150,10 @@ class ResourceSweeper:
         action = await self.state.deploy_placeholder(scope_id, token)
         if action != "need_deploy":
             await self.state.clear_deploy_token(scope_id, token)
-            return f"skip_{action}"
+            return f"skip_{action}", f"warm={len(warm)} min_idle={min_idle}"
         if not await self.state.try_lock(lock_key, 360, lock_token):
             await self.state.clear_deploy_token(scope_id, token)
-            return "skip_lock_busy"
+            return "skip_lock_busy", f"warm={len(warm)} min_idle={min_idle}"
         try:
             await self.orchestrator._deploy_and_register(
                 scope_id, pod_spec, deploy_ver, token, idle_flag=True
@@ -139,11 +161,13 @@ class ResourceSweeper:
         except Exception:  # noqa: BLE001 - sweeper 自愈路径，记录不中断
             logger.exception("autoscale deploy failed: scope=%s", scope_id)
             await self._emit(scope_id, "ev_autoscale_deploy_error")
-            return "deploy_error"
+            return "deploy_error", f"warm={len(warm)} min_idle={min_idle}"
         finally:
             await self.state.unlock(lock_key, lock_token)
         await self._emit(scope_id, "ev_autoscale_deployed")
-        return "deployed"
+        return "deployed", (
+            f"warm={len(warm)} min_idle={min_idle} total={total} max_pods={max_pods}"
+        )
 
     # -------------------------------------------------------------- reclaim（K）
 
@@ -193,10 +217,32 @@ class ResourceSweeper:
                     warm = await self._current_version_idle(scope_id, cfg, idle)
                     stale = sorted(set(idle) - set(warm))
                     if not stale and len(idle) <= min_idle:
+                        # 回到稳态：上一拍还有 excess 时打一条收敛留痕
+                        if self._reclaim_state.get(scope_id):
+                            logger.info(
+                                "reclaim pending: scope=%s excess=0", scope_id)
+                            self._reclaim_state[scope_id] = ()
                         continue
                     aged = {p: await self.state.idle_since(p) for p in idle}
                     ranked_warm = sorted(warm, key=lambda p: aged[p])
                     excess = stale + ranked_warm[min_idle:]
+                    # 待回收留痕：excess 成员变化才 INFO（30s tick，稳定成员
+                    # 不重复）；到龄即回收的走 _reclaim_pod 自有日志
+                    sig = tuple(excess)
+                    if self._reclaim_state.get(scope_id) != sig:
+                        ages = [now - aged[p] for p in excess if aged.get(p)]
+                        due = sum(
+                            1 for p in excess
+                            if aged.get(p) and now - aged[p] >= pod_ttl
+                        )
+                        logger.info(
+                            "reclaim pending: scope=%s excess=%d pending=%d "
+                            "oldest_age=%ds pod_ttl=%ds pods=%s",
+                            scope_id, len(excess), len(excess) - due,
+                            max(ages) if ages else 0,
+                            pod_ttl, ",".join(excess),
+                        )
+                        self._reclaim_state[scope_id] = sig
                     for pod_id in excess:
                         if aged[pod_id] and now - aged[pod_id] >= pod_ttl:
                             await self._reclaim_pod(pod_id, scope_id)
