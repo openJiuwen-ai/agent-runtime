@@ -44,8 +44,9 @@ _MAX_JIUWENCLAW_ID_ATTEMPTS = 10
 _HOST_MAX_LEN = 512
 _NAMESPACE_MAX_LEN = 64
 
-# gateway_status 从这些状态切到 online 时触发全量配置下发
+# gateway_status / runtime_status 从这些状态切到 online 时触发全量配置下发
 _GATEWAY_STATUS_NEEDS_FULL_SYNC = frozenset({"pending", "offline"})
+_RUNTIME_STATUS_NEEDS_FULL_SYNC = frozenset({"pending", "offline"})
 
 
 def _norm_namespace(value: str | None) -> str:
@@ -296,6 +297,57 @@ async def maybe_full_sync_gateway_on_online(
         )
 
 
+async def maybe_full_sync_runtime_on_online(
+    handler: DBHandler,
+    jiuwenclaw_id: str,
+    *,
+    previous_runtime_status: str | None,
+) -> None:
+    """``runtime_status`` 从 pending/offline → online 时全量 ``config_sync``。
+
+    与 Gateway 的 ``maybe_full_sync_gateway_on_online`` 对称：离线期间 Manager
+    对服务配置模板的变更不会推到 Runtime，须在 Runtime 重新上线时补齐。
+
+    失败只记日志，不影响探活 / 状态更新本身。
+    """
+    prev = str(previous_runtime_status or "").strip().lower()
+    if prev not in _RUNTIME_STATUS_NEEDS_FULL_SYNC:
+        return
+    jid = str(jiuwenclaw_id or "").strip()
+    if not jid:
+        return
+
+    from manager_server.infrastructure.config import settings
+    from manager_server.core.instance_resource.runtime_config_sync import (
+        sync_runtime_config,
+    )
+
+    if not settings.agent_runtime_endpoint.strip():
+        logger.info(
+            "[Instance] skip runtime full sync on online: "
+            "AGENT_RUNTIME_ENDPOINT empty jiuwenclaw_id=%s prev_status=%s",
+            jid,
+            prev,
+        )
+        return
+    try:
+        await sync_runtime_config(handler, jid)
+        logger.info(
+            "[Instance] full sync after runtime online jiuwenclaw_id=%s "
+            "prev_status=%s",
+            jid,
+            prev,
+        )
+    except Exception:
+        logger.warning(
+            "[Instance] full sync failed after runtime online jiuwenclaw_id=%s "
+            "prev_status=%s",
+            jid,
+            prev,
+            exc_info=True,
+        )
+
+
 async def apply_health_probe_result(
     handler: DBHandler,
     *,
@@ -305,7 +357,8 @@ async def apply_health_probe_result(
 ) -> bool:
     """根据 Manager 主动探活结果更新对应侧 status / last_alive。
 
-    - alive：置 online，刷新 last_alive；Gateway 从 pending/offline → online 时全量下发
+    - alive：置 online，刷新 last_alive；Gateway / Runtime 从 pending/offline → online
+      时各自全量下发（Gateway → WS bootstrap；Runtime → config_sync）
     - 失败：仅当当前为 online 时置 offline；pending 保持不变
     """
     jid = str(jiuwenclaw_id or "").strip()
@@ -332,6 +385,12 @@ async def apply_health_probe_result(
                 handler,
                 jid,
                 previous_gateway_status=prev_status,
+            )
+        elif side == "runtime":
+            await maybe_full_sync_runtime_on_online(
+                handler,
+                jid,
+                previous_runtime_status=prev_status,
             )
         return True
 
