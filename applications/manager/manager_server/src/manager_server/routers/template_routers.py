@@ -10,6 +10,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 
 from manager_server.core.template.agent_template import AgentTemplateService
+from manager_server.core.template.a2a_access_policy_template import (
+    A2AAccessPolicyTemplateService,
+)
+from manager_server.core.template.a2a_outbound_template import A2AOutboundTemplateService
+from manager_server.core.template.a2a_discovery import A2ADiscoveryError, create_candidate
+from manager_server.core.template.a2a_discovery_settings import A2ADiscoverySettingsService
 from manager_server.core.template.embedding_template import (
     EmbeddingTemplateService,
 )
@@ -28,8 +34,18 @@ from manager_server.core.template.skill_prebuilt_template import (
     SkillPrebuiltTemplateService,
 )
 from manager_server.infrastructure.db import get_db_handler
+from manager_server.routers.deps import require_admin
 from manager_server.schemas.common_schemas import ResponseModel
 from manager_server.schemas.template_schemas import (
+    A2AAccessPolicyTemplateCreateBody,
+    A2AAccessPolicyTemplateListQuery,
+    A2AAccessPolicyTemplateUpdateBody,
+    A2AOutboundTemplateCreateBody,
+    A2AOutboundDiscoveryBody,
+    A2AConfirmRevisionBody,
+    A2ADiscoverySettingsBody,
+    A2AOutboundTemplateListQuery,
+    A2AOutboundTemplateUpdateBody,
     AgentTemplateCreateBody,
     AgentTemplateListQuery,
     AgentTemplateUpdateBody,
@@ -58,6 +74,15 @@ from manager_server.schemas.template_schemas import (
 )
 
 templates_router = APIRouter()
+a2a_templates_router = APIRouter(dependencies=[Depends(require_admin)])
+
+
+def _a2a_outbound_template_svc(handler: DBHandler) -> A2AOutboundTemplateService:
+    return A2AOutboundTemplateService(handler)
+
+
+def _a2a_access_policy_template_svc(handler: DBHandler) -> A2AAccessPolicyTemplateService:
+    return A2AAccessPolicyTemplateService(handler)
 
 
 def _model_template_svc(handler: DBHandler) -> ModelTemplateService:
@@ -92,7 +117,236 @@ def _agent_template_svc(handler: DBHandler) -> AgentTemplateService:
     return AgentTemplateService(handler)
 
 
+# --- a2a_outbound_template ---
+
+
+@a2a_templates_router.get("/a2a-discovery-settings", response_model=ResponseModel)
+async def get_a2a_discovery_settings(
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    data = await A2ADiscoverySettingsService(handler).get()
+    return ResponseModel(code=200, message="success", data=data.model_dump())
+
+
+@a2a_templates_router.put("/a2a-discovery-settings", response_model=ResponseModel)
+async def update_a2a_discovery_settings(
+    body: A2ADiscoverySettingsBody,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    service = A2ADiscoverySettingsService(handler)
+    data = await service.update(body)
+    errors: list[Exception] = []
+    try:
+        await _a2a_outbound_template_svc(handler).disable_disallowed(data)
+    except Exception as exc:
+        errors.append(exc)
+    try:
+        await service.sync(data)
+    except Exception as exc:
+        errors.append(exc)
+    if errors:
+        raise HTTPException(
+            status_code=502,
+            detail="Network settings saved, but Gateway synchronization is incomplete. Save again to retry.",
+        ) from errors[0]
+    return ResponseModel(code=200, message="success", data=data.model_dump())
+
+
+@a2a_templates_router.post(
+    "/a2a-outbound-templates",
+    response_model=ResponseModel,
+)
+async def create_a2a_outbound_template(
+    body: A2AOutboundTemplateCreateBody,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    """Register a server-discovered A2A Agent candidate."""
+    try:
+        data = await _a2a_outbound_template_svc(handler).create(body)
+    except (A2ADiscoveryError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ResponseModel(code=200, message="success", data=data.model_dump())
+
+
+@a2a_templates_router.post("/a2a-outbound-discoveries", response_model=ResponseModel)
+async def discover_a2a_outbound_template(
+    body: A2AOutboundDiscoveryBody,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    try:
+        data = await create_candidate(handler, body.url, body.card_path)
+    except A2ADiscoveryError as exc:
+        raise HTTPException(
+            status_code=400, detail={"code": exc.code, "message": exc.summary}
+        ) from exc
+    return ResponseModel(code=200, message="success", data=data)
+
+
+@a2a_templates_router.get("/a2a-outbound-templates", response_model=ResponseModel)
+async def list_a2a_outbound_templates(
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+    query: Annotated[A2AOutboundTemplateListQuery, Query()],
+):
+    data = await _a2a_outbound_template_svc(handler).list_templates(query)
+    return ResponseModel(code=200, message="success", data=data)
+
+
+@a2a_templates_router.get(
+    "/a2a-outbound-templates/{template_id}/edit", response_model=ResponseModel
+)
+async def edit_a2a_outbound_template(
+    template_id: TemplateIdPath,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    row = await _a2a_outbound_template_svc(handler).get_for_edit(template_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="a2a outbound template not found")
+    return ResponseModel(code=200, message="success", data=row.model_dump())
+
+
+@a2a_templates_router.get("/a2a-outbound-templates/{template_id}", response_model=ResponseModel)
+async def get_a2a_outbound_template(
+    template_id: TemplateIdPath,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    row = await _a2a_outbound_template_svc(handler).get(template_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="a2a outbound template not found")
+    return ResponseModel(code=200, message="success", data=row.model_dump())
+
+
+@a2a_templates_router.patch("/a2a-outbound-templates/{template_id}", response_model=ResponseModel)
+async def update_a2a_outbound_template(
+    template_id: TemplateIdPath,
+    body: A2AOutboundTemplateUpdateBody,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    row = await _a2a_outbound_template_svc(handler).update(template_id, body)
+    if row is None:
+        raise HTTPException(status_code=404, detail="a2a outbound template not found")
+    return ResponseModel(code=200, message="success", data=row.model_dump())
+
+
+@a2a_templates_router.delete("/a2a-outbound-templates/{template_id}", response_model=ResponseModel)
+async def delete_a2a_outbound_template(
+    template_id: TemplateIdPath,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    try:
+        deleted = await _a2a_outbound_template_svc(handler).delete(template_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail="a2a outbound template not found")
+    return ResponseModel(code=200, message="success", data={"deleted": True})
+
+
+@a2a_templates_router.post(
+    "/a2a-outbound-templates/{template_id}:refresh", response_model=ResponseModel
+)
+async def refresh_a2a_outbound_template(
+    template_id: TemplateIdPath,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    try:
+        row = await _a2a_outbound_template_svc(handler).refresh(template_id)
+    except A2ADiscoveryError as exc:
+        raise HTTPException(
+            status_code=400, detail={"code": exc.code, "message": exc.summary}
+        ) from exc
+    if row is None:
+        raise HTTPException(status_code=404, detail="a2a outbound template not found")
+    return ResponseModel(code=200, message="success", data=row.model_dump())
+
+
+@a2a_templates_router.post(
+    "/a2a-outbound-templates/{template_id}:confirm-revision",
+    response_model=ResponseModel,
+)
+async def confirm_a2a_outbound_template_revision(
+    template_id: TemplateIdPath,
+    body: A2AConfirmRevisionBody,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    try:
+        row = await _a2a_outbound_template_svc(handler).confirm_revision(
+            template_id, accept=body.accept
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if row is None:
+        raise HTTPException(status_code=404, detail="a2a outbound template not found")
+    return ResponseModel(code=200, message="success", data=row.model_dump())
+
+
+# --- a2a_access_policy_template ---
+
+
+@a2a_templates_router.post("/a2a-access-policies", response_model=ResponseModel)
+async def create_a2a_access_policy(
+    body: A2AAccessPolicyTemplateCreateBody,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    try:
+        data = await _a2a_access_policy_template_svc(handler).create(body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ResponseModel(code=200, message="success", data=data.model_dump())
+
+
+@a2a_templates_router.get("/a2a-access-policies", response_model=ResponseModel)
+async def list_a2a_access_policies(
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+    query: Annotated[A2AAccessPolicyTemplateListQuery, Query()],
+):
+    data = await _a2a_access_policy_template_svc(handler).list_templates(query)
+    return ResponseModel(code=200, message="success", data=data)
+
+
+@a2a_templates_router.get("/a2a-access-policies/{policy_id}", response_model=ResponseModel)
+async def get_a2a_access_policy(
+    policy_id: TemplateIdPath,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    row = await _a2a_access_policy_template_svc(handler).get(policy_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="a2a access policy not found")
+    return ResponseModel(code=200, message="success", data=row.model_dump())
+
+
+@a2a_templates_router.patch("/a2a-access-policies/{policy_id}", response_model=ResponseModel)
+async def update_a2a_access_policy(
+    policy_id: TemplateIdPath,
+    body: A2AAccessPolicyTemplateUpdateBody,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    try:
+        row = await _a2a_access_policy_template_svc(handler).update(policy_id, body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if row is None:
+        raise HTTPException(status_code=404, detail="a2a access policy not found")
+    return ResponseModel(code=200, message="success", data=row.model_dump())
+
+
+@a2a_templates_router.delete("/a2a-access-policies/{policy_id}", response_model=ResponseModel)
+async def delete_a2a_access_policy(
+    policy_id: TemplateIdPath,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    try:
+        deleted = await _a2a_access_policy_template_svc(handler).delete(policy_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail="a2a access policy not found")
+    return ResponseModel(code=200, message="success", data={"deleted": True})
+
+
 # --- agent_template ---
+
+
+templates_router.include_router(a2a_templates_router)
 
 
 @templates_router.get("/agent-templates/", response_model=ResponseModel)
@@ -100,7 +354,9 @@ async def list_agent_templates(
     handler: Annotated[DBHandler, Depends(get_db_handler)],
     query: Annotated[AgentTemplateListQuery, Query()],
 ):
-    return ResponseModel(code=200, message="success", data=await _agent_template_svc(handler).list(query))
+    return ResponseModel(
+        code=200, message="success", data=await _agent_template_svc(handler).list(query)
+    )
 
 
 @templates_router.post("/agent-templates/", response_model=ResponseModel)
@@ -109,7 +365,9 @@ async def create_agent_template(
     handler: Annotated[DBHandler, Depends(get_db_handler)],
 ):
     try:
-        return ResponseModel(code=200, message="success", data=await _agent_template_svc(handler).create(body))
+        return ResponseModel(
+            code=200, message="success", data=await _agent_template_svc(handler).create(body)
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -137,7 +395,10 @@ async def update_agent_template(
     body: AgentTemplateUpdateBody,
     handler: Annotated[DBHandler, Depends(get_db_handler)],
 ):
-    row = await _agent_template_svc(handler).update(template_id, body)
+    try:
+        row = await _agent_template_svc(handler).update(template_id, body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if row is None:
         raise HTTPException(status_code=404, detail="agent_template not found")
     return ResponseModel(code=200, message="success", data=row)
@@ -278,9 +539,7 @@ async def get_embedding_template(
     return ResponseModel(code=200, message="success", data=row.model_dump())
 
 
-@templates_router.patch(
-    "/embedding-templates/{template_id}", response_model=ResponseModel
-)
+@templates_router.patch("/embedding-templates/{template_id}", response_model=ResponseModel)
 async def update_embedding_template(
     template_id: TemplateIdPath,
     body: EmbeddingTemplateUpdateBody,
@@ -296,9 +555,7 @@ async def update_embedding_template(
     return ResponseModel(code=200, message="success", data=row.model_dump())
 
 
-@templates_router.delete(
-    "/embedding-templates/{template_id}", response_model=ResponseModel
-)
+@templates_router.delete("/embedding-templates/{template_id}", response_model=ResponseModel)
 async def delete_embedding_template(
     template_id: TemplateIdPath,
     handler: Annotated[DBHandler, Depends(get_db_handler)],
@@ -344,9 +601,7 @@ async def list_extension_config_templates(
     return ResponseModel(code=200, message="success", data=data)
 
 
-@templates_router.get(
-    "/extension-config-templates/{template_id}", response_model=ResponseModel
-)
+@templates_router.get("/extension-config-templates/{template_id}", response_model=ResponseModel)
 async def get_extension_config_template(
     template_id: TemplateIdPath,
     handler: Annotated[DBHandler, Depends(get_db_handler)],
@@ -361,9 +616,7 @@ async def get_extension_config_template(
     return ResponseModel(code=200, message="success", data=row.model_dump())
 
 
-@templates_router.patch(
-    "/extension-config-templates/{template_id}", response_model=ResponseModel
-)
+@templates_router.patch("/extension-config-templates/{template_id}", response_model=ResponseModel)
 async def update_extension_config_template(
     template_id: TemplateIdPath,
     body: ExtensionConfigTemplateUpdateBody,
@@ -379,9 +632,7 @@ async def update_extension_config_template(
     return ResponseModel(code=200, message="success", data=row.model_dump())
 
 
-@templates_router.delete(
-    "/extension-config-templates/{template_id}", response_model=ResponseModel
-)
+@templates_router.delete("/extension-config-templates/{template_id}", response_model=ResponseModel)
 async def delete_extension_config_template(
     template_id: TemplateIdPath,
     handler: Annotated[DBHandler, Depends(get_db_handler)],
@@ -510,9 +761,7 @@ async def list_permissions_templates(
     return ResponseModel(code=200, message="success", data=data)
 
 
-@templates_router.get(
-    "/permissions-templates/{template_id}", response_model=ResponseModel
-)
+@templates_router.get("/permissions-templates/{template_id}", response_model=ResponseModel)
 async def get_permissions_template(
     template_id: TemplateIdPath,
     handler: Annotated[DBHandler, Depends(get_db_handler)],
@@ -527,9 +776,7 @@ async def get_permissions_template(
     return ResponseModel(code=200, message="success", data=row.model_dump())
 
 
-@templates_router.patch(
-    "/permissions-templates/{template_id}", response_model=ResponseModel
-)
+@templates_router.patch("/permissions-templates/{template_id}", response_model=ResponseModel)
 async def update_permissions_template(
     template_id: TemplateIdPath,
     body: PermissionsTemplateUpdateBody,
@@ -545,9 +792,7 @@ async def update_permissions_template(
     return ResponseModel(code=200, message="success", data=row.model_dump())
 
 
-@templates_router.delete(
-    "/permissions-templates/{template_id}", response_model=ResponseModel
-)
+@templates_router.delete("/permissions-templates/{template_id}", response_model=ResponseModel)
 async def delete_permissions_template(
     template_id: TemplateIdPath,
     handler: Annotated[DBHandler, Depends(get_db_handler)],
@@ -593,9 +838,7 @@ async def list_mcp_templates(
     return ResponseModel(code=200, message="success", data=data)
 
 
-@templates_router.get(
-    "/mcp-templates/{template_id}", response_model=ResponseModel
-)
+@templates_router.get("/mcp-templates/{template_id}", response_model=ResponseModel)
 async def get_mcp_template(
     template_id: TemplateIdPath,
     handler: Annotated[DBHandler, Depends(get_db_handler)],
@@ -610,9 +853,7 @@ async def get_mcp_template(
     return ResponseModel(code=200, message="success", data=row.model_dump())
 
 
-@templates_router.patch(
-    "/mcp-templates/{template_id}", response_model=ResponseModel
-)
+@templates_router.patch("/mcp-templates/{template_id}", response_model=ResponseModel)
 async def update_mcp_template(
     template_id: TemplateIdPath,
     body: McpTemplateUpdateBody,
@@ -628,9 +869,7 @@ async def update_mcp_template(
     return ResponseModel(code=200, message="success", data=row.model_dump())
 
 
-@templates_router.delete(
-    "/mcp-templates/{template_id}", response_model=ResponseModel
-)
+@templates_router.delete("/mcp-templates/{template_id}", response_model=ResponseModel)
 async def delete_mcp_template(
     template_id: TemplateIdPath,
     handler: Annotated[DBHandler, Depends(get_db_handler)],
@@ -676,9 +915,7 @@ async def list_service_config_templates(
     return ResponseModel(code=200, message="success", data=data)
 
 
-@templates_router.get(
-    "/service-config-templates/{template_id}", response_model=ResponseModel
-)
+@templates_router.get("/service-config-templates/{template_id}", response_model=ResponseModel)
 async def get_service_config_template(
     template_id: TemplateIdPath,
     handler: Annotated[DBHandler, Depends(get_db_handler)],
@@ -693,9 +930,7 @@ async def get_service_config_template(
     return ResponseModel(code=200, message="success", data=row.model_dump())
 
 
-@templates_router.patch(
-    "/service-config-templates/{template_id}", response_model=ResponseModel
-)
+@templates_router.patch("/service-config-templates/{template_id}", response_model=ResponseModel)
 async def update_service_config_template(
     template_id: TemplateIdPath,
     body: ServiceConfigTemplateUpdateBody,
@@ -711,9 +946,7 @@ async def update_service_config_template(
     return ResponseModel(code=200, message="success", data=row.model_dump())
 
 
-@templates_router.delete(
-    "/service-config-templates/{template_id}", response_model=ResponseModel
-)
+@templates_router.delete("/service-config-templates/{template_id}", response_model=ResponseModel)
 async def delete_service_config_template(
     template_id: TemplateIdPath,
     handler: Annotated[DBHandler, Depends(get_db_handler)],

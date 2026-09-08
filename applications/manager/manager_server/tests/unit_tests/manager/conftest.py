@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 import pytest_asyncio
+from demo_payloads import instance_create_body
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient, Response
 from openjiuwen_runtime.foundation.db.handler import DBHandler
@@ -18,15 +19,17 @@ from sqlalchemy.exc import SAWarning
 
 from manager_server.infrastructure.db import get_db_handler
 from manager_server.models.table_init import init_all_tables
+from manager_server.routers.deps import require_admin
 from manager_server.routers.register import router_register
-
-from demo_payloads import instance_create_body
 
 pytestmark = pytest.mark.filterwarnings("ignore::sqlalchemy.exc.SAWarning")
 
 
+@dataclass
 class _GatewayAckSimulator:
     """模拟 Gateway HTTP ack。"""
+
+    calls: list[tuple[str, str, str, dict[str, Any]]] = field(default_factory=list)
 
     async def gateway_request(
         self,
@@ -37,9 +40,7 @@ class _GatewayAckSimulator:
         **_kwargs: Any,
     ) -> dict[str, Any]:
         _ = jiuwenclaw_id
-        _ = business
-        _ = method
-        _ = path
+        self.calls.append((jiuwenclaw_id, method, path, dict(business or {})))
         return {
             "success_flag": True,
             "result": None,
@@ -56,9 +57,7 @@ async def _open_sqlite(path: Path) -> SQLiteHandler:
 
 def _require_http_ok(resp: Response) -> None:
     if resp.status_code != 200:
-        raise RuntimeError(
-            f"expected HTTP 200, got {resp.status_code}: {resp.text}"
-        )
+        raise RuntimeError(f"expected HTTP 200, got {resp.status_code}: {resp.text}")
 
 
 @dataclass
@@ -67,6 +66,7 @@ class ManagerApiHarness:
 
     http: AsyncClient
     handler: DBHandler
+    app: FastAPI
     jiuwenclaw_id: str = field(default="")
     gateway_sim: _GatewayAckSimulator = field(default_factory=_GatewayAckSimulator)
 
@@ -96,12 +96,18 @@ class ManagerApiHarness:
         return self.jiuwenclaw_id
 
     async def post_json(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
-        if path.startswith((
-            "/model-templates",
-            "/extension-config-templates",
-            "/skill-prebuilt-templates",
-            "/service-config-templates",
-        )):
+        if path.startswith(
+            (
+                "/model-templates",
+                "/extension-config-templates",
+                "/skill-prebuilt-templates",
+                "/mcp-templates",
+                "/service-config-templates",
+                "/a2a-outbound-templates",
+                "/a2a-outbound-discoveries",
+                "/a2a-access-policies",
+            )
+        ):
             url = self.templates_url(path)
         else:
             url = self.scoped_url(path)
@@ -110,12 +116,18 @@ class ManagerApiHarness:
         return resp.json()["data"]
 
     async def get_json(self, path: str, **params: Any) -> dict[str, Any]:
-        if path.startswith((
-            "/model-templates",
-            "/extension-config-templates",
-            "/skill-prebuilt-templates",
-            "/service-config-templates",
-        )):
+        if path.startswith(
+            (
+                "/model-templates",
+                "/extension-config-templates",
+                "/skill-prebuilt-templates",
+                "/mcp-templates",
+                "/service-config-templates",
+                "/a2a-outbound-templates",
+                "/a2a-outbound-discoveries",
+                "/a2a-access-policies",
+            )
+        ):
             url = self.templates_url(path)
         else:
             url = self.scoped_url(path)
@@ -124,12 +136,17 @@ class ManagerApiHarness:
         return resp.json()["data"]
 
     async def patch_json(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
-        if path.startswith((
-            "/model-templates",
-            "/extension-config-templates",
-            "/skill-prebuilt-templates",
-            "/service-config-templates",
-        )):
+        if path.startswith(
+            (
+                "/model-templates",
+                "/extension-config-templates",
+                "/skill-prebuilt-templates",
+                "/mcp-templates",
+                "/service-config-templates",
+                "/a2a-outbound-templates",
+                "/a2a-access-policies",
+            )
+        ):
             url = self.templates_url(path)
         else:
             url = self.scoped_url(path)
@@ -138,12 +155,17 @@ class ManagerApiHarness:
         return resp.json()["data"]
 
     async def delete_ok(self, path: str) -> None:
-        if path.startswith((
-            "/model-templates",
-            "/extension-config-templates",
-            "/skill-prebuilt-templates",
-            "/service-config-templates",
-        )):
+        if path.startswith(
+            (
+                "/model-templates",
+                "/extension-config-templates",
+                "/skill-prebuilt-templates",
+                "/mcp-templates",
+                "/service-config-templates",
+                "/a2a-outbound-templates",
+                "/a2a-access-policies",
+            )
+        ):
             url = self.templates_url(path)
         else:
             url = self.scoped_url(path)
@@ -212,9 +234,14 @@ async def manager_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     app.dependency_overrides[get_db_handler] = _override_get_db_handler
 
+    async def _admin_user() -> object:
+        return object()
+
+    app.dependency_overrides[require_admin] = _admin_user
+
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        harness = ManagerApiHarness(http=client, handler=handler, gateway_sim=sim)
+        harness = ManagerApiHarness(http=client, handler=handler, app=app, gateway_sim=sim)
         yield harness
 
     app.dependency_overrides.clear()

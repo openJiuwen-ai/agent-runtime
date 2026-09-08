@@ -17,6 +17,7 @@ EXTENSION_CONFIG_SLOT = "extension_config"
 MCP_SLOT = "mcp"
 EMBEDDING_MODEL_SLOT = "embedding_model"
 PERMISSIONS_SLOT = "permissions"
+A2A_ACCESS_POLICY_SLOT = "a2a_access_policy"
 # 服务配置不进 agent ``template_ref``；仅用于 ``jid_template_ref.slot`` 区分 Runtime 映射。
 SERVICE_CONFIG_SLOT = "service_config"
 
@@ -27,12 +28,13 @@ _TEMPLATE_REF_SLOTS: tuple[str, ...] = (
     MCP_SLOT,
     EMBEDDING_MODEL_SLOT,
     PERMISSIONS_SLOT,
+    A2A_ACCESS_POLICY_SLOT,
 )
 
 MODEL_TEMPLATE_SLOTS: frozenset[str] = frozenset(_MODEL_TEMPLATE_SLOTS)
 TEMPLATE_REF_SLOTS: frozenset[str] = frozenset(_TEMPLATE_REF_SLOTS)
 SINGLE_VALUE_TEMPLATE_REF_SLOTS: frozenset[str] = frozenset(
-    (*_MODEL_TEMPLATE_SLOTS, EMBEDDING_MODEL_SLOT, PERMISSIONS_SLOT)
+    (*_MODEL_TEMPLATE_SLOTS, EMBEDDING_MODEL_SLOT, PERMISSIONS_SLOT, A2A_ACCESS_POLICY_SLOT)
 )
 
 DefaultTemplateMappingTypeLiteral = Literal[
@@ -46,6 +48,7 @@ DefaultTemplateMappingTypeLiteral = Literal[
     "mcp",
     "embedding_model",
     "permissions",
+    "a2a_access_policy",
 ]
 
 MappingScopeTypeLiteral = Literal["user", "group", "bot"]
@@ -58,6 +61,7 @@ __all__ = (
     "MCP_SLOT",
     "EMBEDDING_MODEL_SLOT",
     "PERMISSIONS_SLOT",
+    "A2A_ACCESS_POLICY_SLOT",
     "SERVICE_CONFIG_SLOT",
     "SINGLE_VALUE_TEMPLATE_REF_SLOTS",
     "TEMPLATE_REF_SLOTS",
