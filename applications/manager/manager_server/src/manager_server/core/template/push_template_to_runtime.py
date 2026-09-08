@@ -131,7 +131,8 @@ async def update_service_template_on_referencing_runtimes(
     以便 ``build_runtime_config`` 读到最新模板行。
 
     实际 HTTP 仍走全局 ``AGENT_RUNTIME_ENDPOINT``（与现有授权 sync 一致）；
-    这里用实例 online 集合做过滤，不依赖 ``gateway_config_host``。
+    这里用 ``runtime_status=online`` 过滤，不依赖 ``gateway_status`` /
+    ``gateway_config_host``。
     """
     tid = str(template_id or "").strip()
     if not tid:
@@ -143,7 +144,7 @@ async def update_service_template_on_referencing_runtimes(
 
     all_refs = await collect_jiuwenclaw_ids_for_service_template(handler, tid)
     online_rows, _ = await list_instance_rows(
-        handler, gateway_status="online", offset=0, limit=_LIST_ALL_CAP
+        handler, runtime_status="online", offset=0, limit=_LIST_ALL_CAP
     )
     online = _collect_nonempty_jiuwenclaw_ids(online_rows)
     for jid in sorted(all_refs):
