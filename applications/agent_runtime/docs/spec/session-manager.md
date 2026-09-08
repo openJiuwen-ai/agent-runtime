@@ -165,7 +165,10 @@ lock:config_sync 串行化(忙→409 CONFIG_SYNC_BUSY;基线 TTL 60 + **看门�
   (模板引用永不悬挂)→ upsert/delete 模板(三段式形态行)→ upsert/delete scopes
   → GC 容器(container_id ∉ 本批 → 删;空全量 ⇒ 容器行清空);红线保持:事务
   先于快照/推送,失败上抛时零 Redis 副作用)
-→ rebuild_snapshot()(DB 读回 → 原子 SET;B 类立即生效由此完成)
+→ rebuild_snapshot()(DB 读回 → 原子 SET;B 类立即生效由此完成;每模板一行
+  生效参数 INFO `snapshot template: id= sc= pc= min_idle= session_ttl= pod_ttl=
+  max_pods=`(2026-09-08 观测增强)——「配置页 vs 运行时实际生效值」对账只看
+  这行,不必从 max_followers 等间接证据反推)
 → eager 预热:每个**生效中** scope 推 push(sid, pool_config, deploy_subset)——必须带
   pod_spec(RM 才落 pod_spec_json/deploy_ver;autoscale 无请求预热 min_idle 的依赖);
   禁用/过期 scope 推 min_idle=0 停预热(与被删同款)

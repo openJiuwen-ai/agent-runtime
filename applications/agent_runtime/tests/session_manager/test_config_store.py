@@ -1217,3 +1217,26 @@ async def test_config_sync_not_blocked_by_refresh_sunset_pods(runtime):
         [_scope(SCOPE, "tpl-1")],
     ))
     assert result["ok"] is True
+
+
+@requires_lua
+async def test_rebuild_snapshot_logs_template_params(runtime, caplog):
+    """生效参数留痕:快照重建每模板一行 sc/pc/min_idle/ttl/派生 max_pods。
+
+    对账用:「配置页 vs 运行时实际生效值」只看这行(2026-09-08 wangchang
+    环境排障:pc 生效值与配置认知不符,只能从 max_followers=pc-1 间接反推)。
+    """
+    import logging
+
+    await runtime.seed_template(
+        scope_concurrency=7, pod_concurrency=3, min_idle_pods=1)
+    caplog.clear()                       # seed 的 config_sync 也走快照重建
+    with caplog.at_level(logging.INFO,
+                         logger="agent_runtime.session_manager"):
+        await runtime.config_store.ensure_snapshot()
+    lines = [r.getMessage() for r in caplog.records
+             if "snapshot template" in r.getMessage()]
+    assert len(lines) == 1
+    assert "sc=7" in lines[0] and "pc=3" in lines[0]
+    assert "min_idle=1" in lines[0] and "session_ttl=60s" in lines[0]
+    assert "max_pods=3" in lines[0]        # ⌈7/3⌉ 派生值同打印
