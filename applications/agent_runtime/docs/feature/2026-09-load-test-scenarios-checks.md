@@ -43,6 +43,7 @@
   - `mixed` 180s(churn 12s + refresh 60s + route_touch,groups=2):**77 pass / 0 fail / 1 warn**;14 次 sync(43–129ms)+ 2 次 refresh(9–13ms)全程**零 409**(本地单发射者锁生效,同时实测了"刷新排空期内 B 类 sync 放行");代次 0→1→2 单调、重建收敛、暖探测 200、冷启动 4/4 成功(6ms–10s);11.6 万请求 p50=5.3ms p99=9.4ms;9 次 503/NO_POD_AVAILABLE(0.01%,max_pods 容量语义)按 WARN 观测;ERROR 日志 0。`affinity_violations` 全量记录 1 次换 pod(rebuild 等待期老 Pod 被 pod_ttl 回收后会话重放置,检查窗口外,属正常回收行为——JSON 全量字段提供可见性)。
   - `queued` 25s 回归:**6 pass / 0 fail / 2 warn**;552rps 下 82% 请求被快失败(SCOPE_FULL 55.9% + NO_POD_AVAILABLE 26.5%——后者为快失败改造后的超限粗化码,白名单补充),p99=70.5ms;ERROR 日志 0。
 - 发现的环境事实:e2e 部署镜像落后一个特性(b2b92604,无 559d62db 的 sm.capacity/history/evaluation 字段)→ 触发回退路径并被 warn 提示;自评估巡检在旧镜像上 404→skip(设计内)。
+- **600s 浸泡(mixed,同参数放大时长)**:第一轮 257/1/1——唯一 FAIL 经 K8s 事件绝对时间戳实锤为 **pod_ttl 合法重放置**:旧 Pod(`fd8hbq1lm3`/`zkmn23kkhk`)寿命恰 180s=churn 状态 B 的 pod_ttl,refresh#6 重建暖 Pod 就绪 11s后被 reclaim,其上 6 个活跃会话 60ms 内重放置、服务零错误。据此增强亲和判定(旧 Pod 存活性核验,消亡重放置降 warn)。第二轮:**258 pass / 0 fail / 1 warn**,39 万请求(652.9rps)p50=5.4/p99=10.1ms,47 次 sync+9 次 refresh 零 409,冷启动 18/18 成功(p50 6.1s),930 次 503/NO_POD_AVAILABLE(0.24%,max_pods 容量语义 WARN 观测),ERROR 日志 0,自评估 0 critical。
 
 ## 影响面
 
