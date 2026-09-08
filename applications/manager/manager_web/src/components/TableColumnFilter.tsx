@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
+import { useDismissWhenPointerLeaves } from '../hooks/useDismissWhenPointerLeaves';
 
 export type ColumnFilterOption = {
   value: string;
@@ -22,22 +23,13 @@ export function TableColumnFilter({
   iconOnly = false,
 }: TableColumnFilterProps) {
   const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
+  const hostRef = useRef<HTMLDivElement>(null);
   const active = value !== '';
-
-  useEffect(() => {
-    if (!open) return;
-    const onDocClick = (e: MouseEvent) => {
-      if (!rootRef.current?.contains(e.target as Node)) {
-        setOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', onDocClick);
-    return () => document.removeEventListener('mousedown', onDocClick);
-  }, [open]);
+  const dismissMenu = useCallback(() => setOpen(false), []);
+  useDismissWhenPointerLeaves(hostRef, open, dismissMenu);
 
   return (
-    <div className="th-filter" ref={rootRef}>
+    <div className="th-filter" ref={hostRef}>
       {!iconOnly && <span className="th-filter__label">{label}</span>}
       <button
         type="button"
