@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useRouter } from '../router';
+import { HintTooltip } from './HintTooltip';
 import {
   EmbeddingTemplateApi,
   ExtensionTemplateApi,
@@ -21,6 +23,34 @@ export interface TemplateOption {
   template_id: string;
   label: string;
 }
+
+/** 槽位 → 对应资源管理页路径（用于「前往 xxx 页添加配置」引导跳转） */
+const SLOT_CONFIG_PATH: Record<string, string> = {
+  default_model: '/model-templates',
+  video_model: '/model-templates',
+  audio_model: '/model-templates',
+  vision_model: '/model-templates',
+  image_gen_model: '/model-templates',
+  embedding_model: '/embedding-templates',
+  skill_prebuilt: '/skill-prebuilt-templates',
+  extension_config: '/extension-config-templates',
+  permissions: '/safety-guardrails',
+  a2a_access_policy: '/a2a-management?tab=policies',
+};
+
+/** 槽位 → 引导文案 key（链接常驻显示） */
+const SLOT_HINT_KEY: Record<string, string> = {
+  default_model: 'gotoModelLink',
+  video_model: 'gotoModelLink',
+  audio_model: 'gotoModelLink',
+  vision_model: 'gotoModelLink',
+  image_gen_model: 'gotoModelLink',
+  embedding_model: 'gotoEmbeddingLink',
+  skill_prebuilt: 'gotoSkillLink',
+  extension_config: 'gotoExtensionLink',
+  permissions: 'gotoPermissionsLink',
+  a2a_access_policy: 'gotoA2APolicyLink',
+};
 
 function SelectChevron({ open = false }: { open?: boolean }) {
   return (
@@ -281,6 +311,7 @@ export function TemplateRefEditor({
   onChange,
 }: TemplateRefEditorProps) {
   const { t } = useTranslation();
+  const { navigate } = useRouter();
   const [editor, setEditor] = useState(() => editorValueFromMap(value));
   const extraSlotsRef = useRef<TemplateRefMap>(extraSlotsFromMap(value));
   const [templateOptions, setTemplateOptions] = useState<Record<string, TemplateOption[]>>({});
@@ -339,6 +370,9 @@ export function TemplateRefEditor({
           const options = templateOptions[slot] ?? [];
           const selected = editor[slot] ?? [];
           const multi = isMultiValueTemplateRefSlot(slot);
+          const configPath = SLOT_CONFIG_PATH[slot];
+          const hintKey = SLOT_HINT_KEY[slot];
+          const showHint = !!configPath && !!hintKey;
           return (
             <div key={slot} className="flex items-start gap-2">
               <div className="w-32 shrink-0 pt-2 text-xs font-medium text-muted whitespace-nowrap">
@@ -369,6 +403,13 @@ export function TemplateRefEditor({
                   </select>
                 )}
               </div>
+              {showHint && (
+                <HintTooltip
+                  className="ml-1.5 self-center"
+                  text={t(`templateRefEditor.${hintKey}`)}
+                  linkTo={() => navigate(configPath!)}
+                />
+              )}
             </div>
           );
         })}

@@ -51,9 +51,14 @@ function InstanceTopoCard({
   const { t } = useTranslation();
   const { navigate } = useRouter();
   const [confirmDel, setConfirmDel] = useState(false);
+  const detailHref = `/instances/${instance.jiuwenclaw_id}`;
 
   return (
-    <div className="instance-card">
+    <div
+      className="instance-card cursor-pointer"
+      title={t('topology.cardClickHint')}
+      onClick={() => navigate(detailHref)}
+    >
       <div className="instance-card__header">
         <div className="instance-card__identity min-w-0">
           <div className="brand-logo shrink-0" aria-hidden>
@@ -100,10 +105,44 @@ function InstanceTopoCard({
       </div>
 
       <div className="instance-card__actions">
-        <button className="btn sm" onClick={() => navigate(`/instances/${instance.jiuwenclaw_id}`)}>
-          {t('topology.viewDetail')}
+        <button
+          className="btn sm"
+          title={t('instanceDetail.tabs.access')}
+          onClick={(e) => {
+            e.stopPropagation();
+            navigate(`${detailHref}/access`);
+          }}
+        >
+          {t('topology.cardAccess')}
         </button>
-        <button className="btn sm danger" onClick={() => setConfirmDel(true)}>
+        <button
+          className="btn sm"
+          title={t('instanceDetail.tabs.clusterConfig')}
+          onClick={(e) => {
+            e.stopPropagation();
+            navigate(`${detailHref}/cluster-config`);
+          }}
+        >
+          {t('topology.cardConfig')}
+        </button>
+        <button
+          className="btn sm"
+          title={t('instanceDetail.tabs.status')}
+          onClick={(e) => {
+            e.stopPropagation();
+            navigate(`${detailHref}/status`);
+          }}
+        >
+          {t('topology.cardStatus')}
+        </button>
+        <button
+          className="btn sm danger"
+          title={t('topology.deleteConfirm')}
+          onClick={(e) => {
+            e.stopPropagation();
+            setConfirmDel(true);
+          }}
+        >
           {t('common.delete')}
         </button>
       </div>

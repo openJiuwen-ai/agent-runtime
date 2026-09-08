@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useRouter } from '../../../router';
 import { Modal, ModalCancelButton } from '../../../components/Modal';
 import { MatchExprEditor } from '../../../components/MatchExprEditor';
 import { useAsync } from '../../../hooks/useAsync';
@@ -92,6 +93,7 @@ function primaryRecord(row: InstanceServiceResource): InstanceServiceResourceRec
 
 export function InstanceServiceResourceTab({ instanceId }: Props) {
   const { t } = useTranslation();
+  const { navigate } = useRouter();
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const { searchInput, setSearchInput, searchQuery } = useListSearch();
@@ -652,6 +654,13 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
                 </option>
               ))}
             </select>
+            <button
+              type="button"
+              className="mt-1 text-[11px] text-accent hover:text-accent-hover hover:underline text-left"
+              onClick={() => navigate('/service-config-templates')}
+            >
+              {t('instanceDetail.resourcePanel.serviceResource.gotoPoolTemplateLink')}
+            </button>
           </label>
           <label className="block mb-3">
             <FieldLabel required>{t(`${sr}.priority`)}</FieldLabel>

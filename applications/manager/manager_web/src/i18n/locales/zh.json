@@ -48,22 +48,22 @@
   },
   "brand": {
     "title": "{{productName}}",
-    "sub": "Claw Manager"
+    "sub": "Manager"
   },
   "nav": {
     "platform": "控制台",
     "overview": "总览",
-    "instances": "实例管理",
-    "config": "模板管理",
-    "agentConfigTemplates": "Agent配置模板",
+    "instances": "集群管理",
+    "config": "工作台",
+    "agentConfigTemplates": "资源管理",
     "modelTemplates": "模型",
-    "embeddingTemplates": "Embedding 模板",
+    "embeddingTemplates": "Embedding模型",
     "skillWhitelistTemplates": "预置Skill",
     "safetyGuardrails": "安全护栏",
     "a2aManagement": "A2A管理",
     "extensionTemplates": "扩展配置",
-    "agentManagement": "Agent模板",
-    "serviceConfigTemplates": "服务资源模板",
+    "agentManagement": "Agent定义",
+    "serviceConfigTemplates": "Agent实例池定义",
     "iam": "身份中心",
     "users": "用户",
     "orgs": "组织",
@@ -72,9 +72,9 @@
   "safetyGuardrails": {
     "title": "安全护栏",
     "subtitle": "配置 Agent 安全护栏策略",
-    "empty": "暂无安全护栏模板",
-    "new": "新建安全护栏模板",
-    "edit": "编辑安全护栏模板",
+    "empty": "暂无安全护栏",
+    "new": "新建安全护栏",
+    "edit": "编辑安全护栏",
     "searchPlaceholder": "搜索模板 ID、名称、描述",
     "templateName": "模板名称",
     "templateDescription": "模板描述",
@@ -101,13 +101,13 @@
     "registeredOnWs": "已注册到 WS 的实例",
     "wsListening": "监听地址",
     "wsPid": "Manager PID",
-    "noInstances": "暂未发现实例，可在「实例管理」中新建。"
+    "noInstances": "暂未发现集群，可在「集群管理」中新建。"
   },
   "topology": {
-    "title": "实例管理",
-    "subtitle": "管理 {{productName}} 实例",
-    "createInstance": "新建实例",
-    "instanceStatus": "实例状态",
+    "title": "集群管理",
+    "subtitle": "管理 {{productName}} 集群",
+    "createInstance": "新建集群",
+    "instanceStatus": "集群状态",
     "gatewayStatus": "Gateway 状态",
     "runtimeStatus": "Runtime 状态",
     "namespace": "命名空间",
@@ -118,6 +118,10 @@
     "agentServer": "AgentServer",
     "otherService": "其他服务",
     "viewDetail": "详情",
+    "cardAccess": "准入",
+    "cardConfig": "配置",
+    "cardStatus": "状态",
+    "cardClickHint": "点击进入集群详情",
     "noServices": "暂未发现 Gateway / AgentServer 服务（等待探活）",
     "lastAlive": "最近探活",
     "gatewayLastAlive": "Gateway 最近探活",
@@ -125,18 +129,18 @@
     "lastUpdated": "最近更新",
     "endpoint": "Endpoint",
     "version": "版本",
-    "deleteConfirm": "确认删除该实例？",
+    "deleteConfirm": "确认删除该集群？",
     "filterStatus": "按状态过滤",
-    "instanceName": "实例名称",
+    "instanceName": "集群名称",
     "modifiedAt": "修改时间",
     "viewBrief": "卡片视图",
     "viewList": "列表视图",
-    "searchPlaceholder": "搜索实例名称、实例 ID、状态",
+    "searchPlaceholder": "搜索集群名称、集群 ID、状态",
     "probeFailed": "探活失败：{{detail}}"
   },
   "instanceForm": {
-    "name": "实例名称",
-    "description": "实例描述",
+    "name": "集群名称",
+    "description": "集群描述",
     "namespace": "命名空间",
     "gatewayConfigHost": "gateway配置下发地址",
     "runtimeConfigHost": "runtime配置下发地址",
@@ -147,39 +151,40 @@
     "unsafeText": "{{field}}包含不安全内容"
   },
   "instanceDetail": {
-    "title": "实例详情",
+    "title": "集群详情",
     "services": "纳管服务列表",
     "connectivity": "连通与部署",
     "meta": "状态与元数据",
     "extraData": "扩展数据 (instance_info.data)",
     "editData": "编辑扩展数据",
     "tabs": {
-      "access": "实例准入",
-      "config": "全局配置",
+      "access": "集群准入",
+      "clusterConfig": "集群配置",
+      "config": "基础配置",
       "status": "状态监控",
       "tokenQuota": "Token配额",
       "cost": "成本统计",
       "audit": "业务审计",
-      "resources": "实例资源"
+      "resources": "集群资源"
     },
     "placeholder": {
       "empty": "功能开发中，敬请期待"
     },
     "access": {
-      "title": "实例准入",
-      "subtitle": "配置谁可以进入本实例"
+      "title": "集群准入",
+      "subtitle": "配置谁可以进入本集群"
     },
     "tokenQuota": {
       "title": "Token配额",
-      "subtitle": "查看与管理实例 Token 配额"
+      "subtitle": "查看与管理集群 Token 配额"
     },
     "cost": {
       "title": "成本统计",
-      "subtitle": "查看实例成本与用量统计"
+      "subtitle": "查看集群成本与用量统计"
     },
     "audit": {
       "title": "业务审计",
-      "subtitle": "查看实例业务审计日志"
+      "subtitle": "查看集群业务审计日志"
     },
     "accessPanel": {
       "tabs": {
@@ -187,10 +192,10 @@
         "orgs": "组织"
       },
       "instance": {
-        "users": "已授权用户",
-        "usersHint": "授权用户才能登录到实例",
-        "orgs": "已授权组织",
-        "orgsHint": "授权组织的成员才能登录到实例",
+        "users": "准入用户",
+        "usersHint": "授权用户才能登录到集群",
+        "orgs": "准入组织",
+        "orgsHint": "授权组织的成员才能登录到集群",
         "addUsers": "添加用户",
         "addOrgs": "添加组织",
         "noUsers": "暂无已授权用户",
@@ -207,21 +212,21 @@
         "expiresAt": "过期时间",
         "neverExpires": "永不过期",
         "expiresHint": "留空表示永不过期",
-        "confirmRemoveUsers": "从本实例移除选中的 {{n}} 个用户？",
-        "confirmRemoveOrgs": "从本实例移除选中的 {{n}} 个组织？"
+        "confirmRemoveUsers": "从本集群移除选中的 {{n}} 个用户？",
+        "confirmRemoveOrgs": "从本集群移除选中的 {{n}} 个组织？"
       }
     },
     "resourcePanel": {
       "tabs": {
-        "agent": "Agent 资源",
-        "serviceResource": "服务资源"
+        "agent": "Agent",
+        "serviceResource": "Agent实例池"
       },
       "agent": {
-        "title": "Agent 资源",
-        "subtitle": "在本实例上配置Agent资源，并配置授权范围",
-        "agentLabel": "Agent模板",
+        "title": "Agent",
+        "subtitle": "在本集群上配置Agent授权，并配置授权范围",
+        "agentLabel": "Agent定义",
         "agentInstance": "Agent实例",
-        "agentTemplate": "Agent模板",
+        "agentTemplate": "Agent定义",
         "scopeLabel": "授权范围",
         "scopeAll": "全员可用",
         "grantedBy": "授权人",
@@ -230,10 +235,11 @@
         "searchPlaceholder": "搜索资源 ID、资源名称、资源描述、模板 ID/名称、授权人",
         "add": "添加Agent",
         "editGrant": "编辑授权 · {{name}}",
-        "grantHint": "match_expr 为空表示该实例上已准入用户均可使用。",
+        "grantHint": "match_expr 为空表示该集群上已准入用户均可使用。",
         "expiresHint": "留空表示永不过期",
-        "empty": "本实例尚未添加 Agent 模板",
-        "confirmRemove": "从本实例移除选中的 {{n}} 个 Agent 模板？",
+        "empty": "本集群尚未添加 Agent 定义",
+        "gotoAgentTemplateLink": "前往 Agent定义 页添加配置",
+        "confirmRemove": "从本集群移除选中的 {{n}} 个 Agent 定义？",
         "resourceId": "资源 ID",
         "resourceName": "资源名称",
         "resourceNamePlaceholder": "请输入资源名称",
@@ -241,9 +247,9 @@
         "resourceDescPlaceholder": "请输入资源描述（可选）"
       },
       "serviceResource": {
-        "title": "服务资源",
-        "subtitle": "在本实例上配置服务资源，并配置授权范围",
-        "template": "服务资源模板",
+        "title": "Agent实例池",
+        "subtitle": "在本集群上分配Agent实例池，并配置授权范围",
+        "template": "Agent实例池定义",
         "scopeLabel": "授权范围",
         "scopeAll": "全员可用",
         "priority": "优先级",
@@ -252,10 +258,11 @@
         "neverExpires": "永不过期",
         "expiresHint": "留空表示永不过期",
         "searchPlaceholder": "搜索资源 ID、资源名称、资源描述、模板 ID/名称、授权人、优先级",
-        "add": "添加服务资源",
+        "add": "添加Agent实例池",
         "editGrant": "编辑授权 · {{name}}",
-        "empty": "本实例尚未添加服务资源",
-        "confirmRemove": "从本实例移除选中的 {{n}} 个服务资源？",
+        "empty": "本集群尚未分配 Agent 实例池",
+        "gotoPoolTemplateLink": "前往 Agent实例池定义 页添加配置",
+        "confirmRemove": "从本集群移除选中的 {{n}} 个 Agent 实例池？",
         "resourceId": "资源 ID",
         "resourceName": "资源名称",
         "resourceDesc": "资源描述"
@@ -358,10 +365,10 @@
     }
   },
   "modelTemplate": {
-    "title": "模型模板",
+    "title": "模型",
     "subtitle": "维护大语言模型模板",
-    "new": "新建模型模板",
-    "edit": "编辑模型模板",
+    "new": "新建模型",
+    "edit": "编辑模型",
     "templateName": "模板名称",
     "templateDescription": "模板描述",
     "modelType": "模型类型",
@@ -389,10 +396,10 @@
     "deleteConfirm": "确认删除该模型模板？该模板可能被多个实例资源引用，请确认无副作用。"
   },
   "embeddingTemplate": {
-    "title": "Embedding 模板",
+    "title": "Embedding模型",
     "subtitle": "维护向量模型模板",
-    "new": "新建 Embedding 模板",
-    "edit": "编辑 Embedding 模板",
+    "new": "新建 Embedding模型",
+    "edit": "编辑 Embedding模型",
     "templateName": "模板名称",
     "templateDescription": "模板描述",
     "embedTags": "Embedding 标签",
@@ -412,10 +419,10 @@
     "deleteConfirm": "确认删除该 Embedding 模板？该模板可能被多个实例资源引用，请确认无副作用。"
   },
   "extensionTemplate": {
-    "title": "扩展配置模板",
+    "title": "扩展配置",
     "subtitle": "维护可在Agent处调用的扩展配置模板，支持调用定制化钩子函数",
-    "new": "新建扩展模板",
-    "edit": "编辑扩展模板",
+    "new": "新建扩展配置",
+    "edit": "编辑扩展配置",
     "templateName": "模板名称",
     "templateDescription": "模板描述",
     "component": "目标组件",
@@ -441,10 +448,10 @@
     "deleteConfirm": "确认删除该扩展模板？"
   },
   "skillWhitelistTemplate": {
-    "title": "预置 Skill 模板",
+    "title": "预置 Skill",
     "subtitle": "维护 Agent 可调用的预置 Skill 模板（SPI Provider 或受控 URL）",
-    "new": "新建预置 Skill 模板",
-    "edit": "编辑预置 Skill 模板",
+    "new": "新建预置 Skill",
+    "edit": "编辑预置 Skill",
     "templateName": "模板名称",
     "templateDescription": "模板描述",
     "skillId": "Skill ID",
@@ -476,17 +483,16 @@
     "deleteConfirm": "确认删除该预置 Skill 模板？该模板可能被多个实例资源引用，请确认无副作用。"
   },
   "serviceConfigTemplate": {
-    "title": "服务资源模板",
+    "title": "Agent实例池定义",
     "subtitle": "维护AgentServer会话参数和容器运行模板",
-    "new": "新建服务配置模板",
-    "edit": "编辑服务配置模板",
-    "editSubtitle": "按 HLD 三段式配置：模板级策略 + AgentServer 主容器 + Sandbox sidecar",
-    "backToList": "返回服务配置模板列表",
-    "tabTemplate": "服务配置模板",
+    "new": "新建Agent实例池定义",
+    "edit": "编辑Agent实例池定义",
+    "backToList": "返回Agent实例池定义列表",
+    "tabTemplate": "实例池参数",
     "tabTemplateHint": "Pod 级字段与池策略：namespace / nodeName / volumes / 并发与 TTL",
-    "tabAgentServer": "AgentServer 容器",
+    "tabAgentServer": "AgentServer参数",
     "tabAgentServerHint": "主容器（容器通用配置）：ports（须含 name=sse）/ securityContext / readinessProbe / 资源限额 / env / envFrom / volumeMounts",
-    "tabSandbox": "Sandbox 容器",
+    "tabSandbox": "Sandbox参数",
     "tabSandboxHint": "Sidecar 容器（容器通用配置）：ports / securityContext / readinessProbe / 资源限额 / env / envFrom / volumeMounts",
     "containerId": "容器 ID",
     "containerIdConflict": "主容器与 Sandbox 的 container_id 不能相同",
@@ -567,12 +573,13 @@
     "sectionPool": "动态池与超时",
     "export": "导出",
     "import": "导入",
+    "importHint": "实例池定义文件（json格式）",
     "exportOk": "已导出配置 JSON",
     "exportFailed": "导出失败：{{detail}}",
-    "importOk": "已导入并创建服务配置模板",
-    "importOkFirstOfMany": "文件含 {{count}} 个模板，已导入第一个并创建服务配置模板",
+    "importOk": "已导入并创建Agent实例池定义",
+    "importOkFirstOfMany": "文件含 {{count}} 个模板，已导入第一个并创建Agent实例池定义",
     "importFailed": "导入失败：{{detail}}",
-    "deleteConfirm": "确认删除该服务配置模板？该模板可能被多个实例资源引用，请确认无副作用。"
+    "deleteConfirm": "确认删除该Agent实例池定义？该模板可能被多个实例资源引用，请确认无副作用。"
   },
   "policies": {
     "fieldRequired": "请填写{{field}}",
@@ -792,10 +799,10 @@
     "chatLoadingSlow": "加载较慢,请稍候…"
   },
   "agentTemplate": {
-    "title": "Agent模板",
+    "title": "Agent定义",
     "subtitle": "维护可复用的Agent定义模板，供实例绑定使用",
-    "new": "新建 Agent 模板",
-    "edit": "编辑 Agent 模板",
+    "new": "新建 Agent 定义",
+    "edit": "编辑 Agent 定义",
     "templateName": "模板名称",
     "templateDescription": "模板描述",
     "agentTags": "标签",
@@ -806,5 +813,13 @@
     "updatedAt": "修改时间",
     "fieldRequired": "请填写{{field}}",
     "deleteConfirm": "确认删除 Agent 模板「{{name}}」？会清除其在各实例上的授权。"
+  },
+  "templateRefEditor": {
+    "gotoModelLink": "前往 模型 页添加配置",
+    "gotoEmbeddingLink": "前往 Embedding模型 页添加配置",
+    "gotoSkillLink": "前往 预置 Skill 页添加配置",
+    "gotoExtensionLink": "前往 扩展配置 页添加配置",
+    "gotoPermissionsLink": "前往 安全护栏 页添加配置",
+    "gotoA2APolicyLink": "前往 A2A管理·访问策略 页添加配置"
   }
 }

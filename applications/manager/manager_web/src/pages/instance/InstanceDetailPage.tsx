@@ -11,12 +11,15 @@ import { toast } from '../../stores/uiStore';
 import { InstanceConfigPanel } from './instanceConfigPanel/InstanceConfigPanel';
 import { InstanceDetailPanel } from './instanceDetailPanel/instanceDetailPanel';
 import { InstanceAccessPanel } from './instanceAccessPanel/InstanceAccessPanel';
-import { InstanceResourcePanel } from './instanceResourcePanel/InstanceResourcePanel';
+import { InstanceAgentResourceTab } from './instanceResourcePanel/InstanceAgentResourceTab';
+import { InstanceServiceResourceTab } from './instanceResourcePanel/InstanceServiceResourceTab';
 import { InstancePlaceholderPanel } from './InstancePlaceholderPanel';
 
 export type InstancePageTab =
   | 'access'
-  | 'resources'
+  | 'clusterConfig'
+  | 'agentResources'
+  | 'serviceResources'
   | 'config'
   | 'status'
   | 'tokenQuota'
@@ -40,13 +43,22 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
 
   const mainTabs: { key: InstancePageTab; label: string; href: string }[] = [
     { key: 'access', label: t('instanceDetail.tabs.access'), href: `/instances/${instanceId}/access` },
-    { key: 'resources', label: t('instanceDetail.tabs.resources'), href: `/instances/${instanceId}/resources` },
-    { key: 'config', label: t('instanceDetail.tabs.config'), href: `/instances/${instanceId}/config` },
+    { key: 'clusterConfig', label: t('instanceDetail.tabs.clusterConfig'), href: `/instances/${instanceId}/cluster-config` },
     { key: 'status', label: t('instanceDetail.tabs.status'), href: `/instances/${instanceId}/status` },
     { key: 'tokenQuota', label: t('instanceDetail.tabs.tokenQuota'), href: `/instances/${instanceId}/token-quota` },
     { key: 'cost', label: t('instanceDetail.tabs.cost'), href: `/instances/${instanceId}/cost` },
     { key: 'audit', label: t('instanceDetail.tabs.audit'), href: `/instances/${instanceId}/audit` },
   ];
+
+  /** 「集群配置」下的子页签（Agent / Agent实例池 / 基础配置） */
+  const clusterConfigSubTabs: { key: InstancePageTab; label: string; href: string }[] = [
+    { key: 'agentResources', label: t('instanceDetail.resourcePanel.tabs.agent'), href: `/instances/${instanceId}/agent-resources` },
+    { key: 'serviceResources', label: t('instanceDetail.resourcePanel.tabs.serviceResource'), href: `/instances/${instanceId}/service-resources` },
+    { key: 'config', label: t('instanceDetail.tabs.config'), href: `/instances/${instanceId}/config` },
+  ];
+  const inClusterConfig =
+    tab === 'clusterConfig' ||
+    clusterConfigSubTabs.some((it) => it.key === tab);
 
   const handleOpenEdit = () => {
     const next = safeStringify(instance.data?.data ?? {}, 2);
@@ -103,7 +115,15 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
               <button
                 key={it.key}
                 onClick={() => navigate(it.href)}
-                className={`tab ${tab === it.key ? 'active' : ''}`}
+                className={`tab ${
+                  it.key === 'clusterConfig'
+                    ? inClusterConfig
+                      ? 'active'
+                      : ''
+                    : tab === it.key
+                      ? 'active'
+                      : ''
+                }`}
               >
                 {it.label}
               </button>
@@ -113,9 +133,26 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
           <div aria-hidden="true" className="hidden min-w-0 lg:block" />
         </div>
 
+        {inClusterConfig && (
+          <div className="tabs-bar max-w-full shrink-0 overflow-x-auto">
+            {clusterConfigSubTabs.map((it) => (
+              <button
+                key={it.key}
+                onClick={() => navigate(it.href)}
+                className={`tab ${tab === it.key ? 'active' : ''}`}
+              >
+                {it.label}
+              </button>
+            ))}
+          </div>
+        )}
+
         <div className="w-full min-w-0 shrink-0">
           {tab === 'access' && <InstanceAccessPanel instanceId={instanceId} />}
-          {tab === 'resources' && <InstanceResourcePanel instanceId={instanceId} />}
+          {(tab === 'clusterConfig' || tab === 'agentResources') && (
+            <InstanceAgentResourceTab instanceId={instanceId} />
+          )}
+          {tab === 'serviceResources' && <InstanceServiceResourceTab instanceId={instanceId} />}
           {tab === 'config' && <InstanceConfigPanel instanceId={instanceId} />}
           {tab === 'status' && (
             <InstanceDetailPanel

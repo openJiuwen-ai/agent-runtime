@@ -4,12 +4,14 @@ import { createPortal } from 'react-dom';
 type HintTooltipProps = {
   text: string;
   className?: string;
+  /** 可选跳转：配置后气泡内追加「前往配置 →」链接，点击执行 */
+  linkTo?: () => void;
 };
 
 const HIDE_DELAY_MS = 100;
 const VIEWPORT_PAD = 8;
 
-export function HintTooltip({ text, className }: HintTooltipProps) {
+export function HintTooltip({ text, className, linkTo }: HintTooltipProps) {
   const [anchor, setAnchor] = useState<DOMRect | null>(null);
   const [open, setOpen] = useState(false);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -64,7 +66,22 @@ export function HintTooltip({ text, className }: HintTooltipProps) {
         onMouseEnter={clearHideTimer}
         onMouseLeave={scheduleHide}
       >
-        <p className="text-[11px] leading-snug text-muted m-0">{text}</p>
+        {linkTo ? (
+          <button
+            type="button"
+            className="flex items-center gap-1 text-[11px] leading-snug text-muted no-underline hover:text-accent hover:underline cursor-pointer text-left m-0 p-0 bg-transparent border-0"
+            onClick={() => {
+              setOpen(false);
+              setAnchor(null);
+              linkTo();
+            }}
+          >
+            <span>{text}</span>
+            <span aria-hidden="true">→</span>
+          </button>
+        ) : (
+          <p className="text-[11px] leading-snug text-muted m-0">{text}</p>
+        )}
       </div>
     ) : null;
 
