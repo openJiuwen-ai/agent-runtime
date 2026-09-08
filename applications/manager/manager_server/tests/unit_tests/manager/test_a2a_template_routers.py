@@ -751,8 +751,6 @@ async def test_refresh_failure_is_non_2xx_and_persists_error(
     created = await _create_agent(manager_api)
 
     async def failed(_url: str, _path: str | None = None, **_kwargs) -> DiscoveredCard:
-        from manager_server.core.template.a2a_discovery import A2ADiscoveryError
-
         raise A2ADiscoveryError("CARD_FETCH_FAILED", "Agent Card request failed")
 
     monkeypatch.setattr(
