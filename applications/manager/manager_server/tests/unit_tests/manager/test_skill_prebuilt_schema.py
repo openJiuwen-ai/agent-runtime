@@ -66,7 +66,7 @@ def test_provider_preferred_when_both_present() -> None:
 
 
 def test_update_blank_package_url_becomes_none() -> None:
-    """编辑 SPI 模板时前端会把空 URL 打成 ''，不得触发 min_length=1。"""
+    """编辑 SPI 模板时前端会把空 URL 打成 ''，须收成 None 而不是 422。"""
     body = SkillPrebuiltTemplateUpdateBody(
         template_name="employment-rights-team",
         skill_id="c0f2e4ba2d7d4cb2b6050de03b92db5b",
@@ -75,3 +75,41 @@ def test_update_blank_package_url_becomes_none() -> None:
         package_url="",
     )
     assert body.package_url is None
+
+
+def test_update_whitespace_package_url_becomes_none() -> None:
+    body = SkillPrebuiltTemplateUpdateBody(package_url="   ")
+    assert body.package_url is None
+
+
+@pytest.mark.parametrize(
+    "package_url",
+    [
+        "ftp://example.com/x.zip",
+        "not-a-url",
+        "https://",
+        "http://",
+    ],
+)
+def test_update_rejects_invalid_package_url(package_url: str) -> None:
+    with pytest.raises(ValidationError, match="valid http"):
+        SkillPrebuiltTemplateUpdateBody(package_url=package_url)
+
+
+def _http_url_of_length(n: int) -> str:
+    prefix = "https://example.com/"
+    return prefix + "a" * (n - len(prefix))
+
+
+def test_update_package_url_accepts_2048_chars() -> None:
+    url = _http_url_of_length(2048)
+    assert len(url) == 2048
+    body = SkillPrebuiltTemplateUpdateBody(package_url=url)
+    assert body.package_url == url
+
+
+def test_update_package_url_rejects_over_2048_chars() -> None:
+    url = _http_url_of_length(2049)
+    assert len(url) == 2049
+    with pytest.raises(ValidationError, match="at most 2048"):
+        SkillPrebuiltTemplateUpdateBody(package_url=url)

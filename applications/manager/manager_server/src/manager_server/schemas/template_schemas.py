@@ -109,11 +109,6 @@ ApiBaseUrl = Annotated[
     Field(min_length=1, max_length=512),
     AfterValidator(_validate_http_url),
 ]
-SkillSourceUrl = Annotated[
-    str,
-    Field(min_length=1, max_length=2048),
-    AfterValidator(_validate_http_url),
-]
 A2ASourceUrl = Annotated[
     str,
     Field(min_length=1, max_length=2048),
@@ -125,6 +120,8 @@ A2ACardPath = Annotated[
     AfterValidator(_validate_a2a_card_path),
 ]
 
+_SKILL_SOURCE_URL_MAX_LEN = 2048
+
 def _optional_skill_source_url(value: Any) -> str | None:
     """空字符串视为未填；有值则按 http(s) URL 校验。"""
     if value is None:
@@ -132,7 +129,7 @@ def _optional_skill_source_url(value: Any) -> str | None:
     text = str(value).strip()
     if not text:
         return None
-    if len(text) > 2048:
+    if len(text) > _SKILL_SOURCE_URL_MAX_LEN:
         raise ValueError("package_url must be at most 2048 characters")
     return _validate_http_url(text)
 

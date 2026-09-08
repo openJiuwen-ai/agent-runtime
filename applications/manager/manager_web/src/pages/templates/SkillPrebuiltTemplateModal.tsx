@@ -150,7 +150,7 @@ export function SkillPrebuiltTemplateModal({ open, template, onClose, onSaved }:
     setSaving(true);
     try {
       if (template) {
-        // 空 URL 不要发 ""：Pydantic SkillSourceUrl 有 min_length=1，会 422。
+        // 空 URL 省略不发：后端会把 "" 收成 None，但未改字段时不应误清已有 URL。
         // 仅在原先有 URL、现在要清空时发 null。
         const patch: SkillPrebuiltTemplateUpdateBody = {
           template_name: form.template_name.trim(),
