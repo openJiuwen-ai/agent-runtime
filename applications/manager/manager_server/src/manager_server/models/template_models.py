@@ -1,6 +1,6 @@
 """模板表定义：model_template、embedding_template、extension_config_template、
-skill_prebuilt_template、permissions_template、service_config_container、service_config_template、
-agent_template（id 自增主键；对外引用 template_id / container_id UUID）。
+skill_prebuilt_template、permissions_template、A2A 模板、service_config_container、
+service_config_template、agent_template（id 自增主键；对外引用 UUID 业务键）。
 """
 
 from __future__ import annotations
@@ -130,7 +130,82 @@ SKILL_PREBUILT_TEMPLATE_TABLE_DEF = TableDefinition(
     ],
 )
 
-# 兼容旧符号名
+A2A_OUTBOUND_TEMPLATE_TABLE_DEF = TableDefinition(
+    table_name="a2a_outbound_template",
+    columns=[
+        ColumnDefinition("id", "integer", primary_key=True, autoincrement=True, nullable=False),
+        ColumnDefinition("template_id", "string", length=100, nullable=False),
+        ColumnDefinition("template_name", "string", length=128, nullable=False),
+        ColumnDefinition("description", "string", length=512, nullable=True),
+        ColumnDefinition("a2a_tags", "json", nullable=True),
+        ColumnDefinition("source_url", "string", length=2048, nullable=False),
+        ColumnDefinition("card_path", "string", length=512, nullable=False),
+        ColumnDefinition("registration_key", "string", length=71, nullable=True),
+        ColumnDefinition("agent_card", "json", nullable=False),
+        ColumnDefinition("card_fingerprint", "string", length=128, nullable=False),
+        ColumnDefinition("card_revision", "integer", nullable=False, default=1),
+        ColumnDefinition("selected_interface", "json", nullable=False),
+        ColumnDefinition("credential", "string", length=4096, nullable=True),
+        ColumnDefinition("connect_timeout_seconds", "float", nullable=False, default=10.0),
+        ColumnDefinition("sync_wait_seconds", "float", nullable=False, default=120.0),
+        ColumnDefinition("enabled", "boolean", nullable=False, default=True),
+        ColumnDefinition("pending_revision", "json", nullable=True),
+        ColumnDefinition("last_checked_at", "datetime", nullable=True),
+        ColumnDefinition("last_error_code", "string", length=64, nullable=True),
+        ColumnDefinition("last_error_summary", "string", length=512, nullable=True),
+        ColumnDefinition("data", "json", nullable=True),
+        ColumnDefinition("created_at", "datetime", nullable=False),
+        ColumnDefinition("updated_at", "datetime", nullable=False),
+    ],
+    indexes=[
+        IndexDefinition(["template_id"], unique=True),
+        IndexDefinition(["registration_key"], unique=True),
+    ],
+)
+
+A2A_OUTBOUND_DISCOVERY_TABLE_DEF = TableDefinition(
+    table_name="a2a_outbound_discovery",
+    columns=[
+        ColumnDefinition("id", "integer", primary_key=True, autoincrement=True, nullable=False),
+        ColumnDefinition("discovery_id", "string", length=128, nullable=False),
+        ColumnDefinition("payload", "json", nullable=False),
+        ColumnDefinition("expires_at", "datetime", nullable=False),
+        ColumnDefinition("created_at", "datetime", nullable=False),
+    ],
+    indexes=[IndexDefinition(["discovery_id"], unique=True)],
+)
+
+A2A_DISCOVERY_SETTINGS_TABLE_DEF = TableDefinition(
+    table_name="a2a_discovery_settings",
+    columns=[
+        ColumnDefinition("id", "integer", primary_key=True, autoincrement=True, nullable=False),
+        ColumnDefinition("settings_id", "string", length=32, nullable=False),
+        ColumnDefinition("allow_http", "boolean", nullable=False, default=False),
+        ColumnDefinition("allow_loopback", "boolean", nullable=False, default=False),
+        ColumnDefinition("allow_private_network", "boolean", nullable=False, default=False),
+        ColumnDefinition("allow_public_http", "boolean", nullable=False, default=False),
+        ColumnDefinition("created_at", "datetime", nullable=False),
+        ColumnDefinition("updated_at", "datetime", nullable=False),
+    ],
+    indexes=[IndexDefinition(["settings_id"], unique=True)],
+)
+
+A2A_ACCESS_POLICY_TEMPLATE_TABLE_DEF = TableDefinition(
+    table_name="a2a_access_policy_template",
+    columns=[
+        ColumnDefinition("id", "integer", primary_key=True, autoincrement=True, nullable=False),
+        ColumnDefinition("policy_id", "string", length=100, nullable=False),
+        ColumnDefinition("policy_name", "string", length=128, nullable=False),
+        ColumnDefinition("description", "string", length=512, nullable=True),
+        ColumnDefinition("mode", "string", length=16, nullable=False),
+        ColumnDefinition("member_template_ids", "json", nullable=False, default=list),
+        ColumnDefinition("enabled", "boolean", nullable=False, default=True),
+        ColumnDefinition("revision", "integer", nullable=False, default=1),
+        ColumnDefinition("created_at", "datetime", nullable=False),
+        ColumnDefinition("updated_at", "datetime", nullable=False),
+    ],
+    indexes=[IndexDefinition(["policy_id"], unique=True)],
+)
 
 PERMISSIONS_TEMPLATE_TABLE_DEF = TableDefinition(
     table_name="permissions_template",

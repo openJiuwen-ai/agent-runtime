@@ -7,11 +7,19 @@ permissions_template、service_config_template、agent_template。
 from __future__ import annotations
 
 from typing import Annotated, Any, Literal
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse, urlsplit
 import re
 
 from croniter import croniter
-from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 from manager_server.schemas.safe_text import SafeTextMixin
 
@@ -80,6 +88,22 @@ def _validate_http_url(value: str) -> str:
     return value
 
 
+def _validate_a2a_card_path(value: str) -> str:
+    """Card 地址只能是同源绝对路径，禁止换源和目录回退。"""
+    if not value.startswith("/") or value.startswith("//") or "\\" in value:
+        raise ValueError("must be an absolute same-origin path starting with a single '/'")
+    parsed = urlsplit(value)
+    if parsed.scheme or parsed.netloc or parsed.query or parsed.fragment:
+        raise ValueError("must not contain a scheme, host, query, or fragment")
+    decoded_path = unquote(parsed.path)
+    if decoded_path.startswith("//") or "\\" in decoded_path:
+        raise ValueError("must remain a same-origin path after URL decoding")
+    decoded_segments = decoded_path.split("/")
+    if ".." in decoded_segments:
+        raise ValueError("must not contain parent-directory segments")
+    return value
+
+
 ApiBaseUrl = Annotated[
     str,
     Field(min_length=1, max_length=512),
@@ -90,7 +114,16 @@ SkillSourceUrl = Annotated[
     Field(min_length=1, max_length=2048),
     AfterValidator(_validate_http_url),
 ]
-
+A2ASourceUrl = Annotated[
+    str,
+    Field(min_length=1, max_length=2048),
+    AfterValidator(_validate_http_url),
+]
+A2ACardPath = Annotated[
+    str,
+    Field(min_length=1, max_length=512),
+    AfterValidator(_validate_a2a_card_path),
+]
 
 def _optional_skill_source_url(value: Any) -> str | None:
     """空字符串视为未填；有值则按 http(s) URL 校验。"""
@@ -149,7 +182,6 @@ class AgentTemplateListQuery(BaseModel):
         description="排序字段：template_name、description、template_id、updated_at",
     )
     sort_order: str | None = Field(default=None, description="排序方向：asc、desc")
-
 
 
 class ModelTemplateCreateBody(SafeTextMixin):
@@ -481,6 +513,157 @@ class SkillPrebuiltTemplateOut(BaseModel):
     updated_at: str | None
 
 
+A2AAccessPolicyMode = Literal["allowlist", "denylist"]
+
+
+class A2AOutboundTemplateCreateBody(SafeTextMixin):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    discovery_id: str = Field(..., min_length=1, max_length=128)
+    template_name: str = Field(..., min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=512)
+    a2a_tags: list[str] | None = None
+    credential: str | None = Field(default=None, max_length=4096)
+    connect_timeout_seconds: float = Field(default=10.0, gt=0)
+    sync_wait_seconds: float = Field(default=120.0, gt=0)
+    enabled: bool = True
+    data: dict[str, Any] | None = None
+
+
+class A2AOutboundDiscoveryBody(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    url: A2ASourceUrl
+    card_path: A2ACardPath | None = None
+
+
+class A2ADiscoverySettingsBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    allow_http: bool
+    allow_loopback: bool
+    allow_private_network: bool
+    allow_public_http: bool
+
+
+class A2AConfirmRevisionBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    accept: bool
+
+
+class A2AOutboundTemplateUpdateBody(SafeTextMixin):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    template_name: str | None = Field(default=None, min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=512)
+    a2a_tags: list[str] | None = None
+    credential: str | None = Field(default=None, max_length=4096)
+    clear_credential: bool = False
+    connect_timeout_seconds: float | None = Field(default=None, gt=0)
+    sync_wait_seconds: float | None = Field(default=None, gt=0)
+    enabled: bool | None = None
+    data: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def validate_credential_operation(self):
+        if self.clear_credential and (self.credential or "").strip():
+            raise ValueError("credential and clear_credential cannot be used together")
+        return self
+
+
+class A2AOutboundTemplateListQuery(BaseModel):
+    page: int = Field(1, ge=1)
+    page_size: int = Field(20, ge=1, le=200)
+    enabled: bool | None = None
+    search: str | None = Field(default=None, max_length=256)
+    sort_by: str | None = None
+    sort_order: str | None = None
+
+
+class A2AOutboundTemplateOut(BaseModel):
+    id: int
+    template_id: str
+    template_name: str
+    description: str | None
+    a2a_tags: list[str] | None
+    source_url: str
+    card_path: str
+    agent_card: dict[str, Any]
+    card_fingerprint: str
+    card_revision: int
+    selected_interface: dict[str, Any]
+    credential_configured: bool
+    connect_timeout_seconds: float
+    sync_wait_seconds: float
+    enabled: bool
+    pending_revision: dict[str, Any] | None
+    last_checked_at: str | None
+    last_error_code: str | None
+    last_error_summary: str | None
+    data: dict[str, Any] | None
+    created_at: str | None
+    updated_at: str | None
+
+
+class A2AOutboundTemplateEditOut(A2AOutboundTemplateOut):
+    credential: str | None
+
+
+class A2AAccessPolicyTemplateCreateBody(SafeTextMixin):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    policy_name: str = Field(..., min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=512)
+    mode: A2AAccessPolicyMode
+    member_template_ids: list[TemplateIdPath] = Field(default_factory=list)
+    enabled: bool = True
+
+    @field_validator("member_template_ids")
+    @classmethod
+    def deduplicate_members(cls, value: list[str]) -> list[str]:
+        return list(dict.fromkeys(value))
+
+
+class A2AAccessPolicyTemplateUpdateBody(SafeTextMixin):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    policy_name: str | None = Field(default=None, min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=512)
+    mode: A2AAccessPolicyMode | None = None
+    member_template_ids: list[TemplateIdPath] | None = None
+    enabled: bool | None = None
+
+    @field_validator("member_template_ids")
+    @classmethod
+    def deduplicate_members(cls, value: list[str] | None) -> list[str] | None:
+        return None if value is None else list(dict.fromkeys(value))
+
+
+class A2AAccessPolicyTemplateListQuery(BaseModel):
+    page: int = Field(1, ge=1)
+    page_size: int = Field(20, ge=1, le=200)
+    enabled: bool | None = None
+    mode: A2AAccessPolicyMode | None = None
+    search: str | None = Field(default=None, max_length=256)
+    sort_by: str | None = None
+    sort_order: str | None = None
+
+
+class A2AAccessPolicyTemplateOut(BaseModel):
+    id: int
+    policy_id: str
+    policy_name: str
+    description: str | None
+    mode: A2AAccessPolicyMode
+    member_template_ids: list[str]
+    enabled: bool
+    revision: int
+    reference_count: int = 0
+    created_at: str | None
+    updated_at: str | None
+
+
 class PermissionsTemplateCreateBody(SafeTextMixin):
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -489,9 +672,7 @@ class PermissionsTemplateCreateBody(SafeTextMixin):
     enabled: bool = True
     body: dict[str, Any] = Field(
         ...,
-        description=(
-            "完整 permissions 段，结构与 config.yaml::permissions 一致"
-        ),
+        description=("完整 permissions 段，结构与 config.yaml::permissions 一致"),
     )
     data: dict[str, Any] | None = None
 
@@ -533,13 +714,15 @@ class PermissionsTemplateOut(BaseModel):
     updated_at: str | None
 
 
-_VALID_MCP_TRANSPORTS = frozenset({
-    "stdio",
-    "sse",
-    "http",
-    "streamable-http",
-    "streamable_http",
-})
+_VALID_MCP_TRANSPORTS = frozenset(
+    {
+        "stdio",
+        "sse",
+        "http",
+        "streamable-http",
+        "streamable_http",
+    }
+)
 
 
 def validate_mcp_entry(entry: dict[str, Any]) -> dict[str, Any]:
@@ -557,8 +740,7 @@ def validate_mcp_entry(entry: dict[str, Any]) -> dict[str, Any]:
     transport = str(normalized.get("transport", "")).strip().lower()
     if transport not in _VALID_MCP_TRANSPORTS:
         raise ValueError(
-            "mcp_entry.transport must be one of: "
-            + ", ".join(sorted(_VALID_MCP_TRANSPORTS))
+            "mcp_entry.transport must be one of: " + ", ".join(sorted(_VALID_MCP_TRANSPORTS))
         )
     if transport == "stdio":
         command = str(normalized.get("command", "")).strip()
@@ -638,9 +820,7 @@ _SERVICE_INT_MAX = 2_147_483_647
 
 # K8s resource quantity：CPU 如 500m / 2 / 0.5；内存须带单位 Ki/Mi/Gi/K/M/G
 _K8S_CPU_RE = re.compile(r"^(?:(?:0|[1-9]\d*)(?:\.\d+)?|\.\d+)m?$")
-_K8S_MEMORY_RE = re.compile(
-    r"^(?:(?:0|[1-9]\d*)(?:\.\d+)?|\.\d+)(?:Ki|Mi|Gi|K|M|G)$"
-)
+_K8S_MEMORY_RE = re.compile(r"^(?:(?:0|[1-9]\d*)(?:\.\d+)?|\.\d+)(?:Ki|Mi|Gi|K|M|G)$")
 
 
 def _normalize_resource_quantity(value: Any) -> str | None:
@@ -656,9 +836,7 @@ def _validate_k8s_cpu(value: str | None) -> str | None:
     if len(value) > 32:
         raise ValueError("at most 32 characters")
     if not _K8S_CPU_RE.fullmatch(value):
-        raise ValueError(
-            "must be a valid Kubernetes CPU quantity (e.g. '500m', '2', '0.5')"
-        )
+        raise ValueError("must be a valid Kubernetes CPU quantity (e.g. '500m', '2', '0.5')")
     return value
 
 
@@ -715,9 +893,7 @@ def _normalize_required_nfs_path(value: Any) -> str:
 
 def _validate_required_nfs_path(value: str) -> str:
     if not is_valid_unix_abs_path(value):
-        raise ValueError(
-            "must be an absolute Unix path (e.g. '/', '/data/nfs')"
-        )
+        raise ValueError("must be an absolute Unix path (e.g. '/', '/data/nfs')")
     return value
 
 
@@ -732,9 +908,7 @@ def _validate_optional_unix_path(value: str | None) -> str | None:
     if value is None:
         return None
     if not is_valid_unix_abs_path(value):
-        raise ValueError(
-            "must be an absolute Unix path (e.g. '/mnt/nfs')"
-        )
+        raise ValueError("must be an absolute Unix path (e.g. '/mnt/nfs')")
     return value
 
 

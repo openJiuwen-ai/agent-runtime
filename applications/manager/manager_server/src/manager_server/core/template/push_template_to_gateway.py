@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import re
 from collections import Counter
 from collections.abc import Callable
@@ -11,24 +12,26 @@ from typing import Any
 
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 
-from manager_server.manager_config_push import (
-    gateway_request,
-    list_reachable_jiuwenclaw_ids,
-)
+from manager_server.infrastructure.logger import get_logger
 from manager_server.infrastructure.template_ref import (
     normalize_template_ref,
     read_template_ref_from_row,
 )
 from manager_server.infrastructure.utils import utc_now
-from manager_server.infrastructure.logger import get_logger
-from manager_server.models.jid_template_ref_models import (
-    JID_TEMPLATE_REF_TABLE_DEF,
+from manager_server.manager_config_push import (
+    gateway_request,
+    list_reachable_jiuwenclaw_ids,
 )
 from manager_server.models.instance_resource_models import (
     INSTANCE_AGENT_RESOURCE_TABLE_DEF,
     INSTANCE_SERVICE_RESOURCE_TABLE_DEF,
 )
+from manager_server.models.jid_template_ref_models import (
+    JID_TEMPLATE_REF_TABLE_DEF,
+)
 from manager_server.models.template_models import (
+    A2A_ACCESS_POLICY_TEMPLATE_TABLE_DEF,
+    A2A_OUTBOUND_TEMPLATE_TABLE_DEF,
     AGENT_TEMPLATE_TABLE_DEF,
     EMBEDDING_TEMPLATE_TABLE_DEF,
     EXTENSION_CONFIG_TEMPLATE_TABLE_DEF,
@@ -38,6 +41,7 @@ from manager_server.models.template_models import (
     SKILL_PREBUILT_TEMPLATE_TABLE_DEF,
 )
 from manager_server.schemas.template_slot_schemas import (
+    A2A_ACCESS_POLICY_SLOT,
     EMBEDDING_MODEL_SLOT,
     EXTENSION_CONFIG_SLOT,
     MCP_SLOT,
@@ -54,6 +58,18 @@ _OR_SPLIT_PATTERN = re.compile(r"\s+or\s+", flags=re.IGNORECASE)
 _MAPPING_DIM_PATTERN = re.compile(r"^\$\{(user|group)::([^}]+)\}$", re.IGNORECASE)
 
 _JID_TEMPLATE_REF_TABLE = JID_TEMPLATE_REF_TABLE_DEF.table_name
+_A2A_OUTBOUND_PROJECTION_SLOT = "a2a_outbound_projection"
+
+
+def _id_set(value: Any) -> set[str]:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError):
+            return set()
+    if not isinstance(value, list):
+        return set()
+    return {str(item) for item in value if item}
 
 
 @dataclass(frozen=True)
@@ -63,11 +79,23 @@ class TemplateKindSpec:
     config_section: str
     table_name: str
     slot_keys: frozenset[str]
+    id_field: str = "template_id"
 
 
 AGENT_TEMPLATES_KIND = "agent_templates"
 
 TEMPLATE_KIND_SPECS: dict[str, TemplateKindSpec] = {
+    "a2a_outbound_templates": TemplateKindSpec(
+        config_section="a2a_outbound_templates",
+        table_name=A2A_OUTBOUND_TEMPLATE_TABLE_DEF.table_name,
+        slot_keys=frozenset(),
+    ),
+    "a2a_access_policies": TemplateKindSpec(
+        config_section="a2a_access_policies",
+        table_name=A2A_ACCESS_POLICY_TEMPLATE_TABLE_DEF.table_name,
+        slot_keys=frozenset({A2A_ACCESS_POLICY_SLOT}),
+        id_field="policy_id",
+    ),
     "model_templates": TemplateKindSpec(
         config_section="model_templates",
         table_name=MODEL_TEMPLATE_TABLE_DEF.table_name,
@@ -111,8 +139,13 @@ TEMPLATE_KIND_ORDER: tuple[str, ...] = tuple(TEMPLATE_KIND_SPECS.keys())
 ORDINARY_TEMPLATE_KIND_ORDER: tuple[str, ...] = tuple(
     kind for kind in TEMPLATE_KIND_ORDER if kind != AGENT_TEMPLATES_KIND
 )
+_INDEXED_TEMPLATE_REF_SLOTS: frozenset[str] = frozenset(
+    slot for kind in ORDINARY_TEMPLATE_KIND_ORDER for slot in TEMPLATE_KIND_SPECS[kind].slot_keys
+)
 
 _TEMPLATE_HTTP_PATHS: dict[str, str] = {
+    "a2a_outbound_templates": "/api/v1/a2a-outbound-templates",
+    "a2a_access_policies": "/api/v1/a2a-access-policies",
     "model_templates": "/api/v1/model-templates",
     "embedding_templates": "/api/v1/embedding-templates",
     "extension_config_templates": "/api/v1/extension-config-templates",
@@ -124,6 +157,8 @@ _TEMPLATE_HTTP_PATHS: dict[str, str] = {
 _PUSH_DROP_KEYS = frozenset({"id", "created_at", "updated_at", "jiuwenclaw_id"})
 
 _ROW_TO_OUT_MODULES: dict[str, str] = {
+    "a2a_outbound_templates": "manager_server.core.template.a2a_outbound_template",
+    "a2a_access_policies": "manager_server.core.template.a2a_access_policy_template",
     "model_templates": "manager_server.core.template.model_template",
     "embedding_templates": "manager_server.core.template.embedding_template",
     "skill_prebuilt_templates": "manager_server.core.template.skill_prebuilt_template",
@@ -161,11 +196,14 @@ async def _create_template_on_gateway(
     **kwargs: Any,
 ) -> dict[str, Any]:
     section = _normalize_kind(kind)
+    payload = _clean_template(template)
+    if section in {"a2a_outbound_templates", "a2a_access_policies"}:
+        payload["updated_at"] = template.get("updated_at")
     return await gateway_request(
         jiuwenclaw_id,
         "POST",
         _template_base_path(section),
-        _clean_template(template),
+        payload,
         **kwargs,
     )
 
@@ -302,11 +340,7 @@ async def _count_slot_pairs_from_agent_resources(
         )
         if tpl_row is None:
             continue
-        counter.update(
-            slot_template_pairs_from_template_ref(
-                read_template_ref_from_row(tpl_row)
-            )
-        )
+        counter.update(slot_template_pairs_from_template_ref(read_template_ref_from_row(tpl_row)))
     return counter
 
 
@@ -372,6 +406,26 @@ async def collect_referenced_template_ids_for_gateway(
     normalized = _normalize_kind(kind)
     if normalized == AGENT_TEMPLATES_KIND:
         return await _agent_template_ids_bound_on_gateway(handler, jid)
+    if normalized == "a2a_outbound_templates":
+        policy_ids = await collect_referenced_template_ids_for_gateway(
+            handler, jid, "a2a_access_policies"
+        )
+        agent_rows = await handler.list_records(
+            A2A_OUTBOUND_TEMPLATE_TABLE_DEF.table_name, {}, limit=_LIST_ALL_CAP, offset=0
+        )
+        all_ids = {str(getattr(row, "template_id", "")) for row in agent_rows}
+        allowed: set[str] = set()
+        for policy_id in policy_ids:
+            policy = await handler.get(
+                A2A_ACCESS_POLICY_TEMPLATE_TABLE_DEF.table_name, {"policy_id": policy_id}
+            )
+            if policy is None or not bool(getattr(policy, "enabled", False)):
+                continue
+            members = _id_set(getattr(policy, "member_template_ids", None))
+            allowed.update(
+                members if getattr(policy, "mode", "") == "allowlist" else all_ids - members
+            )
+        return allowed
     spec = TEMPLATE_KIND_SPECS[normalized]
     pairs = await _slot_pairs_for_gateway(handler, jid, slot_keys=spec.slot_keys)
     return {tid for _, tid in pairs}
@@ -453,9 +507,7 @@ async def _resolve_template_ref_lookup(
         # Agent 模板不进 jid_template_ref；引用只看 instance_agent_resource。
         return tid, frozenset(), False
     spec = TEMPLATE_KIND_SPECS[normalized]
-    indexed = (
-        await handler.count_records(_JID_TEMPLATE_REF_TABLE, {"template_id": tid})
-    ) > 0
+    indexed = (await handler.count_records(_JID_TEMPLATE_REF_TABLE, {"template_id": tid})) > 0
     return tid, spec.slot_keys, indexed
 
 
@@ -538,24 +590,29 @@ async def collect_referenced_jiuwenclaw_ids_for_template(
     normalized = _normalize_kind(kind)
     if normalized == AGENT_TEMPLATES_KIND:
         return await _jiuwenclaw_ids_binding_agent_template(handler, template_id)
+    if normalized == "a2a_outbound_templates":
+        rows = await _list_active_jid_template_ref_rows(
+            handler, template_id, slot_keys=frozenset({_A2A_OUTBOUND_PROJECTION_SLOT})
+        )
+        return {
+            str(getattr(row, "jiuwenclaw_id", ""))
+            for row in rows
+            if getattr(row, "jiuwenclaw_id", None)
+        }
 
     lookup = await _resolve_template_ref_lookup(handler, template_id, normalized)
     if lookup is None:
         return set()
     tid, slot_keys, use_index = lookup
     if use_index:
-        rows = await _list_active_jid_template_ref_rows(
-            handler, tid, slot_keys=slot_keys
-        )
+        rows = await _list_active_jid_template_ref_rows(handler, tid, slot_keys=slot_keys)
         jids: set[str] = set()
         for row in rows:
             jid = str(getattr(row, "jiuwenclaw_id", "") or "").strip()
             if jid:
                 jids.add(jid)
         return jids
-    jids, _ = await _scan_agent_resource_references_for_template(
-        handler, tid, slot_keys=slot_keys
-    )
+    jids, _ = await _scan_agent_resource_references_for_template(handler, tid, slot_keys=slot_keys)
     return jids
 
 
@@ -574,9 +631,7 @@ async def _referencing_reachable_jids(
     tid = str(template_id or "").strip()
     if not tid:
         return []
-    jids = await collect_referenced_jiuwenclaw_ids_for_template(
-        handler, tid, normalized
-    )
+    jids = await collect_referenced_jiuwenclaw_ids_for_template(handler, tid, normalized)
     reachable = await _reachable_gateway_jiuwenclaw_ids(handler)
     return sorted(jid for jid in jids if jid in reachable)
 
@@ -595,9 +650,10 @@ def _row_to_sync_payload(row: Any, *, row_to_out: RowToOutFn) -> dict[str, Any]:
 def _resolve_row_to_sync(kind: str) -> RowToSyncFn:
     normalized = _normalize_kind(kind)
     module = importlib.import_module(_ROW_TO_OUT_MODULES[normalized])
-    row_to_out = getattr(module, "row_to_out", None) or getattr(
-        module, "agent_template_out"
-    )
+    custom = getattr(module, "row_to_sync", None)
+    if custom is not None:
+        return custom
+    row_to_out = getattr(module, "row_to_out", None) or module.agent_template_out
     return lambda row: _row_to_sync_payload(row, row_to_out=row_to_out)
 
 
@@ -610,10 +666,23 @@ async def _build_sync_payloads(
     row_to_sync = _resolve_row_to_sync(kind)
     templates: list[dict[str, Any]] = []
     for template_id in sorted(template_ids):
-        row = await handler.get(spec.table_name, {"template_id": template_id})
+        row = await handler.get(spec.table_name, {spec.id_field: template_id})
         if row is not None:
-            templates.append(row_to_sync(row))
+            payload = row_to_sync(row)
+            if _normalize_kind(kind) == "a2a_outbound_templates":
+                payload = await _with_a2a_network_policy(handler, payload)
+            templates.append(payload)
     return templates
+
+
+async def _with_a2a_network_policy(
+    handler: DBHandler, payload: dict[str, Any], network_policy: dict[str, bool] | None = None,
+) -> dict[str, Any]:
+    from manager_server.core.template.a2a_discovery_settings import A2ADiscoverySettingsService
+
+    if network_policy is None:
+        network_policy = (await A2ADiscoverySettingsService(handler).get()).model_dump()
+    return {**payload, "data": {**(payload.get("data") or {}), "network_policy": network_policy}}
 
 
 async def sync_referenced_templates_to_gateway(
@@ -628,9 +697,7 @@ async def sync_referenced_templates_to_gateway(
     results: dict[str, dict[str, Any]] = {}
     for kind in TEMPLATE_KIND_ORDER:
         normalized = _normalize_kind(kind)
-        referenced_ids = await collect_referenced_template_ids_for_gateway(
-            handler, jid, normalized
-        )
+        referenced_ids = await collect_referenced_template_ids_for_gateway(handler, jid, normalized)
         templates = await _build_sync_payloads(handler, normalized, referenced_ids)
         results[kind] = await _sync_templates_on_gateway(jid, normalized, templates)
     return results
@@ -641,6 +708,9 @@ async def update_template_on_referencing_gateways(
     kind: str,
     template_id: str,
     updates: dict[str, Any],
+    *,
+    network_policy: dict[str, bool] | None = None,
+    continue_on_error: bool = False,
 ) -> None:
     """向引用了该模板的可达 Gateway PATCH 更新。
 
@@ -650,10 +720,13 @@ async def update_template_on_referencing_gateways(
     tid = str(template_id or "").strip()
     if not tid:
         return
+    if normalized == "a2a_outbound_templates":
+        if "data" not in updates:
+            row = await handler.get(A2A_OUTBOUND_TEMPLATE_TABLE_DEF.table_name, {"template_id": tid})
+            updates = {**updates, "data": getattr(row, "data", None)}
+        updates = await _with_a2a_network_policy(handler, updates, network_policy)
     reachable = set(await _referencing_reachable_jids(handler, normalized, tid))
-    all_refs = await collect_referenced_jiuwenclaw_ids_for_template(
-        handler, tid, normalized
-    )
+    all_refs = await collect_referenced_jiuwenclaw_ids_for_template(handler, tid, normalized)
 
     old_template_ref: Any | None = None
     new_template_ref = updates.get("template_ref")
@@ -662,13 +735,10 @@ async def update_template_on_referencing_gateways(
         and "template_ref" in updates
         and new_template_ref is not None
     ):
-        existing = await handler.get(
-            AGENT_TEMPLATE_TABLE_DEF.table_name, {"template_id": tid}
-        )
-        old_template_ref = (
-            read_template_ref_from_row(existing) if existing is not None else {}
-        )
+        existing = await handler.get(AGENT_TEMPLATE_TABLE_DEF.table_name, {"template_id": tid})
+        old_template_ref = read_template_ref_from_row(existing) if existing is not None else {}
 
+    errors: list[Exception] = []
     for jid in sorted(all_refs):
         if jid not in reachable:
             logger.info(
@@ -679,14 +749,48 @@ async def update_template_on_referencing_gateways(
                 tid,
             )
             continue
-        await _update_template_on_gateway(jid, normalized, tid, updates)
+        added_pairs: set[tuple[str, str]] = set()
+        removed_pairs: set[tuple[str, str]] = set()
         if old_template_ref is not None:
-            await sync_gateway_templates_after_template_ref_change(
+            old_pairs = slot_template_pairs_from_template_ref(old_template_ref)
+            new_pairs = slot_template_pairs_from_template_ref(new_template_ref)
+            added_pairs = new_pairs - old_pairs
+            removed_pairs = old_pairs - new_pairs
+            # Create newly referenced dependencies before the Agent starts using them.
+            await _apply_slot_pair_delta(
                 handler,
                 jid,
-                old_template_ref=old_template_ref,
-                new_template_ref=new_template_ref,
+                added=added_pairs,
+                removed=set(),
             )
+        try:
+            await _update_template_on_gateway(jid, normalized, tid, updates)
+        except Exception as exc:
+            # The Manager row is still unchanged. Roll back the provisional dependency
+            # references so a retry cannot double-count them.
+            if added_pairs:
+                await _apply_slot_pair_delta(
+                    handler,
+                    jid,
+                    added=set(),
+                    removed=added_pairs,
+                )
+            if continue_on_error:
+                logger.exception("Template sync failed gateway=%s kind=%s template_id=%s", jid, normalized, tid)
+                errors.append(exc)
+                continue
+            raise
+        if old_template_ref is not None:
+            # Remove stale dependencies only after the Agent no longer references them.
+            await _apply_slot_pair_delta(
+                handler,
+                jid,
+                added=set(),
+                removed=removed_pairs,
+            )
+
+    if errors:
+        raise errors[0]
 
 
 async def delete_template_on_referencing_gateways(
@@ -700,9 +804,7 @@ async def delete_template_on_referencing_gateways(
     if not tid:
         return
     reachable = set(await _referencing_reachable_jids(handler, normalized, tid))
-    all_refs = await collect_referenced_jiuwenclaw_ids_for_template(
-        handler, tid, normalized
-    )
+    all_refs = await collect_referenced_jiuwenclaw_ids_for_template(handler, tid, normalized)
     for jid in sorted(all_refs):
         if jid not in reachable:
             logger.info(
@@ -797,11 +899,76 @@ async def _snapshot_template_totals(
     return totals
 
 
+async def _desired_a2a_outbound_ids(handler: DBHandler, policy_ids: set[str]) -> set[str]:
+    agent_rows = await handler.list_records(
+        A2A_OUTBOUND_TEMPLATE_TABLE_DEF.table_name, {}, limit=_LIST_ALL_CAP, offset=0
+    )
+    all_ids = {str(getattr(row, "template_id", "")) for row in agent_rows}
+    desired: set[str] = set()
+    for policy_id in policy_ids:
+        policy = await handler.get(
+            A2A_ACCESS_POLICY_TEMPLATE_TABLE_DEF.table_name, {"policy_id": policy_id}
+        )
+        if policy is None or not bool(getattr(policy, "enabled", False)):
+            continue
+        members = _id_set(getattr(policy, "member_template_ids", None))
+        desired.update(members if getattr(policy, "mode", "") == "allowlist" else all_ids - members)
+    return desired
+
+
+async def _reconcile_a2a_projection(
+    handler: DBHandler,
+    jiuwenclaw_id: str,
+    *,
+    added: set[tuple[str, str]],
+    removed: set[tuple[str, str]],
+) -> None:
+    if not any(slot == A2A_ACCESS_POLICY_SLOT for slot, _ in added | removed):
+        return
+    rows = await handler.list_records(
+        _JID_TEMPLATE_REF_TABLE,
+        {"jiuwenclaw_id": jiuwenclaw_id},
+        limit=_LIST_ALL_CAP,
+        offset=0,
+    )
+    policy_counts: Counter[str] = Counter()
+    current: set[str] = set()
+    for row in rows:
+        slot = str(getattr(row, "slot", "") or "")
+        tid = str(getattr(row, "template_id", "") or "")
+        if slot == A2A_ACCESS_POLICY_SLOT:
+            policy_counts[tid] += int(getattr(row, "ref_count", 0) or 0)
+        elif slot == _A2A_OUTBOUND_PROJECTION_SLOT:
+            current.add(tid)
+    for slot, tid in added:
+        if slot == A2A_ACCESS_POLICY_SLOT:
+            policy_counts[tid] += 1
+    for slot, tid in removed:
+        if slot == A2A_ACCESS_POLICY_SLOT:
+            policy_counts[tid] -= 1
+    desired = await _desired_a2a_outbound_ids(
+        handler, {tid for tid, count in policy_counts.items() if count > 0}
+    )
+    now = utc_now()
+    for tid in sorted(desired - current):
+        payloads = await _build_sync_payloads(handler, "a2a_outbound_templates", {tid})
+        if payloads:
+            await _create_template_on_gateway(jiuwenclaw_id, "a2a_outbound_templates", payloads[0])
+            await _adjust_ref_count(
+                handler, jiuwenclaw_id, _A2A_OUTBOUND_PROJECTION_SLOT, tid, 1, now=now
+            )
+    for tid in sorted(current - desired):
+        await _delete_template_on_gateway(jiuwenclaw_id, "a2a_outbound_templates", tid)
+        await _adjust_ref_count(
+            handler, jiuwenclaw_id, _A2A_OUTBOUND_PROJECTION_SLOT, tid, -1, now=now
+        )
+
+
 async def _resolve_template_kind(handler: DBHandler, template_id: str) -> str | None:
     """解析嵌套普通模板的 kind（不含 agent_templates）。"""
     for kind in ORDINARY_TEMPLATE_KIND_ORDER:
         spec = TEMPLATE_KIND_SPECS[kind]
-        row = await handler.get(spec.table_name, {"template_id": template_id})
+        row = await handler.get(spec.table_name, {spec.id_field: template_id})
         if row is not None:
             return kind
     return None
@@ -825,10 +992,13 @@ async def _apply_slot_pair_delta(
     if not jid or (not added and not removed):
         return
 
+    added = {pair for pair in added if pair[0] in _INDEXED_TEMPLATE_REF_SLOTS}
+    removed = {pair for pair in removed if pair[0] in _INDEXED_TEMPLATE_REF_SLOTS}
     affected_template_ids = {tid for _, tid in added | removed}
-    before_totals = await _snapshot_template_totals(
-        handler, jid, affected_template_ids
-    )
+    if not affected_template_ids:
+        return
+    await _reconcile_a2a_projection(handler, jid, added=added, removed=removed)
+    before_totals = await _snapshot_template_totals(handler, jid, affected_template_ids)
 
     tid_delta: Counter[str] = Counter()
     for _, tid in added:
@@ -907,7 +1077,9 @@ async def rebuild_jid_template_ref_for_gateway(
     counter = await _count_slot_pairs_for_gateway(handler, jid)
     now = utc_now()
     for (slot, template_id), ref_count in sorted(counter.items()):
-        if ref_count <= 0:
+        if ref_count <= 0 or (
+            slot != SERVICE_CONFIG_SLOT and slot not in _INDEXED_TEMPLATE_REF_SLOTS
+        ):
             continue
         await handler.create(
             _JID_TEMPLATE_REF_TABLE,
@@ -916,6 +1088,24 @@ async def rebuild_jid_template_ref_for_gateway(
                 "slot": slot,
                 "template_id": template_id,
                 "ref_count": ref_count,
+                "data": None,
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+    policy_ids = {
+        template_id
+        for (slot, template_id), ref_count in counter.items()
+        if slot == A2A_ACCESS_POLICY_SLOT and ref_count > 0
+    }
+    for template_id in sorted(await _desired_a2a_outbound_ids(handler, policy_ids)):
+        await handler.create(
+            _JID_TEMPLATE_REF_TABLE,
+            {
+                "jiuwenclaw_id": jid,
+                "slot": _A2A_OUTBOUND_PROJECTION_SLOT,
+                "template_id": template_id,
+                "ref_count": 1,
                 "data": None,
                 "created_at": now,
                 "updated_at": now,
@@ -933,9 +1123,7 @@ async def collect_jiuwenclaw_ids_referencing_template(
     tid = str(template_id or "").strip()
     if not tid:
         return set()
-    rows = await _list_active_jid_template_ref_rows(
-        handler, tid, slot_keys=slot_keys
-    )
+    rows = await _list_active_jid_template_ref_rows(handler, tid, slot_keys=slot_keys)
     jids: set[str] = set()
     for row in rows:
         jid = str(getattr(row, "jiuwenclaw_id", "") or "").strip()
@@ -963,13 +1151,9 @@ async def count_config_effective_policy_references_for_template(
         return 0
     tid, slot_keys, use_index = lookup
     if use_index:
-        rows = await _list_active_jid_template_ref_rows(
-            handler, tid, slot_keys=slot_keys
-        )
+        rows = await _list_active_jid_template_ref_rows(handler, tid, slot_keys=slot_keys)
         return sum(int(getattr(row, "ref_count", 0) or 0) for row in rows)
-    _, count = await _scan_agent_resource_references_for_template(
-        handler, tid, slot_keys=slot_keys
-    )
+    _, count = await _scan_agent_resource_references_for_template(handler, tid, slot_keys=slot_keys)
     return count
 
 
@@ -982,6 +1166,8 @@ async def ensure_referenced_templates_on_gateway(
     pairs = slot_template_pairs_from_template_ref(template_ref)
     if not pairs:
         return
+    if any(slot == A2A_ACCESS_POLICY_SLOT for slot, _ in pairs):
+        await _reconcile_a2a_projection(handler, jiuwenclaw_id, added=pairs, removed=pairs)
     by_kind: dict[str, set[str]] = {}
     for _slot, tid in pairs:
         kind = await _resolve_template_kind(handler, tid)
@@ -992,6 +1178,40 @@ async def ensure_referenced_templates_on_gateway(
         payloads = await _build_sync_payloads(handler, kind, template_ids)
         for tmpl in payloads:
             await _create_template_on_gateway(jiuwenclaw_id, kind, tmpl)
+
+
+async def reconcile_a2a_projection_on_referencing_gateways(
+    handler: DBHandler, policy_id: str
+) -> None:
+    jids = await _referencing_reachable_jids(handler, "a2a_access_policies", policy_id)
+    pair = {(A2A_ACCESS_POLICY_SLOT, policy_id)}
+    for jid in jids:
+        await _reconcile_a2a_projection(handler, jid, added=pair, removed=pair)
+
+
+async def sync_new_a2a_outbound_to_gateways(handler: DBHandler, template_id: str) -> None:
+    rows = await handler.list_records(
+        _JID_TEMPLATE_REF_TABLE,
+        {"slot": A2A_ACCESS_POLICY_SLOT},
+        limit=_LIST_ALL_CAP,
+        offset=0,
+    )
+    reachable = await _reachable_gateway_jiuwenclaw_ids(handler)
+    for jid in sorted({str(getattr(row, "jiuwenclaw_id", "")) for row in rows} & reachable):
+        pair_ids = {
+            str(getattr(row, "template_id", ""))
+            for row in rows
+            if str(getattr(row, "jiuwenclaw_id", "")) == jid
+            and int(getattr(row, "ref_count", 0) or 0) > 0
+        }
+        if not pair_ids or template_id not in await _desired_a2a_outbound_ids(handler, pair_ids):
+            continue
+        await _reconcile_a2a_projection(
+            handler,
+            jid,
+            added={(A2A_ACCESS_POLICY_SLOT, next(iter(pair_ids)))},
+            removed={(A2A_ACCESS_POLICY_SLOT, next(iter(pair_ids)))},
+        )
 
 
 async def upsert_agent_template_on_gateway(
@@ -1014,9 +1234,7 @@ async def delete_agent_template_on_gateway(
     template_id: str,
 ) -> None:
     """从 Gateway 删除单个 agent 模板。"""
-    await _delete_template_on_gateway(
-        jiuwenclaw_id, AGENT_TEMPLATES_KIND, template_id
-    )
+    await _delete_template_on_gateway(jiuwenclaw_id, AGENT_TEMPLATES_KIND, template_id)
 
 
 async def assert_template_deletable(
@@ -1048,8 +1266,10 @@ __all__ = (
     "delete_template_on_referencing_gateways",
     "ensure_referenced_templates_on_gateway",
     "rebuild_jid_template_ref_for_gateway",
+    "reconcile_a2a_projection_on_referencing_gateways",
     "slot_template_pairs_from_template_ref",
     "sync_gateway_templates_after_template_ref_change",
+    "sync_new_a2a_outbound_to_gateways",
     "sync_referenced_templates_to_gateway",
     "update_template_on_referencing_gateways",
     "upsert_agent_template_on_gateway",

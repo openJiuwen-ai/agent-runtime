@@ -11,6 +11,8 @@ from manager_server.infrastructure.logger import get_logger
 from manager_server.infrastructure.template_ref import read_template_ref_from_row
 from manager_server.infrastructure.utils import iso_datetime, new_uuid4, strip_optional, utc_now
 from manager_server.models.template_models import AGENT_TEMPLATE_TABLE_DEF
+from manager_server.models.template_models import A2A_ACCESS_POLICY_TEMPLATE_TABLE_DEF
+from manager_server.schemas.template_slot_schemas import A2A_ACCESS_POLICY_SLOT
 from manager_server.schemas.template_schemas import (
     AgentTemplateCreateBody,
     AgentTemplateListQuery,
@@ -19,6 +21,7 @@ from manager_server.schemas.template_schemas import (
 
 _log = get_logger(__name__)
 _AGENT_TPL = AGENT_TEMPLATE_TABLE_DEF.table_name
+_A2A_POLICY_TPL = A2A_ACCESS_POLICY_TEMPLATE_TABLE_DEF.table_name
 _ALLOWED_SORT_FIELDS = frozenset({
     "template_name",
     "description",
@@ -75,6 +78,16 @@ class AgentTemplateService:
     def __init__(self, handler: DBHandler) -> None:
         self._h = handler
 
+    async def _validate_a2a_policy_ref(self, template_ref: dict[str, list[str]]) -> None:
+        refs = template_ref.get(A2A_ACCESS_POLICY_SLOT, [])
+        if not refs:
+            return
+        policy_id = refs[0]
+        if "${" in policy_id or " or " in policy_id.lower():
+            raise ValueError("a2a_access_policy must directly reference one policy_id")
+        if await self._h.get(_A2A_POLICY_TPL, {"policy_id": policy_id}) is None:
+            raise ValueError(f"unknown a2a access policy id: {policy_id}")
+
     async def list(self, query: AgentTemplateListQuery) -> dict[str, Any]:
         page = max(query.page, 1)
         page_size = min(max(query.page_size, 1), 200)
@@ -119,6 +132,7 @@ class AgentTemplateService:
         return agent_template_out(row)
 
     async def create(self, body: AgentTemplateCreateBody) -> dict[str, Any]:
+        await self._validate_a2a_policy_ref(body.template_ref)
         template_id = new_uuid4()
         now = utc_now()
         await self._h.create(
@@ -153,6 +167,7 @@ class AgentTemplateService:
         if body.agent_tags is not None:
             updates["agent_tags"] = body.agent_tags
         if body.template_ref is not None:
+            await self._validate_a2a_policy_ref(body.template_ref)
             updates["template_ref"] = body.template_ref
         if body.enabled is not None:
             updates["enabled"] = body.enabled

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -11,6 +12,16 @@ from manager_server.infrastructure.logger import get_logger
 from manager_server.manager_config_push.endpoint import require_gateway_endpoint
 
 logger = get_logger(__name__)
+
+
+def _contains_credential_replace(value: Any) -> bool:
+    if isinstance(value, dict):
+        if value.get("operation") == "replace" and "value" in value:
+            return True
+        return any(_contains_credential_replace(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_credential_replace(item) for item in value)
+    return False
 
 
 async def gateway_request(
@@ -33,12 +44,18 @@ async def gateway_request(
 
     endpoint = await require_gateway_endpoint(jid)
     payload = dict(business or {})
+    if (
+        path.startswith("/api/v1/a2a-outbound-templates")
+        and _contains_credential_replace(payload)
+        and urlsplit(endpoint).scheme.lower() != "https"
+    ):
+        raise ValueError("A2A credentials may only be synchronized over HTTPS")
 
     url = f"{endpoint}{path}"
     try:
         async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
             resp = await client.request(method.upper(), url, json=payload)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise ValueError(
             f"gateway HTTP push failed jiuwenclaw_id={jid!r} url={url}: {exc}"
         ) from exc
@@ -47,11 +64,9 @@ async def gateway_request(
         detail = resp.text[:500]
         try:
             detail = resp.json().get("detail") or detail
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, S110
             pass
-        raise ValueError(
-            f"gateway HTTP push rejected status={resp.status_code} detail={detail!r}"
-        )
+        raise ValueError(f"gateway HTTP push rejected status={resp.status_code} detail={detail!r}")
 
     result = None
     try:
@@ -62,12 +77,10 @@ async def gateway_request(
                 result = inner.get("result")
             else:
                 result = inner
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001, S110
         pass
 
-    logger.info(
-        "[ManagerConfigPush] ok jiuwenclaw_id=%s %s %s", jid, method.upper(), path
-    )
+    logger.info("[ManagerConfigPush] ok jiuwenclaw_id=%s %s %s", jid, method.upper(), path)
     return {
         "success_flag": True,
         "result": result,
