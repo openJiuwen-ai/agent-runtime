@@ -66,7 +66,10 @@ docker save agent-runtime:<tag> | ssh root@192.168.1.64 docker load    # 另一�
 # 多副本 e2e(真 LB 单入口,含 failover;单实例自动 DEGRADED)
 uv run --no-sync python scripts/e2e_multi_replica.py --base-url http://127.0.0.1:30091/api/session \
     --redis-url redis://127.0.0.1:30001/2 --namespace agent-runtime-e2e
-# 压测/浸泡(零依赖,场景化;无 FLUSHDB、不动 cleanup 端点)
+# 压测/浸泡(零依赖,场景化;无 FLUSHDB、不动 cleanup 端点;config 面单发射者不自造 409)
+# 6 场景:route/route_touch/queued/config_churn(热更新)/config_refresh(强制刷新)/mixed;
+# 判定层:可视化接口断言(/visualization/*:传播/代次/亲和/重建收敛/收尾巡检)+ ERROR 日志感知
+# (--log-source auto|file|kubectl,增量 " - ERROR - " 计数超 --log-error-max 即退出码 1;只读 kubectl logs 是唯一非 HTTP 例外)
 uv run --no-sync python scripts/load_test.py --base-url http://127.0.0.1:30091/api/session --duration 60
 ```
 
