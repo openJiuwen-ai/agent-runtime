@@ -7,7 +7,7 @@ Agent 资源写入会经 Manager 推送到 Gateway。
 
 执行顺序：
 
-1. 模型模板 M1–M3
+1. 模型模板 M1–M4（含 ``image_gen`` 生图模型 M4）
 2. Embedding 模板 B1–B3
 3. 扩展配置模板 E1–E4
 4. Skill 白名单模板 W1–W3
@@ -238,6 +238,22 @@ def _model_templates() -> list[tuple[str, dict[str, Any]]]:
                 "data": {},
             },
         ),
+        (
+            "M4 生图模型",
+            {
+                "template_name": "生图模型",
+                "description": "演示 image_gen 槽位；各 Agent 模板共用",
+                "model_type": ["image_gen"],
+                "model_tags": ["image_gen"],
+                "api_base": "https://api.openai.com/v1",
+                "api_key": "sk-demo-image-gen",
+                "model_id": "gpt-image-1",
+                "model_provider": "openai",
+                "parameters": {"size": "1024x1024", "quality": "standard"},
+                "enabled": True,
+                "data": {"demo": "m4"},
+            },
+        ),
     ]
 
 
@@ -444,7 +460,7 @@ def seed_demo_config(client: ManagerClient) -> dict[str, Any]:
         "agent_resources": {},
     }
 
-    logger.info("[1/7] 创建 model_template（M1–M3）")
+    logger.info("[1/7] 创建 model_template（M1–M4，含 image_gen）")
     model_ids: list[str] = []
     for label, body in _model_templates():
         row = client.post("/model-templates", body)
@@ -453,7 +469,7 @@ def seed_demo_config(client: ManagerClient) -> dict[str, Any]:
         key = f"m{len(model_ids)}"
         result["model_templates"][key] = tid
         logger.info("  [%s] %s -> template_id=%s", key, label, tid)
-    m1, m2, m3 = model_ids
+    m1, m2, m3, m4 = model_ids
 
     logger.info("[2/7] 创建 embedding-templates（B1–B3）")
     embed_ids: list[str] = []
@@ -506,13 +522,14 @@ def seed_demo_config(client: ManagerClient) -> dict[str, Any]:
             "VIP Agent 模板",
             {
                 "template_name": "VIP Agent 模板",
-                "description": "alice VIP：M3/B3/W1/E3",
+                "description": "alice VIP：M3/M4/B3/W1/E3",
                 "agent_tags": ["vip", "demo"],
                 "template_ref": {
                     "default_model": [m3],
                     "vision_model": [m3],
                     "video_model": [m1],
                     "audio_model": [m1],
+                    "image_gen_model": [m4],
                     "embedding_model": [b3],
                     "skill_prebuilt": [w1],
                     "extension_config": [e3],
@@ -526,13 +543,14 @@ def seed_demo_config(client: ManagerClient) -> dict[str, Any]:
             "销售组 Agent 模板",
             {
                 "template_name": "销售组 Agent 模板",
-                "description": "销售通道：M2/B2/W1+W2/E1+E2",
+                "description": "销售通道：M2/M4/B2/W1+W2/E1+E2",
                 "agent_tags": ["sales", "demo"],
                 "template_ref": {
                     "default_model": [m2],
                     "vision_model": [m2],
                     "video_model": [m1],
                     "audio_model": [m1],
+                    "image_gen_model": [m4],
                     "embedding_model": [b2],
                     "skill_prebuilt": [w1, w2],
                     "extension_config": [e1, e2],
@@ -546,13 +564,14 @@ def seed_demo_config(client: ManagerClient) -> dict[str, Any]:
             "兜底 Agent 模板",
             {
                 "template_name": "兜底 Agent 模板",
-                "description": "通用兜底：M1/B1/W3/E4",
+                "description": "通用兜底：M1/M4/B1/W3/E4",
                 "agent_tags": ["fallback", "demo"],
                 "template_ref": {
                     "default_model": [m1],
                     "vision_model": [m1],
                     "video_model": [m1],
                     "audio_model": [m1],
+                    "image_gen_model": [m4],
                     "embedding_model": [b1],
                     "skill_prebuilt": [w3],
                     "extension_config": [e4],
@@ -622,6 +641,7 @@ def seed_demo_config(client: ManagerClient) -> dict[str, Any]:
         "m1": m1,
         "m2": m2,
         "m3": m3,
+        "m4": m4,
         "b1": b1,
         "b2": b2,
         "b3": b3,
@@ -699,9 +719,9 @@ def main() -> None:
 
     logger.info("")
     logger.info("[done] 演示配置已写入。聊天时 bot_id 填 resource_id：")
-    logger.info("  R_VIP=%s      → M3/B3/W1/E3（VIP 模板）", r_vip)
-    logger.info("  R_SALES=%s    → M2/B2/W1+W2/E1+E2/S1（销售模板）", r_sales)
-    logger.info("  R_FALLBACK=%s → M1/B1/W3/E4/S2（兜底模板）", r_fallback)
+    logger.info("  R_VIP=%s      → M3/M4/B3/W1/E3（VIP 模板）", r_vip)
+    logger.info("  R_SALES=%s    → M2/M4/B2/W1+W2/E1+E2/S1（销售模板）", r_sales)
+    logger.info("  R_FALLBACK=%s → M1/M4/B1/W3/E4/S2（兜底模板）", r_fallback)
     logger.info("")
     logger.info("AgentServer 聊天联调：")
     logger.info(

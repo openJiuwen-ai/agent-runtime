@@ -22,7 +22,7 @@ interface Props {
   onSaved: () => void;
 }
 
-const MODEL_TYPE_OPTIONS = ['default', 'video', 'audio', 'vision'] as const;
+const MODEL_TYPE_OPTIONS = ['default', 'video', 'audio', 'vision', 'image_gen'] as const;
 
 /** 与 model_template 表 ColumnDefinition length 一致 */
 const FIELD_MAX_LENGTH = {

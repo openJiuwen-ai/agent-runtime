@@ -9,6 +9,7 @@ _MODEL_TEMPLATE_SLOTS: tuple[str, ...] = (
     "video_model",
     "audio_model",
     "vision_model",
+    "image_gen_model",
 )
 
 SKILL_PREBUILT_SLOT = "skill_prebuilt"
@@ -39,6 +40,7 @@ DefaultTemplateMappingTypeLiteral = Literal[
     "video_model",
     "audio_model",
     "vision_model",
+    "image_gen_model",
     "skill_prebuilt",
     "extension_config",
     "mcp",

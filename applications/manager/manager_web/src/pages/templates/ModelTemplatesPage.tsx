@@ -18,7 +18,7 @@ import { ModelTemplateModal } from './ModelTemplateModal';
 import { toast } from '../../stores/uiStore';
 import { formatTime, truncate } from '../../utils/format';
 
-const MODEL_TYPE_OPTIONS = ['default', 'video', 'audio', 'vision'] as const;
+const MODEL_TYPE_OPTIONS = ['default', 'video', 'audio', 'vision', 'image_gen'] as const;
 const MODEL_PROVIDER_OPTIONS = [
   'OpenAI',
   'OpenRouter',

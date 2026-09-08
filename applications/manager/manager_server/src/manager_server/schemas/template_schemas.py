@@ -20,7 +20,7 @@ from manager_server.infrastructure.template_ref import (
     normalize_template_ref_optional,
 )
 
-ModelTypeLiteral = Literal["default", "video", "audio", "vision"]
+ModelTypeLiteral = Literal["default", "video", "audio", "vision", "image_gen"]
 ExtensionComponentLiteral = Literal["gateway", "agent_server"]
 ExtensionHookTypeLiteral = Literal["pre_request", "post_request", "error", "schedule"]
 ImagePullPolicyLiteral = Literal["Always", "IfNotPresent", "Never"]
@@ -32,7 +32,7 @@ OptionalTemplateRefField = Annotated[
 ]
 
 
-ModelTypeLiteral = Literal["default", "video", "audio", "vision"]
+ModelTypeLiteral = Literal["default", "video", "audio", "vision", "image_gen"]
 ExtensionComponentLiteral = Literal["gateway", "agent_server"]
 ExtensionHookTypeLiteral = Literal["pre_request", "post_request", "error", "schedule"]
 ImagePullPolicyLiteral = Literal["Always", "IfNotPresent", "Never"]
@@ -225,7 +225,7 @@ class ModelTemplateListQuery(BaseModel):
     enabled: bool | None = None
     model_type: ModelTypeLiteral | None = Field(
         default=None,
-        description="按模型类型筛选，如 default / video / audio / vision",
+        description="按模型类型筛选，如 default / video / audio / vision / image_gen",
     )
     model_provider: str | None = Field(
         default=None,
