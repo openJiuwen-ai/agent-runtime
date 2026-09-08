@@ -484,6 +484,7 @@ class VisClient:
                 f"/visualization/recent_errors?limit={limit}", close=True)
             if status != 200:
                 continue
+            # 无论 errors 是否为空都建桶——采样实例数才真实
             bucket = per_instance.setdefault(
                 str(body.get("instance_id", "?")), {})
             for e in body.get("errors") or []:
