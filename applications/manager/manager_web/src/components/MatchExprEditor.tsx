@@ -94,7 +94,7 @@ function OpNode({
       className="flex shrink-0 items-center gap-1 rounded-full border-2 border-[var(--primary)]/35 bg-[var(--card)] px-2.5 py-1.5 shadow-sm"
     >
       <select
-        className="select !border-0 !bg-transparent !py-0 !pl-0 !pr-6 !text-xs font-semibold uppercase tracking-wide !shadow-none focus:!ring-0 min-w-[4.5rem]"
+        className="select !border-0 !bg-transparent !py-0 !pl-0 !pr-8 !text-xs font-semibold uppercase tracking-wide !shadow-none focus:!ring-0 min-w-[4.5rem]"
         value={value}
         onChange={(e) => onChange(e.target.value as MatchCombineOp)}
         aria-label={t('policies.matchExpr.combineOp')}

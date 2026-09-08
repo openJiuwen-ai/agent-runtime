@@ -94,7 +94,7 @@ export function Pagination({
         <select
           value={pageSize}
           onChange={(e) => onChange(1, Number(e.target.value))}
-          className="select !w-auto py-1 pl-2 pr-7 text-xs"
+          className="select !w-auto py-1 pl-2 !pr-8 text-xs"
           aria-label={t('common.pagination.itemsPerPage')}
         >
           {pageSizeOptions.map((opt) => (

@@ -60,6 +60,7 @@
     "embeddingTemplates": "Embedding Templates",
     "skillWhitelistTemplates": "Preset Skills",
     "safetyGuardrails": "Safety Guardrails",
+    "a2aManagement": "A2A Management",
     "extensionTemplates": "Extension Config",
     "agentManagement": "Agent Templates",
     "serviceConfigTemplates": "Service Resource Templates",
@@ -607,7 +608,8 @@
         "embedding_model": "Embedding model",
         "skill_prebuilt": "Preset Skills",
         "extension_config": "Extension config",
-        "permissions": "Safety guardrails"
+        "permissions": "Safety guardrails",
+        "a2a_access_policy": "A2A access policy"
       },
       "none": "None",
       "noOptions": "No templates available"

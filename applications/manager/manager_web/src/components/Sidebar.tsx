@@ -32,6 +32,7 @@ export function Sidebar() {
     '/skill-prebuilt-templates',
     '/safety-guardrails',
     '/extension-config-templates',
+    '/a2a-management',
   ];
   const agentTemplateActive = agentTemplateChildPaths.some(
     (p) => path === p || path.startsWith(`${p}/`),
@@ -127,6 +128,17 @@ export function Sidebar() {
       icon: (
         <svg className="w-4 h-4 nav-item__icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M12 3l8 4v5c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V7l8-4z" />
+        </svg>
+      ),
+    },
+    {
+      key: 'a2a-management',
+      pathPrefix: '/a2a-management',
+      href: '/a2a-management',
+      label: t('nav.a2aManagement'),
+      icon: (
+        <svg className="w-4 h-4 nav-item__icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+          <circle cx="6" cy="12" r="2" /><circle cx="18" cy="6" r="2" /><circle cx="18" cy="18" r="2" /><path d="M8 11l8-4M8 13l8 4" />
         </svg>
       ),
     },

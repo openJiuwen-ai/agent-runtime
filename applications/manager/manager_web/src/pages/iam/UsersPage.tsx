@@ -577,7 +577,7 @@ function UserModal({ user, orgs, onClose, onSaved }: { user: IamUser | null; org
       {isEdit && (
         <>
           <label className="label" style={{ marginTop: 12 }}>{t('iam.status')}</label>
-          <select className="input" value={status} onChange={(e) => setStatus(e.target.value)}>
+          <select className="select" value={status} onChange={(e) => setStatus(e.target.value)}>
             <option value="active">active</option>
             <option value="disabled">disabled</option>
           </select>

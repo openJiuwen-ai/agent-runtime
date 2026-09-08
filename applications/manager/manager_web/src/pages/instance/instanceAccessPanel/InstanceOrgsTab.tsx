@@ -477,7 +477,7 @@ function OrgRow({
       </td>
       <td className="whitespace-nowrap">
         <select
-          className="input sm !w-[5.75rem] !min-w-[5.75rem] !max-w-[5.75rem] !px-1.5"
+          className="select sm !w-[5.75rem] !min-w-[5.75rem] !max-w-[5.75rem] !pl-1.5 !pr-8"
           value={policy}
           onChange={(e) => onChangeLoginPolicy(e.target.value === 'deny' ? 'deny' : 'allow')}
           aria-label={t(`${IA}.loginPolicy`)}

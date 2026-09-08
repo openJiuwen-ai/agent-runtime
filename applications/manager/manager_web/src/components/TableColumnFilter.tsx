@@ -55,14 +55,14 @@ export function TableColumnFilter({
         </svg>
       </button>
       {open && (
-        <div className="th-filter__menu" role="menu">
+        <div className="th-filter__menu dropdown-menu-surface" role="menu">
           {options.map((opt) => (
             <button
               key={opt.value || '__all__'}
               type="button"
               role="menuitemradio"
               aria-checked={value === opt.value}
-              className={`th-filter__item${value === opt.value ? ' selected' : ''}`}
+              className={`th-filter__item dropdown-menu-option${value === opt.value ? ' selected' : ''}`}
               onClick={() => {
                 onChange(opt.value);
                 setOpen(false);
