@@ -9,7 +9,6 @@ import { findUnsafeTextField } from '../../utils/safeText';
 import { isValidHttpUrl } from '../../utils/url';
 import type {
   SkillPrebuiltTemplate,
-  SkillPrebuiltTemplateCreateBody,
   SkillPrebuiltTemplateUpdateBody,
 } from '../../types';
 
@@ -145,29 +144,39 @@ export function SkillPrebuiltTemplateModal({ open, template, onClose, onSaved }:
       return;
     }
 
-    const body: SkillPrebuiltTemplateCreateBody | SkillPrebuiltTemplateUpdateBody = {
-      template_name: form.template_name.trim(),
-      description: form.description.trim() || undefined,
-      skill_id: form.skill_id.trim(),
-      package_url: packageUrl || undefined,
-      source_id: sourceId || undefined,
-      version_id: versionId || undefined,
-      data: sha && !provider ? { sha256: sha } : undefined,
-    };
+    const description = form.description.trim() || undefined;
+    const data = sha && !provider ? { sha256: sha } : undefined;
 
     setSaving(true);
     try {
       if (template) {
-        // 从 provider 切回 url 时清空 SPI 字段
+        // 空 URL 不要发 ""：Pydantic SkillSourceUrl 有 min_length=1，会 422。
+        // 仅在原先有 URL、现在要清空时发 null。
         const patch: SkillPrebuiltTemplateUpdateBody = {
-          ...body,
+          template_name: form.template_name.trim(),
+          description,
+          skill_id: form.skill_id.trim(),
           source_id: sourceId || '',
           version_id: versionId || '',
-          package_url: packageUrl || '',
+          data,
         };
+        if (packageUrl) {
+          patch.package_url = packageUrl;
+        } else if (template.package_url) {
+          patch.package_url = null;
+        }
         await SkillPrebuiltTemplateApi.update(template.template_id, patch);
       } else {
-        await SkillPrebuiltTemplateApi.create({ ...body, enabled: true } as SkillPrebuiltTemplateCreateBody);
+        await SkillPrebuiltTemplateApi.create({
+          template_name: form.template_name.trim(),
+          description,
+          skill_id: form.skill_id.trim(),
+          package_url: packageUrl || undefined,
+          source_id: sourceId || undefined,
+          version_id: versionId || undefined,
+          enabled: true,
+          data,
+        });
       }
       toast('success', t('success.saved'));
       onSaved();

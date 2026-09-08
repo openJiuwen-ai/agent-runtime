@@ -140,7 +140,11 @@ export interface SkillPrebuiltTemplateCreateBody {
   data?: Record<string, unknown>;
 }
 
-export type SkillPrebuiltTemplateUpdateBody = Partial<SkillPrebuiltTemplateCreateBody>;
+export type SkillPrebuiltTemplateUpdateBody = Partial<
+  Omit<SkillPrebuiltTemplateCreateBody, 'package_url'>
+> & {
+  package_url?: string | null;
+};
 
 
 export interface PermissionsTemplate {

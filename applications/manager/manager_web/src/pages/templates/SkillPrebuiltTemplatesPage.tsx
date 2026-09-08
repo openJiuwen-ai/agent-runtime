@@ -21,11 +21,33 @@ import { formatTime, truncate } from '../../utils/format';
 type SkillPrebuiltTemplateSortField =
   | 'template_name'
   | 'description'
-  | 'package_url'
   | 'skill_id'
   | 'source_id'
   | 'version_id'
   | 'updated_at';
+
+function installSourceCell(
+  row: SkillPrebuiltTemplate,
+  t: (key: string) => string,
+): { text: string; title?: string } {
+  const sourceId = (row.source_id || '').trim();
+  if (sourceId) {
+    const versionId = (row.version_id || '').trim();
+    const value = versionId ? `${sourceId}@${versionId}` : sourceId;
+    return {
+      text: `${t('skillWhitelistTemplate.modeSpi')} · ${truncate(value, 36)}`,
+      title: value,
+    };
+  }
+  const packageUrl = (row.package_url || '').trim();
+  if (packageUrl) {
+    return {
+      text: `${t('skillWhitelistTemplate.modeUrl')} · ${truncate(packageUrl, 36)}`,
+      title: packageUrl,
+    };
+  }
+  return { text: '—' };
+}
 
 export function SkillPrebuiltTemplatesPage() {
   const { t } = useTranslation();
@@ -169,14 +191,7 @@ export function SkillPrebuiltTemplatesPage() {
                     onChange={(value) => handleSortChange('description', value)}
                   />
                 </th>
-                <th>
-                  <TableColumnSort
-                    label={t('skillWhitelistTemplate.packageUrl')}
-                    value={sortBy === 'package_url' ? sortOrder : ''}
-                    options={sortOptions}
-                    onChange={(value) => handleSortChange('package_url', value)}
-                  />
-                </th>
+                <th>{t('skillWhitelistTemplate.installSource')}</th>
                 <th>
                   <TableColumnSort
                     label={t('skillWhitelistTemplate.skillId')}
@@ -226,7 +241,9 @@ export function SkillPrebuiltTemplatesPage() {
                     <Empty text={t('common.empty')} />
                   </td>
                 </tr>
-              ) : items.map((row) => (
+              ) : items.map((row) => {
+                const source = installSourceCell(row, t);
+                return (
                 <tr key={row.template_id}>
                   <td className="align-top">
                     <div className="text-text-strong font-medium break-words">{row.template_name}</div>
@@ -237,12 +254,11 @@ export function SkillPrebuiltTemplatesPage() {
                   <td className="text-[11px] text-muted max-w-[14rem]" title={row.description ?? undefined}>
                     {row.description ? truncate(row.description, 48) : '—'}
                   </td>
-                  <td className="mono text-[11px] text-muted max-w-[12rem]" title={row.package_url || row.source_id || undefined}>
-                    {row.source_id
-                      ? truncate(`${row.source_id}@${row.version_id || ''}`, 36)
-                      : row.package_url
-                        ? truncate(String(row.package_url), 36)
-                        : '—'}
+                  <td
+                    className="mono text-[11px] text-muted max-w-[16rem]"
+                    title={source.title}
+                  >
+                    {source.text}
                   </td>
                   <td className="mono text-xs min-w-[10rem] max-w-[18rem] break-all align-top text-text-strong" title={row.skill_id}>
                     {row.skill_id}
@@ -274,7 +290,8 @@ export function SkillPrebuiltTemplatesPage() {
                     </div>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
           </div>
