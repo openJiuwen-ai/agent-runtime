@@ -60,6 +60,7 @@
     "embeddingTemplates": "Embedding 模板",
     "skillWhitelistTemplates": "预置Skill",
     "safetyGuardrails": "安全护栏",
+    "a2aManagement": "A2A管理",
     "extensionTemplates": "扩展配置",
     "agentManagement": "Agent模板",
     "serviceConfigTemplates": "服务资源模板",
@@ -607,7 +608,8 @@
         "embedding_model": "Embedding 模型",
         "skill_prebuilt": "预置 Skill",
         "extension_config": "扩展配置",
-        "permissions": "安全护栏"
+        "permissions": "安全护栏",
+        "a2a_access_policy": "A2A 访问策略"
       },
       "none": "不选择",
       "noOptions": "暂无可选模板"

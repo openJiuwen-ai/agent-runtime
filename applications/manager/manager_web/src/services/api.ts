@@ -29,6 +29,13 @@ import type {
   ListItemsResult,
   LoggingConfig,
   LoggingConfigUpsertBody,
+  A2AOutboundTemplate,
+  A2ADiscoveryCandidate,
+  A2ADiscoverySettings,
+  A2AOutboundTemplateCreateBody,
+  A2AOutboundTemplateUpdateBody,
+  A2AAccessPolicyTemplate,
+  A2AAccessPolicyTemplateBody,
 } from '../types';
 
 // 平台管理 API(claw_manager) 与 认证/目录 API(独立认证服务) 两个反代前缀。
@@ -429,6 +436,66 @@ export const UserApi = {
       summary: { total: number; ok: number; failed: number };
       results: Array<{ row: number; username: string; ok: boolean; user_id?: string; warnings?: string[]; error?: string }>;
     }>('/v1/users/batch', { method: 'POST', body: { users } }),
+};
+
+export const A2AOutboundTemplateApi = {
+  getDiscoverySettings: () =>
+    http<A2ADiscoverySettings>('/v1/a2a-discovery-settings'),
+  updateDiscoverySettings: (body: A2ADiscoverySettings) =>
+    http<A2ADiscoverySettings>('/v1/a2a-discovery-settings', { method: 'PUT', body }),
+  list: (params?: {
+    page?: number;
+    page_size?: number;
+    enabled?: boolean;
+    search?: string;
+  }) => http<PageResult<A2AOutboundTemplate>>('/v1/a2a-outbound-templates', { query: params }),
+  getForEdit: (id: string) =>
+    http<A2AOutboundTemplate & { credential?: string | null }>(
+      `/v1/a2a-outbound-templates/${encodeURIComponent(id)}/edit`,
+    ),
+  discover: (body: { url: string; card_path?: string }) =>
+    http<A2ADiscoveryCandidate>('/v1/a2a-outbound-discoveries', { method: 'POST', body }),
+  create: (body: A2AOutboundTemplateCreateBody) =>
+    http<A2AOutboundTemplate>('/v1/a2a-outbound-templates', { method: 'POST', body }),
+  update: (id: string, body: A2AOutboundTemplateUpdateBody) =>
+    http<A2AOutboundTemplate>(`/v1/a2a-outbound-templates/${encodeURIComponent(id)}`, {
+      method: 'PATCH', body,
+    }),
+  refresh: (id: string) =>
+    http<A2AOutboundTemplate>(`/v1/a2a-outbound-templates/${encodeURIComponent(id)}:refresh`, {
+      method: 'POST',
+    }),
+  confirmRevision: (id: string, accept: boolean) =>
+    http<A2AOutboundTemplate>(
+      `/v1/a2a-outbound-templates/${encodeURIComponent(id)}:confirm-revision`,
+      { method: 'POST', body: { accept } },
+    ),
+  remove: (id: string) =>
+    http<{ deleted: boolean }>(`/v1/a2a-outbound-templates/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
+};
+
+export const A2AAccessPolicyTemplateApi = {
+  list: (params?: {
+    page?: number;
+    page_size?: number;
+    enabled?: boolean;
+    mode?: 'allowlist' | 'denylist';
+    search?: string;
+  }) => http<PageResult<A2AAccessPolicyTemplate>>('/v1/a2a-access-policies', { query: params }),
+  get: (id: string) =>
+    http<A2AAccessPolicyTemplate>(`/v1/a2a-access-policies/${encodeURIComponent(id)}`),
+  create: (body: A2AAccessPolicyTemplateBody) =>
+    http<A2AAccessPolicyTemplate>('/v1/a2a-access-policies', { method: 'POST', body }),
+  update: (id: string, body: Partial<A2AAccessPolicyTemplateBody>) =>
+    http<A2AAccessPolicyTemplate>(`/v1/a2a-access-policies/${encodeURIComponent(id)}`, {
+      method: 'PATCH', body,
+    }),
+  remove: (id: string) =>
+    http<{ deleted: boolean }>(`/v1/a2a-access-policies/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
 };
 
 export const AgentTemplateApi = {

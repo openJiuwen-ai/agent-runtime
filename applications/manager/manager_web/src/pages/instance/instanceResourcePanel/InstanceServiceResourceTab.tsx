@@ -634,7 +634,7 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
           <label className="block mb-3">
             <FieldLabel required>{t(`${sr}.template`)}</FieldLabel>
             <select
-              className="input mt-1 w-full"
+              className="select mt-1 w-full"
               value={addTemplateId}
               onChange={(e) => {
                 const selectedTemplateId = e.target.value;

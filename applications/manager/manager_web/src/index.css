@@ -445,6 +445,19 @@ button, input, textarea, select { font: inherit; color: inherit; }
     display: flex; align-items: center; justify-content: space-between;
     gap: 16px; margin-bottom: 4px;
   }
+  .page-header .btn,
+  .page-header .input,
+  .page-header .select {
+    height: 36px;
+    min-height: 36px;
+    box-sizing: border-box;
+  }
+  .a2a-header-actions { flex: 0 1 auto; }
+  .a2a-header-search {
+    width: clamp(18rem, 28vw, 32rem) !important;
+    min-width: 0 !important;
+    max-width: none !important;
+  }
   .page-title {
     font-size: 18px; font-weight: 700; color: var(--text-strong);
     letter-spacing: -0.02em;
@@ -695,6 +708,48 @@ button, input, textarea, select { font: inherit; color: inherit; }
   .input:focus, .textarea:focus, .select:focus { border-color: var(--ring); box-shadow: var(--focus-ring); }
   .textarea { font-family: var(--mono); font-size: var(--font-size-xs); min-height: 110px; resize: vertical; }
 
+  select.input,
+  select.select {
+    appearance: none;
+    cursor: pointer;
+    padding-right: 40px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    background-size: 16px 16px;
+  }
+  select.input:disabled,
+  select.select:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+  select.input option,
+  select.select option {
+    color: var(--text);
+    background: var(--card);
+  }
+
+  .dropdown-menu-surface {
+    padding: 4px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--card);
+    box-shadow: var(--shadow-lg);
+  }
+  .dropdown-menu-option {
+    width: 100%;
+    min-height: 34px;
+    padding: 7px 10px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text);
+    font-size: var(--font-size-sm);
+    cursor: pointer;
+    transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
+  }
+  .dropdown-menu-option:hover { background: var(--bg-hover); }
+
   .label {
     display: block;
     font-size: var(--font-size-xs);
@@ -790,11 +845,6 @@ button, input, textarea, select { font: inherit; color: inherit; }
     left: 0;
     z-index: 3;
     min-width: 148px;
-    padding: 4px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    background: var(--card);
-    box-shadow: var(--shadow-lg);
   }
 
   /* 表头筛选/排序菜单展开时，避免被表格区域裁剪或分页条遮挡 */
@@ -812,19 +862,7 @@ button, input, textarea, select { font: inherit; color: inherit; }
   }
   .th-filter__item {
     display: block;
-    width: 100%;
-    padding: 7px 10px;
-    border: 0;
-    border-radius: var(--radius-sm);
-    background: transparent;
-    color: var(--text);
-    font-size: var(--font-size-sm);
     text-align: left;
-    cursor: pointer;
-    transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
-  }
-  .th-filter__item:hover {
-    background: var(--bg-hover);
   }
   .th-filter__item.selected {
     color: var(--accent);

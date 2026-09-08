@@ -528,7 +528,7 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
           <label className="block mb-3">
             <FieldLabel required>{t('instanceDetail.resourcePanel.agent.agentLabel')}</FieldLabel>
             <select
-              className="input mt-1 w-full"
+              className="select mt-1 w-full"
               value={addAgentId}
               onChange={(e) => {
                 const selectedTemplateId = e.target.value;

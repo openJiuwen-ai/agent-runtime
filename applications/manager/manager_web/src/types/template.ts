@@ -267,6 +267,93 @@ export interface ServiceConfigTemplateCreateBody {
 
 export type ServiceConfigTemplateUpdateBody = Partial<ServiceConfigTemplateCreateBody>;
 
+export interface A2AOutboundTemplate {
+  id: number;
+  template_id: string;
+  template_name: string;
+  description?: string | null;
+  a2a_tags?: string[] | null;
+  source_url: string;
+  card_path: string;
+  agent_card: Record<string, unknown>;
+  card_fingerprint: string;
+  card_revision: number;
+  selected_interface: Record<string, unknown>;
+  credential_configured: boolean;
+  connect_timeout_seconds: number;
+  sync_wait_seconds: number;
+  enabled: boolean;
+  pending_revision?: Record<string, unknown> | null;
+  last_checked_at?: string | null;
+  last_error_code?: string | null;
+  last_error_summary?: string | null;
+  updated_at?: string | null;
+}
+
+export interface A2ADiscoveryCandidate {
+  discovery_id: string;
+  expires_at: string;
+  source_url: string;
+  card_path: string;
+  card_url: string;
+  card_fingerprint: string;
+  agent_card: Record<string, unknown>;
+  selected_interface: Record<string, unknown>;
+}
+
+export interface A2ADiscoverySettings {
+  allow_http: boolean;
+  allow_loopback: boolean;
+  allow_private_network: boolean;
+  allow_public_http: boolean;
+}
+
+export interface A2AOutboundTemplateCreateBody {
+  discovery_id: string;
+  template_name: string;
+  description?: string;
+  a2a_tags?: string[];
+  credential?: string;
+  connect_timeout_seconds?: number;
+  sync_wait_seconds?: number;
+  enabled?: boolean;
+}
+
+export interface A2AOutboundTemplateUpdateBody {
+  template_name?: string;
+  description?: string;
+  a2a_tags?: string[];
+  credential?: string;
+  clear_credential?: boolean;
+  connect_timeout_seconds?: number;
+  sync_wait_seconds?: number;
+  enabled?: boolean;
+}
+
+export type A2AAccessPolicyMode = 'allowlist' | 'denylist';
+
+export interface A2AAccessPolicyTemplate {
+  id: number;
+  policy_id: string;
+  policy_name: string;
+  description?: string | null;
+  mode: A2AAccessPolicyMode;
+  member_template_ids: string[];
+  enabled: boolean;
+  revision: number;
+  reference_count: number;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface A2AAccessPolicyTemplateBody {
+  policy_name: string;
+  description?: string;
+  mode: A2AAccessPolicyMode;
+  member_template_ids: string[];
+  enabled?: boolean;
+}
+
 /** 容器规格（service_config_container），供模板引用。 */
 export interface ServiceConfigContainer {
   id: number;

@@ -117,7 +117,7 @@ export function AddToInstanceModal({
               />
             </span>
             <select
-              className="input mt-1 w-full"
+              className="select mt-1 w-full"
               value={loginPolicy}
               onChange={(e) => setLoginPolicy(e.target.value === 'deny' ? 'deny' : 'allow')}
             >

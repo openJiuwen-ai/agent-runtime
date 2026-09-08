@@ -5,6 +5,7 @@ import {
   ExtensionTemplateApi,
   ModelTemplateApi,
   PermissionsTemplateApi,
+  A2AAccessPolicyTemplateApi,
   SkillPrebuiltTemplateApi,
 } from '../services/api';
 import {
@@ -21,6 +22,21 @@ export interface TemplateOption {
   label: string;
 }
 
+function SelectChevron({ open = false }: { open?: boolean }) {
+  return (
+    <svg
+      className={`h-4 w-4 shrink-0 text-muted transition-transform ${open ? 'rotate-180' : ''}`}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      aria-hidden
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M6 9l6 6 6-6" />
+    </svg>
+  );
+}
+
 interface TemplateRefEditorProps {
   label?: string;
   hint?: string;
@@ -31,12 +47,13 @@ interface TemplateRefEditorProps {
 
 export async function loadTemplateOptions(): Promise<Record<string, TemplateOption[]>> {
   const pageSize = 200;
-  const [models, embeddings, skills, extensions, permissions] = await Promise.all([
+  const [models, embeddings, skills, extensions, permissions, a2aPolicies] = await Promise.all([
     ModelTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
     EmbeddingTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
     SkillPrebuiltTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
     ExtensionTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
     PermissionsTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
+    A2AAccessPolicyTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
   ]);
 
   const toOpt = (id: string, name: string): TemplateOption => ({
@@ -62,6 +79,9 @@ export async function loadTemplateOptions(): Promise<Record<string, TemplateOpti
   bySlot.skill_prebuilt = (skills.items ?? []).map((t) => toOpt(t.template_id, t.template_name));
   bySlot.extension_config = (extensions.items ?? []).map((t) => toOpt(t.template_id, t.template_name));
   bySlot.permissions = (permissions.items ?? []).map((t) => toOpt(t.template_id, t.template_name));
+  bySlot.a2a_access_policy = (a2aPolicies.items ?? []).map((t) =>
+    toOpt(t.policy_id, `${t.policy_name} · ${t.mode}`),
+  );
   return bySlot;
 }
 
@@ -220,15 +240,16 @@ function CheckboxSelect({
       <button
         ref={triggerRef}
         type="button"
-        className="select w-full text-left flex items-center justify-between gap-2"
+        className="select flex h-10 w-full cursor-pointer items-center justify-between gap-2 pr-3 text-left"
         onClick={toggleOpen}
+        aria-expanded={open}
       >
         <span className={selected.length ? 'truncate' : 'text-muted truncate'}>{display}</span>
-        <span className="text-muted text-xs shrink-0">{open ? '▲' : '▼'}</span>
+        <SelectChevron open={open} />
       </button>
       <div
         ref={setPopoverEl}
-        className="fixed z-[80] max-h-56 overflow-auto rounded-md border border-border bg-bg shadow-lg py-1"
+        className="dropdown-menu-surface fixed z-[80] max-h-56 overflow-auto"
       >
         {items.length === 0 ? (
           <div className="px-3 py-2 text-xs text-muted">{t('policies.templateRef.noOptions')}</div>
@@ -236,7 +257,7 @@ function CheckboxSelect({
           items.map((opt) => (
             <label
               key={opt.template_id}
-              className="flex items-center gap-2 px-3 py-2 hover:bg-bg-hover cursor-pointer text-sm"
+              className="dropdown-menu-option flex items-center gap-2"
             >
               <input
                 type="checkbox"
@@ -332,7 +353,7 @@ export function TemplateRefEditor({
                   />
                 ) : (
                   <select
-                    className="select w-full"
+                    className="select h-10 w-full"
                     value={selected[0] ?? ''}
                     onChange={(e) => setSlotIds(slot, e.target.value ? [e.target.value] : [])}
                   >

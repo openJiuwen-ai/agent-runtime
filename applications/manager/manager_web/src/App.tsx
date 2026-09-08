@@ -21,6 +21,7 @@ import { LoginPage } from './pages/LoginPage';
 import { UsersPage } from './pages/iam/UsersPage';
 import { OrgsPage } from './pages/iam/OrgsPage';
 import { AgentTemplatesPage } from './pages/templates/AgentTemplatesPage';
+import { A2AManagementPage } from './pages/templates/A2AManagementPage';
 import { getProductName } from './utils/env';
 
 interface ErrorBoundaryState {
@@ -82,6 +83,9 @@ function RouteView() {
   }
   if (path === '/safety-guardrails') {
     return <SafetyGuardrailsPage />;
+  }
+  if (path === '/a2a-management') {
+    return <A2AManagementPage />;
   }
   if (path === '/service-config-templates') {
     return <ServiceConfigTemplatesPage />;
