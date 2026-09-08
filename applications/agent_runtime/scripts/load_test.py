@@ -908,10 +908,33 @@ async def refresh_controller(client: httpx.AsyncClient, base: str, run: str,
                               f"status={wst} {wraw.get('error_code') or ''} "
                               f"pod={wraw.get('pod_id')}")
         violations = affinity.violations_since(cp)
-        checks.record(f"refresh#{n} 存量会话亲和保持(同 session 回同 pod)",
-                      not violations,
-                      f"{len(violations)} 次换 pod"
-                      + (f": {violations[:3]}" if violations else ""))
+        if not violations:
+            checks.record(f"refresh#{n} 存量会话亲和保持(同 session 回同 pod)",
+                          True, "0 次换 pod")
+        else:
+            # 区分两类换 pod:旧 Pod 已消亡(pod_ttl 回收等,pod_ttl<
+            # session_ttl 时必然偶发)→ 合法重放置,记 warn;旧 Pod 仍在
+            # 池中却换车 → 真亲和违规,fail。存活性经 vis rm.pods 核验。
+            pods_cache: dict[str, set] = {}
+            true_viol: list[tuple[str, str, str]] = []
+            for _ts, sid_, old, new in violations:
+                gi = sid_.rsplit("-", 2)[-2]
+                sc_id = f"scope-{run}-{gi}"
+                if sc_id not in pods_cache:
+                    _, b = await vis.get(f"/visualization/scope?scope_id={sc_id}")
+                    pods_cache[sc_id] = {
+                        p.get("pod_id")
+                        for p in (_dig(b, "rm", "pods", default=[]) or [])}
+                if old in pods_cache[sc_id]:
+                    true_viol.append((sid_, old, new))
+            checks.record(
+                f"refresh#{n} 存量会话亲和保持(同 session 回同 pod)",
+                not true_viol,
+                f"{len(violations)} 次换 pod,真违规 {len(true_viol)}"
+                + (f": {true_viol[:3]}" if true_viol
+                   else f";其余为旧 Pod 消亡(pod_ttl 到期回收)后的"
+                        f"合法重放置,例:{violations[:2]}"),
+                severity="fail" if true_viol else "warn")
         next_at += args.refresh_interval
 
 
