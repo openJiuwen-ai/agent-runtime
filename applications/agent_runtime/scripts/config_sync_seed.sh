@@ -118,7 +118,7 @@ kubectl exec -n "${NAMESPACE}" "${AGENT_RUNTIME_POD}" -i -- \
         "ports": [{"containerPort": 8321}],
         "env": [
           {"name": "JIUWENBOX_LISTEN", "value": "http://0.0.0.0:8321"},
-          {"name": "JIUWENBOX_POLICY_PATH", "value": "/usr/local/lib/python3.11/site-packages/jiuwenbox/configs/enterprise-policy.yaml"},
+          {"name": "JIUWENBOX_POLICY_PATH", "value": "/app/jiuwenswarm/jiuwenbox/src/jiuwenbox/configs/enterprise-policy.yaml"},
           {"name": "TZ", "value": "Asia/Shanghai"}
         ],
         "securityContext": {
@@ -131,7 +131,7 @@ kubectl exec -n "${NAMESPACE}" "${AGENT_RUNTIME_POD}" -i -- \
                             "initialDelaySeconds": 10, "periodSeconds": 5},
         "volumeMounts": [
           {"name": "hp-cgroup", "mountPath": "/sys/fs/cgroup"},
-          {"name": "hp-jiuwenbox", "mountPath": "/usr/local/lib/python3.11/site-packages/jiuwenbox"},
+          {"name": "hp-jiuwenbox", "mountPath": "/app/jiuwenswarm/jiuwenbox"},
           {"name": "data", "mountPath": "/root/.jiuwenswarm"}
         ]
       }
@@ -158,7 +158,7 @@ kubectl exec -n "${NAMESPACE}" "${AGENT_RUNTIME_POD}" -i -- \
         {"name": "gw-envfile", "configMap": {"name": "jiuwenclaw-gateway-envfile"}},
         {"name": "data", "persistentVolumeClaim": {"claimName": "jiuwenclaw-pvc"}},
         {"name": "hp-cgroup", "hostPath": {"path": "/sys/fs/cgroup", "type": "Directory"}},
-        {"name": "hp-jiuwenbox", "hostPath": {"path": "${CLAW_CODE_PATH}/jiuwenbox/src/jiuwenbox", "type": "Directory"}}
+        {"name": "hp-jiuwenbox", "hostPath": {"path": "${CLAW_CODE_PATH}/jiuwenbox", "type": "Directory"}}
       ]
     }],
     "scopes": [{
