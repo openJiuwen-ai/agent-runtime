@@ -297,7 +297,7 @@ curl -s -X POST "http://127.0.0.1:8091/api/session/config_sync" \
           },
           {
             "name": "JIUWENBOX_POLICY_PATH",
-            "value": "/usr/local/lib/python3.11/site-packages/jiuwenbox/configs/enterprise-policy.yaml"
+            "value": "/app/jiuwenswarm/jiuwenbox/src/jiuwenbox/configs/enterprise-policy.yaml"
           },
           {
             "name": "TZ",
@@ -333,7 +333,7 @@ curl -s -X POST "http://127.0.0.1:8091/api/session/config_sync" \
           },
           {
             "name": "hp-jiuwenbox",
-            "mountPath": "/usr/local/lib/python3.11/site-packages/jiuwenbox"
+            "mountPath": "/app/jiuwenswarm/jiuwenbox"
           },
           {
             "name": "data",
@@ -417,7 +417,7 @@ curl -s -X POST "http://127.0.0.1:8091/api/session/config_sync" \
           {
             "name": "hp-jiuwenbox",
             "hostPath": {
-              "path": "/root/wangxin/jiuwenswarm/jiuwenbox/src/jiuwenbox",
+              "path": "/root/wangxin/jiuwenswarm/jiuwenbox",
               "type": "Directory"
             }
           }

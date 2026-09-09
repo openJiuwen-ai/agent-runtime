@@ -1,24 +1,28 @@
-ARG BASE_IMAGE
-ARG IMAGE_VERSION
-FROM ${BASE_IMAGE}:${IMAGE_VERSION}
+ARG NODE_IMAGE=node:20-alpine
+ARG NGINX_IMAGE=nginx:1.27-alpine
 
-ARG PIP_EXTRA_ARGS="-i https://mirrors.aliyun.com/pypi/simple/"
+# ---------- 阶段1:前端构建 ----------
+FROM ${NODE_IMAGE} AS web-builder
+
 ARG NPM_REGISTRY=https://registry.npmmirror.com
 ARG VITE_PRODUCT_NAME=JiuwenSwarm
-ENV VITE_PRODUCT_NAME=${VITE_PRODUCT_NAME}
+ENV NPM_CONFIG_REGISTRY=${NPM_REGISTRY} \
+    VITE_PRODUCT_NAME=${VITE_PRODUCT_NAME}
 
-RUN uv pip install --system -e "./applications/manager/manager_server" \
-    ${PIP_EXTRA_ARGS}
-
-USER app
-WORKDIR /app/agent-runtime/applications/manager/manager_web
-ENV NPM_CONFIG_REGISTRY=${NPM_REGISTRY}
+WORKDIR /build/applications/manager/manager_web
+COPY applications/manager/manager_web/package.json \
+     applications/manager/manager_web/package-lock.json ./
 RUN npm install
+
+COPY applications/manager/manager_web/ ./
 RUN npm run build
 
-WORKDIR /app/agent-runtime
-ENV PATH=$PATH:/home/app/.local/bin
-ENV MANAGER_WEB_HOST=0.0.0.0
+
+# ---------- 阶段2:nginx 运行 ----------
+FROM ${NGINX_IMAGE}
+
+COPY docker/manager-web.nginx.conf.template /etc/nginx/templates/default.conf.template
+COPY --from=web-builder /build/applications/manager/manager_web/dist \
+     /app/agent-runtime/applications/manager/manager_web/dist
 
 EXPOSE 5273
-CMD ["manager-web"]
