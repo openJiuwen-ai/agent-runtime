@@ -160,8 +160,6 @@ async def log_masking_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     await _init_manager_tables(manager_handler)
     await _init_gateway_log_masking_table(gateway_handler, gateway_models_mod)
 
-    monkeypatch.setenv("JIUWENCLAW_ID", jid)
-
     async def _ensure_db_handler(**_kwargs: Any) -> DBHandler:
         return gateway_handler
 

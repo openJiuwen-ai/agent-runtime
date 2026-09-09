@@ -48,7 +48,7 @@ class ListInstanceAgentResourcesQuery(BaseModel):
     enabled: bool | None = None
     sort_by: str | None = Field(
         default=None,
-        description="排序字段：resource_id、template_name、granted_by、expires_at、enabled、updated_at",
+        description="排序字段：resource_id、resource_name、template_name、granted_by、expires_at、enabled、updated_at",
     )
     sort_order: str | None = Field(default=None, description="排序方向：asc、desc")
 

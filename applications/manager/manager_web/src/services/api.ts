@@ -342,7 +342,7 @@ export interface IamUser {
 }
 export type MatchExpr = string | string[];
 /** instance_agent_resource 表一行（授权即实例化）。 */
-export interface InstanceAgentResourceRecord {
+export interface InstanceAgentResource {
   id: number;
   jiuwenclaw_id: string;
   resource_id: string;
@@ -357,6 +357,8 @@ export interface InstanceAgentResourceRecord {
   created_at: string | null;
   updated_at: string | null;
 }
+/** @deprecated 使用 InstanceAgentResource */
+export type InstanceAgentResourceRecord = InstanceAgentResource;
 export interface AgentTemplate {
   id: number;
   template_id: string;
@@ -368,10 +370,6 @@ export interface AgentTemplate {
   data: Record<string, unknown> | null;
   created_at: string | null;
   updated_at: string | null;
-  resource_id?: string;
-  ref_template_id?: string;
-  /** 该模板关联的 instance_agent_resource 行 */
-  records?: InstanceAgentResourceRecord[];
 }
 /** @deprecated 使用 AgentTemplate */
 export type Bot = AgentTemplate;
@@ -532,15 +530,6 @@ export const AgentTemplateApi = {
 };
 export const BotApi = AgentTemplateApi;
 
-// 某实例已实例化的 Agent（目录信息 + 该实例上的 instance_agent_resource）。
-export interface InstanceAgentResource extends AgentTemplate {
-  resource_id: string;
-  resource_name?: string | null;
-  resource_desc?: string | null;
-  /** 该 resource_id 下的 instance_agent_resource 行 */
-  records: InstanceAgentResourceRecord[];
-}
-
 /** 实例 Agent 资源（instance_agent_resource，admin）。 */
 export const InstanceAgentResourceApi = {
   listInstanceAgentResources: (
@@ -550,7 +539,7 @@ export const InstanceAgentResourceApi = {
       page_size?: number;
       search?: string;
       enabled?: boolean;
-      sort_by?: 'resource_id' | 'template_name' | 'granted_by' | 'expires_at' | 'enabled' | 'updated_at';
+      sort_by?: 'resource_id' | 'resource_name' | 'template_name' | 'granted_by' | 'expires_at' | 'enabled' | 'updated_at';
       sort_order?: 'asc' | 'desc';
     },
   ) =>
@@ -569,7 +558,7 @@ export const InstanceAgentResourceApi = {
       expires_at?: string | null;
     },
   ) =>
-    http<{ items: InstanceAgentResourceRecord[] }>(
+    http<{ items: InstanceAgentResource[] }>(
       `/v1/instances/${encodeURIComponent(jid)}/agent-resources`,
       { method: 'POST', body },
     ),
@@ -584,7 +573,7 @@ export const InstanceAgentResourceApi = {
       expires_at?: string | null;
     },
   ) =>
-    http<{ items: InstanceAgentResourceRecord[] }>(
+    http<{ items: InstanceAgentResource[] }>(
       `/v1/instances/${encodeURIComponent(jid)}/agent-resources/${encodeURIComponent(resourceId)}`,
       { method: 'PATCH', body },
     ),
@@ -596,7 +585,7 @@ export const InstanceAgentResourceApi = {
 };
 
 /** instance_service_resource 表一行（授权即实例化）。 */
-export interface InstanceServiceResourceRecord {
+export interface InstanceServiceResource {
   id: number;
   jiuwenclaw_id: string;
   resource_id: string;
@@ -612,20 +601,8 @@ export interface InstanceServiceResourceRecord {
   created_at: string | null;
   updated_at: string | null;
 }
-
-/** 某实例已授权的服务资源（模板信息 + records）。 */
-export interface InstanceServiceResource {
-  id: number;
-  template_id: string;
-  template_name: string;
-  description: string | null;
-  enabled: boolean;
-  resource_id: string;
-  resource_name: string | null;
-  resource_desc: string | null;
-  ref_template_id: string;
-  records: InstanceServiceResourceRecord[];
-}
+/** @deprecated 使用 InstanceServiceResource */
+export type InstanceServiceResourceRecord = InstanceServiceResource;
 
 /** 实例服务资源（instance_service_resource，admin）。 */
 export const InstanceServiceResourceApi = {
@@ -664,7 +641,7 @@ export const InstanceServiceResourceApi = {
       expires_at?: string | null;
     },
   ) =>
-    http<{ items: InstanceServiceResourceRecord[] }>(
+    http<{ items: InstanceServiceResource[] }>(
       `/v1/instances/${encodeURIComponent(jid)}/service-resources`,
       { method: 'POST', body },
     ),
@@ -680,7 +657,7 @@ export const InstanceServiceResourceApi = {
       expires_at?: string | null;
     },
   ) =>
-    http<{ items: InstanceServiceResourceRecord[] }>(
+    http<{ items: InstanceServiceResource[] }>(
       `/v1/instances/${encodeURIComponent(jid)}/service-resources/${encodeURIComponent(resourceId)}`,
       { method: 'PATCH', body },
     ),
@@ -804,14 +781,20 @@ export interface UserGateway {
   gateway_endpoint: string | null;
 }
 
-// 当前登录用户视角：身份来自 JWT，Manager 只返回该用户获授权的组网与 Agent。
+/** 用户控制台：可访问的 Agent 上下文（bot_id + group_id + user_id）。 */
+export interface UserAgentContext {
+  bot_id: string;
+  group_id: string;
+  user_id: string;
+  jiuwenclaw_id: string;
+  agent_name: string;
+  group_name: string;
+}
+
+// 当前登录用户视角：身份来自 JWT；组合由 instance_grant + instance_agent_resource 算出。
 export const UserConsoleApi = {
   orgs: () => idpHttp<{ orgs: Org[] }>('/v1/auth/me/orgs'),
-  gateways: () => http<{ gateways: UserGateway[] }>('/v1/user-console/gateways'),
-  agents: (groupId: string, jiuwenclawId: string) =>
-    http<{ agents: AgentTemplate[] }>('/v1/user-console/agents', {
-      query: { group_id: groupId, jiuwenclaw_id: jiuwenclawId },
-    }),
+  agentContexts: () => http<{ contexts: UserAgentContext[] }>('/v1/user-console/agent-contexts'),
 };
 
 // ---------- Instances ----------

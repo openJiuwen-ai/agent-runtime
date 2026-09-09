@@ -128,7 +128,7 @@ async def test_embedded_user_web_manager_api_uses_explicit_namespace(
         captured["authorization"] = request.headers.get("authorization")
         return httpx.Response(
             200,
-            json={"code": 200, "data": {"gateways": []}},
+            json={"code": 200, "data": {"contexts": []}},
         )
 
     def client_factory(*_args, **_kwargs) -> httpx.AsyncClient:
@@ -139,14 +139,14 @@ async def test_embedded_user_web_manager_api_uses_explicit_namespace(
         transport=httpx.ASGITransport(app=app), base_url="http://manager-web"
     ) as client:
         response = await client.get(
-            "/manager-api/v1/user-console/gateways",
+            "/manager-api/v1/user-console/agent-contexts",
             headers={"authorization": "Bearer user-token"},
         )
 
     assert response.status_code == 200
-    assert response.json()["data"]["gateways"] == []
+    assert response.json()["data"]["contexts"] == []
     assert captured == {
-        "url": "http://manager-api:8765/api/v1/user-console/gateways",
+        "url": "http://manager-api:8765/api/v1/user-console/agent-contexts",
         "authorization": "Bearer user-token",
     }
 
