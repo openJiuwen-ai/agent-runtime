@@ -5,7 +5,7 @@ from datetime import datetime
 import logging
 from typing import Optional, Any
 import json
-from sqlalchemy import Column, Integer, String, DateTime, JSON, Boolean, Float, Text, text, inspect, Index
+from sqlalchemy import Column, Integer, String, DateTime, JSON, Boolean, Float, Double, Text, text, inspect, Index
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
@@ -115,6 +115,8 @@ class SQLAlchemyHandler(DBHandler):
 
                 return LONGTEXT if key == "longtext" else MEDIUMTEXT
             return Text
+        # double 用通用 Double 类型（mysql → DOUBLE，pg → DOUBLE PRECISION）：
+        # 裸 Float 在 mysql 方言编译为 FLOAT（32 位），时间戳存储会精度失真。
         type_map = {
             "integer": Integer,
             "int": Integer,
@@ -126,7 +128,7 @@ class SQLAlchemyHandler(DBHandler):
             "boolean": Boolean,
             "bool": Boolean,
             "float": Float,
-            "double": Float,
+            "double": Double,
             "decimal": Float,
             "number": Float,
             "real": Float,
@@ -167,7 +169,10 @@ class SQLAlchemyHandler(DBHandler):
             return "JSON"
         if data_type in {"boolean", "bool"}:
             return "BOOLEAN"
-        if data_type in {"float", "double", "decimal", "number", "real"}:
+        if data_type == "double":
+            # MySQL 将 DOUBLE PRECISION 视为 DOUBLE 的同义词，PG/SQLite 原生支持
+            return "DOUBLE PRECISION"
+        if data_type in {"float", "decimal", "number", "real"}:
             return "FLOAT"
         return "VARCHAR"
 
