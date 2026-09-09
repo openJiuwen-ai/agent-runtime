@@ -2,10 +2,12 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAsync } from '../../hooks/useAsync';
 import { useFormDirty } from '../../hooks/useFormDirty';
+import { useClusterGuideStatus } from '../../hooks/useGuideStatus';
 import { useRouter } from '../../router';
 import { InstanceApi, ApiError } from '../../services/api';
 import { Modal, ModalCancelButton } from '../../components/Modal';
 import { JsonField, tryParseJson, useInvalidJsonChecker } from '../../components/JsonField';
+import { WarnBadge, type WarnBadgeLink } from '../../components/WarnBadge';
 import { safeStringify } from '../../utils/format';
 import { toast } from '../../stores/uiStore';
 import { InstanceConfigPanel } from './instanceConfigPanel/InstanceConfigPanel';
@@ -35,6 +37,8 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
   const { t } = useTranslation();
   const { navigate } = useRouter();
   const instance = useAsync(() => InstanceApi.get(instanceId), [instanceId]);
+  const { hasAccessUser, hasAccessOrg, hasAgentResource, hasPoolResource } =
+    useClusterGuideStatus(instanceId);
 
   const [editOpen, setEditOpen] = useState(false);
   const [editText, setEditText] = useState('');
@@ -59,6 +63,30 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
   const inClusterConfig =
     tab === 'clusterConfig' ||
     clusterConfigSubTabs.some((it) => it.key === tab);
+
+  /** 引导状态：准入（用户/组织均未配置）、Agent 与 Agent实例池（任一未配置），提示项可点击跳转并自动打开添加弹框 */
+  const accessWarnLinks =
+    hasAccessUser === false && hasAccessOrg === false
+      ? [
+          { label: t('guide.missingAccessUsers'), to: `/instances/${instanceId}/access`, openTarget: 'accessUsers' as const },
+          { label: t('guide.missingAccessOrgs'), to: `/instances/${instanceId}/access`, openTarget: 'accessOrgs' as const },
+        ]
+      : undefined;
+  const clusterConfigWarnLinks: WarnBadgeLink[] = [];
+  if (hasAgentResource === false) {
+    clusterConfigWarnLinks.push({
+      label: t('guide.missingAgentResource'),
+      to: `/instances/${instanceId}/agent-resources`,
+      openTarget: 'agentResourceAdd',
+    });
+  }
+  if (hasPoolResource === false) {
+    clusterConfigWarnLinks.push({
+      label: t('guide.missingPoolResource'),
+      to: `/instances/${instanceId}/service-resources`,
+      openTarget: 'serviceResourceAdd',
+    });
+  }
 
   const handleOpenEdit = () => {
     const next = safeStringify(instance.data?.data ?? {}, 2);
@@ -111,23 +139,34 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
           </div>
 
           <div className="tabs-bar max-w-full shrink-0 self-center overflow-x-auto lg:justify-self-center">
-            {mainTabs.map((it) => (
-              <button
-                key={it.key}
-                onClick={() => navigate(it.href)}
-                className={`tab ${
-                  it.key === 'clusterConfig'
-                    ? inClusterConfig
-                      ? 'active'
-                      : ''
-                    : tab === it.key
-                      ? 'active'
-                      : ''
-                }`}
-              >
-                {it.label}
-              </button>
-            ))}
+            {mainTabs.map((it) => {
+              const warnLinks =
+                it.key === 'access'
+                  ? accessWarnLinks
+                  : it.key === 'clusterConfig'
+                    ? clusterConfigWarnLinks
+                    : undefined;
+              return (
+                <button
+                  key={it.key}
+                  onClick={() => navigate(it.href)}
+                  className={`tab ${
+                    it.key === 'clusterConfig'
+                      ? inClusterConfig
+                        ? 'active'
+                        : ''
+                      : tab === it.key
+                        ? 'active'
+                        : ''
+                  }`}
+                >
+                  {it.label}
+                  {warnLinks && warnLinks.length > 0 && (
+                    <WarnBadge className="ml-1.5" links={warnLinks} />
+                  )}
+                </button>
+              );
+            })}
           </div>
 
           <div aria-hidden="true" className="hidden min-w-0 lg:block" />
@@ -135,15 +174,26 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
 
         {inClusterConfig && (
           <div className="tabs-bar max-w-full shrink-0 overflow-x-auto">
-            {clusterConfigSubTabs.map((it) => (
-              <button
-                key={it.key}
-                onClick={() => navigate(it.href)}
-                className={`tab ${tab === it.key ? 'active' : ''}`}
-              >
-                {it.label}
-              </button>
-            ))}
+            {clusterConfigSubTabs.map((it) => {
+              const warnLinks: WarnBadgeLink[] | undefined =
+                it.key === 'agentResources' && hasAgentResource === false
+                  ? [{ label: t('guide.missingAgentResource'), to: `/instances/${instanceId}/agent-resources`, openTarget: 'agentResourceAdd' as const }]
+                  : it.key === 'serviceResources' && hasPoolResource === false
+                    ? [{ label: t('guide.missingPoolResource'), to: `/instances/${instanceId}/service-resources`, openTarget: 'serviceResourceAdd' as const }]
+                    : undefined;
+              return (
+                <button
+                  key={it.key}
+                  onClick={() => navigate(it.href)}
+                  className={`tab ${tab === it.key ? 'active' : ''}`}
+                >
+                  {it.label}
+                  {warnLinks && warnLinks.length > 0 && (
+                    <WarnBadge className="ml-1.5" links={warnLinks} />
+                  )}
+                </button>
+              );
+            })}
           </div>
         )}
 

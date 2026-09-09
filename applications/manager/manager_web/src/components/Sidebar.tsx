@@ -2,7 +2,9 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useRouter } from '../router';
 import { useAsync } from '../hooks/useAsync';
+import { useDefinitionPresence } from '../hooks/useGuideStatus';
 import { InstanceApi } from '../services/api';
+import { WarnBadge, type WarnBadgeLink } from './WarnBadge';
 
 type NavItem = {
   key: string;
@@ -25,6 +27,7 @@ export function Sidebar() {
   const { path, navigate } = useRouter();
 
   const { data: instancesPage } = useAsync(() => InstanceApi.list({ page: 1, page_size: 50 }), []);
+  const { agentDefined, poolDefined } = useDefinitionPresence();
 
   const agentTemplateChildPaths = [
     '/model-templates',
@@ -192,7 +195,7 @@ export function Sidebar() {
     },
   ];
 
-  const renderItem = (item: NavItem, nested = false) => {
+  const renderItem = (item: NavItem, nested = false, warnLinks?: WarnBadgeLink[]) => {
     const active = isItemActive(item, path);
     return (
       <button
@@ -207,6 +210,9 @@ export function Sidebar() {
       >
         {item.icon}
         {item.label}
+        {warnLinks && warnLinks.length > 0 && (
+          <WarnBadge className="ml-auto" links={warnLinks} />
+        )}
       </button>
     );
   };
@@ -247,8 +253,22 @@ export function Sidebar() {
             </div>
           )}
         </div>
-        {renderItem(agentManagementItem)}
-        {configTopItems.map((item) => renderItem(item))}
+        {renderItem(
+          agentManagementItem,
+          false,
+          agentDefined === false
+            ? [{ label: t('guide.missingAgentDefinition'), to: '/agent-templates', openTarget: 'agentTemplateNew' }]
+            : undefined,
+        )}
+        {configTopItems.map((item) =>
+          renderItem(
+            item,
+            false,
+            poolDefined === false
+              ? [{ label: t('guide.missingPoolDefinition'), to: '/service-config-templates/new' }]
+              : undefined,
+          ),
+        )}
       </div>
 
       <div className="nav-group-title nav-group-title--with-top-gap">{t('nav.iam')}</div>
