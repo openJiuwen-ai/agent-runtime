@@ -69,6 +69,15 @@
     "orgs": "组织",
     "bots": "Agent模板"
   },
+  "guide": {
+    "missingAgentDefinition": "未配置 Agent定义",
+    "missingPoolDefinition": "未配置 Agent实例池定义",
+    "missingAccessUsers": "未配置准入用户",
+    "missingAccessOrgs": "未配置准入组织",
+    "missingAgentResource": "未配置 Agent",
+    "missingPoolResource": "未配置 Agent实例池",
+    "missingAgentAndPoolResource": "未配置 Agent、Agent实例池"
+  },
   "safetyGuardrails": {
     "title": "安全护栏",
     "subtitle": "配置 Agent 安全护栏策略",

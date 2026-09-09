@@ -12,6 +12,7 @@ import {
   InstanceAgentResource,
 } from '../../../services/api';
 import { toast } from '../../../stores/uiStore';
+import { bumpGuideRevision } from '../../../stores/guideStore';
 import {
   matchExprToEditorString,
   parseMatchExpr,
@@ -26,6 +27,7 @@ import { Switch } from '../../../components/Switch';
 import { LimitedTextInput } from '../../../components/LimitedTextInput';
 import { ListSearchInput } from '../../../components/ListSearchInput';
 import { useListSearch } from '../../../hooks/useListSearch';
+import { useGuideAutoOpen } from '../../../hooks/useGuideAutoOpen';
 import { TableColumnFilter } from '../../../components/TableColumnFilter';
 import {
   TableColumnSort,
@@ -129,6 +131,9 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
 
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [showAdd, setShowAdd] = useState(false);
+
+  /** 引导跳转：其他页面点「未配置 Agent」跳过来时自动打开添加Agent弹框 */
+  useGuideAutoOpen('agentResourceAdd', () => setShowAdd(true));
   const [delTarget, setDelTarget] = useState<InstanceAgentResource | null>(null);
   const [confirmBatchDelete, setConfirmBatchDelete] = useState(false);
   const [addAgentId, setAddAgentId] = useState('');
@@ -232,6 +237,7 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
       toast('success', t('success.saved'));
       setChecked(new Set());
       reload();
+      bumpGuideRevision();
     } catch (e) {
       toast('danger', e instanceof ApiError ? e.detail : String(e));
     }
@@ -491,6 +497,7 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
                     setAddAgentId('');
                     setAddResourceName('');
                     setAddResourceDesc('');
+                    bumpGuideRevision();
                     setAddMatchExpr('');
                     setAddExpiresAt('');
                     reload();
@@ -665,6 +672,7 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
             await InstanceAgentResourceApi.remove(instanceId, delTarget.resource_id);
             toast('success', t('success.saved'));
             void reload();
+            bumpGuideRevision();
           } catch (e) {
             toast('danger', e instanceof ApiError ? e.detail : String(e));
           } finally {

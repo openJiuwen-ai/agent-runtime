@@ -15,6 +15,7 @@ import {
 } from '../../components/TableColumnSort';
 import { ListSearchInput } from '../../components/ListSearchInput';
 import { toast } from '../../stores/uiStore';
+import { bumpGuideRevision } from '../../stores/guideStore';
 import { formatTime, truncate } from '../../utils/format';
 import { useRouter } from '../../router';
 import {
@@ -123,6 +124,7 @@ export function ServiceConfigTemplatesPage() {
               : t('serviceConfigTemplate.importOk'),
           );
           void reload();
+          bumpGuideRevision();
         } catch (err) {
           toast(
             'danger',
@@ -356,6 +358,7 @@ export function ServiceConfigTemplatesPage() {
             await ServiceConfigTemplateApi.remove(delTarget.template_id);
             toast('success', t('success.deleted'));
             void reload();
+            bumpGuideRevision();
           } catch (e) {
             toast('danger', t('errors.deleteFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
           }

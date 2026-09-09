@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { InstanceUsersTab } from './InstanceUsersTab';
 import { InstanceOrgsTab } from './InstanceOrgsTab';
+import { useGuideStore } from '../../../stores/guideStore';
 
 type AccessTabKey = 'users' | 'orgs';
 
@@ -12,7 +13,13 @@ interface Props {
 /** 实例准入：谁能进入本实例（instance_grant）。 */
 export function InstanceAccessPanel({ instanceId }: Props) {
   const { t } = useTranslation();
-  const [tab, setTab] = useState<AccessTabKey>('users');
+  /** 引导跳转「未配置准入组织」时直接落在组织页签 */
+  const openTarget = useGuideStore((s) => s.openTarget);
+  const [tab, setTab] = useState<AccessTabKey>(openTarget === 'accessOrgs' ? 'orgs' : 'users');
+
+  useEffect(() => {
+    if (openTarget === 'accessOrgs') setTab('orgs');
+  }, [openTarget]);
 
   const tabs: { key: AccessTabKey; label: string }[] = [
     { key: 'users', label: t('instanceDetail.accessPanel.tabs.users') },

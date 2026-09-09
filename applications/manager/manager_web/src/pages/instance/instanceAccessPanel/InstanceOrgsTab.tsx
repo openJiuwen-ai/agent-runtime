@@ -12,11 +12,13 @@ import {
 } from '../../../services/api';
 import { AddToInstanceModal } from './instanceBinding';
 import { toast } from '../../../stores/uiStore';
+import { bumpGuideRevision } from '../../../stores/guideStore';
 import { Empty } from '../../../components/Empty';
 import { Pagination } from '../../../components/Pagination';
 import { ConfirmDialog } from '../../../components/ConfirmDialog';
 import { ListSearchInput } from '../../../components/ListSearchInput';
 import { useListSearch } from '../../../hooks/useListSearch';
+import { useGuideAutoOpen } from '../../../hooks/useGuideAutoOpen';
 import { TableColumnFilter } from '../../../components/TableColumnFilter';
 import {
   TableColumnSort,
@@ -110,6 +112,9 @@ export function InstanceOrgsTab({ instanceId }: Props) {
   const [pageSize, setPageSize] = useState(20);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [showAdd, setShowAdd] = useState(false);
+
+  /** 引导跳转：其他页面点「未配置准入组织」跳过来时自动打开添加准入组织弹框 */
+  useGuideAutoOpen('accessOrgs', () => setShowAdd(true));
   const [pendingDelete, setPendingDelete] = useState<string[] | null>(null);
   const [enabledFilter, setEnabledFilter] = useState('');
   const [loginPolicyFilter, setLoginPolicyFilter] = useState('');
@@ -215,6 +220,7 @@ export function InstanceOrgsTab({ instanceId }: Props) {
       toast('success', t('success.saved'));
       setChecked(new Set());
       reloadBinding();
+      bumpGuideRevision();
     } catch (e) {
       toast('danger', e instanceof ApiError ? e.detail : String(e));
     }
@@ -424,6 +430,7 @@ export function InstanceOrgsTab({ instanceId }: Props) {
             toast('success', t('success.saved'));
             reloadBinding();
             reloadOrgs();
+            bumpGuideRevision();
           }}
           onClose={() => setShowAdd(false)}
         />

@@ -6,6 +6,7 @@ import { LimitedTextInput } from '../../components/LimitedTextInput';
 import { useFormDirty } from '../../hooks/useFormDirty';
 import { AgentTemplate, AgentTemplateApi, ApiError } from '../../services/api';
 import { toast } from '../../stores/uiStore';
+import { bumpGuideRevision } from '../../stores/guideStore';
 import { fromCommaList, toCommaList } from '../../utils/format';
 import {
   findSingleValueTemplateRefViolation,
@@ -76,6 +77,13 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
       toast('warn', t('agentTemplate.fieldRequired', { field: t('agentTemplate.templateName') }));
       return;
     }
+    const defaultModelRefs = form.template_ref.default_model;
+    if (!defaultModelRefs?.length || defaultModelRefs.every((ref) => !ref.trim())) {
+      toast('warn', t('agentTemplate.fieldRequired', {
+        field: t('policies.templateRef.slots.default_model', { defaultValue: 'default_model' }),
+      }));
+      return;
+    }
     const singleValueViolation = findSingleValueTemplateRefViolation(form.template_ref);
     if (singleValueViolation) {
       toast('warn', t('policies.templateRef.singleValueOnly', {
@@ -101,6 +109,7 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
         await AgentTemplateApi.create(body);
       }
       toast('success', t('success.saved'));
+      bumpGuideRevision();
       onSaved();
     } catch (e) {
       toast('danger', t('errors.saveFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
@@ -156,6 +165,7 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
             key={template?.template_id ?? 'new'}
             label={t('agentTemplate.templateRef')}
             hint={t('agentTemplate.templateRefHint')}
+            required
             value={form.template_ref}
             onChange={(v) => update('template_ref', v)}
           />

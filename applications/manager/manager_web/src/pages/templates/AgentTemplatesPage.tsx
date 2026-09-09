@@ -13,8 +13,10 @@ import {
 import { ListSearchInput } from '../../components/ListSearchInput';
 import { useAsync } from '../../hooks/useAsync';
 import { useListSearch } from '../../hooks/useListSearch';
+import { useGuideAutoOpen } from '../../hooks/useGuideAutoOpen';
 import { AgentTemplate, AgentTemplateApi, ApiError } from '../../services/api';
 import { toast } from '../../stores/uiStore';
+import { bumpGuideRevision } from '../../stores/guideStore';
 import { formatTime, truncate } from '../../utils/format';
 import { AgentTemplateModal } from './AgentTemplateModal';
 
@@ -28,6 +30,13 @@ export function AgentTemplatesPage() {
   const [enabledFilter, setEnabledFilter] = useState<string>('');
   const [sortBy, setSortBy] = useState<AgentTemplateSortField | ''>('');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [modalOpen, setModalOpen] = useState(false);
+
+  /** 引导跳转：其他页面点「未配置 Agent定义」跳过来时自动打开新建弹框 */
+  useGuideAutoOpen('agentTemplateNew', () => {
+    setEditing(null);
+    setModalOpen(true);
+  });
 
   const sortOptions = useMemo(
     () => [
@@ -67,7 +76,6 @@ export function AgentTemplatesPage() {
   );
 
   const [items, setItems] = useState<AgentTemplate[]>([]);
-  const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<AgentTemplate | null>(null);
   const [delTarget, setDelTarget] = useState<AgentTemplate | null>(null);
   const [togglingId, setTogglingId] = useState<string | null>(null);
@@ -288,6 +296,7 @@ export function AgentTemplatesPage() {
             await AgentTemplateApi.remove(delTarget.template_id);
             toast('success', t('success.deleted'));
             void reload();
+            bumpGuideRevision();
           } catch (e) {
             toast('danger', t('errors.deleteFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
           }

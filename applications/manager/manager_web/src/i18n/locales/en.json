@@ -69,6 +69,15 @@
     "orgs": "Orgs",
     "bots": "Agent Templates"
   },
+  "guide": {
+    "missingAgentDefinition": "Agent definitions not configured",
+    "missingPoolDefinition": "Agent instance pool definitions not configured",
+    "missingAccessUsers": "No admitted users configured",
+    "missingAccessOrgs": "No admitted organizations configured",
+    "missingAgentResource": "Agent not configured",
+    "missingPoolResource": "Agent instance pool not configured",
+    "missingAgentAndPoolResource": "Agent and Agent instance pool not configured"
+  },
   "safetyGuardrails": {
     "title": "Safety Guardrails",
     "subtitle": "Configure Agent safety guardrail policies",
