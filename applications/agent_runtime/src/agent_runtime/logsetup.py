@@ -10,7 +10,8 @@
    handler 级别（只放宽不收紧）、httpx 探测降噪、请求上下文注入。
 
 2. 请求关联：contextvars + root 级 Filter/Formatter。请求处理期间的日志行
-   尾部追加 ``| request_id=… session_id=… endpoint=… instance=…``；后台任务
+   尾部追加 ``| request_id=… session_id=… user_id=… endpoint=… instance=…``
+   （user_id 缺省时该字段不出现）；后台任务
    （无请求上下文）日志行保持与原先逐字节一致。不改框架 logging.yaml 格式串，
    只在各 root handler 外包一层 Formatter。
 
