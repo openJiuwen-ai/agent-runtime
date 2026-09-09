@@ -1,9 +1,13 @@
-import { useState } from 'react';
 import { A2AAccessPoliciesPage } from './A2AAccessPoliciesPage';
 import { A2AOutboundTemplatesPage } from './A2AOutboundTemplatesPage';
+import { useRouter } from '../../router';
 
+/** A2A 管理页：agents / policies 两个页签；页签状态同步到 ?tab= 以支持外链直达。 */
 export function A2AManagementPage() {
-  const [tab, setTab] = useState<'agents' | 'policies'>('agents');
+  const { params, navigate } = useRouter();
+  const tab = params.get('tab') === 'policies' ? 'policies' : 'agents';
+  const setTab = (next: 'agents' | 'policies') => navigate(`/a2a-management${next === 'policies' ? '?tab=policies' : ''}`);
+
   const header = (
     <div className="min-w-[12rem] max-w-[32rem] shrink-0">
       <div className="page-title truncate" title="A2A 管理">A2A 管理</div>

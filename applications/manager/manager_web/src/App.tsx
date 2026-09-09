@@ -110,13 +110,26 @@ function RouteView() {
   if (instanceAccess) {
     return <InstanceDetailPage instanceId={instanceAccess.id} tab="access" />;
   }
-  const instanceResources = matchRoute('/instances/:id/resources', path);
-  if (instanceResources) {
-    return <InstanceDetailPage instanceId={instanceResources.id} tab="resources" />;
+  const instanceClusterConfig = matchRoute('/instances/:id/cluster-config', path);
+  if (instanceClusterConfig) {
+    return <InstanceDetailPage instanceId={instanceClusterConfig.id} tab="agentResources" />;
   }
-  const instanceConfig = matchRoute('/instances/:id/config', path);
-  if (instanceConfig) {
-    return <InstanceDetailPage instanceId={instanceConfig.id} tab="config" />;
+  const instanceAgentResources = matchRoute('/instances/:id/agent-resources', path);
+  if (instanceAgentResources) {
+    return <InstanceDetailPage instanceId={instanceAgentResources.id} tab="agentResources" />;
+  }
+  const instanceServiceResources = matchRoute('/instances/:id/service-resources', path);
+  if (instanceServiceResources) {
+    return <InstanceDetailPage instanceId={instanceServiceResources.id} tab="serviceResources" />;
+  }
+  // 旧「实例资源/全局配置」页签 URL（已并入「集群配置」页签组，分别落子页签）
+  const legacyResources = matchRoute('/instances/:id/resources', path);
+  if (legacyResources) {
+    return <InstanceDetailPage instanceId={legacyResources.id} tab="agentResources" />;
+  }
+  const legacyConfig = matchRoute('/instances/:id/config', path);
+  if (legacyConfig) {
+    return <InstanceDetailPage instanceId={legacyConfig.id} tab="config" />;
   }
   const instanceStatus = matchRoute('/instances/:id/status', path);
   if (instanceStatus) {
@@ -147,13 +160,13 @@ function Shell() {
     <div className="shell">
       <header className="topbar">
         <div className="brand">
-          <img src="/logo.png" alt={getProductName()} className="brand-logo-img" />
+          <img src="/logo.svg" alt={getProductName()} className="brand-logo-img" />
           <div className="brand-text">
             <span className="brand-title">
               {t('brand.title')}
               <span className="brand-version">v0.1.0</span>
             </span>
-            <span className="brand-sub">{t('brand.sub')}</span>
+            <span className="brand-sub">Manager</span>
           </div>
         </div>
         <div className="flex items-center gap-3">

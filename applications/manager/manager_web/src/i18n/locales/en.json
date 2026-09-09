@@ -48,22 +48,22 @@
   },
   "brand": {
     "title": "{{productName}}",
-    "sub": "Claw Manager"
+    "sub": "Manager"
   },
   "nav": {
     "platform": "Console",
     "overview": "Overview",
-    "instances": "Instance Management",
-    "config": "Template Management",
-    "agentConfigTemplates": "Agent Config Templates",
+    "instances": "Cluster Management",
+    "config": "Workspace",
+    "agentConfigTemplates": "Resource Management",
     "modelTemplates": "Models",
-    "embeddingTemplates": "Embedding Templates",
+    "embeddingTemplates": "Embedding Models",
     "skillWhitelistTemplates": "Preset Skills",
     "safetyGuardrails": "Safety Guardrails",
     "a2aManagement": "A2A Management",
     "extensionTemplates": "Extension Config",
-    "agentManagement": "Agent Templates",
-    "serviceConfigTemplates": "Service Resource Templates",
+    "agentManagement": "Agent Definitions",
+    "serviceConfigTemplates": "Agent Instance Pool Definitions",
     "iam": "Identity Center",
     "users": "Users",
     "orgs": "Orgs",
@@ -72,9 +72,9 @@
   "safetyGuardrails": {
     "title": "Safety Guardrails",
     "subtitle": "Configure Agent safety guardrail policies",
-    "empty": "No safety guardrail templates yet",
-    "new": "New Safety Guardrail Template",
-    "edit": "Edit Safety Guardrail Template",
+    "empty": "No safety guardrails yet",
+    "new": "New Safety Guardrail",
+    "edit": "Edit Safety Guardrail",
     "searchPlaceholder": "Search template ID, name, or description",
     "templateName": "Template Name",
     "templateDescription": "Description",
@@ -101,12 +101,12 @@
     "registeredOnWs": "Instances on WS",
     "wsListening": "Listening at",
     "wsPid": "Manager PID",
-    "noInstances": "No instance yet. Create one in Instance Management."
+    "noInstances": "No cluster yet. Create one in Cluster Management."
   },
   "topology": {
-    "title": "Instance Management",
-    "subtitle": "Manage {{productName}} instances",
-    "createInstance": "Create Instance",
+    "title": "Cluster Management",
+    "subtitle": "Manage {{productName}} clusters",
+    "createInstance": "Create Cluster",
     "instanceStatus": "Status",
     "gatewayStatus": "Gateway Status",
     "runtimeStatus": "Runtime Status",
@@ -118,6 +118,10 @@
     "agentServer": "AgentServer",
     "otherService": "Other",
     "viewDetail": "Detail",
+    "cardAccess": "Access",
+    "cardConfig": "Config",
+    "cardStatus": "Status",
+    "cardClickHint": "Click to open cluster details",
     "noServices": "No Gateway / AgentServer yet (awaiting health probe)",
     "lastAlive": "Last alive",
     "gatewayLastAlive": "Gateway last probe",
@@ -125,18 +129,18 @@
     "lastUpdated": "Last updated",
     "endpoint": "Endpoint",
     "version": "Version",
-    "deleteConfirm": "Delete this instance?",
+    "deleteConfirm": "Delete this cluster?",
     "filterStatus": "Filter by status",
-    "instanceName": "Instance Name",
+    "instanceName": "Cluster Name",
     "modifiedAt": "Modified At",
     "viewBrief": "Card view",
     "viewList": "List view",
-    "searchPlaceholder": "Search instance name, ID, or status",
+    "searchPlaceholder": "Search cluster name, ID, or status",
     "probeFailed": "Health probe failed: {{detail}}"
   },
   "instanceForm": {
-    "name": "Instance Name",
-    "description": "Instance Description",
+    "name": "Cluster Name",
+    "description": "Cluster Description",
     "namespace": "Namespace",
     "gatewayConfigHost": "Gateway Config Host",
     "runtimeConfigHost": "Runtime Config Host",
@@ -147,39 +151,40 @@
     "unsafeText": "{{field}} contains unsafe content"
   },
   "instanceDetail": {
-    "title": "Instance Detail",
+    "title": "Cluster Detail",
     "services": "Managed Services",
     "connectivity": "Connectivity",
     "meta": "Status & Meta",
     "extraData": "Extra Data (instance_info.data)",
     "editData": "Edit extra data",
     "tabs": {
-      "access": "Instance Access",
-      "config": "Global Config",
+      "access": "Cluster Access",
+      "clusterConfig": "Cluster Config",
+      "config": "Basic Config",
       "status": "Status Monitor",
       "tokenQuota": "Token Quota",
       "cost": "Cost Analytics",
       "audit": "Business Audit",
-      "resources": "Instance Resources"
+      "resources": "Cluster Resources"
     },
     "placeholder": {
       "empty": "Coming soon"
     },
     "access": {
-      "title": "Instance Access",
-      "subtitle": "Configure who can enter this instance"
+      "title": "Cluster Access",
+      "subtitle": "Configure who can enter this cluster"
     },
     "tokenQuota": {
       "title": "Token Quota",
-      "subtitle": "View and manage instance token quotas"
+      "subtitle": "View and manage cluster token quotas"
     },
     "cost": {
       "title": "Cost Analytics",
-      "subtitle": "View instance cost and usage statistics"
+      "subtitle": "View cluster cost and usage statistics"
     },
     "audit": {
       "title": "Business Audit",
-      "subtitle": "View instance business audit logs"
+      "subtitle": "View cluster business audit logs"
     },
     "accessPanel": {
       "tabs": {
@@ -187,10 +192,10 @@
         "orgs": "Organizations"
       },
       "instance": {
-        "users": "Authorized Users",
-        "usersHint": "Only authorized users can log in to the instance",
-        "orgs": "Authorized Organizations",
-        "orgsHint": "Only members of authorized organizations can log in to the instance",
+        "users": "Admitted Users",
+        "usersHint": "Only authorized users can log in to the cluster",
+        "orgs": "Admitted Organizations",
+        "orgsHint": "Only members of authorized organizations can log in to the cluster",
         "addUsers": "Add Users",
         "addOrgs": "Add Organizations",
         "noUsers": "No authorized users",
@@ -207,33 +212,34 @@
         "expiresAt": "Expires At",
         "neverExpires": "Never expires",
         "expiresHint": "Leave empty for no expiration",
-        "confirmRemoveUsers": "Remove {{n}} selected user(s) from this instance?",
-        "confirmRemoveOrgs": "Remove {{n}} selected organization(s) from this instance?"
+        "confirmRemoveUsers": "Remove {{n}} selected user(s) from this cluster?",
+        "confirmRemoveOrgs": "Remove {{n}} selected organization(s) from this cluster?"
       }
     },
     "resourcePanel": {
       "tabs": {
-        "agent": "Agent Resources",
-        "serviceResource": "Service Resources"
+        "agent": "Agent",
+        "serviceResource": "Agent Instance Pool"
       },
       "agent": {
-        "title": "Agent Resources",
-        "subtitle": "Configure Agent resources on this instance and set the authorization scope",
-        "agentLabel": "Agent Template",
+        "title": "Agent",
+        "subtitle": "Configure Agent grants on this cluster and set the authorization scope",
+        "agentLabel": "Agent Definition",
         "agentInstance": "Agent Instance",
-        "agentTemplate": "Agent Template",
+        "agentTemplate": "Agent Definition",
         "scopeLabel": "Authorization Scope",
         "scopeAll": "Available to all",
         "grantedBy": "Granted By",
         "expiresAt": "Expires At",
         "neverExpires": "Never expires",
         "searchPlaceholder": "Search resource ID/name/description, template ID/name, granted by",
-        "add": "Add Agent Template",
+        "add": "Add Agent",
         "editGrant": "Edit grant · {{name}}",
-        "grantHint": "Empty match_expr allows any provisioned user on this instance.",
+        "grantHint": "Empty match_expr allows any provisioned user on this cluster.",
         "expiresHint": "Leave empty for no expiration",
-        "empty": "No Agent templates on this instance",
-        "confirmRemove": "Remove {{n}} selected Agent template(s) from this instance?",
+        "empty": "No Agent definitions on this cluster",
+        "gotoAgentTemplateLink": "Go to the Agent Definitions page to add configuration",
+        "confirmRemove": "Remove {{n}} selected Agent definition(s) from this cluster?",
         "resourceId": "Resource ID",
         "resourceName": "Resource Name",
         "resourceNamePlaceholder": "Enter resource name",
@@ -241,9 +247,9 @@
         "resourceDescPlaceholder": "Enter resource description (optional)"
       },
       "serviceResource": {
-        "title": "Service Resources",
-        "subtitle": "Configure service resources on this instance and set the authorization scope",
-        "template": "Service Resource Template",
+        "title": "Agent Instance Pool",
+        "subtitle": "Assign agent instance pools on this cluster and set the authorization scope",
+        "template": "Agent Instance Pool Definition",
         "scopeLabel": "Authorization Scope",
         "scopeAll": "Available to all",
         "priority": "Priority",
@@ -252,10 +258,11 @@
         "neverExpires": "Never expires",
         "expiresHint": "Leave empty for no expiration",
         "searchPlaceholder": "Search resource ID/name/description, template ID/name, granted by, priority",
-        "add": "Add Service Resource",
+        "add": "Add Agent Instance Pool",
         "editGrant": "Edit grant · {{name}}",
-        "empty": "No service resources on this instance",
-        "confirmRemove": "Remove {{n}} selected service resource(s) from this instance?",
+        "empty": "No agent instance pools assigned to this cluster",
+        "gotoPoolTemplateLink": "Go to the Agent Instance Pool Definitions page to add configuration",
+        "confirmRemove": "Remove {{n}} selected agent instance pool(s) from this cluster?",
         "resourceId": "Resource ID",
         "resourceName": "Resource Name",
         "resourceDesc": "Resource Description"
@@ -358,10 +365,10 @@
     }
   },
   "modelTemplate": {
-    "title": "Model Templates",
+    "title": "Models",
     "subtitle": "Maintain large language model templates",
-    "new": "New Template",
-    "edit": "Edit Template",
+    "new": "New Model",
+    "edit": "Edit Model",
     "templateName": "Template Name",
     "templateDescription": "Template Description",
     "modelType": "Model Type",
@@ -389,10 +396,10 @@
     "deleteConfirm": "Delete this model template? It may be referenced by instance resources."
   },
   "embeddingTemplate": {
-    "title": "Embedding Templates",
+    "title": "Embedding Models",
     "subtitle": "Maintain embedding model templates",
-    "new": "New Embedding Template",
-    "edit": "Edit Embedding Template",
+    "new": "New Embedding Model",
+    "edit": "Edit Embedding Model",
     "templateName": "Template Name",
     "templateDescription": "Template Description",
     "embedTags": "Embedding Tags",
@@ -412,10 +419,10 @@
     "deleteConfirm": "Delete this embedding template? It may be referenced by instance resources."
   },
   "extensionTemplate": {
-    "title": "Extension Templates",
+    "title": "Extension Config",
     "subtitle": "Maintain extension config templates callable on Agent, with support for custom hook functions",
-    "new": "New Template",
-    "edit": "Edit Template",
+    "new": "New Extension Config",
+    "edit": "Edit Extension Config",
     "templateName": "Template Name",
     "templateDescription": "Template Description",
     "component": "Target Component",
@@ -441,10 +448,10 @@
     "deleteConfirm": "Delete this extension template?"
   },
   "skillWhitelistTemplate": {
-    "title": "Preset Skill Templates",
+    "title": "Preset Skills",
     "subtitle": "Maintain preset Skill templates (SPI Provider or controlled URL)",
-    "new": "New Preset Skill Template",
-    "edit": "Edit Preset Skill Template",
+    "new": "New Preset Skill",
+    "edit": "Edit Preset Skill",
     "templateName": "Template Name",
     "templateDescription": "Template Description",
     "skillId": "Skill ID",
@@ -476,17 +483,16 @@
     "deleteConfirm": "Delete this preset Skill template? It may be referenced by instance resources."
   },
   "serviceConfigTemplate": {
-    "title": "Service Resource Templates",
+    "title": "Agent Instance Pool Definitions",
     "subtitle": "Maintain AgentServer session parameters and container runtime templates",
-    "new": "New Template",
-    "edit": "Edit Template",
-    "editSubtitle": "HLD three-part config: template policy + AgentServer main + Sandbox sidecar",
-    "backToList": "Back to service config templates",
-    "tabTemplate": "Service Template",
+    "new": "New Agent Instance Pool Definition",
+    "edit": "Edit Agent Instance Pool Definition",
+    "backToList": "Back to agent instance pool definitions",
+    "tabTemplate": "Pool Parameters",
     "tabTemplateHint": "Pod-level fields and pool policy: namespace / nodeName / volumes / concurrency & TTL",
-    "tabAgentServer": "AgentServer Container",
+    "tabAgentServer": "AgentServer Parameters",
     "tabAgentServerHint": "Main container (common container config): ports (must include name=sse) / securityContext / readinessProbe / resources / env / envFrom / volumeMounts",
-    "tabSandbox": "Sandbox Container",
+    "tabSandbox": "Sandbox Parameters",
     "tabSandboxHint": "Sidecar container (common container config): ports / securityContext / readinessProbe / resources / env / envFrom / volumeMounts",
     "containerId": "Container ID",
     "containerIdConflict": "AgentServer and Sandbox container_id must differ",
@@ -567,12 +573,13 @@
     "sectionPool": "Pool & Timeouts",
     "export": "Export",
     "import": "Import",
+    "importHint": "Instance pool definition file (JSON format)",
     "exportOk": "Config JSON exported",
     "exportFailed": "Export failed: {{detail}}",
-    "importOk": "Imported and created a service config template",
+    "importOk": "Imported and created an agent instance pool definition",
     "importOkFirstOfMany": "File has {{count}} templates; imported the first one",
     "importFailed": "Import failed: {{detail}}",
-    "deleteConfirm": "Delete this service config template? It may be referenced by instance resources."
+    "deleteConfirm": "Delete this agent instance pool definition? It may be referenced by instance resources."
   },
   "policies": {
     "fieldRequired": "Please fill in {{field}}",
@@ -791,10 +798,10 @@
     "chatLoadingSlow": "Taking longer than usual. Please wait…"
   },
   "agentTemplate": {
-    "title": "Agent Templates",
+    "title": "Agent Definitions",
     "subtitle": "Maintain reusable Agent definition templates for instance binding",
-    "new": "New Agent Template",
-    "edit": "Edit Agent Template",
+    "new": "New Agent Definition",
+    "edit": "Edit Agent Definition",
     "templateName": "Template Name",
     "templateDescription": "Description",
     "agentTags": "Tags",
@@ -805,5 +812,13 @@
     "updatedAt": "Updated",
     "fieldRequired": "Please fill in {{field}}",
     "deleteConfirm": "Delete agent template \"{{name}}\"? Instance grants will also be removed."
+  },
+  "templateRefEditor": {
+    "gotoModelLink": "Go to the Models page to add configuration",
+    "gotoEmbeddingLink": "Go to the Embedding Models page to add configuration",
+    "gotoSkillLink": "Go to the Preset Skills page to add configuration",
+    "gotoExtensionLink": "Go to the Extension Config page to add configuration",
+    "gotoPermissionsLink": "Go to the Safety Guardrails page to add configuration",
+    "gotoA2APolicyLink": "Go to the A2A Management · Access Policies page to add configuration"
   }
 }

@@ -201,6 +201,7 @@ export function ServiceConfigTemplatesPage() {
           <button
             className="btn sm"
             disabled={importing}
+            title={t('serviceConfigTemplate.importHint')}
             onClick={() => importInputRef.current?.click()}
           >
             {importing ? t('common.loading') : t('serviceConfigTemplate.import')}

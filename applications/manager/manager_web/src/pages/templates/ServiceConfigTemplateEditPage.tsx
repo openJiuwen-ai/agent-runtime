@@ -1084,11 +1084,8 @@ export function ServiceConfigTemplateEditPage({ templateId }: { templateId?: str
             <div className="page-title truncate" title={pageTitle}>
               {pageTitle}
             </div>
-            <div
-              className="text-[11px] text-muted mono truncate"
-              title={isNew ? t('serviceConfigTemplate.editSubtitle') : templateId}
-            >
-              {isNew ? t('serviceConfigTemplate.editSubtitle') : templateId}
+            <div className="text-[11px] text-muted mono truncate" title={templateId}>
+              {templateId}
             </div>
           </div>
         </div>
