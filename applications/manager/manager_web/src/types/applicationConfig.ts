@@ -49,6 +49,8 @@ export interface PermissionRuleEntry {
 
 export interface PermissionsFormState {
   enabled: boolean;
+  /** 技能加载时是否根据 SKILL.md 权限声明触发动态授权 */
+  skillAuthorizationEnabled: boolean;
   schema: string;
   permissionMode: PermissionMode;
   /** config.yaml defaults，如 { '*': 'allow' } */

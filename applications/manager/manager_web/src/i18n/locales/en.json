@@ -325,6 +325,8 @@
       "deleteConfirm": "Remove Manager-managed permissions? Gateway will fall back to config.yaml.",
       "deleted": "Managed config removed; Gateway will fall back to config.yaml",
       "enabled": "Enable permission control",
+      "skillAuthorizationEnabled": "Enable dynamic skill authorization",
+      "skillAuthorizationHint": "Request user authorization dynamically from permissions declared in SKILL.md; permission control must be enabled",
       "permissionMode": "Permission mode (permission_mode)",
       "permissionModeHint": "normal: LOW/MEDIUM→allow, HIGH/CRITICAL→ask; strict: MEDIUM→ask, CRITICAL→deny",
       "modes": {
