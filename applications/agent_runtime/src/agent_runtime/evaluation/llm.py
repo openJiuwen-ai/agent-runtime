@@ -1,5 +1,5 @@
 # coding: utf-8
-"""LLM 分析层(OpenAI 兼容 chat completions;env 未配置自动禁用)。
+"""LLM 分析层(协议可插拔,默认 OpenAI 兼容 chat completions;env 未配置自动禁用)。
 
 定位:**LLM 不做原始数据分析**——确定性规则引擎已产结构化 findings;
 LLM 拿到的是「规则产物 + 趋势聚合 + 配置快照」的白名单 JSON,只做汇总
@@ -8,6 +8,16 @@ LLM 拿到的是「规则产物 + 趋势聚合 + 配置快照」的白名单 JSO
 
 安全:prompt payload 构造期白名单(绝不含 agent_env/kubeconfig/pod_spec/
 api_key/base_url);服务自有网络边界内调用,每 5min 一次短连接。
+
+协议缝(AGENT_RUNTIME_EVAL_LLM_PROVIDER,默认 openai):协议差异全部
+隔离在 ``_call_<provider>`` 一个函数里,返回归一化三元组
+``(text, reasoning, finish)``——finish 用 openai 语义("length"=截断),
+其余协议自行映射;analyze() 的超时/预算自诊断/降级/LLMResult 全部协议
+无关。**新协议适配配方**(出现真实端点时再加适配器,勿写无法验证的投机
+代码):以 anthropic /v1/messages 为例——路径 ``{base}/v1/messages``;
+鉴权 ``x-api-key`` 头(+ ``anthropic-version`` 头);system 是顶层参数
+而非 message role;响应 content 是块列表(取 text 块拼接,thinking 块
+计入 reasoning);``stop_reason=="max_tokens"`` 映射为 "length"。
 """
 
 from __future__ import annotations
@@ -71,7 +81,8 @@ class LLMClient:
         timeout: float = 60.0,
         transport: Any = None,       # httpx transport 注入口(测试 MockTransport)
         disable_thinking: bool = False,
-        max_tokens: int = 1024,
+        max_tokens: int = 16384,
+        provider: str = "openai",
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
@@ -80,6 +91,7 @@ class LLMClient:
         self._transport = transport
         self.disable_thinking = bool(disable_thinking)
         self.max_tokens = int(max_tokens)
+        self.provider = (provider or "openai").strip().lower()
 
     @classmethod
     def from_arc(cls, arc: Any) -> "LLMClient":
@@ -90,7 +102,8 @@ class LLMClient:
             model=getattr(arc, "eval_llm_model", "") or "",
             timeout=float(getattr(arc, "eval_llm_timeout", 60.0) or 60.0),
             disable_thinking=bool(getattr(arc, "eval_llm_disable_thinking", False)),
-            max_tokens=int(getattr(arc, "eval_llm_max_tokens", 1024) or 1024),
+            max_tokens=int(getattr(arc, "eval_llm_max_tokens", 16384) or 16384),
+            provider=str(getattr(arc, "eval_llm_provider", "openai") or "openai"),
         )
 
     @property
@@ -104,39 +117,60 @@ class LLMClient:
             return LLMResult(status="error", error="llm disabled")
         import httpx
 
+        if self.provider != "openai":
+            # 协议白名单:新协议 = 在下方加 _call_<provider> 适配器 + 此处登记
+            # (配方见模块 docstring)。未知值直接可操作报错,不静默回退——
+            # 换协议意味着端点/鉴权/响应形状全变,静默回退会把请求发向错误端点。
+            return LLMResult(
+                status="error",
+                error=(
+                    f"未知 AGENT_RUNTIME_EVAL_LLM_PROVIDER={self.provider!r}"
+                    "(当前支持: openai;新协议适配见 evaluation/llm.py 模块注释)"
+                ),
+            )
         user_text = json.dumps(
             build_prompt(prompt_payload), ensure_ascii=False, separators=(",", ":")
         )
         t0 = time.monotonic()
         try:
-            headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
-            request_body: dict[str, Any] = {
-                "model": self.model,
-                "messages": [
-                    {"role": "system", "content": _SYSTEM_PROMPT},
-                    {"role": "user", "content": user_text},
-                ],
-                "temperature": 0.2,
-                "max_tokens": self.max_tokens,
-            }
-            if self.disable_thinking:
-                # 推理模型(GLM 系,vLLM 部署):reasoning 计入 max_tokens 预算,
-                # 预算被吃空 → content 为空 → 解析必败(实测 GLM-5.3 reasoning
-                # 1.7~2.2 万字符)。vLLM 的 chat_template_kwargs 开关是否被执行
-                # 取决于服务端模板——不开时改用 max_tokens 兜底;OpenAI 官方等
-                # 非 vLLM 端点不识此键,故 opt-in。
-                request_body["chat_template_kwargs"] = {"enable_thinking": False}
             async with httpx.AsyncClient(
                 timeout=self.timeout, transport=self._transport
             ) as client:
-                resp = await client.post(
-                    f"{self.base_url}/chat/completions",
-                    headers=headers,
-                    json=request_body,
+                text, reasoning, finish = await self._call_openai(client, user_text)
+            # 预算耗尽自诊断(2026-09-04:出厂失败曾表现为不可读的
+            # "llm output not parseable",配置错误应一次失败即自我引导):
+            # 推理模型思考吃空预算 → content 空但 reasoning_content 非空;
+            # 截断 → finish_reason=length(content 半截 JSON,解析同样必败)
+            if not text.strip():
+                if reasoning:
+                    return LLMResult(
+                        status="error",
+                        error=(
+                            f"reasoning 模型思考耗尽 max_tokens={self.max_tokens} "
+                            f"预算(reasoning_content {len(reasoning)} 字符,"
+                            "content 为空):请抬高 "
+                            "AGENT_RUNTIME_EVAL_LLM_MAX_TOKENS(≥16384)或开 "
+                            "AGENT_RUNTIME_EVAL_LLM_DISABLE_THINKING=true"
+                        ),
+                        latency_ms=(time.monotonic() - t0) * 1000,
+                    )
+                return LLMResult(
+                    status="error",
+                    error="llm returned empty content(无 reasoning_content;"
+                          "检查端点返回或换个模型)",
+                    latency_ms=(time.monotonic() - t0) * 1000,
                 )
-                resp.raise_for_status()
-                data = resp.json()
-            text = str(data["choices"][0]["message"]["content"] or "")
+            if finish == "length":
+                return LLMResult(
+                    status="error",
+                    error=(
+                        f"输出被 max_tokens={self.max_tokens} 截断"
+                        "(finish_reason=length,JSON 解析必败):请抬高 "
+                        "AGENT_RUNTIME_EVAL_LLM_MAX_TOKENS 或开 "
+                        "AGENT_RUNTIME_EVAL_LLM_DISABLE_THINKING=true"
+                    ),
+                    latency_ms=(time.monotonic() - t0) * 1000,
+                )
             return LLMResult(
                 status="ok", text=text,
                 latency_ms=(time.monotonic() - t0) * 1000,
@@ -146,6 +180,46 @@ class LLMClient:
                 status="error", error=f"{type(exc).__name__}: {exc}"[:300],
                 latency_ms=(time.monotonic() - t0) * 1000,
             )
+
+
+    async def _call_openai(self, client: Any, user_text: str) -> tuple[str, str, str]:
+        """OpenAI 兼容 chat completions 适配器。
+
+        返回归一化三元组 ``(text, reasoning, finish)``;finish 用 openai 语义
+        ("length" = 截断)。新协议照此形状写 ``_call_<provider>`` 并在
+        analyze() 登记(配方见模块 docstring)。
+        """
+        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+        request_body: dict[str, Any] = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "user", "content": user_text},
+            ],
+            "temperature": 0.2,
+            "max_tokens": self.max_tokens,
+        }
+        if self.disable_thinking:
+            # 推理模型(GLM 系,vLLM 部署):reasoning 计入 max_tokens 预算,
+            # 预算被吃空 → content 为空 → 解析必败(实测 GLM-5.3 reasoning
+            # 1.7~2.2 万字符)。vLLM 的 chat_template_kwargs 开关是否被执行
+            # 取决于服务端模板——不开时改用 max_tokens 兜底;OpenAI 官方等
+            # 非 vLLM 端点不识此键,故 opt-in。
+            request_body["chat_template_kwargs"] = {"enable_thinking": False}
+        resp = await client.post(
+            f"{self.base_url}/chat/completions",
+            headers=headers,
+            json=request_body,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        choice = (data.get("choices") or [{}])[0]
+        message = choice.get("message") or {}
+        return (
+            str(message.get("content") or ""),
+            str(message.get("reasoning_content") or ""),
+            str(choice.get("finish_reason") or ""),
+        )
 
 
 # ----------------------------------------------------------------------
