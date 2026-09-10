@@ -71,7 +71,7 @@ class LLMClient:
         timeout: float = 60.0,
         transport: Any = None,       # httpx transport 注入口(测试 MockTransport)
         disable_thinking: bool = False,
-        max_tokens: int = 1024,
+        max_tokens: int = 16384,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
@@ -90,7 +90,7 @@ class LLMClient:
             model=getattr(arc, "eval_llm_model", "") or "",
             timeout=float(getattr(arc, "eval_llm_timeout", 60.0) or 60.0),
             disable_thinking=bool(getattr(arc, "eval_llm_disable_thinking", False)),
-            max_tokens=int(getattr(arc, "eval_llm_max_tokens", 1024) or 1024),
+            max_tokens=int(getattr(arc, "eval_llm_max_tokens", 16384) or 16384),
         )
 
     @property
@@ -136,7 +136,44 @@ class LLMClient:
                 )
                 resp.raise_for_status()
                 data = resp.json()
-            text = str(data["choices"][0]["message"]["content"] or "")
+            choice = (data.get("choices") or [{}])[0]
+            message = choice.get("message") or {}
+            text = str(message.get("content") or "")
+            reasoning = str(message.get("reasoning_content") or "")
+            # 预算耗尽自诊断(2026-09-04:出厂失败曾表现为不可读的
+            # "llm output not parseable",配置错误应一次失败即自我引导):
+            # 推理模型思考吃空预算 → content 空但 reasoning_content 非空;
+            # 截断 → finish_reason=length(content 半截 JSON,解析同样必败)
+            if not text.strip():
+                if reasoning:
+                    return LLMResult(
+                        status="error",
+                        error=(
+                            f"reasoning 模型思考耗尽 max_tokens={self.max_tokens} "
+                            f"预算(reasoning_content {len(reasoning)} 字符,"
+                            "content 为空):请抬高 "
+                            "AGENT_RUNTIME_EVAL_LLM_MAX_TOKENS(≥16384)或开 "
+                            "AGENT_RUNTIME_EVAL_LLM_DISABLE_THINKING=true"
+                        ),
+                        latency_ms=(time.monotonic() - t0) * 1000,
+                    )
+                return LLMResult(
+                    status="error",
+                    error="llm returned empty content(无 reasoning_content;"
+                          "检查端点返回或换个模型)",
+                    latency_ms=(time.monotonic() - t0) * 1000,
+                )
+            if str(choice.get("finish_reason") or "") == "length":
+                return LLMResult(
+                    status="error",
+                    error=(
+                        f"输出被 max_tokens={self.max_tokens} 截断"
+                        "(finish_reason=length,JSON 解析必败):请抬高 "
+                        "AGENT_RUNTIME_EVAL_LLM_MAX_TOKENS 或开 "
+                        "AGENT_RUNTIME_EVAL_LLM_DISABLE_THINKING=true"
+                    ),
+                    latency_ms=(time.monotonic() - t0) * 1000,
+                )
             return LLMResult(
                 status="ok", text=text,
                 latency_ms=(time.monotonic() - t0) * 1000,

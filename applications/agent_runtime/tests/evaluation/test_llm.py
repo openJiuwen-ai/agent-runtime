@@ -141,7 +141,7 @@ async def test_analyze_disable_thinking_switch():
 
 @pytest.mark.asyncio
 async def test_analyze_max_tokens_env():
-    """推理模型 reasoning 计入 max_tokens 预算:env 可抬(默认 1024 不变)。"""
+    """推理模型 reasoning 计入 max_tokens 预算:env 可抬(默认 16384)。"""
     seen: list[dict] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -153,6 +153,50 @@ async def test_analyze_max_tokens_env():
                        transport=httpx.MockTransport(handler), max_tokens=16384)
     assert (await client.analyze({"service": {}})).status == "ok"
     assert seen[-1]["max_tokens"] == 16384
+
+
+def _budget_handler(body: dict) -> httpx.MockTransport:
+    return httpx.MockTransport(
+        lambda request: httpx.Response(200, json={"choices": [body]}))
+
+
+@pytest.mark.asyncio
+async def test_analyze_diagnoses_reasoning_budget_exhaustion():
+    """推理模型思考吃空预算 → 报错自我引导配置(而非玄学 parse 失败)。"""
+    client = LLMClient(base_url="http://llm.test/v1", model="m", max_tokens=1024,
+                       transport=_budget_handler({
+                           "message": {"content": "",
+                                       "reasoning_content": "思" * 18000},
+                           "finish_reason": "length"}))
+    result = await client.analyze({"service": {}})
+    assert result.status == "error"
+    assert "AGENT_RUNTIME_EVAL_LLM_MAX_TOKENS" in result.error
+    assert "AGENT_RUNTIME_EVAL_LLM_DISABLE_THINKING" in result.error
+    assert "18000" in result.error          # 实际 reasoning 体量留痕
+
+
+@pytest.mark.asyncio
+async def test_analyze_diagnoses_length_truncation():
+    """finish_reason=length(截断的半截 JSON)→ 同样给可操作报错。"""
+    client = LLMClient(base_url="http://llm.test/v1", model="m",
+                       transport=_budget_handler({
+                           "message": {"content": "{\"summary\": \"半截"},
+                           "finish_reason": "length"}))
+    result = await client.analyze({"service": {}})
+    assert result.status == "error"
+    assert "截断" in result.error and "MAX_TOKENS" in result.error
+
+
+@pytest.mark.asyncio
+async def test_analyze_diagnoses_empty_content_without_reasoning():
+    """content 空且无 reasoning → 提示查端点/换模型(非预算问题)。"""
+    client = LLMClient(base_url="http://llm.test/v1", model="m",
+                       transport=_budget_handler({
+                           "message": {"content": ""}, "finish_reason": "stop"}))
+    result = await client.analyze({"service": {}})
+    assert result.status == "error"
+    assert "empty content" in result.error
+    assert "MAX_TOKENS" not in result.error
 
 
 def test_from_arc_plumbs_disable_thinking(monkeypatch):

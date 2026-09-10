@@ -75,9 +75,11 @@ class AgentRuntimeConfig:
                                                # 计入 max_tokens 预算会吃空
                                                # content；vLLM chat_template_kwargs
                                                # 开关，非 vLLM 端点勿开
-    eval_llm_max_tokens: int = 1024            # 推理模型预算须盖住 reasoning+答案
-                                               # （实测 GLM-5.3 需 ~16k；常规模型
-                                               # 默认值够）
+    eval_llm_max_tokens: int = 16384           # 预算是上限非计费(按实际生成计),
+                                               # 推理模型 reasoning 计入预算,默认
+                                               # 抬到盖住 reasoning+答案(实测
+                                               # GLM-5.3 需 ~16k);常规模型输出仅
+                                               # 数百 token,抬高零日常成本
     eval_pod_budget: int = 0                   # 集群 AgentServer Pod 预算；0=预算规则关闭
 
     @classmethod
@@ -101,6 +103,6 @@ class AgentRuntimeConfig:
             eval_llm_disable_thinking=_env_bool(
                 "AGENT_RUNTIME_EVAL_LLM_DISABLE_THINKING"),
             eval_llm_max_tokens=_env_int(
-                "AGENT_RUNTIME_EVAL_LLM_MAX_TOKENS", 1024),
+                "AGENT_RUNTIME_EVAL_LLM_MAX_TOKENS", 16384),
             eval_pod_budget=_env_int("AGENT_RUNTIME_EVAL_POD_BUDGET", 0),
         )

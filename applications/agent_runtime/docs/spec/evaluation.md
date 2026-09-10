@@ -18,7 +18,7 @@ findings → 可选 LLM 叠加分析 → 报告只读产出(`/visualization/eval
 | `src/agent_runtime/evaluation/rules.py` | 纯函数规则引擎(静态 7 + 动态 5;快失败适配);`Finding`/`ScopeConfigView`/`RuleThresholds` 数据类 |
 | `src/agent_runtime/evaluation/llm.py` | OpenAI 兼容 client(短连接、transport 可注入测试)+ prompt 白名单构造 + `parse_llm_analysis` 防御解析 |
 | `src/agent_runtime/evaluation/evaluator.py` | `evaluate_once` 编排:清单→规则→LLM(可选)→报告落盘 |
-| `tests/evaluation/` | 49 用例(规则边界/LLM 三态/键形 TTL/全链路) |
+| `tests/evaluation/` | 56 用例(规则边界/LLM 三态/键形 TTL/全链路) |
 
 ## Redis 键表(前缀 `{agent_runtime:eval}`,hash tag 单槽、零 Lua)
 
@@ -92,14 +92,18 @@ pod_ttl/min_idle_pods,即时生效);报告 caveat 明示 A 类(deploy 子集)变
 | `AGENT_RUNTIME_EVAL_LLM_API_KEY` | 空 | 可空(内网免鉴权);绝不进日志/报告/端点输出 |
 | `AGENT_RUNTIME_EVAL_LLM_MODEL` | 空 | 模型名 |
 | `AGENT_RUNTIME_EVAL_LLM_TIMEOUT` | 60.0 | 须 < TICK_TIMEOUTS.sys_eval=120 |
-| `AGENT_RUNTIME_EVAL_LLM_MAX_TOKENS` | 1024 | 推理模型(GLM 系)reasoning 计入输出预算,须抬到盖住 reasoning+答案(2026-09-04 实测 GLM-5.3 真实 prompt 需 ~16k,1024/4096 均 content 为空 → 解析必败);常规模型默认够。注意推理耗时随预算涨,须与 timeout/tick 上限一起调 |
+| `AGENT_RUNTIME_EVAL_LLM_MAX_TOKENS` | 16384 | 输出预算上限(非计费额度,按实际生成计费——常规模型输出仅数百 token,抬高零日常成本)。推理模型 reasoning 计入预算(2026-09-04 实测 GLM-5.3 真实 prompt 需 ~16k,1024/4096 均 content 为空→解析必败),故默认出厂即兼容;预算耗尽时 client 自诊断报错(见降级矩阵)。注意推理耗时随预算涨,须与 timeout/tick 上限一起调 |
 | `AGENT_RUNTIME_EVAL_LLM_DISABLE_THINKING` | false | vLLM 部署的推理模型(GLM 系)可开:请求带 `chat_template_kwargs.enable_thinking=false` 关思考省预算。**是否被执行取决于服务端 chat template**(实测某 GLM-5.3 vLLM 端点对大 prompt 不执行,仍需抬 MAX_TOKENS 兜底);非 vLLM 端点不识此键,勿开 |
 
 降级矩阵:未配置→`llm.status="disabled"`(纯规则报告照常);HTTP/超时→
-`"error"`+error 留痕(纯规则报告);输出不可解析→`"error"`+"parse failed";
-解析成功→合并 `additional_findings`(**逐项策略字段白名单,越界整条丢弃**,
-`source="llm"`)。prompt 构造白名单投影(绝不含 agent_env/kubeconfig/
-pod_spec/api_key/base_url)+48KB 体积护栏(超限截 trend 段)。
+`"error"`+error 留痕(纯规则报告);**预算耗尽自诊断**(2026-09-04,出厂失败
+曾表现为不可读的 parse 失败):content 空且 reasoning_content 非空 → 报错
+注明 reasoning 体量并指引 MAX_TOKENS/DISABLE_THINKING 两 env;finish_reason
+=length(截断半截 JSON)→ 同款指引;content 空且无 reasoning → 提示查端点;
+输出不可解析→`"error"`+"parse failed";解析成功→合并 `additional_findings`
+(**逐项策略字段白名单,越界整条丢弃**,`source="llm"`)。prompt 构造白名单
+投影(绝不含 agent_env/kubeconfig/pod_spec/api_key/base_url)+48KB 体积
+护栏(超限截 trend 段)。
 
 ## 可视化端点(service-core.md 端点表同步)
 
@@ -120,7 +124,7 @@ pod_spec/api_key/base_url)+48KB 体积护栏(超限截 trend 段)。
 
 `AGENT_RUNTIME_EVAL_SAMPLE_INTERVAL`(30)/`AGENT_RUNTIME_EVAL_INTERVAL`(300)/
 `AGENT_RUNTIME_EVAL_LLM_BASE_URL`/`_API_KEY`/`_MODEL`/`_TIMEOUT`(60)/
-`_MAX_TOKENS`(1024)/`_DISABLE_THINKING`(false)/
+`_MAX_TOKENS`(16384)/`_DISABLE_THINKING`(false)/
 `AGENT_RUNTIME_EVAL_POD_BUDGET`(0=预算规则关闭)。默认全空 = 纯规则评估 +
 30s 采样,零 LLM 外呼。部署模板(deploy/ 两 env + template.yaml +
 server.env.example)已同步——**空值变量也必须定义**,否则 render 残留 `<<`
