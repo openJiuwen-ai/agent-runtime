@@ -88,6 +88,7 @@ pod_ttl/min_idle_pods,即时生效);报告 caveat 明示 A 类(deploy 子集)变
 
 | env | 默认 | 说明 |
 |---|---|---|
+| `AGENT_RUNTIME_EVAL_LLM_PROVIDER` | openai | 协议选择(白名单,未知值报可操作错误不静默回退)。当前仅 `openai`(OpenAI 兼容 chat completions);新协议适配配方见下方「协议缝」 |
 | `AGENT_RUNTIME_EVAL_LLM_BASE_URL` | 空 | OpenAI 兼容端点(如 `http://api.openai.rnd.huawei.com/v1`);**与 model 均非空才启用** |
 | `AGENT_RUNTIME_EVAL_LLM_API_KEY` | 空 | 可空(内网免鉴权);绝不进日志/报告/端点输出 |
 | `AGENT_RUNTIME_EVAL_LLM_MODEL` | 空 | 模型名 |
@@ -104,6 +105,17 @@ pod_ttl/min_idle_pods,即时生效);报告 caveat 明示 A 类(deploy 子集)变
 (**逐项策略字段白名单,越界整条丢弃**,`source="llm"`)。prompt 构造白名单
 投影(绝不含 agent_env/kubeconfig/pod_spec/api_key/base_url)+48KB 体积
 护栏(超限截 trend 段)。
+
+## 协议缝(llm.py;AGENT_RUNTIME_EVAL_LLM_PROVIDER)
+
+协议差异全部隔离在 `_call_<provider>` 一个函数,返回归一化三元组
+`(text, reasoning, finish)`(finish 用 openai 语义,"length"=截断);
+analyze() 的超时/预算自诊断/降级/LLMResult 协议无关。**新协议适配配方**
+(出现真实端点时再加适配器,勿写无法验证的投机代码——2026-08-26 门禁
+教训:替身世界的契约假设不可见):以 anthropic `/v1/messages` 为例——
+路径 `{base}/v1/messages`;鉴权 `x-api-key` 头(+)`anthropic-version` 头;
+system 是顶层参数而非 message role;响应 content 是块列表(text 块拼接,
+thinking 块计入 reasoning);`stop_reason=="max_tokens"` 映射为 "length"。
 
 ## 可视化端点(service-core.md 端点表同步)
 

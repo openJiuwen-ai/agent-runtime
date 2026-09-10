@@ -30,6 +30,23 @@ def test_enabled_requires_base_url_and_model():
 
 
 @pytest.mark.asyncio
+async def test_unknown_provider_self_diagnoses():
+    """协议白名单:未知 provider → 可操作报错(点名 env),绝不静默回退。"""
+    client = LLMClient(base_url="http://llm.test/v1", model="m", provider="anthropic")
+    result = await client.analyze({"service": {}})
+    assert result.status == "error"
+    assert "AGENT_RUNTIME_EVAL_LLM_PROVIDER" in result.error
+    assert "anthropic" in result.error
+
+
+@pytest.mark.asyncio
+async def test_default_provider_is_openai_and_normalizes_case():
+    """默认 openai;from_arc plumbing + 大小写归一。"""
+    assert LLMClient(base_url="http://x", model="m").provider == "openai"
+    assert LLMClient(base_url="http://x", model="m", provider=" OpenAI ").provider == "openai"
+
+
+@pytest.mark.asyncio
 async def test_analyze_ok():
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)

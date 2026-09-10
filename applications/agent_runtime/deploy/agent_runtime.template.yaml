@@ -181,6 +181,8 @@ spec:
               value: "<<AGENT_RUNTIME_EVAL_LLM_API_KEY>>"
             - name: AGENT_RUNTIME_EVAL_LLM_MODEL
               value: "<<AGENT_RUNTIME_EVAL_LLM_MODEL>>"
+            - name: AGENT_RUNTIME_EVAL_LLM_PROVIDER
+              value: "<<AGENT_RUNTIME_EVAL_LLM_PROVIDER>>"
             - name: AGENT_RUNTIME_EVAL_LLM_MAX_TOKENS
               value: "<<AGENT_RUNTIME_EVAL_LLM_MAX_TOKENS>>"
             - name: AGENT_RUNTIME_EVAL_LLM_DISABLE_THINKING
