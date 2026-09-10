@@ -303,7 +303,6 @@ export interface A2ADiscoveryCandidate {
 
 export interface A2ADiscoverySettings {
   allow_http: boolean;
-  allow_loopback: boolean;
   allow_private_network: boolean;
   allow_public_http: boolean;
 }

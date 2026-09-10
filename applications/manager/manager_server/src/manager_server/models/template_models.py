@@ -181,7 +181,6 @@ A2A_DISCOVERY_SETTINGS_TABLE_DEF = TableDefinition(
         ColumnDefinition("id", "integer", primary_key=True, autoincrement=True, nullable=False),
         ColumnDefinition("settings_id", "string", length=32, nullable=False),
         ColumnDefinition("allow_http", "boolean", nullable=False, default=False),
-        ColumnDefinition("allow_loopback", "boolean", nullable=False, default=False),
         ColumnDefinition("allow_private_network", "boolean", nullable=False, default=False),
         ColumnDefinition("allow_public_http", "boolean", nullable=False, default=False),
         ColumnDefinition("created_at", "datetime", nullable=False),

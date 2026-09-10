@@ -101,7 +101,6 @@ async def _validate_target(
     url: str,
     *,
     allow_http: bool = False,
-    allow_loopback: bool = False,
     allow_private_network: bool = False,
     allow_public_http: bool = False,
 ) -> tuple[str, str]:
@@ -117,17 +116,15 @@ async def _validate_target(
         raise A2ADiscoveryError("CARD_FETCH_FAILED", "Agent Card host cannot be resolved") from exc
     addresses = sorted({str(row[4][0]).split("%", 1)[0] for row in rows})
     resolved = [ipaddress.ip_address(address) for address in addresses]
-    loopback_only = bool(resolved) and all(address.is_loopback for address in resolved)
     public_only = bool(resolved) and all(address.is_global for address in resolved)
     private_only = bool(resolved) and all(
         any(address in network for network in _PRIVATE_NETWORKS) for address in resolved
     )
     if not (
         public_only
-        or (allow_loopback and loopback_only)
         or (allow_private_network and private_only)
     ):
-        raise A2ADiscoveryError("DISCOVERY_BLOCKED", "private network targets are not allowed")
+        raise A2ADiscoveryError("DISCOVERY_BLOCKED", "target address is not allowed by network access policy")
     if parts.scheme == "http" and public_only and not allow_public_http:
         raise A2ADiscoveryError("DISCOVERY_BLOCKED", "discovery requires HTTPS")
     return str(parts.hostname).lower().rstrip("."), addresses[0]
@@ -184,7 +181,6 @@ async def fetch_agent_card(
     card_path: str | None = None,
     *,
     allow_http: bool = False,
-    allow_loopback: bool = False,
     allow_private_network: bool = False,
     allow_public_http: bool = False,
 ) -> DiscoveredCard:
@@ -192,7 +188,6 @@ async def fetch_agent_card(
     host, pinned_address = await _validate_target(
         card_url,
         allow_http=allow_http,
-        allow_loopback=allow_loopback,
         allow_private_network=allow_private_network,
         allow_public_http=allow_public_http,
     )
@@ -214,7 +209,6 @@ async def fetch_agent_card(
     await _validate_target(
         selected["url"],
         allow_http=allow_http,
-        allow_loopback=allow_loopback,
         allow_private_network=allow_private_network,
         allow_public_http=allow_public_http,
     )
@@ -270,7 +264,6 @@ async def create_candidate(
         url,
         card_path,
         allow_http=settings.allow_http,
-        allow_loopback=settings.allow_loopback,
         allow_private_network=settings.allow_private_network,
         allow_public_http=settings.allow_public_http,
     )

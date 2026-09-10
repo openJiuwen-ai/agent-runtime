@@ -17,6 +17,7 @@ from manager_server.core.template.a2a_discovery import (
     _select_interface,
     _validate_target,
     critical_identity,
+    fetch_agent_card,
 )
 from manager_server.core.template.push_agent_template_to_gateway import (
     sync_agent_resource_to_gateway,
@@ -433,7 +434,7 @@ async def test_a2a_policy_slot_is_indexed_for_gateway_projection(
     assert "pending_revision" not in outbound_payload
     assert "last_error_code" not in outbound_payload
     defaults = {
-        "allow_http": False, "allow_loopback": False,
+        "allow_http": False,
         "allow_private_network": False, "allow_public_http": False,
     }
     assert outbound_payload["data"]["network_policy"] == defaults
@@ -826,7 +827,7 @@ async def test_discovery_blocks_private_target_and_pins_validated_address(
         return [(None, None, None, None, ("169.254.169.254", 443))]
 
     monkeypatch.setattr(loop, "getaddrinfo", private_dns)
-    with pytest.raises(A2ADiscoveryError, match="private network"):
+    with pytest.raises(A2ADiscoveryError, match="target address is not allowed by network access policy"):
         await _validate_target("https://agents.example.com/card.json")
 
     async with httpx.AsyncClient(trust_env=False) as client:
@@ -879,7 +880,6 @@ async def test_a2a_discovery_settings_are_persisted(manager_api: ManagerApiHarne
     assert initial.status_code == 200
     assert initial.json()["data"] == {
         "allow_http": False,
-        "allow_loopback": False,
         "allow_private_network": False,
         "allow_public_http": False,
     }
@@ -888,7 +888,6 @@ async def test_a2a_discovery_settings_are_persisted(manager_api: ManagerApiHarne
         url,
         json={
             "allow_http": True,
-            "allow_loopback": True,
             "allow_private_network": True,
             "allow_public_http": True,
         },
@@ -896,7 +895,6 @@ async def test_a2a_discovery_settings_are_persisted(manager_api: ManagerApiHarne
     assert updated.status_code == 200
     assert updated.json()["data"] == {
         "allow_http": True,
-        "allow_loopback": True,
         "allow_private_network": True,
         "allow_public_http": True,
     }
@@ -904,7 +902,6 @@ async def test_a2a_discovery_settings_are_persisted(manager_api: ManagerApiHarne
     persisted = await manager_api.http.get(url)
     assert persisted.json()["data"] == {
         "allow_http": True,
-        "allow_loopback": True,
         "allow_private_network": True,
         "allow_public_http": True,
     }
@@ -923,11 +920,11 @@ async def test_discovery_uses_persisted_network_settings(
             card_path=card_path or "/.well-known/agent-card.json",
             card_url=f"{url.rstrip('/')}/.well-known/agent-card.json",
             card_fingerprint="sha256:settings",
-            agent_card={"name": "Local Agent"},
+            agent_card={"name": "Private Agent"},
             selected_interface={
                 "protocol_binding": "JSONRPC",
                 "protocol_version": "1.0",
-                "url": "http://127.0.0.1:19110/a2a",
+                "url": "http://192.168.1.10:19110/a2a",
             },
         )
 
@@ -936,48 +933,75 @@ async def test_discovery_uses_persisted_network_settings(
         manager_api.templates_url("/a2a-discovery-settings"),
         json={
             "allow_http": True,
-            "allow_loopback": True,
             "allow_private_network": True,
             "allow_public_http": True,
         },
     )
     response = await manager_api.http.post(
         manager_api.templates_url("/a2a-outbound-discoveries"),
-        json={"url": "http://127.0.0.1:19110"},
+        json={"url": "http://192.168.1.10:19110"},
     )
     assert response.status_code == 200
     assert observed == {
         "allow_http": True,
-        "allow_loopback": True,
         "allow_private_network": True,
         "allow_public_http": True,
     }
 
 
 @pytest.mark.asyncio
-async def test_http_loopback_requires_both_discovery_switches(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("host,address", [
+    ("localhost", "127.0.0.1"), ("localhost", "::1"),
+    ("127.0.0.1", "127.0.0.1"), ("127.0.0.2", "127.0.0.2"), ("[::1]", "::1"),
+])
+@pytest.mark.parametrize("scheme", ["http", "https"])
+async def test_discovery_always_rejects_loopback(monkeypatch, host, address, scheme):
+    import asyncio
+
+    async def loopback_dns(*_args, **_kwargs):
+        return [(None, None, None, None, (address, 19110))]
+
+    monkeypatch.setattr(asyncio.get_running_loop(), "getaddrinfo", loopback_dns)
+    with pytest.raises(A2ADiscoveryError, match="target address is not allowed by network access policy"):
+        await _validate_target(
+            f"{scheme}://{host}:19110/card.json",
+            allow_http=True,
+            allow_private_network=True,
+            allow_public_http=True,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("host,address", [
+    ("localhost", "127.0.0.1"), ("127.0.0.1", "127.0.0.1"),
+    ("127.0.0.2", "127.0.0.2"), ("[::1]", "::1"),
+])
+@pytest.mark.parametrize("scheme", ["http", "https"])
+async def test_discovery_api_rejects_loopback_with_all_switches_enabled(
+    manager_api: ManagerApiHarness, monkeypatch, host, address, scheme,
 ):
     import asyncio
 
-    loop = asyncio.get_running_loop()
-
     async def loopback_dns(*_args, **_kwargs):
-        return [(None, None, None, None, ("127.0.0.1", 19110))]
+        return [(None, None, None, None, (address, 19110))]
 
-    monkeypatch.setattr(loop, "getaddrinfo", loopback_dns)
-    with pytest.raises(A2ADiscoveryError, match="requires HTTPS"):
-        await _validate_target("http://localhost:19110/card.json", allow_loopback=True)
-    with pytest.raises(A2ADiscoveryError, match="private network"):
-        await _validate_target("http://localhost:19110/card.json", allow_http=True)
-
-    host, address = await _validate_target(
-        "http://localhost:19110/card.json",
-        allow_http=True,
-        allow_loopback=True,
+    # Exercise the real discovery path instead of the module's default Card stub.
+    monkeypatch.setattr("manager_server.core.template.a2a_discovery.fetch_agent_card", fetch_agent_card)
+    monkeypatch.setattr(asyncio.get_running_loop(), "getaddrinfo", loopback_dns)
+    settings = await manager_api.http.put(
+        manager_api.templates_url("/a2a-discovery-settings"),
+        json={"allow_http": True, "allow_private_network": True, "allow_public_http": True},
     )
-    assert host == "localhost"
-    assert address == "127.0.0.1"
+    assert settings.status_code == 200
+    response = await manager_api.http.post(
+        manager_api.templates_url("/a2a-outbound-discoveries"),
+        json={"url": f"{scheme}://{host}:19110/card.json"},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == {
+        "code": "DISCOVERY_BLOCKED",
+        "message": "target address is not allowed by network access policy",
+    }
 
 
 @pytest.mark.asyncio
@@ -996,7 +1020,6 @@ async def test_allow_http_does_not_allow_public_http(
         await _validate_target(
             "http://agents.example.com/card.json",
             allow_http=True,
-            allow_loopback=False,
         )
 
     host, address = await _validate_target(
@@ -1022,11 +1045,10 @@ async def test_private_network_requires_its_discovery_switch(
         return [(None, None, None, None, (private_address, 8080))]
 
     monkeypatch.setattr(loop, "getaddrinfo", private_dns)
-    with pytest.raises(A2ADiscoveryError, match="private network"):
+    with pytest.raises(A2ADiscoveryError, match="target address is not allowed by network access policy"):
         await _validate_target(
             "https://weather.internal:8080/card.json",
             allow_http=True,
-            allow_loopback=True,
             allow_public_http=True,
         )
 
@@ -1062,7 +1084,7 @@ async def test_private_network_switch_does_not_allow_link_local(
         return [(None, None, None, None, ("169.254.169.254", 443))]
 
     monkeypatch.setattr(loop, "getaddrinfo", link_local_dns)
-    with pytest.raises(A2ADiscoveryError, match="private network"):
+    with pytest.raises(A2ADiscoveryError, match="target address is not allowed by network access policy"):
         await _validate_target(
             "https://metadata.internal/card.json",
             allow_private_network=True,
@@ -1081,7 +1103,7 @@ async def test_private_network_switch_does_not_allow_cgnat(
         return [(None, None, None, None, ("100.100.100.200", 443))]
 
     monkeypatch.setattr(loop, "getaddrinfo", cgnat_dns)
-    with pytest.raises(A2ADiscoveryError, match="private network"):
+    with pytest.raises(A2ADiscoveryError, match="target address is not allowed by network access policy"):
         await _validate_target(
             "https://metadata.internal/card.json",
             allow_private_network=True,
@@ -1126,7 +1148,6 @@ async def test_closing_discovery_switches_disables_http_agents(
     settings_url = manager_api.templates_url("/a2a-discovery-settings")
     enabled_settings = {
         "allow_http": True,
-        "allow_loopback": True,
         "allow_private_network": True,
         "allow_public_http": True,
     }
@@ -1142,7 +1163,6 @@ async def test_closing_discovery_switches_disables_http_agents(
         settings_url,
         json={
             "allow_http": False,
-            "allow_loopback": False,
             "allow_private_network": False,
             "allow_public_http": False,
         },
