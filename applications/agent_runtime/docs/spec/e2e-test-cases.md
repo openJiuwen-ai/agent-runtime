@@ -650,7 +650,8 @@ uv run --no-sync python scripts/load_test.py \
 - 主容器 pod 落位字段(026450be 引入):`run_as_user/group`(容器内 `id -u` 生效实证)、
   `node_name`(Pod 实际落指定节点)——渲染层已有单测(`test_k8s_pod_body.py`),真环境
   生效零覆盖;`PVC 同 claim 跨容器去重`(主/sidecar 共享一卷)同此。
-- `nfs_server/nfs_path/nfs_mount_path` 挂载:e2e 零覆盖(需 NFS 环境决策)。
+- NFS 挂载(`agent_nfs_mounts`/sidecar `nfs_mounts`,与 PVC 同构;2026-09 前为
+  `nfs_server/nfs_path/nfs_mount_path` 三元组):e2e 零覆盖(需 NFS 环境决策)。
 
 **B. 已确认存在、复现需确定性时序或产品决策(P1/P2 遗留)**
 - reclaim 与 acquire 复用的 TOCTOU(在用 Pod 被物理删):两轮审计确认,

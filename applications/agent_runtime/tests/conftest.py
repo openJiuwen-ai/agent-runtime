@@ -116,7 +116,8 @@ def split_sync_payload(templates: list[dict], scopes: list[dict] | None = None) 
                  "nfs", {"mountPath": t.get("nfs_mount_path") or "/data"})
         for kind, legacy_key in (("hp", "agent_host_path_mounts"),
                                  ("cm", "agent_configmap_mounts"),
-                                 ("pvc", "agent_pvc_mounts")):
+                                 ("pvc", "agent_pvc_mounts"),
+                                 ("nfs", "agent_nfs_mounts")):
             for m in t.get(legacy_key) or []:
                 if kind == "hp":
                     source = {"hostPath": {
@@ -131,6 +132,11 @@ def split_sync_payload(templates: list[dict], scopes: list[dict] | None = None) 
                     mount = {"mountPath": m["mount_path"],
                              **({"subPath": m["sub_path"]} if m.get("sub_path") else {}),
                              **({"readOnly": m["read_only"]} if m.get("read_only") is not None else {})}
+                elif kind == "nfs":
+                    source = {"nfs": {"server": m["server"],
+                                      **({"path": m["path"]} if m.get("path") else {})}}
+                    mount = {"mountPath": m["mount_path"],
+                             **({"readOnly": m["read_only"]} if m.get("read_only") is not None else {})}
                 else:
                     source = {"persistentVolumeClaim": {"claimName": m["claim_name"]}}
                     mount = {"mountPath": m["mount_path"],
@@ -144,7 +150,8 @@ def split_sync_payload(templates: list[dict], scopes: list[dict] | None = None) 
             sc_mounts: list[dict] = []
             for kind, items in (("hp", sc.get("host_path_mounts") or []),
                                 ("cm", sc.get("configmap_mounts") or []),
-                                ("pvc", sc.get("pvc_mounts") or [])):
+                                ("pvc", sc.get("pvc_mounts") or []),
+                                ("nfs", sc.get("nfs_mounts") or [])):
                 for m in items:
                     name = f"v{len(volumes)}-{kind}"
                     if kind == "hp":
@@ -159,6 +166,12 @@ def split_sync_payload(templates: list[dict], scopes: list[dict] | None = None) 
                             **({"items": m["items"]} if m.get("items") else {})}})
                         sc_mounts.append({"name": name, "mountPath": m["mount_path"],
                                           **({"subPath": m["sub_path"]} if m.get("sub_path") else {}),
+                                          **({"readOnly": m["read_only"]} if m.get("read_only") is not None else {})})
+                    elif kind == "nfs":
+                        volumes.append({"name": name, "nfs": {
+                            "server": m["server"],
+                            **({"path": m["path"]} if m.get("path") else {})}})
+                        sc_mounts.append({"name": name, "mountPath": m["mount_path"],
                                           **({"readOnly": m["read_only"]} if m.get("read_only") is not None else {})})
                     else:
                         volumes.append({"name": name, "persistentVolumeClaim": {

@@ -64,18 +64,20 @@ SERVICE_CONFIG_CONTAINER_TABLE_DEF = TableDefinition(
         ColumnDefinition("resources", "json", nullable=True),
         ColumnDefinition("volume_mounts", "json", nullable=True),
         ColumnDefinition("security_context", "json", nullable=True),
+        ColumnDefinition("command", "json", nullable=True),
+        ColumnDefinition("args", "json", nullable=True),
         ColumnDefinition("readiness_probe", "json", nullable=True),
         ColumnDefinition("created_at", "datetime", nullable=False),
         ColumnDefinition("updated_at", "datetime", nullable=False),
     ],
 )
 
-# wire 合法键(K8s V1Container 子集 + 业务键 container_id;command/args 等
-# 内部表达不了的字段不在白名单 → 出现即 400,绝不静默丢弃)
+# wire 合法键(K8s V1Container 子集 + 业务键 container_id;不在白名单的
+# 键出现即 400,绝不静默丢弃)
 _CONTAINER_WIRE_KEYS = frozenset({
     "container_id", "name", "image", "imagePullPolicy", "ports", "env",
     "envFrom", "resources", "volumeMounts", "securityContext",
-    "readinessProbe",
+    "readinessProbe", "command", "args",
 })
 
 _PORT_ENTRY_KEYS = frozenset({"name", "containerPort"})
@@ -335,6 +337,24 @@ def _parse_volume_mounts(value: Any, where: str) -> list[dict]:
     return out
 
 
+def _parse_str_list(value: Any, where: str, key: str) -> list[str] | None:
+    """wire 字符串列表(command/args)→ list[str] | None。
+
+    None/缺省 → None(走镜像 ENTRYPOINT/CMD);空列表归一 None(防手滑
+    显式清空启动命令);非列表或含非字符串项 → 400。
+    """
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        raise InvalidParams(f"{where}.{key} must be a list of strings, "
+                            f"got {value!r}")
+    for i, item in enumerate(value):
+        if not isinstance(item, str):
+            raise InvalidParams(
+                f"{where}.{key}[{i}] must be a string, got {item!r}")
+    return value or None
+
+
 def _parse_security_context(value: Any, where: str,
                             role: str) -> dict[str, Any]:
     """securityContext → 内部八键规范形(主容器仅 runAs 两键合法,越角色 400)。"""
@@ -531,6 +551,8 @@ def parse_container_spec(item: Any, where: str, *, role: str) -> dict[str, Any]:
     volume_mounts = _parse_volume_mounts(item.get("volumeMounts"), where)
     security_context = _parse_security_context(
         item.get("securityContext"), where, role)
+    command = _parse_str_list(item.get("command"), where, "command")
+    args = _parse_str_list(item.get("args"), where, "args")
     readiness_probe = _parse_readiness_probe(
         item.get("readinessProbe"), where, role, ports)
     return {
@@ -544,6 +566,8 @@ def parse_container_spec(item: Any, where: str, *, role: str) -> dict[str, Any]:
         "resources": resources,
         "volume_mounts": volume_mounts,
         "security_context": security_context,
+        "command": command,
+        "args": args,
         "readiness_probe": readiness_probe,
     }
 
@@ -644,18 +668,19 @@ def mounted_volume_names(spec: dict[str, Any]) -> set[str]:
 
 def fuse_mounts(spec: dict[str, Any], volumes: dict[str, dict[str, Any]],
                 where: str, role: str) -> dict[str, Any]:
-    """volumeMounts × volumes join → 原始 fused 挂载 + NFS 三元组。
+    """volumeMounts × volumes join → 原始 fused 挂载。
 
-    返回 {host_path_mounts, configmap_mounts, pvc_mounts, nfs};
-    前三者是 mounts.py 规范形函数的**输入**(raw 条目,调用方决定过
-    canonical_* 还是直接交 validate_*);nfs = {server, path, mount_path} | None。
-    源类型相关规则在此落定:subPath 仅 configMap、readOnly 默认按源类型
-    (cm→true、hp/pvc→false)、NFS 只许主容器一个且不支持 readOnly。
+    返回 {host_path_mounts, configmap_mounts, pvc_mounts, nfs_mounts};
+    四者是 mounts.py 规范形函数的**输入**(raw 条目,调用方决定过
+    canonical_* 还是直接交 validate_*)。源类型相关规则在此落定:subPath
+    仅 configMap、readOnly 缺省按源类型(cm→true、hp/pvc/nfs→false)。
+    NFS 与 PVC 同构:卷源(server/path)属模板级 volumes(pod 级),主/
+    sidecar 容器一律按名引用挂载,条数/挂载点不限(K8s 语义,不加限制)。
     """
     host: list[dict] = []
     cm: list[dict] = []
     pvc: list[dict] = []
-    nfs: Optional[dict[str, Any]] = None
+    nfs: list[dict] = []
     for i, mount in enumerate(spec.get("volume_mounts") or []):
         mount_where = f"{where}.volumeMounts[{i}]"
         volume = volumes.get(mount["name"])
@@ -685,22 +710,12 @@ def fuse_mounts(spec: dict[str, Any], volumes: dict[str, dict[str, Any]],
                         "mount_path": mount["mount_path"],
                         "read_only": False if read_only is None else read_only})
         else:  # nfs
-            if role == SIDECAR_ROLE:
-                raise InvalidParams(
-                    f"{mount_where}: nfs volume {mount['name']!r} cannot be "
-                    "mounted by a sidecar container")
-            if read_only:
-                raise InvalidParams(
-                    f"{mount_where}: nfs volume mounts do not support "
-                    "readOnly=true")
-            if nfs is not None:
-                raise InvalidParams(
-                    f"{mount_where}: at most one nfs volume mount is allowed "
-                    "per template")
-            nfs = {"server": volume["nfs_server"], "path": volume["nfs_path"],
-                   "mount_path": mount["mount_path"]}
+            nfs.append({"server": volume["nfs_server"],
+                        "path": volume["nfs_path"],
+                        "mount_path": mount["mount_path"],
+                        "read_only": False if read_only is None else read_only})
     return {"host_path_mounts": host, "configmap_mounts": cm,
-            "pvc_mounts": pvc, "nfs": nfs}
+            "pvc_mounts": pvc, "nfs_mounts": nfs}
 
 
 # -------------------------------------------------------------- 投影:内部规范形 → Template/sidecar
@@ -722,14 +737,14 @@ def main_template_kwargs(spec: dict[str, Any],
     """主容器内部规范形(+模板 volumes join)→ Template 容器级 kwargs。
 
     与 Template 默认逐项对齐(缺省落定不漂指纹);挂载经
-    validate_agent_mounts 规范化 + 冲突检查(含撞 nfs_mount_path)。
+    validate_agent_mounts 规范化 + 冲突检查(四类挂载 mount_path 互斥)。
     """
     fused = fuse_mounts(spec, volumes, where, MAIN_ROLE)
-    (host, cm, pvc) = validate_agent_mounts(
+    (host, cm, pvc, nfs) = validate_agent_mounts(
         fused["host_path_mounts"] or None,
         fused["configmap_mounts"] or None,
         fused["pvc_mounts"] or None,
-        nfs_mount_path=fused["nfs"]["mount_path"] if fused["nfs"] else None,
+        fused["nfs_mounts"] or None,
     )
     secctx = spec["security_context"]
     probe = spec["readiness_probe"]
@@ -748,15 +763,15 @@ def main_template_kwargs(spec: dict[str, Any],
         "agent_memory_limit": resources["memory_limit"],
         "run_as_user": secctx["run_as_user"],
         "run_as_group": secctx["run_as_group"],
+        "command": spec["command"],
+        "args": spec["args"],
         "health_path": probe["path"],
         "readiness_initial_delay": probe["initial_delay"],
         "readiness_period": probe["period"],
         "agent_host_path_mounts": host,
         "agent_configmap_mounts": cm,
         "agent_pvc_mounts": pvc,
-        "nfs_server": fused["nfs"]["server"] if fused["nfs"] else None,
-        "nfs_path": fused["nfs"]["path"] if fused["nfs"] else None,
-        "nfs_mount_path": fused["nfs"]["mount_path"] if fused["nfs"] else None,
+        "agent_nfs_mounts": nfs,
     }
 
 
@@ -767,6 +782,8 @@ def sidecar_wire_input(spec: dict[str, Any],
 
     产物交 validate_sidecars(幂等再规范化 + ≤8/重名/撞端口/挂载冲突);
     挂载列表给 raw 条目(canonical_* 在其中兜全量校验与排序)。
+    NFS 与 PVC 同构:sidecar 经 ``nfs_mounts`` 列表按名挂载模板级 NFS 卷,
+    与主容器无耦合(_canonical_sidecar 内条件键:空列表省略,存量指纹零扰动)。
     """
     fused = fuse_mounts(spec, volumes, where, SIDECAR_ROLE)
     secctx = spec["security_context"]
@@ -794,6 +811,7 @@ def sidecar_wire_input(spec: dict[str, Any],
         "host_path_mounts": fused["host_path_mounts"],
         "configmap_mounts": fused["configmap_mounts"],
         "pvc_mounts": fused["pvc_mounts"],
+        "nfs_mounts": fused["nfs_mounts"],
         "readiness_probe_type": probe["probe_type"],
         "readiness_path": probe["path"],
         "readiness_initial_delay": probe["initial_delay"],
@@ -827,7 +845,7 @@ def volumes_from_column(value: Any) -> dict[str, dict[str, Any]]:
 
 _CONTAINER_SECTION_COLUMNS = (
     "ports", "env", "env_from", "resources", "volume_mounts",
-    "security_context", "readiness_probe",
+    "security_context", "command", "args", "readiness_probe",
 )
 
 
@@ -885,6 +903,12 @@ def container_spec_from_row(row: Any) -> Optional[dict[str, Any]]:
     probe = {key: probe.get(key, default) for key, default in (
         ("probe_type", None), ("path", "/health"), ("initial_delay", 5),
         ("period", 10), ("timeout", 3))}
+    command = getattr(row, "command", None)
+    if not isinstance(command, list):
+        command = None
+    args = getattr(row, "args", None)
+    if not isinstance(args, list):
+        args = None
     return {
         "container_id": getattr(row, "container_id", None),
         "name": getattr(row, "name", None) or "",
@@ -897,5 +921,7 @@ def container_spec_from_row(row: Any) -> Optional[dict[str, Any]]:
         "resources": resources,
         "volume_mounts": volume_mounts,
         "security_context": secctx,
+        "command": command,
+        "args": args,
         "readiness_probe": probe,
     }

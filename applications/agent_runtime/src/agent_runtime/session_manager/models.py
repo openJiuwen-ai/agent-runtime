@@ -39,6 +39,12 @@ class Template:
     node_name: str | None = None
     run_as_user: int | None = None
     run_as_group: int | None = None
+    # Pod 级 securityContext.fsGroup(wire 键 fsGroup,与 nodeName 同款拍平;
+    # 运行时落到 Pod securityContext;None = 不设)
+    fs_group: int | None = None
+    # 主容器启动命令/参数覆盖(缺省走镜像 ENTRYPOINT/CMD;None = 不设)
+    command: list[str] | None = None
+    args: list[str] | None = None
     pod_name: str = "agentserver"          # Pod 名前缀（pod_id = 前缀-随机后缀）
     container_name: str = "agent"
     container_port: int = 8080
@@ -56,6 +62,9 @@ class Template:
     readiness_period: int = 5
     ready_timeout: int = 300               # deploy 等 Ready 的超时（秒）
     ready_poll_interval: int = 2
+    # NFS 三元组:legacy 内联行的只读兼容载体(新契约不下发——NFS 卷与 PVC
+    # 同构,卷源在模板级 volumes、挂载在 agent_nfs_mounts/sidecar nfs_mounts;
+    # __post_init__ 把旧行三元组转成 agent_nfs_mounts,见下)
     nfs_server: str | None = None
     nfs_path: str | None = None
     nfs_mount_path: str | None = None
@@ -73,6 +82,7 @@ class Template:
     agent_host_path_mounts: list[dict[str, Any]] | None = None
     agent_configmap_mounts: list[dict[str, Any]] | None = None
     agent_pvc_mounts: list[dict[str, Any]] | None = None
+    agent_nfs_mounts: list[dict[str, Any]] | None = None
     # deploy 凭证（B 类例外：只影响新 deploy，不日落）
     kubeconfig: str | None = None
     # 元信息
@@ -87,9 +97,17 @@ class Template:
         # payload/DB 行/快照 JSON/测试手搓全部构造路径收敛于此。
         object.__setattr__(self, "sidecars", normalize_sidecars(self.sidecars))
         for field in ("agent_host_path_mounts", "agent_configmap_mounts",
-                      "agent_pvc_mounts"):
+                      "agent_pvc_mounts", "agent_nfs_mounts"):
             kind = field.replace("agent_", "", 1)
             object.__setattr__(self, field, normalize_mounts(getattr(self, field), kind))
+        # legacy 内联三元组 → agent_nfs_mounts(旧行读兼容;RM 只认列表形态)。
+        # mount_path 缺省 "/data" 沿旧 RM 缺省(nfs_server 有值而挂载点未给时
+        # 历史上挂 /data);新契约不受影响——三元组列对三段式行恒为 NULL。
+        if self.nfs_server and not self.agent_nfs_mounts:
+            object.__setattr__(self, "agent_nfs_mounts", normalize_mounts(
+                [{"server": self.nfs_server, "path": self.nfs_path,
+                  "mount_path": self.nfs_mount_path or "/data",
+                  "read_only": False}], "nfs_mounts"))
         # 路径字段归一：缺前导 '/' 的值会拼出 "http://ip:8080api/..."（端口段
         # 粘连路径，httpx 直接抛非法端口 → 健康 Pod 被探死无限重部署）
         for field in ("sse_path", "health_path"):

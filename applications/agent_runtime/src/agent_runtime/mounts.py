@@ -1,10 +1,11 @@
 # coding: utf-8
-"""容器卷挂载(hostPath / ConfigMap / PVC)——SM 校验/归一 + RM 渲染共享。
+"""容器卷挂载(hostPath / ConfigMap / PVC / NFS)——SM 校验/归一 + RM 渲染共享。
 
 主 agent 容器(Template ``agent_host_path_mounts`` / ``agent_configmap_mounts`` /
-``agent_pvc_mounts``)与 sidecar 容器(sidecars 各自的 ``host_path_mounts`` /
-``configmap_mounts`` / ``pvc_mounts``)共用同一套规范形与校验;SM 与 RM 共用本
-模块,不引入 SM↔RM 相互 import(与 spec_fields/sidecars 同款顶层共享先例)。
+``agent_pvc_mounts`` / ``agent_nfs_mounts``)与 sidecar 容器(sidecars 各自的
+``host_path_mounts`` / ``configmap_mounts`` / ``pvc_mounts`` / ``nfs_mounts``)
+共用同一套规范形与校验;SM 与 RM 共用本模块,不引入 SM↔RM 相互 import
+(与 spec_fields/sidecars 同款顶层共享先例)。
 
 指纹不变式(★,同 sidecars.py):规范形填满全部默认键 + 列表按 mount_path 升序;
 「显式给默认值」与「省略键」、「下发顺序重排」必须产生同一 deploy_ver。
@@ -33,6 +34,7 @@ _MOUNT_KEYS_BY_TYPE = {
     "configmap_mounts": frozenset(
         {"config_map_name", "mount_path", "sub_path", "items", "read_only"}),
     "pvc_mounts": frozenset({"claim_name", "mount_path", "read_only"}),
+    "nfs_mounts": frozenset({"server", "path", "mount_path", "read_only"}),
 }
 
 
@@ -192,6 +194,43 @@ def canonical_pvc_mounts(value: Any, where: str) -> list[dict[str, Any]]:
     return _sorted_mounts(mounts)
 
 
+# -------------------------------------------------------------- NFS
+
+def canonical_nfs_mounts(value: Any, where: str) -> list[dict[str, Any]]:
+    """NFS 挂载 → 规范形(与 PVC 同构:卷源随模板级卷定义,挂载按名引用)。
+
+    非法 raise InvalidParams;path 缺省 None = NFS 导出根。
+    """
+    if not isinstance(value, list):
+        raise InvalidParams(f"{where} must be a list, got {value!r}")
+    mounts: list[dict[str, Any]] = []
+    for j, item in enumerate(value):
+        mount_where = f"{where}[{j}]"
+        if not isinstance(item, dict):
+            raise InvalidParams(f"{mount_where} must be an object, got {item!r}")
+        _unknown_keys(item, "nfs_mounts", mount_where)
+        server = item.get("server")
+        if not isinstance(server, str) or not server or len(server) > 256:
+            raise InvalidParams(
+                f"{mount_where}.server must be a non-empty string of at most "
+                f"256 chars, got {server!r}")
+        path = item.get("path")
+        if path is not None:
+            if (not isinstance(path, str) or not path
+                    or len(path) > 256):
+                raise InvalidParams(
+                    f"{mount_where}.path must be a non-empty string of at most "
+                    f"256 chars or null, got {path!r}")
+        mounts.append({
+            "server": server,
+            "path": path,
+            "mount_path": _check_mount_path(item.get("mount_path"), mount_where),
+            "read_only": _check_bool(item.get("read_only"), mount_where,
+                                     "read_only", False),
+        })
+    return _sorted_mounts(mounts)
+
+
 # -------------------------------------------------------------- 归一/校验入口
 
 def normalize_mounts(
@@ -203,6 +242,7 @@ def normalize_mounts(
         "host_path_mounts": canonical_host_path_mounts,
         "configmap_mounts": canonical_configmap_mounts,
         "pvc_mounts": canonical_pvc_mounts,
+        "nfs_mounts": canonical_nfs_mounts,
     }[kind]
     if not isinstance(value, list):
         return None
@@ -219,12 +259,11 @@ def normalize_mounts(
 
 def find_mount_path_conflicts(
         mount_lists: list[tuple[str, list[dict[str, Any]] | None]],
-        extra_paths: Optional[list[str]] = None,
 ) -> Optional[str]:
     """同一容器内 mount_path 重复检测(K8s 会拒,这里 fail-fast 到 400)。
 
-    mount_lists: [(来源标签, 挂载规范形列表)];extra_paths: 该容器既有的其他
-    挂载点(如主容器的 nfs_mount_path)。
+    mount_lists: [(来源标签, 挂载规范形列表)];四类挂载(hostPath/ConfigMap/
+    PVC/NFS)各自列表一起查重。
     """
     seen: dict[str, str] = {}
     for source, mounts in mount_lists:
@@ -234,23 +273,19 @@ def find_mount_path_conflicts(
                 return (f"mount_path {path!r} duplicated in {seen[path]} and "
                         f"{source}; a container can mount a path only once")
             seen[path] = source
-    for path in extra_paths or []:
-        if path in seen:
-            return (f"mount_path {path!r} duplicated in {seen[path]} and "
-                    f"nfs_mount_path; a container can mount a path only once")
     return None
 
 
 def validate_agent_mounts(
-        host_path: Any, config_map: Any, pvc: Any, *,
-        nfs_mount_path: Optional[str],
-) -> tuple[Optional[list], Optional[list], Optional[list]]:
-    """主容器三列表 config_sync 下发校验(fail-fast 400);各返回规范形或 None。"""
+        host_path: Any, config_map: Any, pvc: Any, nfs: Any,
+) -> tuple[Optional[list], Optional[list], Optional[list], Optional[list]]:
+    """主容器四列表 config_sync 下发校验(fail-fast 400);各返回规范形或 None。"""
     out = []
     for kind, value, where in (
             ("host_path_mounts", host_path, "agent_host_path_mounts"),
             ("configmap_mounts", config_map, "agent_configmap_mounts"),
             ("pvc_mounts", pvc, "agent_pvc_mounts"),
+            ("nfs_mounts", nfs, "agent_nfs_mounts"),
     ):
         if value is None:
             out.append(None)
@@ -261,13 +296,13 @@ def validate_agent_mounts(
             "host_path_mounts": canonical_host_path_mounts,
             "configmap_mounts": canonical_configmap_mounts,
             "pvc_mounts": canonical_pvc_mounts,
+            "nfs_mounts": canonical_nfs_mounts,
         }[kind](value, where) or None)
     conflict = find_mount_path_conflicts(
         [("agent_host_path_mounts", out[0]),
          ("agent_configmap_mounts", out[1]),
-         ("agent_pvc_mounts", out[2])],
-        extra_paths=[nfs_mount_path] if nfs_mount_path else None,
-    )
+         ("agent_pvc_mounts", out[2]),
+         ("agent_nfs_mounts", out[3])])
     if conflict:
         raise InvalidParams(conflict)
-    return out[0] or None, out[1] or None, out[2] or None
+    return out[0] or None, out[1] or None, out[2] or None, out[3] or None

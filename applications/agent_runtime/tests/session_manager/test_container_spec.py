@@ -126,6 +126,8 @@ def test_main_container_all_fields_roundtrip():
         "agent_memory_limit": "4Gi",
         "run_as_user": 1000,
         "run_as_group": 1000,
+        "command": None,
+        "args": None,
         "health_path": "/api/v1/health",
         "readiness_initial_delay": 6,
         "readiness_period": 7,
@@ -134,9 +136,9 @@ def test_main_container_all_fields_roundtrip():
         "agent_pvc_mounts": [
             {"claim_name": "agent-data", "mount_path": "/var/lib/agent",
              "read_only": False}],
-        "nfs_server": "10.0.0.1",
-        "nfs_path": "/export",
-        "nfs_mount_path": "/mnt/nfs",
+        "agent_nfs_mounts": [
+            {"server": "10.0.0.1", "path": "/export",
+             "mount_path": "/mnt/nfs", "read_only": False}],
     }
 
 
@@ -210,9 +212,9 @@ def test_sidecar_env_from_projected():
 # -------------------------------------------------------------- wire 拒绝矩阵
 
 def test_unknown_container_keys_rejected():
-    with pytest.raises(InvalidParams, match=r"unknown keys.*command"):
+    with pytest.raises(InvalidParams, match=r"unknown keys.*stdin"):
         parse_container_spec(
-            {"container_id": "c", "image": "i:1", "command": ["/bin/sh"]},
+            {"container_id": "c", "image": "i:1", "stdin": True},
             "containers[0]", role=MAIN_ROLE)
 
 
@@ -391,9 +393,9 @@ def test_volume_join_fused_mounts_canonical():
     assert kwargs["agent_pvc_mounts"] == [
         {"claim_name": "agent-data", "mount_path": "/var/lib/agent",
          "read_only": False}]
-    assert kwargs["nfs_server"] == "10.0.0.1"
-    assert kwargs["nfs_path"] == "/export"
-    assert kwargs["nfs_mount_path"] == "/mnt/nfs"
+    assert kwargs["agent_nfs_mounts"] == [
+        {"server": "10.0.0.1", "path": "/export",
+         "mount_path": "/mnt/nfs", "read_only": False}]
 
 
 def test_volume_join_read_only_overrides():
@@ -418,18 +420,6 @@ def test_volume_join_read_only_overrides():
     ([{"name": "hp", "hostPath": {"path": "/h"}}],
      [{"name": "hp", "mountPath": "/h", "subPath": "s"}], MAIN_ROLE,
      r"only supported on configMap"),
-    # NFS readOnly 不支持
-    ([{"name": "n", "nfs": {"server": "s"}}],
-     [{"name": "n", "mountPath": "/n", "readOnly": True}], MAIN_ROLE,
-     r"readOnly=true"),
-    # NFS 不许 sidecar
-    ([{"name": "n", "nfs": {"server": "s"}}],
-     [{"name": "n", "mountPath": "/n"}], SIDECAR_ROLE, r"sidecar container"),
-    # NFS 至多一个
-    ([{"name": "n1", "nfs": {"server": "s"}},
-      {"name": "n2", "nfs": {"server": "s"}}],
-     [{"name": "n1", "mountPath": "/n1"}, {"name": "n2", "mountPath": "/n2"}],
-     MAIN_ROLE, r"at most one nfs"),
 ])
 def test_volume_join_rules_rejected(volumes, mounts, where_role, match):
     spec = parse_container_spec(
@@ -440,6 +430,51 @@ def test_volume_join_rules_rejected(volumes, mounts, where_role, match):
         "c", role=where_role)
     with pytest.raises(InvalidParams, match=match):
         fuse_mounts(spec, canonical_volumes(volumes, "v"), "c", where_role)
+
+
+def test_volume_join_nfs_same_as_pvc():
+    """NFS 与 PVC 同构:主/sidecar 均可按名挂载,条数不限,readOnly 透传(K8s 语义)。"""
+    volumes = canonical_volumes([
+        {"name": "n1", "nfs": {"server": "10.0.0.1", "path": "/export"}},
+        {"name": "n2", "nfs": {"server": "10.0.0.2"}},
+    ], "volumes")
+    main_spec = parse_container_spec(
+        {"container_id": "c", "name": "agent", "image": "i:1",
+         "ports": [{"name": "sse", "containerPort": 8086}],
+         "volumeMounts": [{"name": "n1", "mountPath": "/mnt/n1", "readOnly": True},
+                          {"name": "n2", "mountPath": "/mnt/n2"}]},
+        "c", role=MAIN_ROLE)
+    fused = fuse_mounts(main_spec, volumes, "c", MAIN_ROLE)
+    assert fused["nfs_mounts"] == [  # raw 条目保持 wire 顺序
+        {"server": "10.0.0.1", "path": "/export", "mount_path": "/mnt/n1",
+         "read_only": True},
+        {"server": "10.0.0.2", "path": None, "mount_path": "/mnt/n2",
+         "read_only": False}]
+    kwargs = main_template_kwargs(main_spec, volumes, "c")
+    assert kwargs["agent_nfs_mounts"] == [  # 规范形按 mount_path 升序
+        {"server": "10.0.0.1", "path": "/export", "mount_path": "/mnt/n1",
+         "read_only": True},
+        {"server": "10.0.0.2", "path": None, "mount_path": "/mnt/n2",
+         "read_only": False}]
+
+    side_spec = parse_container_spec(
+        {"container_id": "c2", "name": "box", "image": "i:2",
+         "volumeMounts": [{"name": "n1", "mountPath": "/box/data"}]},
+        "c2", role=SIDECAR_ROLE)
+    wire_input = sidecar_wire_input(side_spec, volumes, "c2")
+    canonical = _validate_sidecars([wire_input])[0]
+    assert canonical["nfs_mounts"] == [
+        {"server": "10.0.0.1", "path": "/export",
+         "mount_path": "/box/data", "read_only": False}]
+
+
+def test_sidecar_without_nfs_mounts_key_is_fingerprint_stable():
+    """未挂 NFS 的 sidecar 规范形不含 nfs_mounts 键(条件键,存量指纹零扰动)。"""
+    spec = parse_container_spec(K8S_BOX, "c-box-1", role=SIDECAR_ROLE)
+    canonical = _validate_sidecars(
+        [sidecar_wire_input(spec, canonical_volumes(list(BOX_VOLUMES.values()),
+                                                    "v"), "c-box-1")])[0]
+    assert "nfs_mounts" not in canonical
 
 
 @pytest.mark.parametrize("volumes,match", [
@@ -469,7 +504,7 @@ def test_container_row_roundtrip():
     assert set(row) == {
         "container_id", "name", "image", "image_pull_policy", "ports", "env",
         "env_from", "resources", "volume_mounts", "security_context",
-        "readiness_probe"}
+        "command", "args", "readiness_probe"}
     from types import SimpleNamespace
     restored = container_spec_from_row(SimpleNamespace(**row))
     assert restored == spec

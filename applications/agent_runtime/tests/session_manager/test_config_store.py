@@ -740,7 +740,7 @@ async def test_route_and_pool_push_carry_sidecars_end_to_end(runtime):
 
 @requires_lua
 async def test_config_sync_roundtrips_agent_and_sidecar_mounts(runtime):
-    """主容器三种挂载 + sidecar cm/pvc 下发 → DB JSON 列回读 = 规范形。"""
+    """主容器四类挂载 + sidecar cm/pvc/nfs 下发 → DB JSON 列回读 = 规范形。"""
     await runtime.config_store.config_sync(_payload(
         [_tpl("tpl-mnt",
               agent_host_path_mounts=[{"host_path": "/host/c", "mount_path": "/etc/host"}],
@@ -748,10 +748,15 @@ async def test_config_sync_roundtrips_agent_and_sidecar_mounts(runtime):
                                        "mount_path": "/etc/agent/config.yaml",
                                        "sub_path": "config.yaml"}],
               agent_pvc_mounts=[{"claim_name": "agent-data", "mount_path": "/data"}],
+              agent_nfs_mounts=[{"server": "10.0.0.1", "path": "/jiuwenclaw",
+                                 "mount_path": "/mnt/nfs"}],
               sidecars=[dict(_SIDECAR,
                              configmap_mounts=[{"config_map_name": "box-policy",
                                                 "mount_path": "/etc/box/policy.yaml",
-                                                "sub_path": "policy.yaml"}])])],
+                                                "sub_path": "policy.yaml"}],
+                             nfs_mounts=[{"server": "10.0.0.1",
+                                          "path": "/jiuwenclaw",
+                                          "mount_path": "/box/data"}])])],
         [_scope(SCOPE, "tpl-mnt")],
     ))
     t = await runtime.config_store.get_template("tpl-mnt")
@@ -762,12 +767,19 @@ async def test_config_sync_roundtrips_agent_and_sidecar_mounts(runtime):
     assert t.agent_configmap_mounts[0]["read_only"] is True
     assert t.agent_pvc_mounts == [{"claim_name": "agent-data",
                                    "mount_path": "/data", "read_only": False}]
+    assert t.agent_nfs_mounts == [{"server": "10.0.0.1", "path": "/jiuwenclaw",
+                                   "mount_path": "/mnt/nfs", "read_only": False}]
     assert t.sidecars[0]["configmap_mounts"][0]["config_map_name"] == "box-policy"
-    # deploy_subset 携带三列表,整体 json 可序列化
+    assert t.sidecars[0]["nfs_mounts"] == [{"server": "10.0.0.1",
+                                            "path": "/jiuwenclaw",
+                                            "mount_path": "/box/data",
+                                            "read_only": False}]
+    # deploy_subset 携带四列表,整体 json 可序列化
     subset = t.deploy_subset()
     import json
     json.loads(json.dumps(subset))
     assert subset["agent_pvc_mounts"] == t.agent_pvc_mounts
+    assert subset["agent_nfs_mounts"] == t.agent_nfs_mounts
 
 
 @requires_lua
@@ -804,6 +816,34 @@ def test_template_from_row_normalizes_agent_mounts():
     assert template_from_row(
         _row(agent_pvc_mounts=[{"claim_name": "p", "mount_path": "/v"}])
     ).agent_pvc_mounts == [{"claim_name": "p", "mount_path": "/v", "read_only": False}]
+
+
+def test_template_from_row_legacy_nfs_triple_becomes_mounts():
+    """legacy 内联行的 NFS 三元组 → agent_nfs_mounts 规范形(RM 只认列表形态)。
+
+    mount_path 缺省落 "/data"(沿旧 RM 缺省);新契约行三元组列恒 NULL 不受影响。
+    """
+    from types import SimpleNamespace
+
+    from agent_runtime.session_manager.config_store import (
+        _COLUMN_OF,
+        template_from_row,
+    )
+
+    def _row(**kw):
+        base = {column: None for column in _COLUMN_OF.values()}
+        base.update(agent_image="img:1", **kw)
+        return SimpleNamespace(**base)
+
+    t = template_from_row(_row(nfs_server="10.0.0.1", nfs_path="/export",
+                               nfs_mount_path="/mnt/nfs"))
+    assert t.agent_nfs_mounts == [{"server": "10.0.0.1", "path": "/export",
+                                   "mount_path": "/mnt/nfs", "read_only": False}]
+    t = template_from_row(_row(nfs_server="10.0.0.1"))
+    assert t.agent_nfs_mounts == [{"server": "10.0.0.1", "path": None,
+                                   "mount_path": "/data", "read_only": False}]
+    # 新契约(无三元组)零影响
+    assert template_from_row(_row()).agent_nfs_mounts is None
 
 
 # -------------------------------------------------------------- 三段式契约(容器表拆分)

@@ -94,6 +94,8 @@ SERVICE_CONFIG_TEMPLATE_TABLE_DEF = TableDefinition(
         ColumnDefinition("node_name", "string", length=128, nullable=True),
         ColumnDefinition("run_as_user", "integer", nullable=True),
         ColumnDefinition("run_as_group", "integer", nullable=True),
+        # Pod 级 securityContext.fsGroup(存量库需先手工 ALTER 补列)
+        ColumnDefinition("fs_group", "integer", nullable=True),
         ColumnDefinition("pod_name", "string", length=128, nullable=False, default="agentserver"),
         ColumnDefinition("container_name", "string", length=128, nullable=False, default="agent"),
         ColumnDefinition("container_port", "integer", nullable=False, default=8080),
@@ -172,6 +174,7 @@ _COLUMN_OF: dict[str, str] = {
     "node_name": "node_name",
     "run_as_user": "run_as_user",
     "run_as_group": "run_as_group",
+    "fs_group": "fs_group",
     "pod_name": "pod_name",
     "container_name": "container_name",
     "container_port": "container_port",
@@ -212,7 +215,7 @@ _INT_FIELDS = frozenset({
     "container_port", "sse_port", "readiness_initial_delay", "readiness_period",
     "ready_timeout", "ready_poll_interval", "min_idle_pods", "pod_concurrency",
     "pod_ttl", "scope_concurrency", "session_ttl", "message_timeout",
-    "run_as_user", "run_as_group",
+    "run_as_user", "run_as_group", "fs_group",
 })
 
 # 模板级字段(留在模板表;容器级 22 字段 + sidecars 由容器表水合,见
@@ -221,7 +224,7 @@ _INT_FIELDS = frozenset({
 # 与 legacy 内联容器键并存 = mixed 形态 → 400。
 TEMPLATE_LEVEL_FIELDS: tuple[str, ...] = (
     "template_id", "template_name", "description", "enabled", "data",
-    "namespace", "node_name", "pod_name", "sse_path",
+    "namespace", "node_name", "fs_group", "pod_name", "sse_path",
     "ready_timeout", "ready_poll_interval", "kubeconfig",
     "scope_concurrency", "pod_concurrency", "session_ttl", "pod_ttl",
     "min_idle_pods", "message_timeout",
@@ -230,7 +233,7 @@ _SPLIT_REFERENCE_KEYS = frozenset(
     {"main_container_id", "sidecar_container_ids", "volumes"})
 # 模板级 wire 键别名:K8s 派生字段用 K8s 拼写(nodeName);snake 双形态拒绝
 # (防静默二义——两个拼写同时给不同值无法仲裁,fail-fast)
-_TEMPLATE_WIRE_ALIASES = {"node_name": "nodeName"}
+_TEMPLATE_WIRE_ALIASES = {"node_name": "nodeName", "fs_group": "fsGroup"}
 
 
 def _scope_row(scope: RoutingScopeDef) -> dict[str, Any]:
@@ -570,7 +573,7 @@ def _validate_pod_placing_fields(template_id: str, kwargs: dict[str, Any]) -> No
     ready_timeout,错误对下发方不可见)——提前到 config_sync 锁外,确定性 400。
     对齐 sidecars.py 对 sidecar run_as_user 的 minimum=0 先例。
     """
-    for field in ("run_as_user", "run_as_group"):
+    for field in ("run_as_user", "run_as_group", "fs_group"):
         value = kwargs.get(field)
         if isinstance(value, int) and value < 0:
             raise InvalidParams(

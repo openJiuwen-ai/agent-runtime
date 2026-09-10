@@ -311,6 +311,41 @@ def test_sidecar_rejects_bad_configmap_mount():
                                           "mount_path": "/cfg"}]}])
 
 
+# -------------------------------------------------------------- sidecar NFS 挂载
+
+def test_sidecar_nfs_mounts_canonical_and_conditional_key():
+    """sidecar NFS 挂载与 PVC 同构;规范形条件键——非空才出现,存量指纹零扰动。"""
+    out = _validate([{
+        "name": "box", "image": "x:1",
+        "nfs_mounts": [{"server": "10.0.0.1", "path": "/jiuwenclaw",
+                        "mount_path": "/home/app/.jiuwenswarm"}],
+    }])
+    box = out[0]
+    assert box["nfs_mounts"] == [{"server": "10.0.0.1", "path": "/jiuwenclaw",
+                                  "mount_path": "/home/app/.jiuwenswarm",
+                                  "read_only": False}]
+    # 未挂 NFS → 无 nfs_mounts 键(条件键,同 env_from 先例)
+    plain = _validate([{"name": "box", "image": "x:1"}])[0]
+    assert "nfs_mounts" not in plain
+    # 显式空列表同样省略(与缺省等价)
+    empty = _validate([{"name": "box", "image": "x:1", "nfs_mounts": []}])[0]
+    assert "nfs_mounts" not in empty
+    assert empty == plain
+
+
+def test_sidecar_nfs_rejects_bad_entry_and_duplicate_mount_path():
+    with pytest.raises(InvalidParams, match=r"nfs_mounts\[0\]"):
+        _validate([{"name": "box", "image": "x:1",
+                    "nfs_mounts": [{"server": "", "mount_path": "/m"}]}])
+    # NFS 挂载点与 pvc_mounts 撞路径 → 400
+    with pytest.raises(InvalidParams, match="mount_path.*duplicated"):
+        _validate([{
+            "name": "box", "image": "x:1",
+            "pvc_mounts": [{"claim_name": "p", "mount_path": "/data"}],
+            "nfs_mounts": [{"server": "s", "mount_path": "/data"}],
+        }])
+
+
 # -------------------------------------------------------------- envFrom(引用注入)
 
 def test_env_from_canonical_matrix():

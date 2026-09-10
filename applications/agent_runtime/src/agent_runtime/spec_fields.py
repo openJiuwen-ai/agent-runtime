@@ -17,6 +17,7 @@ DEPLOY_FIELDS: tuple[str, ...] = (
     "node_name",
     "run_as_user",
     "run_as_group",
+    "fs_group",             # Pod 级 securityContext.fsGroup(变更需重部署 Pod)
     "pod_name",
     "container_name",
     "container_port",
@@ -25,12 +26,11 @@ DEPLOY_FIELDS: tuple[str, ...] = (
     "health_path",          # readiness 探针路径(默认 /health;真 AgentServer 为 /api/v1/health)
     "agent_env",            # Agent 容器注入的 env(如 AGENT_HTTP_ENABLED/HOST/PORT)
     "agent_env_from",       # envFrom 引用(secretRef/configMapRef;None 不进指纹——存量零扰动)
+    "command",              # 主容器 command 覆盖(None = 走镜像入口)
+    "args",                 # 主容器 args 覆盖(None = 走镜像入口)
     "image_pull_policy",
     "readiness_initial_delay",
     "readiness_period",
-    "nfs_server",
-    "nfs_path",
-    "nfs_mount_path",
     "agent_cpu_request",
     "agent_memory_request",
     "agent_cpu_limit",
@@ -39,6 +39,7 @@ DEPLOY_FIELDS: tuple[str, ...] = (
     "agent_host_path_mounts",   # 主容器 hostPath 挂载(规范形见 mounts.py)
     "agent_configmap_mounts",   # 主容器 ConfigMap 挂载
     "agent_pvc_mounts",         # 主容器 PVC 挂载
+    "agent_nfs_mounts",         # 主容器 NFS 挂载(与 PVC 同构,卷源在模板级 volumes)
 )
 
 # deploy 指纹涵盖字段（deploy 子集 + ready 超时参数——影响 deploy 行为与版本）
