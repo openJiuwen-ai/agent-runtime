@@ -87,7 +87,7 @@ SM 侧 ctx,级联管理全部生命周期(框架 App 的 lifespan 只认一个 c
   2. `AGENT_RUNTIME_LOG_LEVEL` → root 级别;handler 级别**只放宽不收紧**(yaml 钉死的 INFO 不被覆盖,DEBUG 请求可穿透);非法值 WARNING 并回退 INFO;
   3. `httpx`/`httpcore` → WARNING(健康探测刷屏降噪);
   4. `install_request_context()`。
-- **请求关联**:contextvars + root 级 `_RequestContextFilter`/`_ContextFormatter`。请求处理期间的日志行尾部追加 `| request_id=… session_id=… endpoint=… instance=…`;后台任务行(无上下文)与原格式逐字节一致。中间件负责 set/reset(`metrics.py`)。
+- **请求关联**:contextvars + root 级 `_RequestContextFilter`/`_ContextFormatter`。请求处理期间的日志行尾部追加 `| request_id=… session_id=… user_id=… endpoint=… instance=…`(user_id 取自信封 Metadata,缺省时该字段不出现);后台任务行(无上下文)与原格式逐字节一致。中间件负责 set/reset(`metrics.py`)。
 - **stdout 主形态**:`OPENJIUWEN_RUNTIME_LOG_FILE=disabled|off|none|false` → 框架 `setup_logging` 从 dictConfig 三处(handlers/root/loggers)移除 file handler(K8s 模板已固定注入;容器文件随 pod 丢失且无处导出)。留空则维持文件 handler(宿主机调试可用)。
 
 ### 日志契约(排障入口)

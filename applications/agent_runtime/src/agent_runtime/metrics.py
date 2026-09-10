@@ -147,10 +147,12 @@ def request_metrics_middleware(
         metadata = getattr(env, "metadata", None)
         request_id = getattr(metadata, "request_id", "") if metadata else ""
         session_id = getattr(metadata, "session_id", "") if metadata else ""
+        user_id = getattr(metadata, "user_id", "") if metadata else ""
         instance_id = getattr(getattr(ctx, "sysctx", None), "instance_id", "") or ""
         token = set_request_log_context(
             request_id=request_id,
             session_id=session_id,
+            user_id=user_id,
             endpoint=getattr(env, "type", ""),
             instance_id=instance_id,
         )

@@ -106,3 +106,35 @@ def test_middleware_slow_request_warning(monkeypatch, caplog):
         messages = [r.getMessage() for r in caplog.records]
         assert any("request: endpoint=route" in m for m in messages)
         assert not any("request slow" in m for m in messages)
+
+
+def test_middleware_binds_user_id_to_log_tail(monkeypatch):
+    """日志尾巴带 user_id（取信封 Metadata）；缺省时该字段不出现。"""
+    from agent_runtime.logsetup import current_log_tail
+
+    clock = _FakeClock()
+    clock.install(monkeypatch)
+    middleware = request_metrics_middleware(MetricsRegistry())
+    seen = {}
+
+    async def drive(user_id):
+        env = SimpleNamespace(
+            type="route",
+            metadata=SimpleNamespace(
+                request_id="r1", session_id="s1", user_id=user_id),
+        )
+        ctx = SimpleNamespace(sysctx=SimpleNamespace(instance_id="i1"))
+
+        async def nxt(ctx_, env_):
+            seen["tail"] = current_log_tail()
+            return SimpleNamespace(response=SimpleNamespace(
+                ok=True, error_code=None, error_message=""))
+
+        await middleware(ctx, env, nxt)
+
+    asyncio.run(drive("u-1"))
+    assert seen["tail"] == (
+        "request_id=r1 session_id=s1 user_id=u-1 endpoint=route instance_id=i1")
+    asyncio.run(drive(None))
+    assert seen["tail"] == (
+        "request_id=r1 session_id=s1 endpoint=route instance_id=i1")
