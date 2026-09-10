@@ -165,7 +165,7 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
             key={template?.template_id ?? 'new'}
             label={t('agentTemplate.templateRef')}
             hint={t('agentTemplate.templateRefHint')}
-            required
+            requiredSlots={['default_model']}
             value={form.template_ref}
             onChange={(v) => update('template_ref', v)}
           />

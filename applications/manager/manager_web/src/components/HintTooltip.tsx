@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 type HintTooltipProps = {
@@ -6,12 +6,14 @@ type HintTooltipProps = {
   className?: string;
   /** 可选跳转：配置后气泡内追加「前往配置 →」链接，点击执行 */
   linkTo?: () => void;
+  /** 可选自定义气泡内容（如统一格式的 GuideLink）；配置后优先于 text/linkTo */
+  children?: ReactNode;
 };
 
 const HIDE_DELAY_MS = 100;
 const VIEWPORT_PAD = 8;
 
-export function HintTooltip({ text, className, linkTo }: HintTooltipProps) {
+export function HintTooltip({ text, className, linkTo, children }: HintTooltipProps) {
   const [anchor, setAnchor] = useState<DOMRect | null>(null);
   const [open, setOpen] = useState(false);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -66,7 +68,9 @@ export function HintTooltip({ text, className, linkTo }: HintTooltipProps) {
         onMouseEnter={clearHideTimer}
         onMouseLeave={scheduleHide}
       >
-        {linkTo ? (
+        {children ? (
+          children
+        ) : linkTo ? (
           <button
             type="button"
             className="flex items-center gap-1 text-[11px] leading-snug text-muted no-underline hover:text-accent hover:underline cursor-pointer text-left m-0 p-0 bg-transparent border-0"

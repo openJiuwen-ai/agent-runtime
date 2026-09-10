@@ -16,6 +16,8 @@ import {
 import { ListSearchInput } from '../../components/ListSearchInput';
 import { ModelTemplateModal } from './ModelTemplateModal';
 import { toast } from '../../stores/uiStore';
+import { bumpGuideRevision } from '../../stores/guideStore';
+import { useGuideAutoOpen } from '../../hooks/useGuideAutoOpen';
 import { formatTime, truncate } from '../../utils/format';
 
 const MODEL_TYPE_OPTIONS = ['default', 'video', 'audio', 'vision', 'image_gen'] as const;
@@ -46,6 +48,12 @@ export function ModelTemplatesPage() {
   const [enabledFilter, setEnabledFilter] = useState<string>('');
   const [sortBy, setSortBy] = useState<ModelTemplateSortField | ''>('');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+
+  /** 引导跳转：其他页面点「未配置 模型」跳过来时自动打开新建弹框 */
+  useGuideAutoOpen('modelTemplateNew', () => {
+    setEditing(null);
+    setModalOpen(true);
+  });
 
   const sortOptions = useMemo(
     () => [
@@ -369,6 +377,7 @@ export function ModelTemplatesPage() {
         onClose={() => setModalOpen(false)}
         onSaved={() => {
           setModalOpen(false);
+          bumpGuideRevision();
           void reload();
         }}
       />
@@ -382,6 +391,7 @@ export function ModelTemplatesPage() {
           try {
             await ModelTemplateApi.remove(delTarget.template_id);
             toast('success', t('success.deleted'));
+            bumpGuideRevision();
             void reload();
           } catch (e) {
             toast('danger', t('errors.deleteFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));

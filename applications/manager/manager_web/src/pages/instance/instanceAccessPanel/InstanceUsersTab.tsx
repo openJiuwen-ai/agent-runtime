@@ -457,6 +457,7 @@ export function InstanceUsersTab({ instanceId }: Props) {
           title={t(`${IA}.addUsers`)}
           candidates={candidates}
           showExpiresAt
+          manageLink={{ page: t('iam.users'), to: '/users' }}
           onConfirm={async ({ ids, expires_at, login_policy }) => {
             await InstanceBindingApi.bindUsers(instanceId, ids, { expires_at, login_policy });
             toast('success', t('success.saved'));

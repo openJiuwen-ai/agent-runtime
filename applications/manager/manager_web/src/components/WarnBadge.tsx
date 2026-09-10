@@ -113,7 +113,7 @@ export function WarnBadge({ text, links, className }: Props) {
   return (
     <>
       <span
-        className={`inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border border-danger text-danger text-[9px] font-bold leading-none opacity-80 cursor-help ${className ?? ''}`}
+        className={`inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border border-danger bg-transparent text-danger text-[9px] font-bold leading-none opacity-80 cursor-help ${className ?? ''}`}
         aria-label={ariaText}
         onMouseEnter={(e) => show(e.currentTarget.getBoundingClientRect())}
         onMouseLeave={scheduleHide}

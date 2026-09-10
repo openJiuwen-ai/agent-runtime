@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Modal, ModalCancelButton } from '../../../components/Modal';
 import { HintTooltip } from '../../../components/HintTooltip';
+import { GuideLink } from '../../../components/GuideLink';
 import { useFormDirty } from '../../../hooks/useFormDirty';
 import { ApiError } from '../../../services/api';
 import { toast } from '../../../stores/uiStore';
@@ -17,13 +18,15 @@ export type AddToInstanceConfirmPayload = {
 
 /** 通用"添加到实例"选择器：候选（已排除在册者）搜索 + 多选 + 可选过期时间/登录权限 → onConfirm。 */
 export function AddToInstanceModal({
-  title, candidates, onConfirm, onClose, showExpiresAt = false,
+  title, candidates, onConfirm, onClose, showExpiresAt = false, manageLink,
 }: {
   title: string;
   candidates: Candidate[];
   onConfirm: (payload: AddToInstanceConfirmPayload) => Promise<void>;
   onClose: () => void;
   showExpiresAt?: boolean;
+  /** 可选：弹窗底部「前往 xxx 页面 →」导航链接，点击关闭弹窗并跳转对应页面 */
+  manageLink?: { page: string; to: string };
 }) {
   const { t } = useTranslation();
   const { markClean, isDirty } = useFormDirty(true);
@@ -146,6 +149,16 @@ export function AddToInstanceModal({
           </label>
         </>
       ) : null}
+      {manageLink && (
+        <div className="mt-3">
+          <GuideLink
+            page={manageLink.page}
+            to={manageLink.to}
+            className="text-xs text-muted hover:text-accent hover:underline"
+            onNavigate={onClose}
+          />
+        </div>
+      )}
     </Modal>
   );
 }

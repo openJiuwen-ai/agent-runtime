@@ -5,6 +5,7 @@ import { useAsync } from '../hooks/useAsync';
 import { useDefinitionPresence } from '../hooks/useGuideStatus';
 import { InstanceApi } from '../services/api';
 import { WarnBadge, type WarnBadgeLink } from './WarnBadge';
+import { useGuideMissingLabel } from './GuideLink';
 
 type NavItem = {
   key: string;
@@ -25,9 +26,10 @@ function isItemActive(item: NavItem, path: string): boolean {
 export function Sidebar() {
   const { t } = useTranslation();
   const { path, navigate } = useRouter();
+  const missingLabel = useGuideMissingLabel();
 
   const { data: instancesPage } = useAsync(() => InstanceApi.list({ page: 1, page_size: 50 }), []);
-  const { agentDefined, poolDefined } = useDefinitionPresence();
+  const { agentDefined, poolDefined, instanceCreated, modelDefined } = useDefinitionPresence();
 
   const agentTemplateChildPaths = [
     '/model-templates',
@@ -222,7 +224,17 @@ export function Sidebar() {
   return (
     <aside className="nav flex flex-col">
       <div className="nav-group-title nav-group-title--uppercase">{t('nav.platform')}</div>
-      <div className="space-y-1">{platformItems.map((item) => renderItem(item))}</div>
+      <div className="space-y-1">
+        {platformItems.map((item) =>
+          renderItem(
+            item,
+            false,
+            item.key === 'instances' && instanceCreated === false
+              ? [{ label: missingLabel(t('nav.instances')), to: '/instances', openTarget: 'instanceCreate' }]
+              : undefined,
+          ),
+        )}
+      </div>
 
       <div className="nav-group-title nav-group-title--with-top-gap">{t('nav.config')}</div>
       <div className="space-y-1">
@@ -249,7 +261,15 @@ export function Sidebar() {
           </button>
           {agentTemplatesOpen && (
             <div className="nav-subgroup__children space-y-1">
-              {agentConfigTemplateItems.map((item) => renderItem(item, true))}
+              {agentConfigTemplateItems.map((item) =>
+                renderItem(
+                  item,
+                  true,
+                  item.key === 'model-templates' && modelDefined === false
+                    ? [{ label: missingLabel(t('nav.modelTemplates')), to: '/model-templates', openTarget: 'modelTemplateNew' }]
+                    : undefined,
+                ),
+              )}
             </div>
           )}
         </div>
@@ -257,7 +277,7 @@ export function Sidebar() {
           agentManagementItem,
           false,
           agentDefined === false
-            ? [{ label: t('guide.missingAgentDefinition'), to: '/agent-templates', openTarget: 'agentTemplateNew' }]
+            ? [{ label: missingLabel(t('nav.agentManagement')), to: '/agent-templates', openTarget: 'agentTemplateNew' }]
             : undefined,
         )}
         {configTopItems.map((item) =>
@@ -265,7 +285,7 @@ export function Sidebar() {
             item,
             false,
             poolDefined === false
-              ? [{ label: t('guide.missingPoolDefinition'), to: '/service-config-templates/new' }]
+              ? [{ label: missingLabel(t('nav.serviceConfigTemplates')), to: '/service-config-templates/new' }]
               : undefined,
           ),
         )}
@@ -277,7 +297,7 @@ export function Sidebar() {
       <div className="flex-1" />
       <div className="nav-footer">
         <div className="nav-footer__row">
-          <span className="nav-footer__label">{t('overview.totalInstances')}</span>
+          <span className="nav-footer__label">{t('nav.instances')}</span>
           <span className="nav-footer__value">{instanceCount}</span>
         </div>
         <div className="nav-footer__row">
