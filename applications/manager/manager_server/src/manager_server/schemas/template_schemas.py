@@ -538,7 +538,6 @@ class A2ADiscoverySettingsBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     allow_http: bool
-    allow_loopback: bool
     allow_private_network: bool
     allow_public_http: bool
 

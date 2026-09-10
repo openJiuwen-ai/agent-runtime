@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 from openjiuwen_runtime.foundation.db.sqlite_handler import SQLiteHandler
-from openjiuwen_runtime.foundation.db.table_def import TableDefinition
+from openjiuwen_runtime.foundation.db.table_def import ColumnDefinition, TableDefinition
 from sqlalchemy import (
     Boolean,
     Column,
@@ -106,7 +106,6 @@ async def test_existing_discovery_settings_table_gets_private_network_column(tmp
             {
                 "settings_id": "global",
                 "allow_http": True,
-                "allow_loopback": True,
                 "allow_public_http": True,
                 "created_at": now,
                 "updated_at": now,
@@ -127,5 +126,45 @@ async def test_existing_discovery_settings_table_gets_private_network_column(tmp
         migrated = await handler.get(old_definition.table_name, {"settings_id": "global"})
         assert migrated.allow_private_network is False
         assert migrated.allow_http is True
+    finally:
+        await handler.disconnect()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy_value", [False, True])
+async def test_legacy_loopback_column_is_not_read_or_written(tmp_path, legacy_value):
+    from manager_server.core.template.a2a_discovery_settings import A2ADiscoverySettingsService
+
+    definition = A2A_DISCOVERY_SETTINGS_TABLE_DEF
+    assert "allow_loopback" not in {column.name for column in definition.columns}
+    handler = SQLiteHandler(str(tmp_path / "legacy.db"))
+    await handler.connect()
+    try:
+        await handler.init_table(TableDefinition(
+            table_name=definition.table_name,
+            columns=[*definition.columns, ColumnDefinition(
+                "allow_loopback", "boolean", nullable=False, default=False,
+            )],
+            indexes=definition.indexes,
+        ))
+        now = utc_now()
+        await handler.create(definition.table_name, {
+            "settings_id": "global", "allow_loopback": legacy_value,
+            "allow_http": True, "allow_private_network": True, "allow_public_http": True,
+            "created_at": now, "updated_at": now,
+        })
+        await handler.init_table(definition)
+        service = A2ADiscoverySettingsService(handler)
+        settings = await service.get()
+        assert settings.model_dump() == {
+            "allow_http": True, "allow_private_network": True, "allow_public_http": True,
+        }
+        await service.update(settings)
+        async with handler.engine.connect() as connection:
+            from sqlalchemy import text
+            result = await connection.execute(text(
+                f"SELECT allow_loopback FROM {definition.table_name}"
+            ))
+            assert bool(result.scalar_one()) is legacy_value
     finally:
         await handler.disconnect()

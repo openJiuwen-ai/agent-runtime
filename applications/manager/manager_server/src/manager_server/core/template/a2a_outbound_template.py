@@ -201,7 +201,6 @@ class A2AOutboundTemplateService:
                 existing.source_url,
                 existing.card_path,
                 allow_http=settings.allow_http,
-                allow_loopback=settings.allow_loopback,
                 allow_private_network=settings.allow_private_network,
                 allow_public_http=settings.allow_public_http,
             )
@@ -275,7 +274,6 @@ class A2AOutboundTemplateService:
                         await _validate_target(
                             url,
                             allow_http=settings.allow_http,
-                            allow_loopback=settings.allow_loopback,
                             allow_private_network=settings.allow_private_network,
                             allow_public_http=settings.allow_public_http,
                         )

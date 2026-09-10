@@ -21,13 +21,11 @@ class A2ADiscoverySettingsService:
         if row is None:
             return A2ADiscoverySettingsBody(
                 allow_http=False,
-                allow_loopback=False,
                 allow_private_network=False,
                 allow_public_http=False,
             )
         return A2ADiscoverySettingsBody(
             allow_http=bool(row.allow_http),
-            allow_loopback=bool(row.allow_loopback),
             allow_private_network=bool(row.allow_private_network),
             allow_public_http=bool(row.allow_public_http),
         )

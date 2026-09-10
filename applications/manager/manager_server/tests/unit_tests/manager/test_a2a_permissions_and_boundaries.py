@@ -39,7 +39,6 @@ async def test_a2a_management_routes_require_admin(manager_api: ManagerApiHarnes
             "/a2a-discovery-settings",
             {
                 "allow_http": True,
-                "allow_loopback": True,
                 "allow_private_network": True,
                 "allow_public_http": True,
             },
