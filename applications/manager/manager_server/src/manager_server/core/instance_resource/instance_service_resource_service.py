@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from openjiuwen_runtime.foundation.db.handler import DBHandler
@@ -38,7 +38,6 @@ _ALLOWED_GRANT_SORT_FIELDS = frozenset(
         "ref_template_id",
     }
 )
-_ALLOWED_TEMPLATE_SORT_FIELDS = frozenset({"template_name", "updated_at", "description", "template_id"})
 
 
 def _g(row: Any, key: str, default: Any = None) -> Any:
@@ -77,31 +76,6 @@ def grant_out(row: Any) -> dict[str, Any]:
 
 def match_key(expr: Any) -> str:
     return json.dumps(canonicalize_match_expr(expr), ensure_ascii=False, separators=(",", ":"))
-
-
-def _parse_dt(value: Any) -> datetime | None:
-    if isinstance(value, datetime):
-        return value
-    if isinstance(value, str) and value:
-        try:
-            return datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
-            return None
-    return None
-
-
-def _dt_sort_value(value: Any) -> float:
-    dt = _parse_dt(value)
-    if dt is None:
-        return float("-inf")
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.timestamp()
-
-
-def _primary_rank(grant: dict[str, Any]) -> tuple[int, float]:
-    """priority 降序，同 priority 时 updated_at 降序。"""
-    return (int(grant.get("priority") or 0), _dt_sort_value(grant.get("updated_at")))
 
 
 class InstanceServiceResourceService:
@@ -410,8 +384,14 @@ class InstanceServiceResourceService:
         sort_by: str | None = None,
         sort_order: str | None = None,
     ) -> dict[str, Any]:
+        """按 ``instance_service_resource`` 行返回（一 resource_id 一行，对齐表结构）。
+
+        ``template_name`` 仅用于 search / sort，不写入响应体。
+        """
         requested_sort = (sort_by or "").strip().lower()
-        grant_sort_field = "ref_template_id" if requested_sort == "template_name" else requested_sort
+        grant_sort_field = (
+            "ref_template_id" if requested_sort == "template_name" else requested_sort
+        )
         order_by = resolve_order_by(
             grant_sort_field,
             sort_order,
@@ -424,82 +404,63 @@ class InstanceServiceResourceService:
             offset=0,
             order_by=order_by,
         )
-        by_policy: dict[str, dict[str, Any]] = {}
-        for r in rows:
-            pid = str(_g(r, "resource_id"))
-            tid = str(_g(r, "ref_template_id"))
-            bucket = by_policy.setdefault(pid, {"template_id": tid, "records": [], "primary": None})
-            out = grant_out(r)
-            bucket["records"].append(out)
-            prev = bucket["primary"]
-            if prev is None or _primary_rank(out) >= _primary_rank(prev):
-                bucket["primary"] = out
+        items = [grant_out(r) for r in rows]
 
-        out: list[dict[str, Any]] = []
-        for pid, bucket in by_policy.items():
-            tid = str(bucket["template_id"])
-            tpl = await self._tpl.get(tid)
-            if tpl is None:
-                continue
-            item = tpl.model_dump() if hasattr(tpl, "model_dump") else dict(tpl)
-            primary = bucket["primary"] or {}
-            item["resource_id"] = pid
-            item["resource_name"] = primary.get("resource_name")
-            item["resource_desc"] = primary.get("resource_desc")
-            item["ref_template_id"] = tid
-            item["records"] = bucket["records"]
-            item["_primary_grant"] = primary
-            out.append(item)
+        tpl_name_by_id: dict[str, str] = {}
+        need_tpl_names = bool((search or "").strip()) or requested_sort == "template_name"
+        if need_tpl_names:
+            tpl_rows = await self._h.list_records(_SVC_TPL, {}, limit=_CAP, offset=0)
+            tpl_name_by_id = {
+                str(_g(r, "template_id") or ""): str(_g(r, "template_name") or "")
+                for r in tpl_rows
+                if _g(r, "template_id")
+            }
 
         if enabled is not None:
-            out = [x for x in out if bool((x.get("_primary_grant") or {}).get("enabled", True)) is enabled]
+            items = [x for x in items if bool(x.get("enabled", True)) is enabled]
 
         kw = (search or "").strip().lower()
         if kw:
             matched: list[dict[str, Any]] = []
-            for x in out:
-                p = x.get("_primary_grant") or {}
+            for x in items:
+                tid = str(x.get("ref_template_id") or "")
                 parts = [
                     str(x.get("resource_id") or ""),
-                    str(p.get("resource_name") or ""),
-                    str(p.get("resource_desc") or ""),
-                    str(x.get("template_id") or ""),
-                    str(x.get("template_name") or ""),
-                    str(x.get("description") or ""),
-                    str(p.get("granted_by") or ""),
-                    str(p.get("priority") or ""),
+                    str(x.get("resource_name") or ""),
+                    str(x.get("resource_desc") or ""),
+                    tid,
+                    tpl_name_by_id.get(tid, ""),
+                    str(x.get("granted_by") or ""),
+                    str(x.get("priority") or ""),
                 ]
                 if any(kw in s.lower() for s in parts):
                     matched.append(x)
-            out = matched
+            items = matched
 
         if requested_sort == "template_name":
-            tpl_order = resolve_order_by(
-                "template_name",
-                sort_order,
-                allowed_sort_fields=_ALLOWED_TEMPLATE_SORT_FIELDS,
+            reverse = (sort_order or "asc").strip().lower() == "desc"
+            items.sort(
+                key=lambda x: tpl_name_by_id.get(
+                    str(x.get("ref_template_id") or ""), ""
+                ).lower(),
+                reverse=reverse,
             )
-            tpl_rows = await self._h.list_records(_SVC_TPL, {}, limit=_CAP, offset=0, order_by=tpl_order)
-            by_tid: dict[str, list[dict[str, Any]]] = {}
-            for item in out:
-                by_tid.setdefault(str(item.get("template_id")), []).append(item)
-            ordered: list[dict[str, Any]] = []
-            for row in tpl_rows:
-                tid = str(_g(row, "template_id"))
-                ordered.extend(by_tid.get(tid) or [])
-            out = ordered
         elif requested_sort == "priority":
             reverse = (sort_order or "asc").strip().lower() == "desc"
-            out.sort(key=lambda x: int((x.get("_primary_grant") or {}).get("priority") or 0), reverse=reverse)
+            items.sort(
+                key=lambda x: int(x.get("priority") or 0),
+                reverse=reverse,
+            )
         elif requested_sort == "resource_name":
             reverse = (sort_order or "asc").strip().lower() == "desc"
-            out.sort(key=lambda x: str(x.get("resource_name") or "").lower(), reverse=reverse)
+            items.sort(
+                key=lambda x: str(x.get("resource_name") or "").lower(),
+                reverse=reverse,
+            )
 
-        total = len(out)
+        total = len(items)
         page = max(page, 1)
         page_size = min(max(page_size, 1), 200)
         offset = (page - 1) * page_size
-        out = out[offset:offset + page_size]
-        for x in out:
-            x.pop("_primary_grant", None)
-        return {"items": out, "total": total, "page": page, "page_size": page_size}
+        items = items[offset:offset + page_size]
+        return {"items": items, "total": total, "page": page, "page_size": page_size}

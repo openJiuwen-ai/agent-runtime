@@ -5,7 +5,6 @@ import { MatchExprEditor } from '../../../components/MatchExprEditor';
 import { useAsync } from '../../../hooks/useAsync';
 import { useFormDirty } from '../../../hooks/useFormDirty';
 import {
-  InstanceAgentResourceRecord,
   InstanceAgentResourceApi,
   AgentTemplateApi,
   ApiError,
@@ -66,21 +65,9 @@ function FieldLabel({ children, required }: { children: ReactNode; required?: bo
   );
 }
 
-function recordsToEditorString(records: InstanceAgentResourceRecord[]): string {
-  const parts = records
-    .map((g) => matchExprToEditorString(g.match_expr))
-    .filter((s) => s.length > 0);
-  if (parts.length === 0) return '';
-  if (parts.length === 1) return parts[0];
-  return JSON.stringify(parts);
-}
-
-function summarizeMatchExpr(records: InstanceAgentResourceRecord[], allLabel: string): string {
-  if (!records.length) return '-';
-  const parts = records.map((g) => matchExprToEditorString(g.match_expr)).filter(Boolean);
-  if (!parts.length || parts.every((p) => !p)) return allLabel;
-  if (parts.length === 1) return parts[0];
-  return parts.join(' OR ');
+function summarizeMatchExpr(expr: InstanceAgentResource['match_expr'], allLabel: string): string {
+  const text = matchExprToEditorString(expr);
+  return text || allLabel;
 }
 
 export function InstanceAgentResourceTab({ instanceId }: Props) {
@@ -128,6 +115,13 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
   const { data: catalogData } = useAsync(() => AgentTemplateApi.list(), []);
   const agents = rosterData?.items ?? [];
   const catalog = catalogData?.items ?? [];
+  const templateNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const item of catalog) {
+      map.set(item.template_id, item.template_name);
+    }
+    return map;
+  }, [catalog]);
 
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [showAdd, setShowAdd] = useState(false);
@@ -180,19 +174,12 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
 
   useEffect(() => {
     if (editing) {
-      const nextMatch = recordsToEditorString(editing.records ?? []);
-      const first = (editing.records ?? [])[0];
-      const nextName = clipField(
-        first?.resource_name ?? editing.resource_name ?? '',
-        FIELD_MAX_LENGTH.resource_name,
-      );
-      const nextDesc = clipField(
-        first?.resource_desc ?? editing.resource_desc ?? '',
-        FIELD_MAX_LENGTH.resource_desc,
-      );
+      const nextMatch = matchExprToEditorString(editing.match_expr);
+      const nextName = clipField(editing.resource_name ?? '', FIELD_MAX_LENGTH.resource_name);
+      const nextDesc = clipField(editing.resource_desc ?? '', FIELD_MAX_LENGTH.resource_desc);
       let nextExpires = '';
-      if (first?.expires_at) {
-        const d = new Date(first.expires_at);
+      if (editing.expires_at) {
+        const d = new Date(editing.expires_at);
         nextExpires = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
       }
       setMatchExpr(nextMatch);
@@ -213,6 +200,10 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
   }, [editing, instanceId, markEditClean]);
 
   const candidates = catalog.map((b) => ({ id: b.template_id, label: b.template_name, sub: b.template_id }));
+
+  function templateLabel(refTemplateId: string): string {
+    return templateNameById.get(refTemplateId) || refTemplateId;
+  }
 
   function toggleCheck(id: string) {
     setChecked((prev) => {
@@ -391,9 +382,10 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
               {agents.length === 0 ? (
                 <tr><td colSpan={10}><Empty text={t('common.empty')} /></td></tr>
               ) : agents.map((a) => {
-                const first = (a.records ?? [])[0] as InstanceAgentResourceRecord | undefined;
+                const tplName = templateLabel(a.ref_template_id);
+                const scopeText = summarizeMatchExpr(a.match_expr, allMatchLabel);
                 return (
-                  <tr key={`${a.template_id}:${a.resource_id}`}>
+                  <tr key={a.resource_id}>
                     <td><input type="checkbox" checked={checked.has(a.resource_id)} onChange={() => toggleCheck(a.resource_id)} /></td>
                     <td className="align-top">
                       <div className="text-text-strong font-medium break-words">
@@ -407,30 +399,30 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
                       {a.resource_desc || '-'}
                     </td>
                     <td className="align-top">
-                      <div className="text-text-strong font-medium break-words">{a.template_name}</div>
-                      <div className="text-[11px] text-muted mono break-all" title={a.template_id}>{a.template_id}</div>
+                      <div className="text-text-strong font-medium break-words">{tplName}</div>
+                      <div className="text-[11px] text-muted mono break-all" title={a.ref_template_id}>{a.ref_template_id}</div>
                     </td>
-                    <td className="mono text-[11px] text-muted max-w-[14rem]" title={summarizeMatchExpr(a.records ?? [], allMatchLabel)}>
-                      {summarizeMatchExpr(a.records ?? [], allMatchLabel)}
+                    <td className="mono text-[11px] text-muted max-w-[14rem]" title={scopeText}>
+                      {scopeText}
                     </td>
-                    <td className="text-[11px] text-muted whitespace-nowrap">{first?.granted_by ?? '-'}</td>
-                    <td className="text-[11px] text-muted whitespace-nowrap">{first?.expires_at ? formatTime(first.expires_at) : t('instanceDetail.resourcePanel.agent.neverExpires')}</td>
+                    <td className="text-[11px] text-muted whitespace-nowrap">{a.granted_by ?? '-'}</td>
+                    <td className="text-[11px] text-muted whitespace-nowrap">{a.expires_at ? formatTime(a.expires_at) : t('instanceDetail.resourcePanel.agent.neverExpires')}</td>
                     <td className="whitespace-nowrap">
                       <Switch
-                        checked={first?.enabled !== false}
+                        checked={a.enabled !== false}
                         onChange={(enabled) => {
                           InstanceAgentResourceApi.update(instanceId, a.resource_id, {
-                            match_exprs: (a.records ?? []).map((g) => matchExprToEditorString(g.match_expr)),
-                            resource_name: (first?.resource_name ?? a.resource_name ?? '').trim() || a.resource_id,
-                            resource_desc: first?.resource_desc ?? a.resource_desc ?? null,
+                            match_exprs: [matchExprToEditorString(a.match_expr)],
+                            resource_name: (a.resource_name ?? '').trim() || a.resource_id,
+                            resource_desc: a.resource_desc ?? null,
                             enabled,
                           }).then(() => { toast('success', t('success.saved')); reload(); })
                             .catch((e) => toast('danger', e instanceof ApiError ? e.detail : String(e)));
                         }}
-                        aria-label={first?.enabled !== false ? t('common.enabled') : t('common.disabled')}
+                        aria-label={a.enabled !== false ? t('common.enabled') : t('common.disabled')}
                       />
                     </td>
-                    <td className="mono text-[11px] text-muted whitespace-nowrap">{formatTime(first?.updated_at)}</td>
+                    <td className="mono text-[11px] text-muted whitespace-nowrap">{formatTime(a.updated_at)}</td>
                     <td className="whitespace-nowrap min-w-[9.5rem]">
                       <div className="flex items-center gap-1">
                         <button className="btn sm ghost" onClick={() => setEditing(a)}>{t('common.edit')}</button>
@@ -589,7 +581,9 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
         <Modal
           open
           size="lg"
-          title={t('instanceDetail.resourcePanel.agent.editGrant', { name: editing.template_name })}
+          title={t('instanceDetail.resourcePanel.agent.editGrant', {
+            name: editing.resource_name || templateLabel(editing.ref_template_id),
+          })}
           onClose={() => setEditing(null)}
           dirty={isEditDirty(editDraft)}
           footer={
@@ -624,13 +618,15 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
           </label>
           <label className="block mb-3">
             <FieldLabel>{t('instanceDetail.resourcePanel.agent.agentLabel')}</FieldLabel>
-            <div className="input mt-1 w-full !bg-[var(--bg-muted)] cursor-not-allowed">{editing.template_name}({editing.template_id})</div>
+            <div className="input mt-1 w-full !bg-[var(--bg-muted)] cursor-not-allowed">
+              {templateLabel(editing.ref_template_id)}({editing.ref_template_id})
+            </div>
           </label>
           <label className="block mb-3">
             <FieldLabel>{t('instanceDetail.resourcePanel.agent.scopeLabel')}</FieldLabel>
             <div className="mt-1">
               <MatchExprEditor
-                key={`${editing.template_id}:${editing.resource_id}`}
+                key={editing.resource_id}
                 value={matchExpr}
                 onChange={setMatchExpr}
                 allowedFields={AGENT_RESOURCE_MATCH_FIELDS}

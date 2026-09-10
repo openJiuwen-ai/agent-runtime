@@ -9,7 +9,6 @@ import {
   ApiError,
   InstanceServiceResource,
   ServiceConfigTemplateApi,
-  InstanceServiceResourceRecord,
   InstanceServiceResourceApi,
 } from '../../../services/api';
 import { toast } from '../../../stores/uiStore';
@@ -66,31 +65,9 @@ function FieldLabel({ children, required }: { children: ReactNode; required?: bo
   );
 }
 
-function recordsToEditorString(records: InstanceServiceResourceRecord[]): string {
-  const parts = records
-    .map((g) => matchExprToEditorString(g.match_expr))
-    .filter((s) => s.length > 0);
-  if (parts.length === 0) return '';
-  if (parts.length === 1) return parts[0];
-  return JSON.stringify(parts);
-}
-
-function summarizeMatchExpr(records: InstanceServiceResourceRecord[], allLabel: string): string {
-  if (!records.length) return '-';
-  const parts = records.map((g) => matchExprToEditorString(g.match_expr)).filter(Boolean);
-  if (!parts.length || parts.every((p) => !p)) return allLabel;
-  if (parts.length === 1) return parts[0];
-  return parts.join(' OR ');
-}
-
-function primaryRecord(row: InstanceServiceResource): InstanceServiceResourceRecord | undefined {
-  const records = row.records ?? [];
-  if (!records.length) return undefined;
-  return [...records].sort((a, b) => {
-    const dp = (b.priority ?? 0) - (a.priority ?? 0);
-    if (dp !== 0) return dp;
-    return String(b.updated_at ?? '').localeCompare(String(a.updated_at ?? ''));
-  })[0];
+function summarizeMatchExpr(expr: InstanceServiceResource['match_expr'], allLabel: string): string {
+  const text = matchExprToEditorString(expr);
+  return text || allLabel;
 }
 
 export function InstanceServiceResourceTab({ instanceId }: Props) {
@@ -141,6 +118,13 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
   );
   const items = rosterData?.items ?? [];
   const catalog = catalogData?.items ?? [];
+  const templateNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const item of catalog) {
+      map.set(item.template_id, item.template_name);
+    }
+    return map;
+  }, [catalog]);
 
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [showAdd, setShowAdd] = useState(false);
@@ -204,20 +188,13 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
 
   useEffect(() => {
     if (editing) {
-      const nextMatch = recordsToEditorString(editing.records ?? []);
-      const first = primaryRecord(editing);
-      const nextName = clipField(
-        first?.resource_name ?? editing.resource_name ?? '',
-        FIELD_MAX_LENGTH.resource_name,
-      );
-      const nextDesc = clipField(
-        first?.resource_desc ?? editing.resource_desc ?? '',
-        FIELD_MAX_LENGTH.resource_desc,
-      );
-      const nextPriority = first?.priority ?? 0;
+      const nextMatch = matchExprToEditorString(editing.match_expr);
+      const nextName = clipField(editing.resource_name ?? '', FIELD_MAX_LENGTH.resource_name);
+      const nextDesc = clipField(editing.resource_desc ?? '', FIELD_MAX_LENGTH.resource_desc);
+      const nextPriority = editing.priority ?? 0;
       let nextExpires = '';
-      if (first?.expires_at) {
-        const d = new Date(first.expires_at);
+      if (editing.expires_at) {
+        const d = new Date(editing.expires_at);
         nextExpires = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
       }
       setMatchExpr(nextMatch);
@@ -244,6 +221,10 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
     id: b.template_id,
     label: b.template_name,
   }));
+
+  function templateLabel(refTemplateId: string): string {
+    return templateNameById.get(refTemplateId) || refTemplateId;
+  }
 
   function toggleCheck(id: string) {
     setChecked((prev) => {
@@ -447,7 +428,8 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
                   </tr>
                 ) : (
                   items.map((row) => {
-                    const first = primaryRecord(row);
+                    const tplName = templateLabel(row.ref_template_id);
+                    const scopeText = summarizeMatchExpr(row.match_expr, allMatchLabel);
                     return (
                       <tr key={row.resource_id}>
                         <td>
@@ -469,42 +451,39 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
                           {row.resource_desc || '-'}
                         </td>
                         <td className="align-top">
-                          <div className="text-text-strong font-medium break-words">{row.template_name}</div>
-                          <div className="text-[11px] text-muted mono break-all" title={row.template_id}>
-                            {row.template_id}
+                          <div className="text-text-strong font-medium break-words">{tplName}</div>
+                          <div className="text-[11px] text-muted mono break-all" title={row.ref_template_id}>
+                            {row.ref_template_id}
                           </div>
                         </td>
                         <td
                           className="mono text-[11px] text-muted max-w-[14rem]"
-                          title={summarizeMatchExpr(row.records ?? [], allMatchLabel)}
+                          title={scopeText}
                         >
-                          {summarizeMatchExpr(row.records ?? [], allMatchLabel)}
+                          {scopeText}
                         </td>
                         <td className="whitespace-nowrap">
                           <span className="pill accent mono text-[11px] tabular-nums">
-                            {first?.priority ?? 0}
+                            {row.priority ?? 0}
                           </span>
                         </td>
                         <td className="text-[11px] text-muted whitespace-nowrap">
-                          {first?.granted_by ?? '-'}
+                          {row.granted_by ?? '-'}
                         </td>
                         <td className="text-[11px] text-muted whitespace-nowrap">
-                          {first?.expires_at
-                            ? formatTime(first.expires_at)
+                          {row.expires_at
+                            ? formatTime(row.expires_at)
                             : t(`${sr}.neverExpires`)}
                         </td>
                         <td className="whitespace-nowrap">
                           <Switch
-                            checked={first?.enabled !== false}
+                            checked={row.enabled !== false}
                             onChange={(enabled) => {
                               InstanceServiceResourceApi.update(instanceId, row.resource_id, {
-                                match_exprs: (row.records ?? []).map((g) =>
-                                  matchExprToEditorString(g.match_expr),
-                                ),
-                                resource_name:
-                                  (first?.resource_name ?? row.resource_name ?? '').trim() || row.resource_id,
-                                resource_desc: first?.resource_desc ?? row.resource_desc ?? null,
-                                priority: first?.priority ?? 0,
+                                match_exprs: [matchExprToEditorString(row.match_expr)],
+                                resource_name: (row.resource_name ?? '').trim() || row.resource_id,
+                                resource_desc: row.resource_desc ?? null,
+                                priority: row.priority ?? 0,
                                 enabled,
                               })
                                 .then(() => {
@@ -516,12 +495,12 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
                                 );
                             }}
                             aria-label={
-                              first?.enabled !== false ? t('common.enabled') : t('common.disabled')
+                              row.enabled !== false ? t('common.enabled') : t('common.disabled')
                             }
                           />
                         </td>
                         <td className="mono text-[11px] text-muted whitespace-nowrap">
-                          {formatTime(first?.updated_at)}
+                          {formatTime(row.updated_at)}
                         </td>
                         <td className="whitespace-nowrap min-w-[9.5rem]">
                           <div className="flex items-center gap-1">
@@ -706,7 +685,9 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
         <Modal
           open
           size="lg"
-          title={t(`${sr}.editGrant`, { name: editing.resource_name || editing.template_name })}
+          title={t(`${sr}.editGrant`, {
+            name: editing.resource_name || templateLabel(editing.ref_template_id),
+          })}
           onClose={() => setEditing(null)}
           dirty={isEditDirty(editDraft)}
           footer={
@@ -747,7 +728,7 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
           <label className="block mb-3">
             <FieldLabel>{t(`${sr}.template`)}</FieldLabel>
             <div className="input mt-1 w-full !bg-[var(--bg-muted)] cursor-not-allowed">
-              {editing.template_name}({editing.template_id})
+              {templateLabel(editing.ref_template_id)}({editing.ref_template_id})
             </div>
           </label>
           <label className="block mb-3">
