@@ -1,5 +1,5 @@
 # coding: utf-8
-"""mounts 共享模块测试:三种挂载规范形/校验拒绝矩阵/指纹不变式/冲突检测。"""
+"""mounts 共享模块测试:四类挂载规范形/校验拒绝矩阵/指纹不变式/冲突检测。"""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from agent_runtime.errors import InvalidParams
 from agent_runtime.mounts import (
     canonical_configmap_mounts,
     canonical_host_path_mounts,
+    canonical_nfs_mounts,
     canonical_pvc_mounts,
     find_mount_path_conflicts,
     normalize_mounts,
@@ -53,6 +54,18 @@ def test_pvc_canonical_form():
                     "read_only": False}]  # PVC 默认可写
 
 
+def test_nfs_canonical_form():
+    """NFS 与 PVC 同构:server/path 卷源 + mount_path/read_only;path 缺省 None。"""
+    out = canonical_nfs_mounts(
+        [{"server": "10.0.0.1", "path": "/jiuwenclaw", "mount_path": "/root/.jiuwenswarm"}],
+        "agent_nfs_mounts")
+    assert out == [{"server": "10.0.0.1", "path": "/jiuwenclaw",
+                    "mount_path": "/root/.jiuwenswarm", "read_only": False}]
+    out2 = canonical_nfs_mounts([{"server": "nfs.svc", "mount_path": "/data"}], "w")
+    assert out2 == [{"server": "nfs.svc", "path": None,
+                     "mount_path": "/data", "read_only": False}]
+
+
 def test_mounts_sorted_by_mount_path():
     """列表按下发顺序无关(按 mount_path 升序)——挂载顺序无语义。"""
     out = canonical_pvc_mounts(
@@ -88,11 +101,17 @@ def test_explicit_defaults_equal_omitted():
                           "items": [{"key": "", "path": "p"}]}, "non-empty string"),
     ("pvc_mounts", {"claim_name": "", "mount_path": "/m"}, "resource name"),
     ("pvc_mounts", {"claim_name": "p", "mount_path": "/m", "mode": "rw"}, "unknown keys"),
+    ("nfs_mounts", {"server": "", "mount_path": "/m"}, "server"),
+    ("nfs_mounts", {"mount_path": "/m"}, "server"),
+    ("nfs_mounts", {"server": "s", "path": 1, "mount_path": "/m"}, "path"),
+    ("nfs_mounts", {"server": "s", "mount_path": "rel"}, "absolute mount_path"),
+    ("nfs_mounts", {"server": "s", "mount_path": "/m", "extra": 1}, "unknown keys"),
 ])
 def test_mount_rejections(kind, item, match):
     fn = {"host_path_mounts": canonical_host_path_mounts,
           "configmap_mounts": canonical_configmap_mounts,
-          "pvc_mounts": canonical_pvc_mounts}[kind]
+          "pvc_mounts": canonical_pvc_mounts,
+          "nfs_mounts": canonical_nfs_mounts}[kind]
     with pytest.raises(InvalidParams, match=match):
         fn([item], f"agent_{kind}")
 
@@ -112,29 +131,30 @@ def test_find_mount_path_conflicts():
     assert find_mount_path_conflicts([("hp", hp), ("cm", cm)]) is not None
     cm2 = [dict(cm[0], mount_path="/etc/other")]
     assert find_mount_path_conflicts([("hp", hp), ("cm", cm2)]) is None
-    # 撞主容器 NFS 挂载点
+    # NFS 挂载列表参与同一容器查重
+    nfs = [{"server": "s", "path": None, "mount_path": "/data", "read_only": False}]
     assert find_mount_path_conflicts(
-        [("hp", [dict(hp[0], mount_path="/data")])],
-        extra_paths=["/data"]) is not None
+        [("hp", [dict(hp[0], mount_path="/data")]), ("nfs", nfs)]) is not None
+    assert find_mount_path_conflicts([("nfs", nfs)]) is None
 
 
 def test_validate_agent_mounts_strict_and_none():
-    out = validate_agent_mounts(
-        None, None, None, nfs_mount_path="/data")
-    assert out == (None, None, None)
+    out = validate_agent_mounts(None, None, None, None)
+    assert out == (None, None, None, None)
     out = validate_agent_mounts(
         [{"host_path": "/h", "mount_path": "/m"}],
         [{"config_map_name": "cm", "mount_path": "/cfg"}],
         [{"claim_name": "pvc", "mount_path": "/vol"}],
-        nfs_mount_path="/data")
+        [{"server": "s", "mount_path": "/nfs"}])
     assert out[0][0]["host_path"] == "/h"
     assert out[1][0]["config_map_name"] == "cm"
     assert out[2][0]["claim_name"] == "pvc"
-    # mount_path 撞 nfs → 400
+    assert out[3][0]["server"] == "s"
+    # mount_path 撞 nfs 挂载 → 400
     with pytest.raises(InvalidParams, match="duplicated"):
         validate_agent_mounts(
             [{"host_path": "/h", "mount_path": "/data"}], None, None,
-            nfs_mount_path="/data")
+            [{"server": "s", "mount_path": "/data"}])
 
 
 # -------------------------------------------------------------- 归一 + 指纹
@@ -157,7 +177,7 @@ def test_agent_mounts_fingerprint_stability():
     legacy = Template(template_id="t", agent_image="i:1")
     empty = Template(template_id="t", agent_image="i:1",
                      agent_host_path_mounts=[], agent_configmap_mounts=[],
-                     agent_pvc_mounts=[])
+                     agent_pvc_mounts=[], agent_nfs_mounts=[])
     assert empty == legacy and empty.deploy_ver() == legacy.deploy_ver()
 
     reordered = Template(

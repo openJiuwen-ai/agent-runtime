@@ -22,6 +22,7 @@ from .errors import InvalidParams
 from .mounts import (
     canonical_configmap_mounts,
     canonical_host_path_mounts,
+    canonical_nfs_mounts,
     canonical_pvc_mounts,
     check_resource_name,
     find_mount_path_conflicts,
@@ -42,7 +43,7 @@ _SIDECAR_KEYS = frozenset({
     "cpu_request", "memory_request", "cpu_limit", "memory_limit",
     "privileged", "capabilities_add", "capabilities_drop",
     "seccomp_unconfined", "apparmor_unconfined", "run_as_user", "run_as_group",
-    "host_path_mounts", "configmap_mounts", "pvc_mounts",
+    "host_path_mounts", "configmap_mounts", "pvc_mounts", "nfs_mounts",
     "readiness_probe_type", "readiness_path",
     "readiness_initial_delay", "readiness_period", "readiness_timeout_seconds",
 })
@@ -209,6 +210,10 @@ def _canonical_sidecar(item: Any, where: str) -> dict[str, Any]:
         run_as_group = _canonical_int(run_as_group, where, "run_as_group", minimum=0)
     # envFrom:None/[] 归一 None(条件键,见 canonical_env_from docstring)
     env_from = canonical_env_from(item.get("env_from"), f"{where}.env_from")
+    # NFS 挂载列表:与 pvc_mounts 同构(模板级 NFS 卷按名引用,规范形见
+    # mounts.py);条件键——空列表省略(后加键,存量 sidecar 指纹零扰动)
+    nfs_mounts = canonical_nfs_mounts(
+        item.get("nfs_mounts") or [], f"{where}.nfs_mounts")
 
     result = {
         "name": name,
@@ -265,6 +270,9 @@ def _canonical_sidecar(item: Any, where: str) -> dict[str, Any]:
     # env_from 条件键:有值才出现(存量 sidecar 指纹零扰动)
     if env_from is not None:
         result["env_from"] = env_from
+    # nfs_mounts 条件键:非空才出现(同款指纹零扰动)
+    if nfs_mounts:
+        result["nfs_mounts"] = nfs_mounts
     return result
 
 
@@ -323,12 +331,13 @@ def validate_sidecars(
     conflict = find_sidecar_conflict(items, container_name, sse_port, container_port)
     if conflict:
         raise InvalidParams(f"sidecars: {conflict}")
-    # 每个 sidecar 自身三种挂载的 mount_path 不得重复(K8s 会拒,这里 fail-fast)
+    # 每个 sidecar 自身四类挂载的 mount_path 不得重复(K8s 会拒,这里 fail-fast)
     for i, sc in enumerate(items):
         mount_conflict = find_mount_path_conflicts([
             (f"sidecars[{i}].host_path_mounts", sc["host_path_mounts"]),
             (f"sidecars[{i}].configmap_mounts", sc["configmap_mounts"]),
             (f"sidecars[{i}].pvc_mounts", sc["pvc_mounts"]),
+            (f"sidecars[{i}].nfs_mounts", sc.get("nfs_mounts")),
         ])
         if mount_conflict:
             raise InvalidParams(f"sidecars[{i}]: {mount_conflict}")
