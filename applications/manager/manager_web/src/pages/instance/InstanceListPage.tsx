@@ -19,6 +19,10 @@ import { formatTime, relativeTime } from '../../utils/format';
 import { toast } from '../../stores/uiStore';
 import { ApiError } from '../../services/api';
 import { CreateInstanceModal } from './modal/CreateInstanceModal';
+import { useGuideAutoOpen } from '../../hooks/useGuideAutoOpen';
+import { useClustersGuideStatus } from '../../hooks/useGuideStatus';
+import { WarnBadge, type WarnBadgeLink } from '../../components/WarnBadge';
+import { bumpGuideRevision } from '../../stores/guideStore';
 
 type ViewMode = 'brief' | 'list';
 
@@ -44,9 +48,12 @@ function readViewMode(): ViewMode {
 function InstanceTopoCard({
   instance,
   onChanged,
+  alertLinks,
 }: {
   instance: InstanceSummary;
   onChanged: () => void;
+  /** 该集群的引导告警项（未配置准入/Agent/Agent实例池），右上角叹号汇总 */
+  alertLinks?: WarnBadgeLink[];
 }) {
   const { t } = useTranslation();
   const { navigate } = useRouter();
@@ -75,6 +82,11 @@ function InstanceTopoCard({
             </div>
           </div>
         </div>
+        {alertLinks && alertLinks.length > 0 && (
+          <div className="ml-auto shrink-0 relative -top-1 -right-1">
+            <WarnBadge className="opacity-100" links={alertLinks} />
+          </div>
+        )}
       </div>
 
       <div className="instance-card__status">
@@ -155,6 +167,7 @@ function InstanceTopoCard({
           try {
             await InstanceApi.remove(instance.jiuwenclaw_id);
             toast('success', t('success.deleted'));
+            bumpGuideRevision();
             onChanged();
           } catch (e) {
             toast('danger', t('errors.deleteFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
@@ -338,6 +351,7 @@ function InstanceListTable({
           try {
             await InstanceApi.remove(deleteTarget.jiuwenclaw_id);
             toast('success', t('success.deleted'));
+            bumpGuideRevision();
             onChanged();
           } catch (e) {
             toast('danger', t('errors.deleteFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
@@ -398,6 +412,9 @@ export function InstanceListPage() {
   const [viewMode, setViewMode] = useState<ViewMode>(() => readViewMode());
   const [createOpen, setCreateOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+
+  /** 引导跳转：其他页面点「未创建集群」跳过来时自动打开新建弹框 */
+  useGuideAutoOpen('instanceCreate', () => setCreateOpen(true));
 
   const sortOptions = useMemo(
     () => [
@@ -462,6 +479,26 @@ export function InstanceListPage() {
 
   const refresh = () => {
     void instances.reload();
+  };
+
+  /** 各集群引导告警（未配置准入用户/组织、Agent、Agent实例池），用于方块右上角叹号 */
+  const clusterIds = useMemo(
+    () => (instances.data?.items ?? []).map((it) => it.jiuwenclaw_id),
+    [instances.data],
+  );
+  const alertsByInstance = useClustersGuideStatus(clusterIds);
+  const clusterAlertLinks = (instanceId: string): WarnBadgeLink[] => {
+    const labels: Record<string, string> = {
+      accessUsers: t('instanceDetail.accessPanel.instance.users'),
+      accessOrgs: t('instanceDetail.accessPanel.instance.orgs'),
+      agentResource: t('instanceDetail.resourcePanel.tabs.agent'),
+      poolResource: t('instanceDetail.resourcePanel.tabs.serviceResource'),
+    };
+    return (alertsByInstance[instanceId] ?? []).map((a) => ({
+      label: t('guide.missingItem', { item: labels[a.labelKey] ?? a.labelKey }),
+      to: a.to,
+      openTarget: a.openTarget,
+    }));
   };
 
   const handleRefresh = async () => {
@@ -549,7 +586,12 @@ export function InstanceListPage() {
           ) : (
             <div className="instance-card-grid">
               {instances.data.items.map((it) => (
-                <InstanceTopoCard key={it.jiuwenclaw_id} instance={it} onChanged={refresh} />
+                <InstanceTopoCard
+                  key={it.jiuwenclaw_id}
+                  instance={it}
+                  onChanged={refresh}
+                  alertLinks={clusterAlertLinks(it.jiuwenclaw_id)}
+                />
               ))}
             </div>
           )}
@@ -573,6 +615,7 @@ export function InstanceListPage() {
         onClose={() => setCreateOpen(false)}
         onCreated={() => {
           setCreateOpen(false);
+          bumpGuideRevision();
           refresh();
         }}
       />

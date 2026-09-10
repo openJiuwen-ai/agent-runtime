@@ -425,6 +425,7 @@ export function InstanceOrgsTab({ instanceId }: Props) {
           title={t(`${IA}.addOrgs`)}
           candidates={candidates}
           showExpiresAt
+          manageLink={{ page: t('iam.orgs'), to: '/orgs' }}
           onConfirm={async ({ ids, expires_at, login_policy }) => {
             await InstanceBindingApi.bindOrgs(instanceId, ids, { expires_at, login_policy });
             toast('success', t('success.saved'));

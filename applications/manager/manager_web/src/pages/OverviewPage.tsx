@@ -2,7 +2,9 @@ import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { InstanceApi, SystemApi } from '../services/api';
 import { useAsync } from '../hooks/useAsync';
+import { useDefinitionPresence } from '../hooks/useGuideStatus';
 import { StatusBadge } from '../components/StatusBadge';
+import { WarnBadge, type WarnBadgeLink } from '../components/WarnBadge';
 import { useRouter } from '../router';
 
 function Icon({ d }: { d: string }) {
@@ -16,13 +18,27 @@ function Icon({ d }: { d: string }) {
 export function OverviewPage() {
   const { t } = useTranslation();
   const { navigate } = useRouter();
+  const { agentDefined, poolDefined, instanceCreated, modelDefined } = useDefinitionPresence();
 
   const health = useAsync(() => SystemApi.health(), []);
-  const wsStatus = useAsync(() => SystemApi.managerWsStatus(), []);
   const instances = useAsync(() => InstanceApi.list({ page: 1, page_size: 200 }), []);
 
   const instanceTotal = instances.data?.total ?? 0;
-  const wsRegistered = wsStatus.data?.registered_jiuwenclaw_ids?.length ?? 0;
+
+  /** 与左侧导航栏叹号提示同源的汇总：按导航栏顺序（模型 → Agent定义 → Agent实例池定义 → 集群）展示 */
+  const quickNavLinks: WarnBadgeLink[] = [];
+  if (modelDefined === false) {
+    quickNavLinks.push({ label: t('guide.missingItem', { item: t('nav.modelTemplates') }), to: '/model-templates', openTarget: 'modelTemplateNew' });
+  }
+  if (agentDefined === false) {
+    quickNavLinks.push({ label: t('guide.missingItem', { item: t('nav.agentManagement') }), to: '/agent-templates', openTarget: 'agentTemplateNew' });
+  }
+  if (poolDefined === false) {
+    quickNavLinks.push({ label: t('guide.missingItem', { item: t('nav.serviceConfigTemplates') }), to: '/service-config-templates/new' });
+  }
+  if (instanceCreated === false) {
+    quickNavLinks.push({ label: t('guide.missingItem', { item: t('nav.instances') }), to: '/instances', openTarget: 'instanceCreate' });
+  }
 
   const statusDist = useMemo(() => {
     const items = instances.data?.items ?? [];
@@ -51,7 +67,6 @@ export function OverviewPage() {
             className="btn sm"
             onClick={() => {
               void health.reload();
-              void wsStatus.reload();
               void instances.reload();
             }}
           >
@@ -61,6 +76,7 @@ export function OverviewPage() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+        {/* Manager 健康 */}
         <div className="card kpi-card">
           <div className="kpi-card__head">
             <span className="kpi-card__label">{t('overview.managerHealth')}</span>
@@ -68,58 +84,42 @@ export function OverviewPage() {
               <Icon d="M9 12.75l2.25 2.25 4.5-4.5M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </span>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="kpi-card__value flex items-center gap-2">
             <StatusBadge
               status={health.error ? 'offline' : health.data?.status === 'ok' ? 'ok' : 'pending'}
               label={health.error ? 'offline' : (health.data?.status ?? '-')}
             />
+          </div>
+          <div className="kpi-card__meta">
             <span className="text-[11px] text-muted mono">{t('overview.managerHealth')}</span>
           </div>
         </div>
 
-        <div className="card kpi-card">
-          <div className="kpi-card__head">
-            <span className="kpi-card__label">{t('overview.managerWs')}</span>
-            <span className={`kpi-card__icon ${wsStatus.data?.running ? 'ok' : 'warn'}`}>
-              <Icon d="M8.288 15.038a5.25 5.25 0 017.424 0M5.106 11.856c3.807-3.808 9.98-3.808 13.788 0M1.924 8.674c5.565-5.565 14.587-5.565 20.152 0M12.53 18.22l-.53.53-.53-.53a.75.75 0 011.06 0z" />
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <StatusBadge
-              status={wsStatus.data?.running ? 'ok' : 'offline'}
-              label={wsStatus.data?.running ? 'running' : 'offline'}
-            />
-            {wsStatus.data?.running && (
-              <span className="text-[11px] text-muted mono">
-                {wsStatus.data?.host}:{wsStatus.data?.port}
-              </span>
-            )}
-          </div>
-          <div className="kpi-card__meta">
-            <span>{t('overview.wsPid')}: <span className="mono text-text">{wsStatus.data?.pid ?? '-'}</span></span>
-          </div>
-        </div>
-
-        <button
-          className="card kpi-card text-left"
+        {/* 集群总数（div + role=button，避免 button UA 样式导致内容不与其他卡片对齐） */}
+        <div
+          className="card kpi-card cursor-pointer"
+          role="button"
+          tabIndex={0}
           onClick={() => navigate('/instances')}
-          aria-label={t('overview.totalInstances')}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') navigate('/instances');
+          }}
+          aria-label={t('overview.totalClusters')}
         >
           <div className="kpi-card__head">
-            <span className="kpi-card__label">{t('overview.totalInstances')}</span>
+            <span className="kpi-card__label">{t('overview.totalClusters')}</span>
             <span className="kpi-card__icon">
               <Icon d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zm0 9.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zm9.75-9.75A2.25 2.25 0 0115.75 3.75H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25A2.25 2.25 0 0113.5 8.25V6zm0 9.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z" />
             </span>
           </div>
           <div className="kpi-card__value">
             {instanceTotal}
-            <span className="unit">instance{instanceTotal === 1 ? '' : 's'}</span>
+            <span className="unit">{t('overview.unitClusters')}</span>
           </div>
-          <div className="kpi-card__meta">
-            <span>{t('overview.registeredOnWs')}: <span className="mono text-text">{wsRegistered}</span></span>
-          </div>
-        </button>
+          <div className="kpi-card__meta" />
+        </div>
 
+        {/* 在线服务数 */}
         <div className="card kpi-card">
           <div className="kpi-card__head">
             <span className="kpi-card__label">{t('overview.activeServices')}</span>
@@ -144,6 +144,36 @@ export function OverviewPage() {
             <span className="flex items-center gap-1"><span className="statusDot warn" />{statusDist.warn}</span>
             <span className="flex items-center gap-1"><span className="statusDot" />{statusDist.danger}</span>
             <span className="flex items-center gap-1"><span className="statusDot muted" />{statusDist.muted}</span>
+          </div>
+        </div>
+
+        {/* 快速导航 */}
+        <div className="card kpi-card">
+          <div className="kpi-card__head">
+            <span className="kpi-card__label">{t('overview.quickNav')}</span>
+          </div>
+          <div className="kpi-card__value flex items-center gap-2">
+            {quickNavLinks.length > 0 ? (
+              <WarnBadge className="!h-6 !w-6 !text-[12px] opacity-100" links={quickNavLinks} />
+            ) : (
+              <span
+                className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-ok text-ok text-[11px] font-bold leading-none cursor-help"
+                title={t('overview.noAlerts')}
+              >
+                ✓
+              </span>
+            )}
+            <span className="text-sm text-text">{t('overview.unconfiguredItems')}</span>
+            {quickNavLinks.length > 0 && (
+              <span className="text-[11px] text-muted mono">({quickNavLinks.length})</span>
+            )}
+          </div>
+          <div className="kpi-card__meta">
+            <span className="text-[11px] text-muted">
+              {quickNavLinks.length > 0
+                ? quickNavLinks.map((l) => l.label).join('、')
+                : t('overview.noAlerts')}
+            </span>
           </div>
         </div>
       </div>

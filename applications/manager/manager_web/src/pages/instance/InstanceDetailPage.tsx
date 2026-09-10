@@ -8,6 +8,7 @@ import { InstanceApi, ApiError } from '../../services/api';
 import { Modal, ModalCancelButton } from '../../components/Modal';
 import { JsonField, tryParseJson, useInvalidJsonChecker } from '../../components/JsonField';
 import { WarnBadge, type WarnBadgeLink } from '../../components/WarnBadge';
+import { useGuideMissingLabel } from '../../components/GuideLink';
 import { safeStringify } from '../../utils/format';
 import { toast } from '../../stores/uiStore';
 import { InstanceConfigPanel } from './instanceConfigPanel/InstanceConfigPanel';
@@ -36,6 +37,7 @@ interface Props {
 export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
   const { t } = useTranslation();
   const { navigate } = useRouter();
+  const missingLabel = useGuideMissingLabel();
   const instance = useAsync(() => InstanceApi.get(instanceId), [instanceId]);
   const { hasAccessUser, hasAccessOrg, hasAgentResource, hasPoolResource } =
     useClusterGuideStatus(instanceId);
@@ -68,21 +70,21 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
   const accessWarnLinks =
     hasAccessUser === false && hasAccessOrg === false
       ? [
-          { label: t('guide.missingAccessUsers'), to: `/instances/${instanceId}/access`, openTarget: 'accessUsers' as const },
-          { label: t('guide.missingAccessOrgs'), to: `/instances/${instanceId}/access`, openTarget: 'accessOrgs' as const },
+          { label: missingLabel(t('instanceDetail.accessPanel.instance.users')), to: `/instances/${instanceId}/access`, openTarget: 'accessUsers' as const },
+          { label: missingLabel(t('instanceDetail.accessPanel.instance.orgs')), to: `/instances/${instanceId}/access`, openTarget: 'accessOrgs' as const },
         ]
       : undefined;
   const clusterConfigWarnLinks: WarnBadgeLink[] = [];
   if (hasAgentResource === false) {
     clusterConfigWarnLinks.push({
-      label: t('guide.missingAgentResource'),
+      label: missingLabel(t('instanceDetail.resourcePanel.tabs.agent')),
       to: `/instances/${instanceId}/agent-resources`,
       openTarget: 'agentResourceAdd',
     });
   }
   if (hasPoolResource === false) {
     clusterConfigWarnLinks.push({
-      label: t('guide.missingPoolResource'),
+      label: missingLabel(t('instanceDetail.resourcePanel.tabs.serviceResource')),
       to: `/instances/${instanceId}/service-resources`,
       openTarget: 'serviceResourceAdd',
     });
@@ -177,9 +179,9 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
             {clusterConfigSubTabs.map((it) => {
               const warnLinks: WarnBadgeLink[] | undefined =
                 it.key === 'agentResources' && hasAgentResource === false
-                  ? [{ label: t('guide.missingAgentResource'), to: `/instances/${instanceId}/agent-resources`, openTarget: 'agentResourceAdd' as const }]
+                  ? [{ label: missingLabel(t('instanceDetail.resourcePanel.tabs.agent')), to: `/instances/${instanceId}/agent-resources`, openTarget: 'agentResourceAdd' as const }]
                   : it.key === 'serviceResources' && hasPoolResource === false
-                    ? [{ label: t('guide.missingPoolResource'), to: `/instances/${instanceId}/service-resources`, openTarget: 'serviceResourceAdd' as const }]
+                    ? [{ label: missingLabel(t('instanceDetail.resourcePanel.tabs.serviceResource')), to: `/instances/${instanceId}/service-resources`, openTarget: 'serviceResourceAdd' as const }]
                     : undefined;
               return (
                 <button

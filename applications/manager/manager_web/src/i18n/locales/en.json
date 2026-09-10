@@ -70,13 +70,8 @@
     "bots": "Agent Templates"
   },
   "guide": {
-    "missingAgentDefinition": "Agent definitions not configured",
-    "missingPoolDefinition": "Agent instance pool definitions not configured",
-    "missingAccessUsers": "No admitted users configured",
-    "missingAccessOrgs": "No admitted organizations configured",
-    "missingAgentResource": "Agent not configured",
-    "missingPoolResource": "Agent instance pool not configured",
-    "missingAgentAndPoolResource": "Agent and Agent instance pool not configured"
+    "gotoPageLink": "Go to {{page}}",
+    "missingItem": "{{item}} not configured"
   },
   "safetyGuardrails": {
     "title": "Safety Guardrails",
@@ -102,14 +97,15 @@
   },
   "overview": {
     "title": "Overview",
-    "subtitle": "Management plane health and instance summary",
+    "subtitle": "Management plane health and cluster summary",
     "managerHealth": "Manager Health",
-    "managerWs": "Manager WebSocket",
-    "totalInstances": "Total Instances",
+    "totalClusters": "Total Clusters",
+    "unitClusters": "clusters",
     "activeServices": "Online Services",
-    "registeredOnWs": "Instances on WS",
-    "wsListening": "Listening at",
-    "wsPid": "Manager PID",
+    "quickNav": "Quick Navigation",
+    "unconfiguredItems": "Unconfigured Items",
+    "noAlerts": "Nothing unconfigured",
+    "clusterAlertsTitle": "Unconfigured items of this cluster",
     "noInstances": "No cluster yet. Create one in Cluster Management."
   },
   "topology": {
@@ -247,7 +243,6 @@
         "grantHint": "Empty match_expr allows any provisioned user on this cluster.",
         "expiresHint": "Leave empty for no expiration",
         "empty": "No Agent definitions on this cluster",
-        "gotoAgentTemplateLink": "Go to the Agent Definitions page to add configuration",
         "confirmRemove": "Remove {{n}} selected Agent definition(s) from this cluster?",
         "resourceId": "Resource ID",
         "resourceName": "Resource Name",
@@ -270,7 +265,6 @@
         "add": "Add Agent Instance Pool",
         "editGrant": "Edit grant · {{name}}",
         "empty": "No agent instance pools assigned to this cluster",
-        "gotoPoolTemplateLink": "Go to the Agent Instance Pool Definitions page to add configuration",
         "confirmRemove": "Remove {{n}} selected agent instance pool(s) from this cluster?",
         "resourceId": "Resource ID",
         "resourceName": "Resource Name",
@@ -677,6 +671,8 @@
     "orgs": "Org Management",
     "orgsSubtitle": "Manage organizations and membership",
     "orgsSearchPlaceholder": "Search organization ID or display name",
+    "gotoOrgsLink": "Go to Org Management",
+    "gotoUsersLink": "Go to User Management",
     "bots": "Agent Templates",
     "newUser": "New User",
     "batchNewUser": "Batch Create",
@@ -824,12 +820,5 @@
     "fieldRequired": "Please fill in {{field}}",
     "deleteConfirm": "Delete agent template \"{{name}}\"? Instance grants will also be removed."
   },
-  "templateRefEditor": {
-    "gotoModelLink": "Go to the Models page to add configuration",
-    "gotoEmbeddingLink": "Go to the Embedding Models page to add configuration",
-    "gotoSkillLink": "Go to the Preset Skills page to add configuration",
-    "gotoExtensionLink": "Go to the Extension Config page to add configuration",
-    "gotoPermissionsLink": "Go to the Safety Guardrails page to add configuration",
-    "gotoA2APolicyLink": "Go to the A2A Management · Access Policies page to add configuration"
-  }
+  "templateRefEditor": {}
 }

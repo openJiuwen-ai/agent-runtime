@@ -70,13 +70,8 @@
     "bots": "Agent模板"
   },
   "guide": {
-    "missingAgentDefinition": "未配置 Agent定义",
-    "missingPoolDefinition": "未配置 Agent实例池定义",
-    "missingAccessUsers": "未配置准入用户",
-    "missingAccessOrgs": "未配置准入组织",
-    "missingAgentResource": "未配置 Agent",
-    "missingPoolResource": "未配置 Agent实例池",
-    "missingAgentAndPoolResource": "未配置 Agent、Agent实例池"
+    "gotoPageLink": "前往 {{page}} 页面",
+    "missingItem": "未配置 {{item}}"
   },
   "safetyGuardrails": {
     "title": "安全护栏",
@@ -102,14 +97,15 @@
   },
   "overview": {
     "title": "总览",
-    "subtitle": "实时查看管理面与实例整体健康状态",
+    "subtitle": "实时查看管理面与集群整体健康状态",
     "managerHealth": "Manager 健康",
-    "managerWs": "Manager WebSocket",
-    "totalInstances": "实例总数",
+    "totalClusters": "集群总数",
+    "unitClusters": "集群",
     "activeServices": "在线服务数",
-    "registeredOnWs": "已注册到 WS 的实例",
-    "wsListening": "监听地址",
-    "wsPid": "Manager PID",
+    "quickNav": "快速导航",
+    "unconfiguredItems": "未配置项",
+    "noAlerts": "暂无未配置项",
+    "clusterAlertsTitle": "该集群未配置项",
     "noInstances": "暂未发现集群，可在「集群管理」中新建。"
   },
   "topology": {
@@ -247,7 +243,6 @@
         "grantHint": "match_expr 为空表示该集群上已准入用户均可使用。",
         "expiresHint": "留空表示永不过期",
         "empty": "本集群尚未添加 Agent 定义",
-        "gotoAgentTemplateLink": "前往 Agent定义 页添加配置",
         "confirmRemove": "从本集群移除选中的 {{n}} 个 Agent 定义？",
         "resourceId": "资源 ID",
         "resourceName": "资源名称",
@@ -270,7 +265,6 @@
         "add": "添加Agent实例池",
         "editGrant": "编辑授权 · {{name}}",
         "empty": "本集群尚未分配 Agent 实例池",
-        "gotoPoolTemplateLink": "前往 Agent实例池定义 页添加配置",
         "confirmRemove": "从本集群移除选中的 {{n}} 个 Agent 实例池？",
         "resourceId": "资源 ID",
         "resourceName": "资源名称",
@@ -677,6 +671,8 @@
     "orgs": "组织管理",
     "orgsSubtitle": "管理组织与成员归属",
     "orgsSearchPlaceholder": "搜索组织 ID、显示名",
+    "gotoOrgsLink": "前往 组织管理 页面",
+    "gotoUsersLink": "前往 用户管理 页面",
     "bots": "Agent 模板",
     "newUser": "新建用户",
     "batchNewUser": "批量新建",
@@ -825,12 +821,5 @@
     "fieldRequired": "请填写{{field}}",
     "deleteConfirm": "确认删除 Agent 模板「{{name}}」？会清除其在各实例上的授权。"
   },
-  "templateRefEditor": {
-    "gotoModelLink": "前往 模型 页添加配置",
-    "gotoEmbeddingLink": "前往 Embedding模型 页添加配置",
-    "gotoSkillLink": "前往 预置 Skill 页添加配置",
-    "gotoExtensionLink": "前往 扩展配置 页添加配置",
-    "gotoPermissionsLink": "前往 安全护栏 页添加配置",
-    "gotoA2APolicyLink": "前往 A2A管理·访问策略 页添加配置"
-  }
+  "templateRefEditor": {}
 }

@@ -6,6 +6,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 
 const ModalRequestCloseContext = createContext<(() => void) | null>(null);
@@ -95,7 +96,9 @@ export function Modal({
 
   if (!open) return null;
 
-  return (
+  // 经 portal 挂到 body：避免祖先的 transform/hover（如卡片 hover 位移）把
+  // position:fixed 的遮罩当成包含块，导致弹窗被限制在小方格内。
+  return createPortal(
     <ModalRequestCloseContext.Provider value={requestClose}>
       <div className="modal-mask" onClick={requestClose}>
         <div
@@ -148,6 +151,7 @@ export function Modal({
           </div>
         </div>
       )}
-    </ModalRequestCloseContext.Provider>
+    </ModalRequestCloseContext.Provider>,
+    document.body,
   );
 }

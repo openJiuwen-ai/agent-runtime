@@ -33,7 +33,7 @@ import {
   TableColumnSort,
   type ColumnSortValue,
 } from '../../../components/TableColumnSort';
-import { useRouter } from '../../../router';
+import { GuideLink } from '../../../components/GuideLink';
 
 interface Props {
   instanceId: string;
@@ -85,7 +85,6 @@ function summarizeMatchExpr(records: InstanceAgentResourceRecord[], allLabel: st
 
 export function InstanceAgentResourceTab({ instanceId }: Props) {
   const { t } = useTranslation();
-  const { navigate } = useRouter();
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const { searchInput, setSearchInput, searchQuery } = useListSearch();
@@ -553,13 +552,9 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
                 <option key={c.id} value={c.id}>{c.label}({c.id})</option>
               ))}
             </select>
-            <button
-              type="button"
-              className="mt-1 text-[11px] text-accent hover:text-accent-hover hover:underline text-left"
-              onClick={() => navigate('/agent-templates')}
-            >
-              {t('instanceDetail.resourcePanel.agent.gotoAgentTemplateLink')}
-            </button>
+            <div className="mt-1">
+              <GuideLink page={t('nav.agentManagement')} to="/agent-templates" />
+            </div>
           </label>
           <label className="block mb-3">
             <FieldLabel>{t('instanceDetail.resourcePanel.agent.scopeLabel')}</FieldLabel>

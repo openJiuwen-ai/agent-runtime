@@ -63,7 +63,7 @@ export function LoginPage() {
     <div className="flex items-center justify-center h-screen p-8">
       <form className="card" style={{ width: 360 }} onSubmit={onSubmit}>
         <div className="flex items-center gap-2 mb-4">
-          <img src="/logo.png" alt={getProductName()} style={{ height: 28 }} />
+          <img src="/logo.svg" alt={getProductName()} style={{ height: 28 }} />
           <div className="card-title">{t('auth.loginTitle')}</div>
         </div>
 
