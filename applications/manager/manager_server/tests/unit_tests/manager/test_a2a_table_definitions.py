@@ -195,3 +195,51 @@ async def test_legacy_loopback_migration_allows_saving_settings(
             assert "allow_loopback" not in columns
     finally:
         await handler.disconnect()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dialect,code,retry", [
+    ("postgresql", "42701", True), ("postgresql", "42703", True),
+    ("mysql", 1060, True), ("mysql", 1091, True),
+    ("postgresql", "42501", False), ("mysql", 1142, False),
+])
+async def test_migration_retries_column_races_after_rollback(dialect, code, retry):
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from sqlalchemy.exc import DBAPIError
+    from openjiuwen_runtime.foundation.db.sqlalchemy_handler import SQLAlchemyHandler
+    from manager_server.models.table_init import _migrate_a2a_discovery_settings
+
+    original = Exception(code)
+    original.sqlstate = code if dialect == "postgresql" else None
+    failure = DBAPIError("ALTER TABLE", {}, original)
+    events = []
+
+    class Connection:
+        async def run_sync(self, migrate):
+            events.append("inspect")
+            if events.count("inspect") == 1:
+                raise failure
+
+    @asynccontextmanager
+    async def begin():
+        events.append("begin")
+        try:
+            yield Connection()
+        except DBAPIError:
+            events.append("rollback")
+            raise
+        else:
+            events.append("commit")
+
+    handler = Mock(spec=SQLAlchemyHandler)
+    handler.engine = SimpleNamespace(begin=begin, dialect=SimpleNamespace(name=dialect))
+    if retry:
+        await _migrate_a2a_discovery_settings(handler)
+        assert events == ["begin", "inspect", "rollback", "begin", "inspect", "commit"]
+    else:
+        with pytest.raises(DBAPIError) as caught:
+            await _migrate_a2a_discovery_settings(handler)
+        assert caught.value is failure
+        assert events == ["begin", "inspect", "rollback"]
