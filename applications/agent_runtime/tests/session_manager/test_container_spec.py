@@ -32,6 +32,8 @@ MAIN_FULL = {
     "name": "agent",
     "image": "agentserver:2.1",
     "imagePullPolicy": "IfNotPresent",
+    "command": ["/bin/agent", "--foreground"],
+    "args": ["--port", "8086"],
     "ports": [{"name": "sse", "containerPort": 8086},
               {"name": "http", "containerPort": 9000}],
     "env": [{"name": "AGENT_HTTP_PORT", "value": "8086"}],
@@ -126,8 +128,8 @@ def test_main_container_all_fields_roundtrip():
         "agent_memory_limit": "4Gi",
         "run_as_user": 1000,
         "run_as_group": 1000,
-        "command": None,
-        "args": None,
+        "command": ["/bin/agent", "--foreground"],
+        "args": ["--port", "8086"],
         "health_path": "/api/v1/health",
         "readiness_initial_delay": 6,
         "readiness_period": 7,
@@ -523,3 +525,87 @@ def test_container_spec_from_row_none_and_corrupt():
     assert spec["ports"] is None and spec["env"] == {}
     assert spec["volume_mounts"] == []
     assert spec["readiness_probe"]["period"] == 10   # sidecar 缺省口径
+
+
+# -------------------------------------------------------------- build_canonical(C2 内核)
+
+def test_build_canonical_main_golden():
+    """wire 主容器 + volumes → canonical 黄金 dict(13 键,指纹/传输/渲染同形)。"""
+    from agent_runtime.session_manager.container_spec import build_canonical
+    spec = parse_container_spec(MAIN_FULL, "containers[0]", role=MAIN_ROLE)
+    volumes = canonical_volumes(list(MAIN_VOLUMES.values()), "volumes")
+    cont = build_canonical(spec, volumes, "containers[0]", role=MAIN_ROLE)
+    assert cont == {
+        "name": "agent",
+        "image": "agentserver:2.1",
+        "image_pull_policy": "IfNotPresent",
+        "command": ["/bin/agent", "--foreground"],
+        "args": ["--port", "8086"],
+        "ports": [{"name": "sse", "container_port": 8086},
+                  {"name": "http", "container_port": 9000}],
+        "env": {"AGENT_HTTP_PORT": "8086"},
+        "env_from": [
+            {"prefix": "DB_",
+             "secret_ref": {"name": "agent-secret", "optional": False}},
+            {"prefix": None,
+             "config_map_ref": {"name": "agent-cm", "optional": True}}],
+        "resources": {"cpu_request": "500m", "memory_request": "1Gi",
+                      "cpu_limit": "2", "memory_limit": "4Gi"},
+        "host_path_mounts": [],
+        "configmap_mounts": [],
+        "pvc_mounts": [{"claim_name": "agent-data",
+                        "mount_path": "/var/lib/agent", "read_only": False}],
+        "nfs_mounts": [{"server": "10.0.0.1", "path": "/export",
+                        "mount_path": "/mnt/nfs", "read_only": False}],
+        "security_context": {"run_as_user": 1000, "run_as_group": 1000,
+                             "privileged": False, "capabilities_add": [],
+                             "capabilities_drop": [],
+                             "seccomp_unconfined": False,
+                             "apparmor_unconfined": False},
+        "readiness_probe": {"probe_type": "http", "path": "/api/v1/health",
+                            "initial_delay": 6, "period": 7, "timeout": None},
+    }
+
+
+def test_build_canonical_defaults_and_idempotence():
+    from agent_runtime.containers import MAIN_PROBE_DEFAULT
+    from agent_runtime.session_manager.container_spec import build_canonical
+    spec = parse_container_spec({"container_id": "c", "image": "x:1"},
+                                "containers[0]", role=MAIN_ROLE)
+    cont = build_canonical(spec, {}, "containers[0]", role=MAIN_ROLE)
+    assert cont["name"] == "agent"
+    assert cont["ports"] == [{"name": "sse", "container_port": 8080}]
+    assert cont["readiness_probe"] == dict(MAIN_PROBE_DEFAULT)
+    assert cont["nfs_mounts"] == [] and cont["env_from"] is None
+    assert cont["command"] is None and cont["args"] is None
+    # 幂等:canonical 再过 build_canonical 的收口层不变
+    from agent_runtime.containers import canonical_container
+    assert canonical_container(cont, "w", role=MAIN_ROLE) == cont
+
+
+def test_build_canonical_sidecar_matches_containers_module():
+    """wire sidecar → canonical == containers.canonical_container 直构(同直径)。"""
+    from agent_runtime.containers import canonical_container
+    from agent_runtime.session_manager.container_spec import build_canonical
+    spec = parse_container_spec(K8S_BOX, "containers[1]", role=SIDECAR_ROLE)
+    volumes = canonical_volumes(list(BOX_VOLUMES.values()), "volumes")
+    cont = build_canonical(spec, volumes, "containers[1]",
+                           role=SIDECAR_ROLE)
+    assert cont == canonical_container({
+        "name": "jiuwenbox",
+        "image": "jiuwenbox-amd64:0.0.1",
+        "ports": [{"name": None, "container_port": 8321}],
+        "env": {"JIUWENBOX_LISTEN": "tcp://0.0.0.0:8321"},
+        "resources": {"cpu_request": "100m", "memory_request": None,
+                      "cpu_limit": None, "memory_limit": "1Gi"},
+        "host_path_mounts": [{"host_path": "/sys/fs/cgroup",
+                              "mount_path": "/sys/fs/cgroup"}],
+        "security_context": {"run_as_user": None, "run_as_group": None,
+                             "privileged": True,
+                             "capabilities_add": ["NET_ADMIN", "SYS_ADMIN"],
+                             "capabilities_drop": [],
+                             "seccomp_unconfined": True,
+                             "apparmor_unconfined": True},
+        "readiness_probe": {"probe_type": "tcp", "path": "/health",
+                            "initial_delay": 10, "period": 5, "timeout": 3},
+    }, "w", role=SIDECAR_ROLE)

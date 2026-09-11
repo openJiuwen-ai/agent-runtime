@@ -136,7 +136,7 @@ def test_build_pod_body_renders_full_sidecar(client):
     # 安全上下文:特权 + caps + seccomp unconfined
     sec = box["security_context"].kwargs
     assert sec["privileged"] is True
-    assert sec["capabilities"].kwargs["add"] == ["SYS_ADMIN", "NET_ADMIN"]
+    assert sec["capabilities"].kwargs["add"] == ["NET_ADMIN", "SYS_ADMIN"]  # canonical 排序
     assert sec["seccomp_profile"].kwargs == {"type": "Unconfined"}
     # apparmor → Pod annotation(不是 security_context)
     assert meta["annotations"] == {

@@ -158,12 +158,14 @@ def _canonical_bool(value: Any, where: str, key: str) -> bool:
 
 
 def _canonical_caps(value: Any, where: str, key: str) -> list[str]:
+    """capabilities 列表:非空 str 列表 + 排序去重(K8s 无序语义;与
+    containers.py 统一规范形同步收紧——值序不影响运行时行为)。"""
     if not isinstance(value, list) or any(
             not isinstance(item, str) or not item for item in value):
         raise InvalidParams(
             f"{where}.{key} must be a list of non-empty strings, got {value!r}"
         )
-    return list(value)
+    return sorted(set(value))
 
 
 def _canonical_sidecar(item: Any, where: str) -> dict[str, Any]:

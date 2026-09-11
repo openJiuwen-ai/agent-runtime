@@ -47,6 +47,8 @@ MAIN_FULL = {
     "name": "agent",
     "image": "agentserver:2.1",
     "image_pull_policy": "IfNotPresent",
+    "command": ["/bin/agent", "--foreground"],
+    "args": ["--port", "8086"],
     "ports": [{"name": "sse", "container_port": 8086},
               {"name": "http", "container_port": 9000}],
     "env": {"AGENT_HTTP_PORT": "8086"},
@@ -61,8 +63,8 @@ MAIN_FULL = {
                           "read_only": True}],
     "pvc_mounts": [{"claim_name": "agent-data", "mount_path": "/var/lib/agent",
                     "read_only": False}],
-    "nfs": {"server": "10.0.0.1", "path": "/export",
-            "mount_path": "/mnt/nfs"},
+    "nfs_mounts": [{"server": "10.0.0.1", "path": "/export",
+                    "mount_path": "/mnt/nfs", "read_only": False}],
     "security_context": {"run_as_user": 1000, "run_as_group": 1000,
                          "privileged": False, "capabilities_add": [],
                          "capabilities_drop": [],
@@ -102,12 +104,13 @@ def test_canonical_defaults_filled():
     out = canonical_container({"image": "x:1"}, "main", role="main")
     assert out["name"] == "agent"
     assert out["image_pull_policy"] == "IfNotPresent"
+    assert out["command"] is None and out["args"] is None
     assert out["ports"] == [{"name": "sse", "container_port": 8080}]
     assert out["env"] == {} and out["env_from"] is None
     assert out["resources"] == {"cpu_request": None, "memory_request": None,
                                 "cpu_limit": None, "memory_limit": None}
     assert out["host_path_mounts"] == [] and out["pvc_mounts"] == []
-    assert out["nfs"] is None
+    assert out["nfs_mounts"] == []
     assert out["security_context"]["privileged"] is False
     assert out["readiness_probe"] == dict(MAIN_PROBE_DEFAULT)
 
@@ -219,12 +222,27 @@ def test_sidecar_rejects_named_or_multiple_ports(ports):
                             "sc", role="sidecar")
 
 
-def test_sidecar_rejects_nfs():
-    with pytest.raises(InvalidParams, match="main-container only"):
-        canonical_container(
-            {"name": "b", "image": "x:1",
-             "nfs": {"server": "s", "mount_path": "/m"}},
-            "sc", role="sidecar")
+def test_sidecar_nfs_mounts_allowed():
+    """sidecar 可挂 NFS(上游 bef82fc4 起,第四挂载族对主/sidecar 一致开放)。"""
+    out = canonical_container(
+        {"name": "b", "image": "x:1",
+         "nfs_mounts": [{"server": "s", "mount_path": "/m"}]},
+        "sc", role="sidecar")
+    assert out["nfs_mounts"] == [{"server": "s", "path": None,
+                                  "mount_path": "/m", "read_only": False}]
+
+
+def test_command_args_validation():
+    """command/args:None/[] 同义 None;非字符串项 400。"""
+    out = canonical_container(
+        {"image": "x:1", "command": [], "args": None}, "main", role="main")
+    assert out["command"] is None and out["args"] is None
+    with pytest.raises(InvalidParams, match="command"):
+        canonical_container({"image": "x:1", "command": [42]}, "main",
+                            role="main")
+    with pytest.raises(InvalidParams, match=r"args"):
+        canonical_container({"image": "x:1", "args": "x"}, "main",
+                            role="main")
 
 
 def test_sidecar_probe_requires_ports():

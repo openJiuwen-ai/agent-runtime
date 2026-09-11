@@ -46,6 +46,7 @@ from .errors import InvalidParams
 from .mounts import (
     canonical_configmap_mounts,
     canonical_host_path_mounts,
+    canonical_nfs_mounts,
     canonical_pvc_mounts,
     check_resource_name,
     find_mount_path_conflicts,
@@ -90,9 +91,9 @@ _RESOURCE_KEYS = tuple(RESOURCES_DEFAULT)
 # canonical 合法键(_canonical_container 拒未知键:容器是安全敏感面,
 # 拼错的 capabilities_add 被静默吞掉 = "看似有特权实际没有"的运行期疑难)
 _CONTAINER_KEYS = frozenset({
-    "name", "image", "image_pull_policy", "ports", "env", "env_from",
-    "resources", "host_path_mounts", "configmap_mounts", "pvc_mounts",
-    "nfs", "security_context", "readiness_probe",
+    "name", "image", "image_pull_policy", "command", "args", "ports", "env",
+    "env_from", "resources", "host_path_mounts", "configmap_mounts",
+    "pvc_mounts", "nfs_mounts", "security_context", "readiness_probe",
 })
 
 _ENV_FROM_ITEM_KEYS = frozenset({"prefix", "secret_ref", "config_map_ref"})
@@ -100,7 +101,6 @@ _ENV_FROM_REF_KEYS = frozenset({"secret_ref", "config_map_ref"})
 _PROBE_KEYS = frozenset(
     {"probe_type", "path", "initial_delay", "period", "timeout"})
 _SECCTX_KEYS = frozenset(SECCTX_DEFAULT)
-_NFS_KEYS = frozenset({"server", "path", "mount_path"})
 _PORT_KEYS = frozenset({"name", "container_port"})
 
 
@@ -307,29 +307,19 @@ def _canonical_resources(value: Any, where: str) -> dict[str, Optional[str]]:
             for key in _RESOURCE_KEYS}
 
 
-def _canonical_nfs(value: Any, where: str, role: str) -> Optional[dict[str, Any]]:
-    """NFS 挂载三元组(server/path/mount_path);main 独有,sidecar 恒 None。"""
-    if value is None:
+def _canonical_str_list(value: Any, where: str, key: str) -> Optional[list[str]]:
+    """command/args → list[str] | None(None/[] 同义 = 走镜像入口;
+    非列表或含非字符串项 → 400)。"""
+    if value is None or value == []:
         return None
-    if role != MAIN_ROLE:
-        raise InvalidParams(
-            f"{where}.nfs cannot be set on a sidecar container "
-            f"(nfs volume mounts are main-container only)")
-    if not isinstance(value, dict):
-        raise InvalidParams(f"{where}.nfs must be an object, got {value!r}")
-    unknown = set(value) - _NFS_KEYS
-    if unknown:
-        raise InvalidParams(
-            f"{where}.nfs unknown keys {sorted(unknown)}; allowed: "
-            f"{sorted(_NFS_KEYS)}")
-    return {
-        "server": _str(value.get("server"), f"{where}.nfs", "server",
-                       max_len=_MAX_PATH_LEN),
-        "path": _str(value.get("path"), f"{where}.nfs", "path",
-                     max_len=_MAX_PATH_LEN, required=False),
-        "mount_path": _str(value.get("mount_path"), f"{where}.nfs",
-                           "mount_path", max_len=_MAX_PATH_LEN),
-    }
+    if not isinstance(value, list):
+        raise InvalidParams(f"{where}.{key} must be a list of strings, "
+                            f"got {value!r}")
+    for i, item in enumerate(value):
+        if not isinstance(item, str):
+            raise InvalidParams(
+                f"{where}.{key}[{i}] must be a string, got {item!r}")
+    return list(value)
 
 
 def _canonical_secctx(value: Any, where: str,
@@ -467,6 +457,8 @@ def canonical_container(item: Any, where: str, *, role: str) -> dict[str, Any]:
         "image_pull_policy": _str(
             item.get("image_pull_policy") or DEFAULT_IMAGE_PULL_POLICY,
             where, "image_pull_policy", max_len=64),
+        "command": _canonical_str_list(item.get("command"), where, "command"),
+        "args": _canonical_str_list(item.get("args"), where, "args"),
         "ports": ports,
         "env": _canonical_env(item.get("env") or {}, where),
         "env_from": canonical_env_from(item.get("env_from"),
@@ -478,7 +470,8 @@ def canonical_container(item: Any, where: str, *, role: str) -> dict[str, Any]:
             item.get("configmap_mounts") or [], f"{where}.configmap_mounts"),
         "pvc_mounts": canonical_pvc_mounts(
             item.get("pvc_mounts") or [], f"{where}.pvc_mounts"),
-        "nfs": _canonical_nfs(item.get("nfs"), where, role),
+        "nfs_mounts": canonical_nfs_mounts(
+            item.get("nfs_mounts") or [], f"{where}.nfs_mounts"),
         "security_context": _canonical_secctx(
             item.get("security_context"), where, role),
         "readiness_probe": probe,
@@ -493,6 +486,8 @@ def default_main_container() -> dict[str, Any]:
         "name": DEFAULT_MAIN_NAME,
         "image": "",
         "image_pull_policy": DEFAULT_IMAGE_PULL_POLICY,
+        "command": None,
+        "args": None,
         "ports": list(MAIN_PORTS_DEFAULT),
         "env": {},
         "env_from": None,
@@ -500,7 +495,7 @@ def default_main_container() -> dict[str, Any]:
         "host_path_mounts": [],
         "configmap_mounts": [],
         "pvc_mounts": [],
-        "nfs": None,
+        "nfs_mounts": [],
         "security_context": dict(SECCTX_DEFAULT),
         "readiness_probe": dict(MAIN_PROBE_DEFAULT),
     }
@@ -591,7 +586,7 @@ def validate_pod_containers(
     """
     canonical_main = canonical_container(main, f"{where}.main_container",
                                          role=MAIN_ROLE)
-    # main 挂载冲突(三类卷 + nfs.mount_path,与旧 validate_agent_mounts 同面)
+    # main 四类挂载 mount_path 互斥(K8s 会拒,这里 fail-fast)
     mount_conflict = find_mount_path_conflicts([
         (f"{where}.main_container.host_path_mounts",
          canonical_main["host_path_mounts"]),
@@ -599,8 +594,9 @@ def validate_pod_containers(
          canonical_main["configmap_mounts"]),
         (f"{where}.main_container.pvc_mounts",
          canonical_main["pvc_mounts"]),
-    ], extra_paths=([canonical_main["nfs"]["mount_path"]]
-                    if canonical_main["nfs"] else None))
+        (f"{where}.main_container.nfs_mounts",
+         canonical_main["nfs_mounts"]),
+    ])
     if mount_conflict:
         raise InvalidParams(f"{where}.main_container: {mount_conflict}")
     if sidecars is None:
@@ -637,6 +633,7 @@ def validate_pod_containers(
             (f"{where}.sidecars[{i}].configmap_mounts",
              sc["configmap_mounts"]),
             (f"{where}.sidecars[{i}].pvc_mounts", sc["pvc_mounts"]),
+            (f"{where}.sidecars[{i}].nfs_mounts", sc["nfs_mounts"]),
         ])
         if mount_conflict:
             raise InvalidParams(f"{where}.sidecars[{i}]: {mount_conflict}")
@@ -703,6 +700,9 @@ def _fill_defaults(item: dict[str, Any], role: str) -> Optional[dict[str, Any]]:
     if not isinstance(out.get("image_pull_policy"), str) \
             or not out["image_pull_policy"]:
         out["image_pull_policy"] = DEFAULT_IMAGE_PULL_POLICY
+    for key in ("command", "args"):
+        if key not in out or out[key] == []:
+            out[key] = None
     if not isinstance(out.get("ports"), list):
         out["ports"] = (list(MAIN_PORTS_DEFAULT) if role == MAIN_ROLE
                         else None)
@@ -715,15 +715,10 @@ def _fill_defaults(item: dict[str, Any], role: str) -> Optional[dict[str, Any]]:
         resources = {}
     out["resources"] = {
         key: resources.get(key) for key in _RESOURCE_KEYS}
-    for key in ("host_path_mounts", "configmap_mounts", "pvc_mounts"):
+    for key in ("host_path_mounts", "configmap_mounts", "pvc_mounts",
+                "nfs_mounts"):
         if not isinstance(out.get(key), list):
             out[key] = []
-    if "nfs" not in out or out["nfs"] is None:
-        out["nfs"] = None
-    elif isinstance(out["nfs"], dict):
-        nfs = dict(out["nfs"])
-        nfs.setdefault("path", None)
-        out["nfs"] = nfs
     secctx = out.get("security_context")
     if not isinstance(secctx, dict):
         secctx = {}

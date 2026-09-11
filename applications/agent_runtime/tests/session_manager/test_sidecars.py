@@ -104,7 +104,7 @@ def test_validate_sidecars_canonicalizes_jiuwenbox_spec():
     box = out[1]
     # 显式值保留
     assert box["port"] == 8321 and box["privileged"] is True
-    assert box["capabilities_add"] == ["SYS_ADMIN", "NET_ADMIN"]
+    assert box["capabilities_add"] == ["NET_ADMIN", "SYS_ADMIN"]  # canonical 排序
     assert box["host_path_mounts"] == [
         {"host_path": "/sys/fs/cgroup", "mount_path": "/sys/fs/cgroup",
          "read_only": False, "host_path_type": None},

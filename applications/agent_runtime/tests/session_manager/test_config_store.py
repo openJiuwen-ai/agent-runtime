@@ -546,7 +546,7 @@ async def test_config_sync_persists_and_roundtrips_sidecars(runtime):
         "cpu_request": None, "memory_request": None,
         "cpu_limit": None, "memory_limit": None,
         "privileged": True,
-        "capabilities_add": ["SYS_ADMIN", "NET_ADMIN"],
+        "capabilities_add": ["NET_ADMIN", "SYS_ADMIN"],
         "capabilities_drop": [],
         "seccomp_unconfined": True,
         "apparmor_unconfined": True,
