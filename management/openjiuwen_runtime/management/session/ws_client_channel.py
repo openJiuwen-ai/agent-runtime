@@ -90,6 +90,7 @@ class WSServiceMessageChannel:
             verify_peer: Optional[Callable[[dict], bool]] = None,
             ws_ping_interval: float = 20.0,
             ws_ping_timeout: float = 20.0,
+            ws_max_size: int = 64 * 2**20,
     ) -> None:
         self._fallback_port = int(target_port) if target_port is not None else None
         self._port = self._fallback_port or 0
@@ -126,6 +127,10 @@ class WSServiceMessageChannel:
         self._last_service_id: str = ""
         self._ws_ping_interval = ws_ping_interval
         self._ws_ping_timeout = ws_ping_timeout
+        # 单帧最大字节数（解压后）。websockets 默认 1 MiB，业务下行（如 skill 列表
+        # 查询结果）单帧 JSON 可超过该值，接收侧会主动回 1009 close 断连并 fail
+        # 在飞请求；本链路为 Pod 内网可信链路，统一放宽为 64 MiB。
+        self._ws_max_size = ws_max_size
 
         logger.debug(
             "WSServiceMessageChannel: port=%s container=%s path=%s tls=%s",
@@ -250,6 +255,7 @@ class WSServiceMessageChannel:
                     ping_interval=self._ws_ping_interval,
                     ping_timeout=self._ws_ping_timeout,
                     additional_headers=hdrs,
+                    max_size=self._ws_max_size,
                 ),
                 timeout=self._connect_timeout,
             )
