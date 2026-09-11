@@ -67,6 +67,8 @@ def _render_volume_mounts(
         config_map: list[dict[str, Any]] | None = None,
         pvc: list[dict[str, Any]] | None = None,
         nfs: list[dict[str, Any]] | None = None,
+        hp_seen: dict[tuple[str, Any], str] | None = None,
+        cm_seen: dict[tuple, str] | None = None,
         pvc_seen: dict[str, str] | None = None,
         nfs_seen: dict[tuple[str, str], str] | None = None,
 ) -> tuple[list[Any], list[Any]]:
@@ -79,6 +81,11 @@ def _render_volume_mounts(
     挂第二个同 claim 卷时死锁/超时)。None=不做去重(兼容单容器调用)。
     nfs_seen: 同款登记簿,键 = (server, path)——同一 NFS 共享跨容器只建
     一个卷,主容器与 sidecar 复挂同一共享源时复用卷名。
+    hp_seen: 同款登记簿,键 = (host_path, host_path_type)——同一 hostPath
+    跨容器只建一个卷(挂载的 mount_path/read_only 是容器侧属性不影响共享);
+    None=不做去重(兼容单容器调用)。
+    cm_seen: 同款登记簿,键 = (config_map_name, items 键值对元组)——items
+    属于卷定义(决定卷内容),同名不同 items 不共享。
     """
     volumes: list[Any] = []
     mounts: list[Any] = []
@@ -87,11 +94,19 @@ def _render_volume_mounts(
         for mi, m in enumerate(mlist or []):
             volume_name = _scoped_volume_name(prefix, owner, idx, mi)
             if prefix == "hp":
-                volumes.append(c.V1Volume(
-                    name=volume_name,
-                    host_path=c.V1HostPathVolumeSource(
-                        path=m["host_path"], type=m["host_path_type"]),
-                ))
+                # 同一 hostPath(同 path+type)跨容器只建一个卷,主+sidecar
+                # 都引用它(对齐 nfs_seen/pvc_seen 写法)
+                share = (m["host_path"], m["host_path_type"])
+                if hp_seen is not None and share in hp_seen:
+                    volume_name = hp_seen[share]
+                else:
+                    volumes.append(c.V1Volume(
+                        name=volume_name,
+                        host_path=c.V1HostPathVolumeSource(
+                            path=m["host_path"], type=m["host_path_type"]),
+                    ))
+                    if hp_seen is not None:
+                        hp_seen[share] = volume_name
                 mounts.append(c.V1VolumeMount(
                     name=volume_name, mount_path=m["mount_path"],
                     read_only=m["read_only"],
@@ -99,11 +114,20 @@ def _render_volume_mounts(
             elif prefix == "cm":
                 items = ([c.V1KeyToPath(key=e["key"], path=e["path"])
                           for e in m["items"]] if m["items"] else None)
-                volumes.append(c.V1Volume(
-                    name=volume_name,
-                    config_map=c.V1ConfigMapVolumeSource(
-                        name=m["config_map_name"], items=items),
-                ))
+                # items 属于卷定义(决定卷内容):同名不同 items 不共享
+                share = (m["config_map_name"],
+                         tuple((e["key"], e["path"])
+                               for e in (m["items"] or [])))
+                if cm_seen is not None and share in cm_seen:
+                    volume_name = cm_seen[share]
+                else:
+                    volumes.append(c.V1Volume(
+                        name=volume_name,
+                        config_map=c.V1ConfigMapVolumeSource(
+                            name=m["config_map_name"], items=items),
+                    ))
+                    if cm_seen is not None:
+                        cm_seen[share] = volume_name
                 mounts.append(c.V1VolumeMount(
                     name=volume_name, mount_path=m["mount_path"],
                     sub_path=m["sub_path"], read_only=m["read_only"],
@@ -377,6 +401,8 @@ class RealK8sPodClient(K8sPodClient):
 
     def _build_sidecar_container(
             self, c: Any, sc: dict[str, Any], idx: int, *,
+            hp_seen: dict[tuple[str, Any], str] | None = None,
+            cm_seen: dict[tuple, str] | None = None,
             pvc_seen: dict[str, str] | None = None,
             nfs_seen: dict[tuple[str, str], str] | None = None,
     ) -> tuple[Any, list[Any], dict[str, str]]:
@@ -387,6 +413,8 @@ class RealK8sPodClient(K8sPodClient):
             config_map=sc["configmap_mounts"],
             pvc=sc["pvc_mounts"],
             nfs=sc.get("nfs_mounts"),
+            hp_seen=hp_seen,
+            cm_seen=cm_seen,
             pvc_seen=pvc_seen,
             nfs_seen=nfs_seen,
         )
@@ -429,6 +457,9 @@ class RealK8sPodClient(K8sPodClient):
         # 主 agent 容器卷挂载(hostPath/ConfigMap/PVC/NFS;脏缓存 normalize 兜底,
         # 规范形见 mounts.py;无挂载时零增量——与历史一致)
         agent_owner = spec.get("container_name") or "agent"
+        # 跨容器共享卷登记簿:同源只建一个 Pod 级卷,主+sidecar 复用卷名
+        hp_seen: dict[tuple[str, Any], str] = {}  # 同 (path, type) 的 hostPath 共享卷
+        cm_seen: dict[tuple, str] = {}  # 同 (name, items) 的 ConfigMap 共享卷
         pvc_seen: dict[str, str] = {}  # 同 claim 的 PVC 跨容器共享一个卷(主+sidecar)
         nfs_seen: dict[tuple[str, str], str] = {}  # 同 server+path 的 NFS 共享卷
         agent_volumes, agent_mounts = _render_volume_mounts(
@@ -439,6 +470,8 @@ class RealK8sPodClient(K8sPodClient):
                                         "configmap_mounts"),
             pvc=normalize_mounts(spec.get("agent_pvc_mounts"), "pvc_mounts"),
             nfs=normalize_mounts(spec.get("agent_nfs_mounts"), "nfs_mounts"),
+            hp_seen=hp_seen,
+            cm_seen=cm_seen,
             pvc_seen=pvc_seen,
             nfs_seen=nfs_seen,
         )
@@ -527,7 +560,9 @@ class RealK8sPodClient(K8sPodClient):
                 raise DeployFailed(f"pod spec sidecars invalid: {conflict}")
             for idx, sc in enumerate(sidecars):
                 sc_container, sc_volumes, sc_annotations = (
-                    self._build_sidecar_container(c, sc, idx, pvc_seen=pvc_seen,
+                    self._build_sidecar_container(c, sc, idx, hp_seen=hp_seen,
+                                                  cm_seen=cm_seen,
+                                                  pvc_seen=pvc_seen,
                                                   nfs_seen=nfs_seen))
                 sidecar_containers.append(sc_container)
                 volumes.extend(sc_volumes)

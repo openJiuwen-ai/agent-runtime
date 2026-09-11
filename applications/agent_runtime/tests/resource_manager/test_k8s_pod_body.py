@@ -508,3 +508,89 @@ def test_render_env_from_tolerates_corrupt_cache(client):
     assert out is not None and len(out) == 1
     assert out[0].kwargs["secret_ref"].kwargs == {"name": "ok", "optional": False}
     assert _render_env_from(c, [{"secret_ref": {"name": ""}}]) is None
+
+
+# -------------------------------------------------------------- 跨容器同源卷共享
+
+# pylint: disable=protected-access
+
+
+def _hp_volumes(pod) -> list:
+    """收集 Pod 级 hp- 前缀卷(简单过滤,保持调用方断言聚焦)。"""
+    out = []
+    for v in pod.kwargs["spec"].kwargs["volumes"]:
+        if v.kwargs["name"].startswith("hp-"):
+            out.append(v)
+    return out
+
+
+def _cm_volumes(pod) -> list:
+    """收集 Pod 级 cm- 前缀卷(简单过滤,保持调用方断言聚焦)。"""
+    out = []
+    for v in pod.kwargs["spec"].kwargs["volumes"]:
+        if v.kwargs["name"].startswith("cm-"):
+            out.append(v)
+    return out
+
+
+def test_build_pod_body_dedupes_shared_hostpath_across_containers(client):
+    """主容器与 sidecar 引用同一 hostPath(同 path+type)→ Pod 级只建一个卷,两侧 volumeMounts 复用同一卷名(对齐 pvc_seen/nfs_seen 语义)。"""
+    shared_hp = [{"host_path": "/root/chenhui/jiuwenclaw",
+                  "mount_path": "/app/jiuwenswarm", "read_only": False,
+                  "host_path_type": "Directory"}]
+    sc = dict(JIUWENBOX)
+    sc["host_path_mounts"] = shared_hp  # 与主容器同源
+    spec = _base_spec(agent_host_path_mounts=shared_hp,
+                      sidecars=_sidecars([sc]))
+    pod = client._build_pod_body("pod-1", spec)
+    pod_spec = pod.kwargs["spec"].kwargs
+
+    hp_vols = _hp_volumes(pod)
+    assert len(hp_vols) == 1
+    vol_name = hp_vols[0].kwargs["name"]
+    assert hp_vols[0].kwargs["host_path"].kwargs == {
+        "path": "/root/chenhui/jiuwenclaw", "type": "Directory"}
+    mounts_by_container = {
+        c.kwargs["name"]: [m.kwargs["name"]
+                           for m in c.kwargs["volume_mounts"]]
+        for c in pod_spec["containers"]}
+    assert mounts_by_container["agent"].count(vol_name) == 1
+    assert mounts_by_container["jiuwenbox"].count(vol_name) == 1
+
+
+def test_build_pod_body_hostpath_differs_by_type_not_shared(client):
+    """同 path 不同 host_path_type:卷定义不同 → 不共享。"""
+    hp_a = [{"host_path": "/data", "mount_path": "/a", "read_only": False,
+             "host_path_type": "Directory"}]
+    sc = dict(JIUWENBOX)
+    sc["host_path_mounts"] = [{"host_path": "/data", "mount_path": "/b",
+                               "read_only": False, "host_path_type": None}]
+    spec = _base_spec(agent_host_path_mounts=hp_a,
+                      sidecars=_sidecars([sc]))
+    pod = client._build_pod_body("pod-1", spec)
+    assert len(_hp_volumes(pod)) == 2
+
+
+def test_build_pod_body_dedupes_shared_configmap_across_containers(client):
+    """同名同 items 的 ConfigMap 跨容器共享;同名不同 items 不共享。"""
+    cm = [{"config_map_name": "app-config", "mount_path": "/etc/app",
+           "read_only": True, "sub_path": None,
+           "items": [{"key": "a", "path": "a"}]}]
+    sc = dict(JIUWENBOX)
+    sc["configmap_mounts"] = cm
+    spec = _base_spec(agent_configmap_mounts=cm, sidecars=_sidecars([sc]))
+    pod = client._build_pod_body("pod-1", spec)
+    assert len(_cm_volumes(pod)) == 1
+
+    sc_diff = dict(JIUWENBOX)
+    sc_diff["configmap_mounts"] = [{"config_map_name": "app-config",
+                                    "mount_path": "/etc/app2", "read_only": True,
+                                    "sub_path": None,
+                                    "items": [{"key": "b", "path": "b"}]}]
+    spec2 = _base_spec(agent_configmap_mounts=cm,
+                       sidecars=_sidecars([sc_diff]))
+    pod2 = client._build_pod_body("pod-2", spec2)
+    assert len(_cm_volumes(pod2)) == 2
+
+
+# pylint: enable=protected-access
