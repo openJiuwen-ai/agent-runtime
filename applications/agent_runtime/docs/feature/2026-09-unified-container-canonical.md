@@ -59,3 +59,11 @@ rebase 后重验:真镜像门禁 127/127(镜像 `canonical-20260911b`,e2e PG 已
 - **`deploy_ver` 一次性重置**:升级后首个 config_sync 的版本收敛把旧 idle Pod 全部软摘除,按 `pod_ttl` 回收 + autoscale 重建(dev 可 config_refresh 加速)。这是本重构的**有意决策**,非缺陷。
 - **升级操作序列**:①前置检查(存量库):`SELECT template_id FROM service_config_template WHERE main_container_id IS NULL OR main_container_id='';`——非空则**先重放 config_sync**(否则这些模板 fail-closed 跳过,scope 落兜底);②**全量重启**换镜像(不做新旧混版:混版下两套指纹算法 → 暖池互不复用 + autoscale 误判 stale);③启动后重放一次 config_sync 或调 config_refresh(Redis `pod_spec_json`/快照收敛,RM 侧对旧形缓存 autoscale skip_legacy_spec 待重推);④dev 环境可 FLUSHDB 简化。
 - **后续加容器字段的标准路径**:containers.py(canonical 键 + 默认值常量 + role 校验)→ container_spec.py(wire 键 + `_parse_*`)→ k8s.py `_build_container`(渲染分支)→(可选)容器表新列(框架只 create_all,存量库手工 ALTER)。spec_fields/Template/指纹/投影**零改动**。
+
+## 决策 B:主容器 securityContext 特权面放开(2026-09-11,用户确认)
+
+审阅主/sidecar 残余差异时确认分界原则:**runtime 只限制自身机制依赖的不变量,业务策略归管理面**。据此逐条判定:sse 端口/唯一性校验/探针恒 http 是 runtime 机制依赖(路由、判 Ready、场景 N 探测、pod:info 烘焙),保留;**主容器 securityContext 仅 runAs 两键是唯一一条 runtime 功能不依赖的纯策略限制**(且与"sidecar 可特权"不自洽,实为历史沉淀),放开。
+
+- 改动:canonical `_canonical_secctx` 与 wire `_parse_security_context` 去 role 值域,主/sidecar 同一白名单;渲染层主容器改走 `_build_security_context` 全量路径(与 sidecar 同款,全默认 → None 走镜像默认;渲染出的 K8s Pod 与旧路径等价,仅 kwargs 表达带显式 None 键)。
+- 安全职责转移:**是否给主容器(AgentServer)开特权由管理面负责**,runtime 保留键白名单与值类型校验(纵深防御缩为"防配错",不再是"防越权")。
+- 指纹零扰动:存量配置的主容器 secctx 本就全默认,canonical 输出不变。

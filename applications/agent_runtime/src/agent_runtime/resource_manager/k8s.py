@@ -401,11 +401,11 @@ class RealK8sPodClient(K8sPodClient):
     ) -> tuple[Any, list[Any], dict[str, str]]:
         """单个容器(canonical,见 containers.py)→ (V1Container, 挂载卷, Pod annotation)。
 
-        主/sidecar 统一渲染器;role 差异收敛为四处:ports 有名(sse/http)vs
+        主/sidecar 统一渲染器;role 差异收敛为两处:ports 有名(sse/http)vs
         无名纯声明、探针恒 httpGet 打 sse 端口且无 timeout vs 可选 tcp/http
-        带 timeout、securityContext 主容器仅 runAs 两键(空则省 kwarg,走镜像
-        默认)、apparmor annotation(canonical 主容器恒 False → 永不产出)。
-        command/args 与挂载四族主/sidecar 一致渲染。挂载四族
+        带 timeout。securityContext/command/args/挂载四族/env/envFrom/
+        resources 主/sidecar 一致渲染(apparmor 走 Pod annotation,role 无关;
+        security_context 全默认时传 None = 走镜像默认)。挂载四族
         (hp/cm/pvc/nfs)主/sidecar 一致(_render_volume_mounts),pvc_seen/
         nfs_seen 跨容器共享同 claim/同 server+path 的卷(防 kubelet 挂第二
         个同源卷死锁)。
@@ -513,20 +513,10 @@ class RealK8sPodClient(K8sPodClient):
             "readiness_probe": probe,
         }
         secctx = cont.get("security_context") or {}
-        if is_main:
-            # 主容器 securityContext 仅 runAs 两键(有则设:无则不设,走镜像
-            # 默认——黄金断言保形)
-            sec_kwargs: dict[str, Any] = {}
-            if secctx.get("run_as_user") is not None:
-                sec_kwargs["run_as_user"] = int(secctx["run_as_user"])
-            if secctx.get("run_as_group") is not None:
-                sec_kwargs["run_as_group"] = int(secctx["run_as_group"])
-            if sec_kwargs:
-                container_kwargs["security_context"] = (
-                    c.V1SecurityContext(**sec_kwargs))
-        else:
-            container_kwargs["security_context"] = self._build_security_context(
-                c, secctx)
+        # securityContext 主/sidecar 全量一致渲染(决策 B:主容器特权面放开;
+        # 全默认 → None,走镜像默认)
+        container_kwargs["security_context"] = self._build_security_context(
+            c, secctx)
         container = c.V1Container(**container_kwargs, **cmd_kwargs)
         # apparmor unconfined 只能以 Pod annotation 表达(老 SDK 同款)
         annotations = ({f"container.apparmor.security.beta.kubernetes.io/{cont['name']}":

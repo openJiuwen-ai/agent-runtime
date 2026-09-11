@@ -229,18 +229,15 @@ def test_resource_rules_rejected(resources, match):
             "c", role=MAIN_ROLE)
 
 
-def test_main_security_context_role_restriction():
-    """主容器 securityContext 只许 runAs 两键(越角色 400,防静默丢特权)。"""
-    with pytest.raises(InvalidParams, match=r"unknown keys.*privileged"):
-        parse_container_spec(
-            {"container_id": "c", "image": "i:1",
-             "securityContext": {"privileged": True}},
-            "c", role=MAIN_ROLE)
-    with pytest.raises(InvalidParams, match=r"seccompProfile"):
-        parse_container_spec(
-            {"container_id": "c", "image": "i:1",
-             "securityContext": {"seccompProfile": {"type": "Unconfined"}}},
-            "c", role=MAIN_ROLE)
+def test_main_security_context_full_parity():
+    """决策 B:主容器 securityContext 与 sidecar 同一白名单(特权面放开)。"""
+    spec = parse_container_spec(
+        {"container_id": "c", "image": "i:1",
+         "securityContext": {"privileged": True,
+                             "seccompProfile": {"type": "Unconfined"}}},
+        "c", role=MAIN_ROLE)
+    assert spec["security_context"]["privileged"] is True
+    assert spec["security_context"]["seccomp_unconfined"] is True
 
 
 @pytest.mark.parametrize("profile,match", [

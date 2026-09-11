@@ -99,11 +99,10 @@ _PROBE_KEYS = frozenset(
      "timeoutSeconds"})
 _HTTP_GET_KEYS = frozenset({"path", "port"})
 _TCP_SOCKET_KEYS = frozenset({"port"})
-_MAIN_SECCTX_KEYS = frozenset({"runAsUser", "runAsGroup"})
-_SIDECAR_SECCTX_EXTRA = {
-    "privileged", "capabilities", "seccompProfile", "appArmorProfile",
-}
 _SECCTX_PROFILE_TYPES = {"Unconfined": True, "RuntimeDefault": False}
+_SECCTX_WIRE_KEYS = frozenset({
+    "runAsUser", "runAsGroup", "privileged", "capabilities",
+    "seccompProfile", "appArmorProfile"})
 
 # 模板级 volumes:K8s 卷源键 → 内部 kind
 _VOLUME_WIRE_SOURCES = ("hostPath", "configMap", "persistentVolumeClaim", "nfs")
@@ -361,25 +360,19 @@ def _parse_str_list(value: Any, where: str, key: str) -> list[str] | None:
     return value or None
 
 
-def _parse_security_context(value: Any, where: str,
-                            role: str) -> dict[str, Any]:
-    """securityContext → 内部八键规范形(主容器仅 runAs 两键合法,越角色 400)。"""
+def _parse_security_context(value: Any, where: str) -> dict[str, Any]:
+    """securityContext → 内部八键规范形(主/sidecar 同一白名单,决策 B)。"""
     out: dict[str, Any] = dict(SECCTX_DEFAULT)
     if value is None:
         return out
     if not isinstance(value, dict):
         raise InvalidParams(
             f"{where}.securityContext must be an object, got {value!r}")
-    allowed = _MAIN_SECCTX_KEYS | (
-        _SIDECAR_SECCTX_EXTRA if role == SIDECAR_ROLE else set())
-    unknown = set(value) - allowed
+    unknown = set(value) - _SECCTX_WIRE_KEYS
     if unknown:
-        role_note = ("only runAsUser/runAsGroup are allowed on the main "
-                     "container" if role == MAIN_ROLE else "")
         raise InvalidParams(
             f"{where}.securityContext unknown keys {sorted(unknown)}; "
-            f"allowed: {sorted(allowed)}"
-            + (f" ({role_note})" if role_note else ""))
+            f"allowed: {sorted(_SECCTX_WIRE_KEYS)}")
     for wire_key, out_key in (("runAsUser", "run_as_user"),
                               ("runAsGroup", "run_as_group")):
         if value.get(wire_key) is not None:
@@ -551,7 +544,7 @@ def parse_container_spec(item: Any, where: str, *, role: str) -> dict[str, Any]:
     resources = _parse_resources(item.get("resources"), where)
     volume_mounts = _parse_volume_mounts(item.get("volumeMounts"), where)
     security_context = _parse_security_context(
-        item.get("securityContext"), where, role)
+        item.get("securityContext"), where)
     command = _parse_str_list(item.get("command"), where, "command")
     args = _parse_str_list(item.get("args"), where, "args")
     readiness_probe = _parse_readiness_probe(

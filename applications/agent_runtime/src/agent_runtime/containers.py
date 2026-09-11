@@ -17,8 +17,8 @@ canonical 13 键::
   ``name="sse"``(gateway 直连契约)+ 至多一个 ``name="http"``,固定序
   ``[sse, http?]``;sidecar 至多一个**无名**端口(纯声明性)。
 - ``nfs``:``{server, path, mount_path} | None``,main 独有(sidecar 恒 None)。
-- ``security_context``:7 键恒满;main 值域仅 runAs 两键(其余恒默认),sidecar
-  全量。``readiness_probe``:5 键恒满;main 恒 http 且 ``timeout=None``
+- ``security_context``:7 键恒满,主/sidecar 全量一致(2026-09-11 决策 B:
+  主容器特权面放开,安全策略归管理面)。``readiness_probe``:5 键恒满;main 恒 http 且 ``timeout=None``
   (= 不支持,非未设置),sidecar 可 tcp/http 缺省带 timeout(period 默认
   main 5 / sidecar 10,历史默认不得拉平)。
 
@@ -325,9 +325,9 @@ def _canonical_str_list(value: Any, where: str, key: str) -> Optional[list[str]]
     return list(value)
 
 
-def _canonical_secctx(value: Any, where: str,
-                      role: str) -> dict[str, Any]:
-    """securityContext → 7 键规范形;main 值域仅 runAs 两键(越角色 400)。"""
+def _canonical_secctx(value: Any, where: str) -> dict[str, Any]:
+    """securityContext → 7 键规范形(主/sidecar 全量一致——2026-09-11 决策 B
+    放开主容器特权面,安全策略归管理面,runtime 只做键合法性与值类型校验)。"""
     if value is None:
         value = {}
     if not isinstance(value, dict):
@@ -352,19 +352,6 @@ def _canonical_secctx(value: Any, where: str,
     for key in ("seccomp_unconfined", "apparmor_unconfined"):
         out[key] = _bool(
             value.get(key, False), f"{where}.security_context", key)
-    if role == MAIN_ROLE:
-        extras = {
-            "privileged": out["privileged"],
-            "capabilities_add": out["capabilities_add"],
-            "capabilities_drop": out["capabilities_drop"],
-            "seccomp_unconfined": out["seccomp_unconfined"],
-            "apparmor_unconfined": out["apparmor_unconfined"],
-        }
-        if any(extras.values()):
-            raise InvalidParams(
-                f"{where}.security_context: only run_as_user/run_as_group are "
-                "allowed on the main container (privileged/capabilities/"
-                "seccomp/apparmor are sidecar-only)")
     return out
 
 
@@ -476,7 +463,7 @@ def canonical_container(item: Any, where: str, *, role: str) -> dict[str, Any]:
         "nfs_mounts": canonical_nfs_mounts(
             item.get("nfs_mounts") or [], f"{where}.nfs_mounts"),
         "security_context": _canonical_secctx(
-            item.get("security_context"), where, role),
+            item.get("security_context"), where),
         "readiness_probe": probe,
     }
 

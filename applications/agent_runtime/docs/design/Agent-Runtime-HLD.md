@@ -156,7 +156,7 @@ flowchart TB
 | `envFrom` | list[{prefix?, secretRef?/configMapRef?}] | **envFrom 引用注入**(K8s EnvFromSource 完整形态;每项恰一 ref,`{name, optional?}`,prefix 为 env 变量名前缀;`[]`/缺省 = 无。密钥以引用名下发,**值不落模板/快照/pod_spec**) |
 | `resources` | {requests?, limits?} | 嵌套 `{cpu, memory}` 量纲字符串;缺省 None |
 | `volumeMounts` | list[{name, mountPath, subPath?, readOnly?}] | 按名引用模板 `volumes`(悬挂引用 → 400;`subPath` 仅 configMap 卷;`readOnly` 缺省按内部规范:configMap→true、hostPath/PVC→false) |
-| `securityContext` | dict | 主容器只许 `runAsUser`/`runAsGroup`(≥0,`None` = 走镜像默认;**不改变卷文件属主**——PVC 写权限根治仍是存储侧预属主,见 `e2e-test-cases.md` 真实缺陷②);sidecar 另有 `privileged`、`capabilities{add,drop}`、`seccompProfile`/`appArmorProfile`(type ∈ {Unconfined, RuntimeDefault};appArmor 渲染为 Pod annotation) |
+| `securityContext` | dict | **主/sidecar 同一白名单**(2026-09-11 决策 B:主容器特权面放开,安全策略归管理面,runtime 只做键/值校验):`runAsUser`/`runAsGroup`(≥0,`null` = 走镜像默认;**不改变卷文件属主**——PVC 写权限根治仍是存储侧预属主,见 `e2e-test-cases.md` 真实缺陷②)、`privileged`(bool)、`capabilities{add,drop}`、`seccompProfile`/`appArmorProfile`(type ∈ {Unconfined, RuntimeDefault};appArmor 渲染为 Pod annotation) |
 | `readinessProbe` | dict | 主容器恒 `httpGet{path(=health_path), port(=sse 端口)}` + `initialDelaySeconds`/`periodSeconds`(缺省 5/5;`tcpSocket`/`timeoutSeconds` → 400);sidecar `tcpSocket`/`httpGet` 二选一可缺省(缺省 5/**10**/3,period 差异不得跨角色套用),`timeoutSeconds` 1..300 |
 | `command` / `args` | list[str] | 启动命令/参数覆盖(**主容器/sidecar 一致生效**,2026-09-11 起双角色);`None`/`[]` 同义 = 走镜像 ENTRYPOINT/CMD;非 str 项 → 400 |
 | —(不可表示即拒绝) | — | 端口 `protocol`/`Localhost` profile 等 K8s 字段内部表达不了 → **400,绝不静默丢弃**(防"看似有特权实际没有") |
@@ -217,7 +217,7 @@ field    := user_id | group_id | bot_id(固定小写枚举)
 ```
 
 - 语义:**以数组为准的全量替换**(upsert 全部 + 删除消失项;容器以本批为集 GC);幂等重放收敛(affected_scopes 为空)。
-- 校验(400 VALIDATION,锁外零副作用):缺 `containers` 键(legacy 内联载荷);`templates`/`scopes` 非 list;模板缺 `main_container_id`;**mixed**(引用键与 legacy 内联容器键并存);container_id 空/>100/同批重复/未被引用/双角色;容器逐项按角色校验(见 `container` 结构表;未知键/越角色键/不可表示字段);模板引用不在本批 containers;sidecar 引用重复/>8;volumes(重复卷名/多源/无源/悬挂挂载/未挂载卷/`subPath` 非 configMap/NFS 逾界);模板级 int 严格/策略下界/`nodeName` hostname;scope_id 字符集/`index` 拒 bool/引用不在本批模板集/`routing_rules` 表达式语法/`enabled` 须 bool/`expires_at` ISO-8601 或 null/同批重复(语法细则见上文)。
+- 校验(400 VALIDATION,锁外零副作用):缺 `containers` 键(legacy 内联载荷);`templates`/`scopes` 非 list;模板缺 `main_container_id`;**mixed**(引用键与 legacy 内联容器键并存);container_id 空/>100/同批重复/未被引用/双角色;容器逐项按角色校验(见 `container` 结构表;未知键/不可表示字段);模板引用不在本批 containers;sidecar 引用重复/>8;volumes(重复卷名/多源/无源/悬挂挂载/未挂载卷/`subPath` 非 configMap/NFS 逾界);模板级 int 严格/策略下界/`nodeName` hostname;scope_id 字符集/`index` 拒 bool/引用不在本批模板集/`routing_rules` 表达式语法/`enabled` 须 bool/`expires_at` ISO-8601 或 null/同批重复(语法细则见上文)。
 - 每次成功下发都会:重建路由快照(§5.1 `routing:snapshot`)、对每个**生效中** scope 推 RM 池参数 + pod_spec(**eager 预热**:autoscale 下一拍即预热 min_idle)、对禁用/过期 scope 与被删 scope 推 `min_idle=0`(自然排空)。
 
 **curl 调用示例**(Envelope 包装:`type` 须为端点名、`metadata.request_id` 必填(兼幂等键)、三段式载荷在 `rawdata`;带 K8s pod 内探测的脚本版本见 `scripts/config_sync_seed.sh`。示例载荷要点:主容器探针恒 `httpGet` 且**无** `timeoutSeconds`/sidecar `tcpSocket` + 特权三件套/模板只持容器引用与 `volumes`/空 `routing_rules` = 通配兜底 scope):

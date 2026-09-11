@@ -171,11 +171,20 @@ def test_canonical_probe_path_gets_leading_slash():
     {"seccomp_unconfined": True},
     {"apparmor_unconfined": True},
 ])
-def test_main_rejects_sidecar_only_security(secctx_extra):
-    with pytest.raises(InvalidParams, match="sidecar-only"):
-        canonical_container(
-            {"image": "x:1", "security_context": secctx_extra},
-            "main", role="main")
+def test_main_accepts_full_security(secctx_extra):
+    """决策 B(2026-09-11):主容器特权面与 sidecar 全量对齐——安全策略归
+    管理面,runtime 只做键/值校验,不再按 role 收值域。"""
+    out = canonical_container(
+        {"image": "x:1", "security_context": secctx_extra},
+        "main", role="main")
+    rendered = {k: v for k, v in out["security_context"].items() if v}
+    expect = {("privileged" if k == "privileged"
+               else "capabilities_add" if k == "capabilities_add"
+               else "capabilities_drop" if k == "capabilities_drop"
+               else "seccomp_unconfined" if k == "seccomp_unconfined"
+               else "apparmor_unconfined"): v
+              for k, v in secctx_extra.items()}
+    assert all(rendered.get(k) == v for k, v in expect.items())
 
 
 @pytest.mark.parametrize("probe", [

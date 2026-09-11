@@ -280,23 +280,36 @@ def test_host_path_volume_name_rules(name, idx, mount_idx, expected):
 # ---------------------------------------------- 主容器 securityContext / node_name
 
 def test_build_pod_body_main_security_context(client):
-    """主容器 runAs → securityContext;未给则不设键(镜像 USER 生效)。"""
+    """决策 B:主容器 securityContext 与 sidecar 全量一致渲染。"""
     spec = _base_spec(main_container=_main(
         security_context={"run_as_user": 1000, "run_as_group": 1000}))
     main = client._build_pod_body("pod-1", spec).kwargs["spec"].kwargs[
         "containers"][0].kwargs
-    assert main["security_context"].kwargs == {
-        "run_as_user": 1000, "run_as_group": 1000}
-    # 只给 user 不给 group:半渲染
+    effective = {k: v for k, v in
+                 main["security_context"].kwargs.items() if v is not None}
+    assert effective == {"run_as_user": 1000, "run_as_group": 1000}
+    # 只给 user 不给 group:半渲染(其余键 None=未设,K8s 渲染等价)
     main = client._build_pod_body(
         "pod-1", _base_spec(main_container=_main(
             security_context={"run_as_user": 1000}))
     ).kwargs["spec"].kwargs["containers"][0].kwargs
-    assert main["security_context"].kwargs == {"run_as_user": 1000}
-    # 默认:不设键(与历史 Pod 零差异)
+    effective = {k: v for k, v in
+                 main["security_context"].kwargs.items() if v is not None}
+    assert effective == {"run_as_user": 1000}
+    # 特权/caps/seccomp:主容器同 sidecar 渲染
+    main = client._build_pod_body(
+        "pod-1", _base_spec(main_container=_main(security_context={
+            "privileged": True, "capabilities_add": ["SYS_ADMIN"],
+            "seccomp_unconfined": True}))
+    ).kwargs["spec"].kwargs["containers"][0].kwargs
+    sec = main["security_context"].kwargs
+    assert sec["privileged"] is True
+    assert sec["capabilities"].kwargs == {"add": ["SYS_ADMIN"], "drop": None}
+    assert sec["seccomp_profile"].kwargs == {"type": "Unconfined"}
+    # 默认:security_context=None(走镜像默认;渲染出的 K8s 对象无该段)
     main = client._build_pod_body(
         "pod-1", _base_spec()).kwargs["spec"].kwargs["containers"][0].kwargs
-    assert "security_context" not in main
+    assert main["security_context"] is None
 
 
 def test_build_pod_body_node_name(client):
