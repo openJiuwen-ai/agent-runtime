@@ -173,7 +173,7 @@ SM 侧 ctx,级联管理全部生命周期(框架 App 的 lifespan 只认一个 c
 - `POLICY_FIELDS`:B 类策略(`scope_concurrency/pod_concurrency/session_ttl/pod_ttl/min_idle_pods`)。
 - **kubeconfig 例外**:在 deploy 子集但**不入指纹**(只影响新 deploy,不日落)。
 - 约束:SM `Template.deploy_ver()` 与 RM `orchestrator._deploy_ver()` 必须用同一字段集与算法(`util.fingerprint`)——A 类版本过滤依赖两端一致。
-- **新增 template 字段时**:先在此分类 → 再补 `config_store.py` 的 `_COLUMN_OF` 列映射与 `*_TABLE_DEF` 表结构。
+- **新增模板级字段时**:先在此分类 → 再补 `config_store.py` 的 `_COLUMN_OF` 列映射与 `*_TABLE_DEF` 表结构。**容器级字段增改不碰本文件**(2026-09 起 `main_container`/`sidecars` 以 canonical 整体进指纹,只改 containers.py + RM 渲染分支;RM 对旧缓存经 `normalize_pod_spec` 补缺省后同指纹,零伪日落)。
 
 ## util.py —— 纯函数
 

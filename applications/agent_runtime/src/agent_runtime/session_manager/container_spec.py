@@ -27,7 +27,9 @@ from openjiuwen_runtime.foundation.db.table_def import (
 )
 
 from ..containers import (
+    CONTAINER_NAME_RE,
     DEFAULT_IMAGE_PULL_POLICY,
+    canonical_env_from,
     DEFAULT_MAIN_NAME,
     DEFAULT_SSE_PORT,
     MAIN_PROBE_DEFAULT,
@@ -45,10 +47,7 @@ from ..mounts import (
     canonical_pvc_mounts,
     find_mount_path_conflicts,
 )
-from ..sidecars import (
-    SIDECAR_NAME_RE,
-    canonical_env_from,
-)
+
 
 CONTAINER_TABLE = "service_config_container"
 
@@ -535,7 +534,7 @@ def parse_container_spec(item: Any, where: str, *, role: str) -> dict[str, Any]:
     name = item.get("name")
     if role == MAIN_ROLE and name is None:
         name = DEFAULT_MAIN_NAME  # Template.container_name 默认
-    if not isinstance(name, str) or not SIDECAR_NAME_RE.match(name):
+    if not isinstance(name, str) or not CONTAINER_NAME_RE.match(name):
         raise InvalidParams(
             f"{where}.name {name!r} must be a DNS-1123 label (lowercase "
             "alphanumeric or '-'), max 63 chars")
@@ -600,7 +599,7 @@ def canonical_volumes(value: Any, where: str) -> dict[str, dict[str, Any]]:
                 f"{entry_where} must have exactly one volume source among "
                 f"{list(_VOLUME_WIRE_SOURCES)}, got {sorted(entry)!r}")
         name = entry.get("name")
-        if not isinstance(name, str) or not SIDECAR_NAME_RE.match(name):
+        if not isinstance(name, str) or not CONTAINER_NAME_RE.match(name):
             raise InvalidParams(
                 f"{entry_where}.name {name!r} must be a DNS-1123 label, "
                 "max 63 chars")
@@ -750,104 +749,6 @@ def build_canonical(spec: dict[str, Any],
         "security_context": spec["security_context"],
         "readiness_probe": spec["readiness_probe"],
     }, where, role=role)
-
-
-def main_template_kwargs(spec: dict[str, Any],
-                         volumes: dict[str, dict[str, Any]],
-                         where: str) -> dict[str, Any]:
-    """主容器内部规范形(+模板 volumes join)→ Template 容器级 kwargs。
-
-    C2 过渡实现:build_canonical → 旧扁平 kwargs 适配(既有断言即等价证明
-    承重);挂载冲突检查语义保留(四类挂载 mount_path 互斥,上游新签名)。
-    C3 随 Template 切换 canonical 后删除。
-    """
-    cont = build_canonical(spec, volumes, where, role=MAIN_ROLE)
-    conflict = find_mount_path_conflicts([
-        (f"{where}.host_path_mounts", cont["host_path_mounts"]),
-        (f"{where}.configmap_mounts", cont["configmap_mounts"]),
-        (f"{where}.pvc_mounts", cont["pvc_mounts"]),
-        (f"{where}.nfs_mounts", cont["nfs_mounts"]),
-    ])
-    if conflict:
-        raise InvalidParams(f"{where}: {conflict}")
-    secctx = cont["security_context"]
-    probe = cont["readiness_probe"]
-    resources = cont["resources"]
-    sse = next(p for p in cont["ports"] if p["name"] == "sse")
-    http = next((p for p in cont["ports"] if p["name"] == "http"), None)
-    return {
-        "container_name": cont["name"],
-        "agent_image": cont["image"],
-        "image_pull_policy": cont["image_pull_policy"],
-        "sse_port": sse["container_port"],
-        "container_port": (http["container_port"] if http
-                           else sse["container_port"]),
-        "agent_env": cont["env"],
-        "agent_env_from": cont["env_from"],
-        "agent_cpu_request": resources["cpu_request"],
-        "agent_memory_request": resources["memory_request"],
-        "agent_cpu_limit": resources["cpu_limit"],
-        "agent_memory_limit": resources["memory_limit"],
-        "run_as_user": secctx["run_as_user"],
-        "run_as_group": secctx["run_as_group"],
-        "command": cont["command"],
-        "args": cont["args"],
-        "health_path": probe["path"],
-        "readiness_initial_delay": probe["initial_delay"],
-        "readiness_period": probe["period"],
-        "agent_host_path_mounts": cont["host_path_mounts"] or None,
-        "agent_configmap_mounts": cont["configmap_mounts"] or None,
-        "agent_pvc_mounts": cont["pvc_mounts"] or None,
-        "agent_nfs_mounts": cont["nfs_mounts"] or None,
-    }
-
-
-def sidecar_wire_input(spec: dict[str, Any],
-                       volumes: dict[str, dict[str, Any]],
-                       where: str) -> dict[str, Any]:
-    """sidecar 内部规范形(+模板 volumes join)→ sidecars.py 校验输入形态。
-
-    C2 过渡实现:build_canonical → 旧 24 键适配(既有断言即等价证明承重)。
-    NFS 与 PVC 同构:sidecar 经 nfs_mounts 列表按名挂载模板级 NFS 卷
-    (canonical 全键;旧规范形条件键在 _canonical_sidecar 侧归一)。
-    C3 随 sidecars 规范形切换 canonical 后删除。
-    """
-    cont = build_canonical(spec, volumes, where, role=SIDECAR_ROLE)
-    secctx = cont["security_context"]
-    probe = cont["readiness_probe"]
-    resources = cont["resources"]
-    out = {
-        "name": cont["name"],
-        "image": cont["image"],
-        "port": (cont["ports"][0]["container_port"]
-                 if cont["ports"] else None),
-        "env": cont["env"],
-        "image_pull_policy": cont["image_pull_policy"],
-        "cpu_request": resources["cpu_request"],
-        "memory_request": resources["memory_request"],
-        "cpu_limit": resources["cpu_limit"],
-        "memory_limit": resources["memory_limit"],
-        "privileged": secctx["privileged"],
-        "capabilities_add": secctx["capabilities_add"],
-        "capabilities_drop": secctx["capabilities_drop"],
-        "seccomp_unconfined": secctx["seccomp_unconfined"],
-        "apparmor_unconfined": secctx["apparmor_unconfined"],
-        "run_as_user": secctx["run_as_user"],
-        "run_as_group": secctx["run_as_group"],
-        "host_path_mounts": cont["host_path_mounts"],
-        "configmap_mounts": cont["configmap_mounts"],
-        "pvc_mounts": cont["pvc_mounts"],
-        "nfs_mounts": cont["nfs_mounts"],
-        "readiness_probe_type": probe["probe_type"],
-        "readiness_path": probe["path"],
-        "readiness_initial_delay": probe["initial_delay"],
-        "readiness_period": probe["period"],
-        "readiness_timeout_seconds": probe["timeout"],
-    }
-    # 旧规范形 env_from 条件键(有值才出现)
-    if cont["env_from"] is not None:
-        out["env_from"] = cont["env_from"]
-    return out
 
 
 # -------------------------------------------------------------- volumes 列存取

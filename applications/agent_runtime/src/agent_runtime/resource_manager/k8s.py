@@ -21,9 +21,15 @@ from typing import Any
 
 import httpx
 
+from ..containers import (
+    MAIN_ROLE,
+    SIDECAR_ROLE,
+    find_container_conflict,
+    main_sse_port,
+    normalize_pod_spec,
+)
 from ..errors import DeployFailed
 from ..mounts import normalize_mounts
-from ..sidecars import find_sidecar_conflict, normalize_sidecars
 from .models import POD_LABEL_KEY, POD_LABEL_VALUE, PodDeployInfo, PodInfo
 
 logger = logging.getLogger("agent_runtime.resource_manager")
@@ -333,7 +339,8 @@ class RealK8sPodClient(K8sPodClient):
             pod_id = f"{pod_spec.get('pod_name') or 'agentserver'}-{_random_suffix(10)}-{_random_suffix(5)}"
             body = self._build_pod_body(pod_id, pod_spec)
             logger.info("k8s create pod: name=%s namespace=%s image=%s",
-                        pod_id, namespace, pod_spec.get("agent_image"))
+                        pod_id, namespace,
+                        (pod_spec.get("main_container") or {}).get("image"))
             try:
                 await core.create_namespaced_pod(
                     namespace=namespace, body=body, _request_timeout=CREATE_TIMEOUT)
@@ -360,213 +367,212 @@ class RealK8sPodClient(K8sPodClient):
                 raise
         raise DeployFailed("k8s create pod failed: name conflicts exhausted")
 
-    # -------------------------------------------------------------- sidecar 渲染
+    # -------------------------------------------------------------- 容器渲染(主/sidecar 统一)
 
     @staticmethod
-    def _build_sidecar_security_context(c: Any, sc: dict[str, Any]) -> Any | None:
+    def _build_security_context(c: Any, secctx: dict[str, Any]) -> Any | None:
         """sidecar 安全上下文(移植老 SDK _build_security_context 精简版):
         privileged/caps/seccomp/run_as_;apparmor 走 Pod annotation(调用方收集)。"""
         capabilities = None
-        if sc["capabilities_add"] or sc["capabilities_drop"]:
+        if secctx.get("capabilities_add") or secctx.get("capabilities_drop"):
             capabilities = c.V1Capabilities(
-                add=sc["capabilities_add"] or None,
-                drop=sc["capabilities_drop"] or None,
+                add=secctx.get("capabilities_add") or None,
+                drop=secctx.get("capabilities_drop") or None,
             )
         kwargs = {
-            "privileged": True if sc["privileged"] else None,
+            "privileged": True if secctx.get("privileged") else None,
             "capabilities": capabilities,
             "seccomp_profile": (c.V1SeccompProfile(type="Unconfined")
-                                if sc["seccomp_unconfined"] else None),
-            "run_as_user": sc["run_as_user"],
-            "run_as_group": sc["run_as_group"],
+                                if secctx.get("seccomp_unconfined") else None),
+            "run_as_user": secctx.get("run_as_user"),
+            "run_as_group": secctx.get("run_as_group"),
         }
         if all(value is None for value in kwargs.values()):
             return None
         return c.V1SecurityContext(**kwargs)
 
-    @staticmethod
-    def _build_sidecar_probe(c: Any, sc: dict[str, Any]) -> Any:
-        """tcp → V1TCPSocketAction;http → V1HTTPGetAction(readiness_path)。"""
-        common = {
-            "initial_delay_seconds": sc["readiness_initial_delay"],
-            "period_seconds": sc["readiness_period"],
-            "timeout_seconds": sc["readiness_timeout_seconds"],
-        }
-        if sc["readiness_probe_type"] == "tcp":
-            return c.V1Probe(tcp_socket=c.V1TCPSocketAction(port=sc["port"]), **common)
-        return c.V1Probe(
-            http_get=c.V1HTTPGetAction(path=sc["readiness_path"], port=sc["port"]),
-            **common,
-        )
-
-    def _build_sidecar_container(
-            self, c: Any, sc: dict[str, Any], idx: int, *,
+    def _build_container(
+            self, c: Any, cont: dict[str, Any], *, role: str, idx: int,
+            pod_id: str = "",
             hp_seen: dict[tuple[str, Any], str] | None = None,
             cm_seen: dict[tuple, str] | None = None,
             pvc_seen: dict[str, str] | None = None,
             nfs_seen: dict[tuple[str, str], str] | None = None,
     ) -> tuple[Any, list[Any], dict[str, str]]:
-        """单个 sidecar(规范形,见 sidecars.py)→ (V1Container, 挂载卷, Pod annotation)。"""
+        """单个容器(canonical,见 containers.py)→ (V1Container, 挂载卷, Pod annotation)。
+
+        主/sidecar 统一渲染器;role 差异收敛为五处:ports 有名(sse/http)vs
+        无名纯声明、探针恒 httpGet 打 sse 端口且无 timeout vs 可选 tcp/http
+        带 timeout、securityContext 主容器仅 runAs 两键(空则省 kwarg,走镜像
+        默认)、apparmor annotation(canonical 主容器恒 False → 永不产出)、
+        command/args 仅主容器渲染(sidecar 暂不开放,同上游)。挂载四族
+        (hp/cm/pvc/nfs)主/sidecar 一致(_render_volume_mounts),pvc_seen/
+        nfs_seen 跨容器共享同 claim/同 server+path 的卷(防 kubelet 挂第二
+        个同源卷死锁)。
+        """
+        is_main = role == MAIN_ROLE
         volumes, mounts = _render_volume_mounts(
-            c, sc["name"], idx,
-            host_path=sc["host_path_mounts"],
-            config_map=sc["configmap_mounts"],
-            pvc=sc["pvc_mounts"],
-            nfs=sc.get("nfs_mounts"),
+            c, cont["name"], idx,
+            host_path=normalize_mounts(cont.get("host_path_mounts"),
+                                       "host_path_mounts"),
+            config_map=normalize_mounts(cont.get("configmap_mounts"),
+                                        "configmap_mounts"),
+            pvc=normalize_mounts(cont.get("pvc_mounts"), "pvc_mounts"),
+            nfs=normalize_mounts(cont.get("nfs_mounts"), "nfs_mounts"),
             hp_seen=hp_seen,
             cm_seen=cm_seen,
             pvc_seen=pvc_seen,
             nfs_seen=nfs_seen,
         )
+
         resources = None
-        if any(sc[f] for f in ("cpu_request", "memory_request",
-                               "cpu_limit", "memory_limit")):
+        res = cont.get("resources") or {}
+        if any(res.get(f) for f in ("cpu_request", "memory_request",
+                                    "cpu_limit", "memory_limit")):
             resources = c.V1ResourceRequirements(
                 requests={k: v for k, v in (
-                    ("cpu", sc["cpu_request"]), ("memory", sc["memory_request"]),
+                    ("cpu", res.get("cpu_request")),
+                    ("memory", res.get("memory_request")),
                 ) if v} or None,
                 limits={k: v for k, v in (
-                    ("cpu", sc["cpu_limit"]), ("memory", sc["memory_limit"]),
+                    ("cpu", res.get("cpu_limit")),
+                    ("memory", res.get("memory_limit")),
                 ) if v} or None,
             )
-        container = c.V1Container(
-            name=sc["name"],
-            image=sc["image"],
-            image_pull_policy=sc["image_pull_policy"] or "IfNotPresent",
+
+        ports = None
+        if is_main:
+            sse_port = main_sse_port(cont)
+            ports = [c.V1ContainerPort(name="sse", container_port=sse_port)]
+            for p in cont.get("ports") or []:
+                if (p.get("name") == "http"
+                        and p.get("container_port") != sse_port):
+                    ports.append(c.V1ContainerPort(
+                        name="http", container_port=p["container_port"]))
+        elif cont.get("ports"):
             # 端口纯声明性(无名,消灭端口名撞号类 bug):sidecar 只被同 Pod
-            # 127.0.0.1 访问,不进 Service,gateway 仍直连 Pod IP 的 sse_port
-            ports=[c.V1ContainerPort(container_port=sc["port"])] if sc["port"] else None,
-            env=[c.V1EnvVar(name=k, value=v) for k, v in sc["env"].items()] or None,
-            env_from=_render_env_from(c, sc.get("env_from")),
-            volume_mounts=mounts or None,
-            resources=resources,
-            security_context=self._build_sidecar_security_context(c, sc),
-            readiness_probe=(self._build_sidecar_probe(c, sc)
-                             if sc["readiness_probe_type"] else None),
-        )
+            # 127.0.0.1 访问,不进 Service,gateway 仍直连 Pod IP 的 sse 端口
+            ports = [c.V1ContainerPort(
+                container_port=cont["ports"][0]["container_port"])]
+
+        probe = None
+        probe_spec = cont.get("readiness_probe") or {}
+        if is_main:
+            # AgentServer 固定约定:SSE 端口提供健康端点(默认 /health,模板
+            # 可覆盖——真 AgentServer HTTP 入口为 /api/v1/health);无 timeout
+            probe = c.V1Probe(
+                http_get=c.V1HTTPGetAction(
+                    path=probe_spec.get("path") or "/health",
+                    port=main_sse_port(cont)),
+                initial_delay_seconds=int(probe_spec.get("initial_delay") or 5),
+                period_seconds=int(probe_spec.get("period") or 5),
+            )
+        elif probe_spec.get("probe_type"):
+            common = {
+                "initial_delay_seconds": int(
+                    probe_spec.get("initial_delay") or 5),
+                "period_seconds": int(probe_spec.get("period") or 10),
+                "timeout_seconds": int(probe_spec.get("timeout") or 3),
+            }
+            port = (cont["ports"][0]["container_port"]
+                    if cont.get("ports") else None)
+            if port is not None:
+                if probe_spec["probe_type"] == "tcp":
+                    probe = c.V1Probe(
+                        tcp_socket=c.V1TCPSocketAction(port=port), **common)
+                else:
+                    probe = c.V1Probe(
+                        http_get=c.V1HTTPGetAction(
+                            path=probe_spec.get("path") or "/health",
+                            port=port),
+                        **common,
+                    )
+
+        env = [
+            c.V1EnvVar(name=str(k), value=str(v))
+            for k, v in (cont.get("env") or {}).items()
+        ] or None
+
+        # 主容器启动命令/参数覆盖(缺省走镜像 ENTRYPOINT/CMD;sidecar 暂不开放)
+        cmd_kwargs: dict[str, Any] = {}
+        if is_main:
+            if cont.get("command"):
+                cmd_kwargs["command"] = [str(x) for x in cont["command"]]
+            if cont.get("args"):
+                cmd_kwargs["args"] = [str(x) for x in cont["args"]]
+
+        container_kwargs: dict[str, Any] = {
+            "name": cont["name"],
+            "image": cont.get("image") or "",
+            "image_pull_policy": (cont.get("image_pull_policy")
+                                  or "IfNotPresent"),
+            "ports": ports,
+            "env": env,
+            "env_from": _render_env_from(c, cont.get("env_from")),
+            "volume_mounts": mounts or None,
+            "resources": resources,
+            "readiness_probe": probe,
+        }
+        secctx = cont.get("security_context") or {}
+        if is_main:
+            # 主容器 securityContext 仅 runAs 两键(有则设:无则不设,走镜像
+            # 默认——黄金断言保形)
+            sec_kwargs: dict[str, Any] = {}
+            if secctx.get("run_as_user") is not None:
+                sec_kwargs["run_as_user"] = int(secctx["run_as_user"])
+            if secctx.get("run_as_group") is not None:
+                sec_kwargs["run_as_group"] = int(secctx["run_as_group"])
+            if sec_kwargs:
+                container_kwargs["security_context"] = (
+                    c.V1SecurityContext(**sec_kwargs))
+        else:
+            container_kwargs["security_context"] = self._build_security_context(
+                c, secctx)
+        container = c.V1Container(**container_kwargs, **cmd_kwargs)
         # apparmor unconfined 只能以 Pod annotation 表达(老 SDK 同款)
-        annotations = ({f"container.apparmor.security.beta.kubernetes.io/{sc['name']}":
-                        "unconfined"} if sc["apparmor_unconfined"] else {})
+        annotations = ({f"container.apparmor.security.beta.kubernetes.io/{cont['name']}":
+                        "unconfined"} if secctx.get("apparmor_unconfined") else {})
         return container, volumes, annotations
 
     def _build_pod_body(self, pod_id: str, spec: dict[str, Any]) -> Any:
         c = self._client
         labels = {POD_LABEL_KEY: POD_LABEL_VALUE, "app": pod_id}
-        volumes, mounts = [], []
-
-        # 主 agent 容器卷挂载(hostPath/ConfigMap/PVC/NFS;脏缓存 normalize 兜底,
-        # 规范形见 mounts.py;无挂载时零增量——与历史一致)
-        agent_owner = spec.get("container_name") or "agent"
-        # 跨容器共享卷登记簿:同源只建一个 Pod 级卷,主+sidecar 复用卷名
-        hp_seen: dict[tuple[str, Any], str] = {}  # 同 (path, type) 的 hostPath 共享卷
-        cm_seen: dict[tuple, str] = {}  # 同 (name, items) 的 ConfigMap 共享卷
-        pvc_seen: dict[str, str] = {}  # 同 claim 的 PVC 跨容器共享一个卷(主+sidecar)
-        nfs_seen: dict[tuple[str, str], str] = {}  # 同 server+path 的 NFS 共享卷
-        agent_volumes, agent_mounts = _render_volume_mounts(
-            c, agent_owner, 0,
-            host_path=normalize_mounts(spec.get("agent_host_path_mounts"),
-                                        "host_path_mounts"),
-            config_map=normalize_mounts(spec.get("agent_configmap_mounts"),
-                                        "configmap_mounts"),
-            pvc=normalize_mounts(spec.get("agent_pvc_mounts"), "pvc_mounts"),
-            nfs=normalize_mounts(spec.get("agent_nfs_mounts"), "nfs_mounts"),
-            hp_seen=hp_seen,
-            cm_seen=cm_seen,
-            pvc_seen=pvc_seen,
-            nfs_seen=nfs_seen,
-        )
-        volumes.extend(agent_volumes)
-        mounts.extend(agent_mounts)
-
-        resources = None
-        if any(spec.get(f) for f in ("agent_cpu_request", "agent_memory_request",
-                                     "agent_cpu_limit", "agent_memory_limit")):
-            resources = c.V1ResourceRequirements(
-                requests={k: v for k, v in (
-                    ("cpu", spec.get("agent_cpu_request")),
-                    ("memory", spec.get("agent_memory_request")),
-                ) if v} or None,
-                limits={k: v for k, v in (
-                    ("cpu", spec.get("agent_cpu_limit")),
-                    ("memory", spec.get("agent_memory_limit")),
-                ) if v} or None,
-            )
-
-        sse_port = int(spec.get("sse_port") or 8080)
-        container_port = int(spec.get("container_port") or sse_port)
-        ports = [c.V1ContainerPort(name="sse", container_port=sse_port)]
-        if container_port != sse_port:
-            ports.append(c.V1ContainerPort(name="http", container_port=container_port))
-
-        # AgentServer 固定约定：SSE 端口提供健康端点（默认 /health，模板可覆盖——
-        # 真 AgentServer HTTP 入口为 /api/v1/health）
-        probe = c.V1Probe(
-            http_get=c.V1HTTPGetAction(path=spec.get("health_path") or "/health",
-                                       port=sse_port),
-            initial_delay_seconds=int(spec.get("readiness_initial_delay") or 5),
-            period_seconds=int(spec.get("readiness_period") or 5),
-        )
-
-        # Agent 容器 env 注入（模板 agent_env，如 AGENT_HTTP_ENABLED/HOST/PORT）
-        env = [
-            c.V1EnvVar(name=str(k), value=str(v))
-            for k, v in (spec.get("agent_env") or {}).items()
-        ] or None
-        # envFrom 引用注入（secretRef/configMapRef；None = 不设，历史行为不变）
-        env_from = _render_env_from(c, spec.get("agent_env_from"))
-
-        # 主容器 securityContext(有则设:run_as_user/run_as_group;无则不设,走镜像默认)
-        sec_kwargs: dict[str, Any] = {}
-        if spec.get("run_as_user") is not None:
-            sec_kwargs["run_as_user"] = int(spec["run_as_user"])
-        if spec.get("run_as_group") is not None:
-            sec_kwargs["run_as_group"] = int(spec["run_as_group"])
-        # 主容器启动命令/参数覆盖(模板可缺省,走镜像 ENTRYPOINT/CMD)
-        cmd_kwargs: dict[str, Any] = {}
-        if spec.get("command"):
-            cmd_kwargs["command"] = [str(x) for x in spec["command"]]
-        if spec.get("args"):
-            cmd_kwargs["args"] = [str(x) for x in spec["args"]]
-        container = c.V1Container(
-            name=spec.get("container_name") or "agent",
-            image=spec.get("agent_image") or "",
-            image_pull_policy=spec.get("image_pull_policy") or "IfNotPresent",
-            ports=ports,
-            env=env,
-            env_from=env_from,
-            volume_mounts=mounts or None,
-            resources=resources,
-            readiness_probe=probe,
-            **({"security_context": c.V1SecurityContext(**sec_kwargs)}
-               if sec_kwargs else {}),
-            **cmd_kwargs,
-        )
-
-        # ---- sidecar 容器(通用机制,规范形见 sidecars.py;无 sidecars 时零改动:
-        # annotations=None、containers=[container] 与历史逐字节一致)
-        annotations: dict[str, str] = {}
-        sidecar_containers: list[Any] = []
         # pod_spec 可能来自 Redis pod_spec_json 缓存(旧版本写入/手改):
-        # normalize 兜底坏项,但端口/容器名冲突 fail-fast(防 Pod 建出来
-        # agent 经 127.0.0.1 连错进程)
-        sidecars = normalize_sidecars(spec.get("sidecars"))
-        if sidecars:
-            conflict = find_sidecar_conflict(
-                sidecars,
-                spec.get("container_name") or "agent",
-                sse_port, container_port,
-            )
-            if conflict:
-                raise DeployFailed(f"pod spec sidecars invalid: {conflict}")
-            for idx, sc in enumerate(sidecars):
-                sc_container, sc_volumes, sc_annotations = (
-                    self._build_sidecar_container(c, sc, idx, hp_seen=hp_seen,
-                                                  cm_seen=cm_seen,
-                                                  pvc_seen=pvc_seen,
-                                                  nfs_seen=nfs_seen))
-                sidecar_containers.append(sc_container)
-                volumes.extend(sc_volumes)
-                annotations.update(sc_annotations)
+        # normalize 补缺省键;shape 探测(缺 main_container = 旧扁平缓存)
+        # fail-fast,防渲染出空镜像 Pod
+        spec = normalize_pod_spec(spec)
+        main = spec.get("main_container")
+        if not isinstance(main, dict):
+            raise DeployFailed(
+                "pod spec has no main_container (legacy flat-form cache "
+                "written before the unified container canonical? re-push "
+                "config_sync/config_refresh first)")
+        sidecars = spec.get("sidecars") or []
+        # 容器名/端口冲突 fail-fast(防 Pod 建出来 agent 经 127.0.0.1 连错进程)
+        conflict = find_container_conflict(main, sidecars)
+        if conflict:
+            raise DeployFailed(f"pod spec containers invalid: {conflict}")
+
+        # 跨容器共享卷登记簿:同源只建一个 Pod 级卷,主+sidecar 复用卷名
+        hp_seen: dict[tuple[str, Any], str] = {}  # 同 (path, type) 的 hostPath
+        cm_seen: dict[tuple, str] = {}  # 同 (name, items) 的 ConfigMap
+        pvc_seen: dict[str, str] = {}  # 同 claim 的 PVC
+        nfs_seen: dict[tuple[str, str], str] = {}  # 同 server+path 的 NFS
+        container, volumes, annotations = self._build_container(
+            c, main, role=MAIN_ROLE, idx=0, pod_id=pod_id, hp_seen=hp_seen,
+            cm_seen=cm_seen, pvc_seen=pvc_seen, nfs_seen=nfs_seen)
+        # ---- sidecar 容器(通用机制,canonical 见 containers.py;无 sidecars
+        # 时零改动:annotations=None、containers=[main] 与历史逐字节一致)
+        containers: list[Any] = [container]
+        for idx, sc in enumerate(sidecars):
+            sc_container, sc_volumes, sc_annotations = (
+                self._build_container(c, sc, role=SIDECAR_ROLE, idx=idx,
+                                      pod_id=pod_id, hp_seen=hp_seen,
+                                      cm_seen=cm_seen, pvc_seen=pvc_seen,
+                                      nfs_seen=nfs_seen))
+            containers.append(sc_container)
+            volumes.extend(sc_volumes)
+            annotations.update(sc_annotations)
 
         # Pod 级 securityContext.fsGroup(模板级 wire 键 fsGroup;None = 不设,
         # kubelet 不做卷属主修正——NFS 卷属主问题的官方修法)
@@ -581,12 +587,13 @@ class RealK8sPodClient(K8sPodClient):
             metadata=c.V1ObjectMeta(name=pod_id, namespace=spec.get("namespace")
                                     or self.default_namespace, labels=labels,
                                     annotations=annotations or None),
-            spec=c.V1PodSpec(containers=[container, *sidecar_containers],
+            spec=c.V1PodSpec(containers=containers,
                              restart_policy="Always",
                              volumes=volumes or None,
                              node_name=(spec.get("node_name") or None),
                              security_context=pod_security_context),
         )
+
 
     async def _wait_ready(self, pod_id: str, namespace: str,
                           timeout: float, poll: float) -> PodDeployInfo:

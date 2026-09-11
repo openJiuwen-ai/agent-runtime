@@ -162,7 +162,7 @@ flowchart TB
 
 **`volumes`**(模板级,K8s `spec.volumes` 同构):`[{name(DNS-1123,模板内唯一), 恰一源}]`;源 = `hostPath{path, type?}` / `configMap{name, items?=[{key,path}]}` / `persistentVolumeClaim{claimName}` / `nfs{server, path?}`(NFS 仅主容器、至多一个挂载)。**未被任何容器挂载的卷 → 400**;同卷多容器共享天然成立(PVC 同 claim 跨容器单卷去重由 RM 渲染保证)。
 
-> 内部实现注:水合后仍是扁平 `Template`(字段名 `agent_image`/`agent_env`/`sse_port`/`health_path`/`sidecars` 等,即快照与 RM `pod_spec` 契约,见 `docs/spec/session-manager.md` §models)——**同值必同 deploy_ver**(三段式与 legacy 内联逐字节等价,承重断言固化)。`max_pods` 不在 template 里——它是派生值 `⌈scope_concurrency / pod_concurrency⌉`;`autoscale_interval` 是全局默认(0.5s)。
+> 内部实现注:水合后是**统一容器规范形**(2026-09 起,`containers.py`):`Template` 持模板级字段(namespace/node_name/pod_name/sse_path/ready_*/策略)+ `main_container`(canonical dict,13 键全填满:ports/env/env_from/resources/三类挂载/nfs/security_context/readiness_probe 等)+ `sidecars`(同款 canonical 列表,name 升序)——即快照与 RM `pod_spec` 契约,见 `docs/spec/session-manager.md` §models)——**同值必同 deploy_ver**(三段式水合 vs 手构 canonical 等值,承重断言固化;RM 侧 `normalize_pod_spec` 对缓存补缺省,未来加容器字段零伪日落)。`max_pods` 不在 template 里——它是派生值 `⌈scope_concurrency / pod_concurrency⌉`;`autoscale_interval` 是全局默认(0.5s)。
 
 **`routing_scope`**(config_sync 下发,持久化到 DB 表 `routing_scope`):scope 定义 = `scope_id + index + template_id + routing_rules + enabled + expires_at`,scope↔模板多对一。
 
@@ -1180,15 +1180,14 @@ sequenceDiagram
 
 **配置项按"值是否在 deploy 时被烘焙进运行中的 Pod"分两类:**
 
-**A 类——变更需"日落"老 Pod**(deploy 子集,除 `kubeconfig`;变更后老 Pod 运行态与新配置不一致,不再接新流量):
+**A 类——变更需"日落"老 Pod**(deploy 子集,除 `kubeconfig`;变更后老 Pod 运行态与新配置不一致,不再接新流量)。2026-09 统一规范形起容器级以 canonical **整体**进指纹——加容器字段不动指纹字段集(spec_fields 只列模板级 + main_container/sidecars 两键):
 
 | 配置项 | 日落原因 |
 |---|---|
-| `agent_image` | 老 Pod 跑老代码 |
-| `namespace` / `container_name` / `container_port` | Pod 部署规格,新老不一致 |
-| `sse_port` / `sse_path` | 影响 `pod_sse_url` 构造 |
-| `readiness_*` | 探针烘焙在 Pod spec 里,K8s 对老 Pod 持续用老探针 |
-| `nfs_*` / 资源限额(CPU / 内存) | 挂载 / 限额要重建才生效 |
+| `namespace` / `node_name` / `pod_name` | Pod 部署规格,新老不一致 |
+| `sse_path` | 影响 `pod_sse_url` 构造(`sse_port` 在 main_container 内) |
+| `main_container`(整体) | 镜像/`sse_port`/探针/env/envFrom/挂载/NFS/资源限额/securityContext——全部烘焙进 Pod,要重建才生效 |
+| `sidecars`(整体) | sidecar 镜像/端口/挂载/安全上下文,同上 |
 
 **B 类——变更无需日落老 Pod**(运行时策略,控制面读时使用,老 Pod 继续服务):
 

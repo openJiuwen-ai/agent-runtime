@@ -58,8 +58,9 @@ class _SlowK8s:
 def nat_cfg():
     """合法 pod_spec(autoscale 预热依赖 pod_spec_json 非空)。"""
     return {
-        "agent_image": "agentserver:1.0", "namespace": "default",
-        "sse_port": 8080, "sse_path": "/sse",
+        "main_container": {"name": "agent", "image": "agentserver:1.0",
+                           "ports": [{"name": "sse", "container_port": 8080}]},
+        "namespace": "default", "sse_path": "/sse",
     }
 
 
@@ -174,7 +175,7 @@ async def test_acquire_no_config_is_bounded(rm_state, k8s, monkeypatch):
     t0 = time.monotonic()
     with pytest.raises(DeployFailed, match="no pool config"):
         await orchestrator.acquire(
-            SCOPE, {"agent_image": "agentserver:1.0"},
+            SCOPE, {"main_container": {"name": "agent", "image": "agentserver:1.0"}},
             {"max_pods": 2}, request_id="req-nc",
         )
     assert time.monotonic() - t0 < 2, "no_config 重跑应有界退出"

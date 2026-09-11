@@ -137,7 +137,9 @@ async def test_all_k8s_calls_carry_request_timeout():
     core = _FakeCore()
     client = _armed_client(core)
 
-    await client.deploy({"agent_image": "agentserver:1.0", "namespace": "default",
+    await client.deploy({"main_container": {"name": "agent",
+                                            "image": "agentserver:1.0"},
+                         "namespace": "default",
                          "ready_timeout": 1, "ready_poll_interval": 0.01})
     await client.get_pod("p1", "default")
     await client.list_pods("default", "app=x")

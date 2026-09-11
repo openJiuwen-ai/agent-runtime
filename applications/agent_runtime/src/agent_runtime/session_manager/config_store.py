@@ -42,21 +42,20 @@ from openjiuwen_runtime.foundation.db.table_def import (
     TableDefinition,
 )
 
+from ..containers import validate_pod_containers
 from ..errors import ConfigNotFound, ConfigSyncBusy, InvalidParams
-from ..sidecars import validate_sidecars
 from ..util import key_unsafe, now_ts, parse_datetime, s, utc_now
 from .container_spec import (
     MAIN_ROLE,
     SIDECAR_ROLE,
     CONTAINER_TABLE,
-    SERVICE_CONFIG_CONTAINER_TABLE_DEF,
+    SERVICE_CONFIG_CONTAINER_TABLE_DEF,  # noqa: F401 - tests 经本模块复导出
+    build_canonical,
     canonical_volumes,
     container_row_from_spec,
     container_spec_from_row,
-    main_template_kwargs,
     mounted_volume_names,
     parse_container_spec,
-    sidecar_wire_input,
     volumes_from_column,
     volumes_to_column,
 )
@@ -92,10 +91,10 @@ SERVICE_CONFIG_TEMPLATE_TABLE_DEF = TableDefinition(
         ColumnDefinition("agent_image", "string", length=512, nullable=False),
         ColumnDefinition("namespace", "string", length=128, nullable=False, default="default"),
         ColumnDefinition("node_name", "string", length=128, nullable=True),
-        ColumnDefinition("run_as_user", "integer", nullable=True),
-        ColumnDefinition("run_as_group", "integer", nullable=True),
         # Pod 级 securityContext.fsGroup(存量库需先手工 ALTER 补列)
         ColumnDefinition("fs_group", "integer", nullable=True),
+        ColumnDefinition("run_as_user", "integer", nullable=True),
+        ColumnDefinition("run_as_group", "integer", nullable=True),
         ColumnDefinition("pod_name", "string", length=128, nullable=False, default="agentserver"),
         ColumnDefinition("container_name", "string", length=128, nullable=False, default="agent"),
         ColumnDefinition("container_port", "integer", nullable=False, default=8080),
@@ -164,41 +163,19 @@ ROUTING_SCOPE_TABLE_DEF = TableDefinition(
     ],
 )
 
-# Template 字段 ↔ DB 列名（HLD 名 → EE 兼容列名）
+# Template 字段 ↔ DB 列名（模板级;容器级字段由容器表携带,legacy 扁平列已死值）
 _COLUMN_OF: dict[str, str] = {
     "template_id": "template_id",
     "template_name": "template_name",
     "description": "description",
-    "agent_image": "agent_image",
     "namespace": "namespace",
     "node_name": "node_name",
-    "run_as_user": "run_as_user",
-    "run_as_group": "run_as_group",
     "fs_group": "fs_group",
     "pod_name": "pod_name",
-    "container_name": "container_name",
-    "container_port": "container_port",
-    "sse_port": "sse_port",
     "sse_path": "sse_path",
-    "health_path": "health_path",
-    "agent_env": "agent_env",
-    "image_pull_policy": "image_pull_policy",
     "kubeconfig": "kubeconfig",
-    "readiness_initial_delay": "readiness_initial_delay",
-    "readiness_period": "readiness_period",
     "ready_timeout": "ready_timeout",
     "ready_poll_interval": "ready_poll_interval",
-    "nfs_server": "nfs_server",
-    "nfs_path": "nfs_path",
-    "nfs_mount_path": "nfs_mount_path",
-    "agent_cpu_request": "agent_cpu_request",
-    "agent_memory_request": "agent_memory_request",
-    "agent_cpu_limit": "agent_cpu_limit",
-    "agent_memory_limit": "agent_memory_limit",
-    "sidecars": "sidecars",
-    "agent_host_path_mounts": "agent_host_path_mounts",
-    "agent_configmap_mounts": "agent_configmap_mounts",
-    "agent_pvc_mounts": "agent_pvc_mounts",
     # 2026-09 起四列与 wire 术语同名(identity 映射;曾为 EE 兼容名
     # min_idle_services/service_concurrency/service_ttl/session_concurrency)。
     "min_idle_pods": "min_idle_pods",
@@ -212,16 +189,28 @@ _COLUMN_OF: dict[str, str] = {
 }
 
 _INT_FIELDS = frozenset({
-    "container_port", "sse_port", "readiness_initial_delay", "readiness_period",
     "ready_timeout", "ready_poll_interval", "min_idle_pods", "pod_concurrency",
     "pod_ttl", "scope_concurrency", "session_ttl", "message_timeout",
-    "run_as_user", "run_as_group", "fs_group",
+    "fs_group",
 })
 
-# 模板级字段(留在模板表;容器级 22 字段 + sidecars 由容器表水合,见
-# container_spec.main_template_kwargs / sidecar_wire_input)。三段式契约的
-# template dict 只认这些键 + main_container_id/sidecar_container_ids/volumes;
-# 与 legacy 内联容器键并存 = mixed 形态 → 400。
+# legacy 内联容器键(2026-08 拆表前平铺在模板上的字段;三段式 wire 独占后
+# 只作为 mixed-400 检测的黑名单存在——出现在 template dict 即拒绝)
+_LEGACY_INLINE_CONTAINER_KEYS = frozenset({
+    "agent_image", "run_as_user", "run_as_group", "container_name",
+    "container_port", "port_name", "sse_port", "health_path", "agent_env",
+    "agent_env_from", "image_pull_policy", "readiness_initial_delay",
+    "readiness_period", "nfs_server", "nfs_path", "nfs_mount_path",
+    "agent_cpu_request", "agent_memory_request", "agent_cpu_limit",
+    "agent_memory_limit", "sidecars", "agent_host_path_mounts",
+    "agent_configmap_mounts", "agent_pvc_mounts", "agent_nfs_mounts",
+    "command", "args",
+})
+
+# 模板级字段(留在模板表;容器级由容器表水合为统一 canonical,见
+# container_spec.build_canonical)。三段式契约的 template dict 只认这些键 +
+# main_container_id/sidecar_container_ids/volumes;与 legacy 内联容器键
+# 并存 = mixed 形态 → 400。
 TEMPLATE_LEVEL_FIELDS: tuple[str, ...] = (
     "template_id", "template_name", "description", "enabled", "data",
     "namespace", "node_name", "fs_group", "pod_name", "sse_path",
@@ -233,7 +222,8 @@ _SPLIT_REFERENCE_KEYS = frozenset(
     {"main_container_id", "sidecar_container_ids", "volumes"})
 # 模板级 wire 键别名:K8s 派生字段用 K8s 拼写(nodeName);snake 双形态拒绝
 # (防静默二义——两个拼写同时给不同值无法仲裁,fail-fast)
-_TEMPLATE_WIRE_ALIASES = {"node_name": "nodeName", "fs_group": "fsGroup"}
+_TEMPLATE_WIRE_ALIASES = {"node_name": "nodeName",
+                          "fs_group": "fsGroup"}
 
 
 def _scope_row(scope: RoutingScopeDef) -> dict[str, Any]:
@@ -251,40 +241,44 @@ def _scope_row(scope: RoutingScopeDef) -> dict[str, Any]:
     }
 
 
+def _hydrate_containers(
+        main_spec: dict[str, Any],
+        sidecar_specs: list[dict[str, Any]],
+        volumes: dict[str, dict[str, Any]],
+        where: str,
+) -> dict[str, Any]:
+    """容器内部规范形 + 模板 volumes → ``{main_container, sidecars}``(canonical)。
+
+    读路径(行水合)与写路径(载荷解析)共用的唯一水合出口:build_canonical
+    ×2 → validate_pod_containers(≤8/重名/撞端口/挂载冲突)。
+    """
+    main = build_canonical(main_spec, volumes, where, role=MAIN_ROLE)
+    sidecars = [build_canonical(spec, volumes, where, role=SIDECAR_ROLE)
+                for spec in sidecar_specs]
+    main, sidecars = validate_pod_containers(main, sidecars, where)
+    return {"main_container": main, "sidecars": sidecars}
+
+
 def template_from_row(row: Any,
                       containers: dict[str, dict[str, Any]] | None = None,
                       ) -> Template | None:
     """DB 行 → Template 业务对象(未命中 enabled=False 的模板仍返回,调用方判定)。
 
-    双形态:行有真值 ``main_container_id`` → 三段式新形态(模板级行列 +
-    容器行 + volumes join 水合;任一引用容器行缺失 → WARNING + None,
-    绝不静默丢单个 sidecar——那会隐形改 deploy_ver);否则 → legacy 内联
-    列路径(旧行,行为逐字节保留,``containers`` 被忽略)。
+    单轨水合(2026-09 起):模板级行列 + 容器引用 + volumes join → 统一
+    canonical。任一引用容器行缺失/水合校验失败 → WARNING + None(fail-closed,
+    绝不静默丢单个 sidecar——那会隐形改 deploy_ver)。**无 ``main_container_id``
+    的 legacy 内联行不再水合**(wire 已三段式独占,此类行 = 未收敛残骸,
+    升级前置检查见 docs/feature/2026-09-unified-container-canonical.md)。
     """
     main_cid = getattr(row, "main_container_id", None)
-    if main_cid:
-        return _template_from_split_row(row, main_cid, containers or {})
-    kwargs: dict[str, Any] = {}
-    for field_name, column in _COLUMN_OF.items():
-        value = getattr(row, column, None)
-        if field_name in _INT_FIELDS and value is not None:
-            value = int(value)
-        kwargs[field_name] = value
-    # 老行/NULL 防御:agent_env 非 dict → 空表;health_path 空 → 默认;
-    # sidecars 坏值/空 → None 的兜底在 Template.__post_init__(normalize_sidecars)
-    if not isinstance(kwargs.get("agent_env"), dict):
-        kwargs["agent_env"] = {}
-    if not kwargs.get("health_path"):
-        kwargs["health_path"] = "/health"
-    return Template(**kwargs)
-
-
-def _template_from_split_row(row: Any, main_cid: str,
-                             containers: dict[str, dict[str, Any]],
-                             ) -> Template | None:
-    """新形态行水合:模板级列 + 容器引用 + volumes join(损坏 fail-closed 跳过)。"""
     tid = getattr(row, "template_id", "?")
-    main_spec = containers.get(main_cid)
+    if not main_cid:
+        logger.warning(
+            "template %r has no main_container_id (legacy inline row, "
+            "pre-2026-08 split), skipped -- re-send config_sync", tid,
+        )
+        return None
+    main_spec = (containers or {}).get(main_cid)
     if main_spec is None:
         logger.warning(
             "template %r references missing main container %r, skipped",
@@ -296,7 +290,7 @@ def _template_from_split_row(row: Any, main_cid: str,
         sidecar_ids = []
     sidecar_specs = []
     for cid in sidecar_ids:
-        spec = containers.get(cid) if isinstance(cid, str) else None
+        spec = (containers or {}).get(cid) if isinstance(cid, str) else None
         if spec is None:
             logger.warning(
                 "template %r references missing sidecar container %r, skipped",
@@ -315,17 +309,11 @@ def _template_from_split_row(row: Any, main_cid: str,
     if not isinstance(kwargs.get("data"), dict):
         kwargs["data"] = {}
     try:
-        kwargs.update(main_template_kwargs(main_spec, volumes, f"template {tid!r}"))
-        kwargs["sidecars"] = validate_sidecars(
-            [sidecar_wire_input(spec, volumes, f"template {tid!r}")
-             for spec in sidecar_specs],
-            container_name=str(kwargs.get("container_name") or "agent"),
-            sse_port=int(kwargs.get("sse_port") or 8080),
-            container_port=int(kwargs.get("container_port") or kwargs.get("sse_port") or 8080),
-        )
+        kwargs.update(_hydrate_containers(
+            main_spec, sidecar_specs, volumes, f"template {tid!r}"))
     except InvalidParams:
         logger.warning(
-            "template %r split-form hydration failed, skipped", tid,
+            "template %r container hydration failed, skipped", tid,
             exc_info=True,
         )
         return None
@@ -366,8 +354,7 @@ def template_from_split_payload(
     volumes join;mixed 形态(引用键与 legacy 内联容器键并存)→ 400。
     返回卷映射供调用方落 volumes 列(volumes_to_column)。
     """
-    inline = ({k for k in payload if k in _COLUMN_OF}
-              | {k for k in payload if k == "sidecars"}) - set(TEMPLATE_LEVEL_FIELDS)
+    inline = {k for k in payload if k in _LEGACY_INLINE_CONTAINER_KEYS}
     if inline:
         raise InvalidParams(
             f"template {template_id!r} mixes container references with inline "
@@ -455,14 +442,7 @@ def template_from_split_payload(
         )
 
     where = f"template {template_id!r}"
-    kwargs.update(main_template_kwargs(main_spec, volumes, where))
-    kwargs["sidecars"] = validate_sidecars(
-        [sidecar_wire_input(spec, volumes, where) for spec in sidecar_specs],
-        container_name=str(kwargs.get("container_name") or "agent"),
-        sse_port=int(kwargs.get("sse_port") or 8080),
-        container_port=int(kwargs.get("container_port")
-                           or kwargs.get("sse_port") or 8080),
-    )
+    kwargs.update(_hydrate_containers(main_spec, sidecar_specs, volumes, where))
     return Template(**kwargs), volumes
 
 
@@ -552,9 +532,6 @@ def _validate_policy_fields(template_id: str, kwargs: dict[str, Any]) -> None:
         value = kwargs.get(field)
         if isinstance(value, int) and value < minimum:
             problems.append(f"{field}={value} < {minimum}")
-    sse_port = kwargs.get("sse_port")
-    if isinstance(sse_port, int) and sse_port and not (1 <= sse_port <= 65535):
-        problems.append(f"sse_port={sse_port} out of range")
     if problems:
         raise InvalidParams(
             f"template {template_id!r} policy fields invalid: {'; '.join(problems)}"
@@ -567,13 +544,12 @@ _NODE_NAME_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$")
 
 
 def _validate_pod_placing_fields(template_id: str, kwargs: dict[str, Any]) -> None:
-    """A 类容器身份/节点绑定字段(run_as_user/group、node_name)校验。
+    """节点绑定字段(node_name)校验(run_as 已随容器 canonical 校验)。
 
-    负 uid 与坏节点名都要到 K8s API 侧才失败(后者 Pod 永久 Pending 挂满
-    ready_timeout,错误对下发方不可见)——提前到 config_sync 锁外,确定性 400。
-    对齐 sidecars.py 对 sidecar run_as_user 的 minimum=0 先例。
+    坏节点名要到 K8s API 侧才失败(Pod 永久 Pending 挂满 ready_timeout,
+    错误对下发方不可见)——提前到 config_sync 锁外,确定性 400。
     """
-    for field in ("run_as_user", "run_as_group", "fs_group"):
+    for field in ("fs_group",):
         value = kwargs.get(field)
         if isinstance(value, int) and value < 0:
             raise InvalidParams(
@@ -611,13 +587,11 @@ class ConfigStore:
     # -------------------------------------------------------------- 读路径
 
     async def get_template(self, template_id: str) -> Template | None:
-        """单模板水合(新形态行才取容器表;引用损坏返回 None,日志区分)。"""
+        """单模板水合(引用损坏/legacy 行返回 None,日志区分)。"""
         row = await self._db.get(TEMPLATE_TABLE, {"template_id": template_id})
         if row is None:
             return None
-        if getattr(row, "main_container_id", None):
-            return template_from_row(row, await self._all_containers())
-        return template_from_row(row)
+        return template_from_row(row, await self._all_containers())
 
     async def list_templates(self, limit: int = 200) -> list[dict[str, Any]]:
         """诊断只读：模板摘要（HLD 字段名；kubeconfig 等敏感列由 /visualization 层脱敏）。"""

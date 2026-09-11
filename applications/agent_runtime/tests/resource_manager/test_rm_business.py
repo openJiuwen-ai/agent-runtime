@@ -278,7 +278,8 @@ async def test_update_pool_config_with_pod_spec_refreshes_deploy_ver(runtime):
 
     from agent_runtime.session_manager.models import Template
 
-    new_template = Template(template_id="tpl-1", agent_image="agentserver:9.0")
+    new_template = Template(template_id="tpl-1", main_container={
+        "name": "agent", "image": "agentserver:9.0"})
     await runtime.rm_facade.update_pool_config(
         SCOPE, {"min_idle_pods": 0, "max_pods": 2, "pod_ttl": 300},
         pod_spec=new_template.deploy_subset(),

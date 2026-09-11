@@ -468,3 +468,73 @@ def test_normalize_pod_spec_tolerates_garbage_and_keeps_unknown_keys():
                                            {"image": "y"}]})
     assert [sc["name"] for sc in out["sidecars"]] == ["b"]
     assert out["sidecars"][0]["readiness_probe"]["period"] == 10  # 默认补齐
+
+
+# -------------------------------------------------------------- deploy_ver 基线冻结(承重)
+
+def test_canonical_deploy_ver_baseline_frozen():
+    """统一规范形指纹基线冻结(2026-09-11 rebase 合入上游 fs_group/command/
+    args/nfs_mounts 后二次重置;前序常量 026cfcf9a6b31721(扁平时代)与
+    0ac9bf7494973132(13 键 canonical)均随作废)。
+
+    同值必同 deploy_ver 的红线在新形状上继续承重:基线漂移 = 非加字段/
+    非语义的公式变化 = 全量伪 A 类日落,必须在此拦下。
+    """
+    from agent_runtime.session_manager.models import Template
+    main, _ = validate_pod_containers(
+        {"name": "agent", "image": "img:1"}, [], "t")
+    assert Template(template_id="x", main_container=main).deploy_ver() \
+        == "80bd09a60f8c470c"
+    sc_main, sc = validate_pod_containers(
+        {"name": "agent", "image": "img:1"},
+        [{"name": "jiuwenbox", "image": "box:1",
+          "ports": [{"name": None, "container_port": 8321}],
+          "env": {"A": "b"},
+          "host_path_mounts": [{"host_path": "/h", "mount_path": "/m"}]}], "t")
+    assert Template(template_id="x", main_container=sc_main,
+                    sidecars=sc).deploy_ver() == "e4c697572c185b0a"
+    env_main, _ = validate_pod_containers(
+        {"name": "agent", "image": "img:1", "env": {"K": "v"}}, [], "t")
+    assert Template(template_id="x", main_container=env_main).deploy_ver() \
+        == "c19f1e18236e2ab1"
+
+
+def test_sidecars_change_changes_deploy_ver():
+    """sidecar 内容变更(如 env)→ 指纹变(A 类日落语义)。"""
+    from agent_runtime.session_manager.models import Template
+    main, sc1 = validate_pod_containers(
+        {"name": "agent", "image": "img:1"},
+        [{"name": "b", "image": "x:1"}], "t")
+    _, sc2 = validate_pod_containers(
+        {"name": "agent", "image": "img:1"},
+        [{"name": "b", "image": "x:1", "env": {"A": "1"}}], "t")
+    assert (Template(template_id="x", main_container=main, sidecars=sc1)
+            .deploy_ver()
+            != Template(template_id="x", main_container=dict(main),
+                        sidecars=[dict(sc1[0], env={"A": "1"})]).deploy_ver())
+
+
+def test_canonical_order_and_key_order_do_not_change_deploy_ver():
+    """键序乱序 + env 键序乱序 + sidecar 列表顺序重排 → 同一 deploy_ver。"""
+    from agent_runtime.session_manager.models import Template
+    main, sc = validate_pod_containers(
+        {"name": "agent", "image": "img:1", "env": {"A": "1", "B": "2"}},
+        [{"name": "b", "image": "x:1"}, {"name": "a", "image": "y:1"}], "t")
+    t1 = Template(template_id="x", main_container=main, sidecars=sc)
+    main_rev = {k: main[k] for k in reversed(list(main))}
+    main_rev["env"] = dict(reversed(list(main["env"].items())))
+    t2 = Template(template_id="x", main_container=main_rev,
+                  sidecars=list(reversed([dict(s) for s in sc])))
+    assert t1.deploy_ver() == t2.deploy_ver()
+
+
+def test_sidecars_empty_list_normalized_to_none():
+    """[] → None:与"不下发 sidecars"同 dataclass 相等、同指纹。"""
+    from agent_runtime.session_manager.models import Template
+    main, _ = validate_pod_containers({"name": "agent", "image": "img:1"},
+                                      [], "t")
+    t_empty = Template(template_id="x", main_container=dict(main), sidecars=[])
+    t_none = Template(template_id="x", main_container=dict(main))
+    assert t_empty.sidecars is None
+    assert t_empty == t_none
+    assert t_empty.deploy_ver() == t_none.deploy_ver()

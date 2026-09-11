@@ -279,7 +279,10 @@ def _canonical_ports(value: Any, where: str,
             raise InvalidParams(
                 f"{where}.ports must contain exactly one port named 'sse' "
                 f"(the gateway SSE contract), got {value!r}")
-        return [sse[0]] + http
+        # http 端口号 == sse 时丢弃(RM 渲染同名端口去重的既有约定)——
+        # 渲染同形 ⟺ canonical 同形,否则同 Pod 两个指纹
+        return [sse[0]] + [h for h in http
+                           if h["container_port"] != sse[0]["container_port"]]
     if len(entries) > 1:
         raise InvalidParams(
             f"{where}.ports supports at most one port for a sidecar "

@@ -20,6 +20,7 @@ import logging
 import time
 from uuid import uuid4
 
+from ..containers import main_health_path, main_sse_port
 from ..util import now_ts, to_int
 from .k8s import K8sPodClient
 from .models import DEAD_POD_STATUSES, POD_LABEL_SELECTOR
@@ -133,7 +134,9 @@ class ResourceSweeper:
             return "skip_max", (
                 f"warm={len(warm)} min_idle={min_idle} total={total} max_pods={max_pods}"
             )
-        # 热备 deploy 用缓存的 pod_spec（config_sync A 类变更后为新值）
+        # 热备 deploy 用缓存的 pod_spec（config_sync A 类变更后为新值）。
+        # shape 探测:缺 main_container = 统一规范形前的旧扁平缓存(渲染会
+        # 拿到空镜像)→ 跳过,下次 config_sync/config_refresh 覆写后收敛
         try:
             pod_spec = json.loads(cfg.get("pod_spec_json") or "{}")
         except ValueError:
@@ -141,6 +144,11 @@ class ResourceSweeper:
             return "skip_bad_spec", ""
         if not pod_spec:
             return "skip_no_spec", ""
+        if not isinstance(pod_spec.get("main_container"), dict):
+            logger.warning(
+                "autoscale: scope=%s pod_spec_json is legacy flat-form "
+                "(no main_container), skip until re-pushed", scope_id)
+            return "skip_legacy_spec", ""
         deploy_ver = cfg.get("deploy_ver") or _deploy_ver(pod_spec)
         lock_key = self.state.k.lock_deploy(scope_id)
         lock_token = f"autoscale-{uuid4().hex}"
@@ -352,10 +360,14 @@ class ResourceSweeper:
             pod_spec = json.loads(cfg.get("pod_spec_json") or "{}")
         except ValueError:
             return None
+        # 统一规范形:主容器 ports 的 name=sse 项;legacy 扁平缓存 → None(回退)
+        main = pod_spec.get("main_container")
+        if isinstance(main, dict):
+            return main_sse_port(main)
         return to_int(pod_spec.get("sse_port")) or None
 
     async def _scope_health_path(self, scope_id: str) -> str:
-        """健康探测路径(与 readiness 同源,模板 health_path;缺省 /health)。"""
+        """健康探测路径(与 readiness 同源,主容器探针 path;缺省 /health)。"""
         if not scope_id:
             return "/health"
         cfg = await self.state.load_scope_config(scope_id)
@@ -363,6 +375,9 @@ class ResourceSweeper:
             pod_spec = json.loads(cfg.get("pod_spec_json") or "{}")
         except ValueError:
             return "/health"
+        main = pod_spec.get("main_container")
+        if isinstance(main, dict):
+            return main_health_path(main)
         return str(pod_spec.get("health_path") or "/health")
 
     # -------------------------------------------------------------- reconcile（L）
