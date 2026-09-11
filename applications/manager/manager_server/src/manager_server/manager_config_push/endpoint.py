@@ -1,5 +1,5 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-"""解析 Gateway HTTP 入口（``instance_info.gateway_config_host``）。"""
+"""解析 Gateway / Runtime HTTP 入口（``instance_info.*_config_host``）。"""
 
 from __future__ import annotations
 
@@ -11,18 +11,15 @@ from manager_server.core.instance.instance_service import get_instance_row, list
 
 
 def resolve_gateway_endpoint(row: Any) -> str | None:
-    """解析 Gateway 配置下发基址。
-
-    优先读正式列 ``gateway_config_host``；兼容旧数据 ``data.gateway_endpoint``。
-    """
+    """解析 Gateway 配置下发基址（``gateway_config_host``）。"""
     host = str(getattr(row, "gateway_config_host", None) or "").strip().rstrip("/")
-    if host:
-        return host
-    data = getattr(row, "data", None)
-    if isinstance(data, dict):
-        ep = str(data.get("gateway_endpoint") or "").strip().rstrip("/")
-        return ep or None
-    return None
+    return host or None
+
+
+def resolve_runtime_endpoint(row: Any) -> str | None:
+    """解析 Runtime ``config_sync`` 基址（``runtime_config_host``）。"""
+    host = str(getattr(row, "runtime_config_host", None) or "").strip().rstrip("/")
+    return host or None
 
 
 async def require_gateway_endpoint(jiuwenclaw_id: str) -> str:
@@ -36,6 +33,22 @@ async def require_gateway_endpoint(jiuwenclaw_id: str) -> str:
         raise ValueError(
             f"no gateway_config_host for jiuwenclaw_id={jiuwenclaw_id!r}; "
             "set gateway_config_host on the instance"
+        )
+    return endpoint
+
+
+async def require_runtime_endpoint(jiuwenclaw_id: str) -> str:
+    """按实例解析 Runtime 基址（``runtime_config_host``）。"""
+    from manager_server.infrastructure.db import get_db_handler
+
+    row = await get_instance_row(get_db_handler(), jiuwenclaw_id)
+    if row is None:
+        raise ValueError(f"instance not found: {jiuwenclaw_id!r}")
+    endpoint = resolve_runtime_endpoint(row)
+    if not endpoint:
+        raise ValueError(
+            f"no runtime_config_host for jiuwenclaw_id={jiuwenclaw_id!r}; "
+            "set runtime_config_host on the instance"
         )
     return endpoint
 

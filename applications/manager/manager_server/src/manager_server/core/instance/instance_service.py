@@ -263,15 +263,14 @@ async def maybe_full_sync_gateway_on_online(
     if not jid:
         return
 
-    from manager_server.manager_config_push.endpoint import resolve_gateway_endpoint
+    from manager_server.manager_config_push.endpoint import require_gateway_endpoint
     from manager_server.core.instance.instance_data_lifecycle import (
         sync_data_to_gateway_on_register,
     )
 
-    row = await get_instance_row(handler, jid)
-    if row is None:
-        return
-    if not resolve_gateway_endpoint(row):
+    try:
+        await require_gateway_endpoint(jid)
+    except ValueError:
         logger.info(
             "[Instance] skip full sync on online: no gateway_config_host "
             "jiuwenclaw_id=%s prev_status=%s",
@@ -317,21 +316,20 @@ async def maybe_full_sync_runtime_on_online(
     if not jid:
         return
 
-    from manager_server.infrastructure.config import settings
     from manager_server.core.instance_resource.runtime_config_sync import (
         sync_runtime_config,
     )
 
-    if not settings.agent_runtime_endpoint.strip():
-        logger.info(
-            "[Instance] skip runtime full sync on online: "
-            "AGENT_RUNTIME_ENDPOINT empty jiuwenclaw_id=%s prev_status=%s",
-            jid,
-            prev,
-        )
-        return
     try:
-        await sync_runtime_config(handler, jid)
+        result = await sync_runtime_config(handler, jid)
+        if isinstance(result, dict) and result.get("skipped"):
+            logger.info(
+                "[Instance] skip runtime full sync on online: "
+                "no runtime endpoint jiuwenclaw_id=%s prev_status=%s",
+                jid,
+                prev,
+            )
+            return
         logger.info(
             "[Instance] full sync after runtime online jiuwenclaw_id=%s "
             "prev_status=%s",

@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -30,15 +30,10 @@ async def test_skip_when_already_online():
 @pytest.mark.asyncio
 async def test_sync_when_pending_to_online():
     handler = AsyncMock()
-    row = MagicMock(gateway_config_host="http://gw:8080", data=None)
     with (
         patch(
-            "manager_server.core.instance.instance_service.get_instance_row",
+            "manager_server.manager_config_push.endpoint.require_gateway_endpoint",
             new_callable=AsyncMock,
-            return_value=row,
-        ),
-        patch(
-            "manager_server.manager_config_push.endpoint.resolve_gateway_endpoint",
             return_value="http://gw:8080",
         ),
         patch(
@@ -56,15 +51,10 @@ async def test_sync_when_pending_to_online():
 @pytest.mark.asyncio
 async def test_sync_when_offline_to_online():
     handler = AsyncMock()
-    row = MagicMock(gateway_config_host="http://gw:8080", data=None)
     with (
         patch(
-            "manager_server.core.instance.instance_service.get_instance_row",
+            "manager_server.manager_config_push.endpoint.require_gateway_endpoint",
             new_callable=AsyncMock,
-            return_value=row,
-        ),
-        patch(
-            "manager_server.manager_config_push.endpoint.resolve_gateway_endpoint",
             return_value="http://gw:8080",
         ),
         patch(
@@ -82,16 +72,11 @@ async def test_sync_when_offline_to_online():
 @pytest.mark.asyncio
 async def test_skip_when_no_gateway_host():
     handler = AsyncMock()
-    row = MagicMock(gateway_config_host=None, data=None)
     with (
         patch(
-            "manager_server.core.instance.instance_service.get_instance_row",
+            "manager_server.manager_config_push.endpoint.require_gateway_endpoint",
             new_callable=AsyncMock,
-            return_value=row,
-        ),
-        patch(
-            "manager_server.manager_config_push.endpoint.resolve_gateway_endpoint",
-            return_value=None,
+            side_effect=ValueError("no gateway_config_host"),
         ),
         patch(
             "manager_server.core.instance.instance_data_lifecycle.sync_data_to_gateway_on_register",

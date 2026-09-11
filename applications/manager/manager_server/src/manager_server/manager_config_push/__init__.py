@@ -10,12 +10,12 @@ from manager_server.manager_config_push.client import gateway_request
 from manager_server.manager_config_push.endpoint import (
     list_reachable_jiuwenclaw_ids,
     require_gateway_endpoint,
-    resolve_gateway_endpoint,
+    require_runtime_endpoint,
 )
 
 __all__ = (
     "gateway_request",
     "list_reachable_jiuwenclaw_ids",
     "require_gateway_endpoint",
-    "resolve_gateway_endpoint",
+    "require_runtime_endpoint",
 )

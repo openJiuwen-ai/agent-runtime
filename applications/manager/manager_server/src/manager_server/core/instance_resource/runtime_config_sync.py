@@ -21,7 +21,6 @@ from openjiuwen_runtime.foundation.db.handler import DBHandler
 from manager_server.infrastructure.config import settings
 from manager_server.infrastructure.logger import get_logger
 from manager_server.infrastructure.utils import iso_datetime
-from manager_server.models.instance_models import INSTANCE_INFO_TABLE_DEF
 from manager_server.models.instance_resource_models import INSTANCE_SERVICE_RESOURCE_TABLE_DEF
 from manager_server.models.template_models import SERVICE_CONFIG_TEMPLATE_TABLE_DEF
 from manager_server.security.link_mtls import ManagerLinkMTLSConfig
@@ -442,33 +441,26 @@ async def build_runtime_config(
     }
 
 
-async def resolve_runtime_endpoint(handler: DBHandler, jiuwenclaw_id: str) -> str:
-    """Resolve this instance's Runtime; keep the process setting as legacy fallback."""
-    instance = await handler.get(
-        INSTANCE_INFO_TABLE_DEF.table_name,
-        {"jiuwenclaw_id": jiuwenclaw_id},
-    )
-    endpoint = str(getattr(instance, "runtime_config_host", "") or "").strip()
-    if not endpoint:
-        endpoint = settings.agent_runtime_endpoint.strip()
-    return endpoint.rstrip("/")
-
-
 async def sync_runtime_config(
     handler: DBHandler,
     jiuwenclaw_id: str,
     *,
     resource_rows: list[Any] | None = None,
 ) -> dict[str, Any]:
-    """向 Runtime 全量同步 Service Resource 投影。
+    """向对应实例的 Runtime 全量同步 Service Resource 投影。
 
+    目标地址取自该实例 ``runtime_config_host``（与 Gateway 下发对称）。
     调用方应在 Manager 落库前传入 ``resource_rows``（目标态），避免 Manager/Runtime 不一致。
     """
-    # 多实例时必须使用当前 instance_info 中的 Runtime 地址。全局变量仅作为
-    # 旧部署兼容回退，避免把 A 实例配置误推送给 B 实例的 Runtime。
-    endpoint = await resolve_runtime_endpoint(handler, jiuwenclaw_id)
-    if not endpoint:
-        _log.info("AGENT_RUNTIME_ENDPOINT not configured; runtime sync skipped")
+    from manager_server.manager_config_push.endpoint import require_runtime_endpoint
+
+    try:
+        endpoint = await require_runtime_endpoint(jiuwenclaw_id)
+    except ValueError:
+        _log.info(
+            "no runtime endpoint for jiuwenclaw_id=%s; runtime sync skipped",
+            jiuwenclaw_id,
+        )
         return {"skipped": True}
     link_mtls = ManagerLinkMTLSConfig.from_env()
     link_target = await link_mtls.target(
@@ -508,6 +500,7 @@ async def sync_runtime_config(
     _log.info(
         "runtime config synced",
         jiuwenclaw_id=jiuwenclaw_id,
+        endpoint=endpoint,
         containers=len(rawdata["containers"]),
         templates=len(rawdata["templates"]),
         scopes=len(rawdata["scopes"]),
