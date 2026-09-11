@@ -32,7 +32,10 @@
 ## 验证
 
 - 单测:497/497 全绿(拆分提交:C1 新增 containers.py+50 用例纯增 → C2 投影内核+适配器等价证明(既有断言零改动通过) → C3 原子切换+测试改造)。承重断言:指纹基线冻结(新三常量)、`normalize_pod_spec` 补缺省==全键指纹、不同值必不等、canonical 幂等、legacy 行/快照/缓存三方 fail-closed、渲染黄金断言(kwargs 级,含主容器空 secctx 省 kwarg、sidecar `is None`)。
-- 真环境:C3 后本地替身冒烟 + 真镜像发布门禁(三件套 + `--with-sidecar --with-mounts`,阶段 2c 24 项逐字段断言 = 渲染不变锚)在 C4 执行。
+- 真环境(2026-09-11,e2e 集群 3 副本 `agent-runtime:canonical-20260911`,前置 SQL 0 行 legacy):
+  - **真镜像发布门禁 127/127 PASS**(agentserver 0.0.16s + sandbox 0.0.18s 三件套契约 + `--with-sidecar --with-mounts`;含阶段 2c 真实 Pod spec 逐字段断言=渲染不变锚、DB 落库校验 postgresql、阶段 11b 内部不变量巡检 deploy_ver==RM cfg)。
+  - **多副本 e2e 32/32**(S1–S8:跨副本快照共享/会话幂等/删 Pod 恢复/failover 后 LB 可服务/选主互斥)。
+  - **load_test 60s 6 场景 6/6 checks**:28068 请求 p50=5.4ms p99=9.2ms,ERROR 日志增量 0,config_churn/config_refresh 热更新全过。
 
 ## 影响面
 
