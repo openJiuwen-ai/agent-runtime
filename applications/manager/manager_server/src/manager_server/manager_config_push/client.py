@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 from typing import Any
-from urllib.parse import urlsplit
 
 import httpx
 
@@ -44,17 +43,38 @@ async def gateway_request(
 
     endpoint = await require_gateway_endpoint(jid)
     payload = dict(business or {})
-    if (
-        path.startswith("/api/v1/a2a-outbound-templates")
-        and _contains_credential_replace(payload)
-        and urlsplit(endpoint).scheme.lower() != "https"
-    ):
-        raise ValueError("A2A credentials may only be synchronized over HTTPS")
+    target = None
+    if path.startswith("/api/v1/a2a-outbound-templates") and _contains_credential_replace(payload):
+        from manager_server.core.template.a2a_discovery import _normalize_url, _validate_target
+
+        data = payload.get("data") or {}
+        policy = data.get("network_policy") if isinstance(data, dict) else None
+        policy = policy if isinstance(policy, dict) else {}
+        flags = {
+            name: policy.get(name) is True
+            for name in ("allow_http", "allow_private_network", "allow_public_http")
+        }
+        _normalize_url(endpoint, None)
+        try:
+            target = await _validate_target(endpoint, **flags)
+        except ValueError as exc:
+            raise ValueError(f"A2A credential sync blocked by network access settings: {exc}") from exc
 
     url = f"{endpoint}{path}"
     try:
         async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
-            resp = await client.request(method.upper(), url, json=payload)
+            if target is None:
+                resp = await client.request(method.upper(), url, json=payload)
+            else:
+                from manager_server.core.template.a2a_discovery import _pinned_request
+
+                pinned = _pinned_request(client, url, *target)
+                request = client.build_request(
+                    method.upper(), pinned.url, json=payload,
+                    headers={"Host": pinned.headers["Host"]},
+                    extensions=pinned.extensions,
+                )
+                resp = await client.send(request)
     except Exception as exc:
         raise ValueError(
             f"gateway HTTP push failed jiuwenclaw_id={jid!r} url={url}: {exc}"

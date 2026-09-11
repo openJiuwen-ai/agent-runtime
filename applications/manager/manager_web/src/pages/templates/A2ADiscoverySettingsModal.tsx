@@ -63,7 +63,7 @@ export function A2ADiscoverySettingsModal({ open, onClose, onSaved }: Props) {
       footer={<><ModalCancelButton /><button className="btn primary" disabled={loading || saving} onClick={() => void save()}>保存</button></>}
     >
       <div className="flex flex-col gap-4">
-        <p className="text-xs text-muted">同时用于发现注册和 Gateway 任务派发。保存后同步到已关联的 Gateway。</p>
+        <p className="text-xs text-muted">统一用于发现注册、Token 验证、向 Gateway 同步凭据和 Gateway 任务派发。保存后同步到已关联的 Gateway。</p>
         <div className="flex items-start justify-between gap-4">
           <div><div className="font-medium">允许 HTTP 地址</div><div className="mt-1 text-xs text-muted">HTTP 总开关。使用内网或公网 HTTP 地址时，还需开启对应的地址开关。</div></div>
           <Switch checked={allowHttp} disabled={loading} aria-label="允许 HTTP 地址" onChange={setAllowHttp} />
