@@ -63,20 +63,20 @@ export function A2ADiscoverySettingsModal({ open, onClose, onSaved }: Props) {
       footer={<><ModalCancelButton /><button className="btn primary" disabled={loading || saving} onClick={() => void save()}>保存</button></>}
     >
       <div className="flex flex-col gap-4">
-        <p className="text-xs text-muted">同时用于发现注册和 Gateway 任务派发。保存后同步到已关联的 Gateway。</p>
+        <p className="text-xs text-muted">统一控制 A2A 注册、凭据同步和调用。</p>
         <div className="flex items-start justify-between gap-4">
-          <div><div className="font-medium">允许 HTTP 地址</div><div className="mt-1 text-xs text-muted">HTTP 总开关。使用内网或公网 HTTP 地址时，还需开启对应的地址开关。</div></div>
+          <div><div className="font-medium">允许 HTTP 地址</div><div className="mt-1 text-xs text-muted">使用 HTTP 时，还需开启对应的内网或公网开关。</div></div>
           <Switch checked={allowHttp} disabled={loading} aria-label="允许 HTTP 地址" onChange={setAllowHttp} />
         </div>
         <div className="flex items-start justify-between gap-4">
-          <div><div className="font-medium">允许内网地址</div><div className="mt-1 text-xs text-muted">允许访问 10.x、172.16-31.x、192.168.x 内网地址。Manager 和 Gateway 均需能连接目标服务。</div></div>
+          <div><div className="font-medium">允许内网地址</div><div className="mt-1 text-xs text-muted">允许 Agent 和 Gateway 使用 10.x、172.16–31.x、192.168.x 地址。</div></div>
           <Switch checked={allowPrivateNetwork} disabled={loading} aria-label="允许内网地址" onChange={setAllowPrivateNetwork} />
         </div>
         <div className="flex items-start justify-between gap-4">
-          <div><div className="font-medium">允许公网 HTTP</div><div className="mt-1 text-xs text-muted">与 HTTP 地址开关同时开启时，允许通过公网 HTTP 地址发现和调用 A2A Agent。</div></div>
+          <div><div className="font-medium">允许公网 HTTP</div><div className="mt-1 text-xs text-muted">需同时开启“允许 HTTP 地址”。</div></div>
           <Switch checked={allowPublicHttp} disabled={loading} aria-label="允许公网 HTTP" onChange={setAllowPublicHttp} />
         </div>
-        <div className="rounded-md bg-warning/10 px-3 py-2 text-xs text-warning">仅建议用于可信联调网络。企业版始终禁止访问 127.0.0.1、::1 和 localhost 等回环地址。</div>
+        <div className="rounded-md bg-warning/10 px-3 py-2 text-xs text-warning">HTTP 会明文传输凭据，仅用于可信网络。回环地址始终禁止。</div>
       </div>
     </Modal>
   );

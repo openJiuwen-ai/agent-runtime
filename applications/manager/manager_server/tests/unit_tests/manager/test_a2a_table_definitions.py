@@ -131,40 +131,115 @@ async def test_existing_discovery_settings_table_gets_private_network_column(tmp
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("legacy_value", [False, True])
-async def test_legacy_loopback_column_is_not_read_or_written(tmp_path, legacy_value):
+@pytest.mark.parametrize("legacy_value", [None, False, True])
+@pytest.mark.parametrize("has_private_network", [False, True])
+async def test_legacy_loopback_migration_allows_saving_settings(
+    tmp_path, legacy_value, has_private_network,
+):
     from manager_server.core.template.a2a_discovery_settings import A2ADiscoverySettingsService
+    from manager_server.schemas.template_schemas import A2ADiscoverySettingsBody
 
     definition = A2A_DISCOVERY_SETTINGS_TABLE_DEF
     assert "allow_loopback" not in {column.name for column in definition.columns}
     handler = SQLiteHandler(str(tmp_path / "legacy.db"))
     await handler.connect()
     try:
-        await handler.init_table(TableDefinition(
+        columns = [
+            column for column in definition.columns
+            if has_private_network or column.name != "allow_private_network"
+        ]
+        legacy_table = _as_sqlalchemy_table(TableDefinition(
             table_name=definition.table_name,
-            columns=[*definition.columns, ColumnDefinition(
-                "allow_loopback", "boolean", nullable=False, default=False,
+            columns=[*columns, ColumnDefinition(
+                "allow_loopback", "boolean", nullable=False,
             )],
             indexes=definition.indexes,
         ))
+        async with handler.engine.begin() as connection:
+            await connection.run_sync(legacy_table.metadata.create_all)
         now = utc_now()
-        await handler.create(definition.table_name, {
-            "settings_id": "global", "allow_loopback": legacy_value,
-            "allow_http": True, "allow_private_network": True, "allow_public_http": True,
-            "created_at": now, "updated_at": now,
-        })
-        await handler.init_table(definition)
+        if legacy_value is not None:
+            values = {
+                "settings_id": "global", "allow_loopback": legacy_value,
+                "allow_http": True, "allow_public_http": True,
+                "created_at": now, "updated_at": now,
+            }
+            if has_private_network:
+                values["allow_private_network"] = True
+            async with handler.engine.begin() as connection:
+                await connection.execute(legacy_table.insert().values(**values))
+        await init_all_tables(handler)
+        await init_all_tables(handler)
         service = A2ADiscoverySettingsService(handler)
         settings = await service.get()
         assert settings.model_dump() == {
-            "allow_http": True, "allow_private_network": True, "allow_public_http": True,
+            "allow_http": legacy_value is not None,
+            "allow_private_network": legacy_value is not None and has_private_network,
+            "allow_public_http": legacy_value is not None,
         }
-        await service.update(settings)
+        desired = A2ADiscoverySettingsBody(
+            allow_http=True, allow_private_network=True, allow_public_http=False,
+        )
+        await service.update(desired)
+        assert await service.get() == desired
+        desired.allow_http = False
+        await service.update(desired)
+        assert await service.get() == desired
+        if legacy_value is not None:
+            row = await handler.get(definition.table_name, {"settings_id": "global"})
+            assert row.created_at == now.replace(tzinfo=None)
         async with handler.engine.connect() as connection:
-            from sqlalchemy import text
-            result = await connection.execute(text(
-                f"SELECT allow_loopback FROM {definition.table_name}"
-            ))
-            assert bool(result.scalar_one()) is legacy_value
+            columns = await connection.run_sync(
+                lambda conn: {item["name"] for item in inspect(conn).get_columns(definition.table_name)}
+            )
+            assert "allow_loopback" not in columns
     finally:
         await handler.disconnect()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dialect,code,retry", [
+    ("postgresql", "42701", True), ("postgresql", "42703", True),
+    ("mysql", 1060, True), ("mysql", 1091, True),
+    ("postgresql", "42501", False), ("mysql", 1142, False),
+])
+async def test_migration_retries_column_races_after_rollback(dialect, code, retry):
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from sqlalchemy.exc import DBAPIError
+    from openjiuwen_runtime.foundation.db.sqlalchemy_handler import SQLAlchemyHandler
+    from manager_server.models.table_init import _migrate_a2a_discovery_settings
+
+    original = Exception(code)
+    original.sqlstate = code if dialect == "postgresql" else None
+    failure = DBAPIError("ALTER TABLE", {}, original)
+    events = []
+
+    class Connection:
+        async def run_sync(self, migrate):
+            events.append("inspect")
+            if events.count("inspect") == 1:
+                raise failure
+
+    @asynccontextmanager
+    async def begin():
+        events.append("begin")
+        try:
+            yield Connection()
+        except DBAPIError:
+            events.append("rollback")
+            raise
+        else:
+            events.append("commit")
+
+    handler = Mock(spec=SQLAlchemyHandler)
+    handler.engine = SimpleNamespace(begin=begin, dialect=SimpleNamespace(name=dialect))
+    if retry:
+        await _migrate_a2a_discovery_settings(handler)
+        assert events == ["begin", "inspect", "rollback", "begin", "inspect", "commit"]
+    else:
+        with pytest.raises(DBAPIError) as caught:
+            await _migrate_a2a_discovery_settings(handler)
+        assert caught.value is failure
+        assert events == ["begin", "inspect", "rollback"]

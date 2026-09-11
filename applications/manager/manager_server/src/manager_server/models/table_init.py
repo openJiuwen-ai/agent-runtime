@@ -5,6 +5,7 @@ from __future__ import annotations
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 from openjiuwen_runtime.foundation.db.sqlalchemy_handler import SQLAlchemyHandler
 from sqlalchemy import inspect, text
+from sqlalchemy.exc import DBAPIError
 
 from manager_server.models.instance_models import INSTANCE_INFO_TABLE_DEF
 from manager_server.models.key_models import (
@@ -65,29 +66,46 @@ ALL_TABLE_DEFINITIONS = (
 )
 
 
-async def _ensure_a2a_private_network_column(handler: DBHandler) -> None:
+async def _migrate_a2a_discovery_settings(handler: DBHandler) -> None:
     if not isinstance(handler, SQLAlchemyHandler):
         return
 
-    async with handler.engine.begin() as connection:
-
-        def migrate(sync_connection) -> None:
-            table_name = A2A_DISCOVERY_SETTINGS_TABLE_DEF.table_name
-            columns = {item["name"] for item in inspect(sync_connection).get_columns(table_name)}
-            if "allow_private_network" in columns:
-                return
-            quote = sync_connection.dialect.identifier_preparer.quote
+    def migrate(sync_connection) -> None:
+        table_name = A2A_DISCOVERY_SETTINGS_TABLE_DEF.table_name
+        columns = {item["name"] for item in inspect(sync_connection).get_columns(table_name)}
+        quote = sync_connection.dialect.identifier_preparer.quote
+        if "allow_private_network" not in columns:
             sync_connection.execute(
                 text(
                     f"ALTER TABLE {quote(table_name)} ADD COLUMN "
                     f"{quote('allow_private_network')} BOOLEAN NOT NULL DEFAULT FALSE"
                 )
             )
+        if "allow_loopback" in columns:
+            # The retired NOT NULL column can otherwise reject first-time saves.
+            sync_connection.execute(
+                text(f"ALTER TABLE {quote(table_name)} DROP COLUMN {quote('allow_loopback')}")
+            )
 
-        await connection.run_sync(migrate)
+    # Reinspect after a competing instance changes either column. Catch outside
+    # begin() so PostgreSQL's failed transaction is rolled back before retrying.
+    for attempt in range(3):
+        try:
+            async with handler.engine.begin() as connection:
+                await connection.run_sync(migrate)
+            return
+        except DBAPIError as exc:
+            dialect = handler.engine.dialect.name
+            sqlstate = getattr(exc.orig, "sqlstate", None) or getattr(exc.orig, "pgcode", None)
+            errno = exc.orig.args[0] if exc.orig.args else None
+            column_race = (
+                dialect == "postgresql" and sqlstate in {"42701", "42703"}
+            ) or (dialect == "mysql" and errno in {1060, 1091})
+            if not column_race or attempt == 2:
+                raise
 
 
 async def init_all_tables(handler: DBHandler) -> None:
     for table_def in ALL_TABLE_DEFINITIONS:
         await handler.init_table(table_def)
-    await _ensure_a2a_private_network_column(handler)
+    await _migrate_a2a_discovery_settings(handler)
