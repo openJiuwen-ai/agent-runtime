@@ -46,7 +46,12 @@
   uv run --no-sync python scripts/load_test.py \
       --base-url http://127.0.0.1:30091/api/session --scenario mixed \
       --duration 300 --groups 2 --log-source kubectl --json
-  # 浸泡:--duration 3600 --report-interval 300
+  # 真实 AgentServer 镜像(三件套契约,同 e2e 真镜像门禁):
+  uv run --no-sync python scripts/load_test.py --scenario mixed --duration 43200 \
+      --agent-image swr.cn-north-4.myhuaweicloud.com/openjiuwen/jiuwenclaw-agentserver-amd64:<tag> \
+      --health-path /api/v1/health --sse-path /api/v1/events/stream --ready-timeout 240 \
+      --agent-env '{"AGENT_HTTP_ENABLED":"true","AGENT_HTTP_HOST":"0.0.0.0","AGENT_HTTP_PORT":"8086"}'
+  # 浸泡:--duration 3600 --report-interval 300(延迟样本自动裁剪保最近 2M 条)
 """
 
 from __future__ import annotations
@@ -110,6 +115,20 @@ def _parse_args() -> argparse.Namespace:
                         "config 面场景不适用)")
     p.add_argument("--namespace", default="agent-runtime-e2e-wmq",
                    help="AgentServer Pod 拉起的 namespace(须已存在)")
+
+    # ---- AgentServer 容器契约(默认 influxdb:1.8 替身;真镜像带三件套,
+    #      同 e2e 真镜像门禁:integration_smoke.sh --image ... --health-path
+    #      ... --sse-path ... --agent-env ...)
+    p.add_argument("--agent-image", default="influxdb:1.8",
+                   help="AgentServer 主容器镜像(真实镜像用 SWR 全名)")
+    p.add_argument("--health-path", default="/health",
+                   help="readiness/健康探测路径(真 AgentServer=/api/v1/health)")
+    p.add_argument("--sse-path", default="/sse",
+                   help="模板 sse_path(真 AgentServer=/api/v1/events/stream)")
+    p.add_argument("--agent-env", default=None,
+                   help='容器 env 的 JSON 对象(真 AgentServer 需 {"AGENT_HTTP_ENABLED":"true","AGENT_HTTP_HOST":"0.0.0.0","AGENT_HTTP_PORT":"8086"})')
+    p.add_argument("--ready-timeout", type=float, default=60,
+                   help="模板 ready_timeout 秒(真镜像冷启动慢可调大,e2e 同款 240)")
     p.add_argument("--cleanup", choices=["none", "config"], default="config",
                    help="结束时删除本次 run 的模板/规则(默认);none=留待 TTL")
     p.add_argument("--timeout", type=float, default=90.0, help="单请求超时秒")
@@ -171,6 +190,13 @@ def _parse_args() -> argparse.Namespace:
         args.log_source = "none"
     if args.log_source == "file" and not args.log_file:
         p.error("--log-source file 需要 --log-file")
+    if args.agent_env:
+        try:
+            args.agent_env = json.loads(args.agent_env)
+            if not isinstance(args.agent_env, dict):
+                raise ValueError("须为 JSON 对象")
+        except ValueError as exc:
+            p.error(f"--agent-env 解析失败: {exc}")
     if args.scenario in CONFIG_SCENARIOS and args.no_seed:
         p.error(f"--scenario {args.scenario} 需要播种(--no-seed 不适用)")
     if args.scenario in CONFIG_SCENARIOS:
@@ -202,13 +228,20 @@ def _envelope(msg_type, request_id, session_id, group_id):
     }
 
 
-def _main_container(container_id, agent_image):
+def _main_container(container_id, agent_image, health_path, agent_env):
     return {
         "container_id": container_id,
         "name": "agent",
         "image": agent_image,
-        # influxdb:1.8 的 /health 在 8086(e2e 同款替代 AgentServer)
+        # influxdb:1.8 的 /health 在 8086(e2e 同款替代 AgentServer);
+        # 真实 AgentServer 同端口 8086,health_path/sse_path/agent_env 三件套
+        # 见 e2e 真镜像门禁参数
         "ports": [{"name": "sse", "containerPort": 8086}],
+        "imagePullPolicy": "IfNotPresent",
+        "readinessProbe": {"httpGet": {"path": health_path, "port": 8086},
+                           "initialDelaySeconds": 5, "periodSeconds": 5},
+        **({"env": [{"name": k, "value": v} for k, v in agent_env.items()]}
+           if agent_env else {}),
     }
 
 
@@ -244,13 +277,15 @@ def _seed_payload(run: str, args, params: dict) -> dict:
     """三段式快照载荷。churn 重放时同 id 仅 params 变(热更新而非删建)。"""
     cid, tpl_id = _ids(run, args.scenario)
     tpl = {"template_id": tpl_id, "main_container_id": cid,
-           "namespace": args.namespace, "ready_timeout": 60, **params}
+           "namespace": args.namespace, "sse_path": args.sse_path,
+           "ready_timeout": args.ready_timeout, **params}
     scopes = [
         {"scope_id": f"scope-{run}-{gi}", "index": gi, "template_id": tpl_id,
          "routing_rules": f"group_id in ('grp-{run}-{gi}')"}
         for gi in range(args.groups)
     ]
-    return {"containers": [_main_container(cid, "influxdb:1.8")],
+    return {"containers": [_main_container(cid, args.agent_image, args.health_path,
+                                           args.agent_env)],
             "templates": [tpl], "scopes": scopes}
 
 
@@ -325,6 +360,10 @@ def _as_float(v, default=0.0):
 
 
 class Stats:
+    # 浸泡内存上限:保留最近 ~2M 样本(≈51 分钟 @650rps),超出裁最旧 1/4;
+    # 三数组同步裁保持 ts/endpoints 对齐。total/错误直方图始终全程累计。
+    _CAP = 2_000_000
+
     def __init__(self) -> None:
         self.latencies: list[float] = []          # 毫秒
         self.ts: list[float] = []                 # time.monotonic(),与上同下标
@@ -333,6 +372,7 @@ class Stats:
         self.transport_errors: Counter[str] = Counter()
         self.total = 0
         self.transport_total = 0
+        self.total_trimmed = 0                    # 已裁样本数(soak 窗口对齐用)
 
     def record(self, latency_ms: float, status: int, error_code: str | None,
                endpoint: str = "route") -> None:
@@ -342,6 +382,10 @@ class Stats:
         self.endpoints.append(endpoint)
         if status != 200:
             self.errors[f"{status}/{error_code or '-'}"] += 1
+        if len(self.latencies) > self._CAP:
+            cut = len(self.latencies) // 4
+            del self.latencies[:cut], self.ts[:cut], self.endpoints[:cut]
+            self.total_trimmed += cut
 
     def record_transport_error(self, kind: str) -> None:
         self.transport_total += 1
@@ -1131,17 +1175,19 @@ async def main() -> int:
                                    events, lock, seed_ctx, affinity,
                                    cold_log, stop_at)))
 
-        # 浸泡周期报告(增量窗口)
-        last_count, last_t = 0, time.monotonic()
+        # 浸泡周期报告(增量窗口;窗口起点按裁剪量平移)
+        last_count, last_t, last_trimmed = 0, time.monotonic(), 0
         try:
             while any(not t.done() for t in tasks):
                 await asyncio.sleep(min(args.report_interval, 1.0))
                 now = time.monotonic()
                 if args.report_interval > 0 and now - last_t >= args.report_interval \
                         and now > warmup_until:
-                    snap = _window(stats, last_count)
+                    idx = max(0, last_count - (stats.total_trimmed - last_trimmed))
+                    snap = _window(stats, idx)
                     _print_report("soak", snap, now - last_t)
                     last_count, last_t = len(stats.latencies), now
+                    last_trimmed = stats.total_trimmed
         except KeyboardInterrupt:
             print("\n[load] Ctrl-C:等待 task 收尾后输出部分报告…")
             for t in tasks:
@@ -1248,6 +1294,10 @@ async def main() -> int:
 
     # ---------------- 报告与退出码
     snap = stats.snapshot()
+    if stats.total_trimmed:
+        print(f"[final] 注:延迟样本保留最近 {snap['count']} 条"
+              f"(累计 {stats.total} 请求,裁剪 {stats.total_trimmed});"
+              f"错误码直方图为全程累计")
     _print_report("final", snap, elapsed)
     n_sync = sum(1 for e in events if e["kind"] == "sync")
     n_refresh = sum(1 for e in events if e["kind"] == "refresh")
