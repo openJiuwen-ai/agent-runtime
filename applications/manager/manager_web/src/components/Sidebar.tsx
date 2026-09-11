@@ -107,10 +107,11 @@ export function Sidebar() {
       label: t('nav.embeddingTemplates'),
       icon: (
         <svg className="w-4 h-4 nav-item__icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
-          <circle cx="6" cy="12" r="2" />
-          <circle cx="18" cy="6" r="2" />
-          <circle cx="18" cy="18" r="2" />
-          <path strokeLinecap="round" strokeLinejoin="round" d="M8 11l8-4M8 13l8 4" />
+          {/* 向量空间：坐标轴 + 散点 */}
+          <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v16h16" />
+          <circle cx="9.5" cy="9.5" r="1.4" />
+          <circle cx="15.5" cy="12.5" r="1.4" />
+          <circle cx="10.5" cy="15.5" r="1.4" />
         </svg>
       ),
     },

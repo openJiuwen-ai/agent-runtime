@@ -5,7 +5,9 @@ import { Sidebar } from './components/Sidebar';
 import { Toaster } from './components/Toaster';
 import { ThemeToggle } from './components/ThemeToggle';
 import { LanguageSwitcher } from './components/LanguageSwitcher';
+import { ConfigGuideMenu } from './components/ConfigGuideMenu';
 import { OverviewPage } from './pages/OverviewPage';
+import { DocsPage } from './pages/DocsPage';
 import { InstanceListPage } from './pages/instance/InstanceListPage';
 import { InstanceDetailPage } from './pages/instance/InstanceDetailPage';
 import { ModelTemplatesPage } from './pages/templates/ModelTemplatesPage';
@@ -168,8 +170,18 @@ function Shell() {
             </span>
             <span className="brand-sub">Manager</span>
           </div>
+          <ConfigGuideMenu />
         </div>
         <div className="flex items-center gap-3">
+          <button
+            type="button"
+            className="btn ghost sm"
+            onClick={() => {
+              window.location.href = '/docs';
+            }}
+          >
+            {t('docs.entry')}
+          </button>
           <LanguageSwitcher />
           <ThemeToggle />
           <UserMenu />
@@ -178,6 +190,7 @@ function Shell() {
       <Sidebar />
       <main className="content">
         <RouteView />
+        <div className="ai-disclaimer">{t('footer.aiNotice')}</div>
       </main>
       <Toaster />
     </div>
@@ -245,6 +258,8 @@ function Gate() {
   }
   return (
     <Routes>
+      {/* 文档页：登录前后均可访问 */}
+      <Route path="/docs" element={<DocsPage />} />
       {/* 认证面 */}
       <Route path="/auth" element={<AuthRoute />} />
       {/* 管理面(admin):内部页面在 /manager basename 下,既有页面零改动 */}

@@ -75,24 +75,46 @@ export function useClustersGuideStatus(instanceIds: string[]) {
     let cancelled = false;
     const pending: Promise<void>[] = [];
     const next: Record<string, ClusterGuideAlert[]> = {};
+    const accessResults: Record<string, [boolean | null, boolean | null]> = {};
+    const nonEmpty = (r: { items?: unknown[] }) => (r.items?.length ?? 0) > 0;
+    const skip = () => {};
     for (const id of ids) {
       next[id] = [];
-      const nonEmpty = (set: (empty: boolean) => void) => (r: { items?: unknown[] }) => set((r.items?.length ?? 0) > 0);
-      const skip = () => {};
-      const collect = (id: string, key: ClusterGuideAlert['labelKey'], to: string, openTarget: ClusterGuideAlert['openTarget'], empty: boolean) => {
+      accessResults[id] = [null, null];
+      const collect = (key: ClusterGuideAlert['labelKey'], to: string, openTarget: ClusterGuideAlert['openTarget'], empty: boolean) => {
         if (!cancelled && empty) {
           next[id] = [...(next[id] ?? []), { labelKey: key, to, openTarget }];
         }
       };
+      // 准入与详情页口径一致：用户和组织均未配置才提醒，两项结果汇总后再判定
       pending.push(
-        InstanceBindingApi.listUsers(id).then(nonEmpty((empty) => collect(id, 'accessUsers', `/instances/${id}/access`, 'accessUsers', empty))).catch(skip),
-        InstanceBindingApi.listOrgs(id).then(nonEmpty((empty) => collect(id, 'accessOrgs', `/instances/${id}/access`, 'accessOrgs', empty))).catch(skip),
-        InstanceAgentResourceApi.listInstanceAgentResources(id, { page: 1, page_size: 1 }).then(nonEmpty((empty) => collect(id, 'agentResource', `/instances/${id}/agent-resources`, 'agentResourceAdd', empty))).catch(skip),
-        InstanceServiceResourceApi.listInstanceResources(id, { page: 1, page_size: 1 }).then(nonEmpty((empty) => collect(id, 'poolResource', `/instances/${id}/service-resources`, 'serviceResourceAdd', empty))).catch(skip),
+        InstanceBindingApi.listUsers(id)
+          .then((r) => { accessResults[id][0] = nonEmpty(r); })
+          .catch(() => { accessResults[id][0] = null; }),
+        InstanceBindingApi.listOrgs(id)
+          .then((r) => { accessResults[id][1] = nonEmpty(r); })
+          .catch(() => { accessResults[id][1] = null; }),
+        InstanceAgentResourceApi.listInstanceAgentResources(id, { page: 1, page_size: 1 })
+          .then((r) => collect('agentResource', `/instances/${id}/agent-resources`, 'agentResourceAdd', !nonEmpty(r)))
+          .catch(skip),
+        InstanceServiceResourceApi.listInstanceResources(id, { page: 1, page_size: 1 })
+          .then((r) => collect('poolResource', `/instances/${id}/service-resources`, 'serviceResourceAdd', !nonEmpty(r)))
+          .catch(skip),
       );
     }
     void Promise.all(pending).then(() => {
-      if (!cancelled) setAlertsByInstance(next);
+      if (cancelled) return;
+      for (const id of ids) {
+        const [hasUsers, hasOrgs] = accessResults[id] ?? [null, null];
+        if (hasUsers === false && hasOrgs === false) {
+          next[id] = [
+            { labelKey: 'accessUsers', to: `/instances/${id}/access`, openTarget: 'accessUsers' },
+            { labelKey: 'accessOrgs', to: `/instances/${id}/access`, openTarget: 'accessOrgs' },
+            ...(next[id] ?? []),
+          ];
+        }
+      }
+      setAlertsByInstance(next);
     });
     return () => { cancelled = true; };
   }, [idsKey, revision]);

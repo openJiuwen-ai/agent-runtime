@@ -112,6 +112,12 @@ export function LoginPage() {
             ))}
           </div>
         )}
+
+        <div className="mt-4" style={{ textAlign: 'center' }}>
+          <button type="button" className="btn ghost sm" onClick={() => { window.location.href = '/docs'; }}>
+            {t('docs.entry')}
+          </button>
+        </div>
       </form>
     </div>
   );

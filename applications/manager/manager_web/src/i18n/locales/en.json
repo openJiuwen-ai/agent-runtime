@@ -50,6 +50,9 @@
     "title": "{{productName}}",
     "sub": "Manager"
   },
+  "footer": {
+    "aiNotice": "Answers are AI-generated, for reference only"
+  },
   "nav": {
     "platform": "Console",
     "overview": "Overview",
@@ -71,7 +74,18 @@
   },
   "guide": {
     "gotoPageLink": "Go to {{page}}",
-    "missingItem": "{{item}} not configured"
+    "missingItem": "{{item}} not configured",
+    "configGuide": "Config Guide",
+    "gettingStarted": "Getting Started",
+    "advancedConfig": "Advanced Config",
+    "quickEntry": "Quick Entry",
+    "newMember": "New Member",
+    "newModel": "New Model",
+    "newAgentDefinition": "New Agent Definition",
+    "newPoolDefinition": "New Agent Instance Pool Definition",
+    "noClusters": "No clusters yet. Create one in Cluster Management first.",
+    "selectCluster": "Select cluster",
+    "clusterAlerts": "Clusters have unconfigured items"
   },
   "safetyGuardrails": {
     "title": "Safety Guardrails",
@@ -102,7 +116,7 @@
     "totalClusters": "Total Clusters",
     "unitClusters": "clusters",
     "activeServices": "Online Services",
-    "quickNav": "Quick Navigation",
+    "quickNav": "Config Checklist",
     "unconfiguredItems": "Unconfigured Items",
     "noAlerts": "Nothing unconfigured",
     "clusterAlertsTitle": "Unconfigured items of this cluster",
@@ -786,6 +800,20 @@
     "loading": "Loading…",
     "errBadCredentials": "Incorrect username or password.",
     "errDisabled": "This account has been disabled. Please contact an administrator."
+  },
+  "docs": {
+    "entry": "DOCS",
+    "title": "{{productName}} Enterprise Edition Documentation",
+    "backToConsole": "Back to Console",
+    "onThisPage": "On this page",
+    "toc": {
+      "getting-started": "Getting Started",
+      "overview": "Product Overview",
+      "guides": "Feature Guides",
+      "guideAgent": "Agent Management",
+      "guidePool": "Agent Instance Pool Management",
+      "guideCluster": "Cluster Management"
+    }
   },
   "userConsole": {
     "brandSub": "Web Server",

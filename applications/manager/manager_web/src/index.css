@@ -441,6 +441,19 @@ button, input, textarea, select { font: inherit; color: inherit; }
   }
   :root[data-theme="light"] .content { background: var(--bg-content); }
 
+  /* 内容区底部 AI 免责声明小字(样式对齐用户面 chat-ai-disclaimer) */
+  .ai-disclaimer {
+    flex: 0 0 auto;
+    margin: auto auto -14px; /* 负下边距抵消 .content 的 20px 底部内边距,压缩占用 */
+    padding: 2px 12px;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 400;
+    line-height: 1.3;
+    text-align: center;
+    letter-spacing: 0.1px;
+  }
+
   .page-header {
     display: flex; align-items: center; justify-content: space-between;
     gap: 16px; margin-bottom: 4px;
@@ -1226,6 +1239,314 @@ button, input, textarea, select { font: inherit; color: inherit; }
     width: 3px;
     border-radius: var(--radius-full);
     background: linear-gradient(180deg, var(--accent), var(--accent-2));
+  }
+
+  /* --- 顶栏「配置引导」下拉 --- */
+  .guide-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--text);
+    font-size: var(--font-size-sm);
+    font-weight: 500;
+    letter-spacing: -0.01em;
+    cursor: pointer;
+    white-space: nowrap;
+    transition:
+      border-color var(--duration-fast) var(--ease-out),
+      background var(--duration-fast) var(--ease-out),
+      color var(--duration-fast) var(--ease-out);
+  }
+  .guide-trigger:hover,
+  .guide-trigger--open {
+    background: var(--bg-hover);
+    border-color: var(--border-strong);
+    color: var(--text-strong);
+  }
+  .guide-menu {
+    position: absolute;
+    top: calc(100% + 10px);
+    left: 0;
+    z-index: 60;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(200px, 1fr));
+    width: max-content;
+    min-width: 660px;
+    max-width: min(860px, calc(100vw - 32px));
+    padding: 18px;
+    gap: 24px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xl);
+    background: var(--card);
+    box-shadow: var(--shadow-xl);
+    animation: guide-menu-in var(--duration-normal) var(--ease-out) backwards;
+  }
+  @keyframes guide-menu-in {
+    from { opacity: 0; transform: translateY(-6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .guide-menu__col { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .guide-menu__title {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: var(--font-size-base);
+    font-weight: 600;
+    color: var(--text-strong);
+    letter-spacing: 0.04em;
+    padding: 0 2px 8px;
+    margin-bottom: 4px;
+    border-bottom: 1px solid var(--border);
+  }
+  .guide-menu__title-bar {
+    width: 3px;
+    height: 14px;
+    border-radius: var(--radius-full);
+    background: linear-gradient(180deg, var(--accent), var(--accent-2));
+    flex-shrink: 0;
+  }
+  .guide-menu__cluster {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+  }
+  .guide-menu__cluster-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .guide-menu__cluster-label {
+    font-size: var(--font-size-xs);
+    font-weight: 500;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .guide-menu__cluster .select { min-width: 0; flex: 1; padding: 5px 26px 5px 10px; font-size: var(--font-size-xs); }
+  .guide-menu__cluster-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .guide-btn {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+    padding: 9px 14px;
+    border: 1px solid transparent;
+    border-left: 2px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--text);
+    font-size: var(--font-size-sm);
+    cursor: pointer;
+    text-align: left;
+    white-space: nowrap;
+    transition:
+      border-color var(--duration-fast) var(--ease-out),
+      background var(--duration-fast) var(--ease-out),
+      box-shadow var(--duration-fast) var(--ease-out),
+      transform var(--duration-fast) var(--ease-out),
+      color var(--duration-fast) var(--ease-out);
+  }
+  .guide-btn:hover {
+    background: var(--bg-hover);
+    border-color: var(--border-strong);
+    border-left: 2px solid var(--accent);
+    color: var(--text-strong);
+    box-shadow: var(--shadow-sm);
+  }
+  .guide-btn:active { transform: translateY(0); box-shadow: none; }
+  .guide-btn:disabled { opacity: 0.5; cursor: not-allowed; pointer-events: none; }
+  .guide-btn__arrow {
+    color: var(--accent);
+    font-size: var(--font-size-xs);
+    opacity: 0;
+    transform: translateX(-4px);
+    transition: opacity var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-out);
+  }
+  .guide-btn:hover .guide-btn__arrow { opacity: 1; transform: translateX(0); }
+
+  /* --- 文档页（/docs） --- */
+  .docs-toc-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--muted);
+    font-size: var(--font-size-sm);
+    cursor: pointer;
+    text-align: left;
+    white-space: nowrap;
+    transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+  }
+  .docs-toc-item:hover { background: var(--bg-hover); color: var(--text-strong); }
+  .docs-toc-item.active {
+    background: var(--accent-subtle);
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .docs-toc-group {
+    margin-top: 0.5rem;
+    padding: 0.5rem 12px 0.25rem;
+    font-size: var(--font-size-xs);
+    font-weight: 600;
+    color: var(--muted);
+    letter-spacing: 0.04em;
+    border-top: 1px solid var(--border);
+  }
+  .docs-toc-item--nested {
+    padding-left: 24px;
+    font-size: var(--font-size-xs);
+  }
+
+  /* 文档页右侧 md 内部目录（标题锚点导航，按 md 标题层级缩进） */
+  .docs-headings {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  /* 整列一条引导竖线 */
+  .docs-headings::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 4px;
+    bottom: 4px;
+    width: 2px;
+    border-radius: var(--radius-full);
+    background: var(--border);
+  }
+  .docs-heading-item {
+    display: block;
+    width: 100%;
+    padding: 4px 8px 4px 14px;
+    border: 0;
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    background: transparent;
+    color: var(--muted);
+    font-size: var(--font-size-2xs);
+    font-weight: 500;
+    line-height: 1.5;
+    text-align: left;
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: color var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out);
+  }
+  .docs-heading-item:hover { color: var(--text-strong); background: var(--bg-hover); }
+  .docs-heading-item.active {
+    color: var(--accent);
+    font-weight: 600;
+    background: var(--accent-subtle);
+    border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  }
+  /* 层级：h2 加粗深色，h3/h4 逐级缩进+减轻 */
+  .docs-heading-item--l2 { font-weight: 600; color: var(--text); }
+  .docs-heading-item--l2.active { color: var(--accent); }
+  .docs-heading-item--l3 { padding-left: 28px; color: var(--muted); }
+  .docs-heading-item--l3.active { color: var(--accent); }
+  .docs-heading-item--l4 { padding-left: 42px; font-size: 10px; color: var(--muted-strong); }
+
+  /* markdown 正文（marked 输出，类名手写不依赖 typography 插件） */
+  .docs-body h1 {
+    font-size: 1.5rem; font-weight: 700; color: var(--text-strong);
+    margin: 0.5rem 0 1rem; padding-bottom: 0.75rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .docs-body h2 {
+    font-size: 1.125rem; font-weight: 600; color: var(--text-strong);
+    margin: 2rem 0 0.75rem;
+  }
+  .docs-body h3 {
+    font-size: 0.9375rem; font-weight: 600; color: var(--text-strong);
+    margin: 1.5rem 0 0.5rem;
+  }
+  .docs-body h4 {
+    font-size: var(--font-size-sm); font-weight: 600; color: var(--text-strong);
+    margin: 1.25rem 0 0.5rem;
+  }
+  .docs-body p { margin: 0.75rem 0; line-height: 1.75; color: var(--text); }
+  .docs-body ul, .docs-body ol { margin: 0.75rem 0; padding-left: 1.5rem; color: var(--text); }
+  .docs-body ul { list-style: disc; }
+  .docs-body ol { list-style: decimal; }
+  .docs-body li { margin: 0.375rem 0; line-height: 1.75; }
+  .docs-body li::marker { color: var(--muted); }
+  .docs-body strong { color: var(--text-strong); font-weight: 600; }
+  .docs-body a { color: var(--accent); text-decoration: none; word-break: break-all; }
+  .docs-body a:hover { text-decoration: underline; }
+  .docs-body code {
+    font-family: var(--mono);
+    font-size: 0.85em;
+    padding: 0.125rem 0.375rem;
+    border-radius: var(--radius-sm);
+    background: var(--bg-muted);
+    color: var(--text-strong);
+  }
+  .docs-body pre {
+    margin: 0.875rem 0;
+    padding: 0.875rem 1rem;
+    background: var(--panel-strong);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    overflow-x: auto;
+  }
+  .docs-body pre code {
+    padding: 0; background: transparent; color: var(--text);
+    font-size: var(--font-size-xs); line-height: 1.6;
+  }
+  .docs-body table {
+    width: 100%;
+    margin: 0.875rem 0;
+    border-collapse: separate; border-spacing: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    font-size: var(--font-size-sm);
+  }
+  .docs-body thead th {
+    background: var(--panel-strong);
+    color: var(--text-strong);
+    font-weight: 600;
+    padding: 0.5rem 0.75rem;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+  }
+  .docs-body tbody td {
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+    vertical-align: top;
+  }
+  .docs-body tbody tr:last-child td { border-bottom: 0; }
+  .docs-body img {
+    display: block;
+    max-width: 100%;
+    margin: 1rem 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+  }
+  .docs-body hr {
+    border: 0; height: 1px; margin: 1.5rem 0;
+    background: var(--border);
+  }
+  .docs-body blockquote {
+    margin: 0.875rem 0; padding: 0.5rem 1rem;
+    border-left: 3px solid var(--accent);
+    background: var(--bg-muted);
+    border-radius: 0 var(--radius-md) var(--radius-md) 0;
+    color: var(--muted);
   }
 
   /* --- skeleton (留作 loading 占位) --- */
