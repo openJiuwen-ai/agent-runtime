@@ -65,7 +65,7 @@ ALL_TABLE_DEFINITIONS = (
 )
 
 
-async def _ensure_a2a_private_network_column(handler: DBHandler) -> None:
+async def _migrate_a2a_discovery_settings(handler: DBHandler) -> None:
     if not isinstance(handler, SQLAlchemyHandler):
         return
 
@@ -74,15 +74,19 @@ async def _ensure_a2a_private_network_column(handler: DBHandler) -> None:
         def migrate(sync_connection) -> None:
             table_name = A2A_DISCOVERY_SETTINGS_TABLE_DEF.table_name
             columns = {item["name"] for item in inspect(sync_connection).get_columns(table_name)}
-            if "allow_private_network" in columns:
-                return
             quote = sync_connection.dialect.identifier_preparer.quote
-            sync_connection.execute(
-                text(
-                    f"ALTER TABLE {quote(table_name)} ADD COLUMN "
-                    f"{quote('allow_private_network')} BOOLEAN NOT NULL DEFAULT FALSE"
+            if "allow_private_network" not in columns:
+                sync_connection.execute(
+                    text(
+                        f"ALTER TABLE {quote(table_name)} ADD COLUMN "
+                        f"{quote('allow_private_network')} BOOLEAN NOT NULL DEFAULT FALSE"
+                    )
                 )
-            )
+            if "allow_loopback" in columns:
+                # The retired NOT NULL column can otherwise reject first-time saves.
+                sync_connection.execute(
+                    text(f"ALTER TABLE {quote(table_name)} DROP COLUMN {quote('allow_loopback')}")
+                )
 
         await connection.run_sync(migrate)
 
@@ -90,4 +94,4 @@ async def _ensure_a2a_private_network_column(handler: DBHandler) -> None:
 async def init_all_tables(handler: DBHandler) -> None:
     for table_def in ALL_TABLE_DEFINITIONS:
         await handler.init_table(table_def)
-    await _ensure_a2a_private_network_column(handler)
+    await _migrate_a2a_discovery_settings(handler)
