@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "openjiuwen-runtime-foundation"
 version = "0.1.0"
 description = "OpenJiuwen Runtime"
-requires-python = ">=3.11.4"
+requires-python = ">=3.11"
 dependencies = [
     # service
     "build>=1.0.0",
@@ -23,11 +23,14 @@ dependencies = [
     "aiomysql==0.2.0",
     "aiosqlite>=0.21.0",
     "redis==7.1.0",
-    # lint
-    "ruff==0.9.10",
 ]
 
 [project.optional-dependencies]
+link-mtls = [
+    "httpx>=0.28.1,<0.29",
+    "httpcore>=1.0.9,<1.1",
+    "uvicorn>=0.42,<0.47",
+]
 gaussdb = [
     "async-gaussdb>=0.30.4",
 ]
@@ -40,11 +43,16 @@ default-groups = ['dev']
 
 [dependency-groups]
 dev = [
+    # Lint tooling is not a dependency of applications using foundation.
+    "ruff==0.9.10",
     # test
     "coverage==7.8.0",
     "pytest==8.3.5",
     "pytest-asyncio==1.2.0",
     "pytest-mock==3.14.0",
+    "httpx>=0.28.1,<0.29",
+    "uvicorn>=0.42,<0.47",
+    "fastapi>=0.115",
 ]
 
 [[tool.uv.index]]

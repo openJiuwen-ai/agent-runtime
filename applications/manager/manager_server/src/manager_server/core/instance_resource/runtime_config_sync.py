@@ -6,12 +6,13 @@
 - ``nodeName`` 用 K8s wire 拼写；
 - ``routing_rules`` 为布尔表达式字符串（非结构化 list）。
 """
+
 from __future__ import annotations
 
 import ast
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -20,8 +21,10 @@ from openjiuwen_runtime.foundation.db.handler import DBHandler
 from manager_server.infrastructure.config import settings
 from manager_server.infrastructure.logger import get_logger
 from manager_server.infrastructure.utils import iso_datetime
+from manager_server.models.instance_models import INSTANCE_INFO_TABLE_DEF
 from manager_server.models.instance_resource_models import INSTANCE_SERVICE_RESOURCE_TABLE_DEF
 from manager_server.models.template_models import SERVICE_CONFIG_TEMPLATE_TABLE_DEF
+from manager_server.security.link_mtls import ManagerLinkMTLSConfig
 
 _log = get_logger(__name__)
 _CAP = 100_000
@@ -61,14 +64,14 @@ def _is_expired(value: Any) -> bool:
         return False
     if isinstance(value, str):
         try:
-            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            value = datetime.fromisoformat(value)
         except ValueError:
             return False
     if not isinstance(value, datetime):
         return False
     if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    return value <= datetime.now(timezone.utc)
+        value = value.replace(tzinfo=UTC)
+    return value <= datetime.now(UTC)
 
 
 def _scope_id(resource_id: str) -> str:
@@ -94,7 +97,7 @@ def _comparison_to_expression(node: ast.Compare) -> dict[str, Any]:
     elif isinstance(op_node, (ast.NotEq, ast.NotIn)):
         op = "not_in"
     else:
-        raise ValueError("unsupported runtime scope operator")
+        raise TypeError("unsupported runtime scope operator")
     return {"field": field, "op": op, "values": values}
 
 
@@ -177,22 +180,25 @@ def _env_to_wire(env: Any) -> list[dict[str, str]] | None:
         for item in env:
             if not isinstance(item, dict) or item.get("name") is None:
                 continue
-            out.append({"name": str(item["name"]), "value": "" if item.get("value") is None else str(item["value"])})
+            out.append(
+                {
+                    "name": str(item["name"]),
+                    "value": "" if item.get("value") is None else str(item["value"]),
+                }
+            )
         return out or None
     if isinstance(env, dict):
-        return [{"name": str(k), "value": "" if v is None else str(v)} for k, v in env.items()] or None
+        return [
+            {"name": str(k), "value": "" if v is None else str(v)} for k, v in env.items()
+        ] or None
     return None
 
 
 def _synthesize_main_container(row: Any, container_id: str) -> dict[str, Any]:
     """无 data.config_sync.containers 时，由模板内联列合成主容器 wire。"""
     data = _g(row, "data") if isinstance(_g(row, "data"), dict) else {}
-    sse_port = int(
-        _g(row, "sse_port") or data.get("sse_port") or _g(row, "container_port") or 8080
-    )
-    health_path = str(
-        _g(row, "health_path") or data.get("health_path") or "/api/v1/health"
-    )
+    sse_port = int(_g(row, "sse_port") or data.get("sse_port") or _g(row, "container_port") or 8080)
+    health_path = str(_g(row, "health_path") or data.get("health_path") or "/api/v1/health")
     wire: dict[str, Any] = {
         "container_id": container_id,
         "name": str(_g(row, "container_name") or "agent"),
@@ -285,9 +291,10 @@ def service_template_wire(row: Any) -> tuple[dict[str, Any], list[dict[str, Any]
         )
         return None
 
-    if not str(by_id[main_cid].get("image") or "").strip() and not str(
-        _g(row, "agent_image") or ""
-    ).strip():
+    if (
+        not str(by_id[main_cid].get("image") or "").strip()
+        and not str(_g(row, "agent_image") or "").strip()
+    ):
         _log.warning("runtime sync skip template %s: empty main container image", tid)
         return None
 
@@ -306,9 +313,7 @@ def service_template_wire(row: Any) -> tuple[dict[str, Any], list[dict[str, Any]
         "enabled": bool(_g(row, "enabled", True)),
         "namespace": str(_g(row, "namespace") or "default"),
         "pod_name": str(_g(row, "pod_name") or "agentserver"),
-        "sse_path": str(
-            _g(row, "sse_path") or data.get("sse_path") or "/api/v1/events/stream"
-        ),
+        "sse_path": str(_g(row, "sse_path") or data.get("sse_path") or "/api/v1/events/stream"),
         "ready_timeout": int(_g(row, "ready_timeout") or 300),
         "ready_poll_interval": int(_g(row, "ready_poll_interval") or 2),
         "scope_concurrency": int(_g(row, "session_concurrency") or 3),
@@ -398,9 +403,7 @@ async def build_runtime_config(
             else None
         )
         if service is None or not bool(_g(service, "enabled", True)):
-            _log.warning(
-                "runtime sync skipped resource without enabled service template: %s", rid
-            )
+            _log.warning("runtime sync skipped resource without enabled service template: %s", rid)
             continue
 
         wired = service_template_wire(service)
@@ -439,6 +442,18 @@ async def build_runtime_config(
     }
 
 
+async def resolve_runtime_endpoint(handler: DBHandler, jiuwenclaw_id: str) -> str:
+    """Resolve this instance's Runtime; keep the process setting as legacy fallback."""
+    instance = await handler.get(
+        INSTANCE_INFO_TABLE_DEF.table_name,
+        {"jiuwenclaw_id": jiuwenclaw_id},
+    )
+    endpoint = str(getattr(instance, "runtime_config_host", "") or "").strip()
+    if not endpoint:
+        endpoint = settings.agent_runtime_endpoint.strip()
+    return endpoint.rstrip("/")
+
+
 async def sync_runtime_config(
     handler: DBHandler,
     jiuwenclaw_id: str,
@@ -449,13 +464,22 @@ async def sync_runtime_config(
 
     调用方应在 Manager 落库前传入 ``resource_rows``（目标态），避免 Manager/Runtime 不一致。
     """
-    endpoint = settings.agent_runtime_endpoint.strip().rstrip("/")
+    # 多实例时必须使用当前 instance_info 中的 Runtime 地址。全局变量仅作为
+    # 旧部署兼容回退，避免把 A 实例配置误推送给 B 实例的 Runtime。
+    endpoint = await resolve_runtime_endpoint(handler, jiuwenclaw_id)
     if not endpoint:
         _log.info("AGENT_RUNTIME_ENDPOINT not configured; runtime sync skipped")
         return {"skipped": True}
-    rawdata = await build_runtime_config(
-        handler, jiuwenclaw_id, resource_rows=resource_rows
+    link_mtls = ManagerLinkMTLSConfig.from_env()
+    link_target = await link_mtls.target(
+        handler,
+        jiuwenclaw_id,
+        role="runtime",
+        endpoint=endpoint,
     )
+    endpoint = link_target.endpoint
+    headers = link_target.headers
+    rawdata = await build_runtime_config(handler, jiuwenclaw_id, resource_rows=resource_rows)
     envelope = {
         "type": "config_sync",
         "metadata": {
@@ -467,8 +491,16 @@ async def sync_runtime_config(
         },
         "rawdata": rawdata,
     }
-    async with httpx.AsyncClient(timeout=settings.agent_runtime_sync_timeout) as client:
-        response = await client.post(f"{endpoint}/api/session/config_sync", json=envelope)
+    async with httpx.AsyncClient(
+        timeout=settings.agent_runtime_sync_timeout,
+        trust_env=False,
+        **link_target.client_kwargs,
+    ) as client:
+        response = await client.post(
+            f"{endpoint}/api/session/config_sync",
+            json=envelope,
+            headers=headers,
+        )
     response.raise_for_status()
     body = response.json()
     if isinstance(body, dict) and body.get("ok") is False:

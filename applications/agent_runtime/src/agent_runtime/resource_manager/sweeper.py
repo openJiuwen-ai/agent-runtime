@@ -328,7 +328,13 @@ class ResourceSweeper:
         health_path = info.get("health_path") or await self._scope_health_path(
             info.get("scope_id", ""))
         self._probe_gap_warned.discard(pod_id)
-        if await self.k8s.probe_health(pod_ip, sse_port, health_path):
+        if await self.k8s.probe_pod_health(
+            pod_id=pod_id,
+            namespace=info.get("namespace", "default"),
+            pod_ip=pod_ip,
+            sse_port=sse_port,
+            health_path=health_path,
+        ):
             await self.state.reset_health_fail(pod_id)
             return
         fails = await self.state.bump_health_fail(pod_id)

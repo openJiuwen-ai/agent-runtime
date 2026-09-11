@@ -7,33 +7,34 @@ from openjiuwen_runtime.foundation.db.sqlalchemy_handler import SQLAlchemyHandle
 from sqlalchemy import inspect, text
 from sqlalchemy.exc import DBAPIError
 
+from manager_server.models.application_config_models import (
+    _MEMORY_CONFIG_TABLE_DEF,
+    _TASK_MEMORY_CONFIG_TABLE_DEF,
+    LOG_MASKING_RULE_TABLE_DEF,
+    LOGGING_CONFIG_TABLE_DEF,
+)
+from manager_server.models.instance_access_models import INSTANCE_ACCESS_TABLE_DEFINITIONS
 from manager_server.models.instance_models import INSTANCE_INFO_TABLE_DEF
+from manager_server.models.instance_resource_models import INSTANCE_RESOURCE_TABLE_DEFINITIONS
+from manager_server.models.jid_template_ref_models import (
+    JID_TEMPLATE_REF_TABLE_DEF,
+)
 from manager_server.models.key_models import (
     INSTANCE_ENC_PUBKEY_TABLE_DEF,
     MANAGER_IDENTITY_TABLE_DEF,
 )
-from manager_server.models.application_config_models import (
-    LOG_MASKING_RULE_TABLE_DEF,
-    LOGGING_CONFIG_TABLE_DEF,
-    _TASK_MEMORY_CONFIG_TABLE_DEF,
-    _MEMORY_CONFIG_TABLE_DEF,
-)
-from manager_server.models.jid_template_ref_models import (
-    JID_TEMPLATE_REF_TABLE_DEF,
-)
-from manager_server.models.instance_access_models import INSTANCE_ACCESS_TABLE_DEFINITIONS
-from manager_server.models.instance_resource_models import INSTANCE_RESOURCE_TABLE_DEFINITIONS
+from manager_server.models.link_binding_models import INSTANCE_LINK_BINDING_TABLE_DEF
 from manager_server.models.template_models import (
     A2A_ACCESS_POLICY_TEMPLATE_TABLE_DEF,
     A2A_DISCOVERY_SETTINGS_TABLE_DEF,
-    A2A_OUTBOUND_TEMPLATE_TABLE_DEF,
     A2A_OUTBOUND_DISCOVERY_TABLE_DEF,
+    A2A_OUTBOUND_TEMPLATE_TABLE_DEF,
     AGENT_TEMPLATE_TABLE_DEF,
     EMBEDDING_TEMPLATE_TABLE_DEF,
     EXTENSION_CONFIG_TEMPLATE_TABLE_DEF,
+    MCP_TEMPLATE_TABLE_DEF,
     MODEL_TEMPLATE_TABLE_DEF,
     PERMISSIONS_TEMPLATE_TABLE_DEF,
-    MCP_TEMPLATE_TABLE_DEF,
     SERVICE_CONFIG_CONTAINER_TABLE_DEF,
     SERVICE_CONFIG_TEMPLATE_TABLE_DEF,
     SKILL_PREBUILT_TEMPLATE_TABLE_DEF,
@@ -41,6 +42,7 @@ from manager_server.models.template_models import (
 
 ALL_TABLE_DEFINITIONS = (
     INSTANCE_INFO_TABLE_DEF,
+    INSTANCE_LINK_BINDING_TABLE_DEF,
     MANAGER_IDENTITY_TABLE_DEF,
     INSTANCE_ENC_PUBKEY_TABLE_DEF,
     _TASK_MEMORY_CONFIG_TABLE_DEF,

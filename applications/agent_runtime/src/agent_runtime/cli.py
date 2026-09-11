@@ -40,6 +40,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     from openjiuwen_runtime.service.config import ServiceConfig
 
     from .config import AgentRuntimeConfig
+    from .link_mtls import LinkMTLSConfig
     from .logsetup import configure_logging
     from .main import create_app
 
@@ -49,7 +50,8 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     settings = ServiceConfig.from_env()
     arc = AgentRuntimeConfig.from_env()
-    application = create_app(settings, arc)
+    link_mtls = LinkMTLSConfig.from_env()
+    application = create_app(settings, arc, link_mtls_config=link_mtls)
 
     import uvicorn
 
@@ -58,6 +60,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         host=settings.host,
         port=settings.port,
         log_level=os.getenv("AGENT_RUNTIME_LOG_LEVEL", "info").strip().lower(),
+        **link_mtls.uvicorn_ssl_kwargs(),
     )
 
 
