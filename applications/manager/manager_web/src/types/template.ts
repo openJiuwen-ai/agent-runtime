@@ -141,9 +141,10 @@ export interface SkillPrebuiltTemplateCreateBody {
 }
 
 export type SkillPrebuiltTemplateUpdateBody = Partial<
-  Omit<SkillPrebuiltTemplateCreateBody, 'package_url'>
+  Omit<SkillPrebuiltTemplateCreateBody, 'package_url' | 'data'>
 > & {
   package_url?: string | null;
+  data?: Record<string, unknown> | null;
 };
 
 

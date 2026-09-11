@@ -27,6 +27,7 @@ const FIELD_MAX_LENGTH = {
   package_url: 2048,
   source_id: 64,
   version_id: 128,
+  author: 200,
 } as const;
 
 function clipField(value: string, max: number): string {
@@ -50,6 +51,7 @@ interface FormState {
   source_id: string;
   version_id: string;
   sha256: string;
+  author: string;
 }
 
 const empty: FormState = {
@@ -60,12 +62,37 @@ const empty: FormState = {
   source_id: '',
   version_id: '',
   sha256: '',
+  author: '',
 };
 
-function readSha256(data: Record<string, unknown> | null | undefined): string {
+function readDataString(data: Record<string, unknown> | null | undefined, key: string): string {
   if (!data || typeof data !== 'object') return '';
-  const value = data.sha256;
+  const value = data[key];
   return typeof value === 'string' ? value : '';
+}
+
+function buildTemplateData(
+  existing: Record<string, unknown> | null | undefined,
+  author: string,
+  sha256: string,
+  provider: boolean,
+): Record<string, unknown> | undefined {
+  const next: Record<string, unknown> = {
+    ...(existing && typeof existing === 'object' ? { ...existing } : {}),
+  };
+  const trimmedAuthor = author.trim().slice(0, FIELD_MAX_LENGTH.author);
+  if (trimmedAuthor) {
+    next.author = trimmedAuthor;
+  } else {
+    delete next.author;
+  }
+  const sha = sha256.trim().toLowerCase();
+  if (sha && !provider) {
+    next.sha256 = sha;
+  } else {
+    delete next.sha256;
+  }
+  return Object.keys(next).length ? next : undefined;
 }
 
 export function SkillPrebuiltTemplateModal({ open, template, onClose, onSaved }: Props) {
@@ -85,7 +112,8 @@ export function SkillPrebuiltTemplateModal({ open, template, onClose, onSaved }:
           package_url: clipField(packageUrl, FIELD_MAX_LENGTH.package_url),
           source_id: clipField(template.source_id ?? '', FIELD_MAX_LENGTH.source_id),
           version_id: clipField(template.version_id ?? '', FIELD_MAX_LENGTH.version_id),
-          sha256: clipField(readSha256(template.data ?? undefined), 64),
+          sha256: clipField(readDataString(template.data ?? undefined, 'sha256'), 64),
+          author: clipField(readDataString(template.data ?? undefined, 'author'), FIELD_MAX_LENGTH.author),
         }
       : empty;
     setForm(next);
@@ -132,6 +160,7 @@ export function SkillPrebuiltTemplateModal({ open, template, onClose, onSaved }:
       { label: t('skillWhitelistTemplate.skillId'), value: form.skill_id },
       { label: t('skillWhitelistTemplate.sourceId'), value: form.source_id },
       { label: t('skillWhitelistTemplate.versionId'), value: form.version_id },
+      { label: t('skillWhitelistTemplate.author'), value: form.author },
     ]);
     if (unsafeField) {
       toast('warn', t('skillWhitelistTemplate.unsafeText', { field: unsafeField }));
@@ -145,7 +174,7 @@ export function SkillPrebuiltTemplateModal({ open, template, onClose, onSaved }:
     }
 
     const description = form.description.trim() || undefined;
-    const data = sha && !provider ? { sha256: sha } : undefined;
+    const data = buildTemplateData(template?.data ?? undefined, form.author, form.sha256, provider);
 
     setSaving(true);
     try {
@@ -158,7 +187,7 @@ export function SkillPrebuiltTemplateModal({ open, template, onClose, onSaved }:
           skill_id: form.skill_id.trim(),
           source_id: sourceId || '',
           version_id: versionId || '',
-          data,
+          data: data ?? null,
         };
         if (packageUrl) {
           patch.package_url = packageUrl;
@@ -254,6 +283,15 @@ export function SkillPrebuiltTemplateModal({ open, template, onClose, onSaved }:
             maxLength={FIELD_MAX_LENGTH.package_url}
             onChange={(v) => update('package_url', v)}
             placeholder={t('skillWhitelistTemplate.packageUrlHint')}
+          />
+        </div>
+        <div className="md:col-span-2">
+          <FieldLabel>{t('skillWhitelistTemplate.author')}</FieldLabel>
+          <LimitedTextInput
+            value={form.author}
+            maxLength={FIELD_MAX_LENGTH.author}
+            onChange={(v) => update('author', v)}
+            placeholder={t('skillWhitelistTemplate.authorHint')}
           />
         </div>
         <div className="md:col-span-2">
