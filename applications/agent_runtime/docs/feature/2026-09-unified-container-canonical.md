@@ -39,6 +39,20 @@
 
 ## 影响面
 
+**2026-09-11 rebase 补记**:本篇落地后 develop rebase 到上游 `1d8698b7`(manager A2A 发现/凭证同步策略),其前置 `bef82fc4`("添加fsgroup,cmd,args参数")在旧两套形状上扩了容器面——本次冲突解决把三特性**吸收进 canonical**,成为统一规范形的第一次真实"加字段"验证:
+- `fs_group`(模板级,wire `fsGroup`)→ Template 字段 + spec_fields + `_build_pod_body` 的 `V1PodSecurityContext.fsGroup`;
+- `command`/`args`(容器级)→ canonical 两键(None/[] 同义),仅主容器渲染;
+- NFS 第四挂载族 `nfs_mounts`(取代本篇原设计的单条 `nfs` dict 键):主/sidecar 一致开放、条数不限、readOnly 透传,RM `nfs_seen` 按 (server,path) 跨容器共享去重——上游语义更宽,采纳之。
+canonical 由 13 键扩到 **15 键**;`deploy_ver` 随之**二次重置**(基线常量再冻结:80bd09a60f8c470c/e4c697572c185b0a/c19f1e18236e2ab1)。上游同名的 feature 文档见 `2026-09-nfs-volume-pod-level.md`(其"Template 四字段"表述以本篇 canonical 为准)。
+
+**升级前置 ALTER(实测踩到:漏 ALTER → config_sync 写库 500 → 快照缺失、阶段 11b 崩)**:
+```sql
+ALTER TABLE service_config_template  ADD COLUMN IF NOT EXISTS fs_group integer;
+ALTER TABLE service_config_container ADD COLUMN IF NOT EXISTS command json;
+ALTER TABLE service_config_container ADD COLUMN IF NOT EXISTS args json;
+```
+rebase 后重验:真镜像门禁 127/127(镜像 `canonical-20260911b`,e2e PG 已补列)。
+
 - 文档同步(同一提交):HLD(内部实现注/场景 M A 类字段表三分类)、spec/session-manager.md(单轨水合/containers.py 段/水合出口)、spec/resource-manager.md(`_build_container` 五分支/`_deploy_and_register` helper)、spec/service-core.md(容器字段不碰 spec_fields 指引)、api/config-plane-api.md(pod_spec_json 示例换嵌套形)、CLAUDE.md(用例计数/模块描述)。
 - **`deploy_ver` 一次性重置**:升级后首个 config_sync 的版本收敛把旧 idle Pod 全部软摘除,按 `pod_ttl` 回收 + autoscale 重建(dev 可 config_refresh 加速)。这是本重构的**有意决策**,非缺陷。
 - **升级操作序列**:①前置检查(存量库):`SELECT template_id FROM service_config_template WHERE main_container_id IS NULL OR main_container_id='';`——非空则**先重放 config_sync**(否则这些模板 fail-closed 跳过,scope 落兜底);②**全量重启**换镜像(不做新旧混版:混版下两套指纹算法 → 暖池互不复用 + autoscale 误判 stale);③启动后重放一次 config_sync 或调 config_refresh(Redis `pod_spec_json`/快照收敛,RM 侧对旧形缓存 autoscale skip_legacy_spec 待重推);④dev 环境可 FLUSHDB 简化。
