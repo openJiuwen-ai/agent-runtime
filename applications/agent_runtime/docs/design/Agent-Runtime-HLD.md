@@ -158,7 +158,8 @@ flowchart TB
 | `volumeMounts` | list[{name, mountPath, subPath?, readOnly?}] | 按名引用模板 `volumes`(悬挂引用 → 400;`subPath` 仅 configMap 卷;`readOnly` 缺省按内部规范:configMap→true、hostPath/PVC→false) |
 | `securityContext` | dict | 主容器只许 `runAsUser`/`runAsGroup`(≥0,`None` = 走镜像默认;**不改变卷文件属主**——PVC 写权限根治仍是存储侧预属主,见 `e2e-test-cases.md` 真实缺陷②);sidecar 另有 `privileged`、`capabilities{add,drop}`、`seccompProfile`/`appArmorProfile`(type ∈ {Unconfined, RuntimeDefault};appArmor 渲染为 Pod annotation) |
 | `readinessProbe` | dict | 主容器恒 `httpGet{path(=health_path), port(=sse 端口)}` + `initialDelaySeconds`/`periodSeconds`(缺省 5/5;`tcpSocket`/`timeoutSeconds` → 400);sidecar `tcpSocket`/`httpGet` 二选一可缺省(缺省 5/**10**/3,period 差异不得跨角色套用),`timeoutSeconds` 1..300 |
-| —(不可表示即拒绝) | — | `command`/`args`/端口 `protocol`/nfs 卷 `readOnly:true`/`Localhost` profile 等 K8s 字段内部表达不了 → **400,绝不静默丢弃**(防"看似有特权实际没有") |
+| `command` / `args` | list[str] | 启动命令/参数覆盖(**主容器/sidecar 一致生效**,2026-09-11 起双角色);`None`/`[]` 同义 = 走镜像 ENTRYPOINT/CMD;非 str 项 → 400 |
+| —(不可表示即拒绝) | — | 端口 `protocol`/`Localhost` profile 等 K8s 字段内部表达不了 → **400,绝不静默丢弃**(防"看似有特权实际没有") |
 
 **`volumes`**(模板级,K8s `spec.volumes` 同构):`[{name(DNS-1123,模板内唯一), 恰一源}]`;源 = `hostPath{path, type?}` / `configMap{name, items?=[{key,path}]}` / `persistentVolumeClaim{claimName}` / `nfs{server, path?}`(NFS 仅主容器、至多一个挂载)。**未被任何容器挂载的卷 → 400**;同卷多容器共享天然成立(PVC 同 claim 跨容器单卷去重由 RM 渲染保证)。
 

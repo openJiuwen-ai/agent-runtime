@@ -401,11 +401,11 @@ class RealK8sPodClient(K8sPodClient):
     ) -> tuple[Any, list[Any], dict[str, str]]:
         """单个容器(canonical,见 containers.py)→ (V1Container, 挂载卷, Pod annotation)。
 
-        主/sidecar 统一渲染器;role 差异收敛为五处:ports 有名(sse/http)vs
+        主/sidecar 统一渲染器;role 差异收敛为四处:ports 有名(sse/http)vs
         无名纯声明、探针恒 httpGet 打 sse 端口且无 timeout vs 可选 tcp/http
         带 timeout、securityContext 主容器仅 runAs 两键(空则省 kwarg,走镜像
-        默认)、apparmor annotation(canonical 主容器恒 False → 永不产出)、
-        command/args 仅主容器渲染(sidecar 暂不开放,同上游)。挂载四族
+        默认)、apparmor annotation(canonical 主容器恒 False → 永不产出)。
+        command/args 与挂载四族主/sidecar 一致渲染。挂载四族
         (hp/cm/pvc/nfs)主/sidecar 一致(_render_volume_mounts),pvc_seen/
         nfs_seen 跨容器共享同 claim/同 server+path 的卷(防 kubelet 挂第二
         个同源卷死锁)。
@@ -493,13 +493,12 @@ class RealK8sPodClient(K8sPodClient):
             for k, v in (cont.get("env") or {}).items()
         ] or None
 
-        # 主容器启动命令/参数覆盖(缺省走镜像 ENTRYPOINT/CMD;sidecar 暂不开放)
+        # 启动命令/参数覆盖(主/sidecar 一致;缺省走镜像 ENTRYPOINT/CMD)
         cmd_kwargs: dict[str, Any] = {}
-        if is_main:
-            if cont.get("command"):
-                cmd_kwargs["command"] = [str(x) for x in cont["command"]]
-            if cont.get("args"):
-                cmd_kwargs["args"] = [str(x) for x in cont["args"]]
+        if cont.get("command"):
+            cmd_kwargs["command"] = [str(x) for x in cont["command"]]
+        if cont.get("args"):
+            cmd_kwargs["args"] = [str(x) for x in cont["args"]]
 
         container_kwargs: dict[str, Any] = {
             "name": cont["name"],

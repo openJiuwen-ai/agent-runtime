@@ -438,8 +438,8 @@ def test_render_env_from_tolerates_corrupt_cache(client):
 
 # ---------------------------------------------- command/args(Pod 级 fsGroup)
 
-def test_build_pod_body_renders_main_command_args(client):
-    """主容器 command/args 覆盖(缺省走镜像 ENTRYPOINT/CMD;sidecar 不开放)。"""
+def test_build_pod_body_renders_command_args(client):
+    """command/args 覆盖,主/sidecar 一致生效(缺省走镜像 ENTRYPOINT/CMD)。"""
     spec = _base_spec(main_container=_main(
         command=["/bin/agent"], args=["--port", "8086"]))
     main = client._build_pod_body("pod-1", spec).kwargs["spec"].kwargs[
@@ -450,11 +450,12 @@ def test_build_pod_body_renders_main_command_args(client):
     plain = client._build_pod_body(
         "pod-1", _base_spec()).kwargs["spec"].kwargs["containers"][0].kwargs
     assert "command" not in plain and "args" not in plain
-    # sidecar 即便带了 command 也不渲染(值域未开放)
-    sc = dict(JIUWENBOX, command=["/bin/box"])
+    # sidecar 同样生效(2026-09-11 双角色开放;不再静默吞键)
+    sc = dict(JIUWENBOX, command=["/bin/box"], args=["--box-flag"])
     pod = client._build_pod_body("pod-1", _base_spec(sidecars=[sc]))
     box = pod.kwargs["spec"].kwargs["containers"][1].kwargs
-    assert "command" not in box
+    assert box["command"] == ["/bin/box"]
+    assert box["args"] == ["--box-flag"]
 
 
 def test_build_pod_body_renders_pod_fs_group(client):

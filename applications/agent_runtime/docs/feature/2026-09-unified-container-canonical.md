@@ -53,6 +53,8 @@ ALTER TABLE service_config_container ADD COLUMN IF NOT EXISTS args json;
 ```
 rebase 后重验:真镜像门禁 127/127(镜像 `canonical-20260911b`,e2e PG 已补列)。
 
+**同日追加(用户决策)**:上游三字段在**主/sidecar 双容器一致生效**——`fs_group` 本就是 Pod 级 securityContext(天生全容器);`nfs_mounts` 吸收时已双角色;**`command`/`args` 打开 sidecar 渲染**(原上游仅主容器,canonical 已携带但渲染层丢弃 = 静默吞键,违反白名单原则)。`_build_container` 的 cmd_kwargs 去掉 role 门;HLD 容器表补 `command`/`args` 行并从"不可表示"清单摘除。
+
 - 文档同步(同一提交):HLD(内部实现注/场景 M A 类字段表三分类)、spec/session-manager.md(单轨水合/containers.py 段/水合出口)、spec/resource-manager.md(`_build_container` 五分支/`_deploy_and_register` helper)、spec/service-core.md(容器字段不碰 spec_fields 指引)、api/config-plane-api.md(pod_spec_json 示例换嵌套形)、CLAUDE.md(用例计数/模块描述)。
 - **`deploy_ver` 一次性重置**:升级后首个 config_sync 的版本收敛把旧 idle Pod 全部软摘除,按 `pod_ttl` 回收 + autoscale 重建(dev 可 config_refresh 加速)。这是本重构的**有意决策**,非缺陷。
 - **升级操作序列**:①前置检查(存量库):`SELECT template_id FROM service_config_template WHERE main_container_id IS NULL OR main_container_id='';`——非空则**先重放 config_sync**(否则这些模板 fail-closed 跳过,scope 落兜底);②**全量重启**换镜像(不做新旧混版:混版下两套指纹算法 → 暖池互不复用 + autoscale 误判 stale);③启动后重放一次 config_sync 或调 config_refresh(Redis `pod_spec_json`/快照收敛,RM 侧对旧形缓存 autoscale skip_legacy_spec 待重推);④dev 环境可 FLUSHDB 简化。
