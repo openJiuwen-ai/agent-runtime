@@ -67,3 +67,7 @@ rebase 后重验:真镜像门禁 127/127(镜像 `canonical-20260911b`,e2e PG 已
 - 改动:canonical `_canonical_secctx` 与 wire `_parse_security_context` 去 role 值域,主/sidecar 同一白名单;渲染层主容器改走 `_build_security_context` 全量路径(与 sidecar 同款,全默认 → None 走镜像默认;渲染出的 K8s Pod 与旧路径等价,仅 kwargs 表达带显式 None 键)。
 - 安全职责转移:**是否给主容器(AgentServer)开特权由管理面负责**,runtime 保留键白名单与值类型校验(纵深防御缩为"防配错",不再是"防越权")。
 - 指纹零扰动:存量配置的主容器 secctx 本就全默认,canonical 输出不变。
+
+## 二次 rebase 补记(2026-09-12,up/develop 026b53ff"多容器共用一个卷")
+
+上游把跨容器共享卷从 PVC/NFS 扩展到 **hostPath(`hp_seen`,键=path+type)与 ConfigMap(`cm_seen`,键=name+items 元组——items 属卷定义,同名不同 items 不共享)**,同款登记簿模式。吸收进统一渲染器:`_render_volume_mounts` 增 hp_seen/cm_seen,`_build_container` 透传,`_build_pod_body` 四登记簿贯穿主+sidecar——**四类挂载族现在全部具备跨容器同源去重**。上游三条共享用例移植到 canonical 形。508 用例。
