@@ -19,6 +19,7 @@ from uuid import uuid4
 
 from ..containers import main_health_path, main_sse_port, normalize_pod_spec
 from ..errors import DeployFailed, MaxPodsReached
+from ..link_mtls import LinkMTLSConfig
 from ..spec_fields import DEPLOY_VER_FIELDS
 from ..util import fingerprint, now_ts
 from .k8s import DEFAULT_READY_TIMEOUT, K8sPodClient
@@ -56,10 +57,12 @@ class ResourceOrchestrator:
         k8s: K8sPodClient,
         *,
         telemetry: Any = None,           # ScopeTelemetryBuffer(评估计数;None=旧测试)
+        link_mtls_config: LinkMTLSConfig | None = None,
     ) -> None:
         self.state = rm_state
         self.k8s = k8s
         self.telemetry = telemetry
+        self.link_mtls = link_mtls_config or LinkMTLSConfig.from_env()
 
     # -------------------------------------------------------------- acquire
 
@@ -297,9 +300,12 @@ class ResourceOrchestrator:
             norm = normalize_pod_spec(pod_spec)
             main = norm.get("main_container")
             sse_port = main_sse_port(main)
-            sse_url = (
-                f"http://{info.pod_ip}:{sse_port}"
-                f"{pod_spec.get('sse_path') or '/sse'}"
+            sse_url = self.link_mtls.agentserver_url(
+                pod_id=info.pod_id,
+                namespace=info.namespace,
+                port=sse_port,
+                path=str(pod_spec.get("sse_path") or "/sse"),
+                pod_ip=info.pod_ip,
             )
             await self.state.register_pod(
                 pod_id=info.pod_id,

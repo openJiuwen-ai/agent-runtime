@@ -7,8 +7,10 @@ from typing import Any
 
 import httpx
 
+from manager_server.infrastructure.db import get_db_handler
 from manager_server.infrastructure.logger import get_logger
 from manager_server.manager_config_push.endpoint import require_gateway_endpoint
+from manager_server.security.link_mtls import ManagerLinkMTLSConfig
 
 logger = get_logger(__name__)
 
@@ -42,8 +44,16 @@ async def gateway_request(
         raise ValueError(f"path must start with /: {path!r}")
 
     endpoint = await require_gateway_endpoint(jid)
+    link_mtls = ManagerLinkMTLSConfig.from_env()
+    link_target = await link_mtls.target(
+        get_db_handler() if link_mtls.enforced else None,
+        jid,
+        role="gateway",
+        endpoint=endpoint,
+    )
+    endpoint = link_target.endpoint
     payload = dict(business or {})
-    target = None
+    network_target = None
     if path.startswith("/api/v1/a2a-outbound-templates") and _contains_credential_replace(payload):
         from manager_server.core.template.a2a_discovery import _normalize_url, _validate_target
 
@@ -56,22 +66,34 @@ async def gateway_request(
         }
         _normalize_url(endpoint, None)
         try:
-            target = await _validate_target(endpoint, **flags)
+            network_target = await _validate_target(endpoint, **flags)
         except ValueError as exc:
-            raise ValueError(f"A2A credential sync blocked by network access settings: {exc}") from exc
+            raise ValueError(
+                f"A2A credential sync blocked by network access settings: {exc}"
+            ) from exc
+
+    headers = link_target.headers
 
     url = f"{endpoint}{path}"
     try:
-        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
-            if target is None:
-                resp = await client.request(method.upper(), url, json=payload)
+        async with httpx.AsyncClient(
+            timeout=timeout,
+            trust_env=False,
+            **link_target.client_kwargs,
+        ) as client:
+            if network_target is None:
+                resp = await client.request(
+                    method.upper(), url, json=payload, **({"headers": headers} if headers else {})
+                )
             else:
                 from manager_server.core.template.a2a_discovery import _pinned_request
 
-                pinned = _pinned_request(client, url, *target)
+                pinned = _pinned_request(client, url, *network_target)
                 request = client.build_request(
-                    method.upper(), pinned.url, json=payload,
-                    headers={"Host": pinned.headers["Host"]},
+                    method.upper(),
+                    pinned.url,
+                    json=payload,
+                    headers={**headers, "Host": pinned.headers["Host"]},
                     extensions=pinned.extensions,
                 )
                 resp = await client.send(request)

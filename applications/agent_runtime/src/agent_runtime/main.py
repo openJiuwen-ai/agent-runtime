@@ -28,8 +28,6 @@ from openjiuwen_runtime.service.config import ServiceConfig
 
 from . import errors as app_errors
 from .config import RM_KEY_PREFIX, SERVICE_PREFIX, SM_KEY_PREFIX, AgentRuntimeConfig
-from .visualization_api import register_visualization_api
-from .metrics import MetricsRegistry, request_metrics_middleware
 from .evaluation.collector import (
     FLUSH_INTERVAL_SEC,
     FLUSH_TIMEOUT_SEC,
@@ -39,6 +37,12 @@ from .evaluation.collector import (
 from .evaluation.evaluator import Evaluator
 from .evaluation.llm import LLMClient
 from .evaluation.state import EvaluationState
+from .link_binding_state import (
+    LINK_BINDING_STATE_TABLE_DEF,
+    sync_local_link_binding_state,
+)
+from .link_mtls import LinkMTLSConfig, LinkMTLSError, LinkMTLSMode
+from .metrics import MetricsRegistry, request_metrics_middleware
 from .resource_manager.facade import ResourceManagerFacade
 from .resource_manager.k8s import FakeK8sPodClient, RealK8sPodClient
 from .resource_manager.orchestrator import ResourceOrchestrator
@@ -55,6 +59,7 @@ from .session_manager.handlers import register_handlers
 from .session_manager.orchestrator import SessionOrchestrator
 from .session_manager.state import SessionState
 from .session_manager.sweeper import SessionSweeper
+from .visualization_api import register_visualization_api
 
 logger = logging.getLogger("agent_runtime")
 
@@ -83,7 +88,9 @@ TICK_TIMEOUTS = {
 
 
 def build_resources(
-    settings: ServiceConfig, arc: AgentRuntimeConfig
+    settings: ServiceConfig,
+    arc: AgentRuntimeConfig,
+    link_mtls: LinkMTLSConfig | None = None,
 ) -> tuple[Any, Any, Any]:
     """构造共享物理资源（redis client / db handler / k8s client）。
 
@@ -98,11 +105,16 @@ def build_resources(
 
         redis_client = FakeRedis()
         # 文件型 SQLite（:memory: 在连接池下会丢表；local 模式仅供开发调试）
-        db = SQLiteHandler(os.getenv("AGENT_RUNTIME_SQLITE_PATH", "./agent_runtime_local.db"))
+        db = SQLiteHandler(
+            os.getenv("AGENT_RUNTIME_SQLITE_PATH", "./agent_runtime_local.db")
+        )
         k8s = FakeK8sPodClient(default_namespace=arc.default_namespace)
         return redis_client, db, k8s
 
-    from openjiuwen_runtime.service.bootstrap import build_db_handler, build_redis_client
+    from openjiuwen_runtime.service.bootstrap import (
+        build_db_handler,
+        build_redis_client,
+    )
 
     redis_client = build_redis_client(settings)
     db = build_db_handler(settings)
@@ -112,7 +124,9 @@ def build_resources(
             "（OPENJIUWEN_SERVICE_DB_TYPE=mysql|postgresql）"
         )
     k8s = RealK8sPodClient(
-        kubeconfig=arc.kubeconfig, default_namespace=arc.default_namespace
+        kubeconfig=arc.kubeconfig,
+        default_namespace=arc.default_namespace,
+        link_mtls_config=link_mtls,
     )
     return redis_client, db, k8s
 
@@ -128,6 +142,7 @@ class OrchestratorSystemContext(SystemContext):
         k8s: Any,
         settings: ServiceConfig,
         arc: AgentRuntimeConfig,
+        link_mtls: LinkMTLSConfig | None = None,
         instance_id: str | None = None,
         owns_resources: bool = True,
     ) -> None:
@@ -136,9 +151,12 @@ class OrchestratorSystemContext(SystemContext):
             db=db,
             settings=settings,
             key_prefix=SM_KEY_PREFIX,
-            table_definitions=[SERVICE_CONFIG_TEMPLATE_TABLE_DEF,
-                               SERVICE_CONFIG_CONTAINER_TABLE_DEF,
-                               ROUTING_SCOPE_TABLE_DEF],
+            table_definitions=[
+                SERVICE_CONFIG_TEMPLATE_TABLE_DEF,
+                SERVICE_CONFIG_CONTAINER_TABLE_DEF,
+                ROUTING_SCOPE_TABLE_DEF,
+                LINK_BINDING_STATE_TABLE_DEF,
+            ],
             instance_id=instance_id,
             _owns_db=owns_resources,
             _owns_redis=owns_resources,
@@ -158,6 +176,7 @@ class OrchestratorSystemContext(SystemContext):
             _owns_redis=False,
         )
         self.arc = arc
+        self.link_mtls = link_mtls or LinkMTLSConfig.from_env()
         self.k8s = k8s
         self._jobs: list[Any] = []
         self._bind_modules()
@@ -175,11 +194,14 @@ class OrchestratorSystemContext(SystemContext):
 
         self.sm_facade = SessionManagerFacade(sm_state)
 
-        rm_orchestrator = ResourceOrchestrator(rm_state, self.k8s, telemetry=telemetry)
+        rm_orchestrator = ResourceOrchestrator(
+            rm_state, self.k8s, telemetry=telemetry, link_mtls_config=self.link_mtls
+        )
         self.rm_facade = ResourceManagerFacade(rm_orchestrator)
 
         self.sm_config_store = ConfigStore(
-            self.db, sm_state,
+            self.db,
+            sm_state,
             push_pool_config=self.rm_facade.update_pool_config,
             known_rm_scopes=self.rm_facade.known_scope_ids,
             bump_generation=self.rm_facade.bump_generation,
@@ -193,17 +215,25 @@ class OrchestratorSystemContext(SystemContext):
         )
         self.sm_sweeper = SessionSweeper(sm_state, self.rm_facade)
         self.rm_sweeper = ResourceSweeper(
-            rm_state, self.k8s, self.sm_facade, orchestrator=rm_orchestrator,
+            rm_state,
+            self.k8s,
+            self.sm_facade,
+            orchestrator=rm_orchestrator,
             event_sink=eval_state.bump_event,
         )
         self.eval_state = eval_state
         self.eval_telemetry = telemetry
         self.eval_collector = EvaluationCollector(
-            eval_state=eval_state, sm_state=sm_state, rm_state=rm_state,
+            eval_state=eval_state,
+            sm_state=sm_state,
+            rm_state=rm_state,
         )
         self.evaluator = Evaluator(
-            collector=self.eval_collector, llm=LLMClient.from_arc(self.arc),
-            state=eval_state, arc=self.arc, instance_id=self.instance_id,
+            collector=self.eval_collector,
+            llm=LLMClient.from_arc(self.arc),
+            state=eval_state,
+            arc=self.arc,
+            instance_id=self.instance_id,
         )
         self._telemetry_task: asyncio.Task | None = None
 
@@ -212,43 +242,51 @@ class OrchestratorSystemContext(SystemContext):
         arc = self.arc
         jobs = [
             self.create_single_leader_job(
-                name="sm_sweep", on_tick=self.sm_sweeper.sweep_once,
-                interval_sec=arc.sweep_interval, lock_key="agent_runtime:job:sm_sweep",
+                name="sm_sweep",
+                on_tick=self.sm_sweeper.sweep_once,
+                interval_sec=arc.sweep_interval,
+                lock_key="agent_runtime:job:sm_sweep",
                 tick_timeout_sec=TICK_TIMEOUTS["sm_sweep"],
             ),
             self.rm_sysctx.create_single_leader_job(
-                name="rm_autoscale", on_tick=self.rm_sweeper.autoscale_once,
+                name="rm_autoscale",
+                on_tick=self.rm_sweeper.autoscale_once,
                 interval_sec=arc.autoscale_interval,
                 lock_key="agent_runtime:job:rm_autoscale",
                 tick_timeout_sec=TICK_TIMEOUTS["rm_autoscale"],
             ),
             self.rm_sysctx.create_single_leader_job(
-                name="rm_reclaim", on_tick=self.rm_sweeper.reclaim_once,
+                name="rm_reclaim",
+                on_tick=self.rm_sweeper.reclaim_once,
                 interval_sec=arc.reclaim_interval,
                 lock_key="agent_runtime:job:rm_reclaim",
                 tick_timeout_sec=TICK_TIMEOUTS["rm_reclaim"],
             ),
             self.rm_sysctx.create_single_leader_job(
-                name="rm_watch", on_tick=self.rm_sweeper.watch_once,
+                name="rm_watch",
+                on_tick=self.rm_sweeper.watch_once,
                 interval_sec=arc.watch_interval,
                 lock_key="agent_runtime:job:rm_watch",
                 tick_timeout_sec=TICK_TIMEOUTS["rm_watch"],
             ),
             self.rm_sysctx.create_single_leader_job(
-                name="rm_reconcile", on_tick=self.rm_sweeper.reconcile_once,
+                name="rm_reconcile",
+                on_tick=self.rm_sweeper.reconcile_once,
                 interval_sec=arc.reconcile_interval,
                 lock_key="agent_runtime:job:rm_reconcile",
                 tick_timeout_sec=TICK_TIMEOUTS["rm_reconcile"],
             ),
             # 系统自评估(sys_eval 全局单副本产报告,任意副本可读):
             self.create_single_leader_job(
-                name="sys_sample", on_tick=self.eval_collector.sample_once,
+                name="sys_sample",
+                on_tick=self.eval_collector.sample_once,
                 interval_sec=max(arc.eval_sample_interval, 5),
                 lock_key="agent_runtime:job:sys_sample",
                 tick_timeout_sec=TICK_TIMEOUTS["sys_sample"],
             ),
             self.create_single_leader_job(
-                name="sys_eval", on_tick=self.evaluator.evaluate_once,
+                name="sys_eval",
+                on_tick=self.evaluator.evaluate_once,
                 interval_sec=max(arc.eval_interval, 30),
                 lock_key="agent_runtime:job:sys_eval",
                 tick_timeout_sec=TICK_TIMEOUTS["sys_eval"],
@@ -260,24 +298,29 @@ class OrchestratorSystemContext(SystemContext):
 
     async def start(self) -> None:
         await super().start()
+        await sync_local_link_binding_state(self.db, self.link_mtls)
         await self.rm_sysctx.start()
         # 启动即重建路由快照（消除首次 route 的冷启动窗口；失败降级到首次 route 重建）
         try:
             await self.sm_config_store.ensure_snapshot()
         except Exception:  # noqa: BLE001
-            self.logger.exception("routing snapshot rebuild failed at startup "
-                                  "(defer to first route)")
+            self.logger.exception(
+                "routing snapshot rebuild failed at startup (defer to first route)"
+            )
         try:
             await self.k8s.start()
         except Exception:  # noqa: BLE001 - k8s 不可用只影响扩缩容，不阻断启动
-            self.logger.exception("kubernetes client start failed (scale in/out degraded)")
+            self.logger.exception(
+                "kubernetes client start failed (scale in/out degraded)"
+            )
         self._jobs = self._build_jobs()
         interval_by_name = self._job_intervals()
         for job in self._jobs:
             await job.start()
             self.logger.info(
                 "background job registered: name=%s interval_sec=%s tick_timeout_sec=%s",
-                job.name, interval_by_name.get(job.name, "?"),
+                job.name,
+                interval_by_name.get(job.name, "?"),
                 TICK_TIMEOUTS.get(job.name),
             )
         # 计数缓冲 flusher:每副本独立(选主 job 会漏非 leader 副本的缓冲),
@@ -290,20 +333,37 @@ class OrchestratorSystemContext(SystemContext):
             "reclaim=%ss watch=%ss reconcile=%ss "
             "default_session_ttl=%ss eval_sample=%ss eval=%ss eval_llm=%s "
             "kubeconfig=%s",
-            self.arc.mode, self.arc.default_namespace,
-            self.arc.sweep_interval, self.arc.autoscale_interval,
-            self.arc.reclaim_interval, self.arc.watch_interval,
+            self.arc.mode,
+            self.arc.default_namespace,
+            self.arc.sweep_interval,
+            self.arc.autoscale_interval,
+            self.arc.reclaim_interval,
+            self.arc.watch_interval,
             self.arc.reconcile_interval,
             self.arc.default_session_ttl,
-            self.arc.eval_sample_interval, self.arc.eval_interval,
-            "enabled" if (self.arc.eval_llm_base_url and self.arc.eval_llm_model)
+            self.arc.eval_sample_interval,
+            self.arc.eval_interval,
+            "enabled"
+            if (self.arc.eval_llm_base_url and self.arc.eval_llm_model)
             else "disabled",
             "set" if self.arc.kubeconfig else "in-cluster",
         )
         self.logger.info(
             "agent-runtime started: instance=%s mode=%s port=%s",
-            self.instance_id, self.arc.mode,
+            self.instance_id,
+            self.arc.mode,
             getattr(self.settings, "port", "?"),
+        )
+        self.logger.info(
+            "link mTLS: mode=%s mtls_deployment_id=%s mtls_binding_id=%s epoch=%s",
+            self.link_mtls.mode.value,
+            self.link_mtls.identity.mtls_deployment_id
+            if self.link_mtls.identity
+            else "-",
+            self.link_mtls.identity.mtls_binding_id if self.link_mtls.identity else "-",
+            self.link_mtls.identity.mtls_binding_epoch
+            if self.link_mtls.identity
+            else "-",
         )
 
     def _job_intervals(self) -> dict[str, int]:
@@ -350,7 +410,11 @@ class OrchestratorSystemContext(SystemContext):
             lock_key = f"agent_runtime:job:{job.name}"
             token = await self.redis.get(lock_key)
             if token:
-                token = token.decode() if isinstance(token, (bytes, bytearray)) else str(token)
+                token = (
+                    token.decode()
+                    if isinstance(token, (bytes, bytearray))
+                    else str(token)
+                )
                 leader = token.removeprefix(f"{job.name}:").rsplit(":", 1)[0]
                 entry["leader"] = {
                     "instance_id": leader,
@@ -410,6 +474,7 @@ def create_app(
     resources: tuple[Any, Any, Any] | None = None,
     instance_id: str | None = None,
     own_resources: bool = True,
+    link_mtls_config: LinkMTLSConfig | None = None,
 ) -> App:
     """构造唯一 App（/api/session）并注册 5 个对外 handler。
 
@@ -418,19 +483,44 @@ def create_app(
     生产路径不传，行为与原先完全一致。
     """
 
+    link_mtls = link_mtls_config or LinkMTLSConfig.from_env()
+
     def ctx_factory() -> OrchestratorSystemContext:
         if resources is not None:
             redis_client, db, k8s = resources
         else:
-            redis_client, db, k8s = build_resources(settings, arc)
+            redis_client, db, k8s = build_resources(settings, arc, link_mtls)
         return OrchestratorSystemContext(
-            redis_client=redis_client, db=db, k8s=k8s,
-            settings=settings, arc=arc,
+            redis_client=redis_client,
+            db=db,
+            k8s=k8s,
+            settings=settings,
+            arc=arc,
+            link_mtls=link_mtls,
             instance_id=instance_id,
             owns_resources=own_resources,
         )
 
-    app = App(ctx_factory, prefix=SERVICE_PREFIX, enable_ws=False, title="agent-runtime")
+    app = App(
+        ctx_factory, prefix=SERVICE_PREFIX, enable_ws=False, title="agent-runtime"
+    )
+
+    @app.asgi.middleware("http")
+    async def _link_binding_guard(request: Request, call_next):  # noqa: ANN001, ANN202
+        try:
+            link_mtls.authorize_request(request)
+        except LinkMTLSError as exc:
+            logger.warning("link binding rejected: %s", exc)
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "ok": False,
+                    "error_code": "LINK_BINDING_MISMATCH",
+                    "error_message": str(exc),
+                },
+            )
+        return await call_next(request)
+
     # 请求汇总日志 + 指标（touch/cleanup 从此每请求一行；registry 供 /visualization/stats）
     registry = MetricsRegistry()
     app.use(request_metrics_middleware(registry))
@@ -438,6 +528,8 @@ def create_app(
     _register_healthz(app)
     register_visualization_api(app, registry=registry)
     register_handlers(app)
+    if link_mtls.mode is LinkMTLSMode.OBSERVE:
+        logger.info("link mTLS observe preflight complete; data path remains HTTP")
     return app
 
 
@@ -479,7 +571,9 @@ def _collect_runtime_identity() -> dict[str, Any]:
         except OSError:
             ns = ""
     if not ns:
-        ns = (os.getenv("AGENT_RUNTIME_DEFAULT_NAMESPACE") or "default").strip() or "default"
+        ns = (
+            os.getenv("AGENT_RUNTIME_DEFAULT_NAMESPACE") or "default"
+        ).strip() or "default"
     pod = (os.getenv("HOSTNAME") or "").strip()
     return {
         "namespace": ns,

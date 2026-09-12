@@ -58,6 +58,12 @@ def _services(ctx: Any) -> tuple[Any, Any, Any]:
     return sysctx.sm_orchestrator, sysctx.sm_config_store, sysctx.rm_facade
 
 
+def _link_route_metadata(ctx: Any) -> dict[str, str | int]:
+    """兼容直接构造最小 sysctx 的既有单测/嵌入方。"""
+    config = getattr(ctx.sysctx, "link_mtls", None)
+    return config.route_metadata() if config is not None else {}
+
+
 def _error_envelope(env: Envelope, exc: AgentRuntimeError) -> ResponseEnvelope:
     """业务异常 → 错误信封（error_code / error_message / retry_after）。"""
     return ResponseEnvelope(
@@ -123,8 +129,10 @@ async def handle_route(ctx, env: Envelope) -> ResponseEnvelope | dict:
     if not guard.acquired and guard.cached_result is not None:
         logger.info("route idempotent replay: request_id=%s", metadata.request_id)
         cached = guard.cached_result
+        rawdata = dict(cached.rawdata)
+        rawdata.update(_link_route_metadata(ctx))
         return ResponseEnvelope(
-            type=env.type, metadata=env.metadata, rawdata=dict(cached.rawdata),
+            type=env.type, metadata=env.metadata, rawdata=rawdata,
             ok=True, retry_after=None,
         )
     try:
@@ -142,6 +150,7 @@ async def handle_route(ctx, env: Envelope) -> ResponseEnvelope | dict:
         return _infra_fail(env, exc, endpoint="route",
                            duration_ms=(time.monotonic() - t0) * 1000,
                            session=session_id, request_id=metadata.request_id)
+    result.update(_link_route_metadata(ctx))
     response = ResponseEnvelope(
         type=env.type, metadata=env.metadata, rawdata=result, ok=True,
     )

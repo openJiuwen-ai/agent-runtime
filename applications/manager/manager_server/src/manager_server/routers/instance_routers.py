@@ -5,16 +5,21 @@ Gateway / Runtime 存活由 Manager 周期探活 ``*_config_host`` 健康检查�
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 
 from manager_server.core.instance import InstanceService
-from manager_server.infrastructure.db import get_db_handler
+from manager_server.core.instance.link_binding_service import (
+    InstanceLinkBindingService,
+    LinkBindingConflict,
+)
 from manager_server.core.instance.pod_status_cache import (
     get_pod_status_snapshot,
 )
+from manager_server.infrastructure.db import get_db_handler
+from manager_server.routers.deps import AdminUser
 from manager_server.schedulers.heartbeat_scanner import scan_instance_health_once
 from manager_server.schemas.common_schemas import ResponseModel
 from manager_server.schemas.instance_schemas import (
@@ -22,12 +27,17 @@ from manager_server.schemas.instance_schemas import (
     InstanceListQuery,
     InstanceUpdateBody,
 )
+from manager_server.schemas.link_binding_schemas import LinkBindingCreateBody
 
 instance_router = APIRouter()
 
 
 def _svc(handler: DBHandler) -> InstanceService:
     return InstanceService(handler)
+
+
+def _link_svc(handler: DBHandler) -> InstanceLinkBindingService:
+    return InstanceLinkBindingService(handler)
 
 
 def _request_volume_value(bv: dict, key: str, legacy_key: str | None = None) -> int:
@@ -41,9 +51,7 @@ def _normalize_request_volume(bv: dict) -> dict:
     return {
         "gateway_queued": _request_volume_value(bv, "gateway_queued"),
         "gateway_running": _request_volume_value(bv, "gateway_running"),
-        "service_manager_queued": _request_volume_value(
-            bv, "service_manager_queued", "sm_queued"
-        ),
+        "service_manager_queued": _request_volume_value(bv, "service_manager_queued", "sm_queued"),
         "service_manager_routing": _request_volume_value(
             bv, "service_manager_routing", "sm_routing"
         ),
@@ -58,16 +66,12 @@ def _normalize_request_volume(bv: dict) -> dict:
 
 
 def _build_request_volume_summary(bv: dict) -> dict:
-    queued_requests = _request_volume_value(
-        bv, "gateway_queued"
-    ) + _request_volume_value(
+    queued_requests = _request_volume_value(bv, "gateway_queued") + _request_volume_value(
         bv, "service_manager_queued", "sm_queued"
     )
     running_requests = _request_volume_value(
         bv, "service_manager_running", "sm_running"
-    ) or _request_volume_value(
-        bv, "gateway_running"
-    )
+    ) or _request_volume_value(bv, "gateway_running")
     return {
         "queued_requests": queued_requests,
         "running_requests": running_requests,
@@ -126,9 +130,7 @@ async def update_instance(
 
 
 @instance_router.get("/{jiuwenclaw_id}", response_model=ResponseModel)
-async def get_instance(
-    jiuwenclaw_id: str, handler: Annotated[DBHandler, Depends(get_db_handler)]
-):
+async def get_instance(jiuwenclaw_id: str, handler: Annotated[DBHandler, Depends(get_db_handler)]):
     svc = _svc(handler)
     row = await svc.get(jiuwenclaw_id)
     if row is None:
@@ -148,6 +150,63 @@ async def delete_instance(
     if not ok:
         raise HTTPException(status_code=404, detail="instance not found")
     return ResponseModel(code=200, message="success", data={"deleted": True})
+
+
+@instance_router.put("/{jiuwenclaw_id}/link-binding", response_model=ResponseModel)
+async def bind_instance_link(
+    jiuwenclaw_id: str,
+    body: LinkBindingCreateBody,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+    admin: AdminUser,
+):
+    """建立当前有效的 Gateway ↔ Runtime 绑定；完全相同请求幂等。"""
+    _ = admin
+    try:
+        binding = await _link_svc(handler).bind(jiuwenclaw_id, body)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except LinkBindingConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return ResponseModel(code=200, message="success", data=binding.model_dump())
+
+
+@instance_router.get("/{jiuwenclaw_id}/link-binding", response_model=ResponseModel)
+async def get_instance_link_binding(
+    jiuwenclaw_id: str,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+    admin: AdminUser,
+):
+    _ = admin
+    binding = await _link_svc(handler).get(jiuwenclaw_id)
+    if binding is None:
+        raise HTTPException(status_code=404, detail="link binding not found")
+    return ResponseModel(code=200, message="success", data=binding.model_dump())
+
+
+@instance_router.delete("/{jiuwenclaw_id}/link-binding", response_model=ResponseModel)
+async def unbind_instance_link(
+    jiuwenclaw_id: str,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+    admin: AdminUser,
+    updated_by: str = Query("system", min_length=1, max_length=64),
+):
+    _ = admin
+    try:
+        binding, rotation_required = await _link_svc(handler).unbind(
+            jiuwenclaw_id, updated_by=updated_by
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except LinkBindingConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return ResponseModel(
+        code=200,
+        message="success",
+        data={
+            **binding.model_dump(),
+            "rotation_required": rotation_required,
+        },
+    )
 
 
 @instance_router.get("/{jiuwenclaw_id}/pods", response_model=ResponseModel)

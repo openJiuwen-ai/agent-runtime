@@ -273,12 +273,12 @@ async def purge_runtime_instance_data(
     from manager_server.core.instance_resource.runtime_config_sync import (
         sync_runtime_config,
     )
-    from manager_server.infrastructure.config import settings
 
     jid = str(jiuwenclaw_id or "").strip()
     if not jid:
         return {"purged": False}
-    if not settings.agent_runtime_endpoint.strip():
+    from manager_server.core.instance_resource.runtime_config_sync import resolve_runtime_endpoint
+    if not await resolve_runtime_endpoint(handler, jid):
         logger.info(
             "[InstanceDataLifecycle] runtime purge skipped jiuwenclaw_id=%s "
             "(AGENT_RUNTIME_ENDPOINT empty)",

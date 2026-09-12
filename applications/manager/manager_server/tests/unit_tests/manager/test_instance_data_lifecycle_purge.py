@@ -75,6 +75,7 @@ async def test_purge_runtime_pushes_empty_projection():
 @pytest.mark.asyncio
 async def test_purge_runtime_skips_when_endpoint_empty():
     handler = AsyncMock()
+    handler.get = AsyncMock(return_value=None)  # Neither instance-specific nor global endpoint.
     with (
         patch(
             "manager_server.infrastructure.config.settings.agent_runtime_endpoint",

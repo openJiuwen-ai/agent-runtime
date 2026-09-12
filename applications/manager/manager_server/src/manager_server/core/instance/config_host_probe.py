@@ -7,6 +7,8 @@ from typing import Literal
 
 import httpx
 
+from manager_server.security.link_mtls import ManagerLinkMTLSConfig
+
 Side = Literal["gateway", "runtime"]
 
 # Gateway Config Receiver：``GET /api/health``（manager_config_receiver）
@@ -35,20 +37,22 @@ async def probe_config_host(
     base = str(base_url or "").strip().rstrip("/")
     if not base:
         raise ValueError(f"{side}_config_host is empty")
-    if not (base.startswith("http://") or base.startswith("https://")):
-        raise ValueError(
-            f"{side}_config_host must be an http(s) URL, got {base_url!r}"
-        )
+    link_mtls = ManagerLinkMTLSConfig.from_env()
+    base = link_mtls.resolve_endpoint(base, role=side)
+    if not base.startswith(("http://", "https://")):
+        raise ValueError(f"{side}_config_host must be an http(s) URL, got {base_url!r}")
 
     path = _health_path(side)
     url = f"{base}{path}"
     try:
-        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+        async with httpx.AsyncClient(
+            timeout=timeout,
+            trust_env=False,
+            **link_mtls.health_client_kwargs(),
+        ) as client:
             resp = await client.get(url)
-    except Exception as exc:  # noqa: BLE001
-        raise ValueError(
-            f"{side} health check failed url={url}: {exc}"
-        ) from exc
+    except Exception as exc:
+        raise ValueError(f"{side} health check failed url={url}: {exc}") from exc
 
     if resp.status_code >= 400:
         detail = resp.text[:300]
@@ -56,22 +60,19 @@ async def probe_config_host(
             body = resp.json()
             if isinstance(body, dict):
                 detail = str(body.get("detail") or body.get("message") or detail)
-        except Exception:  # noqa: BLE001
+        except ValueError:
             pass
         raise ValueError(
-            f"{side} health check rejected status={resp.status_code} "
-            f"url={url} detail={detail!r}"
+            f"{side} health check rejected status={resp.status_code} url={url} detail={detail!r}"
         )
 
     if side == "runtime":
         try:
             body = resp.json()
-        except Exception:  # noqa: BLE001
+        except ValueError:
             body = None
         if isinstance(body, dict) and body.get("ok") is False:
-            raise ValueError(
-                f"runtime health check not ready url={url} body={body!r}"
-            )
+            raise ValueError(f"runtime health check not ready url={url} body={body!r}")
 
 
 async def check_config_host_alive(
@@ -96,10 +97,6 @@ async def require_config_hosts_reachable(
 ) -> None:
     """对非空的 gateway / runtime host 依次探活；任一失败即抛错。"""
     if gateway_config_host:
-        await probe_config_host(
-            gateway_config_host, side="gateway", timeout=timeout
-        )
+        await probe_config_host(gateway_config_host, side="gateway", timeout=timeout)
     if runtime_config_host:
-        await probe_config_host(
-            runtime_config_host, side="runtime", timeout=timeout
-        )
+        await probe_config_host(runtime_config_host, side="runtime", timeout=timeout)

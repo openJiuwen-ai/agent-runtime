@@ -17,9 +17,11 @@ import random
 import re
 import string
 import time
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import httpx
+from openjiuwen_runtime.foundation.security import link_material_sync
 
 from ..containers import (
     MAIN_ROLE,
@@ -29,6 +31,7 @@ from ..containers import (
     normalize_pod_spec,
 )
 from ..errors import DeployFailed
+from ..link_mtls import LinkMTLSConfig
 from ..mounts import normalize_mounts
 from .models import POD_LABEL_KEY, POD_LABEL_VALUE, PodDeployInfo, PodInfo
 
@@ -264,6 +267,18 @@ class K8sPodClient:
                          type(exc).__name__, exc)
             return False
 
+    async def probe_pod_health(
+        self,
+        *,
+        pod_id: str,
+        namespace: str,
+        pod_ip: str,
+        sse_port: int,
+        health_path: str = "/health",
+    ) -> bool:
+        """带 Pod 身份的探测；旧实现自动回退原 ``probe_health`` 契约。"""
+        return await self.probe_health(pod_ip, sse_port, health_path)
+
 
 # ---------------------------------------------------------------- Real（kubernetes_asyncio）
 
@@ -271,9 +286,15 @@ class K8sPodClient:
 class RealK8sPodClient(K8sPodClient):
     """真集群实现（server 模式）。pod_spec 字段 = Template.deploy_subset()。"""
 
-    def __init__(self, kubeconfig: str | None = None, default_namespace: str = "default"):
+    def __init__(
+        self,
+        kubeconfig: str | None = None,
+        default_namespace: str = "default",
+        link_mtls_config: LinkMTLSConfig | None = None,
+    ):
         self.kubeconfig = kubeconfig
         self.default_namespace = default_namespace
+        self.link_mtls = link_mtls_config or LinkMTLSConfig.from_env()
         self._client: Any = None       # kubernetes_asyncio.client 模块
         self._core: Any = None         # CoreV1Api
         self._api_client: Any = None
@@ -523,6 +544,10 @@ class RealK8sPodClient(K8sPodClient):
                         "unconfined"} if secctx.get("apparmor_unconfined") else {})
         return container, volumes, annotations
 
+    def build_pod_body(self, pod_id: str, spec: dict[str, Any]) -> Any:
+        """Render a Pod with the initialized SDK, without making Kubernetes API calls."""
+        return self._build_pod_body(pod_id, spec)
+
     def _build_pod_body(self, pod_id: str, spec: dict[str, Any]) -> Any:
         c = self._client
         labels = {POD_LABEL_KEY: POD_LABEL_VALUE, "app": pod_id}
@@ -563,6 +588,10 @@ class RealK8sPodClient(K8sPodClient):
             volumes.extend(sc_volumes)
             annotations.update(sc_annotations)
 
+        tls_volumes, tls_helpers, tls_init = self._inject_link_mtls(c, spec, container)
+        volumes.extend(tls_volumes)
+        containers.extend(tls_helpers)
+
         # Pod 级 securityContext.fsGroup(模板级 wire 键 fsGroup;None = 不设,
         # kubelet 不做卷属主修正——NFS 卷属主问题的官方修法)
         pod_security_context = None
@@ -577,12 +606,134 @@ class RealK8sPodClient(K8sPodClient):
                                     or self.default_namespace, labels=labels,
                                     annotations=annotations or None),
             spec=c.V1PodSpec(containers=containers,
+                             **({"init_containers": tls_init} if tls_init else {}),
+                             hostname=(pod_id if self.link_mtls.enforced else None),
+                             subdomain=(self.link_mtls.headless_service if self.link_mtls.enforced else None),
                              restart_policy="Always",
                              volumes=volumes or None,
                              node_name=(spec.get("node_name") or None),
                              security_context=pod_security_context),
         )
 
+    def _inject_link_mtls(self, client, spec, container):
+        """Add credentials only to the canonical main container, preserving its settings."""
+        if not self.link_mtls.enforced:
+            return [], [], []
+        if not self.link_mtls.agentserver_secret:
+            raise DeployFailed("enforce requires an AgentServer certificate Secret")
+        main = spec.get("main_container") or {}
+        security = main.get("security_context") or {}
+        private_copy = security.get("run_as_user") != 0 or spec.get("fs_group") is not None
+        volume_name = "jiuwenswarm-link-mtls"
+        source_name = f"{volume_name}-source" if private_copy else volume_name
+        volumes = [client.V1Volume(
+            name=source_name,
+            secret=client.V1SecretVolumeSource(
+                secret_name=self.link_mtls.agentserver_secret,
+                default_mode=0o444 if private_copy else 0o400,
+            ),
+        )]
+        env = self.link_mtls.agentserver_env()
+        helpers, initializers = [], []
+        if private_copy:
+            reserved = {"link-material-init", "link-material-sync"}
+            names = {item.get("name") for item in [main, *(spec.get("sidecars") or [])]}
+            if names.intersection(reserved):
+                raise DeployFailed("container name is reserved for link material helpers")
+            volumes.append(client.V1Volume(
+                name=volume_name, empty_dir=client.V1EmptyDirVolumeSource(medium="Memory"),
+            ))
+            root = PurePosixPath(self.link_mtls.mount_dir)
+            for name, value in env.items():
+                path = PurePosixPath(value)
+                if path.is_relative_to(root):
+                    env[name] = str(root / "private" / "identity" / path.relative_to(root))
+            helper = self._link_material_helper(client, main, source_name)
+            helpers.append(client.V1Container(name="link-material-sync", **helper))
+            helper = {**helper, "command": [*helper.get("command", []), "--once"]}
+            initializers.append(client.V1Container(name="link-material-init", **helper))
+        container.volume_mounts = [
+            *(container.volume_mounts or []),
+            client.V1VolumeMount(name=volume_name, mount_path=self.link_mtls.mount_dir, read_only=True),
+        ]
+        # Explicit role settings override template values and envFrom; never inject into sidecars.
+        container.env = [item for item in (container.env or []) if item.name not in env]
+        container.env.extend(client.V1EnvVar(name=name, value=value) for name, value in env.items())
+        probe = main.get("readiness_probe") or {}
+        container.readiness_probe = client.V1Probe(
+            tcp_socket=client.V1TCPSocketAction(port=main_sse_port(main)),
+            initial_delay_seconds=int(probe.get("initial_delay") or 5),
+            period_seconds=int(probe.get("period") or 5),
+        )
+        return volumes, helpers, initializers
+
+    @staticmethod
+    def _link_material_helper(client, main, source_name):
+        """Use the main image's UID but not its privileges, credentials or business mounts."""
+        security = main.get("security_context") or {}
+        uid = {}
+        for name in ("run_as_user", "run_as_group"):
+            if security.get(name) is not None:
+                uid[name] = int(security.get(name))
+        script = Path(link_material_sync.__file__).read_text(encoding="utf-8")
+        return {
+            "image": main.get("image") or "",
+            "image_pull_policy": main.get("image_pull_policy") or "IfNotPresent",
+            "command": ["python", "-c", script],
+            "security_context": client.V1SecurityContext(
+                **uid, allow_privilege_escalation=False,
+                capabilities=client.V1Capabilities(drop=["ALL"]),
+            ),
+            "resources": client.V1ResourceRequirements(
+                requests={"cpu": "5m", "memory": "16Mi"},
+                limits={"cpu": "100m", "memory": "64Mi"},
+            ),
+            "volume_mounts": [
+                client.V1VolumeMount(name=source_name, mount_path="/run/link-source", read_only=True),
+                client.V1VolumeMount(name="jiuwenswarm-link-mtls", mount_path="/run/link-owned"),
+            ],
+        }
+
+    async def probe_pod_health(
+        self,
+        *,
+        pod_id: str,
+        namespace: str,
+        pod_ip: str,
+        sse_port: int,
+        health_path: str = "/health",
+    ) -> bool:
+        url = self.link_mtls.agentserver_url(
+            pod_id=pod_id,
+            namespace=namespace,
+            port=sse_port,
+            path=health_path or "/health",
+            pod_ip=pod_ip,
+        )
+        try:
+            async with httpx.AsyncClient(
+                timeout=3.0,
+                trust_env=False,
+                **self.link_mtls.client_kwargs(role="agentserver"),
+            ) as client:
+                response = await client.get(
+                    url, headers=self.link_mtls.binding_headers()
+                )
+                if response.status_code != 200:
+                    logger.debug(
+                        "health probe non-200: url=%s status=%s",
+                        url,
+                        response.status_code,
+                    )
+                return response.status_code == 200
+        except Exception as exc:  # noqa: BLE001 - 探测失败即不健康
+            logger.debug(
+                "health probe error: url=%s error=%s: %s",
+                url,
+                type(exc).__name__,
+                exc,
+            )
+            return False
 
     async def _wait_ready(self, pod_id: str, namespace: str,
                           timeout: float, poll: float) -> PodDeployInfo:
