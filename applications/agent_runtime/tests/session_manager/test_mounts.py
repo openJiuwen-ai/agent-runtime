@@ -173,27 +173,29 @@ def test_normalize_mounts_tolerant(kind, value):
 
 
 def test_agent_mounts_fingerprint_stability():
-    """承重:无挂载/空列表 → None → 指纹与旧字段集逐字节相等;顺序重排同指纹。"""
-    legacy = Template(template_id="t", agent_image="i:1")
-    empty = Template(template_id="t", agent_image="i:1",
-                     agent_host_path_mounts=[], agent_configmap_mounts=[],
-                     agent_pvc_mounts=[], agent_nfs_mounts=[])
-    assert empty == legacy and empty.deploy_ver() == legacy.deploy_ver()
+    """承重:无挂载/空列表 → 同指纹;顺序重排同指纹;变更 → A 类。"""
+    base = {"name": "agent", "image": "i:1"}
+    empty = Template(template_id="t", main_container={
+        **base, "host_path_mounts": [], "configmap_mounts": [],
+        "pvc_mounts": []})
+    assert (empty.deploy_ver()
+            == Template(template_id="t", main_container=dict(base)).deploy_ver())
 
-    reordered = Template(
-        template_id="t", agent_image="i:1",
-        agent_pvc_mounts=[{"claim_name": "b", "mount_path": "/b"},
-                          {"claim_name": "a", "mount_path": "/a"}],
-        agent_configmap_mounts=[{"config_map_name": "cm", "mount_path": "/cfg"}])
-    ordered = Template(
-        template_id="t", agent_image="i:1",
-        agent_pvc_mounts=[{"claim_name": "a", "mount_path": "/a"},
-                          {"claim_name": "b", "mount_path": "/b"}],
-        agent_configmap_mounts=[{"config_map_name": "cm", "mount_path": "/cfg",
-                                 "read_only": True, "sub_path": None, "items": None}])
+    reordered = Template(template_id="t", main_container={
+        **base,
+        "pvc_mounts": [{"claim_name": "b", "mount_path": "/b"},
+                       {"claim_name": "a", "mount_path": "/a"}],
+        "configmap_mounts": [{"config_map_name": "cm", "mount_path": "/cfg"}]})
+    ordered = Template(template_id="t", main_container={
+        **base,
+        "pvc_mounts": [{"claim_name": "a", "mount_path": "/a"},
+                       {"claim_name": "b", "mount_path": "/b"}],
+        "configmap_mounts": [{"config_map_name": "cm", "mount_path": "/cfg",
+                              "read_only": True, "sub_path": None,
+                              "items": None}]})
     assert reordered.deploy_ver() == ordered.deploy_ver()
     # 挂载变更 → A 类(指纹变)
-    changed = Template(template_id="t", agent_image="i:1",
-                       agent_configmap_mounts=[{"config_map_name": "cm2",
-                                                "mount_path": "/cfg"}])
+    changed = Template(template_id="t", main_container={
+        **base, "configmap_mounts": [{"config_map_name": "cm2",
+                                      "mount_path": "/cfg"}]})
     assert changed.deploy_ver() != ordered.deploy_ver()

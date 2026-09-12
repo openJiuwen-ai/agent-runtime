@@ -393,15 +393,26 @@ def test_has_wildcard_scope():
 # -------------------------------------------------------------- Template/快照 roundtrip
 
 def test_template_json_roundtrip():
-    t = _tpl("tpl-1", agent_image="img:1", min_idle_pods=2, nfs_server=None,
-             data={"k": "v"})
+    t = _tpl("tpl-1", main_container={"name": "agent", "image": "img:1",
+                                      "env": {"A": "1"}},
+             min_idle_pods=2, data={"k": "v"})
     restored = template_from_json(template_to_json(t))
     assert restored == t
     # int/bool 矫正 + 未知键忽略
-    mixed = {**template_to_json(t), "container_port": "9090",
+    mixed = {**template_to_json(t), "ready_timeout": "90",
              "enabled": 0, "unknown_key": "x"}
     restored2 = template_from_json(mixed)
-    assert restored2.container_port == 9090 and restored2.enabled is False
+    assert restored2.ready_timeout == 90 and restored2.enabled is False
+
+
+def test_template_from_json_rejects_legacy_flat_snapshot():
+    """统一规范形前的扁平快照(有 agent_image 无 main_container)→ 判坏重建。"""
+    import pytest
+    legacy = template_to_json(_tpl("tpl-1"))
+    legacy.pop("main_container")
+    legacy["agent_image"] = "img:1"
+    with pytest.raises(ValueError, match="legacy"):
+        template_from_json(legacy)
 
 
 def test_snapshot_json_roundtrip_preserves_order_and_expr():

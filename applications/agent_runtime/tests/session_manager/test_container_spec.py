@@ -7,24 +7,22 @@ sidecars.py 既有规范形输出(逐字节);fused 挂载 == mounts.py 规范形
 
 from __future__ import annotations
 
-import json
 
 import pytest
 
+from agent_runtime.containers import validate_pod_containers
 from agent_runtime.errors import InvalidParams
 from agent_runtime.session_manager.container_spec import (
     MAIN_ROLE,
     SIDECAR_ROLE,
+    build_canonical,
     canonical_volumes,
     container_row_from_spec,
     container_spec_from_row,
     fuse_mounts,
-    main_template_kwargs,
     parse_container_spec,
-    sidecar_wire_input,
 )
 from agent_runtime.session_manager.models import Template
-from agent_runtime.sidecars import validate_sidecars
 
 # K8s wire 全量主容器样例(与 wire 契约文档同形态)
 MAIN_FULL = {
@@ -32,6 +30,8 @@ MAIN_FULL = {
     "name": "agent",
     "image": "agentserver:2.1",
     "imagePullPolicy": "IfNotPresent",
+    "command": ["/bin/agent", "--foreground"],
+    "args": ["--port", "8086"],
     "ports": [{"name": "sse", "containerPort": 8086},
               {"name": "http", "containerPort": 9000}],
     "env": [{"name": "AGENT_HTTP_PORT", "value": "8086"}],
@@ -50,25 +50,6 @@ MAIN_VOLUMES = {
     "nfs": {"name": "nfs", "nfs": {"server": "10.0.0.1", "path": "/export"}},
     "data": {"name": "data",
              "persistentVolumeClaim": {"claimName": "agent-data"}},
-}
-
-# 与 MAIN_FULL 同值的 legacy 内联 sidecar(24 键形态,对照基准)
-LEGACY_BOX = {
-    "name": "jiuwenbox",
-    "image": "jiuwenbox-amd64:0.0.1",
-    "port": 8321,
-    "env": {"JIUWENBOX_LISTEN": "tcp://0.0.0.0:8321"},
-    "cpu_request": "100m",
-    "memory_limit": "1Gi",
-    "privileged": True,
-    "capabilities_add": ["SYS_ADMIN", "NET_ADMIN"],
-    "seccomp_unconfined": True,
-    "apparmor_unconfined": True,
-    "host_path_mounts": [
-        {"host_path": "/sys/fs/cgroup", "mount_path": "/sys/fs/cgroup"}],
-    "readiness_probe_type": "tcp",
-    "readiness_initial_delay": 10,
-    "readiness_period": 5,
 }
 
 K8S_BOX = {
@@ -95,108 +76,58 @@ BOX_VOLUMES = {
 }
 
 
-def _validate_sidecars(items, **kw):
-    kw.setdefault("container_name", "agent")
-    kw.setdefault("sse_port", 8086)
-    kw.setdefault("container_port", 8086)
-    return validate_sidecars(items, **kw)
-
-
 # -------------------------------------------------------------- 主容器投影(承重)
 
-def test_main_container_all_fields_roundtrip():
-    spec = parse_container_spec(MAIN_FULL, "containers[0]", role=MAIN_ROLE)
-    volumes = canonical_volumes(list(MAIN_VOLUMES.values()), "volumes")
-    kwargs = main_template_kwargs(spec, volumes, "containers[0]")
-    assert kwargs == {
-        "container_name": "agent",
-        "agent_image": "agentserver:2.1",
-        "image_pull_policy": "IfNotPresent",
-        "sse_port": 8086,
-        "container_port": 9000,
-        "agent_env": {"AGENT_HTTP_PORT": "8086"},
-        "agent_env_from": [
-            {"prefix": "DB_",
-             "secret_ref": {"name": "agent-secret", "optional": False}},
-            {"prefix": None,
-             "config_map_ref": {"name": "agent-cm", "optional": True}}],
-        "agent_cpu_request": "500m",
-        "agent_memory_request": "1Gi",
-        "agent_cpu_limit": "2",
-        "agent_memory_limit": "4Gi",
-        "run_as_user": 1000,
-        "run_as_group": 1000,
-        "command": None,
-        "args": None,
-        "health_path": "/api/v1/health",
-        "readiness_initial_delay": 6,
-        "readiness_period": 7,
-        "agent_host_path_mounts": None,
-        "agent_configmap_mounts": None,
-        "agent_pvc_mounts": [
-            {"claim_name": "agent-data", "mount_path": "/var/lib/agent",
-             "read_only": False}],
-        "agent_nfs_mounts": [
-            {"server": "10.0.0.1", "path": "/export",
-             "mount_path": "/mnt/nfs", "read_only": False}],
-    }
+def test_main_container_defaults_equal_omitted():
+    """「显式给默认值」与「省略键」→ 同 canonical → 同 deploy_ver(指纹承重)。"""
+    minimal = {"name": "agent", "image": "img:1"}
+    explicit = build_canonical(parse_container_spec(
+        {"container_id": "c", "image": "img:1"}, "c", role=MAIN_ROLE),
+        {}, "c", role=MAIN_ROLE)
+    omitted = build_canonical(parse_container_spec(
+        {"container_id": "c", "image": "img:1", "name": "agent",
+         "imagePullPolicy": "IfNotPresent"}, "c", role=MAIN_ROLE),
+        {}, "c", role=MAIN_ROLE)
+    assert explicit == omitted
+    assert (Template(template_id="t", main_container=explicit).deploy_ver()
+            == Template(template_id="t",
+                        main_container=dict(minimal)).deploy_ver())
 
 
-def test_main_container_defaults_match_template_defaults():
-    """缺省落定与 Template 默认逐项相等 → 同值必同 deploy_ver(指纹承重)。"""
-    spec = parse_container_spec(
-        {"container_id": "c", "image": "img:1"}, "c", role=MAIN_ROLE)
-    kwargs = main_template_kwargs(spec, {}, "c")
-    defaults = Template(template_id="t")
-    for key, value in kwargs.items():
-        if key == "agent_image":
-            continue  # 新契约必填(Template 缺省 "" 不适用)
-        assert value == getattr(defaults, key), key
-    assert (Template(template_id="t", **kwargs).deploy_ver()
-            == Template(template_id="t", agent_image="img:1").deploy_ver())
-
-
-def test_main_http_port_defaults_to_sse():
+def test_main_ports_and_http_defaults():
     spec = parse_container_spec(
         {"container_id": "c", "image": "i:1",
          "ports": [{"name": "sse", "containerPort": 8086}]},
         "c", role=MAIN_ROLE)
-    assert main_template_kwargs(spec, {}, "c")["container_port"] == 8086
+    cont = build_canonical(spec, {}, "c", role=MAIN_ROLE)
+    assert [p["name"] for p in cont["ports"]] == ["sse"]
+    assert cont["ports"][0]["container_port"] == 8086
     # sse 端口本身缺省 8080
-    spec2 = parse_container_spec({"container_id": "c", "image": "i:1"},
-                                 "c", role=MAIN_ROLE)
-    kwargs2 = main_template_kwargs(spec2, {}, "c")
-    assert kwargs2["sse_port"] == 8080 and kwargs2["container_port"] == 8080
+    cont2 = build_canonical(parse_container_spec(
+        {"container_id": "c", "image": "i:1"}, "c", role=MAIN_ROLE),
+        {}, "c", role=MAIN_ROLE)
+    assert cont2["ports"] == [{"name": "sse", "container_port": 8080}]
+    # http 端口号 == sse → canonical 丢弃(RM 渲染同名端口去重的约定)
+    cont3 = build_canonical(parse_container_spec(
+        {"container_id": "c", "image": "i:1",
+         "ports": [{"name": "sse", "containerPort": 8086},
+                   {"name": "http", "containerPort": 8086}]},
+        "c", role=MAIN_ROLE), {}, "c", role=MAIN_ROLE)
+    assert cont3["ports"] == [{"name": "sse", "container_port": 8086}]
+    assert cont3 == cont
 
 
 # -------------------------------------------------------------- sidecar 投影(承重)
 
-def test_sidecar_projection_byte_identical_to_canonical():
-    """K8s wire sidecar → 投影 == legacy 24 键输入的规范形,逐字节相等。"""
-    expected = _validate_sidecars([LEGACY_BOX])[0]
-    spec = parse_container_spec(K8S_BOX, "containers[1]", role=SIDECAR_ROLE)
-    volumes = canonical_volumes(list(BOX_VOLUMES.values()), "volumes")
-    projected = _validate_sidecars(
-        [sidecar_wire_input(spec, volumes, "containers[1]")])[0]
-    assert projected == expected
-    assert (json.dumps(projected, sort_keys=True, ensure_ascii=False)
-            == json.dumps(expected, sort_keys=True, ensure_ascii=False))
-
-
 def test_sidecar_empty_collections_survive_projection():
-    """空集合语义:env 恒 dict、mounts/caps 恒 list(空也进指纹)。"""
-    spec = parse_container_spec(
+    """空集合语义:env 恒 dict、mounts/caps 恒 list(空也进指纹,恒为键)。"""
+    cont = build_canonical(parse_container_spec(
         {"container_id": "c", "name": "box", "image": "x:1"},
-        "c", role=SIDECAR_ROLE)
-    wire_input = sidecar_wire_input(spec, {}, "c")
-    assert wire_input["env"] == {}
-    assert wire_input["host_path_mounts"] == []
-    assert wire_input["capabilities_add"] == []
-    canonical = _validate_sidecars([wire_input])[0]
-    assert canonical["env"] == {}
-    assert canonical["host_path_mounts"] == []
-    assert canonical["capabilities_add"] == []
-    assert "env_from" not in canonical
+        "c", role=SIDECAR_ROLE), {}, "c", role=SIDECAR_ROLE)
+    assert cont["env"] == {}
+    assert cont["host_path_mounts"] == []
+    assert cont["security_context"]["capabilities_add"] == []
+    assert cont["env_from"] is None  # 全键携带(条件键已废除)
 
 
 def test_sidecar_env_from_projected():
@@ -204,17 +135,31 @@ def test_sidecar_env_from_projected():
         {"container_id": "c", "name": "box", "image": "x:1",
          "envFrom": [{"secretRef": {"name": "s"}}]},
         "c", role=SIDECAR_ROLE)
-    canonical = _validate_sidecars([sidecar_wire_input(spec, {}, "c")])[0]
-    assert canonical["env_from"] == [
+    cont = build_canonical(spec, {}, "c", role=SIDECAR_ROLE)
+    assert cont["env_from"] == [
         {"prefix": None, "secret_ref": {"name": "s", "optional": False}}]
+
+
+def test_validate_pod_containers_accepts_built_canonical():
+    """build_canonical 产物可直接过 validate_pod_containers(同直径收敛)。"""
+    main = build_canonical(parse_container_spec(
+        MAIN_FULL, "containers[0]", role=MAIN_ROLE),
+        canonical_volumes(list(MAIN_VOLUMES.values()), "volumes"),
+        "containers[0]", role=MAIN_ROLE)
+    box = build_canonical(parse_container_spec(
+        K8S_BOX, "containers[1]", role=SIDECAR_ROLE),
+        canonical_volumes(list(BOX_VOLUMES.values()), "volumes"),
+        "containers[1]", role=SIDECAR_ROLE)
+    out_main, out_sidecars = validate_pod_containers(main, [box], "t")
+    assert out_main == main and out_sidecars == [box]
 
 
 # -------------------------------------------------------------- wire 拒绝矩阵
 
 def test_unknown_container_keys_rejected():
-    with pytest.raises(InvalidParams, match=r"unknown keys.*stdin"):
+    with pytest.raises(InvalidParams, match=r"unknown keys.*workingDir"):
         parse_container_spec(
-            {"container_id": "c", "image": "i:1", "stdin": True},
+            {"container_id": "c", "image": "i:1", "workingDir": "/w"},
             "containers[0]", role=MAIN_ROLE)
 
 
@@ -284,18 +229,15 @@ def test_resource_rules_rejected(resources, match):
             "c", role=MAIN_ROLE)
 
 
-def test_main_security_context_role_restriction():
-    """主容器 securityContext 只许 runAs 两键(越角色 400,防静默丢特权)。"""
-    with pytest.raises(InvalidParams, match=r"unknown keys.*privileged"):
-        parse_container_spec(
-            {"container_id": "c", "image": "i:1",
-             "securityContext": {"privileged": True}},
-            "c", role=MAIN_ROLE)
-    with pytest.raises(InvalidParams, match=r"seccompProfile"):
-        parse_container_spec(
-            {"container_id": "c", "image": "i:1",
-             "securityContext": {"seccompProfile": {"type": "Unconfined"}}},
-            "c", role=MAIN_ROLE)
+def test_main_security_context_full_parity():
+    """决策 B:主容器 securityContext 与 sidecar 同一白名单(特权面放开)。"""
+    spec = parse_container_spec(
+        {"container_id": "c", "image": "i:1",
+         "securityContext": {"privileged": True,
+                             "seccompProfile": {"type": "Unconfined"}}},
+        "c", role=MAIN_ROLE)
+    assert spec["security_context"]["privileged"] is True
+    assert spec["security_context"]["seccomp_unconfined"] is True
 
 
 @pytest.mark.parametrize("profile,match", [
@@ -344,17 +286,15 @@ def test_main_probe_rules_rejected(probe, match):
             "c", role=MAIN_ROLE)
 
 
-def test_sidecar_probe_defaults_match_sidecar_canonical():
-    """sidecar 探针缺省(period=10/timeout=3)与 _canonical_sidecar 默认逐项相等。"""
-    spec = parse_container_spec(
+def test_sidecar_probe_defaults_match_canonical():
+    """sidecar 探针缺省(probe_type None/period=10/timeout=3)。"""
+    cont = build_canonical(parse_container_spec(
         {"container_id": "c", "name": "box", "image": "i:1",
          "ports": [{"containerPort": 8321}]},
-        "c", role=SIDECAR_ROLE)
-    canonical = _validate_sidecars([sidecar_wire_input(spec, {}, "c")])[0]
-    assert canonical["readiness_probe_type"] is None
-    assert canonical["readiness_initial_delay"] == 5
-    assert canonical["readiness_period"] == 10
-    assert canonical["readiness_timeout_seconds"] == 3
+        "c", role=SIDECAR_ROLE), {}, "c", role=SIDECAR_ROLE)
+    assert cont["readiness_probe"] == {"probe_type": None, "path": "/health",
+                                       "initial_delay": 5, "period": 10,
+                                       "timeout": 3}
 
 
 # -------------------------------------------------------------- 卷 join
@@ -380,22 +320,22 @@ def test_volume_join_fused_mounts_canonical():
              {"name": "nfs", "mountPath": "/mnt/nfs"},
              {"name": "data", "mountPath": "/var/lib/agent"},
          ]}, "c", role=MAIN_ROLE)
-    kwargs = main_template_kwargs(spec, volumes, "c")
-    assert kwargs["agent_host_path_mounts"] == [
+    cont = build_canonical(spec, volumes, "c", role=MAIN_ROLE)
+    assert cont["host_path_mounts"] == [
         {"host_path": "/mnt/host", "mount_path": "/zz", "read_only": False,
          "host_path_type": "DirectoryOrCreate"}]
     # configMap:read_only 缺省 true、items 按 key 排序
-    assert kwargs["agent_configmap_mounts"] == [
+    assert cont["configmap_mounts"] == [
         {"config_map_name": "agent-cm", "mount_path": "/etc/agent",
          "sub_path": None,
          "items": [{"key": "a", "path": "a.yaml"}, {"key": "b", "path": "b.yaml"}],
          "read_only": True}]
-    assert kwargs["agent_pvc_mounts"] == [
+    assert cont["pvc_mounts"] == [
         {"claim_name": "agent-data", "mount_path": "/var/lib/agent",
          "read_only": False}]
-    assert kwargs["agent_nfs_mounts"] == [
-        {"server": "10.0.0.1", "path": "/export",
-         "mount_path": "/mnt/nfs", "read_only": False}]
+    assert cont["nfs_mounts"] == [{"server": "10.0.0.1", "path": "/export",
+                                   "mount_path": "/mnt/nfs",
+                                   "read_only": False}]
 
 
 def test_volume_join_read_only_overrides():
@@ -408,9 +348,9 @@ def test_volume_join_read_only_overrides():
              {"name": "cfg", "mountPath": "/c", "readOnly": False},
              {"name": "hp", "mountPath": "/h2", "readOnly": True}]},
         "c", role=MAIN_ROLE)
-    kwargs = main_template_kwargs(spec, volumes, "c")
-    assert kwargs["agent_configmap_mounts"][0]["read_only"] is False
-    assert kwargs["agent_host_path_mounts"][0]["read_only"] is True
+    cont = build_canonical(spec, volumes, "c", role=MAIN_ROLE)
+    assert cont["configmap_mounts"][0]["read_only"] is False
+    assert cont["host_path_mounts"][0]["read_only"] is True
 
 
 @pytest.mark.parametrize("volumes,mounts,where_role,match", [
@@ -432,50 +372,36 @@ def test_volume_join_rules_rejected(volumes, mounts, where_role, match):
         fuse_mounts(spec, canonical_volumes(volumes, "v"), "c", where_role)
 
 
+
 def test_volume_join_nfs_same_as_pvc():
-    """NFS 与 PVC 同构:主/sidecar 均可按名挂载,条数不限,readOnly 透传(K8s 语义)。"""
+    """NFS 与 PVC 同构(上游 bef82fc4 放宽):主/sidecar 均可挂、条数不限、
+    readOnly 透传——K8s 语义,不再自设窄约束。"""
     volumes = canonical_volumes([
         {"name": "n1", "nfs": {"server": "10.0.0.1", "path": "/export"}},
         {"name": "n2", "nfs": {"server": "10.0.0.2"}},
     ], "volumes")
-    main_spec = parse_container_spec(
+    spec = parse_container_spec(
         {"container_id": "c", "name": "agent", "image": "i:1",
          "ports": [{"name": "sse", "containerPort": 8086}],
-         "volumeMounts": [{"name": "n1", "mountPath": "/mnt/n1", "readOnly": True},
+         "volumeMounts": [{"name": "n1", "mountPath": "/mnt/n1",
+                           "readOnly": True},
                           {"name": "n2", "mountPath": "/mnt/n2"}]},
         "c", role=MAIN_ROLE)
-    fused = fuse_mounts(main_spec, volumes, "c", MAIN_ROLE)
-    assert fused["nfs_mounts"] == [  # raw 条目保持 wire 顺序
+    cont = build_canonical(spec, volumes, "c", role=MAIN_ROLE)
+    assert cont["nfs_mounts"] == [   # 规范形按 mount_path 升序
         {"server": "10.0.0.1", "path": "/export", "mount_path": "/mnt/n1",
          "read_only": True},
         {"server": "10.0.0.2", "path": None, "mount_path": "/mnt/n2",
          "read_only": False}]
-    kwargs = main_template_kwargs(main_spec, volumes, "c")
-    assert kwargs["agent_nfs_mounts"] == [  # 规范形按 mount_path 升序
-        {"server": "10.0.0.1", "path": "/export", "mount_path": "/mnt/n1",
-         "read_only": True},
-        {"server": "10.0.0.2", "path": None, "mount_path": "/mnt/n2",
-         "read_only": False}]
-
-    side_spec = parse_container_spec(
-        {"container_id": "c2", "name": "box", "image": "i:2",
-         "volumeMounts": [{"name": "n1", "mountPath": "/box/data"}]},
+    # sidecar 挂 NFS 合法
+    sc_spec = parse_container_spec(
+        {"container_id": "c2", "name": "box", "image": "i:1",
+         "volumeMounts": [{"name": "n1", "mountPath": "/box/n1"}]},
         "c2", role=SIDECAR_ROLE)
-    wire_input = sidecar_wire_input(side_spec, volumes, "c2")
-    canonical = _validate_sidecars([wire_input])[0]
-    assert canonical["nfs_mounts"] == [
-        {"server": "10.0.0.1", "path": "/export",
-         "mount_path": "/box/data", "read_only": False}]
-
-
-def test_sidecar_without_nfs_mounts_key_is_fingerprint_stable():
-    """未挂 NFS 的 sidecar 规范形不含 nfs_mounts 键(条件键,存量指纹零扰动)。"""
-    spec = parse_container_spec(K8S_BOX, "c-box-1", role=SIDECAR_ROLE)
-    canonical = _validate_sidecars(
-        [sidecar_wire_input(spec, canonical_volumes(list(BOX_VOLUMES.values()),
-                                                    "v"), "c-box-1")])[0]
-    assert "nfs_mounts" not in canonical
-
+    sc = build_canonical(sc_spec, volumes, "c2", role=SIDECAR_ROLE)
+    assert sc["nfs_mounts"] == [
+        {"server": "10.0.0.1", "path": "/export", "mount_path": "/box/n1",
+         "read_only": False}]
 
 @pytest.mark.parametrize("volumes,match", [
     ([{"hostPath": {"path": "/h"}}], r"DNS-1123"),   # 缺 name
@@ -502,9 +428,9 @@ def test_container_row_roundtrip():
     spec = parse_container_spec(MAIN_FULL, "c", role=MAIN_ROLE)
     row = container_row_from_spec(spec)
     assert set(row) == {
-        "container_id", "name", "image", "image_pull_policy", "ports", "env",
-        "env_from", "resources", "volume_mounts", "security_context",
-        "command", "args", "readiness_probe"}
+        "container_id", "name", "image", "image_pull_policy", "command",
+        "args", "ports", "env", "env_from", "resources", "volume_mounts",
+        "security_context", "readiness_probe"}
     from types import SimpleNamespace
     restored = container_spec_from_row(SimpleNamespace(**row))
     assert restored == spec
@@ -523,3 +449,87 @@ def test_container_spec_from_row_none_and_corrupt():
     assert spec["ports"] is None and spec["env"] == {}
     assert spec["volume_mounts"] == []
     assert spec["readiness_probe"]["period"] == 10   # sidecar 缺省口径
+
+
+# -------------------------------------------------------------- build_canonical(C2 内核)
+
+def test_build_canonical_main_golden():
+    """wire 主容器 + volumes → canonical 黄金 dict(13 键,指纹/传输/渲染同形)。"""
+    from agent_runtime.session_manager.container_spec import build_canonical
+    spec = parse_container_spec(MAIN_FULL, "containers[0]", role=MAIN_ROLE)
+    volumes = canonical_volumes(list(MAIN_VOLUMES.values()), "volumes")
+    cont = build_canonical(spec, volumes, "containers[0]", role=MAIN_ROLE)
+    assert cont == {
+        "name": "agent",
+        "image": "agentserver:2.1",
+        "image_pull_policy": "IfNotPresent",
+        "command": ["/bin/agent", "--foreground"],
+        "args": ["--port", "8086"],
+        "ports": [{"name": "sse", "container_port": 8086},
+                  {"name": "http", "container_port": 9000}],
+        "env": {"AGENT_HTTP_PORT": "8086"},
+        "env_from": [
+            {"prefix": "DB_",
+             "secret_ref": {"name": "agent-secret", "optional": False}},
+            {"prefix": None,
+             "config_map_ref": {"name": "agent-cm", "optional": True}}],
+        "resources": {"cpu_request": "500m", "memory_request": "1Gi",
+                      "cpu_limit": "2", "memory_limit": "4Gi"},
+        "host_path_mounts": [],
+        "configmap_mounts": [],
+        "pvc_mounts": [{"claim_name": "agent-data",
+                        "mount_path": "/var/lib/agent", "read_only": False}],
+        "nfs_mounts": [{"server": "10.0.0.1", "path": "/export",
+                        "mount_path": "/mnt/nfs", "read_only": False}],
+        "security_context": {"run_as_user": 1000, "run_as_group": 1000,
+                             "privileged": False, "capabilities_add": [],
+                             "capabilities_drop": [],
+                             "seccomp_unconfined": False,
+                             "apparmor_unconfined": False},
+        "readiness_probe": {"probe_type": "http", "path": "/api/v1/health",
+                            "initial_delay": 6, "period": 7, "timeout": None},
+    }
+
+
+def test_build_canonical_defaults_and_idempotence():
+    from agent_runtime.containers import MAIN_PROBE_DEFAULT
+    from agent_runtime.session_manager.container_spec import build_canonical
+    spec = parse_container_spec({"container_id": "c", "image": "x:1"},
+                                "containers[0]", role=MAIN_ROLE)
+    cont = build_canonical(spec, {}, "containers[0]", role=MAIN_ROLE)
+    assert cont["name"] == "agent"
+    assert cont["ports"] == [{"name": "sse", "container_port": 8080}]
+    assert cont["readiness_probe"] == dict(MAIN_PROBE_DEFAULT)
+    assert cont["nfs_mounts"] == [] and cont["env_from"] is None
+    assert cont["command"] is None and cont["args"] is None
+    # 幂等:canonical 再过 build_canonical 的收口层不变
+    from agent_runtime.containers import canonical_container
+    assert canonical_container(cont, "w", role=MAIN_ROLE) == cont
+
+
+def test_build_canonical_sidecar_matches_containers_module():
+    """wire sidecar → canonical == containers.canonical_container 直构(同直径)。"""
+    from agent_runtime.containers import canonical_container
+    from agent_runtime.session_manager.container_spec import build_canonical
+    spec = parse_container_spec(K8S_BOX, "containers[1]", role=SIDECAR_ROLE)
+    volumes = canonical_volumes(list(BOX_VOLUMES.values()), "volumes")
+    cont = build_canonical(spec, volumes, "containers[1]",
+                           role=SIDECAR_ROLE)
+    assert cont == canonical_container({
+        "name": "jiuwenbox",
+        "image": "jiuwenbox-amd64:0.0.1",
+        "ports": [{"name": None, "container_port": 8321}],
+        "env": {"JIUWENBOX_LISTEN": "tcp://0.0.0.0:8321"},
+        "resources": {"cpu_request": "100m", "memory_request": None,
+                      "cpu_limit": None, "memory_limit": "1Gi"},
+        "host_path_mounts": [{"host_path": "/sys/fs/cgroup",
+                              "mount_path": "/sys/fs/cgroup"}],
+        "security_context": {"run_as_user": None, "run_as_group": None,
+                             "privileged": True,
+                             "capabilities_add": ["NET_ADMIN", "SYS_ADMIN"],
+                             "capabilities_drop": [],
+                             "seccomp_unconfined": True,
+                             "apparmor_unconfined": True},
+        "readiness_probe": {"probe_type": "tcp", "path": "/health",
+                            "initial_delay": 10, "period": 5, "timeout": 3},
+    }, "w", role=SIDECAR_ROLE)

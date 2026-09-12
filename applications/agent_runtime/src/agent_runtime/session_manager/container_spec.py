@@ -26,23 +26,32 @@ from openjiuwen_runtime.foundation.db.table_def import (
     TableDefinition,
 )
 
+from ..containers import (
+    CONTAINER_NAME_RE,
+    DEFAULT_IMAGE_PULL_POLICY,
+    canonical_env_from,
+    DEFAULT_MAIN_NAME,
+    DEFAULT_SSE_PORT,
+    MAIN_PROBE_DEFAULT,
+    RESOURCES_DEFAULT,
+    SECCTX_DEFAULT,
+    SIDECAR_PROBE_DEFAULT,
+    MAIN_ROLE,
+    SIDECAR_ROLE,
+    canonical_container,
+)
 from ..errors import InvalidParams
 from ..mounts import (
     canonical_configmap_mounts,
     canonical_host_path_mounts,
     canonical_pvc_mounts,
-    validate_agent_mounts,
+    find_mount_path_conflicts,
 )
-from ..sidecars import (
-    SIDECAR_NAME_RE,
-    canonical_env_from,
-)
+
 
 CONTAINER_TABLE = "service_config_container"
 
 CONTAINER_ID_MAX = 100
-MAIN_ROLE = "main"
-SIDECAR_ROLE = "sidecar"
 
 # 容器表:标量列 + 段落 JSON 列(内容为本模块产出的内部规范形,snake 键)。
 # 新表由框架 init_table 自动建(create_all),无需手工 DDL。
@@ -90,11 +99,10 @@ _PROBE_KEYS = frozenset(
      "timeoutSeconds"})
 _HTTP_GET_KEYS = frozenset({"path", "port"})
 _TCP_SOCKET_KEYS = frozenset({"port"})
-_MAIN_SECCTX_KEYS = frozenset({"runAsUser", "runAsGroup"})
-_SIDECAR_SECCTX_EXTRA = {
-    "privileged", "capabilities", "seccompProfile", "appArmorProfile",
-}
 _SECCTX_PROFILE_TYPES = {"Unconfined": True, "RuntimeDefault": False}
+_SECCTX_WIRE_KEYS = frozenset({
+    "runAsUser", "runAsGroup", "privileged", "capabilities",
+    "seccompProfile", "appArmorProfile"})
 
 # 模板级 volumes:K8s 卷源键 → 内部 kind
 _VOLUME_WIRE_SOURCES = ("hostPath", "configMap", "persistentVolumeClaim", "nfs")
@@ -132,7 +140,7 @@ def _parse_ports(value: Any, where: str, role: str) -> Optional[list[dict]]:
     """
     if value is None:
         if role == MAIN_ROLE:
-            return [{"name": "sse", "container_port": 8080}]
+            return [{"name": "sse", "container_port": DEFAULT_SSE_PORT}]
         return None
     if not isinstance(value, list):
         raise InvalidParams(
@@ -257,10 +265,7 @@ def _parse_env_from(value: Any, where: str) -> Optional[list[dict]]:
 
 def _parse_resources(value: Any, where: str) -> dict[str, Optional[str]]:
     """resources(K8s 嵌套)→ 内部扁平四字段(与 Template/sidecar 同名)。"""
-    out: dict[str, Optional[str]] = {
-        "cpu_request": None, "memory_request": None,
-        "cpu_limit": None, "memory_limit": None,
-    }
+    out: dict[str, Optional[str]] = dict(RESOURCES_DEFAULT)
     if value is None:
         return out
     if not isinstance(value, dict):
@@ -355,29 +360,19 @@ def _parse_str_list(value: Any, where: str, key: str) -> list[str] | None:
     return value or None
 
 
-def _parse_security_context(value: Any, where: str,
-                            role: str) -> dict[str, Any]:
-    """securityContext → 内部八键规范形(主容器仅 runAs 两键合法,越角色 400)。"""
-    out: dict[str, Any] = {
-        "run_as_user": None, "run_as_group": None,
-        "privileged": False, "capabilities_add": [], "capabilities_drop": [],
-        "seccomp_unconfined": False, "apparmor_unconfined": False,
-    }
+def _parse_security_context(value: Any, where: str) -> dict[str, Any]:
+    """securityContext → 内部八键规范形(主/sidecar 同一白名单,决策 B)。"""
+    out: dict[str, Any] = dict(SECCTX_DEFAULT)
     if value is None:
         return out
     if not isinstance(value, dict):
         raise InvalidParams(
             f"{where}.securityContext must be an object, got {value!r}")
-    allowed = _MAIN_SECCTX_KEYS | (
-        _SIDECAR_SECCTX_EXTRA if role == SIDECAR_ROLE else set())
-    unknown = set(value) - allowed
+    unknown = set(value) - _SECCTX_WIRE_KEYS
     if unknown:
-        role_note = ("only runAsUser/runAsGroup are allowed on the main "
-                     "container" if role == MAIN_ROLE else "")
         raise InvalidParams(
             f"{where}.securityContext unknown keys {sorted(unknown)}; "
-            f"allowed: {sorted(allowed)}"
-            + (f" ({role_note})" if role_note else ""))
+            f"allowed: {sorted(_SECCTX_WIRE_KEYS)}")
     for wire_key, out_key in (("runAsUser", "run_as_user"),
                               ("runAsGroup", "run_as_group")):
         if value.get(wire_key) is not None:
@@ -437,11 +432,9 @@ def _parse_readiness_probe(value: Any, where: str, role: str,
     探针 port 若给必须等于容器端口(主容器 = sse 端口)。
     """
     if role == MAIN_ROLE:
-        out = {"probe_type": "http", "path": "/health",
-               "initial_delay": 5, "period": 5, "timeout": None}
+        out = dict(MAIN_PROBE_DEFAULT)
     else:
-        out = {"probe_type": None, "path": "/health",
-               "initial_delay": 5, "period": 10, "timeout": 3}
+        out = dict(SIDECAR_PROBE_DEFAULT)
     if value is None:
         return out
     if not isinstance(value, dict):
@@ -533,13 +526,14 @@ def parse_container_spec(item: Any, where: str, *, role: str) -> dict[str, Any]:
             f"{CONTAINER_ID_MAX} chars, got {container_id!r}")
     name = item.get("name")
     if role == MAIN_ROLE and name is None:
-        name = "agent"  # Template.container_name 默认
-    if not isinstance(name, str) or not SIDECAR_NAME_RE.match(name):
+        name = DEFAULT_MAIN_NAME  # Template.container_name 默认
+    if not isinstance(name, str) or not CONTAINER_NAME_RE.match(name):
         raise InvalidParams(
             f"{where}.name {name!r} must be a DNS-1123 label (lowercase "
             "alphanumeric or '-'), max 63 chars")
     image = _nonempty_str(item.get("image"), where, "image", max_len=512)
-    image_pull_policy = item.get("imagePullPolicy") or "IfNotPresent"
+    image_pull_policy = (
+        item.get("imagePullPolicy") or DEFAULT_IMAGE_PULL_POLICY)
     if not isinstance(image_pull_policy, str) or not image_pull_policy.strip():
         raise InvalidParams(
             f"{where}.imagePullPolicy must be a non-empty string, "
@@ -550,7 +544,7 @@ def parse_container_spec(item: Any, where: str, *, role: str) -> dict[str, Any]:
     resources = _parse_resources(item.get("resources"), where)
     volume_mounts = _parse_volume_mounts(item.get("volumeMounts"), where)
     security_context = _parse_security_context(
-        item.get("securityContext"), where, role)
+        item.get("securityContext"), where)
     command = _parse_str_list(item.get("command"), where, "command")
     args = _parse_str_list(item.get("args"), where, "args")
     readiness_probe = _parse_readiness_probe(
@@ -598,7 +592,7 @@ def canonical_volumes(value: Any, where: str) -> dict[str, dict[str, Any]]:
                 f"{entry_where} must have exactly one volume source among "
                 f"{list(_VOLUME_WIRE_SOURCES)}, got {sorted(entry)!r}")
         name = entry.get("name")
-        if not isinstance(name, str) or not SIDECAR_NAME_RE.match(name):
+        if not isinstance(name, str) or not CONTAINER_NAME_RE.match(name):
             raise InvalidParams(
                 f"{entry_where}.name {name!r} must be a DNS-1123 label, "
                 "max 63 chars")
@@ -718,106 +712,36 @@ def fuse_mounts(spec: dict[str, Any], volumes: dict[str, dict[str, Any]],
             "pvc_mounts": pvc, "nfs_mounts": nfs}
 
 
-# -------------------------------------------------------------- 投影:内部规范形 → Template/sidecar
+# -------------------------------------------------------------- 投影:内部规范形 → canonical/旧形
 
-def _sse_port(spec: dict[str, Any]) -> int:
-    return spec["ports"][0]["container_port"]
+def build_canonical(spec: dict[str, Any],
+                    volumes: dict[str, dict[str, Any]],
+                    where: str, *, role: str) -> dict[str, Any]:
+    """容器内部规范形(14 键 unfused)+ 模板 volumes → canonical(15 键)。
 
-
-def _http_port(spec: dict[str, Any]) -> int:
-    """主容器 http 端口;无则 = sse 端口(RM 渲染同名端口的既有约定)。"""
-    if len(spec["ports"]) > 1:
-        return spec["ports"][1]["container_port"]
-    return spec["ports"][0]["container_port"]
-
-
-def main_template_kwargs(spec: dict[str, Any],
-                         volumes: dict[str, dict[str, Any]],
-                         where: str) -> dict[str, Any]:
-    """主容器内部规范形(+模板 volumes join)→ Template 容器级 kwargs。
-
-    与 Template 默认逐项对齐(缺省落定不漂指纹);挂载经
-    validate_agent_mounts 规范化 + 冲突检查(四类挂载 mount_path 互斥)。
+    fuse_mounts(join 卷,四挂载族)组装 canonical 输入,交
+    containers.canonical_container 幂等收口(默认填满/挂载排序/校验)。
+    产物 = Template.main_container / sidecars 元素 / pod_spec 容器段
+    (同一直径,指纹/传输/渲染三处同形)。
     """
-    fused = fuse_mounts(spec, volumes, where, MAIN_ROLE)
-    (host, cm, pvc, nfs) = validate_agent_mounts(
-        fused["host_path_mounts"] or None,
-        fused["configmap_mounts"] or None,
-        fused["pvc_mounts"] or None,
-        fused["nfs_mounts"] or None,
-    )
-    secctx = spec["security_context"]
-    probe = spec["readiness_probe"]
-    resources = spec["resources"]
-    return {
-        "container_name": spec["name"],
-        "agent_image": spec["image"],
-        "image_pull_policy": spec["image_pull_policy"],
-        "sse_port": _sse_port(spec),
-        "container_port": _http_port(spec),
-        "agent_env": spec["env"],
-        "agent_env_from": spec["env_from"],
-        "agent_cpu_request": resources["cpu_request"],
-        "agent_memory_request": resources["memory_request"],
-        "agent_cpu_limit": resources["cpu_limit"],
-        "agent_memory_limit": resources["memory_limit"],
-        "run_as_user": secctx["run_as_user"],
-        "run_as_group": secctx["run_as_group"],
-        "command": spec["command"],
-        "args": spec["args"],
-        "health_path": probe["path"],
-        "readiness_initial_delay": probe["initial_delay"],
-        "readiness_period": probe["period"],
-        "agent_host_path_mounts": host,
-        "agent_configmap_mounts": cm,
-        "agent_pvc_mounts": pvc,
-        "agent_nfs_mounts": nfs,
-    }
-
-
-def sidecar_wire_input(spec: dict[str, Any],
-                       volumes: dict[str, dict[str, Any]],
-                       where: str) -> dict[str, Any]:
-    """sidecar 内部规范形(+模板 volumes join)→ sidecars.py 校验输入形态。
-
-    产物交 validate_sidecars(幂等再规范化 + ≤8/重名/撞端口/挂载冲突);
-    挂载列表给 raw 条目(canonical_* 在其中兜全量校验与排序)。
-    NFS 与 PVC 同构:sidecar 经 ``nfs_mounts`` 列表按名挂载模板级 NFS 卷,
-    与主容器无耦合(_canonical_sidecar 内条件键:空列表省略,存量指纹零扰动)。
-    """
-    fused = fuse_mounts(spec, volumes, where, SIDECAR_ROLE)
-    secctx = spec["security_context"]
-    probe = spec["readiness_probe"]
-    resources = spec["resources"]
-    return {
+    fused = fuse_mounts(spec, volumes, where, role)
+    return canonical_container({
         "name": spec["name"],
         "image": spec["image"],
-        "port": (spec["ports"][0]["container_port"]
-                 if spec["ports"] else None),
+        "image_pull_policy": spec["image_pull_policy"],
+        "command": spec["command"],
+        "args": spec["args"],
+        "ports": spec["ports"],
         "env": spec["env"],
         "env_from": spec["env_from"],
-        "image_pull_policy": spec["image_pull_policy"],
-        "cpu_request": resources["cpu_request"],
-        "memory_request": resources["memory_request"],
-        "cpu_limit": resources["cpu_limit"],
-        "memory_limit": resources["memory_limit"],
-        "privileged": secctx["privileged"],
-        "capabilities_add": secctx["capabilities_add"],
-        "capabilities_drop": secctx["capabilities_drop"],
-        "seccomp_unconfined": secctx["seccomp_unconfined"],
-        "apparmor_unconfined": secctx["apparmor_unconfined"],
-        "run_as_user": secctx["run_as_user"],
-        "run_as_group": secctx["run_as_group"],
+        "resources": spec["resources"],
         "host_path_mounts": fused["host_path_mounts"],
         "configmap_mounts": fused["configmap_mounts"],
         "pvc_mounts": fused["pvc_mounts"],
         "nfs_mounts": fused["nfs_mounts"],
-        "readiness_probe_type": probe["probe_type"],
-        "readiness_path": probe["path"],
-        "readiness_initial_delay": probe["initial_delay"],
-        "readiness_period": probe["period"],
-        "readiness_timeout_seconds": probe["timeout"],
-    }
+        "security_context": spec["security_context"],
+        "readiness_probe": spec["readiness_probe"],
+    }, where, role=role)
 
 
 # -------------------------------------------------------------- volumes 列存取

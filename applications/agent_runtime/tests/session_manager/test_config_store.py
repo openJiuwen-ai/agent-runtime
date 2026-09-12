@@ -528,6 +528,32 @@ _SIDECAR = {
     "readiness_probe_type": "tcp",
 }
 
+# _SIDECAR 经 wire → canonical 的期望形态(13 键全填满)
+_SIDECAR_CANONICAL = {
+    "name": "jiuwenbox",
+    "image": "jiuwenbox-amd64:0.0.1",
+    "image_pull_policy": "IfNotPresent",
+    "command": None,
+    "args": None,
+    "ports": [{"name": None, "container_port": 8321}],
+    "env": {"JIUWENBOX_LISTEN": "tcp://0.0.0.0:8321"},
+    "env_from": None,
+    "resources": {"cpu_request": None, "memory_request": None,
+                  "cpu_limit": None, "memory_limit": None},
+    "security_context": {"run_as_user": None, "run_as_group": None,
+                         "privileged": True,
+                         "capabilities_add": ["NET_ADMIN", "SYS_ADMIN"],
+                         "capabilities_drop": [],
+                         "seccomp_unconfined": True,
+                         "apparmor_unconfined": True},
+    "host_path_mounts": [{"host_path": "/sys/fs/cgroup",
+                          "mount_path": "/sys/fs/cgroup",
+                          "read_only": False, "host_path_type": None}],
+    "configmap_mounts": [], "pvc_mounts": [], "nfs_mounts": [],
+    "readiness_probe": {"probe_type": "tcp", "path": "/health",
+                        "initial_delay": 5, "period": 10, "timeout": 3},
+}
+
 
 @requires_lua
 async def test_config_sync_persists_and_roundtrips_sidecars(runtime):
@@ -537,30 +563,7 @@ async def test_config_sync_persists_and_roundtrips_sidecars(runtime):
         [_scope(SCOPE, "tpl-box")],
     ))
     t = await runtime.config_store.get_template("tpl-box")
-    assert t.sidecars == [{
-        "name": "jiuwenbox",
-        "image": "jiuwenbox-amd64:0.0.1",
-        "port": 8321,
-        "env": {"JIUWENBOX_LISTEN": "tcp://0.0.0.0:8321"},
-        "image_pull_policy": "IfNotPresent",
-        "cpu_request": None, "memory_request": None,
-        "cpu_limit": None, "memory_limit": None,
-        "privileged": True,
-        "capabilities_add": ["SYS_ADMIN", "NET_ADMIN"],
-        "capabilities_drop": [],
-        "seccomp_unconfined": True,
-        "apparmor_unconfined": True,
-        "run_as_user": None, "run_as_group": None,
-        "host_path_mounts": [{"host_path": "/sys/fs/cgroup",
-                              "mount_path": "/sys/fs/cgroup",
-                              "read_only": False, "host_path_type": None}],
-        "configmap_mounts": [], "pvc_mounts": [],
-        "readiness_probe_type": "tcp",
-        "readiness_path": "/health",
-        "readiness_initial_delay": 5,
-        "readiness_period": 10,
-        "readiness_timeout_seconds": 3,
-    }]
+    assert t.sidecars == [_SIDECAR_CANONICAL]
     # deploy_subset 携带 sidecars;json 可序列化(RM 缓存 pod_spec_json 用)
     subset = t.deploy_subset()
     import json
@@ -600,11 +603,12 @@ async def test_config_sync_persists_and_roundtrips_pod_placing_fields(runtime):
         [_scope(SCOPE, "tpl-pin")],
     ))
     t = await runtime.config_store.get_template("tpl-pin")
-    assert (t.node_name, t.run_as_user, t.run_as_group) == (
-        "ecs-38b3-0001", 1000, 1000)
+    secctx = t.main_container["security_context"]
+    assert (t.node_name, secctx["run_as_user"],
+            secctx["run_as_group"]) == ("ecs-38b3-0001", 1000, 1000)
     subset = t.deploy_subset()
-    assert (subset["node_name"], subset["run_as_user"],
-            subset["run_as_group"]) == ("ecs-38b3-0001", 1000, 1000)
+    assert subset["node_name"] == "ecs-38b3-0001"
+    assert subset["main_container"]["security_context"]["run_as_user"] == 1000
 
 
 @requires_lua
@@ -696,8 +700,12 @@ async def test_config_sync_sidecars_removal_triggers_a_class_sunset(runtime):
     assert runtime.k8s.deployed_specs[-1]["sidecars"] is None
 
 
-def test_template_from_row_normalizes_sidecars():
-    """DB 行兜底:sidecars None/[]/坏值 → Template.sidecars 统一 None。"""
+def test_template_from_row_rejects_legacy_inline_rows():
+    """legacy 内联行(无 main_container_id)不再水合 → None(fail-closed)。
+
+    wire 已三段式独占,此类行 = 拆分后未收敛的残骸,重放 config_sync 收敛;
+    容错归一职责移至 containers.normalize_*(见 test_containers)。
+    """
     from types import SimpleNamespace
 
     from agent_runtime.session_manager.config_store import (
@@ -705,42 +713,54 @@ def test_template_from_row_normalizes_sidecars():
         template_from_row,
     )
 
-    def _row(sidecars_value):
-        base = {column: None for column in _COLUMN_OF.values()}
-        base.update(agent_image="img:1", sidecars=sidecars_value)
-        return SimpleNamespace(**base)
+    base = {column: None for column in _COLUMN_OF.values()}
+    base.update(agent_image="img:1", sidecars=[dict(_SIDECAR)])
+    assert template_from_row(SimpleNamespace(**base)) is None
 
-    assert template_from_row(_row(None)).sidecars is None
-    assert template_from_row(_row([])).sidecars is None
-    assert template_from_row(_row("garbage")).sidecars is None
-    assert template_from_row(_row([{"garbage": 1}])).sidecars is None
-    assert template_from_row(_row([dict(_SIDECAR)])).sidecars is not None
+
+def test_template_from_row_skips_corrupt_container_sections():
+    """split 行 + 容器段落坏值(手改 DB)→ 水合校验失败 → None(fail-closed)。"""
+    from types import SimpleNamespace
+
+    from agent_runtime.session_manager.config_store import (
+        _COLUMN_OF,
+        template_from_row,
+    )
+    from agent_runtime.session_manager.container_spec import parse_container_spec
+
+    base = {column: None for column in _COLUMN_OF.values()}
+    base.update(template_id="tpl-x", main_container_id="c-main-1")
+    row = SimpleNamespace(**base)
+    spec = parse_container_spec(
+        {"container_id": "c-main-1", "image": "i:1"}, "c", role="main")
+    # 挂载引用不存在的卷 → canonical 校验拒 → 整模板跳过
+    bad = dict(spec, volume_mounts=[{"name": "ghost", "mount_path": "/g"}])
+    assert template_from_row(row, {"c-main-1": bad}) is None
+    # 干净容器(无挂载)→ 水合成功
+    out = template_from_row(row, {"c-main-1": dict(spec)})
+    assert out is not None and out.main_container["host_path_mounts"] == []
 
 
 @requires_lua
 async def test_route_and_pool_push_carry_sidecars_end_to_end(runtime):
     """端到端:seed(sidecars) → route → FakeK8s 收到的 pod_spec 含规范形 sidecars。"""
-    from agent_runtime.sidecars import validate_sidecars
-
     await runtime.seed_template(sidecars=[_SIDECAR])
     result = await runtime.route("sess-e2e")
     assert result["pod_id"]
 
-    canonical = validate_sidecars([_SIDECAR], container_name="agent",
-                                  sse_port=8080, container_port=8080)
-    # FakeK8s 录制:deploy 真正收到 sidecars
+    # FakeK8s 录制:deploy 真正收到 canonical sidecars
     assert runtime.k8s.deployed_specs, "FakeK8s.deployed_specs 未录制"
-    assert runtime.k8s.deployed_specs[0]["sidecars"] == canonical
+    assert runtime.k8s.deployed_specs[0]["sidecars"] == [_SIDECAR_CANONICAL]
     # RM scope:config 缓存的 pod_spec_json 同样携带
     cfg = await runtime.rm_state.load_scope_config(SCOPE)
     import json
     cached = json.loads(cfg["pod_spec_json"])
-    assert cached["sidecars"] == canonical
+    assert cached["sidecars"] == [_SIDECAR_CANONICAL]
 
 
 @requires_lua
 async def test_config_sync_roundtrips_agent_and_sidecar_mounts(runtime):
-    """主容器四类挂载 + sidecar cm/pvc/nfs 下发 → DB JSON 列回读 = 规范形。"""
+    """主容器三种挂载 + sidecar cm/pvc 下发 → DB JSON 列回读 = 规范形。"""
     await runtime.config_store.config_sync(_payload(
         [_tpl("tpl-mnt",
               agent_host_path_mounts=[{"host_path": "/host/c", "mount_path": "/etc/host"}],
@@ -748,38 +768,27 @@ async def test_config_sync_roundtrips_agent_and_sidecar_mounts(runtime):
                                        "mount_path": "/etc/agent/config.yaml",
                                        "sub_path": "config.yaml"}],
               agent_pvc_mounts=[{"claim_name": "agent-data", "mount_path": "/data"}],
-              agent_nfs_mounts=[{"server": "10.0.0.1", "path": "/jiuwenclaw",
-                                 "mount_path": "/mnt/nfs"}],
               sidecars=[dict(_SIDECAR,
                              configmap_mounts=[{"config_map_name": "box-policy",
                                                 "mount_path": "/etc/box/policy.yaml",
-                                                "sub_path": "policy.yaml"}],
-                             nfs_mounts=[{"server": "10.0.0.1",
-                                          "path": "/jiuwenclaw",
-                                          "mount_path": "/box/data"}])])],
+                                                "sub_path": "policy.yaml"}])])],
         [_scope(SCOPE, "tpl-mnt")],
     ))
     t = await runtime.config_store.get_template("tpl-mnt")
-    assert t.agent_host_path_mounts == [
+    main = t.main_container
+    assert main["host_path_mounts"] == [
         {"host_path": "/host/c", "mount_path": "/etc/host",
          "read_only": False, "host_path_type": None}]
-    assert t.agent_configmap_mounts[0]["sub_path"] == "config.yaml"
-    assert t.agent_configmap_mounts[0]["read_only"] is True
-    assert t.agent_pvc_mounts == [{"claim_name": "agent-data",
+    assert main["configmap_mounts"][0]["sub_path"] == "config.yaml"
+    assert main["configmap_mounts"][0]["read_only"] is True
+    assert main["pvc_mounts"] == [{"claim_name": "agent-data",
                                    "mount_path": "/data", "read_only": False}]
-    assert t.agent_nfs_mounts == [{"server": "10.0.0.1", "path": "/jiuwenclaw",
-                                   "mount_path": "/mnt/nfs", "read_only": False}]
     assert t.sidecars[0]["configmap_mounts"][0]["config_map_name"] == "box-policy"
-    assert t.sidecars[0]["nfs_mounts"] == [{"server": "10.0.0.1",
-                                            "path": "/jiuwenclaw",
-                                            "mount_path": "/box/data",
-                                            "read_only": False}]
-    # deploy_subset 携带四列表,整体 json 可序列化
+    # deploy_subset 携带 canonical 容器段,整体 json 可序列化
     subset = t.deploy_subset()
     import json
     json.loads(json.dumps(subset))
-    assert subset["agent_pvc_mounts"] == t.agent_pvc_mounts
-    assert subset["agent_nfs_mounts"] == t.agent_nfs_mounts
+    assert subset["main_container"]["pvc_mounts"] == main["pvc_mounts"]
 
 
 @requires_lua
@@ -795,55 +804,6 @@ async def test_config_sync_agent_mount_change_is_a_class(runtime):
         [_scope(SCOPE, "tpl-1")],
     ))
     assert await runtime.sm_state.scope_pod_ids(SCOPE) == []
-
-
-def test_template_from_row_normalizes_agent_mounts():
-    """DB 行兜底:三种主容器挂载坏值 → None(同 sidecars 单点归一)。"""
-    from types import SimpleNamespace
-
-    from agent_runtime.session_manager.config_store import (
-        _COLUMN_OF,
-        template_from_row,
-    )
-
-    def _row(**kw):
-        base = {column: None for column in _COLUMN_OF.values()}
-        base.update(agent_image="img:1", **kw)
-        return SimpleNamespace(**base)
-
-    assert template_from_row(_row(agent_pvc_mounts="garbage")).agent_pvc_mounts is None
-    assert template_from_row(_row(agent_pvc_mounts=[])).agent_pvc_mounts is None
-    assert template_from_row(
-        _row(agent_pvc_mounts=[{"claim_name": "p", "mount_path": "/v"}])
-    ).agent_pvc_mounts == [{"claim_name": "p", "mount_path": "/v", "read_only": False}]
-
-
-def test_template_from_row_legacy_nfs_triple_becomes_mounts():
-    """legacy 内联行的 NFS 三元组 → agent_nfs_mounts 规范形(RM 只认列表形态)。
-
-    mount_path 缺省落 "/data"(沿旧 RM 缺省);新契约行三元组列恒 NULL 不受影响。
-    """
-    from types import SimpleNamespace
-
-    from agent_runtime.session_manager.config_store import (
-        _COLUMN_OF,
-        template_from_row,
-    )
-
-    def _row(**kw):
-        base = {column: None for column in _COLUMN_OF.values()}
-        base.update(agent_image="img:1", **kw)
-        return SimpleNamespace(**base)
-
-    t = template_from_row(_row(nfs_server="10.0.0.1", nfs_path="/export",
-                               nfs_mount_path="/mnt/nfs"))
-    assert t.agent_nfs_mounts == [{"server": "10.0.0.1", "path": "/export",
-                                   "mount_path": "/mnt/nfs", "read_only": False}]
-    t = template_from_row(_row(nfs_server="10.0.0.1"))
-    assert t.agent_nfs_mounts == [{"server": "10.0.0.1", "path": None,
-                                   "mount_path": "/data", "read_only": False}]
-    # 新契约(无三元组)零影响
-    assert template_from_row(_row()).agent_nfs_mounts is None
 
 
 # -------------------------------------------------------------- 三段式契约(容器表拆分)
@@ -876,7 +836,6 @@ async def test_split_contract_deploy_ver_identical_to_inline(runtime):
     载荷不可再下发;双路径等价性在 2026-08-31 收紧前经实测锁定)。"""
     from agent_runtime.session_manager.models import Template
     from agent_runtime.session_manager.routing import template_to_json
-    from agent_runtime.sidecars import validate_sidecars
 
     # 三段式下发(含 sidecar + env + 资源 + 探针 + 挂载)
     containers = [
@@ -900,21 +859,27 @@ async def test_split_contract_deploy_ver_identical_to_inline(runtime):
     split_template = await runtime.config_store.get_template("tpl-x")
     assert split_template is not None
 
-    # 逐字段等价的内联构造(等值基准)
+    # 逐字段等价的手构 canonical Template(等值基准;__post_init__ 归一到
+    # 与三段式水合同一 canonical → deploy_ver/快照 JSON 逐字节相等)
     inline_template = Template(
         template_id="tpl-x",
-        agent_image="agentserver:1.0", sse_port=8086, container_port=8086,
-        agent_env={"K": "v"}, agent_cpu_request="500m", run_as_user=1000,
-        health_path="/api/v1/health", readiness_period=7,
-        agent_configmap_mounts=[{
-            "config_map_name": "agent-cm", "mount_path": "/etc/agent",
-            "sub_path": None, "items": None, "read_only": True}],
-        sidecars=validate_sidecars([{
-            "name": "jiuwenbox", "image": "box:1", "port": 8321,
-            "privileged": True,
-            "host_path_mounts": [{"host_path": "/h", "mount_path": "/m",
-                                  "read_only": False, "host_path_type": None}]}],
-            container_name="agent", sse_port=8086, container_port=8086),
+        main_container={
+            "name": "agent", "image": "agentserver:1.0",
+            "ports": [{"name": "sse", "container_port": 8086}],
+            "env": {"K": "v"},
+            "resources": {"cpu_request": "500m"},
+            "security_context": {"run_as_user": 1000},
+            "readiness_probe": {"probe_type": "http",
+                                "path": "/api/v1/health", "period": 7},
+            "configmap_mounts": [{"config_map_name": "agent-cm",
+                                  "mount_path": "/etc/agent"}],
+        },
+        sidecars=[{
+            "name": "jiuwenbox", "image": "box:1",
+            "ports": [{"name": None, "container_port": 8321}],
+            "security_context": {"privileged": True},
+            "host_path_mounts": [{"host_path": "/h", "mount_path": "/m"}],
+        }],
     )
     assert split_template.deploy_ver() == inline_template.deploy_ver()
     assert template_to_json(split_template) == template_to_json(inline_template)
@@ -955,7 +920,7 @@ async def test_container_image_change_updates_deploy_ver(runtime):
     assert new.agent_image == "agentserver:2.0"
     # 最后一拍推送带新 pod_spec(RM 侧 pod_spec_json/deploy_ver 收敛)
     scope_id, pool, pod_spec = runtime.pool_pushes[-1]
-    assert pod_spec["agent_image"] == "agentserver:2.0"
+    assert pod_spec["main_container"]["image"] == "agentserver:2.0"
 
 
 @requires_lua
@@ -998,7 +963,7 @@ async def test_container_shared_across_templates(runtime):
     for tid in ("tpl-1", "tpl-2"):
         t = await runtime.config_store.get_template(tid)
         assert t is not None
-        assert t.agent_host_path_mounts == [
+        assert t.main_container["host_path_mounts"] == [
             {"host_path": "/h", "mount_path": "/m", "read_only": False,
              "host_path_type": None}]
         assert [sc["name"] for sc in t.sidecars] == ["sharer"]

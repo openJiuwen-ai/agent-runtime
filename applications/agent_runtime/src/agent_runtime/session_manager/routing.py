@@ -422,7 +422,17 @@ def template_to_json(template: Template) -> dict[str, Any]:
 
 
 def template_from_json(payload: dict[str, Any]) -> Template:
-    """快照 dict → Template;未知键忽略,int/bool 字段按默认值类型矫正。"""
+    """快照 dict → Template;未知键忽略,int/bool 字段按默认值类型矫正。
+
+    legacy 扁平快照(统一规范形前写入:有 agent_image 无 main_container)
+    → ValueError:判坏重建(lifespan ensure_snapshot 本就无条件重建,
+    这是冷读路径的双保险)。
+    """
+    if "main_container" not in payload and "agent_image" in payload:
+        raise ValueError(
+            "legacy flat-form template snapshot (pre unified-canonical); "
+            "rebuild required"
+        )
     kwargs: dict[str, Any] = {}
     for name in _TEMPLATE_FIELDS:
         if name not in payload or payload[name] is None:

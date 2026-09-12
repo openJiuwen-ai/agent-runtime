@@ -17,7 +17,8 @@
 
 | 日期 | 文档 | 一句话 |
 |---|---|---|
-| 2026-09 | [NFS 卷与 PVC 同构化(pod 级卷源)](2026-09-nfs-volume-pod-level.md) | NFS 卷源归模板级 volumes、挂载走 `agent_nfs_mounts`/sidecar `nfs_mounts` 列表(与 PVC 同构,`nfs_seen` 跨容器去重);三元组降级 legacy 只读兼容;废「仅主容器/单挂载/禁 readOnly」限制;501 用例 |
+| 2026-09 | [NFS 卷与 PVC 同构化(pod 级卷源)](2026-09-nfs-volume-pod-level.md) | NFS 卷源归模板级 volumes、挂载走第四族 `nfs_mounts`(与 PVC 同构,`nfs_seen` 跨容器去重);三元组降级 legacy 只读兼容;废「仅主容器/单挂载/禁 readOnly」限制;501 用例 |
+| 2026-09 | [容器规范形统一(主/sidecar 单一 canonical)](2026-09-unified-container-canonical.md) | 新增 containers.py:15 键 canonical(主/sidecar 同形,role 只控值域;吸收 fs_group/command/args/nfs_mounts),删 sidecars.py 与 Template ~23 个扁平字段、spec_fields 缩到模板级+容器两键——加容器字段只改一处(canonical+渲染分支);全键填满废条件键、caps 排序去重、normalize_pod_spec 补缺省防未来伪日落;RM 单一 _build_container;deploy_ver 二次重置(rebase 合入上游,开发期无存量);505 用例,升级序列与前置 SQL 见文档 |
 | 2026-09 | [压测脚本重设计:6 场景 + 可视化/ERROR 日志判定层](2026-09-load-test-scenarios-checks.md) | 3→6 场景(+config_churn/config_refresh/mixed,config 面单发射者);判定层加可视化断言(传播/代次/亲和/重建收敛/收尾巡检)与 ERROR 日志感知(文件偏移/只读 kubectl logs,默认阈值 0 硬门);max_pods 容量语义(连续刷新多代堆积→503)白名单化 WARN 观测;实测 churn 23/0、refresh 20/0、亲和 0 违规、ERROR 0 |
 | 2026-09 | [场景 F 快失败:拆除有界等待队列](2026-09-scope-full-fastfail.md) | scope 满→立即 503 `SCOPE_FULL`(删 504/队列满两码);根因 redis-py asyncio `RedisCluster` 无 pubsub;waiter ZSET/free 通道/LUA_WAITER_GATE/`AGENT_RUNTIME_SCOPE_FULL_TIMEOUT` 全链拆除;总预算改 `ready_timeout+余量`、超限粗化 NO_POD_AVAILABLE;433 用例 |
 | 2026-09 | [系统自评估与建议能力(观测补齐+规则引擎+LLM)](2026-09-system-self-evaluation.md) | 新 evaluation 子包+`{agent_runtime:eval}` 键域(单槽 tag/零 Lua):sys_sample(30s 采样)+sys_eval(300s 规则+可选 LLM)两选主 job、route 热路径内存缓冲 5s 批量 flush、静态 7+动态 5 规则(findings 带 A/B 代价;快失败适配:删队列压力/超时-TTL 比两规则,容量错误计数改 SCOPE_FULL)、报告只读产出人审应用;可视化补容量闸门字段+history/evaluation 端点;真镜像门禁 126/126+真 cluster 19/19;LLM env 默认禁用零外呼 |

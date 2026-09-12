@@ -4,6 +4,13 @@
 - DEPLOY_FIELDS   deploy 子集（A 类字段）：值被烘焙进运行中的 Pod，变更需日落。
 - POLICY_FIELDS   策略字段（B 类）：控制面读时使用，变更不日落老 Pod。
 
+2026-09 统一规范形起，容器级配置以**整体**进指纹：
+``main_container`` / ``sidecars``（containers.py canonical，13 键全填满）。
+**加/改容器字段不再动本文件**——canonical 整体序列化进 deploy_ver,
+只需改 containers.py（canonical 定义）+ RM 渲染分支。RM 侧对旧缓存
+（缺新键的 pod_spec_json）以 containers.normalize_pod_spec 补缺省后
+同指纹（新键默认值 == 旧行为时零伪日落）。
+
 deploy_ver = DEPLOY_VER_FIELDS 的 hash 指纹（不含 kubeconfig——虽在 deploy
 子集但例外：只影响新 deploy 操作，不日落）。SM（Template.deploy_ver）与 RM
 （pod_spec 指纹）必须用同一字段集与算法（util.fingerprint）。
@@ -12,34 +19,16 @@ deploy_ver = DEPLOY_VER_FIELDS 的 hash 指纹（不含 kubeconfig——虽在 d
 from __future__ import annotations
 
 DEPLOY_FIELDS: tuple[str, ...] = (
-    "agent_image",
+    # Pod 级字段（模板表模板级行列）
     "namespace",
     "node_name",
-    "run_as_user",
-    "run_as_group",
-    "fs_group",             # Pod 级 securityContext.fsGroup(变更需重部署 Pod)
+    "fs_group",            # Pod 级 securityContext.fsGroup(变更需重部署 Pod)
     "pod_name",
-    "container_name",
-    "container_port",
-    "sse_port",
-    "sse_path",
-    "health_path",          # readiness 探针路径(默认 /health;真 AgentServer 为 /api/v1/health)
-    "agent_env",            # Agent 容器注入的 env(如 AGENT_HTTP_ENABLED/HOST/PORT)
-    "agent_env_from",       # envFrom 引用(secretRef/configMapRef;None 不进指纹——存量零扰动)
-    "command",              # 主容器 command 覆盖(None = 走镜像入口)
-    "args",                 # 主容器 args 覆盖(None = 走镜像入口)
-    "image_pull_policy",
-    "readiness_initial_delay",
-    "readiness_period",
-    "agent_cpu_request",
-    "agent_memory_request",
-    "agent_cpu_limit",
-    "agent_memory_limit",
-    "sidecars",             # 同 Pod sidecar 容器列表(通用;首个用户 jiuwenbox)
-    "agent_host_path_mounts",   # 主容器 hostPath 挂载(规范形见 mounts.py)
-    "agent_configmap_mounts",   # 主容器 ConfigMap 挂载
-    "agent_pvc_mounts",         # 主容器 PVC 挂载
-    "agent_nfs_mounts",         # 主容器 NFS 挂载(与 PVC 同构,卷源在模板级 volumes)
+    "sse_path",             # gateway 直连 URL 路径段（RM 拼 pod_sse_url）
+    # 容器级（canonical 整体；主容器含 nfs/sse 端口/探针等,sidecars 为
+    # name 升序 canonical 列表,None = 无 sidecar）
+    "main_container",
+    "sidecars",
 )
 
 # deploy 指纹涵盖字段（deploy 子集 + ready 超时参数——影响 deploy 行为与版本）

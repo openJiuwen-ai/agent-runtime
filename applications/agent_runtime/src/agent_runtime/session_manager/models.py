@@ -5,6 +5,10 @@ template 字段定义见 HLD §3.1「数据结构定义」。DB 列名与 wire �
 (2026-09 起统一;曾用 EE 兼容名 session_concurrency/service_concurrency/
 service_ttl/min_idle_services,存量库须 RENAME COLUMN)。
 
+2026-09 统一规范形:容器级配置(主/sidecar)以 containers.py canonical
+(dict,13 键全填满)携带——``main_container`` 单容器 + ``sidecars`` 列表,
+不再平铺 ~23 个 agent_* 字段(历史包袱,加字段要改六处的根因)。
+
 scope 定义(scope_id/index/引用模板/路由规则集)由 config_sync 全量下发,
 见 ``routing.py``(RoutingScopeDef)与 ``routing_scope`` 表——不再由
 (group_id, bot_id) 二元组派生。
@@ -16,8 +20,14 @@ import math
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..mounts import normalize_mounts
-from ..sidecars import normalize_sidecars
+from ..containers import (
+    MAIN_ROLE,
+    default_main_container,
+    main_health_path,
+    main_sse_port,
+    normalize_container,
+    normalize_containers,
+)
 from ..spec_fields import DEPLOY_VER_FIELDS, POLICY_FIELDS  # noqa: F401 - 字段分类定义
 from ..util import fingerprint
 
@@ -33,56 +43,22 @@ class Template:
     session_ttl: int = 60
     pod_ttl: int = 300
     min_idle_pods: int = 0
-    # deploy 子集（A 类）
-    agent_image: str = ""
+    # deploy 子集（A 类）——Pod 级字段
     namespace: str = "default"
     node_name: str | None = None
-    run_as_user: int | None = None
-    run_as_group: int | None = None
-    # Pod 级 securityContext.fsGroup(wire 键 fsGroup,与 nodeName 同款拍平;
-    # 运行时落到 Pod securityContext;None = 不设)
+    # Pod 级 securityContext.fsGroup(wire 键 fsGroup,与 nodeName 同款模板级;
+    # kubelet 卷属主修正——NFS 卷属主问题的官方修法;None = 不设)
     fs_group: int | None = None
-    # 主容器启动命令/参数覆盖(缺省走镜像 ENTRYPOINT/CMD;None = 不设)
-    command: list[str] | None = None
-    args: list[str] | None = None
     pod_name: str = "agentserver"          # Pod 名前缀（pod_id = 前缀-随机后缀）
-    container_name: str = "agent"
-    container_port: int = 8080
-    sse_port: int = 8080                   # gateway 直连 Pod 的 SSE 端口
     sse_path: str = "/sse"
-    health_path: str = "/health"           # readiness 探针路径(真 AgentServer HTTP 入口为 /api/v1/health)
-    agent_env: dict[str, str] = field(default_factory=dict)  # Agent 容器 env 注入(AGENT_HTTP_* 等)
-    # envFrom 引用(K8s EnvFromSource 内部规范形:[{prefix?, secret_ref|config_map_ref:
-    # {name, optional}}])。缺省 None 被 fingerprint 滤除 → 存量模板指纹零扰动;
-    # 值变化 = 正确的 A 类日落(env 烘焙进 Pod)。仅新契约(config_sync containers
-    # 形态)可下发;legacy 内联 payload 不接此字段。
-    agent_env_from: list[dict[str, Any]] | None = None
-    image_pull_policy: str = "IfNotPresent"
-    readiness_initial_delay: int = 5
-    readiness_period: int = 5
     ready_timeout: int = 300               # deploy 等 Ready 的超时（秒）
     ready_poll_interval: int = 2
-    # NFS 三元组:legacy 内联行的只读兼容载体(新契约不下发——NFS 卷与 PVC
-    # 同构,卷源在模板级 volumes、挂载在 agent_nfs_mounts/sidecar nfs_mounts;
-    # __post_init__ 把旧行三元组转成 agent_nfs_mounts,见下)
-    nfs_server: str | None = None
-    nfs_path: str | None = None
-    nfs_mount_path: str | None = None
-    agent_cpu_request: str | None = None
-    agent_memory_request: str | None = None
-    agent_cpu_limit: str | None = None
-    agent_memory_limit: str | None = None
-    # 同 Pod sidecar 容器列表(A 类字段,通用机制,jiuwenbox 是第一个使用者;
-    # 规范形与校验见 sidecars.py)。None 与 [] 统一归一为 None——fingerprint
-    # 只滤 None,若以 [] 为默认会使全部存量模板 deploy_ver 变化 → 全量 A 类
-    # 日落,不可接受(见 __post_init__ 的 normalize_sidecars)。
+    # 主容器（canonical,见 containers.py;default = 空镜像哨兵,与旧
+    # agent_image="" 同语义——未配置模板渲染空镜像,由上层拒绝/覆盖)
+    main_container: dict[str, Any] = field(default_factory=default_main_container)
+    # 同 Pod sidecar 容器列表(canonical;None 与 [] 统一归一为 None——
+    # fingerprint 只滤 None,[] 会扰动指纹)
     sidecars: list[dict[str, Any]] | None = None
-    # 主 agent 容器卷挂载(A 类;规范形与校验见 mounts.py,与 sidecar 挂载同款;
-    # 空列表/坏值同样归一为 None 保指纹稳定)
-    agent_host_path_mounts: list[dict[str, Any]] | None = None
-    agent_configmap_mounts: list[dict[str, Any]] | None = None
-    agent_pvc_mounts: list[dict[str, Any]] | None = None
-    agent_nfs_mounts: list[dict[str, Any]] | None = None
     # deploy 凭证（B 类例外：只影响新 deploy，不日落）
     kubeconfig: str | None = None
     # 元信息
@@ -93,30 +69,38 @@ class Template:
     data: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        # 空列表/坏值 → None;逐项规范形 + 排序(指纹/DB/快照三处形态唯一)。
-        # payload/DB 行/快照 JSON/测试手搓全部构造路径收敛于此。
-        object.__setattr__(self, "sidecars", normalize_sidecars(self.sidecars))
-        for field in ("agent_host_path_mounts", "agent_configmap_mounts",
-                      "agent_pvc_mounts", "agent_nfs_mounts"):
-            kind = field.replace("agent_", "", 1)
-            object.__setattr__(self, field, normalize_mounts(getattr(self, field), kind))
-        # legacy 内联三元组 → agent_nfs_mounts(旧行读兼容;RM 只认列表形态)。
-        # mount_path 缺省 "/data" 沿旧 RM 缺省(nfs_server 有值而挂载点未给时
-        # 历史上挂 /data);新契约不受影响——三元组列对三段式行恒为 NULL。
-        if self.nfs_server and not self.agent_nfs_mounts:
-            object.__setattr__(self, "agent_nfs_mounts", normalize_mounts(
-                [{"server": self.nfs_server, "path": self.nfs_path,
-                  "mount_path": self.nfs_mount_path or "/data",
-                  "read_only": False}], "nfs_mounts"))
+        # 规范形收敛:payload/DB 行/快照 JSON/测试手搓全部构造路径统一于此
+        # (指纹/DB/快照三处形态唯一;canonical 幂等 → 显式默认 == 省略)。
+        object.__setattr__(self, "main_container",
+                           normalize_container(self.main_container,
+                                               role=MAIN_ROLE))
+        object.__setattr__(self, "sidecars", normalize_containers(self.sidecars))
         # 路径字段归一：缺前导 '/' 的值会拼出 "http://ip:8080api/..."（端口段
         # 粘连路径，httpx 直接抛非法端口 → 健康 Pod 被探死无限重部署）
-        for field in ("sse_path", "health_path"):
-            value = getattr(self, field) or ""
-            if value and not value.startswith("/"):
-                object.__setattr__(self, field, f"/{value}")
-        # envFrom 空列表归一 None(指纹滤 None;[] 不入库不入快照)
-        if self.agent_env_from == []:
-            object.__setattr__(self, "agent_env_from", None)
+        value = self.sse_path or ""
+        if value and not value.startswith("/"):
+            object.__setattr__(self, "sse_path", f"/{value}")
+
+    # -------------------------------------------------------------- 兼容只读派生
+
+    @property
+    def agent_image(self) -> str:
+        """主容器镜像(UI/诊断摘要兼容键;不参与指纹与序列化)。"""
+        return str(self.main_container.get("image") or "")
+
+    @property
+    def sse_port(self) -> int:
+        """gateway 直连 Pod 的 SSE 端口(canonical main ports 的 name=sse 项)。"""
+        return main_sse_port(self.main_container)
+
+    @property
+    def health_path(self) -> str:
+        """readiness/健康探测路径(与主容器探针同源)。"""
+        return main_health_path(self.main_container)
+
+    @property
+    def container_name(self) -> str:
+        return str(self.main_container.get("name") or "agent")
 
     # -------------------------------------------------------------- 派生
 

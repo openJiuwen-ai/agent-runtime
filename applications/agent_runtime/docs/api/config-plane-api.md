@@ -119,10 +119,10 @@ Envelope 外层见 §0.2;`rawdata` 为三段式配置快照:
 | `envFrom` | list | 否 | envFrom 引用注入:每项 `{prefix?, secretRef:{name, optional?}}` 或 `{prefix?, configMapRef:{name, optional?}}`(恰一 ref)。**密钥以引用名下发,值不落模板/快照/pod_spec** |
 | `resources` | object | 否 | `{requests?: {cpu?, memory?}, limits?: {cpu?, memory?}}`,量纲字符串(如 `"500m"`/`"1Gi"`) |
 | `volumeMounts` | list | 否 | `[{name, mountPath, subPath?, readOnly?}]`,按名引用模板 `volumes`;悬挂引用(卷未定义)→ 400;`subPath` 仅 configMap 卷;`readOnly` 缺省按源类型(configMap→true、hostPath/PVC→false) |
-| `securityContext` | object | 否 | **主容器只许 `runAsUser`/`runAsGroup`**(int ≥0,`null`=走镜像默认;注意不改变卷文件属主);sidecar 另有 `privileged`(bool)、`capabilities:{add:[], drop:[]}`、`seccompProfile:{type}`、`appArmorProfile:{type}`(type ∈ {`Unconfined`, `RuntimeDefault`}) |
+| `securityContext` | object | 否 | **主/sidecar 同一白名单**(决策 B,2026-09-11):`runAsUser`/`runAsGroup`(int ≥0,`null`=走镜像默认;注意不改变卷文件属主)、`privileged`(bool)、`capabilities:{add:[], drop:[]}`、`seccompProfile:{type}`、`appArmorProfile:{type}`(type ∈ {`Unconfined`, `RuntimeDefault`}) |
 | `readinessProbe` | object | 否 | **主容器恒 `httpGet{path, port}`** + `initialDelaySeconds`/`periodSeconds`(缺省 5/5);`tcpSocket`/`timeoutSeconds` → 400;probe port 若给必须等于 sse 端口。sidecar 为 `tcpSocket{port}`/`httpGet{path, port}` 二选一(可整体缺省,默认 5/10/3),`timeoutSeconds` 1..300 |
 
-> 未知键、越角色键、内部表达不了的 K8s 字段(`command`/`args`/端口 `protocol` 等)→ **400,绝不静默丢弃**(防"看似配置了实际没生效")。
+> 未知键、内部表达不了的 K8s 字段(端口 `protocol` 等)→ **400,绝不静默丢弃**(防"看似配置了实际没生效")。
 
 #### `templates[]` 字段(模板只持容器引用与 Pod 级/策略字段)
 

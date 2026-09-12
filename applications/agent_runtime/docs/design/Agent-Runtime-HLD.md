@@ -156,13 +156,14 @@ flowchart TB
 | `envFrom` | list[{prefix?, secretRef?/configMapRef?}] | **envFrom 引用注入**(K8s EnvFromSource 完整形态;每项恰一 ref,`{name, optional?}`,prefix 为 env 变量名前缀;`[]`/缺省 = 无。密钥以引用名下发,**值不落模板/快照/pod_spec**) |
 | `resources` | {requests?, limits?} | 嵌套 `{cpu, memory}` 量纲字符串;缺省 None |
 | `volumeMounts` | list[{name, mountPath, subPath?, readOnly?}] | 按名引用模板 `volumes`(悬挂引用 → 400;`subPath` 仅 configMap 卷;`readOnly` 缺省按内部规范:configMap→true、hostPath/PVC→false) |
-| `securityContext` | dict | 主容器只许 `runAsUser`/`runAsGroup`(≥0,`None` = 走镜像默认;**不改变卷文件属主**——PVC 写权限根治仍是存储侧预属主,见 `e2e-test-cases.md` 真实缺陷②);sidecar 另有 `privileged`、`capabilities{add,drop}`、`seccompProfile`/`appArmorProfile`(type ∈ {Unconfined, RuntimeDefault};appArmor 渲染为 Pod annotation) |
+| `securityContext` | dict | **主/sidecar 同一白名单**(2026-09-11 决策 B:主容器特权面放开,安全策略归管理面,runtime 只做键/值校验):`runAsUser`/`runAsGroup`(≥0,`null` = 走镜像默认;**不改变卷文件属主**——PVC 写权限根治仍是存储侧预属主,见 `e2e-test-cases.md` 真实缺陷②)、`privileged`(bool)、`capabilities{add,drop}`、`seccompProfile`/`appArmorProfile`(type ∈ {Unconfined, RuntimeDefault};appArmor 渲染为 Pod annotation) |
 | `readinessProbe` | dict | 主容器恒 `httpGet{path(=health_path), port(=sse 端口)}` + `initialDelaySeconds`/`periodSeconds`(缺省 5/5;`tcpSocket`/`timeoutSeconds` → 400);sidecar `tcpSocket`/`httpGet` 二选一可缺省(缺省 5/**10**/3,period 差异不得跨角色套用),`timeoutSeconds` 1..300 |
-| —(不可表示即拒绝) | — | `command`/`args`/端口 `protocol`/nfs 卷 `readOnly:true`/`Localhost` profile 等 K8s 字段内部表达不了 → **400,绝不静默丢弃**(防"看似有特权实际没有") |
+| `command` / `args` | list[str] | 启动命令/参数覆盖(**主容器/sidecar 一致生效**,2026-09-11 起双角色);`None`/`[]` 同义 = 走镜像 ENTRYPOINT/CMD;非 str 项 → 400 |
+| —(不可表示即拒绝) | — | 端口 `protocol`/`Localhost` profile 等 K8s 字段内部表达不了 → **400,绝不静默丢弃**(防"看似有特权实际没有") |
 
 **`volumes`**(模板级,K8s `spec.volumes` 同构):`[{name(DNS-1123,模板内唯一), 恰一源}]`;源 = `hostPath{path, type?}` / `configMap{name, items?=[{key,path}]}` / `persistentVolumeClaim{claimName}` / `nfs{server, path?}`(NFS 仅主容器、至多一个挂载)。**未被任何容器挂载的卷 → 400**;同卷多容器共享天然成立(PVC 同 claim 跨容器单卷去重由 RM 渲染保证)。
 
-> 内部实现注:水合后仍是扁平 `Template`(字段名 `agent_image`/`agent_env`/`sse_port`/`health_path`/`sidecars` 等,即快照与 RM `pod_spec` 契约,见 `docs/spec/session-manager.md` §models)——**同值必同 deploy_ver**(三段式与 legacy 内联逐字节等价,承重断言固化)。`max_pods` 不在 template 里——它是派生值 `⌈scope_concurrency / pod_concurrency⌉`;`autoscale_interval` 是全局默认(0.5s)。
+> 内部实现注:水合后是**统一容器规范形**(2026-09 起,`containers.py`):`Template` 持模板级字段(namespace/node_name/pod_name/sse_path/ready_*/策略)+ `main_container`(canonical dict,13 键全填满:ports/env/env_from/resources/三类挂载/nfs/security_context/readiness_probe 等)+ `sidecars`(同款 canonical 列表,name 升序)——即快照与 RM `pod_spec` 契约,见 `docs/spec/session-manager.md` §models)——**同值必同 deploy_ver**(三段式水合 vs 手构 canonical 等值,承重断言固化;RM 侧 `normalize_pod_spec` 对缓存补缺省,未来加容器字段零伪日落)。`max_pods` 不在 template 里——它是派生值 `⌈scope_concurrency / pod_concurrency⌉`;`autoscale_interval` 是全局默认(0.5s)。
 
 **`routing_scope`**(config_sync 下发,持久化到 DB 表 `routing_scope`):scope 定义 = `scope_id + index + template_id + routing_rules + enabled + expires_at`,scope↔模板多对一。
 
@@ -216,7 +217,7 @@ field    := user_id | group_id | bot_id(固定小写枚举)
 ```
 
 - 语义:**以数组为准的全量替换**(upsert 全部 + 删除消失项;容器以本批为集 GC);幂等重放收敛(affected_scopes 为空)。
-- 校验(400 VALIDATION,锁外零副作用):缺 `containers` 键(legacy 内联载荷);`templates`/`scopes` 非 list;模板缺 `main_container_id`;**mixed**(引用键与 legacy 内联容器键并存);container_id 空/>100/同批重复/未被引用/双角色;容器逐项按角色校验(见 `container` 结构表;未知键/越角色键/不可表示字段);模板引用不在本批 containers;sidecar 引用重复/>8;volumes(重复卷名/多源/无源/悬挂挂载/未挂载卷/`subPath` 非 configMap/NFS 逾界);模板级 int 严格/策略下界/`nodeName` hostname;scope_id 字符集/`index` 拒 bool/引用不在本批模板集/`routing_rules` 表达式语法/`enabled` 须 bool/`expires_at` ISO-8601 或 null/同批重复(语法细则见上文)。
+- 校验(400 VALIDATION,锁外零副作用):缺 `containers` 键(legacy 内联载荷);`templates`/`scopes` 非 list;模板缺 `main_container_id`;**mixed**(引用键与 legacy 内联容器键并存);container_id 空/>100/同批重复/未被引用/双角色;容器逐项按角色校验(见 `container` 结构表;未知键/不可表示字段);模板引用不在本批 containers;sidecar 引用重复/>8;volumes(重复卷名/多源/无源/悬挂挂载/未挂载卷/`subPath` 非 configMap/NFS 逾界);模板级 int 严格/策略下界/`nodeName` hostname;scope_id 字符集/`index` 拒 bool/引用不在本批模板集/`routing_rules` 表达式语法/`enabled` 须 bool/`expires_at` ISO-8601 或 null/同批重复(语法细则见上文)。
 - 每次成功下发都会:重建路由快照(§5.1 `routing:snapshot`)、对每个**生效中** scope 推 RM 池参数 + pod_spec(**eager 预热**:autoscale 下一拍即预热 min_idle)、对禁用/过期 scope 与被删 scope 推 `min_idle=0`(自然排空)。
 
 **curl 调用示例**(Envelope 包装:`type` 须为端点名、`metadata.request_id` 必填(兼幂等键)、三段式载荷在 `rawdata`;带 K8s pod 内探测的脚本版本见 `scripts/config_sync_seed.sh`。示例载荷要点:主容器探针恒 `httpGet` 且**无** `timeoutSeconds`/sidecar `tcpSocket` + 特权三件套/模板只持容器引用与 `volumes`/空 `routing_rules` = 通配兜底 scope):
@@ -1180,15 +1181,14 @@ sequenceDiagram
 
 **配置项按"值是否在 deploy 时被烘焙进运行中的 Pod"分两类:**
 
-**A 类——变更需"日落"老 Pod**(deploy 子集,除 `kubeconfig`;变更后老 Pod 运行态与新配置不一致,不再接新流量):
+**A 类——变更需"日落"老 Pod**(deploy 子集,除 `kubeconfig`;变更后老 Pod 运行态与新配置不一致,不再接新流量)。2026-09 统一规范形起容器级以 canonical **整体**进指纹——加容器字段不动指纹字段集(spec_fields 只列模板级 + main_container/sidecars 两键):
 
 | 配置项 | 日落原因 |
 |---|---|
-| `agent_image` | 老 Pod 跑老代码 |
-| `namespace` / `container_name` / `container_port` | Pod 部署规格,新老不一致 |
-| `sse_port` / `sse_path` | 影响 `pod_sse_url` 构造 |
-| `readiness_*` | 探针烘焙在 Pod spec 里,K8s 对老 Pod 持续用老探针 |
-| `nfs_*` / 资源限额(CPU / 内存) | 挂载 / 限额要重建才生效 |
+| `namespace` / `node_name` / `pod_name` | Pod 部署规格,新老不一致 |
+| `sse_path` | 影响 `pod_sse_url` 构造(`sse_port` 在 main_container 内) |
+| `main_container`(整体) | 镜像/`sse_port`/探针/env/envFrom/挂载/NFS/资源限额/securityContext——全部烘焙进 Pod,要重建才生效 |
+| `sidecars`(整体) | sidecar 镜像/端口/挂载/安全上下文,同上 |
 
 **B 类——变更无需日落老 Pod**(运行时策略,控制面读时使用,老 Pod 继续服务):
 

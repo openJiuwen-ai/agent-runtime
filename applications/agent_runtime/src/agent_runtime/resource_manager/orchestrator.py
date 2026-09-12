@@ -17,6 +17,7 @@ import time
 from typing import Any
 from uuid import uuid4
 
+from ..containers import main_health_path, main_sse_port, normalize_pod_spec
 from ..errors import DeployFailed, MaxPodsReached
 from ..spec_fields import DEPLOY_VER_FIELDS
 from ..util import fingerprint, now_ts
@@ -37,8 +38,13 @@ FOLLOWER_PROGRESS_LOG_SEC = 5  # follower 轮询进度 INFO 行间隔（限频�
 
 def _deploy_ver(pod_spec: dict[str, Any]) -> str:
     """pod_spec 的 deploy 子集指纹（与 SM Template.deploy_ver() 同一算法/字段，
-    两端必须一致——A 类版本过滤依赖它）。kubeconfig 不入指纹（B 类例外）。"""
-    return fingerprint({f: pod_spec.get(f) for f in DEPLOY_VER_FIELDS})
+    两端必须一致——A 类版本过滤依赖它）。kubeconfig 不入指纹（B 类例外）。
+
+    先过 normalize_pod_spec(只补 canonical 缺省键不改值):pod_spec 可能来自
+    Redis pod_spec_json 缓存——未来加容器字段后旧缓存缺新键,补默认(==旧行为)
+    后与新算指纹相等 → 零伪 A 类日落;行为性新键应当日落,日落正确。"""
+    norm = normalize_pod_spec(pod_spec)
+    return fingerprint({f: norm.get(f) for f in DEPLOY_VER_FIELDS})
 
 
 class ResourceOrchestrator:
@@ -288,9 +294,12 @@ class ResourceOrchestrator:
         info: PodDeployInfo | None = None
         try:
             info = await self.k8s.deploy(pod_spec)
+            norm = normalize_pod_spec(pod_spec)
+            main = norm.get("main_container")
+            sse_port = main_sse_port(main)
             sse_url = (
-                f"http://{info.pod_ip}:{pod_spec.get('sse_port', 8080)}"
-                f"{pod_spec.get('sse_path', '/sse')}"
+                f"http://{info.pod_ip}:{sse_port}"
+                f"{pod_spec.get('sse_path') or '/sse'}"
             )
             await self.state.register_pod(
                 pod_id=info.pod_id,
@@ -302,8 +311,8 @@ class ResourceOrchestrator:
                 deploy_token=deploy_token,
                 idle_flag=idle_flag,
                 now=now_ts(),
-                sse_port=int(pod_spec.get("sse_port") or 8080),
-                health_path=str(pod_spec.get("health_path") or "/health"),
+                sse_port=sse_port,
+                health_path=main_health_path(main),
             )
         except BaseException as exc:   # noqa: BLE001 - 占位清理红线含取消路径
             try:

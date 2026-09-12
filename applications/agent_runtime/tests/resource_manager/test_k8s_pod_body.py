@@ -1,8 +1,9 @@
 # coding: utf-8
-"""_build_pod_body 多容器渲染测试(单容器黄金断言 + sidecar 全量渲染)。
+"""_build_pod_body 统一容器渲染测试(单容器黄金断言 + sidecar 全量渲染)。
 
 mock 手法:_V1 记录型替身注入 client._client——_build_pod_body 只做 kwargs
 透传,断言直接读 .kwargs 链,零环境依赖(不依赖 kubernetes_asyncio 安装)。
+pod_spec 为统一容器规范形(containers.py canonical):main_container + sidecars。
 """
 
 from __future__ import annotations
@@ -16,26 +17,26 @@ from agent_runtime.resource_manager.k8s import (
     RealK8sPodClient,
     _host_path_volume_name,
 )
-from agent_runtime.sidecars import validate_sidecars
 
+# canonical jiuwenbox 全量样例(渲染断言基准)
 JIUWENBOX = {
     "name": "jiuwenbox",
     "image": "jiuwenbox-amd64:0.0.1",
-    "port": 8321,
+    "ports": [{"name": None, "container_port": 8321}],
     "env": {"JIUWENBOX_LISTEN": "tcp://0.0.0.0:8321",
             "JIUWENBOX_POLICY_PATH": "/app/configs/enterprise-policy.yaml"},
-    "cpu_request": "100m",
-    "memory_limit": "1Gi",
-    "privileged": True,
-    "capabilities_add": ["SYS_ADMIN", "NET_ADMIN"],
-    "seccomp_unconfined": True,
-    "apparmor_unconfined": True,
+    "resources": {"cpu_request": "100m", "memory_request": None,
+                  "cpu_limit": None, "memory_limit": "1Gi"},
+    "security_context": {"run_as_user": None, "run_as_group": None,
+                         "privileged": True,
+                         "capabilities_add": ["NET_ADMIN", "SYS_ADMIN"],
+                         "capabilities_drop": [],
+                         "seccomp_unconfined": True,
+                         "apparmor_unconfined": True},
     "host_path_mounts": [
-        {"host_path": "/sys/fs/cgroup", "mount_path": "/sys/fs/cgroup"},
-    ],
-    "readiness_probe_type": "tcp",
-    "readiness_initial_delay": 10,
-    "readiness_period": 5,
+        {"host_path": "/sys/fs/cgroup", "mount_path": "/sys/fs/cgroup"}],
+    "readiness_probe": {"probe_type": "tcp", "path": "/health",
+                        "initial_delay": 10, "period": 5, "timeout": 3},
 }
 
 
@@ -55,6 +56,7 @@ def _fake_client_module() -> SimpleNamespace:
         "V1HostPathVolumeSource", "V1ConfigMapVolumeSource", "V1KeyToPath",
         "V1PersistentVolumeClaimVolumeSource",
         "V1EnvFromSource", "V1SecretEnvSource", "V1ConfigMapEnvSource",
+        "V1PodSecurityContext",
     )
     return SimpleNamespace(**{name: _V1 for name in names})
 
@@ -66,25 +68,25 @@ def client() -> RealK8sPodClient:
     return c
 
 
-def _base_spec(**overrides) -> dict:
-    spec = {
-        "agent_image": "agentserver:1.0",
-        "namespace": "default",
-        "sse_port": 8086,
-        "container_port": 8086,
-        "container_name": "agent",
-        "agent_nfs_mounts": [{"server": "nfs.example", "path": "/export",
-                              "mount_path": "/data", "read_only": False}],
-        "health_path": "/health",
-        "agent_env": {"AGENT_HTTP_ENABLED": "true"},
+def _main(**overrides) -> dict:
+    main = {
+        "name": "agent",
+        "image": "agentserver:1.0",
+        "ports": [{"name": "sse", "container_port": 8086}],
+        "env": {"AGENT_HTTP_ENABLED": "true"},
+        "nfs_mounts": [{"server": "nfs.example", "path": "/export",
+                        "mount_path": "/data", "read_only": False}],
+        "readiness_probe": {"probe_type": "http", "path": "/health",
+                            "initial_delay": 5, "period": 5, "timeout": None},
     }
+    main.update(overrides)
+    return main
+
+
+def _base_spec(**overrides) -> dict:
+    spec = {"main_container": _main(), "namespace": "default"}
     spec.update(overrides)
     return spec
-
-
-def _sidecars(validated: list[dict]) -> list[dict]:
-    return validate_sidecars(validated, container_name="agent",
-                             sse_port=8086, container_port=8086)
 
 
 # -------------------------------------------------------------- 单容器黄金断言
@@ -98,13 +100,7 @@ def test_build_pod_body_without_sidecars_unchanged(client):
     assert len(containers) == 1
     assert containers[0].kwargs["name"] == "agent"
     volume_names = [v.kwargs["name"] for v in spec["volumes"]]
-    assert volume_names == ["nfs-agent-0-0"]
-    nfs_vol = spec["volumes"][0]
-    assert nfs_vol.kwargs["nfs"].kwargs == {"server": "nfs.example",
-                                            "path": "/export"}
-    main_mount = containers[0].kwargs["volume_mounts"][0].kwargs
-    assert main_mount == {"name": "nfs-agent-0-0", "mount_path": "/data",
-                          "read_only": False}
+    assert volume_names == ["nfs-agent-0-0"]  # NFS 第四挂载族卷名(同 hp/cm/pvc 规则)
     assert spec["restart_policy"] == "Always"
     # 主容器探针/端口/env 不受 sidecar 改动影响
     main = containers[0].kwargs
@@ -113,11 +109,18 @@ def test_build_pod_body_without_sidecars_unchanged(client):
     assert [p.kwargs["container_port"] for p in main["ports"]] == [8086]
 
 
+def test_build_pod_body_rejects_legacy_flat_spec(client):
+    """缺 main_container 的旧扁平缓存 → DeployFailed(防渲染空镜像 Pod)。"""
+    with pytest.raises(DeployFailed, match="no main_container"):
+        client._build_pod_body("pod-1", {"agent_image": "x:1",
+                                         "namespace": "default"})
+
+
 # -------------------------------------------------------------- sidecar 渲染
 
 def test_build_pod_body_renders_full_sidecar(client):
     """jiuwenbox 全量:双容器 + 特权安全上下文 + hostPath 卷 + apparmor annotation。"""
-    spec = _base_spec(sidecars=_sidecars([JIUWENBOX]))
+    spec = _base_spec(sidecars=[JIUWENBOX])
     pod = client._build_pod_body("pod-1", spec)
     meta, pod_spec = pod.kwargs["metadata"].kwargs, pod.kwargs["spec"].kwargs
 
@@ -136,7 +139,7 @@ def test_build_pod_body_renders_full_sidecar(client):
     # 安全上下文:特权 + caps + seccomp unconfined
     sec = box["security_context"].kwargs
     assert sec["privileged"] is True
-    assert sec["capabilities"].kwargs["add"] == ["SYS_ADMIN", "NET_ADMIN"]
+    assert sec["capabilities"].kwargs["add"] == ["NET_ADMIN", "SYS_ADMIN"]  # canonical 排序
     assert sec["seccomp_profile"].kwargs == {"type": "Unconfined"}
     # apparmor → Pod annotation(不是 security_context)
     assert meta["annotations"] == {
@@ -164,9 +167,10 @@ def test_build_pod_body_renders_full_sidecar(client):
 
 
 def test_build_pod_body_sidecar_readiness_http(client):
-    sc = dict(JIUWENBOX, readiness_probe_type="http", port=8321,
-              readiness_path="/box/health")
-    spec = _base_spec(sidecars=_sidecars([sc]))
+    sc = dict(JIUWENBOX, readiness_probe={
+        "probe_type": "http", "path": "/box/health", "initial_delay": 5,
+        "period": 10, "timeout": 3})
+    spec = _base_spec(sidecars=[sc])
     pod = client._build_pod_body("pod-1", spec)
     probe = pod.kwargs["spec"].kwargs["containers"][1].kwargs["readiness_probe"]
     assert probe.kwargs["http_get"].kwargs == {"path": "/box/health", "port": 8321}
@@ -175,7 +179,7 @@ def test_build_pod_body_sidecar_readiness_http(client):
 def test_build_pod_body_sidecar_without_port(client):
     """无 port sidecar:ports=None、无探针(纯后台容器)。"""
     sc = {"name": "logtail", "image": "logtail:1"}
-    spec = _base_spec(sidecars=_sidecars([sc]))
+    spec = _base_spec(sidecars=[sc])
     pod = client._build_pod_body("pod-1", spec)
     box = pod.kwargs["spec"].kwargs["containers"][1].kwargs
     assert box["ports"] is None
@@ -184,9 +188,10 @@ def test_build_pod_body_sidecar_without_port(client):
 
 
 def test_build_pod_body_rejects_port_conflict(client):
-    """脏缓存(绕过 SM 校验的 pod_spec):sidecar port 撞 sse_port → DeployFailed。"""
-    spec = _base_spec(sidecars=[dict(JIUWENBOX, port=8086)])  # 原始 dict,未走校验
-    with pytest.raises(DeployFailed, match="sidecars invalid"):
+    """脏缓存(绕过 SM 校验的 pod_spec):sidecar port 撞主容器端口 → DeployFailed。"""
+    spec = _base_spec(sidecars=[dict(
+        JIUWENBOX, ports=[{"name": None, "container_port": 8086}])])
+    with pytest.raises(DeployFailed, match="containers invalid"):
         client._build_pod_body("pod-1", spec)
 
 
@@ -201,25 +206,22 @@ def test_build_pod_body_skips_corrupt_cached_sidecars(client):
 # -------------------------------------------------------------- 卷名规则
 
 def test_build_pod_body_renders_main_container_mounts(client):
-    """主容器四类挂载:ConfigMap(sub_path+items)/hostPath/PVC/NFS 卷与挂载点。"""
-    from agent_runtime.mounts import validate_agent_mounts
-
-    hp, cm, pvc, nfs = validate_agent_mounts(
-        [{"host_path": "/host/cfg", "mount_path": "/etc/host"}],
-        [{"config_map_name": "agent-cm", "mount_path": "/etc/agent/config.yaml",
-          "sub_path": "config.yaml",
-          "items": [{"key": "k1", "path": "config.yaml"}]}],
-        [{"claim_name": "agent-data", "mount_path": "/data"}],
-        [{"server": "nfs.example", "path": "/export", "mount_path": "/nfs"}],
+    """主容器三种挂载:ConfigMap(sub_path+items)/hostPath/PVC 卷与挂载点。"""
+    main = _main(
+        nfs_mounts=[{"server": "nfs.example", "path": "/export",
+                     "mount_path": "/nfs", "read_only": False}],
+        host_path_mounts=[{"host_path": "/host/cfg", "mount_path": "/etc/host"}],
+        configmap_mounts=[{"config_map_name": "agent-cm",
+                           "mount_path": "/etc/agent/config.yaml",
+                           "sub_path": "config.yaml",
+                           "items": [{"key": "k1", "path": "config.yaml"}]}],
+        pvc_mounts=[{"claim_name": "agent-data", "mount_path": "/data"}],
     )
-    spec = _base_spec(agent_host_path_mounts=hp,
-                      agent_configmap_mounts=cm,
-                      agent_pvc_mounts=pvc,
-                      agent_nfs_mounts=nfs)
+    spec = _base_spec(main_container=main)
     pod = client._build_pod_body("pod-1", spec)
     pod_spec = pod.kwargs["spec"].kwargs
     vols = {v.kwargs["name"]: v.kwargs for v in pod_spec["volumes"]}
-    # NFS + 三种卷共存;主容器卷名 {hp,cm,pvc,nfs}-agent-0-{mount_idx}
+    # NFS(既有)+ 三种新卷共存;主容器卷名 {hp,cm,pvc}-agent-0-{mount_idx}
     assert set(vols) == {"nfs-agent-0-0", "cm-agent-0-0", "hp-agent-0-0",
                          "pvc-agent-0-0"}
     cm_vol = vols["cm-agent-0-0"]["config_map"].kwargs
@@ -230,11 +232,10 @@ def test_build_pod_body_renders_main_container_mounts(client):
         "path": "/host/cfg", "type": None}
     assert vols["pvc-agent-0-0"]["persistent_volume_claim"].kwargs == {
         "claim_name": "agent-data", "read_only": False}
-    assert vols["nfs-agent-0-0"]["nfs"].kwargs == {
-        "server": "nfs.example", "path": "/export"}
     # 主容器 volumeMounts:NFS + cm(sub_path+只读默认 True)+ hp + pvc
-    main = pod_spec["containers"][0].kwargs
-    mounts = {m.kwargs["mount_path"]: m.kwargs for m in main["volume_mounts"]}
+    main_kwargs = pod_spec["containers"][0].kwargs
+    mounts = {m.kwargs["mount_path"]: m.kwargs
+              for m in main_kwargs["volume_mounts"]}
     assert set(mounts) == {"/nfs", "/etc/host", "/etc/agent/config.yaml", "/data"}
     assert mounts["/etc/agent/config.yaml"] == {
         "name": "cm-agent-0-0", "mount_path": "/etc/agent/config.yaml",
@@ -243,15 +244,14 @@ def test_build_pod_body_renders_main_container_mounts(client):
 
 
 def test_build_pod_body_renders_sidecar_configmap_and_pvc(client):
-    from agent_runtime.sidecars import validate_sidecars
-
-    sc = dict(JIUWENBOX, configmap_mounts=[
-        {"config_map_name": "box-policy",
-         "mount_path": "/etc/jiuwenbox/policy.yaml", "sub_path": "policy.yaml"}],
-        pvc_mounts=[{"claim_name": "box-data", "mount_path": "/var/lib/box"}])
-    sidecars = validate_sidecars([sc], container_name="agent",
-                                 sse_port=8086, container_port=8086)
-    spec = _base_spec(sidecars=sidecars)
+    sc = dict(JIUWENBOX,
+              configmap_mounts=[
+                  {"config_map_name": "box-policy",
+                   "mount_path": "/etc/jiuwenbox/policy.yaml",
+                   "sub_path": "policy.yaml"}],
+              pvc_mounts=[{"claim_name": "box-data",
+                           "mount_path": "/var/lib/box"}])
+    spec = _base_spec(sidecars=[sc])
     pod = client._build_pod_body("pod-1", spec)
     pod_spec = pod.kwargs["spec"].kwargs
     vols = {v.kwargs["name"]: v.kwargs for v in pod_spec["volumes"]}
@@ -280,21 +280,36 @@ def test_host_path_volume_name_rules(name, idx, mount_idx, expected):
 # ---------------------------------------------- 主容器 securityContext / node_name
 
 def test_build_pod_body_main_security_context(client):
-    """主容器 run_as_user/run_as_group → securityContext;未给则不设键(镜像 USER 生效)。"""
-    spec = _base_spec(run_as_user=1000, run_as_group=1000)
+    """决策 B:主容器 securityContext 与 sidecar 全量一致渲染。"""
+    spec = _base_spec(main_container=_main(
+        security_context={"run_as_user": 1000, "run_as_group": 1000}))
     main = client._build_pod_body("pod-1", spec).kwargs["spec"].kwargs[
         "containers"][0].kwargs
-    assert main["security_context"].kwargs == {
-        "run_as_user": 1000, "run_as_group": 1000}
-    # 只给 user 不给 group:半渲染
+    effective = {k: v for k, v in
+                 main["security_context"].kwargs.items() if v is not None}
+    assert effective == {"run_as_user": 1000, "run_as_group": 1000}
+    # 只给 user 不给 group:半渲染(其余键 None=未设,K8s 渲染等价)
     main = client._build_pod_body(
-        "pod-1", _base_spec(run_as_user=1000)).kwargs["spec"].kwargs[
-        "containers"][0].kwargs
-    assert main["security_context"].kwargs == {"run_as_user": 1000}
-    # 默认:不设键(与历史 Pod 零差异)
+        "pod-1", _base_spec(main_container=_main(
+            security_context={"run_as_user": 1000}))
+    ).kwargs["spec"].kwargs["containers"][0].kwargs
+    effective = {k: v for k, v in
+                 main["security_context"].kwargs.items() if v is not None}
+    assert effective == {"run_as_user": 1000}
+    # 特权/caps/seccomp:主容器同 sidecar 渲染
+    main = client._build_pod_body(
+        "pod-1", _base_spec(main_container=_main(security_context={
+            "privileged": True, "capabilities_add": ["SYS_ADMIN"],
+            "seccomp_unconfined": True}))
+    ).kwargs["spec"].kwargs["containers"][0].kwargs
+    sec = main["security_context"].kwargs
+    assert sec["privileged"] is True
+    assert sec["capabilities"].kwargs == {"add": ["SYS_ADMIN"], "drop": None}
+    assert sec["seccomp_profile"].kwargs == {"type": "Unconfined"}
+    # 默认:security_context=None(走镜像默认;渲染出的 K8s 对象无该段)
     main = client._build_pod_body(
         "pod-1", _base_spec()).kwargs["spec"].kwargs["containers"][0].kwargs
-    assert "security_context" not in main
+    assert main["security_context"] is None
 
 
 def test_build_pod_body_node_name(client):
@@ -310,17 +325,13 @@ def test_build_pod_body_node_name(client):
 # -------------------------------------------------------------- PVC 同 claim 去重
 
 def _spec_with_pvcs(client, main_pvc, sc_pvc):
-    """主容器 + jiuwenbox sidecar 各带 pvc_mounts 的 spec(均走规范形校验)。"""
-    from agent_runtime.mounts import validate_agent_mounts
-    from agent_runtime.sidecars import validate_sidecars
-
-    hp, cm, pvc, _nfs = validate_agent_mounts([], [], main_pvc, None)
+    """主容器 + jiuwenbox sidecar 各带 pvc_mounts 的 spec(canonical 形)。"""
+    main = _main(
+        nfs_mounts=[{"server": "nfs.example", "path": "/export",
+                     "mount_path": "/nfs", "read_only": False}],
+        pvc_mounts=main_pvc)
     sc = dict(JIUWENBOX, pvc_mounts=sc_pvc)
-    sidecars = validate_sidecars([sc], container_name="agent",
-                                 sse_port=8086, container_port=8086)
-    # 关掉 base 的 NFS 挂载(默认 /data 会与 PVC 测试挂载点相撞)
-    return _base_spec(agent_nfs_mounts=None, agent_pvc_mounts=pvc,
-                      sidecars=sidecars)
+    return _base_spec(main_container=main, sidecars=[sc])
 
 
 def test_build_pod_body_pvc_same_claim_shared_across_containers(client):
@@ -382,86 +393,15 @@ def test_build_pod_body_pvc_shared_claim_read_only_first_wins(client):
     assert box_mounts["/var/lib/box"]["read_only"] is False  # mount 级原样
 
 
-# -------------------------------------------------------------- NFS 同共享去重
-# 白盒单测:直测渲染纯函数 _build_pod_body(同文件既有惯例),压制 G.CLS.11
-# pylint: disable=protected-access
-
-def _spec_with_nfs(main_nfs, sc_nfs):
-    """主容器 + jiuwenbox sidecar 各带 nfs_mounts 的 spec(均走规范形校验)。"""
-    from agent_runtime.mounts import validate_agent_mounts
-
-    hp, cm, pvc, nfs = validate_agent_mounts([], [], [], main_nfs)
-    sc = dict(JIUWENBOX, nfs_mounts=sc_nfs)
-    sidecars = validate_sidecars([sc], container_name="agent",
-                                 sse_port=8086, container_port=8086)
-    return _base_spec(agent_nfs_mounts=nfs, sidecars=sidecars)
-
-
-def test_build_pod_body_nfs_same_share_shared_across_containers(client):
-    """同 server+path 的 NFS 共享跨主/sidecar:只建一个共享卷,双挂载点复用。
-
-    企业版 jiuwenclaw 场景:agentserver(/root/.jiuwenswarm)与 jiuwenbox
-    sidecar(/home/app/.jiuwenswarm)共挂同一 NFS 数据目录。
-    """
-    spec = _spec_with_nfs(
-        [{"server": "10.0.0.1", "path": "/jiuwenclaw",
-          "mount_path": "/root/.jiuwenswarm"}],
-        [{"server": "10.0.0.1", "path": "/jiuwenclaw",
-          "mount_path": "/home/app/.jiuwenswarm"}])
-    ps = client._build_pod_body("pod-1", spec).kwargs["spec"].kwargs
-    nfs_vols = [v for v in ps["volumes"] if "nfs" in v.kwargs]
-    assert len(nfs_vols) == 1                              # 去重:同共享一卷
-    assert nfs_vols[0].kwargs["name"] == "nfs-agent-0-0"   # 首现=主容器(idx 0)
-    assert nfs_vols[0].kwargs["nfs"].kwargs == {
-        "server": "10.0.0.1", "path": "/jiuwenclaw"}
-    assert "nfs-jiuwenbox-0-0" not in [v.kwargs["name"] for v in ps["volumes"]]
-    main_mounts = {m.kwargs["mount_path"]: m.kwargs
-                   for m in ps["containers"][0].kwargs["volume_mounts"]}
-    box_mounts = {m.kwargs["mount_path"]: m.kwargs
-                  for m in ps["containers"][1].kwargs["volume_mounts"]}
-    assert main_mounts["/root/.jiuwenswarm"]["name"] == "nfs-agent-0-0"
-    assert box_mounts["/home/app/.jiuwenswarm"]["name"] == "nfs-agent-0-0"
-
-
-def test_build_pod_body_nfs_different_shares_not_deduped(client):
-    """异共享不误伤:各建各卷、各引用各卷名。"""
-    spec = _spec_with_nfs(
-        [{"server": "10.0.0.1", "path": "/a", "mount_path": "/mnt/a"}],
-        [{"server": "10.0.0.2", "path": "/b", "mount_path": "/mnt/b"}])
-    ps = client._build_pod_body("pod-1", spec).kwargs["spec"].kwargs
-    vols = {v.kwargs["name"]: v.kwargs for v in ps["volumes"]}
-    assert set(vols) >= {"nfs-agent-0-0", "nfs-jiuwenbox-0-0"}
-    assert vols["nfs-agent-0-0"]["nfs"].kwargs == {
-        "server": "10.0.0.1", "path": "/a"}
-    assert vols["nfs-jiuwenbox-0-0"]["nfs"].kwargs == {
-        "server": "10.0.0.2", "path": "/b"}
-
-
-def test_build_pod_body_nfs_sidecar_only_mount(client):
-    """仅 sidecar 挂 NFS(主容器不挂):卷照建、主容器零挂载(pod 级卷语义)。"""
-    sc = dict(JIUWENBOX, nfs_mounts=[
-        {"server": "10.0.0.1", "path": "/export", "mount_path": "/box/data"}])
-    sidecars = validate_sidecars([sc], container_name="agent",
-                                 sse_port=8086, container_port=8086)
-    spec = _base_spec(agent_nfs_mounts=None, sidecars=sidecars)
-    ps = client._build_pod_body("pod-1", spec).kwargs["spec"].kwargs
-    assert [v.kwargs["name"] for v in ps["volumes"]] == [
-        "hp-jiuwenbox-0-0", "nfs-jiuwenbox-0-0"]
-    assert ps["containers"][0].kwargs["volume_mounts"] is None
-    box_mounts = {m.kwargs["mount_path"]: m.kwargs
-                  for m in ps["containers"][1].kwargs["volume_mounts"]}
-    assert box_mounts["/box/data"]["name"] == "nfs-jiuwenbox-0-0"
-# pylint: enable=protected-access
-
-
 # -------------------------------------------------------------- envFrom 渲染
 
 def test_build_pod_body_renders_main_env_from(client):
     """主容器 envFrom:secretRef/configMapRef/prefix/optional 逐字段透传。"""
-    spec = _base_spec(agent_env_from=[
-        {"prefix": "DB_", "secret_ref": {"name": "agent-secret", "optional": True}},
+    spec = _base_spec(main_container=_main(env_from=[
+        {"prefix": "DB_",
+         "secret_ref": {"name": "agent-secret", "optional": True}},
         {"config_map_ref": {"name": "agent-cm", "optional": False}},
-    ])
+    ]))
     pod = client._build_pod_body("pod-1", spec)
     main = pod.kwargs["spec"].kwargs["containers"][0].kwargs
     env_from = main["env_from"]
@@ -482,9 +422,8 @@ def test_build_pod_body_main_env_from_absent_is_none(client):
 
 
 def test_build_pod_body_renders_sidecar_env_from(client):
-    box = dict(JIUWENBOX, env_from=[
-        {"secret_ref": {"name": "box-secret"}}])
-    spec = _base_spec(sidecars=_sidecars([box]))
+    box = dict(JIUWENBOX, env_from=[{"secret_ref": {"name": "box-secret"}}])
+    spec = _base_spec(sidecars=[box])
     pod = client._build_pod_body("pod-1", spec)
     box_container = pod.kwargs["spec"].kwargs["containers"][1].kwargs
     assert box_container["env_from"][0].kwargs["prefix"] is None
@@ -510,42 +449,81 @@ def test_render_env_from_tolerates_corrupt_cache(client):
     assert _render_env_from(c, [{"secret_ref": {"name": ""}}]) is None
 
 
+# ---------------------------------------------- command/args(Pod 级 fsGroup)
+
+def test_build_pod_body_renders_command_args(client):
+    """command/args 覆盖,主/sidecar 一致生效(缺省走镜像 ENTRYPOINT/CMD)。"""
+    spec = _base_spec(main_container=_main(
+        command=["/bin/agent"], args=["--port", "8086"]))
+    main = client._build_pod_body("pod-1", spec).kwargs["spec"].kwargs[
+        "containers"][0].kwargs
+    assert main["command"] == ["/bin/agent"]
+    assert main["args"] == ["--port", "8086"]
+    # 缺省:不设键(镜像入口生效)
+    plain = client._build_pod_body(
+        "pod-1", _base_spec()).kwargs["spec"].kwargs["containers"][0].kwargs
+    assert "command" not in plain and "args" not in plain
+    # sidecar 同样生效(2026-09-11 双角色开放;不再静默吞键)
+    sc = dict(JIUWENBOX, command=["/bin/box"], args=["--box-flag"])
+    pod = client._build_pod_body("pod-1", _base_spec(sidecars=[sc]))
+    box = pod.kwargs["spec"].kwargs["containers"][1].kwargs
+    assert box["command"] == ["/bin/box"]
+    assert box["args"] == ["--box-flag"]
+
+
+def test_build_pod_body_renders_pod_fs_group(client):
+    """模板级 fsGroup → Pod securityContext.fsGroup(NFS 卷属主官方修法)。"""
+    spec = _base_spec(fs_group=2000)
+    pod = client._build_pod_body("pod-1", spec)
+    assert pod.kwargs["spec"].kwargs["security_context"].kwargs == {
+        "fs_group": 2000}
+    # 缺省:不设
+    pod2 = client._build_pod_body("pod-1", _base_spec())
+    assert pod2.kwargs["spec"].kwargs["security_context"] is None
+
+
+def test_build_pod_body_nfs_shared_across_containers(client):
+    """同 server+path 的 NFS 共享跨主/sidecar 只建一个卷,复用卷名。"""
+    sc = dict(JIUWENBOX, nfs_mounts=[
+        {"server": "nfs.example", "path": "/export",
+         "mount_path": "/var/lib/box", "read_only": True}])
+    pod = client._build_pod_body("pod-1", _base_spec(sidecars=[sc]))
+    ps = pod.kwargs["spec"].kwargs
+    nfs_vols = [v for v in ps["volumes"]
+                if "nfs" in v.kwargs]
+    assert len(nfs_vols) == 1
+    assert nfs_vols[0].kwargs["name"] == "nfs-agent-0-0"  # 首现=主容器(idx 0)
+    assert nfs_vols[0].kwargs["nfs"].kwargs == {
+        "server": "nfs.example", "path": "/export"}
+    box_mounts = {m.kwargs["mount_path"]: m.kwargs
+                  for m in ps["containers"][1].kwargs["volume_mounts"]}
+    assert box_mounts["/var/lib/box"]["name"] == "nfs-agent-0-0"
+    assert box_mounts["/var/lib/box"]["read_only"] is True  # mount 级原样
+
+
 # -------------------------------------------------------------- 跨容器同源卷共享
 
 # pylint: disable=protected-access
 
 
-def _hp_volumes(pod) -> list:
-    """收集 Pod 级 hp- 前缀卷(简单过滤,保持调用方断言聚焦)。"""
-    out = []
-    for v in pod.kwargs["spec"].kwargs["volumes"]:
-        if v.kwargs["name"].startswith("hp-"):
-            out.append(v)
-    return out
-
-
-def _cm_volumes(pod) -> list:
-    """收集 Pod 级 cm- 前缀卷(简单过滤,保持调用方断言聚焦)。"""
-    out = []
-    for v in pod.kwargs["spec"].kwargs["volumes"]:
-        if v.kwargs["name"].startswith("cm-"):
-            out.append(v)
-    return out
+def _prefix_volumes(pod, prefix: str) -> list:
+    """收集 Pod 级指定前缀卷(简单过滤,保持调用方断言聚焦)。"""
+    return [v for v in pod.kwargs["spec"].kwargs["volumes"]
+            if v.kwargs["name"].startswith(f"{prefix}-")]
 
 
 def test_build_pod_body_dedupes_shared_hostpath_across_containers(client):
-    """主容器与 sidecar 引用同一 hostPath(同 path+type)→ Pod 级只建一个卷,两侧 volumeMounts 复用同一卷名(对齐 pvc_seen/nfs_seen 语义)。"""
+    """主容器与 sidecar 同 hostPath(同 path+type)→ 一个 Pod 级卷,两侧复用。"""
     shared_hp = [{"host_path": "/root/chenhui/jiuwenclaw",
                   "mount_path": "/app/jiuwenswarm", "read_only": False,
                   "host_path_type": "Directory"}]
-    sc = dict(JIUWENBOX)
-    sc["host_path_mounts"] = shared_hp  # 与主容器同源
-    spec = _base_spec(agent_host_path_mounts=shared_hp,
-                      sidecars=_sidecars([sc]))
+    sc = dict(JIUWENBOX, host_path_mounts=shared_hp)  # 与主容器同源
+    spec = _base_spec(main_container=_main(host_path_mounts=shared_hp),
+                      sidecars=[sc])
     pod = client._build_pod_body("pod-1", spec)
     pod_spec = pod.kwargs["spec"].kwargs
 
-    hp_vols = _hp_volumes(pod)
+    hp_vols = _prefix_volumes(pod, "hp")
     assert len(hp_vols) == 1
     vol_name = hp_vols[0].kwargs["name"]
     assert hp_vols[0].kwargs["host_path"].kwargs == {
@@ -562,13 +540,13 @@ def test_build_pod_body_hostpath_differs_by_type_not_shared(client):
     """同 path 不同 host_path_type:卷定义不同 → 不共享。"""
     hp_a = [{"host_path": "/data", "mount_path": "/a", "read_only": False,
              "host_path_type": "Directory"}]
-    sc = dict(JIUWENBOX)
-    sc["host_path_mounts"] = [{"host_path": "/data", "mount_path": "/b",
-                               "read_only": False, "host_path_type": None}]
-    spec = _base_spec(agent_host_path_mounts=hp_a,
-                      sidecars=_sidecars([sc]))
+    sc = dict(JIUWENBOX, host_path_mounts=[
+        {"host_path": "/data", "mount_path": "/b", "read_only": False,
+         "host_path_type": None}])
+    spec = _base_spec(main_container=_main(host_path_mounts=hp_a),
+                      sidecars=[sc])
     pod = client._build_pod_body("pod-1", spec)
-    assert len(_hp_volumes(pod)) == 2
+    assert len(_prefix_volumes(pod, "hp")) == 2
 
 
 def test_build_pod_body_dedupes_shared_configmap_across_containers(client):
@@ -576,21 +554,20 @@ def test_build_pod_body_dedupes_shared_configmap_across_containers(client):
     cm = [{"config_map_name": "app-config", "mount_path": "/etc/app",
            "read_only": True, "sub_path": None,
            "items": [{"key": "a", "path": "a"}]}]
-    sc = dict(JIUWENBOX)
-    sc["configmap_mounts"] = cm
-    spec = _base_spec(agent_configmap_mounts=cm, sidecars=_sidecars([sc]))
+    sc = dict(JIUWENBOX, configmap_mounts=cm)
+    spec = _base_spec(main_container=_main(configmap_mounts=cm),
+                      sidecars=[sc])
     pod = client._build_pod_body("pod-1", spec)
-    assert len(_cm_volumes(pod)) == 1
+    assert len(_prefix_volumes(pod, "cm")) == 1
 
-    sc_diff = dict(JIUWENBOX)
-    sc_diff["configmap_mounts"] = [{"config_map_name": "app-config",
-                                    "mount_path": "/etc/app2", "read_only": True,
-                                    "sub_path": None,
-                                    "items": [{"key": "b", "path": "b"}]}]
-    spec2 = _base_spec(agent_configmap_mounts=cm,
-                       sidecars=_sidecars([sc_diff]))
+    sc_diff = dict(JIUWENBOX, configmap_mounts=[
+        {"config_map_name": "app-config", "mount_path": "/etc/app2",
+         "read_only": True, "sub_path": None,
+         "items": [{"key": "b", "path": "b"}]}])
+    spec2 = _base_spec(main_container=_main(configmap_mounts=cm),
+                       sidecars=[sc_diff])
     pod2 = client._build_pod_body("pod-2", spec2)
-    assert len(_cm_volumes(pod2)) == 2
+    assert len(_prefix_volumes(pod2, "cm")) == 2
 
 
 # pylint: enable=protected-access
