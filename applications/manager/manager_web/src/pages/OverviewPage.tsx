@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { InstanceApi, SystemApi } from '../services/api';
 import { useAsync } from '../hooks/useAsync';
-import { useDefinitionPresence } from '../hooks/useGuideStatus';
+import { useClustersGuideStatus, useDefinitionPresence } from '../hooks/useGuideStatus';
 import { StatusBadge } from '../components/StatusBadge';
 import { WarnBadge, type WarnBadgeLink } from '../components/WarnBadge';
 import { useRouter } from '../router';
@@ -25,7 +25,15 @@ export function OverviewPage() {
 
   const instanceTotal = instances.data?.total ?? 0;
 
-  /** 与左侧导航栏叹号提示同源的汇总：按导航栏顺序（模型 → Agent定义 → Agent实例池定义 → 集群）展示 */
+  /** 各集群的引导告警（与集群管理页方块右上角叹号同源），有任一集群告警时汇总为一项 */
+  const clusterIds = useMemo(
+    () => (instances.data?.items ?? []).map((it) => it.jiuwenclaw_id),
+    [instances.data],
+  );
+  const alertsByInstance = useClustersGuideStatus(clusterIds);
+  const hasClusterAlerts = Object.values(alertsByInstance).some((alerts) => alerts.length > 0);
+
+  /** 与左侧导航栏叹号提示同源的汇总：按导航栏顺序（模型 → Agent定义 → Agent实例池定义 → 集群 → 集群管理告警）展示 */
   const quickNavLinks: WarnBadgeLink[] = [];
   if (modelDefined === false) {
     quickNavLinks.push({ label: t('guide.missingItem', { item: t('nav.modelTemplates') }), to: '/model-templates', openTarget: 'modelTemplateNew' });
@@ -38,6 +46,9 @@ export function OverviewPage() {
   }
   if (instanceCreated === false) {
     quickNavLinks.push({ label: t('guide.missingItem', { item: t('nav.instances') }), to: '/instances', openTarget: 'instanceCreate' });
+  }
+  if (hasClusterAlerts) {
+    quickNavLinks.push({ label: t('guide.clusterAlerts'), to: '/instances' });
   }
 
   const statusDist = useMemo(() => {

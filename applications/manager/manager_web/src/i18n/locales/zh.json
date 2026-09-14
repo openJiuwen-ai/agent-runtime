@@ -50,6 +50,9 @@
     "title": "{{productName}}",
     "sub": "Manager"
   },
+  "footer": {
+    "aiNotice": "内容由AI生成，仅供参考"
+  },
   "nav": {
     "platform": "控制台",
     "overview": "总览",
@@ -71,7 +74,18 @@
   },
   "guide": {
     "gotoPageLink": "前往 {{page}} 页面",
-    "missingItem": "未配置 {{item}}"
+    "missingItem": "未配置 {{item}}",
+    "configGuide": "配置引导",
+    "gettingStarted": "新手开局",
+    "advancedConfig": "进阶配置",
+    "quickEntry": "快捷入口",
+    "newMember": "新建成员",
+    "newModel": "新建模型",
+    "newAgentDefinition": "新建Agent定义",
+    "newPoolDefinition": "新建Agent实例池定义",
+    "noClusters": "暂无集群，请先在集群管理中新建",
+    "selectCluster": "选择集群",
+    "clusterAlerts": "集群存在未配置项"
   },
   "safetyGuardrails": {
     "title": "安全护栏",
@@ -102,7 +116,7 @@
     "totalClusters": "集群总数",
     "unitClusters": "集群",
     "activeServices": "在线服务数",
-    "quickNav": "快速导航",
+    "quickNav": "配置检查清单",
     "unconfiguredItems": "未配置项",
     "noAlerts": "暂无未配置项",
     "clusterAlertsTitle": "该集群未配置项",
@@ -789,6 +803,20 @@
     "loading": "加载中…",
     "errBadCredentials": "用户名或密码错误。",
     "errDisabled": "该账户已被禁用,请联系管理员。"
+  },
+  "docs": {
+    "entry": "DOCS",
+    "title": "{{productName}} Enterprise Edition 文档",
+    "backToConsole": "返回控制台",
+    "onThisPage": "本页目录",
+    "toc": {
+      "getting-started": "Getting Started",
+      "overview": "Product Overview",
+      "guides": "功能指南",
+      "guideAgent": "Agent Management",
+      "guidePool": "Agent Instance Pool Management",
+      "guideCluster": "Cluster Management"
+    }
   },
   "userConsole": {
     "brandSub": "Web Server",

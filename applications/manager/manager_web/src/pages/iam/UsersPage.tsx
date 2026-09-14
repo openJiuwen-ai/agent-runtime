@@ -570,9 +570,15 @@ function UserModal({ user, orgs, onClose, onSaved }: { user: IamUser | null; org
       <label className="label" style={{ marginTop: 12 }}>{isEdit ? t('iam.resetPassword') : t('iam.password')}</label>
       <input className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
 
-      <label className="label" style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
-        <input type="checkbox" checked={isAdmin} onChange={(e) => setIsAdmin(e.target.checked)} /> {t('iam.admin')}
-      </label>
+      <label className="label" style={{ marginTop: 12 }}>{t('iam.role')}</label>
+      <select
+        className="select"
+        value={isAdmin ? 'admin' : 'user'}
+        onChange={(e) => setIsAdmin(e.target.value === 'admin')}
+      >
+        <option value="user">{t('iam.roleUser')}</option>
+        <option value="admin">{t('iam.roleAdmin')}</option>
+      </select>
 
       {isEdit && (
         <>
