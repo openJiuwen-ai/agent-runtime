@@ -297,10 +297,10 @@ export function DocsPage() {
         </button>
       </header>
 
-      <main className="flex-1 w-full max-w-7xl mx-auto px-6 py-8 flex flex-col gap-6 min-h-0">
+      <main className="flex-1 w-full max-w-[1600px] mx-auto px-8 py-8 flex flex-col gap-6 min-h-0">
         {/* 文档标题 */}
         <div className="flex items-baseline gap-3 flex-wrap">
-          <h1 className="text-xl font-bold text-[var(--text-strong)] m-0">
+          <h1 className="text-2xl font-bold text-[var(--text-strong)] m-0">
             {t('docs.title', { productName })}
           </h1>
           <span className="text-xs mono text-accent px-2 py-0.5 rounded-full bg-[var(--accent-subtle)] border border-[var(--border-accent)]">
@@ -308,9 +308,9 @@ export function DocsPage() {
           </span>
         </div>
 
-        <div className="flex-1 flex gap-6 items-start min-h-0">
+        <div className="flex-1 flex gap-8 items-start min-h-0">
           {/* 左侧目录 */}
-          <nav className="w-44 shrink-0 sticky top-6 flex flex-col gap-1">
+          <nav className="w-52 shrink-0 sticky top-6 flex flex-col gap-1">
             {TOC.map((d) =>
               d.group === 'guides' ? (
                 <button
@@ -340,12 +340,12 @@ export function DocsPage() {
           </nav>
 
           {/* 中间正文 */}
-          <article ref={articleRef} className="docs-body flex-1 min-w-0 card p-6 lg:p-8">
+          <article ref={articleRef} className="docs-body flex-1 min-w-0 card p-8 lg:p-10">
             <MarkdownView source={DOC_SOURCES[docKey]} onHeadings={handleHeadings} />
           </article>
 
           {/* 右侧 md 内部目录：按 md 标题层级缩进，点击跳到对应标题 */}
-          <nav className="w-52 shrink-0 sticky top-6 hidden xl:flex flex-col">
+          <nav className="w-64 shrink-0 sticky top-6 hidden xl:flex flex-col">
             {headings.length > 0 && (
               <div className="docs-toc-group !border-t-0 !mt-0 !pt-0">{t('docs.onThisPage')}</div>
             )}

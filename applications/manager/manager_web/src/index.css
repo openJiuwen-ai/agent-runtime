@@ -1406,7 +1406,7 @@ button, input, textarea, select { font: inherit; color: inherit; }
   }
   .docs-toc-item--nested {
     padding-left: 24px;
-    font-size: var(--font-size-xs);
+    font-size: var(--font-size-sm);
   }
 
   /* 文档页右侧 md 内部目录（标题锚点导航，按 md 标题层级缩进） */
@@ -1430,12 +1430,12 @@ button, input, textarea, select { font: inherit; color: inherit; }
   .docs-heading-item {
     display: block;
     width: 100%;
-    padding: 4px 8px 4px 14px;
+    padding: 5px 8px 5px 14px;
     border: 0;
     border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
     background: transparent;
     color: var(--muted);
-    font-size: var(--font-size-2xs);
+    font-size: var(--font-size-sm);
     font-weight: 500;
     line-height: 1.5;
     text-align: left;
@@ -1455,33 +1455,34 @@ button, input, textarea, select { font: inherit; color: inherit; }
   /* 层级：h2 加粗深色，h3/h4 逐级缩进+减轻 */
   .docs-heading-item--l2 { font-weight: 600; color: var(--text); }
   .docs-heading-item--l2.active { color: var(--accent); }
-  .docs-heading-item--l3 { padding-left: 28px; color: var(--muted); }
+  .docs-heading-item--l3 { padding-left: 30px; color: var(--muted); font-size: var(--font-size-xs); }
   .docs-heading-item--l3.active { color: var(--accent); }
-  .docs-heading-item--l4 { padding-left: 42px; font-size: 10px; color: var(--muted-strong); }
+  .docs-heading-item--l4 { padding-left: 46px; font-size: var(--font-size-xs); color: var(--muted-strong); }
 
   /* markdown 正文（marked 输出，类名手写不依赖 typography 插件） */
+  .docs-body { font-size: 15px; }
   .docs-body h1 {
-    font-size: 1.5rem; font-weight: 700; color: var(--text-strong);
+    font-size: 1.75rem; font-weight: 700; color: var(--text-strong);
     margin: 0.5rem 0 1rem; padding-bottom: 0.75rem;
     border-bottom: 1px solid var(--border);
   }
   .docs-body h2 {
-    font-size: 1.125rem; font-weight: 600; color: var(--text-strong);
+    font-size: 1.375rem; font-weight: 600; color: var(--text-strong);
     margin: 2rem 0 0.75rem;
   }
   .docs-body h3 {
-    font-size: 0.9375rem; font-weight: 600; color: var(--text-strong);
+    font-size: 1.125rem; font-weight: 600; color: var(--text-strong);
     margin: 1.5rem 0 0.5rem;
   }
   .docs-body h4 {
-    font-size: var(--font-size-sm); font-weight: 600; color: var(--text-strong);
+    font-size: 1rem; font-weight: 600; color: var(--text-strong);
     margin: 1.25rem 0 0.5rem;
   }
-  .docs-body p { margin: 0.75rem 0; line-height: 1.75; color: var(--text); }
+  .docs-body p { margin: 0.75rem 0; line-height: 1.8; color: var(--text); }
   .docs-body ul, .docs-body ol { margin: 0.75rem 0; padding-left: 1.5rem; color: var(--text); }
   .docs-body ul { list-style: disc; }
   .docs-body ol { list-style: decimal; }
-  .docs-body li { margin: 0.375rem 0; line-height: 1.75; }
+  .docs-body li { margin: 0.375rem 0; line-height: 1.8; }
   .docs-body li::marker { color: var(--muted); }
   .docs-body strong { color: var(--text-strong); font-weight: 600; }
   .docs-body a { color: var(--accent); text-decoration: none; word-break: break-all; }
@@ -1496,7 +1497,7 @@ button, input, textarea, select { font: inherit; color: inherit; }
   }
   .docs-body pre {
     margin: 0.875rem 0;
-    padding: 0.875rem 1rem;
+    padding: 1rem 1.25rem;
     background: var(--panel-strong);
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
@@ -1504,7 +1505,7 @@ button, input, textarea, select { font: inherit; color: inherit; }
   }
   .docs-body pre code {
     padding: 0; background: transparent; color: var(--text);
-    font-size: var(--font-size-xs); line-height: 1.6;
+    font-size: var(--font-size-sm); line-height: 1.6;
   }
   .docs-body table {
     width: 100%;
@@ -1519,12 +1520,12 @@ button, input, textarea, select { font: inherit; color: inherit; }
     background: var(--panel-strong);
     color: var(--text-strong);
     font-weight: 600;
-    padding: 0.5rem 0.75rem;
+    padding: 0.625rem 0.875rem;
     text-align: left;
     border-bottom: 1px solid var(--border);
   }
   .docs-body tbody td {
-    padding: 0.5rem 0.75rem;
+    padding: 0.625rem 0.875rem;
     border-bottom: 1px solid var(--border);
     color: var(--text);
     vertical-align: top;

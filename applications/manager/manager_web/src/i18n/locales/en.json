@@ -527,6 +527,8 @@
     "memoryRequest": "Memory Request",
     "cpuLimit": "CPU Limit",
     "memoryLimit": "Memory Limit",
+    "cpuHint": "Supports 1, 1.5, 500m (1000m = 1 core); leave empty for no limit",
+    "memoryHint": "Supports 128Mi, 1Gi (1024Mi = 1Gi); leave empty for no limit",
     "envFrom": "envFrom (JSON array)",
     "volumeMounts": "volumeMounts (JSON array)",
     "volumesHint": "Pod-level volumes; must be referenced by container volumeMounts by name",

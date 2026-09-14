@@ -527,6 +527,8 @@
     "memoryRequest": "内存请求量",
     "cpuLimit": "CPU 上限",
     "memoryLimit": "内存上限",
+    "cpuHint": "支持 1、1.5、500m 格式（1000m = 1 核），留空不限制",
+    "memoryHint": "支持 128Mi、1Gi 格式（1024Mi = 1Gi），留空不限制",
     "envFrom": "envFrom（JSON 数组）",
     "volumeMounts": "volumeMounts（JSON 数组）",
     "volumesHint": "Pod 级 volumes，须被主容器或 Sandbox 的 volumeMounts 按名引用",
