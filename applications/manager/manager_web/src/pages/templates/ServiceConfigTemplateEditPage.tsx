@@ -12,6 +12,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { LimitedTextInput } from '../../components/LimitedTextInput';
+import { HintTooltip } from '../../components/HintTooltip';
 import { ServiceConfigTemplateApi, ApiError } from '../../services/api';
 import { useRouter } from '../../router';
 import { toast } from '../../stores/uiStore';
@@ -702,37 +703,45 @@ function ContainerFields({
       </div>
 
       <div>
-        <label className="label">{t('serviceConfigTemplate.cpuRequest')}</label>
+        <label className="label flex items-center gap-1.5">
+          {t('serviceConfigTemplate.cpuRequest')}
+          <HintTooltip text={t('serviceConfigTemplate.cpuHint')} />
+        </label>
         <input
           className="input"
-          placeholder="500m"
           value={form.cpu_request}
           onChange={(e) => update('cpu_request', e.target.value)}
         />
       </div>
       <div>
-        <label className="label">{t('serviceConfigTemplate.memoryRequest')}</label>
+        <label className="label flex items-center gap-1.5">
+          {t('serviceConfigTemplate.memoryRequest')}
+          <HintTooltip text={t('serviceConfigTemplate.memoryHint')} />
+        </label>
         <input
           className="input"
-          placeholder="512Mi"
           value={form.memory_request}
           onChange={(e) => update('memory_request', e.target.value)}
         />
       </div>
       <div>
-        <label className="label">{t('serviceConfigTemplate.cpuLimit')}</label>
+        <label className="label flex items-center gap-1.5">
+          {t('serviceConfigTemplate.cpuLimit')}
+          <HintTooltip text={t('serviceConfigTemplate.cpuHint')} />
+        </label>
         <input
           className="input"
-          placeholder="2"
           value={form.cpu_limit}
           onChange={(e) => update('cpu_limit', e.target.value)}
         />
       </div>
       <div>
-        <label className="label">{t('serviceConfigTemplate.memoryLimit')}</label>
+        <label className="label flex items-center gap-1.5">
+          {t('serviceConfigTemplate.memoryLimit')}
+          <HintTooltip text={t('serviceConfigTemplate.memoryHint')} />
+        </label>
         <input
           className="input"
-          placeholder="2Gi"
           value={form.memory_limit}
           onChange={(e) => update('memory_limit', e.target.value)}
         />
