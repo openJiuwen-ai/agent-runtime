@@ -1119,6 +1119,34 @@ async def test_config_refresh_sunsets_candidates_and_bumps_generation(runtime):
 
 
 @requires_lua
+async def test_config_refresh_rejects_when_sunset_pending(runtime):
+    """refresh 串行闸门:上一轮 refresh 日落的老代 Pod 未回收 → 409,零副作用。
+
+    判据是**代次**(registered Pod generation ≠ scope 当前代次)——refresh 不改
+    deploy_ver,config_sync 的版本判定守卫对这些 Pod 失明(钉死语义见
+    test_config_sync_not_blocked_by_refresh_sunset_pods),故 refresh 必须按
+    generation 自查。回收后放行的完整生命周期见 test_force_refresh.py R5;
+    病理实录:2026-09-11 wangchang 环境 9 分钟 4 连刷,多代日落堆积蹲占
+    max_pods=2 把滚动窗口焊死 2.5 分钟。
+    """
+    await runtime.seed_template()
+    await runtime.route("sess_1")
+    r1 = await runtime.config_store.config_refresh()      # gen 1:老 Pod(gen "")日落
+    assert r1["generations"] == {SCOPE: 1}
+
+    with pytest.raises(ConfigSyncBusy, match="pending reclaim"):
+        await runtime.config_store.config_refresh()       # 老 Pod 未回收 → 409
+
+    # 拒绝时零副作用:代次未再 bump、候选集维持日落后的空、锁未遗留
+    assert runtime.gen_bumps == [SCOPE]
+    assert await runtime.sm_state.scope_pod_ids(SCOPE) == []
+    assert await runtime.sm_state.redis.exists(
+        runtime.sm_state.k.lock_config_sync()) == 0
+    cfg = await runtime.rm_state.load_scope_config(SCOPE)
+    assert cfg.get("generation") == "1"
+
+
+@requires_lua
 async def test_config_refresh_preserves_session_affinity(runtime):
     """刷新后存量会话亲和不变:同 session route 回同 Pod、touch 仍 True。"""
     await runtime.seed_template()

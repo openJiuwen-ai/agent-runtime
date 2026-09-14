@@ -188,6 +188,12 @@ lock:config_sync 串行化(忙→409 CONFIG_SYNC_BUSY;基线 TTL 60 + **看门�
 
 ```
 锁内逐 DB 存活 scope(幻影 scope 归扩散③ drain;模板缺失的悬挂 scope 跳过+WARNING):
+  ⓪ 前置日落中间态检查:rm_facade.sunset_pending_pods(sid)——scope 注册 Pod 中
+     generation ≠ 当前配置代次的(busy 排空/idle 待回收均计;判据是代次而非
+     deploy_ver——refresh 不改配置值,版本判定对 refresh 日落失明)。非空 →
+     409 CONFIG_SYNC_BUSY,拒绝时 DB/Redis 零副作用(回收由 reclaim 代次感知
+     保证收敛,闸门不会永久 409;防连续 refresh 多代日落堆积蹲占 max_pods——
+     2026-09-11 wangchang 环境 9 分钟 4 连刷实录)
   ① bump_generation(sid)(rm_facade → HINCRBY scope:config generation;严格,失败上抛)
   ② _push_or_warn(sid, pool_config, deploy_subset)(值未变,确保 RM 缓存就绪;失败仅告警——良性)
   ③ _soft_remove_all_pods(sid)(候选集全量 ZREM,不按版本过滤;严格)

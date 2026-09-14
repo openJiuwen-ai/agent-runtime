@@ -410,6 +410,26 @@ class ResourceOrchestrator:
         logger.info("bump_generation: scope=%s generation=%d", scope_id, generation)
         return generation
 
+    async def sunset_pending_pods(self, scope_id: str) -> list[str]:
+        """日落中间态判定（config_refresh 前置闸门）：scope 注册 Pod 中代次
+        落后于当前配置代次的，按 pod_id 排序返回。
+
+        判据是 **generation** 而非 deploy_ver——refresh 不改配置值，上一轮
+        refresh 日落的老代 Pod 只能按代次识别（版本判定对它们失明）。busy
+        排空中与 idle 待回收一并计入（包容面与 config_sync 的版本判定守卫
+        一致）；info 已缺失的幽灵无法归因，不计入。两侧代次同为缺省（""）
+        视为一致——从未 refresh 过的 scope 零行为变化。
+        """
+        current = (await self.state.load_scope_config(scope_id)).get("generation") or ""
+        pending: list[str] = []
+        for pod_id in await self.state.pod_ids(scope_id):
+            info = await self.state.pod_info(pod_id)
+            if not info:
+                continue
+            if (info.get("generation") or "") != current:
+                pending.append(pod_id)
+        return sorted(pending)
+
     # -------------------------------------------------------------- cleanup
 
     async def cleanup(self, namespace: str | None, label_selector: str | None) -> int:

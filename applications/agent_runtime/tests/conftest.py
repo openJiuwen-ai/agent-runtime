@@ -309,6 +309,7 @@ class Runtime:
             db, self.sm_state, push_pool_config=_push,
             known_rm_scopes=self.rm_facade.known_scope_ids,
             bump_generation=_bump,
+            sunset_pending_pods=self.rm_facade.sunset_pending_pods,
         )
         self.orchestrator = SessionOrchestrator(
             self.sm_state, self.config_store, self.rm_facade,

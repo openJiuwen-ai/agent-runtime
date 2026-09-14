@@ -104,7 +104,7 @@ flowchart TB
 | `POST /api/session/route` | `metadata`:session_id / user_id / group_id / bot_id(**四项均必填非空**) | `{ pod_sse_url, pod_id }` | 同步路由 + 占额度(关键路径);按路由规则匹配 scope(§3.1 匹配语义) |
 | `POST /api/session/touch` | `metadata`:session_id | `{ touched:bool }` | 保活 / EOS,刷新老化 |
 | `POST /api/session/config_sync` | `{ containers:[...], templates:[...], scopes:[...] }`(三段式全量快照,**独占**——无 containers 键的 legacy 内联载荷 400) | `{ ok, templates_synced/deleted, containers_synced/deleted, scopes_synced/deleted, affected_scopes, wildcard_present }` | Claw Manager 全量下发配置(容器列表 + 模板列表 + scope 列表;模板只持容器引用,容器规格集中一张表);旧 `kind/op` 增量协议已废弃(400) |
-| `POST /api/session/config_refresh` | **无载荷**(rawdata 非空 → 400) | `{ ok, scopes_refreshed, pods_sunset, generations }` | 强制刷新(场景 M-R):全部存活 scope 的现有 Pod 优雅日落并**按存量配置重建**——代次 +1(软摘除,不接新会话;存量会话自然跑完)、reclaim 按 pod_ttl 回收老代、autoscale 按缓存 pod_spec 重建;不写 DB 不动快照;与 config_sync 共用锁(忙 → 409) |
+| `POST /api/session/config_refresh` | **无载荷**(rawdata 非空 → 400) | `{ ok, scopes_refreshed, pods_sunset, generations }` | 强制刷新(场景 M-R):全部存活 scope 的现有 Pod 优雅日落并**按存量配置重建**——代次 +1(软摘除,不接新会话;存量会话自然跑完)、reclaim 按 pod_ttl 回收老代、autoscale 按缓存 pod_spec 重建;不写 DB 不动快照;与 config_sync 共用锁(忙 → 409);**前置日落闸门**——任一 scope 存在代次落后且未回收的注册 Pod 时 409(见场景 M-R) |
 | `POST /api/session/cleanup` | `{ namespace?, label_selector? }` | `{ cleaned:int }` | 运维批量清 Pod(灾难恢复 / 重新部署),handler 在 Session Manager、委托 `rm_facade.cleanup()` |
 
 - `group_id` 经 `metadata.extra` 传递;`metadata.request_id` 兼作幂等键。
@@ -1232,18 +1232,19 @@ sequenceDiagram
 
 **处理流程**(锁内,与 config_sync 互斥):
 1. rawdata 非空 → 400(无载荷契约;带配置请走 config_sync);
-2. 逐 DB 存活 scope(幻影 scope 归扩散③ drain 路径,不处理;模板缺失的悬挂 scope 跳过 + WARNING):**① HINCRBY generation(严格,失败上抛)→ ② 重推池参数 + pod_spec(值未变,确保 RM 缓存就绪;失败仅告警)→ ③ 候选集全量 ZREM 软摘除(严格)**;
-3. **顺序红线 bump → ZREM**:唯一危险序是"ZREM 而未 bump"——老 Pod 被摘却仍是当前代次 warm Pod → min_idle 底数保护 → 永久蹲占 max_pods 且不触发重建;bump 在前的任何中途失败都收敛于"老 Pod 暂时继续接新流量",锁过期后重试即收敛。
+2. **前置日落中间态检查(先于任何 bump;拒绝时 DB/Redis 零副作用)**:逐 scope 调 `rm_facade.sunset_pending_pods(sid)`——scope 注册 Pod(`scope:pods` = in_use ∪ idle)中 `generation ≠ 当前配置代次` 者(busy 排空中与 idle 待回收一并计入;info 缺失的幽灵不计;两侧同为缺省视为一致)。任一 scope 非空 → **409 CONFIG_SYNC_BUSY**("still has sunset pods pending reclaim")。判据是**代次**而非 deploy_ver——refresh 不改配置值,上一轮 refresh 日落的老代 Pod 只能按代次识别(版本判定对它们失明);回收由 reclaim 代次感知保证收敛 → 闸门不会永久 409。不检查则连续 refresh 多代日落堆积蹲占 max_pods,小 max_pods 时滚动窗口被焊死(2026-09-11 wangchang 环境 9 分钟 4 连刷 gen 2/3/4/5、max_pods=2 槽位堵满 2.5 分钟实录);
+3. 逐 DB 存活 scope(幻影 scope 归扩散③ drain 路径,不处理;模板缺失的悬挂 scope 跳过 + WARNING):**① HINCRBY generation(严格,失败上抛)→ ② 重推池参数 + pod_spec(值未变,确保 RM 缓存就绪;失败仅告警)→ ③ 候选集全量 ZREM 软摘除(严格)**;
+4. **顺序红线 bump → ZREM**:唯一危险序是"ZREM 而未 bump"——老 Pod 被摘却仍是当前代次 warm Pod → min_idle 底数保护 → 永久蹲占 max_pods 且不触发重建;bump 在前的任何中途失败都收敛于"老 Pod 暂时继续接新流量",锁过期后重试即收敛。
 
 **日落收敛**(刷新返回后,全部复用既有后台任务,与 A 类日落同构):
 - 老 Pod 即刻退出 first-fit(不接新会话);存量会话亲和续期直读 session HASH,继续用老 Pod 到自然到期;
 - 空 Pod 经 sm_sweep / reconcile 转 idle → reclaim 按"代次感知"把老代 idle 恒判 excess → aged ≥ pod_ttl → K8s delete + PURGE + notify_pod_dead;
 - autoscale 的 warm 底数按 "ver ∧ gen" 匹配 → 归零 < min_idle → 用缓存 pod_spec_json 重建(**配置零变化,仅换代**)。
 
-**守卫交互**(config_sync 的日落中间态 409 判定**不扩展**看 generation):老代 Pod 的 deploy_ver 与当前配置相等 → 对守卫不可见 → 刷新后 B 类 / 同版本下发不 409(老代回收由 reclaim 代次感知保证);A 类变更(换版本)照旧可见 → 排空完成前 409(与 M 期 A-叠-A 行为一致,防不可归因混合态)。
+**守卫交互**(config_sync 的日落中间态 409 判定**不扩展**看 generation):老代 Pod 的 deploy_ver 与当前配置相等 → 对守卫不可见 → 刷新后 B 类 / 同版本下发不 409(老代回收由 reclaim 代次感知保证);A 类变更(换版本)照旧可见 → 排空完成前 409(与 M 期 A-叠-A 行为一致,防不可归因混合态)。**config_refresh 自身另有代次判定闸门**(处理流程第 2 步):上一轮 refresh 的老代 Pod 未回收前,后续 refresh 409 串行化——两道守卫判据不同(版本 vs 代次)是设计使然:sync 换版本才需要排空旧版,refresh 每次都日落全部代次。
 
 **运营注意**:
-- **非幂等但收敛**:每次调用 = 一轮全量日落重建;成功后勿自动重试(仅失败时人工重试,重试安全)。
+- **非幂等但收敛**:每次调用 = 一轮全量日落重建;成功后勿自动重试(仅失败时人工重试,重试安全);**连续调用会被前置闸门 409 背压**(老代回收完成前),间隔应 ≥ 会话排空 + pod_ttl;被钉住会话的流量(持续 route/touch)会拉长排空期。
 - **舰队级容量挤压**:max_pods 判定含老代 Pod,排空期(≈ reconcile 30s + pod_ttl + 会话排空)新会话可能 `max_reached` → 503。与 M-A 同机制但**全 scope 同时**发生——低峰执行,或先 B 类调小 pod_ttl → 刷新 → 排空后恢复。**不**通过改 max_pods 口径排除老代(违背物理封顶语义,瞬时超配)。
 - **长会话硬上限**:日落 Pod 上会话的实际存活 ≈ reconcile 30s + pod_ttl(与 M-A 一致);运营前提 pod_ttl ≥ 最长会话时长。
 - **滚动升级混布窗口**:旧版本副本无代次判定,可能 reuse 老代暖 Pod——升级完成后再执行刷新。

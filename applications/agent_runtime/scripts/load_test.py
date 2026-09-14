@@ -12,7 +12,9 @@
 - config_churn   热更新:流量进行中周期性 config_sync 翻转 B 类参数
                  (scope_concurrency/pod_ttl 两态),断言传播与流量无感;
 - config_refresh 强制刷新:流量进行中周期性 config_refresh,断言代次单调、
-                 存量会话亲和、新代暖 Pod 重建收敛、冷启动延迟;
+                 存量会话亲和、新代暖 Pod 重建收敛、冷启动延迟;2026-09 日落
+                 闸门后老代 Pod 回收前再刷 409 背压(记 warn,代次冻结断言),
+                 流量钉住会话时整个 run 可能仅首轮成功;
 - mixed          route_touch + churn + refresh 同场(共享 config 面串行锁)。
 
 判定层(与场景正交,默认全开):
@@ -149,7 +151,9 @@ def _parse_args() -> argparse.Namespace:
 
     # ---- config_refresh(强制刷新)
     p.add_argument("--refresh-interval", type=float, default=15.0,
-                   help="config_refresh/mixed:两次 config_refresh 间隔秒")
+                   help="config_refresh/mixed:两次 config_refresh 间隔秒"
+                        "(2026-09 日落闸门后,老代 Pod 回收前再刷会 409 背压,"
+                        "计入 warn;流量钉住会话时整个 run 可能仅首轮成功)")
     p.add_argument("--refresh-cold-probes", type=int, default=2,
                    help="每个刷新窗口注入的一次性新会话数(测冷启动+驱动新代部署)")
     p.add_argument("--refresh-rebuild-budget", type=float, default=120.0,
@@ -589,7 +593,9 @@ class CheckRecorder:
 # mixed 容 503/NO_POD_AVAILABLE:连续 refresh 的多代 Pod 在 pod_ttl 回收前
 # 堆积,叠加 churn 翻转 scope_concurrency(max_pods=⌈sc/pc⌉ 随之变化),
 # 存量会话重放置会撞 max_pods 硬闸门——容量语义而非缺陷;出现会记 WARN
-# 观测计数,其它错误码仍 fail。
+# 观测计数,其它错误码仍 fail。(2026-09 refresh 日落闸门后多代堆积被压制
+# 到单代,该白名单保留覆盖单代滚动窗口的瞬态 503;闸门自身的 409 背压在
+# refresh_controller 内联处理,不走此流量白名单。)
 EXPECTED_ERRORS: dict[str, set[str]] = {
     "queued": {"503/SCOPE_FULL", "503/NO_POD_AVAILABLE"},
     "mixed": {"503/NO_POD_AVAILABLE"},
@@ -887,6 +893,23 @@ async def refresh_controller(client: httpx.AsyncClient, base: str, run: str,
                            "t_end": time.monotonic(), "duration_ms": round(dt, 1),
                            "ok": ok, "status": status,
                            "generations": gens})
+            if status == 409 and body.get("error_code") == "CONFIG_SYNC_BUSY":
+                # 串行化背压(2026-09 refresh 日落闸门):上一轮 refresh 的日落
+                # Pod 尚未回收(代次落后;busy 排空/idle 待回收均计)→ 409 属
+                # 闸门语义非缺陷。流量钉住会话时整个 run 可能只有首轮成功——
+                # 多轮滚动生命周期由 test_force_refresh.py R5 覆盖。拒绝零
+                # 副作用:代次不得推进(与 prev 一致)。
+                still = {}
+                for s_ in scope_ids:
+                    _, b_ = await vis.get(f"/visualization/scope?scope_id={s_}")
+                    still[s_] = _as_int(_dig(
+                        b_, "rm", "scope_config", "generation"), 0)
+                checks.record(f"refresh#{n} 409 串行化背压(日落未回收,代次冻结)",
+                              still == prev,
+                              f"generation={still} prev={prev}",
+                              severity="warn")
+                next_at += args.refresh_interval
+                continue
             checks.record(f"refresh#{n} config_refresh 200 且全 scope 覆盖",
                           ok and set(scope_ids) <= set(gens),
                           f"status={status} scopes_refreshed="
