@@ -319,6 +319,10 @@ export const AuthApi = {
         await idpHttp('/v1/auth/logout', { method: 'POST', body: { refresh_token: refreshToken } });
       }
     } catch { /* 忽略登出请求错误 */ }
+    try {
+      // HttpOnly jiuwenclaw_id 只能由后端清；残留会导致下一用户 /chat 403
+      await UserConsoleApi.clearActiveCluster();
+    } catch { /* 忽略清 Cookie 失败 */ }
     clearTokens();
   },
 };
@@ -801,6 +805,11 @@ export const UserConsoleApi = {
     http<{ jiuwenclaw_id: string }>('/v1/user-console/active-cluster', {
       method: 'POST',
       body: { jiuwenclaw_id },
+    }),
+  /** 清除用户面动态反代 Cookie（登出 / 无上下文进 /chat 前） */
+  clearActiveCluster: () =>
+    http<{ cleared: boolean }>('/v1/user-console/active-cluster', {
+      method: 'DELETE',
     }),
 };
 

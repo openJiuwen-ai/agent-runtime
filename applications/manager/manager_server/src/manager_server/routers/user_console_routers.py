@@ -3,6 +3,7 @@
 路径：
 - ``GET /v1/user-console/agent-contexts``
 - ``POST /v1/user-console/active-cluster``（写入 Cookie ``jiuwenclaw_id``）
+- ``DELETE /v1/user-console/active-cluster``（清除 Cookie ``jiuwenclaw_id``）
 - ``GET /v1/user-console/user-face-upstream``（nginx auth_request 解析上游）
 身份来自 JWT（``get_current_user``）；组织 id 取 claims.groups。
 """
@@ -36,10 +37,14 @@ class ActiveClusterBody(BaseModel):
     jiuwenclaw_id: str = Field(..., min_length=1, max_length=64)
 
 
-user_console_router = APIRouter(dependencies=[Depends(get_current_user)])
+user_console_router = APIRouter()
 
 
-@user_console_router.get("/agent-contexts", response_model=ResponseModel)
+@user_console_router.get(
+    "/agent-contexts",
+    response_model=ResponseModel,
+    dependencies=[Depends(get_current_user)],
+)
 async def list_my_agent_contexts(
     handler: _Handler,
     user: _CurUser,
@@ -59,7 +64,11 @@ async def list_my_agent_contexts(
     return _ok({"contexts": contexts})
 
 
-@user_console_router.post("/active-cluster", response_model=ResponseModel)
+@user_console_router.post(
+    "/active-cluster",
+    response_model=ResponseModel,
+    dependencies=[Depends(get_current_user)],
+)
 async def set_active_cluster(
     body: ActiveClusterBody,
     response: Response,
@@ -87,7 +96,26 @@ async def set_active_cluster(
     return _ok({"jiuwenclaw_id": jid})
 
 
-@user_console_router.get("/user-face-upstream")
+@user_console_router.delete("/active-cluster", response_model=ResponseModel)
+async def clear_active_cluster(response: Response):
+    """清除用户面动态反代 Cookie（登出 / 换用户 / 无上下文进入 /chat 前调用）。
+
+    不要求登录：登出时 token 可能已失效，但仍须清掉 HttpOnly ``jiuwenclaw_id``，
+    否则下一用户会被 ``user-face-upstream`` 按旧实例鉴权拒绝（403）。
+    """
+    response.delete_cookie(
+        key=JIUWENCLAW_ID_COOKIE,
+        path="/",
+        httponly=True,
+        samesite="lax",
+    )
+    return _ok({"cleared": True})
+
+
+@user_console_router.get(
+    "/user-face-upstream",
+    dependencies=[Depends(get_current_user)],
+)
 async def resolve_user_face_upstream(
     handler: _Handler,
     user: _CurUser,

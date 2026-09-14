@@ -253,9 +253,11 @@ function readCookie(name: string): string {
 /**
  * /chat 由 nginx 按 Cookie jiuwenclaw_id 动态反代 User Web，不能使用 SPA 内部 Navigate。
  * 保留 /user 作为角色落地地址：先写入 active-cluster Cookie，再跳 /chat/。
+ * 无 Agent 上下文时仍进入 /chat/，由 User Web EnterpriseEntry 展示空态与「返回登录页」。
  */
 function UserWebRedirect() {
   const { t } = useTranslation();
+  const { logout } = useAuth();
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -265,7 +267,16 @@ function UserWebRedirect() {
         const { contexts } = await UserConsoleApi.agentContexts();
         if (cancelled) return;
         if (!contexts.length) {
-          setError(t('auth.noClusterAccess'));
+          // 无上下文：先清残留 HttpOnly jiuwenclaw_id，再交给 User Web 空态页
+          // （否则上一用户选中的实例 Cookie 会让 auth_request 对当前用户 403）
+          try {
+            await UserConsoleApi.clearActiveCluster();
+          } catch {
+            /* 忽略 */
+          }
+          if (!cancelled) {
+            window.location.replace('/chat/');
+          }
           return;
         }
         const cookieJid = readCookie('jiuwenclaw_id');
@@ -293,9 +304,14 @@ function UserWebRedirect() {
     return (
       <div className="flex flex-col items-center justify-center h-screen gap-3 text-muted">
         <div>{error}</div>
-        <button className="btn" onClick={() => window.location.reload()}>
-          {t('common.refresh')}
-        </button>
+        <div className="flex gap-2">
+          <button className="btn" onClick={() => window.location.reload()}>
+            {t('common.refresh')}
+          </button>
+          <button className="btn btn-primary" onClick={() => void logout()}>
+            {t('auth.backToLogin')}
+          </button>
+        </div>
       </div>
     );
   }
