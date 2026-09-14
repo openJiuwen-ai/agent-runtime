@@ -69,6 +69,8 @@ class Settings(BaseSettings):
     # ---- 引导播种 ----
     seed_admin: bool = Field(default=True, validation_alias="IDENTITY_SEED_ADMIN")
     seed_user1: bool = Field(default=True, validation_alias="IDENTITY_SEED_USER1")
+    admin_password: str | None = Field(default=None, validation_alias="IDENTITY_ADMIN_PASSWORD")
+    user1_password: str | None = Field(default=None, validation_alias="IDENTITY_USER1_PASSWORD")
 
     @property
     def host(self) -> str:
