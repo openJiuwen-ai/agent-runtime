@@ -62,16 +62,17 @@ type TemplateForm = {
   description: string;
   namespace: string;
   node_name: string;
+  fs_group: string;
   pod_name: string;
   sse_path: string;
   kubeconfig: string;
   ready_timeout: number;
   ready_poll_interval: number;
-  min_idle_services: number;
-  service_concurrency: number;
-  service_ttl: number;
+  min_idle_pods: number;
+  pod_concurrency: number;
+  pod_ttl: number;
   message_timeout: number;
-  session_concurrency: number;
+  scope_concurrency: number;
   session_ttl: number;
   volumes_json: string;
 };
@@ -138,16 +139,17 @@ const emptyTemplate = (): TemplateForm => ({
   description: '',
   namespace: 'default',
   node_name: '',
+  fs_group: '',
   pod_name: 'agentserver',
   sse_path: '/api/v1/events/stream',
   kubeconfig: '',
   ready_timeout: 300,
   ready_poll_interval: 2,
-  min_idle_services: 0,
-  service_concurrency: 2,
-  service_ttl: 300,
+  min_idle_pods: 0,
+  pod_concurrency: 2,
+  pod_ttl: 300,
   message_timeout: 600,
-  session_concurrency: 3,
+  scope_concurrency: 3,
   session_ttl: 60,
   volumes_json: '',
 });
@@ -220,13 +222,6 @@ function parseOptionalInt(text: string): number | undefined {
   const n = Number(t);
   if (!Number.isInteger(n) || n < 0) return NaN;
   return n;
-}
-
-function envToMap(list?: { name: string; value: string }[]): Record<string, string> | undefined {
-  if (!list?.length) return undefined;
-  const out: Record<string, string> = {};
-  for (const row of list) out[row.name] = row.value;
-  return out;
 }
 
 /** 从 ports 数组提取指定命名端口（如 name=sse）的 containerPort */
@@ -374,46 +369,26 @@ function hydrateFromTemplateRow(row: ServiceConfigTemplate): {
     description: row.description ?? '',
     namespace: row.namespace || 'default',
     node_name: row.node_name ?? '',
+    fs_group: row.fs_group != null ? String(row.fs_group) : '',
     pod_name: row.pod_name || 'agentserver',
     sse_path: row.sse_path || '/api/v1/events/stream',
     kubeconfig: row.kubeconfig ?? '',
     ready_timeout: row.ready_timeout,
     ready_poll_interval: row.ready_poll_interval,
-    min_idle_services: row.min_idle_services,
-    service_concurrency: row.service_concurrency,
-    service_ttl: row.service_ttl,
+    min_idle_pods: row.min_idle_pods,
+    pod_concurrency: row.pod_concurrency,
+    pod_ttl: row.pod_ttl,
     message_timeout: row.message_timeout,
-    session_concurrency: row.session_concurrency,
+    scope_concurrency: row.scope_concurrency,
     session_ttl: row.session_ttl,
     volumes_json: formatJson(row.volumes),
   };
 
-  let agent = containerFromRecord(agentRaw, 'agent');
+  const agent = containerFromRecord(agentRaw, 'agent');
   const sandbox = containerFromRecord(sandboxRaw, 'sandbox');
 
-  // 无 stored containers 时用模板内联列回填主容器
-  if (!agentRaw) {
-    const fallbackPort = row.sse_port || row.container_port || 8080;
-    agent = {
-      ...agent,
-      container_id: row.main_container_id || agent.container_id,
-      name: row.container_name || agent.name,
-      image: row.agent_image || '',
-      image_pull_policy: row.image_pull_policy || 'IfNotPresent',
-      ports_json: JSON.stringify([{ name: 'sse', containerPort: fallbackPort }]),
-      env_text: formatEnv(row.agent_env),
-      cpu_request: row.agent_cpu_request ?? '',
-      memory_request: row.agent_memory_request ?? '',
-      cpu_limit: row.agent_cpu_limit ?? '',
-      memory_limit: row.agent_memory_limit ?? '',
-      run_as_user: row.run_as_user != null ? String(row.run_as_user) : '',
-      run_as_group: row.run_as_group != null ? String(row.run_as_group) : '',
-      probe_type: 'httpGet',
-      probe_port: fallbackPort,
-      probe_path: row.health_path || '/api/v1/health',
-      readiness_initial_delay: row.readiness_initial_delay,
-      readiness_period: row.readiness_period,
-    };
+  if (!agentRaw && row.main_container_id) {
+    agent.container_id = row.main_container_id;
   }
   if (!sandboxRaw && row.sidecar_container_ids?.[0]) {
     sandbox.container_id = row.sidecar_container_ids[0];
@@ -993,49 +968,27 @@ export function ServiceConfigTemplateEditPage({ templateId }: { templateId?: str
       sandboxMounts.value,
       sandboxPorts.value,
     );
-    const runAsUser = parseOptionalInt(agent.run_as_user);
-    const runAsGroup = parseOptionalInt(agent.run_as_group);
+    const fsGroup = parseOptionalInt(template.fs_group);
 
     const body: ServiceConfigTemplateCreateBody = {
       template_name: template.template_name.trim(),
       description: opt(template.description),
-      agent_image: agent.image.trim(),
       namespace: template.namespace.trim() || 'default',
       node_name: opt(template.node_name),
-      run_as_user: runAsUser != null && !Number.isNaN(runAsUser) ? runAsUser : null,
-      run_as_group: runAsGroup != null && !Number.isNaN(runAsGroup) ? runAsGroup : null,
+      fs_group: fsGroup != null && !Number.isNaN(fsGroup) ? fsGroup : null,
       pod_name: template.pod_name.trim() || 'agentserver',
-      container_name: agent.name.trim() || 'agent',
-      container_port: ssePort,
-      port_name: 'sse',
-      sse_port: ssePort,
       sse_path: template.sse_path.trim() || '/api/v1/events/stream',
-      health_path:
-        agent.probe_type === 'httpGet'
-          ? agent.probe_path.trim() || '/api/v1/health'
-          : undefined,
-      agent_env: envToMap(agentEnv.value),
-      image_pull_policy: (agent.image_pull_policy || 'IfNotPresent') as
-        | 'Always'
-        | 'IfNotPresent'
-        | 'Never',
       kubeconfig: opt(template.kubeconfig),
-      readiness_initial_delay: agent.readiness_initial_delay,
-      readiness_period: agent.readiness_period,
       ready_timeout: template.ready_timeout,
       ready_poll_interval: template.ready_poll_interval,
-      agent_cpu_request: opt(agent.cpu_request),
-      agent_memory_request: opt(agent.memory_request),
-      agent_cpu_limit: opt(agent.cpu_limit),
-      agent_memory_limit: opt(agent.memory_limit),
       main_container_id: agent.container_id.trim(),
       sidecar_container_ids: [sandbox.container_id.trim()],
       volumes: volumes.value,
-      min_idle_services: template.min_idle_services,
-      service_concurrency: template.service_concurrency,
-      service_ttl: template.service_ttl,
+      min_idle_pods: template.min_idle_pods,
+      pod_concurrency: template.pod_concurrency,
+      pod_ttl: template.pod_ttl,
       message_timeout: template.message_timeout,
-      session_concurrency: template.session_concurrency,
+      scope_concurrency: template.scope_concurrency,
       session_ttl: template.session_ttl,
       enabled: true,
       data: {
@@ -1158,6 +1111,17 @@ export function ServiceConfigTemplateEditPage({ templateId }: { templateId?: str
             />
           </div>
           <div>
+            <FieldLabel>{t('serviceConfigTemplate.fsGroup')}</FieldLabel>
+            <input
+              className="input"
+              type="number"
+              min={0}
+              max={INT32_MAX}
+              value={template.fs_group}
+              onChange={(e) => updateTpl('fs_group', e.target.value)}
+            />
+          </div>
+          <div>
             <FieldLabel>{t('serviceConfigTemplate.podName')}</FieldLabel>
             <LimitedTextInput
               value={template.pod_name}
@@ -1205,47 +1169,47 @@ export function ServiceConfigTemplateEditPage({ templateId }: { templateId?: str
             />
           </div>
           <div>
-            <label className="label">{t('serviceConfigTemplate.minIdleServices')}</label>
+            <label className="label">{t('serviceConfigTemplate.minIdlePods')}</label>
             <input
               className="input"
               type="number"
               min={0}
               max={INT32_MAX}
-              value={template.min_idle_services}
-              onChange={(e) => updateTpl('min_idle_services', Number(e.target.value))}
+              value={template.min_idle_pods}
+              onChange={(e) => updateTpl('min_idle_pods', Number(e.target.value))}
             />
           </div>
           <div>
-            <label className="label">{t('serviceConfigTemplate.serviceConcurrency')}</label>
+            <label className="label">{t('serviceConfigTemplate.podConcurrency')}</label>
             <input
               className="input"
               type="number"
               min={1}
               max={INT32_MAX}
-              value={template.service_concurrency}
-              onChange={(e) => updateTpl('service_concurrency', Number(e.target.value))}
+              value={template.pod_concurrency}
+              onChange={(e) => updateTpl('pod_concurrency', Number(e.target.value))}
             />
           </div>
           <div>
-            <label className="label">{t('serviceConfigTemplate.serviceTtl')}</label>
+            <label className="label">{t('serviceConfigTemplate.podTtl')}</label>
             <input
               className="input"
               type="number"
               min={1}
               max={INT32_MAX}
-              value={template.service_ttl}
-              onChange={(e) => updateTpl('service_ttl', Number(e.target.value))}
+              value={template.pod_ttl}
+              onChange={(e) => updateTpl('pod_ttl', Number(e.target.value))}
             />
           </div>
           <div>
-            <label className="label">{t('serviceConfigTemplate.sessionConcurrency')}</label>
+            <label className="label">{t('serviceConfigTemplate.scopeConcurrency')}</label>
             <input
               className="input"
               type="number"
               min={1}
               max={INT32_MAX}
-              value={template.session_concurrency}
-              onChange={(e) => updateTpl('session_concurrency', Number(e.target.value))}
+              value={template.scope_concurrency}
+              onChange={(e) => updateTpl('scope_concurrency', Number(e.target.value))}
             />
           </div>
           <div>

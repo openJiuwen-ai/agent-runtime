@@ -292,7 +292,7 @@ MANAGER_WEB_GATEWAY_WS_TARGET=http://127.0.0.1:19000
 MANAGER_WEB_RESOLVER=kube-dns.kube-system.svc.cluster.local
 ```
 
-生产 nginx 将 `/chat`、`/ws`、`/gateway-api`、`/file-api`、`/share-api` 按 Cookie `jiuwenclaw_id` 动态反代到各实例 `instance_info.data` 中的 `user_web_host` / `gateway_web_*_host`（空则回退上述 `MANAGER_WEB_*_TARGET`）。`MANAGER_WEB_RESOLVER` 供变量 `proxy_pass` 做 DNS 解析（集群DNS的ClusterIP或完整服务名）。
+生产 nginx 将 `/chat`、`/ws`、`/gateway-api`、`/file-api`、`/share-api` 按 Cookie `jiuwenclaw_id` 动态反代到各实例 `instance_info.user_web_host` 与 `instance_info.data` 中的 `gateway_web_*_host`（空则回退上述 `MANAGER_WEB_*_TARGET`）。`MANAGER_WEB_RESOLVER` 供变量 `proxy_pass` 做 DNS 解析（集群DNS的ClusterIP或完整服务名）。
 
 完整变量列表见 `applications/manager/.env.example`。
 ---

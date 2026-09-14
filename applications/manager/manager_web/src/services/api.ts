@@ -1017,7 +1017,7 @@ export const ServiceConfigTemplateApi = {
     page_size?: number;
     enabled?: boolean;
     search?: string;
-    sort_by?: 'template_name' | 'description' | 'agent_image' | 'updated_at';
+    sort_by?: 'template_name' | 'description' | 'updated_at';
     sort_order?: 'asc' | 'desc';
   }) => http<PageResult<ServiceConfigTemplate>>('/v1/service-config-templates', { query: params }),
   get: (id: string) =>

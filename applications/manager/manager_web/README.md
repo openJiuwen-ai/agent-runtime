@@ -33,7 +33,7 @@ cd ../../..
 
 5273 是唯一外部入口：`/auth`、`/user`、`/manager` 由 Manager SPA 提供。
 普通用户登录后由 `/user` 先调用 `POST /api/v1/user-console/active-cluster` 写入 Cookie `jiuwenclaw_id`，再跳转 `/chat/`。
-生产 nginx 按该 Cookie 动态反代到实例 `data.user_web_host` / `data.gateway_web_*_host`（空则回退 `MANAGER_WEB_*_TARGET`）。
+生产 nginx 按该 Cookie 动态反代到实例 `user_web_host` / `data.gateway_web_*_host`（空则回退 `MANAGER_WEB_*_TARGET`）。
 `/api` 转发 Manager Server，`/idp` 转发 Identity Center；`/ws`、`/gateway-api`、`/file-api`、`/share-api` 同理动态选 Gateway。
 独立的 `/gateway-api` 前缀用于避免与 Manager `/api/v1/*` 冲突。Vite 本地仍为静态 `MANAGER_WEB_*_TARGET` 代理。
 

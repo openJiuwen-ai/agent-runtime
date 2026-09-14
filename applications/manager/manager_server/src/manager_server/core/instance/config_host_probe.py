@@ -97,15 +97,15 @@ async def check_config_host_alive(
 
 async def require_config_hosts_reachable(
     *,
-    gateway_config_host: str | None = None,
-    runtime_config_host: str | None = None,
+    gateway_host: str | None = None,
+    runtime_host: str | None = None,
     user_web_host: str | None = None,
     timeout: float = _DEFAULT_TIMEOUT,
 ) -> None:
     """对非空的 Gateway / Runtime / User Web host 依次探活；任一失败即抛错。"""
-    if gateway_config_host:
-        await probe_config_host(gateway_config_host, side="gateway", timeout=timeout)
-    if runtime_config_host:
-        await probe_config_host(runtime_config_host, side="runtime", timeout=timeout)
+    if gateway_host:
+        await probe_config_host(gateway_host, side="gateway", timeout=timeout)
+    if runtime_host:
+        await probe_config_host(runtime_host, side="runtime", timeout=timeout)
     if user_web_host:
         await probe_config_host(user_web_host, side="user_web", timeout=timeout)

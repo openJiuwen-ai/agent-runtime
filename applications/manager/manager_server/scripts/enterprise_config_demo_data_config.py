@@ -40,27 +40,38 @@ _DEMO_AGENT_SERVER_IMAGE = (
 
 
 def _demo_agent_server_base() -> dict[str, Any]:
+    main_cid = "c-agentserver"
+    main_container = {
+        "container_id": main_cid,
+        "name": "agent-server",
+        "image": _DEMO_AGENT_SERVER_IMAGE,
+        "imagePullPolicy": "IfNotPresent",
+        "ports": [{"name": "sse", "containerPort": 18092}],
+        "readinessProbe": {
+            "httpGet": {"path": "/api/v1/health", "port": 18092},
+            "initialDelaySeconds": 5,
+            "periodSeconds": 5,
+        },
+    }
     return {
-        "agent_image": _DEMO_AGENT_SERVER_IMAGE,
         "namespace": "jiuwenclaw",
         "pod_name": "agentserver",
-        "container_name": "agent-server",
-        "container_port": 18092,
-        "port_name": "http1",
-        "sse_port": 18092,
         "sse_path": "/api/v1/events/stream",
-        "health_path": "/api/v1/health",
-        "image_pull_policy": "IfNotPresent",
-        "readiness_initial_delay": 5,
-        "readiness_period": 5,
         "ready_timeout": 300,
         "ready_poll_interval": 2,
-        "min_idle_services": 0,
-        "service_concurrency": 2,
-        "service_ttl": 300,
+        "main_container_id": main_cid,
+        "sidecar_container_ids": [],
+        "min_idle_pods": 0,
+        "pod_concurrency": 2,
+        "pod_ttl": 300,
         "message_timeout": 600,
-        "session_concurrency": 3,
+        "scope_concurrency": 3,
         "session_ttl": 60,
+        "data": {
+            "config_sync": {
+                "containers": [main_container],
+            }
+        },
     }
 
 
@@ -427,10 +438,13 @@ def _service_config_templates() -> list[tuple[str, dict[str, Any]]]:
                 **base,
                 "template_name": "销售组 AgentServer 池",
                 "description": "销售 Agent 使用的 AgentServer 动态池",
-                "min_idle_services": 2,
-                "service_concurrency": 5,
+                "min_idle_pods": 2,
+                "pod_concurrency": 5,
                 "enabled": True,
-                "data": {"demo": "s1"},
+                "data": {
+                    "demo": "s1",
+                    "config_sync": base["data"]["config_sync"],
+                },
             },
         ),
         (
@@ -439,10 +453,13 @@ def _service_config_templates() -> list[tuple[str, dict[str, Any]]]:
                 **base,
                 "template_name": "兜底 AgentServer 池",
                 "description": "Fallback Agent 最小 AgentServer 池",
-                "min_idle_services": 1,
-                "service_concurrency": 2,
+                "min_idle_pods": 1,
+                "pod_concurrency": 2,
                 "enabled": True,
-                "data": {"demo": "s2"},
+                "data": {
+                    "demo": "s2",
+                    "config_sync": base["data"]["config_sync"],
+                },
             },
         ),
     ]

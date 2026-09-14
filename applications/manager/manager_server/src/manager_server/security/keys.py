@@ -80,6 +80,7 @@ async def get_or_create_manager_signing_key(handler: DBHandler) -> ManagerSignin
             "public_key": cp.b64e(pub),
             "key_version": "v1",
             "fingerprint": fp,
+            "data": None,
             "created_at": now,
             "updated_at": now,
         },
@@ -113,7 +114,13 @@ async def store_instance_enc_pubkey(
     else:
         await handler.create(
             _ENC_PUBKEY_TABLE,
-            {"jiuwenclaw_id": jiuwenclaw_id, "bound_at": now, **data},
+            {
+                "jiuwenclaw_id": jiuwenclaw_id,
+                "bound_at": now,
+                "data": None,
+                "created_at": now,
+                **data,
+            },
         )
     logger.info("[keys] stored gateway enc pubkey jiuwenclaw_id=%s fp=%s", jiuwenclaw_id, fp[:16])
 

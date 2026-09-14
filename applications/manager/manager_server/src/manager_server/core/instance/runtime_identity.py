@@ -14,7 +14,7 @@ _HEALTH_PATH = "/healthz"
 
 
 async def fetch_runtime_identity_from_health(
-    runtime_config_host: str,
+    runtime_host: str,
     *,
     timeout: float = _DEFAULT_TIMEOUT,
 ) -> dict[str, Any]:
@@ -22,13 +22,13 @@ async def fetch_runtime_identity_from_health(
 
     返回 ``{"namespace"}``（若响应体含该字段，否则 ``default``）；探活失败抛 ``ValueError``。
     """
-    base = str(runtime_config_host or "").strip().rstrip("/")
+    base = str(runtime_host or "").strip().rstrip("/")
     if not base:
-        raise ValueError("runtime_config_host is empty")
+        raise ValueError("runtime_host is empty")
     link_mtls = ManagerLinkMTLSConfig.from_env()
     base = link_mtls.resolve_endpoint(base, role="runtime")
     if not base.startswith(("http://", "https://")):
-        raise ValueError(f"runtime_config_host must be an http(s) URL, got {runtime_config_host!r}")
+        raise ValueError(f"runtime_host must be an http(s) URL, got {runtime_host!r}")
 
     url = f"{base}{_HEALTH_PATH}"
     try:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from typing import Any
 
@@ -16,9 +15,7 @@ from manager_server.core.template.push_agent_template_to_gateway import (
 )
 from manager_server.infrastructure.common import resolve_order_by
 from manager_server.infrastructure.logger import get_logger
-from manager_server.infrastructure.match_expr import (
-    canonicalize_match_expr,
-)
+from manager_server.infrastructure.match_expr import merge_match_exprs
 from manager_server.infrastructure.utils import iso_datetime, new_uuid4, strip_optional, utc_now
 from manager_server.core.instance_access import auto_bind_from_match_expr
 from manager_server.models.instance_resource_models import INSTANCE_AGENT_RESOURCE_TABLE_DEF
@@ -72,34 +69,6 @@ def grant_out(row: Any) -> dict[str, Any]:
         "created_at": iso_datetime(_g(row, "created_at")),
         "updated_at": iso_datetime(_g(row, "updated_at")),
     }
-
-
-def match_key(expr: Any) -> str:
-    return json.dumps(canonicalize_match_expr(expr), ensure_ascii=False, separators=(",", ":"))
-
-
-def merge_match_exprs(match_exprs: list[Any]) -> Any:
-    """将多个 match_expr 合并为可入库的单一 JSON 值（多条件为 OR 列表）。"""
-    parts: list[str] = []
-    seen: set[str] = set()
-    for raw in match_exprs:
-        expr = canonicalize_match_expr(raw)
-        if expr == []:
-            return []
-        if isinstance(expr, list):
-            items = expr
-        else:
-            items = [str(expr)]
-        for item in items:
-            text = str(item).strip()
-            if not text:
-                continue
-            key = match_key(text)
-            if key in seen:
-                continue
-            seen.add(key)
-            parts.append(text)
-    return canonicalize_match_expr(parts)
 
 
 def grant_expired(expires_at: Any) -> bool:
@@ -241,6 +210,9 @@ class InstanceAgentResourceService:
         merged_expr = merge_match_exprs(match_exprs)
         now = utc_now()
         granted_by_norm = strip_optional(granted_by)
+        created_at = _g(existing[0], "created_at") if existing else None
+        if created_at is None:
+            created_at = now
         grant_row = {
             "jiuwenclaw_id": jiuwenclaw_id,
             "resource_id": resolved_resource_id,
@@ -252,7 +224,7 @@ class InstanceAgentResourceService:
             "expires_at": expires_at,
             "enabled": enabled,
             "data": data,
-            "created_at": now,
+            "created_at": created_at,
             "updated_at": now,
         }
 

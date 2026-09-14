@@ -13,7 +13,7 @@ class _DB:
     async def get(self, table: str, filters: dict):
         assert table == "instance_info"
         if filters["jiuwenclaw_id"] == "jid-a":
-            return SimpleNamespace(runtime_config_host="https://runtime-a:8091/")
+            return SimpleNamespace(runtime_host="https://runtime-a:8091/")
         return None
 
 

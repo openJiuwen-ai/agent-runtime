@@ -38,6 +38,7 @@ INSTANCE_AGENT_RESOURCE_TABLE_DEF = TableDefinition(
 
 # 实例服务资源（授权即实例化）。每次添加生成独立 resource_id；
 # 含 resource_name / resource_desc；谁可用由 match_expr 判定。
+# priority 与 Runtime routing_scope.index 同义：升序 first-fit（越小越优先）。
 INSTANCE_SERVICE_RESOURCE_TABLE_DEF = TableDefinition(
     table_name="instance_service_resource",
     columns=[

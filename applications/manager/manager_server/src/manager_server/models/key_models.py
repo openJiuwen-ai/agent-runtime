@@ -24,6 +24,7 @@ MANAGER_IDENTITY_TABLE_DEF = TableDefinition(
         ColumnDefinition("public_key", "string", length=256, nullable=False),
         ColumnDefinition("key_version", "string", length=32, nullable=False),
         ColumnDefinition("fingerprint", "string", length=128, nullable=False),
+        ColumnDefinition("data", "json", nullable=True),
         ColumnDefinition("created_at", "datetime", nullable=False),
         ColumnDefinition("updated_at", "datetime", nullable=False),
     ],
@@ -40,6 +41,14 @@ INSTANCE_ENC_PUBKEY_TABLE_DEF = TableDefinition(
         ColumnDefinition("fingerprint", "string", length=128, nullable=False),
         ColumnDefinition("status", "string", length=32, nullable=False, default="bound"),
         ColumnDefinition("bound_at", "datetime", nullable=False),
+        ColumnDefinition("data", "json", nullable=True),
+        # 存量库补列时需 DEFAULT；创建路径始终显式写入
+        ColumnDefinition(
+            "created_at",
+            "datetime",
+            nullable=False,
+            default="1970-01-01 00:00:00",
+        ),
         ColumnDefinition("updated_at", "datetime", nullable=False),
     ],
     indexes=[

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 from urllib.parse import unquote, urlparse, urlsplit
-import re
 
 from croniter import croniter
 from pydantic import (
@@ -31,19 +30,6 @@ from manager_server.infrastructure.template_ref import (
 ModelTypeLiteral = Literal["default", "video", "audio", "vision", "image_gen"]
 ExtensionComponentLiteral = Literal["gateway", "agent_server"]
 ExtensionHookTypeLiteral = Literal["pre_request", "post_request", "error", "schedule"]
-ImagePullPolicyLiteral = Literal["Always", "IfNotPresent", "Never"]
-TemplateIdPath = Annotated[str, Field(min_length=1, max_length=100)]
-TemplateRefField = Annotated[dict[str, list[str]], BeforeValidator(normalize_template_ref)]
-OptionalTemplateRefField = Annotated[
-    dict[str, list[str]] | None,
-    BeforeValidator(normalize_template_ref_optional),
-]
-
-
-ModelTypeLiteral = Literal["default", "video", "audio", "vision", "image_gen"]
-ExtensionComponentLiteral = Literal["gateway", "agent_server"]
-ExtensionHookTypeLiteral = Literal["pre_request", "post_request", "error", "schedule"]
-ImagePullPolicyLiteral = Literal["Always", "IfNotPresent", "Never"]
 TemplateIdPath = Annotated[str, Field(min_length=1, max_length=100)]
 TemplateRefField = Annotated[dict[str, list[str]], BeforeValidator(normalize_template_ref)]
 OptionalTemplateRefField = Annotated[
@@ -614,6 +600,7 @@ class A2AAccessPolicyTemplateCreateBody(SafeTextMixin):
     mode: A2AAccessPolicyMode
     member_template_ids: list[TemplateIdPath] = Field(default_factory=list)
     enabled: bool = True
+    data: dict[str, Any] | None = None
 
     @field_validator("member_template_ids")
     @classmethod
@@ -629,6 +616,7 @@ class A2AAccessPolicyTemplateUpdateBody(SafeTextMixin):
     mode: A2AAccessPolicyMode | None = None
     member_template_ids: list[TemplateIdPath] | None = None
     enabled: bool | None = None
+    data: dict[str, Any] | None = None
 
     @field_validator("member_template_ids")
     @classmethod
@@ -656,6 +644,7 @@ class A2AAccessPolicyTemplateOut(BaseModel):
     enabled: bool
     revision: int
     reference_count: int = 0
+    data: dict[str, Any] | None = None
     created_at: str | None
     updated_at: str | None
 
@@ -810,114 +799,9 @@ class McpTemplateOut(BaseModel):
     updated_at: str | None
 
 
-# 与库表类型上限一致：integer → 有符号 32 位；autoscale_interval → DECIMAL(10,3)
+# 与库表类型上限一致：integer → 有符号 32 位
 
 _SERVICE_INT_MAX = 2_147_483_647
-
-# K8s resource quantity：CPU 如 500m / 2 / 0.5；内存须带单位 Ki/Mi/Gi/K/M/G
-_K8S_CPU_RE = re.compile(r"^(?:(?:0|[1-9]\d*)(?:\.\d+)?|\.\d+)m?$")
-_K8S_MEMORY_RE = re.compile(r"^(?:(?:0|[1-9]\d*)(?:\.\d+)?|\.\d+)(?:Ki|Mi|Gi|K|M|G)$")
-
-
-def _normalize_resource_quantity(value: Any) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
-
-
-def _validate_k8s_cpu(value: str | None) -> str | None:
-    if value is None:
-        return None
-    if len(value) > 32:
-        raise ValueError("at most 32 characters")
-    if not _K8S_CPU_RE.fullmatch(value):
-        raise ValueError("must be a valid Kubernetes CPU quantity (e.g. '500m', '2', '0.5')")
-    return value
-
-
-def _validate_k8s_memory(value: str | None) -> str | None:
-    if value is None:
-        return None
-    if len(value) > 32:
-        raise ValueError("at most 32 characters")
-    if not _K8S_MEMORY_RE.fullmatch(value):
-        raise ValueError(
-            "must be a Kubernetes memory quantity with unit "
-            "Ki/Mi/Gi/K/M/G (e.g. '512Mi', '2Gi', '128M')"
-        )
-    return value
-
-
-K8sCpuQuantity = Annotated[
-    str | None,
-    BeforeValidator(_normalize_resource_quantity),
-    AfterValidator(_validate_k8s_cpu),
-]
-K8sMemoryQuantity = Annotated[
-    str | None,
-    BeforeValidator(_normalize_resource_quantity),
-    AfterValidator(_validate_k8s_memory),
-]
-
-
-def is_valid_unix_abs_path(value: str) -> bool:
-    """校验绝对 Unix 路径：以 / 开头，禁止 \\、空段、. 与 ..。"""
-    if not value or len(value) > 512:
-        return False
-    if "\0" in value or "\\" in value:
-        return False
-    if not value.startswith("/"):
-        return False
-    if value == "/":
-        return True
-    core = value.rstrip("/")
-    if not core.startswith("/"):
-        return False
-    for segment in core[1:].split("/"):
-        if not segment or segment in (".", ".."):
-            return False
-    return True
-
-
-def _normalize_required_nfs_path(value: Any) -> str:
-    if value is None:
-        return "/"
-    text = str(value).strip()
-    return text or "/"
-
-
-def _validate_required_nfs_path(value: str) -> str:
-    if not is_valid_unix_abs_path(value):
-        raise ValueError("must be an absolute Unix path (e.g. '/', '/data/nfs')")
-    return value
-
-
-def _normalize_optional_unix_path(value: Any) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
-
-
-def _validate_optional_unix_path(value: str | None) -> str | None:
-    if value is None:
-        return None
-    if not is_valid_unix_abs_path(value):
-        raise ValueError("must be an absolute Unix path (e.g. '/mnt/nfs')")
-    return value
-
-
-NfsExportPath = Annotated[
-    str,
-    BeforeValidator(_normalize_required_nfs_path),
-    AfterValidator(_validate_required_nfs_path),
-]
-OptionalUnixAbsPath = Annotated[
-    str | None,
-    BeforeValidator(_normalize_optional_unix_path),
-    AfterValidator(_validate_optional_unix_path),
-]
 
 
 class ServiceConfigTemplateCreateBody(SafeTextMixin):
@@ -925,44 +809,22 @@ class ServiceConfigTemplateCreateBody(SafeTextMixin):
 
     template_name: str = Field(..., min_length=1, max_length=128)
     description: str | None = Field(default=None, max_length=512)
-    agent_image: str = Field(default="", max_length=512)
     namespace: str = Field(default="default", max_length=128)
     node_name: str | None = Field(default=None, max_length=128)
-    run_as_user: int | None = Field(default=None, ge=0, le=_SERVICE_INT_MAX)
-    run_as_group: int | None = Field(default=None, ge=0, le=_SERVICE_INT_MAX)
+    fs_group: int | None = Field(default=None, ge=0, le=_SERVICE_INT_MAX)
     pod_name: str = Field(default="agentserver", max_length=128)
-    container_name: str = Field(default="agent", min_length=1, max_length=128)
-    container_port: int = Field(default=8080, ge=1, le=65535)
-    port_name: str = Field(default="http", max_length=64)
-    sse_port: int = Field(default=8080, ge=1, le=65535)
     sse_path: str = Field(default="/sse", max_length=128)
-    health_path: str = Field(default="/health", max_length=128)
-    agent_env: dict[str, str] | None = None
-    image_pull_policy: ImagePullPolicyLiteral = Field(default="IfNotPresent")
     kubeconfig: str | None = Field(default=None, max_length=512)
-    readiness_initial_delay: int = Field(default=5, ge=0, le=_SERVICE_INT_MAX)
-    readiness_period: int = Field(default=5, ge=1, le=_SERVICE_INT_MAX)
     ready_timeout: int = Field(default=300, ge=1, le=_SERVICE_INT_MAX)
     ready_poll_interval: int = Field(default=2, ge=1, le=_SERVICE_INT_MAX)
-    nfs_server: str | None = Field(default=None, max_length=256)
-    nfs_path: OptionalUnixAbsPath = None
-    nfs_mount_path: OptionalUnixAbsPath = None
-    agent_cpu_request: K8sCpuQuantity = None
-    agent_memory_request: K8sMemoryQuantity = None
-    agent_cpu_limit: K8sCpuQuantity = None
-    agent_memory_limit: K8sMemoryQuantity = None
-    sidecars: list[dict[str, Any]] | None = None
-    agent_host_path_mounts: list[dict[str, Any]] | None = None
-    agent_configmap_mounts: list[dict[str, Any]] | None = None
-    agent_pvc_mounts: list[dict[str, Any]] | None = None
     main_container_id: str | None = Field(default=None, max_length=100)
     sidecar_container_ids: list[str] | None = None
     volumes: list[dict[str, Any]] | None = None
-    min_idle_services: int = Field(default=0, ge=0, le=_SERVICE_INT_MAX)
-    service_concurrency: int = Field(default=2, ge=1, le=_SERVICE_INT_MAX)
-    service_ttl: int = Field(default=300, ge=1, le=_SERVICE_INT_MAX)
+    min_idle_pods: int = Field(default=0, ge=0, le=_SERVICE_INT_MAX)
+    pod_concurrency: int = Field(default=2, ge=1, le=_SERVICE_INT_MAX)
+    pod_ttl: int = Field(default=300, ge=1, le=_SERVICE_INT_MAX)
     message_timeout: int = Field(default=600, ge=1, le=_SERVICE_INT_MAX)
-    session_concurrency: int = Field(default=3, ge=1, le=_SERVICE_INT_MAX)
+    scope_concurrency: int = Field(default=3, ge=1, le=_SERVICE_INT_MAX)
     session_ttl: int = Field(default=60, ge=1, le=_SERVICE_INT_MAX)
     enabled: bool = True
     data: dict[str, Any] | None = None
@@ -973,44 +835,22 @@ class ServiceConfigTemplateUpdateBody(SafeTextMixin):
 
     template_name: str | None = Field(default=None, min_length=1, max_length=128)
     description: str | None = Field(default=None, max_length=512)
-    agent_image: str | None = Field(default=None, max_length=512)
     namespace: str | None = Field(default=None, max_length=128)
     node_name: str | None = Field(default=None, max_length=128)
-    run_as_user: int | None = Field(default=None, ge=0, le=_SERVICE_INT_MAX)
-    run_as_group: int | None = Field(default=None, ge=0, le=_SERVICE_INT_MAX)
+    fs_group: int | None = Field(default=None, ge=0, le=_SERVICE_INT_MAX)
     pod_name: str | None = Field(default=None, max_length=128)
-    container_name: str | None = Field(default=None, min_length=1, max_length=128)
-    container_port: int | None = Field(default=None, ge=1, le=65535)
-    port_name: str | None = Field(default=None, max_length=64)
-    sse_port: int | None = Field(default=None, ge=1, le=65535)
     sse_path: str | None = Field(default=None, max_length=128)
-    health_path: str | None = Field(default=None, max_length=128)
-    agent_env: dict[str, str] | None = None
-    image_pull_policy: ImagePullPolicyLiteral | None = None
     kubeconfig: str | None = Field(default=None, max_length=512)
-    readiness_initial_delay: int | None = Field(default=None, ge=0, le=_SERVICE_INT_MAX)
-    readiness_period: int | None = Field(default=None, ge=1, le=_SERVICE_INT_MAX)
     ready_timeout: int | None = Field(default=None, ge=1, le=_SERVICE_INT_MAX)
     ready_poll_interval: int | None = Field(default=None, ge=1, le=_SERVICE_INT_MAX)
-    nfs_server: str | None = Field(default=None, max_length=256)
-    nfs_path: OptionalUnixAbsPath = None
-    nfs_mount_path: OptionalUnixAbsPath = None
-    agent_cpu_request: K8sCpuQuantity = None
-    agent_memory_request: K8sMemoryQuantity = None
-    agent_cpu_limit: K8sCpuQuantity = None
-    agent_memory_limit: K8sMemoryQuantity = None
-    sidecars: list[dict[str, Any]] | None = None
-    agent_host_path_mounts: list[dict[str, Any]] | None = None
-    agent_configmap_mounts: list[dict[str, Any]] | None = None
-    agent_pvc_mounts: list[dict[str, Any]] | None = None
     main_container_id: str | None = Field(default=None, max_length=100)
     sidecar_container_ids: list[str] | None = None
     volumes: list[dict[str, Any]] | None = None
-    min_idle_services: int | None = Field(default=None, ge=0, le=_SERVICE_INT_MAX)
-    service_concurrency: int | None = Field(default=None, ge=1, le=_SERVICE_INT_MAX)
-    service_ttl: int | None = Field(default=None, ge=1, le=_SERVICE_INT_MAX)
+    min_idle_pods: int | None = Field(default=None, ge=0, le=_SERVICE_INT_MAX)
+    pod_concurrency: int | None = Field(default=None, ge=1, le=_SERVICE_INT_MAX)
+    pod_ttl: int | None = Field(default=None, ge=1, le=_SERVICE_INT_MAX)
     message_timeout: int | None = Field(default=None, ge=1, le=_SERVICE_INT_MAX)
-    session_concurrency: int | None = Field(default=None, ge=1, le=_SERVICE_INT_MAX)
+    scope_concurrency: int | None = Field(default=None, ge=1, le=_SERVICE_INT_MAX)
     session_ttl: int | None = Field(default=None, ge=1, le=_SERVICE_INT_MAX)
     enabled: bool | None = None
     data: dict[str, Any] | None = None
@@ -1024,7 +864,7 @@ class ServiceConfigTemplateListQuery(BaseModel):
     search: str | None = Field(default=None, max_length=256)
     sort_by: str | None = Field(
         default=None,
-        description="排序字段：template_name、description、agent_image、updated_at",
+        description="排序字段：template_name、description、updated_at",
     )
     sort_order: str | None = Field(default=None, description="排序方向：asc、desc")
 
@@ -1034,44 +874,23 @@ class ServiceConfigTemplateOut(BaseModel):
     template_id: str
     template_name: str
     description: str | None
-    agent_image: str
     namespace: str
     node_name: str | None
-    run_as_user: int | None
-    run_as_group: int | None
+    fs_group: int | None
     pod_name: str
-    container_name: str
-    container_port: int
-    port_name: str
-    sse_port: int
     sse_path: str
-    health_path: str
-    agent_env: dict[str, Any] | None
-    image_pull_policy: str
     kubeconfig: str | None
-    readiness_initial_delay: int
-    readiness_period: int
     ready_timeout: int
     ready_poll_interval: int
-    nfs_server: str | None
-    nfs_path: str | None
-    nfs_mount_path: str | None
-    agent_cpu_request: str | None
-    agent_memory_request: str | None
-    agent_cpu_limit: str | None
-    agent_memory_limit: str | None
-    sidecars: list[dict[str, Any]] | None
-    agent_host_path_mounts: list[dict[str, Any]] | None
-    agent_configmap_mounts: list[dict[str, Any]] | None
-    agent_pvc_mounts: list[dict[str, Any]] | None
     main_container_id: str | None
     sidecar_container_ids: list[str] | None
     volumes: list[dict[str, Any]] | None
-    min_idle_services: int
-    service_concurrency: int
-    service_ttl: int
+    main_image: str | None = None
+    min_idle_pods: int
+    pod_concurrency: int
+    pod_ttl: int
     message_timeout: int
-    session_concurrency: int
+    scope_concurrency: int
     session_ttl: int
     enabled: bool
     data: dict[str, Any] | None

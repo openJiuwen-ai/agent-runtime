@@ -76,7 +76,7 @@ async def test_skip_when_no_gateway_host():
         patch(
             "manager_server.manager_config_push.endpoint.require_gateway_endpoint",
             new_callable=AsyncMock,
-            side_effect=ValueError("no gateway_config_host"),
+            side_effect=ValueError("no gateway_host"),
         ),
         patch(
             "manager_server.core.instance.instance_data_lifecycle.sync_data_to_gateway_on_register",

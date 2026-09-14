@@ -11,14 +11,14 @@ from manager_server.core.instance.instance_service import get_instance_row, list
 
 
 def resolve_gateway_endpoint(row: Any) -> str | None:
-    """解析 Gateway 配置下发基址（``gateway_config_host``）。"""
-    host = str(getattr(row, "gateway_config_host", None) or "").strip().rstrip("/")
+    """解析 Gateway 配置下发基址（``gateway_host``）。"""
+    host = str(getattr(row, "gateway_host", None) or "").strip().rstrip("/")
     return host or None
 
 
 def resolve_runtime_endpoint(row: Any) -> str | None:
-    """解析 Runtime ``config_sync`` 基址（``runtime_config_host``）。"""
-    host = str(getattr(row, "runtime_config_host", None) or "").strip().rstrip("/")
+    """解析 Runtime ``config_sync`` 基址（``runtime_host``）。"""
+    host = str(getattr(row, "runtime_host", None) or "").strip().rstrip("/")
     return host or None
 
 
@@ -31,14 +31,14 @@ async def require_gateway_endpoint(jiuwenclaw_id: str) -> str:
     endpoint = resolve_gateway_endpoint(row)
     if not endpoint:
         raise ValueError(
-            f"no gateway_config_host for jiuwenclaw_id={jiuwenclaw_id!r}; "
-            "set gateway_config_host on the instance"
+            f"no gateway_host for jiuwenclaw_id={jiuwenclaw_id!r}; "
+            "set gateway_host on the instance"
         )
     return endpoint
 
 
 async def require_runtime_endpoint(jiuwenclaw_id: str) -> str:
-    """按实例解析 Runtime 基址（``runtime_config_host``）。"""
+    """按实例解析 Runtime 基址（``runtime_host``）。"""
     from manager_server.infrastructure.db import get_db_handler
 
     row = await get_instance_row(get_db_handler(), jiuwenclaw_id)
@@ -47,8 +47,8 @@ async def require_runtime_endpoint(jiuwenclaw_id: str) -> str:
     endpoint = resolve_runtime_endpoint(row)
     if not endpoint:
         raise ValueError(
-            f"no runtime_config_host for jiuwenclaw_id={jiuwenclaw_id!r}; "
-            "set runtime_config_host on the instance"
+            f"no runtime_host for jiuwenclaw_id={jiuwenclaw_id!r}; "
+            "set runtime_host on the instance"
         )
     return endpoint
 

@@ -97,12 +97,12 @@ class InstanceLinkBindingService:
 
         gateway_endpoint = self._matching_instance_endpoint(
             instance,
-            column="gateway_config_host",
+            column="gateway_host",
             supplied=body.mtls_gateway_endpoint,
         )
         runtime_endpoint = self._matching_instance_endpoint(
             instance,
-            column="runtime_config_host",
+            column="runtime_host",
             supplied=body.mtls_runtime_endpoint,
         )
         current = await self.handler.get(_TABLE, {"jiuwenclaw_id": jiuwenclaw_id})
@@ -230,8 +230,8 @@ class InstanceLinkBindingService:
         profile_data = profile.current()
         endpoints = profile_data.get("endpoints", {})
         for role, column in (
-            ("gateway", "gateway_config_host"),
-            ("runtime", "runtime_config_host"),
+            ("gateway", "gateway_host"),
+            ("runtime", "runtime_host"),
         ):
             configured = _endpoint_authority(getattr(instance, column, ""))
             declared = _endpoint_authority(endpoints.get(role, ""))

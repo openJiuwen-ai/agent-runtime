@@ -3,10 +3,10 @@ export interface InstanceSummary {
   jiuwenclaw_name: string;
   namespace: string;
   space_id: string;
-  gateway_config_host: string;
+  gateway_host: string;
   gateway_status: string;
   gateway_last_alive?: string | null;
-  runtime_config_host: string;
+  runtime_host: string;
   runtime_status: string;
   runtime_last_alive?: string | null;
   user_web_status?: string;
@@ -31,8 +31,8 @@ export interface CreateInstanceBody {
   namespace?: string;
   space_id?: string;
   created_by?: string;
-  gateway_config_host: string;
-  runtime_config_host: string;
+  gateway_host: string;
+  runtime_host: string;
   user_web_host?: string;
   gateway_web_http_host?: string;
   gateway_web_ws_host?: string;
@@ -44,8 +44,8 @@ export interface UpdateInstanceBody {
   description?: string;
   namespace?: string;
   space_id?: string;
-  gateway_config_host?: string;
-  runtime_config_host?: string;
+  gateway_host?: string;
+  runtime_host?: string;
   user_web_host?: string;
   gateway_web_http_host?: string;
   gateway_web_ws_host?: string;

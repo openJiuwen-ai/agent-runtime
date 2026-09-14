@@ -22,13 +22,13 @@ class _DB:
             "instance_info": {
                 "manager-row-a": {
                     "jiuwenclaw_id": "manager-row-a",
-                    "gateway_config_host": "http://gateway:8775",
-                    "runtime_config_host": "http://runtime:8091",
+                    "gateway_host": "http://gateway:8775",
+                    "runtime_host": "http://runtime:8091",
                 },
                 "manager-row-b": {
                     "jiuwenclaw_id": "manager-row-b",
-                    "gateway_config_host": "https://gateway-b.example:8775",
-                    "runtime_config_host": "https://runtime-b.example:8091",
+                    "gateway_host": "https://gateway-b.example:8775",
+                    "runtime_host": "https://runtime-b.example:8091",
                 },
             },
             "instance_link_binding": {},
@@ -153,18 +153,18 @@ async def test_database_unbind_does_not_revoke_manager_service_certificate(manag
 @pytest.mark.asyncio
 async def test_automatic_adoption_rejects_endpoint_paths(manager):
     db = _DB()
-    db.tables["instance_info"]["manager-row-a"]["gateway_config_host"] = (
+    db.tables["instance_info"]["manager-row-a"]["gateway_host"] = (
         "http://gateway:8775/unexpected"
     )
-    with pytest.raises(ManagerLinkMTLSError, match="gateway_config_host does not match"):
+    with pytest.raises(ManagerLinkMTLSError, match="gateway_host does not match"):
         await manager.binding_headers(db, "manager-row-a")
 
 
 @pytest.mark.asyncio
 async def test_automatic_adoption_rejects_non_http_endpoint(manager):
     db = _DB()
-    db.tables["instance_info"]["manager-row-a"]["gateway_config_host"] = "ftp://gateway:8775"
-    with pytest.raises(ManagerLinkMTLSError, match="gateway_config_host does not match"):
+    db.tables["instance_info"]["manager-row-a"]["gateway_host"] = "ftp://gateway:8775"
+    with pytest.raises(ManagerLinkMTLSError, match="gateway_host does not match"):
         await manager.binding_headers(db, "manager-row-a")
 
 

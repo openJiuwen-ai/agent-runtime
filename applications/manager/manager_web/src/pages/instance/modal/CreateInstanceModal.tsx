@@ -34,8 +34,8 @@ const HOST_PORT = {
 
 /** 手动模式默认短名（同命名空间，不含 ns 后缀） */
 const DEFAULT_MANUAL_HOSTS = {
-  gatewayConfigHost: `http://${HOST_SVC.gateway}:${HOST_PORT.gatewayConfig}`,
-  runtimeConfigHost: `http://${HOST_SVC.runtime}:${HOST_PORT.runtimeConfig}`,
+  gatewayHost: `http://${HOST_SVC.gateway}:${HOST_PORT.gatewayConfig}`,
+  runtimeHost: `http://${HOST_SVC.runtime}:${HOST_PORT.runtimeConfig}`,
   userWebHost: `http://${HOST_SVC.web}:${HOST_PORT.userWeb}`,
   gatewayWebHttpHost: `http://${HOST_SVC.gateway}:${HOST_PORT.gatewayWebHttp}`,
   gatewayWebWsHost: `http://${HOST_SVC.gateway}:${HOST_PORT.gatewayWebWs}`,
@@ -49,16 +49,16 @@ const FIELD_MAX_LENGTH = {
   jiuwenclaw_name: 128,
   description: 4096,
   namespace: 63,
-  gateway_config_host: 512,
-  runtime_config_host: 512,
+  gateway_host: 512,
+  runtime_host: 512,
   user_web_host: 512,
   gateway_web_http_host: 512,
   gateway_web_ws_host: 512,
 } as const;
 
 type HostBundle = {
-  gatewayConfigHost: string;
-  runtimeConfigHost: string;
+  gatewayHost: string;
+  runtimeHost: string;
   userWebHost: string;
   gatewayWebHttpHost: string;
   gatewayWebWsHost: string;
@@ -67,8 +67,8 @@ type HostBundle = {
 function buildHostsFromNamespace(ns: string): HostBundle {
   const namespace = ns.trim();
   return {
-    gatewayConfigHost: `http://${HOST_SVC.gateway}.${namespace}:${HOST_PORT.gatewayConfig}`,
-    runtimeConfigHost: `http://${HOST_SVC.runtime}.${namespace}:${HOST_PORT.runtimeConfig}`,
+    gatewayHost: `http://${HOST_SVC.gateway}.${namespace}:${HOST_PORT.gatewayConfig}`,
+    runtimeHost: `http://${HOST_SVC.runtime}.${namespace}:${HOST_PORT.runtimeConfig}`,
     userWebHost: `http://${HOST_SVC.web}.${namespace}:${HOST_PORT.userWeb}`,
     gatewayWebHttpHost: `http://${HOST_SVC.gateway}.${namespace}:${HOST_PORT.gatewayWebHttp}`,
     gatewayWebWsHost: `http://${HOST_SVC.gateway}.${namespace}:${HOST_PORT.gatewayWebWs}`,
@@ -110,7 +110,7 @@ export function CreateInstanceModal({ open, onClose, onCreated }: Props) {
 
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const [hostMode, setHostMode] = useState<HostMode>('auto');
+  const [hostMode, setHostMode] = useState<HostMode>('manual');
   /** 仅自动页签使用；与手动页签互不影响 */
   const [autoNamespace, setAutoNamespace] = useState(DEFAULT_NAMESPACE);
   /** 仅手动页签使用；与自动页签互不影响 */
@@ -131,7 +131,7 @@ export function CreateInstanceModal({ open, onClose, onCreated }: Props) {
     const next = {
       name: '',
       description: '',
-      hostMode: 'auto' as HostMode,
+      hostMode: 'manual' as HostMode,
       autoNamespace: DEFAULT_NAMESPACE,
       manualHosts: { ...DEFAULT_MANUAL_HOSTS },
     };
@@ -177,8 +177,8 @@ export function CreateInstanceModal({ open, onClose, onCreated }: Props) {
 
     const requiredChecks: { label: string; invalid: boolean }[] = [
       { label: t('instanceForm.name'), invalid: !name.trim() },
-      { label: t('instanceForm.gatewayConfigHost'), invalid: !hosts.gatewayConfigHost.trim() },
-      { label: t('instanceForm.runtimeConfigHost'), invalid: !hosts.runtimeConfigHost.trim() },
+      { label: t('instanceForm.gatewayHost'), invalid: !hosts.gatewayHost.trim() },
+      { label: t('instanceForm.runtimeHost'), invalid: !hosts.runtimeHost.trim() },
       { label: t('instanceForm.userWebHost'), invalid: !hosts.userWebHost.trim() },
       { label: t('instanceForm.gatewayWebHttpHost'), invalid: !hosts.gatewayWebHttpHost.trim() },
     ];
@@ -188,8 +188,8 @@ export function CreateInstanceModal({ open, onClose, onCreated }: Props) {
       return;
     }
     const requiredHosts: { label: string; value: string }[] = [
-      { label: t('instanceForm.gatewayConfigHost'), value: hosts.gatewayConfigHost },
-      { label: t('instanceForm.runtimeConfigHost'), value: hosts.runtimeConfigHost },
+      { label: t('instanceForm.gatewayHost'), value: hosts.gatewayHost },
+      { label: t('instanceForm.runtimeHost'), value: hosts.runtimeHost },
       { label: t('instanceForm.userWebHost'), value: hosts.userWebHost },
       { label: t('instanceForm.gatewayWebHttpHost'), value: hosts.gatewayWebHttpHost },
     ];
@@ -220,8 +220,8 @@ export function CreateInstanceModal({ open, onClose, onCreated }: Props) {
         ...(namespace !== undefined ? { namespace } : {}),
         space_id: 'default',
         created_by: 'system',
-        gateway_config_host: hosts.gatewayConfigHost.trim().slice(0, FIELD_MAX_LENGTH.gateway_config_host),
-        runtime_config_host: hosts.runtimeConfigHost.trim().slice(0, FIELD_MAX_LENGTH.runtime_config_host),
+        gateway_host: hosts.gatewayHost.trim().slice(0, FIELD_MAX_LENGTH.gateway_host),
+        runtime_host: hosts.runtimeHost.trim().slice(0, FIELD_MAX_LENGTH.runtime_host),
         user_web_host: hosts.userWebHost.trim().slice(0, FIELD_MAX_LENGTH.user_web_host),
         gateway_web_http_host: hosts.gatewayWebHttpHost.trim().slice(
           0,
@@ -279,20 +279,20 @@ export function CreateInstanceModal({ open, onClose, onCreated }: Props) {
             <button
               type="button"
               role="tab"
-              aria-selected={hostMode === 'auto'}
-              className={`tab ${hostMode === 'auto' ? 'active' : ''}`}
-              onClick={() => setHostMode('auto')}
-            >
-              {t('instanceForm.hostModeAuto')}
-            </button>
-            <button
-              type="button"
-              role="tab"
               aria-selected={hostMode === 'manual'}
               className={`tab ${hostMode === 'manual' ? 'active' : ''}`}
               onClick={() => setHostMode('manual')}
             >
               {t('instanceForm.hostModeManual')}
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={hostMode === 'auto'}
+              className={`tab ${hostMode === 'auto' ? 'active' : ''}`}
+              onClick={() => setHostMode('auto')}
+            >
+              {t('instanceForm.hostModeAuto')}
             </button>
           </div>
           <p className="text-xs text-muted mt-1 text-center">
@@ -311,8 +311,8 @@ export function CreateInstanceModal({ open, onClose, onCreated }: Props) {
                 placeholder={DEFAULT_NAMESPACE}
               />
             </div>
-            <HostPreview label={t('instanceForm.gatewayConfigHost')} value={autoHosts.gatewayConfigHost} />
-            <HostPreview label={t('instanceForm.runtimeConfigHost')} value={autoHosts.runtimeConfigHost} />
+            <HostPreview label={t('instanceForm.gatewayHost')} value={autoHosts.gatewayHost} />
+            <HostPreview label={t('instanceForm.runtimeHost')} value={autoHosts.runtimeHost} />
             <HostPreview label={t('instanceForm.userWebHost')} value={autoHosts.userWebHost} />
             <HostPreview
               label={t('instanceForm.gatewayWebHttpHost')}
@@ -323,21 +323,21 @@ export function CreateInstanceModal({ open, onClose, onCreated }: Props) {
         ) : (
           <>
             <div>
-              <FieldLabel required>{t('instanceForm.gatewayConfigHost')}</FieldLabel>
+              <FieldLabel required>{t('instanceForm.gatewayHost')}</FieldLabel>
               <LimitedTextInput
-                value={manualHosts.gatewayConfigHost}
-                maxLength={FIELD_MAX_LENGTH.gateway_config_host}
-                onChange={(gatewayConfigHost) => patchManual({ gatewayConfigHost })}
-                placeholder={DEFAULT_MANUAL_HOSTS.gatewayConfigHost}
+                value={manualHosts.gatewayHost}
+                maxLength={FIELD_MAX_LENGTH.gateway_host}
+                onChange={(gatewayHost) => patchManual({ gatewayHost })}
+                placeholder={DEFAULT_MANUAL_HOSTS.gatewayHost}
               />
             </div>
             <div>
-              <FieldLabel required>{t('instanceForm.runtimeConfigHost')}</FieldLabel>
+              <FieldLabel required>{t('instanceForm.runtimeHost')}</FieldLabel>
               <LimitedTextInput
-                value={manualHosts.runtimeConfigHost}
-                maxLength={FIELD_MAX_LENGTH.runtime_config_host}
-                onChange={(runtimeConfigHost) => patchManual({ runtimeConfigHost })}
-                placeholder={DEFAULT_MANUAL_HOSTS.runtimeConfigHost}
+                value={manualHosts.runtimeHost}
+                maxLength={FIELD_MAX_LENGTH.runtime_host}
+                onChange={(runtimeHost) => patchManual({ runtimeHost })}
+                placeholder={DEFAULT_MANUAL_HOSTS.runtimeHost}
               />
             </div>
             <div>
