@@ -19,7 +19,7 @@
 | **审计实锤回归网** | `uv run pytest tests/integration/test_audit_repro.py` | 14 用例 | 无(离线,fakeredis) | pytest 标准 |
 | 集成冒烟(M6) | `./scripts/integration_smoke.sh`(sidecar 阶段加 `--with-sidecar`,全量规格加 `--with-mounts`) | 121 项断言(全规格形态;2026-09-01 真镜像 0.0.9s 门禁 121/121) | 单实例 server 模式 + 真 Redis/MySQL/K8s | 0/1/2 |
 | 多副本 e2e(M7) | `uv run --no-sync python scripts/e2e_multi_replica.py` | 35 项断言 | K8s 多副本 + Service LB + 真 Redis | 0/1/2 |
-| 压测/浸泡 | `uv run --no-sync python scripts/load_test.py` | 3 场景 | 任意入口(建议 LB) | 0/1 |
+| 压测/浸泡 | `uv run --no-sync python scripts/load_test.py` | 6 场景 | 任意入口(建议 LB) | 0/1/2 |
 
 退出码约定(两个 e2e 脚本一致):**0**=全过(含 SKIP/DEGRADED);**1**=有 FAIL;
 **2**=前置自检未过。可直接接 CI。
@@ -528,11 +528,17 @@ FakeK8s 忽略探测参数的保真度缺口(按 (ip,port,path) 判定——2026
 
 ## 6. 压测/浸泡:`scripts/load_test.py`
 
+完整设计与指南(6 场景矩阵 / 判定层 / 参数速查 / 已知容量语义)见
+[load-test.md](load-test.md),本节只留速览:
+
 | 场景 | 输入形态 | 判定/预期 |
 |---|---|---|
 | `route` | 每 scope 50 并发容量,8 会话/scope 轮转 route | 全 200;p50/p90/p99 报告;冷启动 max≈deploy 等待 |
 | `route_touch` | 同上 + 半数请求 touch 保活 | 同上(实测 2 副本 LB:16186 请求**零错误**,p50 7.3ms,p99 24.3ms) |
 | `queued` | cc=2/pc=2 小容量模板 | 直方图出现 503 `SCOPE_FULL` **属预期**(容量满快失败路径被刻意打到),只报告不判败 |
+| `config_churn` | 流量中周期 config_sync 翻转 B 类参数两态 | sync 200+affected 覆盖、热更新传播(30s)、快照 ver 递增;流量无感 |
+| `config_refresh` | 流量中周期强制刷新+冷/暖探测 | 代次单调+1、存量会话亲和、新代暖 Pod 重建收敛、暖探测 200;409=日落闸门背压(warn) |
+| `mixed` | route_touch + churn + refresh 同场 | 上两者并集;config 面单发射者零自造 409 |
 
 - 速率:闭环(并发全速)或开环(`--rps` 令牌桶);`--duration` 长 → 浸泡
   (`--report-interval` 周期增量报告);Ctrl-C 优雅部分报告。
