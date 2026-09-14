@@ -70,6 +70,10 @@ cd applications/manager/manager_web && npm install && cd ../../..
 - 身份库：`identity.db`
 - 管理库：`manager.db`
 
+首次启动身份中心前，复制 `applications/manager/.env.example` 为同目录的 `.env`。
+其中的 `IDENTITY_ADMIN_PASSWORD` 和 `IDENTITY_USER1_PASSWORD` 分别设置预置账号密码；
+直接运行身份中心且未设置密码时，新账号不会以固定密码创建。
+
 默认登录账号见下方「本地开发启动」章节。
 
 ---
@@ -103,7 +107,7 @@ npm run dev
 
 ### 默认登录账号
 
-首次启动 `identity-center` 后会自动创建以下账号（仅用于本地开发）：
+首次启动 `identity-center` 后，会按 `.env` 中的密码创建以下账号（仅用于本地开发；已有账号不会被重置）：
 
 | 用户名 | 密码 | 角色 | 用途 |
 |--------|------|------|------|

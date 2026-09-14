@@ -21,9 +21,9 @@ from identity_center.models.identity_models import (
     AUTH_IDENTITY_TABLE_DEF,
     AUTH_SESSION_TABLE_DEF,
     IDENTITY_ORG_TABLE_DEF,
+    IDENTITY_USER_ORG_MEMBERSHIP_TABLE_DEF,
     IDENTITY_USER_TABLE_DEF,
     NO_ORG_GROUP_ID,
-    IDENTITY_USER_ORG_MEMBERSHIP_TABLE_DEF,
 )
 from identity_center.security.tokens import issue_access_token
 
@@ -59,7 +59,7 @@ class IdentityAuthService:
         return [g for g in gids if g and g != NO_ORG_GROUP_ID]
 
     async def _issue_for(self, user: Any) -> dict[str, Any]:
-        user_id = str(getattr(user, "user_id"))
+        user_id = str(user.user_id)
         groups = await self._load_groups(user_id)
         access, expires_in = issue_access_token(
             user_id,
@@ -181,10 +181,12 @@ async def _ensure_org(handler: DBHandler, group_id: str, display_name: str) -> N
 
 async def _ensure_local_user(
     handler: DBHandler, *, user_id: str, display_name: str, is_admin: bool,
-    username: str, password: str,
+    username: str, password: str | None,
 ) -> None:
     if await handler.get(_IDENTITY_USER, {"user_id": user_id}) is not None:
         return
+    if not password:
+        raise RuntimeError(f"Set IDENTITY_{user_id.upper()}_PASSWORD before seeding {user_id}")
     now = utc_now()
     await handler.create(
         _IDENTITY_USER,
@@ -205,10 +207,10 @@ async def seed_defaults(handler: DBHandler) -> None:
     if settings.seed_admin:
         await _ensure_local_user(
             handler, user_id="admin", display_name="Administrator", is_admin=True,
-            username="admin", password="admin",
+            username="admin", password=settings.admin_password,
         )
     if settings.seed_user1:
         await _ensure_local_user(
             handler, user_id="user1", display_name="User One", is_admin=False,
-            username="user1", password="user1",
+            username="user1", password=settings.user1_password,
         )
