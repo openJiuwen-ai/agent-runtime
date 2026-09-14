@@ -24,6 +24,7 @@
 | `idle_consider(pod_id, scope_id)` | `{transitioned_to_idle}`,幂等 |
 | `update_pool_config(scope_id, pool_config, pod_spec?)` | `{updated}`(config_sync 触发;mapping **永不含 generation**) |
 | `bump_generation(scope_id)` | `generation: int`(config_refresh 触发的代次日落,HINCRBY 原子自增,唯一写点) |
+| `sunset_pending_pods(scope_id)` | `list[str]`(config_refresh 前置闸门:scope 注册 Pod 中 `generation ≠ 当前配置代次` 者,忙排空/idle 待回收均计;非空 → SM 侧 409 CONFIG_SYNC_BUSY,见 session-manager spec ⓪ 步) |
 | `cleanup(namespace?, label_selector?)` | `cleaned: int`(运维批删) |
 | `known_scope_ids()` | RM 已知 scope 枚举(SCAN scope:config;config_sync 的被删 scope drain 收敛用——RM config 键是幻影预热的真源) |
 

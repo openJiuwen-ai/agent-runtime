@@ -205,6 +205,7 @@ class OrchestratorSystemContext(SystemContext):
             push_pool_config=self.rm_facade.update_pool_config,
             known_rm_scopes=self.rm_facade.known_scope_ids,
             bump_generation=self.rm_facade.bump_generation,
+            sunset_pending_pods=self.rm_facade.sunset_pending_pods,
         )
         self.sm_orchestrator = SessionOrchestrator(
             sm_state,

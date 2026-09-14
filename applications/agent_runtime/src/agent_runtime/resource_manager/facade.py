@@ -7,6 +7,8 @@
 - idle_consider(pod_id, scope_id) → {transitioned_to_idle: bool}，幂等。
 - update_pool_config(scope_id, pool_config, pod_spec?) → {updated: bool}（config_sync 触发）。
 - bump_generation(scope_id) → int（config_refresh 触发的代次日落，新代次返回值）。
+- sunset_pending_pods(scope_id) → list[str]（config_refresh 前置闸门：代次落后的
+  注册 Pod；非空 = 上一轮日落未完成，refresh 409 串行化）。
 - cleanup(namespace?, label_selector?) → int（运维批删，经 SM 的 /cleanup 委托）。
 """
 
@@ -49,6 +51,14 @@ class ResourceManagerFacade:
     async def bump_generation(self, scope_id: str) -> int:
         """config_refresh 触发：scope 代次 +1（HINCRBY 原子），返回新代次。"""
         return await self._orchestrator.bump_generation(scope_id=scope_id)
+
+    async def sunset_pending_pods(self, scope_id: str) -> list[str]:
+        """config_refresh 前置闸门：代次落后于当前配置的注册 Pod（含排空中）。
+
+        非空 → 上一轮 refresh 的日落尚未完成，refresh 应 409 拒绝（串行化：
+        防多代日落堆积蹲占 max_pods）。
+        """
+        return await self._orchestrator.sunset_pending_pods(scope_id=scope_id)
 
     async def cleanup(
         self,

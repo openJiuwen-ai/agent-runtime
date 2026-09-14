@@ -490,6 +490,9 @@ KnownRmScopes = Callable[[], Awaitable[list[str]]]
 # RM 代次日落回调：config_refresh → rm_facade.bump_generation(scope_id)
 # （HINCRBY 原子自增，返回新代次）
 GenerationBump = Callable[[str], Awaitable[int]]
+# RM 日落中间态回调：config_refresh → rm_facade.sunset_pending_pods(scope_id)
+# （返回代次落后于当前配置的注册 Pod——refresh 前置闸门的判据）
+SunsetPendingPods = Callable[[str], Awaitable[list[str]]]
 
 CONFIG_SYNC_LOCK_TTL = 60  # 串行化锁基线 TTL（看门狗按 TTL//3 续期——锁内工作
                            # 含日落判定/全量 DB 读写/逐 scope 推送，规模大可超基线）
@@ -574,12 +577,14 @@ class ConfigStore:
         push_pool_config: PoolConfigPush | None = None,
         known_rm_scopes: KnownRmScopes | None = None,
         bump_generation: GenerationBump | None = None,
+        sunset_pending_pods: SunsetPendingPods | None = None,
     ) -> None:
         self._db = db
         self.state = sm_state
         self._push = push_pool_config
         self._known_rm_scopes = known_rm_scopes
         self._bump_generation = bump_generation
+        self._sunset_pending = sunset_pending_pods
         # 进程内快照 memo：原始串相等则复用已解析对象（route 热路径零 json.loads）
         self._snapshot_raw: str | None = None
         self._snapshot: RoutingSnapshot | None = None
@@ -1061,7 +1066,7 @@ class ConfigStore:
             )
 
     async def _config_refresh_locked(self) -> dict[str, Any]:
-        """锁内的强制刷新编排：逐 scope bump → push → 全量软摘除。
+        """锁内的强制刷新编排：前置日落中间态检查 → 逐 scope bump → push → 全量软摘除。
 
         只遍历 DB 存活 scope（幻影 scope 归 config_sync 扩散③的 drain 路径）。
         顺序红线 **bump 先于 ZREM**：唯一危险序是「ZREM 而未 bump」——老 Pod 被
@@ -1070,21 +1075,40 @@ class ConfigStore:
         流量」，锁过期后重试即收敛，不存在搁浅态。
         """
         templates = {t.template_id: t for t in await self._all_templates()}
-        generations: dict[str, int] = {}
-        pods_sunset = 0
+        scopes = []
         for scope in await self.list_scopes():
-            template = templates.get(scope.template_id)
-            if template is None:
+            if templates.get(scope.template_id) is None:
                 # 悬挂引用（模板行损坏/被并发删）跳过不刷，与 match_scope 容错同款
                 logger.warning(
                     "config_refresh skip scope (template missing/corrupt): "
                     "scope=%s template=%s", scope.scope_id, scope.template_id,
                 )
                 continue
+            scopes.append(scope)
+        # ---- 日落中间态检查（★先于任何 bump：拒绝时 DB/Redis 零副作用，与
+        #      config_sync 写库前守卫同语义，但判据是**代次**——refresh 不改
+        #      deploy_ver，上一轮 refresh 日落的老代 Pod 只能按 generation 识别
+        #      （版本判定对它们失明，见 test_config_sync_not_blocked_by_refresh_
+        #      sunset_pods）。不检查则连续 refresh 多代日落堆积蹲占 max_pods，
+        #      小 max_pods 时滚动窗口被焊死（2026-09-11 wangchang 环境 9 分钟
+        #      4 连刷把 2/2 槽位堵满 2.5 分钟实录）。回收由 reclaim 代次感知
+        #      保证收敛（test_force_refresh.py R1/R2），闸门不会永久 409。
+        if self._sunset_pending is not None:
+            for scope in scopes:
+                pending = await self._sunset_pending(scope.scope_id)
+                if pending:
+                    raise ConfigSyncBusy(
+                        f"scope {scope.scope_id} still has sunset pods "
+                        f"pending reclaim: {pending}"
+                    )
+        generations: dict[str, int] = {}
+        pods_sunset = 0
+        for scope in scopes:
             # ① 代次日落（严格：失败上抛中止——该 scope 尚未摘除，重试收敛）
             generations[scope.scope_id] = await self._bump_generation(scope.scope_id)
             # ② 重推池参数 + pod_spec（值未变，确保 RM 缓存/预热就绪；失败仅告警：
             #    刷新不改配置，scope:config 旧值与欲写值相同，良性）
+            template = templates[scope.template_id]
             await self._push_or_warn(
                 scope.scope_id, template.pool_config(), template.deploy_subset()
             )

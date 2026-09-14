@@ -512,7 +512,7 @@ FakeK8s 忽略探测参数的保真度缺口(按 (ip,port,path) 判定——2026
 > 端到端未覆盖(SM waiter 面 2026-09 已拆除);reclaim 与 acquire 的 TOCTOU(在用 Pod 被回收)两轮
 > 审计均确认存在但确定性复现需真时序,列为已知 P1 遗留(feature 记录遗留清单)。
 
-### 5.3 强制刷新自然老化网:`tests/integration/test_force_refresh.py`(4 用例)
+### 5.3 强制刷新自然老化网:`tests/integration/test_force_refresh.py`(5 用例)
 
 方法论同审计网(真实业务流 + 小 TTL 自然到期,禁回拨/直改键),覆盖 config_refresh(场景 M-R)的全链日落闭环:
 
@@ -522,6 +522,7 @@ FakeK8s 忽略探测参数的保真度缺口(按 (ip,port,path) 判定——2026
 | R2 | 重复刷新收敛 | min_idle=1/pod_ttl=1 | 刷新→补位→回收→再刷新→再补位(交错,max_pods=2 内) | 代次 1→2 递增;终态仅最新代 warm Pod 存活 |
 | R3 | 刷新后下发守卫 | 会话在老代 Pod 上,刷新后自然转 idle | B 类下发 → A 类下发(409)→ 回收后 A 类下发 | B 类放行;A 类按日落中间态 409(守卫按版本、不看代次);老代回收后 A 类 200 |
 | R4 | 重建用存量 spec | min_idle=1,autoscale 暖 Pod | config_refresh → autoscale | 重建部署的 pod_spec 与 RM 缓存逐字段一致(配置零变化,仅换代) |
+| R5 | refresh 串行闸门 | min_idle=1/pod_ttl=1,P1(gen "")已部署 | 刷新(gen 1)→ 补位 P2 → 立即再刷(409)→ 真等过 pod_ttl 回收 P1 → 再刷 | 立即再刷 409 CONFIG_SYNC_BUSY 且零副作用(代次冻结 1、bump 仅 1 次);老代回收后放行,代次 2(闸门判据=代次;2026-09-11 4 连刷实录的病理钉死) |
 
 ---
 

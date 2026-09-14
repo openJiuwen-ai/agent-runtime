@@ -12,6 +12,7 @@
 - R2  重复刷新收敛(非幂等但终态唯一)
 - R3  刷新排空期内下发的守卫行为(B 类放行 / A 类按日落中间态 409,排空后放行)
 - R4  重建使用 RM 缓存的存量 pod_spec(配置零变化)
+- R5  refresh 串行闸门(老代回收前再刷 409,回收后放行;判据=代次)
 """
 
 from __future__ import annotations
@@ -184,3 +185,38 @@ async def test_R4_rebuild_uses_cached_pod_spec(runtime):
     cfg = await runtime.rm_state.load_scope_config(SCOPE)
     assert runtime.k8s.deployed_specs[-1] == json.loads(cfg["pod_spec_json"])
     assert runtime.k8s.deployed_specs[-1] == spec_before   # 配置零变化
+
+
+# ------------------------------------------------------- R5:refresh 串行闸门
+
+@requires_lua
+async def test_R5_refresh_serialized_until_sunset_done(runtime):
+    """R5:refresh 前置日落闸门——老代 Pod 回收前再刷 409(零副作用),回收后放行。
+
+    闸门判据=代次(refresh 不改 deploy_ver,config_sync 的版本判定对 refresh
+    日落失明);回收由 reclaim 代次感知保证收敛 → 闸门不会永久 409。
+    病理实录:2026-09-11 wangchang 环境 9 分钟 4 连刷(gen 2/3/4/5),多代
+    日落堆积蹲占 max_pods=2 把滚动窗口焊死 2.5 分钟。
+    """
+    await runtime.seed_template(min_idle_pods=1, session_ttl=60, pod_ttl=1)
+
+    await runtime.rm_sweeper.autoscale_once()            # P1(gen "")
+    p1 = (await runtime.rm_state.all_pod_ids())[0]
+    r1 = await runtime.config_store.config_refresh()     # gen 1:P1 日落
+    await runtime.rm_sweeper.autoscale_once()            # P2(gen 1)
+    assert r1["generations"] == {SCOPE: 1}
+
+    # P1(gen "")代次落后且未回收 → 立即再刷 409;拒绝时零副作用(gen 仍 1)
+    with pytest.raises(ConfigSyncBusy, match="pending reclaim"):
+        await runtime.config_store.config_refresh()
+    cfg = await runtime.rm_state.load_scope_config(SCOPE)
+    assert cfg["generation"] == "1"
+    assert runtime.gen_bumps == [SCOPE]
+
+    # 自然回收 P1(idle 已过 pod_ttl=1)→ 闸门放行,gen 2
+    await asyncio.sleep(1.2)
+    await runtime.rm_sweeper.reclaim_once()
+    assert p1 not in await runtime.rm_state.all_pod_ids()
+    r2 = await runtime.config_store.config_refresh()
+    assert r2["generations"] == {SCOPE: 2}
+    assert runtime.gen_bumps == [SCOPE, SCOPE]
