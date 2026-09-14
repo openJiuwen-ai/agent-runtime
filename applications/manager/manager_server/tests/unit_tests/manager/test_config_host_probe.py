@@ -72,6 +72,41 @@ async def test_require_probes_runtime_when_set():
 
 
 @pytest.mark.asyncio
+async def test_probe_user_web_ok():
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.text = "<html></html>"
+    resp.json.side_effect = ValueError("not json")
+
+    client = AsyncMock()
+    client.get = AsyncMock(return_value=resp)
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=None)
+
+    with patch(
+        "manager_server.core.instance.config_host_probe.httpx.AsyncClient",
+        return_value=client,
+    ):
+        await probe_config_host("http://web.example:5173", side="user_web")
+
+    client.get.assert_awaited_once_with("http://web.example:5173/")
+
+
+@pytest.mark.asyncio
+async def test_require_probes_user_web_when_set():
+    with patch(
+        "manager_server.core.instance.config_host_probe.probe_config_host",
+        new_callable=AsyncMock,
+    ) as probe:
+        await require_config_hosts_reachable(
+            user_web_host="http://web.example:5173",
+        )
+    probe.assert_awaited_once_with(
+        "http://web.example:5173", side="user_web", timeout=5.0
+    )
+
+
+@pytest.mark.asyncio
 async def test_probe_rejects_non_http_url():
     with pytest.raises(ValueError, match="http"):
         await probe_config_host("gw.example:8080", side="gateway")

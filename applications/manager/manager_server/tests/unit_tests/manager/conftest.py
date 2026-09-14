@@ -226,6 +226,10 @@ async def manager_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         warnings.simplefilter("ignore", SAWarning)
         await init_all_tables(handler)
 
+    import manager_server.infrastructure.db as db_mod
+
+    monkeypatch.setattr(db_mod, "_db_handler", handler)
+
     app = FastAPI()
     router_register(app)
 
@@ -246,3 +250,4 @@ async def manager_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     app.dependency_overrides.clear()
     await handler.disconnect()
+    monkeypatch.setattr(db_mod, "_db_handler", None)

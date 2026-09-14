@@ -285,7 +285,10 @@ MANAGER_WEB_IDP_TARGET=http://127.0.0.1:8770
 MANAGER_WEB_USER_WEB_TARGET=http://127.0.0.1:5173
 MANAGER_WEB_GATEWAY_HTTP_TARGET=http://127.0.0.1:19002
 MANAGER_WEB_GATEWAY_WS_TARGET=http://127.0.0.1:19000
+MANAGER_WEB_RESOLVER=127.0.0.11
 ```
+
+生产 nginx 将 `/chat`、`/ws`、`/gateway-api`、`/file-api`、`/share-api` 按 Cookie `jiuwenclaw_id` 动态反代到各实例 `instance_info.data` 中的 `user_web_host` / `gateway_web_*_host`（空则回退上述 `MANAGER_WEB_*_TARGET`）。`MANAGER_WEB_RESOLVER` 供变量 `proxy_pass` 做 DNS 解析（K8s 常用 `kube-dns.kube-system.svc.cluster.local`）。
 
 完整变量列表见 `applications/manager/.env.example`。
 ---

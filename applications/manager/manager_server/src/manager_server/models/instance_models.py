@@ -31,6 +31,8 @@ INSTANCE_INFO_TABLE_DEF = TableDefinition(
         ),
         ColumnDefinition("runtime_last_alive", "datetime", nullable=True),
         ColumnDefinition("space_id", "string", length=64, nullable=False, default="default"),
+        # 扩展 JSON：用户面反代上游 user_web_host / gateway_web_http_host /gateway_web_ws_host
+        # 以及 User Web 探活 user_web_status / user_web_last_alive 等
         ColumnDefinition("data", "json", nullable=True),
         ColumnDefinition("created_at", "datetime", nullable=False),
         ColumnDefinition("created_by", "string", length=64, nullable=False),

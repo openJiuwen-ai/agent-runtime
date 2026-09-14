@@ -200,5 +200,27 @@ class UserConsoleService:
                 result.add(jid)
         return result
 
+    async def user_can_access_instance(
+        self,
+        user_id: str,
+        jiuwenclaw_id: str,
+        groups: list[str] | None = None,
+        *,
+        is_admin: bool = False,
+    ) -> bool:
+        """当前用户是否对指定集群有 instance_grant 准入。"""
+        jid = str(jiuwenclaw_id or "").strip()
+        if not jid:
+            return False
+        member_groups = {
+            str(item).strip() for item in (groups or []) if str(item).strip()
+        }
+        admitted = await self._admitted_instance_ids(
+            str(user_id or "").strip(),
+            member_groups,
+            is_admin=is_admin,
+        )
+        return jid in admitted
+
 
 __all__ = ("UserConsoleService",)

@@ -282,6 +282,9 @@ def instance_create_body(
     jiuwenclaw_name: str = "ut-demo-instance",
     gateway_config_host: str = "http://127.0.0.1:18080",
     runtime_config_host: str = "http://127.0.0.1:18081",
+    user_web_host: str = "http://127.0.0.1:15173",
+    gateway_web_http_host: str = "http://127.0.0.1:19002",
+    gateway_web_ws_host: str = "http://127.0.0.1:19000",
 ) -> dict[str, Any]:
     return {
         "jiuwenclaw_name": jiuwenclaw_name,
@@ -291,4 +294,7 @@ def instance_create_body(
         "space_id": "default",
         "gateway_config_host": gateway_config_host,
         "runtime_config_host": runtime_config_host,
+        "user_web_host": user_web_host,
+        "gateway_web_http_host": gateway_web_http_host,
+        "gateway_web_ws_host": gateway_web_ws_host,
     }

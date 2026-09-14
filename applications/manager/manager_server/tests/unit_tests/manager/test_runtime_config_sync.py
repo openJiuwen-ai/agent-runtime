@@ -147,10 +147,12 @@ async def test_sync_runtime_config_posts_to_instance_runtime_host(monkeypatch):
     posted: dict[str, str] = {}
 
     class _Resp:
-        def raise_for_status(self):
+        @staticmethod
+        def raise_for_status():
             return None
 
-        def json(self):
+        @staticmethod
+        def json():
             return {"ok": True}
 
     class _Client:

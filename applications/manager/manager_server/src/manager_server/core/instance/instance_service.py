@@ -26,10 +26,18 @@ logger = logging.getLogger(__name__)
 
 _INSTANCE_TABLE = INSTANCE_INFO_TABLE_DEF.table_name
 _LOG_MASKING_SEEDED_KEY = "log_masking_seeded"
+# 用户面反代上游存在 instance_info.data 中（非独立列）
+_USER_FACE_HOST_KEYS = (
+    "user_web_host",
+    "gateway_web_http_host",
+    "gateway_web_ws_host",
+)
+_USER_WEB_STATUS_KEY = "user_web_status"
+_USER_WEB_LAST_ALIVE_KEY = "user_web_last_alive"
 
-ServiceSide = Literal["gateway", "runtime"]
+ServiceSide = Literal["gateway", "runtime", "user_web"]
 
-_ALLOWED_INSTANCE_SORT_FIELDS = frozenset({
+_DB_INSTANCE_SORT_FIELDS = frozenset({
     "jiuwenclaw_name",
     "namespace",
     "gateway_status",
@@ -38,6 +46,11 @@ _ALLOWED_INSTANCE_SORT_FIELDS = frozenset({
     "runtime_last_alive",
     "updated_at",
 })
+_MEMORY_INSTANCE_SORT_FIELDS = frozenset({
+    "user_web_status",
+    "user_web_last_alive",
+})
+_ALLOWED_INSTANCE_SORT_FIELDS = _DB_INSTANCE_SORT_FIELDS | _MEMORY_INSTANCE_SORT_FIELDS
 _DEFAULT_INSTANCE_ORDER_BY: list[tuple[str, bool]] = [("updated_at", True)]
 
 _MAX_JIUWENCLAW_ID_ATTEMPTS = 10
@@ -107,6 +120,77 @@ async def _assert_config_host_available(
         )
 
 
+async def _find_user_face_host_conflict(
+    handler: DBHandler,
+    host: str,
+    *,
+    key: str,
+    exclude_jiuwenclaw_id: str | None = None,
+) -> Any | None:
+    """若 host 已被其它实例 data 中同名字段占用则返回冲突行。"""
+    if key not in _USER_FACE_HOST_KEYS:
+        raise ValueError(f"unsupported user-face host key: {key}")
+    normalized = _norm_host(host)
+    if not normalized:
+        return None
+    exclude = str(exclude_jiuwenclaw_id or "").strip() or None
+    rows = await handler.list_records(
+        _INSTANCE_TABLE,
+        {},
+        limit=10_000,
+        offset=0,
+    )
+    for row in rows:
+        jid = str(getattr(row, "jiuwenclaw_id", "") or "")
+        if exclude and jid == exclude:
+            continue
+        face = _user_face_hosts_from_data(_instance_data_dict(row))
+        if face.get(key) == normalized:
+            return row
+    return None
+
+
+async def _assert_user_face_host_available(
+    handler: DBHandler,
+    host: str,
+    *,
+    key: str,
+    exclude_jiuwenclaw_id: str | None = None,
+) -> None:
+    conflict = await _find_user_face_host_conflict(
+        handler,
+        host,
+        key=key,
+        exclude_jiuwenclaw_id=exclude_jiuwenclaw_id,
+    )
+    if conflict is not None:
+        raise ValueError(
+            f"{key} already in use by instance "
+            f"{getattr(conflict, 'jiuwenclaw_id', '')}"
+        )
+
+
+async def _assert_user_face_hosts_available(
+    handler: DBHandler,
+    hosts: dict[str, Any],
+    *,
+    exclude_jiuwenclaw_id: str | None = None,
+) -> None:
+    """对传入的用户面 host 做同字段去重（空值跳过）。"""
+    for key in _USER_FACE_HOST_KEYS:
+        if key not in hosts:
+            continue
+        value = _norm_host(hosts.get(key))
+        if not value:
+            continue
+        await _assert_user_face_host_available(
+            handler,
+            value,
+            key=key,
+            exclude_jiuwenclaw_id=exclude_jiuwenclaw_id,
+        )
+
+
 def _matches_instance_search(row: Any, query: str) -> bool:
     needle = query.strip().lower()
     if not needle:
@@ -116,12 +200,19 @@ def _matches_instance_search(row: Any, query: str) -> bool:
         str(getattr(row, "jiuwenclaw_name", "") or ""),
         str(getattr(row, "gateway_status", "") or ""),
         str(getattr(row, "runtime_status", "") or ""),
+        str(_user_web_status_from_data(_instance_data_dict(row)) or ""),
         str(getattr(row, "namespace", "") or ""),
     ]
     return any(needle in field.lower() for field in fields)
 
 
+def _matches_user_web_status(row: Any, status: str) -> bool:
+    return _user_web_status_from_data(_instance_data_dict(row)) == status
+
+
 def _instance_row_to_summary(row: Any) -> dict:
+    data = _instance_data_dict(row)
+    face = _user_face_hosts_from_data(data)
     summary = InstanceSummary(
         jiuwenclaw_id=row.jiuwenclaw_id,
         jiuwenclaw_name=row.jiuwenclaw_name,
@@ -137,6 +228,11 @@ def _instance_row_to_summary(row: Any) -> dict:
         runtime_last_alive=iso_datetime(
             getattr(row, "runtime_last_alive", None)
         ),
+        user_web_status=_user_web_status_from_data(data),
+        user_web_last_alive=_user_web_last_alive_from_data(data),
+        user_web_host=face["user_web_host"],
+        gateway_web_http_host=face["gateway_web_http_host"],
+        gateway_web_ws_host=face["gateway_web_ws_host"],
         created_at=iso_datetime(row.created_at),
         updated_at=iso_datetime(getattr(row, "updated_at", None)),
     )
@@ -156,6 +252,61 @@ def _instance_row_to_detail(row: Any) -> InstanceDetail:
 def _instance_data_dict(row: Any | None) -> dict[str, Any]:
     data = getattr(row, "data", None) if row is not None else None
     return dict(data) if isinstance(data, dict) else {}
+
+
+def _user_web_status_from_data(data: dict[str, Any] | None) -> str:
+    src = data if isinstance(data, dict) else {}
+    return str(src.get(_USER_WEB_STATUS_KEY) or "pending").strip() or "pending"
+
+
+def _user_web_last_alive_from_data(data: dict[str, Any] | None) -> str | None:
+    src = data if isinstance(data, dict) else {}
+    raw = src.get(_USER_WEB_LAST_ALIVE_KEY)
+    if raw is None or raw == "":
+        return None
+    if isinstance(raw, str):
+        return raw.strip() or None
+    return iso_datetime(raw)
+
+
+def _user_face_hosts_from_data(data: dict[str, Any] | None) -> dict[str, str | None]:
+    src = data if isinstance(data, dict) else {}
+    return {key: _norm_host(src.get(key)) for key in _USER_FACE_HOST_KEYS}
+
+
+def _merge_user_face_hosts_into_data(
+    data: dict[str, Any] | None,
+    hosts: dict[str, Any],
+) -> dict[str, Any]:
+    """把用户面 host 写入 data；空字符串删除对应键。"""
+    merged = dict(data or {})
+    for key in _USER_FACE_HOST_KEYS:
+        if key not in hosts:
+            continue
+        value = _norm_host(hosts.get(key))
+        if value:
+            merged[key] = value
+        else:
+            merged.pop(key, None)
+    return merged
+
+
+def _sort_rows_by_user_web(
+    rows: list[Any],
+    *,
+    sort_by: str,
+    sort_order: str | None,
+) -> list[Any]:
+    reverse = str(sort_order or "asc").strip().lower() == "desc"
+
+    def key(row: Any) -> tuple:
+        data = _instance_data_dict(row)
+        if sort_by == "user_web_status":
+            return (_user_web_status_from_data(data).lower(),)
+        alive = _user_web_last_alive_from_data(data) or ""
+        return (alive,)
+
+    return sorted(rows, key=key, reverse=reverse)
 
 
 async def is_log_masking_seeded(handler: DBHandler, jiuwenclaw_id: str) -> bool:
@@ -243,6 +394,8 @@ def _resolve_service_side(service_type: str | None) -> ServiceSide:
         return "gateway"
     if st == "runtime":
         return "runtime"
+    if st in ("user_web", "web"):
+        return "user_web"
     raise ValueError(f"unsupported service_type: {service_type!r}")
 
 
@@ -358,6 +511,7 @@ async def apply_health_probe_result(
     - alive：置 online，刷新 last_alive；Gateway / Runtime 从 pending/offline → online
       时各自全量下发（Gateway → WS bootstrap；Runtime → config_sync）
     - 失败：仅当当前为 online 时置 offline；pending 保持不变
+    - user_web：状态写入 ``instance_info.data``（非独立列）
     """
     jid = str(jiuwenclaw_id or "").strip()
     if not jid:
@@ -366,9 +520,40 @@ async def apply_health_probe_result(
     if row is None:
         return False
     side = _resolve_service_side(service_type)
+    now = utc_now()
+
+    if side == "user_web":
+        data = _instance_data_dict(row)
+        prev_status = _user_web_status_from_data(data)
+        if alive:
+            data[_USER_WEB_STATUS_KEY] = "online"
+            data[_USER_WEB_LAST_ALIVE_KEY] = iso_datetime(now)
+            await handler.update(
+                _INSTANCE_TABLE,
+                {"jiuwenclaw_id": jid},
+                {
+                    "data": data,
+                    "updated_at": now,
+                    "updated_by": "health-probe",
+                },
+            )
+            return True
+        if prev_status == "online":
+            data[_USER_WEB_STATUS_KEY] = "offline"
+            await handler.update(
+                _INSTANCE_TABLE,
+                {"jiuwenclaw_id": jid},
+                {
+                    "data": data,
+                    "updated_at": now,
+                    "updated_by": "health-probe",
+                },
+            )
+            return True
+        return False
+
     status_key = f"{side}_status"
     prev_status = str(getattr(row, status_key, "") or "")
-    now = utc_now()
 
     if alive:
         updates: dict[str, Any] = {
@@ -403,6 +588,7 @@ async def apply_health_probe_result(
             },
         )
         return True
+    return False
 
 
 async def mark_instance_offline(
@@ -436,10 +622,11 @@ async def list_instance_rows(
     if runtime_status:
         filters["runtime_status"] = runtime_status
     total = await handler.count_records(_INSTANCE_TABLE, filters)
+    db_sort = sort_by if sort_by in _DB_INSTANCE_SORT_FIELDS else None
     order_by = resolve_order_by(
-        sort_by,
+        db_sort,
         sort_order,
-        allowed_sort_fields=_ALLOWED_INSTANCE_SORT_FIELDS,
+        allowed_sort_fields=_DB_INSTANCE_SORT_FIELDS,
         default_order_by=_DEFAULT_INSTANCE_ORDER_BY,
     )
     rows = await handler.list_records(
@@ -488,6 +675,12 @@ class InstanceService:
             raise ValueError("gateway_config_host is required")
         if not runtime_host:
             raise ValueError("runtime_config_host is required")
+        user_web_host = _norm_host(body.user_web_host)
+        gateway_web_http_host = _norm_host(body.gateway_web_http_host)
+        if not user_web_host:
+            raise ValueError("user_web_host is required")
+        if not gateway_web_http_host:
+            raise ValueError("gateway_web_http_host is required")
         await _assert_config_host_available(
             self._handler,
             gateway_host,
@@ -498,9 +691,21 @@ class InstanceService:
             runtime_host,
             column="runtime_config_host",
         )
+        face_hosts = {
+            "user_web_host": user_web_host,
+            "gateway_web_http_host": gateway_web_http_host,
+            "gateway_web_ws_host": body.gateway_web_ws_host,
+        }
+        await _assert_user_face_hosts_available(self._handler, face_hosts)
+        data = _merge_user_face_hosts_into_data(
+            dict(body.data) if isinstance(body.data, dict) else {},
+            face_hosts,
+        )
+        data.setdefault(_USER_WEB_STATUS_KEY, "pending")
         await require_config_hosts_reachable(
             gateway_config_host=gateway_host,
             runtime_config_host=runtime_host,
+            user_web_host=user_web_host,
         )
         namespace = _norm_namespace(body.namespace)
         row_data = {
@@ -512,7 +717,7 @@ class InstanceService:
             "gateway_status": "pending",
             "runtime_config_host": runtime_host,
             "runtime_status": "pending",
-            "data": body.data,
+            "data": data or None,
             "space_id": (body.space_id or "default").strip() or "default",
             "created_by": (body.created_by or "system").strip() or "system",
             "updated_by": (body.created_by or "system").strip() or "system",
@@ -548,6 +753,15 @@ class InstanceService:
             )
             row = await get_instance_row(self._handler, jiuwenclaw_id) or row
 
+        if user_web_host:
+            await apply_health_probe_result(
+                self._handler,
+                jiuwenclaw_id=jiuwenclaw_id,
+                service_type="user_web",
+                alive=True,
+            )
+            row = await get_instance_row(self._handler, jiuwenclaw_id) or row
+
         return {
             "jiuwenclaw_id": jiuwenclaw_id,
             "namespace": getattr(row, "namespace", namespace),
@@ -555,36 +769,55 @@ class InstanceService:
             "gateway_status": getattr(row, "gateway_status", "pending"),
             "runtime_config_host": getattr(row, "runtime_config_host", runtime_host),
             "runtime_status": getattr(row, "runtime_status", "pending"),
+            "user_web_status": _user_web_status_from_data(_instance_data_dict(row)),
         }
 
     async def list_instances(self, query: InstanceListQuery) -> dict:
         page = max(query.page, 1)
         page_size = min(max(query.page_size, 1), 200)
         search_query = (query.search or "").strip()
-        order_by = resolve_order_by(
-            query.sort_by,
-            query.sort_order,
-            allowed_sort_fields=_ALLOWED_INSTANCE_SORT_FIELDS,
-            default_order_by=_DEFAULT_INSTANCE_ORDER_BY,
+        user_web_filter = str(query.user_web_status or "").strip()
+        sort_by = str(query.sort_by or "").strip() or None
+        needs_memory = bool(
+            search_query
+            or user_web_filter
+            or (sort_by in _MEMORY_INSTANCE_SORT_FIELDS)
         )
+
         filters: dict[str, Any] = {}
         if query.gateway_status:
             filters["gateway_status"] = query.gateway_status
         if query.runtime_status:
             filters["runtime_status"] = query.runtime_status
 
-        if search_query:
-            rows = await self._handler.list_records(
-                _INSTANCE_TABLE,
-                filters,
-                limit=10_000,
-                offset=0,
-                order_by=order_by,
+        if needs_memory:
+            db_sort = sort_by if sort_by in _DB_INSTANCE_SORT_FIELDS else None
+            order_by = resolve_order_by(
+                db_sort,
+                query.sort_order,
+                allowed_sort_fields=_DB_INSTANCE_SORT_FIELDS,
+                default_order_by=_DEFAULT_INSTANCE_ORDER_BY,
             )
-            matched = [r for r in rows if _matches_instance_search(r, search_query)]
-            total = len(matched)
+            rows = list(
+                await self._handler.list_records(
+                    _INSTANCE_TABLE,
+                    filters,
+                    limit=10_000,
+                    offset=0,
+                    order_by=order_by,
+                )
+            )
+            if search_query:
+                rows = [r for r in rows if _matches_instance_search(r, search_query)]
+            if user_web_filter:
+                rows = [r for r in rows if _matches_user_web_status(r, user_web_filter)]
+            if sort_by in _MEMORY_INSTANCE_SORT_FIELDS:
+                rows = _sort_rows_by_user_web(
+                    rows, sort_by=sort_by, sort_order=query.sort_order
+                )
+            total = len(rows)
             offset = (page - 1) * page_size
-            page_rows = matched[offset: offset + page_size]
+            page_rows = rows[offset: offset + page_size]
             return {
                 "items": [_instance_row_to_summary(r) for r in page_rows],
                 "total": total,
@@ -599,7 +832,7 @@ class InstanceService:
             runtime_status=query.runtime_status,
             offset=offset,
             limit=page_size,
-            sort_by=query.sort_by,
+            sort_by=sort_by,
             sort_order=query.sort_order,
         )
         return {
@@ -664,6 +897,40 @@ class InstanceService:
         if "runtime_config_host" in updates:
             updates["runtime_config_host"] = _norm_host(updates["runtime_config_host"])
 
+        face_host_updates = {
+            key: updates.pop(key) for key in _USER_FACE_HOST_KEYS if key in updates
+        }
+        if "user_web_host" in face_host_updates and not _norm_host(
+            face_host_updates.get("user_web_host")
+        ):
+            raise ValueError("user_web_host is required")
+        if "gateway_web_http_host" in face_host_updates and not _norm_host(
+            face_host_updates.get("gateway_web_http_host")
+        ):
+            raise ValueError("gateway_web_http_host is required")
+        if face_host_updates or "data" in updates:
+            base_data = _instance_data_dict(row)
+            if "data" in updates:
+                incoming = updates["data"]
+                base_data = dict(incoming) if isinstance(incoming, dict) else {}
+            updates["data"] = _merge_user_face_hosts_into_data(
+                base_data, face_host_updates
+            ) or None
+
+        if "data" in updates and isinstance(updates["data"], dict):
+            old_face = _user_face_hosts_from_data(_instance_data_dict(row))
+            new_face = _user_face_hosts_from_data(updates["data"])
+            changed_hosts = {
+                key: new_face.get(key)
+                for key in _USER_FACE_HOST_KEYS
+                if new_face.get(key) and new_face.get(key) != old_face.get(key)
+            }
+            await _assert_user_face_hosts_available(
+                self._handler,
+                changed_hosts,
+                exclude_jiuwenclaw_id=jid,
+            )
+
         if "gateway_config_host" in updates:
             gateway_host = updates["gateway_config_host"]
             if gateway_host and _norm_host(
@@ -687,6 +954,14 @@ class InstanceService:
                     exclude_jiuwenclaw_id=jid,
                 )
 
+        user_web_probe: str | None = None
+        if "user_web_host" in face_host_updates:
+            merged_data = updates.get("data")
+            if isinstance(merged_data, dict):
+                user_web_probe = _norm_host(merged_data.get("user_web_host"))
+            else:
+                user_web_probe = _norm_host(face_host_updates.get("user_web_host"))
+
         await require_config_hosts_reachable(
             gateway_config_host=(
                 updates["gateway_config_host"]
@@ -698,6 +973,7 @@ class InstanceService:
                 if "runtime_config_host" in updates
                 else None
             ),
+            user_web_host=user_web_probe,
         )
 
         updates["updated_at"] = utc_now()
