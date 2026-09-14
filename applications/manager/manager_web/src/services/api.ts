@@ -1,5 +1,6 @@
 import type {
   CreateInstanceBody,
+  UpdateInstanceBody,
   EmbeddingTemplate,
   EmbeddingTemplateCreateBody,
   EmbeddingTemplateUpdateBody,
@@ -795,6 +796,12 @@ export interface UserAgentContext {
 export const UserConsoleApi = {
   orgs: () => idpHttp<{ orgs: Org[] }>('/v1/auth/me/orgs'),
   agentContexts: () => http<{ contexts: UserAgentContext[] }>('/v1/user-console/agent-contexts'),
+  /** 设置用户面动态反代 Cookie（jiuwenclaw_id） */
+  setActiveCluster: (jiuwenclaw_id: string) =>
+    http<{ jiuwenclaw_id: string }>('/v1/user-console/active-cluster', {
+      method: 'POST',
+      body: { jiuwenclaw_id },
+    }),
 };
 
 // ---------- Instances ----------
@@ -812,19 +819,22 @@ export const InstanceApi = {
     page_size?: number;
     gateway_status?: string;
     runtime_status?: string;
+    user_web_status?: string;
     search?: string;
     sort_by?:
       | 'jiuwenclaw_name'
       | 'gateway_status'
       | 'runtime_status'
+      | 'user_web_status'
       | 'gateway_last_alive'
       | 'runtime_last_alive'
+      | 'user_web_last_alive'
       | 'namespace'
       | 'updated_at';
     sort_order?: 'asc' | 'desc';
   }) =>
     http<InstancePageRaw>('/v1/instances/', { query: params }),
-  /** 立即探活所有实例的 Gateway / Runtime，刷新 online/offline 状态。 */
+  /** 立即探活所有实例的 Gateway / Runtime / User Web，刷新 online/offline 状态。 */
   probeHealth: () =>
     http<{ probed: number; alive: number; dead: number; skipped: number }>(
       '/v1/instances/health-probe',
@@ -832,7 +842,7 @@ export const InstanceApi = {
     ),
   get: (id: string) => http<InstanceDetail>(`/v1/instances/${encodeURIComponent(id)}`),
   create: (body: CreateInstanceBody) => http<InstanceSummary>('/v1/instances/', { method: 'POST', body }),
-  update: (id: string, body: { data?: Record<string, unknown> }) =>
+  update: (id: string, body: UpdateInstanceBody) =>
     http<InstanceDetail>(`/v1/instances/${encodeURIComponent(id)}`, { method: 'PATCH', body }),
   remove: (id: string, force = false) =>
     http<{ deleted: boolean }>(`/v1/instances/${encodeURIComponent(id)}`, {

@@ -55,17 +55,11 @@ async def test_purge_manager_deletes_instance_resources_and_grants():
 @pytest.mark.asyncio
 async def test_purge_runtime_pushes_empty_projection():
     handler = AsyncMock()
-    with (
-        patch(
-            "manager_server.infrastructure.config.settings.agent_runtime_endpoint",
-            "http://runtime:8091",
-        ),
-        patch(
-            "manager_server.core.instance_resource.runtime_config_sync.sync_runtime_config",
-            new_callable=AsyncMock,
-            return_value={"ok": True},
-        ) as sync_mock,
-    ):
+    with patch(
+        "manager_server.core.instance_resource.runtime_config_sync.sync_runtime_config",
+        new_callable=AsyncMock,
+        return_value={"ok": True},
+    ) as sync_mock:
         result = await purge_runtime_instance_data(handler, "jid-1")
 
     assert result == {"purged": True}
@@ -73,23 +67,17 @@ async def test_purge_runtime_pushes_empty_projection():
 
 
 @pytest.mark.asyncio
-async def test_purge_runtime_skips_when_endpoint_empty():
+async def test_purge_runtime_skips_when_endpoint_missing():
     handler = AsyncMock()
-    handler.get = AsyncMock(return_value=None)  # Neither instance-specific nor global endpoint.
-    with (
-        patch(
-            "manager_server.infrastructure.config.settings.agent_runtime_endpoint",
-            "",
-        ),
-        patch(
-            "manager_server.core.instance_resource.runtime_config_sync.sync_runtime_config",
-            new_callable=AsyncMock,
-        ) as sync_mock,
-    ):
+    with patch(
+        "manager_server.core.instance_resource.runtime_config_sync.sync_runtime_config",
+        new_callable=AsyncMock,
+        return_value={"skipped": True},
+    ) as sync_mock:
         result = await purge_runtime_instance_data(handler, "jid-1")
 
     assert result.get("skipped") is True
-    sync_mock.assert_not_awaited()
+    sync_mock.assert_awaited_once_with(handler, "jid-1", resource_rows=[])
 
 
 @pytest.mark.asyncio

@@ -30,17 +30,11 @@ async def test_skip_when_already_online():
 @pytest.mark.asyncio
 async def test_sync_when_pending_to_online():
     handler = AsyncMock()
-    with (
-        patch(
-            "manager_server.infrastructure.config.settings.agent_runtime_endpoint",
-            "http://runtime:8091",
-        ),
-        patch(
-            "manager_server.core.instance_resource.runtime_config_sync.sync_runtime_config",
-            new_callable=AsyncMock,
-            return_value={"ok": True},
-        ) as sync_mock,
-    ):
+    with patch(
+        "manager_server.core.instance_resource.runtime_config_sync.sync_runtime_config",
+        new_callable=AsyncMock,
+        return_value={"ok": True},
+    ) as sync_mock:
         await maybe_full_sync_runtime_on_online(
             handler, "jid-1", previous_runtime_status="pending"
         )
@@ -50,17 +44,11 @@ async def test_sync_when_pending_to_online():
 @pytest.mark.asyncio
 async def test_sync_when_offline_to_online():
     handler = AsyncMock()
-    with (
-        patch(
-            "manager_server.infrastructure.config.settings.agent_runtime_endpoint",
-            "http://runtime:8091",
-        ),
-        patch(
-            "manager_server.core.instance_resource.runtime_config_sync.sync_runtime_config",
-            new_callable=AsyncMock,
-            return_value={"ok": True},
-        ) as sync_mock,
-    ):
+    with patch(
+        "manager_server.core.instance_resource.runtime_config_sync.sync_runtime_config",
+        new_callable=AsyncMock,
+        return_value={"ok": True},
+    ) as sync_mock:
         await maybe_full_sync_runtime_on_online(
             handler, "jid-1", previous_runtime_status="offline"
         )
@@ -68,37 +56,26 @@ async def test_sync_when_offline_to_online():
 
 
 @pytest.mark.asyncio
-async def test_skip_when_endpoint_empty():
+async def test_skip_when_endpoint_missing():
     handler = AsyncMock()
-    with (
-        patch(
-            "manager_server.infrastructure.config.settings.agent_runtime_endpoint",
-            "  ",
-        ),
-        patch(
-            "manager_server.core.instance_resource.runtime_config_sync.sync_runtime_config",
-            new_callable=AsyncMock,
-        ) as sync_mock,
-    ):
+    with patch(
+        "manager_server.core.instance_resource.runtime_config_sync.sync_runtime_config",
+        new_callable=AsyncMock,
+        return_value={"skipped": True},
+    ) as sync_mock:
         await maybe_full_sync_runtime_on_online(
             handler, "jid-1", previous_runtime_status="offline"
         )
-    sync_mock.assert_not_awaited()
+    sync_mock.assert_awaited_once_with(handler, "jid-1")
 
 
 @pytest.mark.asyncio
 async def test_failure_does_not_raise():
     handler = AsyncMock()
-    with (
-        patch(
-            "manager_server.infrastructure.config.settings.agent_runtime_endpoint",
-            "http://runtime:8091",
-        ),
-        patch(
-            "manager_server.core.instance_resource.runtime_config_sync.sync_runtime_config",
-            new_callable=AsyncMock,
-            side_effect=RuntimeError("boom"),
-        ),
+    with patch(
+        "manager_server.core.instance_resource.runtime_config_sync.sync_runtime_config",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("boom"),
     ):
         await maybe_full_sync_runtime_on_online(
             handler, "jid-1", previous_runtime_status="offline"

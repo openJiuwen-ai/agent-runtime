@@ -30,8 +30,10 @@ type InstanceSortField =
   | 'jiuwenclaw_name'
   | 'gateway_status'
   | 'runtime_status'
+  | 'user_web_status'
   | 'gateway_last_alive'
   | 'runtime_last_alive'
+  | 'user_web_last_alive'
   | 'updated_at';
 
 const VIEW_MODE_STORAGE_KEY = 'claw_manager_instance_view';
@@ -114,6 +116,18 @@ function InstanceTopoCard({
             {t('topology.lastAlive')} {relativeTime(instance.runtime_last_alive)}
           </span>
         </div>
+        <div className="instance-card__status-row">
+          <span className="instance-card__status-label">
+            {t('topology.userWeb')}
+            <StatusBadge status={instance.user_web_status || 'pending'} />
+          </span>
+          <span
+            className="instance-card__probe mono"
+            title={instance.user_web_last_alive ? formatTime(instance.user_web_last_alive) : undefined}
+          >
+            {t('topology.lastAlive')} {relativeTime(instance.user_web_last_alive)}
+          </span>
+        </div>
       </div>
 
       <div className="instance-card__actions">
@@ -190,6 +204,8 @@ function InstanceListTable({
   onGatewayStatusFilterChange,
   runtimeStatusFilter,
   onRuntimeStatusFilterChange,
+  userWebStatusFilter,
+  onUserWebStatusFilterChange,
 }: {
   items: InstanceSummary[];
   onChanged: () => void;
@@ -201,6 +217,8 @@ function InstanceListTable({
   onGatewayStatusFilterChange: (value: string) => void;
   runtimeStatusFilter: string;
   onRuntimeStatusFilterChange: (value: string) => void;
+  userWebStatusFilter: string;
+  onUserWebStatusFilterChange: (value: string) => void;
 }) {
   const { t } = useTranslation();
   const { navigate } = useRouter();
@@ -267,6 +285,25 @@ function InstanceListTable({
                     />
                   </div>
                 </th>
+                <th className="whitespace-nowrap">
+                  <div className="th-filter">
+                    <span className="th-filter__label">{t('topology.userWebStatus')}</span>
+                    <TableColumnSort
+                      iconOnly
+                      label={t('topology.userWebStatus')}
+                      value={sortBy === 'user_web_status' ? sortOrder : ''}
+                      options={sortOptions}
+                      onChange={(value) => onSortChange('user_web_status', value)}
+                    />
+                    <TableColumnFilter
+                      iconOnly
+                      label={t('topology.userWebStatus')}
+                      value={userWebStatusFilter}
+                      options={statusFilterOptions}
+                      onChange={onUserWebStatusFilterChange}
+                    />
+                  </div>
+                </th>
                 <th className="whitespace-nowrap min-w-[10.5rem]">
                   <TableColumnSort
                     label={t('topology.gatewayLastAlive')}
@@ -285,6 +322,14 @@ function InstanceListTable({
                 </th>
                 <th className="whitespace-nowrap min-w-[10.5rem]">
                   <TableColumnSort
+                    label={t('topology.userWebLastAlive')}
+                    value={sortBy === 'user_web_last_alive' ? sortOrder : ''}
+                    options={sortOptions}
+                    onChange={(value) => onSortChange('user_web_last_alive', value)}
+                  />
+                </th>
+                <th className="whitespace-nowrap min-w-[10.5rem]">
+                  <TableColumnSort
                     label={t('topology.modifiedAt')}
                     value={sortBy === 'updated_at' ? sortOrder : ''}
                     options={sortOptions}
@@ -297,7 +342,7 @@ function InstanceListTable({
             <tbody>
               {items.length === 0 ? (
                 <tr>
-                  <td colSpan={7}>
+                  <td colSpan={9}>
                     <Empty text={t('common.empty')} />
                   </td>
                 </tr>
@@ -314,11 +359,17 @@ function InstanceListTable({
                     <td>
                       <StatusBadge status={instance.runtime_status} />
                     </td>
+                    <td>
+                      <StatusBadge status={instance.user_web_status || 'pending'} />
+                    </td>
                     <td className="mono text-[11px] whitespace-nowrap">
                       {formatTime(instance.gateway_last_alive)}
                     </td>
                     <td className="mono text-[11px] whitespace-nowrap">
                       {formatTime(instance.runtime_last_alive)}
+                    </td>
+                    <td className="mono text-[11px] whitespace-nowrap">
+                      {formatTime(instance.user_web_last_alive)}
                     </td>
                     <td className="mono text-[11px] whitespace-nowrap">{formatTime(instance.updated_at)}</td>
                     <td>
@@ -405,6 +456,7 @@ export function InstanceListPage() {
   const { searchInput, setSearchInput, searchQuery } = useListSearch();
   const [gatewayStatusFilter, setGatewayStatusFilter] = useState<string>('');
   const [runtimeStatusFilter, setRuntimeStatusFilter] = useState<string>('');
+  const [userWebStatusFilter, setUserWebStatusFilter] = useState<string>('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [sortBy, setSortBy] = useState<InstanceSortField | ''>('');
@@ -435,6 +487,11 @@ export function InstanceListPage() {
     setPage(1);
   };
 
+  const handleUserWebStatusFilterChange = (value: string) => {
+    setUserWebStatusFilter(value);
+    setPage(1);
+  };
+
   const handleSortChange = (field: InstanceSortField, value: ColumnSortValue) => {
     if (value === '') {
       setSortBy('');
@@ -461,6 +518,7 @@ export function InstanceListPage() {
         page_size: pageSize,
         gateway_status: gatewayStatusFilter || undefined,
         runtime_status: runtimeStatusFilter || undefined,
+        user_web_status: userWebStatusFilter || undefined,
         search: searchQuery,
         sort_by: apiSortBy,
         sort_order: apiSortOrder,
@@ -468,6 +526,7 @@ export function InstanceListPage() {
     [
       gatewayStatusFilter,
       runtimeStatusFilter,
+      userWebStatusFilter,
       page,
       pageSize,
       searchQuery,
@@ -578,6 +637,8 @@ export function InstanceListPage() {
               onGatewayStatusFilterChange={handleGatewayStatusFilterChange}
               runtimeStatusFilter={runtimeStatusFilter}
               onRuntimeStatusFilterChange={handleRuntimeStatusFilterChange}
+              userWebStatusFilter={userWebStatusFilter}
+              onUserWebStatusFilterChange={handleUserWebStatusFilterChange}
             />
           ) : !instances.data || instances.data.items.length === 0 ? (
             <div className="card">

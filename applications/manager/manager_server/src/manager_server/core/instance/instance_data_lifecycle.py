@@ -26,7 +26,7 @@ from manager_server.core.instance.instance_service import (
     is_log_masking_seeded,
     merge_instance_data,
 )
-from manager_server.manager_config_push import gateway_request, resolve_gateway_endpoint
+from manager_server.manager_config_push import gateway_request
 from manager_server.core.template.push_agent_template_to_gateway import (
     push_agent_resources_sync_to_gateway,
 )
@@ -218,16 +218,11 @@ async def purge_manager_instance_data(
 
 
 async def _purge_gateway_via_http(jiuwenclaw_id: str) -> bool:
-    """有 gateway_endpoint 则 HTTP purge；否则返回 False（不抛错）。"""
-    from manager_server.infrastructure.db import get_db_handler
-
+    """有 gateway_config_host 则 HTTP purge；否则返回 False（不抛错）。"""
     jid = str(jiuwenclaw_id or "").strip()
     if not jid:
         return False
     try:
-        row = await get_instance_row(get_db_handler(), jid)
-        if row is None or not resolve_gateway_endpoint(row):
-            return False
         await gateway_request(
             jid,
             "POST",
@@ -264,11 +259,11 @@ async def purge_runtime_instance_data(
     handler: DBHandler,
     jiuwenclaw_id: str,
 ) -> dict[str, Any]:
-    """向 Runtime 推空 ``config_sync``，清掉该实例投影的 template/scope。
+    """向该实例 Runtime 推空 ``config_sync``，清掉此前下发的 template/scope。
 
     Runtime 只有全量快照替换，无按实例 purge API；空投影
     ``{containers:[], templates:[], scopes:[]}`` 即删除该实例此前下发的配置。
-    ``AGENT_RUNTIME_ENDPOINT`` 未配置或推送失败时跳过（不抛错）。
+    无 ``runtime_config_host``（且无全局回退）或推送失败时跳过（不抛错）。
     """
     from manager_server.core.instance_resource.runtime_config_sync import (
         sync_runtime_config,
@@ -277,17 +272,16 @@ async def purge_runtime_instance_data(
     jid = str(jiuwenclaw_id or "").strip()
     if not jid:
         return {"purged": False}
-    from manager_server.core.instance_resource.runtime_config_sync import resolve_runtime_endpoint
-    if not await resolve_runtime_endpoint(handler, jid):
-        logger.info(
-            "[InstanceDataLifecycle] runtime purge skipped jiuwenclaw_id=%s "
-            "(AGENT_RUNTIME_ENDPOINT empty)",
-            jid,
-        )
-        return {"purged": False, "skipped": True}
     try:
         # 显式空投影：不依赖 Manager 侧资源是否已删。
-        await sync_runtime_config(handler, jid, resource_rows=[])
+        result = await sync_runtime_config(handler, jid, resource_rows=[])
+        if isinstance(result, dict) and result.get("skipped"):
+            logger.info(
+                "[InstanceDataLifecycle] runtime purge skipped jiuwenclaw_id=%s "
+                "(no runtime endpoint)",
+                jid,
+            )
+            return {"purged": False, "skipped": True}
         logger.info(
             "[InstanceDataLifecycle] runtime config cleared jiuwenclaw_id=%s",
             jid,

@@ -87,9 +87,6 @@ class Settings(BaseSettings):
     jwt_issuer: str = Field(default="openjiuwen-identity", validation_alias="IDENTITY_JWT_ISSUER")
     jwt_audience: str = Field(default="openjiuwen", validation_alias="IDENTITY_JWT_AUDIENCE")
 
-    agent_runtime_endpoint: str = Field(
-        default="", validation_alias="AGENT_RUNTIME_ENDPOINT"
-    )
     agent_runtime_sync_timeout: float = Field(
         default=10.0, validation_alias="AGENT_RUNTIME_SYNC_TIMEOUT"
     )

@@ -32,11 +32,10 @@ cd ../../..
 ```
 
 5273 是唯一外部入口：`/auth`、`/user`、`/manager` 由 Manager SPA 提供。
-普通用户登录后由 `/user` 页面级跳转到 `/chat/`；`/chat/` 同源反向代理独立
-User Web，User Web 根据登录账号的授权自动选择组织、组网和 Agent，不再使用 iframe。
-`/api` 转发 Manager Server，`/idp` 转发 Identity Center，`/ws` 转发
-Gateway WebSocket，`/gateway-api`、`/file-api`、`/share-api` 转发 Gateway Web HTTP。
-独立的 `/gateway-api` 前缀用于避免与 Manager `/api/v1/*` 冲突。
+普通用户登录后由 `/user` 先调用 `POST /api/v1/user-console/active-cluster` 写入 Cookie `jiuwenclaw_id`，再跳转 `/chat/`。
+生产 nginx 按该 Cookie 动态反代到实例 `data.user_web_host` / `data.gateway_web_*_host`（空则回退 `MANAGER_WEB_*_TARGET`）。
+`/api` 转发 Manager Server，`/idp` 转发 Identity Center；`/ws`、`/gateway-api`、`/file-api`、`/share-api` 同理动态选 Gateway。
+独立的 `/gateway-api` 前缀用于避免与 Manager `/api/v1/*` 冲突。Vite 本地仍为静态 `MANAGER_WEB_*_TARGET` 代理。
 
 `npm run dev` 仍可用于单独调试 Manager 前端；集成验证应使用上面的统一入口。
 

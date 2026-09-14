@@ -5,11 +5,11 @@ import type { InstanceDetail } from '../../../types';
 
 interface Props {
   instance: { data?: InstanceDetail | null };
-  onOpenEdit: () => void;
+  onOpenEditConnectivity: () => void;
   onRefresh: () => void;
 }
 
-export function InstanceDetailPanel({ instance, onOpenEdit, onRefresh }: Props) {
+export function InstanceDetailPanel({ instance, onOpenEditConnectivity, onRefresh }: Props) {
   const { t } = useTranslation();
   const d = instance.data;
 
@@ -25,15 +25,30 @@ export function InstanceDetailPanel({ instance, onOpenEdit, onRefresh }: Props) 
         <div className="card">
           <div className="card-header">
             <div className="card-title">{t('instanceDetail.connectivity')}</div>
+            <button className="btn ghost sm" onClick={onOpenEditConnectivity}>
+              {t('instanceDetail.editConnectivity')}
+            </button>
           </div>
-          <div className="text-xs grid grid-cols-[7.5em_1fr] gap-y-2 gap-x-2 mono">
-            <div className="text-muted">gateway host</div>
+          <div className="text-xs grid grid-cols-[11.5em_1fr] gap-y-2 gap-x-2 mono">
+            <div className="text-muted whitespace-nowrap">gateway host</div>
             <div className="truncate" title={d?.gateway_config_host ?? ''}>
               {d?.gateway_config_host ?? '-'}
             </div>
-            <div className="text-muted">runtime host</div>
+            <div className="text-muted whitespace-nowrap">runtime host</div>
             <div className="truncate" title={d?.runtime_config_host ?? ''}>
               {d?.runtime_config_host ?? '-'}
+            </div>
+            <div className="text-muted whitespace-nowrap">user web</div>
+            <div className="truncate" title={d?.user_web_host ?? ''}>
+              {d?.user_web_host ?? '-'}
+            </div>
+            <div className="text-muted whitespace-nowrap">gateway web http</div>
+            <div className="truncate" title={d?.gateway_web_http_host ?? ''}>
+              {d?.gateway_web_http_host ?? '-'}
+            </div>
+            <div className="text-muted whitespace-nowrap">gateway web ws</div>
+            <div className="truncate" title={d?.gateway_web_ws_host ?? ''}>
+              {d?.gateway_web_ws_host ?? '-'}
             </div>
           </div>
         </div>
@@ -57,6 +72,13 @@ export function InstanceDetailPanel({ instance, onOpenEdit, onRefresh }: Props) 
                 {formatTime(d?.runtime_last_alive)}
               </span>
             </div>
+            <div className="text-muted">user web</div>
+            <div className="flex items-center gap-2">
+              {d?.user_web_status ? <StatusBadge status={d.user_web_status} /> : <StatusBadge status="pending" />}
+              <span className="mono text-muted" title={relativeTime(d?.user_web_last_alive)}>
+                {formatTime(d?.user_web_last_alive)}
+              </span>
+            </div>
             <div className="text-muted">created</div>
             <div className="mono">{formatTime(d?.created_at)}</div>
             <div className="text-muted">updated</div>
@@ -69,9 +91,6 @@ export function InstanceDetailPanel({ instance, onOpenEdit, onRefresh }: Props) 
         <div className="card">
           <div className="card-header">
             <div className="card-title">{t('instanceDetail.extraData')}</div>
-            <button className="btn ghost sm" onClick={onOpenEdit}>
-              {t('instanceDetail.editData')}
-            </button>
           </div>
           <pre className="text-[11px] mono whitespace-pre-wrap break-words text-text max-h-48 overflow-auto">
             {safeStringify(d?.data ?? {}, 2) || '-'}

@@ -1,4 +1,4 @@
-"""定时巡检：Manager 主动探活 Gateway / Runtime 健康检查接口，更新 online/offline。"""
+"""定时巡检：Manager 主动探活 Gateway / Runtime / User Web，更新 online/offline。"""
 
 from __future__ import annotations
 
@@ -16,6 +16,14 @@ _log = get_logger(__name__)
 _TABLE = INSTANCE_INFO_TABLE_DEF.table_name
 _PROBE_TIMEOUT = 5.0
 _PROBE_CONCURRENCY = 20
+
+
+def _user_web_host_from_row(row) -> str | None:
+    data = getattr(row, "data", None)
+    if not isinstance(data, dict):
+        return None
+    host = str(data.get("user_web_host") or "").strip().rstrip("/")
+    return host or None
 
 
 async def _probe_one_side(
@@ -42,7 +50,7 @@ async def _probe_one_side(
 
 
 async def scan_instance_health_once(handler: DBHandler) -> dict[str, int]:
-    """对所有带 config_host 的实例做一轮探活。"""
+    """对所有带探活地址的实例做一轮探活。"""
     rows = await handler.list_records(_TABLE, {}, limit=10_000, offset=0)
     sem = asyncio.Semaphore(_PROBE_CONCURRENCY)
 
@@ -57,6 +65,7 @@ async def scan_instance_health_once(handler: DBHandler) -> dict[str, int]:
             continue
         gw_host = getattr(row, "gateway_config_host", None)
         rt_host = getattr(row, "runtime_config_host", None)
+        web_host = _user_web_host_from_row(row)
         if gw_host:
             tasks.append(
                 _guarded(
@@ -65,12 +74,19 @@ async def scan_instance_health_once(handler: DBHandler) -> dict[str, int]:
                     )
                 )
             )
-        # runtime 探活与创建时策略一致：有 host 才探（probe 实现已支持 /healthz）
         if rt_host:
             tasks.append(
                 _guarded(
                     _probe_one_side(
                         handler, jiuwenclaw_id=jid, side="runtime", host=rt_host
+                    )
+                )
+            )
+        if web_host:
+            tasks.append(
+                _guarded(
+                    _probe_one_side(
+                        handler, jiuwenclaw_id=jid, side="user_web", host=web_host
                     )
                 )
             )

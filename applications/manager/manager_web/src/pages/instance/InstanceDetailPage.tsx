@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAsync } from '../../hooks/useAsync';
 import { useFormDirty } from '../../hooks/useFormDirty';
@@ -6,11 +6,11 @@ import { useClusterGuideStatus } from '../../hooks/useGuideStatus';
 import { useRouter } from '../../router';
 import { InstanceApi, ApiError } from '../../services/api';
 import { Modal, ModalCancelButton } from '../../components/Modal';
-import { JsonField, tryParseJson, useInvalidJsonChecker } from '../../components/JsonField';
+import { LimitedTextInput } from '../../components/LimitedTextInput';
 import { WarnBadge, type WarnBadgeLink } from '../../components/WarnBadge';
 import { useGuideMissingLabel } from '../../components/GuideLink';
-import { safeStringify } from '../../utils/format';
 import { toast } from '../../stores/uiStore';
+import { isValidHttpUrl } from '../../utils/url';
 import { InstanceConfigPanel } from './instanceConfigPanel/InstanceConfigPanel';
 import { InstanceDetailPanel } from './instanceDetailPanel/instanceDetailPanel';
 import { InstanceAccessPanel } from './instanceAccessPanel/InstanceAccessPanel';
@@ -34,6 +34,29 @@ interface Props {
   tab?: InstancePageTab;
 }
 
+const HOST_MAX = 512;
+
+type ConnectivityForm = {
+  gateway_config_host: string;
+  runtime_config_host: string;
+  user_web_host: string;
+  gateway_web_http_host: string;
+  gateway_web_ws_host: string;
+};
+
+function FieldLabel({ children, required }: { children: ReactNode; required?: boolean }) {
+  return (
+    <label className="label">
+      {children}
+      {required && (
+        <span className="text-danger ml-0.5" aria-hidden="true">
+          *
+        </span>
+      )}
+    </label>
+  );
+}
+
 export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
   const { t } = useTranslation();
   const { navigate } = useRouter();
@@ -43,8 +66,13 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
     useClusterGuideStatus(instanceId);
 
   const [editOpen, setEditOpen] = useState(false);
-  const [editText, setEditText] = useState('');
-  const checkJson = useInvalidJsonChecker();
+  const [connectivityForm, setConnectivityForm] = useState<ConnectivityForm>({
+    gateway_config_host: '',
+    runtime_config_host: '',
+    user_web_host: '',
+    gateway_web_http_host: '',
+    gateway_web_ws_host: '',
+  });
   const { markClean, isDirty } = useFormDirty(editOpen);
 
   const mainTabs: { key: InstancePageTab; label: string; href: string }[] = [
@@ -90,21 +118,59 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
     });
   }
 
-  const handleOpenEdit = () => {
-    const next = safeStringify(instance.data?.data ?? {}, 2);
-    setEditText(next);
+  const handleOpenEditConnectivity = () => {
+    const d = instance.data;
+    const next: ConnectivityForm = {
+      gateway_config_host: d?.gateway_config_host ?? '',
+      runtime_config_host: d?.runtime_config_host ?? '',
+      user_web_host: d?.user_web_host ?? '',
+      gateway_web_http_host: d?.gateway_web_http_host ?? '',
+      gateway_web_ws_host: d?.gateway_web_ws_host ?? '',
+    };
+    setConnectivityForm(next);
     markClean(next);
     setEditOpen(true);
   };
 
-  const submitData = async () => {
-    const err = checkJson(editText);
-    if (err) {
-      toast('danger', err);
+  const submitConnectivity = async () => {
+    const gateway = connectivityForm.gateway_config_host.trim();
+    const runtime = connectivityForm.runtime_config_host.trim();
+    const userWeb = connectivityForm.user_web_host.trim();
+    const gatewayWebHttp = connectivityForm.gateway_web_http_host.trim();
+    const gatewayWebWs = connectivityForm.gateway_web_ws_host.trim();
+    const requiredChecks: { label: string; invalid: boolean }[] = [
+      { label: t('instanceForm.gatewayConfigHost'), invalid: !gateway },
+      { label: t('instanceForm.runtimeConfigHost'), invalid: !runtime },
+      { label: t('instanceForm.userWebHost'), invalid: !userWeb },
+      { label: t('instanceForm.gatewayWebHttpHost'), invalid: !gatewayWebHttp },
+    ];
+    const missing = requiredChecks.find((item) => item.invalid);
+    if (missing) {
+      toast('warn', t('instanceForm.fieldRequired', { field: missing.label }));
       return;
     }
+    const hostsToValidate: { value: string; field: string }[] = [
+      { value: gateway, field: t('instanceForm.gatewayConfigHost') },
+      { value: runtime, field: t('instanceForm.runtimeConfigHost') },
+      { value: userWeb, field: t('instanceForm.userWebHost') },
+      { value: gatewayWebHttp, field: t('instanceForm.gatewayWebHttpHost') },
+      { value: gatewayWebWs, field: t('instanceForm.gatewayWebWsHost') },
+    ];
+    for (const host of hostsToValidate) {
+      if (!host.value) continue;
+      if (!isValidHttpUrl(host.value)) {
+        toast('warn', t('instanceForm.hostInvalid', { field: host.field }));
+        return;
+      }
+    }
     try {
-      await InstanceApi.update(instanceId, { data: tryParseJson(editText, {}) });
+      await InstanceApi.update(instanceId, {
+        gateway_config_host: gateway,
+        runtime_config_host: runtime,
+        user_web_host: userWeb,
+        gateway_web_http_host: gatewayWebHttp,
+        gateway_web_ws_host: gatewayWebWs,
+      });
       toast('success', t('success.saved'));
       setEditOpen(false);
       void instance.reload();
@@ -209,7 +275,7 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
           {tab === 'status' && (
             <InstanceDetailPanel
               instance={instance}
-              onOpenEdit={handleOpenEdit}
+              onOpenEditConnectivity={handleOpenEditConnectivity}
               onRefresh={() => void instance.reload()}
             />
           )}
@@ -236,20 +302,71 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
 
       <Modal
         open={editOpen}
-        title={t('instanceDetail.editData')}
+        title={t('instanceDetail.editConnectivity')}
         onClose={() => setEditOpen(false)}
-        dirty={isDirty(editText)}
+        dirty={isDirty(connectivityForm)}
         size="lg"
         footer={
           <>
             <ModalCancelButton />
-            <button className="btn primary" onClick={submitData}>
+            <button className="btn primary" onClick={() => void submitConnectivity()}>
               {t('common.save')}
             </button>
           </>
         }
       >
-        <JsonField label="instance_info.data" value={editText} onChange={setEditText} rows={14} />
+        <div className="flex flex-col gap-3">
+          <div>
+            <FieldLabel required>{t('instanceForm.gatewayConfigHost')}</FieldLabel>
+            <LimitedTextInput
+              value={connectivityForm.gateway_config_host}
+              maxLength={HOST_MAX}
+              onChange={(gateway_config_host) =>
+                setConnectivityForm((prev) => ({ ...prev, gateway_config_host }))
+              }
+            />
+          </div>
+          <div>
+            <FieldLabel required>{t('instanceForm.runtimeConfigHost')}</FieldLabel>
+            <LimitedTextInput
+              value={connectivityForm.runtime_config_host}
+              maxLength={HOST_MAX}
+              onChange={(runtime_config_host) =>
+                setConnectivityForm((prev) => ({ ...prev, runtime_config_host }))
+              }
+            />
+          </div>
+          <div>
+            <FieldLabel required>{t('instanceForm.userWebHost')}</FieldLabel>
+            <LimitedTextInput
+              value={connectivityForm.user_web_host}
+              maxLength={HOST_MAX}
+              onChange={(user_web_host) =>
+                setConnectivityForm((prev) => ({ ...prev, user_web_host }))
+              }
+            />
+          </div>
+          <div>
+            <FieldLabel required>{t('instanceForm.gatewayWebHttpHost')}</FieldLabel>
+            <LimitedTextInput
+              value={connectivityForm.gateway_web_http_host}
+              maxLength={HOST_MAX}
+              onChange={(gateway_web_http_host) =>
+                setConnectivityForm((prev) => ({ ...prev, gateway_web_http_host }))
+              }
+            />
+          </div>
+          <div>
+            <FieldLabel>{t('instanceForm.gatewayWebWsHost')}</FieldLabel>
+            <LimitedTextInput
+              value={connectivityForm.gateway_web_ws_host}
+              maxLength={HOST_MAX}
+              onChange={(gateway_web_ws_host) =>
+                setConnectivityForm((prev) => ({ ...prev, gateway_web_ws_host }))
+              }
+            />
+          </div>
+        </div>
       </Modal>
     </>
   );

@@ -1,4 +1,4 @@
-import { Component, ReactNode, useEffect } from 'react';
+import { Component, ReactNode, useEffect, useState } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Sidebar } from './components/Sidebar';
@@ -25,6 +25,7 @@ import { OrgsPage } from './pages/iam/OrgsPage';
 import { AgentTemplatesPage } from './pages/templates/AgentTemplatesPage';
 import { A2AManagementPage } from './pages/templates/A2AManagementPage';
 import { getProductName } from './utils/env';
+import { ApiError, UserConsoleApi } from './services/api';
 
 interface ErrorBoundaryState {
   hasError: boolean;
@@ -238,15 +239,66 @@ function RootRedirect() {
   return <Navigate to={user ? roleHome(user.is_admin) : '/auth'} replace />;
 }
 
+function readCookie(name: string): string {
+  const prefix = `${name}=`;
+  for (const part of document.cookie.split(';')) {
+    const item = part.trim();
+    if (item.startsWith(prefix)) {
+      return decodeURIComponent(item.slice(prefix.length));
+    }
+  }
+  return '';
+}
+
 /**
- * /chat 由 Manager Web 后端同源代理 User Web，不能使用 SPA 内部 Navigate。
- * 保留 /user 作为角色落地地址，避免认证回调和已有书签失效。
+ * /chat 由 nginx 按 Cookie jiuwenclaw_id 动态反代 User Web，不能使用 SPA 内部 Navigate。
+ * 保留 /user 作为角色落地地址：先写入 active-cluster Cookie，再跳 /chat/。
  */
 function UserWebRedirect() {
   const { t } = useTranslation();
+  const [error, setError] = useState<string | null>(null);
+
   useEffect(() => {
-    window.location.replace('/chat/');
-  }, []);
+    let cancelled = false;
+    (async () => {
+      try {
+        const { contexts } = await UserConsoleApi.agentContexts();
+        if (cancelled) return;
+        if (!contexts.length) {
+          setError(t('auth.noClusterAccess'));
+          return;
+        }
+        const cookieJid = readCookie('jiuwenclaw_id');
+        const preferred =
+          contexts.find((item) => item.jiuwenclaw_id === cookieJid)?.jiuwenclaw_id ??
+          contexts[0].jiuwenclaw_id;
+        await UserConsoleApi.setActiveCluster(preferred);
+        if (!cancelled) {
+          window.location.replace('/chat/');
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setError(
+            e instanceof ApiError ? e.detail : (e as Error).message || t('auth.clusterSelectFailed'),
+          );
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [t]);
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center h-screen gap-3 text-muted">
+        <div>{error}</div>
+        <button className="btn" onClick={() => window.location.reload()}>
+          {t('common.refresh')}
+        </button>
+      </div>
+    );
+  }
   return <div className="flex items-center justify-center h-screen text-muted">{t('auth.loading')}</div>;
 }
 

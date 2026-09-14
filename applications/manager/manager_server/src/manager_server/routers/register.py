@@ -18,7 +18,7 @@ INSTANCES_PREFIX = "/instances"
 
 def router_register(app: FastAPI) -> None:
     v1_router = APIRouter(prefix="/v1")
-    # 用户控制台：当前用户可见 Agent。
+    # 用户控制台：当前用户可见 Agent + 用户面选路。
     v1_router.include_router(user_console_router, prefix="/user-console", tags=["User Console"])
     v1_router.include_router(templates_router, tags=["Templates"])
     v1_router.include_router(instance_resource_router, tags=["Instance Resource"])

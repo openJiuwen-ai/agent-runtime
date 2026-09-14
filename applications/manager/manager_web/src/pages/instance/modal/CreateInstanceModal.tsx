@@ -16,6 +16,9 @@ interface Props {
 
 const DEFAULT_GATEWAY_CONFIG_HOST = 'http://jiuwenclaw-gateway:8775';
 const DEFAULT_RUNTIME_CONFIG_HOST = 'http://jiuwenclaw-agent-runtime:8091';
+const DEFAULT_USER_WEB_HOST = 'http://jiuwenclaw-web:5173';
+const DEFAULT_GATEWAY_WEB_HTTP_HOST = 'http://jiuwenclaw-gateway:19002';
+const DEFAULT_GATEWAY_WEB_WS_HOST = 'http://jiuwenclaw-gateway:19000';
 
 /** 与 instance_info 表 ColumnDefinition length 一致 */
 const FIELD_MAX_LENGTH = {
@@ -23,6 +26,9 @@ const FIELD_MAX_LENGTH = {
   description: 4096,
   gateway_config_host: 512,
   runtime_config_host: 512,
+  user_web_host: 512,
+  gateway_web_http_host: 512,
+  gateway_web_ws_host: 512,
 } as const;
 
 function FieldLabel({ children, required }: { children: ReactNode; required?: boolean }) {
@@ -46,9 +52,20 @@ export function CreateInstanceModal({ open, onClose, onCreated }: Props) {
   const [description, setDescription] = useState('');
   const [gatewayConfigHost, setGatewayConfigHost] = useState(DEFAULT_GATEWAY_CONFIG_HOST);
   const [runtimeConfigHost, setRuntimeConfigHost] = useState(DEFAULT_RUNTIME_CONFIG_HOST);
+  const [userWebHost, setUserWebHost] = useState(DEFAULT_USER_WEB_HOST);
+  const [gatewayWebHttpHost, setGatewayWebHttpHost] = useState(DEFAULT_GATEWAY_WEB_HTTP_HOST);
+  const [gatewayWebWsHost, setGatewayWebWsHost] = useState(DEFAULT_GATEWAY_WEB_WS_HOST);
   const [saving, setSaving] = useState(false);
 
-  const draft = { name, description, gatewayConfigHost, runtimeConfigHost };
+  const draft = {
+    name,
+    description,
+    gatewayConfigHost,
+    runtimeConfigHost,
+    userWebHost,
+    gatewayWebHttpHost,
+    gatewayWebWsHost,
+  };
 
   const applyDefaults = () => {
     const next = {
@@ -56,11 +73,17 @@ export function CreateInstanceModal({ open, onClose, onCreated }: Props) {
       description: '',
       gatewayConfigHost: DEFAULT_GATEWAY_CONFIG_HOST,
       runtimeConfigHost: DEFAULT_RUNTIME_CONFIG_HOST,
+      userWebHost: DEFAULT_USER_WEB_HOST,
+      gatewayWebHttpHost: DEFAULT_GATEWAY_WEB_HTTP_HOST,
+      gatewayWebWsHost: DEFAULT_GATEWAY_WEB_WS_HOST,
     };
     setName(next.name);
     setDescription(next.description);
     setGatewayConfigHost(next.gatewayConfigHost);
     setRuntimeConfigHost(next.runtimeConfigHost);
+    setUserWebHost(next.userWebHost);
+    setGatewayWebHttpHost(next.gatewayWebHttpHost);
+    setGatewayWebWsHost(next.gatewayWebWsHost);
     markClean(next);
   };
 
@@ -76,18 +99,28 @@ export function CreateInstanceModal({ open, onClose, onCreated }: Props) {
       { label: t('instanceForm.name'), invalid: !name.trim() },
       { label: t('instanceForm.gatewayConfigHost'), invalid: !gatewayConfigHost.trim() },
       { label: t('instanceForm.runtimeConfigHost'), invalid: !runtimeConfigHost.trim() },
+      { label: t('instanceForm.userWebHost'), invalid: !userWebHost.trim() },
+      { label: t('instanceForm.gatewayWebHttpHost'), invalid: !gatewayWebHttpHost.trim() },
     ];
     const missing = requiredChecks.find((item) => item.invalid);
     if (missing) {
       toast('warn', t('instanceForm.fieldRequired', { field: missing.label }));
       return;
     }
-    if (!isValidHttpUrl(gatewayConfigHost)) {
-      toast('warn', t('instanceForm.hostInvalid', { field: t('instanceForm.gatewayConfigHost') }));
-      return;
+    const requiredHosts: { label: string; value: string }[] = [
+      { label: t('instanceForm.gatewayConfigHost'), value: gatewayConfigHost },
+      { label: t('instanceForm.runtimeConfigHost'), value: runtimeConfigHost },
+      { label: t('instanceForm.userWebHost'), value: userWebHost },
+      { label: t('instanceForm.gatewayWebHttpHost'), value: gatewayWebHttpHost },
+    ];
+    for (const item of requiredHosts) {
+      if (!isValidHttpUrl(item.value)) {
+        toast('warn', t('instanceForm.hostInvalid', { field: item.label }));
+        return;
+      }
     }
-    if (!isValidHttpUrl(runtimeConfigHost)) {
-      toast('warn', t('instanceForm.hostInvalid', { field: t('instanceForm.runtimeConfigHost') }));
+    if (gatewayWebWsHost.trim() && !isValidHttpUrl(gatewayWebWsHost)) {
+      toast('warn', t('instanceForm.hostInvalid', { field: t('instanceForm.gatewayWebWsHost') }));
       return;
     }
     const unsafeField = findUnsafeTextField([
@@ -109,6 +142,13 @@ export function CreateInstanceModal({ open, onClose, onCreated }: Props) {
         created_by: 'system',
         gateway_config_host: gatewayConfigHost.trim().slice(0, FIELD_MAX_LENGTH.gateway_config_host),
         runtime_config_host: runtimeConfigHost.trim().slice(0, FIELD_MAX_LENGTH.runtime_config_host),
+        user_web_host: userWebHost.trim().slice(0, FIELD_MAX_LENGTH.user_web_host),
+        gateway_web_http_host: gatewayWebHttpHost.trim().slice(
+          0,
+          FIELD_MAX_LENGTH.gateway_web_http_host,
+        ),
+        gateway_web_ws_host:
+          gatewayWebWsHost.trim().slice(0, FIELD_MAX_LENGTH.gateway_web_ws_host) || undefined,
       });
       toast('success', t('success.created'));
       applyDefaults();
@@ -169,6 +209,33 @@ export function CreateInstanceModal({ open, onClose, onCreated }: Props) {
             maxLength={FIELD_MAX_LENGTH.runtime_config_host}
             onChange={setRuntimeConfigHost}
             placeholder={DEFAULT_RUNTIME_CONFIG_HOST}
+          />
+        </div>
+        <div>
+          <FieldLabel required>{t('instanceForm.userWebHost')}</FieldLabel>
+          <LimitedTextInput
+            value={userWebHost}
+            maxLength={FIELD_MAX_LENGTH.user_web_host}
+            onChange={setUserWebHost}
+            placeholder={DEFAULT_USER_WEB_HOST}
+          />
+        </div>
+        <div>
+          <FieldLabel required>{t('instanceForm.gatewayWebHttpHost')}</FieldLabel>
+          <LimitedTextInput
+            value={gatewayWebHttpHost}
+            maxLength={FIELD_MAX_LENGTH.gateway_web_http_host}
+            onChange={setGatewayWebHttpHost}
+            placeholder={DEFAULT_GATEWAY_WEB_HTTP_HOST}
+          />
+        </div>
+        <div>
+          <FieldLabel>{t('instanceForm.gatewayWebWsHost')}</FieldLabel>
+          <LimitedTextInput
+            value={gatewayWebWsHost}
+            maxLength={FIELD_MAX_LENGTH.gateway_web_ws_host}
+            onChange={setGatewayWebWsHost}
+            placeholder={DEFAULT_GATEWAY_WEB_WS_HOST}
           />
         </div>
       </div>

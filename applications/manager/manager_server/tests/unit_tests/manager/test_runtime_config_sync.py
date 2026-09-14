@@ -135,3 +135,54 @@ def test_rule_groups_to_routing_rules_or_and():
         ]
     )
     assert expr == "user_id in ('u1') or (bot_id not in ('b1') and group_id in ('g1'))"
+
+
+@pytest.mark.asyncio
+async def test_sync_runtime_config_posts_to_instance_runtime_host(monkeypatch):
+    """config_sync 必须打到实例的 runtime_config_host。"""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from manager_server.core.instance_resource import runtime_config_sync as mod
+
+    posted: dict[str, str] = {}
+
+    class _Resp:
+        @staticmethod
+        def raise_for_status():
+            return None
+
+        @staticmethod
+        def json():
+            return {"ok": True}
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def post(self, url, json=None):
+            posted["url"] = url
+            return _Resp()
+
+    monkeypatch.setattr(
+        "manager_server.manager_config_push.endpoint.require_runtime_endpoint",
+        AsyncMock(return_value="http://jiuwenclaw-agent-runtime.wx2:8091"),
+    )
+    monkeypatch.setattr(
+        mod,
+        "build_runtime_config",
+        AsyncMock(return_value={"containers": [], "templates": [], "scopes": []}),
+    )
+    monkeypatch.setattr(mod.httpx, "AsyncClient", _Client)
+    monkeypatch.setattr(mod.settings, "agent_runtime_sync_timeout", 1.0)
+
+    result = await mod.sync_runtime_config(MagicMock(), "jid-wx2")
+    assert result == {"ok": True}
+    assert posted["url"] == (
+        "http://jiuwenclaw-agent-runtime.wx2:8091/api/session/config_sync"
+    )

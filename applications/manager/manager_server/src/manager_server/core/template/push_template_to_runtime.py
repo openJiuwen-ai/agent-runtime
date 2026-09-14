@@ -130,9 +130,8 @@ async def update_service_template_on_referencing_runtimes(
     Runtime 无单模板 PATCH，只能 ``config_sync``；须在 Manager 落库**之后**调用，
     以便 ``build_runtime_config`` 读到最新模板行。
 
-    实际 HTTP 仍走全局 ``AGENT_RUNTIME_ENDPOINT``（与现有授权 sync 一致）；
-    这里用 ``runtime_status=online`` 过滤，不依赖 ``gateway_status`` /
-    ``gateway_config_host``。
+    HTTP 目标按实例 ``runtime_config_host`` 解析；这里用 ``runtime_status=online``
+    过滤，不依赖 ``gateway_status`` / ``gateway_config_host``。
     """
     tid = str(template_id or "").strip()
     if not tid:
