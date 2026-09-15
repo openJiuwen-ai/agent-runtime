@@ -10,13 +10,16 @@
 |---|---|---|
 | 本文件 | 架构一页纸 + 键前缀总览 + 测试/部署入口 | 先读 |
 | [service-core.md](service-core.md) | 组装(main)/CLI/配置(`AGENT_RUNTIME_*`)/错误码契约/字段分类/工具/部署 | 改装配、配置、错误契约、部署时 |
+| [link-mtls.md](link-mtls.md) | HTTP/SSE 链路 mTLS：模式、profile、请求守卫、数据库与 AgentServer Pod 注入 | 改内部链路认证、证书材料或部署集成时 |
 | [session-manager.md](session-manager.md) | SM:route/touch/config_sync/config_refresh/cleanup 编排、6 个 Lua、SM 键表 | 改会话编排/配置层时 |
 | [resource-manager.md](resource-manager.md) | RM:acquire/后台任务/K8s 适配、6 个 Lua、RM 键表 | 改 Pod 池/扩缩容/清理时 |
 | [evaluation.md](evaluation.md) | 自评估:采样/评估两 job、`{agent_runtime:eval}` 键表、规则清单、LLM 降级矩阵 | 改自评估/趋势/报告时 |
 | [e2e-test-cases.md](e2e-test-cases.md) | 全部 e2e 用例的场景/输入/预期输出 | 写或跑 e2e 时 |
 | [load-test.md](load-test.md) | 压测/浸泡工具 `scripts/load_test.py`:6 场景矩阵、判定层(客户端/可视化/ERROR 日志/巡检)、使用指南与已知容量语义 | 跑压测/浸泡、给工具加场景或判定时 |
 | `../api/config-plane-api.md` | 配置面对外接口文档(config_sync/config_refresh/visualization:字段表+curl+真实返回示例) | 给调用方(Claw Manager/运维/可视化前端)交付接口契约时 |
+| `../api/link-mtls-contract.md` | HTTPS/mTLS、证书角色、绑定 Header、Manager 绑定接口契约 | 对接 Gateway、Manager 或 AgentServer 时 |
 | `../design/Agent-Runtime-HLD.md` | 架构总览/接口契约/场景 A–N/Redis 键表(语义权威) | 语义不确定时 |
+| `../design/http-sse-link-mtls-design.md` | 内部链路 mTLS 的身份、信任、持久化和多实例设计 | 理解安全边界和跨组件关系时 |
 | `../design/session-manager-design.md` | SM 详细设计(6 个 Lua 全文) | 深挖 SM 设计动机 |
 | `../design/resource-manager-design.md` | RM 详细设计(6 个 Lua 全文) | 深挖 RM 设计动机 |
 
