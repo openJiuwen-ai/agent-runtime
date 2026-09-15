@@ -430,7 +430,7 @@ def test_container_row_roundtrip():
     assert set(row) == {
         "container_id", "name", "image", "image_pull_policy", "command",
         "args", "ports", "env", "env_from", "resources", "volume_mounts",
-        "security_context", "readiness_probe"}
+        "security_context", "readiness_probe", "data"}
     from types import SimpleNamespace
     restored = container_spec_from_row(SimpleNamespace(**row))
     assert restored == spec
