@@ -12,8 +12,10 @@
 |---|---|
 | 服务前缀 | `/api/session`(业务端点)/ `/visualization`(可视化端点,无前缀) |
 | 默认端口 | 8091(`service_port`,部署形态经 Service/NodePort 暴露时以入口地址为准) |
-| 认证 | 无内置鉴权,靠网络边界(Service ClusterIP 仅集群内可达);可视化输出对 secrets 脱敏 |
+| 认证 | `off` 保持原接口行为；`enforce` 要求 HTTPS/mTLS、允许的证书角色及绑定 Header，详见 [link-mtls-contract.md](link-mtls-contract.md)；可视化输出对 secrets 脱敏 |
 | Content-Type | `application/json`(业务端点 POST) |
+
+本文后续 curl 使用 HTTP 展示业务载荷，适用于 `off`、`observe` 模式。`enforce` 模式的调用方在相同载荷上增加客户端证书和绑定 Header，并使用 HTTPS 地址。
 
 ### 0.2 业务端点请求信封(Envelope)
 

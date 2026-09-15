@@ -1288,8 +1288,8 @@ sequenceDiagram
 ### 7.3 过载保护 —— 流量超容量时排队,而不是把后端打爆
 当某个 scope 的活跃会话已达上限,新请求**立即返回 503 `SCOPE_FULL`**(带 `Retry-After`),不拖着占用连接、不排队(2026-09 起快失败——有界等待队列已拆除:redis-py asyncio `RedisCluster` 无 pubsub 实现,且等待资源占用与控制面定位不匹配,见 docs/feature/2026-09-scope-full-fastfail.md)。gateway 拿到“可重试”的错误码后,用**指数退避 + 随机抖动**重试——每次等更久、再叠加一个随机量,把一大批同时被拒的请求在时间上摊开,避免它们同一瞬间又一起涌回来把服务打爆(即“重试风暴”)。
 
-### 7.4 认证授权 —— 谁能调哪个接口,由服务框架统一把关
-对外的五个接口(`route` / `touch` / `config_sync` / `config_refresh` / `cleanup`)用什么凭证(mTLS 或 token)、是否允许本次调用,由底层**服务框架 `openjiuwen_runtime.service` 统一把关**(`link_auth` + adapter 中间件),本服务只声明各接口的调用方约束:`config_sync` 只许 Claw Manager 调、`config_refresh` 只许运维(或 Claw Manager)调、`cleanup` 只许运维调。SM 与 RM 之间的调用是同进程函数调用,不经过网络框架,因此不需要鉴权。
+### 7.4 认证授权 —— HTTP/SSE 内部链路按证书角色与绑定校验
+内部链路认证由 `LinkMTLSConfig`、Foundation `LinkProfile` 与 Runtime ASGI 守卫实现。`JIUWENSWARM_LINK_MTLS_MODE` 默认 `off`;`observe` 只做材料预检;`enforce` 启用 HTTPS/mTLS,从真实 TLS 对端证书识别角色,并校验绑定 ID 与 epoch。`route` / `touch` / `config_refresh` / `cleanup` 接受 gateway 角色,`config_sync` 接受 manager 角色。SM 与 RM 之间是同进程函数调用,不经过网络认证。完整设计和接口矩阵见 [`http-sse-link-mtls-design.md`](http-sse-link-mtls-design.md) 与 [`../api/link-mtls-contract.md`](../api/link-mtls-contract.md)。
 
 ### 7.5 输入校验 —— 通用校验框架做,本服务只补自己特有的
 接口入参的常规校验(字符集合法、长度不超、非空、数值在合理范围)由**服务框架在进入 handler 之前统一拦掉**,handler 不必重复实现。本服务只补框架管不到的两条:
