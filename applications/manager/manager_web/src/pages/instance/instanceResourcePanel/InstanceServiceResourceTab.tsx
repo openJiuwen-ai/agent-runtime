@@ -128,7 +128,7 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [showAdd, setShowAdd] = useState(false);
 
-  /** 引导跳转：其他页面点「未配置 Agent实例池」跳过来时自动打开添加Agent实例池弹框 */
+  /** 引导跳转：其他页面点「未配置 运行时」跳过来时自动打开添加运行时弹框 */
   useGuideAutoOpen('serviceResourceAdd', () => setShowAdd(true));
   const [delTarget, setDelTarget] = useState<InstanceServiceResource | null>(null);
   const [confirmBatchDelete, setConfirmBatchDelete] = useState(false);

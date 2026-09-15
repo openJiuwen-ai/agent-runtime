@@ -65,8 +65,8 @@
     "safetyGuardrails": "安全护栏",
     "a2aManagement": "A2A管理",
     "extensionTemplates": "扩展配置",
-    "agentManagement": "Agent定义",
-    "serviceConfigTemplates": "Agent实例池定义",
+    "agentManagement": "Agent模板",
+    "serviceConfigTemplates": "运行时模板",
     "iam": "身份中心",
     "users": "用户",
     "orgs": "组织",
@@ -81,8 +81,8 @@
     "quickEntry": "快捷入口",
     "newMember": "新建成员",
     "newModel": "新建模型",
-    "newAgentDefinition": "新建Agent定义",
-    "newPoolDefinition": "新建Agent实例池定义",
+    "newAgentDefinition": "新建Agent模板",
+    "newPoolDefinition": "新建运行时模板",
     "noClusters": "暂无集群，请先在集群管理中新建",
     "selectCluster": "选择集群",
     "clusterAlerts": "集群存在未配置项"
@@ -251,14 +251,14 @@
     "resourcePanel": {
       "tabs": {
         "agent": "Agent",
-        "serviceResource": "Agent实例池"
+        "serviceResource": "运行时"
       },
       "agent": {
         "title": "Agent",
-        "subtitle": "在本集群上配置Agent授权，并配置授权范围",
-        "agentLabel": "Agent定义",
+        "subtitle": "基于 Agent模板 接入并管理 Agent，配置各 Agent 的授权范围",
+        "agentLabel": "Agent模板",
         "agentInstance": "Agent实例",
-        "agentTemplate": "Agent定义",
+        "agentTemplate": "Agent模板",
         "scopeLabel": "授权范围",
         "scopeAll": "全员可用",
         "grantedBy": "授权人",
@@ -269,8 +269,8 @@
         "editGrant": "编辑授权 · {{name}}",
         "grantHint": "match_expr 为空表示该集群上已准入用户均可使用。",
         "expiresHint": "留空表示永不过期",
-        "empty": "本集群尚未添加 Agent 定义",
-        "confirmRemove": "从本集群移除选中的 {{n}} 个 Agent 定义？",
+        "empty": "本集群尚未添加 Agent",
+        "confirmRemove": "从本集群移除选中的 {{n}} 个 Agent？",
         "resourceId": "资源 ID",
         "resourceName": "资源名称",
         "resourceNamePlaceholder": "请输入资源名称",
@@ -278,9 +278,9 @@
         "resourceDescPlaceholder": "请输入资源描述（可选）"
       },
       "serviceResource": {
-        "title": "Agent实例池",
-        "subtitle": "在本集群上分配Agent实例池，并配置授权范围",
-        "template": "Agent实例池定义",
+        "title": "运行时",
+        "subtitle": "基于 运行时模板 创建并管理实例池，配置各池的调度策略，实例在会话触发时按需分配",
+        "template": "运行时模板",
         "scopeLabel": "授权范围",
         "scopeAll": "全员可用",
         "priority": "优先级",
@@ -289,10 +289,10 @@
         "neverExpires": "永不过期",
         "expiresHint": "留空表示永不过期",
         "searchPlaceholder": "搜索资源 ID、资源名称、资源描述、模板 ID/名称、授权人、优先级",
-        "add": "添加Agent实例池",
+        "add": "添加运行时",
         "editGrant": "编辑授权 · {{name}}",
-        "empty": "本集群尚未分配 Agent 实例池",
-        "confirmRemove": "从本集群移除选中的 {{n}} 个 Agent 实例池？",
+        "empty": "本集群尚未分配运行时",
+        "confirmRemove": "从本集群移除选中的 {{n}} 个运行时？",
         "resourceId": "资源 ID",
         "resourceName": "资源名称",
         "resourceDesc": "资源描述"
@@ -517,11 +517,11 @@
     "deleteConfirm": "确认删除该预置 Skill 模板？该模板可能被多个实例资源引用，请确认无副作用。"
   },
   "serviceConfigTemplate": {
-    "title": "Agent实例池定义",
-    "subtitle": "维护AgentServer会话参数和容器运行模板",
-    "new": "新建Agent实例池定义",
-    "edit": "编辑Agent实例池定义",
-    "backToList": "返回Agent实例池定义列表",
+    "title": "运行时模板",
+    "subtitle": "维护实例池参数和容器运行模板",
+    "new": "新建运行时模板",
+    "edit": "编辑运行时模板",
+    "backToList": "返回运行时模板列表",
     "tabTemplate": "实例池参数",
     "tabTemplateHint": "Pod 级字段与池策略：namespace / nodeName / volumes / 并发与 TTL",
     "tabAgentServer": "AgentServer参数",
@@ -612,10 +612,10 @@
     "importHint": "实例池定义文件（json格式）",
     "exportOk": "已导出配置 JSON",
     "exportFailed": "导出失败：{{detail}}",
-    "importOk": "已导入并创建Agent实例池定义",
-    "importOkFirstOfMany": "文件含 {{count}} 个模板，已导入第一个并创建Agent实例池定义",
+    "importOk": "已导入并创建运行时模板",
+    "importOkFirstOfMany": "文件含 {{count}} 个模板，已导入第一个并创建运行时模板",
     "importFailed": "导入失败：{{detail}}",
-    "deleteConfirm": "确认删除该Agent实例池定义？该模板可能被多个实例资源引用，请确认无副作用。"
+    "deleteConfirm": "确认删除该运行时模板？该模板可能被多个实例资源引用，请确认无副作用。"
   },
   "policies": {
     "fieldRequired": "请填写{{field}}",
@@ -832,7 +832,7 @@
       "overview": "Product Overview",
       "guides": "功能指南",
       "guideAgent": "Agent Management",
-      "guidePool": "Agent Instance Pool Management",
+      "guidePool": "Runtime Template Management",
       "guideCluster": "Cluster Management"
     }
   },
@@ -854,10 +854,10 @@
     "chatLoadingSlow": "加载较慢,请稍候…"
   },
   "agentTemplate": {
-    "title": "Agent定义",
-    "subtitle": "维护可复用的Agent定义模板，供实例绑定使用",
-    "new": "新建 Agent 定义",
-    "edit": "编辑 Agent 定义",
+    "title": "Agent模板",
+    "subtitle": "维护可复用的Agent模板，供实例绑定使用",
+    "new": "新建 Agent模板",
+    "edit": "编辑 Agent模板",
     "templateName": "模板名称",
     "templateDescription": "模板描述",
     "agentTags": "标签",

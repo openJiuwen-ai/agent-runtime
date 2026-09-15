@@ -30,8 +30,8 @@ type TocEntry = {
 const TOC: TocEntry[] = [
   { key: 'getting-started', labelKey: 'docs.toc.getting-started', fallbackZh: '快速开局' },
   { key: 'overview', labelKey: 'docs.toc.overview', fallbackZh: '产品总览' },
-  { key: 'guide-agent', labelKey: 'docs.toc.guideAgent', fallbackZh: 'Agent管理', group: 'guides' },
-  { key: 'guide-pool', labelKey: 'docs.toc.guidePool', fallbackZh: 'Agent实例池管理', group: 'guides' },
+  { key: 'guide-agent', labelKey: 'docs.toc.guideAgent', fallbackZh: 'Agent模板管理', group: 'guides' },
+  { key: 'guide-pool', labelKey: 'docs.toc.guidePool', fallbackZh: '运行时模板管理', group: 'guides' },
   { key: 'guide-cluster', labelKey: 'docs.toc.guideCluster', fallbackZh: '集群管理', group: 'guides' },
 ];
 
@@ -283,8 +283,8 @@ export function DocsPage() {
 
   return (
     <div className="min-h-screen flex flex-col bg-[var(--bg)]">
-      {/* 顶栏：与管理面 Shell 同款品牌区 */}
-      <header className="topbar !static">
+      {/* 顶栏：与管理面 Shell 同款品牌区，sticky 固定在视口顶部，滚动时不随页面滚走 */}
+      <header className="topbar">
         <div className="brand">
           <img src="/logo.svg" alt={productName} className="brand-logo-img" />
           <div className="brand-text">
@@ -297,20 +297,18 @@ export function DocsPage() {
         </button>
       </header>
 
-      <main className="flex-1 w-full max-w-[1600px] mx-auto px-8 py-8 flex flex-col gap-6 min-h-0">
-        {/* 文档标题 */}
-        <div className="flex items-baseline gap-3 flex-wrap">
-          <h1 className="text-2xl font-bold text-[var(--text-strong)] m-0">
-            {t('docs.title', { productName })}
-          </h1>
-          <span className="text-xs mono text-accent px-2 py-0.5 rounded-full bg-[var(--accent-subtle)] border border-[var(--border-accent)]">
-            v1.0
-          </span>
-        </div>
-
+      <main className="flex-1 w-full max-w-[1600px] mx-auto px-8 py-8 flex gap-8 items-start">
         <div className="flex-1 flex gap-8 items-start min-h-0">
-          {/* 左侧目录 */}
-          <nav className="w-52 shrink-0 sticky top-6 flex flex-col gap-1">
+          {/* 左侧目录：文档标题与版本号置于目录上方（侧栏内，不占整行） */}
+          <nav className="w-52 shrink-0 sticky top-[calc(var(--shell-topbar-height)_+_1.5rem)] flex flex-col gap-1">
+            <div className="flex items-baseline gap-2 flex-wrap mb-3">
+              <h1 className="text-base font-bold leading-snug text-[var(--text-strong)] m-0">
+                {t('docs.title', { productName })}
+              </h1>
+              <span className="text-xs mono text-accent px-2 py-0.5 rounded-full bg-[var(--accent-subtle)] border border-[var(--border-accent)]">
+                v1.0
+              </span>
+            </div>
             {TOC.map((d) =>
               d.group === 'guides' ? (
                 <button
@@ -345,7 +343,7 @@ export function DocsPage() {
           </article>
 
           {/* 右侧 md 内部目录：按 md 标题层级缩进，点击跳到对应标题 */}
-          <nav className="w-64 shrink-0 sticky top-6 hidden xl:flex flex-col">
+          <nav className="w-64 shrink-0 sticky top-[calc(var(--shell-topbar-height)_+_1.5rem)] hidden xl:flex flex-col">
             {headings.length > 0 && (
               <div className="docs-toc-group !border-t-0 !mt-0 !pt-0">{t('docs.onThisPage')}</div>
             )}

@@ -33,7 +33,7 @@ export function OverviewPage() {
   const alertsByInstance = useClustersGuideStatus(clusterIds);
   const hasClusterAlerts = Object.values(alertsByInstance).some((alerts) => alerts.length > 0);
 
-  /** 与左侧导航栏叹号提示同源的汇总：按导航栏顺序（模型 → Agent定义 → Agent实例池定义 → 集群 → 集群管理告警）展示 */
+  /** 与左侧导航栏叹号提示同源的汇总：按导航栏顺序（模型 → Agent模板 → 运行时模板 → 集群 → 集群管理告警）展示 */
   const quickNavLinks: WarnBadgeLink[] = [];
   if (modelDefined === false) {
     quickNavLinks.push({ label: t('guide.missingItem', { item: t('nav.modelTemplates') }), to: '/model-templates', openTarget: 'modelTemplateNew' });

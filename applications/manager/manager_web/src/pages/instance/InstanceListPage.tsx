@@ -54,7 +54,7 @@ function InstanceTopoCard({
 }: {
   instance: InstanceSummary;
   onChanged: () => void;
-  /** 该集群的引导告警项（未配置准入/Agent/Agent实例池），右上角叹号汇总 */
+  /** 该集群的引导告警项（未配置准入/Agent/运行时），右上角叹号汇总 */
   alertLinks?: WarnBadgeLink[];
 }) {
   const { t } = useTranslation();
@@ -540,7 +540,7 @@ export function InstanceListPage() {
     void instances.reload();
   };
 
-  /** 各集群引导告警（未配置准入用户/组织、Agent、Agent实例池），用于方块右上角叹号 */
+  /** 各集群引导告警（未配置准入用户/组织、Agent、运行时），用于方块右上角叹号 */
   const clusterIds = useMemo(
     () => (instances.data?.items ?? []).map((it) => it.jiuwenclaw_id),
     [instances.data],

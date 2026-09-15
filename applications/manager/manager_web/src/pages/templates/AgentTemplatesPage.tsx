@@ -32,7 +32,7 @@ export function AgentTemplatesPage() {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [modalOpen, setModalOpen] = useState(false);
 
-  /** 引导跳转：其他页面点「未配置 Agent定义」跳过来时自动打开新建弹框 */
+  /** 引导跳转：其他页面点「未配置 Agent模板」跳过来时自动打开新建弹框 */
   useGuideAutoOpen('agentTemplateNew', () => {
     setEditing(null);
     setModalOpen(true);
