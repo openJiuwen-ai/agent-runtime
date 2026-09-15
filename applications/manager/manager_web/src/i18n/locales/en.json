@@ -65,8 +65,8 @@
     "safetyGuardrails": "Safety Guardrails",
     "a2aManagement": "A2A Management",
     "extensionTemplates": "Extension Config",
-    "agentManagement": "Agent Definitions",
-    "serviceConfigTemplates": "Agent Instance Pool Definitions",
+    "agentManagement": "Agent Templates",
+    "serviceConfigTemplates": "Runtime Templates",
     "iam": "Identity Center",
     "users": "Users",
     "orgs": "Orgs",
@@ -81,8 +81,8 @@
     "quickEntry": "Quick Entry",
     "newMember": "New Member",
     "newModel": "New Model",
-    "newAgentDefinition": "New Agent Definition",
-    "newPoolDefinition": "New Agent Instance Pool Definition",
+    "newAgentDefinition": "New Agent Template",
+    "newPoolDefinition": "New Runtime Template",
     "noClusters": "No clusters yet. Create one in Cluster Management first.",
     "selectCluster": "Select cluster",
     "clusterAlerts": "Clusters have unconfigured items"
@@ -251,14 +251,14 @@
     "resourcePanel": {
       "tabs": {
         "agent": "Agent",
-        "serviceResource": "Agent Instance Pool"
+        "serviceResource": "Runtime"
       },
       "agent": {
         "title": "Agent",
-        "subtitle": "Configure Agent grants on this cluster and set the authorization scope",
-        "agentLabel": "Agent Definition",
+        "subtitle": "Onboard and manage Agents based on Agent Templates, and configure the authorization scope of each Agent",
+        "agentLabel": "Agent Template",
         "agentInstance": "Agent Instance",
-        "agentTemplate": "Agent Definition",
+        "agentTemplate": "Agent Template",
         "scopeLabel": "Authorization Scope",
         "scopeAll": "Available to all",
         "grantedBy": "Granted By",
@@ -269,8 +269,8 @@
         "editGrant": "Edit grant · {{name}}",
         "grantHint": "Empty match_expr allows any provisioned user on this cluster.",
         "expiresHint": "Leave empty for no expiration",
-        "empty": "No Agent definitions on this cluster",
-        "confirmRemove": "Remove {{n}} selected Agent definition(s) from this cluster?",
+        "empty": "No Agents added on this cluster",
+        "confirmRemove": "Remove {{n}} selected Agent(s) from this cluster?",
         "resourceId": "Resource ID",
         "resourceName": "Resource Name",
         "resourceNamePlaceholder": "Enter resource name",
@@ -278,9 +278,9 @@
         "resourceDescPlaceholder": "Enter resource description (optional)"
       },
       "serviceResource": {
-        "title": "Agent Instance Pool",
-        "subtitle": "Assign agent instance pools on this cluster and set the authorization scope",
-        "template": "Agent Instance Pool Definition",
+        "title": "Runtime",
+        "subtitle": "Create and manage instance pools based on Runtime Templates, configure the scheduling policy of each pool; instances are allocated on demand when a session triggers",
+        "template": "Runtime Template",
         "scopeLabel": "Authorization Scope",
         "scopeAll": "Available to all",
         "priority": "Priority",
@@ -289,10 +289,10 @@
         "neverExpires": "Never expires",
         "expiresHint": "Leave empty for no expiration",
         "searchPlaceholder": "Search resource ID/name/description, template ID/name, granted by, priority",
-        "add": "Add Agent Instance Pool",
+        "add": "Add Runtime",
         "editGrant": "Edit grant · {{name}}",
-        "empty": "No agent instance pools assigned to this cluster",
-        "confirmRemove": "Remove {{n}} selected agent instance pool(s) from this cluster?",
+        "empty": "No runtimes assigned to this cluster",
+        "confirmRemove": "Remove {{n}} selected runtime(s) from this cluster?",
         "resourceId": "Resource ID",
         "resourceName": "Resource Name",
         "resourceDesc": "Resource Description"
@@ -517,11 +517,11 @@
     "deleteConfirm": "Delete this preset Skill template? It may be referenced by instance resources."
   },
   "serviceConfigTemplate": {
-    "title": "Agent Instance Pool Definitions",
+    "title": "Runtime Templates",
     "subtitle": "Maintain AgentServer session parameters and container runtime templates",
-    "new": "New Agent Instance Pool Definition",
-    "edit": "Edit Agent Instance Pool Definition",
-    "backToList": "Back to agent instance pool definitions",
+    "new": "New Runtime Template",
+    "edit": "Edit Runtime Template",
+    "backToList": "Back to runtime templates",
     "tabTemplate": "Pool Parameters",
     "tabTemplateHint": "Pod-level fields and pool policy: namespace / nodeName / volumes / concurrency & TTL",
     "tabAgentServer": "AgentServer Parameters",
@@ -609,13 +609,13 @@
     "sectionPool": "Pool & Timeouts",
     "export": "Export",
     "import": "Import",
-    "importHint": "Instance pool definition file (JSON format)",
+    "importHint": "Runtime template file (JSON format)",
     "exportOk": "Config JSON exported",
     "exportFailed": "Export failed: {{detail}}",
-    "importOk": "Imported and created an agent instance pool definition",
+    "importOk": "Imported and created a runtime template",
     "importOkFirstOfMany": "File has {{count}} templates; imported the first one",
     "importFailed": "Import failed: {{detail}}",
-    "deleteConfirm": "Delete this agent instance pool definition? It may be referenced by instance resources."
+    "deleteConfirm": "Delete this runtime template? It may be referenced by instance resources."
   },
   "policies": {
     "fieldRequired": "Please fill in {{field}}",
@@ -831,7 +831,7 @@
       "overview": "Product Overview",
       "guides": "Feature Guides",
       "guideAgent": "Agent Management",
-      "guidePool": "Agent Instance Pool Management",
+      "guidePool": "Runtime Template Management",
       "guideCluster": "Cluster Management"
     }
   },
@@ -853,10 +853,10 @@
     "chatLoadingSlow": "Taking longer than usual. Please wait…"
   },
   "agentTemplate": {
-    "title": "Agent Definitions",
-    "subtitle": "Maintain reusable Agent definition templates for instance binding",
-    "new": "New Agent Definition",
-    "edit": "Edit Agent Definition",
+    "title": "Agent Templates",
+    "subtitle": "Maintain reusable Agent templates for instance binding",
+    "new": "New Agent Template",
+    "edit": "Edit Agent Template",
     "templateName": "Template Name",
     "templateDescription": "Description",
     "agentTags": "Tags",

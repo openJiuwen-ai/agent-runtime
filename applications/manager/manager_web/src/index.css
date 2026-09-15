@@ -243,6 +243,14 @@ button, input, textarea, select { font: inherit; color: inherit; }
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(120%); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes toast-out {
+  from { opacity: 1; transform: translateX(0); }
+  to { opacity: 0; transform: translateX(120%); }
+}
 @keyframes pulse-subtle {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.6; }
@@ -1461,6 +1469,10 @@ button, input, textarea, select { font: inherit; color: inherit; }
 
   /* markdown 正文（marked 输出，类名手写不依赖 typography 插件） */
   .docs-body { font-size: 15px; }
+  /* 文档页顶栏 sticky 固定，锚点跳转需留出顶栏高度，否则标题会被盖住 */
+  .docs-body h1, .docs-body h2, .docs-body h3, .docs-body h4 {
+    scroll-margin-top: calc(var(--shell-topbar-height) + 1rem);
+  }
   .docs-body h1 {
     font-size: 1.75rem; font-weight: 700; color: var(--text-strong);
     margin: 0.5rem 0 1rem; padding-bottom: 0.75rem;
@@ -1565,6 +1577,10 @@ button, input, textarea, select { font: inherit; color: inherit; }
 
 .animate-rise { animation: rise 0.35s var(--ease-out) backwards; }
 .animate-spin { animation: spin 1s linear infinite; }
+
+/* Toast 从右侧滑入，关闭时滑回右侧（.leaving 期间播放离场动画） */
+.toast-item--slide { animation: toast-in 0.35s var(--ease-out) backwards; }
+.toast-item--slide.leaving { animation: toast-out 0.3s var(--ease-out) forwards; }
 
 @media (min-width: 1440px) {
   :root {

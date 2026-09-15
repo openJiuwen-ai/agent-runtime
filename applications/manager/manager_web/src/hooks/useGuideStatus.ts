@@ -54,7 +54,7 @@ export function useClusterGuideStatus(instanceId: string | null | undefined) {
   return { hasAccessUser, hasAccessOrg, hasAgentResource, hasPoolResource };
 }
 
-/** 某集群当前的引导告警项（未配置准入用户/组织、Agent、Agent实例池），供总览/列表页汇总展示。 */
+/** 某集群当前的引导告警项（未配置准入用户/组织、Agent、运行时），供总览/列表页汇总展示。 */
 export type ClusterGuideAlert = {
   labelKey: 'accessUsers' | 'accessOrgs' | 'agentResource' | 'poolResource';
   to: string;

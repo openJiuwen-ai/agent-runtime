@@ -13,17 +13,18 @@ interface Props {
 /** 实例准入：谁能进入本实例（instance_grant）。 */
 export function InstanceAccessPanel({ instanceId }: Props) {
   const { t } = useTranslation();
-  /** 引导跳转「未配置准入组织」时直接落在组织页签 */
+  /** 引导跳转「未配置准入用户」时直接落在用户页签（组织页签排在第一） */
   const openTarget = useGuideStore((s) => s.openTarget);
-  const [tab, setTab] = useState<AccessTabKey>(openTarget === 'accessOrgs' ? 'orgs' : 'users');
+  const [tab, setTab] = useState<AccessTabKey>(openTarget === 'accessUsers' ? 'users' : 'orgs');
 
   useEffect(() => {
-    if (openTarget === 'accessOrgs') setTab('orgs');
+    if (openTarget === 'accessUsers') setTab('users');
   }, [openTarget]);
 
+  /** 页签顺序：组织在前（更重要），用户在后 */
   const tabs: { key: AccessTabKey; label: string }[] = [
-    { key: 'users', label: t('instanceDetail.accessPanel.tabs.users') },
     { key: 'orgs', label: t('instanceDetail.accessPanel.tabs.orgs') },
+    { key: 'users', label: t('instanceDetail.accessPanel.tabs.users') },
   ];
 
   return (

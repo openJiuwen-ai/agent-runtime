@@ -4,7 +4,7 @@ import { useRouter } from '../router';
 import { requestGuideOpen, type GuideOpenTarget } from '../stores/guideStore';
 
 export type WarnBadgeLink = {
-  /** 提示文案（如「未配置 Agent定义」） */
+  /** 提示文案（如「未配置 Agent模板」） */
   label: string;
   /** 点击后跳转的子路径 */
   to: string;

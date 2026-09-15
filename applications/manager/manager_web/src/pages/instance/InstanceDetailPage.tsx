@@ -84,7 +84,7 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
     { key: 'audit', label: t('instanceDetail.tabs.audit'), href: `/instances/${instanceId}/audit` },
   ];
 
-  /** 「集群配置」下的子页签（Agent / Agent实例池 / 基础配置） */
+  /** 「集群配置」下的子页签（Agent / 运行时 / 基础配置） */
   const clusterConfigSubTabs: { key: InstancePageTab; label: string; href: string }[] = [
     { key: 'agentResources', label: t('instanceDetail.resourcePanel.tabs.agent'), href: `/instances/${instanceId}/agent-resources` },
     { key: 'serviceResources', label: t('instanceDetail.resourcePanel.tabs.serviceResource'), href: `/instances/${instanceId}/service-resources` },
@@ -94,7 +94,7 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
     tab === 'clusterConfig' ||
     clusterConfigSubTabs.some((it) => it.key === tab);
 
-  /** 引导状态：准入（用户/组织均未配置）、Agent 与 Agent实例池（任一未配置），提示项可点击跳转并自动打开添加弹框 */
+  /** 引导状态：准入（用户/组织均未配置）、Agent 与 运行时（任一未配置），提示项可点击跳转并自动打开添加弹框 */
   const accessWarnLinks =
     hasAccessUser === false && hasAccessOrg === false
       ? [
