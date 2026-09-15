@@ -42,13 +42,7 @@ INSTANCE_ENC_PUBKEY_TABLE_DEF = TableDefinition(
         ColumnDefinition("status", "string", length=32, nullable=False, default="bound"),
         ColumnDefinition("bound_at", "datetime", nullable=False),
         ColumnDefinition("data", "json", nullable=True),
-        # 存量库补列时需 DEFAULT；创建路径始终显式写入
-        ColumnDefinition(
-            "created_at",
-            "datetime",
-            nullable=False,
-            default="1970-01-01 00:00:00",
-        ),
+        ColumnDefinition("created_at", "datetime", nullable=False),
         ColumnDefinition("updated_at", "datetime", nullable=False),
     ],
     indexes=[

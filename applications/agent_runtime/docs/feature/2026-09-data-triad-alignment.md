@@ -33,8 +33,10 @@ ALTER TABLE service_config_container ADD COLUMN IF NOT EXISTS data json;
 ALTER TABLE a2a_access_policy_template ADD COLUMN IF NOT EXISTS data json;
 ALTER TABLE manager_identity ADD COLUMN IF NOT EXISTS data json;
 ALTER TABLE instance_enc_pubkey ADD COLUMN IF NOT EXISTS data json;
-ALTER TABLE instance_enc_pubkey ADD COLUMN IF NOT EXISTS created_at timestamp NOT NULL DEFAULT '1970-01-01 00:00:00';
-UPDATE instance_enc_pubkey SET created_at = bound_at WHERE created_at = '1970-01-01 00:00:00';
+-- created_at：先可空补列 → 用 bound_at 回填 → 再收紧 NOT NULL（TableDefinition 不写 default）
+ALTER TABLE instance_enc_pubkey ADD COLUMN IF NOT EXISTS created_at timestamp;
+UPDATE instance_enc_pubkey SET created_at = bound_at WHERE created_at IS NULL;
+ALTER TABLE instance_enc_pubkey ALTER COLUMN created_at SET NOT NULL;
 
 -- Runtime DB
 ALTER TABLE service_config_container ADD COLUMN IF NOT EXISTS data json;
@@ -46,8 +48,9 @@ ALTER TABLE link_binding_state ADD COLUMN IF NOT EXISTS data json;
 ALTER TABLE gateway_enc_keypair ADD COLUMN IF NOT EXISTS data json;
 ALTER TABLE gateway_sign_keypair ADD COLUMN IF NOT EXISTS data json;
 ALTER TABLE manager_sign_pubkey ADD COLUMN IF NOT EXISTS data json;
-ALTER TABLE manager_sign_pubkey ADD COLUMN IF NOT EXISTS created_at timestamp NOT NULL DEFAULT '1970-01-01 00:00:00';
-UPDATE manager_sign_pubkey SET created_at = bound_at WHERE created_at = '1970-01-01 00:00:00';
+ALTER TABLE manager_sign_pubkey ADD COLUMN IF NOT EXISTS created_at timestamp;
+UPDATE manager_sign_pubkey SET created_at = bound_at WHERE created_at IS NULL;
+ALTER TABLE manager_sign_pubkey ALTER COLUMN created_at SET NOT NULL;
 ```
 
-> MySQL 更早版本去掉 `IF EXISTS` 并确认列不存在后再执行。
+> MySQL 更早版本去掉 `IF EXISTS` 并确认列不存在后再执行；`ALTER COLUMN … SET NOT NULL` 语法按引擎调整。

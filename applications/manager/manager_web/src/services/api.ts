@@ -786,12 +786,14 @@ export interface UserGateway {
   gateway_endpoint: string | null;
 }
 
-/** 用户控制台：可访问的 Agent 上下文（bot_id + group_id + user_id）。 */
+/** 用户控制台：可访问的 Agent 上下文（bot_id + group_id + user_id + jiuwenclaw_id）。 */
 export interface UserAgentContext {
   bot_id: string;
   group_id: string;
   user_id: string;
   jiuwenclaw_id: string;
+  /** 实例/集群展示名 */
+  jiuwenclaw_name: string;
   agent_name: string;
   group_name: string;
 }

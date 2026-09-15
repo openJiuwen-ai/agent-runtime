@@ -32,16 +32,43 @@ def _resource(
     )
 
 
+def _instance(jiuwenclaw_id: str = "gw-1", jiuwenclaw_name: str = "") -> SimpleNamespace:
+    return SimpleNamespace(
+        jiuwenclaw_id=jiuwenclaw_id,
+        jiuwenclaw_name=jiuwenclaw_name or jiuwenclaw_id,
+    )
+
+
+def _filter_resources(table: str, resources: list[SimpleNamespace], args, kwargs):
+    if table == "instance_info":
+        return []
+    filters = kwargs.get("filters")
+    if filters is None and len(args) >= 1 and isinstance(args[0], dict):
+        filters = args[0]
+    if not isinstance(filters, dict):
+        return resources
+    jid = filters.get("jiuwenclaw_id")
+    if not jid:
+        return resources
+    return [r for r in resources if r.jiuwenclaw_id == jid]
+
+
 @pytest.mark.asyncio
 async def test_enumerates_matching_group_and_user_contexts() -> None:
+    resources = [
+        _resource(resource_id="bot-sales", resource_name="Sales", match_expr="group_id in ('g-sales')"),
+        _resource(resource_id="bot-alice", resource_name="Alice", match_expr="user_id == 'alice'"),
+        _resource(resource_id="bot-all", resource_name="All", match_expr=[]),
+    ]
+    instances = [_instance("gw-1", "集群一号")]
+
+    async def list_records(table: str, *args, **kwargs):
+        if table == "instance_info":
+            return instances
+        return _filter_resources(table, resources, args, kwargs)
+
     handler = AsyncMock()
-    handler.list_records = AsyncMock(
-        return_value=[
-            _resource(resource_id="bot-sales", resource_name="Sales", match_expr="group_id in ('g-sales')"),
-            _resource(resource_id="bot-alice", resource_name="Alice", match_expr="user_id == 'alice'"),
-            _resource(resource_id="bot-all", resource_name="All", match_expr=[]),
-        ]
-    )
+    handler.list_records = AsyncMock(side_effect=list_records)
     service = UserConsoleService(handler)
 
     with (
@@ -76,6 +103,7 @@ async def test_enumerates_matching_group_and_user_contexts() -> None:
     assert ("bot-all", "g-sales", "alice") in keys
     assert ("bot-all", "g-other", "alice") in keys
     assert all(x["jiuwenclaw_id"] == "gw-1" for x in result)
+    assert all(x["jiuwenclaw_name"] == "集群一号" for x in result)
     sales = next(x for x in result if x["bot_id"] == "bot-sales")
     assert sales["agent_name"] == "Sales"
     assert sales["group_name"] == "销售组"
@@ -83,10 +111,16 @@ async def test_enumerates_matching_group_and_user_contexts() -> None:
 
 @pytest.mark.asyncio
 async def test_no_org_uses_none_group_context() -> None:
+    resources = [_resource(resource_id="bot-1", match_expr=[])]
+    instances = [_instance("gw-1", "Debug Cluster")]
+
+    async def list_records(table: str, *args, **kwargs):
+        if table == "instance_info":
+            return instances
+        return _filter_resources(table, resources, args, kwargs)
+
     handler = AsyncMock()
-    handler.list_records = AsyncMock(
-        return_value=[_resource(resource_id="bot-1", match_expr=[])]
-    )
+    handler.list_records = AsyncMock(side_effect=list_records)
     service = UserConsoleService(handler)
 
     with (
@@ -108,6 +142,7 @@ async def test_no_org_uses_none_group_context() -> None:
             "jiuwenclaw_id": "gw-1",
             "agent_name": "bot-1",
             "group_name": "无组织",
+            "jiuwenclaw_name": "Debug Cluster",
         }
     ]
 
@@ -144,7 +179,7 @@ async def test_admin_lists_all_instances_without_admission() -> None:
 
     async def list_records(table: str, *_args, **_kwargs):
         if table == "instance_info":
-            return [SimpleNamespace(jiuwenclaw_id="gw-admin")]
+            return [SimpleNamespace(jiuwenclaw_id="gw-admin", jiuwenclaw_name="管理集群")]
         return [_resource(resource_id="bot-admin", jiuwenclaw_id="gw-admin", match_expr=[])]
 
     handler.list_records = AsyncMock(side_effect=list_records)
@@ -163,7 +198,7 @@ async def test_admin_lists_all_instances_without_admission() -> None:
             "admin", ["g-any"], is_admin=True, authorization="Bearer t"
         )
 
-    assert [(x["bot_id"], x["group_id"], x["group_name"]) for x in result] == [
-        ("bot-admin", "g-any", "任意组")
+    assert [(x["bot_id"], x["group_id"], x["group_name"], x["jiuwenclaw_name"]) for x in result] == [
+        ("bot-admin", "g-any", "任意组", "管理集群")
     ]
     is_admitted.assert_not_awaited()

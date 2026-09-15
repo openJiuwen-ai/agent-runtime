@@ -1,7 +1,7 @@
 """用户控制台业务逻辑：当前用户可访问的 Agent 上下文组合。
 
 instance_grant 在 core/instance_access；instance_agent_resource 在 core/instance_resource。
-返回 (bot_id, group_id, user_id) 组合；任选其一即可访问对应 Agent。
+返回 (bot_id, group_id, user_id, jiuwenclaw_id) 组合；任选其一即可访问对应 Agent。
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from manager_server.infrastructure.utils import utc_now
 from manager_server.models.instance_resource_models import INSTANCE_AGENT_RESOURCE_TABLE_DEF
 
 _GRANT = INSTANCE_AGENT_RESOURCE_TABLE_DEF.table_name
+_INSTANCE_INFO = "instance_info"
 _CAP = 100_000
 _NO_ORG_GROUP_ID = "__none__"
 
@@ -100,8 +101,8 @@ class UserConsoleService:
     ) -> list[dict[str, Any]]:
         """返回用户可选用的上下文列表。
 
-        业务键均为 id：``bot_id`` / ``group_id`` / ``user_id``。
-        展示字段：``agent_name``（资源表）/ ``group_name``（身份中心，与组织列表同次查询得到）。
+        业务键均为 id：``bot_id`` / ``group_id`` / ``user_id`` / ``jiuwenclaw_id``。
+        展示字段：``agent_name`` / ``group_name`` / ``jiuwenclaw_name``。
         """
         uid = str(user_id or "").strip()
         if not uid:
@@ -128,12 +129,14 @@ class UserConsoleService:
         if not admitted:
             return []
 
-        seen: set[tuple[str, str, str]] = set()
+        name_by_jid = await self._instance_display_names(admitted)
+        seen: set[tuple[str, str, str, str]] = set()
         out: list[dict[str, Any]] = []
         for jid in sorted(admitted):
             rows = await self._h.list_records(
                 _GRANT, {"jiuwenclaw_id": jid}, limit=_CAP, offset=0
             )
+            cluster_name = name_by_jid.get(jid) or jid
             for r in rows:
                 if not bool(_g(r, "enabled", True)) or _grant_expired(_g(r, "expires_at")):
                     continue
@@ -150,7 +153,7 @@ class UserConsoleService:
                         )
                     ):
                         continue
-                    key = (bot_id, group_id, uid)
+                    key = (bot_id, group_id, uid, jid)
                     if key in seen:
                         continue
                     seen.add(key)
@@ -162,23 +165,40 @@ class UserConsoleService:
                             "jiuwenclaw_id": jid,
                             "agent_name": agent_name,
                             "group_name": group_name,
+                            "jiuwenclaw_name": cluster_name,
                         }
                     )
         out.sort(
             key=lambda x: (
                 str(x.get("agent_name") or ""),
                 str(x.get("group_name") or ""),
+                str(x.get("jiuwenclaw_name") or ""),
                 str(x.get("bot_id") or ""),
                 str(x.get("group_id") or ""),
+                str(x.get("jiuwenclaw_id") or ""),
             )
         )
+        return out
+
+    async def _instance_display_names(self, jids: set[str]) -> dict[str, str]:
+        """``jiuwenclaw_id`` → ``jiuwenclaw_name``（缺省回退为 id）。"""
+        if not jids:
+            return {}
+        rows = await self._h.list_records(_INSTANCE_INFO, {}, limit=_CAP, offset=0)
+        out: dict[str, str] = {}
+        for r in rows:
+            jid = str(_g(r, "jiuwenclaw_id") or "").strip()
+            if jid not in jids:
+                continue
+            name = str(_g(r, "jiuwenclaw_name") or "").strip() or jid
+            out[jid] = name
         return out
 
     async def _admitted_instance_ids(
         self, user_id: str, member_groups: set[str], *, is_admin: bool
     ) -> set[str]:
         if is_admin:
-            rows = await self._h.list_records("instance_info", {}, limit=_CAP, offset=0)
+            rows = await self._h.list_records(_INSTANCE_INFO, {}, limit=_CAP, offset=0)
             return {
                 str(_g(r, "jiuwenclaw_id") or "").strip()
                 for r in rows
