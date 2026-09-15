@@ -21,9 +21,6 @@ RUN npm run build
 # ---------- 阶段2:nginx 运行 ----------
 FROM ${NGINX_IMAGE}
 
-# 变量 proxy_pass 需要 resolver；部署方可覆盖为集群 DNS
-ENV MANAGER_WEB_RESOLVER=127.0.0.11
-
 COPY docker/manager-web.nginx.conf.template /etc/nginx/templates/default.conf.template
 COPY --from=web-builder /build/applications/manager/manager_web/dist \
      /app/agent-runtime/applications/manager/manager_web/dist
