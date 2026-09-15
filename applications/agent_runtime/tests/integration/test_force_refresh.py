@@ -10,9 +10,11 @@
 用例:
 - R1  全量自然周期(日落 → 排空 → 重建)
 - R2  重复刷新收敛(非幂等但终态唯一)
-- R3  刷新排空期内下发的守卫行为(B 类放行 / A 类按日落中间态 409,排空后放行)
+- R3  刷新排空期内下发的守卫行为(B/A 类均放行;守卫基准=当前生效版本)
 - R4  重建使用 RM 缓存的存量 pod_spec(配置零变化)
 - R5  refresh 串行闸门(老代回收前再刷 409,回收后放行;判据=代次)
+- R6  reclaim 两级回收:ver/gen 落后免老化即刻回收(③)
+- R7  reclaim 两级回收:当前版本超额仍 aged ≥ pod_ttl(③ 对照)
 """
 
 from __future__ import annotations
@@ -136,12 +138,14 @@ async def test_R2_repeat_refresh_converges(runtime):
 
 @requires_lua
 async def test_R3_refresh_then_sync_guard_semantics(runtime):
-    """R3:刷新排空期内的下发守卫——B 类(同版本)放行;A 类(换版本)按既有
-    日落中间态语义 409,老代 Pod 回收后放行。
+    """R3:刷新排空期内的下发守卫——基准=当前生效版本,B/A 类均放行。
 
-    守卫按版本判定(不看代次):老代 Pod 版本与当前配置一致 → B 类不可见;
-    A 类新版本 ≠ 老 Pod 版本 → 可见 → 409(与 M 期 A-类叠 A-类行为一致,
-    防不可归因的混合态;B 类不受阻 = C1a/C1b 同款病理边界)。
+    2026-09-15 修正:原判据比**新载荷**版本——A 类(换版本)时当前代空闲 Pod
+    必然 ≠ 新版被误判日落遗留;而它 ver==cfg 受 min_idle 底数保护永不回收,
+    等它 = 配置面永久 409(cyz 实测:暖 Pod idle 33min ≫ pod_ttl 仍 409)。
+    修正后与 refresh 闸门比当前代次同构,只拦 ver ≠ 当前配置的真版本遗留
+    (见 test_config_sync_rejects_when_sunset_pending)。A 类放行后由扩散②
+    软摘 + reclaim 免老化即刻回收老代 Pod(③,无需等 pod_ttl)。
     """
     await runtime.seed_template(
         agent_image="agentserver:1.0", session_ttl=1, pod_ttl=2)
@@ -154,18 +158,14 @@ async def test_R3_refresh_then_sync_guard_semantics(runtime):
         _tpl(agent_image="agentserver:1.0", session_ttl=99, pod_ttl=2)))
     assert b["ok"] is True
 
-    # A 类(镜像变 → deploy_ver 变)→ 日落中间态 409(老代 Pod 版本可见)
-    with pytest.raises(ConfigSyncBusy):
-        await runtime.config_store.config_sync(_sync_payload(
-            _tpl(agent_image="agentserver:2.0", pod_ttl=2)))
-
-    # 老代回收后 → A 类放行,池收敛到新版本
-    await asyncio.sleep(2.2)
-    await runtime.rm_sweeper.reclaim_once()
-    assert old_pod not in await runtime.rm_state.all_pod_ids()
+    # A 类(镜像变 → deploy_ver 变)→ 同样放行(老代 Pod ver==当前配置,不可见)
     a = await runtime.config_store.config_sync(_sync_payload(
         _tpl(agent_image="agentserver:2.0", pod_ttl=2)))
     assert a["ok"] is True
+
+    # 老代 Pod:ver/gen 均落后于新 cfg → stale 免老化即刻回收(无需 sleep 过 pod_ttl)
+    await runtime.rm_sweeper.reclaim_once()
+    assert old_pod not in await runtime.rm_state.all_pod_ids()
     cfg = await runtime.rm_state.load_scope_config(SCOPE)
     assert "agentserver:2.0" in cfg["pod_spec_json"]
 
@@ -220,3 +220,100 @@ async def test_R5_refresh_serialized_until_sunset_done(runtime):
     r2 = await runtime.config_store.config_refresh()
     assert r2["generations"] == {SCOPE: 2}
     assert runtime.gen_bumps == [SCOPE, SCOPE]
+
+
+# ---------------------------------------------------- R6/R7:reclaim 两级回收(③)
+
+@requires_lua
+async def test_R6_reclaim_stale_immediate_no_aging(runtime):
+    """R6(③ 2026-09-15):ver/gen 落后的 idle Pod 免老化即刻回收。
+
+    pod_ttl=60 远未到龄,老代 Pod(gen 落后)转 idle 后同拍回收——旧版/旧代
+    被 acquire 的 want_ver+generation 过滤判死,零复用价值,蹲满剩余 pod_ttl
+    只白占 max_pods 槽位并拖长 config_sync/refresh 日落闸门的等待。
+    当前版本超额的老化义务见 R7。"""
+    await runtime.seed_template(min_idle_pods=1, session_ttl=1, pod_ttl=60)
+    await runtime.route("sess_1")
+    await runtime.config_store.config_refresh()
+    old_pod = await _natural_idle(runtime)       # 老代 idle,aged ≈ 0 ≪ pod_ttl=60
+    await runtime.rm_sweeper.reclaim_once()      # 同拍回收,不等 pod_ttl
+    assert old_pod not in await runtime.rm_state.all_pod_ids()
+
+
+@requires_lua
+async def test_R7_reclaim_warm_overflow_still_ages(runtime):
+    """R7(③ 对照):当前版本超额(超 min_idle 底数)仍须 aged ≥ pod_ttl——
+    抗「马上会被复用」的抖动;即刻回收只给零复用价值的落后 Pod。"""
+    await runtime.seed_template(
+        min_idle_pods=1, pod_concurrency=1, session_ttl=1, pod_ttl=2)
+    await runtime.route("sess_a")
+    await runtime.route("sess_b")                # pc=1 → 各占一只 Pod
+    await asyncio.sleep(1.6)                     # 会话自然到期
+    await runtime.sm_sweeper.sweep_once()        # 空 Pod pass → 双双转 idle
+    for _ in range(100):
+        if len(await runtime.rm_state.idle_pods(SCOPE)) >= 2:
+            break
+        await asyncio.sleep(0.02)
+    both = set(await runtime.rm_state.all_pod_ids())
+    assert len(both) == 2
+    await runtime.rm_sweeper.reclaim_once()      # 未到龄 → 全保留(底数 + 抗抖)
+    assert set(await runtime.rm_state.all_pod_ids()) == both
+    await asyncio.sleep(2.2)                     # 真等过 pod_ttl=2
+    await runtime.rm_sweeper.reclaim_once()
+    assert len(set(await runtime.rm_state.all_pod_ids())) == 1   # 溢出者走,底数留
+
+
+# ------------------------------------------- R8:闸门过滤候选集内老代 Pod(竞态)
+
+@requires_lua
+async def test_R8_refresh_gate_skips_busy_lagged_pod_in_candidates(runtime):
+    """R8(2026-09-15):日落 ZREM 与并发 follower 复用的 REGISTER_POD 竞态把
+    老代 Pod 重新登记回候选集 → 闸门不拦在集老代 Pod(在集=合法服务中,等它
+    =等会话生命周期;e2e 15s 连刷 409 连坐 2min+ 实录)。放行后自愈闭环:
+    全量软摘除把它 ZREM 出集 → reconcile 入 idle → reclaim stale 即刻回收。"""
+    await runtime.seed_template(min_idle_pods=1, session_ttl=60, pod_ttl=60)
+    r1 = await runtime.route("sess_1")
+    pod = r1["pod_id"]
+    r = await runtime.config_store.config_refresh()     # gen 1:全量软摘除
+    assert r["generations"] == {SCOPE: 1}
+    # 竞态形态:并发 follower 复用把老代 Pod REGISTER 回候选集(真实 API)
+    url = await runtime.sm_state.pod_sse_url(SCOPE, pod)
+    ver = await runtime.sm_state.pod_deploy_ver(SCOPE, pod)
+    await runtime.sm_state.register_pod(SCOPE, pod, url, ver)
+    assert pod in await runtime.sm_state.scope_pod_ids(SCOPE)
+    # 老行为:409 等会话结束;修正后:在集不拦 → 放行(gen 2)
+    r2 = await runtime.config_store.config_refresh()
+    assert r2["generations"] == {SCOPE: 2}
+    # 自愈闭环:软摘除摘出 → reconcile release 入 idle → stale 即刻回收
+    # (pod_ttl=60 远未到;会话硬切重放置,决策接受)
+    await runtime.rm_sweeper.reconcile_once()
+    await runtime.rm_sweeper.reclaim_once()
+    assert pod not in await runtime.rm_state.all_pod_ids()
+
+
+# ------------------------------------------- R8:闸门过滤候选集内老代 Pod(竞态)
+
+@requires_lua
+async def test_R8_refresh_gate_skips_busy_lagged_pod_in_candidates(runtime):
+    """R8(2026-09-15):日落 ZREM 与并发 follower 复用的 REGISTER_POD 竞态把
+    老代 Pod 重新登记回候选集 → 闸门不拦在集老代 Pod(在集=合法服务中,等它
+    =等会话生命周期;e2e 15s 连刷 409 连坐 2min+ 实录)。放行后自愈闭环:
+    全量软摘除把它 ZREM 出集 → reconcile 入 idle → reclaim stale 即刻回收。"""
+    await runtime.seed_template(min_idle_pods=1, session_ttl=60, pod_ttl=60)
+    r1 = await runtime.route("sess_1")
+    pod = r1["pod_id"]
+    r = await runtime.config_store.config_refresh()     # gen 1:全量软摘除
+    assert r["generations"] == {SCOPE: 1}
+    # 竞态形态:并发 follower 复用把老代 Pod REGISTER 回候选集(真实 API)
+    url = await runtime.sm_state.pod_sse_url(SCOPE, pod)
+    ver = await runtime.sm_state.pod_deploy_ver(SCOPE, pod)
+    await runtime.sm_state.register_pod(SCOPE, pod, url, ver)
+    assert pod in await runtime.sm_state.scope_pod_ids(SCOPE)
+    # 老行为:409 等会话结束;修正后:在集不拦 → 放行(gen 2)
+    r2 = await runtime.config_store.config_refresh()
+    assert r2["generations"] == {SCOPE: 2}
+    # 自愈闭环:软摘除摘出 → reconcile release 入 idle → stale 即刻回收
+    # (pod_ttl=60 远未到;会话硬切重放置,决策接受)
+    await runtime.rm_sweeper.reconcile_once()
+    await runtime.rm_sweeper.reclaim_once()
+    assert pod not in await runtime.rm_state.all_pod_ids()

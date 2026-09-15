@@ -906,14 +906,22 @@ class ConfigStore:
         )
 
         # ---- 日落中间态检查（★先于写库：拒绝时 DB/Redis 均未动；沿用 M 期语义，
-        #      对全部受影响 scope 生效）。判定**按版本**：registered∖candidates
-        #      同时是 idle_consider 的合法中间态（HLD §5.1），只有其中
-        #      deploy_ver ≠ 新版本的才是真「日落待回收」——按集合形状判定会把
-        #      正常空闲 Pod 误当日落遗留，min_idle≥1 时（底数保护永不回收）
-        #      变成配置面永久 409。
+        #      对全部受影响 scope 生效）。判定**按版本**，基准是**当前生效版本**
+        #      （= 上次落库已承诺排空的版本，与 config_refresh 闸门比当前代次
+        #      同构）：registered∖candidates 中 deploy_ver ≠ 当前版本的才是真
+        #      「日落待回收」。**不比新载荷版本**——版本变更下发时，当前代空闲
+        #      Pod 必然 ≠ 新版本，会被误判成遗留；而它 ver==cfg 受 min_idle 底数
+        #      保护不会被回收，等它 = 配置面永久 409（2026-09-15 cyz 实测：暖 Pod
+        #      idle 33min ≫ pod_ttl=180s 仍不回收、sync 持续 409）。ver==当前版本
+        #      的离集 Pod 是 idle_consider 合法中间态（HLD §5.1），本次落库后由
+        #      扩散②软摘 + reclaim 版本感知即刻回收。新 scope / legacy 无版本 →
+        #      无已承诺排空，放行（与 _current_version_idle 的 legacy 口径一致）。
         for sid in affected:
-            new_ver = templates_in[scopes_in[sid].template_id].deploy_ver()
-            pending = await self._sunset_pending_pods(sid, new_ver)
+            old_scope = old_scopes.get(sid)
+            old_tpl = (old_templates.get(old_scope.template_id)
+                       if old_scope else None)
+            cur_ver = old_tpl.deploy_ver() if old_tpl else ""
+            pending = await self._sunset_pending_pods(sid, cur_ver)
             if pending:
                 raise ConfigSyncBusy(
                     f"scope {sid} still has sunset pods pending reclaim: {pending}"
@@ -1065,9 +1073,21 @@ class ConfigStore:
         #      小 max_pods 时滚动窗口被焊死（2026-09-11 wangchang 环境 9 分钟
         #      4 连刷把 2/2 槽位堵满 2.5 分钟实录）。回收由 reclaim 代次感知
         #      保证收敛（test_force_refresh.py R1/R2），闸门不会永久 409。
+        #      **候选集内的老代 Pod 不拦**（2026-09-15 e2e 实测竞态）：日落
+        #      ZREM 与并发 follower 复用的 REGISTER_POD 同秒交错时老代 Pod 被
+        #      重新登记回候选集，带着持续 touch 的会话永不被 reconcile release/
+        #      回收（在集=合法服务中），闸门等它=等会话生命周期（600s 会话
+        #      15s 连刷 409 连坐 2min+ 实录）。放行语义与 config_sync 闸门跳过
+        #      在集 Pod 一致；且自愈闭环：本次 refresh 的全量软摘除把它 ZREM
+        #      出集 → reconcile ≤30s release 入 idle → reclaim stale 免老化
+        #      即刻回收（会话硬切重放置，2026-09-15 决策接受）。
         if self._sunset_pending is not None:
             for scope in scopes:
                 pending = await self._sunset_pending(scope.scope_id)
+                if pending:
+                    in_candidates = set(
+                        await self.state.scope_pod_ids(scope.scope_id))
+                    pending = [p for p in pending if p not in in_candidates]
                 if pending:
                     raise ConfigSyncBusy(
                         f"scope {scope.scope_id} still has sunset pods "
@@ -1195,13 +1215,19 @@ class ConfigStore:
             await self.state.redis.zrem(self.state.k.scope_pods(scope_id), pod_id)
         return removed
 
-    async def _sunset_pending_pods(self, scope_id: str, new_deploy_ver: str) -> list[str]:
-        """日落中间态判定：registered∖candidates 中 deploy_ver ≠ 新版本的 Pod。
+    async def _sunset_pending_pods(self, scope_id: str, cur_deploy_ver: str) -> list[str]:
+        """日落中间态判定：registered∖candidates 中 deploy_ver ≠ 当前生效版本的 Pod。
 
-        registered∖candidates 也是 idle_consider 的合法中间态（其 Pod 版本
-        与当前一致），不计入；版本不同才是「已软摘除、待 reclaim 回收」的
-        真日落遗留。info 已缺失的条目（幽灵）无法归因，不计入。
+        当前生效版本 = 上次落库已承诺排空的基准（**不是**本次新载荷版本——
+        版本变更时当前代空闲 Pod 必然 ≠ 新版，会被误判遗留；min_idle≥1 时
+        底数保护使它永不回收 → 永久 409）。ver == 当前版本的离集 Pod 是
+        idle_consider 的合法中间态，不计入（本次落库后由扩散②软摘）；
+        版本不同才是「上轮变更已软摘、reclaim 排空中」的真日落遗留。
+        基准为空（新 scope / legacy 手写配置）→ 无已承诺排空，一律不计入。
+        info 已缺失的条目（幽灵）无法归因，不计入。
         """
+        if not cur_deploy_ver:
+            return []
         registered = await self.state.registered_pods()
         prefix = f"{scope_id}:"
         in_candidates = set(await self.state.scope_pod_ids(scope_id))
@@ -1213,6 +1239,6 @@ class ConfigStore:
             if pod_id in in_candidates:
                 continue
             ver = await self.state.pod_deploy_ver(scope_id, pod_id)
-            if ver and ver != new_deploy_ver:
+            if ver and ver != cur_deploy_ver:
                 pending.append(pod_id)
         return pending

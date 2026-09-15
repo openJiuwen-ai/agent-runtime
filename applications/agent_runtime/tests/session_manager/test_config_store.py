@@ -395,6 +395,31 @@ async def test_config_sync_rejects_when_sunset_pending(runtime):
 
 
 @requires_lua
+async def test_config_sync_a_class_passes_with_current_version_idle_pod(runtime):
+    """当前代空闲 Pod(idle_consider 合法中间态)不得阻塞版本变更下发。
+
+    2026-09-15 cyz 实测病理:原判据比**新载荷**版本——版本变更时当前代空闲
+    Pod 必然 ≠ 新版,被误判日落遗留;而它 ver==cfg 受 min_idle 底数保护永不
+    回收,等它 = 配置面永久 409(暖 Pod idle 33min ≫ pod_ttl=180s 仍 409)。
+    修正后基准=当前生效版本 → 放行;老 Pod 落库后被扩散②软摘,reconcile
+    转入 idle 池,reclaim 免老化即刻回收(带会话硬切重放置,决策接受)。"""
+    await runtime.seed_template(min_idle_pods=1)
+    await runtime.route("sess_1")
+    pod_id = (await runtime.sm_state.registered_pods())[0].split(":", 1)[1]
+    # 合法中间态:软摘出候选集;版本保持当前值(对照上例,不伪造旧版本号)
+    await runtime.sm_state.redis.zrem(runtime.sm_state.k.scope_pods(SCOPE), pod_id)
+    result = await runtime.config_store.config_sync(_payload(
+        [_tpl("tpl-1", agent_image="agentserver:2.0")],
+        [_scope(SCOPE, "tpl-1")],
+    ))
+    assert result["ok"] is True
+    # 落库后闭环:扩散②软摘(已在集外)+ reconcile 转 idle + reclaim 即刻回收
+    await runtime.rm_sweeper.reconcile_once()
+    await runtime.rm_sweeper.reclaim_once()
+    assert pod_id not in await runtime.rm_state.all_pod_ids()
+
+
+@requires_lua
 def _flaky_write_factory(db_handler, fail_on_write: int):
     """包装 session_factory:第 fail_on_write 次**写语句**(Insert/Update/Delete)
     抛 OperationalError——注入点在事务内部,考验回滚与红线(读语句放行)。"""

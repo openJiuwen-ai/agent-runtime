@@ -157,9 +157,12 @@ lock:config_sync 串行化(忙→409 CONFIG_SYNC_BUSY;基线 TTL 60 + **看门�
   (DB 单事务收敛);unlock 失败只记日志,不把成功变 500/不吞原异常)
 → 读 DB 旧态(containers + templates(双形态水合) + scopes)
 → diff:模板 changed_ids(_diff_class 沿用)/ 引用切换 ref_switched → affected
-→ 日落中间态检查(★先于写库,拒绝时零副作用;★按版本判定:registered∖candidates
-  且 deploy_ver ≠ 新版本的才是真日落残留——该集合差同时是 idle_consider 合法
-  中间态,按形状判定会误拒正常空闲 Pod,min_idle≥1 时变配置面永久 409)
+→ 日落中间态检查(★先于写库,拒绝时零副作用;★按版本判定,**基准=当前生效
+  版本**(2026-09-15 修正,原比新载荷版本——版本变更时当前代空闲 Pod 必然
+  ≠ 新版被误判遗留,而它受 min_idle 底数保护永不回收 → 永久 409,cyz 实测):
+  registered∖candidates 且 deploy_ver ≠ 当前生效版本的才是真日落残留;
+  ver==当前版本的离集 Pod 是 idle_consider 合法中间态,落库后由扩散②软摘+
+  reclaim 即刻回收;新 scope/legacy 无版本 → 放行)
 → 写 DB(**单事务全有或全无**——`_db_session()`(=handler session_factory)+
   `_upsert_row_tx/_delete_tx`(get_table Core 原语);多步独立提交的中途失败会留
   半同步 DB,重启 ensure_snapshot 把混合态固化成路由快照;顺序:先 upsert 容器
@@ -190,10 +193,13 @@ lock:config_sync 串行化(忙→409 CONFIG_SYNC_BUSY;基线 TTL 60 + **看门�
 锁内逐 DB 存活 scope(幻影 scope 归扩散③ drain;模板缺失的悬挂 scope 跳过+WARNING):
   ⓪ 前置日落中间态检查:rm_facade.sunset_pending_pods(sid)——scope 注册 Pod 中
      generation ≠ 当前配置代次的(busy 排空/idle 待回收均计;判据是代次而非
-     deploy_ver——refresh 不改配置值,版本判定对 refresh 日落失明)。非空 →
-     409 CONFIG_SYNC_BUSY,拒绝时 DB/Redis 零副作用(回收由 reclaim 代次感知
-     保证收敛,闸门不会永久 409;防连续 refresh 多代日落堆积蹲占 max_pods——
-     2026-09-11 wangchang 环境 9 分钟 4 连刷实录)
+     deploy_ver——refresh 不改配置值,版本判定对 refresh 日落失明),再过滤掉
+     仍在 SM 候选集内的(2026-09-15:日落 ZREM 与并发 follower REGISTER 竞态
+     重入集的老代 Pod 还在合法服务,等它=等会话生命周期;在集不拦与 sync 闸门
+     跳过在集 Pod 一致,放行后的全量软摘除会摘它出集交 reconcile/reclaim 收敛)。
+     非空 → 409 CONFIG_SYNC_BUSY,拒绝时 DB/Redis 零副作用(回收由 reclaim
+     代次感知保证收敛,闸门不会永久 409;防连续 refresh 多代日落堆积蹲占
+     max_pods——2026-09-11 wangchang 环境 9 分钟 4 连刷实录)
   ① bump_generation(sid)(rm_facade → HINCRBY scope:config generation;严格,失败上抛)
   ② _push_or_warn(sid, pool_config, deploy_subset)(值未变,确保 RM 缓存就绪;失败仅告警——良性)
   ③ _soft_remove_all_pods(sid)(候选集全量 ZREM,不按版本过滤;严格)
@@ -203,7 +209,7 @@ lock:config_sync 串行化(忙→409 CONFIG_SYNC_BUSY;基线 TTL 60 + **看门�
 - **顺序红线 bump → ZREM**:"ZREM 而未 bump"会造出"被摘却仍是当前代次 warm"的搁浅态(min_idle 底数保护 → 永久蹲占 max_pods 且不重建);bump 在前的任何中途失败都收敛于"老 Pod 暂时继续接新流量",重试即收敛。
 - 不写 DB、不动路由快照;日落收敛/重建全复用既有后台任务(reclaim 代次感知回收 + autoscale 按缓存 pod_spec 重建,见 resource-manager spec)。
 - `pods_sunset` 只计 SM 候选集摘除量(未入候选的 RM 暖 Pod 不计但同样被代次日落)。
-- **非幂等但收敛**(每次调用 = 一轮全量日落重建,成功后勿自动重试);config_sync 的日落中间态守卫**不扩展**看 generation——老代 Pod 版本与当前配置相等 → 对守卫不可见 → B 类/同版本下发不 409;A 类(换版本)照旧 409 到排空完成(与 M 期 A-叠-A 一致)。
+- **非幂等但收敛**(每次调用 = 一轮全量日落重建,成功后勿自动重试);config_sync 的日落中间态守卫基准=**当前生效版本**、不扩展看 generation——老代 Pod 版本与当前配置相等 → 对守卫不可见 → B 类/A 类下发均不因此 409(2026-09-15 修正;原「A 类照旧 409 到排空完成」在老代 Pod 受 min_idle 底数保护时永不放行=配置面永久 409)。A 类落库后由扩散②软摘 + reclaim 版本感知即刻回收老代 Pod。
 - 构造注入:`ConfigStore(..., bump_generation=rm_facade.bump_generation)`(`main._bind_modules`)。
 
 ## sweeper.py —— 老化扫描

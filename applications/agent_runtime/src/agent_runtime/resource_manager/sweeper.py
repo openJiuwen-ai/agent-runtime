@@ -6,8 +6,10 @@ SystemContext.create_single_leader_job 注入。均 per-scope 操作，不读 SM
 Redis key（跨模块数据只走 Facade）：
 
 - autoscale（场景 H）：idle < min_idle_pods 且未达 max_pods → 占位 deploy 热备。
-- reclaim（场景 K）：idle 池 excess（超 min_idle 底数）中 aged ≥ pod_ttl →
-  K8s delete + PURGE + notify_pod_dead。安全性靠 SM 侧 ZREM 契约，不读 SM。
+- reclaim（场景 K）：idle 池 excess 两级回收——旧版本/旧代次（ver/gen ≠ 当前
+  配置，acquire 过滤判死零复用价值）**免老化即刻回收**；当前版本超额（超
+  min_idle 底数）aged ≥ pod_ttl（抗复用抖动）后回收。均 K8s delete + PURGE +
+  notify_pod_dead。安全性靠 SM 侧 ZREM 契约，不读 SM。
 - watch（场景 J/N，10s）：死 Pod 轮询（判死枚举）+ AgentServer /health 健康探测
   （连续 2 次失败判半死）→ 按死 Pod 清理。
 - reconcile（场景 L，30s）：Redis↔K8s 孤儿对账 + RM↔SM stale Pod 对账（经 Facade）。
@@ -223,7 +225,8 @@ class ResourceSweeper:
                     # 恒为 excess——否则 A 类变更或 config_refresh 后旧暖 Pod 被底数
                     # 永久保护，暖池钉死旧版且蹲占 max_pods 槽位
                     warm = await self._current_version_idle(scope_id, cfg, idle)
-                    stale = sorted(set(idle) - set(warm))
+                    stale_set = set(idle) - set(warm)
+                    stale = sorted(stale_set)
                     if not stale and len(idle) <= min_idle:
                         # 回到稳态：上一拍还有 excess 时打一条收敛留痕
                         if self._reclaim_state.get(scope_id):
@@ -239,8 +242,9 @@ class ResourceSweeper:
                     sig = tuple(excess)
                     if self._reclaim_state.get(scope_id) != sig:
                         ages = [now - aged[p] for p in excess if aged.get(p)]
-                        due = sum(
-                            1 for p in excess
+                        overflow = ranked_warm[min_idle:]
+                        due = len(stale) + sum(
+                            1 for p in overflow
                             if aged.get(p) and now - aged[p] >= pod_ttl
                         )
                         logger.info(
@@ -251,8 +255,16 @@ class ResourceSweeper:
                             pod_ttl, ",".join(excess),
                         )
                         self._reclaim_state[scope_id] = sig
+                    # 两级回收：stale（ver/gen 落后）免老化即刻回收——acquire 的
+                    # want_ver+generation 过滤已判死刑，零复用价值，蹲满剩余
+                    # pod_ttl 只白占 max_pods 槽位并拖长 config_sync/refresh 日落
+                    # 闸门的等待（含扩散后仍带会话的 Pod：会话被硬切重放置，
+                    # 2026-09-15 决策接受）；当前版本超额保留 pod_ttl 老化，抗
+                    # 「马上会被复用」的抖动（真镜像冷启动 p50≈12s）。
                     for pod_id in excess:
-                        if aged[pod_id] and now - aged[pod_id] >= pod_ttl:
+                        if pod_id in stale_set or (
+                                aged.get(pod_id)
+                                and now - aged[pod_id] >= pod_ttl):
                             await self._reclaim_pod(pod_id, scope_id)
                             reclaimed += 1
                 except Exception:  # noqa: BLE001 - per-scope 隔离，下拍重试
