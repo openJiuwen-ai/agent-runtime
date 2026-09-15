@@ -1,0 +1,26 @@
+ARG NODE_IMAGE=node:20-alpine
+ARG NGINX_IMAGE=nginx:1.27-alpine
+
+# ---------- 阶段1:前端构建 ----------
+FROM ${NODE_IMAGE} AS web-builder
+
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+ENV NPM_CONFIG_REGISTRY=${NPM_REGISTRY}
+ARG VITE_PRODUCT_NAME=JiuwenSwarm
+ENV VITE_PRODUCT_NAME=${VITE_PRODUCT_NAME}
+
+WORKDIR /build/applications/observability/web
+COPY applications/observability/web/package.json applications/observability/web/package-lock.json ./
+RUN npm install
+
+COPY applications/observability/web/ ./
+RUN npm run build
+
+# ---------- 阶段2:nginx 运行 ----------
+FROM ${NGINX_IMAGE}
+
+COPY docker/observability.nginx.conf.template /etc/nginx/templates/default.conf.template
+COPY --from=web-builder /build/applications/observability/web/dist \
+     /app/agent-runtime/applications/observability/web/dist
+
+EXPOSE 5274
