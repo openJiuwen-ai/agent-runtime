@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from datetime import datetime
 from typing import Any
 
@@ -17,7 +16,7 @@ from manager_server.core.template.push_template_to_runtime import (
 )
 from manager_server.infrastructure.common import resolve_order_by
 from manager_server.infrastructure.logger import get_logger
-from manager_server.infrastructure.match_expr import canonicalize_match_expr
+from manager_server.infrastructure.match_expr import merge_match_exprs
 from manager_server.infrastructure.utils import iso_datetime, new_uuid4, strip_optional, utc_now
 from manager_server.models.instance_resource_models import INSTANCE_SERVICE_RESOURCE_TABLE_DEF
 from manager_server.models.template_models import SERVICE_CONFIG_TEMPLATE_TABLE_DEF
@@ -72,10 +71,6 @@ def grant_out(row: Any) -> dict[str, Any]:
         "created_at": iso_datetime(_g(row, "created_at")),
         "updated_at": iso_datetime(_g(row, "updated_at")),
     }
-
-
-def match_key(expr: Any) -> str:
-    return json.dumps(canonicalize_match_expr(expr), ensure_ascii=False, separators=(",", ":"))
 
 
 class InstanceServiceResourceService:
@@ -176,11 +171,11 @@ class InstanceServiceResourceService:
     def _project_upsert(
         current: list[Any],
         resource_id: str,
-        new_rows: list[dict[str, Any]],
+        new_row: dict[str, Any],
     ) -> list[Any]:
         rid = str(resource_id).strip()
         kept = [row for row in current if str(_g(row, "resource_id") or "").strip() != rid]
-        return [*kept, *new_rows]
+        return [*kept, new_row]
 
     @staticmethod
     def _project_without(current: list[Any], resource_id: str) -> list[Any]:
@@ -221,33 +216,27 @@ class InstanceServiceResourceService:
         if not resolved_name:
             raise ValueError("resource_name is required")
 
-        seen: set[str] = set()
-        grant_rows: list[dict[str, Any]] = []
+        merged_expr = merge_match_exprs(match_exprs)
         now = utc_now()
         granted_by_norm = strip_optional(granted_by)
-        for raw in match_exprs:
-            expr = canonicalize_match_expr(raw)
-            key = match_key(expr)
-            if key in seen:
-                continue
-            seen.add(key)
-            grant_rows.append(
-                {
-                    "jiuwenclaw_id": jiuwenclaw_id,
-                    "resource_id": resolved_resource_id,
-                    "resource_name": resolved_name,
-                    "resource_desc": resolved_desc,
-                    "ref_template_id": template_id,
-                    "match_expr": expr,
-                    "priority": int(priority),
-                    "granted_by": granted_by_norm,
-                    "expires_at": expires_at,
-                    "enabled": enabled,
-                    "data": data,
-                    "created_at": now,
-                    "updated_at": now,
-                }
-            )
+        created_at = _g(existing[0], "created_at") if existing else None
+        if created_at is None:
+            created_at = now
+        grant_row = {
+            "jiuwenclaw_id": jiuwenclaw_id,
+            "resource_id": resolved_resource_id,
+            "resource_name": resolved_name,
+            "resource_desc": resolved_desc,
+            "ref_template_id": template_id,
+            "match_expr": merged_expr,
+            "priority": int(priority),
+            "granted_by": granted_by_norm,
+            "expires_at": expires_at,
+            "enabled": enabled,
+            "data": data,
+            "created_at": created_at,
+            "updated_at": now,
+        }
 
         # 先 sync Runtime（目标态），成功后再写 Manager / 引用索引
         current = await self._list_instance_rows(jiuwenclaw_id)
@@ -259,7 +248,7 @@ class InstanceServiceResourceService:
             if rid:
                 before_resource_ids.add(rid)
         is_new_resource = resolved_resource_id not in before_resource_ids
-        projected = self._project_upsert(current, resolved_resource_id, grant_rows)
+        projected = self._project_upsert(current, resolved_resource_id, grant_row)
         try:
             await sync_runtime_config(
                 self._h, jiuwenclaw_id, resource_rows=projected
@@ -269,9 +258,8 @@ class InstanceServiceResourceService:
 
         if normalized_resource_id:
             await _delete_where(self._h, _GRANT, target_filters, "id")
-        for row in grant_rows:
-            await self._h.create(_GRANT, row)
-            await auto_bind_from_match_expr(self._h, jiuwenclaw_id, row["match_expr"])
+        await self._h.create(_GRANT, grant_row)
+        await auto_bind_from_match_expr(self._h, jiuwenclaw_id, merged_expr)
         if is_new_resource:
             await record_service_template_ref_on_runtime(
                 self._h, jiuwenclaw_id, template_id
@@ -281,7 +269,7 @@ class InstanceServiceResourceService:
             jiuwenclaw_id=jiuwenclaw_id,
             template_id=template_id,
             resource_id=resolved_resource_id,
-            n=len(seen),
+            n=1,
         )
         return await self.list_grants(template_id, jiuwenclaw_id)
 

@@ -655,6 +655,7 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
                 setAddPriority(raw === '' ? NaN : Number(raw));
               }}
             />
+            <div className="mt-1 text-xs text-muted">{t(`${sr}.priorityHint`)}</div>
           </label>
           <label className="block mb-3">
             <FieldLabel>{t(`${sr}.scopeLabel`)}</FieldLabel>
@@ -738,6 +739,7 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
                 setEditPriority(raw === '' ? NaN : Number(raw));
               }}
             />
+            <div className="mt-1 text-xs text-muted">{t(`${sr}.priorityHint`)}</div>
           </label>
           <label className="block mb-3">
             <FieldLabel>{t(`${sr}.scopeLabel`)}</FieldLabel>

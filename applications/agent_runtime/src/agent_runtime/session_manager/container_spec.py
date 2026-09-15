@@ -76,6 +76,7 @@ SERVICE_CONFIG_CONTAINER_TABLE_DEF = TableDefinition(
         ColumnDefinition("command", "json", nullable=True),
         ColumnDefinition("args", "json", nullable=True),
         ColumnDefinition("readiness_probe", "json", nullable=True),
+        ColumnDefinition("data", "json", nullable=True),
         ColumnDefinition("created_at", "datetime", nullable=False),
         ColumnDefinition("updated_at", "datetime", nullable=False),
     ],
@@ -783,6 +784,8 @@ def container_row_from_spec(spec: dict[str, Any]) -> dict[str, Any]:
     }
     for column in _CONTAINER_SECTION_COLUMNS:
         row[column] = spec.get(column)
+    data = spec.get("data")
+    row["data"] = data if isinstance(data, dict) else None
     return row
 
 

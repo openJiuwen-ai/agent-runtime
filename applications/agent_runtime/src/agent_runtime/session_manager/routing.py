@@ -100,6 +100,7 @@ class RoutingScopeDef:
     rule: BoolNode | None
     enabled: bool = True
     expires_at: datetime | None = None
+    data: dict[str, Any] | None = None
 
     def is_active(self, now: datetime | None = None) -> bool:
         """enabled 且未过期才生效(expires_at=None = 永不过期)。"""
@@ -132,6 +133,7 @@ class RoutingScopeDef:
             "expires_at": (
                 self.expires_at.isoformat() if self.expires_at is not None else None
             ),
+            "data": self.data if isinstance(self.data, dict) else None,
         }
 
 
@@ -376,6 +378,12 @@ def parse_scope(payload: Any, known_template_ids: set[str]) -> RoutingScopeDef:
         )
     except ValueError as exc:
         raise InvalidParams(str(exc)) from exc
+    data_raw = payload.get("data")
+    if data_raw is not None and not isinstance(data_raw, dict):
+        raise InvalidParams(
+            f"scope {scope_id!r} data must be an object or null, got "
+            f"{type(data_raw).__name__}"
+        )
     return RoutingScopeDef(
         scope_id=scope_id,
         index=index,
@@ -384,6 +392,7 @@ def parse_scope(payload: Any, known_template_ids: set[str]) -> RoutingScopeDef:
         rule=rule,
         enabled=enabled,
         expires_at=expires_at,
+        data=data_raw if isinstance(data_raw, dict) else None,
     )
 
 
@@ -490,6 +499,11 @@ def snapshot_from_json(text: str) -> RoutingSnapshot:
         if not isinstance(enabled, bool):
             raise ValueError(f"enabled must be a boolean, got {type(enabled).__name__}")
         expires_at = parse_datetime(item.get("expires_at"))
+        data_raw = item.get("data")
+        if data_raw is not None and not isinstance(data_raw, dict):
+            raise ValueError(
+                f"data must be an object or null, got {type(data_raw).__name__}"
+            )
         return RoutingScopeDef(
             scope_id=str(item["scope_id"]),
             index=int(item["index"]),
@@ -498,6 +512,7 @@ def snapshot_from_json(text: str) -> RoutingSnapshot:
             rule=parse_routing_expr(expr) if expr.strip() else None,
             enabled=enabled,
             expires_at=expires_at,
+            data=data_raw if isinstance(data_raw, dict) else None,
         )
 
     try:

@@ -39,13 +39,10 @@ SAFE_TEXT_FIELD_NAMES: frozenset[str] = frozenset(
         "description",
         "namespace",
         "pod_name",
-        "container_name",
-        "port_name",
         "skill_id",
         "model_id",
         "model_provider",
         "agent_runtime",
-        "agent_image",
     }
 )
 SAFE_TEXT_LIST_FIELD_NAMES: frozenset[str] = frozenset(

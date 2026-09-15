@@ -103,8 +103,8 @@ async def test_instance_list_sort_by_name(manager_api: ManagerApiHarness):
                 h.instances_url(),
                 json=instance_create_body(
                     jiuwenclaw_name=name,
-                    gateway_config_host=f"http://127.0.0.1:{base}",
-                    runtime_config_host=f"http://127.0.0.1:{base + 1}",
+                    gateway_host=f"http://127.0.0.1:{base}",
+                    runtime_host=f"http://127.0.0.1:{base + 1}",
                     user_web_host=f"http://127.0.0.1:{base + 2}",
                     gateway_web_http_host=f"http://127.0.0.1:{base + 3}",
                     gateway_web_ws_host=f"http://127.0.0.1:{base + 4}",
@@ -177,7 +177,7 @@ async def test_instance_patch_not_found(manager_api: ManagerApiHarness):
 
 
 @pytest.mark.asyncio
-async def test_instance_create_rejects_duplicate_gateway_config_host(
+async def test_instance_create_rejects_duplicate_gateway_host(
     manager_api: ManagerApiHarness,
 ):
     h = manager_api
@@ -193,13 +193,13 @@ async def test_instance_create_rejects_duplicate_gateway_config_host(
             ),
         )
         assert dup_resp.status_code == 400
-        assert "gateway_config_host already in use" in dup_resp.json()["detail"]
+        assert "gateway_host already in use" in dup_resp.json()["detail"]
     finally:
         await h.http.delete(h.instances_url(f"/{jid}"))
 
 
 @pytest.mark.asyncio
-async def test_instance_create_rejects_duplicate_runtime_config_host(
+async def test_instance_create_rejects_duplicate_runtime_host(
     manager_api: ManagerApiHarness,
 ):
     h = manager_api
@@ -209,13 +209,13 @@ async def test_instance_create_rejects_duplicate_runtime_config_host(
     jid = create_resp.json()["data"]["jiuwenclaw_id"]
     try:
         dup_body = instance_create_body(jiuwenclaw_name="ut-host-dup-runtime-b")
-        dup_body["gateway_config_host"] = "http://127.0.0.1:28080"
+        dup_body["gateway_host"] = "http://127.0.0.1:28080"
         dup_body["user_web_host"] = "http://127.0.0.1:25173"
         dup_body["gateway_web_http_host"] = "http://127.0.0.1:29002"
         dup_body["gateway_web_ws_host"] = "http://127.0.0.1:29000"
         dup_resp = await h.http.post(h.instances_url(), json=dup_body)
         assert dup_resp.status_code == 400
-        assert "runtime_config_host already in use" in dup_resp.json()["detail"]
+        assert "runtime_host already in use" in dup_resp.json()["detail"]
     finally:
         await h.http.delete(h.instances_url(f"/{jid}"))
 
@@ -229,12 +229,12 @@ async def test_instance_create_allows_cross_column_config_host(
     create_resp = await h.http.post(h.instances_url(), json=body)
     assert create_resp.status_code == 200
     first_jid = create_resp.json()["data"]["jiuwenclaw_id"]
-    existing_gateway = body["gateway_config_host"]
+    existing_gateway = body["gateway_host"]
     second_jid = ""
     try:
         dup_body = instance_create_body(jiuwenclaw_name="ut-host-cross-col-b")
-        dup_body["gateway_config_host"] = "http://127.0.0.1:28080"
-        dup_body["runtime_config_host"] = existing_gateway
+        dup_body["gateway_host"] = "http://127.0.0.1:28080"
+        dup_body["runtime_host"] = existing_gateway
         dup_body["user_web_host"] = "http://127.0.0.1:25173"
         dup_body["gateway_web_http_host"] = "http://127.0.0.1:29002"
         dup_body["gateway_web_ws_host"] = "http://127.0.0.1:29000"
@@ -258,8 +258,8 @@ async def test_instance_update_rejects_duplicate_config_host(
     first_jid = first_resp.json()["data"]["jiuwenclaw_id"]
 
     second_body = instance_create_body(jiuwenclaw_name="ut-host-update-b")
-    second_body["gateway_config_host"] = "http://127.0.0.1:38080"
-    second_body["runtime_config_host"] = "http://127.0.0.1:38081"
+    second_body["gateway_host"] = "http://127.0.0.1:38080"
+    second_body["runtime_host"] = "http://127.0.0.1:38081"
     second_body["user_web_host"] = "http://127.0.0.1:35173"
     second_body["gateway_web_http_host"] = "http://127.0.0.1:39002"
     second_body["gateway_web_ws_host"] = "http://127.0.0.1:39000"
@@ -269,15 +269,15 @@ async def test_instance_update_rejects_duplicate_config_host(
     try:
         patch_resp = await h.http.patch(
             h.instances_url(f"/{second_jid}"),
-            json={"gateway_config_host": first_body["gateway_config_host"]},
+            json={"gateway_host": first_body["gateway_host"]},
         )
         assert patch_resp.status_code == 400
-        assert "gateway_config_host already in use" in patch_resp.json()["detail"]
+        assert "gateway_host already in use" in patch_resp.json()["detail"]
 
         keep_resp = await h.http.patch(
             h.instances_url(f"/{second_jid}"),
             json={
-                "gateway_config_host": second_body["gateway_config_host"] + "/",
+                "gateway_host": second_body["gateway_host"] + "/",
             },
         )
         assert keep_resp.status_code == 200
@@ -302,8 +302,8 @@ async def test_instance_create_rejects_duplicate_user_face_hosts(
             ("gateway_web_ws_host", "gateway_web_ws_host already in use"),
         ):
             dup_body = instance_create_body(jiuwenclaw_name=f"ut-host-dup-face-{field}")
-            dup_body["gateway_config_host"] = "http://127.0.0.1:28080"
-            dup_body["runtime_config_host"] = "http://127.0.0.1:28081"
+            dup_body["gateway_host"] = "http://127.0.0.1:28080"
+            dup_body["runtime_host"] = "http://127.0.0.1:28081"
             dup_body["user_web_host"] = "http://127.0.0.1:25173"
             dup_body["gateway_web_http_host"] = "http://127.0.0.1:29002"
             dup_body["gateway_web_ws_host"] = "http://127.0.0.1:29000"
@@ -326,8 +326,8 @@ async def test_instance_update_rejects_duplicate_user_face_hosts(
     first_jid = first_resp.json()["data"]["jiuwenclaw_id"]
 
     second_body = instance_create_body(jiuwenclaw_name="ut-host-face-update-b")
-    second_body["gateway_config_host"] = "http://127.0.0.1:38080"
-    second_body["runtime_config_host"] = "http://127.0.0.1:38081"
+    second_body["gateway_host"] = "http://127.0.0.1:38080"
+    second_body["runtime_host"] = "http://127.0.0.1:38081"
     second_body["user_web_host"] = "http://127.0.0.1:35173"
     second_body["gateway_web_http_host"] = "http://127.0.0.1:39002"
     second_body["gateway_web_ws_host"] = "http://127.0.0.1:39000"

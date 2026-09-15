@@ -88,42 +88,15 @@ SERVICE_CONFIG_TEMPLATE_TABLE_DEF = TableDefinition(
         ColumnDefinition("template_id", "string", length=100, nullable=False, unique=True),
         ColumnDefinition("template_name", "string", length=128, nullable=False, default=""),
         ColumnDefinition("description", "string", length=512, nullable=True),
-        ColumnDefinition("agent_image", "string", length=512, nullable=False),
         ColumnDefinition("namespace", "string", length=128, nullable=False, default="default"),
         ColumnDefinition("node_name", "string", length=128, nullable=True),
         # Pod 级 securityContext.fsGroup(存量库需先手工 ALTER 补列)
         ColumnDefinition("fs_group", "integer", nullable=True),
-        ColumnDefinition("run_as_user", "integer", nullable=True),
-        ColumnDefinition("run_as_group", "integer", nullable=True),
         ColumnDefinition("pod_name", "string", length=128, nullable=False, default="agentserver"),
-        ColumnDefinition("container_name", "string", length=128, nullable=False, default="agent"),
-        ColumnDefinition("container_port", "integer", nullable=False, default=8080),
-        ColumnDefinition("port_name", "string", length=64, nullable=False, default="http"),
-        ColumnDefinition("sse_port", "integer", nullable=False, default=8080),
         ColumnDefinition("sse_path", "string", length=128, nullable=False, default="/sse"),
-        ColumnDefinition("health_path", "string", length=128, nullable=False,
-                         default="/health"),
-        ColumnDefinition("agent_env", "json", nullable=True),
-        ColumnDefinition("image_pull_policy", "string", length=64, nullable=False,
-                         default="IfNotPresent"),
         ColumnDefinition("kubeconfig", "string", length=512, nullable=True),
-        ColumnDefinition("readiness_initial_delay", "integer", nullable=False, default=5),
-        ColumnDefinition("readiness_period", "integer", nullable=False, default=5),
         ColumnDefinition("ready_timeout", "integer", nullable=False, default=300),
         ColumnDefinition("ready_poll_interval", "integer", nullable=False, default=2),
-        ColumnDefinition("nfs_server", "string", length=256, nullable=True),
-        ColumnDefinition("nfs_path", "string", length=256, nullable=True),
-        ColumnDefinition("nfs_mount_path", "string", length=256, nullable=True),
-        ColumnDefinition("agent_cpu_request", "string", length=32, nullable=True),
-        ColumnDefinition("agent_memory_request", "string", length=32, nullable=True),
-        ColumnDefinition("agent_cpu_limit", "string", length=32, nullable=True),
-        ColumnDefinition("agent_memory_limit", "string", length=32, nullable=True),
-        # 同 Pod sidecar 容器列表(规范形 list[dict];存量库需先手工 ALTER 补列)
-        ColumnDefinition("sidecars", "json", nullable=True),
-        # 主 agent 容器卷挂载(与 sidecar 挂载同款规范形;存量库同样先 ALTER)
-        ColumnDefinition("agent_host_path_mounts", "json", nullable=True),
-        ColumnDefinition("agent_configmap_mounts", "json", nullable=True),
-        ColumnDefinition("agent_pvc_mounts", "json", nullable=True),
         # 三段式契约(容器表拆分):主容器引用 + sidecar 引用列表 + Pod 级卷定义。
         # 存量库需先手工 ALTER 补列(框架 init_table 只 create_all 不补列)。
         ColumnDefinition("main_container_id", "string", length=100, nullable=True),
@@ -158,12 +131,13 @@ ROUTING_SCOPE_TABLE_DEF = TableDefinition(
         ColumnDefinition("routing_rules", "json", nullable=True),
         ColumnDefinition("expires_at", "datetime", nullable=True),
         ColumnDefinition("enabled", "boolean", nullable=False, default=True),
+        ColumnDefinition("data", "json", nullable=True),
         ColumnDefinition("created_at", "datetime", nullable=False),
         ColumnDefinition("updated_at", "datetime", nullable=False),
     ],
 )
 
-# Template 字段 ↔ DB 列名（模板级;容器级字段由容器表携带,legacy 扁平列已死值）
+# Template 字段 ↔ DB 列名（模板级;容器级字段由容器表携带）
 _COLUMN_OF: dict[str, str] = {
     "template_id": "template_id",
     "template_name": "template_name",
@@ -229,6 +203,7 @@ _TEMPLATE_WIRE_ALIASES = {"node_name": "nodeName",
 def _scope_row(scope: RoutingScopeDef) -> dict[str, Any]:
     """scope → DB 行（时间戳由 _upsert_row_tx 统一处理；enabled/expires_at
     为 2026-09 routing-scope 扩展字段，随三段式载荷透传）。"""
+    data = getattr(scope, "data", None)
     return {
         "jiuwenclaw_id": TENANT_ID,
         "scope_id": scope.scope_id,
@@ -238,6 +213,7 @@ def _scope_row(scope: RoutingScopeDef) -> dict[str, Any]:
         "routing_rules": scope.expr,
         "enabled": bool(scope.enabled),
         "expires_at": scope.expires_at,
+        "data": data if isinstance(data, dict) else None,
     }
 
 
@@ -326,16 +302,10 @@ def row_from_template_split(
         sidecar_container_ids: tuple[str, ...] | list[str] | None,
         volumes_column: list[dict[str, Any]] | None,
 ) -> dict[str, Any]:
-    """三段式新形态模板行:模板级列 + 引用列 + volumes 列。
-
-    容器级 legacy 列不写(NOT NULL 无默认的 agent_image 例外,填 "" 死值,
-    create/update 都写——legacy→new 转换不残留旧镜像值误导诊断);
-    其余 NOT NULL legacy 列由 ORM 默认兜底成死值。
-    """
+    """三段式模板行:模板级列 + 引用列 + volumes 列。"""
     row: dict[str, Any] = {"jiuwenclaw_id": TENANT_ID}
     for field_name in TEMPLATE_LEVEL_FIELDS:
         row[_COLUMN_OF[field_name]] = getattr(t, field_name)
-    row["agent_image"] = ""
     row["main_container_id"] = main_container_id
     row["sidecar_container_ids"] = (
         list(sidecar_container_ids) if sidecar_container_ids else None)
@@ -464,6 +434,7 @@ def _scope_from_row(row: Any) -> RoutingScopeDef | None:
             )
         enabled_raw = getattr(row, "enabled", True)
         enabled = True if enabled_raw is None else bool(enabled_raw)
+        data_raw = getattr(row, "data", None)
         return RoutingScopeDef(
             scope_id=s(getattr(row, "scope_id")),
             index=int(getattr(row, "match_index") or 0),
@@ -472,6 +443,7 @@ def _scope_from_row(row: Any) -> RoutingScopeDef | None:
             rule=parse_routing_expr(expr_raw) if expr_raw.strip() else None,
             enabled=enabled,
             expires_at=parse_datetime(getattr(row, "expires_at", None)),
+            data=data_raw if isinstance(data_raw, dict) else None,
         )
     except Exception:  # noqa: BLE001 - 读路径对坏行容错（写路径已强校验）
         logger.warning(

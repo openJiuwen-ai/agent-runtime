@@ -49,6 +49,7 @@ LINK_BINDING_STATE_TABLE_DEF = TableDefinition(
         ColumnDefinition(
             "status", "string", length=32, nullable=False, default="active"
         ),
+        ColumnDefinition("data", "json", nullable=True),
         ColumnDefinition("created_at", "datetime", nullable=False),
         ColumnDefinition("updated_at", "datetime", nullable=False),
     ],
@@ -111,7 +112,7 @@ async def sync_local_link_binding_state(db: Any, config: LinkMTLSConfig) -> Any 
     if row is None:
         return await db.create(
             LINK_BINDING_STATE_TABLE,
-            {"created_at": now, **payload},
+            {"created_at": now, "data": None, **payload},
         )
     previous_epoch = int(getattr(row, "mtls_binding_epoch", 0) or 0)
     filters = {"service_role": LOCAL_SERVICE_ROLE}

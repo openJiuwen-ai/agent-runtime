@@ -6,30 +6,44 @@ from __future__ import annotations
 from typing import Any
 
 _DEMO_AGENT_IMAGE = "jiuwenclaw/agent-server:latest"
+_DEMO_MAIN_CID = "c-agentserver"
+
+
+def _demo_main_container(*, image: str = _DEMO_AGENT_IMAGE, port: int = 8080) -> dict[str, Any]:
+    return {
+        "container_id": _DEMO_MAIN_CID,
+        "name": "agent-server",
+        "image": image,
+        "imagePullPolicy": "IfNotPresent",
+        "ports": [{"name": "sse", "containerPort": port}],
+        "readinessProbe": {
+            "httpGet": {"path": "/api/v1/health", "port": port},
+            "initialDelaySeconds": 5,
+            "periodSeconds": 5,
+        },
+    }
 
 
 def demo_agent_server_base() -> dict[str, Any]:
     return {
-        "agent_image": _DEMO_AGENT_IMAGE,
         "namespace": "jiuwenclaw",
         "pod_name": "agentserver",
-        "container_name": "agent-server",
-        "container_port": 8080,
-        "port_name": "http1",
-        "sse_port": 8080,
         "sse_path": "/api/v1/events/stream",
-        "health_path": "/api/v1/health",
-        "image_pull_policy": "IfNotPresent",
-        "readiness_initial_delay": 5,
-        "readiness_period": 5,
         "ready_timeout": 300,
         "ready_poll_interval": 2,
-        "min_idle_services": 0,
-        "service_concurrency": 2,
-        "service_ttl": 300,
+        "main_container_id": _DEMO_MAIN_CID,
+        "sidecar_container_ids": [],
+        "min_idle_pods": 0,
+        "pod_concurrency": 2,
+        "pod_ttl": 300,
         "message_timeout": 600,
-        "session_concurrency": 3,
+        "scope_concurrency": 3,
         "session_ttl": 60,
+        "data": {
+            "config_sync": {
+                "containers": [_demo_main_container()],
+            }
+        },
     }
 
 
@@ -256,10 +270,15 @@ def service_config_templates() -> list[tuple[str, dict[str, Any]]]:
                 **base,
                 "template_name": "销售组 AgentServer 池",
                 "description": "销售通道 g_demo_sales 使用的 AgentServer 动态池",
-                "min_idle_services": 2,
-                "service_concurrency": 5,
+                "min_idle_pods": 2,
+                "pod_concurrency": 5,
                 "enabled": True,
-                "data": {"demo": "s1"},
+                "data": {
+                    "demo": "s1",
+                    "config_sync": {
+                        "containers": [_demo_main_container()],
+                    },
+                },
             },
         ),
         (
@@ -268,10 +287,15 @@ def service_config_templates() -> list[tuple[str, dict[str, Any]]]:
                 **base,
                 "template_name": "全局兜底 AgentServer 池",
                 "description": "未命中服务策略时的最小 AgentServer 池",
-                "min_idle_services": 1,
-                "service_concurrency": 2,
+                "min_idle_pods": 1,
+                "pod_concurrency": 2,
                 "enabled": True,
-                "data": {"demo": "s2"},
+                "data": {
+                    "demo": "s2",
+                    "config_sync": {
+                        "containers": [_demo_main_container()],
+                    },
+                },
             },
         ),
     ]
@@ -280,8 +304,8 @@ def service_config_templates() -> list[tuple[str, dict[str, Any]]]:
 def instance_create_body(
     *,
     jiuwenclaw_name: str = "ut-demo-instance",
-    gateway_config_host: str = "http://127.0.0.1:18080",
-    runtime_config_host: str = "http://127.0.0.1:18081",
+    gateway_host: str = "http://127.0.0.1:18080",
+    runtime_host: str = "http://127.0.0.1:18081",
     user_web_host: str = "http://127.0.0.1:15173",
     gateway_web_http_host: str = "http://127.0.0.1:19002",
     gateway_web_ws_host: str = "http://127.0.0.1:19000",
@@ -292,8 +316,8 @@ def instance_create_body(
         "description": "manager API unit test instance",
         "namespace": "default",
         "space_id": "default",
-        "gateway_config_host": gateway_config_host,
-        "runtime_config_host": runtime_config_host,
+        "gateway_host": gateway_host,
+        "runtime_host": runtime_host,
         "user_web_host": user_web_host,
         "gateway_web_http_host": gateway_web_http_host,
         "gateway_web_ws_host": gateway_web_ws_host,

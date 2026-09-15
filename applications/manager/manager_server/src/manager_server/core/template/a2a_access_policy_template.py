@@ -54,6 +54,7 @@ def row_to_out(row: Any, *, reference_count: int = 0) -> A2AAccessPolicyTemplate
         enabled=row.enabled,
         revision=row.revision,
         reference_count=reference_count,
+        data=getattr(row, "data", None) if isinstance(getattr(row, "data", None), dict) else None,
         created_at=iso_datetime(row.created_at),
         updated_at=iso_datetime(row.updated_at),
     )

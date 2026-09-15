@@ -701,10 +701,9 @@ async def test_config_sync_sidecars_removal_triggers_a_class_sunset(runtime):
 
 
 def test_template_from_row_rejects_legacy_inline_rows():
-    """legacy 内联行(无 main_container_id)不再水合 → None(fail-closed)。
+    """无 main_container_id 的行不再水合 → None(fail-closed)。
 
-    wire 已三段式独占,此类行 = 拆分后未收敛的残骸,重放 config_sync 收敛;
-    容错归一职责移至 containers.normalize_*(见 test_containers)。
+    wire 已三段式独占;缺引用 = 未收敛残骸,重放 config_sync 收敛。
     """
     from types import SimpleNamespace
 
@@ -714,7 +713,8 @@ def test_template_from_row_rejects_legacy_inline_rows():
     )
 
     base = {column: None for column in _COLUMN_OF.values()}
-    base.update(agent_image="img:1", sidecars=[dict(_SIDECAR)])
+    base.update(template_id="tpl-legacy")
+    # 无 main_container_id → fail-closed(不依赖已删的 legacy 内联列)
     assert template_from_row(SimpleNamespace(**base)) is None
 
 
@@ -899,7 +899,6 @@ async def test_split_sync_persists_rows_and_routes(runtime):
     assert row.main_container_id == "c-main-1"
     assert row.sidecar_container_ids is None          # 空列表归一 None
     assert row.volumes is None
-    assert row.agent_image == ""                      # legacy 列死值
     crow = await runtime.db.get(CONTAINER_TABLE, {"container_id": "c-main-1"})
     assert crow is not None and crow.image == "agentserver:1.0"
 
@@ -1027,12 +1026,8 @@ async def test_new_form_row_with_missing_container_skipped(runtime):
     # 直插一条引用幽灵容器的新形态行(手删 DB/GC 误删形态)+ 指向它的 scope
     await runtime.db.create(TEMPLATE_TABLE, {
         "template_id": "tpl-ghost", "jiuwenclaw_id": "",
-        "template_name": "", "agent_image": "", "namespace": "default",
-        "pod_name": "agentserver", "container_name": "agent",
-        "container_port": 8080, "port_name": "http", "sse_port": 8080,
-        "sse_path": "/sse", "health_path": "/health",
-        "image_pull_policy": "IfNotPresent",
-        "readiness_initial_delay": 5, "readiness_period": 5,
+        "template_name": "", "namespace": "default",
+        "pod_name": "agentserver", "sse_path": "/sse",
         "ready_timeout": 300, "ready_poll_interval": 2,
         "scope_concurrency": 3, "pod_concurrency": 2,
         "pod_ttl": 300, "session_ttl": 60, "min_idle_pods": 0,

@@ -108,7 +108,10 @@ def build_agent_resource_gateway_payload(
     expires_at: Any = None,
     data: Any = None,
 ) -> dict[str, Any]:
-    """构造下发 Gateway 的 agent resource payload（字段对齐 Manager 行，无 jiuwenclaw_id）。"""
+    """构造下发 Gateway 的 agent resource payload（无 jiuwenclaw_id / 时间戳）。
+
+    ``created_at`` / ``updated_at`` 由 Gateway 落库时自行刷新，不下发。
+    """
     return {
         "resource_id": str(resource_id or "").strip(),
         "ref_template_id": str(ref_template_id or "").strip(),

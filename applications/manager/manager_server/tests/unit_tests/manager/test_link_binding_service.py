@@ -25,18 +25,18 @@ class _DB:
             "instance_info": {
                 "jid-a": {
                     "jiuwenclaw_id": "jid-a",
-                    "gateway_config_host": "http://gateway-a:8775",
-                    "runtime_config_host": "http://runtime-a:8091",
+                    "gateway_host": "http://gateway-a:8775",
+                    "runtime_host": "http://runtime-a:8091",
                 },
                 "jid-b": {
                     "jiuwenclaw_id": "jid-b",
-                    "gateway_config_host": "http://gateway-a:8775",
-                    "runtime_config_host": "http://runtime-b:8091",
+                    "gateway_host": "http://gateway-a:8775",
+                    "runtime_host": "http://runtime-b:8091",
                 },
                 "jid-c": {
                     "jiuwenclaw_id": "jid-c",
-                    "gateway_config_host": "http://gateway-c:8775",
-                    "runtime_config_host": "http://runtime-a:8091",
+                    "gateway_host": "http://gateway-c:8775",
+                    "runtime_host": "http://runtime-a:8091",
                 },
             },
             "instance_link_binding": {},
@@ -136,8 +136,8 @@ async def test_unbind_revokes_epoch_and_releases_active_keys() -> None:
 
     db = service.handler
     db.tables["instance_info"]["jid-a"].update(
-        gateway_config_host="http://gateway-new:8775",
-        runtime_config_host="http://runtime-new:8091",
+        gateway_host="http://gateway-new:8775",
+        runtime_host="http://runtime-new:8091",
     )
     rebound = await service.bind(
         "jid-a",
@@ -170,8 +170,8 @@ async def test_rebind_uses_optimistic_epoch_guard() -> None:
     await service.bind("jid-a", _body())
     await service.unbind("jid-a", updated_by="admin")
     db.tables["instance_info"]["jid-a"].update(
-        gateway_config_host="http://gateway-new:8775",
-        runtime_config_host="http://runtime-new:8091",
+        gateway_host="http://gateway-new:8775",
+        runtime_host="http://runtime-new:8091",
     )
     db.drop_next_guarded_update = True
 
@@ -197,7 +197,7 @@ async def test_unknown_instance_is_rejected() -> None:
 @pytest.mark.asyncio
 async def test_binding_endpoint_must_match_the_manager_instance() -> None:
     service = InstanceLinkBindingService(_DB())
-    with pytest.raises(LinkBindingConflict, match="gateway_config_host"):
+    with pytest.raises(LinkBindingConflict, match="gateway_host"):
         await service.bind("jid-a", _body(gateway="other-gateway:8775"))
 
 

@@ -63,8 +63,8 @@ async def test_require_probes_runtime_when_set():
         new_callable=AsyncMock,
     ) as probe:
         await require_config_hosts_reachable(
-            gateway_config_host=None,
-            runtime_config_host="http://rt.example:8090",
+            gateway_host=None,
+            runtime_host="http://rt.example:8090",
         )
     probe.assert_awaited_once_with(
         "http://rt.example:8090", side="runtime", timeout=5.0

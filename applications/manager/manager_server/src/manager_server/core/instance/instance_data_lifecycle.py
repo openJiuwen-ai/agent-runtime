@@ -218,7 +218,7 @@ async def purge_manager_instance_data(
 
 
 async def _purge_gateway_via_http(jiuwenclaw_id: str) -> bool:
-    """有 gateway_config_host 则 HTTP purge；否则返回 False（不抛错）。"""
+    """有 gateway_host 则 HTTP purge；否则返回 False（不抛错）。"""
     jid = str(jiuwenclaw_id or "").strip()
     if not jid:
         return False
@@ -263,7 +263,7 @@ async def purge_runtime_instance_data(
 
     Runtime 只有全量快照替换，无按实例 purge API；空投影
     ``{containers:[], templates:[], scopes:[]}`` 即删除该实例此前下发的配置。
-    无 ``runtime_config_host``（且无全局回退）或推送失败时跳过（不抛错）。
+    无 ``runtime_host``（且无全局回退）或推送失败时跳过（不抛错）。
     """
     from manager_server.core.instance_resource.runtime_config_sync import (
         sync_runtime_config,

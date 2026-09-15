@@ -134,6 +134,7 @@ async def test_link_binding_state_upsert_excludes_private_key(
     assert "private_key" not in row
     assert row["local_cert_pem"] == "public certificate"
     assert row["peer_trust_bundle_pem"] == "public ca"
+    assert row["data"] is None
 
     updated = LinkMTLSConfig(
         **{

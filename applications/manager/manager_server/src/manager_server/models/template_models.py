@@ -200,6 +200,7 @@ A2A_ACCESS_POLICY_TEMPLATE_TABLE_DEF = TableDefinition(
         ColumnDefinition("member_template_ids", "json", nullable=False, default=list),
         ColumnDefinition("enabled", "boolean", nullable=False, default=True),
         ColumnDefinition("revision", "integer", nullable=False, default=1),
+        ColumnDefinition("data", "json", nullable=True),
         ColumnDefinition("created_at", "datetime", nullable=False),
         ColumnDefinition("updated_at", "datetime", nullable=False),
     ],
@@ -231,6 +232,8 @@ PERMISSIONS_TEMPLATE_TABLE_DEF = TableDefinition(
 )
 
 # 容器规格目录（与 Runtime service_config_container 对齐；平台全局，不带 jiuwenclaw_id）。
+# 模板经 main_container_id / sidecar_container_ids 引用；create/update 时 UPSERT 本表。
+# command/args 与 Runtime 对齐（存量库须手工 ALTER 补列）。
 # 段落 JSON 列为内部规范形（snake 键）；模板经 main_container_id / sidecar_container_ids 引用。
 
 MCP_TEMPLATE_TABLE_DEF = TableDefinition(
@@ -283,7 +286,10 @@ SERVICE_CONFIG_CONTAINER_TABLE_DEF = TableDefinition(
         ColumnDefinition("resources", "json", nullable=True),
         ColumnDefinition("volume_mounts", "json", nullable=True),
         ColumnDefinition("security_context", "json", nullable=True),
+        ColumnDefinition("command", "json", nullable=True),
+        ColumnDefinition("args", "json", nullable=True),
         ColumnDefinition("readiness_probe", "json", nullable=True),
+        ColumnDefinition("data", "json", nullable=True),
         ColumnDefinition("created_at", "datetime", nullable=False),
         ColumnDefinition("updated_at", "datetime", nullable=False),
     ],
@@ -305,51 +311,26 @@ SERVICE_CONFIG_TEMPLATE_TABLE_DEF = TableDefinition(
         ColumnDefinition("template_id", "string", length=100, nullable=False),
         ColumnDefinition("template_name", "string", length=128, nullable=False, default=""),
         ColumnDefinition("description", "string", length=512, nullable=True),
-        # 以下容器级列与 Runtime 对齐：三段式引用落地前仍保留内联形态（读兼容）；
-        # 新写入可同时填 main_container_id / sidecar_container_ids / volumes。
-        ColumnDefinition("agent_image", "string", length=512, nullable=False, default=""),
         ColumnDefinition("namespace", "string", length=128, nullable=False, default="default"),
         ColumnDefinition("node_name", "string", length=128, nullable=True),
-        ColumnDefinition("run_as_user", "integer", nullable=True),
-        ColumnDefinition("run_as_group", "integer", nullable=True),
+        # Pod 级 securityContext.fsGroup（与 Runtime 对齐；存量库须手工 ALTER）
+        ColumnDefinition("fs_group", "integer", nullable=True),
         ColumnDefinition("pod_name", "string", length=128, nullable=False, default="agentserver"),
-        ColumnDefinition("container_name", "string", length=128, nullable=False, default="agent"),
-        ColumnDefinition("container_port", "integer", nullable=False, default=8080),
-        ColumnDefinition("port_name", "string", length=64, nullable=False, default="http"),
-        ColumnDefinition("sse_port", "integer", nullable=False, default=8080),
         ColumnDefinition("sse_path", "string", length=128, nullable=False, default="/sse"),
-        ColumnDefinition("health_path", "string", length=128, nullable=False, default="/health"),
-        ColumnDefinition("agent_env", "json", nullable=True),
-        ColumnDefinition(
-            "image_pull_policy",
-            "string",
-            length=64,
-            nullable=False,
-            default="IfNotPresent",
-        ),
         ColumnDefinition("kubeconfig", "string", length=512, nullable=True),
-        ColumnDefinition("readiness_initial_delay", "integer", nullable=False, default=5),
-        ColumnDefinition("readiness_period", "integer", nullable=False, default=5),
         ColumnDefinition("ready_timeout", "integer", nullable=False, default=300),
         ColumnDefinition("ready_poll_interval", "integer", nullable=False, default=2),
-        ColumnDefinition("nfs_server", "string", length=256, nullable=True),
-        ColumnDefinition("nfs_path", "string", length=256, nullable=True),
-        ColumnDefinition("nfs_mount_path", "string", length=256, nullable=True),
-        ColumnDefinition("agent_cpu_request", "string", length=32, nullable=True),
-        ColumnDefinition("agent_memory_request", "string", length=32, nullable=True),
-        ColumnDefinition("agent_cpu_limit", "string", length=32, nullable=True),
-        ColumnDefinition("agent_memory_limit", "string", length=32, nullable=True),
-        ColumnDefinition("sidecars", "json", nullable=True),
-        ColumnDefinition("agent_host_path_mounts", "json", nullable=True),
-        ColumnDefinition("agent_configmap_mounts", "json", nullable=True),
-        ColumnDefinition("agent_pvc_mounts", "json", nullable=True),
+        # 容器规格经 main_container_id / sidecar_container_ids 引用目录；
+        # volumes 为 Pod 级卷定义（与 Runtime 三段式对齐）。
         ColumnDefinition("main_container_id", "string", length=100, nullable=True),
         ColumnDefinition("sidecar_container_ids", "json", nullable=True),
         ColumnDefinition("volumes", "json", nullable=True),
-        ColumnDefinition("min_idle_services", "integer", nullable=False, default=0),
-        ColumnDefinition("service_concurrency", "integer", nullable=False, default=2),
-        ColumnDefinition("service_ttl", "integer", nullable=False, default=300),
-        ColumnDefinition("session_concurrency", "integer", nullable=False, default=3),
+        # 策略四列与 Runtime/wire 术语同名（曾用 EE 名 min_idle_services/
+        # service_concurrency/service_ttl/session_concurrency；存量库须手工 RENAME）。
+        ColumnDefinition("min_idle_pods", "integer", nullable=False, default=0),
+        ColumnDefinition("pod_concurrency", "integer", nullable=False, default=2),
+        ColumnDefinition("pod_ttl", "integer", nullable=False, default=300),
+        ColumnDefinition("scope_concurrency", "integer", nullable=False, default=3),
         ColumnDefinition("session_ttl", "integer", nullable=False, default=60),
         ColumnDefinition("message_timeout", "integer", nullable=False, default=600),
         ColumnDefinition("enabled", "boolean", nullable=False, default=True),

@@ -28,7 +28,6 @@ import {
 type ServiceConfigTemplateSortField =
   | 'template_name'
   | 'description'
-  | 'agent_image'
   | 'updated_at';
 
 export function ServiceConfigTemplatesPage() {
@@ -244,14 +243,7 @@ export function ServiceConfigTemplatesPage() {
                     onChange={(value) => handleSortChange('description', value)}
                   />
                 </th>
-                <th>
-                  <TableColumnSort
-                    label={t('serviceConfigTemplate.agentImage')}
-                    value={sortBy === 'agent_image' ? sortOrder : ''}
-                    options={sortOptions}
-                    onChange={(value) => handleSortChange('agent_image', value)}
-                  />
-                </th>
+                <th>{t('serviceConfigTemplate.mainImage')}</th>
                 <th>
                   <TableColumnFilter
                     label={t('common.enabled')}
@@ -296,8 +288,11 @@ export function ServiceConfigTemplatesPage() {
                   <td className="text-[11px] text-muted max-w-[14rem]" title={row.description ?? undefined}>
                     {row.description ? truncate(row.description, 48) : '—'}
                   </td>
-                  <td className="mono text-[11px] text-muted min-w-[10rem] max-w-[18rem] break-all align-top" title={row.agent_image}>
-                    {row.agent_image}
+                  <td
+                    className="mono text-[11px] text-muted min-w-[10rem] max-w-[18rem] break-all align-top"
+                    title={row.main_image ?? undefined}
+                  >
+                    {row.main_image || '—'}
                   </td>
                   <td className="whitespace-nowrap">
                     <Switch

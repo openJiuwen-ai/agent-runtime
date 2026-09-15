@@ -37,8 +37,8 @@ interface Props {
 const HOST_MAX = 512;
 
 type ConnectivityForm = {
-  gateway_config_host: string;
-  runtime_config_host: string;
+  gateway_host: string;
+  runtime_host: string;
   user_web_host: string;
   gateway_web_http_host: string;
   gateway_web_ws_host: string;
@@ -67,8 +67,8 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
 
   const [editOpen, setEditOpen] = useState(false);
   const [connectivityForm, setConnectivityForm] = useState<ConnectivityForm>({
-    gateway_config_host: '',
-    runtime_config_host: '',
+    gateway_host: '',
+    runtime_host: '',
     user_web_host: '',
     gateway_web_http_host: '',
     gateway_web_ws_host: '',
@@ -121,8 +121,8 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
   const handleOpenEditConnectivity = () => {
     const d = instance.data;
     const next: ConnectivityForm = {
-      gateway_config_host: d?.gateway_config_host ?? '',
-      runtime_config_host: d?.runtime_config_host ?? '',
+      gateway_host: d?.gateway_host ?? '',
+      runtime_host: d?.runtime_host ?? '',
       user_web_host: d?.user_web_host ?? '',
       gateway_web_http_host: d?.gateway_web_http_host ?? '',
       gateway_web_ws_host: d?.gateway_web_ws_host ?? '',
@@ -133,14 +133,14 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
   };
 
   const submitConnectivity = async () => {
-    const gateway = connectivityForm.gateway_config_host.trim();
-    const runtime = connectivityForm.runtime_config_host.trim();
+    const gateway = connectivityForm.gateway_host.trim();
+    const runtime = connectivityForm.runtime_host.trim();
     const userWeb = connectivityForm.user_web_host.trim();
     const gatewayWebHttp = connectivityForm.gateway_web_http_host.trim();
     const gatewayWebWs = connectivityForm.gateway_web_ws_host.trim();
     const requiredChecks: { label: string; invalid: boolean }[] = [
-      { label: t('instanceForm.gatewayConfigHost'), invalid: !gateway },
-      { label: t('instanceForm.runtimeConfigHost'), invalid: !runtime },
+      { label: t('instanceForm.gatewayHost'), invalid: !gateway },
+      { label: t('instanceForm.runtimeHost'), invalid: !runtime },
       { label: t('instanceForm.userWebHost'), invalid: !userWeb },
       { label: t('instanceForm.gatewayWebHttpHost'), invalid: !gatewayWebHttp },
     ];
@@ -150,8 +150,8 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
       return;
     }
     const hostsToValidate: { value: string; field: string }[] = [
-      { value: gateway, field: t('instanceForm.gatewayConfigHost') },
-      { value: runtime, field: t('instanceForm.runtimeConfigHost') },
+      { value: gateway, field: t('instanceForm.gatewayHost') },
+      { value: runtime, field: t('instanceForm.runtimeHost') },
       { value: userWeb, field: t('instanceForm.userWebHost') },
       { value: gatewayWebHttp, field: t('instanceForm.gatewayWebHttpHost') },
       { value: gatewayWebWs, field: t('instanceForm.gatewayWebWsHost') },
@@ -165,8 +165,8 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
     }
     try {
       await InstanceApi.update(instanceId, {
-        gateway_config_host: gateway,
-        runtime_config_host: runtime,
+        gateway_host: gateway,
+        runtime_host: runtime,
         user_web_host: userWeb,
         gateway_web_http_host: gatewayWebHttp,
         gateway_web_ws_host: gatewayWebWs,
@@ -317,22 +317,22 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
       >
         <div className="flex flex-col gap-3">
           <div>
-            <FieldLabel required>{t('instanceForm.gatewayConfigHost')}</FieldLabel>
+            <FieldLabel required>{t('instanceForm.gatewayHost')}</FieldLabel>
             <LimitedTextInput
-              value={connectivityForm.gateway_config_host}
+              value={connectivityForm.gateway_host}
               maxLength={HOST_MAX}
-              onChange={(gateway_config_host) =>
-                setConnectivityForm((prev) => ({ ...prev, gateway_config_host }))
+              onChange={(gateway_host) =>
+                setConnectivityForm((prev) => ({ ...prev, gateway_host }))
               }
             />
           </div>
           <div>
-            <FieldLabel required>{t('instanceForm.runtimeConfigHost')}</FieldLabel>
+            <FieldLabel required>{t('instanceForm.runtimeHost')}</FieldLabel>
             <LimitedTextInput
-              value={connectivityForm.runtime_config_host}
+              value={connectivityForm.runtime_host}
               maxLength={HOST_MAX}
-              onChange={(runtime_config_host) =>
-                setConnectivityForm((prev) => ({ ...prev, runtime_config_host }))
+              onChange={(runtime_host) =>
+                setConnectivityForm((prev) => ({ ...prev, runtime_host }))
               }
             />
           </div>

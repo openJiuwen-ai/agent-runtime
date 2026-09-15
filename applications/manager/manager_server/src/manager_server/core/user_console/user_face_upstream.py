@@ -240,8 +240,9 @@ async def resolve_user_face_upstreams(
 
     data = getattr(row, "data", None)
     data_dict = dict(data) if isinstance(data, dict) else {}
+    raw_user_web = getattr(row, "user_web_host", None)
     resolved = UserFaceUpstreams(
-        user_web=_pick(data_dict.get("user_web_host"), defaults.user_web),
+        user_web=_pick(raw_user_web, defaults.user_web),
         gateway_http=_pick(data_dict.get("gateway_web_http_host"), defaults.gateway_http),
         gateway_ws=_pick(data_dict.get("gateway_web_ws_host"), defaults.gateway_ws),
     )
@@ -253,7 +254,7 @@ async def resolve_user_face_upstreams(
         "user_face_upstream_resolved",
         user_id=uid,
         jiuwenclaw_id=jid,
-        raw_user_web=data_dict.get("user_web_host"),
+        raw_user_web=raw_user_web,
         raw_gateway_http=data_dict.get("gateway_web_http_host"),
         raw_gateway_ws=data_dict.get("gateway_web_ws_host"),
         user_web=resolved.user_web,

@@ -18,14 +18,6 @@ _PROBE_TIMEOUT = 5.0
 _PROBE_CONCURRENCY = 20
 
 
-def _user_web_host_from_row(row) -> str | None:
-    data = getattr(row, "data", None)
-    if not isinstance(data, dict):
-        return None
-    host = str(data.get("user_web_host") or "").strip().rstrip("/")
-    return host or None
-
-
 async def _probe_one_side(
     handler: DBHandler,
     *,
@@ -63,9 +55,9 @@ async def scan_instance_health_once(handler: DBHandler) -> dict[str, int]:
         jid = str(getattr(row, "jiuwenclaw_id", "") or "").strip()
         if not jid:
             continue
-        gw_host = getattr(row, "gateway_config_host", None)
-        rt_host = getattr(row, "runtime_config_host", None)
-        web_host = _user_web_host_from_row(row)
+        gw_host = getattr(row, "gateway_host", None)
+        rt_host = getattr(row, "runtime_host", None)
+        web_host = str(getattr(row, "user_web_host", "") or "").strip().rstrip("/") or None
         if gw_host:
             tasks.append(
                 _guarded(

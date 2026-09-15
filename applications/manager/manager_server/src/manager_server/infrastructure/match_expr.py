@@ -41,6 +41,35 @@ def canonicalize_match_expr(value: Any) -> Any:
     return _canonicalize_string(text) if text else []
 
 
+def match_key(expr: Any) -> str:
+    """去重键：规范化后的稳定 JSON 串。"""
+    return json.dumps(canonicalize_match_expr(expr), ensure_ascii=False, separators=(",", ":"))
+
+
+def merge_match_exprs(match_exprs: list[Any]) -> Any:
+    """将 API ``match_exprs`` 合并为可入库的单一 JSON 值（多条件为 OR 列表）。
+
+    一行一 ``resource_id``：多条输入合进同一单元格，不再拆多行。
+    """
+    parts: list[str] = []
+    seen: set[str] = set()
+    for raw in match_exprs:
+        expr = canonicalize_match_expr(raw)
+        if expr == []:
+            return []
+        items = expr if isinstance(expr, list) else [str(expr)]
+        for item in items:
+            text = str(item).strip()
+            if not text:
+                continue
+            key = match_key(text)
+            if key in seen:
+                continue
+            seen.add(key)
+            parts.append(text)
+    return canonicalize_match_expr(parts)
+
+
 def _canonicalize_string(text: str) -> Any:
     if not text:
         return []

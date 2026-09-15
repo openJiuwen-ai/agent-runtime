@@ -3,6 +3,8 @@
  * 导入导出只处理 `{ containers, templates, scopes }`；
  * `type` / `metadata` 由 Manager 下发 Runtime 时自行拼接。
  * 导入兼容误带 Envelope 的文件（自动取 rawdata）。
+ * 导出强制 split：template 仅带 refs，容器规格在 containers。
+ * 导入兼容旧 inline wire：前端合成 containers 写入 data.config_sync。
  */
 import type {
   ServiceConfigTemplate,
@@ -83,29 +85,29 @@ function pickStoredSync(data: Record<string, unknown> | null | undefined): Store
 }
 
 /**
- * Manager 模板 → Runtime wire 模板。
+ * Manager 模板 → Runtime wire 模板（强制 split，不写 inline 容器键）。
  * 对齐联调样例：仅写 nodeName（勿双写 node_name，Runtime 会拒收）。
  */
 export function templateToWire(
   row: ServiceConfigTemplate,
-  options?: { templateId?: string; splitForm?: boolean },
+  options?: { templateId?: string },
 ): Record<string, unknown> {
-  const split = options?.splitForm ?? Boolean(row.main_container_id);
   const wire: Record<string, unknown> = {
     template_id: options?.templateId || row.template_id,
     template_name: row.template_name,
     pod_name: row.pod_name || 'agentserver',
     namespace: row.namespace || 'default',
     sse_path: row.sse_path || '/sse',
-    scope_concurrency: row.session_concurrency,
-    pod_concurrency: row.service_concurrency,
+    scope_concurrency: row.scope_concurrency,
+    pod_concurrency: row.pod_concurrency,
     session_ttl: row.session_ttl,
-    pod_ttl: row.service_ttl,
-    min_idle_pods: row.min_idle_services,
+    pod_ttl: row.pod_ttl,
+    min_idle_pods: row.min_idle_pods,
     ready_timeout: row.ready_timeout,
   };
   if (row.description) wire.description = row.description;
   if (row.node_name) wire.nodeName = row.node_name;
+  if (row.fs_group != null) wire.fsGroup = row.fs_group;
   if (row.kubeconfig) wire.kubeconfig = row.kubeconfig;
   // 样例未写这些字段；仅非默认时带上，避免噪音
   if (row.ready_poll_interval != null && row.ready_poll_interval !== 2) {
@@ -116,185 +118,115 @@ export function templateToWire(
   }
   if (row.enabled === false) wire.enabled = false;
 
-  if (split) {
-    if (row.main_container_id) wire.main_container_id = row.main_container_id;
-    if (row.sidecar_container_ids?.length) {
-      wire.sidecar_container_ids = [...row.sidecar_container_ids];
-    }
-    if (row.volumes?.length) wire.volumes = row.volumes;
-    return wire;
+  if (row.main_container_id) wire.main_container_id = row.main_container_id;
+  if (row.sidecar_container_ids?.length) {
+    wire.sidecar_container_ids = [...row.sidecar_container_ids];
   }
-
-  wire.agent_image = row.agent_image ?? '';
-  wire.container_name = row.container_name;
-  wire.container_port = row.container_port;
-  wire.port_name = row.port_name;
-  wire.sse_port = row.sse_port;
-  wire.health_path = row.health_path;
-  wire.image_pull_policy = row.image_pull_policy;
-  if (row.agent_env) wire.agent_env = row.agent_env;
-  if (row.run_as_user != null) wire.run_as_user = row.run_as_user;
-  if (row.run_as_group != null) wire.run_as_group = row.run_as_group;
-  if (row.readiness_initial_delay != null) {
-    wire.readiness_initial_delay = row.readiness_initial_delay;
-  }
-  if (row.readiness_period != null) wire.readiness_period = row.readiness_period;
-  if (row.nfs_server) wire.nfs_server = row.nfs_server;
-  if (row.nfs_path) wire.nfs_path = row.nfs_path;
-  if (row.nfs_mount_path) wire.nfs_mount_path = row.nfs_mount_path;
-  if (row.agent_cpu_request) wire.agent_cpu_request = row.agent_cpu_request;
-  if (row.agent_memory_request) wire.agent_memory_request = row.agent_memory_request;
-  if (row.agent_cpu_limit) wire.agent_cpu_limit = row.agent_cpu_limit;
-  if (row.agent_memory_limit) wire.agent_memory_limit = row.agent_memory_limit;
-  if (row.sidecars?.length) wire.sidecars = row.sidecars;
-  if (row.agent_host_path_mounts?.length) {
-    wire.agent_host_path_mounts = row.agent_host_path_mounts;
-  }
-  if (row.agent_configmap_mounts?.length) {
-    wire.agent_configmap_mounts = row.agent_configmap_mounts;
-  }
-  if (row.agent_pvc_mounts?.length) wire.agent_pvc_mounts = row.agent_pvc_mounts;
+  if (row.volumes?.length) wire.volumes = row.volumes;
   return wire;
 }
 
-function synthesizeMainContainer(row: ServiceConfigTemplate): Record<string, unknown> {
-  const cid = row.main_container_id || `c-${row.template_id}-main`;
+/**
+ * 从旧版 inline wire 字段合成主容器规格（导入兼容）。
+ * CreateBody 不再写这些已删列，合成结果放入 data.config_sync.containers。
+ */
+function synthesizeMainContainerFromWire(
+  wire: Record<string, unknown>,
+): Record<string, unknown> {
+  const tid = optStr(wire.template_id) || 'imported';
+  const cid = optStr(wire.main_container_id) || `c-${tid}-main`;
+  const containerPort = optInt(wire.container_port) ?? 8080;
+  const ssePort = optInt(wire.sse_port) ?? containerPort;
+  const agentEnv =
+    envListToMap(wire.agent_env) ??
+    (() => {
+      const rec = asRecord(wire.agent_env);
+      if (!rec) return undefined;
+      const out: Record<string, string> = {};
+      for (const [k, v] of Object.entries(rec)) {
+        if (v == null) continue;
+        out[k] = String(v);
+      }
+      return Object.keys(out).length ? out : undefined;
+    })();
+
   const container: Record<string, unknown> = {
     container_id: cid,
-    name: row.container_name || 'agent',
-    image: row.agent_image || '',
-    imagePullPolicy: row.image_pull_policy || 'IfNotPresent',
+    name: optStr(wire.container_name) || 'agent',
+    image: optStr(wire.agent_image) || '',
+    imagePullPolicy: optStr(wire.image_pull_policy) || 'IfNotPresent',
     ports: [
       {
-        name: row.port_name || 'http',
-        containerPort: row.container_port || 8080,
+        name: optStr(wire.port_name) || 'http',
+        containerPort,
       },
     ],
-    env: envMapToList(row.agent_env),
+    env: envMapToList(agentEnv),
   };
-  if (row.run_as_user != null || row.run_as_group != null) {
+
+  const runAsUser = optInt(wire.run_as_user);
+  const runAsGroup = optInt(wire.run_as_group);
+  if (runAsUser != null || runAsGroup != null) {
     container.securityContext = {
-      ...(row.run_as_user != null ? { runAsUser: row.run_as_user } : {}),
-      ...(row.run_as_group != null ? { runAsGroup: row.run_as_group } : {}),
+      ...(runAsUser != null ? { runAsUser } : {}),
+      ...(runAsGroup != null ? { runAsGroup } : {}),
     };
   }
-  if (row.health_path || row.readiness_initial_delay != null) {
+
+  const healthPath = optStr(wire.health_path);
+  const readinessInitial = optInt(wire.readiness_initial_delay);
+  if (healthPath || readinessInitial != null) {
     container.readinessProbe = {
       httpGet: {
-        path: row.health_path || '/health',
-        port: row.sse_port || row.container_port || 8080,
+        path: healthPath || '/health',
+        port: ssePort,
       },
-      initialDelaySeconds: row.readiness_initial_delay ?? 5,
-      periodSeconds: row.readiness_period ?? 5,
+      initialDelaySeconds: readinessInitial ?? 5,
+      periodSeconds: optInt(wire.readiness_period) ?? 5,
     };
   }
+
   const resources: Record<string, unknown> = {};
   const requests: Record<string, string> = {};
   const limits: Record<string, string> = {};
-  if (row.agent_cpu_request) requests.cpu = row.agent_cpu_request;
-  if (row.agent_memory_request) requests.memory = row.agent_memory_request;
-  if (row.agent_cpu_limit) limits.cpu = row.agent_cpu_limit;
-  if (row.agent_memory_limit) limits.memory = row.agent_memory_limit;
+  if (optStr(wire.agent_cpu_request)) requests.cpu = String(wire.agent_cpu_request);
+  if (optStr(wire.agent_memory_request)) {
+    requests.memory = String(wire.agent_memory_request);
+  }
+  if (optStr(wire.agent_cpu_limit)) limits.cpu = String(wire.agent_cpu_limit);
+  if (optStr(wire.agent_memory_limit)) limits.memory = String(wire.agent_memory_limit);
   if (Object.keys(requests).length) resources.requests = requests;
   if (Object.keys(limits).length) resources.limits = limits;
   if (Object.keys(resources).length) container.resources = resources;
+
   return container;
 }
 
-/** 导出 rawdata（三段式）。 */
+function looksLikeInlineWire(wire: Record<string, unknown>): boolean {
+  return Boolean(
+    optStr(wire.agent_image) ||
+      optStr(wire.container_name) ||
+      wire.container_port != null ||
+      wire.agent_env != null ||
+      wire.health_path != null,
+  );
+}
+
+/** 导出 rawdata（三段式，强制 split）。 */
 export function exportTemplateRawdata(row: ServiceConfigTemplate): ConfigSyncRawdata {
   const stored = pickStoredSync(row.data ?? undefined);
-  const hasStoredContainers = (stored.containers?.length ?? 0) > 0;
-  const splitForm = hasStoredContainers || Boolean(row.main_container_id);
   const wire = templateToWire(row, {
     templateId: stored.source_template_id || row.template_id,
-    splitForm,
   });
 
-  let containers = stored.containers ?? [];
-  if (!containers.length && (row.main_container_id || row.agent_image)) {
-    const main = synthesizeMainContainer(row);
-    containers = [main];
-    if (!wire.main_container_id) {
-      wire.main_container_id = String(main.container_id);
-    }
-  }
-
   return {
-    containers,
+    containers: stored.containers ?? [],
     templates: [wire],
     scopes: stored.scopes ?? [],
   };
 }
 
-function hydrateFromContainer(
-  body: ServiceConfigTemplateCreateBody,
-  container: Record<string, unknown>,
-): void {
-  if (!body.agent_image && container.image != null) {
-    body.agent_image = String(container.image);
-  }
-  if (!body.container_name && container.name != null) {
-    body.container_name = String(container.name);
-  }
-  const pull = container.imagePullPolicy ?? container.image_pull_policy;
-  if (!body.image_pull_policy && pull != null) {
-    body.image_pull_policy = String(pull);
-  }
-  const ports = asArray(container.ports);
-  const firstPort = asRecord(ports[0]);
-  if (firstPort) {
-    const port = optInt(firstPort.containerPort ?? firstPort.container_port);
-    if (port != null && body.container_port == null) body.container_port = port;
-    const pname = optStr(firstPort.name);
-    if (pname && !body.port_name) body.port_name = pname;
-  }
-  const env = envListToMap(container.env);
-  if (env && !body.agent_env) body.agent_env = env;
-  const sc = asRecord(container.securityContext ?? container.security_context);
-  if (sc) {
-    if (body.run_as_user == null) {
-      body.run_as_user = optInt(sc.runAsUser ?? sc.run_as_user) ?? null;
-    }
-    if (body.run_as_group == null) {
-      body.run_as_group = optInt(sc.runAsGroup ?? sc.run_as_group) ?? null;
-    }
-  }
-  const probe = asRecord(container.readinessProbe ?? container.readiness_probe);
-  if (probe) {
-    if (body.readiness_initial_delay == null) {
-      body.readiness_initial_delay = optInt(
-        probe.initialDelaySeconds ?? probe.initial_delay_seconds,
-      );
-    }
-    if (body.readiness_period == null) {
-      body.readiness_period = optInt(probe.periodSeconds ?? probe.period_seconds);
-    }
-    const httpGet = asRecord(probe.httpGet ?? probe.http_get);
-    if (httpGet?.path != null && !body.health_path) {
-      body.health_path = String(httpGet.path);
-    }
-    const probePort = optInt(httpGet?.port);
-    if (probePort != null && body.sse_port == null) body.sse_port = probePort;
-  }
-  const resources = asRecord(container.resources);
-  const requests = asRecord(resources?.requests);
-  const limits = asRecord(resources?.limits);
-  if (requests?.cpu != null && !body.agent_cpu_request) {
-    body.agent_cpu_request = String(requests.cpu);
-  }
-  if (requests?.memory != null && !body.agent_memory_request) {
-    body.agent_memory_request = String(requests.memory);
-  }
-  if (limits?.cpu != null && !body.agent_cpu_limit) {
-    body.agent_cpu_limit = String(limits.cpu);
-  }
-  if (limits?.memory != null && !body.agent_memory_limit) {
-    body.agent_memory_limit = String(limits.memory);
-  }
-}
-
-/** Runtime wire / 内联模板 → Manager CreateBody。 */
+/** Runtime wire / 内联模板 → Manager CreateBody（仅保留字段 + data.config_sync）。 */
 export function wireTemplateToCreateBody(
   wire: Record<string, unknown>,
   containers: Record<string, unknown>[] = [],
@@ -309,98 +241,68 @@ export function wireTemplateToCreateBody(
       optStr(wire.template_id) ||
       'imported-template',
     description: optStr(wire.description),
-    agent_image: optStr(wire.agent_image) ?? '',
     namespace: optStr(wire.namespace) || 'default',
     node_name: nodeName,
-    run_as_user: optInt(wire.run_as_user) ?? null,
-    run_as_group: optInt(wire.run_as_group) ?? null,
+    fs_group: optInt(wire.fsGroup ?? wire.fs_group) ?? null,
     pod_name: optStr(wire.pod_name) || 'agentserver',
-    container_name: optStr(wire.container_name) || 'agent',
-    container_port: optInt(wire.container_port) ?? 8080,
-    port_name: optStr(wire.port_name) || 'http',
-    sse_port: optInt(wire.sse_port) ?? optInt(wire.container_port) ?? 8080,
     sse_path: optStr(wire.sse_path) || '/sse',
-    health_path: optStr(wire.health_path) || '/health',
-    agent_env: (() => {
-      const fromList = envListToMap(wire.agent_env);
-      if (fromList) return fromList;
-      const rec = asRecord(wire.agent_env);
-      if (!rec) return undefined;
-      const out: Record<string, string> = {};
-      for (const [k, v] of Object.entries(rec)) {
-        if (v == null) continue;
-        out[k] = String(v);
-      }
-      return Object.keys(out).length ? out : undefined;
-    })(),
-    image_pull_policy: (optStr(wire.image_pull_policy) || 'IfNotPresent') as
-      | 'Always'
-      | 'IfNotPresent'
-      | 'Never',
     kubeconfig: optStr(wire.kubeconfig),
-    readiness_initial_delay: optInt(wire.readiness_initial_delay) ?? 5,
-    readiness_period: optInt(wire.readiness_period) ?? 5,
     ready_timeout: optInt(wire.ready_timeout) ?? 300,
     ready_poll_interval: optInt(wire.ready_poll_interval) ?? 2,
-    nfs_server: optStr(wire.nfs_server),
-    nfs_path: optStr(wire.nfs_path),
-    nfs_mount_path: optStr(wire.nfs_mount_path),
-    agent_cpu_request: optStr(wire.agent_cpu_request),
-    agent_memory_request: optStr(wire.agent_memory_request),
-    agent_cpu_limit: optStr(wire.agent_cpu_limit),
-    agent_memory_limit: optStr(wire.agent_memory_limit),
-    sidecars: asArray(wire.sidecars).filter(asRecord) as Record<string, unknown>[],
-    agent_host_path_mounts: asArray(wire.agent_host_path_mounts).filter(
-      asRecord,
-    ) as Record<string, unknown>[],
-    agent_configmap_mounts: asArray(wire.agent_configmap_mounts).filter(
-      asRecord,
-    ) as Record<string, unknown>[],
-    agent_pvc_mounts: asArray(wire.agent_pvc_mounts).filter(asRecord) as Record<
-      string,
-      unknown
-    >[],
     main_container_id: optStr(wire.main_container_id),
     sidecar_container_ids: asArray(wire.sidecar_container_ids)
       .map((id) => String(id).trim())
       .filter(Boolean),
     volumes: asArray(wire.volumes).filter(asRecord) as Record<string, unknown>[],
-    min_idle_services: optInt(wire.min_idle_pods ?? wire.min_idle_services) ?? 0,
-    service_concurrency:
-      optInt(wire.pod_concurrency ?? wire.service_concurrency) ?? 2,
-    service_ttl: optInt(wire.pod_ttl ?? wire.service_ttl) ?? 300,
+    min_idle_pods: optInt(wire.min_idle_pods ?? wire.min_idle_services) ?? 0,
+    pod_concurrency: optInt(wire.pod_concurrency ?? wire.service_concurrency) ?? 2,
+    pod_ttl: optInt(wire.pod_ttl ?? wire.service_ttl) ?? 300,
     message_timeout: optInt(wire.message_timeout) ?? 600,
-    session_concurrency:
+    scope_concurrency:
       optInt(wire.scope_concurrency ?? wire.session_concurrency) ?? 3,
     session_ttl: optInt(wire.session_ttl) ?? 60,
     enabled: wire.enabled === false ? false : true,
   };
 
-  const byId = new Map<string, Record<string, unknown>>();
-  for (const c of containers) {
-    const id = optStr(c.container_id);
-    if (id) byId.set(id, c);
-  }
-  if (body.main_container_id && byId.has(body.main_container_id)) {
-    hydrateFromContainer(body, byId.get(body.main_container_id)!);
-  } else if (!body.main_container_id && containers.length === 1) {
-    const only = containers[0];
-    const cid = optStr(only.container_id);
+  let resolvedContainers = [...containers];
+
+  // 旧 inline wire：无 containers 时从前端合成，不写已删模板列
+  if (!resolvedContainers.length && looksLikeInlineWire(wire)) {
+    const main = synthesizeMainContainerFromWire(wire);
+    resolvedContainers = [main];
+    if (!body.main_container_id) {
+      body.main_container_id = String(main.container_id);
+    }
+    const inlineSidecars = asArray(wire.sidecars).filter(asRecord) as Record<
+      string,
+      unknown
+    >[];
+    if (inlineSidecars.length) {
+      const sideIds: string[] = [];
+      for (let i = 0; i < inlineSidecars.length; i++) {
+        const side = { ...inlineSidecars[i] };
+        const sid =
+          optStr(side.container_id) ||
+          `c-${optStr(wire.template_id) || 'imported'}-side-${i}`;
+        side.container_id = sid;
+        resolvedContainers.push(side);
+        sideIds.push(sid);
+      }
+      if (!body.sidecar_container_ids?.length) {
+        body.sidecar_container_ids = sideIds;
+      }
+    }
+  } else if (!body.main_container_id && resolvedContainers.length === 1) {
+    const cid = optStr(resolvedContainers[0].container_id);
     if (cid) body.main_container_id = cid;
-    hydrateFromContainer(body, only);
   }
 
-  if (!body.sidecars?.length) delete body.sidecars;
-  if (!body.agent_host_path_mounts?.length) delete body.agent_host_path_mounts;
-  if (!body.agent_configmap_mounts?.length) delete body.agent_configmap_mounts;
-  if (!body.agent_pvc_mounts?.length) delete body.agent_pvc_mounts;
   if (!body.sidecar_container_ids?.length) delete body.sidecar_container_ids;
   if (!body.volumes?.length) delete body.volumes;
-  if (!body.agent_env || !Object.keys(body.agent_env).length) delete body.agent_env;
 
   const data: Record<string, unknown> = {};
   const configSync: StoredSync = {};
-  if (containers.length) configSync.containers = containers;
+  if (resolvedContainers.length) configSync.containers = resolvedContainers;
   if (options?.scopes?.length) configSync.scopes = options.scopes;
   const sourceTid = optStr(wire.template_id);
   if (sourceTid) configSync.source_template_id = sourceTid;
@@ -434,7 +336,8 @@ export function parseConfigSyncImport(parsed: unknown): {
   } else if (
     optStr(root.template_name) ||
     optStr(root.template_id) ||
-    root.main_container_id
+    root.main_container_id ||
+    looksLikeInlineWire(root)
   ) {
     return {
       body: wireTemplateToCreateBody(root, []),

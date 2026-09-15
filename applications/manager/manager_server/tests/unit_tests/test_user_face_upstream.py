@@ -131,11 +131,11 @@ async def test_resolve_uses_instance_hosts_when_admitted(
         "get_instance_row",
         AsyncMock(
             return_value=SimpleNamespace(
+                user_web_host="http://inst-web:5173",
                 data={
-                    "user_web_host": "http://inst-web:5173",
                     "gateway_web_http_host": "http://inst-gw:19002",
                     "gateway_web_ws_host": "ws://inst-gw:19000",
-                }
+                },
             )
         ),
     )

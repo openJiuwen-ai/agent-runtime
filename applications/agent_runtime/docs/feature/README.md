@@ -17,6 +17,8 @@
 
 | 日期 | 文档 | 一句话 |
 |---|---|---|
+| 2026-09 | [data / created_at / updated_at 三元组对齐](2026-09-data-triad-alignment.md) | container/routing_scope/link_binding_state 补 data；config_sync 透传模板/资源 data；Gateway agent-resource 补时间戳；实例资源更新保留 created_at |
+| 2026-09 | [删除 service_config_template legacy 内联容器列](2026-09-drop-legacy-inline-template-columns.md) | 硬删 24 个拆表前内联列；Manager 只认 data.config_sync.containers + refs；Runtime 保留 wire mixed 黑名单；存量库须 DROP COLUMN |
 | 2026-09 | [HTTP/SSE 内部链路 mTLS](2026-09-http-sse-link-mtls.md) | Manager、Gateway、Agent Runtime、AgentServer 四角色证书，HTTPS/mTLS + 角色指纹 + 绑定版本校验，数据库持久化与 AgentServer Pod 注入，兼容 Manager 多实例和 Runtime 多副本 |
 | 2026-09 | [config_refresh 前置日落闸门(连续刷新 409 串行化)](2026-09-config-refresh-sunset-gate.md) | refresh 在任何 bump 前按**代次**自查 `rm_facade.sunset_pending_pods`(sync 守卫按版本、对 refresh 日落失明)——老代回收完成前连刷 409 背压、零副作用,防多代日落堆积蹲占 max_pods(2026-09-11 4 连刷 2.5 分钟全量 503 实录);load_test 409 warn 化+代次冻结断言;510 用例 |
 | 2026-09 | [NFS 卷与 PVC 同构化(pod 级卷源)](2026-09-nfs-volume-pod-level.md) | NFS 卷源归模板级 volumes、挂载走第四族 `nfs_mounts`(与 PVC 同构,`nfs_seen` 跨容器去重);三元组降级 legacy 只读兼容;废「仅主容器/单挂载/禁 readOnly」限制;501 用例 |

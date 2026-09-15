@@ -31,12 +31,12 @@ export function InstanceDetailPanel({ instance, onOpenEditConnectivity, onRefres
           </div>
           <div className="text-xs grid grid-cols-[11.5em_1fr] gap-y-2 gap-x-2 mono">
             <div className="text-muted whitespace-nowrap">gateway host</div>
-            <div className="truncate" title={d?.gateway_config_host ?? ''}>
-              {d?.gateway_config_host ?? '-'}
+            <div className="truncate" title={d?.gateway_host ?? ''}>
+              {d?.gateway_host ?? '-'}
             </div>
             <div className="text-muted whitespace-nowrap">runtime host</div>
-            <div className="truncate" title={d?.runtime_config_host ?? ''}>
-              {d?.runtime_config_host ?? '-'}
+            <div className="truncate" title={d?.runtime_host ?? ''}>
+              {d?.runtime_host ?? '-'}
             </div>
             <div className="text-muted whitespace-nowrap">user web</div>
             <div className="truncate" title={d?.user_web_host ?? ''}>
