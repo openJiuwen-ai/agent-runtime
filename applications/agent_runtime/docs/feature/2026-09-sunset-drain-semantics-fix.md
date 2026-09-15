@@ -1,4 +1,4 @@
-# 日落排空语义修复:sync 闸门基准改当前生效版本 + reclaim 落后 Pod 免老化即刻回收
+# 日落排空语义修复:sync 闸门基准改当前生效版本 + reclaim 落后 Pod 免老化即刻回收 + refresh 闸门过滤在集老代 Pod
 
 - 日期:2026-09-15
 - 里程碑:M 维护期
@@ -24,6 +24,16 @@ pod_ttl=180s 仍不回收)。根因是**版本口径不一致**:
 ## 方案
 
 定案要点(与需求方逐条确认过):
+
+4. **④ refresh 闸门过滤在集老代 Pod**(同日追补,e2e 压测暴露):refresh 的
+   全量软摘除 ZREM 与并发 follower 复用的 `REGISTER_POD` **同秒竞态**会把
+   老代 Pod 重新登记回 SM 候选集;在集 Pod 不被 reconcile release、活会话
+   (持续 touch)不空不走 sweep → 永不进 idle 池 → ③ 够不着 → 闸门(按 RM
+   全集判代次)等它 = 等会话生命周期(e2e 15s 连刷 + session_ttl=600s 场景
+   409 连坐 2min+,两次复跑一致)。修正:闸门把 `rm_facade.sunset_pending_
+   pods` 结果再过滤掉仍在 SM 候选集内的(与 sync 闸门跳过在集 Pod 同构);
+   自愈闭环 = 本次 refresh 的全量软摘除把它 ZREM 出集 → reconcile ≤30s
+   release 入 idle → ③ stale 即刻回收(硬切,已接受)。
 
 1. **① 闸门基准修复**:`_sunset_pending_pods` 比较基准从新载荷 ver 改为
    **当前生效版本**(`old_templates[old_scopes[sid].template_id].deploy_ver()`)。
@@ -51,10 +61,18 @@ pod_ttl=180s 仍不回收)。根因是**版本口径不一致**:
 - `session_manager/config_store.py`:闸门调用点基准改 `old_templates[old_scopes
   [sid].template_id].deploy_ver()`;`_sunset_pending_pods(scope_id, cur_deploy_ver)`
   改参名+空基准早退;注释重写口径推导。**扩散② `_soft_remove_stale_pods`
-  仍比新版本**——那是「本次要承诺的排空」,语义正确不动。
+  仍比新版本**——那是「本次要承诺的排空」,语义正确不动。④:`_config_
+  refresh_locked` 闸门对 `rm_facade.sunset_pending_pods` 结果过滤仍在 SM
+  候选集内的 Pod(SM 侧读自家键,无跨模块违规)。
 - `resource_manager/sweeper.py`:`reclaim_once` 循环改两级判定(`pod_id in
   stale_set or aged ≥ pod_ttl`);reclaim pending 留痕的 due 口径同步
-  (stale 全部即刻到龄);模块 docstring 更新。
+  (stale 全部即刻到龄);模块 docstring 更新。④:`orchestrator.sunset_
+  pending_pods` docstring 注明调用方的在集过滤。
+- `scripts/load_test.py`(④ 场景对齐):`EXPECTED_ERRORS` 增 `config_refresh`
+  → {503/NO_POD_AVAILABLE, 409/CONFIG_SYNC_BUSY}(容量语义/排空窗背压,
+  参照 mixed 先例);暖探测改 `refresh_rebuild_budget` 预算内重试(契约=
+  「最终可达」而非瞬时零 503,重建收敛后 max_pods 仍可能被回收中老代 Pod
+  占满一个 reconcile 周期)。
 - 无新增键 / Lua / 接口;红线零触碰(闸门仍先于写库、拒绝零副作用)。
 
 ## 验证
@@ -80,11 +98,15 @@ pod_ttl=180s 仍不回收)。根因是**版本口径不一致**:
     死亡组合就位(registered∖candidates ∩ idle,ver==cfg)→ A 类下发
     **200(0.0s,修复前永久 409)** → 老 Pod **2.2s 回收**(pod_ttl=600,
     ③ 免老化)→ 重发 200 + 新代暖池重建;
-  - config_refresh 180s:27/2——**非回归**(两次复跑一致;卡闸 Pod 全程
-    被 touch 活会话占住,永不进 idle 池,③ 不在其路径;闸门代次版未改动)。
-    根因是 refresh 闸门既有背压语义撞上场景参数:15s 连刷 ≪ session_ttl=600s
-    长活会话 → 闸门等会话排空属设计行为(12h 浸泡零 409 因刷新间隔 ≈
-    session_ttl)。场景零 409/503 预期对此节放过紧,待场景白名单或设计定夺。
+  - config_refresh 180s:首跑 27/2(两次复跑一致)→ 定性为 **④ 竞态**(见
+    方案 4):卡闸 Pod 均为"日落 ZREM 后被并发 follower REGISTER 重入候选集、
+    带持续 touch 活会话永不进 idle"形态,闸门等它=等会话生命周期(409 连坐
+    2min+ 实录)。④ 修复后(`sunsetfix-20260915b`):refresh 11 发 5~6 成,
+    409 连坐消失(残余为秒级排空窗口背压,WARN 观测);高频连刷下的
+    NO_POD_AVAILABLE 与合法重放置(真违规 0)是硬切决策在 15s 节拍下的容量
+    代价(max_pods 语义,load_test 场景参数注释即"容量语义非缺陷"),场景
+    预期对齐(NO_POD_AVAILABLE/短窗 409 白名单化 + 暖探测改重建预算内
+    「最终可达」)后 **49 pass / 0 fail / 1 warn**(warn 为白名单计数标记)。
 
 ## 影响面
 
@@ -96,8 +118,6 @@ pod_ttl=180s 仍不回收)。根因是**版本口径不一致**:
   (重放置到新 Pod,丢 Pod 本地上下文)——已确认接受。
 - 兼容:无 schema/键/Lua 变更,无存量库前置 SQL。
 - 遗留:若未来要恢复「版本变更不切活会话」,按②B 方案实现;e2e 用例
-  (`e2e-test-cases.md`)的 409 串行化相关条目按新语义复核待做;config_refresh
-  压测场景对「连刷背压 + 容量 503」的预期需与闸门设计对齐(白名单化或调
-  cadence,参照 mixed 的 NO_POD_AVAILABLE 白名单先例);真镜像 tag 甄别:
-  `0.0.34r` 是 WS 契约构建(仅 ws://127.0.0.1:18092,8086 HTTP 入口无),
-  三件套 HTTP 契约用 `0.0.16s`。
+  (`e2e-test-cases.md`)的 409 串行化相关条目按新语义复核待做;真镜像 tag
+  甄别:`0.0.34r` 是 WS 契约构建(仅 ws://127.0.0.1:18092,8086 HTTP 入口
+  无),三件套 HTTP 契约用 `0.0.16s`。

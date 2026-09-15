@@ -1073,9 +1073,21 @@ class ConfigStore:
         #      小 max_pods 时滚动窗口被焊死（2026-09-11 wangchang 环境 9 分钟
         #      4 连刷把 2/2 槽位堵满 2.5 分钟实录）。回收由 reclaim 代次感知
         #      保证收敛（test_force_refresh.py R1/R2），闸门不会永久 409。
+        #      **候选集内的老代 Pod 不拦**（2026-09-15 e2e 实测竞态）：日落
+        #      ZREM 与并发 follower 复用的 REGISTER_POD 同秒交错时老代 Pod 被
+        #      重新登记回候选集，带着持续 touch 的会话永不被 reconcile release/
+        #      回收（在集=合法服务中），闸门等它=等会话生命周期（600s 会话
+        #      15s 连刷 409 连坐 2min+ 实录）。放行语义与 config_sync 闸门跳过
+        #      在集 Pod 一致；且自愈闭环：本次 refresh 的全量软摘除把它 ZREM
+        #      出集 → reconcile ≤30s release 入 idle → reclaim stale 免老化
+        #      即刻回收（会话硬切重放置，2026-09-15 决策接受）。
         if self._sunset_pending is not None:
             for scope in scopes:
                 pending = await self._sunset_pending(scope.scope_id)
+                if pending:
+                    in_candidates = set(
+                        await self.state.scope_pod_ids(scope.scope_id))
+                    pending = [p for p in pending if p not in in_candidates]
                 if pending:
                     raise ConfigSyncBusy(
                         f"scope {scope.scope_id} still has sunset pods "

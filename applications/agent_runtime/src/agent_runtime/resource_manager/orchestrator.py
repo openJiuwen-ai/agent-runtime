@@ -416,9 +416,11 @@ class ResourceOrchestrator:
 
         判据是 **generation** 而非 deploy_ver——refresh 不改配置值，上一轮
         refresh 日落的老代 Pod 只能按代次识别（版本判定对它们失明）。busy
-        排空中与 idle 待回收一并计入（包容面与 config_sync 的版本判定守卫
-        一致）；info 已缺失的幽灵无法归因，不计入。两侧代次同为缺省（""）
-        视为一致——从未 refresh 过的 scope 零行为变化。
+        排空中与 idle 待回收一并计入；info 已缺失的幽灵无法归因，不计入。
+        两侧代次同为缺省（""）视为一致——从未 refresh 过的 scope 零行为变化。
+        注意调用方（config_store._config_refresh_locked）会再过滤掉仍在 SM
+        候选集内的 Pod——日落 ZREM 与并发 follower REGISTER 竞态重入集的
+        老代 Pod 还在合法服务，不等它（2026-09-15 e2e 实测 409 连坐病理）。
         """
         current = (await self.state.load_scope_config(scope_id)).get("generation") or ""
         pending: list[str] = []

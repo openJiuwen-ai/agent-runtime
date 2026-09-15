@@ -599,6 +599,11 @@ class CheckRecorder:
 EXPECTED_ERRORS: dict[str, set[str]] = {
     "queued": {"503/SCOPE_FULL", "503/NO_POD_AVAILABLE"},
     "mixed": {"503/NO_POD_AVAILABLE"},
+    # config_refresh(2026-09-15 对齐):闸门过滤在集老代 Pod 后不再长窗背压,
+    # 高频连刷 = 每 bump 日落全舰队 → 硬切重放置风暴 → max_pods 饱和的
+    # NO_POD_AVAILABLE(容量语义非缺陷,同上);排空窗口内残余 409 背压是
+    # 闸门设计行为(秒级收敛,controller 内联重试)。
+    "config_refresh": {"503/NO_POD_AVAILABLE", "409/CONFIG_SYNC_BUSY"},
 }
 
 
@@ -965,11 +970,20 @@ async def refresh_controller(client: httpx.AsyncClient, base: str, run: str,
                 rebuilt,
                 f"目标代次={ {s: gens.get(s) for s in scope_ids} }")
             if rebuilt:
-                # 暖探测:重建完成后新会话必须 200(命中 min_idle 暖 Pod)
+                # 暖探测:重建完成后新会话必须 200(命中 min_idle 暖 Pod)。
+                # 重试预算对齐 refresh_rebuild_budget(默认 120s,间隔 3s):
+                # 高频连刷下重建收敛后 max_pods 仍可能被回收中老代 Pod +
+                # 重部署占满一个 reconcile 周期(≤30s,容量语义,白名单同族),
+                # 契约是「最终可达」而非「瞬时零 503」——预算耗尽仍非 200 才 fail。
                 wenv = _envelope("route", f"{run}-warm-{n}", f"sess-{run}-warm-{n}",
                                  f"grp-{run}-0")
                 wst, wraw, _ = await _post(client, f"{base}/route", wenv,
                                            args.timeout)
+                deadline = time.monotonic() + args.refresh_rebuild_budget
+                while wst != 200 and time.monotonic() < deadline:
+                    await asyncio.sleep(3)
+                    wst, wraw, _ = await _post(client, f"{base}/route", wenv,
+                                               args.timeout)
                 checks.record(f"refresh#{n} 重建后新会话可达(暖探测 200)",
                               wst == 200,
                               f"status={wst} {wraw.get('error_code') or ''} "

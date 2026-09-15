@@ -261,3 +261,59 @@ async def test_R7_reclaim_warm_overflow_still_ages(runtime):
     await asyncio.sleep(2.2)                     # 真等过 pod_ttl=2
     await runtime.rm_sweeper.reclaim_once()
     assert len(set(await runtime.rm_state.all_pod_ids())) == 1   # 溢出者走,底数留
+
+
+# ------------------------------------------- R8:闸门过滤候选集内老代 Pod(竞态)
+
+@requires_lua
+async def test_R8_refresh_gate_skips_busy_lagged_pod_in_candidates(runtime):
+    """R8(2026-09-15):日落 ZREM 与并发 follower 复用的 REGISTER_POD 竞态把
+    老代 Pod 重新登记回候选集 → 闸门不拦在集老代 Pod(在集=合法服务中,等它
+    =等会话生命周期;e2e 15s 连刷 409 连坐 2min+ 实录)。放行后自愈闭环:
+    全量软摘除把它 ZREM 出集 → reconcile 入 idle → reclaim stale 即刻回收。"""
+    await runtime.seed_template(min_idle_pods=1, session_ttl=60, pod_ttl=60)
+    r1 = await runtime.route("sess_1")
+    pod = r1["pod_id"]
+    r = await runtime.config_store.config_refresh()     # gen 1:全量软摘除
+    assert r["generations"] == {SCOPE: 1}
+    # 竞态形态:并发 follower 复用把老代 Pod REGISTER 回候选集(真实 API)
+    url = await runtime.sm_state.pod_sse_url(SCOPE, pod)
+    ver = await runtime.sm_state.pod_deploy_ver(SCOPE, pod)
+    await runtime.sm_state.register_pod(SCOPE, pod, url, ver)
+    assert pod in await runtime.sm_state.scope_pod_ids(SCOPE)
+    # 老行为:409 等会话结束;修正后:在集不拦 → 放行(gen 2)
+    r2 = await runtime.config_store.config_refresh()
+    assert r2["generations"] == {SCOPE: 2}
+    # 自愈闭环:软摘除摘出 → reconcile release 入 idle → stale 即刻回收
+    # (pod_ttl=60 远未到;会话硬切重放置,决策接受)
+    await runtime.rm_sweeper.reconcile_once()
+    await runtime.rm_sweeper.reclaim_once()
+    assert pod not in await runtime.rm_state.all_pod_ids()
+
+
+# ------------------------------------------- R8:闸门过滤候选集内老代 Pod(竞态)
+
+@requires_lua
+async def test_R8_refresh_gate_skips_busy_lagged_pod_in_candidates(runtime):
+    """R8(2026-09-15):日落 ZREM 与并发 follower 复用的 REGISTER_POD 竞态把
+    老代 Pod 重新登记回候选集 → 闸门不拦在集老代 Pod(在集=合法服务中,等它
+    =等会话生命周期;e2e 15s 连刷 409 连坐 2min+ 实录)。放行后自愈闭环:
+    全量软摘除把它 ZREM 出集 → reconcile 入 idle → reclaim stale 即刻回收。"""
+    await runtime.seed_template(min_idle_pods=1, session_ttl=60, pod_ttl=60)
+    r1 = await runtime.route("sess_1")
+    pod = r1["pod_id"]
+    r = await runtime.config_store.config_refresh()     # gen 1:全量软摘除
+    assert r["generations"] == {SCOPE: 1}
+    # 竞态形态:并发 follower 复用把老代 Pod REGISTER 回候选集(真实 API)
+    url = await runtime.sm_state.pod_sse_url(SCOPE, pod)
+    ver = await runtime.sm_state.pod_deploy_ver(SCOPE, pod)
+    await runtime.sm_state.register_pod(SCOPE, pod, url, ver)
+    assert pod in await runtime.sm_state.scope_pod_ids(SCOPE)
+    # 老行为:409 等会话结束;修正后:在集不拦 → 放行(gen 2)
+    r2 = await runtime.config_store.config_refresh()
+    assert r2["generations"] == {SCOPE: 2}
+    # 自愈闭环:软摘除摘出 → reconcile release 入 idle → stale 即刻回收
+    # (pod_ttl=60 远未到;会话硬切重放置,决策接受)
+    await runtime.rm_sweeper.reconcile_once()
+    await runtime.rm_sweeper.reclaim_once()
+    assert pod not in await runtime.rm_state.all_pod_ids()
