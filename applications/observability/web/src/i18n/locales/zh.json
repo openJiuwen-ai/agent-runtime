@@ -1,0 +1,37 @@
+{
+  "common": {
+    "ok": "确定",
+    "cancel": "取消",
+    "save": "保存",
+    "delete": "删除",
+    "edit": "编辑",
+    "create": "新建",
+    "search": "搜索",
+    "refresh": "刷新",
+    "loading": "加载中…",
+    "empty": "暂无数据",
+    "yes": "是",
+    "no": "否",
+    "enabled": "已启用",
+    "disabled": "已禁用",
+    "detail": "详情",
+    "view": "查看",
+    "actions": "操作",
+    "all": "全部",
+    "reload": "刷新页面",
+    "retry": "重试"
+  },
+  "brand": {
+    "title": "{{productName}}",
+    "sub": "Observability"
+  },
+  "nav": {
+    "observability": "观测"
+  },
+  "observability": {
+    "tabs": {
+      "auditLog": "审核日志"
+    },
+    "placeholderHint": "该 Tab 内容待规划，敬请期待。"
+  }
+}
