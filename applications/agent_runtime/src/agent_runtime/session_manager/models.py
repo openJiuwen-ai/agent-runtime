@@ -65,7 +65,6 @@ class Template:
     template_name: str = ""
     description: str = ""
     enabled: bool = True
-    message_timeout: int = 600
     data: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:

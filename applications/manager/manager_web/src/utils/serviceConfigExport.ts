@@ -96,7 +96,8 @@ export function templateToWire(
     template_id: options?.templateId || row.template_id,
     template_name: row.template_name,
     pod_name: row.pod_name || 'agentserver',
-    namespace: row.namespace || 'default',
+    // ns 不可配：空串 = 继承，AgentServer 跟随 runtime 自身 ns
+    namespace: '',
     sse_path: row.sse_path || '/sse',
     scope_concurrency: row.scope_concurrency,
     pod_concurrency: row.pod_concurrency,
@@ -241,7 +242,6 @@ export function wireTemplateToCreateBody(
       optStr(wire.template_id) ||
       'imported-template',
     description: optStr(wire.description),
-    namespace: optStr(wire.namespace) || 'default',
     node_name: nodeName,
     fs_group: optInt(wire.fsGroup ?? wire.fs_group) ?? null,
     pod_name: optStr(wire.pod_name) || 'agentserver',

@@ -110,7 +110,6 @@ SERVICE_CONFIG_TEMPLATE_TABLE_DEF = TableDefinition(
         ColumnDefinition("pod_ttl", "integer", nullable=False, default=300),
         ColumnDefinition("scope_concurrency", "integer", nullable=False, default=3),
         ColumnDefinition("session_ttl", "integer", nullable=False, default=60),
-        ColumnDefinition("message_timeout", "integer", nullable=False, default=600),
         ColumnDefinition("enabled", "boolean", nullable=False, default=True),
         ColumnDefinition("data", "json", nullable=True),
         ColumnDefinition("created_at", "datetime", nullable=False),
@@ -157,14 +156,13 @@ _COLUMN_OF: dict[str, str] = {
     "pod_ttl": "pod_ttl",
     "scope_concurrency": "scope_concurrency",
     "session_ttl": "session_ttl",
-    "message_timeout": "message_timeout",
     "enabled": "enabled",
     "data": "data",
 }
 
 _INT_FIELDS = frozenset({
     "ready_timeout", "ready_poll_interval", "min_idle_pods", "pod_concurrency",
-    "pod_ttl", "scope_concurrency", "session_ttl", "message_timeout",
+    "pod_ttl", "scope_concurrency", "session_ttl",
     "fs_group",
 })
 
@@ -190,7 +188,7 @@ TEMPLATE_LEVEL_FIELDS: tuple[str, ...] = (
     "namespace", "node_name", "fs_group", "pod_name", "sse_path",
     "ready_timeout", "ready_poll_interval", "kubeconfig",
     "scope_concurrency", "pod_concurrency", "session_ttl", "pod_ttl",
-    "min_idle_pods", "message_timeout",
+    "min_idle_pods",
 )
 _SPLIT_REFERENCE_KEYS = frozenset(
     {"main_container_id", "sidecar_container_ids", "volumes"})

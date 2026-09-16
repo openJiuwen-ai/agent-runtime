@@ -119,6 +119,9 @@ async def test_build_runtime_config_routes_service_resource():
     assert tpl["sidecar_container_ids"] == ["c-jiuwenbox"]
     assert tpl["nodeName"] == "arm-master"
     assert tpl["fsGroup"] == 1000
+    # ns 不再由管理面配置:行内 namespace="tenant" 也不透传,恒发空串
+    # (空串 = 继承,AgentServer 跟随 runtime 自身 ns)
+    assert tpl["namespace"] == ""
     assert "agent_image" not in tpl
     assert "node_name" not in tpl
     assert "fs_group" not in tpl

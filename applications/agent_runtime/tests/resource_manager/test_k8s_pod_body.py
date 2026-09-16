@@ -178,6 +178,20 @@ def test_build_pod_body_rejects_legacy_flat_spec(client):
         client.build("pod-1", {"agent_image": "x:1", "namespace": "default"})
 
 
+def test_build_pod_body_empty_namespace_falls_back_to_default(client):
+    """模板 namespace=""(继承语义)→ Pod 落 default_namespace;显式 ns 仍优先。
+
+    集群内 default_namespace 由 POD_NAMESPACE(downward API)解析为
+    runtime 自身 ns,即"配置下发 ns 为空时 AgentServer 跟随 runtime"。
+    """
+    own = _TestPodClient(default_namespace="runtime-own-ns")
+    meta = own.build("pod-1", _base_spec(namespace="")).kwargs["metadata"].kwargs
+    assert meta["namespace"] == "runtime-own-ns"
+    meta = own.build("pod-2",
+                     _base_spec(namespace="pinned-ns")).kwargs["metadata"].kwargs
+    assert meta["namespace"] == "pinned-ns"
+
+
 # -------------------------------------------------------------- sidecar 渲染
 
 

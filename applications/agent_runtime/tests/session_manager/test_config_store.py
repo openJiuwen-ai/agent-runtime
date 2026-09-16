@@ -309,6 +309,22 @@ async def test_config_sync_b_class_takes_effect_via_snapshot(runtime):
 
 
 @requires_lua
+async def test_config_sync_message_timeout_dropped_silently(runtime):
+    """message_timeout 已删(2026-09):老发送方载荷残留该键 → 静默忽略不 400。
+
+    白名单解析只认 TEMPLATE_LEVEL_FIELDS,未知键零副作用(与 max_pods 同款);
+    ok=True 同时证明写路径无该列(否则 INSERT 缺列即失败)。
+    """
+    payload = _payload([_tpl("tpl-1")], [_scope(SCOPE, "tpl-1")])
+    payload["templates"][0]["message_timeout"] = 10
+    result = await runtime.config_store.config_sync(payload)
+    assert result["ok"] is True
+    _, template = await runtime.config_store.resolve("u", "grp", "bot")
+    assert template.template_id == "tpl-1"
+    assert not hasattr(template, "message_timeout")
+
+
+@requires_lua
 async def test_config_sync_a_class_sunsets_old_pods(runtime):
     """A 类(镜像变更):deploy_ver 变 → 软摘除老版本 Pod + 新 route 扩新版本。"""
     await runtime.seed_template(agent_image="agentserver:1.0")
@@ -1056,7 +1072,7 @@ async def test_new_form_row_with_missing_container_skipped(runtime):
         "ready_timeout": 300, "ready_poll_interval": 2,
         "scope_concurrency": 3, "pod_concurrency": 2,
         "pod_ttl": 300, "session_ttl": 60, "min_idle_pods": 0,
-        "message_timeout": 600, "enabled": True,
+        "enabled": True,
         "main_container_id": "c-missing", "sidecar_container_ids": None,
         "volumes": None,
         "created_at": datetime.utcnow(), "updated_at": datetime.utcnow(),
@@ -1293,3 +1309,16 @@ async def test_rebuild_snapshot_logs_template_params(runtime, caplog):
     assert "sc=7" in lines[0] and "pc=3" in lines[0]
     assert "min_idle=1" in lines[0] and "session_ttl=60s" in lines[0]
     assert "max_pods=3" in lines[0]        # ⌈7/3⌉ 派生值同打印
+
+
+@requires_lua
+async def test_template_empty_namespace_roundtrip(runtime):
+    """namespace=""(继承语义):sync 接受、往返存活、deploy_subset 原样携带。
+
+    k8s 层 falsy 兜底到 default_namespace——集群内 = POD_NAMESPACE(downward
+    API)解析的 runtime 自身 ns;DB 列 NOT NULL 允许空串,契约/库零改动。
+    """
+    await runtime.seed_template(namespace="")
+    t = await runtime.config_store.get_template("tpl-1")
+    assert t.namespace == ""
+    assert t.deploy_subset()["namespace"] == ""

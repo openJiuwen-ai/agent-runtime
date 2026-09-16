@@ -236,7 +236,10 @@ async def service_template_wire(
         "description": str(_g(row, "description") or ""),
         "enabled": bool(_g(row, "enabled", True)),
         "data": data,
-        "namespace": str(_g(row, "namespace") or "default"),
+        # ns 不再由管理面配置(Web UI 入口已删):恒发空串 = 继承,
+        # AgentServer 跟随 runtime 自身 ns(Runtime 侧 POD_NAMESPACE 兜底链;
+        # 行内存量值不透传)
+        "namespace": "",
         "pod_name": str(_g(row, "pod_name") or "agentserver"),
         "sse_path": str(_g(row, "sse_path") or data.get("sse_path") or "/api/v1/events/stream"),
         "ready_timeout": int(_g(row, "ready_timeout") or 300),
