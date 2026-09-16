@@ -141,7 +141,6 @@ flowchart TB
 | `session_ttl` | int(秒) | 会话保活超时,未 touch 则老化 |
 | `pod_ttl` | int(秒) | idle Pod 至 reclaim 的等待 |
 | `min_idle_pods` | int | 该 scope 最少热备 Pod 数 |
-| `message_timeout` | int | 数据面 SSE 读写超时语义(gateway 侧使用) |
 
 **`container`**(config_sync 三段式下发,持久化到 DB 表 `service_config_container`;wire 字段名与结构**对齐 K8s 原生 container 规范**——K8s 派生字段用 K8s API 同名 camelCase,业务键 `container_id` 为本仓 snake_case;角色 = 模板引用位置,主容器/sidecar 同一 schema、键白名单与默认值按角色收敛):
 
@@ -1271,7 +1270,7 @@ sequenceDiagram
     Note over SM: 触发场景 G:清洗粘在 pod_2 上的会话<br/>用户下次请求重新 route → 健康 Pod
 ```
 
-**数据面超时契约(gateway ↔ Pod SSE,配套自愈)**:gateway 对 SSE 流设读写超时(`message_timeout` 语义,默认 600s 量级);**超时或断流必须给用户明确错误,禁止流静默结束**(老 SDK 真实踩过:静默结束导致前端只看到对话无声中断);断流/超时后 gateway 的自愈 = **重新 `route`**——此时半死 Pod 已被 RM 摘除(本场景)或将被摘除,重新 route 会拿到健康 Pod,粘上去的旧会话由场景 G 清洗。SM 不在数据通路上,不感知单次断流;数据面健康由本场景的 RM 探测兜底。
+**数据面超时契约(gateway ↔ Pod SSE,配套自愈)**:gateway 对 SSE 流设读写超时(**超时参数为 gateway 自身配置**;模板字段 `message_timeout` 全链路无人消费,已于 2026-09 从契约/DB/代码删除,见 `docs/feature/2026-09-drop-message-timeout.md`);**超时或断流必须给用户明确错误,禁止流静默结束**(老 SDK 真实踩过:静默结束导致前端只看到对话无声中断);断流/超时后 gateway 的自愈 = **重新 `route`**——此时半死 Pod 已被 RM 摘除(本场景)或将被摘除,重新 route 会拿到健康 Pod,粘上去的旧会话由场景 G 清洗。SM 不在数据通路上,不感知单次断流;数据面健康由本场景的 RM 探测兜底。
 
 > 价值:**旁路架构下的数据面健康兜底**——控制面不在数据通路上,看不见"SSE 不通";用 AgentServer 健康 SSE 端点 + RM 周期探测补上这块盲区,半死 Pod 在 ≤20s 内被发现并清理,配合 gateway 超时 + 重新 route 实现用户无感自愈。
 

@@ -89,7 +89,7 @@ Claw Manager **全量配置下发**(场景 M):一次请求同时携带 `containe
 | 类别 | 触发 | 生效方式 |
 |---|---|---|
 | **A 类**(deploy 字段变更) | 镜像/端口/env/挂载/sidecar 等容器规格变化(`deploy_ver` 指纹不等) | 老 Pod 软摘除退出候选集,按新规格重建;存量会话自然跑完 |
-| **B 类**(策略字段变更) | `scope_concurrency`/`pod_concurrency`/`session_ttl`/`pod_ttl`/`min_idle_pods`/`message_timeout` | 快照覆盖 + RM 池参数重推,**立即生效**,不动存量 Pod |
+| **B 类**(策略字段变更) | `scope_concurrency`/`pod_concurrency`/`session_ttl`/`pod_ttl`/`min_idle_pods` | 快照覆盖 + RM 池参数重推,**立即生效**,不动存量 Pod |
 | **删除** | 本批载荷未携带的模板/scope/容器 | DB 删行;被删 scope 停预热自然排空,存量会话到期止 |
 
 幂等性:同载荷重放收敛(`affected_scopes` 为空数组)。
@@ -147,7 +147,6 @@ Envelope 外层见 §0.2;`rawdata` 为三段式配置快照:
 | `session_ttl` | int(秒) | 否 | 60 | 会话保活超时(下界 1) |
 | `pod_ttl` | int(秒) | 否 | 300 | idle Pod 至 reclaim 的等待(下界 1) |
 | `min_idle_pods` | int | 否 | 0 | 该 scope 最少热备 Pod 数(≥0) |
-| `message_timeout` | int(秒) | 否 | 600 | 数据面 SSE 读写超时语义(gateway 侧使用) |
 | `enabled` | bool | 否 | true | 模板禁用则路由不解析、不预热 |
 | `data` | object | 否 | `{}` | 透传扩展字段 |
 

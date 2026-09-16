@@ -252,7 +252,7 @@ def split_sync_payload(templates: list[dict], scopes: list[dict] | None = None) 
             "template_id", "template_name", "description", "enabled", "data",
             "namespace", "pod_name", "sse_path", "kubeconfig", "ready_timeout",
             "ready_poll_interval", "scope_concurrency", "pod_concurrency",
-            "session_ttl", "pod_ttl", "min_idle_pods", "message_timeout")}
+            "session_ttl", "pod_ttl", "min_idle_pods")}
         if "node_name" in t:
             template["nodeName"] = t["node_name"]
         template["main_container_id"] = f"c-{tid}"
