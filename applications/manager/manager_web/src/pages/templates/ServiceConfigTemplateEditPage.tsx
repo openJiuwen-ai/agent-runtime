@@ -1,6 +1,7 @@
 /**
  * 服务配置模板编辑页（三段式布局对齐 HLD）：
- * 1) 模板级：namespace/nodeName/pod/volumes/池策略/sse_path…
+ * 1) 模板级：nodeName/pod/volumes/池策略/sse_path…（namespace 不可配，
+ *    下发恒为空串 = AgentServer 跟随 runtime 自身 ns）
  * 2) AgentServer 主容器
  * 3) Sandbox sidecar 容器
  * 两个容器页签为同一套「容器通用配置」字段（ports / securityContext / readinessProbe /
@@ -60,7 +61,6 @@ type ContainerForm = {
 type TemplateForm = {
   template_name: string;
   description: string;
-  namespace: string;
   node_name: string;
   fs_group: string;
   pod_name: string;
@@ -137,7 +137,6 @@ const emptyContainer = (role: 'agent' | 'sandbox'): ContainerForm =>
 const emptyTemplate = (): TemplateForm => ({
   template_name: '',
   description: '',
-  namespace: 'default',
   node_name: '',
   fs_group: '',
   pod_name: 'agentserver',
@@ -367,7 +366,6 @@ function hydrateFromTemplateRow(row: ServiceConfigTemplate): {
   const template: TemplateForm = {
     template_name: row.template_name,
     description: row.description ?? '',
-    namespace: row.namespace || 'default',
     node_name: row.node_name ?? '',
     fs_group: row.fs_group != null ? String(row.fs_group) : '',
     pod_name: row.pod_name || 'agentserver',
@@ -944,7 +942,6 @@ export function ServiceConfigTemplateEditPage({ templateId }: { templateId?: str
       { label: t('serviceConfigTemplate.templateDescription'), value: template.description },
       { label: t('serviceConfigTemplate.agentImage'), value: agent.image },
       { label: t('serviceConfigTemplate.sandboxImage'), value: sandbox.image },
-      { label: t('serviceConfigTemplate.namespace'), value: template.namespace },
       { label: t('serviceConfigTemplate.podName'), value: template.pod_name },
     ]);
     if (unsafe) {
@@ -973,7 +970,6 @@ export function ServiceConfigTemplateEditPage({ templateId }: { templateId?: str
     const body: ServiceConfigTemplateCreateBody = {
       template_name: template.template_name.trim(),
       description: opt(template.description),
-      namespace: template.namespace.trim() || 'default',
       node_name: opt(template.node_name),
       fs_group: fsGroup != null && !Number.isNaN(fsGroup) ? fsGroup : null,
       pod_name: template.pod_name.trim() || 'agentserver',
@@ -1092,14 +1088,6 @@ export function ServiceConfigTemplateEditPage({ templateId }: { templateId?: str
               value={template.description}
               maxLength={512}
               onChange={(v) => updateTpl('description', v)}
-            />
-          </div>
-          <div>
-            <FieldLabel>{t('serviceConfigTemplate.namespace')}</FieldLabel>
-            <LimitedTextInput
-              value={template.namespace}
-              maxLength={128}
-              onChange={(v) => updateTpl('namespace', v)}
             />
           </div>
           <div>
