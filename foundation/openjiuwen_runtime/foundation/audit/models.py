@@ -5,8 +5,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Mapping
+from dataclasses import dataclass
+
+from .config import AuditLogConfig, OtelConfig
+from .schema import FormatSpec
 
 
 @dataclass(frozen=True)
@@ -18,23 +20,27 @@ class RuntimeIdentity:
     node: str = "-"
 
 
-@dataclass
-class ParsedAuditLine:
-    """parse_audit_line 的结果，便于单测断言。"""
-
-    header: dict[str, str]
-    keyword: str | None
-    elements: dict[str, str]
-    ext: dict[str, str] = field(default_factory=dict)
-    raw: str = ""
-
-
 @dataclass(frozen=True)
-class ClockEvent:
-    """时钟同步产生的 #EVT 语义（由 formatter 落成管道行）。"""
+class AuditSnapshot:
+    """一次 log_audit 调用时捕获的配置快照（与在途 emit 隔离）。"""
 
-    event: str
-    level: str
-    message: str
-    rspcd: str
-    details: Mapping[str, Any] = field(default_factory=dict)
+    format: FormatSpec
+    identity: RuntimeIdentity
+    otel: OtelConfig
+    service: str | None
+    attribute_value_max_length: int
+
+    @classmethod
+    def from_config(cls, config: AuditLogConfig) -> AuditSnapshot:
+        ident = config.identity
+        return cls(
+            format=config.format,
+            identity=RuntimeIdentity(
+                data_center=ident.data_center,
+                system_code=ident.system_code,
+                node=ident.node,
+            ),
+            otel=config.otel,
+            service=config.service,
+            attribute_value_max_length=config.attribute_value_max_length,
+        )

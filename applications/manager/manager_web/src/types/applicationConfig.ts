@@ -91,3 +91,54 @@ export interface LoggingConfigUpsertBody {
   agent_server?: LogLevel | null;
   full?: LogLevel | null;
 }
+
+export type AuditOtelProtocol = 'grpc' | 'http';
+
+export interface AuditLogFormatSpec {
+  schema_version: string;
+  header_fields: string[];
+  content_fields: string[];
+  required_fields: string[];
+  placeholder: string;
+  timestamp_format: string;
+}
+
+export interface AuditLogOtelConfig {
+  enabled: boolean;
+  endpoint: string;
+  protocol: AuditOtelProtocol;
+  headers: Record<string, string>;
+}
+
+/** PUT body（与 AuditLogUpsertRequest 对齐；不含 service / ntp） */
+export interface AuditLogConfigUpsertBody {
+  format: AuditLogFormatSpec;
+  otel?: AuditLogOtelConfig;
+  data_center?: string | null;
+  system_code?: string | null;
+  node?: string | null;
+}
+
+/** GET data（扁平列 + 权威 body） */
+export interface AuditLogConfig {
+  id?: number;
+  jiuwenclaw_id: string;
+  schema_version?: string;
+  otel_enabled?: boolean;
+  otel_endpoint?: string | null;
+  otel_protocol?: string;
+  data_center?: string;
+  system_code?: string;
+  node?: string | null;
+  body?: {
+    format?: AuditLogFormatSpec;
+    otel?: Partial<AuditLogOtelConfig> & { headers?: Record<string, string> };
+    data_center?: string;
+    system_code?: string;
+    node?: string | null;
+  } | null;
+  source?: string;
+  revision?: number;
+  created_at?: string | null;
+  updated_at?: string | null;
+}

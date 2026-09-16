@@ -1,26 +1,28 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
-"""审计日志配置聚合（FR8 命名空间骨架；FR1 的 format / ntp 已生效）。
-
-默认配置不含任何环境特定地址。加载时走合规校验门，不通过则拒绝生效。
-"""
+"""审计日志配置（format / otel / identity；ntp 仅预留解析）。"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
-from .clock import NtpConfig
-from .schema import AuditLogSchema
-from .validator import validate_schema
+from .constants import (
+    ATTRIBUTE_VALUE_MAX_LENGTH_DEFAULT,
+    NTP_FAILOVER_DEFAULT,
+    NTP_MAX_OFFSET_MS_DEFAULT,
+    NTP_SYNC_INTERVAL_DEFAULT,
+    OTEL_PROTOCOL_GRPC,
+)
+from .schema import FormatSpec
+from .validator import validate_config
 
 
 @dataclass(frozen=True)
 class RuntimeIdentityConfig:
     data_center: str = "-"
     system_code: str = "-"
-    node_strategy: str = "ip_port"
     node: str = "-"
 
     @classmethod
@@ -30,15 +32,63 @@ class RuntimeIdentityConfig:
         return cls(
             data_center=str(data.get("data_center", "-")),
             system_code=str(data.get("system_code", "-")),
-            node_strategy=str(data.get("node_strategy", "ip_port")),
             node=str(data.get("node", "-")),
         )
 
 
 @dataclass(frozen=True)
-class RedactionConfig:
-    """FR3 脱敏配置骨架。校验门会拒绝 command_force_redact=False。"""
+class NtpConfig:
+    """NTP 配置预留：本阶段可随 body 落库，SDK 不消费。"""
 
+    servers: tuple[str, ...] = ()
+    sync_interval: str = NTP_SYNC_INTERVAL_DEFAULT
+    max_offset_ms: int = NTP_MAX_OFFSET_MS_DEFAULT
+    failover: bool = NTP_FAILOVER_DEFAULT
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any] | None) -> NtpConfig:
+        if not data:
+            return cls()
+        if not isinstance(data, Mapping):
+            return cls()
+        servers = data.get("servers") or ()
+        return cls(
+            servers=tuple(str(s) for s in servers if str(s).strip()),
+            sync_interval=str(data.get("sync_interval", NTP_SYNC_INTERVAL_DEFAULT)),
+            max_offset_ms=int(data.get("max_offset_ms", NTP_MAX_OFFSET_MS_DEFAULT)),
+            failover=bool(data.get("failover", NTP_FAILOVER_DEFAULT)),
+        )
+
+
+@dataclass(frozen=True)
+class OtelConfig:
+    """OTEL Logs 连接；service.name 由进程本地 service 推导，不在此下发。"""
+
+    enabled: bool = True
+    endpoint: str = "http://localhost:4317"
+    protocol: str = OTEL_PROTOCOL_GRPC
+    headers: Mapping[str, str] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any] | None) -> OtelConfig:
+        if not data:
+            return cls()
+        headers = data.get("headers") or {}
+        if not isinstance(headers, Mapping):
+            headers = {}
+        return cls(
+            enabled=bool(data.get("enabled", True)),
+            endpoint=str(data.get("endpoint", "http://localhost:4317")),
+            protocol=str(data.get("protocol", OTEL_PROTOCOL_GRPC)).strip().lower(),
+            headers={str(k): str(v) for k, v in headers.items()},
+        )
+
+
+# --- FR3–FR7 骨架配置（本阶段主路径不消费；供骨架模块 import）---
+
+
+@dataclass(frozen=True)
+class RedactionConfig:
     redaction_token: str = "***REDACTED***"
     sensitive_keys: tuple[str, ...] = (
         "password",
@@ -56,231 +106,51 @@ class RedactionConfig:
     )
     command_force_redact: bool = True
     sandbox_path_redact: bool = True
-    extra: Mapping[str, Any] = field(default_factory=dict)
-
-    @classmethod
-    def from_dict(cls, data: Mapping[str, Any] | None) -> RedactionConfig:
-        if not data:
-            return cls()
-        keys = data.get("sensitive_keys")
-        return cls(
-            redaction_token=str(data.get("redaction_token", "***REDACTED***")),
-            sensitive_keys=tuple(keys) if keys is not None else cls.sensitive_keys,
-            command_force_redact=bool(data.get("command_force_redact", True)),
-            sandbox_path_redact=bool(data.get("sandbox_path_redact", True)),
-            extra=dict(data),
-        )
 
 
 @dataclass(frozen=True)
 class WriterConfig:
-    """FR4 异步输出配置骨架。"""
-
     async_write: bool = True
     queue_size: int = 10000
-    overflow_policy: str = "spill_to_disk"
-    max_line_size: int = 524288
-    truncation_tag: str = "...[TRUNCATED，原长{len}字节]"
-    encoding: str = "utf-8"
-    audit_enabled: bool = True
-    disable_requires_auth: bool = True
-    debug_in_prod: bool = False
-
-    @classmethod
-    def from_dict(cls, data: Mapping[str, Any] | None) -> WriterConfig:
-        if not data:
-            return cls()
-        async_cfg = data.get("async") or {}
-        switch = data.get("audit_switch") or {}
-        level_filter = data.get("level_filter") or {}
-        return cls(
-            async_write=bool(data.get("async_write", True)),
-            queue_size=int(async_cfg.get("queue_size", 10000)),
-            overflow_policy=str(async_cfg.get("overflow_policy", "spill_to_disk")),
-            max_line_size=int(data.get("max_line_size", 524288)),
-            truncation_tag=str(data.get("truncation_tag", "...[TRUNCATED，原长{len}字节]")),
-            encoding=str(data.get("encoding", "utf-8")),
-            audit_enabled=bool(switch.get("enabled", True)),
-            disable_requires_auth=bool(switch.get("disable_requires_auth", True)),
-            debug_in_prod=bool(level_filter.get("debug_in_prod", False)),
-        )
 
 
 @dataclass(frozen=True)
 class StorageConfig:
-    """FR5 存储 / 轮转 / 留存配置骨架。"""
-
     filename_pattern: str = "SEC-{dc}_{sys}_{node}.log"
-    filename_charset: str = r"[A-Za-z0-9_]"
-    filename_max_length: int = 64
     storage_dir: str = "/var/log/audit/"
-    storage_separation: bool = True
-    integrity_protection: bool = True
-    rotation: Mapping[str, Any] = field(
-        default_factory=lambda: {
-            "mode": "size_and_time",
-            "max_bytes": 20971520,
-            "backup_count": 20,
-            "rollover_suffix": ".log.{n}",
-            "expiry_handler": "secure_delete",
-        }
-    )
-    retention: Mapping[str, Any] = field(
-        default_factory=lambda: {
-            "data_level_field": "data_level",
-            "mapping": {
-                "普通": "6m",
-                "level_3": "1y",
-                "level_4_5": "3y",
-                "personal_info_outbound": "3y",
-            },
-            "protect_before_expiry": True,
-            "expiry_action": "secure_delete",
-        }
-    )
-
-    @classmethod
-    def from_dict(cls, data: Mapping[str, Any] | None) -> StorageConfig:
-        if not data:
-            return cls()
-        rotation = dict(cls().rotation)
-        rotation.update(data.get("rotation") or {})
-        retention = dict(cls().retention)
-        incoming_ret = data.get("retention") or {}
-        retention.update(incoming_ret)
-        if "mapping" in incoming_ret:
-            retention["mapping"] = dict(incoming_ret["mapping"])
-        return cls(
-            filename_pattern=str(data.get("filename_pattern", cls.filename_pattern)),
-            filename_charset=str(data.get("filename_charset", cls.filename_charset)),
-            filename_max_length=int(data.get("filename_max_length", 64)),
-            storage_dir=str(data.get("storage_dir", cls.storage_dir)),
-            storage_separation=bool(data.get("storage_separation", True)),
-            integrity_protection=bool(data.get("integrity_protection", True)),
-            rotation=rotation,
-            retention=retention,
-        )
 
 
 @dataclass(frozen=True)
 class ShipperConfig:
-    """FR6 采集外送配置骨架。endpoint 禁止硬编码。"""
-
     protocol: str = ""
     endpoint: str = ""
-    auth: str = ""
-    field_mapping: Mapping[str, str] = field(default_factory=dict)
-    extra: Mapping[str, Any] = field(default_factory=dict)
-
-    @classmethod
-    def from_dict(cls, data: Mapping[str, Any] | None) -> ShipperConfig:
-        if not data:
-            return cls()
-        shipper = data.get("shipper") if "protocol" not in data else data
-        shipper = shipper or {}
-        return cls(
-            protocol=str(shipper.get("protocol", "")),
-            endpoint=str(shipper.get("endpoint", "")),
-            auth=str(shipper.get("auth", "")),
-            field_mapping=dict(shipper.get("field_mapping") or {}),
-            extra=dict(shipper),
-        )
 
 
 @dataclass(frozen=True)
 class AccessConfig:
-    """FR7 访问控制配置骨架。"""
-
-    roles: Mapping[str, str] = field(
-        default_factory=lambda: {
-            "business_account": "none",
-            "audit_admin": "read",
-            "log_writer": "append_only",
-        }
-    )
-    log_writer_mode: str = "append_only"
     require_auth: bool = True
-    extra: Mapping[str, Any] = field(default_factory=dict)
-
-    @classmethod
-    def from_dict(cls, data: Mapping[str, Any] | None) -> AccessConfig:
-        if not data:
-            return cls()
-        access = data.get("access") if "roles" not in data else data
-        access = access or {}
-        roles = dict(cls().roles)
-        roles.update(access.get("roles") or {})
-        return cls(
-            roles=roles,
-            log_writer_mode=str(access.get("log_writer_mode", "append_only")),
-            require_auth=bool(access.get("require_auth", True)),
-            extra=dict(access),
-        )
 
 
 @dataclass(frozen=True)
 class DeployConfig:
-    """FR8 配置下发 / 滚动升级骨架。"""
-
-    page_requires_auth: bool = True
     precheck_gate: bool = True
-    extra: Mapping[str, Any] = field(default_factory=dict)
-
-    @classmethod
-    def from_dict(cls, data: Mapping[str, Any] | None) -> DeployConfig:
-        if not data:
-            return cls()
-        return cls(
-            page_requires_auth=bool(data.get("page_requires_auth", True)),
-            precheck_gate=bool(data.get("precheck_gate", True)),
-            extra=dict(data),
-        )
 
 
 @dataclass(frozen=True)
 class LinkpointConfig:
-    """FR2 全链路打点对照表骨架。"""
-
-    submdl_names: Mapping[str, str] = field(
-        default_factory=lambda: {
-            "gateway": "gateway",
-            "agent": "agent",
-            "api_client": "api_client",
-            "file": "file",
-            "sandbox": "sandbox",
-            "alert": "alert",
-        }
-    )
     sandbox_submdl: str = "sandbox"
-    extra: Mapping[str, Any] = field(default_factory=dict)
-
-    @classmethod
-    def from_dict(cls, data: Mapping[str, Any] | None) -> LinkpointConfig:
-        if not data:
-            return cls()
-        names = dict(cls().submdl_names)
-        names.update(data.get("submdl_names") or {})
-        return cls(
-            submdl_names=names,
-            sandbox_submdl=str(data.get("sandbox_submdl", "sandbox")),
-            extra=dict(data),
-        )
 
 
 @dataclass(frozen=True)
 class AuditLogConfig:
-    """完整审计配置。当前真正消费 format / ntp / identity / redaction 开关。"""
+    """完整审计配置。本阶段生效：format / otel / identity / service。"""
 
-    format: AuditLogSchema = field(default_factory=AuditLogSchema)
-    ntp: NtpConfig = field(default_factory=NtpConfig)
+    format: FormatSpec = field(default_factory=FormatSpec)
+    otel: OtelConfig = field(default_factory=OtelConfig)
     identity: RuntimeIdentityConfig = field(default_factory=RuntimeIdentityConfig)
-    redaction: RedactionConfig = field(default_factory=RedactionConfig)
-    writer: WriterConfig = field(default_factory=WriterConfig)
-    storage: StorageConfig = field(default_factory=StorageConfig)
-    shipper: ShipperConfig = field(default_factory=ShipperConfig)
-    access: AccessConfig = field(default_factory=AccessConfig)
-    deploy: DeployConfig = field(default_factory=DeployConfig)
-    linkpoint: LinkpointConfig = field(default_factory=LinkpointConfig)
+    ntp: NtpConfig = field(default_factory=NtpConfig)
+    service: str | None = None
+    attribute_value_max_length: int = ATTRIBUTE_VALUE_MAX_LENGTH_DEFAULT
 
     @classmethod
     def from_dict(
@@ -290,38 +160,47 @@ class AuditLogConfig:
         validate: bool = True,
     ) -> AuditLogConfig:
         data = dict(data or {})
-        fmt = data.get("format") or data
-        # 允许直接传入 SRS 的 AUDIT_LOG_FORMAT 片段。
-        if "header" in data and "format" not in data:
-            fmt = data
+        fmt_data = data.get("format")
+        if not isinstance(fmt_data, Mapping):
+            fmt_data = None
+
         identity_data = {
             "data_center": data.get("data_center", "-"),
             "system_code": data.get("system_code", "-"),
-            "node_strategy": data.get("node_strategy", "ip_port"),
             "node": data.get("node", "-"),
         }
+
+        service = data.get("service")
+        service_str = str(service).strip() if service is not None else None
+        if service_str == "":
+            service_str = None
+
+        max_len = data.get(
+            "attribute_value_max_length", ATTRIBUTE_VALUE_MAX_LENGTH_DEFAULT
+        )
+        try:
+            max_len_int = max(1, int(max_len))
+        except (TypeError, ValueError):
+            max_len_int = ATTRIBUTE_VALUE_MAX_LENGTH_DEFAULT
+
         cfg = cls(
-            format=AuditLogSchema.from_dict(fmt if isinstance(fmt, Mapping) else None),
-            ntp=NtpConfig.from_dict(data.get("ntp")),
+            format=FormatSpec.from_dict(fmt_data),
+            otel=OtelConfig.from_dict(
+                data.get("otel") if isinstance(data.get("otel"), Mapping) else None
+            ),
             identity=RuntimeIdentityConfig.from_dict(identity_data),
-            redaction=RedactionConfig.from_dict(data),
-            writer=WriterConfig.from_dict(data),
-            storage=StorageConfig.from_dict(data),
-            shipper=ShipperConfig.from_dict(data),
-            access=AccessConfig.from_dict(data),
-            deploy=DeployConfig.from_dict(data.get("deploy")),
-            linkpoint=LinkpointConfig.from_dict(data),
+            ntp=NtpConfig.from_dict(
+                data.get("ntp") if isinstance(data.get("ntp"), Mapping) else None
+            ),
+            service=service_str,
+            attribute_value_max_length=max_len_int,
         )
         if validate:
             cfg.validate()
         return cfg
 
     def validate(self) -> None:
-        validate_schema(
-            self.format,
-            ntp=self.ntp,
-            command_force_redact=self.redaction.command_force_redact,
-        )
+        validate_config(self)
 
 
 def default_config(*, validate: bool = True) -> AuditLogConfig:

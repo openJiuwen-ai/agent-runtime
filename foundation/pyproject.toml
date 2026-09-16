@@ -41,6 +41,12 @@ gaussdb = [
 amqp = [
     "aio-pika>=9.4",
 ]
+audit-otel = [
+    "opentelemetry-api>=1.28.0",
+    "opentelemetry-sdk>=1.28.0",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.28.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.28.0",
+]
 
 [tool.uv]
 default-groups = ['dev']
@@ -57,6 +63,11 @@ dev = [
     "httpx>=0.28.1,<0.29",
     "uvicorn>=0.42,<0.47",
     "fastapi>=0.115",
+    # audit OTEL emit path（与 optional-dependencies.audit-otel 对齐）
+    "opentelemetry-api>=1.28.0",
+    "opentelemetry-sdk>=1.28.0",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.28.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.28.0",
 ]
 
 [[tool.uv.index]]

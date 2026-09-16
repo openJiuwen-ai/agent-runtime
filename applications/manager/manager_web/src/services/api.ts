@@ -30,6 +30,8 @@ import type {
   ListItemsResult,
   LoggingConfig,
   LoggingConfigUpsertBody,
+  AuditLogConfig,
+  AuditLogConfigUpsertBody,
   A2AOutboundTemplate,
   A2ADiscoveryCandidate,
   A2ADiscoverySettings,
@@ -1081,5 +1083,13 @@ export const LoggingApi = {
     http<LoggingConfig>(`${instanceBase(instanceId)}/logging`, { method: 'PUT', body }),
   remove: (instanceId: string) =>
     http<void>(`${instanceBase(instanceId)}/logging`, { method: 'DELETE' }),
+};
+
+export const AuditLogApi = {
+  get: (instanceId: string) => http<AuditLogConfig>(`${instanceBase(instanceId)}/audit-log`),
+  upsert: (instanceId: string, body: AuditLogConfigUpsertBody) =>
+    http<AuditLogConfig>(`${instanceBase(instanceId)}/audit-log`, { method: 'PUT', body }),
+  remove: (instanceId: string) =>
+    http<void>(`${instanceBase(instanceId)}/audit-log`, { method: 'DELETE' }),
 };
 

@@ -304,6 +304,7 @@
     "tabs": {
       "logMasking": "Log Masking",
       "logging": "Log Levels",
+      "auditLog": "Audit Log",
       "permissions": "Permissions"
     },
     "logMasking": {
@@ -344,6 +345,45 @@
       "agentServer": "AgentServer log (agent_server)",
       "full": "Full log (full)",
       "fullHint": "Level for full.log aggregate output"
+    },
+    "auditLog": {
+      "intro": "Configure audit log field list and OTEL export. Saving writes to Manager DB and pushes Gateway (hot reload); AgentServer applies after pod restart. Without managed config, processes use their default behavior.",
+      "managed": "Manager managed",
+      "resetToDefault": "Remove managed config",
+      "deleteConfirm": "Remove Manager-managed audit log config? Gateway will be notified first, then Manager DB will be cleared.",
+      "deleted": "Managed config removed",
+      "sections": {
+        "identity": "Runtime identity",
+        "otel": "OTEL export",
+        "format": "Field list"
+      },
+      "dataCenter": "Data center (data_center)",
+      "systemCode": "System code (system_code)",
+      "node": "Node (node)",
+      "serviceHint": "service / service.name is derived per process and is not configured here.",
+      "otelEnabled": "Enable OTEL export",
+      "otelEnabledHint": "When off, log_audit does not raise business errors (may log a process warning).",
+      "otelEndpoint": "Endpoint",
+      "otelProtocol": "Protocol",
+      "otelHeaders": "Headers (JSON object)",
+      "schemaVersion": "Schema version",
+      "placeholder": "Empty-value placeholder",
+      "timestampFormat": "Timestamp format",
+      "timestampFormatHint": "Fixed in this phase; not editable",
+      "headerFields": "Header fields",
+      "contentFields": "Content fields",
+      "requiredFields": "Required fields",
+      "requiredSubsetHint": "Required fields must also be selected in header or content; enabled fields marked * cannot be unchecked until removed from required.",
+      "restoreDefaultFields": "Restore default fields",
+      "cannotUncheckRequired": "This field is still required; uncheck it from required first",
+      "validation": {
+        "endpointRequired": "Endpoint is required when OTEL is enabled",
+        "headersInvalid": "Headers must be a valid JSON object",
+        "fieldsEmpty": "Header, content, and required fields must not be empty",
+        "requiredNotSubset": "Required fields must be a subset of enabled fields",
+        "placeholderRequired": "Placeholder is required",
+        "schemaVersionRequired": "Schema version is required"
+      }
     },
     "permissions": {
       "sections": {

@@ -3,27 +3,21 @@
 
 """安全审计日志（foundation.audit）。
 
-当前实现 SRS FR1（schema 驱动格式 + 合规校验门 + NTP 时钟）。
-FR2–FR8 仅提供配置骨架与接口占位，见 README.md / DESIGN.md。
+本阶段：字段清单 format + ContextVar 合并 + OTEL Logs emit（optional extra ``audit-otel``）。
+不做：本地审计文件、管道行、NTP 同步、脱敏、SIEM。
 """
 
 from __future__ import annotations
 
-from .clock import (
-    LocalClock,
-    NtpClient,
-    NtpConfig,
-    SequenceNtpClient,
-    SyncResult,
-    SyncedClock,
-    UdpNtpClient,
-    parse_sync_interval,
-)
+from .attributes import build_audit_attributes, capture_caller
+from .clock import LocalClock, format_timestamp
 from .config import (
     AccessConfig,
     AuditLogConfig,
     DeployConfig,
     LinkpointConfig,
+    NtpConfig,
+    OtelConfig,
     RedactionConfig,
     RuntimeIdentityConfig,
     ShipperConfig,
@@ -32,82 +26,104 @@ from .config import (
     default_config,
 )
 from .constants import (
-    CONTENT_REQUIRED_FIELDS,
+    ATTRIBUTE_VALUE_MAX_LENGTH_DEFAULT,
+    DEFAULT_CONTENT_FIELDS,
     DEFAULT_HEADER_FIELDS,
-    DEFAULT_REDLINE_FIELDS,
+    DEFAULT_REQUIRED_FIELDS,
+    EVENT_TYPE_ATTR,
     KEYWORD_EVT,
     KEYWORD_UA,
     LEVELS,
+    OTEL_LOGGER_NAME,
+    PLACEHOLDER_DEFAULT,
     RSPCD_KNOWN,
     SCHEMA_VERSION_DEFAULT,
+    TIMESTAMP_FORMAT_DEFAULT,
 )
+from .context import (
+    AuditContextTokens,
+    bind_audit_context,
+    clear_audit_context,
+    get_audit_context,
+    reset_audit_context,
+)
+from .emitter import MemoryEmitter, NoopEmitter, build_emitter, resolve_service_name
 from .errors import (
     AuditError,
     AuditNotImplementedError,
-    ClockSyncError,
     FormatError,
     SchemaValidationError,
 )
-from .facade import AuditFacade, log_audit
-from .formatter import (
-    capture_caller,
-    escape_value,
-    format_audit_line,
-    format_clock_event,
-    format_timestamp,
-    parse_audit_line,
+from .facade import (
+    AuditManager,
+    audit_error,
+    audit_info,
+    audit_warn,
+    get_audit_manager,
+    log_audit,
+    reset_audit_manager,
 )
-from .models import ClockEvent, ParsedAuditLine, RuntimeIdentity
-from .schema import AuditLogSchema, ContentSchema, HeaderSchema, default_schema
-from .validator import canonicalize_fields, validate_schema
+from .models import AuditSnapshot, RuntimeIdentity
+from .schema import FormatSpec, default_format, is_semver
+from .validator import canonicalize_fields, validate_config, validate_format, validate_otel
 
 __all__ = (
+    "ATTRIBUTE_VALUE_MAX_LENGTH_DEFAULT",
     "AccessConfig",
+    "AuditContextTokens",
     "AuditError",
-    "AuditFacade",
     "AuditLogConfig",
-    "AuditLogSchema",
+    "AuditManager",
     "AuditNotImplementedError",
-    "CONTENT_REQUIRED_FIELDS",
-    "ClockEvent",
-    "ClockSyncError",
-    "ContentSchema",
+    "AuditSnapshot",
+    "DEFAULT_CONTENT_FIELDS",
     "DEFAULT_HEADER_FIELDS",
-    "DEFAULT_REDLINE_FIELDS",
+    "DEFAULT_REQUIRED_FIELDS",
     "DeployConfig",
+    "EVENT_TYPE_ATTR",
     "FormatError",
-    "HeaderSchema",
+    "FormatSpec",
     "KEYWORD_EVT",
     "KEYWORD_UA",
     "LEVELS",
     "LinkpointConfig",
     "LocalClock",
-    "NtpClient",
+    "MemoryEmitter",
+    "NoopEmitter",
     "NtpConfig",
-    "ParsedAuditLine",
+    "OTEL_LOGGER_NAME",
+    "OtelConfig",
+    "PLACEHOLDER_DEFAULT",
     "RSPCD_KNOWN",
     "RedactionConfig",
     "RuntimeIdentity",
     "RuntimeIdentityConfig",
     "SCHEMA_VERSION_DEFAULT",
     "SchemaValidationError",
-    "SequenceNtpClient",
     "ShipperConfig",
     "StorageConfig",
-    "SyncResult",
-    "SyncedClock",
-    "UdpNtpClient",
+    "TIMESTAMP_FORMAT_DEFAULT",
     "WriterConfig",
+    "audit_error",
+    "audit_info",
+    "audit_warn",
+    "bind_audit_context",
+    "build_audit_attributes",
+    "build_emitter",
     "canonicalize_fields",
     "capture_caller",
+    "clear_audit_context",
     "default_config",
-    "default_schema",
-    "escape_value",
-    "format_audit_line",
-    "format_clock_event",
+    "default_format",
     "format_timestamp",
+    "get_audit_context",
+    "get_audit_manager",
+    "is_semver",
     "log_audit",
-    "parse_audit_line",
-    "parse_sync_interval",
-    "validate_schema",
+    "reset_audit_context",
+    "reset_audit_manager",
+    "resolve_service_name",
+    "validate_config",
+    "validate_format",
+    "validate_otel",
 )

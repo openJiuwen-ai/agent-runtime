@@ -46,6 +46,11 @@ async def test_sync_data_pushes_application_configs():
             return_value=ack,
         ) as memory_mock,
         patch(
+            "manager_server.core.instance.instance_data_lifecycle.push_audit_log_config_sync_to_gateway",
+            new_callable=AsyncMock,
+            return_value=ack,
+        ) as audit_mock,
+        patch(
             "manager_server.core.instance.instance_data_lifecycle.push_log_masking_rules_sync_to_gateway",
             new_callable=AsyncMock,
             return_value=ack,
@@ -64,9 +69,11 @@ async def test_sync_data_pushes_application_configs():
     logging_mock.assert_awaited_once_with(handler, "jid-app")
     task_memory_mock.assert_awaited_once_with(handler, "jid-app")
     memory_mock.assert_awaited_once_with(handler, "jid-app")
+    audit_mock.assert_awaited_once_with(handler, "jid-app")
     assert "logging" in results
     assert "task_memory" in results
     assert "memory" in results
+    assert "audit_log" in results
     assert "permissions" not in results
 
 
