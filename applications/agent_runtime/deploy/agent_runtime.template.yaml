@@ -162,9 +162,11 @@ spec:
             # 空 kubeconfig → Pod 内走 in-cluster ServiceAccount
             - name: AGENT_RUNTIME_KUBECONFIG
               value: ""
-            # AgentServer Pod 拉起的目标 namespace（与 e2e/生产约定一致）
-            - name: AGENT_RUNTIME_DEFAULT_NAMESPACE
-              value: "<<AGENT_RUNTIME_AGENTSERVER_NAMESPACE>>"
+            # runtime 自身 ns（downward API）：模板 namespace 为空时 AgentServer 落同名 ns
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
             - name: AGENT_RUNTIME_LOG_LEVEL
               value: "<<AGENT_RUNTIME_LOG_LEVEL>>"
             # ---- 系统自评估（2026-09;默认全空 = 纯规则评估,无 LLM 外呼）----

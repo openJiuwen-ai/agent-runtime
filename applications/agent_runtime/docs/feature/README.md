@@ -17,6 +17,7 @@
 
 | 日期 | 文档 | 一句话 |
 |---|---|---|
+| 2026-09 | [AgentServer 默认 namespace 跟随 runtime 自身 ns](2026-09-agentserver-ns-follow-runtime.md) | 模板下发 namespace 空串=继承——AgentServer 落 runtime 自身 ns(downward API 注入 `POD_NAMESPACE`,`default_namespace = POD_NAMESPACE or "default"` 单点改 config.from_env;`AGENT_RUNTIME_DEFAULT_NAMESPACE` 变量移除);部署模板换注入源;DB/wire 契约/存量库零改动 |
 | 2026-09 | [日落排空语义修复(闸门基准=当前生效版本 + reclaim 落后免老化)](2026-09-sunset-drain-semantics-fix.md) | config_sync 闸门原比新载荷版本,当前代空闲 Pod 必然≠新版被误判遗留、又受 min_idle 底数保护永不回收=**永久 409**(cyz 实测 idle 33min≫pod_ttl);基准改当前生效版本(与 refresh 闸门比当前代次同构)+reclaim 对 ver/gen 落后 idle Pod 免老化即刻回收(当前版超额仍抗抖);会话硬切决策接受(②B 否决留档);528 用例 |
 | 2026-09 | [data / created_at / updated_at 三元组对齐](2026-09-data-triad-alignment.md) | container/routing_scope/link_binding_state 补 data；config_sync 透传模板/资源 data；Gateway agent-resource 补时间戳；实例资源更新保留 created_at |
 | 2026-09 | [删除 service_config_template legacy 内联容器列](2026-09-drop-legacy-inline-template-columns.md) | 硬删 24 个拆表前内联列；Manager 只认 data.config_sync.containers + refs；Runtime 保留 wire mixed 黑名单；存量库须 DROP COLUMN |

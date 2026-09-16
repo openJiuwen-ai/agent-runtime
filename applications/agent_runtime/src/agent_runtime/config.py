@@ -89,7 +89,8 @@ class AgentRuntimeConfig:
         return cls(
             mode=os.getenv("AGENT_RUNTIME_MODE", "server").strip().lower(),
             kubeconfig=os.getenv("AGENT_RUNTIME_KUBECONFIG") or None,
-            default_namespace=os.getenv("AGENT_RUNTIME_DEFAULT_NAMESPACE", "default"),
+            # 解析链:POD_NAMESPACE(downward API 注入的自身 ns)> "default"
+            default_namespace=(os.getenv("POD_NAMESPACE") or "default"),
             sweep_interval=_env_int("AGENT_RUNTIME_SWEEP_INTERVAL", 1),
             autoscale_interval=_env_int("AGENT_RUNTIME_AUTOSCALE_INTERVAL", 1),
             reclaim_interval=_env_int("AGENT_RUNTIME_RECLAIM_INTERVAL", 1),

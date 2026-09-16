@@ -1293,3 +1293,16 @@ async def test_rebuild_snapshot_logs_template_params(runtime, caplog):
     assert "sc=7" in lines[0] and "pc=3" in lines[0]
     assert "min_idle=1" in lines[0] and "session_ttl=60s" in lines[0]
     assert "max_pods=3" in lines[0]        # ⌈7/3⌉ 派生值同打印
+
+
+@requires_lua
+async def test_template_empty_namespace_roundtrip(runtime):
+    """namespace=""(继承语义):sync 接受、往返存活、deploy_subset 原样携带。
+
+    k8s 层 falsy 兜底到 default_namespace——集群内 = POD_NAMESPACE(downward
+    API)解析的 runtime 自身 ns;DB 列 NOT NULL 允许空串,契约/库零改动。
+    """
+    await runtime.seed_template(namespace="")
+    t = await runtime.config_store.get_template("tpl-1")
+    assert t.namespace == ""
+    assert t.deploy_subset()["namespace"] == ""

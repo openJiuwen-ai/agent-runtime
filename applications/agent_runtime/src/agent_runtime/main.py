@@ -563,7 +563,7 @@ def _collect_runtime_identity() -> dict[str, Any]:
     """采集 Runtime 所在 K8s namespace 与当前 Pod 名（非 K8s 时 namespace=default）。"""
     import os
 
-    ns = (os.getenv("NAMESPACE") or "").strip()
+    ns = (os.getenv("NAMESPACE") or os.getenv("POD_NAMESPACE") or "").strip()
     if not ns:
         sa_ns = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
         try:
@@ -572,9 +572,7 @@ def _collect_runtime_identity() -> dict[str, Any]:
         except OSError:
             ns = ""
     if not ns:
-        ns = (
-            os.getenv("AGENT_RUNTIME_DEFAULT_NAMESPACE") or "default"
-        ).strip() or "default"
+        ns = "default"
     pod = (os.getenv("HOSTNAME") or "").strip()
     return {
         "namespace": ns,

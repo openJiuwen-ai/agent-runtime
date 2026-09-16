@@ -127,7 +127,7 @@ flowchart TB
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `template_id` / `template_name` / `description` / `enabled` / `data` | — | 元信息(`enabled=False` 的模板路由不解析) |
-| `namespace` | str | K8s 命名空间(Pod 级) |
+| `namespace` | str | K8s 命名空间(Pod 级;**空串 = 继承**——AgentServer 落 runtime 自身 ns,由 `POD_NAMESPACE`(downward API)解析,见 §deploy 兜底链与 docs/feature/2026-09-agentserver-ns-follow-runtime.md;省略仍落默认值 `"default"`,表达继承须显式下发 `""`) |
 | `nodeName` | str? | 节点绑定(A 类;渲染为 `V1PodSpec.nodeName` 绕过调度器点名上机,deploy tool 镜像预载场景用。`None` = 不绑定;空串同 `None`。坏值 → Pod 永久 Pending 挂满 ready_timeout,入口按 hostname 形态 ≤253 校验) |
 | `pod_name` | str | Pod 名前缀(pod_id = 前缀-随机后缀,默认 `agentserver`) |
 | `volumes` | list[dict]? | **Pod 级卷定义**(K8s `spec.volumes` 同构,见下) |
