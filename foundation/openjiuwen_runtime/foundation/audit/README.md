@@ -84,13 +84,21 @@ mem = MemoryEmitter()
 reset_audit_manager(AuditManager(emitter=mem))
 ```
 
-## 测试
+## 示例
+
+可运行脚本见 [`examples/`](examples/)（`MemoryEmitter`，无需 collector）：
 
 ```bash
 cd foundation
-uv run pytest tests/unit_tests/test_audit_format_spec.py \
-              tests/unit_tests/test_audit_attributes.py \
-              tests/unit_tests/test_audit_emit.py \
-              tests/unit_tests/test_audit_apply_config.py \
-              tests/unit_tests/test_audit_facade_api.py -q
+uv run python openjiuwen_runtime/foundation/audit/examples/01_basic_memory.py
+uv run python openjiuwen_runtime/foundation/audit/examples/02_context_and_config.py
+```
+
+## 测试
+
+单测与模块同目录，见 [`tests/`](tests/)：
+
+```bash
+cd foundation
+uv run pytest openjiuwen_runtime/foundation/audit/tests -q
 ```

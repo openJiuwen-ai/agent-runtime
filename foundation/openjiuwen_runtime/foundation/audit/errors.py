@@ -17,6 +17,3 @@ class SchemaValidationError(AuditError):
 class FormatError(AuditError):
     """打点参数非法（如缺 level / 非法 event_type）。"""
 
-
-class AuditNotImplementedError(AuditError, NotImplementedError):
-    """框架已预留、对应 FR 尚未实现（FR3/FR5–FR7 等骨架）。"""

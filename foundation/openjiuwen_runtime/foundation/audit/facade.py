@@ -114,16 +114,31 @@ class AuditManager:
             level=level_norm,
             fields=fields,
         )
-        body = str(
-            attributes.get("UA")
-            or attributes.get("EVT")
-            or attributes.get("MSG")
-            or keyword
-        )
+        body = _select_body(attributes, event_type=keyword, placeholder=snap.format.placeholder)
         try:
             emitter.emit(severity=level_norm, body=body, attributes=attributes)
         except Exception as exc:  # noqa: BLE001
             logger.warning("audit emit failed: %s", exc)
+
+
+def _select_body(
+    attributes: Mapping[str, str],
+    *,
+    event_type: str,
+    placeholder: str,
+) -> str:
+    """按 event_type 优先取 UA/EVT，再 MSG；占位符视为无正文。"""
+    preferred = ("UA", "MSG") if event_type == "UA" else ("EVT", "MSG")
+    # UA 事件也可回退看 EVT；EVT 也可回退看 UA（极少用）
+    ordered = preferred + (("EVT",) if event_type == "UA" else ("UA",))
+    for key in ordered:
+        value = attributes.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text and text != placeholder:
+            return text
+    return event_type
 
 
 def get_audit_manager() -> AuditManager:

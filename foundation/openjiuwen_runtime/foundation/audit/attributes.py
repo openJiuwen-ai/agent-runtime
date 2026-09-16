@@ -101,7 +101,6 @@ def build_audit_attributes(
     merged["pid"] = str(os.getpid())
     merged["tid"] = _tid_string()
     merged["caller"] = caller if caller is not None else capture_caller()
-    merged["CUSTID"] = placeholder
 
     # ContextVar
     session_id = ctx.get("session_id")
@@ -120,11 +119,12 @@ def build_audit_attributes(
     if dst_ip is not None and str(dst_ip) != "":
         merged["DSTIP"] = dst_ip
 
-    # 显式覆盖（含 UID=system）
+    # 显式覆盖（含 UID=system）；CUSTID 本阶段恒为 placeholder，不允许覆盖
     for key, value in explicit.items():
-        if key == EVENT_TYPE_ATTR:
+        if key == EVENT_TYPE_ATTR or key == "CUSTID":
             continue
         merged[key] = value
+    merged["CUSTID"] = placeholder
 
     # 按 format 过滤并占位
     attributes: dict[str, str] = {}

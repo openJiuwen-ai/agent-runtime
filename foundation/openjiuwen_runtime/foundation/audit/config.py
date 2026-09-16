@@ -84,63 +84,6 @@ class OtelConfig:
         )
 
 
-# --- FR3–FR7 骨架配置（本阶段主路径不消费；供骨架模块 import）---
-
-
-@dataclass(frozen=True)
-class RedactionConfig:
-    redaction_token: str = "***REDACTED***"
-    sensitive_keys: tuple[str, ...] = (
-        "password",
-        "token",
-        "secret",
-        "key",
-        "cvn",
-        "pin",
-        "cvn2",
-        "otp",
-        "captcha",
-        "smscode",
-        "dynamic_code",
-        "verify_code",
-    )
-    command_force_redact: bool = True
-    sandbox_path_redact: bool = True
-
-
-@dataclass(frozen=True)
-class WriterConfig:
-    async_write: bool = True
-    queue_size: int = 10000
-
-
-@dataclass(frozen=True)
-class StorageConfig:
-    filename_pattern: str = "SEC-{dc}_{sys}_{node}.log"
-    storage_dir: str = "/var/log/audit/"
-
-
-@dataclass(frozen=True)
-class ShipperConfig:
-    protocol: str = ""
-    endpoint: str = ""
-
-
-@dataclass(frozen=True)
-class AccessConfig:
-    require_auth: bool = True
-
-
-@dataclass(frozen=True)
-class DeployConfig:
-    precheck_gate: bool = True
-
-
-@dataclass(frozen=True)
-class LinkpointConfig:
-    sandbox_submdl: str = "sandbox"
-
-
 @dataclass(frozen=True)
 class AuditLogConfig:
     """完整审计配置。本阶段生效：format / otel / identity / service。"""

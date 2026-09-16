@@ -12,17 +12,10 @@ from __future__ import annotations
 from .attributes import build_audit_attributes, capture_caller
 from .clock import LocalClock, format_timestamp
 from .config import (
-    AccessConfig,
     AuditLogConfig,
-    DeployConfig,
-    LinkpointConfig,
     NtpConfig,
     OtelConfig,
-    RedactionConfig,
     RuntimeIdentityConfig,
-    ShipperConfig,
-    StorageConfig,
-    WriterConfig,
     default_config,
 )
 from .constants import (
@@ -48,12 +41,7 @@ from .context import (
     reset_audit_context,
 )
 from .emitter import MemoryEmitter, NoopEmitter, build_emitter, resolve_service_name
-from .errors import (
-    AuditError,
-    AuditNotImplementedError,
-    FormatError,
-    SchemaValidationError,
-)
+from .errors import AuditError, FormatError, SchemaValidationError
 from .facade import (
     AuditManager,
     audit_error,
@@ -69,24 +57,20 @@ from .validator import canonicalize_fields, validate_config, validate_format, va
 
 __all__ = (
     "ATTRIBUTE_VALUE_MAX_LENGTH_DEFAULT",
-    "AccessConfig",
     "AuditContextTokens",
     "AuditError",
     "AuditLogConfig",
     "AuditManager",
-    "AuditNotImplementedError",
     "AuditSnapshot",
     "DEFAULT_CONTENT_FIELDS",
     "DEFAULT_HEADER_FIELDS",
     "DEFAULT_REQUIRED_FIELDS",
-    "DeployConfig",
     "EVENT_TYPE_ATTR",
     "FormatError",
     "FormatSpec",
     "KEYWORD_EVT",
     "KEYWORD_UA",
     "LEVELS",
-    "LinkpointConfig",
     "LocalClock",
     "MemoryEmitter",
     "NoopEmitter",
@@ -95,15 +79,11 @@ __all__ = (
     "OtelConfig",
     "PLACEHOLDER_DEFAULT",
     "RSPCD_KNOWN",
-    "RedactionConfig",
     "RuntimeIdentity",
     "RuntimeIdentityConfig",
     "SCHEMA_VERSION_DEFAULT",
     "SchemaValidationError",
-    "ShipperConfig",
-    "StorageConfig",
     "TIMESTAMP_FORMAT_DEFAULT",
-    "WriterConfig",
     "audit_error",
     "audit_info",
     "audit_warn",

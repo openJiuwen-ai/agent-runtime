@@ -22,6 +22,9 @@ from __future__ import annotations
 #   facade.py       AuditManager / log_audit / apply_config
 #   clock.py        LocalClock + format_timestamp
 #
+# 本阶段不包含：本地文件 writer/storage、脱敏、shipper、访问控制、打点对照表等；
+# 后续 FR 实现时再按需新增模块，不预留空骨架。
+#
 # 调用链：
 #
 #   apply_config(payload) → validate → 替换 snapshot → rebind emitter
@@ -32,6 +35,7 @@ from __future__ import annotations
 #
 # 字段约定：
 #   event_type 必填（UA|EVT），写入 attributes["event_type"]
-#   level 必填；audit_info/warn/error 自带
-#   CUSTID 恒 placeholder；UID=system 仅显式传入
+#   level 必填；audit_info/warn/error 自带；WARNING 归一为 WARN
+#   CUSTID 恒 placeholder（显式传入也忽略）；UID=system 仅显式传入
 #   service 进程本地；Resource service.name = jiuwenclaw-{service}
+#   body：按 event_type 优先 UA 或 EVT，占位符不计入正文
