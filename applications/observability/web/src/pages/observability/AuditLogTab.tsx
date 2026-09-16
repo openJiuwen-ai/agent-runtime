@@ -2,10 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { LokiApi, parseLokiAuditStreams, AuditLogEntry } from '../../services/api';
 
-const AUDIT_TYPE_LABELS: Record<string, string> = {
-  ua: '行为审计',
-  evt: '安全事件',
-};
+
 
 const AUDIT_TYPE_COLORS: Record<string, string> = {
   ua: '#22c55e',
@@ -43,7 +40,7 @@ export function AuditLogTab() {
   const [expanded, setExpanded] = useState<string | null>(null);
 
   const logql = useMemo(() => {
-    let q = '{service_name="jiuwenclaw-agentserver"}';
+    let q = '{service_name=~"jiuwenclaw-(agentserver|gateway)"}';
     const filters: string[] = [];
     if (auditType) {
       filters.push(`audit_type="${escapeLogqlValue(auditType)}"`);
@@ -90,9 +87,9 @@ export function AuditLogTab() {
             value={auditType}
             onChange={(e) => setAuditType(e.target.value)}
           >
-            <option value="">全部类型</option>
-            <option value="ua">行为审计</option>
-            <option value="evt">安全事件</option>
+            <option value="">全部结果</option>
+            <option value="ua">正常</option>
+            <option value="evt">异常</option>
           </select>
           <input
             type="date"
@@ -138,7 +135,6 @@ export function AuditLogTab() {
             <thead>
               <tr className="border-b text-left text-xs text-muted">
                 <th className="px-3 py-2">时间</th>
-                <th className="px-3 py-2">类型</th>
                 <th className="px-3 py-2">摘要</th>
                 <th className="px-3 py-2">用户</th>
                 <th className="px-3 py-2">Trace</th>
@@ -158,15 +154,13 @@ export function AuditLogTab() {
                       <td className="px-3 py-2 whitespace-nowrap text-muted num">
                         {formatTime(entry.timestamp)}
                       </td>
-                      <td className="px-3 py-2 whitespace-nowrap">
-                        <span
-                          className="px-2 py-0.5 rounded text-xs font-medium"
-                          style={{ background: color + '20', color }}
-                        >
-                          {AUDIT_TYPE_LABELS[entry.auditType] ?? entry.auditType}
-                        </span>
+                      <td
+                        className="px-3 py-2 truncate max-w-md font-medium"
+                        style={{ color }}
+                        title={entry.auditType === 'evt' ? '异常' : '正常'}
+                      >
+                        {entry.body}
                       </td>
-                      <td className="px-3 py-2 truncate max-w-md">{entry.body}</td>
                       <td className="px-3 py-2 whitespace-nowrap mono text-xs">
                         {entry.userId || '-'}
                       </td>
@@ -183,8 +177,14 @@ export function AuditLogTab() {
                     </tr>
                     {isExpanded && (
                       <tr key={`${key}-detail`}>
-                        <td colSpan={5} className="px-3 py-3 bg-white dark:bg-[var(--bg-card)]">
+                        <td colSpan={4} className="px-3 py-3 bg-white dark:bg-[var(--bg-card)]">
                           <div className="space-y-1 text-xs">
+                            <div><span className="text-muted">子模块:</span> {entry.submdl || '-'}</div>
+                            <div><span className="text-muted">过程:</span> {entry.proc || '-'}</div>
+                            <div><span className="text-muted">结果:</span> {entry.outcome || '-'}</div>
+                            {entry.phase && <div><span className="text-muted">阶段:</span> {entry.phase}</div>}
+                            {entry.error && <div><span className="text-muted">错误:</span> <span className="mono break-all">{entry.error}</span></div>}
+                            <div><span className="text-muted">服务:</span> {entry.serviceName || '-'}</div>
                             <div><span className="text-muted">Trace ID:</span> <span className="mono">{entry.traceId || '-'}</span></div>
                             <div><span className="text-muted">Request ID:</span> <span className="mono">{entry.requestId || '-'}</span></div>
                             <div><span className="text-muted">Session ID:</span> <span className="mono">{entry.sessionId || '-'}</span></div>

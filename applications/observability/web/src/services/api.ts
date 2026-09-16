@@ -67,6 +67,12 @@ async function httpLoki<T>(
 export interface AuditLogEntry {
   timestamp: number;  // ms
   auditType: string;
+  serviceName: string;
+  submdl: string;
+  proc: string;
+  outcome: string;
+  phase: string;
+  error: string;
   traceId: string;
   requestId: string;
   sessionId: string;
@@ -89,6 +95,12 @@ export function parseLokiAuditStreams(resp: LokiQueryRangeResponse): AuditLogEnt
       entries.push({
         timestamp: ts,
         auditType: String(labels['audit_type'] ?? ''),
+        serviceName: String(labels['service_name'] ?? '').replace(/^jiuwenclaw-/, ''),
+        submdl: String(labels['submdl'] ?? ''),
+        proc: String(labels['proc'] ?? ''),
+        outcome: String(labels['outcome'] ?? ''),
+        phase: String(labels['phase'] ?? ''),
+        error: String(labels['error'] ?? ''),
         traceId: String(labels['trace_id'] ?? ''),
         requestId: String(labels['request_id'] ?? ''),
         sessionId: String(labels['session_id'] ?? ''),
