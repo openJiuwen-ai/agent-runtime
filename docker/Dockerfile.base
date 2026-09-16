@@ -3,7 +3,10 @@ FROM ${BASE_IMAGE}
 
 ARG PIP_EXTRA_ARGS="-i https://mirrors.aliyun.com/pypi/simple/"
 
-RUN useradd --create-home --shell /bin/bash app \
+# uid/gid 固定 1000：与 k8s 模板 fsGroup=1000 及部署侧硬编码 uid 对齐，
+# 防止基础镜像占用 1000 时属主漂移（构建期直接失败，fail fast）
+RUN groupadd --gid 1000 app \
+    && useradd --uid 1000 --gid 1000 --create-home --shell /bin/bash app \
     && mkdir -p /app/agent-runtime && chown app:app /app/agent-runtime
 
 WORKDIR /app/agent-runtime
