@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from pydantic import ValidationError
 
+from manager_server.core.instance.instance_service import delete_instance_row
 from manager_server.core.instance.link_binding_service import (
     InstanceLinkBindingService,
     LinkBindingConflict,
@@ -60,6 +62,13 @@ class _DB:
         row = self.tables[table][current.jiuwenclaw_id]
         row.update(data)
         return SimpleNamespace(**row)
+
+    async def delete(self, table: str, filters: dict):
+        current = await self.get(table, filters)
+        if current is None:
+            return False
+        del self.tables[table][current.jiuwenclaw_id]
+        return True
 
 
 class _LostUpdateDB(_DB):
@@ -116,6 +125,30 @@ async def test_active_gateway_or_runtime_cannot_bind_another_instance() -> None:
         await service.bind("jid-b", _body(runtime="runtime-b:8091"))
     with pytest.raises(LinkBindingConflict, match="runtime"):
         await service.bind("jid-c", _body(gateway="gateway-c:8775"))
+
+
+@pytest.mark.asyncio
+async def test_deleted_instance_releases_binding_for_reregistration() -> None:
+    db = _DB()
+    service = InstanceLinkBindingService(db)
+    await service.bind("jid-a", _body())
+
+    with patch(
+        "manager_server.security.keys.delete_instance_enc_pubkey",
+        new_callable=AsyncMock,
+    ):
+        await delete_instance_row(db, "jid-a")
+
+    assert "jid-a" not in db.tables["instance_info"]
+    assert "jid-a" not in db.tables["instance_link_binding"]
+
+    db.tables["instance_info"]["jid-new"] = {
+        "jiuwenclaw_id": "jid-new",
+        "gateway_host": "http://gateway-a:8775",
+        "runtime_host": "http://runtime-a:8091",
+    }
+    rebound = await service.bind("jid-new", _body())
+    assert rebound.mtls_binding_id == "binding-a"
 
 
 @pytest.mark.asyncio
