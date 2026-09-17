@@ -28,7 +28,7 @@ from openjiuwen_runtime.foundation.security.link_profile import (
     LinkProfile,
     LinkProfileError,
 )
-from sqlalchemy import Column, MetaData, Table, select, text, update
+from sqlalchemy import Column, MetaData, Table, inspect, select, text, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -150,6 +150,7 @@ async def test_incremental_schema_extension_preserves_other_tables_and_public_bi
     table = definition()
     # The public application projection may already exist before mTLS is enabled.
     omitted_columns = {
+        "data",
         "material_schema_version",
         "material_epoch",
         "certificate_materials",
@@ -190,6 +191,14 @@ async def test_incremental_schema_extension_preserves_other_tables_and_public_bi
         )
     await migrate(engine)
     await migrate(engine)
+    async with engine.connect() as conn:
+        migrated_columns = await conn.run_sync(
+            lambda c: {
+                column["name"]
+                for column in inspect(c).get_columns("link_binding_state")
+            }
+        )
+    assert "data" in migrated_columns
     with pytest.raises(LinkProfileError, match="no recoverable bundle"):
         await ensure(engine, endpoints=ENDPOINTS)
     async with engine.connect() as conn:

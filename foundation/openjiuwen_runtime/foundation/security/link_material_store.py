@@ -16,6 +16,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     Integer,
+    JSON,
     MetaData,
     String,
     Table,
@@ -32,7 +33,8 @@ from .link_certificate_bundle import issue_bundle, validate_bundle
 from .link_profile import LinkProfileError
 
 TABLE_NAME = "link_binding_state"
-MATERIAL_COLUMNS = {
+MIGRATABLE_COLUMNS = {
+    "data": JSON(),
     "material_schema_version": Integer(),
     "material_epoch": Integer(),
     "certificate_materials": Text().with_variant(LONGTEXT(), "mysql"),
@@ -81,7 +83,10 @@ def definition() -> Table:
         Column("status", String(32), nullable=False),
         Column("created_at", DateTime, nullable=False),
         Column("updated_at", DateTime, nullable=False),
-        *(Column(name, kind, nullable=True) for name, kind in MATERIAL_COLUMNS.items()),
+        *(
+            Column(name, kind, nullable=True)
+            for name, kind in MIGRATABLE_COLUMNS.items()
+        ),
     )
 
 
@@ -102,7 +107,7 @@ async def migrate(engine) -> Table:
             )
         if not exists:
             raise LinkProfileError("mTLS table initialization failed") from None
-    for name, kind in MATERIAL_COLUMNS.items():
+    for name, kind in MIGRATABLE_COLUMNS.items():
         async with engine.connect() as connection:
             columns = await connection.run_sync(
                 lambda c: inspect(c).get_columns(TABLE_NAME)

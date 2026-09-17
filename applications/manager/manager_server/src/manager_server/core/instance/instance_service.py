@@ -8,18 +8,19 @@ from typing import Any, Literal
 
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 
-from manager_server.infrastructure.utils import iso_datetime, new_uuid4, utc_now
+from manager_server.core.instance.config_host_probe import (
+    require_config_hosts_reachable,
+)
 from manager_server.infrastructure.common import resolve_order_by
+from manager_server.infrastructure.utils import iso_datetime, new_uuid4, utc_now
+from manager_server.models.instance_models import INSTANCE_INFO_TABLE_DEF
+from manager_server.models.link_binding_models import INSTANCE_LINK_BINDING_TABLE_DEF
 from manager_server.schemas.instance_schemas import (
     CreateInstanceBody,
     InstanceDetail,
     InstanceListQuery,
     InstanceSummary,
     InstanceUpdateBody,
-)
-from manager_server.models.instance_models import INSTANCE_INFO_TABLE_DEF
-from manager_server.core.instance.config_host_probe import (
-    require_config_hosts_reachable,
 )
 
 logger = logging.getLogger(__name__)
@@ -588,6 +589,10 @@ async def list_instance_rows(
 
 
 async def delete_instance_row(handler: DBHandler, jiuwenclaw_id: str) -> None:
+    await handler.delete(
+        INSTANCE_LINK_BINDING_TABLE_DEF.table_name,
+        {"jiuwenclaw_id": jiuwenclaw_id},
+    )
     await handler.delete(_INSTANCE_TABLE, {"jiuwenclaw_id": jiuwenclaw_id})
     from manager_server.security.keys import delete_instance_enc_pubkey
 
