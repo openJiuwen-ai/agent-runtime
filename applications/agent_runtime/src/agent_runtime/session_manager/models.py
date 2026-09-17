@@ -124,10 +124,14 @@ class Template:
 
         pod_concurrency 供 RM 的 deploy follower 等待室推导上限（pc-1）——
         不参与 max_pods 判定（per-Pod 容量闸门仍在 SM 侧，红线不变）。
+        session_ttl 供 RM 日落排空窗口计 deadline（= 日落时刻 + session_ttl，
+        2026-09-17 优雅排空）——SM 侧 session 过期仍走自己的 session_expiry
+        ZSET，两处用途互不依赖。
         """
         return {
             "min_idle_pods": self.min_idle_pods,
             "max_pods": self.max_pods,
             "pod_ttl": self.pod_ttl,
             "pod_concurrency": self.pod_concurrency,
+            "session_ttl": self.session_ttl,
         }

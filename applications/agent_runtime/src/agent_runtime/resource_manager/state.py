@@ -76,6 +76,17 @@ class RMKeys:
         """
         return f"{self.prefix}:resource:scope:{scope_id}:deploy_followers"
 
+    def scope_drain_until(self, scope_id: str) -> str:
+        """STRING: 日落排空截止时间戳（秒）。存在 ⟺ 排空纪元活跃。
+
+        update_pool_config 检出版本/代次落后 Pod 时戳记（值 = now +
+        session_ttl，EX 同值 + DRAIN_SLACK_S 崩溃兜底）；期间 LUA_ACQUIRE /
+        LUA_PLACEHOLDER 的容量上限 +SURGE_MARGIN、reclaim 对 stale Pod 延后
+        到截止后才回收；全部 stale Pod 收完后由 reclaim 主动 DEL（TTL 只是
+        崩溃兜底，非正常终止路径）。
+        """
+        return f"{self.prefix}:resource:scope:{scope_id}:drain_until"
+
     # ---- Pod 级
     def pod_info(self, pod_id: str) -> str:
         """HASH: scope_id / pod_sse_url / pod_ip / namespace / phase / created_ts /
@@ -276,6 +287,36 @@ class ResourceState:
         return to_int(await self.redis.hincrby(
             self.k.scope_config(scope_id), "generation", 1
         ))
+
+    async def drain_until(self, scope_id: str) -> int | None:
+        """排空截止时间戳；None = 无活跃排空纪元（或已过期，兜底语义 = 立即回收）。"""
+        raw = await self.redis.get(self.k.scope_drain_until(scope_id))
+        return to_int(raw) if raw is not None else None
+
+    async def set_drain_until(self, scope_id: str, deadline: int, ttl: int) -> None:
+        """戳记排空纪元（EX=ttl 崩溃兜底；正常终止走 clear_drain_until）。"""
+        await self.redis.set(self.k.scope_drain_until(scope_id), deadline, ex=ttl)
+
+    async def clear_drain_until(self, scope_id: str) -> None:
+        await self.redis.delete(self.k.scope_drain_until(scope_id))
+
+    async def has_lagged_pods(self, scope_id: str) -> bool:
+        """注册表中是否存在版本或代次落后于 scope 当前配置的 Pod。
+
+        排空纪元的统一判据（update_pool_config 戳记 / reclaim 收尾终止共用）：
+        读注册表（scope:pods + pod:info），不读 SM 候选集——与软摘除的先后
+        顺序无关。幽灵成员（info 已清）不构成落后。
+        """
+        cfg = await self.load_scope_config(scope_id)
+        ver = cfg.get("deploy_ver") or ""
+        gen = cfg.get("generation") or ""
+        for pod_id in await self.pod_ids(scope_id):
+            info = await self.pod_info(pod_id)
+            if info and (
+                    (info.get("deploy_ver") or "") != ver
+                    or (info.get("generation") or "") != gen):
+                return True
+        return False
 
     async def has_scope_config(self, scope_id: str) -> bool:
         return to_int(

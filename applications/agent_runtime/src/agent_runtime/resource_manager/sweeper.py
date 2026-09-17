@@ -34,6 +34,9 @@ logger = logging.getLogger("agent_runtime.resource_manager")
 HEALTH_FAIL_THRESHOLD = 2   # 连续失败判半死（防瞬时抖动误杀，场景 N）
 WATCH_LOCK_TTL = 15         # 10s tick + 余量
 RECONCILE_LOCK_TTL = 60     # 30s tick + 余量
+DRAIN_SURGE_MARGIN = 1      # 排空纪元活跃时的容量上限加成（暂写死，2026-09-17
+                            # 优雅排空决策；与 lua_scripts 两闸门内的 +1 对齐——
+                            # 改动须三处同步）
 
 
 class ResourceSweeper:
@@ -132,9 +135,15 @@ class ResourceSweeper:
                 f"warm={len(warm)} min_idle={min_idle} idle_total={len(idle)}"
             )
         total = await self.state.pod_count(scope_id) + await self.state.deploying_count(scope_id)
-        if total >= max_pods:
+        # 排空纪元活跃 → 容量上限 +SURGE_MARGIN：日落老 Pod 在 drain_until 前
+        # 占槽不清，无余量则新代补位 Pod 无处部署（与 Lua 两闸门同步加成）
+        cap = max_pods
+        if await self.state.drain_until(scope_id) is not None:
+            cap += DRAIN_SURGE_MARGIN
+        if total >= cap:
             return "skip_max", (
                 f"warm={len(warm)} min_idle={min_idle} total={total} max_pods={max_pods}"
+                + (f" cap={cap}(drain)" if cap != max_pods else "")
             )
         # 热备 deploy 用缓存的 pod_spec（config_sync A 类变更后为新值）。
         # shape 探测:缺 main_container = 统一规范形前的旧扁平缓存(渲染会
@@ -237,36 +246,62 @@ class ResourceSweeper:
                     aged = {p: await self.state.idle_since(p) for p in idle}
                     ranked_warm = sorted(warm, key=lambda p: aged[p])
                     excess = stale + ranked_warm[min_idle:]
+                    # 排空纪元（优雅排空，2026-09-17）：日落 Pod（ver/gen 落后，
+                    # 已被软摘出候选集）在 drain_until 前不回收——期间已绑定
+                    # 会话继续在其上服务（route 亲和/touch 只查 pod:info 不查
+                    # 候选集），窗口给到 session_ttl 让停活跃的会话自然结束；
+                    # 键缺失（过期/旧版本遗留）兜底为立即可收，闸门收敛不破坏
+                    drain = await self.state.drain_until(scope_id)
                     # 待回收留痕：excess 成员变化才 INFO（30s tick，稳定成员
                     # 不重复）；到龄即回收的走 _reclaim_pod 自有日志
                     sig = tuple(excess)
                     if self._reclaim_state.get(scope_id) != sig:
                         ages = [now - aged[p] for p in excess if aged.get(p)]
                         overflow = ranked_warm[min_idle:]
-                        due = len(stale) + sum(
+                        due = sum(
+                            1 for p in stale
+                            if drain is None or now >= drain
+                        ) + sum(
                             1 for p in overflow
                             if aged.get(p) and now - aged[p] >= pod_ttl
                         )
+                        drain_ctx = (
+                            f" drain_wait={max(0, drain - now)}s"
+                            if drain is not None and any(
+                                p in stale_set for p in excess) else "")
                         logger.info(
                             "reclaim pending: scope=%s excess=%d pending=%d "
-                            "oldest_age=%ds pod_ttl=%ds pods=%s",
+                            "oldest_age=%ds pod_ttl=%ds%s pods=%s",
                             scope_id, len(excess), len(excess) - due,
                             max(ages) if ages else 0,
-                            pod_ttl, ",".join(excess),
+                            pod_ttl, drain_ctx, ",".join(excess),
                         )
                         self._reclaim_state[scope_id] = sig
-                    # 两级回收：stale（ver/gen 落后）免老化即刻回收——acquire 的
-                    # want_ver+generation 过滤已判死刑，零复用价值，蹲满剩余
-                    # pod_ttl 只白占 max_pods 槽位并拖长 config_sync/refresh 日落
-                    # 闸门的等待（含扩散后仍带会话的 Pod：会话被硬切重放置，
-                    # 2026-09-15 决策接受）；当前版本超额保留 pod_ttl 老化，抗
-                    # 「马上会被复用」的抖动（真镜像冷启动 p50≈12s）。
+                    # 两级回收：stale（ver/gen 落后）排空到龄回收（drain 缺失
+                    # 兜底立即——acquire 的 want_ver+generation 过滤已判死刑，
+                    # 零复用价值，蹲着只白占 max_pods 槽位并拖长 config_sync/
+                    # refresh 日落闸门的等待）；当前版本超额保留 pod_ttl 老化，
+                    # 抗「马上会被复用」的抖动（真镜像冷启动 p50≈12s）。
+                    reclaimed_stale = 0
                     for pod_id in excess:
-                        if pod_id in stale_set or (
+                        if (pod_id in stale_set and (
+                                drain is None or now >= drain)) or (
+                                pod_id not in stale_set and
                                 aged.get(pod_id)
                                 and now - aged[pod_id] >= pod_ttl):
                             await self._reclaim_pod(pod_id, scope_id)
                             reclaimed += 1
+                            if pod_id in stale_set:
+                                reclaimed_stale += 1
+                    # 排空收尾：本拍收过 stale 且注册表已无任何落后 Pod →
+                    # 纪元结束，DEL drain_until 精确终止 surge（不留 TTL 悬挂
+                    # 的超额窗口）；仍有落后 Pod（含未释放的带会话者）则续期等待
+                    if reclaimed_stale and not await self.state.has_lagged_pods(
+                            scope_id):
+                        await self.state.clear_drain_until(scope_id)
+                        logger.info(
+                            "sunset drain epoch done: scope=%s (lagged pods all "
+                            "reclaimed, surge released)", scope_id)
                 except Exception:  # noqa: BLE001 - per-scope 隔离，下拍重试
                     logger.exception("reclaim scope failed: scope=%s", scope_id)
         finally:

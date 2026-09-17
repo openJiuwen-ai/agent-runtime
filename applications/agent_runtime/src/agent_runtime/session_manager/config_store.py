@@ -1077,8 +1077,10 @@ class ConfigStore:
         #      回收（在集=合法服务中），闸门等它=等会话生命周期（600s 会话
         #      15s 连刷 409 连坐 2min+ 实录）。放行语义与 config_sync 闸门跳过
         #      在集 Pod 一致；且自愈闭环：本次 refresh 的全量软摘除把它 ZREM
-        #      出集 → reconcile ≤30s release 入 idle → reclaim stale 免老化
-        #      即刻回收（会话硬切重放置，2026-09-15 决策接受）。
+        #      出集 → reconcile ≤30s release 入 idle → reclaim 在排空窗口
+        #      （drain_until = 日落 + session_ttl，2026-09-17 优雅排空，此前为
+        #      免老化即刻硬切）后回收，闸门等待窗相应从 ~分钟内拉长到
+        #      ≤ session_ttl + tick；见 docs/feature/2026-09-sunset-drain-window.md。
         if self._sunset_pending is not None:
             for scope in scopes:
                 pending = await self._sunset_pending(scope.scope_id)

@@ -211,7 +211,8 @@ lock:config_sync 串行化(忙→409 CONFIG_SYNC_BUSY;基线 TTL 60 + **看门�
 - **顺序红线 bump → ZREM**:"ZREM 而未 bump"会造出"被摘却仍是当前代次 warm"的搁浅态(min_idle 底数保护 → 永久蹲占 max_pods 且不重建);bump 在前的任何中途失败都收敛于"老 Pod 暂时继续接新流量",重试即收敛。
 - 不写 DB、不动路由快照;日落收敛/重建全复用既有后台任务(reclaim 代次感知回收 + autoscale 按缓存 pod_spec 重建,见 resource-manager spec)。
 - `pods_sunset` 只计 SM 候选集摘除量(未入候选的 RM 暖 Pod 不计但同样被代次日落)。
-- **非幂等但收敛**(每次调用 = 一轮全量日落重建,成功后勿自动重试);config_sync 的日落中间态守卫基准=**当前生效版本**、不扩展看 generation——老代 Pod 版本与当前配置相等 → 对守卫不可见 → B 类/A 类下发均不因此 409(2026-09-15 修正;原「A 类照旧 409 到排空完成」在老代 Pod 受 min_idle 底数保护时永不放行=配置面永久 409)。A 类落库后由扩散②软摘 + reclaim 版本感知即刻回收老代 Pod。
+- **非幂等但收敛**(每次调用 = 一轮全量日落重建,成功后勿自动重试);config_sync 的日落中间态守卫基准=**当前生效版本**、不扩展看 generation——老代 Pod 版本与当前配置相等 → 对守卫不可见 → B 类/A 类下发均不因此 409(2026-09-15 修正;原「A 类照旧 409 到排空完成」在老代 Pod 受 min_idle 底数保护时永不放行=配置面永久 409)。A 类落库后由扩散②软摘 + reclaim **在排空窗口后**回收老代 Pod(2026-09-17 优雅排空,与 refresh 统一:窗口 = 首因下发 + session_ttl,期间已绑定会话继续服务;见 docs/feature/2026-09-sunset-drain-window.md)。
+- **排空窗口对闸门的时长影响(2026-09-17)**:⓪ 的等待窗从"~一拍 reconcile+reclaim"拉长到 ≤ session_ttl + tick(有界:窗口截止后 reclaim 必收 → 放行)。两闸门判据维度不同——refresh 闸门看**代次**(对 A 类排空 Pod 失明)、sync 守卫看**版本**(对 refresh 排空 Pod 失明)——各自入口在自家排空窗口内 409,异类入口可放行(R3)。运维节奏须适配:攒完编辑再刷新。
 - 构造注入:`ConfigStore(..., bump_generation=rm_facade.bump_generation)`(`main._bind_modules`)。
 
 ## sweeper.py —— 老化扫描

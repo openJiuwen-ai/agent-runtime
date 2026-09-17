@@ -35,6 +35,9 @@ FOLLOWER_WAIT_MARGIN = 10      # follower 等待上界 = ready_timeout + 此余�
 NO_CONFIG_MAX_LOOPS = 5        # acquire 内 no_config 重跑上限（真异常态有界，防热自旋）
 NO_CONFIG_BACKOFF_SEC = 0.2    # no_config 重跑退避（正常首见建配置后 1 次即过）
 FOLLOWER_PROGRESS_LOG_SEC = 5  # follower 轮询进度 INFO 行间隔（限频）
+DRAIN_SLACK_S = 60             # 排空纪元键 TTL 的崩溃兜底余量（盖住 reconcile 30s
+                              # + reclaim 1s tick + 选主抖动；正常终止是 reclaim
+                              # 收完主动 DEL，TTL 只防进程死透后 surge 悬挂）
 
 
 def _deploy_ver(pod_spec: dict[str, Any]) -> str:
@@ -94,6 +97,7 @@ class ResourceOrchestrator:
                     "min_idle_pods": int(pool_config.get("min_idle_pods", 0)),
                     "max_pods": int(pool_config.get("max_pods", 1)),
                     "pod_ttl": int(pool_config.get("pod_ttl", 300)),
+                    "session_ttl": int(pool_config.get("session_ttl", 600)),
                     "pod_concurrency": int(pool_config.get("pod_concurrency", 1)),
                     "deploy_ver": deploy_ver,
                     "pod_spec_json": json.dumps(pod_spec),
@@ -389,21 +393,42 @@ class ResourceOrchestrator:
         pool_config: dict[str, Any],
         pod_spec: dict[str, Any] | None = None,
     ) -> dict[str, bool]:
-        """config_sync 主动刷新（场景 M）：HSET 覆盖（幂等），立即生效。
+        """config_sync/refresh 主动刷新（场景 M）：HSET 覆盖（幂等），立即生效。
 
         A 类变更附带 pod_spec：同时刷新 deploy_ver / pod_spec_json →
         autoscale 补位的新暖 Pod 用新 deploy 字段。mapping 永不含 generation
         ——代次只经 bump_generation 单调递增，config_sync 推送不重置。
+        session_ttl 进 config 供排空 deadline 计算与后续读点。
         """
         mapping: dict[str, Any] = {
             "min_idle_pods": int(pool_config.get("min_idle_pods", 0)),
             "max_pods": int(pool_config.get("max_pods", 1)),
             "pod_ttl": int(pool_config.get("pod_ttl", 300)),
+            "session_ttl": int(pool_config.get("session_ttl", 600)),
         }
         if pod_spec is not None:
             mapping["deploy_ver"] = _deploy_ver(pod_spec)
             mapping["pod_spec_json"] = json.dumps(pod_spec)
         await self.state.save_scope_config(scope_id, mapping)
+        # ---- 日落排空纪元戳记（2026-09-17 优雅排空）：
+        # 本次推送后仍有版本(A 类 sync)或代次(refresh 已先 bump)落后的注册 Pod
+        # → 它们已被/将被软摘出候选集,戳 drain_until = now + session_ttl;
+        # 期间容量上限 +SURGE_MARGIN(reclaim 对应延后回收)。**纪元已活跃则不
+        # 重戳**——首因下发(refresh 的 bump / A 类的换版)定窗口,后续不改变
+        # ver/gen 的下发(B 类纯池参数)不延长;排空中的 refresh 本就被闸门 409
+        # 拦住到不了这里。无落后 Pod 不戳(空 scope/B 类不得激活 surge)。
+        # 检出读注册表不读候选集,与软摘除的先后顺序无关。
+        if (await self.state.drain_until(scope_id) is None
+                and await self.state.has_lagged_pods(scope_id)):
+            ttl = int(pool_config.get("session_ttl", 600))
+            deadline = now_ts() + ttl
+            await self.state.set_drain_until(
+                scope_id, deadline, ttl + DRAIN_SLACK_S)
+            logger.info(
+                "sunset drain epoch: scope=%s drain_until=%d window=%ds "
+                "(lagged pods keep serving sessions until deadline)",
+                scope_id, deadline, ttl,
+            )
         logger.info("update_pool_config: scope=%s fields=%s", scope_id, sorted(mapping))
         return {"updated": True}
 
@@ -411,7 +436,8 @@ class ResourceOrchestrator:
         """config_refresh 的代次日落（facade 出口）：scope 代次 +1，返回新代次。
 
         效果：现有 Pod 的 generation 全部落后于 config → LUA_ACQUIRE 不再复用、
-        _current_version_idle 判 stale（reclaim 按 pod_ttl 回收、autoscale 重建）。
+        _current_version_idle 判 stale（reclaim 按排空窗口延后回收、autoscale
+        重建；排空纪元由随后的 update_pool_config 推送戳记）。
         """
         generation = await self.state.bump_generation(scope_id)
         logger.info("bump_generation: scope=%s generation=%d", scope_id, generation)

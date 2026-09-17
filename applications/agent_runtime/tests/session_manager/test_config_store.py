@@ -4,6 +4,7 @@ eager 预热推送 / A-B 类扩散 / 409 / 红线（场景 M）。"""
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -417,22 +418,29 @@ async def test_config_sync_a_class_passes_with_current_version_idle_pod(runtime)
     2026-09-15 cyz 实测病理:原判据比**新载荷**版本——版本变更时当前代空闲
     Pod 必然 ≠ 新版,被误判日落遗留;而它 ver==cfg 受 min_idle 底数保护永不
     回收,等它 = 配置面永久 409(暖 Pod idle 33min ≫ pod_ttl=180s 仍 409)。
-    修正后基准=当前生效版本 → 放行;老 Pod 落库后被扩散②软摘,reconcile
-    转入 idle 池,reclaim 免老化即刻回收(带会话硬切重放置,决策接受)。"""
-    await runtime.seed_template(min_idle_pods=1)
+    修正后基准=当前生效版本 → 放行;老 Pod 落库后被扩散②软摘,reclaim 在
+    排空窗口(A 类统一进排空,2026-09-17;session_ttl=1)截止后回收——
+    窗口内不收(带会话 Pod 优雅排空),过窗即收(零复用价值不蹲 pod_ttl)。"""
+    await runtime.seed_template(min_idle_pods=1, session_ttl=1)
     await runtime.route("sess_1")
     pod_id = (await runtime.sm_state.registered_pods())[0].split(":", 1)[1]
     # 合法中间态:软摘出候选集;版本保持当前值(对照上例,不伪造旧版本号)
     await runtime.sm_state.redis.zrem(runtime.sm_state.k.scope_pods(SCOPE), pod_id)
     result = await runtime.config_store.config_sync(_payload(
-        [_tpl("tpl-1", agent_image="agentserver:2.0")],
+        [_tpl("tpl-1", agent_image="agentserver:2.0", session_ttl=1)],
         [_scope(SCOPE, "tpl-1")],
     ))
     assert result["ok"] is True
-    # 落库后闭环:扩散②软摘(已在集外)+ reconcile 转 idle + reclaim 即刻回收
+    # 落库后闭环:扩散②软摘(已在集外)+ reconcile 转 idle
     await runtime.rm_sweeper.reconcile_once()
+    # 排空窗口内:不回收(优雅排空)
+    await runtime.rm_sweeper.reclaim_once()
+    assert pod_id in await runtime.rm_state.all_pod_ids()
+    # 过窗(session_ttl=1)→ 回收 + 纪元收尾释放 surge
+    await asyncio.sleep(1.2)
     await runtime.rm_sweeper.reclaim_once()
     assert pod_id not in await runtime.rm_state.all_pod_ids()
+    assert await runtime.rm_state.drain_until(SCOPE) is None
 
 
 @requires_lua

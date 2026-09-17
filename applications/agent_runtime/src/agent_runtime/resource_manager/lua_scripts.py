@@ -61,7 +61,14 @@ end
 -- 2. 无匹配暖 Pod：判 max_pods（含 deploying 占位，防并发超配）
 local total = redis.call('ZCARD', pfx .. 'resource:scope:' .. scope .. ':pods')
            + redis.call('ZCARD', dep_key)
-if total >= max_pods then
+-- 排空纪元活跃（sunset drain）→ 容量上限 +SURGE_MARGIN（暂写死 1，与
+-- sweeper.DRAIN_SURGE_MARGIN 对齐）：日落老 Pod 在 drain_until 前占槽不清，
+-- 无余量则新代补位 Pod 无处部署（2026-09-17 优雅排空配套头寸）
+local cap = max_pods
+if redis.call('EXISTS', pfx .. 'resource:scope:' .. scope .. ':drain_until') == 1 then
+  cap = cap + 1
+end
+if total >= cap then
   return {'max_reached', '', ''}
 end
 
@@ -87,7 +94,12 @@ local dep_key = pfx .. 'resource:scope:' .. scope .. ':deploying'
 redis.call('ZREMRANGEBYSCORE', dep_key, '-inf', now)
 local total = redis.call('ZCARD', pfx .. 'resource:scope:' .. scope .. ':pods')
            + redis.call('ZCARD', dep_key)
-if total >= max_pods then
+-- 排空纪元活跃 → 上限 +SURGE_MARGIN(1)，同 LUA_ACQUIRE（2026-09-17 优雅排空）
+local cap = max_pods
+if redis.call('EXISTS', pfx .. 'resource:scope:' .. scope .. ':drain_until') == 1 then
+  cap = cap + 1
+end
+if total >= cap then
   return {'max_reached'}
 end
 redis.call('ZADD', dep_key, deadline, token)

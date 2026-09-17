@@ -13,7 +13,7 @@
   [2] 选主协调器：抽签（winner/candidates 经 hash tag 同槽）
   [3] SM 状态层：route_place / register_pod / touch / evict
   [4] RM 状态层：acquire / scope 配置 / known_scope_ids（SCAN dict 游标）/
-      pop_idle（follower 接管忙记账，2026-09-17）
+      pop_idle（follower 接管忙记账，2026-09-17）/ 排空纪元 surge（2026-09-17）
   [5] 评估域（2026-09）：计数 HINCRBY / 采样 ZADD / 报告 SET+ZADD
       （``{agent_runtime:eval}`` 单槽 tag；全单键命令，无 Lua）
 
@@ -192,6 +192,27 @@ async def verify(url: str, wipe: bool) -> int:
           "v-pod-r3" not in await rm.idle_pods("v-scope"))
     check("RM: pop_idle 清 idle_since 计时",
           await client.exists(rm.k.pod_idle_since("v-pod-r3")) == 0)
+
+    # [4d] 排空纪元容量 surge(2026-09-17 优雅排空):drain_until 键存在 →
+    #      ACQUIRE/PLACEHOLDER 容量上限 +SURGE_MARGIN(跨槽安全:单键 GET)
+    await rm.register_pod(
+        pod_id="v-pod-d1", scope_id="v-scope-2",
+        pod_sse_url="http://127.0.0.1:8089", pod_ip="127.0.0.1",
+        namespace="default", deploy_ver="v-ver-old", deploy_token="v-tok-5",
+        idle_flag=True, now=now_ts(), sse_port=8086, health_path="/health",
+    )   # v-scope-2 max_pods=1:唯一槽位被排空 Pod 占据(ver 落后不可复用)
+    action, _, _ = await rm.acquire("v-scope-2", "v-ver-1", "v-tok-d0")
+    check("RM: 无 surge 时满槽 max_reached(对照)",
+          action == "max_reached", action)
+    await rm.set_drain_until("v-scope-2", now_ts() + 300, 360)
+    action, _, _ = await rm.acquire("v-scope-2", "v-ver-1", "v-tok-d1")
+    check("RM: drain 纪元激活 → 上限 +1 → need_deploy(surge)",
+          action == "need_deploy", action)
+    await rm.clear_deploy_token("v-scope-2", "v-tok-d1")
+    await rm.clear_drain_until("v-scope-2")
+    action, _, _ = await rm.acquire("v-scope-2", "v-ver-1", "v-tok-d2")
+    check("RM: drain 纪元收尾 → 上限回落 → max_reached",
+          action == "max_reached", action)
 
     # [5] 评估域(2026-09 自评估;{agent_runtime:eval} hash tag 单槽,零 Lua)
     from agent_runtime.evaluation.state import EvaluationState
