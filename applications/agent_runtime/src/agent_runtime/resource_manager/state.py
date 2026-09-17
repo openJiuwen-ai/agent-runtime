@@ -204,6 +204,14 @@ class ResourceState:
         ret = await self.eval(lua.LUA_RELEASE, pod_id, scope_id, now)
         return bool(ret and ret[0] == "true")
 
+    async def pop_idle(self, pod_id: str, scope_id: str) -> None:
+        """LUA_POP_IDLE：忙占用摘出 idle 暖池 + 清 idle_since。幂等。
+
+        follower 接管 leader 热备 Pod 时用——与 LUA_ACQUIRE 的 reuse 分支
+        记账对齐（release 的逆操作，不起计时而是清计时）。
+        """
+        await self.eval(lua.LUA_POP_IDLE, pod_id, scope_id)
+
     async def purge(self, pod_id: str) -> str:
         """LUA_PURGE：清该 Pod 全部 RM key。返回其 scope_id（空串=本就不存在）。"""
         ret = await self.eval(lua.LUA_PURGE, pod_id)

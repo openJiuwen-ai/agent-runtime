@@ -12,7 +12,8 @@
   [1] bootstrap：``redis+cluster://`` 构造集群客户端；URL 带库号快速失败
   [2] 选主协调器：抽签（winner/candidates 经 hash tag 同槽）
   [3] SM 状态层：route_place / register_pod / touch / evict
-  [4] RM 状态层：acquire / scope 配置 / known_scope_ids（SCAN dict 游标）
+  [4] RM 状态层：acquire / scope 配置 / known_scope_ids（SCAN dict 游标）/
+      pop_idle（follower 接管忙记账，2026-09-17）
   [5] 评估域（2026-09）：计数 HINCRBY / 采样 ZADD / 报告 SET+ZADD
       （``{agent_runtime:eval}`` 单槽 tag；全单键命令，无 Lua）
 
@@ -178,6 +179,19 @@ async def verify(url: str, wipe: bool) -> int:
     action, pod, _ = await rm.acquire("v-scope", "v-ver-1", "v-tok-3")
     check("RM: bump 后 acquire 跳过老代、选中新代暖 Pod",
           action == "reuse" and pod == "v-pod-r2", f"{action}/{pod}")
+
+    # [4c] follower 接管忙记账(2026-09-17 修复):POP_IDLE 摘 idle + 清计时
+    await rm.register_pod(
+        pod_id="v-pod-r3", scope_id="v-scope",
+        pod_sse_url="http://127.0.0.1:8088", pod_ip="127.0.0.1",
+        namespace="default", deploy_ver="v-ver-1", deploy_token="v-tok-4",
+        idle_flag=True, now=now_ts(), sse_port=8086, health_path="/health",
+    )
+    await rm.pop_idle("v-pod-r3", "v-scope")
+    check("RM: pop_idle 摘出 idle 暖池(follower 接管记账)",
+          "v-pod-r3" not in await rm.idle_pods("v-scope"))
+    check("RM: pop_idle 清 idle_since 计时",
+          await client.exists(rm.k.pod_idle_since("v-pod-r3")) == 0)
 
     # [5] 评估域(2026-09 自评估;{agent_runtime:eval} hash tag 单槽,零 Lua)
     from agent_runtime.evaluation.state import EvaluationState

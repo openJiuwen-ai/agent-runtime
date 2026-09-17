@@ -241,6 +241,13 @@ class ResourceOrchestrator:
                     for pod in new_pods:
                         info = await self.state.pod_info(pod)
                         if info.get("pod_sse_url"):
+                            # 忙记账对齐 LUA_ACQUIRE 的 reuse 分支：leader 以
+                            # idle_flag=True 注册的热备 Pod 被接管即转忙，须摘出
+                            # idle 池——否则 autoscale 的 warm 底数把忙 Pod 数成
+                            # 热备，min_idle 永不重建（2026-09-17 wangchang 实录：
+                            # follower_reuse 泄漏 → 池卡 1 忙 Pod，久无补位）。
+                            # 幂等：请求驱动 leader（idle_flag=False）注册时为 no-op。
+                            await self.state.pop_idle(pod, scope_id)
                             logger.info(
                                 "acquire follower reuses leader pod: scope=%s "
                                 "pod=%s follower=%s", scope_id, pod, request_id)

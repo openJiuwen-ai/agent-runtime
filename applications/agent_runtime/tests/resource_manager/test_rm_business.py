@@ -220,6 +220,52 @@ async def test_follower_progress_and_reuse_logged(runtime, monkeypatch, caplog):
         assert any("acquire follower reuses leader pod" in m for m in messages)
 
 
+@requires_lua
+async def test_follower_reuse_pops_idle_warm_pod(runtime, monkeypatch):
+    """follower 接管 leader 热备 Pod 必须摘出 idle 池（2026-09-17 回归）。
+
+    wangchang 实录：config_refresh 日落 → autoscale 抢锁部署热备
+    （idle_flag=True 注册即入 idle）→ 并发请求 acquire 落 follower 接管，
+    旧实现直接 return 不摘 idle → 忙 Pod 永占 warm 底数 → autoscale 恒
+    skip_warm 不补位（池卡 1 忙 Pod，min_idle 热备永不重建），且
+    idle_since 卡在部署时刻（LUA_RELEASE 幂等不刷新）致 pod_ttl 误计。
+    """
+    await runtime.seed_template(min_idle_pods=1)   # sc=3/pc=2 → max_pods=2
+    monkeypatch.setattr(rm_orch, "DEPLOY_WAIT_ON_BUSY", 0.01)
+    cfg = await runtime.rm_state.load_scope_config(SCOPE)
+
+    # 生产时序：leader（=autoscale）先持 deploy 锁；chat 的 acquire 后到落等待室
+    lock_key = runtime.rm_state.k.lock_deploy(SCOPE)
+    assert await runtime.rm_state.try_lock(lock_key, 60, "leader-token")
+    task = asyncio.create_task(runtime.rm_orchestrator.acquire(
+        SCOPE, {"ready_timeout": 5}, {"pod_concurrency": 2}, "req-pop",
+    ))
+    await asyncio.sleep(0.05)
+
+    # leader 注册热备 Pod（同 autoscale._deploy_and_register 的 idle_flag=True）
+    await runtime.rm_state.register_pod(
+        pod_id="leader-pod", scope_id=SCOPE,
+        pod_sse_url="http://1.2.3.4:8080/sse", pod_ip="1.2.3.4",
+        namespace="default", deploy_ver=cfg.get("deploy_ver", ""),
+        deploy_token="tok", idle_flag=True, now=now_ts(),
+        sse_port=8080, health_path="/health",
+    )
+    result = await asyncio.wait_for(task, timeout=5)
+    assert result["pod_id"] == "leader-pod"
+
+    # ★ 忙记账：接管即摘出 idle 池 + 清 idle_since（对齐 reuse 分支）
+    assert await runtime.rm_state.idle_pods(SCOPE) == []
+    assert await runtime.rm_state.redis.exists(
+        runtime.rm_state.k.pod_idle_since("leader-pod")) == 0
+
+    await runtime.rm_state.unlock(lock_key, "leader-token")   # leader 完成
+
+    # ★ 下游闭环：忙 Pod 不占 warm 底数 → autoscale 补回 1 个新热备
+    await runtime.rm_sweeper.autoscale_once()
+    idle = await runtime.rm_state.idle_pods(SCOPE)
+    assert len(idle) == 1 and idle[0] != "leader-pod"
+
+
 async def test_cleanup_namespace_missing_returns_zero(runtime):
     """cleanup 目标 namespace 不存在（404）→ 容忍为 cleaned=0。
 

@@ -49,7 +49,7 @@
 
 `_follow_leader`(M8,deploy 锁输家的等待室):
 - 准入走 `LUA_DEPLOY_FOLLOWER_GATE` 原子闸门,上限 `pod_concurrency - 1`(leader 会话之外新 Pod 恰剩这些槽);overflow 严格快失败 MaxPodsReached。
-- 等待有界:`ready_timeout + 10s` 余量;轮询 `resource:scope:{sid}:pods` 出现新 Pod 且 pod:info 有 sse_url → **直接复用返回**(与 reuse 分支同构,SM 侧重跑仲裁即可)。
+- 等待有界:`ready_timeout + 10s` 余量;轮询 `resource:scope:{sid}:pods` 出现新 Pod 且 pod:info 有 sse_url → `LUA_POP_IDLE` 忙记账(SREM idle + DEL idle_since,与 reuse 分支对齐;幂等)→ **直接复用返回**(与 reuse 分支同构,SM 侧重跑仲裁即可)。不摘则 autoscale(leader=补位路径,idle_flag=True 注册)的热备被接管后仍占 warm 底数 → 恒 skip_warm 不补位,池卡 1 忙 Pod(2026-09-17 wangchang follower_reuse 泄漏实录)。
 - leader 失败判定:deploy 锁空闲且无新 Pod → `DeployFailed`(**follower 不接管**——同镜像同环境大概率也失败);deadline 到 → MaxPodsReached。
 - 等待期进度行:每 `FOLLOWER_PROGRESS_LOG_SEC`(5s)一条 INFO `follower still waiting: scope= follower= waited_s=`——ready_timeout 最长 300s,INFO 下不留日志空白(部署风暴期的观测窗口);复用成功另有一条 INFO `acquire follower reuses leader pod`。
 - 错误路径双清:占位 + follower 成员都进 finally;崩溃遗留由闸门 `ZREMRANGEBYSCORE(deadline)` 兜底。
@@ -88,6 +88,7 @@
 | `LUA_PLACEHOLDER` | autoscale 专用占位(判 max_pods + ZADD,**不碰 idle 池**——补位不该消耗暖 Pod;同款 deadline 自清) |
 | `LUA_REGISTER` | deploy 成功登记:pod:info(含 sse_port/health_path + **generation 服务端烙印**——读注册时刻 scope:config 当前代次)/ scope:pods / pods:all 同写,清占位;idle_flag=1(热备)入 idle 池 |
 | `LUA_RELEASE` | idle_consider:转 idle 暖池,**仅首次转入(SADD=1)起 pod_ttl 计时**;周期重放(reconcile stale/idle_consider 去重重发)不刷新计时——否则空闲 Pod 永不回收;acquire 弹出后再转 idle 重新计时;**已 PURGE 的 Pod(info 已清)no-op**(防 TOCTOU 幽灵成员) |
+| `LUA_POP_IDLE` | 忙占用摘出 idle 暖池(SREM idle + DEL idle_since;幂等,非 idle 成员/请求驱动 leader 的 idle_flag=False 注册均 no-op)——`_follow_leader` follower 接管 leader 热备 Pod 的忙记账,与 LUA_ACQUIRE reuse 分支对齐(2026-09-17 修复) |
 | `LUA_PURGE` | Pod 死亡/reclaim 后清全部 RM key(返回其 scope_id;幂等) |
 | `LUA_DEPLOY_FOLLOWER_GATE` | follower 等待室原子准入:先 `ZREMRANGEBYSCORE` 清过期 → ZADD 先行 → ZCARD 超限自退(纪律同 LUA_WAITER_GATE,禁止先查后加) |
 
