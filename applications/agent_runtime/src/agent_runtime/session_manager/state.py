@@ -161,7 +161,10 @@ class SessionState:
         max_pods: int,
         now: int,
     ) -> tuple[str, str]:
-        """返回 (action, pod_id)。action ∈ refresh/placed/scope_full/need_acquire。
+        """返回 (action, pod_id)。action ∈ refresh/placed/scope_full/need_acquire/rebind。
+
+        rebind：绑定已惰性回收（过期/Pod 注册消失），调用方须换 first-fit 结果
+        重试（本调用内不落放置，见 lua_scripts 注释）。
 
         空/异常返回兜底 "scope_full"（fail-closed，eval 层 WARNING 留痕）——
         场景 F 快失败后该兜底对外表现为立即 503 SCOPE_FULL。

@@ -411,7 +411,8 @@ class ResourceOrchestrator:
             mapping["pod_spec_json"] = json.dumps(pod_spec)
         await self.state.save_scope_config(scope_id, mapping)
         # ---- 日落排空纪元戳记（2026-09-17 优雅排空）：
-        # 本次推送后仍有版本(A 类 sync)或代次(refresh 已先 bump)落后的注册 Pod
+        # 本次推送后仍有版本(A 类 sync)或代次(refresh / 路由性排除已先 bump)
+        # 落后的注册 Pod
         # → 它们已被/将被软摘出候选集,戳 drain_until = now + session_ttl;
         # 期间容量上限 +SURGE_MARGIN(reclaim 对应延后回收)。**纪元已活跃则不
         # 重戳**——首因下发(refresh 的 bump / A 类的换版)定窗口,后续不改变

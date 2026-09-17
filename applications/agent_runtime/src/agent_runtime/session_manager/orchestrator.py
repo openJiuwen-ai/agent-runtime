@@ -1,12 +1,17 @@
 # coding: utf-8
 """Session Manager route/touch 编排（SM 设计 §5.2 / §5.3）。
 
-route 主循环：幂等回放（handler 层）→ resolve → LUA_ROUTE_PLACE 原子仲裁 →
+route 主循环：幂等回放（handler 层）→ resolve + 亲和持有判定 → LUA_ROUTE_PLACE
+原子仲裁 →
 - refresh/placed：读 pod sse_url 返回 gateway（数据面直连，SM 旁路）；
+- rebind：绑定已被惰性回收（过期/Pod 注册消失）→ 换 first-fit 结果重试；
 - scope_full：场景 F 快失败——立即 503 SCOPE_FULL + retry_after，不排队不订阅
   （有界等待 2026-09 已整体拆除：redis-py asyncio RedisCluster 无 pubsub 实现，
   见 docs/feature/2026-09-scope-full-fastfail.md；背压 = gateway 指数退避）；
 - need_acquire：调 rm_facade.acquire 扩 +1 Pod → register_pod 登记候选集 → 重跑。
+
+**scope 亲和保持**（2026-09-scope-affinity-hold，#152）：已有绑定的会话维持绑定
+scope，不按重算规则即时迁移；重排零打扰，禁用/失权经 RM 排空窗口有界回收。
 
 **单次 route 总预算**：need_acquire 分支一轮可触发完整 deploy（ready_timeout
 默认 300s），无总预算时单请求可阻塞 max_pods×ready_timeout 且期间持续扩
@@ -83,6 +88,26 @@ class SessionOrchestrator:
             )
         # 路由匹配：按 (index, scope_id) 序 first-fit 命中下发 scope（快照求值）
         scope_id, template = await self.config.resolve(user_id, group_id, bot_id)
+        # scope 亲和保持（2026-09-scope-affinity-hold，#152）：已有绑定则维持绑定
+        # scope（Pod 存活在 Lua 内原子判定），不按每请求重算的 first-fit 即时迁移
+        # 存量会话——优先级重排对旧会话零打扰；禁用/失权/删 scope 由 config_sync
+        # 触发 gen bump → RM 排空窗口有界回收，Pod 消失后 ROUTE_PLACE 返回
+        # rebind，届时才按新规则重新放置。first-fit 只决定新会话（与 rebind 后）
+        # 的去处。refresh 分支只消费 expiry/session_ttl，闸门参数走不进去。
+        binding = await self.state.session_hash(session_id)
+        target_scope = scope_id
+        sttl = template.session_ttl
+        if binding and binding.get("scope_id") and binding.get("pod_id"):
+            target_scope = binding["scope_id"]
+            if target_scope != scope_id:
+                _, btpl = await self.config.scope_template(target_scope)
+                if btpl is not None:
+                    sttl = btpl.session_ttl
+                else:
+                    # scope/模板已从快照消失：回退绑定哈希留存的 session_ttl
+                    stored = str(binding.get("session_ttl") or "").strip()
+                    if stored.isdigit() and int(stored) > 0:
+                        sttl = int(stored)
         # total_deadline（总预算）：扩容 + 重仲裁全链 = ready_timeout + 余量。
         # 封的是 need_acquire 无上界循环（一轮可触发完整 deploy），非冷启动
         # 本身；超预算 503 后 RM acquire 照常完成并落 idem 缓存，同
@@ -118,30 +143,38 @@ class SessionOrchestrator:
                 now = now_ts()
                 action, pod_id = await self.state.route_place(
                     session_id=session_id,
-                    scope_id=scope_id,
-                    expiry_ts=now + template.session_ttl,
-                    session_ttl=template.session_ttl,
+                    scope_id=target_scope,
+                    expiry_ts=now + sttl,
+                    session_ttl=sttl,
                     scope_concurrency=template.scope_concurrency,
                     pod_concurrency=template.pod_concurrency,
                     max_pods=template.max_pods,
                     now=now,
                 )
 
+                if action == "rebind":
+                    # 绑定已被惰性回收（过期/Pod 注册消失）：换 first-fit 结果重试。
+                    # 曾见绑定的调用内不落放置（防向已禁用/删除 scope 重部署）
+                    if target_scope != scope_id:
+                        target_scope = scope_id
+                        sttl = template.session_ttl
+                    continue
+
                 if action in ("refresh", "placed"):
-                    sse_url = await self.state.pod_sse_url(scope_id, pod_id)
+                    sse_url = await self.state.pod_sse_url(target_scope, pod_id)
                     if not sse_url:
                         # 极端竞态：Pod 刚被 notify_pod_dead 清理。ROUTE_PLACE 的
                         # refresh 分支有 info 存活守卫，下一轮会惰性回收死绑定并
                         # 重新放置（continue 不构成自旋）
                         logger.warning(
                             "route: pod info missing, retrying: scope=%s pod=%s "
-                            "session=%s action=%s", scope_id, pod_id, session_id, action,
+                            "session=%s action=%s", target_scope, pod_id, session_id, action,
                         )
                         continue
                     logger.info(
                         "route: session=%s scope=%s pod=%s action=%s "
                         "request_id=%s duration_ms=%.1f",
-                        session_id, scope_id, pod_id, action,
+                        session_id, target_scope, pod_id, action,
                         request_id, (time.monotonic() - t0) * 1000,
                     )
                     route_ok = True
@@ -154,22 +187,28 @@ class SessionOrchestrator:
                     logger.debug(
                         "route: scope full, fast-fail: scope=%s request=%s "
                         "scope_concurrency=%d",
-                        scope_id, request_id, template.scope_concurrency,
+                        target_scope, request_id, template.scope_concurrency,
                     )
                     raise ScopeFull(
-                        f"scope {scope_id} at concurrency limit "
+                        f"scope {target_scope} at concurrency limit "
                         f"({template.scope_concurrency})",
                         retry_after=DEFAULT_RETRY_AFTER,
                     )
 
                 # action == "need_acquire"：现有 Pod 全满且未达 max_pods → RM 扩 +1
+                if target_scope != scope_id:
+                    # 防御：hold 态不该到达此处（仅 hash 被并发 DEL 的缝隙）——
+                    # 先归位再扩容，避免把 resolved 模板的 pod_spec 推进持有
+                    # scope 的 RM 配置
+                    target_scope = scope_id
+                    sttl = template.session_ttl
                 if self.telemetry is not None:
-                    self.telemetry.observe_acquire(scope_id, "need_acquire")
+                    self.telemetry.observe_acquire(target_scope, "need_acquire")
                 pod_id, sse_url = await self._acquire_pod(
-                    scope_id, template, request_id
+                    target_scope, template, request_id
                 )
                 await self.state.register_pod(
-                    scope_id, pod_id, sse_url, template.deploy_ver()
+                    target_scope, pod_id, sse_url, template.deploy_ver()
                 )
                 # 重跑 ROUTE_PLACE：新 Pod 必被 first-fit 选中
         except AgentRuntimeError as exc:
@@ -177,7 +216,7 @@ class SessionOrchestrator:
             raise
         finally:
             if self.telemetry is not None:
-                self.telemetry.observe_route(scope_id, route_ok, route_code)
+                self.telemetry.observe_route(target_scope, route_ok, route_code)
 
     # -------------------------------------------------------------- 内部
 

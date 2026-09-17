@@ -128,15 +128,59 @@ async def test_route_scope_full_when_sessions_at_limit(sm_state):
 
 @requires_lua
 async def test_route_lazy_evict_expired_binding(sm_state, placed):
-    """亲和绑定已过期 → route 当场清旧绑定再重新放置（惰性兜底）。"""
+    """亲和绑定已过期 → 惰性回收旧绑定并返回 rebind；重试调用落放置。
+
+    scope 亲和保持（2026-09-scope-affinity-hold）：曾见绑定的调用内不再直接
+    放置——由 handler 换 first-fit 结果重试，杜绝向已禁用/删除 scope 重部署。
+    """
     await placed()
     # 时间推进到过期之后（expiry=NOW+60）
     action, pod = await sm_state.route_place(
         "sess_1", SCOPE, NOW + 200, 60, 3, 2, 2, NOW + 100
     )
+    assert (action, pod) == ("rebind", "")
+    # 旧绑定四处已清：hash 删、scope 活跃数归零、expiry 出队
+    assert await sm_state.redis.exists(sm_state.k.session("sess_1")) == 0
+    assert await sm_state.redis.scard(sm_state.k.scope_sessions(SCOPE)) == 0
+    assert await sm_state.redis.zscore(sm_state.k.session_expiry(), "sess_1") is None
+    # handler 重试（同 first-fit scope）→ 正常放置，旧额度已释放
+    action, pod = await sm_state.route_place(
+        "sess_1", SCOPE, NOW + 200, 60, 3, 2, 2, NOW + 100
+    )
     assert (action, pod) == ("placed", "pod_1")
-    # 旧额度已释放：scope 活跃数仍为 1（不是 2）
     assert await sm_state.redis.scard(sm_state.k.scope_sessions(SCOPE)) == 1
+
+
+@requires_lua
+async def test_route_rebind_on_dead_pod(sm_state, placed):
+    """绑定未过期但 Pod 注册已消失（notify_pod_dead 清理后）→ rebind 而非续期。
+
+    防「对着已删 sse_url 无限自旋」的老语义保留；差异仅在放置推迟到重试。
+    """
+    await placed()
+    await sm_state.redis.delete(sm_state.k.pod_info(SCOPE, "pod_1"))
+    action, pod = await sm_state.route_place(
+        "sess_1", SCOPE, NOW + 200, 60, 3, 2, 2, NOW
+    )
+    assert (action, pod) == ("rebind", "")
+    assert await sm_state.redis.exists(sm_state.k.session("sess_1")) == 0
+
+
+@requires_lua
+async def test_route_rebind_on_scope_mismatch(sm_state, placed):
+    """传入 scope ≠ 绑定 scope（并发竞态/调用方持有旧绑定）→ 回收旧绑定返回 rebind。
+
+    亲和保持语义下调用方传入的即要维持的绑定 scope；不匹配只可能是竞态残留
+    ——按新 first-fit 重试，不在本调用内放置。
+    """
+    await placed()
+    action, pod = await sm_state.route_place(
+        "sess_1", "scope-other", NOW + 200, 60, 3, 2, 2, NOW
+    )
+    assert (action, pod) == ("rebind", "")
+    # 旧 scope 侧额度已释放，新 scope 侧未被污染
+    assert await sm_state.redis.scard(sm_state.k.scope_sessions(SCOPE)) == 0
+    assert await sm_state.redis.exists(sm_state.k.session("sess_1")) == 0
 
 
 @requires_lua
@@ -146,7 +190,8 @@ async def test_teardown_clean_no_waiter_or_free_keys(sm_state, placed):
     await placed()
     # touch 惰性驱逐路径
     await sm_state.touch("sess_1", now=NOW + 100, default_ttl=60)
-    # route 惰性回收 + 重新放置路径
+    # route 惰性回收路径（rebind 后由重试调用重新放置）
+    await sm_state.route_place("sess_1", SCOPE, NOW + 200, 60, 3, 2, 2, NOW + 100)
     await sm_state.route_place("sess_1", SCOPE, NOW + 200, 60, 3, 2, 2, NOW + 100)
     # evict 路径
     await sm_state.register_pod(SCOPE, "pod_2", "http://10.0.0.2:8080/sse", "ver1")

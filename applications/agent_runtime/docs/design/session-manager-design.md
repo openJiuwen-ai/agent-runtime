@@ -258,7 +258,7 @@
 > `{session_manager}:`,hash tag)拼出;调用侧把前缀同时声明为 `KEYS[1]` 作路由锚
 > (集群客户端据此把 EVAL 路由到 tag 归属节点;单实例无影响)。下文伪码从简省略。
 
-**`LUA_ROUTE_PLACE(session_id, scope_id, expiry_ts, session_ttl, scope_concurrency, pod_concurrency, max_pods, now)`** —— route 的原子核心:一次脚本内完成"亲和续期 / 惰性回收 / scope 闸门 / first-fit 选 Pod / 提交",中途无其它请求插入(无 race)。`session_ttl` 随亲和写入 session HASH,供 TOUCH 就地读取(不依赖 scope:config)。
+**`LUA_ROUTE_PLACE(session_id, scope_id, expiry_ts, session_ttl, scope_concurrency, pod_concurrency, max_pods, now)`** —— route 的原子核心:一次脚本内完成"亲和续期 / rebind 重解 / scope 闸门 / first-fit 选 Pod / 提交",中途无其它请求插入(无 race)。`session_ttl` 随亲和写入 session HASH,供 TOUCH 就地读取(不依赖 scope:config)。**传入 scope 的语义(2026-09-scope-affinity-hold,#152)**:调用方要维持的绑定 scope(已有绑定的持有续期)或新会话的 first-fit 结果(全新放置)——规则变化不即时迁移存量会话,放置只发生在无绑定的调用里。
 ```
 # 1. 读现有亲和绑定(若该 session_id 之前 route 过)
 1. existing = HGETALL(session:{session_id})
@@ -270,19 +270,25 @@
 1b. if existing 且 existing.scope_id/pod_id/expiry 任一为 nil:
       ZREM session_expiry session_id; DEL session:{session_id}; 落穿到 4
 
-# 2. 亲和命中且未过期 → 仅续期,返回原 Pod。
+# 2. 亲和命中且未过期且 Pod 注册仍在 → 仅续期,返回原 Pod。
 #    不重新抢额度:chat_session 粒度模型下,额度在首次 route 已占用,持续到 TTL 老化;
 #    同一 chat_session 的后续请求只刷新老化计时,不重复扣 scope/Pod 容量。
-2. if existing.scope_id == scope_id and existing.expiry > now:
+#    Pod 注册缺失(notify_pod_dead 清理窗口)判死绑定:继续续期会让会话对着已删
+#    的 sse_url 无限自旋且 sweeper 永远收不走。
+2. if existing.scope_id == scope_id and existing.expiry > now
+      and EXISTS(pod:{scope_id}:{existing.pod_id}:info):
       HSET session:{session_id} expiry expiry_ts session_ttl {session_ttl}   # 续期 + 刷新 ttl(config 改了随 route 生效)
       ZADD session_expiry expiry_ts session_id
       return {action:"refresh", pod_id: existing.pod_id}
 
-# 3. 惰性兜底:绑定存在但已过期,或 group/bot 变了导致 scope_id 不同 → 先回收旧绑定。
-#    "惰性"= 在访问当场发现 session 已死就立即清理,不等 sweeper 下一 tick。
-#    空在此处不触发 idle_consider(统一交 sweeper 空 Pod pass,见 §5.4)。
+# 3. 惰性兜底:绑定存在但已过期 / Pod 注册消失 / scope 不匹配(并发竞态)→
+#    回收旧绑定并返回 rebind,handler 换 first-fit 结果重试——**本调用内不落
+#    放置**(曾见绑定的调用直接按传入 scope 放置,会把会话部署进已禁用/删除
+#    的 scope)。"惰性"= 在访问当场发现 session 已死就立即清理,不等 sweeper
+#    下一 tick。空在此处不触发 idle_consider(统一交 sweeper 空 Pod pass,见 §5.4)。
 3. if existing:
       内部走 EVICT 逻辑(用 existing.scope_id/pod_id)
+      return {action:"rebind"}
 
 # 4. scope 闸门:scope_concurrency 限的是"活跃 chat_session 数",而非"在途请求数"
 #    (gateway 保证每 chat_session ≤1 在途,故活跃数 == 在途数上界)。SCARD 即活跃数。
@@ -393,17 +399,29 @@ cached = ctx.idempotency.get(metadata.request_id); if cached: return cached
 # resolve:热路径先查 scope:{scope_id}:config 缓存(命中不查库);miss 或被 config_sync 失效才读共享 DB。
 scope_config = resolve(scope_id, group_id, bot_id, user_id)
 
+# 亲和持有判定(2026-09-scope-affinity-hold,#152):已有绑定 → 仲裁目标改为绑定
+# scope(session_ttl 取其当前模板;scope/模板已从快照消失则回退哈希留存的
+# session_ttl)。规则变化不即时迁移存量会话;first-fit 只决定新会话(与 rebind
+# 后)的去处。
+binding = HGETALL(session:{session_id})
+target_scope = binding.scope_id if binding 有 scope_id+pod_id else scope_id
+
 # 容量数学(见术语表):pod_concurrency = 单 Pod 满载容量(per-scope 独占);max_pods = 本 scope 的 Pod 数上限。
 max_pods = ceil(scope_config.scope_concurrency / scope_config.pod_concurrency)
 
 pod_spec = extract_pod_spec(scope_config.template)                    # acquire 时下发给 Resource Manager 的部署子集
 
 loop:
-    # 原子核心:一次 Lua 完成 亲和续期/惰性回收/闸门/选 Pod/提交。
+    # 原子核心:一次 Lua 完成 亲和续期/rebind 重解/闸门/选 Pod/提交。
     # 传 expiry_ts = now + session_ttl,并把 session_ttl 传入(写入 session HASH 供 TOUCH 就地读)。
-    result = redis.eval(LUA_ROUTE_PLACE, session_id, scope_id,
-                        now + scope_config.session_ttl, scope_config.session_ttl,
+    result = redis.eval(LUA_ROUTE_PLACE, session_id, target_scope,
+                        now + session_ttl, session_ttl,
                         scope_config.scope_concurrency, scope_config.pod_concurrency, max_pods, now)
+
+    if result.action == "rebind":
+        # 绑定已被惰性回收(过期/Pod 注册消失):换 first-fit 结果重试——曾见绑定
+        # 的调用内不落放置(防向已禁用/删除 scope 重部署)。
+        target_scope = scope_id; continue
 
     if result.action in ("refresh","placed"):
         # 成功:取 Pod 的 sse_url 返回 gateway;gateway 据此直连 Pod(数据面绕过 Session Manager)。

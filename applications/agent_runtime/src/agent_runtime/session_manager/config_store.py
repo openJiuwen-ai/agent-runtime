@@ -626,6 +626,22 @@ class ConfigStore:
         )
         return scope.scope_id, snapshot.templates[scope.template_id]
 
+    async def scope_template(
+        self, scope_id: str
+    ) -> tuple[RoutingScopeDef | None, Template | None]:
+        """快照查指定 scope：(scope 定义, 其模板)。
+
+        scope 亲和保持（2026-09-scope-affinity-hold）专供 route 持有分支取
+        绑定 scope 的 session_ttl；scope 已删 / 模板缺失时对应项为 None，
+        调用方回退绑定哈希里留存的 session_ttl。非匹配语义：不判
+        enabled/expires_at（持有不重算规则，日落界由 RM 排空窗口管）。
+        """
+        snapshot = await self._load_snapshot()
+        for scope in snapshot.scopes:
+            if scope.scope_id == scope_id:
+                return scope, snapshot.templates.get(scope.template_id)
+        return None, None
+
     # -------------------------------------------------------------- 路由快照
 
     async def _load_snapshot(self) -> RoutingSnapshot:
@@ -888,7 +904,7 @@ class ConfigStore:
         }
         old_scopes = {scope.scope_id: scope for scope in await self.list_scopes()}
 
-        # ---- diff：模板变更集 / 引用切换
+        # ---- diff：模板变更集 / 引用切换 / 路由性排除
         changed_ids = {
             tid for tid, new in templates_in.items()
             if tid not in old_templates
@@ -897,6 +913,16 @@ class ConfigStore:
         ref_switched = {
             sid for sid, scope in scopes_in.items()
             if sid in old_scopes and old_scopes[sid].template_id != scope.template_id
+        }
+        # 路由性排除(scope 亲和保持,#152):expr 变化(失权)或 生效→失效
+        # (enabled 关 / expires_at 缩到已过)。**不含** index 重排——重排不排除
+        # 命中,存量会话零打扰;也不含模板引用切换——走既有 ver 日落。
+        routing_excluded = {
+            sid for sid, scope in scopes_in.items()
+            if sid in old_scopes and (
+                old_scopes[sid].expr != scope.expr
+                or (old_scopes[sid].is_active() and not scope.is_active())
+            )
         }
         affected = sorted(
             {sid for sid, scope in scopes_in.items() if scope.template_id in changed_ids}
@@ -966,6 +992,23 @@ class ConfigStore:
         # ---- 重建快照（DB 读回最终态 → 原子 SET；B 类立即生效由此完成）
         await self.rebuild_snapshot()
 
+        # ---- 路由性排除日落（scope 亲和保持，#152）：expr 变化 / 生效→失效的
+        #      scope 先 bump gen——随后的扩散① push 凭 gen lag 截排空纪元
+        #      （日落 + session_ttl，与 #151 排空窗口同哲学）：存量会话窗口内
+        #      继续原池（route 亲和保持），Pod 过窗回收后旧会话 rebind 落新
+        #      规则；新会话立即走新规则。bump 后顺带软摘候选集，防 drain 期
+        #      新会话 first-fit 落上老代 Pod。**时序红线：bump 必须先于扩散①
+        #      push**（纪元戳记依赖 gen lag 已形成）。失败 warn 不 raise——DB
+        #      已提交，丢 bump 的 scope 退化为软界（会话自然结束后 pod_ttl
+        #      回收），同扩散① push_or_warn 先例。
+        for sid in sorted(routing_excluded):
+            await self._bump_or_warn(sid)
+            try:
+                await self._soft_remove_all_pods(sid)
+            except Exception:  # noqa: BLE001 - 软摘失败不阻断扩散,下拍可补
+                logger.exception(
+                    "routing sunset soft-remove failed: scope=%s", sid)
+
         # ---- 扩散①：eager 预热——每个生效中的 scope 推池参数 + pod_spec；
         #      禁用/过期 scope 推 min_idle=0 停预热(与被删 scope 同款自然排空)。
         #      带 pod_spec 时 RM 才会落 pod_spec_json/deploy_ver，autoscale 才能
@@ -994,7 +1037,8 @@ class ConfigStore:
                     "new_ver=%s", sid, removed, new_ver,
                 )
 
-        # ---- 扩散③：被删 scope → 推 min_idle=0（停预热自然排空；存量会话到期止）。
+        # ---- 扩散③：被删 scope → bump 日落 + 推 min_idle=0（停预热；存量会话
+        #      排空窗口内继续原池，过窗回收后 rebind 落新规则）。
         #      目标集 = RM 已知 scope ∪ DB 旧 scope − 本批 payload：RM config 键
         #      是幻影预热的真源，DB old_scopes 删行后即失忆——只看 DB 的话，
         #      一次推送失败（滚动重启中断）后该 scope 的 min_idle=0 永远补不上。
@@ -1005,11 +1049,18 @@ class ConfigStore:
             except Exception:  # noqa: BLE001 - 枚举失败退回 DB 视图
                 logger.exception("known_rm_scopes failed, falling back to db diff")
         for sid in sorted((rm_known | set(old_scopes)) - set(scopes_in)):
+            # 本批新删的 scope = 最强排除：bump 日落后下方 push 凭 gen lag 戳
+            # 排空纪元（仅首删一次；rm_known 里的陈年旧删每拍只重推
+            # min_idle=0，不重复 bump）。存量会话窗口内继续原池（亲和保持），
+            # 过窗回收后 rebind 落新规则。
+            if sid in old_scopes:
+                await self._bump_or_warn(sid)
             old_tpl = old_templates.get(old_scopes[sid].template_id) if sid in old_scopes else None
             pool = (
                 {**old_tpl.pool_config(), "min_idle_pods": 0}
                 if old_tpl is not None
-                else {"min_idle_pods": 0, "max_pods": 1, "pod_ttl": 300}
+                else {"min_idle_pods": 0, "max_pods": 1, "pod_ttl": 300,
+                      "session_ttl": 60}
             )
             await self._push_or_warn(sid, pool, None)
 
@@ -1022,6 +1073,10 @@ class ConfigStore:
             "scopes_synced": len(scopes_in),
             "scopes_deleted": len(set(old_scopes) - set(scopes_in)),
             "affected_scopes": affected,
+            # 路由性排除日落集（expr 变化 / 生效→失效 / 本批删除）：已 bump gen，
+            # 存量会话经 RM 排空窗口有界回收（scope 亲和保持，#152）
+            "routing_sunset": sorted(
+                routing_excluded | (set(old_scopes) - set(scopes_in))),
             "wildcard_present": parsed.wildcard,
         }
 
@@ -1041,6 +1096,22 @@ class ConfigStore:
                 "push pool config failed (scope=%s fields=%s) -- "
                 "warm-up deferred to next config_sync/first acquire",
                 scope_id, sorted(pool),
+            )
+
+    async def _bump_or_warn(self, scope_id: str) -> None:
+        """路由性排除变更的 gen bump（diff 驱动）；失败仅告警不中止。
+
+        DB 已提交，raise 只会留下更大的半同步面；丢 bump 的 scope 退化为软界
+        ——存量会话自然结束后 Pod 转 idle、按 pod_ttl 回收（同扩散③自然排空）。
+        """
+        if self._bump_generation is None:
+            return
+        try:
+            await self._bump_generation(scope_id)
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "routing sunset bump failed (scope=%s) -- old sessions "
+                "degrade to natural-drain bound", scope_id,
             )
 
     async def _config_refresh_locked(self) -> dict[str, Any]:

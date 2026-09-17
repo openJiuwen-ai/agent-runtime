@@ -49,6 +49,10 @@ touch 不分桶(无容量信号,HGET 反查 scope 热路径加一跳,不做)。
 四参非空校验(缺 → InvalidParams 400)
 → resolve(user_id, group_id, bot_id)(config_store:读路由快照 first-fit 匹配)
    返回 (scope_id, template);无匹配 → ConfigNotFound(503)
+→ **亲和持有判定(2026-09-scope-affinity-hold,#152)**:读 `session:{sid}` 哈希,
+   已有绑定(scope_id+pod_id 在)→ 本次仲裁目标改为**绑定 scope**(session_ttl 取
+   该 scope 当前模板,scope/模板已从快照消失则回退哈希留存的 session_ttl)——
+   规则变化不即时迁移存量会话;first-fit 只决定新会话(与 rebind 后)的去处
 → 循环 { **总预算校验:total_deadline = now + template.ready_timeout
      + ROUTE_BUDGET_MARGIN_SEC(10s),每圈 monotonic 复核。
      总预算封的是 need_acquire 的无上界循环(一轮可触发完整 deploy,ready_timeout
@@ -59,6 +63,8 @@ touch 不分桶(无容量信号,HGET 反查 scope 热路径加一跳,不做)。
      LUA_ROUTE_PLACE 原子仲裁 → (action, pod_id):
      refresh/placed → 读 pod:info sse_url 返回(缺失=极端竞态被清,continue 重跑;
                      refresh 分支有 info 存活守卫,下一轮惰性回收死绑定重新放置,不构成自旋)
+     rebind         → 绑定已惰性回收(过期/Pod 注册消失)→ 目标切回 first-fit 结果
+                     重试(曾见绑定的调用内不落放置——防向已禁用/删除 scope 重部署)
      scope_full     → 立即 raise ScopeFull(503, retry_after=1)——场景 F 快失败
                      (2026-09):不排队不订阅,Lua 闸门即唯一仲裁,被拒者毫秒级返回
      need_acquire   → rm_facade.acquire(扩+1)→ state.register_pod → 重跑(新 Pod 必被 first-fit 选中) }
@@ -95,7 +101,7 @@ touch 不分桶(无容量信号,HGET 反查 scope 热路径加一跳,不做)。
 
 | 脚本 | 一句话职责 |
 |---|---|
-| `LUA_ROUTE_PLACE` | route 原子核心:**残骸自卫(2026-09,同 EVICT:缺 scope_id/pod_id/expiry 的半成品哈希自清两处后落穿全新放置——nil 比较/nil 拼接是 Lua runtime error,该会话 route 永久 500)**→亲和续期(**前提 pod:info 存在**——注册已被清的绑定判死,惰性回收后走重新放置;否则 notify_pod_dead 窗口内新落的会话会无限自旋且每圈续期 expiry)→惰性回收旧绑定→scope 闸门(SCARD)→first-fit(接入序)→达 max_pods 则 scope_full / 否则 need_acquire→原子提交四处同写(复用时清 idle_notified) |
+| `LUA_ROUTE_PLACE` | route 原子核心:**残骸自卫(2026-09,同 EVICT:缺 scope_id/pod_id/expiry 的半成品哈希自清两处后落穿全新放置——nil 比较/nil 拼接是 Lua runtime error,该会话 route 永久 500)**→亲和续期(**前提 pod:info 存在**——注册已被清的绑定判死,惰性回收后走重新放置;否则 notify_pod_dead 窗口内新落的会话会无限自旋且每圈续期 expiry)→**其余(过期/Pod 注册消失/scope 不匹配竞态)惰性回收旧绑定后返回 `rebind`(2026-09-scope-affinity-hold:曾见绑定的调用内不落放置,handler 换 first-fit 结果重试;传入 scope 即要维持的绑定 scope 或新会话的 first-fit 结果——曾见绑定的调用直接按传入 scope 放置会把会话部署进已禁用/删除的 scope)**→scope 闸门(SCARD)→first-fit(接入序)→达 max_pods 则 scope_full / 否则 need_acquire→原子提交四处同写(复用时清 idle_notified) |
 | `LUA_EVICT` | session 移除**唯一原语**(四处同删;返回 scope/pod/remaining;幂等 noop;**残骸自卫**:哈希缺 scope/pod(外部直改键半成品)→ 自清两处返回 rubble,调用侧 WARNING——单坏键不得使到期 pass 崩溃循环) |
 | `LUA_TOUCH` | 保活续期;**残骸自卫(2026-09,同 EVICT:缺 scope_id/pod_id/expiry 自清返回 False,不得 Lua runtime error)**;已过期当场惰性 evict;ttl 就地读 session HASH(不依赖 scope:config) |
 | `LUA_SWEEP_IDLE_NOTIFY` | 空 Pod 判定(SCARD==0)+ 60s NX 去重 + ZREM 退出候选(堵 reclaim 窗口内 route 直选的竞态 A) |
@@ -158,7 +164,8 @@ lock:config_sync 串行化(忙→409 CONFIG_SYNC_BUSY;基线 TTL 60 + **看门�
   经 compare-and-del 误删他人锁);续期发现锁丢失 → ERROR 停止续期、本批跑完
   (DB 单事务收敛);unlock 失败只记日志,不把成功变 500/不吞原异常)
 → 读 DB 旧态(containers + templates(双形态水合) + scopes)
-→ diff:模板 changed_ids(_diff_class 沿用)/ 引用切换 ref_switched → affected
+→ diff:模板 changed_ids(_diff_class 沿用)/ 引用切换 ref_switched → affected /
+  路由性排除 routing_excluded(expr 变化 / 生效→失效,2026-09-scope-affinity-hold)
 → 日落中间态检查(★先于写库,拒绝时零副作用;★按版本判定,**基准=当前生效
   版本**(2026-09-15 修正,原比新载荷版本——版本变更时当前代空闲 Pod 必然
   ≠ 新版被误判遗留,而它受 min_idle 底数保护永不回收 → 永久 409,cyz 实测):
@@ -175,6 +182,13 @@ lock:config_sync 串行化(忙→409 CONFIG_SYNC_BUSY;基线 TTL 60 + **看门�
   生效参数 INFO `snapshot template: id= sc= pc= min_idle= session_ttl= pod_ttl=
   max_pods=`(2026-09-08 观测增强)——「配置页 vs 运行时实际生效值」对账只看
   这行,不必从 max_followers 等间接证据反推)
+→ **路由性排除日落(2026-09-scope-affinity-hold,#152)**:diff 出的
+  routing_excluded(expr 变化 / 生效→失效;**不含 index 重排与引用切换**——
+  重排不排除命中,零打扰;引用切换走 ver 日落)逐 scope `_bump_or_warn`(gen
+  bump)+ `_soft_remove_all_pods`(候选软摘,防 drain 期新会话 first-fit 落上
+  老代 Pod);**时序红线:bump 先于下方 eager 预热 push**(RM update_pool_config
+  凭 gen lag 戳排空纪元,反序则永远不戳)。失败 warn 不 raise——DB 已提交,
+  丢 bump 的 scope 退化为软界(会话自然结束后 pod_ttl 回收)
 → eager 预热:每个**生效中** scope 推 push(sid, pool_config, deploy_subset)——必须带
   pod_spec(RM 才落 pod_spec_json/deploy_ver;autoscale 无请求预热 min_idle 的依赖);
   禁用/过期 scope 推 min_idle=0 停预热(与被删同款)
@@ -182,9 +196,11 @@ lock:config_sync 串行化(忙→409 CONFIG_SYNC_BUSY;基线 TTL 60 + **看门�
   Pod ZREM 出候选——不由 diff 驱动,写 DB 后中途失败/同载荷重试(diff==none)也每拍
   重算,旧版 Pod 不会无限期接新流量
 → 删除处理:目标集 = **RM 已知 scope(known_rm_scopes 回调)∪ DB 旧 scope** − 本批;
-  推 push(sid, {**旧模板池参数, min_idle_pods:0}, None)——RM config 键是幻影预热的
-  真源,只看 DB(删行后失忆)的话一次推送失败后 min_idle=0 永远补不上
-→ 响应 {ok, templates_synced/deleted, **containers_synced/deleted**, scopes_synced/deleted, affected_scopes, wildcard_present}
+  **本批新删的 scope(s∈DB 旧集)先 `_bump_or_warn` 再推** push(sid,
+  {**旧模板池参数, min_idle_pods:0}, None)——同款日落排空(仅首删一次,rm_known
+  里的陈年旧删每拍只重推不重复 bump);RM config 键是幻影预热的真源,只看 DB(删行
+  后失忆)的话一次推送失败后 min_idle=0 永远补不上
+→ 响应 {ok, templates_synced/deleted, **containers_synced/deleted**, scopes_synced/deleted, affected_scopes, **routing_sunset(路由性排除日落集,2026-09)**, wildcard_present}
 ```
 
 幂等重放收敛(changed 空 → affected=[]);启动期 `main.start()` 调 `ensure_snapshot()` 无条件重建(消冷启动窗口);`Template.deploy_ver()` / RM `_deploy_ver()` 同一算法(`util.fingerprint` + `DEPLOY_VER_FIELDS`)——A 类过滤两端一致的前提。

@@ -130,9 +130,25 @@ async def verify(url: str, wipe: bool) -> int:
           f"{action}/{pod}")
     touched, _ = await sm.touch("v-s1", now + 1)
     check("SM: touch 保活", touched is True)
+    # [3b] rebind(2026-09-scope-affinity-hold):绑定未过期但 Pod 注册消失 →
+    # 惰性回收返回 rebind(曾见绑定的调用不落放置);重试(新会话路径)才 placed
+    dead, _ = await sm.route_place(
+        session_id="v-s2", scope_id="v-scope", expiry_ts=now + 60,
+        session_ttl=60, scope_concurrency=10, pod_concurrency=10,
+        max_pods=2, now=now,
+    )
+    check("SM: v-s2 也放置到 v-pod-1", dead == "placed", dead)
+    await client.delete(sm.k.pod_info("v-scope", "v-pod-1"))   # 模拟 notify_pod_dead 的 info 清除
+    rebound, _ = await sm.route_place(
+        session_id="v-s2", scope_id="v-scope", expiry_ts=now + 120,
+        session_ttl=60, scope_concurrency=10, pod_concurrency=10,
+        max_pods=2, now=now,
+    )
+    check("SM: Pod 注册消失 → rebind(不落放置)", rebound == "rebind", rebound)
     evicted = await sm.evict("v-s1")
     check("SM: evict 四处同删", evicted is not None
           and evicted.get("scope_id") == "v-scope")
+    await sm.evict("v-s2")
 
     # [4] RM 状态层
     rm = ResourceState(client)
