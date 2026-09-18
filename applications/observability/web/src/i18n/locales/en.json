@@ -1,0 +1,37 @@
+{
+  "common": {
+    "ok": "OK",
+    "cancel": "Cancel",
+    "save": "Save",
+    "delete": "Delete",
+    "edit": "Edit",
+    "create": "Create",
+    "search": "Search",
+    "refresh": "Refresh",
+    "loading": "Loading…",
+    "empty": "No data",
+    "yes": "Yes",
+    "no": "No",
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "detail": "Detail",
+    "view": "View",
+    "actions": "Actions",
+    "all": "All",
+    "reload": "Reload",
+    "retry": "Retry"
+  },
+  "brand": {
+    "title": "{{productName}}",
+    "sub": "Observability"
+  },
+  "nav": {
+    "observability": "Observability"
+  },
+  "observability": {
+    "tabs": {
+      "auditLog": "Audit Log"
+    },
+    "placeholderHint": "Content of this tab is to be determined."
+  }
+}

@@ -23,6 +23,10 @@ dependencies = [
     "aiomysql==0.2.0",
     "aiosqlite>=0.21.0",
     "redis==7.1.0",
+    # audit_v2: OTEL Logs emit（Batch + OTLP/HTTP）
+    "opentelemetry-sdk>=1.30,<2",
+    "opentelemetry-api>=1.30,<2",
+    "opentelemetry-exporter-otlp-proto-http>=1.30,<2",
 ]
 
 [project.optional-dependencies]
