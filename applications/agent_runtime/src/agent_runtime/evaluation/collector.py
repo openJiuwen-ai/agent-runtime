@@ -63,7 +63,7 @@ _EVENT_FIELDS = {
 
 # scope 生效分类(visualization/评估共用;孤儿 = 仅在 RM 有 config 键)
 PHASE_ACTIVE = "active"
-PHASE_DISABLED = "disabled"           # scope 禁用/过期或模板禁用
+PHASE_DISABLED = "disabled"           # scope 过期或模板悬挂引用(生命周期=存在性+expires_at)
 PHASE_ORPHAN_RM = "orphan_rm"         # 快照无此 scope,RM config 残留
 PHASE_MISSING_RM_CFG = "missing_rm_cfg"  # 快照生效但 RM 无 config 键
 
@@ -205,9 +205,9 @@ class EvaluationCollector:
     ) -> str:
         if routing is None:
             return PHASE_ORPHAN_RM
-        if not routing.is_active():
-            return PHASE_DISABLED
-        if template is None or not template.enabled:
+        # 生命周期 = 存在性 + expires_at(enabled 已删,2026-09-drop-enabled-fields):
+        # 过期或模板悬挂引用 → disabled
+        if not routing.is_active() or template is None:
             return PHASE_DISABLED
         if not in_rm:
             # 快照生效但 RM 无 config 键:config_sync 推送失败/尚未推

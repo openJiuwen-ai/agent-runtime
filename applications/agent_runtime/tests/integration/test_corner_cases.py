@@ -330,11 +330,32 @@ async def test_resolve_index_priority_first_fit_matrix(runtime):
 
 
 @requires_lua
-async def test_resolve_skips_disabled_template_and_falls_back(runtime):
-    """enabled=False 的模板视为未命中 → 落到下一个 index 的 scope。"""
+async def test_disabled_template_residual_treated_as_absent(runtime):
+    """残留防御(2026-09-drop-enabled-fields):enabled=false 模板视为缺席——
+
+    被 scope 引用 → 400「引用不在本批模板集」(强制发送方显式删除/改引用);
+    无引用 → 剔除 + WARNING,sync ok,其余模板照常生效。"""
     from tests.conftest import split_sync_payload
 
-    await runtime.config_store.config_sync(split_sync_payload(
+    # 被引用的禁用模板 → 400(parse 守卫直指问题,而非静默重开准入)
+    with pytest.raises(InvalidParams, match="references unknown template"):
+        await runtime.config_store.config_sync(split_sync_payload(
+            [
+                {"template_id": "tpl-off", "agent_image": "a:off",
+                 "namespace": "default", "enabled": False},
+                {"template_id": "tpl-ok", "agent_image": "a:ok",
+                 "namespace": "default"},
+            ],
+            [
+                {"scope_id": "s-off", "index": 0, "template_id": "tpl-off",
+                 "routing_rules": ""},
+                {"scope_id": "s-ok", "index": 100, "template_id": "tpl-ok",
+                 "routing_rules": ""},
+            ],
+        ))
+
+    # 无引用的禁用模板 → 剔除后 ok,Template 无该属性
+    result = await runtime.config_store.config_sync(split_sync_payload(
         [
             {"template_id": "tpl-off", "agent_image": "a:off",
              "namespace": "default", "enabled": False},
@@ -342,14 +363,14 @@ async def test_resolve_skips_disabled_template_and_falls_back(runtime):
              "namespace": "default"},
         ],
         [
-            {"scope_id": "s-off", "index": 0, "template_id": "tpl-off",
-             "routing_rules": ""},
             {"scope_id": "s-ok", "index": 100, "template_id": "tpl-ok",
              "routing_rules": ""},
         ],
     ))
+    assert result["ok"] is True
     scope_id, template = await runtime.config_store.resolve("u", "g", "b")
     assert (scope_id, template.template_id) == ("s-ok", "tpl-ok")
+    assert not hasattr(template, "enabled")
 
 
 @requires_lua

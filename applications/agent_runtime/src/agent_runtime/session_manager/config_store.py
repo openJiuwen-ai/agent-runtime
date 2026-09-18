@@ -110,7 +110,8 @@ SERVICE_CONFIG_TEMPLATE_TABLE_DEF = TableDefinition(
         ColumnDefinition("pod_ttl", "integer", nullable=False, default=300),
         ColumnDefinition("scope_concurrency", "integer", nullable=False, default=3),
         ColumnDefinition("session_ttl", "integer", nullable=False, default=60),
-        ColumnDefinition("enabled", "boolean", nullable=False, default=True),
+        # enabled 列 2026-09 删除(生命周期=存在性;存量库先发版后 DROP,
+        # 见 docs/feature/2026-09-drop-enabled-fields.md)
         ColumnDefinition("data", "json", nullable=True),
         ColumnDefinition("created_at", "datetime", nullable=False),
         ColumnDefinition("updated_at", "datetime", nullable=False),
@@ -129,7 +130,8 @@ ROUTING_SCOPE_TABLE_DEF = TableDefinition(
         # 结构化规则原样落库（wire 格式；空列表/NULL = 通配 scope）
         ColumnDefinition("routing_rules", "json", nullable=True),
         ColumnDefinition("expires_at", "datetime", nullable=True),
-        ColumnDefinition("enabled", "boolean", nullable=False, default=True),
+        # enabled 列 2026-09 删除(生命周期=存在性+expires_at;存量库先发版
+        # 后 DROP,见 docs/feature/2026-09-drop-enabled-fields.md)
         ColumnDefinition("data", "json", nullable=True),
         ColumnDefinition("created_at", "datetime", nullable=False),
         ColumnDefinition("updated_at", "datetime", nullable=False),
@@ -156,7 +158,6 @@ _COLUMN_OF: dict[str, str] = {
     "pod_ttl": "pod_ttl",
     "scope_concurrency": "scope_concurrency",
     "session_ttl": "session_ttl",
-    "enabled": "enabled",
     "data": "data",
 }
 
@@ -182,9 +183,10 @@ _LEGACY_INLINE_CONTAINER_KEYS = frozenset({
 # 模板级字段(留在模板表;容器级由容器表水合为统一 canonical,见
 # container_spec.build_canonical)。三段式契约的 template dict 只认这些键 +
 # main_container_id/sidecar_container_ids/volumes;与 legacy 内联容器键
-# 并存 = mixed 形态 → 400。
+# 并存 = mixed 形态 → 400。enabled 已删(2026-09-drop-enabled-fields):残留
+# 键由 _parse_payload 防御性剔除(真值 false 视为缺席)或静默忽略(真值 true)。
 TEMPLATE_LEVEL_FIELDS: tuple[str, ...] = (
-    "template_id", "template_name", "description", "enabled", "data",
+    "template_id", "template_name", "description", "data",
     "namespace", "node_name", "fs_group", "pod_name", "sse_path",
     "ready_timeout", "ready_poll_interval", "kubeconfig",
     "scope_concurrency", "pod_concurrency", "session_ttl", "pod_ttl",
@@ -199,8 +201,8 @@ _TEMPLATE_WIRE_ALIASES = {"node_name": "nodeName",
 
 
 def _scope_row(scope: RoutingScopeDef) -> dict[str, Any]:
-    """scope → DB 行（时间戳由 _upsert_row_tx 统一处理；enabled/expires_at
-    为 2026-09 routing-scope 扩展字段，随三段式载荷透传）。"""
+    """scope → DB 行（时间戳由 _upsert_row_tx 统一处理；expires_at 为
+    routing-scope 扩展字段随三段式载荷透传;enabled 已删,生命周期=存在性）。"""
     data = getattr(scope, "data", None)
     return {
         "jiuwenclaw_id": TENANT_ID,
@@ -209,7 +211,6 @@ def _scope_row(scope: RoutingScopeDef) -> dict[str, Any]:
         "template_id": scope.template_id,
         # 原始表达式串(空 = 通配);JSON 列存标量字符串
         "routing_rules": scope.expr,
-        "enabled": bool(scope.enabled),
         "expires_at": scope.expires_at,
         "data": data if isinstance(data, dict) else None,
     }
@@ -236,7 +237,7 @@ def _hydrate_containers(
 def template_from_row(row: Any,
                       containers: dict[str, dict[str, Any]] | None = None,
                       ) -> Template | None:
-    """DB 行 → Template 业务对象(未命中 enabled=False 的模板仍返回,调用方判定)。
+    """DB 行 → Template 业务对象。
 
     单轨水合(2026-09 起):模板级行列 + 容器引用 + volumes join → 统一
     canonical。任一引用容器行缺失/水合校验失败 → WARNING + None(fail-closed,
@@ -430,8 +431,6 @@ def _scope_from_row(row: Any) -> RoutingScopeDef | None:
                 f"scope_id must not contain '{{' or '}}': "
                 f"{getattr(row, 'scope_id', None)!r}"
             )
-        enabled_raw = getattr(row, "enabled", True)
-        enabled = True if enabled_raw is None else bool(enabled_raw)
         data_raw = getattr(row, "data", None)
         return RoutingScopeDef(
             scope_id=s(getattr(row, "scope_id")),
@@ -439,7 +438,6 @@ def _scope_from_row(row: Any) -> RoutingScopeDef | None:
             template_id=s(getattr(row, "template_id")),
             expr=expr_raw,
             rule=parse_routing_expr(expr_raw) if expr_raw.strip() else None,
-            enabled=enabled,
             expires_at=parse_datetime(getattr(row, "expires_at", None)),
             data=data_raw if isinstance(data_raw, dict) else None,
         )
@@ -579,7 +577,6 @@ class ConfigStore:
                 continue
             out.append({
                 "template_id": t.template_id,
-                "enabled": bool(t.enabled),
                 "agent_image": t.agent_image,
                 "namespace": t.namespace,
                 "scope_concurrency": t.scope_concurrency,
@@ -634,7 +631,7 @@ class ConfigStore:
         scope 亲和保持（2026-09-scope-affinity-hold）专供 route 持有分支取
         绑定 scope 的 session_ttl；scope 已删 / 模板缺失时对应项为 None，
         调用方回退绑定哈希里留存的 session_ttl。非匹配语义：不判
-        enabled/expires_at（持有不重算规则，日落界由 RM 排空窗口管）。
+        expires_at（持有不重算规则，日落界由 RM 排空窗口管）。
         """
         snapshot = await self._load_snapshot()
         for scope in snapshot.scopes:
@@ -804,6 +801,12 @@ class ConfigStore:
         containers_raw = payload.get("containers")
 
         # ---- 阶段 1:浅扫模板(收引用),不构造
+        # 残留防御(2026-09-drop-enabled-fields):enabled 真值为 false 的模板
+        # 视为缺席——「关」的正确表达是从载荷删除,静默忽略会让存量禁用配置
+        # 升级后重开准入。引用照收(其容器不因剔除变成未引用),仅阶段 3 跳过
+        # 构造:引用它的 scope 得到直指问题的 400「引用不在本批模板集」。
+        # 真值 true 的残留键在构造层随未知键忽略。
+        dropped_templates: set[str] = set()
         main_refs: dict[str, str] = {}        # tid → main_container_id
         sidecar_refs: dict[str, list[str]] = {}
         for item in templates_raw:
@@ -812,6 +815,8 @@ class ConfigStore:
             tid = str(item.get("template_id") or "")
             if not tid:
                 raise InvalidParams("template item missing template_id")
+            if item.get("enabled") is False:
+                dropped_templates.add(tid)
             main_cid = item.get("main_container_id")
             if not isinstance(main_cid, str) or not main_cid.strip():
                 raise InvalidParams(
@@ -820,6 +825,12 @@ class ConfigStore:
                 )
             main_refs[tid] = main_cid
             sidecar_refs[tid] = list(item.get("sidecar_container_ids") or [])
+        if dropped_templates:
+            logger.warning(
+                "config_sync: templates with enabled=false treated as absent "
+                "(field removed 2026-09, disable = remove from payload): %s",
+                sorted(dropped_templates),
+            )
 
         # ---- 阶段 2:容器逐项按角色校验(角色 = 引用位置;未引用/双角色 → 400)
         main_ids, sidecar_ids = set(main_refs.values()), set().union(
@@ -857,10 +868,12 @@ class ConfigStore:
                 f"{missing}"
             )
 
-        # ---- 阶段 3:构造模板
+        # ---- 阶段 3:构造模板(enabled=false 剔除项不构造 → 引用它的 scope 400)
         templates_in: dict[str, TemplateSync] = {}
         for item in templates_raw:
             tid = str(item.get("template_id") or "")
+            if tid in dropped_templates:
+                continue
             if tid in templates_in:
                 raise InvalidParams(f"duplicate template_id {tid!r}")
             template, volumes = template_from_split_payload(
@@ -873,11 +886,23 @@ class ConfigStore:
             )
 
         scopes_in: dict[str, RoutingScopeDef] = {}
+        dropped_scopes: list[str] = []
         for item in scopes_raw:
             scope = parse_scope(item, set(templates_in))
+            if scope is None:
+                # 残留防御(2026-09-drop-enabled-fields):enabled=false 的 scope
+                # 视为缺席剔除 = 发送方删除该 scope → 扩散③ 优雅日落
+                dropped_scopes.append(str(item.get("scope_id") or "?"))
+                continue
             if scope.scope_id in scopes_in:
                 raise InvalidParams(f"duplicate scope_id {scope.scope_id!r}")
             scopes_in[scope.scope_id] = scope
+        if dropped_scopes:
+            logger.warning(
+                "config_sync: scopes with enabled=false treated as absent "
+                "(field removed 2026-09, disable = remove from payload): %s",
+                dropped_scopes,
+            )
 
         wildcard = has_wildcard_scope(scopes_in.values())
         if not wildcard:
@@ -915,8 +940,9 @@ class ConfigStore:
             if sid in old_scopes and old_scopes[sid].template_id != scope.template_id
         }
         # 路由性排除(scope 亲和保持,#152):expr 变化(失权)或 生效→失效
-        # (enabled 关 / expires_at 缩到已过)。**不含** index 重排——重排不排除
-        # 命中,存量会话零打扰;也不含模板引用切换——走既有 ver 日落。
+        # (expires_at 缩到已过;enabled 已删,关 = 从载荷删除走扩散③)。
+        # **不含** index 重排——重排不排除命中,存量会话零打扰;也不含模板
+        # 引用切换——走既有 ver 日落。
         routing_excluded = {
             sid for sid, scope in scopes_in.items()
             if sid in old_scopes and (
@@ -1170,11 +1196,20 @@ class ConfigStore:
             # ① 代次日落（严格：失败上抛中止——该 scope 尚未摘除，重试收敛）
             generations[scope.scope_id] = await self._bump_generation(scope.scope_id)
             # ② 重推池参数 + pod_spec（值未变，确保 RM 缓存/预热就绪；失败仅告警：
-            #    刷新不改配置，scope:config 旧值与欲写值相同，良性）
+            #    刷新不改配置，scope:config 旧值与欲写值相同，良性）。
+            #    **过期 scope 只日落不保温**（is_active 纯过期判定,时间感知）:
+            #    推 min_idle=0 + 无 pod_spec——否则一次强制刷新就把已停池按
+            #    模板 min_idle 重新焐热(#154 同族半死态)
             template = templates[scope.template_id]
-            await self._push_or_warn(
-                scope.scope_id, template.pool_config(), template.deploy_subset()
-            )
+            if not scope.is_active():
+                await self._push_or_warn(
+                    scope.scope_id,
+                    {**template.pool_config(), "min_idle_pods": 0}, None,
+                )
+            else:
+                await self._push_or_warn(
+                    scope.scope_id, template.pool_config(), template.deploy_subset()
+                )
             # ③ 候选集全量软摘除（严格：失败上抛；从此刻起老 Pod 不接新会话）
             removed = await self._soft_remove_all_pods(scope.scope_id)
             pods_sunset += len(removed)

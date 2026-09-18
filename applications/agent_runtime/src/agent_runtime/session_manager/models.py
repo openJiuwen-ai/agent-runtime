@@ -61,10 +61,10 @@ class Template:
     sidecars: list[dict[str, Any]] | None = None
     # deploy 凭证（B 类例外：只影响新 deploy，不日落）
     kubeconfig: str | None = None
-    # 元信息
+    # 元信息(enabled 已删:模板生命周期 = 存在性,禁用 = 从载荷删除,
+    # 见 2026-09-drop-enabled-fields;残留载荷键在解析层防御性剔除)
     template_name: str = ""
     description: str = ""
-    enabled: bool = True
     data: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:

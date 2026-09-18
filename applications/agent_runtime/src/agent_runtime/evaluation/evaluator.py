@@ -63,8 +63,7 @@ class Evaluator:
                 # 孤儿:无快照定义,仅报 RM 侧 min_idle
                 return ScopeConfigView(
                     scope_id=row["scope_id"], template_id="",
-                    scope_enabled=False, expires_at=None,
-                    template_enabled=False,
+                    expires_at=None,
                     scope_concurrency=0, pod_concurrency=1, session_ttl=0,
                     pod_ttl=0, min_idle_pods=0, max_pods=0,
                     phase=row["phase"],
@@ -74,9 +73,7 @@ class Evaluator:
         return ScopeConfigView(
             scope_id=row["scope_id"],
             template_id=routing.template_id,
-            scope_enabled=routing.enabled,
             expires_at=routing.expires_at,
-            template_enabled=template.enabled,
             scope_concurrency=template.scope_concurrency,
             pod_concurrency=template.pod_concurrency,
             session_ttl=template.session_ttl,

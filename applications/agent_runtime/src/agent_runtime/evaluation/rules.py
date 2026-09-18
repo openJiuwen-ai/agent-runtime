@@ -71,9 +71,7 @@ class ScopeConfigView:
 
     scope_id: str
     template_id: str
-    scope_enabled: bool
     expires_at: datetime | None
-    template_enabled: bool
     scope_concurrency: int
     pod_concurrency: int
     session_ttl: int
@@ -160,7 +158,8 @@ def static_rules(
             continue
 
         if v.phase != "active":
-            # disabled:过期/禁用提示(仅 expires_at 临期值得报)
+            # disabled:过期提示(enabled 已删,生命周期=存在性+expires_at,
+            # 模板悬挂引用属数据损坏防御,另有 collector 告警)
             if v.expires_at is not None:
                 now = utc_now()
                 if v.expires_at <= now:
@@ -180,15 +179,6 @@ def static_rules(
                         rationale="scope 24h 内到期,届时流量将落兜底 scope",
                         evidence=["phase=disabled"],
                     ))
-            if not v.template_enabled:
-                findings.append(Finding(
-                    id="S-DISABLED-TEMPLATE-REF", severity=SEV_WARN, source=SOURCE_RULE,
-                    target={"scope_id": v.scope_id, "template_id": v.template_id},
-                    field="", current="template enabled=false", suggested="",
-                    rationale="scope 引用禁用模板,匹配时被跳过——该 scope 是"
-                              "死配置,流量落兜底",
-                    evidence=["phase=disabled", "template_enabled=false"],
-                ))
             continue
 
         # ---- active:逐项静态检查

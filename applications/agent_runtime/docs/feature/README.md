@@ -17,6 +17,7 @@
 
 | 日期 | 文档 | 一句话 |
 |---|---|---|
+| 2026-09 | [删除两级 enabled(禁用=删除,生命周期=存在性+expires_at)](2026-09-drop-enabled-fields.md) | #154 定案:template/scope 两级 enabled 半死态(准入看/暖侧不看→暖 Pod 死锁,refresh 重焐热同族)整字段删除;「关」=从载荷删除(删 scope 走扩散③ 优雅排空,删 template 被 parse 400 强制显式组合);expires_at 保留为唯一生命周期字段;残留 enabled:false 防御性视为缺席(防静默重开准入);refresh 对过期 scope 只日落不保温;DB 两表先发版后 DROP+前置检查;555 用例 |
 | 2026-09 | [scope 亲和保持(规则变更不迁移旧会话 + 路由性排除日落)](2026-09-scope-affinity-hold.md) | #152:route 每请求重算 first-fit 参与仲裁存量绑定=规则一改旧会话被即时迁移;改为亲和只认「绑定+Pod 存活」(重算只服务新放置,曾见绑定的调用不落放置,rebind 重试);禁用/失权/删 scope bump gen 走排空窗口(与 #151 同哲学,首因定窗);index 重排零打扰;corner 用例反转;554 用例 |
 | 2026-09 | [日落优雅排空窗口(drain=session_ttl + surge 余量 1)](2026-09-sunset-drain-window.md) | 会话中的 Pod 不再被日落秒杀:排空截止=首因下发+session_ttl(route 亲和/touch 只查 pod:info 天然连续),过窗即收;max_pods 排空期 +1(三闸门同步);闸门 409 等排空(窗 ≤ session_ttl);A 类 sync 统一进窗;取代 09-15 硬切决策;542 用例+cluster 23/23 |
 | 2026-09 | [删除模板字段 message_timeout](2026-09-drop-message-timeout.md) | 全链路死参数硬删:runtime 只落库无出口(pool_config/route 响应/Redis 键均不含,单改连 affected_scopes 都不进;实测 10s/90s 配 40s 慢调用均不超时)——契约/DB/代码/文档同步删;载荷残留键静默忽略(同 max_pods)不 400;数据面 SSE 超时定性为 gateway 自身配置;存量库先发版后 DROP COLUMN |

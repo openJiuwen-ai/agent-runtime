@@ -97,15 +97,16 @@ async def test_priority_reorder_zero_disturbance(runtime):
 
 @requires_lua
 async def test_disable_scope_drains_and_rebinds(runtime):
-    """H2(路径 B):禁用原池 → bump+排空纪元;窗口内旧会话继续原 Pod;过窗
-    回收后 rebind 落兜底。排空收尾 DEL 纪元。"""
+    """H2(路径 B,残留 enabled=false ≡ 删除,2026-09-drop-enabled-fields):
+    剔除 main → bump+排空纪元;窗口内旧会话继续原 Pod;过窗回收后 rebind 落
+    兜底。排空收尾 DEL 纪元。"""
     await _sync(runtime)
     first = await runtime.route("sess_1")               # group=grp → main
     pod = first["pod_id"]
     assert await _binding_scope(runtime, "sess_1") == SCOPE
 
     runtime.gen_bumps.clear()
-    await _sync(runtime, main_enabled=False)            # 禁用 main(留兜底)
+    await _sync(runtime, main_enabled=False)            # 残留禁用 → 视为删除(留兜底)
     assert runtime.gen_bumps == [SCOPE]
     assert await runtime.rm_state.drain_until(SCOPE) is not None
     # 窗口内旧会话继续原 Pod(亲和保持);新会话立即兜底

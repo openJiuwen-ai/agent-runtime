@@ -263,9 +263,10 @@ async def _scope(request: Request, sysctx: Any) -> dict[str, Any]:
             **redact(info),
         })
     # 生效分类(collector 同款规则;单 scope 详情不整表扫描)
+    # 生命周期 = 存在性 + expires_at(enabled 已删,2026-09-drop-enabled-fields)
     if scope_def is None:
         phase = "orphan_rm"
-    elif not scope_def.is_active() or template is None or not template.enabled:
+    elif not scope_def.is_active() or template is None:
         phase = "disabled"
     elif not cfg:
         phase = "missing_rm_cfg"
@@ -279,8 +280,6 @@ async def _scope(request: Request, sysctx: Any) -> dict[str, Any]:
         scope_concurrency = template.scope_concurrency
         capacity = {
             "template_id": scope_def.template_id,
-            "template_enabled": bool(template.enabled),
-            "scope_enabled": bool(scope_def.enabled),
             "expires_at": routing["expires_at"] if routing else None,
             "scope_concurrency": scope_concurrency,
             "pod_concurrency": template.pod_concurrency,
@@ -336,7 +335,6 @@ async def _scopes(request: Request, sysctx: Any) -> dict[str, Any]:
             "scope_id": row["scope_id"],
             "phase": row["phase"],
             "template_id": routing.template_id if routing else None,
-            "scope_enabled": routing.enabled if routing else None,
             "expires_at": (
                 routing.expires_at.isoformat()
                 if routing is not None and routing.expires_at is not None else None
