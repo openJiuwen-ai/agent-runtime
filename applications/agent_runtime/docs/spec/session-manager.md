@@ -67,8 +67,13 @@ touch 不分桶(无容量信号,HGET 反查 scope 热路径加一跳,不做)。
                      重试(曾见绑定的调用内不落放置——防向已禁用/删除 scope 重部署)
      scope_full     → 立即 raise ScopeFull(503, retry_after=1)——场景 F 快失败
                      (2026-09):不排队不订阅,Lua 闸门即唯一仲裁,被拒者毫秒级返回
-     need_acquire   → rm_facade.acquire(扩+1)→ state.register_pod → 重跑(新 Pod 必被 first-fit 选中) }
+     need_acquire   → rm_facade.acquire(扩+1)→ state.register_pod → 重跑(由 Lua 原子争抢空位) }
 ```
+
+`acquire` 不预留会话槽位：返回的 Pod 可能在下一次放置前被其他请求占满。
+一次 route 内首轮 acquire 沿用 request_id，后续已完成申请后的新一轮使用
+`{request_id}:acquire:{轮次}`（从 1 开始）。同一轮在 route 重试时仍使用相同幂等键，
+避免重复部署；不同轮不再永久回放已满 Pod。原有容量上限与总预算保持不变。
 
 `_acquire_pod`:`MaxPodsReached`/`DeployFailed` → 映射 `NoPodAvailable(503, retry_after=1)`。
 

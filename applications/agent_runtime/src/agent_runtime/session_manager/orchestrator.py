@@ -121,6 +121,7 @@ class SessionOrchestrator:
         # per-scope 评估计数(resolve 之后 scope 已知;纯内存,绝不反噬业务)
         route_ok = False
         route_code: str | None = None
+        acquire_round = 0
         try:
             while True:
                 # 总预算：need_acquire 一轮可触发完整 deploy（ready_timeout 量级），
@@ -204,13 +205,23 @@ class SessionOrchestrator:
                     sttl = template.session_ttl
                 if self.telemetry is not None:
                     self.telemetry.observe_acquire(target_scope, "need_acquire")
-                pod_id, sse_url = await self._acquire_pod(
-                    target_scope, template, request_id
+                # acquire is not a session-slot reservation. Another route may
+                # fill the returned Pod before our next placement. Reusing its
+                # idem key here would replay that full Pod forever. Give each
+                # completed allocation its own deterministic key, so retries
+                # of the same route still replay rather than duplicate deploys.
+                acquire_id = (
+                    request_id if acquire_round == 0 or not request_id
+                    else f"{request_id}:acquire:{acquire_round}"
                 )
+                pod_id, sse_url = await self._acquire_pod(
+                    target_scope, template, acquire_id
+                )
+                acquire_round += 1
                 await self.state.register_pod(
                     target_scope, pod_id, sse_url, template.deploy_ver()
                 )
-                # 重跑 ROUTE_PLACE：新 Pod 必被 first-fit 选中
+                # 重跑 ROUTE_PLACE：由 Lua 原子争抢空位，不假设 acquire 预留了容量。
         except AgentRuntimeError as exc:
             route_code = exc.code
             raise
