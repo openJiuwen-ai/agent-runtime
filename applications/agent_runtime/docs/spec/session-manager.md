@@ -49,6 +49,10 @@ touch 不分桶(无容量信号,HGET 反查 scope 热路径加一跳,不做)。
 四参非空校验(缺 → InvalidParams 400)
 → resolve(user_id, group_id, bot_id)(config_store:读路由快照 first-fit 匹配)
    返回 (scope_id, template);无匹配 → ConfigNotFound(503)
+→ **亲和持有判定(2026-09-scope-affinity-hold,#152)**:读 `session:{sid}` 哈希,
+   已有绑定(scope_id+pod_id 在)→ 本次仲裁目标改为**绑定 scope**(session_ttl 取
+   该 scope 当前模板,scope/模板已从快照消失则回退哈希留存的 session_ttl)——
+   规则变化不即时迁移存量会话;first-fit 只决定新会话(与 rebind 后)的去处
 → 循环 { **总预算校验:total_deadline = now + template.ready_timeout
      + ROUTE_BUDGET_MARGIN_SEC(10s),每圈 monotonic 复核。
      总预算封的是 need_acquire 的无上界循环(一轮可触发完整 deploy,ready_timeout
@@ -59,6 +63,8 @@ touch 不分桶(无容量信号,HGET 反查 scope 热路径加一跳,不做)。
      LUA_ROUTE_PLACE 原子仲裁 → (action, pod_id):
      refresh/placed → 读 pod:info sse_url 返回(缺失=极端竞态被清,continue 重跑;
                      refresh 分支有 info 存活守卫,下一轮惰性回收死绑定重新放置,不构成自旋)
+     rebind         → 绑定已惰性回收(过期/Pod 注册消失)→ 目标切回 first-fit 结果
+                     重试(曾见绑定的调用内不落放置——防向已禁用/删除 scope 重部署)
      scope_full     → 立即 raise ScopeFull(503, retry_after=1)——场景 F 快失败
                      (2026-09):不排队不订阅,Lua 闸门即唯一仲裁,被拒者毫秒级返回
      need_acquire   → rm_facade.acquire(扩+1)→ state.register_pod → 重跑(新 Pod 必被 first-fit 选中) }
@@ -95,7 +101,7 @@ touch 不分桶(无容量信号,HGET 反查 scope 热路径加一跳,不做)。
 
 | 脚本 | 一句话职责 |
 |---|---|
-| `LUA_ROUTE_PLACE` | route 原子核心:**残骸自卫(2026-09,同 EVICT:缺 scope_id/pod_id/expiry 的半成品哈希自清两处后落穿全新放置——nil 比较/nil 拼接是 Lua runtime error,该会话 route 永久 500)**→亲和续期(**前提 pod:info 存在**——注册已被清的绑定判死,惰性回收后走重新放置;否则 notify_pod_dead 窗口内新落的会话会无限自旋且每圈续期 expiry)→惰性回收旧绑定→scope 闸门(SCARD)→first-fit(接入序)→达 max_pods 则 scope_full / 否则 need_acquire→原子提交四处同写(复用时清 idle_notified) |
+| `LUA_ROUTE_PLACE` | route 原子核心:**残骸自卫(2026-09,同 EVICT:缺 scope_id/pod_id/expiry 的半成品哈希自清两处后落穿全新放置——nil 比较/nil 拼接是 Lua runtime error,该会话 route 永久 500)**→亲和续期(**前提 pod:info 存在**——注册已被清的绑定判死,惰性回收后走重新放置;否则 notify_pod_dead 窗口内新落的会话会无限自旋且每圈续期 expiry)→**其余(过期/Pod 注册消失/scope 不匹配竞态)惰性回收旧绑定后返回 `rebind`(2026-09-scope-affinity-hold:曾见绑定的调用内不落放置,handler 换 first-fit 结果重试;传入 scope 即要维持的绑定 scope 或新会话的 first-fit 结果——曾见绑定的调用直接按传入 scope 放置会把会话部署进已禁用/删除的 scope)**→scope 闸门(SCARD)→first-fit(接入序)→达 max_pods 则 scope_full / 否则 need_acquire→原子提交四处同写(复用时清 idle_notified) |
 | `LUA_EVICT` | session 移除**唯一原语**(四处同删;返回 scope/pod/remaining;幂等 noop;**残骸自卫**:哈希缺 scope/pod(外部直改键半成品)→ 自清两处返回 rubble,调用侧 WARNING——单坏键不得使到期 pass 崩溃循环) |
 | `LUA_TOUCH` | 保活续期;**残骸自卫(2026-09,同 EVICT:缺 scope_id/pod_id/expiry 自清返回 False,不得 Lua runtime error)**;已过期当场惰性 evict;ttl 就地读 session HASH(不依赖 scope:config) |
 | `LUA_SWEEP_IDLE_NOTIFY` | 空 Pod 判定(SCARD==0)+ 60s NX 去重 + ZREM 退出候选(堵 reclaim 窗口内 route 直选的竞态 A) |
@@ -106,9 +112,9 @@ touch 不分桶(无容量信号,HGET 反查 scope 热路径加一跳,不做)。
 
 ## config_store.py —— 配置层(scope 重构版)
 
-**DB 表**(策略四列 2026-09 起与 wire 术语同名,identity 映射在 `_COLUMN_OF`;曾用 EE 兼容名,见文末 RENAME 义务):`service_config_template`(模板级:`namespace`/`node_name`/`fs_group`/`pod_name`/`sse_path`/`kubeconfig`/`ready_*` + 策略四列 `min_idle_pods`/`pod_concurrency`/`pod_ttl`/`scope_concurrency` + 三段式引用 `main_container_id`(string 100)/`sidecar_container_ids`(JSON)/`volumes`(JSON);**2026-09 起已 DROP 拆表前内联容器列**,见 `docs/feature/2026-09-drop-legacy-inline-template-columns.md`)、**`service_config_container`**(容器规格表,15 列:`container_id` unique ≤100、`name`/`image`/`image_pull_policy` 标量 + `ports`/`env`/`env_from`/`resources`/`volume_mounts`/`security_context`/`readiness_probe` 七个内部规范形 JSON 段落列;框架 init_table 自动建,无需手工 DDL)、`routing_scope`(`scope_id` unique / `match_index`(避 SQL 保留字 index) / `template_id` / `routing_rules` JSON / `enabled` bool 默认 true / `expires_at` datetime 可空)。表结构常量 `*_TABLE_DEF` 由 main 传给框架建表。旧 `routing_rule` 表已废弃(不再读写,老库残留无害)。**模板表三段式三列为后期新增:存量库须先手工 ALTER 再发版**(`ALTER TABLE service_config_template ADD COLUMN main_container_id VARCHAR(100) NULL; ADD COLUMN sidecar_container_ids JSON NULL; ADD COLUMN volumes JSON NULL;`,框架建表只 create_all 不补列)。**routing_scope 的 `enabled`/`expires_at` 同为后期新增:存量库须** `ALTER TABLE routing_scope ADD COLUMN expires_at DATETIME NULL; ADD COLUMN enabled BOOLEAN NOT NULL DEFAULT TRUE;`(方言类型按 MySQL/PG 调整)。**模板表策略四列 2026-09 改名(wire 术语统一):存量库须先手工 RENAME 再发版**(`ALTER TABLE service_config_template RENAME COLUMN min_idle_services TO min_idle_pods; RENAME COLUMN service_concurrency TO pod_concurrency; RENAME COLUMN service_ttl TO pod_ttl; RENAME COLUMN session_concurrency TO scope_concurrency;`,MySQL 8+/PG 均支持;见 `docs/feature/2026-09-template-table-runtime-terms.md`)。**legacy 内联容器列 DROP:存量库须先按 feature 篇 DROP COLUMN 再发版**(框架不 DROP)。
+**DB 表**(策略四列 2026-09 起与 wire 术语同名,identity 映射在 `_COLUMN_OF`;曾用 EE 兼容名,见文末 RENAME 义务):`service_config_template`(模板级:`namespace`/`node_name`/`fs_group`/`pod_name`/`sse_path`/`kubeconfig`/`ready_*` + 策略四列 `min_idle_pods`/`pod_concurrency`/`pod_ttl`/`scope_concurrency` + 三段式引用 `main_container_id`(string 100)/`sidecar_container_ids`(JSON)/`volumes`(JSON);**2026-09 起已 DROP 拆表前内联容器列**,见 `docs/feature/2026-09-drop-legacy-inline-template-columns.md`)、**`service_config_container`**(容器规格表,15 列:`container_id` unique ≤100、`name`/`image`/`image_pull_policy` 标量 + `ports`/`env`/`env_from`/`resources`/`volume_mounts`/`security_context`/`readiness_probe` 七个内部规范形 JSON 段落列;框架 init_table 自动建,无需手工 DDL)、`routing_scope`(`scope_id` unique / `match_index`(避 SQL 保留字 index) / `template_id` / `routing_rules` JSON / `expires_at` datetime 可空;`enabled` 列 2026-09 删除,生命周期=存在性+expires_at,存量库先发版后 DROP,见 `docs/feature/2026-09-drop-enabled-fields.md`)。表结构常量 `*_TABLE_DEF` 由 main 传给框架建表。旧 `routing_rule` 表已废弃(不再读写,老库残留无害)。**模板表三段式三列为后期新增:存量库须先手工 ALTER 再发版**(`ALTER TABLE service_config_template ADD COLUMN main_container_id VARCHAR(100) NULL; ADD COLUMN sidecar_container_ids JSON NULL; ADD COLUMN volumes JSON NULL;`,框架建表只 create_all 不补列)。**routing_scope 的 `expires_at` 为后期新增:存量库须** `ALTER TABLE routing_scope ADD COLUMN expires_at DATETIME NULL;`(方言类型按 MySQL/PG 调整);`enabled` 列 2026-09 起删除(先发版后 DROP,见 drop-enabled-fields)。**模板表策略四列 2026-09 改名(wire 术语统一):存量库须先手工 RENAME 再发版**(`ALTER TABLE service_config_template RENAME COLUMN min_idle_services TO min_idle_pods; RENAME COLUMN service_concurrency TO pod_concurrency; RENAME COLUMN service_ttl TO pod_ttl; RENAME COLUMN session_concurrency TO scope_concurrency;`,MySQL 8+/PG 均支持;见 `docs/feature/2026-09-template-table-runtime-terms.md`)。**legacy 内联容器列 DROP:存量库须先按 feature 篇 DROP COLUMN 再发版**(框架不 DROP)。
 
-**`namespace` 空串语义(2026-09,跟随 runtime ns)**:显式下发 `"namespace": ""` = 继承——AgentServer 落 runtime 自身 ns(k8s 层 falsy 兜底到 `default_namespace`,= `POD_NAMESPACE`(downward API),见 spec/service-core.md / resource-manager.md)。列 NOT NULL 允许空串,**省略仍落默认值 `"default"`**——表达继承须显式空串。deploy_ver 以空串字面量进指纹(runtime 搬家不触发日落,老 Pod 按 idle 自然回收);库与 wire 契约零改动。
+**`namespace` 空串语义(2026-09,跟随 runtime ns)**:显式下发 `"namespace": ""` = 继承——AgentServer 落 runtime 自身 ns(k8s 层 falsy 兜底到 `default_namespace`,= `config.own_namespace()`:`POD_NAMESPACE` env > SA 文件,见 spec/service-core.md / resource-manager.md)。列 NOT NULL 允许空串,**省略仍落默认值 `"default"`**——表达继承须显式空串。deploy_ver 以空串字面量进指纹(runtime 搬家不触发日落,老 Pod 按 idle 自然回收);库与 wire 契约零改动。
 
 **行形态单轨(2026-09 统一规范形起)**(`template_from_row(row, containers)`):模板级行列 + 容器行引用 + volumes join → 统一 canonical 水合(**任一引用容器行缺失/容器段落校验失败 → WARNING + 整模板跳过**,绝不静默丢单个 sidecar——那会隐形改 deploy_ver;引用它的 scope 视为不命中落兜底);**无 `main_container_id` 的行不再水合**(→ WARNING + None,fail-closed;wire 已三段式独占)。写行(`row_from_template_split`)只写模板级列 + 引用列 + volumes(不再写已 DROP 的内联列死值)。wire 层仍用 `_LEGACY_INLINE_CONTAINER_KEYS` 拒 mixed(template 带内联容器键 → 400)。
 
@@ -126,7 +132,7 @@ touch 不分桶(无容量信号,HGET 反查 scope 热路径加一跳,不做)。
 - **卷 join(K8s spec.volumes 同构)**:模板级 `volumes`(每卷恰一源:hostPath/configMap/persistentVolumeClaim/nfs;卷名 DNS-1123 唯一)+ 容器 `volumeMounts` 按名引用;`fuse_mounts` 重建内部 fused 挂载(mounts.py 规范形,指纹承重)。源类型规则:悬挂引用/未挂载卷 → 400;`subPath` 仅 configMap;`readOnly` 缺省按内部规范(cm→**true**、hp/pvc/nfs→false)。**NFS 与 PVC 同构**:卷源(server/path)是模板级(pod 级)卷,主容器与 sidecar 一律按名引用挂载,条数/挂载点不限(2026-09 起废除「NFS 仅主容器单挂载」的三元组特化)。
 - 水合出口:`build_canonical`(内部规范形 + volumes join → containers.canonical 收口)×2 → `validate_pod_containers`——读路径(`_template_from_split_row`)与写路径(`template_from_split_payload`)共用 `_hydrate_containers` 单出口。**同值必同 deploy_ver**(`test_split_contract_deploy_ver_identical_to_inline`:三段式水合 vs 手构 canonical Template 逐字节相等,承重)。
 
-**routing.py(纯函数)**:`routing_rules` 是**布尔表达式字符串**——条件 `field in|not in ('v1', 'v2')` 经 `and`/`or` 与括号任意组合;优先级 条件 > and > or;关键字大小写不敏感,字段名固定小写枚举(user_id/group_id/bot_id);值单引号串(`''` 加倍或 `\'`/`\\` 转义);空值列表 `()` → in 恒假、not_in 恒真;不支持一元 `not`;上限长度 8000、括号嵌套 32。**空 routing_rules(null/空串/纯空白)= 通配兜底**;遍历按 `(index ASC, scope_id ASC)` **first-fit**;引用模板缺失/禁用的 scope、以及 scope 自身 `enabled=False` / `expires_at` 已过期(墙钟判定,`null`=永不过期)的,跳过落下一个。通配告警只计生效中的空表达式 scope。解析器 = 词法(`_TOKEN_RE`)+ 递归下降(`_Parser`:or_expr → and_expr → primary),产物为表达式树(`MatchExpression` 叶 / `AndNode` / `OrNode`),存于 `RoutingScopeDef.rule`(与原始串 `expr` 成对,后者是 wire/DB/快照载体)。`SCOPE_ID_RE = ^[0-9A-Za-z._-]{1,128}$`(禁 `:`/`*`/空白——Redis 键与 `pods:registered` 切分依赖)。
+**routing.py(纯函数)**:`routing_rules` 是**布尔表达式字符串**——条件 `field in|not in ('v1', 'v2')` 经 `and`/`or` 与括号任意组合;优先级 条件 > and > or;关键字大小写不敏感,字段名固定小写枚举(user_id/group_id/bot_id);值单引号串(`''` 加倍或 `\'`/`\\` 转义);空值列表 `()` → in 恒假、not_in 恒真;不支持一元 `not`;上限长度 8000、括号嵌套 32。**空 routing_rules(null/空串/纯空白)= 通配兜底**;遍历按 `(index ASC, scope_id ASC)` **first-fit**;引用模板缺失(悬挂引用)的 scope、以及 `expires_at` 已过期(墙钟判定,`null`=永不过期)的,跳过落下一个(两级 enabled 已删 2026-09,生命周期=存在性+expires_at;残留 `enabled:false` 载荷防御性视为缺席)。通配告警只计生效中的空表达式 scope。解析器 = 词法(`_TOKEN_RE`)+ 递归下降(`_Parser`:or_expr → and_expr → primary),产物为表达式树(`MatchExpression` 叶 / `AndNode` / `OrNode`),存于 `RoutingScopeDef.rule`(与原始串 `expr` 成对,后者是 wire/DB/快照载体)。`SCOPE_ID_RE = ^[0-9A-Za-z._-]{1,128}$`(禁 `:`/`*`/空白——Redis 键与 `pods:registered` 切分依赖)。
 
 **resolve(user_id, group_id, bot_id) → (scope_id, Template)**:读单键快照 `routing:snapshot`(1 GET;进程内按原文 memo 免重复解析)→ first-fit 匹配;快照缺失/损坏 → 从 DB 重建;无匹配 → `ConfigNotFound(503)`。
 
@@ -148,7 +154,7 @@ touch 不分桶(无容量信号,HGET 反查 scope 热路径加一跳,不做)。
   坏值 Pod 永久 Pending 挂满 ready_timeout 才暴露;空串归一 None 同未设;
   snake 双形态 node_name → 400,用 K8s 拼写 nodeName)
   scope 段同前(scope_id 字符集/index 拒 bool/引用不在本批模板集/routing_rules
-  表达式串语法/enabled 须 bool/expires_at ISO-8601 或 null/重复);缺通配 scope
+  表达式串语法/expires_at ISO-8601 或 null/重复;残留 `enabled:false` 视为缺席);缺通配 scope
   → 仅 WARNING 放行(响应 wildcard_present:false;通配只计生效中的空表达式)
 lock:config_sync 串行化(忙→409 CONFIG_SYNC_BUSY;基线 TTL 60 + **看门狗续期**:
   周期 TTL//3 经 SessionState.refresh_lock(Lua compare-and-EXPIRE,同 unlock 守卫
@@ -158,7 +164,9 @@ lock:config_sync 串行化(忙→409 CONFIG_SYNC_BUSY;基线 TTL 60 + **看门�
   经 compare-and-del 误删他人锁);续期发现锁丢失 → ERROR 停止续期、本批跑完
   (DB 单事务收敛);unlock 失败只记日志,不把成功变 500/不吞原异常)
 → 读 DB 旧态(containers + templates(双形态水合) + scopes)
-→ diff:模板 changed_ids(_diff_class 沿用)/ 引用切换 ref_switched → affected
+→ diff:模板 changed_ids(_diff_class 沿用)/ 引用切换 ref_switched → affected /
+  路由性排除 routing_excluded(expr 变化 / 生效→失效即 expires_at 缩到已过,
+  2026-09-scope-affinity-hold;enabled 已删,关=删除走扩散③)
 → 日落中间态检查(★先于写库,拒绝时零副作用;★按版本判定,**基准=当前生效
   版本**(2026-09-15 修正,原比新载荷版本——版本变更时当前代空闲 Pod 必然
   ≠ 新版被误判遗留,而它受 min_idle 底数保护永不回收 → 永久 409,cyz 实测):
@@ -175,16 +183,25 @@ lock:config_sync 串行化(忙→409 CONFIG_SYNC_BUSY;基线 TTL 60 + **看门�
   生效参数 INFO `snapshot template: id= sc= pc= min_idle= session_ttl= pod_ttl=
   max_pods=`(2026-09-08 观测增强)——「配置页 vs 运行时实际生效值」对账只看
   这行,不必从 max_followers 等间接证据反推)
+→ **路由性排除日落(2026-09-scope-affinity-hold,#152)**:diff 出的
+  routing_excluded(expr 变化 / 生效→失效即 expires_at 缩到已过;**不含 index 重排与引用切换**——
+  重排不排除命中,零打扰;引用切换走 ver 日落)逐 scope `_bump_or_warn`(gen
+  bump)+ `_soft_remove_all_pods`(候选软摘,防 drain 期新会话 first-fit 落上
+  老代 Pod);**时序红线:bump 先于下方 eager 预热 push**(RM update_pool_config
+  凭 gen lag 戳排空纪元,反序则永远不戳)。失败 warn 不 raise——DB 已提交,
+  丢 bump 的 scope 退化为软界(会话自然结束后 pod_ttl 回收)
 → eager 预热:每个**生效中** scope 推 push(sid, pool_config, deploy_subset)——必须带
   pod_spec(RM 才落 pod_spec_json/deploy_ver;autoscale 无请求预热 min_idle 的依赖);
-  禁用/过期 scope 推 min_idle=0 停预热(与被删同款)
+  过期 scope 推 min_idle=0 停预热(与被删同款;enabled 已删,「关」=从载荷删除)
 → 候选集版本收敛(声明式,非 one-shot):对**每个生效中** scope 把 deploy_ver ≠ 当前版本的
   Pod ZREM 出候选——不由 diff 驱动,写 DB 后中途失败/同载荷重试(diff==none)也每拍
   重算,旧版 Pod 不会无限期接新流量
 → 删除处理:目标集 = **RM 已知 scope(known_rm_scopes 回调)∪ DB 旧 scope** − 本批;
-  推 push(sid, {**旧模板池参数, min_idle_pods:0}, None)——RM config 键是幻影预热的
-  真源,只看 DB(删行后失忆)的话一次推送失败后 min_idle=0 永远补不上
-→ 响应 {ok, templates_synced/deleted, **containers_synced/deleted**, scopes_synced/deleted, affected_scopes, wildcard_present}
+  **本批新删的 scope(s∈DB 旧集)先 `_bump_or_warn` 再推** push(sid,
+  {**旧模板池参数, min_idle_pods:0}, None)——同款日落排空(仅首删一次,rm_known
+  里的陈年旧删每拍只重推不重复 bump);RM config 键是幻影预热的真源,只看 DB(删行
+  后失忆)的话一次推送失败后 min_idle=0 永远补不上
+→ 响应 {ok, templates_synced/deleted, **containers_synced/deleted**, scopes_synced/deleted, affected_scopes, **routing_sunset(路由性排除日落集,2026-09)**, wildcard_present}
 ```
 
 幂等重放收敛(changed 空 → affected=[]);启动期 `main.start()` 调 `ensure_snapshot()` 无条件重建(消冷启动窗口);`Template.deploy_ver()` / RM `_deploy_ver()` 同一算法(`util.fingerprint` + `DEPLOY_VER_FIELDS`)——A 类过滤两端一致的前提。
@@ -203,7 +220,10 @@ lock:config_sync 串行化(忙→409 CONFIG_SYNC_BUSY;基线 TTL 60 + **看门�
      代次感知保证收敛,闸门不会永久 409;防连续 refresh 多代日落堆积蹲占
      max_pods——2026-09-11 wangchang 环境 9 分钟 4 连刷实录)
   ① bump_generation(sid)(rm_facade → HINCRBY scope:config generation;严格,失败上抛)
-  ② _push_or_warn(sid, pool_config, deploy_subset)(值未变,确保 RM 缓存就绪;失败仅告警——良性)
+  ② _push_or_warn(sid, pool_config, deploy_subset)(值未变,确保 RM 缓存就绪;失败仅告警——良性)。
+     **过期 scope(is_active 纯过期判定,时间感知)只日落不保温**:推
+     {**pool, min_idle_pods:0} + 无 pod_spec——否则一次强制刷新就把已停池按
+     模板 min_idle 重新焐热(#154 同族半死态,2026-09-drop-enabled-fields 修)
   ③ _soft_remove_all_pods(sid)(候选集全量 ZREM,不按版本过滤;严格)
 → 响应 {ok, scopes_refreshed, pods_sunset, generations}
 ```
@@ -211,7 +231,8 @@ lock:config_sync 串行化(忙→409 CONFIG_SYNC_BUSY;基线 TTL 60 + **看门�
 - **顺序红线 bump → ZREM**:"ZREM 而未 bump"会造出"被摘却仍是当前代次 warm"的搁浅态(min_idle 底数保护 → 永久蹲占 max_pods 且不重建);bump 在前的任何中途失败都收敛于"老 Pod 暂时继续接新流量",重试即收敛。
 - 不写 DB、不动路由快照;日落收敛/重建全复用既有后台任务(reclaim 代次感知回收 + autoscale 按缓存 pod_spec 重建,见 resource-manager spec)。
 - `pods_sunset` 只计 SM 候选集摘除量(未入候选的 RM 暖 Pod 不计但同样被代次日落)。
-- **非幂等但收敛**(每次调用 = 一轮全量日落重建,成功后勿自动重试);config_sync 的日落中间态守卫基准=**当前生效版本**、不扩展看 generation——老代 Pod 版本与当前配置相等 → 对守卫不可见 → B 类/A 类下发均不因此 409(2026-09-15 修正;原「A 类照旧 409 到排空完成」在老代 Pod 受 min_idle 底数保护时永不放行=配置面永久 409)。A 类落库后由扩散②软摘 + reclaim 版本感知即刻回收老代 Pod。
+- **非幂等但收敛**(每次调用 = 一轮全量日落重建,成功后勿自动重试);config_sync 的日落中间态守卫基准=**当前生效版本**、不扩展看 generation——老代 Pod 版本与当前配置相等 → 对守卫不可见 → B 类/A 类下发均不因此 409(2026-09-15 修正;原「A 类照旧 409 到排空完成」在老代 Pod 受 min_idle 底数保护时永不放行=配置面永久 409)。A 类落库后由扩散②软摘 + reclaim **在排空窗口后**回收老代 Pod(2026-09-17 优雅排空,与 refresh 统一:窗口 = 首因下发 + session_ttl,期间已绑定会话继续服务;见 docs/feature/2026-09-sunset-drain-window.md)。
+- **排空窗口对闸门的时长影响(2026-09-17)**:⓪ 的等待窗从"~一拍 reconcile+reclaim"拉长到 ≤ session_ttl + tick(有界:窗口截止后 reclaim 必收 → 放行)。两闸门判据维度不同——refresh 闸门看**代次**(对 A 类排空 Pod 失明)、sync 守卫看**版本**(对 refresh 排空 Pod 失明)——各自入口在自家排空窗口内 409,异类入口可放行(R3)。运维节奏须适配:攒完编辑再刷新。
 - 构造注入:`ConfigStore(..., bump_generation=rm_facade.bump_generation)`(`main._bind_modules`)。
 
 ## sweeper.py —— 老化扫描

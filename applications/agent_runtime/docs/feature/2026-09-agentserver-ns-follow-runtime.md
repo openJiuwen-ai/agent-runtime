@@ -75,3 +75,24 @@ API 注入 env `POD_NAMESPACE`),否则用下发的值;不改 DB schema、不改�
   不再驱动运行时兜底,只渲染 RBAC。钉死 ns 的唯一途径 = 模板显式下发。
 - 存量模板显式 ns(如 wmq 联调 `agent-runtime-e2e-wmq`)行为不变;后续想跟随 runtime
   的模板自行改下发空串即可(会触发一轮 A 类日落,预期行为)。
+
+## 2026-09-17 补丁:SA 文件兜底(cyz2 403 事故复盘)
+
+**现象**:cyz2 联调(镜像 0.0.28s,含本篇"删 AGENT_RUNTIME_DEFAULT_NAMESPACE"代码)
+创建 AgentServer 全 403——`cannot create pods in the namespace "default"`。
+启动日志 `config summary: namespace=default`。
+
+**根因**:**镜像升级与部署模板重渲染两条时间线断层**。cyz/cyz2 的 Deployment 由
+swarm 仓 `deploy/enterprise/templates/runtime.template.yaml` 渲染,旧模板仍注入
+`AGENT_RUNTIME_DEFAULT_NAMESPACE=cyz2`(新代码忽略)且无 `POD_NAMESPACE` → 空 ns
+模板落字面 `"default"` → SA 只在自身 ns 有 RBAC → 403。仅修模板不够:存量环境
+(wx2/wx3/zxy/zyq)单独升镜像而不重渲染,会复刻同款故障。
+
+**修复(代码层自愈,零部署配置)**:`config.own_namespace()` 解析链改为
+`POD_NAMESPACE env(显式覆盖)> in-cluster SA namespace 文件(Pod 必挂)> "default"`
+——任何镜像/模板升级顺序下自动正确。配套:swarm 模板同注入 POD_NAMESPACE 并清除
+两个死变量(`AGENT_RUNTIME_DEFAULT_NAMESPACE`/`AGENT_RUNTIME_SCOPE_FULL_TIMEOUT`,
+后者随场景 F 拆队列已删)。
+
+**验证**:tests/test_config.py 扩至 5 例(env 生效/SA 兜底/env 压过 SA/空串下探/
+双缺失字面 default);全量 pytest 全绿。

@@ -61,10 +61,10 @@ class Template:
     sidecars: list[dict[str, Any]] | None = None
     # deploy 凭证（B 类例外：只影响新 deploy，不日落）
     kubeconfig: str | None = None
-    # 元信息
+    # 元信息(enabled 已删:模板生命周期 = 存在性,禁用 = 从载荷删除,
+    # 见 2026-09-drop-enabled-fields;残留载荷键在解析层防御性剔除)
     template_name: str = ""
     description: str = ""
-    enabled: bool = True
     data: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -124,10 +124,14 @@ class Template:
 
         pod_concurrency 供 RM 的 deploy follower 等待室推导上限（pc-1）——
         不参与 max_pods 判定（per-Pod 容量闸门仍在 SM 侧，红线不变）。
+        session_ttl 供 RM 日落排空窗口计 deadline（= 日落时刻 + session_ttl，
+        2026-09-17 优雅排空）——SM 侧 session 过期仍走自己的 session_expiry
+        ZSET，两处用途互不依赖。
         """
         return {
             "min_idle_pods": self.min_idle_pods,
             "max_pods": self.max_pods,
             "pod_ttl": self.pod_ttl,
             "pod_concurrency": self.pod_concurrency,
+            "session_ttl": self.session_ttl,
         }

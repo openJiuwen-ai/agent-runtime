@@ -20,6 +20,27 @@ SERVICE_PREFIX = "/api/session"      # 唯一 App 的 prefix（端口 8091）
 
 logger = logging.getLogger("agent_runtime.config")
 
+_SA_NS_FILE = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+
+
+def own_namespace() -> str:
+    """default_namespace 解析链:POD_NAMESPACE env(显式覆盖/downward API)
+    > in-cluster SA namespace 文件(Pod 必挂,自身 ns,零部署配置)> "default"。
+
+    2026-09-17 cyz2 实录:镜像带"删 AGENT_RUNTIME_DEFAULT_NAMESPACE"新代码 +
+    旧部署模板无 POD_NAMESPACE 注入 → 空 ns 模板落字面 "default" → SA 越
+    ns 建 Pod 403;SA 文件兜底使存量部署零改动自愈(env 仍可显式覆盖)。
+    """
+    ns = (os.getenv("POD_NAMESPACE") or "").strip()
+    if ns:
+        return ns
+    try:
+        with open(_SA_NS_FILE, encoding="utf-8") as f:
+            ns = f.read().strip()
+    except OSError:
+        return "default"
+    return ns or "default"
+
 
 def _env_float(name: str, default: float) -> float:
     """float 型 env(评估 LLM 超时用;场景 F 快失败时随 scope_full_timeout
@@ -89,8 +110,8 @@ class AgentRuntimeConfig:
         return cls(
             mode=os.getenv("AGENT_RUNTIME_MODE", "server").strip().lower(),
             kubeconfig=os.getenv("AGENT_RUNTIME_KUBECONFIG") or None,
-            # 解析链:POD_NAMESPACE(downward API 注入的自身 ns)> "default"
-            default_namespace=(os.getenv("POD_NAMESPACE") or "default"),
+            # 解析链见 own_namespace():POD_NAMESPACE env > SA 文件 > "default"
+            default_namespace=own_namespace(),
             sweep_interval=_env_int("AGENT_RUNTIME_SWEEP_INTERVAL", 1),
             autoscale_interval=_env_int("AGENT_RUNTIME_AUTOSCALE_INTERVAL", 1),
             reclaim_interval=_env_int("AGENT_RUNTIME_RECLAIM_INTERVAL", 1),

@@ -1,5 +1,5 @@
 # coding: utf-8
-"""Resource Manager 的 6 个 Lua 脚本（所有编排态变更，原子）。
+"""Resource Manager 的 7 个 Lua 脚本（所有编排态变更，原子）。
 
 约定同 SM：``ARGV[1]`` 恒为键前缀（``{resource_manager}:``，hash tag 使 cluster
 下全键域同槽）；返回扁平字符串数组。
@@ -9,6 +9,7 @@
 - LUA_REGISTER  deploy 成功登记（info / scope:pods / pods:all，清占位；热备入 idle；
                 generation 服务端烙印注册时刻 scope 当前代次）
 - LUA_RELEASE   idle_consider：转 idle 暖池 + 起 pod_ttl 计时（幂等）
+- LUA_POP_IDLE  忙占用摘出 idle 暖池（follower 接管 leader 热备 Pod；幂等）
 - LUA_PURGE     Pod 死亡 / reclaim 后清全部 RM key（幂等）
 - LUA_DEPLOY_FOLLOWER_GATE  deploy 锁输家的等待室原子准入（ZSET+deadline，
   上限 pod_concurrency-1；先清过期成员再 ZADD 先行+超限自退——原子闸门
@@ -60,7 +61,14 @@ end
 -- 2. 无匹配暖 Pod：判 max_pods（含 deploying 占位，防并发超配）
 local total = redis.call('ZCARD', pfx .. 'resource:scope:' .. scope .. ':pods')
            + redis.call('ZCARD', dep_key)
-if total >= max_pods then
+-- 排空纪元活跃（sunset drain）→ 容量上限 +SURGE_MARGIN（暂写死 1，与
+-- sweeper.DRAIN_SURGE_MARGIN 对齐）：日落老 Pod 在 drain_until 前占槽不清，
+-- 无余量则新代补位 Pod 无处部署（2026-09-17 优雅排空配套头寸）
+local cap = max_pods
+if redis.call('EXISTS', pfx .. 'resource:scope:' .. scope .. ':drain_until') == 1 then
+  cap = cap + 1
+end
+if total >= cap then
   return {'max_reached', '', ''}
 end
 
@@ -86,7 +94,12 @@ local dep_key = pfx .. 'resource:scope:' .. scope .. ':deploying'
 redis.call('ZREMRANGEBYSCORE', dep_key, '-inf', now)
 local total = redis.call('ZCARD', pfx .. 'resource:scope:' .. scope .. ':pods')
            + redis.call('ZCARD', dep_key)
-if total >= max_pods then
+-- 排空纪元活跃 → 上限 +SURGE_MARGIN(1)，同 LUA_ACQUIRE（2026-09-17 优雅排空）
+local cap = max_pods
+if redis.call('EXISTS', pfx .. 'resource:scope:' .. scope .. ':drain_until') == 1 then
+  cap = cap + 1
+end
+if total >= cap then
   return {'max_reached'}
 end
 redis.call('ZADD', dep_key, deadline, token)
@@ -157,6 +170,22 @@ if redis.call('SADD', pfx .. 'resource:scope:' .. scope .. ':idle', pod) == 1 th
   redis.call('SET', pfx .. 'resource:pod:' .. pod .. ':idle_since', now)
 end
 return {'true'}
+"""
+
+# Argv: prefix, pod_id, scope_id
+LUA_POP_IDLE = r"""
+local pfx = ARGV[1]
+local pod = ARGV[2]
+local scope = ARGV[3]
+
+-- follower 接管 leader 新 Pod 的忙记账（与 LUA_ACQUIRE reuse 分支同款）：
+-- 摘出 idle 池 + 清 idle_since。幂等：非 idle 成员（请求驱动 leader 的
+-- idle_flag=False 注册 / 已被并发 acquire 弹出）两指令均为 no-op。不摘则
+-- autoscale 的 warm 底数把忙 Pod 数成热备，min_idle 永不重建（2026-09-17
+-- wangchang follower_reuse 泄漏实录：池卡 1 忙 Pod 无补位）。
+redis.call('SREM', pfx .. 'resource:scope:' .. scope .. ':idle', pod)
+redis.call('DEL', pfx .. 'resource:pod:' .. pod .. ':idle_since')
+return {'ok'}
 """
 
 # Argv: prefix, pod_id

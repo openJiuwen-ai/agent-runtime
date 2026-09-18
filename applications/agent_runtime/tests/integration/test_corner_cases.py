@@ -4,8 +4,9 @@
 基本功能路径已由 test_route_flow / test_rm_business / test_config_store 覆盖，
 本文件专测边界与异常分支：
 
-- SM 编排：参数校验、Pod 清洗后立即 route 的恢复、会话跨 scope 迁移（活跃绑定
-  回收）、SM/RM 瞬时漂移 → MaxPodsReached 映射
+- SM 编排：参数校验、Pod 清洗后立即 route 的恢复、会话跨 scope 亲和保持
+  （规则变化不迁移存量绑定，2026-09-scope-affinity-hold）、SM/RM 瞬时漂移
+  → MaxPodsReached 映射
   NO_POD_AVAILABLE、touch 缺 session_ttl 字段回退默认 TTL；
 - RM：acquire 幂等回放零重复部署、他副本持 deploy 锁时等待并复用其成果、
   reclaim 只回收 excess（保护最早 idle 的 min_idle 个）、autoscale 封顶
@@ -78,9 +79,13 @@ async def test_route_after_pod_death_cleanup_deploys_new(runtime):
 
 
 @requires_lua
-async def test_session_moving_scope_recycles_active_binding(runtime):
-    """同 session_id 路由到新 scope（活跃未过期）：旧 scope 绑定被就地回收
-    （LUA_ROUTE_PLACE 分支 3，scope 变化路径），新 scope 正常部署。"""
+async def test_session_moving_scope_keeps_active_binding(runtime):
+    """同 session_id 路由到新解析 scope（活跃未过期）：亲和保持——不迁移。
+
+    scope 亲和保持（2026-09-scope-affinity-hold，#152）：已有绑定 + Pod 存活
+    → 维持绑定 scope，不按重算 first-fit 即时迁移（对话连续性优先；重排对
+    存量会话零打扰）。迁移只发生在绑定失效（过期/Pod 消失）后的 rebind。
+    """
     await runtime.seed_template()                      # 通配兜底 scope → tpl-1
     # 追加一个按 group 命中的 scope(index 0 优先于兜底)
     from tests.conftest import split_sync_payload
@@ -99,18 +104,18 @@ async def test_session_moving_scope_recycles_active_binding(runtime):
 
     first = await runtime.route("sess_1", group_id="grp", request_id="req-move-1")
     second = await runtime.route("sess_1", group_id="ga",
-                                 request_id="req-move-2")   # 活跃绑定跨 scope 迁移
+                                 request_id="req-move-2")   # 解析变化 → 亲和保持
 
-    assert second["pod_id"] != first["pod_id"]
+    assert second["pod_id"] == first["pod_id"]
     assert await runtime.sm_state.redis.scard(
-        runtime.sm_state.k.scope_sessions(SCOPE)) == 0       # 旧 scope 已回收
+        runtime.sm_state.k.scope_sessions(SCOPE)) == 1       # 原 scope 保持占位
     assert await runtime.sm_state.redis.scard(
-        runtime.sm_state.k.scope_sessions(scope2)) == 1      # 新 scope 占位
+        runtime.sm_state.k.scope_sessions(scope2)) == 0      # 新 scope 未被触碰
     binding = await runtime.sm_state.redis.hgetall(
         runtime.sm_state.k.session("sess_1"))
-    pod_field = binding.get("pod_id") or binding.get(b"pod_id")
-    pod_field = pod_field.decode() if isinstance(pod_field, bytes) else pod_field
-    assert pod_field == second["pod_id"]
+    scope_field = binding.get("scope_id") or binding.get(b"scope_id")
+    scope_field = scope_field.decode() if isinstance(scope_field, bytes) else scope_field
+    assert scope_field == SCOPE
 
 
 @requires_lua
@@ -325,11 +330,32 @@ async def test_resolve_index_priority_first_fit_matrix(runtime):
 
 
 @requires_lua
-async def test_resolve_skips_disabled_template_and_falls_back(runtime):
-    """enabled=False 的模板视为未命中 → 落到下一个 index 的 scope。"""
+async def test_disabled_template_residual_treated_as_absent(runtime):
+    """残留防御(2026-09-drop-enabled-fields):enabled=false 模板视为缺席——
+
+    被 scope 引用 → 400「引用不在本批模板集」(强制发送方显式删除/改引用);
+    无引用 → 剔除 + WARNING,sync ok,其余模板照常生效。"""
     from tests.conftest import split_sync_payload
 
-    await runtime.config_store.config_sync(split_sync_payload(
+    # 被引用的禁用模板 → 400(parse 守卫直指问题,而非静默重开准入)
+    with pytest.raises(InvalidParams, match="references unknown template"):
+        await runtime.config_store.config_sync(split_sync_payload(
+            [
+                {"template_id": "tpl-off", "agent_image": "a:off",
+                 "namespace": "default", "enabled": False},
+                {"template_id": "tpl-ok", "agent_image": "a:ok",
+                 "namespace": "default"},
+            ],
+            [
+                {"scope_id": "s-off", "index": 0, "template_id": "tpl-off",
+                 "routing_rules": ""},
+                {"scope_id": "s-ok", "index": 100, "template_id": "tpl-ok",
+                 "routing_rules": ""},
+            ],
+        ))
+
+    # 无引用的禁用模板 → 剔除后 ok,Template 无该属性
+    result = await runtime.config_store.config_sync(split_sync_payload(
         [
             {"template_id": "tpl-off", "agent_image": "a:off",
              "namespace": "default", "enabled": False},
@@ -337,14 +363,14 @@ async def test_resolve_skips_disabled_template_and_falls_back(runtime):
              "namespace": "default"},
         ],
         [
-            {"scope_id": "s-off", "index": 0, "template_id": "tpl-off",
-             "routing_rules": ""},
             {"scope_id": "s-ok", "index": 100, "template_id": "tpl-ok",
              "routing_rules": ""},
         ],
     ))
+    assert result["ok"] is True
     scope_id, template = await runtime.config_store.resolve("u", "g", "b")
     assert (scope_id, template.template_id) == ("s-ok", "tpl-ok")
+    assert not hasattr(template, "enabled")
 
 
 @requires_lua

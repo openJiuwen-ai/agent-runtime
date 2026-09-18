@@ -64,7 +64,8 @@ drain)。必须每副本独立——选主 job 会漏非 leader 副本的缓冲�
 静态(输入 ScopeConfigView 集 + ServiceView):
 `S-CONTRADICTION-MIN-IDLE`(min_idle>max_pods,**critical**,config 层只查下界
 不拦)/`S-POD-BUDGET`(Σmin_idle>env 预算;0=关闭)/`S-CEIL-WASTE`(sc%pc≠0 尾 Pod
-浪费)/`S-DISABLED-TEMPLATE-REF`/`S-SCOPE-EXPIRY`(过期 info/临期 warn)/
+浪费)/`S-SCOPE-EXPIRY`(过期 info/临期 warn;`S-DISABLED-TEMPLATE-REF` 随
+两级 enabled 删除而移除,2026-09-drop-enabled-fields)/
 `S-RM-ORPHAN-CONFIG`(min_idle>0 幻影预热 warn;=0 残留 info)/
 `S-RM-MISSING-CONFIG`。(原 S-TIMEOUT-TTL-RATIO 随场景 F 快失败拆除的等待
 队列废弃——无 scope_full_timeout 概念)
@@ -119,9 +120,10 @@ thinking 块计入 reasoning);`stop_reason=="max_tokens"` 映射为 "length"。
 
 ## 可视化端点(service-core.md 端点表同步)
 
-- `/visualization/scopes`:行补 `phase/template_id/scope_enabled/expires_at/
+- `/visualization/scopes`:行补 `phase/template_id/expires_at/
   scope_concurrency/pod_concurrency/session_ttl/session_count`
-  (phase 分类:active/disabled/orphan_rm/missing_rm_cfg;清单 = RM 键 ∪ 快照)。
+  (phase 分类:active/disabled/orphan_rm/missing_rm_cfg;清单 = RM 键 ∪ 快照;
+  disabled = 过期或模板悬挂引用,enabled 已删 2026-09)。
 - `/visualization/scope`:`sm.capacity` 子对象(策略字段+派生 max_pods/
   session_utilization/route_budget_sec=ready_timeout+10)+顶层 phase
   (快失败后无 waiters/max_waiters 概念)。

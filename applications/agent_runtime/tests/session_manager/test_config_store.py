@@ -4,6 +4,7 @@ eager 预热推送 / A-B 类扩散 / 409 / 红线（场景 M）。"""
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -148,8 +149,13 @@ async def test_config_sync_full_replace_and_validation(runtime):
 
 
 @requires_lua
-async def test_config_sync_persists_scope_enabled_expires_and_skips_on_resolve(runtime):
-    """routing_scope.enabled / expires_at 落库;禁用与过期不参与 resolve。"""
+async def test_config_sync_scope_lifecycle_presence_and_expiry(runtime):
+    """生命周期 = 存在性 + expires_at(2026-09-drop-enabled-fields):
+
+    - enabled=false 的 scope 视为缺席(不落库,resolve 落下一个);
+    - 过期 scope 落库但不参与 resolve,推 min_idle=0 不预热;
+    - 生效 scope 正常全量推送。
+    """
     store = runtime.config_store
     now = datetime.now(timezone.utc)
     past = (now - timedelta(hours=1)).isoformat().replace("+00:00", "Z")
@@ -165,20 +171,21 @@ async def test_config_sync_persists_scope_enabled_expires_and_skips_on_resolve(r
         ],
     ))
     by_id = {s.scope_id: s for s in await store.list_scopes()}
-    assert by_id["s-off"].enabled is False
+    # enabled=false → 缺席:不落库
+    assert "s-off" not in by_id
     assert by_id["s-exp"].expires_at is not None
-    assert by_id["s-ok"].enabled is True and by_id["s-ok"].expires_at is not None
+    assert by_id["s-ok"].expires_at is not None
 
     scope_id, _ = await store.resolve("u-ok", "g", "b")
     assert scope_id == "s-ok"
     scope_id, _ = await store.resolve("other", "g", "b")
     assert scope_id == "fallback"
 
-    # 禁用/过期 scope 推 min_idle=0,不带 pod_spec(不预热)
+    # 过期 scope 推 min_idle=0,不带 pod_spec(不预热);生效 scope 带全量
     pushed = {sid: (pool, spec) for sid, pool, spec in runtime.pool_pushes}
-    assert pushed["s-off"][0]["min_idle_pods"] == 0
-    assert pushed["s-off"][1] is None
+    assert "s-off" not in pushed                       # 缺席 = 无推送面
     assert pushed["s-exp"][0]["min_idle_pods"] == 0
+    assert pushed["s-exp"][1] is None
     assert pushed["s-ok"][1] is not None
 
 
@@ -366,8 +373,178 @@ async def test_config_sync_scope_template_switch_sunsets(runtime):
         [_scope(SCOPE, "tpl-b")],
     ))
     assert await runtime.sm_state.scope_pod_ids(SCOPE) == []
-    _, template = await runtime.config_store.resolve("u", "grp", "bot")
-    assert template.template_id == "tpl-b"
+
+
+# -------------------------------------------------------------- 路由性排除日落(亲和保持,#152)
+
+@requires_lua
+async def test_config_sync_index_reorder_no_bump_no_migrate(runtime):
+    """index 重排(不排除命中)→ 不 bump 不日落,存量会话零打扰留原池。
+
+    路径 A(#152):vip(10)/team(20) 双命中身份旧会话落 vip;team.index 改 5
+    后新会话进 team,旧会话继续原 Pod。
+    """
+    await runtime.config_store.config_sync(_payload(
+        [_tpl("tpl-vip"), _tpl("tpl-team")],
+        [_scope("vip", "tpl-vip", index=10),
+         _scope("team", "tpl-team", index=20)],
+    ))
+    first = await runtime.route("sess_1")
+    runtime.gen_bumps.clear()
+
+    await runtime.config_store.config_sync(_payload(
+        [_tpl("tpl-vip"), _tpl("tpl-team")],
+        [_scope("vip", "tpl-vip", index=10),
+         _scope("team", "tpl-team", index=5)],
+    ))
+    # 重排不触发日落:vip/team 均无 bump、无排空纪元
+    assert runtime.gen_bumps == []
+    assert await runtime.rm_state.drain_until("vip") is None
+    assert await runtime.rm_state.drain_until("team") is None
+    # 旧会话亲和保持:同 Pod 同 scope;新会话(first-fit)进 team
+    again = await runtime.route("sess_1")
+    assert again["pod_id"] == first["pod_id"]
+    binding = await runtime.sm_state.redis.hgetall(
+        runtime.sm_state.k.session("sess_1"))
+    assert binding[b"scope_id"] == b"vip"
+    fresh = await runtime.route("sess_2")
+    binding2 = await runtime.sm_state.redis.hgetall(
+        runtime.sm_state.k.session("sess_2"))
+    assert binding2[b"scope_id"] == b"team"
+    assert fresh["pod_id"] != first["pod_id"]
+
+
+@requires_lua
+async def test_config_sync_routing_rules_change_bumps_with_drain(runtime):
+    """expr 变化(失权)→ bump gen + 软摘候选集 + 排空纪元生效(时序自证)。
+
+    drain_until 非空本身证明 bump 先于扩散① push——纪元戳记要求 push 时刻
+    gen lag 已形成;反序则永远不戳。
+    """
+    await runtime.seed_template()
+    await runtime.route("sess_1")
+    assert await runtime.sm_state.scope_pod_ids(SCOPE)
+    runtime.gen_bumps.clear()
+
+    await runtime.config_store.config_sync(_payload(
+        [_tpl("tpl-1")],
+        [_scope(SCOPE, "tpl-1", expr="user_id in ('someone-else')")],
+    ))
+    assert runtime.gen_bumps == [SCOPE]
+    # 老代 Pod 被软摘出候选集(新会话不再 first-fit 落上)
+    assert await runtime.sm_state.scope_pod_ids(SCOPE) == []
+    # 排空纪元已戳(bump→push 时序正确的唯一可观测证据)
+    assert await runtime.rm_state.drain_until(SCOPE) is not None
+    # 存量会话绑定仍在(窗口内继续原池)
+    assert await runtime.sm_state.redis.exists(
+        runtime.sm_state.k.session("sess_1"))
+    # 同载荷重放(幂等)不重复 bump,纪元仍活跃(首因定窗,不重戳)
+    runtime.gen_bumps.clear()
+    await runtime.config_store.config_sync(_payload(
+        [_tpl("tpl-1")],
+        [_scope(SCOPE, "tpl-1", expr="user_id in ('someone-else')")],
+    ))
+    assert runtime.gen_bumps == []
+    assert await runtime.rm_state.drain_until(SCOPE) is not None
+
+
+@requires_lua
+async def test_config_sync_disable_scope_bumps_with_drain(runtime):
+    """残留 enabled=false → 视为缺席 = 删除路径(2026-09-drop-enabled-fields):
+    bump + 排空纪元;新会话立即兜底。「禁用」的正确表达即从载荷删除。"""
+    await runtime.config_store.config_sync(_payload(
+        [_tpl("tpl-1"), _tpl("tpl-fb")],
+        [_scope(SCOPE, "tpl-1", index=0, expr="group_id in ('grp')"),
+         _scope("scope-fb", "tpl-fb", index=100)],
+    ))
+    old = await runtime.route("sess_1")
+    runtime.gen_bumps.clear()
+
+    await runtime.config_store.config_sync(_payload(
+        [_tpl("tpl-1"), _tpl("tpl-fb")],
+        [_scope(SCOPE, "tpl-1", index=0, expr="group_id in ('grp')",
+                enabled=False),
+         _scope("scope-fb", "tpl-fb", index=100)],
+    ))
+    assert runtime.gen_bumps == [SCOPE]
+    assert await runtime.rm_state.drain_until(SCOPE) is not None
+    # 禁用 scope 推 min_idle=0 停预热(无 pod_spec)
+    disable_pushes = [p for p in runtime.pool_pushes if p[0] == SCOPE]
+    assert disable_pushes and disable_pushes[-1][2] is None
+    assert int(disable_pushes[-1][1]["min_idle_pods"]) == 0
+    # 窗口内旧会话继续原 Pod;新会话落兜底
+    again = await runtime.route("sess_1")
+    assert again["pod_id"] == old["pod_id"]
+    fresh = await runtime.route("sess_2")
+    binding = await runtime.sm_state.redis.hgetall(
+        runtime.sm_state.k.session("sess_2"))
+    assert binding[b"scope_id"] == b"scope-fb"
+
+
+@requires_lua
+async def test_config_sync_expires_at_shortened_bumps_with_drain(runtime):
+    """expires_at 缩短到已过(生效→失效的唯一保留翻转)→ routing_excluded
+    仍触发:bump + 排空纪元 + 候选软摘(enabled 删除后的生命周期自证)。"""
+    now = datetime.now(timezone.utc)
+    future = (now + timedelta(days=1)).isoformat().replace("+00:00", "Z")
+    past = (now - timedelta(hours=1)).isoformat().replace("+00:00", "Z")
+    await runtime.config_store.config_sync(_payload(
+        [_tpl("tpl-1")],
+        [_scope(SCOPE, "tpl-1", index=0, expires_at=future)],
+    ))
+    await runtime.route("sess_1")
+    assert await runtime.sm_state.scope_pod_ids(SCOPE)
+    runtime.gen_bumps.clear()
+
+    await runtime.config_store.config_sync(_payload(
+        [_tpl("tpl-1")],
+        [_scope(SCOPE, "tpl-1", index=0, expires_at=past)],
+    ))
+    assert runtime.gen_bumps == [SCOPE]
+    assert await runtime.sm_state.scope_pod_ids(SCOPE) == []
+    assert await runtime.rm_state.drain_until(SCOPE) is not None
+
+
+@requires_lua
+async def test_config_sync_deleted_scope_bumps_once(runtime):
+    """删除 scope → bump + 推 min_idle=0(带 session_ttl);重放不重复 bump。"""
+    await runtime.config_store.config_sync(_payload(
+        [_tpl("tpl-1"), _tpl("tpl-keep")],
+        [_scope("s-drop", "tpl-1"), _scope("s-keep", "tpl-keep")],
+    ))
+    runtime.gen_bumps.clear()
+    await runtime.config_store.config_sync(_payload(
+        [_tpl("tpl-keep")],
+        [_scope("s-keep", "tpl-keep")],
+    ))
+    assert runtime.gen_bumps == ["s-drop"]
+    drop_pushes = [p for p in runtime.pool_pushes if p[0] == "s-drop"]
+    assert drop_pushes and drop_pushes[-1][2] is None
+    assert int(drop_pushes[-1][1]["min_idle_pods"]) == 0
+    assert "session_ttl" in drop_pushes[-1][1]
+
+    # 同载荷重放:rm_known 仍含 s-drop(每拍重推 min_idle=0),但不再 bump
+    runtime.gen_bumps.clear()
+    runtime.pool_pushes.clear()
+    await runtime.config_store.config_sync(_payload(
+        [_tpl("tpl-keep")],
+        [_scope("s-keep", "tpl-keep")],
+    ))
+    assert runtime.gen_bumps == []
+    assert any(p[0] == "s-drop" for p in runtime.pool_pushes)
+
+
+@requires_lua
+async def test_config_sync_b_class_params_no_bump(runtime):
+    """B 类纯池参数(session_ttl 等)→ 不 bump(scope/模板定义未动)。"""
+    await runtime.seed_template()
+    runtime.gen_bumps.clear()
+    await runtime.config_store.config_sync(_payload(
+        [_tpl("tpl-1", session_ttl=99, pod_ttl=120)],
+        [_scope(SCOPE, "tpl-1")],
+    ))
+    assert runtime.gen_bumps == []
+    assert await runtime.rm_state.drain_until(SCOPE) is None
 
 
 # -------------------------------------------------------------- 锁 / 409 / 红线
@@ -417,22 +594,29 @@ async def test_config_sync_a_class_passes_with_current_version_idle_pod(runtime)
     2026-09-15 cyz 实测病理:原判据比**新载荷**版本——版本变更时当前代空闲
     Pod 必然 ≠ 新版,被误判日落遗留;而它 ver==cfg 受 min_idle 底数保护永不
     回收,等它 = 配置面永久 409(暖 Pod idle 33min ≫ pod_ttl=180s 仍 409)。
-    修正后基准=当前生效版本 → 放行;老 Pod 落库后被扩散②软摘,reconcile
-    转入 idle 池,reclaim 免老化即刻回收(带会话硬切重放置,决策接受)。"""
-    await runtime.seed_template(min_idle_pods=1)
+    修正后基准=当前生效版本 → 放行;老 Pod 落库后被扩散②软摘,reclaim 在
+    排空窗口(A 类统一进排空,2026-09-17;session_ttl=1)截止后回收——
+    窗口内不收(带会话 Pod 优雅排空),过窗即收(零复用价值不蹲 pod_ttl)。"""
+    await runtime.seed_template(min_idle_pods=1, session_ttl=1)
     await runtime.route("sess_1")
     pod_id = (await runtime.sm_state.registered_pods())[0].split(":", 1)[1]
     # 合法中间态:软摘出候选集;版本保持当前值(对照上例,不伪造旧版本号)
     await runtime.sm_state.redis.zrem(runtime.sm_state.k.scope_pods(SCOPE), pod_id)
     result = await runtime.config_store.config_sync(_payload(
-        [_tpl("tpl-1", agent_image="agentserver:2.0")],
+        [_tpl("tpl-1", agent_image="agentserver:2.0", session_ttl=1)],
         [_scope(SCOPE, "tpl-1")],
     ))
     assert result["ok"] is True
-    # 落库后闭环:扩散②软摘(已在集外)+ reconcile 转 idle + reclaim 即刻回收
+    # 落库后闭环:扩散②软摘(已在集外)+ reconcile 转 idle
     await runtime.rm_sweeper.reconcile_once()
+    # 排空窗口内:不回收(优雅排空)
+    await runtime.rm_sweeper.reclaim_once()
+    assert pod_id in await runtime.rm_state.all_pod_ids()
+    # 过窗(session_ttl=1)→ 回收 + 纪元收尾释放 surge
+    await asyncio.sleep(1.2)
     await runtime.rm_sweeper.reclaim_once()
     assert pod_id not in await runtime.rm_state.all_pod_ids()
+    assert await runtime.rm_state.drain_until(SCOPE) is None
 
 
 @requires_lua
@@ -1072,7 +1256,6 @@ async def test_new_form_row_with_missing_container_skipped(runtime):
         "ready_timeout": 300, "ready_poll_interval": 2,
         "scope_concurrency": 3, "pod_concurrency": 2,
         "pod_ttl": 300, "session_ttl": 60, "min_idle_pods": 0,
-        "enabled": True,
         "main_container_id": "c-missing", "sidecar_container_ids": None,
         "volumes": None,
         "created_at": datetime.utcnow(), "updated_at": datetime.utcnow(),

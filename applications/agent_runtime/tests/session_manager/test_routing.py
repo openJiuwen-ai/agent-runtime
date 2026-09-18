@@ -31,13 +31,12 @@ def _tpl(template_id: str, **overrides) -> Template:
 
 
 def _scope(scope_id: str, index: int, template_id: str = "tpl",
-           expr: str = "", *, enabled: bool = True,
-           expires_at=None) -> RoutingScopeDef:
+           expr: str = "", *, expires_at=None) -> RoutingScopeDef:
     """expr → RoutingScopeDef(与生产构造路径一致:解析串并同时保存原串)。"""
     return RoutingScopeDef(
         scope_id=scope_id, index=index, template_id=template_id, expr=expr,
         rule=parse_routing_expr(expr) if expr.strip() else None,
-        enabled=enabled, expires_at=expires_at,
+        expires_at=expires_at,
     )
 
 
@@ -218,26 +217,20 @@ def test_match_scope_first_fit_by_index_then_scope_id():
     assert match_scope(snap2, "u1", "g", "b").scope_id == "a-tie"
 
 
-def test_match_scope_skips_disabled_and_missing_template():
-    """模板缺失/禁用的 scope 不命中,继续落下一个。"""
-    disabled = _scope("s-off", 0, "tpl-off")
+def test_match_scope_skips_missing_template():
+    """模板缺失(悬挂引用)的 scope 不命中,继续落下一个。"""
     missing = _scope("s-miss", 1, "tpl-none")
     fallback = _scope("s-ok", 2, "tpl-ok")
-    snap = build_snapshot(
-        [disabled, missing, fallback],
-        [_tpl("tpl-off", enabled=False), _tpl("tpl-ok")],
-        1,
-    )
+    snap = build_snapshot([missing, fallback], [_tpl("tpl-ok")], 1)
     hit = match_scope(snap, "u", "g", "b")
     assert hit is not None and hit.scope_id == "s-ok"
 
 
-def test_match_scope_skips_disabled_and_expired_scope():
-    """scope 自身 enabled=False / expires_at 已过期不命中,继续落下一个。"""
+def test_match_scope_skips_expired_scope():
+    """scope 自身 expires_at 已过期不命中,继续落下一个。"""
     from datetime import datetime, timedelta
 
     now = datetime(2026, 9, 1, 12, 0, 0)
-    disabled = _scope("s-off", 0, enabled=False)
     expired = _scope(
         "s-exp", 1, expires_at=now - timedelta(seconds=1),
     )
@@ -245,7 +238,7 @@ def test_match_scope_skips_disabled_and_expired_scope():
         "s-ok", 2, expires_at=now + timedelta(hours=1),
     )
     snap = build_snapshot(
-        [disabled, expired, future], [_tpl("tpl")], 1,
+        [expired, future], [_tpl("tpl")], 1,
     )
     hit = match_scope(snap, "u", "g", "b", now=now)
     assert hit is not None and hit.scope_id == "s-ok"
@@ -265,11 +258,17 @@ def test_match_scope_no_match_returns_none():
 
 
 def test_has_wildcard_ignores_inactive_scopes():
-    assert not has_wildcard_scope([_scope("fb", 0, enabled=False)])
+    from datetime import datetime, timedelta
+
+    now = datetime(2026, 9, 1, 12, 0, 0)
+    expired = _scope("fb", 0, expires_at=now - timedelta(seconds=1))
+    assert not has_wildcard_scope([expired])
     assert has_wildcard_scope([_scope("fb", 0)])
 
 
-def test_parse_scope_enabled_and_expires_at():
+def test_parse_scope_enabled_false_treated_as_absent():
+    """残留防御(2026-09-drop-enabled-fields):enabled=false → None(调用方
+    剔除);expires_at 正常解析。"""
     from datetime import datetime
 
     tids = {"tpl"}
@@ -284,17 +283,14 @@ def test_parse_scope_enabled_and_expires_at():
         },
         tids,
     )
-    assert scope.enabled is False
-    assert scope.expires_at == datetime(2026, 9, 1, 12, 0, 0)
-    assert scope.to_payload()["enabled"] is False
-    assert scope.to_payload()["expires_at"] == "2026-09-01T12:00:00"
-
-    with pytest.raises(InvalidParams, match="enabled"):
-        parse_scope(
-            {"scope_id": "s", "index": 0, "template_id": "tpl",
-             "enabled": "yes"},
-            tids,
-        )
+    assert scope is None
+    # 残留 enabled=true → 原样忽略
+    kept = parse_scope(
+        {"scope_id": "s", "index": 0, "template_id": "tpl",
+         "routing_rules": "", "enabled": True},
+        tids,
+    )
+    assert kept is not None and kept.to_payload()["expires_at"] is None
     with pytest.raises(InvalidParams, match="expires_at"):
         parse_scope(
             {"scope_id": "s", "index": 0, "template_id": "tpl",
@@ -303,23 +299,21 @@ def test_parse_scope_enabled_and_expires_at():
         )
 
 
-def test_snapshot_roundtrips_enabled_expires_at():
+def test_snapshot_roundtrips_expires_at():
     from datetime import datetime
 
     scope = _scope(
-        "s", 0, expires_at=datetime(2026, 9, 1, 12, 0, 0), enabled=True,
+        "s", 0, expires_at=datetime(2026, 9, 1, 12, 0, 0),
     )
     text = snapshot_to_json(build_snapshot([scope], [_tpl("tpl")], 7))
     restored = snapshot_from_json(text)
-    assert restored.scopes[0].enabled is True
     assert restored.scopes[0].expires_at == datetime(2026, 9, 1, 12, 0, 0)
-    # 旧快照无字段 → 默认生效
+    # 旧快照含 enabled 残键/无 expires_at → 忽略/默认生效
     legacy = snapshot_from_json(
         '{"ver":1,"templates":{"tpl":{"template_id":"tpl"}},'
         '"scopes":[{"scope_id":"fb","index":0,"template_id":"tpl",'
-        '"routing_rules":""}]}'
+        '"routing_rules":"","enabled":true}]}'
     )
-    assert legacy.scopes[0].enabled is True
     assert legacy.scopes[0].expires_at is None
 
 
@@ -398,11 +392,12 @@ def test_template_json_roundtrip():
              min_idle_pods=2, data={"k": "v"})
     restored = template_from_json(template_to_json(t))
     assert restored == t
-    # int/bool 矫正 + 未知键忽略
+    # int 矫正 + 未知键忽略(enabled 已删,残留键随未知键忽略)
     mixed = {**template_to_json(t), "ready_timeout": "90",
              "enabled": 0, "unknown_key": "x"}
     restored2 = template_from_json(mixed)
-    assert restored2.ready_timeout == 90 and restored2.enabled is False
+    assert restored2.ready_timeout == 90
+    assert not hasattr(restored2, "enabled")
 
 
 def test_template_from_json_rejects_legacy_flat_snapshot():

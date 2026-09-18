@@ -88,16 +88,20 @@ async def test_scope_inventory_no_snapshot_returns_empty_without_rebuild():
 
 
 async def test_scope_inventory_union_and_phases():
+    from datetime import datetime, timedelta
     redis = FakeRedis()
     collector = await _make_collector(redis)
-    tpl = Template(template_id="t1", enabled=True)
+    tpl = Template(template_id="t1")
     active = RoutingScopeDef(scope_id="s-active", index=0, template_id="t1",
                              expr="", rule=None)
-    disabled = RoutingScopeDef(scope_id="s-off", index=1, template_id="t1",
-                               expr="", rule=None, enabled=False)
+    # 过期 → disabled(enabled 已删,生命周期=存在性+expires_at)
+    disabled = RoutingScopeDef(
+        scope_id="s-off", index=1, template_id="t1", expr="", rule=None,
+        expires_at=datetime.utcnow() - timedelta(hours=1),
+    )
     await _seed_snapshot(redis, {"t1": tpl}, [active, disabled])
 
-    # s-active 推 RM config → active;s-off 在快照禁用 → disabled;
+    # s-active 推 RM config → active;s-off 在快照已过期 → disabled;
     # s-ghost 只在 RM(config_sync drain 收敛推过 min_idle=0)→ orphan
     await redis.hset(
         "{resource_manager}:resource:scope:s-active:config",

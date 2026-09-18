@@ -162,7 +162,8 @@ spec:
             # 空 kubeconfig → Pod 内走 in-cluster ServiceAccount
             - name: AGENT_RUNTIME_KUBECONFIG
               value: ""
-            # runtime 自身 ns（downward API）：模板 namespace 为空时 AgentServer 落同名 ns
+            # runtime 自身 ns（downward API）：模板 namespace 为空时 AgentServer
+            # 落同名 ns；代码另有 SA 文件兜底（config.own_namespace），注入仅为显式化
             - name: POD_NAMESPACE
               valueFrom:
                 fieldRef:

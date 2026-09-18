@@ -20,8 +20,8 @@ from agent_runtime.util import utc_now
 def make_view(**over) -> ScopeConfigView:
     """默认一个健康 active scope;测试覆写个别字段。"""
     base = dict(
-        scope_id="s1", template_id="t1", scope_enabled=True, expires_at=None,
-        template_enabled=True, scope_concurrency=3, pod_concurrency=2,
+        scope_id="s1", template_id="t1", expires_at=None,
+        scope_concurrency=3, pod_concurrency=2,
         session_ttl=60, pod_ttl=300, min_idle_pods=1, max_pods=2,
         phase="active", rm_min_idle=1,
     )
@@ -74,11 +74,14 @@ def test_static_pod_budget_over():
     assert "sum_min_idle=25" in f.evidence
 
 
-def test_static_disabled_template_reference():
+def test_static_disabled_phase_no_template_finding():
+    """enabled 已删(2026-09-drop-enabled-fields):disabled 相只报 expires_at
+    临期/过期,模板禁用 finding(S-DISABLED-TEMPLATE-REF)随字段消失。"""
     findings = static_rules(
-        [make_view(template_enabled=False, phase="disabled")],
+        [make_view(phase="disabled")],
         ServiceView())
-    assert "S-DISABLED-TEMPLATE-REF" in ids(findings)
+    assert "S-DISABLED-TEMPLATE-REF" not in ids(findings)
+    assert "S-SCOPE-EXPIRY" not in ids(findings)   # expires_at=None 无告警
 
 
 def test_static_scope_expiry_soon_and_past():
@@ -99,15 +102,13 @@ def test_static_scope_expiry_soon_and_past():
 
 def test_static_orphan_phantom_warmup():
     findings = static_rules(
-        [make_view(phase="orphan_rm", rm_min_idle=2, scope_enabled=False,
-                   template_enabled=False)],
+        [make_view(phase="orphan_rm", rm_min_idle=2)],
         ServiceView())
     f = next(x for x in findings if x.id == "S-RM-ORPHAN-CONFIG")
     assert f.severity == "warn"
     # min_idle=0 → info 残留
     findings = static_rules(
-        [make_view(phase="orphan_rm", rm_min_idle=0, scope_enabled=False,
-                   template_enabled=False)],
+        [make_view(phase="orphan_rm", rm_min_idle=0)],
         ServiceView())
     f = next(x for x in findings if x.id == "S-RM-ORPHAN-CONFIG")
     assert f.severity == "info"

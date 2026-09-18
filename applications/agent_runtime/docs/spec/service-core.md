@@ -133,7 +133,7 @@ SM 侧 ctx,级联管理全部生命周期(框架 App 的 lifespan 只认一个 c
 |---|---|---|---|
 | mode | `AGENT_RUNTIME_MODE` | server | server\|local |
 | kubeconfig | `AGENT_RUNTIME_KUBECONFIG` | None(集群内 SA) | |
-| default_namespace | `POD_NAMESPACE` | default | downward API 注入的自身 ns(deploy 模板已注入);未注入/非 K8s 落字面 default。模板 namespace 为空串时 AgentServer 的落点(k8s 层 falsy 兜底) |
+| default_namespace | `POD_NAMESPACE` | default | 解析链(`config.own_namespace()`):`POD_NAMESPACE` env(显式覆盖/downward API)> in-cluster SA namespace 文件(Pod 必挂,**零部署配置**)> 字面 default。模板 namespace 为空串时 AgentServer 的落点(k8s 层 falsy 兜底);`AGENT_RUNTIME_DEFAULT_NAMESPACE` 已删,设了也忽略 |
 | sweep_interval | `AGENT_RUNTIME_SWEEP_INTERVAL` | 1 | SM:到期+空 Pod pass |
 | autoscale_interval | `AGENT_RUNTIME_AUTOSCALE_INTERVAL` | 1 | RM:min_idle 补位(**全局默认,无 per-scope 覆盖**) |
 | reclaim_interval | `AGENT_RUNTIME_RECLAIM_INTERVAL` | 1 | RM:idle 回收 |
