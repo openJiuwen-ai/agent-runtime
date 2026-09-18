@@ -32,16 +32,25 @@
 - visualization:`_scope` phase 收敛(过期 + 模板悬挂 → disabled);`template_enabled`/`scope_enabled` 键删。
 - evaluation:`S-DISABLED-TEMPLATE-REF` finding 随触发条件消失;`ScopeConfigView` 删两字段;`PHASE_DISABLED` 注释更新。
 
-## DB 迁移(先发版后 DROP;与 message_timeout 列 DROP 同批执行时一并提醒)
+## DB 迁移(2026-09-18 e2e 门禁实测修正:DEFAULT 补齐是发版**前置**,非可选)
 
-发版前**数据前置检查**(非空须先人工处置——删模板并处理引用/接受重开准入,否则升级后按启用处理):
+**发版前置 ALTER(必须)**:存量 `enabled` 列 NOT NULL——`service_config_template` 的该列当年补列时**漏带 DEFAULT**(e2e PG 实测:新代码 INSERT 不再写该列 → NotNullViolation → config_sync 500 全链雪崩)。发版前对所有存量库执行:
+
+```sql
+ALTER TABLE service_config_template ALTER COLUMN enabled SET DEFAULT TRUE;  -- 缺 DEFAULT 的库,必须
+ALTER TABLE routing_scope          ALTER COLUMN enabled SET DEFAULT TRUE;  -- 防御(多数库已有)
+```
+
+SET DEFAULT 而非立即 DROP:保持旧镜像回滚兼容(旧代码显式读写该列)。e2e PG(30025/agent_runtime)已于 2026-09-18 执行;**联调 MySQL(runtime_wmq)发版时同查同补**——MySQL 语法 `ALTER TABLE service_config_template MODIFY enabled BOOLEAN NOT NULL DEFAULT TRUE;`。
+
+数据前置检查(非空须先人工处置——删模板并处理引用/接受重开准入,否则升级后按启用处理):
 
 ```sql
 SELECT template_id FROM service_config_template WHERE enabled = false;
 SELECT scope_id    FROM routing_scope     WHERE enabled = false;
 ```
 
-发版后 DROP(框架不 DROP):
+发版稳定后 DROP(框架不 DROP;与 message_timeout 列 DROP 同批执行时一并提醒):
 
 ```sql
 ALTER TABLE service_config_template DROP COLUMN enabled;   -- MySQL 无 IF EXISTS,重跑报 1091 忽略
@@ -53,6 +62,7 @@ ALTER TABLE routing_scope DROP COLUMN enabled;             -- PostgreSQL: DROP C
 ## 验证
 
 - 全量 555 passed / 9 skipped(基线 554 + 残留回归净增);
+- **真环境门禁(2026-09-18,镜像 agent-runtime:drainhold-20260918a,含本篇+排空窗口+亲和保持三提交)**:integration_smoke 真镜像三件套(agentserver 0.0.14s + sandbox 0.0.27s,双容器+全量挂载)**127/127**;多副本 e2e(3 副本 LB+failover)**32/32**。首跑 42/76 暴露上述 DEFAULT 缺口,补 ALTER 后全绿;
 - 用例改写:test_routing(match_scope 拆「模板缺失」「过期」两例 + parse 剔除哨兵 + 快照旧键容忍)、test_config_store(scope 生命周期用例改「缺席/过期」口径 + expires_at 翻转自证 + DB 直插行删键)、test_corner_cases(禁用模板用例改为「被引用 → 400 / 无引用 → 剔除 ok」)、test_scope_affinity_hold H2 与 disable 用例自动走删除路径(断言零改动,docstring 更新)、evaluation 测试(make_view 字段收敛 + disabled finding 用例反转);
 - 集群校验免跑:不动键名/Lua/选主(快照 JSON 字段属 STRING 值域,与槽位无关);
 - e2e 冒烟随发版门禁(与 #151/#152/#153 同批)。
