@@ -82,15 +82,16 @@
 
 Claw Manager **全量配置下发**(场景 M):一次请求同时携带 `containers` / `templates` / `scopes` 三个列表,**快照式全量替换**——upsert 本批全部条目 + 删除 DB 中已消失的条目(容器以本批为集 GC)。旧 `kind/op` 增量协议与无 `containers` 键的 legacy 内联载荷均 400 拒绝(三段式契约独占)。
 
-处理编排(全程持 `lock:config_sync` 串行化,忙 → 409):锁外校验(确定性 400、零副作用)→ 日落中间态检查 → **单事务写 DB**(全有或全无)→ 重建路由快照(原子 SET,`route` 匹配立即用新配置)→ 逐 scope 推 RM 池参数 + pod_spec(**eager 预热**:autoscale 下一拍即预热 `min_idle_pods`,从未被请求过的 scope 也生效)→ A 类软摘除老版本 Pod(不再接新会话,存量会话不受影响)→ 被删/禁用 scope 推 `min_idle=0` 自然排空。
+处理编排(全程持 `lock:config_sync` 串行化,忙 → 409):锁外校验(确定性 400、零副作用)→ 日落中间态检查 → **单事务写 DB**(全有或全无)→ 重建路由快照(原子 SET,`route` 匹配立即用新配置)→ 逐 scope 推 RM 池参数 + pod_spec(**eager 预热**:autoscale 下一拍即预热 `min_idle_pods`,从未被请求过的 scope 也生效)→ A 类软摘除老版本 Pod(不再接新会话,存量会话在**排空窗口**内继续原 Pod,窗口 = 下发时刻 + `session_ttl`)→ 被删/过期 scope 推 `min_idle=0` 并日落排空。
 
 变更分类(服务端逐字段 diff 自动判定,无需调用方声明):
 
 | 类别 | 触发 | 生效方式 |
 |---|---|---|
-| **A 类**(deploy 字段变更) | 镜像/端口/env/挂载/sidecar 等容器规格变化(`deploy_ver` 指纹不等) | 老 Pod 软摘除退出候选集,按新规格重建;存量会话自然跑完 |
+| **A 类**(deploy 字段变更) | 镜像/端口/env/挂载/sidecar 等容器规格变化(`deploy_ver` 指纹不等) | 老 Pod 软摘除退出候选集,按新规格重建;存量会话排空窗口(下发 + `session_ttl`)内继续原 Pod,过窗回收 |
 | **B 类**(策略字段变更) | `scope_concurrency`/`pod_concurrency`/`session_ttl`/`pod_ttl`/`min_idle_pods` | 快照覆盖 + RM 池参数重推,**立即生效**,不动存量 Pod |
-| **删除** | 本批载荷未携带的模板/scope/容器 | DB 删行;被删 scope 停预热自然排空,存量会话到期止 |
+| **路由性排除** | scope 的 `routing_rules` 变化 / `expires_at` 缩短到已过 | 同款日落排空:新会话立即走新规则,存量会话窗口内保持原池 |
+| **删除** | 本批载荷未携带的模板/scope/容器 | DB 删行;被删 scope 停保温 + 日落排空(**「禁用」= 删除**,两级 `enabled` 字段已删) |
 
 幂等性:同载荷重放收敛(`affected_scopes` 为空数组)。
 
@@ -147,7 +148,8 @@ Envelope 外层见 §0.2;`rawdata` 为三段式配置快照:
 | `session_ttl` | int(秒) | 否 | 60 | 会话保活超时(下界 1) |
 | `pod_ttl` | int(秒) | 否 | 300 | idle Pod 至 reclaim 的等待(下界 1) |
 | `min_idle_pods` | int | 否 | 0 | 该 scope 最少热备 Pod 数(≥0) |
-| `enabled` | bool | 否 | true | 模板禁用则路由不解析、不预热 |
+
+> `enabled` 字段已删(2026-09):模板生命周期 = 存在性,「禁用模板」= 从载荷删除(引用它的 scope 必须同批删除/改引用,否则 400)。残留 `enabled:false` 键 → 该模板视为缺席(被引用 → 400);`enabled:true` 残留静默忽略。
 | `data` | object | 否 | `{}` | 透传扩展字段 |
 
 > 模板级 K8s 派生字段用 K8s 拼写(`nodeName`),snake 双形态并存 → 400(防静默二义)。
@@ -160,8 +162,9 @@ Envelope 外层见 §0.2;`rawdata` 为三段式配置快照:
 | `index` | int | 是 | — | 匹配序号;请求按 `(index 升序, scope_id 升序)` **first-fit** 首个命中即止(bool 拒绝) |
 | `template_id` | str | 是 | — | 引用模板,**必须在本批模板列表内**;多个 scope 可引用同一模板 |
 | `routing_rules` | str | 否 | `""` | 布尔表达式字符串;**null/空串/纯空白 = 通配兜底 scope**(命中一切);语法见下 |
-| `enabled` | bool | 否 | true | 禁用则不参与路由匹配与 eager 预热(仍落库/进快照) |
-| `expires_at` | str? | 否 | `null` | 可选过期时间(ISO-8601);到点后视为不生效;`null` = 永不过期 |
+| `expires_at` | str? | 否 | `null` | 可选过期时间(ISO-8601);到点后视为不生效;`null` = 永不过期。**生命周期唯一状态字段**(`enabled` 已删,「禁用」= 从载荷删除) |
+
+> 残留 `enabled:false` 的 scope → 视为缺席剔除 + WARNING(等价于删除该 scope,服务端日落排空);`enabled:true` 残留静默忽略。
 
 `routing_rules` 表达式语法:
 
@@ -483,17 +486,35 @@ JSON
 
 每 scope 三步(顺序红线:bump 先于摘除,任何中途失败形态都收敛于"老 Pod 暂时继续接新流量",重试即收敛):
 
-1. **代次 +1**(`generation` HINCRBY 唯一写点)——老代 Pod 即刻退出候选集,**不接新会话**;存量会话亲和不受影响,自然跑完;
-2. 重推池参数 + pod_spec(值未变,确保 RM 缓存/预热就绪);
-3. 候选集全量软摘除——reclaim 按 `pod_ttl` 回收老代空 Pod,autoscale 按缓存的 pod_spec(即存量配置)重建。
+1. **代次 +1**(`generation` HINCRBY 唯一写点)——老代 Pod 即刻退出候选集,**不接新会话**;存量会话在排空窗口内继续原 Pod 服务(亲和不受影响),见 §2.2;
+2. 重推池参数 + pod_spec(值未变,确保 RM 缓存/预热就绪;过期 scope 只日落不保温,min_idle=0);
+3. 候选集全量软摘除——老代 Pod 保留至**排空截止 = 刷新时刻 + `session_ttl`**(优雅排空窗口)后回收,autoscale 按缓存的 pod_spec(即存量配置)重建新代暖 Pod。
 
 与 `config_sync` 共用串行化锁:上一次操作未完成 → 409 `CONFIG_SYNC_BUSY`。非幂等但收敛:每次调用 = 一轮全量日落重建,**成功后勿自动重试**。
 
-### 2.2 入参
+### 2.2 代价与操作建议(务必低峰期执行)
+
+本端点是配置平面中**影响面最大的操作**——一次调用对**全部 scope 的全部 Pod**(含从未被请求的 `min_idle` 暖 Pod)做整体换代,代价如下,建议在业务低峰期执行:
+
+| 代价 | 说明 |
+|---|---|
+| **全量冷启动** | 每个 scope 的 Pod 池整体重建,重建完成前新会话承担全额冷启动等待(真镜像实测 p50≈12s,max≈16s/Pod) |
+| **瞬时容量上浮** | 排空纪元期间每个 scope 的容量上限临时 `max_pods+1`(surge 余量,给补位 Pod 让槽),瞬时物理 Pod 数可达 Σ(max_pods+1);排空收尾自动回落 |
+| **存量会话有界保留,过窗硬切** | 老代 Pod 保留至 刷新时刻 + `session_ttl`;窗口内存量会话**不打断**、继续原 Pod 原配置;**窗口截止仍未结束的活跃会话将被硬切重放置**——上下文不迁移、重放置再付一次全额冷启动 |
+| **配置面阻塞** | 排空窗口内再触发 `config_sync`/`config_refresh` 均可能 409 `CONFIG_SYNC_BUSY`,等待窗从"约一拍对账"拉长为 **≤ `session_ttl` + tick**——期间无法下发任何配置变更 |
+
+操作建议:
+
+1. **业务低峰期执行**,避开活跃会话高峰(排空窗口与 `session_ttl` 同量级,活跃会话越多、过窗硬切面越大);
+2. 配置变更**优先走 `config_sync`**(A/B 类按需日落,影响面只限受影响模板引用的 scope);`config_refresh` 仅用于漂移自愈、同 tag 镜像强拉、运行时异常兜底重建;
+3. **攒批一次执行、勿连续刷新**——多代日落会叠加占位,延长闸门阻塞窗;
+4. 执行后经 `GET /visualization/scopes` 确认各 scope 收敛(`phase=active`、`generation` 已更新、Pod 数回落 `max_pods`)再进行其他操作。
+
+### 2.3 入参
 
 Envelope 外层见 §0.2;**`rawdata` 必须为空对象 `{}`**(非空 → 400 `VALIDATION`)。
 
-### 2.3 返回值(`rawdata`)
+### 2.4 返回值(`rawdata`)
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
@@ -502,7 +523,7 @@ Envelope 外层见 §0.2;**`rawdata` 必须为空对象 `{}`**(非空 → 400 `V
 | `pods_sunset` | int | 被软摘除的 Pod 总数(仅统计 SM 候选集内成员;从未被 route 过的 RM 暖 Pod 不计数,但同样被代次日落) |
 | `generations` | object | `{scope_id: 新代次号}` 逐 scope 返回(bump 后的 `generation` 值,单调递增) |
 
-### 2.4 curl 示例
+### 2.5 curl 示例
 
 ```bash
 curl -s -X POST "http://127.0.0.1:8091/api/session/config_refresh" \
@@ -519,7 +540,7 @@ curl -s -X POST "http://127.0.0.1:8091/api/session/config_refresh" \
   }'
 ```
 
-### 2.5 返回值示例
+### 2.6 返回值示例
 
 成功(2 个 scope、1 个在候选集的 Pod 被日落,两 scope 代次均升到 1):
 
@@ -679,15 +700,13 @@ curl -s "http://127.0.0.1:8091/visualization/overview"
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `scope_id` | str | scope 标识 |
-| `phase` | str | 生效分类:`active`(正常)/ `disabled`(scope 禁用/过期或模板禁用/缺失)/ `missing_rm_cfg`(快照生效但 RM 无 config 键)/ `orphan_rm`(RM 有键但不在快照) |
+| `phase` | str | 生效分类:`active`(正常)/ `disabled`(scope 过期或引用模板悬挂)/ `missing_rm_cfg`(快照生效但 RM 无 config 键)/ `orphan_rm`(RM 有键但不在快照) |
 | `template_id` | str? | 引用模板 |
-| `scope_enabled` | bool? | scope 自身 enabled |
 | `expires_at` | str? | 过期时间(ISO-8601) |
 | `pods` / `idle` / `deploying` | int | Pod 总数 / 空闲数 / 部署中数 |
-| `session_count` / `waiters` | int | 活跃会话数 / 等待队列长度 |
+| `session_count` | int | 活跃会话数 |
 | `max_pods` / `min_idle_pods` | int | Pod 上限(派生 ⌈sc/pc⌉)/ 最小热备 |
 | `scope_concurrency` / `pod_concurrency` / `session_ttl` | int? | 模板策略字段(模板缺失时为 `null`) |
-| `max_waiters` | int? | 等待队列上限(2 × scope_concurrency) |
 
 **curl 与返回示例**:
 
@@ -702,37 +721,31 @@ curl -s "http://127.0.0.1:8091/visualization/scopes?limit=100"
       "scope_id": "scope-default",
       "phase": "active",
       "template_id": "tpl-standard",
-      "scope_enabled": true,
       "expires_at": null,
       "pods": 1,
       "idle": 0,
       "deploying": 0,
       "session_count": 1,
-      "waiters": 0,
       "max_pods": 3,
       "min_idle_pods": 1,
       "scope_concurrency": 6,
       "pod_concurrency": 2,
-      "session_ttl": 120,
-      "max_waiters": 12
+      "session_ttl": 120
     },
     {
       "scope_id": "scope-vip",
       "phase": "active",
       "template_id": "tpl-vip",
-      "scope_enabled": true,
       "expires_at": null,
       "pods": 0,
       "idle": 0,
       "deploying": 0,
       "session_count": 0,
-      "waiters": 0,
       "max_pods": 2,
       "min_idle_pods": 0,
       "scope_concurrency": 3,
       "pod_concurrency": 2,
-      "session_ttl": 300,
-      "max_waiters": 6
+      "session_ttl": 300
     }
   ],
   "total": 2,
@@ -776,9 +789,9 @@ curl -s "http://127.0.0.1:8091/visualization/scopes?limit=100"
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `sm.waiters` / `session_count` / `candidate_pods` | int/int/list | 等待队列 / 活跃会话 / 候选集 Pod id |
-| `sm.capacity` | object? | 生效容量闸门(快照无此 scope 的孤儿为 `null`):`template_id`、`template_enabled`、`scope_enabled`、`expires_at`、`scope_concurrency`、`pod_concurrency`、`session_ttl`、`pod_ttl`、`min_idle_pods`、`max_pods`、`max_waiters`(2×sc)、`session_utilization`/`waiter_utilization`(0–1)、`route_budget_sec`(= `scope_full_timeout + ready_timeout + 10`) |
-| `sm.routing` | object? | 快照内路由定义:`scope_id`、`index`、`template_id`、`routing_rules`、`enabled`、`expires_at`(不在快照为 `null`) |
+| `sm.session_count` / `candidate_pods` | int/list | 活跃会话数 / 候选集 Pod id |
+| `sm.capacity` | object? | 生效容量闸门(快照无此 scope 的孤儿为 `null`):`template_id`、`expires_at`、`scope_concurrency`、`pod_concurrency`、`session_ttl`、`pod_ttl`、`min_idle_pods`、`max_pods`(派生 ⌈sc/pc⌉)、`session_utilization`(0–1)、`route_budget_sec`(= `ready_timeout + 10`) |
+| `sm.routing` | object? | 快照内路由定义:`scope_id`、`index`、`template_id`、`routing_rules`、`expires_at`、`data`(不在快照为 `null`) |
 
 **curl 与返回示例**:
 
@@ -825,13 +838,10 @@ curl -s "http://127.0.0.1:8091/visualization/scope?scope_id=scope-default&limit=
     "truncated": false
   },
   "sm": {
-    "waiters": 0,
     "session_count": 1,
     "candidate_pods": [],
     "capacity": {
       "template_id": "tpl-standard",
-      "template_enabled": true,
-      "scope_enabled": true,
       "expires_at": null,
       "scope_concurrency": 6,
       "pod_concurrency": 2,
@@ -839,9 +849,7 @@ curl -s "http://127.0.0.1:8091/visualization/scope?scope_id=scope-default&limit=
       "pod_ttl": 600,
       "min_idle_pods": 1,
       "max_pods": 3,
-      "max_waiters": 12,
       "session_utilization": 0.167,
-      "waiter_utilization": 0.0,
       "route_budget_sec": 340.0
     },
     "routing": {
@@ -907,7 +915,6 @@ curl -s "http://127.0.0.1:8091/visualization/session?session_id=sess-7f3a2b"
   "ttl_remaining_s": 119.9,
   "scope": {
     "scope_id": "scope-default",
-    "waiters": 0,
     "session_count": 1,
     "candidate_pods": []
   },
