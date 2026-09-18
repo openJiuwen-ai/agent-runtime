@@ -441,7 +441,7 @@ loop:
         register_pod(scope_id, acquired.pod_id, acquired.pod_sse_url, deploy_ver)
         # register_pod = ZADD scope:pods(pod_seq) + HSET pod:info{sse_url, deploy_ver} + SADD pods:{pod_id}:scopes + SADD pods:registered + DEL idle_notified
         # deploy_ver = 本次 acquire 所用 deploy 子集的 hash 指纹,注册时记入 pod:info;config_sync A 类变更据此判定日落(§4.3)。
-        continue                                                      # 重跑 ROUTE_PLACE(新 Pod 必被 first-fit 选中)
+        continue                                                      # 重跑 ROUTE_PLACE 原子争抢空位；acquire 不预留会话槽位
 ```
 **快失败语义**(2026-09 起):`scope_full` 时 Lua 闸门即唯一仲裁,被拒者毫秒级 503 返回——无等待队列、无 pubsub 订阅、拒绝路径零 Redis 写入。历史的有界等待(pubsub 唤醒 + 安全轮询双保险)已整体拆除,见 docs/feature/2026-09-scope-full-fastfail.md。
 
