@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from openjiuwen_runtime.foundation.db.handler import DBHandler
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from manager_server.core.application_config.task_memory_config import (TaskMemoryConfigService,
                                                                            TaskMemoryUpsertParams)
@@ -22,6 +22,7 @@ from manager_server.schemas.application_config_schemas import (
 
 from manager_server.core.application_config.logging_config import LoggingConfigService
 from manager_server.core.application_config.memory_config import MemoryConfigService
+from manager_server.core.application_config.audit_log_config import AuditLogConfigService
 
 from manager_server.infrastructure.db import get_db_handler
 from manager_server.schemas.common_schemas import ResponseModel
@@ -43,6 +44,10 @@ def _logging_config_svc(handler: DBHandler) -> LoggingConfigService:
 
 def _memory_config_svc(handler: DBHandler) -> MemoryConfigService:
     return MemoryConfigService(handler)
+
+
+def _audit_log_config_svc(handler: DBHandler) -> AuditLogConfigService:
+    return AuditLogConfigService(handler)
 
 
 @application_config_router.get(
@@ -320,6 +325,67 @@ async def delete_memory_config(
     handler: Annotated[DBHandler, Depends(get_db_handler)],
 ):
     svc = _memory_config_svc(handler)
+    try:
+        await svc.delete(jiuwenclaw_id=jiuwenclaw_id)
+    except ValueError as exc:
+        if "not found" in str(exc):
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ResponseModel(code=200, message="success")
+
+
+class AuditLogUpsertRequest(BaseModel):
+    """§5.2 payload 作请求根对象；service 不接收（进程本地项）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    format: dict[str, Any] = Field(..., description="字段清单 format")
+    otel: dict[str, Any] | None = Field(default=None)
+    ntp: dict[str, Any] | None = Field(default=None)
+    data_center: str | None = Field(default=None, max_length=32)
+    system_code: str | None = Field(default=None, max_length=64)
+    node: str | None = Field(default=None, max_length=128)
+
+
+@application_config_router.put(
+    "/{jiuwenclaw_id}/audit-log", response_model=ResponseModel
+)
+async def upsert_audit_log_config(
+    jiuwenclaw_id: str,
+    body: AuditLogUpsertRequest,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    svc = _audit_log_config_svc(handler)
+    payload = body.model_dump(exclude_unset=True)
+    try:
+        data = await svc.upsert(jiuwenclaw_id=jiuwenclaw_id, payload=payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ResponseModel(code=200, message="success", data=data)
+
+
+@application_config_router.get(
+    "/{jiuwenclaw_id}/audit-log", response_model=ResponseModel
+)
+async def get_audit_log_config(
+    jiuwenclaw_id: str,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    svc = _audit_log_config_svc(handler)
+    data = await svc.get(jiuwenclaw_id=jiuwenclaw_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="audit log config not found")
+    return ResponseModel(code=200, message="success", data=data)
+
+
+@application_config_router.delete(
+    "/{jiuwenclaw_id}/audit-log", response_model=ResponseModel
+)
+async def delete_audit_log_config(
+    jiuwenclaw_id: str,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    svc = _audit_log_config_svc(handler)
     try:
         await svc.delete(jiuwenclaw_id=jiuwenclaw_id)
     except ValueError as exc:

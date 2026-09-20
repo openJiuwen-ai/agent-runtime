@@ -32,6 +32,72 @@
     "tabs": {
       "auditLog": "Audit Log"
     },
-    "placeholderHint": "Content of this tab is to be determined."
+    "placeholderHint": "Content of this tab is to be determined.",
+    "audit": {
+      "filterTitle": "Filters",
+      "allResults": "All",
+      "ua": "Normal (UA)",
+      "evt": "Abnormal (EVT)",
+      "copyJson": "Copy attributes JSON",
+      "copied": "Copied",
+      "copyFailed": "Copy failed — select manually",
+      "showNoise": "Show OTel noise labels",
+      "col": {
+        "time": "Time",
+        "summary": "Summary",
+        "user": "User",
+        "trace": "Trace"
+      },
+      "sections": {
+        "summary": "Summary",
+        "header": "Header fields",
+        "content": "Content fields",
+        "bridge": "Context",
+        "extension": "Extensions"
+      },
+      "fields": {
+        "event_type": "Event type",
+        "audit_type": "Audit type",
+        "schema_version": "Schema version",
+        "timestamp": "Timestamp",
+        "level": "Level",
+        "data_center": "Data center",
+        "system_code": "System code",
+        "node": "Node",
+        "trace_id": "Trace ID",
+        "txn_seq": "Txn seq",
+        "pid": "PID",
+        "tid": "TID",
+        "caller": "Caller",
+        "UID": "UID",
+        "CUSTID": "CUSTID",
+        "SRCIP": "Source IP",
+        "DSTIP": "Dest IP",
+        "COST": "Cost (ms)",
+        "UA": "UA text",
+        "EVT": "EVT text",
+        "MSG": "Message",
+        "RSPCD": "Response code",
+        "SUBMDL": "Submodule",
+        "PROC": "Procedure",
+        "SVRNAM": "Service name",
+        "ACTION": "Action",
+        "SANDBOXID": "Sandbox ID",
+        "RESULT": "Result",
+        "service_name": "Service",
+        "submdl": "Submodule (bridge)",
+        "proc": "Procedure (bridge)",
+        "outcome": "Outcome",
+        "phase": "Phase",
+        "session_id": "Session ID",
+        "request_id": "Request ID",
+        "user_id": "User ID",
+        "bot_id": "Bot ID",
+        "group_id": "Group ID",
+        "channel_id": "Channel ID",
+        "agent_pod": "Agent Pod",
+        "agent_name": "Agent name"
+      }
+    }
   }
 }

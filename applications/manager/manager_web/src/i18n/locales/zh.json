@@ -304,6 +304,7 @@
     "tabs": {
       "logMasking": "日志脱敏",
       "logging": "日志级别",
+      "auditLog": "审计日志",
       "permissions": "权限配置"
     },
     "logMasking": {
@@ -344,6 +345,38 @@
       "agentServer": "AgentServer 日志 (agent_server)",
       "full": "汇总日志 (full)",
       "fullHint": "full.log 汇总输出级别"
+    },
+    "auditLog": {
+      "intro": "配置安全审计日志字段清单与运行标识。保存后写入 Manager DB 并下发 Gateway（热加载）；AgentServer 经实例重建后生效。未托管时使用进程侧默认行为。",
+      "otelDeployHint": "OTEL 导出（开关 / Endpoint / 协议）由企业部署环境变量与 telemetry 配置，不在此页修改；审计查询见 Observability。",
+      "managed": "Manager 托管",
+      "resetToDefault": "删除托管配置",
+      "deleteConfirm": "确认删除 Manager 托管的审计日志配置？将通知 Gateway 删除后再清除 Manager 库中的配置。",
+      "deleted": "已删除托管配置",
+      "sections": {
+        "identity": "运行标识",
+        "format": "字段清单"
+      },
+      "dataCenter": "数据中心 (data_center)",
+      "systemCode": "系统编码 (system_code)",
+      "node": "节点 (node)",
+      "serviceHint": "service / service.name 由各进程本地推导，不在此配置。",
+      "schemaVersion": "Schema 版本",
+      "placeholder": "空值占位符",
+      "timestampFormat": "时间戳格式",
+      "timestampFormatHint": "本阶段固定，不可修改",
+      "headerFields": "头部字段",
+      "contentFields": "内容字段",
+      "requiredFields": "必填字段",
+      "requiredSubsetHint": "必填字段必须同时勾选在头部或内容中；带 * 的启用字段不可直接取消（请先取消必填）。",
+      "restoreDefaultFields": "恢复默认字段",
+      "cannotUncheckRequired": "该字段仍为必填，请先取消必填后再取消启用",
+      "validation": {
+        "fieldsEmpty": "头部 / 内容 / 必填字段均不能为空",
+        "requiredNotSubset": "必填字段必须是已启用字段的子集",
+        "placeholderRequired": "请填写空值占位符",
+        "schemaVersionRequired": "请填写 Schema 版本"
+      }
     },
     "permissions": {
       "sections": {

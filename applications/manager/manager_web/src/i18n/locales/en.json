@@ -304,6 +304,7 @@
     "tabs": {
       "logMasking": "Log Masking",
       "logging": "Log Levels",
+      "auditLog": "Audit Log",
       "permissions": "Permissions"
     },
     "logMasking": {
@@ -344,6 +345,38 @@
       "agentServer": "AgentServer log (agent_server)",
       "full": "Full log (full)",
       "fullHint": "Level for full.log aggregate output"
+    },
+    "auditLog": {
+      "intro": "Configure audit log field list and runtime identity. Saving writes to Manager DB and pushes Gateway (hot reload); AgentServer applies after pod restart. Without managed config, processes use their default behavior.",
+      "otelDeployHint": "OTEL export (enabled / endpoint / protocol) is configured via enterprise deploy env and telemetry — not on this page. Use Observability to query audit logs.",
+      "managed": "Manager managed",
+      "resetToDefault": "Remove managed config",
+      "deleteConfirm": "Remove Manager-managed audit log config? Gateway will be notified first, then Manager DB will be cleared.",
+      "deleted": "Managed config removed",
+      "sections": {
+        "identity": "Runtime identity",
+        "format": "Field list"
+      },
+      "dataCenter": "Data center (data_center)",
+      "systemCode": "System code (system_code)",
+      "node": "Node (node)",
+      "serviceHint": "service / service.name is derived per process and is not configured here.",
+      "schemaVersion": "Schema version",
+      "placeholder": "Empty-value placeholder",
+      "timestampFormat": "Timestamp format",
+      "timestampFormatHint": "Fixed in this phase; not editable",
+      "headerFields": "Header fields",
+      "contentFields": "Content fields",
+      "requiredFields": "Required fields",
+      "requiredSubsetHint": "Required fields must also be selected in header or content; enabled fields marked * cannot be unchecked until removed from required.",
+      "restoreDefaultFields": "Restore default fields",
+      "cannotUncheckRequired": "This field is still required; uncheck it from required first",
+      "validation": {
+        "fieldsEmpty": "Header, content, and required fields must not be empty",
+        "requiredNotSubset": "Required fields must be a subset of enabled fields",
+        "placeholderRequired": "Placeholder is required",
+        "schemaVersionRequired": "Schema version is required"
+      }
     },
     "permissions": {
       "sections": {

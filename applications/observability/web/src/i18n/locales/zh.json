@@ -32,6 +32,72 @@
     "tabs": {
       "auditLog": "审核日志"
     },
-    "placeholderHint": "该 Tab 内容待规划，敬请期待。"
+    "placeholderHint": "该 Tab 内容待规划，敬请期待。",
+    "audit": {
+      "filterTitle": "筛选搜索",
+      "allResults": "全部结果",
+      "ua": "正常 (UA)",
+      "evt": "异常 (EVT)",
+      "copyJson": "复制全部属性 JSON",
+      "copied": "已复制",
+      "copyFailed": "复制失败，请手动全选",
+      "showNoise": "显示 OTel 噪声标签",
+      "col": {
+        "time": "时间",
+        "summary": "摘要",
+        "user": "用户",
+        "trace": "Trace"
+      },
+      "sections": {
+        "summary": "事件概要",
+        "header": "头部字段 (header)",
+        "content": "内容字段 (content)",
+        "bridge": "关联上下文",
+        "extension": "扩展属性"
+      },
+      "fields": {
+        "event_type": "事件类型",
+        "audit_type": "审计类型",
+        "schema_version": "字段清单版本",
+        "timestamp": "事件时间",
+        "level": "严重度",
+        "data_center": "数据中心",
+        "system_code": "系统编码",
+        "node": "节点",
+        "trace_id": "全局跟踪号",
+        "txn_seq": "系统内序号",
+        "pid": "进程号",
+        "tid": "线程号",
+        "caller": "代码位置",
+        "UID": "用户标识",
+        "CUSTID": "客户标识",
+        "SRCIP": "源 IP",
+        "DSTIP": "目的 IP",
+        "COST": "耗时(ms)",
+        "UA": "正常描述",
+        "EVT": "异常描述",
+        "MSG": "补充信息",
+        "RSPCD": "响应码",
+        "SUBMDL": "子模块",
+        "PROC": "过程",
+        "SVRNAM": "服务/接口名",
+        "ACTION": "沙箱动作",
+        "SANDBOXID": "沙箱 ID",
+        "RESULT": "结果",
+        "service_name": "服务名",
+        "submdl": "子模块(桥接)",
+        "proc": "过程(桥接)",
+        "outcome": "结果(桥接)",
+        "phase": "阶段",
+        "session_id": "会话 ID",
+        "request_id": "请求 ID",
+        "user_id": "用户 ID",
+        "bot_id": "Bot ID",
+        "group_id": "Group ID",
+        "channel_id": "渠道 ID",
+        "agent_pod": "Agent Pod",
+        "agent_name": "Agent 名称"
+      }
+    }
   }
 }

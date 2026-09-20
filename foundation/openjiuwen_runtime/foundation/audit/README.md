@@ -1,139 +1,88 @@
-# foundation.audit
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
-横切的安全审计日志能力，落在 `openjiuwen_runtime.foundation.audit`。
-业务子系统只依赖本包，不感知落盘、外送与管理面。
+"""foundation.audit
 
-**当前实现范围：SRS FR1（必选）。** FR2–FR8 已搭配置骨架与接口，方法体为 `AuditNotImplementedError`。
+横切的安全审计日志能力，落在 ``openjiuwen_runtime.foundation.audit``。
 
-## 定位
+**本阶段范围：** 字段清单可配的 ``format`` + ``log_audit`` / ``log_event`` → **OTEL Logs emit**  
+（复用进程内由 telemetry 安装的 ``LoggerProvider``）。  
+**otel 开关 / endpoint：** 由部署 env（``OTEL_*``）与 telemetry 配置，**不由 Manager 下发驱动**。  
+**不做：** 管道文本行、本地 ``audit-*.log``、NTP 同步、脱敏、SIEM。
 
-- 审计日志 ≠ 业务 DEBUG / metric / APM。
-- 审计日志 ≠ Service 层现有的 `ctx.audit()`（结构化应用审计，走标准 logging）。
-- 本模块产出 **schema 驱动的管道格式** 行，供后续异步落盘（`SEC-*.log`）与 SIEM 外送。
-
-## 目录
-
-| 文件 | 职责 | 状态 |
-| --- | --- | --- |
-| `schema.py` / `formatter.py` / `validator.py` / `clock.py` | FR1 格式、校验门、NTP | **已实现** |
-| `config.py` / `models.py` / `facade.py` | 配置聚合与门面 | FR1 可用；`log_audit` 待 FR4 |
-| `linkpoint.py` | FR2 打点对照表 | 骨架 |
-| `redaction.py` | FR3 脱敏 | 骨架 |
-| `writer.py` | FR4 异步输出 | 骨架 |
-| `storage.py` | FR5 存储轮转留存 | 骨架 |
-| `shipper.py` | FR6 采集外送 | 骨架 |
-| `access.py` | FR7 访问控制 | 骨架 |
-| `deploy.py` | FR8 配置下发 | 骨架 |
-| `DESIGN.md` | 模块设计 | — |
-
-## FR1 用法
+## 用法
 
 ```python
 from openjiuwen_runtime.foundation.audit import (
-    AuditLogConfig,
-    RuntimeIdentity,
-    SyncedClock,
-    format_audit_line,
-    validate_schema,
+    log_audit,
+    log_event,
+    audit_info,
+    get_audit_manager,
+    bind_audit_context,
+    reset_audit_context,
 )
 
-cfg = AuditLogConfig.from_dict({
+tokens = bind_audit_context(session_id="sess_1", request_id="req_1", user_id="alice")
+try:
+    log_event(submdl="gateway", proc="authenticate", success=True, desc="用户登录成功")
+    # 或契约形态
+    log_audit(
+        "UA",
+        level="INFO",
+        UA="用户登录成功",
+        RSPCD="0000",
+        SUBMDL="gateway",
+        PROC="authenticate",
+        COST=45,
+    )
+finally:
+    reset_audit_context(tokens)
+
+# Manager 只下发 format / identity（otel 块若仍存在则忽略写出）
+get_audit_manager().apply_config({
     "format": {
         "schema_version": "1.0.0",
-        "header": {
-            "fields": [
-                "schema_version", "timestamp", "level", "data_center",
-                "system_code", "node", "trace_id", "txn_seq",
-                "pid", "tid", "caller",
-            ],
-            "separator": "|",
-            "placeholder": "-",
-            "formats": {"timestamp": "yyyyMMdd-HH:mm:ss.SSS"},
-        },
-        "content": {
-            "keyword_prefix": "#",
-            "element_separator": "|@|",
-            "kv_separator": "=",
-            "escape_mode": "replace",
-            "pipe_escape": "_",
-        },
-        "redline_fields": [
-            "timestamp", "UID", "UA", "EVT", "RSPCD",
-            "SRCIP", "DSTIP", "CUSTID", "SUBMDL", "PROC",
+        "header_fields": [
+            "schema_version", "timestamp", "level", "data_center",
+            "system_code", "node", "trace_id", "txn_seq",
+            "pid", "tid", "caller",
         ],
-    },
-    "ntp": {
-        "servers": [],          # 部署注入真实时间源，禁止硬编码
-        "sync_interval": "300s",
-        "max_offset_ms": 500,
-        "failover": True,
+        "content_fields": [
+            "UID", "CUSTID", "SRCIP", "DSTIP", "COST",
+            "UA", "EVT", "MSG", "RSPCD", "SUBMDL", "PROC",
+            "SVRNAM", "ACTION", "SANDBOXID", "RESULT",
+        ],
+        "required_fields": [
+            "timestamp", "level", "UID", "CUSTID", "SRCIP", "DSTIP",
+            "RSPCD", "SUBMDL", "PROC",
+        ],
+        "placeholder": "-",
+        "timestamp_format": "yyyyMMdd-HH:mm:ss.SSS",
     },
     "data_center": "N",
     "system_code": "99900180001",
     "node": "10.0.0.1:8080",
+    "service": "gateway",
 })
-
-line = format_audit_line(
-    schema=cfg.format,
-    identity=RuntimeIdentity(
-        data_center=cfg.identity.data_center,
-        system_code=cfg.identity.system_code,
-        node=cfg.identity.node,
-    ),
-    level="INFO",
-    keyword="UA",
-    elements={
-        "UID": "wangzeyu",
-        "CUSTID": "6217991100012345678",
-        "SRCIP": "192.168.1.100",
-        "DSTIP": "10.0.0.1",
-        "COST": 45,
-        "UA": "用户登录成功",
-        "MSG": "用户登录成功",
-        "RSPCD": "0000",
-        "SUBMDL": "gateway",
-        "PROC": "authenticate",
-    },
-    header={"trace_id": "TXN20250420103000123", "txn_seq": "001"},
-)
 ```
 
-默认 schema 产出形态：
+## OTEL 依赖与写出
 
-```text
-1.0.0|{timestamp}|INFO|N|99900180001|{node}|{trace_id}|{txn_seq}|{pid}|{tid}|{caller}:#UA:UID=...|@|CUSTID=...|@|RSPCD=0000|@|...
-```
+- foundation 默认依赖含 ``opentelemetry-api/sdk`` 与 OTLP/HTTP exporter（对齐第二版）。
+- 写出端：``SharedProviderEmitter`` 复用 ``opentelemetry._logs`` 全局 SDK ``LoggerProvider``
+  （由 jiuwenswarm ``TelemetryRuntime`` 在 ``OTEL_ENABLED=true`` 且 logs exporter=otlp 时安装）。
+- 无 Provider 时 emit 降级为 no-op 并 warning，**不抛业务异常**。
 
-- 头部 11 字段按 schema 顺序输出；无值填占位符 `-`，禁止省略。
-- 内容 `#UA` / `#EVT` + `|@|` 键值。成功正常流程打 `#UA`，失败/违规/告警打 `#EVT`。
-- 值中的 `|` 在默认 `replace` 模式下替换为 `_`。
-- `schema_version` 逐行输出，滚动升级期可并存多版本。
-
-## NTP
+单测可注入 ``MemoryEmitter``：
 
 ```python
-from openjiuwen_runtime.foundation.audit import NtpConfig, SequenceNtpClient, SyncedClock
+from openjiuwen_runtime.foundation.audit import AuditManager, MemoryEmitter, reset_audit_manager
 
-clock = SyncedClock(NtpConfig(servers=("ntp-a", "ntp-b")), client=SequenceNtpClient({
-    "ntp-a": ConnectionError("down"),
-    "ntp-b": 1710000000.0,
-}))
-clock.sync_once()          # 主源失败则切备用并产生 ClockEvent
-ts = clock.now()           # 本地时钟 + offset
-clock.start_periodic()     # 后台周期同步；测试记得 stop()
+mem = MemoryEmitter()
+reset_audit_manager(AuditManager(emitter=mem))
 ```
 
-默认 `ntp.servers` 为空。全部不可达时 `degraded=True`，`now()` 退回本地时钟。
+## Loki 桥接字段
 
-## 测试
-
-```bash
-cd foundation
-uv run pytest tests/unit_tests/test_audit_schema.py \
-              tests/unit_tests/test_audit_formatter.py \
-              tests/unit_tests/test_audit_clock.py -q
-```
-
-## 尚未实现
-
-`log_audit()` 会抛 `AuditNotImplementedError`：落盘前脱敏、异步写、`SEC-` 文件、外送、ACL、配置滚动下发分别对应 FR3–FR8。
+每条记录在规范大写字段之外，始终附加小写桥接键：``audit_type`` / ``submdl`` / ``proc`` /
+``outcome`` / ``session_id`` / ``user_id`` 等，供 Observability Web LogQL 查询。
