@@ -126,6 +126,9 @@ def build_audit_attributes(
         merged[key] = value
     merged["CUSTID"] = placeholder
 
+    # 设计 §6.4：session_id → trace_id，request_id → txn_seq（显式参数与 ContextVar 同源）
+    _apply_session_request_mapping(merged, placeholder=placeholder)
+
     # 按 format 过滤并占位
     attributes: dict[str, str] = {}
     for name in fmt.enabled_fields:
@@ -138,7 +141,84 @@ def build_audit_attributes(
     attributes[EVENT_TYPE_ATTR] = event_type
 
     _warn_missing_required(fmt.required_fields, attributes, event_type, placeholder)
+    _append_bridge_attributes(
+        attributes,
+        event_type=event_type,
+        fields=explicit,
+        max_len=max_len,
+        placeholder=placeholder,
+    )
     return attributes
+
+
+def _is_blank_or_placeholder(value: Any, placeholder: str) -> bool:
+    if value is None:
+        return True
+    text = str(value).strip()
+    return text == "" or text == placeholder
+
+
+def _apply_session_request_mapping(
+    merged: dict[str, Any],
+    *,
+    placeholder: str,
+) -> None:
+    """无 trace_id/txn_seq 时，用 session_id/request_id 回填（对齐设计 §6.4）。"""
+    if _is_blank_or_placeholder(merged.get("trace_id"), placeholder):
+        sid = merged.get("session_id")
+        if not _is_blank_or_placeholder(sid, placeholder):
+            merged["trace_id"] = sid
+    if _is_blank_or_placeholder(merged.get("txn_seq"), placeholder):
+        rid = merged.get("request_id")
+        if not _is_blank_or_placeholder(rid, placeholder):
+            merged["txn_seq"] = rid
+
+
+def _append_bridge_attributes(
+    attributes: dict[str, str],
+    *,
+    event_type: str,
+    fields: Mapping[str, Any],
+    max_len: int,
+    placeholder: str = PLACEHOLDER_DEFAULT,
+) -> None:
+    """追加 Loki / Observability 依赖的小写桥接键（不参与 format 清单）。"""
+    evt = str(event_type or "").strip().upper()
+    attributes["audit_type"] = evt.lower() if evt else ""
+    attributes["submdl"] = attributes.get("SUBMDL", "")
+    attributes["proc"] = attributes.get("PROC", "")
+    attributes["outcome"] = "success" if evt == KEYWORD_UA else "fail"
+
+    ctx = get_audit_context()
+    bridge_sources = {
+        "session_id": fields.get("session_id") or ctx.get("session_id") or attributes.get("trace_id"),
+        "request_id": fields.get("request_id") or ctx.get("request_id") or attributes.get("txn_seq"),
+        "user_id": fields.get("user_id") or fields.get("UID") or ctx.get("user_id") or attributes.get("UID"),
+        "bot_id": fields.get("bot_id") or ctx.get("bot_id"),
+        "group_id": fields.get("group_id") or ctx.get("group_id"),
+        "channel_id": fields.get("channel_id") or ctx.get("channel_id"),
+    }
+    for key, value in bridge_sources.items():
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text and text != placeholder:
+            attributes[key] = _truncate(text, max_len)
+
+    extra = fields.get("extra")
+    if isinstance(extra, Mapping):
+        for key, value in extra.items():
+            if value is None:
+                continue
+            key_s = str(key)
+            text = _stringify(value, "")
+            if not text or text == placeholder:
+                continue
+            # 允许覆盖 format 已写出的 placeholder（如 COST=-），保留非空业务值
+            existing = attributes.get(key_s)
+            if existing is not None and not _is_blank_or_placeholder(existing, placeholder):
+                continue
+            attributes[key_s] = _truncate(text, max_len)
 
 
 # 本阶段常合法为 placeholder，不因占位刷 warning。

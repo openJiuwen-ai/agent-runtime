@@ -1,6 +1,8 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
+# pylint: disable=protected-access,add-staticmethod-or-classmethod-decorator
+
 """边界 / 异常场景：规范化、校验失败隔离、emit 容错、字段契约。"""
 
 from __future__ import annotations

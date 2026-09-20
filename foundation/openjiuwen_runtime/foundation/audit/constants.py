@@ -86,3 +86,11 @@ OTEL_PROTOCOL_HTTP = "http"
 OTEL_PROTOCOLS: tuple[str, ...] = (OTEL_PROTOCOL_GRPC, OTEL_PROTOCOL_HTTP)
 
 SERVICE_NAME_PREFIX = "jiuwenclaw-"
+
+# 规范 SUBMDL（挂点表）
+SUBMDL_GATEWAY = "gateway"
+SUBMDL_AGENT = "agent"
+SUBMDL_API_CLIENT = "api_client"
+SUBMDL_FILE = "file"
+SUBMDL_ALERT = "alert"
+SUBMDL_SANDBOX = "sandbox"

@@ -1,15 +1,21 @@
-# foundation.audit
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
-横切的安全审计日志能力，落在 `openjiuwen_runtime.foundation.audit`。
+"""foundation.audit
 
-**本阶段范围：** 字段清单可配的 `format` + `log_audit` → **OTEL Logs emit**（`emit_only`）。  
-**不做：** 管道文本行、本地 `audit-*.log`、NTP 同步、脱敏、SIEM。
+横切的安全审计日志能力，落在 ``openjiuwen_runtime.foundation.audit``。
+
+**本阶段范围：** 字段清单可配的 ``format`` + ``log_audit`` / ``log_event`` → **OTEL Logs emit**  
+（复用进程内由 telemetry 安装的 ``LoggerProvider``）。  
+**otel 开关 / endpoint：** 由部署 env（``OTEL_*``）与 telemetry 配置，**不由 Manager 下发驱动**。  
+**不做：** 管道文本行、本地 ``audit-*.log``、NTP 同步、脱敏、SIEM。
 
 ## 用法
 
 ```python
 from openjiuwen_runtime.foundation.audit import (
     log_audit,
+    log_event,
     audit_info,
     get_audit_manager,
     bind_audit_context,
@@ -18,6 +24,8 @@ from openjiuwen_runtime.foundation.audit import (
 
 tokens = bind_audit_context(session_id="sess_1", request_id="req_1", user_id="alice")
 try:
+    log_event(submdl="gateway", proc="authenticate", success=True, desc="用户登录成功")
+    # 或契约形态
     log_audit(
         "UA",
         level="INFO",
@@ -27,11 +35,10 @@ try:
         PROC="authenticate",
         COST=45,
     )
-    # 或
-    audit_info("UA", UA="...", RSPCD="0000", SUBMDL="gateway", PROC="authenticate")
 finally:
     reset_audit_context(tokens)
 
+# Manager 只下发 format / identity（otel 块若仍存在则忽略写出）
 get_audit_manager().apply_config({
     "format": {
         "schema_version": "1.0.0",
@@ -52,30 +59,21 @@ get_audit_manager().apply_config({
         "placeholder": "-",
         "timestamp_format": "yyyyMMdd-HH:mm:ss.SSS",
     },
-    "otel": {
-        "enabled": True,
-        "endpoint": "http://localhost:4317",
-        "protocol": "grpc",
-        "headers": {},
-    },
     "data_center": "N",
     "system_code": "99900180001",
     "node": "10.0.0.1:8080",
-    "service": "gateway",  # 进程本地；推导 service.name=jiuwenclaw-gateway
+    "service": "gateway",
 })
 ```
 
-## OTEL 依赖
+## OTEL 依赖与写出
 
-写出端需要 optional extra：
+- foundation 默认依赖含 ``opentelemetry-api/sdk`` 与 OTLP/HTTP exporter（对齐第二版）。
+- 写出端：``SharedProviderEmitter`` 复用 ``opentelemetry._logs`` 全局 SDK ``LoggerProvider``
+  （由 jiuwenswarm ``TelemetryRuntime`` 在 ``OTEL_ENABLED=true`` 且 logs exporter=otlp 时安装）。
+- 无 Provider 时 emit 降级为 no-op 并 warning，**不抛业务异常**。
 
-```bash
-pip install "openjiuwen-runtime-foundation[audit-otel]"
-```
-
-未安装或 `otel.enabled=false` 时：`log_audit` 降级为 noop 并打进程 warning，**不抛业务异常**。
-
-单测可注入 `MemoryEmitter`：
+单测可注入 ``MemoryEmitter``：
 
 ```python
 from openjiuwen_runtime.foundation.audit import AuditManager, MemoryEmitter, reset_audit_manager
@@ -84,21 +82,7 @@ mem = MemoryEmitter()
 reset_audit_manager(AuditManager(emitter=mem))
 ```
 
-## 示例
+## Loki 桥接字段
 
-可运行脚本见 [`examples/`](examples/)（`MemoryEmitter`，无需 collector）：
-
-```bash
-cd foundation
-uv run python openjiuwen_runtime/foundation/audit/examples/01_basic_memory.py
-uv run python openjiuwen_runtime/foundation/audit/examples/02_context_and_config.py
-```
-
-## 测试
-
-单测与模块同目录，见 [`tests/`](tests/)：
-
-```bash
-cd foundation
-uv run pytest openjiuwen_runtime/foundation/audit/tests -q
-```
+每条记录在规范大写字段之外，始终附加小写桥接键：``audit_type`` / ``submdl`` / ``proc`` /
+``outcome`` / ``session_id`` / ``user_id`` 等，供 Observability Web LogQL 查询。

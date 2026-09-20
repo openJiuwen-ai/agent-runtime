@@ -1,12 +1,11 @@
 /**
  * 与 foundation/audit/constants.py 字段清单对齐（本阶段封闭集）。
+ * otel 不再由 Manager 前端配置（部署 env / telemetry）；库表列可保留。
  */
 import type {
   AuditLogConfig,
   AuditLogConfigUpsertBody,
   AuditLogFormatSpec,
-  AuditLogOtelConfig,
-  AuditOtelProtocol,
 } from '../../../types';
 
 export const DEFAULT_HEADER_FIELDS = [
@@ -65,7 +64,6 @@ export interface AuditLogFormState {
   data_center: string;
   system_code: string;
   node: string;
-  otel: AuditLogOtelConfig;
   format: AuditLogFormatSpec;
 }
 
@@ -73,12 +71,6 @@ export const DEFAULT_FORM: AuditLogFormState = {
   data_center: 'N',
   system_code: '-',
   node: '',
-  otel: {
-    enabled: true,
-    endpoint: 'http://localhost:4317',
-    protocol: 'grpc',
-    headers: {},
-  },
   format: {
     schema_version: '1.0.0',
     header_fields: [...DEFAULT_HEADER_FIELDS],
@@ -102,20 +94,6 @@ function asStringList(value: unknown, fallback: readonly string[]): string[] {
   return out.length > 0 ? out : [...fallback];
 }
 
-function normalizeProtocol(value: unknown): AuditOtelProtocol {
-  const p = String(value ?? 'grpc').trim().toLowerCase();
-  return p === 'http' ? 'http' : 'grpc';
-}
-
-function normalizeHeaders(value: unknown): Record<string, string> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-  const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-    out[k] = String(v ?? '');
-  }
-  return out;
-}
-
 export function mapFromGet(data: AuditLogConfig): AuditLogFormState {
   const body = (data.body && typeof data.body === 'object' ? data.body : {}) as NonNullable<
     AuditLogConfig['body']
@@ -123,22 +101,11 @@ export function mapFromGet(data: AuditLogConfig): AuditLogFormState {
   const format = (body.format && typeof body.format === 'object'
     ? body.format
     : {}) as Partial<AuditLogFormatSpec>;
-  const otel = (body.otel && typeof body.otel === 'object'
-    ? body.otel
-    : {}) as Partial<AuditLogOtelConfig>;
 
   return {
     data_center: String(body.data_center ?? data.data_center ?? DEFAULT_FORM.data_center),
     system_code: String(body.system_code ?? data.system_code ?? DEFAULT_FORM.system_code),
     node: String(body.node ?? data.node ?? ''),
-    otel: {
-      enabled: Boolean(otel.enabled ?? data.otel_enabled ?? DEFAULT_FORM.otel.enabled),
-      endpoint: String(
-        otel.endpoint ?? data.otel_endpoint ?? DEFAULT_FORM.otel.endpoint
-      ),
-      protocol: normalizeProtocol(otel.protocol ?? data.otel_protocol),
-      headers: normalizeHeaders(otel.headers),
-    },
     format: {
       schema_version: String(format.schema_version ?? '1.0.0'),
       header_fields: asStringList(format.header_fields, DEFAULT_HEADER_FIELDS),
@@ -150,17 +117,12 @@ export function mapFromGet(data: AuditLogConfig): AuditLogFormState {
   };
 }
 
+/** 仅提交 format + identity；otel 由部署侧配置，不经 Manager 下发。 */
 export function toUpsertBody(form: AuditLogFormState): AuditLogConfigUpsertBody {
   return {
     format: {
       ...form.format,
       timestamp_format: TIMESTAMP_FORMAT_FIXED,
-    },
-    otel: {
-      enabled: form.otel.enabled,
-      endpoint: form.otel.endpoint.trim(),
-      protocol: form.otel.protocol,
-      headers: form.otel.headers,
     },
     data_center: form.data_center.trim() || undefined,
     system_code: form.system_code.trim() || undefined,
@@ -169,17 +131,12 @@ export function toUpsertBody(form: AuditLogFormState): AuditLogConfigUpsertBody 
 }
 
 export type AuditLogValidateErrorKey =
-  | 'endpointRequired'
-  | 'headersInvalid'
   | 'fieldsEmpty'
   | 'requiredNotSubset'
   | 'placeholderRequired'
   | 'schemaVersionRequired';
 
-export function clientValidate(
-  form: AuditLogFormState,
-  headersText: string
-): AuditLogValidateErrorKey | null {
+export function clientValidate(form: AuditLogFormState): AuditLogValidateErrorKey | null {
   if (!form.format.schema_version.trim()) return 'schemaVersionRequired';
   if (!form.format.placeholder.trim()) return 'placeholderRequired';
   if (
@@ -193,27 +150,7 @@ export function clientValidate(
   if (form.format.required_fields.some((f) => !enabled.has(f))) {
     return 'requiredNotSubset';
   }
-  if (form.otel.enabled && !form.otel.endpoint.trim()) {
-    return 'endpointRequired';
-  }
-  try {
-    const parsed = JSON.parse(headersText || '{}') as unknown;
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return 'headersInvalid';
-    }
-  } catch {
-    return 'headersInvalid';
-  }
   return null;
-}
-
-export function parseHeadersText(headersText: string): Record<string, string> {
-  const parsed = JSON.parse(headersText || '{}') as unknown;
-  return normalizeHeaders(parsed);
-}
-
-export function headersToText(headers: Record<string, string>): string {
-  return JSON.stringify(headers ?? {}, null, 2);
 }
 
 /** D6：必填勾选时，若尚未启用则自动加入对应分组 */
@@ -221,11 +158,7 @@ export function ensureEnabledForRequired(
   form: AuditLogFormState,
   field: string
 ): AuditLogFormState {
-  const inHeader = form.format.header_fields.includes(field);
-  const inContent = form.format.content_fields.includes(field);
-  if (inHeader || inContent) return form;
-
-  if (HEADER_SET.has(field)) {
+  if (HEADER_SET.has(field) && !form.format.header_fields.includes(field)) {
     return {
       ...form,
       format: {
@@ -234,7 +167,7 @@ export function ensureEnabledForRequired(
       },
     };
   }
-  if (CONTENT_SET.has(field)) {
+  if (CONTENT_SET.has(field) && !form.format.content_fields.includes(field)) {
     return {
       ...form,
       format: {
@@ -249,6 +182,14 @@ export function ensureEnabledForRequired(
 export function restoreDefaultFields(form: AuditLogFormState): AuditLogFormState {
   return {
     ...form,
-    format: { ...DEFAULT_FORM.format },
+    format: {
+      ...form.format,
+      header_fields: [...DEFAULT_HEADER_FIELDS],
+      content_fields: [...DEFAULT_CONTENT_FIELDS],
+      required_fields: [...DEFAULT_REQUIRED_FIELDS],
+      schema_version: '1.0.0',
+      placeholder: '-',
+      timestamp_format: TIMESTAMP_FORMAT_FIXED,
+    },
   };
 }

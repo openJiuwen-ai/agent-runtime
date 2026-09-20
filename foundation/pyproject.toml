@@ -24,8 +24,8 @@ dependencies = [
     "aiosqlite>=0.21.0",
     "redis==7.1.0",
     # audit_v2: OTEL Logs emit（Batch + OTLP/HTTP）
-    "opentelemetry-sdk>=1.30,<2",
     "opentelemetry-api>=1.30,<2",
+    "opentelemetry-sdk>=1.30,<2",
     "opentelemetry-exporter-otlp-proto-http>=1.30,<2",
 ]
 
@@ -41,11 +41,12 @@ gaussdb = [
 amqp = [
     "aio-pika>=9.4",
 ]
+# 兼容旧安装名；grpc exporter 仅在需要时安装
 audit-otel = [
-    "opentelemetry-api>=1.28.0",
-    "opentelemetry-sdk>=1.28.0",
-    "opentelemetry-exporter-otlp-proto-grpc>=1.28.0",
-    "opentelemetry-exporter-otlp-proto-http>=1.28.0",
+    "opentelemetry-api>=1.30,<2",
+    "opentelemetry-sdk>=1.30,<2",
+    "opentelemetry-exporter-otlp-proto-http>=1.30,<2",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.30,<2",
 ]
 
 [tool.uv]
@@ -63,11 +64,9 @@ dev = [
     "httpx>=0.28.1,<0.29",
     "uvicorn>=0.42,<0.47",
     "fastapi>=0.115",
-    # audit OTEL emit path（与 optional-dependencies.audit-otel 对齐）
-    "opentelemetry-api>=1.28.0",
-    "opentelemetry-sdk>=1.28.0",
-    "opentelemetry-exporter-otlp-proto-grpc>=1.28.0",
-    "opentelemetry-exporter-otlp-proto-http>=1.28.0",
+    "opentelemetry-api>=1.30,<2",
+    "opentelemetry-sdk>=1.30,<2",
+    "opentelemetry-exporter-otlp-proto-http>=1.30,<2",
 ]
 
 [[tool.uv.index]]
@@ -87,3 +86,8 @@ testpaths = [
     "openjiuwen_runtime/foundation/audit/tests",
 ]
 pythonpath = ["."]
+# 默认跳过 perf；显式跑：pytest -m perf -s
+addopts = "-m 'not perf'"
+markers = [
+    "perf: performance / stress tests (opt-in via -m perf)",
+]

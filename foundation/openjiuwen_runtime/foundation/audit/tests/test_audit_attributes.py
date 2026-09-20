@@ -160,3 +160,67 @@ def test_attribute_truncation():
         caller="t:1",
     )
     assert attrs["UA"] == "12345"
+
+
+def test_explicit_session_request_maps_to_trace_txn():
+    """设计 §6.4：无 ContextVar 时，显式 session_id/request_id → trace_id/txn_seq。"""
+    attrs = build_audit_attributes(
+        _snapshot(),
+        event_type="UA",
+        level="INFO",
+        fields={
+            "UA": "sandbox.create_sandbox 成功",
+            "RSPCD": "0000",
+            "SUBMDL": "sandbox",
+            "PROC": "create_sandbox",
+            "session_id": "web_sess_abc",
+            "request_id": "req_001",
+            "UID": "user1",
+        },
+        clock=_FixedClock(1.0),
+        caller="t:1",
+    )
+    assert attrs["trace_id"] == "web_sess_abc"
+    assert attrs["txn_seq"] == "req_001"
+    assert attrs["session_id"] == "web_sess_abc"
+    assert attrs["request_id"] == "req_001"
+
+
+def test_extra_cost_overwrites_placeholder():
+    """log_event 路径把 COST 放在 extra 时，应覆盖 format 占位 '-'。"""
+    attrs = build_audit_attributes(
+        _snapshot(),
+        event_type="UA",
+        level="INFO",
+        fields={
+            "UA": "api_client.http_agent_send 成功",
+            "RSPCD": "0000",
+            "SUBMDL": "api_client",
+            "PROC": "http_agent_send",
+            "extra": {"COST": 42, "sandbox_type": "jiuwenbox"},
+        },
+        clock=_FixedClock(1.0),
+        caller="t:1",
+    )
+    assert attrs["COST"] == "42"
+    assert attrs["sandbox_type"] == "jiuwenbox"
+
+
+def test_extra_does_not_overwrite_non_placeholder():
+    attrs = build_audit_attributes(
+        _snapshot(),
+        event_type="UA",
+        level="INFO",
+        fields={
+            "UA": "ok",
+            "RSPCD": "0000",
+            "SUBMDL": "gateway",
+            "PROC": "authenticate",
+            "COST": 10,
+            "extra": {"COST": 99},
+        },
+        clock=_FixedClock(1.0),
+        caller="t:1",
+    )
+    assert attrs["COST"] == "10"
+

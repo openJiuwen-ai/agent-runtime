@@ -58,7 +58,9 @@ def test_apply_config_affects_subsequent_emits_only():
     )
     after = mem.records[1]["attributes"]
     assert "SVRNAM" not in after
-    assert set(after.keys()) == set(slim.enabled_fields) | {"event_type"}
+    assert set(slim.enabled_fields).issubset(set(after.keys()))
+    assert after["event_type"] == "UA"
+    assert after["audit_type"] == "ua"
 
 
 def test_apply_config_preserves_local_service_when_absent():

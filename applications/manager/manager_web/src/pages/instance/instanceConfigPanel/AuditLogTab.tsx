@@ -2,10 +2,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ApiError, AuditLogApi } from '../../../services/api';
 import { ConfirmDialog } from '../../../components/ConfirmDialog';
-import { Switch } from '../../../components/Switch';
 import { toast } from '../../../stores/uiStore';
 import { formatTime } from '../../../utils/format';
-import type { AuditOtelProtocol } from '../../../types';
 import {
   CONTENT_FIELD_CANDIDATES,
   DEFAULT_FORM,
@@ -13,9 +11,7 @@ import {
   TIMESTAMP_FORMAT_FIXED,
   clientValidate,
   ensureEnabledForRequired,
-  headersToText,
   mapFromGet,
-  parseHeadersText,
   restoreDefaultFields,
   toUpsertBody,
   type AuditLogFormState,
@@ -35,7 +31,6 @@ function toggleInList(list: string[], field: string, checked: boolean): string[]
 export function AuditLogTab({ instanceId }: Props) {
   const { t } = useTranslation();
   const [form, setForm] = useState<AuditLogFormState>(DEFAULT_FORM);
-  const [headersText, setHeadersText] = useState(headersToText(DEFAULT_FORM.otel.headers));
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [hasRemoteConfig, setHasRemoteConfig] = useState(false);
@@ -45,7 +40,6 @@ export function AuditLogTab({ instanceId }: Props) {
 
   const applyForm = useCallback((next: AuditLogFormState) => {
     setForm(next);
-    setHeadersText(headersToText(next.otel.headers));
   }, []);
 
   const reload = useCallback(async () => {
@@ -118,17 +112,15 @@ export function AuditLogTab({ instanceId }: Props) {
   };
 
   const save = async () => {
-    const errKey = clientValidate(form, headersText);
+    const errKey = clientValidate(form);
     if (errKey) {
       toast('danger', t(`instanceConfig.auditLog.validation.${errKey}`));
       return;
     }
     setSaving(true);
     try {
-      const headers = parseHeadersText(headersText);
       const body = toUpsertBody({
         ...form,
-        otel: { ...form.otel, headers },
         format: { ...form.format, timestamp_format: TIMESTAMP_FORMAT_FIXED },
       });
       const data = await AuditLogApi.upsert(instanceId, body);
@@ -183,6 +175,7 @@ export function AuditLogTab({ instanceId }: Props) {
   return (
     <div className="flex flex-col gap-3">
       <p className="text-[12px] text-muted">{t('instanceConfig.auditLog.intro')}</p>
+      <p className="text-[11px] text-muted">{t('instanceConfig.auditLog.otelDeployHint')}</p>
 
       <div className="flex items-center gap-2 flex-wrap">
         {hasRemoteConfig && (
@@ -247,60 +240,6 @@ export function AuditLogTab({ instanceId }: Props) {
           </div>
         </div>
         <p className="text-[11px] text-muted">{t('instanceConfig.auditLog.serviceHint')}</p>
-      </div>
-
-      <div className="card flex flex-col gap-3">
-        <div className="text-sm font-medium">{t('instanceConfig.auditLog.sections.otel')}</div>
-        <div className="flex items-center gap-2">
-          <Switch
-            checked={form.otel.enabled}
-            onChange={(checked) =>
-              setForm((prev) => ({ ...prev, otel: { ...prev.otel, enabled: checked } }))
-            }
-            aria-label={t('instanceConfig.auditLog.otelEnabled')}
-          />
-          <span className="text-sm">{t('instanceConfig.auditLog.otelEnabled')}</span>
-        </div>
-        <p className="text-[11px] text-muted">{t('instanceConfig.auditLog.otelEnabledHint')}</p>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <label className="label">{t('instanceConfig.auditLog.otelEndpoint')}</label>
-            <input
-              className="input w-full"
-              value={form.otel.endpoint}
-              onChange={(e) =>
-                setForm((prev) => ({
-                  ...prev,
-                  otel: { ...prev.otel, endpoint: e.target.value },
-                }))
-              }
-            />
-          </div>
-          <div>
-            <label className="label">{t('instanceConfig.auditLog.otelProtocol')}</label>
-            <select
-              className="select w-full"
-              value={form.otel.protocol}
-              onChange={(e) =>
-                setForm((prev) => ({
-                  ...prev,
-                  otel: { ...prev.otel, protocol: e.target.value as AuditOtelProtocol },
-                }))
-              }
-            >
-              <option value="grpc">grpc</option>
-              <option value="http">http</option>
-            </select>
-          </div>
-        </div>
-        <div>
-          <label className="label">{t('instanceConfig.auditLog.otelHeaders')}</label>
-          <textarea
-            className="input w-full min-h-[5rem] font-mono text-[12px]"
-            value={headersText}
-            onChange={(e) => setHeadersText(e.target.value)}
-          />
-        </div>
       </div>
 
       <div className="card flex flex-col gap-3">

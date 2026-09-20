@@ -347,25 +347,20 @@
       "fullHint": "full.log 汇总输出级别"
     },
     "auditLog": {
-      "intro": "配置安全审计日志字段清单与 OTEL 出口。保存后写入 Manager DB 并下发 Gateway（热加载）；AgentServer 经实例重建后生效。未托管时使用进程侧默认行为。",
+      "intro": "配置安全审计日志字段清单与运行标识。保存后写入 Manager DB 并下发 Gateway（热加载）；AgentServer 经实例重建后生效。未托管时使用进程侧默认行为。",
+      "otelDeployHint": "OTEL 导出（开关 / Endpoint / 协议）由企业部署环境变量与 telemetry 配置，不在此页修改；审计查询见 Observability。",
       "managed": "Manager 托管",
       "resetToDefault": "删除托管配置",
       "deleteConfirm": "确认删除 Manager 托管的审计日志配置？将通知 Gateway 删除后再清除 Manager 库中的配置。",
       "deleted": "已删除托管配置",
       "sections": {
         "identity": "运行标识",
-        "otel": "OTEL 出口",
         "format": "字段清单"
       },
       "dataCenter": "数据中心 (data_center)",
       "systemCode": "系统编码 (system_code)",
       "node": "节点 (node)",
       "serviceHint": "service / service.name 由各进程本地推导，不在此配置。",
-      "otelEnabled": "启用 OTEL 导出",
-      "otelEnabledHint": "关闭后 log_audit 不抛业务异常，仅可能打进程 warning。",
-      "otelEndpoint": "Endpoint",
-      "otelProtocol": "协议",
-      "otelHeaders": "Headers (JSON 对象)",
       "schemaVersion": "Schema 版本",
       "placeholder": "空值占位符",
       "timestampFormat": "时间戳格式",
@@ -377,8 +372,6 @@
       "restoreDefaultFields": "恢复默认字段",
       "cannotUncheckRequired": "该字段仍为必填，请先取消必填后再取消启用",
       "validation": {
-        "endpointRequired": "启用 OTEL 时必须填写 Endpoint",
-        "headersInvalid": "Headers 必须是合法 JSON 对象",
         "fieldsEmpty": "头部 / 内容 / 必填字段均不能为空",
         "requiredNotSubset": "必填字段必须是已启用字段的子集",
         "placeholderRequired": "请填写空值占位符",

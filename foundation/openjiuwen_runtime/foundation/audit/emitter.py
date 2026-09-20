@@ -1,10 +1,15 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
-"""审计事件写出：OTEL Logs（optional extra）或 Noop。"""
+"""审计事件写出：复用进程内 LoggerProvider（由 telemetry 安装），否则 Noop。
+
+写出端不再由 Manager ``body.otel`` / ``AuditLogConfig.otel`` 驱动；
+OTLP endpoint 与开关由部署 env + TelemetryRuntime 负责。
+"""
 
 from __future__ import annotations
 
+import importlib
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Protocol
@@ -12,8 +17,6 @@ from typing import Any, Mapping, Protocol
 from .config import OtelConfig
 from .constants import (
     OTEL_LOGGER_NAME,
-    OTEL_PROTOCOL_GRPC,
-    OTEL_PROTOCOL_HTTP,
     SERVICE_NAME_PREFIX,
 )
 
@@ -28,6 +31,8 @@ _SEVERITY_MAP = {
     "FATAL": 21,
 }
 
+_missing_provider_warned = False
+
 
 class AuditEmitter(Protocol):
     def emit(
@@ -36,9 +41,11 @@ class AuditEmitter(Protocol):
         severity: str,
         body: str,
         attributes: Mapping[str, str],
-    ) -> None: ...
+    ) -> None:
+        ...
 
-    def shutdown(self) -> None: ...
+    def shutdown(self) -> None:
+        ...
 
 
 @dataclass
@@ -62,7 +69,8 @@ class MemoryEmitter:
             }
         )
 
-    def shutdown(self) -> None:
+    @staticmethod
+    def shutdown() -> None:
         return None
 
     def clear(self) -> None:
@@ -70,8 +78,8 @@ class MemoryEmitter:
 
 
 class NoopEmitter:
+    @staticmethod
     def emit(
-        self,
         *,
         severity: str,
         body: str,
@@ -79,7 +87,8 @@ class NoopEmitter:
     ) -> None:
         return None
 
-    def shutdown(self) -> None:
+    @staticmethod
+    def shutdown() -> None:
         return None
 
 
@@ -94,167 +103,120 @@ def resolve_service_name(service: str | None) -> str | None:
     return f"{SERVICE_NAME_PREFIX}{name}"
 
 
-def _otel_available() -> bool:
+def _sdk_logger_provider() -> Any | None:
+    """返回进程内已安装的 SDK LoggerProvider；proxy/缺省则 None。"""
     try:
-        import opentelemetry.sdk.logs  # noqa: F401
-        import opentelemetry.exporter.otlp.proto.grpc._log_exporter  # noqa: F401
-    except Exception:
-        try:
-            import opentelemetry.sdk.logs  # noqa: F401
-            import opentelemetry.exporter.otlp.proto.http._log_exporter  # noqa: F401
-        except Exception:
-            return False
-    return True
-
-
-class OtelLogsEmitter:
-    """通过 OTEL Logs API emit；Batch 处理器异步导出。"""
-
-    def __init__(
-        self,
-        otel: OtelConfig,
-        *,
-        service: str | None = None,
-        owns_provider: bool = False,
-        logger_provider: Any = None,
-        otel_logger: Any = None,
-    ) -> None:
-        self._otel = otel
-        self._owns_provider = owns_provider
-        self._provider = logger_provider
-        self._logger = otel_logger
-
-    @classmethod
-    def create(
-        cls,
-        otel: OtelConfig,
-        *,
-        service: str | None = None,
-    ) -> OtelLogsEmitter | NoopEmitter:
-        if not otel.enabled:
-            return NoopEmitter()
-        if not _otel_available():
-            logger.warning(
-                "audit-otel extra not installed; audit emit degraded to noop"
-            )
-            return NoopEmitter()
-        try:
-            return cls._build(otel, service=service)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "failed to initialize OTEL Logs emitter: %s; degraded to noop",
-                exc,
-            )
-            return NoopEmitter()
-
-    @classmethod
-    def _build(cls, otel: OtelConfig, *, service: str | None) -> OtelLogsEmitter:
         from opentelemetry import _logs as logs_api
-        from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
-        from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
-        from opentelemetry.sdk.resources import Resource, SERVICE_NAME
-
-        existing = logs_api.get_logger_provider()
-        owns_provider = False
-        provider: Any = existing
-
-        # 无可用 SDK Provider 时自建
         from opentelemetry.sdk._logs import LoggerProvider as SdkLoggerProvider
+    except Exception:
+        return None
+    try:
+        provider = logs_api.get_logger_provider()
+    except Exception:
+        return None
+    if isinstance(provider, SdkLoggerProvider):
+        return provider
+    return None
 
-        if not isinstance(existing, SdkLoggerProvider):
-            attrs: dict[str, str] = {}
-            service_name = resolve_service_name(service)
-            if service_name:
-                attrs[SERVICE_NAME] = service_name
-            resource = Resource.create(attrs) if attrs else Resource.create()
-            provider = LoggerProvider(resource=resource)
-            exporter = _build_otlp_log_exporter(otel)
-            provider.add_log_record_processor(BatchLogRecordProcessor(exporter))
-            logs_api.set_logger_provider(provider)
-            owns_provider = True
 
-        otel_logger = logs_api.get_logger(OTEL_LOGGER_NAME)
-        # LoggingHandler 仅用于确认 sdk logs 可导入；emit 走 logger.emit
-        _ = LoggingHandler
-        return cls(
-            otel,
-            service=service,
-            owns_provider=owns_provider,
-            logger_provider=provider,
-            otel_logger=otel_logger,
-        )
+class SharedProviderEmitter:
+    """通过 telemetry（或其它方）已 set 的全局 LoggerProvider emit；不自建、不拥有。"""
 
+    @staticmethod
     def emit(
-        self,
         *,
         severity: str,
         body: str,
         attributes: Mapping[str, str],
     ) -> None:
-        if self._logger is None:
+        global _missing_provider_warned
+        provider = _sdk_logger_provider()
+        if provider is None:
+            if not _missing_provider_warned:
+                logger.warning(
+                    "audit emit skipped: no SDK LoggerProvider "
+                    "(start telemetry / set OTEL_* first)"
+                )
+                _missing_provider_warned = True
             return
         try:
-            from opentelemetry.sdk._logs import LogRecord
+            from opentelemetry import _logs as logs_api
             from opentelemetry._logs import SeverityNumber
 
+            otel_logger = logs_api.get_logger(OTEL_LOGGER_NAME)
             severity_number = _SEVERITY_MAP.get(severity.upper(), 9)
-            # Logger.emit API（opentelemetry-sdk logs）
-            emit = getattr(self._logger, "emit", None)
-            if callable(emit):
-                # 新 API：接受 LogRecord 或 kwargs，按版本兼容
-                try:
-                    emit(
-                        severity_number=SeverityNumber(severity_number),
-                        body=body,
-                        attributes=dict(attributes),
-                    )
-                    return
-                except TypeError:
-                    record = LogRecord(
-                        body=body,
-                        severity_number=SeverityNumber(severity_number),
-                        severity_text=severity.upper(),
-                        attributes=dict(attributes),
-                    )
-                    emit(record)
-                    return
-            logger.warning("otel logger has no emit(); drop audit record")
+            emit = getattr(otel_logger, "emit", None)
+            if not callable(emit):
+                logger.warning("otel logger has no emit(); drop audit record")
+                return
+            # 优先 kwargs emit（opentelemetry-sdk>=1.30 常见）；勿先从
+            # opentelemetry.sdk._logs 导入 LogRecord（1.39+ 已移出该导出）。
+            try:
+                emit(
+                    severity_number=SeverityNumber(severity_number),
+                    severity_text=severity.upper(),
+                    body=body,
+                    attributes=dict(attributes),
+                )
+                return
+            except TypeError:
+                pass
+
+            log_record_cls = _resolve_log_record_class()
+            if log_record_cls is None:
+                logger.warning(
+                    "audit OTEL emit failed: Logger.emit kwargs unsupported "
+                    "and LogRecord class not found"
+                )
+                return
+            emit(
+                log_record_cls(
+                    body=body,
+                    severity_number=SeverityNumber(severity_number),
+                    severity_text=severity.upper(),
+                    attributes=dict(attributes),
+                )
+            )
         except Exception as exc:  # noqa: BLE001
             logger.warning("audit OTEL emit failed: %s", exc)
 
-    def shutdown(self) -> None:
-        if self._owns_provider and self._provider is not None:
-            try:
-                self._provider.shutdown()
-            except Exception:  # noqa: BLE001
-                pass
+    @staticmethod
+    def shutdown() -> None:
+        # Provider 由 telemetry 拥有，此处不 shutdown。
+        return None
 
 
-def _build_otlp_log_exporter(otel: OtelConfig) -> Any:
-    protocol = (otel.protocol or OTEL_PROTOCOL_GRPC).strip().lower()
-    headers = dict(otel.headers or {})
-    endpoint = otel.endpoint
-    if protocol == OTEL_PROTOCOL_HTTP:
-        from opentelemetry.exporter.otlp.proto.http._log_exporter import (
-            OTLPLogExporter,
-        )
-
-        return OTLPLogExporter(endpoint=endpoint, headers=headers)
-    if protocol != OTEL_PROTOCOL_GRPC:
-        raise ValueError(f"unsupported otel.protocol: {protocol!r}")
-    from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
-
-    return OTLPLogExporter(endpoint=endpoint, headers=headers)
+def _resolve_log_record_class() -> Any | None:
+    """兼容不同 opentelemetry-sdk 版本的 LogRecord 导入路径。"""
+    candidates = (
+        "opentelemetry._logs.LogRecord",
+        "opentelemetry.sdk._logs._internal.LogRecord",
+        "opentelemetry.sdk._logs.LogRecord",
+    )
+    for dotted in candidates:
+        module_name, _, attr = dotted.rpartition(".")
+        try:
+            module = importlib.import_module(module_name)
+            cls = getattr(module, attr, None)
+            if cls is not None:
+                return cls
+        except Exception:  # noqa: BLE001
+            continue
+    return None
 
 
 def build_emitter(
-    otel: OtelConfig,
+    otel: OtelConfig | None = None,
     *,
     service: str | None = None,
     override: AuditEmitter | None = None,
 ) -> AuditEmitter:
+    """装配写出端。
+
+    ``otel`` / ``service`` 保留签名以兼容旧调用，**不再**据此自建 OTLP exporter。
+    有 override 用 override；否则始终返回 SharedProviderEmitter（无 Provider 时 emit 为 no-op）。
+    """
+    _ = otel, service  # 兼容保留；写出由进程 Provider / 部署 env 决定
     if override is not None:
         return override
-    if not otel.enabled:
-        return NoopEmitter()
-    return OtelLogsEmitter.create(otel, service=service)
+    return SharedProviderEmitter()
