@@ -1,8 +1,9 @@
 # coding: utf-8
-"""SM 对外 HTTP handler（对外仅 5 个端点，prefix /api/session）：
+"""SM 对外 HTTP handler（对外仅 6 个端点，prefix /api/session）：
 
 - route           同步路由 + 占额度（幂等键 = metadata.request_id）
 - touch           保活 / EOS
+- rebind          session.create 临时 key 原子改绑为真实 id（to 空=驱逐；Lua 幂等）
 - config_sync     Claw Manager 配置全量下发（containers + templates + scopes）
 - config_refresh  强制刷新：全 scope Pod 优雅日落并按存量配置重建（无载荷）
 - cleanup         运维批删 Pod（handler 在 SM，委托 rm_facade.cleanup）
@@ -256,10 +257,36 @@ async def handle_cleanup(ctx, env: Envelope) -> dict:
     return {"cleaned": cleaned}
 
 
+async def handle_rebind(ctx, env: Envelope) -> dict:
+    """POST /api/session/rebind：session.create 临时 key 原子改绑为真实 id。
+
+    载荷：metadata.session_id = 临时 key（from），rawdata.to = 真实 id（空/缺省
+    = 驱逐）。幂等由 Lua 语义保证（noop/overtaken），不走 request_id 结果缓存
+    ——重放无副作用，且避免缓存写失败把已生效的改绑变成错误响应。
+    """
+    orchestrator, _, _ = _services(ctx)
+    metadata = env.metadata
+    from_sid = metadata.session_id or ""
+    to_raw = (env.rawdata or {}).get("to")
+    to_sid = str(to_raw).strip() if to_raw is not None else ""
+    t0 = time.monotonic()
+    try:
+        result = await orchestrator.rebind(metadata.request_id, from_sid, to_sid)
+    except AgentRuntimeError as exc:
+        return _fail(env, exc, endpoint="rebind", duration_ms=(time.monotonic() - t0) * 1000,
+                     session=from_sid, request_id=metadata.request_id)
+    except _INFRA_EXCEPTIONS as exc:
+        return _infra_fail(env, exc, endpoint="rebind",
+                           duration_ms=(time.monotonic() - t0) * 1000,
+                           session=from_sid, request_id=metadata.request_id)
+    return result
+
+
 def register_handlers(app) -> None:
-    """把 5 个 handler 注册到 App（msg_type 即 REST 路径段 /api/session/{type}）。"""
+    """把 6 个 handler 注册到 App（msg_type 即 REST 路径段 /api/session/{type}）。"""
     app.handle("route", summary="同步路由 + 占额度")(handle_route)
     app.handle("touch", summary="保活 / EOS，刷新老化")(handle_touch)
+    app.handle("rebind", summary="session.create 临时 key 原子改绑为真实 id（to 空=驱逐）")(handle_rebind)
     app.handle("config_sync", summary="配置全量下发（containers + templates + scopes）")(handle_config_sync)
     app.handle("config_refresh", summary="强制刷新：全 scope Pod 优雅日落并按存量配置重建（无载荷）")(handle_config_refresh)
     app.handle("cleanup", summary="运维批删 AgentServer Pod")(handle_cleanup)

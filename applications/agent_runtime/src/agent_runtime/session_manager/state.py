@@ -190,6 +190,34 @@ class SessionState:
             return None
         return {"scope_id": ret[1], "pod_id": ret[2], "remaining": ret[3]}
 
+    async def rebind(
+        self, from_session_id: str, to_session_id: str, now: int, default_ttl: int = 60,
+    ) -> dict[str, str]:
+        """临时路由 key 原子改绑（session.create 真实 id 回填，幂等）。
+
+        ``to_session_id`` 为空串 = 驱逐（create 失败立即释放槽位）。返回
+        ``{'action','scope_id','pod_id','remaining'}``，action 见 lua_scripts
+        ``LUA_REBIND`` 注释（noop/rubble/evicted/overtaken/rebound）。
+        """
+        ret = await self.eval(
+            lua.LUA_REBIND, from_session_id, to_session_id, now, default_ttl,
+        )
+        if not ret:
+            # eval 层空返回兜底（真异常已 WARNING 留痕）——对齐 route_place 的
+            # fail-closed 姿态：视作 from 不存在，调用方无副作用可做
+            return {"action": "noop", "scope_id": "", "pod_id": "", "remaining": "0"}
+        if ret[0] == "rubble":
+            logger.warning(
+                "rebind rubble session (hash missing scope/pod): from=%s",
+                from_session_id,
+            )
+        return {
+            "action": ret[0],
+            "scope_id": ret[1] if len(ret) > 1 else "",
+            "pod_id": ret[2] if len(ret) > 2 else "",
+            "remaining": ret[3] if len(ret) > 3 else "0",
+        }
+
     async def touch(self, session_id: str, now: int, default_ttl: int = 60) -> tuple[bool, str]:
         """保活。返回 (touched, pod_id)。"""
         ret = await self.eval(lua.LUA_TOUCH, session_id, now, default_ttl)

@@ -285,3 +285,75 @@ async def test_route_idempotent_replay_via_handler_idempotency(runtime):
     assert await runtime.sm_state.redis.scard(
         runtime.sm_state.k.scope_sessions(SCOPE)
     ) == 1                                    # 只占一份额度
+
+
+# ---------------------------------------------------------------- rebind：create 临时 key 改绑（双计数/亲和修复）
+
+
+@requires_lua
+async def test_rebind_restores_single_slot_and_affinity(runtime):
+    """回归（ns wmq 实证缺陷）：create 以临时 key route 占槽，真实 id 首条
+    chat.send 会二次占槽（双计数）且可能落别的 Pod（亲和断裂）。rebind 后：
+    scope 仅剩真实 id 一个成员，后续 route(真实 id) 返回原 Pod。"""
+    await runtime.seed_template()
+    temp = "webhttp_543f23f0f3ad"          # gateway HTTP 路径临时 key 形态
+    real = "web_1a0bdc6eef0_3c4917fe393f"  # AgentServer 返回的真实 id 形态
+    first = await runtime.route(temp)
+    result = await runtime.orchestrator.rebind(
+        request_id="req-rebind-1", from_session_id=temp, to_session_id=real,
+    )
+    assert result["action"] == "rebound"
+    assert result["pod_id"] == first["pod_id"]
+    # 双计数修复：scope 槽位只算真实 id 一个
+    assert await runtime.sm_state.redis.smembers(
+        runtime.sm_state.k.scope_sessions(SCOPE)
+    ) == {real.encode()}
+    assert await runtime.sm_state.redis.smembers(
+        runtime.sm_state.k.pod_sessions(SCOPE, first["pod_id"])
+    ) == {real.encode()}
+    # 亲和修复：真实 id 的 route 命中原 Pod（refresh，非全新放置）
+    second = await runtime.route(real)
+    assert second["pod_id"] == first["pod_id"]
+    assert await runtime.sm_state.redis.scard(
+        runtime.sm_state.k.scope_sessions(SCOPE)
+    ) == 1
+
+
+@requires_lua
+async def test_rebind_idempotent_replay(runtime):
+    """同 (from,to) 重放 / from 已收走 → noop，不产生额外副作用。"""
+    await runtime.seed_template()
+    await runtime.route("temp_1")
+    first = await runtime.orchestrator.rebind("req-rb-1", "temp_1", "real_1")
+    assert first["action"] == "rebound"
+    replay = await runtime.orchestrator.rebind("req-rb-2", "temp_1", "real_1")
+    assert replay["action"] == "noop"
+    assert await runtime.sm_state.redis.scard(
+        runtime.sm_state.k.scope_sessions(SCOPE)
+    ) == 1
+
+
+@requires_lua
+async def test_rebind_evict_frees_scope_slot(runtime):
+    """create 失败驱逐：to 为空立即释放槽位——scope_concurrency=1 顶死时，
+    驱逐后新会话可立即 route（不等 session_ttl）。"""
+    await runtime.seed_template(scope_concurrency=1, pod_concurrency=1)
+    await runtime.route("temp_fail")        # 占满唯一槽位
+    result = await runtime.orchestrator.rebind("req-rb-3", "temp_fail", None)
+    assert result["action"] == "evicted"
+    freed = await runtime.route("sess_next")   # 槽位已释放，不再 scope_full
+    assert freed["pod_id"]
+
+
+@requires_lua
+async def test_rebind_rejects_invalid_params(runtime):
+    """from 缺失 / 键名含花括号（破坏 hash tag 同槽性）→ InvalidParams。"""
+    from agent_runtime.errors import InvalidParams
+
+    await runtime.seed_template()
+    with pytest.raises(InvalidParams):
+        await runtime.orchestrator.rebind("req-rb-4", "", "real_x")
+    with pytest.raises(InvalidParams):
+        await runtime.orchestrator.rebind("req-rb-5", "temp{bad", "real_x")
+    with pytest.raises(InvalidParams):
+        await runtime.orchestrator.rebind("req-rb-6", "temp_ok", "real{bad")

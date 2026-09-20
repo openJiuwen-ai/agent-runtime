@@ -150,6 +150,22 @@ async def verify(url: str, wipe: bool) -> int:
     check("SM: evict 四处同删", evicted is not None
           and evicted.get("scope_id") == "v-scope")
     await sm.evict("v-s2")
+    # [3c] LUA_REBIND(2026-09-session-create-rebind)：临时 key 槽位原子搬给
+    # 真实 id——四处多键同脚本访问，cluster 下依赖 hash tag 同槽 + eval 路由锚
+    await client.hset(sm.k.pod_info("v-scope", "v-pod-1"), mapping={
+        "sse_url": "http://127.0.0.1:8086", "deploy_ver": "v1"})
+    await sm.route_place(
+        session_id="v-temp", scope_id="v-scope", expiry_ts=now + 60,
+        session_ttl=60, scope_concurrency=10, pod_concurrency=10,
+        max_pods=2, now=now,
+    )
+    rb = await sm.rebind("v-temp", "v-real", now=now + 1)
+    members = await client.smembers(sm.k.scope_sessions("v-scope"))
+    check("SM: rebind 临时 key 原子搬移", rb.get("action") == "rebound"
+          and members == {b"v-real"}, f"{rb.get('action')}/{sorted(members)}")
+    touched_real, _ = await sm.touch("v-real", now + 2)
+    check("SM: rebind 后真实 id touch 保活", touched_real is True)
+    await sm.evict("v-real")
 
     # [4] RM 状态层
     rm = ResourceState(client)
