@@ -12,7 +12,8 @@
   [1] bootstrap：``redis+cluster://`` 构造集群客户端；URL 带库号快速失败
   [2] 选主协调器：抽签（winner/candidates 经 hash tag 同槽）
   [3] SM 状态层：route_place / register_pod / touch / evict
-  [4] RM 状态层：acquire / scope 配置 / known_scope_ids（SCAN dict 游标）/
+  [4] RM 状态层：acquire / scope 配置 / known_scope_ids（SCAN dict 游标，
+      含 1000 键强制分页续扫——2026-09-20 issue #4581 回归）/
       pop_idle（follower 接管忙记账，2026-09-17）/ 排空纪元 surge（2026-09-17）
   [5] 评估域（2026-09）：计数 HINCRBY / 采样 ZADD / 报告 SET+ZADD
       （``{agent_runtime:eval}`` 单槽 tag；全单键命令，无 Lua）
@@ -166,6 +167,29 @@ async def verify(url: str, wipe: bool) -> int:
     scopes = await rm.known_scope_ids()
     check("RM: known_scope_ids 扫出两个 scope(SCAN dict 游标)",
           {"v-scope", "v-scope-2"} <= set(scopes), str(scopes))
+
+    # [4a-2] SCAN 分页续扫(2026-09-20 issue #4581):批量造 scope:config 键,
+    # 使归属节点(全部 RM 键同一 hash tag → 单主节点)键空间一页扫不完——
+    # 首轮 SCAN 游标 dict 必含非零项,续扫须逐节点标量游标;手写循环把整个
+    # dict 当游标回传即 DataError(线上 /visualization/config 503 根因)。
+    N_SCAN = 1000
+    pipe = client.pipeline()
+    for i in range(N_SCAN):
+        pipe.hset(rm.k.scope_config(f"v-scan-{i:04d}"), mapping={"max_pods": "1"})
+    await pipe.execute()
+    cursors, _ = await client.scan(0, match=f"{rm.prefix}resource:scope:*:config",
+                                   count=200)
+    paginated = any(int(c) for c in cursors.values())   # dict 游标有非零项才证明踩到分页
+    scan_scopes = await rm.known_scope_ids()
+    n_scan = sum(1 for x in scan_scopes if x.startswith("v-scan-"))
+    check("RM: 1000 键迫出 SCAN 分页(首轮游标 dict 含非零项)",
+          paginated, str(cursors))
+    check("RM: known_scope_ids 分页续扫全量扫出(不丢页/不 DataError)",
+          n_scan == N_SCAN, f"{n_scan}/{N_SCAN}")
+    pipe = client.pipeline()
+    for i in range(N_SCAN):
+        pipe.delete(rm.k.scope_config(f"v-scan-{i:04d}"))
+    await pipe.execute()
 
     # [4b] 代次日落(config_refresh,场景 M-R):REGISTER 烙印 + ACQUIRE 过滤
     await rm.register_pod(

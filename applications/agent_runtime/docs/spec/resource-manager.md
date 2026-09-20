@@ -26,7 +26,7 @@
 | `bump_generation(scope_id)` | `generation: int`(代次日落:HINCRBY 原子自增,唯一写点;调用方=config_refresh 全量 + config_sync 路由性排除变更[2026-09-scope-affinity-hold]) |
 | `sunset_pending_pods(scope_id)` | `list[str]`(config_refresh 前置闸门:scope 注册 Pod 中 `generation ≠ 当前配置代次` 者,忙排空/idle 待回收均计;非空 → SM 侧 409 CONFIG_SYNC_BUSY,见 session-manager spec ⓪ 步) |
 | `cleanup(namespace?, label_selector?)` | `cleaned: int`(运维批删) |
-| `known_scope_ids()` | RM 已知 scope 枚举(SCAN scope:config;config_sync 的被删 scope drain 收敛用——RM config 键是幻影预热的真源) |
+| `known_scope_ids()` | RM 已知 scope 枚举(SCAN scope:config,分页续扫由客户端 `scan_iter` 驱动——cluster 游标是 `{节点: 游标}` dict,须逐节点标量续扫,手写回传 dict 即 DataError,issue #4581;config_sync 的被删 scope drain 收敛用——RM config 键是幻影预热的真源) |
 
 ## orchestrator.py —— acquire 决策树
 
