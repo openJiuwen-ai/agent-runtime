@@ -8,7 +8,9 @@ K（reclaim 前置状态）、G/J（purge 清理）的 Redis 侧断言。
 from __future__ import annotations
 
 import pytest
+from redis.exceptions import DataError
 
+from agent_runtime.resource_manager.state import ResourceState
 from tests.conftest import requires_lua
 
 SCOPE = "grp-bot"   # scope_id 由 config_sync 下发,测试用字面量
@@ -187,6 +189,57 @@ async def test_known_scope_ids_scan(rm_state):
     await rm_state.save_scope_config("scopeA", {"max_pods": 1})
     await rm_state.save_scope_config("scopeB", {"max_pods": 2})
     assert await rm_state.known_scope_ids() == ["scopeA", "scopeB"]
+
+
+class _ClusterScanShim:
+    """redis-py cluster SCAN 语义最小替身（issue #4581 回归锚）。
+
+    忠实模拟 cluster 客户端：首轮 SCAN 全主节点合并，游标为 {节点: 游标}
+    dict；续扫必须逐节点传标量游标（target_nodes=节点）。dict 整体回传
+    即 DataError——若实现退化为手写 scan 游标循环，本替身会如实复现
+    线上 503 的故障形态（键空间一页扫不完即炸）。
+    """
+
+    def __init__(self, node_pages: dict[str, list[list[str]]]) -> None:
+        self._pages = node_pages  # {节点名: [第 0 轮命中键, 第 1 轮, ...]}
+
+    async def scan(self, cursor=0, match=None, count=None, target_nodes=None):
+        if isinstance(cursor, dict):
+            raise DataError("Invalid input of type: 'dict'.")
+        nodes = [target_nodes] if target_nodes is not None else list(self._pages)
+        cursors, keys = {}, []
+        for node in nodes:
+            pages = self._pages[node]
+            keys += pages[cursor]
+            # 游标即"下一轮页号"，页尽归零（对齐真实 SCAN 的续扫/终止语义）
+            cursors[node] = cursor + 1 if cursor + 1 < len(pages) else 0
+        return cursors, keys
+
+    async def scan_iter(self, match=None, count=None, _type=None, **kwargs):
+        # 与 redis-py AsyncClusterDataAccessCommands.scan_iter 同构
+        cursors, data = await self.scan(match=match, count=count)
+        for key in data:
+            yield key
+        cursors = {n: c for n, c in cursors.items() if c != 0}
+        while cursors:
+            for name, cursor in list(cursors.items()):
+                cur, data = await self.scan(
+                    cursor=cursor, match=match, count=count, target_nodes=name)
+                for key in data:
+                    yield key
+                cursors[name] = cur[name]
+            cursors = {n: c for n, c in cursors.items() if c != 0}
+
+
+async def test_known_scope_ids_cluster_dict_cursor_pagination():
+    """cluster dict 游标分页续扫（issue #4581）：多轮扫描不再把 dict 当游标回传。"""
+    k = "{resource_manager}:resource:scope:%s:config"
+    shim = _ClusterScanShim({
+        "nodeA": [[k % "s1", k % "s2"],   # 首轮 2 键,游标未归零
+                  [k % "s3"]],            # 次轮扫尽
+        "nodeB": [[k % "s4"]],            # 单轮扫尽
+    })
+    assert await ResourceState(shim).known_scope_ids() == ["s1", "s2", "s3", "s4"]
 
 
 # ---------------------------------------------------------------- follower 等待室

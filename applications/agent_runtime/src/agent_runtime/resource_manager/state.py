@@ -357,23 +357,18 @@ class ResourceState:
     async def known_scope_ids(self) -> list[str]:
         """扫全部 scope:config 键（autoscale / reclaim 的 per-scope 遍历源）。
 
-        cluster 客户端的 SCAN 默认扫全部主节点，游标返回 {节点: 游标} dict
-        （单实例/fakeredis 返回 int）——两者都要全部归零才算扫尽。
+        分页续扫交由客户端 ``scan_iter`` 驱动：cluster 的 SCAN 默认扫全部
+        主节点，游标返回 {节点: 游标} dict（单实例/fakeredis 为 int），续扫
+        必须逐节点传标量游标——redis-py 的 scan_iter 内置该语义。手写循环
+        曾把整个 dict 当游标回传，键空间一页扫不完即 DataError，配置查询/
+        autoscale/reclaim 全断（2026-09-20 issue #4581）。
         """
         pattern = f"{self.prefix}resource:scope:*:config"
         scope_ids: list[str] = []
-        cursor: Any = 0
-        while True:
-            cursor, keys = await self.redis.scan(cursor, match=pattern, count=200)
-            for key in keys:
-                # {resource_manager}:resource:scope:{scope_id}:config → scope_id
-                parts = s(key).split(":")
-                scope_ids.append(parts[-2])
-            if isinstance(cursor, dict):
-                if not any(to_int(c) for c in cursor.values()):
-                    break
-            elif to_int(cursor) == 0:
-                break
+        async for key in self.redis.scan_iter(match=pattern, count=200):
+            # {resource_manager}:resource:scope:{scope_id}:config → scope_id
+            parts = s(key).split(":")
+            scope_ids.append(parts[-2])
         return sorted(set(scope_ids))
 
     # -------------------------------------------------------------- 健康探测（场景 N）
