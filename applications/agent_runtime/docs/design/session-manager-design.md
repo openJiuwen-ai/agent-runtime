@@ -106,6 +106,14 @@
 - **out**:`{ touched:bool }`(`false`=会话已过期/不存在,gateway 应回退重新 `route`)
 - **用途**:① 保活:gateway 对仍打开的页面会话周期性调用,无新消息时阻止老化;② EOS:response 末帧时调用,作为旁路感知会话活动的信号。**不改任何计数**。
 
+### 2.2b `POST /api/session/rebind` —— session.create 临时 key 原子改绑(2026-09-session-create-rebind)
+
+- **背景**:gateway 的 `session.create` 以临时 key(`sess_*`/`webhttp_*`/身份组合串)调 `route` 占槽,AgentServer 返回真实 session id 后,首条 `chat.send` 按真实 id 再次 route——双计数(临时 key 残留至 `session_ttl` 过期)+ 亲和断裂(真实 id 全新 placement 可能落别的 Pod,而会话元数据已写在 create 实际服务的 Pod)。runtime 是 bypass 控制面、响应不过境,改绑由 **gateway 在把 create 响应交还调用方之前**触发本端点(时序保证:客户端拿到真实 id 时改绑已完成,chat.send 不可能抢先)。
+- **in**:`session_id`(metadata)= from(临时 key);`rawdata.to` = 真实 id(**空/缺省 = 驱逐**,create 失败立即释放槽位)
+- **out**:`{ action, scope_id, pod_id, remaining }`,action ∈ `noop`(from 不存在,幂等)/`rubble`(残骸自清)/`evicted`(to 空驱逐 or 绑定 Pod 注册已消失)/`overtaken`(to 已有自己的绑定——首条 chat.send 抢先放置,保留 to 仅清 from)/`rebound`(搬移成功)
+- **语义**:四处不变量整体 from→to(集合 SADD/SREM、HASH 重建、ZSET 换名),TTL 刷新(`session_ttl` 就地读 from 哈希);**from 已过期未被 sweeper 收走仍搬移**(慢 create/冷启动下亲和成立);幂等性由 Lua 语义保证,**不走 request_id 结果缓存**(单次 EVAL 重放无副作用,且缓存写失败不得把已生效改绑变错误响应);rebind 失败时 gateway 侧降级为现状(临时 key 等 TTL 过期),不阻塞 create 响应。
+- **Lua 全文**:`LUA_REBIND`(§5.1)。
+
 ### 2.3 notify_pod_dead —— RM 模块 → SM 模块(进程内 Facade)【进程内 Facade 方法,不再对外 HTTP】
 
 > ⚠️ 此接口现为 `SessionManagerFacade.notify_pod_dead(pod_id)`,**不再对外 HTTP**,仅由 resource_manager 模块(死Pod / reclaim 路径)经进程内 Facade 调用;入参 / 出参 / 清注册语义不变。
@@ -252,7 +260,7 @@
 
 ### 5.1 Lua 脚本(承担所有 runtime 状态变更,原子)
 
-> 脚本全集(6 个,实现与本文对齐):`LUA_ROUTE_PLACE` / `LUA_EVICT` / `LUA_TOUCH` / `LUA_SWEEP_IDLE_NOTIFY`(核心 4 个,下文全文)+ `LUA_REGISTER_POD`(acquire 成功登记,§5.2)+ `LUA_CLEANUP_POD`(notify_pod_dead 清注册,§2.3)。(`LUA_WAITER_GATE` 等待队列闸门已随 2026-09 场景 F 快失败拆除,历史见 §8.2/feature 文档。)
+> 脚本全集(7 个,实现与本文对齐):`LUA_ROUTE_PLACE` / `LUA_EVICT` / `LUA_REBIND` / `LUA_TOUCH` / `LUA_SWEEP_IDLE_NOTIFY`(核心 5 个,下文全文)+ `LUA_REGISTER_POD`(acquire 成功登记,§5.2)+ `LUA_CLEANUP_POD`(notify_pod_dead 清注册,§2.3)。(`LUA_WAITER_GATE` 等待队列闸门已随 2026-09 场景 F 快失败拆除,历史见 §8.2/feature 文档。)
 >
 > **调用约定(2026-08-29 cluster 兼容)**:键名在脚本内由 `ARGV[1]`(键前缀
 > `{session_manager}:`,hash tag)拼出;调用侧把前缀同时声明为 `KEYS[1]` 作路由锚
@@ -343,6 +351,45 @@ remaining = SCARD(pod:{scope_id}:{pod_id}:sessions)   # 该 Pod 剩余 session �
 # 注意:不触发 idle_consider——空 Pod 回收统一由 sweeper 空 Pod pass 驱动(§5.4),
 # 避免 evict 的每条调用路径都重复 idle_consider 逻辑与去重判断。
 return {scope_id, pod_id, remaining}
+```
+
+**`LUA_REBIND(from_session_id, to_session_id, now, default_session_ttl)`** —— session.create 临时 key 原子改绑(2026-09-session-create-rebind,接口语义见 §2.2b)。原子,幂等;调用方为 gateway 路由客户端(拿到 create 响应真实 id 后、交还调用方之前)。
+```
+existing = HGETALL(session:{from})
+if not existing: return {noop}                           # 已被 sweeper 收走 / 已搬过,幂等
+
+# 残骸自卫(同 LUA_EVICT):缺 scope_id/pod_id → 自清两处,不上抛
+if existing.scope_id == nil or existing.pod_id == nil:
+    ZREM session_expiry from; DEL session:{from}; return {rubble}
+
+scope_id, pod_id = existing.scope_id, existing.pod_id
+
+# to 为空 = 驱逐(create 失败,立即释放槽位,不等 session_ttl);to == from 幂等
+if to == "": SREM scope:{scope_id}:sessions from; SREM pod:{scope_id}:{pod_id}:sessions from
+             ZREM session_expiry from; DEL session:{from}
+             return {evicted, scope_id, pod_id, remaining}
+if to == from: return {noop}
+
+# to 已有自己的绑定(首条 chat.send 抢先 route)→ 保留 to(其绑定可能指向别的
+# Pod,那是已生效的亲和,不得覆盖),仅清 from
+if EXISTS(session:{to}):
+    (同上清 from 四处); return {overtaken, scope_id, pod_id, remaining}
+
+# 绑定 Pod 注册已消失(notify_pod_dead 清理窗口)→ 亲和信息失效,仅清 from,
+# 真实 id 由后续 chat.send 的 route 全新放置
+if not EXISTS(pod:{scope_id}:{pod_id}:info):
+    (同上清 from 四处); return {evicted, scope_id, pod_id, 0}
+
+# 搬移:四处不变量整体 from→to;TTL 刷新(session_ttl 就地读 from 哈希)。
+# from 已过期未被 sweeper 收走仍搬移——慢 create(冷启动)下亲和仍应成立;
+# scope/pod 槽位计数不变(一删一加)。
+ttl = existing.session_ttl or default_session_ttl; expiry = now + ttl
+SADD scope:{scope_id}:sessions to;   SREM scope:{scope_id}:sessions from
+SADD pod:{scope_id}:{pod_id}:sessions to; SREM pod:{scope_id}:{pod_id}:sessions from
+HSET session:{to}, scope_id, pod_id, expiry, session_ttl=ttl); DEL session:{from}
+ZREM session_expiry from; ZADD session_expiry {expiry: to}
+DEL pod:{scope_id}:{pod_id}:idle_notified                # 复用 Pod 清空标记(同 ROUTE_PLACE 提交步)
+return {rebound, scope_id, pod_id, remaining}
 ```
 
 **`LUA_TOUCH(session_id, now)`** —— 保活/续期。touch 入参只有 session_id;`session_ttl` 直接从 session HASH 的 `existing.session_ttl` 读(route 写入),**不读 scope:config**(避免 config_sync `DEL` 后的 default fallback 不一致)。不改任何计数(额度不变)。

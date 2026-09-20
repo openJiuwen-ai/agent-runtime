@@ -365,3 +365,129 @@ async def test_route_place_rubble_hash_self_heals_not_crashes(sm_state):
     info = await sm_state.redis.hgetall(sm_state.k.session("s-rubble-rp"))
     assert info[b"scope_id"] == SCOPE.encode() and info[b"pod_id"] == b"pod_rp"
     assert b"expiry" in info and b"session_ttl" in info
+
+
+# ---------------------------------------------------------------- LUA_REBIND：临时 key 原子改绑
+
+
+@requires_lua
+async def test_rebind_moves_four_places_and_refreshes_ttl(sm_state, placed):
+    """rebound 主路径：四处不变量整体 from→to，TTL 按新时刻刷新。"""
+    await placed()   # sess_1 已放置 pod_1（expiry=NOW+60, ttl=60）
+    result = await sm_state.rebind("sess_1", "web_real_1", now=NOW + 5)
+    assert result["action"] == "rebound"
+    assert result["scope_id"] == SCOPE and result["pod_id"] == "pod_1"
+    # 集合成员换名（计数不变）
+    assert await sm_state.redis.scard(sm_state.k.scope_sessions(SCOPE)) == 1
+    assert await sm_state.redis.smembers(sm_state.k.scope_sessions(SCOPE)) == {b"web_real_1"}
+    assert await sm_state.redis.smembers(sm_state.k.pod_sessions(SCOPE, "pod_1")) == {b"web_real_1"}
+    # 哈希搬移 + expiry 刷新（NOW+5 + 60，读 from 哈希的 session_ttl）
+    binding = await sm_state.redis.hgetall(sm_state.k.session("web_real_1"))
+    assert binding[b"scope_id"] == SCOPE.encode()
+    assert binding[b"pod_id"] == b"pod_1"
+    assert int(binding[b"expiry"]) == NOW + 5 + 60
+    assert binding[b"session_ttl"] == b"60"
+    assert await sm_state.redis.exists(sm_state.k.session("sess_1")) == 0
+    # ZSET 成员换名
+    assert await sm_state.redis.zscore(sm_state.k.session_expiry(), "sess_1") is None
+    assert await sm_state.redis.zscore(sm_state.k.session_expiry(), "web_real_1") == NOW + 65
+
+
+@requires_lua
+async def test_rebind_noop_when_from_missing(sm_state):
+    """from 不存在（已被 sweeper 收走/已搬过）→ 幂等 noop。"""
+    result = await sm_state.rebind("ghost", "web_real_1", now=NOW)
+    assert result["action"] == "noop"
+    assert await sm_state.redis.exists(sm_state.k.session("web_real_1")) == 0
+
+
+@requires_lua
+async def test_rebind_same_id_is_noop(sm_state, placed):
+    await placed()
+    result = await sm_state.rebind("sess_1", "sess_1", now=NOW + 5)
+    assert result["action"] == "noop"
+    assert await sm_state.redis.scard(sm_state.k.scope_sessions(SCOPE)) == 1
+
+
+@requires_lua
+async def test_rebind_empty_to_evicts(sm_state, placed):
+    """to 为空 = 驱逐（create 失败立即释放槽位，不等 session_ttl）。"""
+    await placed()
+    result = await sm_state.rebind("sess_1", "", now=NOW + 5)
+    assert result["action"] == "evicted"
+    assert result["scope_id"] == SCOPE and result["pod_id"] == "pod_1"
+    assert await sm_state.redis.scard(sm_state.k.scope_sessions(SCOPE)) == 0
+    assert await sm_state.redis.scard(sm_state.k.pod_sessions(SCOPE, "pod_1")) == 0
+    assert await sm_state.redis.exists(sm_state.k.session("sess_1")) == 0
+    assert await sm_state.redis.zscore(sm_state.k.session_expiry(), "sess_1") is None
+
+
+@requires_lua
+async def test_rebind_overtaken_keeps_existing_to_binding(sm_state, placed):
+    """to 已有自己的绑定（首条 chat.send 抢先 route）→ 仅清 from，保留 to。"""
+    await placed()   # sess_1 → pod_1（1/2）
+    action, pod = await sm_state.route_place(
+        "web_real_1", SCOPE, NOW + 60, 60, 3, 2, 2, NOW
+    )
+    assert action == "placed"   # first-fit 有位，web_real_1 也落 pod_1（2/2）
+    result = await sm_state.rebind("sess_1", "web_real_1", now=NOW + 5)
+    assert result["action"] == "overtaken"
+    # from 四处清除
+    assert await sm_state.redis.exists(sm_state.k.session("sess_1")) == 0
+    assert await sm_state.redis.zscore(sm_state.k.session_expiry(), "sess_1") is None
+    # to 绑定原样保留（expiry 不被改绑刷新）
+    binding = await sm_state.redis.hgetall(sm_state.k.session("web_real_1"))
+    assert int(binding[b"expiry"]) == NOW + 60
+    # 计数不增：scope 仍 2 个成员（web_real_1 + 无），实为 1（sess_1 被清）
+    assert await sm_state.redis.scard(sm_state.k.scope_sessions(SCOPE)) == 1
+
+
+@requires_lua
+async def test_rebind_dead_pod_falls_back_to_evict(sm_state, placed):
+    """绑定 Pod 注册已消失（notify_pod_dead 窗口）→ 仅清 from，不造死绑定。"""
+    await placed()
+    await sm_state.redis.delete(sm_state.k.pod_info(SCOPE, "pod_1"))
+    result = await sm_state.rebind("sess_1", "web_real_1", now=NOW + 5)
+    assert result["action"] == "evicted"
+    assert await sm_state.redis.exists(sm_state.k.session("web_real_1")) == 0
+    assert await sm_state.redis.scard(sm_state.k.scope_sessions(SCOPE)) == 0
+
+
+@requires_lua
+async def test_rebind_rubble_hash_self_heals(sm_state, caplog):
+    """残骸自卫（同 EVICT/TOUCH）：半成品哈希自清两处，不上抛。"""
+    import logging as _logging
+    await sm_state.redis.hset(sm_state.k.session("s-rubble-rb"), "scope_id", SCOPE)
+    await sm_state.redis.zadd(sm_state.k.session_expiry(), {"s-rubble-rb": 1})
+    with caplog.at_level(_logging.WARNING, logger="agent_runtime.session_manager"):
+        result = await sm_state.rebind("s-rubble-rb", "web_real_1", now=NOW)
+    assert result["action"] == "rubble"
+    assert await sm_state.redis.exists(sm_state.k.session("s-rubble-rb")) == 0
+    assert await sm_state.redis.zscore(sm_state.k.session_expiry(), "s-rubble-rb") is None
+    assert any("rubble" in r.getMessage() for r in caplog.records)
+
+
+@requires_lua
+async def test_rebind_resurrects_expired_unswept_binding(sm_state, placed):
+    """from 已过期未被 sweeper 收走 → 仍搬移（慢 create 下亲和成立），
+    to 获得全新 TTL；槽位计数不变。"""
+    await placed()
+    result = await sm_state.rebind("sess_1", "web_real_1", now=NOW + 3600)
+    assert result["action"] == "rebound"
+    binding = await sm_state.redis.hgetall(sm_state.k.session("web_real_1"))
+    assert int(binding[b"expiry"]) == NOW + 3600 + 60
+    assert await sm_state.redis.scard(sm_state.k.scope_sessions(SCOPE)) == 1
+
+
+@requires_lua
+async def test_rebind_reuses_pod_ttl_from_binding(sm_state):
+    """session_ttl 就地读 from 哈希（非默认值）：TTL 用绑定自身的 120。"""
+    await sm_state.register_pod(SCOPE, "pod_t", "http://10.0.0.3:8080/sse", "ver1")
+    await sm_state.route_place(
+        "sess_t", SCOPE, NOW + 120, 120, 3, 2, 2, NOW
+    )
+    result = await sm_state.rebind("sess_t", "web_real_t", now=NOW + 5, default_ttl=60)
+    assert result["action"] == "rebound"
+    binding = await sm_state.redis.hgetall(sm_state.k.session("web_real_t"))
+    assert int(binding[b"expiry"]) == NOW + 5 + 120
+    assert binding[b"session_ttl"] == b"120"

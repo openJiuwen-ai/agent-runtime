@@ -111,6 +111,28 @@ def test_http_all_five_endpoints(tmp_path, monkeypatch):
         assert bad_user.status_code == 400
         assert bad_user.json()["error_code"] == "VALIDATION"
 
+        # 5c. rebind：临时 key 原子改绑（metadata.session_id=from，
+        #     rawdata.to=真实 id；空 to=驱逐）。幂等重放 → noop。
+        #     用独立会话，避免搬走 sess-smoke-1 影响步骤 6 的亲和断言。
+        rb_route = client.post("/api/session/route", json=_envelope(
+            "route", session_id="temp-smoke-http"))
+        assert rb_route.status_code == 200, rb_route.text
+        rb1 = client.post("/api/session/rebind", json=_envelope(
+            "rebind", session_id="temp-smoke-http", rawdata={"to": "real-smoke-1"}))
+        assert rb1.status_code == 200, rb1.text
+        assert rb1.json()["rawdata"]["action"] == "rebound"
+        rb2 = client.post("/api/session/rebind", json=_envelope(
+            "rebind", session_id="temp-smoke-http", rawdata={"to": "real-smoke-1"}))
+        assert rb2.json()["rawdata"]["action"] == "noop"
+        # 改绑后真实 id 可 touch（亲和哈希已换名）；from 端点参数缺失 → 400
+        real_touched = client.post("/api/session/touch", json=_envelope(
+            "touch", session_id="real-smoke-1"))
+        assert real_touched.json()["rawdata"] == {"touched": True}
+        bad_rebind = client.post("/api/session/rebind", json=_envelope(
+            "rebind", session_id=None, rawdata={"to": "x"}))
+        assert bad_rebind.status_code == 400
+        assert bad_rebind.json()["error_code"] == "VALIDATION"
+
         # 6. config_refresh：强制刷新（无载荷）→ 老候选全摘、亲和不动、新会话扩新 Pod
         refreshed = client.post("/api/session/config_refresh", json=_envelope(
             "config_refresh"))

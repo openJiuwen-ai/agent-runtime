@@ -271,6 +271,45 @@ class SessionOrchestrator:
         )
         return acquired["pod_id"], acquired["pod_sse_url"]
 
+    # -------------------------------------------------------------- rebind
+
+    async def rebind(
+        self, request_id: str, from_session_id: str, to_session_id: str | None,
+    ) -> dict[str, str]:
+        """session.create 真实 id 回填：把临时 key 的槽位原子搬给真实 id。
+
+        gateway 在把 create 响应交还调用方**之前**调用（时序保证：客户端拿到
+        真实 id 时改绑已完成，chat.send 不可能抢先）。``to_session_id`` 为空 =
+        驱逐（create 失败立即释放槽位，不等 session_ttl）。
+
+        幂等性由 Lua 语义保证（from 不存在 → noop；to 已有绑定 → overtaken
+        仅清 from），不依赖 request_id 缓存——单次 EVAL 无副作用重放风险。
+        """
+        if not from_session_id:
+            raise InvalidParams("rebind requires from_session_id")
+        if key_unsafe(from_session_id):
+            raise InvalidParams(
+                f"from_session_id must not contain '{{' or '}}': {from_session_id!r}"
+            )
+        to_sid = str(to_session_id or "").strip()
+        if to_sid and key_unsafe(to_sid):
+            # to 同样进键名（session:{to}），必须过同槽性校验
+            raise InvalidParams(
+                f"to_session_id must not contain '{{' or '}}': {to_sid!r}"
+            )
+        result = await self.state.rebind(
+            from_session_id, to_sid, now_ts(), self.default_session_ttl,
+        )
+        # 生命周期事件（非热路径），INFO 供排障对齐 gateway 侧 create 日志
+        logger.info(
+            "rebind: action=%s from=%s to=%s scope=%s pod=%s remaining=%s "
+            "request_id=%s",
+            result["action"], from_session_id, to_sid or "(evict)",
+            result["scope_id"] or "-", result["pod_id"] or "-",
+            result["remaining"], request_id,
+        )
+        return result
+
     # -------------------------------------------------------------- touch
 
     async def touch(self, session_id: str) -> bool:

@@ -11,10 +11,22 @@
 脚本清单（语义见 SM 设计 §5.1，逐条对齐）：
 - LUA_ROUTE_PLACE        route 原子核心：亲和续期 / rebind 重解 / 闸门 / first-fit / 提交
 - LUA_EVICT              session 移除唯一原语（四处同删）
+- LUA_REBIND             临时路由 key 原子改绑（session.create 真实 id 回填，见下）
 - LUA_TOUCH              保活续期（惰性 evict 兜底；ttl 就地读 session HASH）
 - LUA_SWEEP_IDLE_NOTIFY  空 Pod pass 原子核心：SCARD==0 判定 + NX 去重 + ZREM 退出候选
 - LUA_REGISTER_POD       acquire 成功后登记新 Pod（三处注册同写 + 接入序）
 - LUA_CLEANUP_POD        notify_pod_dead 清该 (scope,pod) 的全部注册
+
+LUA_REBIND 背景：gateway 的 session.create 以临时 key（sess_*/webhttp_*/身份组合串）
+route 占槽，AgentServer 返回真实 session id 后，gateway 在把 create 响应交还调用方
+之前调用本脚本把槽位原子搬给真实 id——修复双计数（临时 key 残留至 session_ttl
+过期）与亲和断裂（真实 id 全新 placement 可能落在别的 Pod，而会话元数据已写在
+create 实际服务的 Pod 上）。返回 action：
+- noop        from 不存在（已过期被 sweeper 收走 / 已搬过）——幂等
+- rubble      残骸自卫（同 LUA_EVICT）
+- evicted     to 为空（create 失败驱逐）或绑定 Pod 注册已消失——仅清 from
+- overtaken   to 已有自己的绑定（首条 chat.send 抢先放置）——仅清 from，保留 to
+- rebound     搬移成功：四处不变量整体从 from 迁至 to，TTL 刷新
 """
 
 from __future__ import annotations
@@ -135,6 +147,90 @@ redis.call('DEL', skey)
 
 local remaining = redis.call('SCARD', pfx .. 'pod:' .. scope .. ':' .. pod .. ':sessions')
 return {'evicted', scope, pod, tostring(remaining)}
+"""
+
+# Argv: prefix, from_session_id, to_session_id（空串=驱逐）, now, default_session_ttl
+LUA_REBIND = r"""
+local pfx     = ARGV[1]
+local from    = ARGV[2]
+local to      = ARGV[3]
+local now     = tonumber(ARGV[4])
+local def_ttl = tonumber(ARGV[5])
+
+local fkey = pfx .. 'session:' .. from
+
+-- 读 from 绑定
+local flat = redis.call('HGETALL', fkey)
+if #flat == 0 then
+  return {'noop', '', '', '0'}        -- 已被 sweeper 收走 / 已搬过，幂等
+end
+local m = {}
+for i = 1, #flat, 2 do m[flat[i]] = flat[i + 1] end
+
+-- 残骸自卫（同 LUA_EVICT）：缺 scope_id/pod_id 的半成品哈希 → 自清两处，
+-- 不上抛（上抛会让 create 响应路径对同一坏键永久失败）。
+if m['scope_id'] == nil or m['pod_id'] == nil then
+  redis.call('ZREM', pfx .. 'session_expiry', from)
+  redis.call('DEL', fkey)
+  return {'rubble', '', '', '0'}
+end
+
+local scope, pod = m['scope_id'], m['pod_id']
+
+-- to 为空 = 驱逐（create 失败，立即释放槽位，不等 TTL）
+-- to == from = 无可搬，幂等
+if to == '' or to == from then
+  if to == '' then
+    redis.call('SREM', pfx .. 'scope:' .. scope .. ':sessions', from)
+    redis.call('SREM', pfx .. 'pod:' .. scope .. ':' .. pod .. ':sessions', from)
+    redis.call('ZREM', pfx .. 'session_expiry', from)
+    redis.call('DEL', fkey)
+    local remaining = redis.call('SCARD', pfx .. 'pod:' .. scope .. ':' .. pod .. ':sessions')
+    return {'evicted', scope, pod, tostring(remaining)}
+  end
+  return {'noop', scope, pod, '0'}
+end
+
+local tkey = pfx .. 'session:' .. to
+
+-- to 已有自己的绑定（首条 chat.send 抢先 route 过）：保留 to，仅清 from。
+-- 绑定可能指向别的 Pod——那是已生效的亲和，不得覆盖。
+if redis.call('EXISTS', tkey) == 1 then
+  redis.call('SREM', pfx .. 'scope:' .. scope .. ':sessions', from)
+  redis.call('SREM', pfx .. 'pod:' .. scope .. ':' .. pod .. ':sessions', from)
+  redis.call('ZREM', pfx .. 'session_expiry', from)
+  redis.call('DEL', fkey)
+  local remaining = redis.call('SCARD', pfx .. 'pod:' .. scope .. ':' .. pod .. ':sessions')
+  return {'overtaken', scope, pod, tostring(remaining)}
+end
+
+-- 绑定 Pod 注册已消失（notify_pod_dead 清理窗口）：亲和信息失效，仅清 from，
+-- 真实 id 由后续 chat.send 的 route 全新放置。
+if redis.call('EXISTS', pfx .. 'pod:' .. scope .. ':' .. pod .. ':info') == 0 then
+  redis.call('SREM', pfx .. 'scope:' .. scope .. ':sessions', from)
+  redis.call('SREM', pfx .. 'pod:' .. scope .. ':' .. pod .. ':sessions', from)
+  redis.call('ZREM', pfx .. 'session_expiry', from)
+  redis.call('DEL', fkey)
+  return {'evicted', scope, pod, '0'}
+end
+
+-- 搬移：四处不变量整体 from → to，TTL 刷新（含 from 已过期未扫的复活场景——
+-- 慢 create（冷启动）下亲和仍应成立；scope/pod 槽位计数不变（一删一加））。
+local ttl = tonumber(m['session_ttl']) or def_ttl
+local expiry = now + ttl
+redis.call('SADD', pfx .. 'scope:' .. scope .. ':sessions', to)
+redis.call('SREM', pfx .. 'scope:' .. scope .. ':sessions', from)
+redis.call('SADD', pfx .. 'pod:' .. scope .. ':' .. pod .. ':sessions', to)
+redis.call('SREM', pfx .. 'pod:' .. scope .. ':' .. pod .. ':sessions', from)
+redis.call('HSET', tkey, 'scope_id', scope, 'pod_id', pod,
+           'expiry', tostring(expiry), 'session_ttl', tostring(ttl))
+redis.call('DEL', fkey)
+redis.call('ZREM', pfx .. 'session_expiry', from)
+redis.call('ZADD', pfx .. 'session_expiry', expiry, to)
+-- 复用 Pod 时清 idle_notified（同 ROUTE_PLACE 提交步；空标记失效）
+redis.call('DEL', pfx .. 'pod:' .. scope .. ':' .. pod .. ':idle_notified')
+local remaining = redis.call('SCARD', pfx .. 'pod:' .. scope .. ':' .. pod .. ':sessions')
+return {'rebound', scope, pod, tostring(remaining)}
 """
 
 # Argv: prefix, session_id, now, default_session_ttl

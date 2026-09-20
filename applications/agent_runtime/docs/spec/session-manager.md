@@ -19,19 +19,20 @@
 | `facade.py` | `SessionManagerFacade`(RM→SM:notify_pod_dead / reconcile_pods) |
 | `models.py` | `Template` dataclass(字段/派生/pod_spec) |
 
-## handlers.py —— 对外 5 端点
+## handlers.py —— 对外 6 端点
 
 | 端点 | handler | 行为 |
 |---|---|---|
 | POST /api/session/route | `handle_route` | 同步路由+占额度,返回 `{pod_sse_url, pod_id}`;**幂等键 = metadata.request_id**(框架 idempotency,窗口 60s,回放缓存结果) |
 | POST /api/session/touch | `handle_touch` | 保活/EOS,返回 `{touched}`;False=已过期/不存在(gateway 回退重新 route) |
+| POST /api/session/rebind | `handle_rebind` | session.create 临时 key 原子改绑为真实 id(2026-09-session-create-rebind):`metadata.session_id`=from,`rawdata.to`=真实 id(**空/缺省=驱逐**,create 失败立即释放槽位);返回 `{action, scope_id, pod_id, remaining}`,action ∈ noop/rubble/evicted/overtaken/rebound;**幂等由 Lua 语义保证**(from 不存在→noop,to 已有绑定→overtaken 仅清 from),不走 request_id 结果缓存——重放无副作用,且避免缓存写失败把已生效改绑变成错误响应 |
 | POST /api/session/config_sync | `handle_config_sync` | 全量配置下发 `{containers, templates, scopes}`(三段式**独占**;无 containers 键的 legacy 内联载荷 → 400),委托 `ConfigStore.config_sync` |
 | POST /api/session/config_refresh | `handle_config_refresh` | 强制刷新(场景 M-R,**无载荷**;rawdata 非空 → 400),委托 `ConfigStore.config_refresh` |
 | POST /api/session/cleanup | `handle_cleanup` | 运维批删 Pod,委托 `rm_facade.cleanup`(handler 在 SM,逻辑在 RM) |
 
-- 入参从 `Envelope.metadata`(session_id/user_id/group_id/bot_id/request_id)与 `rawdata` 取;`group_id` 在 `metadata.extra`,**user_id/group_id/bot_id/session_id 四项均必填非空**(orchestrator 校验,缺 → 400 VALIDATION)。
+- 入参从 `Envelope.metadata`(session_id/user_id/group_id/bot_id/request_id)与 `rawdata` 取;`group_id` 在 `metadata.extra`,**user_id/group_id/bot_id/session_id 四项均必填非空**(orchestrator 校验,缺 → 400 VALIDATION;rebind 例外——只需 `session_id`(from)非空,scope/pod 从 from 绑定哈希读取,from/to 均不得含 `{`/`}`)。
 - `AgentRuntimeError` 统一捕获 → `ResponseEnvelope(ok=False, error_code, error_message, retry_after)`。
-- **基础设施连接级异常 → 503 STATE_UNAVAILABLE**(2026-09 健壮性加固):`_INFRA_EXCEPTIONS`(redis ConnectionError/TimeoutError + sqlalchemy OperationalError/InterfaceError/DisconnectionError,**防御式 import**——传递依赖缺失回退空元组;有意不含 redis ResponseError/sqlalchemy ProgrammingError,那是 500 该暴露的真 bug)在 5 个 handler 各并一档 except(route 含幂等闸 acquire),经 `_infra_fail` 翻译为 `StateUnavailable(retry_after=1)`——Redis/DB 抖动是暂态,500 语义不可重试会错杀 LB/客户端重试。
+- **基础设施连接级异常 → 503 STATE_UNAVAILABLE**(2026-09 健壮性加固):`_INFRA_EXCEPTIONS`(redis ConnectionError/TimeoutError + sqlalchemy OperationalError/InterfaceError/DisconnectionError,**防御式 import**——传递依赖缺失回退空元组;有意不含 redis ResponseError/sqlalchemy ProgrammingError,那是 500 该暴露的真 bug)在各 handler 并一档 except(route 含幂等闸 acquire),经 `_infra_fail` 翻译为 `StateUnavailable(retry_after=1)`——Redis/DB 抖动是暂态,500 语义不可重试会错杀 LB/客户端重试。
 - **幂等缓存写失败不吞成功响应**:route 成功后 `guard.succeed` 抛错仅 exception 留痕、照常返回结果(代价 = 60s 窗口内同 request_id 重放重跑 route,会话亲和续期本身幂等)。
 - handler 无模块级可变状态;服务对象从 `sysctx` 取(`main._bind_modules` 注入)。
 
@@ -102,12 +103,13 @@ touch 不分桶(无容量信号,HGET 反查 scope 热路径加一跳,不做)。
 
 **诊断只读方法**(/visualization/* 用,无业务调用方):`session_hash(sid)`、`session_expiry_score(sid)`、`scope_session_count(sid)`(SCARD)、`routing_snapshot_raw()`(快照原文)。
 
-## lua_scripts.py —— 6 个 Lua
+## lua_scripts.py —— 7 个 Lua
 
 | 脚本 | 一句话职责 |
 |---|---|
 | `LUA_ROUTE_PLACE` | route 原子核心:**残骸自卫(2026-09,同 EVICT:缺 scope_id/pod_id/expiry 的半成品哈希自清两处后落穿全新放置——nil 比较/nil 拼接是 Lua runtime error,该会话 route 永久 500)**→亲和续期(**前提 pod:info 存在**——注册已被清的绑定判死,惰性回收后走重新放置;否则 notify_pod_dead 窗口内新落的会话会无限自旋且每圈续期 expiry)→**其余(过期/Pod 注册消失/scope 不匹配竞态)惰性回收旧绑定后返回 `rebind`(2026-09-scope-affinity-hold:曾见绑定的调用内不落放置,handler 换 first-fit 结果重试;传入 scope 即要维持的绑定 scope 或新会话的 first-fit 结果——曾见绑定的调用直接按传入 scope 放置会把会话部署进已禁用/删除的 scope)**→scope 闸门(SCARD)→first-fit(接入序)→达 max_pods 则 scope_full / 否则 need_acquire→原子提交四处同写(复用时清 idle_notified) |
 | `LUA_EVICT` | session 移除**唯一原语**(四处同删;返回 scope/pod/remaining;幂等 noop;**残骸自卫**:哈希缺 scope/pod(外部直改键半成品)→ 自清两处返回 rubble,调用侧 WARNING——单坏键不得使到期 pass 崩溃循环) |
+| `LUA_REBIND` | session.create 临时 key **原子改绑**(2026-09-session-create-rebind):四处不变量整体 from→to + TTL 刷新(session_ttl 就地读 from 哈希);返回 noop(from 不存在,幂等)/rubble(残骸自卫)/evicted(to 空驱逐 or 绑定 Pod 注册消失→仅清 from)/overtaken(to 已有自己的绑定,首条 chat 抢先→仅清 from,保留 to)/rebound(搬移成功);**from 已过期未被扫仍搬移**(慢 create 冷启动下亲和成立);复用 Pod 清 idle_notified |
 | `LUA_TOUCH` | 保活续期;**残骸自卫(2026-09,同 EVICT:缺 scope_id/pod_id/expiry 自清返回 False,不得 Lua runtime error)**;已过期当场惰性 evict;ttl 就地读 session HASH(不依赖 scope:config) |
 | `LUA_SWEEP_IDLE_NOTIFY` | 空 Pod 判定(SCARD==0)+ 60s NX 去重 + ZREM 退出候选(堵 reclaim 窗口内 route 直选的竞态 A) |
 | `LUA_REGISTER_POD` | acquire 成功登记:三处注册(scope:pods/pod:info/pods:registered)+ 接入序 + pods:{pod}:scopes |
