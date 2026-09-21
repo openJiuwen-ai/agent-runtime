@@ -469,7 +469,7 @@ JSON
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `ok` | bool | 固定 `false` |
-| `error_code` | str | `SCOPE_FULL` / `NO_POD_AVAILABLE` / `CONFIG_NOT_FOUND` / `MAX_PODS_REACHED` / `DEPLOY_FAILED` / `CONFIG_SYNC_BUSY` / `STATE_UNAVAILABLE` / `VALIDATION` |
+| `error_code` | str | `SCOPE_FULL` / `NO_POD_AVAILABLE` / `CONFIG_NOT_FOUND` / `MAX_PODS_REACHED` / `DEPLOY_FAILED` / `PODS_STARTING_UP` / `CONFIG_SYNC_BUSY` / `STATE_UNAVAILABLE` / `VALIDATION` |
 | `error_message` | str | 人类可读描述 |
 | `retry_after` | int?(秒) | 仅过载类(`SCOPE_FULL` / `NO_POD_AVAILABLE`)与 `STATE_UNAVAILABLE` 返回;其它省略 |
 
@@ -1057,6 +1057,7 @@ sequenceDiagram
 | 复用暖 Pod | `scope:idle` 非空 | 取一暖 Pod 返回(零部署;暖 Pod 来自场景 H 或刚腾空的 Pod) |
 | deploy +1 | idle 空 + `ZCARD(scope:pods)+SCARD(scope:deploying) < max_pods` | 选主 deploy + `LUA_REGISTER`(场景 C 的 RM 侧) |
 | **deploy 失败** | K8s create 报错 / NotReady 超 `ready_timeout`(300s)/ 镜像拉取失败 | `SREM` 清占位 → 抛 `DeployFailed`(503 可重试;占位已清,下次 acquire 可重试 deploy) |
+| 冷启动中 | deploy 锁被持(选主/autoscale 在飞)+ follower 等待室满(上限 pc-1)或等待超时 | `PodsStartingUp` → SM 映射 503 `NO_POD_AVAILABLE`(文案"Pod 冷启动中,暂时没有可用 Pod,请稍后再试";非封顶) |
 | 封顶 | 达 `max_pods`(含 deploying 占位) | `MaxPodsReached` → SM 映射 503 `NO_POD_AVAILABLE` |
 
 > 价值:**按需给 scope 配 Pod**——优先复用 idle 暖池里现成的 Pod(零部署等待),不够再 deploy,达上限则背压返回。一个 Pod 只服务一个 scope,RM 不做容量叠加判定(容量由 SM 的 `SCARD < pod_concurrency` 闸门保证)。

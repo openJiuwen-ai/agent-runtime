@@ -34,6 +34,7 @@ from ..errors import (
     InvalidParams,
     MaxPodsReached,
     NoPodAvailable,
+    PodsStartingUp,
     ScopeFull,
 )
 from ..util import key_unsafe, now_ts
@@ -243,6 +244,20 @@ class SessionOrchestrator:
                 pool_config=template.pool_config(),
                 request_id=request_id,
             )
+        except PodsStartingUp as exc:
+            # 冷启动中：deploy 在飞 + follower 等待室满/超时——新 Pod 稍后即有，
+            # 非 max_pods 封顶。文案按冷启动措辞（客户端可见），真因进
+            # mapped_from 日志（2026-09-21 wmq 实录：pc=1 时此类被误标
+            # "reached max_pods=400"，而实际 total 远未达上限，误导排障）
+            logger.warning(
+                "acquire mapped to NO_POD_AVAILABLE: scope=%s mapped_from=%s "
+                "request_id=%s detail=%s",
+                scope_id, exc.code, request_id, exc,
+            )
+            raise NoPodAvailable(
+                f"scope {scope_id} Pod 冷启动中，暂时没有可用 Pod，请稍后再试",
+                retry_after=DEFAULT_RETRY_AFTER,
+            ) from exc
         except MaxPodsReached as exc:
             # 达 max_pods：总容量已 ≥ scope 预算，只能等额度释放。
             # 对外错误码粗化为 NO_POD_AVAILABLE——映射前留真因，客户端侧不可见

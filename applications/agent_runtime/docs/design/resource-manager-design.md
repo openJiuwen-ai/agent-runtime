@@ -126,7 +126,7 @@
   - `pool_config` = per-scope 池参数(`min_idle_pods`/`max_pods`(SM 派生)/`pod_ttl`/`pod_concurrency`),RM 首 acquire 缓存为 `scope:config`。`pod_concurrency` **仅用于 deploy follower 等待室推导上限(pc-1)**——per-Pod 容量闸门仍在 SM 侧(`SCARD < pod_concurrency`),RM 不做容量叠加判定(红线不变)。
   - **out**:`{ pod_id:str, pod_sse_url:str }`
   - **错**(Facade 抛异常):`MaxPodsReached`(对应原 `MAX_PODS_REACHED`)、`DeployFailed`(对应原 `DEPLOY_FAILED`)、`ValidationError`(对应原 `VALIDATION`)。错误码语义不变,见 §7;SM 的 `route` handler 捕获后映射为自身对外 HTTP 响应。
-  - **语义**:按 `scope_id` 取 Pod——若 `scope:idle` 有暖 Pod 则复用,否则未达 `max_pods` → 选主 deploy +1,达 `max_pods` → `MaxPodsReached`。deploy 锁的**输家进 follower 等待室**(M8):原子闸门准入上限 `pod_concurrency-1`(leader 会话之外新 Pod 恰剩这些槽),overflow 严格快失败;等待有界(`ready_timeout`+余量),leader 失败(锁空闲且无进展)则 follower 直接失败**不接管**;检测到 leader 的 Pod 注册即**直接复用返回**(与 reuse 分支同构,SM 侧重跑仲裁)——RM 全程不读 SM 容量键。从 `scope:idle` 取暖 Pod 时**跳过 `deploy_ver` 或 `generation` 不匹配当前配置的**(A 类配置变更后的老版本暖 Pod、config_refresh 后的老代次暖 Pod 均留在 idle 池按 `pod_ttl` 回收,不外发给新流量;见 HLD 场景 M / M-R / §2.2.1 / §2.2.2)。**config-agnostic**:不解析 `pod_spec` 语义,池参数经 `acquire` 传入并缓存于 `scope:config`。
+  - **语义**:按 `scope_id` 取 Pod——若 `scope:idle` 有暖 Pod 则复用,否则未达 `max_pods` → 选主 deploy +1,达 `max_pods` → `MaxPodsReached`。deploy 锁的**输家进 follower 等待室**(M8):原子闸门准入上限 `pod_concurrency-1`(leader 会话之外新 Pod 恰剩这些槽),overflow 严格快失败 `PodsStartingUp`(冷启动中,非封顶;2026-09-21 前误挂 MaxPodsReached 致客户端文案误导);等待有界(`ready_timeout`+余量),leader 失败(锁空闲且无进展)则 follower 直接失败**不接管**;检测到 leader 的 Pod 注册即**直接复用返回**(与 reuse 分支同构,SM 侧重跑仲裁)——RM 全程不读 SM 容量键。从 `scope:idle` 取暖 Pod 时**跳过 `deploy_ver` 或 `generation` 不匹配当前配置的**(A 类配置变更后的老版本暖 Pod、config_refresh 后的老代次暖 Pod 均留在 idle 池按 `pod_ttl` 回收,不外发给新流量;见 HLD 场景 M / M-R / §2.2.1 / §2.2.2)。**config-agnostic**:不解析 `pod_spec` 语义,池参数经 `acquire` 传入并缓存于 `scope:config`。
 
 ### 2.2 `ResourceManagerFacade.idle_consider(...)` —— 该 scope 在该 Pod 上已无会话(⚠️ scope 级,修订)
 - **in**:`{ pod_id:str, scope_id:str }`
@@ -432,6 +432,7 @@ loop:
 ## 7. 错误码与边界
 
 - `MAX_PODS_REACHED`(503,可重试):该 `scope_id` 的 Pod 数达 `max_pods`(含 `deploying` 占位)。`Retry-After` 估算 = 最近一个 idle Pod 的 `pod_ttl` 剩余(保守)。
+  - `PODS_STARTING_UP`(503,可重试):新 Pod 冷启动中——deploy 在飞且 follower 等待室满(上限 pc-1)或等待超时;语义区别于封顶("稍后即有" vs "额度用尽")。SM 映射 `NO_POD_AVAILABLE` 时文案按冷启动措辞(2026-09-21 起;此前误挂 `MAX_PODS_REACHED`,pc=1 时报 "reached max_pods=400" 误导排障)。
   - `DEPLOY_FAILED`(503,可重试):K8s create / `_wait_running_ready` 失败。
   - `VALIDATION`(400,不可重试):缺 `scope_id`;`pod_spec` 必填字段缺失。
   - 边界:

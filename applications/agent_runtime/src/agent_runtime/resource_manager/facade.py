@@ -3,7 +3,8 @@
 
 方法与错误码契约见 SM 设计 §13.1 / RM 设计 §2：
 - acquire(scope_id, pod_spec, pool_config, request_id) → {pod_id, pod_sse_url}；
-  失败抛 MaxPodsReached / DeployFailed（SM route 捕获映射 NO_POD_AVAILABLE）。
+  失败抛 MaxPodsReached / DeployFailed / PodsStartingUp（SM route 捕获映射
+  NO_POD_AVAILABLE；PodsStartingUp=新 Pod 冷启动中，非封顶）。
 - idle_consider(pod_id, scope_id) → {transitioned_to_idle: bool}，幂等。
 - update_pool_config(scope_id, pool_config, pod_spec?) → {updated: bool}（config_sync 触发）。
 - bump_generation(scope_id) → int（config_refresh 触发的代次日落，新代次返回值）。

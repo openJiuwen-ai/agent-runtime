@@ -174,14 +174,19 @@ async def test_deploy_follower_cap_strict_fast_fail(dual):
 
     async def _attempt(i):
         status, _, body = await dual.post(i % 2, "route", session_id=f"cap-{i}")
-        return status, body.get("error_code")
+        return status, body.get("error_code"), body.get("error_message")
 
     outcomes = await asyncio.gather(*[_attempt(i) for i in range(4)])
     ok = [outcome for outcome in outcomes if outcome[0] == 200]
     fast_fail = [outcome for outcome in outcomes
-                 if outcome == (503, "NO_POD_AVAILABLE")]
+                 if outcome[:2] == (503, "NO_POD_AVAILABLE")]
     assert len(ok) == 2, outcomes
     assert len(fast_fail) == 2, outcomes
+    # 文案回归：冷启动中（等待室满）不得误标 max_pods 封顶
+    # （2026-09-21 wmq 实录：pc=1 报 "reached max_pods=400" 误导排障）
+    for _, _, msg in fast_fail:
+        assert "冷启动" in (msg or ""), msg
+        assert "max_pods" not in (msg or ""), msg
     assert len(dual.k8s.deploy_log) == 1          # 恰好 1 次部署
     assert await dual.redis.zcard(
         f"{RM}resource:scope:{scope}:deploying") == 0
