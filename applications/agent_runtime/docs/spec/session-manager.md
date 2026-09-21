@@ -76,7 +76,7 @@ touch 不分桶(无容量信号,HGET 反查 scope 热路径加一跳,不做)。
 `{request_id}:acquire:{轮次}`（从 1 开始）。同一轮在 route 重试时仍使用相同幂等键，
 避免重复部署；不同轮不再永久回放已满 Pod。原有容量上限与总预算保持不变。
 
-`_acquire_pod`:`MaxPodsReached`/`DeployFailed` → 映射 `NoPodAvailable(503, retry_after=1)`。
+`_acquire_pod`:`MaxPodsReached`/`DeployFailed`/`PodsStartingUp` → 映射 `NoPodAvailable(503, retry_after=1)`。文案区分:`MaxPodsReached`→"reached max_pods={N}"(真封顶);`PodsStartingUp`→"Pod 冷启动中，暂时没有可用 Pod，请稍后再试"(deploy 在飞/follower 等待室满——非封顶,2026-09-21 wmq 实录前误标 max_pods 误导排障)。
 
 `touch(session_id)`:LUA_TOUCH;不存在/已过期返回 False(此时 INFO `touch missed: session=…` 留痕——gateway 回退重新 route 的排障入口;命中仅 DEBUG)。
 

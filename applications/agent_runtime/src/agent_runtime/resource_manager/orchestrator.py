@@ -3,7 +3,8 @@
 
 acquire 决策：取暖 Pod 复用（deploy_ver 过滤）→ 无暖 Pod 未达 max_pods 选主
 deploy +1 → 达上限 MaxPodsReached。deploy 走 per-scope 锁串行（防并发超配）；
-他副本在 deploy 时本请求短暂等待后重跑 ACQUIRE 复用其成果。
+他副本在 deploy 时本请求短暂等待后重跑 ACQUIRE 复用其成果；锁输家进 follower
+等待室（上限 pc-1，overflow 快失败 PodsStartingUp=冷启动中，非 max_pods 封顶）。
 
 红线：错误路径必须清 deploying 占位（防 max_pods 永久虚高）。
 """
@@ -18,7 +19,7 @@ from typing import Any
 from uuid import uuid4
 
 from ..containers import main_health_path, main_sse_port, normalize_pod_spec
-from ..errors import DeployFailed, MaxPodsReached
+from ..errors import DeployFailed, MaxPodsReached, PodsStartingUp
 from ..link_mtls import LinkMTLSConfig
 from ..spec_fields import DEPLOY_VER_FIELDS
 from ..util import fingerprint, now_ts
@@ -213,7 +214,7 @@ class ResourceOrchestrator:
                 "follower waiting room full: scope=%s follower=%s max_followers=%d",
                 scope_id, request_id, max_followers,
             )
-            raise MaxPodsReached(
+            raise PodsStartingUp(
                 f"scope {scope_id} deploy followers full ({max_followers}); "
                 f"retry after leader registers")
 
@@ -275,7 +276,7 @@ class ResourceOrchestrator:
                         scope_id, request_id,
                         ready_timeout + FOLLOWER_WAIT_MARGIN, ready_timeout,
                     )
-                    raise MaxPodsReached(
+                    raise PodsStartingUp(
                         f"scope {scope_id} follower wait timeout "
                         f"({ready_timeout + FOLLOWER_WAIT_MARGIN}s)")
         finally:

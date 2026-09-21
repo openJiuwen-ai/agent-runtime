@@ -483,7 +483,7 @@ loop:
     if result.action == "need_acquire":
         # 现有 Pod 都满且未达 max_pods:调 resource_manager 扩 +1 Pod(经进程内 rm_facade)。
         acquired = await rm_facade.acquire(scope_id=scope_id, pod_spec=pod_spec, pool_config=scope_config.pool_config, request_id=metadata.request_id)
-        if not acquired: raise NO_POD_AVAILABLE(503)                 # NO_POD_AVAILABLE 由 rm_facade.acquire 抛 MaxPodsReached / DeployFailed 异常映射而来(原 Resource 拒绝 MAX_SERVICES_REACHED / DEPLOY_FAILED)
+        if not acquired: raise NO_POD_AVAILABLE(503)                 # NO_POD_AVAILABLE 由 rm_facade.acquire 抛 MaxPodsReached / DeployFailed / PodsStartingUp 异常映射而来(原 Resource 拒绝 MAX_SERVICES_REACHED / DEPLOY_FAILED;PodsStartingUp=冷启动中,对外文案按冷启动措辞)
         # 登记新 Pod 到本 scope 候选集,供下一轮 ROUTE_PLACE 的 first-fit 选中。
         register_pod(scope_id, acquired.pod_id, acquired.pod_sse_url, deploy_ver)
         # register_pod = ZADD scope:pods(pod_seq) + HSET pod:info{sse_url, deploy_ver} + SADD pods:{pod_id}:scopes + SADD pods:registered + DEL idle_notified
@@ -685,7 +685,7 @@ agent-runtime/applications/orchestrator/   # 【合并壳】合并服务的唯�
 > **已解决(完备性修订)**:`scope:{scope_id}:config` 归属——保留作 resolve 的 Redis 缓存(框架禁进程内缓存,Redis 是合规缓存位,唯一读者= resolve);TOUCH 改读 `session:{session_id}.session_ttl`(route 写入),不再依赖 scope:config,消除 config_sync `DEL` 后的 default fallback 不一致。见 §3 键表 / §5.1 LUA_TOUCH。
 
 1. **Resource Manager 契约**(✅ 已与 RM 设计 `resource-manager-design.md` §0.3 对齐确认;二者为同进程模块,经**进程内 Facade 方法签名**互调(见本节下文);**不共享 Redis 修订**:删 RM 读 SM 的前置对账,改 SM→RM 单向 ZREM + 周期 Facade 对账兜底;入参 / 出参 / 幂等 / 防 deploy 超配 / 自治 reclaim 语义均不变):
-   - **`ResourceManagerFacade.acquire`** 入参 `{ scope_id, pod_spec, pool_config, request_id }`;出参 `{pod_id, pod_sse_url}`。失败抛 `MaxPodsReached` / `DeployFailed` / `ValidationError` 异常,由 `route` handler 捕获映射为对外 HTTP `NO_POD_AVAILABLE`(§2.1)。
+   - **`ResourceManagerFacade.acquire`** 入参 `{ scope_id, pod_spec, pool_config, request_id }`;出参 `{pod_id, pod_sse_url}`。失败抛 `MaxPodsReached` / `DeployFailed` / `PodsStartingUp` / `ValidationError` 异常,由 `route` handler 捕获映射为对外 HTTP `NO_POD_AVAILABLE`(§2.1;`PodsStartingUp`=新 Pod 冷启动中,文案区别于 max_pods 封顶)。
    - **单 scope 占 Pod**:RM 按 `scope_id` 独立建池;容量由 SM 的 `SCARD < pod_concurrency` 闸门保证,RM 不强制、无 reserves HASH。
    - **`ResourceManagerFacade.idle_consider` 为 scope 级**:入参 `{pod_id, scope_id}`,出参 `{transitioned_to_idle:bool}`,幂等(`HDEL` 天然幂等)。单 scope 占 Pod,释放即 idle。
    - **`ResourceManagerFacade.update_pool_config`**(config_sync 触发,见 §4.3):入参 `{ scope_id, pool_config }`(A 类变更时附带 `pod_spec` deploy 字段);出参 `{ updated:bool }`。HSET 覆盖 RM 侧 `resource:scope:{scope_id}:config`(**幂等**;mapping 永不含 `generation`,代次只经 `bump_generation` 单调递增);RM 的 autoscale/reclaim **立即**用新池参数,A 类变更同时刷新 RM 缓存的 deploy 字段(后续 deploy 用新值)。详见 RM spec §2.2.1。

@@ -48,9 +48,9 @@
 `_deploy_and_register`:`k8s.deploy(pod_spec)`(create+wait Ready)→ 拼 `pod_sse_url = http://{pod_ip}:{sse_port}{sse_path}`(sse_port/health_path 取自 `main_container`(经 `normalize_pod_spec` 正规化 + `containers.main_sse_port/main_health_path` 单源读取)→ `LUA_REGISTER`(带 sse_port/health_path,Pod 烘焙自己的探测契约)。**deploy 与 REGISTER 都在 `except BaseException` 保护内**(红线:占位清理含取消路径;REGISTER 步失败不清占位一样虚占 max_pods);孤儿兜底删除**两级推导**——异常携带 pod_id/namespace(k8s.deploy 契约)优先,**否则用已到手的 `info`**(REGISTER 步的 Redis 异常/取消不带该属性,但物理 Pod 已建 Ready,不删就成 pods:all 之外的孤儿)。
 
 `_follow_leader`(M8,deploy 锁输家的等待室):
-- 准入走 `LUA_DEPLOY_FOLLOWER_GATE` 原子闸门,上限 `pod_concurrency - 1`(leader 会话之外新 Pod 恰剩这些槽);overflow 严格快失败 MaxPodsReached。
+- 准入走 `LUA_DEPLOY_FOLLOWER_GATE` 原子闸门,上限 `pod_concurrency - 1`(leader 会话之外新 Pod 恰剩这些槽);overflow 严格快失败 `PodsStartingUp`(冷启动中,非 max_pods 封顶;2026-09-21 前误挂 MaxPodsReached,客户端文案误导排障)。
 - 等待有界:`ready_timeout + 10s` 余量;轮询 `resource:scope:{sid}:pods` 出现新 Pod 且 pod:info 有 sse_url → `LUA_POP_IDLE` 忙记账(SREM idle + DEL idle_since,与 reuse 分支对齐;幂等)→ **直接复用返回**(与 reuse 分支同构,SM 侧重跑仲裁即可)。不摘则 autoscale(leader=补位路径,idle_flag=True 注册)的热备被接管后仍占 warm 底数 → 恒 skip_warm 不补位,池卡 1 忙 Pod(2026-09-17 wangchang follower_reuse 泄漏实录)。
-- leader 失败判定:deploy 锁空闲且无新 Pod → `DeployFailed`(**follower 不接管**——同镜像同环境大概率也失败);deadline 到 → MaxPodsReached。
+- leader 失败判定:deploy 锁空闲且无新 Pod → `DeployFailed`(**follower 不接管**——同镜像同环境大概率也失败);deadline 到 → `PodsStartingUp`(同冷启动语义)。
 - 等待期进度行:每 `FOLLOWER_PROGRESS_LOG_SEC`(5s)一条 INFO `follower still waiting: scope= follower= waited_s=`——ready_timeout 最长 300s,INFO 下不留日志空白(部署风暴期的观测窗口);复用成功另有一条 INFO `acquire follower reuses leader pod`。
 - 错误路径双清:占位 + follower 成员都进 finally;崩溃遗留由闸门 `ZREMRANGEBYSCORE(deadline)` 兜底。
 

@@ -33,6 +33,7 @@ class ErrorCode:
     # RM Facade 异常（SM route 捕获后统一映射 NO_POD_AVAILABLE）
     MAX_PODS_REACHED = "MAX_PODS_REACHED"
     DEPLOY_FAILED = "DEPLOY_FAILED"
+    PODS_STARTING_UP = "PODS_STARTING_UP"        # RM 内部：新 Pod 冷启动中（非 max_pods 封顶）
 
 
 # 业务错误码 → HTTP 状态（HLD §3.1）。VALIDATION 复用框架小写码即可，这里注册大写契约码。
@@ -45,6 +46,7 @@ HTTP_STATUS_MAP = {
     ErrorCode.STATE_UNAVAILABLE: 503,
     ErrorCode.MAX_PODS_REACHED: 503,
     ErrorCode.DEPLOY_FAILED: 503,
+    ErrorCode.PODS_STARTING_UP: 503,
 }
 
 
@@ -117,3 +119,15 @@ class MaxPodsReached(AgentRuntimeError):
 
 class DeployFailed(AgentRuntimeError):
     code = ErrorCode.DEPLOY_FAILED
+
+
+class PodsStartingUp(AgentRuntimeError):
+    """新 Pod 冷启动中，容量暂不可得（deploy 在飞 + follower 等待室满/超时）。
+
+    语义区别于 ``MaxPodsReached``：不是 max_pods 封顶，是「正在部署、稍后即有」。
+    2026-09-21 wmq 实录：pc=1 时等待室上限 pc-1=0，锁输家全落此类，此前误挂
+    MaxPodsReached 导致客户端看到 "reached max_pods=400" 而实际远未达上限。
+    SM 映射 NO_POD_AVAILABLE 时文案按冷启动措辞（见 SM orchestrator）。
+    """
+
+    code = ErrorCode.PODS_STARTING_UP
