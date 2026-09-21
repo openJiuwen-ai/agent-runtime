@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { ConfigRefreshCostHint } from '../../components/ConfigRefreshCostHint';
 import { Modal, ModalCancelButton } from '../../components/Modal';
 import { TemplateRefEditor } from '../../components/TemplateRefEditor';
 import { LimitedTextInput } from '../../components/LimitedTextInput';
@@ -171,6 +172,7 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
           />
         </div>
       </div>
+      {template && <ConfigRefreshCostHint scope="template" />}
     </Modal>
   );
 }

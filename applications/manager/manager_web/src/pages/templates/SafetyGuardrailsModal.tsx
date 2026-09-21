@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { ConfigRefreshCostHint } from '../../components/ConfigRefreshCostHint';
 import { Modal, ModalCancelButton } from '../../components/Modal';
 import { LimitedTextInput } from '../../components/LimitedTextInput';
 import { useInvalidJsonChecker } from '../../components/JsonField';
@@ -152,6 +153,7 @@ export function SafetyGuardrailsModal({ open, template, onClose, onSaved }: Prop
         </div>
         <PermissionsBodyEditor form={form} onChange={setForm} />
       </div>
+      {template && <ConfigRefreshCostHint scope="template" />}
     </Modal>
   );
 }

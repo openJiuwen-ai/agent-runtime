@@ -38,7 +38,9 @@
       "nav": "分页导航"
     },
     "pleaseSelect": "请选择",
-    "updatedAt": "更新时间"
+    "updatedAt": "更新时间",
+    "configRefreshCost": "保存后将下发到网关并触发运行时强制刷新（config_refresh）：该运行时下全部 AgentServer Pod 会优雅日落并按新配置重建。存量会话不受影响；重建期间新会话可能冷启动变慢，短时间内连续变更可能被容量保护暂时拒绝，稍后会自动恢复。",
+    "configRefreshCostTemplate": "该模板已被实例引用时，保存将把变更下发到网关并触发运行时强制刷新（config_refresh）：对应运行时下全部 AgentServer Pod 优雅日落并按新配置重建。存量会话不受影响；重建期间新会话可能冷启动变慢，短时间内连续变更可能被容量保护暂时拒绝，稍后会自动恢复。"
   },
   "time": {
     "secondsAgo": "{{count}}s 前",

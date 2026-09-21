@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Modal, ModalCancelButton } from '../../components/Modal';
+import { ConfigRefreshCostHint } from '../../components/ConfigRefreshCostHint';
 import { ApiError, A2AOutboundTemplateApi } from '../../services/api';
 import { toast } from '../../stores/uiStore';
 import type { A2ADiscoveryCandidate, A2AOutboundTemplate } from '../../types';
@@ -109,6 +110,7 @@ export function A2AOutboundTemplateModal({ open, template, onClose, onSaved }: P
         <div><label className="label">连接超时（秒）</label><input className="input" type="number" min={0.1} value={connectTimeout} onChange={(e) => setConnectTimeout(Number(e.target.value))} /></div>
         <div><label className="label">同步等待（秒）</label><input className="input" type="number" min={0.1} value={syncWait} onChange={(e) => setSyncWait(Number(e.target.value))} /></div>
       </div>
+      <ConfigRefreshCostHint scope="template" />
     </Modal>
   );
 }

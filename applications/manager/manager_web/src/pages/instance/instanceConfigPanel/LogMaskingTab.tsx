@@ -6,6 +6,7 @@ import { useListSearch } from '../../../hooks/useListSearch';
 import type { LogMaskingRule } from '../../../types';
 import { Empty } from '../../../components/Empty';
 import { ConfirmDialog } from '../../../components/ConfirmDialog';
+import { ConfigRefreshCostHint } from '../../../components/ConfigRefreshCostHint';
 import { Modal, ModalCancelButton } from '../../../components/Modal';
 import { LimitedTextInput } from '../../../components/LimitedTextInput';
 import { Switch } from '../../../components/Switch';
@@ -230,6 +231,8 @@ export function LogMaskingTab({ instanceId }: { instanceId: string }) {
             + {t('instanceConfig.logMasking.new')}
           </button>
         </div>
+
+        <ConfigRefreshCostHint />
 
         <div className="card !p-0">
           {loading ? (
@@ -482,12 +485,14 @@ export function LogMaskingTab({ instanceId }: { instanceId: string }) {
             </div>
           </div>
         </div>
+        <ConfigRefreshCostHint />
       </Modal>
 
       <ConfirmDialog
         open={!!delTarget}
         message={t('instanceConfig.logMasking.deleteConfirm')}
         danger
+        costHint
         onConfirm={async () => {
           if (!delTarget) return;
           try {

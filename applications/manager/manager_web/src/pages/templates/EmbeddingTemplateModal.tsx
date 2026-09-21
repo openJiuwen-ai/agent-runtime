@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { ConfigRefreshCostHint } from '../../components/ConfigRefreshCostHint';
 import { LimitedTextInput } from '../../components/LimitedTextInput';
 import { Modal, ModalCancelButton } from '../../components/Modal';
 import { useFormDirty } from '../../hooks/useFormDirty';
@@ -208,6 +209,7 @@ export function EmbeddingTemplateModal({ open, template, onClose, onSaved }: Pro
           <input className="input" value={form.embed_tags} placeholder={t('embeddingTemplate.embedTagsHint')} onChange={(event) => update('embed_tags', event.target.value)} />
         </div>
       </div>
+      {template && <ConfigRefreshCostHint scope="template" />}
     </Modal>
   );
 }

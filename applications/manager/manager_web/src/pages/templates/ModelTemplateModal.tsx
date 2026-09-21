@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { ConfigRefreshCostHint } from '../../components/ConfigRefreshCostHint';
 import { Modal, ModalCancelButton } from '../../components/Modal';
 import { JsonField, tryParseJson, useInvalidJsonChecker } from '../../components/JsonField';
 import { LimitedTextInput } from '../../components/LimitedTextInput';
@@ -412,6 +413,7 @@ export function ModelTemplateModal({ open, template, onClose, onSaved }: Props) 
           />
         </div>
       </div>
+      {template && <ConfigRefreshCostHint scope="template" />}
     </Modal>
   );
 }
