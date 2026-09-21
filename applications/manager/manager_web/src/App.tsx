@@ -147,6 +147,10 @@ function RouteView() {
   if (instanceTokenQuota) {
     return <InstanceDetailPage instanceId={instanceTokenQuota.id} tab="tokenQuota" />;
   }
+  const instanceWorkspaceQuota = matchRoute('/instances/:id/workspace-quota', path);
+  if (instanceWorkspaceQuota) {
+    return <InstanceDetailPage instanceId={instanceWorkspaceQuota.id} tab="config" />;
+  }
   const instanceCost = matchRoute('/instances/:id/cost', path);
   if (instanceCost) {
     return <InstanceDetailPage instanceId={instanceCost.id} tab="cost" />;

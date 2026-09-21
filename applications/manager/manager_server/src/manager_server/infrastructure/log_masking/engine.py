@@ -53,14 +53,14 @@ class CompiledMaskingRule:
     with_fingerprint: bool = False
 
 
-# priority 越大越先执行。顺序：大体积 data-uri → PII（无指纹）→ 敏感 KV（有指纹）。
+# priority 越小越先执行。顺序：大体积 data-uri → PII（无指纹）→ 敏感 KV（有指纹）。
 _BUILTIN_RULES: list[CompiledMaskingRule] = [
     CompiledMaskingRule(
         "builtin_data_image",
         re.compile(r"data:image/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/=]+"),
         "data:image/*;base64,******",
         name="DataURI图片",
-        priority=50,
+        priority=10,
     ),
     # --- PII（邮箱 / 手机 / 身份证）：纯掩码，不附指纹 ---
     CompiledMaskingRule(
@@ -68,7 +68,7 @@ _BUILTIN_RULES: list[CompiledMaskingRule] = [
         re.compile(r"\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[A-Za-z]{2,}\b"),
         DEFAULT_REPLACEMENT,
         name="邮箱",
-        priority=40,
+        priority=20,
     ),
     CompiledMaskingRule(
         "builtin_cn_mobile",
@@ -82,21 +82,21 @@ _BUILTIN_RULES: list[CompiledMaskingRule] = [
         re.compile(r"(?<!\d)\d{17}[\dXx](?!\d)"),
         DEFAULT_REPLACEMENT,
         name="身份证号",
-        priority=20,
+        priority=40,
     ),
     CompiledMaskingRule(
         "builtin_kv_sensitive",
         _KV_SENSITIVE_PATTERN,
         _KV_SENSITIVE_REPLACEMENT,
         name="敏感KV",
-        priority=10,
+        priority=50,
         with_fingerprint=True,
     ),
 ]
 
 
 def compiled_default_rules() -> list[CompiledMaskingRule]:
-    """返回内置规则列表（priority 越大越先执行），供实例 seed 使用。"""
+    """返回内置规则列表（priority 越小越先执行），供实例 seed 使用。"""
     return list(_BUILTIN_RULES)
 
 

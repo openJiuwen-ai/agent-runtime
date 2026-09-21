@@ -9,6 +9,7 @@ from sqlalchemy.exc import DBAPIError
 
 from manager_server.models.application_config_models import (
     AUDIT_LOG_CONFIG_TABLE_DEF,
+    WORKSPACE_QUOTA_POLICY_TABLE_DEF,
     _MEMORY_CONFIG_TABLE_DEF,
     _TASK_MEMORY_CONFIG_TABLE_DEF,
     LOG_MASKING_RULE_TABLE_DEF,
@@ -67,6 +68,7 @@ ALL_TABLE_DEFINITIONS = (
     JID_TEMPLATE_REF_TABLE_DEF,
     *INSTANCE_ACCESS_TABLE_DEFINITIONS,
     *INSTANCE_RESOURCE_TABLE_DEFINITIONS,
+    WORKSPACE_QUOTA_POLICY_TABLE_DEF,
 )
 
 
@@ -109,7 +111,38 @@ async def _migrate_a2a_discovery_settings(handler: DBHandler) -> None:
                 raise
 
 
+def _ensure_bigint_type_support() -> None:
+    """旧版 foundation 不认识 ``bigint`` 时会落成无长度 VARCHAR。
+
+    MySQL 的 ``create_all`` 在编译阶段失败，事务回滚，新表不会出现。
+    """
+    from sqlalchemy import BigInteger
+    from openjiuwen_runtime.foundation.db.sqlalchemy_handler import SQLAlchemyHandler
+
+    getter = SQLAlchemyHandler._get_sqlalchemy_type
+    if getattr(getter, "_accepts_bigint", False):
+        return
+
+    def _get_sqlalchemy_type(self, data_type: str, length=None):
+        if str(data_type or "").lower() == "bigint":
+            return BigInteger
+        return getter(self, data_type, length)
+
+    _get_sqlalchemy_type._accepts_bigint = True
+    SQLAlchemyHandler._get_sqlalchemy_type = _get_sqlalchemy_type
+
+    sql_getter = SQLAlchemyHandler._get_column_sql_type
+
+    def _get_column_sql_type(self, col_def):
+        if str(getattr(col_def, "data_type", "") or "").lower() == "bigint":
+            return "BIGINT"
+        return sql_getter(self, col_def)
+
+    SQLAlchemyHandler._get_column_sql_type = _get_column_sql_type
+
+
 async def init_all_tables(handler: DBHandler) -> None:
+    _ensure_bigint_type_support()
     for table_def in ALL_TABLE_DEFINITIONS:
         await handler.init_table(table_def)
     await _migrate_a2a_discovery_settings(handler)

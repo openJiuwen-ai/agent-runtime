@@ -3,8 +3,9 @@ import { useTranslation } from 'react-i18next';
 import { LogMaskingTab } from './LogMaskingTab';
 import { LoggingTab } from './LoggingTab';
 import { AuditLogTab } from './AuditLogTab';
+import { WorkspaceQuotaPanel } from './WorkspaceQuotaPanel';
 
-type ConfigTabKey = 'logMasking' | 'logging' | 'auditLog';
+type ConfigTabKey = 'logMasking' | 'logging' | 'auditLog' | 'workspaceQuota';
 
 interface Props {
   instanceId: string;
@@ -18,6 +19,7 @@ export function InstanceConfigPanel({ instanceId }: Props) {
     { key: 'logMasking', label: t('instanceConfig.tabs.logMasking') },
     { key: 'logging', label: t('instanceConfig.tabs.logging') },
     { key: 'auditLog', label: t('instanceConfig.tabs.auditLog') },
+    { key: 'workspaceQuota', label: t('instanceConfig.tabs.workspaceQuota') },
   ];
 
   return (
@@ -38,6 +40,7 @@ export function InstanceConfigPanel({ instanceId }: Props) {
         {tab === 'logMasking' && <LogMaskingTab instanceId={instanceId} />}
         {tab === 'logging' && <LoggingTab instanceId={instanceId} />}
         {tab === 'auditLog' && <AuditLogTab instanceId={instanceId} />}
+        {tab === 'workspaceQuota' && <WorkspaceQuotaPanel instanceId={instanceId} />}
       </div>
     </div>
   );

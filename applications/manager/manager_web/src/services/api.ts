@@ -35,6 +35,9 @@ import type {
   LoggingConfigUpsertBody,
   AuditLogConfig,
   AuditLogConfigUpsertBody,
+  WorkspaceQuotaPolicy,
+  WorkspaceQuotaPolicyCreateBody,
+  WorkspaceQuotaPolicyPatchBody,
   A2AOutboundTemplate,
   A2ADiscoveryCandidate,
   A2ADiscoverySettings,
@@ -1196,6 +1199,49 @@ export const LoggingApi = {
     http<LoggingConfig>(`${instanceBase(instanceId)}/logging`, { method: 'PUT', body }),
   remove: (instanceId: string) =>
     http<void>(`${instanceBase(instanceId)}/logging`, { method: 'DELETE' }),
+};
+
+export const WorkspaceQuotaApi = {
+  list: (
+    instanceId: string,
+    params?: {
+      policy_id?: string;
+      enabled?: boolean;
+      search?: string;
+      sort_by?:
+        | 'policy_name'
+        | 'policy_desc'
+        | 'priority'
+        | 'match_expr'
+        | 'limit_bytes'
+        | 'soft_percent'
+        | 'hard_percent'
+        | 'source_order_num'
+        | 'updated_at';
+      sort_order?: 'asc' | 'desc';
+      page?: number;
+      page_size?: number;
+    },
+  ) =>
+    http<PageResult<WorkspaceQuotaPolicy>>(
+      `${instanceBase(instanceId)}/workspace-quota/policies`,
+      { query: params },
+    ),
+  create: (instanceId: string, body: WorkspaceQuotaPolicyCreateBody) =>
+    http<WorkspaceQuotaPolicy>(`${instanceBase(instanceId)}/workspace-quota/policies`, {
+      method: 'POST',
+      body,
+    }),
+  update: (instanceId: string, policyId: string, body: WorkspaceQuotaPolicyPatchBody) =>
+    http<WorkspaceQuotaPolicy>(
+      `${instanceBase(instanceId)}/workspace-quota/policies/${encodeURIComponent(policyId)}`,
+      { method: 'PATCH', body },
+    ),
+  remove: (instanceId: string, policyId: string) =>
+    http<void>(
+      `${instanceBase(instanceId)}/workspace-quota/policies/${encodeURIComponent(policyId)}`,
+      { method: 'DELETE' },
+    ),
 };
 
 export const AuditLogApi = {

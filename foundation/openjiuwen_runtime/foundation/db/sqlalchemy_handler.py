@@ -5,7 +5,7 @@ from datetime import datetime
 import logging
 from typing import Optional, Any
 import json
-from sqlalchemy import Column, Integer, String, DateTime, JSON, Boolean, Float, Double, Text, text, inspect, Index
+from sqlalchemy import Column, Integer, BigInteger, String, DateTime, JSON, Boolean, Float, Double, Text, text, inspect, Index
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
@@ -120,6 +120,7 @@ class SQLAlchemyHandler(DBHandler):
         type_map = {
             "integer": Integer,
             "int": Integer,
+            "bigint": BigInteger,
             "string": String,
             "str": String,
             "text": Text,
@@ -153,6 +154,8 @@ class SQLAlchemyHandler(DBHandler):
         data_type = col_def.data_type.lower()
         if data_type in {"integer", "int"}:
             return "INTEGER"
+        if data_type == "bigint":
+            return "BIGINT"
         if data_type in {"string", "str"}:
             if col_def.length:
                 return f"VARCHAR({col_def.length})"

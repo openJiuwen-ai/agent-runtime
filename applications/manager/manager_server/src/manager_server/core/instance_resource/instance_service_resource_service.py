@@ -37,6 +37,10 @@ _ALLOWED_GRANT_SORT_FIELDS = frozenset(
         "ref_template_id",
     }
 )
+_DEFAULT_GRANT_ORDER_BY: list[tuple[str, bool]] = [
+    ("priority", False),
+    ("id", False),
+]
 
 
 def _g(row: Any, key: str, default: Any = None) -> Any:
@@ -167,6 +171,32 @@ class InstanceServiceResourceService:
             offset=0,
         )
 
+    async def _assert_unique_enabled_priority(
+        self,
+        *,
+        jiuwenclaw_id: str,
+        priority: int,
+        enabled: bool,
+        exclude_resource_id: str | None = None,
+    ) -> None:
+        """同一集群内，启用中的运行时授权 priority 不可重复。停用行不参与校验。"""
+        if not enabled:
+            return
+        rows = await self._h.list_records(
+            _GRANT,
+            {"jiuwenclaw_id": jiuwenclaw_id, "enabled": True},
+            limit=_CAP,
+            offset=0,
+        )
+        for row in rows:
+            rid = str(_g(row, "resource_id") or "").strip()
+            if exclude_resource_id and rid == exclude_resource_id:
+                continue
+            if int(_g(row, "priority", 0) or 0) == int(priority):
+                raise ValueError(
+                    "priority already used by an enabled policy in this cluster"
+                )
+
     @staticmethod
     def _project_upsert(
         current: list[Any],
@@ -215,6 +245,13 @@ class InstanceServiceResourceService:
         resolved_desc = (resource_desc or "").strip() or existing_desc or None
         if not resolved_name:
             raise ValueError("resource_name is required")
+
+        await self._assert_unique_enabled_priority(
+            jiuwenclaw_id=jiuwenclaw_id,
+            priority=int(priority),
+            enabled=bool(enabled),
+            exclude_resource_id=resolved_resource_id if normalized_resource_id else None,
+        )
 
         merged_expr = merge_match_exprs(match_exprs)
         now = utc_now()
@@ -384,6 +421,7 @@ class InstanceServiceResourceService:
             grant_sort_field,
             sort_order,
             allowed_sort_fields=_ALLOWED_GRANT_SORT_FIELDS,
+            default_order_by=_DEFAULT_GRANT_ORDER_BY,
         )
         rows = await self._h.list_records(
             _GRANT,
@@ -428,21 +466,32 @@ class InstanceServiceResourceService:
         if requested_sort == "template_name":
             reverse = (sort_order or "asc").strip().lower() == "desc"
             items.sort(
-                key=lambda x: tpl_name_by_id.get(
-                    str(x.get("ref_template_id") or ""), ""
-                ).lower(),
+                key=lambda x: (
+                    tpl_name_by_id.get(str(x.get("ref_template_id") or ""), "").lower(),
+                    str(x.get("resource_id") or ""),
+                ),
                 reverse=reverse,
             )
-        elif requested_sort == "priority":
-            reverse = (sort_order or "asc").strip().lower() == "desc"
+        elif requested_sort == "priority" or not requested_sort:
+            reverse = (
+                (sort_order or "asc").strip().lower() == "desc"
+                if requested_sort == "priority"
+                else False
+            )
             items.sort(
-                key=lambda x: int(x.get("priority") or 0),
+                key=lambda x: (
+                    int(x.get("priority") or 0),
+                    str(x.get("resource_id") or ""),
+                ),
                 reverse=reverse,
             )
         elif requested_sort == "resource_name":
             reverse = (sort_order or "asc").strip().lower() == "desc"
             items.sort(
-                key=lambda x: str(x.get("resource_name") or "").lower(),
+                key=lambda x: (
+                    str(x.get("resource_name") or "").lower(),
+                    str(x.get("resource_id") or ""),
+                ),
                 reverse=reverse,
             )
 

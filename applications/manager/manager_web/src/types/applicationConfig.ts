@@ -64,6 +64,47 @@ export interface PermissionsFormState {
   fileGuardJson: string;
 }
 
+export type WorkspaceQuotaMatchExpr = string | string[] | null;
+
+export interface WorkspaceQuotaPolicy {
+  policy_id: string;
+  cluster_id: string;
+  policy_name: string;
+  policy_desc?: string | null;
+  match_expr: WorkspaceQuotaMatchExpr;
+  priority: number;
+  limit_bytes: number;
+  soft_percent: number;
+  hard_percent: number;
+  source_order_num?: string | null;
+  enabled: boolean;
+  created_at?: string | null;
+  created_by?: string | null;
+  updated_at?: string | null;
+  updated_by?: string | null;
+}
+
+export interface WorkspaceQuotaPolicyCreateBody {
+  policy_name: string;
+  policy_desc?: string | null;
+  match_expr?: WorkspaceQuotaMatchExpr;
+  priority?: number;
+  limit_bytes: number;
+  soft_percent?: number;
+  hard_percent?: number;
+}
+
+export interface WorkspaceQuotaPolicyPatchBody {
+  policy_name?: string;
+  policy_desc?: string | null;
+  limit_bytes?: number;
+  match_expr?: WorkspaceQuotaMatchExpr;
+  priority?: number;
+  soft_percent?: number;
+  hard_percent?: number;
+  enabled?: boolean;
+}
+
 export interface ListItemsResult<T> {
   items: T[];
 }

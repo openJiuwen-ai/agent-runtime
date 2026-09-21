@@ -38,7 +38,7 @@
       "nav": "Pagination"
     },
     "pleaseSelect": "Please select",
-    "updatedAt": "Updated At",
+    "updatedAt": "UPDATED AT",
     "configRefreshCost": "Saving pushes this change to the gateway and triggers a runtime-wide config refresh: all AgentServer pods are gracefully sunset and rebuilt with the new configuration. Existing sessions are unaffected; new sessions may cold-start slower during the rebuild, and rapid consecutive changes may be temporarily rejected by capacity protection until recovery.",
     "configRefreshCostTemplate": "If this template is referenced by an instance, saving pushes the change to the gateway and triggers a runtime-wide config refresh: all AgentServer pods of that runtime are gracefully sunset and rebuilt. Existing sessions are unaffected; new sessions may cold-start slower during the rebuild, and rapid consecutive changes may be temporarily rejected by capacity protection until recovery."
   },
@@ -103,7 +103,7 @@
     "referenceHint": "Click to view agent templates referencing this template",
     "templateName": "Template Name",
     "templateDescription": "Description",
-    "updatedAt": "Updated",
+    "updatedAt": "UPDATED AT",
     "bodyEnabled": "Policy enabled",
     "bodyDisabled": "Policy disabled",
     "permissionModeTag": "Mode: {{value}}",
@@ -161,7 +161,7 @@
     "deleteConfirm": "Delete this cluster?",
     "filterStatus": "Filter by status",
     "instanceName": "Cluster Name",
-    "modifiedAt": "Modified At",
+    "modifiedAt": "UPDATED AT",
     "viewBrief": "Card view",
     "viewList": "List view",
     "searchPlaceholder": "Search cluster name, ID, or status",
@@ -215,7 +215,8 @@
       "tokenQuota": "Token Quota",
       "cost": "Cost Analytics",
       "audit": "Business Audit",
-      "resources": "Cluster Resources"
+      "resources": "Cluster Resources",
+      "workspaceQuota": "User Space Quota"
     },
     "placeholder": {
       "empty": "Coming soon"
@@ -302,7 +303,7 @@
         "scopeLabel": "Authorization Scope",
         "scopeAll": "Available to all",
         "priority": "Priority",
-        "priorityHint": "Lower values have higher priority",
+        "priorityHint": "Smaller numbers win. Enabled policies in one cluster cannot share a priority.",
         "grantedBy": "Granted By",
         "expiresAt": "Expires At",
         "neverExpires": "Never expires",
@@ -316,6 +317,46 @@
         "resourceName": "Resource Name",
         "resourceDesc": "Resource Description"
       }
+    },
+    "workspaceQuota": {
+      "title": "User Space Quota",
+      "subtitle": "Set this cluster's user space quota by match scope",
+      "new": "New policy",
+      "edit": "Edit policy",
+      "searchPlaceholder": "Search policy ID, policy name, policy description, match scope",
+      "policyName": "Policy name",
+      "policyDesc": "Description",
+      "priority": "Priority",
+      "priorityHint": "Smaller numbers win. Enabled policies in one cluster cannot share a priority.",
+      "matchExpr": "Match scope",
+      "fullMatch": "Match all",
+      "limit": "Quota",
+      "tier": "Tier",
+      "tierCustom": "Custom",
+      "tierZero": "0 (no space)",
+      "tierUnlimited": "Unlimited",
+      "unlimited": "Unlimited",
+      "customSize": "Custom size",
+      "customUnit": "Unit",
+      "bytesHint": "Stored as {{bytes}} bytes",
+      "bytesHintUnlimited": "Stored as -1 (unlimited sentinel)",
+      "softPercent": "Warn threshold (%)",
+      "hardPercent": "Block threshold (%)",
+      "softPercentHint": "When the warn threshold is reached, remind the user that the quota is almost exceeded.",
+      "hardPercentHint": "When the block threshold is reached, block operations that increase user space usage.",
+      "sourceOrder": "Source",
+      "sourceManual": "Manual",
+      "disableTitle": "Disable policy",
+      "disableMessage": "After disabling, subjects that matched this policy follow the next matching rule. Continue?",
+      "lowerTitle": "Lower quota",
+      "lowerMessage": "After lowering, subjects already over the new limit will be blocked. Save anyway?",
+      "deleteTitle": "Delete policy",
+      "deleteMessage": "After deletion, subjects that matched this policy follow the next matching rule. Continue?",
+      "invalidLimit": "Quota must be 0, a positive integer, or unlimited",
+      "invalidPercent": "The block threshold must be greater than the warn threshold, and neither can be negative",
+      "invalidPriority": "Enter an integer priority",
+      "fieldRequired": "Please fill in {{field}}",
+      "updatedAt": "UPDATED AT"
     }
   },
   "instanceConfig": {
@@ -323,7 +364,8 @@
       "logMasking": "Log Masking",
       "logging": "Log Levels",
       "auditLog": "Audit Log",
-      "permissions": "Permissions"
+      "permissions": "Permissions",
+      "workspaceQuota": "User Space Quota"
     },
     "logMasking": {
       "new": "New Rule",
@@ -334,7 +376,7 @@
       "patternPlaceholder": "e.g. (?i)(api[_-]?key)\\s*[:=]\\s*\\S+",
       "replacement": "Replacement",
       "priority": "Priority",
-      "priorityHint": "Masking rules are applied in descending priority order.",
+      "priorityHint": "Masking rules are applied in ascending priority order (smaller numbers first). Enabled rules in one cluster cannot share a priority.",
       "priorityInvalid": "Please enter a valid priority",
       "withFingerprint": "With fingerprint",
       "withFingerprintHint": "When on, masked values include an irreversible fingerprint for correlating the same secret across logs; when off, only the replacement text is used.",
@@ -342,7 +384,7 @@
       "source_builtin": "Builtin",
       "source_custom": "Custom",
       "data": "Extra Data (JSON, optional)",
-      "updatedAt": "Updated",
+      "updatedAt": "UPDATED AT",
       "searchPlaceholder": "Search rule ID, name, description, match regex pattern, replacement, priority, or source",
       "fieldRequired": "Please fill in {{field}}",
       "deleteConfirm": "Delete this log masking rule?"
@@ -935,7 +977,7 @@
     "templateRef": "Template references",
     "templateRefHint": "Config templates referenced by this Agent; unconfigured slots fall back to policy defaults.",
     "searchPlaceholder": "Search template ID, name, description, or tags",
-    "updatedAt": "Updated",
+    "updatedAt": "UPDATED AT",
     "fieldRequired": "Please fill in {{field}}",
     "deleteConfirm": "Delete agent template \"{{name}}\"? Instance grants will also be removed."
   },

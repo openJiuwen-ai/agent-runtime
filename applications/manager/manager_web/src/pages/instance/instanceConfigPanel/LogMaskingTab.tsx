@@ -75,7 +75,7 @@ export function LogMaskingTab({ instanceId }: { instanceId: string }) {
   const { searchInput, setSearchInput, searchQuery } = useListSearch();
   const [enabledFilter, setEnabledFilter] = useState('');
   const [sourceFilter, setSourceFilter] = useState('');
-  const [sortBy, setSortBy] = useState<LogMaskingSortField | ''>('');
+  const [sortBy, setSortBy] = useState<LogMaskingSortField>('priority');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<LogMaskingRule | null>(null);
@@ -97,7 +97,7 @@ export function LogMaskingTab({ instanceId }: { instanceId: string }) {
 
   const handleSortChange = (field: LogMaskingSortField, value: ColumnSortValue) => {
     if (value === '') {
-      setSortBy('');
+      setSortBy('priority');
       setSortOrder('asc');
     } else {
       setSortBy(field);
@@ -111,8 +111,8 @@ export function LogMaskingTab({ instanceId }: { instanceId: string }) {
         enabled: enabledFilter === '' ? undefined : enabledFilter === 'true',
         source: sourceFilter || undefined,
         search: searchQuery,
-        sort_by: sortBy || undefined,
-        sort_order: sortBy ? sortOrder : undefined,
+        sort_by: sortBy,
+        sort_order: sortOrder,
       }),
     [instanceId, enabledFilter, sourceFilter, searchQuery, sortBy, sortOrder],
   );
