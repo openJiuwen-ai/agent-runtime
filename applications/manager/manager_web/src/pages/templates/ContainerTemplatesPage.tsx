@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { Empty } from '../../components/Empty';
@@ -11,29 +11,30 @@ import {
   type ColumnSortValue,
 } from '../../components/TableColumnSort';
 import { useAsync } from '../../hooks/useAsync';
+import { useGuideAutoOpen } from '../../hooks/useGuideAutoOpen';
 import { useListSearch } from '../../hooks/useListSearch';
-import { ApiError, EmbeddingTemplateApi } from '../../services/api';
+import { bumpGuideRevision } from '../../stores/guideStore';
+import { ApiError, ContainerTemplateApi, ServiceConfigTemplateApi } from '../../services/api';
 import { toast } from '../../stores/uiStore';
-import type { EmbeddingTemplate } from '../../types';
+import type { ContainerTemplate } from '../../types';
 import { formatTime, truncate } from '../../utils/format';
+import { parseConfigSyncImport } from '../../utils/serviceConfigExport';
 import { useRouter } from '../../router';
-import { EmbeddingTemplateModal } from './EmbeddingTemplateModal';
+import { ContainerTemplateModal } from './ContainerTemplateModal';
 
-type EmbeddingTemplateSortField =
-  | 'template_name'
-  | 'description'
-  | 'model_provider'
-  | 'model_id'
-  | 'api_base'
-  | 'updated_at';
+type ContainerTemplateSortField = 'template_name' | 'container_id' | 'updated_at';
 
-export function EmbeddingTemplatesPage() {
+/**
+ * 容器模板列表页：维护 AgentServer / Sandbox 容器的可复用运行规格，
+ * 供运行时模板绑定（binding 关系见运行时模板编辑页）。
+ */
+export function ContainerTemplatesPage() {
   const { t } = useTranslation();
   const { navigate } = useRouter();
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [enabledFilter, setEnabledFilter] = useState('');
-  const [sortBy, setSortBy] = useState<EmbeddingTemplateSortField | ''>('');
+  const [sortBy, setSortBy] = useState<ContainerTemplateSortField | ''>('');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const { searchInput, setSearchInput, searchQuery } = useListSearch();
 
@@ -46,7 +47,7 @@ export function EmbeddingTemplatesPage() {
     [t],
   );
 
-  const handleSortChange = (field: EmbeddingTemplateSortField, value: ColumnSortValue) => {
+  const handleSortChange = (field: ContainerTemplateSortField, value: ColumnSortValue) => {
     if (value === '') {
       setSortBy('');
       setSortOrder('asc');
@@ -59,7 +60,7 @@ export function EmbeddingTemplatesPage() {
 
   const { data, loading, error, reload } = useAsync(
     () =>
-      EmbeddingTemplateApi.list({
+      ContainerTemplateApi.list({
         page,
         page_size: pageSize,
         search: searchQuery,
@@ -69,18 +70,71 @@ export function EmbeddingTemplatesPage() {
       }),
     [page, pageSize, searchQuery, enabledFilter, sortBy, sortOrder],
   );
-  const [items, setItems] = useState<EmbeddingTemplate[]>([]);
-  const [editing, setEditing] = useState<EmbeddingTemplate | null>(null);
+  const [items, setItems] = useState<ContainerTemplate[]>([]);
   const [modalOpen, setModalOpen] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState<EmbeddingTemplate | null>(null);
+  const [editing, setEditing] = useState<ContainerTemplate | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ContainerTemplate | null>(null);
   const [togglingId, setTogglingId] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
+  const importInputRef = useRef<HTMLInputElement>(null);
+
+  /** 与运行时模板列表的导入一致：实例池定义 JSON，含容器模板时一并落库 */
+  const handleImportFile = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      void (async () => {
+        setImporting(true);
+        try {
+          const text = String(reader.result ?? '');
+          const parsed = JSON.parse(text) as unknown;
+          const { body, templateCount } = parseConfigSyncImport(parsed);
+          await ServiceConfigTemplateApi.create(body);
+          toast(
+            'success',
+            templateCount > 1
+              ? t('serviceConfigTemplate.importOkFirstOfMany', { count: templateCount })
+              : t('serviceConfigTemplate.importOk'),
+          );
+          void reload();
+          bumpGuideRevision();
+        } catch (err) {
+          toast(
+            'danger',
+            t('serviceConfigTemplate.importFailed', {
+              detail:
+                err instanceof ApiError
+                  ? err.detail
+                  : err instanceof Error
+                    ? err.message
+                    : String(err),
+            }),
+          );
+        } finally {
+          setImporting(false);
+        }
+      })();
+    };
+    reader.onerror = () => {
+      toast('danger', t('serviceConfigTemplate.importFailed', { detail: 'read error' }));
+    };
+    reader.readAsText(file, 'UTF-8');
+  };
 
   useEffect(() => setPage(1), [searchQuery]);
   useEffect(() => {
     if (data?.items) setItems(data.items);
   }, [data]);
 
-  const toggleEnabled = async (row: EmbeddingTemplate, enabled: boolean) => {
+  // 配置引导「新建容器模板」跳转后自动打开弹框
+  useGuideAutoOpen('containerTemplateNew', () => {
+    setEditing(null);
+    setModalOpen(true);
+  });
+
+  const toggleEnabled = async (row: ContainerTemplate, enabled: boolean) => {
     if (togglingId) return;
     const previous = row.enabled;
     setItems((current) =>
@@ -88,7 +142,7 @@ export function EmbeddingTemplatesPage() {
     );
     setTogglingId(row.template_id);
     try {
-      await EmbeddingTemplateApi.update(row.template_id, { enabled });
+      await ContainerTemplateApi.update(row.template_id, { enabled });
       toast('success', t('success.saved'));
     } catch (toggleError) {
       setItems((current) =>
@@ -109,14 +163,29 @@ export function EmbeddingTemplatesPage() {
       <div className="flex min-w-0 flex-col gap-4">
         <div className="page-header w-full min-w-0 flex-wrap items-start gap-y-3">
           <div className="min-w-[7.5rem] max-w-[20rem] shrink-0 sm:max-w-[32rem]">
-            <div className="page-title truncate">{t('embeddingTemplate.title')}</div>
-            <div className="page-subtitle truncate">{t('embeddingTemplate.subtitle')}</div>
+            <div className="page-title">{t('containerTemplate.title')}</div>
+            <div className="page-subtitle">{t('containerTemplate.subtitle')}</div>
           </div>
           <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
-            <ListSearchInput value={searchInput} onChange={setSearchInput} placeholder={t('embeddingTemplate.searchPlaceholder')} className="basis-full sm:basis-auto" />
+            <ListSearchInput value={searchInput} onChange={setSearchInput} placeholder={t('containerTemplate.searchPlaceholder')} className="basis-full sm:basis-auto" />
             <button className="btn sm" onClick={() => void reload()}>{t('common.refresh')}</button>
+            <input
+              ref={importInputRef}
+              type="file"
+              accept="application/json,.json"
+              className="hidden"
+              onChange={handleImportFile}
+            />
+            <button
+              className="btn sm"
+              disabled={importing}
+              title={t('containerTemplate.importRuntimeAndContainerHint')}
+              onClick={() => importInputRef.current?.click()}
+            >
+              {importing ? t('common.loading') : t('serviceConfigTemplate.import')}
+            </button>
             <button className="btn primary sm" onClick={() => { setEditing(null); setModalOpen(true); }}>
-              + {t('embeddingTemplate.new')}
+              + {t('containerTemplate.new')}
             </button>
           </div>
         </div>
@@ -132,7 +201,7 @@ export function EmbeddingTemplatesPage() {
                   <tr>
                     <th>
                       <TableColumnSort
-                        label={t('embeddingTemplate.templateName')}
+                        label={t('containerTemplate.templateName')}
                         value={sortBy === 'template_name' ? sortOrder : ''}
                         options={sortOptions}
                         onChange={(value) => handleSortChange('template_name', value)}
@@ -140,37 +209,13 @@ export function EmbeddingTemplatesPage() {
                     </th>
                     <th>
                       <TableColumnSort
-                        label={t('embeddingTemplate.templateDescription')}
-                        value={sortBy === 'description' ? sortOrder : ''}
+                        label={t('containerTemplate.containerId')}
+                        value={sortBy === 'container_id' ? sortOrder : ''}
                         options={sortOptions}
-                        onChange={(value) => handleSortChange('description', value)}
+                        onChange={(value) => handleSortChange('container_id', value)}
                       />
                     </th>
-                    <th>
-                      <TableColumnSort
-                        label={t('embeddingTemplate.modelProvider')}
-                        value={sortBy === 'model_provider' ? sortOrder : ''}
-                        options={sortOptions}
-                        onChange={(value) => handleSortChange('model_provider', value)}
-                      />
-                    </th>
-                    <th>
-                      <TableColumnSort
-                        label={t('embeddingTemplate.modelId')}
-                        value={sortBy === 'model_id' ? sortOrder : ''}
-                        options={sortOptions}
-                        onChange={(value) => handleSortChange('model_id', value)}
-                      />
-                    </th>
-                    <th>{t('embeddingTemplate.embedTags')}</th>
-                    <th>
-                      <TableColumnSort
-                        label={t('embeddingTemplate.apiBase')}
-                        value={sortBy === 'api_base' ? sortOrder : ''}
-                        options={sortOptions}
-                        onChange={(value) => handleSortChange('api_base', value)}
-                      />
-                    </th>
+                    <th>{t('containerTemplate.image')}</th>
                     <th>
                       <TableColumnFilter
                         label={t('common.enabled')}
@@ -183,10 +228,10 @@ export function EmbeddingTemplatesPage() {
                         onChange={(value) => { setEnabledFilter(value); setPage(1); }}
                       />
                     </th>
-                    <th>{t('embeddingTemplate.referenceCount')}</th>
+                    <th>{t('containerTemplate.referenceCount')}</th>
                     <th>
                       <TableColumnSort
-                        label={t('embeddingTemplate.updatedAt')}
+                        label={t('containerTemplate.updatedAt')}
                         value={sortBy === 'updated_at' ? sortOrder : ''}
                         options={sortOptions}
                         onChange={(value) => handleSortChange('updated_at', value)}
@@ -197,35 +242,28 @@ export function EmbeddingTemplatesPage() {
                 </thead>
                 <tbody>
                   {items.length === 0 ? (
-                    <tr><td colSpan={10}><Empty text={t('common.empty')} /></td></tr>
+                    <tr><td colSpan={7}><Empty text={t('containerTemplate.empty')} /></td></tr>
                   ) : items.map((row) => (
                     <tr key={row.template_id}>
                       <td className="align-top">
                         <div className="font-medium text-text-strong">{row.template_name}</div>
                         <div className="mono text-[11px] text-muted">{row.template_id}</div>
                       </td>
-                      <td className="max-w-[14rem] text-[11px] text-muted" title={row.description ?? undefined}>
-                        {row.description ? truncate(row.description, 48) : '—'}
+                      <td className="mono max-w-[14rem] break-all text-xs" title={row.container_id}>
+                        {row.container_id}
                       </td>
-                      <td className="whitespace-nowrap"><span className="tag">{row.model_provider}</span></td>
-                      <td className="mono max-w-[18rem] break-all text-xs">{row.model_id}</td>
-                      <td className="max-w-[14rem]">
-                        <div className="flex flex-wrap gap-1">
-                          {(row.embed_tags ?? []).map((tag) => <span key={tag} className="tag">{tag}</span>)}
-                        </div>
-                      </td>
-                      <td className="mono max-w-[14rem] text-[11px] text-muted" title={row.api_base}>
-                        {truncate(row.api_base, 36)}
+                      <td className="mono max-w-[16rem] text-[11px] text-muted" title={row.image}>
+                        {truncate(row.image, 36) || '—'}
                       </td>
                       <td>
                         <Switch checked={row.enabled} disabled={togglingId === row.template_id} onChange={(enabled) => void toggleEnabled(row, enabled)} />
                       </td>
-                      <td className="whitespace-nowrap">
+                      <td>
                         {row.reference_count > 0 ? (
                           <span
                             className="tag cursor-pointer"
-                            title={t('embeddingTemplate.referenceHint')}
-                            onClick={() => navigate('/agent-templates')}
+                            title={t('containerTemplate.referenceHint')}
+                            onClick={() => navigate('/service-config-templates')}
                           >
                             {row.reference_count}
                           </span>
@@ -251,22 +289,23 @@ export function EmbeddingTemplatesPage() {
           <Pagination page={page} pageSize={pageSize} total={data.total ?? data.items.length} onChange={(nextPage, nextSize) => { setPage(nextPage); setPageSize(nextSize); }} />
         ) : null}
       </div>
-      <EmbeddingTemplateModal
+      <ContainerTemplateModal
         open={modalOpen}
         template={editing}
         onClose={() => setModalOpen(false)}
-        onSaved={() => { setModalOpen(false); void reload(); }}
+        onSaved={() => { setModalOpen(false); void reload(); bumpGuideRevision(); }}
       />
       <ConfirmDialog
         open={!!deleteTarget}
-        message={t('embeddingTemplate.deleteConfirm')}
+        message={t('containerTemplate.deleteConfirm', { name: deleteTarget?.template_name ?? '' })}
         danger
         onConfirm={async () => {
           if (!deleteTarget) return;
           try {
-            await EmbeddingTemplateApi.remove(deleteTarget.template_id);
+            await ContainerTemplateApi.remove(deleteTarget.template_id);
             toast('success', t('success.deleted'));
             void reload();
+            bumpGuideRevision();
           } catch (deleteError) {
             toast('danger', t('errors.deleteFailed', {
               detail: deleteError instanceof ApiError ? deleteError.detail : (deleteError as Error).message,

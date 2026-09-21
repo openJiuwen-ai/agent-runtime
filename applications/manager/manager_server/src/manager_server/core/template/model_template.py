@@ -8,6 +8,7 @@ from openjiuwen_runtime.foundation.db.handler import DBHandler
 
 from manager_server.core.template.push_template_to_gateway import (
     assert_template_deletable,
+    count_agent_template_reference_counts,
     update_template_on_referencing_gateways,
     delete_template_on_referencing_gateways,
 )
@@ -17,6 +18,7 @@ from manager_server.schemas.template_schemas import (
     ModelTemplateOut,
     ModelTemplateUpdateBody,
 )
+from manager_server.schemas.template_slot_schemas import MODEL_TEMPLATE_SLOTS
 from manager_server.infrastructure.common import resolve_order_by
 from manager_server.infrastructure.utils import iso_datetime, new_uuid4, utc_now
 from manager_server.models.template_models import MODEL_TEMPLATE_TABLE_DEF
@@ -49,7 +51,7 @@ def _matches_search(row: Any, query: str) -> bool:
     return any(needle in field.lower() for field in fields)
 
 
-def row_to_out(row: Any) -> ModelTemplateOut:
+def row_to_out(row: Any, *, reference_count: int = 0) -> ModelTemplateOut:
     model_tags = row.model_tags
     if model_tags is not None and not isinstance(model_tags, list):
         model_tags = list(model_tags) if model_tags else None
@@ -71,6 +73,7 @@ def row_to_out(row: Any) -> ModelTemplateOut:
         enable_function_calling=row.enable_function_calling,
         verify_ssl=row.verify_ssl,
         enabled=row.enabled,
+        reference_count=reference_count,
         data=row.data,
         created_at=iso_datetime(row.created_at),
         updated_at=iso_datetime(row.updated_at),
@@ -80,6 +83,12 @@ def row_to_out(row: Any) -> ModelTemplateOut:
 class ModelTemplateService:
     def __init__(self, handler: DBHandler) -> None:
         self._handler = handler
+
+    async def _reference_counts(self) -> dict[str, int]:
+        """被引用数：引用本类模板的 Agent 模板数（模型各槽位）。"""
+        return await count_agent_template_reference_counts(
+            self._handler, slot_keys=MODEL_TEMPLATE_SLOTS
+        )
 
     @staticmethod
     def _build_row_for_create(
@@ -122,7 +131,8 @@ class ModelTemplateService:
         row = await self._handler.get(_MODEL_TEMPLATE_TABLE, {"template_id": template_id})
         if row is None:
             return None
-        return row_to_out(row)
+        counts = await self._reference_counts()
+        return row_to_out(row, reference_count=counts.get(str(row.template_id), 0))
 
     async def list_templates(self, query: ModelTemplateListQuery) -> dict[str, Any]:
         page = max(query.page, 1)
@@ -135,6 +145,7 @@ class ModelTemplateService:
             filters["model_provider"] = provider_query
         model_type = query.model_type
 
+        reference_counts = await self._reference_counts()
         order_by = resolve_order_by(
             query.sort_by, query.sort_order, allowed_sort_fields=_ALLOWED_SORT_FIELDS
         )
@@ -153,7 +164,11 @@ class ModelTemplateService:
                     continue
                 if search_query and not _matches_search(row, search_query):
                     continue
-                items.append(row_to_out(row).model_dump(mode="json"))
+                items.append(
+                    row_to_out(
+                        row, reference_count=reference_counts.get(str(row.template_id), 0)
+                    ).model_dump(mode="json")
+                )
             total = len(items)
             offset = (page - 1) * page_size
             page_items = items[offset:offset + page_size]
@@ -173,7 +188,12 @@ class ModelTemplateService:
             order_by=order_by,
         )
         total = await self._handler.count_records(_MODEL_TEMPLATE_TABLE, filters)
-        items = [row_to_out(r).model_dump(mode="json") for r in rows]
+        items = [
+            row_to_out(r, reference_count=reference_counts.get(str(r.template_id), 0)).model_dump(
+                mode="json"
+            )
+            for r in rows
+        ]
         return {
             "items": items,
             "total": total,
@@ -192,7 +212,10 @@ class ModelTemplateService:
             row = await self._handler.get(
                 _MODEL_TEMPLATE_TABLE, {"template_id": template_id}
             )
-            return row_to_out(row) if row is not None else None
+            if row is None:
+                return None
+            counts = await self._reference_counts()
+            return row_to_out(row, reference_count=counts.get(str(row.template_id), 0))
 
         existing = await self._handler.get(
             _MODEL_TEMPLATE_TABLE, {"template_id": template_id}
@@ -213,7 +236,8 @@ class ModelTemplateService:
         )
         if row is None:
             return None
-        return row_to_out(row)
+        counts = await self._reference_counts()
+        return row_to_out(row, reference_count=counts.get(str(row.template_id), 0))
 
     async def delete(self, template_id: str) -> bool:
         row = await self._handler.get(

@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useGuideStore } from '../stores/guideStore';
 import {
-  AgentTemplateApi, InstanceAgentResourceApi, InstanceApi, InstanceBindingApi,
-  InstanceServiceResourceApi, ModelTemplateApi, ServiceConfigTemplateApi,
+  AgentTemplateApi, ContainerTemplateApi, InstanceAgentResourceApi, InstanceApi,
+  InstanceBindingApi, InstanceServiceResourceApi, ModelTemplateApi,
+  ServiceConfigTemplateApi,
 } from '../services/api';
 
 export function useDefinitionPresence() {
@@ -10,6 +11,7 @@ export function useDefinitionPresence() {
   const [poolDefined, setPoolDefined] = useState<boolean | null>(null);
   const [instanceCreated, setInstanceCreated] = useState<boolean | null>(null);
   const [modelDefined, setModelDefined] = useState<boolean | null>(null);
+  const [containerDefined, setContainerDefined] = useState<boolean | null>(null);
   const revision = useGuideStore((s) => s.revision);
   useEffect(() => {
     let cancelled = false;
@@ -25,9 +27,12 @@ export function useDefinitionPresence() {
     void ModelTemplateApi.list({ page: 1, page_size: 1 })
       .then((r) => { if (!cancelled) setModelDefined((r.items?.length ?? 0) > 0); })
       .catch(() => { if (!cancelled) setModelDefined(null); });
+    void ContainerTemplateApi.list({ page: 1, page_size: 1 })
+      .then((r) => { if (!cancelled) setContainerDefined((r.items?.length ?? 0) > 0); })
+      .catch(() => { if (!cancelled) setContainerDefined(null); });
     return () => { cancelled = true; };
   }, [revision]);
-  return { agentDefined, poolDefined, instanceCreated, modelDefined };
+  return { agentDefined, poolDefined, instanceCreated, modelDefined, containerDefined };
 }
 
 export function useClusterGuideStatus(instanceId: string | null | undefined) {

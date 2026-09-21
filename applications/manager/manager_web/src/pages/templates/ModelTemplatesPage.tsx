@@ -19,6 +19,7 @@ import { toast } from '../../stores/uiStore';
 import { bumpGuideRevision } from '../../stores/guideStore';
 import { useGuideAutoOpen } from '../../hooks/useGuideAutoOpen';
 import { formatTime, truncate } from '../../utils/format';
+import { useRouter } from '../../router';
 
 const MODEL_TYPE_OPTIONS = ['default', 'video', 'audio', 'vision', 'image_gen'] as const;
 const MODEL_PROVIDER_OPTIONS = [
@@ -40,6 +41,7 @@ type ModelTemplateSortField =
 
 export function ModelTemplatesPage() {
   const { t } = useTranslation();
+  const { navigate } = useRouter();
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const { searchInput, setSearchInput, searchQuery } = useListSearch();
@@ -277,6 +279,7 @@ export function ModelTemplatesPage() {
                     }}
                   />
                 </th>
+                <th>{t('modelTemplate.referenceCount')}</th>
                 <th>
                   <TableColumnSort
                     label={t('modelTemplate.updatedAt')}
@@ -291,7 +294,7 @@ export function ModelTemplatesPage() {
             <tbody>
               {items.length === 0 ? (
                 <tr>
-                  <td colSpan={9}>
+                  <td colSpan={10}>
                     <Empty text={t('common.empty')} />
                   </td>
                 </tr>
@@ -330,6 +333,19 @@ export function ModelTemplatesPage() {
                         aria-label={row.enabled ? t('common.enabled') : t('common.disabled')}
                         onChange={(enabled) => void toggleEnabled(row, enabled)}
                       />
+                    </td>
+                    <td className="whitespace-nowrap">
+                      {row.reference_count > 0 ? (
+                        <span
+                          className="tag cursor-pointer"
+                          title={t('modelTemplate.referenceHint')}
+                          onClick={() => navigate('/agent-templates')}
+                        >
+                          {row.reference_count}
+                        </span>
+                      ) : (
+                        <span className="text-[11px] text-muted">0</span>
+                      )}
                     </td>
                     <td className="mono text-[11px] text-muted whitespace-nowrap">{formatTime(row.updated_at)}</td>
                     <td className="whitespace-nowrap min-w-[9.5rem]">

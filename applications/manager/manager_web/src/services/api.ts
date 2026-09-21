@@ -23,6 +23,9 @@ import type {
   ServiceConfigTemplate,
   ServiceConfigTemplateCreateBody,
   ServiceConfigTemplateUpdateBody,
+  ContainerTemplate,
+  ContainerTemplateCreateBody,
+  ContainerTemplateUpdateBody,
   ResponseModel,
   LogMaskingRule,
   LogMaskingRuleCreateBody,
@@ -1036,6 +1039,31 @@ export const ServiceConfigTemplateApi = {
   remove: (id: string) =>
     http<{ deleted: boolean; template_id: string }>(
       `/v1/service-config-templates/${encodeURIComponent(id)}`,
+      { method: 'DELETE' }
+    ),
+};
+
+export const ContainerTemplateApi = {
+  list: (params?: {
+    page?: number;
+    page_size?: number;
+    enabled?: boolean;
+    search?: string;
+    sort_by?: 'template_name' | 'container_id' | 'updated_at';
+    sort_order?: 'asc' | 'desc';
+  }) => http<PageResult<ContainerTemplate>>('/v1/container-templates', { query: params }),
+  get: (id: string) =>
+    http<ContainerTemplate>(`/v1/container-templates/${encodeURIComponent(id)}`),
+  create: (body: ContainerTemplateCreateBody) =>
+    http<ContainerTemplate>('/v1/container-templates', { method: 'POST', body }),
+  update: (id: string, body: ContainerTemplateUpdateBody) =>
+    http<ContainerTemplate>(`/v1/container-templates/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body,
+    }),
+  remove: (id: string) =>
+    http<{ deleted: boolean; template_id: string }>(
+      `/v1/container-templates/${encodeURIComponent(id)}`,
       { method: 'DELETE' }
     ),
 };

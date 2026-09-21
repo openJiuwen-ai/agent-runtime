@@ -4,6 +4,7 @@ import { create } from 'zustand';
 export type GuideOpenTarget =
   | 'agentTemplateNew'
   | 'modelTemplateNew'
+  | 'containerTemplateNew'
   | 'instanceCreate'
   | 'accessUsers'
   | 'accessOrgs'

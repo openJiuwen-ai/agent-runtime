@@ -1,4 +1,9 @@
-"""服务配置模板 service_config_template 业务逻辑。"""
+"""服务配置模板 service_config_template 业务逻辑。
+
+容器规格不再内联：模板仅绑定容器模板（main_container_id / sidecar_container_ids），
+Out 投影返回 ``bound_containers`` 绑定摘要；创建/更新时校验绑定存在性。
+历史兼容：``data.config_sync.containers`` wire 仍抽出落表（导入旧文件过渡）。
+"""
 
 from __future__ import annotations
 
@@ -7,8 +12,9 @@ from typing import Any
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 
 from manager_server.core.template.service_config_container import (
+    bound_container_briefs,
     extract_wire_containers,
-    hydrate_data_with_containers,
+    load_row_by_container_id,
     main_image_from_table,
     strip_containers_from_data,
     upsert_wire_containers,
@@ -82,7 +88,7 @@ async def row_to_out(handler: DBHandler, row: Any) -> ServiceConfigTemplateOut:
     sidecar_ids = _g(row, "sidecar_container_ids")
     if sidecar_ids is not None and not isinstance(sidecar_ids, list):
         sidecar_ids = None
-    data = await hydrate_data_with_containers(handler, row)
+    briefs = await bound_container_briefs(handler, row)
     return ServiceConfigTemplateOut(
         id=row.id,
         template_id=str(row.template_id),
@@ -100,6 +106,7 @@ async def row_to_out(handler: DBHandler, row: Any) -> ServiceConfigTemplateOut:
         sidecar_container_ids=sidecar_ids,
         volumes=_g(row, "volumes") if isinstance(_g(row, "volumes"), list) else None,
         main_image=await main_image_from_table(handler, row),
+        bound_containers=briefs,
         min_idle_pods=_as_int(_g(row, "min_idle_pods"), 0),
         pod_concurrency=_as_int(_g(row, "pod_concurrency"), 2),
         pod_ttl=_as_int(_g(row, "pod_ttl"), 300),
@@ -107,15 +114,44 @@ async def row_to_out(handler: DBHandler, row: Any) -> ServiceConfigTemplateOut:
         scope_concurrency=_as_int(_g(row, "scope_concurrency"), 3),
         session_ttl=_as_int(_g(row, "session_ttl"), 60),
         enabled=bool(_g(row, "enabled", True)),
-        data=data,
+        # data 不再回填容器列表（绑定关系由 bound_containers 表达），仅保留
+        # scopes / source_template_id 等元数据，供导入导出往返
+        data=_strip_wire_containers_if_any(_g(row, "data")),
         created_at=iso_datetime(row.created_at),
         updated_at=iso_datetime(row.updated_at),
     )
 
 
+def _strip_wire_containers_if_any(data: Any) -> dict[str, Any] | None:
+    """Out 投影不再内联容器列表；存量 data.config_sync.containers 从响应剥离。"""
+    if not isinstance(data, dict):
+        return data if isinstance(data, dict) else None
+    sync = data.get("config_sync")
+    if not isinstance(sync, dict) or "containers" not in sync:
+        return data
+    stripped = strip_containers_from_data(data)
+    return stripped if isinstance(stripped, dict) else None
+
+
 def _split_body_data(data: Any) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     wires = extract_wire_containers(data)
     return wires, strip_containers_from_data(data)
+
+
+async def _assert_bound_containers_exist(handler: DBHandler, body: Any) -> None:
+    """创建/更新前校验：绑定的容器模板（主 + sidecar）须已存在于容器模板目录。"""
+    main = getattr(body, "main_container_id", None)
+    if isinstance(main, str) and main.strip():
+        if await load_row_by_container_id(handler, main) is None:
+            raise ValueError(f"bound main container template not found: {main.strip()}")
+    sidecars = getattr(body, "sidecar_container_ids", None)
+    if isinstance(sidecars, list):
+        for sid in sidecars:
+            if isinstance(sid, str) and sid.strip():
+                if await load_row_by_container_id(handler, sid) is None:
+                    raise ValueError(
+                        f"bound sidecar container template not found: {sid.strip()}"
+                    )
 
 
 class ServiceConfigTemplateService:
@@ -158,6 +194,7 @@ class ServiceConfigTemplateService:
         wires, data = _split_body_data(body.data)
         if wires:
             await upsert_wire_containers(self._handler, wires)
+        await _assert_bound_containers_exist(self._handler, body)
         template_uuid = new_uuid4()
         row = self._build_row_for_create(body, template_id=template_uuid, data=data)
         now = utc_now()
@@ -252,6 +289,10 @@ class ServiceConfigTemplateService:
             if wires:
                 await upsert_wire_containers(self._handler, wires)
             updates["data"] = data
+
+        # 绑定变更时校验存在性（仅当本次显式更新了绑定字段）
+        if "main_container_id" in updates or "sidecar_container_ids" in updates:
+            await _assert_bound_containers_exist(self._handler, body)
 
         payload = dict(updates)
         payload["updated_at"] = utc_now()

@@ -21,14 +21,17 @@ from manager_server.core.template.a2a_discovery import (
 from manager_server.core.template.a2a_discovery_settings import A2ADiscoverySettingsService
 from manager_server.core.template.push_template_to_gateway import (
     delete_template_on_referencing_gateways,
+    slot_template_pairs_from_template_ref,
     sync_new_a2a_outbound_to_gateways,
     update_template_on_referencing_gateways,
 )
 from manager_server.infrastructure.common import resolve_order_by
+from manager_server.infrastructure.template_ref import read_template_ref_from_row
 from manager_server.infrastructure.utils import iso_datetime, new_uuid4, utc_now
 from manager_server.models.template_models import (
     A2A_ACCESS_POLICY_TEMPLATE_TABLE_DEF,
     A2A_OUTBOUND_TEMPLATE_TABLE_DEF,
+    AGENT_TEMPLATE_TABLE_DEF,
 )
 from manager_server.schemas.template_schemas import (
     A2AOutboundTemplateCreateBody,
@@ -38,6 +41,7 @@ from manager_server.schemas.template_schemas import (
     A2AOutboundTemplateOut,
     A2AOutboundTemplateUpdateBody,
 )
+from manager_server.schemas.template_slot_schemas import A2A_ACCESS_POLICY_SLOT
 
 _TABLE = A2A_OUTBOUND_TEMPLATE_TABLE_DEF.table_name
 _POLICY_TABLE = A2A_ACCESS_POLICY_TEMPLATE_TABLE_DEF.table_name
@@ -84,12 +88,14 @@ def _row_payload(row: Any) -> dict[str, Any]:
     }
 
 
-def row_to_out(row: Any) -> A2AOutboundTemplateOut:
-    return A2AOutboundTemplateOut(**_row_payload(row))
+def row_to_out(row: Any, *, reference_count: int = 0) -> A2AOutboundTemplateOut:
+    return A2AOutboundTemplateOut(**_row_payload(row), reference_count=reference_count)
 
 
-def row_to_edit_out(row: Any) -> A2AOutboundTemplateEditOut:
-    return A2AOutboundTemplateEditOut(**_row_payload(row), credential=row.credential)
+def row_to_edit_out(row: Any, *, reference_count: int = 0) -> A2AOutboundTemplateEditOut:
+    return A2AOutboundTemplateEditOut(
+        **_row_payload(row), reference_count=reference_count, credential=row.credential
+    )
 
 
 def row_to_sync(row: Any) -> dict[str, Any]:
@@ -148,6 +154,56 @@ def _member_template_ids(row: Any) -> list[str]:
 class A2AOutboundTemplateService:
     def __init__(self, handler: DBHandler) -> None:
         self._handler = handler
+
+    async def _effective_reference_counts(self) -> dict[str, int]:
+        """有效被引用数：生效出站集合覆盖本类模板的 Agent 模板数。
+
+        A2A 访问策略为单值槽位，每个 Agent 模板至多命中一条策略：
+        allowlist 统计策略成员，denylist 统计未被策略排除的全部出站模板。
+        """
+        policy_map: dict[str, tuple[str, set[str]]] = {}
+        for policy in await self._handler.list_records(
+            _POLICY_TABLE, {}, limit=_LIST_ALL_CAP, offset=0
+        ):
+            policy_map[str(policy.policy_id)] = (
+                str(policy.mode),
+                set(_member_template_ids(policy)),
+            )
+        outbound_ids: set[str] | None = None
+        counts: dict[str, int] = {}
+        offset = 0
+        while True:
+            rows = await self._handler.list_records(
+                AGENT_TEMPLATE_TABLE_DEF.table_name,
+                {},
+                limit=_REFERENCE_SCAN_PAGE_SIZE,
+                offset=offset,
+                order_by=[("id", False)],
+            )
+            for row in rows:
+                pairs = slot_template_pairs_from_template_ref(read_template_ref_from_row(row))
+                policy_ids = {tid for slot, tid in pairs if slot == A2A_ACCESS_POLICY_SLOT}
+                for policy_id in policy_ids:
+                    spec = policy_map.get(policy_id)
+                    if spec is None:
+                        continue
+                    mode, members = spec
+                    if mode == "denylist":
+                        if outbound_ids is None:
+                            outbound_rows = await self._handler.list_records(
+                                _TABLE, {}, limit=_LIST_ALL_CAP, offset=0
+                            )
+                            outbound_ids = set()
+                            for outbound in outbound_rows:
+                                outbound_ids.add(str(outbound.template_id))
+                        affected = outbound_ids - members
+                    else:
+                        affected = members
+                    for template_id in affected:
+                        counts[template_id] = counts.get(template_id, 0) + 1
+            if len(rows) < _REFERENCE_SCAN_PAGE_SIZE:
+                return counts
+            offset += len(rows)
 
     async def create(self, body: A2AOutboundTemplateCreateBody) -> A2AOutboundTemplateOut:
         card = await get_candidate(self._handler, body.discovery_id)
@@ -251,7 +307,10 @@ class A2AOutboundTemplateService:
             await update_template_on_referencing_gateways(
                 self._handler, "a2a_outbound_templates", template_id, _row_to_update_sync(row)
             )
-        return row_to_out(row)
+        if row is None:
+            return None
+        counts = await self._effective_reference_counts()
+        return row_to_out(row, reference_count=counts.get(str(row.template_id), 0))
 
     async def disable_disallowed(self, settings: A2ADiscoverySettingsBody) -> int:
         disabled_rows: list[Any] = []
@@ -336,15 +395,24 @@ class A2AOutboundTemplateService:
             await update_template_on_referencing_gateways(
                 self._handler, "a2a_outbound_templates", template_id, _row_to_update_sync(row)
             )
-        return row_to_out(row)
+        if row is None:
+            return None
+        counts = await self._effective_reference_counts()
+        return row_to_out(row, reference_count=counts.get(str(row.template_id), 0))
 
     async def get(self, template_id: str) -> A2AOutboundTemplateOut | None:
         row = await self._handler.get(_TABLE, {"template_id": template_id})
-        return row_to_out(row) if row is not None else None
+        if row is None:
+            return None
+        counts = await self._effective_reference_counts()
+        return row_to_out(row, reference_count=counts.get(str(row.template_id), 0))
 
     async def get_for_edit(self, template_id: str) -> A2AOutboundTemplateEditOut | None:
         row = await self._handler.get(_TABLE, {"template_id": template_id})
-        return row_to_edit_out(row) if row is not None else None
+        if row is None:
+            return None
+        counts = await self._effective_reference_counts()
+        return row_to_edit_out(row, reference_count=counts.get(str(row.template_id), 0))
 
     async def list_templates(self, query: A2AOutboundTemplateListQuery) -> dict[str, Any]:
         filters: dict[str, Any] = {}
@@ -353,13 +421,16 @@ class A2AOutboundTemplateService:
         order_by = resolve_order_by(
             query.sort_by, query.sort_order, allowed_sort_fields=_ALLOWED_SORT_FIELDS
         )
+        reference_counts = await self._effective_reference_counts()
         search = (query.search or "").strip()
         if search:
             rows = await self._handler.list_records(
                 _TABLE, filters, limit=_LIST_ALL_CAP, offset=0, order_by=order_by
             )
             items = [
-                row_to_out(row).model_dump(mode="json")
+                row_to_out(
+                    row, reference_count=reference_counts.get(str(row.template_id), 0)
+                ).model_dump(mode="json")
                 for row in rows
                 if _matches_search(row, search)
             ]
@@ -371,7 +442,12 @@ class A2AOutboundTemplateService:
             rows = await self._handler.list_records(
                 _TABLE, filters, limit=query.page_size, offset=offset, order_by=order_by
             )
-            items = [row_to_out(row).model_dump(mode="json") for row in rows]
+            items = [
+                row_to_out(
+                    row, reference_count=reference_counts.get(str(row.template_id), 0)
+                ).model_dump(mode="json")
+                for row in rows
+            ]
             total = await self._handler.count_records(_TABLE, filters)
         return {"items": items, "total": total, "page": query.page, "page_size": query.page_size}
 
@@ -393,7 +469,8 @@ class A2AOutboundTemplateService:
             updates["credential"] = None
             credential_operation = "clear"
         if not updates:
-            return row_to_out(existing)
+            counts = await self._effective_reference_counts()
+            return row_to_out(existing, reference_count=counts.get(str(existing.template_id), 0))
         updates["updated_at"] = utc_now()
         row = await self._handler.update(_TABLE, {"template_id": template_id}, updates)
         if row is not None:
@@ -403,7 +480,10 @@ class A2AOutboundTemplateService:
                 template_id,
                 _row_to_update_sync(row, credential_operation=credential_operation),
             )
-        return row_to_out(row) if row is not None else None
+        if row is None:
+            return None
+        counts = await self._effective_reference_counts()
+        return row_to_out(row, reference_count=counts.get(str(row.template_id), 0))
 
     async def delete(self, template_id: str) -> bool:
         existing = await self._handler.get(_TABLE, {"template_id": template_id})

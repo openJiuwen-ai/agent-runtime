@@ -3,10 +3,13 @@
  * 导入导出只处理 `{ containers, templates, scopes }`；
  * `type` / `metadata` 由 Manager 下发 Runtime 时自行拼接。
  * 导入兼容误带 Envelope 的文件（自动取 rawdata）。
- * 导出强制 split：template 仅带 refs，容器规格在 containers。
+ * 导出强制 split：template 仅带 refs，容器规格从容器模板目录按绑定解析
+ * （Out.data 不再内联 containers；解析不到时回退存量 data 内联，旧文件过渡）。
  * 导入兼容旧 inline wire：前端合成 containers 写入 data.config_sync。
  */
+import { ContainerTemplateApi } from '../services/api';
 import type {
+  ContainerTemplate,
   ServiceConfigTemplate,
   ServiceConfigTemplateCreateBody,
 } from '../types';
@@ -213,15 +216,84 @@ function looksLikeInlineWire(wire: Record<string, unknown>): boolean {
   );
 }
 
-/** 导出 rawdata（三段式，强制 split）。 */
-export function exportTemplateRawdata(row: ServiceConfigTemplate): ConfigSyncRawdata {
+/** 容器模板行 → config_sync wire 容器（对齐后端 row_to_wire 键形）。 */
+function containerTemplateToWire(tpl: ContainerTemplate): Record<string, unknown> {
+  const wire: Record<string, unknown> = {
+    container_id: tpl.container_id,
+    name: tpl.name,
+    image: tpl.image,
+    imagePullPolicy: tpl.image_pull_policy || 'IfNotPresent',
+  };
+  for (const [wireKey, value] of [
+    ['ports', tpl.ports],
+    ['env', tpl.env],
+    ['envFrom', tpl.env_from],
+    ['resources', tpl.resources],
+    ['volumeMounts', tpl.volume_mounts],
+    ['securityContext', tpl.security_context],
+    ['readinessProbe', tpl.readiness_probe],
+  ] as const) {
+    if (value != null) wire[wireKey] = value;
+  }
+  return wire;
+}
+
+/**
+ * 导出 rawdata（三段式，强制 split）。
+ * 绑定的容器规格优先从容器模板目录按 container_id 解析；
+ * 目录缺失该绑定（存量数据/被删）时回退 Out.data 内联 containers。
+ */
+export async function exportTemplateRawdata(
+  row: ServiceConfigTemplate,
+  catalog?: ContainerTemplate[],
+): Promise<ConfigSyncRawdata> {
   const stored = pickStoredSync(row.data ?? undefined);
   const wire = templateToWire(row, {
     templateId: stored.source_template_id || row.template_id,
   });
 
+  const boundIds = [
+    ...new Set(
+      [row.main_container_id, ...(row.sidecar_container_ids ?? [])]
+        .filter((id): id is string => Boolean(id && id.trim())),
+    ),
+  ];
+  const containers: Record<string, unknown>[] = [];
+  const missingIds: string[] = [];
+  if (boundIds.length) {
+    let catalogRows = catalog;
+    if (!catalogRows) {
+      try {
+        catalogRows = (await ContainerTemplateApi.list({ page: 1, page_size: 200 })).items ?? [];
+      } catch {
+        catalogRows = [];
+      }
+    }
+    const byId = new Map(catalogRows.map((tpl) => [tpl.container_id, tpl]));
+    for (const cid of boundIds) {
+      const tpl = byId.get(cid);
+      if (tpl) {
+        containers.push(containerTemplateToWire(tpl));
+      } else {
+        missingIds.push(cid);
+      }
+    }
+  }
+  // 存量兜底：内联数据里还有目录解析不到的绑定
+  if (missingIds.length) {
+    const inlineById = new Map(
+      stored.containers
+        ?.filter((c) => typeof c.container_id === 'string')
+        .map((c) => [String(c.container_id), c]) ?? [],
+    );
+    for (const cid of missingIds) {
+      const inline = inlineById.get(cid);
+      if (inline) containers.push(inline);
+    }
+  }
+
   return {
-    containers: stored.containers ?? [],
+    containers,
     templates: [wire],
     scopes: stored.scopes ?? [],
   };

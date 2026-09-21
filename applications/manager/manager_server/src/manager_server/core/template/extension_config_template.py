@@ -8,6 +8,7 @@ from openjiuwen_runtime.foundation.db.handler import DBHandler
 
 from manager_server.core.template.push_template_to_gateway import (
     assert_template_deletable,
+    count_agent_template_reference_counts,
     update_template_on_referencing_gateways,
     delete_template_on_referencing_gateways,
 )
@@ -22,6 +23,7 @@ from manager_server.schemas.template_schemas import (
     HookConfig,
     normalize_hook_schedule,
 )
+from manager_server.schemas.template_slot_schemas import EXTENSION_CONFIG_SLOT
 
 _TABLE = EXTENSION_CONFIG_TEMPLATE_TABLE_DEF.table_name
 _LIST_ALL_CAP = 10_000
@@ -65,7 +67,7 @@ def _validate_hook_config(hook_config: HookConfig | dict[str, Any], *, hook_type
     return data
 
 
-def row_to_out(row: Any) -> ExtensionConfigTemplateOut:
+def row_to_out(row: Any, *, reference_count: int = 0) -> ExtensionConfigTemplateOut:
     raw_hook = row.hook_config
     if isinstance(raw_hook, HookConfig):
         hook_config = raw_hook
@@ -86,6 +88,7 @@ def row_to_out(row: Any) -> ExtensionConfigTemplateOut:
         hook_config=hook_config,
         custom_config=custom_config,
         enabled=row.enabled,
+        reference_count=reference_count,
         data=row.data,
         created_at=iso_datetime(row.created_at),
         updated_at=iso_datetime(row.updated_at),
@@ -95,6 +98,12 @@ def row_to_out(row: Any) -> ExtensionConfigTemplateOut:
 class ExtensionConfigTemplateService:
     def __init__(self, handler: DBHandler) -> None:
         self._handler = handler
+
+    async def _reference_counts(self) -> dict[str, int]:
+        """被引用数：在 Agent 模板 extension_config 槽位引用本类模板的 Agent 模板数。"""
+        return await count_agent_template_reference_counts(
+            self._handler, slot_keys=frozenset({EXTENSION_CONFIG_SLOT})
+        )
 
     @staticmethod
     def _build_row_for_create(
@@ -131,7 +140,8 @@ class ExtensionConfigTemplateService:
         row = await self._handler.get(_TABLE, {"template_id": template_id})
         if row is None:
             return None
-        return row_to_out(row)
+        counts = await self._reference_counts()
+        return row_to_out(row, reference_count=counts.get(str(row.template_id), 0))
 
     async def list_templates(
         self,
@@ -147,6 +157,7 @@ class ExtensionConfigTemplateService:
         if query.hook_type is not None:
             filters["hook_type"] = query.hook_type
 
+        reference_counts = await self._reference_counts()
         order_by = resolve_order_by(
             query.sort_by, query.sort_order, allowed_sort_fields=_ALLOWED_SORT_FIELDS
         )
@@ -160,7 +171,9 @@ class ExtensionConfigTemplateService:
                 order_by=order_by,
             )
             items = [
-                row_to_out(r).model_dump(mode="json")
+                row_to_out(
+                    r, reference_count=reference_counts.get(str(r.template_id), 0)
+                ).model_dump(mode="json")
                 for r in rows
                 if _matches_search(r, search_query)
             ]
@@ -183,7 +196,12 @@ class ExtensionConfigTemplateService:
             order_by=order_by,
         )
         total = await self._handler.count_records(_TABLE, filters)
-        items = [row_to_out(r).model_dump(mode="json") for r in rows]
+        items = [
+            row_to_out(r, reference_count=reference_counts.get(str(r.template_id), 0)).model_dump(
+                mode="json"
+            )
+            for r in rows
+        ]
         return {
             "items": items,
             "total": total,
@@ -200,7 +218,10 @@ class ExtensionConfigTemplateService:
 
         if not updates:
             row = await self._handler.get(_TABLE, {"template_id": template_id})
-            return row_to_out(row) if row is not None else None
+            if row is None:
+                return None
+            counts = await self._reference_counts()
+            return row_to_out(row, reference_count=counts.get(str(row.template_id), 0))
 
         existing = await self._handler.get(_TABLE, {"template_id": template_id})
         if existing is None:
@@ -225,7 +246,8 @@ class ExtensionConfigTemplateService:
         )
         if row is None:
             return None
-        return row_to_out(row)
+        counts = await self._reference_counts()
+        return row_to_out(row, reference_count=counts.get(str(row.template_id), 0))
 
     async def delete(self, template_id: str) -> bool:
         row = await self._handler.get(_TABLE, {"template_id": template_id})

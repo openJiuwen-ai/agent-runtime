@@ -18,6 +18,8 @@ export interface ModelTemplate {
   enable_function_calling: boolean;
   verify_ssl: boolean;
   enabled: boolean;
+  /** 只读：在 Agent 模板各模型槽位引用本模板的 Agent 模板数 */
+  reference_count: number;
   data?: Record<string, unknown> | null;
   created_at?: string | null;
   updated_at?: string | null;
@@ -57,6 +59,8 @@ export interface EmbeddingTemplate {
   parameters?: Record<string, unknown> | null;
   client_config?: Record<string, unknown> | null;
   enabled: boolean;
+  /** 只读：在 Agent 模板 embedding_model 槽位引用本模板的 Agent 模板数 */
+  reference_count: number;
   data?: Record<string, unknown> | null;
   created_at?: string | null;
   updated_at?: string | null;
@@ -96,6 +100,8 @@ export interface ExtensionConfigTemplate {
   hook_config: HookConfig;
   custom_config?: Record<string, unknown> | null;
   enabled: boolean;
+  /** 只读：在 Agent 模板 extension_config 槽位引用本模板的 Agent 模板数 */
+  reference_count: number;
   data?: Record<string, unknown> | null;
   created_at?: string | null;
   updated_at?: string | null;
@@ -124,6 +130,8 @@ export interface SkillPrebuiltTemplate {
   source_id?: string | null;
   version_id?: string | null;
   enabled: boolean;
+  /** 只读：在 Agent 模板 skill_prebuilt 槽位引用本模板的 Agent 模板数 */
+  reference_count: number;
   data?: Record<string, unknown> | null;
   created_at?: string | null;
   updated_at?: string | null;
@@ -154,6 +162,8 @@ export interface PermissionsTemplate {
   template_name: string;
   description?: string | null;
   enabled: boolean;
+  /** 只读：在 Agent 模板 permissions 槽位引用本模板的 Agent 模板数 */
+  reference_count: number;
   body: Record<string, unknown>;
   data?: Record<string, unknown> | null;
   created_at?: string | null;
@@ -186,7 +196,9 @@ export interface ServiceConfigTemplate {
   main_container_id?: string | null;
   sidecar_container_ids?: string[] | null;
   volumes?: Record<string, unknown>[] | null;
-  /** 只读：从 data.config_sync.containers 派生的主容器镜像 */
+  /** 只读：绑定的容器模板摘要（main 在前，仅含可解析的绑定） */
+  bound_containers?: ServiceConfigContainerBrief[] | null;
+  /** 只读：从绑定容器派生的主容器镜像 */
   main_image?: string | null;
   min_idle_pods: number;
   pod_concurrency: number;
@@ -242,6 +254,8 @@ export interface A2AOutboundTemplate {
   connect_timeout_seconds: number;
   sync_wait_seconds: number;
   enabled: boolean;
+  /** 只读：生效出站集合覆盖本模板的 Agent 模板数 */
+  reference_count: number;
   pending_revision?: Record<string, unknown> | null;
   last_checked_at?: string | null;
   last_error_code?: string | null;
@@ -312,7 +326,7 @@ export interface A2AAccessPolicyTemplateBody {
   enabled?: boolean;
 }
 
-/** 容器规格（service_config_container），供模板引用。 */
+/** 容器规格（service_config_container），供运行时模板引用。 */
 export interface ServiceConfigContainer {
   id: number;
   container_id: string;
@@ -329,4 +343,59 @@ export interface ServiceConfigContainer {
   data?: Record<string, unknown> | null;
   created_at?: string | null;
   updated_at?: string | null;
+}
+
+/** 容器模板（service_config_container 的独立维护视图），业务主键 template_id。 */
+export interface ContainerTemplate {
+  id: number;
+  template_id: string;
+  template_name: string;
+  description?: string | null;
+  container_id: string;
+  name: string;
+  image: string;
+  image_pull_policy: string;
+  ports?: unknown[] | null;
+  env?: unknown[] | null;
+  env_from?: unknown[] | null;
+  resources?: Record<string, unknown> | null;
+  volume_mounts?: unknown[] | null;
+  security_context?: Record<string, unknown> | null;
+  readiness_probe?: Record<string, unknown> | null;
+  /** 只读：引用该容器模板的运行时模板数量 */
+  reference_count: number;
+  enabled: boolean;
+  data?: Record<string, unknown> | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface ContainerTemplateCreateBody {
+  template_name: string;
+  description?: string;
+  container_id: string;
+  name?: string;
+  image?: string;
+  image_pull_policy?: string;
+  ports?: unknown[];
+  env?: unknown[];
+  env_from?: unknown[];
+  resources?: Record<string, unknown>;
+  volume_mounts?: unknown[];
+  security_context?: Record<string, unknown>;
+  readiness_probe?: Record<string, unknown>;
+  command?: string[];
+  args?: string[];
+  enabled?: boolean;
+  data?: Record<string, unknown>;
+}
+
+export type ContainerTemplateUpdateBody = Partial<ContainerTemplateCreateBody>;
+
+/** 运行时模板 Out 中携带的绑定容器摘要。 */
+export interface ServiceConfigContainerBrief {
+  container_id: string;
+  template_id: string;
+  template_name: string;
+  image: string;
 }

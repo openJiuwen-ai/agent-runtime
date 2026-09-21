@@ -17,6 +17,7 @@ import { ListSearchInput } from '../../components/ListSearchInput';
 import { SafetyGuardrailsModal } from './SafetyGuardrailsModal';
 import { toast } from '../../stores/uiStore';
 import { formatTime, truncate } from '../../utils/format';
+import { useRouter } from '../../router';
 
 type PermissionsTemplateSortField = 'template_name' | 'description' | 'updated_at';
 
@@ -31,6 +32,7 @@ function bodySummary(
 
 export function SafetyGuardrailsPage() {
   const { t } = useTranslation();
+  const { navigate } = useRouter();
   const permissionModeLabel = (mode: string) =>
     t(`instanceConfig.permissions.modes.${mode}`, { defaultValue: mode });
   const [page, setPage] = useState(1);
@@ -188,6 +190,7 @@ export function SafetyGuardrailsPage() {
                           }}
                         />
                       </th>
+                      <th>{t('safetyGuardrails.referenceCount')}</th>
                       <th>
                         <TableColumnSort
                           label={t('safetyGuardrails.updatedAt')}
@@ -202,7 +205,7 @@ export function SafetyGuardrailsPage() {
                   <tbody>
                     {items.length === 0 ? (
                       <tr>
-                        <td colSpan={5}>
+                        <td colSpan={6}>
                           <Empty text={t('common.empty')} />
                         </td>
                       </tr>
@@ -239,6 +242,19 @@ export function SafetyGuardrailsPage() {
                                   </span>
                                 </div>
                               </div>
+                            </td>
+                            <td className="whitespace-nowrap">
+                              {row.reference_count > 0 ? (
+                                <span
+                                  className="tag cursor-pointer"
+                                  title={t('safetyGuardrails.referenceHint')}
+                                  onClick={() => navigate('/agent-templates')}
+                                >
+                                  {row.reference_count}
+                                </span>
+                              ) : (
+                                <span className="text-[11px] text-muted">0</span>
+                              )}
                             </td>
                             <td className="mono text-[11px] text-muted whitespace-nowrap">
                               {formatTime(row.updated_at)}

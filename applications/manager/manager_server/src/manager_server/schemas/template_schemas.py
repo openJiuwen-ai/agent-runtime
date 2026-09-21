@@ -227,6 +227,7 @@ class ModelTemplateOut(BaseModel):
     enable_function_calling: bool
     verify_ssl: bool
     enabled: bool
+    reference_count: int = 0
     data: dict[str, Any] | None
     created_at: str | None
     updated_at: str | None
@@ -316,6 +317,7 @@ class EmbeddingTemplateOut(BaseModel):
     parameters: dict[str, Any] | None
     client_config: dict[str, Any] | None
     enabled: bool
+    reference_count: int = 0
     data: dict[str, Any] | None
     created_at: str | None
     updated_at: str | None
@@ -409,6 +411,7 @@ class ExtensionConfigTemplateOut(BaseModel):
     hook_config: HookConfig
     custom_config: dict[str, Any] | None
     enabled: bool
+    reference_count: int = 0
     data: dict[str, Any] | None
     created_at: str | None
     updated_at: str | None
@@ -491,6 +494,7 @@ class SkillPrebuiltTemplateOut(BaseModel):
     source_id: str | None = None
     version_id: str | None = None
     enabled: bool
+    reference_count: int = 0
     data: dict[str, Any] | None
     created_at: str | None
     updated_at: str | None
@@ -579,6 +583,7 @@ class A2AOutboundTemplateOut(BaseModel):
     connect_timeout_seconds: float
     sync_wait_seconds: float
     enabled: bool
+    reference_count: int = 0
     pending_revision: dict[str, Any] | None
     last_checked_at: str | None
     last_error_code: str | None
@@ -693,6 +698,7 @@ class PermissionsTemplateOut(BaseModel):
     template_name: str
     description: str | None
     enabled: bool
+    reference_count: int = 0
     body: dict[str, Any]
     data: dict[str, Any] | None
     created_at: str | None
@@ -794,6 +800,7 @@ class McpTemplateOut(BaseModel):
     description: str | None
     mcp_entry: dict[str, Any]
     enabled: bool
+    reference_count: int = 0
     data: dict[str, Any] | None
     created_at: str | None
     updated_at: str | None
@@ -802,6 +809,92 @@ class McpTemplateOut(BaseModel):
 # 与库表类型上限一致：integer → 有符号 32 位
 
 _SERVICE_INT_MAX = 2_147_483_647
+
+
+# --- service_config_container（容器模板）---
+
+
+class ServiceConfigContainerCreateBody(SafeTextMixin):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    template_name: str = Field(..., min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=512)
+    container_id: str = Field(..., min_length=1, max_length=100)
+    name: str = Field(default="agent", max_length=128)
+    image: str = Field(default="", max_length=512)
+    image_pull_policy: str = Field(default="IfNotPresent", max_length=64)
+    ports: list[dict[str, Any]] | None = None
+    env: list[dict[str, Any]] | None = None
+    env_from: list[dict[str, Any]] | None = None
+    resources: dict[str, Any] | None = None
+    volume_mounts: list[dict[str, Any]] | None = None
+    security_context: dict[str, Any] | None = None
+    command: list[str] | None = None
+    args: list[str] | None = None
+    readiness_probe: dict[str, Any] | None = None
+    enabled: bool = True
+    data: dict[str, Any] | None = None
+
+
+class ServiceConfigContainerUpdateBody(SafeTextMixin):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    template_name: str | None = Field(default=None, min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=512)
+    container_id: str | None = Field(default=None, min_length=1, max_length=100)
+    name: str | None = Field(default=None, max_length=128)
+    image: str | None = Field(default=None, max_length=512)
+    image_pull_policy: str | None = Field(default=None, max_length=64)
+    ports: list[dict[str, Any]] | None = None
+    env: list[dict[str, Any]] | None = None
+    env_from: list[dict[str, Any]] | None = None
+    resources: dict[str, Any] | None = None
+    volume_mounts: list[dict[str, Any]] | None = None
+    security_context: dict[str, Any] | None = None
+    command: list[str] | None = None
+    args: list[str] | None = None
+    readiness_probe: dict[str, Any] | None = None
+    enabled: bool | None = None
+    data: dict[str, Any] | None = None
+
+
+class ServiceConfigContainerListQuery(BaseModel):
+    page: int = Field(1, ge=1)
+    page_size: int = Field(20, ge=1, le=200)
+    enabled: bool | None = None
+    search: str | None = Field(default=None, max_length=256)
+    sort_by: str | None = Field(
+        default=None,
+        description="排序字段：container_id、updated_at（template_name 为内存回退）",
+    )
+    sort_order: str | None = Field(default=None, description="排序方向：asc、desc")
+
+
+class ServiceConfigContainerOut(BaseModel):
+    id: int
+    # API 主键与 container_id 同值（表结构无独立 template_id 列）
+    template_id: str
+    template_name: str = ""
+    description: str | None = None
+    container_id: str
+    name: str
+    image: str
+    image_pull_policy: str
+    ports: list[dict[str, Any]] | None
+    env: list[dict[str, Any]] | None
+    env_from: list[dict[str, Any]] | None
+    resources: dict[str, Any] | None
+    volume_mounts: list[dict[str, Any]] | None
+    security_context: dict[str, Any] | None
+    command: list[str] | None
+    args: list[str] | None
+    readiness_probe: dict[str, Any] | None
+    # 引用统计：被多少个运行时模板绑定（main + sidecar，去重）
+    reference_count: int = 0
+    enabled: bool
+    data: dict[str, Any] | None
+    created_at: str | None
+    updated_at: str | None
 
 
 class ServiceConfigTemplateCreateBody(SafeTextMixin):
@@ -869,6 +962,15 @@ class ServiceConfigTemplateListQuery(BaseModel):
     sort_order: str | None = Field(default=None, description="排序方向：asc、desc")
 
 
+class ServiceConfigContainerBrief(BaseModel):
+    """运行时模板绑定的容器模板摘要（不内联完整容器规格）。"""
+
+    container_id: str
+    template_id: str
+    template_name: str
+    image: str
+
+
 class ServiceConfigTemplateOut(BaseModel):
     id: int
     template_id: str
@@ -886,6 +988,8 @@ class ServiceConfigTemplateOut(BaseModel):
     sidecar_container_ids: list[str] | None
     volumes: list[dict[str, Any]] | None
     main_image: str | None = None
+    # 绑定关系投影：main 绑定在前，sidecar 随后；未解析到的引用不出现在列表
+    bound_containers: list[ServiceConfigContainerBrief] | None = None
     min_idle_pods: int
     pod_concurrency: int
     pod_ttl: int

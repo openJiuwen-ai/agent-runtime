@@ -1,5 +1,6 @@
 """模板 CRUD API：model_template、extension_config_template、skill_prebuilt_template、
-permissions_template、mcp_template、service_config_template（全局；服务配置同步 Runtime，其余可下发 Gateway）、agent_template。
+permissions_template、mcp_template、service_config_template（全局；服务配置同步 Runtime，其余可下发 Gateway）、agent_template、
+service_config_container（容器模板，供运行时模板绑定）。
 """
 
 from __future__ import annotations
@@ -26,6 +27,9 @@ from manager_server.core.template.model_template import ModelTemplateService
 from manager_server.core.template.mcp_template import McpTemplateService
 from manager_server.core.template.permissions_template import (
     PermissionsTemplateService,
+)
+from manager_server.core.template.service_config_container import (
+    ServiceConfigContainerService,
 )
 from manager_server.core.template.service_config_template import (
     ServiceConfigTemplateService,
@@ -64,6 +68,9 @@ from manager_server.schemas.template_schemas import (
     PermissionsTemplateCreateBody,
     PermissionsTemplateListQuery,
     PermissionsTemplateUpdateBody,
+    ServiceConfigContainerCreateBody,
+    ServiceConfigContainerListQuery,
+    ServiceConfigContainerUpdateBody,
     ServiceConfigTemplateCreateBody,
     ServiceConfigTemplateListQuery,
     ServiceConfigTemplateUpdateBody,
@@ -111,6 +118,10 @@ def _mcp_template_svc(handler: DBHandler) -> McpTemplateService:
 
 def _service_config_template_svc(handler: DBHandler) -> ServiceConfigTemplateService:
     return ServiceConfigTemplateService(handler)
+
+
+def _service_config_container_svc(handler: DBHandler) -> ServiceConfigContainerService:
+    return ServiceConfigContainerService(handler)
 
 
 def _agent_template_svc(handler: DBHandler) -> AgentTemplateService:
@@ -958,6 +969,83 @@ async def delete_service_config_template(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not ok:
         raise HTTPException(status_code=404, detail="service config template not found")
+    return ResponseModel(
+        code=200, message="success", data={"deleted": True, "template_id": template_id}
+    )
+
+
+# --- service_config_container（容器模板）---
+
+
+@templates_router.post("/container-templates", response_model=ResponseModel)
+async def create_container_template(
+    body: ServiceConfigContainerCreateBody,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    svc = _service_config_container_svc(handler)
+    try:
+        data = await svc.create(body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ResponseModel(code=200, message="success", data=data.model_dump())
+
+
+@templates_router.get("/container-templates", response_model=ResponseModel)
+async def list_container_templates(
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+    query: Annotated[ServiceConfigContainerListQuery, Query()],
+):
+    svc = _service_config_container_svc(handler)
+    try:
+        data = await svc.list_containers(query)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ResponseModel(code=200, message="success", data=data)
+
+
+@templates_router.get("/container-templates/{template_id}", response_model=ResponseModel)
+async def get_container_template(
+    template_id: TemplateIdPath,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    svc = _service_config_container_svc(handler)
+    try:
+        row = await svc.get(template_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if row is None:
+        raise HTTPException(status_code=404, detail="container template not found")
+    return ResponseModel(code=200, message="success", data=row.model_dump())
+
+
+@templates_router.patch("/container-templates/{template_id}", response_model=ResponseModel)
+async def update_container_template(
+    template_id: TemplateIdPath,
+    body: ServiceConfigContainerUpdateBody,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    svc = _service_config_container_svc(handler)
+    try:
+        row = await svc.update(template_id, body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if row is None:
+        raise HTTPException(status_code=404, detail="container template not found")
+    return ResponseModel(code=200, message="success", data=row.model_dump())
+
+
+@templates_router.delete("/container-templates/{template_id}", response_model=ResponseModel)
+async def delete_container_template(
+    template_id: TemplateIdPath,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    svc = _service_config_container_svc(handler)
+    try:
+        ok = await svc.delete(template_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not ok:
+        raise HTTPException(status_code=404, detail="container template not found")
     return ResponseModel(
         code=200, message="success", data={"deleted": True, "template_id": template_id}
     )

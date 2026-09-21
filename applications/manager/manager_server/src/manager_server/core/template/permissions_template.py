@@ -8,6 +8,7 @@ from openjiuwen_runtime.foundation.db.handler import DBHandler
 
 from manager_server.core.template.push_template_to_gateway import (
     assert_template_deletable,
+    count_agent_template_reference_counts,
     update_template_on_referencing_gateways,
     delete_template_on_referencing_gateways,
 )
@@ -20,6 +21,7 @@ from manager_server.schemas.template_schemas import (
     PermissionsTemplateOut,
     PermissionsTemplateUpdateBody,
 )
+from manager_server.schemas.template_slot_schemas import PERMISSIONS_SLOT
 
 _TABLE = PERMISSIONS_TEMPLATE_TABLE_DEF.table_name
 _LIST_ALL_CAP = 10_000
@@ -42,7 +44,7 @@ def _matches_search(row: Any, query: str) -> bool:
     return any(needle in field.lower() for field in fields)
 
 
-def row_to_out(row: Any) -> PermissionsTemplateOut:
+def row_to_out(row: Any, *, reference_count: int = 0) -> PermissionsTemplateOut:
     body = row.body if isinstance(getattr(row, "body", None), dict) else {}
     return PermissionsTemplateOut(
         id=row.id,
@@ -50,6 +52,7 @@ def row_to_out(row: Any) -> PermissionsTemplateOut:
         template_name=row.template_name,
         description=row.description,
         enabled=row.enabled,
+        reference_count=reference_count,
         body=body,
         data=row.data,
         created_at=iso_datetime(row.created_at),
@@ -60,6 +63,12 @@ def row_to_out(row: Any) -> PermissionsTemplateOut:
 class PermissionsTemplateService:
     def __init__(self, handler: DBHandler) -> None:
         self._handler = handler
+
+    async def _reference_counts(self) -> dict[str, int]:
+        """被引用数：在 Agent 模板 permissions 槽位引用本类模板的 Agent 模板数。"""
+        return await count_agent_template_reference_counts(
+            self._handler, slot_keys=frozenset({PERMISSIONS_SLOT})
+        )
 
     @staticmethod
     def _build_row_for_create(
@@ -91,7 +100,8 @@ class PermissionsTemplateService:
         row = await self._handler.get(_TABLE, {"template_id": template_id})
         if row is None:
             return None
-        return row_to_out(row)
+        counts = await self._reference_counts()
+        return row_to_out(row, reference_count=counts.get(str(row.template_id), 0))
 
     async def list_templates(
         self,
@@ -103,6 +113,7 @@ class PermissionsTemplateService:
         if query.enabled is not None:
             filters["enabled"] = query.enabled
 
+        reference_counts = await self._reference_counts()
         order_by = resolve_order_by(
             query.sort_by, query.sort_order, allowed_sort_fields=_ALLOWED_SORT_FIELDS
         )
@@ -116,7 +127,9 @@ class PermissionsTemplateService:
                 order_by=order_by,
             )
             items = [
-                row_to_out(r).model_dump(mode="json")
+                row_to_out(
+                    r, reference_count=reference_counts.get(str(r.template_id), 0)
+                ).model_dump(mode="json")
                 for r in rows
                 if _matches_search(r, search_query)
             ]
@@ -139,7 +152,12 @@ class PermissionsTemplateService:
             order_by=order_by,
         )
         total = await self._handler.count_records(_TABLE, filters)
-        items = [row_to_out(r).model_dump(mode="json") for r in rows]
+        items = [
+            row_to_out(r, reference_count=reference_counts.get(str(r.template_id), 0)).model_dump(
+                mode="json"
+            )
+            for r in rows
+        ]
         return {
             "items": items,
             "total": total,
@@ -156,7 +174,10 @@ class PermissionsTemplateService:
 
         if not updates:
             row = await self._handler.get(_TABLE, {"template_id": template_id})
-            return row_to_out(row) if row is not None else None
+            if row is None:
+                return None
+            counts = await self._reference_counts()
+            return row_to_out(row, reference_count=counts.get(str(row.template_id), 0))
 
         existing = await self._handler.get(_TABLE, {"template_id": template_id})
         if existing is None:
@@ -175,7 +196,8 @@ class PermissionsTemplateService:
         )
         if row is None:
             return None
-        return row_to_out(row)
+        counts = await self._reference_counts()
+        return row_to_out(row, reference_count=counts.get(str(row.template_id), 0))
 
     async def delete(self, template_id: str) -> bool:
         row = await self._handler.get(_TABLE, {"template_id": template_id})

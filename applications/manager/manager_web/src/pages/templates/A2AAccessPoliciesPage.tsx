@@ -10,9 +10,11 @@ import { A2AAccessPolicyTemplateApi, ApiError } from '../../services/api';
 import { toast } from '../../stores/uiStore';
 import type { A2AAccessPolicyMode, A2AAccessPolicyTemplate } from '../../types';
 import { formatTime, truncate } from '../../utils/format';
+import { useRouter } from '../../router';
 import { A2AAccessPolicyModal } from './A2AAccessPolicyModal';
 
 export function A2AAccessPoliciesPage({ header, tabs }: { header?: ReactNode; tabs?: ReactNode }) {
+  const { navigate } = useRouter();
   const [page, setPage] = useState(1); const [pageSize, setPageSize] = useState(20);
   const [mode, setMode] = useState<A2AAccessPolicyMode | ''>(''); const [enabled, setEnabled] = useState('');
   const { searchInput, setSearchInput, searchQuery } = useListSearch();
@@ -33,7 +35,7 @@ export function A2AAccessPoliciesPage({ header, tabs }: { header?: ReactNode; ta
       {tabs}
       <div className="card !p-0 overflow-x-auto">{loading ? <div className="p-4 text-muted">加载中…</div> : error ? <div className="p-4 text-danger">{error}</div> : <table className="table min-w-full"><thead><tr><th>策略</th><th>模式</th><th>成员数</th><th>引用数</th><th>状态</th><th>版本 / 更新时间</th><th>操作</th></tr></thead><tbody>
         {!items.length ? <tr><td colSpan={7}><Empty text="暂无访问策略" /></td></tr> : items.map((row) => <tr key={row.policy_id}>
-          <td><div className="font-medium">{row.policy_name}</div><div className="text-xs text-muted">{truncate(row.description || '', 42) || '—'}</div></td><td>{row.mode === 'allowlist' ? '白名单' : '黑名单'}</td><td>{row.member_template_ids.length}</td><td>{row.reference_count}</td>
+          <td><div className="font-medium">{row.policy_name}</div><div className="text-xs text-muted">{truncate(row.description || '', 42) || '—'}</div></td><td>{row.mode === 'allowlist' ? '白名单' : '黑名单'}</td><td>{row.member_template_ids.length}</td><td>{row.reference_count > 0 ? <span className="tag cursor-pointer" title="点击查看引用了该策略的 Agent 模板" onClick={() => navigate('/agent-templates')}>{row.reference_count}</span> : <span className="text-[11px] text-muted">0</span>}</td>
           <td><Switch checked={row.enabled} onChange={(value) => value || !row.reference_count ? void action(() => A2AAccessPolicyTemplateApi.update(row.policy_id, { enabled: value })) : setDisabling(row)} /></td><td><span className="badge">r{row.revision}</span><div className="text-xs text-muted">{formatTime(row.updated_at)}</div></td>
           <td className="whitespace-nowrap"><button className="btn sm ghost" onClick={() => { setEditing(row); setModalOpen(true); }}>编辑</button><button className="btn sm danger ml-1" onClick={() => row.reference_count ? toast('warn', `该策略被 ${row.reference_count} 个 Agent 模板引用，无法删除。`) : setDeleting(row)}>删除</button></td></tr>)}</tbody></table>}
       </div>{data && <Pagination page={page} pageSize={pageSize} total={data.total} onChange={(p, ps) => { setPage(p); setPageSize(ps); }} />}
