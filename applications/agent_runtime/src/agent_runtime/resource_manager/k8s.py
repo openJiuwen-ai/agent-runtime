@@ -839,8 +839,10 @@ class RealK8sPodClient(K8sPodClient):
             if getattr(exc, "status", None) != 404:
                 raise DeployFailed(f"k8s delete pod {pod_id} failed: {exc}") from exc
             logger.info("k8s pod already absent: name=%s", pod_id)
-        logger.debug("k8s delete_pod: name=%s duration_ms=%.1f",
-                     pod_id, (time.monotonic() - t0) * 1000)
+        # INFO：物理删除是有副作用的关键操作——曾为 DEBUG 导致取消路径删 Pod
+        # 在生产日志不可见，#4619 排障时被误判为“Pod 被外部神秘删除”
+        logger.info("k8s delete pod: name=%s namespace=%s duration_ms=%.1f",
+                    pod_id, namespace, (time.monotonic() - t0) * 1000)
         return pod_id
 
 
