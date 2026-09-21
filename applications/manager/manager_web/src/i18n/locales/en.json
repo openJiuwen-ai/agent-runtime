@@ -38,7 +38,9 @@
       "nav": "Pagination"
     },
     "pleaseSelect": "Please select",
-    "updatedAt": "Updated At"
+    "updatedAt": "Updated At",
+    "configRefreshCost": "Saving pushes this change to the gateway and triggers a runtime-wide config refresh: all AgentServer pods are gracefully sunset and rebuilt with the new configuration. Existing sessions are unaffected; new sessions may cold-start slower during the rebuild, and rapid consecutive changes may be temporarily rejected by capacity protection until recovery.",
+    "configRefreshCostTemplate": "If this template is referenced by an instance, saving pushes the change to the gateway and triggers a runtime-wide config refresh: all AgentServer pods of that runtime are gracefully sunset and rebuilt. Existing sessions are unaffected; new sessions may cold-start slower during the rebuild, and rapid consecutive changes may be temporarily rejected by capacity protection until recovery."
   },
   "time": {
     "secondsAgo": "{{count}}s ago",

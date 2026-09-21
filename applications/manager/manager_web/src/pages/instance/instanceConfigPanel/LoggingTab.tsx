@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ApiError, LoggingApi } from '../../../services/api';
+import { ConfigRefreshCostHint } from '../../../components/ConfigRefreshCostHint';
 import { ConfirmDialog } from '../../../components/ConfirmDialog';
 import { toast } from '../../../stores/uiStore';
 import { formatTime } from '../../../utils/format';
@@ -173,6 +174,8 @@ export function LoggingTab({ instanceId }: Props) {
           {saving ? t('common.loading') : t('common.save')}
         </button>
       </div>
+
+      <ConfigRefreshCostHint />
 
       <div className="card grid grid-cols-1 md:grid-cols-2 gap-4">
         {fields.map(({ key, labelKey, hintKey }) => (

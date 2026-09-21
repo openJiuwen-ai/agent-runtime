@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { ConfigRefreshCostHint } from '../../components/ConfigRefreshCostHint';
 import { Modal, ModalCancelButton } from '../../components/Modal';
 import { LimitedTextInput } from '../../components/LimitedTextInput';
 import { useFormDirty } from '../../hooks/useFormDirty';
@@ -304,6 +305,7 @@ export function SkillPrebuiltTemplateModal({ open, template, onClose, onSaved }:
           />
         </div>
       </div>
+      {template && <ConfigRefreshCostHint scope="template" />}
     </Modal>
   );
 }

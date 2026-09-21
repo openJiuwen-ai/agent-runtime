@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Modal, ModalCancelButton } from '../../components/Modal';
+import { ConfigRefreshCostHint } from '../../components/ConfigRefreshCostHint';
 import { A2AAccessPolicyTemplateApi, A2AOutboundTemplateApi, ApiError } from '../../services/api';
 import { toast } from '../../stores/uiStore';
 import type { A2AAccessPolicyMode, A2AAccessPolicyTemplate, A2AOutboundTemplate } from '../../types';
@@ -73,5 +74,6 @@ export function A2AAccessPolicyModal({ open, policy, onClose, onSaved }: Props) 
         </div>
       </div>
     </div>
+    {policy && <ConfigRefreshCostHint scope="template" />}
   </Modal>;
 }

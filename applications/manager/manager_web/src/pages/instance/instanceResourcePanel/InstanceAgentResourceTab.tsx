@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Modal, ModalCancelButton } from '../../../components/Modal';
+import { ConfigRefreshCostHint } from '../../../components/ConfigRefreshCostHint';
 import { MatchExprEditor } from '../../../components/MatchExprEditor';
 import { useAsync } from '../../../hooks/useAsync';
 import { useFormDirty } from '../../../hooks/useFormDirty';
@@ -569,6 +570,7 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
             />
             <div className="text-[11px] text-muted mt-1">{t('instanceDetail.resourcePanel.agent.expiresHint')}</div>
           </label>
+          <ConfigRefreshCostHint />
         </Modal>
       )}
 
@@ -639,6 +641,7 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
             />
             <div className="text-[11px] text-muted mt-1">{t('instanceDetail.resourcePanel.agent.expiresHint')}</div>
           </label>
+          <ConfigRefreshCostHint />
         </Modal>
       )}
 
@@ -646,6 +649,7 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
         open={confirmBatchDelete}
         message={t('instanceDetail.resourcePanel.agent.confirmRemove', { n: checked.size })}
         danger
+        costHint
         onConfirm={async () => {
           await removeSelected();
           setConfirmBatchDelete(false);
@@ -657,6 +661,7 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
         open={!!delTarget}
         message={t('instanceDetail.resourcePanel.agent.confirmRemove', { n: 1 })}
         danger
+        costHint
         onConfirm={async () => {
           if (!delTarget) return;
           try {

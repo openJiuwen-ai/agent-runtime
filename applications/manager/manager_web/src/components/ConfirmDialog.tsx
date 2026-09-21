@@ -1,5 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { Modal } from './Modal';
+import { ConfigRefreshCostHint } from './ConfigRefreshCostHint';
 
 interface ConfirmDialogProps {
   open: boolean;
@@ -8,6 +9,8 @@ interface ConfirmDialogProps {
   confirmText?: string;
   cancelText?: string;
   danger?: boolean;
+  /** 确认后将下发网关并触发运行时 config_refresh（Pod 日落重建）时展示代价提示 */
+  costHint?: boolean;
   onConfirm: () => void;
   onClose: () => void;
 }
@@ -19,6 +22,7 @@ export function ConfirmDialog({
   confirmText,
   cancelText,
   danger,
+  costHint = false,
   onConfirm,
   onClose,
 }: ConfirmDialogProps) {
@@ -46,6 +50,7 @@ export function ConfirmDialog({
       }
     >
       <div className="text-sm text-text whitespace-pre-wrap">{message}</div>
+      {costHint && <ConfigRefreshCostHint />}
     </Modal>
   );
 }
