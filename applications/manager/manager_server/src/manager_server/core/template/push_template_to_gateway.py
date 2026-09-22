@@ -168,6 +168,9 @@ _ROW_TO_OUT_MODULES: dict[str, str] = {
     AGENT_TEMPLATES_KIND: "manager_server.core.template.agent_template",
 }
 
+# Agent 模板引用扫描分页大小（template_ref 被引用数统计）
+_AGENT_REF_SCAN_PAGE_SIZE = 500
+
 RowToSyncFn = Callable[[Any], dict[str, Any]]
 RowToOutFn = Callable[[Any], Any]
 
@@ -636,13 +639,45 @@ async def _referencing_reachable_jids(
     return sorted(jid for jid in jids if jid in reachable)
 
 
+async def count_agent_template_reference_counts(
+    handler: DBHandler,
+    *,
+    slot_keys: frozenset[str] | None = None,
+) -> dict[str, int]:
+    """统计各 ``template_id`` 被多少个 Agent 模板的 ``template_ref`` 引用。
+
+    字面引用（含 ``or`` 右侧回退，忽略 ``${user/group/bot::}`` 运行时映射段），
+    ``slot_keys`` 限定槽位，``None`` 表示全部槽位；同一 Agent 模板对同一 id 至多计一次。
+    供各模板配置页展示“被引用数”（点击跳转 Agent 模板列表）。
+    """
+    counts: dict[str, int] = {}
+    offset = 0
+    while True:
+        rows = await handler.list_records(
+            AGENT_TEMPLATE_TABLE_DEF.table_name,
+            {},
+            limit=_AGENT_REF_SCAN_PAGE_SIZE,
+            offset=offset,
+            order_by=[("id", False)],
+        )
+        for row in rows:
+            pairs = slot_template_pairs_from_template_ref(read_template_ref_from_row(row))
+            if slot_keys is not None:
+                pairs = {pair for pair in pairs if pair[0] in slot_keys}
+            for tid in {tid for _, tid in pairs}:
+                counts[tid] = counts.get(tid, 0) + 1
+        if len(rows) < _AGENT_REF_SCAN_PAGE_SIZE:
+            return counts
+        offset += len(rows)
+
+
 def _row_to_sync_payload(row: Any, *, row_to_out: RowToOutFn) -> dict[str, Any]:
     out = row_to_out(row)
     if hasattr(out, "model_dump"):
         data = out.model_dump(mode="json")
     else:
         data = dict(out)
-    for key in ("id", "created_at", "updated_at"):
+    for key in ("id", "created_at", "updated_at", "reference_count"):
         data.pop(key, None)
     return data
 
@@ -1261,6 +1296,7 @@ __all__ = (
     "TEMPLATE_KIND_ORDER",
     "TEMPLATE_KIND_SPECS",
     "assert_template_deletable",
+    "count_agent_template_reference_counts",
     "count_config_effective_policy_references_for_template",
     "delete_agent_template_on_gateway",
     "delete_template_on_referencing_gateways",

@@ -17,6 +17,7 @@ import { ListSearchInput } from '../../components/ListSearchInput';
 import { SkillPrebuiltTemplateModal } from './SkillPrebuiltTemplateModal';
 import { toast } from '../../stores/uiStore';
 import { formatTime, truncate } from '../../utils/format';
+import { useRouter } from '../../router';
 
 type SkillPrebuiltTemplateSortField =
   | 'template_name'
@@ -51,6 +52,7 @@ function installSourceCell(
 
 export function SkillPrebuiltTemplatesPage() {
   const { t } = useTranslation();
+  const { navigate } = useRouter();
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const { searchInput, setSearchInput, searchQuery } = useListSearch();
@@ -223,6 +225,7 @@ export function SkillPrebuiltTemplatesPage() {
                     }}
                   />
                 </th>
+                <th>{t('skillWhitelistTemplate.referenceCount')}</th>
                 <th>
                   <TableColumnSort
                     label={t('skillWhitelistTemplate.updatedAt')}
@@ -237,7 +240,7 @@ export function SkillPrebuiltTemplatesPage() {
             <tbody>
               {items.length === 0 ? (
                 <tr>
-                  <td colSpan={8}>
+                  <td colSpan={9}>
                     <Empty text={t('common.empty')} />
                   </td>
                 </tr>
@@ -271,6 +274,19 @@ export function SkillPrebuiltTemplatesPage() {
                       aria-label={row.enabled ? t('common.enabled') : t('common.disabled')}
                       onChange={(enabled) => void toggleEnabled(row, enabled)}
                     />
+                  </td>
+                  <td className="whitespace-nowrap">
+                    {row.reference_count > 0 ? (
+                      <span
+                        className="tag cursor-pointer"
+                        title={t('skillWhitelistTemplate.referenceHint')}
+                        onClick={() => navigate('/agent-templates')}
+                      >
+                        {row.reference_count}
+                      </span>
+                    ) : (
+                      <span className="text-[11px] text-muted">0</span>
+                    )}
                   </td>
                   <td className="mono text-[11px] text-muted whitespace-nowrap">{formatTime(row.updated_at)}</td>
                   <td className="whitespace-nowrap min-w-[9.5rem]">

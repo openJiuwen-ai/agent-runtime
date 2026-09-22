@@ -8,6 +8,7 @@ from openjiuwen_runtime.foundation.db.handler import DBHandler
 
 from manager_server.core.template.push_template_to_gateway import (
     assert_template_deletable,
+    count_agent_template_reference_counts,
     update_template_on_referencing_gateways,
     delete_template_on_referencing_gateways,
 )
@@ -20,6 +21,7 @@ from manager_server.schemas.template_schemas import (
     EmbeddingTemplateOut,
     EmbeddingTemplateUpdateBody,
 )
+from manager_server.schemas.template_slot_schemas import EMBEDDING_MODEL_SLOT
 
 _EMBEDDING_TEMPLATE_TABLE = EMBEDDING_TEMPLATE_TABLE_DEF.table_name
 _ALLOWED_SORT_FIELDS = frozenset({
@@ -48,7 +50,7 @@ def _matches_search(row: Any, query: str) -> bool:
     return any(needle in str(field).lower() for field in fields)
 
 
-def row_to_out(row: Any) -> EmbeddingTemplateOut:
+def row_to_out(row: Any, *, reference_count: int = 0) -> EmbeddingTemplateOut:
     embed_tags = row.embed_tags
     if embed_tags is not None and not isinstance(embed_tags, list):
         embed_tags = list(embed_tags) if embed_tags else None
@@ -65,6 +67,7 @@ def row_to_out(row: Any) -> EmbeddingTemplateOut:
         parameters=row.parameters,
         client_config=row.client_config,
         enabled=row.enabled,
+        reference_count=reference_count,
         data=row.data,
         created_at=iso_datetime(row.created_at),
         updated_at=iso_datetime(row.updated_at),
@@ -74,6 +77,12 @@ def row_to_out(row: Any) -> EmbeddingTemplateOut:
 class EmbeddingTemplateService:
     def __init__(self, handler: DBHandler) -> None:
         self._handler = handler
+
+    async def _reference_counts(self) -> dict[str, int]:
+        """被引用数：在 Agent 模板 embedding_model 槽位引用本类模板的 Agent 模板数。"""
+        return await count_agent_template_reference_counts(
+            self._handler, slot_keys=frozenset({EMBEDDING_MODEL_SLOT})
+        )
 
     async def create(
         self,
@@ -93,7 +102,10 @@ class EmbeddingTemplateService:
         row = await self._handler.get(
             _EMBEDDING_TEMPLATE_TABLE, {"template_id": template_id}
         )
-        return row_to_out(row) if row is not None else None
+        if row is None:
+            return None
+        counts = await self._reference_counts()
+        return row_to_out(row, reference_count=counts.get(str(row.template_id), 0))
 
     async def list_templates(
         self,
@@ -107,6 +119,7 @@ class EmbeddingTemplateService:
         provider_query = (query.model_provider or "").strip()
         if provider_query:
             filters["model_provider"] = provider_query
+        reference_counts = await self._reference_counts()
         order_by = resolve_order_by(
             query.sort_by,
             query.sort_order,
@@ -122,7 +135,9 @@ class EmbeddingTemplateService:
                 order_by=order_by,
             )
             items = [
-                row_to_out(row).model_dump(mode="json")
+                row_to_out(
+                    row, reference_count=reference_counts.get(str(row.template_id), 0)
+                ).model_dump(mode="json")
                 for row in rows
                 if _matches_search(row, search_query)
             ]
@@ -146,8 +161,14 @@ class EmbeddingTemplateService:
         total = await self._handler.count_records(
             _EMBEDDING_TEMPLATE_TABLE, filters
         )
+        items = [
+            row_to_out(
+                row, reference_count=reference_counts.get(str(row.template_id), 0)
+            ).model_dump(mode="json")
+            for row in rows
+        ]
         return {
-            "items": [row_to_out(row).model_dump(mode="json") for row in rows],
+            "items": items,
             "total": total,
             "page": page,
             "page_size": page_size,
@@ -165,7 +186,8 @@ class EmbeddingTemplateService:
         if existing is None:
             return None
         if not updates:
-            return row_to_out(existing)
+            counts = await self._reference_counts()
+            return row_to_out(existing, reference_count=counts.get(str(existing.template_id), 0))
         await update_template_on_referencing_gateways(
             self._handler,
             "embedding_templates",
@@ -177,7 +199,10 @@ class EmbeddingTemplateService:
             {"template_id": template_id},
             {**updates, "updated_at": utc_now()},
         )
-        return row_to_out(row) if row is not None else None
+        if row is None:
+            return None
+        counts = await self._reference_counts()
+        return row_to_out(row, reference_count=counts.get(str(row.template_id), 0))
 
     async def delete(self, template_id: str) -> bool:
         row = await self._handler.get(

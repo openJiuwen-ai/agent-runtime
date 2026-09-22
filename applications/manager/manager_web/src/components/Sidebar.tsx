@@ -31,7 +31,7 @@ export function Sidebar() {
   const { data: instancesPage } = useAsync(() => InstanceApi.list({ page: 1, page_size: 50 }), []);
   const { agentDefined, poolDefined, instanceCreated, modelDefined } = useDefinitionPresence();
 
-  const agentTemplateChildPaths = [
+  const agentResourceChildPaths = [
     '/model-templates',
     '/embedding-templates',
     '/skill-prebuilt-templates',
@@ -39,14 +39,22 @@ export function Sidebar() {
     '/extension-config-templates',
     '/a2a-management',
   ];
-  const agentTemplateActive = agentTemplateChildPaths.some(
+  const agentResourceActive = agentResourceChildPaths.some(
     (p) => path === p || path.startsWith(`${p}/`),
   );
-  const [agentTemplatesOpen, setAgentTemplatesOpen] = useState(agentTemplateActive);
+  const [agentResourcesOpen, setAgentResourcesOpen] = useState(true);
+  const runtimeResourceChildPaths = ['/container-templates'];
+  const runtimeResourceActive = runtimeResourceChildPaths.some(
+    (p) => path === p || path.startsWith(`${p}/`),
+  );
+  const [runtimeResourcesOpen, setRuntimeResourcesOpen] = useState(true);
 
   useEffect(() => {
-    if (agentTemplateActive) setAgentTemplatesOpen(true);
-  }, [agentTemplateActive]);
+    if (agentResourceActive) setAgentResourcesOpen(true);
+  }, [agentResourceActive]);
+  useEffect(() => {
+    if (runtimeResourceActive) setRuntimeResourcesOpen(true);
+  }, [runtimeResourceActive]);
 
   const platformItems: NavItem[] = [
     {
@@ -88,7 +96,7 @@ export function Sidebar() {
     ),
   };
 
-  const agentConfigTemplateItems: NavItem[] = [
+  const agentResourceItems: NavItem[] = [
     {
       key: 'model-templates',
       pathPrefix: '/model-templates',
@@ -157,6 +165,22 @@ export function Sidebar() {
         <svg className="w-4 h-4 nav-item__icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M14 4l6 6m0 0l-6 6m6-6H4" />
           <path strokeLinecap="round" strokeLinejoin="round" d="M4 20h7" />
+        </svg>
+      ),
+    },
+  ];
+
+  const runtimeResourceItems: NavItem[] = [
+    {
+      key: 'container-templates',
+      pathPrefix: '/container-templates',
+      href: '/container-templates',
+      label: t('nav.containerTemplates'),
+      icon: (
+        <svg className="w-4 h-4 nav-item__icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+          {/* 集装箱：箱体 + 竖棱 */}
+          <rect x="3.5" y="6.5" width="17" height="11" rx="1" />
+          <path strokeLinecap="round" d="M8 7v10M12 7v10M16 7v10" />
         </svg>
       ),
     },
@@ -242,16 +266,16 @@ export function Sidebar() {
         <div className="nav-subgroup">
           <button
             type="button"
-            className={`nav-subgroup__toggle ${agentTemplateActive ? 'active' : ''}`}
-            onClick={() => setAgentTemplatesOpen((v) => !v)}
-            aria-expanded={agentTemplatesOpen}
+            className={`nav-subgroup__toggle ${agentResourceActive ? 'active' : ''}`}
+            onClick={() => setAgentResourcesOpen((v) => !v)}
+            aria-expanded={agentResourcesOpen}
           >
             <svg className="w-4 h-4 nav-item__icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
             </svg>
-            <span className="nav-subgroup__label">{t('nav.agentConfigTemplates')}</span>
+            <span className="nav-subgroup__label">{t('nav.agentResources')}</span>
             <svg
-              className={`w-3.5 h-3.5 nav-subgroup__chevron ${agentTemplatesOpen ? 'open' : ''}`}
+              className={`w-3.5 h-3.5 nav-subgroup__chevron ${agentResourcesOpen ? 'open' : ''}`}
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -260,9 +284,9 @@ export function Sidebar() {
               <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
             </svg>
           </button>
-          {agentTemplatesOpen && (
+          {agentResourcesOpen && (
             <div className="nav-subgroup__children space-y-1">
-              {agentConfigTemplateItems.map((item) =>
+              {agentResourceItems.map((item) =>
                 renderItem(
                   item,
                   true,
@@ -281,6 +305,33 @@ export function Sidebar() {
             ? [{ label: missingLabel(t('nav.agentManagement')), to: '/agent-templates', openTarget: 'agentTemplateNew' }]
             : undefined,
         )}
+        <div className="nav-subgroup">
+          <button
+            type="button"
+            className={`nav-subgroup__toggle ${runtimeResourceActive ? 'active' : ''}`}
+            onClick={() => setRuntimeResourcesOpen((v) => !v)}
+            aria-expanded={runtimeResourcesOpen}
+          >
+            <svg className="w-4 h-4 nav-item__icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+            </svg>
+            <span className="nav-subgroup__label">{t('nav.runtimeResources')}</span>
+            <svg
+              className={`w-3.5 h-3.5 nav-subgroup__chevron ${runtimeResourcesOpen ? 'open' : ''}`}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+              strokeWidth={2}
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+            </svg>
+          </button>
+          {runtimeResourcesOpen && (
+            <div className="nav-subgroup__children space-y-1">
+              {runtimeResourceItems.map((item) => renderItem(item, true))}
+            </div>
+          )}
+        </div>
         {configTopItems.map((item) =>
           renderItem(
             item,

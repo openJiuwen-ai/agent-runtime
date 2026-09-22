@@ -14,6 +14,7 @@ import {
   type ColumnSortValue,
 } from '../../components/TableColumnSort';
 import { ListSearchInput } from '../../components/ListSearchInput';
+import { ServiceConfigTemplateModal } from './ServiceConfigTemplateModal';
 import { toast } from '../../stores/uiStore';
 import { bumpGuideRevision } from '../../stores/guideStore';
 import { formatTime, truncate } from '../../utils/format';
@@ -30,7 +31,18 @@ type ServiceConfigTemplateSortField =
   | 'description'
   | 'updated_at';
 
-export function ServiceConfigTemplatesPage() {
+/**
+ * 运行时模板列表页。新建/编辑均为弹窗：
+ * - autoNew：/service-config-templates/new 时自动打开新建弹窗（引导页跳转入口）
+ * - autoEditId：/service-config-templates/:templateId 时自动拉取并打开编辑弹窗
+ */
+export function ServiceConfigTemplatesPage({
+  autoNew = false,
+  autoEditId,
+}: {
+  autoNew?: boolean;
+  autoEditId?: string;
+}) {
   const { t } = useTranslation();
   const { navigate } = useRouter();
   const [page, setPage] = useState(1);
@@ -82,6 +94,41 @@ export function ServiceConfigTemplatesPage() {
   const [togglingId, setTogglingId] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const importInputRef = useRef<HTMLInputElement>(null);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editing, setEditing] = useState<ServiceConfigTemplate | null>(null);
+  const [autoHandled, setAutoHandled] = useState(false);
+
+  /** 经由 /new 或 /:templateId 进入时自动打开弹窗；关闭后回到列表 URL */
+  useEffect(() => {
+    if (autoHandled) return;
+    setAutoHandled(true);
+    if (autoNew) {
+      setEditing(null);
+      setModalOpen(true);
+      return;
+    }
+    if (autoEditId) {
+      void ServiceConfigTemplateApi.get(autoEditId)
+        .then((row) => {
+          setEditing(row);
+          setModalOpen(true);
+        })
+        .catch((e) => {
+          toast(
+            'danger',
+            t('errors.loadFailed', {
+              detail: e instanceof ApiError ? e.detail : (e as Error).message,
+            }),
+          );
+          navigate('/service-config-templates');
+        });
+    }
+  }, [autoNew, autoEditId, autoHandled, navigate, t]);
+
+  const closeAndBack = () => {
+    setModalOpen(false);
+    if (autoNew || autoEditId) navigate('/service-config-templates');
+  };
 
   useEffect(() => {
     if (data?.items) {
@@ -90,17 +137,20 @@ export function ServiceConfigTemplatesPage() {
   }, [data]);
 
   const handleExport = (row: ServiceConfigTemplate) => {
-    try {
-      downloadJson(exportFilename(row), exportTemplateRawdata(row));
-      toast('success', t('serviceConfigTemplate.exportOk'));
-    } catch (e) {
-      toast(
-        'danger',
-        t('serviceConfigTemplate.exportFailed', {
-          detail: e instanceof Error ? e.message : String(e),
-        }),
-      );
-    }
+    void (async () => {
+      try {
+        // 绑定容器规格按容器模板目录解析（目录缺失回退存量内联）
+        downloadJson(exportFilename(row), await exportTemplateRawdata(row));
+        toast('success', t('serviceConfigTemplate.exportOk'));
+      } catch (e) {
+        toast(
+          'danger',
+          t('serviceConfigTemplate.exportFailed', {
+            detail: e instanceof Error ? e.message : String(e),
+          }),
+        );
+      }
+    })();
   };
 
   const handleImportFile = (e: ChangeEvent<HTMLInputElement>) => {
@@ -202,14 +252,17 @@ export function ServiceConfigTemplatesPage() {
           <button
             className="btn sm"
             disabled={importing}
-            title={t('serviceConfigTemplate.importHint')}
+            title={t('containerTemplate.importRuntimeAndContainerHint')}
             onClick={() => importInputRef.current?.click()}
           >
             {importing ? t('common.loading') : t('serviceConfigTemplate.import')}
           </button>
           <button
             className="btn primary sm"
-            onClick={() => navigate('/service-config-templates/new')}
+            onClick={() => {
+              setEditing(null);
+              setModalOpen(true);
+            }}
           >
             + {t('serviceConfigTemplate.new')}
           </button>
@@ -307,9 +360,10 @@ export function ServiceConfigTemplatesPage() {
                     <div className="flex items-center gap-1">
                       <button
                         className="btn sm ghost"
-                        onClick={() =>
-                          navigate(`/service-config-templates/${encodeURIComponent(row.template_id)}`)
-                        }
+                        onClick={() => {
+                          setEditing(row);
+                          setModalOpen(true);
+                        }}
                       >
                         {t('common.edit')}
                       </button>
@@ -342,6 +396,18 @@ export function ServiceConfigTemplatesPage() {
       )}
       </div>
       </div>
+
+      <ServiceConfigTemplateModal
+        open={modalOpen}
+        template={editing}
+        onClose={closeAndBack}
+        onSaved={() => {
+          setModalOpen(false);
+          bumpGuideRevision();
+          void reload();
+          if (autoNew || autoEditId) navigate('/service-config-templates');
+        }}
+      />
 
       <ConfirmDialog
         open={!!delTarget}

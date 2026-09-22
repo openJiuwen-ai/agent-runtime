@@ -103,6 +103,7 @@ class ManagerApiHarness:
                 "/skill-prebuilt-templates",
                 "/mcp-templates",
                 "/service-config-templates",
+                "/container-templates",
                 "/a2a-outbound-templates",
                 "/a2a-outbound-discoveries",
                 "/a2a-access-policies",
@@ -123,6 +124,7 @@ class ManagerApiHarness:
                 "/skill-prebuilt-templates",
                 "/mcp-templates",
                 "/service-config-templates",
+                "/container-templates",
                 "/a2a-outbound-templates",
                 "/a2a-outbound-discoveries",
                 "/a2a-access-policies",
@@ -143,6 +145,7 @@ class ManagerApiHarness:
                 "/skill-prebuilt-templates",
                 "/mcp-templates",
                 "/service-config-templates",
+                "/container-templates",
                 "/a2a-outbound-templates",
                 "/a2a-access-policies",
             )
@@ -162,6 +165,7 @@ class ManagerApiHarness:
                 "/skill-prebuilt-templates",
                 "/mcp-templates",
                 "/service-config-templates",
+                "/container-templates",
                 "/a2a-outbound-templates",
                 "/a2a-access-policies",
             )

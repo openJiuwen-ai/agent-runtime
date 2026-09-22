@@ -171,6 +171,48 @@ async def update_service_template_on_referencing_runtimes(
         )
 
 
+async def update_service_template_on_referencing_jids(
+    handler: DBHandler,
+    jiuwenclaw_ids: set[str] | list[str],
+) -> None:
+    """按实例集合重推 Runtime 全量投影（容器模板共享变更的入口）。
+
+    容器模板被多个运行时模板/多个实例绑定时，逐模板重推会重复同步同一实例；
+    这里按 ``jiuwenclaw_id`` 去重后每实例只 ``config_sync`` 一次。
+    """
+    from manager_server.core.instance.instance_service import list_instance_rows
+
+    wanted = {str(jid or "").strip() for jid in jiuwenclaw_ids}
+    wanted.discard("")
+    if not wanted:
+        return
+    online_rows, _ = await list_instance_rows(
+        handler, runtime_status="online", offset=0, limit=_LIST_ALL_CAP
+    )
+    online = _collect_nonempty_jiuwenclaw_ids(online_rows)
+    for jid in sorted(wanted):
+        if jid not in online:
+            logger.info(
+                "[push_template_runtime] skip offline instance jiuwenclaw_id=%s "
+                "action=update source=container_template",
+                jid,
+            )
+            continue
+        try:
+            await sync_runtime_config(handler, jid)
+        except Exception:
+            logger.exception(
+                "[push_template_runtime] sync failed jiuwenclaw_id=%s "
+                "source=container_template",
+                jid,
+            )
+            raise
+        logger.info(
+            "[push_template_runtime] synced jiuwenclaw_id=%s source=container_template",
+            jid,
+        )
+
+
 __all__ = (
     "SERVICE_CONFIG_SLOT",
     "SERVICE_CONFIG_TEMPLATES_KIND",
@@ -178,5 +220,6 @@ __all__ = (
     "record_service_template_ref_on_runtime",
     "service_config_slot_pair",
     "unrecord_service_template_ref_on_runtime",
+    "update_service_template_on_referencing_jids",
     "update_service_template_on_referencing_runtimes",
 )

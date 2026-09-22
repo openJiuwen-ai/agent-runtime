@@ -14,8 +14,8 @@ import { ModelTemplatesPage } from './pages/templates/ModelTemplatesPage';
 import { EmbeddingTemplatesPage } from './pages/templates/EmbeddingTemplatesPage';
 import { ExtensionTemplatesPage } from './pages/templates/ExtensionTemplatesPage';
 import { SkillPrebuiltTemplatesPage } from './pages/templates/SkillPrebuiltTemplatesPage';
+import { ContainerTemplatesPage } from './pages/templates/ContainerTemplatesPage';
 import { ServiceConfigTemplatesPage } from './pages/templates/ServiceConfigTemplatesPage';
-import { ServiceConfigTemplateEditPage } from './pages/templates/ServiceConfigTemplateEditPage';
 import { SafetyGuardrailsPage } from './pages/templates/SafetyGuardrailsPage';
 import { matchRoute, RouterProvider, useRouter } from './router';
 import { AuthProvider, useAuth } from './auth/AuthContext';
@@ -84,6 +84,9 @@ function RouteView() {
   if (path === '/skill-prebuilt-templates') {
     return <SkillPrebuiltTemplatesPage />;
   }
+  if (path === '/container-templates') {
+    return <ContainerTemplatesPage />;
+  }
   if (path === '/safety-guardrails') {
     return <SafetyGuardrailsPage />;
   }
@@ -94,11 +97,13 @@ function RouteView() {
     return <ServiceConfigTemplatesPage />;
   }
   if (path === '/service-config-templates/new') {
-    return <ServiceConfigTemplateEditPage />;
+    // 新建已改为列表页内弹窗；保留 /new URL 兼容引导页等跳转入口
+    return <ServiceConfigTemplatesPage autoNew />;
   }
   const serviceConfigEdit = matchRoute('/service-config-templates/:templateId', path);
   if (serviceConfigEdit) {
-    return <ServiceConfigTemplateEditPage templateId={serviceConfigEdit.templateId} />;
+    // 编辑已改为列表页内弹窗；保留 /:templateId URL 兼容历史链接
+    return <ServiceConfigTemplatesPage autoEditId={serviceConfigEdit.templateId} />;
   }
   if (path === '/users') {
     return <UsersPage />;

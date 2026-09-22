@@ -301,6 +301,44 @@ def service_config_templates() -> list[tuple[str, dict[str, Any]]]:
     ]
 
 
+def container_templates() -> list[tuple[str, dict[str, Any]]]:
+    return [
+        (
+            "C1",
+            {
+                "template_name": "默认 AgentServer 容器",
+                "description": "主容器模板（含 name=sse 端口）",
+                "container_id": "c-agentserver",
+                "name": "agent-server",
+                "image": _DEMO_AGENT_IMAGE,
+                "image_pull_policy": "IfNotPresent",
+                "ports": [{"name": "sse", "containerPort": 8080}],
+                "readiness_probe": {
+                    "httpGet": {"path": "/api/v1/health", "port": 8080},
+                    "initialDelaySeconds": 5,
+                    "periodSeconds": 5,
+                },
+                "enabled": True,
+                "data": {},
+            },
+        ),
+        (
+            "C2",
+            {
+                "template_name": "默认 Sandbox 容器",
+                "description": "Sidecar 容器模板",
+                "container_id": "c-jiuwenbox",
+                "name": "jiuwenbox",
+                "image": "jiuwenclaw/jiuwenbox:latest",
+                "image_pull_policy": "IfNotPresent",
+                "ports": [{"containerPort": 8321}],
+                "enabled": True,
+                "data": {},
+            },
+        ),
+    ]
+
+
 def instance_create_body(
     *,
     jiuwenclaw_name: str = "ut-demo-instance",

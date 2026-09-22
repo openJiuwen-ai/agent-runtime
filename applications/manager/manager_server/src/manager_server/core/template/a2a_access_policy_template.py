@@ -8,8 +8,10 @@ from typing import Any
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 
 from manager_server.core.template.push_template_to_gateway import (
+    count_agent_template_reference_counts,
     delete_template_on_referencing_gateways,
     reconcile_a2a_projection_on_referencing_gateways,
+    slot_template_pairs_from_template_ref,
     update_template_on_referencing_gateways,
 )
 from manager_server.infrastructure.common import resolve_order_by
@@ -18,6 +20,7 @@ from manager_server.infrastructure.utils import iso_datetime, new_uuid4, utc_now
 from manager_server.models.template_models import (
     A2A_ACCESS_POLICY_TEMPLATE_TABLE_DEF,
     A2A_OUTBOUND_TEMPLATE_TABLE_DEF,
+    AGENT_TEMPLATE_TABLE_DEF,
 )
 from manager_server.schemas.template_schemas import (
     A2AAccessPolicyTemplateCreateBody,
@@ -25,10 +28,11 @@ from manager_server.schemas.template_schemas import (
     A2AAccessPolicyTemplateOut,
     A2AAccessPolicyTemplateUpdateBody,
 )
+from manager_server.schemas.template_slot_schemas import A2A_ACCESS_POLICY_SLOT
 
 _TABLE = A2A_ACCESS_POLICY_TEMPLATE_TABLE_DEF.table_name
 _AGENT_TABLE = A2A_OUTBOUND_TEMPLATE_TABLE_DEF.table_name
-_AGENT_TEMPLATE_TABLE = "agent_template"
+_AGENT_TEMPLATE_TABLE = AGENT_TEMPLATE_TABLE_DEF.table_name
 _LIST_ALL_CAP = 10_000
 _REFERENCE_SCAN_PAGE_SIZE = 500
 _ALLOWED_SORT_FIELDS = frozenset({"policy_name", "mode", "enabled", "updated_at"})
@@ -88,22 +92,10 @@ class A2AAccessPolicyTemplateService:
             raise ValueError("unknown a2a outbound template ids: " + ", ".join(missing))
 
     async def _reference_counts(self) -> dict[str, int]:
-        counts: dict[str, int] = {}
-        offset = 0
-        while True:
-            rows = await self._handler.list_records(
-                _AGENT_TEMPLATE_TABLE,
-                {},
-                limit=_REFERENCE_SCAN_PAGE_SIZE,
-                offset=offset,
-                order_by=[("id", False)],
-            )
-            for row in rows:
-                for policy_id in read_template_ref_from_row(row).get("a2a_access_policy", []):
-                    counts[policy_id] = counts.get(policy_id, 0) + 1
-            if len(rows) < _REFERENCE_SCAN_PAGE_SIZE:
-                return counts
-            offset += len(rows)
+        """被引用数：在 Agent 模板 a2a_access_policy 槽位引用本类模板的 Agent 模板数。"""
+        return await count_agent_template_reference_counts(
+            self._handler, slot_keys=frozenset({A2A_ACCESS_POLICY_SLOT})
+        )
 
     async def create(self, body: A2AAccessPolicyTemplateCreateBody) -> A2AAccessPolicyTemplateOut:
         await self._validate_members(body.member_template_ids)
@@ -200,8 +192,8 @@ class A2AAccessPolicyTemplateService:
                 order_by=[("id", False)],
             )
             for row in agent_templates:
-                refs = read_template_ref_from_row(row).get("a2a_access_policy", [])
-                if policy_id in refs:
+                pairs = slot_template_pairs_from_template_ref(read_template_ref_from_row(row))
+                if (A2A_ACCESS_POLICY_SLOT, policy_id) in pairs:
                     raise ValueError("a2a access policy is referenced by an agent template")
             if len(agent_templates) < _REFERENCE_SCAN_PAGE_SIZE:
                 break
