@@ -41,12 +41,16 @@ async def package_python_to_whl(
     if not setup_py.exists() and not pyproject_toml.exists():
         raise ValueError(f"No setup.py or pyproject.toml found in {source_dir}")
 
-    result = subprocess.run(
-        [sys.executable, "-m", "build", "--wheel", "--outdir", str(output_path)],
-        cwd=str(source_path),
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "build", "--wheel", "--outdir", str(output_path)],
+            cwd=str(source_path),
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(f"Build timed out after {e.timeout}s") from e
 
     if result.returncode != 0:
         raise RuntimeError(f"Build failed: {result.stderr}")
@@ -81,8 +85,11 @@ def create_virtualenv(venv_path: str, python_version: Optional[str] = None) -> s
 
     cmd = [sys.executable, "-m", "venv", str(venv_path)]
     
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(f"Failed to create virtualenv: timed out after {e.timeout}s") from e
+
     if result.returncode != 0:
         raise RuntimeError(f"Failed to create virtualenv: {result.stderr}")
 
@@ -118,12 +125,16 @@ def install_package(venv_path: str, package: str) -> bool:
     """
     pip_path = get_pip_path(venv_path)
     
-    result = subprocess.run(
-        [pip_path, "install", package],
-        capture_output=True,
-        text=True,
-    )
-    
+    try:
+        result = subprocess.run(
+            [pip_path, "install", package],
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+    except subprocess.TimeoutExpired:
+        return False
+
     return result.returncode == 0
 
 
@@ -140,10 +151,14 @@ def uninstall_package(venv_path: str, package: str) -> bool:
     """
     pip_path = get_pip_path(venv_path)
     
-    result = subprocess.run(
-        [pip_path, "uninstall", "-y", package],
-        capture_output=True,
-        text=True,
-    )
-    
+    try:
+        result = subprocess.run(
+            [pip_path, "uninstall", "-y", package],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+    except subprocess.TimeoutExpired:
+        return False
+
     return result.returncode == 0

@@ -73,7 +73,8 @@ class VirtualEnvironmentManager:
             result = subprocess.run(
                 [uv_exe, "venv", str(venv_path)],
                 capture_output=True,
-                text=True
+                text=True,
+                timeout=300,
             )
 
             if result.returncode != 0:
@@ -103,7 +104,8 @@ class VirtualEnvironmentManager:
                 ensure_result = subprocess.run(
                     [str(python_exe), "-m", "ensurepip", "--upgrade"],
                     capture_output=True,
-                    text=True
+                    text=True,
+                    timeout=300,
                 )
                 if ensure_result.returncode != 0:
                     logger.warning(
@@ -114,7 +116,8 @@ class VirtualEnvironmentManager:
                     get_pip_result = subprocess.run(
                         [str(python_exe), "-m", "pip", "install", "--upgrade", "pip"],
                         capture_output=True,
-                        text=True
+                        text=True,
+                        timeout=300,
                     )
                     if get_pip_result.returncode != 0:
                         logger.error("Failed to bootstrap pip: %s", get_pip_result.stderr)
@@ -122,6 +125,11 @@ class VirtualEnvironmentManager:
 
             logger.info("Virtual environment created successfully: %s", venv_path)
             return venv_path
+        except subprocess.TimeoutExpired as e:
+            logger.error("Timed out creating virtual environment: %s", venv_path)
+            raise RuntimeError(
+                f"Failed to create venv: command timed out after {e.timeout}s"
+            ) from e
         except subprocess.CalledProcessError as e:
             logger.error("Failed to create virtual environment: %s", e.stderr)
             raise RuntimeError(f"Failed to create venv: {e}") from e
@@ -211,6 +219,7 @@ class VirtualEnvironmentManager:
                     capture_output=True,
                     text=True,
                     encoding="utf-8",
+                    timeout=1800,
                 )
 
                 if result.returncode == 0:

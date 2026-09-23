@@ -196,14 +196,19 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
             log_dir.mkdir(parents=True, exist_ok=True)
             log_file = log_dir / "agent.log"
             log_fp = open(log_file, "a", encoding="utf-8")
-
-            process = subprocess.Popen(
-                cmd,
-                env=env,
-                stdout=log_fp,
-                stderr=log_fp,
-                creationflags=creation_flags,
-            )
+            try:
+                process = subprocess.Popen(
+                    cmd,
+                    env=env,
+                    stdout=log_fp,
+                    stderr=log_fp,
+                    creationflags=creation_flags,
+                )
+            finally:
+                # 子进程已继承日志句柄，父进程不再需要保留
+                log_fp.close()
+            # 登记进程，供 stop/get_status 精确管理
+            self._processes[deployment_id] = process
             logger.info("Agent log file: %s", log_file)
 
             # 6. 等待进程启动并检查状态
@@ -211,7 +216,7 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
 
             if process.poll() is not None:
                 # 进程已经退出，从日志文件读取错误信息
-                log_fp.close()
+                self._processes.pop(deployment_id, None)
                 error_msg = "Unknown error"
                 try:
                     error_msg = log_file.read_text(encoding="utf-8", errors="ignore").strip() or error_msg
