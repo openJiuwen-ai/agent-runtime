@@ -28,8 +28,7 @@ check_cmds() {
 
     check_yq
 
-    local os_type=${DEPLOY_VARS["OS_TYPE"]}
-    if [ "${os_type}" == "macos" ]; then
+    if [ "${DEPLOY_VARS["OS_TYPE"]}" == "macos" ]; then
         for cmd in jot lsof
         do
             check_cmd ${cmd}
@@ -39,7 +38,7 @@ check_cmds() {
 
 detect_os() {
     if [ "$(uname -s)" != "Linux" ]; then
-        error "Unsupported OS: ${os_type}"
+        error "Unsupported OS: $(uname -s)"
     fi
     DEPLOY_VARS["OS_TYPE"]="linux"
 }
@@ -68,11 +67,51 @@ check_cluster_has_enough_nodes() {
     success "Cluster has ${node_count} Ready nodes, check passed!"
 }
 
+# 配置加载后的变量统一加工：后续新增的变量归一化/派生逻辑都放这里
+check_vars() {
+    # 归一化 NFS_SHARE_PATH 尾斜杠：PV 模板拼接为 "${NFS_SHARE_PATH}/<资源名>"，
+    # 尾斜杠会拼出 "//name" 双斜杠；PV 的 spec.nfs.path 不可变，仅字符串差异
+    # 就会导致重渲染 apply 失败。故统一去掉尾部 "/"（"/" 本身归一为空）。
+    DEPLOY_VARS["NFS_SHARE_PATH"]="${DEPLOY_VARS["NFS_SHARE_PATH"]%/}"
+
+    #   dev     -> root（hostPath 挂载源码）          HOME=/root
+    #   product -> app（镜像内 USER app，uid 1000）   HOME=/home/app
+    # CLAW_HOME： HOME目录
+    # CLAW_FS_GROUP：（PVC/NFS）要靠 kubelet 按属组 授权
+    # CLAW_USER: 运行时用户
+    # CLAW_GROUP： 运行时组
+    if [ "${DEPLOY_VARS["MODE"]}" == "dev" ]; then
+        DEPLOY_VARS["CLAW_HOME"]="/root"
+        DEPLOY_VARS["CLAW_FS_GROUP"]="0"
+        DEPLOY_VARS["CLAW_USER"]="0"
+        DEPLOY_VARS["CLAW_GROUP"]="0"
+    else
+        DEPLOY_VARS["CLAW_HOME"]="/home/app"
+        DEPLOY_VARS["CLAW_FS_GROUP"]="1000"
+        DEPLOY_VARS["CLAW_USER"]="1000"
+        DEPLOY_VARS["CLAW_GROUP"]="1000"
+    fi
+
+    # dev 模式渲染时会把 Deployment 固定到当前节点（hostPath 是节点本地的）。
+    # --render-only 不执行 collect_k8s_cluster_info 自动识别节点，此时若
+    # CURRENT_NODE_NAME 为空，渲染阶段会因 set -u 直接崩溃，这里提前报错提醒配置。
+    if [[ "${DEPLOY_VARS["MODE"]}" == "dev" && "${DEPLOY_VARS["RENDER_ONLY"]}" == "true" \
+        && -z "${DEPLOY_VARS["CURRENT_NODE_NAME"]:-}" ]]; then
+        error "MODE=dev with --render-only requires CURRENT_NODE_NAME, please set it in .env.custom"
+    fi
+
+
+}
+
 check_dependency(){
+    detect_os
+    check_vars
+
     if [ "${DEPLOY_VARS["RENDER_ONLY"]}" == "true" ]; then
         return
     fi
 
+    link_mtls_check
     check_cmds
     check_if_root
 }
@@ -319,9 +358,8 @@ check_if_jina_up() {
 check_if_rabbitmq_up() {
     local name="${DEPLOY_VARS["RABBITMQ_NAME"]}"
     local user=${DEPLOY_VARS["RABBITMQ_USER"]}
-    local password=${DEPLOY_VARS["RABBITMQ_PASSWORD"]}
     local url=""
-    local encoded_password=$(urlencode "$password")
+    local encoded_password=$(urlencode "${DEPLOY_VARS["RABBITMQ_PASSWORD"]}")
 
     # Check if external RABBITMQ server
     if [ -n "${DEPLOY_VARS["RABBITMQ_URL"]:-}" ]; then
@@ -349,14 +387,13 @@ check_if_otel_up() {
     fi
     DEPLOY_VARS["OTEL_CHECKED"]="true"
 
-    local name="${DEPLOY_VARS["OTEL_NAME"]}"
     if [ -n "${DEPLOY_VARS["OTEL_EXPORTER_OTLP_ENDPOINT"]:-}" ]; then
         info "Use external Opentelemetry Collector"
         DEPLOY_VARS["ENABLE_EXTERNAL_OTEL"]="true"
         return
     fi
     info "Use built-in Opentelemetry Collector"
-    DEPLOY_VARS["OTEL_EXPORTER_OTLP_ENDPOINT"]="http://${name}:4318"
+    DEPLOY_VARS["OTEL_EXPORTER_OTLP_ENDPOINT"]="http://${DEPLOY_VARS["OTEL_NAME"]}:4318"
 
     # loki 是 otel collector 的日志后端：仅内置 otel 需要检查 loki 归属；
     # 外部 OTEL 时 collector/存储均由外部承担，上方 early return 已跳过
@@ -373,8 +410,9 @@ check_if_loki_up() {
     info "Use built-in Loki server"
     DEPLOY_VARS["LOKI_URL"]="http://${name}:3100"
 
-    prepare_nfs_path "${DEPLOY_VARS["LOKI_NAME"]}"
+    prepare_nfs_path "${DEPLOY_VARS["LOKI_NAME"]}/${DEPLOY_VARS["NAMESPACE"]}"
 }
+
 
 check_if_gateway_up() {
     # 已经执行过检查，直接返回，避免重复校验（web/runtime 依赖都会调用）
@@ -416,6 +454,7 @@ check_minio_up_dependency(){
     prepare_nfs_path "${DEPLOY_VARS["MINIO_NAME"]}"
 }
 
+
 check_rabbitmq_up_dependency(){
     prepare_nfs_path "${DEPLOY_VARS["RABBITMQ_NAME"]}"
 }
@@ -423,7 +462,6 @@ check_rabbitmq_up_dependency(){
 prepare_nfs_path() {
     local name="$1"
     local path="${DEPLOY_VARS["NFS_POD_PATH"]}/${name}"
-    local nfs_dname=${DEPLOY_VARS["NFS_NAME"]}
 
     check_if_nfs_up
 
@@ -436,7 +474,7 @@ prepare_nfs_path() {
     fi
 
     info "Preparing ${name} data directory: ${path}"
-    local nfs_pod=$(kubectl get pods -n default -l app=${nfs_dname} -o jsonpath='{.items[0].metadata.name}')
+    local nfs_pod=$(kubectl get pods -n default -l app=${DEPLOY_VARS["NFS_NAME"]} -o jsonpath='{.items[0].metadata.name}')
     info "Executing: kubectl exec ${nfs_pod} -- sh -c \"mkdir -p ${path} && chmod 777 ${path}\""
     kubectl exec ${nfs_pod} -- sh -c "mkdir -p ${path} && chmod 777 ${path}"
     success "${name} directory created successfully in NFS Pod!"
@@ -467,7 +505,6 @@ check_proxy_up_dependency() {
 prepare_nfs_path() {
     local name="$1"
     local path="${DEPLOY_VARS["NFS_POD_PATH"]}/${name}"
-    local nfs_dname=${DEPLOY_VARS["NFS_NAME"]}
 
     check_if_nfs_up
 
@@ -480,7 +517,7 @@ prepare_nfs_path() {
     fi
 
     info "Preparing ${name} data directory: ${path}"
-    local nfs_pod=$(kubectl get pods -n default -l app=${nfs_dname} -o jsonpath='{.items[0].metadata.name}')
+    local nfs_pod=$(kubectl get pods -n default -l app=${DEPLOY_VARS["NFS_NAME"]} -o jsonpath='{.items[0].metadata.name}')
     info "Executing: kubectl exec ${nfs_pod} -- sh -c \"mkdir -p ${path}\""
     kubectl exec ${nfs_pod} -- sh -c "mkdir -p ${path}"
     success "${name} directory created successfully in NFS Pod!"

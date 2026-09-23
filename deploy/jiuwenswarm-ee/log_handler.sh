@@ -2,9 +2,6 @@
 set -euo >/dev/null 2>&1
 
 render_log_files() {
-    local template_file="${CONFIG["LOG_TEMPLATE_FILE"]}"
-    local file="${CONFIG["LOG_FILE"]}"
-
     if [ -z "${DEPLOY_VARS["CLAW_LOG_DIR"]:-}" ]; then
         DEPLOY_VARS["CLAW_LOG_DIR"]="${HOME}/claw_logs"
     fi
@@ -24,27 +21,18 @@ render_log_files() {
         docker://*)     DEPLOY_VARS["VAR_LIB_DOCKER_PATH"]="/var/lib/docker/containers" ;;
     esac
 
-    render_config_template "${template_file}" "${file}" "DEPLOY_VARS"
+    render_config_template "${CONFIG["LOG_TEMPLATE_FILE"]}" "${CONFIG["LOG_FILE"]}" "DEPLOY_VARS"
+    success "Log module is rendered."
 }
 
 deploy_log() {
-    local namespace="${DEPLOY_VARS["NAMESPACE"]}"
-    local vector_name="${DEPLOY_VARS["VECTOR_NAME"]}"
-    local fluent_name="${DEPLOY_VARS["FLUENT_BIT_NAME"]}"
-    local file="${CONFIG["LOG_FILE"]}"
-
-    exec_cmd kubectl apply -f ${file}
-    wait_k8s_resource_ready "deployment" "${vector_name}"
-    wait_k8s_resource_ready "daemonset" "${fluent_name}"
+    exec_cmd kubectl apply -f ${CONFIG["LOG_FILE"]}
+    wait_k8s_resource_ready "deployment" "${DEPLOY_VARS["VECTOR_NAME"]}"
+    wait_k8s_resource_ready "daemonset" "${DEPLOY_VARS["FLUENT_BIT_NAME"]}"
+    success "Log module is deployed."
 }
 
 uninstall_log() {
-    local namespace="${DEPLOY_VARS["NAMESPACE"]}"
-    local vector_name="${DEPLOY_VARS["VECTOR_NAME"]}"
-    local fluent_name="${DEPLOY_VARS["FLUENT_BIT_NAME"]}"
-    local file="${CONFIG["LOG_FILE"]}"
-
-    exec_cmd kubectl delete -f ${file} --ignore-not-found=true
-    wait_pod_terminated "${vector_name}"
-    wait_pod_terminated "${fluent_name}"
+    delete_k8s_resource_by_file "${CONFIG["LOG_FILE"]}"
+    success "Log module is uninstalled."
 }

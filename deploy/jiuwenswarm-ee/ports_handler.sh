@@ -5,9 +5,8 @@ set -euo >/dev/null 2>&1
 is_port_occupied() {
     local port="$1"
     local port_occupied=0
-    local os_type=${DEPLOY_VARS["OS_TYPE"]}
 
-    case "${os_type}" in
+    case "${DEPLOY_VARS["OS_TYPE"]}" in
         macos)
             # macOS: use lsof which is more reliable
             if lsof -Pi :$port -sTCP:LISTEN -t >/dev/null 2>&1; then
@@ -58,38 +57,52 @@ is_port_occupied() {
 #   1. If port is already configured in DEPLOY_VARS, check if it's available
 #   2. If no port configured, auto-allocate from START_PORT ~ END_PORT
 ensure_available_port() {
+    local names=("$@")
     if [ "${DEPLOY_VARS["NO_CHECK_PORTS"]}" == "true" ]; then
-        for port_name in "$@"; do
+        for port_name in "${names[@]}"; do
             if [ -z "${DEPLOY_VARS["${port_name}"]:-}" ]; then
                 error "Please define ${port_name} in .env.custom"
             fi
         done
-        return
+    else
+        # cursor 跨端口名持续推进：同一次调用内每个端口名拿到不同的端口，
+        # 否则多个 NodePort Service 都会分到同一个最低空闲端口，apply 时冲突
+        local cursor=${CONFIG["START_PORT"]}
+        local end_port=${CONFIG["END_PORT"]}
+        local port
+        for port_name in "${names[@]}"; do
+            # If port is already set in config, validate it
+            if [ -n "${DEPLOY_VARS["${port_name}"]:-}" ]; then
+                port=${DEPLOY_VARS["${port_name}"]}
+                if is_port_occupied "${port}"; then
+                    error "[${port_name}] Port ${port} is occupied, please choose another one."
+                fi
+                info "Using pre-configured port ${port} for ${port_name}"
+                continue
+            fi
+
+            # Auto allocate available port from range
+            for port in $(seq "${cursor}" "${end_port}"); do
+                if ! is_port_occupied "$port"; then
+                    DEPLOY_VARS["${port_name}"]="$port"
+                    cursor=$((port + 1))
+                    break
+                fi
+            done
+        done
     fi
 
-    local start_port=${CONFIG["START_PORT"]}
-    local end_port=${CONFIG["END_PORT"]}
-
-    # Iterate over all passed port name arguments
-    for port_name in "$@"; do
-        # If port is already set in config, validate it
-        if [ -n "${DEPLOY_VARS["${port_name}"]:-}" ]; then
-            local port=${DEPLOY_VARS["${port_name}"]}
-            if is_port_occupied "${port}"; then
-                error "[${port_name}] Port ${port} is occupied, please choose another one."
-            fi
-            info "Using pre-configured port ${port} for ${port_name}"
-            continue
-        fi
-
-        # Auto allocate available port from range
-        for port in $(seq "$start_port" "$end_port"); do
-            if ! is_port_occupied "$port"; then
-                DEPLOY_VARS["${port_name}"]="$port"
-                # Move start port forward to avoid reusing the same port
-                start_port=$((port + 1))
-                break
-            fi
-        done
+    # 同一次调用内不允许出现重复端口：把冲突拦在渲染期，
+    # 而不是等到 kubectl apply 才报 "provided port is already allocated"
+    local seen="," port_name port
+    for port_name in "${names[@]}"; do
+        port="${DEPLOY_VARS["${port_name}"]:-}"
+        [ -z "${port}" ] && continue
+        case ",${seen}," in
+            *",${port},"*)
+                error "[${port_name}] port ${port} is allocated more than once in this deployment, please check port settings in .env.custom"
+                ;;
+        esac
+        seen="${seen}${port},"
     done
 }

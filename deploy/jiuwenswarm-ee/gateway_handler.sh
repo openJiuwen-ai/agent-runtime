@@ -2,13 +2,9 @@
 set -euo >/dev/null 2>&1
 
 gen_gateway_env_file() {
-    local namespace="${DEPLOY_VARS["NAMESPACE"]}"
-    local env_template_file="${CONFIG["GATEWAY_ENV_TEMPLATE_FILE"]}"
-    local envfile_name="${DEPLOY_VARS["GATEWAY_ENV_FILE_CM_NAME"]}"
     local env_file="${CONFIG["GATEWAY_ENV_FILE"]}"
-    local yaml_file="${CONFIG["GATEWAY_ENV_YAML_FILE"]}"
 
-    render_config_template "${env_template_file}" "${env_file}" "DEPLOY_VARS"
+    render_config_template "${CONFIG["GATEWAY_ENV_TEMPLATE_FILE"]}" "${env_file}" "DEPLOY_VARS"
 
     # 移除所有注释行、过滤空值行 KEY=、按变量名排序
     # 注意：不能 sort > 同一个文件，shell 会在管道启动前就截断输出文件，
@@ -18,19 +14,17 @@ gen_gateway_env_file() {
         | awk -F'=' '$2 != ""' \
         | sort > "${env_file}.tmp" && mv -f "${env_file}.tmp" "${env_file}"
 
-    kubectl create configmap -n "${namespace}" "${envfile_name}" \
+    kubectl create configmap -n "${DEPLOY_VARS["NAMESPACE"]}" "${DEPLOY_VARS["GATEWAY_ENV_FILE_CM_NAME"]}" \
         --from-env-file="${env_file}" \
         --dry-run=client -o yaml \
-        | yq eval 'del(.metadata.creationTimestamp)' > "${yaml_file}"
+        | yq eval 'del(.metadata.creationTimestamp)' > "${CONFIG["GATEWAY_ENV_YAML_FILE"]}"
 }
 
 gen_gateway_file() {
     local mode="${DEPLOY_VARS["MODE"]}"
-    local template_file="${CONFIG["GATEWAY_TEMPLATE_FILE"]}"
     local file="${CONFIG["GATEWAY_FILE"]}"
-    local enable_gw_lable="${DEPLOY_VARS["GATEWAY_SCHED_LABEL_ENABLED"]}"
 
-    render_config_template "${template_file}" "${file}" "DEPLOY_VARS"
+    render_config_template "${CONFIG["GATEWAY_TEMPLATE_FILE"]}" "${file}" "DEPLOY_VARS"
     enable_dev_mode_if_needed "${file}" gateway
 
     # No need to install packages
@@ -42,7 +36,7 @@ gen_gateway_file() {
 
     add_resource_if_set "GATEWAY" "${file}"
 
-    if [[ "${mode}" != "dev" && "${enable_gw_lable}" == "true" ]]; then
+    if [[ "${mode}" != "dev" && "${DEPLOY_VARS["GATEWAY_SCHED_LABEL_ENABLED"]}" == "true" ]]; then
         # Automatically create nodeSelector and set gateway=enable
         yq eval 'select(.kind == "Deployment").spec.template.spec.nodeSelector |= {"gateway": "enable"}' -i "${file}"
     fi
@@ -55,40 +49,34 @@ gen_gateway_file() {
 }
 
 render_gateway_files() {
-    local mode="${DEPLOY_VARS["MODE"]}"
 
     render_secret_configmap
     gen_gateway_env_file
 
     ensure_available_port "GATEWAY_CONFIG_HTTP_NODE_PORT"
     gen_gateway_file
-    if [[ "${DEPLOY_VARS[JIUWENSWARM_LINK_MTLS_MODE]:-off}" != off ]]; then
+    if [[ "${DEPLOY_VARS[JIUWENSWARM_LINK_MTLS_MODE]}" != off ]]; then
         link_mtls_render gateway "${CONFIG[GATEWAY_FILE]}"
     fi
+    success "Gateway module is rendered."
 }
 
 deploy_gateway() {
-    local namespace="${DEPLOY_VARS["NAMESPACE"]}"
-    local env_yaml_file="${CONFIG["GATEWAY_ENV_YAML_FILE"]}"
-    local name="${DEPLOY_VARS["GATEWAY_NAME"]}"
-    local gateway_file="${CONFIG["GATEWAY_FILE"]}"
 
     ensure_secret_configmap
     # 使用 apply 保证重复部署幂等：ConfigMap 已存在时更新内容，不因 create 冲突失败。
-    exec_cmd kubectl apply -f "${env_yaml_file}"
+    exec_cmd kubectl apply -f "${CONFIG["GATEWAY_ENV_YAML_FILE"]}"
 
-    exec_cmd kubectl apply -f "${gateway_file}"
-    wait_k8s_resource_ready "deployment" "${name}" "${namespace}"
+    exec_cmd kubectl apply -f "${CONFIG["GATEWAY_FILE"]}"
+    wait_k8s_resource_ready "deployment" "${DEPLOY_VARS["GATEWAY_NAME"]}" "${DEPLOY_VARS["NAMESPACE"]}"
+    success "Gateway module is deployed."
 }
 
 uninstall_gateway() {
-    local namespace="${DEPLOY_VARS["NAMESPACE"]}"
-    local gateway_file="${CONFIG["GATEWAY_FILE"]}"
-    local env_yaml_file="${CONFIG["GATEWAY_ENV_YAML_FILE"]}"
 
-    exec_cmd kubectl delete -f "${gateway_file}" --ignore-not-found=true
-    exec_cmd kubectl delete -f "${env_yaml_file}" --ignore-not-found=true
-    wait_pod_terminated "${DEPLOY_VARS["GATEWAY_NAME"]}" "${namespace}"
+    delete_k8s_resource_by_file "${CONFIG["GATEWAY_FILE"]}"
+    delete_k8s_resource_by_file "${CONFIG["GATEWAY_ENV_YAML_FILE"]}"
     uninstall_secret_configmap
     ensure_redis_down
+    success "Gateway module is uninstalled."
 }

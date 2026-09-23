@@ -51,7 +51,7 @@ parse_args() {
 }
 
 process_modules() {
-    MODULES=("GATEWAY" "WEB" "RUNTIME")
+    MODULES=("MONITOR" "GATEWAY" "WEB" "RUNTIME")
 }
 
 # Print help info and exit
@@ -72,8 +72,10 @@ Modules (Optional):
   log       Log module (deploys to default namespace, ignores -n parameter)
   jina      Jina module (deploys to default namespace, ignores -n parameter)
   proxy     Proxy module (deploys to default namespace, ignores -n parameter)
+  monitor   Observability module
   gateway   Gateway service module
   web       Web frontend module
+  runtime   Agent-Runtime module
   manager   CLAW Manager module
 
 Options:
