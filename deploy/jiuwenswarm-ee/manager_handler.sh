@@ -2,10 +2,9 @@
 set -euo >/dev/null 2>&1
 
 gen_manager_server_file() {
-    local template_file="${CONFIG["MANAGER_SERVER_TEMPLATE_FILE"]}"
     local file="${CONFIG["MANAGER_SERVER_FILE"]}"
 
-    render_config_template "${template_file}" "${file}" "DEPLOY_VARS"
+    render_config_template "${CONFIG["MANAGER_SERVER_TEMPLATE_FILE"]}" "${file}" "DEPLOY_VARS"
     enable_dev_mode_if_needed ${file} manager-server
 
     if [ "${DEPLOY_VARS["DB_TYPE"]}" == "postgresql" ]; then
@@ -22,10 +21,9 @@ gen_manager_server_file() {
 }
 
 gen_identity_file() {
-    local template_file="${CONFIG["IDENTITY_TEMPLATE_FILE"]}"
     local file="${CONFIG["IDENTITY_FILE"]}"
 
-    render_config_template "${template_file}" "${file}" "DEPLOY_VARS"
+    render_config_template "${CONFIG["IDENTITY_TEMPLATE_FILE"]}" "${file}" "DEPLOY_VARS"
     enable_dev_mode_if_needed ${file} identity
 
     # yq quotes arbitrary password characters correctly in the generated YAML.
@@ -52,7 +50,7 @@ gen_identity_file() {
 # MANAGER_WEB_RESOLVER=auto → 解析为具体 DNS。
 # 优先级：kube-dns/coredns ClusterIP → 本机私网 nameserver → kube-dns 服务名兜底。
 resolve_manager_web_resolver() {
-    local current="${DEPLOY_VARS["MANAGER_WEB_RESOLVER"]:-auto}"
+    local current="${DEPLOY_VARS["MANAGER_WEB_RESOLVER"]}"
     [[ "${current}" == "auto" || -z "${current}" ]] || return 0
 
     local dns_ip=""
@@ -85,7 +83,7 @@ resolve_manager_web_resolver() {
         info "MANAGER_WEB_RESOLVER=auto → ${dns_ip}"
     else
         DEPLOY_VARS["MANAGER_WEB_RESOLVER"]="kube-dns.kube-system.svc.cluster.local"
-        warning "MANAGER_WEB_RESOLVER=auto 未能解析到 DNS IP，回退为 kube-dns.kube-system.svc.cluster.local"
+        warning "MANAGER_WEB_RESOLVER=auto failed to resolve a DNS IP, falling back to kube-dns.kube-system.svc.cluster.local"
     fi
 }
 
@@ -93,18 +91,18 @@ render_manager_files() {
     render_secret_configmap
     ensure_available_port "MANAGER_SERVER_NODE_PORT" "MANAGER_WEB_NODE_PORT"
     gen_manager_server_file
-    if [[ "${DEPLOY_VARS[JIUWENSWARM_LINK_MTLS_MODE]:-off}" != off ]]; then
+    if [[ "${DEPLOY_VARS[JIUWENSWARM_LINK_MTLS_MODE]}" != off ]]; then
         link_mtls_render manager "${CONFIG[MANAGER_SERVER_FILE]}"
     fi
     gen_identity_file
 
-    local manager_web_template_file="${CONFIG["MANAGER_WEB_TEMPLATE_FILE"]}"
     local manager_web_file="${CONFIG["MANAGER_WEB_FILE"]}"
 
     resolve_manager_web_resolver
-    render_config_template "${manager_web_template_file}" "${manager_web_file}" "DEPLOY_VARS"
+    render_config_template "${CONFIG["MANAGER_WEB_TEMPLATE_FILE"]}" "${manager_web_file}" "DEPLOY_VARS"
     enable_dev_mode_if_needed "${manager_web_file}" manager-web
     add_resource_if_set "MANAGER_WEB" "${manager_web_file}"
+    success "Manager module is rendered."
 }
 
 deploy_manager() {
@@ -113,45 +111,31 @@ deploy_manager() {
     ensure_secret_configmap
 
     # manager-server
-    local manager_server_name="${DEPLOY_VARS["MANAGER_SERVER_NAME"]}"
-    local manager_server_file="${CONFIG["MANAGER_SERVER_FILE"]}"
-    exec_cmd kubectl apply -f ${manager_server_file}
-    wait_k8s_resource_ready "deployment" "${manager_server_name}" "${namespace}"
+    exec_cmd kubectl apply -f ${CONFIG["MANAGER_SERVER_FILE"]}
+    wait_k8s_resource_ready "deployment" "${DEPLOY_VARS["MANAGER_SERVER_NAME"]}" "${namespace}"
     success "MANAGER_SERVER_NODE_PORT: ${DEPLOY_VARS["MANAGER_SERVER_NODE_PORT"]}"
 
     # identity
-    local identity_name="${DEPLOY_VARS["IDENTITY_NAME"]}"
-    local identity_file="${CONFIG["IDENTITY_FILE"]}"
-    exec_cmd kubectl apply -f ${identity_file}
-    wait_k8s_resource_ready "deployment" "${identity_name}" "${namespace}"
+    exec_cmd kubectl apply -f ${CONFIG["IDENTITY_FILE"]}
+    wait_k8s_resource_ready "deployment" "${DEPLOY_VARS["IDENTITY_NAME"]}" "${namespace}"
 
     # manager-web
-    local manager_web_name="${DEPLOY_VARS["MANAGER_WEB_NAME"]}"
-    local manager_web_file="${CONFIG["MANAGER_WEB_FILE"]}"
 
-    exec_cmd kubectl apply -f ${manager_web_file}
-    wait_k8s_resource_ready "deployment" "${manager_web_name}" "${namespace}"
+    exec_cmd kubectl apply -f ${CONFIG["MANAGER_WEB_FILE"]}
+    wait_k8s_resource_ready "deployment" "${DEPLOY_VARS["MANAGER_WEB_NAME"]}" "${namespace}"
     success "MANAGER_WEB_NODE_PORT: ${DEPLOY_VARS["MANAGER_WEB_NODE_PORT"]}"
+    success "Manager module is deployed."
 }
 
 uninstall_manager() {
-    local namespace="${DEPLOY_VARS["NAMESPACE"]}"
 
     # 反序：manager-web → identity → manager-server
-    local manager_web_name="${DEPLOY_VARS["MANAGER_WEB_NAME"]}"
-    local manager_web_file="${CONFIG["MANAGER_WEB_FILE"]}"
-    exec_cmd kubectl delete -f ${manager_web_file} --ignore-not-found=true
-    wait_pod_terminated "${manager_web_name}" "${namespace}"
+    delete_k8s_resource_by_file "${CONFIG["MANAGER_WEB_FILE"]}"
 
-    local identity_name="${DEPLOY_VARS["IDENTITY_NAME"]}"
-    local identity_file="${CONFIG["IDENTITY_FILE"]}"
-    exec_cmd kubectl delete -f ${identity_file} --ignore-not-found=true
-    wait_pod_terminated "${identity_name}" "${namespace}"
+    delete_k8s_resource_by_file "${CONFIG["IDENTITY_FILE"]}"
 
-    local manager_server_name="${DEPLOY_VARS["MANAGER_SERVER_NAME"]}"
-    local manager_server_file="${CONFIG["MANAGER_SERVER_FILE"]}"
-    exec_cmd kubectl delete -f ${manager_server_file} --ignore-not-found=true
-    wait_pod_terminated "${manager_server_name}" "${namespace}"
+    delete_k8s_resource_by_file "${CONFIG["MANAGER_SERVER_FILE"]}"
 
     uninstall_secret_configmap
+    success "Manager module is uninstalled."
 }

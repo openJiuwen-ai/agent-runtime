@@ -3,7 +3,7 @@
 # module owns PKI/database operations. Never trace private stdin/stdout.
 
 link_mtls_check() {
-    local mode="${DEPLOY_VARS[JIUWENSWARM_LINK_MTLS_MODE]:-off}" module imports
+    local mode="${DEPLOY_VARS[JIUWENSWARM_LINK_MTLS_MODE]}" module imports
     case "$mode" in off|observe|enforce) ;; *) error 'JIUWENSWARM_LINK_MTLS_MODE must be off, observe or enforce' ;; esac
     [[ "$mode" == enforce && "$CMD" != down ]] || return 0
     for module in "${MODULES[@]}"; do
@@ -43,14 +43,14 @@ link_mtls_resolve_host() {
 
 link_mtls_headless() {
     yq -o=json '.headlessService' "${SCRIPT_DIR}/templates/link-mtls.template.yaml" |
-        jq --arg name "${DEPLOY_VARS[AGENT_SERVER_NAME]:-jiuwenclaw-agentserver}" \
+        jq --arg name "${DEPLOY_VARS[AGENT_SERVER_NAME]}" \
            --arg ns "${DEPLOY_VARS[NAMESPACE]}" --argjson port "${DEPLOY_VARS[AGENT_SERVER_PORT]}" \
            '.metadata={name:$name,namespace:$ns} | .spec.ports[0] |= (.port=$port | .targetPort=$port)'
 }
 
 link_mtls_preflight() {
     local previous
-    previous=$(link_mtls_kube get service "${DEPLOY_VARS[AGENT_SERVER_NAME]:-jiuwenclaw-agentserver}" --ignore-not-found -o json) || return 1
+    previous=$(link_mtls_kube get service "${DEPLOY_VARS[AGENT_SERVER_NAME]}" --ignore-not-found -o json) || return 1
     if [[ -n "$previous" ]]; then
         printf '%s' "$previous" | jq -e '.spec.clusterIP == "None" and .spec.selector == {"jiuwenclaw-component":"agentserver"}' >/dev/null || {
             echo 'Existing AgentServer Service conflicts with the certificate binding' >&2; return 1;
@@ -115,7 +115,7 @@ link_mtls_worker() (
     set +x
     set -o pipefail
     local action="$1" target="${2:-}" path="${3:-}" existing='{}' role previous endpoint network=host settings
-    [[ "${DEPLOY_VARS[JIUWENSWARM_LINK_MTLS_MODE]:-off}" == enforce ]] || return 1
+    [[ "${DEPLOY_VARS[JIUWENSWARM_LINK_MTLS_MODE]}" == enforce ]] || return 1
     [[ "$action" == imports ]] || link_mtls_require_database_settings || return 1
     endpoint=${DOCKER_HOST:-}
     if [[ -n "${DOCKER_CONTEXT:-}" || -z "$endpoint" ]]; then
@@ -189,8 +189,8 @@ link_mtls_call() (
 )
 
 link_mtls_prepare() {
-    [[ "${DEPLOY_VARS[JIUWENSWARM_LINK_MTLS_MODE]:-off}" == enforce && "${DEPLOY_VARS[RENDER_ONLY]}" != true ]] || return 0
-    [[ "${DEPLOY_VARS[LINK_PREPARED]:-false}" != true ]] || return 0
+    [[ "${DEPLOY_VARS[JIUWENSWARM_LINK_MTLS_MODE]}" == enforce && "${DEPLOY_VARS[RENDER_ONLY]}" != true ]] || return 0
+    [[ "${DEPLOY_VARS[LINK_PREPARED]}" != true ]] || return 0
     local summary
     summary=$(link_mtls_call ensure) || error 'Certificate preparation failed. No HTTP fallback.'
     DEPLOY_VARS[LINK_PREPARED]=true
@@ -209,15 +209,15 @@ link_mtls_request() (
 link_mtls_render() (
     set +x
     set -o pipefail
-    local role="$1" file="$2" mode="${DEPLOY_VARS[JIUWENSWARM_LINK_MTLS_MODE]:-off}" temporary
+    local role="$1" file="$2" mode="${DEPLOY_VARS[JIUWENSWARM_LINK_MTLS_MODE]}" temporary
     [[ "$mode" != off ]] || return 0
     temporary=$(mktemp "${file}.link.XXXXXX") || return 1
     trap 'rm -f "$temporary"' EXIT
     yq -o=json '.' "$file" | jq -s \
         --arg role "$role" --arg mode "$mode" --arg dev "${DEPLOY_VARS[MODE]}" \
         --arg source "${DEPLOY_VARS[RUNTIME_CODE_PATH]:-}" --arg claw "${DEPLOY_VARS[CLAW_POD_CODE_PATH]:-/app/jiuwenswarm}" \
-        --arg domain "${DEPLOY_VARS[AGENT_RUNTIME_LINK_MTLS_CLUSTER_DOMAIN]:-cluster.local}" \
-        --arg headless "${DEPLOY_VARS[AGENT_SERVER_NAME]:-jiuwenclaw-agentserver}" \
+        --arg domain "${DEPLOY_VARS[AGENT_RUNTIME_LINK_MTLS_CLUSTER_DOMAIN]}" \
+        --arg headless "${DEPLOY_VARS[AGENT_SERVER_NAME]}" \
         --arg port "$([[ "$role" == gateway ]] && printf '%s' "${DEPLOY_VARS[GATEWAY_CONFIG_HTTP_PORT]}" || printf '%s' "${DEPLOY_VARS[AGENT_RUNTIME_PORT]}")" \
         --arg code "${DEPLOY_VARS[LINK_SYNC_CODE]:-}" \
         --slurpfile parts <(yq -o=json '.' "${SCRIPT_DIR}/templates/link-mtls.template.yaml") '

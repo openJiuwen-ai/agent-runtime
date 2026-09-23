@@ -10,8 +10,6 @@ render_secret_configmap() {
         return
     fi
 
-    local template_file="${CONFIG["SECRET_CM_TEMPLATE_FILE"]}"
-    local file="${CONFIG["SECRET_CM_FILE"]}"
     local secret_keys=(
         "GATEWAY_DB_PASSWORD"
         "MANAGER_DB_PASSWORD"
@@ -30,40 +28,39 @@ render_secret_configmap() {
         local ekey="${key}_ENCODED"
         DEPLOY_VARS["$ekey"]=$(echo -n "${DEPLOY_VARS[$key]}" | base64 -w 0)
     done
-    render_config_template "${template_file}" "${file}" "DEPLOY_VARS"
+    render_config_template "${CONFIG["SECRET_CM_TEMPLATE_FILE"]}" "${CONFIG["SECRET_CM_FILE"]}" "DEPLOY_VARS"
+    success "Secret configmap is rendered."
 }
 
 ensure_secret_configmap() {
     local namespace="${DEPLOY_VARS["NAMESPACE"]}"
     local name="${DEPLOY_VARS["SECRET_CM_NAME"]}"
-    local file="${CONFIG["SECRET_CM_FILE"]}"
 
     if check_k8s_resource_exists "secret" "${name}" "${namespace}"; then
         warning "Secret ${namespace}/${name} exists, skip creating."
         return
     fi
 
-    exec_cmd kubectl apply -f ${file}
+    exec_cmd kubectl apply -f ${CONFIG["SECRET_CM_FILE"]}
 }
 
 uninstall_secret_configmap() {
     local namespace="${DEPLOY_VARS["NAMESPACE"]}"
-    local name="${DEPLOY_VARS["SECRET_CM_NAME"]}"
     local component_names=(
         "${DEPLOY_VARS["GATEWAY_NAME"]}"
         "${DEPLOY_VARS["MANAGER_SERVER_NAME"]}"
         "${DEPLOY_VARS["WEB_NAME"]}"
         "${DEPLOY_VARS["AGENT_RUNTIME_NAME"]}"
     )
-    local file="${CONFIG["SECRET_CM_FILE"]}"
 
     # Gateway、Web、Manager、AgentRuntime这些组件都依赖于本资源，检查它们是否存在，若存在不能删除本资源
     for cname in "${component_names[@]}"; do
         if check_k8s_resource_exists "deployment" "${cname}" "${namespace}"; then
-            warning "Deployment ${namespace}/${cname} exists, skip deleting ${namespace}/${name}."
+            warning "Deployment ${namespace}/${cname} exists, skip deleting ${namespace}/${DEPLOY_VARS["SECRET_CM_NAME"]}."
             return
         fi
     done
 
-    exec_cmd kubectl delete -f ${file} --ignore-not-found=true
+    delete_k8s_resource_by_file "${CONFIG["SECRET_CM_FILE"]}"
+    success "Secret configmap is uninstalled."
 }

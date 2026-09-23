@@ -129,6 +129,55 @@ delete_k8s_resource() {
 
 
 # Wait for a pod in a given namespace to be fully terminated and removed
+# =====================================================================
+# 按正确顺序删除清单文件中的资源（替代 kubectl delete -f 一把梭），单参数 file。
+#
+# 先用一次 yq 解读清单，产出有序的"删除计划"（TSV：kind/namespace/name），
+# 计划顺序即删除顺序：
+#   1) Deployment / StatefulSet / DaemonSet → 删完等 Pod 全部退出，释放卷挂载
+#      （否则 PVC 被 pvc-protection finalizer 卡住）
+#   2) PersistentVolumeClaim    → kubectl delete 自带阻塞语义，无需额外 wait：
+#      Pod 已退出 finalizer 即可满足；若仍阻塞说明还有别的 Pod 挂载，属应暴露问题
+#   3) PersistentVolume         → Retain 策略只删对象不删 NFS 数据，
+#      重建同名 PV 后数据仍可见
+#   4) 剩余资源 delete -f 一把删（RBAC/Service/ConfigMap；PVC/PV 已删，此处 no-op）
+#
+# 为什么不能直接 kubectl delete -f：清单内 PV 常排在 PVC 之前，PV 因 pv-protection
+# finalizer 等待 PVC 先删，而 PVC 的删除请求尚未发出 → kubectl 永久阻塞（死锁）。
+# =====================================================================
+delete_k8s_resource_by_file() {
+    local file="$1"
+
+    local plan
+    plan=$(yq eval-all '
+        (select(.kind == "Deployment")          | [.kind, (.metadata.namespace // "-"), .metadata.name] | @tsv),
+        (select(.kind == "StatefulSet")         | [.kind, (.metadata.namespace // "-"), .metadata.name] | @tsv),
+        (select(.kind == "DaemonSet")           | [.kind, (.metadata.namespace // "-"), .metadata.name] | @tsv),
+        (select(.kind == "PersistentVolumeClaim") | [.kind, (.metadata.namespace // "-"), .metadata.name] | @tsv),
+        (select(.kind == "PersistentVolume")    | [.kind, (.metadata.namespace // "-"), .metadata.name] | @tsv)
+    ' "${file}") || plan=""
+
+    local kind ns name
+    while IFS=$'\t' read -r kind ns name; do
+        [ -z "${kind}" ] && continue
+        case "${kind}" in
+            Deployment|StatefulSet|DaemonSet)
+                exec_cmd kubectl delete "${kind}" "${name}" -n "${ns}" --ignore-not-found=true
+                wait_pod_terminated "${name}" "${ns}"
+                ;;
+            PersistentVolumeClaim)
+                exec_cmd kubectl delete pvc "${name}" -n "${ns}" --ignore-not-found=true
+                ;;
+            PersistentVolume)
+                exec_cmd kubectl delete pv "${name}" --ignore-not-found=true
+                ;;
+        esac
+    done <<< "${plan}"
+
+    # 剩余资源一把删（此时再删工作负载/PVC/PV 为 no-op）
+    exec_cmd kubectl delete -f "${file}" --ignore-not-found=true
+}
+
 wait_pod_terminated() {
   local pod_name_prefix="$1"
   local namespace="${2:-default}"
@@ -190,7 +239,7 @@ fetch_current_node_name() {
         fi
     done
 
-    error "无法自动获取节点名，请手动赋值 CURRENT_NODE_NAME"
+    error "Failed to auto-detect node name, please set CURRENT_NODE_NAME manually"
 }
 
 # Collect Kubernetes cluster information:

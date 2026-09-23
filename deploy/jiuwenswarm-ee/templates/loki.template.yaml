@@ -89,7 +89,7 @@ spec:
         # shipped index(cache) + chunks：NFS，持久不丢
         - name: <<LOKI_NAME>>-storage
           persistentVolumeClaim:
-            claimName: <<LOKI_NAME>>-pvc
+            claimName: <<LOKI_NAME>>-<<NAMESPACE>>-pvc
 ---
 apiVersion: v1
 kind: Service
@@ -109,7 +109,7 @@ spec:
 apiVersion: v1
 kind: PersistentVolume
 metadata:
-  name: <<LOKI_NAME>>-pv
+  name: <<LOKI_NAME>>-<<NAMESPACE>>-pv
   labels:
     app: <<LOKI_NAME>>
 spec:
@@ -121,7 +121,7 @@ spec:
   storageClassName: ""
   nfs:
     server: <<NFS_SERVER_ADDR>>
-    path: <<NFS_SHARE_PATH>>/<<LOKI_NAME>>
+    path: <<NFS_SHARE_PATH>>/<<LOKI_NAME>>/<<NAMESPACE>>
     readOnly: false
   mountOptions:
     - nfsvers=4
@@ -135,7 +135,7 @@ spec:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: <<LOKI_NAME>>-pvc
+  name: <<LOKI_NAME>>-<<NAMESPACE>>-pvc
   namespace: <<NAMESPACE>>
 spec:
   accessModes:

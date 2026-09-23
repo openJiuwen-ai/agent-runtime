@@ -12,7 +12,7 @@ wait_http_ready() {
     local port="$2"
     local path="$3"
     local module="${4:-service}"
-    if [[ "${DEPLOY_VARS[JIUWENSWARM_LINK_MTLS_MODE]:-off}" == enforce ]]; then
+    if [[ "${DEPLOY_VARS[JIUWENSWARM_LINK_MTLS_MODE]}" == enforce ]]; then
         local role=gateway
         [[ "$module" != agent-runtime* ]] || role=runtime
         link_mtls_call wait "$role" "$path"
@@ -43,7 +43,7 @@ post_and_validate() {
     local url="$1"
     local data="$2"
     local module="${3:-}"
-    if [[ "${DEPLOY_VARS[JIUWENSWARM_LINK_MTLS_MODE]:-off}" == enforce ]]; then
+    if [[ "${DEPLOY_VARS[JIUWENSWARM_LINK_MTLS_MODE]}" == enforce ]]; then
         local path="${url#*://}"
         path="/${path#*/}"
         link_mtls_request "$module" "$path" "$data"
@@ -71,7 +71,6 @@ post_and_validate() {
 #        与 check_runtime_up_dependency 预创建的内置 NFS 数据目录同名)
 # 用法: inject_data_volume <json_file>
 inject_data_volume() {
-    local json_file="${CONFIG["AS_JSON_FILE"]}"
     local mount_type="${DEPLOY_VARS["CLAW_MOUNT_TYPE"]}"
     local data_volume
     if [ "${mount_type}" == "pvc" ]; then
@@ -91,7 +90,7 @@ inject_data_volume() {
     fi
     jq --argjson volume "${data_volume}" \
         '.rawdata.templates[].volumes += [$volume]' \
-        "${json_file}" > "${json_file}.tmp" && mv -f "${json_file}.tmp" "${json_file}"
+        "${CONFIG["AS_JSON_FILE"]}" > "${CONFIG["AS_JSON_FILE"]}.tmp" && mv -f "${CONFIG["AS_JSON_FILE"]}.tmp" "${CONFIG["AS_JSON_FILE"]}"
 }
 
 # product 模式下镜像内置代码、Pod 无需固定调度到当前节点,
@@ -153,10 +152,9 @@ inject_container_res() {
     if [ -z "${value}" ]; then
         return
     fi
-    local json_file="${CONFIG["AS_JSON_FILE"]}"
     jq --arg cid "${cid}" --arg section "${section}" --arg key "${key}" --arg v "${value}" \
         '(.rawdata.containers[] | select(.container_id == $cid) | .resources[$section][$key]) = $v' \
-        "${json_file}" > "${json_file}.tmp" && mv -f "${json_file}.tmp" "${json_file}"
+        "${CONFIG["AS_JSON_FILE"]}" > "${CONFIG["AS_JSON_FILE"]}.tmp" && mv -f "${CONFIG["AS_JSON_FILE"]}.tmp" "${CONFIG["AS_JSON_FILE"]}"
 }
 
 # 配置为 agentserver 双容器注入 K8s resources
@@ -175,11 +173,10 @@ inject_container_resources() {
 }
 
 render_patch_file() {
-    local json_template="${CONFIG["AS_JSON_TEMPLATE_FILE"]}"
     local json_file="${CONFIG["AS_JSON_FILE"]}"
 
     info "Rendering AgentServer templates"
-    render_config_template "${json_template}" "${json_file}" "DEPLOY_VARS"
+    render_config_template "${CONFIG["AS_JSON_TEMPLATE_FILE"]}" "${json_file}" "DEPLOY_VARS"
 
     if ! jq . "${json_file}" >/dev/null 2>&1; then
         error "AgentServer JSON rendering failed, invalid JSON format: ${json_file}"
@@ -198,14 +195,13 @@ render_patch_file() {
 install_agentserver_patch() {
     local runtime_port="${DEPLOY_VARS["AGENT_RUNTIME_NODE_PORT"]}"
     local host="${DEPLOY_VARS["CURRENT_NODE_IP"]:-127.0.0.1}"
-    local json_file="${CONFIG["AS_JSON_FILE"]}"
 
     # 下发agentserver服务配置:先确认 runtime NodePort 真正可达(等 kube-proxy
     # 规则生效),再推 config_sync,并校验 HTTP 2xx + ok==true(不再只看 curl 退出码)。
     wait_http_ready "${host}" "${runtime_port}" "/healthz" "agent-runtime NodePort"
     info "Pushing AgentServer template"
     post_and_validate "http://${host}:${runtime_port}/api/session/config_sync" \
-        "@${json_file}" runtime
+        "@${CONFIG["AS_JSON_FILE"]}" runtime
 }
 
 install_model_patch() {

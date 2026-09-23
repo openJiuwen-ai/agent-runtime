@@ -16,10 +16,9 @@ replace_placeholder() {
     local var_name=$(echo "${placeholder}" | sed -e 's/^<<//' -e 's/>>$//')
     local arr_key_ref="${vars_arr_name}[${var_name}]"
     local var_value="${!arr_key_ref:-}"
-    local os_type=${DEPLOY_VARS["OS_TYPE"]}
 
     #info "  Replacing placeholder: ${placeholder} → ${var_value}"
-    if [ "${os_type}" == "macos" ]; then
+    if [ "${DEPLOY_VARS["OS_TYPE"]}" == "macos" ]; then
         # macOS sed requires backup extension with -i
         sed -i.bak "s|${placeholder}|${var_value}|g" "${destfile}"
         rm -f "${destfile}.bak"
@@ -196,3 +195,4 @@ add_resource_if_set() {
         yq eval 'select(.kind == "'"${kind_type}"'").spec.template.spec.containers[0].resources.limits.memory = "'"${DEPLOY_VARS["${module}_MEMORY_LIMIT"]}"'"' -i "${file}"
     fi
 }
+

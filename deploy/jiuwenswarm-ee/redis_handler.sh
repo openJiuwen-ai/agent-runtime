@@ -2,29 +2,20 @@
 set -euo >/dev/null 2>&1
 
 render_redis_files() {
-    local template_file="${CONFIG["REDIS_TEMPLATE_FILE"]}"
-    local file="${CONFIG["REDIS_FILE"]}"
-
     ensure_available_port "REDIS_NODE_PORT"
-    render_config_template "${template_file}" "${file}" "DEPLOY_VARS"
+    render_config_template "${CONFIG["REDIS_TEMPLATE_FILE"]}" "${CONFIG["REDIS_FILE"]}" "DEPLOY_VARS"
+    success "Redis module is rendered."
 }
 
 deploy_redis() {
-    local namespace="${DEPLOY_VARS["NAMESPACE"]}"
-    local redis_name="${DEPLOY_VARS["REDIS_NAME"]}"
-    local file="${CONFIG["REDIS_FILE"]}"
-
-    exec_cmd kubectl apply -f "${file}"
-    wait_k8s_resource_ready "deployment" "${redis_name}" "${namespace}"
+    exec_cmd kubectl apply -f "${CONFIG["REDIS_FILE"]}"
+    wait_k8s_resource_ready "deployment" "${DEPLOY_VARS["REDIS_NAME"]}" "${DEPLOY_VARS["NAMESPACE"]}"
+    success "Redis module is deployed."
 }
 
 uninstall_redis() {
-    local namespace="${DEPLOY_VARS["NAMESPACE"]}"
-    local redis_name="${DEPLOY_VARS["REDIS_NAME"]}"
-    local file="${CONFIG["REDIS_FILE"]}"
-
-    exec_cmd kubectl delete -f "${file}" --ignore-not-found=true
-    wait_pod_terminated "${redis_name}" "${namespace}"
+    delete_k8s_resource_by_file "${CONFIG["REDIS_FILE"]}"
+    success "Redis module is uninstalled."
 }
 
 
