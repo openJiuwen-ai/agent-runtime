@@ -226,8 +226,17 @@ async def service_template_wire(
         _log.warning("runtime sync skip template %s: empty main container image", tid)
         return None
 
-    referenced = {main_cid, *sidecar_ids}
-    used_containers = [by_id[cid] for cid in referenced if cid in by_id]
+    used_containers: list[dict[str, Any]] = []
+    for cid in [main_cid, *sidecar_ids]:
+        container = dict(by_id[cid])
+        if cid == main_cid and isinstance(container.get("readinessProbe"), dict):
+            # Runtime derives the main-container probe timeout and rejects this
+            # otherwise valid catalog field. Keep the stored template unchanged
+            # so the same container can still be used as a sidecar elsewhere.
+            probe = dict(container["readinessProbe"])
+            probe.pop("timeoutSeconds", None)
+            container["readinessProbe"] = probe
+        used_containers.append(container)
 
     data = _g(row, "data") if isinstance(_g(row, "data"), dict) else {}
     wire: dict[str, Any] = {

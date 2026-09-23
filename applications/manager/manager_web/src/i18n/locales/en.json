@@ -165,7 +165,18 @@
     "viewBrief": "Card view",
     "viewList": "List view",
     "searchPlaceholder": "Search cluster name, ID, or status",
-    "probeFailed": "Health probe failed: {{detail}}"
+    "probeFailed": "Health probe failed: {{detail}}",
+    "import": "Import",
+    "export": "Export",
+    "importTitle": "Import Cluster Configuration",
+    "importHelp": "Select an .xlsx file exported by Manager. A full preflight runs first. Existing objects with the same ID and matching configuration are reused and never overwritten. Fill highlighted sensitive fields in Excel when a new object needs them.",
+    "importConfirm": "Import",
+    "importXlsxOnly": "Select an .xlsx file",
+    "preflightPassed": "Preflight passed. The workbook can be imported.",
+    "preflightBlocked": "Preflight found blocking issues. Update the workbook or resolve target conflicts, then select it again.",
+    "importSuccess": "Import complete: {{created}} created, {{reused}} reused",
+    "exportSuccess": "Cluster configuration Excel exported",
+    "exportFailed": "Export failed: "
   },
   "instanceForm": {
     "name": "Cluster Name",

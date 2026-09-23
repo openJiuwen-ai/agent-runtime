@@ -27,6 +27,7 @@ dependencies = [
     "cryptography>=42.0",
     "croniter>=2.0",
     "PyJWT>=2.8",
+    "openpyxl>=3.1.5",
 ]
 
 [project.optional-dependencies]

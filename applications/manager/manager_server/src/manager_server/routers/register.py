@@ -9,6 +9,7 @@ from .user_console_routers import user_console_router
 from .instance_access_routers import gateway_lookup_router, instance_grant_router
 from .instance_resource_routers import instance_resource_router
 from .instance_routers import instance_router
+from .import_export_routers import import_export_router
 from .template_routers import templates_router
 
 api_router = APIRouter()
@@ -21,6 +22,7 @@ def router_register(app: FastAPI) -> None:
     # 用户控制台：当前用户可见 Agent + 用户面选路。
     v1_router.include_router(user_console_router, prefix="/user-console", tags=["User Console"])
     v1_router.include_router(templates_router, tags=["Templates"])
+    v1_router.include_router(import_export_router, tags=["Import Export"])
     v1_router.include_router(instance_resource_router, tags=["Instance Resource"])
     v1_router.include_router(
         instance_router,

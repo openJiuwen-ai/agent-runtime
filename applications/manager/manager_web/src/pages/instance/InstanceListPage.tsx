@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { InstanceApi } from '../../services/api';
+import { ImportExportApi, InstanceApi } from '../../services/api';
 import type { InstanceSummary } from '../../types';
 import { useAsync } from '../../hooks/useAsync';
 import { useListSearch } from '../../hooks/useListSearch';
@@ -19,6 +19,7 @@ import { formatTime, relativeTime } from '../../utils/format';
 import { toast } from '../../stores/uiStore';
 import { ApiError } from '../../services/api';
 import { CreateInstanceModal } from './modal/CreateInstanceModal';
+import { ImportClusterModal } from './modal/ImportClusterModal';
 import { useGuideAutoOpen } from '../../hooks/useGuideAutoOpen';
 import { useClustersGuideStatus } from '../../hooks/useGuideStatus';
 import { WarnBadge, type WarnBadgeLink } from '../../components/WarnBadge';
@@ -39,6 +40,24 @@ type InstanceSortField =
 const VIEW_MODE_STORAGE_KEY = 'claw_manager_instance_view';
 
 const INSTANCE_STATUS_VALUES = ['online', 'pending', 'offline'] as const;
+
+async function exportCluster(instance: InstanceSummary, success: string, failed: string) {
+  try {
+    const { blob, filename } = await ImportExportApi.exportCluster(instance.jiuwenclaw_id);
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+    toast('success', success);
+  } catch (e) {
+    const detail = e instanceof ApiError ? e.detail : (e as Error).message;
+    toast('danger', `${failed}${detail}`);
+  }
+}
 
 function readViewMode(): ViewMode {
   const saved = localStorage.getItem(VIEW_MODE_STORAGE_KEY);
@@ -131,6 +150,16 @@ function InstanceTopoCard({
       </div>
 
       <div className="instance-card__actions">
+        <button
+          className="btn sm"
+          title={t('topology.export')}
+          onClick={(e) => {
+            e.stopPropagation();
+            void exportCluster(instance, t('topology.exportSuccess'), t('topology.exportFailed'));
+          }}
+        >
+          {t('topology.export')}
+        </button>
         <button
           className="btn sm"
           title={t('instanceDetail.tabs.access')}
@@ -380,6 +409,16 @@ function InstanceListTable({
                         >
                           {t('topology.viewDetail')}
                         </button>
+                        <button
+                          className="btn sm"
+                          onClick={() => void exportCluster(
+                            instance,
+                            t('topology.exportSuccess'),
+                            t('topology.exportFailed'),
+                          )}
+                        >
+                          {t('topology.export')}
+                        </button>
                         <button className="btn sm danger" onClick={() => setDeleteTarget(instance)}>
                           {t('common.delete')}
                         </button>
@@ -463,6 +502,7 @@ export function InstanceListPage() {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [viewMode, setViewMode] = useState<ViewMode>(() => readViewMode());
   const [createOpen, setCreateOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
   /** 引导跳转：其他页面点「未创建集群」跳过来时自动打开新建弹框 */
@@ -612,6 +652,9 @@ export function InstanceListPage() {
             >
               {refreshing ? t('common.loading') : t('common.refresh')}
             </button>
+            <button className="btn sm" onClick={() => setImportOpen(true)}>
+              {t('topology.import')}
+            </button>
             <button className="btn primary sm" onClick={() => setCreateOpen(true)}>
               + {t('topology.createInstance')}
             </button>
@@ -676,6 +719,15 @@ export function InstanceListPage() {
         onClose={() => setCreateOpen(false)}
         onCreated={() => {
           setCreateOpen(false);
+          bumpGuideRevision();
+          refresh();
+        }}
+      />
+      <ImportClusterModal
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        onImported={() => {
+          setImportOpen(false);
           bumpGuideRevision();
           refresh();
         }}

@@ -343,6 +343,8 @@ export interface Org {
 }
 export interface IamUser {
   user_id: string;
+  username?: string | null;
+  identity_provider?: 'local' | 'federated' | string;
   display_name: string;
   is_admin: boolean;
   status: string;
@@ -867,6 +869,89 @@ export const InstanceApi = {
     }),
 };
 
+export interface ImportPreflightAction {
+  scope: 'manager' | 'identity' | string;
+  object_type: string;
+  object_id: string;
+  action: 'create' | 'reuse' | 'conflict' | 'missing_dependency' | 'missing_sensitive_value' | string;
+  detail: string;
+}
+
+export interface ImportPreflightReport {
+  resource_type: string;
+  resource_id: string;
+  can_import: boolean;
+  summary: Record<string, number>;
+  actions: ImportPreflightAction[];
+  confirmation_token: string;
+}
+
+async function workbookRequest<T>(
+  path: string,
+  file: File,
+  retried = false,
+): Promise<T> {
+  const url = resolveRequestUrl(API_BASE, path, '');
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  };
+  if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+  let response = await fetch(url, { method: 'POST', headers, body: file });
+  if (response.status === 401 && accessToken && !retried && await tryRefresh()) {
+    return workbookRequest<T>(path, file, true);
+  }
+  const text = await response.text();
+  let json: unknown = null;
+  if (text) {
+    try { json = JSON.parse(text); } catch { /* handled below */ }
+  }
+  if (!response.ok) {
+    const detail = json && typeof json === 'object' && 'detail' in json
+      ? (json as { detail: unknown }).detail
+      : response.statusText;
+    throw new ApiError(response.status, formatApiErrorDetail(detail), json);
+  }
+  const wrapped = json as ResponseModel<T>;
+  if (!wrapped || wrapped.code !== 200) {
+    throw new ApiError(response.status, wrapped?.message || 'unknown error', json);
+  }
+  return wrapped.data as T;
+}
+
+export const ImportExportApi = {
+  exportCluster: async (id: string): Promise<{ blob: Blob; filename: string }> => {
+    const path = `/v1/import-export/cluster/${encodeURIComponent(id)}/export`;
+    const url = resolveRequestUrl(API_BASE, path, '');
+    const headers: Record<string, string> = {};
+    if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+    let response = await fetch(url, { headers });
+    if (response.status === 401 && accessToken && await tryRefresh()) {
+      if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+      response = await fetch(url, { headers });
+    }
+    if (!response.ok) {
+      const text = await response.text();
+      let detail: unknown = response.statusText;
+      try { detail = (JSON.parse(text) as { detail?: unknown }).detail ?? detail; } catch { /* noop */ }
+      throw new ApiError(response.status, formatApiErrorDetail(detail));
+    }
+    const disposition = response.headers.get('Content-Disposition') || '';
+    const filename = disposition.match(/filename="?([^";]+)"?/i)?.[1] || `cluster-${id}.xlsx`;
+    return { blob: await response.blob(), filename };
+  },
+  preflightCluster: (file: File) =>
+    workbookRequest<ImportPreflightReport>('/v1/import-export/cluster/preflight', file),
+  importCluster: (file: File, confirmationToken: string) =>
+    workbookRequest<{
+      resource_type: string;
+      resource_id: string;
+      created_manager_objects: number;
+      created_identity_objects: Array<{ object_type: string; object_id: string }>;
+      reused_objects: number;
+      pending_sync: string[];
+    }>(`/v1/import-export/cluster/import?confirmation_token=${encodeURIComponent(confirmationToken)}`, file),
+};
+
 // ---------- Templates ----------
 
 export const ModelTemplateApi = {
@@ -1120,4 +1205,3 @@ export const AuditLogApi = {
   remove: (instanceId: string) =>
     http<void>(`${instanceBase(instanceId)}/audit-log`, { method: 'DELETE' }),
 };
-

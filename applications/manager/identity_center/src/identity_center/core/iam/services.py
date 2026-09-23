@@ -326,8 +326,35 @@ class UserService:
         if row is None:
             return None
         out = _user_out(row)
+        # Username is safe directory metadata needed by Manager configuration
+        # backup/restore. Credentials and password hashes remain private and
+        # are never included in this projection.
+        local_identities = await self._h.list_records(
+            _AUTH_IDENTITY,
+            {"provider": _LOCAL, "user_id": user_id},
+            limit=1,
+            offset=0,
+        )
+        out["username"] = (
+            str(_g(local_identities[0], "external_subject"))
+            if local_identities else None
+        )
+        out["identity_provider"] = _LOCAL if local_identities else "federated"
         out["group_ids"] = await self.list_org_ids(user_id)
         return out
+
+    async def get_by_local_username(self, username: str) -> dict[str, Any] | None:
+        """Resolve safe user metadata by local login name without credentials."""
+        normalized = validate_identity_id(username, field="username")
+        identities = await self._h.list_records(
+            _AUTH_IDENTITY,
+            {"provider": _LOCAL, "external_subject": normalized},
+            limit=1,
+            offset=0,
+        )
+        if not identities:
+            return None
+        return await self.get(str(_g(identities[0], "user_id") or ""))
 
     async def create(
         self, *, user_id: str | None, display_name: str, is_admin: bool, username: str, password: str
