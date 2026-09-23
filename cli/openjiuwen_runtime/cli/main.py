@@ -7,6 +7,7 @@
 """
 
 import asyncio
+import atexit
 import json
 import os
 import re
@@ -92,6 +93,25 @@ def _build_project(project_dir: Path) -> Path:
     return whl_path
 
 
+_shutdown_done = False
+
+
+def _shutdown_manager(manager) -> None:
+    """幂等地关闭 DeploymentManager。
+
+    ``result_callback`` 仅在命令成功时触发，命令抛异常时不会执行，
+    因此额外通过 ``atexit`` 兜底，保证数据库连接等资源始终被释放。
+    """
+    global _shutdown_done
+    if _shutdown_done:
+        return
+    _shutdown_done = True
+    try:
+        asyncio.run(manager.shutdown())
+    except Exception as exc:
+        click.echo(f"Failed to shutdown manager: {exc}", err=True)
+
+
 @click.group()
 @click.pass_context
 def cli(ctx):
@@ -106,6 +126,7 @@ def cli(ctx):
 
     # 初始化 manager
     asyncio.run(manager.initialize())
+    atexit.register(_shutdown_manager, manager)
 
 
 @cli.result_callback()
@@ -113,7 +134,7 @@ def cli(ctx):
 def cleanup(ctx, result, **kwargs):
     """清理资源"""
     if "manager" in ctx.obj:
-        asyncio.run(ctx.obj["manager"].shutdown())
+        _shutdown_manager(ctx.obj["manager"])
 
 
 # ==================== Agent 命令 ====================
