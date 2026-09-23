@@ -165,7 +165,18 @@
     "viewBrief": "卡片视图",
     "viewList": "列表视图",
     "searchPlaceholder": "搜索集群名称、集群 ID、状态",
-    "probeFailed": "探活失败：{{detail}}"
+    "probeFailed": "探活失败：{{detail}}",
+    "import": "导入",
+    "export": "导出",
+    "importTitle": "导入集群配置",
+    "importHelp": "选择 Manager 导出的 .xlsx 文件。系统会先完整预检；同 ID 已存在且配置一致的对象会复用，不会覆盖现有配置。黄色敏感字段若用于新建对象，需要先在 Excel 中填写。",
+    "importConfirm": "确认导入",
+    "importXlsxOnly": "请选择 .xlsx 文件",
+    "preflightPassed": "预检通过，可以导入。",
+    "preflightBlocked": "预检发现阻塞项，请修改 Excel 或处理目标环境冲突后重新选择文件。",
+    "importSuccess": "导入完成：创建 {{created}} 项，复用 {{reused}} 项",
+    "exportSuccess": "集群配置 Excel 已导出",
+    "exportFailed": "导出失败："
   },
   "instanceForm": {
     "name": "集群名称",

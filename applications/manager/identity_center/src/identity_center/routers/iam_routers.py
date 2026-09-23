@@ -190,6 +190,18 @@ async def batch_create_users(body: UsersBatchCreateBody, handler: _Handler):
     }
 
 
+@user_router.get("/by-username/{username}")
+async def get_user_by_username(username: str, handler: _Handler):
+    """Return directory metadata for a local username, never credentials."""
+    try:
+        user = await UserService(handler).get_by_local_username(username)
+    except ValueError as exc:
+        raise _bad(exc) from exc
+    if user is None:
+        raise HTTPException(status_code=404, detail="user not found")
+    return user
+
+
 @user_router.get("/{user_id}")
 async def get_user(user_id: str, handler: _Handler):
     user = await UserService(handler).get(user_id)
