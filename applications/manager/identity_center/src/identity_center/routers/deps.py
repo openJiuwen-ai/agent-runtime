@@ -1,7 +1,10 @@
-"""鉴权依赖：OAuth2 Bearer + JWT 验签 → 当前用户 claims；admin 守卫。
+"""鉴权依赖：OAuth2 Bearer + JWT 验签 → 当前用户 claims。
 
 ``oauth2_scheme`` 让 ``/docs`` 出现 Authorize（密码流，tokenUrl 指向 /token）。
 本服务自身验签用本地公钥；claw_manager / 企业版 web 复用同样的验签逻辑（拿公钥）。
+
+目录管理 API 仅要求登录身份；平台管理员资格由 Manager 本地角色（platform_admin）
+在管理面把关，不再依赖 JWT / identity_user.is_admin。
 """
 
 from __future__ import annotations
@@ -35,6 +38,7 @@ _Claims = Annotated[dict[str, Any], Depends(get_current_claims)]
 
 
 async def require_admin(claims: _Claims) -> dict[str, Any]:
-    if not bool(claims.get("is_admin")):
+    """历史名称保留：现仅校验已登录。产品权限改由 Manager 角色控制。"""
+    if not str(claims.get("sub") or "").strip():
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="admin required")
     return claims

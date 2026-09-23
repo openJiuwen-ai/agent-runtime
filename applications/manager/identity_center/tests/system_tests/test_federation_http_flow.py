@@ -87,7 +87,7 @@ def test_federation_http_flow_issues_normal_identity_token(tmp_path, monkeypatch
         )
         assert me.status_code == 200
         assert me.json()["display_name"] == "HTTP Enterprise User"
-        assert me.json()["is_admin"] is True
+        assert me.json()["is_admin"] is False
         assert me.json()["groups"] == ["federated-enterprise-demo"]
 
         admin_api = client.get(
@@ -135,8 +135,9 @@ def test_federation_http_flow_issues_normal_identity_token(tmp_path, monkeypatch
         assert downgraded_me.status_code == 200
         assert downgraded_me.json()["user_id"] == me.json()["user_id"]
         assert downgraded_me.json()["is_admin"] is False
-        denied_admin_api = client.get(
+        # IdP 目录 API 不再用 is_admin 守卫；平台权限改由 Manager 角色控制
+        still_allowed = client.get(
             "/v1/users/",
             headers={"Authorization": f"Bearer {downgraded_token}"},
         )
-        assert denied_admin_api.status_code == 403
+        assert still_allowed.status_code == 200

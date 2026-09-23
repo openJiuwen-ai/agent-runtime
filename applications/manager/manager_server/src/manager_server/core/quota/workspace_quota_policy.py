@@ -16,12 +16,17 @@ from manager_server.infrastructure.match_expr import (
 )
 from manager_server.infrastructure.utils import iso_datetime, new_uuid4, utc_now
 from manager_server.manager_config_push import gateway_request
-from manager_server.models.application_config_models import WORKSPACE_QUOTA_POLICY_TABLE_DEF
-from manager_server.schemas.application_config_schemas import WorkspaceQuotaPolicyListQuery
+from manager_server.models.quota_models import WORKSPACE_QUOTA_POLICY_TABLE_DEF
+from manager_server.schemas.quota_schemas import WorkspaceQuotaPolicyListQuery
 
 _TABLE = WORKSPACE_QUOTA_POLICY_TABLE_DEF.table_name
 _GATEWAY_COLLECTION = "/api/v1/workspace-quota/policies"
 _PAGE = 500
+# 负数 priority 保留给特殊操作；审批通过写入的策略统一为 -1（可多条并存，不参与 priority 唯一约束）
+APPROVAL_POLICY_PRIORITY = -1
+SOURCE_MANUAL = "manual"
+SOURCE_APPROVAL = "approval"
+VALID_SOURCES = frozenset({SOURCE_MANUAL, SOURCE_APPROVAL})
 _ALLOWED_SORT_FIELDS = frozenset({
     "policy_name",
     "policy_desc",
@@ -30,12 +35,15 @@ _ALLOWED_SORT_FIELDS = frozenset({
     "limit_bytes",
     "soft_percent",
     "hard_percent",
+    "source",
     "source_order_num",
     "updated_at",
 })
 _DEFAULT_ORDER_BY: list[tuple[str, bool]] = [("priority", False)]
 _INT_SORT_FIELDS = frozenset({"priority", "limit_bytes", "soft_percent", "hard_percent"})
-_TEXT_SORT_FIELDS = frozenset({"policy_name", "policy_desc", "source_order_num"})
+_TEXT_SORT_FIELDS = frozenset({"policy_name", "policy_desc", "source", "source_order_num"})
+# 审批来源策略允许管理员改的字段（仅停用/启用）
+_APPROVAL_LOCK_ALLOWED_FIELDS = frozenset({"enabled"})
 
 
 def _g(row: Any, name: str, default: Any = None) -> Any:
@@ -46,6 +54,27 @@ def _g(row: Any, name: str, default: Any = None) -> Any:
 
 def _enabled(row: Any) -> bool:
     return bool(_g(row, "enabled", True))
+
+
+def _normalize_source(row: Any) -> str:
+    """策略来源：manual / approval。兼容旧行（无 source 时按 source_order_num 推断）。"""
+    raw = str(_g(row, "source") or "").strip().lower()
+    if raw in VALID_SOURCES:
+        return raw
+    if str(_g(row, "source_order_num") or "").strip():
+        return SOURCE_APPROVAL
+    return SOURCE_MANUAL
+
+
+def _is_approval_sourced(row: Any) -> bool:
+    return _normalize_source(row) == SOURCE_APPROVAL
+
+
+def _require_admin_priority(priority: int) -> None:
+    if int(priority) < 0:
+        raise ValueError(
+            "priority < 0 is reserved for approval-sourced policies; use priority >= 0"
+        )
 
 
 def _is_full_match(expr: Any) -> bool:
@@ -81,6 +110,12 @@ def _policy_dict(row: Any) -> dict[str, Any]:
     desc = _g(row, "policy_desc")
     if isinstance(desc, str):
         desc = desc.strip() or None
+    source = _normalize_source(row)
+    source_order_num = _g(row, "source_order_num")
+    if isinstance(source_order_num, str):
+        source_order_num = source_order_num.strip() or None
+    if source != SOURCE_APPROVAL:
+        source_order_num = None
     return {
         "policy_id": _g(row, "policy_id"),
         "cluster_id": _g(row, "cluster_id"),
@@ -91,7 +126,9 @@ def _policy_dict(row: Any) -> dict[str, Any]:
         "limit_bytes": int(_g(row, "limit_bytes")),
         "soft_percent": int(_g(row, "soft_percent")),
         "hard_percent": int(_g(row, "hard_percent")),
-        "source_order_num": _g(row, "source_order_num"),
+        "source": source,
+        "source_order_num": source_order_num,
+        "locked": source == SOURCE_APPROVAL,
         "enabled": _enabled(row),
         "created_at": iso_datetime(_g(row, "created_at")),
         "created_by": _g(row, "created_by"),
@@ -110,14 +147,15 @@ def _gateway_body(row: dict[str, Any]) -> dict[str, Any]:
         "limit_bytes": row["limit_bytes"],
         "soft_percent": row["soft_percent"],
         "hard_percent": row["hard_percent"],
+        "source": row.get("source") or SOURCE_MANUAL,
         "source_order_num": row["source_order_num"],
         "enabled": row["enabled"],
     }
 
 
 def _require_percents(soft_percent: int, hard_percent: int) -> None:
-    if soft_percent < 0 or hard_percent < 0:
-        raise ValueError("soft_percent and hard_percent must be >= 0")
+    if not (0 <= soft_percent <= 100 and 0 <= hard_percent <= 100):
+        raise ValueError("soft_percent and hard_percent must be between 0 and 100")
     if hard_percent <= soft_percent:
         raise ValueError("hard_percent must be greater than soft_percent")
 
@@ -172,6 +210,7 @@ def _matches_search(row: Any, query: str) -> bool:
         str(_g(row, "policy_name") or ""),
         str(_g(row, "policy_desc") or ""),
         _match_expr_text(_g(row, "match_expr")),
+        str(_g(row, "source") or ""),
         str(_g(row, "source_order_num") or ""),
         str(_g(row, "priority", "")),
         str(_g(row, "limit_bytes", "")),
@@ -296,6 +335,9 @@ class WorkspaceQuotaPolicyService:
         cid = cluster_id.strip()
         if not cid:
             raise ValueError("cluster_id is required")
+        if (source_order_num or "").strip():
+            raise ValueError("source_order_num can only be set by the approval flow")
+        _require_admin_priority(priority)
         name = _normalize_policy_name(policy_name)
         desc = _normalize_policy_desc(policy_desc)
         expr = validate_match_expr(match_expr)
@@ -318,7 +360,8 @@ class WorkspaceQuotaPolicyService:
             "limit_bytes": int(limit_bytes),
             "soft_percent": int(soft_percent),
             "hard_percent": int(hard_percent),
-            "source_order_num": (source_order_num or "").strip() or None,
+            "source": SOURCE_MANUAL,
+            "source_order_num": None,
             "enabled": True,
             "data": None,
             "created_at": now,
@@ -347,6 +390,14 @@ class WorkspaceQuotaPolicyService:
         if cluster_id is not None and str(_g(existing, "cluster_id") or "") != cluster_id.strip():
             return None
         current = _policy_dict(existing)
+        locked = _is_approval_sourced(existing)
+        if locked:
+            forbidden = sorted(set(changes) - _APPROVAL_LOCK_ALLOWED_FIELDS)
+            if forbidden:
+                raise ValueError(
+                    "approval-sourced policy is locked; only enabled can be changed "
+                    f"(refused: {', '.join(forbidden)})"
+                )
         merged = dict(current)
         if "policy_name" in changes:
             merged["policy_name"] = _normalize_policy_name(changes["policy_name"])
@@ -356,6 +407,8 @@ class WorkspaceQuotaPolicyService:
             merged["match_expr"] = validate_match_expr(changes["match_expr"])
         if "priority" in changes:
             merged["priority"] = int(changes["priority"])
+            if not locked:
+                _require_admin_priority(merged["priority"])
         if "limit_bytes" in changes:
             merged["limit_bytes"] = int(changes["limit_bytes"])
             _require_limit(merged["limit_bytes"])
@@ -429,7 +482,8 @@ class WorkspaceQuotaPolicyService:
             pid = str(_g(row, "policy_id") or "")
             if exclude_policy_id and pid == exclude_policy_id:
                 continue
-            if int(_g(row, "priority", 0)) == int(priority):
+            # 负数域可多条同 priority（审批策略统一 -1）；非负 priority 仍集群内唯一
+            if int(priority) >= 0 and int(_g(row, "priority", 0)) == int(priority):
                 raise ValueError("priority already used by an enabled policy in this cluster")
             if match_key(_g(row, "match_expr")) == key:
                 raise ValueError("match_expr already used by an enabled policy in this cluster")

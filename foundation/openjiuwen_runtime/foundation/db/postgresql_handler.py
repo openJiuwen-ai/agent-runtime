@@ -9,6 +9,7 @@ from typing import Optional
 from urllib.parse import quote_plus
 
 from sqlalchemy import DateTime, text
+from sqlalchemy.dialects.postgresql import TIMESTAMP
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -136,6 +137,8 @@ class PostgreSQLHandler(SQLAlchemyHandler):
 
     def _get_sqlalchemy_type(self, data_type: str, length: Optional[int] = None):
         """PostgreSQL 方言类型映射：datetime 使用 TIMESTAMP WITH TIME ZONE。"""
+        if data_type.lower() == "datetime3":
+            return TIMESTAMP(timezone=True, precision=3)
         if data_type.lower() == "datetime":
             return DateTime(timezone=True)
         return super()._get_sqlalchemy_type(data_type, length)
@@ -146,7 +149,8 @@ class PostgreSQLHandler(SQLAlchemyHandler):
         基类将 datetime 映射为 DATETIME（MySQL 语法），PG 需改为 TIMESTAMP。
         此方法仅在 ALTER TABLE ADD COLUMN（增量同步缺失列）时调用。
         """
+        if col_def.data_type.lower() == "datetime3":
+            return "TIMESTAMP(3) WITH TIME ZONE"
         if col_def.data_type.lower() == "datetime":
             return "TIMESTAMP WITH TIME ZONE"
         return super()._get_column_sql_type(col_def)
-

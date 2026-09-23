@@ -6,7 +6,6 @@ import {
   InstanceBindingApi,
   InstanceGrant,
   LoginPolicy,
-  NO_ORG_GROUP_ID,
   Org,
   OrgApi,
 } from '../../../services/api';
@@ -83,7 +82,7 @@ export function InstanceOrgsTab({ instanceId }: Props) {
     [instanceId],
   );
 
-  const allOrgs = (orgsData?.items ?? []).filter((o) => o.group_id !== NO_ORG_GROUP_ID);
+  const allOrgs = orgsData?.items ?? [];
 
   const orgGrantById = useMemo(() => {
     const m = new Map<string, InstanceGrant>();

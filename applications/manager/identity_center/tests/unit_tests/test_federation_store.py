@@ -201,7 +201,7 @@ async def test_verified_group_grants_admin_and_next_login_can_revoke_it(tmp_path
             {"user_id": administrator.user_id},
         )
         assert user is not None
-        assert user.is_admin is True
+        assert user.is_admin is False
 
         _, ordinary_user = await _federated_login(
             service,

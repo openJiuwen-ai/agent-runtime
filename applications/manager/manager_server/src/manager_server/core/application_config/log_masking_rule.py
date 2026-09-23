@@ -68,7 +68,7 @@ _ALLOWED_SORT_FIELDS = frozenset({
 })
 _DEFAULT_LOG_MASKING_ORDER_BY: list[tuple[str, bool]] = [
     ("priority", False),
-    ("id", False),
+    ("updated_at", True),
 ]
 
 
@@ -187,7 +187,7 @@ class LogMaskingRuleService:
         enabled: bool,
         exclude_rule_id: str | None = None,
     ) -> None:
-        """同一集群内，启用中的规则 priority 不可重复。停用行不参与校验。"""
+        """同一集群内，启用中的规则 priority 不可重复。"""
         if not enabled:
             return
         rows = await self._handler.list_records(

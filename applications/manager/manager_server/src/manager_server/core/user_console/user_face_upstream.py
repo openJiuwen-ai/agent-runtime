@@ -189,7 +189,6 @@ async def resolve_user_face_upstreams(
     *,
     user_id: str,
     groups: list[str] | None,
-    is_admin: bool,
     jiuwenclaw_id: str | None,
 ) -> UserFaceUpstreams:
     """解析当前请求应反代的上游；无 Cookie 时直接回退默认。
@@ -229,7 +228,6 @@ async def resolve_user_face_upstreams(
         uid,
         jid,
         groups,
-        is_admin=is_admin,
     )
     if not admitted:
         raise PermissionError(f"instance not admitted: {jid}")

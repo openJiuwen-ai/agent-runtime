@@ -3,9 +3,10 @@ import { useTranslation } from 'react-i18next';
 import { useRouter } from '../router';
 import { useAsync } from '../hooks/useAsync';
 import { useDefinitionPresence } from '../hooks/useGuideStatus';
-import { InstanceApi } from '../services/api';
 import { WarnBadge, type WarnBadgeLink } from './WarnBadge';
 import { useGuideMissingLabel } from './GuideLink';
+import { useAuth } from '../auth/AuthContext';
+import { hasPermission, InstanceApi, isPlatformAdmin } from '../services/api';
 
 type NavItem = {
   key: string;
@@ -26,10 +27,18 @@ function isItemActive(item: NavItem, path: string): boolean {
 export function Sidebar() {
   const { t } = useTranslation();
   const { path, navigate } = useRouter();
+  const { user } = useAuth();
   const missingLabel = useGuideMissingLabel();
+  const platformAdmin = isPlatformAdmin(user);
 
-  const { data: instancesPage } = useAsync(() => InstanceApi.list({ page: 1, page_size: 50 }), []);
-  const { agentDefined, poolDefined, instanceCreated, modelDefined } = useDefinitionPresence();
+  const { data: instancesPage } = useAsync(
+    () => platformAdmin
+      ? InstanceApi.list({ page: 1, page_size: 50 })
+      : Promise.resolve({ items: [], total: 0, page: 1, page_size: 50 }),
+    [platformAdmin],
+  );
+  const { agentDefined, poolDefined, instanceCreated, modelDefined } =
+    useDefinitionPresence(platformAdmin);
 
   const agentResourceChildPaths = [
     '/model-templates',
@@ -206,20 +215,26 @@ export function Sidebar() {
     </svg>
   );
   const iamItems: NavItem[] = [
-    {
+    ...(platformAdmin ? [{
       key: 'users',
       pathPrefix: '/users',
       href: '/users',
       label: t('nav.users'),
       icon: iamIcon('M15 19.5a3 3 0 00-6 0M12 11a3 3 0 100-6 3 3 0 000 6zM3 19.5a9 9 0 0118 0'),
-    },
-    {
+    }, {
       key: 'orgs',
       pathPrefix: '/orgs',
       href: '/orgs',
       label: t('nav.orgs'),
       icon: iamIcon('M3 21h18M5 21V7l7-4 7 4v14M9 21v-4h6v4M9 10h.01M15 10h.01M9 13h.01M15 13h.01'),
-    },
+    }] : []),
+    ...(hasPermission(user, 'iam:role:read') ? [{
+      key: 'roles',
+      pathPrefix: '/roles',
+      href: '/roles',
+      label: t('nav.roles'),
+      icon: iamIcon('M12 3l7 4v5c0 4.5-2.9 7.8-7 9-4.1-1.2-7-4.5-7-9V7l7-4zm-3 9l2 2 4-4'),
+    }] : []),
   ];
 
   const renderItem = (item: NavItem, nested = false, warnLinks?: WarnBadgeLink[]) => {
@@ -248,21 +263,23 @@ export function Sidebar() {
 
   return (
     <aside className="nav flex flex-col">
-      <div className="nav-group-title nav-group-title--uppercase">{t('nav.platform')}</div>
-      <div className="space-y-1">
-        {platformItems.map((item) =>
-          renderItem(
-            item,
-            false,
-            item.key === 'instances' && instanceCreated === false
-              ? [{ label: missingLabel(t('nav.instances')), to: '/instances', openTarget: 'instanceCreate' }]
-              : undefined,
-          ),
-        )}
-      </div>
+      {platformAdmin && (
+        <>
+          <div className="nav-group-title nav-group-title--uppercase">{t('nav.platform')}</div>
+          <div className="space-y-1">
+            {platformItems.map((item) =>
+              renderItem(
+                item,
+                false,
+                item.key === 'instances' && instanceCreated === false
+                  ? [{ label: missingLabel(t('nav.instances')), to: '/instances', openTarget: 'instanceCreate' }]
+                  : undefined,
+              ),
+            )}
+          </div>
 
-      <div className="nav-group-title nav-group-title--with-top-gap">{t('nav.config')}</div>
-      <div className="space-y-1">
+          <div className="nav-group-title nav-group-title--with-top-gap">{t('nav.config')}</div>
+          <div className="space-y-1">
         <div className="nav-subgroup">
           <button
             type="button"
@@ -341,13 +358,19 @@ export function Sidebar() {
               : undefined,
           ),
         )}
-      </div>
+          </div>
+        </>
+      )}
 
-      <div className="nav-group-title nav-group-title--with-top-gap">{t('nav.iam')}</div>
-      <div className="space-y-1">{iamItems.map((item) => renderItem(item))}</div>
+      {iamItems.length > 0 && (
+        <>
+          <div className="nav-group-title nav-group-title--with-top-gap">{t('nav.iam')}</div>
+          <div className="space-y-1">{iamItems.map((item) => renderItem(item))}</div>
+        </>
+      )}
 
       <div className="flex-1" />
-      <div className="nav-footer">
+      {platformAdmin && <div className="nav-footer">
         <div className="nav-footer__row">
           <span className="nav-footer__label">{t('nav.instances')}</span>
           <span className="nav-footer__value">{instanceCount}</span>
@@ -356,7 +379,7 @@ export function Sidebar() {
           <span className="nav-footer__label">manager</span>
           <span className="nav-footer__value">v0.1.0</span>
         </div>
-      </div>
+      </div>}
     </aside>
   );
 }

@@ -5,7 +5,21 @@ from datetime import datetime
 import logging
 from typing import Optional, Any
 import json
-from sqlalchemy import Column, Integer, BigInteger, String, DateTime, JSON, Boolean, Float, Double, Text, text, inspect, Index
+from sqlalchemy import (
+    Column,
+    Integer,
+    BigInteger,
+    String,
+    DateTime,
+    JSON,
+    Boolean,
+    Float,
+    Double,
+    Text,
+    text,
+    inspect,
+    Index,
+)
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
@@ -115,12 +129,21 @@ class SQLAlchemyHandler(DBHandler):
 
                 return LONGTEXT if key == "longtext" else MEDIUMTEXT
             return Text
+        if key == "datetime3":
+            if self._get_dialect_name() == "mysql":
+                from sqlalchemy.dialects.mysql import DATETIME
+
+                return DATETIME(fsp=3)
+            return DateTime
         # double 用通用 Double 类型（mysql → DOUBLE，pg → DOUBLE PRECISION）：
         # 裸 Float 在 mysql 方言编译为 FLOAT（32 位），时间戳存储会精度失真。
         type_map = {
             "integer": Integer,
             "int": Integer,
-            "bigint": BigInteger,
+            # SQLite requires the exact INTEGER PRIMARY KEY spelling for rowid
+            # autoincrement; other databases use the Wiki's BIGINT contract.
+            "bigint": BigInteger().with_variant(Integer, "sqlite"),
+
             "string": String,
             "str": String,
             "text": Text,
@@ -168,6 +191,8 @@ class SQLAlchemyHandler(DBHandler):
             return "TEXT"
         if data_type == "datetime":
             return "DATETIME"
+        if data_type == "datetime3":
+            return "DATETIME(3)" if self._get_dialect_name() == "mysql" else "DATETIME"
         if data_type == "json":
             return "JSON"
         if data_type in {"boolean", "bool"}:

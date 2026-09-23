@@ -9,11 +9,11 @@ import pytest
 
 pytestmark = pytest.mark.unit
 
-_GW = "manager_server.core.application_config.workspace_quota_policy.gateway_request"
+_GW = "manager_server.core.quota.workspace_quota_policy.gateway_request"
 
 
 def test_select_effective_policy_uses_lowest_priority():
-    from manager_server.core.application_config.workspace_quota_policy import select_effective_policy
+    from manager_server.core.quota.workspace_quota_policy import select_effective_policy
 
     rows = [
         {
@@ -57,7 +57,7 @@ def test_select_effective_policy_uses_lowest_priority():
 
 @pytest.mark.asyncio
 async def test_create_pushes_gateway_before_manager_write():
-    from manager_server.core.application_config.workspace_quota_policy import WorkspaceQuotaPolicyService
+    from manager_server.core.quota.workspace_quota_policy import WorkspaceQuotaPolicyService
 
     handler = AsyncMock()
     handler.list_records = AsyncMock(return_value=[])
@@ -91,6 +91,8 @@ async def test_create_pushes_gateway_before_manager_write():
     assert result["soft_percent"] == 80
     assert result["hard_percent"] == 100
     assert result["limit_bytes"] == 21474836480
+    assert result["source"] == "manual"
+    assert result["locked"] is False
     args = gw_mock.await_args.args
     assert args[0] == "cluster_01"
     assert args[1] == "PUT"
@@ -98,12 +100,13 @@ async def test_create_pushes_gateway_before_manager_write():
     assert "cluster_id" not in args[3]
     assert args[3]["policy_id"] == result["policy_id"]
     assert args[3]["policy_name"] == "个人额度"
+    assert args[3]["source"] == "manual"
     assert args[3]["policy_desc"] == "测试描述"
 
 
 @pytest.mark.asyncio
 async def test_create_allows_zero_and_unlimited_limit():
-    from manager_server.core.application_config.workspace_quota_policy import WorkspaceQuotaPolicyService
+    from manager_server.core.quota.workspace_quota_policy import WorkspaceQuotaPolicyService
 
     handler = AsyncMock()
     handler.list_records = AsyncMock(return_value=[])
@@ -137,7 +140,7 @@ async def test_create_allows_zero_and_unlimited_limit():
 
 @pytest.mark.asyncio
 async def test_create_rejects_invalid_negative_limit():
-    from manager_server.core.application_config.workspace_quota_policy import WorkspaceQuotaPolicyService
+    from manager_server.core.quota.workspace_quota_policy import WorkspaceQuotaPolicyService
 
     handler = AsyncMock()
     handler.list_records = AsyncMock(return_value=[])
@@ -156,7 +159,7 @@ async def test_create_rejects_invalid_negative_limit():
 
 @pytest.mark.asyncio
 async def test_create_does_not_write_manager_when_gateway_fails():
-    from manager_server.core.application_config.workspace_quota_policy import WorkspaceQuotaPolicyService
+    from manager_server.core.quota.workspace_quota_policy import WorkspaceQuotaPolicyService
 
     handler = AsyncMock()
     handler.list_records = AsyncMock(return_value=[])
@@ -176,7 +179,7 @@ async def test_create_does_not_write_manager_when_gateway_fails():
 
 @pytest.mark.asyncio
 async def test_create_rejects_duplicate_priority():
-    from manager_server.core.application_config.workspace_quota_policy import WorkspaceQuotaPolicyService
+    from manager_server.core.quota.workspace_quota_policy import WorkspaceQuotaPolicyService
 
     handler = AsyncMock()
     handler.list_records = AsyncMock(
@@ -206,7 +209,7 @@ async def test_create_rejects_duplicate_priority():
 
 @pytest.mark.asyncio
 async def test_delete_pushes_gateway_before_manager_delete():
-    from manager_server.core.application_config.workspace_quota_policy import WorkspaceQuotaPolicyService
+    from manager_server.core.quota.workspace_quota_policy import WorkspaceQuotaPolicyService
 
     handler = AsyncMock()
     handler.get = AsyncMock(
@@ -239,7 +242,7 @@ async def test_delete_pushes_gateway_before_manager_delete():
 
 @pytest.mark.asyncio
 async def test_delete_allows_full_match():
-    from manager_server.core.application_config.workspace_quota_policy import WorkspaceQuotaPolicyService
+    from manager_server.core.quota.workspace_quota_policy import WorkspaceQuotaPolicyService
 
     handler = AsyncMock()
     handler.get = AsyncMock(
@@ -269,6 +272,7 @@ async def test_delete_allows_full_match():
     assert args[1] == "DELETE"
     assert args[2] == "/api/v1/workspace-quota/policies/qp_default"
 
+
 def _quota_row(
     policy_id: str,
     *,
@@ -276,6 +280,7 @@ def _quota_row(
     match_expr: object,
     limit_bytes: int,
     enabled: bool = True,
+    source: str = "manual",
     source_order_num: str | None = None,
     policy_name: str | None = None,
     policy_desc: str | None = None,
@@ -290,6 +295,7 @@ def _quota_row(
         "limit_bytes": limit_bytes,
         "soft_percent": 80,
         "hard_percent": 100,
+        "source": source,
         "source_order_num": source_order_num,
         "enabled": enabled,
         "created_at": None,
@@ -299,8 +305,8 @@ def _quota_row(
 
 @pytest.mark.asyncio
 async def test_list_policies_filters_sorts_and_pages_on_server():
-    from manager_server.core.application_config.workspace_quota_policy import WorkspaceQuotaPolicyService
-    from manager_server.schemas.application_config_schemas import WorkspaceQuotaPolicyListQuery
+    from manager_server.core.quota.workspace_quota_policy import WorkspaceQuotaPolicyService
+    from manager_server.schemas.quota_schemas import WorkspaceQuotaPolicyListQuery
 
     rows = [
         _quota_row("wide", priority=100, match_expr=[], limit_bytes=1, enabled=False, policy_name="平台默认"),
@@ -309,6 +315,7 @@ async def test_list_policies_filters_sorts_and_pages_on_server():
             priority=50,
             match_expr="group_id == 'g_sales'",
             limit_bytes=5 * 1024**3,
+            source="approval",
             source_order_num="ORD-9",
             policy_name="销售组组织额度",
             policy_desc="组织级",
@@ -387,3 +394,116 @@ async def test_list_policies_filters_sorts_and_pages_on_server():
         query=WorkspaceQuotaPolicyListQuery(sort_by="not_a_field", sort_order="desc"),
     )
     assert [item["policy_id"] for item in fallback["items"]] == ["person", "org", "wide"]
+
+
+@pytest.mark.asyncio
+async def test_create_rejects_negative_priority_for_admin():
+    from manager_server.core.quota.workspace_quota_policy import (
+        WorkspaceQuotaPolicyService,
+    )
+
+    handler = AsyncMock()
+    handler.list_records = AsyncMock(return_value=[])
+    handler.create = AsyncMock()
+    with pytest.raises(ValueError, match="priority < 0"):
+        await WorkspaceQuotaPolicyService(handler).create(
+            cluster_id="cluster_01",
+            policy_name="非法负优先级",
+            match_expr="user_id == 'u1'",
+            priority=-1,
+            limit_bytes=1024,
+        )
+    handler.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_create_rejects_admin_setting_source_order_num():
+    from manager_server.core.quota.workspace_quota_policy import (
+        WorkspaceQuotaPolicyService,
+    )
+
+    handler = AsyncMock()
+    handler.list_records = AsyncMock(return_value=[])
+    handler.create = AsyncMock()
+    with pytest.raises(ValueError, match="source_order_num"):
+        await WorkspaceQuotaPolicyService(handler).create(
+            cluster_id="cluster_01",
+            policy_name="伪造审批",
+            match_expr="user_id == 'u1'",
+            priority=10,
+            limit_bytes=1024,
+            source_order_num="apr_fake",
+        )
+    handler.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_assert_unique_allows_duplicate_negative_priority():
+    from manager_server.core.quota.workspace_quota_policy import (
+        APPROVAL_POLICY_PRIORITY,
+        WorkspaceQuotaPolicyService,
+    )
+
+    handler = AsyncMock()
+    handler.list_records = AsyncMock(
+        return_value=[
+            {
+                "policy_id": "apr_a",
+                "priority": APPROVAL_POLICY_PRIORITY,
+                "match_expr": "user_id == 'u_a' and group_id == 'g' and bot_id == 'b'",
+                "enabled": True,
+                "source": "approval",
+                "source_order_num": "apr_01",
+            }
+        ]
+    )
+    svc = WorkspaceQuotaPolicyService(handler)
+    # 另一条审批策略同为 -1、不同 match_expr，应允许。
+    # 管理面 create 禁止 priority<0，故用 getattr 覆盖白盒校验（避免 G.CLS.11）。
+    assert_unique = getattr(svc, "_assert_unique")
+    await assert_unique(
+        cluster_id="cluster_01",
+        match_expr="user_id == 'u_b' and group_id == 'g' and bot_id == 'b'",
+        priority=APPROVAL_POLICY_PRIORITY,
+        enabled=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_locks_approval_sourced_policy():
+    from manager_server.core.quota.workspace_quota_policy import (
+        WorkspaceQuotaPolicyService,
+    )
+
+    row = {
+        "policy_id": "qp_apr",
+        "cluster_id": "cluster_01",
+        "policy_name": "quota-expand-apr_01",
+        "policy_desc": "Created by workspace quota approval",
+        "match_expr": "user_id == 'u1' and group_id == 'g' and bot_id == 'b'",
+        "priority": -1,
+        "limit_bytes": 20_000,
+        "soft_percent": 80,
+        "hard_percent": 100,
+        "source": "approval",
+        "source_order_num": "apr_01",
+        "enabled": True,
+        "created_at": None,
+        "created_by": "u_admin",
+        "updated_at": None,
+        "updated_by": "u_admin",
+    }
+    handler = AsyncMock()
+    handler.get = AsyncMock(return_value=row)
+    handler.list_records = AsyncMock(return_value=[row])
+    handler.update = AsyncMock(return_value={**row, "enabled": False})
+
+    svc = WorkspaceQuotaPolicyService(handler)
+    with pytest.raises(ValueError, match="locked"):
+        await svc.update("qp_apr", {"limit_bytes": 30_000}, cluster_id="cluster_01")
+
+    with patch(_GW, new_callable=AsyncMock, return_value={"success_flag": True}):
+        updated = await svc.update("qp_apr", {"enabled": False}, cluster_id="cluster_01")
+    assert updated is not None
+    assert updated["locked"] is True
+    assert updated["enabled"] is False

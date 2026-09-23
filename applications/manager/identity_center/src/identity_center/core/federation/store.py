@@ -147,7 +147,7 @@ class IdentityCenterFederatedIdentityStore(FederatedIdentityStore):
                 connection_row,
                 identity.attributes,
             )
-            is_admin = "admin" in roles
+            _ = roles  # IdP 角色不再映射到 identity_user.is_admin
 
             identity_key = _external_identity_key(
                 identity.connection_id,
@@ -174,7 +174,7 @@ class IdentityCenterFederatedIdentityStore(FederatedIdentityStore):
                     insert(self._users).values(
                         user_id=user_id,
                         display_name=identity.display_name,
-                        is_admin=is_admin,
+                        is_admin=False,
                         status="active",
                         created_at=now,
                         updated_at=now,
@@ -217,7 +217,6 @@ class IdentityCenterFederatedIdentityStore(FederatedIdentityStore):
                     .where(self._users.c.user_id == user_id)
                     .values(
                         display_name=identity.display_name,
-                        is_admin=is_admin,
                         updated_at=now,
                     )
                 )

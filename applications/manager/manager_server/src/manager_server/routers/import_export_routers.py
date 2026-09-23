@@ -16,7 +16,7 @@ from manager_server.core.import_export import ImportExportContext, adapter_regis
 from manager_server.core.import_export import cluster as _cluster_adapter  # noqa: F401
 from manager_server.core.import_export.workbook import dump_workbook, load_workbook_data
 from manager_server.infrastructure.db import get_db_handler
-from manager_server.routers.deps import AdminUser
+from manager_server.routers.auth_guards import AdminUser
 from manager_server.schemas.common_schemas import ResponseModel
 
 import_export_router = APIRouter(prefix="/import-export")

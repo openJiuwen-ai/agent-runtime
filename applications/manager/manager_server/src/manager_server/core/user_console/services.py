@@ -96,7 +96,6 @@ class UserConsoleService:
         user_id: str,
         groups: list[str] | None = None,
         *,
-        is_admin: bool = False,
         authorization: str | None = None,
     ) -> list[dict[str, Any]]:
         """返回用户可选用的上下文列表。
@@ -125,7 +124,7 @@ class UserConsoleService:
             candidate_groups = [(_NO_ORG_GROUP_ID, "无组织")]
             member_groups = set()
 
-        admitted = await self._admitted_instance_ids(uid, member_groups, is_admin=is_admin)
+        admitted = await self._admitted_instance_ids(uid, member_groups)
         if not admitted:
             return []
 
@@ -146,11 +145,8 @@ class UserConsoleService:
                 expr = _g(r, "match_expr")
                 agent_name = str(_g(r, "resource_name") or "").strip() or bot_id
                 for group_id, group_name in candidate_groups:
-                    if not (
-                        is_admin
-                        or evaluate_match_expr(
-                            expr, user_id=uid, group_id=group_id, bot_id=""
-                        )
+                    if not evaluate_match_expr(
+                        expr, user_id=uid, group_id=group_id, bot_id=""
                     ):
                         continue
                     key = (bot_id, group_id, uid, jid)
@@ -195,16 +191,8 @@ class UserConsoleService:
         return out
 
     async def _admitted_instance_ids(
-        self, user_id: str, member_groups: set[str], *, is_admin: bool
+        self, user_id: str, member_groups: set[str]
     ) -> set[str]:
-        if is_admin:
-            rows = await self._h.list_records(_INSTANCE_INFO, {}, limit=_CAP, offset=0)
-            return {
-                str(_g(r, "jiuwenclaw_id") or "").strip()
-                for r in rows
-                if str(_g(r, "jiuwenclaw_id") or "").strip()
-            }
-
         allowed: set[str] = set()
         user_map = await self._instance_grants.list_instances_for(SUBJECT_USER, [user_id])
         allowed.update(user_map.get(user_id, []))
@@ -225,8 +213,6 @@ class UserConsoleService:
         user_id: str,
         jiuwenclaw_id: str,
         groups: list[str] | None = None,
-        *,
-        is_admin: bool = False,
     ) -> bool:
         """当前用户是否对指定集群有 instance_grant 准入。"""
         jid = str(jiuwenclaw_id or "").strip()
@@ -238,9 +224,37 @@ class UserConsoleService:
         admitted = await self._admitted_instance_ids(
             str(user_id or "").strip(),
             member_groups,
-            is_admin=is_admin,
         )
         return jid in admitted
+
+    async def user_can_access_context(
+        self,
+        user_id: str,
+        *,
+        jiuwenclaw_id: str,
+        group_id: str,
+        bot_id: str,
+        groups: list[str] | None = None,
+        authorization: str | None = None,
+    ) -> bool:
+        """当前用户是否可对指定三元组 + 集群提交扩容（与 agent-contexts 同一准入口径）。"""
+        uid = str(user_id or "").strip()
+        jid = str(jiuwenclaw_id or "").strip()
+        gid = str(group_id or "").strip()
+        bid = str(bot_id or "").strip()
+        if not uid or not jid or not bid:
+            return False
+        contexts = await self.list_accessible_contexts(
+            uid, groups, authorization=authorization
+        )
+        for item in contexts:
+            if (
+                str(item.get("jiuwenclaw_id") or "") == jid
+                and str(item.get("bot_id") or "") == bid
+                and str(item.get("group_id") or "") == gid
+            ):
+                return True
+        return False
 
 
 __all__ = ("UserConsoleService",)

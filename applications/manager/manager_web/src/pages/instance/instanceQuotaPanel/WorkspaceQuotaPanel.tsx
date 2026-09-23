@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ApiError, WorkspaceQuotaApi } from '../../../services/api';
+import { useAuth } from '../../../auth/AuthContext';
+import { ApiError, hasPermission, WorkspaceQuotaApi } from '../../../services/api';
 import { useAsync } from '../../../hooks/useAsync';
 import { useFormDirty } from '../../../hooks/useFormDirty';
 import { useListSearch } from '../../../hooks/useListSearch';
@@ -43,6 +44,7 @@ type WorkspaceQuotaSortField =
   | 'limit_bytes'
   | 'soft_percent'
   | 'hard_percent'
+  | 'source'
   | 'source_order_num'
   | 'updated_at';
 
@@ -175,6 +177,8 @@ function FieldLabel({ children, required }: { children: ReactNode; required?: bo
 
 export function WorkspaceQuotaPanel({ instanceId }: { instanceId: string }) {
   const { t } = useTranslation();
+  const { user } = useAuth();
+  const canWrite = hasPermission(user, 'quota:write');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const { searchInput, setSearchInput, searchQuery } = useListSearch();
@@ -263,6 +267,11 @@ export function WorkspaceQuotaPanel({ instanceId }: { instanceId: string }) {
   const bytesPreview = limitBytesOf(form);
 
   const save = async () => {
+    if (!canWrite) return;
+    if (editing?.locked || editing?.source === 'approval') {
+      toast('warn', t('instanceDetail.workspaceQuota.lockedHint'));
+      return;
+    }
     const policyName = form.policyName.trim();
     if (!policyName) {
       toast('warn', t('instanceDetail.workspaceQuota.fieldRequired', {
@@ -275,7 +284,7 @@ export function WorkspaceQuotaPanel({ instanceId }: { instanceId: string }) {
       toast('warn', t('instanceDetail.workspaceQuota.invalidLimit'));
       return;
     }
-    if (!Number.isInteger(form.priority)) {
+    if (!Number.isInteger(form.priority) || form.priority < 0) {
       toast('warn', t('instanceDetail.workspaceQuota.invalidPriority'));
       return;
     }
@@ -283,7 +292,9 @@ export function WorkspaceQuotaPanel({ instanceId }: { instanceId: string }) {
       !Number.isInteger(form.softPercent)
       || !Number.isInteger(form.hardPercent)
       || form.softPercent < 0
+      || form.softPercent > 100
       || form.hardPercent < 0
+      || form.hardPercent > 100
       || form.hardPercent <= form.softPercent
     ) {
       toast('warn', t('instanceDetail.workspaceQuota.invalidPercent'));
@@ -339,6 +350,7 @@ export function WorkspaceQuotaPanel({ instanceId }: { instanceId: string }) {
   };
 
   const patchEnabled = async (row: WorkspaceQuotaPolicy, enabled: boolean) => {
+    if (!canWrite || togglingId) return;
     setTogglingId(row.policy_id);
     try {
       await WorkspaceQuotaApi.update(instanceId, row.policy_id, { enabled });
@@ -352,6 +364,7 @@ export function WorkspaceQuotaPanel({ instanceId }: { instanceId: string }) {
   };
 
   const remove = async (row: WorkspaceQuotaPolicy) => {
+    if (!canWrite) return;
     try {
       await WorkspaceQuotaApi.remove(instanceId, row.policy_id);
       toast('success', t('success.deleted'));
@@ -379,15 +392,17 @@ export function WorkspaceQuotaPanel({ instanceId }: { instanceId: string }) {
               <button className="btn sm" onClick={() => void reload()}>
                 {t('common.refresh')}
               </button>
-              <button
-                className="btn primary sm"
-                onClick={() => {
-                  setEditing(null);
-                  setModalOpen(true);
-                }}
-              >
-                + {t('instanceDetail.workspaceQuota.new')}
-              </button>
+              {canWrite && (
+                <button
+                  className="btn primary sm"
+                  onClick={() => {
+                    setEditing(null);
+                    setModalOpen(true);
+                  }}
+                >
+                  + {t('instanceDetail.workspaceQuota.new')}
+                </button>
+              )}
             </div>
           </div>
           <div className="page-subtitle truncate pl-3">{t('instanceDetail.workspaceQuota.subtitle')}</div>
@@ -483,9 +498,9 @@ export function WorkspaceQuotaPanel({ instanceId }: { instanceId: string }) {
                     <th>
                       <TableColumnSort
                         label={t('instanceDetail.workspaceQuota.sourceOrder')}
-                        value={sortBy === 'source_order_num' ? sortOrder : ''}
+                        value={sortBy === 'source' ? sortOrder : ''}
                         options={sortOptions}
-                        onChange={(value) => handleSortChange('source_order_num', value)}
+                        onChange={(value) => handleSortChange('source', value)}
                       />
                     </th>
                     <th>
@@ -562,14 +577,27 @@ export function WorkspaceQuotaPanel({ instanceId }: { instanceId: string }) {
                           <td className="whitespace-nowrap tabular-nums">{row.soft_percent}</td>
                           <td className="whitespace-nowrap tabular-nums">{row.hard_percent}</td>
                           <td className="mono text-[11px] whitespace-nowrap">
-                            {row.source_order_num || t('instanceDetail.workspaceQuota.sourceManual')}
+                            {row.source === 'approval' || row.locked ? (
+                              <span
+                                className="inline-flex flex-col gap-0.5"
+                                title={row.source_order_num || undefined}
+                              >
+                                <span className="badge">{t('instanceDetail.workspaceQuota.sourceApproval')}</span>
+                                {row.source_order_num ? (
+                                  <span className="text-muted break-all">{row.source_order_num}</span>
+                                ) : null}
+                              </span>
+                            ) : (
+                              t('instanceDetail.workspaceQuota.sourceManual')
+                            )}
                           </td>
                           <td className="whitespace-nowrap">
                             <Switch
                               checked={row.enabled}
-                              disabled={togglingId === row.policy_id}
+                              disabled={!canWrite || togglingId === row.policy_id}
                               aria-label={row.enabled ? t('common.enabled') : t('common.disabled')}
                               onChange={(enabled) => {
+                                if (!canWrite) return;
                                 if (!enabled) {
                                   setDisableTarget(row);
                                   return;
@@ -583,18 +611,31 @@ export function WorkspaceQuotaPanel({ instanceId }: { instanceId: string }) {
                           </td>
                           <td className="whitespace-nowrap min-w-[9.5rem]">
                             <div className="flex items-center gap-1">
-                              <button
-                                className="btn sm ghost"
-                                onClick={() => {
-                                  setEditing(row);
-                                  setModalOpen(true);
-                                }}
-                              >
-                                {t('common.edit')}
-                              </button>
-                              <button className="btn sm danger" onClick={() => setDelTarget(row)}>
-                                {t('common.delete')}
-                              </button>
+                              {canWrite && (
+                                <>
+                                  {!(row.locked || row.source === 'approval') ? (
+                                    <button
+                                      className="btn sm ghost"
+                                      onClick={() => {
+                                        setEditing(row);
+                                        setModalOpen(true);
+                                      }}
+                                    >
+                                      {t('common.edit')}
+                                    </button>
+                                  ) : (
+                                    <span
+                                      className="text-[11px] text-muted px-1"
+                                      title={t('instanceDetail.workspaceQuota.lockedHint')}
+                                    >
+                                      {t('instanceDetail.workspaceQuota.locked')}
+                                    </span>
+                                  )}
+                                  <button className="btn sm danger" onClick={() => setDelTarget(row)}>
+                                    {t('common.delete')}
+                                  </button>
+                                </>
+                              )}
                             </div>
                           </td>
                         </tr>

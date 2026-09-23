@@ -357,7 +357,7 @@ class UserService:
         return await self.get(str(_g(identities[0], "user_id") or ""))
 
     async def create(
-        self, *, user_id: str | None, display_name: str, is_admin: bool, username: str, password: str
+        self, *, user_id: str | None, display_name: str, is_admin: bool = False, username: str, password: str
     ) -> dict[str, Any]:
         username = validate_identity_id(username, field="username")
         uid = validate_identity_id(strip_optional(user_id) or username, field="user_id")
@@ -369,9 +369,10 @@ class UserService:
         if dup:
             raise ValueError(f"username already taken: {username}")
         now = utc_now()
+        _ = is_admin  # 兼容旧入参；新建用户固定 is_admin=false
         await self._h.create(
             _IDENTITY_USER,
-            {"user_id": uid, "display_name": display_name.strip(), "is_admin": is_admin,
+            {"user_id": uid, "display_name": display_name.strip(), "is_admin": False,
              "status": "active", "created_at": now, "updated_at": now},
         )
         await self._h.create(
@@ -379,7 +380,7 @@ class UserService:
             {"user_id": uid, "provider": _LOCAL, "external_subject": username,
              "credential": hash_password(password), "created_at": now, "updated_at": now},
         )
-        _log.info("[IAM] user.create", user_id=uid, username=username, is_admin=is_admin)
+        _log.info("[IAM] user.create", user_id=uid, username=username)
         created = await self.get(uid)
         if created is None:  # pragma: no cover - 刚写入必存在
             raise RuntimeError(f"user just created but missing: {uid}")
@@ -395,8 +396,8 @@ class UserService:
         updates: dict[str, Any] = {"updated_at": now}
         if display_name is not None:
             updates["display_name"] = display_name.strip()
-        if is_admin is not None:
-            updates["is_admin"] = is_admin
+        # is_admin 字段保留在表中，但不再接受写入（权限改为 Manager 角色）
+        _ = is_admin
         if status is not None:
             updates["status"] = status.strip()
         await self._h.update(_IDENTITY_USER, {"user_id": user_id}, updates)

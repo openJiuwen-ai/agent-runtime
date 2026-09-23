@@ -13,7 +13,7 @@ from manager_server.core.template.push_template_to_gateway import (
     rebuild_jid_template_ref_for_gateway,
 )
 from manager_server.infrastructure.utils import utc_now
-from manager_server.routers.deps import get_current_user, require_admin
+from manager_server.routers.auth_guards import get_current_user, require_admin
 
 pytestmark = pytest.mark.unit
 

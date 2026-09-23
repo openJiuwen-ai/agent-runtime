@@ -3,17 +3,17 @@ import { useTranslation } from 'react-i18next';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { Empty } from '../../components/Empty';
 import { ListSearchInput } from '../../components/ListSearchInput';
-import { Modal, ModalCancelButton } from '../../components/Modal';
 import { Pagination } from '../../components/Pagination';
+import { Switch } from '../../components/Switch';
 import { TableColumnFilter } from '../../components/TableColumnFilter';
 import {
   TableColumnSort,
   type ColumnSortValue,
 } from '../../components/TableColumnSort';
 import { useAsync } from '../../hooks/useAsync';
-import { useFormDirty } from '../../hooks/useFormDirty';
 import { useListSearch } from '../../hooks/useListSearch';
-import { ApiError, IamUser, NO_ORG_GROUP_ID, Org, OrgApi, UserApi } from '../../services/api';
+import { useRouter } from '../../router';
+import { ApiError, Org, OrgApi } from '../../services/api';
 import { toast } from '../../stores/uiStore';
 import { formatTime } from '../../utils/format';
 
@@ -21,15 +21,16 @@ type OrgSortField = 'group_id' | 'display_name' | 'status' | 'updated_at';
 
 export function OrgsPage() {
   const { t } = useTranslation();
+  const { navigate } = useRouter();
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const { searchInput, setSearchInput, searchQuery } = useListSearch();
   const [statusFilter, setStatusFilter] = useState('');
   const [sortBy, setSortBy] = useState<OrgSortField | ''>('');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
-  const [editing, setEditing] = useState<Org | null | undefined>(undefined); // undefined=关闭, null=新建
-  const [managing, setManaging] = useState<Org | null>(null);
   const [delTarget, setDelTarget] = useState<Org | null>(null);
+  const [items, setItems] = useState<Org[]>([]);
+  const [togglingId, setTogglingId] = useState<string | null>(null);
 
   const sortOptions = useMemo(
     () => [
@@ -68,7 +69,39 @@ export function OrgsPage() {
     [page, pageSize, searchQuery, statusFilter, sortBy, sortOrder],
   );
 
-  const items = data?.items ?? [];
+  useEffect(() => {
+    if (data?.items) setItems(data.items);
+  }, [data]);
+
+  const toggleStatus = async (row: Org, enabled: boolean) => {
+    if (togglingId) return;
+    const nextStatus = enabled ? 'active' : 'disabled';
+    const previous = row.status;
+    setItems((list) =>
+      list.map((item) => (item.group_id === row.group_id ? { ...item, status: nextStatus } : item)),
+    );
+    setTogglingId(row.group_id);
+    try {
+      await OrgApi.update(row.group_id, { status: nextStatus });
+      if (statusFilter !== '' && nextStatus !== statusFilter) {
+        setItems((list) => list.filter((item) => item.group_id !== row.group_id));
+      }
+      toast('success', t('success.saved'));
+    } catch (e) {
+      setItems((list) =>
+        list.map((item) =>
+          (item.group_id === row.group_id ? { ...item, status: previous } : item)),
+      );
+      toast(
+        'danger',
+        t('errors.saveFailed', {
+          detail: e instanceof ApiError ? e.detail : (e as Error).message,
+        }),
+      );
+    } finally {
+      setTogglingId(null);
+    }
+  };
 
   return (
     <>
@@ -92,7 +125,7 @@ export function OrgsPage() {
             <button className="btn sm" onClick={() => void reload()}>
               {t('common.refresh')}
             </button>
-            <button className="btn primary sm" onClick={() => setEditing(null)}>
+            <button className="btn primary sm" onClick={() => navigate('/orgs/new')}>
               + {t('iam.newOrg')}
             </button>
           </div>
@@ -127,17 +160,17 @@ export function OrgsPage() {
                       </th>
                       <th>
                         <div className="th-filter">
-                          <span className="th-filter__label">{t('iam.status')}</span>
+                          <span className="th-filter__label">{t('common.enabled')}</span>
                           <TableColumnSort
                             iconOnly
-                            label={t('iam.status')}
+                            label={t('common.enabled')}
                             value={sortBy === 'status' ? sortOrder : ''}
                             options={sortOptions}
                             onChange={(value) => handleSortChange('status', value)}
                           />
                           <TableColumnFilter
                             iconOnly
-                            label={t('iam.status')}
+                            label={t('common.enabled')}
                             value={statusFilter}
                             options={[
                               { value: '', label: t('common.all') },
@@ -180,17 +213,26 @@ export function OrgsPage() {
                           </td>
                           <td className="text-text-strong font-medium break-words">{o.display_name}</td>
                           <td className="whitespace-nowrap">
-                            {o.status === 'active' ? t('common.enabled') : t('common.disabled')}
+                            <Switch
+                              checked={o.status === 'active'}
+                              disabled={togglingId === o.group_id}
+                              aria-label={
+                                o.status === 'active' ? t('common.enabled') : t('common.disabled')
+                              }
+                              onChange={(enabled) => void toggleStatus(o, enabled)}
+                            />
                           </td>
                           <td className="mono text-[11px] text-muted whitespace-nowrap">
                             {formatTime(o.updated_at)}
                           </td>
                           <td className="whitespace-nowrap min-w-[9.5rem]">
                             <div className="flex items-center gap-1">
-                              <button className="btn sm" onClick={() => setManaging(o)}>
-                                {t('iam.members')}
-                              </button>
-                              <button className="btn sm ghost" onClick={() => setEditing(o)}>
+                              <button
+                                className="btn sm ghost"
+                                onClick={() =>
+                                  navigate(`/orgs/${encodeURIComponent(o.group_id)}`)
+                                }
+                              >
                                 {t('common.edit')}
                               </button>
                               <button className="btn sm danger" onClick={() => setDelTarget(o)}>
@@ -221,18 +263,6 @@ export function OrgsPage() {
         </div>
       </div>
 
-      {editing !== undefined && (
-        <OrgModal
-          org={editing}
-          onClose={() => setEditing(undefined)}
-          onSaved={() => {
-            setEditing(undefined);
-            void reload();
-          }}
-        />
-      )}
-      {managing && <MembersModal org={managing} onClose={() => setManaging(null)} />}
-
       <ConfirmDialog
         open={!!delTarget}
         message={t('iam.confirmDeleteOrg', { name: delTarget?.display_name ?? '' })}
@@ -255,151 +285,5 @@ export function OrgsPage() {
         onClose={() => setDelTarget(null)}
       />
     </>
-  );
-}
-
-function MembersModal({ org, onClose }: { org: Org; onClose: () => void }) {
-  const { t } = useTranslation();
-  const readOnly = org.group_id === NO_ORG_GROUP_ID; // 无组织=自动归类,只读
-  const { data: membersData, loading, reload } = useAsync(() => OrgApi.listMembers(org.group_id), [org.group_id]);
-  const { data: allUsersData } = useAsync(() => UserApi.list(), []);
-  const [search, setSearch] = useState('');
-  const [busy, setBusy] = useState('');
-
-  const members: IamUser[] = membersData?.users ?? [];
-  const memberIds = useMemo(() => new Set(members.map((u) => u.user_id)), [members]);
-  const candidates = useMemo(() => {
-    const all = allUsersData?.items ?? [];
-    const q = search.trim().toLowerCase();
-    return all.filter((u) =>
-      !memberIds.has(u.user_id) &&
-      (!q || u.user_id.toLowerCase().includes(q) || (u.display_name ?? '').toLowerCase().includes(q)),
-    );
-  }, [allUsersData, memberIds, search]);
-
-  async function add(uid: string) {
-    setBusy(uid);
-    try {
-      await OrgApi.addMembers(org.group_id, [uid]);
-      toast('success', t('success.saved'));
-      reload();
-    } catch (e) {
-      toast('danger', e instanceof ApiError ? e.detail : String(e));
-    } finally {
-      setBusy('');
-    }
-  }
-
-  async function remove(uid: string) {
-    setBusy(uid);
-    try {
-      await OrgApi.removeMember(org.group_id, uid);
-      toast('success', t('success.deleted'));
-      reload();
-    } catch (e) {
-      toast('danger', e instanceof ApiError ? e.detail : String(e));
-    } finally {
-      setBusy('');
-    }
-  }
-
-  return (
-    <Modal
-      open
-      title={`${t('iam.members')} · ${org.display_name}`}
-      onClose={onClose}
-      footer={<button className="btn primary" onClick={onClose}>{t('common.close')}</button>}
-    >
-      <label className="label">{t('iam.currentMembers')} ({members.length})</label>
-      <div style={{ maxHeight: 200, overflow: 'auto', border: '1px solid var(--border, #ddd)', borderRadius: 6, padding: 8 }}>
-        {members.map((u) => (
-          <div key={u.user_id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '3px 0' }}>
-            <span>{u.display_name} <span className="text-xs text-muted mono">{u.user_id}</span></span>
-            {!readOnly && (
-              <button className="btn sm danger" disabled={busy === u.user_id} onClick={() => remove(u.user_id)}>{t('iam.removeMember')}</button>
-            )}
-          </div>
-        ))}
-        {!loading && members.length === 0 && <div className="text-xs text-muted">{t('iam.noMembers')}</div>}
-      </div>
-
-      {readOnly ? (
-        <div className="text-xs text-muted" style={{ marginTop: 12 }}>{t('iam.noOrgReadonly')}</div>
-      ) : (
-        <>
-          <label className="label" style={{ marginTop: 12 }}>{t('iam.addMember')}</label>
-          <input className="input" placeholder={t('iam.searchUser')} value={search} onChange={(e) => setSearch(e.target.value)} />
-          <div style={{ maxHeight: 180, overflow: 'auto', border: '1px solid var(--border, #ddd)', borderRadius: 6, padding: 8, marginTop: 6 }}>
-            {candidates.map((u) => (
-              <div key={u.user_id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '3px 0' }}>
-                <span>{u.display_name} <span className="text-xs text-muted mono">{u.user_id}</span></span>
-                <button className="btn sm" disabled={busy === u.user_id} onClick={() => add(u.user_id)}>{t('iam.add')}</button>
-              </div>
-            ))}
-            {candidates.length === 0 && <div className="text-xs text-muted">{t('iam.noCandidates')}</div>}
-          </div>
-        </>
-      )}
-    </Modal>
-  );
-}
-
-function OrgModal({ org, onClose, onSaved }: { org: Org | null; onClose: () => void; onSaved: () => void }) {
-  const { t } = useTranslation();
-  const { markClean, isDirty } = useFormDirty(true);
-  const [displayName, setDisplayName] = useState(org?.display_name ?? '');
-  const [status, setStatus] = useState(org?.status ?? 'active');
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    const next = { displayName: org?.display_name ?? '', status: org?.status ?? 'active' };
-    setDisplayName(next.displayName);
-    setStatus(next.status);
-    markClean(next);
-  }, [org, markClean]);
-
-  async function save() {
-    setBusy(true);
-    try {
-      if (org) await OrgApi.update(org.group_id, { display_name: displayName, status });
-      else await OrgApi.create({ display_name: displayName });
-      toast('success', t('success.saved'));
-      onSaved();
-    } catch (e) {
-      toast('danger', e instanceof ApiError ? e.detail : String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const draft = { displayName, status };
-  const canSave = !!displayName.trim();
-
-  return (
-    <Modal
-      open
-      title={org ? t('iam.editOrg') : t('iam.newOrg')}
-      onClose={onClose}
-      dirty={isDirty(draft)}
-      footer={
-        <>
-          <ModalCancelButton className="btn" />
-          <button className="btn primary" style={{ marginLeft: 8 }} disabled={busy || !canSave} onClick={save}>{t('common.save')}</button>
-        </>
-      }
-    >
-      <label className="label">{t('iam.displayName')}</label>
-      <input className="input" value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
-      {org && (
-        <>
-          <label className="label" style={{ marginTop: 12 }}>{t('iam.status')}</label>
-          <select className="select" value={status} onChange={(e) => setStatus(e.target.value)}>
-            <option value="active">active</option>
-            <option value="disabled">disabled</option>
-          </select>
-          <div className="text-xs text-muted" style={{ marginTop: 8 }}>{t('iam.groupId')}: <span className="mono">{org.group_id}</span></div>
-        </>
-      )}
-    </Modal>
   );
 }

@@ -6,7 +6,7 @@ import {
   ServiceConfigTemplateApi,
 } from '../services/api';
 
-export function useDefinitionPresence() {
+export function useDefinitionPresence(enabled = true) {
   const [agentDefined, setAgentDefined] = useState<boolean | null>(null);
   const [poolDefined, setPoolDefined] = useState<boolean | null>(null);
   const [instanceCreated, setInstanceCreated] = useState<boolean | null>(null);
@@ -14,6 +14,7 @@ export function useDefinitionPresence() {
   const [containerDefined, setContainerDefined] = useState<boolean | null>(null);
   const revision = useGuideStore((s) => s.revision);
   useEffect(() => {
+    if (!enabled) return;
     let cancelled = false;
     void AgentTemplateApi.list({ page: 1, page_size: 1 })
       .then((r) => { if (!cancelled) setAgentDefined((r.items?.length ?? 0) > 0); })
@@ -31,7 +32,7 @@ export function useDefinitionPresence() {
       .then((r) => { if (!cancelled) setContainerDefined((r.items?.length ?? 0) > 0); })
       .catch(() => { if (!cancelled) setContainerDefined(null); });
     return () => { cancelled = true; };
-  }, [revision]);
+  }, [enabled, revision]);
   return { agentDefined, poolDefined, instanceCreated, modelDefined, containerDefined };
 }
 
