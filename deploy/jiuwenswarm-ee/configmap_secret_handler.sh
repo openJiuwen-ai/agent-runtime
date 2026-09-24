@@ -5,42 +5,38 @@ set -euo >/dev/null 2>&1
 render_secret_configmap() {
     local namespace="${DEPLOY_VARS["NAMESPACE"]}"
     local name="${DEPLOY_VARS["SECRET_CM_NAME"]}"
-    if [[ "${DEPLOY_VARS["RENDER_ONLY"]}" == "false" ]] && check_k8s_resource_exists "secret" "${name}" "${namespace}"; then
-        warning "Secret ${namespace}/${name} exists, skip rendering."
+    local file="${CONFIG["SECRET_CM_FILE"]}"
+
+    # 本次部署负责写入的密码键：DB_MODULES 推导 + redis/obs
+    local own_keys=()
+    local m
+    for m in "${DB_MODULES[@]}"; do
+        own_keys+=("${m}_DB_PASSWORD")
+    done
+    own_keys+=("REDIS_PASSWORD" "OBS_SECRET_KEY")
+
+    local key b64
+
+    # 文件不存在（首次部署）→ 完整渲染模板
+    # 文件已存在 → yq 只更新自己的密码域，不碰其他键
+    if [ ! -f "${file}" ]; then
+        for key in "${own_keys[@]}"; do
+            [ -z "${DEPLOY_VARS[$key]:-}" ] && continue
+            DEPLOY_VARS["${key}_ENCODED"]=$(printf '%s' "${DEPLOY_VARS[$key]}" | base64 -w 0)
+        done
+        render_config_template "${CONFIG["SECRET_CM_TEMPLATE_FILE"]}" "${file}" "DEPLOY_VARS"
         return
     fi
 
-    local secret_keys=(
-        "GATEWAY_DB_PASSWORD"
-        "MANAGER_DB_PASSWORD"
-        "IDENTITY_DB_PASSWORD"
-        "WEB_DB_PASSWORD"
-        "RUNTIME_DB_PASSWORD"
-        "REDIS_PASSWORD"
-        "OBS_SECRET_KEY"
-    )
-    for key in "${secret_keys[@]}"; do
-        # 空值直接跳过，无需编码
-        if [ -z "${DEPLOY_VARS[$key]:-}" ]; then
-            continue
-        fi
-
-        local ekey="${key}_ENCODED"
-        DEPLOY_VARS["$ekey"]=$(echo -n "${DEPLOY_VARS[$key]}" | base64 -w 0)
+    for key in "${own_keys[@]}"; do
+        [ -n "${DEPLOY_VARS[$key]:-}" ] || continue
+        b64=$(printf '%s' "${DEPLOY_VARS[$key]}" | base64 -w 0)
+        yq eval ".data[\"${key}\"] = \"${b64}\"" -i "${file}"
     done
-    render_config_template "${CONFIG["SECRET_CM_TEMPLATE_FILE"]}" "${CONFIG["SECRET_CM_FILE"]}" "DEPLOY_VARS"
     success "Secret configmap is rendered."
 }
 
 ensure_secret_configmap() {
-    local namespace="${DEPLOY_VARS["NAMESPACE"]}"
-    local name="${DEPLOY_VARS["SECRET_CM_NAME"]}"
-
-    if check_k8s_resource_exists "secret" "${name}" "${namespace}"; then
-        warning "Secret ${namespace}/${name} exists, skip creating."
-        return
-    fi
-
     exec_cmd kubectl apply -f ${CONFIG["SECRET_CM_FILE"]}
 }
 
