@@ -82,7 +82,8 @@ mem = MemoryEmitter()
 reset_audit_manager(AuditManager(emitter=mem))
 ```
 
-## Loki 桥接字段
+## 输出字段
 
-每条记录在规范大写字段之外，始终附加小写桥接键：``audit_type`` / ``submdl`` / ``proc`` /
-``outcome`` / ``session_id`` / ``user_id`` 等，供 Observability Web LogQL 查询。
+每条记录的 LogRecord attributes = ``format.header_fields ∪ format.content_fields`` + 固定 ``event_type``，
+以及打点 ``extra`` 中的非空键。``session_id`` / ``request_id`` / ``user_id`` 仅作入参映射到
+``trace_id`` / ``txn_seq`` / ``UID``，**不再**作为独立 attributes 写出。结果以内容字段 ``RESULT`` 为准。

@@ -19,7 +19,7 @@ from openjiuwen_runtime.foundation.audit import (
 from openjiuwen_runtime.foundation.audit.emitter import build_emitter
 
 
-def test_emit_attribute_keys_include_format_and_bridge():
+def test_emit_attribute_keys_include_format_and_event_type():
     mem = MemoryEmitter()
     mgr = AuditManager(emitter=mem)
     reset_audit_manager(mgr)
@@ -40,10 +40,21 @@ def test_emit_attribute_keys_include_format_and_bridge():
     assert enabled.issubset(set(attrs.keys()))
     assert attrs[EVENT_TYPE_ATTR] == "UA"
     assert attrs["RSPCD"] == "0000"
-    assert attrs["audit_type"] == "ua"
-    assert attrs["submdl"] == "gateway"
-    assert attrs["proc"] == "authenticate"
-    assert attrs["outcome"] == "success"
+    assert attrs["SUBMDL"] == "gateway"
+    assert attrs["PROC"] == "authenticate"
+    for bridge in (
+        "audit_type",
+        "submdl",
+        "proc",
+        "session_id",
+        "request_id",
+        "user_id",
+        "bot_id",
+        "group_id",
+        "channel_id",
+        "outcome",
+    ):
+        assert bridge not in attrs
     assert mem.records[0]["severity"] == "INFO"
 
 
@@ -101,8 +112,8 @@ def test_log_event_maps_success_to_ua():
     assert attrs["SUBMDL"] == "gateway"
     assert attrs["PROC"] == "ws_resolve_identity"
     assert attrs["RSPCD"] == "0000"
-    assert attrs["audit_type"] == "ua"
-    assert attrs["outcome"] == "success"
+    assert "audit_type" not in attrs
+    assert "outcome" not in attrs
 
 
 def test_log_event_extra_cost_and_session_mapping():

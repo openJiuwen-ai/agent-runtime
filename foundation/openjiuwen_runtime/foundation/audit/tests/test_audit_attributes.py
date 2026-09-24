@@ -182,8 +182,9 @@ def test_explicit_session_request_maps_to_trace_txn():
     )
     assert attrs["trace_id"] == "web_sess_abc"
     assert attrs["txn_seq"] == "req_001"
-    assert attrs["session_id"] == "web_sess_abc"
-    assert attrs["request_id"] == "req_001"
+    assert "session_id" not in attrs
+    assert "request_id" not in attrs
+    assert "user_id" not in attrs
 
 
 def test_extra_cost_overwrites_placeholder():
@@ -223,4 +224,32 @@ def test_extra_does_not_overwrite_non_placeholder():
         caller="t:1",
     )
     assert attrs["COST"] == "10"
+
+
+def test_extra_bridge_keys_map_without_leaking():
+    """extra 中的 session_id/request_id 映射到 trace_id/txn_seq，且不原名写出。"""
+    attrs = build_audit_attributes(
+        _snapshot(),
+        event_type="UA",
+        level="INFO",
+        fields={
+            "UA": "gateway.http_resolve_identity 成功",
+            "RSPCD": "0000",
+            "SUBMDL": "gateway",
+            "PROC": "http_resolve_identity",
+            "UID": "user1",
+            "extra": {
+                "session_id": "webhttp_abc",
+                "request_id": "req_001",
+                "agent_pod": "pod-1",
+            },
+        },
+        clock=_FixedClock(1.0),
+        caller="t:1",
+    )
+    assert attrs["trace_id"] == "webhttp_abc"
+    assert attrs["txn_seq"] == "req_001"
+    assert "session_id" not in attrs
+    assert "request_id" not in attrs
+    assert attrs["agent_pod"] == "pod-1"
 

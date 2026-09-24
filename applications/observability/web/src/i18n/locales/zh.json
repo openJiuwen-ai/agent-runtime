@@ -52,12 +52,10 @@
         "summary": "事件概要",
         "header": "头部字段 (header)",
         "content": "内容字段 (content)",
-        "bridge": "关联上下文",
         "extension": "扩展属性"
       },
       "fields": {
         "event_type": "事件类型",
-        "audit_type": "审计类型",
         "schema_version": "字段清单版本",
         "timestamp": "事件时间",
         "level": "严重度",
@@ -84,19 +82,8 @@
         "ACTION": "沙箱动作",
         "SANDBOXID": "沙箱 ID",
         "RESULT": "结果",
-        "service_name": "服务名",
-        "submdl": "子模块(桥接)",
-        "proc": "过程(桥接)",
-        "outcome": "结果(桥接)",
-        "phase": "阶段",
-        "session_id": "会话 ID",
-        "request_id": "请求 ID",
-        "user_id": "用户 ID",
-        "bot_id": "Bot ID",
-        "group_id": "Group ID",
-        "channel_id": "渠道 ID",
         "agent_pod": "Agent Pod",
-        "agent_name": "Agent 名称"
+        "method": "方法"
       }
     }
   }

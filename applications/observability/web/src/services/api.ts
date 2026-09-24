@@ -98,24 +98,8 @@ export const DESIGN_CONTENT_FIELDS = [
   'RESULT',
 ] as const;
 
-/** 关键字 + 常用桥接（Observability 运维上下文） */
-export const DESIGN_BRIDGE_FIELDS = [
-  'event_type',
-  'audit_type',
-  'service_name',
-  'submdl',
-  'proc',
-  'outcome',
-  'phase',
-  'session_id',
-  'request_id',
-  'user_id',
-  'bot_id',
-  'group_id',
-  'channel_id',
-  'agent_pod',
-  'agent_name',
-] as const;
+/** 固定写入 attributes、但不在 header/content 清单中的键 */
+export const DESIGN_FIXED_FIELDS = ['event_type'] as const;
 
 /** 展开「扩展」时默认隐藏的 OTel / Loki 噪声键 */
 export const NOISE_ATTRIBUTE_KEYS = new Set([
@@ -129,39 +113,31 @@ export const NOISE_ATTRIBUTE_KEYS = new Set([
   'flags',
   'span_id',
   'service_version',
+  'service_name',
 ]);
 
 export interface AuditLogEntry {
-  timestamp: number;  // ms（列表排序用 Loki ns）
-  auditType: string;
+  timestamp: number; // ms（列表排序用 Loki ns）
   eventType: string;
   serviceName: string;
   submdl: string;
   proc: string;
-  outcome: string;
-  phase: string;
+  result: string;
   error: string;
   traceId: string;
-  requestId: string;
-  sessionId: string;
+  txnSeq: string;
   userId: string;
-  botId: string;
-  groupId: string;
-  agentName: string;
   agentPod: string;
   body: string;
   /** Loki stream 全量 labels（含设计字段） */
   attributes: Record<string, string>;
-  details: Record<string, string>;
   raw: string;
 }
 
-function pickAttr(labels: Record<string, string>, ...keys: string[]): string {
-  for (const k of keys) {
-    const v = labels[k];
-    if (v !== undefined && v !== null && String(v).trim() !== '') {
-      return String(v);
-    }
+function pickAttr(labels: Record<string, string>, key: string): string {
+  const v = labels[key];
+  if (v !== undefined && v !== null && String(v).trim() !== '') {
+    return String(v);
   }
   return '';
 }
@@ -172,34 +148,20 @@ export function parseLokiAuditStreams(resp: LokiQueryRangeResponse): AuditLogEnt
     const labels = { ...(stream.stream ?? {}) };
     for (const [tsNs, line] of stream.values) {
       const ts = Math.floor(Number(tsNs) / 1e6);
-      const eventType = pickAttr(labels, 'event_type');
-      const auditType = pickAttr(labels, 'audit_type') || eventType.toLowerCase();
       entries.push({
         timestamp: ts,
-        auditType,
-        eventType,
+        eventType: pickAttr(labels, 'event_type'),
         serviceName: pickAttr(labels, 'service_name').replace(/^jiuwenclaw-/, ''),
-        submdl: pickAttr(labels, 'SUBMDL', 'submdl'),
-        proc: pickAttr(labels, 'PROC', 'proc'),
-        outcome: pickAttr(labels, 'outcome', 'RESULT'),
-        phase: pickAttr(labels, 'phase'),
-        error: pickAttr(labels, 'error', 'MSG'),
+        submdl: pickAttr(labels, 'SUBMDL'),
+        proc: pickAttr(labels, 'PROC'),
+        result: pickAttr(labels, 'RESULT'),
+        error: pickAttr(labels, 'MSG'),
         traceId: pickAttr(labels, 'trace_id'),
-        requestId: pickAttr(labels, 'request_id', 'txn_seq'),
-        sessionId: pickAttr(labels, 'session_id', 'trace_id'),
-        userId: pickAttr(labels, 'user_id', 'UID'),
-        botId: pickAttr(labels, 'bot_id'),
-        groupId: pickAttr(labels, 'group_id'),
-        agentName: pickAttr(labels, 'agent_name'),
+        txnSeq: pickAttr(labels, 'txn_seq'),
+        userId: pickAttr(labels, 'UID'),
         agentPod: pickAttr(labels, 'agent_pod'),
         body: line,
         attributes: labels,
-        details: Object.entries(labels)
-          .filter(([k]) => k.startsWith('audit_') && k !== 'audit_type')
-          .reduce<Record<string, string>>((acc, [k, v]) => {
-            acc[k.replace('audit_', '')] = String(v);
-            return acc;
-          }, {}),
         raw: line,
       });
     }
@@ -219,7 +181,7 @@ export function orderedDesignFields(
   }));
 }
 
-/** 扩展区：不在设计/桥接列表中的其余键 */
+/** 扩展区：不在设计清单中的其余键 */
 export function extensionFields(
   attributes: Record<string, string>,
   showNoise = false,
@@ -227,7 +189,7 @@ export function extensionFields(
   const known = new Set<string>([
     ...DESIGN_HEADER_FIELDS,
     ...DESIGN_CONTENT_FIELDS,
-    ...DESIGN_BRIDGE_FIELDS,
+    ...DESIGN_FIXED_FIELDS,
   ]);
   return Object.keys(attributes)
     .filter((k) => !known.has(k))

@@ -95,6 +95,19 @@ check_vars() {
     if [[ " ${MODULES[@]} " =~ " MANAGER " ]]; then
         DB_MODULES+=("IDENTITY")
     fi
+
+    # Gateway ConfigPoll：由副本数派生，不接受用户直接配置 GATEWAY_CONFIG_POLL_*。
+    # 多副本（>1）打开轮询以便各 Pod 从共享库热更；单副本关闭。
+    local gateway_replicas="${DEPLOY_VARS["GATEWAY_REPLICAS"]:-1}"
+    if [[ ! "${gateway_replicas}" =~ ^[0-9]+$ ]] || [[ "${gateway_replicas}" -lt 1 ]]; then
+        gateway_replicas=1
+    fi
+    DEPLOY_VARS["GATEWAY_CONFIG_POLL_INTERVAL_SECONDS"]="10"
+    if [[ "${gateway_replicas}" -gt 1 ]]; then
+        DEPLOY_VARS["GATEWAY_CONFIG_POLL_ENABLED"]="true"
+    else
+        DEPLOY_VARS["GATEWAY_CONFIG_POLL_ENABLED"]="false"
+    fi
 }
 
 check_dependency(){
