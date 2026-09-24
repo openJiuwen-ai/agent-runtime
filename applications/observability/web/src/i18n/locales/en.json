@@ -52,12 +52,10 @@
         "summary": "Summary",
         "header": "Header fields",
         "content": "Content fields",
-        "bridge": "Context",
         "extension": "Extensions"
       },
       "fields": {
         "event_type": "Event type",
-        "audit_type": "Audit type",
         "schema_version": "Schema version",
         "timestamp": "Timestamp",
         "level": "Level",
@@ -84,19 +82,8 @@
         "ACTION": "Action",
         "SANDBOXID": "Sandbox ID",
         "RESULT": "Result",
-        "service_name": "Service",
-        "submdl": "Submodule (bridge)",
-        "proc": "Procedure (bridge)",
-        "outcome": "Outcome",
-        "phase": "Phase",
-        "session_id": "Session ID",
-        "request_id": "Request ID",
-        "user_id": "User ID",
-        "bot_id": "Bot ID",
-        "group_id": "Group ID",
-        "channel_id": "Channel ID",
         "agent_pod": "Agent Pod",
-        "agent_name": "Agent name"
+        "method": "Method"
       }
     }
   }

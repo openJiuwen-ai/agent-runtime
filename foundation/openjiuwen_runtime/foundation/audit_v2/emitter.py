@@ -89,11 +89,10 @@ def build_attributes(
 ) -> dict[str, Any]:
     """Assemble the audit attribute set（默认字段清单）.
 
-    头部自动字段 + 内容要素 + 小写桥接键（供观测前端读取）。
+    头部自动字段 + 内容要素 + ``extra`` 透传。不写出规范字段别名桥接键。
     """
     snap = ctx.snapshot()
     evt = event_type.upper()
-    success = evt == "UA"
 
     def pick(explicit: Any, ctx_key: str, default: str = _PLACEHOLDER) -> str:
         if explicit is not None and str(explicit).strip():
@@ -133,18 +132,6 @@ def build_attributes(
         if fields.get(key) is not None:
             attributes[key] = fields[key]
 
-    # ---- 桥接键（观测前端依赖的小写别名） ----
-    attributes["audit_type"] = evt.lower()
-    attributes["submdl"] = attributes["SUBMDL"]
-    attributes["proc"] = attributes["PROC"]
-    attributes["outcome"] = "success" if success else "fail"
-    for key in ("session_id", "request_id", "user_id", "bot_id", "group_id"):
-        # 显式传参优先于 ContextVar 快照；UID 为同一身份的大写契约键
-        value = fields.get(key) or snap.get(key) or (
-            fields.get("UID") if key == "user_id" else None
-        )
-        if value:
-            attributes[key] = str(value)
     extra = fields.get("extra")
     if isinstance(extra, dict):
         for key, value in extra.items():

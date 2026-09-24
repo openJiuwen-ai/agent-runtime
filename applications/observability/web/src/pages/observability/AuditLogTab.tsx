@@ -7,13 +7,12 @@ import {
   extensionFields,
   DESIGN_HEADER_FIELDS,
   DESIGN_CONTENT_FIELDS,
-  DESIGN_BRIDGE_FIELDS,
   AuditLogEntry,
 } from '../../services/api';
 
-const AUDIT_TYPE_COLORS: Record<string, string> = {
-  ua: '#22c55e',
-  evt: '#ef4444',
+const EVENT_TYPE_COLORS: Record<string, string> = {
+  UA: '#22c55e',
+  EVT: '#ef4444',
 };
 
 // LogQL 字符串字面量转义：反斜杠与双引号，防止用户输入闭合/注入过滤表达式
@@ -113,9 +112,6 @@ function DetailPanel({ entry }: { entry: AuditLogEntry }) {
   const summary = orderedDesignFields(entry.attributes, summaryKeys);
   const headers = orderedDesignFields(entry.attributes, DESIGN_HEADER_FIELDS);
   const content = orderedDesignFields(entry.attributes, DESIGN_CONTENT_FIELDS);
-  const bridge = orderedDesignFields(entry.attributes, DESIGN_BRIDGE_FIELDS).filter(
-    (x) => !summaryKeys.includes(x.key as (typeof summaryKeys)[number]),
-  );
   const extras = extensionFields(entry.attributes, showNoise);
 
   const [copyError, setCopyError] = useState(false);
@@ -165,10 +161,6 @@ function DetailPanel({ entry }: { entry: AuditLogEntry }) {
         <div className="font-semibold mb-1">{t('observability.audit.sections.content')}</div>
         <FieldGrid items={content} labelOf={labelOf} />
       </section>
-      <section>
-        <div className="font-semibold mb-1">{t('observability.audit.sections.bridge')}</div>
-        <FieldGrid items={bridge} labelOf={labelOf} />
-      </section>
       {extras.length > 0 && (
         <section>
           <div className="font-semibold mb-1">{t('observability.audit.sections.extension')}</div>
@@ -185,9 +177,8 @@ export function AuditLogTab() {
   const defaultStart = new Date(defaultEnd.getTime() - 24 * 3600 * 1000);
   const [startDate, setStartDate] = useState(defaultStart.toISOString().slice(0, 10));
   const [endDate, setEndDate] = useState(defaultEnd.toISOString().slice(0, 10));
-  const [auditType, setAuditType] = useState('');
+  const [eventType, setEventType] = useState('');
   const [userId, setUserId] = useState('');
-  const [groupId, setGroupId] = useState('');
   const [entries, setEntries] = useState<AuditLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -196,16 +187,15 @@ export function AuditLogTab() {
   const logql = useMemo(() => {
     let q = '{service_name=~"jiuwenclaw-(agentserver|gateway)"}';
     const filters: string[] = [];
-    if (auditType) {
-      filters.push(`audit_type="${escapeLogqlValue(auditType)}"`);
+    if (eventType) {
+      filters.push(`event_type="${escapeLogqlValue(eventType)}"`);
     }
-    if (userId) filters.push(`user_id="${escapeLogqlValue(userId)}"`);
-    if (groupId) filters.push(`group_id="${escapeLogqlValue(groupId)}"`);
+    if (userId) filters.push(`UID="${escapeLogqlValue(userId)}"`);
     if (filters.length > 0) {
       q += ` | ${filters.join(' | ')}`;
     }
     return q;
-  }, [auditType, userId, groupId]);
+  }, [eventType, userId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -239,12 +229,12 @@ export function AuditLogTab() {
           <select
             className="input"
             style={{ width: '140px' }}
-            value={auditType}
-            onChange={(e) => setAuditType(e.target.value)}
+            value={eventType}
+            onChange={(e) => setEventType(e.target.value)}
           >
             <option value="">{t('observability.audit.allResults')}</option>
-            <option value="ua">{t('observability.audit.ua')}</option>
-            <option value="evt">{t('observability.audit.evt')}</option>
+            <option value="UA">{t('observability.audit.ua')}</option>
+            <option value="EVT">{t('observability.audit.evt')}</option>
           </select>
           <input
             type="date"
@@ -263,16 +253,9 @@ export function AuditLogTab() {
           <input
             className="input"
             style={{ width: '140px' }}
-            placeholder="UserID"
+            placeholder="UID"
             value={userId}
             onChange={(e) => setUserId(e.target.value)}
-          />
-          <input
-            className="input"
-            style={{ width: '140px' }}
-            placeholder="GroupID"
-            value={groupId}
-            onChange={(e) => setGroupId(e.target.value)}
           />
         </div>
       </div>
@@ -298,7 +281,7 @@ export function AuditLogTab() {
               {entries.map((entry, i) => {
                 const key = `${i}-${entry.timestamp}`;
                 const isExpanded = expanded === key;
-                const color = AUDIT_TYPE_COLORS[entry.auditType] ?? '#6b7280';
+                const color = EVENT_TYPE_COLORS[entry.eventType] ?? '#6b7280';
                 return (
                   <Fragment key={key}>
                     <tr
@@ -311,7 +294,7 @@ export function AuditLogTab() {
                       <td
                         className="px-3 py-2 truncate max-w-md font-medium"
                         style={{ color }}
-                        title={entry.auditType === 'evt' ? 'EVT' : 'UA'}
+                        title={entry.eventType || '-'}
                       >
                         {entry.body}
                       </td>
