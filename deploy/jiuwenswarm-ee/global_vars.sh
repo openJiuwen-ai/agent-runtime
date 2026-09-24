@@ -103,6 +103,10 @@ declare -ga ALL_MODULES=("NFS" "NFS-SC" "RABBITMQ" "MYSQL" "POSTGRESQL" "MINIO" 
 
 declare -ga MODULES=()
 
+# 本次 up 的模块中需要处理 DB 凭证/库名的清单（check_vars 依据 MODULES 推导；
+# manager 模块同时部署 identity，故 IDENTITY 也在其中）
+declare -ga DB_MODULES=()
+
 declare -A DEPLOY_VARS=(
     ["AGENT_RUNTIME_LOG_LEVEL"]="INFO"
     ["AGENT_RUNTIME_LINK_MTLS_CLUSTER_DOMAIN"]="cluster.local"
@@ -252,6 +256,7 @@ declare -A DEPLOY_VARS=(
     ["REDIS_MODE"]="standalone"
     ["REDIS_NAME"]="jiuwenclaw-redis"
     ["REDIS_PASSWORD"]=""
+    ["REDIS_USER"]=""
     ["REDIS_PORT"]="6379"
     ["RENDER_ONLY"]="false"
     ["RUNTIME_POD_CODE_PATH"]="/app/agent-runtime"
