@@ -63,6 +63,7 @@ class ServiceConfig:
     port: int = _DEFAULT_PORT
     redis_url: str = _DEFAULT_REDIS_URL
     redis_password: str | None = None
+    redis_username: str | None = None
     key_prefix: str = _DEFAULT_KEY_PREFIX
     title: str = _DEFAULT_TITLE
     request_timeout_seconds: float = _DEFAULT_REQUEST_TIMEOUT_SECONDS
@@ -262,6 +263,7 @@ class ServiceConfig:
             port=int(os.getenv("OPENJIUWEN_SERVICE_PORT", str(_DEFAULT_PORT))),
             redis_url=os.getenv("OPENJIUWEN_SERVICE_REDIS_URL", _DEFAULT_REDIS_URL),
             redis_password=(os.getenv("REDIS_PASSWORD", "").strip() or None),
+            redis_username=(os.getenv("REDIS_USER", "").strip() or None),
             key_prefix=os.getenv(
                 "OPENJIUWEN_SERVICE_REDIS_KEY_PREFIX", _DEFAULT_KEY_PREFIX
             ),

@@ -49,23 +49,6 @@ check_if_root() {
     fi
 }
 
-# ======== Check if the cluster has at least 2 nodes ======== 
-check_cluster_has_enough_nodes() {
-    if [ "${CMD}" == "down"  ]; then
-        return
-    fi
-    info "===== Checking cluster node count ====="
-
-    # Get ready node count (only Ready nodes)
-    local node_count=$(kubectl get nodes --no-headers | grep -w "Ready" | wc -l)
-
-    # Check if node count >= 2
-    if [[ ${node_count} -lt 2 ]]; then
-        error "Cluster only has ${node_count} Ready node(s), at least 2 required!"
-    fi
-
-    success "Cluster has ${node_count} Ready nodes, check passed!"
-}
 
 # 配置加载后的变量统一加工：后续新增的变量归一化/派生逻辑都放这里
 check_vars() {
@@ -100,7 +83,18 @@ check_vars() {
         error "MODE=dev with --render-only requires CURRENT_NODE_NAME, please set it in .env.custom"
     fi
 
-
+    # DB_MODULES：本次 up 的模块中需要处理 DB 凭证/库名的清单；
+    # manager 模块同时部署 identity，故 IDENTITY 也计入
+    DB_MODULES=()
+    local m
+    for m in "${MODULES[@]}"; do
+        case "$m" in
+            GATEWAY|WEB|RUNTIME|MANAGER) DB_MODULES+=("$m") ;;
+        esac
+    done
+    if [[ " ${MODULES[@]} " =~ " MANAGER " ]]; then
+        DB_MODULES+=("IDENTITY")
+    fi
 }
 
 check_dependency(){
@@ -237,8 +231,7 @@ check_if_db_up() {
             mysql)
                 DEPLOY_VARS["DB_HOST"]="${name}-headless.default"
                 DEPLOY_VARS["DB_PORT"]="3306"
-                for module in GATEWAY WEB MANAGER IDENTITY RUNTIME
-                do
+                for module in "${DB_MODULES[@]}"; do
                     DEPLOY_VARS["${module}_DB_USER"]="root"
                     DEPLOY_VARS["${module}_DB_PASSWORD"]=${DEPLOY_VARS["MYSQL_ROOT_PASSWORD"]}
                     for name in DB_NAME PG_SCHEMA; do
@@ -249,8 +242,7 @@ check_if_db_up() {
             postgresql)
                 DEPLOY_VARS["DB_HOST"]="${name}-headless.default"
                 DEPLOY_VARS["DB_PORT"]="5432"
-                for module in GATEWAY WEB MANAGER IDENTITY RUNTIME
-                do
+                for module in "${DB_MODULES[@]}"; do
                     DEPLOY_VARS["${module}_DB_USER"]="postgres"
                     DEPLOY_VARS["${module}_DB_PASSWORD"]=${DEPLOY_VARS["POSTGRESQL_PASSWORD"]}
                     for name in DB_NAME PG_SCHEMA; do
@@ -271,7 +263,7 @@ check_if_db_up() {
         error "Please define DB_PORT in .env.custom"
     fi
 
-    for module in GATEWAY WEB MANAGER IDENTITY RUNTIME; do
+    for module in "${DB_MODULES[@]}"; do
         for name in DB_USER DB_PASSWORD DB_NAME PG_SCHEMA; do
             set_db_var "${module}" "${db_type}" "${name}"
         done

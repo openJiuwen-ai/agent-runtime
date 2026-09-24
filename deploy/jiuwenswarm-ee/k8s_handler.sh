@@ -247,11 +247,52 @@ fetch_current_node_name() {
 #     current master name
 #     worker IPs
 #     other master IPs
+# =====================================================================
+# 集群版本校验：观测组件（OpenTelemetry Collector 等）要求 Kubernetes v1.25+。
+# 版本号取自 apiserver /version；minor 兼容发行版后缀（如 "25+"、"25.3-gke.0"）。
+# =====================================================================
+check_k8s_cluster_version() {
+    local raw major minor
+    raw=$(kubectl get --raw=/version 2>/dev/null) || \
+        error "Failed to get Kubernetes version, please check cluster connectivity"
+    major=$(echo "${raw}" | jq -r '.major // empty')
+    minor=$(echo "${raw}" | jq -r '.minor // empty' | tr -dc '0-9')
+    if [ -z "${major}" ] || [ -z "${minor}" ]; then
+        error "Failed to parse Kubernetes version (raw: ${raw}), please check cluster connectivity"
+    fi
+    if [ "${major}" -lt 1 ] || { [ "${major}" -eq 1 ] && [ "${minor}" -lt 25 ]; }; then
+        warning "Kubernetes v${major}.${minor} is below v1.25 (OpenTelemetry Collector requires v1.25+), disabling the observability stack (OTEL_ENABLED=false)"
+        DEPLOY_VARS["OTEL_ENABLED"]="false"
+        return
+    fi
+    info "Kubernetes version check passed: v${major}.${minor}"
+}
+
+
+# ======== Check if the cluster has at least 2 nodes ========
+check_cluster_has_enough_nodes() {
+    if [ "${CMD}" == "down"  ]; then
+        return
+    fi
+    info "===== Checking cluster node count ====="
+
+    # Get ready node count (only Ready nodes)
+    local node_count=$(kubectl get nodes --no-headers | grep -w "Ready" | wc -l)
+
+    # Check if node count >= 2
+    if [[ ${node_count} -lt 2 ]]; then
+        error "Cluster only has ${node_count} Ready node(s), at least 2 required!"
+    fi
+
+    success "Cluster has ${node_count} Ready nodes, check passed!"
+}
+
 collect_k8s_cluster_info() {
+    check_k8s_cluster_version
+    check_cluster_has_enough_nodes
     fetch_current_node_name
     fetch_current_node_ip
 }
-
 
 # Check if any node has the gateway=enable label
 if_any_nodes_gateway_label() {
