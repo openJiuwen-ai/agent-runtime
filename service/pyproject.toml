@@ -16,7 +16,7 @@ dependencies = [
     "pydantic==2.11.7",
     "pydantic[email]==2.11.7",
     "pydantic-settings==2.5.2",
-    "python-multipart>=0.0.20",
+    "python-multipart>=0.0.31",
     "greenlet>=3.3.1",
     "openjiuwen-runtime-foundation==0.1.0"
 ]

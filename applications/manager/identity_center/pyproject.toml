@@ -19,7 +19,7 @@ dependencies = [
     "structlog>=24.0",
     "PyJWT>=2.8",
     "cryptography>=42.0",
-    "python-multipart>=0.0.9",
+    "python-multipart>=0.0.31",
     "openjiuwen-runtime-foundation",
     "openjiuwen-runtime-service",
     "asyncpg>=0.29",
