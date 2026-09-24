@@ -134,7 +134,6 @@ check_if_nfs_up() {
     fi
 
     info "Use built-in NFS server"
-    fetch_current_node_ip
     DEPLOY_VARS["NFS_SERVER_ADDR"]=${DEPLOY_VARS["CURRENT_NODE_IP"]}
 }
 
