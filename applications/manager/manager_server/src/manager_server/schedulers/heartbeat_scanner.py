@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import socket
 
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 
@@ -16,6 +17,11 @@ _log = get_logger(__name__)
 _TABLE = INSTANCE_INFO_TABLE_DEF.table_name
 _PROBE_TIMEOUT = 5.0
 _PROBE_CONCURRENCY = 20
+
+# 巡检锁：多副本选主——SET NX PX 原生原子命令
+# TTL 与扫描间隔均可配（settings），锁在下一轮前自动过期，每轮重新抢；
+# 副本死亡后锁自动释放，其他副本接管。抢到锁的副本执行本轮扫描，其余跳过。
+_SCAN_LOCK_KEY = "manager:heartbeat:scan-lock"
 
 
 async def _probe_one_side(
@@ -104,9 +110,15 @@ async def scan_instance_health_once(handler: DBHandler) -> dict[str, int]:
     return stats
 
 
-async def run_heartbeat_scan_loop(stop: asyncio.Event, handler: DBHandler) -> None:
-    """周期探活循环（沿用原 heartbeat scanner 入口名，便于 app 启动挂载）。"""
+async def run_heartbeat_scan_loop(stop: asyncio.Event, handler: DBHandler, redis) -> None:
+    """周期探活循环（沿用原 heartbeat scanner 入口名，便于 app 启动挂载）。
+
+    redis 可用时：每轮先 SET NX PX 抢扫描锁（TTL 自动过期，无需主动释放），
+    抢到的副本执行本轮扫描，其余跳过。
+    redis 不可用（None）时：无锁直接扫描（探活幂等，并发无害），每次警告一次。
+    """
     interval = max(15, int(settings.MANAGER_HEARTBEAT_SCAN_INTERVAL_SECONDS or 60))
+    owner = socket.gethostname()
     while not stop.is_set():
         try:
             await asyncio.wait_for(stop.wait(), timeout=interval)
@@ -114,6 +126,11 @@ async def run_heartbeat_scan_loop(stop: asyncio.Event, handler: DBHandler) -> No
         except asyncio.TimeoutError:
             pass
         try:
+            if redis is not None and not await redis.set(
+                _SCAN_LOCK_KEY, owner, nx=True, px=settings.scan_lock_ttl_ms
+            ):
+                _log.info("scan lock held by another replica, skip this round")
+                continue
             stats = await scan_instance_health_once(handler)
             if stats["probed"]:
                 _log.info(

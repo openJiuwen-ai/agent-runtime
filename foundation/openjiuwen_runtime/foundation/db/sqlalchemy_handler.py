@@ -9,6 +9,11 @@ from sqlalchemy import Column, Integer, String, DateTime, JSON, Boolean, Float, 
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.exc import DBAPIError
+
+# init_table 建表/补索引的并发竞态错误码（多副本同时首启）
+_RACE_ERRNOS = {1050, 1061}
+_RACE_SQLSTATES = {"42P07", "42P16"}
 from sqlalchemy import select, update, delete, func
 
 from ..log import get_logger
@@ -310,14 +315,34 @@ class SQLAlchemyHandler(DBHandler):
 
         self._table_models[table_def.table_name] = table
 
-        async with self.engine.begin() as conn:
-            def init_sync(sync_conn):
-                Base.metadata.create_all(
-                    sync_conn, tables=[table.__table__]
-                )
-                self._create_table_indexes(sync_conn, table_def)
+        # 多副本并发首启：create_all/补索引存在竞态（另一副本可能刚建好同名
+        # 表/索引）。MySQL 1050=表已存在 1061=索引名重复；PG 42P07/42P16。
+        # 另一副本建成功即等价于本副本成功，视为幂等，不作为启动失败。
+        try:
+            async with self.engine.begin() as conn:
+                def init_sync(sync_conn):
+                    Base.metadata.create_all(
+                        sync_conn, tables=[table.__table__]
+                    )
+                    self._create_table_indexes(sync_conn, table_def)
 
-            await conn.run_sync(init_sync)
+                await conn.run_sync(init_sync)
+        except DBAPIError as exc:
+            dialect = self.engine.dialect.name
+            sqlstate = getattr(exc.orig, "sqlstate", None) or getattr(exc.orig, "pgcode", None)
+            errno = exc.orig.args[0] if exc.orig.args else None
+            raced = (
+                (dialect == "postgresql" and sqlstate in _RACE_SQLSTATES)
+                or (dialect == "mysql" and errno in _RACE_ERRNOS)
+                or (sqlstate in _RACE_SQLSTATES)
+            )
+            if not raced:
+                raise
+            logger.warning(
+                "init_table raced with concurrent creator (table=%s, errno=%s sqlstate=%s), "
+                "treated as idempotent",
+                table_def.table_name, errno, sqlstate,
+            )
         logger.debug("Table initialized: table_name=%s", table_def.table_name)
 
     async def _get_session(self) -> AsyncSession:

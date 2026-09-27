@@ -33,15 +33,6 @@ delete_agentserver_env_configmap() {
 gen_runtime_file() {
     local file="${CONFIG["RUNTIME_FILE"]}"
 
-    local redis_host="${DEPLOY_VARS["REDIS_HOST"]}"
-    local redis_port="${DEPLOY_VARS["REDIS_PORT"]}"
-
-    if [[ "${DEPLOY_VARS["REDIS_MODE"]}" == "cluster" ]]; then
-        DEPLOY_VARS["OPENJIUWEN_SERVICE_REDIS_URL"]="redis+cluster://${redis_host}:${redis_port}"
-    else
-        DEPLOY_VARS["OPENJIUWEN_SERVICE_REDIS_URL"]="redis://${redis_host}:${redis_port}/${DEPLOY_VARS["AGENT_RUNTIME_REDIS_DB"]}"
-    fi
-
     render_config_template "${CONFIG["RUNTIME_TEMPLATE_FILE"]}" "${file}" "DEPLOY_VARS"
     enable_dev_mode_if_needed ${file} runtime
     if [ "${DEPLOY_VARS["DB_TYPE"]}" == "postgresql" ]; then
