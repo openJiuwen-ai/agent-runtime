@@ -261,8 +261,8 @@ check_k8s_cluster_version() {
         error "Failed to parse Kubernetes version (raw: ${raw}), please check cluster connectivity"
     fi
     if [ "${major}" -lt 1 ] || { [ "${major}" -eq 1 ] && [ "${minor}" -lt 25 ]; }; then
-        warning "Kubernetes v${major}.${minor} is below v1.25 (OpenTelemetry Collector requires v1.25+), disabling the observability stack (OTEL_ENABLED=false)"
-        DEPLOY_VARS["OTEL_ENABLED"]="false"
+        warning "Kubernetes v${major}.${minor} is below v1.25 (OpenTelemetry Collector requires v1.25+), disabling the observability module"
+        DEPLOY_VARS["OBSERVABILITY_ENABLED"]="false"
         return
     fi
     info "Kubernetes version check passed: v${major}.${minor}"

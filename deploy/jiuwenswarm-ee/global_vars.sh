@@ -229,6 +229,7 @@ declare -A DEPLOY_VARS=(
     ["OBS_REGION"]="default"
     ["OBS_SECRET_KEY"]="Minio@123456"
     ["OBS_SECURE"]="false"
+    ["OBSERVABILITY_ENABLED"]="true"
     ["OTEL_ENABLED"]="true"
     ["OTEL_IMAGE"]="otel/opentelemetry-collector-contrib:0.104.0"
     ["OTEL_NAME"]="jiuwenclaw-otel-collector"

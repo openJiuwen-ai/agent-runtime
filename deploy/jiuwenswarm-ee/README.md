@@ -528,15 +528,19 @@ LOG_TO_FILE_ENABLED=false
 
 | 配置项 | 说明 |
 | --- | --- |
-| OTEL_ENABLED | 链路追踪总开关：`true` 启用业务侧 OTLP 上报并部署内置 Collector；`false` 关闭链路追踪 |
-| OTEL_EXPORTER_OTLP_ENDPOINT | 业务应用 OTLP 上报地址。留空自动指向内置 Collector（`http://jiuwenclaw-otel-collector:4318`）；填写则视为外部 OTEL，OTEL模块整体跳过部署 |
-| LOKI_URL | Observability 界面查询日志的 Loki 地址。留空自动指向内置 Loki（`http://jiuwenclaw-loki:3100`）；填写则日志写入外部 Loki，界面查询指向该地址 |
+| OBSERVABILITY_ENABLED | 观测模块总开关。`true`（默认）部署上述三个组件；`false` 整个观测模块不部署。集群 Kubernetes 版本低于 v1.25 时，部署工具会自动关闭观测模块（Collector 依赖 v1.25+ 的集群特性，低版本上无法运行） |
+| OTEL_ENABLED | 业务上报开关。控制 gateway / AgentServer 是否向 Collector 上报链路数据；`true`（默认）上报，`false` 不上报 |
+| OTEL_EXPORTER_OTLP_ENDPOINT | 链路数据的上报地址。留空时自动指向部署工具提供的内置 Collector；填写外部 Collector 地址则表示使用外部 OTEL 服务，部署工具将不再部署内置 Collector，业务数据上报到您指定的地址 |
+| LOKI_URL | 观测界面的日志查询后端地址。留空时自动指向内置 Loki；填写外部 Loki 地址则日志写入外部 Loki，观测界面从该地址查询 |
+
+**关于两个开关的分工**：`OBSERVABILITY_ENABLED` 决定"内置观测组件装不装"，`OTEL_ENABLED` 决定"业务上不上报"，二者相互独立——例如集群版本低导致内置组件无法部署时，只要您有外部 Collector，业务上报仍然可以正常开启。
 
 **部署形态组合：**
 
-- **全内置（默认推荐）**：保持 `OTEL_ENABLED="true"`，其余两项留空，自动指向内置服务；
-- **外部 OTEL**：`OTEL_EXPORTER_OTLP_ENDPOINT` 填写外部 Collector 地址，链路数据的接收与存储全部交由外部承担，观测界面与内置 Loki 一并不再部署；
-- **外部 Loki**：`LOKI_URL` 填写外部 Loki 地址，内置 Collector 与观测界面保留，业务日志落外部 Loki。
+- **全内置（默认推荐）**：保持默认值即可，无需额外配置，观测页面、业务上报与日志存储均走内置组件；
+- **外部 OTEL**：`OTEL_EXPORTER_OTLP_ENDPOINT` 填写外部 Collector 地址。业务链路数据上报到外部服务，内置 Collector 不再部署（集群版本低于 v1.25 时推荐此形态，可获得完整链路追踪）；
+- **外部 Loki**：`LOKI_URL` 填写外部 Loki 地址。内置 Collector 与观测界面正常部署，业务日志写入外部 Loki；
+- **完全关闭内置观测**：`OBSERVABILITY_ENABLED="false"`
 
 #### 3.6.2 服务部署命令
 

@@ -2,15 +2,13 @@
 set -euo >/dev/null 2>&1
 
 # 监控栈语义（loki 是 otel collector 的日志后端，二者必须成对出现）：
-#   OTEL_ENABLED=false              → 整个监控栈（otel/loki/UI）不渲染不部署
+#   OTEL_ENABLED=false              → 业务端不上报
+#   OBSERVABILITY_ENABLED=false     → 整个内置的监控栈（otel/loki/UI）不渲染不部署
 #   ENABLE_EXTERNAL_OTEL=true       → collector/loki 均由外部承担，内置栈全部跳过
 #   ENABLE_EXTERNAL_LOKI=true       → 内置 otel 保留，日志落外部 Loki，UI 指向 <<LOKI_URL>>
 #   全内置                          → otel + loki + UI
 
 render_otel_files() {
-    if [ "${DEPLOY_VARS["OTEL_ENABLED"]}" == "false" ]; then
-        return
-    fi
     if [ "${DEPLOY_VARS["ENABLE_EXTERNAL_OTEL"]}" == "true" ]; then
         return
     fi
@@ -24,6 +22,10 @@ render_otel_files() {
 }
 
 render_monitor_files() {
+    if [ "${DEPLOY_VARS["OBSERVABILITY_ENABLED"]}" == "false" ]; then
+        return
+    fi
+
     ensure_available_port "OBSERVABILITY_NODE_PORT"
     render_otel_files
     render_config_template "${CONFIG["OBSERVABILITY_TEMPLATE_FILE"]}" "${CONFIG["OBSERVABILITY_FILE"]}" "DEPLOY_VARS"
@@ -33,9 +35,6 @@ render_monitor_files() {
 
 deploy_otel() {
     local namespace="${DEPLOY_VARS["NAMESPACE"]}"
-    if [ "${DEPLOY_VARS["OTEL_ENABLED"]}" == "false" ]; then
-        return
-    fi
     if [ "${DEPLOY_VARS["ENABLE_EXTERNAL_OTEL"]}" == "true" ]; then
         return
     fi
@@ -51,6 +50,10 @@ deploy_otel() {
 }
 
 deploy_monitor() {
+    if [ "${DEPLOY_VARS["OBSERVABILITY_ENABLED"]}" == "false" ]; then
+        return
+    fi
+
     deploy_otel
     exec_cmd kubectl apply -f ${CONFIG["OBSERVABILITY_FILE"]}
     wait_k8s_resource_ready "deployment" "${DEPLOY_VARS["OBSERVABILITY_NAME"]}" "${DEPLOY_VARS["NAMESPACE"]}"
@@ -58,9 +61,6 @@ deploy_monitor() {
 }
 
 uninstall_otel() {
-    if [ "${DEPLOY_VARS["OTEL_ENABLED"]}" == "false" ]; then
-        return
-    fi
     if [ "${DEPLOY_VARS["ENABLE_EXTERNAL_OTEL"]}" == "true" ]; then
         return
     fi
@@ -75,6 +75,10 @@ uninstall_otel() {
 }
 
 uninstall_monitor() {
+    if [ "${DEPLOY_VARS["OBSERVABILITY_ENABLED"]}" == "false" ]; then
+        return
+    fi
+
     uninstall_otel
     delete_k8s_resource_by_file "${CONFIG["OBSERVABILITY_FILE"]}"
     success "Monitor module is uninstalled."
