@@ -528,7 +528,14 @@ prepare_nfs_path() {
 }
 
 check_monitor_up_dependency() {
+    # No business-side reporting means the built-in observability stack has no
+    # consumer; skip deploying it
     if [ "${DEPLOY_VARS["OTEL_ENABLED"]}" == "false" ]; then
+        DEPLOY_VARS["OBSERVABILITY_ENABLED"]="false"
+    fi
+
+    # Module disabled: observability may be served by an external stack instead
+    if [ "${DEPLOY_VARS["OBSERVABILITY_ENABLED"]}" == "false" ]; then
         return
     fi
 
