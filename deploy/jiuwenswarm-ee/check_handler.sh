@@ -307,6 +307,17 @@ check_if_obs_up() {
     DEPLOY_VARS["OBS_URL"]="${name}-headless.default:9000"
 }
 
+compose_redis_url() {
+    local host="${DEPLOY_VARS["REDIS_HOST"]}"
+    local port="${DEPLOY_VARS["REDIS_PORT"]}"
+
+    if [[ "${DEPLOY_VARS["REDIS_MODE"]}" == "cluster" ]]; then
+        DEPLOY_VARS["REDIS_URL"]="redis+cluster://${host}:${port}"
+    else
+        DEPLOY_VARS["REDIS_URL"]="redis://${host}:${port}"
+    fi
+}
+
 ensure_redis_up() {
     # 已经执行过检查，直接返回，避免重复校验
     if [[ "${DEPLOY_VARS["REDIS_CHECKED"]:-}" == "true" ]]; then
@@ -316,20 +327,22 @@ ensure_redis_up() {
     DEPLOY_VARS["REDIS_CHECKED"]="true"
 
     local namespace="${DEPLOY_VARS["NAMESPACE"]}"
-    local redis_name="${DEPLOY_VARS["REDIS_NAME"]}"
+    local name="${DEPLOY_VARS["REDIS_NAME"]}"
 
     # 已设外挂 Redis，跳过
     if [ -n "${DEPLOY_VARS["REDIS_HOST"]:-}" ]; then
         info "Use external Redis server: ${DEPLOY_VARS["REDIS_HOST"]}"
         DEPLOY_VARS["ENABLE_EXTERNAL_REDIS"]="true"
+        compose_redis_url
         return
     fi
 
-    DEPLOY_VARS["REDIS_HOST"]="${redis_name}.${namespace}"
+    DEPLOY_VARS["REDIS_HOST"]="${name}"
     DEPLOY_VARS["REDIS_PORT"]="6379"
+    compose_redis_url
 
     # 同命名空间已有 redis，直接用
-    if check_k8s_resource_exists "deployment" "${redis_name}" "${namespace}"; then
+    if check_k8s_resource_exists "deployment" "${name}" "${namespace}"; then
         info "Use built-in Redis server in namespace: ${namespace}"
         return
     fi
@@ -559,6 +572,8 @@ check_manager_up_dependency(){
     fi
 
     check_if_db_up
+    # manager 心跳选主锁也走 redis：与 gateway/runtime 同一实例解析
+    ensure_redis_up
 }
 
 check_runtime_up_dependency(){

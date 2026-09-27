@@ -38,6 +38,14 @@ class Settings(BaseSettings):
     MANAGER_HEARTBEAT_SCAN_INTERVAL_SECONDS: int = Field(
         default=60, validation_alias="MANAGER_HEARTBEAT_SCAN_INTERVAL_SECONDS"
     )
+
+    # ---- Redis（心跳巡检选主的分布式锁；URL 留空时，走无锁分支）----
+    redis_url: str = Field(default="", validation_alias="REDIS_URL")
+    redis_username: str = Field(default="", validation_alias="REDIS_USER")
+    redis_password: str = Field(default="", validation_alias="REDIS_PASSWORD")
+    # 巡检锁 TTL（毫秒）：< 扫描间隔，扫描结束自动过期，无需释放
+    scan_lock_ttl_ms: int = Field(default=30000, validation_alias="MANAGER_SCAN_LOCK_TTL_MS")
+
     # ========== 配置下发字段级加密（信封加密，密钥握手分发） ==========
     config_enc_enabled: bool = Field(
         default=False, validation_alias="CLAWMANAGER_CONFIG_ENC_ENABLED"

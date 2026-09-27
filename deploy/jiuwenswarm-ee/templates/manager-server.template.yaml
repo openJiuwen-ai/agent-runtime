@@ -40,7 +40,7 @@ metadata:
   name: <<MANAGER_SERVER_NAME>>
   namespace: <<NAMESPACE>>
 spec:
-  replicas: 1
+  replicas: <<MANAGER_SERVER_REPLICAS>>
   selector:
     matchLabels:
       app: <<MANAGER_SERVER_NAME>>
@@ -66,6 +66,10 @@ spec:
             - secretRef:
                 name: <<SECRET_CM_NAME>>
         env:
+        - name: REDIS_URL
+          value: "<<REDIS_URL>>"
+        - name: REDIS_USER
+          value: "<<REDIS_USER>>"
         - name: MANAGER_RABBITMQ_URL
           value: "<<MANAGER_RABBITMQ_URL>>"
         - name: MANAGER_REST_HOST

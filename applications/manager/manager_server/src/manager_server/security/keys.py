@@ -11,6 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from sqlalchemy.exc import DBAPIError
+
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 
 from manager_server.infrastructure.logger import get_logger
@@ -71,20 +73,39 @@ async def get_or_create_manager_signing_key(handler: DBHandler) -> ManagerSignin
     priv, pub = cp.ed25519_generate()
     fp = cp.fingerprint(pub)
     now = utc_now()
-    await handler.create(
-        _IDENTITY_TABLE,
-        {
-            "id": _IDENTITY_ID,
-            "sign_alg": SIGN_ALG,
-            "private_key": cp.b64e(priv),
-            "public_key": cp.b64e(pub),
-            "key_version": "v1",
-            "fingerprint": fp,
-            "data": None,
-            "created_at": now,
-            "updated_at": now,
-        },
-    )
+    try:
+        await handler.create(
+            _IDENTITY_TABLE,
+            {
+                "id": _IDENTITY_ID,
+                "sign_alg": SIGN_ALG,
+                "private_key": cp.b64e(priv),
+                "public_key": cp.b64e(pub),
+                "key_version": "v1",
+                "fingerprint": fp,
+                "data": None,
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+    except DBAPIError:
+        # 多副本并发首启：另一副本已生成并写入（id='default' 唯一键冲突）。
+        # 以 DB 中胜者密钥为准重新加载，保证幂等（loser 不再使用自己的密钥）
+        row = _row_to_dict(await handler.get(_IDENTITY_TABLE, {"id": _IDENTITY_ID}))
+        if not (row and row.get("private_key") and row.get("public_key")):
+            raise
+        priv = cp.b64d(row["private_key"])
+        pub = cp.b64d(row["public_key"])
+        logger.info(
+            "[keys] signing key created by another replica, reloaded fp=%s",
+            str(row.get("fingerprint") or "")[:16],
+        )
+        return ManagerSigningKey(
+            key_version=str(row.get("key_version") or "v1"),
+            private_raw=priv,
+            public_raw=pub,
+            fingerprint=str(row.get("fingerprint") or cp.fingerprint(pub)),
+        )
     logger.info("[keys] generated manager signing key version=v1 fp=%s", fp[:16])
     return ManagerSigningKey("v1", priv, pub, fp)
 
