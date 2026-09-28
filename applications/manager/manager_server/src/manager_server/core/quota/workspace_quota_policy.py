@@ -297,7 +297,7 @@ class WorkspaceQuotaPolicyService:
         bot_id: str,
     ) -> dict[str, Any] | None:
         cid = cluster_id.strip()
-        rows = await self._list_all({"cluster_id": cid, "enabled": True})
+        rows = await self.list_enabled(cluster_id=cid)
         chosen = select_effective_policy(
             rows,
             user_id=user_id,
@@ -489,6 +489,13 @@ class WorkspaceQuotaPolicyService:
                 raise ValueError("match_expr already used by an enabled policy in this cluster")
             if full and _is_full_match(_g(row, "match_expr")):
                 raise ValueError("full-match policy already exists in this cluster")
+
+    async def list_enabled(self, *, cluster_id: str) -> list[Any]:
+        """列出本集群全部启用策略，供用量合成等跨服务选路。"""
+        cid = cluster_id.strip()
+        if not cid:
+            return []
+        return await self._list_all({"cluster_id": cid, "enabled": True})
 
     async def _list_all(self, filters: dict[str, Any]) -> list[Any]:
         rows: list[Any] = []

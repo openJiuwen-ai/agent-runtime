@@ -7,7 +7,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 
-from manager_server.core.quota import WorkspaceQuotaPolicyService
+from manager_server.core.quota import WorkspaceQuotaPolicyService, WorkspaceQuotaUsageService
 from manager_server.infrastructure.db import get_db_handler
 from manager_server.routers.auth_guards import require_permission
 from manager_server.schemas.common_schemas import ResponseModel
@@ -16,6 +16,7 @@ from manager_server.schemas.quota_schemas import (
     WorkspaceQuotaPolicyCreateBody,
     WorkspaceQuotaPolicyListQuery,
     WorkspaceQuotaPolicyPatchBody,
+    WorkspaceQuotaUsageListQuery,
 )
 
 quota_router = APIRouter()
@@ -26,6 +27,10 @@ _WriteQuota = Annotated[Any, Depends(require_permission("quota:write"))]
 
 def _workspace_quota_svc(handler: DBHandler) -> WorkspaceQuotaPolicyService:
     return WorkspaceQuotaPolicyService(handler)
+
+
+def _workspace_quota_usage_svc(handler: DBHandler) -> WorkspaceQuotaUsageService:
+    return WorkspaceQuotaUsageService(handler)
 
 
 def _actor(user: Any) -> str | None:
@@ -151,4 +156,25 @@ async def get_workspace_quota_effective(
     )
     if data is None:
         raise HTTPException(status_code=404, detail="no matching workspace quota policy")
+    return ResponseModel(code=200, message="success", data=data)
+
+
+@quota_router.get(
+    "/{jiuwenclaw_id}/workspace-quota/usage",
+    response_model=ResponseModel,
+)
+async def list_workspace_quota_usage(
+    jiuwenclaw_id: str,
+    user: _ReadQuota,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+    query: Annotated[WorkspaceQuotaUsageListQuery, Query()],
+):
+    try:
+        data = await _workspace_quota_usage_svc(handler).list_usage(
+            cluster_id=jiuwenclaw_id,
+            query=query,
+            actor_id=_actor(user),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return ResponseModel(code=200, message="success", data=data)

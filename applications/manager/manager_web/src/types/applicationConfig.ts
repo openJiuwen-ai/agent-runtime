@@ -109,6 +109,42 @@ export interface WorkspaceQuotaPolicyPatchBody {
   enabled?: boolean;
 }
 
+export type WorkspaceQuotaUsageStatus = 'ok' | 'warn' | 'block';
+
+export interface WorkspaceQuotaUsage {
+  cluster_id: string;
+  user_id: string;
+  group_id: string;
+  bot_id: string;
+  used_bytes: number;
+  limit_bytes: number;
+  source_policy_id: string;
+  status: WorkspaceQuotaUsageStatus;
+  reported_at?: string | null;
+}
+
+export interface WorkspaceQuotaUsageSummary {
+  subject_count: number;
+  total_used_bytes: number;
+  ok_count: number;
+  warn_count: number;
+  block_count: number;
+  top_items: Array<
+    Pick<
+      WorkspaceQuotaUsage,
+      'user_id' | 'group_id' | 'bot_id' | 'used_bytes' | 'limit_bytes' | 'status'
+    >
+  >;
+}
+
+export interface WorkspaceQuotaUsageListResult {
+  items: WorkspaceQuotaUsage[];
+  total: number;
+  page: number;
+  page_size: number;
+  summary: WorkspaceQuotaUsageSummary;
+}
+
 export interface ListItemsResult<T> {
   items: T[];
 }

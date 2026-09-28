@@ -8,11 +8,13 @@ from .workspace_quota_policy import (
     WorkspaceQuotaPolicyService,
     select_effective_policy,
 )
+from .workspace_quota_usage import WorkspaceQuotaUsageService
 
 __all__ = (
     "APPROVAL_POLICY_PRIORITY",
     "SOURCE_APPROVAL",
     "SOURCE_MANUAL",
     "WorkspaceQuotaPolicyService",
+    "WorkspaceQuotaUsageService",
     "select_effective_policy",
 )

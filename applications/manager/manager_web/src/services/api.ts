@@ -41,6 +41,8 @@ import type {
   WorkspaceQuotaPolicy,
   WorkspaceQuotaPolicyCreateBody,
   WorkspaceQuotaPolicyPatchBody,
+  WorkspaceQuotaUsageListResult,
+  WorkspaceQuotaUsageStatus,
   A2AOutboundTemplate,
   A2ADiscoveryCandidate,
   A2ADiscoverySettings,
@@ -1481,6 +1483,22 @@ export const WorkspaceQuotaApi = {
   ) =>
     http<PageResult<WorkspaceQuotaPolicy>>(
       `${instanceBase(instanceId)}/workspace-quota/policies`,
+      { query: params },
+    ),
+  listUsage: (
+    instanceId: string,
+    params?: {
+      user_id?: string;
+      group_id?: string;
+      bot_id?: string;
+      search?: string;
+      status?: WorkspaceQuotaUsageStatus;
+      page?: number;
+      page_size?: number;
+    },
+  ) =>
+    http<WorkspaceQuotaUsageListResult>(
+      `${instanceBase(instanceId)}/workspace-quota/usage`,
       { query: params },
     ),
   create: (instanceId: string, body: WorkspaceQuotaPolicyCreateBody) =>

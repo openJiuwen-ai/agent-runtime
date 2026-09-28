@@ -328,6 +328,10 @@
     "workspaceQuota": {
       "title": "用户空间配额",
       "subtitle": "按匹配范围配置本集群的用户空间配额",
+      "tabs": {
+        "policy": "配额策略管理",
+        "usage": "用户空间用量统计"
+      },
       "new": "新建策略",
       "edit": "编辑策略",
       "searchPlaceholder": "搜索策略ID、策略名称、策略描述、匹配范围",
@@ -366,7 +370,32 @@
       "invalidLimit": "配额须为 0、正整数，或选择无限制",
       "invalidPercent": "阻断阈值必须大于提醒阈值，且都不能为负",
       "fieldRequired": "请填写{{field}}",
-      "updatedAt": "更新时间"
+      "updatedAt": "更新时间",
+      "usage": {
+        "title": "用户空间用量统计",
+        "subtitle": "展示本集群已缓存的用户空间用量。数据来自用户查看工作空间页面后的用量快照，可能略旧于最新用量。",
+        "searchPlaceholder": "搜索用户 ID、组织 ID、Bot ID",
+        "subjectCount": "主体数",
+        "subjectCountHint": "按用户、组织、Bot 三元组计数：每个有用量缓存的工作区身份算 1 个主体。",
+        "totalUsed": "总已用",
+        "warnCount": "提醒中",
+        "blockCount": "已阻断",
+        "statusChart": "状态分布",
+        "topChart": "用量 Top",
+        "userId": "用户",
+        "groupId": "组织",
+        "botId": "Bot",
+        "used": "已用",
+        "limit": "配额",
+        "percent": "使用率",
+        "status": "状态",
+        "statusOk": "正常",
+        "statusWarn": "提醒",
+        "statusBlock": "阻断",
+        "policyId": "命中策略",
+        "reportedAt": "计量时间",
+        "empty": "暂无用量缓存。用户打开用量或文件列表后会出现在此。"
+      }
     }
   },
   "instanceConfig": {

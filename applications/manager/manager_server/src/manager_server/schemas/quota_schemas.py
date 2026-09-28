@@ -59,3 +59,22 @@ class WorkspaceQuotaPolicyPatchBody(BaseModel):
     soft_percent: int | None = Field(default=None, ge=0, le=100)
     hard_percent: int | None = Field(default=None, ge=0, le=100)
     enabled: bool | None = None
+
+
+class WorkspaceQuotaUsageListQuery(BaseModel):
+    """管理面用量查询。先同步 Gateway 缓存，再查 Manager 表。"""
+
+    user_id: str | None = Field(default=None, max_length=64)
+    group_id: str | None = Field(default=None, max_length=64)
+    bot_id: str | None = Field(default=None, max_length=64)
+    search: str | None = Field(
+        default=None,
+        max_length=256,
+        description="模糊搜索 user_id / group_id / bot_id",
+    )
+    status: str | None = Field(
+        default=None,
+        description="过滤状态：ok / warn / block",
+    )
+    page: int = Field(1, ge=1)
+    page_size: int = Field(20, ge=1, le=100)
