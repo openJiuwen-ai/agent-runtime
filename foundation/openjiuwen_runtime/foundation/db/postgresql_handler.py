@@ -5,11 +5,12 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 from urllib.parse import quote_plus
 
 from sqlalchemy import DateTime, text
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from .sqlalchemy_handler import SQLAlchemyHandler
@@ -18,6 +19,47 @@ from .engine_options import get_command_timeout, get_connect_timeout
 from ..log import get_logger
 
 logger = get_logger(__name__)
+
+# init_database 建库/建 schema 的并发竞态错误码（多副本同时首启）：
+#   42P04=duplicate_database（库已存在）
+#   42P06=duplicate_schema（schema 已存在）
+#   42P07=duplicate_table（同名 relation 已存在——表/索引/序列均算 relation）
+#   42710=duplicate_object（同名命名对象已存在——如建表隐式创建的复合类型）
+#   23505=unique_violation——PG 并发 CREATE DATABASE 的标志性报错：建库会隐式
+#         向 pg_database 写入同名行，撞唯一索引 pg_database_datname_index 后
+#         报的不是 42P04 而是唯一冲突（同并发建表撞 pg_type 的模式）
+_DB_RACE_SQLSTATES = {"42P04", "42P06", "42P07", "42710", "23505"}
+
+
+async def _exec_ddl_idempotent(
+    conn: Any,
+    ddl: str,
+    method: str,
+    label: str,
+    name: str,
+) -> None:
+    """执行建库/建 schema DDL，并把多副本并发首启的竞态按幂等消化。
+
+    check-then-create 存在竞态：另一副本可能刚建好同名对象，其建成功即
+    等价于本副本成功，不作为初始化失败（错误码见 _DB_RACE_SQLSTATES）。
+    """
+    try:
+        await conn.execute(text(ddl))
+        logger.info("PostgreSQL %s created: %s=%s", label, label, name)
+    except DBAPIError as exc:
+        sqlstate = getattr(exc.orig, "sqlstate", None) or getattr(
+            exc.orig, "pgcode", None
+        )
+        if sqlstate not in _DB_RACE_SQLSTATES:
+            raise
+        logger.warning(
+            "%s raced with concurrent creator (%s=%s, sqlstate=%s), "
+            "treated as idempotent",
+            method,
+            label,
+            name,
+            sqlstate,
+        )
 
 
 class PostgreSQLHandler(SQLAlchemyHandler):
@@ -93,10 +135,17 @@ class PostgreSQLHandler(SQLAlchemyHandler):
                 )
                 if result.scalar() is None:
                     quoted = self.database.replace('"', '""')
-                    await conn.execute(text(f'CREATE DATABASE "{quoted}"'))
-                    logger.info("PostgreSQL database created: database=%s", self.database)
+                    await _exec_ddl_idempotent(
+                        conn,
+                        f'CREATE DATABASE "{quoted}"',
+                        method="_ensure_pg_db",
+                        label="database",
+                        name=self.database,
+                    )
                 else:
-                    logger.debug("PostgreSQL database already exists: database=%s", self.database)
+                    logger.debug(
+                        "PostgreSQL database already exists: database=%s", self.database
+                    )
         finally:
             await temp_engine.dispose()
 
@@ -127,10 +176,17 @@ class PostgreSQLHandler(SQLAlchemyHandler):
                 if result.scalar() is None:
                     # 安全转义双引号，规避标识符注入
                     quoted_schema = self.schema.replace('"', '""')
-                    await conn.execute(text(f'CREATE SCHEMA "{quoted_schema}"'))
-                    logger.info("PostgreSQL schema created: schema=%s", self.schema)
+                    await _exec_ddl_idempotent(
+                        conn,
+                        f'CREATE SCHEMA "{quoted_schema}"',
+                        method="_ensure_pg_schema",
+                        label="schema",
+                        name=self.schema,
+                    )
                 else:
-                    logger.debug("PostgreSQL schema already exists: schema=%s", self.schema)
+                    logger.debug(
+                        "PostgreSQL schema already exists: schema=%s", self.schema
+                    )
         finally:
             await temp_engine.dispose()
 
