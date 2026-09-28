@@ -12,8 +12,15 @@ from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.exc import DBAPIError
 
 # init_table 建表/补索引的并发竞态错误码（多副本同时首启）
+# MySQL：1050=ER_TABLE_EXISTS_ERROR（表已存在），1061=ER_DUP_KEYNAME（索引名重复）
+# PostgreSQL（并发 CREATE TABLE 依时序可能报以下任一种，均为同一良性竞态）：
+#   42P07=duplicate_table（表或索引已存在——PG 把索引也当作 relation）
+#   42710=duplicate_object（asyncpg DuplicateObjectError：并发建表撞隐式
+#         同名复合类型时可能以 "type xxx already exists" 形式报出）
+#   23505=unique_violation——建表会隐式向 pg_type 写入同名复合类型，撞唯一
+#         索引 pg_type_typname_nsp_index 后报的是唯一冲突而非 42P07
 _RACE_ERRNOS = {1050, 1061}
-_RACE_SQLSTATES = {"42P07", "42P16"}
+_RACE_SQLSTATES = {"42P07", "23505", "42710"}
 from sqlalchemy import select, update, delete, func
 
 from ..log import get_logger
@@ -316,7 +323,7 @@ class SQLAlchemyHandler(DBHandler):
         self._table_models[table_def.table_name] = table
 
         # 多副本并发首启：create_all/补索引存在竞态（另一副本可能刚建好同名
-        # 表/索引）。MySQL 1050=表已存在 1061=索引名重复；PG 42P07/42P16。
+        # 表/索引）。MySQL 1050=表已存在 1061=索引名重复；PG 42P07/42710/23505。
         # 另一副本建成功即等价于本副本成功，视为幂等，不作为启动失败。
         try:
             async with self.engine.begin() as conn:
