@@ -328,6 +328,10 @@
     "workspaceQuota": {
       "title": "User Space Quota",
       "subtitle": "Set this cluster's user space quota by match scope",
+      "tabs": {
+        "policy": "Quota Policies",
+        "usage": "Usage Statistics"
+      },
       "new": "New policy",
       "edit": "Edit policy",
       "searchPlaceholder": "Search policy ID, policy name, policy description, match scope",
@@ -366,7 +370,32 @@
       "invalidPercent": "The block threshold must be greater than the warn threshold, and neither can be negative",
       "invalidPriority": "Priority must be an integer ≥ 0",
       "fieldRequired": "Please fill in {{field}}",
-      "updatedAt": "UPDATED AT"
+      "updatedAt": "UPDATED AT",
+      "usage": {
+        "title": "User Space Usage",
+        "subtitle": "Shows cached user-space usage for this cluster. Data comes from usage snapshots after users open the workspace page and may lag the latest usage.",
+        "searchPlaceholder": "Search user ID, org ID, or bot ID",
+        "subjectCount": "Subjects",
+        "subjectCountHint": "Counted by (user, org, bot) triples: each cached workspace identity is one subject.",
+        "totalUsed": "Total used",
+        "warnCount": "Warning",
+        "blockCount": "Blocked",
+        "statusChart": "Status distribution",
+        "topChart": "Top usage",
+        "userId": "User",
+        "groupId": "Org",
+        "botId": "Bot",
+        "used": "Used",
+        "limit": "Quota",
+        "percent": "Usage %",
+        "status": "Status",
+        "statusOk": "OK",
+        "statusWarn": "Warn",
+        "statusBlock": "Block",
+        "policyId": "Policy",
+        "reportedAt": "Reported at",
+        "empty": "No usage cache yet. Rows appear after users open usage or the file list."
+      }
     }
   },
   "instanceConfig": {

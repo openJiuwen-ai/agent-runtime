@@ -35,4 +35,32 @@ WORKSPACE_QUOTA_POLICY_TABLE_DEF = TableDefinition(
     ],
 )
 
-QUOTA_TABLE_DEFINITIONS = (WORKSPACE_QUOTA_POLICY_TABLE_DEF,)
+WORKSPACE_QUOTA_USAGE_TABLE_DEF = TableDefinition(
+    table_name="workspace_quota_usage",
+    columns=[
+        ColumnDefinition("id", "integer", primary_key=True, autoincrement=True, nullable=False),
+        ColumnDefinition("cluster_id", "string", length=64, nullable=False),
+        ColumnDefinition("user_id", "string", length=64, nullable=False),
+        ColumnDefinition("group_id", "string", length=64, nullable=False),
+        ColumnDefinition("bot_id", "string", length=64, nullable=False),
+        ColumnDefinition("used_bytes", "bigint", nullable=False),
+        ColumnDefinition("limit_bytes", "bigint", nullable=False),
+        ColumnDefinition("source_policy_id", "string", length=64, nullable=False),
+        ColumnDefinition("status", "string", length=16, nullable=False),
+        ColumnDefinition("reported_at", "datetime", nullable=False),
+        ColumnDefinition("data", "json", nullable=True),
+        ColumnDefinition("created_at", "datetime", nullable=False),
+        ColumnDefinition("created_by", "string", length=64, nullable=True),
+        ColumnDefinition("updated_at", "datetime", nullable=False),
+        ColumnDefinition("updated_by", "string", length=64, nullable=True),
+    ],
+    indexes=[
+        IndexDefinition(["cluster_id", "user_id", "group_id", "bot_id"], unique=True),
+        IndexDefinition(["cluster_id", "status"]),
+    ],
+)
+
+QUOTA_TABLE_DEFINITIONS = (
+    WORKSPACE_QUOTA_POLICY_TABLE_DEF,
+    WORKSPACE_QUOTA_USAGE_TABLE_DEF,
+)
