@@ -112,6 +112,7 @@ export function ConfigGuideMenu() {
     { label: t('nav.safetyGuardrails'), to: '/safety-guardrails' },
     { label: t('nav.a2aManagement'), to: '/a2a-management' },
     { label: t('nav.extensionTemplates'), to: '/extension-config-templates' },
+    { label: t('nav.mcpTemplates'), to: '/mcp-templates' },
   ];
 
   const clusterTabs = selectedId

@@ -155,6 +155,42 @@ export type SkillPrebuiltTemplateUpdateBody = Partial<
   data?: Record<string, unknown> | null;
 };
 
+/** 远程 MCP 连接配置（管理面 MVP 不暴露 stdio）。 */
+export type McpRemoteTransport = 'sse' | 'streamable-http' | 'http';
+
+export interface McpEntry {
+  name: string;
+  transport: McpRemoteTransport | string;
+  url: string;
+  headers?: Record<string, string> | null;
+  auth_headers?: Record<string, string> | null;
+  timeout_s?: number | null;
+  [key: string]: unknown;
+}
+
+export interface McpTemplate {
+  id: number;
+  template_id: string;
+  template_name: string;
+  description?: string | null;
+  mcp_entry: McpEntry;
+  enabled: boolean;
+  /** 只读：在 Agent 模板 mcp 槽位引用本模板的 Agent 模板数 */
+  reference_count: number;
+  data?: Record<string, unknown> | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface McpTemplateCreateBody {
+  template_name: string;
+  description?: string;
+  mcp_entry: McpEntry;
+  enabled?: boolean;
+  data?: Record<string, unknown>;
+}
+
+export type McpTemplateUpdateBody = Partial<McpTemplateCreateBody>;
 
 export interface PermissionsTemplate {
   id: number;

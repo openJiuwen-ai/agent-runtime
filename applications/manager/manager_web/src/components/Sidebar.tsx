@@ -37,6 +37,7 @@ export function Sidebar() {
     '/skill-prebuilt-templates',
     '/safety-guardrails',
     '/extension-config-templates',
+    '/mcp-templates',
     '/a2a-management',
   ];
   const agentResourceActive = agentResourceChildPaths.some(
@@ -165,6 +166,17 @@ export function Sidebar() {
         <svg className="w-4 h-4 nav-item__icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M14 4l6 6m0 0l-6 6m6-6H4" />
           <path strokeLinecap="round" strokeLinejoin="round" d="M4 20h7" />
+        </svg>
+      ),
+    },
+    {
+      key: 'mcp-templates',
+      pathPrefix: '/mcp-templates',
+      href: '/mcp-templates',
+      label: t('nav.mcpTemplates'),
+      icon: (
+        <svg className="w-4 h-4 nav-item__icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M8 9l3 3-3 3m5 0h3M5 5h14a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2z" />
         </svg>
       ),
     },

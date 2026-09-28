@@ -24,6 +24,7 @@ export const TEMPLATE_REF_EDITOR_SLOTS = [
   'embedding_model',
   'skill_prebuilt',
   'extension_config',
+  'mcp',
   'permissions',
   'a2a_access_policy',
 ] as const;
