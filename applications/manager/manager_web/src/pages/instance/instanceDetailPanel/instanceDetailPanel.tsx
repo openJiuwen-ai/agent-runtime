@@ -81,7 +81,7 @@ export function InstanceDetailPanel({ instance, onOpenEditConnectivity, onRefres
             </div>
             <div className="text-muted">created</div>
             <div className="mono">{formatTime(d?.created_at)}</div>
-            <div className="text-muted">updated</div>
+            <div className="text-muted">{t('common.updatedAt')}</div>
             <div className="mono">{formatTime(d?.updated_at)}</div>
             <div className="text-muted">description</div>
             <div>{d?.description ?? '-'}</div>

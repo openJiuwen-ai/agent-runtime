@@ -6,6 +6,8 @@ import { Toaster } from './components/Toaster';
 import { ThemeToggle } from './components/ThemeToggle';
 import { LanguageSwitcher } from './components/LanguageSwitcher';
 import { ConfigGuideMenu } from './components/ConfigGuideMenu';
+import { UserMenu } from './components/UserMenu';
+import { ApprovalTodoButton } from './components/ApprovalTodoButton';
 import { OverviewPage } from './pages/OverviewPage';
 import { DocsPage } from './pages/DocsPage';
 import { InstanceListPage } from './pages/instance/InstanceListPage';
@@ -23,10 +25,15 @@ import { AuthProvider, useAuth } from './auth/AuthContext';
 import { LoginPage } from './pages/LoginPage';
 import { UsersPage } from './pages/iam/UsersPage';
 import { OrgsPage } from './pages/iam/OrgsPage';
+import { OrgsEditPage } from './pages/iam/OrgsEditPage';
+import { RolesPage } from './pages/iam/RolesPage';
+import { RolesEditPage } from './pages/iam/RolesEditPage';
+import { ApprovalPage } from './pages/approval/ApprovalPage';
+import { ApprovalEditPage } from './pages/approval/ApprovalEditPage';
 import { AgentTemplatesPage } from './pages/templates/AgentTemplatesPage';
 import { A2AManagementPage } from './pages/templates/A2AManagementPage';
 import { getProductName } from './utils/env';
-import { ApiError, UserConsoleApi } from './services/api';
+import { ApiError, AuthUser, canAccessManager, hasPermission, isPlatformAdmin, UserConsoleApi } from './services/api';
 
 interface ErrorBoundaryState {
   hasError: boolean;
@@ -65,7 +72,33 @@ class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryStat
 }
 
 function RouteView() {
+  const { t } = useTranslation();
   const { path } = useRouter();
+  const { user } = useAuth();
+  const platformAdmin = isPlatformAdmin(user);
+
+  if (!platformAdmin) {
+    if (path === '/approvals' && hasPermission(user, 'approval:read')) {
+      return <ApprovalPage />;
+    }
+    const approvalEditLimited = matchRoute('/approvals/:orderNum', path);
+    if (approvalEditLimited && hasPermission(user, 'approval:read')) {
+      return <ApprovalEditPage orderNum={approvalEditLimited.orderNum} />;
+    }
+    if (hasPermission(user, 'iam:role:read')) {
+      if (path === '/roles') {
+        return <RolesPage />;
+      }
+      if (path === '/roles/new') {
+        return <RolesEditPage />;
+      }
+      const roleEdit = matchRoute('/roles/:roleId', path);
+      if (roleEdit) {
+        return <RolesEditPage roleId={roleEdit.roleId} />;
+      }
+    }
+    return <div className="card text-sm text-muted">{t('auth.noPagePermission')}</div>;
+  }
 
   if (path === '/overview' || path === '/') {
     return <OverviewPage />;
@@ -115,6 +148,30 @@ function RouteView() {
   if (path === '/orgs') {
     return <OrgsPage />;
   }
+  if (path === '/orgs/new') {
+    return <OrgsEditPage />;
+  }
+  const orgEdit = matchRoute('/orgs/:groupId', path);
+  if (orgEdit) {
+    return <OrgsEditPage groupId={orgEdit.groupId} />;
+  }
+  if (path === '/roles') {
+    return <RolesPage />;
+  }
+  if (path === '/roles/new') {
+    return <RolesEditPage />;
+  }
+  const roleEdit = matchRoute('/roles/:roleId', path);
+  if (roleEdit) {
+    return <RolesEditPage roleId={roleEdit.roleId} />;
+  }
+  if (path === '/approvals') {
+    return <ApprovalPage />;
+  }
+  const approvalEdit = matchRoute('/approvals/:orderNum', path);
+  if (approvalEdit) {
+    return <ApprovalEditPage orderNum={approvalEdit.orderNum} />;
+  }
   if (path === '/agent-templates') {
     return <AgentTemplatesPage />;
   }
@@ -146,6 +203,14 @@ function RouteView() {
   const instanceStatus = matchRoute('/instances/:id/status', path);
   if (instanceStatus) {
     return <InstanceDetailPage instanceId={instanceStatus.id} tab="status" />;
+  }
+  const instanceQuota = matchRoute('/instances/:id/quota', path);
+  if (instanceQuota) {
+    return <InstanceDetailPage instanceId={instanceQuota.id} tab="workspaceQuota" />;
+  }
+  const instanceWorkspaceQuota = matchRoute('/instances/:id/workspace-quota', path);
+  if (instanceWorkspaceQuota) {
+    return <InstanceDetailPage instanceId={instanceWorkspaceQuota.id} tab="workspaceQuota" />;
   }
   const instanceTokenQuota = matchRoute('/instances/:id/token-quota', path);
   if (instanceTokenQuota) {
@@ -192,6 +257,7 @@ function Shell() {
           >
             {t('docs.entry')}
           </button>
+          <ApprovalTodoButton />
           <LanguageSwitcher />
           <ThemeToggle />
           <UserMenu />
@@ -207,45 +273,35 @@ function Shell() {
   );
 }
 
-function UserMenu() {
-  const { t } = useTranslation();
-  const { user, logout } = useAuth();
-  if (!user) return null;
-  return (
-    <div className="flex items-center gap-2">
-      <span className="text-sm text-muted">
-        {user.display_name}
-        <span className="badge ml-1">{user.is_admin ? t('iam.roleAdmin') : t('iam.roleUser')}</span>
-      </span>
-      <button className="btn" onClick={() => void logout()}>{t('auth.logout')}</button>
-    </div>
-  );
-}
-
-/** 已登录用户的默认落地页:管理员→/manager,普通用户→/user（随后进入同源 User Web）。 */
-function roleHome(isAdmin: boolean): string {
-  return isAdmin ? '/manager' : '/user';
+/** 已登录用户的默认落地页:平台/管理员类型角色→/manager,有限权限→对应页,否则→/user。 */
+function roleHome(user: AuthUser): string {
+  if (isPlatformAdmin(user) || user.manager_access) return '/manager';
+  if (hasPermission(user, 'approval:read')) return '/manager/approvals';
+  if (hasPermission(user, 'iam:role:read')) return '/manager/roles';
+  return '/user';
 }
 
 /** /auth:已登录则按角色跳走,否则展示登录页。 */
 function AuthRoute() {
   const { user } = useAuth();
-  if (user) return <Navigate to={roleHome(user.is_admin)} replace />;
+  if (user) return <Navigate to={roleHome(user)} replace />;
   return <LoginPage />;
 }
 
-/** 登录 + 角色守卫:未登录→/auth;要求 admin 但非 admin→/user。 */
-function RequireAuth({ admin, children }: { admin?: boolean; children: ReactNode }) {
+/** 登录 + 角色守卫:未登录→/auth;要求管理面但无资格→/user。 */
+function RequireAuth({ manager, children }: { manager?: boolean; children: ReactNode }) {
   const { user } = useAuth();
   if (!user) return <Navigate to="/auth" replace />;
-  if (admin && !user.is_admin) return <Navigate to="/user" replace />;
+  if (manager && !canAccessManager(user)) {
+    return <Navigate to="/user" replace />;
+  }
   return <>{children}</>;
 }
 
 /** 根/未知路径:按登录态与角色重定向。 */
 function RootRedirect() {
   const { user } = useAuth();
-  return <Navigate to={user ? roleHome(user.is_admin) : '/auth'} replace />;
+  return <Navigate to={user ? roleHome(user) : '/auth'} replace />;
 }
 
 function readCookie(name: string): string {
@@ -343,7 +399,7 @@ function Gate() {
       <Route
         path="/manager/*"
         element={
-          <RequireAuth admin>
+          <RequireAuth manager>
             <RouterProvider basename="/manager">
               <Shell />
             </RouterProvider>

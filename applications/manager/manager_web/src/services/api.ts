@@ -38,6 +38,9 @@ import type {
   LoggingConfigUpsertBody,
   AuditLogConfig,
   AuditLogConfigUpsertBody,
+  WorkspaceQuotaPolicy,
+  WorkspaceQuotaPolicyCreateBody,
+  WorkspaceQuotaPolicyPatchBody,
   A2AOutboundTemplate,
   A2ADiscoveryCandidate,
   A2ADiscoverySettings,
@@ -266,9 +269,21 @@ export const SystemApi = {
 export interface AuthUser {
   user_id: string;
   display_name: string;
-  is_admin: boolean;
+  /** @deprecated 不再参与权限；仅兼容旧 /me 字段 */
+  is_admin?: boolean;
   status: string;
   groups?: string[];
+  role_ids?: string[];
+  permissions?: string[];
+  manager_access?: boolean;
+  is_platform_admin?: boolean;
+}
+export interface AuthzSelf {
+  user_id: string;
+  role_ids: string[];
+  permissions: string[];
+  manager_access: boolean;
+  is_platform_admin: boolean;
 }
 export interface TokenResponse {
   access_token: string;
@@ -279,6 +294,30 @@ export interface TokenResponse {
 export interface FederationConnection {
   connection_id: string;
   name: string;
+}
+
+async function withManagerAuthorization(user: AuthUser): Promise<AuthUser> {
+  const authz = await http<AuthzSelf>('/v1/authz/me');
+  return {
+    ...user,
+    role_ids: authz.role_ids,
+    permissions: authz.permissions,
+    manager_access: authz.manager_access,
+    is_platform_admin: authz.is_platform_admin,
+  };
+}
+
+export function hasPermission(user: AuthUser | null, permissionId: string): boolean {
+  return !!user?.permissions?.includes(permissionId);
+}
+
+export function isPlatformAdmin(user: AuthUser | null): boolean {
+  return !!user?.is_platform_admin
+    || !!user?.role_ids?.includes('platform_admin');
+}
+
+export function canAccessManager(user: AuthUser | null): boolean {
+  return !!user?.manager_access || isPlatformAdmin(user);
 }
 
 // 认证全部走独立认证服务(经 /idp 反代)。claw_manager 不再有登录端点。
@@ -301,7 +340,7 @@ export const AuthApi = {
     }
     const t = (await resp.json()) as TokenResponse;
     setTokens(t.access_token, t.refresh_token);
-    return idpHttp<AuthUser>('/v1/auth/me');
+    return withManagerAuthorization(await idpHttp<AuthUser>('/v1/auth/me'));
   },
   federationConnections: () =>
     idpHttp<{ connections: FederationConnection[] }>('/v1/auth/federation/connections'),
@@ -317,10 +356,13 @@ export const AuthApi = {
       body: { code },
     });
     setTokens(t.access_token, t.refresh_token);
-    return idpHttp<AuthUser>('/v1/auth/me');
+    return withManagerAuthorization(await idpHttp<AuthUser>('/v1/auth/me'));
   },
-  me: () => idpHttp<AuthUser>('/v1/auth/me'),
-  myOrgs: () => idpHttp<{ orgs: Org[] }>('/v1/auth/me/orgs'),
+  me: async () => withManagerAuthorization(await idpHttp<AuthUser>('/v1/auth/me')),
+  myOrgs: async () => {
+    const data = await idpHttp<{ orgs: Org[] }>('/v1/auth/me/orgs');
+    return { orgs: excludeNoOrgItems(data.orgs) };
+  },
   logout: async (): Promise<void> => {
     try {
       if (refreshToken) {
@@ -349,12 +391,177 @@ export interface IamUser {
   username?: string | null;
   identity_provider?: 'local' | 'federated' | string;
   display_name: string;
-  is_admin: boolean;
+  /** @deprecated 目录字段保留，不参与权限展示 */
+  is_admin?: boolean;
   status: string;
   created_at: string | null;
   updated_at: string | null;
   group_ids?: string[];
 }
+
+export interface PermissionDefinition {
+  permission_id: string;
+  name: string;
+  description: string | null;
+  resource_type: string;
+  action: string;
+  scope: 'admin' | 'org' | 'user';
+  enabled: boolean;
+}
+
+export interface AuthzRole {
+  role_id: string;
+  name: string;
+  description: string | null;
+  scope: 'admin' | 'org' | 'user';
+  is_system: boolean;
+  enabled: boolean;
+  permission_ids: string[];
+  user_ids: string[];
+  assignee_count: number;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+/** 对应 authz_role_user 表一行 */
+export interface AuthzRoleUser {
+  role_id: string;
+  user_id: string;
+  granted_by: string | null;
+  expires_at: string | null;
+  created_at: string | null;
+  created_by: string | null;
+  updated_at: string | null;
+  updated_by: string | null;
+}
+
+export const AuthzApi = {
+  permissions: (params?: {
+    enabled?: boolean;
+    scope?: 'admin' | 'org' | 'user';
+    search?: string;
+  }) => http<{ items: PermissionDefinition[] }>('/v1/authz/permissions', { query: params }),
+  roles: (params?: {
+    page?: number;
+    page_size?: number;
+    enabled?: boolean;
+    scope?: 'admin' | 'org' | 'user';
+    search?: string;
+    sort_by?: 'name' | 'description' | 'updated_at' | 'role_id';
+    sort_order?: 'asc' | 'desc';
+  }) => http<PageResult<AuthzRole>>('/v1/authz/roles', { query: params }),
+  getRole: (roleId: string) =>
+    http<AuthzRole>(`/v1/authz/roles/${encodeURIComponent(roleId)}`),
+  createRole: (body: {
+    role_id: string;
+    name: string;
+    description?: string | null;
+    scope: 'admin' | 'org' | 'user';
+    permission_ids: string[];
+  }) => http<AuthzRole>('/v1/authz/roles', { method: 'POST', body }),
+  updateRole: (
+    roleId: string,
+    body: {
+      name?: string;
+      description?: string | null;
+      scope?: 'admin' | 'org' | 'user';
+      enabled?: boolean;
+      permission_ids?: string[];
+    },
+  ) => http<AuthzRole>(`/v1/authz/roles/${encodeURIComponent(roleId)}`, {
+    method: 'PATCH',
+    body,
+  }),
+  deleteRole: (roleId: string) =>
+    http<{ role_id: string; deleted: boolean }>(
+      `/v1/authz/roles/${encodeURIComponent(roleId)}`,
+      { method: 'DELETE' },
+    ),
+  roleUsers: (roleId: string, params?: {
+    page?: number;
+    page_size?: number;
+    search?: string;
+    sort_by?: 'user_id' | 'granted_by' | 'expires_at' | 'created_at' | 'updated_at';
+    sort_order?: 'asc' | 'desc';
+  }) => http<PageResult<AuthzRoleUser>>(
+    `/v1/authz/roles/${encodeURIComponent(roleId)}/users`,
+    { query: params },
+  ),
+  assignUsers: (roleId: string, body: {
+    user_ids: string[];
+    expires_at?: string | null;
+  }) => http<AuthzRole>(`/v1/authz/roles/${encodeURIComponent(roleId)}/users`, {
+    method: 'POST',
+    body,
+  }),
+  replaceUsers: (roleId: string, user_ids: string[]) =>
+    http<AuthzRole>(`/v1/authz/roles/${encodeURIComponent(roleId)}/users`, {
+      method: 'PUT',
+      body: { user_ids },
+    }),
+};
+
+export interface ApprovalRecord {
+  record_id: string;
+  order_num: string;
+  operator_id: string;
+  action: 'approve' | 'reject' | 'cancel';
+  comment: string | null;
+  created_at: string | null;
+}
+
+export interface ApprovalOrder {
+  order_num: string;
+  business_type: string;
+  title: string;
+  status: 'pending' | 'approved' | 'rejected' | 'cancelled';
+  applicant_id: string;
+  approver_id: string | null;
+  group_id: string;
+  bot_id: string;
+  cluster_id: string;
+  reason?: string;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface ApprovalDetail extends ApprovalOrder {
+  reason: string;
+  apply_data: {
+    workspace_key: string;
+    current_limit_bytes: number;
+    requested_limit_bytes: number;
+    used_bytes: number;
+    usage_percent: number;
+    source_policy_id: string;
+  };
+  result_data: {
+    policy_id: string;
+    limit_bytes: number;
+    sync_status: 'success' | 'failed';
+    sync_detail?: string | null;
+  } | null;
+  finished_at: string | null;
+  records: ApprovalRecord[];
+}
+
+export const ApprovalApi = {
+  list: (params?: {
+    business_type?: string;
+    view?: 'todo' | 'mine';
+    status?: ApprovalOrder['status'];
+    group_id?: string;
+    /** 匹配单号、标题、申请说明 */
+    search?: string;
+  }) => http<{ items: ApprovalOrder[] }>('/v1/approvals', { query: params }),
+  get: (orderNum: string) =>
+    http<ApprovalDetail>(`/v1/approvals/${encodeURIComponent(orderNum)}`),
+  act: (orderNum: string, action: 'approve' | 'reject', comment?: string) =>
+    http<{ order_num: string; status: string; policy_id: string | null }>(
+      `/v1/approvals/${encodeURIComponent(orderNum)}/actions`,
+      { method: 'POST', body: { action, comment } },
+    ),
+};
 export type MatchExpr = string | string[];
 /** instance_agent_resource 表一行（授权即实例化）。 */
 export interface InstanceAgentResource {
@@ -395,19 +602,44 @@ interface IamPaged<T> {
   page_size: number;
 }
 
+/** 无组织保留组的 group_id（与后端 NO_ORG_GROUP_ID 一致）。后台仍管理，前端列表/选择器不展示。 */
+export const NO_ORG_GROUP_ID = '__none__';
+
+export function isNoOrgGroupId(groupId: string | null | undefined): boolean {
+  return !groupId || groupId === NO_ORG_GROUP_ID;
+}
+
+function excludeNoOrgItems<T extends { group_id: string }>(items: T[] | undefined | null): T[] {
+  return (items ?? []).filter((item) => !isNoOrgGroupId(item.group_id));
+}
+
+function excludeNoOrgPage(data: IamPaged<Org>): IamPaged<Org> {
+  const rawItems = data.items ?? [];
+  const items = excludeNoOrgItems(rawItems);
+  const removed = rawItems.length - items.length;
+  return {
+    ...data,
+    items,
+    total: Math.max(0, (data.total ?? rawItems.length) - removed),
+  };
+}
+
 export const OrgApi = {
-  list: (params?: {
+  list: async (params?: {
     page?: number;
     page_size?: number;
     search?: string;
     status?: string;
     sort_by?: 'group_id' | 'display_name' | 'status' | 'created_at' | 'updated_at';
     sort_order?: 'asc' | 'desc';
-  }) =>
-    idpHttp<IamPaged<Org>>('/v1/orgs/', {
+  }) => {
+    const data = await idpHttp<IamPaged<Org>>('/v1/orgs/', {
       query: { page: 1, page_size: 200, ...params },
-    }),
+    });
+    return excludeNoOrgPage(data);
+  },
   create: (body: { group_id?: string; display_name: string }) => idpHttp<Org>('/v1/orgs/', { method: 'POST', body }),
+  get: (gid: string) => idpHttp<Org>(`/v1/orgs/${encodeURIComponent(gid)}`),
   update: (gid: string, body: { display_name?: string; status?: string }) =>
     idpHttp<Org>(`/v1/orgs/${encodeURIComponent(gid)}`, { method: 'PATCH', body }),
   remove: (gid: string) => idpHttp<{ deleted: boolean }>(`/v1/orgs/${encodeURIComponent(gid)}`, { method: 'DELETE' }),
@@ -418,32 +650,28 @@ export const OrgApi = {
     idpHttp<{ removed: boolean }>(`/v1/orgs/${encodeURIComponent(gid)}/members/${encodeURIComponent(userId)}`, { method: 'DELETE' }),
 };
 
-/** 无组织保留组的 group_id（与后端 NO_ORG_GROUP_ID 一致）。 */
-export const NO_ORG_GROUP_ID = '__none__';
-
 export const UserApi = {
   list: (params?: {
     page?: number;
     page_size?: number;
     search?: string;
     status?: string;
-    is_admin?: boolean;
-    sort_by?: 'user_id' | 'display_name' | 'is_admin' | 'status' | 'created_at' | 'updated_at';
+    sort_by?: 'user_id' | 'display_name' | 'status' | 'created_at' | 'updated_at';
     sort_order?: 'asc' | 'desc';
   }) =>
     idpHttp<IamPaged<IamUser>>('/v1/users/', {
       query: { page: 1, page_size: 200, ...params },
     }),
   get: (id: string) => idpHttp<IamUser>(`/v1/users/${encodeURIComponent(id)}`),
-  create: (body: { user_id?: string; display_name: string; is_admin?: boolean; username: string; password: string }) =>
+  create: (body: { user_id?: string; display_name: string; username: string; password: string }) =>
     idpHttp<IamUser>('/v1/users/', { method: 'POST', body }),
-  update: (id: string, body: { display_name?: string; is_admin?: boolean; status?: string; password?: string }) =>
+  update: (id: string, body: { display_name?: string; status?: string; password?: string }) =>
     idpHttp<IamUser>(`/v1/users/${encodeURIComponent(id)}`, { method: 'PATCH', body }),
   remove: (id: string) => idpHttp<{ deleted: boolean }>(`/v1/users/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   setOrgs: (id: string, group_ids: string[]) =>
     idpHttp<{ group_ids: string[] }>(`/v1/users/${encodeURIComponent(id)}/orgs`, { method: 'PUT', body: { group_ids } }),
   batchCreate: (
-    users: Array<{ username: string; password: string; display_name?: string; is_admin?: boolean; orgs?: string[] }>,
+    users: Array<{ username: string; password: string; display_name?: string; orgs?: string[] }>,
   ) =>
     idpHttp<{
       summary: { total: number; ok: number; failed: number };
@@ -810,7 +1038,10 @@ export interface UserAgentContext {
 
 // 当前登录用户视角：身份来自 JWT；组合由 instance_grant + instance_agent_resource 算出。
 export const UserConsoleApi = {
-  orgs: () => idpHttp<{ orgs: Org[] }>('/v1/auth/me/orgs'),
+  orgs: async () => {
+    const data = await idpHttp<{ orgs: Org[] }>('/v1/auth/me/orgs');
+    return { orgs: excludeNoOrgItems(data.orgs) };
+  },
   agentContexts: () => http<{ contexts: UserAgentContext[] }>('/v1/user-console/agent-contexts'),
   /** 设置用户面动态反代 Cookie（jiuwenclaw_id） */
   setActiveCluster: (jiuwenclaw_id: string) =>
@@ -1223,6 +1454,50 @@ export const LoggingApi = {
     http<LoggingConfig>(`${instanceBase(instanceId)}/logging`, { method: 'PUT', body }),
   remove: (instanceId: string) =>
     http<void>(`${instanceBase(instanceId)}/logging`, { method: 'DELETE' }),
+};
+
+export const WorkspaceQuotaApi = {
+  list: (
+    instanceId: string,
+    params?: {
+      policy_id?: string;
+      enabled?: boolean;
+      search?: string;
+      sort_by?:
+        | 'policy_name'
+        | 'policy_desc'
+        | 'priority'
+        | 'match_expr'
+        | 'limit_bytes'
+        | 'soft_percent'
+        | 'hard_percent'
+        | 'source'
+        | 'source_order_num'
+        | 'updated_at';
+      sort_order?: 'asc' | 'desc';
+      page?: number;
+      page_size?: number;
+    },
+  ) =>
+    http<PageResult<WorkspaceQuotaPolicy>>(
+      `${instanceBase(instanceId)}/workspace-quota/policies`,
+      { query: params },
+    ),
+  create: (instanceId: string, body: WorkspaceQuotaPolicyCreateBody) =>
+    http<WorkspaceQuotaPolicy>(`${instanceBase(instanceId)}/workspace-quota/policies`, {
+      method: 'POST',
+      body,
+    }),
+  update: (instanceId: string, policyId: string, body: WorkspaceQuotaPolicyPatchBody) =>
+    http<WorkspaceQuotaPolicy>(
+      `${instanceBase(instanceId)}/workspace-quota/policies/${encodeURIComponent(policyId)}`,
+      { method: 'PATCH', body },
+    ),
+  remove: (instanceId: string, policyId: string) =>
+    http<void>(
+      `${instanceBase(instanceId)}/workspace-quota/policies/${encodeURIComponent(policyId)}`,
+      { method: 'DELETE' },
+    ),
 };
 
 export const AuditLogApi = {

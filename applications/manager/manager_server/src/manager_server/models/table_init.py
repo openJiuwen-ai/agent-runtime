@@ -14,6 +14,9 @@ from manager_server.models.application_config_models import (
     LOG_MASKING_RULE_TABLE_DEF,
     LOGGING_CONFIG_TABLE_DEF,
 )
+from manager_server.models.approval_models import APPROVAL_TABLE_DEFINITIONS
+from manager_server.models.quota_models import QUOTA_TABLE_DEFINITIONS
+from manager_server.models.authz_models import AUTHZ_TABLE_DEFINITIONS
 from manager_server.models.instance_access_models import INSTANCE_ACCESS_TABLE_DEFINITIONS
 from manager_server.models.instance_models import INSTANCE_INFO_TABLE_DEF
 from manager_server.models.instance_resource_models import INSTANCE_RESOURCE_TABLE_DEFINITIONS
@@ -67,6 +70,9 @@ ALL_TABLE_DEFINITIONS = (
     JID_TEMPLATE_REF_TABLE_DEF,
     *INSTANCE_ACCESS_TABLE_DEFINITIONS,
     *INSTANCE_RESOURCE_TABLE_DEFINITIONS,
+    *AUTHZ_TABLE_DEFINITIONS,
+    *QUOTA_TABLE_DEFINITIONS,
+    *APPROVAL_TABLE_DEFINITIONS,
 )
 
 
@@ -109,7 +115,64 @@ async def _migrate_a2a_discovery_settings(handler: DBHandler) -> None:
                 raise
 
 
+_BIGINT_TYPE_PATCH_APPLIED = False
+
+
+def _ensure_bigint_type_support() -> None:
+    """旧版 foundation 不认识 ``bigint`` 时会落成无长度 VARCHAR。
+
+    MySQL 的 ``create_all`` 在编译阶段失败，事务回滚，新表不会出现。
+    通过 getattr/setattr 做兼容补丁，避免直接访问受保护成员触发 G.CLS.11。
+    """
+    global _BIGINT_TYPE_PATCH_APPLIED
+    if _BIGINT_TYPE_PATCH_APPLIED:
+        return
+
+    from sqlalchemy import BigInteger, String
+    from openjiuwen_runtime.foundation.db.table_def import ColumnDefinition
+
+    getter = getattr(SQLAlchemyHandler, "_get_sqlalchemy_type", None)
+    sql_getter = getattr(SQLAlchemyHandler, "_get_column_sql_type", None)
+    if getter is None or sql_getter is None:
+        _BIGINT_TYPE_PATCH_APPLIED = True
+        return
+
+    probe = object.__new__(SQLAlchemyHandler)
+    try:
+        sa_type = getter(probe, "bigint")
+        sql_type = str(
+            sql_getter(probe, ColumnDefinition("x", "bigint", nullable=False))
+        ).upper()
+    except Exception:  # noqa: BLE001 - probe may fail on incomplete handler stubs
+        sa_type = None
+        sql_type = ""
+
+    # 现行 foundation 已原生支持 bigint，无需再打补丁。
+    maps_to_string = sa_type is String or isinstance(sa_type, String)
+    if sql_type == "BIGINT" and sa_type is not None and not maps_to_string:
+        _BIGINT_TYPE_PATCH_APPLIED = True
+        return
+
+    def _get_sqlalchemy_type(self, data_type: str, length=None):
+        if str(data_type or "").lower() == "bigint":
+            return BigInteger
+        return getter(self, data_type, length)
+
+    def _get_column_sql_type(self, col_def):
+        if str(getattr(col_def, "data_type", "") or "").lower() == "bigint":
+            return "BIGINT"
+        return sql_getter(self, col_def)
+
+    setattr(SQLAlchemyHandler, "_get_sqlalchemy_type", _get_sqlalchemy_type)
+    setattr(SQLAlchemyHandler, "_get_column_sql_type", _get_column_sql_type)
+    _BIGINT_TYPE_PATCH_APPLIED = True
+
+
 async def init_all_tables(handler: DBHandler) -> None:
+    _ensure_bigint_type_support()
     for table_def in ALL_TABLE_DEFINITIONS:
         await handler.init_table(table_def)
     await _migrate_a2a_discovery_settings(handler)
+    from manager_server.core.authz import seed_authz_defaults
+
+    await seed_authz_defaults(handler)

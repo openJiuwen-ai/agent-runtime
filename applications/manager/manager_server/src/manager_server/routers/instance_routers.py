@@ -19,7 +19,7 @@ from manager_server.core.instance.pod_status_cache import (
     get_pod_status_snapshot,
 )
 from manager_server.infrastructure.db import get_db_handler
-from manager_server.routers.deps import AdminUser
+from manager_server.routers.auth_guards import AdminUser
 from manager_server.schedulers.heartbeat_scanner import scan_instance_health_once
 from manager_server.schemas.common_schemas import ResponseModel
 from manager_server.schemas.instance_schemas import (

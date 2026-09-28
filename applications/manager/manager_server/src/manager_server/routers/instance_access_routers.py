@@ -15,7 +15,7 @@ from openjiuwen_runtime.foundation.db.handler import DBHandler
 from manager_server.core.instance_access import org_gateway_service, user_gateway_service
 from manager_server.infrastructure.db import get_db_handler
 from manager_server.infrastructure.jiuwenclaw_id import validate_jiuwenclaw_id
-from manager_server.routers.deps import require_admin
+from manager_server.routers.auth_guards import require_admin
 from manager_server.schemas.common_schemas import ResponseModel
 from manager_server.schemas.instance_access_schemas import (
     InstanceBindBody,

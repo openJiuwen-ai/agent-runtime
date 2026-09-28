@@ -38,7 +38,7 @@ from manager_server.core.template.skill_prebuilt_template import (
     SkillPrebuiltTemplateService,
 )
 from manager_server.infrastructure.db import get_db_handler
-from manager_server.routers.deps import require_admin
+from manager_server.routers.auth_guards import require_admin
 from manager_server.schemas.common_schemas import ResponseModel
 from manager_server.schemas.template_schemas import (
     A2AAccessPolicyTemplateCreateBody,

@@ -6,6 +6,7 @@ import { Empty } from '../../components/Empty';
 import { ListSearchInput } from '../../components/ListSearchInput';
 import { Modal, ModalCancelButton } from '../../components/Modal';
 import { Pagination } from '../../components/Pagination';
+import { Switch } from '../../components/Switch';
 import { TableColumnFilter } from '../../components/TableColumnFilter';
 import {
   TableColumnSort,
@@ -14,12 +15,12 @@ import {
 import { useAsync } from '../../hooks/useAsync';
 import { useFormDirty } from '../../hooks/useFormDirty';
 import { useListSearch } from '../../hooks/useListSearch';
-import { ApiError, IamUser, NO_ORG_GROUP_ID, Org, OrgApi, UserApi } from '../../services/api';
+import { ApiError, IamUser, UserApi } from '../../services/api';
 import { toast } from '../../stores/uiStore';
 import { formatTime } from '../../utils/format';
 import { isValidIdentityId, sanitizeIdentityIdInput } from '../../utils/identityId';
 
-type UserSortField = 'user_id' | 'display_name' | 'is_admin' | 'status' | 'updated_at';
+type UserSortField = 'user_id' | 'display_name' | 'status' | 'updated_at';
 
 export function UsersPage() {
   const { t } = useTranslation();
@@ -27,15 +28,13 @@ export function UsersPage() {
   const [pageSize, setPageSize] = useState(20);
   const { searchInput, setSearchInput, searchQuery } = useListSearch();
   const [statusFilter, setStatusFilter] = useState('');
-  const [roleFilter, setRoleFilter] = useState(''); // '' | 'true' | 'false'
   const [sortBy, setSortBy] = useState<UserSortField | ''>('');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [editing, setEditing] = useState<IamUser | null | undefined>(undefined);
   const [showBatch, setShowBatch] = useState(false);
   const [delTarget, setDelTarget] = useState<IamUser | null>(null);
-
-  const { data: orgsData } = useAsync(() => OrgApi.list(), []);
-  const orgs = orgsData?.items ?? [];
+  const [items, setItems] = useState<IamUser[]>([]);
+  const [togglingId, setTogglingId] = useState<string | null>(null);
 
   const sortOptions = useMemo(
     () => [
@@ -68,14 +67,45 @@ export function UsersPage() {
         page_size: pageSize,
         search: searchQuery,
         status: statusFilter || undefined,
-        is_admin: roleFilter === '' ? undefined : roleFilter === 'true',
         sort_by: sortBy || undefined,
         sort_order: sortBy ? sortOrder : undefined,
       }),
-    [page, pageSize, searchQuery, statusFilter, roleFilter, sortBy, sortOrder],
+    [page, pageSize, searchQuery, statusFilter, sortBy, sortOrder],
   );
 
-  const items = data?.items ?? [];
+  useEffect(() => {
+    if (data?.items) setItems(data.items);
+  }, [data]);
+
+  const toggleStatus = async (row: IamUser, enabled: boolean) => {
+    if (togglingId) return;
+    const nextStatus = enabled ? 'active' : 'disabled';
+    const previous = row.status;
+    setItems((list) =>
+      list.map((item) => (item.user_id === row.user_id ? { ...item, status: nextStatus } : item)),
+    );
+    setTogglingId(row.user_id);
+    try {
+      await UserApi.update(row.user_id, { status: nextStatus });
+      if (statusFilter !== '' && nextStatus !== statusFilter) {
+        setItems((list) => list.filter((item) => item.user_id !== row.user_id));
+      }
+      toast('success', t('success.saved'));
+    } catch (e) {
+      setItems((list) =>
+        list.map((item) =>
+          (item.user_id === row.user_id ? { ...item, status: previous } : item)),
+      );
+      toast(
+        'danger',
+        t('errors.saveFailed', {
+          detail: e instanceof ApiError ? e.detail : (e as Error).message,
+        }),
+      );
+    } finally {
+      setTogglingId(null);
+    }
+  };
 
   return (
     <>
@@ -137,43 +167,17 @@ export function UsersPage() {
                       </th>
                       <th>
                         <div className="th-filter">
-                          <span className="th-filter__label">{t('iam.role')}</span>
+                          <span className="th-filter__label">{t('common.enabled')}</span>
                           <TableColumnSort
                             iconOnly
-                            label={t('iam.role')}
-                            value={sortBy === 'is_admin' ? sortOrder : ''}
-                            options={sortOptions}
-                            onChange={(value) => handleSortChange('is_admin', value)}
-                          />
-                          <TableColumnFilter
-                            iconOnly
-                            label={t('iam.role')}
-                            value={roleFilter}
-                            options={[
-                              { value: '', label: t('common.all') },
-                              { value: 'true', label: t('iam.roleAdmin') },
-                              { value: 'false', label: t('iam.roleUser') },
-                            ]}
-                            onChange={(value) => {
-                              setRoleFilter(value);
-                              setPage(1);
-                            }}
-                          />
-                        </div>
-                      </th>
-                      <th>
-                        <div className="th-filter">
-                          <span className="th-filter__label">{t('iam.status')}</span>
-                          <TableColumnSort
-                            iconOnly
-                            label={t('iam.status')}
+                            label={t('common.enabled')}
                             value={sortBy === 'status' ? sortOrder : ''}
                             options={sortOptions}
                             onChange={(value) => handleSortChange('status', value)}
                           />
                           <TableColumnFilter
                             iconOnly
-                            label={t('iam.status')}
+                            label={t('common.enabled')}
                             value={statusFilter}
                             options={[
                               { value: '', label: t('common.all') },
@@ -201,7 +205,7 @@ export function UsersPage() {
                   <tbody>
                     {items.length === 0 ? (
                       <tr>
-                        <td colSpan={6}>
+                        <td colSpan={5}>
                           <Empty text={t('common.empty')} />
                         </td>
                       </tr>
@@ -216,14 +220,14 @@ export function UsersPage() {
                           </td>
                           <td className="text-text-strong font-medium break-words">{u.display_name}</td>
                           <td className="whitespace-nowrap">
-                            {u.is_admin ? (
-                              <span className="badge">{t('iam.roleAdmin')}</span>
-                            ) : (
-                              t('iam.roleUser')
-                            )}
-                          </td>
-                          <td className="whitespace-nowrap">
-                            {u.status === 'active' ? t('common.enabled') : t('common.disabled')}
+                            <Switch
+                              checked={u.status === 'active'}
+                              disabled={togglingId === u.user_id}
+                              aria-label={
+                                u.status === 'active' ? t('common.enabled') : t('common.disabled')
+                              }
+                              onChange={(enabled) => void toggleStatus(u, enabled)}
+                            />
                           </td>
                           <td className="mono text-[11px] text-muted whitespace-nowrap">
                             {formatTime(u.updated_at)}
@@ -264,7 +268,6 @@ export function UsersPage() {
       {editing !== undefined && (
         <UserModal
           user={editing}
-          orgs={orgs}
           onClose={() => setEditing(undefined)}
           onSaved={() => {
             setEditing(undefined);
@@ -309,16 +312,11 @@ export function UsersPage() {
   );
 }
 
-type BatchRow = { username: string; password: string; display_name?: string; is_admin?: boolean; orgs?: string[] };
+type BatchRow = { username: string; password: string; display_name?: string };
 type BatchResp = {
   summary: { total: number; ok: number; failed: number };
   results: Array<{ row: number; username: string; ok: boolean; user_id?: string; warnings?: string[]; error?: string }>;
 };
-
-function parseBool(v: unknown): boolean {
-  const s = String(v ?? '').trim().toLowerCase();
-  return s === 'true' || s === '1' || s === 'yes' || s === 'y' || s === '是';
-}
 
 function BatchImportModal({
   onClose, onDone,
@@ -331,8 +329,8 @@ function BatchImportModal({
 
   function downloadTemplate() {
     const ws = XLSX.utils.aoa_to_sheet([
-      ['username', 'password', 'display_name', 'is_admin', 'orgs'],
-      ['zhangsan', 'Pass@123', '张三', 'false', '销售部,市场部'],
+      ['username', 'password', 'display_name'],
+      ['zhangsan', 'Pass@123', '张三'],
     ]);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'users');
@@ -358,8 +356,6 @@ function BatchImportModal({
           username: String(r.username ?? '').trim(),
           password: String(r.password ?? '').trim(),
           display_name: String(r.display_name ?? '').trim() || undefined,
-          is_admin: parseBool(r.is_admin),
-          orgs: String(r.orgs ?? '').split(/[,，]/).map((s) => s.trim()).filter(Boolean),
         })));
       } catch (err) {
         toast('danger', String(err));
@@ -421,14 +417,12 @@ function BatchImportModal({
           </div>
           <div style={{ maxHeight: 220, overflow: 'auto', border: '1px solid #ddd', borderRadius: 6 }}>
             <table className="table" style={{ width: '100%', fontSize: 12 }}>
-              <thead><tr><th>{t('iam.username')}</th><th>{t('iam.displayName')}</th><th>{t('iam.admin')}</th><th>{t('iam.belongOrgs')}</th></tr></thead>
+              <thead><tr><th>{t('iam.username')}</th><th>{t('iam.displayName')}</th></tr></thead>
               <tbody>
                 {rows.map((r, i) => (
                   <tr key={i} style={!r.username || !r.password || !isValidIdentityId(r.username) ? { background: 'rgba(192,57,43,0.08)' } : undefined}>
                     <td>{r.username || '—'}{!r.password && <span style={{ color: '#c0392b' }}> ·{t('iam.batchNoPwd')}</span>}{!!r.username && !isValidIdentityId(r.username) && <span style={{ color: '#c0392b' }}> ·{t('iam.idCharsetInvalid', { field: t('iam.username') })}</span>}</td>
                     <td>{r.display_name || r.username}</td>
-                    <td>{r.is_admin ? '✓' : ''}</td>
-                    <td className="mono text-xs">{(r.orgs || []).join(', ')}</td>
                   </tr>
                 ))}
               </tbody>
@@ -457,47 +451,24 @@ function BatchImportModal({
   );
 }
 
-function UserModal({ user, orgs, onClose, onSaved }: { user: IamUser | null; orgs: Org[]; onClose: () => void; onSaved: () => void }) {
+function UserModal({ user, onClose, onSaved }: { user: IamUser | null; onClose: () => void; onSaved: () => void }) {
   const { t } = useTranslation();
   const isEdit = !!user;
   const { markClean, isDirty } = useFormDirty(true);
   const [displayName, setDisplayName] = useState(user?.display_name ?? '');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [isAdmin, setIsAdmin] = useState(user?.is_admin ?? false);
   const [status, setStatus] = useState(user?.status ?? 'active');
-  const [selectedOrgs, setSelectedOrgs] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
-  // 不展示"无组织":未勾选任何组织即自动归为无组织
-  const realOrgs = orgs.filter((o) => o.group_id !== NO_ORG_GROUP_ID);
 
   useEffect(() => {
-    const base = {
+    markClean({
       displayName: user?.display_name ?? '',
       username: '',
       password: '',
-      isAdmin: user?.is_admin ?? false,
       status: user?.status ?? 'active',
-      orgs: [] as string[],
-    };
-    markClean(base);
-    if (!user) return;
-    UserApi.get(user.user_id)
-      .then((d) => {
-        const orgIds = [...(d.group_ids ?? [])].sort();
-        setSelectedOrgs(new Set(orgIds));
-        markClean({ ...base, orgs: orgIds });
-      })
-      .catch(() => undefined);
-  }, [user, markClean]);
-
-  function toggleOrg(gid: string) {
-    setSelectedOrgs((prev) => {
-      const next = new Set(prev);
-      if (next.has(gid)) next.delete(gid); else next.add(gid);
-      return next;
     });
-  }
+  }, [user, markClean]);
 
   async function save() {
     if (!isEdit) {
@@ -508,17 +479,18 @@ function UserModal({ user, orgs, onClose, onSaved }: { user: IamUser | null; org
     }
     setBusy(true);
     try {
-      let uid = user?.user_id;
       if (isEdit && user) {
         await UserApi.update(user.user_id, {
-          display_name: displayName, is_admin: isAdmin, status,
+          display_name: displayName, status,
           ...(password ? { password } : {}),
         });
       } else {
-        const created = await UserApi.create({ display_name: displayName, username: username.trim(), password, is_admin: isAdmin });
-        uid = created.user_id;
+        await UserApi.create({
+          display_name: displayName,
+          username: username.trim(),
+          password,
+        });
       }
-      if (uid) await UserApi.setOrgs(uid, Array.from(selectedOrgs));
       toast('success', t('success.saved'));
       onSaved();
     } catch (e) {
@@ -533,9 +505,7 @@ function UserModal({ user, orgs, onClose, onSaved }: { user: IamUser | null; org
     displayName,
     username,
     password,
-    isAdmin,
     status,
-    orgs: [...selectedOrgs].sort(),
   };
 
   return (
@@ -551,12 +521,9 @@ function UserModal({ user, orgs, onClose, onSaved }: { user: IamUser | null; org
         </>
       }
     >
-      <label className="label">{t('iam.displayName')}</label>
-      <input className="input" value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
-
       {!isEdit && (
         <>
-          <label className="label" style={{ marginTop: 12 }}>{t('iam.username')}</label>
+          <label className="label">{t('iam.username')}</label>
           <input
             className="input mono"
             value={username}
@@ -567,18 +534,11 @@ function UserModal({ user, orgs, onClose, onSaved }: { user: IamUser | null; org
         </>
       )}
 
+      <label className="label" style={{ marginTop: isEdit ? 0 : 12 }}>{t('iam.displayName')}</label>
+      <input className="input" value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
+
       <label className="label" style={{ marginTop: 12 }}>{isEdit ? t('iam.resetPassword') : t('iam.password')}</label>
       <input className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
-
-      <label className="label" style={{ marginTop: 12 }}>{t('iam.role')}</label>
-      <select
-        className="select"
-        value={isAdmin ? 'admin' : 'user'}
-        onChange={(e) => setIsAdmin(e.target.value === 'admin')}
-      >
-        <option value="user">{t('iam.roleUser')}</option>
-        <option value="admin">{t('iam.roleAdmin')}</option>
-      </select>
 
       {isEdit && (
         <>
@@ -589,18 +549,6 @@ function UserModal({ user, orgs, onClose, onSaved }: { user: IamUser | null; org
           </select>
         </>
       )}
-
-      <label className="label" style={{ marginTop: 12 }}>{t('iam.belongOrgs')}</label>
-      <div className="text-xs text-muted" style={{ marginBottom: 6 }}>{t('iam.noOrgHint')}</div>
-      <div style={{ maxHeight: 180, overflow: 'auto', border: '1px solid var(--border, #ddd)', borderRadius: 6, padding: 8 }}>
-        {realOrgs.map((o) => (
-          <label key={o.group_id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '2px 0' }}>
-            <input type="checkbox" checked={selectedOrgs.has(o.group_id)} onChange={() => toggleOrg(o.group_id)} />
-            {o.display_name} <span className="text-xs text-muted mono">{o.group_id}</span>
-          </label>
-        ))}
-        {realOrgs.length === 0 && <div className="text-xs text-muted">{t('iam.noOrgs')}</div>}
-      </div>
     </Modal>
   );
 }

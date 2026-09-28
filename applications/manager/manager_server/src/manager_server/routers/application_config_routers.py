@@ -1,4 +1,4 @@
-"""应用配置 API：logging 配置（针对特定 Gateway 实例的配置）。"""
+"""应用配置 API：日志、记忆、审计。"""
 
 from __future__ import annotations
 
@@ -14,17 +14,15 @@ from manager_server.core.application_config.task_memory_config import (TaskMemor
 from manager_server.core.application_config.log_masking_rule import (
     LogMaskingRuleService,
 )
+from manager_server.core.application_config.logging_config import LoggingConfigService
+from manager_server.core.application_config.memory_config import MemoryConfigService
+from manager_server.core.application_config.audit_log_config import AuditLogConfigService
+from manager_server.infrastructure.db import get_db_handler
 from manager_server.schemas.application_config_schemas import (
     LogMaskingRuleCreateBody,
     LogMaskingRuleListQuery,
     LogMaskingRuleUpdateBody,
 )
-
-from manager_server.core.application_config.logging_config import LoggingConfigService
-from manager_server.core.application_config.memory_config import MemoryConfigService
-from manager_server.core.application_config.audit_log_config import AuditLogConfigService
-
-from manager_server.infrastructure.db import get_db_handler
 from manager_server.schemas.common_schemas import ResponseModel
 
 application_config_router = APIRouter()

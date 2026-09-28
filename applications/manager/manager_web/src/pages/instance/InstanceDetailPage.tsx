@@ -1,10 +1,11 @@
-import { useState, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useAuth } from '../../auth/AuthContext';
 import { useAsync } from '../../hooks/useAsync';
 import { useFormDirty } from '../../hooks/useFormDirty';
 import { useClusterGuideStatus } from '../../hooks/useGuideStatus';
 import { useRouter } from '../../router';
-import { InstanceApi, ApiError } from '../../services/api';
+import { InstanceApi, ApiError, hasPermission } from '../../services/api';
 import { Modal, ModalCancelButton } from '../../components/Modal';
 import { LimitedTextInput } from '../../components/LimitedTextInput';
 import { WarnBadge, type WarnBadgeLink } from '../../components/WarnBadge';
@@ -16,6 +17,7 @@ import { InstanceDetailPanel } from './instanceDetailPanel/instanceDetailPanel';
 import { InstanceAccessPanel } from './instanceAccessPanel/InstanceAccessPanel';
 import { InstanceAgentResourceTab } from './instanceResourcePanel/InstanceAgentResourceTab';
 import { InstanceServiceResourceTab } from './instanceResourcePanel/InstanceServiceResourceTab';
+import { WorkspaceQuotaPanel } from './instanceQuotaPanel/WorkspaceQuotaPanel';
 import { InstancePlaceholderPanel } from './InstancePlaceholderPanel';
 
 export type InstancePageTab =
@@ -25,6 +27,8 @@ export type InstancePageTab =
   | 'serviceResources'
   | 'config'
   | 'status'
+  | 'quotaManagement'
+  | 'workspaceQuota'
   | 'tokenQuota'
   | 'cost'
   | 'audit';
@@ -60,6 +64,8 @@ function FieldLabel({ children, required }: { children: ReactNode; required?: bo
 export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
   const { t } = useTranslation();
   const { navigate } = useRouter();
+  const { user } = useAuth();
+  const canReadQuota = hasPermission(user, 'quota:read');
   const missingLabel = useGuideMissingLabel();
   const instance = useAsync(() => InstanceApi.get(instanceId), [instanceId]);
   const { hasAccessUser, hasAccessOrg, hasAgentResource, hasPoolResource } =
@@ -79,7 +85,7 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
     { key: 'access', label: t('instanceDetail.tabs.access'), href: `/instances/${instanceId}/access` },
     { key: 'clusterConfig', label: t('instanceDetail.tabs.clusterConfig'), href: `/instances/${instanceId}/cluster-config` },
     { key: 'status', label: t('instanceDetail.tabs.status'), href: `/instances/${instanceId}/status` },
-    { key: 'tokenQuota', label: t('instanceDetail.tabs.tokenQuota'), href: `/instances/${instanceId}/token-quota` },
+    { key: 'quotaManagement', label: t('instanceDetail.tabs.quotaManagement'), href: `/instances/${instanceId}/quota` },
     { key: 'cost', label: t('instanceDetail.tabs.cost'), href: `/instances/${instanceId}/cost` },
     { key: 'audit', label: t('instanceDetail.tabs.audit'), href: `/instances/${instanceId}/audit` },
   ];
@@ -93,6 +99,31 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
   const inClusterConfig =
     tab === 'clusterConfig' ||
     clusterConfigSubTabs.some((it) => it.key === tab);
+
+  /** 「配额管理」下的子页签（用户空间配额 / Token 配额） */
+  const quotaSubTabs = useMemo(() => {
+    const all: { key: InstancePageTab; label: string; href: string }[] = [
+      {
+        key: 'workspaceQuota',
+        label: t('instanceDetail.tabs.workspaceQuota'),
+        href: `/instances/${instanceId}/workspace-quota`,
+      },
+      {
+        key: 'tokenQuota',
+        label: t('instanceDetail.tabs.tokenQuota'),
+        href: `/instances/${instanceId}/token-quota`,
+      },
+    ];
+    return all.filter((item) => item.key !== 'workspaceQuota' || canReadQuota);
+  }, [canReadQuota, instanceId, t]);
+  const inQuotaManagement =
+    tab === 'quotaManagement' ||
+    tab === 'workspaceQuota' ||
+    tab === 'tokenQuota';
+  const activeQuotaTab: InstancePageTab =
+    tab === 'tokenQuota' || ((tab === 'workspaceQuota' || tab === 'quotaManagement') && !canReadQuota)
+      ? 'tokenQuota'
+      : 'workspaceQuota';
 
   /** 引导状态：准入（用户/组织均未配置）、Agent 与 运行时（任一未配置），提示项可点击跳转并自动打开添加弹框 */
   const accessWarnLinks =
@@ -214,19 +245,17 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
                   : it.key === 'clusterConfig'
                     ? clusterConfigWarnLinks
                     : undefined;
+              const active =
+                it.key === 'clusterConfig'
+                  ? inClusterConfig
+                  : it.key === 'quotaManagement'
+                    ? inQuotaManagement
+                    : tab === it.key;
               return (
                 <button
                   key={it.key}
                   onClick={() => navigate(it.href)}
-                  className={`tab ${
-                    it.key === 'clusterConfig'
-                      ? inClusterConfig
-                        ? 'active'
-                        : ''
-                      : tab === it.key
-                        ? 'active'
-                        : ''
-                  }`}
+                  className={`tab ${active ? 'active' : ''}`}
                 >
                   {it.label}
                   {warnLinks && warnLinks.length > 0 && (
@@ -265,6 +294,20 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
           </div>
         )}
 
+        {inQuotaManagement && (
+          <div className="tabs-bar max-w-full shrink-0 overflow-x-auto">
+            {quotaSubTabs.map((it) => (
+              <button
+                key={it.key}
+                onClick={() => navigate(it.href)}
+                className={`tab ${activeQuotaTab === it.key ? 'active' : ''}`}
+              >
+                {it.label}
+              </button>
+            ))}
+          </div>
+        )}
+
         <div className="w-full min-w-0 shrink-0">
           {tab === 'access' && <InstanceAccessPanel instanceId={instanceId} />}
           {(tab === 'clusterConfig' || tab === 'agentResources') && (
@@ -279,7 +322,10 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
               onRefresh={() => void instance.reload()}
             />
           )}
-          {tab === 'tokenQuota' && (
+          {inQuotaManagement && activeQuotaTab === 'workspaceQuota' && (
+            <WorkspaceQuotaPanel instanceId={instanceId} />
+          )}
+          {inQuotaManagement && activeQuotaTab === 'tokenQuota' && (
             <InstancePlaceholderPanel
               titleKey="instanceDetail.tokenQuota.title"
               subtitleKey="instanceDetail.tokenQuota.subtitle"

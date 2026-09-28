@@ -67,8 +67,8 @@ _ALLOWED_SORT_FIELDS = frozenset({
     "updated_at",
 })
 _DEFAULT_LOG_MASKING_ORDER_BY: list[tuple[str, bool]] = [
-    ("priority", True),
-    ("id", False),
+    ("priority", False),
+    ("updated_at", True),
 ]
 
 
@@ -179,6 +179,32 @@ class LogMaskingRuleService:
     def __init__(self, handler: DBHandler) -> None:
         self._handler = handler
 
+    async def _assert_unique_enabled_priority(
+        self,
+        *,
+        jiuwenclaw_id: str,
+        priority: int,
+        enabled: bool,
+        exclude_rule_id: str | None = None,
+    ) -> None:
+        """同一集群内，启用中的规则 priority 不可重复。"""
+        if not enabled:
+            return
+        rows = await self._handler.list_records(
+            _TABLE,
+            {"jiuwenclaw_id": jiuwenclaw_id, "enabled": True},
+            limit=_LIST_ALL_CAP,
+            offset=0,
+        )
+        for row in rows:
+            rid = str(getattr(row, "rule_id", "") or "")
+            if exclude_rule_id and rid == exclude_rule_id:
+                continue
+            if int(getattr(row, "priority", 0) or 0) == int(priority):
+                raise ValueError(
+                    "priority already used by an enabled rule in this cluster"
+                )
+
     async def create(
         self,
         jiuwenclaw_id: str,
@@ -202,6 +228,11 @@ class LogMaskingRuleService:
             "created_at": now,
             "updated_at": now,
         }
+        await self._assert_unique_enabled_priority(
+            jiuwenclaw_id=jid,
+            priority=int(created_payload["priority"]),
+            enabled=bool(created_payload["enabled"]),
+        )
 
         try:
             await gateway_request(
@@ -291,6 +322,23 @@ class LogMaskingRuleService:
             updates["priority"] = int(updates["priority"])
         if "with_fingerprint" in updates and updates["with_fingerprint"] is not None:
             updates["with_fingerprint"] = bool(updates["with_fingerprint"])
+
+        merged_priority = (
+            int(updates["priority"])
+            if "priority" in updates and updates["priority"] is not None
+            else int(getattr(existing, "priority", 0) or 0)
+        )
+        merged_enabled = (
+            bool(updates["enabled"])
+            if "enabled" in updates
+            else bool(getattr(existing, "enabled", True))
+        )
+        await self._assert_unique_enabled_priority(
+            jiuwenclaw_id=jid,
+            priority=merged_priority,
+            enabled=merged_enabled,
+            exclude_rule_id=rid,
+        )
 
         try:
             await gateway_request(

@@ -1,4 +1,4 @@
-/** user_id / group_id：仅英文字母、数字、下划线、连字符。 */
+/** user_id / group_id / role_id：仅英文字母、数字、下划线、连字符。 */
 
 export const IDENTITY_ID_MAX_LENGTH = 64;
 export const IDENTITY_ID_PATTERN = /^[A-Za-z0-9_-]+$/;

@@ -19,7 +19,7 @@ from sqlalchemy.exc import SAWarning
 
 from manager_server.infrastructure.db import get_db_handler
 from manager_server.models.table_init import init_all_tables
-from manager_server.routers.deps import require_admin
+from manager_server.routers.auth_guards import require_admin
 from manager_server.routers.register import router_register
 
 pytestmark = pytest.mark.filterwarnings("ignore::sqlalchemy.exc.SAWarning")
@@ -189,6 +189,7 @@ _GATEWAY_REQUEST_MODULES = (
     "manager_server.core.template.push_agent_template_to_gateway",
     "manager_server.core.instance.instance_data_lifecycle",
     "manager_server.core.instance_resource.instance_agent_resource_service",
+    "manager_server.core.quota.workspace_quota_policy",
 )
 
 

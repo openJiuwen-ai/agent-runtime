@@ -63,3 +63,4 @@ class LogMaskingRuleOut(BaseModel):
     data: dict[str, Any] | None
     created_at: str | None
     updated_at: str | None
+

@@ -129,6 +129,7 @@ async def test_rest_create_always_sets_source_custom():
     )
 
     handler = MagicMock()
+    handler.list_records = AsyncMock(return_value=[])
     handler.create = AsyncMock(
         return_value=SimpleNamespace(
             id=1,
@@ -168,6 +169,196 @@ async def test_rest_create_always_sets_source_custom():
 
 
 @pytest.mark.asyncio
+async def test_create_rejects_duplicate_enabled_priority():
+    from manager_server.core.application_config.log_masking_rule import (
+        LogMaskingRuleService,
+    )
+    from manager_server.schemas.application_config_schemas import (
+        LogMaskingRuleCreateBody,
+    )
+
+    handler = MagicMock()
+    handler.list_records = AsyncMock(
+        return_value=[
+            SimpleNamespace(rule_id="existing", priority=5, enabled=True),
+        ]
+    )
+    handler.create = AsyncMock()
+    svc = LogMaskingRuleService(handler)
+
+    with patch(
+        "manager_server.core.application_config.log_masking_rule.gateway_request",
+        new_callable=AsyncMock,
+    ) as gw_mock:
+        with pytest.raises(ValueError, match="priority"):
+            await svc.create(
+                "sp-rest",
+                LogMaskingRuleCreateBody(
+                    rule_name="dup",
+                    pattern=r"secret=\d+",
+                    priority=5,
+                    enabled=True,
+                ),
+            )
+    gw_mock.assert_not_awaited()
+    handler.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_create_allows_same_priority_when_other_disabled():
+    from manager_server.core.application_config.log_masking_rule import (
+        LogMaskingRuleService,
+    )
+    from manager_server.schemas.application_config_schemas import (
+        LogMaskingRuleCreateBody,
+    )
+
+    created_row = SimpleNamespace(
+        id=2,
+        jiuwenclaw_id="sp-rest",
+        rule_id="new-rule",
+        rule_name="dup-ok",
+        description=None,
+        pattern=r"secret=\d+",
+        replacement="******",
+        priority=5,
+        with_fingerprint=False,
+        source="custom",
+        enabled=True,
+        data=None,
+        created_at=None,
+        updated_at=None,
+    )
+    handler = MagicMock()
+    # DB 按 enabled=True 过滤；停用规则不会出现在结果里。
+    handler.list_records = AsyncMock(return_value=[])
+    handler.create = AsyncMock(return_value=created_row)
+    svc = LogMaskingRuleService(handler)
+
+    with patch(
+        "manager_server.core.application_config.log_masking_rule.gateway_request",
+        new_callable=AsyncMock,
+        return_value={"success_flag": True},
+    ):
+        out = await svc.create(
+            "sp-rest",
+            LogMaskingRuleCreateBody(
+                rule_name="dup-ok",
+                pattern=r"secret=\d+",
+                priority=5,
+                enabled=True,
+            ),
+        )
+    assert out.priority == 5
+    handler.list_records.assert_awaited()
+    handler.create.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_create_allows_disabled_even_if_enabled_priority_exists():
+    from manager_server.core.application_config.log_masking_rule import (
+        LogMaskingRuleService,
+    )
+    from manager_server.schemas.application_config_schemas import (
+        LogMaskingRuleCreateBody,
+    )
+
+    created_row = SimpleNamespace(
+        id=3,
+        jiuwenclaw_id="sp-rest",
+        rule_id="disabled-rule",
+        rule_name="dup-disabled",
+        description=None,
+        pattern=r"secret=\d+",
+        replacement="******",
+        priority=5,
+        with_fingerprint=False,
+        source="custom",
+        enabled=False,
+        data=None,
+        created_at=None,
+        updated_at=None,
+    )
+    handler = MagicMock()
+    # list_records 在 disabled 路径上不会被调用（early return），但保留空实现。
+    handler.list_records = AsyncMock(
+        return_value=[
+            SimpleNamespace(rule_id="existing", priority=5, enabled=True),
+        ]
+    )
+    handler.create = AsyncMock(return_value=created_row)
+    svc = LogMaskingRuleService(handler)
+
+    with patch(
+        "manager_server.core.application_config.log_masking_rule.gateway_request",
+        new_callable=AsyncMock,
+        return_value={"success_flag": True},
+    ):
+        out = await svc.create(
+            "sp-rest",
+            LogMaskingRuleCreateBody(
+                rule_name="dup-disabled",
+                pattern=r"secret=\d+",
+                priority=5,
+                enabled=False,
+            ),
+        )
+    assert out.enabled is False
+    assert out.priority == 5
+    handler.list_records.assert_not_awaited()
+    handler.create.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_rejects_enabled_priority_collision():
+    from manager_server.core.application_config.log_masking_rule import (
+        LogMaskingRuleService,
+    )
+    from manager_server.schemas.application_config_schemas import (
+        LogMaskingRuleUpdateBody,
+    )
+
+    existing = SimpleNamespace(
+        id=2,
+        jiuwenclaw_id="sp-rest",
+        rule_id="custom-rule-2",
+        rule_name="custom",
+        description=None,
+        pattern=r"x=\d+",
+        replacement="******",
+        priority=8,
+        with_fingerprint=False,
+        source="custom",
+        enabled=True,
+        data=None,
+        created_at=None,
+        updated_at=None,
+    )
+    handler = MagicMock()
+    handler.get = AsyncMock(return_value=existing)
+    handler.list_records = AsyncMock(
+        return_value=[
+            SimpleNamespace(rule_id="other", priority=5, enabled=True),
+        ]
+    )
+    handler.update = AsyncMock()
+    svc = LogMaskingRuleService(handler)
+
+    with patch(
+        "manager_server.core.application_config.log_masking_rule.gateway_request",
+        new_callable=AsyncMock,
+    ) as gw_mock:
+        with pytest.raises(ValueError, match="priority"):
+            await svc.update(
+                "sp-rest",
+                "custom-rule-2",
+                LogMaskingRuleUpdateBody(priority=5),
+            )
+    gw_mock.assert_not_awaited()
+    handler.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_rest_create_and_patch_with_fingerprint():
     from manager_server.core.application_config.log_masking_rule import (
         LogMaskingRuleService,
@@ -194,6 +385,7 @@ async def test_rest_create_and_patch_with_fingerprint():
         updated_at=None,
     )
     handler = MagicMock()
+    handler.list_records = AsyncMock(return_value=[])
     handler.create = AsyncMock(return_value=created_row)
     handler.get = AsyncMock(return_value=created_row)
     handler.update = AsyncMock(

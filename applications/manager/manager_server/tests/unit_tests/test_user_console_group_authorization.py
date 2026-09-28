@@ -174,17 +174,10 @@ async def test_empty_when_not_admitted() -> None:
 
 
 @pytest.mark.asyncio
-async def test_admin_lists_all_instances_without_admission() -> None:
+async def test_admin_no_longer_bypasses_admission() -> None:
+    """平台管理员也须走 instance_grant，不再因 is_admin 短路。"""
     handler = AsyncMock()
-
-    async def list_records(table: str, *_args, **_kwargs):
-        if table == "instance_info":
-            return [SimpleNamespace(jiuwenclaw_id="gw-admin", jiuwenclaw_name="管理集群")]
-        return [_resource(resource_id="bot-admin", jiuwenclaw_id="gw-admin", match_expr=[])]
-
-    handler.list_records = AsyncMock(side_effect=list_records)
     service = UserConsoleService(handler)
-    is_admitted = AsyncMock(return_value=False)
 
     with (
         patch.object(
@@ -192,13 +185,15 @@ async def test_admin_lists_all_instances_without_admission() -> None:
             "_load_orgs",
             AsyncMock(return_value=[{"group_id": "g-any", "group_name": "任意组"}]),
         ),
-        patch.object(InstanceGrantService, "is_admitted", is_admitted),
+        patch.object(
+            InstanceGrantService,
+            "list_instances_for",
+            AsyncMock(return_value={}),
+        ),
+        patch.object(InstanceGrantService, "is_admitted", AsyncMock(return_value=False)),
     ):
         result = await service.list_accessible_contexts(
-            "admin", ["g-any"], is_admin=True, authorization="Bearer t"
+            "admin", ["g-any"], authorization="Bearer t"
         )
 
-    assert [(x["bot_id"], x["group_id"], x["group_name"], x["jiuwenclaw_name"]) for x in result] == [
-        ("bot-admin", "g-any", "任意组", "管理集群")
-    ]
-    is_admitted.assert_not_awaited()
+    assert result == []

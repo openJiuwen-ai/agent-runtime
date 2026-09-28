@@ -67,7 +67,6 @@ interface Props {
 
 type UserSortField =
   | 'display_name'
-  | 'role'
   | 'granted_by'
   | 'login_policy'
   | 'expires_at'
@@ -118,7 +117,6 @@ export function InstanceUsersTab({ instanceId }: Props) {
   const [pendingDelete, setPendingDelete] = useState<string[] | null>(null);
   const [enabledFilter, setEnabledFilter] = useState('');
   const [loginPolicyFilter, setLoginPolicyFilter] = useState('');
-  const [roleFilter, setRoleFilter] = useState('');
   const [sortBy, setSortBy] = useState<UserSortField | ''>('');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
 
@@ -149,7 +147,7 @@ export function InstanceUsersTab({ instanceId }: Props) {
 
   useEffect(() => {
     setPage(1);
-  }, [searchQuery, enabledFilter, loginPolicyFilter, roleFilter]);
+  }, [searchQuery, enabledFilter, loginPolicyFilter]);
 
   const filtered = useMemo(() => {
     const kw = searchQuery?.toLowerCase() ?? '';
@@ -158,7 +156,6 @@ export function InstanceUsersTab({ instanceId }: Props) {
         [
           u.user_id,
           u.display_name,
-          u.is_admin ? 'admin' : 'user',
           u.grant.granted_by ?? '',
           u.grant.login_policy ?? 'allow',
           u.grant.enabled ? 'enabled' : 'disabled',
@@ -166,8 +163,6 @@ export function InstanceUsersTab({ instanceId }: Props) {
         kw,
       ),
     );
-    if (roleFilter === 'admin') rows = rows.filter((u) => !!u.is_admin);
-    if (roleFilter === 'user') rows = rows.filter((u) => !u.is_admin);
     if (enabledFilter === 'true') rows = rows.filter((u) => u.grant.enabled !== false);
     if (enabledFilter === 'false') rows = rows.filter((u) => u.grant.enabled === false);
     if (loginPolicyFilter === 'allow' || loginPolicyFilter === 'deny') {
@@ -179,8 +174,6 @@ export function InstanceUsersTab({ instanceId }: Props) {
       switch (sortBy) {
         case 'display_name':
           return compareText(a.display_name || a.user_id, b.display_name || b.user_id, order);
-        case 'role':
-          return compareBool(!!a.is_admin, !!b.is_admin, order);
         case 'granted_by':
           return compareText(a.grant.granted_by ?? '', b.grant.granted_by ?? '', order);
         case 'login_policy':
@@ -195,7 +188,7 @@ export function InstanceUsersTab({ instanceId }: Props) {
           return 0;
       }
     });
-  }, [boundUsers, searchQuery, enabledFilter, loginPolicyFilter, roleFilter, sortBy, sortOrder]);
+  }, [boundUsers, searchQuery, enabledFilter, loginPolicyFilter, sortBy, sortOrder]);
 
   const paged = useMemo(() => {
     const offset = (page - 1) * pageSize;
@@ -291,32 +284,6 @@ export function InstanceUsersTab({ instanceId }: Props) {
                     />
                   </th>
                   <th>
-                    <div className="th-filter">
-                      <span className="th-filter__label">{t('iam.role')}</span>
-                      <TableColumnSort
-                        iconOnly
-                        label={t('iam.role')}
-                        value={sortBy === 'role' ? sortOrder : ''}
-                        options={sortOptions}
-                        onChange={(value) => handleSortChange('role', value)}
-                      />
-                      <TableColumnFilter
-                        iconOnly
-                        label={t('iam.role')}
-                        value={roleFilter}
-                        options={[
-                          { value: '', label: t('common.all') },
-                          { value: 'admin', label: t('iam.roleAdmin') },
-                          { value: 'user', label: t('iam.roleUser') },
-                        ]}
-                        onChange={(value) => {
-                          setRoleFilter(value);
-                          setPage(1);
-                        }}
-                      />
-                    </div>
-                  </th>
-                  <th>
                     <TableColumnSort
                       label={t(`${IA}.grantedBy`)}
                       value={sortBy === 'granted_by' ? sortOrder : ''}
@@ -401,7 +368,7 @@ export function InstanceUsersTab({ instanceId }: Props) {
               <tbody>
                 {paged.length === 0 ? (
                   <tr>
-                    <td colSpan={9}>
+                    <td colSpan={8}>
                       <Empty text={t(`${IA}.noUsers`)} />
                     </td>
                   </tr>
@@ -511,13 +478,6 @@ function UserRow({
         <div className="text-[11px] text-muted mono break-all" title={user.user_id}>
           {user.user_id}
         </div>
-      </td>
-      <td className="whitespace-nowrap">
-        {user.is_admin ? (
-          <span className="pill accent text-[11px]">{t('iam.roleAdmin')}</span>
-        ) : (
-          <span className="text-[11px] text-muted">{t('iam.roleUser')}</span>
-        )}
       </td>
       <td className="text-[11px] text-muted whitespace-nowrap">
         {user.grant.granted_by ?? '-'}

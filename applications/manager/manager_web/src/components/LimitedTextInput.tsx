@@ -7,6 +7,8 @@ interface LimitedTextInputProps {
   type?: 'text' | 'password';
   className?: string;
   placeholder?: string;
+  disabled?: boolean;
+  required?: boolean;
 }
 
 function truncate(value: string, limit: number): string {
@@ -25,6 +27,8 @@ export function LimitedTextInput({
   type = 'text',
   className,
   placeholder,
+  disabled,
+  required,
 }: LimitedTextInputProps) {
   const atLimit = value.length >= maxLength;
 
@@ -45,6 +49,8 @@ export function LimitedTextInput({
         value={value}
         maxLength={maxLength}
         placeholder={placeholder}
+        disabled={disabled}
+        required={required}
         onChange={syncValue}
         onCompositionEnd={syncAfterIme}
       />

@@ -32,6 +32,7 @@ import {
   TableColumnSort,
   type ColumnSortValue,
 } from '../../../components/TableColumnSort';
+import { HintTooltip } from '../../../components/HintTooltip';
 
 interface Props {
   instanceId: string;
@@ -45,6 +46,9 @@ type SortField =
   | 'expires_at'
   | 'enabled'
   | 'updated_at';
+
+/** 缺省与「默认排序」都是优先级升序，和列表接口一致。 */
+const DEFAULT_SORT_FIELD: SortField = 'priority';
 
 /** Align with instance_service_resource ColumnDefinition length. */
 const FIELD_MAX_LENGTH = {
@@ -76,7 +80,7 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
   const [pageSize, setPageSize] = useState(20);
   const { searchInput, setSearchInput, searchQuery } = useListSearch();
   const [enabledFilter, setEnabledFilter] = useState<string>('');
-  const [sortBy, setSortBy] = useState<SortField | ''>('');
+  const [sortBy, setSortBy] = useState<SortField>(DEFAULT_SORT_FIELD);
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
 
   const sortOptions = useMemo(
@@ -90,7 +94,7 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
 
   const handleSortChange = (field: SortField, value: ColumnSortValue) => {
     if (value === '') {
-      setSortBy('');
+      setSortBy(DEFAULT_SORT_FIELD);
       setSortOrder('asc');
     } else {
       setSortBy(field);
@@ -106,8 +110,8 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
         page_size: pageSize,
         search: searchQuery || undefined,
         enabled: enabledFilter === '' ? undefined : enabledFilter === 'true',
-        sort_by: sortBy || undefined,
-        sort_order: sortBy ? sortOrder : undefined,
+        sort_by: sortBy,
+        sort_order: sortOrder,
       }),
     [instanceId, page, pageSize, searchQuery, enabledFilter, sortBy, sortOrder],
   );
@@ -358,12 +362,19 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
                   </th>
                   <th>{t(`${sr}.scopeLabel`)}</th>
                   <th>
-                    <TableColumnSort
-                      label={t(`${sr}.priority`)}
-                      value={sortBy === 'priority' ? sortOrder : ''}
-                      options={sortOptions}
-                      onChange={(value) => handleSortChange('priority', value)}
-                    />
+                    <div className="th-filter">
+                      <span className="th-filter__label inline-flex items-center gap-1">
+                        {t(`${sr}.priority`)}
+                        <HintTooltip text={t(`${sr}.priorityHint`)} />
+                      </span>
+                      <TableColumnSort
+                        iconOnly
+                        label={t(`${sr}.priority`)}
+                        value={sortBy === 'priority' ? sortOrder : ''}
+                        options={sortOptions}
+                        onChange={(value) => handleSortChange('priority', value)}
+                      />
+                    </div>
                   </th>
                   <th>
                     <TableColumnSort
@@ -644,7 +655,10 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
             </div>
           </label>
           <label className="block mb-3">
-            <FieldLabel required>{t(`${sr}.priority`)}</FieldLabel>
+            <div className="flex items-center gap-1">
+              <FieldLabel required>{t(`${sr}.priority`)}</FieldLabel>
+              <HintTooltip text={t(`${sr}.priorityHint`)} />
+            </div>
             <input
               className="input mt-1 w-full"
               type="number"
@@ -655,7 +669,6 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
                 setAddPriority(raw === '' ? NaN : Number(raw));
               }}
             />
-            <div className="mt-1 text-xs text-muted">{t(`${sr}.priorityHint`)}</div>
           </label>
           <label className="block mb-3">
             <FieldLabel>{t(`${sr}.scopeLabel`)}</FieldLabel>
@@ -728,7 +741,10 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
             </div>
           </label>
           <label className="block mb-3">
-            <FieldLabel required>{t(`${sr}.priority`)}</FieldLabel>
+            <div className="flex items-center gap-1">
+              <FieldLabel required>{t(`${sr}.priority`)}</FieldLabel>
+              <HintTooltip text={t(`${sr}.priorityHint`)} />
+            </div>
             <input
               className="input mt-1 w-full"
               type="number"
@@ -739,7 +755,6 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
                 setEditPriority(raw === '' ? NaN : Number(raw));
               }}
             />
-            <div className="mt-1 text-xs text-muted">{t(`${sr}.priorityHint`)}</div>
           </label>
           <label className="block mb-3">
             <FieldLabel>{t(`${sr}.scopeLabel`)}</FieldLabel>

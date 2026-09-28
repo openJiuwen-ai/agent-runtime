@@ -98,7 +98,7 @@ export function ConfigGuideMenu() {
 
   const startedItems = [
     { label: t('guide.newMember'), to: '/users' },
-    { label: t('iam.newOrg'), to: '/orgs' },
+    { label: t('iam.newOrg'), to: '/orgs/new' },
     { label: t('guide.newModel'), to: '/model-templates' },
     { label: t('guide.newAgentDefinition'), to: '/agent-templates' },
     { label: t('guide.newContainerTemplate'), to: '/container-templates' },
@@ -120,7 +120,7 @@ export function ConfigGuideMenu() {
         { label: t('instanceDetail.tabs.access'), to: `/instances/${selectedId}/access` },
         { label: t('instanceDetail.tabs.clusterConfig'), to: `/instances/${selectedId}/cluster-config` },
         { label: t('instanceDetail.tabs.status'), to: `/instances/${selectedId}/status` },
-        { label: t('instanceDetail.tabs.tokenQuota'), to: `/instances/${selectedId}/token-quota` },
+        { label: t('instanceDetail.tabs.quotaManagement'), to: `/instances/${selectedId}/quota` },
         { label: t('instanceDetail.tabs.cost'), to: `/instances/${selectedId}/cost` },
         { label: t('instanceDetail.tabs.audit'), to: `/instances/${selectedId}/audit` },
       ]

@@ -1,28 +1,34 @@
-"""用户控制台 API（当前用户可访问的 Agent 上下文 + 用户面选路）。
+"""用户控制台 API（当前用户可访问的 Agent 上下文 + 用户面选路 + 扩容申请）。
 
 路径：
 - ``GET /v1/user-console/agent-contexts``
 - ``POST /v1/user-console/active-cluster``（写入 Cookie ``jiuwenclaw_id``）
 - ``DELETE /v1/user-console/active-cluster``（清除 Cookie ``jiuwenclaw_id``）
 - ``GET /v1/user-console/user-face-upstream``（nginx auth_request 解析上游）
+- ``POST /v1/user-console/workspace/expand-requests``
+- ``GET /v1/user-console/approvals/candidates``
+- ``GET /v1/user-console/approvals/mine``
+- ``POST /v1/user-console/approvals/{order_num}/cancel``
 身份来自 JWT（``get_current_user``）；组织 id 取 claims.groups。
 """
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Response
+from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Query, Response
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 from pydantic import BaseModel, Field
 
+from manager_server.core.approval import ApprovalService
 from manager_server.core.user_console import UserConsoleService
 from manager_server.core.user_console.user_face_upstream import (
     JIUWENCLAW_ID_COOKIE,
     resolve_user_face_upstreams,
 )
 from manager_server.infrastructure.db import get_db_handler
-from manager_server.routers.deps import get_current_user
+from manager_server.routers.auth_guards import get_current_user
+from manager_server.schemas.approval_schemas import UserConsoleExpandSubmitBody
 from manager_server.schemas.common_schemas import ResponseModel
 
 _Handler = Annotated[DBHandler, Depends(get_db_handler)]
@@ -31,6 +37,10 @@ _CurUser = Annotated[Any, Depends(get_current_user)]
 
 def _ok(data: Any = None) -> ResponseModel:
     return ResponseModel(code=200, message="success", data=data)
+
+
+def _user_id(user: Any) -> str:
+    return str(getattr(user, "user_id", "") or "")
 
 
 class ActiveClusterBody(BaseModel):
@@ -58,7 +68,6 @@ async def list_my_agent_contexts(
     contexts = await UserConsoleService(handler).list_accessible_contexts(
         getattr(user, "user_id"),
         getattr(user, "groups", []),
-        is_admin=bool(getattr(user, "is_admin", False)),
         authorization=authorization,
     )
     return _ok({"contexts": contexts})
@@ -81,7 +90,6 @@ async def set_active_cluster(
         getattr(user, "user_id"),
         jid,
         getattr(user, "groups", []),
-        is_admin=bool(getattr(user, "is_admin", False)),
     )
     if not allowed:
         raise HTTPException(status_code=403, detail="instance not admitted")
@@ -130,7 +138,6 @@ async def resolve_user_face_upstream(
             handler,
             user_id=str(getattr(user, "user_id", "") or ""),
             groups=list(getattr(user, "groups", []) or []),
-            is_admin=bool(getattr(user, "is_admin", False)),
             jiuwenclaw_id=jiuwenclaw_id,
         )
     except PermissionError as exc:
@@ -142,3 +149,107 @@ async def resolve_user_face_upstream(
     headers = upstreams.as_headers()
     headers["Cache-Control"] = "private, max-age=5"
     return Response(status_code=200, content=b"", headers=headers)
+
+
+@user_console_router.post(
+    "/workspace/expand-requests",
+    response_model=ResponseModel,
+)
+async def submit_workspace_expand(
+    body: UserConsoleExpandSubmitBody,
+    handler: _Handler,
+    user: _CurUser,
+    authorization: Annotated[str | None, Header()] = None,
+):
+    """用户面发起扩容：校验上下文准入，服务端解析生效配额后建单。"""
+    uid = _user_id(user)
+    allowed = await UserConsoleService(handler).user_can_access_context(
+        uid,
+        jiuwenclaw_id=body.jiuwenclaw_id,
+        group_id=body.group_id,
+        bot_id=body.bot_id,
+        groups=list(getattr(user, "groups", []) or []),
+        authorization=authorization,
+    )
+    if not allowed:
+        raise HTTPException(status_code=403, detail="context not admitted")
+    try:
+        result = await ApprovalService(handler).submit_from_user_console(
+            applicant_id=uid,
+            group_id=body.group_id,
+            bot_id=body.bot_id,
+            cluster_id=body.jiuwenclaw_id,
+            requested_limit_bytes=body.requested_limit_bytes,
+            reason=body.reason,
+            used_bytes=body.used_bytes,
+            approver_id=body.approver_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _ok(result)
+
+
+@user_console_router.get(
+    "/approvals/candidates",
+    response_model=ResponseModel,
+)
+async def list_approval_candidates(
+    handler: _Handler,
+    user: _CurUser,
+):
+    """扩容申请可选审批人：持有 approval:act 且非当前用户。"""
+    items = await ApprovalService(handler).list_approver_candidates(
+        exclude_user_id=_user_id(user),
+    )
+    return _ok({"items": items})
+
+
+@user_console_router.get(
+    "/approvals/mine",
+    response_model=ResponseModel,
+)
+async def list_my_approvals(
+    handler: _Handler,
+    user: _CurUser,
+    business_type: Annotated[str | None, Query(max_length=64)] = None,
+    status: Literal["pending", "approved", "rejected", "cancelled"] | None = None,
+    search: Annotated[str | None, Query(max_length=128)] = None,
+):
+    """申请人侧「我的申请」：通用审批列表，可按业务类型/状态/关键字过滤。
+
+    ``search`` 匹配单号、标题、申请说明。
+    """
+    try:
+        items = await ApprovalService(handler).list_mine(
+            applicant_id=_user_id(user),
+            business_type=business_type,
+            status=status,
+            search=search,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _ok({"items": items})
+
+
+@user_console_router.post(
+    "/approvals/{order_num}/cancel",
+    response_model=ResponseModel,
+)
+async def cancel_my_approval(
+    order_num: str,
+    handler: _Handler,
+    user: _CurUser,
+):
+    """申请人撤回本人 pending 申请（任意 business_type）。"""
+    try:
+        result = await ApprovalService(handler).cancel(
+            order_num=order_num,
+            operator_id=_user_id(user),
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="approval order not found")
+    return _ok(result)
