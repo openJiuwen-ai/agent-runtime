@@ -17,6 +17,9 @@ import type {
   SkillPrebuiltTemplate,
   SkillPrebuiltTemplateCreateBody,
   SkillPrebuiltTemplateUpdateBody,
+  McpTemplate,
+  McpTemplateCreateBody,
+  McpTemplateUpdateBody,
   PermissionsTemplate,
   PermissionsTemplateCreateBody,
   PermissionsTemplateUpdateBody,
@@ -1075,6 +1078,30 @@ export const SkillPrebuiltTemplateApi = {
     http<{ deleted: boolean; template_id: string }>(
       `/v1/skill-prebuilt-templates/${encodeURIComponent(id)}`,
       { method: 'DELETE' }
+    ),
+};
+
+export const McpTemplateApi = {
+  list: (params?: {
+    page?: number;
+    page_size?: number;
+    enabled?: boolean;
+    search?: string;
+    sort_by?: 'template_name' | 'description' | 'updated_at';
+    sort_order?: 'asc' | 'desc';
+  }) => http<PageResult<McpTemplate>>('/v1/mcp-templates', { query: params }),
+  get: (id: string) => http<McpTemplate>(`/v1/mcp-templates/${encodeURIComponent(id)}`),
+  create: (body: McpTemplateCreateBody) =>
+    http<McpTemplate>('/v1/mcp-templates', { method: 'POST', body }),
+  update: (id: string, body: McpTemplateUpdateBody) =>
+    http<McpTemplate>(`/v1/mcp-templates/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body,
+    }),
+  remove: (id: string) =>
+    http<{ deleted: boolean; template_id: string }>(
+      `/v1/mcp-templates/${encodeURIComponent(id)}`,
+      { method: 'DELETE' },
     ),
 };
 

@@ -13,6 +13,7 @@ import { InstanceDetailPage } from './pages/instance/InstanceDetailPage';
 import { ModelTemplatesPage } from './pages/templates/ModelTemplatesPage';
 import { EmbeddingTemplatesPage } from './pages/templates/EmbeddingTemplatesPage';
 import { ExtensionTemplatesPage } from './pages/templates/ExtensionTemplatesPage';
+import { McpTemplatesPage } from './pages/templates/McpTemplatesPage';
 import { SkillPrebuiltTemplatesPage } from './pages/templates/SkillPrebuiltTemplatesPage';
 import { ContainerTemplatesPage } from './pages/templates/ContainerTemplatesPage';
 import { ServiceConfigTemplatesPage } from './pages/templates/ServiceConfigTemplatesPage';
@@ -80,6 +81,9 @@ function RouteView() {
   }
   if (path === '/extension-config-templates') {
     return <ExtensionTemplatesPage />;
+  }
+  if (path === '/mcp-templates') {
+    return <McpTemplatesPage />;
   }
   if (path === '/skill-prebuilt-templates') {
     return <SkillPrebuiltTemplatesPage />;

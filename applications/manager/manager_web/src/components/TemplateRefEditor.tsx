@@ -5,6 +5,7 @@ import { GuideLink } from './GuideLink';
 import {
   EmbeddingTemplateApi,
   ExtensionTemplateApi,
+  McpTemplateApi,
   ModelTemplateApi,
   PermissionsTemplateApi,
   A2AAccessPolicyTemplateApi,
@@ -34,6 +35,7 @@ const SLOT_CONFIG_PATH: Record<string, string> = {
   embedding_model: '/embedding-templates',
   skill_prebuilt: '/skill-prebuilt-templates',
   extension_config: '/extension-config-templates',
+  mcp: '/mcp-templates',
   permissions: '/safety-guardrails',
   a2a_access_policy: '/a2a-management?tab=policies',
 };
@@ -48,6 +50,7 @@ const SLOT_HINT_PAGE_KEY: Record<string, string> = {
   embedding_model: 'nav.embeddingTemplates',
   skill_prebuilt: 'nav.skillWhitelistTemplates',
   extension_config: 'nav.extensionTemplates',
+  mcp: 'nav.mcpTemplates',
   permissions: 'nav.safetyGuardrails',
   a2a_access_policy: 'nav.a2aManagement',
 };
@@ -79,11 +82,12 @@ interface TemplateRefEditorProps {
 
 export async function loadTemplateOptions(): Promise<Record<string, TemplateOption[]>> {
   const pageSize = 200;
-  const [models, embeddings, skills, extensions, permissions, a2aPolicies] = await Promise.all([
+  const [models, embeddings, skills, extensions, mcps, permissions, a2aPolicies] = await Promise.all([
     ModelTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
     EmbeddingTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
     SkillPrebuiltTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
     ExtensionTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
+    McpTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
     PermissionsTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
     A2AAccessPolicyTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
   ]);
@@ -110,6 +114,7 @@ export async function loadTemplateOptions(): Promise<Record<string, TemplateOpti
   );
   bySlot.skill_prebuilt = (skills.items ?? []).map((t) => toOpt(t.template_id, t.template_name));
   bySlot.extension_config = (extensions.items ?? []).map((t) => toOpt(t.template_id, t.template_name));
+  bySlot.mcp = (mcps.items ?? []).map((t) => toOpt(t.template_id, t.template_name));
   bySlot.permissions = (permissions.items ?? []).map((t) => toOpt(t.template_id, t.template_name));
   bySlot.a2a_access_policy = (a2aPolicies.items ?? []).map((t) =>
     toOpt(t.policy_id, `${t.policy_name} · ${t.mode}`),
