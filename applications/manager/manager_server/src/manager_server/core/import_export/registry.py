@@ -29,6 +29,7 @@ class WorkbookData:
 class ImportExportContext:
     handler: DBHandler
     authorization: str | None = None
+    operator_id: str = "xlsx-import"
 
 
 class ImportExportAdapter(Protocol):

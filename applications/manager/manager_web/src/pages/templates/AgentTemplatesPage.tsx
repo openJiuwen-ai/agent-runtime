@@ -19,6 +19,7 @@ import { toast } from '../../stores/uiStore';
 import { bumpGuideRevision } from '../../stores/guideStore';
 import { formatTime, truncate } from '../../utils/format';
 import { AgentTemplateModal } from './AgentTemplateModal';
+import { ResourceExportButton, ResourceImportButton } from '../../components/ResourceImportExport';
 
 type AgentTemplateSortField = 'template_name' | 'description' | 'template_id' | 'updated_at';
 
@@ -131,6 +132,7 @@ export function AgentTemplatesPage() {
             <button className="btn sm" onClick={() => void reload()}>
               {t('common.refresh')}
             </button>
+            <ResourceImportButton resourceType="agent-template" onImported={() => void reload()} />
             <button
               className="btn primary sm"
               onClick={() => {
@@ -240,6 +242,7 @@ export function AgentTemplatesPage() {
                         </td>
                         <td className="whitespace-nowrap min-w-[9.5rem]">
                           <div className="flex items-center gap-1">
+                            <ResourceExportButton resourceType="agent-template" resourceIds={[row.template_id]} />
                             <button
                               className="btn sm ghost"
                               onClick={() => {

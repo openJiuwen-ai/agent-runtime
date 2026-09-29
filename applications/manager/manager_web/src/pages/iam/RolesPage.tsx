@@ -23,6 +23,7 @@ import {
 import { useRouter } from '../../router';
 import { toast } from '../../stores/uiStore';
 import { formatTime, truncate } from '../../utils/format';
+import { ResourceExportButton, ResourceImportButton } from '../../components/ResourceImportExport';
 
 type RoleSortField = 'name' | 'role_id' | 'description' | 'updated_at';
 
@@ -77,6 +78,17 @@ export function RolesPage() {
   const [items, setItems] = useState<AuthzRole[]>([]);
   const [togglingId, setTogglingId] = useState<string | null>(null);
   const [delTarget, setDelTarget] = useState<AuthzRole | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+
+  const currentIds = items.map((item) => item.role_id);
+  const allCurrentSelected = currentIds.length > 0 && currentIds.every((id) => selectedIds.has(id));
+  const toggleCurrentPage = (checked: boolean) => {
+    setSelectedIds((previous) => {
+      const next = new Set(previous);
+      for (const id of currentIds) checked ? next.add(id) : next.delete(id);
+      return next;
+    });
+  };
 
   const canWrite = hasPermission(user, 'iam:role:write');
   const canOpenEditor = canWrite || hasPermission(user, 'iam:role:read');
@@ -181,6 +193,18 @@ export function RolesPage() {
             {t('common.refresh')}
           </button>
           {canWrite && (
+            <ResourceImportButton resourceType="role" onImported={() => void reload()} />
+          )}
+          <ResourceExportButton
+            resourceType="role"
+            resourceIds={[...selectedIds]}
+            disabled={selectedIds.size === 0}
+            className="btn sm"
+          />
+          {selectedIds.size > 0 && (
+            <span className="text-xs text-muted">{t('importExport.selected', { count: selectedIds.size })}</span>
+          )}
+          {canWrite && (
             <button
               className="btn primary sm"
               onClick={() => navigate('/roles/new')}
@@ -204,6 +228,14 @@ export function RolesPage() {
               <table className="table w-max min-w-full">
                 <thead>
                   <tr>
+                    <th className="w-10">
+                      <input
+                        type="checkbox"
+                        aria-label={t('importExport.export')}
+                        checked={allCurrentSelected}
+                        onChange={(event) => toggleCurrentPage(event.target.checked)}
+                      />
+                    </th>
                     <th>
                       <TableColumnSort
                         label={t('roles.roleId')}
@@ -275,7 +307,7 @@ export function RolesPage() {
                 <tbody>
                   {items.length === 0 ? (
                     <tr>
-                      <td colSpan={9}>
+                      <td colSpan={10}>
                         <Empty text={t('common.empty')} />
                       </td>
                     </tr>
@@ -286,6 +318,18 @@ export function RolesPage() {
                     );
                     return (
                       <tr key={role.role_id}>
+                        <td>
+                          <input
+                            type="checkbox"
+                            aria-label={role.role_id}
+                            checked={selectedIds.has(role.role_id)}
+                            onChange={(event) => setSelectedIds((previous) => {
+                              const next = new Set(previous);
+                              event.target.checked ? next.add(role.role_id) : next.delete(role.role_id);
+                              return next;
+                            })}
+                          />
+                        </td>
                         <td className="mono text-[11px] text-muted break-all align-top">
                           {role.role_id}
                         </td>

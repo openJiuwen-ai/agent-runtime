@@ -18,6 +18,7 @@ import type { EmbeddingTemplate } from '../../types';
 import { formatTime, truncate } from '../../utils/format';
 import { useRouter } from '../../router';
 import { EmbeddingTemplateModal } from './EmbeddingTemplateModal';
+import { ResourceExportButton, ResourceImportButton } from '../../components/ResourceImportExport';
 
 type EmbeddingTemplateSortField =
   | 'template_name'
@@ -115,6 +116,7 @@ export function EmbeddingTemplatesPage() {
           <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
             <ListSearchInput value={searchInput} onChange={setSearchInput} placeholder={t('embeddingTemplate.searchPlaceholder')} className="basis-full sm:basis-auto" />
             <button className="btn sm" onClick={() => void reload()}>{t('common.refresh')}</button>
+            <ResourceImportButton resourceType="embedding" onImported={() => void reload()} />
             <button className="btn primary sm" onClick={() => { setEditing(null); setModalOpen(true); }}>
               + {t('embeddingTemplate.new')}
             </button>
@@ -236,6 +238,7 @@ export function EmbeddingTemplatesPage() {
                       <td className="mono whitespace-nowrap text-[11px] text-muted">{formatTime(row.updated_at)}</td>
                       <td className="whitespace-nowrap">
                         <div className="flex gap-1">
+                          <ResourceExportButton resourceType="embedding" resourceIds={[row.template_id]} />
                           <button className="btn sm ghost" onClick={() => { setEditing(row); setModalOpen(true); }}>{t('common.edit')}</button>
                           <button className="btn sm danger" onClick={() => setDeleteTarget(row)}>{t('common.delete')}</button>
                         </div>

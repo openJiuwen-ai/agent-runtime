@@ -16,6 +16,7 @@ import { useRouter } from '../../router';
 import { ApiError, Org, OrgApi } from '../../services/api';
 import { toast } from '../../stores/uiStore';
 import { formatTime } from '../../utils/format';
+import { ResourceExportButton, ResourceImportButton } from '../../components/ResourceImportExport';
 
 type OrgSortField = 'group_id' | 'display_name' | 'status' | 'updated_at';
 
@@ -31,6 +32,17 @@ export function OrgsPage() {
   const [delTarget, setDelTarget] = useState<Org | null>(null);
   const [items, setItems] = useState<Org[]>([]);
   const [togglingId, setTogglingId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+
+  const currentIds = items.map((item) => item.group_id);
+  const allCurrentSelected = currentIds.length > 0 && currentIds.every((id) => selectedIds.has(id));
+  const toggleCurrentPage = (checked: boolean) => {
+    setSelectedIds((previous) => {
+      const next = new Set(previous);
+      for (const id of currentIds) checked ? next.add(id) : next.delete(id);
+      return next;
+    });
+  };
 
   const sortOptions = useMemo(
     () => [
@@ -125,6 +137,16 @@ export function OrgsPage() {
             <button className="btn sm" onClick={() => void reload()}>
               {t('common.refresh')}
             </button>
+            <ResourceImportButton resourceType="organization" onImported={() => void reload()} />
+            <ResourceExportButton
+              resourceType="organization"
+              resourceIds={[...selectedIds]}
+              disabled={selectedIds.size === 0}
+              className="btn sm"
+            />
+            {selectedIds.size > 0 && (
+              <span className="text-xs text-muted">{t('importExport.selected', { count: selectedIds.size })}</span>
+            )}
             <button className="btn primary sm" onClick={() => navigate('/orgs/new')}>
               + {t('iam.newOrg')}
             </button>
@@ -142,6 +164,14 @@ export function OrgsPage() {
                 <table className="table w-max min-w-full">
                   <thead>
                     <tr>
+                      <th className="w-10">
+                        <input
+                          type="checkbox"
+                          aria-label={t('importExport.export')}
+                          checked={allCurrentSelected}
+                          onChange={(event) => toggleCurrentPage(event.target.checked)}
+                        />
+                      </th>
                       <th className="w-[25rem] max-w-[25rem]">
                         <TableColumnSort
                           label={t('iam.groupId')}
@@ -198,13 +228,25 @@ export function OrgsPage() {
                   <tbody>
                     {items.length === 0 ? (
                       <tr>
-                        <td colSpan={5}>
+                        <td colSpan={6}>
                           <Empty text={t('common.empty')} />
                         </td>
                       </tr>
                     ) : (
                       items.map((o) => (
                         <tr key={o.group_id}>
+                          <td>
+                            <input
+                              type="checkbox"
+                              aria-label={o.group_id}
+                              checked={selectedIds.has(o.group_id)}
+                              onChange={(event) => setSelectedIds((previous) => {
+                                const next = new Set(previous);
+                                event.target.checked ? next.add(o.group_id) : next.delete(o.group_id);
+                                return next;
+                              })}
+                            />
+                          </td>
                           <td
                             className="mono text-[11px] text-muted w-[25rem] max-w-[25rem] break-all"
                             title={o.group_id}

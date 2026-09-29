@@ -19,6 +19,7 @@ import { ApiError, IamUser, UserApi } from '../../services/api';
 import { toast } from '../../stores/uiStore';
 import { formatTime } from '../../utils/format';
 import { isValidIdentityId, sanitizeIdentityIdInput } from '../../utils/identityId';
+import { ResourceExportButton, ResourceImportButton } from '../../components/ResourceImportExport';
 
 type UserSortField = 'user_id' | 'display_name' | 'status' | 'updated_at';
 
@@ -35,6 +36,17 @@ export function UsersPage() {
   const [delTarget, setDelTarget] = useState<IamUser | null>(null);
   const [items, setItems] = useState<IamUser[]>([]);
   const [togglingId, setTogglingId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+
+  const currentIds = items.map((item) => item.user_id);
+  const allCurrentSelected = currentIds.length > 0 && currentIds.every((id) => selectedIds.has(id));
+  const toggleCurrentPage = (checked: boolean) => {
+    setSelectedIds((previous) => {
+      const next = new Set(previous);
+      for (const id of currentIds) checked ? next.add(id) : next.delete(id);
+      return next;
+    });
+  };
 
   const sortOptions = useMemo(
     () => [
@@ -129,6 +141,16 @@ export function UsersPage() {
             <button className="btn sm" onClick={() => void reload()}>
               {t('common.refresh')}
             </button>
+            <ResourceImportButton resourceType="user" onImported={() => void reload()} />
+            <ResourceExportButton
+              resourceType="user"
+              resourceIds={[...selectedIds]}
+              disabled={selectedIds.size === 0}
+              className="btn sm"
+            />
+            {selectedIds.size > 0 && (
+              <span className="text-xs text-muted">{t('importExport.selected', { count: selectedIds.size })}</span>
+            )}
             <button className="btn sm" onClick={() => setShowBatch(true)}>
               {t('iam.batchNewUser')}
             </button>
@@ -149,6 +171,14 @@ export function UsersPage() {
                 <table className="table w-max min-w-full">
                   <thead>
                     <tr>
+                      <th className="w-10">
+                        <input
+                          type="checkbox"
+                          aria-label={t('importExport.export')}
+                          checked={allCurrentSelected}
+                          onChange={(event) => toggleCurrentPage(event.target.checked)}
+                        />
+                      </th>
                       <th className="w-[25rem] max-w-[25rem]">
                         <TableColumnSort
                           label={t('iam.userId')}
@@ -205,13 +235,25 @@ export function UsersPage() {
                   <tbody>
                     {items.length === 0 ? (
                       <tr>
-                        <td colSpan={5}>
+                        <td colSpan={6}>
                           <Empty text={t('common.empty')} />
                         </td>
                       </tr>
                     ) : (
                       items.map((u) => (
                         <tr key={u.user_id}>
+                          <td>
+                            <input
+                              type="checkbox"
+                              aria-label={u.user_id}
+                              checked={selectedIds.has(u.user_id)}
+                              onChange={(event) => setSelectedIds((previous) => {
+                                const next = new Set(previous);
+                                event.target.checked ? next.add(u.user_id) : next.delete(u.user_id);
+                                return next;
+                              })}
+                            />
+                          </td>
                           <td
                             className="mono text-[11px] text-muted w-[25rem] max-w-[25rem] break-all"
                             title={u.user_id}

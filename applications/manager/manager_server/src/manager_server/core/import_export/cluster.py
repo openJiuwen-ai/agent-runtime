@@ -616,7 +616,7 @@ def _special_sheets(rows: dict[str, list[dict[str, Any]]]) -> list[SheetData]:
     for policy in rows.get("a2a_access_policy_template", []):
         configured_ids = {str(item) for item in (policy.get("member_template_ids") or [])}
         listed_ids = (
-            sorted(a2a_agent_ids)
+            sorted(a2a_agent_ids | configured_ids)
             if str(policy.get("mode") or "") == "denylist"
             else sorted(configured_ids)
         )

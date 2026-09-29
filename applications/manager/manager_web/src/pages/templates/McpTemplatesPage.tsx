@@ -18,6 +18,7 @@ import { toast } from '../../stores/uiStore';
 import type { McpTemplate } from '../../types';
 import { formatTime, truncate } from '../../utils/format';
 import { McpTemplateModal } from './McpTemplateModal';
+import { ResourceExportButton, ResourceImportButton } from '../../components/ResourceImportExport';
 
 type McpTemplateSortField = 'template_name' | 'description' | 'updated_at';
 
@@ -129,6 +130,7 @@ export function McpTemplatesPage() {
               className="basis-full sm:basis-auto"
             />
             <button className="btn sm" onClick={() => void reload()}>{t('common.refresh')}</button>
+            <ResourceImportButton resourceType="mcp" onImported={() => void reload()} />
             <button
               className="btn primary sm"
               onClick={() => {
@@ -240,6 +242,7 @@ export function McpTemplatesPage() {
                       </td>
                       <td className="whitespace-nowrap">
                         <div className="flex gap-1">
+                          <ResourceExportButton resourceType="mcp" resourceIds={[row.template_id]} />
                           <button
                             className="btn sm ghost"
                             onClick={() => {
