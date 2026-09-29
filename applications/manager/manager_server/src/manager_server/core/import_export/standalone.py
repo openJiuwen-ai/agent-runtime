@@ -16,15 +16,8 @@ from openjiuwen_runtime.foundation.db.handler import DBHandler
 from openjiuwen_runtime.foundation.db.sqlalchemy_handler import SQLAlchemyHandler
 from sqlalchemy import insert
 
-from manager_server.core.authz import AuthzService
 from manager_server.core.template.push_template_to_gateway import (
     slot_template_pairs_from_template_ref,
-)
-from manager_server.models.authz_models import (
-    AUTHZ_PERMISSION_TABLE_DEF,
-    AUTHZ_ROLE_PERMISSION_TABLE_DEF,
-    AUTHZ_ROLE_TABLE_DEF,
-    AUTHZ_ROLE_USER_TABLE_DEF,
 )
 from manager_server.schemas.template_schemas import (
     A2AAccessPolicyTemplateCreateBody,
@@ -50,7 +43,6 @@ from .cluster import (
     _identity_request,
     _list,
     _manager_actions,
-    _matches,
     _merge_special_rows,
     _object_id,
     _parse_leaf,
@@ -63,6 +55,12 @@ from .cluster import (
     _unique_filters,
 )
 from .registry import ImportExportContext, SheetData, WorkbookData, adapter_registry
+from .roles import (
+    apply_role_rows,
+    collect_roles_by_ids,
+    decode_role_sheets,
+    role_preflight_actions,
+)
 from .workbook import SENSITIVE_REDACTED
 
 _EXTRA_HEADERS = ["object_type", "object_id", "field_path", "value_type", "value"]
@@ -91,7 +89,9 @@ _SIMPLE_KINDS = (
     CatalogKind("embedding", "embedding_template", "EmbeddingModel", ("embedding_template",)),
     CatalogKind("skill", "skill_prebuilt_template", "PrebuiltSkill", ("skill_prebuilt_template",)),
     CatalogKind("guardrail", "permissions_template", "SafetyGuardrail", ("permissions_template",)),
-    CatalogKind("extension", "extension_config_template", "ExtensionConfig", ("extension_config_template",)),
+    CatalogKind(
+        "extension", "extension_config_template", "ExtensionConfig", ("extension_config_template",)
+    ),
     CatalogKind("mcp", "mcp_template", "MCPConfig", ("mcp_template",)),
     CatalogKind("a2a-agent", "a2a_outbound_template", "A2AAgent", ("a2a_outbound_template",)),
 )
@@ -188,8 +188,7 @@ def _manager_workbook(
 ) -> WorkbookData:
     extras: list[dict[str, Any]] = []
     sheets = [
-        _table_sheet(SPEC_BY_TABLE[table], rows_by_table.get(table, []), extras)
-        for table in tables
+        _table_sheet(SPEC_BY_TABLE[table], rows_by_table.get(table, []), extras) for table in tables
     ]
     special = {sheet.name: sheet for sheet in _special_sheets(rows_by_table)}
     if "agent_template" in tables:
@@ -270,13 +269,15 @@ def _catalog_structural_actions(
 ) -> list[dict[str, Any]]:
     actions: list[dict[str, Any]] = []
     if not rows.get(primary_table):
-        actions.append({
-            "scope": "workbook",
-            "object_type": primary_table,
-            "object_id": "",
-            "action": "missing_dependency",
-            "detail": f"{SPEC_BY_TABLE[primary_table].sheet} contains no data rows",
-        })
+        actions.append(
+            {
+                "scope": "workbook",
+                "object_type": primary_table,
+                "object_id": "",
+                "action": "missing_dependency",
+                "detail": f"{SPEC_BY_TABLE[primary_table].sheet} contains no data rows",
+            }
+        )
     for table, values in rows.items():
         seen: set[tuple[tuple[str, str], ...]] = set()
         for index, row in enumerate(values, start=2):
@@ -284,19 +285,27 @@ def _catalog_structural_actions(
             missing = [key for key, value in unique.items() if value in (None, "")]
             object_id = "|".join(str(value or "") for value in unique.values())
             if missing:
-                actions.append({
-                    "scope": "workbook", "object_type": table,
-                    "object_id": f"row:{index}", "action": "missing_dependency",
-                    "detail": f"missing business key column(s): {', '.join(missing)}",
-                })
+                actions.append(
+                    {
+                        "scope": "workbook",
+                        "object_type": table,
+                        "object_id": f"row:{index}",
+                        "action": "missing_dependency",
+                        "detail": f"missing business key column(s): {', '.join(missing)}",
+                    }
+                )
                 continue
             signature = tuple((key, str(value)) for key, value in unique.items())
             if signature in seen:
-                actions.append({
-                    "scope": "workbook", "object_type": table,
-                    "object_id": object_id, "action": "conflict",
-                    "detail": f"duplicate business key at decoded row {index}",
-                })
+                actions.append(
+                    {
+                        "scope": "workbook",
+                        "object_type": table,
+                        "object_id": object_id,
+                        "action": "conflict",
+                        "detail": f"duplicate business key at decoded row {index}",
+                    }
+                )
             seen.add(signature)
     return actions
 
@@ -310,22 +319,30 @@ def _validate_catalog_rows(rows: dict[str, list[dict[str, Any]]]) -> list[dict[s
             try:
                 schema.model_validate(body)
             except ValueError as exc:  # Pydantic error is intentionally shown in preflight.
-                actions.append({
-                    "scope": "workbook",
-                    "object_type": table,
-                    "object_id": "|".join(str(v or "") for v in _unique_filters(table, row).values()),
-                    "action": "conflict",
-                    "detail": f"invalid configuration: {exc}",
-                })
+                actions.append(
+                    {
+                        "scope": "workbook",
+                        "object_type": table,
+                        "object_id": "|".join(
+                            str(v or "") for v in _unique_filters(table, row).values()
+                        ),
+                        "action": "conflict",
+                        "detail": f"invalid configuration: {exc}",
+                    }
+                )
     for row in rows.get("a2a_outbound_template", []):
         required = ("template_name", "source_url", "card_path", "agent_card", "selected_interface")
         missing = [name for name in required if row.get(name) in (None, "")]
         if missing:
-            actions.append({
-                "scope": "workbook", "object_type": "a2a_outbound_template",
-                "object_id": str(row.get("template_id") or ""), "action": "missing_dependency",
-                "detail": f"missing required field(s): {', '.join(missing)}",
-            })
+            actions.append(
+                {
+                    "scope": "workbook",
+                    "object_type": "a2a_outbound_template",
+                    "object_id": str(row.get("template_id") or ""),
+                    "action": "missing_dependency",
+                    "detail": f"missing required field(s): {', '.join(missing)}",
+                }
+            )
     return actions
 
 
@@ -342,13 +359,15 @@ async def _a2a_policy_dependency_actions(
             if not item_id or item_id in workbook_agent_ids:
                 continue
             if await handler.get("a2a_outbound_template", {"template_id": item_id}) is None:
-                actions.append({
-                    "scope": "manager",
-                    "object_type": "a2a_access_policy_template",
-                    "object_id": str(policy.get("policy_id") or ""),
-                    "action": "missing_dependency",
-                    "detail": f"missing a2a_outbound_template.template_id={item_id}",
-                })
+                actions.append(
+                    {
+                        "scope": "manager",
+                        "object_type": "a2a_access_policy_template",
+                        "object_id": str(policy.get("policy_id") or ""),
+                        "action": "missing_dependency",
+                        "detail": f"missing a2a_outbound_template.template_id={item_id}",
+                    }
+                )
     return actions
 
 
@@ -360,9 +379,15 @@ class StandaloneCatalogImportService:
 
     async def create_missing(self, rows: dict[str, list[dict[str, Any]]]) -> int:
         order = (
-            "model_template", "embedding_template", "skill_prebuilt_template",
-            "extension_config_template", "mcp_template", "permissions_template",
-            "a2a_outbound_template", "a2a_access_policy_template", "agent_template",
+            "model_template",
+            "embedding_template",
+            "skill_prebuilt_template",
+            "extension_config_template",
+            "mcp_template",
+            "permissions_template",
+            "a2a_outbound_template",
+            "a2a_access_policy_template",
+            "agent_template",
         )
         create_rows: list[tuple[str, dict[str, Any]]] = []
         for table in order:
@@ -436,18 +461,26 @@ class CatalogAdapter:
 
 class A2APolicyAdapter(CatalogAdapter):
     def __init__(self) -> None:
-        super().__init__(CatalogKind(
-            "a2a-policy", "a2a_access_policy_template", "A2AAccessPolicy",
-            ("a2a_access_policy_template",),
-        ))
+        super().__init__(
+            CatalogKind(
+                "a2a-policy",
+                "a2a_access_policy_template",
+                "A2AAccessPolicy",
+                ("a2a_access_policy_template",),
+            )
+        )
 
 
 class AgentTemplateAdapter(CatalogAdapter):
     def __init__(self) -> None:
-        super().__init__(CatalogKind(
-            "agent-template", "agent_template", "AgentTemplate",
-            (*_AGENT_DEP_TABLES, "agent_template"),
-        ))
+        super().__init__(
+            CatalogKind(
+                "agent-template",
+                "agent_template",
+                "AgentTemplate",
+                (*_AGENT_DEP_TABLES, "agent_template"),
+            )
+        )
 
     async def export_many(
         self, context: ImportExportContext, resource_ids: list[str]
@@ -485,7 +518,9 @@ class AgentTemplateAdapter(CatalogAdapter):
             else:
                 outbound = []
                 for item_id in sorted(member_ids):
-                    row = await context.handler.get("a2a_outbound_template", {"template_id": item_id})
+                    row = await context.handler.get(
+                        "a2a_outbound_template", {"template_id": item_id}
+                    )
                     if row is not None:
                         outbound.append(_row_dict(row, DEF_BY_TABLE["a2a_outbound_template"]))
             rows["a2a_outbound_template"] = outbound
@@ -511,14 +546,10 @@ def _user_row(user: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def _fetch_users(
-    authorization: str | None, user_ids: list[str]
-) -> list[dict[str, Any]]:
+async def _fetch_users(authorization: str | None, user_ids: list[str]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for user_id in user_ids:
-        user = await _identity_request(
-            "GET", f"/v1/users/{quote(user_id, safe='')}", authorization
-        )
+        user = await _identity_request("GET", f"/v1/users/{quote(user_id, safe='')}", authorization)
         if user is None:
             raise LookupError(f"user not found: {user_id}")
         rows.append(_user_row(user))
@@ -539,10 +570,15 @@ def _identity_duplicates(
         else:
             seen.add(object_id)
             continue
-        actions.append({
-            "scope": "workbook", "object_type": object_type,
-            "object_id": object_id or f"row:{index}", "action": action, "detail": detail,
-        })
+        actions.append(
+            {
+                "scope": "workbook",
+                "object_type": object_type,
+                "object_id": object_id or f"row:{index}",
+                "action": action,
+                "detail": detail,
+            }
+        )
     return actions
 
 
@@ -558,7 +594,9 @@ async def _apply_users(
         if existing is not None:
             continue
         await _identity_request(
-            "POST", "/v1/users/", context.authorization,
+            "POST",
+            "/v1/users/",
+            context.authorization,
             body={
                 "user_id": user_id,
                 "username": str(user.get("username") or user_id),
@@ -570,7 +608,9 @@ async def _apply_users(
         status = str(user.get("status") or "active")
         if status != "active":
             await _identity_request(
-                "PATCH", f"/v1/users/{quote(user_id, safe='')}", context.authorization,
+                "PATCH",
+                f"/v1/users/{quote(user_id, safe='')}",
+                context.authorization,
                 body={"status": status},
             )
         created.append({"object_type": "user", "object_id": user_id})
@@ -591,11 +631,15 @@ class UserAdapter:
             resource_type=self.resource_type,
             resource_id=_selection_id(resource_ids),
             resource_name="User" if len(resource_ids) == 1 else "UserSelection",
-            sheets=[SheetData(
-                "02_Users", _USER_HEADERS, users,
-                "Selected user profiles. Passwords are never exported; fill initial_password for missing local users.",
-                {(index, "initial_password") for index in range(len(users))},
-            )],
+            sheets=[
+                SheetData(
+                    "02_Users",
+                    _USER_HEADERS,
+                    users,
+                    "Selected user profiles. Passwords are never exported; fill initial_password for missing local users.",
+                    {(index, "initial_password") for index in range(len(users))},
+                )
+            ],
         )
 
     def _decode(self, workbook: WorkbookData) -> list[dict[str, Any]]:
@@ -619,9 +663,12 @@ class UserAdapter:
             raise ValueError("workbook has blocking preflight issues")
         created = await _apply_users(context, users)
         return {
-            "resource_type": self.resource_type, "resource_id": workbook.resource_id,
-            "created_manager_objects": 0, "created_identity_objects": created,
-            "reused_objects": report["summary"].get("reuse", 0), "pending_sync": [],
+            "resource_type": self.resource_type,
+            "resource_id": workbook.resource_id,
+            "created_manager_objects": 0,
+            "created_identity_objects": created,
+            "reused_objects": report["summary"].get("reuse", 0),
+            "pending_sync": [],
         }
 
 
@@ -643,14 +690,19 @@ class OrganizationAdapter:
             )
             if org is None:
                 raise LookupError(f"organization not found: {group_id}")
-            orgs.append({
-                "group_id": group_id,
-                "display_name": org.get("display_name") or group_id,
-                "status": org.get("status") or "active",
-            })
-            response = await _identity_request(
-                "GET", f"/v1/orgs/{quote(group_id, safe='')}/members", context.authorization
-            ) or {}
+            orgs.append(
+                {
+                    "group_id": group_id,
+                    "display_name": org.get("display_name") or group_id,
+                    "status": org.get("status") or "active",
+                }
+            )
+            response = (
+                await _identity_request(
+                    "GET", f"/v1/orgs/{quote(group_id, safe='')}/members", context.authorization
+                )
+                or {}
+            )
             for member in response.get("users") or []:
                 user_id = str(member.get("user_id") or "").strip()
                 if not user_id:
@@ -667,9 +719,13 @@ class OrganizationAdapter:
             resource_id=_selection_id(resource_ids),
             resource_name="Organization" if len(resource_ids) == 1 else "OrganizationSelection",
             sheets=[
-                SheetData("02_Users", _USER_HEADERS, users,
-                          "Referenced member profiles; fill initial_password only for missing local users.",
-                          {(index, "initial_password") for index in range(len(users))}),
+                SheetData(
+                    "02_Users",
+                    _USER_HEADERS,
+                    users,
+                    "Referenced member profiles; fill initial_password only for missing local users.",
+                    {(index, "initial_password") for index in range(len(users))},
+                ),
                 SheetData("03_Organizations", _ORG_HEADERS, orgs),
                 SheetData("22_OrganizationMembers", ["group_id", "user_id"], memberships),
             ],
@@ -682,7 +738,11 @@ class OrganizationAdapter:
         for required in ("02_Users", "03_Organizations", "22_OrganizationMembers"):
             if required not in sheets:
                 raise ValueError(f"missing required sheet: {required}")
-        return sheets["02_Users"].rows, sheets["03_Organizations"].rows, sheets["22_OrganizationMembers"].rows
+        return (
+            sheets["02_Users"].rows,
+            sheets["03_Organizations"].rows,
+            sheets["22_OrganizationMembers"].rows,
+        )
 
     async def preflight(
         self, context: ImportExportContext, workbook: WorkbookData
@@ -718,10 +778,15 @@ class OrganizationAdapter:
             elif key[0] not in org_ids or key[1] not in user_ids:
                 detail = "membership references a user or organization absent from the workbook"
             if detail:
-                actions.append({
-                    "scope": "workbook", "object_type": "organization_member",
-                    "object_id": "|".join(key), "action": "conflict", "detail": detail,
-                })
+                actions.append(
+                    {
+                        "scope": "workbook",
+                        "object_type": "organization_member",
+                        "object_id": "|".join(key),
+                        "action": "conflict",
+                        "detail": detail,
+                    }
+                )
             seen.add(key)
         return _report(self.resource_type, workbook.resource_id, actions)
 
@@ -740,13 +805,20 @@ class OrganizationAdapter:
             if existing is not None:
                 continue
             await _identity_request(
-                "POST", "/v1/orgs/", context.authorization,
-                body={"group_id": group_id, "display_name": str(org.get("display_name") or group_id)},
+                "POST",
+                "/v1/orgs/",
+                context.authorization,
+                body={
+                    "group_id": group_id,
+                    "display_name": str(org.get("display_name") or group_id),
+                },
             )
             status = str(org.get("status") or "active")
             if status != "active":
                 await _identity_request(
-                    "PATCH", f"/v1/orgs/{quote(group_id, safe='')}", context.authorization,
+                    "PATCH",
+                    f"/v1/orgs/{quote(group_id, safe='')}",
+                    context.authorization,
                     body={"status": status},
                 )
             new_org_ids.add(group_id)
@@ -756,10 +828,12 @@ class OrganizationAdapter:
             for row in memberships
             if str(row.get("group_id") or "") in new_org_ids
         }
-        created.extend(await _apply_users(
-            context,
-            [row for row in users if str(row.get("user_id") or "") in required_user_ids],
-        ))
+        created.extend(
+            await _apply_users(
+                context,
+                [row for row in users if str(row.get("user_id") or "") in required_user_ids],
+            )
+        )
         members_by_org: dict[str, list[str]] = {}
         for row in memberships:
             group_id = str(row.get("group_id") or "")
@@ -767,13 +841,18 @@ class OrganizationAdapter:
                 members_by_org.setdefault(group_id, []).append(str(row.get("user_id") or ""))
         for group_id, user_ids in members_by_org.items():
             await _identity_request(
-                "POST", f"/v1/orgs/{quote(group_id, safe='')}/members", context.authorization,
+                "POST",
+                f"/v1/orgs/{quote(group_id, safe='')}/members",
+                context.authorization,
                 body={"user_ids": user_ids},
             )
         return {
-            "resource_type": self.resource_type, "resource_id": workbook.resource_id,
-            "created_manager_objects": 0, "created_identity_objects": created,
-            "reused_objects": report["summary"].get("reuse", 0), "pending_sync": [],
+            "resource_type": self.resource_type,
+            "resource_id": workbook.resource_id,
+            "created_manager_objects": 0,
+            "created_identity_objects": created,
+            "reused_objects": report["summary"].get("reuse", 0),
+            "pending_sync": [],
         }
 
 
@@ -786,215 +865,74 @@ class RoleAdapter:
     async def export_many(
         self, context: ImportExportContext, resource_ids: list[str]
     ) -> WorkbookData:
-        roles: list[dict[str, Any]] = []
-        permissions: list[dict[str, Any]] = []
-        assignments: list[dict[str, Any]] = []
-        user_ids: set[str] = set()
-        for role_id in resource_ids:
-            role = await context.handler.get(AUTHZ_ROLE_TABLE_DEF.table_name, {"role_id": role_id})
-            if role is None:
-                raise LookupError(f"role not found: {role_id}")
-            roles.append({
-                "role_id": role_id, "name": getattr(role, "name", ""),
-                "description": getattr(role, "description", None), "scope": getattr(role, "scope", "admin"),
-                "is_system": bool(getattr(role, "is_system", False)),
-                "enabled": bool(getattr(role, "enabled", True)),
-            })
-            for binding in await _list(context.handler, AUTHZ_ROLE_PERMISSION_TABLE_DEF.table_name, {"role_id": role_id}):
-                permissions.append({"role_id": role_id, "permission_id": getattr(binding, "permission_id", "")})
-            for binding in await _list(context.handler, AUTHZ_ROLE_USER_TABLE_DEF.table_name, {"role_id": role_id}):
-                user_id = str(getattr(binding, "user_id", "") or "")
-                user_ids.add(user_id)
-                assignments.append({
-                    "role_id": role_id, "user_id": user_id,
-                    "expires_at": getattr(binding, "expires_at", None),
-                })
+        role_rows = await collect_roles_by_ids(context.handler, resource_ids)
+        user_ids = {
+            str(item.get("user_id") or "")
+            for item in role_rows.assignments
+            if str(item.get("user_id") or "")
+        }
         users = await _fetch_users(context.authorization, sorted(user_ids))
         return WorkbookData(
             resource_type=self.resource_type,
             resource_id=_selection_id(resource_ids),
             resource_name="Role" if len(resource_ids) == 1 else "RoleSelection",
             sheets=[
-                SheetData("02_Users", _USER_HEADERS, users,
-                          "Referenced assignee profiles; fill initial_password only for missing local users.",
-                          {(index, "initial_password") for index in range(len(users))}),
-                SheetData("40_Roles", ["role_id", "name", "description", "scope", "is_system", "enabled"], roles),
-                SheetData("41_RolePermissions", ["role_id", "permission_id"], permissions),
-                SheetData("42_RoleAssignments", ["role_id", "user_id", "expires_at"], assignments),
+                SheetData(
+                    "02_Users",
+                    _USER_HEADERS,
+                    users,
+                    "Referenced assignee profiles; fill initial_password only for missing local users.",
+                    {(index, "initial_password") for index in range(len(users))},
+                ),
+                *role_rows.sheets(),
             ],
         )
 
     def _decode(self, workbook: WorkbookData):
         sheets = _sheet_map(workbook)
-        for required in ("02_Users", "40_Roles", "41_RolePermissions", "42_RoleAssignments"):
-            if required not in sheets:
-                raise ValueError(f"missing required sheet: {required}")
-        return (
-            sheets["02_Users"].rows,
-            sheets["40_Roles"].rows,
-            sheets["41_RolePermissions"].rows,
-            sheets["42_RoleAssignments"].rows,
-        )
+        if "02_Users" not in sheets:
+            raise ValueError("missing required sheet: 02_Users")
+        return sheets["02_Users"].rows, decode_role_sheets(workbook, required=True)
 
     async def preflight(
         self, context: ImportExportContext, workbook: WorkbookData
     ) -> dict[str, Any]:
-        users, roles, permissions, assignments = self._decode(workbook)
+        users, role_rows = self._decode(workbook)
         actions = _identity_duplicates("user", "user_id", users)
-        actions.extend(_identity_duplicates("role", "role_id", roles))
-        missing_role_ids: set[str] = set()
-        for role in roles:
-            role_id = str(role.get("role_id") or "")
-            existing = await context.handler.get(
-                AUTHZ_ROLE_TABLE_DEF.table_name, {"role_id": role_id}
+        actions.extend(
+            await _identity_actions(
+                context.authorization,
+                users,
+                [],
             )
-            if existing is None:
-                missing_role_ids.add(role_id)
-        required_user_ids = {
-            str(item.get("user_id") or "")
-            for item in assignments
-            if str(item.get("role_id") or "") in missing_role_ids
-        }
-        actions.extend(await _identity_actions(
-            context.authorization,
-            [row for row in users if str(row.get("user_id") or "") in required_user_ids],
-            [],
-        ))
-        permission_map: dict[str, set[str]] = {}
-        for item in permissions:
-            role_id = str(item.get("role_id") or "")
-            permission_id = str(item.get("permission_id") or "")
-            permission_map.setdefault(role_id, set()).add(permission_id)
-            existing = await context.handler.get(
-                AUTHZ_PERMISSION_TABLE_DEF.table_name, {"permission_id": permission_id}
+        )
+        actions.extend(
+            await role_preflight_actions(
+                context.handler,
+                users=users,
+                role_rows=role_rows,
             )
-            if existing is None:
-                actions.append({
-                    "scope": "manager", "object_type": "authz_permission",
-                    "object_id": permission_id, "action": "missing_dependency",
-                    "detail": f"permission required by role {role_id} does not exist",
-                })
-        role_ids = {str(item.get("role_id") or "") for item in roles}
-        user_ids = {str(item.get("user_id") or "") for item in users}
-        for item in assignments:
-            role_id = str(item.get("role_id") or "")
-            user_id = str(item.get("user_id") or "")
-            if role_id not in role_ids or user_id not in user_ids:
-                actions.append({
-                    "scope": "workbook", "object_type": "authz_role_user",
-                    "object_id": f"{role_id}|{user_id}", "action": "missing_dependency",
-                    "detail": "assignment references a role or user absent from the workbook",
-                })
-        for role in roles:
-            role_id = str(role.get("role_id") or "")
-            existing = await context.handler.get(AUTHZ_ROLE_TABLE_DEF.table_name, {"role_id": role_id})
-            if existing is None:
-                if bool(role.get("is_system")):
-                    action, detail = "conflict", "system roles may only be reused"
-                else:
-                    action, detail = "create", ""
-            else:
-                desired = {
-                    key: role.get(key) for key in ("name", "description", "scope", "is_system", "enabled")
-                }
-                existing_value = {key: getattr(existing, key, None) for key in desired}
-                current_permissions = {
-                    str(getattr(item, "permission_id", ""))
-                    for item in await _list(
-                        context.handler, AUTHZ_ROLE_PERMISSION_TABLE_DEF.table_name, {"role_id": role_id}
-                    )
-                }
-                if _matches(existing_value, desired) and current_permissions == permission_map.get(role_id, set()):
-                    action, detail = "reuse", "existing role is reused; assignments are not overwritten"
-                else:
-                    action, detail = "conflict", "same role_id exists with different role or permission configuration"
-            actions.append({
-                "scope": "manager", "object_type": "authz_role", "object_id": role_id,
-                "action": action, "detail": detail,
-            })
-            if (
-                action == "create"
-                and str(role.get("scope") or "") == "admin"
-                and any(
-                    str(item.get("role_id") or "") == role_id
-                    for item in assignments
-                )
-            ):
-                actions.append({
-                    "scope": "manager", "object_type": "authz_role_user", "object_id": role_id,
-                    "action": "warning", "detail": "import creates admin-scope role assignments",
-                })
+        )
         return _report(self.resource_type, workbook.resource_id, actions)
 
     async def apply(self, context: ImportExportContext, workbook: WorkbookData) -> dict[str, Any]:
-        users, roles, permissions, assignments = self._decode(workbook)
+        users, role_rows = self._decode(workbook)
         report = await self.preflight(context, workbook)
         if not report["can_import"]:
             raise ValueError("workbook has blocking preflight issues")
-        target_role_ids = {
-            str(role.get("role_id") or "")
-            for role in roles
-            if await context.handler.get(
-                AUTHZ_ROLE_TABLE_DEF.table_name,
-                {"role_id": str(role.get("role_id") or "")},
-            ) is None
-        }
-        required_user_ids = {
-            str(item.get("user_id") or "")
-            for item in assignments
-            if str(item.get("role_id") or "") in target_role_ids
-        }
-        created_identity = await _apply_users(
-            context,
-            [row for row in users if str(row.get("user_id") or "") in required_user_ids],
+        created_identity = await _apply_users(context, users)
+        created_roles, created_assignments = await apply_role_rows(
+            context.handler,
+            role_rows=role_rows,
+            operator_id=context.operator_id,
         )
-        permission_map: dict[str, list[str]] = {}
-        for item in permissions:
-            permission_map.setdefault(str(item.get("role_id") or ""), []).append(
-                str(item.get("permission_id") or "")
-            )
-        new_roles: set[str] = set()
-        service = AuthzService(context.handler)
-        for role in roles:
-            role_id = str(role.get("role_id") or "")
-            if await context.handler.get(AUTHZ_ROLE_TABLE_DEF.table_name, {"role_id": role_id}) is not None:
-                continue
-            await service.create_role(
-                role_id=role_id,
-                name=str(role.get("name") or role_id),
-                description=role.get("description"),
-                scope=str(role.get("scope") or "admin"),
-                permission_ids=permission_map.get(role_id, []),
-                operator_id=context.operator_id,
-            )
-            if not bool(role.get("enabled", True)):
-                await service.update_role(
-                    role_id, name=None, description=None, scope=None, enabled=False,
-                    permission_ids=None, operator_id=context.operator_id,
-                )
-            new_roles.add(role_id)
-        now = datetime.now(UTC)
-        created_assignments = 0
-        for item in assignments:
-            role_id = str(item.get("role_id") or "")
-            if role_id not in new_roles:
-                continue
-            user_id = str(item.get("user_id") or "")
-            expires_at = item.get("expires_at")
-            if isinstance(expires_at, str) and expires_at:
-                expires_at = datetime.fromisoformat(expires_at)
-            await context.handler.create(AUTHZ_ROLE_USER_TABLE_DEF.table_name, {
-                "role_id": role_id, "user_id": user_id,
-                "granted_by": context.operator_id, "expires_at": expires_at or None,
-                "data": None, "created_at": now, "created_by": context.operator_id,
-                "updated_at": now, "updated_by": context.operator_id,
-            })
-            created_assignments += 1
         return {
-            "resource_type": self.resource_type, "resource_id": workbook.resource_id,
-            "created_manager_objects": len(new_roles) + created_assignments,
+            "resource_type": self.resource_type,
+            "resource_id": workbook.resource_id,
+            "created_manager_objects": created_roles + created_assignments,
             "created_identity_objects": created_identity,
-            "reused_objects": report["summary"].get("reuse", 0), "pending_sync": [],
+            "reused_objects": report["summary"].get("reuse", 0),
+            "pending_sync": [],
         }
 
 

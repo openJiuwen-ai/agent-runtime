@@ -54,6 +54,12 @@ from manager_server.models.template_models import (
 )
 
 from .registry import ImportExportContext, SheetData, WorkbookData, adapter_registry
+from .roles import (
+    apply_role_rows,
+    collect_roles_for_users,
+    decode_role_sheets,
+    role_preflight_actions,
+)
 from .workbook import SENSITIVE_REDACTED
 
 _AUDIT_FIELDS = {"id", "created_at", "updated_at", "created_by", "updated_by", "granted_by"}
@@ -248,6 +254,9 @@ _SHEET_ORDER = (
     "32_RuntimeVolumes",
     "33_ContainerTemplates",
     "34_ContainerDetails",
+    "40_Roles",
+    "41_RolePermissions",
+    "42_RoleAssignments",
     "90_ExtraFields",
 )
 
@@ -1439,6 +1448,7 @@ class ClusterImportExportAdapter:
     async def export(self, context: ImportExportContext, resource_id: str) -> WorkbookData:
         rows = await _collect_rows(context.handler, resource_id)
         users, groups = _referenced_subject_ids(rows)
+        role_rows = await collect_roles_for_users(context.handler, users)
         user_rows = []
         for user_id in sorted(users):
             user = await _identity_request(
@@ -1499,6 +1509,7 @@ class ClusterImportExportAdapter:
                 _SHEET_NOTES["03_Organizations"],
             )
         )
+        sheets.extend(role_rows.sheets())
         sheets.append(
             SheetData(
                 "90_ExtraFields",
@@ -1527,6 +1538,7 @@ class ClusterImportExportAdapter:
         self, context: ImportExportContext, workbook: WorkbookData
     ) -> dict[str, Any]:
         rows, users, organizations = _decode_workbook(workbook)
+        role_rows = decode_role_sheets(workbook, required=False)
         actions = _structural_actions(workbook, rows, users, organizations)
         actions.extend(await _identity_actions(context.authorization, users, organizations))
         actions.extend(
@@ -1536,10 +1548,18 @@ class ClusterImportExportAdapter:
         actions.extend(await _instance_host_actions(context.handler, rows))
         actions.extend(await _dependency_actions(context.handler, rows))
         actions.extend(await _a2a_semantic_actions(context.handler, rows))
+        actions.extend(
+            await role_preflight_actions(
+                context.handler,
+                users=users,
+                role_rows=role_rows,
+            )
+        )
         return _report(actions, workbook.resource_id)
 
     async def apply(self, context: ImportExportContext, workbook: WorkbookData) -> dict[str, Any]:
         rows, users, organizations = _decode_workbook(workbook)
+        role_rows = decode_role_sheets(workbook, required=False)
         report = await self.preflight(context, workbook)
         if not report["can_import"]:
             raise ValueError("workbook has blocking preflight issues")
@@ -1580,6 +1600,12 @@ class ClusterImportExportAdapter:
                 )
                 created_identity.append({"object_type": "user", "object_id": user_id})
 
+        created_roles, created_assignments = await apply_role_rows(
+            context.handler,
+            role_rows=role_rows,
+            operator_id=context.operator_id,
+        )
+
         create_rows: list[tuple[str, dict[str, Any]]] = []
         for table in _IMPORT_ORDER:
             table_def = DEF_BY_TABLE.get(table)
@@ -1615,7 +1641,7 @@ class ClusterImportExportAdapter:
         return {
             "resource_type": "cluster",
             "resource_id": workbook.resource_id,
-            "created_manager_objects": len(create_rows),
+            "created_manager_objects": len(create_rows) + created_roles + created_assignments,
             "created_identity_objects": created_identity,
             "reused_objects": report["summary"].get("reuse", 0),
             "pending_sync": sorted(pending_sync),

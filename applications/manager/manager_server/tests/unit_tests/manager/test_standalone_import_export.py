@@ -140,8 +140,9 @@ async def test_organization_export_resolves_member_identity_provider(
 
 
 @pytest.mark.asyncio
-async def test_existing_admin_role_does_not_warn_about_skipped_assignments(
+async def test_existing_admin_role_adds_missing_assignment_with_warning(
     manager_api: ManagerApiHarness,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     h = manager_api
     role = await AuthzService(h.handler).create_role(
@@ -211,13 +212,52 @@ async def test_existing_admin_role_does_not_warn_about_skipped_assignments(
         ],
     )
 
-    report = await RoleAdapter().preflight(
-        ImportExportContext(manager_api.handler, "Bearer test"),
-        workbook,
+    async def fake_identity_request(
+        method: str,
+        path: str,
+        _authorization: str | None,
+        body: dict | None = None,
+    ):
+        assert method == "GET"
+        assert path == "/v1/users/existing-user"
+        assert body is None
+        return {
+            "user_id": "existing-user",
+            "username": "existing-user",
+            "identity_provider": "local",
+            "display_name": "Existing User",
+            "status": "active",
+        }
+
+    monkeypatch.setattr(
+        "manager_server.core.import_export.standalone._identity_request",
+        fake_identity_request,
+    )
+    monkeypatch.setattr(
+        "manager_server.core.import_export.cluster._identity_request",
+        fake_identity_request,
     )
 
+    adapter = RoleAdapter()
+    context = ImportExportContext(
+        manager_api.handler,
+        "Bearer test",
+        operator_id="test-operator",
+    )
+    report = await adapter.preflight(
+        context,
+        workbook,
+    )
+    result = await adapter.apply(context, workbook)
+
     assert report["can_import"] is True
-    assert report["summary"] == {"reuse": 1}
+    assert report["summary"] == {"reuse": 2, "create": 1, "warning": 1}
+    assert result["created_manager_objects"] == 1
+    assignment = await h.handler.get(
+        AUTHZ_ROLE_USER_TABLE_DEF.table_name,
+        {"role_id": role["role_id"], "user_id": "existing-user"},
+    )
+    assert assignment is not None
 
 
 @pytest.mark.asyncio
@@ -435,7 +475,7 @@ async def test_role_import_creates_assignment_with_expiry(
         workbook,
     )
 
-    assert report["summary"] == {"create": 1, "warning": 1, "reuse": 1}
+    assert report["summary"] == {"create": 2, "warning": 1, "reuse": 1}
     assert result["created_manager_objects"] == 2
     assignment = await manager_api.handler.get(
         AUTHZ_ROLE_USER_TABLE_DEF.table_name,
@@ -443,3 +483,122 @@ async def test_role_import_creates_assignment_with_expiry(
     )
     assert assignment is not None
     assert assignment.expires_at.replace(tzinfo=UTC) == expiry
+
+
+@pytest.mark.asyncio
+async def test_role_import_never_overwrites_assignment_expiry(
+    manager_api: ManagerApiHarness,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    h = manager_api
+    original_expiry = datetime(2030, 1, 15, 12, 0, tzinfo=UTC)
+    imported_expiry = datetime(2031, 1, 15, 12, 0, tzinfo=UTC)
+    role = await AuthzService(h.handler).create_role(
+        role_id="existing_user_role",
+        name="Existing User Role",
+        description=None,
+        scope="user",
+        permission_ids=[],
+        operator_id="test-operator",
+    )
+    await AuthzService(h.handler).assign_role_users(
+        role["role_id"],
+        ["existing-user"],
+        "test-operator",
+        expires_at=original_expiry,
+    )
+
+    async def fake_identity_request(
+        method: str,
+        path: str,
+        _authorization: str | None,
+        body: dict | None = None,
+    ):
+        assert method == "GET"
+        assert path == "/v1/users/existing-user"
+        assert body is None
+        return {
+            "user_id": "existing-user",
+            "username": "existing-user",
+            "identity_provider": "local",
+            "display_name": "Existing User",
+            "status": "active",
+        }
+
+    monkeypatch.setattr(
+        "manager_server.core.import_export.standalone._identity_request",
+        fake_identity_request,
+    )
+    monkeypatch.setattr(
+        "manager_server.core.import_export.cluster._identity_request",
+        fake_identity_request,
+    )
+    workbook = WorkbookData(
+        resource_type="role",
+        resource_id=role["role_id"],
+        resource_name="Role",
+        sheets=[
+            SheetData(
+                "02_Users",
+                [
+                    "user_id",
+                    "username",
+                    "identity_provider",
+                    "display_name",
+                    "status",
+                    "initial_password",
+                ],
+                [
+                    {
+                        "user_id": "existing-user",
+                        "username": "existing-user",
+                        "identity_provider": "local",
+                        "display_name": "Existing User",
+                        "status": "active",
+                        "initial_password": "",
+                    }
+                ],
+            ),
+            SheetData(
+                "40_Roles",
+                ["role_id", "name", "description", "scope", "is_system", "enabled"],
+                [
+                    {
+                        "role_id": role["role_id"],
+                        "name": role["name"],
+                        "description": role["description"],
+                        "scope": role["scope"],
+                        "is_system": role["is_system"],
+                        "enabled": role["enabled"],
+                    }
+                ],
+            ),
+            SheetData("41_RolePermissions", ["role_id", "permission_id"], []),
+            SheetData(
+                "42_RoleAssignments",
+                ["role_id", "user_id", "expires_at"],
+                [
+                    {
+                        "role_id": role["role_id"],
+                        "user_id": "existing-user",
+                        "expires_at": imported_expiry,
+                    }
+                ],
+            ),
+        ],
+    )
+    adapter = RoleAdapter()
+    context = ImportExportContext(h.handler, "Bearer test", operator_id="test-operator")
+
+    report = await adapter.preflight(context, workbook)
+
+    assert report["can_import"] is False
+    assert report["summary"]["conflict"] == 1
+    with pytest.raises(ValueError, match="blocking preflight issues"):
+        await adapter.apply(context, workbook)
+    assignment = await h.handler.get(
+        AUTHZ_ROLE_USER_TABLE_DEF.table_name,
+        {"role_id": role["role_id"], "user_id": "existing-user"},
+    )
+    assert assignment is not None
+    assert assignment.expires_at.replace(tzinfo=UTC) == original_expiry
