@@ -18,6 +18,7 @@ import { ExtensionTemplateModal } from './ExtensionTemplateModal';
 import { toast } from '../../stores/uiStore';
 import { formatTime, truncate } from '../../utils/format';
 import { useRouter } from '../../router';
+import { ResourceExportButton, ResourceImportButton } from '../../components/ResourceImportExport';
 
 type ExtensionTemplateSortField =
   | 'template_name'
@@ -134,6 +135,7 @@ export function ExtensionTemplatesPage() {
           <button className="btn sm" onClick={() => void reload()}>
             {t('common.refresh')}
           </button>
+          <ResourceImportButton resourceType="extension" onImported={() => void reload()} />
           <button
             className="btn primary sm"
             onClick={() => {
@@ -297,8 +299,9 @@ export function ExtensionTemplatesPage() {
                   </td>
                   <td className="mono text-[11px] text-muted whitespace-nowrap">{formatTime(row.updated_at)}</td>
                   <td className="whitespace-nowrap min-w-[9.5rem]">
-                    <div className="flex items-center gap-1">
-                      <button
+                      <div className="flex items-center gap-1">
+                        <ResourceExportButton resourceType="extension" resourceIds={[row.template_id]} />
+                        <button
                         className="btn sm ghost"
                         onClick={() => {
                           setEditing(row);

@@ -1154,7 +1154,55 @@ async function workbookRequest<T>(
   return wrapped.data as T;
 }
 
+async function workbookExportRequest(
+  resourceType: string,
+  resourceIds: string[],
+  retried = false,
+): Promise<{ blob: Blob; filename: string }> {
+  const path = `/v1/import-export/${encodeURIComponent(resourceType)}/export`;
+  const url = resolveRequestUrl(API_BASE, path, '');
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+  let response = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ resource_ids: resourceIds }),
+  });
+  if (response.status === 401 && accessToken && !retried && await tryRefresh()) {
+    return workbookExportRequest(resourceType, resourceIds, true);
+  }
+  if (!response.ok) {
+    const text = await response.text();
+    let detail: unknown = response.statusText;
+    try { detail = (JSON.parse(text) as { detail?: unknown }).detail ?? detail; } catch { /* noop */ }
+    throw new ApiError(response.status, formatApiErrorDetail(detail));
+  }
+  const disposition = response.headers.get('Content-Disposition') || '';
+  const fallback = `${resourceType}-${resourceIds.length === 1 ? resourceIds[0] : 'selection'}.xlsx`;
+  const filename = disposition.match(/filename="?([^";]+)"?/i)?.[1] || fallback;
+  return { blob: await response.blob(), filename };
+}
+
 export const ImportExportApi = {
+  exportResources: (resourceType: string, resourceIds: string[]) =>
+    workbookExportRequest(resourceType, resourceIds),
+  preflight: (resourceType: string, file: File) =>
+    workbookRequest<ImportPreflightReport>(
+      `/v1/import-export/${encodeURIComponent(resourceType)}/preflight`,
+      file,
+    ),
+  import: (resourceType: string, file: File, confirmationToken: string) =>
+    workbookRequest<{
+      resource_type: string;
+      resource_id: string;
+      created_manager_objects: number;
+      created_identity_objects: Array<{ object_type: string; object_id: string }>;
+      reused_objects: number;
+      pending_sync: string[];
+    }>(
+      `/v1/import-export/${encodeURIComponent(resourceType)}/import?confirmation_token=${encodeURIComponent(confirmationToken)}`,
+      file,
+    ),
   exportCluster: async (id: string): Promise<{ blob: Blob; filename: string }> => {
     const path = `/v1/import-export/cluster/${encodeURIComponent(id)}/export`;
     const url = resolveRequestUrl(API_BASE, path, '');

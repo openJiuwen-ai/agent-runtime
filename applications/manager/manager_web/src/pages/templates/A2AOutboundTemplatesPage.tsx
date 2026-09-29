@@ -13,6 +13,7 @@ import { formatTime, truncate } from '../../utils/format';
 import { useRouter } from '../../router';
 import { A2AOutboundTemplateModal } from './A2AOutboundTemplateModal';
 import { A2ADiscoverySettingsModal } from './A2ADiscoverySettingsModal';
+import { ResourceExportButton, ResourceImportButton } from '../../components/ResourceImportExport';
 
 export function A2AOutboundTemplatesPage({ embedded = false, header, tabs }: { embedded?: boolean; header?: ReactNode; tabs?: ReactNode }) {
   const { navigate } = useRouter();
@@ -39,7 +40,7 @@ export function A2AOutboundTemplatesPage({ embedded = false, header, tabs }: { e
     <div className="flex min-w-0 flex-col gap-4">
       <div className="page-header w-full min-w-0 items-start">
         {header ?? (!embedded && <div><div className="page-title">A2A 管理</div><div className="page-subtitle">发现、注册并维护企业可用的出站 A2A Agent</div></div>)}
-        <div className="a2a-header-actions flex min-w-0 flex-nowrap items-center justify-end gap-2"><ListSearchInput value={searchInput} onChange={setSearchInput} placeholder="搜索名称、地址或标签" className="a2a-header-search py-0" /><button className="btn sm shrink-0" onClick={() => void reload()}>刷新</button><button className="btn sm shrink-0" onClick={() => setSettingsOpen(true)}>网络访问设置</button><button className="btn primary sm shrink-0" onClick={() => { setEditing(null); setModalOpen(true); }}>+ 注册 A2A Agent</button></div>
+        <div className="a2a-header-actions flex min-w-0 flex-nowrap items-center justify-end gap-2"><ListSearchInput value={searchInput} onChange={setSearchInput} placeholder="搜索名称、地址或标签" className="a2a-header-search py-0" /><button className="btn sm shrink-0" onClick={() => void reload()}>刷新</button><ResourceImportButton resourceType="a2a-agent" onImported={() => void reload()} className="btn sm shrink-0" /><button className="btn sm shrink-0" onClick={() => setSettingsOpen(true)}>网络访问设置</button><button className="btn primary sm shrink-0" onClick={() => { setEditing(null); setModalOpen(true); }}>+ 注册 A2A Agent</button></div>
       </div>
       {tabs}
       <div className="card !p-0 overflow-x-auto">
@@ -52,7 +53,7 @@ export function A2AOutboundTemplatesPage({ embedded = false, header, tabs }: { e
             <td><Switch checked={row.enabled} onChange={(enabled) => void action(() => A2AOutboundTemplateApi.update(row.template_id, { enabled }))} /></td>
             <td>{row.reference_count > 0 ? <span className="tag cursor-pointer" title="点击查看生效策略覆盖了该 Agent 的模板" onClick={() => navigate('/agent-templates')}>{row.reference_count}</span> : <span className="text-[11px] text-muted">0</span>}</td>
             <td className="text-xs text-muted whitespace-nowrap">{formatTime(row.last_checked_at)}</td>
-            <td className="whitespace-nowrap"><div className="flex gap-1"><button className="btn sm ghost" onClick={() => void action(() => A2AOutboundTemplateApi.refresh(row.template_id))}>检查 Card</button>{row.pending_revision && <><button className="btn sm" onClick={() => void action(() => A2AOutboundTemplateApi.confirmRevision(row.template_id, true))}>接受</button><button className="btn sm ghost" onClick={() => void action(() => A2AOutboundTemplateApi.confirmRevision(row.template_id, false))}>拒绝</button></>}<button className="btn sm ghost" onClick={() => { setEditing(row); setModalOpen(true); }}>编辑</button><button className="btn sm danger" onClick={() => setDeleting(row)}>删除</button></div></td>
+            <td className="whitespace-nowrap"><div className="flex gap-1"><ResourceExportButton resourceType="a2a-agent" resourceIds={[row.template_id]} /><button className="btn sm ghost" onClick={() => void action(() => A2AOutboundTemplateApi.refresh(row.template_id))}>检查 Card</button>{row.pending_revision && <><button className="btn sm" onClick={() => void action(() => A2AOutboundTemplateApi.confirmRevision(row.template_id, true))}>接受</button><button className="btn sm ghost" onClick={() => void action(() => A2AOutboundTemplateApi.confirmRevision(row.template_id, false))}>拒绝</button></>}<button className="btn sm ghost" onClick={() => { setEditing(row); setModalOpen(true); }}>编辑</button><button className="btn sm danger" onClick={() => setDeleting(row)}>删除</button></div></td>
           </tr>)}</tbody></table>}
       </div>
       {data && <Pagination page={page} pageSize={pageSize} total={data.total} onChange={(p, ps) => { setPage(p); setPageSize(ps); }} />}

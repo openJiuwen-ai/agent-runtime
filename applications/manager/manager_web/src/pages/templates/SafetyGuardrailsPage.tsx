@@ -18,6 +18,7 @@ import { SafetyGuardrailsModal } from './SafetyGuardrailsModal';
 import { toast } from '../../stores/uiStore';
 import { formatTime, truncate } from '../../utils/format';
 import { useRouter } from '../../router';
+import { ResourceExportButton, ResourceImportButton } from '../../components/ResourceImportExport';
 
 type PermissionsTemplateSortField = 'template_name' | 'description' | 'updated_at';
 
@@ -136,6 +137,7 @@ export function SafetyGuardrailsPage() {
             <button className="btn sm" onClick={() => void reload()}>
               {t('common.refresh')}
             </button>
+            <ResourceImportButton resourceType="guardrail" onImported={() => void reload()} />
             <button
               className="btn primary sm"
               onClick={() => {
@@ -260,8 +262,9 @@ export function SafetyGuardrailsPage() {
                               {formatTime(row.updated_at)}
                             </td>
                             <td className="whitespace-nowrap min-w-[9.5rem]">
-                              <div className="flex items-center gap-1">
-                                <button
+                                <div className="flex items-center gap-1">
+                                  <ResourceExportButton resourceType="guardrail" resourceIds={[row.template_id]} />
+                                  <button
                                   className="btn sm ghost"
                                   onClick={() => {
                                     setEditing(row);

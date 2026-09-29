@@ -20,6 +20,7 @@ import { bumpGuideRevision } from '../../stores/guideStore';
 import { useGuideAutoOpen } from '../../hooks/useGuideAutoOpen';
 import { formatTime, truncate } from '../../utils/format';
 import { useRouter } from '../../router';
+import { ResourceExportButton, ResourceImportButton } from '../../components/ResourceImportExport';
 
 const MODEL_TYPE_OPTIONS = ['default', 'video', 'audio', 'vision', 'image_gen'] as const;
 const MODEL_PROVIDER_OPTIONS = [
@@ -153,6 +154,7 @@ export function ModelTemplatesPage() {
           <button className="btn sm" onClick={() => void reload()}>
             {t('common.refresh')}
           </button>
+          <ResourceImportButton resourceType="model" onImported={() => void reload()} />
           <button
             className="btn primary sm"
             onClick={() => {
@@ -350,6 +352,7 @@ export function ModelTemplatesPage() {
                     <td className="mono text-[11px] text-muted whitespace-nowrap">{formatTime(row.updated_at)}</td>
                     <td className="whitespace-nowrap min-w-[9.5rem]">
                       <div className="flex items-center gap-1">
+                        <ResourceExportButton resourceType="model" resourceIds={[row.template_id]} />
                         <button
                           className="btn sm ghost"
                           onClick={() => {

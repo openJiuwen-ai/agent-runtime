@@ -42,6 +42,20 @@
     "configRefreshCost": "Saving pushes this change to the gateway and triggers a runtime-wide config refresh: all AgentServer pods are gracefully sunset and rebuilt with the new configuration. Existing sessions are unaffected; new sessions may cold-start slower during the rebuild, and rapid consecutive changes may be temporarily rejected by capacity protection until recovery.",
     "configRefreshCostTemplate": "If this template is referenced by an instance, saving pushes the change to the gateway and triggers a runtime-wide config refresh: all AgentServer pods of that runtime are gracefully sunset and rebuilt. Existing sessions are unaffected; new sessions may cold-start slower during the rebuild, and rapid consecutive changes may be temporarily rejected by capacity protection until recovery."
   },
+  "importExport": {
+    "import": "Import",
+    "export": "Export",
+    "importTitle": "Import configuration",
+    "importHelp": "Select an XLSX file exported by Manager. A preflight runs first, and existing configuration is never overwritten.",
+    "xlsxOnly": "Only .xlsx files are supported",
+    "preflightPassed": "Preflight passed. The workbook can be imported.",
+    "preflightBlocked": "Preflight failed. Fix the issues below and select the file again.",
+    "confirmImport": "Import",
+    "importSuccess": "Import complete: {{created}} created, {{reused}} reused",
+    "exportSuccess": "Export complete",
+    "exportFailed": "Export failed: {{detail}}",
+    "selected": "{{count}} selected"
+  },
   "time": {
     "secondsAgo": "{{count}}s ago",
     "minutesAgo": "{{count}}m ago",
