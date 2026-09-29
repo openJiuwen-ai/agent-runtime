@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     redis_url: str = Field(default="", validation_alias="REDIS_URL")
     redis_username: str = Field(default="", validation_alias="REDIS_USER")
     redis_password: str = Field(default="", validation_alias="REDIS_PASSWORD")
+    # Redis 键前缀（选配；共享 Redis 多业务隔离用）。空 = 键名与历史版本一致
+    redis_key_prefix: str = Field(default="", validation_alias="REDIS_KEY_PREFIX")
     # 巡检锁 TTL（毫秒）：< 扫描间隔，扫描结束自动过期，无需释放
     scan_lock_ttl_ms: int = Field(default=30000, validation_alias="MANAGER_SCAN_LOCK_TTL_MS")
 

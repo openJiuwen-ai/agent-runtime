@@ -16,11 +16,9 @@ import logging
 import time
 from typing import Any
 
+from ..config import rm_key_prefix
 from ..util import now_ts, s, to_int
 from . import lua_scripts as lua
-
-# hash tag 语义见模块 docstring
-KEY_PREFIX = "{resource_manager}"
 
 logger = logging.getLogger("agent_runtime.resource_manager")
 
@@ -43,8 +41,9 @@ def _script_tag(script: str) -> str:
 class RMKeys:
     """RM Redis 键构造器（全部返回含前缀的完整键名）。"""
 
-    def __init__(self, prefix: str = KEY_PREFIX) -> None:
-        self.prefix = prefix
+    def __init__(self, prefix: str | None = None) -> None:
+        # 缺省构造时求值（用户级前缀 env 在进程启动后不变）；显式入参优先
+        self.prefix = rm_key_prefix() if prefix is None else prefix
 
     # ---- per-scope Pod 池
     def scope_pods(self, scope_id: str) -> str:

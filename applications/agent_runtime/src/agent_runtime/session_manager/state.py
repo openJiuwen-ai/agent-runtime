@@ -16,12 +16,9 @@ import logging
 import time
 from typing import Any
 
+from ..config import sm_key_prefix
 from ..util import s, to_int
 from . import lua_scripts as lua
-
-# hash tag 语义见模块 docstring；scope_id 等外部标识符禁止含 {/}（否则
-# 破坏同槽性，入口校验见 orchestrator/config_store）
-KEY_PREFIX = "{session_manager}"
 
 logger = logging.getLogger("agent_runtime.session_manager")
 
@@ -40,8 +37,9 @@ def _script_tag(script: str) -> str:
 class SMKeys:
     """SM Redis 键构造器（全部返回含前缀的完整键名）。"""
 
-    def __init__(self, prefix: str = KEY_PREFIX) -> None:
-        self.prefix = prefix
+    def __init__(self, prefix: str | None = None) -> None:
+        # 缺省构造时求值（用户级前缀 env 在进程启动后不变）；显式入参优先
+        self.prefix = sm_key_prefix() if prefix is None else prefix
 
     # ---- 会话四处（不变量 1：一个活跃会话同时存在于此四处）
     def session_expiry(self) -> str:

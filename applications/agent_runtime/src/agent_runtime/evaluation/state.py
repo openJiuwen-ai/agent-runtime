@@ -26,10 +26,12 @@ import json
 import logging
 from typing import Any
 
+from ..config import user_key_prefix
 from ..util import s, to_int
 
-# hash tag 语义见模块 docstring(须与 config.py 的 EVAL_KEY_PREFIX 一致)
-KEY_PREFIX = "{agent_runtime:eval}"
+
+def key_prefix() -> str:
+    return f"{user_key_prefix()}{{agent_runtime:eval}}"
 
 # 键 TTL:采样窗口 24h + 1h 余量(每写刷新;scope 消失后自然过期)
 SAMPLE_TTL_SEC = 25 * 3600
@@ -45,19 +47,19 @@ class EvalKeys:
 
     @staticmethod
     def scope_samples(scope_id: str) -> str:
-        return f"{KEY_PREFIX}:sample:scope:{scope_id}"
+        return f"{key_prefix()}:sample:scope:{scope_id}"
 
     @staticmethod
     def scope_counters(scope_id: str) -> str:
-        return f"{KEY_PREFIX}:ct:scope:{scope_id}"
+        return f"{key_prefix()}:ct:scope:{scope_id}"
 
     @staticmethod
     def report_latest() -> str:
-        return f"{KEY_PREFIX}:report:latest"
+        return f"{key_prefix()}:report:latest"
 
     @staticmethod
     def report_history() -> str:
-        return f"{KEY_PREFIX}:report:history"
+        return f"{key_prefix()}:report:history"
 
 
 class EvaluationState:

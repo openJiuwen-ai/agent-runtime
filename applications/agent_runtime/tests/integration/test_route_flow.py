@@ -14,7 +14,7 @@ import time
 
 import pytest
 
-from agent_runtime.config import SM_KEY_PREFIX
+from agent_runtime.config import sm_key_prefix
 from agent_runtime.errors import (
     ErrorCode,
     HTTP_STATUS_MAP,
@@ -86,7 +86,7 @@ async def test_route_scope_full_at_max_pods_fast_fail(runtime):
     assert HTTP_STATUS_MAP[ErrorCode.SCOPE_FULL] == 503   # 错误码契约
     # 拆除净空：不创建等待队列键
     assert await runtime.sm_state.redis.keys(
-        f"{SM_KEY_PREFIX}:scope:{SCOPE}:waiters"
+        f"{sm_key_prefix()}:scope:{SCOPE}:waiters"
     ) == []
 
 
@@ -261,7 +261,7 @@ async def test_route_idempotent_replay_via_handler_idempotency(runtime):
             from openjiuwen_runtime.service.context.primitives.idempotency import Idempotency
 
             self.idempotency = Idempotency(
-                runtime.redis, prefix=f"{SM_KEY_PREFIX}:idem"
+                runtime.redis, prefix=f"{sm_key_prefix()}:idem"
             )
 
         @property

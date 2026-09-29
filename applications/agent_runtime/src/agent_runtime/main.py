@@ -27,7 +27,13 @@ from openjiuwen_runtime.service import App, SystemContext
 from openjiuwen_runtime.service.config import ServiceConfig
 
 from . import errors as app_errors
-from .config import RM_KEY_PREFIX, SERVICE_PREFIX, SM_KEY_PREFIX, AgentRuntimeConfig
+from .config import (
+    SERVICE_PREFIX,
+    AgentRuntimeConfig,
+    job_lock_key,
+    rm_key_prefix,
+    sm_key_prefix,
+)
 from .evaluation.collector import (
     FLUSH_INTERVAL_SEC,
     FLUSH_TIMEOUT_SEC,
@@ -150,7 +156,7 @@ class OrchestratorSystemContext(SystemContext):
             redis=redis_client,
             db=db,
             settings=settings,
-            key_prefix=SM_KEY_PREFIX,
+            key_prefix=sm_key_prefix(),
             table_definitions=[
                 SERVICE_CONFIG_TEMPLATE_TABLE_DEF,
                 SERVICE_CONFIG_CONTAINER_TABLE_DEF,
@@ -169,7 +175,7 @@ class OrchestratorSystemContext(SystemContext):
             redis=redis_client,
             db=db,
             settings=settings,
-            key_prefix=RM_KEY_PREFIX,
+            key_prefix=rm_key_prefix(),
             instance_id=self.instance_id,
             logger=self.logger,
             _owns_db=False,
@@ -246,35 +252,35 @@ class OrchestratorSystemContext(SystemContext):
                 name="sm_sweep",
                 on_tick=self.sm_sweeper.sweep_once,
                 interval_sec=arc.sweep_interval,
-                lock_key="agent_runtime:job:sm_sweep",
+                lock_key=job_lock_key("sm_sweep"),
                 tick_timeout_sec=TICK_TIMEOUTS["sm_sweep"],
             ),
             self.rm_sysctx.create_single_leader_job(
                 name="rm_autoscale",
                 on_tick=self.rm_sweeper.autoscale_once,
                 interval_sec=arc.autoscale_interval,
-                lock_key="agent_runtime:job:rm_autoscale",
+                lock_key=job_lock_key("rm_autoscale"),
                 tick_timeout_sec=TICK_TIMEOUTS["rm_autoscale"],
             ),
             self.rm_sysctx.create_single_leader_job(
                 name="rm_reclaim",
                 on_tick=self.rm_sweeper.reclaim_once,
                 interval_sec=arc.reclaim_interval,
-                lock_key="agent_runtime:job:rm_reclaim",
+                lock_key=job_lock_key("rm_reclaim"),
                 tick_timeout_sec=TICK_TIMEOUTS["rm_reclaim"],
             ),
             self.rm_sysctx.create_single_leader_job(
                 name="rm_watch",
                 on_tick=self.rm_sweeper.watch_once,
                 interval_sec=arc.watch_interval,
-                lock_key="agent_runtime:job:rm_watch",
+                lock_key=job_lock_key("rm_watch"),
                 tick_timeout_sec=TICK_TIMEOUTS["rm_watch"],
             ),
             self.rm_sysctx.create_single_leader_job(
                 name="rm_reconcile",
                 on_tick=self.rm_sweeper.reconcile_once,
                 interval_sec=arc.reconcile_interval,
-                lock_key="agent_runtime:job:rm_reconcile",
+                lock_key=job_lock_key("rm_reconcile"),
                 tick_timeout_sec=TICK_TIMEOUTS["rm_reconcile"],
             ),
             # 系统自评估(sys_eval 全局单副本产报告,任意副本可读):
@@ -282,14 +288,14 @@ class OrchestratorSystemContext(SystemContext):
                 name="sys_sample",
                 on_tick=self.eval_collector.sample_once,
                 interval_sec=max(arc.eval_sample_interval, 5),
-                lock_key="agent_runtime:job:sys_sample",
+                lock_key=job_lock_key("sys_sample"),
                 tick_timeout_sec=TICK_TIMEOUTS["sys_sample"],
             ),
             self.create_single_leader_job(
                 name="sys_eval",
                 on_tick=self.evaluator.evaluate_once,
                 interval_sec=max(arc.eval_interval, 30),
-                lock_key="agent_runtime:job:sys_eval",
+                lock_key=job_lock_key("sys_eval"),
                 tick_timeout_sec=TICK_TIMEOUTS["sys_eval"],
             ),
         ]
@@ -408,7 +414,7 @@ class OrchestratorSystemContext(SystemContext):
             entry["tick_timeout_sec"] = TICK_TIMEOUTS.get(job.name)
             # leader 身份：选主锁值 "{name}:{instance_id}:{uuid4}"（TTL=interval，
             # tick 间隙可能瞬时缺 key → leader=None 属正常）
-            lock_key = f"agent_runtime:job:{job.name}"
+            lock_key = job_lock_key(job.name)
             token = await self.redis.get(lock_key)
             if token:
                 token = (

@@ -104,6 +104,8 @@ spec:
               value: "<<AGENT_RUNTIME_PORT>>"
             - name: OPENJIUWEN_SERVICE_REDIS_URL
               value: "<<REDIS_URL>>"
+            - name: OPENJIUWEN_SERVICE_REDIS_KEY_PREFIX
+              value: "<<REDIS_KEY_PREFIX>>"
             - name: REDIS_USER
               value: "<<REDIS_USER>>"
             - name: OPENJIUWEN_SERVICE_REQUEST_TIMEOUT_SECONDS

@@ -25,13 +25,13 @@ from __future__ import annotations
 import asyncio
 import json
 
-from agent_runtime.config import RM_KEY_PREFIX, SM_KEY_PREFIX
+from agent_runtime.config import rm_key_prefix, sm_key_prefix
 from tests.conftest import requires_lua
 from tests.integration._dual_harness import scope_of
 
 # 键前缀取自 config 常量（带 hash tag），断言不硬编码字面键名
-SM = f"{SM_KEY_PREFIX}:"
-RM = f"{RM_KEY_PREFIX}:"
+SM = f"{sm_key_prefix()}:"
+RM = f"{rm_key_prefix()}:"
 
 # ---------------------------------------------------------------- 基础
 

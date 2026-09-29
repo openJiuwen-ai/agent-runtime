@@ -519,27 +519,6 @@ check_proxy_up_dependency() {
     info "PROXY module has no dependencies"
 }
 
-prepare_nfs_path() {
-    local name="$1"
-    local path="${DEPLOY_VARS["NFS_POD_PATH"]}/${name}"
-
-    check_if_nfs_up
-
-    if [ "${DEPLOY_VARS["RENDER_ONLY"]}" == "true" ]; then
-        return
-    fi
-
-    if [ "${DEPLOY_VARS["ENABLE_EXTERNAL_NFS"]}" == "true" ]; then
-        return
-    fi
-
-    info "Preparing ${name} data directory: ${path}"
-    local nfs_pod=$(kubectl get pods -n default -l app=${DEPLOY_VARS["NFS_NAME"]} -o jsonpath='{.items[0].metadata.name}')
-    info "Executing: kubectl exec ${nfs_pod} -- sh -c \"mkdir -p ${path}\""
-    kubectl exec ${nfs_pod} -- sh -c "mkdir -p ${path}"
-    success "${name} directory created successfully in NFS Pod!"
-}
-
 check_monitor_up_dependency() {
     # No business-side reporting means the built-in observability stack has no
     # consumer; skip deploying it
@@ -585,7 +564,7 @@ check_manager_up_dependency(){
 
 check_runtime_up_dependency(){
     if [ "${DEPLOY_VARS["CLAW_MOUNT_TYPE"]}" == "nfs" ]; then
-        prepare_nfs_path "jiuwenclaw"
+        prepare_nfs_path "jiuwenclaw/${DEPLOY_VARS["NAMESPACE"]}"
     elif [ "${DEPLOY_VARS["CLAW_MOUNT_TYPE"]}" == "pvc" ]; then
         check_if_nfs_sc_up
     fi
