@@ -354,13 +354,13 @@ async def role_preflight_actions(
                 "is_system": _as_bool(_get(existing, "is_system", False)),
                 "enabled": _as_bool(_get(existing, "enabled", True)),
             }
+            current_permission_rows = await _list(
+                handler,
+                AUTHZ_ROLE_PERMISSION_TABLE_DEF.table_name,
+                {"role_id": role_id},
+            )
             current_permissions = {
-                str(_get(item, "permission_id") or "")
-                for item in await _list(
-                    handler,
-                    AUTHZ_ROLE_PERMISSION_TABLE_DEF.table_name,
-                    {"role_id": role_id},
-                )
+                str(_get(item, "permission_id") or "") for item in current_permission_rows
             }
             if existing_value == desired and current_permissions == permission_map[role_id]:
                 action, detail = "reuse", "existing role is reused without modification"
@@ -428,12 +428,15 @@ async def role_preflight_actions(
             }
         )
         role = role_by_id[role_id]
-        if (
-            action == "create"
-            and role_actions.get(role_id) in {"create", "reuse"}
-            and str(role.get("scope") or "") == "admin"
-            and _is_effective(desired_expiry)
-        ):
+        should_warn = all(
+            (
+                action == "create",
+                role_actions.get(role_id) in {"create", "reuse"},
+                str(role.get("scope") or "") == "admin",
+                _is_effective(desired_expiry),
+            )
+        )
+        if should_warn:
             actions.append(
                 {
                     "scope": "manager",

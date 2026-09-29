@@ -636,13 +636,15 @@ class UserAdapter:
                     "02_Users",
                     _USER_HEADERS,
                     users,
-                    "Selected user profiles. Passwords are never exported; fill initial_password for missing local users.",
+                    "Selected user profiles. Passwords are never exported; "
+                    "fill initial_password for missing local users.",
                     {(index, "initial_password") for index in range(len(users))},
                 )
             ],
         )
 
-    def _decode(self, workbook: WorkbookData) -> list[dict[str, Any]]:
+    @staticmethod
+    def _decode(workbook: WorkbookData) -> list[dict[str, Any]]:
         sheet = _sheet_map(workbook).get("02_Users")
         if sheet is None:
             raise ValueError("missing required sheet: 02_Users")
@@ -731,8 +733,9 @@ class OrganizationAdapter:
             ],
         )
 
+    @staticmethod
     def _decode(
-        self, workbook: WorkbookData
+        workbook: WorkbookData,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
         sheets = _sheet_map(workbook)
         for required in ("02_Users", "03_Organizations", "22_OrganizationMembers"):
@@ -888,7 +891,8 @@ class RoleAdapter:
             ],
         )
 
-    def _decode(self, workbook: WorkbookData):
+    @staticmethod
+    def _decode(workbook: WorkbookData):
         sheets = _sheet_map(workbook)
         if "02_Users" not in sheets:
             raise ValueError("missing required sheet: 02_Users")
