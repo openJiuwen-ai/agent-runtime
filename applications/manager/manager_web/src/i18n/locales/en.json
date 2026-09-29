@@ -491,7 +491,7 @@
       "skillAuthorizationEnabled": "Enable dynamic skill authorization",
       "skillAuthorizationHint": "Request user authorization dynamically from permissions declared in SKILL.md; permission control must be enabled",
       "permissionMode": "Permission mode (permission_mode)",
-      "permissionModeHint": "normal: LOW/MEDIUM→allow, HIGH/CRITICAL→ask; strict: MEDIUM→ask, CRITICAL→deny",
+      "permissionModeHint": "normal: LOW/MEDIUM→allow, HIGH/CRITICAL→ask; strict: LOW→allow, MEDIUM/HIGH→ask, CRITICAL→deny",
       "modes": {
         "normal": "normal",
         "strict": "strict"
