@@ -15,7 +15,7 @@ render_secret_configmap() {
     done
     own_keys+=("REDIS_PASSWORD" "OBS_SECRET_KEY")
 
-    local key b64
+    local key skey b64
 
     # 文件不存在（首次部署）→ 完整渲染模板
     # 文件已存在 → yq 只更新自己的密码域，不碰其他键
@@ -30,8 +30,11 @@ render_secret_configmap() {
 
     for key in "${own_keys[@]}"; do
         [ -n "${DEPLOY_VARS[$key]:-}" ] || continue
+        # RUNTIME 模块的密码在 secret 中的键为 OPENJIUWEN_SERVICE_DB_PASSWORD，其余为 <module>_DB_PASSWORD
+        skey="${key}"
+        [[ "${key}" == "RUNTIME_DB_PASSWORD" ]] && skey="OPENJIUWEN_SERVICE_DB_PASSWORD"
         b64=$(printf '%s' "${DEPLOY_VARS[$key]}" | base64 -w 0)
-        yq eval ".data[\"${key}\"] = \"${b64}\"" -i "${file}"
+        yq eval ".data[\"${skey}\"] = \"${b64}\"" -i "${file}"
     done
     success "Secret configmap is rendered."
 }
