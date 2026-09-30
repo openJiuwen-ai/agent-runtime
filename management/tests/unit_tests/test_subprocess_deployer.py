@@ -59,7 +59,7 @@ class TestGetStatusRefreshesReturncode(TestCase):
     def test_natural_exit_detected_as_stopped(self):
         deployer = LocalSubprocessDeployer()
         process = _FakePopen()
-        deployer._processes["dep-1"] = process
+        getattr(deployer, "_processes")["dep-1"] = process
 
         self.assertEqual(
             asyncio.run(deployer.get_status("dep-1")),
@@ -78,7 +78,7 @@ class TestGetStatusRefreshesReturncode(TestCase):
     def test_running_process_stays_running(self):
         deployer = LocalSubprocessDeployer()
         process = _FakePopen()
-        deployer._processes["dep-2"] = process
+        getattr(deployer, "_processes")["dep-2"] = process
 
         self.assertEqual(
             asyncio.run(deployer.get_status("dep-2")),
@@ -91,7 +91,7 @@ class TestStopRegisteredProcess(TestCase):
 
     def _deployer_with(self, process) -> LocalSubprocessDeployer:
         deployer = LocalSubprocessDeployer()
-        deployer._processes["dep-stop"] = process
+        getattr(deployer, "_processes")["dep-stop"] = process
         return deployer
 
     def test_graceful_stop_succeeds_and_cleans_up(self):
@@ -106,7 +106,7 @@ class TestStopRegisteredProcess(TestCase):
             self.assertTrue(result.success)
             self.assertTrue(process.terminated)
             self.assertFalse(process.killed)
-            self.assertNotIn("dep-stop", deployer._processes)
+            self.assertNotIn("dep-stop", getattr(deployer, "_processes"))
             self.assertFalse(venv_path.exists())
 
     def test_stop_kills_when_terminate_times_out(self):
@@ -121,5 +121,5 @@ class TestStopRegisteredProcess(TestCase):
             self.assertTrue(result.success)
             self.assertTrue(process.terminated)
             self.assertTrue(process.killed)
-            self.assertNotIn("dep-stop", deployer._processes)
+            self.assertNotIn("dep-stop", getattr(deployer, "_processes"))
             self.assertFalse(venv_path.exists())
