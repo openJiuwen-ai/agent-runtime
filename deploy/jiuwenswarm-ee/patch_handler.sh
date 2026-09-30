@@ -67,7 +67,8 @@ post_and_validate() {
 # 按存储模式注入 data 卷(.jiuwenswarm 数据目录):模板里不再预置 PVC 卷,
 # 由本函数按 CLAW_MOUNT_TYPE 二选一注入——
 #   pvc: StorageClass 动态供给的持久卷(claimName=CLAW_PVC)
-#   nfs: 直连 NFS 共享目录(server=NFS_SERVER_ADDR, path=NFS_SHARE_PATH/jiuwenclaw,
+#   nfs: 直连 NFS 共享目录(server=NFS_SERVER_ADDR,
+#        path=NFS_SHARE_PATH/jiuwenclaw/<NAMESPACE>, 按实例 namespace 隔离,
 #        与 check_runtime_up_dependency 预创建的内置 NFS 数据目录同名)
 # 用法: inject_data_volume <json_file>
 inject_data_volume() {
@@ -83,7 +84,7 @@ inject_data_volume() {
         # 规整共享根路径尾部 '/'(内置 NFS 默认 NFS_SHARE_PATH="/",避免拼出 //jiuwenclaw)
         local nfs_share="${DEPLOY_VARS["NFS_SHARE_PATH"]%/}"
         data_volume="$(jq -n --arg server "${DEPLOY_VARS["NFS_SERVER_ADDR"]}" \
-            --arg path "${nfs_share}/jiuwenclaw" \
+            --arg path "${nfs_share}/jiuwenclaw/${DEPLOY_VARS["NAMESPACE"]}" \
             '{name: "data", nfs: {server: $server, path: $path}}')"
     else
         error "Unsupported CLAW_MOUNT_TYPE '${mount_type}' (expect pvc/nfs)"

@@ -12,11 +12,42 @@ import logging
 import os
 from dataclasses import dataclass
 
-# 键前缀带 Redis Cluster hash tag（{xxx}）：cluster 下模块键域同槽，多键 Lua
-# 保持原子；单实例/哨兵下 {} 无语义。须与两模块 state.KEY_PREFIX 一致。
-SM_KEY_PREFIX = "{session_manager}"
-RM_KEY_PREFIX = "{resource_manager}"
+# SM/RM 键域带 Redis Cluster hash tag（{xxx}）：cluster 下模块键域同槽，多键 Lua
+# 保持原子；单实例/哨兵下 {} 无语义。
 SERVICE_PREFIX = "/api/session"      # 唯一 App 的 prefix（端口 8091）
+
+
+def user_key_prefix() -> str:
+    """用户级键命名空间前缀；env 未设置返回空串。
+
+    env 名与框架 ``ServiceConfig.from_env`` 读取的同名变量一致（其缺省
+    ``service``，见 service/config.py）。
+    空串语义 = SM/RM/JOB 键名与历史版本逐字节一致（存量部署升级零迁移）。
+    启动/构造时调用（不做 import 期 env 读取）。
+    """
+    return os.getenv("OPENJIUWEN_SERVICE_REDIS_KEY_PREFIX", "").strip()
+
+
+def sm_key_prefix() -> str:
+    """SM 键域完整前缀：用户前缀 + hash tag 域 ``{session_manager}``（cluster 下同槽）。"""
+    return f"{user_key_prefix()}{{session_manager}}"
+
+
+def rm_key_prefix() -> str:
+    """RM 键域完整前缀：用户前缀 + hash tag 域 ``{resource_manager}``（cluster 下同槽）。"""
+    return f"{user_key_prefix()}{{resource_manager}}"
+
+
+
+def job_lock_key(name: str) -> str:
+    """周期任务选主/执行锁键：``[前缀:]{agent_runtime:job:<name>}``。
+
+    与 SM/RM/eval 同模式：用户前缀在 hash tag 外，tag=``agent_runtime:job:<name>``
+    （candidates/winner 双键 Lua 同槽）。winner/candidates 派生键由 coordinator
+    以 lock_key 直接后拼（tag 幂等），各 job 独占自己的 cluster 槽位。
+    """
+    return f"{user_key_prefix()}{{agent_runtime:job:{name}}}"
+
 
 logger = logging.getLogger("agent_runtime.config")
 

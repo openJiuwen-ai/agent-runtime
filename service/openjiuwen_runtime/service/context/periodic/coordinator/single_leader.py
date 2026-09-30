@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import re
 from typing import Any, Optional
 
 from openjiuwen_runtime.foundation.log import get_logger
@@ -23,6 +24,9 @@ from ..clock import RedisAlignedClock, redis_unix_now
 from ..lock import TickLock
 
 logger = get_logger(__name__)
+
+# 非空闭合 hash tag：{ 与 } 之间至少一个非花括号字符（{} 视为空 tag 无效）
+_META_TAG_RE = re.compile(r"\{[^{}]+\}")
 
 _ELECT_LUA = """
 local existing = redis.call('GET', KEYS[1])
@@ -46,6 +50,30 @@ redis.call('SADD', KEYS[1], ARGV[1])
 redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2]))
 return 1
 """
+
+
+def _meta_stem(lock_key: str) -> str:
+    """candidates/winner 派生键词干：保证两键同槽（Redis Cluster 双键 Lua）。
+
+    - lock_key 自带非空闭合 hash tag（如 agent_runtime job 键
+      ``<前缀>{agent_runtime:job:x}``，用户前缀在 tag 外）→ 整键作词干，
+      前缀保留（多租户共享 Redis 时各部署选主互不串扰）；
+    - 纯净无花括号的名字（如框架缺省 ``lock:<name>``，且不以 ``}`` 开头）
+      → 整键包 brace，恢复 ``{lock_key}:candidates/{epoch}`` 形态
+      （框架级同槽契约，任意调用方受益）；
+    - 其余一律 raise ValueError（空串 / ``}`` 开头 / 花括号残缺如
+      ``{}abc``、``x{}``、``foo{bar``——无法构成非空 tag，拒绝魔法修复）。
+    执行锁为单键操作，无需与派生键同槽。
+    """
+    if _META_TAG_RE.search(lock_key):
+        return lock_key
+    if lock_key and "{" not in lock_key and not lock_key.startswith("}"):
+        return "{%s}" % lock_key
+    raise ValueError(
+        f"invalid lock_key {lock_key!r}: 无法构造非空 hash tag "
+        "(candidates/winner 双键 Lua 需同槽)，"
+        "请使用形如 <前缀>{domain} 的键名或不含花括号的普通键名"
+    )
 
 
 class SingleLeaderCoordinator:
@@ -72,6 +100,8 @@ class SingleLeaderCoordinator:
         if meta_ttl_sec is None:
             meta_ttl_sec = max(3, int(math.ceil(self._gather_window_sec)) + 2)
         self._meta_ttl_sec = max(int(meta_ttl_sec), 1)
+        # 启动即校验 lock_key（病态键在 _meta_stem 内 raise，fail-fast）
+        _meta_stem(lock_key)
         self._lock = TickLock(
             redis,
             lock_key=lock_key,
@@ -86,13 +116,10 @@ class SingleLeaderCoordinator:
         return self._lock.lost_event
 
     def _candidates_key(self, epoch: int) -> str:
-        # hash tag({lock_key})：Redis Cluster 下 candidates 与 winner 落同一
-        # slot，抽签 Lua 的双键 EVAL 才能通过 cluster 客户端的同槽校验；
-        # 单实例下 {} 无语义。执行锁键本身保持原样（单键操作无需同槽）。
-        return f"{{{self._lock_key}}}:candidates:{epoch}"
+        return f"{_meta_stem(self._lock_key)}:candidates:{epoch}"
 
     def _winner_key(self, epoch: int) -> str:
-        return f"{{{self._lock_key}}}:winner:{epoch}"
+        return f"{_meta_stem(self._lock_key)}:winner:{epoch}"
 
     async def _enroll(self, cand_key: str, instance_id: str) -> None:
         await self._redis.eval(

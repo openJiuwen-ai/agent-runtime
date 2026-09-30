@@ -15,13 +15,13 @@ import uuid
 import httpx
 import redis.asyncio as aioredis
 
-from agent_runtime.config import RM_KEY_PREFIX, SM_KEY_PREFIX
+from agent_runtime.config import rm_key_prefix, sm_key_prefix
 
 RESULTS: list[tuple[str, bool, str]] = []
 
-# 键前缀取自服务常量（带 Redis Cluster hash tag），脚本断言不硬编码字面键名
-SM_PREFIX = f"{SM_KEY_PREFIX}:"
-RM_PREFIX = f"{RM_KEY_PREFIX}:"
+# 键前缀取自服务函数（用户前缀 + Redis Cluster hash tag），脚本断言不硬编码字面键名
+SM_PREFIX = f"{sm_key_prefix()}:"
+RM_PREFIX = f"{rm_key_prefix()}:"
 
 # 防误刷：目标 DB 只允许本服务前缀（{session_manager}:/{resource_manager}:
 # 业务键 + agent_runtime:job:* 选主执行锁 + {agent_runtime:job:*}:winner/

@@ -70,6 +70,8 @@ spec:
           value: "<<REDIS_URL>>"
         - name: REDIS_USER
           value: "<<REDIS_USER>>"
+        - name: REDIS_KEY_PREFIX
+          value: "<<REDIS_KEY_PREFIX>>"
         - name: MANAGER_RABBITMQ_URL
           value: "<<MANAGER_RABBITMQ_URL>>"
         - name: MANAGER_REST_HOST

@@ -127,7 +127,10 @@ async def run_heartbeat_scan_loop(stop: asyncio.Event, handler: DBHandler, redis
             pass
         try:
             if redis is not None and not await redis.set(
-                _SCAN_LOCK_KEY, owner, nx=True, px=settings.scan_lock_ttl_ms
+                f"{settings.redis_key_prefix}{_SCAN_LOCK_KEY}",
+                owner,
+                nx=True,
+                px=settings.scan_lock_ttl_ms,
             ):
                 _log.info("scan lock held by another replica, skip this round")
                 continue

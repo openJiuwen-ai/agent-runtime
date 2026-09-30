@@ -7,7 +7,7 @@ import pytest
 from fakeredis.aioredis import FakeRedis
 
 from agent_runtime.evaluation.state import (
-    KEY_PREFIX,
+    key_prefix,
     REPORT_HISTORY_MAX,
     EvaluationState,
 )
@@ -22,15 +22,15 @@ async def state():
 
 def test_key_prefix_has_hash_tag():
     # cluster 兼容:eval 键域整体单槽(首段字面量 {agent_runtime:eval})
-    assert KEY_PREFIX == "{agent_runtime:eval}"
+    assert key_prefix() == "{agent_runtime:eval}"
 
 
 def test_state_keys_shape():
     state = EvaluationState(redis=None)
-    assert state.k.scope_samples("s1") == f"{KEY_PREFIX}:sample:scope:s1"
-    assert state.k.scope_counters("s1") == f"{KEY_PREFIX}:ct:scope:s1"
-    assert state.k.report_latest() == f"{KEY_PREFIX}:report:latest"
-    assert state.k.report_history() == f"{KEY_PREFIX}:report:history"
+    assert state.k.scope_samples("s1") == f"{key_prefix()}:sample:scope:s1"
+    assert state.k.scope_counters("s1") == f"{key_prefix()}:ct:scope:s1"
+    assert state.k.report_latest() == f"{key_prefix()}:report:latest"
+    assert state.k.report_history() == f"{key_prefix()}:report:history"
 
 
 async def test_bump_counters_accumulates(state):
