@@ -12,6 +12,7 @@ import json
 import os
 import re
 import subprocess
+import weakref
 from pathlib import Path
 
 import click
@@ -93,7 +94,7 @@ def _build_project(project_dir: Path) -> Path:
     return whl_path
 
 
-_shutdown_done = False
+_shutdown_managers: "weakref.WeakSet" = weakref.WeakSet()
 
 
 def _shutdown_manager(manager) -> None:
@@ -101,11 +102,12 @@ def _shutdown_manager(manager) -> None:
 
     ``result_callback`` 仅在命令成功时触发，命令抛异常时不会执行，
     因此额外通过 ``atexit`` 兜底，保证数据库连接等资源始终被释放。
+    去重以 manager 实例为粒度，避免同一进程内多次调用 CLI 时
+    后续 manager 因模块级标记而被跳过。
     """
-    global _shutdown_done
-    if _shutdown_done:
+    if manager in _shutdown_managers:
         return
-    _shutdown_done = True
+    _shutdown_managers.add(manager)
     try:
         asyncio.run(manager.shutdown())
     except Exception as exc:

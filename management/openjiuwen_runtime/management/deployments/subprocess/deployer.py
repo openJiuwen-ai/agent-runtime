@@ -336,10 +336,10 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
 
         if deployment_id in self._processes:
             process = self._processes[deployment_id]
-            if process.returncode is None:
+            # poll() 会刷新 returncode，进程自然退出时也能被正确识别
+            if process.poll() is None:
                 return DeploymentStatus.RUNNING
-            else:
-                return DeploymentStatus.STOPPED
+            return DeploymentStatus.STOPPED
 
         if pid:
             is_running = self._check_process_by_pid(pid)

@@ -127,12 +127,18 @@ class VirtualEnvironmentManager:
             return venv_path
         except subprocess.TimeoutExpired as e:
             logger.error("Timed out creating virtual environment: %s", venv_path)
+            shutil.rmtree(venv_path, ignore_errors=True)
             raise RuntimeError(
                 f"Failed to create venv: command timed out after {e.timeout}s"
             ) from e
         except subprocess.CalledProcessError as e:
             logger.error("Failed to create virtual environment: %s", e.stderr)
+            shutil.rmtree(venv_path, ignore_errors=True)
             raise RuntimeError(f"Failed to create venv: {e}") from e
+        except Exception:
+            # 清理半成品 venv，避免下次调用因目录已存在而误判为创建成功
+            shutil.rmtree(venv_path, ignore_errors=True)
+            raise
 
     def get_python_executable(self, deployment_id: str) -> Path:
         """
