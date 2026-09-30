@@ -25,6 +25,7 @@ import { ResourceExportButton, ResourceImportButton } from '../../components/Res
 const MODEL_TYPE_OPTIONS = ['default', 'video', 'audio', 'vision', 'image_gen'] as const;
 const MODEL_PROVIDER_OPTIONS = [
   'OpenAI',
+  'Anthropic',
   'OpenRouter',
   'DashScope',
   'SiliconFlow',

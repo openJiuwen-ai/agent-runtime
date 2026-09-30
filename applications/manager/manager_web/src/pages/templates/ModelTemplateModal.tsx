@@ -42,6 +42,7 @@ function clipField(value: string, max: number): string {
 /** 与 openjiuwen ProviderType / 运行时校验一致 */
 const MODEL_PROVIDER_OPTIONS = [
   'OpenAI',
+  'Anthropic',
   'OpenRouter',
   'DashScope',
   'SiliconFlow',
