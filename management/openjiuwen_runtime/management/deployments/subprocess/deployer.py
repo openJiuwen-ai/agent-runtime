@@ -47,7 +47,7 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
         self.default_host = default_host
         self.default_port_start = default_port_start
         self.venv_manager = VirtualEnvironmentManager()
-        self._processes: Dict[str, asyncio.subprocess.Process] = {}
+        self._processes: Dict[str, subprocess.Popen] = {}
 
     def _kill_by_pid(self, pid: int) -> bool:
         """通过 PID 终止进程（跨进程有效）"""
@@ -196,14 +196,19 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
             log_dir.mkdir(parents=True, exist_ok=True)
             log_file = log_dir / "agent.log"
             log_fp = open(log_file, "a", encoding="utf-8")
-
-            process = subprocess.Popen(
-                cmd,
-                env=env,
-                stdout=log_fp,
-                stderr=log_fp,
-                creationflags=creation_flags,
-            )
+            try:
+                process = subprocess.Popen(
+                    cmd,
+                    env=env,
+                    stdout=log_fp,
+                    stderr=log_fp,
+                    creationflags=creation_flags,
+                )
+            finally:
+                # 子进程已继承日志句柄，父进程不再需要保留
+                log_fp.close()
+            # 登记进程，供 stop/get_status 精确管理
+            self._processes[deployment_id] = process
             logger.info("Agent log file: %s", log_file)
 
             # 6. 等待进程启动并检查状态
@@ -211,7 +216,7 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
 
             if process.poll() is not None:
                 # 进程已经退出，从日志文件读取错误信息
-                log_fp.close()
+                self._processes.pop(deployment_id, None)
                 error_msg = "Unknown error"
                 try:
                     error_msg = log_file.read_text(encoding="utf-8", errors="ignore").strip() or error_msg
@@ -261,22 +266,29 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
         logger.info("Stopping subprocess: deployment_id=%s, pid=%s", deployment_id, pid)
         try:
             if deployment_id in self._processes:
-                process = self._processes[deployment_id]
-                logger.debug(
-                    "Terminating process: deployment_id=%s, pid=%s",
-                    deployment_id,
-                    process.pid,
-                )
-                process.terminate()
-                try:
-                    await asyncio.wait_for(process.wait(), timeout=10)
-                except asyncio.TimeoutError:
-                    logger.warning(
-                        "Process did not terminate gracefully, killing: deployment_id=%s",
+                process = self._processes.pop(deployment_id, None)
+                if process is not None:
+                    logger.debug(
+                        "Terminating process: deployment_id=%s, pid=%s",
                         deployment_id,
+                        process.pid,
                     )
-                    process.kill()
-                del self._processes[deployment_id]
+                    process.terminate()
+                    try:
+                        await asyncio.to_thread(process.wait, 10)
+                    except subprocess.TimeoutExpired:
+                        logger.warning(
+                            "Process did not terminate gracefully, killing: deployment_id=%s",
+                            deployment_id,
+                        )
+                        process.kill()
+                        try:
+                            await asyncio.wait_for(asyncio.to_thread(process.wait), timeout=10)
+                        except asyncio.TimeoutError:
+                            logger.warning(
+                                "Process still alive after kill: deployment_id=%s",
+                                deployment_id,
+                            )
             elif pid:
                 success = self._kill_by_pid(pid)
                 if not success:
@@ -324,10 +336,10 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
 
         if deployment_id in self._processes:
             process = self._processes[deployment_id]
-            if process.returncode is None:
+            # poll() 会刷新 returncode，进程自然退出时也能被正确识别
+            if process.poll() is None:
                 return DeploymentStatus.RUNNING
-            else:
-                return DeploymentStatus.STOPPED
+            return DeploymentStatus.STOPPED
 
         if pid:
             is_running = self._check_process_by_pid(pid)
