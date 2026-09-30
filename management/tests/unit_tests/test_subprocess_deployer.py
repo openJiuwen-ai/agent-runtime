@@ -2,6 +2,9 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
 import asyncio
+import subprocess
+import tempfile
+from pathlib import Path
 from unittest import TestCase
 
 from openjiuwen_runtime.management.deployments.subprocess.deployer import (
@@ -27,6 +30,29 @@ class _FakePopen:
         if self._exited:
             self.returncode = 0
         return self.returncode
+
+
+class _StoppablePopen:
+    """模拟同步 Popen，记录 terminate/kill，wait 支持一次超时。"""
+
+    def __init__(self, pid: int = 5678, timeout_first: bool = True):
+        self.pid = pid
+        self.terminated = False
+        self.killed = False
+        self._timeout_first = timeout_first
+        self._wait_calls = 0
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+    def kill(self) -> None:
+        self.killed = True
+
+    def wait(self, timeout=None) -> int:
+        self._wait_calls += 1
+        if self._timeout_first and self._wait_calls == 1:
+            raise subprocess.TimeoutExpired(cmd="agent", timeout=timeout)
+        return 0
 
 
 class TestGetStatusRefreshesReturncode(TestCase):
@@ -58,3 +84,42 @@ class TestGetStatusRefreshesReturncode(TestCase):
             asyncio.run(deployer.get_status("dep-2")),
             DeploymentStatus.RUNNING,
         )
+
+
+class TestStopRegisteredProcess(TestCase):
+    """登记同步 Popen 后 stop() 的优雅分支必须成功返回并完成清理。"""
+
+    def _deployer_with(self, process) -> LocalSubprocessDeployer:
+        deployer = LocalSubprocessDeployer()
+        deployer._processes["dep-stop"] = process
+        return deployer
+
+    def test_graceful_stop_succeeds_and_cleans_up(self):
+        process = _StoppablePopen(timeout_first=False)
+        deployer = self._deployer_with(process)
+        with tempfile.TemporaryDirectory() as tmp:
+            venv_path = Path(tmp) / "venv"
+            venv_path.mkdir()
+
+            result = asyncio.run(deployer.stop("dep-stop", venv_path=str(venv_path)))
+
+            self.assertTrue(result.success)
+            self.assertTrue(process.terminated)
+            self.assertFalse(process.killed)
+            self.assertNotIn("dep-stop", deployer._processes)
+            self.assertFalse(venv_path.exists())
+
+    def test_stop_kills_when_terminate_times_out(self):
+        process = _StoppablePopen(timeout_first=True)
+        deployer = self._deployer_with(process)
+        with tempfile.TemporaryDirectory() as tmp:
+            venv_path = Path(tmp) / "venv"
+            venv_path.mkdir()
+
+            result = asyncio.run(deployer.stop("dep-stop", venv_path=str(venv_path)))
+
+            self.assertTrue(result.success)
+            self.assertTrue(process.terminated)
+            self.assertTrue(process.killed)
+            self.assertNotIn("dep-stop", deployer._processes)
+            self.assertFalse(venv_path.exists())
