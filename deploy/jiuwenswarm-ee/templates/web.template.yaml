@@ -40,6 +40,8 @@ spec:
               value: "<<LOGIN_AUTH_SIMULATE>>"
             - name: WEB_TRANSPORT
               value: "http"
+            - name: WORKSPACE_QUOTA_ENABLED
+              value: "<<WORKSPACE_QUOTA_ENABLED>>"
             - name: GATEWAY_URL
               value: "http://<<GATEWAY_NAME>>:<<WEB_PORT>>"
             - name: GATEWAY_WEB_HTTP_URL

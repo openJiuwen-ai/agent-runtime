@@ -274,6 +274,7 @@ declare -A DEPLOY_VARS=(
     ["WEB_PORT"]="19000"
     ["WEB_REPLICAS"]="2"
     ["WEB_WS_PORT"]="19000"
+    ["WORKSPACE_QUOTA_ENABLED"]="false"
 )
 
 declare -A OYR_COMPONENTS=(

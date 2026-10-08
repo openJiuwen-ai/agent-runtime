@@ -5,7 +5,7 @@ import { useAsync } from '../../hooks/useAsync';
 import { useFormDirty } from '../../hooks/useFormDirty';
 import { useClusterGuideStatus } from '../../hooks/useGuideStatus';
 import { useRouter } from '../../router';
-import { InstanceApi, ApiError, hasPermission } from '../../services/api';
+import { InstanceApi, ApiError, hasPermission, isWorkspaceQuotaEnabled } from '../../services/api';
 import { Modal, ModalCancelButton } from '../../components/Modal';
 import { LimitedTextInput } from '../../components/LimitedTextInput';
 import { WarnBadge, type WarnBadgeLink } from '../../components/WarnBadge';
@@ -66,6 +66,7 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
   const { navigate } = useRouter();
   const { user } = useAuth();
   const canReadQuota = hasPermission(user, 'quota:read');
+  const workspaceQuotaEnabled = isWorkspaceQuotaEnabled(user);
   const missingLabel = useGuideMissingLabel();
   const instance = useAsync(() => InstanceApi.get(instanceId), [instanceId]);
   const { hasAccessUser, hasAccessOrg, hasAgentResource, hasPoolResource } =
@@ -100,7 +101,7 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
     tab === 'clusterConfig' ||
     clusterConfigSubTabs.some((it) => it.key === tab);
 
-  /** 「配额管理」下的子页签（用户空间配额 / Token 配额） */
+  /** 「配额管理」下的子页签（用户空间配额 / Token 配额）；特性关闭时仍展示 Tab，内容区留白。 */
   const quotaSubTabs = useMemo(() => {
     const all: { key: InstancePageTab; label: string; href: string }[] = [
       {
@@ -323,7 +324,14 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
             />
           )}
           {inQuotaManagement && activeQuotaTab === 'workspaceQuota' && (
-            <WorkspaceQuotaPanel instanceId={instanceId} />
+            workspaceQuotaEnabled ? (
+              <WorkspaceQuotaPanel instanceId={instanceId} />
+            ) : (
+              <InstancePlaceholderPanel
+                titleKey="instanceDetail.workspaceQuota.title"
+                subtitleKey="instanceDetail.workspaceQuota.subtitle"
+              />
+            )
           )}
           {inQuotaManagement && activeQuotaTab === 'tokenQuota' && (
             <InstancePlaceholderPanel

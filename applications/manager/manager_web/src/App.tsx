@@ -33,7 +33,15 @@ import { ApprovalEditPage } from './pages/approval/ApprovalEditPage';
 import { AgentTemplatesPage } from './pages/templates/AgentTemplatesPage';
 import { A2AManagementPage } from './pages/templates/A2AManagementPage';
 import { getProductName } from './utils/env';
-import { ApiError, AuthUser, canAccessManager, hasPermission, isPlatformAdmin, UserConsoleApi } from './services/api';
+import {
+  ApiError,
+  AuthUser,
+  canAccessManager,
+  hasPermission,
+  isPlatformAdmin,
+  isWorkspaceQuotaEnabled,
+  UserConsoleApi,
+} from './services/api';
 
 interface ErrorBoundaryState {
   hasError: boolean;
@@ -78,11 +86,12 @@ function RouteView() {
   const platformAdmin = isPlatformAdmin(user);
 
   if (!platformAdmin) {
-    if (path === '/approvals' && hasPermission(user, 'approval:read')) {
+    const approvalUiEnabled = isWorkspaceQuotaEnabled(user);
+    if (path === '/approvals' && approvalUiEnabled && hasPermission(user, 'approval:read')) {
       return <ApprovalPage />;
     }
     const approvalEditLimited = matchRoute('/approvals/:orderNum', path);
-    if (approvalEditLimited && hasPermission(user, 'approval:read')) {
+    if (approvalEditLimited && approvalUiEnabled && hasPermission(user, 'approval:read')) {
       return <ApprovalEditPage orderNum={approvalEditLimited.orderNum} />;
     }
     if (hasPermission(user, 'iam:role:read')) {
@@ -166,10 +175,16 @@ function RouteView() {
     return <RolesEditPage roleId={roleEdit.roleId} />;
   }
   if (path === '/approvals') {
+    if (!isWorkspaceQuotaEnabled(user)) {
+      return <div className="card text-sm text-muted">{t('auth.noPagePermission')}</div>;
+    }
     return <ApprovalPage />;
   }
   const approvalEdit = matchRoute('/approvals/:orderNum', path);
   if (approvalEdit) {
+    if (!isWorkspaceQuotaEnabled(user)) {
+      return <div className="card text-sm text-muted">{t('auth.noPagePermission')}</div>;
+    }
     return <ApprovalEditPage orderNum={approvalEdit.orderNum} />;
   }
   if (path === '/agent-templates') {
@@ -276,7 +291,9 @@ function Shell() {
 /** 已登录用户的默认落地页:平台/管理员类型角色→/manager,有限权限→对应页,否则→/user。 */
 function roleHome(user: AuthUser): string {
   if (isPlatformAdmin(user) || user.manager_access) return '/manager';
-  if (hasPermission(user, 'approval:read')) return '/manager/approvals';
+  if (isWorkspaceQuotaEnabled(user) && hasPermission(user, 'approval:read')) {
+    return '/manager/approvals';
+  }
   if (hasPermission(user, 'iam:role:read')) return '/manager/roles';
   return '/user';
 }

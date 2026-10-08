@@ -13,7 +13,7 @@ import httpx
 import uvicorn
 import websockets
 from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
 from websockets.exceptions import ConnectionClosed
 
 _SKIP_REQ_HEADERS = frozenset({"host", "content-length", "transfer-encoding", "connection"})
@@ -25,6 +25,25 @@ _ACCESS_COOKIE = "openjiuwen_access_token"
 
 def _manager_web_dist() -> Path:
     return Path(__file__).resolve().parents[2].parent / "manager_web" / "dist"
+
+
+def _inject_manager_web_runtime_config(document: str) -> str:
+    """Inject deploy-time feature flags into index.html (mirrors User Web)."""
+    from manager_server.infrastructure.config import settings
+
+    enabled = bool(settings.workspace_quota_enabled)
+    return document.replace(
+        "__WORKSPACE_QUOTA_ENABLED_VALUE__",
+        "true" if enabled else "false",
+    )
+
+
+def _index_html_response(index_path: Path) -> HTMLResponse:
+    body = _inject_manager_web_runtime_config(index_path.read_text(encoding="utf-8"))
+    return HTMLResponse(
+        content=body,
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
 
 
 def _coerce_backend_url(raw: str) -> str:
@@ -425,8 +444,10 @@ def create_manager_web_app(
             and str(candidate).startswith(str(dist_root.resolve()))
             and candidate.is_file()
         ):
+            if candidate.name == "index.html":
+                return _index_html_response(candidate)
             return FileResponse(candidate)
-        return FileResponse(_index)
+        return _index_html_response(_index)
 
     return application
 
