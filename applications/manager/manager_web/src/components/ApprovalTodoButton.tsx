@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../auth/AuthContext';
 import { useRouter } from '../router';
-import { ApprovalApi, hasPermission } from '../services/api';
+import { ApprovalApi, hasPermission, isWorkspaceQuotaEnabled } from '../services/api';
 
 const POLL_MS = 60_000;
 
@@ -17,7 +17,7 @@ export function ApprovalTodoButton() {
   const { user } = useAuth();
   const { path, navigate } = useRouter();
   const [count, setCount] = useState(0);
-  const canRead = hasPermission(user, 'approval:read');
+  const canRead = hasPermission(user, 'approval:read') && isWorkspaceQuotaEnabled(user);
 
   const refresh = useCallback(async () => {
     if (!canRead) {

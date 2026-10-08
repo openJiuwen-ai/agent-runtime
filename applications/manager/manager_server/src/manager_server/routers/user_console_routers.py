@@ -26,10 +26,13 @@ from manager_server.core.user_console.user_face_upstream import (
     JIUWENCLAW_ID_COOKIE,
     resolve_user_face_upstreams,
 )
+from manager_server.infrastructure.config import settings
 from manager_server.infrastructure.db import get_db_handler
 from manager_server.routers.auth_guards import get_current_user
 from manager_server.schemas.approval_schemas import UserConsoleExpandSubmitBody
 from manager_server.schemas.common_schemas import ResponseModel
+
+WORKSPACE_QUOTA_FEATURE_DISABLED = "WORKSPACE_QUOTA_FEATURE_DISABLED"
 
 _Handler = Annotated[DBHandler, Depends(get_db_handler)]
 _CurUser = Annotated[Any, Depends(get_current_user)]
@@ -162,6 +165,8 @@ async def submit_workspace_expand(
     authorization: Annotated[str | None, Header()] = None,
 ):
     """用户面发起扩容：校验上下文准入，服务端解析生效配额后建单。"""
+    if not settings.workspace_quota_enabled:
+        raise HTTPException(status_code=403, detail=WORKSPACE_QUOTA_FEATURE_DISABLED)
     uid = _user_id(user)
     allowed = await UserConsoleService(handler).user_can_access_context(
         uid,

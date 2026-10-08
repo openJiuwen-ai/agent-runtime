@@ -20,6 +20,8 @@ class Settings(BaseSettings):
         env_file=_resolve_env_files() or None,
         env_file_encoding="utf-8",
         extra="ignore",
+        # 部署模板未填时常见 ``ENV=""``；忽略空串以使用字段 default
+        env_ignore_empty=True,
     )
 
     rest_host: str = Field(default="0.0.0.0", validation_alias="MANAGER_REST_HOST")
@@ -99,6 +101,12 @@ class Settings(BaseSettings):
 
     agent_runtime_sync_timeout: float = Field(
         default=10.0, validation_alias="AGENT_RUNTIME_SYNC_TIMEOUT"
+    )
+
+    # 用户空间配额（策略/用量/扩容）。默认关闭；与 Gateway/AgentServer 共用 WORKSPACE_QUOTA_ENABLED。
+    workspace_quota_enabled: bool = Field(
+        default=False,
+        validation_alias="WORKSPACE_QUOTA_ENABLED",
     )
 
     @property

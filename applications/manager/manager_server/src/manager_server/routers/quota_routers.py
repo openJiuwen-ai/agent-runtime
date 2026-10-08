@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 
 from manager_server.core.quota import WorkspaceQuotaPolicyService, WorkspaceQuotaUsageService
+from manager_server.infrastructure.config import settings
 from manager_server.infrastructure.db import get_db_handler
 from manager_server.routers.auth_guards import require_permission
 from manager_server.schemas.common_schemas import ResponseModel
@@ -23,6 +24,13 @@ quota_router = APIRouter()
 
 _ReadQuota = Annotated[Any, Depends(require_permission("quota:read"))]
 _WriteQuota = Annotated[Any, Depends(require_permission("quota:write"))]
+
+WORKSPACE_QUOTA_FEATURE_DISABLED = "WORKSPACE_QUOTA_FEATURE_DISABLED"
+
+
+def _require_workspace_quota_feature() -> None:
+    if not settings.workspace_quota_enabled:
+        raise HTTPException(status_code=403, detail=WORKSPACE_QUOTA_FEATURE_DISABLED)
 
 
 def _workspace_quota_svc(handler: DBHandler) -> WorkspaceQuotaPolicyService:
@@ -48,6 +56,7 @@ async def list_workspace_quota_policies(
     handler: Annotated[DBHandler, Depends(get_db_handler)],
     query: Annotated[WorkspaceQuotaPolicyListQuery, Query()],
 ):
+    _require_workspace_quota_feature()
     data = await _workspace_quota_svc(handler).list_policies(
         cluster_id=jiuwenclaw_id,
         query=query,
@@ -65,6 +74,7 @@ async def create_workspace_quota_policy(
     body: WorkspaceQuotaPolicyCreateBody,
     handler: Annotated[DBHandler, Depends(get_db_handler)],
 ):
+    _require_workspace_quota_feature()
     try:
         data = await _workspace_quota_svc(handler).create(
             cluster_id=jiuwenclaw_id,
@@ -94,6 +104,7 @@ async def patch_workspace_quota_policy(
     body: WorkspaceQuotaPolicyPatchBody,
     handler: Annotated[DBHandler, Depends(get_db_handler)],
 ):
+    _require_workspace_quota_feature()
     changes = body.model_dump(exclude_unset=True)
     if not changes:
         raise HTTPException(status_code=400, detail="at least one field is required")
@@ -129,6 +140,7 @@ async def delete_workspace_quota_policy(
     _user: _WriteQuota,
     handler: Annotated[DBHandler, Depends(get_db_handler)],
 ):
+    _require_workspace_quota_feature()
     try:
         await _workspace_quota_svc(handler).delete(policy_id, cluster_id=jiuwenclaw_id)
     except ValueError as exc:
@@ -148,6 +160,7 @@ async def get_workspace_quota_effective(
     handler: Annotated[DBHandler, Depends(get_db_handler)],
     query: Annotated[WorkspaceQuotaEffectiveQuery, Depends()],
 ):
+    _require_workspace_quota_feature()
     data = await _workspace_quota_svc(handler).effective(
         cluster_id=jiuwenclaw_id,
         user_id=query.user_id,
@@ -169,6 +182,7 @@ async def list_workspace_quota_usage(
     handler: Annotated[DBHandler, Depends(get_db_handler)],
     query: Annotated[WorkspaceQuotaUsageListQuery, Query()],
 ):
+    _require_workspace_quota_feature()
     try:
         data = await _workspace_quota_usage_svc(handler).list_usage(
             cluster_id=jiuwenclaw_id,

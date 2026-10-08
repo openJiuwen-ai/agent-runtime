@@ -309,6 +309,23 @@ async function withManagerAuthorization(user: AuthUser): Promise<AuthUser> {
   };
 }
 
+function coerceRuntimeBool(raw: unknown): boolean {
+  const text = String(raw ?? '').trim().toLowerCase();
+  return text === 'true' || text === '1' || text === 'yes' || text === 'on';
+}
+
+/** 用户空间配额特性是否开启（默认关闭；读 index.html 注入的 ``window.__WORKSPACE_QUOTA_ENABLED__``）。 */
+export function isWorkspaceQuotaEnabled(_user?: AuthUser | null): boolean {
+  return coerceRuntimeBool(
+    typeof window !== 'undefined' ? window.__WORKSPACE_QUOTA_ENABLED__ : undefined,
+  );
+}
+
+/** 配额 / 审批权限码（特性关闭时管理面角色权限 UI 隐藏）。 */
+export function isWorkspaceQuotaPermission(permissionId: string): boolean {
+  return permissionId.startsWith('quota:') || permissionId.startsWith('approval:');
+}
+
 export function hasPermission(user: AuthUser | null, permissionId: string): boolean {
   return !!user?.permissions?.includes(permissionId);
 }

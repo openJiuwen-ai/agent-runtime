@@ -21,6 +21,8 @@ import {
   AuthzRoleUser,
   hasPermission,
   IamUser,
+  isWorkspaceQuotaEnabled,
+  isWorkspaceQuotaPermission,
   PermissionDefinition,
   UserApi,
 } from '../../services/api';
@@ -209,17 +211,23 @@ export function RolesEditPage({ roleId }: { roleId?: string }) {
     };
   }, [isNew, navigate, roleId, t]);
 
-  const scopedPermissions = useMemo(
-    () =>
-      isSystem
-        ? permissions.filter((permission) => selected.has(permission.permission_id))
-        : permissions,
-    [isSystem, permissions, selected],
-  );
+  const workspaceQuotaEnabled = isWorkspaceQuotaEnabled(user);
+  const scopedPermissions = useMemo(() => {
+    const base = isSystem
+      ? permissions.filter((permission) => selected.has(permission.permission_id))
+      : permissions;
+    if (workspaceQuotaEnabled) return base;
+    return base.filter((permission) => !isWorkspaceQuotaPermission(permission.permission_id));
+  }, [isSystem, permissions, selected, workspaceQuotaEnabled]);
   const permissionGroups = useMemo(
     () => groupPermissionItems(scopedPermissions),
     [scopedPermissions],
   );
+
+  const visibleSelectedCount = useMemo(() => {
+    if (workspaceQuotaEnabled) return selected.size;
+    return [...selected].filter((id) => !isWorkspaceQuotaPermission(id)).length;
+  }, [selected, workspaceQuotaEnabled]);
 
   const tabs = useMemo(() => {
     const items: Array<{ id: Section; label: string; count?: number }> = [
@@ -227,7 +235,7 @@ export function RolesEditPage({ roleId }: { roleId?: string }) {
       {
         id: 'permissions',
         label: t('roles.tabPermissions'),
-        count: selected.size,
+        count: visibleSelectedCount,
       },
       {
         id: 'assignees',
@@ -236,7 +244,7 @@ export function RolesEditPage({ roleId }: { roleId?: string }) {
       },
     ];
     return items;
-  }, [assignedIds.length, isNew, selected.size, t]);
+  }, [assignedIds.length, isNew, t, visibleSelectedCount]);
 
   const canSave = canWrite
     && !!name.trim()

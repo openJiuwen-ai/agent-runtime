@@ -37,6 +37,8 @@ spec:
             # nginx 变量 proxy_pass 需要 resolver
             - name: MANAGER_WEB_RESOLVER
               value: "<<MANAGER_WEB_RESOLVER>>"
+            - name: WORKSPACE_QUOTA_ENABLED
+              value: "<<WORKSPACE_QUOTA_ENABLED>>"
             - name: TZ
               value: "<<TIMEZONE>>"
 

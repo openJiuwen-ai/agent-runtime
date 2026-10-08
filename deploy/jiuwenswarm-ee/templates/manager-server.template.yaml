@@ -101,6 +101,8 @@ spec:
           value: "<<NAMESPACE>>"
         - name: AGENT_RUNTIME_SYNC_TIMEOUT
           value: "<<AGENT_RUNTIME_SYNC_TIMEOUT>>"
+        - name: WORKSPACE_QUOTA_ENABLED
+          value: "<<WORKSPACE_QUOTA_ENABLED>>"
         - name: MANAGER_WS_ENABLED
           value: "true"
         - name: MANAGER_WS_HOST
