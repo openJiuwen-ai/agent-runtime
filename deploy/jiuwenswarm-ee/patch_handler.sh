@@ -173,6 +173,21 @@ inject_container_resources() {
     inject_container_res "c-jiuwenbox" limits  memory  "${DEPLOY_VARS["JIUWENBOX_MEMORY_LIMIT"]:-}"
 }
 
+# 沙箱可插拔：JIUWENBOX_ENABLED=false 时从 config_sync 载荷移除 jiuwenbox sidecar，
+# 移除内容：c-jiuwenbox 容器、sidecar_container_ids 引用、hp-cgroup 卷
+# 用法: drop_jiuwenbox_sidecar <json_file>
+drop_jiuwenbox_sidecar() {
+    local json_file="${CONFIG["AS_JSON_FILE"]}"
+    if [ "${DEPLOY_VARS["JIUWENBOX_ENABLED"]}" == "true" ]; then
+        return
+    fi
+    info "JIUWENBOX_ENABLED=${DEPLOY_VARS["JIUWENBOX_ENABLED"]:-}: dropping jiuwenbox sidecar from config_sync payload"
+    jq '.rawdata.containers |= map(select(.container_id != "c-jiuwenbox"))
+        | .rawdata.templates[].sidecar_container_ids |= map(select(. != "c-jiuwenbox"))
+        | .rawdata.templates[].volumes |= map(select(.name != "hp-cgroup"))' \
+        "${json_file}" > "${json_file}.tmp" && mv -f "${json_file}.tmp" "${json_file}"
+}
+
 render_patch_file() {
     local json_file="${CONFIG["AS_JSON_FILE"]}"
 
@@ -185,6 +200,7 @@ render_patch_file() {
 
     inject_data_volume
     drop_hostpath_volumes
+    drop_jiuwenbox_sidecar
     drop_nodename_field
     inject_container_resources
 
