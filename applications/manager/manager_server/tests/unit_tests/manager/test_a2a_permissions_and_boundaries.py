@@ -21,6 +21,7 @@ pytestmark = pytest.mark.unit
 @pytest.mark.asyncio
 async def test_a2a_management_routes_require_admin(manager_api: ManagerApiHarness):
     manager_api.app.dependency_overrides.pop(require_admin)
+    manager_api.app.dependency_overrides.pop(get_current_user)
 
     unauthenticated = await manager_api.http.get(
         manager_api.templates_url("/a2a-outbound-templates")
@@ -75,12 +76,12 @@ async def test_a2a_management_routes_require_admin(manager_api: ManagerApiHarnes
         )
         assert response.status_code == 403, (method, path, response.text)
 
-    # M5 must not silently change the pre-existing Agent template permission contract.
+    # Legacy templates now share the centralized Manager-role admin guard.
     legacy_agent_update = await manager_api.http.patch(
         manager_api.templates_url("/agent-templates/missing-agent"),
         json={"enabled": False},
     )
-    assert legacy_agent_update.status_code == 404
+    assert legacy_agent_update.status_code == 403
 
 
 @pytest.mark.asyncio

@@ -6,6 +6,7 @@ from __future__ import annotations
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -19,7 +20,7 @@ from sqlalchemy.exc import SAWarning
 
 from manager_server.infrastructure.db import get_db_handler
 from manager_server.models.table_init import init_all_tables
-from manager_server.routers.auth_guards import require_admin
+from manager_server.routers.auth_guards import get_current_user, require_admin
 from manager_server.routers.register import router_register
 
 pytestmark = pytest.mark.filterwarnings("ignore::sqlalchemy.exc.SAWarning")
@@ -247,6 +248,13 @@ async def manager_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         return object()
 
     app.dependency_overrides[require_admin] = _admin_user
+
+    # Business-only fixture. Security tests use real JWTs and do not override
+    # authentication or authorization dependencies.
+    def _current_user() -> SimpleNamespace:
+        return SimpleNamespace(user_id="admin", is_admin=False, groups=[])
+
+    app.dependency_overrides[get_current_user] = _current_user
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:

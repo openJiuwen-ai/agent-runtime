@@ -51,6 +51,9 @@ class ActiveClusterBody(BaseModel):
 
 
 user_console_router = APIRouter()
+# Logout cleanup must also work with expired tokens; only this cookie-only
+# endpoint is mounted outside the authenticated business subtree.
+public_user_console_router = APIRouter()
 
 
 @user_console_router.get(
@@ -107,7 +110,7 @@ async def set_active_cluster(
     return _ok({"jiuwenclaw_id": jid})
 
 
-@user_console_router.delete("/active-cluster", response_model=ResponseModel)
+@public_user_console_router.delete("/active-cluster", response_model=ResponseModel)
 async def clear_active_cluster(response: Response):
     """清除用户面动态反代 Cookie（登出 / 换用户 / 无上下文进入 /chat 前调用）。
 
@@ -150,7 +153,7 @@ async def resolve_user_face_upstream(
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
     headers = upstreams.as_headers()
-    headers["Cache-Control"] = "private, max-age=5"
+    headers["Cache-Control"] = "no-store"
     return Response(status_code=200, content=b"", headers=headers)
 
 

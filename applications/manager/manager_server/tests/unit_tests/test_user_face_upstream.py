@@ -47,17 +47,13 @@ def test_expand_k8s_hostname_short_and_svc_ns() -> None:
         == "jiuwenclaw-web.wx.svc.cluster.local"
     )
     assert (
-        upstream.expand_k8s_hostname(
-            "example.com", default_ns="wx", dns_suffix="svc.cluster.local"
-        )
+        upstream.expand_k8s_hostname("example.com", default_ns="wx", dns_suffix="svc.cluster.local")
         == "example.com"
     )
 
 
 def test_coerce_expands_when_k8s_context(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        upstream, "_k8s_dns_context", lambda: ("wx", "svc.cluster.local")
-    )
+    monkeypatch.setattr(upstream, "_k8s_dns_context", lambda: ("wx", "svc.cluster.local"))
     assert (
         upstream.coerce_http_upstream("http://jiuwenclaw-web:5173")
         == "http://jiuwenclaw-web.wx.svc.cluster.local:5173"
@@ -91,7 +87,6 @@ async def test_resolve_falls_back_to_defaults_without_cookie(
         handler=object(),  # type: ignore[arg-type]
         user_id="u1",
         groups=[],
-        is_admin=False,
         jiuwenclaw_id=None,
     )
     assert result.user_web == "http://default-web:5173"
@@ -143,7 +138,6 @@ async def test_resolve_uses_instance_hosts_when_admitted(
         handler=object(),  # type: ignore[arg-type]
         user_id="u1",
         groups=["g1"],
-        is_admin=False,
         jiuwenclaw_id="jid-1",
     )
     assert result.user_web == "http://inst-web:5173"
@@ -167,6 +161,27 @@ async def test_resolve_rejects_unadmitted_instance(
             handler=object(),  # type: ignore[arg-type]
             user_id="u1",
             groups=[],
-            is_admin=False,
             jiuwenclaw_id="jid-denied",
         )
+
+
+@pytest.mark.asyncio
+async def test_cached_upstream_rechecks_grant_and_current_groups(monkeypatch):
+    admit = AsyncMock(side_effect=[True, True, False])
+    monkeypatch.setattr(
+        "manager_server.core.user_console.UserConsoleService.user_can_access_instance", admit
+    )
+    lookup = AsyncMock(return_value=SimpleNamespace(user_web_host="http://web:5173", data={}))
+    monkeypatch.setattr(upstream, "get_instance_row", lookup)
+    for groups in (["g1"], ["g2"]):
+        await upstream.resolve_user_face_upstreams(
+            object(), user_id="u1", groups=groups, jiuwenclaw_id="jid-1"
+        )
+    # Upstream lookup is cached, but the admission decision is NOT.
+    assert lookup.await_count == 1
+    assert admit.await_args.args[-1] == ["g2"]
+    with pytest.raises(PermissionError, match="instance not admitted"):
+        await upstream.resolve_user_face_upstreams(
+            object(), user_id="u1", groups=[], jiuwenclaw_id="jid-1"
+        )
+    assert admit.await_count == 3

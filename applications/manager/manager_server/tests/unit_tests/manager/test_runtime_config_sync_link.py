@@ -4,9 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from manager_server.core.instance_resource.runtime_config_sync import (
-    resolve_runtime_endpoint,
-)
+from manager_server.manager_config_push.endpoint import require_runtime_endpoint
 
 
 class _DB:
@@ -18,5 +16,13 @@ class _DB:
 
 
 @pytest.mark.asyncio
-async def test_resolve_runtime_endpoint_uses_instance_row() -> None:
-    assert await resolve_runtime_endpoint(_DB(), "jid-a") == "https://runtime-a:8091"
+async def test_resolve_runtime_endpoint_uses_instance_row(monkeypatch) -> None:
+    monkeypatch.setattr("manager_server.infrastructure.db.get_db_handler", lambda: _DB())
+    assert await require_runtime_endpoint("jid-a") == "https://runtime-a:8091"
+
+
+@pytest.mark.asyncio
+async def test_resolve_runtime_endpoint_rejects_missing_instance(monkeypatch) -> None:
+    monkeypatch.setattr("manager_server.infrastructure.db.get_db_handler", lambda: _DB())
+    with pytest.raises(ValueError, match="instance not found"):
+        await require_runtime_endpoint("missing")
