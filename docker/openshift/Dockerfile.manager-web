@@ -1,0 +1,28 @@
+# manager-web — Manager 管理端前端（OpenShift / nginx-unprivileged :5273）
+ARG NODE_IMAGE=node:20-alpine
+ARG NGINX_IMAGE=nginxinc/nginx-unprivileged:1.27-alpine
+
+# ---------- 阶段1:前端构建 ----------
+FROM ${NODE_IMAGE} AS web-builder
+
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+ARG VITE_PRODUCT_NAME=JiuwenSwarm
+ENV NPM_CONFIG_REGISTRY=${NPM_REGISTRY} \
+    VITE_PRODUCT_NAME=${VITE_PRODUCT_NAME}
+
+WORKDIR /build/applications/manager/manager_web
+COPY applications/manager/manager_web/package.json \
+     applications/manager/manager_web/package-lock.json ./
+RUN npm install
+
+COPY applications/manager/manager_web/ ./
+RUN npm run build
+
+# ---------- 阶段2:nginx 运行 ----------
+FROM ${NGINX_IMAGE}
+
+COPY docker/manager-web.nginx.conf.template /etc/nginx/templates/default.conf.template
+COPY --from=web-builder /build/applications/manager/manager_web/dist \
+     /app/agent-runtime/applications/manager/manager_web/dist
+
+EXPOSE 5273

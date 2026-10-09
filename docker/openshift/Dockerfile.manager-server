@@ -1,0 +1,17 @@
+# manager-server — Manager 业务服务（OpenShift / 非 root）
+ARG BASE_IMAGE
+ARG IMAGE_VERSION
+FROM ${BASE_IMAGE}:${IMAGE_VERSION}
+
+
+ARG PIP_EXTRA_ARGS="-i https://mirrors.aliyun.com/pypi/simple/"
+
+RUN uv pip install --system -e "./applications/manager/manager_server" \
+    ${PIP_EXTRA_ARGS}
+
+USER 1000
+WORKDIR /app/agent-runtime
+ENV PATH=/usr/local/bin:$PATH:/home/app/.local/bin
+
+EXPOSE 8765 8766
+CMD ["manager-server"]

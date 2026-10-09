@@ -1,0 +1,23 @@
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+USER root
+ARG PIP_EXTRA_ARGS="-i https://mirrors.aliyun.com/pypi/simple/"
+
+
+RUN groupadd --gid 1000 app \
+    && useradd --uid 1000 --gid 1000 --create-home --shell /bin/bash app \
+    && mkdir -p /app/agent-runtime \
+    && chown 1000:0 /app/agent-runtime /home/app \
+    && chmod -R g+rwX /app/agent-runtime /home/app
+
+WORKDIR /app/agent-runtime
+COPY --chown=1000:0 . /app/agent-runtime/
+RUN chgrp -R 0 /app/agent-runtime && chmod -R g+rwX /app/agent-runtime
+
+RUN uv pip install --system -e "./foundation" \
+    -e "./service" \
+    ${PIP_EXTRA_ARGS}
+
+ENV HOME=/home/app \
+    PYTHONUNBUFFERED=1

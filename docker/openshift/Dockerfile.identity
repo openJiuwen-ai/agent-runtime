@@ -1,0 +1,17 @@
+# identity-center — 身份认证服务（OpenShift / 非 root）
+ARG BASE_IMAGE
+ARG IMAGE_VERSION
+FROM ${BASE_IMAGE}:${IMAGE_VERSION}
+
+
+ARG PIP_EXTRA_ARGS="-i https://mirrors.aliyun.com/pypi/simple/"
+
+RUN uv pip install --system -e "./applications/manager/identity_center" \
+    ${PIP_EXTRA_ARGS}
+
+USER 1000
+WORKDIR /app/agent-runtime
+ENV PATH=/usr/local/bin:$PATH:/home/app/.local/bin
+
+EXPOSE 8770
+CMD ["identity-center"]
