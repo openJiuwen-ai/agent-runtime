@@ -112,10 +112,14 @@ class SeedDemoConfigError(RuntimeError):
 
 
 class ManagerClient:
-    def __init__(self, base_url: str, jiuwenclaw_id: str, *, timeout: float = 120.0) -> None:
+    def __init__(
+        self, base_url: str, jiuwenclaw_id: str, *, timeout: float = 120.0,
+        access_token: str | None = None,
+    ) -> None:
         self._base = base_url.rstrip("/")
         self._jid = jiuwenclaw_id.strip()
         self._timeout = timeout
+        self._access_token = (access_token or os.environ.get("MANAGER_ACCESS_TOKEN", "")).strip()
         if not self._jid:
             raise ValueError("jiuwenclaw_id 不能为空")
 
@@ -148,9 +152,11 @@ class ManagerClient:
         json_body: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         url = self._url(path)
-        with httpx.Client(timeout=self._timeout, follow_redirects=True) as client:
+        headers = {"Authorization": f"Bearer {self._access_token}"} if self._access_token else {}
+        # Do not follow redirects to another origin with a credential-bearing request.
+        with httpx.Client(timeout=self._timeout, headers=headers, follow_redirects=False) as client:
             resp = client.request(method, url, json=json_body)
-        if resp.status_code >= 400:
+        if resp.status_code >= 300:
             detail = resp.text.strip()
             try:
                 payload = resp.json()
@@ -709,6 +715,9 @@ def main() -> None:
         sys.exit(1)
 
     args = _parse_args()
+    if not os.environ.get("MANAGER_ACCESS_TOKEN", "").strip():
+        logger.error("请先登录 Identity，并通过 MANAGER_ACCESS_TOKEN 环境变量提供有管理角色的 access token")
+        raise SystemExit(1)
     client = ManagerClient(args.manager_base, args.jiuwenclaw_id, timeout=args.timeout)
     logger.info("[seed] jiuwenclaw_id=%s manager=%s", client.jiuwenclaw_id, client.base_url)
 

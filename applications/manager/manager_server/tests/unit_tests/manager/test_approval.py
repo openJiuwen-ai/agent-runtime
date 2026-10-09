@@ -455,7 +455,10 @@ async def test_list_mine_includes_latest_reject_comment():
 
 
 @pytest.mark.asyncio
-async def test_http_submit_and_mine_routes():
+async def test_http_submit_and_mine_routes(monkeypatch):
+    from manager_server.infrastructure.config import settings
+
+    monkeypatch.setattr(settings, "workspace_quota_enabled", True)
     from manager_server.routers.user_console_routers import user_console_router
 
     app = FastAPI()

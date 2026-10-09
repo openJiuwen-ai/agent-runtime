@@ -200,6 +200,12 @@ async def resolve_user_face_upstreams(
     defaults = _defaults()
     jid = str(jiuwenclaw_id or "").strip()
     uid = str(user_id or "").strip()
+    # Cache only upstream mappings, not authorization decisions: grants may be
+    # revoked/disabled/expired and a refreshed token can have different groups.
+    if jid:
+        admitted = await UserConsoleService(handler).user_can_access_instance(uid, jid, groups)
+        if not admitted:
+            raise PermissionError(f"instance not admitted: {jid}")
     cache_key = (uid, jid)
     cached = _cache_get(cache_key)
     if cached is not None:
@@ -223,14 +229,6 @@ async def resolve_user_face_upstreams(
             gateway_ws=defaults.gateway_ws,
         )
         return defaults
-
-    admitted = await UserConsoleService(handler).user_can_access_instance(
-        uid,
-        jid,
-        groups,
-    )
-    if not admitted:
-        raise PermissionError(f"instance not admitted: {jid}")
 
     row = await get_instance_row(handler, jid)
     if row is None:

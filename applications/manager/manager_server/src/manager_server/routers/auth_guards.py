@@ -16,7 +16,7 @@ from openjiuwen_runtime.foundation.db.handler import DBHandler
 
 from manager_server.core.authz import AuthzService
 from manager_server.infrastructure.db import get_db_handler
-from manager_server.security.jwt_verify import decode_token
+from manager_server.security.jwt_verify import PublicKeyUnavailableError, decode_token
 
 
 def _extract_bearer(authorization: str | None) -> str:
@@ -33,11 +33,17 @@ async def get_current_user(
 ) -> Any:
     token = _extract_bearer(authorization)
     if not token:
-        raise HTTPException(status_code=401, detail="unauthorized")
+        raise HTTPException(
+            status_code=401, detail="unauthorized", headers={"WWW-Authenticate": "Bearer"}
+        )
     try:
         claims = await decode_token(token)
     except jwt.PyJWTError as exc:
-        raise HTTPException(status_code=401, detail="unauthorized") from exc
+        raise HTTPException(
+            status_code=401, detail="unauthorized", headers={"WWW-Authenticate": "Bearer"}
+        ) from exc
+    except PublicKeyUnavailableError as exc:
+        raise HTTPException(status_code=503, detail="authentication service unavailable") from exc
     return SimpleNamespace(
         user_id=str(claims.get("sub") or ""),
         # 兼容旧代码读取；权限判定不得依赖该字段
@@ -72,6 +78,8 @@ def require_permission(permission_id: str):
             )
         return user
 
+    # Stable marker for tests inspecting the final FastAPI dependency graph.
+    dependency.required_permission = permission_id
     return dependency
 
 

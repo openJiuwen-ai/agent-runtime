@@ -1,7 +1,7 @@
 """资源服务器侧 JWT 验签：从认证服务拉 RS256 公钥(缓存),本地校验 access JWT。
 
-claw_manager 不再签发 token,只验证 jiuwenclaw_identity 签发的 JWT 并读取 claims
-（sub / is_admin / groups）。公钥首次使用时拉取并缓存；拉取走 httpx trust_env=False，
+Manager 只验证 Identity 签发的 access JWT 并读取身份 claims（sub / groups / name），
+产品权限由 Manager 本地角色决定。公钥首次使用时拉取并缓存；拉取走 httpx trust_env=False，
 不读环境代理（与本仓库其它本机调用一致）。
 """
 
@@ -23,6 +23,10 @@ _public_pem: bytes | None = None
 _lock = asyncio.Lock()
 
 
+class PublicKeyUnavailableError(RuntimeError):
+    """Identity public key cannot be obtained; never bypass authentication."""
+
+
 async def _fetch_public_pem() -> bytes:
     last_exc: Exception | None = None
     async with httpx.AsyncClient(trust_env=False, timeout=5.0) as client:
@@ -35,7 +39,7 @@ async def _fetch_public_pem() -> bytes:
                 last_exc = e
                 _log.warning("[jwt] fetch public key failed", attempt=attempt, err=str(e))
                 await asyncio.sleep(min(2 ** (attempt - 1), 8))
-    raise RuntimeError(f"cannot fetch identity public key: {last_exc}")
+    raise PublicKeyUnavailableError("cannot fetch identity public key") from last_exc
 
 
 async def get_public_pem(force: bool = False) -> bytes:
@@ -54,9 +58,33 @@ async def decode_token(token: str) -> dict[str, Any]:
 
     若用 缓存公钥 解码失败（可能认证服务轮换了密钥），强制刷新一次再试。
     """
+
+    def decode(pem: bytes) -> dict[str, Any]:
+        try:
+            claims = jwt.decode(
+                token,
+                pem,
+                algorithms=[_ALG],
+                audience=settings.jwt_audience,
+                issuer=settings.jwt_issuer,
+                options={"require": ["exp", "iat", "sub", "iss", "aud", "typ"]},
+            )
+        except (TypeError, ValueError) as exc:
+            raise jwt.InvalidTokenError("malformed claims") from exc
+        if any(type(claims[field]) is not int for field in ("exp", "iat")):
+            raise jwt.InvalidTokenError("integer timestamps required")
+        if claims["typ"] != "access":
+            raise jwt.InvalidTokenError("access token required")
+        if not isinstance(claims["sub"], str) or not claims["sub"].strip():
+            raise jwt.InvalidTokenError("non-empty subject required")
+        groups = claims.get("groups", [])
+        if not isinstance(groups, list) or any(not isinstance(group, str) for group in groups):
+            raise jwt.InvalidTokenError("invalid groups claim")
+        return claims
+
     pem = await get_public_pem()
     try:
-        return jwt.decode(token, pem, algorithms=[_ALG], audience=settings.jwt_audience, issuer=settings.jwt_issuer)
+        return decode(pem)
     except jwt.InvalidSignatureError:
         pem = await get_public_pem(force=True)
-        return jwt.decode(token, pem, algorithms=[_ALG], audience=settings.jwt_audience, issuer=settings.jwt_issuer)
+        return decode(pem)
