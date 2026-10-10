@@ -173,6 +173,18 @@ export interface LoggingConfigUpsertBody {
   full?: LogLevel | null;
 }
 
+export interface CronPolicy {
+  id?: number;
+  jiuwenclaw_id: string;
+  max_jobs_per_user: number;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface CronPolicyUpsertBody {
+  max_jobs_per_user: number;
+}
+
 export type AuditOtelProtocol = 'grpc' | 'http';
 
 export interface AuditLogFormatSpec {

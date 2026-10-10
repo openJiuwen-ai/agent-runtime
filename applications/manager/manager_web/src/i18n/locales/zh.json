@@ -417,6 +417,7 @@
       "logMasking": "日志脱敏",
       "logging": "日志级别",
       "auditLog": "审计日志",
+      "cronPolicy": "定时任务",
       "permissions": "权限配置",
       "workspaceQuota": "用户空间配额"
     },
@@ -441,6 +442,16 @@
       "searchPlaceholder": "搜索规则ID、名称、描述、匹配正则表达式、替换文本、优先级、来源",
       "fieldRequired": "请填写{{field}}",
       "deleteConfirm": "确认删除该日志脱敏规则？"
+    },
+    "cronPolicy": {
+      "intro": "限制用户在 Web 面板里同时处于运行中的定时任务个数。默认 5。只拦截面板上的新建启用、启动暂停任务，以及把暂停任务改成启用。通过对话、TUI、Cron 表达式创建，以及已经在运行的任务，不受这次调整影响，也不会被删除或停止。0 表示不能再从面板启用新的运行任务。未托管时使用实例本地 config.yaml，缺省同样是 5。",
+      "managed": "Manager 托管",
+      "resetToYaml": "删除托管配置",
+      "deleteConfirm": "确认删除 Manager 托管的定时任务个数上限？Gateway 将回退到 config.yaml。",
+      "deleted": "已删除托管配置，Gateway 将回退到 config.yaml",
+      "maxJobs": "每个用户允许运行的定时任务数",
+      "maxJobsHint": "只统计当前启用且未过期的定时任务。填 0 时，面板不能再启用新任务。",
+      "invalid": "请填写大于或等于 0 的整数"
     },
     "logging": {
       "intro": "对应 config.yaml 的 logging 段。保存后写入 Manager DB 并下发至 Gateway 热更新；未托管时使用实例本地 config.yaml。",

@@ -14,6 +14,9 @@ from manager_server.core.application_config.log_masking_rule import (
     push_log_masking_rules_sync_to_gateway,
     seed_builtin_log_masking_rules,
 )
+from manager_server.core.application_config.cron_policy import (
+    push_cron_policy_sync_to_gateway,
+)
 from manager_server.core.application_config.logging_config import (
     push_logging_config_sync_to_gateway,
 )
@@ -47,6 +50,7 @@ from manager_server.models.jid_template_ref_models import (
 )
 from manager_server.models.application_config_models import (
     AUDIT_LOG_CONFIG_TABLE_DEF,
+    CRON_POLICY_TABLE_DEF,
     LOG_MASKING_RULE_TABLE_DEF,
     LOGGING_CONFIG_TABLE_DEF,
     _MEMORY_CONFIG_TABLE_DEF,
@@ -61,6 +65,7 @@ _LIST_ALL_CAP = 10_000
 _MANAGER_INSTANCE_TABLES = (
     LOG_MASKING_RULE_TABLE_DEF.table_name,
     LOGGING_CONFIG_TABLE_DEF.table_name,
+    CRON_POLICY_TABLE_DEF.table_name,
     _TASK_MEMORY_CONFIG_TABLE_DEF.table_name,
     _MEMORY_CONFIG_TABLE_DEF.table_name,
     AUDIT_LOG_CONFIG_TABLE_DEF.table_name,
@@ -97,7 +102,7 @@ async def sync_data_to_gateway_on_register(
     顺序说明：
     1. 模板（含 permissions_template；Agent 资源依赖）
     2. Agent 资源（template_ref.permissions 绑定安全护栏）
-    3. 应用配置（logging / task-memory / memory / audit-log / 日志脱敏）
+    3. 应用配置（logging / task-memory / memory / audit-log / 定时任务上限 / 日志脱敏）
     4. 重建 Manager 侧 jid_template_ref 索引
 
     注：实例级 ``permissions_config`` 已废弃，企业权限走 ``permissions_template``，
@@ -133,6 +138,7 @@ async def sync_data_to_gateway_on_register(
         ("task_memory", push_task_memory_config_sync_to_gateway, None),
         ("memory", push_memory_config_sync_to_gateway, None),
         ("audit_log", push_audit_log_config_sync_to_gateway, None),
+        ("cron_policy", push_cron_policy_sync_to_gateway, None),
         (
             "log_masking_rule",
             push_log_masking_rules_sync_to_gateway,

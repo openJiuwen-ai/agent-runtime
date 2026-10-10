@@ -183,6 +183,7 @@ _GATEWAY_REQUEST_MODULES = (
     "manager_server.manager_config_push.client",
     "manager_server.manager_config_push",
     "manager_server.core.application_config.logging_config",
+    "manager_server.core.application_config.cron_policy",
     "manager_server.core.application_config.task_memory_config",
     "manager_server.core.application_config.memory_config",
     "manager_server.core.application_config.log_masking_rule",

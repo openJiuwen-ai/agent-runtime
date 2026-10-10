@@ -42,6 +42,21 @@ LOG_MASKING_RULE_TABLE_DEF = TableDefinition(
     ],
 )
 
+CRON_POLICY_TABLE_DEF = TableDefinition(
+    table_name="cron_policy",
+    columns=[
+        ColumnDefinition("id", "integer", primary_key=True, autoincrement=True, nullable=False),
+        ColumnDefinition("jiuwenclaw_id", "string", length=64, nullable=False),
+        # 界面上允许同时处于运行中的定时任务数。0 表示不能再从界面启用新任务。
+        ColumnDefinition("max_jobs_per_user", "integer", nullable=False, default=5),
+        ColumnDefinition("created_at", "datetime", nullable=False),
+        ColumnDefinition("updated_at", "datetime", nullable=False),
+    ],
+    indexes=[
+        IndexDefinition(["jiuwenclaw_id"], unique=True),
+    ],
+)
+
 LOGGING_CONFIG_TABLE_DEF = TableDefinition(
     table_name="logging_config",
     columns=[

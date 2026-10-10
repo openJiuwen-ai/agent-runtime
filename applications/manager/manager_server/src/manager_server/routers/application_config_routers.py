@@ -1,4 +1,4 @@
-"""应用配置 API：日志、记忆、审计。"""
+"""应用配置 API：日志、记忆、审计、定时任务。"""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from manager_server.core.application_config.task_memory_config import (TaskMemor
 from manager_server.core.application_config.log_masking_rule import (
     LogMaskingRuleService,
 )
+from manager_server.core.application_config.cron_policy import CronPolicyService
 from manager_server.core.application_config.logging_config import LoggingConfigService
 from manager_server.core.application_config.memory_config import MemoryConfigService
 from manager_server.core.application_config.audit_log_config import AuditLogConfigService
@@ -38,6 +39,10 @@ def _log_masking_rule_svc(handler: DBHandler) -> LogMaskingRuleService:
 
 def _logging_config_svc(handler: DBHandler) -> LoggingConfigService:
     return LoggingConfigService(handler)
+
+
+def _cron_policy_svc(handler: DBHandler) -> CronPolicyService:
+    return CronPolicyService(handler)
 
 
 def _memory_config_svc(handler: DBHandler) -> MemoryConfigService:
@@ -195,6 +200,60 @@ async def delete_logging_config(
     handler: Annotated[DBHandler, Depends(get_db_handler)],
 ):
     svc = _logging_config_svc(handler)
+    try:
+        await svc.delete(jiuwenclaw_id=jiuwenclaw_id)
+    except ValueError as exc:
+        if "not found" in str(exc):
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ResponseModel(code=200, message="success")
+
+
+class CronPolicyUpsertRequest(BaseModel):
+    max_jobs_per_user: int = Field(..., ge=0)
+
+
+@application_config_router.put(
+    "/{jiuwenclaw_id}/cron-policy", response_model=ResponseModel
+)
+async def upsert_cron_policy(
+    jiuwenclaw_id: str,
+    body: CronPolicyUpsertRequest,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    svc = _cron_policy_svc(handler)
+    try:
+        data = await svc.upsert(
+            jiuwenclaw_id=jiuwenclaw_id,
+            max_jobs_per_user=body.max_jobs_per_user,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ResponseModel(code=200, message="success", data=data)
+
+
+@application_config_router.get(
+    "/{jiuwenclaw_id}/cron-policy", response_model=ResponseModel
+)
+async def get_cron_policy(
+    jiuwenclaw_id: str,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    svc = _cron_policy_svc(handler)
+    data = await svc.get(jiuwenclaw_id=jiuwenclaw_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="cron policy not found")
+    return ResponseModel(code=200, message="success", data=data)
+
+
+@application_config_router.delete(
+    "/{jiuwenclaw_id}/cron-policy", response_model=ResponseModel
+)
+async def delete_cron_policy(
+    jiuwenclaw_id: str,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    svc = _cron_policy_svc(handler)
     try:
         await svc.delete(jiuwenclaw_id=jiuwenclaw_id)
     except ValueError as exc:
