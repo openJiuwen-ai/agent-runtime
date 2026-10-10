@@ -54,7 +54,13 @@ from manager_server.models.template_models import (
     SKILL_PREBUILT_TEMPLATE_TABLE_DEF,
 )
 
-from .registry import ImportExportContext, SheetData, WorkbookData, adapter_registry
+from .registry import (
+    IdentityServiceUnavailableError,
+    ImportExportContext,
+    SheetData,
+    WorkbookData,
+    adapter_registry,
+)
 from .roles import (
     apply_role_rows,
     collect_roles_for_users,
@@ -412,13 +418,26 @@ async def _list(handler: DBHandler, table: str, filters: dict[str, Any]) -> list
     return list(await handler.list_records(table, filters, limit=10_000, offset=0))
 
 
+def _identity_base_url(public_key_url: str, fallback_url: str) -> str:
+    public_key = str(public_key_url or "").strip().rstrip("/")
+    suffix = "/v1/auth/public_key"
+    if public_key.endswith(suffix):
+        return public_key[: -len(suffix)]
+    return str(fallback_url or "").strip().rstrip("/")
+
+
 async def _identity_request(
     method: str, path: str, authorization: str | None, *, body: dict[str, Any] | None = None
 ) -> dict[str, Any] | None:
     headers = {"Authorization": authorization} if authorization else {}
-    base = str(settings.manager_web_idp_target or "").rstrip("/")
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        response = await client.request(method, f"{base}{path}", headers=headers, json=body)
+    base = _identity_base_url(settings.identity_public_key_url, settings.manager_web_idp_target)
+    try:
+        async with httpx.AsyncClient(timeout=10.0, trust_env=False) as client:
+            response = await client.request(method, f"{base}{path}", headers=headers, json=body)
+    except httpx.RequestError as exc:
+        raise IdentityServiceUnavailableError(
+            "identity center is unavailable; check the service and address configuration"
+        ) from exc
     if response.status_code == 404:
         return None
     if response.status_code >= 400:

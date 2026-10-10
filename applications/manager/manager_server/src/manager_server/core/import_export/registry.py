@@ -6,6 +6,10 @@ from typing import Any, Protocol
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 
 
+class IdentityServiceUnavailableError(RuntimeError):
+    """An import/export operation cannot reach the identity service."""
+
+
 @dataclass(slots=True)
 class SheetData:
     name: str

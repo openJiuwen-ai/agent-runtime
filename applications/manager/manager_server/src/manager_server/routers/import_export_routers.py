@@ -16,6 +16,7 @@ from manager_server.core.import_export import ImportExportContext, adapter_regis
 # implement and register another adapter; the routes remain unchanged.
 from manager_server.core.import_export import cluster as _cluster_adapter  # noqa: F401
 from manager_server.core.import_export import standalone as _standalone_adapters  # noqa: F401
+from manager_server.core.import_export.registry import IdentityServiceUnavailableError
 from manager_server.core.import_export.workbook import dump_workbook, load_workbook_data
 from manager_server.infrastructure.db import get_db_handler
 from manager_server.routers.auth_guards import AdminUser
@@ -81,6 +82,8 @@ async def export_resource(
     try:
         workbook = await _adapter(resource_type).export(context, resource_id)
         payload = dump_workbook(workbook)
+    except IdentityServiceUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -109,6 +112,8 @@ async def export_resources(
         else:
             workbook = await export_many(context, resource_ids)
         payload = dump_workbook(workbook)
+    except IdentityServiceUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -128,6 +133,8 @@ async def preflight_import(
     try:
         workbook = load_workbook_data(raw, expected_resource_type=resource_type)
         report = await _adapter(resource_type).preflight(context, workbook)
+    except IdentityServiceUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     report["confirmation_token"] = hashlib.sha256(raw).hexdigest()
@@ -149,6 +156,8 @@ async def import_resource(
     try:
         workbook = load_workbook_data(raw, expected_resource_type=resource_type)
         result = await _adapter(resource_type).apply(context, workbook)
+    except IdentityServiceUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return ResponseModel(code=200, message="success", data=result)
