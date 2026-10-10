@@ -113,7 +113,7 @@
 
 **FakeK8sPodClient**(local/单测):deploy 立即 Ready;可编程 `unready_pods`/`dead_pods`/`unhealthy_pods`/`deploy_failures`(create 前失败,无物理残留)/`fail_after_create`(create 成功但永不 Ready——Pod 留在集群、DeployFailed 携带 pod_id,考验上层兜底删除)/`delete_failures`(连续 delete 失败,非 404 形态——考验 PURGE 的 delete 门槛)模拟异常分支;`deployed_specs` 录制每次 deploy 收到的 pod_spec(断言 pod_spec 端到端透传,如 sidecars)。
 
-`probe_health(pod_ip, sse_port, health_path="/health")`:`GET http://{pod_ip}:{sse_port}{health_path}`,3s 超时,非 200/异常即不健康(K8sPodClient 基类默认实现,Real/Fake 共用;调用方 sweeper 按 Pod 自己的 info 参数传,回退 scope 当前配置)。
+`probe_health(pod_ip, sse_port, health_path="/health", *, timeout=HEALTH_PROBE_TIMEOUT)`:`GET http://{pod_ip}:{sse_port}{health_path}`,默认 3s 超时(env `AGENT_RUNTIME_HEALTH_PROBE_TIMEOUT` 经 `RealK8sPodClient(health_probe_timeout=...)` 构造注入,2026-10 起可配;AgentServer 慢启动/高负载被误杀半死时调大,判死时延≈`HEALTH_FAIL_THRESHOLD(2)×watch_interval`),非 200/异常即不健康(K8sPodClient 基类默认实现,Real/Fake 共用;调用方 sweeper 按 Pod 自己的 info 参数传,回退 scope 当前配置)。
 
 ## models.py
 

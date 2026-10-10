@@ -170,6 +170,14 @@ spec:
                   fieldPath: metadata.namespace
             - name: AGENT_RUNTIME_LOG_LEVEL
               value: "<<AGENT_RUNTIME_LOG_LEVEL>>"
+            # ---- 周期任务与健康探测 ----
+            # rm_watch tick 间隔(死 Pod 轮询+健康探测同拍;调大应同步调大
+            # sweeper.WATCH_LOCK_TTL,判死时延≈HEALTH_FAIL_THRESHOLD×间隔)
+            - name: AGENT_RUNTIME_WATCH_INTERVAL
+              value: "<<AGENT_RUNTIME_WATCH_INTERVAL>>"
+            # 健康探测单次 HTTP 超时(秒;AgentServer 慢启动/高负载被误杀时调大)
+            - name: AGENT_RUNTIME_HEALTH_PROBE_TIMEOUT
+              value: "<<AGENT_RUNTIME_HEALTH_PROBE_TIMEOUT>>"
             # ---- 系统自评估（2026-09;默认全空 = 纯规则评估,无 LLM 外呼）----
             # 采样/评估两 job 间隔(秒);LLM 三项(base_url+model 均非空才启用,
             # api_key 可空=内网免鉴权端点);pod_budget=集群 AgentServer Pod

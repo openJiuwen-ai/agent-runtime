@@ -133,6 +133,7 @@ def build_resources(
         kubeconfig=arc.kubeconfig,
         default_namespace=arc.default_namespace,
         link_mtls_config=link_mtls,
+        health_probe_timeout=arc.health_probe_timeout,
     )
     return redis_client, db, k8s
 

@@ -173,6 +173,7 @@ async def _overview(request: Request, sysctx: Any) -> dict[str, Any]:
             "reclaim_interval": arc.reclaim_interval,
             "watch_interval": arc.watch_interval,
             "reconcile_interval": arc.reconcile_interval,
+            "health_probe_timeout": arc.health_probe_timeout,
             "default_session_ttl": arc.default_session_ttl,
             "eval_sample_interval": arc.eval_sample_interval,
             "eval_interval": arc.eval_interval,

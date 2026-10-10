@@ -47,6 +47,10 @@ READ_TIMEOUT = 10     # 单 Pod read（_wait_ready 轮询间隔 2s，10s 充裕�
 LIST_TIMEOUT = 15     # namespace 级 list
 DELETE_TIMEOUT = 60   # delete（含驱逐收敛，物理操作最宽）
 WAIT_READY_PROGRESS_SEC = 30    # _wait_ready 进度行间隔（最长 300s 不留空白）
+# 健康探测单次 HTTP 超时（秒）。默认与 config.health_probe_timeout 同源
+# （两处各持字面量,改默认须同步）；env
+# AGENT_RUNTIME_HEALTH_PROBE_TIMEOUT 经 RealK8sPodClient 构造注入覆盖。
+HEALTH_PROBE_TIMEOUT = 3.0
 
 
 def _random_suffix(length: int = 5) -> str:
@@ -250,10 +254,11 @@ class K8sPodClient:
         raise NotImplementedError
 
     async def probe_health(self, pod_ip: str, sse_port: int,
-                           health_path: str = "/health") -> bool:
+                           health_path: str = "/health",
+                           *, timeout: float = HEALTH_PROBE_TIMEOUT) -> bool:
         """场景 N：探测 AgentServer 健康端点 GET http://{pod_ip}:{sse_port}{health_path}。"""
         try:
-            async with httpx.AsyncClient(timeout=3.0) as client:
+            async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.get(
                     f"http://{pod_ip}:{sse_port}{health_path or '/health'}")
                 if response.status_code != 200:
@@ -275,9 +280,10 @@ class K8sPodClient:
         pod_ip: str,
         sse_port: int,
         health_path: str = "/health",
+        timeout: float = HEALTH_PROBE_TIMEOUT,
     ) -> bool:
         """带 Pod 身份的探测；旧实现自动回退原 ``probe_health`` 契约。"""
-        return await self.probe_health(pod_ip, sse_port, health_path)
+        return await self.probe_health(pod_ip, sse_port, health_path, timeout=timeout)
 
 
 # ---------------------------------------------------------------- Real（kubernetes_asyncio）
@@ -291,10 +297,12 @@ class RealK8sPodClient(K8sPodClient):
         kubeconfig: str | None = None,
         default_namespace: str = "default",
         link_mtls_config: LinkMTLSConfig | None = None,
+        health_probe_timeout: float = HEALTH_PROBE_TIMEOUT,
     ):
         self.kubeconfig = kubeconfig
         self.default_namespace = default_namespace
         self.link_mtls = link_mtls_config or LinkMTLSConfig.from_env()
+        self.health_probe_timeout = health_probe_timeout
         self._client: Any = None       # kubernetes_asyncio.client 模块
         self._core: Any = None         # CoreV1Api
         self._api_client: Any = None
@@ -712,7 +720,7 @@ class RealK8sPodClient(K8sPodClient):
         )
         try:
             async with httpx.AsyncClient(
-                timeout=3.0,
+                timeout=self.health_probe_timeout,
                 trust_env=False,
                 **self.link_mtls.client_kwargs(role="agentserver"),
             ) as client:
@@ -954,7 +962,9 @@ class FakeK8sPodClient(K8sPodClient):
         return info
 
     async def probe_health(self, pod_ip: str, sse_port: int,
-                           health_path: str = "/health") -> bool:
+                           health_path: str = "/health",
+                           *, timeout: float = HEALTH_PROBE_TIMEOUT) -> bool:
+        # timeout 收下不用:进程内实现无 HTTP,签名与基类契约对齐
         return pod_ip not in self.unhealthy_pods
 
 

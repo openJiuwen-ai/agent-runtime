@@ -603,7 +603,7 @@ curl -s -X POST "http://127.0.0.1:8091/api/session/config_refresh" \
 | `mode` | str | 运行模式(`local`/`server`) |
 | `uptime_sec` | float | 进程存活秒数 |
 | `pid` / `python` / `platform` | int/str/str | 进程号 / Python 版本 / 平台 |
-| `config` | object | 脱敏配置摘要:命名空间、5 个后台任务间隔、`scope_full_timeout`、`default_session_ttl`、自评估四项(sample_interval/interval/llm_enabled/pod_budget)、`kubeconfig`(脱敏 `"***"`)、服务 host/port、`redis_url`(剥凭据)、DB 类型/主机/库名 |
+| `config` | object | 脱敏配置摘要:命名空间、5 个后台任务间隔、`health_probe_timeout`、`scope_full_timeout`、`default_session_ttl`、自评估四项(sample_interval/interval/llm_enabled/pod_budget)、`kubeconfig`(脱敏 `"***"`)、服务 host/port、`redis_url`(剥凭据)、DB 类型/主机/库名 |
 | `readiness` | object | 依赖就绪:`{db, redis, kubernetes, lock, cache, ready}` |
 | `jobs` | list[object] | 7 个后台任务(`sm_sweep`/`rm_autoscale`/`rm_reclaim`/`rm_watch`/`rm_reconcile`/`sys_sample`/`sys_eval`)逐个:`name`、`instance_id`、`running`、`ticks`/`ok_ticks`/`error_ticks`/`aborted_ticks`/`timedout_ticks`/`lock_misses`(计数器)、`last_tick_at`(epoch 秒)、`last_duration_ms`、`last_error`、`interval_sec`、`tick_timeout_sec`、`leader`(`{instance_id, is_local, ttl_sec}` 或 `null`——tick 间隙锁瞬时缺失 → `null` 属正常) |
 
@@ -628,6 +628,7 @@ curl -s "http://127.0.0.1:8091/visualization/overview"
     "reclaim_interval": 1,
     "watch_interval": 10,
     "reconcile_interval": 30,
+    "health_probe_timeout": 3.0,
     "scope_full_timeout": 30.0,
     "default_session_ttl": 60,
     "eval_sample_interval": 30,

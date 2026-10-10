@@ -139,6 +139,7 @@ SM 侧 ctx,级联管理全部生命周期(框架 App 的 lifespan 只认一个 c
 | reclaim_interval | `AGENT_RUNTIME_RECLAIM_INTERVAL` | 1 | RM:idle 回收 |
 | watch_interval | `AGENT_RUNTIME_WATCH_INTERVAL` | 10 | RM:死 Pod+健康探测 |
 | reconcile_interval | `AGENT_RUNTIME_RECONCILE_INTERVAL` | 30 | RM:对账 |
+| health_probe_timeout | `AGENT_RUNTIME_HEALTH_PROBE_TIMEOUT` | 3.0 | RM:健康探测单次 HTTP 超时(2026-10;AgentServer 慢启动/高负载误杀时调大) |
 | default_session_ttl | `AGENT_RUNTIME_DEFAULT_SESSION_TTL` | 60 | touch 兜底 ttl |
 | eval_sample_interval | `AGENT_RUNTIME_EVAL_SAMPLE_INTERVAL` | 30 | sys_sample 采样间隔(钳 5;spec/evaluation.md) |
 | eval_interval | `AGENT_RUNTIME_EVAL_INTERVAL` | 300 | sys_eval 评估间隔(钳 30) |
