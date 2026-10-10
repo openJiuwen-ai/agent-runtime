@@ -17,6 +17,7 @@
 
 | 日期 | 文档 | 一句话 |
 |---|---|---|
+| 2026-10 | [健康探测超时可配(AGENT_RUNTIME_HEALTH_PROBE_TIMEOUT)](2026-10-health-probe-timeout-config.md) | sweeper 半死检测单次 /health HTTP 超时原为 k8s.py 两处硬编码 3.0s,AgentServer 慢启动/高负载误杀只能改码;env→config→构造注入贯通 Real 探测(基类 probe_health 参数化,常量 HEALTH_PROBE_TIMEOUT 单源);顺带补齐 WATCH_INTERVAL 的部署模板渲染项(此前改 env 不生效);**存量 env 文件须补两变量否则渲染 fail-fast**;判死时延公式≈阈值 2×watch_interval 不变 |
 | 2026-09 | [session.create 临时 key 原子改绑(修复双计数与亲和断裂)](2026-09-session-create-rebind.md) | gateway create 以临时 key(sess_*/webhttp_*/组合串)route 占槽、真实 id 首 chat 二次占槽(ns wmq 实证 60s 双计数+亲和断裂);新增 POST /api/session/rebind + LUA_REBIND(四处不变量整体搬移,TTL 刷新,to 空=驱逐;幂等 noop/overtaken 由 Lua 保证不走 request_id 缓存;过期未扫仍搬移保慢 create 亲和);gateway 在 create 响应返回前 await rebind 封死竞态,失败降级=现状;gateway 短路方案否决留档;573 用例+cluster 27/27 |
 | 2026-09 | [删除两级 enabled(禁用=删除,生命周期=存在性+expires_at)](2026-09-drop-enabled-fields.md) | #154 定案:template/scope 两级 enabled 半死态(准入看/暖侧不看→暖 Pod 死锁,refresh 重焐热同族)整字段删除;「关」=从载荷删除(删 scope 走扩散③ 优雅排空,删 template 被 parse 400 强制显式组合);expires_at 保留为唯一生命周期字段;残留 enabled:false 防御性视为缺席(防静默重开准入);refresh 对过期 scope 只日落不保温;DB 两表先发版后 DROP+前置检查;555 用例 |
 | 2026-09 | [scope 亲和保持(规则变更不迁移旧会话 + 路由性排除日落)](2026-09-scope-affinity-hold.md) | #152:route 每请求重算 first-fit 参与仲裁存量绑定=规则一改旧会话被即时迁移;改为亲和只认「绑定+Pod 存活」(重算只服务新放置,曾见绑定的调用不落放置,rebind 重试);禁用/失权/删 scope bump gen 走排空窗口(与 #151 同哲学,首因定窗);index 重排零打扰;corner 用例反转;554 用例 |

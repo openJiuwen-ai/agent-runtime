@@ -74,8 +74,7 @@ def own_namespace() -> str:
 
 
 def _env_float(name: str, default: float) -> float:
-    """float 型 env(评估 LLM 超时用;场景 F 快失败时随 scope_full_timeout
-    被删,评估层引入后恢复)。"""
+    """float 型 env(现用户:健康探测超时 / 评估 LLM 超时)。"""
     try:
         return float(os.getenv(name, "") or default)
     except ValueError:
@@ -114,6 +113,9 @@ class AgentRuntimeConfig:
     reclaim_interval: int = 1                  # RM：idle 超 pod_ttl 回收
     watch_interval: int = 10                   # RM：死 Pod 轮询 + 健康探测
     reconcile_interval: int = 30               # RM：孤儿对账
+    health_probe_timeout: float = 3.0          # RM：健康探测单次 HTTP 超时
+                                               # （默认与 k8s.HEALTH_PROBE_TIMEOUT 同源；
+                                               # AgentServer 慢启动/高负载误杀时调大）
     # route 行为
     default_session_ttl: int = 60
     # 系统自评估（docs/spec/evaluation.md）：采样/评估两 job + LLM 分析（默认禁用）
@@ -148,6 +150,8 @@ class AgentRuntimeConfig:
             reclaim_interval=_env_int("AGENT_RUNTIME_RECLAIM_INTERVAL", 1),
             watch_interval=_env_int("AGENT_RUNTIME_WATCH_INTERVAL", 10),
             reconcile_interval=_env_int("AGENT_RUNTIME_RECONCILE_INTERVAL", 30),
+            health_probe_timeout=_env_float(
+                "AGENT_RUNTIME_HEALTH_PROBE_TIMEOUT", 3.0),
             default_session_ttl=_env_int("AGENT_RUNTIME_DEFAULT_SESSION_TTL", 60),
             eval_sample_interval=_env_int("AGENT_RUNTIME_EVAL_SAMPLE_INTERVAL", 30),
             eval_interval=_env_int("AGENT_RUNTIME_EVAL_INTERVAL", 300),

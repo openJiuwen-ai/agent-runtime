@@ -193,3 +193,45 @@ async def test_concurrent_start_builds_single_apiclient(monkeypatch):
     await client.close()
     assert client._core is None and client._loaded is False
     assert built[0].closed
+
+
+async def test_probe_pod_health_timeout_injected(monkeypatch):
+    """健康探测超时经构造注入贯通到 httpx(env
+    AGENT_RUNTIME_HEALTH_PROBE_TIMEOUT,默认 HEALTH_PROBE_TIMEOUT=3.0)——
+    防退化为字面量(历史为两处硬编码 3.0)。"""
+    import agent_runtime.resource_manager.k8s as k8s_module
+
+    captured: dict = {}
+
+    class _Resp:
+        status_code = 200
+
+    class _CaptureClient:
+        def __init__(self, timeout=None, **kwargs):
+            captured["timeout"] = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get(self, url, headers=None):
+            captured["url"] = url
+            return _Resp()
+
+    monkeypatch.setattr(k8s_module.httpx, "AsyncClient", _CaptureClient)
+    client = RealK8sPodClient(health_probe_timeout=7.5)
+    ok = await client.probe_pod_health(
+        pod_id="p1", namespace="default", pod_ip="10.42.0.5",
+        sse_port=8086, health_path="/health")
+    assert ok is True
+    assert captured["timeout"] == 7.5
+    assert captured["url"] == "http://10.42.0.5:8086/health"
+
+    # 未注入时回退模块常量默认(env 链路的兜底契约)
+    client_default = RealK8sPodClient()
+    await client_default.probe_pod_health(
+        pod_id="p1", namespace="default", pod_ip="10.42.0.5",
+        sse_port=8086, health_path="/health")
+    assert captured["timeout"] == k8s_module.HEALTH_PROBE_TIMEOUT

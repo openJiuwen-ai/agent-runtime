@@ -57,3 +57,23 @@ def test_default_namespace_literal_default(monkeypatch, tmp_path):
     monkeypatch.setattr(config_module, "_SA_NS_FILE",
                         str(tmp_path / "nonexistent"))
     assert AgentRuntimeConfig.from_env().default_namespace == "default"
+
+
+# ---- health_probe_timeout(AGENT_RUNTIME_HEALTH_PROBE_TIMEOUT,2026-10)----
+
+
+def test_health_probe_timeout_default(monkeypatch):
+    monkeypatch.delenv("AGENT_RUNTIME_HEALTH_PROBE_TIMEOUT", raising=False)
+    assert AgentRuntimeConfig.from_env().health_probe_timeout == 3.0
+
+
+def test_health_probe_timeout_env_overrides(monkeypatch):
+    """AgentServer 慢启动/高负载被误杀半死时的调大入口。"""
+    monkeypatch.setenv("AGENT_RUNTIME_HEALTH_PROBE_TIMEOUT", "8.5")
+    assert AgentRuntimeConfig.from_env().health_probe_timeout == 8.5
+
+
+def test_health_probe_timeout_invalid_falls_back(monkeypatch):
+    """env 手误(非 float)留痕回退默认——与 _env_int 同纪律,配错可见。"""
+    monkeypatch.setenv("AGENT_RUNTIME_HEALTH_PROBE_TIMEOUT", "3s")
+    assert AgentRuntimeConfig.from_env().health_probe_timeout == 3.0
