@@ -18,6 +18,7 @@ gen_manager_server_file() {
     fi
 
     add_resource_if_set "MANAGER_SERVER" "${file}"
+    apply_hpa_policy "MANAGER_SERVER" "${file}"
 }
 
 gen_identity_file() {
@@ -102,6 +103,7 @@ render_manager_files() {
     render_config_template "${CONFIG["MANAGER_WEB_TEMPLATE_FILE"]}" "${manager_web_file}" "DEPLOY_VARS"
     enable_dev_mode_if_needed "${manager_web_file}" manager-web
     add_resource_if_set "MANAGER_WEB" "${manager_web_file}"
+    apply_hpa_policy "MANAGER_WEB" "${manager_web_file}"
     success "Manager module is rendered."
 }
 

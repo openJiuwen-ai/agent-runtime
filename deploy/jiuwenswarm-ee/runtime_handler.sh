@@ -52,6 +52,7 @@ gen_runtime_file() {
 }
 
 render_runtime_files() {
+
     render_secret_configmap
     ensure_available_port "AGENT_RUNTIME_NODE_PORT"
     gen_runtime_file

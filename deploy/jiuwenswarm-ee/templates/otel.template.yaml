@@ -1,4 +1,4 @@
-# 部署 OpenTelemetry Collector（logs-only：audit log 打点 → Loki）
+# 部署 OpenTelemetry Collector（logs + metrics：audit log → Loki，业务 metrics → Prometheus）
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -52,6 +52,9 @@ spec:
     - name: otlp-http
       port: 4318
       targetPort: 4318
+    - name: prom-metrics
+      port: 8889
+      targetPort: 8889
   # 强制流量只发往本地节点的 DaemonSet 实例
   internalTrafficPolicy: Local
 ---
@@ -76,10 +79,23 @@ data:
         limit_percentage: 80
         spike_limit_percentage: 20
       batch:
+      # 丢弃 Collector 自身指标，避免污染业务指标
+      filter/ownmetrics:
+        metrics:
+          exclude:
+            match_type: strict
+            resource_attributes:
+              - key: service.name
+                value: otelcol-contrib
 
     exporters:
       otlphttp/loki:
         endpoint: "http://<<LOKI_NAME>>:3100/otlp"
+      # 指标经 Prometheus exporter 暴露在 :8889，由 Prometheus 抓取入库
+      prometheus:
+        endpoint: 0.0.0.0:8889
+        resource_to_telemetry_conversion:
+          enabled: true
 
     service:
       pipelines:
@@ -87,6 +103,10 @@ data:
           receivers: [otlp]
           processors: [memory_limiter, batch]
           exporters: [otlphttp/loki]
+        metrics:
+          receivers: [otlp]
+          processors: [memory_limiter, filter/ownmetrics, batch]
+          exporters: [prometheus]
 ---
 # 授权 Collector 读取 K8s 节点日志所需的 RBAC（filelog 扩展预留）
 apiVersion: v1

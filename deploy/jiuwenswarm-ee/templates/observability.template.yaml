@@ -29,6 +29,8 @@ spec:
               value: "5274"
             - name: OBSERVABILITY_LOKI_URL
               value: "<<LOKI_URL>>"
+            - name: OBSERVABILITY_PROMETHEUS_URL
+              value: "<<PROMETHEUS_URL>>"
           readinessProbe:
             httpGet:
               path: /
