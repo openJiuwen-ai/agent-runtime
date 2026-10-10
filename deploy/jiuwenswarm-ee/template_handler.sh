@@ -210,3 +210,16 @@ add_resource_if_set() {
     fi
 }
 
+# HPA 与 Deployment.spec.replicas 互斥，渲染后按 {MODULE}_HPA_ENABLED 二选一：
+#   true  → 保留模板中的 HPA 文档，删除固定 replicas，副本数交给 HPA 管理
+#            （否则每次 apply 都会把 HPA 已扩出的副本打回 GATEWAY_REPLICAS 等固定值）
+#   false → 剔除 HPA 文档，Deployment 按固定 replicas 部署，行为与历史版本一致
+apply_hpa_policy() {
+    local module="$1"  file="$2"
+
+    if [[ "${DEPLOY_VARS["${module}_HPA_ENABLED"]}" == "true" ]]; then
+        yq eval 'del(select(.kind == "Deployment").spec.replicas)' -i "${file}"
+    else
+        yq eval-all -i 'select(.kind != "HorizontalPodAutoscaler" or .metadata.name != "'"${DEPLOY_VARS["${module}_NAME"]}"'")' "${file}"
+    fi
+}

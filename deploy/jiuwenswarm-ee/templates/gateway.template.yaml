@@ -117,3 +117,33 @@ spec:
       nodePort: <<GATEWAY_CONFIG_HTTP_NODE_PORT>>
   selector:
     app: <<GATEWAY_NAME>>
+---
+# HPA：GATEWAY_HPA_ENABLED=true 时保留本段（副本数交由 HPA 管理，
+# Deployment 固定 replicas 会被渲染流程删除）；false 时整段剔除。
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: <<GATEWAY_NAME>>
+  namespace: <<NAMESPACE>>
+  labels:
+    app: <<GATEWAY_NAME>>
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: <<GATEWAY_NAME>>
+  minReplicas: <<GATEWAY_HPA_MIN_REPLICAS>>
+  maxReplicas: <<GATEWAY_HPA_MAX_REPLICAS>>
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: <<GATEWAY_HPA_TARGET_CPU>>
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: <<GATEWAY_HPA_TARGET_MEM>>

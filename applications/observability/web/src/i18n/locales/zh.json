@@ -30,6 +30,7 @@
   },
   "observability": {
     "tabs": {
+      "monitoring": "资源监控",
       "auditLog": "审核日志"
     },
     "placeholderHint": "该 Tab 内容待规划，敬请期待。",
@@ -84,6 +85,20 @@
         "RESULT": "结果",
         "agent_pod": "Agent Pod",
         "method": "方法"
+      }
+    },
+    "monitoring": {
+      "filterTitle": "资源监控筛选",
+      "updatedAt": "更新于 {{time}}",
+      "autoRefresh": "自动刷新 (10s)",
+      "allNamespaces": "全部命名空间",
+      "searchPod": "搜索 Pod 名称",
+      "summary": "Pod 数 {{pods}} ｜ CPU 合计 {{cpu}} 核 ｜ 内存合计 {{mem}}",
+      "col": {
+        "namespace": "命名空间",
+        "pod": "Pod",
+        "cpu": "CPU (核)",
+        "memory": "内存"
       }
     }
   }
