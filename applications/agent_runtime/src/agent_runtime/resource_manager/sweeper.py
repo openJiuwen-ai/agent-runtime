@@ -440,9 +440,37 @@ class ResourceSweeper:
         if not await self.state.try_lock(self.state.k.lock_reconcile(), RECONCILE_LOCK_TTL, token):
             return
         t0 = time.monotonic()
-        orphans = stale = failed = 0
+        healed = orphans = stale = failed = 0
         view: list[dict[str, str]] = []
         try:
+            # 0. idle 计时自愈（无 Lua 模式的唯一崩溃窗口，时长 < 一个 reconcile
+            #    周期）：release 的 EXEC(SADD idle) 成功后、SET idle_since 前
+            #    进程死亡 → idle 成员无计时，reclaim 的 aged=0 恒 falsy 永不到
+            #    龄（槽位永久虚占）。补 SET NX 重启计时；对 Lua 模式无害
+            #    （该窗口不存在，NX 恒空过）。
+            for scope_id in await self.state.known_scope_ids():
+                try:
+                    now0 = now_ts()
+                    for pod_id in await self.state.idle_pods(scope_id):
+                        try:
+                            if await self.state.idle_since(pod_id):
+                                continue
+                            if not await self.state.pod_info(pod_id):
+                                continue  # info 已清：不复活已 PURGE 记账
+                            if await self.state.set_idle_since_if_absent(pod_id, now0):
+                                healed += 1
+                                logger.warning(
+                                    "reconcile healed missing idle_since: "
+                                    "pod=%s scope=%s", pod_id, scope_id)
+                        except Exception:  # noqa: BLE001 - per-Pod 隔离
+                            failed += 1
+                            logger.exception(
+                                "reconcile idle_since heal failed: pod=%s", pod_id)
+                except Exception:  # noqa: BLE001 - per-scope 隔离
+                    failed += 1
+                    logger.exception(
+                        "reconcile idle heal scope failed: scope=%s", scope_id)
+
             # 1. Redis↔K8s：Redis 记录的 Pod 在 K8s 已不存在 → 清理（Watch 兜底）
             for pod_id in await self.state.all_pod_ids():
                 # per-Pod 隔离（同 watch_once：sorted 确定序，单点异常不得饿死后续）
@@ -492,8 +520,10 @@ class ResourceSweeper:
         finally:
             await self.state.unlock(self.state.k.lock_reconcile(), token)
             logger.debug(
-                "reconcile tick: pods=%d orphans=%d stale=%d failed=%d duration_ms=%.0f",
-                len(view), orphans, stale, failed, (time.monotonic() - t0) * 1000,
+                "reconcile tick: pods=%d healed=%d orphans=%d stale=%d "
+                "failed=%d duration_ms=%.0f",
+                len(view), healed, orphans, stale, failed,
+                (time.monotonic() - t0) * 1000,
             )
 
     # -------------------------------------------------------------- 清理

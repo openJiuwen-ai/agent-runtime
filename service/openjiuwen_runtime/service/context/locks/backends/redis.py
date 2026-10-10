@@ -1,7 +1,11 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
-"""Redis ``SET NX PX`` lock backend with owner-checked Lua mutations."""
+"""Redis ``SET NX PX`` lock backend with owner-checked mutations.
+
+renew/release 经 :func:`redis_compat.eval_or_watch`：真 Redis 走原子 Lua，
+EVAL 被禁的环境降级为 WATCH/MULTI/EXEC 的 owner-token 校验式 CAS。
+"""
 
 from __future__ import annotations
 
@@ -11,9 +15,8 @@ import time
 from typing import Any
 from uuid import uuid4
 
-from redis.exceptions import ResponseError, WatchError
-
 from ....errors import InvalidLockLease, LockBackendUnavailable, LockLost
+from ...redis_compat import eval_or_watch, watch_cas
 from ..base import LockCapabilities, LockCredential
 
 _RELEASE_SCRIPT = """
@@ -131,51 +134,30 @@ class RedisLockBackend:
             )
 
     async def _cas(self, credential: LockCredential, script: str, *args: Any) -> int:
-        try:
-            return int(
-                await self._redis.eval(
-                    script, 1, credential.key, credential.token, *args
-                )
-            )
-        except ResponseError as exc:
-            # Older fakeredis builds omit Lua support. Keep the compatibility
-            # test path while real Redis always takes the atomic Lua branch.
-            if (
-                "unknown command" not in str(exc).lower()
-                or "eval" not in str(exc).lower()
-            ):
-                raise
-            return int(await self._watch_cas(credential, script, *args))
+        # eval 优先（真 Redis 原子 Lua）；EVAL 被禁（rename-command / ACL，
+        # 或缺 lupa 的 fakeredis）时经 redis_compat 分类后惰性降级 WATCH
+        # 路径并 memo——两种路径行为等价（owner-token 校验式 CAS）。
+        result = await eval_or_watch(
+            self._redis,
+            lambda: self._redis.eval(
+                script, 1, credential.key, credential.token, *args
+            ),
+            lambda: self._watch_cas(credential, script, *args),
+            op="lock_cas",
+        )
+        return int(result or 0)
 
     async def _watch_cas(
         self, credential: LockCredential, script: str, *args: Any
     ) -> int:
-        pipe = self._redis.pipeline(transaction=True)
-        try:
-            await pipe.watch(credential.key)
-            current = await pipe.get(credential.key)
-            if _as_bytes(current) != credential.token.encode():
-                await pipe.unwatch()
-                return 0
-            pipe.multi()
+        def queue(pipe: Any) -> None:
             if script is _RENEW_SCRIPT:
                 pipe.pexpire(credential.key, args[0])
             else:
                 pipe.delete(credential.key)
-            response = await pipe.execute()
-            return int(response[0]) if response else 0
-        except WatchError:
-            try:
-                await pipe.unwatch()
-            except Exception:  # noqa: BLE001
-                pass
-            return 0
 
-
-def _as_bytes(value: Any) -> bytes | None:
-    if value is None:
-        return None
-    return value.encode() if isinstance(value, str) else bytes(value)
+        response = await watch_cas(self._redis, credential.key, credential.token, queue)
+        return int(response[0]) if response else 0
 
 
 __all__ = ["RedisLockBackend"]

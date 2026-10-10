@@ -530,3 +530,21 @@ agent-runtime/applications/orchestrator/            # 合并服务的唯一可�
 | `session/` SDK 数据面(`WSServiceMessageChannel`/`response_queue`/`dual_queue`) | 数据面 | **弃用**(旁路定位) |
 | `openjiuwen_runtime.service`(App/Envelope/RequestContext/Redis 原语 + `ctx.redis`) | 服务框架 | **直接使用**(`ctx.redis` 由 Session Manager M0 已加) |
 | Session Manager `session_manager/`(app/handlers/orchestrator/state/lua_scripts/sweeper 结构) | 同范式参考 | **镜像结构**(RM 包 `resource_manager/` 同构) |
+
+---
+
+## 14. 无 Lua 模式语义映射表(2026-10-redis-no-lua-compat)
+
+`AGENT_RUNTIME_REDIS_LUA=off` 时 `ResourceState.eval` 分派到 `resource_manager/no_lua.py`(同参数同返回规约)。等价性论证与实现纪律同 SM 设计 §15(WATCH+复读+MULTI 闭环;HLEN/GET 判活;两段 WATCH——静态键先行,idle 现成员的 info 键在复读后补 WATCH,MULTI 前可多次下发)。
+
+| 脚本 | 手段 | WATCH 集 | 与 Lua 的偏差与兜底 |
+|---|---|---|---|
+| ACQUIRE | 两段 WATCH | {config, idle, pods, deploying, drain} + idle 现成员的 pod:info | 过期占位清理(ZREMRANGEBYSCORE)为 WATCH 前独立命令:清理与复读之间新过期使 total 偏保守(可能 max_reached),下一拍自愈——安全向,不会超配。reuse 的并发独占:双 acquire 抢同一暖 Pod → 后者 WatchError → 重试选下一个/need_deploy |
+| PLACEHOLDER | WATCH | {config, pods, deploying, drain} | 同 ACQUIRE deploy 分支,不碰 idle 池 |
+| REGISTER | WATCH {scope:config} | 同左 | generation 烙印原子性保持:bump 与注册并发 → config 变更 → WatchError → 重试读新代(等价 Lua 单线程排队) |
+| RELEASE | WATCH {pod:info} + EXEC 后独立 SET | 同左 | **唯一新增崩溃窗口**:EXEC(SADD idle) 成功后、SET idle_since 前进程死 → idle 成员无计时(reclaim 的 aged=0 恒 falsy 永不到龄,槽位虚占)——由 `reconcile_once` 步 0 检测项自愈(`set_idle_since_if_absent`,SET NX)。SET 不入 MULTI 是为保「重放不刷新计时」幂等(进 MULTI 会让 SADD=0 的重放路径也重写计时,reclaim 永不达成) |
+| POP_IDLE | 纯 MULTI(不 WATCH) | — | 无(幂等写集) |
+| PURGE | WATCH {pod:info} | 同左 | scope 从 info 复读与清删同事务(并发重注册换 scope → WatchError 重试复读,不留新 scope 集合残留) |
+| DEPLOY_FOLLOWER_GATE | WATCH {deploy_followers} | 同左 | 「加前判定」(复读 ZCARD,n+1>max 拒绝不加)替代 Lua「先 ZADD 后 ZCARD 超限自退」——单键 WATCH 下两者等价(并发插入必触发重读,不超收) |
+
+真环境验证:`scripts/verify_redis_no_lua.py`(单实例/cluster 各 19/19,环境自证防假绿——`--rename-command EVAL ""` 实例)。

@@ -710,3 +710,21 @@ agent-runtime/applications/orchestrator/   # 【合并壳】合并服务的唯�
 | `session/` SDK:`WSServiceMessageChannel`、`ServiceHandler` 通道、`dual_queue`、`response_queue` | 数据面 | **弃用**(旁路定位) |
 | EE `service_config_template.py`:`apply_service_config_template` op、`_build_row_from_template` | config 持久化 | **移植**,本地库→共享 DB |
 | `openjiuwen_runtime.service`(App/Envelope/RequestContext/Redis 原语 + 新 `ctx.redis`) | 服务框架 | **直接使用**(框架加 `ctx.redis` 见 §0.4) |
+
+---
+
+## 15. 无 Lua 模式语义映射表(2026-10-redis-no-lua-compat)
+
+`AGENT_RUNTIME_REDIS_LUA=off` 时 `SessionState.eval` 分派到 `session_manager/no_lua.py`(同参数同返回规约,业务层零改动)。实现范式与逐脚本 WATCH 集如下;与 Lua 的等价性论证:**Redis 事务(WATCH/MULTI/EXEC)与 Lua 同为单连接串行化,键集同槽(hash tag)时并发语义等价**——闸门类不变量全部落在「WATCH + 复读 + MULTI」闭环内,任何并发放置必 SADD scope:sessions、任何生命周期写必改/删 session 哈希,均在 WATCH 覆盖下触发重试,不超卖/不断亲和/不泄漏额度。
+
+| 脚本 | 手段 | WATCH 集 | 与 Lua 的偏差(均非不变量) |
+|---|---|---|---|
+| ROUTE_PLACE | 绑定段(窄 WATCH)+ 放置段(进程内 per-scope 锁 + 最小 WATCH) | 绑定:{session, 亲和 pod:info};放置:{session, scope:sessions, scope:pods, 选中 pod:sessions} | ①first-fit 可能选中接入序稍后 Pod(公平性微偏——Lua 本身也只是任意串行序);②放置段进程内锁消本地惊群后,WATCH 仅防跨副本竞争(真 cluster 40 路并发实测:修复前 349 abort/18 耗尽,修复后 0 abort/0.15s/恰收满);③重试耗尽(12×[0,120ms))上抛 → 既有 503 STATE_UNAVAILABLE retry_after=1 通道 |
+| EVICT | WATCH {session} | 同左 | 并发双 evict 串行化为 noop(经 skey WATCH 重读,与 Lua 等价);remaining 经 MULTI 末位 SCARD 从 EXEC 响应取 |
+| REBIND | WATCH {from, to, 绑定 pod:info}(两段补 WATCH) | 同左 | 无;overtaken/evicted 判定读均在 WATCH 保护下 |
+| TOUCH | WATCH {session} | 同左 | 无(身份/expiry/ttl 全在该哈希;过期惰性 evict 为单事务) |
+| SWEEP_IDLE_NOTIFY | WATCH {pod:sessions, scope:pods} | 同左 | SET NX 去重结果从 EXEC 响应判定(None/False=已通知,真 Redis 实测 NX 失败为 nil→None 非 False) |
+| REGISTER_POD | INCR + 纯 MULTI(不 WATCH) | — | 崩溃于 INCR 与 MULTI 间 → seq 空洞(接入序仅要求单调,无害) |
+| CLEANUP_POD | 纯 MULTI(不 WATCH) | — | 无(幂等写集) |
+
+**实现纪律(踩坑实录)**:①pre-MULTI 判活禁用 `pipe.exists`——EXISTS 属 ClusterPipeline 可拆分多键命令,pre-MULTI 不立即执行而返回 pipeline 对象(单实例/fakeredis 返回 coroutine,静默分歧;真 cluster 实测亲和判活恒假误回收绑定),判活一律 HLEN(HASH)/GET(STRING);②残骸自清后落穿用 _REDO 哨兵重入决策(EXEC 后 pipe 已 reset,复用同一 pipe 再 WATCH 语义脆弱);③内联锁 unlock/refresh_lock 走框架 `redis_compat.watch_cas`(GET==token 才 DEL/EXPIRE,WatchError 视同失锁)。

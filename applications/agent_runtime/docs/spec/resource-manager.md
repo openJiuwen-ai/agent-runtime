@@ -95,6 +95,10 @@
 
 约定同 SM:不传 KEYS,`ARGV[1]`=前缀,返回扁平字符串数组。
 
+## no_lua.py —— 7 个 Lua 的无 Lua 等价实现(2026-10-redis-no-lua-compat)
+
+`AGENT_RUNTIME_REDIS_LUA=off` 时 `ResourceState.eval` 分派到 `ResourceNoLua`(同参数、同扁平返回规约)。逐脚本 WATCH 集与语义偏差见 `docs/design/resource-manager-design.md` 无 Lua 模式映射表;实现纪律同 SM 侧(HLEN/GET 判活、两段 WATCH、全抖动退避)。RM 特有:acquire 的过期占位清理(ZREMRANGEBYSCORE)为 WATCH 前独立命令,清理与复读之间新过期使 total 偏保守(下拍自愈,安全向);release 的「EXEC(SADD) 响应==1 才独立 SET idle_since」保留幂等,**唯一新增崩溃窗口**(SADD 与 SET 之间进程死 → idle 成员无计时)由 `reconcile_once` 步 0 的 idle_since 补计时检测项自愈(`set_idle_since_if_absent`,SET NX 不刷新既有计时)。
+
 ## k8s.py —— K8s 适配层
 
 `K8sPodClient` 抽象(Real/Fake 同签名):`start/close/deploy/delete/get_pod/list_pods/probe_health`。
@@ -132,7 +136,7 @@
 | `autoscale_once`(场景 H) | 1s / lock:rm:autoscale | 先 `reap_expired_deploying`(崩溃遗留占位自愈)再遍历 `known_scope_ids()`(SCAN scope:config):**当前版本+代次** idle < min_idle_pods(`_current_version_idle`:deploy_ver ∧ generation 均与 scope:config 一致——A 类变更后旧版、config_refresh 后老代次 idle Pod 永不可能被复用,不能拿来满足 min_idle,否则暖池被旧版钉死)且 pods+deploying < 容量上限(max_pods;**排空纪元活跃 +SURGE_MARGIN=1**,与 Lua 闸门同步,2026-09-17)→ `LUA_PLACEHOLDER` 占位 → 抢 deploy 锁 → `_deploy_and_register(idle_flag=True)` 热备入池;pod_spec 取 scope:config 缓存(A 类变更后为新值;刷新后同值仅换代)。**config_sync 会主动写每个存活 scope 的 config(带 pod_spec)→ 从未被请求过的 scope 也会被预热(eager,下发即预备热备)** |
 | `reclaim_once`(场景 K) | 1s / lock:rm:reclaim | excess = 旧版本/老代次 idle Pod(**恒为 excess**——acquire want_ver+generation 过滤后永不可复用,若受底数保护则暖池钉死旧版+蹲占 max_pods)+ 当前版本代次 idle 超出 min_idle 的部分(按转 idle 先后);**两级回收(2026-09-17 优雅排空,取代 2026-09-15 免老化即刻)**:stale(旧版本/老代次)在**排空窗口截止后回收**——`scope:drain_until` 存在且 `now < 截止` 则跳过(窗口 = 首因下发 + session_ttl;期间已绑定会话继续服务:route 亲和/touch 只查 pod:info 不查候选集);**键缺失(过期/残局)兜底立即回收**,闸门收敛保证不破坏;当前版本超额仍须 `aged ≥ pod_ttl`(抗复用抖动,真镜像冷启动 p50≈12s)→ `_purge_and_notify`(K8s delete → LUA_PURGE → notify_pod_dead);底数只保护当前版本代次最早入 idle 的 min_idle 个(保底热备)。**排空收尾**:本拍收过 stale 且注册表已无落后 Pod(`has_lagged_pods`)→ DEL drain_until 精确终止 surge。**scope 被删除/禁用/失权时 config_sync 先 bump 再推 min_idle=0(2026-09-scope-affinity-hold)→ 其 Pod 走同款日落排空:存量会话窗口内继续原 Pod,过窗回收后 rebind 落新规则;窗口内会话停止活跃即回收(与 refresh 日落同语义)** |
 | `watch_once`(场景 J/N) | 10s / lock:rm:watch(TTL 15) | 遍历 pods:all:get_pod 为 None 或 phase∈DEAD → 清理;Running 但 `probe_health` **连续 2 次失败**(health_fails 阈值,防瞬时抖动误杀)→ 半死清理;成功清零计数。**探测参数优先取 Pod 自己 info 烘焙的 sse_port/health_path**(A 类变更后存量老 Pod 用旧契约探测;旧 Pod 无字段时回退 scope:config 的 pod_spec_json) |
-| `reconcile_once`(场景 L) | 30s / lock:rm:reconcile(TTL 60) | ① Redis 有 K8s 无 → PURGE+notify;② RM 持有但 SM 候选集已无的 stale Pod(经 `sm_facade.reconcile_pods`,Facade 单向)→ `LUA_RELEASE` 转 idle 按 pod_ttl 回收 |
+| `reconcile_once`(场景 L) | 30s / lock:rm:reconcile(TTL 60) | ⓪ **idle 计时自愈(2026-10-redis-no-lua-compat)**:idle 成员存在但 idle_since 缺失(info 在)→ `set_idle_since_if_absent` 补 SET NX——无 Lua 模式 release 的 EXEC(SADD)与 SET idle_since 之间崩溃留下的无计时成员,reclaim 的 aged=0 恒 falsy 永不到龄(槽位永久虚占),在此重启计时;Lua 模式该窗口不存在,NX 恒空过,对齐冒烟阶段 11b「idle_since 存在」不变量;① Redis 有 K8s 无 → PURGE+notify;② RM 持有但 SM 候选集已无的 stale Pod(经 `sm_facade.reconcile_pods`,Facade 单向)→ `LUA_RELEASE` 转 idle 按 pod_ttl 回收 |
 
 `_purge_and_notify(pod_id)` 三步(K8s delete 若还在 → LUA_PURGE → notify_pod_dead);全幂等。**delete 非 404 失败 → 本拍整体放弃**(记录留在 pods:all,watch/reconcile 下拍重试——若继续 PURGE,存活物理 Pod 脱离 Redis 枚举源成孤儿:对账只做 Redis→K8s 单向);PURGE/notify 失败仅记录(下拍兜底);PURGE 失败 `logger.exception` + 成功 INFO `pod purged`(三步可审计)。
 

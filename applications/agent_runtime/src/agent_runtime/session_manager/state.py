@@ -16,9 +16,13 @@ import logging
 import time
 from typing import Any
 
+from openjiuwen_runtime.service.context.redis_compat import watch_cas
+
+from .. import redis_lua_mode
 from ..config import sm_key_prefix
 from ..util import s, to_int
 from . import lua_scripts as lua
+from . import no_lua
 
 logger = logging.getLogger("agent_runtime.session_manager")
 
@@ -105,28 +109,47 @@ class SessionState:
     不直接 eval Lua——统一走本类方法，键 schema 与脚本调用集中一处。
     """
 
-    def __init__(self, redis: Any, keys: SMKeys | None = None) -> None:
+    def __init__(self, redis: Any, keys: SMKeys | None = None,
+                 *, use_lua: bool | None = None) -> None:
         self.redis = redis
         self.k = keys or SMKeys()
+        # None → 首次 eval 读进程级默认（main.start() 依据 AGENT_RUNTIME_REDIS_LUA
+        # 置位）并固化；未设置默认 = lua（存量行为，禁 EVAL 环境外零影响）
+        self._use_lua = use_lua
+        self._no_lua = no_lua.SessionNoLua(self.redis, self.k)
 
     # 键前缀（含尾冒号）：eval 的 KEYS[1]/ARGV[1]，Redis Cluster 的 EVAL 路由锚
     @property
     def prefix(self) -> str:
         return self.k.prefix + ":"
 
+    def _lua_enabled(self) -> bool:
+        """模式决议（惰性固化）：显式入参 > 进程级默认 > lua。"""
+        if self._use_lua is None:
+            default = redis_lua_mode.get_default()
+            self._use_lua = True if default is None else default
+        return self._use_lua
+
     async def eval(self, script: str, *args: Any) -> list[str]:
         """统一 EVAL 出口：自动带键前缀，返回值逐元素转 str。
+
+        无 Lua 模式（``use_lua=False`` / 进程级 off）下分派到
+        ``no_lua.SessionNoLua`` 的 WATCH/MULTI/EXEC 等价实现——同参数、
+        同扁平返回规约，本出口的后处理（慢探针/异常留痕）两分支共用。
 
         异常策略（防刷屏）：SM 各 Lua 正常必返回非空表，None/False 属真异常
         → WARNING（route_place 的 scope_full 兜底会掩盖它，这里单独留痕）；
         单次超 _SLOW_EVAL_MS → WARNING（Redis 延迟探针）；常规 eval 仅 DEBUG。
         """
         t0 = time.monotonic()
-        # KEYS[1] 声明 prefix：cluster 客户端据此把 EVAL 路由到 hash tag 的
-        # 归属节点（numkeys=0 会被随机路由，脚本摸到非本节点键即报
-        # "non local key"，真环境 20/30 复现）；脚本体内仍取 ARGV[1]。
-        # 单实例/fakeredis 下多声明一个不访问的 KEYS 无任何影响。
-        result = await self.redis.eval(script, 1, self.prefix, self.prefix, *args)
+        if self._lua_enabled():
+            # KEYS[1] 声明 prefix：cluster 客户端据此把 EVAL 路由到 hash tag 的
+            # 归属节点（numkeys=0 会被随机路由，脚本摸到非本节点键即报
+            # "non local key"，真环境 20/30 复现）；脚本体内仍取 ARGV[1]。
+            # 单实例/fakeredis 下多声明一个不访问的 KEYS 无任何影响。
+            result = await self.redis.eval(script, 1, self.prefix, self.prefix, *args)
+        else:
+            result = await self._no_lua.dispatch(script, args)
         duration_ms = (time.monotonic() - t0) * 1000
         if duration_ms > _SLOW_EVAL_MS:
             logger.warning(
@@ -277,24 +300,35 @@ class SessionState:
         return bool(ok)
 
     async def unlock(self, key: str, token: str) -> None:
-        """释放锁（仅持有者，Lua 防误删他人锁）。"""
-        await self.redis.eval(
-            "if redis.call('GET', KEYS[1]) == ARGV[1] then "
-            "return redis.call('DEL', KEYS[1]) else return 0 end",
-            1, key, token,
-        )
+        """释放锁（仅持有者，防误删他人锁）。
+
+        Lua 模式走 EVAL 原子脚本；no-Lua 模式（use_lua=False/进程级 off）
+        经 redis_compat.watch_cas 等价实现（GET==token 才 DEL）。
+        """
+        if self._lua_enabled():
+            await self.redis.eval(
+                "if redis.call('GET', KEYS[1]) == ARGV[1] then "
+                "return redis.call('DEL', KEYS[1]) else return 0 end",
+                1, key, token,
+            )
+            return
+        await watch_cas(self.redis, key, token, lambda p: p.delete(key))
 
     async def refresh_lock(self, key: str, ttl: int, token: str) -> bool:
-        """看门狗续期（仅持有者，Lua 防误续他人锁）；返回是否仍持有。
+        """看门狗续期（仅持有者，防误续他人锁）；返回是否仍持有。
 
         不引入新键（对既有锁键 EXPIRE），Redis Cluster 同槽纪律不受影响。
         """
-        ok = await self.redis.eval(
-            "if redis.call('GET', KEYS[1]) == ARGV[1] then "
-            "return redis.call('EXPIRE', KEYS[1], ARGV[2]) else return 0 end",
-            1, key, token, ttl,
-        )
-        return bool(ok)
+        if self._lua_enabled():
+            ok = await self.redis.eval(
+                "if redis.call('GET', KEYS[1]) == ARGV[1] then "
+                "return redis.call('EXPIRE', KEYS[1], ARGV[2]) else return 0 end",
+                1, key, token, ttl,
+            )
+            return bool(ok)
+        resp = await watch_cas(self.redis, key, token,
+                               lambda p: p.expire(key, ttl))
+        return bool(resp)
 
     # -------------------------------------------------------------- 诊断只读（/visualization/*）
 
