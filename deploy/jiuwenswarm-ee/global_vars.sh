@@ -108,6 +108,7 @@ declare -ga MODULES=()
 declare -ga DB_MODULES=()
 
 declare -A DEPLOY_VARS=(
+    ["AGENT_RUNTIME_HEALTH_PROBE_TIMEOUT"]="3.0"
     ["AGENT_RUNTIME_LOG_LEVEL"]="INFO"
     ["AGENT_RUNTIME_LINK_MTLS_CLUSTER_DOMAIN"]="cluster.local"
     ["AGENT_RUNTIME_NAME"]="jiuwenclaw-agent-runtime"
