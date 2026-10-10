@@ -30,10 +30,12 @@
 
 - 单测:agent_runtime 508→632(新增双模式套件 `test_sm_state_no_lua.py` 17/`test_rm_state_no_lua.py` 16,`parametrize(use_lua=[lua,no-lua])` 同断言双跑;`test_redis_lua_mode.py` 16 开关/分派;`test_no_lua_mode.py` 5 组件全链)——fakeredis 原生支持 WATCH/MULTI,**无 lupa 的 CI 也能跑满 no-lua 参数**。框架 service 231→234(`test_redis_compat.py`:分类/watch_cas/惰性降级+memo/TickLock/选主)。
 - 真环境:`scripts/verify_redis_no_lua.py` **单实例 19/19 + 禁 EVAL 三主 cluster 19/19**(环境自证 EVAL 必报错防假绿;覆盖框架锁/选主/SM 全分支含 40 路并发不超卖/RM 闸门/烙印/drain surge/reconcile 自愈);`verify_redis_cluster.py` Lua 默认路径回归 29/29(字节不变红线)。
+- **真环境发布门禁(2026-10-10,镜像 agent-runtime:nolua-20261010a,AgentServer=jiuwenclaw-core-amd64:0.0.40s)**:两模式各跑全量——K8s 三副本部署 + `e2e_multi_replica` **32/32** + 真镜像三件套门禁(integration_smoke `--with-sidecar --with-mounts`) **127/127**;load_test 60s 双模式对比:on=372.5rps/p50 7.8ms/**p99 12.7ms**,off=388.6rps/p50 8.2ms/**p99 14.7ms**——RTT 放大实测 ≈+2ms(p99),巡检 6/6 全过、ERROR=0。
 - 实测数据:40 路并发 route(scope_cc=20/pod_cc=5)——修复惊群前 placed=20/EXHAUSTED=18/349 abort/2.60s;修复后 placed=20/full=20/**0 abort/0.15s**/不超卖,Lua 与 no-Lua 一致。
 
 ## 影响面
 
 - 文档同步:design 两篇新增「无 Lua 模式语义映射表」(§15/§14);spec 三篇(config 表 redis_lua 行、no_lua 节、reconcile 步 0);CLAUDE.md 测试/环境段。
-- 配置与兼容:默认 on 零变化;off 为新能力,存量部署无需动作。禁 EVAL 环境部署模板可加 `AGENT_RUNTIME_REDIS_LUA=off`。
-- 遗留:热路径 RTT 放大(1 EVAL → ~4-5 命令)待 load_test 双模式 P99 对比量化(预期影响小:route 非超高 QPS);a2a 测试待其 CI 环境跑(本机 venv 缺 a2a protobuf SDK,预置限制)。
+- 配置与兼容:默认 on 零变化;off 为新能力,存量部署无需动作。禁 EVAL 环境部署模板可加 `AGENT_RUNTIME_REDIS_LUA=off`(部署模板已带渲染项,example/env 默认 on)。
+- 真环境门禁注意(2026-10-10 实录):①统一镜像 jiuwenclaw-core-amd64 的 start.sh 要求 `ROLE=agentserver`,门禁 `--agent-env` 三件套须追加该键(缺省 CrashLoopBackOff);②宿主冒烟 MySQL(30000/agent_runtime)存量 schema 漂移,已手工 ALTER 补 5 列(fs_group/command/args/data×2)+ 11 个 legacy NOT NULL 列补默认值。
+- 遗留:a2a 测试待其 CI 环境跑(本机 venv 缺 a2a protobuf SDK,预置限制)。
