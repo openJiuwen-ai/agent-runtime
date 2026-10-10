@@ -29,6 +29,7 @@ from manager_server.models.application_config_models import (
     _MEMORY_CONFIG_TABLE_DEF,
     _TASK_MEMORY_CONFIG_TABLE_DEF,
     AUDIT_LOG_CONFIG_TABLE_DEF,
+    CRON_POLICY_TABLE_DEF,
     LOG_MASKING_RULE_TABLE_DEF,
     LOGGING_CONFIG_TABLE_DEF,
 )
@@ -173,6 +174,7 @@ TABLE_SPECS: tuple[TableSpec, ...] = (
 
 SETTINGS_DEFS = (
     LOGGING_CONFIG_TABLE_DEF,
+    CRON_POLICY_TABLE_DEF,
     _TASK_MEMORY_CONFIG_TABLE_DEF,
     _MEMORY_CONFIG_TABLE_DEF,
     AUDIT_LOG_CONFIG_TABLE_DEF,
@@ -213,6 +215,7 @@ _IMPORT_ORDER = (
     "instance_info",
     "instance_grant",
     "logging_config",
+    "cron_policy",
     "task_memory_config",
     "memory_config",
     "audit_log_config",
@@ -770,7 +773,7 @@ def _settings_sheet(rows: dict[str, list[dict[str, Any]]]) -> SheetData:
         "07_InstanceSettings",
         ["jiuwenclaw_id", "config_domain", "field_path", "value_type", "value"],
         output,
-        "Instance-level logging, task memory, memory, and audit configuration.",
+        "Instance-level logging, cron policy, task memory, memory, and audit configuration.",
         sensitive,
     )
 

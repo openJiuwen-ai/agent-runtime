@@ -13,6 +13,7 @@ from manager_server.models.application_config_models import (
     _TASK_MEMORY_CONFIG_TABLE_DEF,
     LOG_MASKING_RULE_TABLE_DEF,
     LOGGING_CONFIG_TABLE_DEF,
+    CRON_POLICY_TABLE_DEF,
 )
 from manager_server.models.approval_models import APPROVAL_TABLE_DEFINITIONS
 from manager_server.models.quota_models import QUOTA_TABLE_DEFINITIONS
@@ -52,6 +53,7 @@ ALL_TABLE_DEFINITIONS = (
     _TASK_MEMORY_CONFIG_TABLE_DEF,
     LOG_MASKING_RULE_TABLE_DEF,
     LOGGING_CONFIG_TABLE_DEF,
+    CRON_POLICY_TABLE_DEF,
     _MEMORY_CONFIG_TABLE_DEF,
     AUDIT_LOG_CONFIG_TABLE_DEF,
     A2A_OUTBOUND_TEMPLATE_TABLE_DEF,

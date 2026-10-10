@@ -51,6 +51,11 @@ async def test_sync_data_pushes_application_configs():
             return_value=ack,
         ) as audit_mock,
         patch(
+            "manager_server.core.instance.instance_data_lifecycle.push_cron_policy_sync_to_gateway",
+            new_callable=AsyncMock,
+            return_value=ack,
+        ) as cron_mock,
+        patch(
             "manager_server.core.instance.instance_data_lifecycle.push_log_masking_rules_sync_to_gateway",
             new_callable=AsyncMock,
             return_value=ack,
@@ -70,10 +75,12 @@ async def test_sync_data_pushes_application_configs():
     task_memory_mock.assert_awaited_once_with(handler, "jid-app")
     memory_mock.assert_awaited_once_with(handler, "jid-app")
     audit_mock.assert_awaited_once_with(handler, "jid-app")
+    cron_mock.assert_awaited_once_with(handler, "jid-app")
     assert "logging" in results
     assert "task_memory" in results
     assert "memory" in results
     assert "audit_log" in results
+    assert "cron_policy" in results
     assert "permissions" not in results
 
 
@@ -131,6 +138,51 @@ async def test_push_logging_config_sync_skips_when_missing():
         new_callable=AsyncMock,
     ) as gw_mock:
         ack = await push_logging_config_sync_to_gateway(handler, "jid-1")
+
+    gw_mock.assert_not_awaited()
+    assert ack["result"]["synced"] is False
+
+
+@pytest.mark.asyncio
+async def test_push_cron_policy_sync_puts_manager_row():
+    from manager_server.core.application_config.cron_policy import (
+        push_cron_policy_sync_to_gateway,
+    )
+
+    row = MagicMock(max_jobs_per_user=8)
+    handler = AsyncMock()
+    handler.get = AsyncMock(return_value=row)
+
+    with patch(
+        "manager_server.core.application_config.cron_policy.gateway_request",
+        new_callable=AsyncMock,
+        return_value={"success_flag": True, "result": {}, "transport": "http"},
+    ) as gw_mock:
+        ack = await push_cron_policy_sync_to_gateway(handler, "jid-1")
+
+    assert ack["success_flag"] is True
+    gw_mock.assert_awaited_once_with(
+        "jid-1",
+        "PUT",
+        "/api/v1/cron-policy",
+        {"max_jobs_per_user": 8},
+    )
+
+
+@pytest.mark.asyncio
+async def test_push_cron_policy_sync_skips_when_missing():
+    from manager_server.core.application_config.cron_policy import (
+        push_cron_policy_sync_to_gateway,
+    )
+
+    handler = AsyncMock()
+    handler.get = AsyncMock(return_value=None)
+
+    with patch(
+        "manager_server.core.application_config.cron_policy.gateway_request",
+        new_callable=AsyncMock,
+    ) as gw_mock:
+        ack = await push_cron_policy_sync_to_gateway(handler, "jid-1")
 
     gw_mock.assert_not_awaited()
     assert ack["result"]["synced"] is False

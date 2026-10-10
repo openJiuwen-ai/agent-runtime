@@ -417,6 +417,7 @@
       "logMasking": "Log Masking",
       "logging": "Log Levels",
       "auditLog": "Audit Log",
+      "cronPolicy": "Scheduled Tasks",
       "permissions": "Permissions",
       "workspaceQuota": "User Space Quota"
     },
@@ -441,6 +442,16 @@
       "searchPlaceholder": "Search rule ID, name, description, match regex pattern, replacement, priority, or source",
       "fieldRequired": "Please fill in {{field}}",
       "deleteConfirm": "Delete this log masking rule?"
+    },
+    "cronPolicy": {
+      "intro": "Limits how many scheduled tasks a user can have running at once in the Web panel. Default is 5. It only blocks enabling a new task, starting a paused task, or turning a paused task on from the panel. Tasks created in chat, the TUI, or with a cron expression, and tasks that are already running, stay as they are and are not deleted or stopped. 0 means the panel cannot enable any new running task. Without a managed value the instance uses local config.yaml, which also defaults to 5.",
+      "managed": "Manager managed",
+      "resetToYaml": "Remove managed config",
+      "deleteConfirm": "Remove the Manager-managed scheduled-task limit? Gateway will fall back to config.yaml.",
+      "deleted": "Managed config removed; Gateway will fall back to config.yaml",
+      "maxJobs": "Running scheduled tasks allowed per user",
+      "maxJobsHint": "Only enabled tasks that have not expired are counted. 0 means the panel cannot enable any new task.",
+      "invalid": "Enter an integer greater than or equal to 0"
     },
     "logging": {
       "intro": "Maps to config.yaml logging. Saving writes to Manager DB and hot-reloads Gateway; without managed config the instance uses local config.yaml.",

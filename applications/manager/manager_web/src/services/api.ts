@@ -36,6 +36,8 @@ import type {
   ListItemsResult,
   LoggingConfig,
   LoggingConfigUpsertBody,
+  CronPolicy,
+  CronPolicyUpsertBody,
   AuditLogConfig,
   AuditLogConfigUpsertBody,
   WorkspaceQuotaPolicy,
@@ -1521,6 +1523,14 @@ export const LoggingApi = {
     http<LoggingConfig>(`${instanceBase(instanceId)}/logging`, { method: 'PUT', body }),
   remove: (instanceId: string) =>
     http<void>(`${instanceBase(instanceId)}/logging`, { method: 'DELETE' }),
+};
+
+export const CronPolicyApi = {
+  get: (instanceId: string) => http<CronPolicy>(`${instanceBase(instanceId)}/cron-policy`),
+  upsert: (instanceId: string, body: CronPolicyUpsertBody) =>
+    http<CronPolicy>(`${instanceBase(instanceId)}/cron-policy`, { method: 'PUT', body }),
+  remove: (instanceId: string) =>
+    http<void>(`${instanceBase(instanceId)}/cron-policy`, { method: 'DELETE' }),
 };
 
 export const WorkspaceQuotaApi = {

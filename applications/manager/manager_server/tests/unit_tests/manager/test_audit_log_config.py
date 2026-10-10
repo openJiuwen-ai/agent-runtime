@@ -358,6 +358,11 @@ async def test_sync_data_includes_audit_log_push():
             return_value=ack,
         ) as audit_mock,
         patch(
+            "manager_server.core.instance.instance_data_lifecycle.push_cron_policy_sync_to_gateway",
+            new_callable=AsyncMock,
+            return_value=ack,
+        ),
+        patch(
             "manager_server.core.instance.instance_data_lifecycle.push_log_masking_rules_sync_to_gateway",
             new_callable=AsyncMock,
             return_value=ack,
