@@ -133,6 +133,8 @@ spec:
               value: "<<AGENT_RUNTIME_LOG_LEVEL>>"
             - name: AGENT_RUNTIME_WATCH_INTERVAL
               value: "<<AGENT_RUNTIME_WATCH_INTERVAL>>"
+            - name: AGENT_RUNTIME_HEALTH_PROBE_TIMEOUT
+              value: "<<AGENT_RUNTIME_HEALTH_PROBE_TIMEOUT>>"
             - name: JIUWENSWARM_EDITION
               value: "enterprise"
             - name: TZ
