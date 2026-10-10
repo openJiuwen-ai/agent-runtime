@@ -1,0 +1,18 @@
+# agent-runtime — Agent 运行时（OpenShift / 非 root）
+ARG BASE_IMAGE
+ARG IMAGE_VERSION
+FROM ${BASE_IMAGE}:${IMAGE_VERSION}
+
+
+ARG PIP_EXTRA_ARGS="-i https://mirrors.aliyun.com/pypi/simple/"
+
+RUN uv pip install --system -e "./applications/agent_runtime[server]" \
+    ${PIP_EXTRA_ARGS}
+
+USER 1000
+WORKDIR /app/agent-runtime
+ENV PATH=/usr/local/bin:$PATH:/home/app/.local/bin \
+    PYTHONUNBUFFERED=1
+
+EXPOSE 8091
+CMD ["agent-runtime", "--mode", "server"]
