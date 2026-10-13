@@ -12,7 +12,7 @@ parse_args() {
                 CMD="${args[$i]}"
                 i=$((i+1))
                 ;;
-            nfs|nfs-sc|rabbitmq|mariadb|mysql|postgresql|minio|log|jina|proxy|monitor|gateway|web|manager|runtime)
+            nfs|nfs-sc|rabbitmq|mariadb|mysql|postgresql|minio|log|jina|proxy|monitor|gateway|web|manager|runtime|agentserver)
                 MODULES+=("${args[$i]^^}")
                 i=$((i+1))
                 ;;
@@ -44,6 +44,19 @@ parse_args() {
         process_modules
     fi
 
+    # AGENT_RUNTIME_ENABLED 决定 agentserver 的生命周期归属：
+    #   true  -> AGENTSERVER 模块由 agent-runtime 动态创建
+    #   false -> AGENTSERVER 模块由 Deployment+Service启动，不经 agent-runtime）
+    if [ "${DEPLOY_VARS["AGENT_RUNTIME_ENABLED"]}" == "false" ]; then
+        if [[ " ${MODULES[@]} " =~ " RUNTIME " ]]; then
+            error "module 'runtime' requires AGENT_RUNTIME_ENABLED=true"
+        fi
+    else
+        if [[ " ${MODULES[@]} " =~ " AGENTSERVER " ]]; then
+            error "module 'agentserver' requires AGENT_RUNTIME_ENABLED=false"
+        fi
+    fi
+
     info "Executing command: $*"
     info "CMD=${CMD}"
     info "MODULES=${MODULES[@]}"
@@ -51,7 +64,11 @@ parse_args() {
 }
 
 process_modules() {
-    MODULES=("MONITOR" "GATEWAY" "WEB" "RUNTIME")
+    if [ "${DEPLOY_VARS["AGENT_RUNTIME_ENABLED"]}" == "false" ]; then
+        MODULES=("MONITOR" "GATEWAY" "WEB" "AGENTSERVER")
+    else
+        MODULES=("MONITOR" "GATEWAY" "WEB" "RUNTIME")
+    fi
 }
 
 # Print help info and exit
@@ -76,7 +93,8 @@ Modules (Optional):
   monitor   Observability module
   gateway   Gateway service module
   web       Web frontend module
-  runtime   Agent-Runtime module
+  runtime   Agent-Runtime module (dynamic agentserver pods; requires AGENT_RUNTIME_ENABLED=true)
+  agentserver  AgentServer module (Deployment+Service; requires AGENT_RUNTIME_ENABLED=false)
   manager   CLAW Manager module
 
 Options:

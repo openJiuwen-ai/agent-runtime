@@ -89,7 +89,7 @@ check_vars() {
     local m
     for m in "${MODULES[@]}"; do
         case "$m" in
-            GATEWAY|WEB|RUNTIME|MANAGER) DB_MODULES+=("$m") ;;
+            GATEWAY|WEB|RUNTIME|MANAGER|AGENTSERVER) DB_MODULES+=("$m") ;;
         esac
     done
     if [[ " ${MODULES[@]} " =~ " MANAGER " ]]; then
@@ -595,4 +595,16 @@ check_runtime_up_dependency(){
         error "Failed to read nodePort (config-http) from service ${gw_svc} in namespace ${namespace}"
     fi
     DEPLOY_VARS["GATEWAY_CONFIG_HTTP_NODE_PORT"]="${gw_port}"
+}
+
+check_agentserver_up_dependency() {
+    if [ "${DEPLOY_VARS["CLAW_MOUNT_TYPE"]}" == "nfs" ]; then
+        prepare_nfs_path "jiuwenclaw/${DEPLOY_VARS["NAMESPACE"]}"
+    elif [ "${DEPLOY_VARS["CLAW_MOUNT_TYPE"]}" == "pvc" ]; then
+        check_if_nfs_sc_up
+    fi
+
+    check_if_db_up
+    check_if_obs_up
+    check_if_otel_up
 }

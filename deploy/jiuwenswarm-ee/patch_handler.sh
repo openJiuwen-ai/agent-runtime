@@ -271,6 +271,8 @@ install_patch()
         return
     fi
 
-    install_agentserver_patch
+    if [[ "${DEPLOY_VARS["AGENT_RUNTIME_ENABLED"]}" == "true" ]]; then
+        install_agentserver_patch
+    fi
     install_model_patch
 }
