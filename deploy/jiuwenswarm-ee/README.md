@@ -2,7 +2,7 @@
 
 JiuwenSwarm 企业级部署工具是适配 Kubernetes 集群的一站式自动化部署运维工具，专注于 JiuwenSwarm 企业版服务的快速搭建与全生命周期运维管理，有效解决了传统部署模式流程繁琐、环境适配复杂、运维操作碎片化、多组件协同部署易出错、标准化程度低等行业痛点。
 
-该工具深度适配企业级集群交付场景，内置 MinIO 对象存储、PostgreSQL/MySQL 数据库、Redis 缓存等全套基础依赖组件的一键标准化部署能力，同时支持灵活对接外置 OBS 存储、独立数据库与缓存服务，适配多样化企业存量架构。工具高度封装部署、卸载、重启等核心运维操作，无需用户手动编写复杂的 Kubernetes YAML 资源文件，大幅降低操作门槛。此外，工具支持基于命名空间的多实例隔离部署，可自定义服务端口与各类环境参数，兼顾部署规范性与场景灵活度，能够有效提升集群搭建效率、统一企业运维标准，全面适配大规模、高可用、多租户的生产级集群运行环境。
+该工具深度适配企业级集群交付场景，内置 MinIO 对象存储、PostgreSQL/MySQL/MariaDB 数据库、Redis 缓存等全套基础依赖组件的一键标准化部署能力，同时支持灵活对接外置 OBS 存储、独立数据库与缓存服务，适配多样化企业存量架构。工具高度封装部署、卸载、重启等核心运维操作，无需用户手动编写复杂的 Kubernetes YAML 资源文件，大幅降低操作门槛。此外，工具支持基于命名空间的多实例隔离部署，可自定义服务端口与各类环境参数，兼顾部署规范性与场景灵活度，能够有效提升集群搭建效率、统一企业运维标准，全面适配大规模、高可用、多租户的生产级集群运行环境。
 
 ## 1. 环境准备
 
@@ -79,6 +79,7 @@ JiuwenClaw_deployTool_<VERSION>_<ARCH>_product/
 ├── link_mtls_handler.sh                  # 可选内部链路证书准备、挂载及认证下发
 ├── k8s_handler.sh                        # Kubernetes 集群资源操作核心脚本
 ├── minio_handler.sh                      # MinIO 对象存储模块部署运维脚本
+├── mariadb_handler.sh                    # MariaDB 数据库模块部署运维脚本
 ├── mysql_handler.sh                      # MySQL 数据库模块部署运维脚本
 ├── ports_handler.sh                      # 端口分配、校验、冲突检测管理脚本
 ├── postgresql_handler.sh                 # PostgreSQL 数据库模块部署运维脚本
@@ -100,6 +101,7 @@ JiuwenClaw_deployTool_<VERSION>_<ARCH>_product/
     ├── runtime.template.yaml             # AgentRuntime 运行时 Kubernetes 资源模板
     ├── link-mtls.template.yaml           # 可选证书挂载辅助容器及 headless Service 片段
     ├── minio.template.yaml               # MinIO 存储 Kubernetes 资源模板
+    ├── mariadb.template.yaml             # MariaDB 数据库 Kubernetes 资源模板
     ├── mysql.template.yaml               # MySQL 数据库 Kubernetes 资源模板
     ├── nfs.template.yaml                 # NFS 存储 Kubernetes 资源模板
     ├── nfs-sc.template.yaml              # NFS 存储供给 Kubernetes 资源模板
@@ -144,6 +146,7 @@ JiuwenClaw_deployTool_<VERSION>_<ARCH>_product/
 **部署工具支持对以下独立模块进行精细化管理：**
 - **nfs**：NFS 存储服务模块
 - **nfs-sc**：NFS 存储供给模块
+- **mariadb**：MariaDB 存储服务模块
 - **mysql**：MySQL 存储服务模块
 - **postgresql**：PostgreSQL 存储服务模块
 - **minio**：Minio 存储服务模块
@@ -157,6 +160,7 @@ JiuwenClaw_deployTool_<VERSION>_<ARCH>_product/
 ```
 ./deploy.sh [操作命令] nfs          # 仅操作 NFS 存储模块
 ./deploy.sh [操作命令] nfs-sc       # 仅操作 NFS 存储供给模块
+./deploy.sh [操作命令] mariadb      # 仅操作 MariaDB 模块
 ./deploy.sh [操作命令] mysql        # 仅操作 MySQL 模块
 ./deploy.sh [操作命令] postgresql   # 仅操作 PostgreSQL 模块
 ./deploy.sh [操作命令] minio        # 仅操作 MinIO 模块
@@ -169,7 +173,7 @@ JiuwenClaw_deployTool_<VERSION>_<ARCH>_product/
 
 **重要约束：**
 
-- **NFS / MySQL / PostgreSQL / MinIO / Log：** 以上基础依赖模块全局仅支持单次部署，固定运行于 default 命名空间，部署命令自动忽略自定义命名空间参数。
+- **NFS / MariaDB / MySQL / PostgreSQL / MinIO / Log：** 以上基础依赖模块全局仅支持单次部署，固定运行于 default 命名空间，部署命令自动忽略自定义命名空间参数。
 - **Redis：** 不作为独立模块部署，仅作为 Gateway、Runtime 的附属依赖。每个命名空间拥有独立的 Redis 实例（Deployment 名为 `jiuwenclaw-redis`），实现多业务实例间数据隔离。启动 Gateway 或 Runtime 等依赖 Redis 的业务模块时，部署工具会自动执行就绪检查：已配置外挂 Redis 则复用外部服务；否则复用同命名空间已有的内置 Redis；若同命名空间既无外挂 Redis 也无内置 Redis，则自动拉起一个内置 Redis 实例。
 - **Web / Gateway / Runtime：** 业务服务模块需保持命名空间一致（为了环境隔离与日志运维，禁止使用default命名空间），否则服务间网络互通异常、功能不可用。
 
@@ -178,6 +182,7 @@ JiuwenClaw_deployTool_<VERSION>_<ARCH>_product/
 ```
 ./deploy.sh up nfs        # 启动 NFS 存储模块（只需一次）
 ./deploy.sh up nfs-sc     # 启动 NFS 存储供给模块（只需一次）
+./deploy.sh up mariadb    # 启动 MariaDB 存储模块（只需一次）
 ./deploy.sh up mysql      # 启动 MySQL 存储模块（只需一次）
 ./deploy.sh up postgresql # 启动 PostgreSQL 存储模块（只需一次）
 ./deploy.sh up minio      # 启动 MinIO 存储模块（只需一次）
@@ -193,12 +198,14 @@ JiuwenClaw_deployTool_<VERSION>_<ARCH>_product/
 ./deploy.sh down log        # 卸载日志管理服务模块（非必要不卸载）
 ./deploy.sh down minio      # 卸载 MinIO 存储模块（非必要不卸载）
 ./deploy.sh down postgresql # 卸载 PostgreSQL 存储模块（非必要不卸载）
+./deploy.sh down mariadb    # 卸载 MariaDB 存储模块（非必要不卸载）
 ./deploy.sh down mysql      # 卸载 MySQL 存储模块（非必要不卸载）
 ./deploy.sh down nfs-sc     # 卸载 NFS 存储供给模块（非必要不卸载）
 ./deploy.sh down nfs        # 卸载 NFS 存储模块（非必要不卸载）
 
 ./deploy.sh restart nfs-sc      # 重启 NFS 存储供给模块（非必要不重启）
 ./deploy.sh restart nfs         # 重启 NFS 存储模块（非必要不重启）
+./deploy.sh restart mariadb     # 重启 MariaDB 存储模块（非必要不重启）
 ./deploy.sh restart mysql       # 重启 MySQL 存储模块（非必要不重启）
 ./deploy.sh restart postgresql  # 重启 PostgreSQL 存储模块（非必要不重启）
 ./deploy.sh restart minio       # 重启 MinIO 存储模块（非必要不重启）
@@ -209,13 +216,13 @@ JiuwenClaw_deployTool_<VERSION>_<ARCH>_product/
 ```
 
 **重要说明：**
-每当升级新版本服务时，对于**NFS、NFS-SC、MySQL、PostgreSQL、MinIO、Log** 等全局基础依赖组件应尽量保持不变，无需重复部署。**Redis** 已改为按命名空间独立部署、随业务实例隔离（不支持单独部署），升级业务模块时各命名空间下的 Redis 实例保持不变即可。仅需对业务服务**Gateway、Web、AgentRuntime**进行版本替换：在旧版本部署目录中，依次卸载业务模块；随后切换至新版本部署工具目录，启动对应新版业务模块。
+每当升级新版本服务时，对于**NFS、NFS-SC、MariaDB、MySQL、PostgreSQL、MinIO、Log** 等全局基础依赖组件应尽量保持不变，无需重复部署。**Redis** 已改为按命名空间独立部署、随业务实例隔离（不支持单独部署），升级业务模块时各命名空间下的 Redis 实例保持不变即可。仅需对业务服务**Gateway、Web、AgentRuntime**进行版本替换：在旧版本部署目录中，依次卸载业务模块；随后切换至新版本部署工具目录，启动对应新版业务模块。
 
 ### 2.3 配置参数（选填）
 
 **参数说明：**
 - `-n`:  指定部署目标命名空间, 从而实现模块多实例隔离部署，不同命名空间的资源不冲突，默认值：`default`。需要注意的是：
-    - 操作 **NFS / MySQL / PostgreSQL / MinIO / Log** 等基础依赖模块时，该参数强制失效，固定部署于 `default` 命名空间；
+    - 操作 **NFS / MariaDB / MySQL / PostgreSQL / MinIO / Log** 等基础依赖模块时，该参数强制失效，固定部署于 `default` 命名空间；
     - **Redis** 随业务模块按 `-n` 指定的命名空间自动部署（不支持单独部署）。
 - `--render-only`：只渲染模板输出文件至 conf 目录，不操作集群、不校验集群资源
 
@@ -299,9 +306,9 @@ NFS_SC_NAME=""
 
 ### 3.2 部署数据库服务
 
-本产品支持 PostgreSQL、MySQL 两种数据库类型，可根据具体需求二选一配置即可。选定数据库类型后，在配置文件 `.env.custom` 中指定：
+本产品支持 PostgreSQL、MySQL、MariaDB 三种数据库类型，可根据具体需求二选一配置即可。选定数据库类型后，在配置文件 `.env.custom` 中指定：
 ```
-# 数据库类型，支持 mysql、postgresql，默认 mysql
+# 数据库类型，支持 mysql、mariadb、postgresql，默认 mysql
 DB_TYPE="mysql"
 ```
 
@@ -309,8 +316,9 @@ DB_TYPE="mysql"
 
 #### 3.2.1 工具内置部署（开发环境可用）
 
-本部署工具提供一键部署能力，可在集群内快速拉起 MySQL 或 PostgreSQL 单实例服务：
+本部署工具提供一键部署能力，可在集群内快速拉起 MariaDB、MySQL 或 PostgreSQL 单实例服务：
 ```
+./deploy.sh up mariadb      # 部署 MariaDB 存储模块（基础依赖，只需也只能一次）
 ./deploy.sh up mysql        # 部署 MySQL 存储模块（基础依赖，只需也只能一次）
 ./deploy.sh up postgresql   # 部署 PostgreSQL 存储模块（基础依赖，只需也只能一次）
 ```
@@ -324,7 +332,7 @@ CLAW_MOUNT_TYPE="nfs"
 NFS_SERVER_ADDR=""
 
 # 外部 NFS 服务的共享根目录路径
-# 前置约束：共享目录下必须预先创建 mysql / postgresql 对应子目录用于数据存储
+# 前置约束：共享目录下必须预先创建 mariadb / mysql / postgresql 对应子目录用于数据存储
 NFS_SHARE_PATH=""
 ```
 
@@ -358,16 +366,17 @@ RUNTIME_PG_SCHEMA=""
 
 #### 3.2.3 多实例数据库隔离
 
-数据库服务（MySQL/PostgreSQL）为所有业务实例共享同一台 DB Server。在多实例（多命名空间）部署场景下，部署工具会自动为每个实例隔离各模块数据，实例间互不干扰，默认无需任何手动配置。
+数据库服务（MariaDB/MySQL/PostgreSQL）为所有业务实例共享同一台 DB Server。在多实例（多命名空间）部署场景下，部署工具会自动为每个实例隔离各模块数据，实例间互不干扰，默认无需任何手动配置。
 
 **默认行为（推荐）**：未显式指定各模块数据库名时，部署工具按实例（命名空间）自动为每个模块分配独立的数据库，天然保证各实例数据隔离：
 
 - **MySQL**：每个实例的每个模块使用形如 `<模块库名>_<命名空间>` 的独立数据库（如实例 `test` 的 Gateway 库为 `gateway_test`）。
+- **MariaDB**：隔离策略与 MySQL 相同（`<模块库名>_<命名空间>`，如 `gateway_test`）。
 - **PostgreSQL**：在同一共享数据库内，为每个实例使用以命名空间命名的独立 schema 实现隔离（如实例 `test` 使用 schema `test`）。
 
 各模块默认库名为：Gateway→`gateway`、Runtime→`runtime`、Web→`web`。
 
-**自定义数据库名**：如需指定，可在 `.env.custom` 中为各模块设置对应变量（MySQL 为 `*_DB_NAME`，PostgreSQL 为 `*_PG_SCHEMA`）。一旦显式设置，部署工具将直接采用该值并不再自动分配——**请务必保证同一套部署中每个实例的各模块数据库名（或 PostgreSQL schema 名）互不相同**，否则不同实例会读写同一数据库，导致数据串台。
+**自定义数据库名**：如需指定，可在 `.env.custom` 中为各模块设置对应变量（MySQL/MariaDB 为 `*_DB_NAME`，PostgreSQL 为 `*_PG_SCHEMA`）。一旦显式设置，部署工具将直接采用该值并不再自动分配——**请务必保证同一套部署中每个实例的各模块数据库名（或 PostgreSQL schema 名）互不相同**，否则不同实例会读写同一数据库，导致数据串台。
 
 > 提示：如无特殊需求，建议保持默认，由部署工具自动分配，既省心又能可靠保证隔离性。
 

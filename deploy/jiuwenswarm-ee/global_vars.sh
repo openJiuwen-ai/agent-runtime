@@ -20,6 +20,9 @@ declare -A CONFIG=(
     ["MYSQL_TEMPLATE_FILE"]="${TEMPLATE_DIR}/mysql.template.yaml"
     ["MYSQL_FILE"]="${CONFIG_DIR}/mysql.yaml"
 
+    ["MARIADB_TEMPLATE_FILE"]="${TEMPLATE_DIR}/mariadb.template.yaml"
+    ["MARIADB_FILE"]="${CONFIG_DIR}/mariadb.yaml"
+
     ["POSTGRESQL_TEMPLATE_FILE"]="${TEMPLATE_DIR}/postgresql.template.yaml"
     ["POSTGRESQL_FILE"]="${CONFIG_DIR}/postgresql.yaml"
 
@@ -99,7 +102,7 @@ declare -A ARGS=(
 
 
 # ==== All available modules ====
-declare -ga ALL_MODULES=("NFS" "NFS-SC" "RABBITMQ" "MYSQL" "POSTGRESQL" "MINIO" "LOG" "JINA" "PROXY" "MONITOR" "GATEWAY" "WEB" "MANAGER" "RUNTIME")
+declare -ga ALL_MODULES=("NFS" "NFS-SC" "RABBITMQ" "MARIADB" "MYSQL" "POSTGRESQL" "MINIO" "LOG" "JINA" "PROXY" "MONITOR" "GATEWAY" "WEB" "MANAGER" "RUNTIME")
 
 declare -ga MODULES=()
 
@@ -203,6 +206,11 @@ declare -A DEPLOY_VARS=(
     ["MANAGER_WEB_REPLICAS"]="2"
     ["MANAGER_WEB_RESOLVER"]="auto"
     ["MANAGER_WS_PORT"]="8766"
+    ["MARIADB_IMAGE"]="mariadb:10.11"
+    ["MARIADB_MAX_CONNECTION"]="400"
+    ["MARIADB_NAME"]="mariadb"
+    ["MARIADB_ROOT_PASSWORD"]="Root@123456"
+    ["MARIADB_STORAGE_SIZE"]="4Gi"
     ["MINIO_IMAGE"]="minio/minio-arm64:RELEASE.2024-12-18T13-15-44Z"
     ["MINIO_NAME"]="minio"
     ["MINIO_STORAGE_SIZE"]="4Gi"

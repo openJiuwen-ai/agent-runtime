@@ -11,7 +11,6 @@ render_postgresql_files() {
 }
 
 deploy_postgresql() {
-    
     exec_cmd kubectl apply -f ${CONFIG["POSTGRESQL_FILE"]}
     wait_k8s_resource_ready "statefulset" "${DEPLOY_VARS["POSTGRESQL_NAME"]}"
     success "POSTGRESQL_NODE_PORT: ${DEPLOY_VARS["POSTGRESQL_NODE_PORT"]}"
@@ -19,7 +18,6 @@ deploy_postgresql() {
 }
 
 uninstall_postgresql() {
-
     delete_k8s_resource_by_file "${CONFIG["POSTGRESQL_FILE"]}"
     success "PostgreSQL module is uninstalled."
 }

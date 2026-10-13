@@ -17,7 +17,9 @@ class Settings(BaseSettings):
     # --------------------------
     # 【基础配置】
     # --------------------------
-    RUNTIME_DB_TYPE: Literal["mysql", "sqlite", "gaussdb", "opengauss"] = Field(default="sqlite", env="RUNTIME_DB_TYPE")
+    RUNTIME_DB_TYPE: Literal["mysql", "mariadb", "sqlite", "gaussdb", "opengauss"] = Field(
+        default="sqlite", env="RUNTIME_DB_TYPE"
+    )
 
     # --------------------------
     # 【MySQL RUNTIME_DB_TYPE=mysql 时必选）
@@ -67,7 +69,7 @@ class Settings(BaseSettings):
     def check_mysql_required(self) -> "Settings":
         if not self._server_env_file_present():
             return self
-        if self.RUNTIME_DB_TYPE in {"mysql", "gaussdb", "opengauss"}:
+        if self.RUNTIME_DB_TYPE in {"mysql", "mariadb", "gaussdb", "opengauss"}:
             missing = []
             if not self.RUNTIME_DB_HOST:
                 missing.append("RUNTIME_DB_HOST")
@@ -82,7 +84,7 @@ class Settings(BaseSettings):
 
             if missing:
                 msg = (
-                    "When RUNTIME_DB_TYPE is mysql/gaussdb/opengauss, "
+                    "When RUNTIME_DB_TYPE is mysql/mariadb/gaussdb/opengauss, "
                     "the following fields are required: "
                     f"{', '.join(missing)}"
                 )

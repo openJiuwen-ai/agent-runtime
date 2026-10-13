@@ -11,7 +11,6 @@ render_rabbitmq_files() {
 }
 
 deploy_rabbitmq() {
-    
     exec_cmd kubectl apply -f ${CONFIG["RABBITMQ_FILE"]}
     wait_k8s_resource_ready "statefulset" "${DEPLOY_VARS["RABBITMQ_NAME"]}"
     success "RABBITMQ_AMQ_NODE_PORT: ${DEPLOY_VARS["RABBITMQ_AMQ_NODE_PORT"]}"
@@ -20,7 +19,6 @@ deploy_rabbitmq() {
 }
 
 uninstall_rabbitmq() {
-
     delete_k8s_resource_by_file "${CONFIG["RABBITMQ_FILE"]}"
     success "RabbitMQ module is uninstalled."
 }

@@ -104,6 +104,7 @@ def deployment_plan(settings):
 
 async def connect(settings, role, *, initialize=False):
     from openjiuwen_runtime.foundation.db import MySQLHandler, PostgreSQLHandler
+    from openjiuwen_runtime.foundation.db.utils import is_mysql, is_postgresql
 
     prefix = role.upper()
     database = settings.get(f"{prefix}_DB_NAME")
@@ -118,9 +119,9 @@ async def connect(settings, role, *, initialize=False):
         user=settings[f"{prefix}_DB_USER"],
         password=settings[f"{prefix}_DB_PASSWORD"],
     )
-    if settings["DB_TYPE"] == "mysql":
+    if is_mysql(settings["DB_TYPE"]):
         handler = MySQLHandler(**values)
-    elif settings["DB_TYPE"] == "postgresql":
+    elif is_postgresql(settings["DB_TYPE"]):
         handler = PostgreSQLHandler(
             **values, schema=settings.get(f"{prefix}_PG_SCHEMA") or "public"
         )

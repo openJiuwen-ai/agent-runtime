@@ -134,7 +134,7 @@ class ServiceConfig:
             {"memory", "redis", "none"},
         )
         self._validate_choice(
-            "db_type", self.db_type, {"mysql", "postgresql", "sqlite", "none"}
+            "db_type", self.db_type, {"mysql", "mariadb", "postgresql", "sqlite", "none"}
         )
         self._validate_positive("lock_ttl_seconds", self.lock_ttl_seconds)
         self._validate_non_negative("lock_wait_seconds", self.lock_wait_seconds)
@@ -191,7 +191,7 @@ class ServiceConfig:
             raise ValueError(
                 "memory lock backend cannot be used with multiple replicas"
             )
-        if self.db_type in ("mysql", "postgresql"):
+        if self.db_type in ("mysql", "mariadb", "postgresql"):
             missing = []
             required_fields = (
                 ("db_host", self.db_host),
