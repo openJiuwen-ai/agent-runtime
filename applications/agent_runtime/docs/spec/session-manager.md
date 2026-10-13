@@ -117,6 +117,14 @@ touch 不分桶(无容量信号,HGET 反查 scope 热路径加一跳,不做)。
 
 约定:脚本不传 KEYS,`ARGV[1]`=键前缀,键在脚本内拼;返回扁平字符串数组(`SessionState.eval` 统一转 str)。
 
+## no_lua.py —— 7 个 Lua 的无 Lua 等价实现(2026-10-redis-no-lua-compat)
+
+`AGENT_RUNTIME_REDIS_LUA=off` 时 `SessionState.eval` 分派到 `SessionNoLua`(同参数、同扁平返回规约,业务层零改动)。实现范式:**read-decide-write 一律「预读 → WATCH 决策依赖键 → pipe 复读关键前提 → MULTI 写集 → EXEC」**,WatchError 全抖动退避重试(热路径 12×[0,120ms),温/冷 5 次),耗尽上抛走 503 STATE_UNAVAILABLE。逐脚本 WATCH 集与语义偏差见 `docs/design/session-manager-design.md` 无 Lua 模式映射表。三个实现纪律:
+
+- **判活用 HLEN/GET,不用 pipe.exists**——EXISTS 属 ClusterPipeline 可拆分多键命令,pre-MULTI 不立即执行(返回 pipeline 对象,真 cluster 实测踩坑)。
+- **route 放置段有进程内 per-scope 锁**(`_placement_lock`)——每次放置提交必 SADD scope:sessions 踢掉全部竞争者 WATCH,40 路并发实测 349 次 abort/18 任务重试耗尽(乐观锁惊群);进程内串行化后 WATCH 只防跨副本竞争。
+- **release 类「SADD 判首转 + SET 计时」拆两步**(SET 进 MULTI 会让重放路径也重写计时,破坏幂等)——RM 侧;崩溃窗口由 rm_reconcile 补计时自愈。
+
 ## config_store.py —— 配置层(scope 重构版)
 
 **DB 表**(策略四列 2026-09 起与 wire 术语同名,identity 映射在 `_COLUMN_OF`;曾用 EE 兼容名,见文末 RENAME 义务):`service_config_template`(模板级:`namespace`/`node_name`/`fs_group`/`pod_name`/`sse_path`/`kubeconfig`/`ready_*` + 策略四列 `min_idle_pods`/`pod_concurrency`/`pod_ttl`/`scope_concurrency` + 三段式引用 `main_container_id`(string 100)/`sidecar_container_ids`(JSON)/`volumes`(JSON);**2026-09 起已 DROP 拆表前内联容器列**,见 `docs/feature/2026-09-drop-legacy-inline-template-columns.md`)、**`service_config_container`**(容器规格表,15 列:`container_id` unique ≤100、`name`/`image`/`image_pull_policy` 标量 + `ports`/`env`/`env_from`/`resources`/`volume_mounts`/`security_context`/`readiness_probe` 七个内部规范形 JSON 段落列;框架 init_table 自动建,无需手工 DDL)、`routing_scope`(`scope_id` unique / `match_index`(避 SQL 保留字 index) / `template_id` / `routing_rules` JSON / `expires_at` datetime 可空;`enabled` 列 2026-09 删除,生命周期=存在性+expires_at,存量库先发版后 DROP,见 `docs/feature/2026-09-drop-enabled-fields.md`)。表结构常量 `*_TABLE_DEF` 由 main 传给框架建表。旧 `routing_rule` 表已废弃(不再读写,老库残留无害)。**模板表三段式三列为后期新增:存量库须先手工 ALTER 再发版**(`ALTER TABLE service_config_template ADD COLUMN main_container_id VARCHAR(100) NULL; ADD COLUMN sidecar_container_ids JSON NULL; ADD COLUMN volumes JSON NULL;`,框架建表只 create_all 不补列)。**routing_scope 的 `expires_at` 为后期新增:存量库须** `ALTER TABLE routing_scope ADD COLUMN expires_at DATETIME NULL;`(方言类型按 MySQL/PG 调整);`enabled` 列 2026-09 起删除(先发版后 DROP,见 drop-enabled-fields)。**模板表策略四列 2026-09 改名(wire 术语统一):存量库须先手工 RENAME 再发版**(`ALTER TABLE service_config_template RENAME COLUMN min_idle_services TO min_idle_pods; RENAME COLUMN service_concurrency TO pod_concurrency; RENAME COLUMN service_ttl TO pod_ttl; RENAME COLUMN session_concurrency TO scope_concurrency;`,MySQL 8+/PG 均支持;见 `docs/feature/2026-09-template-table-runtime-terms.md`)。**legacy 内联容器列 DROP:存量库须先按 feature 篇 DROP COLUMN 再发版**(框架不 DROP)。

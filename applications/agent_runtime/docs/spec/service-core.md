@@ -141,6 +141,7 @@ SM 侧 ctx,级联管理全部生命周期(框架 App 的 lifespan 只认一个 c
 | reconcile_interval | `AGENT_RUNTIME_RECONCILE_INTERVAL` | 30 | RM:对账 |
 | health_probe_timeout | `AGENT_RUNTIME_HEALTH_PROBE_TIMEOUT` | 3.0 | RM:健康探测单次 HTTP 超时(2026-10;AgentServer 慢启动/高负载误杀时调大) |
 | default_session_ttl | `AGENT_RUNTIME_DEFAULT_SESSION_TTL` | 60 | touch 兜底 ttl |
+| redis_lua | `AGENT_RUNTIME_REDIS_LUA` | on | **仅显式 on\|off,非法值启动 raise**(2026-10-redis-no-lua-compat)。off=SM/RM 状态层走 WATCH/MULTI/EXEC 无 Lua 实现(禁 EVAL 环境),框架层锁/选主同步 memo,不发任何 EVAL 探测命令;on=与存量逐字节一致 |
 | eval_sample_interval | `AGENT_RUNTIME_EVAL_SAMPLE_INTERVAL` | 30 | sys_sample 采样间隔(钳 5;spec/evaluation.md) |
 | eval_interval | `AGENT_RUNTIME_EVAL_INTERVAL` | 300 | sys_eval 评估间隔(钳 30) |
 | eval_llm_base_url | `AGENT_RUNTIME_EVAL_LLM_BASE_URL` | 空 | OpenAI 兼容端点;**与 model 均非空才启用** |

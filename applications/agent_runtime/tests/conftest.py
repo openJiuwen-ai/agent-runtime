@@ -274,7 +274,7 @@ class Runtime:
     """组件全链路装配：SM（orchestrator/sweeper/facade/config_store）+ RM
     （orchestrator/sweeper/facade）+ FakeK8s，共享一个 fakeredis。"""
 
-    def __init__(self, db, redis_client, k8s):
+    def __init__(self, db, redis_client, k8s, use_lua: bool | None = None):
         from agent_runtime.resource_manager.facade import ResourceManagerFacade
         from agent_runtime.resource_manager.orchestrator import ResourceOrchestrator
         from agent_runtime.resource_manager.sweeper import ResourceSweeper
@@ -286,8 +286,9 @@ class Runtime:
         self.redis = redis_client
         self.k8s = k8s
         self.db = db
-        self.sm_state = SessionState(redis_client)
-        self.rm_state = ResourceState(redis_client)
+        # use_lua=None=进程默认(=lua);False=无 Lua 模式(双模式套件用)
+        self.sm_state = SessionState(redis_client, use_lua=use_lua)
+        self.rm_state = ResourceState(redis_client, use_lua=use_lua)
 
         self.sm_facade = SessionManagerFacade(self.sm_state)
         self.rm_orchestrator = ResourceOrchestrator(self.rm_state, k8s)
@@ -361,3 +362,9 @@ def k8s():
 @pytest.fixture
 def runtime(db_handler, redis_client, k8s):
     return Runtime(db_handler, redis_client, k8s)
+
+
+@pytest.fixture
+def runtime_no_lua(db_handler, redis_client, k8s):
+    """无 Lua 模式的组件全链路（AGENT_RUNTIME_REDIS_LUA=off 的 State 等价）。"""
+    return Runtime(db_handler, redis_client, k8s, use_lua=False)

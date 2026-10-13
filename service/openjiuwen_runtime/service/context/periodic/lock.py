@@ -1,7 +1,12 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
-"""Tick 锁：SET NX EX；持有期间可续期；释放时校验 token。"""
+"""Tick 锁：SET NX EX；持有期间可续期；释放时校验 token。
+
+renew/release 的 owner 校验在真 Redis 上走原子 Lua；EVAL 被禁
+（rename-command / ACL）的环境经 :mod:`redis_compat` 惰性降级为
+WATCH/MULTI/EXEC 的 owner-token 校验式 CAS，语义等价。
+"""
 
 from __future__ import annotations
 
@@ -10,6 +15,8 @@ from typing import Any, Optional
 from uuid import uuid4
 
 from openjiuwen_runtime.foundation.log import get_logger
+
+from ..redis_compat import eval_or_watch, watch_cas
 
 logger = get_logger(__name__)
 
@@ -110,14 +117,28 @@ class TickLock:
 
     async def renew_once(self, token: str) -> bool:
         """仍是 owner 则续 TTL，返回 True；失锁返回 False。"""
-        result = await self._redis.eval(
-            _RENEW_IF_OWNER_LUA,
-            1,
-            self._lock_key,
-            token,
-            str(self._lock_ttl_sec),
+        result = await eval_or_watch(
+            self._redis,
+            lambda: self._redis.eval(
+                _RENEW_IF_OWNER_LUA,
+                1,
+                self._lock_key,
+                token,
+                str(self._lock_ttl_sec),
+            ),
+            lambda: self._renew_watch(token),
+            op=f"tick_renew:{self._lock_key}",
         )
         return int(result or 0) == 1
+
+    async def _renew_watch(self, token: str) -> int:
+        """renew 的 WATCH 版：GET==token 则 EXPIRE（Lua 等价物）。"""
+
+        def queue(pipe: Any) -> None:
+            pipe.expire(self._lock_key, self._lock_ttl_sec)
+
+        resp = await watch_cas(self._redis, self._lock_key, token, queue)
+        return int(resp[0]) if resp else 0
 
     def start_renew(self, token: str) -> None:
         """启动后台续期；同一把锁只跑一个续期任务。"""
@@ -178,7 +199,14 @@ class TickLock:
                 await task
             except asyncio.CancelledError:
                 pass
-        result = await self._redis.eval(_RELEASE_IF_OWNER_LUA, 1, self._lock_key, token)
+        result = await eval_or_watch(
+            self._redis,
+            lambda: self._redis.eval(
+                _RELEASE_IF_OWNER_LUA, 1, self._lock_key, token
+            ),
+            lambda: self._release_watch(token),
+            op=f"tick_release:{self._lock_key}",
+        )
         released = int(result or 0) == 1
         if released:
             logger.debug("tick lock released: key=%s token=%s", self._lock_key, token)
@@ -189,3 +217,12 @@ class TickLock:
                 token,
             )
         return released
+
+    async def _release_watch(self, token: str) -> int:
+        """release 的 WATCH 版：GET==token 则 DEL（Lua 等价物）。"""
+
+        def queue(pipe: Any) -> None:
+            pipe.delete(self._lock_key)
+
+        resp = await watch_cas(self._redis, self._lock_key, token, queue)
+        return int(resp[0]) if resp else 0

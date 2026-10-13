@@ -16,9 +16,13 @@ import logging
 import time
 from typing import Any
 
+from openjiuwen_runtime.service.context.redis_compat import watch_cas
+
+from .. import redis_lua_mode
 from ..config import rm_key_prefix
 from ..util import now_ts, s, to_int
 from . import lua_scripts as lua
+from . import no_lua
 
 logger = logging.getLogger("agent_runtime.resource_manager")
 
@@ -124,24 +128,41 @@ class RMKeys:
 class ResourceState:
     """RM 运行态读写门面：键 schema + Lua 调用唯一出口。"""
 
-    def __init__(self, redis: Any, keys: RMKeys | None = None) -> None:
+    def __init__(self, redis: Any, keys: RMKeys | None = None,
+                 *, use_lua: bool | None = None) -> None:
         self.redis = redis
         self.k = keys or RMKeys()
+        # None → 首次 eval 读进程级默认并固化（同 SessionState 语义）
+        self._use_lua = use_lua
+        self._no_lua = no_lua.ResourceNoLua(self.redis, self.k)
 
     @property
     def prefix(self) -> str:
         return self.k.prefix + ":"
 
+    def _lua_enabled(self) -> bool:
+        """模式决议（惰性固化）：显式入参 > 进程级默认 > lua。"""
+        if self._use_lua is None:
+            default = redis_lua_mode.get_default()
+            self._use_lua = True if default is None else default
+        return self._use_lua
+
     async def eval(self, script: str, *args: Any) -> list[str]:
         """统一 EVAL 出口（含异常留痕，见 session_manager.state.eval 同款策略）。
+
+        无 Lua 模式下分派到 ``no_lua.ResourceNoLua`` 的 WATCH/MULTI/EXEC
+        等价实现——同参数、同扁平返回规约（详见 session_manager 侧注释）。
 
         RM 各 Lua 正常必返回非空表，None/False 属真异常 → WARNING（acquire 的
         no_config 兜底会掩盖它）；单次超 _SLOW_EVAL_MS → WARNING；常规仅 DEBUG。
         """
         t0 = time.monotonic()
-        # KEYS[1] 声明 prefix 作路由锚（cluster 路由到 tag 归属节点），脚本
-        # 体内仍取 ARGV[1]——同 session_manager.state.eval 的实测结论
-        result = await self.redis.eval(script, 1, self.prefix, self.prefix, *args)
+        if self._lua_enabled():
+            # KEYS[1] 声明 prefix 作路由锚（cluster 路由到 tag 归属节点），脚本
+            # 体内仍取 ARGV[1]——同 session_manager.state.eval 的实测结论
+            result = await self.redis.eval(script, 1, self.prefix, self.prefix, *args)
+        else:
+            result = await self._no_lua.dispatch(script, args)
         duration_ms = (time.monotonic() - t0) * 1000
         if duration_ms > _SLOW_EVAL_MS:
             logger.warning(
@@ -342,6 +363,16 @@ class ResourceState:
     async def idle_since(self, pod_id: str) -> int:
         return to_int(await self.redis.get(self.k.pod_idle_since(pod_id)))
 
+    async def set_idle_since_if_absent(self, pod_id: str, now: int) -> bool:
+        """reconcile 自愈：idle_since 缺失才补 SET NX（不刷新既有计时）。
+
+        无 Lua 模式 release 的 EXEC(SADD) 与 SET idle_since 之间崩溃留下的
+        「无计时 idle 成员」在此重启计时（reclaim 恢复到龄回收）；与在途
+        release 竞态无害（NX 先落则 release 覆盖为同时刻值）。
+        """
+        ok = await self.redis.set(self.k.pod_idle_since(pod_id), int(now), nx=True)
+        return bool(ok)
+
     async def pod_count(self, scope_id: str) -> int:
         return to_int(await self.redis.zcard(self.k.scope_pods(scope_id)))
 
@@ -394,8 +425,12 @@ class ResourceState:
         return bool(await self.redis.get(key))
 
     async def unlock(self, key: str, token: str) -> None:
-        await self.redis.eval(
-            "if redis.call('GET', KEYS[1]) == ARGV[1] then "
-            "return redis.call('DEL', KEYS[1]) else return 0 end",
-            1, key, token,
-        )
+        """释放锁（仅持有者，防误删他人锁）。no-Lua 模式经 watch_cas 等价。"""
+        if self._lua_enabled():
+            await self.redis.eval(
+                "if redis.call('GET', KEYS[1]) == ARGV[1] then "
+                "return redis.call('DEL', KEYS[1]) else return 0 end",
+                1, key, token,
+            )
+            return
+        await watch_cas(self.redis, key, token, lambda p: p.delete(key))

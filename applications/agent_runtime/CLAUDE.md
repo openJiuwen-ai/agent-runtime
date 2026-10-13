@@ -24,7 +24,7 @@
 ```bash
 cd applications/agent_runtime
 uv sync --extra local
-uv run pytest                 # 508 个用例:状态层 Lua(含 EVICT/TOUCH/ROUTE_PLACE 残骸自卫) / 路由匹配纯函数(含表达式解析) / config 层(含三段式契约与容器表水合、config_refresh 强制刷新、写库单事务+锁看门狗) / 容器规范形(containers 统一 canonical + container_spec wire 翻译) / envFrom / 组件全链路(含 sidecars 多容器与卷挂载) / HTTP 冒烟 / corner case / 双实例多副本 / 停机韧性 / 审计实锤回归(test_audit_repro) / 强制刷新自然老化(test_force_refresh) / 健壮性故障注入(test_k8s_io_timeouts / test_infra_faults / test_main_lifecycle,见 docs/feature/2026-09-robustness-hardening.md) / 系统自评估(tests/evaluation/:规则引擎+LLM 降级+采样报告全链路,见 docs/spec/evaluation.md)
+uv run pytest                 # 632 个用例:状态层 Lua(含 EVICT/TOUCH/ROUTE_PLACE 残骸自卫) / **无 Lua 双模式等价(2026-10-redis-no-lua-compat:test_sm/rm_state_no_lua.py parametrize use_lua 双跑——fakeredis 原生支持 WATCH/MULTI,无 lupa 的 CI 也能跑满 no-lua 参数;test_no_lua_mode.py 组件全链)** / 路由匹配纯函数(含表达式解析) / config 层(含三段式契约与容器表水合、config_refresh 强制刷新、写库单事务+锁看门狗) / 容器规范形(containers 统一 canonical + container_spec wire 翻译) / envFrom / 组件全链路(含 sidecars 多容器与卷挂载) / HTTP 冒烟 / corner case / 双实例多副本 / 停机韧性 / 审计实锤回归(test_audit_repro) / 强制刷新自然老化(test_force_refresh) / 健壮性故障注入(test_k8s_io_timeouts / test_infra_faults / test_main_lifecycle,见 docs/feature/2026-09-robustness-hardening.md) / 系统自评估(tests/evaluation/:规则引擎+LLM 降级+采样报告全链路,见 docs/spec/evaluation.md)
 ```
 
 - 构造 `ServiceManager` 必须传 `deploy_mode="subprocess"`(默认 k8s 会挂死测试)。
@@ -75,7 +75,7 @@ uv run --no-sync python scripts/load_test.py --base-url http://127.0.0.1:30091/a
 
 ## 环境
 
-- Python 3.11–3.13;Redis 须开 AOF/RDB(单实例/哨兵 `redis://`,**Redis Cluster 用 `redis+cluster://`**,键前缀已 hash tag 同槽化,见 `docs/feature/2026-08-redis-cluster.md`;cluster 无库号,URL 禁带 `/N`);DB 用 MySQL/PostgreSQL(禁 SQLite 回退——server 模式;local 模式调试可用)。
+- Python 3.11–3.13;Redis 须开 AOF/RDB(单实例/哨兵 `redis://`,**Redis Cluster 用 `redis+cluster://`**,键前缀已 hash tag 同槽化,见 `docs/feature/2026-08-redis-cluster.md`;cluster 无库号,URL 禁带 `/N`);**禁 EVAL 环境(rename-command/ACL)设 `AGENT_RUNTIME_REDIS_LUA=off`(仅显式 on/off,非法值启动 raise)**——SM/RM 状态层走 WATCH/MULTI/EXEC 等价实现、框架锁/选主惰性降级,键名/语义不变,见 `docs/feature/2026-10-redis-no-lua-compat.md` 与 `scripts/verify_redis_no_lua.py`(禁 EVAL 实例单实例/cluster 各 19/19);DB 用 MySQL/PostgreSQL(禁 SQLite 回退——server 模式;local 模式调试可用)。
 - **存量库升级:历次 schema 变更须先按 `docs/feature/` 对应篇目手工 ALTER 再发版**(框架建表只 create_all 不补列/不 DROP)——容器表拆分三列(`2026-08-container-table-split.md`)、routing_scope `enabled`/`expires_at`(`2026-09-routing-scope-enabled-expires.md`)、模板表策略四列 RENAME(`2026-09-template-table-runtime-terms.md`)、**legacy 内联容器列 DROP**(`2026-09-drop-legacy-inline-template-columns.md`)、**data 三元组对齐**(`2026-09-data-triad-alignment.md`);具体 SQL 见各篇。
 - 框架:`service/openjiuwen_runtime/service`(App/Envelope/SystemContext);App 范式参考 `applications/echo/echo_server.py`(**不是** a2a_service)。
 - 部署:`applications/agent_runtime/scripts/deploy.sh local|server`(server 读 `.env.production.local`)。

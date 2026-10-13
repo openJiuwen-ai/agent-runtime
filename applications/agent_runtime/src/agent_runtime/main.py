@@ -25,8 +25,10 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from openjiuwen_runtime.service import App, SystemContext
 from openjiuwen_runtime.service.config import ServiceConfig
+from openjiuwen_runtime.service.context import redis_compat
 
 from . import errors as app_errors
+from . import redis_lua_mode
 from .config import (
     SERVICE_PREFIX,
     AgentRuntimeConfig,
@@ -305,6 +307,16 @@ class OrchestratorSystemContext(SystemContext):
     # -------------------------------------------------------------- 生命周期
 
     async def start(self) -> None:
+        # 无 Lua 模式先行置位（off 为显式声明，禁 EVAL 环境不发任何探测命令）：
+        # - 进程级默认 → State 门面首次 eval 惰性固化；
+        # - 框架层 memo → TickLock/选主/锁后端直接走 WATCH 路径，免首拍撞墙。
+        redis_lua_mode.set_default(self.arc.redis_lua)
+        redis_compat.mark_eval_disabled(self.redis, disabled=not self.arc.redis_lua)
+        if not self.arc.redis_lua:
+            self.logger.info(
+                "redis no-lua mode enabled (AGENT_RUNTIME_REDIS_LUA=off): "
+                "SM/RM state + framework locks run on WATCH/MULTI/EXEC"
+            )
         await super().start()
         await sync_local_link_binding_state(self.db, self.link_mtls)
         await self.rm_sysctx.start()

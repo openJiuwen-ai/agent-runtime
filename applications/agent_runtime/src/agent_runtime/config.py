@@ -100,6 +100,24 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw in ("1", "true", "yes", "on")
 
 
+def _env_redis_lua(name: str) -> bool:
+    """AGENT_RUNTIME_REDIS_LUA 专用解析：仅显式 on/off，非法值启动 raise。
+
+    不沿用 _env_bool 的静默回退——模式配错静默回 on 会让禁 EVAL 环境以
+    Lua 模式启动、首个 Redis 操作才炸，掩盖部署问题。
+    """
+    raw = (os.getenv(name) or "").strip().lower()
+    if not raw:
+        return True
+    if raw in ("on", "1", "true", "yes"):
+        return True
+    if raw in ("off", "0", "false", "no"):
+        return False
+    raise ValueError(
+        f"invalid {name}={os.getenv(name)!r}: 仅接受 on|off（默认 on）"
+    )
+
+
 @dataclass(frozen=True)
 class AgentRuntimeConfig:
     """本服务自有配置。"""
@@ -118,6 +136,9 @@ class AgentRuntimeConfig:
                                                # AgentServer 慢启动/高负载误杀时调大）
     # route 行为
     default_session_ttl: int = 60
+    # Redis 无 Lua 兼容模式（AGENT_RUNTIME_REDIS_LUA=on|off，默认 on）：
+    # off = SM/RM 状态层走 WATCH/MULTI/EXEC 实现，框架层锁/选主同步降级
+    redis_lua: bool = True
     # 系统自评估（docs/spec/evaluation.md）：采样/评估两 job + LLM 分析（默认禁用）
     eval_sample_interval: int = 30             # sys_sample：趋势采样间隔（下限钳 5s）
     eval_interval: int = 300                   # sys_eval：评估报告间隔（下限钳 30s）
@@ -153,6 +174,7 @@ class AgentRuntimeConfig:
             health_probe_timeout=_env_float(
                 "AGENT_RUNTIME_HEALTH_PROBE_TIMEOUT", 3.0),
             default_session_ttl=_env_int("AGENT_RUNTIME_DEFAULT_SESSION_TTL", 60),
+            redis_lua=_env_redis_lua("AGENT_RUNTIME_REDIS_LUA"),
             eval_sample_interval=_env_int("AGENT_RUNTIME_EVAL_SAMPLE_INTERVAL", 30),
             eval_interval=_env_int("AGENT_RUNTIME_EVAL_INTERVAL", 300),
             eval_llm_base_url=(os.getenv("AGENT_RUNTIME_EVAL_LLM_BASE_URL") or "").strip(),

@@ -3,6 +3,9 @@
 
 """
 异步 Redis 客户端（redis-py asyncio）。
+
+release_lock 在真 Redis 上走原子 Lua；EVAL 被禁（rename-command / ACL）
+的环境惰性降级为 WATCH/MULTI/EXEC 的 owner 校验式 CAS（单键，语义等价）。
 """
 from __future__ import annotations
 
@@ -12,6 +15,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from loguru import logger
 from redis.asyncio import Redis
+from redis.exceptions import ResponseError, WatchError
 
 
 _RELEASE_LOCK_LUA = """
@@ -27,6 +31,8 @@ class RedisClient:
 
     def __init__(self) -> None:
         self._client: Optional[Redis] = None
+        # EVAL 禁用 memo（首撞后置位，后续直接走 WATCH 路径）
+        self._eval_disabled: bool = False
 
     async def connect(self, url: str) -> None:
         self._client = Redis.from_url(url, decode_responses=True, protocol=2)
@@ -102,5 +108,33 @@ class RedisClient:
         return await self.set_if_not_exists(lock_key, owner_id, ex=ttl)
 
     async def release_lock(self, lock_key: str, owner_id: str) -> bool:
-        result = await self.client.eval(_RELEASE_LOCK_LUA, 1, lock_key, owner_id)
-        return int(result or 0) == 1
+        """释放锁（仅持有者，防误删他人锁）。EVAL 禁用环境降级 WATCH-CAS。"""
+        if not self._eval_disabled:
+            try:
+                result = await self.client.eval(
+                    _RELEASE_LOCK_LUA, 1, lock_key, owner_id)
+                return int(result or 0) == 1
+            except ResponseError as exc:
+                msg = str(exc).lower()
+                if not (("unknown command" in msg or "noperm" in msg
+                         or "no permissions" in msg) and "eval" in msg):
+                    raise
+                self._eval_disabled = True
+                logger.warning(f"[Redis] EVAL 已禁用，release_lock 降级 WATCH 路径：{exc}")
+        return await self._release_lock_watch(lock_key, owner_id)
+
+    async def _release_lock_watch(self, lock_key: str, owner_id: str) -> bool:
+        """release 的 WATCH 版：GET==owner 才 DEL（decode_responses=True → str）。"""
+        async with self.client.pipeline(transaction=True) as pipe:
+            try:
+                await pipe.watch(lock_key)
+                current = await pipe.get(lock_key)
+                if current != owner_id:
+                    await pipe.unwatch()
+                    return False
+                pipe.multi()
+                pipe.delete(lock_key)
+                resp = await pipe.execute()
+                return bool(resp and resp[0])
+            except WatchError:
+                return False
