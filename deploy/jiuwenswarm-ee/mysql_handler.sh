@@ -11,7 +11,6 @@ render_mysql_files() {
 }
 
 deploy_mysql() {
-
     exec_cmd kubectl apply -f ${CONFIG["MYSQL_FILE"]}
     wait_k8s_resource_ready "statefulset" "${DEPLOY_VARS["MYSQL_NAME"]}"
     success "MYSQL_NODE_PORT: ${DEPLOY_VARS["MYSQL_NODE_PORT"]}"
@@ -19,7 +18,6 @@ deploy_mysql() {
 }
 
 uninstall_mysql() {
-
     delete_k8s_resource_by_file "${CONFIG["MYSQL_FILE"]}"
     success "MySQL module is uninstalled."
 }

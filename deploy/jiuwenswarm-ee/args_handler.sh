@@ -12,7 +12,7 @@ parse_args() {
                 CMD="${args[$i]}"
                 i=$((i+1))
                 ;;
-            nfs|nfs-sc|rabbitmq|mysql|postgresql|minio|log|jina|proxy|monitor|gateway|web|manager|runtime)
+            nfs|nfs-sc|rabbitmq|mariadb|mysql|postgresql|minio|log|jina|proxy|monitor|gateway|web|manager|runtime)
                 MODULES+=("${args[$i]^^}")
                 i=$((i+1))
                 ;;
@@ -67,6 +67,7 @@ Commands (Required):
 Modules (Optional):
   nfs       NFS service module (deploys to default namespace, ignores -n parameter)
   rabbitmq  RabbitMQ module (deploys to default namespace, ignores -n parameter)
+  mariadb   MariaDB module (deploys to default namespace, ignores -n parameter)
   mysql     MySQL module (deploys to default namespace, ignores -n parameter)
   minio     Minio module (deploys to default namespace, ignores -n parameter)
   log       Log module (deploys to default namespace, ignores -n parameter)

@@ -157,9 +157,15 @@ delete_k8s_resource_by_file() {
         (select(.kind == "PersistentVolume")    | [.kind, (.metadata.namespace // "-"), .metadata.name] | @tsv)
     ' "${file}") || plan=""
 
+    # 模板未写 namespace 的资源，获取默认的命名空间
+    local context_ns
+    context_ns=$(kubectl config view --minify -o jsonpath='{..namespace}' 2>/dev/null)
+    [ -z "${context_ns}" ] && context_ns="default"
+
     local kind ns name
     while IFS=$'\t' read -r kind ns name; do
         [ -z "${kind}" ] && continue
+        [ "${ns}" == "-" ] && ns="${context_ns}"
         case "${kind}" in
             Deployment|StatefulSet|DaemonSet)
                 exec_cmd kubectl delete "${kind}" "${name}" -n "${ns}" --ignore-not-found=true

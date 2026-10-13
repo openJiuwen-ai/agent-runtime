@@ -184,7 +184,7 @@ set_db_var() {
     case "$name" in
         DB_NAME)
             if [[ -z "${DEPLOY_VARS["${full_name}"]:-}" ]]; then
-                if [ "${db_type}" == "mysql" ]; then
+                if [ "${db_type}" == "mysql" ] || [ "${db_type}" == "mariadb" ]; then
                     DEPLOY_VARS["${full_name}"]="${lmodule}_${namespace}"
                 else
                     DEPLOY_VARS["${full_name}"]="${lmodule}"
@@ -225,8 +225,8 @@ check_if_db_up() {
     local db_type="${DEPLOY_VARS["DB_TYPE"]}"
     info "DB_TYPE: ${db_type}"
 
-    if [ "${db_type}" != "mysql" ] && [ "${db_type}" != "postgresql" ]; then
-        error "DB_TYPE='${db_type}' is not supported in enterprise deploy; use 'mysql' or 'postgresql'"
+    if [ "${db_type}" != "mysql" ] && [ "${db_type}" != "mariadb" ] && [ "${db_type}" != "postgresql" ]; then
+        error "DB_TYPE='${db_type}' is not supported in enterprise deploy; use 'mysql', 'mariadb' or 'postgresql'"
     fi
 
     local db_type_upper="${db_type^^}"
@@ -240,12 +240,12 @@ check_if_db_up() {
 
         info "Use built-in ${db_type} server"
         case "${db_type}" in
-            mysql)
+            mysql|mariadb)
                 DEPLOY_VARS["DB_HOST"]="${name}-headless.default"
                 DEPLOY_VARS["DB_PORT"]="3306"
                 for module in "${DB_MODULES[@]}"; do
                     DEPLOY_VARS["${module}_DB_USER"]="root"
-                    DEPLOY_VARS["${module}_DB_PASSWORD"]=${DEPLOY_VARS["MYSQL_ROOT_PASSWORD"]}
+                    DEPLOY_VARS["${module}_DB_PASSWORD"]=${DEPLOY_VARS["${db_type_upper}_ROOT_PASSWORD"]}
                     for name in DB_NAME PG_SCHEMA; do
                         set_db_var "${module}" "${db_type}" "${name}"
                     done
@@ -461,6 +461,10 @@ check_nfs_sc_up_dependency(){
 
 check_mysql_up_dependency(){
     prepare_nfs_path "${DEPLOY_VARS["MYSQL_NAME"]}"
+}
+
+check_mariadb_up_dependency(){
+    prepare_nfs_path "${DEPLOY_VARS["MARIADB_NAME"]}"
 }
 
 check_postgresql_up_dependency(){
