@@ -30,6 +30,7 @@
   },
   "observability": {
     "tabs": {
+      "monitoring": "Monitoring",
       "auditLog": "Audit Log"
     },
     "placeholderHint": "Content of this tab is to be determined.",
@@ -84,6 +85,20 @@
         "RESULT": "Result",
         "agent_pod": "Agent Pod",
         "method": "Method"
+      }
+    },
+    "monitoring": {
+      "filterTitle": "Resource monitoring filters",
+      "updatedAt": "Updated at {{time}}",
+      "autoRefresh": "Auto refresh (10s)",
+      "allNamespaces": "All namespaces",
+      "searchPod": "Search pod name",
+      "summary": "Pods {{pods}} | CPU total {{cpu}} cores | Memory total {{mem}}",
+      "col": {
+        "namespace": "Namespace",
+        "pod": "Pod",
+        "cpu": "CPU (cores)",
+        "memory": "Memory"
       }
     }
   }

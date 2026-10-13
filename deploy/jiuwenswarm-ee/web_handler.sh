@@ -31,6 +31,7 @@ gen_web_file() {
     fi
 
     add_resource_if_set "WEB" "${file}"
+    apply_hpa_policy "WEB" "${file}"
 
     # yq 追加资源配置时可能重复 env；Deployment strategic merge patch 不接受重复键，
     # 这里按名称去重，保留最后一次生成的值。

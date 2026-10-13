@@ -111,3 +111,34 @@ spec:
           value: "<<MANAGER_WS_PORT>>"
         - name: TZ
           value: "<<TIMEZONE>>"
+
+---
+# HPA：MANAGER_SERVER_HPA_ENABLED=true 时保留本段（副本数交由 HPA 管理，
+# Deployment 固定 replicas 会被渲染流程删除）；false 时整段剔除。
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: <<MANAGER_SERVER_NAME>>
+  namespace: <<NAMESPACE>>
+  labels:
+    app: <<MANAGER_SERVER_NAME>>
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: <<MANAGER_SERVER_NAME>>
+  minReplicas: <<MANAGER_SERVER_HPA_MIN_REPLICAS>>
+  maxReplicas: <<MANAGER_SERVER_HPA_MAX_REPLICAS>>
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: <<MANAGER_SERVER_HPA_TARGET_CPU>>
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: <<MANAGER_SERVER_HPA_TARGET_MEM>>

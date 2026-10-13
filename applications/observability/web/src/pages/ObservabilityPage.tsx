@@ -2,16 +2,17 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useRouter } from '../router';
 import { AuditLogTab } from './observability/AuditLogTab';
+import { MonitoringTab } from './observability/MonitoringTab';
 
-export type ObservabilityTabKey = 'auditLog';
+export type ObservabilityTabKey = 'monitoring' | 'auditLog';
 
-const TAB_ORDER: ObservabilityTabKey[] = ['auditLog'];
+const TAB_ORDER: ObservabilityTabKey[] = ['monitoring', 'auditLog'];
 
 export function ObservabilityPage() {
   const { t } = useTranslation();
   const { params, navigate } = useRouter();
-  const tabParam = (params.get('tab') as ObservabilityTabKey | null) ?? 'auditLog';
-  const activeTab: ObservabilityTabKey = TAB_ORDER.includes(tabParam) ? tabParam : 'auditLog';
+  const tabParam = (params.get('tab') as ObservabilityTabKey | null) ?? 'monitoring';
+  const activeTab: ObservabilityTabKey = TAB_ORDER.includes(tabParam) ? tabParam : 'monitoring';
 
   const [tab, setTab] = useState<ObservabilityTabKey>(activeTab);
 
@@ -20,6 +21,7 @@ export function ObservabilityPage() {
   }, [activeTab]);
 
   const tabs: { key: ObservabilityTabKey; label: string }[] = [
+    { key: 'monitoring', label: t('observability.tabs.monitoring') },
     { key: 'auditLog', label: t('observability.tabs.auditLog') },
   ];
 
@@ -47,6 +49,7 @@ export function ObservabilityPage() {
         </div>
       </>
       <div className="w-full min-w-0">
+        {tab === 'monitoring' && <MonitoringTab />}
         {tab === 'auditLog' && <AuditLogTab />}
       </div>
     </div>

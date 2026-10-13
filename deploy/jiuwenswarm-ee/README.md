@@ -149,6 +149,7 @@ JiuwenClaw_deployTool_<VERSION>_<ARCH>_product/
 - **minio**：Minio 存储服务模块
 - **log**：日志管理模块
 - **monitor**：观测模块
+- **hpa**：HPA 自动扩缩容模块（metrics-server 指标后端）
 - **gateway**：Gateway 模块
 - **web**：Web 前端页面服务模块
 - **runtime**：AgentRuntime 运行时模块，负责按需创建与管理 AgentServer Pod
@@ -162,6 +163,7 @@ JiuwenClaw_deployTool_<VERSION>_<ARCH>_product/
 ./deploy.sh [操作命令] minio        # 仅操作 MinIO 模块
 ./deploy.sh [操作命令] log          # 仅操作日志管理模块
 ./deploy.sh [操作命令] monitor      # 仅操作观测模块
+./deploy.sh [操作命令] hpa          # 仅操作 HPA 自动扩缩容模块
 ./deploy.sh [操作命令] gateway      # 仅操作 Gateway 模块
 ./deploy.sh [操作命令] web          # 仅操作 Web 模块
 ./deploy.sh [操作命令] runtime      # 仅操作 AgentRuntime 模块
@@ -170,6 +172,7 @@ JiuwenClaw_deployTool_<VERSION>_<ARCH>_product/
 **重要约束：**
 
 - **NFS / MySQL / PostgreSQL / MinIO / Log：** 以上基础依赖模块全局仅支持单次部署，固定运行于 default 命名空间，部署命令自动忽略自定义命名空间参数。
+- **HPA：** metrics-server 指标后端模块，全局仅支持单次部署，固定运行于 kube-system 命名空间，部署命令自动忽略自定义命名空间参数。详细使用方式见 2.4 节。
 - **Redis：** 不作为独立模块部署，仅作为 Gateway、Runtime 的附属依赖。每个命名空间拥有独立的 Redis 实例（Deployment 名为 `jiuwenclaw-redis`），实现多业务实例间数据隔离。启动 Gateway 或 Runtime 等依赖 Redis 的业务模块时，部署工具会自动执行就绪检查：已配置外挂 Redis 则复用外部服务；否则复用同命名空间已有的内置 Redis；若同命名空间既无外挂 Redis 也无内置 Redis，则自动拉起一个内置 Redis 实例。
 - **Web / Gateway / Runtime：** 业务服务模块需保持命名空间一致（为了环境隔离与日志运维，禁止使用default命名空间），否则服务间网络互通异常、功能不可用。
 
@@ -182,6 +185,7 @@ JiuwenClaw_deployTool_<VERSION>_<ARCH>_product/
 ./deploy.sh up postgresql # 启动 PostgreSQL 存储模块（只需一次）
 ./deploy.sh up minio      # 启动 MinIO 存储模块（只需一次）
 ./deploy.sh up log        # 启动日志管理服务模块（只需一次）
+./deploy.sh up hpa        # 启动 HPA 自动扩缩容模块（只需一次）
 ./deploy.sh up gateway    # 启动 Gateway 服务模块
 ./deploy.sh up web        # 启动 Web 前端模块
 ./deploy.sh up runtime    # 启动 AgentRuntime 运行时模块（负责拉起 AgentServer）
@@ -216,6 +220,7 @@ JiuwenClaw_deployTool_<VERSION>_<ARCH>_product/
 **参数说明：**
 - `-n`:  指定部署目标命名空间, 从而实现模块多实例隔离部署，不同命名空间的资源不冲突，默认值：`default`。需要注意的是：
     - 操作 **NFS / MySQL / PostgreSQL / MinIO / Log** 等基础依赖模块时，该参数强制失效，固定部署于 `default` 命名空间；
+    - 操作 **HPA** 模块时同样失效，固定部署于 `kube-system` 命名空间；
     - **Redis** 随业务模块按 `-n` 指定的命名空间自动部署（不支持单独部署）。
 - `--render-only`：只渲染模板输出文件至 conf 目录，不操作集群、不校验集群资源
 
@@ -225,6 +230,44 @@ JiuwenClaw_deployTool_<VERSION>_<ARCH>_product/
 ./deploy.sh up web -n test-ns                # 部署 Web 模块至 test-ns 命名空间, 自动分配空闲端口
 ./deploy.sh up nfs -n test-ns                # -n 参数无效，NFS 仍部署于 default 空间
 ```
+
+### 2.4 HPA 自动扩缩容使用说明
+
+HPA 模块部署 metrics-server 指标后端（集群级基础服务，全局仅需部署一次，固定运行于 `kube-system` 命名空间），为 **Gateway / Web / AgentRuntime 提供按 CPU 与内存利用率的水平自动扩缩能力。
+
+**使用步骤：**
+
+```
+# 1. 安装 metrics-server 指标后端（全局仅需一次，需要先执行这一步）
+./deploy.sh up hpa
+kubectl get apiservice v1beta1.metrics.k8s.io      # AVAILABLE 应为 True
+
+# 2. 在 .env.custom 中开启目标组件并配置 requests 与阈值（见下方配置说明）
+
+# 3. 部署目标组件使 HPA 生效（渲染时自动移除固定副本数，交由 HPA 管理）
+./deploy.sh up -n <命名空间>
+```
+
+**配置说明：**
+
+```
+# 在 .env.custom 中开启目标组件并配置 requests 与阈值（以 Gateway 为例）
+GATEWAY_HPA_ENABLED=true
+GATEWAY_CPU_REQUEST=250m                # HPA 利用率指标分母，开启 HPA 后必配
+GATEWAY_MEMORY_REQUEST=512Mi
+GATEWAY_HPA_MIN_REPLICAS=1
+GATEWAY_HPA_MAX_REPLICAS=3
+GATEWAY_HPA_TARGET_CPU=70               # CPU 利用率阈值(%)
+GATEWAY_HPA_TARGET_MEM=80               # 内存利用率阈值(%)
+
+```
+
+四个组件的开关与变量前缀分别为 `GATEWAY_` / `WEB_` / `AGENT_RUNTIME_`，配置方式相同。
+
+**行为说明：**
+
+- 多指标取最大期望副本数：CPU 或内存**任一超过阈值即触发扩容**；缩容需两者均低于阈值，且默认有 10% 容忍度与 300 秒缩容稳定窗口，避免副本数抖动
+- 启用 HPA 后对应 Deployment 的固定副本数配置（`*_REPLICAS`）失效，副本数由 HPA 在 [MIN, MAX] 区间内自动调节
 
 ## 3 部署基础依赖服务
 

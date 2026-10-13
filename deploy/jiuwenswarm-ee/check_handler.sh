@@ -92,8 +92,13 @@ check_vars() {
             GATEWAY|WEB|RUNTIME|MANAGER) DB_MODULES+=("$m") ;;
         esac
     done
-    if [[ " ${MODULES[@]} " =~ " MANAGER " ]]; then
-        DB_MODULES+=("IDENTITY")
+
+    # HPA 总开关：HPA_ENABLED=true 等价于开启全部组件的 *_HPA_ENABLED
+    local m
+    if [ "${DEPLOY_VARS["HPA_ENABLED"]}" == "true" ]; then
+        for m in GATEWAY WEB AGENT_RUNTIME MANAGER_WEB MANAGER_SERVER; do
+            DEPLOY_VARS["${m}_HPA_ENABLED"]="true"
+        done
     fi
 
     # Gateway ConfigPoll：由副本数派生，不接受用户直接配置 GATEWAY_CONFIG_POLL_*。
@@ -108,6 +113,19 @@ check_vars() {
     else
         DEPLOY_VARS["GATEWAY_CONFIG_POLL_ENABLED"]="false"
     fi
+
+    # HPA 启用的组件：requests 未配置时填默认值（HPA 利用率指标以 requests 为分母，
+    # 缺失即失效）。默认值仅在此处动态填充，不预置于 global_vars——
+    # 非 HPA 场景保持"未配置 = 不注入资源"的语义
+    for m in GATEWAY WEB AGENT_RUNTIME MANAGER_WEB MANAGER_SERVER; do
+        [ "${DEPLOY_VARS["${m}_HPA_ENABLED"]}" != "true" ] && continue
+        if [ -z "${DEPLOY_VARS["${m}_CPU_REQUEST"]:-}" ]; then
+            DEPLOY_VARS["${m}_CPU_REQUEST"]="${DEPLOY_VARS["HPA_DEFAULT_${m}_CPU_REQUEST"]}"
+        fi
+        if [ -z "${DEPLOY_VARS["${m}_MEMORY_REQUEST"]:-}" ]; then
+            DEPLOY_VARS["${m}_MEMORY_REQUEST"]="${DEPLOY_VARS["HPA_DEFAULT_${m}_MEMORY_REQUEST"]}"
+        fi
+    done
 }
 
 check_dependency(){
@@ -415,6 +433,7 @@ check_if_otel_up() {
     # loki 是 otel collector 的日志后端：仅内置 otel 需要检查 loki 归属；
     # 外部 OTEL 时 collector/存储均由外部承担，上方 early return 已跳过
     check_if_loki_up
+    check_if_prometheus_up
 }
 
 check_if_loki_up() {
@@ -428,6 +447,19 @@ check_if_loki_up() {
     DEPLOY_VARS["LOKI_URL"]="http://${name}:3100"
 
     prepare_nfs_path "${DEPLOY_VARS["LOKI_NAME"]}/${DEPLOY_VARS["NAMESPACE"]}"
+}
+
+check_if_prometheus_up() {
+    local name="${DEPLOY_VARS["PROMETHEUS_NAME"]}"
+    if [ -n "${DEPLOY_VARS["PROMETHEUS_URL"]:-}" ]; then
+        info "Use external Prometheus server"
+        DEPLOY_VARS["ENABLE_EXTERNAL_PROMETHEUS"]="true"
+        return
+    fi
+    info "Use built-in Prometheus server"
+    DEPLOY_VARS["PROMETHEUS_URL"]="http://${name}:9090"
+
+    prepare_nfs_path "${DEPLOY_VARS["PROMETHEUS_NAME"]}/${DEPLOY_VARS["NAMESPACE"]}"
 }
 
 
@@ -471,6 +503,9 @@ check_minio_up_dependency(){
     prepare_nfs_path "${DEPLOY_VARS["MINIO_NAME"]}"
 }
 
+check_hpa_up_dependency(){
+    info "HPA module has no dependencies"
+}
 
 check_rabbitmq_up_dependency(){
     prepare_nfs_path "${DEPLOY_VARS["RABBITMQ_NAME"]}"

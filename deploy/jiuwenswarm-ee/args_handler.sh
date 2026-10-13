@@ -12,7 +12,7 @@ parse_args() {
                 CMD="${args[$i]}"
                 i=$((i+1))
                 ;;
-            nfs|nfs-sc|rabbitmq|mysql|postgresql|minio|log|jina|proxy|monitor|gateway|web|manager|runtime)
+            nfs|nfs-sc|rabbitmq|mysql|postgresql|minio|log|jina|proxy|monitor|gateway|web|manager|runtime|hpa)
                 MODULES+=("${args[$i]^^}")
                 i=$((i+1))
                 ;;
@@ -69,6 +69,7 @@ Modules (Optional):
   rabbitmq  RabbitMQ module (deploys to default namespace, ignores -n parameter)
   mysql     MySQL module (deploys to default namespace, ignores -n parameter)
   minio     Minio module (deploys to default namespace, ignores -n parameter)
+  hpa       HPA module (deploys to kube-system namespace, ignores -n parameter)
   log       Log module (deploys to default namespace, ignores -n parameter)
   jina      Jina module (deploys to default namespace, ignores -n parameter)
   proxy     Proxy module (deploys to default namespace, ignores -n parameter)

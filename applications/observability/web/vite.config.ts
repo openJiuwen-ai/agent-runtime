@@ -18,6 +18,13 @@ export default defineConfig({
         target: 'http://127.0.0.1:9090',
         changeOrigin: true,
       },
+      // Prometheus API 反代（MonitoringTab 资源监控）
+      '/prometheus': {
+        target: 'http://127.0.0.1:9090',
+        changeOrigin: true,
+        // 后端 Prometheus API 无 /prometheus 前缀，转发时去掉
+        rewrite: (p) => p.replace(/^\/prometheus/, ''),
+      },
     },
   },
 });

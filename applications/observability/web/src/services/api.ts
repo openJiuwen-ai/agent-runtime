@@ -208,3 +208,57 @@ export const LokiApi = {
       direction: 'backward',
     }),
 };
+
+// ---------------------------------------------------------------------------
+// Prometheus
+// ---------------------------------------------------------------------------
+
+export interface PrometheusVectorResult {
+  metric: Record<string, string>;
+  /** [timestamp_sec, "value_string"] */
+  value: [number, string];
+}
+export interface PrometheusQueryResponse {
+  status: string;
+  data: {
+    resultType: string;
+    result: PrometheusVectorResult[];
+  };
+}
+
+async function httpPrometheus<T>(
+  path: string,
+  query?: Record<string, string>,
+): Promise<T> {
+  const url = `/prometheus${path}${buildQuery(
+    (query ?? {}) as Record<string, string | number | boolean | null | undefined>,
+  )}`;
+  let resp: Response;
+  try {
+    resp = await fetch(url, { headers: { 'Content-Type': 'application/json' } });
+  } catch (e) {
+    throw new ApiError(0, `network error: ${(e as Error).message}`);
+  }
+  const text = await resp.text();
+  let json: unknown = null;
+  if (text) {
+    try {
+      json = JSON.parse(text);
+    } catch {
+      // non-JSON
+    }
+  }
+  if (!resp.ok) {
+    const detail =
+      (json && typeof json === 'object' && 'error' in (json as Record<string, unknown>)
+        ? String((json as { error: unknown }).error)
+        : '') || resp.statusText;
+    throw new ApiError(resp.status, detail, json);
+  }
+  return json as T;
+}
+
+export const PrometheusApi = {
+  /** PromQL 即时查询（instant query） */
+  query: (query: string) => httpPrometheus<PrometheusQueryResponse>('/api/v1/query', { query }),
+};

@@ -47,6 +47,7 @@ gen_gateway_file() {
     fi
 
     add_resource_if_set "GATEWAY" "${file}"
+    apply_hpa_policy "GATEWAY" "${file}"
 
     if [[ "${mode}" != "dev" && "${DEPLOY_VARS["GATEWAY_SCHED_LABEL_ENABLED"]}" == "true" ]]; then
         # Automatically create nodeSelector and set gateway=enable

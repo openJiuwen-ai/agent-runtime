@@ -171,3 +171,33 @@ spec:
       nodePort: <<AGENT_RUNTIME_NODE_PORT>>
   selector:
     app: <<AGENT_RUNTIME_NAME>>
+---
+# HPA：AGENT_RUNTIME_HPA_ENABLED=true 时保留本段（副本数交由 HPA 管理，
+# Deployment 固定 replicas 会被渲染流程删除）；false 时整段剔除。
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: <<AGENT_RUNTIME_NAME>>
+  namespace: <<NAMESPACE>>
+  labels:
+    app: <<AGENT_RUNTIME_NAME>>
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: <<AGENT_RUNTIME_NAME>>
+  minReplicas: <<AGENT_RUNTIME_HPA_MIN_REPLICAS>>
+  maxReplicas: <<AGENT_RUNTIME_HPA_MAX_REPLICAS>>
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: <<AGENT_RUNTIME_HPA_TARGET_CPU>>
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: <<AGENT_RUNTIME_HPA_TARGET_MEM>>

@@ -3,17 +3,21 @@ set -euo >/dev/null 2>&1
 
 # 监控栈语义（loki 是 otel collector 的日志后端，二者必须成对出现）：
 #   OTEL_ENABLED=false              → 业务端不上报
-#   OBSERVABILITY_ENABLED=false     → 整个内置的监控栈（otel/loki/UI）不渲染不部署
-#   ENABLE_EXTERNAL_OTEL=true       → collector/loki 均由外部承担，内置栈全部跳过
+#   OBSERVABILITY_ENABLED=false     → 整个内置的监控栈（otel/loki/prometheus/UI）不渲染不部署
+#   ENABLE_EXTERNAL_OTEL=true       → collector/loki/prometheus 均由外部承担，内置栈全部跳过
 #   ENABLE_EXTERNAL_LOKI=true       → 内置 otel 保留，日志落外部 Loki，UI 指向 <<LOKI_URL>>
-#   全内置                          → otel + loki + UI
-
+#   ENABLE_EXTERNAL_PROMETHEUS=true → 内置 otel 保留并经 prometheus exporter 暴露 :8889，
+#                                     内置 Prometheus 跳过，UI 指向 <<PROMETHEUS_URL>>
+#   全内置                          → otel + loki + prometheus + UI
 render_otel_files() {
     if [ "${DEPLOY_VARS["ENABLE_EXTERNAL_OTEL"]}" == "true" ]; then
         return
     fi
     render_config_template "${CONFIG["OTEL_TEMPLATE_FILE"]}" "${CONFIG["OTEL_FILE"]}" "DEPLOY_VARS"
 
+    if [ "${DEPLOY_VARS["ENABLE_EXTERNAL_PROMETHEUS"]}" == "false" ]; then
+        render_config_template "${CONFIG["PROMETHEUS_TEMPLATE_FILE"]}" "${CONFIG["PROMETHEUS_FILE"]}" "DEPLOY_VARS"
+    fi
 
     if [ "${DEPLOY_VARS["ENABLE_EXTERNAL_LOKI"]}" == "false" ]; then
         render_config_template "${CONFIG["LOKI_TEMPLATE_FILE"]}" "${CONFIG["LOKI_FILE"]}" "DEPLOY_VARS"
@@ -27,6 +31,11 @@ render_monitor_files() {
     fi
 
     ensure_available_port "OBSERVABILITY_NODE_PORT"
+    if [ "${DEPLOY_VARS["OBSERVABILITY_ENABLED"]}" == "false" ]; then
+        return
+    fi
+
+    ensure_available_port "PROMETHEUS_NODE_PORT" "OBSERVABILITY_NODE_PORT"
     render_otel_files
     render_config_template "${CONFIG["OBSERVABILITY_TEMPLATE_FILE"]}" "${CONFIG["OBSERVABILITY_FILE"]}" "DEPLOY_VARS"
     enable_dev_mode_if_needed "${CONFIG["OBSERVABILITY_FILE"]}" observability
@@ -41,6 +50,11 @@ deploy_otel() {
     exec_cmd kubectl apply -f ${CONFIG["OTEL_FILE"]}
     wait_k8s_resource_ready "daemonset" "${DEPLOY_VARS["OTEL_NAME"]}" "${namespace}"
 
+    if [ "${DEPLOY_VARS["ENABLE_EXTERNAL_PROMETHEUS"]}" == "false" ]; then
+        exec_cmd kubectl apply -f ${CONFIG["PROMETHEUS_FILE"]}
+        wait_k8s_resource_ready "deployment" "${DEPLOY_VARS["PROMETHEUS_NAME"]}" "${namespace}"
+        success "PROMETHEUS_NODE_PORT: ${DEPLOY_VARS["PROMETHEUS_NODE_PORT"]}"
+    fi
 
     if [ "${DEPLOY_VARS["ENABLE_EXTERNAL_LOKI"]}" == "false" ]; then
         exec_cmd kubectl apply -f ${CONFIG["LOKI_FILE"]}
@@ -61,13 +75,20 @@ deploy_monitor() {
 }
 
 uninstall_otel() {
+    if [ "${DEPLOY_VARS["OTEL_ENABLED"]}" == "false" ]; then
+        return
+    fi
     if [ "${DEPLOY_VARS["ENABLE_EXTERNAL_OTEL"]}" == "true" ]; then
         return
     fi
     delete_k8s_resource_by_file "${CONFIG["OTEL_FILE"]}"
 
-    # loki 带 NFS PV，由 delete_k8s_resource_by_file 按
+    # prometheus / loki 带 NFS PV，由 delete_k8s_resource_by_file 按
     # 工作负载→Pod 退出→PVC→PV→剩余资源 顺序卸载
+    if [ "${DEPLOY_VARS["ENABLE_EXTERNAL_PROMETHEUS"]}" == "false" ]; then
+        delete_k8s_resource_by_file "${CONFIG["PROMETHEUS_FILE"]}"
+    fi
+
     if [ "${DEPLOY_VARS["ENABLE_EXTERNAL_LOKI"]}" == "false" ]; then
         delete_k8s_resource_by_file "${CONFIG["LOKI_FILE"]}"
     fi
