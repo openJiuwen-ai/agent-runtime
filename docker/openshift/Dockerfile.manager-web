@@ -1,6 +1,5 @@
-# manager-web — Manager 管理端前端（OpenShift / nginx-unprivileged :5273）
-ARG NODE_IMAGE=node:20-alpine
-ARG NGINX_IMAGE=nginxinc/nginx-unprivileged:1.27-alpine
+ARG NODE_IMAGE=node:22-alpine
+ARG NGINX_IMAGE=nginx:1.27-alpine
 
 # ---------- 阶段1:前端构建 ----------
 FROM ${NODE_IMAGE} AS web-builder
@@ -20,6 +19,10 @@ RUN npm run build
 
 # ---------- 阶段2:nginx 运行 ----------
 FROM ${NGINX_IMAGE}
+
+# [安全加固] 强制升级 Alpine 系统依赖，消除 Node 基础镜像中的老旧系统库 CVE 漏洞
+RUN apk update && apk upgrade --no-cache && \
+    apk add --no-cache bash
 
 COPY docker/manager-web.nginx.conf.template /etc/nginx/templates/default.conf.template
 COPY --from=web-builder /build/applications/manager/manager_web/dist \

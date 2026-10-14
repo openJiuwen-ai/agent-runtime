@@ -9,7 +9,6 @@ ARG PIP_EXTRA_ARGS="-i https://mirrors.aliyun.com/pypi/simple/"
 RUN uv pip install --system -e "./applications/agent_runtime[server]" \
     ${PIP_EXTRA_ARGS}
 
-USER 1000
 WORKDIR /app/agent-runtime
 ENV PATH=/usr/local/bin:$PATH:/home/app/.local/bin \
     PYTHONUNBUFFERED=1
