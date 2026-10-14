@@ -57,6 +57,31 @@ check_vars() {
     # 就会导致重渲染 apply 失败。故统一去掉尾部 "/"（"/" 本身归一为空）。
     DEPLOY_VARS["NFS_SHARE_PATH"]="${DEPLOY_VARS["NFS_SHARE_PATH"]%/}"
 
+    # 企业部署默认共享 Skill 授权，复用现有 Redis；用户无需填写新增配置。
+    # 隔离标识由部署空间派生，所有动态创建的 AgentServer Pod 使用同一值。
+    local skill_backend="${DEPLOY_VARS["SKILL_GRANT_STORE_BACKEND"]:-redis}"
+    skill_backend="${skill_backend,,}"
+    case "${skill_backend}" in
+        memory|redis) DEPLOY_VARS["SKILL_GRANT_STORE_BACKEND"]="${skill_backend}" ;;
+        *) error "SKILL_GRANT_STORE_BACKEND must be memory or redis" ;;
+    esac
+    if [[ -z "${DEPLOY_VARS["SKILL_GRANT_STORE_NAMESPACE"]:-}" ]]; then
+        local redis_prefix="${DEPLOY_VARS["REDIS_KEY_PREFIX"]:-jiuwenclaw:}"
+        DEPLOY_VARS["SKILL_GRANT_STORE_NAMESPACE"]="${redis_prefix%:}:skill-state:${DEPLOY_VARS["NAMESPACE"]:-default}"
+    fi
+    local skill_ttl="${DEPLOY_VARS["SKILL_GRANT_STORE_TTL"]:-604800}"
+    if [[ ! "${skill_ttl}" =~ ^[0-9]+$ || "${skill_ttl}" =~ ^0+$ ]]; then
+        error "SKILL_GRANT_STORE_TTL must be a positive integer (seconds)"
+    fi
+    DEPLOY_VARS["SKILL_GRANT_STORE_TTL"]="${skill_ttl}"
+    local skill_timeout="${DEPLOY_VARS["SKILL_GRANT_STORE_OPERATION_TIMEOUT"]:-0.3}"
+    if ! awk -v value="${skill_timeout}" 'BEGIN {
+        exit !(value ~ /^([0-9]+([.][0-9]*)?|[.][0-9]+)$/ && value + 0 > 0 && value + 0 <= 5)
+    }'; then
+        error "SKILL_GRANT_STORE_OPERATION_TIMEOUT must be in (0, 5] seconds"
+    fi
+    DEPLOY_VARS["SKILL_GRANT_STORE_OPERATION_TIMEOUT"]="${skill_timeout}"
+
     #   dev     -> root（hostPath 挂载源码）          HOME=/root
     #   product -> app（镜像内 USER app，uid 1000）   HOME=/home/app
     # CLAW_HOME： HOME目录
