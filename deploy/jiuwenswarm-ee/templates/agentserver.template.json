@@ -19,7 +19,7 @@
         "ports": [
           {
             "name": "sse",
-            "containerPort": <<AGENT_SERVER_PORT>>
+            "containerPort": <<AGENT_SERVER_HTTP_PORT>>
           }
         ],
         "envFrom": [
@@ -41,7 +41,7 @@
         "readinessProbe": {
           "httpGet": {
             "path": "/api/v1/health",
-            "port": <<AGENT_SERVER_PORT>>
+            "port": <<AGENT_SERVER_HTTP_PORT>>
           },
           "initialDelaySeconds": 5,
           "periodSeconds": 10

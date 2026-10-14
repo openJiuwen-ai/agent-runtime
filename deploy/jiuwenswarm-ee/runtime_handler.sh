@@ -1,34 +1,8 @@
 #!/usr/bin/env bash
 set -euo >/dev/null 2>&1
 
-render_agentserver_env_configmap() {
-    local env_file="${CONFIG["AS_ENV_FILE"]}"
-    local yaml_file="${CONFIG["AS_ENV_YAML_FILE"]}"
-
-    render_config_template "${CONFIG["AS_ENV_TEMPLATE_FILE"]}" "${env_file}" "DEPLOY_VARS"
-
-    # 移除所有注释行、过滤空值行 KEY=、按变量名排序
-    # 注意：不能 sort > 同一个文件，shell 会在管道启动前就截断输出文件，
-    # 导致左侧 grep 读到空。先写临时文件再 mv 覆盖。
-    grep -v '^[[:space:]]*#' "${env_file}" \
-        | grep '=' \
-        | awk -F'=' '$2 != ""' \
-        | sort > "${env_file}.tmp" && mv -f "${env_file}.tmp" "${env_file}"
-
-    kubectl create configmap -n "${DEPLOY_VARS["NAMESPACE"]}" "${DEPLOY_VARS["AGENT_SERVER_ENV_CM_NAME"]}" \
-        --from-env-file="${env_file}" \
-        --dry-run=client -o yaml \
-        | yq eval 'del(.metadata.creationTimestamp)' > "${yaml_file}"
-    success "AgentServer env ConfigMap rendered: ${yaml_file}"
-}
-
-create_agentserver_env_configmap() {
-    exec_cmd kubectl apply -f "${CONFIG["AS_ENV_YAML_FILE"]}"
-}
-
-delete_agentserver_env_configmap() {
-    delete_k8s_resource_by_file "${CONFIG["AS_ENV_YAML_FILE"]}"
-}
+# AgentServer env ConfigMap 的渲染/创建/删除函数在 agentserver_handler.sh
+# （动态/静态两种形态共用，静态模式下由 agentserver 模块负责创建）。
 
 gen_runtime_file() {
     local file="${CONFIG["RUNTIME_FILE"]}"

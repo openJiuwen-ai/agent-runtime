@@ -78,6 +78,8 @@ declare -A CONFIG=(
 
     ["AS_JSON_TEMPLATE_FILE"]="${TEMPLATE_DIR}/agentserver.template.json"
     ["AS_JSON_FILE"]="${CONFIG_DIR}/agentserver.json"
+    ["AS_TEMPLATE_FILE"]="${TEMPLATE_DIR}/agentserver.template.yaml"
+    ["AS_FILE"]="${CONFIG_DIR}/agentserver.yaml"
     ["AS_ENV_TEMPLATE_FILE"]="${TEMPLATE_DIR}/agentserver.template.env"
     ["AS_ENV_FILE"]="${CONFIG_DIR}/agentserver.env"
     ["AS_ENV_YAML_FILE"]="${CONFIG_DIR}/agentserver-env.configmap.yaml"
@@ -102,7 +104,7 @@ declare -A ARGS=(
 
 
 # ==== All available modules ====
-declare -ga ALL_MODULES=("NFS" "NFS-SC" "RABBITMQ" "MARIADB" "MYSQL" "POSTGRESQL" "MINIO" "LOG" "JINA" "PROXY" "MONITOR" "GATEWAY" "WEB" "MANAGER" "RUNTIME")
+declare -ga ALL_MODULES=("NFS" "NFS-SC" "RABBITMQ" "MARIADB" "MYSQL" "POSTGRESQL" "MINIO" "LOG" "JINA" "PROXY" "MONITOR" "GATEWAY" "WEB" "MANAGER" "RUNTIME" "AGENTSERVER")
 
 declare -ga MODULES=()
 
@@ -111,11 +113,13 @@ declare -ga MODULES=()
 declare -ga DB_MODULES=()
 
 declare -A DEPLOY_VARS=(
+    ["AGENT_RUNTIME_ENABLED"]="true"
     ["AGENT_RUNTIME_HEALTH_PROBE_TIMEOUT"]="3.0"
     ["AGENT_RUNTIME_LOG_LEVEL"]="INFO"
     ["AGENT_RUNTIME_LINK_MTLS_CLUSTER_DOMAIN"]="cluster.local"
     ["AGENT_RUNTIME_NAME"]="jiuwenclaw-agent-runtime"
     ["AGENT_RUNTIME_PORT"]="8091"
+    ["AGENT_RUNTIME_REDIS_LUA"]="on"
     ["AGENT_RUNTIME_REPLICAS"]="3"
     ["AGENT_RUNTIME_REQUEST_TIMEOUT"]="300"
     ["AGENT_RUNTIME_SCOPE_FULL_TIMEOUT"]="30"
@@ -123,8 +127,10 @@ declare -A DEPLOY_VARS=(
     ["AGENT_RUNTIME_WATCH_INTERVAL"]="10"
     ["AGENT_SERVER_ENV_CM_NAME"]="jiuwenclaw-agentserver-env"
     ["AGENT_SERVER_NAME"]="jiuwenclaw-agentserver"
-    ["AGENT_SERVER_PORT"]="8766"
+    ["AGENT_SERVER_HTTP_PORT"]="8766"
+    ["AGENT_SERVER_WS_PORT"]="18092"
     ["AGENT_SERVER_REACT_MAX_ITER"]="10"
+    ["AGENT_SERVER_REPLICAS"]="1"
     ["APPLY_PATCH"]="false"
     ["CLAW_FS_GROUP"]="1000"
     ["CLAW_GROUP"]="1000"

@@ -152,7 +152,7 @@ enable_dev_mode_if_needed() {
 
     local file="$1" comp="$2"
     case "${comp}" in
-        gateway)
+        gateway | agentserver)
             mount_claw_code "${file}"
             mount_runtime_pkg "${file}"
             mount_core_pkg "${file}"

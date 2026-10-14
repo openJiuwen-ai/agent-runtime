@@ -50,6 +50,7 @@ uninstall_secret_configmap() {
         "${DEPLOY_VARS["MANAGER_SERVER_NAME"]}"
         "${DEPLOY_VARS["WEB_NAME"]}"
         "${DEPLOY_VARS["AGENT_RUNTIME_NAME"]}"
+        "${DEPLOY_VARS["AGENT_SERVER_NAME"]}"
     )
 
     # Gateway、Web、Manager、AgentRuntime这些组件都依赖于本资源，检查它们是否存在，若存在不能删除本资源

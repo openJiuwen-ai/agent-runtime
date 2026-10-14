@@ -14,6 +14,19 @@ gen_gateway_env_file() {
         | awk -F'=' '$2 != ""' \
         | sort > "${env_file}.tmp" && mv -f "${env_file}.tmp" "${env_file}"
 
+    # agentserver 双态清理（gateway.template.env 同时携带两种形态的行）：
+    #   动态(true):  删 AGENT_SERVER_URL（经 agent-runtime 路由，用不到）
+    #   静态(false): 删 GATEWAY_RUNTIME_MANAGER_URL（agent-runtime 不存在），
+    #                保留 AGENT_SERVER_URL=http 直连 8766
+    # type 恒为 http（update_conf.py 硬编码）：动态模式 extension 客户端优先、
+    # type 无读者；静态模式回退分支正需要它选 HttpSse 客户端
+    # AGENT_RUNTIME_ENABLED 行两种模式都保留：仅 false 时被容器 start.sh 消费
+    if [ "${DEPLOY_VARS["AGENT_RUNTIME_ENABLED"]}" == "true" ]; then
+        sed -i '/^AGENT_SERVER_URL=/d' "${env_file}"
+    else
+        sed -i '/^GATEWAY_RUNTIME_MANAGER_URL=/d' "${env_file}"
+    fi
+
     kubectl create configmap -n "${DEPLOY_VARS["NAMESPACE"]}" "${DEPLOY_VARS["GATEWAY_ENV_FILE_CM_NAME"]}" \
         --from-env-file="${env_file}" \
         --dry-run=client -o yaml \

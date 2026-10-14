@@ -44,7 +44,7 @@ link_mtls_resolve_host() {
 link_mtls_headless() {
     yq -o=json '.headlessService' "${SCRIPT_DIR}/templates/link-mtls.template.yaml" |
         jq --arg name "${DEPLOY_VARS[AGENT_SERVER_NAME]}" \
-           --arg ns "${DEPLOY_VARS[NAMESPACE]}" --argjson port "${DEPLOY_VARS[AGENT_SERVER_PORT]}" \
+           --arg ns "${DEPLOY_VARS[NAMESPACE]}" --argjson port "${DEPLOY_VARS[AGENT_SERVER_HTTP_PORT]}" \
            '.metadata={name:$name,namespace:$ns} | .spec.ports[0] |= (.port=$port | .targetPort=$port)'
 }
 
