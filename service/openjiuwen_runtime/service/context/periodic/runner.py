@@ -25,20 +25,74 @@ logger = get_logger(__name__)
 
 _STOP_TIMEOUT_SEC = 3.0
 _TIME_FAIL_SLEEP_SEC = 0.5
+# 取消后最多再等这么久。子任务若把 CancelledError 吞掉（redis-py 关连接
+# 不返回就是这种），继续 await 会把整拍和看门狗一起拖死。
+_CANCEL_WAIT_SEC = 3.0
+# 看门狗在 tick 超时 + 取消等待之外再留的余量。必须盖住合法长 tick
+# （autoscale 等 Ready 可到 tick_timeout），只抓「超时之后仍不推进」的循环。
+_WATCHDOG_SLACK_SEC = 15.0
+_WATCHDOG_POLL_SEC = 5.0
 # tick done 常态降为 DEBUG（1Hz 任务刷屏降噪）；异常拍与周期心跳仍打 INFO
 _TICK_HEARTBEAT_EVERY = 600        # 每 N 拍打一条 INFO 心跳（1Hz ≈ 10 分钟）
 _TICK_SLOW_MS = 1000.0             # 单拍超过该时长视为慢拍，提级 INFO
 
 
-async def _cancel_and_wait(task: asyncio.Task[Any]) -> None:
-    """取消后台任务并等到它结束，避免 stop 后回调还在跑。"""
-    if task.done():
-        return
-    task.cancel()
+def _iter_coro_frames(coro: Any) -> Any:
+    """沿 cr_await 链交出仍挂起的帧。"""
+    seen: set[int] = set()
+    while coro is not None and id(coro) not in seen:
+        seen.add(id(coro))
+        frame = getattr(coro, "cr_frame", None)
+        if frame is not None:
+            yield frame
+        coro = getattr(coro, "cr_await", None)
+
+
+def _detach_redis_connection(pool: Any, conn: Any) -> bool:
+    """同步关掉连接并从在用集合摘掉，不放回空闲列表。
+
+    卡死协程的 finally 不会再 release。放回池会被后续命令复用，协议状态
+    已经不可信。``_close`` 是 redis-py 的同步关套接字，不走会再次挂起的
+    ``disconnect()``。
+    """
+    in_use = getattr(pool, "_in_use_connections", None)
+    close = getattr(conn, "_close", None)
+    if in_use is None or not callable(close) or conn not in in_use:
+        return False
     try:
-        await task
-    except asyncio.CancelledError:
-        pass
+        close()
+    except Exception:
+        logger.exception("close abandoned redis connection failed")
+    try:
+        in_use.discard(conn)
+    except Exception:
+        logger.exception("drop abandoned redis connection from pool failed")
+    return True
+
+
+def _drop_stuck_redis_connections(root: asyncio.Task[Any]) -> int:
+    """从放弃的任务及其子任务栈上摘掉仍占着的 redis 连接。"""
+    dropped = 0
+    seen_tasks: set[int] = set()
+    pending: list[asyncio.Task[Any]] = [root]
+    while pending:
+        task = pending.pop()
+        if id(task) in seen_tasks:
+            continue
+        seen_tasks.add(id(task))
+        get_coro = getattr(task, "get_coro", None)
+        coro = get_coro() if callable(get_coro) else None
+        for frame in _iter_coro_frames(coro):
+            locals_ = list(frame.f_locals.items())
+            conn = frame.f_locals.get("conn")
+            pool = frame.f_locals.get("pool")
+            if conn is not None and pool is not None:
+                if _detach_redis_connection(pool, conn):
+                    dropped += 1
+            for value in (item[1] for item in locals_):
+                if isinstance(value, asyncio.Task) and id(value) not in seen_tasks:
+                    pending.append(value)
+    return dropped
 
 
 class JobRunner:
@@ -58,6 +112,8 @@ class JobRunner:
         run_on_start: bool = False,
         stop_timeout_sec: float = _STOP_TIMEOUT_SEC,
         tick_timeout_sec: Optional[float] = None,
+        cancel_wait_sec: float = _CANCEL_WAIT_SEC,
+        watchdog_slack_sec: float = _WATCHDOG_SLACK_SEC,
     ) -> None:
         self._name = name
         self._schedule = schedule
@@ -75,8 +131,15 @@ class JobRunner:
         self._tick_timeout_sec = (
             None if tick_timeout_sec is None else max(float(tick_timeout_sec), 0.001)
         )
+        self._cancel_wait_sec = max(float(cancel_wait_sec), 0.001)
+        self._watchdog_slack_sec = max(float(watchdog_slack_sec), 0.0)
         self._stopped = asyncio.Event()
         self._task: Optional[asyncio.Task[Any]] = None
+        self._watchdog: Optional[asyncio.Task[Any]] = None
+        self._generation = 0
+        self._loop_alive_at = time.monotonic()
+        self._stall_restarts = 0
+        self._abandoned_tasks: set[asyncio.Task[Any]] = set()
         self._last_now: Optional[float] = None
         # 诊断计数器（只增不改语义；snapshot() 供 /visualization 端点读取）
         self._ticks = 0
@@ -106,6 +169,7 @@ class JobRunner:
             "aborted_ticks": self._aborted_ticks,
             "timedout_ticks": self._timedout_ticks,
             "lock_misses": self._lock_misses,
+            "stall_restarts": self._stall_restarts,
             "last_tick_at": last_tick_at,
             "last_duration_ms": self._last_duration_ms,
             "last_error": self._last_error,
@@ -134,8 +198,178 @@ class JobRunner:
             await asyncio.sleep(_TIME_FAIL_SLEEP_SEC)
             return None
 
+    def _schedule_interval_sec(self) -> float:
+        raw = getattr(self._schedule, "interval_sec", 0)
+        try:
+            return max(float(raw), 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _stall_limit_sec(self) -> float:
+        """循环无推进的判定阈值。
+
+        取 tick 上限和调度间隔的较大者，再加取消等待。只盖 tick 时，
+        sys_eval 这种间隔 300 秒、tick 只有 120 秒的任务会在正常睡觉时被重启。
+        """
+        tick = self._tick_timeout_sec if self._tick_timeout_sec is not None else 60.0
+        return (
+            max(tick, self._schedule_interval_sec())
+            + self._cancel_wait_sec
+            + self._watchdog_slack_sec
+        )
+
+    def _generation_current(self, generation: int) -> bool:
+        """被放弃的旧循环世代号对不上。它若之后从卡死里醒过来，不能再往下打。"""
+        return generation == self._generation and not self._stopped.is_set()
+
+    def _abandon_coordinator_claim(self) -> None:
+        """续约独立于 tick。放弃卡死协程时先停续约，否则新循环抢不到锁。"""
+        abandon = getattr(self._coordinator, "abandon_claim", None)
+        if abandon is None:
+            return
+        try:
+            abandon()
+        except Exception:
+            logger.exception(
+                "abandon claim failed: job=%s instance=%s",
+                self._name,
+                self._instance_id,
+            )
+
+    async def _cancel_and_wait(self, task: asyncio.Task[Any]) -> bool:
+        """取消任务并最多再等 ``cancel_wait_sec``。
+
+        返回 False 表示任务没结束，调用方必须停止等待。用 ``shield`` 包住，
+        这样超时作用在等待者身上：子任务把取消吞掉时，本函数仍能返回。
+        """
+        if task.done() or task in self._abandoned_tasks:
+            return task.done()
+        task.cancel()
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=self._cancel_wait_sec)
+        except asyncio.TimeoutError:
+            self._abandoned_tasks.add(task)
+            task.add_done_callback(self._abandoned_tasks.discard)
+            dropped = _drop_stuck_redis_connections(task)
+            logger.warning(
+                "cancel wait abandoned task: job=%s task=%s dropped_conns=%d",
+                self._name,
+                task.get_name(),
+                dropped,
+            )
+            return False
+        except asyncio.CancelledError:
+            me = asyncio.current_task()
+            if me is not None and me.cancelling():
+                raise
+            return task.done()
+        except Exception:
+            logger.exception(
+                "cancelled task raised: job=%s task=%s",
+                self._name,
+                task.get_name(),
+            )
+        return True
+
+    def _spawn_loop(self) -> None:
+        self._generation += 1
+        generation = self._generation
+        self._loop_alive_at = time.monotonic()
+        self._task = asyncio.create_task(
+            self._run_forever(generation),
+            name=f"periodic-{self._name}-{self._instance_id}",
+        )
+
+    def _ensure_watchdog(self) -> None:
+        if self._watchdog is not None and not self._watchdog.done():
+            return
+        self._watchdog = asyncio.create_task(
+            self._stall_watchdog(),
+            name=f"periodic-watchdog-{self._name}-{self._instance_id}",
+        )
+
+    async def _restart_abandoned_loop(self, task: asyncio.Task[Any]) -> None:
+        """不等待卡死循环，换一条新的。旧协程若之后自行返回，世代号对不上即退出。"""
+        if self._stopped.is_set():
+            return
+        self._stall_restarts += 1
+        self._abandon_coordinator_claim()
+        if not task.done():
+            self._abandoned_tasks.add(task)
+            task.add_done_callback(self._abandoned_tasks.discard)
+            task.cancel()
+            dropped = _drop_stuck_redis_connections(task)
+            logger.warning(
+                "stall restart dropped redis conns: job=%s dropped_conns=%d",
+                self._name,
+                dropped,
+            )
+        self._task = None
+        if self._stopped.is_set():
+            return
+        self._spawn_loop()
+        logger.critical(
+            "JobRunner restarted after stall: job=%s instance=%s restarts=%d",
+            self._name,
+            self._instance_id,
+            self._stall_restarts,
+        )
+
+    async def _check_loop_liveness(self) -> None:
+        if self._stopped.is_set():
+            return
+        task = self._task
+        if task is None:
+            return
+        if task.done():
+            logger.critical(
+                "JobRunner loop exited, restarting: job=%s instance=%s",
+                self._name,
+                self._instance_id,
+            )
+            self._task = None
+            if not self._stopped.is_set():
+                self._stall_restarts += 1
+                self._spawn_loop()
+            return
+        if self._tick_timeout_sec is None:
+            return
+        idle = time.monotonic() - self._loop_alive_at
+        if idle <= self._stall_limit_sec():
+            return
+        logger.critical(
+            "JobRunner stalled %.0fs, restarting loop: job=%s instance=%s ticks=%d",
+            idle,
+            self._name,
+            self._instance_id,
+            self._ticks,
+        )
+        await self._restart_abandoned_loop(task)
+
+    async def _stall_watchdog(self) -> None:
+        while not self._stopped.is_set():
+            delay = min(
+                _WATCHDOG_POLL_SEC,
+                max(self._stall_limit_sec() / 4, 0.05),
+            )
+            try:
+                await asyncio.wait_for(self._stopped.wait(), timeout=delay)
+                return
+            except asyncio.TimeoutError:
+                pass
+            try:
+                await self._check_loop_liveness()
+            except Exception:
+                # CancelledError 继承 BaseException，不会进这里，停机取消仍向上抛。
+                logger.exception(
+                    "JobRunner watchdog failed: job=%s instance=%s",
+                    self._name,
+                    self._instance_id,
+                )
+
     async def start(self) -> None:
-        # 旧循环未结束（含 stop 超时）时禁止再起，避免双循环
+        # 旧循环未结束（含 stop 超时）时禁止再起，避免双循环。
+        # 看门狗主动放弃卡死循环时会先把 _task 置空，再走 _spawn_loop。
         if self._task is not None and not self._task.done():
             logger.warning(
                 "JobRunner start ignored, still running: job=%s instance=%s",
@@ -144,10 +378,8 @@ class JobRunner:
             )
             return
         self._stopped.clear()
-        self._task = asyncio.create_task(
-            self._run_forever(),
-            name=f"periodic-{self._name}-{self._instance_id}",
-        )
+        self._spawn_loop()
+        self._ensure_watchdog()
         logger.info(
             "JobRunner started: job=%s instance=%s",
             self._name,
@@ -156,6 +388,12 @@ class JobRunner:
 
     async def stop(self) -> None:
         self._stopped.set()
+        watchdog = self._watchdog
+        if watchdog is not None and not watchdog.done():
+            watchdog.cancel()
+        for abandoned in list(self._abandoned_tasks):
+            if not abandoned.done():
+                abandoned.cancel()
         task = self._task
         if task is None:
             return
@@ -201,10 +439,13 @@ class JobRunner:
             return
         await asyncio.sleep(delay)
 
-    async def _run_forever(self) -> None:
-        while not self._stopped.is_set():
+    async def _run_forever(self, generation: int) -> None:
+        while self._generation_current(generation):
+            self._loop_alive_at = time.monotonic()
             try:
                 now = await self._sync_now()
+                if not self._generation_current(generation):
+                    return
                 if now is None:
                     continue
 
@@ -221,6 +462,8 @@ class JobRunner:
                         now,
                     )
                     now = await self._sync_now()
+                    if not self._generation_current(generation):
+                        return
                     if now is None:
                         continue
                 self._last_now = now
@@ -228,6 +471,8 @@ class JobRunner:
                 next_ts = self._schedule.next_fire_time(now)
                 if next_ts <= now:
                     now = await self._sync_now()
+                    if not self._generation_current(generation):
+                        return
                     if now is None:
                         continue
                     next_ts = self._schedule.next_fire_time(now)
@@ -235,12 +480,17 @@ class JobRunner:
                 gather = min(self._gather_window_sec, max(next_ts - now, 0.0))
                 wake_at = next_ts - gather
                 if wake_at > now:
+                    # 睡觉单独计时。醒了立刻刷新，避免整段间隔叠到醒后的对表上。
+                    self._loop_alive_at = time.monotonic()
                     await self._sleep_until(wake_at)
-                if self._stopped.is_set():
-                    break
+                if not self._generation_current(generation):
+                    return
+                self._loop_alive_at = time.monotonic()
 
                 # 长睡之后再对表，集合窗口用较新的偏移
                 now2 = await self._sync_now()
+                if not self._generation_current(generation):
+                    return
                 if now2 is None:
                     continue
                 if self._missed_fire(now2, planned_fire=next_ts, wake_at=wake_at):
@@ -253,6 +503,13 @@ class JobRunner:
                     continue
                 await self._safe_tick(planned_fire=next_ts, now=now2)
             except asyncio.CancelledError:
+                if generation != self._generation or self._stopped.is_set():
+                    logger.debug(
+                        "JobRunner loop cancelled: job=%s instance=%s",
+                        self._name,
+                        self._instance_id,
+                    )
+                    return
                 logger.debug(
                     "JobRunner loop cancelled: job=%s instance=%s",
                     self._name,
@@ -307,16 +564,20 @@ class JobRunner:
             )
             return False
         except asyncio.CancelledError:
-            # 先抓住取消，把子任务收干净再往上抛（3.11 里 catch 后才能 await 子任务）
-            await _cancel_and_wait(tick_task)
-            await _cancel_and_wait(lost_task)
+            # 先抓住取消，把子任务收干净再往上抛（3.11 里 catch 后才能 await 子任务）。
+            # 收不干净就放弃：停续约、关连接，不再等它把 CancelledError 交回来。
+            if not await self._cancel_and_wait(tick_task):
+                self._abandon_coordinator_claim()
+            await self._cancel_and_wait(lost_task)
             raise
         finally:
-            await _cancel_and_wait(lost_task)
-            if not tick_task.done():
-                await _cancel_and_wait(tick_task)
+            await self._cancel_and_wait(lost_task)
+            if not tick_task.done() and not await self._cancel_and_wait(tick_task):
+                self._abandon_coordinator_claim()
 
     async def _safe_tick(self, *, planned_fire: float, now: Optional[float] = None) -> None:
+        # 睡觉结束才进入本拍。看门狗从这里起算，避免把调度间隔算进停滞。
+        self._loop_alive_at = time.monotonic()
         now_v = now if now is not None else self._now()
         claim = await self._coordinator.try_claim(
             now=now_v,
