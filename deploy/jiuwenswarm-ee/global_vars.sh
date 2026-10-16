@@ -288,6 +288,7 @@ declare -A DEPLOY_VARS=(
     ["WEB_NAME"]="jiuwenclaw-web"
     ["WEB_PORT"]="19000"
     ["WEB_REPLICAS"]="2"
+    ["WEB_REQUEST_TIMEOUT_SECONDS"]="15"
     ["WEB_WS_PORT"]="19000"
     ["WORKSPACE_QUOTA_ENABLED"]="false"
 )
