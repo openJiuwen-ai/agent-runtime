@@ -87,6 +87,10 @@ deploy_agentserver() {
     create_agentserver_env_configmap
     exec_cmd kubectl apply -f "${CONFIG["AS_FILE"]}"
     wait_k8s_resource_ready "deployment" "${DEPLOY_VARS["AGENT_SERVER_NAME"]}" "${DEPLOY_VARS["NAMESPACE"]}"
+    # 静态形态（AGENT_RUNTIME_ENABLED=false）原本无模型下发入口，此处补齐（install_patch 自带门控）
+    if [[ "${DEPLOY_VARS["AGENT_RUNTIME_ENABLED"]}" == "false" ]]; then
+        install_patch
+    fi
     success "AgentServer module is deployed."
 }
 

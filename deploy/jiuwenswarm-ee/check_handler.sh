@@ -441,6 +441,15 @@ check_if_gateway_up() {
     if ! check_k8s_resource_exists "deployment" "${DEPLOY_VARS["GATEWAY_NAME"]}" "${DEPLOY_VARS["NAMESPACE"]}"; then
         error "GATEWAY is not deployed. Please deploy it first with: ./$(basename "$0") up gateway"
     fi
+
+    # 解析配置口 NodePort（模型/agent 模板下发依赖）；gateway 已确认部署，读不到即环境异常
+    local gw_port=$(kubectl get service "${DEPLOY_VARS["GATEWAY_NAME"]}-nodeport" \
+        -n "${DEPLOY_VARS["NAMESPACE"]}" \
+        -o jsonpath='{.spec.ports[?(@.name=="config-http")].nodePort}')
+    if [ -z "${gw_port}" ]; then
+        error "Failed to read nodePort (config-http) from service ${DEPLOY_VARS["GATEWAY_NAME"]}-nodeport in namespace ${DEPLOY_VARS["NAMESPACE"]}"
+    fi
+    DEPLOY_VARS["GATEWAY_CONFIG_HTTP_NODE_PORT"]="${gw_port}"
 }
 
 check_nfs_up_dependency(){
@@ -585,16 +594,6 @@ check_runtime_up_dependency(){
     fi
 
     check_if_gateway_up
-    if [ -n "${DEPLOY_VARS["GATEWAY_CONFIG_HTTP_NODE_PORT"]:-}" ]; then
-        return
-    fi
-    local namespace="${DEPLOY_VARS["NAMESPACE"]}"
-    local gw_svc="${DEPLOY_VARS["GATEWAY_NAME"]}-nodeport"
-    local gw_port=$(kubectl get service "${gw_svc}" -n "${namespace}" -o jsonpath='{.spec.ports[?(@.name=="config-http")].nodePort}')
-    if [ -z "${gw_port}" ]; then
-        error "Failed to read nodePort (config-http) from service ${gw_svc} in namespace ${namespace}"
-    fi
-    DEPLOY_VARS["GATEWAY_CONFIG_HTTP_NODE_PORT"]="${gw_port}"
 }
 
 check_agentserver_up_dependency() {
@@ -607,4 +606,5 @@ check_agentserver_up_dependency() {
     check_if_db_up
     check_if_obs_up
     check_if_otel_up
+    check_if_gateway_up
 }

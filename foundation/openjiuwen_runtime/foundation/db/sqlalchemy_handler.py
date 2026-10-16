@@ -326,13 +326,16 @@ class SQLAlchemyHandler(DBHandler):
                 "nullable": col_def.nullable,
                 "unique": col_def.unique,
                 "autoincrement": col_def.autoincrement,
+                # DDL 与 ORM 生成的 DML 统一反引号包裹列名：MariaDB sql_mode=ORACLE 下
+                # body 等 Oracle 语法关键字是保留字，裸标识符会 1064（反引号在所有模式合法）
+                "quote": True,
             }
             if col_def.default is not None:
                 col_kwargs["default"] = col_def.default
             if sa_type == String and col_def.length:
-                col = Column(sa_type(col_def.length), **col_kwargs)
+                col = Column(col_def.name, sa_type(col_def.length), **col_kwargs)
             else:
-                col = Column(sa_type, **col_kwargs)
+                col = Column(col_def.name, sa_type, **col_kwargs)
             columns.append(col)
 
         table = type(
