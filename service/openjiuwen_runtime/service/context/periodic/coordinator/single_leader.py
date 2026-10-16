@@ -275,3 +275,11 @@ class SingleLeaderCoordinator:
                 self._lock.lock_key,
                 token,
             )
+
+    def abandon_claim(self) -> None:
+        """停掉续约，但不等待。
+
+        卡死的 tick 被放弃时调用：续约任务若还在刷 TTL，新循环抢不到锁。
+        停掉之后锁按剩余 TTL 过期（1Hz 任务约 1 秒）。
+        """
+        self._lock.stop_renew()
