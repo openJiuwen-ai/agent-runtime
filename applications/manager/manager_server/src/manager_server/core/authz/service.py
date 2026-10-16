@@ -6,6 +6,8 @@ import re
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy.exc import IntegrityError
+
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 from openjiuwen_runtime.foundation.log import get_logger
 
@@ -249,6 +251,28 @@ def _sort_role_items(
     items.sort(key=sort_key, reverse=is_desc)
 
 
+async def _seed_insert(handler: DBHandler, table: str, values: dict[str, Any]) -> None:
+    """多副本同时首启会竞争插入同一批预置行：唯一键冲突视为另一副本已写入，告警后继续。
+
+    MySQL/MariaDB 1062 / PostgreSQL 23505；其余冲突照常抛出。
+    """
+    try:
+        await handler.create(table, values)
+    except IntegrityError as exc:
+        orig = exc.orig
+        errno = orig.args[0] if orig is not None and getattr(orig, "args", None) else None
+        pgcode = getattr(orig, "pgcode", None)
+        if errno == 1062 or pgcode == "23505":
+            _log.warning(
+                "seed_authz_defaults raced with concurrent creator (table=%s, errno=%s), "
+                "treated as idempotent",
+                table,
+                errno or pgcode,
+            )
+            return
+        raise
+
+
 async def seed_authz_defaults(handler: DBHandler) -> None:
     """幂等播种本需求的权限码、平台管理员角色与绑定。"""
     now = utc_now()
@@ -263,7 +287,8 @@ async def seed_authz_defaults(handler: DBHandler) -> None:
             "updated_by": "system",
         }
         if existing is None:
-            await handler.create(
+            await _seed_insert(
+                handler,
                 _PERMISSION_TABLE,
                 {**values, "created_at": now, "created_by": "system"},
             )
@@ -282,7 +307,8 @@ async def seed_authz_defaults(handler: DBHandler) -> None:
         "updated_by": "system",
     }
     if role is None:
-        await handler.create(
+        await _seed_insert(
+            handler,
             _ROLE_TABLE,
             {
                 "role_id": PLATFORM_ADMIN_ROLE_ID,
@@ -298,7 +324,8 @@ async def seed_authz_defaults(handler: DBHandler) -> None:
             "permission_id": seed["permission_id"],
         }
         if await handler.get(_ROLE_PERMISSION_TABLE, filters) is None:
-            await handler.create(
+            await _seed_insert(
+                handler,
                 _ROLE_PERMISSION_TABLE,
                 {
                     **filters,
@@ -316,7 +343,8 @@ async def seed_authz_defaults(handler: DBHandler) -> None:
         "user_id": "admin",
     }
     if await handler.get(_ROLE_USER_TABLE, admin_assignment) is None:
-        await handler.create(
+        await _seed_insert(
+            handler,
             _ROLE_USER_TABLE,
             {
                 **admin_assignment,

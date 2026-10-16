@@ -56,7 +56,6 @@ declare -A CONFIG=(
     ["WEB_TEMPLATE_FILE"]="${TEMPLATE_DIR}/web.template.yaml"
     ["WEB_FILE"]="${CONFIG_DIR}/web.yaml"
 
-
     ["MANAGER_SERVER_TEMPLATE_FILE"]="${TEMPLATE_DIR}/manager-server.template.yaml"
     ["MANAGER_SERVER_FILE"]="${CONFIG_DIR}/manager-server.yaml"
 
@@ -212,7 +211,7 @@ declare -A DEPLOY_VARS=(
     ["MANAGER_WEB_REPLICAS"]="2"
     ["MANAGER_WEB_RESOLVER"]="auto"
     ["MANAGER_WS_PORT"]="8766"
-    ["MARIADB_IMAGE"]="mariadb:10.11"
+    ["MARIADB_IMAGE"]="mariadb:11.8"
     ["MARIADB_MAX_CONNECTION"]="400"
     ["MARIADB_NAME"]="mariadb"
     ["MARIADB_ROOT_PASSWORD"]="Root@123456"
