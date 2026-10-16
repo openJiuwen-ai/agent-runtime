@@ -540,6 +540,7 @@
       "rulePattern": "Match pattern",
       "rulePatternRequired": "Please enter a match pattern",
       "ruleTools": "Tools",
+      "ruleToolsRequired": "Please enter at least one tool",
       "ruleToolsHint": "Comma-separated, e.g. bash, mcp_exec_command, create_terminal",
       "ruleSeverity": "Severity",
       "severities": {

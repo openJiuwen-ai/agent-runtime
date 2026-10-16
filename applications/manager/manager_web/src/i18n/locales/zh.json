@@ -540,6 +540,7 @@
       "rulePattern": "匹配模式",
       "rulePatternRequired": "请填写匹配模式",
       "ruleTools": "适用工具",
+      "ruleToolsRequired": "请至少填写一个适用工具",
       "ruleToolsHint": "逗号分隔，例如 bash, mcp_exec_command, create_terminal",
       "ruleSeverity": "严重级别",
       "severities": {

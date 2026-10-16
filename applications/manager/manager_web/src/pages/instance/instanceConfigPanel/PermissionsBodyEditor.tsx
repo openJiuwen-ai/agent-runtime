@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Empty } from '../../../components/Empty';
 import { Modal, ModalCancelButton } from '../../../components/Modal';
@@ -93,6 +93,7 @@ export function PermissionsBodyEditor({ form, onChange }: Props) {
   const [editingRule, setEditingRule] = useState<PermissionRuleEntry | null>(null);
   const [ruleForm, setRuleForm] = useState<PermissionRuleEntry>(emptyRuleRow());
   const [ruleToolsText, setRuleToolsText] = useState('');
+  const ruleFieldId = useId();
   const { markClean: markRuleClean, isDirty: isRuleDirty } = useFormDirty(ruleModalOpen);
 
   const updateForm = <K extends keyof PermissionsFormState>(key: K, value: PermissionsFormState[K]) => {
@@ -144,11 +145,16 @@ export function PermissionsBodyEditor({ form, onChange }: Props) {
       toast('warn', t('instanceConfig.permissions.rulePatternRequired'));
       return;
     }
+    const tools = parseToolsInput(ruleToolsText);
+    if (tools.length === 0) {
+      toast('warn', t('instanceConfig.permissions.ruleToolsRequired'));
+      return;
+    }
     const next: PermissionRuleEntry = {
       ...ruleForm,
       id: ruleForm.id.trim(),
       pattern: ruleForm.pattern.trim(),
-      tools: parseToolsInput(ruleToolsText),
+      tools,
       severity: ruleForm.severity,
     };
     if (editingRule) {
@@ -428,17 +434,27 @@ export function PermissionsBodyEditor({ form, onChange }: Props) {
       >
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div>
-            <label className="label">{t('instanceConfig.permissions.ruleId')}</label>
+            <label className="label" htmlFor={`${ruleFieldId}-id`}>
+              {t('instanceConfig.permissions.ruleId')}
+              <span className="text-danger ml-0.5" aria-hidden="true">*</span>
+            </label>
             <input
+              id={`${ruleFieldId}-id`}
               className="input mono"
+              required
               value={ruleForm.id}
               onChange={(e) => setRuleForm((s) => ({ ...s, id: e.target.value }))}
             />
           </div>
           <div>
-            <label className="label">{t('instanceConfig.permissions.ruleSeverity')}</label>
+            <label className="label" htmlFor={`${ruleFieldId}-severity`}>
+              {t('instanceConfig.permissions.ruleSeverity')}
+              <span className="text-danger ml-0.5" aria-hidden="true">*</span>
+            </label>
             <select
+              id={`${ruleFieldId}-severity`}
               className="select"
+              required
               value={ruleForm.severity}
               onChange={(e) => setRuleForm((s) => ({ ...s, severity: e.target.value as PermissionSeverity }))}
             >
@@ -450,18 +466,28 @@ export function PermissionsBodyEditor({ form, onChange }: Props) {
             </select>
           </div>
           <div className="md:col-span-2">
-            <label className="label">{t('instanceConfig.permissions.rulePattern')}</label>
+            <label className="label" htmlFor={`${ruleFieldId}-pattern`}>
+              {t('instanceConfig.permissions.rulePattern')}
+              <span className="text-danger ml-0.5" aria-hidden="true">*</span>
+            </label>
             <input
+              id={`${ruleFieldId}-pattern`}
               className="input mono text-xs"
+              required
               value={ruleForm.pattern}
               onChange={(e) => setRuleForm((s) => ({ ...s, pattern: e.target.value }))}
               placeholder="ls *"
             />
           </div>
           <div className="md:col-span-2">
-            <label className="label">{t('instanceConfig.permissions.ruleTools')}</label>
+            <label className="label" htmlFor={`${ruleFieldId}-tools`}>
+              {t('instanceConfig.permissions.ruleTools')}
+              <span className="text-danger ml-0.5" aria-hidden="true">*</span>
+            </label>
             <input
+              id={`${ruleFieldId}-tools`}
               className="input mono text-xs"
+              required
               value={ruleToolsText}
               onChange={(e) => setRuleToolsText(e.target.value)}
               placeholder="bash, mcp_exec_command, create_terminal"
