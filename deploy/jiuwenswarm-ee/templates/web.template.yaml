@@ -40,6 +40,8 @@ spec:
               value: "<<LOGIN_AUTH_SIMULATE>>"
             - name: WEB_TRANSPORT
               value: "http"
+            - name: WEB_REQUEST_TIMEOUT_SECONDS
+              value: "<<WEB_REQUEST_TIMEOUT_SECONDS>>"
             - name: WORKSPACE_QUOTA_ENABLED
               value: "<<WORKSPACE_QUOTA_ENABLED>>"
             - name: GATEWAY_URL
