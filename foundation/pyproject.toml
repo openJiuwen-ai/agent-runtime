@@ -22,7 +22,7 @@ dependencies = [
     "pydantic-settings>=2.5.2",
     "aiomysql==0.2.0",
     "aiosqlite>=0.21.0",
-    "redis==7.1.0",
+    "redis==8.0.0",
     # audit_v2: OTEL Logs emit（Batch + OTLP/HTTP）
     "opentelemetry-api>=1.30,<2",
     "opentelemetry-sdk>=1.30,<2",
