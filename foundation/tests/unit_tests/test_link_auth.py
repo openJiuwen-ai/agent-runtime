@@ -166,3 +166,45 @@ def test_observe_allows_but_reports_failure(monkeypatch):
     monkeypatch.setenv("CLAW_LINK_AUTH_MODE", "observe")
     res = verify_and_pin(InMemoryPinStore(), None, expect_type="gateway")
     assert res.allowed is True and res.ok is False
+
+
+# ---------- 令牌携带的公钥字段不可信 ----------
+
+def _token_with_raw_pub_field(pub_field: str) -> str:
+    import base64
+    import json
+
+    payload = {
+        "iss": "peer-1",
+        "typ": "gateway",
+        "iat": int(time.time()),
+        "nonce": "nonce-1",
+        "pub": pub_field,
+    }
+    payload_b64 = base64.urlsafe_b64encode(
+        json.dumps(payload).encode("utf-8")
+    ).rstrip(b"=").decode("ascii")
+    sig_b64 = base64.urlsafe_b64encode(b"signature").rstrip(b"=").decode("ascii")
+    return f"{payload_b64}.{sig_b64}"
+
+
+def test_non_base64_pub_is_rejected_as_link_auth_error():
+    """载荷里的 pub 非法 base64 时，应统一抛 LinkAuthError，而不是泄漏 binascii.Error。"""
+    token = _token_with_raw_pub_field("!!!not-base64!!!")
+
+    with pytest.raises(LinkAuthError):
+        verify_signature(token)
+
+    res = verify_token(token, expect_type="gateway")
+    assert res.allowed is False and res.ok is False
+    assert "public key" in res.reason
+
+
+def test_observe_mode_allows_non_base64_pub(monkeypatch):
+    """observe 模式对验不过的令牌应放行并给出 ok=False，而不是抛异常中断握手。"""
+    monkeypatch.setenv("CLAW_LINK_AUTH_MODE", "observe")
+
+    res = verify_token(_token_with_raw_pub_field("!!!not-base64!!!"), expect_type="gateway")
+
+    assert res.allowed is True and res.ok is False
+    assert "public key" in res.reason
