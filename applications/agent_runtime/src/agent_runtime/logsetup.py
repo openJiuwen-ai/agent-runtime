@@ -29,6 +29,15 @@ from typing import Any
 from openjiuwen_runtime.foundation.log import setup_logging
 
 _VALID_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+# uvicorn.run() looks the level up in its own LOG_LEVELS dict and raises
+# KeyError for anything else, so the CLI must pass a name from this mapping.
+_UVICORN_LEVEL_NAMES = {
+    "DEBUG": "debug",
+    "INFO": "info",
+    "WARNING": "warning",
+    "ERROR": "error",
+    "CRITICAL": "critical",
+}
 
 _CTX: ContextVar[dict[str, str]] = ContextVar(
     "agent_runtime_log_ctx", default={}
@@ -90,6 +99,18 @@ def install_request_context() -> None:
 
 
 # ---------------------------------------------------------------- 入口收口
+
+
+def uvicorn_log_level(level: str | None = None) -> str:
+    """Return the uvicorn-valid name for ``AGENT_RUNTIME_LOG_LEVEL``.
+
+    ``configure_logging()`` already documents ``非法值 WARNING 并回退 INFO``,
+    but ``uvicorn.run(log_level=<raw value>)`` looks the raw string up in its
+    own dict and crashes with ``KeyError`` before binding. Normalize with the
+    same accepted set here so the entry point both warns and starts.
+    """
+    raw_level = (level or os.getenv("AGENT_RUNTIME_LOG_LEVEL", "INFO")).strip().upper()
+    return _UVICORN_LEVEL_NAMES.get(raw_level, "info")
 
 
 def configure_logging(level: str | None = None) -> None:
