@@ -147,9 +147,9 @@ class DockerDeployer(Deployer[DockerParams]):
             ir_path = docker_params.ir_path
             package_name = docker_params.package_name
             container_name = docker_params.container_name or f"deploy_{deployment_id}"
-            env_vars = docker_params.env_vars
+            env_vars = docker_params.env_vars or {}
             volumes = docker_params.volumes
-            host = ctx.host or self.default_host
+            host = ctx.host or self.default_host or "127.0.0.1"
             iport = "8090"
 
             import json
@@ -187,14 +187,20 @@ class DockerDeployer(Deployer[DockerParams]):
                     raise RuntimeError("package_name is required for docker deployment")
 
             logger.debug("Start scanning host port range...")
+            # settings.IP is the externally reachable host when configured; the
+            # deploy context's host is the documented fallback (e.g. localhost /
+            # a clean SDK install where the optional IP setting is empty).
+            endpoint_host = settings.IP or host
             available_port = find_available_port(
-                host=settings.IP
+                host=endpoint_host
             )
 
             if available_port:
                 logger.info("Found available port: %d", available_port)
             else:
-                raise RuntimeError("No available port found")
+                raise RuntimeError(
+                    f"No available port found on {endpoint_host!r}"
+                )
 
             # 创建并启动低代码Agent容器
             container_id = await self.deploy_lowcode_container(
@@ -207,7 +213,7 @@ class DockerDeployer(Deployer[DockerParams]):
             )
             self._containers[deployment_id] = container_id
 
-            url = f"http://{settings.IP}:{available_port}"
+            url = f"http://{settings.IP or host}:{available_port}"
             logger.debug("url: %s", url)
 
             logger.info(
