@@ -432,6 +432,10 @@ check_if_loki_up() {
 
 
 check_if_gateway_up() {
+    if [ "${DEPLOY_VARS["RENDER_ONLY"]}" == "true" ]; then
+        return
+    fi
+
     # 已经执行过检查，直接返回，避免重复校验（web/runtime 依赖都会调用）
     if [[ "${DEPLOY_VARS["GATEWAY_CHECKED"]:-}" == "true" ]]; then
         return
@@ -442,16 +446,18 @@ check_if_gateway_up() {
         error "GATEWAY is not deployed. Please deploy it first with: ./$(basename "$0") up gateway"
     fi
 
-    if [[ "${DEPLOY_VARS["APPLY_PATCH"]}" == "true" ]]; then
-        # 解析配置口 NodePort（模型/agent 模板下发依赖）；gateway 已确认部署，读不到即环境异常
-        local gw_port=$(kubectl get service "${DEPLOY_VARS["GATEWAY_NAME"]}-nodeport" \
-            -n "${DEPLOY_VARS["NAMESPACE"]}" \
-            -o jsonpath='{.spec.ports[?(@.name=="config-http")].nodePort}')
-        if [ -z "${gw_port}" ]; then
-            error "Failed to read nodePort (config-http) from service ${DEPLOY_VARS["GATEWAY_NAME"]}-nodeport in namespace ${DEPLOY_VARS["NAMESPACE"]}"
-        fi
-        DEPLOY_VARS["GATEWAY_CONFIG_HTTP_NODE_PORT"]="${gw_port}"
+    if [[ "${DEPLOY_VARS["APPLY_PATCH"]}" == "false" ]]; then
+        return
     fi
+
+    # 解析配置口 NodePort（模型/agent 模板下发依赖）；gateway 已确认部署，读不到即环境异常
+    local gw_port=$(kubectl get service "${DEPLOY_VARS["GATEWAY_NAME"]}-nodeport" \
+        -n "${DEPLOY_VARS["NAMESPACE"]}" \
+        -o jsonpath='{.spec.ports[?(@.name=="config-http")].nodePort}')
+    if [ -z "${gw_port}" ]; then
+        error "Failed to read nodePort (config-http) from service ${DEPLOY_VARS["GATEWAY_NAME"]}-nodeport in namespace ${DEPLOY_VARS["NAMESPACE"]}"
+    fi
+    DEPLOY_VARS["GATEWAY_CONFIG_HTTP_NODE_PORT"]="${gw_port}"
 }
 
 check_nfs_up_dependency(){
