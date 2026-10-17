@@ -86,3 +86,27 @@ def test_config_env_parse_warns(monkeypatch, caplog):
         assert _env_int("AGENT_RUNTIME_SWEEP_INTERVAL", 1) == 1
     assert any("AGENT_RUNTIME_SWEEP_INTERVAL" in r.message
                and "not-a-number" in r.message for r in caplog.records)
+
+
+def test_uvicorn_log_level_accepts_only_uvicorn_names(monkeypatch):
+    from agent_runtime.logsetup import uvicorn_log_level
+
+    for raw, expected in (
+        ("DEBUG", "debug"),
+        ("info", "info"),
+        ("WARNING", "warning"),
+        ("ERROR", "error"),
+        ("CRITICAL", "critical"),
+        (" DEBUG ", "debug"),
+    ):
+        monkeypatch.setenv("AGENT_RUNTIME_LOG_LEVEL", raw)
+        assert uvicorn_log_level() == expected
+
+
+def test_uvicorn_log_level_falls_back_to_info(monkeypatch):
+    """非法/非 uvicorn 名称不能在 uvicorn.run 内变成 KeyError（文档约定回退 INFO）。"""
+    from agent_runtime.logsetup import uvicorn_log_level
+
+    for raw in ("verbose", "WARN", ""):
+        monkeypatch.setenv("AGENT_RUNTIME_LOG_LEVEL", raw)
+        assert uvicorn_log_level() == "info"
