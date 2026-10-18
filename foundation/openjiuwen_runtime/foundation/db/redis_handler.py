@@ -168,7 +168,11 @@ class RedisHandler(DBHandler):
         if not prefix:
             raise ValueError(f"Table {table_name} not initialized")
 
-        keys = await self.client.lrange(f"{table_name}:list", offset, offset + limit - 1)
+        # Filters must be applied before the page window: a raw lrange page can
+        # contain no match while later list entries do (SQL backend filters first).
+        keys = await self.client.lrange(
+            f"{table_name}:list", 0 if filters else offset, -1 if filters else offset + limit - 1
+        )
         records = []
 
         for key in keys:
@@ -185,6 +189,8 @@ class RedisHandler(DBHandler):
                 else:
                     records.append(record)
 
+        if filters:
+            return records[offset:offset + limit]
         return records
 
     async def count_records(
