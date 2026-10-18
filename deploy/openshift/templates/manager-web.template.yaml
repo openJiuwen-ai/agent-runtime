@@ -1,0 +1,66 @@
+# jiuwenclaw-manager-web for OpenShift 试用集群（镜像 <<MANAGER_WEB_IMAGE>>，nginx 形态）
+# 相对 conf/manager-web.yaml 的适配点：
+#   1. 删除 pod securityContext.fsGroup(0)：restricted-v2 仅允许命名空间组段，留空由 SCC 自动注入
+#   2. MANAGER_WEB_RESOLVER: kube-dns.kube-system.svc.cluster.local →
+#      dns-default.openshift-dns.svc.cluster.local（OCP 的 CoreDNS 服务，kube-dns 在 OCP 不存在）
+#   3. nodePort 30008：30000-30007 已被 mysql/mariadb/redis/minio/gateway/web/manager-server 占用
+#   4. 镜像基于 nginxinc/nginx-unprivileged（关键目录属主 101:0+g+w，pid/temp 在 /tmp），
+#      restricted-v2 随机 uid 直接可写，无需 emptyDir 顶替
+# 应用：kubectl apply --request-timeout=120s -f openshift/manager-web.yaml（本环境走 ./deploy.sh manager-web）
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jiuwenclaw-manager-web
+  namespace: <<NAMESPACE>>
+  labels:
+    app: jiuwenclaw-manager-web
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: jiuwenclaw-manager-web
+  template:
+    metadata:
+      labels:
+        app: jiuwenclaw-manager-web
+    spec:
+      containers:
+        - name: manager-web
+          image: <<MANAGER_WEB_IMAGE>>
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 5273
+              protocol: TCP
+          env:
+            - name: MANAGER_WEB_HOST
+              value: "0.0.0.0"
+            - name: MANAGER_WEB_PORT
+              value: "5273"
+            - name: MANAGER_WEB_PROXY_TARGET
+              value: "http://jiuwenclaw-manager-server:8765"
+            - name: MANAGER_WEB_IDP_TARGET
+              value: "http://jiuwenclaw-identity:8770"
+            # nginx 变量 proxy_pass 需要 resolver
+            - name: MANAGER_WEB_RESOLVER
+              value: "dns-default.openshift-dns.svc.cluster.local"
+            - name: WORKSPACE_QUOTA_ENABLED
+              value: "false"
+            - name: TZ
+              value: "Asia/Shanghai"
+---
+# NodePort Service：供外连接
+apiVersion: v1
+kind: Service
+metadata:
+  name: jiuwenclaw-manager-web-nodeport
+  namespace: <<NAMESPACE>>
+spec:
+  type: NodePort
+  ports:
+    - name: http
+      port: 5273
+      targetPort: 5273
+      nodePort: 30008
+  selector:
+    app: jiuwenclaw-manager-web

@@ -1,0 +1,81 @@
+# jiuwenclaw-identity for OpenShift 试用集群（镜像 <<IDENTITY_IMAGE>>）
+# 相对 conf/identity.yaml 的适配点：
+#   1. 删除 pod securityContext.fsGroup(1000) 与 container runAsUser/runAsGroup(1000)：
+#      restricted-v2 强制随机 uid（命名空间段 1008160000/10000）
+#   2. IDENTITY_DB_HOST: mariadb-headless.default → mariadb-headless.<<NAMESPACE>>
+#   3. 依赖前置：mariadb 已建库 identity_<<NAMESPACE>>（utf8mb4）
+# 应用：kubectl apply --request-timeout=120s -f openshift/identity.yaml（本环境走 ./deploy.sh identity）
+apiVersion: v1
+kind: Service
+metadata:
+  name: jiuwenclaw-identity
+  namespace: <<NAMESPACE>>
+spec:
+  selector:
+    app: jiuwenclaw-identity
+  ports:
+    - name: rest
+      port: 8770
+      targetPort: 8770
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jiuwenclaw-identity
+  namespace: <<NAMESPACE>>
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jiuwenclaw-identity
+  template:
+    metadata:
+      labels:
+        app: jiuwenclaw-identity
+    spec:
+      containers:
+        - name: jiuwenclaw-identity
+          image: <<IDENTITY_IMAGE>>
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: rest
+              containerPort: 8770
+          envFrom:
+            - secretRef:
+                name: jiuwenclaw-secret-configmap
+          env:
+            - name: IDENTITY_REST_HOST
+              value: "0.0.0.0"
+            - name: IDENTITY_REST_PORT
+              value: "8770"
+            - name: IDENTITY_DB_TYPE
+              value: "mariadb"
+            - name: IDENTITY_DB_HOST
+              value: "mariadb-headless.<<NAMESPACE>>"
+            - name: IDENTITY_DB_PORT
+              value: "3306"
+            - name: IDENTITY_DB_USER
+              value: "root"
+            - name: IDENTITY_DB_NAME
+              value: "identity_<<NAMESPACE>>"
+            - name: IDENTITY_SEED_ADMIN
+              value: "true"
+            - name: IDENTITY_SEED_USER1
+              value: "true"
+            - name: IDENTITY_FEDERATION_DEMO_ENABLED
+              value: "false"
+            - name: IDENTITY_FEDERATION_PUBLIC_PATH_PREFIX
+              value: "/idp"
+            - name: IDENTITY_FEDERATION_REQUEST_TTL
+              value: "300"
+            - name: IDENTITY_FEDERATION_CODE_TTL
+              value: "60"
+            - name: IDENTITY_FEDERATION_DEMO_ADMIN_GROUP
+              value: "enterprise-admins"
+            - name: TZ
+              value: "Asia/Shanghai"
+            - name: IDENTITY_ADMIN_PASSWORD
+              value: admin
+            - name: IDENTITY_USER1_PASSWORD
+              value: user1
