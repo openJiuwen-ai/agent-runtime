@@ -30,6 +30,10 @@ class RedisHandler(DBHandler):
         self._table_columns: dict[str, list[str]] = {}
         self._id_counters: dict[str, str] = {}
 
+    def register_table_prefix(self, table: str, prefix: str) -> None:
+        """Register the Redis key prefix used for one logical table."""
+        self._table_prefixes[table] = prefix
+
     async def connect(self) -> None:
         self.client = redis.Redis(
             host=self.host,
@@ -168,7 +172,11 @@ class RedisHandler(DBHandler):
         if not prefix:
             raise ValueError(f"Table {table_name} not initialized")
 
-        keys = await self.client.lrange(f"{table_name}:list", offset, offset + limit - 1)
+        # Filters must be applied before the page window: a raw lrange page can
+        # contain no match while later list entries do (SQL backend filters first).
+        keys = await self.client.lrange(
+            f"{table_name}:list", 0 if filters else offset, -1 if filters else offset + limit - 1
+        )
         records = []
 
         for key in keys:
@@ -185,6 +193,8 @@ class RedisHandler(DBHandler):
                 else:
                     records.append(record)
 
+        if filters:
+            return records[offset:offset + limit]
         return records
 
     async def count_records(
