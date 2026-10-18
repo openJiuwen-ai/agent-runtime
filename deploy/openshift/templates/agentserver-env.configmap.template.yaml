@@ -1,0 +1,56 @@
+# jiuwenclaw-agentserver-env ConfigMap for OpenShift 试用集群
+# 相对 conf/agentserver-env.configmap.yaml 的适配点（服务均在本 ns <<NAMESPACE>>）：
+#   GATEWAY_DB_HOST: mariadb-headless.default → mariadb-headless.<<NAMESPACE>>
+#   OBS_URL: minio-headless.default:9000 → minio.<<NAMESPACE>>:9000
+#   GATEWAY_DB_NAME=gateway_<<DB_NAME_SUFFIX>> 保持：库已在 mariadb 中（gateway 建表 27 张）
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: jiuwenclaw-agentserver-env
+  namespace: <<NAMESPACE>>
+data:
+  AGENT_HTTP_ENABLED: "true"
+  AGENT_HTTP_HOST: 0.0.0.0
+  AGENT_HTTP_PORT: "8766"
+  AGENT_SERVER_HOST: 0.0.0.0
+  AGENT_SERVER_REACT_MAX_ITER: "10"
+  CHECKPOINT_DB_TYPE: mariadb
+  CLAW_POD_CODE_PATH: /app/jiuwenswarm
+  DB_CONNECT_TIMEOUT: "15"
+  DISABLED_TOOLS: search_skill,install_skill,uninstall_skill,code,web_search,fetch_webpage,skill_acceleration_exec,deepresearch_execute,deepresearch_stream,deepresearch_prepare_rewrite,deepresearch_commit_rewrite,deepresearch_generate_rewrite_html,wiki_ingest,wiki_query,wiki_lint,memory_search,audio_transcription,audio_question_answering,prepare_skill_evolution,evolve_review_task,evolve_skill_experiences,list_skill_experiences,read_skill_experiences,simplify_skill_experiences,get_current_goal,submit_goal_report
+  EXTENSION_DIRS: /app/jiuwenswarm/packages/jiuwenclaw-ee/agentserver/extensions
+  GATEWAY_DB_HOST: mariadb-headless.<<NAMESPACE>>
+  GATEWAY_DB_NAME: gateway_<<DB_NAME_SUFFIX>>
+  GATEWAY_DB_PORT: "3306"
+  GATEWAY_DB_TYPE: mariadb
+  GATEWAY_DB_USER: root
+  HOME: /home/app
+  JIUWENBOX_ENABLED: "false"
+  JIUWENBOX_URL: http://127.0.0.1:8321
+  JIUWENCLAW_ADAPTER_CKPT_LIGHT: "1"
+  JIUWENCLAW_EARLY_CHECKPOINT: "0"
+  JIUWENSWARM_CONFIG_DIR: /app/config
+  JIUWENSWARM_EDITION: enterprise
+  JIUWENSWARM_GC_RECLAIM_INTERVAL: "60"
+  JIUWENSWARM_SESSION_ADAPTER_IDLE_TTL_SEC: "180"
+  LLM_SSL_VERIFY: "False"
+  LOG_MASK_ENABLED: "true"
+  LOG_ROOT_PATH: /home/app
+  LOG_TO_FILE_ENABLED: "true"
+  OBS_ACCESS_KEY: minioadmin
+  OBS_BUCKET: jiuwenclaw
+  OBS_REGION: default
+  OBS_SECURE: "false"
+  OBS_URL: minio.<<NAMESPACE>>:9000
+  OTEL_ENABLED: "true"
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://jiuwenclaw-otel-collector:4318
+  OTEL_EXPORTER_OTLP_PROTOCOL: http
+  OTEL_EXPORTER_TYPE: otlp
+  OTEL_LOGS_EXPORTER: otlp
+  OTEL_METRICS_EXPORTER: none
+  OTEL_SERVICE_NAME: jiuwenclaw-agentserver
+  OTEL_TRACES_EXPORTER: none
+  ROLE: agentserver
+  SKILL_REFRESH_TTL_SECONDS: "30"
+  TZ: Asia/Shanghai
+  WORKSPACE_QUOTA_ENABLED: "false"

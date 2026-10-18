@@ -1,0 +1,117 @@
+# jiuwenclaw-manager-server for OpenShift 试用集群（镜像 <<MANAGER_SERVER_IMAGE>>）
+# 相对 conf/manager-server.yaml 的适配点：
+#   1. 删除 pod securityContext.fsGroup(1000) 与 container runAsUser/runAsGroup(1000)：
+#      restricted-v2 强制随机 uid（命名空间段 1008160000/10000）
+#   2. REDIS_URL: redis://jiuwenclaw-redis:6379 → redis://:Root%40123456@redis.<<NAMESPACE>>:6379
+#      （本 redis 有 requirepass，密码 Root@123456 需 URL 编码 @→%40 后嵌入 URL）
+#   3. MANAGER_DB_HOST: mariadb-headless.default → mariadb-headless.<<NAMESPACE>>
+#   4. nodePort 30007：30000-30006 已被 mysql/mariadb/redis/minio/gateway/web 占用
+#   5. 依赖前置：mariadb 已建库 manager_<<DB_NAME_SUFFIX>>（utf8mb4）；identity 需先部署（公钥拉取）
+# 应用：kubectl apply --request-timeout=120s -f openshift/manager-server.yaml（本环境走 ./deploy.sh manager-server）
+# Service：提供稳定 DNS 域名，供集群内部访问
+apiVersion: v1
+kind: Service
+metadata:
+  name: jiuwenclaw-manager-server
+  namespace: <<NAMESPACE>>
+spec:
+  selector:
+    app: jiuwenclaw-manager-server
+  ports:
+    - name: rest
+      port: 8765
+      targetPort: 8765
+    - name: websocket
+      port: 8766
+      targetPort: 8766
+  type: ClusterIP
+---
+# NodePort Service：供集群外部连接
+apiVersion: v1
+kind: Service
+metadata:
+  name: jiuwenclaw-manager-server-nodeport
+  namespace: <<NAMESPACE>>
+spec:
+  type: NodePort
+  ports:
+    - name: rest
+      port: 8765
+      targetPort: 8765
+      nodePort: 30007
+  selector:
+    app: jiuwenclaw-manager-server
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jiuwenclaw-manager-server
+  namespace: <<NAMESPACE>>
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: jiuwenclaw-manager-server
+  template:
+    metadata:
+      labels:
+        app: jiuwenclaw-manager-server
+    spec:
+      containers:
+      - name: manager
+        image: <<MANAGER_SERVER_IMAGE>>
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: rest
+          containerPort: 8765
+        - name: websocket
+          containerPort: 8766
+        envFrom:
+            - secretRef:
+                name: jiuwenclaw-secret-configmap
+        env:
+        - name: REDIS_URL
+          value: "redis://:Root%40123456@redis.<<NAMESPACE>>:6379"
+        - name: REDIS_USER
+          value: ""
+        - name: REDIS_KEY_PREFIX
+          value: "jiuwenclaw:"
+        - name: MANAGER_RABBITMQ_URL
+          value: ""
+        - name: MANAGER_REST_HOST
+          value: "0.0.0.0"
+        - name: MANAGER_REST_PORT
+          value: "8765"
+        - name: MANAGER_DB_TYPE
+          value: "mariadb"
+        - name: MANAGER_DB_HOST
+          value: "mariadb-headless.<<NAMESPACE>>"
+        - name: MANAGER_DB_PORT
+          value: "3306"
+        - name: MANAGER_DB_USER
+          value: "root"
+        - name: MANAGER_DB_NAME
+          value: "manager_<<DB_NAME_SUFFIX>>"
+        - name: IDENTITY_PUBLIC_KEY_URL
+          value: "http://jiuwenclaw-identity:8770/v1/auth/public_key"
+        # nginx 变量 proxy_pass 需 FQDN；短名作回退时由 Manager 扩成 *.svc.cluster.local
+        - name: MANAGER_WEB_USER_WEB_TARGET
+          value: "http://jiuwenclaw-web.<<NAMESPACE>>.svc.cluster.local:5173"
+        - name: MANAGER_WEB_GATEWAY_HTTP_TARGET
+          value: "http://jiuwenclaw-gateway.<<NAMESPACE>>.svc.cluster.local:19002"
+        - name: MANAGER_WEB_GATEWAY_WS_TARGET
+          value: "http://jiuwenclaw-gateway.<<NAMESPACE>>.svc.cluster.local:19000"
+        - name: NAMESPACE
+          value: "<<NAMESPACE>>"
+        - name: AGENT_RUNTIME_SYNC_TIMEOUT
+          value: "10"
+        - name: WORKSPACE_QUOTA_ENABLED
+          value: "false"
+        - name: MANAGER_WS_ENABLED
+          value: "true"
+        - name: MANAGER_WS_HOST
+          value: "0.0.0.0"
+        - name: MANAGER_WS_PORT
+          value: "8766"
+        - name: TZ
+          value: "Asia/Shanghai"

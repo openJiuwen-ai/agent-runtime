@@ -1,0 +1,93 @@
+# jiuwenclaw-agentserver for OpenShift 试用集群（镜像 <<AGENTSERVER_IMAGE>>，与 gateway 同镜像）
+# 相对 conf/agentserver.yaml 的适配点：
+#   1. 删除 pod securityContext.fsGroup(1000) 与 container runAsUser/runAsGroup(1000)：
+#      restricted-v2 强制随机 uid（命名空间段 1008160000/10000），镜像为 ocp 适配版
+#   2. 依赖复用：Secret jiuwenclaw-secret-configmap（随 gateway 已部署，含 REDIS_PASSWORD/
+#      OBS_SECRET_KEY/AGENTSERVER_DB_PASSWORD 修正值）；juiwenclaw-pvc 由 openshift/claw-pvc.yaml 创建
+#   3. 无 NodePort（agentserver 为内部组件，gateway 经 AGENT_SERVER_URL 走 ClusterIP 直连）
+# 应用：kubectl apply --request-timeout=120s -f openshift/agentserver.yaml（本环境走 curl REST）
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jiuwenclaw-agentserver
+  namespace: <<NAMESPACE>>
+  labels:
+    app: jiuwenclaw-agentserver
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jiuwenclaw-agentserver
+  template:
+    metadata:
+      labels:
+        app: jiuwenclaw-agentserver
+        jiuwenclaw-component: agentserver
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - jiuwenclaw-agentserver
+                topologyKey: "kubernetes.io/hostname"
+      containers:
+        - name: jiuwenclaw-agentserver
+          image: <<AGENTSERVER_IMAGE>>
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: sse
+              containerPort: 8766
+            - name: ws
+              containerPort: 18092
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: sse
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: sse
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 6
+          envFrom:
+            - secretRef:
+                name: jiuwenclaw-secret-configmap
+            - configMapRef:
+                name: jiuwenclaw-agentserver-env
+          volumeMounts:
+            - name: data
+              mountPath: /home/app/.jiuwenswarm
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: jiuwenclaw-pvc
+---
+# Service：提供稳定 DNS 域名，gateway 静态模式经 AGENT_SERVER_URL 直连
+apiVersion: v1
+kind: Service
+metadata:
+  name: jiuwenclaw-agentserver
+  namespace: <<NAMESPACE>>
+spec:
+  selector:
+    app: jiuwenclaw-agentserver
+  ports:
+    - name: sse
+      port: 8766
+      targetPort: sse
+    - name: ws
+      port: 18092
+      targetPort: ws
+  type: ClusterIP

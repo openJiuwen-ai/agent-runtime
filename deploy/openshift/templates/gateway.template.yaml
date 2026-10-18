@@ -1,0 +1,116 @@
+# jiuwenclaw-gateway for OpenShift 试用集群（镜像 <<GATEWAY_IMAGE>>，预期已兼容 MariaDB JSON DDL）
+# 相对 conf/gateway.yaml 的适配点：
+#   1. 删除 pod securityContext.fsGroup(1000) 与 container runAsUser/runAsGroup(1000)：
+#      restricted-v2 强制随机 uid（命名空间段 1008160000/10000），镜像为 ocp 适配版
+#   2. nodePort 30005：30000-30004 已被 mysql/mariadb/redis/minio 占用（NodePort 全集群唯一）
+#   3. 依赖前置：mariadb 已建库 gateway_<<NAMESPACE>> / web_<<NAMESPACE>>（utf8mb4）
+#   4. jiuwenclaw-manager-server / jiuwenclaw-agentserver / otel-collector 尚未部署
+# 应用：kubectl apply --request-timeout=120s -f openshift/gateway.yaml（本环境走 curl REST）
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jiuwenclaw-gateway
+  namespace: <<NAMESPACE>>
+  labels:
+    app: jiuwenclaw-gateway
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: jiuwenclaw-gateway
+  template:
+    metadata:
+      labels:
+        app: jiuwenclaw-gateway
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - jiuwenclaw-gateway
+              topologyKey: "kubernetes.io/hostname"
+      containers:
+        - name: gateway
+          image: <<GATEWAY_IMAGE>>
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: web-ws
+              containerPort: 19000
+            - name: http
+              containerPort: 19001
+            - name: web-http
+              containerPort: 19002
+            - name: config-http
+              containerPort: 8775
+          readinessProbe:
+            httpGet:
+              path: /api/v1/ready
+              port: config-http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: config-http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          envFrom:
+            - secretRef:
+                name: jiuwenclaw-secret-configmap
+            - configMapRef:
+                name: jiuwenclaw-gateway-envfile
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+---
+# Service：提供稳定 DNS 域名，供集群内部访问
+apiVersion: v1
+kind: Service
+metadata:
+  name: jiuwenclaw-gateway
+  namespace: <<NAMESPACE>>
+spec:
+  selector:
+    app: jiuwenclaw-gateway
+  ports:
+    - name: web-ws
+      port: 19000
+      targetPort: 19000
+    - name: http
+      port: 19001
+      targetPort: 19001
+    - name: web-http
+      port: 19002
+      targetPort: 19002
+    - name: config-http
+      port: 8775
+      targetPort: 8775
+  type: ClusterIP
+---
+# NodePort Service：只暴露 config-http 端口
+apiVersion: v1
+kind: Service
+metadata:
+  name: jiuwenclaw-gateway-nodeport
+  namespace: <<NAMESPACE>>
+spec:
+  type: NodePort
+  ports:
+    - name: config-http
+      port: 8775
+      targetPort: 8775
+      nodePort: 30005
+  selector:
+    app: jiuwenclaw-gateway
