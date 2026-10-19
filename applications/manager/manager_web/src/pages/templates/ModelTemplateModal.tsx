@@ -8,6 +8,7 @@ import { useFormDirty } from '../../hooks/useFormDirty';
 import { ModelTemplateApi, ApiError } from '../../services/api';
 import { toast } from '../../stores/uiStore';
 import { fromCommaList, safeStringify, toCommaList } from '../../utils/format';
+import { jsonContentForValidation } from '../../utils/jsonExample';
 import { findUnsafeTextField } from '../../utils/safeText';
 import { isValidHttpUrl } from '../../utils/url';
 import type {
@@ -91,6 +92,7 @@ interface FormState {
   enable_streaming: boolean;
   enable_function_calling: boolean;
   verify_ssl: boolean;
+  headers: string;
 }
 
 const empty: FormState = {
@@ -108,7 +110,43 @@ const empty: FormState = {
   enable_streaming: true,
   enable_function_calling: true,
   verify_ssl: false,
+  headers: '',
 };
+
+function headersFromData(data: Record<string, unknown> | null | undefined): string {
+  const headers = data?.headers;
+  if (!headers || typeof headers !== 'object' || Array.isArray(headers)) return '';
+  if (Object.keys(headers).length === 0) return '';
+  return safeStringify(headers, 2);
+}
+
+function parseHeadersObject(raw: string): Record<string, unknown> | null | undefined {
+  const content = jsonContentForValidation(raw);
+  if (!content) return null;
+  try {
+    const parsed: unknown = JSON.parse(content);
+    if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return undefined;
+    }
+    return parsed as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+}
+
+function buildTemplateData(
+  existing: Record<string, unknown> | null | undefined,
+  headers: Record<string, unknown> | null,
+): Record<string, unknown> | null {
+  const data: Record<string, unknown> = { ...(existing ?? {}) };
+  delete data.headers;
+  if (headers && Object.keys(headers).length > 0) {
+    data.headers = Object.fromEntries(
+      Object.entries(headers).map(([key, value]) => [key.trim(), value == null ? '' : String(value)]),
+    );
+  }
+  return Object.keys(data).length > 0 ? data : null;
+}
 
 export function ModelTemplateModal({ open, template, onClose, onSaved }: Props) {
   const { t } = useTranslation();
@@ -140,6 +178,7 @@ export function ModelTemplateModal({ open, template, onClose, onSaved }: Props) 
           enable_streaming: template.enable_streaming,
           enable_function_calling: template.enable_function_calling,
           verify_ssl: template.verify_ssl,
+          headers: headersFromData(template.data),
         }
       : empty;
     setForm(next);
@@ -214,6 +253,16 @@ export function ModelTemplateModal({ open, template, onClose, onSaved }: Props) 
       toast('danger', paramErr);
       return;
     }
+    const headersErr = checkJson(form.headers);
+    if (headersErr) {
+      toast('danger', headersErr);
+      return;
+    }
+    const parsedHeaders = parseHeadersObject(form.headers);
+    if (parsedHeaders === undefined) {
+      toast('warn', t('modelTemplate.headersMustBeObject'));
+      return;
+    }
 
     const modelTypeList = form.model_type.filter(Boolean);
 
@@ -233,6 +282,12 @@ export function ModelTemplateModal({ open, template, onClose, onSaved }: Props) 
       enable_function_calling: form.enable_function_calling,
       verify_ssl: form.verify_ssl,
     };
+    const nextData = buildTemplateData(template?.data, parsedHeaders);
+    if (template) {
+      body.data = nextData ?? {};
+    } else if (nextData) {
+      body.data = nextData;
+    }
 
     setSaving(true);
     try {
@@ -403,6 +458,16 @@ export function ModelTemplateModal({ open, template, onClose, onSaved }: Props) 
               <span>{label}</span>
             </label>
           ))}
+        </div>
+        <div className="md:col-span-2">
+          <JsonField
+            label={t('modelTemplate.headers')}
+            hint={t('modelTemplate.headersHint')}
+            value={form.headers}
+            onChange={(v) => update('headers', v)}
+            placeholder='{"X-Trace-Id": "demo"}'
+            rows={4}
+          />
         </div>
         <div className="md:col-span-2">
           <JsonField
