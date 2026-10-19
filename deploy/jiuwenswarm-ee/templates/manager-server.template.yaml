@@ -94,7 +94,7 @@ spec:
         - name: MANAGER_WEB_USER_WEB_TARGET
           value: "http://<<WEB_NAME>>.<<NAMESPACE>>.svc.cluster.local:<<WEB_HTTP_PORT>>"
         - name: MANAGER_WEB_GATEWAY_HTTP_TARGET
-          value: "http://<<GATEWAY_NAME>>.<<NAMESPACE>>.svc.cluster.local:<<GATEWAY_WEB_HTTP_PORT>>"
+          value: "http://<<GATEWAY_NAME>>.<<NAMESPACE>>.svc.cluster.local:<<WEB_PORT>>"
         - name: MANAGER_WEB_GATEWAY_WS_TARGET
           value: "http://<<GATEWAY_NAME>>.<<NAMESPACE>>.svc.cluster.local:<<WEB_PORT>>"
         - name: NAMESPACE

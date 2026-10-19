@@ -25,10 +25,10 @@ const HOST_SVC = {
 } as const;
 
 const HOST_PORT = {
-  gatewayConfig: 8775,
+  gatewayConfig: 19000,
   runtimeConfig: 8091,
   userWeb: 5173,
-  gatewayWebHttp: 19002,
+  gatewayWebHttp: 19000,
   gatewayWebWs: 19000,
 } as const;
 

@@ -52,7 +52,7 @@ spec:
           readinessProbe:
             httpGet:
               path: /api/v1/ready
-              port: config-http
+              port: web-ws
             initialDelaySeconds: 10
             periodSeconds: 5
             timeoutSeconds: 3
@@ -60,7 +60,7 @@ spec:
           livenessProbe:
             httpGet:
               path: /api/health
-              port: config-http
+              port: web-ws
             initialDelaySeconds: 30
             periodSeconds: 20
             timeoutSeconds: 3

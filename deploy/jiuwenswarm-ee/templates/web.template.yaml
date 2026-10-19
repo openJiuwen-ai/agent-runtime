@@ -47,7 +47,7 @@ spec:
             - name: GATEWAY_URL
               value: "http://<<GATEWAY_NAME>>:<<WEB_PORT>>"
             - name: GATEWAY_WEB_HTTP_URL
-              value: "http://<<GATEWAY_NAME>>:<<GATEWAY_WEB_HTTP_PORT>>"
+              value: "http://<<GATEWAY_NAME>>:<<WEB_PORT>>"
             - name: TZ
               value: "<<TIMEZONE>>"
             - name: OBS_URL
