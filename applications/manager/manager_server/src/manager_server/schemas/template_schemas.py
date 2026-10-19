@@ -6,6 +6,7 @@ permissions_template、service_config_template、agent_template。
 
 from __future__ import annotations
 
+import re
 from typing import Annotated, Any, Literal
 from urllib.parse import unquote, urlparse, urlsplit
 
@@ -125,6 +126,62 @@ OptionalSkillSourceUrl = Annotated[
     BeforeValidator(_optional_skill_source_url),
 ]
 
+# HTTP header 名（RFC 9110 token）。请求头落在 model_template.data.headers。
+_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
+_MAX_MODEL_HEADERS = 50
+_MAX_HEADER_NAME_LEN = 256
+_MAX_HEADER_VALUE_LEN = 8192
+
+
+def normalize_model_template_data(value: Any) -> dict[str, Any] | None:
+    """校验并规范化 ``data.headers``；无该键时原样返回。"""
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("data must be an object")
+    if "headers" not in value:
+        return value
+
+    headers = value.get("headers")
+    data = dict(value)
+    if headers is None:
+        data.pop("headers", None)
+        return data or None
+    if not isinstance(headers, dict) or isinstance(headers, list):
+        raise ValueError("data.headers must be an object")
+    if len(headers) > _MAX_MODEL_HEADERS:
+        raise ValueError(f"data.headers supports at most {_MAX_MODEL_HEADERS} entries")
+
+    normalized: dict[str, str] = {}
+    seen_names: set[str] = set()
+    for raw_name, raw_value in headers.items():
+        name = str(raw_name).strip()
+        if (
+            not name
+            or len(name) > _MAX_HEADER_NAME_LEN
+            or _HEADER_NAME_RE.fullmatch(name) is None
+        ):
+            raise ValueError(f"invalid header name: {raw_name!r}")
+        folded = name.lower()
+        if folded in seen_names:
+            raise ValueError(f"duplicate header name: {name}")
+        seen_names.add(folded)
+        if not isinstance(raw_value, str):
+            raise ValueError(f"header {name} value must be a string")
+        if (
+            "\r" in raw_value
+            or "\n" in raw_value
+            or len(raw_value) > _MAX_HEADER_VALUE_LEN
+        ):
+            raise ValueError(f"invalid header value for {name}")
+        normalized[name] = raw_value
+
+    if normalized:
+        data["headers"] = normalized
+    else:
+        data.pop("headers", None)
+    return data or None
+
 
 
 class AgentTemplateCreateBody(SafeTextMixin):
@@ -187,6 +244,11 @@ class ModelTemplateCreateBody(SafeTextMixin):
     enabled: bool = True
     data: dict[str, Any] | None = None
 
+    @field_validator("data")
+    @classmethod
+    def _normalize_data_headers(cls, value: Any) -> dict[str, Any] | None:
+        return normalize_model_template_data(value)
+
 
 class ModelTemplateUpdateBody(SafeTextMixin):
     model_config = ConfigDict(str_strip_whitespace=True)
@@ -207,6 +269,11 @@ class ModelTemplateUpdateBody(SafeTextMixin):
     verify_ssl: bool | None = None
     enabled: bool | None = None
     data: dict[str, Any] | None = None
+
+    @field_validator("data")
+    @classmethod
+    def _normalize_data_headers(cls, value: Any) -> dict[str, Any] | None:
+        return normalize_model_template_data(value)
 
 
 class ModelTemplateOut(BaseModel):
