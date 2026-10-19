@@ -152,6 +152,7 @@ declare -A DEPLOY_VARS=(
     ["FLUENT_BIT_IMAGE"]="fluent/fluent-bit:3.0.0"
     ["FLUENT_BIT_NAME"]="fluent-bit"
     ["FUNC_SVC_NAME"]="0@jiuwen@clawtest"
+    ["GATEWAY_AGENT_CLIENT_MODE"]="runtime"
     ["GATEWAY_AGENT_HTTP_MAX_CONNECTIONS"]="200"
     ["GATEWAY_AGENT_HTTP_MAX_KEEPALIVE"]="20"
     ["GATEWAY_CONFIG_HTTP_PORT"]="8775"
