@@ -20,6 +20,19 @@ async def test_system_priority_over_user() -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_returns_one_item_when_both_queues_ready() -> None:
+    """Both queues becoming ready in the same scheduling step must not crash get()."""
+    q: PriorityDualAsyncQueues[str] = PriorityDualAsyncQueues(10, 10)
+    get_task = asyncio.create_task(q.get())
+    await asyncio.sleep(0)
+    await asyncio.gather(q.put_user("u1"), q.put_system("s1"))
+    first = await get_task
+    assert first == "s1"
+    assert await q.get() == "u1"
+    q.mark_closed()
+
+
+@pytest.mark.asyncio
 async def test_maxsize() -> None:
     """满队列时 put 阻塞，asyncio 队列的 put 不抛 QueueFull，故用超时代替。"""
     q: PriorityDualAsyncQueues[int] = PriorityDualAsyncQueues(1, 1)
