@@ -1122,15 +1122,14 @@ def _validate_import_rows(rows: dict[str, list[dict[str, Any]]]) -> list[dict[st
                     continue
                 # Business IDs and snapshot-only columns are not CreateBody fields.
                 row.update(normalized)
-            missing = [
-                column.name
-                for column in table_def.columns
-                if not column.nullable
-                and not column.autoincrement
-                and column.name not in _AUDIT_FIELDS
-                and row.get(column.name) is None
-                and (column.name in row or column.default is None)
-            ]
+            missing = []
+            for column in table_def.columns:
+                if column.nullable or column.autoincrement or column.name in _AUDIT_FIELDS:
+                    continue
+                if row.get(column.name) is not None:
+                    continue
+                if column.name in row or column.default is None:
+                    missing.append(column.name)
             if missing:
                 actions.append(
                     {
