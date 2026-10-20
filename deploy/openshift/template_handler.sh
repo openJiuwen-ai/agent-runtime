@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# template_handler.sh —— 清单渲染（对齐 ../jiuwenswarm-ee/template_handler.sh 的 <<VAR>> 机制）
-# templates/ 下全部为 *.template.yaml（含 <<VAR>> 占位符，如 <<AGENTSERVER_IMAGE>>、<<NAMESPACE>>），
+# template_handler.sh —— 清单渲染
+# templates/ 下为 *.template.yaml 模板（<<VAR>> 占位符，如 <<AGENTSERVER_IMAGE>>、<<NAMESPACE>>），
 # 渲染时替换为 DEPLOY_VARS 对应值；产物输出到 conf/（*.template.yaml → 同名 *.yaml）。
 # up/down 前都要执行（down 依赖 conf 里的资源名与模板保持一致）
 

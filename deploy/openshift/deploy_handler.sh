@@ -97,10 +97,9 @@ component_expected_image() { # $1=组件
 }
 
 # 读取指定标签下 Pod 的 "total ready imgok"（ready=就绪数；imgok=请求镜像与期望一致的 Pod 数）。
-# 不走 kubectl get：其 discovery 缓存过期后会拉取 MB 级响应体，跨境链路不可用；
-# 此处仅取 PodList 小响应。比对 Pod spec 里的镜像（创建时原样保留，与渲染清单同形），
-# status.containerStatuses[].image 会被 k8s 规范化（redis:7-alpine →
-# docker.io/library/redis:7-alpine），直接比对必失配
+# 仅拉取 PodList 小响应。镜像比对取 spec.containers[].image（创建时原样保留，与渲染清单同形）；
+# status.containerStatuses[].image 会被 k8s 规范化（如 redis:7-alpine →
+# docker.io/library/redis:7-alpine），不可直接比对
 read_pods() { # $1=label selector $2=期望镜像（空=不校验镜像）
   local sel="$1" want_img="${2:-}" resp code total ready imgok
   [ -n "${KCTL_TOKEN:-}" ] || { echo "0 0 0"; return 0; }

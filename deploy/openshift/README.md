@@ -110,6 +110,10 @@ kubectl get pods
   （默认预算 300s，可 `WAIT_TIMEOUT_SECS=600 ./deploy.sh up` 调整，首次拉取镜像建议调大）；
 - **render-only**：`--render-only` 只渲染本次目标组件的清单到 `conf/`，不连接集群，
   用于核对 / 交付部署清单；
+- **副本数可配置**：各组件副本数由 `.env.custom` 的 `*_REPLICAS` 变量控制
+  （`AGENT_SERVER_REPLICAS / GATEWAY_REPLICAS / WEB_REPLICAS / IDENTITY_REPLICAS /
+  MANAGER_SERVER_REPLICAS / MANAGER_WEB_REPLICAS`，默认 1 / 3 / 2 / 1 / 2 / 2），
+  改后重跑 `up` 生效，存量副本数自动对齐；`AGENT_SERVER_REPLICAS` 目前建议保持 1
 - gateway 为 distributed 多副本部署，等待全部副本 Ready 后才继续。
 
 完整部署顺序（从零开始）：
@@ -122,7 +126,7 @@ kubectl get pods
 ```
 
 数据库说明：`templates/` 下同时提供 mysql.template.yaml / postgresql.template.yaml，供需要
-替换数据库的场景选用（如客户环境指定 MySQL / PostgreSQL），部署命令同款：
+替换数据库的场景选用（如客户环境指定 MySQL / PostgreSQL），部署命令相同：
 `./deploy.sh up mysql`。本集群产品栈默认对接 MariaDB，换库时需同步调整组件清单中的
 数据库连接配置（`*_DB_TYPE` / `*_DB_HOST` 等）后重新 `up`。
 
@@ -145,13 +149,13 @@ kubectl get pods
 
 ### 4.1 访问管理界面
 
-NodePort 仅集群 VPC 内可达；外部网络建议通过 port-forward 隧道访问（经 API server 转发，
-不产生公网暴露）。以下命令中的 `-n rapheale-dev` 为示例，按实际 `NAMESPACE` 调整。
+外部网络通过 port-forward 隧道访问（经 API server 转发，不产生公网暴露）。
+以下命令中的 `-n rapheale-dev` 为示例，按实际 `NAMESPACE` 调整。
 
 在这台机器上执行：
 
 ```bash
-kubectl port-forward --address 0.0.0.0 -n rapheale-dev svc/jiuwenclaw-manager-web-nodeport 30273:5273
+kubectl port-forward --address 0.0.0.0 -n rapheale-dev svc/jiuwenclaw-manager-web 30273:5273
 ```
 
 浏览器打开 `http://<这台机器的IP>:30273` 即可访问管理界面。注意：该终端需保持运行；
@@ -160,9 +164,11 @@ token 过期后需重新登录并重启 port-forward。
 ### 4.2 其他服务临时访问
 
 ```bash
-kubectl port-forward --address 0.0.0.0 -n rapheale-dev svc/mysql-nodeport 3306:3306       # 本机 127.0.0.1:3306
-kubectl port-forward --address 0.0.0.0 -n rapheale-dev svc/mariadb-nodeport 3307:3306     # 本机 127.0.0.1:3307
-kubectl port-forward --address 0.0.0.0 -n rapheale-dev svc/postgresql-nodeport 5433:5432  # 本机 127.0.0.1:5433
+kubectl port-forward --address 0.0.0.0 -n rapheale-dev svc/mysql-headless 3306:3306       # 本机 127.0.0.1:3306
+kubectl port-forward --address 0.0.0.0 -n rapheale-dev svc/mariadb-headless 3307:3306     # 本机 127.0.0.1:3307
+kubectl port-forward --address 0.0.0.0 -n rapheale-dev svc/postgresql-headless 5433:5432  # 本机 127.0.0.1:5433
+kubectl port-forward --address 0.0.0.0 -n rapheale-dev svc/redis 6379:6379                # redis-cli -a Root@123456
+kubectl port-forward --address 0.0.0.0 -n rapheale-dev svc/minio 9000:9000 9001:9001      # S3 API / Console
 ```
 
 ## 5. 模型接入（集群内共享模型）

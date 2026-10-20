@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# args_handler.sh —— 命令行解析（对齐 ../jiuwenswarm-ee/args_handler.sh 风格）
+# args_handler.sh —— 命令行解析
 # 解析结果写入全局：CMD(up|down)、SCOPE(""|manager)、TARGETS
 
 CMD=""

@@ -1,11 +1,9 @@
-# jiuwenclaw-agentserver for OpenShift 试用集群（镜像 <<AGENTSERVER_IMAGE>>，与 gateway 同镜像）
-# 相对 conf/agentserver.yaml 的适配点：
-#   1. 删除 pod securityContext.fsGroup(1000) 与 container runAsUser/runAsGroup(1000)：
-#      restricted-v2 强制随机 uid（命名空间段 1008160000/10000），镜像为 ocp 适配版
-#   2. 依赖复用：Secret jiuwenclaw-secret-configmap（随 gateway 已部署，含 REDIS_PASSWORD/
-#      OBS_SECRET_KEY/AGENTSERVER_DB_PASSWORD 修正值）；juiwenclaw-pvc 由 openshift/claw-pvc.yaml 创建
-#   3. 无 NodePort（agentserver 为内部组件，gateway 经 AGENT_SERVER_URL 走 ClusterIP 直连）
-# 应用：kubectl apply --request-timeout=120s -f openshift/agentserver.yaml（本环境走 curl REST）
+# jiuwenclaw-agentserver 部署清单（镜像 <<AGENTSERVER_IMAGE>>，与 gateway 同镜像）
+# 说明：
+#   - 镜像为 OpenShift 适配版，适配 restricted-v2 SCC（强制随机 uid，不指定 runAsUser/fsGroup）
+#   - 配置经 Secret jiuwenclaw-secret-configmap 与 ConfigMap jiuwenclaw-agentserver-env 注入
+#   - 数据卷挂载 PVC jiuwenclaw-pvc 至 /home/app/.jiuwenswarm
+#   - 内部组件：gateway 经 AGENT_SERVER_URL 通过 ClusterIP Service 直连，不对外暴露
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -14,7 +12,7 @@ metadata:
   labels:
     app: jiuwenclaw-agentserver
 spec:
-  replicas: 1
+  replicas: <<AGENT_SERVER_REPLICAS>>
   selector:
     matchLabels:
       app: jiuwenclaw-agentserver

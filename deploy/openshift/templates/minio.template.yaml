@@ -1,13 +1,8 @@
-# MinIO for OpenShift 试用集群（restricted-v2 SCC + gp3 动态供给）
-# 相对 conf/minio.yaml 的适配点：
-#   1. 资源显式指定 namespace: <<NAMESPACE>>；本环境部署走 curl REST（见 work-docs/dbs/试用集群基础服务的部署.md 2.2）
-#   2. 无静态存储依赖：PVC 走 gp3（EBS）动态供给挂 /data；Deployment + Recreate（RWO 单挂）
-#   3. nodePort 30003(API)/30004(Console)：30000-30002 已被 mysql/mariadb/redis 占用（NodePort 全集群唯一）
-#   4. 不设置 fsGroup，由 SCC 自动注入；root 凭证用 env 显式指定（共享环境不用默认 minioadmin/minioadmin）
-#   5. 镜像来源实测：docker.io 的 minio/minio 全 tag 拒绝（官方撤仓+出口对 org 镜像 deny）、
-#      quay.io/minio/minio 已转私有；可用镜像为 **quay.io/minio/aistor/minio**（MinIO 官方 AIStor
-#      发布线，公开仓库），本文件锁定 RELEASE.2026-09-19T17-05-25Z
-# 应用：kubectl apply --request-timeout=120s -f openshift/minio.yaml
+# MinIO 部署清单（OpenShift）
+# 说明：
+#   - 存储走 gp3 StorageClass 动态供给挂 /data；Deployment + Recreate 策略（RWO 卷限制单节点挂载）
+#   - root 凭证经 env 指定：minioadmin / Root@123456；适配 restricted-v2 SCC（fsGroup 由 SCC 自动注入）
+#   - 镜像使用 quay.io/minio/aistor/minio（公开仓库），锁定 RELEASE.2026-09-19T17-05-25Z
 # 访问：oc port-forward svc/minio 9000:9000（S3 API）、9001:9001（Console）
 # 凭证：minioadmin / Root@123456
 apiVersion: v1
@@ -23,25 +18,6 @@ spec:
     - name: console
       port: 9001
       targetPort: 9001
-  selector:
-    app: minio
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: minio-nodeport
-  namespace: <<NAMESPACE>>
-spec:
-  type: NodePort
-  ports:
-    - name: api
-      port: 9000
-      targetPort: 9000
-      nodePort: 30003
-    - name: console
-      port: 9001
-      targetPort: 9001
-      nodePort: 30004
   selector:
     app: minio
 ---

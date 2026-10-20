@@ -1,8 +1,5 @@
-# jiuwenclaw-agentserver-env ConfigMap for OpenShift 试用集群
-# 相对 conf/agentserver-env.configmap.yaml 的适配点（服务均在本 ns <<NAMESPACE>>）：
-#   GATEWAY_DB_HOST: mariadb-headless.default → mariadb-headless.<<NAMESPACE>>
-#   OBS_URL: minio-headless.default:9000 → minio.<<NAMESPACE>>:9000
-#   GATEWAY_DB_NAME=gateway_<<NAMESPACE>> 保持：库已在 mariadb 中（gateway 建表 27 张）
+# jiuwenclaw-agentserver-env ConfigMap（agentserver 经 envFrom 注入）
+# 说明：数据库 / 对象存储等地址均指向本 namespace（<<NAMESPACE>>）内的服务
 apiVersion: v1
 kind: ConfigMap
 metadata:
