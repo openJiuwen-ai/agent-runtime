@@ -1,0 +1,103 @@
+# jiuwenclaw-web for OpenShift 试用集群（镜像 <<WEB_IMAGE>>）
+# 相对 conf/web.yaml 的适配点：
+#   1. 删除 pod securityContext.fsGroup(0)：restricted-v2 仅允许命名空间组段，留空由 SCC 自动注入
+#   2. OBS_URL: minio-headless.default:9000 → minio.<<NAMESPACE>>:9000
+#   3. nodePort 30006：30000-30005 已被 mysql/mariadb/redis/minio/gateway 占用（NodePort 全集群唯一）
+#   4. 镜像基于 nginxinc/nginx-unprivileged（关键目录属主 101:0+g+w，pid/temp 在 /tmp），
+#      restricted-v2 随机 uid 直接可写，无需 emptyDir 顶替
+# 应用：kubectl apply --request-timeout=120s -f openshift/web.yaml（本环境走 curl REST）
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jiuwenclaw-web
+  namespace: <<NAMESPACE>>
+  labels:
+    app: jiuwenclaw-web
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: jiuwenclaw-web
+  template:
+    metadata:
+      labels:
+        app: jiuwenclaw-web
+    spec:
+      containers:
+        - name: web
+          image: <<WEB_IMAGE>>
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 5173
+              protocol: TCP
+            - name: websocket
+              containerPort: 19000
+              protocol: TCP
+          envFrom:
+            - secretRef:
+                name: jiuwenclaw-secret-configmap
+          env:
+            - name: WEB_HTTP_PORT
+              value: "5173"
+            - name: JIUWENSWARM_EDITION
+              value: "enterprise"
+            - name: LOGIN_AUTH_SIMULATE
+              value: "false"
+            - name: WEB_TRANSPORT
+              value: "http"
+            - name: WEB_REQUEST_TIMEOUT_SECONDS
+              value: "15"
+            - name: WORKSPACE_QUOTA_ENABLED
+              value: "false"
+            - name: GATEWAY_URL
+              value: "http://jiuwenclaw-gateway:19000"
+            - name: GATEWAY_WEB_HTTP_URL
+              value: "http://jiuwenclaw-gateway:19002"
+            - name: TZ
+              value: "Asia/Shanghai"
+            - name: OBS_URL
+              value: "minio.<<NAMESPACE>>:9000"
+            - name: OBS_ACCESS_KEY
+              value: "minioadmin"
+            - name: OBS_BUCKET
+              value: "jiuwenclaw"
+            - name: OBS_SECURE
+              value: "false"
+            - name: OBS_PUBLIC_BASE_URL
+              value: ""
+            - name: OBS_REGION
+              value: "default"
+---
+# 集群内部访问：提供稳定 DNS 域名
+apiVersion: v1
+kind: Service
+metadata:
+  name: jiuwenclaw-web
+  namespace: <<NAMESPACE>>
+spec:
+  selector:
+    app: jiuwenclaw-web
+  ports:
+    - name: http
+      port: 5173
+      targetPort: 5173
+    - name: websocket
+      port: 19000
+      targetPort: 19000
+  type: ClusterIP
+---
+# NodePort Service：供外连接
+apiVersion: v1
+kind: Service
+metadata:
+  name: jiuwenclaw-web-nodeport
+  namespace: <<NAMESPACE>>
+spec:
+  type: NodePort
+  ports:
+    - port: 5173
+      targetPort: 5173
+      nodePort: 30006
+  selector:
+    app: jiuwenclaw-web

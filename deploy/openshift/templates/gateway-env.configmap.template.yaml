@@ -1,0 +1,76 @@
+# jiuwenclaw-gateway-env ConfigMap for OpenShift 试用集群
+# 相对 conf/gateway-env.configmap.yaml 的适配点（服务均在本 ns <<NAMESPACE>>）：
+#   GATEWAY_DB_HOST/WEB_DB_HOST: mariadb-headless.default → mariadb-headless.<<NAMESPACE>>
+#   REDIS_HOST: jiuwenclaw-redis → redis.<<NAMESPACE>>
+#   OBS_URL: minio-headless.default:9000 → minio.<<NAMESPACE>>:9000
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: jiuwenclaw-gateway-envfile
+  namespace: <<NAMESPACE>>
+data:
+  AGENT_RUNTIME_ENABLED: "false"
+  AGENT_SERVER_URL: http://jiuwenclaw-agentserver:8766
+  DEPLOYMENT_MODE: distributed
+  EXTENSION_DIRS: /app/jiuwenswarm/packages/jiuwenclaw-ee/gateway/extensions
+  GATEWAY_AGENT_HTTP_MAX_CONNECTIONS: "200"
+  GATEWAY_AGENT_HTTP_MAX_KEEPALIVE: "20"
+  GATEWAY_CONFIG_HTTP_HOST: 0.0.0.0
+  GATEWAY_CONFIG_HTTP_PORT: "8775"
+  GATEWAY_CONFIG_POLL_ENABLED: "true"
+  GATEWAY_CONFIG_POLL_INTERVAL_SECONDS: "10"
+  GATEWAY_CONFIG_PUBLIC_HOST: jiuwenclaw-gateway
+  GATEWAY_CONFIG_RECEIVER_ENABLED: "true"
+  GATEWAY_DB_HOST: mariadb-headless.<<NAMESPACE>>
+  GATEWAY_DB_NAME: gateway_<<NAMESPACE>>
+  GATEWAY_DB_PORT: "3306"
+  GATEWAY_DB_TYPE: mariadb
+  GATEWAY_DB_USER: root
+  GATEWAY_HOST: 0.0.0.0
+  GATEWAY_INSTANCE_ID: jiuwenclaw-gateway-<<NAMESPACE>>
+  GATEWAY_MANAGER_HTTP_URL: http://jiuwenclaw-manager-server:8765
+  GATEWAY_PORT: "19001"
+  GATEWAY_SESSION_MAP_SCOPE: per_chat_bot_user
+  GATEWAY_WEB_HTTP_PORT: "19002"
+  GATEWAY_WEB_HTTP_TRUST_CLIENT_HEADERS: "true"
+  GATEWAY_WEB_SESSION_STORAGE: remote
+  JIUWENSWARM_CONFIG_DIR: /app/config
+  JIUWENSWARM_EDITION: enterprise
+  LOG_MASK_ENABLED: "true"
+  LOG_ROOT_PATH: /home/app/.logs
+  LOG_TO_FILE_ENABLED: "true"
+  MODE: product
+  NAMESPACE: <<NAMESPACE>>
+  OBS_ACCESS_KEY: minioadmin
+  OBS_BUCKET: jiuwenclaw
+  OBS_REGION: default
+  OBS_SECURE: "false"
+  OBS_URL: minio.<<NAMESPACE>>:9000
+  OTEL_ENABLED: "true"
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://jiuwenclaw-otel-collector:4318
+  OTEL_EXPORTER_OTLP_PROTOCOL: http
+  OTEL_EXPORTER_TYPE: otlp
+  OTEL_LOGS_EXPORTER: otlp
+  OTEL_METRICS_EXPORTER: none
+  OTEL_SERVICE_NAME: jiuwenclaw-gateway
+  OTEL_TRACES_EXPORTER: none
+  REDIS_DB: "0"
+  REDIS_HOST: redis.<<NAMESPACE>>
+  REDIS_KEY_PREFIX: 'jiuwenclaw:'
+  REDIS_MODE: standalone
+  REDIS_PORT: "6379"
+  ROLE: gateway
+  RUNTIME_DB_MAX_OVERFLOW: "20"
+  RUNTIME_DB_POOL_SIZE: "2"
+  RUNTIME_DB_POOL_TIMEOUT: "30"
+  SYNC_CONFIG_ON_STARTUP: "FALSE"
+  TOOL_RESULT_DISPLAY_MAX_CHARS: "500"
+  TZ: Asia/Shanghai
+  WEB_DB_HOST: mariadb-headless.<<NAMESPACE>>
+  WEB_DB_NAME: web_<<NAMESPACE>>
+  WEB_DB_PORT: "3306"
+  WEB_DB_TYPE: mariadb
+  WEB_DB_USER: root
+  WEB_HOST: 0.0.0.0
+  WEB_PORT: "19000"
+  WORKSPACE_QUOTA_ENABLED: "false"

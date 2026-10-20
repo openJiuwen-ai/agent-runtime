@@ -1,0 +1,103 @@
+# MySQL for OpenShift 试用集群（restricted-v2 SCC + gp3 动态供给）
+# 相对 conf/mysql.yaml 的适配点：
+#   1. 资源显式指定 namespace: <<NAMESPACE>>，可直接 kubectl apply -f 使用
+#   2. 无静态 NFS PV：PVC 走 gp3（EBS 块存储）动态供给；
+#      WaitForFirstConsumer——Pod 调度后才 Bound，PVC 短暂 Pending 属预期
+#   3. 不设置 fsGroup：restricted-v2 仅允许命名空间分配的组段（1008160000/10000），
+#      留空由 SCC 自动注入
+#   4. mysql:8.0 为多架构镜像；若节点拉取 docker.io 受限，请更换可用镜像源
+# 应用：kubectl apply --request-timeout=120s -f openshift/mysql.yaml
+# 访问：<节点IP>:30000，或临时 oc port-forward svc/mysql-nodeport 3306:3306
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-headless
+  namespace: <<NAMESPACE>>
+spec:
+  ports:
+    - port: 3306
+      targetPort: 3306
+  clusterIP: None
+  selector:
+    app: mysql
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-nodeport
+  namespace: <<NAMESPACE>>
+spec:
+  type: NodePort
+  ports:
+    - port: 3306
+      targetPort: 3306
+      nodePort: 30000
+  selector:
+    app: mysql
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mysql-pvc
+  namespace: <<NAMESPACE>>
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 4Gi
+  storageClassName: gp3
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mysql
+  namespace: <<NAMESPACE>>
+spec:
+  serviceName: mysql-headless
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mysql
+  template:
+    metadata:
+      labels:
+        app: mysql
+    spec:
+      containers:
+        - name: mysql
+          image: mysql:8.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - --innodb_use_native_aio=0
+            - --innodb_flush_method=O_DIRECT_NO_FSYNC
+            - --max-connections=400
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              value: "Root@123456"
+            - name: TZ
+              value: "Asia/Shanghai"
+            - name: MYSQL_ROOT_HOST
+              value: "%"
+          ports:
+            - containerPort: 3306
+              name: mysql
+          volumeMounts:
+            - name: mysql-data
+              mountPath: /var/lib/mysql
+          livenessProbe:
+            tcpSocket:
+              port: 3306
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 5
+          readinessProbe:
+            tcpSocket:
+              port: 3306
+            initialDelaySeconds: 20
+            periodSeconds: 5
+            timeoutSeconds: 2
+      volumes:
+        - name: mysql-data
+          persistentVolumeClaim:
+            claimName: mysql-pvc
