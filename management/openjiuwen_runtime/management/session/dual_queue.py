@@ -83,22 +83,27 @@ class PriorityDualAsyncQueues(Generic[T]):
                     {t_sys, t_usr},
                     return_when=asyncio.FIRST_COMPLETED,
                 )
-                if len(done) != 1:
-                    raise RuntimeError("PriorityDualAsyncQueues is closed  ")
-                d = next(iter(done))
                 for p in pending:
                     p.cancel()
                     try:
                         await p
                     except (asyncio.CancelledError, Exception):
                         pass
-                if d is t_sys:
-                    out = t_sys.result()
+                if not done:
+                    # Both waits were cancelled externally; re-evaluate from the top.
+                    continue
+                if t_sys in done and t_usr in done:
+                    # Both queues became ready within the same scheduling step.
+                    # Keep system priority and requeue the already-consumed user
+                    # item so that no message is lost.
+                    self._user.put_nowait(t_usr.result())
+                    logger.debug("双队列 get: 双队列同时就绪, 取系统项并回退用户项")
+                    return t_sys.result()
+                if t_sys in done:
                     logger.debug("双队列 get: 阻塞取系统项, user~=%s", self._user.qsize())
-                else:
-                    out = t_usr.result()
-                    logger.debug("双队列 get: 阻塞取用户项, sys~=%s", self._sys.qsize())
-                return out
+                    return t_sys.result()
+                logger.debug("双队列 get: 阻塞取用户项, sys~=%s", self._sys.qsize())
+                return t_usr.result()
             except Exception:
                 for p in (t_sys, t_usr):
                     if not p.done():
