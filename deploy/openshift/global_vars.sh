@@ -30,13 +30,14 @@ REPLICAS_VARS=(AGENT_SERVER_REPLICAS GATEWAY_REPLICAS WEB_REPLICAS IDENTITY_REPL
 declare -A DEPLOY_VARS=(
     ["NAMESPACE"]="rapheale-dev"
     ["RENDER_ONLY"]="false"
-    # 组件副本数（.env.custom 可覆盖，改后重跑 up 生效）
+    # 组件副本数（默认均为 1；.env.custom 可覆盖，改后重跑 up 生效。
+    # AGENT_SERVER_REPLICAS / IDENTITY_REPLICAS 目前建议保持 1）
     ["AGENT_SERVER_REPLICAS"]="1"
-    ["GATEWAY_REPLICAS"]="3"
-    ["WEB_REPLICAS"]="2"
+    ["GATEWAY_REPLICAS"]="1"
+    ["WEB_REPLICAS"]="1"
     ["IDENTITY_REPLICAS"]="1"
-    ["MANAGER_SERVER_REPLICAS"]="2"
-    ["MANAGER_WEB_REPLICAS"]="2"
+    ["MANAGER_SERVER_REPLICAS"]="1"
+    ["MANAGER_WEB_REPLICAS"]="1"
 )
 
 # ---------- 通用工具 ----------
