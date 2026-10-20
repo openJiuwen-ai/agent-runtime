@@ -1,12 +1,9 @@
-# Redis for OpenShift 试用集群（restricted-v2 SCC + gp3 动态供给）
-# 相对 conf/redis.yaml 的适配点：
-#   1. 资源显式指定 namespace: <<NAMESPACE>>；本环境部署走 curl REST（见 work-docs/dbs/试用集群基础服务的部署.md 2.2）
-#   2. 无静态存储依赖：PVC 走 gp3（EBS）动态供给挂 /data（appendonly 持久化）；Deployment + Recreate（RWO 单挂）
-#   3. nodePort 30002：30000/30001 已被 mysql/mariadb 占用（NodePort 全集群唯一）
-#   4. 补充 --requirepass（试用集群共享环境，裸奔不安全）；不设置 fsGroup，由 SCC 自动注入
-#   5. 镜像 docker.io redis:7-alpine（多架构，amd64 可用；docker.io 拉取已实测可达）
-# 应用：kubectl apply --request-timeout=120s -f openshift/redis.yaml
-# 访问：oc port-forward svc/redis-nodeport 6379:6379，redis-cli -a Root@123456
+# Redis 部署清单（OpenShift）
+# 说明：
+#   - 存储走 gp3 StorageClass 动态供给挂 /data（appendonly 持久化）
+#   - Deployment + Recreate 策略（RWO 卷限制单节点挂载）
+#   - 启用 --requirepass（密码 Root@123456）；适配 restricted-v2 SCC（fsGroup 由 SCC 自动注入）
+# 访问：oc port-forward svc/redis 6379:6379，redis-cli -a Root@123456
 apiVersion: v1
 kind: Service
 metadata:
@@ -17,21 +14,6 @@ spec:
     - name: redis
       port: 6379
       targetPort: 6379
-  selector:
-    app: redis
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: redis-nodeport
-  namespace: <<NAMESPACE>>
-spec:
-  type: NodePort
-  ports:
-    - name: redis
-      port: 6379
-      targetPort: 6379
-      nodePort: 30002
   selector:
     app: redis
 ---

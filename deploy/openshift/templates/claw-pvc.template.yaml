@@ -1,9 +1,5 @@
-# jiuwenclaw 共享工作区 PVC for OpenShift 试用集群
-# 相对 conf/claw-pvc.yaml 的适配点：
-#   storageClassName: nfs-storage（kubeadm 专用，试用集群无）→ efs-sc（EFS AccessPoint，RWX）
-#   accessModes 保持 ReadWriteMany：与 kubeadm 的 NFS 语义一致（共享工作区），
-#   多副本/多组件可跨节点共享；代价是 NFS 延迟，workspace 小文件场景可接受
-#   （历史：曾短暂用 gp3/RWO，因设计语义是共享盘且趁数据为零时切换，改回 RWX）
+# jiuwenclaw 共享工作区 PVC（agentserver 等组件共享挂载）
+# 说明：storageClassName 为 efs-sc（EFS AccessPoint）；ReadWriteMany 支持多副本/多组件跨节点共享
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

@@ -1,11 +1,8 @@
-# jiuwenclaw-gateway for OpenShift 试用集群（镜像 <<GATEWAY_IMAGE>>，预期已兼容 MariaDB JSON DDL）
-# 相对 conf/gateway.yaml 的适配点：
-#   1. 删除 pod securityContext.fsGroup(1000) 与 container runAsUser/runAsGroup(1000)：
-#      restricted-v2 强制随机 uid（命名空间段 1008160000/10000），镜像为 ocp 适配版
-#   2. nodePort 30005：30000-30004 已被 mysql/mariadb/redis/minio 占用（NodePort 全集群唯一）
-#   3. 依赖前置：mariadb 已建库 gateway_<<NAMESPACE>> / web_<<NAMESPACE>>（utf8mb4）
-#   4. jiuwenclaw-manager-server / jiuwenclaw-agentserver / otel-collector 尚未部署
-# 应用：kubectl apply --request-timeout=120s -f openshift/gateway.yaml（本环境走 curl REST）
+# jiuwenclaw-gateway 部署清单（镜像 <<GATEWAY_IMAGE>>）
+# 说明：
+#   - 镜像为 OpenShift 适配版，适配 restricted-v2 SCC（强制随机 uid，不指定 runAsUser/fsGroup）
+#   - 配置经 Secret jiuwenclaw-secret-configmap 与 ConfigMap jiuwenclaw-gateway-envfile 注入
+#   - 依赖前置：mariadb 已建库 gateway_<<NAMESPACE>> / web_<<NAMESPACE>>（utf8mb4）
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -14,7 +11,7 @@ metadata:
   labels:
     app: jiuwenclaw-gateway
 spec:
-  replicas: 3
+  replicas: <<GATEWAY_REPLICAS>>
   selector:
     matchLabels:
       app: jiuwenclaw-gateway
@@ -98,19 +95,3 @@ spec:
       port: 8775
       targetPort: 8775
   type: ClusterIP
----
-# NodePort Service：只暴露 config-http 端口
-apiVersion: v1
-kind: Service
-metadata:
-  name: jiuwenclaw-gateway-nodeport
-  namespace: <<NAMESPACE>>
-spec:
-  type: NodePort
-  ports:
-    - name: config-http
-      port: 8775
-      targetPort: 8775
-      nodePort: 30005
-  selector:
-    app: jiuwenclaw-gateway

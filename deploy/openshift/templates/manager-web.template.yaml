@@ -1,12 +1,8 @@
-# jiuwenclaw-manager-web for OpenShift 试用集群（镜像 <<MANAGER_WEB_IMAGE>>，nginx 形态）
-# 相对 conf/manager-web.yaml 的适配点：
-#   1. 删除 pod securityContext.fsGroup(0)：restricted-v2 仅允许命名空间组段，留空由 SCC 自动注入
-#   2. MANAGER_WEB_RESOLVER: kube-dns.kube-system.svc.cluster.local →
-#      dns-default.openshift-dns.svc.cluster.local（OCP 的 CoreDNS 服务，kube-dns 在 OCP 不存在）
-#   3. nodePort 30008：30000-30007 已被 mysql/mariadb/redis/minio/gateway/web/manager-server 占用
-#   4. 镜像基于 nginxinc/nginx-unprivileged（关键目录属主 101:0+g+w，pid/temp 在 /tmp），
-#      restricted-v2 随机 uid 直接可写，无需 emptyDir 顶替
-# 应用：kubectl apply --request-timeout=120s -f openshift/manager-web.yaml（本环境走 ./deploy.sh manager-web）
+# jiuwenclaw-manager-web 部署清单（镜像 <<MANAGER_WEB_IMAGE>>，nginx 形态）
+# 说明：
+#   - 镜像基于 nginxinc/nginx-unprivileged，适配 restricted-v2 SCC
+#     （关键目录属主 101:0+g+w，pid/temp 位于 /tmp，随机 uid 直接可写，无需 emptyDir 顶替）
+#   - MANAGER_WEB_RESOLVER 使用 OCP CoreDNS：dns-default.openshift-dns.svc.cluster.local
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -15,7 +11,7 @@ metadata:
   labels:
     app: jiuwenclaw-manager-web
 spec:
-  replicas: 2
+  replicas: <<MANAGER_WEB_REPLICAS>>
   selector:
     matchLabels:
       app: jiuwenclaw-manager-web
@@ -49,18 +45,18 @@ spec:
             - name: TZ
               value: "Asia/Shanghai"
 ---
-# NodePort Service：供外连接
+# Service：提供稳定 DNS 域名（原 NodePort Service 已删，OpenShift 集群上不可达；
+# 外部访问走 port-forward，见 README §4）
 apiVersion: v1
 kind: Service
 metadata:
-  name: jiuwenclaw-manager-web-nodeport
+  name: jiuwenclaw-manager-web
   namespace: <<NAMESPACE>>
 spec:
-  type: NodePort
+  selector:
+    app: jiuwenclaw-manager-web
   ports:
     - name: http
       port: 5273
       targetPort: 5273
-      nodePort: 30008
-  selector:
-    app: jiuwenclaw-manager-web
+  type: ClusterIP

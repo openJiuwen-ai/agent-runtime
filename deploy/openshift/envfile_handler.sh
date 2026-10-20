@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# envfile_handler.sh —— .env.custom 读取（对齐 ../jiuwenswarm-ee/envfile_handler.sh）
+# envfile_handler.sh —— .env.custom 读取
 
 # == read key-value pairs from file into array ==
 read_env_from_file() { # $1=env文件 $2=目标关联数组名

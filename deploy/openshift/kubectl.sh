@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# kubectl.sh —— 试用集群 kubectl -f 等价工具（curl 直连 Kubernetes REST API）
-# 适用场景：kubectl/oc apply 提交资源前需拉取数 MB 的 OpenAPI schema，跨境链路易传输失败；
-# 本脚本仅收发小请求/小响应，动词与语义对齐原生 kubectl（apply/create/replace/delete）。
+# kubectl.sh —— 轻量 kubectl -f 等价工具（curl 直连 Kubernetes REST API）
+# 仅收发小请求/小响应，动词与语义对齐原生 kubectl；适用于 apply 大响应易失败的集群链路。
 #
 # 命令行用法（直接执行）：
 #   ./kubectl.sh -f xxx.yaml                 # 默认动词 apply；多文档一次提交；已存在自动跳过
@@ -31,15 +30,15 @@
 # 运行期输出变量：
 #   KCTL_KIND KCTL_NAME KCTL_RES_NS KCTL_PATH KCTL_LK（单资源解析结果）
 #   KCTL_RESOURCES（拆分结果） KCTL_TMP（临时目录 <脚本目录>/kapply-<PID>，进程退出时由 trap 统一清理）
-# 依赖：curl yq oc；临时目录在脚本所在目录下 kapply-<PID>（须保持非隐藏且位于 $HOME 内：snap 版 yq 沙箱限制）
+# 依赖：curl yq oc；临时目录位于脚本所在目录 kapply-<PID>，进程退出时由 trap 统一清理
 
 # 本脚本所在目录
 _KCTL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 source "$_KCTL_DIR/common.sh"
 
-# 临时目录生命周期：随进程退出清理（source 与直接执行均生效；按 PID 隔离，不误删
-# 并发进程的目录；SIGINT/SIGTERM 转发为正常退出以触发本 trap，SIGKILL 除外）
+# 临时目录生命周期：随进程退出清理（按 PID 隔离，不误删并发进程的目录；
+# SIGINT/SIGTERM 转发为正常退出以触发本 trap）
 trap 'rm -rf "$_KCTL_DIR/kapply-$$"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -65,11 +64,10 @@ kctl_auth() {
   return 0
 }
 
-# 惰性创建临时目录（拆分的资源文件/响应文件落这里）。
+# 惰性创建临时目录（拆分产物/响应文件落这里）。
 # 固定为 <脚本目录>/kapply-<PID>：$$ 在子 shell 中等于父进程 PID，命令替换内多次调用
-# 返回同一目录，不会因子 shell 变量不可见而重复建目录；按进程隔离避免并发冲突。
-# 位置约束：须保持非隐藏且位于 $HOME 内（snap 版 yq 沙箱限制，隐藏目录与 /tmp 读不了）。
-# 进程退出时由本脚本的 EXIT trap 清理
+# 返回同一目录；按进程隔离避免并发冲突。须位于 $HOME 内且非隐藏（snap 版 yq 沙箱限制），
+# 进程退出时由 EXIT trap 清理
 kctl_tmpdir() {
   KCTL_TMP="$_KCTL_DIR/kapply-$$"
   mkdir -p "$KCTL_TMP"
@@ -185,9 +183,8 @@ kctl_show_err() { # $1=code $2=resp文件
 
 # ---------- 单资源操作（返回 0=成功/跳过，失败走 error 退出） ----------
 
-# POST 创建（apply/create 共用）：先 ?dryRun=All 准入预检，通过后真建。
-# 前置条件：调用方已 GET 探测确认资源不存在——已存在的 NodePort Service 直接 dryRun POST
-# 会先撞端口占用 422（nodePort already allocated）而非 409，造成误报。
+# POST 创建（apply/create 共用）：先 ?dryRun=All 准入预检（提前暴露配额/准入错误），通过后真建。
+# 调用方须先 GET 探测确认资源不存在。
 # $3=撞 409 时的动作：skip（apply 语义）| fail（create 语义）
 _kctl_post_resource() { # $1=资源文件 $2=resp文件 $3=skip|fail
   local res="$1" resp="$2" code

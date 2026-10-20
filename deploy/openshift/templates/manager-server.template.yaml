@@ -1,13 +1,9 @@
-# jiuwenclaw-manager-server for OpenShift 试用集群（镜像 <<MANAGER_SERVER_IMAGE>>）
-# 相对 conf/manager-server.yaml 的适配点：
-#   1. 删除 pod securityContext.fsGroup(1000) 与 container runAsUser/runAsGroup(1000)：
-#      restricted-v2 强制随机 uid（命名空间段 1008160000/10000）
-#   2. REDIS_URL: redis://jiuwenclaw-redis:6379 → redis://:Root%40123456@redis.<<NAMESPACE>>:6379
-#      （本 redis 有 requirepass，密码 Root@123456 需 URL 编码 @→%40 后嵌入 URL）
-#   3. MANAGER_DB_HOST: mariadb-headless.default → mariadb-headless.<<NAMESPACE>>
-#   4. nodePort 30007：30000-30006 已被 mysql/mariadb/redis/minio/gateway/web 占用
-#   5. 依赖前置：mariadb 已建库 manager_<<NAMESPACE>>（utf8mb4）；identity 需先部署（公钥拉取）
-# 应用：kubectl apply --request-timeout=120s -f openshift/manager-server.yaml（本环境走 ./deploy.sh manager-server）
+# jiuwenclaw-manager-server 部署清单（镜像 <<MANAGER_SERVER_IMAGE>>）
+# 说明：
+#   - 镜像为 OpenShift 适配版，适配 restricted-v2 SCC（强制随机 uid，不指定 runAsUser/fsGroup）
+#   - redis 连接：REDIS_URL 内嵌 URL 编码后的访问密码（@ → %40）
+#   - 依赖前置：mariadb 已建库 manager_<<NAMESPACE>>（utf8mb4）；identity 先行部署（公钥经
+#     IDENTITY_PUBLIC_KEY_URL 拉取）
 # Service：提供稳定 DNS 域名，供集群内部访问
 apiVersion: v1
 kind: Service
@@ -26,29 +22,13 @@ spec:
       targetPort: 8766
   type: ClusterIP
 ---
-# NodePort Service：供集群外部连接
-apiVersion: v1
-kind: Service
-metadata:
-  name: jiuwenclaw-manager-server-nodeport
-  namespace: <<NAMESPACE>>
-spec:
-  type: NodePort
-  ports:
-    - name: rest
-      port: 8765
-      targetPort: 8765
-      nodePort: 30007
-  selector:
-    app: jiuwenclaw-manager-server
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: jiuwenclaw-manager-server
   namespace: <<NAMESPACE>>
 spec:
-  replicas: 2
+  replicas: <<MANAGER_SERVER_REPLICAS>>
   selector:
     matchLabels:
       app: jiuwenclaw-manager-server

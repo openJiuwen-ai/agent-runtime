@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# common.sh —— 日志函数（对齐 ../jiuwenswarm-ee/common.sh）
+# common.sh —— 日志函数
 # error 输出日志后直接退出脚本，调用方无需再处理返回值
 
 [ -n "${_DEPLOY_COMMON_SH:-}" ] && return 0

@@ -1,15 +1,11 @@
-# PostgreSQL for OpenShift 试用集群（restricted-v2 SCC + gp3 动态供给）
-# 相对 conf/postgresql.yaml 的适配点：
-#   1. 资源显式 namespace: <<NAMESPACE>>
-#   2. 删静态 NFS PV（SCC + Pod 无出网双重排除）→ PVC 走 gp3（EBS）动态供给；
-#      WaitForFirstConsumer——PVC 建后不立即 Bound，Pod 调度后才绑
-#   3. nodePort 30009：30000-30008 已被 mysql/mariadb/redis/minio/gateway/web/manager-server/manager-web 占用
-#   4. 不设置 fsGroup/runAsUser：restricted-v2 强制随机 uid，卷属主由 SCC 注入 fsGroup 管控
-#   5. 增加 emptyDir 挂 /var/run/postgresql（socket 目录；非 root 随机 uid 写不了镜像内 root 属主目录，web.yaml 同款套路）
-#   6. 镜像沿用客户环境 swr.cn-north-4 仓库 postgres-amd64:16（mariadb-amd64 同仓库已实测可拉）；
-#      若节点拉取受限，回退 docker.io/library/postgres:16
-# 应用：./deploy.sh postgresql（走 curl REST，kubectl apply 在本环境不可用，见 work-docs/dbs/试用集群基础服务的部署.md 2.2）
-# 访问：<节点IP>:30009（VPC 内）；办公网 kubectl port-forward -n <<NAMESPACE>> svc/postgresql-nodeport 5433:5432
+# PostgreSQL 部署清单（OpenShift）
+# 说明：
+#   - 存储走 gp3 StorageClass 动态供给；WaitForFirstConsumer——Pod 调度后才 Bound
+#   - 适配 restricted-v2 SCC：随机 uid 运行，fsGroup 由 SCC 注入；
+#     emptyDir 挂载 /var/run/postgresql（socket 目录，随机 uid 无法写镜像内 root 属主目录）
+#   - 镜像 swr.cn-north-4.myhuaweicloud.com/openjiuwen/postgres-amd64:16；
+#     节点拉取受限时可回退 docker.io/library/postgres:16
+# 访问：kubectl port-forward sts/postgresql 5433:5432
 #       psql -h 127.0.0.1 -p 5433 -U postgres（密码 Root@123456）
 apiVersion: v1
 kind: Service
@@ -21,20 +17,6 @@ spec:
     - port: 5432
       targetPort: 5432
   clusterIP: None
-  selector:
-    app: postgresql
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: postgresql-nodeport
-  namespace: <<NAMESPACE>>
-spec:
-  type: NodePort
-  ports:
-    - port: 5432
-      targetPort: 5432
-      nodePort: 30009
   selector:
     app: postgresql
 ---
