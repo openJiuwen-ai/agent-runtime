@@ -19,16 +19,6 @@ from sqlalchemy import insert
 from manager_server.core.template.push_template_to_gateway import (
     slot_template_pairs_from_template_ref,
 )
-from manager_server.schemas.template_schemas import (
-    A2AAccessPolicyTemplateCreateBody,
-    AgentTemplateCreateBody,
-    EmbeddingTemplateCreateBody,
-    ExtensionConfigTemplateCreateBody,
-    McpTemplateCreateBody,
-    ModelTemplateCreateBody,
-    PermissionsTemplateCreateBody,
-    SkillPrebuiltTemplateCreateBody,
-)
 
 from .cluster import (
     _INLINE_LIST_FIELDS,
@@ -53,6 +43,7 @@ from .cluster import (
     _special_sheets,
     _table_sheet,
     _unique_filters,
+    _validate_import_rows,
 )
 from .registry import ImportExportContext, SheetData, WorkbookData, adapter_registry
 from .roles import (
@@ -106,17 +97,6 @@ _AGENT_DEP_TABLES = (
     "a2a_outbound_template",
     "a2a_access_policy_template",
 )
-
-_CREATE_SCHEMAS: dict[str, Any] = {
-    "model_template": ModelTemplateCreateBody,
-    "embedding_template": EmbeddingTemplateCreateBody,
-    "skill_prebuilt_template": SkillPrebuiltTemplateCreateBody,
-    "extension_config_template": ExtensionConfigTemplateCreateBody,
-    "mcp_template": McpTemplateCreateBody,
-    "permissions_template": PermissionsTemplateCreateBody,
-    "a2a_access_policy_template": A2AAccessPolicyTemplateCreateBody,
-    "agent_template": AgentTemplateCreateBody,
-}
 
 
 def _report(resource_type: str, resource_id: str, actions: list[dict[str, Any]]) -> dict[str, Any]:
@@ -310,42 +290,6 @@ def _catalog_structural_actions(
     return actions
 
 
-def _validate_catalog_rows(rows: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
-    actions: list[dict[str, Any]] = []
-    for table, schema in _CREATE_SCHEMAS.items():
-        for row in rows.get(table, []):
-            fields = set(schema.model_fields)
-            body = {key: value for key, value in row.items() if key in fields}
-            try:
-                schema.model_validate(body)
-            except ValueError as exc:  # Pydantic error is intentionally shown in preflight.
-                actions.append(
-                    {
-                        "scope": "workbook",
-                        "object_type": table,
-                        "object_id": "|".join(
-                            str(v or "") for v in _unique_filters(table, row).values()
-                        ),
-                        "action": "conflict",
-                        "detail": f"invalid configuration: {exc}",
-                    }
-                )
-    for row in rows.get("a2a_outbound_template", []):
-        required = ("template_name", "source_url", "card_path", "agent_card", "selected_interface")
-        missing = [name for name in required if row.get(name) in (None, "")]
-        if missing:
-            actions.append(
-                {
-                    "scope": "workbook",
-                    "object_type": "a2a_outbound_template",
-                    "object_id": str(row.get("template_id") or ""),
-                    "action": "missing_dependency",
-                    "detail": f"missing required field(s): {', '.join(missing)}",
-                }
-            )
-    return actions
-
-
 async def _a2a_policy_dependency_actions(
     handler: DBHandler, rows: dict[str, list[dict[str, Any]]]
 ) -> list[dict[str, Any]]:
@@ -433,7 +377,7 @@ class CatalogAdapter:
             allowed_tables=self.kind.allowed_tables,
         )
         actions = _catalog_structural_actions(rows, self.kind.primary_table)
-        actions.extend(_validate_catalog_rows(rows))
+        actions.extend(_validate_import_rows(rows))
         actions.extend(await _manager_actions(context.handler, rows))
         actions.extend(await _dependency_actions(context.handler, rows))
         actions.extend(await _a2a_policy_dependency_actions(context.handler, rows))
@@ -448,6 +392,7 @@ class CatalogAdapter:
         report = await self.preflight(context, workbook)
         if not report["can_import"]:
             raise ValueError("workbook has blocking preflight issues")
+        _validate_import_rows(rows)
         created = await StandaloneCatalogImportService(context.handler).create_missing(rows)
         return {
             "resource_type": self.resource_type,

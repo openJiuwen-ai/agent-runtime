@@ -53,6 +53,17 @@ from manager_server.models.template_models import (
     SERVICE_CONFIG_TEMPLATE_TABLE_DEF,
     SKILL_PREBUILT_TEMPLATE_TABLE_DEF,
 )
+from manager_server.schemas.template_schemas import (
+    A2AAccessPolicyTemplateCreateBody,
+    AgentTemplateCreateBody,
+    EmbeddingTemplateCreateBody,
+    ExtensionConfigTemplateCreateBody,
+    McpTemplateCreateBody,
+    ModelTemplateCreateBody,
+    PermissionsTemplateCreateBody,
+    ServiceConfigTemplateCreateBody,
+    SkillPrebuiltTemplateCreateBody,
+)
 
 from .registry import (
     IdentityServiceUnavailableError,
@@ -277,6 +288,18 @@ _INLINE_LIST_FIELDS = {
     "embedding_template": ("embed_tags",),
     "a2a_outbound_template": ("a2a_tags",),
     "service_config_container": ("command", "args"),
+}
+
+_CREATE_SCHEMAS: dict[str, Any] = {
+    "model_template": ModelTemplateCreateBody,
+    "embedding_template": EmbeddingTemplateCreateBody,
+    "skill_prebuilt_template": SkillPrebuiltTemplateCreateBody,
+    "extension_config_template": ExtensionConfigTemplateCreateBody,
+    "mcp_template": McpTemplateCreateBody,
+    "permissions_template": PermissionsTemplateCreateBody,
+    "a2a_access_policy_template": A2AAccessPolicyTemplateCreateBody,
+    "agent_template": AgentTemplateCreateBody,
+    "service_config_template": ServiceConfigTemplateCreateBody,
 }
 
 
@@ -583,7 +606,7 @@ def _table_sheet(
                     # those hosts again, so omit it from the manifest.
                     if not value:
                         continue
-                if value is not None:
+                if column.name in redacted:
                     leaves: list[tuple[str, str, Any]] = []
                     _flatten(value, column.name, leaves)
                     for path, value_type, leaf in leaves:
@@ -1069,6 +1092,54 @@ async def _manager_actions(
                     "detail": detail,
                 }
             )
+    return actions
+
+
+def _validate_import_rows(rows: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    """Normalize decoded rows in place; use the same defaults for validation and inserts."""
+    actions: list[dict[str, Any]] = []
+    for table, values in rows.items():
+        table_def = DEF_BY_TABLE.get(table)
+        if table_def is None:
+            continue
+        schema = _CREATE_SCHEMAS.get(table)
+        for row in values:
+            object_id = "|".join(str(v or "") for v in _unique_filters(table, row).values())
+            if schema is not None:
+                body = {key: value for key, value in row.items() if key in schema.model_fields}
+                try:
+                    normalized = schema.model_validate(body).model_dump()
+                except ValueError as exc:
+                    actions.append(
+                        {
+                            "scope": "workbook",
+                            "object_type": table,
+                            "object_id": object_id,
+                            "action": "conflict",
+                            "detail": f"invalid configuration: {exc}",
+                        }
+                    )
+                    continue
+                # Business IDs and snapshot-only columns are not CreateBody fields.
+                row.update(normalized)
+            missing = []
+            for column in table_def.columns:
+                if column.nullable or column.autoincrement or column.name in _AUDIT_FIELDS:
+                    continue
+                if row.get(column.name) is not None:
+                    continue
+                if column.name in row or column.default is None:
+                    missing.append(column.name)
+            if missing:
+                actions.append(
+                    {
+                        "scope": "workbook",
+                        "object_type": table,
+                        "object_id": object_id,
+                        "action": "missing_dependency",
+                        "detail": f"missing required field(s): {', '.join(missing)}",
+                    }
+                )
     return actions
 
 
@@ -1562,6 +1633,7 @@ class ClusterImportExportAdapter:
         rows, users, organizations = _decode_workbook(workbook)
         role_rows = decode_role_sheets(workbook, required=False)
         actions = _structural_actions(workbook, rows, users, organizations)
+        actions.extend(_validate_import_rows(rows))
         actions.extend(await _identity_actions(context.authorization, users, organizations))
         actions.extend(
             await _identity_dependency_actions(context.authorization, rows, users, organizations)
@@ -1585,6 +1657,7 @@ class ClusterImportExportAdapter:
         report = await self.preflight(context, workbook)
         if not report["can_import"]:
             raise ValueError("workbook has blocking preflight issues")
+        _validate_import_rows(rows)
         created_identity: list[dict[str, str]] = []
         for org in organizations:
             group_id = str(org.get("group_id") or "").strip()
