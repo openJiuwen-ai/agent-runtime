@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Literal
 
 import httpx
@@ -10,6 +11,11 @@ import httpx
 from manager_server.security.link_mtls import ManagerLinkMTLSConfig
 
 Side = Literal["gateway", "runtime", "user_web"]
+
+
+def runtime_probe_enabled() -> bool:
+    """``AGENT_RUNTIME_ENABLED=false`` 时跳过 Runtime 探活（静态 AgentServer 部署无 Runtime 组件）。"""
+    return os.getenv("AGENT_RUNTIME_ENABLED", "true").strip().lower() != "false"
 
 # Gateway Config Receiver：``GET /api/health``（manager_config_receiver）
 _GATEWAY_HEALTH_PATH = "/api/health"
