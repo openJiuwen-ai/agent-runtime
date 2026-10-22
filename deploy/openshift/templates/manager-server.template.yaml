@@ -74,6 +74,9 @@ spec:
           value: "manager_<<NAMESPACE>>"
         - name: IDENTITY_PUBLIC_KEY_URL
           value: "http://jiuwenclaw-identity:8770/v1/auth/public_key"
+        # 静态 AgentServer 部署无 agent-runtime 组件时：manager-server 跳过 Runtime 探活
+        - name: AGENT_RUNTIME_ENABLED
+          value: "false"
         # MANAGER_WEB_*_TARGET 为 manager-web nginx 的 proxy_pass 上游（nginx 要求 FQDN）
         - name: MANAGER_WEB_USER_WEB_TARGET
           value: "http://jiuwenclaw-web.<<NAMESPACE>>.svc.cluster.local:5173"

@@ -10,6 +10,7 @@ from openjiuwen_runtime.foundation.db.handler import DBHandler
 
 from manager_server.core.instance.config_host_probe import (
     require_config_hosts_reachable,
+    runtime_probe_enabled,
 )
 from manager_server.infrastructure.common import resolve_order_by
 from manager_server.infrastructure.utils import iso_datetime, new_uuid4, utc_now
@@ -661,7 +662,7 @@ class InstanceService:
         )
         await require_config_hosts_reachable(
             gateway_host=gateway_host,
-            runtime_host=runtime_host,
+            runtime_host=runtime_host if runtime_probe_enabled() else None,
             user_web_host=user_web_host,
         )
         namespace = _norm_namespace(body.namespace)
@@ -693,7 +694,7 @@ class InstanceService:
             )
             row = await get_instance_row(self._handler, jiuwenclaw_id) or row
 
-        if runtime_host:
+        if runtime_probe_enabled() and runtime_host:
             from manager_server.core.instance.runtime_identity import (
                 fetch_runtime_identity_from_health,
             )
@@ -925,7 +926,7 @@ class InstanceService:
             ),
             runtime_host=(
                 updates["runtime_host"]
-                if "runtime_host" in updates
+                if runtime_probe_enabled() and "runtime_host" in updates
                 else None
             ),
             user_web_host=(
