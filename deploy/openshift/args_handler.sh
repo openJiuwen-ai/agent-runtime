@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+[ -n "${_DEPLOY_ARGS_HANDLER_SH:-}" ] && return 0
+_DEPLOY_ARGS_HANDLER_SH=1
+
 # args_handler.sh —— 命令行解析
 # 解析结果写入全局：CMD(up|down)、SCOPE(""|manager)、TARGETS
 
@@ -44,7 +47,8 @@ usage() {
                     （依赖的 secret / redis 集群缺失时自动拉起，已有则复用）
   up mariadb        只部署/渲染指定组件；可多选，如: up mariadb minio
                     基础服务四件套: mariadb / mysql / postgresql / minio（数据库三选一）
-  down [组件...]    卸载目标（倒序删除；secret / redis 仍被存活组件依赖时自动保留）
+  down [组件...]    卸载目标（倒序删除；共享依赖 secret/redis 仍被存活组件依赖时保留，
+                    卸载后依赖方清零则自动回收）
   -n NAMESPACE      指定 namespace（默认取 .env.custom 的 NAMESPACE）
   --render-only     只渲染本次目标组件的清单到 conf/，不连接集群（核对/交付 yaml 用）
   -y                兼容保留参数，无实际作用（卸载不再需要确认）

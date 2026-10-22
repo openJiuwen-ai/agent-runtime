@@ -74,11 +74,11 @@ spec:
           value: "manager_<<NAMESPACE>>"
         - name: IDENTITY_PUBLIC_KEY_URL
           value: "http://jiuwenclaw-identity:8770/v1/auth/public_key"
-        # nginx 变量 proxy_pass 需 FQDN；短名作回退时由 Manager 扩成 *.svc.cluster.local
+        # MANAGER_WEB_*_TARGET 为 manager-web nginx 的 proxy_pass 上游（nginx 要求 FQDN）
         - name: MANAGER_WEB_USER_WEB_TARGET
           value: "http://jiuwenclaw-web.<<NAMESPACE>>.svc.cluster.local:5173"
         - name: MANAGER_WEB_GATEWAY_HTTP_TARGET
-          value: "http://jiuwenclaw-gateway.<<NAMESPACE>>.svc.cluster.local:19002"
+          value: "http://jiuwenclaw-gateway.<<NAMESPACE>>.svc.cluster.local:19000"
         - name: MANAGER_WEB_GATEWAY_WS_TARGET
           value: "http://jiuwenclaw-gateway.<<NAMESPACE>>.svc.cluster.local:19000"
         - name: NAMESPACE

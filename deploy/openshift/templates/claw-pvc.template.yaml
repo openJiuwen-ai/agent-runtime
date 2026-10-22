@@ -1,12 +1,12 @@
 # jiuwenclaw 共享工作区 PVC（agentserver 等组件共享挂载）
-# 说明：storageClassName 为 efs-sc（EFS AccessPoint）；ReadWriteMany 支持多副本/多组件跨节点共享
+# 说明：存储类经 WORKSPACE_STORAGE_CLASS 变量配置（.env.custom，留空走集群默认）；ReadWriteMany 支持多副本/多组件跨节点共享
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: jiuwenclaw-pvc
   namespace: <<NAMESPACE>>
 spec:
-  storageClassName: efs-sc
+  storageClassName: <<WORKSPACE_STORAGE_CLASS>>
   accessModes:
     - ReadWriteMany
   resources:

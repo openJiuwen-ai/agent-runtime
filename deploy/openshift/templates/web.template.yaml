@@ -1,7 +1,6 @@
 # jiuwenclaw-web 部署清单（镜像 <<WEB_IMAGE>>）
 # 说明：
-#   - 镜像基于 nginxinc/nginx-unprivileged，适配 restricted-v2 SCC
-#     （关键目录属主 101:0+g+w，pid/temp 位于 /tmp，随机 uid 直接可写，无需 emptyDir 顶替）
+#   - 镜像基于 nginxinc/nginx-unprivileged，适配 restricted-v2 SCC（随机 uid，pid/temp 写 /tmp）
 #   - OBS_URL 指向集群内 MinIO：minio.<<NAMESPACE>>:9000
 apiVersion: apps/v1
 kind: Deployment
@@ -50,7 +49,7 @@ spec:
             - name: GATEWAY_URL
               value: "http://jiuwenclaw-gateway:19000"
             - name: GATEWAY_WEB_HTTP_URL
-              value: "http://jiuwenclaw-gateway:19002"
+              value: "http://jiuwenclaw-gateway:19000"
             - name: TZ
               value: "Asia/Shanghai"
             - name: OBS_URL

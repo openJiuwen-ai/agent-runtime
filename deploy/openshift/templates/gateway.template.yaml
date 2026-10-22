@@ -41,14 +41,10 @@ spec:
               containerPort: 19000
             - name: http
               containerPort: 19001
-            - name: web-http
-              containerPort: 19002
-            - name: config-http
-              containerPort: 8775
           readinessProbe:
             httpGet:
               path: /api/v1/ready
-              port: config-http
+              port: web-ws
             initialDelaySeconds: 10
             periodSeconds: 5
             timeoutSeconds: 3
@@ -56,7 +52,7 @@ spec:
           livenessProbe:
             httpGet:
               path: /api/health
-              port: config-http
+              port: web-ws
             initialDelaySeconds: 30
             periodSeconds: 20
             timeoutSeconds: 3
@@ -88,10 +84,4 @@ spec:
     - name: http
       port: 19001
       targetPort: 19001
-    - name: web-http
-      port: 19002
-      targetPort: 19002
-    - name: config-http
-      port: 8775
-      targetPort: 8775
   type: ClusterIP

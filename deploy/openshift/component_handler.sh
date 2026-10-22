@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+[ -n "${_DEPLOY_COMPONENT_HANDLER_SH:-}" ] && return 0
+_DEPLOY_COMPONENT_HANDLER_SH=1
+
 # component_handler.sh —— 组件映射表（组件 → 清单/标签/依赖/探测）
 
 # 组件是否可由本脚本部署（清单唯一来源：global_vars.sh 的 ALL_COMPONENTS；
@@ -25,7 +28,11 @@ component_files() {
     minio)          echo "minio.yaml";;
     secret)         echo "configmap-secret.yaml";;
     redis)          echo "redis.yaml";;
-    agentserver)    echo "agentserver-env.configmap.yaml claw-pvc.yaml agentserver.yaml";;
+    agentserver)    if is_k8s_cluster; then
+                      echo "agentserver-env.configmap.yaml agentserver.yaml"
+                    else
+                      echo "agentserver-env.configmap.yaml claw-pvc.yaml agentserver.yaml"
+                    fi;;
     gateway)        echo "gateway-env.configmap.yaml gateway.yaml";;
     web)            echo "web.yaml";;
     identity)       echo "identity.yaml";;
@@ -93,8 +100,6 @@ dep_hint() {
   case "$1" in
     secret) echo "随 ./deploy.sh up 自动拉起（各组件共用的配置 Secret）";;
     redis)  echo "随 ./deploy.sh up 自动拉起";;
-    mariadb|mysql|postgresql|minio)
-            echo "先执行 ./deploy.sh up $1（或 ./kubectl.sh -f $TEMPLATE_DIR/$1.template.yaml）";;
-    *)      echo "先拉起基础服务: ./kubectl.sh -f $TEMPLATE_DIR/$1.template.yaml";;
+    *)      echo "先执行 ./deploy.sh up $1";;
   esac
 }

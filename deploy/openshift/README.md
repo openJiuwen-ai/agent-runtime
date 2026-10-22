@@ -37,20 +37,14 @@ kubectl get pods   # 确认登录成功
 
 ## 2. 配置（.env.custom）
 
-部署前检查同目录 `.env.custom`，按实际环境修改：
+可配置变量的含义与默认值详见同目录 `.env.example`。
 
-| 变量 | 说明 |
-|---|---|
-| `NAMESPACE` | 部署目标 namespace（数据库建库的库名后缀同样取自该值） |
-| `*_IMAGE` | 各组件完整镜像名（必填；升级/回滚只改镜像后重跑 `up`，存量 Pod 自动滚动更新） |
-| `*_REPLICAS` | 各组件副本数，默认均为 1（`AGENT_SERVER_REPLICAS / GATEWAY_REPLICAS / WEB_REPLICAS / IDENTITY_REPLICAS / MANAGER_SERVER_REPLICAS / MANAGER_WEB_REPLICAS`） |
-
-副本数改后重跑 `up` 生效，存量副本数自动对齐；其中 `AGENT_SERVER_REPLICAS` /
-`IDENTITY_REPLICAS` 目前建议保持为 1。
 
 ## 3. 部署 / 卸载
 
-依赖要求：机器上已安装 `oc`、`curl`、`yq`。
+**依赖要求**：
+- **openshift 形态**： `oc`、`curl`、`yq`；
+- **k8s 形态**：`kubectl`、`yq`
 
 ### 3.1 deploy.sh —— 组件一键部署
 
@@ -70,6 +64,10 @@ kubectl get pods   # 确认登录成功
 
 行为说明：
 
+- **集群形态**：`CLUSTER_TYPE` 控制（默认 `openshift`）。`k8s` 形态下渲染后自动把
+  mariadb/mysql/postgresql/minio/agentserver 的数据卷改写为 NFS 直连挂载
+  （`NFS_SERVER_ADDR`/`NFS_SHARE_PATH`，路径 `<NFS_SHARE_PATH>/<NAMESPACE>/<组件>`），
+  StorageClass 变量不生效；
 - **namespace**：全部组件的 namespace 由 `.env.custom` 的 `NAMESPACE` 统一控制，
   也可 `-n <ns>` 临时指定；数据库建库的库名后缀同样取自 `NAMESPACE`
   （库名形如 `<业务>_<NAMESPACE>`，更换 namespace 即使用对应后缀的库）；
@@ -121,7 +119,6 @@ kubectl get pods   # 确认登录成功
 ### 3.2 kubectl.sh —— 底层资源提交工具
 
 `kubectl -f` 等价工具，适合提交单份 yaml、批量清理等场景；日常组件部署请用 deploy.sh。
-注意 templates/ 下的模板含占位符，kubectl.sh 不做渲染，需先经 deploy.sh 渲染：
 
 ```bash
 ./kubectl.sh -f xxx.yaml                 # 默认 apply：已存在自动跳过
@@ -130,6 +127,7 @@ kubectl get pods   # 确认登录成功
 ./kubectl.sh delete -f xxx.yaml          # 删除资源（404 时报错，加 --ignore-not-found 可忽略）
 ./kubectl.sh -n <ns> -f xxx.yaml         # yaml 未显式写 namespace 时的兜底
 ```
+
 
 ## 4. 访问服务
 
@@ -148,11 +146,11 @@ kubectl port-forward --address 0.0.0.0 -n rapheale-dev svc/jiuwenclaw-manager-we
 其他服务临时排障访问：
 
 ```bash
-kubectl port-forward --address 0.0.0.0 -n rapheale-dev svc/mysql-headless 3306:3306       # 本机 127.0.0.1:3306
-kubectl port-forward --address 0.0.0.0 -n rapheale-dev svc/mariadb-headless 3307:3306     # 本机 127.0.0.1:3307
-kubectl port-forward --address 0.0.0.0 -n rapheale-dev svc/postgresql-headless 5433:5432  # 本机 127.0.0.1:5433
-kubectl port-forward --address 0.0.0.0 -n rapheale-dev svc/redis 6379:6379                # 密码取部署配置
-kubectl port-forward --address 0.0.0.0 -n rapheale-dev svc/minio 9000:9000 9001:9001      # S3 API / Console
+kubectl port-forward --address 0.0.0.0 -n rapheale-dev svc/mysql-headless 30306:3306       # 本机 127.0.0.1:3306
+kubectl port-forward --address 0.0.0.0 -n rapheale-dev svc/mariadb-headless 30307:3306     # 本机 127.0.0.1:3307
+kubectl port-forward --address 0.0.0.0 -n rapheale-dev svc/postgresql-headless 30433:5432  # 本机 127.0.0.1:5433
+kubectl port-forward --address 0.0.0.0 -n rapheale-dev svc/redis 30379:6379                # 密码取部署配置
+kubectl port-forward --address 0.0.0.0 -n rapheale-dev svc/minio 30900:9000 30901:9001     # S3 API / Console
 ```
 
 若集群中仍残留旧版本的 `*-nodeport` Service（当前模板已不含），可手动清理。

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+[ -n "${_DEPLOY_HANDLER_SH:-}" ] && return 0
+_DEPLOY_HANDLER_SH=1
+
 # deploy_handler.sh —— 目标解析 / 依赖预检 / 副本与镜像对齐 / 就绪与删除等待 / 部署 / 卸载
 
 # up 目标按 ALL_COMPONENTS 规范依赖序重排（保证依赖方后于被依赖方部署）
@@ -14,8 +17,7 @@ sort_targets() {
 # 组件存在性探测：stdout 输出 http_code（200=已在集群；无探测映射或路径解析失败输出 000）
 component_probe_code() { # $1=组件
   local probe p
-  component_probe "$1" >/dev/null || { echo "000"; return 0; }
-  probe=$(component_probe "$1")
+  probe=$(component_probe "$1") || { echo "000"; return 0; }
   p=$(kctl_kind_path "${probe%%/*}" "$KCTL_NS") || { echo "000"; return 0; }
   kctl_http GET "$p/${probe#*/}" /dev/null
 }
@@ -117,54 +119,36 @@ read_pods() { # $1=label selector $2=期望镜像（空=不校验镜像）
   echo "${total:-0} ${ready:-0} ${imgok:-0}"
 }
 
-# 确保工作负载副本数与清单一致——apply 对已存在资源 unchanged 跳过，
-# 集群中被人为缩容的副本无法靠 apply 恢复，需 PATCH scale
-ensure_replicas() { # $@=组件 yaml 清单
-  local yaml res resp code want cur p
+# 确保工作负载副本数与镜像和渲染清单一致
+ensure_workload() {
+  local yaml res resp code want cur img new cname p
   local tmp; tmp=$(kctl_tmpdir)
   local -a reslist=()
   for yaml in "$@"; do
     mapfile -t reslist < <(list_workload_resources "$yaml")
     for res in "${reslist[@]}"; do
-      kctl_resource_fields "$res"   # 重解析当前资源字段
+      kctl_resource_fields "$res"
+      p=$(kctl_kind_path "$KCTL_KIND" "$KCTL_NS") || continue
+      resp="$tmp/resp"
+      [ "$(kctl_http GET "$p/$KCTL_NAME" "$resp")" = 200 ] || continue
+      # 期望值/现值一次读齐（resp 文件由 GET 与 PATCH 复用）
       want=$(yq '.spec.replicas' "$res")
-      [ "$want" = "null" ] && continue
-      p=$(kctl_kind_path "$KCTL_KIND" "$KCTL_NS") || continue
-      resp="$tmp/resp"
-      [ "$(kctl_http GET "$p/$KCTL_NAME" "$resp")" = 200 ] || continue
       cur=$(yq '.spec.replicas' "$resp")
-      [ "$cur" = "$want" ] && continue
-      info "${KCTL_KIND,,}/$KCTL_NAME 副本 $cur → $want（PATCH 恢复）"
-      code=$(kctl_patch "$p/$KCTL_NAME" "{\"spec\":{\"replicas\":$want}}" "$resp")
-      [ "$code" = 200 ] || error "PATCH scale 失败 → HTTP $code"
-    done
-  done
-}
-
-# 确保工作负载镜像与渲染清单一致——apply 对已存在资源 unchanged 跳过，
-# 升级/回滚后的镜像变更需 strategic-merge PATCH 对齐（按容器 name 合并），触发滚动更新
-ensure_image() { # $@=组件 yaml 清单
-  local yaml res resp code img new cname p
-  local tmp; tmp=$(kctl_tmpdir)
-  local -a reslist=()
-  for yaml in "$@"; do
-    mapfile -t reslist < <(list_workload_resources "$yaml")
-    for res in "${reslist[@]}"; do
-      kctl_resource_fields "$res"   # 重解析当前资源字段
-      p=$(kctl_kind_path "$KCTL_KIND" "$KCTL_NS") || continue
-      resp="$tmp/resp"
-      [ "$(kctl_http GET "$p/$KCTL_NAME" "$resp")" = 200 ] || continue
       img=$(yq -r '.spec.template.spec.containers[0].image' "$resp")
-      if [ "$img" = "null" ] || [ -z "$img" ]; then continue; fi
       new=$(yq -r '.spec.template.spec.containers[0].image' "$res")
-      if [ "$new" = "null" ] || [ -z "$new" ]; then continue; fi
-      [ "$new" = "$img" ] && continue
       cname=$(yq -r '.spec.template.spec.containers[0].name' "$resp")
-      info "${KCTL_KIND,,}/$KCTL_NAME 镜像 → $new（PATCH 触发滚动更新）"
-      code=$(kctl_patch_strategic "$p/$KCTL_NAME" \
-        "{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"$cname\",\"image\":\"$new\"}]}}}}" \
-        "$resp")
-      [ "$code" = 200 ] || error "PATCH image 失败 → HTTP $code"
+      if [ "$want" != "null" ] && [ "$cur" != "$want" ]; then
+        info "${KCTL_KIND,,}/$KCTL_NAME 副本 $cur → $want（PATCH 恢复）"
+        code=$(kctl_patch "$p/$KCTL_NAME" "{\"spec\":{\"replicas\":$want}}" "$resp")
+        [ "$code" = 200 ] || error "PATCH scale 失败 → HTTP $code"
+      fi
+      if [ "$img" != "null" ] && [ -n "$img" ] && [ "$new" != "null" ] && [ -n "$new" ] && [ "$new" != "$img" ]; then
+        info "${KCTL_KIND,,}/$KCTL_NAME 镜像 → $new（PATCH 触发滚动更新）"
+        code=$(kctl_patch_strategic "$p/$KCTL_NAME" \
+          "{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"$cname\",\"image\":\"$new\"}]}}}}" \
+          "$resp")
+        [ "$code" = 200 ] || error "PATCH image 失败 → HTTP $code"
+      fi
     done
   done
 }
@@ -209,14 +193,15 @@ deploy_component() { # $1=组件 $2=序号 $3=总数
   done
   info "[$idx/$n] $comp（yaml: $file_list）"
   kctl_run apply "${paths[@]}"
-  ensure_replicas "${paths[@]}"
-  ensure_image "${paths[@]}"
+  ensure_workload "${paths[@]}"
   wait_ready "$comp"
 }
 
 # 组件是否仍被集群中存活的组件依赖——本次卸载目标中的不算（会一并删除）。
 # 典型场景：secret / redis 被 gateway（产品组）与 manager-server（管理组）共享，
 # 任一依赖方还在集群就不能删
+# 探测语义（fail-safe）：仅 404 视为确认不存在；200 与其余状态码（含探测失败 000、
+# 401/403 等无法排除存活的情况）一律保守视为存活
 has_alive_dependents() { # $1=组件 → 0=有依赖方存活
   local comp="$1" other
   local -a dependents=()
@@ -226,7 +211,10 @@ has_alive_dependents() { # $1=组件 → 0=有依赖方存活
   done
   [ ${#dependents[@]} -eq 0 ] && return 1
   for other in "${dependents[@]}"; do
-    [ "$(component_probe_code "$other")" = 200 ] && return 0
+    case "$(component_probe_code "$other")" in
+      404) continue;;
+      *)   return 0;;
+    esac
   done
   return 1
 }
@@ -265,6 +253,50 @@ delete_component() { # $1=组件 $2=序号 $3=总数
   fi
   kctl_run delete "${paths[@]}"
   wait_deleted "$comp"
+}
+
+# down 末尾回收孤儿共享依赖（secret/redis）：已无存活依赖方时自动卸载；
+# mariadb/minio 等基础服务带数据卷，不自动回收，仍需显式 down
+# 判定口径与 has_alive_dependents 一致（fail-safe）：仅 404 算确认不存在，
+# 探测失败/权限等未知状态按存活处理并跳过回收
+gc_orphan_shared_deps() {
+  local -a orphans=()
+  local dep other orphan
+  for dep in secret redis; do
+    component_autoprovision "$dep" || continue
+    component_probe "$dep" >/dev/null 2>&1 || continue
+    case "$(component_probe_code "$dep")" in
+      200)  ;;
+      404)  continue;;   # 集群中不存在，无需回收
+      *)    warning "$dep 探测失败（无法确认存活状态），跳过回收"; continue;;
+    esac
+    orphan=1
+    for other in "${ALL_COMPONENTS[@]}"; do
+      [ "$other" = "$dep" ] && continue
+      in_array "$dep" $(component_deps "$other") || continue
+      case "$(component_probe_code "$other")" in
+        404) continue;;   # 该依赖方确认不存在，检查下一个
+        200) info "$dep 仍被存活组件 $other 依赖，保留"; orphan=0; break;;
+        *)   warning "$dep 的依赖方 $other 探测失败（无法确认存活状态），跳过回收"; orphan=0; break;;
+      esac
+    done
+    [ "$orphan" = 1 ] && orphans+=("$dep")
+  done
+  [ ${#orphans[@]} -eq 0 ] && return 0
+  info "回收孤儿共享依赖: ${orphans[*]}"
+  # 孤儿不在本次 TARGETS 内，主流程未渲染其清单；重渲染保证文件存在且与当前 namespace 一致
+  # （陈旧 conf 可能残留其他 namespace 的同名资源，直接按文件删除会误删）
+  local i=1 f
+  KCTL_IGNORE_NOT_FOUND=1
+  for dep in "${orphans[@]}"; do
+    for f in $(render_component_files "$dep"); do
+      [ -f "$CONF_DIR/$f" ] || warning "$dep 缺清单 $CONF_DIR/$f，跳过该文件"
+    done
+    delete_component "$dep" "$i" "${#orphans[@]}"
+    i=$((i + 1))
+  done
+  unset KCTL_IGNORE_NOT_FOUND
+  return 0
 }
 
 run_phase() { # $1=apply|delete $2=标题 其余=组件（已按依赖序排好）
