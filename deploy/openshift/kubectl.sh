@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
+[ -n "${_DEPLOY_KUBECTL_SH:-}" ] && return 0
+_DEPLOY_KUBECTL_SH=1
+
 # kubectl.sh —— 轻量 kubectl -f 等价工具（curl 直连 Kubernetes REST API）
-# 仅收发小请求/小响应，动词与语义对齐原生 kubectl；适用于 apply 大响应易失败的集群链路。
+# 动词与语义对齐原生 kubectl，仅收发小请求/小响应
 #
 # 命令行用法（直接执行）：
 #   ./kubectl.sh -f xxx.yaml                 # 默认动词 apply；多文档一次提交；已存在自动跳过
@@ -13,9 +16,9 @@
 #   ./kubectl.sh --server URL --token TOK    # 覆盖 API server / 凭证
 #
 # 函数库用法（source 后调用）：
-#   check_dependency                           # 校验 curl/yq/oc（入口脚本各调用一次）
-#   kctl_auth                                  # 解析 SERVER/NS/TOKEN → KCTL_*（幂等）
-#   kctl_kind_path Service rapheale-dev        # → stdout: REST 集合路径；未知 kind 返回 1
+#   check_dependency                           # 校验运行依赖（按 CLUSTER_TYPE: curl/yq/oc 或 yq/kubectl）
+#   kctl_check_vars                            # 校验集群配置并解析 server/NS/TOKEN → KCTL_*（幂等；k8s 免地址、置 kubeconfig 哨兵）
+#   kctl_kind_path Service my-ns               # → stdout: REST 集合路径；未知 kind 返回 1
 #   kctl_http GET "$path/名称" resp文件        # → stdout: http_code（网络瞬断自动重试）
 #   kctl_patch "$path/名称" '{"spec":{...}}' resp文件   # merge-patch → stdout: http_code
 #   kctl_patch_strategic "$path/名称" '{...}' resp文件  # strategic merge patch → stdout: http_code
@@ -25,38 +28,56 @@
 #   kctl_replace_resource res.yaml             # 单资源：同 kubectl replace -f（PUT）
 #   kctl_delete_resource res.yaml              # 单资源：同 kubectl delete -f
 #   kctl_run VERB file.yaml ...                # 高层入口：文件→拆分→逐资源执行
-# 可预设配置（source 前设置，未设时回落到环境变量 SERVER/TOKEN/NS 再到内置默认）：
-#   KCTL_SERVER / KCTL_TOKEN / KCTL_NS
-# 运行期输出变量：
-#   KCTL_KIND KCTL_NAME KCTL_RES_NS KCTL_PATH KCTL_LK（单资源解析结果）
-#   KCTL_RESOURCES（拆分结果） KCTL_TMP（临时目录 <脚本目录>/kapply-<PID>，进程退出时由 trap 统一清理）
-# 依赖：curl yq oc；临时目录位于脚本所在目录 kapply-<PID>，进程退出时由 trap 统一清理
+# CLUSTER_API_SERVER / NAMESPACE 覆盖顺序：--server/-n > .env.custom
+# token 覆盖顺序：--token > 环境变量 TOKEN > oc 登录态
+# CLUSTER_TYPE=k8s：kubectl + kubeconfig 认证，--server/--token 与 oc 逻辑不生效
 
 # 本脚本所在目录
 _KCTL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 source "$_KCTL_DIR/common.sh"
+source "$_KCTL_DIR/envfile_handler.sh"
+# DEPLOY_VARS 默认值唯一定义处；.env.custom 由各入口 main 读取后覆盖
+source "$_KCTL_DIR/global_vars.sh"
+# 集群级变量公共校验函数库（供 kctl_check_vars 复用）
+source "$_KCTL_DIR/var_handler.sh"
+# k8s 形态专属函数（_kctl_k8s_* 通道实现、渲染后处理）；独立执行本脚本时也需要
+source "$_KCTL_DIR/k8s_handler.sh"
 
-# 临时目录生命周期：随进程退出清理（按 PID 隔离，不误删并发进程的目录；
-# SIGINT/SIGTERM 转发为正常退出以触发本 trap）
+# 临时目录随进程退出清理（kapply-<PID> 按进程隔离）；SIGINT/SIGTERM 转发为正常退出以触发本 trap
 trap 'rm -rf "$_KCTL_DIR/kapply-$$"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
 # ---------- 基础设施 ----------
 
-# 校验运行依赖（入口脚本各调用一次；kctl_* 函数运行期不再重复检查）
+# 校验运行依赖（按 CLUSTER_TYPE 选用：openshift 走 curl + oc 登录态，k8s 走 kubectl + kubeconfig）
 check_dependency() {
-  local cmd
-  for cmd in curl yq oc; do
-    command -v "$cmd" >/dev/null 2>&1 || error "缺少依赖: $cmd"
-  done
+  if is_k8s_cluster; then
+    require_cmds "${DEPS_K8S[@]}"
+  else
+    require_cmds "${DEPS_OPENSHIFT[@]}"
+  fi
 }
 
-# 解析 API server / namespace / token 配置（幂等，可重复调用；取不到 token 报错退出）
-kctl_auth() {
-  : "${KCTL_SERVER:=${SERVER:-https://api.rm1.0a51.p1.openshiftapps.com:6443}}"
-  : "${KCTL_NS:=${NS:-rapheale-dev}}"
+# 校验集群级配置并解析 KCTL_*（幂等；调用后 kctl_http 等不再自带认证兜底）
+# server/ns 优先取 KCTL_* 预设（--server/-n），否则取 DEPLOY_VARS；取不到 token 报错退出
+# CLUSTER_TYPE=k8s 走 kubeconfig 认证，KCTL_TOKEN 置哨兵值供调用方判空
+kctl_check_vars() {
+  check_cluster_type_var
+  # CLI 覆盖（--server/-n）已写入 KCTL_*：回填 DEPLOY_VARS 后走统一校验，
+  # .env.custom 缺失/缺项不再阻塞 --server/-n 的独立使用
+  [ -n "${KCTL_SERVER:-}" ] && DEPLOY_VARS["CLUSTER_API_SERVER"]="${KCTL_SERVER}"
+  [ -n "${KCTL_NS:-}" ] && DEPLOY_VARS["NAMESPACE"]="${KCTL_NS}"
+  check_api_server_var
+  check_namespace_var
+
+  if is_k8s_cluster; then
+    : "${KCTL_TOKEN:=kubeconfig}"
+    return 0
+  fi
+  : "${KCTL_SERVER:=${DEPLOY_VARS["CLUSTER_API_SERVER"]:-}}"
+  : "${KCTL_NS:=${DEPLOY_VARS["NAMESPACE"]:-}}"
   if [ -z "${KCTL_TOKEN:-}" ]; then
     KCTL_TOKEN="${TOKEN:-$(oc whoami -t 2>/dev/null)}"
     [ -n "$KCTL_TOKEN" ] || error "取不到 token：控制台右上角 Copy login command → oc login，或 TOKEN=xxx 传入"
@@ -64,10 +85,10 @@ kctl_auth() {
   return 0
 }
 
-# 惰性创建临时目录（拆分产物/响应文件落这里）。
-# 固定为 <脚本目录>/kapply-<PID>：$$ 在子 shell 中等于父进程 PID，命令替换内多次调用
-# 返回同一目录；按进程隔离避免并发冲突。须位于 $HOME 内且非隐藏（snap 版 yq 沙箱限制），
-# 进程退出时由 EXIT trap 清理
+# k8s 形态通道实现见 k8s_handler.sh；本文件保留原语入口与形态分流
+
+# 惰性创建临时目录：kapply-<PID> 按进程隔离，命令替换内多次调用返回同一目录；
+# 路径须位于 $HOME 内且非隐藏（snap 版 yq 沙箱要求），退出时由 EXIT trap 清理
 kctl_tmpdir() {
   KCTL_TMP="$_KCTL_DIR/kapply-$$"
   mkdir -p "$KCTL_TMP"
@@ -75,8 +96,9 @@ kctl_tmpdir() {
 }
 
 # curl 封装：stdout 输出 http_code；网络瞬断/DNS 抖动自动重试 3 次
+# CLUSTER_TYPE=k8s 时改走 kubectl 通道（_kctl_k8s_http，见 k8s_handler.sh）
 kctl_http() { # $1=method $2=path $3=resp文件 $4=body文件(可选)
-  [ -n "${KCTL_TOKEN:-}" ] || kctl_auth
+  is_k8s_cluster && { _kctl_k8s_http "$1" "$2" "$3"; return 0; }
   local method="$1" url="$KCTL_SERVER$2" out="$3" body="${4:-}" code n
   for n in 1 2 3; do
     if [ -n "$body" ]; then
@@ -93,8 +115,9 @@ kctl_http() { # $1=method $2=path $3=resp文件 $4=body文件(可选)
 }
 
 # merge-patch / strategic merge patch 通用实现；stdout 输出 http_code
+# CLUSTER_TYPE=k8s 时改走 kubectl 通道（_kctl_k8s_patch）
 _kctl_patch() { # $1=Content-Type $2=资源路径 $3=JSON体 $4=resp文件
-  [ -n "${KCTL_TOKEN:-}" ] || kctl_auth
+  is_k8s_cluster && { _kctl_k8s_patch "$@"; return 0; }
   curl -s -m 60 -H "Authorization: Bearer $KCTL_TOKEN" -H "Content-Type: $1" \
        -o "$4" -w "%{http_code}" -X PATCH --data-binary "$3" "$KCTL_SERVER$2"
 }
@@ -152,9 +175,9 @@ kctl_split_resources() { # $1=yaml文件 $2=输出目录
 
 # 解析单资源 → KCTL_KIND/KCTL_NAME/KCTL_RES_NS（namespace 未写时为空串）
 kctl_resource_fields() { # $1=资源文件
-  KCTL_KIND=$(yq '.kind' "$1")
-  KCTL_NAME=$(yq '.metadata.name' "$1")
-  KCTL_RES_NS=$(yq '.metadata.namespace' "$1")
+  local -a fields=()
+  mapfile -t fields < <(yq '.kind, .metadata.name, .metadata.namespace' "$1")
+  KCTL_KIND="${fields[0]:-}"; KCTL_NAME="${fields[1]:-}"; KCTL_RES_NS="${fields[2]:-}"
   [ "$KCTL_KIND" = "null" ] && KCTL_KIND=""
   [ "$KCTL_NAME" = "null" ] && KCTL_NAME=""
   [ "$KCTL_RES_NS" = "null" ] && KCTL_RES_NS=""
@@ -163,7 +186,6 @@ kctl_resource_fields() { # $1=资源文件
 
 # 解析资源并定位 REST 路径 → KCTL_PATH/KCTL_LK
 kctl_resolve_resource() { # $1=资源文件
-  [ -n "${KCTL_TOKEN:-}" ] || kctl_auth
   kctl_resource_fields "$1"
   [ -n "$KCTL_KIND" ] && [ -n "$KCTL_NAME" ] || error "资源缺 kind/name: $(basename "$1")"
   local ns="$KCTL_RES_NS"
@@ -173,18 +195,21 @@ kctl_resolve_resource() { # $1=资源文件
   KCTL_LK="${KCTL_KIND,,}"
 }
 
-# 非 2xx 响应统一报错退出；401 给出 token 续期指引
+# 非 2xx 响应统一报错退出；401 按形态给出续期指引
 kctl_show_err() { # $1=code $2=resp文件
   if [ "$1" = "401" ]; then
-    error "401 token 过期：控制台 → Copy login command → oc login 后重跑"
+    if is_k8s_cluster; then
+      error "401 认证失败：检查 kubeconfig 凭证有效性（kubectl auth whoami）"
+    else
+      error "401 token 过期：控制台 → Copy login command → oc login 后重跑"
+    fi
   fi
   error "HTTP $1: $(head -c 300 "$2" 2>/dev/null)"
 }
 
 # ---------- 单资源操作（返回 0=成功/跳过，失败走 error 退出） ----------
 
-# POST 创建（apply/create 共用）：先 ?dryRun=All 准入预检（提前暴露配额/准入错误），通过后真建。
-# 调用方须先 GET 探测确认资源不存在。
+# POST 创建（apply/create 共用）：?dryRun=All 预检通过后真建；调用方须先 GET 确认资源不存在
 # $3=撞 409 时的动作：skip（apply 语义）| fail（create 语义）
 _kctl_post_resource() { # $1=资源文件 $2=resp文件 $3=skip|fail
   local res="$1" resp="$2" code
@@ -202,9 +227,11 @@ _kctl_post_resource() { # $1=资源文件 $2=resp文件 $3=skip|fail
   esac
 }
 
-# 同 kubectl apply -f：不存在则建，已存在 unchanged 跳过（不做增量合并，改配置用 replace）
+# 同 kubectl apply -f：openshift 形态不存在则建、已存在 unchanged 跳过（改配置用 replace）；
+# k8s 形态走 kubectl apply（服务端增量合并）
 kctl_apply_resource() { # $1=资源文件
   kctl_resolve_resource "$1"
+  is_k8s_cluster && { _kctl_k8s_apply_resource "$1"; return 0; }
   local resp; resp="$(kctl_tmpdir)/resp"
   local code; code=$(kctl_http GET "$KCTL_PATH/$KCTL_NAME" "$resp")
   case "$code" in
@@ -218,6 +245,7 @@ kctl_apply_resource() { # $1=资源文件
 # 同 kubectl create -f：已存在报 AlreadyExists（与 kubectl 一致，退出码 1）
 kctl_create_resource() { # $1=资源文件
   kctl_resolve_resource "$1"
+  is_k8s_cluster && { _kctl_k8s_create_resource "$1"; return 0; }
   local resp; resp="$(kctl_tmpdir)/resp"
   local code; code=$(kctl_http GET "$KCTL_PATH/$KCTL_NAME" "$resp")
   case "$code" in
@@ -231,6 +259,7 @@ kctl_create_resource() { # $1=资源文件
 # 整对象替换（PUT）；不做创建（404 报错，与 kubectl replace 一致）
 kctl_replace_resource() { # $1=资源文件
   kctl_resolve_resource "$1"
+  is_k8s_cluster && { _kctl_k8s_replace_resource "$1"; return 0; }
   local resp; resp="$(kctl_tmpdir)/resp"
   local code; code=$(kctl_http PUT "$KCTL_PATH/$KCTL_NAME" "$resp" "$1")
   case "$code" in
@@ -243,6 +272,7 @@ kctl_replace_resource() { # $1=资源文件
 # 同 kubectl delete -f：404 默认报 NotFound（与 kubectl 一致）；KCTL_IGNORE_NOT_FOUND=1 时忽略
 kctl_delete_resource() { # $1=资源文件
   kctl_resolve_resource "$1"
+  is_k8s_cluster && { _kctl_k8s_delete_resource "$1"; return 0; }
   local resp; resp="$(kctl_tmpdir)/resp"
   local code; code=$(kctl_http DELETE "$KCTL_PATH/$KCTL_NAME" "$resp")
   case "$code" in
@@ -266,7 +296,6 @@ kctl_run() {
     apply|create|replace|delete) ;;
     *) error "未知动词: $verb（apply/create/replace/delete）";;
   esac
-  [ -n "${KCTL_TOKEN:-}" ] || kctl_auth
   local file res
   kctl_tmpdir >/dev/null
   for file in "$@"; do
@@ -287,7 +316,7 @@ kctl_run() {
   done
 }
 
-# ---------- 命令行入口（kctl_ 前缀避免与 source 方 usage/main 冲突） ----------
+# ---------- 命令行入口 ----------
 
 kctl_usage() {
   cat <<'EOF'
@@ -297,8 +326,9 @@ kctl_usage() {
   -n/--namespace NS     yaml 未显式写 namespace 时的兜底
   --ignore-not-found    delete 404 时不报错（同 kubectl）
   --server URL / --token TOK    覆盖 API server / Bearer token（默认取 oc whoami -t）
-环境变量: SERVER / TOKEN / NS 同样可覆盖默认（优先级：flag > 环境变量 > 内置默认）
-函数库:   source kubectl.sh 后可调用 check_dependency / kctl_auth / kctl_http / kctl_kind_path / kctl_run / ...
+集群配置: 默认取同目录 .env.custom 的 CLUSTER_API_SERVER / NAMESPACE，可用 --server / -n 覆盖
+环境变量: TOKEN 覆盖默认 token（默认取 oc whoami -t）
+函数库:   source kubectl.sh 后可调用 check_dependency / kctl_check_vars / kctl_http / kctl_kind_path / kctl_run / ...
 EOF
 }
 
@@ -332,8 +362,10 @@ kctl_main() {
 
   [ -n "$ns_arg" ] && KCTL_NS="$ns_arg"
 
+  # .env.custom 可选（独立使用时 --server/-n/--token 已足够）；deploy.sh 路径由其 main 读取
+  [ -f "$CUSTOM_ENV_FILE" ] && read_env_from_file "$CUSTOM_ENV_FILE" DEPLOY_VARS
   check_dependency
-  kctl_auth
+  kctl_check_vars
 
   # 展开通配符（含 bash 默认不展开的 **.yaml 字面量）
   local all=() f

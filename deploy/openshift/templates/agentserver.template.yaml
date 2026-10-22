@@ -65,10 +65,10 @@ spec:
             - configMapRef:
                 name: jiuwenclaw-agentserver-env
           volumeMounts:
-            - name: data
+            - name: agentserver-data
               mountPath: /home/app/.jiuwenswarm
       volumes:
-        - name: data
+        - name: agentserver-data
           persistentVolumeClaim:
             claimName: jiuwenclaw-pvc
 ---

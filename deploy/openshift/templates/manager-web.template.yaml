@@ -1,8 +1,7 @@
 # jiuwenclaw-manager-web 部署清单（镜像 <<MANAGER_WEB_IMAGE>>，nginx 形态）
 # 说明：
-#   - 镜像基于 nginxinc/nginx-unprivileged，适配 restricted-v2 SCC
-#     （关键目录属主 101:0+g+w，pid/temp 位于 /tmp，随机 uid 直接可写，无需 emptyDir 顶替）
-#   - MANAGER_WEB_RESOLVER 使用 OCP CoreDNS：dns-default.openshift-dns.svc.cluster.local
+#   - 镜像基于 nginxinc/nginx-unprivileged，适配 restricted-v2 SCC（随机 uid，pid/temp 写 /tmp）
+#   - MANAGER_WEB_RESOLVER 留空=按集群形态自动解析（openshift 用 OCP CoreDNS 服务名，k8s 取 ClusterIP）
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -39,14 +38,13 @@ spec:
               value: "http://jiuwenclaw-identity:8770"
             # nginx 变量 proxy_pass 需要 resolver
             - name: MANAGER_WEB_RESOLVER
-              value: "dns-default.openshift-dns.svc.cluster.local"
+              value: "<<MANAGER_WEB_RESOLVER>>"
             - name: WORKSPACE_QUOTA_ENABLED
               value: "false"
             - name: TZ
               value: "Asia/Shanghai"
 ---
-# Service：提供稳定 DNS 域名（原 NodePort Service 已删，OpenShift 集群上不可达；
-# 外部访问走 port-forward，见 README §4）
+# Service：集群内 DNS
 apiVersion: v1
 kind: Service
 metadata:

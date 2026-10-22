@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
+[ -n "${_DEPLOY_ENVFILE_HANDLER_SH:-}" ] && return 0
+_DEPLOY_ENVFILE_HANDLER_SH=1
+
 # envfile_handler.sh —— .env.custom 读取
 
-# == read key-value pairs from file into array ==
+# 从 env 文件逐行读键值对写入目标关联数组（值可带双引号，支持跨行）
 read_env_from_file() { # $1=env文件 $2=目标关联数组名
   local env_file="$1"
   local -n target_array="$2"

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# global_vars.sh —— 全局变量与默认配置
-# DEPLOY_VARS 仅提供通用默认值；镜像名等环境相关值一律在 .env.custom 维护（缺失时
-# check_vars 报错提示，见 envfile_handler.sh 的 read_env_from_file）
+[ -n "${_DEPLOY_GLOBAL_VARS_SH:-}" ] && return 0
+_DEPLOY_GLOBAL_VARS_SH=1
 
+# global_vars.sh —— 全局变量与默认配置
 # SCRIPT_DIR 由入口 deploy.sh 定义；独立 source 时自行推导
 SCRIPT_DIR="${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 CONF_DIR="$SCRIPT_DIR/conf"
@@ -20,53 +20,61 @@ UP_TARGETS=(secret redis agentserver gateway web)         # up 默认目标（�
 MANAGER_TARGETS=(identity manager-server manager-web)     # manager 组
 
 # 镜像名变量清单，与 templates/ 下 <<XXX_IMAGE>> 占位符一一对应
-IMAGE_VARS=(AGENTSERVER_IMAGE GATEWAY_IMAGE WEB_IMAGE IDENTITY_IMAGE MANAGER_SERVER_IMAGE MANAGER_WEB_IMAGE)
+IMAGE_VARS=(AGENTSERVER_IMAGE GATEWAY_IMAGE WEB_IMAGE IDENTITY_IMAGE MANAGER_SERVER_IMAGE MANAGER_WEB_IMAGE MARIADB_IMAGE MYSQL_IMAGE POSTGRESQL_IMAGE REDIS_IMAGE MINIO_IMAGE)
 
 # 副本数变量清单，与 templates/ 下 <<XXX_REPLICAS>> 占位符一一对应
 REPLICAS_VARS=(AGENT_SERVER_REPLICAS GATEWAY_REPLICAS WEB_REPLICAS IDENTITY_REPLICAS MANAGER_SERVER_REPLICAS MANAGER_WEB_REPLICAS)
 
-# ---------- 部署变量默认值 ----------
+# 允许留空的变量（留空走集群默认）：StorageClass 未配置时使用集群默认动态供给
+OPTIONAL_VARS=(DATA_STORAGE_CLASS WORKSPACE_STORAGE_CLASS)
 
+# 运行依赖清单（check_dependency 按 CLUSTER_TYPE 选用；kubectl --raw 需 ≥1.20）
+DEPS_OPENSHIFT=(curl yq oc)
+DEPS_K8S=(yq kubectl)
+
+# ---------- 部署变量默认值 ----------
+# DEPLOY_VARS 提供通用默认值；可被 .env.custom 覆盖
 declare -A DEPLOY_VARS=(
+    # ----- 通用（双形态） -----
     ["NAMESPACE"]="rapheale-dev"
     ["RENDER_ONLY"]="false"
-    # 组件副本数（默认均为 1；.env.custom 可覆盖，改后重跑 up 生效。
-    # AGENT_SERVER_REPLICAS / IDENTITY_REPLICAS 目前建议保持 1）
+    ["CLUSTER_TYPE"]="openshift"
+    ["CLUSTER_API_SERVER"]=""            # openshift 形态必填（http(s) URL）；k8s 形态走 kubeconfig，留空
     ["AGENT_SERVER_REPLICAS"]="1"
     ["GATEWAY_REPLICAS"]="1"
     ["WEB_REPLICAS"]="1"
     ["IDENTITY_REPLICAS"]="1"
     ["MANAGER_SERVER_REPLICAS"]="1"
     ["MANAGER_WEB_REPLICAS"]="1"
+    ["DATA_STORAGE_CLASS"]=""
+    ["WORKSPACE_STORAGE_CLASS"]=""
+    ["MARIADB_IMAGE"]="mariadb:11.8"
+    ["MYSQL_IMAGE"]="mysql:8.0"
+    ["POSTGRESQL_IMAGE"]="postgres:16"
+    ["REDIS_IMAGE"]="redis:7-alpine"
+    ["MINIO_IMAGE"]="quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z"
+
+    # ----- 仅 k8s 形态（CLUSTER_TYPE=k8s，openshift 下不生效） -----
+    # NFS 直连挂载：PVC 卷改写为 NFS 直连挂载
+    ["NFS_SERVER_ADDR"]=""               # NFS 服务器地址（必填）
+    ["NFS_SHARE_PATH"]="/"               # 共享根路径（须绝对路径），数据落 <该路径>/<NAMESPACE>/<组件>
+    # manager-web NodePort Service：外部经 http://<节点IP>:<nodePort> 访问
+    ["MANAGER_WEB_NODE_PORT"]=""         # 留空=从下方范围自动分配；.env.custom 可固定端口
+    ["NODE_PORT_RANGE_START"]="30000"    # 自动分配范围下界
+    ["NODE_PORT_RANGE_END"]="32767"      # 自动分配范围上界
+    ["NO_CHECK_PORTS"]="false"           # true=跳过端口占用检查（此时 MANAGER_WEB_NODE_PORT 必须显式配置）
+    # dev 模式：hostPath 挂载宿主机代码调试（MODE=dev 仅 k8s 形态支持；Pod 固定到代码所在节点）
+    ["MODE"]="product"                   # product | dev
+    ["CLAW_CODE_PATH"]=""                # jiuwenclaw 仓库路径（挂载到 agentserver/gateway/web）
+    ["RUNTIME_CODE_PATH"]=""             # agent-runtime 仓库路径（挂载到 identity/manager-server/manager-web）
+    ["CORE_CODE_PATH"]=""                # agent-core 仓库路径（openjiuwen 包挂载到 agentserver/gateway）
+    ["IS_MOUNT_WEB_CODE"]="false"        # dev 模式下 web 是否挂载代码
+    ["IS_MOUNT_MANAGER_WEB_CODE"]="false" # dev 模式下 manager-web 是否挂载代码
+    ["CURRENT_NODE_NAME"]=""             # 代码所在节点；留空=按本机 hostname/IP 自动识别
+    # Pod 侧代码路径（按镜像内布局，一般无需修改）
+    ["CLAW_POD_CODE_PATH"]="/app/jiuwenswarm"
+    ["RUNTIME_POD_CODE_PATH"]="/app/agent-runtime"
+    ["RUNTIME_POD_PKG_PATH"]="/usr/local/lib/python3.11/site-packages/openjiuwen_runtime"
+    ["CORE_POD_PKG_PATH"]="/usr/local/lib/python3.11/site-packages/openjiuwen"
 )
 
-# ---------- 通用工具 ----------
-
-in_array() {
-  local v; for v in "${@:2}"; do [ "$v" = "$1" ] && return 0; done; return 1
-}
-
-# ---------- 变量校验 ----------
-
-# 变量值会内嵌进渲染（awk gsub）与 yq 表达式/REST 路径，统一做格式校验防止注入与拼坏 yaml
-check_vars() {
-  local v val
-  # 镜像名（仅由 .env.custom 提供，无内置默认）：校验非空；格式覆盖
-  # registry:port/repo:tag 与 @sha256 摘要形态
-  for v in "${IMAGE_VARS[@]}"; do
-    val="${DEPLOY_VARS[$v]:-}"
-    [ -n "$val" ] || error "$v 未设置（检查 $CUSTOM_ENV_FILE）"
-    [[ "$val" =~ ^[A-Za-z0-9._:@/-]+$ ]] \
-      || error "$v 含非法字符（仅允许字母数字._:@/-）: $val"
-  done
-  # namespace：k8s DNS label 规范
-  val="${DEPLOY_VARS["NAMESPACE"]:-}"
-  [ -n "$val" ] || error "NAMESPACE 未设置（检查 $CUSTOM_ENV_FILE）"
-  [[ "$val" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]] \
-    || error "NAMESPACE 非法（须为 DNS label：小写字母数字与 -）: $val"
-  # 副本数：正整数
-  for v in "${REPLICAS_VARS[@]}"; do
-    val="${DEPLOY_VARS[$v]:-}"
-    [[ "$val" =~ ^[1-9][0-9]*$ ]] || error "$v 非法（须为正整数）: $val"
-  done
-}

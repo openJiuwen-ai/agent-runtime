@@ -1,8 +1,8 @@
 # MySQL 部署清单（OpenShift）
 # 说明：
-#   - 存储走 gp3 StorageClass 动态供给；WaitForFirstConsumer——Pod 调度后才 Bound
+#   - 存储类经 DATA_STORAGE_CLASS 变量配置（.env.custom，留空走集群默认）动态供给（WaitForFirstConsumer）
 #   - 适配 restricted-v2 SCC：随机 uid 运行，fsGroup 由 SCC 自动注入
-#   - 镜像 mysql:8.0 为多架构镜像；节点拉取 docker.io 受限时请更换可用镜像源
+#   - 镜像经 MYSQL_IMAGE 变量配置（.env.custom）
 # 访问：oc port-forward sts/mysql 3306:3306
 apiVersion: v1
 kind: Service
@@ -28,7 +28,7 @@ spec:
   resources:
     requests:
       storage: 4Gi
-  storageClassName: gp3
+  storageClassName: <<DATA_STORAGE_CLASS>>
 ---
 apiVersion: apps/v1
 kind: StatefulSet
@@ -48,7 +48,7 @@ spec:
     spec:
       containers:
         - name: mysql
-          image: mysql:8.0
+          image: <<MYSQL_IMAGE>>
           imagePullPolicy: IfNotPresent
           args:
             - --innodb_use_native_aio=0

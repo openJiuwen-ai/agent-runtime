@@ -1,8 +1,5 @@
 # Redis 部署清单（OpenShift）
-# 说明：
-#   - 存储走 gp3 StorageClass 动态供给挂 /data（appendonly 持久化）
-#   - Deployment + Recreate 策略（RWO 卷限制单节点挂载）
-#   - 启用 --requirepass（密码 Root@123456）；适配 restricted-v2 SCC（fsGroup 由 SCC 自动注入）
+# 纯缓存用途，不挂持久卷；--requirepass 密码 Root@123456；适配 restricted-v2 SCC
 # 访问：oc port-forward svc/redis 6379:6379，redis-cli -a Root@123456
 apiVersion: v1
 kind: Service
@@ -17,19 +14,6 @@ spec:
   selector:
     app: redis
 ---
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: redis-pvc
-  namespace: <<NAMESPACE>>
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 2Gi
-  storageClassName: gp3
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -37,8 +21,6 @@ metadata:
   namespace: <<NAMESPACE>>
 spec:
   replicas: 1
-  strategy:
-    type: Recreate
   selector:
     matchLabels:
       app: redis
@@ -49,20 +31,15 @@ spec:
     spec:
       containers:
         - name: redis
-          image: redis:7-alpine
+          image: <<REDIS_IMAGE>>
           imagePullPolicy: IfNotPresent
           args:
             - redis-server
-            - --appendonly
-            - "yes"
             - --requirepass
             - "Root@123456"
           ports:
             - containerPort: 6379
               name: redis
-          volumeMounts:
-            - name: redis-data
-              mountPath: /data
           livenessProbe:
             tcpSocket:
               port: 6379
@@ -75,7 +52,3 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 5
             timeoutSeconds: 3
-      volumes:
-        - name: redis-data
-          persistentVolumeClaim:
-            claimName: redis-pvc
