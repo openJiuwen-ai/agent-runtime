@@ -2,6 +2,9 @@
 [ -n "${_DEPLOY_K8S_HANDLER_SH:-}" ] && return 0
 _DEPLOY_K8S_HANDLER_SH=1
 
+# 本次运行内已分配的 NodePort（ensure_node_port 进程内去重，防止同批组件撞端口）
+_ENSURED_NODE_PORTS=""
+
 # k8s_handler.sh —— 原生 k8s 形态（CLUSTER_TYPE=k8s）专属函数；openshift 形态下均不生效。
 # 包含三部分：
 #   1. k8s 形态通道实现（_kctl_k8s_*）：kubectl.sh 共享原语的 k8s 分支，按形态分流调用
@@ -210,46 +213,51 @@ _port_taken() { # → 0=占用 1=空闲
 }
 
 # NodePort 申请：
-#   .env.custom 已配置 → 校验占用，被占即报错
-#   未配置             → 从 NODE_PORT_RANGE_START~END 自动挑选首个空闲端口写入 DEPLOY_VARS
-#   NO_CHECK_PORTS=true → 跳过检查，但变量必须已显式配置
-ensure_node_port() { # $1=DEPLOY_VARS 变量名（如 MANAGER_WEB_NODE_PORT）
+#   .env.custom 已配置 → 校验占用（含本次运行已分配），被占即报错
+#   未配置             → 优先复用本 namespace 同名 Service 已持有的端口（复跑稳定），
+#                        否则从 NODE_PORT_RANGE_START~END 自动挑选首个空闲端口写入 DEPLOY_VARS
+ensure_node_port() { # $1=DEPLOY_VARS 变量名（如 MANAGER_WEB_NODE_PORT）[$2=复用检查的 Service 名，默认 jiuwenclaw-manager-web-nodeport]
   local name="$1"
+  local reuse_svc="${2:-jiuwenclaw-manager-web-nodeport}"
   local configured="${DEPLOY_VARS[$name]:-}"
-  if [ "${DEPLOY_VARS["NO_CHECK_PORTS"]}" = "true" ]; then
-    [ -n "$configured" ] || error "NO_CHECK_PORTS=true 时需在 .env.custom 显式配置 ${name}"
-    return 0
-  fi
   # 占用集合一次性预取（避免逐端口查询 APIServer）；查询失败按空处理（视为无占用）。
-  # 仅排除「本 namespace 的」manager-web NodePort Service：其他 namespace 同名 Service
-  # 占用的 nodePort 是真实冲突（nodePort 集群级唯一），必须计入占用
+  # 复用检查仅排除「本 namespace 的」$reuse_svc：其他 namespace 同名 Service 占用的
+  # nodePort 是真实冲突（nodePort 集群级唯一），必须计入占用
   local local_listens cluster_ports svc_json current_port
   local ns="${DEPLOY_VARS["NAMESPACE"]}"
   local_listens=$(netstat -tuln 2>/dev/null || ss -tuln 2>/dev/null || true)
   svc_json=$(kubectl get svc --all-namespaces -o json 2>/dev/null || true)
   cluster_ports=$(printf '%s' "$svc_json" \
-    | yq '.items[] | select(.metadata.name != "jiuwenclaw-manager-web-nodeport" or .metadata.namespace != "'"${ns}"'") | .spec.ports[]? | .nodePort | select(. != null)' 2>/dev/null \
+    | yq '.items[] | select(.metadata.name != "'"$reuse_svc"'" or .metadata.namespace != "'"${ns}"'") | .spec.ports[]? | .nodePort | select(. != null)' 2>/dev/null \
     | sort -u || true)
   # 本 namespace 自家 Service 已持有的 nodePort：留空自动分配时优先复用（复跑端口稳定）
   current_port=$(printf '%s' "$svc_json" \
-    | yq '.items[] | select(.metadata.name == "jiuwenclaw-manager-web-nodeport" and .metadata.namespace == "'"${ns}"'") | .spec.ports[]? | .nodePort | select(. != null)' 2>/dev/null \
+    | yq '.items[] | select(.metadata.name == "'"$reuse_svc"'" and .metadata.namespace == "'"${ns}"'") | .spec.ports[]? | .nodePort | select(. != null)' 2>/dev/null \
     | head -1)
   if [ -n "$configured" ]; then
-    if _port_taken "$configured" "$local_listens" "$cluster_ports"; then
-      error "${name}=${configured} 已被占用，请在 .env.custom 更换，或留空以自动分配"
+    if _port_taken "$configured" "$local_listens" "$cluster_ports" \
+      || grep -qx "${configured}" <<<"${_ENSURED_NODE_PORTS:-}"; then
+      error "${name}=${configured} 已被占用（本机监听 / 集群 Service / 本次运行已分配），请在 .env.custom 更换，或留空以自动分配"
     fi
+    _ENSURED_NODE_PORTS+="${configured}"
+    _ENSURED_NODE_PORTS+=$'\n'
     info "使用预配置 NodePort: ${name}=${configured}"
     return 0
   fi
   local port
   if [ -n "$current_port" ]; then
     DEPLOY_VARS[$name]="$current_port"
+    _ENSURED_NODE_PORTS+="${current_port}"
+    _ENSURED_NODE_PORTS+=$'\n'
     info "复用已分配 NodePort: ${name}=$current_port"
     return 0
   fi
   for port in $(seq "${DEPLOY_VARS["NODE_PORT_RANGE_START"]}" "${DEPLOY_VARS["NODE_PORT_RANGE_END"]}"); do
-    if ! _port_taken "$port" "$local_listens" "$cluster_ports"; then
+    if ! _port_taken "$port" "$local_listens" "$cluster_ports" \
+      && ! grep -qx "${port}" <<<"${_ENSURED_NODE_PORTS:-}"; then
       DEPLOY_VARS[$name]="$port"
+      _ENSURED_NODE_PORTS+="${port}"
+      _ENSURED_NODE_PORTS+=$'\n'
       info "自动分配 NodePort: ${name}=$port（范围 ${DEPLOY_VARS["NODE_PORT_RANGE_START"]}-${DEPLOY_VARS["NODE_PORT_RANGE_END"]}）"
       return 0
     fi
@@ -257,28 +265,54 @@ ensure_node_port() { # $1=DEPLOY_VARS 变量名（如 MANAGER_WEB_NODE_PORT）
   error "NodePort 自动分配失败：${DEPLOY_VARS["NODE_PORT_RANGE_START"]}-${DEPLOY_VARS["NODE_PORT_RANGE_END"]} 范围内无空闲端口"
 }
 
-# k8s 形态给 manager-web 追加 NodePort Service（openshift 形态模板仅保留 ClusterIP）
-# 幂等：render_templates 每次从模板重建 conf 清单，重复渲染不会叠加
-append_manager_web_nodeport() { # $1=conf/manager-web.yaml
-  local file="$1"
-  local ns="${DEPLOY_VARS["NAMESPACE"]}" node_port="${DEPLOY_VARS["MANAGER_WEB_NODE_PORT"]:-}"
-  [ -n "$node_port" ] || error "MANAGER_WEB_NODE_PORT 未分配（先调用 ensure_node_port）"
-  [ -z "$(yq 'select(.kind == "Service" and .metadata.name == "jiuwenclaw-manager-web-nodeport") | .metadata.name' "$file")" ] \
-    || { info "manager-web NodePort Service 已存在，跳过追加"; return 0; }
+# 通用：向清单文件追加单端口 NodePort Service 文档（幂等，按名称查重）
+append_nodeport_svc() { # $1=conf文件 $2=Service名 $3=app标签 $4=nodePort $5=端口名 $6=端口号
+  local file="$1" name="$2" app="$3" node_port="$4" pname="$5" pnum="$6"
+  local ns="${DEPLOY_VARS["NAMESPACE"]}"
+  [ -n "$node_port" ] || error "NodePort 未分配（$name，先调用 ensure_node_port）"
+  [ -z "$(yq 'select(.kind == "Service" and .metadata.name == "'"$name"'") | .metadata.name' "$file")" ] \
+    || { info "NodePort Service $name 已存在，跳过追加"; return 0; }
   yq eval-all -i 'select(fileIndex == 0), select(fileIndex == 1)' "$file" \
-    <(yq -n -o=yaml '.apiVersion = "v1" | .kind = "Service" | .metadata.name = "jiuwenclaw-manager-web-nodeport" | .metadata.namespace = "'"$ns"'" | .spec.type = "NodePort" | .spec.selector.app = "jiuwenclaw-manager-web" | .spec.ports = [{"name": "http", "port": 5273, "targetPort": 5273, "nodePort": '"$node_port"'}]') \
-    || error "manager-web NodePort Service 追加失败: $file"
-  [ -n "$(yq 'select(.kind == "Service" and .metadata.name == "jiuwenclaw-manager-web-nodeport") | .spec.type' "$file")" ] \
-    || error "manager-web NodePort Service 校验失败: $file"
-  info "manager-web NodePort Service 已追加（nodePort=$node_port，外部访问 http://<节点IP>:$node_port）"
+    <(yq -n -o=yaml '.apiVersion = "v1" | .kind = "Service" | .metadata.name = "'"$name"'" | .metadata.namespace = "'"$ns"'" | .spec.type = "NodePort" | .spec.selector.app = "'"$app"'" | .spec.ports = [{"name": "'"$pname"'", "port": '"$pnum"', "targetPort": '"$pnum"', "nodePort": '"$node_port"'}]') \
+    || error "NodePort Service 追加失败: $name"
+  [ -n "$(yq 'select(.kind == "Service" and .metadata.name == "'"$name"'") | .spec.type' "$file")" ] \
+    || error "NodePort Service 校验失败: $name"
+  info "NodePort Service 已追加: $name（nodePort=$node_port，外部访问 http://<节点IP>:$node_port）"
 }
 
 # k8s 形态清单后处理分发（与 apply_nfs_direct_mounts 并列；其余形态 no-op）
 apply_k8s_extras() { # $@=本次渲染的清单文件名
   is_k8s_cluster || return 0
-  in_array "manager-web.yaml" "$@" || return 0
-  ensure_node_port MANAGER_WEB_NODE_PORT
-  append_manager_web_nodeport "$CONF_DIR/manager-web.yaml"
+  local f
+  for f in "$@"; do
+    # k8s 形态无 Route 资源（openshift 独有）：剥离清单中残留的 Route 文档（幂等）
+    yq -i 'select(.kind != "Route")' "$CONF_DIR/$f"
+    case "$f" in
+      manager-web.yaml)
+        ensure_node_port MANAGER_WEB_NODE_PORT
+        append_nodeport_svc "$CONF_DIR/manager-web.yaml" jiuwenclaw-manager-web-nodeport \
+          jiuwenclaw-manager-web "${DEPLOY_VARS["MANAGER_WEB_NODE_PORT"]}" http 5273;;
+      minio.yaml)
+        ensure_node_port MINIO_API_NODE_PORT minio-api-nodeport
+        ensure_node_port MINIO_CONSOLE_NODE_PORT minio-console-nodeport
+        append_nodeport_svc "$CONF_DIR/minio.yaml" minio-api-nodeport minio \
+          "${DEPLOY_VARS["MINIO_API_NODE_PORT"]}" api 9000
+        append_nodeport_svc "$CONF_DIR/minio.yaml" minio-console-nodeport minio \
+          "${DEPLOY_VARS["MINIO_CONSOLE_NODE_PORT"]}" console 9001;;
+      mariadb.yaml)
+        ensure_node_port MARIADB_NODE_PORT mariadb-nodeport
+        append_nodeport_svc "$CONF_DIR/mariadb.yaml" mariadb-nodeport mariadb \
+          "${DEPLOY_VARS["MARIADB_NODE_PORT"]}" mysql 3306;;
+      mysql.yaml)
+        ensure_node_port MYSQL_NODE_PORT mysql-nodeport
+        append_nodeport_svc "$CONF_DIR/mysql.yaml" mysql-nodeport mysql \
+          "${DEPLOY_VARS["MYSQL_NODE_PORT"]}" mysql 3306;;
+      postgresql.yaml)
+        ensure_node_port POSTGRESQL_NODE_PORT postgresql-nodeport
+        append_nodeport_svc "$CONF_DIR/postgresql.yaml" postgresql-nodeport postgresql \
+          "${DEPLOY_VARS["POSTGRESQL_NODE_PORT"]}" postgres 5432;;
+    esac
+  done
 }
 
 # ---------- dev 模式代码挂载（MODE=dev） ----------

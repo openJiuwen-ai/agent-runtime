@@ -50,6 +50,16 @@ resolve_manager_web_resolver() {
   return 0
 }
 
+# 数据库连接要素按 DB_TYPE 派生：服务名/端口/超级用户/root 密码，供模板 <<DB_*>> 占位符使用
+resolve_db_vars() {
+  case "${DEPLOY_VARS["DB_TYPE"]}" in
+    mariadb)    DEPLOY_VARS["DB_HEADLESS_SVC"]="mariadb-headless";    DEPLOY_VARS["DB_PORT"]="3306"; DEPLOY_VARS["DB_USER"]="root";      DEPLOY_VARS["DB_ROOT_PASSWORD"]="${DEPLOY_VARS["MARIADB_ROOT_PASSWORD"]:-}";;
+    mysql)      DEPLOY_VARS["DB_HEADLESS_SVC"]="mysql-headless";      DEPLOY_VARS["DB_PORT"]="3306"; DEPLOY_VARS["DB_USER"]="root";      DEPLOY_VARS["DB_ROOT_PASSWORD"]="${DEPLOY_VARS["MYSQL_ROOT_PASSWORD"]:-}";;
+    postgresql) DEPLOY_VARS["DB_HEADLESS_SVC"]="postgresql-headless"; DEPLOY_VARS["DB_PORT"]="5432"; DEPLOY_VARS["DB_USER"]="postgres"; DEPLOY_VARS["DB_ROOT_PASSWORD"]="${DEPLOY_VARS["POSTGRES_PASSWORD"]:-}";;
+    *) error "DB_TYPE 非法（mariadb | mysql | postgresql）: ${DEPLOY_VARS["DB_TYPE"]}" ;;
+  esac
+}
+
 # 将单个 <<VAR>> 占位符替换为 DEPLOY_VARS 中的值
 replace_placeholder() { # $1=占位符 $2=目标文件
   local placeholder="$1" destfile="$2"
@@ -95,6 +105,7 @@ render_templates() {
   local comp out f
   local -a wanted=()
   resolve_manager_web_resolver   # MANAGER_WEB_RESOLVER 为空时按形态/环境自动解析
+  resolve_db_vars                # DB 主机/端口/用户/密码按 DB_TYPE 派生
   for comp in "${TARGETS[@]}"; do
     out=$(render_component_files "$comp")
     for f in $out; do
