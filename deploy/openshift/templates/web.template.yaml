@@ -54,8 +54,6 @@ spec:
               value: "Asia/Shanghai"
             - name: OBS_URL
               value: "minio.<<NAMESPACE>>:9000"
-            - name: OBS_ACCESS_KEY
-              value: "minioadmin"
             - name: OBS_BUCKET
               value: "jiuwenclaw"
             - name: OBS_SECURE

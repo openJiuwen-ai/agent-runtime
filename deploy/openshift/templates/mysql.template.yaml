@@ -54,9 +54,10 @@ spec:
             - --innodb_use_native_aio=0
             - --innodb_flush_method=O_DIRECT_NO_FSYNC
             - --max-connections=400
+          envFrom:
+            - secretRef:
+                name: jiuwenclaw-secret-configmap
           env:
-            - name: MYSQL_ROOT_PASSWORD
-              value: "Root@123456"
             - name: TZ
               value: "Asia/Shanghai"
             - name: MYSQL_ROOT_HOST

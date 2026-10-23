@@ -12,9 +12,8 @@ CUSTOM_ENV_FILE="$SCRIPT_DIR/.env.custom"
 # ---------- 组件清单 ----------
 
 # 全部组件的规范依赖序（up 按此序排列；down 倒序）。
-# 基础服务（mariadb/mysql/postgresql/minio）可显式部署；secret：全组件共用的配置 Secret，
-# 与 redis 同为共享依赖，随用随补、无人使用才可删
-ALL_COMPONENTS=(mariadb mysql postgresql minio secret redis agentserver gateway web identity manager-server manager-web)
+# secret 必须在最前：基础服务与产品组件的密码统一经 jiuwenclaw-secret-configmap 注入
+ALL_COMPONENTS=(secret mariadb mysql postgresql minio redis agentserver gateway web identity manager-server manager-web)
 
 UP_TARGETS=(secret redis agentserver gateway web)         # up 默认目标（规范依赖序）
 MANAGER_TARGETS=(identity manager-server manager-web)     # manager 组
@@ -39,7 +38,15 @@ declare -A DEPLOY_VARS=(
     ["NAMESPACE"]="rapheale-dev"
     ["RENDER_ONLY"]="false"
     ["CLUSTER_TYPE"]="openshift"
+    ["DB_TYPE"]="mariadb"                # 数据库类型：mariadb | mysql | postgresql（驱动 DB 主机/端口/密码/组件选择）
     ["CLUSTER_API_SERVER"]=""            # openshift 形态必填（http(s) URL），留空自动探测（oc/kubeconfig）；k8s 形态走 kubeconfig，留空
+    ["MARIADB_ROOT_PASSWORD"]="Root@123456"
+    ["MYSQL_ROOT_PASSWORD"]="Root@123456"
+    ["POSTGRES_PASSWORD"]="Root@123456"
+    ["MINIO_ROOT_USER"]="minioadmin"
+    ["MINIO_ROOT_PASSWORD"]="Root@123456"
+    ["REDIS_USER"]="jiuwenclaw"
+    ["REDIS_PASSWORD"]="Root@123456"
     ["AGENT_SERVER_REPLICAS"]="1"
     ["GATEWAY_REPLICAS"]="1"
     ["WEB_REPLICAS"]="1"
@@ -62,7 +69,11 @@ declare -A DEPLOY_VARS=(
     ["MANAGER_WEB_NODE_PORT"]=""         # 留空=从下方范围自动分配；.env.custom 可固定端口
     ["NODE_PORT_RANGE_START"]="30000"    # 自动分配范围下界
     ["NODE_PORT_RANGE_END"]="32767"      # 自动分配范围上界
-    ["NO_CHECK_PORTS"]="false"           # true=跳过端口占用检查（此时 MANAGER_WEB_NODE_PORT 必须显式配置）
+    ["MINIO_API_NODE_PORT"]=""           # k8s 形态 minio S3 API NodePort，留空自动分配
+    ["MINIO_CONSOLE_NODE_PORT"]=""       # k8s 形态 minio Console NodePort，留空自动分配
+    ["MARIADB_NODE_PORT"]=""             # k8s 形态 mariadb NodePort，留空自动分配
+    ["MYSQL_NODE_PORT"]=""               # k8s 形态 mysql NodePort，留空自动分配
+    ["POSTGRESQL_NODE_PORT"]=""          # k8s 形态 postgresql NodePort，留空自动分配
     # dev 模式：hostPath 挂载宿主机代码调试（MODE=dev 仅 k8s 形态支持；Pod 固定到代码所在节点）
     ["MODE"]="product"                   # product | dev
     ["CLAW_CODE_PATH"]=""                # jiuwenclaw 仓库路径（挂载到 agentserver/gateway/web）

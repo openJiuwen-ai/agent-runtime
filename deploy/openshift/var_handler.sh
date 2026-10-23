@@ -26,6 +26,12 @@ check_namespace_var() {
     || error "NAMESPACE 非法（须为 DNS label：小写字母数字与 -）: $val"
 }
 
+# 数据库类型：mariadb | mysql | postgresql
+check_db_type_var() {
+  local val="${DEPLOY_VARS["DB_TYPE"]}"
+  [[ "$val" =~ ^(mariadb|mysql|postgresql)$ ]] || error "DB_TYPE 非法（mariadb | mysql | postgresql）: $val"
+}
+
 # 集群形态：openshift | k8s
 check_cluster_type_var() {
   local val="${DEPLOY_VARS["CLUSTER_TYPE"]}"
@@ -81,6 +87,7 @@ check_storage_class_vars() {
 # 变量校验统一入口：逐类分派
 check_vars() {
   check_cluster_type_var
+  check_db_type_var
   check_image_vars
   check_namespace_var
   check_api_server_var
