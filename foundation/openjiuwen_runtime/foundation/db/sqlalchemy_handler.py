@@ -432,6 +432,47 @@ class SQLAlchemyHandler(DBHandler):
             logger.debug("Record found: table=%s, found=%s", table_name, record is not None)
             return record
 
+    @staticmethod
+    def _bind_update_values(model: Any, data: dict) -> dict:
+        """把列自增标记编译成 ``SET col = col + 1``。
+
+        标记是带 ``sql_column_increment = True`` 的对象。值在语句执行时取该行当前值，
+        并发更新同一行会得到不同的号。
+        """
+        values: dict[str, Any] = {}
+        for key, value in data.items():
+            if getattr(value, "sql_column_increment", False) is True:
+                values[key] = getattr(model, key) + 1
+            else:
+                values[key] = value
+        return values
+
+    @staticmethod
+    def _filters_for_reread(model: Any, filters: dict, data: dict) -> dict:
+        """构造更新提交后的回读条件。
+
+        自增列的新值写在数据库里，原过滤值已经对不上。过滤条件里带齐主键时只按主键回读。
+        去掉自增列后没有剩余条件时返回空字典，单例表据此读出唯一的那一行。
+        """
+        increment_keys = {
+            key
+            for key, value in data.items()
+            if getattr(value, "sql_column_increment", False) is True
+        }
+        pk_names = [column.name for column in model.__table__.primary_key.columns]
+        if pk_names and all(
+            name in filters
+            and name not in increment_keys
+            and not isinstance(filters[name], (list, tuple, set))
+            for name in pk_names
+        ):
+            return {name: filters[name] for name in pk_names}
+        return {
+            key: value
+            for key, value in filters.items()
+            if key not in increment_keys
+        }
+
     async def update(self, table_name: str, filters: dict, data: dict) -> Optional[Any]:
         logger.debug("Updating record: table=%s, filters=%s", table_name, filters)
         model = self._table_models.get(table_name)
@@ -441,11 +482,17 @@ class SQLAlchemyHandler(DBHandler):
 
         async with await self._get_session() as session:
             query = self._apply_filters(update(model), model, filters)
-            query = query.values(**data)
-            await session.execute(query)
+            query = query.values(**self._bind_update_values(model, data))
+            result = await session.execute(query)
             await session.commit()
             logger.debug("Record updated: table=%s", table_name)
-            return await self.get(table_name, filters)
+            if result.rowcount == 0:
+                # SQLite 对「WHERE 命中但列值没变」也报 0。用原来的条件再读：
+                # 读到说明行还在，读不到才是这次没更新到。
+                return await self.get(table_name, filters)
+            # 自增列的旧值已经对不上。主键还在就按主键回读，否则丢掉自增列。
+            read_filters = self._filters_for_reread(model, filters, data)
+            return await self.get(table_name, read_filters)
 
     async def delete(self, table_name: str, filters: dict) -> bool:
         logger.debug("Deleting record: table=%s, filters=%s", table_name, filters)
