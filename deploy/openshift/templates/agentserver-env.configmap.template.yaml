@@ -50,4 +50,5 @@ data:
   ROLE: agentserver
   SKILL_REFRESH_TTL_SECONDS: "30"
   TZ: Asia/Shanghai
+  REDIS_USER: <<REDIS_USER>>
   WORKSPACE_QUOTA_ENABLED: "false"

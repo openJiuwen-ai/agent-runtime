@@ -58,3 +58,23 @@ spec:
       port: 5273
       targetPort: 5273
   type: ClusterIP
+---
+# Route：管理面/用户面统一入口（登录认证、用户面 /chat、网关代理都走这个 nginx）
+# openshift 独有资源；k8s 形态由 k8s_handler.apply_k8s_extras 剥离，改用 NodePort
+# host 省略 → Router 自动分配 <name>-<namespace>.<集群ingress域名>
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: jiuwenclaw-manager-web
+  namespace: <<NAMESPACE>>
+spec:
+  port:
+    targetPort: 5273
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  to:
+    kind: Service
+    name: jiuwenclaw-manager-web
+    weight: 100
+  wildcardPolicy: None

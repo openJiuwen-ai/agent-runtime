@@ -89,3 +89,41 @@ spec:
         - name: minio-data
           persistentVolumeClaim:
             claimName: minio-pvc
+---
+# Route：MinIO Console 管理界面（9001）
+# openshift 独有资源；k8s 形态由 k8s_handler.apply_k8s_extras 剥离，改用 NodePort
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: minio
+  namespace: <<NAMESPACE>>
+spec:
+  port:
+    targetPort: console
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  to:
+    kind: Service
+    name: minio
+    weight: 100
+  wildcardPolicy: None
+---
+# Route：MinIO S3 API（9000，浏览器预签名 URL / 直传场景）
+# openshift 独有资源；k8s 形态由 k8s_handler.apply_k8s_extras 剥离，改用 NodePort
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: minio-api
+  namespace: <<NAMESPACE>>
+spec:
+  port:
+    targetPort: api
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  to:
+    kind: Service
+    name: minio
+    weight: 100
+  wildcardPolicy: None

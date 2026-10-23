@@ -40,6 +40,7 @@ declare -A DEPLOY_VARS=(
     ["RENDER_ONLY"]="false"
     ["CLUSTER_TYPE"]="openshift"
     ["CLUSTER_API_SERVER"]=""            # openshift 形态必填（http(s) URL），留空自动探测（oc/kubeconfig）；k8s 形态走 kubeconfig，留空
+    ["REDIS_USER"]="jiuwenclaw"          # 必填，不支持留空：redis ACL 用户名（default 用户在启动参数中禁用）
     ["AGENT_SERVER_REPLICAS"]="1"
     ["GATEWAY_REPLICAS"]="1"
     ["WEB_REPLICAS"]="1"
@@ -62,6 +63,11 @@ declare -A DEPLOY_VARS=(
     ["MANAGER_WEB_NODE_PORT"]=""         # 留空=从下方范围自动分配；.env.custom 可固定端口
     ["NODE_PORT_RANGE_START"]="30000"    # 自动分配范围下界
     ["NODE_PORT_RANGE_END"]="32767"      # 自动分配范围上界
+    ["MINIO_API_NODE_PORT"]=""           # k8s 形态 minio S3 API NodePort，留空自动分配
+    ["MINIO_CONSOLE_NODE_PORT"]=""       # k8s 形态 minio Console NodePort，留空自动分配
+    ["MARIADB_NODE_PORT"]=""             # k8s 形态 mariadb NodePort，留空自动分配
+    ["MYSQL_NODE_PORT"]=""               # k8s 形态 mysql NodePort，留空自动分配
+    ["POSTGRESQL_NODE_PORT"]=""          # k8s 形态 postgresql NodePort，留空自动分配
     ["NO_CHECK_PORTS"]="false"           # true=跳过端口占用检查（此时 MANAGER_WEB_NODE_PORT 必须显式配置）
     # dev 模式：hostPath 挂载宿主机代码调试（MODE=dev 仅 k8s 形态支持；Pod 固定到代码所在节点）
     ["MODE"]="product"                   # product | dev

@@ -55,6 +55,7 @@ data:
   REDIS_HOST: redis.<<NAMESPACE>>
   REDIS_KEY_PREFIX: 'jiuwenclaw:'
   REDIS_MODE: standalone
+  REDIS_USER: <<REDIS_USER>>
   REDIS_PORT: "6379"
   ROLE: gateway
   RUNTIME_DB_MAX_OVERFLOW: "20"

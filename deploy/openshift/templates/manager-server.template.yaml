@@ -53,7 +53,7 @@ spec:
         - name: REDIS_URL
           value: "redis://:Root%40123456@redis.<<NAMESPACE>>:6379"
         - name: REDIS_USER
-          value: ""
+          value: "<<REDIS_USER>>"
         - name: REDIS_KEY_PREFIX
           value: "jiuwenclaw:"
         - name: MANAGER_RABBITMQ_URL

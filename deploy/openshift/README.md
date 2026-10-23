@@ -42,9 +42,7 @@ kubectl get pods   # 确认登录成功
 
 ## 3. 部署 / 卸载
 
-**依赖要求**：
-- **openshift 形态**： `oc`、`curl`、`yq`；
-- **k8s 形态**：`kubectl`、`yq`
+**依赖要求**：`oc`、`curl`、`yq`；
 
 ### 3.1 deploy.sh —— 组件一键部署
 
@@ -64,10 +62,6 @@ kubectl get pods   # 确认登录成功
 
 行为说明：
 
-- **集群形态**：`CLUSTER_TYPE` 控制（默认 `openshift`）。`k8s` 形态下渲染后自动把
-  mariadb/mysql/postgresql/minio/agentserver 的数据卷改写为 NFS 直连挂载
-  （`NFS_SERVER_ADDR`/`NFS_SHARE_PATH`，路径 `<NFS_SHARE_PATH>/<NAMESPACE>/<组件>`），
-  StorageClass 变量不生效；
 - **namespace**：全部组件的 namespace 由 `.env.custom` 的 `NAMESPACE` 统一控制，
   也可 `-n <ns>` 临时指定；数据库建库的库名后缀同样取自 `NAMESPACE`
   （库名形如 `<业务>_<NAMESPACE>`，更换 namespace 即使用对应后缀的库）；
@@ -131,29 +125,37 @@ kubectl get pods   # 确认登录成功
 
 ## 4. 访问服务
 
-集群未开放 NodePort / Route 时，外部网络通过 port-forward 隧道访问（经 API server
-转发，不产生公网暴露）。以下 `-n rapheale-dev` 为示例，按实际 `NAMESPACE` 调整。
+### 4.1 Route 访问
 
-管理界面：
+部署时，部署工具自动为以下服务创建 Route（见各组件模板尾部的 Route
+文档），部署完成后 `kubectl get route` 即可看到实际域名（`<name>-<namespace>.<集群
+ingress域名>`）。**无需 port-forward，浏览器从任何网络直接访问：**
 
+| 服务 | Route | 访问地址 | 说明 |
+|---|---|---|---|
+| 管理面/用户面 | `jiuwenclaw-manager-web` | `https://jiuwenclaw-manager-web-<ns>.<ingress域名>` | 统一入口：登录认证、管理界面、用户面 `/chat` |
+| MinIO Console | `minio` | `https://minio-<ns>.<ingress域名>` | 对象存储管理界面 |
+| MinIO S3 API | `minio-api` | `https://minio-api-<ns>.<ingress域名>` | S3 协议入口（浏览器预签名 URL / 直传场景） |
+
+manager-web 是唯一需要记住的入口：从管理面登录后点击进入用户面，**不要直接访问
+web 组件的地址**（用户面的鉴权代理在 manager-web 的 nginx 上）。
+
+### 4.2 数据库访问说明
+
+mariadb / mysql / postgresql **仅提供集群内访问**（试用集群无公网 NodePort /
+LoadBalancer）。不通过 Route 暴露数据库的原因：Route 对 TCP 流量只有 passthrough
+模式，要求客户端发起连接的第一个字节就是 TLS（Router 靠 SNI 分流）；而 MySQL/
+PostgreSQL 协议是"明文握手 + 协议内协商升级 TLS"，与 passthrough 在协议层面互斥
+（实测两种连接方式均失败）。
+
+临时排障访问可通过port-forward走**本地端口映射**：kubectl 把
+本机端口转发到集群内 Service。
 ```bash
-kubectl port-forward --address 0.0.0.0 -n rapheale-dev svc/jiuwenclaw-manager-web 30273:5273
+kubectl port-forward --address 0.0.0.0 -n rapheale-dev svc/mysql-headless 30306:3306
+kubectl port-forward --address 0.0.0.0 -n rapheale-dev svc/mariadb-headless 30307:3306
+kubectl port-forward --address 0.0.0.0 -n rapheale-dev svc/postgresql-headless 30433:5432
+kubectl port-forward --address 0.0.0.0 -n rapheale-dev svc/redis 30379:6379
 ```
-
-浏览器打开 `http://<部署机IP>:30273` 即可访问（该终端需保持运行；token 过期后
-重新登录并重启 port-forward）。
-
-其他服务临时排障访问：
-
-```bash
-kubectl port-forward --address 0.0.0.0 -n rapheale-dev svc/mysql-headless 30306:3306       # 本机 127.0.0.1:3306
-kubectl port-forward --address 0.0.0.0 -n rapheale-dev svc/mariadb-headless 30307:3306     # 本机 127.0.0.1:3307
-kubectl port-forward --address 0.0.0.0 -n rapheale-dev svc/postgresql-headless 30433:5432  # 本机 127.0.0.1:5433
-kubectl port-forward --address 0.0.0.0 -n rapheale-dev svc/redis 30379:6379                # 密码取部署配置
-kubectl port-forward --address 0.0.0.0 -n rapheale-dev svc/minio 30900:9000 30901:9001     # S3 API / Console
-```
-
-若集群中仍残留旧版本的 `*-nodeport` Service（当前模板已不含），可手动清理。
 
 ## 5. 模型接入
 

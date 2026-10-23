@@ -1,6 +1,7 @@
 # Redis 部署清单（OpenShift）
-# 纯缓存用途，不挂持久卷；--requirepass 密码 Root@123456；适配 restricted-v2 SCC
-# 访问：oc port-forward svc/redis 6379:6379，redis-cli -a Root@123456
+# 纯缓存用途，不挂持久卷；ACL 业务用户认证（default 用户禁用）；适配 restricted-v2 SCC
+# 访问：oc port-forward svc/redis 6379:6379，redis-cli --user jiuwenclaw -a Root@123456
+#      （default 用户已禁用，仅 -a 不带用户名会认证失败）
 apiVersion: v1
 kind: Service
 metadata:
@@ -35,8 +36,18 @@ spec:
           imagePullPolicy: IfNotPresent
           args:
             - redis-server
-            - --requirepass
-            - "Root@123456"
+            # ACL：禁用 default 用户（不能用 --requirepass 替代，它会隐式重新启用 default）；
+            # 值必须加引号：裸写的 on 会被 kubectl 解析为 bool，> 开头会直接导致 YAML 解析失败
+            - --user
+            - "default"
+            - "off"
+            - --user
+            - "<<REDIS_USER>>"
+            - "on"
+            - ">Root@123456"
+            - "~*"
+            - "&*"
+            - "+@all"
           ports:
             - containerPort: 6379
               name: redis
