@@ -57,6 +57,20 @@ CRON_POLICY_TABLE_DEF = TableDefinition(
     ],
 )
 
+PACKAGE_ALLOWLIST_TABLE_DEF = TableDefinition(
+    table_name="package_allowlist",
+    columns=[
+        ColumnDefinition("id", "integer", primary_key=True, autoincrement=True, nullable=False),
+        ColumnDefinition("jiuwenclaw_id", "string", length=64, nullable=False),
+        ColumnDefinition("packages", "json", nullable=False),
+        ColumnDefinition("created_at", "datetime", nullable=False),
+        ColumnDefinition("updated_at", "datetime", nullable=False),
+    ],
+    indexes=[
+        IndexDefinition(["jiuwenclaw_id"], unique=True),
+    ],
+)
+
 LOGGING_CONFIG_TABLE_DEF = TableDefinition(
     table_name="logging_config",
     columns=[

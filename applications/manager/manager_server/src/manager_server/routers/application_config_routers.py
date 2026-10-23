@@ -15,6 +15,10 @@ from manager_server.core.application_config.log_masking_rule import (
     LogMaskingRuleService,
 )
 from manager_server.core.application_config.cron_policy import CronPolicyService
+from manager_server.core.application_config.package_allowlist import (
+    PackageAllowlistService,
+    fetch_hub_catalog,
+)
 from manager_server.core.application_config.logging_config import LoggingConfigService
 from manager_server.core.application_config.memory_config import MemoryConfigService
 from manager_server.core.application_config.audit_log_config import AuditLogConfigService
@@ -43,6 +47,10 @@ def _logging_config_svc(handler: DBHandler) -> LoggingConfigService:
 
 def _cron_policy_svc(handler: DBHandler) -> CronPolicyService:
     return CronPolicyService(handler)
+
+
+def _package_allowlist_svc(handler: DBHandler) -> PackageAllowlistService:
+    return PackageAllowlistService(handler)
 
 
 def _memory_config_svc(handler: DBHandler) -> MemoryConfigService:
@@ -200,6 +208,77 @@ async def delete_logging_config(
     handler: Annotated[DBHandler, Depends(get_db_handler)],
 ):
     svc = _logging_config_svc(handler)
+    try:
+        await svc.delete(jiuwenclaw_id=jiuwenclaw_id)
+    except ValueError as exc:
+        if "not found" in str(exc):
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ResponseModel(code=200, message="success")
+
+
+class PackageAllowlistPackage(BaseModel):
+    kind: str = Field(..., min_length=1, max_length=32)
+    id: str = Field(..., min_length=1, max_length=128)
+    match_expr: str | list[str] | None = None
+
+
+class PackageAllowlistUpsertRequest(BaseModel):
+    packages: list[PackageAllowlistPackage] = Field(default_factory=list)
+
+
+@application_config_router.put(
+    "/{jiuwenclaw_id}/package-allowlists", response_model=ResponseModel
+)
+async def upsert_package_allowlist(
+    jiuwenclaw_id: str,
+    body: PackageAllowlistUpsertRequest,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    svc = _package_allowlist_svc(handler)
+    try:
+        data = await svc.upsert(
+            jiuwenclaw_id=jiuwenclaw_id,
+            packages=[item.model_dump(exclude_none=True) for item in body.packages],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ResponseModel(code=200, message="success", data=data)
+
+
+@application_config_router.get(
+    "/{jiuwenclaw_id}/package-allowlists/catalog", response_model=ResponseModel
+)
+async def get_package_allowlist_catalog(jiuwenclaw_id: str):
+    try:
+        data = await fetch_hub_catalog(jiuwenclaw_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ResponseModel(code=200, message="success", data=data)
+
+
+@application_config_router.get(
+    "/{jiuwenclaw_id}/package-allowlists", response_model=ResponseModel
+)
+async def get_package_allowlist(
+    jiuwenclaw_id: str,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    svc = _package_allowlist_svc(handler)
+    data = await svc.get(jiuwenclaw_id=jiuwenclaw_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="package allowlist not found")
+    return ResponseModel(code=200, message="success", data=data)
+
+
+@application_config_router.delete(
+    "/{jiuwenclaw_id}/package-allowlists", response_model=ResponseModel
+)
+async def delete_package_allowlist(
+    jiuwenclaw_id: str,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    svc = _package_allowlist_svc(handler)
     try:
         await svc.delete(jiuwenclaw_id=jiuwenclaw_id)
     except ValueError as exc:

@@ -12,6 +12,7 @@ from manager_server.core.instance.instance_data_lifecycle import (
     purge_manager_instance_data,
     purge_runtime_instance_data,
 )
+from manager_server.models.application_config_models import PACKAGE_ALLOWLIST_TABLE_DEF
 from manager_server.models.instance_access_models import INSTANCE_GRANT_TABLE_DEF
 from manager_server.models.instance_resource_models import (
     INSTANCE_AGENT_RESOURCE_TABLE_DEF,
@@ -50,6 +51,8 @@ async def test_purge_manager_deletes_instance_resources_and_grants():
     assert _SERVICE in deleted_tables
     assert _AGENT in deleted_tables
     assert _GRANT in deleted_tables
+    listed_tables = {call.args[0] for call in handler.list_records.await_args_list}
+    assert PACKAGE_ALLOWLIST_TABLE_DEF.table_name in listed_tables
 
 
 @pytest.mark.asyncio

@@ -38,6 +38,9 @@ import type {
   LoggingConfigUpsertBody,
   CronPolicy,
   CronPolicyUpsertBody,
+  PackageAllowlist,
+  PackageAllowlistUpsertBody,
+  PackageAllowlistCatalog,
   AuditLogConfig,
   AuditLogConfigUpsertBody,
   WorkspaceQuotaPolicy,
@@ -1531,6 +1534,14 @@ export const CronPolicyApi = {
     http<CronPolicy>(`${instanceBase(instanceId)}/cron-policy`, { method: 'PUT', body }),
   remove: (instanceId: string) =>
     http<void>(`${instanceBase(instanceId)}/cron-policy`, { method: 'DELETE' }),
+};
+
+export const PackageAllowlistApi = {
+  get: (instanceId: string) => http<PackageAllowlist>(`${instanceBase(instanceId)}/package-allowlists`),
+  catalog: (instanceId: string) =>
+    http<PackageAllowlistCatalog>(`${instanceBase(instanceId)}/package-allowlists/catalog`),
+  upsert: (instanceId: string, body: PackageAllowlistUpsertBody) =>
+    http<PackageAllowlist>(`${instanceBase(instanceId)}/package-allowlists`, { method: 'PUT', body }),
 };
 
 export const WorkspaceQuotaApi = {
