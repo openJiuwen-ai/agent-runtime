@@ -4,7 +4,7 @@
 #   - 适配 restricted-v2 SCC：随机 uid 运行，fsGroup 由 SCC 注入；emptyDir 挂载 /var/run/postgresql（socket 目录）
 #   - 镜像经 POSTGRESQL_IMAGE 变量配置（.env.custom）
 # 访问：kubectl port-forward sts/postgresql 5433:5432
-#       psql -h 127.0.0.1 -p 5433 -U postgres（密码 Root@123456）
+#       psql -h 127.0.0.1 -p 5433 -U postgres（密码见 POSTGRES_PASSWORD）
 apiVersion: v1
 kind: Service
 metadata:
@@ -54,9 +54,10 @@ spec:
           args:
             - -c
             - max_connections=192
+          envFrom:
+            - secretRef:
+                name: jiuwenclaw-secret-configmap
           env:
-            - name: POSTGRES_PASSWORD
-              value: "Root@123456"
             - name: POSTGRES_HOST_AUTH_METHOD
               value: "scram-sha-256"
             - name: TZ

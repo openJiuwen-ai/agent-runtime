@@ -252,6 +252,7 @@ delete_component() { # $1=组件 $2=序号 $3=总数
     return 0
   fi
   kctl_run delete "${paths[@]}"
+  DOWN_DELETED_ANY=1
   wait_deleted "$comp"
 }
 
@@ -259,7 +260,9 @@ delete_component() { # $1=组件 $2=序号 $3=总数
 # mariadb/minio 等基础服务带数据卷，不自动回收，仍需显式 down
 # 判定口径与 has_alive_dependents 一致（fail-safe）：仅 404 算确认不存在，
 # 探测失败/权限等未知状态按存活处理并跳过回收
+# 本次卸载未实际删除任何组件（全部被保护跳过）时依赖状态无变化，静默跳过扫描
 gc_orphan_shared_deps() {
+  [ "${DOWN_DELETED_ANY:-0}" = 1 ] || return 0
   local -a orphans=()
   local dep other orphan
   for dep in secret redis; do

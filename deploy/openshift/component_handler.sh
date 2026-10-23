@@ -68,6 +68,10 @@ component_wait_mode() {
 # 组件 → 运行期硬依赖（up 预检：前置组件不在本次目标里就必须已在集群）
 component_deps() {
   case "$1" in
+    mariadb)        echo "secret";;
+    mysql)          echo "secret";;
+    postgresql)     echo "secret";;
+    minio)          echo "secret";;
     agentserver)    echo "secret mariadb minio";;
     gateway)        echo "secret mariadb redis minio agentserver";;
     web)            echo "secret minio";;

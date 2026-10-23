@@ -55,9 +55,10 @@ spec:
             - "--innodb_flush_method=O_DIRECT_NO_FSYNC"
             - "--max-connections=400"
             - "--sql-mode=PIPES_AS_CONCAT,ANSI_QUOTES,IGNORE_SPACE,ORACLE,NO_KEY_OPTIONS,NO_TABLE_OPTIONS,NO_FIELD_OPTIONS,STRICT_TRANS_TABLES,NO_AUTO_CREATE_USER,SIMULTANEOUS_ASSIGNMENT"
+          envFrom:
+            - secretRef:
+                name: jiuwenclaw-secret-configmap
           env:
-            - name: MARIADB_ROOT_PASSWORD
-              value: "Root@123456"
             - name: TZ
               value: "Asia/Shanghai"
             - name: MARIADB_ROOT_HOST

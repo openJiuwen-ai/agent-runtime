@@ -1,10 +1,10 @@
 # MinIO 部署清单（OpenShift）
 # 说明：
 #   - 存储类经 DATA_STORAGE_CLASS 变量配置（.env.custom，留空走集群默认）挂 /data；Deployment + Recreate（RWO 卷）
-#   - root 凭证经 env 指定：minioadmin / Root@123456；适配 restricted-v2 SCC（fsGroup 由 SCC 自动注入）
+#   - root 凭证经 jiuwenclaw-secret-configmap 注入；适配 restricted-v2 SCC（fsGroup 由 SCC 自动注入）
 #   - 镜像经 MINIO_IMAGE 变量配置（.env.custom）
 # 访问：oc port-forward svc/minio 9000:9000（S3 API）、9001:9001（Console）
-# 凭证：minioadmin / Root@123456
+# 凭证：见 jiuwenclaw-secret-configmap（MINIO_ROOT_USER / MINIO_ROOT_PASSWORD）
 apiVersion: v1
 kind: Service
 metadata:
@@ -60,11 +60,9 @@ spec:
             - /data
             - --console-address
             - ":9001"
-          env:
-            - name: MINIO_ROOT_USER
-              value: "minioadmin"
-            - name: MINIO_ROOT_PASSWORD
-              value: "Root@123456"
+          envFrom:
+            - secretRef:
+                name: jiuwenclaw-secret-configmap
           ports:
             - containerPort: 9000
               name: api
