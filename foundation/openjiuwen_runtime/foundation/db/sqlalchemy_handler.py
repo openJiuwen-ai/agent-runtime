@@ -442,10 +442,23 @@ class SQLAlchemyHandler(DBHandler):
         async with await self._get_session() as session:
             query = self._apply_filters(update(model), model, filters)
             query = query.values(**data)
-            await session.execute(query)
+            result = await session.execute(query)
+            rowcount = getattr(result, "rowcount", None)
             await session.commit()
             logger.debug("Record updated: table=%s", table_name)
-            return await self.get(table_name, filters)
+            if rowcount == 0:
+                # The filter matched no row (e.g. a compare-and-set lost a race);
+                # re-reading with filters that the statement itself updated would
+                # otherwise report an unrelated row as the result.
+                return None
+            # A filter column may itself be updated (state/epoch transitions):
+            # read the row back with the values this statement just wrote, not
+            # with the stale filter values, or the successful update returns None.
+            lookup = {
+                **filters,
+                **{key: value for key, value in data.items() if key in filters},
+            }
+            return await self.get(table_name, lookup)
 
     async def delete(self, table_name: str, filters: dict) -> bool:
         logger.debug("Deleting record: table=%s, filters=%s", table_name, filters)
