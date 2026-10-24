@@ -9,23 +9,77 @@ _ENSURED_NODE_PORTS=""
 # 包含三部分：
 #   1. k8s 形态通道实现（_kctl_k8s_*）：kubectl.sh 共享原语的 k8s 分支，按形态分流调用
 #   2. manager-web NodePort Service 追加（apply_k8s_extras）
-#   3. NFS 直连挂载（check_nfs_vars + apply_nfs_direct_mounts）：PVC 卷改写为 NFS 直连挂载
+#   3. NFS 直连挂载（check_nfs_vars + apply_nfs_direct_mounts）：PVC 卷改写为 NFS 直连挂载；
+#      NFS_SERVER_ADDR 空=内置 NFS server（地址解析 + 数据目录自动创建），非空=外部 NFS
 
 # ---------- NFS 直连挂载改写 ----------
 # 改写范围（yq 动态修改渲染产物 conf/*.yaml）：mariadb/mysql/postgresql/agentserver/minio → 删 PVC 文档，卷改为 nfs
 # redis 纯缓存不挂卷（模板已关闭 AOF），不参与改写
 # claw-pvc.yaml 由 component_files 按形态剔除，k8s 形态不渲染不部署。
-# NFS 路径布局：<NFS_SHARE_PATH>/<NAMESPACE>/<组件>（v4 相对导出根），组件间数据隔离；
-# 数据目录须在 NFS 服务器上预先创建（NFS 不支持远程 mkdir）
+# ENABLE_EXTERNAL_NFS=true（外部 NFS）时目录由使用方自行管理
+
+# 在内置 NFS server Pod 内创建组件数据目录（mkdir -p + chmod 777，随机 uid 可写）；
+# RENDER_ONLY（不连集群）与外部 NFS 模式跳过
+# 定位内置 NFS server Pod。
+# 注意：失败用 return 1 + stderr 提示，不能在函数内 error()——命令替换 $(...) 中
+# error 的 exit 1 只退出子 shell，报错文本（stdout）会被父 shell 捕获成返回值
+builtin_nfs_pod() { # → stdout: Pod 名；失败原因 → stderr；rc 1=未找到
+  local pod
+  pod=$(kubectl get pods -n "${DEPLOY_VARS["NFS_POD_NAMESPACE"]}" \
+    -l "${DEPLOY_VARS["NFS_POD_LABEL"]}" \
+    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+  if [ -z "$pod" ]; then
+    echo "未找到内置 NFS server Pod（${DEPLOY_VARS["NFS_POD_NAMESPACE"]}，label ${DEPLOY_VARS["NFS_POD_LABEL"]}）" >&2
+    return 1
+  fi
+  printf '%s' "$pod"
+}
+
+# 内置 NFS server 的挂载地址 = Pod 所在节点 IP（数据目录在节点 hostPath 下）
+_resolve_builtin_nfs_server() { # → stdout: 节点 IP；失败原因 → stderr；rc 1=失败
+  local pod ip
+  pod=$(builtin_nfs_pod) || return 1
+  ip=$(kubectl get pod "$pod" -n "${DEPLOY_VARS["NFS_POD_NAMESPACE"]}" \
+    -o jsonpath='{.status.hostIP}' 2>/dev/null)
+  if [ -z "$ip" ]; then
+    echo "内置 NFS server Pod ${pod} 尚无 hostIP（可能未就绪/正在重建）" >&2
+    return 1
+  fi
+  printf '%s' "$ip"
+}
+
+# 在内置 NFS server Pod 内创建组件数据目录（mkdir -p + chmod 777，随机 uid 可写）；
+# 外部 NFS（ENABLE_EXTERNAL_NFS=true）时目录由使用方自行管理，跳过
+prepare_nfs_path() { # $1=组件
+  [ "${DEPLOY_VARS["ENABLE_EXTERNAL_NFS"]}" = "true" ] && return 0
+  local comp="$1"
+  # 创建路径 = <NFS_POD_PATH> + <NFS_SHARE_PATH>/<NAMESPACE>/<组件>，与清单里的
+  # nfs.path（NFS 伪根相对路径）严格对应——NFS_SHARE_PATH 为子路径时二者才会指向同一目录
+  local root="${DEPLOY_VARS["NFS_POD_PATH"]%/}"
+  local share="${DEPLOY_VARS["NFS_SHARE_PATH"]%/}"
+  local dir="${root}${share}/${DEPLOY_VARS["NAMESPACE"]}/${comp}"
+  local pod
+  pod=$(builtin_nfs_pod) \
+    || error "未找到内置 NFS server Pod，无法创建数据目录 $dir（原因见 stderr 输出）"
+  info "创建 NFS 数据目录: ${dir}（Pod $pod）"
+  kubectl exec "$pod" -n "${DEPLOY_VARS["NFS_POD_NAMESPACE"]}" \
+    -- sh -c "mkdir -p '${dir}' && chmod 777 '${dir}'" \
+    || error "NFS 数据目录创建失败: $dir"
+}
 
 # NFS 变量校验（check_vars 统一入口调用；openshift 形态 no-op）：
-# 服务器地址必填，共享根路径须为绝对路径
+# 派生 ENABLE_EXTERNAL_NFS：NFS_SERVER_ADDR 空=built-in（false）/ 非空=external（true）
+# NFS_SERVER_ADDR 设置时须为主机名或 IP，共享根路径须为绝对路径
 check_nfs_vars() {
   is_k8s_cluster || return 0
   local val="${DEPLOY_VARS["NFS_SERVER_ADDR"]:-}"
-  [ -n "$val" ] || error "CLUSTER_TYPE=k8s 需配置 NFS_SERVER_ADDR（检查 $CUSTOM_ENV_FILE）"
-  [[ "$val" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] \
-    || error "NFS_SERVER_ADDR 非法（须为主机名或 IP）: $val"
+  if [ -z "$val" ]; then
+    DEPLOY_VARS["ENABLE_EXTERNAL_NFS"]="false"   # 内置 NFS server
+  else
+    [[ "$val" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] \
+      || error "NFS_SERVER_ADDR 非法（须为主机名或 IP）: $val"
+    DEPLOY_VARS["ENABLE_EXTERNAL_NFS"]="true"    # 外部 NFS server
+  fi
   val="${DEPLOY_VARS["NFS_SHARE_PATH"]:-}"
   [[ "$val" =~ ^/[A-Za-z0-9_./-]*$ ]] \
     || error "NFS_SHARE_PATH 非法（须为绝对路径）: $val"
@@ -62,11 +116,31 @@ _nfs_rewrite_file() { # $1=conf 清单 $2=卷名 $3=nfs路径 $4=server
 # 按需改写：仅处理本次渲染产物（render_templates 传入的清单），conf/ 中其他文件不动；
 apply_nfs_direct_mounts() { # $@=本次渲染的清单文件名
   is_k8s_cluster || return 0
-  local server="${DEPLOY_VARS["NFS_SERVER_ADDR"]:-}"
-  [ -n "$server" ] || error "CLUSTER_TYPE=k8s 需配置 NFS_SERVER_ADDR"
+  # 仅 up 改写数据卷并准备目录：down 只需 conf 里的资源名与集群一致（卷形态不影响按名删除），
+  # 且拆除时内置 NFS Pod 可能已先被删——此时解析 NFS 地址不应阻塞卸载
+  [ "${CMD:-}" = "up" ] || return 0
   local base="${DEPLOY_VARS["NFS_SHARE_PATH"]}"
   base="${base%/}"
   local ns="${DEPLOY_VARS["NAMESPACE"]}"
+
+  # 模式由 check_nfs_vars 派生：NFS_SERVER_ADDR 空=built-in（ENABLE_EXTERNAL_NFS=false，
+  # 地址从 Pod hostIP 解析，目录自动创建）；非空=external（ENABLE_EXTERNAL_NFS=true，目录须已存在）
+  local external="${DEPLOY_VARS["ENABLE_EXTERNAL_NFS"]}" server=""
+  if [ "$external" = "true" ]; then
+    server="${DEPLOY_VARS["NFS_SERVER_ADDR"]}"
+    info "外部 NFS 模式：$server（数据目录须已存在于 NFS 服务器）"
+  elif [ "${DEPLOY_VARS["RENDER_ONLY"]}" = "true" ]; then
+    info "内置 NFS 模式 + --render-only：跳过数据卷改写（NFS 地址需连接集群解析），部署请走完整 up"
+    return 0
+  else
+    server=$(_resolve_builtin_nfs_server) \
+      || error "内置 NFS server 解析失败（原因见 stderr 输出）"
+    [[ "$server" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] \
+      || error "解析到的 NFS 地址非法: $server"
+    DEPLOY_VARS["NFS_SERVER_ADDR"]="$server"   # 回填解析结果，下游统一取用
+    info "内置 NFS 模式：$server（数据目录自动创建）"
+  fi
+
   local -a rewritten=()
   # 改写范围遵循约定：模板 <组件>.yaml，卷名 <组件>-data，数据目录 <base>/<ns>/<组件>；
   # 卷名与模板不符时 _nfs_rewrite_volume 的结果校验会报错拦截
@@ -76,12 +150,8 @@ apply_nfs_direct_mounts() { # $@=本次渲染的清单文件名
     _nfs_rewrite_file "$CONF_DIR/$cmp.yaml" "${cmp}-data" "$base/$ns/$cmp" "$server"
     info "NFS 直连改写完成: $server:$base/$ns/$cmp"
     rewritten+=("$cmp")
+    [ "$external" = "true" ] || prepare_nfs_path "$cmp"   # 外部 NFS 跳过，内置自动创建
   done
-  if [ ${#rewritten[@]} = 1 ]; then
-    info "若目录未创建，请在 NFS 服务器执行: mkdir -p $base/$ns/${rewritten[0]}"
-  elif [ ${#rewritten[@]} -gt 1 ]; then
-    info "若目录未创建，请在 NFS 服务器执行: mkdir -p $base/$ns/{$(IFS=,; echo "${rewritten[*]}")}"
-  fi
   return 0
 }
 
