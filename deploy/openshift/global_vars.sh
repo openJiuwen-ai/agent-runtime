@@ -63,8 +63,15 @@ declare -A DEPLOY_VARS=(
 
     # ----- 仅 k8s 形态（CLUSTER_TYPE=k8s，openshift 下不生效） -----
     # NFS 直连挂载：PVC 卷改写为 NFS 直连挂载
-    ["NFS_SERVER_ADDR"]=""               # NFS 服务器地址（必填）
+    # NFS_SERVER_ADDR 空=使用内置 NFS server；非空=外部 NFS server
+    ["NFS_SERVER_ADDR"]=""               # NFS 服务器地址（可选）
     ["NFS_SHARE_PATH"]="/"               # 共享根路径（须绝对路径），数据落 <该路径>/<NAMESPACE>/<组件>
+    # ENABLE_EXTERNAL_NFS 为运行时派生值（check_nfs_vars 按 NFS_SERVER_ADDR 是否为空设置），请勿手工配置
+    ["ENABLE_EXTERNAL_NFS"]="false"
+    # 内置 NFS server Pod 定位（NFS_SERVER_ADDR 留空时使用）
+    ["NFS_POD_PATH"]="/exports"          # 内置 NFS Pod 内的导出根（hostPath 挂载点）
+    ["NFS_POD_NAMESPACE"]="default"      # 内置 NFS Pod 所在 namespace
+    ["NFS_POD_LABEL"]="app=nfs-server"   # 内置 NFS Pod 的 label 选择器
     # manager-web NodePort Service：外部经 http://<节点IP>:<nodePort> 访问
     ["MANAGER_WEB_NODE_PORT"]=""         # 留空=从下方范围自动分配；.env.custom 可固定端口
     ["NODE_PORT_RANGE_START"]="30000"    # 自动分配范围下界
