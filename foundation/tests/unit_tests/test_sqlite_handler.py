@@ -8,6 +8,7 @@ import tempfile
 import unittest
 
 from sqlalchemy import inspect
+from sqlalchemy.exc import MultipleResultsFound
 
 from openjiuwen_runtime.foundation.db.sqlite_handler import SQLiteHandler
 from openjiuwen_runtime.foundation.db.table_def import (
@@ -15,6 +16,10 @@ from openjiuwen_runtime.foundation.db.table_def import (
     IndexDefinition,
     TableDefinition,
 )
+
+
+class _Increment:
+    sql_column_increment = True
 
 
 class TestSQLiteHandler(unittest.IsolatedAsyncioTestCase):
@@ -198,6 +203,125 @@ class TestSQLiteHandler(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNotNone(updated)
         self.assertEqual(updated.value, "new_value")
+
+    async def test_update_increment_rereads_by_primary_key(self):
+        """过滤条件里有主键时，丢掉自增列后仍回读到刚更新的那一行。"""
+        await self.handler.init_table(
+            TableDefinition(
+                table_name="test_increment_pk",
+                columns=[
+                    ColumnDefinition("id", "integer", primary_key=True, autoincrement=True),
+                    ColumnDefinition("status", "string", length=32, nullable=False),
+                    ColumnDefinition("revision", "integer", nullable=False),
+                ],
+            )
+        )
+        first = await self.handler.create(
+            "test_increment_pk", {"status": "pending", "revision": 3}
+        )
+        await self.handler.create(
+            "test_increment_pk", {"status": "pending", "revision": 9}
+        )
+
+        updated = await self.handler.update(
+            "test_increment_pk",
+            {"id": first.id, "status": "pending", "revision": 3},
+            {"status": "done", "revision": _Increment()},
+        )
+
+        self.assertEqual(updated.id, first.id)
+        self.assertEqual(updated.status, "done")
+        self.assertEqual(updated.revision, 4)
+        other = await self.handler.get("test_increment_pk", {"revision": 9})
+        self.assertEqual(other.status, "pending")
+
+    async def test_update_increment_without_stable_filter_raises(self):
+        """只按自增列过滤且表里有多行时，回读不会挑出其中一行。"""
+        await self.handler.init_table(
+            TableDefinition(
+                table_name="test_increment_unstable",
+                columns=[
+                    ColumnDefinition("id", "integer", primary_key=True, autoincrement=True),
+                    ColumnDefinition("revision", "integer", nullable=False),
+                ],
+            )
+        )
+        created = await self.handler.create(
+            "test_increment_unstable", {"revision": 3}
+        )
+        await self.handler.create("test_increment_unstable", {"revision": 8})
+
+        with self.assertRaises(MultipleResultsFound):
+            await self.handler.update(
+                "test_increment_unstable",
+                {"revision": 3},
+                {"revision": _Increment()},
+            )
+
+        stored = await self.handler.get("test_increment_unstable", {"id": created.id})
+        self.assertEqual(stored.revision, 4)
+
+    async def test_update_singleton_rereads_with_empty_filters(self):
+        """单例表用空条件更新，回读应返回这一行。"""
+        await self.handler.init_table(
+            TableDefinition(
+                table_name="test_singleton",
+                columns=[
+                    ColumnDefinition("id", "integer", primary_key=True, autoincrement=True),
+                    ColumnDefinition("limit_value", "integer", nullable=False),
+                    ColumnDefinition("revision", "integer", nullable=False),
+                ],
+            )
+        )
+        created = await self.handler.create(
+            "test_singleton", {"limit_value": 5, "revision": 3}
+        )
+
+        plain = await self.handler.update(
+            "test_singleton",
+            {},
+            {"limit_value": 6},
+        )
+        self.assertEqual(plain.id, created.id)
+        self.assertEqual(plain.limit_value, 6)
+        self.assertEqual(plain.revision, 3)
+
+        bumped = await self.handler.update(
+            "test_singleton",
+            {"revision": 3},
+            {"revision": _Increment()},
+        )
+        self.assertEqual(bumped.id, created.id)
+        self.assertEqual(bumped.revision, 4)
+
+    async def test_update_increment_ambiguous_filters_raise(self):
+        """去掉自增列后条件命中多行时，不返回其中某一行。"""
+        await self.handler.init_table(
+            TableDefinition(
+                table_name="test_increment_ambiguous",
+                columns=[
+                    ColumnDefinition("id", "integer", primary_key=True, autoincrement=True),
+                    ColumnDefinition("status", "string", length=32, nullable=False),
+                    ColumnDefinition("revision", "integer", nullable=False),
+                ],
+            )
+        )
+        first = await self.handler.create(
+            "test_increment_ambiguous", {"status": "pending", "revision": 3}
+        )
+        await self.handler.create(
+            "test_increment_ambiguous", {"status": "pending", "revision": 9}
+        )
+
+        with self.assertRaises(MultipleResultsFound):
+            await self.handler.update(
+                "test_increment_ambiguous",
+                {"status": "pending", "revision": 3},
+                {"revision": _Increment()},
+            )
+
+        stored = await self.handler.get("test_increment_ambiguous", {"id": first.id})
+        self.assertEqual(stored.revision, 4)
 
     async def test_delete(self):
         """测试删除记录"""
