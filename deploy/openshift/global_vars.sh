@@ -118,6 +118,11 @@ declare -A DEPLOY_VARS=(
     ["MARIADB_NODE_PORT"]=""             # k8s 形态 mariadb NodePort，留空自动分配
     ["MYSQL_NODE_PORT"]=""               # k8s 形态 mysql NodePort，留空自动分配
     ["POSTGRESQL_NODE_PORT"]=""          # k8s 形态 postgresql NodePort，留空自动分配
+    # 企业统一认证
+    ["IDENTITY_SSO_SERVER_URL"]=""
+    ["IDENTITY_SSO_LOGIN_CLIENT_ID"]=""
+    ["IDENTITY_SSO_TOKEN_AUDIENCE"]=""
+    ["IDENTITY_FEDERATION_CONFIG_FILE"]=""
     # dev 模式：hostPath 挂载宿主机代码调试（MODE=dev 仅 k8s 形态支持；Pod 固定到代码所在节点）
     ["MODE"]="product"                   # product | dev
     ["CLAW_CODE_PATH"]=""                # jiuwenclaw 仓库路径（挂载到 agentserver/gateway/web）

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -44,7 +45,51 @@ class Settings(BaseSettings):
     refresh_ttl_seconds: int = Field(default=7 * 24 * 3600, validation_alias="IDENTITY_REFRESH_TTL")
     # JWT 签名密钥落身份库(表 auth_jwt_signing_key,生成一次→落库→多副本读同一行)。
 
-    # ---- 联合认证（当前仓库仅提供显式开启的本地 Demo Provider）----
+    # ---- 企业用户登录：以下三项需同时填写；不使用时全部留空 ----
+    sso_server_url: str = Field(default="", validation_alias="IDENTITY_SSO_SERVER_URL")
+    sso_login_client_id: str = Field(default="", validation_alias="IDENTITY_SSO_LOGIN_CLIENT_ID")
+    sso_token_audience: str = Field(default="", validation_alias="IDENTITY_SSO_TOKEN_AUDIENCE")
+
+    # File connections take precedence; legacy single-connection envs remain supported.
+    federation_config_file: str | None = Field(default=None, validation_alias="IDENTITY_FEDERATION_CONFIG_FILE")
+    # ---- 联合认证：配置 Issuer 后启用 OIDC，沿用现有 state / code 表 ----
+    federation_oidc_issuer: str = Field(default="", validation_alias="IDENTITY_FEDERATION_OIDC_ISSUER")
+    federation_oidc_client_id: str = Field(default="", validation_alias="IDENTITY_FEDERATION_OIDC_CLIENT_ID")
+    federation_oidc_flow: Literal["server_code", "browser_pkce"] = Field(
+        default="server_code", validation_alias="IDENTITY_FEDERATION_OIDC_FLOW"
+    )
+    federation_oidc_client_secret: SecretStr | None = Field(
+        default=None, validation_alias="IDENTITY_FEDERATION_OIDC_CLIENT_SECRET"
+    )
+    federation_oidc_redirect_uri: str = Field(default="", validation_alias="IDENTITY_FEDERATION_OIDC_REDIRECT_URI")
+    # Optional overrides for customer CA and access-token audience.
+    federation_oidc_ca_bundle: str | None = Field(default=None, validation_alias="IDENTITY_FEDERATION_OIDC_CA_BUNDLE")
+    federation_oidc_audience: str = Field(
+        default="egress_gateway", validation_alias="IDENTITY_FEDERATION_OIDC_AUDIENCE"
+    )
+
+    @property
+    def federation_oidc_enabled(self) -> bool:
+        values = (
+            self.sso_server_url,
+            self.sso_login_client_id,
+            self.sso_token_audience,
+            self.federation_oidc_issuer,
+        )
+        return any(value.strip() for value in values)
+
+    @property
+    def federation_oidc_connection_id(self) -> str:
+        return "keycloak"
+
+    @property
+    def federation_oidc_organization_id(self) -> str:
+        return "federated-keycloak"
+
+    @property
+    def federation_oidc_name(self) -> str:
+        return "Keycloak"
+
     federation_demo_enabled: bool = Field(
         default=False,
         validation_alias="IDENTITY_FEDERATION_DEMO_ENABLED",

@@ -184,6 +184,17 @@ def normalize_model_template_data(value: Any) -> dict[str, Any] | None:
 
 
 
+def validate_agent_template_data(data: dict[str, Any] | None) -> dict[str, Any] | None:
+    if data is not None and "custom_config" in data:
+        config = data["custom_config"]
+        if not isinstance(config, list) or any(not isinstance(item, dict) for item in config):
+            raise ValueError("data.custom_config must be an array of JSON objects")
+    return data
+
+
+AgentTemplateData = Annotated[dict[str, Any] | None, AfterValidator(validate_agent_template_data)]
+
+
 class AgentTemplateCreateBody(SafeTextMixin):
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -192,7 +203,7 @@ class AgentTemplateCreateBody(SafeTextMixin):
     agent_tags: list[str] | None = None
     template_ref: TemplateRefField = Field(default_factory=dict)
     enabled: bool = True
-    data: dict[str, Any] | None = None
+    data: AgentTemplateData = None
 
 
 class AgentTemplateUpdateBody(SafeTextMixin):
@@ -203,7 +214,7 @@ class AgentTemplateUpdateBody(SafeTextMixin):
     agent_tags: list[str] | None = None
     template_ref: OptionalTemplateRefField = None
     enabled: bool | None = None
-    data: dict[str, Any] | None = None
+    data: AgentTemplateData = None
 
 
 class AgentTemplateListQuery(BaseModel):

@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
-    "test": "node tests/permissionsForm.test.mjs",
+    "test": "node --test tests/*.test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -15,6 +15,7 @@
     "clsx": "^2.1.0",
     "i18next": "^25.8.18",
     "i18next-browser-languagedetector": "^8.2.1",
+    "oidc-client-ts": "^3.5.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-i18next": "^16.5.8",

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import html
+import re
+import secrets
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from openjiuwen_runtime.service import (
     FederationError,
@@ -13,14 +15,20 @@ from openjiuwen_runtime.service import (
 )
 
 from identity_center.core.federation import IdentityFederationService
-from identity_center.schemas.auth_schemas import TokenResponse
+from identity_center.infrastructure.logger import get_logger
+from identity_center.routers.deps import get_current_claims
 from identity_center.schemas.federation_schemas import (
+    FederatedTokenResponse,
+    FederationAccessToken,
+    FederationBrowserConfiguration,
     FederationCodeExchangeBody,
     FederationConnectionOut,
     FederationConnectionsOut,
 )
 
 federation_router = APIRouter()
+_PRIVATE_HEADERS = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
+_log = get_logger(__name__)
 
 
 def get_federation_service(request: Request) -> IdentityFederationService:
@@ -34,6 +42,7 @@ def get_federation_service(request: Request) -> IdentityFederationService:
 
 
 _Service = Annotated[IdentityFederationService, Depends(get_federation_service)]
+_Claims = Annotated[dict, Depends(get_current_claims)]
 
 
 @federation_router.get("/connections", response_model=FederationConnectionsOut)
@@ -44,25 +53,167 @@ async def list_connections(service: _Service):
             FederationConnectionOut(
                 connection_id=connection.connection_id,
                 name=connection.organization_name,
+                flow=service.flow(connection.connection_id),
             )
             for connection in service.connections
         ]
     )
 
 
-@federation_router.get("/{connection_id}/login")
-async def begin_login(
-    connection_id: str,
-    service: _Service,
-    return_to: str = Query(default="/auth"),
+@federation_router.get(
+    "/{connection_id}/configuration", response_model=FederationBrowserConfiguration
+)
+async def browser_configuration(
+    connection_id: str, response: Response, service: _Service
 ):
+    response.headers.update(_PRIVATE_HEADERS)
     try:
-        login_url = await service.begin_login(connection_id, return_to)
+        return await service.browser_configuration(connection_id)
     except UnknownFederationConnection as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except FederationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return RedirectResponse(login_url, status_code=status.HTTP_303_SEE_OTHER)
+
+
+@federation_router.post(
+    "/{connection_id}/token-login",
+    response_model=FederatedTokenResponse,
+    response_model_exclude_none=True,
+)
+async def browser_token_login(
+    connection_id: str, request: Request, response: Response, service: _Service
+):
+    response.headers.update(_PRIVATE_HEADERS)
+    scheme, _, token = request.headers.get("Authorization", "").partition(" ")
+    if scheme.lower() != "bearer" or not token.strip() or len(token) > 32768:
+        raise HTTPException(
+            status_code=401,
+            detail="invalid_external_access_token",
+            headers=_PRIVATE_HEADERS,
+        )
+    try:
+        result = await service.login_with_access_token(connection_id, token.strip())
+    except UnknownFederationConnection as exc:
+        raise HTTPException(
+            status_code=404, detail=str(exc), headers=_PRIVATE_HEADERS
+        ) from exc
+    except FederationError as exc:
+        raise HTTPException(
+            status_code=401,
+            detail="invalid_external_access_token",
+            headers=_PRIVATE_HEADERS,
+        ) from exc
+    if isinstance(result, str):
+        raise HTTPException(
+            status_code=403 if result == "disabled" else 401,
+            detail=result,
+            headers=_PRIVATE_HEADERS,
+        )
+    return result
+
+
+@federation_router.post(
+    "/{connection_id}/token-handoff", response_model=FederationAccessToken
+)
+async def refresh_handoff(
+    connection_id: str,
+    request: Request,
+    response: Response,
+    service: _Service,
+    claims: _Claims,
+):
+    response.headers.update(_PRIVATE_HEADERS)
+    scheme, _, token = request.headers.get("X-User-Token", "").partition(" ")
+    if scheme.lower() != "bearer" or not token.strip() or len(token) > 32768:
+        raise HTTPException(
+            status_code=401,
+            detail="invalid_external_access_token",
+            headers=_PRIVATE_HEADERS,
+        )
+    try:
+        return await service.refresh_token_handoff(
+            connection_id, token.strip(), str(claims["sub"])
+        )
+    except UnknownFederationConnection as exc:
+        raise HTTPException(
+            status_code=404, detail=str(exc), headers=_PRIVATE_HEADERS
+        ) from exc
+    except FederationError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail="invalid_external_token_binding",
+            headers=_PRIVATE_HEADERS,
+        ) from exc
+
+
+@federation_router.get("/{connection_id}/login")
+async def begin_login(
+    connection_id: str,
+    request: Request,
+    service: _Service,
+    return_to: str = Query(default="/auth"),
+):
+    try:
+        bound = service.requires_browser_binding(connection_id)
+        binding = request.cookies.get(service.browser_cookie_name, "")
+        if not re.fullmatch(r"[A-Za-z0-9_-]{43,128}", binding):
+            binding = secrets.token_urlsafe(32)
+        login_url = await service.begin_login(
+            connection_id, return_to, browser_binding=binding if bound else None
+        )
+    except UnknownFederationConnection as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except FederationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    response = RedirectResponse(
+        login_url, status_code=status.HTTP_303_SEE_OTHER, headers=_PRIVATE_HEADERS
+    )
+    if bound:
+        response.set_cookie(
+            service.browser_cookie_name,
+            binding,
+            httponly=True,
+            samesite="lax",
+            secure=service.secure_browser_cookie,
+            max_age=service.browser_cookie_ttl,
+            path=service.browser_cookie_path,
+        )
+    return response
+
+
+@federation_router.get("/{connection_id}/callback")
+async def complete_oidc_login(connection_id: str, request: Request, service: _Service):
+    """OIDC query callback: only a server-validated identity can create a local code."""
+    try:
+        if not service.requires_browser_binding(connection_id):
+            raise HTTPException(
+                status_code=405, detail="this provider requires a POST callback"
+            )
+        parameters = dict(request.query_params)
+        for key in ("code", "state", "iss", "error"):
+            if len(request.query_params.getlist(key)) > 1:
+                raise FederationError("duplicate OIDC callback parameter")
+        if (
+            len(parameters.get("state", "")) > 128
+            or len(parameters.get("code", "")) > 4096
+        ):
+            raise FederationError("invalid OIDC callback parameter")
+        redirect_url, _ = await service.complete_callback(
+            connection_id,
+            parameters,
+            browser_binding=request.cookies.get(service.browser_cookie_name),
+        )
+    except UnknownFederationConnection as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except FederationError as exc:
+        # Never echo upstream error descriptions, authorization codes or state.
+        _log.warning(
+            "federation.oidc_login_failed", connection_id=connection_id, reason=str(exc)
+        )
+        redirect_url = "/auth?federation_error=authentication_failed"
+    return RedirectResponse(
+        redirect_url, status_code=status.HTTP_303_SEE_OTHER, headers=_PRIVATE_HEADERS
+    )
 
 
 @federation_router.get(
@@ -122,6 +273,8 @@ async def complete_login(connection_id: str, request: Request, service: _Service
     form_data = await request.form()
     parameters = {key: str(value) for key, value in form_data.items()}
     try:
+        if service.requires_browser_binding(connection_id):
+            raise HTTPException(status_code=405, detail="OIDC requires a GET callback")
         redirect_url, _ = await service.complete_callback(
             connection_id,
             parameters,
@@ -133,9 +286,18 @@ async def complete_login(connection_id: str, request: Request, service: _Service
     return RedirectResponse(redirect_url, status_code=status.HTTP_303_SEE_OTHER)
 
 
-@federation_router.post("/exchange", response_model=TokenResponse)
-async def exchange_code(body: FederationCodeExchangeBody, service: _Service):
-    result = await service.exchange_code(body.code)
+@federation_router.post(
+    "/exchange", response_model=FederatedTokenResponse, response_model_exclude_none=True
+)
+async def exchange_code(
+    body: FederationCodeExchangeBody,
+    request: Request,
+    response: Response,
+    service: _Service,
+):
+    result = await service.exchange_code(
+        body.code, browser_binding=request.cookies.get(service.browser_cookie_name)
+    )
     if isinstance(result, str):
         status_code = (
             status.HTTP_403_FORBIDDEN
@@ -143,11 +305,13 @@ async def exchange_code(body: FederationCodeExchangeBody, service: _Service):
             else status.HTTP_401_UNAUTHORIZED
         )
         raise HTTPException(status_code=status_code, detail=result)
-    return TokenResponse(
+    response.headers.update(_PRIVATE_HEADERS)
+    return FederatedTokenResponse(
         access_token=result["access_token"],
         token_type=result["token_type"],
         expires_in=result["expires_in"],
         refresh_token=result["refresh_token"],
+        federation=result.get("federation"),
     )
 
 

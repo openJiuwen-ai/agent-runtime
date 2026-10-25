@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useAuth } from '../auth/AuthContext';
 import { ApiError, AuthApi, FederationConnection } from '../services/api';
 import { getProductName } from '../utils/env';
+import { beginBrowserLogin } from '../auth/federation/client';
 
 export function LoginPage() {
   const { t } = useTranslation();
@@ -29,7 +30,13 @@ export function LoginPage() {
   }, []);
 
   useEffect(() => {
-    const code = new URLSearchParams(window.location.search).get('federation_code');
+    const params = new URLSearchParams(window.location.search);
+    if (params.has('federation_error')) {
+      window.history.replaceState({}, '', '/auth');
+      setError(t('auth.federationFailed'));
+      return;
+    }
+    const code = params.get('federation_code');
     if (!code || exchangeStarted.current) return;
     exchangeStarted.current = true;
     setSubmitting(true);
@@ -55,6 +62,18 @@ export function LoginPage() {
       const detail = err instanceof ApiError ? err.detail : '';
       setError(codeMsg[detail] ?? t('auth.loginFailed'));
     } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function onEnterpriseLogin(connection: FederationConnection) {
+    setError('');
+    setSubmitting(true);
+    try {
+      if (connection.flow === 'browser_pkce') await beginBrowserLogin(connection.connection_id);
+      else AuthApi.beginFederatedLogin(connection.connection_id);
+    } catch {
+      setError(t('auth.federationFailed'));
       setSubmitting(false);
     }
   }
@@ -102,7 +121,7 @@ export function LoginPage() {
               <button
                 className="btn mt-3"
                 key={connection.connection_id}
-                onClick={() => AuthApi.beginFederatedLogin(connection.connection_id)}
+                onClick={() => void onEnterpriseLogin(connection)}
                 type="button"
                 disabled={submitting}
                 style={{ width: '100%' }}

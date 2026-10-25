@@ -4,11 +4,13 @@ import { ConfigRefreshCostHint } from '../../components/ConfigRefreshCostHint';
 import { Modal, ModalCancelButton } from '../../components/Modal';
 import { TemplateRefEditor } from '../../components/TemplateRefEditor';
 import { LimitedTextInput } from '../../components/LimitedTextInput';
+import { JsonField } from '../../components/JsonField';
 import { useFormDirty } from '../../hooks/useFormDirty';
 import { AgentTemplate, AgentTemplateApi, ApiError } from '../../services/api';
 import { toast } from '../../stores/uiStore';
 import { bumpGuideRevision } from '../../stores/guideStore';
 import { fromCommaList, toCommaList } from '../../utils/format';
+import { jsonContentForValidation } from '../../utils/jsonExample';
 import {
   findSingleValueTemplateRefViolation,
   normalizeTemplateRefFromApi,
@@ -41,6 +43,7 @@ interface FormState {
   description: string;
   agent_tags: string;
   template_ref: TemplateRefMap;
+  custom_config_json: string;
 }
 
 const empty: FormState = {
@@ -48,7 +51,32 @@ const empty: FormState = {
   description: '',
   agent_tags: '',
   template_ref: {},
+  custom_config_json: '',
 };
+
+function customConfigText(data: AgentTemplate['data']): string {
+  const value = data?.custom_config;
+  return value === undefined ? '' : JSON.stringify(value, null, 2);
+}
+
+function parseCustomConfig(text: string): {
+  value: Record<string, unknown>[];
+  error: 'json' | 'objectArray' | null;
+} {
+  const content = jsonContentForValidation(text);
+  if (!content) return { value: [], error: null };
+  try {
+    const value: unknown = JSON.parse(content);
+    if (!Array.isArray(value) || value.some((item) => (
+      item === null || typeof item !== 'object' || Array.isArray(item)
+    ))) {
+      return { value: [], error: 'objectArray' };
+    }
+    return { value, error: null };
+  } catch {
+    return { value: [], error: 'json' };
+  }
+}
 
 export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) {
   const { t } = useTranslation();
@@ -64,6 +92,7 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
           description: (template.description ?? '').slice(0, FIELD_MAX_LENGTH.description),
           agent_tags: toCommaList(template.agent_tags),
           template_ref: normalizeTemplateRefFromApi(template.template_ref),
+          custom_config_json: customConfigText(template.data),
         }
       : empty;
     setForm(next);
@@ -73,7 +102,13 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
   const update = <K extends keyof FormState>(k: K, v: FormState[K]) =>
     setForm((s) => ({ ...s, [k]: v }));
 
+  const customConfig = parseCustomConfig(form.custom_config_json);
+
   const submit = async () => {
+    if (customConfig.error) {
+      toast('warn', t('agentTemplate.customConfigInvalid'));
+      return;
+    }
     if (!form.template_name.trim()) {
       toast('warn', t('agentTemplate.fieldRequired', { field: t('agentTemplate.templateName') }));
       return;
@@ -100,6 +135,9 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
       description: form.description.trim() || undefined,
       agent_tags: fromCommaList(form.agent_tags),
       template_ref: form.template_ref,
+      data: form.custom_config_json !== customConfigText(template?.data ?? null)
+        ? { ...(template?.data ?? {}), custom_config: customConfig.value }
+        : undefined,
     };
 
     setSaving(true);
@@ -129,7 +167,7 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
       footer={
         <>
           <ModalCancelButton />
-          <button className="btn primary" onClick={() => void submit()} disabled={saving}>
+          <button className="btn primary" onClick={() => void submit()} disabled={saving || customConfig.error !== null}>
             {saving ? t('common.loading') : t('common.save')}
           </button>
         </>
@@ -170,6 +208,21 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
             value={form.template_ref}
             onChange={(v) => update('template_ref', v)}
           />
+        </div>
+        <div className="md:col-span-2" data-testid="agent-template-custom-config">
+          <JsonField
+            label={t('agentTemplate.customConfig')}
+            value={form.custom_config_json}
+            onChange={(value) => update('custom_config_json', value)}
+            placeholder={'[\n  {\n    "xxx": "yyy",\n    "xxxz": "asdasd"\n  }\n]'}
+            rows={7}
+          />
+          <p className="text-[11px] text-muted mt-1">{t('agentTemplate.customConfigHint')}</p>
+          {customConfig.error === 'objectArray' && (
+            <div className="text-[11px] text-danger mt-1" role="alert">
+              {t('agentTemplate.customConfigInvalid')}
+            </div>
+          )}
         </div>
       </div>
       {template && <ConfigRefreshCostHint scope="template" />}

@@ -62,6 +62,14 @@ spec:
               value: "true"
             - name: IDENTITY_FEDERATION_DEMO_ENABLED
               value: "false"
+            - name: IDENTITY_SSO_SERVER_URL
+              value: "<<IDENTITY_SSO_SERVER_URL>>"
+            - name: IDENTITY_SSO_LOGIN_CLIENT_ID
+              value: "<<IDENTITY_SSO_LOGIN_CLIENT_ID>>"
+            - name: IDENTITY_SSO_TOKEN_AUDIENCE
+              value: "<<IDENTITY_SSO_TOKEN_AUDIENCE>>"
+            - name: IDENTITY_FEDERATION_CONFIG_FILE
+              value: "<<IDENTITY_FEDERATION_CONFIG_FILE>>"
             - name: IDENTITY_FEDERATION_PUBLIC_PATH_PREFIX
               value: "/idp"
             - name: IDENTITY_FEDERATION_REQUEST_TTL
