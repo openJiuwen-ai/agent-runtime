@@ -47,6 +47,7 @@ declare -A DEPLOY_VARS=(
     ["RENDER_ONLY"]="false"
     ["CLUSTER_TYPE"]="openshift"
     ["CLUSTER_API_SERVER"]=""            # openshift 形态必填（http(s) URL），留空自动探测（oc/kubeconfig）；k8s 形态走 kubeconfig，留空
+    ["BASE_SVC_NS"]=""                   # 基础服务所在 ns
      ["DATA_STORAGE_CLASS"]=""
     ["WORKSPACE_STORAGE_CLASS"]=""
 
@@ -56,8 +57,7 @@ declare -A DEPLOY_VARS=(
     ["MINIO_ROOT_USER"]="minioadmin"
     ["MINIO_ROOT_PASSWORD"]="Root@123456"
 
-    ["DB_TYPE"]="mariadb"                # 数据库类型：mariadb | mysql | postgresql（驱动 DB 主机/端口/密码/组件选择）
-    # 数据库连接：DB_HOST 空=内置数据库（headless 服务名按 DB_TYPE+NAMESPACE 自动派生）；填写=外部数据库
+    ["DB_TYPE"]="mariadb"                # 数据库类型：mariadb | mysql | postgresql
     ["DB_HOST"]=""
     ["DB_PORT"]=""                       # 留空按 DB_TYPE 取默认（3306/5432）；外部数据库填写对应端口
     ["DB_USER"]=""                       # 留空按 DB_TYPE 取默认（root/postgres）；外部数据库填写对应用户
