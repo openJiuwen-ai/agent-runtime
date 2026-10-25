@@ -52,6 +52,7 @@ main() {
   kctl_check_vars
 
   if [ "$CMD" = up ]; then
+    filter_targets_by_cluster_type   # k8s 形态：基础服务复用 default 共享实例，禁在本 ns up（-n default 预置放行）；仅 up 生效
     _kctl_k8s_ensure_namespace "$KCTL_NS"   # 仅 up 且 k8s 形态生效；down/openshift 不新建 namespace
     resolve_targets        # 可拉起依赖（redis）集群缺失时自动纳入
     info "部署目标: ${TARGETS[*]}"

@@ -82,14 +82,27 @@ component_deps() {
   esac
 }
 
-# 组件 → 存在性探测用的 kind/name（依赖预检与卸载存活检查共用，须覆盖全部组件）
+# 组件 → 存在性探测所在命名空间：
+#   基础服务（mariadb/mysql/postgresql/minio）→ BASE_SVC_NS
+#   （k8s 形态=default 集群共享实例；openshift 形态=本 ns，两者同值，行为不变）
+#   其余组件 → 本命名空间（KCTL_NS）
+component_ns() {
+  case "$1" in
+    mariadb|mysql|postgresql|minio) echo "${DEPLOY_VARS["BASE_SVC_NS"]:-$KCTL_NS}";;
+    *)                              echo "$KCTL_NS";;
+  esac
+}
+
+# 组件 → 存在性探测用的 kind/name（依赖预检与卸载存活检查共用，须覆盖全部组件）。
+# kind 与本工具模板一致：基础服务均为 StatefulSet（minio 模板已从 Deployment 改造），
+# redis/产品组件为 Deployment；k8s 形态共享实例（default）亦为同款形态
 component_probe() {
   case "$1" in
     secret)         echo "Secret/jiuwenclaw-secret-configmap";;
     mariadb)        echo "StatefulSet/mariadb";;
     mysql)          echo "StatefulSet/mysql";;
     postgresql)     echo "StatefulSet/postgresql";;
-    minio)          echo "Deployment/minio";;
+    minio)          echo "StatefulSet/minio";;
     redis)          echo "Deployment/redis";;
     agentserver)    echo "Deployment/jiuwenclaw-agentserver";;
     gateway)        echo "Deployment/jiuwenclaw-gateway";;
@@ -106,6 +119,12 @@ dep_hint() {
   case "$1" in
     secret) echo "随 ./deploy.sh up 自动拉起（各组件共用的配置 Secret）";;
     redis)  echo "随 ./deploy.sh up 自动拉起";;
+    mariadb|mysql|postgresql|minio)
+      if is_k8s_cluster; then
+        echo "k8s 形态复用 default 命名空间的共享实例（本次探测 ns: ${DEPLOY_VARS["BASE_SVC_NS"]:-default}），缺失请在该命名空间先行部署或联系管理员"
+      else
+        echo "先执行 ./deploy.sh up $1"
+      fi;;
     *)      echo "先执行 ./deploy.sh up $1";;
   esac
 }

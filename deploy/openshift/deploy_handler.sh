@@ -14,11 +14,12 @@ sort_targets() {
   TARGETS=("${sorted[@]}")
 }
 
-# 组件存在性探测：stdout 输出 http_code（200=已在集群；无探测映射或路径解析失败输出 000）
+# 组件存在性探测：stdout 输出 http_code（200=已在集群；无探测映射或路径解析失败输出 000）。
+# 探测命名空间经 component_ns：基础服务（k8s 形态）指向 default 共享实例，其余在本 ns
 component_probe_code() { # $1=组件
   local probe p
   probe=$(component_probe "$1") || { echo "000"; return 0; }
-  p=$(kctl_kind_path "${probe%%/*}" "$KCTL_NS") || { echo "000"; return 0; }
+  p=$(kctl_kind_path "${probe%%/*}" "$(component_ns "$1")") || { echo "000"; return 0; }
   kctl_http GET "$p/${probe#*/}" /dev/null
 }
 
@@ -55,6 +56,25 @@ resolve_targets() {
   sort_targets
 }
 
+# k8s 形态：基础服务（mariadb/mysql/postgresql/minio）复用 default 命名空间的共享实例，
+# 禁止在业务命名空间部署——显式 `up <基础组件>` 直接报错（而非静默剔除，避免"以为部署了其实没部署"）。
+# 例外：目标 ns 本身就是共享 ns（`./deploy.sh -n default up mysql` 管理员预置场景）→ 放行。
+# 仅 up 流程调用（deploy.sh main 的 up 分支，置于 ensure_namespace 之前避免误建 ns）；
+# down 必须放行（存量业务 ns 基础服务需要可卸载），--render-only 经早退自然豁免（纯本地预览）。
+# 前置条件：KCTL_NS 已赋值、resolve_base_svc_ns 已执行
+filter_targets_by_cluster_type() {
+  is_k8s_cluster || return 0
+  [ "$KCTL_NS" = "${DEPLOY_VARS["BASE_SVC_NS"]}" ] && return 0
+  local comp banned=()
+  for comp in "${TARGETS[@]}"; do
+    case "$comp" in
+      mariadb|mysql|postgresql|minio) banned+=("$comp");;
+    esac
+  done
+  [ ${#banned[@]} -eq 0 ] && return 0
+  error "CLUSTER_TYPE=k8s：基础服务(${banned[*]})复用 default 命名空间的共享实例，禁止在 ${KCTL_NS} 部署；共享实例缺失请先 'deploy.sh -n default up <组件>' 或联系管理员，本次请从 up 目标中剔除后重试"
+}
+
 # up 预检：目标组件的硬依赖必须就位——secret/redis 已由 resolve_targets 补齐，
 # 此处拦截基础服务（mariadb/minio 等）缺失
 preflight() {
@@ -84,8 +104,8 @@ preflight() {
   for dep in "${probes[@]}"; do
     code=$(component_probe_code "$dep")
     case "$code" in
-      200) info "$(component_probe "$dep" | awk -F/ '{print $2}') 已在集群";;
-      404) error "缺依赖: $(component_probe "$dep")，$(dep_hint "$dep")";;
+      200) info "$(component_ns "$dep")/$(component_probe "$dep" | awk -F/ '{print $2}') 已在集群";;
+      404) error "缺依赖: $(component_ns "$dep")/$(component_probe "$dep")，$(dep_hint "$dep")";;
       *)   error "探测 $dep 异常 → HTTP $code";;
     esac
   done
@@ -226,11 +246,17 @@ deploy_component() { # $1=组件 $2=序号 $3=总数
 # 探测语义（fail-safe）：仅 404 视为确认不存在；200 与其余状态码（含探测失败 000、
 # 401/403 等无法排除存活的情况）一律保守视为存活
 has_alive_dependents() { # $1=组件 → 0=有依赖方存活
-  local comp="$1" other
+  local comp="$1" other comp_ns
+  comp_ns=$(component_ns "$comp")
   local -a dependents=()
   for other in "${ALL_COMPONENTS[@]}"; do
     in_array "$other" "${TARGETS[@]}" && continue
-    in_array "$comp" $(component_deps "$other") && dependents+=("$other")
+    in_array "$comp" $(component_deps "$other") || continue
+    # 跨命名空间不构成对象级依赖：k8s 形态基础服务在共享 ns（BASE_SVC_NS），用的是
+    # 共享侧自己的 Secret，与本 ns 的 Secret 对象无关——不算依赖方（否则共享实例
+    # 恒存活会把本 ns 的 Secret 永久钉住，down/gc 永不回收）
+    [ "$(component_ns "$other")" = "$comp_ns" ] || continue
+    dependents+=("$other")
   done
   [ ${#dependents[@]} -eq 0 ] && return 1
   for other in "${dependents[@]}"; do
@@ -304,6 +330,9 @@ gc_orphan_shared_deps() {
     for other in "${ALL_COMPONENTS[@]}"; do
       [ "$other" = "$dep" ] && continue
       in_array "$dep" $(component_deps "$other") || continue
+      # 跨命名空间不构成对象级依赖（同 has_alive_dependents：共享 ns 基础服务
+      # 不钉住本 ns 的 Secret/Redis）
+      [ "$(component_ns "$other")" = "$(component_ns "$dep")" ] || continue
       case "$(component_probe_code "$other")" in
         404) continue;;   # 该依赖方确认不存在，检查下一个
         200) info "$dep 仍被存活组件 $other 依赖，保留"; orphan=0; break;;
