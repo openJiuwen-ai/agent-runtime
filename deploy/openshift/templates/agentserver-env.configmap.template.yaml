@@ -16,7 +16,7 @@ data:
   DB_CONNECT_TIMEOUT: "15"
   DISABLED_TOOLS: search_skill,install_skill,uninstall_skill,code,web_search,fetch_webpage,skill_acceleration_exec,deepresearch_execute,deepresearch_stream,deepresearch_prepare_rewrite,deepresearch_commit_rewrite,deepresearch_generate_rewrite_html,wiki_ingest,wiki_query,wiki_lint,memory_search,audio_transcription,audio_question_answering,prepare_skill_evolution,evolve_review_task,evolve_skill_experiences,list_skill_experiences,read_skill_experiences,simplify_skill_experiences,get_current_goal,submit_goal_report
   EXTENSION_DIRS: /app/jiuwenswarm/packages/jiuwenclaw-ee/agentserver/extensions
-  GATEWAY_DB_HOST: <<DB_HEADLESS_SVC>>.<<NAMESPACE>>
+  GATEWAY_DB_HOST: <<DB_HOST>>
   GATEWAY_DB_NAME: gateway_<<NAMESPACE>>
   GATEWAY_DB_PORT: "<<DB_PORT>>"
   GATEWAY_DB_TYPE: <<DB_TYPE>>
@@ -34,10 +34,10 @@ data:
   LOG_MASK_ENABLED: "true"
   LOG_ROOT_PATH: /home/app
   LOG_TO_FILE_ENABLED: "true"
-  OBS_BUCKET: jiuwenclaw
-  OBS_REGION: default
-  OBS_SECURE: "false"
-  OBS_URL: minio.<<NAMESPACE>>:9000
+  OBS_BUCKET: <<OBS_BUCKET>>
+  OBS_REGION: <<OBS_REGION>>
+  OBS_SECURE: "<<OBS_SECURE>>"
+  OBS_URL: <<OBS_URL>>
   OTEL_ENABLED: "true"
   OTEL_EXPORTER_OTLP_ENDPOINT: http://jiuwenclaw-otel-collector:4318
   OTEL_EXPORTER_OTLP_PROTOCOL: http
@@ -49,5 +49,9 @@ data:
   ROLE: agentserver
   SKILL_REFRESH_TTL_SECONDS: "30"
   TZ: Asia/Shanghai
+  REDIS_MODE: <<REDIS_MODE>>
+  REDIS_HOST: <<REDIS_HOST>>
+  REDIS_PORT: "<<REDIS_PORT>>"
+  REDIS_KEY_PREFIX: '<<REDIS_KEY_PREFIX>>'
   REDIS_USER: <<REDIS_USER>>
   WORKSPACE_QUOTA_ENABLED: "false"

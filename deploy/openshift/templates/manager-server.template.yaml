@@ -51,11 +51,11 @@ spec:
                 name: jiuwenclaw-secret-configmap
         env:
         - name: REDIS_URL
-          value: "redis://redis.<<NAMESPACE>>:6379"  # 凭据经 REDIS_USER/REDIS_PASSWORD 注入
+          value: "<<REDIS_URL>>"  # 凭据经 REDIS_USER/REDIS_PASSWORD 注入
         - name: REDIS_USER
           value: "<<REDIS_USER>>"
         - name: REDIS_KEY_PREFIX
-          value: "jiuwenclaw:"
+          value: "<<REDIS_KEY_PREFIX>>"
         - name: MANAGER_RABBITMQ_URL
           value: ""
         - name: MANAGER_REST_HOST
@@ -65,7 +65,7 @@ spec:
         - name: MANAGER_DB_TYPE
           value: "<<DB_TYPE>>"
         - name: MANAGER_DB_HOST
-          value: "<<DB_HEADLESS_SVC>>.<<NAMESPACE>>"
+          value: "<<DB_HOST>>"
         - name: MANAGER_DB_PORT
           value: "<<DB_PORT>>"
         - name: MANAGER_DB_USER

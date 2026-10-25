@@ -8,7 +8,7 @@ _DEPLOY_COMMON_SH=1
 info() { echo -e "\033[36m=== $@ ===\033[0m"; }
 success() { echo -e "\033[32m✅ $@\033[0m"; }
 warning() { echo -e "\033[33m⚠️  $@\033[0m"; }
-error() { echo -e "\033[31m❌ $@\033[0m"; exit 1; }
+error() { echo -e "\033[31m❌ $@\033[0m" >&2; exit 1; }
 
 in_array() {
   local v; for v in "${@:2}"; do [ "$v" = "$1" ] && return 0; done; return 1

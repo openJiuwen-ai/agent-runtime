@@ -9,7 +9,7 @@ _ENSURED_NODE_PORTS=""
 # 包含三部分：
 #   1. k8s 形态通道实现（_kctl_k8s_*）：kubectl.sh 共享原语的 k8s 分支，按形态分流调用
 #   2. manager-web NodePort Service 追加（apply_k8s_extras）
-#   3. NFS 直连挂载（check_nfs_vars + apply_nfs_direct_mounts）：PVC 卷改写为 NFS 直连挂载；
+#   3. NFS 直连挂载（resolve_nfs_vars + apply_nfs_direct_mounts）：PVC 卷改写为 NFS 直连挂载；
 #      NFS_SERVER_ADDR 空=内置 NFS server（地址解析 + 数据目录自动创建），非空=外部 NFS
 
 # ---------- NFS 直连挂载改写 ----------
@@ -67,19 +67,19 @@ prepare_nfs_path() { # $1=组件
     || error "NFS 数据目录创建失败: $dir"
 }
 
-# NFS 变量校验（check_vars 统一入口调用；openshift 形态 no-op）：
-# 派生 ENABLE_EXTERNAL_NFS：NFS_SERVER_ADDR 空=built-in（false）/ 非空=external（true）
-# NFS_SERVER_ADDR 设置时须为主机名或 IP，共享根路径须为绝对路径
-check_nfs_vars() {
+# NFS 变量校验与内置/外置模式派生（NFS 直连挂载仅 k8s 形态使用）：
+# 内置/外置唯一判据为 NFS_SERVER_ADDR 是否为空；设置时须为主机名或 IP，
+# 共享根路径须为绝对路径
+resolve_nfs_vars() {
   is_k8s_cluster || return 0
   local val="${DEPLOY_VARS["NFS_SERVER_ADDR"]:-}"
-  if [ -z "$val" ]; then
-    DEPLOY_VARS["ENABLE_EXTERNAL_NFS"]="false"   # 内置 NFS server
-  else
-    [[ "$val" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] \
-      || error "NFS_SERVER_ADDR 非法（须为主机名或 IP）: $val"
+  if [ -n "$val" ]; then
     DEPLOY_VARS["ENABLE_EXTERNAL_NFS"]="true"    # 外部 NFS server
+  else
+    DEPLOY_VARS["ENABLE_EXTERNAL_NFS"]="false"   # 内置 NFS server
   fi
+  [ -z "$val" ] || [[ "$val" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] \
+    || error "NFS_SERVER_ADDR 非法（须为主机名或 IP）: $val"
   val="${DEPLOY_VARS["NFS_SHARE_PATH"]:-}"
   [[ "$val" =~ ^/[A-Za-z0-9_./-]*$ ]] \
     || error "NFS_SHARE_PATH 非法（须为绝对路径）: $val"
@@ -123,7 +123,7 @@ apply_nfs_direct_mounts() { # $@=本次渲染的清单文件名
   base="${base%/}"
   local ns="${DEPLOY_VARS["NAMESPACE"]}"
 
-  # 模式由 check_nfs_vars 派生：NFS_SERVER_ADDR 空=built-in（ENABLE_EXTERNAL_NFS=false，
+  # 模式由 resolve_nfs_vars 派生：NFS_SERVER_ADDR 空=built-in（ENABLE_EXTERNAL_NFS=false，
   # 地址从 Pod hostIP 解析，目录自动创建）；非空=external（ENABLE_EXTERNAL_NFS=true，目录须已存在）
   local external="${DEPLOY_VARS["ENABLE_EXTERNAL_NFS"]}" server=""
   if [ "$external" = "true" ]; then
@@ -442,16 +442,25 @@ mount_manager_web_nginx_template() { # manager-web：仓库 nginx 模板同上
 # 自动识别当前节点（hostPath 是节点本地的，Pod 必须固定到代码所在节点）：
 # 优先 .env.custom 的 CURRENT_NODE_NAME；否则按本机 hostname、再按本机 IP 匹配集群节点
 fetch_current_node_name() {
-  [ -n "${DEPLOY_VARS["CURRENT_NODE_NAME"]:-}" ] && { info "CURRENT_NODE_NAME: ${DEPLOY_VARS["CURRENT_NODE_NAME"]}"; return 0; }
+  [ -n "${DEPLOY_VARS["CURRENT_NODE_NAME"]:-}" ] && {
+    info "CURRENT_NODE_NAME: ${DEPLOY_VARS["CURRENT_NODE_NAME"]}"
+    return 0
+  }
   local host ip
   host=$(hostname)
   DEPLOY_VARS["CURRENT_NODE_NAME"]=$(kubectl get nodes -o json 2>/dev/null \
     | HOST="$host" yq -r '.items[] | select(.status.addresses[]? | select(.type == "Hostname") | .address == strenv(HOST)) | .metadata.name' 2>/dev/null | head -1)
-  [ -n "${DEPLOY_VARS["CURRENT_NODE_NAME"]}" ] && { info "CURRENT_NODE_NAME: ${DEPLOY_VARS["CURRENT_NODE_NAME"]}（按 hostname 识别）"; return 0; }
+  [ -n "${DEPLOY_VARS["CURRENT_NODE_NAME"]}" ] && {
+    info "CURRENT_NODE_NAME: ${DEPLOY_VARS["CURRENT_NODE_NAME"]}（按 hostname 识别）"
+    return 0
+  }
   for ip in $(hostname -I 2>/dev/null); do
     DEPLOY_VARS["CURRENT_NODE_NAME"]=$(kubectl get nodes -o json 2>/dev/null \
       | IP="$ip" yq -r '.items[] | select(.status.addresses[]? | select(.type == "InternalIP") | .address == strenv(IP)) | .metadata.name' 2>/dev/null | head -1)
-    [ -n "${DEPLOY_VARS["CURRENT_NODE_NAME"]}" ] && { info "CURRENT_NODE_NAME: ${DEPLOY_VARS["CURRENT_NODE_NAME"]}（按 IP 识别）"; return 0; }
+    [ -n "${DEPLOY_VARS["CURRENT_NODE_NAME"]}" ] && {
+      info "CURRENT_NODE_NAME: ${DEPLOY_VARS["CURRENT_NODE_NAME"]}（按 IP 识别）"
+      return 0
+    }
   done
   error "无法识别当前节点（本机可能不是集群节点）：MODE=dev 需在 .env.custom 配置 CURRENT_NODE_NAME"
 }
@@ -494,7 +503,7 @@ require_abs_dir() { # $1=变量名
 
 # MODE 相关校验（check_vars 统一入口调用）
 # MODE 为 k8s 形态专属调试开关：openshift 形态及 down 命令直接忽略全部 MODE 设置
-check_dev_mode_vars() {
+resolve_dev_mode_vars() {
   is_k8s_cluster || return 0
   [ "${CMD:-}" = "up" ] || return 0
   local mode="${DEPLOY_VARS["MODE"]}"
@@ -512,4 +521,27 @@ check_dev_mode_vars() {
     [ -n "${DEPLOY_VARS[$v]}" ] && require_abs_dir "$v"
   done
   return 0
+}
+
+# k8s 形态：up 前置——目标 namespace 不存在时自动创建（down 不调用本函数）
+# openshift 形态直接跳过：namespace 是 cluster-scope 资源，普通项目用户 GET/POST 均会 403，
+# 探测/自动创建都不可靠；Project 由管理员/平台预建（oc new-project），工具不做隐式创建
+# get 退出码非 0 不等于不存在（无 get namespaces 权限/网络故障同样非 0）：
+# 以 create 结果为准，仅 AlreadyExists 视为已存在放行，其余错误连同 kubectl stderr 报出
+_kctl_k8s_ensure_namespace() { # $1=namespace
+  is_k8s_cluster || return 0   # openshift：不探测、不自动创建
+  local ns="$1" err code
+  [ -n "$ns" ] || return 0
+  if kubectl get namespace "$ns" >/dev/null 2>&1; then
+    return 0
+  fi
+  err="$(kctl_tmpdir)/ns-err"
+  info "namespace $ns 不存在，自动创建"
+  if kubectl create namespace "$ns" >/dev/null 2>"$err"; then
+    info "namespace $ns 已创建"
+    return 0
+  fi
+  code=$(_kctl_k8s_err_code "$(cat "$err")")
+  [ "$code" = 409 ] && { info "namespace $ns 已存在"; return 0; }
+  error "namespace $ns 创建失败 → HTTP $code（若 ns 已存在则是缺 get namespaces 权限所致）: $(cat "$err")"
 }

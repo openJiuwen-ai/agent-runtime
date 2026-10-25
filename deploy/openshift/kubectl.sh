@@ -69,7 +69,7 @@ kctl_check_vars() {
   # .env.custom 缺失/缺项不再阻塞 --server/-n 的独立使用
   [ -n "${KCTL_SERVER:-}" ] && DEPLOY_VARS["CLUSTER_API_SERVER"]="${KCTL_SERVER}"
   [ -n "${KCTL_NS:-}" ] && DEPLOY_VARS["NAMESPACE"]="${KCTL_NS}"
-  check_api_server_var
+  resolve_api_server_var
   check_namespace_var
 
   if is_k8s_cluster; then
