@@ -50,7 +50,12 @@ cmd_ls() {
   local resp list_code pod_code
   resp="$(kctl_tmpdir)/resp"
   list_code=$(kctl_http GET "$IS_PREFIX/$KCTL_NS/imagestreams" "$resp")
-  [ "$list_code" = 200 ] || { [ "$list_code" = 401 ] && error "401 token 过期：控制台 → Copy login command → oc login 后重跑"; kctl_show_err "$list_code" "$resp"; }
+  if [ "$list_code" != 200 ]; then
+    if [ "$list_code" = 401 ]; then
+      error "401 token 过期：控制台 → Copy login command → oc login 后重跑"
+    fi
+    kctl_show_err "$list_code" "$resp"
+  fi
 
   local streams; mapfile -t streams < <(yq -r '.items[].metadata.name' "$resp")
   printf "%-45s %-16s %-20s %s\n" "REPOSITORY" "TAG" "IMAGE ID" "CREATED"
@@ -91,11 +96,21 @@ cmd_rm() {
 
   if [ -n "$IMG_TAG" ]; then
     code=$(kctl_http GET "$IS_PREFIX/$KCTL_NS/imagestreams/$IMG_NAME" "$resp")
-    [ "$code" = 200 ] || { [ "$code" = 404 ] && error "ImageStream 不存在: $IMG_NAME"; kctl_show_err "$code" "$resp"; }
+    if [ "$code" != 200 ]; then
+      if [ "$code" = 404 ]; then
+        error "ImageStream 不存在: $IMG_NAME"
+      fi
+      kctl_show_err "$code" "$resp"
+    fi
     # strategic merge patch 按 name 合并 tags 列表，$patch: delete 移除指定 tag
     code=$(kctl_patch_strategic "$IS_PREFIX/$KCTL_NS/imagestreams/$IMG_NAME" \
       "{\"spec\":{\"tags\":[{\"name\":\"$IMG_TAG\",\"\$patch\":\"delete\"}]}}" "$resp")
-    [ "$code" = 200 ] || { [ "$code" = 401 ] && error "401 token 过期：控制台 → Copy login command → oc login 后重跑"; kctl_show_err "$code" "$resp"; }
+    if [ "$code" != 200 ]; then
+      if [ "$code" = 401 ]; then
+        error "401 token 过期：控制台 → Copy login command → oc login 后重跑"
+      fi
+      kctl_show_err "$code" "$resp"
+    fi
     success "已删除 tag: $KCTL_NS/$IMG_NAME:$IMG_TAG"
   else
     code=$(kctl_http DELETE "$IS_PREFIX/$KCTL_NS/imagestreams/$IMG_NAME" "$resp")

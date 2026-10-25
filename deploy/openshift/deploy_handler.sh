@@ -24,6 +24,19 @@ component_probe_code() { # $1=组件
 
 # up 依赖补全：目标组件的可自动补齐依赖（secret/redis）在集群中缺失时纳入本次部署目标；
 # 集群已有则复用、不重复部署。基础服务不可自动补齐，缺失交给 preflight 报错
+# 外挂 Redis（REDIS_HOST 已配置）时从部署目标剔除内置 redis：
+# 默认目标 UP_TARGETS 写死了 redis，若不剔除，up 会无条件重新拉起内置实例。
+# 放在 check_vars 之后调用，渲染与部署两条路径（--render-only / 完整 up）行为一致。
+filter_targets_by_external_mode() {
+  [ "${DEPLOY_VARS["ENABLE_EXTERNAL_REDIS"]}" = "true" ] || return 0
+  local comp
+  local -a no_redis=()
+  for comp in "${TARGETS[@]}"; do
+    [ "$comp" = "redis" ] || no_redis+=("$comp")
+  done
+  TARGETS=("${no_redis[@]}")
+}
+
 resolve_targets() {
   local comp dep
   local -a extra=()
@@ -50,6 +63,16 @@ preflight() {
   for comp in "${TARGETS[@]}"; do
     for dep in $(component_deps "$comp"); do
       in_array "$dep" "${TARGETS[@]}" && continue        # 本次会一起部署
+      # 外挂数据库：不检查内置 DB 组件（mariadb/mysql/postgresql 依赖按 ENABLE_EXTERNAL_DB 跳过）
+      [ "${DEPLOY_VARS["ENABLE_EXTERNAL_DB"]}" = "true" ] \
+        && in_array "$dep" mariadb mysql postgresql \
+        && continue
+      # 外挂 Redis：不检查内置 Redis 组件
+      [ "${DEPLOY_VARS["ENABLE_EXTERNAL_REDIS"]}" = "true" ] \
+        && in_array "$dep" redis \
+        && continue
+      # 外部 OBS：不检查内置 MinIO 组件
+      [ "${DEPLOY_VARS["ENABLE_EXTERNAL_OBS"]}" = "true" ] && in_array "$dep" minio && continue
       component_autoprovision "$dep" && continue         # 自动补齐依赖由 resolve_targets 兜底
       component_probe "$dep" >/dev/null || continue      # 无探测方式的依赖（如 pvc）跳过
       in_array "$dep" "${probes[@]}" && continue         # 去重
@@ -266,6 +289,10 @@ gc_orphan_shared_deps() {
   local -a orphans=()
   local dep other orphan
   for dep in secret redis; do
+    # 外挂 Redis：内置组件不参与回收
+    if [ "$dep" = redis ] && [ "${DEPLOY_VARS["ENABLE_EXTERNAL_REDIS"]}" = "true" ]; then
+      continue
+    fi
     component_autoprovision "$dep" || continue
     component_probe "$dep" >/dev/null 2>&1 || continue
     case "$(component_probe_code "$dep")" in

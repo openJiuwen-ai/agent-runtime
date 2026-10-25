@@ -24,8 +24,16 @@ IMAGE_VARS=(AGENTSERVER_IMAGE GATEWAY_IMAGE WEB_IMAGE IDENTITY_IMAGE MANAGER_SER
 # 副本数变量清单，与 templates/ 下 <<XXX_REPLICAS>> 占位符一一对应
 REPLICAS_VARS=(AGENT_SERVER_REPLICAS GATEWAY_REPLICAS WEB_REPLICAS IDENTITY_REPLICAS MANAGER_SERVER_REPLICAS MANAGER_WEB_REPLICAS)
 
-# 允许留空的变量（留空走集群默认）：StorageClass 未配置时使用集群默认动态供给
-OPTIONAL_VARS=(DATA_STORAGE_CLASS WORKSPACE_STORAGE_CLASS)
+# 允许留空的变量（render_component_files 消费：留空时占位符独占行整行删除）
+# - StorageClass 未配置时使用集群默认动态供给
+# - OBS_PUBLIC_BASE_URL/OBS_REGION/OBS_SECURE：外部 OBS 选填项（内置 MinIO 时强制派生/忽略）
+# - REDIS_USER：留空 = 外挂 Redis 使用 default 用户（内置模式由 resolve_redis_vars 派生 jiuwenclaw）
+# 格式校验与"允许留空"解耦（用户名/URL 不该按 DNS subdomain 误校验）：
+# StorageClass 见 STORAGE_CLASS_VARS（check_storage_class_vars）；其余选填项见 check_optional_vars
+OPTIONAL_VARS=(DATA_STORAGE_CLASS WORKSPACE_STORAGE_CLASS OBS_PUBLIC_BASE_URL OBS_REGION OBS_SECURE REDIS_USER)
+
+# StorageClass 变量：check_storage_class_vars 做 DNS subdomain 规范校验（留空走集群默认）
+STORAGE_CLASS_VARS=(DATA_STORAGE_CLASS WORKSPACE_STORAGE_CLASS)
 
 # 运行依赖清单（check_dependency 按 CLUSTER_TYPE 选用；kubectl --raw 需 ≥1.20）
 DEPS_OPENSHIFT=(curl yq oc)
@@ -38,35 +46,64 @@ declare -A DEPLOY_VARS=(
     ["NAMESPACE"]="rapheale-dev"
     ["RENDER_ONLY"]="false"
     ["CLUSTER_TYPE"]="openshift"
-    ["DB_TYPE"]="mariadb"                # 数据库类型：mariadb | mysql | postgresql（驱动 DB 主机/端口/密码/组件选择）
     ["CLUSTER_API_SERVER"]=""            # openshift 形态必填（http(s) URL），留空自动探测（oc/kubeconfig）；k8s 形态走 kubeconfig，留空
+     ["DATA_STORAGE_CLASS"]=""
+    ["WORKSPACE_STORAGE_CLASS"]=""
+
     ["MARIADB_ROOT_PASSWORD"]="Root@123456"
     ["MYSQL_ROOT_PASSWORD"]="Root@123456"
     ["POSTGRES_PASSWORD"]="Root@123456"
     ["MINIO_ROOT_USER"]="minioadmin"
     ["MINIO_ROOT_PASSWORD"]="Root@123456"
-    ["REDIS_USER"]="jiuwenclaw"
+
+    ["DB_TYPE"]="mariadb"                # 数据库类型：mariadb | mysql | postgresql（驱动 DB 主机/端口/密码/组件选择）
+    # 数据库连接：DB_HOST 空=内置数据库（headless 服务名按 DB_TYPE+NAMESPACE 自动派生）；填写=外部数据库
+    ["DB_HOST"]=""
+    ["DB_PORT"]=""                       # 留空按 DB_TYPE 取默认（3306/5432）；外部数据库填写对应端口
+    ["DB_USER"]=""                       # 留空按 DB_TYPE 取默认（root/postgres）；外部数据库填写对应用户
+    ["DB_PASSWORD"]=""                   # 外部数据库统一密码（语义对齐 jiuwenswarm-ee）；留空时内置模式按 DB_TYPE 取 ROOT_PASSWORD，外置模式两者均空报错
+    ["ENABLE_EXTERNAL_DB"]="false"
+
+    ["REDIS_USER"]=""                    # 留空 = default 用户（外挂 Redis 场景）；内置 Redis 由 resolve_redis_vars 派生 jiuwenclaw
     ["REDIS_PASSWORD"]="Root@123456"
+    # Redis 部署形态与连接：REDIS_HOST 空=内置 Redis（地址自动派生）；填写=外部 Redis
+    ["REDIS_MODE"]="standalone"          # standalone | cluster（cluster 仅影响外挂连接 URL 前缀 redis+cluster://）
+    ["REDIS_HOST"]=""                    # 外部 Redis 服务的连接地址（内置 Redis 时自动 redis.<NAMESPACE>）
+    ["REDIS_PORT"]=""                    # 留空按形态取默认（6379）；外部 Redis 填写对应端口
+    ["REDIS_KEY_PREFIX"]="jiuwenclaw:"   # gateway/agentserver/manager-server 的 Redis 键统一前缀
+    ["ENABLE_EXTERNAL_REDIS"]="false"
+
+    # 对象存储：是否内置 MinIO 仅由 OBS_URL 是否为空唯一决定，与其余变量无关
+    # 内置（OBS_URL 空）：地址/SECURE/REGION 强制派生，AK/SK 强制取 MinIO root（其他变量填了也会被忽略）
+    # 外部（OBS_URL 填写）：地址原样使用，BUCKET/AK/SK 必填，SECURE/REGION 按需填写
+    ["OBS_URL"]=""                       # 空=内置 MinIO；填写=外部 OBS/S3 兼容服务接入地址
+    ["OBS_BUCKET"]="jiuwenclaw"          # 业务存储桶名称
+    ["OBS_PUBLIC_BASE_URL"]=""           # 对象存储公网预览域名（可选，浏览器直读场景）
+    ["OBS_ACCESS_KEY"]=""                # 内置：忽略（自动取 MINIO_ROOT_USER）；外部：AccessKey（必填）
+    ["OBS_SECRET_KEY"]=""                # 内置：忽略（自动取 MINIO_ROOT_PASSWORD）；外部：SecretKey（必填）
+    ["OBS_SECURE"]=""                    # 内置：忽略（强制 false）；外部：true/false（留空默认 false）
+    ["OBS_REGION"]=""                    # 内置：忽略（强制 default）；外部：区域标识（留空则由 SDK 决定）
+    ["ENABLE_EXTERNAL_OBS"]="false"
+
     ["AGENT_SERVER_REPLICAS"]="1"
     ["GATEWAY_REPLICAS"]="1"
     ["WEB_REPLICAS"]="1"
     ["IDENTITY_REPLICAS"]="1"
     ["MANAGER_SERVER_REPLICAS"]="1"
     ["MANAGER_WEB_REPLICAS"]="1"
-    ["DATA_STORAGE_CLASS"]=""
-    ["WORKSPACE_STORAGE_CLASS"]=""
+
     ["MARIADB_IMAGE"]="mariadb:11.8"
     ["MYSQL_IMAGE"]="mysql:8.0"
     ["POSTGRESQL_IMAGE"]="postgres:16"
     ["REDIS_IMAGE"]="redis:7-alpine"
     ["MINIO_IMAGE"]="quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z"
 
+
     # ----- 仅 k8s 形态（CLUSTER_TYPE=k8s，openshift 下不生效） -----
     # NFS 直连挂载：PVC 卷改写为 NFS 直连挂载
     # NFS_SERVER_ADDR 空=使用内置 NFS server；非空=外部 NFS server
     ["NFS_SERVER_ADDR"]=""               # NFS 服务器地址（可选）
     ["NFS_SHARE_PATH"]="/"               # 共享根路径（须绝对路径），数据落 <该路径>/<NAMESPACE>/<组件>
-    # ENABLE_EXTERNAL_NFS 为运行时派生值（check_nfs_vars 按 NFS_SERVER_ADDR 是否为空设置），请勿手工配置
     ["ENABLE_EXTERNAL_NFS"]="false"
     # 内置 NFS server Pod 定位（NFS_SERVER_ADDR 留空时使用）
     ["NFS_POD_PATH"]="/exports"          # 内置 NFS Pod 内的导出根（hostPath 挂载点）

@@ -12,54 +12,6 @@ extract_placeholders() { # $1=模板文件 → stdout: 占位符列表
   grep -oE '<<[^>]+>>' "$1" | sort -u
 }
 
-# ---------- 渲染前变量解析 ----------
-
-# MANAGER_WEB_RESOLVER 为空 → 自动解析 manager-web nginx 可用的 DNS resolver；设置有值 → 直接使用：
-#   openshift 形态 → OCP CoreDNS 服务名（平台固定）
-#   k8s 形态       → kubectl 查 kube-dns/coredns Service ClusterIP
-#                    → 本机 /etc/resolv.conf 私网 nameserver（RFC1918 校验，防 render-only 写入公网 DNS）
-#                    → kube-dns 服务名兜底
-resolve_manager_web_resolver() {
-  [ -n "${DEPLOY_VARS["MANAGER_WEB_RESOLVER"]:-}" ] && return 0
-  if ! is_k8s_cluster; then
-    DEPLOY_VARS["MANAGER_WEB_RESOLVER"]="dns-default.openshift-dns.svc.cluster.local"
-    return 0
-  fi
-  local dns_ip=""
-  dns_ip=$(kubectl get svc -n kube-system -l k8s-app=kube-dns \
-    -o jsonpath='{.items[0].spec.clusterIP}' 2>/dev/null || true)
-  [ -n "$dns_ip" ] || dns_ip=$(kubectl get svc -n kube-system kube-dns \
-    -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)
-  [ -n "$dns_ip" ] || dns_ip=$(kubectl get svc -n kube-system coredns \
-    -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)
-  if [ -z "$dns_ip" ] && [ -r /etc/resolv.conf ]; then
-    local ns; ns=$(awk '/^nameserver[[:space:]]+/ { print $2; exit }' /etc/resolv.conf 2>/dev/null || true)
-    if [[ "$ns" =~ ^10\.([0-9]{1,3}\.){2}[0-9]{1,3}$ ]] \
-      || [[ "$ns" =~ ^192\.168\.([0-9]{1,3}\.)[0-9]{1,3}$ ]] \
-      || [[ "$ns" =~ ^172\.(1[6-9]|2[0-9]|3[0-1])\.([0-9]{1,3}\.)[0-9]{1,3}$ ]]; then
-      dns_ip="$ns"
-    fi
-  fi
-  if [ -n "$dns_ip" ]; then
-    DEPLOY_VARS["MANAGER_WEB_RESOLVER"]="$dns_ip"
-    info "MANAGER_WEB_RESOLVER 自动解析 → $dns_ip"
-  else
-    DEPLOY_VARS["MANAGER_WEB_RESOLVER"]="kube-dns.kube-system.svc.cluster.local"
-    warning "MANAGER_WEB_RESOLVER 解析失败，兜底使用 kube-dns.kube-system.svc.cluster.local"
-  fi
-  return 0
-}
-
-# 数据库连接要素按 DB_TYPE 派生：服务名/端口/超级用户/root 密码，供模板 <<DB_*>> 占位符使用
-resolve_db_vars() {
-  case "${DEPLOY_VARS["DB_TYPE"]}" in
-    mariadb)    DEPLOY_VARS["DB_HEADLESS_SVC"]="mariadb-headless";    DEPLOY_VARS["DB_PORT"]="3306"; DEPLOY_VARS["DB_USER"]="root";      DEPLOY_VARS["DB_ROOT_PASSWORD"]="${DEPLOY_VARS["MARIADB_ROOT_PASSWORD"]:-}";;
-    mysql)      DEPLOY_VARS["DB_HEADLESS_SVC"]="mysql-headless";      DEPLOY_VARS["DB_PORT"]="3306"; DEPLOY_VARS["DB_USER"]="root";      DEPLOY_VARS["DB_ROOT_PASSWORD"]="${DEPLOY_VARS["MYSQL_ROOT_PASSWORD"]:-}";;
-    postgresql) DEPLOY_VARS["DB_HEADLESS_SVC"]="postgresql-headless"; DEPLOY_VARS["DB_PORT"]="5432"; DEPLOY_VARS["DB_USER"]="postgres"; DEPLOY_VARS["DB_ROOT_PASSWORD"]="${DEPLOY_VARS["POSTGRES_PASSWORD"]:-}";;
-    *) error "DB_TYPE 非法（mariadb | mysql | postgresql）: ${DEPLOY_VARS["DB_TYPE"]}" ;;
-  esac
-}
-
 # 将单个 <<VAR>> 占位符替换为 DEPLOY_VARS 中的值
 replace_placeholder() { # $1=占位符 $2=目标文件
   local placeholder="$1" destfile="$2"
@@ -104,10 +56,11 @@ render_component_files() { # $1=组件 → stdout: 渲染的清单文件名（�
 render_templates() {
   local comp out f
   local -a wanted=()
-  resolve_manager_web_resolver   # MANAGER_WEB_RESOLVER 为空时按形态/环境自动解析
-  resolve_db_vars                # DB 主机/端口/用户/密码按 DB_TYPE 派生
+  # 变量派生（resolve_*）已统一在 check_vars 完成，此处只做清单渲染与后处理
   for comp in "${TARGETS[@]}"; do
-    out=$(render_component_files "$comp")
+    # 渲染在命令替换子 shell 中执行，error() 的 exit 只退出子 shell：
+    # 不检查退出码时错误文本会混入 out 被当清单文件名（表现为 stat conf/<错误文案>）
+    out=$(render_component_files "$comp") || error "组件 ${comp} 渲染失败（检查 $CUSTOM_ENV_FILE 与 templates/）"
     for f in $out; do
       in_array "$f" "${wanted[@]}" || wanted+=("$f")
     done

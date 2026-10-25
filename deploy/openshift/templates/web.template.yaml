@@ -1,7 +1,7 @@
 # jiuwenclaw-web 部署清单（镜像 <<WEB_IMAGE>>）
 # 说明：
 #   - 镜像基于 nginxinc/nginx-unprivileged，适配 restricted-v2 SCC（随机 uid，pid/temp 写 /tmp）
-#   - OBS_URL 指向集群内 MinIO：minio.<<NAMESPACE>>:9000
+#   - OBS_* 经渲染参数化（OBS_URL 空=内置 MinIO，见 .env.example）
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -53,15 +53,15 @@ spec:
             - name: TZ
               value: "Asia/Shanghai"
             - name: OBS_URL
-              value: "minio.<<NAMESPACE>>:9000"
+              value: "<<OBS_URL>>"
             - name: OBS_BUCKET
-              value: "jiuwenclaw"
+              value: "<<OBS_BUCKET>>"
             - name: OBS_SECURE
-              value: "false"
+              value: "<<OBS_SECURE>>"
             - name: OBS_PUBLIC_BASE_URL
-              value: ""
+              value: "<<OBS_PUBLIC_BASE_URL>>"
             - name: OBS_REGION
-              value: "default"
+              value: "<<OBS_REGION>>"
 ---
 # 集群内部访问：提供稳定 DNS 域名
 apiVersion: v1

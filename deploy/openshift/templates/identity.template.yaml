@@ -47,7 +47,7 @@ spec:
             - name: IDENTITY_REST_PORT
               value: "8770"
             - name: IDENTITY_DB_HOST
-              value: "<<DB_HEADLESS_SVC>>.<<NAMESPACE>>"
+              value: "<<DB_HOST>>"
             - name: IDENTITY_DB_PORT
               value: "<<DB_PORT>>"
             - name: IDENTITY_DB_TYPE
