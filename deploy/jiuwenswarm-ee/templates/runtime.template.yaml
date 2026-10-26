@@ -137,6 +137,11 @@ spec:
               value: "<<AGENT_RUNTIME_HEALTH_PROBE_TIMEOUT>>"
             - name: AGENT_RUNTIME_REDIS_LUA
               value: "<<AGENT_RUNTIME_REDIS_LUA>>"
+            # agent-server Pod 供给模式:full=自建/自删(默认);routing=客户
+            # StatefulSet 预建+register_pods 注册,本服务只分配不建删,
+            # 零 K8s API 调用(SA 无需任何 pods 权限)
+            - name: AGENT_RUNTIME_DEPLOY_MODE
+              value: "<<AGENT_RUNTIME_DEPLOY_MODE>>"
             - name: JIUWENSWARM_EDITION
               value: "enterprise"
             - name: TZ
