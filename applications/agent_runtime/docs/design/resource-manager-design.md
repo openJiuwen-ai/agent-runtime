@@ -238,11 +238,13 @@ cfg = HGETALL(resource:scope:{scope_id}:config)                  # max_pods
 if cfg 为空: return {action:"no_config"}                          # 首次 acquire 应由 handler 先建 config
 
 # 1. 取 scope 暖 Pod 复用(跳过 deploy_ver 或 generation 不匹配的——A 类变更后
-#    老版本、config_refresh 后老代次的暖 Pod 由 reclaim 回收,不外发新流量)
+#    老版本、config_refresh 后老代次的暖 Pod 由 reclaim 回收,不外发新流量;
+#    declared 成员豁免比对——routing 模式外部 Pod 版本无关,2026-10-routing-deploy-mode)
 cfg_gen = HGET(resource:scope:{scope_id}:config, "generation") or ""
 pod_id = SPOP(resource:scope:{scope_id}:idle
-              where HGET(resource:pod:{pod_id}:info, "deploy_ver") == want_ver
-              and (HGET(resource:pod:{pod_id}:info, "generation") or "") == cfg_gen)
+              where HEXISTS(resource:scope:{scope_id}:declared, pod_id) == 1
+              or (HGET(resource:pod:{pod_id}:info, "deploy_ver") == want_ver
+              and (HGET(resource:pod:{pod_id}:info, "generation") or "") == cfg_gen))
 if pod_id:
     DEL resource:pod:{pod_id}:idle_since
     return {action:"reuse", pod_id, pod_sse_url:HGET(resource:pod:{pod_id}:info, "pod_sse_url")}
@@ -267,7 +269,9 @@ HSET resource:pod:{pod_id}:info scope_id {scope_id}
            phase "created" created_ts {now} generation {gen}
 ZADD resource:scope:{scope_id}:pods {now} {pod_id}
 SADD resource:pods:all {pod_id}
-SREM resource:scope:{scope_id}:deploying {deploy_token}      # 清占位
+SREM resource:scope:{scope_id}:deploying {deploy_token}      # 清占位(外部注册 token="",no-op)
+if external:                                                 # routing 模式(2026-10):身份标记,
+    HSET resource:pod:{pod_id}:info external "1"             # purge 跳过物理删/watch 跳相位检查
 if idle_flag:
     SADD resource:scope:{scope_id}:idle {pod_id}             # autoscale 暖备
     SET resource:pod:{pod_id}:idle_since {now}               # 满足不变量⑤;reclaim sweeper 以 min_idle 底数保护

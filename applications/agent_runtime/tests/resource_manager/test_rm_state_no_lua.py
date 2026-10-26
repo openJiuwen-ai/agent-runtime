@@ -221,3 +221,78 @@ async def test_reconcile_heals_missing_idle_since(redis_client, k8s):  # noqa: F
     t = await rm.idle_since("p1")
     await sweeper.reconcile_once()
     assert await rm.idle_since("p1") == t
+
+
+# ---------------------------------------------- routing 供给模式（2026-10,双模式）
+
+async def _seed_external(rm, scope="sc", pod="pod-x", host="pod-x.svc",
+                         ver="ver1", declared=True):
+    """播种外部形态：scope config + declared 声明 + external 注册入 idle。"""
+    await _seed_scope(rm, deploy_ver=ver)
+    if declared:
+        await rm.add_declared(scope, {
+            pod: '{"host": "%s", "declared_ts": 1}' % host})
+    await rm.register_pod(
+        pod, scope, f"http://{host}:8080/sse", host, "default",
+        ver, "", idle_flag=True, now=NOW, sse_port=8080,
+        health_path="/health", external=True,
+    )
+
+
+async def test_declared_crud(rm):
+    """声明表五操作：add/entries/names/remove/drop + scope 枚举（SCAN）。"""
+    await rm.add_declared("sc", {"pod-x": '{"host": "h1", "declared_ts": 1}',
+                                 "pod-y": '{"host": "h2", "declared_ts": 1}'})
+    assert await rm.declared_names("sc") == ["pod-x", "pod-y"]
+    entries = await rm.declared_entries("sc")
+    assert entries["pod-x"] == '{"host": "h1", "declared_ts": 1}'
+    assert await rm.declared_scope_ids() == ["sc"]
+    assert await rm.remove_declared("sc", ["pod-y"]) == 1
+    assert await rm.declared_names("sc") == ["pod-x"]
+    assert await rm.drop_declared("sc") == 1
+    assert await rm.declared_names("sc") == []
+    # 幂等：drop 空表返回 0；scope 枚举收敛为空
+    assert await rm.drop_declared("sc") == 0
+    assert await rm.declared_scope_ids() == []
+
+
+async def test_acquire_exempts_declared_from_version_filter(rm):
+    """declared 成员豁免 ver/gen 过滤：版本与代次均不匹配仍可复用（外部
+    Pod 版本无关，客户 StatefulSet 自管形态）。undeclared 不豁免。"""
+    await _seed_external(rm)          # ver1 注册
+    await rm.bump_generation("sc")    # 代次落后
+    action, pod, url = await rm.acquire("sc", "ver2", "t1")
+    assert (action, pod) == ("reuse", "pod-x")
+    assert url == "http://pod-x.svc:8080/sse"
+    # 失去声明资格 → 豁免解除，回到版本过滤（need_deploy 占位）：
+    # pod-z 未声明注册、pod-x 撤销声明后回 idle 复位现场，两者均不豁免
+    await rm.register_pod(
+        "pod-z", "sc", "http://h3:8080/sse", "h3", "default",
+        "ver1", "", idle_flag=True, now=NOW, external=True)
+    await rm.remove_declared("sc", ["pod-x"])
+    await rm.release("pod-x", "sc", NOW + 10)
+    await rm.bump_generation("sc")
+    action, pod, _ = await rm.acquire("sc", "ver2", "t2")
+    assert action == "need_deploy"    # pod-z / pod-x 均 undeclared → 不豁免
+    await rm.clear_deploy_token("sc", "t2")
+
+
+async def test_register_external_flag_and_purge_keeps_declared(rm):
+    """external=1 落 pod:info；PURGE 只清 Pod 记账、不动声明表（声明的
+    删除权在 config_store 的 drop_declared / deregister_pods）。"""
+    await _seed_external(rm)
+    info = await rm.pod_info("pod-x")
+    assert info.get("external") == "1"
+    assert await rm.purge("pod-x") == "sc"
+    assert await rm.pod_info("pod-x") == {}
+    assert await rm.declared_names("sc") == ["pod-x"]
+
+
+async def test_has_lagged_pods_ignores_declared(rm):
+    """排空纪元判据豁免：declared 成员代次落后不构成 lagged（否则外部 Pod
+    虚假触发 drain 纪元/reclaim 排空）；drop 后构成。"""
+    await _seed_external(rm)
+    await rm.bump_generation("sc")
+    assert await rm.has_lagged_pods("sc") is False
+    await rm.drop_declared("sc")
+    assert await rm.has_lagged_pods("sc") is True

@@ -4,10 +4,12 @@
 约定同 SM：``ARGV[1]`` 恒为键前缀（``{resource_manager}:``，hash tag 使 cluster
 下全键域同槽）；返回扁平字符串数组。
 脚本清单（语义见 RM 设计 §5.1）：
-- LUA_ACQUIRE   取暖 Pod 复用（deploy_ver + generation 过滤）/ 判 max_pods（含 deploying 占位）/ 占位
+- LUA_ACQUIRE   取暖 Pod 复用（deploy_ver + generation 过滤；declared 成员豁免
+                ——routing 模式外部 Pod 版本无关）/ 判 max_pods（含 deploying 占位）/ 占位
 - LUA_PLACEHOLDER  autoscale 专用占位（判 max_pods + 占位，不碰 idle 池）
 - LUA_REGISTER  deploy 成功登记（info / scope:pods / pods:all，清占位；热备入 idle；
-                generation 服务端烙印注册时刻 scope 当前代次）
+                generation 服务端烙印注册时刻 scope 当前代次；external=1 时
+                落外部标记——purge 路径据此跳过物理删除）
 - LUA_RELEASE   idle_consider：转 idle 暖池 + 起 pod_ttl 计时（幂等）
 - LUA_POP_IDLE  忙占用摘出 idle 暖池（follower 接管 leader 热备 Pod；幂等）
 - LUA_PURGE     Pod 死亡 / reclaim 后清全部 RM key（幂等）
@@ -42,15 +44,21 @@ redis.call('ZREMRANGEBYSCORE', dep_key, '-inf', now)
 
 -- 1. 取该 scope 暖 Pod 复用；跳过 deploy_ver 或 generation 不匹配的（A 类变更
 --    后老版本暖 Pod、config_refresh 后老代次暖 Pod 均由 reclaim 按版本/代次
---    感知回收，不外发给新流量，场景 M / M-R）
+--    感知回收，不外发给新流量，场景 M / M-R）。**declared 成员豁免**（2026-10
+--    routing 供给模式）：外部预建 Pod 的物理形态由客户 StatefulSet 决定，
+--    runtime 无权换代，版本/代次淘汰对外部 Pod 整体关闭——豁免判据是声明表
+--    成员资格而非 pod:info 的 external 标志：scope 删除/路由性排除时 DEL 声明
+--    键，外部 Pod 即失去豁免、回归既有日落回收（与 full 模式同语义收敛）
 local cfg_gen = redis.call('HGET', cfg_key, 'generation') or ''
+local declared_key = pfx .. 'resource:scope:' .. scope .. ':declared'
 local idle_key = pfx .. 'resource:scope:' .. scope .. ':idle'
 local idle = redis.call('SMEMBERS', idle_key)
 for _, pod in ipairs(idle) do
   local info_key = pfx .. 'resource:pod:' .. pod .. ':info'
   local ver = redis.call('HGET', info_key, 'deploy_ver')
   local gen = redis.call('HGET', info_key, 'generation') or ''
-  if ver == want_ver and gen == cfg_gen then
+  local declared = redis.call('HEXISTS', declared_key, pod)
+  if declared == 1 or (ver == want_ver and gen == cfg_gen) then
     redis.call('SREM', idle_key, pod)
     redis.call('DEL', pfx .. 'resource:pod:' .. pod .. ':idle_since')
     local url = redis.call('HGET', pfx .. 'resource:pod:' .. pod .. ':info', 'pod_sse_url')
@@ -107,7 +115,7 @@ return {'need_deploy'}
 """
 
 # Argv: prefix, pod_id, scope_id, pod_sse_url, pod_ip, namespace, deploy_ver,
-#       deploy_token, idle_flag(0/1), now, sse_port, health_path
+#       deploy_token, idle_flag(0/1), now, sse_port, health_path, external(0/1)
 LUA_REGISTER = r"""
 local pfx = ARGV[1]
 local pod = ARGV[2]
@@ -121,6 +129,7 @@ local idle_flag = ARGV[9]
 local now = ARGV[10]
 local sse_port = ARGV[11]
 local health_path = ARGV[12]
+local external = ARGV[13]
 
 -- sse_port/health_path 随 Pod 烘焙记录：A 类变更后 scope 当前配置已换代，
 -- 健康探测（场景 N）必须用 Pod 自己的契约参数打它，否则存量老 Pod 会被
@@ -136,8 +145,14 @@ redis.call('HSET', pfx .. 'resource:pod:' .. pod .. ':info',
            'namespace', ns, 'deploy_ver', ver, 'phase', 'created',
            'created_ts', now, 'sse_port', sse_port, 'health_path', health_path,
            'generation', gen)
+if external == '1' then
+  -- routing 模式外部 Pod身份标记：仅承载「purge 不物理删 / watch 跳 K8s 相位
+  -- 检查」；版本/代次豁免判据在声明表（ACQUIRE 侧），不在此标志
+  redis.call('HSET', pfx .. 'resource:pod:' .. pod .. ':info', 'external', '1')
+end
 redis.call('ZADD', pfx .. 'resource:scope:' .. scope .. ':pods', now, pod)
 redis.call('SADD', pfx .. 'resource:pods:all', pod)
+-- 外部注册 token 传空串：ZREM 不存在成员是 no-op（deploying 占位与外部注册无关）
 redis.call('ZREM', pfx .. 'resource:scope:' .. scope .. ':deploying', token)
 if idle_flag == '1' then
   -- 热备 Pod：入 idle 池（满足不变量 5；reclaim 以 min_idle 底数保护，不起回收计时判定）

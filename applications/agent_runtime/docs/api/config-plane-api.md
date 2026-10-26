@@ -586,6 +586,65 @@ curl -s -X POST "http://127.0.0.1:8091/api/session/config_refresh" \
 
 ---
 
+## 2b. 外部预建 Pod 端点(routing 模式,2026-10-routing-deploy-mode)
+
+> 仅 `AGENT_RUNTIME_DEPLOY_MODE=routing` 时可用(full 模式调用返回 400 VALIDATION)。
+> 该模式下 agent-runtime 对 K8s **零 API 调用**(SA 无需任何 pods 权限):客户用
+> StatefulSet(+headless service)预拉起 AgentServer,把 Pod 域名注册进来,
+> runtime 只做分配;存活检测=直连域名的 HTTP 健康探测(参数取 scope 模板)。
+
+### 2b.1 注册 `POST /api/session/register_pods`
+
+载荷(rawdata,全必填、无可选参数):
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| scope_id | string | 是 | 目标路由 scope,须已 config_sync 下发,否则 400 |
+| pods | 对象数组 | 是 | 每项 `{name, host}` 均必填:name=K8s Pod 名(禁 `{`/`}`/`:`);host=Pod 稳定域名(headless service 形态,禁空白与 `/`)。数组非空、去重 |
+
+行为:先写声明表(Redis 持久化)→ 逐个 `GET http://{host}:{sse_port}{health_path}` 探测(端口/路径由 scope 模板推导,模板须与客户 StatefulSet 一致;scope 无模板 400):通过 → 注册入池并返回 `pod_sse_url`(= `http://{host}:{sse_port}{sse_path}`,gateway 直连该域名);失败 → pending,由 30s 后台收养循环重试(StatefulSet 重建同名换 IP 后自动回池)。幂等:同名重注册=覆盖声明;已注册且探测通过的 Pod 不重复处理。
+
+返回值(`rawdata`):
+
+```json
+{
+  "scope_id": "prod-default",
+  "registered": [{"pod": "agentserver-0", "pod_sse_url": "http://agentserver-0.as-svc.ns.svc:8086/sse"}],
+  "already_registered": [],
+  "pending": [{"pod": "agentserver-1", "reason": "probe_failed"}]
+}
+```
+
+curl 示例:
+
+```bash
+curl -X POST http://runtime:8091/api/session/register_pods \
+  -H 'Content-Type: application/json' \
+  -d '{"metadata": {"request_id": "reg-001"},
+       "rawdata": {"scope_id": "prod-default",
+                   "pods": [{"name": "agentserver-0", "host": "agentserver-0.as-svc.agentserver.svc"}]}}'
+```
+
+### 2b.2 注销 `POST /api/session/deregister_pods`
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| scope_id | string | 是 | 同上 |
+| pods | string[] | 是 | 要注销的 Pod 名(可部分注销;非空) |
+
+行为:驱逐该批 Pod 上全部活跃会话(gateway 自动重路由)→ 删声明 → 解注册。**绝不物理删**(缩容由客户操作 StatefulSet)。幂等。
+
+返回值(`rawdata`):`{"deregistered": ["agentserver-1"], "evicted_sessions": 3}`
+
+### 2b.3 错误码
+
+| 码 | HTTP | 场景 |
+|---|---|---|
+| VALIDATION | 400 | 参数缺失/格式错/scope 不存在或无模板/full 模式调用 |
+| STATE_UNAVAILABLE | 503 | Redis 故障(可重试) |
+
+限制:link mTLS enforce × routing 组合启动即报错(证书物料无法注入外部 Pod);gateway 与 runtime 须能解析/直达注册域名;池空(全忙或全 pending)→ route 返回 503 NO_POD_AVAILABLE(语义=需扩 StatefulSet 并注册新地址)。
+
 ## 3. 可视化端点 `GET /visualization/*`
 
 全部只读、用于定位问题(实例/依赖/后台任务总览、会话与 scope 池状态、DB 配置、请求统计、趋势采样、系统评估报告)。通用约定见 §0.4。辅助端点 `GET /healthz`(进程就绪探针,503 = 未就绪)返回 `{ok, instance_id, service_type: "runtime", namespace, pod_name, hostname}`。

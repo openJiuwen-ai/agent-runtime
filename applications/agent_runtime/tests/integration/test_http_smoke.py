@@ -33,10 +33,10 @@ def _envelope(msg_type: str, *, session_id=None, group_id="grp", bot_id="bot",
     }
 
 
-def _make_client(tmp_path, monkeypatch):
+def _make_client(tmp_path, monkeypatch, deploy_mode="full"):
     monkeypatch.setenv("AGENT_RUNTIME_SQLITE_PATH", str(tmp_path / "smoke.db"))
     settings = ServiceConfig.from_env()
-    arc = AgentRuntimeConfig(mode="local")
+    arc = AgentRuntimeConfig(mode="local", deploy_mode=deploy_mode)
     application = create_app(settings, arc)
     return TestClient(application.asgi)
 
@@ -277,3 +277,54 @@ def test_http_healthz_endpoint(tmp_path, monkeypatch):
         body = resp.json()
         assert body["ok"] is True
         assert body["instance_id"]  # 非空（hostname:uuid8）
+
+
+# ---------------------------------------------------------------- routing 供给模式端点(2026-10)
+
+
+def test_http_register_deregister_pods_routing_mode(tmp_path, monkeypatch):
+    """routing 模式端点契约:注册(探测通入池/失败 pending)→ 注销;full 模式 400。"""
+    import asyncio
+
+    client = _make_client(tmp_path, monkeypatch, deploy_mode="routing")
+    with client:
+        resp = client.post(
+            "/api/session/config_sync",
+            json=_envelope("config_sync", rawdata=FULL_SYNC))
+        assert resp.status_code == 200
+
+        reg = client.post("/api/session/register_pods", json=_envelope(
+            "register_pods", rawdata={
+                "scope_id": "scope-smoke",
+                "pods": [{"name": "sts-0", "host": "sts-0.svc"},
+                         {"name": "sts-1", "host": "sts-1.svc"}]}))
+        assert reg.status_code == 200
+        body = reg.json()["rawdata"]
+        # FakeK8s 默认健康(未标 unhealthy)→ 全部立即入池
+        assert [e["pod"] for e in body["registered"]] == ["sts-0", "sts-1"]
+
+        dereg = client.post("/api/session/deregister_pods", json=_envelope(
+            "deregister_pods", rawdata={
+                "scope_id": "scope-smoke", "pods": ["sts-0"]}))
+        assert dereg.status_code == 200
+        assert dereg.json()["rawdata"]["deregistered"] == ["sts-0"]
+
+    full = _make_client(tmp_path, monkeypatch, deploy_mode="full")
+    with full:
+        resp = full.post("/api/session/register_pods", json=_envelope(
+            "register_pods", rawdata={"scope_id": "s", "pods": []}))
+        assert resp.status_code == 400
+        body = resp.json()
+        assert body["ok"] is False and body["error_code"] == "VALIDATION"
+
+
+def test_http_register_pods_validation(tmp_path, monkeypatch):
+    """必填校验:缺字段 400 VALIDATION(routing 模式)。"""
+    client = _make_client(tmp_path, monkeypatch, deploy_mode="routing")
+    with client:
+        for bad in ({}, {"scope_id": "s"}, {"pods": [{"name": "x"}]},
+                    {"scope_id": "s", "pods": [{"host": "h"}]},
+                    {"scope_id": "s", "pods": []}):
+            resp = client.post("/api/session/register_pods", json=_envelope(
+                "register_pods", rawdata=bad))
+            assert resp.status_code == 400, bad

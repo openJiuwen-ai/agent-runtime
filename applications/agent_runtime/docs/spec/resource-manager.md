@@ -27,6 +27,10 @@
 | `sunset_pending_pods(scope_id)` | `list[str]`(config_refresh 前置闸门:scope 注册 Pod 中 `generation ≠ 当前配置代次` 者,忙排空/idle 待回收均计;非空 → SM 侧 409 CONFIG_SYNC_BUSY,见 session-manager spec ⓪ 步) |
 | `cleanup(namespace?, label_selector?)` | `cleaned: int`(运维批删) |
 | `known_scope_ids()` | RM 已知 scope 枚举(SCAN scope:config,分页续扫由客户端 `scan_iter` 驱动——cluster 游标是 `{节点: 游标}` dict,须逐节点标量续扫,手写回传 dict 即 DataError,issue #4581;config_sync 的被删 scope drain 收敛用——RM config 键是幻影预热的真源) |
+| `register_pods(scope_id, pods)` | routing 模式专用(2026-10-routing-deploy-mode):声明+逐个 HTTP 探测,通过即 REGISTER(external=1) 入 idle 池;失败转 pending 由 adopt 收养;full 模式 400 VALIDATION |
+| `deregister_pods(scope_id, pods)` | routing 模式:驱逐会话 + HDEL declared + PURGE(绝不物理删);幂等 |
+| `declared_pods(scope_id)` | 该 scope 声明的外部 Pod 名(SM `_soft_remove_stale_pods` 豁免查询;full 模式恒空) |
+| `drop_declared(scope_id)` | 清声明表(config_store scope 删除路径;外部 Pod 失去版本豁免→回归既有 gen-lag 日落) |
 
 ## orchestrator.py —— acquire 决策树
 
@@ -40,7 +44,8 @@
      max_reached  → 清占位 → MaxPodsReached
      no_config    → 退避 0.2s 重跑;有界(NO_CONFIG_MAX_LOOPS=5,超限 DeployFailed
                     ——config 被并发删/残缺的真异常态不得热自旋挂死)
-     need_deploy  → 抢 lock:rm:deploy:{scope}(TTL 360,盖住 ready_timeout 300+余量):
+     need_deploy  → [routing 模式:清占位 → MaxPodsReached(外部供给池耗尽,永不 deploy)]
+                    抢 lock:rm:deploy:{scope}(TTL 360,盖住 ready_timeout 300+余量):
                     赢家 → _deploy_and_register(idle_flag=False)
                     输家 → 清占位 → _follow_leader(follower 等待室) }
 ```
@@ -57,7 +62,8 @@
 `idle_consider`:`LUA_RELEASE` 转 idle 暖池(起 pod_ttl 计时)+ pod:info.phase=idle;幂等。
 `update_pool_config`:HSET 覆盖池参数(含 `session_ttl`,排空 deadline 计算用);A 类变更附带 pod_spec 时同时刷 deploy_ver/pod_spec_json(autoscale 补位用新 deploy 字段);**mapping 永不含 generation——代次只经 `bump_generation` 单调递增,推送永不重置**。**日落排空纪元戳记(2026-09-17)**:推送后注册表存在版本(A 类)或代次(refresh / config_sync 路由性排除已先 bump)落后的 Pod 且纪元未活跃 → SET `scope:drain_until = now + session_ttl`(EX 同值 + DRAIN_SLACK_S=60 崩溃兜底);期间容量上限 +SURGE_MARGIN(见 LUA_ACQUIRE/autoscale),reclaim 对 stale 延后到截止后回收。**首因下发定窗**:纪元已活跃则不重戳(B 类纯池参数下发不延长);排空中的 refresh 本就被闸门 409 拦住(候选集内老代 Pod 放行的竞态形态除外,见 R8)。
 `bump_generation`:HINCRBY `scope:config.generation`;现有 Pod 代次全部落后 → LUA_ACQUIRE 过滤 / `_current_version_idle` 判 stale / autoscale 重建(场景 M-R,SM 的 config_refresh 触发)。"当前版本"判定 = **deploy_ver 相等 ∧ generation 相等**;两侧同缺(空串)视为一致——从未刷新过的 scope 零行为变化。
-`cleanup`:K8s list+delete,**不操作 Redis 编排态**(被删 Pod 由 watch/reconcile 兜底发现);ns 404 容忍为 cleaned=0,**403 保持 fail-fast**(静默清零会掩盖部署配错);逐 Pod 一条 INFO `cleanup deleted pod: pod= namespace=`(批删中途中断时可见删到哪;k8s.delete 自身明细在 DEBUG)+ 结尾 WARNING 聚合。
+**routing 供给模式方法(2026-10-routing-deploy-mode)**:`_external_contract(scope_id)` 从 scope:config 的 pod_spec_json 推导探测/编址契约(main_sse_port/main_health_path/sse_path/namespace/deploy_ver;scope 无模板 400);`_adopt_one` 单 Pod 收养内核(HTTP 探测通过→REGISTER external=1 入 idle);`register_pods` 先 HSET declared 再逐个探测(通过入池/失败 pending;已注册跳过防 idle 重放;同名覆盖声明);`deregister_pods` HDEL declared→PURGE→notify_pod_dead(驱逐会话,绝不物理删;幂等);`adopt_declared(scope_id)` 收养一拍(reconcile 调用,declared ∖ 已注册→探测→注册)。探测=直连 host 的 HTTP GET(probe_pod_health 纯 HTTP 路径,零 K8s 权限);host 兼任 pod_ip 语义烘焙进 info。
+`cleanup`:K8s list+delete,**不操作 Redis 编排态**(routing 模式入口即 400 拒绝——Pod 是客户资产且 SA 无权限)(被删 Pod 由 watch/reconcile 兜底发现);ns 404 容忍为 cleaned=0,**403 保持 fail-fast**(静默清零会掩盖部署配错);逐 Pod 一条 INFO `cleanup deleted pod: pod= namespace=`(批删中途中断时可见删到哪;k8s.delete 自身明细在 DEBUG)+ 结尾 WARNING 聚合。
 
 ## state.py —— RM 键表(`RMKeys`,前缀 `{resource_manager}:`,业务键再带 `resource:` 段)
 
@@ -69,9 +75,10 @@
 | `resource:scope:{sid}:deploying` | ZSET | deploy 占位 token→deadline 秒级 score(计入 max_pods,防并发超配;闸门/autoscale 按 deadline 原子清崩溃遗留——硬崩后进程内清理不存在,占位不得永久虚占容量) |
 | `resource:scope:{sid}:deploy_followers` | ZSET | follower 等待室(request_id→deadline 秒级 score;闸门按 deadline 原子清过期) |
 | `resource:scope:{sid}:drain_until` | STR | 日落排空截止时间戳(秒);存在 ⟺ 排空纪元活跃 → 容量上限 +SURGE_MARGIN / stale 回收延后到截止。写点=update_pool_config(首因下发,不重戳);正常终止=reclaim 收完落后 Pod 主动 DEL;EX=window+60s 为崩溃兜底(2026-09-17) |
-| `resource:pod:{pod}:info` | HASH | scope_id/pod_sse_url/pod_ip/namespace/phase/created_ts/deploy_ver/**sse_port/health_path**(Pod 自己烘焙的探测契约;A 类变更后 scope 当前配置已换代,watch 探测必须用 Pod 自己的参数,否则存量老 Pod 被探错路径误杀)/**generation**(注册时刻代次烙印,REGISTER 服务端读 scope:config——与 bump 原子排队,deploy 中途刷新不误伤晚注册的新 Pod) |
+| `resource:pod:{pod}:info` | HASH | scope_id/pod_sse_url/pod_ip/namespace/phase/created_ts/deploy_ver/**sse_port/health_path**(Pod 自己烘焙的探测契约;A 类变更后 scope 当前配置已换代,watch 探测必须用 Pod 自己的参数,否则存量老 Pod 被探错路径误杀)/**generation**(注册时刻代次烙印,REGISTER 服务端读 scope:config——与 bump 原子排队,deploy 中途刷新不误伤晚注册的新 Pod) |/**external**(=1 ⟺ 外部预建 Pod,routing 模式;purge 跳过物理删/watch 跳 K8s 相位检查)
 | `resource:pod:{pod}:idle_since` | STR | idle 起始(reclaim 计时);存在 ⟺ 在 idle 池 |
 | `resource:pod:{pod}:health_fails` | STR | 健康探测连续失败次数(场景 N) |
+| `resource:scope:{sid}:declared` | HASH | **routing 模式外部 Pod 声明表**(pod 名→JSON{host,declared_ts};2026-10-routing-deploy-mode)。**成员资格 = 版本/代次豁免唯一判据**(LUA_ACQUIRE 复用过滤/reclaim/has_lagged_pods/sunset_pending_pods/SM 软摘除五点共用):scope 删除 DEL 本键→外部 Pod 失去豁免→回归既有日落回收。写点=register_pods(先声明后注册,崩溃由 adopt 自愈)/deregister/drop_declared;枚举 SCAN(同 known_scope_ids 的 scan_iter 纪律) |
 | `resource:pods:all` | SET | 全部 pod_id(watch/reconcile 枚举) |
 | `lock:rm:deploy:{sid}` | STR(NX EX 360) | per-scope deploy 选主串行 |
 | `lock:rm:autoscale\|reclaim\|watch\|reconcile` | STR(NX EX) | 后台任务 tick 级选主 |
@@ -85,9 +92,9 @@
 
 | 脚本 | 一句话职责 |
 |---|---|
-| `LUA_ACQUIRE` | 取暖 Pod 复用(**跳过 deploy_ver 或 generation 不匹配**——A 类变更后老版本、config_refresh 后老代次暖 Pod 不外发,由 reclaim 版本/代次感知回收)→ 无匹配判容量(ZCARD pods + ZCARD deploying;**排空纪元活跃(EXISTS scope:drain_until)→ 上限 +SURGE_MARGIN=1**,2026-09-17 优雅排空)→ 占位 ZADD deploying(score=deadline,先清过期) → need_deploy |
+| `LUA_ACQUIRE` | 取暖 Pod 复用(**跳过 deploy_ver 或 generation 不匹配**——A 类变更后老版本、config_refresh 后老代次暖 Pod 不外发,由 reclaim 版本/代次感知回收;**declared 成员豁免过滤**:HEXISTS scope:declared 命中即跳过比对,routing 模式外部 Pod 版本无关,2026-10-routing-deploy-mode)→ 无匹配判容量(ZCARD pods + ZCARD deploying;**排空纪元活跃(EXISTS scope:drain_until)→ 上限 +SURGE_MARGIN=1**,2026-09-17 优雅排空)→ 占位 ZADD deploying(score=deadline,先清过期) → need_deploy |
 | `LUA_PLACEHOLDER` | autoscale 专用占位(判容量 + ZADD,**不碰 idle 池**——补位不该消耗暖 Pod;同款 deadline 自清;同款排空 surge +1) |
-| `LUA_REGISTER` | deploy 成功登记:pod:info(含 sse_port/health_path + **generation 服务端烙印**——读注册时刻 scope:config 当前代次)/ scope:pods / pods:all 同写,清占位;idle_flag=1(热备)入 idle 池 |
+| `LUA_REGISTER` | deploy 成功登记:pod:info(含 sse_port/health_path + **generation 服务端烙印**——读注册时刻 scope:config 当前代次)/ scope:pods / pods:all 同写,清占位;idle_flag=1(热备)入 idle 池;external=1 时 info 落 external 标记(routing 模式注册,token 传空串 ZREM 为 no-op) |
 | `LUA_RELEASE` | idle_consider:转 idle 暖池,**仅首次转入(SADD=1)起 pod_ttl 计时**;周期重放(reconcile stale/idle_consider 去重重发)不刷新计时——否则空闲 Pod 永不回收;acquire 弹出后再转 idle 重新计时;**已 PURGE 的 Pod(info 已清)no-op**(防 TOCTOU 幽灵成员) |
 | `LUA_POP_IDLE` | 忙占用摘出 idle 暖池(SREM idle + DEL idle_since;幂等,非 idle 成员/请求驱动 leader 的 idle_flag=False 注册均 no-op)——`_follow_leader` follower 接管 leader 热备 Pod 的忙记账,与 LUA_ACQUIRE reuse 分支对齐(2026-09-17 修复) |
 | `LUA_PURGE` | Pod 死亡/reclaim 后清全部 RM key(返回其 scope_id;幂等) |
@@ -133,12 +140,12 @@
 
 | 任务 | 周期/锁 | 逻辑 |
 |---|---|---|
-| `autoscale_once`(场景 H) | 1s / lock:rm:autoscale | 先 `reap_expired_deploying`(崩溃遗留占位自愈)再遍历 `known_scope_ids()`(SCAN scope:config):**当前版本+代次** idle < min_idle_pods(`_current_version_idle`:deploy_ver ∧ generation 均与 scope:config 一致——A 类变更后旧版、config_refresh 后老代次 idle Pod 永不可能被复用,不能拿来满足 min_idle,否则暖池被旧版钉死)且 pods+deploying < 容量上限(max_pods;**排空纪元活跃 +SURGE_MARGIN=1**,与 Lua 闸门同步,2026-09-17)→ `LUA_PLACEHOLDER` 占位 → 抢 deploy 锁 → `_deploy_and_register(idle_flag=True)` 热备入池;pod_spec 取 scope:config 缓存(A 类变更后为新值;刷新后同值仅换代)。**config_sync 会主动写每个存活 scope 的 config(带 pod_spec)→ 从未被请求过的 scope 也会被预热(eager,下发即预备热备)** |
+| `autoscale_once`(场景 H) | 1s / lock:rm:autoscale | **routing 模式整拍跳过(无创建权,min_idle 语义不存在)**;full 模式:先 `reap_expired_deploying`(崩溃遗留占位自愈)再遍历 `known_scope_ids()`(SCAN scope:config):**当前版本+代次** idle < min_idle_pods(`_current_version_idle`:deploy_ver ∧ generation 均与 scope:config 一致——A 类变更后旧版、config_refresh 后老代次 idle Pod 永不可能被复用,不能拿来满足 min_idle,否则暖池被旧版钉死)且 pods+deploying < 容量上限(max_pods;**排空纪元活跃 +SURGE_MARGIN=1**,与 Lua 闸门同步,2026-09-17)→ `LUA_PLACEHOLDER` 占位 → 抢 deploy 锁 → `_deploy_and_register(idle_flag=True)` 热备入池;pod_spec 取 scope:config 缓存(A 类变更后为新值;刷新后同值仅换代)。**config_sync 会主动写每个存活 scope 的 config(带 pod_spec)→ 从未被请求过的 scope 也会被预热(eager,下发即预备热备)** |
 | `reclaim_once`(场景 K) | 1s / lock:rm:reclaim | excess = 旧版本/老代次 idle Pod(**恒为 excess**——acquire want_ver+generation 过滤后永不可复用,若受底数保护则暖池钉死旧版+蹲占 max_pods)+ 当前版本代次 idle 超出 min_idle 的部分(按转 idle 先后);**两级回收(2026-09-17 优雅排空,取代 2026-09-15 免老化即刻)**:stale(旧版本/老代次)在**排空窗口截止后回收**——`scope:drain_until` 存在且 `now < 截止` 则跳过(窗口 = 首因下发 + session_ttl;期间已绑定会话继续服务:route 亲和/touch 只查 pod:info 不查候选集);**键缺失(过期/残局)兜底立即回收**,闸门收敛保证不破坏;当前版本超额仍须 `aged ≥ pod_ttl`(抗复用抖动,真镜像冷启动 p50≈12s)→ `_purge_and_notify`(K8s delete → LUA_PURGE → notify_pod_dead);底数只保护当前版本代次最早入 idle 的 min_idle 个(保底热备)。**排空收尾**:本拍收过 stale 且注册表已无落后 Pod(`has_lagged_pods`)→ DEL drain_until 精确终止 surge。**scope 被删除/禁用/失权时 config_sync 先 bump 再推 min_idle=0(2026-09-scope-affinity-hold)→ 其 Pod 走同款日落排空:存量会话窗口内继续原 Pod,过窗回收后 rebind 落新规则;窗口内会话停止活跃即回收(与 refresh 日落同语义)** |
-| `watch_once`(场景 J/N) | 10s / lock:rm:watch(TTL 15) | 遍历 pods:all:get_pod 为 None 或 phase∈DEAD → 清理;Running 但 `probe_health` **连续 2 次失败**(health_fails 阈值,防瞬时抖动误杀)→ 半死清理;成功清零计数。**探测参数优先取 Pod 自己 info 烘焙的 sse_port/health_path**(A 类变更后存量老 Pod 用旧契约探测;旧 Pod 无字段时回退 scope:config 的 pod_spec_json) |
-| `reconcile_once`(场景 L) | 30s / lock:rm:reconcile(TTL 60) | ⓪ **idle 计时自愈(2026-10-redis-no-lua-compat)**:idle 成员存在但 idle_since 缺失(info 在)→ `set_idle_since_if_absent` 补 SET NX——无 Lua 模式 release 的 EXEC(SADD)与 SET idle_since 之间崩溃留下的无计时成员,reclaim 的 aged=0 恒 falsy 永不到龄(槽位永久虚占),在此重启计时;Lua 模式该窗口不存在,NX 恒空过,对齐冒烟阶段 11b「idle_since 存在」不变量;① Redis 有 K8s 无 → PURGE+notify;② RM 持有但 SM 候选集已无的 stale Pod(经 `sm_facade.reconcile_pods`,Facade 单向)→ `LUA_RELEASE` 转 idle 按 pod_ttl 回收 |
+| `watch_once`(场景 J/N) | 10s / lock:rm:watch(TTL 15) | 遍历 pods:all:**external Pod(info.external=1)跳过 get_pod 相位检查,routing 模式 HTTP 探测是唯一存活信号**;其余:get_pod 为 None 或 phase∈DEAD → 清理;Running 但 `probe_health` **连续 2 次失败**(health_fails 阈值,防瞬时抖动误杀)→ 半死清理;成功清零计数。**探测参数优先取 Pod 自己 info 烘焙的 sse_port/health_path**(A 类变更后存量老 Pod 用旧契约探测;旧 Pod 无字段时回退 scope:config 的 pod_spec_json) |
+| `reconcile_once`(场景 L) | 30s / lock:rm:reconcile(TTL 60) | ⓪.5 **外部收养(routing 模式)**:declared_scope_ids(SCAN declared)→declared ∖ 已注册→逐个 HTTP 探测→通过即注册(StatefulSet 同名重建的自愈路径:判死 PURGE 后声明仍在,重建完成 host 解析新 IP 探测通过回池;恢复时窗≈判死 20s+重建+本拍+服务启动);scope config 缺失只告警不动声明(等 config_sync;scope 删除的清权在 config_store drop_declared);⓪ **idle 计时自愈(2026-10-redis-no-lua-compat)**:idle 成员存在但 idle_since 缺失(info 在)→ `set_idle_since_if_absent` 补 SET NX——无 Lua 模式 release 的 EXEC(SADD)与 SET idle_since 之间崩溃留下的无计时成员,reclaim 的 aged=0 恒 falsy 永不到龄(槽位永久虚占),在此重启计时;Lua 模式该窗口不存在,NX 恒空过,对齐冒烟阶段 11b「idle_since 存在」不变量;① Redis 有 K8s 无 → PURGE+notify;② RM 持有但 SM 候选集已无的 stale Pod(经 `sm_facade.reconcile_pods`,Facade 单向)→ `LUA_RELEASE` 转 idle 按 pod_ttl 回收 |
 
-`_purge_and_notify(pod_id)` 三步(K8s delete 若还在 → LUA_PURGE → notify_pod_dead);全幂等。**delete 非 404 失败 → 本拍整体放弃**(记录留在 pods:all,watch/reconcile 下拍重试——若继续 PURGE,存活物理 Pod 脱离 Redis 枚举源成孤儿:对账只做 Redis→K8s 单向);PURGE/notify 失败仅记录(下拍兜底);PURGE 失败 `logger.exception` + 成功 INFO `pod purged`(三步可审计)。
+`_purge_and_notify(pod_id)` 三步(K8s delete 若还在 → LUA_PURGE → notify_pod_dead);全幂等。**external Pod 跳过 K8s delete(deregister-only:routing 模式无权限亦不该删,403 会触发「本拍放弃」卡死解注册)**。**delete 非 404 失败 → 本拍整体放弃**(记录留在 pods:all,watch/reconcile 下拍重试——若继续 PURGE,存活物理 Pod 脱离 Redis 枚举源成孤儿:对账只做 Redis→K8s 单向);PURGE/notify 失败仅记录(下拍兜底);PURGE 失败 `logger.exception` + 成功 INFO `pod purged`(三步可审计)。
 
 日志纪律:四个 `*_once` 每拍一条 DEBUG 汇总(计数聚合 + duration,如 `autoscale tick: scopes=N skip_warm=N deployed=N`),仅真正动作用 INFO;**决策留痕(2026-09-08 观测增强)**:autoscale 每 scope 决策标签**变化时**(含首拍,进程内 `_autoscale_state` 去重)一条 INFO `autoscale decision: scope= -→skip_warm warm=N min_idle=N idle_total=N`(skip_max/deployed 另带 `total=/max_pods=`;稳态零输出,skip_warm↔skip_max↔deployed 翻转全程可回放);reclaim excess 成员变化一条 INFO `reclaim pending: scope= excess=N pending=N oldest_age=Ns pod_ttl=Ns pods=`,清空后下一拍收敛 `excess=0`——「为什么没补位/没回收」只看日志,不必重推。`_health_probe` 数据缺失(pod_ip/sse_port 空 → 探测被静默跳过)按 pod 去重 WARNING(`_probe_gap_warned`,仅诊断用进程内集合)。
 

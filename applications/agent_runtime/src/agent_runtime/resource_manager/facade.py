@@ -11,6 +11,10 @@
 - sunset_pending_pods(scope_id) → list[str]（config_refresh 前置闸门：代次落后的
   注册 Pod；非空 = 上一轮日落未完成，refresh 409 串行化）。
 - cleanup(namespace?, label_selector?) → int（运维批删，经 SM 的 /cleanup 委托）。
+- register_pods / deregister_pods / declared_pods / drop_declared（routing 供给
+  模式，2026-10）：外部预建 Pod 的声明/注册/注销；register/deregister 经 SM 的
+  /register_pods / /deregister_pods 委托，declared_pods 供 SM 软摘除豁免查询，
+  drop_declared 供 config_store scope 删除路径清声明（豁免解除）。
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ class ResourceManagerFacade:
 
     def __init__(self, orchestrator: ResourceOrchestrator) -> None:
         self._orchestrator = orchestrator
+        self.state = orchestrator.state
 
     async def acquire(
         self,
@@ -76,3 +81,25 @@ class ResourceManagerFacade:
         config 键仍在才是幻影预热的真源（见 ConfigStore 扩散③）。
         """
         return await self._orchestrator.known_scope_ids()
+
+    # -------------------------------------------------------------- 外部供给（routing 模式）
+
+    async def register_pods(
+        self, scope_id: str, pods: list[dict] | None,
+    ) -> dict:
+        return await self._orchestrator.register_pods(scope_id=scope_id, pods=pods)
+
+    async def deregister_pods(
+        self, scope_id: str, pods: list[str] | None,
+    ) -> dict:
+        return await self._orchestrator.deregister_pods(
+            scope_id=scope_id, pods=pods)
+
+    async def declared_pods(self, scope_id: str) -> list[str]:
+        """该 scope 声明的外部 Pod 名（SM 软摘除豁免查询；full 模式恒空）。"""
+        return await self.state.declared_names(scope_id)
+
+    async def drop_declared(self, scope_id: str) -> int:
+        """清空声明表（scope 删除/路由性排除）：外部 Pod 失去版本豁免，
+        回归既有 gen-lag 日落回收（purge 仍不物理删）。"""
+        return await self.state.drop_declared(scope_id)

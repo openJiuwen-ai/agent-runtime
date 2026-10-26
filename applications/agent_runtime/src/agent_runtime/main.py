@@ -204,7 +204,8 @@ class OrchestratorSystemContext(SystemContext):
         self.sm_facade = SessionManagerFacade(sm_state)
 
         rm_orchestrator = ResourceOrchestrator(
-            rm_state, self.k8s, telemetry=telemetry, link_mtls_config=self.link_mtls
+            rm_state, self.k8s, telemetry=telemetry, link_mtls_config=self.link_mtls,
+            deploy_mode=self.arc.deploy_mode, sm_facade=self.sm_facade,
         )
         self.rm_facade = ResourceManagerFacade(rm_orchestrator)
 
@@ -215,6 +216,8 @@ class OrchestratorSystemContext(SystemContext):
             known_rm_scopes=self.rm_facade.known_scope_ids,
             bump_generation=self.rm_facade.bump_generation,
             sunset_pending_pods=self.rm_facade.sunset_pending_pods,
+            declared_pods=self.rm_facade.declared_pods,
+            drop_declared=self.rm_facade.drop_declared,
         )
         self.sm_orchestrator = SessionOrchestrator(
             sm_state,
@@ -222,6 +225,7 @@ class OrchestratorSystemContext(SystemContext):
             self.rm_facade,
             default_session_ttl=self.arc.default_session_ttl,
             telemetry=telemetry,
+            deploy_mode=self.arc.deploy_mode,
         )
         self.sm_sweeper = SessionSweeper(sm_state, self.rm_facade)
         self.rm_sweeper = ResourceSweeper(
@@ -230,6 +234,7 @@ class OrchestratorSystemContext(SystemContext):
             self.sm_facade,
             orchestrator=rm_orchestrator,
             event_sink=eval_state.bump_event,
+            deploy_mode=self.arc.deploy_mode,
         )
         self.eval_state = eval_state
         self.eval_telemetry = telemetry
@@ -307,6 +312,13 @@ class OrchestratorSystemContext(SystemContext):
     # -------------------------------------------------------------- 生命周期
 
     async def start(self) -> None:
+        # routing 供给模式组合校验（fail-fast，2026-10）：link mTLS enforce 需要
+        # 向 Pod 注入证书物料（_inject_link_mtls），外部预建 Pod 做不到——该
+        # 组合静默启动会在首个探测/编址处以晦涩的 https/证书错误暴露
+        if self.arc.deploy_mode == "routing" and self.link_mtls.enforced:
+            raise ValueError(
+                "AGENT_RUNTIME_DEPLOY_MODE=routing 与 link mTLS enforce 不兼容:"
+                "外部预建 Pod 无法注入 mTLS 物料(客户 StatefulSet 自管形态)")
         # 无 Lua 模式先行置位（off 为显式声明，禁 EVAL 环境不发任何探测命令）：
         # - 进程级默认 → State 门面首次 eval 惰性固化；
         # - 框架层 memo → TickLock/选主/锁后端直接走 WATCH 路径，免首拍撞墙。
@@ -349,11 +361,12 @@ class OrchestratorSystemContext(SystemContext):
             self._telemetry_flush_loop(), name="eval-telemetry-flush"
         )
         self.logger.info(
-            "config summary: mode=%s namespace=%s sweep=%ss autoscale=%ss "
-            "reclaim=%ss watch=%ss reconcile=%ss "
+            "config summary: mode=%s deploy_mode=%s namespace=%s sweep=%ss "
+            "autoscale=%ss reclaim=%ss watch=%ss reconcile=%ss "
             "default_session_ttl=%ss eval_sample=%ss eval=%ss eval_llm=%s "
             "kubeconfig=%s",
             self.arc.mode,
+            self.arc.deploy_mode,
             self.arc.default_namespace,
             self.arc.sweep_interval,
             self.arc.autoscale_interval,

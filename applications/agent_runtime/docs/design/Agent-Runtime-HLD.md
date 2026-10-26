@@ -106,6 +106,8 @@ flowchart TB
 | `POST /api/session/config_sync` | `{ containers:[...], templates:[...], scopes:[...] }`(三段式全量快照,**独占**——无 containers 键的 legacy 内联载荷 400) | `{ ok, templates_synced/deleted, containers_synced/deleted, scopes_synced/deleted, affected_scopes, wildcard_present }` | Claw Manager 全量下发配置(容器列表 + 模板列表 + scope 列表;模板只持容器引用,容器规格集中一张表);旧 `kind/op` 增量协议已废弃(400) |
 | `POST /api/session/config_refresh` | **无载荷**(rawdata 非空 → 400) | `{ ok, scopes_refreshed, pods_sunset, generations }` | 强制刷新(场景 M-R):全部存活 scope 的现有 Pod 优雅日落并**按存量配置重建**——代次 +1(软摘除,不接新会话;存量会话自然跑完)、reclaim 按 pod_ttl 回收老代、autoscale 按缓存 pod_spec 重建;不写 DB 不动快照;与 config_sync 共用锁(忙 → 409);**前置日落闸门**——任一 scope 存在代次落后且未回收的注册 Pod 时 409(见场景 M-R) |
 | `POST /api/session/cleanup` | `{ namespace?, label_selector? }` | `{ cleaned:int }` | 运维批量清 Pod(灾难恢复 / 重新部署),handler 在 Session Manager、委托 `rm_facade.cleanup()` |
+| `POST /api/session/register_pods` | `{ scope_id, pods:[{name, host}] }`(全必填) | `{ registered, already_registered, pending }` | **routing 供给模式**(场景 O,2026-10-routing-deploy-mode):外部预建 Pod 声明+注册;端口/路径由 scope 模板推导;探测通过入池、失败 pending 由收养循环补;幂等不走 request_id 缓存 |
+| `POST /api/session/deregister_pods` | `{ scope_id, pods:[name...] }` | `{ deregistered, evicted_sessions }` | routing 模式:驱逐会话并注销外部 Pod(**绝不物理删**);幂等 |
 
 - `group_id` 经 `metadata.extra` 传递;`metadata.request_id` 兼作幂等键。
 - `route` 典型错误:容量满(503)、无可用 Pod(503)、无匹配 scope(503)、参数错(400);过载响应带 `Retry-After` + `error_code`。
@@ -714,6 +716,7 @@ flowchart TB
 |---|---|---|---|
 | `resource:scope:{scope_id}:pods` | ZSET | pod_id(score=创建序) | 该 scope 全部 Pod(in_use ∪ idle);`ZCARD` 参与 `max_pods` 判定 |
 | `resource:scope:{scope_id}:idle` | SET | idle 的 pod_id | **SCARD = idle Pod 数**(autoscale / reclaim 闸门;acquire 从此取暖 Pod) |
+| `resource:scope:{scope_id}:declared` | HASH | pod 名 → JSON{host, declared_ts} | **routing 模式外部 Pod 声明表**(2026-10-routing-deploy-mode);成员资格 = 版本/代次豁免唯一判据(五点共用:LUA_ACQUIRE 过滤/reclaim/has_lagged_pods/sunset_pending_pods/SM 软摘除);scope 删除 DEL → 外部 Pod 回归既有日落 |
 | `resource:scope:{scope_id}:config` | HASH | min_idle_pods / max_pods / pod_ttl / pod_concurrency / deploy_ver / pod_spec_json / generation | config_sync 对**每个存活 scope 主动写入/刷新**(带 pod_spec——无请求 scope 的 autoscale 预热依赖 pod_spec_json;**不含 generation**——代次只经 config_refresh 的 HINCRBY 单调递增,推送永不重置);首 acquire 也会兜底写入;被删 scope 推 `min_idle=0` 停预热自然排空 |
 | `resource:scope:{scope_id}:deploying` | ZSET | deploy 占位 token(uuid) → deadline(秒级时间戳) | 计入 `max_pods` 判定(防并发 deploy 超配);register / 失败时清;score=deadline 供闸门/autoscale 原子清崩溃遗留(硬崩后占位不永久虚占容量) |
 | `resource:scope:{scope_id}:deploy_followers` | ZSET | deploy 锁输家的 request_id → deadline | follower 等待室(M8):`ZCARD ≤ pod_concurrency-1`;检测 leader Pod 注册即复用;score=deadline 供闸门清崩溃遗留 |
@@ -1275,6 +1278,18 @@ sequenceDiagram
 > 价值:**旁路架构下的数据面健康兜底**——控制面不在数据通路上,看不见"SSE 不通";用 AgentServer 健康 SSE 端点 + RM 周期探测补上这块盲区,半死 Pod 在 ≤20s 内被发现并清理,配合 gateway 超时 + 重新 route 实现用户无感自愈。
 
 ---
+
+#### 场景 O:外部预建 Pod 供给 —— routing 模式(2026-10-routing-deploy-mode)
+
+`AGENT_RUNTIME_DEPLOY_MODE=routing`(默认 full=本节以外的一切行为):客户环境无任何 K8s 权限,客户自己用 StatefulSet(+headless service)预拉起 AgentServer,调 `register_pods` 把 Pod 域名注册进来;agent-runtime 只做分配,**一次 K8s API 调用都不发生**(SA 零 pods 权限,Role 可不建)。
+
+- **就绪判定 = HTTP 探测**:注册时逐 Pod `GET http://{host}:{sse_port}{health_path}`(参数由 scope 模板推导,模板即运行契约),通过即入 idle 池,失败转 pending;探测/编址同用该域名(`pod_sse_url = http://{host}:{port}{sse_path}`)。
+- **死亡检测唯一信号 = HTTP 探测**:watch 对外部 Pod 跳过 K8s 相位检查,连续 2 次失败判死 → 解注册(不物理删)+ 驱逐会话。
+- **同名重建自愈**:StatefulSet 重建同名 Pod(换 IP)→ 收养循环(reconcile 30s 拍)对 declared ∖ 已注册逐个探测,域名解析新 IP 探测通过即回池;恢复时窗 ≈ 判死 20s + 重建 + 30s + 服务启动。
+- **版本/代次豁免(五点)**:外部 Pod 物理形态由客户 StatefulSet 决定,runtime 无权换代——LUA_ACQUIRE 复用过滤(declared 成员跳过比对)、reclaim excess/stale 分类、has_lagged_pods(drain 纪元判据)、sunset_pending_pods(refresh 前置闸门,不豁免则永久 409)、SM `_soft_remove_stale_pods`(A 类变更软摘)。豁免判据 = declared 成员资格:scope 删除(config_store drop_declared)→ 失去豁免 → 既有 gen-lag 日落排空回收(purge 仍不物理删)。
+- **容量语义**:注册即容量(派生 max_pods 不再限制注册数);SM `LUA_ROUTE_PLACE` 第 7 步判满在 routing 模式传哨兵值旁路(空闲 Pod 不在 SM 候选集,按候选数判满会假 scope_full);scope_concurrency/pod_concurrency 闸门照常。池空 → 503 NO_POD_AVAILABLE(语义 = 需扩 StatefulSet 并注册)。
+- **关闭面**:autoscale 整拍跳过;cleanup 400 拒绝;deploy/delete 代码路径不可达;link mTLS enforce 组合启动即 raise。
+- **约束**:gateway 与 runtime 须能解析/直达注册域名(客户保证);客户 StatefulSet 端口/路径与平台模板一致。
 
 ## 7. 安全与可靠性设计
 

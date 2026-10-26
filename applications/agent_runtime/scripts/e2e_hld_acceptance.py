@@ -84,6 +84,7 @@ BOX = ""      # （box：sidecar 多容器；--with-sidecar 时启用）
 WITH_SIDECAR = False
 SIDECAR_IMAGE = ""   # sidecar 替身镜像（默认与主镜像同款 influxdb:1.8 改端口）
 MNT = ""      # （mnt：主+sidecar 三种挂载全量真实规格；--with-mounts 时启用）
+ROUTING = False
 WITH_MOUNTS = False
 # 契约参数（真镜像门禁三件套：health_path / sse_path / agent_env）
 HEALTH_PATH = "/health"
@@ -1543,14 +1544,194 @@ def _parse_args() -> argparse.Namespace:
                         help="落库校验的客户端类型:mysql|postgresql")
     parser.add_argument("--force-flush", action="store_true",
                         help="目标 Redis DB 含外来 key 时仍强制 FLUSHDB（默认中止）")
+    parser.add_argument("--routing-provision", action="store_true",
+                        default=env("AGENT_RUNTIME_E2E_ROUTING", "") == "1",
+                        help="routing 供给模式专属流程(2026-10-routing-deploy-mode):"
+                             "跳过常规阶段,工装自建 StatefulSet+headless service 模拟"
+                             "客户预建,跑 注册→分配→判死驱逐→重建收养→refresh 不卡→"
+                             "cleanup 拒绝→注销 全链。要求目标服务以 "
+                             "AGENT_RUNTIME_DEPLOY_MODE=routing 启动(否则首项即 FAIL)"
+                             "且 kubectl 可在 --namespace 建删 sts/svc")
     return parser.parse_args()
+
+
+# ---------------------------------------------------------------- routing 供给模式(2026-10-routing-deploy-mode)
+# 工装(有集群权限)自建 StatefulSet+headless service 模拟客户预建;目标服务须以
+# AGENT_RUNTIME_DEPLOY_MODE=routing 启动(零 K8s 权限形态)。判死窗口刻意用
+# scale 0/1 制造确定性死亡(直接删 Pod 重建太快,探测连败 2 次的窗口不稳定)。
+
+RT_SCOPE, RT_STS, RT_SVC = "e2e-rt", "e2e-as", "e2e-as-svc"
+
+
+def _rt_sts_manifest() -> str:
+    """headless Service + StatefulSet(镜像/探测契约与模板同源:IMAGE+8086+HEALTH_PATH)。
+    不打 jiuwenclaw-component 标签——即便误跑 full 模式,cleanup 默认 selector 也不命中。"""
+    return f"""
+apiVersion: v1
+kind: Service
+metadata:
+  name: {RT_SVC}
+  namespace: {NS}
+spec:
+  clusterIP: None
+  selector: {{app: {RT_STS}}}
+  ports: [{{name: sse, port: 8086}}]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {RT_STS}
+  namespace: {NS}
+spec:
+  serviceName: {RT_SVC}
+  replicas: 1
+  selector: {{matchLabels: {{app: {RT_STS}}}}}
+  template:
+    metadata: {{labels: {{app: {RT_STS}}}}}
+    spec:
+      containers:
+      - name: agent
+        image: {IMAGE}
+        imagePullPolicy: IfNotPresent
+        ports: [{{containerPort: 8086, name: sse}}]
+        readinessProbe:
+          httpGet: {{path: {HEALTH_PATH}, port: 8086}}
+          initialDelaySeconds: 5
+          periodSeconds: 5
+"""
+
+
+async def routing_provision_flow(c: Client, r, args) -> None:
+    from e2e_lib import kubectl, wait_until
+
+    host0 = f"{RT_STS}-0.{RT_SVC}.{NS}.svc"
+    cid = "c-tpl-rt"
+    payload = {
+        "containers": [main_container(cid)],
+        "templates": [{"template_id": "tpl-rt",
+                       **template(cid, scope_concurrency=4, pod_concurrency=1,
+                                  session_ttl=30, pod_ttl=60)}],
+        "scopes": [{"scope_id": RT_SCOPE, "index": 0,
+                    "template_id": "tpl-rt", "routing_rules": ""}],
+    }
+
+    async def teardown() -> None:
+        await kubectl("delete", "statefulset", RT_STS, "-n", NS,
+                      "--ignore-not-found=true")
+        await kubectl("delete", "service", RT_SVC, "-n", NS,
+                      "--ignore-not-found=true")
+
+    try:
+        # R1 播种(与常规阶段独立的小载荷)
+        code, body, _ = await c.post("config_sync", rawdata=payload,
+                                     request_id="rt-seed")
+        check("R1 config_sync 播种 e2e-rt", code == 200 and body.get("ok"),
+              f"code={code} body={body}")
+
+        # R2 预拉 StatefulSet(模拟客户;runtime 全程零 K8s 调用)
+        await teardown()
+        out = await kubectl("apply", "-f", "-", stdin=_rt_sts_manifest())
+        rolled = await kubectl("rollout", "status", f"statefulset/{RT_STS}",
+                               "-n", NS, "--timeout=180s")
+        check("R2 StatefulSet+headless svc 预拉 1/1 Ready",
+              "configured" in out and "successfully rolled out" in rolled,
+              out.strip()[:80])
+
+        # R3 注册:探测通过即入池
+        code, body, _ = await c.post("register_pods", rawdata={
+            "scope_id": RT_SCOPE,
+            "pods": [{"name": f"{RT_STS}-0", "host": host0}],
+        }, request_id="rt-reg")
+        registered = [e.get("pod") for e in body.get("registered") or []]
+        ok = code == 200 and registered == [f"{RT_STS}-0"] and (
+            body["registered"][0].get("pod_sse_url", "").startswith(
+                f"http://{host0}:8086"))
+        check("R3 register_pods 域名注册即入池", ok,
+              f"code={code} body={body}")
+        if not ok and code == 400:
+            print("  (目标服务疑似未以 AGENT_RUNTIME_DEPLOY_MODE=routing 启动)")
+
+        # R4 分配:route 落同名 Pod
+        code, body, _ = await c.post("route", session_id="rt-s1",
+                                     group=RT_SCOPE, request_id="rt-r1")
+        placed = body.get("pod_id") == f"{RT_STS}-0"
+        check("R4 route 落外部 Pod(注册即容量)", code == 200 and placed,
+              f"code={code} body={body}")
+        code, body, _ = await c.post("touch", session_id="rt-s1",
+                                     request_id="rt-t1")
+        check("R5 touch 保活", code == 200 and body.get("touched") is True,
+              f"code={code} body={body}")
+
+        # R6 判死驱逐:scale 0 制造确定性死亡(探测连败 2 次≈20s)
+        await kubectl("scale", f"statefulset/{RT_STS}", "-n", NS,
+                      "--replicas=0")
+        evicted = await wait_until(
+            _touch_false(c, "rt-s1"), timeout=90.0, interval=5.0,
+            desc="probe death eviction")
+        check("R6 探测判死→会话驱逐(零物理删,runtime 不删客户 Pod)", evicted,
+              "90s 内 touch 未转 False")
+
+        # R7 重建收养:scale 1 → 同名重建 → 收养循环回池 → 再分配落同名
+        await kubectl("scale", f"statefulset/{RT_STS}", "-n", NS,
+                      "--replicas=1")
+        await kubectl("rollout", "status", f"statefulset/{RT_STS}",
+                      "-n", NS, "--timeout=180s")
+        readopted = await wait_until(
+            _route_lands(c, "rt-s2", RT_SCOPE, f"{RT_STS}-0"),
+            timeout=120.0, interval=5.0, desc="re-adopt after recreate")
+        check("R7 StatefulSet 同名重建→自动收养→再分配", readopted,
+              "120s 内未恢复分配")
+
+        # R8 config_refresh 不被外部 Pod 卡 409
+        code, body, _ = await c.post("config_refresh", request_id="rt-crf")
+        check("R8 config_refresh 不被外部 Pod 卡 409",
+              code == 200 and body.get("ok"), f"code={code} body={body}")
+
+        # R9 cleanup 在 routing 模式拒绝
+        code, body, _ = await c.post("cleanup", request_id="rt-cln")
+        check("R9 cleanup 拒绝(400 VALIDATION)",
+              code == 400 and body.get("ok") is False, f"code={code}")
+
+        # R10 注销驱逐 + 池空 503
+        code, body, _ = await c.post("deregister_pods", rawdata={
+            "scope_id": RT_SCOPE, "pods": [f"{RT_STS}-0"],
+        }, request_id="rt-dereg")
+        ok = code == 200 and body.get("deregistered") == [f"{RT_STS}-0"] and (
+            int(body.get("evicted_sessions") or 0) >= 1)
+        check("R10 deregister 驱逐会话并注销", ok, f"code={code} body={body}")
+        code, body, _ = await c.post("route", session_id="rt-s3",
+                                     group=RT_SCOPE, request_id="rt-r3")
+        check("R11 池空→503 NO_POD_AVAILABLE(扩容语义)",
+              code == 503 and (body.get("error_code") == "NO_POD_AVAILABLE"
+                               or "NO_POD_AVAILABLE" in str(body)),
+              f"code={code}")
+    finally:
+        await teardown()
+
+
+def _touch_false(c: Client, session_id: str):
+    async def _fn() -> bool:
+        code, body, _ = await c.post("touch", session_id=session_id,
+                                     request_id=f"probe-{session_id}")
+        return code == 200 and body.get("touched") is False
+    return _fn
+
+
+def _route_lands(c: Client, session_id: str, group: str, pod_id: str):
+    async def _fn() -> bool:
+        code, body, _ = await c.post("route", session_id=session_id,
+                                     group=group,
+                                     request_id=f"probe-{session_id}")
+        return code == 200 and body.get("pod_id") == pod_id
+    return _fn
 
 
 async def main() -> None:
     global BASE, REDIS_URL, NS, IMAGE, DB_DSN, MAIN, FSCOPE, WARM, BAD
     global BOX, WITH_SIDECAR, SIDECAR_IMAGE, HEALTH_PATH, SSE_PATH, AGENT_ENV
-    global MNT, WITH_MOUNTS
+    global MNT, WITH_MOUNTS, ROUTING
     args = _parse_args()
+    ROUTING = bool(args.routing_provision)
     BASE = args.base_url.rstrip("/")
     REDIS_URL = args.redis_url
     NS = args.namespace
@@ -1583,6 +1764,14 @@ async def main() -> None:
         if not await preflight(r, args.force_flush):
             print("\n===== 前置自检未通过，中止 =====")
             raise SystemExit(2)
+        if ROUTING:
+            # routing 专属流程:常规阶段全部跳过(clean_previous 的 cleanup 端点
+            # 在 routing 模式 400,清场改由 FLUSHDB + 独立资源名承载)
+            async with httpx.AsyncClient(timeout=90.0) as http:
+                await routing_provision_flow(Client(http, BASE), r, args)
+            await r.aclose()
+            _summarize_and_exit()
+
         if WITH_MOUNTS and not await stage0_provision_mounts():
             print("\n===== 全量规格资源预置未通过，中止（未执行清场）=====")
             raise SystemExit(2)
@@ -1614,6 +1803,10 @@ async def main() -> None:
     finally:
         await r.aclose()
 
+    _summarize_and_exit()
+
+
+def _summarize_and_exit() -> None:
     passed = sum(1 for _, ok, _ in RESULTS if ok)
     print(f"\n===== 冒烟结果：{passed}/{len(RESULTS)} PASS =====")
     for name, ok, detail in RESULTS:

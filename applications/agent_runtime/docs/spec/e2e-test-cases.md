@@ -371,6 +371,24 @@ s1–s3 占满(cc=3),or 支 route 只能被 503 快失败拒绝——原断言�
 
 ---
 
+## 3b. routing 供给模式 e2e(2026-10-routing-deploy-mode):`e2e_hld_acceptance.py --routing-provision`(11 项)
+
+工装(有集群权限)自建 StatefulSet(`e2e-as`)+ headless service(`e2e-as-svc`)模拟客户预拉形态;**目标服务须以 `AGENT_RUNTIME_DEPLOY_MODE=routing` 启动**(否则 R1 后全红且 R3 提示)。判死窗口用 scale 0/1 制造确定性死亡(直接删 Pod 重建太快,探测连败 2 次的窗口不稳定);终态清场删 sts/svc(不打 jiuwenclaw-component 标签,误跑 full 模式 cleanup 也不命中)。
+
+| 项 | 场景 | 输入 | 预期 |
+|---|---|---|---|
+| R1 | 播种 | 独立小载荷 config_sync(tpl-rt,sc=4/pc=1) | 200 ok |
+| R2 | 客户预拉 | kubectl apply sts+svc,rollout status | 1/1 Ready |
+| R3 | 注册 | register_pods(sts-0, host=sts-0.e2e-as-svc.{ns}.svc) | registered;sse_url=http://{host}:8086/sse |
+| R4 | 分配 | route(rt-s1) | pod_id=sts-0(注册即容量) |
+| R5 | 保活 | touch | touched=true |
+| R6 | 判死驱逐 | scale 0 → 轮询 touch(≤90s) | touched=false(探测连败 2 次判死;runtime 零物理删) |
+| R7 | 重建收养 | scale 1 → rollout → 轮询 route(≤120s) | 新会话落 sts-0(同名重建自动回池) |
+| R8 | refresh 不卡 | config_refresh | 200(外部 Pod 不计入日落闸门) |
+| R9 | cleanup 拒绝 | cleanup | 400 VALIDATION |
+| R10 | 注销驱逐 | deregister_pods(sts-0) | deregistered+evicted_sessions≥1 |
+| R11 | 池空语义 | route | 503 NO_POD_AVAILABLE(扩容语义) |
+
 ## 4. 多副本 e2e(M7):`scripts/e2e_multi_replica.py`(35 项)
 
 ### 4.0 形态与前置

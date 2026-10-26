@@ -461,6 +461,13 @@ GenerationBump = Callable[[str], Awaitable[int]]
 # RM 日落中间态回调：config_refresh → rm_facade.sunset_pending_pods(scope_id)
 # （返回代次落后于当前配置的注册 Pod——refresh 前置闸门的判据）
 SunsetPendingPods = Callable[[str], Awaitable[list[str]]]
+# RM 外部声明表回调（routing 供给模式，2026-10）：
+# - declared_pods(scope_id) → 该 scope 声明的外部 Pod 名（软摘除豁免查询，
+#   full 模式恒空 → 豁免分支零行为变化）
+# - drop_declared(scope_id) → 清声明（scope 删除/路由性排除；外部 Pod 失去
+#   版本豁免，回归既有 gen-lag 日落回收——purge 仍不物理删）
+DeclaredPods = Callable[[str], Awaitable[list[str]]]
+DropDeclared = Callable[[str], Awaitable[int]]
 
 CONFIG_SYNC_LOCK_TTL = 60  # 串行化锁基线 TTL（看门狗按 TTL//3 续期——锁内工作
                            # 含日落判定/全量 DB 读写/逐 scope 推送，规模大可超基线）
@@ -546,6 +553,8 @@ class ConfigStore:
         known_rm_scopes: KnownRmScopes | None = None,
         bump_generation: GenerationBump | None = None,
         sunset_pending_pods: SunsetPendingPods | None = None,
+        declared_pods: DeclaredPods | None = None,
+        drop_declared: DropDeclared | None = None,
     ) -> None:
         self._db = db
         self.state = sm_state
@@ -553,6 +562,8 @@ class ConfigStore:
         self._known_rm_scopes = known_rm_scopes
         self._bump_generation = bump_generation
         self._sunset_pending = sunset_pending_pods
+        self._declared_pods = declared_pods
+        self._drop_declared = drop_declared
         # 进程内快照 memo：原始串相等则复用已解析对象（route 热路径零 json.loads）
         self._snapshot_raw: str | None = None
         self._snapshot: RoutingSnapshot | None = None
@@ -1089,6 +1100,10 @@ class ConfigStore:
                       "session_ttl": 60}
             )
             await self._push_or_warn(sid, pool, None)
+            # routing 模式：清外部声明表（warn-only，同 push 先例——DB 已提交）。
+            # 豁免随声明消失而解除，上述 bump 日落 + reclaim 排空对外部 Pod
+            # 即刻生效（purge 仍不物理删）；每拍重推的本循环天然重试丢掉的 drop
+            await self._drop_declared_or_warn(sid)
 
         return {
             "ok": True,
@@ -1138,6 +1153,22 @@ class ConfigStore:
             logger.exception(
                 "routing sunset bump failed (scope=%s) -- old sessions "
                 "degrade to natural-drain bound", scope_id,
+            )
+
+    async def _drop_declared_or_warn(self, scope_id: str) -> None:
+        """清外部声明表（routing 模式，scope 删除路径）；失败仅告警不中止。
+
+        声明残留的后果是外部 Pod 持续豁免版本淘汰（scope 已删却永生）——
+        扩散③每拍对被删 scope 重推 min_idle=0，本 drop 随之重试收敛。
+        """
+        if self._drop_declared is None:
+            return
+        try:
+            await self._drop_declared(scope_id)
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "drop_declared failed (scope=%s) -- external pods keep "
+                "version exemption until next config_sync retry", scope_id,
             )
 
     async def _config_refresh_locked(self) -> dict[str, Any]:
@@ -1302,9 +1333,24 @@ class ConfigStore:
         ) else "none"
 
     async def _soft_remove_stale_pods(self, scope_id: str, new_deploy_ver: str) -> list[str]:
-        """把 deploy_ver 不匹配的 Pod ZREM 出 scope:pods 候选集（与 idle_consider 同款机制）。"""
+        """把 deploy_ver 不匹配的 Pod ZREM 出 scope:pods 候选集（与 idle_consider 同款机制）。
+
+        **外部声明成员豁免**（routing 模式，2026-10）：外部 Pod 版本无关，
+        摘了它只会形成「每拍 sync 摘、每次 acquire 复用再登记」的振荡——
+        其物理规格由客户 StatefulSet 自管，A 类变更对它无意义。
+        """
+        declared: set[str] = set()
+        if self._declared_pods is not None:
+            try:
+                declared = set(await self._declared_pods(scope_id))
+            except Exception:  # noqa: BLE001 - 查询失败退化为不豁免(保守摘除)
+                logger.exception(
+                    "declared_pods query failed, exemption skipped: scope=%s",
+                    scope_id)
         removed: list[str] = []
         for pod_id in await self.state.scope_pod_ids(scope_id):
+            if pod_id in declared:
+                continue
             if await self.state.pod_deploy_ver(scope_id, pod_id) != new_deploy_ver:
                 await self.state.redis.zrem(self.state.k.scope_pods(scope_id), pod_id)
                 removed.append(pod_id)
