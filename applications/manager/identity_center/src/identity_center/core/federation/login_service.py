@@ -5,13 +5,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import secrets
-from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
-
-from sqlalchemy import delete, insert, select, update
-from sqlalchemy.exc import IntegrityError
 
 from openjiuwen_runtime.foundation.db.sqlalchemy_handler import SQLAlchemyHandler
 from openjiuwen_runtime.service import (
@@ -19,11 +15,12 @@ from openjiuwen_runtime.service import (
     FederationConnection,
     FederationCoordinator,
     FederationError,
-    FederationProvider,
     LocalPrincipal,
     SystemContext,
     UnknownFederationConnection,
 )
+from sqlalchemy import delete, insert, select, update
+from sqlalchemy.exc import IntegrityError
 
 from identity_center.core.auth.service import IdentityAuthService
 from identity_center.infrastructure.config import Settings
@@ -34,24 +31,16 @@ from identity_center.models.identity_models import (
     FEDERATION_LOGIN_STATE_TABLE_DEF,
     FEDERATION_ROLE_MAPPING_TABLE_DEF,
 )
+from identity_center.security.federation_code import open_token, seal_token
 
-from .provider import DemoFederationProvider
+from .connections import (
+    ConfiguredFederation,
+    FederationRoleMapping,
+    _configured_federations,
+)
+from .contracts import FederationTokenResult
+from .oidc_provider import ValidatedOidcCallback
 from .store import IdentityCenterFederatedIdentityStore
-
-
-@dataclass(frozen=True)
-class FederationRoleMapping:
-    claim_name: str
-    claim_value: str
-    local_role: str
-
-
-@dataclass(frozen=True)
-class ConfiguredFederation:
-    connection: FederationConnection
-    provider_type: str
-    provider: FederationProvider
-    role_mappings: tuple[FederationRoleMapping, ...] = ()
 
 
 class IdentityFederationService:
@@ -81,6 +70,7 @@ class IdentityFederationService:
                 },
             )
             for registration in registrations
+            if registration.provider is not None
         }
         self._connection_table = handler.get_table(
             FEDERATION_CONNECTION_TABLE_DEF.table_name
@@ -98,8 +88,8 @@ class IdentityFederationService:
         cls,
         handler: SQLAlchemyHandler,
         settings: Settings,
-    ) -> "IdentityFederationService":
-        registrations = _configured_federations(settings)
+    ) -> IdentityFederationService:
+        registrations = _configured_federations(settings, handler)
         service = cls(
             handler=handler,
             settings=settings,
@@ -126,8 +116,132 @@ class IdentityFederationService:
         prefix = prefix.rstrip("/")
         return f"{prefix}{normalized_path}" if prefix else normalized_path
 
-    async def begin_login(self, connection_id: str, return_to: str) -> str:
+    def _registration(self, connection_id: str) -> ConfiguredFederation:
+        registration = self._connections.get(connection_id)
+        if registration is None:
+            raise UnknownFederationConnection("unknown federation connection")
+        return registration
+
+    def flow(self, connection_id: str) -> str:
+        return self._registration(connection_id).flow
+
+    async def browser_configuration(self, connection_id: str) -> dict[str, Any]:
+        registration = self._registration(connection_id)
+        options = registration.options
+        if options is None or options.flow != "browser_pkce":
+            raise FederationError("connection does not use browser PKCE")
+        # Validate discovery server-side before exposing public client parameters.
+        await registration.verifier.discovery()
+        return {
+            "connection_id": connection_id,
+            "flow": options.flow,
+            "authority": options.issuer,
+            "client_id": options.client_id,
+            "scope": options.scope,
+            "automatic_silent_renew": options.automatic_silent_renew,
+        }
+
+    async def login_with_access_token(
+        self, connection_id: str, token: str
+    ) -> dict[str, Any] | str:
+        registration = self._registration(connection_id)
+        options = registration.options
+        if options is None or options.flow != "browser_pkce":
+            raise FederationError("connection does not accept browser tokens")
+        verifier = registration.verifier
+        claims = await verifier.validate_access_token(
+            {"access_token": token, "token_type": "Bearer"},
+            audience=options.access_token_audience,
+        )
+        identity = verifier.identity_from_claims(registration.connection, claims)
+        # No authorization-code callback is fabricated: the verified token is
+        # resolved through the same transactional identity store directly.
+        principal = await self._store.resolve_or_create(
+            registration.connection, identity
+        )
+        result = await IdentityAuthService(self._handler).issue_for_user_id(
+            principal.user_id
+        )
+        if isinstance(result, dict) and options.handoff_access_token:
+            result["federation"] = {
+                "connection_id": connection_id,
+                "user_id": principal.user_id,
+                "access_token": token,
+                "token_type": "Bearer",
+            }
+        return result
+
+    async def refresh_token_handoff(
+        self, connection_id: str, token: str, user_id: str
+    ) -> dict[str, str]:
+        registration = self._registration(connection_id)
+        options = registration.options
+        if (
+            options is None
+            or options.flow != "browser_pkce"
+            or not options.handoff_access_token
+        ):
+            raise FederationError("connection does not hand off browser tokens")
+        claims = await registration.verifier.validate_access_token(
+            {"access_token": token, "token_type": "Bearer"},
+            audience=options.access_token_audience,
+        )
+        principal = await self._store.find(
+            connection_id=connection_id,
+            issuer=registration.connection.issuer,
+            external_subject=claims["sub"],
+        )
+        user = await IdentityAuthService(self._handler).get_user(user_id)
+        identity_mismatch = principal is None or principal.user_id != user_id
+        if identity_mismatch or user is None or user.status != "active":
+            raise FederationError(
+                "customer token does not match the active platform user"
+            )
+        return {
+            "connection_id": connection_id,
+            "user_id": user_id,
+            "access_token": token,
+            "token_type": "Bearer",
+        }
+
+    def requires_browser_binding(self, connection_id: str) -> bool:
+        self._require_coordinator(connection_id)
+        return self._connections[connection_id.strip()].provider_type == "oidc"
+
+    @property
+    def secure_browser_cookie(self) -> bool:
+        return any(
+            item.options is not None
+            and urlsplit(item.options.redirect_uri).scheme == "https"
+            for item in self._connections.values()
+        )
+
+    @property
+    def browser_cookie_name(self) -> str:
+        prefix = "__Host-" if self.secure_browser_cookie else ""
+        return prefix + "identity_federation_browser"
+
+    @property
+    def browser_cookie_path(self) -> str:
+        return (
+            "/"
+            if self.secure_browser_cookie
+            else self.public_path("/v1/auth/federation")
+        )
+
+    @property
+    def browser_cookie_ttl(self) -> int:
+        return (
+            self._settings.federation_request_ttl_seconds
+            + self._settings.federation_code_ttl_seconds
+        )
+
+    async def begin_login(
+        self, connection_id: str, return_to: str, *, browser_binding: str | None = None
+    ) -> str:
         coordinator = self._require_coordinator(connection_id)
+        if self.requires_browser_binding(connection_id) and not browser_binding:
+            raise FederationError("OIDC login must be bound to a browser")
         safe_return_to = _validate_return_to(return_to)
         request_id = secrets.token_urlsafe(32)
         now = utc_now()
@@ -140,10 +254,11 @@ class IdentityFederationService:
                     request_id=request_id,
                     connection_id=connection_id,
                     return_to=safe_return_to,
+                    data={"browser_hash": _hash_code(browser_binding)}
+                    if browser_binding
+                    else None,
                     expires_at=now
-                    + timedelta(
-                        seconds=self._settings.federation_request_ttl_seconds
-                    ),
+                    + timedelta(seconds=self._settings.federation_request_ttl_seconds),
                     created_at=now,
                     updated_at=now,
                 )
@@ -179,21 +294,55 @@ class IdentityFederationService:
         self,
         connection_id: str,
         parameters: dict[str, str],
+        *,
+        browser_binding: str | None = None,
     ) -> tuple[str, LocalPrincipal]:
         coordinator = self._require_coordinator(connection_id)
-        authentication = await coordinator.consume_callback(connection_id, parameters)
-        return_to = await self._consume_request(
-            connection_id,
-            authentication.authorization_request_id,
-        )
+        code_data = None
+        if self.requires_browser_binding(connection_id):
+            request_id = str(parameters.get("state") or "")
+            row = await self._take_request(
+                connection_id, request_id, browser_binding=browser_binding
+            )
+            data = row["data"] or {}
+            code_data = {"browser_hash": data["browser_hash"]}
+            # Consume before contacting the issuer: parallel callbacks cannot
+            # redeem the same state or invalidate another callback in flight.
+            trusted = ValidatedOidcCallback(parameters, data)
+            authentication = await coordinator.consume_callback(connection_id, trusted)
+            return_to = str(row["return_to"])
+        else:
+            authentication = await coordinator.consume_callback(
+                connection_id, parameters
+            )
+            return_to = await self._consume_request(
+                connection_id, authentication.authorization_request_id
+            )
         principal = await coordinator.resolve_or_create(
             connection_id,
             authentication.identity,
         )
-        code = await self._create_login_code(principal.user_id)
+        if isinstance(authentication, FederationTokenResult) and (
+            self._connections[connection_id].options is None
+            or self._connections[connection_id].options.handoff_access_token
+        ):
+            code_data = {
+                **(code_data or {}),
+                "federation": {
+                    "connection_id": connection_id,
+                    "user_id": principal.user_id,
+                    "access_token": seal_token(
+                        authentication.token_bundle["access_token"], principal.user_id
+                    ),
+                    "token_type": "Bearer",
+                },
+            }
+        code = await self._create_login_code(principal.user_id, data=code_data)
         return _append_query(return_to, {"federation_code": code}), principal
 
-    async def exchange_code(self, code: str) -> dict[str, Any] | str:
+    async def exchange_code(
+        self, code: str, *, browser_binding: str | None = None
+    ) -> dict[str, Any] | str:
         code_hash = _hash_code(code)
         async with self._system_context.transaction() as session:
             row = await _one_mapping(
@@ -203,6 +352,9 @@ class IdentityFederationService:
                 ),
             )
             if row is None:
+                return "invalid_federation_code"
+            data = row.get("data") or {}
+            if data.get("browser_hash") and not _matches_browser(data, browser_binding):
                 return "invalid_federation_code"
             deleted = await session.execute(
                 delete(self._code_table).where(
@@ -214,20 +366,32 @@ class IdentityFederationService:
             if _as_utc(row["expires_at"]) <= utc_now():
                 return "invalid_federation_code"
             user_id = str(row["user_id"])
-        return await IdentityAuthService(self._handler).issue_for_user_id(user_id)
+        result = await IdentityAuthService(self._handler).issue_for_user_id(user_id)
+        if isinstance(result, dict) and data.get("federation"):
+            federation = dict(data["federation"])
+            federation["access_token"] = open_token(federation["access_token"], user_id)
+            result["federation"] = federation
+        return result
 
     async def close(self) -> None:
+        for registration in self._connections.values():
+            if registration.verifier is not None:
+                await registration.verifier.close()
         await self._store.close()
 
     def _require_coordinator(self, connection_id: str) -> FederationCoordinator:
+        self._registration(connection_id)
         coordinator = self._coordinators.get(str(connection_id or "").strip())
         if coordinator is None:
-            raise UnknownFederationConnection(
-                f"unknown federation connection: {connection_id or '<empty>'}"
-            )
+            raise FederationError("connection does not use a server callback")
         return coordinator
 
     async def _consume_request(self, connection_id: str, request_id: str) -> str:
+        return str((await self._take_request(connection_id, request_id))["return_to"])
+
+    async def _take_request(
+        self, connection_id: str, request_id: str, *, browser_binding: str | None = None
+    ) -> dict[str, Any]:
         async with self._system_context.transaction() as session:
             row = await _one_mapping(
                 session,
@@ -237,6 +401,11 @@ class IdentityFederationService:
             )
             if row is None or str(row["connection_id"]) != connection_id:
                 raise FederationError("federation login request is missing or expired")
+            data = row.get("data") or {}
+            if self.requires_browser_binding(connection_id) and not _matches_browser(
+                data, browser_binding
+            ):
+                raise FederationError("OIDC login browser does not match")
             deleted = await session.execute(
                 delete(self._state_table).where(
                     self._state_table.c.request_id == request_id
@@ -246,9 +415,11 @@ class IdentityFederationService:
                 raise FederationError("federation login request is missing or expired")
             if _as_utc(row["expires_at"]) <= utc_now():
                 raise FederationError("federation login request is missing or expired")
-            return str(row["return_to"])
+            return dict(row)
 
-    async def _create_login_code(self, user_id: str) -> str:
+    async def _create_login_code(
+        self, user_id: str, *, data: dict[str, Any] | None = None
+    ) -> str:
         code = secrets.token_urlsafe(32)
         now = utc_now()
         async with self._system_context.transaction() as session:
@@ -259,6 +430,7 @@ class IdentityFederationService:
                 insert(self._code_table).values(
                     code_hash=_hash_code(code),
                     user_id=user_id,
+                    data=data,
                     expires_at=now
                     + timedelta(seconds=self._settings.federation_code_ttl_seconds),
                     created_at=now,
@@ -383,43 +555,17 @@ class IdentityFederationService:
                     )
 
 
-def _configured_federations(settings: Settings) -> tuple[ConfiguredFederation, ...]:
-    if not settings.federation_demo_enabled:
-        return ()
-    connection = FederationConnection(
-        connection_id="enterprise-demo",
-        issuer="https://idp.enterprise-demo.example",
-        organization_id="federated-enterprise-demo",
-        organization_name="Enterprise Demo SSO",
-        default_role="member",
-    )
-    admin_group = settings.federation_demo_admin_group.strip()
-    role_mappings = (
-        (
-            FederationRoleMapping(
-                claim_name="groups",
-                claim_value=admin_group,
-                local_role="admin",
-            ),
-        )
-        if admin_group
-        else ()
-    )
-    return (
-        ConfiguredFederation(
-            connection=connection,
-            provider_type="demo",
-            provider=DemoFederationProvider(settings.federation_public_path_prefix),
-            role_mappings=role_mappings,
-        ),
-    )
-
-
 def _validate_return_to(value: str) -> str:
     normalized = str(value or "/auth").strip() or "/auth"
     parsed = urlsplit(normalized)
     has_external_origin = bool(parsed.scheme or parsed.netloc)
-    if has_external_origin or parsed.fragment or parsed.path != "/auth":
+    reserved = {"federation_code", "federation_error"}
+    invalid_target = len(normalized) > 512 or has_external_origin or parsed.fragment
+    if (
+        invalid_target
+        or parsed.path != "/auth"
+        or any(key in reserved for key, _ in parse_qsl(parsed.query))
+    ):
         raise FederationError("federation return_to must be the local /auth route")
     return urlunsplit(("", "", parsed.path, parsed.query, ""))
 
@@ -429,6 +575,16 @@ def _hash_code(code: str) -> str:
     if not normalized:
         return ""
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _matches_browser(data: dict[str, Any], binding: str | None) -> bool:
+    expected = data.get("browser_hash")
+    return bool(
+        binding
+        and isinstance(expected, str)
+        and expected
+        and secrets.compare_digest(expected, _hash_code(binding))
+    )
 
 
 def _as_utc(value: Any) -> datetime:

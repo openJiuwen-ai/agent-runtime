@@ -23,6 +23,10 @@ import { SafetyGuardrailsPage } from './pages/templates/SafetyGuardrailsPage';
 import { matchRoute, RouterProvider, useRouter } from './router';
 import { AuthProvider, useAuth } from './auth/AuthContext';
 import { LoginPage } from './pages/LoginPage';
+import { FederationCallbackPage } from './pages/FederationCallbackPage';
+import { FederationSilentCallbackPage } from './pages/FederationSilentCallbackPage';
+import { FederationLogoutPage } from './pages/FederationLogoutPage';
+import { FederationSessionPage } from './pages/FederationSessionPage';
 import { UsersPage } from './pages/iam/UsersPage';
 import { OrgsPage } from './pages/iam/OrgsPage';
 import { OrgsEditPage } from './pages/iam/OrgsEditPage';
@@ -412,6 +416,11 @@ function Gate() {
       <Route path="/docs" element={<DocsPage />} />
       {/* 认证面 */}
       <Route path="/auth" element={<AuthRoute />} />
+      <Route path="/auth/federation/session" element={<FederationSessionPage />} />
+      <Route path="/auth/federation/:connectionId/callback" element={<FederationCallbackPage />} />
+      <Route path="/auth/federation/:connectionId/silent-callback" element={<FederationSilentCallbackPage />} />
+      <Route path="/auth/federation/logout" element={<FederationLogoutPage />} />
+      <Route path="/auth/federation/:connectionId/logout-callback" element={<FederationLogoutPage callback />} />
       {/* 管理面(admin):内部页面在 /manager basename 下,既有页面零改动 */}
       <Route
         path="/manager/*"

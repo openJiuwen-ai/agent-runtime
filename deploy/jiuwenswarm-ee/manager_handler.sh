@@ -26,12 +26,18 @@ gen_identity_file() {
     render_config_template "${CONFIG["IDENTITY_TEMPLATE_FILE"]}" "${file}" "DEPLOY_VARS"
     enable_dev_mode_if_needed ${file} identity
 
-    # yq quotes arbitrary password characters correctly in the generated YAML.
+    # yq quotes passwords and enterprise-login values correctly in generated YAML.
     IDENTITY_ADMIN_PASSWORD="${DEPLOY_VARS[IDENTITY_ADMIN_PASSWORD]}" \
     IDENTITY_USER1_PASSWORD="${DEPLOY_VARS[IDENTITY_USER1_PASSWORD]}" \
+    IDENTITY_SSO_SERVER_URL="${DEPLOY_VARS[IDENTITY_SSO_SERVER_URL]}" \
+    IDENTITY_SSO_LOGIN_CLIENT_ID="${DEPLOY_VARS[IDENTITY_SSO_LOGIN_CLIENT_ID]}" \
+    IDENTITY_SSO_TOKEN_AUDIENCE="${DEPLOY_VARS[IDENTITY_SSO_TOKEN_AUDIENCE]}" \
         yq eval '(. | select(.kind == "Deployment") | .spec.template.spec.containers[0].env) += [
             {"name": "IDENTITY_ADMIN_PASSWORD", "value": strenv(IDENTITY_ADMIN_PASSWORD)},
-            {"name": "IDENTITY_USER1_PASSWORD", "value": strenv(IDENTITY_USER1_PASSWORD)}
+            {"name": "IDENTITY_USER1_PASSWORD", "value": strenv(IDENTITY_USER1_PASSWORD)},
+            {"name": "IDENTITY_SSO_SERVER_URL", "value": strenv(IDENTITY_SSO_SERVER_URL)},
+            {"name": "IDENTITY_SSO_LOGIN_CLIENT_ID", "value": strenv(IDENTITY_SSO_LOGIN_CLIENT_ID)},
+            {"name": "IDENTITY_SSO_TOKEN_AUDIENCE", "value": strenv(IDENTITY_SSO_TOKEN_AUDIENCE)}
         ]' -i "${file}"
 
     if [ "${DEPLOY_VARS["DB_TYPE"]}" == "postgresql" ]; then

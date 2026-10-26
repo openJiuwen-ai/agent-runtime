@@ -14,6 +14,7 @@ interface AuthContextValue {
   ready: boolean;
   login: (username: string, password: string) => Promise<void>;
   completeFederatedLogin: (code: string) => Promise<void>;
+  completeBrowserLogin: (connectionId: string, token: string) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -85,6 +86,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     dispatch({ kind: 'signed-in', account });
   }, []);
 
+  const completeBrowserLogin = useCallback(async (connectionId: string, token: string) => {
+    const account = await AuthApi.confirmFederationToken(connectionId, token);
+    dispatch({ kind: 'signed-in', account });
+  }, []);
+
   const logout = useCallback(async () => {
     await AuthApi.logout();
     dispatch({ kind: 'cleared' });
@@ -96,9 +102,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       ready: session.bootstrapped,
       login,
       completeFederatedLogin,
+      completeBrowserLogin,
       logout,
     }),
-    [session.account, session.bootstrapped, login, completeFederatedLogin, logout],
+    [session.account, session.bootstrapped, login, completeFederatedLogin, completeBrowserLogin, logout],
   );
 
   return <ManagerSession.Provider value={sessionApi}>{children}</ManagerSession.Provider>;

@@ -1,3 +1,5 @@
+import { clearFederationSession, setFederationToken } from '../auth/federation/session';
+import type { FederationConfiguration, FederationConnection } from '../auth/federation/types';
 import type {
   CreateInstanceBody,
   UpdateInstanceBody,
@@ -105,6 +107,7 @@ export function setTokens(access: string | null, refresh?: string | null): void 
 }
 export function clearTokens(): void {
   setTokens(null, null);
+  clearFederationSession();
 }
 export function getAccessToken(): string | null {
   return accessToken;
@@ -159,6 +162,7 @@ export class ApiError extends Error {
 interface RequestOptions {
   method?: string;
   body?: unknown;
+  headers?: Record<string, string>;
   query?: Record<string, string | number | boolean | null | undefined | string[]>;
 }
 
@@ -207,8 +211,11 @@ function resolveRequestUrl(base: string, path: string, query: string): string {
 async function requestCore<T>(
   base: string, path: string, opts: RequestOptions, unwrap: boolean, retried = false,
 ): Promise<T> {
+  // User Web and the optional renewal frame share the same platform session.
+  accessToken = localStorage.getItem(ACCESS_KEY);
+  refreshToken = localStorage.getItem(REFRESH_KEY);
   const url = resolveRequestUrl(base, path, buildQuery(opts.query));
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const headers: Record<string, string> = { 'Content-Type': 'application/json', ...opts.headers };
   if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
   const init: RequestInit = { method: opts.method ?? 'GET', headers };
   if (opts.body !== undefined) init.body = JSON.stringify(opts.body);
@@ -294,11 +301,15 @@ export interface TokenResponse {
   token_type: string;
   expires_in: number;
   refresh_token: string;
+  federation?: {
+    connection_id: string;
+    user_id: string;
+    access_token: string;
+    token_type: string;
+  };
 }
-export interface FederationConnection {
-  connection_id: string;
-  name: string;
-}
+
+export type { FederationConnection } from '../auth/federation/types';
 
 async function withManagerAuthorization(user: AuthUser): Promise<AuthUser> {
   const authz = await http<AuthzSelf>('/v1/authz/me');
@@ -360,11 +371,38 @@ export const AuthApi = {
       throw new ApiError(resp.status, detail);
     }
     const t = (await resp.json()) as TokenResponse;
+    localStorage.removeItem('openjiuwen_oidc_connection');
+    localStorage.removeItem('openjiuwen_oidc_renew');
     setTokens(t.access_token, t.refresh_token);
+    setFederationToken(t.federation);
     return withManagerAuthorization(await idpHttp<AuthUser>('/v1/auth/me'));
   },
   federationConnections: () =>
     idpHttp<{ connections: FederationConnection[] }>('/v1/auth/federation/connections'),
+  federationConfiguration: (connectionId: string) =>
+    idpHttp<FederationConfiguration>(`/v1/auth/federation/${encodeURIComponent(connectionId)}/configuration`),
+  refreshFederationHandoff: (connectionId: string, token: string) =>
+    idpHttp<NonNullable<TokenResponse['federation']>>(`/v1/auth/federation/${encodeURIComponent(connectionId)}/token-handoff`, {
+      method: 'POST', body: {}, headers: { 'X-User-Token': `Bearer ${token}` },
+    }),
+  confirmFederationToken: async (connectionId: string, token: string): Promise<AuthUser> => {
+    // This endpoint authenticates the customer JWT, not a platform JWT.
+    const response = await fetch(`${IDP_BASE}/v1/auth/federation/${encodeURIComponent(connectionId)}/token-login`, {
+      method: 'POST', credentials: 'same-origin',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    if (!response.ok) throw new ApiError(response.status, 'federation_failed');
+    const bundle = await response.json() as TokenResponse;
+    setTokens(bundle.access_token, bundle.refresh_token);
+    setFederationToken(bundle.federation);
+    try {
+      return await withManagerAuthorization(await idpHttp<AuthUser>('/v1/auth/me'));
+    } catch (error) {
+      clearTokens();
+      throw error;
+    }
+  },
   beginFederatedLogin: (connectionId: string): void => {
     const connection = encodeURIComponent(connectionId);
     window.location.assign(
@@ -377,6 +415,7 @@ export const AuthApi = {
       body: { code },
     });
     setTokens(t.access_token, t.refresh_token);
+    setFederationToken(t.federation);
     return withManagerAuthorization(await idpHttp<AuthUser>('/v1/auth/me'));
   },
   me: async () => withManagerAuthorization(await idpHttp<AuthUser>('/v1/auth/me')),
@@ -384,7 +423,7 @@ export const AuthApi = {
     const data = await idpHttp<{ orgs: Org[] }>('/v1/auth/me/orgs');
     return { orgs: excludeNoOrgItems(data.orgs) };
   },
-  logout: async (): Promise<void> => {
+  logout: async (): Promise<boolean> => {
     try {
       if (refreshToken) {
         await idpHttp('/v1/auth/logout', { method: 'POST', body: { refresh_token: refreshToken } });
@@ -395,6 +434,11 @@ export const AuthApi = {
       await UserConsoleApi.clearActiveCluster();
     } catch { /* 忽略清 Cookie 失败 */ }
     clearTokens();
+    try {
+      const { endBrowserSession } = await import('../auth/federation/client');
+      return await endBrowserSession();
+    } catch { /* Platform logout completes even when the external IdP is unavailable. */ }
+    return false;
   },
 };
 

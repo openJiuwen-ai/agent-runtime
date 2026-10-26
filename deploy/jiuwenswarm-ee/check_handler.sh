@@ -569,7 +569,23 @@ check_web_up_dependency(){
     check_if_gateway_up
 }
 
+check_identity_sso_config(){
+    if [ -z "${DEPLOY_VARS[IDENTITY_SSO_SERVER_URL]:-}" ]; then
+        if [ -n "${DEPLOY_VARS[IDENTITY_SSO_LOGIN_CLIENT_ID]:-}" ]; then
+            error "IDENTITY_SSO_LOGIN_CLIENT_ID requires IDENTITY_SSO_SERVER_URL."
+        fi
+        return
+    fi
+    if [ -z "${DEPLOY_VARS[IDENTITY_SSO_LOGIN_CLIENT_ID]:-}" ]; then
+        error "IDENTITY_SSO_LOGIN_CLIENT_ID is required when enterprise login is enabled."
+    fi
+    if [ -z "${DEPLOY_VARS[IDENTITY_SSO_TOKEN_AUDIENCE]:-}" ]; then
+        error "IDENTITY_SSO_TOKEN_AUDIENCE cannot be empty; use the agreed user Token aud value."
+    fi
+}
+
 check_manager_up_dependency(){
+    check_identity_sso_config
     if [ -z "${DEPLOY_VARS["IDENTITY_ADMIN_PASSWORD"]:-}" ]; then
         error "IDENTITY_ADMIN_PASSWORD cannot be empty."
     fi

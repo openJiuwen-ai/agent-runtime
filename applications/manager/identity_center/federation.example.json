@@ -1,0 +1,16 @@
+{
+  "connections": [
+    {
+      "connection_id": "keycloak",
+      "name": "Enterprise SSO",
+      "flow": "browser_pkce",
+      "issuer": "https://sso.example.test/realms/customer",
+      "client_id": "public-web-client",
+      "organization_id": "federated-keycloak",
+      "access_token_audience": "egress_gateway",
+      "claim_mapping": {
+        "preferred_username": "preferred_username"
+      }
+    }
+  ]
+}
