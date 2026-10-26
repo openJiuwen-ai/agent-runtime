@@ -6,10 +6,10 @@ metadata:
   name: jiuwenclaw-gateway-envfile
   namespace: <<NAMESPACE>>
 data:
-  AGENT_RUNTIME_ENABLED: "false"
   AGENT_SERVER_URL: ws://jiuwenclaw-agentserver:18092
   DEPLOYMENT_MODE: distributed
   EXTENSION_DIRS: /app/jiuwenswarm/packages/jiuwenclaw-ee/gateway/extensions
+  GATEWAY_AGENT_CLIENT_MODE: <<GATEWAY_AGENT_CLIENT_MODE>>
   GATEWAY_AGENT_HTTP_MAX_CONNECTIONS: "200"
   GATEWAY_AGENT_HTTP_MAX_KEEPALIVE: "20"
   GATEWAY_CONFIG_HTTP_HOST: 0.0.0.0
@@ -27,6 +27,7 @@ data:
   GATEWAY_INSTANCE_ID: jiuwenclaw-gateway-<<NAMESPACE>>
   GATEWAY_MANAGER_HTTP_URL: http://jiuwenclaw-manager-server:8765
   GATEWAY_PORT: "19001"
+  GATEWAY_RUNTIME_MANAGER_URL: <<GATEWAY_RUNTIME_MANAGER_URL>>
   GATEWAY_SESSION_MAP_SCOPE: per_chat_bot_user
   GATEWAY_WEB_HTTP_PORT: "19002"
   GATEWAY_WEB_HTTP_TRUST_CLIENT_HEADERS: "true"

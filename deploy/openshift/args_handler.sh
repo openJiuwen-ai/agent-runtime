@@ -8,6 +8,7 @@ _DEPLOY_ARGS_HANDLER_SH=1
 CMD=""
 SCOPE=""
 TARGETS=()
+TARGETS_EXPLICIT=0   # 1=命令行显式指定组件（默认目标按模式派生，显式目标按模式校验矛盾）
 
 parse_args() {
   while [ $# -gt 0 ]; do
@@ -31,6 +32,7 @@ parse_args() {
 
   # 目标组件：显式指定优先（按规范依赖序排列）；未指定则取组默认
   if [ ${#TARGETS[@]} -gt 0 ]; then
+    TARGETS_EXPLICIT=1
     sort_targets
   elif [ "$SCOPE" = manager ]; then
     TARGETS=("${MANAGER_TARGETS[@]}")
@@ -42,13 +44,17 @@ parse_args() {
 usage() {
   cat <<'EOF'
 用法: deploy.sh [manager] [组件...] <up|down> [-n NAMESPACE] [--render-only] [-y]
-  up                拉起产品组件: secret → redis → agentserver → gateway → web
+  up                拉起产品组件（按 AGENT_RUNTIME_DEPLOY_MODE 派生，见 .env.example）:
+                    off:     secret → redis → agentserver → gateway → web
+                    routing: 同上 + runtime（会话粘性路由，零 K8s 权限）
+                    full:    暂未开放（配置即报错，待开放）
   manager up        拉起管理套件: identity → manager-server → manager-web
                     （依赖的 secret / redis 集群缺失时自动拉起，已有则复用）
   up mariadb        只部署/渲染指定组件；可多选，如: up mariadb minio
                     基础服务四件套: mariadb / mysql / postgresql / minio（数据库三选一）
   down [组件...]    卸载目标（倒序删除；共享依赖 secret/redis 仍被存活组件依赖时保留，
-                    卸载后依赖方清零则自动回收）
+                    卸载后依赖方清零则自动回收）。默认 down 与 up 目标对称；
+                    模式切换（routing→off）后遗留的 runtime 用 `down runtime` 清理
   -n NAMESPACE      指定 namespace（默认取 .env.custom 的 NAMESPACE）
   --render-only     只渲染本次目标组件的清单到 conf/，不连接集群（核对/交付 yaml 用）
   -y                兼容保留参数，无实际作用（卸载不再需要确认）

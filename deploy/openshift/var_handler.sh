@@ -11,6 +11,29 @@ check_cluster_type_var() {
     || error "CLUSTER_TYPE 非法（openshift | k8s）: $val"
 }
 
+# agent-runtime 三模式：枚举校验 + 模式派生
+# - routing：gateway 启用 runtime 路由客户端（GATEWAY_AGENT_CLIENT_MODE=runtime）并注入路由地址
+# - off：gateway 两变量留空（占位符行删除，gateway 走 AGENT_SERVER_URL 直连）；
+#   AgentServer 固定单副本，配置多副本视为矛盾
+# - full：暂未开放，配置即报错
+resolve_deploy_mode_vars() {
+  local mode="${DEPLOY_VARS["AGENT_RUNTIME_DEPLOY_MODE"]:-}"
+  case "$mode" in
+    routing)
+      DEPLOY_VARS["GATEWAY_AGENT_CLIENT_MODE"]="runtime"
+      DEPLOY_VARS["GATEWAY_RUNTIME_MANAGER_URL"]="http://jiuwenclaw-agent-runtime:8091";;
+    off)
+      DEPLOY_VARS["GATEWAY_AGENT_CLIENT_MODE"]=""
+      DEPLOY_VARS["GATEWAY_RUNTIME_MANAGER_URL"]=""
+      [ "${DEPLOY_VARS["AGENT_SERVER_REPLICAS"]}" = 1 ] \
+        || error "AGENT_RUNTIME_DEPLOY_MODE=off 时 AgentServer 固定单副本（无粘性路由需求），AGENT_SERVER_REPLICAS 须为 1（多副本请用 routing）";;
+    full)
+      error "AGENT_RUNTIME_DEPLOY_MODE=full 暂未开放（需 Pod 操作权限与 runtime 完整生命周期，待开放）";;
+    *)
+      error "AGENT_RUNTIME_DEPLOY_MODE 非法（routing | off；full 暂未开放）: $mode";;
+  esac
+}
+
 # namespace：k8s DNS label 规范
 check_namespace_var() {
   local val="${DEPLOY_VARS["NAMESPACE"]:-}"
@@ -69,6 +92,10 @@ check_optional_vars() {
 }
 
 check_identity_sso_vars() {
+  # 仅 up 且目标含 identity 时校验
+  if [ "${CMD:-}" != up ] || ! in_array identity "${TARGETS[@]}"; then
+    return 0
+  fi
   [ -z "${DEPLOY_VARS[IDENTITY_FEDERATION_CONFIG_FILE]:-}" ] || return 0
   local name value
   local -a fields=(IDENTITY_SSO_SERVER_URL IDENTITY_SSO_LOGIN_CLIENT_ID IDENTITY_SSO_TOKEN_AUDIENCE)
@@ -288,11 +315,10 @@ check_vars() {
   resolve_manager_web_resolver     # MANAGER_WEB_RESOLVER 为空时按形态/环境自动解析
   check_image_vars
   check_replicas_vars
+  resolve_deploy_mode_vars         # 三模式派生：gateway 条件 env + off 单副本校验
   check_storage_class_vars
   check_optional_vars
-  if [ "$CMD" = up ] && in_array identity "${TARGETS[@]}"; then
-    check_identity_sso_vars
-  fi
+  check_identity_sso_vars          # 企业 SSO 三元组"全空或全配"校验（up + identity 时生效，门禁在函数内）
   resolve_dev_mode_vars            # 函数在 k8s_handler.sh（MODE=dev 校验与派生）
 }
 

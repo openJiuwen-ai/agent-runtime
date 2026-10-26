@@ -56,6 +56,36 @@ resolve_targets() {
   sort_targets
 }
 
+# 目标按 AGENT_RUNTIME_DEPLOY_MODE 派生（管理套件除外）：
+#   默认目标：up/down 对称——非 off 时均纳入 runtime，确保完整部署与完整拆除；
+#            off 不含 runtime（模式切换遗留的 runtime 用显式 `down runtime` 清理）
+#   显式目标：不增删；仅 up 拦截与模式矛盾的组合（down 允许显式卸载任意组件）
+# 前置条件：parse_args 与 check_vars 已完成
+filter_targets_by_deploy_mode() {
+  local mode="${DEPLOY_VARS["AGENT_RUNTIME_DEPLOY_MODE"]}" comp
+  [ "${SCOPE:-}" = manager ] && return 0
+  # 默认目标（未显式指定组件）与部署形态对称：非 off 时 up/down 均纳入 runtime——
+  # up 部署它，down 才能完整拆除（runtime 不删除会钉住 secret/redis 的孤儿回收）
+  # off 不部署 runtime，默认目标不含；模式切换遗留的 runtime 用显式 `down runtime` 清理
+  if [ "${TARGETS_EXPLICIT}" = 0 ]; then
+    if [ "$mode" != off ] && ! in_array runtime "${TARGETS[@]}"; then
+      TARGETS+=("runtime")
+      sort_targets
+    fi
+    return 0
+  fi
+  # 显式目标不增删；仅 up 拦截与模式矛盾的组合
+  [ "$CMD" = up ] || return 0
+  for comp in "${TARGETS[@]}"; do
+    case "$mode:$comp" in
+      full:agentserver)
+        error "AGENT_RUNTIME_DEPLOY_MODE=full：AgentServer 由 agent-runtime 按需创建，不预启动（请从目标剔除 agentserver，或改用 off/routing）";;
+      off:runtime)
+        error "AGENT_RUNTIME_DEPLOY_MODE=off：不部署 agent-runtime（请从目标剔除 runtime，或改用 routing/full）";;
+    esac
+  done
+}
+
 # k8s 形态：基础服务（mariadb/mysql/postgresql/minio）复用 default 命名空间的共享实例，
 # 禁止在业务命名空间部署——显式 `up <基础组件>` 直接报错（而非静默剔除，避免"以为部署了其实没部署"）。
 # 例外：目标 ns 本身就是共享 ns（`./deploy.sh -n default up mysql` 管理员预置场景）→ 放行。

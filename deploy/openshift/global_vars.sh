@@ -13,28 +13,31 @@ CUSTOM_ENV_FILE="$SCRIPT_DIR/.env.custom"
 
 # 全部组件的规范依赖序（up 按此序排列；down 倒序）。
 # secret 必须在最前：基础服务与产品组件的密码统一经 jiuwenclaw-secret-configmap 注入
-ALL_COMPONENTS=(secret mariadb mysql postgresql minio redis agentserver gateway web identity manager-server manager-web)
+ALL_COMPONENTS=(secret mariadb mysql postgresql minio redis runtime agentserver gateway web identity manager-server manager-web)
 
 UP_TARGETS=(secret redis agentserver gateway web)         # up 默认目标（规范依赖序）
 MANAGER_TARGETS=(identity manager-server manager-web)     # manager 组
 
 # 镜像名变量清单，与 templates/ 下 <<XXX_IMAGE>> 占位符一一对应
-IMAGE_VARS=(AGENTSERVER_IMAGE GATEWAY_IMAGE WEB_IMAGE IDENTITY_IMAGE MANAGER_SERVER_IMAGE MANAGER_WEB_IMAGE MARIADB_IMAGE MYSQL_IMAGE POSTGRESQL_IMAGE REDIS_IMAGE MINIO_IMAGE)
+IMAGE_VARS=(AGENTSERVER_IMAGE GATEWAY_IMAGE WEB_IMAGE IDENTITY_IMAGE MANAGER_SERVER_IMAGE MANAGER_WEB_IMAGE AGENT_RUNTIME_IMAGE MARIADB_IMAGE MYSQL_IMAGE POSTGRESQL_IMAGE REDIS_IMAGE MINIO_IMAGE)
 
 # 副本数变量清单，与 templates/ 下 <<XXX_REPLICAS>> 占位符一一对应
-REPLICAS_VARS=(AGENT_SERVER_REPLICAS GATEWAY_REPLICAS WEB_REPLICAS IDENTITY_REPLICAS MANAGER_SERVER_REPLICAS MANAGER_WEB_REPLICAS)
+REPLICAS_VARS=(AGENT_SERVER_REPLICAS GATEWAY_REPLICAS WEB_REPLICAS IDENTITY_REPLICAS MANAGER_SERVER_REPLICAS MANAGER_WEB_REPLICAS AGENT_RUNTIME_REPLICAS)
 
 # 允许留空的变量（render_component_files 消费：留空时占位符独占行整行删除）
 # - StorageClass 未配置时使用集群默认动态供给
 # - OBS_PUBLIC_BASE_URL/OBS_REGION/OBS_SECURE：外部 OBS 选填项（内置 MinIO 时强制派生/忽略）
 # - REDIS_USER：留空 = 外挂 Redis 使用 default 用户（内置模式由 resolve_redis_vars 派生 jiuwenclaw）
 # - IDENTITY_SSO_* / IDENTITY_FEDERATION_CONFIG_FILE：企业认证配置可留空
+# - GATEWAY_AGENT_CLIENT_MODE / GATEWAY_RUNTIME_MANAGER_URL：三模式派生变量
+#   （routing 注入，off 留空 → gateway env 对应行删除）
 # 格式校验与"允许留空"解耦（用户名/URL 不该按 DNS subdomain 误校验）：
 # StorageClass 见 STORAGE_CLASS_VARS（check_storage_class_vars）；其余选填项见 check_optional_vars
 OPTIONAL_VARS=(
     DATA_STORAGE_CLASS WORKSPACE_STORAGE_CLASS OBS_PUBLIC_BASE_URL OBS_REGION OBS_SECURE REDIS_USER
     IDENTITY_SSO_SERVER_URL IDENTITY_SSO_LOGIN_CLIENT_ID IDENTITY_SSO_TOKEN_AUDIENCE
     IDENTITY_FEDERATION_CONFIG_FILE
+    GATEWAY_AGENT_CLIENT_MODE GATEWAY_RUNTIME_MANAGER_URL
 )
 
 # StorageClass 变量：check_storage_class_vars 做 DNS subdomain 规范校验（留空走集群默认）
@@ -96,6 +99,12 @@ declare -A DEPLOY_VARS=(
     ["IDENTITY_REPLICAS"]="1"
     ["MANAGER_SERVER_REPLICAS"]="1"
     ["MANAGER_WEB_REPLICAS"]="1"
+    ["AGENT_RUNTIME_REPLICAS"]="1"
+
+    # agent-runtime 三模式部署形态（routing | off；full 待开放）
+    ["AGENT_RUNTIME_DEPLOY_MODE"]="routing"
+    # 禁 EVAL 兼容模式（on 与历史行为一致；客户 Redis 禁用 EVAL 时设 off）
+    ["AGENT_RUNTIME_REDIS_LUA"]="off"
 
     ["MARIADB_IMAGE"]="mariadb:11.8"
     ["MYSQL_IMAGE"]="mysql:8.0"

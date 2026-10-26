@@ -1,0 +1,123 @@
+# jiuwenclaw-agent-runtime 部署清单（镜像 <<AGENT_RUNTIME_IMAGE>>）
+# 说明：
+#   - 镜像为 OpenShift 适配版，适配 restricted-v2 SCC（强制随机 uid，不指定 runAsUser/fsGroup）
+#   - 零 K8s 权限形态（routing）与 Pod 操作权限形态（full）同模板交付：RBAC 文档
+#     routing/off 渲染后剥除（见下）；模式语义见 .env.example AGENT_RUNTIME_DEPLOY_MODE
+#   - 配置经 Secret jiuwenclaw-secret-configmap（REDIS_PASSWORD 等）注入；DB 凭证经 <<DB_ROOT_PASSWORD>> 内联
+#   - DB 独立库 runtime_<<NAMESPACE>>（框架 MySQLHandler.init_database 自动 CREATE DATABASE IF NOT EXISTS，
+#     仅 MySQL/MariaDB；PostgreSQL 形态需预建库）
+#   - 内部组件：gateway 经 GATEWAY_RUNTIME_MANAGER_URL 指向本 Service（8091），不对外暴露
+#   - 零 K8s 权限形态：实例注册走 HTTP、池修复走 HTTP 健康探测，全程不调用 K8s API，
+#     用 namespace 默认 SA（同 gateway）；full 模式（Pod 操作 RBAC）暂未开放，待开放时
+#     随模板补 SA/Role/RoleBinding 并按模式渲染
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jiuwenclaw-agent-runtime
+  namespace: <<NAMESPACE>>
+  labels:
+    app: jiuwenclaw-agent-runtime
+spec:
+  replicas: <<AGENT_RUNTIME_REPLICAS>>
+  selector:
+    matchLabels:
+      app: jiuwenclaw-agent-runtime
+  template:
+    metadata:
+      labels:
+        app: jiuwenclaw-agent-runtime
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - jiuwenclaw-agent-runtime
+                topologyKey: "kubernetes.io/hostname"
+      containers:
+        - name: agent-runtime
+          image: <<AGENT_RUNTIME_IMAGE>>
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: rest
+              containerPort: 8091
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: rest
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: rest
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          envFrom:
+            - secretRef:
+                name: jiuwenclaw-secret-configmap
+          env:
+            - name: AGENT_RUNTIME_MODE
+              value: "server"
+            # 三模式部署形态（full | routing；off 时本组件不部署，由部署工具保证）
+            - name: AGENT_RUNTIME_DEPLOY_MODE
+              value: "<<AGENT_RUNTIME_DEPLOY_MODE>>"
+            - name: OPENJIUWEN_SERVICE_HOST
+              value: "0.0.0.0"
+            - name: OPENJIUWEN_SERVICE_PORT
+              value: "8091"
+            # redis：URL 不带凭证，REDIS_PASSWORD 经 secretRef 注入，框架组装完整连接串
+            - name: OPENJIUWEN_SERVICE_REDIS_URL
+              value: "<<REDIS_URL>>"
+            - name: OPENJIUWEN_SERVICE_REDIS_KEY_PREFIX
+              value: "<<REDIS_KEY_PREFIX>>"
+            - name: REDIS_USER
+              value: "<<REDIS_USER>>"
+            - name: OPENJIUWEN_SERVICE_DB_TYPE
+              value: "<<DB_TYPE>>"
+            - name: OPENJIUWEN_SERVICE_DB_HOST
+              value: "<<DB_HOST>>"
+            - name: OPENJIUWEN_SERVICE_DB_PORT
+              value: "<<DB_PORT>>"
+            - name: OPENJIUWEN_SERVICE_DB_NAME
+              value: "runtime_<<NAMESPACE>>"
+            - name: OPENJIUWEN_SERVICE_DB_USER
+              value: "<<DB_USER>>"
+            # DB 口令经 envFrom secretRef 注入（OPENJIUWEN_SERVICE_DB_PASSWORD）
+            # 禁 EVAL 环境兼容（on|off；on 与存量逐字节一致）
+            - name: AGENT_RUNTIME_REDIS_LUA
+              value: "<<AGENT_RUNTIME_REDIS_LUA>>"
+            # 命名空间解析链显式覆盖（config.py own_namespace：env > SA 文件 > "default"）
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: metadata.namespace
+            - name: JIUWENSWARM_EDITION
+              value: "enterprise"
+            - name: TZ
+              value: "Asia/Shanghai"
+---
+# Service：提供稳定 DNS 域名，gateway 经 GATEWAY_RUNTIME_MANAGER_URL 访问路由接口
+apiVersion: v1
+kind: Service
+metadata:
+  name: jiuwenclaw-agent-runtime
+  namespace: <<NAMESPACE>>
+spec:
+  selector:
+    app: jiuwenclaw-agent-runtime
+  ports:
+    - name: rest
+      port: 8091
+      targetPort: rest
+  type: ClusterIP

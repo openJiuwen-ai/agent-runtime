@@ -30,6 +30,7 @@ component_files() {
     minio)          echo "minio.yaml";;
     secret)         echo "configmap-secret.yaml";;
     redis)          echo "redis.yaml";;
+    runtime)        echo "runtime.yaml";;
     agentserver)    if is_k8s_cluster; then
                       echo "agentserver-env.configmap.yaml agentserver.yaml"
                     else
@@ -52,6 +53,7 @@ component_label() {
     postgresql)     echo "app=postgresql";;
     minio)          echo "app=minio";;
     redis)          echo "app=redis";;
+    runtime)        echo "app=jiuwenclaw-agent-runtime";;
     agentserver)    echo "app=jiuwenclaw-agentserver";;
     gateway)        echo "app=jiuwenclaw-gateway";;
     web)            echo "app=jiuwenclaw-web";;
@@ -75,10 +77,15 @@ component_deps() {
     postgresql)     echo "secret";;
     minio)          echo "secret";;
     agentserver)    echo "secret ${DEPLOY_VARS["DB_TYPE"]} minio";;
-    gateway)        echo "secret ${DEPLOY_VARS["DB_TYPE"]} redis minio agentserver";;
+    gateway)        if [ "${DEPLOY_VARS["AGENT_RUNTIME_DEPLOY_MODE"]}" = full ]; then
+                      echo "secret ${DEPLOY_VARS["DB_TYPE"]} redis minio"
+                    else
+                      echo "secret ${DEPLOY_VARS["DB_TYPE"]} redis minio agentserver"
+                    fi;;
     web)            echo "secret minio";;
     identity)       echo "secret ${DEPLOY_VARS["DB_TYPE"]}";;
     manager-server) echo "secret ${DEPLOY_VARS["DB_TYPE"]} redis";;
+    runtime)        echo "secret ${DEPLOY_VARS["DB_TYPE"]} redis";;
   esac
 }
 
@@ -95,7 +102,8 @@ component_ns() {
 
 # 组件 → 存在性探测用的 kind/name（依赖预检与卸载存活检查共用，须覆盖全部组件）。
 # kind 与本工具模板一致：基础服务均为 StatefulSet（minio 模板已从 Deployment 改造），
-# redis/产品组件为 Deployment；k8s 形态共享实例（default）亦为同款形态
+# agentserver 为 StatefulSet（稳定 DNS + 每 Pod workspace 隔离）；
+# redis/gateway/web 等其余产品组件为 Deployment；k8s 形态共享实例（default）亦为同款形态
 component_probe() {
   case "$1" in
     secret)         echo "Secret/jiuwenclaw-secret-configmap";;
@@ -104,7 +112,8 @@ component_probe() {
     postgresql)     echo "StatefulSet/postgresql";;
     minio)          echo "StatefulSet/minio";;
     redis)          echo "Deployment/redis";;
-    agentserver)    echo "Deployment/jiuwenclaw-agentserver";;
+    runtime)        echo "Deployment/jiuwenclaw-agent-runtime";;
+    agentserver)    echo "StatefulSet/jiuwenclaw-agentserver";;
     gateway)        echo "Deployment/jiuwenclaw-gateway";;
     web)            echo "Deployment/jiuwenclaw-web";;
     identity)       echo "Deployment/jiuwenclaw-identity";;
