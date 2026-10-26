@@ -641,7 +641,11 @@
     "timeoutInvalid": "Timeout must be a positive number",
     "headersMustBeObject": "Headers must be a JSON object",
     "unsafeText": "{{field}} contains illegal HTML/script or suspected SQL injection content",
-    "deleteConfirm": "Delete this MCP template? It cannot be deleted while referenced by agent templates."
+    "deleteConfirm": "Delete this MCP template? It cannot be deleted while referenced by agent templates.",
+    "customConfig": "Custom configuration (JSON object, optional)",
+    "customConfigHint": "Service-level additional settings. Leave blank or enter {} to clear custom configuration.",
+    "customConfigInvalid": "Custom configuration must be a JSON object.",
+    "customConfigReserved": "Custom configuration cannot contain base fields: {{fields}}"
   },
   "extensionTemplate": {
     "title": "Extension Config",

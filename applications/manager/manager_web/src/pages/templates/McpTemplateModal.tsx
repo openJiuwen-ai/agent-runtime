@@ -18,6 +18,11 @@ import { safeStringify } from '../../utils/format';
 import { jsonContentForValidation } from '../../utils/jsonExample';
 import { findUnsafeTextField } from '../../utils/safeText';
 import { isValidHttpUrl } from '../../utils/url';
+import {
+  customConfigFromMcpEntry,
+  parseMcpCustomConfig,
+  reservedMcpCustomFields,
+} from './mcpTemplateCustomConfig';
 
 interface Props {
   open: boolean;
@@ -35,6 +40,7 @@ const FIELD_MAX_LENGTH = {
 
 const TRANSPORT_OPTIONS: McpRemoteTransport[] = ['http', 'streamable-http', 'sse'];
 const DEFAULT_TRANSPORT: McpRemoteTransport = 'http';
+const CUSTOM_CONFIG_EXAMPLE = '{"url": "xxx"}';
 
 interface FormState {
   template_name: string;
@@ -44,6 +50,7 @@ interface FormState {
   url: string;
   headers: string;
   timeout_s: string;
+  custom_config: string;
 }
 
 const empty: FormState = {
@@ -54,6 +61,7 @@ const empty: FormState = {
   url: '',
   headers: '',
   timeout_s: '',
+  custom_config: '',
 };
 
 function FieldLabel({ children, required }: { children: ReactNode; required?: boolean }) {
@@ -96,8 +104,13 @@ function parseHeadersObject(raw: string): Record<string, unknown> | null | undef
   }
 }
 
-function buildMcpEntry(form: FormState, headers: Record<string, unknown> | null): McpEntry {
+function buildMcpEntry(
+  form: FormState,
+  headers: Record<string, unknown> | null,
+  custom: Record<string, unknown>,
+): McpEntry {
   const entry: McpEntry = {
+    ...custom,
     name: form.mcp_name.trim(),
     transport: form.transport,
     url: form.url.trim(),
@@ -134,6 +147,7 @@ export function McpTemplateModal({ open, template, onClose, onSaved }: Props) {
           transport: normalizeTransport(template.mcp_entry?.transport),
           url: String(template.mcp_entry?.url ?? ''),
           headers: headersFromEntry(template.mcp_entry ?? { name: '', transport: '', url: '' }),
+          custom_config: customConfigFromMcpEntry(template.mcp_entry ?? { name: '', transport: '', url: '' }),
           timeout_s:
             template.mcp_entry?.timeout_s != null && Number(template.mcp_entry.timeout_s) > 0
               ? String(template.mcp_entry.timeout_s)
@@ -147,7 +161,19 @@ export function McpTemplateModal({ open, template, onClose, onSaved }: Props) {
   const update = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setForm((current) => ({ ...current, [key]: value }));
 
+  const customConfig = parseMcpCustomConfig(form.custom_config);
+  const reservedFields = customConfig === undefined ? [] : reservedMcpCustomFields(customConfig);
+  const customConfigError = customConfig === undefined
+    ? t('mcpTemplate.customConfigInvalid')
+    : reservedFields.length
+      ? t('mcpTemplate.customConfigReserved', { fields: reservedFields.join(', ') })
+      : '';
+
   const submit = async () => {
+    if (customConfig === undefined || customConfigError) {
+      toast('warn', customConfigError);
+      return;
+    }
     const required = [
       ['templateName', form.template_name],
       ['mcpName', form.mcp_name],
@@ -195,7 +221,7 @@ export function McpTemplateModal({ open, template, onClose, onSaved }: Props) {
     const body: McpTemplateCreateBody | McpTemplateUpdateBody = {
       template_name: form.template_name.trim(),
       description: form.description.trim() || undefined,
-      mcp_entry: buildMcpEntry(form, parsedHeaders),
+      mcp_entry: buildMcpEntry(form, parsedHeaders, customConfig),
     };
 
     setSaving(true);
@@ -229,7 +255,7 @@ export function McpTemplateModal({ open, template, onClose, onSaved }: Props) {
       footer={
         <>
           <ModalCancelButton />
-          <button className="btn primary" onClick={() => void submit()} disabled={saving}>
+          <button className="btn primary" onClick={() => void submit()} disabled={saving || !!customConfigError}>
             {saving ? t('common.loading') : t('common.save')}
           </button>
         </>
@@ -305,6 +331,17 @@ export function McpTemplateModal({ open, template, onClose, onSaved }: Props) {
             placeholder={t('mcpTemplate.headersHint')}
             rows={5}
           />
+        </div>
+        <div className="md:col-span-2" data-testid="mcp-template-custom-config">
+          <JsonField
+            label={t('mcpTemplate.customConfig')}
+            hint={t('mcpTemplate.customConfigHint')}
+            value={form.custom_config}
+            onChange={(value) => update('custom_config', value)}
+            placeholder={CUSTOM_CONFIG_EXAMPLE}
+            rows={5}
+          />
+          {customConfigError && <div className="text-[11px] text-danger mt-1" role="alert">{customConfigError}</div>}
         </div>
       </div>
       {template ? <ConfigRefreshCostHint scope="template" /> : null}

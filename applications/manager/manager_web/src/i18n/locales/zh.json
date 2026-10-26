@@ -641,7 +641,11 @@
     "timeoutInvalid": "超时须为正数",
     "headersMustBeObject": "请求头须为 JSON 对象",
     "unsafeText": "{{field}} 含有非法 HTML/脚本或疑似 SQL 注入内容，请修改后重试",
-    "deleteConfirm": "确认删除该 MCP 模板？若已被 Agent 模板引用将无法删除。"
+    "deleteConfirm": "确认删除该 MCP 模板？若已被 Agent 模板引用将无法删除。",
+    "customConfig": "自定义配置（JSON对象，可选）",
+    "customConfigHint": "填写服务级扩展配置；留空或填写 {} 清空自定义配置。",
+    "customConfigInvalid": "自定义配置须为 JSON 对象。",
+    "customConfigReserved": "自定义配置不能包含基础字段：{{fields}}"
   },
   "extensionTemplate": {
     "title": "扩展配置",
