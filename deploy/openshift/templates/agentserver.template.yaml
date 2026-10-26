@@ -2,10 +2,16 @@
 # 说明：
 #   - 镜像为 OpenShift 适配版，适配 restricted-v2 SCC（强制随机 uid，不指定 runAsUser/fsGroup）
 #   - 配置经 Secret jiuwenclaw-secret-configmap 与 ConfigMap jiuwenclaw-agentserver-env 注入
-#   - 数据卷挂载 PVC jiuwenclaw-pvc 至 /home/app/.jiuwenswarm
-#   - 内部组件：gateway 经 AGENT_SERVER_URL 通过 ClusterIP Service 直连，不对外暴露
+#   - 数据卷挂载 PVC jiuwenclaw-pvc 至 /home/app/.jiuwenswarm：workspace_{tenant}/、
+#     config/、auth/、agent/ 等多副本共享（租户会话可能落在任意 pod，工作区必须全局可见）；
+#     仅 ~/.jiuwenswarm/run（supervisor IPC unix socket，路径固定）按 Pod 隔离，
+#     经同卷深路径遮蔽挂载实现（subPathExpr: run/$(POD_NAME)，子目录自动创建）
+#   - StatefulSet + headless Service：每 Pod 稳定 DNS
+#     jiuwenclaw-agentserver-{i}.jiuwenclaw-agentserver-headless.<ns>.svc.cluster.local
+#     （Pod 重建后 IP 变、DNS 不变，健康探测与会话路由地址跨重启稳定）
+#   - 内部组件：off 模式 gateway 经 AGENT_SERVER_URL 通过 ClusterIP Service 直连，不对外暴露
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: jiuwenclaw-agentserver
   namespace: <<NAMESPACE>>
@@ -13,6 +19,8 @@ metadata:
     app: jiuwenclaw-agentserver
 spec:
   replicas: <<AGENT_SERVER_REPLICAS>>
+  serviceName: jiuwenclaw-agentserver-headless
+  podManagementPolicy: Parallel
   selector:
     matchLabels:
       app: jiuwenclaw-agentserver
@@ -59,6 +67,11 @@ spec:
             periodSeconds: 20
             timeoutSeconds: 3
             failureThreshold: 6
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
           envFrom:
             - secretRef:
                 name: jiuwenclaw-secret-configmap
@@ -67,10 +80,31 @@ spec:
           volumeMounts:
             - name: agentserver-data
               mountPath: /home/app/.jiuwenswarm
+            - name: agentserver-data
+              mountPath: /home/app/.jiuwenswarm/run
+              subPathExpr: run/$(POD_NAME)
       volumes:
         - name: agentserver-data
           persistentVolumeClaim:
             claimName: jiuwenclaw-pvc
+---
+# headless Service：StatefulSet 治理服务（clusterIP: None），提供每 Pod 稳定 DNS
+apiVersion: v1
+kind: Service
+metadata:
+  name: jiuwenclaw-agentserver-headless
+  namespace: <<NAMESPACE>>
+spec:
+  clusterIP: None
+  selector:
+    app: jiuwenclaw-agentserver
+  ports:
+    - name: sse
+      port: 8766
+      targetPort: sse
+    - name: ws
+      port: 18092
+      targetPort: ws
 ---
 # Service：提供稳定 DNS 域名，gateway 静态模式经 AGENT_SERVER_URL 直连
 apiVersion: v1

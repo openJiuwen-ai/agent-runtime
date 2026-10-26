@@ -389,15 +389,16 @@ apply_k8s_extras() { # $@=本次渲染的清单文件名
 # hostPath 把宿主机仓库代码挂载到镜像内代码路径，改代码无需重建镜像；Pod 固定到代码所在节点
 # 仅 CLUSTER_TYPE=k8s 支持（openshift SCC 禁止 hostPath）
 
-# 给清单内 Deployment 的首个容器追加一个 hostPath 代码挂载（volume + volumeMount）
+# 给清单内工作负载（Deployment/StatefulSet，如 agentserver）的首个容器追加一个 hostPath
+# 代码挂载（volume + volumeMount）
 # 注：select(...).path |= 是更新运算符（非管道 select），yq 对不匹配的文档原样保留，
-# 多文档清单（Deployment + Service）不会丢文档——勿改成 select(...) | .path = 值 的管道形式
+# 多文档清单（工作负载 + Service）不会丢文档——勿改成 select(...) | .path = 值 的管道形式
 add_code_mount() { # $1=清单文件 $2=卷名 $3=宿主机路径 $4=容器内路径 $5=hostPath.type(默认 Directory)
   local file="$1" name="$2" host_path="$3" mount_path="$4" host_type="${5:-Directory}"
   yq -i '
-    select(.kind == "Deployment").spec.template.spec.containers[0].volumeMounts
+    select(.kind == "Deployment" or .kind == "StatefulSet").spec.template.spec.containers[0].volumeMounts
       |= ((. // []) + [{"name": "'"${name}"'", "mountPath": "'"${mount_path}"'"}])
-    | select(.kind == "Deployment").spec.template.spec.volumes
+    | select(.kind == "Deployment" or .kind == "StatefulSet").spec.template.spec.volumes
       |= ((. // []) + [{"name": "'"${name}"'", "hostPath": {"path": "'"${host_path}"'", "type": "'"${host_type}"'"}}])
   ' "$file"
 }
@@ -487,8 +488,9 @@ apply_dev_code_mounts() { # $@=本次渲染的清单文件名
         mount_runtime_code "$CONF_DIR/$f"; mount_manager_web_nginx_template "$CONF_DIR/$f";;
       *) continue;;   # mariadb/minio/redis/secret 等基础服务不挂代码
     esac
-    # hostPath 是节点本地的，Deployment 固定到代码所在节点（更新运算符写法不丢多文档中的 Service）
-    yq -i 'select(.kind == "Deployment").spec.template.spec.nodeName = "'"${DEPLOY_VARS["CURRENT_NODE_NAME"]}"'"' "$CONF_DIR/$f"
+    # hostPath 是节点本地的，工作负载（Deployment/StatefulSet，如 agentserver）固定到代码所在节点
+    # （更新运算符写法不丢多文档中的 Service）
+    yq -i 'select(.kind == "Deployment" or .kind == "StatefulSet").spec.template.spec.nodeName = "'"${DEPLOY_VARS["CURRENT_NODE_NAME"]}"'"' "$CONF_DIR/$f"
     info "dev 模式后处理完成: $comp（节点 ${DEPLOY_VARS["CURRENT_NODE_NAME"]}）"
   done
   return 0

@@ -67,7 +67,8 @@ kubectl get pods   # 确认登录成功
   （库名形如 `<业务>_<NAMESPACE>`，更换 namespace 即使用对应后缀的库）；
 - **版本管理**：组件镜像统一由 `.env.custom` 的 `*_IMAGE` 变量控制。升级 / 回滚 /
   换架构只需改镜像名后重跑 `up`，存量 Pod 会自动滚动更新；
-- **顺序即依赖**：agentserver 先于 gateway 部署，脚本已保证；
+- **顺序即依赖**：agentserver 先于 gateway 部署、runtime 先于 agentserver（注册接收方），
+  脚本已保证；
 - **依赖管理**：共享依赖 secret / redis 缺失时随 `up` 自动拉起，已存在则复用；
   基础服务（mariadb / minio）缺失时终止并提示，`./deploy.sh up mariadb minio` 拉起即可；
 - **卸载保护**：`down` 时组件若仍被集群中存活的组件依赖（如 manager-server 还在时卸载
@@ -85,7 +86,10 @@ kubectl get pods   # 确认登录成功
 ```bash
 ./deploy.sh up mariadb    # 数据库（三选一: mariadb / mysql / postgresql，默认用 MariaDB）
 ./deploy.sh up minio      # 对象存储
-./deploy.sh up            # 产品组件: secret → redis → agentserver → gateway → web
+./deploy.sh up            # 产品组件（按 AGENT_RUNTIME_DEPLOY_MODE 派生，见 .env.example）:
+                          #   off:     secret → redis → agentserver → gateway → web
+                          #   routing: secret → redis → runtime → agentserver → gateway → web
+                          #   full:    暂未开放（配置即报错，待开放）
 ./deploy.sh up manager   # 管理套件: identity → manager-server → manager-web
 ```
 

@@ -14,8 +14,11 @@ Side = Literal["gateway", "runtime", "user_web"]
 
 
 def runtime_probe_enabled() -> bool:
-    """``AGENT_RUNTIME_ENABLED=false`` 时跳过 Runtime 探活（静态 AgentServer 部署无 Runtime 组件）。"""
-    return os.getenv("AGENT_RUNTIME_ENABLED", "true").strip().lower() != "false"
+    """``AGENT_RUNTIME_DEPLOY_MODE=off`` 时跳过 Runtime 探活（AgentServer 静态预启动，无 Runtime 组件）。
+
+    未设置保持探活开启（全量模式部署工具不注入该变量，行为与历史一致）。
+    """
+    return os.getenv("AGENT_RUNTIME_DEPLOY_MODE", "").strip().lower() != "off"
 
 # Gateway Config Receiver：``GET /api/health``（manager_config_receiver）
 _GATEWAY_HEALTH_PATH = "/api/health"

@@ -38,6 +38,7 @@ main() {
   parse_args "$@"
   check_vars
   filter_targets_by_external_mode
+  filter_targets_by_deploy_mode   # 三模式目标派生（up 专属；down 模式无关）
   KCTL_NS="${DEPLOY_VARS["NAMESPACE"]}"   # 全部组件的 namespace 由 .env.custom / -n 统一控制
 
   # --render-only：只渲染清单（纯本地 awk，不需要集群连接与 oc token）
