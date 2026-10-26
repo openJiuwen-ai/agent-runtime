@@ -29,12 +29,14 @@ gen_identity_file() {
     # yq quotes passwords and enterprise-login values correctly in generated YAML.
     IDENTITY_ADMIN_PASSWORD="${DEPLOY_VARS[IDENTITY_ADMIN_PASSWORD]}" \
     IDENTITY_USER1_PASSWORD="${DEPLOY_VARS[IDENTITY_USER1_PASSWORD]}" \
+    IDENTITY_FEDERATION_CONFIG_FILE="${DEPLOY_VARS[IDENTITY_FEDERATION_CONFIG_FILE]}" \
     IDENTITY_SSO_SERVER_URL="${DEPLOY_VARS[IDENTITY_SSO_SERVER_URL]}" \
     IDENTITY_SSO_LOGIN_CLIENT_ID="${DEPLOY_VARS[IDENTITY_SSO_LOGIN_CLIENT_ID]}" \
     IDENTITY_SSO_TOKEN_AUDIENCE="${DEPLOY_VARS[IDENTITY_SSO_TOKEN_AUDIENCE]}" \
         yq eval '(. | select(.kind == "Deployment") | .spec.template.spec.containers[0].env) += [
             {"name": "IDENTITY_ADMIN_PASSWORD", "value": strenv(IDENTITY_ADMIN_PASSWORD)},
             {"name": "IDENTITY_USER1_PASSWORD", "value": strenv(IDENTITY_USER1_PASSWORD)},
+            {"name": "IDENTITY_FEDERATION_CONFIG_FILE", "value": strenv(IDENTITY_FEDERATION_CONFIG_FILE)},
             {"name": "IDENTITY_SSO_SERVER_URL", "value": strenv(IDENTITY_SSO_SERVER_URL)},
             {"name": "IDENTITY_SSO_LOGIN_CLIENT_ID", "value": strenv(IDENTITY_SSO_LOGIN_CLIENT_ID)},
             {"name": "IDENTITY_SSO_TOKEN_AUDIENCE", "value": strenv(IDENTITY_SSO_TOKEN_AUDIENCE)}
