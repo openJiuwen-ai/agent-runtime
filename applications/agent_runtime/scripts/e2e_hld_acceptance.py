@@ -1633,9 +1633,18 @@ async def routing_provision_flow(c: Client, r, args) -> None:
         out = await kubectl("apply", "-f", "-", stdin=_rt_sts_manifest())
         rolled = await kubectl("rollout", "status", f"statefulset/{RT_STS}",
                                "-n", NS, "--timeout=180s")
+        # 首跑 apply 输出 "created"、重跑输出 "configured";错误信封的
+        # ok/error_code 在顶层(第三返回值),rawdata 恒空
+        # kubectl 各版本对 StatefulSet 的完成措辞不一(v1.19 新建是
+        # "partitioned roll out complete"、更新是 "rolling update complete",
+        # Deployment 是 "successfully rolled out")——按 "complete" 且无
+        # error/timed out 判定
+        rolled_ok = ("complete" in rolled
+                     and "error" not in rolled.lower()
+                     and "timed out" not in rolled.lower())
         check("R2 StatefulSet+headless svc 预拉 1/1 Ready",
-              "configured" in out and "successfully rolled out" in rolled,
-              out.strip()[:80])
+              ("created" in out or "configured" in out) and rolled_ok,
+              f"apply={out.strip()[:60]} rollout={rolled.strip()[:60]}")
 
         # R3 注册:探测通过即入池
         code, body, _ = await c.post("register_pods", rawdata={
@@ -1669,7 +1678,7 @@ async def routing_provision_flow(c: Client, r, args) -> None:
             _touch_false(c, "rt-s1"), timeout=90.0, interval=5.0,
             desc="probe death eviction")
         check("R6 探测判死→会话驱逐(零物理删,runtime 不删客户 Pod)", evicted,
-              "90s 内 touch 未转 False")
+              "90s 内 touch 未转 False(判死驱逐未发生)")
 
         # R7 重建收养:scale 1 → 同名重建 → 收养循环回池 → 再分配落同名
         await kubectl("scale", f"statefulset/{RT_STS}", "-n", NS,
@@ -1680,7 +1689,7 @@ async def routing_provision_flow(c: Client, r, args) -> None:
             _route_lands(c, "rt-s2", RT_SCOPE, f"{RT_STS}-0"),
             timeout=120.0, interval=5.0, desc="re-adopt after recreate")
         check("R7 StatefulSet 同名重建→自动收养→再分配", readopted,
-              "120s 内未恢复分配")
+              "120s 内未恢复分配(收养未完成)")
 
         # R8 config_refresh 不被外部 Pod 卡 409
         code, body, _ = await c.post("config_refresh", request_id="rt-crf")
@@ -1688,9 +1697,11 @@ async def routing_provision_flow(c: Client, r, args) -> None:
               code == 200 and body.get("ok"), f"code={code} body={body}")
 
         # R9 cleanup 在 routing 模式拒绝
-        code, body, _ = await c.post("cleanup", request_id="rt-cln")
+        code, _, full = await c.post("cleanup", request_id="rt-cln")
         check("R9 cleanup 拒绝(400 VALIDATION)",
-              code == 400 and body.get("ok") is False, f"code={code}")
+              code == 400 and full.get("ok") is False
+              and full.get("error_code") == "VALIDATION",
+              f"code={code} full={full}")
 
         # R10 注销驱逐 + 池空 503
         code, body, _ = await c.post("deregister_pods", rawdata={
@@ -1699,12 +1710,11 @@ async def routing_provision_flow(c: Client, r, args) -> None:
         ok = code == 200 and body.get("deregistered") == [f"{RT_STS}-0"] and (
             int(body.get("evicted_sessions") or 0) >= 1)
         check("R10 deregister 驱逐会话并注销", ok, f"code={code} body={body}")
-        code, body, _ = await c.post("route", session_id="rt-s3",
+        code, _, full = await c.post("route", session_id="rt-s3",
                                      group=RT_SCOPE, request_id="rt-r3")
         check("R11 池空→503 NO_POD_AVAILABLE(扩容语义)",
-              code == 503 and (body.get("error_code") == "NO_POD_AVAILABLE"
-                               or "NO_POD_AVAILABLE" in str(body)),
-              f"code={code}")
+              code == 503 and full.get("error_code") == "NO_POD_AVAILABLE",
+              f"code={code} full={full}")
     finally:
         await teardown()
 
