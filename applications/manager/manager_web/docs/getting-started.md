@@ -121,11 +121,13 @@ unzip <部署工具安装包>.zip
 
 ![新建Agent模板](assets/image-20260912155054886.png)
 
-### 新建 运行时模板
+### 新建运行时模板
 
-新建 运行时模板，用于为组织或用户分配可用的容器资源池。可以直接导入版本部署工具包中在部署期间生成的 "部署工具目录/conf/agentserver.json" 文件。
+新建运行时模板，用于为组织或用户分配可用的容器资源池。可以直接导入版本部署工具包在部署期间自动生成的agentserver.json文件(文件所在路径：部署工具目录/conf/agentserver.json)。
 
-![新建运行时模板](assets/image-20260912155116428.png)
+![agentserver.json](assets/image-20260912155116429.png)
+
+![新建运行时模板](assets/image-20260912155116430.png)
 
 ### 新建集群
 
