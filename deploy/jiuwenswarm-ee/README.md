@@ -664,6 +664,20 @@ Web 为 JiuwenSwarm 企业版面向终端用户的对话可视化前端，用于
 WEB_REPLICAS=1
 ```
 
+### 4.4 部署 Manager（仅演示用）
+
+Manager 仅做演示用途，**非正式交付组件**。
+
+**启动方法：**
+```
+./deploy.sh up manager -n <你的命名空间>      # 部署 Manager 模块
+./deploy.sh down manager -n <你的命名空间>    # 卸载 Manager 模块
+```
+部署成功后控制台会输出自动分配的 NodePort（30000-32767）。
+
+**登录方式：**
+浏览器访问 `http://<任意节点IP>:<MANAGER_WEB_NODE_PORT>`，默认账号 `admin` / `admin`（管理员）、`user1` / `user1`（普通用户）；密码可在首次部署前通过 `.env.custom` 的 `IDENTITY_ADMIN_PASSWORD` / `IDENTITY_USER1_PASSWORD` 修改。
+
 ## 5 服务异常排查
 
 系统服务运行异常时，可按以下步骤逐层定位故障根因：
