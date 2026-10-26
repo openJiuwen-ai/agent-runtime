@@ -68,6 +68,20 @@ check_optional_vars() {
     || error "REDIS_USER 非法（仅允许字母数字与 ._-）: $val"
 }
 
+check_identity_sso_vars() {
+  [ -z "${DEPLOY_VARS[IDENTITY_FEDERATION_CONFIG_FILE]:-}" ] || return 0
+  local name value
+  local -a fields=(IDENTITY_SSO_SERVER_URL IDENTITY_SSO_LOGIN_CLIENT_ID IDENTITY_SSO_TOKEN_AUDIENCE)
+  local -a missing=()
+  for name in "${fields[@]}"; do
+    value="${DEPLOY_VARS[$name]:-}"
+    [ -n "${value//[[:space:]]/}" ] || missing+=("$name")
+  done
+  if [ "${#missing[@]}" -gt 0 ] && [ "${#missing[@]}" -lt "${#fields[@]}" ]; then
+    error "Enterprise SSO requires all three settings; missing: ${missing[*]}"
+  fi
+}
+
 
 # 集群 API Server 解析与校验（openshift 形态必填；k8s 形态走 kubeconfig 认证，可留空）：
 # .env.custom 已设置 → 校验格式后直接使用；
@@ -276,6 +290,9 @@ check_vars() {
   check_replicas_vars
   check_storage_class_vars
   check_optional_vars
+  if [ "$CMD" = up ] && in_array identity "${TARGETS[@]}"; then
+    check_identity_sso_vars
+  fi
   resolve_dev_mode_vars            # 函数在 k8s_handler.sh（MODE=dev 校验与派生）
 }
 

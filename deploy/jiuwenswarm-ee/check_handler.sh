@@ -570,17 +570,16 @@ check_web_up_dependency(){
 }
 
 check_identity_sso_config(){
-    if [ -z "${DEPLOY_VARS[IDENTITY_SSO_SERVER_URL]:-}" ]; then
-        if [ -n "${DEPLOY_VARS[IDENTITY_SSO_LOGIN_CLIENT_ID]:-}" ]; then
-            error "IDENTITY_SSO_LOGIN_CLIENT_ID requires IDENTITY_SSO_SERVER_URL."
-        fi
-        return
-    fi
-    if [ -z "${DEPLOY_VARS[IDENTITY_SSO_LOGIN_CLIENT_ID]:-}" ]; then
-        error "IDENTITY_SSO_LOGIN_CLIENT_ID is required when enterprise login is enabled."
-    fi
-    if [ -z "${DEPLOY_VARS[IDENTITY_SSO_TOKEN_AUDIENCE]:-}" ]; then
-        error "IDENTITY_SSO_TOKEN_AUDIENCE cannot be empty; use the agreed user Token aud value."
+    [ -z "${DEPLOY_VARS[IDENTITY_FEDERATION_CONFIG_FILE]:-}" ] || return 0
+    local name value
+    local -a fields=(IDENTITY_SSO_SERVER_URL IDENTITY_SSO_LOGIN_CLIENT_ID IDENTITY_SSO_TOKEN_AUDIENCE)
+    local -a missing=()
+    for name in "${fields[@]}"; do
+        value="${DEPLOY_VARS[$name]:-}"
+        [ -n "${value//[[:space:]]/}" ] || missing+=("$name")
+    done
+    if [ "${#missing[@]}" -gt 0 ] && [ "${#missing[@]}" -lt "${#fields[@]}" ]; then
+        error "Enterprise SSO requires all three settings; missing: ${missing[*]}"
     fi
 }
 
