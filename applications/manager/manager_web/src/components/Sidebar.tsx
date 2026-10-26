@@ -94,6 +94,19 @@ export function Sidebar() {
     },
   ];
 
+  const expertPackageItem: NavItem = {
+    key: 'expert-packages',
+    pathPrefix: '/expert-packages',
+    href: '/expert-packages',
+    label: t('nav.expertPackages'),
+    icon: (
+      <svg className="w-4 h-4 nav-item__icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 3l7 4v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V7l7-4z" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4" />
+      </svg>
+    ),
+  };
+
   const agentManagementItem: NavItem = {
     key: 'agent-templates',
     pathPrefix: '/agent-templates',
@@ -334,6 +347,7 @@ export function Sidebar() {
             ? [{ label: missingLabel(t('nav.agentManagement')), to: '/agent-templates', openTarget: 'agentTemplateNew' }]
             : undefined,
         )}
+        {renderItem(expertPackageItem, false)}
         <div className="nav-subgroup">
           <button
             type="button"
