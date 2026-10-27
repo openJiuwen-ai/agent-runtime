@@ -41,7 +41,9 @@ component_files() {
                         echo "agentserver-env.configmap.yaml claw-pvc.yaml runtime.yaml agentserver.json"
                       fi
                     else
-                      echo "runtime.yaml"
+                      # routing：预启动 AgentServer（StatefulSet）+ config_sync 载荷
+                      # （scope/模板契约 + 预建 Pod 注册的模板来源）
+                      echo "runtime.yaml agentserver.json"
                     fi;;
     agentserver)    if is_k8s_cluster; then
                       echo "agentserver-env.configmap.yaml agentserver.yaml"

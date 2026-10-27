@@ -77,6 +77,10 @@ spec:
         # 三模式部署形态（off 时 manager 跳过 Runtime 探活；routing/full 探活 agent-runtime /healthz）
         - name: AGENT_RUNTIME_DEPLOY_MODE
           value: "<<AGENT_RUNTIME_DEPLOY_MODE>>"
+        # routing 模式：外部 AgentServer Pod 的 headless DNS 清单（manager 据此注册，
+        # 与 StatefulSet 副本数同源；off/full 为空）
+        - name: AGENTSERVER_POD_DNS_LIST
+          value: "<<AGENTSERVER_POD_DNS_LIST>>"
         # MANAGER_WEB_*_TARGET 为 manager-web nginx 的 proxy_pass 上游（nginx 要求 FQDN）
         - name: MANAGER_WEB_USER_WEB_TARGET
           value: "http://jiuwenclaw-web.<<NAMESPACE>>.svc.cluster.local:5173"
