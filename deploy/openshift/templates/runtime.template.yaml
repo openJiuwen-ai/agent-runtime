@@ -7,9 +7,9 @@
 #   - DB 独立库 runtime_<<NAMESPACE>>（框架 MySQLHandler.init_database 自动 CREATE DATABASE IF NOT EXISTS，
 #     仅 MySQL/MariaDB；PostgreSQL 形态需预建库）
 #   - 内部组件：gateway 经 GATEWAY_RUNTIME_MANAGER_URL 指向本 Service（8091），不对外暴露
-#   - 零 K8s 权限形态：实例注册走 HTTP、池修复走 HTTP 健康探测，全程不调用 K8s API，
-#     用 namespace 默认 SA（同 gateway）；full 模式（Pod 操作 RBAC）暂未开放，待开放时
-#     随模板补 SA/Role/RoleBinding 并按模式渲染
+#   - 零 K8s 权限形态（routing/off）与 Pod 操作权限形态（full）同一模板交付：
+#     full 模式渲染后由 apply_runtime_mode_extras 注入 SA/Role/RoleBinding 与
+#     serviceAccountName（Pod 增删查），routing/off 保持零 K8s 权限
 apiVersion: apps/v1
 kind: Deployment
 metadata:

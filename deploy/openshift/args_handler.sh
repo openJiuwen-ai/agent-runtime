@@ -47,7 +47,8 @@ usage() {
   up                拉起产品组件（按 AGENT_RUNTIME_DEPLOY_MODE 派生，见 .env.example）:
                     off:     secret → redis → agentserver → gateway → web
                     routing: 同上 + runtime（会话粘性路由，零 K8s 权限）
-                    full:    暂未开放（配置即报错，待开放）
+                    full:    secret → redis → runtime → gateway → web
+                             （AgentServer 由 runtime 按需创建，自动注入 Pod 操作 RBAC）
   manager up        拉起管理套件: identity → manager-server → manager-web
                     （依赖的 secret / redis 集群缺失时自动拉起，已有则复用）
   up mariadb        只部署/渲染指定组件；可多选，如: up mariadb minio

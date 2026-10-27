@@ -1,0 +1,86 @@
+{
+  "type": "config_sync",
+  "metadata": {
+    "request_id": "default",
+    "session_id": null,
+    "user_id": "default",
+    "bot_id": "default",
+    "extra": {
+      "group_id": "default"
+    }
+  },
+  "rawdata": {
+    "containers": [
+      {
+        "container_id": "c-agentserver",
+        "name": "jiuwenclaw-agentserver",
+        "image": "<<AGENTSERVER_IMAGE>>",
+        "imagePullPolicy": "IfNotPresent",
+        "ports": [
+          {
+            "name": "sse",
+            "containerPort": 8766
+          }
+        ],
+        "envFrom": [
+          {
+            "secretRef": {
+              "name": "jiuwenclaw-secret-configmap"
+            }
+          },
+          {
+            "configMapRef": {
+              "name": "jiuwenclaw-agentserver-env"
+            }
+          }
+        ],
+        "readinessProbe": {
+          "httpGet": {
+            "path": "/api/v1/health",
+            "port": 8766
+          },
+          "initialDelaySeconds": 5,
+          "periodSeconds": 10
+        },
+        "volumeMounts": [
+          {
+            "name": "data",
+            "mountPath": "/home/app/.jiuwenswarm"
+          }
+        ]
+      }
+    ],
+    "templates": [
+      {
+        "template_id": "default",
+        "template_name": "default",
+        "main_container_id": "c-agentserver",
+        "pod_name": "jiuwenclaw-agentserver",
+        "namespace": "<<NAMESPACE>>",
+        "sse_path": "/api/v1/events/stream",
+        "scope_concurrency": 400,
+        "pod_concurrency": 200,
+        "session_ttl": 60,
+        "pod_ttl": 180,
+        "min_idle_pods": 1,
+        "ready_timeout": 240,
+        "volumes": [
+          {
+            "name": "data",
+            "persistentVolumeClaim": {
+              "claimName": "jiuwenclaw-pvc"
+            }
+          }
+        ]
+      }
+    ],
+    "scopes": [
+      {
+        "scope_id": "default",
+        "index": 100,
+        "template_id": "default",
+        "routing_rules": ""
+      }
+    ]
+  }
+}

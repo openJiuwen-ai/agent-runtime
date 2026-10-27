@@ -89,7 +89,8 @@ kubectl get pods   # 确认登录成功
 ./deploy.sh up            # 产品组件（按 AGENT_RUNTIME_DEPLOY_MODE 派生，见 .env.example）:
                           #   off:     secret → redis → agentserver → gateway → web
                           #   routing: secret → redis → runtime → agentserver → gateway → web
-                          #   full:    暂未开放（配置即报错，待开放）
+                          #   full:    secret → redis → runtime → gateway → web
+                          #          （AgentServer 由 runtime 按需创建，自动注入 Pod 操作 RBAC）
 ./deploy.sh up manager   # 管理套件: identity → manager-server → manager-web
 ```
 

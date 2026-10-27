@@ -12,25 +12,22 @@ check_cluster_type_var() {
 }
 
 # agent-runtime 三模式：枚举校验 + 模式派生
-# - routing：gateway 启用 runtime 路由客户端（GATEWAY_AGENT_CLIENT_MODE=runtime）并注入路由地址
+# - routing/full：gateway 启用 runtime 路由客户端（GATEWAY_AGENT_CLIENT_MODE=runtime）并注入路由地址
 # - off：gateway 两变量留空（占位符行删除，gateway 走 AGENT_SERVER_URL 直连）；
 #   AgentServer 固定单副本，配置多副本视为矛盾
-# - full：暂未开放，配置即报错
 resolve_deploy_mode_vars() {
   local mode="${DEPLOY_VARS["AGENT_RUNTIME_DEPLOY_MODE"]:-}"
   case "$mode" in
-    routing)
+    routing|full)
       DEPLOY_VARS["GATEWAY_AGENT_CLIENT_MODE"]="runtime"
       DEPLOY_VARS["GATEWAY_RUNTIME_MANAGER_URL"]="http://jiuwenclaw-agent-runtime:8091";;
     off)
       DEPLOY_VARS["GATEWAY_AGENT_CLIENT_MODE"]=""
       DEPLOY_VARS["GATEWAY_RUNTIME_MANAGER_URL"]=""
       [ "${DEPLOY_VARS["AGENT_SERVER_REPLICAS"]}" = 1 ] \
-        || error "AGENT_RUNTIME_DEPLOY_MODE=off 时 AgentServer 固定单副本（无粘性路由需求），AGENT_SERVER_REPLICAS 须为 1（多副本请用 routing）";;
-    full)
-      error "AGENT_RUNTIME_DEPLOY_MODE=full 暂未开放（需 Pod 操作权限与 runtime 完整生命周期，待开放）";;
+        || error "AGENT_RUNTIME_DEPLOY_MODE=off 时 AgentServer 固定单副本（无粘性路由需求），AGENT_SERVER_REPLICAS 须为 1（多副本请用 routing/full）";;
     *)
-      error "AGENT_RUNTIME_DEPLOY_MODE 非法（routing | off；full 暂未开放）: $mode";;
+      error "AGENT_RUNTIME_DEPLOY_MODE 非法（full | routing | off）: $mode";;
   esac
 }
 
@@ -258,7 +255,7 @@ resolve_redis_vars() {
     redis_mode="standalone"
     DEPLOY_VARS["REDIS_MODE"]="standalone"
     DEPLOY_VARS["ENABLE_EXTERNAL_REDIS"]="false"
-    DEPLOY_VARS["REDIS_HOST"]="redis.${DEPLOY_VARS["NAMESPACE"]}"
+    DEPLOY_VARS["REDIS_HOST"]="jiuwenclaw-redis.${DEPLOY_VARS["NAMESPACE"]}"
     # 内置 Redis 启动参数按 <<REDIS_USER>> 创建 ACL 用户，留空会渲染出空串参数：
     # 未显式设置时派生默认用户名（与 redis.template.yaml 启动参数一致）
     [ -n "${DEPLOY_VARS["REDIS_USER"]:-}" ] || DEPLOY_VARS["REDIS_USER"]="jiuwenclaw"

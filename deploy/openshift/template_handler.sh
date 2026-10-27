@@ -39,8 +39,11 @@ render_component_files() { # $1=组件 → stdout: 渲染的清单文件名（�
   local -a files=()
   mkdir -p "$CONF_DIR"
   for f in $(component_files "$comp"); do
-    t="$TEMPLATE_DIR/${f%.yaml}.template.yaml"
-    [ -f "$t" ] || error "目标组件缺清单模板: templates/${f%.yaml}.template.yaml"
+    case "$f" in
+      *.json) t="$TEMPLATE_DIR/${f%.json}.template.json";;
+      *)      t="$TEMPLATE_DIR/${f%.yaml}.template.yaml";;
+    esac
+    [ -f "$t" ] || error "目标组件缺清单模板: $t"
     cp -f "$t" "$CONF_DIR/$f" || error "模板复制失败: $t"
     for ph in $(extract_placeholders "$t"); do
       var_name="${ph#<<}"; var_name="${var_name%>>}"
@@ -68,5 +71,6 @@ render_templates() {
   info "渲染 ${#wanted[@]} 个清单 → conf/（目标: ${TARGETS[*]}）"
   apply_nfs_direct_mounts "${wanted[@]}"
   apply_k8s_extras "${wanted[@]}"
+  apply_runtime_mode_extras "${wanted[@]}"
   apply_dev_code_mounts "${wanted[@]}"
 }
