@@ -78,12 +78,14 @@ class ResourceNoLua:
         pods_key = self.k.scope_pods(scope_id)
         dep_key = self.k.scope_deploying(scope_id)
         drain_key = self.k.scope_drain_until(scope_id)
+        declared_key = self.k.scope_declared(scope_id)
 
         await self.redis.zremrangebyscore(dep_key, "-inf", int(now))
 
         async def _txn() -> list[str]:
             async with self.redis.pipeline(transaction=True) as pipe:
-                await pipe.watch(cfg_key, idle_key, pods_key, dep_key, drain_key)
+                await pipe.watch(cfg_key, idle_key, pods_key, dep_key,
+                                  drain_key, declared_key)
                 max_pods_raw = await pipe.hget(cfg_key, "max_pods")
                 if max_pods_raw is None:
                     await pipe.unwatch()
@@ -98,9 +100,15 @@ class ResourceNoLua:
                     )
                 for pod in idle_now:
                     info_key = self.k.pod_info(pod)
+                    # declared 成员豁免版本/代次过滤（与 LUA_ACQUIRE 同语义，
+                    # routing 供给模式；见 lua_scripts.py 注释）。hexists 在
+                    # fakeredis 返回 bool、真 client 返回 int——统一 bool()
+                    # 判真（to_int(bool) 会经 s()→str→int 失败回退 0，真值
+                    # 被吞成 False）
+                    declared = bool(await pipe.hexists(declared_key, pod))
                     ver = s((await pipe.hget(info_key, "deploy_ver")) or "")
                     gen = s((await pipe.hget(info_key, "generation")) or "")
-                    if ver == deploy_ver and gen == cfg_gen:
+                    if declared or (ver == deploy_ver and gen == cfg_gen):
                         url = s((await pipe.hget(info_key, "pod_sse_url")) or "")
                         pipe.multi()
                         pipe.srem(idle_key, pod)
@@ -219,7 +227,8 @@ class ResourceNoLua:
 
     async def register(self, pod_id: str, scope_id: str, url: str, ip: str,
                        ns: str, ver: str, token: str, idle_flag: str, now: int,
-                       sse_port: Any, health_path: str) -> list[str]:
+                       sse_port: Any, health_path: str,
+                       external: str = "0") -> list[str]:
         """LUA_REGISTER 等价：deploy 成功登记 + generation 服务端烙印。
 
         WATCH scope:config 保持烙印原子性：注册与 bump_generation 并发时
@@ -234,12 +243,15 @@ class ResourceNoLua:
                 gen_raw = await pipe.hget(cfg_key, "generation")
                 gen = s(gen_raw) if gen_raw is not None else ""
                 pipe.multi()
-                pipe.hset(self.k.pod_info(pod_id), mapping={
+                info_key = self.k.pod_info(pod_id)
+                pipe.hset(info_key, mapping={
                     "scope_id": scope_id, "pod_sse_url": url, "pod_ip": ip,
                     "namespace": ns, "deploy_ver": ver, "phase": "created",
                     "created_ts": int(now), "sse_port": sse_port,
                     "health_path": health_path, "generation": gen,
                 })
+                if external == "1":
+                    pipe.hset(info_key, "external", "1")
                 pipe.zadd(self.k.scope_pods(scope_id), {pod_id: int(now)})
                 pipe.sadd(self.k.pods_all(), pod_id)
                 pipe.zrem(self.k.scope_deploying(scope_id), token)

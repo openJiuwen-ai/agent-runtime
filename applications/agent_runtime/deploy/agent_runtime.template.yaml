@@ -10,7 +10,10 @@ metadata:
   namespace: <<NAMESPACE>>
 ---
 # RM 需要 CRUD AgentServer Pod（deploy/read/list/delete），与 gateway 的
-# agentserver-creator Role 同面；namespaced，不越权
+# agentserver-creator Role 同面；namespaced，不越权。
+# AGENT_RUNTIME_DEPLOY_MODE=routing（外部预建 Pod 模式）时本服务零 K8s API
+# 调用：SA 可不绑本 Role（或裁到仅 pods:get 供排障），Pod 由客户 StatefulSet
+# 预建并经 POST /api/session/register_pods 注册（2026-10 routing 供给模式）
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -183,6 +186,12 @@ spec:
             # 禁 EVAL 环境,off 不发任何 EVAL 命令)
             - name: AGENT_RUNTIME_REDIS_LUA
               value: "<<AGENT_RUNTIME_REDIS_LUA>>"
+            # agent-server Pod 供给模式(2026-10 routing 供给模式):full=自建/
+            # 自删(默认,存量行为不变);routing=客户 StatefulSet 预建+register_pods
+            # 注册,本服务只分配不建删,零 K8s API 调用(SA 无需任何 pods 权限,
+            # autoscale 关闭、cleanup 拒绝;存活检测=HTTP 健康探测)
+            - name: AGENT_RUNTIME_DEPLOY_MODE
+              value: "<<AGENT_RUNTIME_DEPLOY_MODE>>"
             # ---- 系统自评估（2026-09;默认全空 = 纯规则评估,无 LLM 外呼）----
             # 采样/评估两 job 间隔(秒);LLM 三项(base_url+model 均非空才启用,
             # api_key 可空=内网免鉴权端点);pod_budget=集群 AgentServer Pod

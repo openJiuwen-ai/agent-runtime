@@ -7,6 +7,8 @@ POD_NAMESPACE env(显式覆盖/downward API)> in-cluster SA namespace 文件
 
 from __future__ import annotations
 
+import pytest
+
 import agent_runtime.config as config_module
 from agent_runtime.config import AgentRuntimeConfig
 
@@ -77,3 +79,26 @@ def test_health_probe_timeout_invalid_falls_back(monkeypatch):
     """env 手误(非 float)留痕回退默认——与 _env_int 同纪律,配错可见。"""
     monkeypatch.setenv("AGENT_RUNTIME_HEALTH_PROBE_TIMEOUT", "3s")
     assert AgentRuntimeConfig.from_env().health_probe_timeout == 3.0
+
+
+# ---- deploy_mode(AGENT_RUNTIME_DEPLOY_MODE=full|routing,2026-10 routing 供给模式)----
+
+
+def test_deploy_mode_default_full(monkeypatch):
+    monkeypatch.delenv("AGENT_RUNTIME_DEPLOY_MODE", raising=False)
+    assert AgentRuntimeConfig.from_env().deploy_mode == "full"
+
+
+def test_deploy_mode_explicit_values(monkeypatch):
+    monkeypatch.setenv("AGENT_RUNTIME_DEPLOY_MODE", "routing")
+    assert AgentRuntimeConfig.from_env().deploy_mode == "routing"
+    monkeypatch.setenv("AGENT_RUNTIME_DEPLOY_MODE", "FULL")
+    assert AgentRuntimeConfig.from_env().deploy_mode == "full"  # 大小写归一
+
+
+def test_deploy_mode_invalid_raises(monkeypatch):
+    """模式类开关严格解析:配错启动即 raise,不做静默回退——否则受限权限
+    环境误配成 full 会以托管模式启动、首个 deploy/delete 才撞 403。"""
+    monkeypatch.setenv("AGENT_RUNTIME_DEPLOY_MODE", "external")
+    with pytest.raises(ValueError, match="full\\|routing"):
+        AgentRuntimeConfig.from_env()

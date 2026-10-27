@@ -90,6 +90,18 @@ class RMKeys:
         """
         return f"{self.prefix}:resource:scope:{scope_id}:drain_until"
 
+    def scope_declared(self, scope_id: str) -> str:
+        """HASH: routing 模式外部 Pod 声明表（pod 名 → JSON{host, declared_ts}）。
+
+        声明持久化（register_pods 先写声明后注册，崩溃由 adopt 循环自愈）；
+        **成员资格是版本/代次豁免的唯一判据**（LUA_ACQUIRE 复用过滤、reclaim、
+        has_lagged_pods、sunset_pending_pods、SM 软摘除五点共用）——scope 删除/
+        路由性排除时 DEL 本键，外部 Pod 即失去豁免、回归既有 gen-lag 日落回收
+        （purge 仍跳过物理删，与 full 模式删除行为对齐）。键在 {resource_manager}
+        tag 内与其他 per-scope 键同槽。
+        """
+        return f"{self.prefix}:resource:scope:{scope_id}:declared"
+
     # ---- Pod 级
     def pod_info(self, pod_id: str) -> str:
         """HASH: scope_id / pod_sse_url / pod_ip / namespace / phase / created_ts /
@@ -218,16 +230,21 @@ class ResourceState:
         *,
         sse_port: int | None = None,
         health_path: str = "",
+        external: bool = False,
     ) -> None:
         """LUA_REGISTER：deploy 成功后登记（清 deploying 占位；idle_flag=热备入 idle 池）。
 
         sse_port/health_path 随 Pod 烘焙进 info——健康探测按 Pod 自己的契约
         参数进行（A 类变更后 scope 当前配置已换代，不能拿新参数探老 Pod）。
+        external=True：routing 供给模式的外部预建 Pod（info 落 external=1，
+        purge 跳过物理删 / watch 跳 K8s 相位检查）；deploy_token 传空串即可
+        （ZREM 不存在成员是 no-op）。
         """
         await self.eval(
             lua.LUA_REGISTER, pod_id, scope_id, pod_sse_url, pod_ip,
             namespace, deploy_ver, deploy_token, "1" if idle_flag else "0", now,
             int(sse_port) if sse_port else "", health_path,
+            "1" if external else "0",
         )
 
     async def release(self, pod_id: str, scope_id: str, now: int) -> bool:
@@ -325,18 +342,74 @@ class ResourceState:
 
         排空纪元的统一判据（update_pool_config 戳记 / reclaim 收尾终止共用）：
         读注册表（scope:pods + pod:info），不读 SM 候选集——与软摘除的先后
-        顺序无关。幽灵成员（info 已清）不构成落后。
+        顺序无关。幽灵成员（info 已清）不构成落后。**declared 成员豁免**：
+        外部 Pod 版本/代次无关（客户 StatefulSet 自管形态），不构成落后——
+        否则外部 Pod 会虚假触发排空纪元（routing 供给模式）。
         """
         cfg = await self.load_scope_config(scope_id)
         ver = cfg.get("deploy_ver") or ""
         gen = cfg.get("generation") or ""
+        declared = set(await self.declared_names(scope_id))
         for pod_id in await self.pod_ids(scope_id):
+            if pod_id in declared:
+                continue
             info = await self.pod_info(pod_id)
             if info and (
                     (info.get("deploy_ver") or "") != ver
                     or (info.get("generation") or "") != gen):
                 return True
         return False
+
+    # -------------------------------------------------------------- 外部声明表（routing 模式）
+
+    async def add_declared(self, scope_id: str, entries: dict[str, str]) -> None:
+        """写声明（HSET 覆盖幂等；name → JSON 串，见 RMKeys.scope_declared）。"""
+        if entries:
+            await self.redis.hset(self.k.scope_declared(scope_id),
+                                  mapping=entries)
+
+    async def declared_entries(self, scope_id: str) -> dict[str, str]:
+        """全部声明：pod 名 → JSON{host, declared_ts}（解码 s() 同池读惯例）。"""
+        raw = await self.redis.hgetall(self.k.scope_declared(scope_id))
+        return {s(k_): s(v) for k_, v in raw.items()}
+
+    async def declared_names(self, scope_id: str) -> list[str]:
+        """声明的 pod 名列表（sorted 确定序）。"""
+        names = await self.redis.hkeys(self.k.scope_declared(scope_id))
+        return sorted(s(n) for n in names)
+
+    async def remove_declared(self, scope_id: str, names: list[str]) -> int:
+        """注销部分声明（deregister_pods）；返回实际删除数。"""
+        if not names:
+            return 0
+        return to_int(await self.redis.hdel(
+            self.k.scope_declared(scope_id), *names))
+
+    async def drop_declared(self, scope_id: str) -> int:
+        """清空该 scope 声明表（scope 删除/路由性排除；返回删除 field 数）。
+
+        语义后果：外部 Pod 失去版本/代次豁免 → 既有 gen-lag 日落回收接管
+        （purge 仍不物理删）。HDEL 逐项 vs DEL 整键：DEL 更彻底（含未知残留
+        field），且 declared 键无 TTL 语义，整删安全。
+        """
+        entries = await self.declared_entries(scope_id)
+        if entries:
+            await self.redis.delete(self.k.scope_declared(scope_id))
+        return len(entries)
+
+    async def declared_scope_ids(self) -> list[str]:
+        """扫全部声明表键（adopt 循环的遍历源）。
+
+        与 known_scope_ids 同款 scan_iter 驱动（cluster 游标 {节点:游标} dict
+        的手写循环陷阱见其注释，2026-09-20 issue #4581）。
+        """
+        pattern = f"{self.prefix}resource:scope:*:declared"
+        scope_ids: list[str] = []
+        async for key in self.redis.scan_iter(match=pattern, count=200):
+            # {resource_manager}:resource:scope:{scope_id}:declared → scope_id
+            parts = s(key).split(":")
+            scope_ids.append(parts[-2])
+        return sorted(set(scope_ids))
 
     async def has_scope_config(self, scope_id: str) -> bool:
         return to_int(

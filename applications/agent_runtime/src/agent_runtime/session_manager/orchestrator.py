@@ -46,6 +46,15 @@ logger = logging.getLogger("agent_runtime.session_manager")
 # 过载参数（SM 设计 §7 默认表；可被 settings 覆盖）
 ROUTE_BUDGET_MARGIN_SEC = 10.0        # 总预算推导余量（acquire 收尾/仲裁重跑）
 
+# routing 供给模式（AGENT_RUNTIME_DEPLOY_MODE=routing）的 route_place 判满
+# 哨兵：LUA_ROUTE_PLACE 第 7 步按 SM 候选集 ZCARD(#pods) 与 max_pods 比较判
+# scope_full，而空闲 Pod 被 LUA_SWEEP_IDLE_NOTIFY ZREM 出候选集（候选数 ≈ 忙
+# Pod 数）——外部注册数超过派生 max_pods(⌈sc/pc⌉) 时会假判满且永不出
+# need_acquire，idle 外部 Pod 被搁死。routing 模式容量治理移交声明表（注册
+# 多少可用多少），此检查旁路；scope_concurrency/pod_concurrency 两级闸门
+# 照常生效，RM LUA_ACQUIRE 的 max 检查照旧兜底（全忙无 idle → max_reached）
+ROUTING_MAX_PODS_SENTINEL = 10**9
+
 
 class SessionOrchestrator:
     """route / touch 业务编排（无进程内状态；全部状态在 Redis）。"""
@@ -58,12 +67,14 @@ class SessionOrchestrator:
         *,
         default_session_ttl: int = 60,
         telemetry: Any = None,               # ScopeTelemetryBuffer(评估计数;None=旧测试)
+        deploy_mode: str = "full",           # full | routing（AGENT_RUNTIME_DEPLOY_MODE）
     ) -> None:
         self.state = sm_state
         self.config = config_store
         self.rm = rm_facade
         self.default_session_ttl = default_session_ttl
         self.telemetry = telemetry
+        self.deploy_mode = deploy_mode
 
     # -------------------------------------------------------------- route
 
@@ -150,7 +161,12 @@ class SessionOrchestrator:
                     session_ttl=sttl,
                     scope_concurrency=template.scope_concurrency,
                     pod_concurrency=template.pod_concurrency,
-                    max_pods=template.max_pods,
+                    # routing 模式旁路派生 max_pods 判满（见 ROUTING_MAX_PODS_
+                    # SENTINEL 注释）；full 模式行为不变
+                    max_pods=(
+                        ROUTING_MAX_PODS_SENTINEL
+                        if self.deploy_mode == "routing" else template.max_pods
+                    ),
                     now=now,
                 )
 
@@ -260,12 +276,20 @@ class SessionOrchestrator:
             ) from exc
         except MaxPodsReached as exc:
             # 达 max_pods：总容量已 ≥ scope 预算，只能等额度释放。
-            # 对外错误码粗化为 NO_POD_AVAILABLE——映射前留真因，客户端侧不可见
+            # 对外错误码粗化为 NO_POD_AVAILABLE——映射前留真因，客户端侧不可见。
+            # routing 模式换外部供给措辞（容量到顶需扩 StatefulSet 注册新地址，
+            # 非「等部署」——语义对调用方排障至关重要）
             logger.warning(
                 "acquire mapped to NO_POD_AVAILABLE: scope=%s mapped_from=%s "
                 "request_id=%s detail=%s",
                 scope_id, exc.code, request_id, exc,
             )
+            if self.deploy_mode == "routing":
+                raise NoPodAvailable(
+                    f"scope {scope_id} 外部供给池已耗尽（routing 模式），"
+                    f"请扩容 StatefulSet 并注册新 Pod",
+                    retry_after=DEFAULT_RETRY_AFTER,
+                ) from exc
             raise NoPodAvailable(
                 f"scope {scope_id} reached max_pods={template.max_pods}",
                 retry_after=DEFAULT_RETRY_AFTER,

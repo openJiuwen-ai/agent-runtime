@@ -263,6 +263,17 @@ async def _scope(request: Request, sysctx: Any) -> dict[str, Any]:
             "idle_since": await rm_state.idle_since(pod_id) or None,
             **redact(info),
         })
+    # 外部声明清单（routing 模式）：declared 与注册表求差 → 收养状态
+    # （adopted=已入池 / pending=探测未通过，StatefulSet 未起/重建中）
+    declared_rows: list[dict[str, Any]] = []
+    if getattr(sysctx, "arc", None) is not None and sysctx.arc.deploy_mode == "routing":
+        declared_entries = await rm_state.declared_entries(scope_id)
+        registered = set(pod_ids)
+        for name in sorted(declared_entries):
+            declared_rows.append({
+                "pod": name,
+                "state": "adopted" if name in registered else "pending",
+            })
     # 生效分类(collector 同款规则;单 scope 详情不整表扫描)
     # 生命周期 = 存在性 + expires_at(enabled 已删,2026-09-drop-enabled-fields)
     if scope_def is None:
@@ -299,6 +310,9 @@ async def _scope(request: Request, sysctx: Any) -> dict[str, Any]:
     return {
         "scope_id": scope_id,
         "phase": phase,
+        "deploy_mode": (
+            sysctx.arc.deploy_mode
+            if getattr(sysctx, "arc", None) is not None else "full"),
         "rm": {
             "pod_count": await rm_state.pod_count(scope_id),
             "idle_count": len(idle),
@@ -306,6 +320,8 @@ async def _scope(request: Request, sysctx: Any) -> dict[str, Any]:
             "deploy_followers": await rm_state.deploy_follower_count(scope_id),
             "scope_config": redact(cfg),
             "pods": pods,
+            "declared": declared_rows,
+            "declared_count": len(declared_rows),
             "total_pods": len(pod_ids),
             "truncated": len(pod_ids) > limit,
         },

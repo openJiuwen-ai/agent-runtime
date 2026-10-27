@@ -118,6 +118,24 @@ def _env_redis_lua(name: str) -> bool:
     )
 
 
+def _env_deploy_mode(name: str) -> str:
+    """AGENT_RUNTIME_DEPLOY_MODE 专用解析：仅显式 full|routing，非法值启动 raise。
+
+    full=自建/自删 agent-server Pod（缺省，行为不变）；routing=客户 StatefulSet
+    预建 + 注册，本服务只分配不建删、零 K8s API 调用（2026-10 routing 供给模式）。
+    同 _env_redis_lua 的 fail-fast 理由：模式配错静默回 full 会让受限权限环境
+    以托管模式启动、首个 deploy/delete 才撞 403，掩盖部署配错。
+    """
+    raw = (os.getenv(name) or "").strip().lower()
+    if not raw:
+        return "full"
+    if raw in ("full", "routing"):
+        return raw
+    raise ValueError(
+        f"invalid {name}={os.getenv(name)!r}: 仅接受 full|routing（默认 full）"
+    )
+
+
 @dataclass(frozen=True)
 class AgentRuntimeConfig:
     """本服务自有配置。"""
@@ -125,6 +143,10 @@ class AgentRuntimeConfig:
     mode: str = "server"                       # server | local（local=fake 依赖）
     kubeconfig: str | None = None              # 空 = 集群内 ServiceAccount
     default_namespace: str = "default"
+    # agent-server Pod 供给模式（AGENT_RUNTIME_DEPLOY_MODE=full|routing，默认
+    # full）：full=自建/自删；routing=客户 StatefulSet 预建 + register_pods 注册，
+    # 只分配不建删（零 K8s API 调用，SA 无需任何 pods 权限）
+    deploy_mode: str = "full"
     # 周期任务（秒）；SM 设计 §7 / RM 设计 §5.4 默认表
     sweep_interval: int = 1                    # SM：到期 pass + 空 Pod pass
     autoscale_interval: int = 1                # RM：min_idle 热备补位
@@ -164,6 +186,7 @@ class AgentRuntimeConfig:
         return cls(
             mode=os.getenv("AGENT_RUNTIME_MODE", "server").strip().lower(),
             kubeconfig=os.getenv("AGENT_RUNTIME_KUBECONFIG") or None,
+            deploy_mode=_env_deploy_mode("AGENT_RUNTIME_DEPLOY_MODE"),
             # 解析链见 own_namespace():POD_NAMESPACE env > SA 文件 > "default"
             default_namespace=own_namespace(),
             sweep_interval=_env_int("AGENT_RUNTIME_SWEEP_INTERVAL", 1),

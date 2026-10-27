@@ -51,6 +51,7 @@ class ResourceSweeper:
         orchestrator: ResourceOrchestrator | None = None,
         health_fail_threshold: int = HEALTH_FAIL_THRESHOLD,
         event_sink=None,             # 评估事件上报 async (scope_id, field, by=1);None=旧测试
+        deploy_mode: str = "full",   # full | routing（AGENT_RUNTIME_DEPLOY_MODE）
     ) -> None:
         self.state = rm_state
         self.k8s = k8s
@@ -58,6 +59,9 @@ class ResourceSweeper:
         self.orchestrator = orchestrator or ResourceOrchestrator(rm_state, k8s)
         self.health_fail_threshold = health_fail_threshold
         self.event_sink = event_sink
+        self.deploy_mode = deploy_mode
+        # routing 模式 adopt 阶段的 per-scope 告警去重（仅日志）
+        self._adopt_scope_warned: set[str] = set()
         # 数据缺失告警去重（仅影响日志，不参与业务判定）
         self._probe_gap_warned: set[str] = set()
         # 决策留痕状态记忆（仅影响日志）：per-scope 上一拍决策标签 / 待回收
@@ -78,6 +82,12 @@ class ResourceSweeper:
     # -------------------------------------------------------------- autoscale（H）
 
     async def autoscale_once(self) -> None:
+        if self.deploy_mode == "routing":
+            # routing 模式：无创建权，min_idle 预热无从谈起（外部供给容量 =
+            # 声明表，客户扩 StatefulSet + register_pods）。job 保留注册
+            # （visualization 可见），tick 空转留痕
+            logger.debug("autoscale skipped (routing deploy mode)")
+            return
         token = uuid4().hex
         if not await self.state.try_lock(self.state.k.lock_autoscale(), 2, token):
             return
@@ -228,6 +238,13 @@ class ResourceSweeper:
                     min_idle = to_int(cfg.get("min_idle_pods"))
                     pod_ttl = to_int(cfg.get("pod_ttl"), 300)
                     idle = await self.state.idle_pods(scope_id)
+                    if self.deploy_mode == "routing":
+                        # 外部 Pod 不进回收分类：既非 stale（版本/代次无关）
+                        # 也非 excess（声明表即容量，idle 超龄回收不适用、
+                        # min_idle 底数不占用）；失去声明资格的（scope 删除
+                        # drop_declared 后）自动回到下方既有 stale 通道排空
+                        declared = set(await self.state.declared_names(scope_id))
+                        idle = [p for p in idle if p not in declared]
                     # 版本+代次感知的 excess：min_idle 底数只保护「当前版本且当前
                     # 代次」的 idle Pod（按转 idle 先后取最早 min_idle 个）；旧版本/
                     # 旧代次 idle Pod 永不可复用（acquire want_ver+generation 过滤），
@@ -332,6 +349,12 @@ class ResourceSweeper:
                 try:
                     info = await self.state.pod_info(pod_id)
                     if not info:
+                        continue
+                    if info.get("external") == "1":
+                        # 外部 Pod（routing 模式）：零 K8s 权限，跳过相位
+                        # 检查，HTTP 健康探测是唯一存活信号（StatefulSet 重建
+                        # 的中间态由探测的连续失败阈值天然覆盖）
+                        await self._health_probe(pod_id, info)
                         continue
                     pod = await self.k8s.get_pod(
                         pod_id, info.get("namespace", "default"))
@@ -471,12 +494,42 @@ class ResourceSweeper:
                     logger.exception(
                         "reconcile idle heal scope failed: scope=%s", scope_id)
 
+            # 0.5 外部收养（routing 模式）：declared ∖ 已注册 → HTTP 探测 → 注册。
+            #     StatefulSet 同名重建的自动恢复路径（判死 PURGE 后声明仍在，
+            #     重建完成 host 解析新 IP、探测通过即回池）；30s 拍 = 恢复时窗
+            #     下界（判死 10s + 重建 + 本拍 + 服务启动，量级一分钟出头）。
+            if self.deploy_mode == "routing":
+                for scope_id in await self.state.declared_scope_ids():
+                    try:
+                        if not await self.state.has_scope_config(scope_id):
+                            # config 键缺失（FLUSHDB/极端态）：不动声明（误删
+                            # 客户声明不可逆），告警一次等 config_sync 恢复
+                            if scope_id not in self._adopt_scope_warned:
+                                self._adopt_scope_warned.add(scope_id)
+                                logger.warning(
+                                    "adopt skipped, scope config missing: "
+                                    "scope=%s", scope_id)
+                            continue
+                        adopted, pending = await self.orchestrator.adopt_declared(
+                            scope_id)
+                        if adopted or pending:
+                            logger.info(
+                                "adopt tick: scope=%s adopted=%d pending=%d",
+                                scope_id, adopted, pending)
+                    except Exception:  # noqa: BLE001 - per-scope 隔离,下拍重试
+                        failed += 1
+                        logger.exception("adopt scope failed: scope=%s", scope_id)
+
             # 1. Redis↔K8s：Redis 记录的 Pod 在 K8s 已不存在 → 清理（Watch 兜底）
             for pod_id in await self.state.all_pod_ids():
                 # per-Pod 隔离（同 watch_once：sorted 确定序，单点异常不得饿死后续）
                 try:
                     info = await self.state.pod_info(pod_id)
                     if not info:
+                        continue
+                    if info.get("external") == "1":
+                        # 外部 Pod 零 K8s 权限：无 get 对账可言，存活判据
+                        # 全在 watch 的 HTTP 探测；purge 后由 adopt 循环收养
                         continue
                     pod = await self.k8s.get_pod(
                         pod_id, info.get("namespace", "default"))
@@ -535,9 +588,14 @@ class ResourceSweeper:
         失败时本拍整体放弃**（记录留在 pods:all，watch/reconcile 下拍重试）——
         若继续 PURGE，存活的物理 Pod 会脱离 Redis 枚举源，而对账只做 Redis→K8s
         单向，之后没有任何任务会重试删它（孤儿无上界累积）。
+
+        外部 Pod（info.external=1，routing 模式）跳过 K8s delete——物理生死
+        归客户 StatefulSet 管，SA 也无 delete 权限（403 会触发上面的「本拍
+        放弃」把解注册卡死）；直接 PURGE + notify，StatefulSet 同名重建后由
+        adopt 循环收养。
         """
         info = await self.state.pod_info(pod_id)
-        if info:
+        if info and info.get("external") != "1":
             try:
                 await self.k8s.delete(pod_id, info.get("namespace", "default"))
             except Exception:  # noqa: BLE001 - 本拍放弃，下拍重试（见 docstring）

@@ -274,7 +274,8 @@ class Runtime:
     """组件全链路装配：SM（orchestrator/sweeper/facade/config_store）+ RM
     （orchestrator/sweeper/facade）+ FakeK8s，共享一个 fakeredis。"""
 
-    def __init__(self, db, redis_client, k8s, use_lua: bool | None = None):
+    def __init__(self, db, redis_client, k8s, use_lua: bool | None = None,
+                 deploy_mode: str = "full"):
         from agent_runtime.resource_manager.facade import ResourceManagerFacade
         from agent_runtime.resource_manager.orchestrator import ResourceOrchestrator
         from agent_runtime.resource_manager.sweeper import ResourceSweeper
@@ -291,7 +292,9 @@ class Runtime:
         self.rm_state = ResourceState(redis_client, use_lua=use_lua)
 
         self.sm_facade = SessionManagerFacade(self.sm_state)
-        self.rm_orchestrator = ResourceOrchestrator(self.rm_state, k8s)
+        self.rm_orchestrator = ResourceOrchestrator(
+            self.rm_state, k8s, deploy_mode=deploy_mode,
+            sm_facade=self.sm_facade)
         self.rm_facade = ResourceManagerFacade(self.rm_orchestrator)
         # 池参数推送记录（断言 config_sync / config_refresh 是否推 RM 用）
         self.pool_pushes: list[tuple[str, dict, dict | None]] = []
@@ -311,14 +314,17 @@ class Runtime:
             known_rm_scopes=self.rm_facade.known_scope_ids,
             bump_generation=_bump,
             sunset_pending_pods=self.rm_facade.sunset_pending_pods,
+            declared_pods=self.rm_facade.declared_pods,
+            drop_declared=self.rm_facade.drop_declared,
         )
         self.orchestrator = SessionOrchestrator(
             self.sm_state, self.config_store, self.rm_facade,
+            deploy_mode=deploy_mode,
         )
         self.sm_sweeper = SessionSweeper(self.sm_state, self.rm_facade)
         self.rm_sweeper = ResourceSweeper(
             self.rm_state, k8s, self.sm_facade,
-            orchestrator=self.rm_orchestrator,
+            orchestrator=self.rm_orchestrator, deploy_mode=deploy_mode,
         )
 
     async def seed_template(self, template_id="tpl-1", scope_id="scope-main",
@@ -368,3 +374,9 @@ def runtime(db_handler, redis_client, k8s):
 def runtime_no_lua(db_handler, redis_client, k8s):
     """无 Lua 模式的组件全链路（AGENT_RUNTIME_REDIS_LUA=off 的 State 等价）。"""
     return Runtime(db_handler, redis_client, k8s, use_lua=False)
+
+
+@pytest.fixture
+def routing_runtime(db_handler, redis_client, k8s):
+    """routing 供给模式组件全链路（AGENT_RUNTIME_DEPLOY_MODE=routing 等价）。"""
+    return Runtime(db_handler, redis_client, k8s, deploy_mode="routing")

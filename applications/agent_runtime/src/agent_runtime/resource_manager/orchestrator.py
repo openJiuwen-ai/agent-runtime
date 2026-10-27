@@ -19,10 +19,10 @@ from typing import Any
 from uuid import uuid4
 
 from ..containers import main_health_path, main_sse_port, normalize_pod_spec
-from ..errors import DeployFailed, MaxPodsReached, PodsStartingUp
+from ..errors import DeployFailed, InvalidParams, MaxPodsReached, PodsStartingUp
 from ..link_mtls import LinkMTLSConfig
 from ..spec_fields import DEPLOY_VER_FIELDS
-from ..util import fingerprint, now_ts
+from ..util import fingerprint, key_unsafe, now_ts
 from .k8s import DEFAULT_READY_TIMEOUT, K8sPodClient
 from .models import PodDeployInfo
 from .state import ResourceState
@@ -62,11 +62,15 @@ class ResourceOrchestrator:
         *,
         telemetry: Any = None,           # ScopeTelemetryBuffer(评估计数;None=旧测试)
         link_mtls_config: LinkMTLSConfig | None = None,
+        deploy_mode: str = "full",       # full | routing（AGENT_RUNTIME_DEPLOY_MODE）
+        sm_facade: Any = None,           # SessionManagerFacade（deregister 驱逐用;None=旧测试）
     ) -> None:
         self.state = rm_state
         self.k8s = k8s
         self.telemetry = telemetry
         self.link_mtls = link_mtls_config or LinkMTLSConfig.from_env()
+        self.deploy_mode = deploy_mode
+        self.sm_facade = sm_facade
 
     # -------------------------------------------------------------- acquire
 
@@ -144,6 +148,15 @@ class ResourceOrchestrator:
                     continue
 
                 # action == need_deploy：选主串行 deploy
+                if self.deploy_mode == "routing":
+                    # routing 供给模式永不 deploy：走到此处 = 暖池空且未达
+                    # max_pods 判定——外部供给容量已耗尽,快失败(错误路径清
+                    # 占位红线保持;deploy 锁/follower 等待室语义不进入)
+                    await self.state.clear_deploy_token(scope_id, token)
+                    outcome = "routing_exhausted"
+                    raise MaxPodsReached(
+                        f"scope {scope_id} external pool exhausted "
+                        f"(routing mode); register more pods")
                 lock_key = self.state.k.lock_deploy(scope_id)
                 lock_token = f"deploy-{token}"
                 if not await self.state.try_lock(lock_key, DEPLOY_LOCK_TTL, lock_token):
@@ -458,8 +471,13 @@ class ResourceOrchestrator:
         老代 Pod 还在合法服务，不等它（2026-09-15 e2e 实测 409 连坐病理）。
         """
         current = (await self.state.load_scope_config(scope_id)).get("generation") or ""
+        declared = set(await self.state.declared_names(scope_id))
         pending: list[str] = []
         for pod_id in await self.state.pod_ids(scope_id):
+            if pod_id in declared:
+                # 外部 Pod 代次无关(routing 模式):不豁免则空闲外部 Pod 不在
+                # SM 候选集、调用方的候选集过滤救不了它,refresh 永久 409
+                continue
             info = await self.state.pod_info(pod_id)
             if not info:
                 continue
@@ -473,6 +491,12 @@ class ResourceOrchestrator:
         """运维批删（灾难恢复 / 重部署 / 清孤儿）。不操作 Redis 编排态；
         被删 Pod 由 watch/reconcile 兜底发现（NotFound → PURGE + notify_pod_dead），
         清完后 autoscale 重建 min_idle_pods。"""
+        if self.deploy_mode == "routing":
+            # routing 模式下 Pod 是客户资产且 SA 无 delete 权限——按 label 批删
+            # 既不可达也绝不该发生;显式拒绝优于让 list_pods 撞 403
+            raise InvalidParams(
+                "cleanup is disabled in routing deploy mode (pods are "
+                "customer-managed; deregister via deregister_pods instead)")
         from .models import POD_LABEL_SELECTOR
 
         ns = namespace or self.k8s.default_namespace
@@ -497,6 +521,201 @@ class ResourceOrchestrator:
             logger.info("cleanup deleted pod: pod=%s namespace=%s", info.pod_id, ns)
         logger.warning("cleanup: namespace=%s selector=%s cleaned=%d", ns, selector, cleaned)
         return cleaned
+
+    # -------------------------------------------------------------- 外部供给（routing 模式）
+
+    async def _external_contract(self, scope_id: str) -> dict[str, Any]:
+        """从 scope:config 推导外部 Pod 的探测/编址契约（routing 模式）。
+
+        端口/路径不入注册载荷——模板即 agent-server 运行契约（客户 StatefulSet
+        须与之一致）；scope 无模板（无 pod_spec_json / 缺 main_container）→ 400。
+        推导出的参数在注册时烘焙进 pod:info，存量外部 Pod 的探测契约不随
+        后续模板变更漂移（与 full 模式 A 类变更同语义）。
+        """
+        cfg = await self.state.load_scope_config(scope_id)
+        try:
+            pod_spec = json.loads(cfg.get("pod_spec_json") or "{}")
+        except ValueError:
+            pod_spec = {}
+        main = pod_spec.get("main_container") if isinstance(pod_spec, dict) else None
+        if not isinstance(main, dict):
+            raise InvalidParams(
+                f"scope {scope_id} has no template (pod_spec missing); cannot "
+                f"derive external pod probe contract — config_sync first")
+        return {
+            "sse_port": main_sse_port(main),
+            "health_path": main_health_path(main),
+            "sse_path": str(pod_spec.get("sse_path") or "/sse"),
+            "namespace": str(pod_spec.get("namespace") or "")
+            or self.k8s.default_namespace,
+            "deploy_ver": cfg.get("deploy_ver") or "",
+        }
+
+    async def _adopt_one(
+        self, scope_id: str, name: str, host: str, contract: dict[str, Any],
+    ) -> tuple[bool, str]:
+        """单外部 Pod 收养内核：HTTP 探测通过即注册入池（注册/收养共用）。
+
+        探测 = GET http://{host}:{sse_port}{health_path}（probe_pod_health 纯
+        HTTP 路径，零 K8s 权限——客户环境无任何 pods 权限，这是唯一存活信号）。
+        host 兼任 pod_ip 语义：烘焙进 pod:info，健康探测/SSE 编址同源。
+        """
+        ok = await self.k8s.probe_pod_health(
+            pod_id=name, namespace=contract["namespace"], pod_ip=host,
+            sse_port=contract["sse_port"], health_path=contract["health_path"],
+        )
+        if not ok:
+            return False, ""
+        sse_url = self.link_mtls.agentserver_url(
+            pod_id=name, namespace=contract["namespace"],
+            port=contract["sse_port"], path=contract["sse_path"], pod_ip=host,
+        )
+        await self.state.register_pod(
+            pod_id=name, scope_id=scope_id, pod_sse_url=sse_url, pod_ip=host,
+            namespace=contract["namespace"], deploy_ver=contract["deploy_ver"],
+            deploy_token="", idle_flag=True, now=now_ts(),
+            sse_port=contract["sse_port"],
+            health_path=contract["health_path"], external=True,
+        )
+        logger.info("external pod adopted: scope=%s pod=%s host=%s url=%s",
+                    scope_id, name, host, sse_url)
+        return True, sse_url
+
+    async def register_pods(
+        self, scope_id: str, pods: list[dict[str, Any]] | None,
+    ) -> dict[str, Any]:
+        """POST /api/session/register_pods（routing 模式专用）。
+
+        声明持久化（先写后注册，未就绪/崩溃由 adopt 循环自愈）+ 逐个探测：
+        通过 → REGISTER(external=1, idle_flag=True) 入暖池；不通 → pending。
+        幂等：已注册 Pod 跳过（防在用 Pod 被 idle_flag=1 重放误标空闲）；
+        同名重注册 = 覆盖声明（host 变更即更新）。
+        """
+        if self.deploy_mode != "routing":
+            raise InvalidParams(
+                "register_pods is only available in routing deploy mode "
+                "(AGENT_RUNTIME_DEPLOY_MODE=routing)")
+        if not scope_id or key_unsafe(scope_id) or ":" in scope_id:
+            raise InvalidParams(f"invalid scope_id: {scope_id!r}")
+        entries: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        for item in pods or []:
+            record = item if isinstance(item, dict) else {}
+            name = str(record.get("name") or "").strip()
+            host = str(record.get("host") or "").strip()
+            if not name or not host:
+                raise InvalidParams(
+                    f"each pods entry requires non-empty name and host, got {item!r}")
+            if key_unsafe(name) or ":" in name:
+                raise InvalidParams(f"pod name unsafe for redis keys: {name!r}")
+            if "/" in host or any(c.isspace() for c in host):
+                raise InvalidParams(
+                    f"host must be a bare hostname (no spaces/slashes): {host!r}")
+            if name in seen:
+                continue
+            seen.add(name)
+            entries.append((name, host))
+        if not entries:
+            raise InvalidParams("pods must be a non-empty list")
+        contract = await self._external_contract(scope_id)
+        now = now_ts()
+        await self.state.add_declared(scope_id, {
+            name: json.dumps({"host": host, "declared_ts": now},
+                             ensure_ascii=False)
+            for name, host in entries
+        })
+        registered_ids = set(await self.state.pod_ids(scope_id))
+        registered: list[dict[str, str]] = []
+        already: list[str] = []
+        pending: list[dict[str, str]] = []
+        for name, host in entries:
+            info = await self.state.pod_info(name)
+            if name in registered_ids and info and info.get("scope_id") == scope_id:
+                already.append(name)
+                continue
+            ok, sse_url = await self._adopt_one(scope_id, name, host, contract)
+            if ok:
+                registered.append({"pod": name, "pod_sse_url": sse_url})
+            else:
+                pending.append({"pod": name, "reason": "probe_failed"})
+        logger.info(
+            "register_pods: scope=%s declared=%d registered=%d "
+            "already=%d pending=%d",
+            scope_id, len(entries), len(registered), len(already), len(pending))
+        return {
+            "scope_id": scope_id,
+            "registered": registered,
+            "already_registered": already,
+            "pending": pending,
+        }
+
+    async def deregister_pods(
+        self, scope_id: str, pods: list[str] | None,
+    ) -> dict[str, Any]:
+        """POST /api/session/deregister_pods：驱逐会话并注销（绝不物理删）。
+
+        注销是显式管理动作：Pod 上活跃会话直接驱逐（gateway 重路由），无
+        force 参数/无 POD_IN_USE 拒绝分支——响应回报驱逐数。
+        """
+        if self.deploy_mode != "routing":
+            raise InvalidParams(
+                "deregister_pods is only available in routing deploy mode "
+                "(AGENT_RUNTIME_DEPLOY_MODE=routing)")
+        names = [str(n or "").strip() for n in (pods or [])]
+        names = [n for n in names if n]
+        if not scope_id or not names:
+            raise InvalidParams(
+                "deregister_pods requires scope_id and non-empty pods")
+        evicted: list[str] = []
+        deregistered: list[str] = []
+        for name in names:
+            await self.state.remove_declared(scope_id, [name])
+            info = await self.state.pod_info(name)
+            if info and info.get("scope_id") == scope_id:
+                await self.state.purge(name)
+                if self.sm_facade is not None:
+                    try:
+                        result = await self.sm_facade.notify_pod_dead(name)
+                        evicted.extend(result.get("invalidated", []))
+                    except Exception:  # noqa: BLE001 - 30s reconcile 兜底重试
+                        logger.exception(
+                            "notify_pod_dead failed during deregister: pod=%s",
+                            name)
+            deregistered.append(name)
+        logger.info(
+            "deregister_pods: scope=%s pods=%s evicted_sessions=%d",
+            scope_id, deregistered, len(evicted))
+        return {"deregistered": deregistered, "evicted_sessions": len(evicted)}
+
+    async def adopt_declared(self, scope_id: str) -> tuple[int, int]:
+        """收养一拍（reconcile 调用）：declared ∖ 已注册 → 探测 → 注册。
+
+        StatefulSet 同名重建场景：Pod 判死后被 PURGE（声明仍在），重建完成
+        后 host 解析到新 IP、探测通过、本方法重新注册——全程无人工。
+        返回 (adopted, pending)；scope 无模板时上抛 InvalidParams（调用方
+        per-scope 隔离捕获）。
+        """
+        contract = await self._external_contract(scope_id)
+        registered = set(await self.state.pod_ids(scope_id))
+        adopted = pending = 0
+        for name, raw in (await self.state.declared_entries(scope_id)).items():
+            if name in registered:
+                continue
+            try:
+                meta = json.loads(raw)
+                host = str(meta.get("host") or "")
+            except ValueError:
+                logger.warning(
+                    "declared entry corrupt, skip: scope=%s pod=%s", scope_id, name)
+                continue
+            if not host:
+                continue
+            ok, _ = await self._adopt_one(scope_id, name, host, contract)
+            if ok:
+                adopted += 1
+            else:
+                pending += 1
+        return adopted, pending
 
     # -------------------------------------------------------------- 幂等缓存
 

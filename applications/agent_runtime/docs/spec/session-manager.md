@@ -8,7 +8,7 @@
 
 | 文件 | 职责 |
 |---|---|
-| `handlers.py` | 5 个 HTTP handler(route/touch/config_sync/config_refresh/cleanup)+ 错误信封映射 |
+| `handlers.py` | 5 个 HTTP handler(route/touch/rebind/config_sync/config_refresh/cleanup/register_pods/deregister_pods)+ 错误信封映射 |
 | `orchestrator.py` | route 主循环(匹配→Lua 仲裁→acquire)+ touch |
 | `state.py` | SM Redis 键 schema 唯一出口 + Lua 调用封装(`SMKeys`/`SessionState`) |
 | `lua_scripts.py` | 6 个 Lua 全文 |
@@ -29,6 +29,8 @@
 | POST /api/session/config_sync | `handle_config_sync` | 全量配置下发 `{containers, templates, scopes}`(三段式**独占**;无 containers 键的 legacy 内联载荷 → 400),委托 `ConfigStore.config_sync` |
 | POST /api/session/config_refresh | `handle_config_refresh` | 强制刷新(场景 M-R,**无载荷**;rawdata 非空 → 400),委托 `ConfigStore.config_refresh` |
 | POST /api/session/cleanup | `handle_cleanup` | 运维批删 Pod,委托 `rm_facade.cleanup`(handler 在 SM,逻辑在 RM) |
+| POST /api/session/register_pods | `handle_register_pods` | **routing 模式**(2026-10-routing-deploy-mode):外部预建 Pod 声明+注册,委托 rm_facade;端口/路径由 scope 模板推导;幂等不走 request_id 缓存 |
+| POST /api/session/deregister_pods | `handle_deregister_pods` | routing 模式:驱逐会话并注销外部 Pod(绝不物理删),委托 rm_facade |
 
 - 入参从 `Envelope.metadata`(session_id/user_id/group_id/bot_id/request_id)与 `rawdata` 取;`group_id` 在 `metadata.extra`,**user_id/group_id/bot_id/session_id 四项均必填非空**(orchestrator 校验,缺 → 400 VALIDATION;rebind 例外——只需 `session_id`(from)非空,scope/pod 从 from 绑定哈希读取,from/to 均不得含 `{`/`}`)。
 - `AgentRuntimeError` 统一捕获 → `ResponseEnvelope(ok=False, error_code, error_message, retry_after)`。

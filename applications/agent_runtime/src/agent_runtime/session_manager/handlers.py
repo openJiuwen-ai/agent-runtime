@@ -1,5 +1,5 @@
 # coding: utf-8
-"""SM 对外 HTTP handler（对外仅 6 个端点，prefix /api/session）：
+"""SM 对外 HTTP handler（对外仅 8 个端点，prefix /api/session）：
 
 - route           同步路由 + 占额度（幂等键 = metadata.request_id）
 - touch           保活 / EOS
@@ -7,6 +7,8 @@
 - config_sync     Claw Manager 配置全量下发（containers + templates + scopes）
 - config_refresh  强制刷新：全 scope Pod 优雅日落并按存量配置重建（无载荷）
 - cleanup         运维批删 Pod（handler 在 SM，委托 rm_facade.cleanup）
+- register_pods   routing 模式：外部预建 Pod 声明+注册（探测通过入池）
+- deregister_pods routing 模式：外部 Pod 注销（驱逐会话；绝不物理删）
 
 服务对象（orchestrator / config_store / rm_facade）挂在 sysctx 上（main 注入），
 handler 无模块级可变状态。业务异常在此映射为带 retry_after 的错误信封。
@@ -282,11 +284,58 @@ async def handle_rebind(ctx, env: Envelope) -> dict:
     return result
 
 
+async def handle_register_pods(ctx, env: Envelope) -> dict:
+    """POST /api/session/register_pods（routing 模式）：外部预建 Pod 注册。
+
+    载荷全必填：{scope_id, pods:[{name, host}]}；端口/路径由 scope 模板推导。
+    幂等由声明表/注册语义保证（同名覆盖、已注册跳过），不走 request_id 结果
+    缓存（同 rebind 先例——重放无副作用）。
+    """
+    _, _, rm_facade = _services(ctx)
+    rawdata = dict(env.rawdata or {})
+    scope_id = str(rawdata.get("scope_id") or "").strip()
+    pods = rawdata.get("pods")
+    t0 = time.monotonic()
+    try:
+        result = await rm_facade.register_pods(scope_id=scope_id, pods=pods)
+    except AgentRuntimeError as exc:
+        return _fail(env, exc, endpoint="register_pods",
+                     duration_ms=(time.monotonic() - t0) * 1000,
+                     scope_id=scope_id or "-", request_id=env.metadata.request_id)
+    except _INFRA_EXCEPTIONS as exc:
+        return _infra_fail(env, exc, endpoint="register_pods",
+                           duration_ms=(time.monotonic() - t0) * 1000,
+                           scope_id=scope_id or "-", request_id=env.metadata.request_id)
+    return result
+
+
+async def handle_deregister_pods(ctx, env: Envelope) -> dict:
+    """POST /api/session/deregister_pods（routing 模式）：驱逐会话并注销。"""
+    _, _, rm_facade = _services(ctx)
+    rawdata = dict(env.rawdata or {})
+    scope_id = str(rawdata.get("scope_id") or "").strip()
+    pods = rawdata.get("pods")
+    t0 = time.monotonic()
+    try:
+        result = await rm_facade.deregister_pods(scope_id=scope_id, pods=pods)
+    except AgentRuntimeError as exc:
+        return _fail(env, exc, endpoint="deregister_pods",
+                     duration_ms=(time.monotonic() - t0) * 1000,
+                     scope_id=scope_id or "-", request_id=env.metadata.request_id)
+    except _INFRA_EXCEPTIONS as exc:
+        return _infra_fail(env, exc, endpoint="deregister_pods",
+                           duration_ms=(time.monotonic() - t0) * 1000,
+                           scope_id=scope_id or "-", request_id=env.metadata.request_id)
+    return result
+
+
 def register_handlers(app) -> None:
-    """把 6 个 handler 注册到 App（msg_type 即 REST 路径段 /api/session/{type}）。"""
+    """把 8 个 handler 注册到 App（msg_type 即 REST 路径段 /api/session/{type}）。"""
     app.handle("route", summary="同步路由 + 占额度")(handle_route)
     app.handle("touch", summary="保活 / EOS，刷新老化")(handle_touch)
     app.handle("rebind", summary="session.create 临时 key 原子改绑为真实 id（to 空=驱逐）")(handle_rebind)
     app.handle("config_sync", summary="配置全量下发（containers + templates + scopes）")(handle_config_sync)
     app.handle("config_refresh", summary="强制刷新：全 scope Pod 优雅日落并按存量配置重建（无载荷）")(handle_config_refresh)
     app.handle("cleanup", summary="运维批删 AgentServer Pod")(handle_cleanup)
+    app.handle("register_pods", summary="routing 模式：外部预建 Pod 声明+注册（仅 AGENT_RUNTIME_DEPLOY_MODE=routing）")(handle_register_pods)
+    app.handle("deregister_pods", summary="routing 模式：外部 Pod 注销（驱逐会话，不物理删）")(handle_deregister_pods)
