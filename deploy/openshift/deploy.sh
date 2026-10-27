@@ -68,6 +68,13 @@ main() {
     info "卸载目标（倒序）: ${reversed[*]}"
     KCTL_IGNORE_NOT_FOUND=1 run_phase delete "卸载" "${reversed[@]}"
     gc_orphan_shared_deps   # secret/redis 已无存活依赖方时自动回收
+    # full 模式：runtime 创建的 AgentServer 是裸 Pod（无 owner 控制器），runtime
+    # 组件卸载后无人回收——按标签兜底清理。仅 full 生效：routing/off 的
+    # AgentServer Pod 由 StatefulSet 托管，按该标签清理会误删在役 Pod
+    if [ "${DEPLOY_VARS["AGENT_RUNTIME_DEPLOY_MODE"]}" = full ] \
+      && in_array runtime "${TARGETS[@]}"; then
+      kctl_delete_pods_by_label "$KCTL_NS" "jiuwenclaw-component=agentserver"
+    fi
   fi
 }
 

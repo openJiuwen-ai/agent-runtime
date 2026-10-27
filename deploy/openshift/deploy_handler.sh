@@ -64,14 +64,34 @@ resolve_targets() {
 filter_targets_by_deploy_mode() {
   local mode="${DEPLOY_VARS["AGENT_RUNTIME_DEPLOY_MODE"]}" comp
   [ "${SCOPE:-}" = manager ] && return 0
-  # 默认目标（未显式指定组件）与部署形态对称：非 off 时 up/down 均纳入 runtime——
-  # up 部署它，down 才能完整拆除（runtime 不删除会钉住 secret/redis 的孤儿回收）
-  # off 不部署 runtime，默认目标不含；模式切换遗留的 runtime 用显式 `down runtime` 清理
   if [ "${TARGETS_EXPLICIT}" = 0 ]; then
-    if [ "$mode" != off ] && ! in_array runtime "${TARGETS[@]}"; then
-      TARGETS+=("runtime")
-      sort_targets
+    if [ "$CMD" = up ]; then
+      local -a adjusted=()
+      for comp in "${TARGETS[@]}"; do
+        case "$mode:$comp" in
+          full:agentserver) continue;;   # full：AgentServer 由 runtime 按需创建，不预启动
+          off:runtime)      continue;;   # off：不部署 agent-runtime
+        esac
+        adjusted+=("$comp")
+      done
+      if [ "$mode" != off ] && ! in_array runtime "${adjusted[@]}"; then
+        adjusted+=("runtime")
+      fi
+      TARGETS=("${adjusted[@]}")
+    else
+      # down 与 up 对称，确保完整拆除（runtime 不删除会钉住 secret/redis 的孤儿回收）
+      if [ "$mode" != off ] && ! in_array runtime "${TARGETS[@]}"; then
+        TARGETS+=("runtime")
+      fi
+      if [ "$mode" = full ]; then
+        local -a kept=()
+        for comp in "${TARGETS[@]}"; do
+          [ "$comp" = agentserver ] || kept+=("$comp")
+        done
+        TARGETS=("${kept[@]}")
+      fi
     fi
+    sort_targets
     return 0
   fi
   # 显式目标不增删；仅 up 拦截与模式矛盾的组合
@@ -262,7 +282,9 @@ deploy_component() { # $1=组件 $2=序号 $3=总数
   local paths=()
   for f in $file_list; do
     [ -f "$CONF_DIR/$f" ] || error "$comp 缺少清单: $CONF_DIR/$f"
-    paths+=("$CONF_DIR/$f")
+    case "$f" in
+      *.yaml) paths+=("$CONF_DIR/$f");;   # 非 K8s 清单（agentserver.json）只渲染不 apply
+    esac
   done
   info "[$idx/$n] $comp（yaml: $file_list）"
   kctl_run apply "${paths[@]}"
@@ -323,7 +345,9 @@ delete_component() { # $1=组件 $2=序号 $3=总数
   file_list=$(component_files "$comp") || error "未知组件: $comp"
   local paths=()
   for f in $file_list; do
-    [ -f "$CONF_DIR/$f" ] && paths+=("$CONF_DIR/$f")   # 缺清单跳过（卸载容错）
+    case "$f" in
+      *.yaml) [ -f "$CONF_DIR/$f" ] && paths+=("$CONF_DIR/$f");;   # 缺清单跳过（卸载容错）；非 K8s 清单跳过
+    esac
   done
   info "[$idx/$n] $comp（yaml: $file_list）"
   if has_alive_dependents "$comp"; then

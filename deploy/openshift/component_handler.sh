@@ -30,7 +30,19 @@ component_files() {
     minio)          echo "minio.yaml";;
     secret)         echo "configmap-secret.yaml";;
     redis)          echo "redis.yaml";;
-    runtime)        echo "runtime.yaml";;
+    runtime)        if [ "${DEPLOY_VARS["AGENT_RUNTIME_DEPLOY_MODE"]}" = full ]; then
+                      # full：AgentServer 由 runtime 按需创建——预创建其 env ConfigMap 与
+                      # 工作区存储（openshift 形态 PVC；k8s 形态走 NFS 直连，卷在
+                      # agentserver.json 内由 apply_nfs_direct_mounts 改写），并渲染
+                      # config_sync 载荷（manager-web 导入运行时模板用，无沙箱容器）
+                      if is_k8s_cluster; then
+                        echo "agentserver-env.configmap.yaml runtime.yaml agentserver.json"
+                      else
+                        echo "agentserver-env.configmap.yaml claw-pvc.yaml runtime.yaml agentserver.json"
+                      fi
+                    else
+                      echo "runtime.yaml"
+                    fi;;
     agentserver)    if is_k8s_cluster; then
                       echo "agentserver-env.configmap.yaml agentserver.yaml"
                     else
@@ -52,7 +64,7 @@ component_label() {
     mysql)          echo "app=mysql";;
     postgresql)     echo "app=postgresql";;
     minio)          echo "app=minio";;
-    redis)          echo "app=redis";;
+    redis)          echo "app=jiuwenclaw-redis";;
     runtime)        echo "app=jiuwenclaw-agent-runtime";;
     agentserver)    echo "app=jiuwenclaw-agentserver";;
     gateway)        echo "app=jiuwenclaw-gateway";;
@@ -111,7 +123,7 @@ component_probe() {
     mysql)          echo "StatefulSet/mysql";;
     postgresql)     echo "StatefulSet/postgresql";;
     minio)          echo "StatefulSet/minio";;
-    redis)          echo "Deployment/redis";;
+    redis)          echo "Deployment/jiuwenclaw-redis";;
     runtime)        echo "Deployment/jiuwenclaw-agent-runtime";;
     agentserver)    echo "StatefulSet/jiuwenclaw-agentserver";;
     gateway)        echo "Deployment/jiuwenclaw-gateway";;

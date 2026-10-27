@@ -288,6 +288,28 @@ kctl_delete_resource() { # $1=资源文件
 
 # ---------- 高层入口 ----------
 
+# 按 label 批删 Pod（down 兜底：runtime 创建的裸 AgentServer Pod 无 owner 控制器，
+# 控制器组件卸载后需显式回收）。openshift 走 curl 通道 list→逐个 DELETE；
+# k8s 走 kubectl delete -l
+kctl_delete_pods_by_label() { # $1=namespace $2=labelSelector
+  local ns="$1" sel="$2" resp names name code
+  if is_k8s_cluster; then
+    kubectl delete pods -n "$ns" -l "$sel" --ignore-not-found >/dev/null 2>&1
+    return 0
+  fi
+  resp="$(kctl_tmpdir)/pods-list"
+  kctl_http GET "/api/v1/namespaces/$ns/pods?labelSelector=${sel//:/\\%3A}" "$resp" >/dev/null || return 0
+  names=$(yq -r '.items[].metadata.name' "$resp" 2>/dev/null) || return 0
+  for name in $names; do
+    code=$(kctl_http DELETE "/api/v1/namespaces/$ns/pods/$name" "$resp")
+    case "$code" in
+      200) info "pod 已删除: $name";;
+      404) ;;
+      *)   warning "pod 删除失败($code): $name";;
+    esac
+  done
+}
+
 # kctl_run VERB FILE...（VERB=apply|create|replace|delete）
 kctl_run() {
   [ $# -ge 1 ] || error "用法: kctl_run VERB FILE..."

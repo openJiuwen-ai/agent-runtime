@@ -152,7 +152,25 @@ apply_nfs_direct_mounts() { # $@=本次渲染的清单文件名
     rewritten+=("$cmp")
     [ "$external" = "true" ] || prepare_nfs_path "$cmp"   # 外部 NFS 跳过，内置自动创建
   done
+  # full 模式：agentserver.json（runtime 建 Pod 的 config_sync 载荷）data 卷同样
+  # 改写为 NFS 直连（与 agentserver.yaml 同源路径），目录一并就绪
+  if in_array "agentserver.json" "$@"; then
+    _nfs_rewrite_json "$CONF_DIR/agentserver.json" "$base/$ns/agentserver" "$server"
+    info "NFS 直连改写完成: agentserver.json → $server:$base/$ns/agentserver"
+    [ "$external" = "true" ] || prepare_nfs_path agentserver
+  fi
   return 0
+}
+
+# agentserver.json（full 模式 runtime 建 Pod 的 config_sync 载荷）数据卷 NFS 直连改写：
+# data 卷由 PVC 源改写为 NFS 源（server/path），与 agentserver.yaml 的直连约定同源
+# （<NFS_SHARE_PATH>/<NAMESPACE>/agentserver）。json 保持 JSON 格式输出（-o=json）
+_nfs_rewrite_json() { # $1=json文件 $2=nfs路径 $3=server
+  yq -i -o=json '
+    (.rawdata.templates[].volumes[]
+      | select(.persistentVolumeClaim.claimName == "jiuwenclaw-pvc")) |=
+    ({"name": .name,
+      "nfs": {"server": "'"${3}"'", "path": "'"${2}"'"}})' "$1"
 }
 
 # ---------- k8s 形态通道实现（由 kubectl.sh 的共享原语按形态分流调用） ----------
@@ -355,6 +373,7 @@ apply_k8s_extras() { # $@=本次渲染的清单文件名
   is_k8s_cluster || return 0
   local f
   for f in "$@"; do
+    case "$f" in *.yaml) ;; *) continue;; esac   # 非 K8s 清单（agentserver.json）不经 yq 改写
     # k8s 形态无 Route 资源（openshift 独有）：剥离清单中残留的 Route 文档（幂等）
     yq -i 'select(.kind != "Route")' "$CONF_DIR/$f"
     case "$f" in
@@ -382,6 +401,33 @@ apply_k8s_extras() { # $@=本次渲染的清单文件名
         append_nodeport_svc "$CONF_DIR/postgresql.yaml" postgresql-nodeport postgresql \
           "${DEPLOY_VARS["POSTGRESQL_NODE_PORT"]}" postgres 5432;;
     esac
+  done
+}
+
+# ---------- agent-runtime 三模式后处理 ----------
+
+# runtime 清单 full 模式后处理：注入 Pod 操作 RBAC（SA/Role/RoleBinding 文档前置 +
+# Deployment serviceAccountName），agent-runtime 获得 AgentServer 创建/删除/扩缩能力。
+# routing/off 不注入（零 K8s 权限形态：实例经 HTTP 注册、池经健康探测修复，不调 K8s API）。
+apply_runtime_mode_extras() { # $@=本次渲染的清单文件名
+  local mode="${DEPLOY_VARS["AGENT_RUNTIME_DEPLOY_MODE"]}"
+  local ns="${DEPLOY_VARS["NAMESPACE"]}" f
+  [ "$mode" = full ] || return 0
+  for f in "$@"; do
+    [ "${f%.yaml}" = runtime ] || continue
+    [ -f "$CONF_DIR/$f" ] || continue
+    {
+      echo "---"
+      yq -n '{"apiVersion":"v1","kind":"ServiceAccount","metadata":{"name":"jiuwenclaw-agent-runtime-sa","namespace":"'"${ns}"'"}}'
+      echo "---"
+      yq -n '{"apiVersion":"rbac.authorization.k8s.io/v1","kind":"Role","metadata":{"name":"jiuwenclaw-agent-runtime-pods","namespace":"'"${ns}"'"},"rules":[{"apiGroups":[""],"resources":["pods"],"verbs":["get","list","watch","create","delete"]},{"apiGroups":[""],"resources":["pods/log"],"verbs":["get"]}]}'
+      echo "---"
+      yq -n '{"apiVersion":"rbac.authorization.k8s.io/v1","kind":"RoleBinding","metadata":{"name":"jiuwenclaw-agent-runtime-pods-binding","namespace":"'"${ns}"'"},"subjects":[{"kind":"ServiceAccount","name":"jiuwenclaw-agent-runtime-sa","namespace":"'"${ns}"'"}],"roleRef":{"apiGroup":"rbac.authorization.k8s.io","kind":"Role","name":"jiuwenclaw-agent-runtime-pods"}}'
+      echo "---"
+      cat "$CONF_DIR/$f"
+    } > "$CONF_DIR/$f.tmp" && mv -f "$CONF_DIR/$f.tmp" "$CONF_DIR/$f"
+    yq -i '(select(.kind == "Deployment").spec.template.spec) |= (.serviceAccountName = "jiuwenclaw-agent-runtime-sa")' "$CONF_DIR/$f"
+    info "runtime 模式后处理：full → 注入 Pod 操作 RBAC"
   done
 }
 
