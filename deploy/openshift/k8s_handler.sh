@@ -404,30 +404,41 @@ apply_k8s_extras() { # $@=本次渲染的清单文件名
   done
 }
 
-# ---------- agent-runtime 三模式后处理 ----------
+# ---------- agent-runtime / manager-server 三模式后处理 ----------
 
-# runtime 清单 full 模式后处理：注入 Pod 操作 RBAC（SA/Role/RoleBinding 文档前置 +
-# Deployment serviceAccountName），agent-runtime 获得 AgentServer 创建/删除/扩缩能力。
-# routing/off 不注入（零 K8s 权限形态：实例经 HTTP 注册、池经健康探测修复，不调 K8s API）。
+# 按部署模式修整渲染产物：
+# - runtime + full：注入 Pod 操作 RBAC（SA/Role/RoleBinding 文档前置 +
+#   Deployment serviceAccountName），agent-runtime 获得 AgentServer 增删查能力；
+#   routing/off 不注入（零 K8s 权限形态）
+# - manager-server + 非 routing：剥除 AGENTSERVER_POD_DNS_LIST env 条目
+#   （静态注册清单仅 routing 消费；off/full 不需要该环境变量）
 apply_runtime_mode_extras() { # $@=本次渲染的清单文件名
-  local mode="${DEPLOY_VARS["AGENT_RUNTIME_DEPLOY_MODE"]}"
-  local ns="${DEPLOY_VARS["NAMESPACE"]}" f
-  [ "$mode" = full ] || return 0
+  local mode="${DEPLOY_VARS["AGENT_RUNTIME_DEPLOY_MODE"]}" f
   for f in "$@"; do
-    [ "${f%.yaml}" = runtime ] || continue
-    [ -f "$CONF_DIR/$f" ] || continue
-    {
-      echo "---"
-      yq -n '{"apiVersion":"v1","kind":"ServiceAccount","metadata":{"name":"jiuwenclaw-agent-runtime-sa","namespace":"'"${ns}"'"}}'
-      echo "---"
-      yq -n '{"apiVersion":"rbac.authorization.k8s.io/v1","kind":"Role","metadata":{"name":"jiuwenclaw-agent-runtime-pods","namespace":"'"${ns}"'"},"rules":[{"apiGroups":[""],"resources":["pods"],"verbs":["get","list","watch","create","delete"]},{"apiGroups":[""],"resources":["pods/log"],"verbs":["get"]}]}'
-      echo "---"
-      yq -n '{"apiVersion":"rbac.authorization.k8s.io/v1","kind":"RoleBinding","metadata":{"name":"jiuwenclaw-agent-runtime-pods-binding","namespace":"'"${ns}"'"},"subjects":[{"kind":"ServiceAccount","name":"jiuwenclaw-agent-runtime-sa","namespace":"'"${ns}"'"}],"roleRef":{"apiGroup":"rbac.authorization.k8s.io","kind":"Role","name":"jiuwenclaw-agent-runtime-pods"}}'
-      echo "---"
-      cat "$CONF_DIR/$f"
-    } > "$CONF_DIR/$f.tmp" && mv -f "$CONF_DIR/$f.tmp" "$CONF_DIR/$f"
-    yq -i '(select(.kind == "Deployment").spec.template.spec) |= (.serviceAccountName = "jiuwenclaw-agent-runtime-sa")' "$CONF_DIR/$f"
-    info "runtime 模式后处理：full → 注入 Pod 操作 RBAC"
+    case "${f%.yaml}" in
+      runtime)
+        [ "$mode" = full ] || continue
+        [ -f "$CONF_DIR/$f" ] || continue
+        {
+          echo "---"
+          yq -n '{"apiVersion":"v1","kind":"ServiceAccount","metadata":{"name":"jiuwenclaw-agent-runtime-sa","namespace":"'"${DEPLOY_VARS["NAMESPACE"]}"'"}}'
+          echo "---"
+          yq -n '{"apiVersion":"rbac.authorization.k8s.io/v1","kind":"Role","metadata":{"name":"jiuwenclaw-agent-runtime-pods","namespace":"'"${DEPLOY_VARS["NAMESPACE"]}"'"},"rules":[{"apiGroups":[""],"resources":["pods"],"verbs":["get","list","watch","create","delete"]},{"apiGroups":[""],"resources":["pods/log"],"verbs":["get"]}]}'
+          echo "---"
+          yq -n '{"apiVersion":"rbac.authorization.k8s.io/v1","kind":"RoleBinding","metadata":{"name":"jiuwenclaw-agent-runtime-pods-binding","namespace":"'"${DEPLOY_VARS["NAMESPACE"]}"'"},"subjects":[{"kind":"ServiceAccount","name":"jiuwenclaw-agent-runtime-sa","namespace":"'"${DEPLOY_VARS["NAMESPACE"]}"'"}],"roleRef":{"apiGroup":"rbac.authorization.k8s.io","kind":"Role","name":"jiuwenclaw-agent-runtime-pods"}}'
+          echo "---"
+          cat "$CONF_DIR/$f"
+        } > "$CONF_DIR/$f.tmp" && mv -f "$CONF_DIR/$f.tmp" "$CONF_DIR/$f"
+        yq -i '(select(.kind == "Deployment").spec.template.spec) |= (.serviceAccountName = "jiuwenclaw-agent-runtime-sa")' "$CONF_DIR/$f"
+        info "runtime 模式后处理：full → 注入 Pod 操作 RBAC"
+        ;;
+      manager-server)
+        [ "$mode" = routing ] && continue
+        [ -f "$CONF_DIR/$f" ] || continue
+        yq -i '(select(.kind == "Deployment").spec.template.spec.containers[0].env) |= map(select(.name != "AGENTSERVER_POD_DNS_LIST"))' "$CONF_DIR/$f"
+        info "manager-server 模式后处理：$mode → 剥除静态注册清单 env"
+        ;;
+    esac
   done
 }
 

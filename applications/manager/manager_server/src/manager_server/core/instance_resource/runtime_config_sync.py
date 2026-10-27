@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import ast
+import os
 import re
 import uuid
 from datetime import UTC, datetime
@@ -419,4 +420,78 @@ async def sync_runtime_config(
         templates=len(rawdata["templates"]),
         scopes=len(rawdata["scopes"]),
     )
+    # routing 模式：按实例配置的静态 Pod 数量注册外部 AgentServer（幂等）。
+    # Pod 名固定 {prefix}-{0..N-1}（StatefulSet 稳定命名），host 为 headless
+    # service DNS（Pod 重建后域名自愈）。pending 由 runtime 后台 adopt 循环自愈。
+    try:
+        await register_external_pods(handler, jiuwenclaw_id, rawdata=rawdata)
+    except Exception:
+        _log.exception(
+            "register external pods failed jiuwenclaw_id=%s", jiuwenclaw_id)
     return body
+
+
+async def register_external_pods(
+    handler: DBHandler,
+    jiuwenclaw_id: str,
+    *,
+    rawdata: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """routing 模式：注册外部 AgentServer Pod（幂等，pending 由 adopt 自愈）。
+
+    Pod 清单来自部署注入的 ``AGENTSERVER_POD_DNS_LIST``（逗号分隔的
+    headless service DNS，与 StatefulSet 副本数同源）；Pod 名取 DNS 首段。
+    非 routing 模式 / 未注入清单 / 无 runtime endpoint 时返回 None。
+    """
+    if os.getenv("AGENT_RUNTIME_DEPLOY_MODE", "").strip().lower() != "routing":
+        return None
+    dns_env = os.getenv("AGENTSERVER_POD_DNS_LIST", "").strip()
+    if not dns_env:
+        _log.info(
+            "register external pods skipped: AGENTSERVER_POD_DNS_LIST not set "
+            "jiuwenclaw_id=%s", jiuwenclaw_id,
+        )
+        return None
+    if rawdata is None:
+        rawdata = await build_runtime_config(handler, jiuwenclaw_id)
+    scope_ids = [
+        str(s.get("scope_id"))
+        for s in rawdata.get("scopes", [])
+        if s.get("scope_id")
+    ]
+    if not scope_ids:
+        return None
+    pods = []
+    for entry in dns_env.split(","):
+        host = entry.strip()
+        if host:
+            pods.append({"name": host.split(".")[0], "host": host})
+    if not pods:
+        return None
+    result: dict[str, Any] = {"pods": len(pods), "scopes": {}}
+    for scope_id in scope_ids:
+        envelope = {
+            "type": "register_pods",
+            "metadata": {
+                "request_id": f"manager-register-{uuid.uuid4().hex}",
+                "session_id": None,
+                "user_id": "manager",
+                "bot_id": "manager",
+                "extra": {"group_id": jiuwenclaw_id},
+            },
+            "rawdata": {"scope_id": scope_id, "pods": pods},
+        }
+        result["scopes"][scope_id] = await runtime_request(
+            jiuwenclaw_id,
+            "POST",
+            "/api/session/register_pods",
+            envelope,
+            handler=handler,
+        )
+        _log.info(
+            "external agentserver pods registered",
+            jiuwenclaw_id=jiuwenclaw_id,
+            scope_id=scope_id,
+            pods=len(pods),
+        )
+    return result

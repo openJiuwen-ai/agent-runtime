@@ -20,7 +20,27 @@ resolve_deploy_mode_vars() {
   case "$mode" in
     routing|full)
       DEPLOY_VARS["GATEWAY_AGENT_CLIENT_MODE"]="runtime"
-      DEPLOY_VARS["GATEWAY_RUNTIME_MANAGER_URL"]="http://jiuwenclaw-agent-runtime:8091";;
+      DEPLOY_VARS["GATEWAY_RUNTIME_MANAGER_URL"]="http://jiuwenclaw-agent-runtime:8091"
+      # routing：manager 据此清单注册外部 AgentServer Pod（与 StatefulSet
+      # 副本数同源：jiuwenclaw-agentserver-{0..N-1} 的 headless DNS，Pod 重建自愈）
+      if [ "$mode" = routing ]; then
+        local dns="" i
+        for ((i = 0; i < DEPLOY_VARS["AGENT_SERVER_REPLICAS"]; i++)); do
+          [ -n "$dns" ] && dns+=","
+          dns+="jiuwenclaw-agentserver-${i}.jiuwenclaw-agentserver-headless.${DEPLOY_VARS["NAMESPACE"]}.svc.cluster.local"
+        done
+        DEPLOY_VARS["AGENTSERVER_POD_DNS_LIST"]="$dns"
+      else
+        DEPLOY_VARS["AGENTSERVER_POD_DNS_LIST"]=""
+      fi
+      # runtime 镜像不在 IMAGE_VARS（off 模式无需配置，不做全局必填）；
+      # 必填与格式白名单在 routing/full 分支补齐（与 check_image_vars 同规则，
+      # 防渲染占位符替换的 awk gsub 特殊字符问题）
+      local img="${DEPLOY_VARS["AGENT_RUNTIME_IMAGE"]:-}"
+      [ -n "$img" ] \
+        || error "AGENT_RUNTIME_IMAGE 未设置（$mode 模式必填，检查 $CUSTOM_ENV_FILE）"
+      [[ "$img" =~ ^[A-Za-z0-9._:@/-]+$ ]] \
+        || error "AGENT_RUNTIME_IMAGE 含非法字符（仅允许字母数字._:@/-）: $img";;
     off)
       DEPLOY_VARS["GATEWAY_AGENT_CLIENT_MODE"]=""
       DEPLOY_VARS["GATEWAY_RUNTIME_MANAGER_URL"]=""
