@@ -33,7 +33,7 @@ gen_gateway_env_file() {
         | yq eval 'del(.metadata.creationTimestamp)' > "${CONFIG["GATEWAY_ENV_YAML_FILE"]}"
 }
 
-# 清空 claw 扩展 extension.yaml 的 dependencies（镜像内已预装，避免运行期装包）。
+# 清空 swarm 扩展 extension.yaml 的 dependencies（镜像内已预装，避免运行期装包）。
 # 文件不存在时静默跳过
 clear_extension_deps() {
     local ext_yaml
@@ -52,11 +52,11 @@ gen_gateway_file() {
     enable_dev_mode_if_needed "${file}" gateway
 
     # No need to install packages
-    if [[ "${mode}" == "dev" && -n "${DEPLOY_VARS["CLAW_CODE_PATH"]:-}" ]]; then
-        local claw_code="${DEPLOY_VARS["CLAW_CODE_PATH"]}"
+    if [[ "${mode}" == "dev" && -n "${DEPLOY_VARS["SWARM_CODE_PATH"]:-}" ]]; then
+        local swarm_code="${DEPLOY_VARS["SWARM_CODE_PATH"]}"
         clear_extension_deps \
-            "${claw_code}/packages/jiuwenclaw-ee/gateway/extensions/runtime_management_extension/extension.yaml" \
-            "${claw_code}/packages/jiuwenclaw-ee/gateway/extensions/manager_config_receiver/extension.yaml"
+            "${swarm_code}/packages/jiuwenswarm-ee/gateway/extensions/runtime_management_extension/extension.yaml" \
+            "${swarm_code}/packages/jiuwenswarm-ee/gateway/extensions/manager_config_receiver/extension.yaml"
     fi
 
     add_resource_if_set "GATEWAY" "${file}"

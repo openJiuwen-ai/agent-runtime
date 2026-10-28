@@ -2,7 +2,7 @@
 # 说明：
 #   - 存储类经 DATA_STORAGE_CLASS 变量配置（.env.custom，留空走集群默认）挂 /data；
 #     StatefulSet + 独立 PVC minio-pvc（单副本，RWO 数据随 PVC 保留，升级/重建不丢）
-#   - root 凭证经 jiuwenclaw-secret-configmap 注入；适配 restricted-v2 SCC（fsGroup 由 SCC 自动注入）
+#   - root 凭证经 jiuwenswarm-secret-configmap 注入；适配 restricted-v2 SCC（fsGroup 由 SCC 自动注入）
 #   - 镜像经 MINIO_IMAGE 变量配置（.env.custom）
 #   - 仅一个 Service：minio-headless（headless，clusterIP=None）——同时充当 StatefulSet 治理服务与
 #     OBS_URL 的 DNS（OBS_URL=minio-headless.<ns>:9000 解析到 Pod IP；单副本 standalone 语义下
@@ -10,7 +10,7 @@
 #   - 存量环境从 Deployment 升级：先 down minio 再 up minio（同 selector 双控制器会抢 Pod；
 #     minio-pvc 数据保留）
 # 访问：oc port-forward svc/minio 9000:9000（S3 API）、9001:9001（Console）
-# 凭证：见 jiuwenclaw-secret-configmap（MINIO_ROOT_USER / MINIO_ROOT_PASSWORD）
+# 凭证：见 jiuwenswarm-secret-configmap（MINIO_ROOT_USER / MINIO_ROOT_PASSWORD）
 apiVersion: v1
 kind: Service
 metadata:
@@ -68,7 +68,7 @@ spec:
             - ":9001"
           envFrom:
             - secretRef:
-                name: jiuwenclaw-secret-configmap
+                name: jiuwenswarm-secret-configmap
           ports:
             - containerPort: 9000
               name: api

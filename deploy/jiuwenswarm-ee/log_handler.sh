@@ -2,8 +2,8 @@
 set -euo >/dev/null 2>&1
 
 render_log_files() {
-    if [ -z "${DEPLOY_VARS["CLAW_LOG_DIR"]:-}" ]; then
-        DEPLOY_VARS["CLAW_LOG_DIR"]="${HOME}/claw_logs"
+    if [ -z "${DEPLOY_VARS["SWARM_LOG_DIR"]:-}" ]; then
+        DEPLOY_VARS["SWARM_LOG_DIR"]="${HOME}/swarm_logs"
     fi
 
     # 根据脱敏开关决定 file_out sink 的输入来源：

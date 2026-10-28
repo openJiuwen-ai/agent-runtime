@@ -452,7 +452,7 @@ export function ContainerTemplateModal({ open, template, onClose, onSaved }: Pro
           <FieldLabel>{t('containerTemplate.envFrom')}</FieldLabel>
           <textarea
             className="input min-h-[4.5rem] font-mono text-[12px]"
-            placeholder='[{"secretRef":{"name":"jiuwenclaw-secret-configmap"}}]'
+            placeholder='[{"secretRef":{"name":"jiuwenswarm-secret-configmap"}}]'
             value={form.env_from_json}
             onChange={(e) => update('env_from_json', e.target.value)}
           />

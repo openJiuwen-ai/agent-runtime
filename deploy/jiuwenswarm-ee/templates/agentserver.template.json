@@ -35,8 +35,8 @@
           }
         ],
         "securityContext": {
-          "runAsUser": <<CLAW_USER>>,
-          "runAsGroup": <<CLAW_GROUP>>
+          "runAsUser": <<SWARM_USER>>,
+          "runAsGroup": <<SWARM_GROUP>>
         },
         "readinessProbe": {
           "httpGet": {
@@ -49,7 +49,7 @@
         "volumeMounts": [
           {
             "name": "hp-code",
-            "mountPath": "<<CLAW_POD_CODE_PATH>>"
+            "mountPath": "<<SWARM_POD_CODE_PATH>>"
           },
           {
             "name": "hp-rt-foundation",
@@ -65,7 +65,7 @@
           },
           {
             "name": "data",
-            "mountPath": "<<CLAW_HOME>>/.jiuwenswarm"
+            "mountPath": "<<SWARM_HOME>>/.jiuwenswarm"
           }
         ]
       },
@@ -86,7 +86,7 @@
           },
           {
             "name": "JIUWENBOX_POLICY_PATH",
-            "value": "<<CLAW_POD_CODE_PATH>>/jiuwenbox/src/jiuwenbox/configs/enterprise-policy.yaml"
+            "value": "<<SWARM_POD_CODE_PATH>>/jiuwenbox/src/jiuwenbox/configs/enterprise-policy.yaml"
           },
           {
             "name": "TZ",
@@ -123,11 +123,11 @@
           },
           {
             "name": "hp-code",
-            "mountPath": "<<CLAW_POD_CODE_PATH>>"
+            "mountPath": "<<SWARM_POD_CODE_PATH>>"
           },
           {
             "name": "data",
-            "mountPath": "<<CLAW_HOME>>/.jiuwenswarm"
+            "mountPath": "<<SWARM_HOME>>/.jiuwenswarm"
           }
         ]
       }
@@ -135,7 +135,7 @@
     "templates": [
       {
         "template_id": "default",
-        "fsGroup": <<CLAW_FS_GROUP>>,
+        "fsGroup": <<SWARM_FS_GROUP>>,
         "template_name": "default",
         "main_container_id": "c-agentserver",
         "sidecar_container_ids": [
@@ -155,7 +155,7 @@
           {
             "name": "hp-code",
             "hostPath": {
-              "path": "<<CLAW_CODE_PATH>>",
+              "path": "<<SWARM_CODE_PATH>>",
               "type": "Directory"
             }
           },

@@ -495,7 +495,7 @@ export function ServiceConfigTemplateModal({ open, template, onClose, onSaved }:
           <label className="label">{t('serviceConfigTemplate.volumes')}</label>
           <textarea
             className="input min-h-[8rem] font-mono text-[12px]"
-            placeholder='[{"name":"data","persistentVolumeClaim":{"claimName":"jiuwenclaw-pvc"}}]'
+            placeholder='[{"name":"data","persistentVolumeClaim":{"claimName":"jiuwenswarm-pvc"}}]'
             value={form.volumes_json}
             onChange={(e) => update('volumes_json', e.target.value)}
           />
