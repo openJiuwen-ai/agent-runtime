@@ -19,9 +19,9 @@ type HostMode = 'auto' | 'manual';
 const DEFAULT_NAMESPACE = 'default';
 
 const HOST_SVC = {
-  gateway: 'jiuwenclaw-gateway',
-  runtime: 'jiuwenclaw-agent-runtime',
-  web: 'jiuwenclaw-web',
+  gateway: 'jiuwenswarm-gateway',
+  runtime: 'jiuwenswarm-agent-runtime',
+  web: 'jiuwenswarm-web',
 } as const;
 
 const HOST_PORT = {

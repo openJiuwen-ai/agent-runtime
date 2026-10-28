@@ -32,6 +32,7 @@ from manager_server.models.application_config_models import (
     CRON_POLICY_TABLE_DEF,
     LOG_MASKING_RULE_TABLE_DEF,
     LOGGING_CONFIG_TABLE_DEF,
+    PACKAGE_ALLOWLIST_TABLE_DEF,
 )
 from manager_server.models.instance_access_models import INSTANCE_GRANT_TABLE_DEF
 from manager_server.models.instance_models import INSTANCE_INFO_TABLE_DEF
@@ -192,6 +193,7 @@ TABLE_SPECS: tuple[TableSpec, ...] = (
 SETTINGS_DEFS = (
     LOGGING_CONFIG_TABLE_DEF,
     CRON_POLICY_TABLE_DEF,
+    PACKAGE_ALLOWLIST_TABLE_DEF,
     _TASK_MEMORY_CONFIG_TABLE_DEF,
     _MEMORY_CONFIG_TABLE_DEF,
     AUDIT_LOG_CONFIG_TABLE_DEF,
@@ -233,6 +235,7 @@ _IMPORT_ORDER = (
     "instance_grant",
     "logging_config",
     "cron_policy",
+    "package_allowlist",
     "task_memory_config",
     "memory_config",
     "audit_log_config",

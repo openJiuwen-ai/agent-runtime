@@ -73,7 +73,7 @@ main() {
     # AgentServer Pod 由 StatefulSet 托管，按该标签清理会误删在役 Pod
     if [ "${DEPLOY_VARS["AGENT_RUNTIME_DEPLOY_MODE"]}" = full ] \
       && in_array runtime "${TARGETS[@]}"; then
-      kctl_delete_pods_by_label "$KCTL_NS" "jiuwenclaw-component=agentserver"
+      kctl_delete_pods_by_label "$KCTL_NS" "jiuwenswarm-component=agentserver"
     fi
   fi
 }

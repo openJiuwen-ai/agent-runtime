@@ -15,7 +15,7 @@ _ENSURED_NODE_PORTS=""
 # ---------- NFS 直连挂载改写 ----------
 # 改写范围（yq 动态修改渲染产物 conf/*.yaml）：mariadb/mysql/postgresql/agentserver/minio → 删 PVC 文档，卷改为 nfs
 # redis 纯缓存不挂卷（模板已关闭 AOF），不参与改写
-# claw-pvc.yaml 由 component_files 按形态剔除，k8s 形态不渲染不部署。
+# swarm-pvc.yaml 由 component_files 按形态剔除，k8s 形态不渲染不部署。
 # ENABLE_EXTERNAL_NFS=true（外部 NFS）时目录由使用方自行管理
 
 # 在内置 NFS server Pod 内创建组件数据目录（mkdir -p + chmod 777，随机 uid 可写）；
@@ -168,7 +168,7 @@ apply_nfs_direct_mounts() { # $@=本次渲染的清单文件名
 _nfs_rewrite_json() { # $1=json文件 $2=nfs路径 $3=server
   yq -i -o=json '
     (.rawdata.templates[].volumes[]
-      | select(.persistentVolumeClaim.claimName == "jiuwenclaw-pvc")) |=
+      | select(.persistentVolumeClaim.claimName == "jiuwenswarm-pvc")) |=
     ({"name": .name,
       "nfs": {"server": "'"${3}"'", "path": "'"${2}"'"}})' "$1"
 }
@@ -304,9 +304,9 @@ _port_taken() { # → 0=占用 1=空闲
 #   .env.custom 已配置 → 校验占用（含本次运行已分配），被占即报错
 #   未配置             → 优先复用本 namespace 同名 Service 已持有的端口（复跑稳定），
 #                        否则从 NODE_PORT_RANGE_START~END 自动挑选首个空闲端口写入 DEPLOY_VARS
-ensure_node_port() { # $1=DEPLOY_VARS 变量名（如 MANAGER_WEB_NODE_PORT）[$2=复用检查的 Service 名，默认 jiuwenclaw-manager-web-nodeport]
+ensure_node_port() { # $1=DEPLOY_VARS 变量名（如 MANAGER_WEB_NODE_PORT）[$2=复用检查的 Service 名，默认 jiuwenswarm-manager-web-nodeport]
   local name="$1"
-  local reuse_svc="${2:-jiuwenclaw-manager-web-nodeport}"
+  local reuse_svc="${2:-jiuwenswarm-manager-web-nodeport}"
   local configured="${DEPLOY_VARS[$name]:-}"
   # 占用集合一次性预取（避免逐端口查询 APIServer）；查询失败按空处理（视为无占用）。
   # 复用检查仅排除「本 namespace 的」$reuse_svc：其他 namespace 同名 Service 占用的
@@ -379,8 +379,8 @@ apply_k8s_extras() { # $@=本次渲染的清单文件名
     case "$f" in
       manager-web.yaml)
         ensure_node_port MANAGER_WEB_NODE_PORT
-        append_nodeport_svc "$CONF_DIR/manager-web.yaml" jiuwenclaw-manager-web-nodeport \
-          jiuwenclaw-manager-web "${DEPLOY_VARS["MANAGER_WEB_NODE_PORT"]}" http 5273;;
+        append_nodeport_svc "$CONF_DIR/manager-web.yaml" jiuwenswarm-manager-web-nodeport \
+          jiuwenswarm-manager-web "${DEPLOY_VARS["MANAGER_WEB_NODE_PORT"]}" http 5273;;
       minio.yaml)
         ensure_node_port MINIO_API_NODE_PORT minio-api-nodeport
         ensure_node_port MINIO_CONSOLE_NODE_PORT minio-console-nodeport
@@ -421,15 +421,15 @@ apply_runtime_mode_extras() { # $@=本次渲染的清单文件名
         [ -f "$CONF_DIR/$f" ] || continue
         {
           echo "---"
-          yq -n '{"apiVersion":"v1","kind":"ServiceAccount","metadata":{"name":"jiuwenclaw-agent-runtime-sa","namespace":"'"${DEPLOY_VARS["NAMESPACE"]}"'"}}'
+          yq -n '{"apiVersion":"v1","kind":"ServiceAccount","metadata":{"name":"jiuwenswarm-agent-runtime-sa","namespace":"'"${DEPLOY_VARS["NAMESPACE"]}"'"}}'
           echo "---"
-          yq -n '{"apiVersion":"rbac.authorization.k8s.io/v1","kind":"Role","metadata":{"name":"jiuwenclaw-agent-runtime-pods","namespace":"'"${DEPLOY_VARS["NAMESPACE"]}"'"},"rules":[{"apiGroups":[""],"resources":["pods"],"verbs":["get","list","watch","create","delete"]},{"apiGroups":[""],"resources":["pods/log"],"verbs":["get"]}]}'
+          yq -n '{"apiVersion":"rbac.authorization.k8s.io/v1","kind":"Role","metadata":{"name":"jiuwenswarm-agent-runtime-pods","namespace":"'"${DEPLOY_VARS["NAMESPACE"]}"'"},"rules":[{"apiGroups":[""],"resources":["pods"],"verbs":["get","list","watch","create","delete"]},{"apiGroups":[""],"resources":["pods/log"],"verbs":["get"]}]}'
           echo "---"
-          yq -n '{"apiVersion":"rbac.authorization.k8s.io/v1","kind":"RoleBinding","metadata":{"name":"jiuwenclaw-agent-runtime-pods-binding","namespace":"'"${DEPLOY_VARS["NAMESPACE"]}"'"},"subjects":[{"kind":"ServiceAccount","name":"jiuwenclaw-agent-runtime-sa","namespace":"'"${DEPLOY_VARS["NAMESPACE"]}"'"}],"roleRef":{"apiGroup":"rbac.authorization.k8s.io","kind":"Role","name":"jiuwenclaw-agent-runtime-pods"}}'
+          yq -n '{"apiVersion":"rbac.authorization.k8s.io/v1","kind":"RoleBinding","metadata":{"name":"jiuwenswarm-agent-runtime-pods-binding","namespace":"'"${DEPLOY_VARS["NAMESPACE"]}"'"},"subjects":[{"kind":"ServiceAccount","name":"jiuwenswarm-agent-runtime-sa","namespace":"'"${DEPLOY_VARS["NAMESPACE"]}"'"}],"roleRef":{"apiGroup":"rbac.authorization.k8s.io","kind":"Role","name":"jiuwenswarm-agent-runtime-pods"}}'
           echo "---"
           cat "$CONF_DIR/$f"
         } > "$CONF_DIR/$f.tmp" && mv -f "$CONF_DIR/$f.tmp" "$CONF_DIR/$f"
-        yq -i '(select(.kind == "Deployment").spec.template.spec) |= (.serviceAccountName = "jiuwenclaw-agent-runtime-sa")' "$CONF_DIR/$f"
+        yq -i '(select(.kind == "Deployment").spec.template.spec) |= (.serviceAccountName = "jiuwenswarm-agent-runtime-sa")' "$CONF_DIR/$f"
         info "runtime 模式后处理：full → 注入 Pod 操作 RBAC"
         ;;
       manager-server)
@@ -461,7 +461,7 @@ apply_sandbox_type_extras() { # $@=本次渲染的清单文件名
       agentserver.yaml)
         [ -f "$CONF_DIR/$f" ] || continue
         # 更新运算符写法：不匹配的文档（headless/ClusterIP Service）原样保留
-        yq -i '(select(.kind == "StatefulSet" and .metadata.name == "jiuwenclaw-agentserver").spec.template.spec) |= (.runtimeClassName = "kata")' "$CONF_DIR/$f"
+        yq -i '(select(.kind == "StatefulSet" and .metadata.name == "jiuwenswarm-agentserver").spec.template.spec) |= (.runtimeClassName = "kata")' "$CONF_DIR/$f"
         [ "$(yq 'select(.kind == "StatefulSet").spec.template.spec.runtimeClassName' "$CONF_DIR/$f")" = "kata" ] \
           || error "runtimeClassName 注入校验失败: $f"
         info "沙箱后处理：agentserver.yaml 注入 runtimeClassName: kata";;
@@ -493,9 +493,9 @@ add_code_mount() { # $1=清单文件 $2=卷名 $3=宿主机路径 $4=容器内�
   ' "$file"
 }
 
-mount_claw_code() { # jiuwenclaw 仓库 → 镜像内代码根
-  [ -n "${DEPLOY_VARS["CLAW_CODE_PATH"]:-}" ] || return 0
-  add_code_mount "$1" "claw-code" "${DEPLOY_VARS["CLAW_CODE_PATH"]}" "${DEPLOY_VARS["CLAW_POD_CODE_PATH"]}"
+mount_swarm_code() { # jiuwenswarm 仓库 → 镜像内代码根
+  [ -n "${DEPLOY_VARS["SWARM_CODE_PATH"]:-}" ] || return 0
+  add_code_mount "$1" "swarm-code" "${DEPLOY_VARS["SWARM_CODE_PATH"]}" "${DEPLOY_VARS["SWARM_POD_CODE_PATH"]}"
 }
 
 mount_runtime_code() { # agent-runtime 仓库 → 镜像内代码根
@@ -517,10 +517,10 @@ mount_core_pkg() { # agent-core 的 openjiuwen 包 → site-packages
 
 mount_web_nginx_template() { # web：仓库 nginx 模板与可选 upstream 脚本盖到镜像 entrypoint 读取路径
   add_code_mount "$1" "web-nginx-template" \
-    "${DEPLOY_VARS["CLAW_CODE_PATH"]}/docker/web.nginx.conf.template" \
+    "${DEPLOY_VARS["SWARM_CODE_PATH"]}/docker/web.nginx.conf.template" \
     "/etc/nginx/templates/default.conf.template" "File"
   add_code_mount "$1" "web-optional-upstreams" \
-    "${DEPLOY_VARS["CLAW_CODE_PATH"]}/docker/web-optional-upstreams.sh" \
+    "${DEPLOY_VARS["SWARM_CODE_PATH"]}/docker/web-optional-upstreams.sh" \
     "/docker-entrypoint.d/40-optional-upstreams.sh" "File"
 }
 
@@ -567,10 +567,10 @@ apply_dev_code_mounts() { # $@=本次渲染的清单文件名
     comp="${f%.yaml}"
     case "$comp" in
       agentserver|gateway)
-        mount_claw_code "$CONF_DIR/$f"; mount_runtime_pkg "$CONF_DIR/$f"; mount_core_pkg "$CONF_DIR/$f";;
+        mount_swarm_code "$CONF_DIR/$f"; mount_runtime_pkg "$CONF_DIR/$f"; mount_core_pkg "$CONF_DIR/$f";;
       web)
         [ "${DEPLOY_VARS["IS_MOUNT_WEB_CODE"]}" = "true" ] || continue
-        mount_claw_code "$CONF_DIR/$f"; mount_web_nginx_template "$CONF_DIR/$f";;
+        mount_swarm_code "$CONF_DIR/$f"; mount_web_nginx_template "$CONF_DIR/$f";;
       identity|manager-server)
         mount_runtime_code "$CONF_DIR/$f";;
       manager-web)
@@ -607,7 +607,7 @@ resolve_dev_mode_vars() {
     error "MODE=dev + --render-only 需在 .env.custom 显式配置 CURRENT_NODE_NAME"
   fi
 
-  [ -n "${DEPLOY_VARS["CLAW_CODE_PATH"]}" ] && require_abs_dir CLAW_CODE_PATH
+  [ -n "${DEPLOY_VARS["SWARM_CODE_PATH"]}" ] && require_abs_dir SWARM_CODE_PATH
   local v
   for v in RUNTIME_CODE_PATH CORE_CODE_PATH; do
     [ -n "${DEPLOY_VARS[$v]}" ] && require_abs_dir "$v"

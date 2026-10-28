@@ -95,7 +95,7 @@ Modules (Optional):
   web       Web frontend module
   runtime   Agent-Runtime module (dynamic agentserver pods; requires AGENT_RUNTIME_ENABLED=true)
   agentserver  AgentServer module (Deployment+Service; requires AGENT_RUNTIME_ENABLED=false)
-  manager   CLAW Manager module
+  manager   Manager module
 
 Options:
   -n NAMESPACE              Specify Kubernetes namespace (defaults to default if unspecified)

@@ -5,7 +5,7 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: jiuwenclaw-redis
+  name: jiuwenswarm-redis
   namespace: <<NAMESPACE>>
 spec:
   ports:
@@ -13,22 +13,22 @@ spec:
       port: 6379
       targetPort: 6379
   selector:
-    app: jiuwenclaw-redis
+    app: jiuwenswarm-redis
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: jiuwenclaw-redis
+  name: jiuwenswarm-redis
   namespace: <<NAMESPACE>>
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: jiuwenclaw-redis
+      app: jiuwenswarm-redis
   template:
     metadata:
       labels:
-        app: jiuwenclaw-redis
+        app: jiuwenswarm-redis
     spec:
       containers:
         - name: redis

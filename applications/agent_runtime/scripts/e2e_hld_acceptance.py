@@ -433,7 +433,7 @@ async def clean_previous(c: Client, r: aioredis.Redis) -> None:
             "TRUNCATE routing_scope; SET FOREIGN_KEY_CHECKS=1;",
             stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
     out = await kubectl("delete", "pod", "-n", NS, "-l",
-                        "jiuwenclaw-component=agentserver", "--wait=false")
+                        "jiuwenswarm-component=agentserver", "--wait=false")
     print(f"-- 清理上一轮残留 Pod：{out.strip().splitlines()[-1][:80] if out.strip() else '无'}")
 
 
@@ -444,7 +444,7 @@ async def stage1_seed(c: Client, r) -> None:
     # 前置观察：清场后（无任何配置）集群零 AgentServer Pod——配置驱动预热的基线
     async def no_pods() -> bool:
         out = await kubectl("get", "pods", "-n", NS, "-l",
-                            "jiuwenclaw-component=agentserver", "--no-headers")
+                            "jiuwenswarm-component=agentserver", "--no-headers")
         return not out.strip() or "No resources found" in out
     check("H0-无配置时零 AgentServer Pod（不因服务启动而拉起）",
           await wait_until(no_pods, 30, 2))
@@ -1357,7 +1357,7 @@ async def stage12_reconcile_cleanup(c: Client, r) -> None:
     code, raw, _ = await c.post("cleanup", rawdata={"namespace": NS})
     cleaned = raw.get("cleaned", -1)
     out = await kubectl("get", "pods", "-n", NS, "-l",
-                        "jiuwenclaw-component=agentserver")
+                        "jiuwenswarm-component=agentserver")
     # 牙齿=「被删的 Pod 从 K8s 消失」,不断言 ns 恒零——min_idle scope
     # (e2e-warm 常开,--with-mounts 再加 e2e-mnt)的 autoscale 重建热备会与
     # 本即时采样竞速,「No resources found」与 H0 配置驱动预热自相矛盾
@@ -1426,7 +1426,7 @@ async def stage13_error_contract(c: Client, r) -> None:
     # 3) 刚清空的验收 ns 也不行：min_idle 模板的 autoscale 1s 内就重建热备。
     code, raw, body = await c.post("cleanup", rawdata={
         "namespace": NS,
-        "label_selector": "jiuwenclaw-component=agentserver-no-such"})
+        "label_selector": "jiuwenswarm-component=agentserver-no-such"})
     check("cleanup 空目标（无匹配 selector）→ 200 cleaned=0",
           code == 200 and raw.get("cleaned") == 0, str(raw))
 
@@ -1565,7 +1565,7 @@ RT_SCOPE, RT_STS, RT_SVC = "e2e-rt", "e2e-as", "e2e-as-svc"
 
 def _rt_sts_manifest() -> str:
     """headless Service + StatefulSet(镜像/探测契约与模板同源:IMAGE+8086+HEALTH_PATH)。
-    不打 jiuwenclaw-component 标签——即便误跑 full 模式,cleanup 默认 selector 也不命中。"""
+    不打 jiuwenswarm-component 标签——即便误跑 full 模式,cleanup 默认 selector 也不命中。"""
     return f"""
 apiVersion: v1
 kind: Service

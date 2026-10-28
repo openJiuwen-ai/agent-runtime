@@ -84,11 +84,11 @@ add_code_mount() {
     ' -i "${file}"
 }
 
-mount_claw_code() {
-    [ -z "${DEPLOY_VARS["CLAW_CODE_PATH"]:-}" ] && return
-    add_code_mount "$1" "claw-code" \
-        "${DEPLOY_VARS["CLAW_CODE_PATH"]}" \
-        "${DEPLOY_VARS["CLAW_POD_CODE_PATH"]}"
+mount_swarm_code() {
+    [ -z "${DEPLOY_VARS["SWARM_CODE_PATH"]:-}" ] && return
+    add_code_mount "$1" "swarm-code" \
+        "${DEPLOY_VARS["SWARM_CODE_PATH"]}" \
+        "${DEPLOY_VARS["SWARM_POD_CODE_PATH"]}"
 }
 
 mount_runtime_code() {
@@ -109,13 +109,13 @@ mount_manager_web_nginx_template() {
 
 # web：把仓库 nginx 模板与可选 upstream 脚本盖到镜像内 entrypoint 读取的路径。
 mount_web_nginx_template() {
-    [ -z "${DEPLOY_VARS["CLAW_CODE_PATH"]:-}" ] && return
+    [ -z "${DEPLOY_VARS["SWARM_CODE_PATH"]:-}" ] && return
     add_code_mount "$1" "web-nginx-template" \
-        "${DEPLOY_VARS["CLAW_CODE_PATH"]}/docker/web.nginx.conf.template" \
+        "${DEPLOY_VARS["SWARM_CODE_PATH"]}/docker/web.nginx.conf.template" \
         "/etc/nginx/templates/default.conf.template" \
         "File"
     add_code_mount "$1" "web-optional-upstreams" \
-        "${DEPLOY_VARS["CLAW_CODE_PATH"]}/docker/web-optional-upstreams.sh" \
+        "${DEPLOY_VARS["SWARM_CODE_PATH"]}/docker/web-optional-upstreams.sh" \
         "/docker-entrypoint.d/40-optional-upstreams.sh" \
         "File"
 }
@@ -153,13 +153,13 @@ enable_dev_mode_if_needed() {
     local file="$1" comp="$2"
     case "${comp}" in
         gateway | agentserver)
-            mount_claw_code "${file}"
+            mount_swarm_code "${file}"
             mount_runtime_pkg "${file}"
             mount_core_pkg "${file}"
             ;;
         web)
             [ "${DEPLOY_VARS["IS_MOUNT_WEB_CODE"]}" != "true" ] && return
-            mount_claw_code "${file}"
+            mount_swarm_code "${file}"
             mount_web_nginx_template "${file}"
             ;;
         manager-server | runtime | identity)

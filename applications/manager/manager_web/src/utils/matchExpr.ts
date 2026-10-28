@@ -296,6 +296,47 @@ export function matchExprToEditorString(expr: string | string[] | null | undefin
   return String(expr).trim();
 }
 
+export interface MatchExprScopeCopy {
+  resolveName: (field: MatchField, id: string) => string;
+  phrase: (field: MatchField, op: MatchOp, names: string[]) => string;
+  andSep: string;
+  orSep: string;
+  groupOpen: string;
+  groupClose: string;
+}
+
+/** 空范围返回 null。能解析成条件树时交给 phrase 组成短句，解析不了则退回原表达式。 */
+export function describeMatchExprScope(
+  expr: string | string[] | null | undefined,
+  copy: MatchExprScopeCopy,
+): { display: string; raw: string } | null {
+  const raw = matchExprToEditorString(expr);
+  if (!raw) return null;
+  const model = parseMatchExpr(raw);
+  if (model.mode === 'all') return null;
+  if (model.raw?.trim()) return { display: model.raw.trim(), raw };
+  const display = renderScopeNode(model.root, true, copy);
+  return { display: display || raw, raw };
+}
+
+function renderScopeNode(node: MatchNode, isRoot: boolean, copy: MatchExprScopeCopy): string | null {
+  if (node.kind === 'cond') {
+    const names = node.values
+      .map((value) => value.trim())
+      .filter(Boolean)
+      .map((id) => copy.resolveName(node.field, id).trim() || id);
+    if (names.length === 0) return null;
+    return copy.phrase(node.field, node.op, names);
+  }
+  const parts = node.children
+    .map((child) => renderScopeNode(child, false, copy))
+    .filter((part): part is string => Boolean(part));
+  if (parts.length === 0) return null;
+  if (parts.length === 1) return parts[0];
+  const joined = parts.join(node.op === 'or' ? copy.orSep : copy.andSep);
+  return isRoot ? joined : `${copy.groupOpen}${joined}${copy.groupClose}`;
+}
+
 export function treeHasFilledCondition(node: MatchNode): boolean {
   if (node.kind === 'cond') return node.values.some((v) => v.trim());
   return node.children.some(treeHasFilledCondition);

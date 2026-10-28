@@ -59,20 +59,20 @@ check_vars() {
 
     #   dev     -> root（hostPath 挂载源码）          HOME=/root
     #   product -> app（镜像内 USER app，uid 1000）   HOME=/home/app
-    # CLAW_HOME： HOME目录
-    # CLAW_FS_GROUP：（PVC/NFS）要靠 kubelet 按属组 授权
-    # CLAW_USER: 运行时用户
-    # CLAW_GROUP： 运行时组
+    # SWARM_HOME： HOME目录
+    # SWARM_FS_GROUP：（PVC/NFS）要靠 kubelet 按属组 授权
+    # SWARM_USER: 运行时用户
+    # SWARM_GROUP： 运行时组
     if [ "${DEPLOY_VARS["MODE"]}" == "dev" ]; then
-        DEPLOY_VARS["CLAW_HOME"]="/root"
-        DEPLOY_VARS["CLAW_FS_GROUP"]="0"
-        DEPLOY_VARS["CLAW_USER"]="0"
-        DEPLOY_VARS["CLAW_GROUP"]="0"
+        DEPLOY_VARS["SWARM_HOME"]="/root"
+        DEPLOY_VARS["SWARM_FS_GROUP"]="0"
+        DEPLOY_VARS["SWARM_USER"]="0"
+        DEPLOY_VARS["SWARM_GROUP"]="0"
     else
-        DEPLOY_VARS["CLAW_HOME"]="/home/app"
-        DEPLOY_VARS["CLAW_FS_GROUP"]="1000"
-        DEPLOY_VARS["CLAW_USER"]="1000"
-        DEPLOY_VARS["CLAW_GROUP"]="1000"
+        DEPLOY_VARS["SWARM_HOME"]="/home/app"
+        DEPLOY_VARS["SWARM_FS_GROUP"]="1000"
+        DEPLOY_VARS["SWARM_USER"]="1000"
+        DEPLOY_VARS["SWARM_GROUP"]="1000"
     fi
 
     # dev 模式渲染时会把 Deployment 固定到当前节点（hostPath 是节点本地的）。
@@ -152,7 +152,7 @@ check_if_nfs_up() {
 
 check_if_nfs_sc_up() {
     # Check if external PVC
-    if [ -n "${DEPLOY_VARS["CLAW_PVC"]:-}" ]; then
+    if [ -n "${DEPLOY_VARS["SWARM_PVC"]:-}" ]; then
         info "Use external PVC"
         DEPLOY_VARS["ENABLE_EXTERNAL_PVC"]="true"
         return
@@ -163,7 +163,7 @@ check_if_nfs_sc_up() {
         error "NFS_SC is not deployed. Please deploy it first with: ./$(basename "$0") up nfs-sc"
     fi
 
-    DEPLOY_VARS["CLAW_PVC"]="jiuwenclaw-pvc"
+    DEPLOY_VARS["SWARM_PVC"]="jiuwenswarm-pvc"
 }
 
 # 变量规则一：
@@ -519,15 +519,15 @@ prepare_nfs_path() {
 }
 
 check_log_up_dependency(){
-    if [ -z "${DEPLOY_VARS["CLAW_LOG_DIR"]:-}" ]; then
-        DEPLOY_VARS["CLAW_LOG_DIR"]="${HOME}/claw_logs"
+    if [ -z "${DEPLOY_VARS["SWARM_LOG_DIR"]:-}" ]; then
+        DEPLOY_VARS["SWARM_LOG_DIR"]="${HOME}/swarm_logs"
     fi
 
     if [ "${DEPLOY_VARS["RENDER_ONLY"]}" == "true" ]; then
         return
     fi
 
-    local log_dir="${DEPLOY_VARS["CLAW_LOG_DIR"]}"
+    local log_dir="${DEPLOY_VARS["SWARM_LOG_DIR"]}"
     exec_cmd mkdir -p "${log_dir}"
     exec_cmd chmod 755 "${log_dir}"
 }
@@ -599,9 +599,9 @@ check_manager_up_dependency(){
 }
 
 check_runtime_up_dependency(){
-    if [ "${DEPLOY_VARS["CLAW_MOUNT_TYPE"]}" == "nfs" ]; then
-        prepare_nfs_path "jiuwenclaw/${DEPLOY_VARS["NAMESPACE"]}"
-    elif [ "${DEPLOY_VARS["CLAW_MOUNT_TYPE"]}" == "pvc" ]; then
+    if [ "${DEPLOY_VARS["SWARM_MOUNT_TYPE"]}" == "nfs" ]; then
+        prepare_nfs_path "jiuwenswarm/${DEPLOY_VARS["NAMESPACE"]}"
+    elif [ "${DEPLOY_VARS["SWARM_MOUNT_TYPE"]}" == "pvc" ]; then
         check_if_nfs_sc_up
     fi
 
@@ -620,9 +620,9 @@ check_runtime_up_dependency(){
 }
 
 check_agentserver_up_dependency() {
-    if [ "${DEPLOY_VARS["CLAW_MOUNT_TYPE"]}" == "nfs" ]; then
-        prepare_nfs_path "jiuwenclaw/${DEPLOY_VARS["NAMESPACE"]}"
-    elif [ "${DEPLOY_VARS["CLAW_MOUNT_TYPE"]}" == "pvc" ]; then
+    if [ "${DEPLOY_VARS["SWARM_MOUNT_TYPE"]}" == "nfs" ]; then
+        prepare_nfs_path "jiuwenswarm/${DEPLOY_VARS["NAMESPACE"]}"
+    elif [ "${DEPLOY_VARS["SWARM_MOUNT_TYPE"]}" == "pvc" ]; then
         check_if_nfs_sc_up
     fi
 

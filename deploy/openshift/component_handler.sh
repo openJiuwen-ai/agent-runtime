@@ -38,7 +38,7 @@ component_files() {
                       if is_k8s_cluster; then
                         echo "agentserver-env.configmap.yaml runtime.yaml agentserver.json"
                       else
-                        echo "agentserver-env.configmap.yaml claw-pvc.yaml runtime.yaml agentserver.json"
+                        echo "agentserver-env.configmap.yaml swarm-pvc.yaml runtime.yaml agentserver.json"
                       fi
                     else
                       # routing：预启动 AgentServer（StatefulSet）+ config_sync 载荷
@@ -48,7 +48,7 @@ component_files() {
     agentserver)    if is_k8s_cluster; then
                       echo "agentserver-env.configmap.yaml agentserver.yaml"
                     else
-                      echo "agentserver-env.configmap.yaml claw-pvc.yaml agentserver.yaml"
+                      echo "agentserver-env.configmap.yaml swarm-pvc.yaml agentserver.yaml"
                     fi;;
     gateway)        echo "gateway-env.configmap.yaml gateway.yaml";;
     web)            echo "web.yaml";;
@@ -66,14 +66,14 @@ component_label() {
     mysql)          echo "app=mysql";;
     postgresql)     echo "app=postgresql";;
     minio)          echo "app=minio";;
-    redis)          echo "app=jiuwenclaw-redis";;
-    runtime)        echo "app=jiuwenclaw-agent-runtime";;
-    agentserver)    echo "app=jiuwenclaw-agentserver";;
-    gateway)        echo "app=jiuwenclaw-gateway";;
-    web)            echo "app=jiuwenclaw-web";;
-    identity)       echo "app=jiuwenclaw-identity";;
-    manager-server) echo "app=jiuwenclaw-manager-server";;
-    manager-web)    echo "app=jiuwenclaw-manager-web";;
+    redis)          echo "app=jiuwenswarm-redis";;
+    runtime)        echo "app=jiuwenswarm-agent-runtime";;
+    agentserver)    echo "app=jiuwenswarm-agentserver";;
+    gateway)        echo "app=jiuwenswarm-gateway";;
+    web)            echo "app=jiuwenswarm-web";;
+    identity)       echo "app=jiuwenswarm-identity";;
+    manager-server) echo "app=jiuwenswarm-manager-server";;
+    manager-web)    echo "app=jiuwenswarm-manager-web";;
   esac
 }
 
@@ -120,19 +120,19 @@ component_ns() {
 # redis/gateway/web 等其余产品组件为 Deployment；k8s 形态共享实例（default）亦为同款形态
 component_probe() {
   case "$1" in
-    secret)         echo "Secret/jiuwenclaw-secret-configmap";;
+    secret)         echo "Secret/jiuwenswarm-secret-configmap";;
     mariadb)        echo "StatefulSet/mariadb";;
     mysql)          echo "StatefulSet/mysql";;
     postgresql)     echo "StatefulSet/postgresql";;
     minio)          echo "StatefulSet/minio";;
-    redis)          echo "Deployment/jiuwenclaw-redis";;
-    runtime)        echo "Deployment/jiuwenclaw-agent-runtime";;
-    agentserver)    echo "StatefulSet/jiuwenclaw-agentserver";;
-    gateway)        echo "Deployment/jiuwenclaw-gateway";;
-    web)            echo "Deployment/jiuwenclaw-web";;
-    identity)       echo "Deployment/jiuwenclaw-identity";;
-    manager-server) echo "Deployment/jiuwenclaw-manager-server";;
-    manager-web)    echo "Deployment/jiuwenclaw-manager-web";;
+    redis)          echo "Deployment/jiuwenswarm-redis";;
+    runtime)        echo "Deployment/jiuwenswarm-agent-runtime";;
+    agentserver)    echo "StatefulSet/jiuwenswarm-agentserver";;
+    gateway)        echo "Deployment/jiuwenswarm-gateway";;
+    web)            echo "Deployment/jiuwenswarm-web";;
+    identity)       echo "Deployment/jiuwenswarm-identity";;
+    manager-server) echo "Deployment/jiuwenswarm-manager-server";;
+    manager-web)    echo "Deployment/jiuwenswarm-manager-web";;
     *)              return 1;;
   esac
 }

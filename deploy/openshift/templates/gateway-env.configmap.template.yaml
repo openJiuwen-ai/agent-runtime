@@ -1,14 +1,14 @@
-# jiuwenclaw-gateway-env ConfigMap（gateway 经 envFrom 注入）
+# jiuwenswarm-gateway-env ConfigMap（gateway 经 envFrom 注入）
 # 说明：数据库 / redis / 对象存储等地址均指向本 namespace（<<NAMESPACE>>）内的服务
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: jiuwenclaw-gateway-envfile
+  name: jiuwenswarm-gateway-envfile
   namespace: <<NAMESPACE>>
 data:
-  AGENT_SERVER_URL: ws://jiuwenclaw-agentserver:18092
+  AGENT_SERVER_URL: ws://jiuwenswarm-agentserver:18092
   DEPLOYMENT_MODE: distributed
-  EXTENSION_DIRS: /app/jiuwenswarm/packages/jiuwenclaw-ee/gateway/extensions
+  EXTENSION_DIRS: /app/jiuwenswarm/packages/jiuwenswarm-ee/gateway/extensions
   GATEWAY_AGENT_CLIENT_MODE: <<GATEWAY_AGENT_CLIENT_MODE>>
   GATEWAY_AGENT_HTTP_MAX_CONNECTIONS: "200"
   GATEWAY_AGENT_HTTP_MAX_KEEPALIVE: "20"
@@ -16,7 +16,7 @@ data:
   GATEWAY_CONFIG_HTTP_PORT: "8775"
   GATEWAY_CONFIG_POLL_ENABLED: "true"
   GATEWAY_CONFIG_POLL_INTERVAL_SECONDS: "10"
-  GATEWAY_CONFIG_PUBLIC_HOST: jiuwenclaw-gateway
+  GATEWAY_CONFIG_PUBLIC_HOST: jiuwenswarm-gateway
   GATEWAY_CONFIG_RECEIVER_ENABLED: "true"
   GATEWAY_DB_HOST: <<DB_HOST>>
   GATEWAY_DB_NAME: gateway_<<NAMESPACE>>
@@ -24,8 +24,8 @@ data:
   GATEWAY_DB_TYPE: <<DB_TYPE>>
   GATEWAY_DB_USER: <<DB_USER>>
   GATEWAY_HOST: 0.0.0.0
-  GATEWAY_INSTANCE_ID: jiuwenclaw-gateway-<<NAMESPACE>>
-  GATEWAY_MANAGER_HTTP_URL: http://jiuwenclaw-manager-server:8765
+  GATEWAY_INSTANCE_ID: jiuwenswarm-gateway-<<NAMESPACE>>
+  GATEWAY_MANAGER_HTTP_URL: http://jiuwenswarm-manager-server:8765
   GATEWAY_PORT: "19001"
   GATEWAY_RUNTIME_MANAGER_URL: <<GATEWAY_RUNTIME_MANAGER_URL>>
   GATEWAY_SESSION_MAP_SCOPE: per_chat_bot_user
@@ -44,12 +44,12 @@ data:
   OBS_SECURE: "<<OBS_SECURE>>"
   OBS_URL: <<OBS_URL>>
   OTEL_ENABLED: "true"
-  OTEL_EXPORTER_OTLP_ENDPOINT: http://jiuwenclaw-otel-collector:4318
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://jiuwenswarm-otel-collector:4318
   OTEL_EXPORTER_OTLP_PROTOCOL: http
   OTEL_EXPORTER_TYPE: otlp
   OTEL_LOGS_EXPORTER: otlp
   OTEL_METRICS_EXPORTER: none
-  OTEL_SERVICE_NAME: jiuwenclaw-gateway
+  OTEL_SERVICE_NAME: jiuwenswarm-gateway
   OTEL_TRACES_EXPORTER: none
   REDIS_DB: "0"
   REDIS_MODE: <<REDIS_MODE>>

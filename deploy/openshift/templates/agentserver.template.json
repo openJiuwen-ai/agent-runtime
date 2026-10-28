@@ -13,7 +13,7 @@
     "containers": [
       {
         "container_id": "c-agentserver",
-        "name": "jiuwenclaw-agentserver",
+        "name": "jiuwenswarm-agentserver",
         "image": "<<AGENTSERVER_IMAGE>>",
         "imagePullPolicy": "IfNotPresent",
         "ports": [
@@ -25,12 +25,12 @@
         "envFrom": [
           {
             "secretRef": {
-              "name": "jiuwenclaw-secret-configmap"
+              "name": "jiuwenswarm-secret-configmap"
             }
           },
           {
             "configMapRef": {
-              "name": "jiuwenclaw-agentserver-env"
+              "name": "jiuwenswarm-agentserver-env"
             }
           }
         ],
@@ -55,7 +55,7 @@
         "template_id": "default",
         "template_name": "default",
         "main_container_id": "c-agentserver",
-        "pod_name": "jiuwenclaw-agentserver",
+        "pod_name": "jiuwenswarm-agentserver",
         "namespace": "<<NAMESPACE>>",
         "sse_path": "/api/v1/events/stream",
         "scope_concurrency": 400,
@@ -68,7 +68,7 @@
           {
             "name": "data",
             "persistentVolumeClaim": {
-              "claimName": "jiuwenclaw-pvc"
+              "claimName": "jiuwenswarm-pvc"
             }
           }
         ]
