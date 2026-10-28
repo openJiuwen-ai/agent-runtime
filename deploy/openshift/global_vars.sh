@@ -105,6 +105,7 @@ declare -A DEPLOY_VARS=(
     ["AGENT_RUNTIME_DEPLOY_MODE"]="routing"
     # 禁 EVAL 兼容模式（on 与历史行为一致；客户 Redis 禁用 EVAL 时设 off）
     ["AGENT_RUNTIME_REDIS_LUA"]="off"
+    ["SANDBOX_TYPE"]="off"
 
     ["MARIADB_IMAGE"]="mariadb:11.8"
     ["MYSQL_IMAGE"]="mysql:8.0"

@@ -276,6 +276,7 @@ check_k8s_cluster_version() {
 
 
 # ======== Check if the cluster has at least 2 nodes ========
+# 不足 2 个 Ready 节点仅警告放行（单节点/实验集群不被阻塞，生产环境请扩容）
 check_cluster_has_enough_nodes() {
     if [ "${CMD}" == "down"  ]; then
         return
@@ -287,7 +288,8 @@ check_cluster_has_enough_nodes() {
 
     # Check if node count >= 2
     if [[ ${node_count} -lt 2 ]]; then
-        error "Cluster only has ${node_count} Ready node(s), at least 2 required!"
+        warning "Cluster only has ${node_count} Ready node(s), at least 2 recommended. Continuing anyway..."
+        return
     fi
 
     success "Cluster has ${node_count} Ready nodes, check passed!"

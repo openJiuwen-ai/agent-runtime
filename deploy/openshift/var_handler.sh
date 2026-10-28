@@ -51,6 +51,24 @@ resolve_deploy_mode_vars() {
   esac
 }
 
+# 沙箱类型：枚举校验（off | jiuwenbox | kata），注入逻辑见 k8s_handler.sh
+# apply_sandbox_type_extras（渲染后处理）
+# - off：保持原样，不注入沙箱运行时
+# - kata：AgentServer 沙箱 Pod 注入 runtimeClassName: kata（集群须预装 Kata
+#   Containers 并创建 RuntimeClass kata，否则 Pod 无法启动）
+# - jiuwenbox：预留类型，暂未实现——按 off 处理并提示
+resolve_sandbox_type_vars() {
+  local val="${DEPLOY_VARS["SANDBOX_TYPE"]:-}"
+  case "$val" in
+    off|kata) ;;
+    jiuwenbox)
+      warning "SANDBOX_TYPE=jiuwenbox 尚未实现，本次按 off 处理（保持原样）"
+      DEPLOY_VARS["SANDBOX_TYPE"]="off";;
+    *)
+      error "SANDBOX_TYPE 非法（off | jiuwenbox | kata）: $val";;
+  esac
+}
+
 # namespace：k8s DNS label 规范
 check_namespace_var() {
   local val="${DEPLOY_VARS["NAMESPACE"]:-}"
@@ -333,6 +351,7 @@ check_vars() {
   check_image_vars
   check_replicas_vars
   resolve_deploy_mode_vars         # 三模式派生：gateway 条件 env + off 单副本校验
+  resolve_sandbox_type_vars        # 沙箱类型枚举校验（jiuwenbox 预留降级为 off）
   check_storage_class_vars
   check_optional_vars
   check_identity_sso_vars          # 企业 SSO 三元组"全空或全配"校验（up + identity 时生效，门禁在函数内）
