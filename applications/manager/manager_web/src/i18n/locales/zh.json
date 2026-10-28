@@ -268,7 +268,8 @@
       "cost": "成本统计",
       "audit": "业务审计",
       "resources": "集群资源",
-      "workspaceQuota": "用户空间配额"
+      "workspaceQuota": "用户空间配额",
+      "teamQuota": "团队配额"
     },
     "placeholder": {
       "empty": "功能开发中，敬请期待"
@@ -440,6 +441,48 @@
         "policyId": "命中策略",
         "reportedAt": "计量时间",
         "empty": "暂无用量缓存。用户打开用量或文件列表后会出现在此。"
+      }
+    },
+    "teamQuota": {
+      "title": "团队配额",
+      "subtitle": "按匹配范围配置本集群每用户最多团队数、每组织最多团队数、每团队最多人数（含 Leader）",
+      "tabs": {
+        "policy": "配额策略管理",
+        "usage": "团队占用统计"
+      },
+      "new": "新建策略",
+      "edit": "编辑策略",
+      "policyName": "策略名称",
+      "policyDesc": "策略描述",
+      "priority": "优先级",
+      "priorityHint": "越大越优先。多条命中时取优先级最高的一条；无匹配则走实例默认，再否则 5/5。",
+      "matchExpr": "匹配范围",
+      "fullMatch": "全匹配（实例默认）",
+      "maxTeams": "每用户最多团队数",
+      "maxTeamsHint": "该用户作为 owner 的活跃团队上限。加入别人的队不占自己的额度。",
+      "maxTeamsPerOrg": "每组织最多团队数",
+      "maxTeamsPerOrgHint": "该组织下所有成员、所有 Bot 作为 owner 的活跃团队总和。0 表示不限制。只对全匹配或只匹配组织的策略生效。",
+      "maxTeammates": "每团队最多人数（含 Leader）",
+      "maxTeammatesHint": "整队上限，含 Leader。填 5 = Leader + 最多 4 名队员。join 不占额，spawn 才占。",
+      "updatedAt": "更新时间",
+      "invalidPriority": "优先级须为整数",
+      "invalidLimit": "上限须为 1 到 1000 的整数",
+      "invalidOrgLimit": "每组织最多团队数须为 0 到 1000 的整数，0 表示不限制",
+      "fieldRequired": "请填写{{field}}",
+      "deleteTitle": "删除策略",
+      "deleteMessage": "删除后，原本命中这条策略的主体会改走下一条命中规则或默认 5/5。确定删除？",
+      "usage": {
+        "subtitle": "数据来自该实例 Gateway 对占用租约的 COUNT，不扫 AgentServer。",
+        "userId": "用户",
+        "groupId": "组织",
+        "botId": "Bot",
+        "used": "已用",
+        "limit": "上限",
+        "default": "默认",
+        "teamId": "团队",
+        "empty": "暂无占用。用户创建团队后会出现在此。",
+        "orgsTitle": "组织占用",
+        "orgUnlimited": "不限制"
       }
     }
   },

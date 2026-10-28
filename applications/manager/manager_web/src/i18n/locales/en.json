@@ -268,7 +268,8 @@
       "cost": "Cost Analytics",
       "audit": "Business Audit",
       "resources": "Cluster Resources",
-      "workspaceQuota": "User Space Quota"
+      "workspaceQuota": "User Space Quota",
+      "teamQuota": "Team Quota"
     },
     "placeholder": {
       "empty": "Coming soon"
@@ -440,6 +441,48 @@
         "policyId": "Policy",
         "reportedAt": "Reported at",
         "empty": "No usage cache yet. Rows appear after users open usage or the file list."
+      }
+    },
+    "teamQuota": {
+      "title": "Team Quota",
+      "subtitle": "Set per-user team limits, per-organization team totals, and per-team size including the leader",
+      "tabs": {
+        "policy": "Quota Policies",
+        "usage": "Occupancy"
+      },
+      "new": "New policy",
+      "edit": "Edit policy",
+      "policyName": "Policy name",
+      "policyDesc": "Description",
+      "priority": "Priority",
+      "priorityHint": "Higher numbers win. The highest matching policy applies; otherwise the instance default, then 5/5.",
+      "matchExpr": "Match scope",
+      "fullMatch": "Match all (instance default)",
+      "maxTeams": "Max teams per user",
+      "maxTeamsHint": "Active teams owned by this user. Joining someone else's team does not count.",
+      "maxTeamsPerOrg": "Max teams per org",
+      "maxTeamsPerOrgHint": "Total active teams owned by every member and every bot in the org. 0 means no cap. Only full-match policies, or policies that do not name a user or bot, set this limit.",
+      "maxTeammates": "Max team size (including leader)",
+      "maxTeammatesHint": "Whole-team cap including the leader. 5 = leader + at most 4 teammates. Join does not occupy a seat; spawn does.",
+      "updatedAt": "Updated at",
+      "invalidPriority": "Priority must be an integer",
+      "invalidLimit": "Limits must be integers from 1 to 1000",
+      "invalidOrgLimit": "Max teams per org must be an integer from 0 to 1000. 0 means no cap",
+      "fieldRequired": "Please fill in {{field}}",
+      "deleteTitle": "Delete policy",
+      "deleteMessage": "After deletion, subjects that matched this policy follow the next matching rule or the default 5/5. Continue?",
+      "usage": {
+        "subtitle": "Counts occupancy leases via this instance's Gateway. AgentServer pods are not scanned.",
+        "userId": "User",
+        "groupId": "Org",
+        "botId": "Bot",
+        "used": "Used",
+        "limit": "Limit",
+        "default": "Default",
+        "teamId": "Team",
+        "empty": "No occupancy yet. Rows appear after users create teams.",
+        "orgsTitle": "Organization occupancy",
+        "orgUnlimited": "No cap"
       }
     }
   },

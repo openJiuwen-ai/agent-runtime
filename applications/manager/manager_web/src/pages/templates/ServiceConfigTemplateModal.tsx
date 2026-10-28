@@ -237,10 +237,10 @@ export function ServiceConfigTemplateModal({ open, template, onClose, onSaved }:
       toast('warn', t('serviceConfigTemplate.fieldRequired', { field: t('serviceConfigTemplate.templateName') }));
       return;
     }
-    if (!form.main_container_id.trim()) {
-      toast('warn', t('serviceConfigTemplate.bindingMissingWarn', { role: t('serviceConfigTemplate.mainContainerBinding') }));
-      return;
-    }
+    // if (!form.main_container_id.trim()) {
+    //   toast('warn', t('serviceConfigTemplate.bindingMissingWarn', { role: t('serviceConfigTemplate.mainContainerBinding') }));
+    //   return;
+    // }
     if (form.sidecar_ids.some((id) => !id.trim())) {
       toast('warn', t('serviceConfigTemplate.sidecarRowMissing'));
       return;

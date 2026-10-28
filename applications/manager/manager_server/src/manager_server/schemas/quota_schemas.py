@@ -78,3 +78,17 @@ class WorkspaceQuotaUsageListQuery(BaseModel):
     )
     page: int = Field(1, ge=1)
     page_size: int = Field(20, ge=1, le=100)
+
+
+class TeamQuotaPolicyUpsertBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    policy_id: str | None = Field(default=None, max_length=64)
+    policy_name: str = Field(default="team-quota", max_length=128)
+    policy_desc: str | None = Field(default=None, max_length=512)
+    match_expr: Any = None
+    priority: int = 0
+    max_teams_per_user: int = Field(default=5, ge=1, le=1000)
+    max_teammates_per_team: int = Field(default=5, ge=1, le=1000)
+    max_teams_per_org: int = Field(default=0, ge=0, le=1000)
+    enabled: bool = True

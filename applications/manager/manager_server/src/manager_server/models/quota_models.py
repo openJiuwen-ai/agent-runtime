@@ -60,7 +60,34 @@ WORKSPACE_QUOTA_USAGE_TABLE_DEF = TableDefinition(
     ],
 )
 
+TEAM_QUOTA_POLICY_TABLE_DEF = TableDefinition(
+    table_name="team_quota_policy",
+    columns=[
+        ColumnDefinition("id", "integer", primary_key=True, autoincrement=True, nullable=False),
+        ColumnDefinition("cluster_id", "string", length=64, nullable=False),
+        ColumnDefinition("policy_id", "string", length=64, nullable=False, unique=True),
+        ColumnDefinition("policy_name", "string", length=128, nullable=False, default=""),
+        ColumnDefinition("policy_desc", "string", length=512, nullable=True),
+        ColumnDefinition("match_expr", "json", nullable=True),
+        ColumnDefinition("priority", "integer", nullable=False, default=0),
+        ColumnDefinition("max_teams_per_user", "integer", nullable=False, default=5),
+        ColumnDefinition("max_teammates_per_team", "integer", nullable=False, default=5),
+        ColumnDefinition("max_teams_per_org", "integer", nullable=False, default=0),
+        ColumnDefinition("source", "string", length=32, nullable=False, default="manual"),
+        ColumnDefinition("enabled", "boolean", nullable=False, default=True),
+        ColumnDefinition("data", "json", nullable=True),
+        ColumnDefinition("created_at", "datetime", nullable=False),
+        ColumnDefinition("created_by", "string", length=64, nullable=True),
+        ColumnDefinition("updated_at", "datetime", nullable=False),
+        ColumnDefinition("updated_by", "string", length=64, nullable=True),
+    ],
+    indexes=[
+        IndexDefinition(["cluster_id"]),
+    ],
+)
+
 QUOTA_TABLE_DEFINITIONS = (
     WORKSPACE_QUOTA_POLICY_TABLE_DEF,
     WORKSPACE_QUOTA_USAGE_TABLE_DEF,
+    TEAM_QUOTA_POLICY_TABLE_DEF,
 )
