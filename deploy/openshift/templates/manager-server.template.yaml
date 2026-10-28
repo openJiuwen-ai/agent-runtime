@@ -1,4 +1,4 @@
-# jiuwenclaw-manager-server 部署清单（镜像 <<MANAGER_SERVER_IMAGE>>）
+# jiuwenswarm-manager-server 部署清单（镜像 <<MANAGER_SERVER_IMAGE>>）
 # 说明：
 #   - 镜像为 OpenShift 适配版，适配 restricted-v2 SCC（强制随机 uid，不指定 runAsUser/fsGroup）
 #   - redis 连接：REDIS_URL 内嵌 URL 编码后的访问密码（@ → %40）
@@ -8,11 +8,11 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: jiuwenclaw-manager-server
+  name: jiuwenswarm-manager-server
   namespace: <<NAMESPACE>>
 spec:
   selector:
-    app: jiuwenclaw-manager-server
+    app: jiuwenswarm-manager-server
   ports:
     - name: rest
       port: 8765
@@ -25,17 +25,17 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: jiuwenclaw-manager-server
+  name: jiuwenswarm-manager-server
   namespace: <<NAMESPACE>>
 spec:
   replicas: <<MANAGER_SERVER_REPLICAS>>
   selector:
     matchLabels:
-      app: jiuwenclaw-manager-server
+      app: jiuwenswarm-manager-server
   template:
     metadata:
       labels:
-        app: jiuwenclaw-manager-server
+        app: jiuwenswarm-manager-server
     spec:
       containers:
       - name: manager
@@ -48,7 +48,7 @@ spec:
           containerPort: 8766
         envFrom:
             - secretRef:
-                name: jiuwenclaw-secret-configmap
+                name: jiuwenswarm-secret-configmap
         env:
         - name: REDIS_URL
           value: "<<REDIS_URL>>"  # 凭据经 REDIS_USER/REDIS_PASSWORD 注入
@@ -73,7 +73,7 @@ spec:
         - name: MANAGER_DB_NAME
           value: "manager_<<NAMESPACE>>"
         - name: IDENTITY_PUBLIC_KEY_URL
-          value: "http://jiuwenclaw-identity:8770/v1/auth/public_key"
+          value: "http://jiuwenswarm-identity:8770/v1/auth/public_key"
         # 三模式部署形态（off 时 manager 跳过 Runtime 探活；routing/full 探活 agent-runtime /healthz）
         - name: AGENT_RUNTIME_DEPLOY_MODE
           value: "<<AGENT_RUNTIME_DEPLOY_MODE>>"
@@ -83,11 +83,11 @@ spec:
           value: "<<AGENTSERVER_POD_DNS_LIST>>"
         # MANAGER_WEB_*_TARGET 为 manager-web nginx 的 proxy_pass 上游（nginx 要求 FQDN）
         - name: MANAGER_WEB_USER_WEB_TARGET
-          value: "http://jiuwenclaw-web.<<NAMESPACE>>.svc.cluster.local:5173"
+          value: "http://jiuwenswarm-web.<<NAMESPACE>>.svc.cluster.local:5173"
         - name: MANAGER_WEB_GATEWAY_HTTP_TARGET
-          value: "http://jiuwenclaw-gateway.<<NAMESPACE>>.svc.cluster.local:19000"
+          value: "http://jiuwenswarm-gateway.<<NAMESPACE>>.svc.cluster.local:19000"
         - name: MANAGER_WEB_GATEWAY_WS_TARGET
-          value: "http://jiuwenclaw-gateway.<<NAMESPACE>>.svc.cluster.local:19000"
+          value: "http://jiuwenswarm-gateway.<<NAMESPACE>>.svc.cluster.local:19000"
         - name: NAMESPACE
           value: "<<NAMESPACE>>"
         - name: AGENT_RUNTIME_SYNC_TIMEOUT

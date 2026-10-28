@@ -1,9 +1,9 @@
-# jiuwenclaw-agent-runtime 部署清单（镜像 <<AGENT_RUNTIME_IMAGE>>）
+# jiuwenswarm-agent-runtime 部署清单（镜像 <<AGENT_RUNTIME_IMAGE>>）
 # 说明：
 #   - 镜像为 OpenShift 适配版，适配 restricted-v2 SCC（强制随机 uid，不指定 runAsUser/fsGroup）
 #   - 零 K8s 权限形态（routing）与 Pod 操作权限形态（full）同模板交付：RBAC 文档
 #     routing/off 渲染后剥除（见下）；模式语义见 .env.example AGENT_RUNTIME_DEPLOY_MODE
-#   - 配置经 Secret jiuwenclaw-secret-configmap（REDIS_PASSWORD 等）注入；DB 凭证经 <<DB_ROOT_PASSWORD>> 内联
+#   - 配置经 Secret jiuwenswarm-secret-configmap（REDIS_PASSWORD 等）注入；DB 凭证经 <<DB_ROOT_PASSWORD>> 内联
 #   - DB 独立库 runtime_<<NAMESPACE>>（框架 MySQLHandler.init_database 自动 CREATE DATABASE IF NOT EXISTS，
 #     仅 MySQL/MariaDB；PostgreSQL 形态需预建库）
 #   - 内部组件：gateway 经 GATEWAY_RUNTIME_MANAGER_URL 指向本 Service（8091），不对外暴露
@@ -13,19 +13,19 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: jiuwenclaw-agent-runtime
+  name: jiuwenswarm-agent-runtime
   namespace: <<NAMESPACE>>
   labels:
-    app: jiuwenclaw-agent-runtime
+    app: jiuwenswarm-agent-runtime
 spec:
   replicas: <<AGENT_RUNTIME_REPLICAS>>
   selector:
     matchLabels:
-      app: jiuwenclaw-agent-runtime
+      app: jiuwenswarm-agent-runtime
   template:
     metadata:
       labels:
-        app: jiuwenclaw-agent-runtime
+        app: jiuwenswarm-agent-runtime
     spec:
       affinity:
         podAntiAffinity:
@@ -37,7 +37,7 @@ spec:
                     - key: app
                       operator: In
                       values:
-                        - jiuwenclaw-agent-runtime
+                        - jiuwenswarm-agent-runtime
                 topologyKey: "kubernetes.io/hostname"
       containers:
         - name: agent-runtime
@@ -64,7 +64,7 @@ spec:
             failureThreshold: 6
           envFrom:
             - secretRef:
-                name: jiuwenclaw-secret-configmap
+                name: jiuwenswarm-secret-configmap
           env:
             - name: AGENT_RUNTIME_MODE
               value: "server"
@@ -111,11 +111,11 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: jiuwenclaw-agent-runtime
+  name: jiuwenswarm-agent-runtime
   namespace: <<NAMESPACE>>
 spec:
   selector:
-    app: jiuwenclaw-agent-runtime
+    app: jiuwenswarm-agent-runtime
   ports:
     - name: rest
       port: 8091

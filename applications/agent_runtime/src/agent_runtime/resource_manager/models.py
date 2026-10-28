@@ -17,7 +17,7 @@ DEAD_POD_STATUSES = frozenset({
 })
 
 # Pod label（与老 SDK 一致；cleanup 默认 selector）
-POD_LABEL_KEY = "jiuwenclaw-component"
+POD_LABEL_KEY = "jiuwenswarm-component"
 POD_LABEL_VALUE = "agentserver"
 POD_LABEL_SELECTOR = f"{POD_LABEL_KEY}={POD_LABEL_VALUE}"
 

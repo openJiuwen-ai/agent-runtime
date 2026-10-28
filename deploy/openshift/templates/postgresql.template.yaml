@@ -56,7 +56,7 @@ spec:
             - max_connections=192
           envFrom:
             - secretRef:
-                name: jiuwenclaw-secret-configmap
+                name: jiuwenswarm-secret-configmap
           env:
             - name: POSTGRES_HOST_AUTH_METHOD
               value: "scram-sha-256"

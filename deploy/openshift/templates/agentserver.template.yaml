@@ -1,34 +1,34 @@
-# jiuwenclaw-agentserver 部署清单（镜像 <<AGENTSERVER_IMAGE>>，与 gateway 同镜像）
+# jiuwenswarm-agentserver 部署清单（镜像 <<AGENTSERVER_IMAGE>>，与 gateway 同镜像）
 # 说明：
 #   - 镜像为 OpenShift 适配版，适配 restricted-v2 SCC（强制随机 uid，不指定 runAsUser/fsGroup）
-#   - 配置经 Secret jiuwenclaw-secret-configmap 与 ConfigMap jiuwenclaw-agentserver-env 注入
-#   - 数据卷挂载 PVC jiuwenclaw-pvc 至 /home/app/.jiuwenswarm：workspace_{tenant}/、
+#   - 配置经 Secret jiuwenswarm-secret-configmap 与 ConfigMap jiuwenswarm-agentserver-env 注入
+#   - 数据卷挂载 PVC jiuwenswarm-pvc 至 /home/app/.jiuwenswarm：workspace_{tenant}/、
 #     config/、auth/、agent/ 等多副本共享（租户会话可能落在任意 pod，工作区必须全局可见）；
 #     仅 ~/.jiuwenswarm/run（supervisor IPC unix socket，路径固定）按 Pod 隔离，
 #     经同卷深路径遮蔽挂载实现（subPathExpr: run/$(POD_NAME)，子目录自动创建）
 #   - StatefulSet + headless Service：每 Pod 稳定 DNS
-#     jiuwenclaw-agentserver-{i}.jiuwenclaw-agentserver-headless.<ns>.svc.cluster.local
+#     jiuwenswarm-agentserver-{i}.jiuwenswarm-agentserver-headless.<ns>.svc.cluster.local
 #     （Pod 重建后 IP 变、DNS 不变，健康探测与会话路由地址跨重启稳定）
 #   - 内部组件：off 模式 gateway 经 AGENT_SERVER_URL 通过 ClusterIP Service 直连，不对外暴露
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: jiuwenclaw-agentserver
+  name: jiuwenswarm-agentserver
   namespace: <<NAMESPACE>>
   labels:
-    app: jiuwenclaw-agentserver
+    app: jiuwenswarm-agentserver
 spec:
   replicas: <<AGENT_SERVER_REPLICAS>>
-  serviceName: jiuwenclaw-agentserver-headless
+  serviceName: jiuwenswarm-agentserver-headless
   podManagementPolicy: Parallel
   selector:
     matchLabels:
-      app: jiuwenclaw-agentserver
+      app: jiuwenswarm-agentserver
   template:
     metadata:
       labels:
-        app: jiuwenclaw-agentserver
-        jiuwenclaw-component: agentserver
+        app: jiuwenswarm-agentserver
+        jiuwenswarm-component: agentserver
     spec:
       affinity:
         podAntiAffinity:
@@ -40,10 +40,10 @@ spec:
                     - key: app
                       operator: In
                       values:
-                        - jiuwenclaw-agentserver
+                        - jiuwenswarm-agentserver
                 topologyKey: "kubernetes.io/hostname"
       containers:
-        - name: jiuwenclaw-agentserver
+        - name: jiuwenswarm-agentserver
           image: <<AGENTSERVER_IMAGE>>
           imagePullPolicy: IfNotPresent
           ports:
@@ -74,9 +74,9 @@ spec:
                   fieldPath: metadata.name
           envFrom:
             - secretRef:
-                name: jiuwenclaw-secret-configmap
+                name: jiuwenswarm-secret-configmap
             - configMapRef:
-                name: jiuwenclaw-agentserver-env
+                name: jiuwenswarm-agentserver-env
           volumeMounts:
             - name: agentserver-data
               mountPath: /home/app/.jiuwenswarm
@@ -86,18 +86,18 @@ spec:
       volumes:
         - name: agentserver-data
           persistentVolumeClaim:
-            claimName: jiuwenclaw-pvc
+            claimName: jiuwenswarm-pvc
 ---
 # headless Service：StatefulSet 治理服务（clusterIP: None），提供每 Pod 稳定 DNS
 apiVersion: v1
 kind: Service
 metadata:
-  name: jiuwenclaw-agentserver-headless
+  name: jiuwenswarm-agentserver-headless
   namespace: <<NAMESPACE>>
 spec:
   clusterIP: None
   selector:
-    app: jiuwenclaw-agentserver
+    app: jiuwenswarm-agentserver
   ports:
     - name: sse
       port: 8766
@@ -110,11 +110,11 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: jiuwenclaw-agentserver
+  name: jiuwenswarm-agentserver
   namespace: <<NAMESPACE>>
 spec:
   selector:
-    app: jiuwenclaw-agentserver
+    app: jiuwenswarm-agentserver
   ports:
     - name: sse
       port: 8766

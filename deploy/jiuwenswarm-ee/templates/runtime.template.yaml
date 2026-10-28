@@ -65,14 +65,14 @@ spec:
                         - <<AGENT_RUNTIME_NAME>>
                 topologyKey: "kubernetes.io/hostname"
       securityContext:
-        fsGroup: <<CLAW_FS_GROUP>>
+        fsGroup: <<SWARM_FS_GROUP>>
       containers:
         - name: agent-runtime
           image: <<AGENT_RUNTIME_IMAGE>>
           imagePullPolicy: IfNotPresent
           securityContext:
-            runAsUser: <<CLAW_USER>>
-            runAsGroup: <<CLAW_GROUP>>
+            runAsUser: <<SWARM_USER>>
+            runAsGroup: <<SWARM_GROUP>>
           ports:
             - name: rest
               containerPort: <<AGENT_RUNTIME_PORT>>

@@ -12,7 +12,7 @@ CUSTOM_ENV_FILE="$SCRIPT_DIR/.env.custom"
 # ---------- 组件清单 ----------
 
 # 全部组件的规范依赖序（up 按此序排列；down 倒序）。
-# secret 必须在最前：基础服务与产品组件的密码统一经 jiuwenclaw-secret-configmap 注入
+# secret 必须在最前：基础服务与产品组件的密码统一经 jiuwenswarm-secret-configmap 注入
 ALL_COMPONENTS=(secret mariadb mysql postgresql minio redis runtime agentserver gateway web identity manager-server manager-web)
 
 UP_TARGETS=(secret redis agentserver gateway web)         # up 默认目标（规范依赖序）
@@ -27,7 +27,7 @@ REPLICAS_VARS=(AGENT_SERVER_REPLICAS GATEWAY_REPLICAS WEB_REPLICAS IDENTITY_REPL
 # 允许留空的变量（render_component_files 消费：留空时占位符独占行整行删除）
 # - StorageClass 未配置时使用集群默认动态供给
 # - OBS_PUBLIC_BASE_URL/OBS_REGION/OBS_SECURE：外部 OBS 选填项（内置 MinIO 时强制派生/忽略）
-# - REDIS_USER：留空 = 外挂 Redis 使用 default 用户（内置模式由 resolve_redis_vars 派生 jiuwenclaw）
+# - REDIS_USER：留空 = 外挂 Redis 使用 default 用户（内置模式由 resolve_redis_vars 派生 jiuwenswarm）
 # - IDENTITY_SSO_* / IDENTITY_FEDERATION_CONFIG_FILE：企业认证配置可留空
 # - GATEWAY_AGENT_CLIENT_MODE / GATEWAY_RUNTIME_MANAGER_URL / AGENTSERVER_POD_DNS_LIST：
 #   三模式派生变量（routing 注入，off/full 留空 → 对应 env 行删除）
@@ -72,20 +72,20 @@ declare -A DEPLOY_VARS=(
     ["DB_PASSWORD"]=""                   # 外部数据库统一密码（语义对齐 jiuwenswarm-ee）；留空时内置模式按 DB_TYPE 取 ROOT_PASSWORD，外置模式两者均空报错
     ["ENABLE_EXTERNAL_DB"]="false"
 
-    ["REDIS_USER"]=""                    # 留空 = default 用户（外挂 Redis 场景）；内置 Redis 由 resolve_redis_vars 派生 jiuwenclaw
+    ["REDIS_USER"]=""                    # 留空 = default 用户（外挂 Redis 场景）；内置 Redis 由 resolve_redis_vars 派生 jiuwenswarm
     ["REDIS_PASSWORD"]="Root@123456"
     # Redis 部署形态与连接：REDIS_HOST 空=内置 Redis（地址自动派生）；填写=外部 Redis
     ["REDIS_MODE"]="standalone"          # standalone | cluster（cluster 仅影响外挂连接 URL 前缀 redis+cluster://）
     ["REDIS_HOST"]=""                    # 外部 Redis 服务的连接地址（内置 Redis 时自动 redis.<NAMESPACE>）
     ["REDIS_PORT"]=""                    # 留空按形态取默认（6379）；外部 Redis 填写对应端口
-    ["REDIS_KEY_PREFIX"]="jiuwenclaw:"   # gateway/agentserver/manager-server 的 Redis 键统一前缀
+    ["REDIS_KEY_PREFIX"]="jiuwenswarm:"   # gateway/agentserver/manager-server 的 Redis 键统一前缀
     ["ENABLE_EXTERNAL_REDIS"]="false"
 
     # 对象存储：是否内置 MinIO 仅由 OBS_URL 是否为空唯一决定，与其余变量无关
     # 内置（OBS_URL 空）：地址/SECURE/REGION 强制派生，AK/SK 强制取 MinIO root（其他变量填了也会被忽略）
     # 外部（OBS_URL 填写）：地址原样使用，BUCKET/AK/SK 必填，SECURE/REGION 按需填写
     ["OBS_URL"]=""                       # 空=内置 MinIO；填写=外部 OBS/S3 兼容服务接入地址
-    ["OBS_BUCKET"]="jiuwenclaw"          # 业务存储桶名称
+    ["OBS_BUCKET"]="jiuwenswarm"          # 业务存储桶名称
     ["OBS_PUBLIC_BASE_URL"]=""           # 对象存储公网预览域名（可选，浏览器直读场景）
     ["OBS_ACCESS_KEY"]=""                # 内置：忽略（自动取 MINIO_ROOT_USER）；外部：AccessKey（必填）
     ["OBS_SECRET_KEY"]=""                # 内置：忽略（自动取 MINIO_ROOT_PASSWORD）；外部：SecretKey（必填）
@@ -140,14 +140,14 @@ declare -A DEPLOY_VARS=(
     ["IDENTITY_FEDERATION_CONFIG_FILE"]=""
     # dev 模式：hostPath 挂载宿主机代码调试（MODE=dev 仅 k8s 形态支持；Pod 固定到代码所在节点）
     ["MODE"]="product"                   # product | dev
-    ["CLAW_CODE_PATH"]=""                # jiuwenclaw 仓库路径（挂载到 agentserver/gateway/web）
+    ["SWARM_CODE_PATH"]=""                # jiuwenswarm 仓库路径（挂载到 agentserver/gateway/web）
     ["RUNTIME_CODE_PATH"]=""             # agent-runtime 仓库路径（挂载到 identity/manager-server/manager-web）
     ["CORE_CODE_PATH"]=""                # agent-core 仓库路径（openjiuwen 包挂载到 agentserver/gateway）
     ["IS_MOUNT_WEB_CODE"]="false"        # dev 模式下 web 是否挂载代码
     ["IS_MOUNT_MANAGER_WEB_CODE"]="false" # dev 模式下 manager-web 是否挂载代码
     ["CURRENT_NODE_NAME"]=""             # 代码所在节点；留空=按本机 hostname/IP 自动识别
     # Pod 侧代码路径（按镜像内布局，一般无需修改）
-    ["CLAW_POD_CODE_PATH"]="/app/jiuwenswarm"
+    ["SWARM_POD_CODE_PATH"]="/app/jiuwenswarm"
     ["RUNTIME_POD_CODE_PATH"]="/app/agent-runtime"
     ["RUNTIME_POD_PKG_PATH"]="/usr/local/lib/python3.11/site-packages/openjiuwen_runtime"
     ["CORE_POD_PKG_PATH"]="/usr/local/lib/python3.11/site-packages/openjiuwen"

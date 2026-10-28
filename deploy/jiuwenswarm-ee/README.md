@@ -48,7 +48,7 @@ kubectl get nodes
 在`部署节点`执行以下操作，下载并解压官方部署工具安装包，工具下载地址：
 
 ```
-https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/jiuwenclaw/JiuwenClaw/product/JiuwenClaw_deployTool_<VERSION>_<ARCH>_product.zip
+https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/jiuwenswarm/JiuwenSwarm/dev/JiuwenSwarm_DeployTool_<VERSION>_<ARCH>_dev.zip
 ```
 
 解压命令：
@@ -63,7 +63,7 @@ unzip ***.zip
 部署工具解压后完整目录结构及各文件/目录用途说明如下，业务配置统一在配置文件`.env.custom` 中调整，其他文件非必要不修改：
 
 ```
-JiuwenClaw_deployTool_<VERSION>_<ARCH>_product/
+JiuwenSwarm_DeployTool_<VERSION>_<ARCH>_product/
 ├── .env.example                          # 配置文件的参数说明书
 ├── .env.custom                           # 配置文件（需用户手动修改）
 ├── README.md                             # 部署工具本地说明文档
@@ -105,7 +105,7 @@ JiuwenClaw_deployTool_<VERSION>_<ARCH>_product/
     ├── mysql.template.yaml               # MySQL 数据库 Kubernetes 资源模板
     ├── nfs.template.yaml                 # NFS 存储 Kubernetes 资源模板
     ├── nfs-sc.template.yaml              # NFS 存储供给 Kubernetes 资源模板
-    ├── claw-pvc.template.yaml            # 业务内置持久卷PVC资源清单模板
+    ├── swarm-pvc.template.yaml            # 业务内置持久卷PVC资源清单模板
     ├── postgresql.template.yaml          # PostgreSQL 数据库 Kubernetes 资源模板
     ├── redis.template.yaml               # Redis 缓存 Kubernetes 资源模板
     ├── log.template.yaml                 # 日志模块 Kubernetes 资源模板
@@ -174,7 +174,7 @@ JiuwenClaw_deployTool_<VERSION>_<ARCH>_product/
 **重要约束：**
 
 - **NFS / MariaDB / MySQL / PostgreSQL / MinIO / Log：** 以上基础依赖模块全局仅支持单次部署，固定运行于 default 命名空间，部署命令自动忽略自定义命名空间参数。
-- **Redis：** 不作为独立模块部署，仅作为 Gateway、Runtime 的附属依赖。每个命名空间拥有独立的 Redis 实例（Deployment 名为 `jiuwenclaw-redis`），实现多业务实例间数据隔离。启动 Gateway 或 Runtime 等依赖 Redis 的业务模块时，部署工具会自动执行就绪检查：已配置外挂 Redis 则复用外部服务；否则复用同命名空间已有的内置 Redis；若同命名空间既无外挂 Redis 也无内置 Redis，则自动拉起一个内置 Redis 实例。
+- **Redis：** 不作为独立模块部署，仅作为 Gateway、Runtime 的附属依赖。每个命名空间拥有独立的 Redis 实例（Deployment 名为 `jiuwenswarm-redis`），实现多业务实例间数据隔离。启动 Gateway 或 Runtime 等依赖 Redis 的业务模块时，部署工具会自动执行就绪检查：已配置外挂 Redis 则复用外部服务；否则复用同命名空间已有的内置 Redis；若同命名空间既无外挂 Redis 也无内置 Redis，则自动拉起一个内置 Redis 实例。
 - **Web / Gateway / Runtime：** 业务服务模块需保持命名空间一致（为了环境隔离与日志运维，禁止使用default命名空间），否则服务间网络互通异常、功能不可用。
 
 **使用示例：**
@@ -272,7 +272,7 @@ sunrpc                585728  10 nfsd,auth_rpcgss,lockd,nfsv3,nfs_acl,nfs
 ```
 ./deploy.sh up nfs-sc          # 部署 NFS 存储供给组件（基础依赖，只需也只能一次）
 ```
-部署完成后自动生成对应 StorageClass，搭配 CLAW_MOUNT_TYPE=pvc 模式使用，可自动创建隔离式 NFS 持久卷。
+部署完成后自动生成对应 StorageClass，搭配 SWARM_MOUNT_TYPE=pvc 模式使用，可自动创建隔离式 NFS 持久卷。
 
 
 #### 3.1.3 外部独立部署 NFS 服务（生产环境推荐）
@@ -280,7 +280,7 @@ sunrpc                585728  10 nfsd,auth_rpcgss,lockd,nfsv3,nfs_acl,nfs
 
 ```
 # 设置产品组件的存储挂载模式为nfs
-CLAW_MOUNT_TYPE="nfs"
+SWARM_MOUNT_TYPE="nfs"
 
 # 外部 NFS 服务的连接地址
 NFS_SERVER_ADDR=""
@@ -294,10 +294,10 @@ NFS_SHARE_PATH=""
 若客户有其他高可用企业级存储组件，并基于其组件的 StorageClass 预创建好了持久化 PVC 资源，业务组件可直接复用现有 PVC 完成存储挂载，配置如下：
 ```
 # 设置产品组件的存储挂载模式为pvc
-CLAW_MOUNT_TYPE="pvc"
+SWARM_MOUNT_TYPE="pvc"
 
 # 外部 PVC 的名字，该 PVC 需存在，且与业务 Pod 处于同一 Namespace
-CLAW_PVC=""
+SWARM_PVC=""
 
 # 外部 PVC 绑定的 StorageClass 名称
 NFS_SC_NAME=""
@@ -326,7 +326,7 @@ DB_TYPE="mysql"
 若需为该服务挂载外部 NFS 服务实现数据持久化，需在配置文件`.env.custom` 中设置：
 ```
 # nfs：Pod直接通过地址直连NFS服务挂载共享目录
-CLAW_MOUNT_TYPE="nfs"
+SWARM_MOUNT_TYPE="nfs"
 
 # 外部 NFS 服务的连接地址
 NFS_SERVER_ADDR=""
@@ -382,12 +382,12 @@ RUNTIME_PG_SCHEMA=""
 
 ### 3.3 部署 Redis 服务
 
-Redis 不支持单独部署，仅作为 Gateway、Runtime 的附属依赖，随业务模块启动时按命名空间自动就绪。每个命名空间拥有独立的 Redis 实例（Deployment 名为 `jiuwenclaw-redis`），实现多业务实例间的数据隔离。
+Redis 不支持单独部署，仅作为 Gateway、Runtime 的附属依赖，随业务模块启动时按命名空间自动就绪。每个命名空间拥有独立的 Redis 实例（Deployment 名为 `jiuwenswarm-redis`），实现多业务实例间的数据隔离。
 
 部署 Gateway 或 Runtime 等依赖 Redis 的业务模块时，部署工具会自动执行 Redis 就绪检查，其行为如下：
 
 1. 若已在 `.env.custom` 中配置外挂 Redis（`REDIS_HOST`），则直接复用外部 Redis 服务，跳过内置部署；
-2. 否则检测同命名空间下是否已存在内置 Redis 实例（Deployment `jiuwenclaw-redis`），存在则直接复用；
+2. 否则检测同命名空间下是否已存在内置 Redis 实例（Deployment `jiuwenswarm-redis`），存在则直接复用；
 3. 若同命名空间下既未配置外挂 Redis、也不存在内置 Redis 实例，则自动拉起一个单节点内置 Redis 实例于该命名空间。
 
 **注意：** 内置 Redis 为单节点实例，如需高可用 Redis 服务，请采用外部独立部署方式。
@@ -422,7 +422,7 @@ REDIS_PASSWORD=""
 若需为该服务挂载外部 NFS 服务实现数据持久化，需在配置文件`.env.custom` 中设置：
 ```
 # nfs：Pod直接通过地址直连NFS服务挂载共享目录
-CLAW_MOUNT_TYPE="nfs"
+SWARM_MOUNT_TYPE="nfs"
 
 # 外部 NFS 服务的连接地址
 NFS_SERVER_ADDR=""
@@ -471,14 +471,14 @@ OBS_REGION=""
 
 **架构分工说明：** 
 - **Fluent Bit**： 以节点级组件部署于所有 K8s 集群节点，负责抓取业务容器原始日志，并将日志数据统一转发至 Vector 服务；
-- **Vector**： 承接日志后续处理工作，完成日志数据脱敏清洗后，将合规日志持久化存储至部署工具运行节点，存储路径由环境变量 CLAW_LOG_DIR 统一指定。
+- **Vector**： 承接日志后续处理工作，完成日志数据脱敏清洗后，将合规日志持久化存储至部署工具运行节点，存储路径由环境变量 SWARM_LOG_DIR 统一指定。
 
 #### 3.5.1 前置配置
 部署日志管理服务前，需在自定义配置文件`.env.custom`中完成如下核心参数配置：
 ```
 # 宿主机日志持久化根目录
-# 默认路径：$HOME/claw_logs，生产环境建议手动显式配置，保证日志路径固定有读写权限
-CLAW_LOG_DIR=""
+# 默认路径：$HOME/swarm_logs，生产环境建议手动显式配置，保证日志路径固定有读写权限
+SWARM_LOG_DIR=""
 
 # 部署工具运行所在K8s节点名称
 # 脚本将尝试自动识别节点名，若识别失败，请手动填写值，取值参考 kubectl get nodes 输出第一列节点名称
@@ -506,20 +506,20 @@ LOG_TO_FILE_ENABLED=false
 ./deploy.sh up log          # 部署日志模块（可选部署，也只能部署一次）
 ```
 
-部署完成后，日志采集服务将自动筛选集群内名称前缀为 `jiuwenclaw` 的 Pod 进行日志采集。采集完成后，日志文件按照 `命名空间/Pod名称/容器名称-日期.log` 层级目录结构持久化存储，目录组织示例如下：
+部署完成后，日志采集服务将自动筛选集群内名称前缀为 `jiuwenswarm` 的 Pod 进行日志采集。采集完成后，日志文件按照 `命名空间/Pod名称/容器名称-日期.log` 层级目录结构持久化存储，目录组织示例如下：
 
 ```
 └── myns
-    ├── jiuwenclaw-agentserver-3nwipvx8cq-y7cu6
+    ├── jiuwenswarm-agentserver-3nwipvx8cq-y7cu6
     │   ├── jiuwenbox-2026-07-14.log
-    │   └── jiuwenclaw-agentserver-2026-07-14.log
-    ├── jiuwenclaw-agentserver-n7iqunzg6h-3l6kf
+    │   └── jiuwenswarm-agentserver-2026-07-14.log
+    ├── jiuwenswarm-agentserver-n7iqunzg6h-3l6kf
     │   ├── jiuwenbox-2026-07-14.log
-    │   └── jiuwenclaw-agentserver-2026-07-14.log
-    ├── jiuwenclaw-gateway-668cccc968-66pxt
+    │   └── jiuwenswarm-agentserver-2026-07-14.log
+    ├── jiuwenswarm-gateway-668cccc968-66pxt
     │   ├── gateway-2026-07-14.log
     │   └── gateway-2026-07-15.log
-    └── jiuwenclaw-web-545f77c477-drfcf
+    └── jiuwenswarm-web-545f77c477-drfcf
         └── web-2026-07-14.log
 ```
 
@@ -597,7 +597,7 @@ GATEWAY_REPLICAS=1
 
 ### 4.2 部署 AgentRuntime（必选部署）
 
-AgentRuntime 是 Agent 运行时管理模块，负责按需创建、管理与回收 AgentServer Pod。AgentServer 不由部署工具直接部署：部署工具将渲染好的 AgentServer 服务模板（`templates/agentserver.template.json`，含容器镜像、存储挂载、多容器编排等）与其环境变量 ConfigMap（由 `templates/agentserver.template.env` 渲染，名为 `jiuwenclaw-agentserver-env`）下发后，由 AgentRuntime 据此拉起并维护 AgentServer 实例。执行以下命令完成部署：
+AgentRuntime 是 Agent 运行时管理模块，负责按需创建、管理与回收 AgentServer Pod。AgentServer 不由部署工具直接部署：部署工具将渲染好的 AgentServer 服务模板（`templates/agentserver.template.json`，含容器镜像、存储挂载、多容器编排等）与其环境变量 ConfigMap（由 `templates/agentserver.template.env` 渲染，名为 `jiuwenswarm-agentserver-env`）下发后，由 AgentRuntime 据此拉起并维护 AgentServer 实例。执行以下命令完成部署：
 
 ```
 ./deploy.sh up runtime -n <你的命名空间>     # 部署 AgentRuntime 运行时模块
@@ -605,8 +605,8 @@ AgentRuntime 是 Agent 运行时管理模块，负责按需创建、管理与回
 
 部署内容包括：
 - ServiceAccount / Role / RoleBinding（授予 AgentServer Pod 创建权限）
-- AgentRuntime Deployment（默认名 `jiuwenclaw-agent-runtime`）
-- AgentServer 环境变量 ConfigMap（`jiuwenclaw-agentserver-env`）
+- AgentRuntime Deployment（默认名 `jiuwenswarm-agent-runtime`）
+- AgentServer 环境变量 ConfigMap（`jiuwenswarm-agentserver-env`）
 - 部署就绪后，通过 AgentRuntime 的 `config_sync` 接口下发 AgentServer 服务模板
 
 启动前可在配置文件 `.env.custom` 中确认如下参数：
@@ -626,23 +626,23 @@ AGENT_RUNTIME_REPLICAS=1
 若需为业务服务挂载外部 NFS 服务实现数据持久化，需在配置文件`.env.custom` 中设置：
 ```
 # 设置产品组件的存储挂载模式为nfs
-CLAW_MOUNT_TYPE="nfs"
+SWARM_MOUNT_TYPE="nfs"
 
 # 外部 NFS 服务的连接地址
 NFS_SERVER_ADDR=""
 
 # 外部 NFS 服务的共享根目录路径
-# 前置约束：共享目录下必须预先创建 jiuwenclaw 对应子目录用于数据存储
+# 前置约束：共享目录下必须预先创建 jiuwenswarm 对应子目录用于数据存储
 NFS_SHARE_PATH=""
 ```
 
 若需为业务服务挂载外部 PVC 服务实现数据持久化，需在配置文件`.env.custom` 中设置：
 ```
 # 设置产品组件的存储挂载模式为pvc
-CLAW_MOUNT_TYPE="pvc"
+SWARM_MOUNT_TYPE="pvc"
 
 # 外部 PVC 的名字，该 PVC 需存在，且与业务 Pod 处于同一 Namespace
-CLAW_PVC=""
+SWARM_PVC=""
 
 # 外部 PVC 绑定的 StorageClass 名称
 NFS_SC_NAME=""
@@ -717,10 +717,10 @@ kubectl logs -f <pod-name> -n <namespace> 2>&1 | tee <file-name>
 
 ```
 # ls /var/log/containers
-jiuwenclaw-agentserver-gcivg9a6xk-aumi6_chenhui_jiuwenbox-f0c50f60193e14524f25f6f949d8c5e8333421812c339cfbaf37fc07a8f30f0f.log
-jiuwenclaw-agentserver-gcivg9a6xk-aumi6_chenhui_jiuwenclaw-agentserver-e5b5a0f61ffd5cf817bf382734d6a50b6af15c81d2ea387c8106548e40005258.log
-jiuwenclaw-gateway-6498fbc8d-nfhcl_chenhui_gateway-38a2134e8932dc4107c4e9cb7ce28e65531eac9f928c802d3cc49840ad363096.log
-jiuwenclaw-web-fd64b644f-p42hf_chenhui_web-aeb66347df8980dea7f4697fe7f6b37eb1529c755efe2fbc778731646f70e7da.log
+jiuwenswarm-agentserver-gcivg9a6xk-aumi6_chenhui_jiuwenbox-f0c50f60193e14524f25f6f949d8c5e8333421812c339cfbaf37fc07a8f30f0f.log
+jiuwenswarm-agentserver-gcivg9a6xk-aumi6_chenhui_jiuwenswarm-agentserver-e5b5a0f61ffd5cf817bf382734d6a50b6af15c81d2ea387c8106548e40005258.log
+jiuwenswarm-gateway-6498fbc8d-nfhcl_chenhui_gateway-38a2134e8932dc4107c4e9cb7ce28e65531eac9f928c802d3cc49840ad363096.log
+jiuwenswarm-web-fd64b644f-p42hf_chenhui_web-aeb66347df8980dea7f4697fe7f6b37eb1529c755efe2fbc778731646f70e7da.log
 ```
 **注意**
 
@@ -815,11 +815,11 @@ WEB_NODE_PORT=
 # 设置运行模式为开发模式，开启本地源码挂载调试逻辑
 MODE=dev
 
-# ===================== jiuwenclaw 模块调试 =====================
-# CLAW源码宿主机绝对路径，仅调试claw组件时填写；不调试直接留空
+# ===================== jiuwenswarm 模块调试 =====================
+# SWARM源码宿主机绝对路径，仅调试swarm组件时填写；不调试直接留空
 # 源码仓库：https://gitcode.com/openJiuwen/jiuwenswarm.git
 # 代码分支：dev-stable
-CLAW_CODE_PATH=""
+SWARM_CODE_PATH=""
 
 # ===================== agent-runtime 模块调试 =====================
 # Runtime源码宿主机绝对路径，仅调试runtime组件时填写；不调试直接留空
@@ -846,8 +846,8 @@ IS_MOUNT_WEB_CODE="false"
 
 | 变量 | Gateway | AgentRuntime | AgentServer | Web |
 |------|---------|--------------|-------------|-----|
-| `CLAW_CODE_PATH` | 挂载 jiuwenswarm 源码 | 不涉及 | 挂载 jiuwenswarm 源码 | 挂载（需 `IS_MOUNT_WEB_CODE=true`） |
+| `SWARM_CODE_PATH` | 挂载 jiuwenswarm 源码 | 不涉及 | 挂载 jiuwenswarm 源码 | 挂载（需 `IS_MOUNT_WEB_CODE=true`） |
 | `RUNTIME_CODE_PATH` | 挂载 foundation/management 包 | 挂载 agent-runtime 源码 | 挂载 foundation/management 包 | 挂载（需 `IS_MOUNT_WEB_CODE=true`） |
 | `CORE_CODE_PATH` | 挂载 openjiuwen 核心包 | 不涉及 | 挂载 openjiuwen 核心包 | 挂载（需 `IS_MOUNT_WEB_CODE=true`） |
 
-说明：AgentServer 为多容器 Pod（jiuwenclaw-agentserver + jiuwenbox），其源码挂载随服务模板一并生效；任一源码路径变量留空时，AgentServer 服务模板中对应的 hostPath 挂载会被自动剔除，继续使用镜像内置代码。
+说明：AgentServer 为多容器 Pod（jiuwenswarm-agentserver + jiuwenbox），其源码挂载随服务模板一并生效；任一源码路径变量留空时，AgentServer 服务模板中对应的 hostPath 挂载会被自动剔除，继续使用镜像内置代码。

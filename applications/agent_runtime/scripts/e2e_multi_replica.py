@@ -181,7 +181,7 @@ async def s1_seed(c: Client, r: aioredis.Redis) -> None:
             "SET FOREIGN_KEY_CHECKS=1;",
             stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
     out = await kubectl("delete", "pod", "-n", NS, "-l",
-                        "jiuwenclaw-component=agentserver", "--wait=false")
+                        "jiuwenswarm-component=agentserver", "--wait=false")
     print(f"-- 清理上一轮 Pod：{out.strip().splitlines()[-1][:60] if out.strip() else '无'}")
 
     payload = config_sync_payload(

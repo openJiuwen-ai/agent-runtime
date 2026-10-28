@@ -17,8 +17,8 @@ function installSameOriginApiGuard(): void {
     let rewritten = raw;
     try {
       const url = new URL(raw, window.location.origin);
-      const internalManager = url.hostname === 'jiuwenclaw-manager-server';
-      const internalIdentity = url.hostname === 'jiuwenclaw-identity';
+      const internalManager = url.hostname === 'jiuwenswarm-manager-server';
+      const internalIdentity = url.hostname === 'jiuwenswarm-identity';
       if (internalManager || internalIdentity) {
         const prefix = internalIdentity ? '/idp' : '/api';
         const upstreamPrefix = internalManager && url.pathname.startsWith('/api/') ? '/api' : '';

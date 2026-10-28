@@ -48,7 +48,8 @@ usage() {
                     off:     secret → redis → agentserver → gateway → web
                     routing: 同上 + runtime（会话粘性路由，零 K8s 权限）
                     full:    secret → redis → runtime → gateway → web
-                             （AgentServer 由 runtime 按需创建，自动注入 Pod 操作 RBAC）
+                             （AgentServer 由 runtime 按需创建，自动注入 Pod 操作 RBAC；
+                             仅 CLUSTER_TYPE=k8s，openshift 暂不支持）
   manager up        拉起管理套件: identity → manager-server → manager-web
                     （依赖的 secret / redis 集群缺失时自动拉起，已有则复用）
   up mariadb        只部署/渲染指定组件；可多选，如: up mariadb minio

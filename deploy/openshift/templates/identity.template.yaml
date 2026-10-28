@@ -1,15 +1,15 @@
-# jiuwenclaw-identity 部署清单（镜像 <<IDENTITY_IMAGE>>）
+# jiuwenswarm-identity 部署清单（镜像 <<IDENTITY_IMAGE>>）
 # 说明：
 #   - 镜像为 OpenShift 适配版，适配 restricted-v2 SCC（强制随机 uid，不指定 runAsUser/fsGroup）
 #   - 依赖前置：mariadb 已建库 identity_<<NAMESPACE>>（utf8mb4）
 apiVersion: v1
 kind: Service
 metadata:
-  name: jiuwenclaw-identity
+  name: jiuwenswarm-identity
   namespace: <<NAMESPACE>>
 spec:
   selector:
-    app: jiuwenclaw-identity
+    app: jiuwenswarm-identity
   ports:
     - name: rest
       port: 8770
@@ -19,20 +19,20 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: jiuwenclaw-identity
+  name: jiuwenswarm-identity
   namespace: <<NAMESPACE>>
 spec:
   replicas: <<IDENTITY_REPLICAS>>
   selector:
     matchLabels:
-      app: jiuwenclaw-identity
+      app: jiuwenswarm-identity
   template:
     metadata:
       labels:
-        app: jiuwenclaw-identity
+        app: jiuwenswarm-identity
     spec:
       containers:
-        - name: jiuwenclaw-identity
+        - name: jiuwenswarm-identity
           image: <<IDENTITY_IMAGE>>
           imagePullPolicy: IfNotPresent
           ports:
@@ -40,7 +40,7 @@ spec:
               containerPort: 8770
           envFrom:
             - secretRef:
-                name: jiuwenclaw-secret-configmap
+                name: jiuwenswarm-secret-configmap
           env:
             - name: IDENTITY_REST_HOST
               value: "0.0.0.0"
