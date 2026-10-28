@@ -7,12 +7,17 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 
-from manager_server.core.quota import WorkspaceQuotaPolicyService, WorkspaceQuotaUsageService
+from manager_server.core.quota import (
+    TeamQuotaPolicyService,
+    WorkspaceQuotaPolicyService,
+    WorkspaceQuotaUsageService,
+)
 from manager_server.infrastructure.config import settings
 from manager_server.infrastructure.db import get_db_handler
 from manager_server.routers.auth_guards import require_permission
 from manager_server.schemas.common_schemas import ResponseModel
 from manager_server.schemas.quota_schemas import (
+    TeamQuotaPolicyUpsertBody,
     WorkspaceQuotaEffectiveQuery,
     WorkspaceQuotaPolicyCreateBody,
     WorkspaceQuotaPolicyListQuery,
@@ -192,3 +197,83 @@ async def list_workspace_quota_usage(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return ResponseModel(code=200, message="success", data=data)
+
+
+def _team_quota_svc(handler: DBHandler) -> TeamQuotaPolicyService:
+    return TeamQuotaPolicyService(handler)
+
+
+@quota_router.get(
+    "/{jiuwenclaw_id}/team-quota/policies",
+    response_model=ResponseModel,
+)
+async def list_team_quota_policies(
+    jiuwenclaw_id: str,
+    user: _ReadQuota,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    data = await _team_quota_svc(handler).list_policies(cluster_id=jiuwenclaw_id)
+    return ResponseModel(code=200, message="success", data=data)
+
+
+@quota_router.put(
+    "/{jiuwenclaw_id}/team-quota/policy",
+    response_model=ResponseModel,
+)
+async def upsert_team_quota_policy(
+    jiuwenclaw_id: str,
+    body: TeamQuotaPolicyUpsertBody,
+    user: _WriteQuota,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    try:
+        data = await _team_quota_svc(handler).upsert(
+            cluster_id=jiuwenclaw_id,
+            policy_id=body.policy_id,
+            policy_name=body.policy_name,
+            policy_desc=body.policy_desc,
+            match_expr=body.match_expr,
+            priority=body.priority,
+            max_teams_per_user=body.max_teams_per_user,
+            max_teammates_per_team=body.max_teammates_per_team,
+            max_teams_per_org=body.max_teams_per_org,
+            enabled=body.enabled,
+            actor_id=_actor(user),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ResponseModel(code=200, message="success", data=data)
+
+
+@quota_router.delete(
+    "/{jiuwenclaw_id}/team-quota/policies/{policy_id}",
+    response_model=ResponseModel,
+)
+async def delete_team_quota_policy(
+    jiuwenclaw_id: str,
+    policy_id: str,
+    user: _WriteQuota,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    try:
+        await _team_quota_svc(handler).delete(policy_id, cluster_id=jiuwenclaw_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ResponseModel(code=200, message="success", data={"ok": True})
+
+
+@quota_router.get(
+    "/{jiuwenclaw_id}/team-quota/usage",
+    response_model=ResponseModel,
+)
+async def list_team_quota_usage(
+    jiuwenclaw_id: str,
+    user: _ReadQuota,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    try:
+        data = await _team_quota_svc(handler).list_usage(cluster_id=jiuwenclaw_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ResponseModel(code=200, message="success", data=data)
+

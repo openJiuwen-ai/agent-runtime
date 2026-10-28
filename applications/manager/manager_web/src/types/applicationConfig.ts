@@ -145,6 +145,67 @@ export interface WorkspaceQuotaUsageListResult {
   summary: WorkspaceQuotaUsageSummary;
 }
 
+export interface TeamQuotaPolicy {
+  cluster_id: string;
+  policy_id: string;
+  policy_name: string;
+  policy_desc?: string | null;
+  match_expr: WorkspaceQuotaMatchExpr;
+  priority: number;
+  max_teams_per_user: number;
+  max_teammates_per_team: number;
+  max_teams_per_org: number;
+  source?: string;
+  enabled: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface TeamQuotaPolicyUpsertBody {
+  policy_id?: string | null;
+  policy_name?: string;
+  policy_desc?: string | null;
+  match_expr?: WorkspaceQuotaMatchExpr;
+  priority?: number;
+  max_teams_per_user: number;
+  max_teammates_per_team: number;
+  max_teams_per_org?: number;
+  enabled?: boolean;
+}
+
+export interface TeamQuotaTeamUsage {
+  team_id: string;
+  used: number;
+  limit: number;
+}
+
+export interface TeamQuotaUsage {
+  user_id: string;
+  group_id: string;
+  bot_id: string;
+  used: number;
+  limit: number;
+  default: number;
+  teams: TeamQuotaTeamUsage[];
+}
+
+export interface TeamQuotaOrgUsage {
+  group_id: string;
+  used: number;
+  limit: number;
+}
+
+export interface TeamQuotaUsageListResult {
+  items: TeamQuotaUsage[];
+  count: number;
+  orgs?: TeamQuotaOrgUsage[];
+}
+
+export interface TeamQuotaPolicyListResult {
+  items: TeamQuotaPolicy[];
+  total: number;
+}
+
 export interface ListItemsResult<T> {
   items: T[];
 }

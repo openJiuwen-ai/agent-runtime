@@ -170,10 +170,31 @@ def _ensure_bigint_type_support() -> None:
     _BIGINT_TYPE_PATCH_APPLIED = True
 
 
+async def _ensure_team_quota_org_column(handler: DBHandler) -> None:
+    """Existing manager databases keep the old team_quota_policy shape."""
+
+    def upgrade(connection):
+        inspector = inspect(connection)
+        if not inspector.has_table("team_quota_policy"):
+            return
+        cols = {col["name"] for col in inspector.get_columns("team_quota_policy")}
+        if "max_teams_per_org" in cols:
+            return
+        quote = connection.dialect.identifier_preparer.quote
+        connection.execute(text(
+            f"ALTER TABLE {quote('team_quota_policy')} "
+            f"ADD COLUMN {quote('max_teams_per_org')} INTEGER NOT NULL DEFAULT 0"
+        ))
+
+    async with handler.get_engine().begin() as connection:
+        await connection.run_sync(upgrade)
+
+
 async def init_all_tables(handler: DBHandler) -> None:
     _ensure_bigint_type_support()
     for table_def in ALL_TABLE_DEFINITIONS:
         await handler.init_table(table_def)
+    await _ensure_team_quota_org_column(handler)
     await _migrate_a2a_discovery_settings(handler)
     from manager_server.core.authz import seed_authz_defaults
 

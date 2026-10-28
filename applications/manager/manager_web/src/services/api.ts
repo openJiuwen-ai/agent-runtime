@@ -45,6 +45,10 @@ import type {
   WorkspaceQuotaPolicyPatchBody,
   WorkspaceQuotaUsageListResult,
   WorkspaceQuotaUsageStatus,
+  TeamQuotaPolicy,
+  TeamQuotaPolicyListResult,
+  TeamQuotaPolicyUpsertBody,
+  TeamQuotaUsageListResult,
   A2AOutboundTemplate,
   A2ADiscoveryCandidate,
   A2ADiscoverySettings,
@@ -1591,6 +1595,23 @@ export const WorkspaceQuotaApi = {
       `${instanceBase(instanceId)}/workspace-quota/policies/${encodeURIComponent(policyId)}`,
       { method: 'DELETE' },
     ),
+};
+
+export const TeamQuotaApi = {
+  list: (instanceId: string) =>
+    http<TeamQuotaPolicyListResult>(`${instanceBase(instanceId)}/team-quota/policies`),
+  upsert: (instanceId: string, body: TeamQuotaPolicyUpsertBody) =>
+    http<TeamQuotaPolicy>(`${instanceBase(instanceId)}/team-quota/policy`, {
+      method: 'PUT',
+      body,
+    }),
+  remove: (instanceId: string, policyId: string) =>
+    http<void>(
+      `${instanceBase(instanceId)}/team-quota/policies/${encodeURIComponent(policyId)}`,
+      { method: 'DELETE' },
+    ),
+  listUsage: (instanceId: string) =>
+    http<TeamQuotaUsageListResult>(`${instanceBase(instanceId)}/team-quota/usage`),
 };
 
 export const AuditLogApi = {

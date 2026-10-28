@@ -18,6 +18,7 @@ import { InstanceAccessPanel } from './instanceAccessPanel/InstanceAccessPanel';
 import { InstanceAgentResourceTab } from './instanceResourcePanel/InstanceAgentResourceTab';
 import { InstanceServiceResourceTab } from './instanceResourcePanel/InstanceServiceResourceTab';
 import { WorkspaceQuotaPanel } from './instanceQuotaPanel/WorkspaceQuotaPanel';
+import { TeamQuotaPanel } from './instanceQuotaPanel/TeamQuotaPanel';
 import { InstancePlaceholderPanel } from './InstancePlaceholderPanel';
 
 export type InstancePageTab =
@@ -29,6 +30,7 @@ export type InstancePageTab =
   | 'status'
   | 'quotaManagement'
   | 'workspaceQuota'
+  | 'teamQuota'
   | 'tokenQuota'
   | 'cost'
   | 'audit';
@@ -110,21 +112,31 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
         href: `/instances/${instanceId}/workspace-quota`,
       },
       {
+        key: 'teamQuota',
+        label: t('instanceDetail.tabs.teamQuota'),
+        href: `/instances/${instanceId}/team-quota`,
+      },
+      {
         key: 'tokenQuota',
         label: t('instanceDetail.tabs.tokenQuota'),
         href: `/instances/${instanceId}/token-quota`,
       },
     ];
-    return all.filter((item) => item.key !== 'workspaceQuota' || canReadQuota);
+    return all.filter((item) => item.key === 'tokenQuota' || canReadQuota);
   }, [canReadQuota, instanceId, t]);
   const inQuotaManagement =
     tab === 'quotaManagement' ||
     tab === 'workspaceQuota' ||
+    tab === 'teamQuota' ||
     tab === 'tokenQuota';
   const activeQuotaTab: InstancePageTab =
-    tab === 'tokenQuota' || ((tab === 'workspaceQuota' || tab === 'quotaManagement') && !canReadQuota)
+    tab === 'tokenQuota'
       ? 'tokenQuota'
-      : 'workspaceQuota';
+      : tab === 'teamQuota' && canReadQuota
+        ? 'teamQuota'
+        : canReadQuota
+          ? 'workspaceQuota'
+          : 'tokenQuota';
 
   /** 引导状态：准入（用户/组织均未配置）、Agent 与 运行时（任一未配置），提示项可点击跳转并自动打开添加弹框 */
   const accessWarnLinks =
@@ -332,6 +344,9 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
                 subtitleKey="instanceDetail.workspaceQuota.subtitle"
               />
             )
+          )}
+          {inQuotaManagement && activeQuotaTab === 'teamQuota' && (
+            <TeamQuotaPanel instanceId={instanceId} />
           )}
           {inQuotaManagement && activeQuotaTab === 'tokenQuota' && (
             <InstancePlaceholderPanel
