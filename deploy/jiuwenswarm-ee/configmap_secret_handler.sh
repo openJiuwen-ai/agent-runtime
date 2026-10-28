@@ -36,6 +36,8 @@ render_secret_configmap() {
         b64=$(printf '%s' "${DEPLOY_VARS[$key]}" | base64 -w 0)
         yq eval ".data[\"${skey}\"] = \"${b64}\"" -i "${file}"
     done
+    # 同步 namespace（namespace 切换后遗留的旧 conf 不再指向旧 ns）
+    yq eval ".metadata.namespace = \"${namespace}\"" -i "${file}"
     success "Secret configmap is rendered."
 }
 

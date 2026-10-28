@@ -1,24 +1,24 @@
-# jiuwenclaw-gateway 部署清单（镜像 <<GATEWAY_IMAGE>>）
+# jiuwenswarm-gateway 部署清单（镜像 <<GATEWAY_IMAGE>>）
 # 说明：
 #   - 镜像为 OpenShift 适配版，适配 restricted-v2 SCC（强制随机 uid，不指定 runAsUser/fsGroup）
-#   - 配置经 Secret jiuwenclaw-secret-configmap 与 ConfigMap jiuwenclaw-gateway-envfile 注入
+#   - 配置经 Secret jiuwenswarm-secret-configmap 与 ConfigMap jiuwenswarm-gateway-envfile 注入
 #   - 依赖前置：mariadb 已建库 gateway_<<NAMESPACE>> / web_<<NAMESPACE>>（utf8mb4）
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: jiuwenclaw-gateway
+  name: jiuwenswarm-gateway
   namespace: <<NAMESPACE>>
   labels:
-    app: jiuwenclaw-gateway
+    app: jiuwenswarm-gateway
 spec:
   replicas: <<GATEWAY_REPLICAS>>
   selector:
     matchLabels:
-      app: jiuwenclaw-gateway
+      app: jiuwenswarm-gateway
   template:
     metadata:
       labels:
-        app: jiuwenclaw-gateway
+        app: jiuwenswarm-gateway
     spec:
       affinity:
         podAntiAffinity:
@@ -30,7 +30,7 @@ spec:
                 - key: app
                   operator: In
                   values:
-                  - jiuwenclaw-gateway
+                  - jiuwenswarm-gateway
               topologyKey: "kubernetes.io/hostname"
       containers:
         - name: gateway
@@ -59,9 +59,9 @@ spec:
             failureThreshold: 3
           envFrom:
             - secretRef:
-                name: jiuwenclaw-secret-configmap
+                name: jiuwenswarm-secret-configmap
             - configMapRef:
-                name: jiuwenclaw-gateway-envfile
+                name: jiuwenswarm-gateway-envfile
           env:
             - name: POD_IP
               valueFrom:
@@ -72,11 +72,11 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: jiuwenclaw-gateway
+  name: jiuwenswarm-gateway
   namespace: <<NAMESPACE>>
 spec:
   selector:
-    app: jiuwenclaw-gateway
+    app: jiuwenswarm-gateway
   ports:
     - name: web-ws
       port: 19000

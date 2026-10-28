@@ -8,7 +8,7 @@ set -euo pipefail
 NAMESPACE="chenhui"
 AGENT_SERVER_IMAGE="swr.cn-north-4.myhuaweicloud.com/openjiuwen/jiuwenclaw-agentserver-arm64:0.0.8s"
 JIUWENBOX_IMAGE="swr.cn-north-4.myhuaweicloud.com/openjiuwen/jiuwenclaw-sandbox-arm64:0.0.8s"
-LABEL="app=jiuwenclaw-agent-runtime"
+LABEL="app=jiuwenswarm-agent-runtime"
 PORT="8091"
 NODE="arm-master"
 
@@ -57,7 +57,7 @@ kubectl exec -n "${NAMESPACE}" "${AGENT_RUNTIME_POD}" -i -- \
     "containers": [
       {
         "container_id": "c-agentserver-main",
-        "name": "jiuwenclaw-agentserver",
+        "name": "jiuwenswarm-agentserver",
         "image": "${AGENT_SERVER_IMAGE}",
         "imagePullPolicy": "IfNotPresent",
         "ports": [
@@ -92,11 +92,11 @@ kubectl exec -n "${NAMESPACE}" "${AGENT_RUNTIME_POD}" -i -- \
           {"name": "LOG_MASK_ENABLED", "value": "false"},
           {"name": "LOG_TO_FILE_ENABLED", "value": "true"},
           {"name": "NO_PROXY", "value": "localhost,127.0.0.1,api.openai.rnd.huawei.com"},
-          {"name": "JIUWENCLAW_SANDBOX_ENABLED", "value": "true"},
-          {"name": "JIUWENCLAW_SANDBOX_URL", "value": "http://127.0.0.1:8321"},
-          {"name": "JIUWENCLAW_SANDBOX_TYPE", "value": "jiuwenbox"},
-          {"name": "JIUWENCLAW_SANDBOX_STARTUP_MODE", "value": "external"},
-          {"name": "JIUWENCLAW_SANDBOX_PRESERVE_FILE_SHARING_MODE", "value": "mount"},
+          {"name": "JIUWENSWARM_SANDBOX_ENABLED", "value": "true"},
+          {"name": "JIUWENSWARM_SANDBOX_URL", "value": "http://127.0.0.1:8321"},
+          {"name": "JIUWENSWARM_SANDBOX_TYPE", "value": "jiuwenbox"},
+          {"name": "JIUWENSWARM_SANDBOX_STARTUP_MODE", "value": "external"},
+          {"name": "JIUWENSWARM_SANDBOX_PRESERVE_FILE_SHARING_MODE", "value": "mount"},
           {"name": "JIUWENBOX_FALLBACK_ON_FAILURE", "value": "False"}
         ],
         "securityContext": {"runAsUser": 0, "runAsGroup": 0},
@@ -141,7 +141,7 @@ kubectl exec -n "${NAMESPACE}" "${AGENT_RUNTIME_POD}" -i -- \
       "template_name": "default",
       "main_container_id": "c-agentserver-main",
       "sidecar_container_ids": ["c-jiuwenbox"],
-      "pod_name": "jiuwenclaw-agentserver",
+      "pod_name": "jiuwenswarm-agentserver",
       "namespace": "${NAMESPACE}",
       "nodeName": "arm-master",
       "sse_path": "/api/v1/events/stream",
@@ -154,9 +154,9 @@ kubectl exec -n "${NAMESPACE}" "${AGENT_RUNTIME_POD}" -i -- \
       "volumes": [
         {"name": "hp-code", "hostPath": {"path": "${CLAW_CODE_PATH}", "type": "Directory"}},
         {"name": "hp-openjiuwen", "hostPath": {"path": "${CORE_CODE_PATH}/openjiuwen", "type": "Directory"}},
-        {"name": "gw-config", "configMap": {"name": "jiuwenclaw-gateway-config"}},
-        {"name": "gw-envfile", "configMap": {"name": "jiuwenclaw-gateway-envfile"}},
-        {"name": "data", "persistentVolumeClaim": {"claimName": "jiuwenclaw-pvc"}},
+        {"name": "gw-config", "configMap": {"name": "jiuwenswarm-gateway-config"}},
+        {"name": "gw-envfile", "configMap": {"name": "jiuwenswarm-gateway-envfile"}},
+        {"name": "data", "persistentVolumeClaim": {"claimName": "jiuwenswarm-pvc"}},
         {"name": "hp-cgroup", "hostPath": {"path": "/sys/fs/cgroup", "type": "Directory"}},
         {"name": "hp-jiuwenbox", "hostPath": {"path": "${CLAW_CODE_PATH}/jiuwenbox", "type": "Directory"}}
       ]

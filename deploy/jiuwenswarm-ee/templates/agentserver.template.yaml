@@ -14,10 +14,10 @@ spec:
     metadata:
       labels:
         app: <<AGENT_SERVER_NAME>>
-        jiuwenclaw-component: agentserver
+        jiuwenswarm-component: agentserver
     spec:
       securityContext:
-        fsGroup: <<CLAW_FS_GROUP>>
+        fsGroup: <<SWARM_FS_GROUP>>
       affinity:
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
@@ -35,8 +35,8 @@ spec:
           image: <<AGENT_SERVER_IMAGE>>
           imagePullPolicy: IfNotPresent
           securityContext:
-            runAsUser: <<CLAW_USER>>
-            runAsGroup: <<CLAW_GROUP>>
+            runAsUser: <<SWARM_USER>>
+            runAsGroup: <<SWARM_GROUP>>
           ports:
             - name: sse
               containerPort: <<AGENT_SERVER_HTTP_PORT>>
@@ -65,7 +65,7 @@ spec:
                 name: <<AGENT_SERVER_ENV_CM_NAME>>
           volumeMounts:
             - name: data
-              mountPath: <<CLAW_HOME>>/.jiuwenswarm
+              mountPath: <<SWARM_HOME>>/.jiuwenswarm
         # jiuwenbox 沙箱 sidecar：JIUWENBOX_ENABLED=false 时由 agentserver_handler 整体移除
         - name: <<JIUWENBOX_NAME>>
           image: <<JIUWENBOX_IMAGE>>
@@ -76,7 +76,7 @@ spec:
             - name: JIUWENBOX_LISTEN
               value: "http://0.0.0.0:<<JIUWENBOX_PORT>>"
             - name: JIUWENBOX_POLICY_PATH
-              value: "<<CLAW_POD_CODE_PATH>>/jiuwenbox/src/jiuwenbox/configs/enterprise-policy.yaml"
+              value: "<<SWARM_POD_CODE_PATH>>/jiuwenbox/src/jiuwenbox/configs/enterprise-policy.yaml"
             - name: TZ
               value: "<<TIMEZONE>>"
           securityContext:
@@ -97,11 +97,11 @@ spec:
             - name: hp-cgroup
               mountPath: /sys/fs/cgroup
             - name: data
-              mountPath: <<CLAW_HOME>>/.jiuwenswarm
+              mountPath: <<SWARM_HOME>>/.jiuwenswarm
       volumes:
         - name: data
           persistentVolumeClaim:
-            claimName: <<CLAW_PVC>>
+            claimName: <<SWARM_PVC>>
         - name: hp-cgroup
           hostPath:
             path: /sys/fs/cgroup

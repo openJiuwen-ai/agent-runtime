@@ -1,23 +1,23 @@
-# jiuwenclaw-web 部署清单（镜像 <<WEB_IMAGE>>）
+# jiuwenswarm-web 部署清单（镜像 <<WEB_IMAGE>>）
 # 说明：
 #   - 镜像基于 nginxinc/nginx-unprivileged，适配 restricted-v2 SCC（随机 uid，pid/temp 写 /tmp）
 #   - OBS_* 经渲染参数化（OBS_URL 空=内置 MinIO，见 .env.example）
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: jiuwenclaw-web
+  name: jiuwenswarm-web
   namespace: <<NAMESPACE>>
   labels:
-    app: jiuwenclaw-web
+    app: jiuwenswarm-web
 spec:
   replicas: <<WEB_REPLICAS>>
   selector:
     matchLabels:
-      app: jiuwenclaw-web
+      app: jiuwenswarm-web
   template:
     metadata:
       labels:
-        app: jiuwenclaw-web
+        app: jiuwenswarm-web
     spec:
       containers:
         - name: web
@@ -32,7 +32,7 @@ spec:
               protocol: TCP
           envFrom:
             - secretRef:
-                name: jiuwenclaw-secret-configmap
+                name: jiuwenswarm-secret-configmap
           env:
             - name: WEB_HTTP_PORT
               value: "5173"
@@ -47,9 +47,9 @@ spec:
             - name: WORKSPACE_QUOTA_ENABLED
               value: "false"
             - name: GATEWAY_URL
-              value: "http://jiuwenclaw-gateway:19000"
+              value: "http://jiuwenswarm-gateway:19000"
             - name: GATEWAY_WEB_HTTP_URL
-              value: "http://jiuwenclaw-gateway:19000"
+              value: "http://jiuwenswarm-gateway:19000"
             - name: TZ
               value: "Asia/Shanghai"
             - name: OBS_URL
@@ -67,11 +67,11 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: jiuwenclaw-web
+  name: jiuwenswarm-web
   namespace: <<NAMESPACE>>
 spec:
   selector:
-    app: jiuwenclaw-web
+    app: jiuwenswarm-web
   ports:
     - name: http
       port: 5173

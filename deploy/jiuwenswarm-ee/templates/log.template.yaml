@@ -16,7 +16,7 @@ data:
         Name              tail
         Tag               kube.*
         # 源头过滤：只采集满足命名空间和 Pod 前缀的文件，极大减少节点无效 IO
-        Path              /var/log/pods/*_jiuwenclaw*/*/*.log
+        Path              /var/log/pods/*_jiuwenswarm*/*/*.log
         Parser            cri_or_docker
         DB                /var/lib/fluent-bit/positions.db
         Mem_Buf_Limit     50MB
@@ -149,8 +149,8 @@ data:
           # 1. 获取 Fluent Bit 传过来的原始 Tag 字段 (路径已被转为点分格式)
           raw_tag = .tag || ""
 
-          # 2. 精准捕获 jiuwenclaw-\* 格式的 Pod 名字
-          captures = parse_regex(raw_tag, r'^kube\.var\.log\.pods\.(?<ns>[^_]+)_(?<pod>jiuwenclaw-.+?)_(?<uid>[^.]+)\.(?<container>[^.]+)\.') ?? null
+          # 2. 精准捕获 jiuwenswarm-\* 格式的 Pod 名字
+          captures = parse_regex(raw_tag, r'^kube\.var\.log\.pods\.(?<ns>[^_]+)_(?<pod>jiuwenswarm-.+?)_(?<uid>[^.]+)\.(?<container>[^.]+)\.') ?? null
           if captures == null {
             # 如果不匹配，说明不是我们想要的业务日志，直接丢弃
             abort
@@ -166,7 +166,7 @@ data:
           .message = .message || .log || ""
 
       # ================================================================
-      # 脱敏 transform：复刻 jiuwenclaw/infrastructure/log_masking/engine.py
+      # 脱敏 transform：复刻 jiuwenswarm/infrastructure/log_masking/engine.py
       # 的 4 条内置规则（按 priority DESC 顺序应用）。
       # DEFAULT_REPLACEMENT = "******"
       #
@@ -254,7 +254,7 @@ spec:
             name: <<VECTOR_NAME>>-config
         - name: master-store
           hostPath:
-            path: <<CLAW_LOG_DIR>> # 映射到 Master 宿主机物理目录
+            path: <<SWARM_LOG_DIR>> # 映射到 Master 宿主机物理目录
 
 ---
 apiVersion: v1
