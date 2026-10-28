@@ -72,5 +72,6 @@ render_templates() {
   apply_nfs_direct_mounts "${wanted[@]}"
   apply_k8s_extras "${wanted[@]}"
   apply_runtime_mode_extras "${wanted[@]}"
+  apply_sandbox_type_extras "${wanted[@]}"
   apply_dev_code_mounts "${wanted[@]}"
 }

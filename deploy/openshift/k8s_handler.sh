@@ -442,6 +442,39 @@ apply_runtime_mode_extras() { # $@=本次渲染的清单文件名
   done
 }
 
+# ---------- 沙箱类型后处理（SANDBOX_TYPE） ----------
+
+# 按沙箱类型修整渲染产物（SANDBOX_TYPE 语义见 .env.example 与 resolve_sandbox_type_vars）：
+# - off：no-op（保持原样）
+# - kata：AgentServer 沙箱 Pod 注入 runtimeClassName: kata（Kata 轻量虚机隔离；
+#   集群须预装 Kata Containers 并已创建 RuntimeClass kata，否则 Pod 无法启动）：
+#   · agentserver.yaml → StatefulSet Pod 模板（off/routing 模式预启动的沙箱 Pod）
+#   · agentserver.json → config_sync 载荷 rawdata.templates（full 模式 runtime 按需
+#     创建的沙箱 Pod；runtime 侧按模板级白名单解析，未知键暂忽略——消费生效待
+#     runtime 打通 runtimeClassName 字段后自然解锁）
+# - jiuwenbox：预留（resolve_sandbox_type_vars 已降级为 off，此处不会出现）
+apply_sandbox_type_extras() { # $@=本次渲染的清单文件名
+  [ "${DEPLOY_VARS["SANDBOX_TYPE"]}" = kata ] || return 0
+  local f
+  for f in "$@"; do
+    case "$f" in
+      agentserver.yaml)
+        [ -f "$CONF_DIR/$f" ] || continue
+        # 更新运算符写法：不匹配的文档（headless/ClusterIP Service）原样保留
+        yq -i '(select(.kind == "StatefulSet" and .metadata.name == "jiuwenclaw-agentserver").spec.template.spec) |= (.runtimeClassName = "kata")' "$CONF_DIR/$f"
+        [ "$(yq 'select(.kind == "StatefulSet").spec.template.spec.runtimeClassName' "$CONF_DIR/$f")" = "kata" ] \
+          || error "runtimeClassName 注入校验失败: $f"
+        info "沙箱后处理：agentserver.yaml 注入 runtimeClassName: kata";;
+      agentserver.json)
+        [ -f "$CONF_DIR/$f" ] || continue
+        yq -i -o=json '.rawdata.templates[].runtimeClassName = "kata"' "$CONF_DIR/$f"
+        [ "$(yq -r '.rawdata.templates[0].runtimeClassName' "$CONF_DIR/$f")" = "kata" ] \
+          || error "runtimeClassName 注入校验失败: $f"
+        info "沙箱后处理：agentserver.json 注入 runtimeClassName: kata";;
+    esac
+  done
+}
+
 # ---------- dev 模式代码挂载（MODE=dev） ----------
 # hostPath 把宿主机仓库代码挂载到镜像内代码路径，改代码无需重建镜像；Pod 固定到代码所在节点
 # 仅 CLUSTER_TYPE=k8s 支持（openshift SCC 禁止 hostPath）
