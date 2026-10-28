@@ -105,7 +105,7 @@ def test_binding_metadata_and_https_dns() -> None:
         path="/sse",
         pod_ip="10.0.0.8",
     ) == (
-        "https://agentserver-abc.jiuwenclaw-agentserver.tenant-a.svc.cluster.local:8080/sse"
+        "https://agentserver-abc.jiuwenswarm-agentserver.tenant-a.svc.cluster.local:8080/sse"
     )
 
 

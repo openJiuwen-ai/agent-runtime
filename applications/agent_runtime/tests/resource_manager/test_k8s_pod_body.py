@@ -841,7 +841,7 @@ def test_build_pod_body_enforce_mounts_secret_only_into_main_container():
     pod_spec = pod.kwargs["spec"].kwargs
     main, sidecar = pod_spec["containers"]
 
-    assert pod_spec["subdomain"] == "jiuwenclaw-agentserver"
+    assert pod_spec["subdomain"] == "jiuwenswarm-agentserver"
     assert pod_spec["hostname"] == "pod-1"
     assert main.kwargs["readiness_probe"].kwargs["tcp_socket"].kwargs == {"port": 8086}
     assert "http_get" not in main.kwargs["readiness_probe"].kwargs
