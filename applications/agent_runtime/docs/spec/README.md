@@ -20,6 +20,7 @@
 | `../api/link-mtls-contract.md` | HTTPS/mTLS、证书角色、绑定 Header、Manager 绑定接口契约 | 对接 Gateway、Manager 或 AgentServer 时 |
 | `../design/Agent-Runtime-HLD.md` | 架构总览/接口契约/场景 A–N/Redis 键表(语义权威) | 语义不确定时 |
 | `../design/http-sse-link-mtls-design.md` | 内部链路 mTLS 的身份、信任、持久化和多实例设计 | 理解安全边界和跨组件关系时 |
+| `../design/routing-deploy-mode-design.md` | routing 供给模式(外部预建 Pod,零 K8s 权限)设计定稿:与需求方确认的决策/被否备选、接口契约、运行时行为与豁免机制 | 理解 routing 模式语义与边界时 |
 | `../design/session-manager-design.md` | SM 详细设计(6 个 Lua 全文) | 深挖 SM 设计动机 |
 | `../design/resource-manager-design.md` | RM 详细设计(6 个 Lua 全文) | 深挖 RM 设计动机 |
 
