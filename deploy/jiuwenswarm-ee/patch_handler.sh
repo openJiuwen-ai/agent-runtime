@@ -65,29 +65,29 @@ post_and_validate() {
 }
 
 # 按存储模式注入 data 卷(.jiuwenswarm 数据目录):模板里不再预置 PVC 卷,
-# 由本函数按 CLAW_MOUNT_TYPE 二选一注入——
-#   pvc: StorageClass 动态供给的持久卷(claimName=CLAW_PVC)
+# 由本函数按 SWARM_MOUNT_TYPE 二选一注入——
+#   pvc: StorageClass 动态供给的持久卷(claimName=SWARM_PVC)
 #   nfs: 直连 NFS 共享目录(server=NFS_SERVER_ADDR,
-#        path=NFS_SHARE_PATH/jiuwenclaw/<NAMESPACE>, 按实例 namespace 隔离,
+#        path=NFS_SHARE_PATH/jiuwenswarm/<NAMESPACE>, 按实例 namespace 隔离,
 #        与 check_runtime_up_dependency 预创建的内置 NFS 数据目录同名)
 # 用法: inject_data_volume <json_file>
 inject_data_volume() {
-    local mount_type="${DEPLOY_VARS["CLAW_MOUNT_TYPE"]}"
+    local mount_type="${DEPLOY_VARS["SWARM_MOUNT_TYPE"]}"
     local data_volume
     if [ "${mount_type}" == "pvc" ]; then
-        data_volume="$(jq -n --arg claim "${DEPLOY_VARS["CLAW_PVC"]}" \
+        data_volume="$(jq -n --arg claim "${DEPLOY_VARS["SWARM_PVC"]}" \
             '{name: "data", persistentVolumeClaim: {claimName: $claim}}')"
     elif [ "${mount_type}" == "nfs" ]; then
         if [ -z "${DEPLOY_VARS["NFS_SERVER_ADDR"]:-}" ]; then
-            error "CLAW_MOUNT_TYPE=nfs requires NFS_SERVER_ADDR (external) or a deployed built-in NFS"
+            error "SWARM_MOUNT_TYPE=nfs requires NFS_SERVER_ADDR (external) or a deployed built-in NFS"
         fi
-        # 规整共享根路径尾部 '/'(内置 NFS 默认 NFS_SHARE_PATH="/",避免拼出 //jiuwenclaw)
+        # 规整共享根路径尾部 '/'(内置 NFS 默认 NFS_SHARE_PATH="/",避免拼出 //jiuwenswarm)
         local nfs_share="${DEPLOY_VARS["NFS_SHARE_PATH"]%/}"
         data_volume="$(jq -n --arg server "${DEPLOY_VARS["NFS_SERVER_ADDR"]}" \
-            --arg path "${nfs_share}/jiuwenclaw/${DEPLOY_VARS["NAMESPACE"]}" \
+            --arg path "${nfs_share}/jiuwenswarm/${DEPLOY_VARS["NAMESPACE"]}" \
             '{name: "data", nfs: {server: $server, path: $path}}')"
     else
-        error "Unsupported CLAW_MOUNT_TYPE '${mount_type}' (expect pvc/nfs)"
+        error "Unsupported SWARM_MOUNT_TYPE '${mount_type}' (expect pvc/nfs)"
     fi
     jq --argjson volume "${data_volume}" \
         '.rawdata.templates[].volumes += [$volume]' \
@@ -107,9 +107,9 @@ drop_nodename_field() {
 }
 
 # 剔除无效/不需要的 hostPath 卷(+ 引用它们的 volumeMounts):
-# 规则1(两模式通用):三个代码目录变量(CLAW_CODE_PATH/RUNTIME_CODE_PATH/CORE_CODE_PATH)任一为空,
+# 规则1(两模式通用):三个代码目录变量(SWARM_CODE_PATH/RUNTIME_CODE_PATH/CORE_CODE_PATH)任一为空,
 #   引用该变量的 hostPath 路径会变坏、不能挂载,一并剔除。映射(按 hostPath path 引用):
-#   CLAW_CODE_PATH    -> hp-code
+#   SWARM_CODE_PATH    -> hp-code
 #   RUNTIME_CODE_PATH -> hp-rt-foundation, hp-rt-management
 #   CORE_CODE_PATH    -> hp-openjiuwen
 # 规则2(仅 product):agentserver 镜像内置代码,4 个 agentserver 代码挂载,1 个 jiuwenbox代码挂载
@@ -119,7 +119,7 @@ drop_nodename_field() {
 drop_hostpath_volumes() {
     local json_file="${CONFIG["AS_JSON_FILE"]}"
     local drop_names=()
-    if [[ -z "${DEPLOY_VARS["CLAW_CODE_PATH"]:-}" ]]; then
+    if [[ -z "${DEPLOY_VARS["SWARM_CODE_PATH"]:-}" ]]; then
         drop_names+=(hp-code)
     fi
     if [[ -z "${DEPLOY_VARS["RUNTIME_CODE_PATH"]:-}" ]]; then

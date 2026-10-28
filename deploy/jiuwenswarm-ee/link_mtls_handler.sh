@@ -52,7 +52,7 @@ link_mtls_preflight() {
     local previous
     previous=$(link_mtls_kube get service "${DEPLOY_VARS[AGENT_SERVER_NAME]}" --ignore-not-found -o json) || return 1
     if [[ -n "$previous" ]]; then
-        printf '%s' "$previous" | jq -e '.spec.clusterIP == "None" and .spec.selector == {"jiuwenclaw-component":"agentserver"}' >/dev/null || {
+        printf '%s' "$previous" | jq -e '.spec.clusterIP == "None" and .spec.selector == {"jiuwenswarm-component":"agentserver"}' >/dev/null || {
             echo 'Existing AgentServer Service conflicts with the certificate binding' >&2; return 1;
         }
     fi
@@ -215,7 +215,7 @@ link_mtls_render() (
     trap 'rm -f "$temporary"' EXIT
     yq -o=json '.' "$file" | jq -s \
         --arg role "$role" --arg mode "$mode" --arg dev "${DEPLOY_VARS[MODE]}" \
-        --arg source "${DEPLOY_VARS[RUNTIME_CODE_PATH]:-}" --arg claw "${DEPLOY_VARS[CLAW_POD_CODE_PATH]:-/app/jiuwenswarm}" \
+        --arg source "${DEPLOY_VARS[RUNTIME_CODE_PATH]:-}" --arg swarm "${DEPLOY_VARS[SWARM_POD_CODE_PATH]:-/app/jiuwenswarm}" \
         --arg domain "${DEPLOY_VARS[AGENT_RUNTIME_LINK_MTLS_CLUSTER_DOMAIN]}" \
         --arg headless "${DEPLOY_VARS[AGENT_SERVER_NAME]}" \
         --arg port "$([[ "$role" == gateway ]] && printf '%s' "${DEPLOY_VARS[GATEWAY_CONFIG_HTTP_PORT]}" || printf '%s' "${DEPLOY_VARS[AGENT_RUNTIME_PORT]}")" \
@@ -233,7 +233,7 @@ link_mtls_render() (
                 .[0] | .rawdata.templates |= map(source_volume) |
                 [.rawdata.templates[].main_container_id] as $ids |
                 .rawdata.containers |= map(if (.container_id as $id | $ids | index($id)) != null then
-                    source_mount | python_path([$claw,"/app/link-runtime-source/foundation","/app/link-runtime-source/service"])
+                    source_mount | python_path([$swarm,"/app/link-runtime-source/foundation","/app/link-runtime-source/service"])
                     else . end)
             else .[0] end
         else
@@ -269,7 +269,7 @@ link_mtls_render() (
                                 ("import urllib.request; from openjiuwen_runtime.foundation.security.link_profile import load_service_identity; p=load_service_identity(\u0027"+$role+"\u0027); o=urllib.request.build_opener(urllib.request.ProxyHandler({}),urllib.request.HTTPSHandler(context=p.ssl_context())); r=o.open(\u0027https://127.0.0.1:"+$port+(if $role=="gateway" then "/api/v1/ready" else "/healthz" end)+"\u0027,timeout=3); assert r.status==200") as $probe |
                                 reduce ["readinessProbe","livenessProbe","startupProbe"][] as $p (. ; if has($p) then .[$p] |= (del(.httpGet,.tcpSocket,.grpc) | .exec={command:["python","-c",$probe]} | .timeoutSeconds=([(.timeoutSeconds // 1),5]|max)) else . end)
                              else . end) |
-                            (if $dev=="dev" then source_mount | python_path(["/app/link-runtime-source/foundation","/app/link-runtime-source/service",(if $role=="runtime" then "/app/link-runtime-source/applications/agent_runtime/src" elif $role=="manager" then "/app/link-runtime-source/applications/manager/manager_server/src" else $claw end)]) else . end)
+                            (if $dev=="dev" then source_mount | python_path(["/app/link-runtime-source/foundation","/app/link-runtime-source/service",(if $role=="runtime" then "/app/link-runtime-source/applications/agent_runtime/src" elif $role=="manager" then "/app/link-runtime-source/applications/manager/manager_server/src" else $swarm end)]) else . end)
                         end) | if $dev=="dev" then source_volume else . end
                     end)
             end)[]

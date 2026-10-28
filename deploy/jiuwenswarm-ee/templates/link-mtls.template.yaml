@@ -28,7 +28,7 @@ headlessService:
     clusterIP: None
     publishNotReadyAddresses: true
     selector:
-      jiuwenclaw-component: agentserver
+      jiuwenswarm-component: agentserver
     ports:
       - name: https
         port: 8766

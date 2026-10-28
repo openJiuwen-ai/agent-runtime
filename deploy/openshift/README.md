@@ -1,6 +1,6 @@
-# jiuwenclaw OpenShift 部署指导
+# jiuwenswarm OpenShift 部署指导
 
-本目录提供在 OpenShift 集群上部署 / 卸载 jiuwenclaw 产品组件与基础服务的脚本和
+本目录提供在 OpenShift 集群上部署 / 卸载 jiuwenswarm 产品组件与基础服务的脚本和
 清单模板。适用于任意 OpenShift 4.x 集群：准备一个具有目标项目 admin 权限的账号，
 按本文步骤操作即可。
 
@@ -137,7 +137,7 @@ kubectl get pods   # 确认登录成功
 **无需 port-forward，浏览器从任何网络直接访问：**
 
 ```text
-https://jiuwenclaw-manager-web-<ns>.<ingress域名>
+https://jiuwenswarm-manager-web-<ns>.<ingress域名>
 ```
 
 这是唯一需要记住的入口：从管理面登录后点击进入用户面，**不要直接访问 web 组件的

@@ -73,7 +73,7 @@ def require_database_names(settings):
 def deployment_plan(settings):
     namespace = settings["NAMESPACE"]
     domain = settings.get("AGENT_RUNTIME_LINK_MTLS_CLUSTER_DOMAIN") or "cluster.local"
-    headless = settings.get("AGENT_SERVER_NAME") or "jiuwenclaw-agentserver"
+    headless = settings.get("AGENT_SERVER_NAME") or "jiuwenswarm-agentserver"
     names = {
         "gateway": settings["GATEWAY_NAME"],
         "runtime": settings["AGENT_RUNTIME_NAME"],

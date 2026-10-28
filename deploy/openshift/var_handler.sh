@@ -17,17 +17,23 @@ check_cluster_type_var() {
 #   AgentServer 固定单副本，配置多副本视为矛盾
 resolve_deploy_mode_vars() {
   local mode="${DEPLOY_VARS["AGENT_RUNTIME_DEPLOY_MODE"]:-}"
+  # openshift 集群暂不支持 full 模式：受限 SCC 环境无法授予 Pod 操作权限，
+  # 且 RS 配额等受限（见 .env.example 模式说明）；k8s 形态不受限。
+  # 本函数在 check_vars 主链执行，error 直接终止部署
+  if [ "$mode" = full ] && ! is_k8s_cluster; then
+    error "AGENT_RUNTIME_DEPLOY_MODE=full 暂不支持 openshift 集群（CLUSTER_TYPE=openshift）：受限环境无法授予 Pod 操作权限，请改用 routing/off，或改用 CLUSTER_TYPE=k8s 形态部署"
+  fi
   case "$mode" in
     routing|full)
       DEPLOY_VARS["GATEWAY_AGENT_CLIENT_MODE"]="runtime"
-      DEPLOY_VARS["GATEWAY_RUNTIME_MANAGER_URL"]="http://jiuwenclaw-agent-runtime:8091"
+      DEPLOY_VARS["GATEWAY_RUNTIME_MANAGER_URL"]="http://jiuwenswarm-agent-runtime:8091"
       # routing：manager 据此清单注册外部 AgentServer Pod（与 StatefulSet
-      # 副本数同源：jiuwenclaw-agentserver-{0..N-1} 的 headless DNS，Pod 重建自愈）
+      # 副本数同源：jiuwenswarm-agentserver-{0..N-1} 的 headless DNS，Pod 重建自愈）
       if [ "$mode" = routing ]; then
         local dns="" i
         for ((i = 0; i < DEPLOY_VARS["AGENT_SERVER_REPLICAS"]; i++)); do
           [ -n "$dns" ] && dns+=","
-          dns+="jiuwenclaw-agentserver-${i}.jiuwenclaw-agentserver-headless.${DEPLOY_VARS["NAMESPACE"]}.svc.cluster.local"
+          dns+="jiuwenswarm-agentserver-${i}.jiuwenswarm-agentserver-headless.${DEPLOY_VARS["NAMESPACE"]}.svc.cluster.local"
         done
         DEPLOY_VARS["AGENTSERVER_POD_DNS_LIST"]="$dns"
       else
@@ -275,10 +281,10 @@ resolve_redis_vars() {
     redis_mode="standalone"
     DEPLOY_VARS["REDIS_MODE"]="standalone"
     DEPLOY_VARS["ENABLE_EXTERNAL_REDIS"]="false"
-    DEPLOY_VARS["REDIS_HOST"]="jiuwenclaw-redis.${DEPLOY_VARS["NAMESPACE"]}"
+    DEPLOY_VARS["REDIS_HOST"]="jiuwenswarm-redis.${DEPLOY_VARS["NAMESPACE"]}"
     # 内置 Redis 启动参数按 <<REDIS_USER>> 创建 ACL 用户，留空会渲染出空串参数：
     # 未显式设置时派生默认用户名（与 redis.template.yaml 启动参数一致）
-    [ -n "${DEPLOY_VARS["REDIS_USER"]:-}" ] || DEPLOY_VARS["REDIS_USER"]="jiuwenclaw"
+    [ -n "${DEPLOY_VARS["REDIS_USER"]:-}" ] || DEPLOY_VARS["REDIS_USER"]="jiuwenswarm"
   fi
   [ -n "${DEPLOY_VARS["REDIS_PORT"]:-}" ] || DEPLOY_VARS["REDIS_PORT"]="6379"
 
@@ -304,7 +310,7 @@ resolve_obs_vars() {
     DEPLOY_VARS["OBS_URL"]="minio-headless.${DEPLOY_VARS["BASE_SVC_NS"]}:9000"
     DEPLOY_VARS["OBS_SECURE"]="false"
     DEPLOY_VARS["OBS_REGION"]="default"
-    [ -n "${DEPLOY_VARS["OBS_BUCKET"]:-}" ] || DEPLOY_VARS["OBS_BUCKET"]="jiuwenclaw"
+    [ -n "${DEPLOY_VARS["OBS_BUCKET"]:-}" ] || DEPLOY_VARS["OBS_BUCKET"]="jiuwenswarm"
     DEPLOY_VARS["OBS_ACCESS_KEY"]="${DEPLOY_VARS["MINIO_ROOT_USER"]}"
     DEPLOY_VARS["OBS_SECRET_KEY"]="${DEPLOY_VARS["MINIO_ROOT_PASSWORD"]}"
     return 0

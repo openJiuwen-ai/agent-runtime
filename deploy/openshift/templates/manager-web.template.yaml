@@ -1,23 +1,23 @@
-# jiuwenclaw-manager-web 部署清单（镜像 <<MANAGER_WEB_IMAGE>>，nginx 形态）
+# jiuwenswarm-manager-web 部署清单（镜像 <<MANAGER_WEB_IMAGE>>，nginx 形态）
 # 说明：
 #   - 镜像基于 nginxinc/nginx-unprivileged，适配 restricted-v2 SCC（随机 uid，pid/temp 写 /tmp）
 #   - MANAGER_WEB_RESOLVER 留空=按集群形态自动解析（openshift 用 OCP CoreDNS 服务名，k8s 取 ClusterIP）
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: jiuwenclaw-manager-web
+  name: jiuwenswarm-manager-web
   namespace: <<NAMESPACE>>
   labels:
-    app: jiuwenclaw-manager-web
+    app: jiuwenswarm-manager-web
 spec:
   replicas: <<MANAGER_WEB_REPLICAS>>
   selector:
     matchLabels:
-      app: jiuwenclaw-manager-web
+      app: jiuwenswarm-manager-web
   template:
     metadata:
       labels:
-        app: jiuwenclaw-manager-web
+        app: jiuwenswarm-manager-web
     spec:
       containers:
         - name: manager-web
@@ -33,9 +33,9 @@ spec:
             - name: MANAGER_WEB_PORT
               value: "5273"
             - name: MANAGER_WEB_PROXY_TARGET
-              value: "http://jiuwenclaw-manager-server:8765"
+              value: "http://jiuwenswarm-manager-server:8765"
             - name: MANAGER_WEB_IDP_TARGET
-              value: "http://jiuwenclaw-identity:8770"
+              value: "http://jiuwenswarm-identity:8770"
             # nginx 变量 proxy_pass 需要 resolver
             - name: MANAGER_WEB_RESOLVER
               value: "<<MANAGER_WEB_RESOLVER>>"
@@ -48,11 +48,11 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: jiuwenclaw-manager-web
+  name: jiuwenswarm-manager-web
   namespace: <<NAMESPACE>>
 spec:
   selector:
-    app: jiuwenclaw-manager-web
+    app: jiuwenswarm-manager-web
   ports:
     - name: http
       port: 5273
@@ -65,8 +65,14 @@ spec:
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
-  name: jiuwenclaw-manager-web
+  name: jiuwenswarm-manager-web
   namespace: <<NAMESPACE>>
+  annotations:
+    # 聊天为 SSE 长连接：Route 默认 30s 空闲超时会掐断流式响应（前端报
+    # "Failed to fetch"），放宽到 300s；nginx 侧需保持 proxy_buffering off
+    # 或由 gateway 发送 X-Accel-Buffering: no，否则 keepalive 被缓冲、
+    # Route 仍会按无流量掐断
+    haproxy.router.openshift.io/timeout: 300s
 spec:
   port:
     targetPort: 5273
@@ -75,6 +81,6 @@ spec:
     insecureEdgeTerminationPolicy: Redirect
   to:
     kind: Service
-    name: jiuwenclaw-manager-web
+    name: jiuwenswarm-manager-web
     weight: 100
   wildcardPolicy: None

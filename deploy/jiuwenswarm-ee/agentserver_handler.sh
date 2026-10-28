@@ -41,14 +41,14 @@ gen_agentserver_file() {
     enable_dev_mode_if_needed "${file}" agentserver
 
     # data 卷按存储模式二选一（与 patch_handler.inject_data_volume 语义对齐）：
-    #   pvc: 模板默认（claimName=CLAW_PVC）
-    #   nfs: 直连 NFS 共享目录（server=NFS_SERVER_ADDR, path=<share>/jiuwenclaw/<NAMESPACE>）
-    if [ "${DEPLOY_VARS["CLAW_MOUNT_TYPE"]}" == "nfs" ]; then
+    #   pvc: 模板默认（claimName=SWARM_PVC）
+    #   nfs: 直连 NFS 共享目录（server=NFS_SERVER_ADDR, path=<share>/jiuwenswarm/<NAMESPACE>）
+    if [ "${DEPLOY_VARS["SWARM_MOUNT_TYPE"]}" == "nfs" ]; then
         if [ -z "${DEPLOY_VARS["NFS_SERVER_ADDR"]:-}" ]; then
-            error "CLAW_MOUNT_TYPE=nfs requires NFS_SERVER_ADDR (external) or a deployed built-in NFS"
+            error "SWARM_MOUNT_TYPE=nfs requires NFS_SERVER_ADDR (external) or a deployed built-in NFS"
         fi
         local nfs_share="${DEPLOY_VARS["NFS_SHARE_PATH"]%/}"
-        local nfs_path="${nfs_share}/jiuwenclaw/${DEPLOY_VARS["NAMESPACE"]}"
+        local nfs_path="${nfs_share}/jiuwenswarm/${DEPLOY_VARS["NAMESPACE"]}"
         yq eval 'select(.kind == "Deployment").spec.template.spec.volumes |= map(select(.name == "data") |= {"name": "data", "nfs": {"server": "'"${DEPLOY_VARS["NFS_SERVER_ADDR"]}"'", "path": "'"${nfs_path}"'"}} // .)' -i "${file}"
     fi
 
@@ -70,18 +70,18 @@ render_agentserver_files() {
     gen_agentserver_file
 
     # 内置 PVC 渲染归属 agentserver 模块（静态 pod 挂数据卷）
-    if [[ "${DEPLOY_VARS["CLAW_MOUNT_TYPE"]}" == "pvc" && "${DEPLOY_VARS["ENABLE_EXTERNAL_PVC"]}" == "false" ]]; then
-        render_config_template "${CONFIG["CLAW_PVC_TEMPLATE_FILE"]}" "${CONFIG["CLAW_PVC_FILE"]}" "DEPLOY_VARS"
+    if [[ "${DEPLOY_VARS["SWARM_MOUNT_TYPE"]}" == "pvc" && "${DEPLOY_VARS["ENABLE_EXTERNAL_PVC"]}" == "false" ]]; then
+        render_config_template "${CONFIG["SWARM_PVC_TEMPLATE_FILE"]}" "${CONFIG["SWARM_PVC_FILE"]}" "DEPLOY_VARS"
     fi
     success "AgentServer module is rendered."
 }
 
 deploy_agentserver() {
-    local pvc_file="${CONFIG["CLAW_PVC_FILE"]}"
+    local pvc_file="${CONFIG["SWARM_PVC_FILE"]}"
 
     ensure_secret_configmap
     # PVC 先于 agentserver 部署：数据卷挂载依赖它
-    if [[ "${DEPLOY_VARS["CLAW_MOUNT_TYPE"]}" == "pvc" && "${DEPLOY_VARS["ENABLE_EXTERNAL_PVC"]}" == "false" && -f "${pvc_file}" ]]; then
+    if [[ "${DEPLOY_VARS["SWARM_MOUNT_TYPE"]}" == "pvc" && "${DEPLOY_VARS["ENABLE_EXTERNAL_PVC"]}" == "false" && -f "${pvc_file}" ]]; then
         exec_cmd kubectl apply -f "${pvc_file}"
     fi
     create_agentserver_env_configmap
@@ -101,8 +101,8 @@ uninstall_agentserver() {
 
     # 仅在内置 PVC 时删（外部 PVC 不动）。必须最后执行：
     # PVC 带 pvc-protection finalizer，agentserver pod 释放挂载前删除会一直阻塞
-    if [[ "${DEPLOY_VARS["CLAW_MOUNT_TYPE"]}" == "pvc" && -z "${DEPLOY_VARS["CLAW_PVC"]:-}" && -f "${CONFIG["CLAW_PVC_FILE"]}" ]]; then
-        delete_k8s_resource_by_file "${CONFIG["CLAW_PVC_FILE"]}"
+    if [[ "${DEPLOY_VARS["SWARM_MOUNT_TYPE"]}" == "pvc" && -z "${DEPLOY_VARS["SWARM_PVC"]:-}" && -f "${CONFIG["SWARM_PVC_FILE"]}" ]]; then
+        delete_k8s_resource_by_file "${CONFIG["SWARM_PVC_FILE"]}"
     fi
     success "AgentServer module is uninstalled."
 }

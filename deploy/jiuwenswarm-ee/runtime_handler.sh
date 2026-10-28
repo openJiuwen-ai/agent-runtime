@@ -37,19 +37,19 @@ render_runtime_files() {
     fi
 
     # agentserver 由 runtime 动态创建并挂载内置 PVC，PVC 渲染归属 runtime
-    if [[ "${DEPLOY_VARS["CLAW_MOUNT_TYPE"]}" == "pvc" && "${DEPLOY_VARS["ENABLE_EXTERNAL_PVC"]}" == "false" ]]; then
-        render_config_template "${CONFIG["CLAW_PVC_TEMPLATE_FILE"]}" "${CONFIG["CLAW_PVC_FILE"]}" "DEPLOY_VARS"
+    if [[ "${DEPLOY_VARS["SWARM_MOUNT_TYPE"]}" == "pvc" && "${DEPLOY_VARS["ENABLE_EXTERNAL_PVC"]}" == "false" ]]; then
+        render_config_template "${CONFIG["SWARM_PVC_TEMPLATE_FILE"]}" "${CONFIG["SWARM_PVC_FILE"]}" "DEPLOY_VARS"
     fi
     success "Runtime module is rendered."
 }
 
 deploy_runtime() {
-    local pvc_file="${CONFIG["CLAW_PVC_FILE"]}"
+    local pvc_file="${CONFIG["SWARM_PVC_FILE"]}"
 
     ensure_secret_configmap
     # PVC 先于 runtime 部署：后续 config_sync 创建的 agentserver pod 会挂载它
-    if [[ "${DEPLOY_VARS["CLAW_MOUNT_TYPE"]}" == "pvc" && "${DEPLOY_VARS["ENABLE_EXTERNAL_PVC"]}" == "false" && -f "${CONFIG["CLAW_PVC_FILE"]}" ]]; then
-        exec_cmd kubectl apply -f "${CONFIG["CLAW_PVC_FILE"]}"
+    if [[ "${DEPLOY_VARS["SWARM_MOUNT_TYPE"]}" == "pvc" && "${DEPLOY_VARS["ENABLE_EXTERNAL_PVC"]}" == "false" && -f "${CONFIG["SWARM_PVC_FILE"]}" ]]; then
+        exec_cmd kubectl apply -f "${CONFIG["SWARM_PVC_FILE"]}"
     fi
     exec_cmd kubectl apply -f ${CONFIG["RUNTIME_FILE"]}
     wait_k8s_resource_ready "deployment" "${DEPLOY_VARS["AGENT_RUNTIME_NAME"]}" "${DEPLOY_VARS["NAMESPACE"]}"
@@ -61,16 +61,16 @@ deploy_runtime() {
 uninstall_runtime() {
     local namespace="${DEPLOY_VARS["NAMESPACE"]}"
     local name="${DEPLOY_VARS["AGENT_RUNTIME_NAME"]}"
-    local pvc_file="${CONFIG["CLAW_PVC_FILE"]}"
+    local pvc_file="${CONFIG["SWARM_PVC_FILE"]}"
 
     delete_k8s_resource_by_file "${CONFIG["RUNTIME_FILE"]}"
 
     # 兜底清理 runtime 动态创建的 agentserver pod（按 label）
     local orphan_pods
-    orphan_pods=$(kubectl get pods -n "${namespace}" -l jiuwenclaw-component=agentserver -o name 2>/dev/null || true)
+    orphan_pods=$(kubectl get pods -n "${namespace}" -l jiuwenswarm-component=agentserver -o name 2>/dev/null || true)
     if [ -n "${orphan_pods}" ]; then
-        info "Cleaning up orphan agentserver pods created by runtime (label: jiuwenclaw-component=agentserver)"
-        exec_cmd kubectl delete pod -n "${namespace}" -l jiuwenclaw-component=agentserver --ignore-not-found=true
+        info "Cleaning up orphan agentserver pods created by runtime (label: jiuwenswarm-component=agentserver)"
+        exec_cmd kubectl delete pod -n "${namespace}" -l jiuwenswarm-component=agentserver --ignore-not-found=true
     else
         info "No orphan agentserver pods to clean up."
     fi
@@ -82,7 +82,7 @@ uninstall_runtime() {
     # 仅在内置 PVC 时删（外部 PVC 不动）。必须在孤儿 agentserver pod 清理之后执行：
     # PVC 带 pvc-protection finalizer，agentserver pod 释放挂载前删除此 PVC 
     # 会一直阻塞
-    if [[ "${DEPLOY_VARS["CLAW_MOUNT_TYPE"]}" == "pvc" && -z "${DEPLOY_VARS["CLAW_PVC"]:-}" && -f "${pvc_file}" ]]; then
+    if [[ "${DEPLOY_VARS["SWARM_MOUNT_TYPE"]}" == "pvc" && -z "${DEPLOY_VARS["SWARM_PVC"]:-}" && -f "${pvc_file}" ]]; then
         delete_k8s_resource_by_file "${pvc_file}"
     fi
     success "Runtime module is uninstalled."
