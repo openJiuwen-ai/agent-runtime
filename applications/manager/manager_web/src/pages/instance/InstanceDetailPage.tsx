@@ -20,11 +20,13 @@ import { InstanceServiceResourceTab } from './instanceResourcePanel/InstanceServ
 import { WorkspaceQuotaPanel } from './instanceQuotaPanel/WorkspaceQuotaPanel';
 import { TeamQuotaPanel } from './instanceQuotaPanel/TeamQuotaPanel';
 import { InstancePlaceholderPanel } from './InstancePlaceholderPanel';
+import { InstanceExpertPackagesTab } from './instanceResourcePanel/InstanceExpertPackagesTab';
 
 export type InstancePageTab =
   | 'access'
   | 'clusterConfig'
   | 'agentResources'
+  | 'expertPackages'
   | 'serviceResources'
   | 'config'
   | 'status'
@@ -93,10 +95,11 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
     { key: 'audit', label: t('instanceDetail.tabs.audit'), href: `/instances/${instanceId}/audit` },
   ];
 
-  /** 「集群配置」下的子页签（Agent / 运行时 / 基础配置） */
+  /** 「集群配置」下的子页签（Agent / 运行时 / 专家包 / 基础配置） */
   const clusterConfigSubTabs: { key: InstancePageTab; label: string; href: string }[] = [
     { key: 'agentResources', label: t('instanceDetail.resourcePanel.tabs.agent'), href: `/instances/${instanceId}/agent-resources` },
     { key: 'serviceResources', label: t('instanceDetail.resourcePanel.tabs.serviceResource'), href: `/instances/${instanceId}/service-resources` },
+    { key: 'expertPackages', label: t('nav.expertPackages'), href: `/instances/${instanceId}/expert-packages` },
     { key: 'config', label: t('instanceDetail.tabs.config'), href: `/instances/${instanceId}/config` },
   ];
   const inClusterConfig =
@@ -326,6 +329,7 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
           {(tab === 'clusterConfig' || tab === 'agentResources') && (
             <InstanceAgentResourceTab instanceId={instanceId} />
           )}
+          {tab === 'expertPackages' && <InstanceExpertPackagesTab instanceId={instanceId} />}
           {tab === 'serviceResources' && <InstanceServiceResourceTab instanceId={instanceId} />}
           {tab === 'config' && <InstanceConfigPanel instanceId={instanceId} />}
           {tab === 'status' && (
