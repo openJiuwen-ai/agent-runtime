@@ -323,6 +323,35 @@ class TestSQLiteHandler(unittest.IsolatedAsyncioTestCase):
         stored = await self.handler.get("test_increment_ambiguous", {"id": first.id})
         self.assertEqual(stored.revision, 4)
 
+    async def test_update_returns_row_when_filter_column_is_updated(self):
+        """filters 中的列同时出现在 data 中（状态/epoch 迁移）时，仍返回更新后的记录。"""
+        await self.handler.init_table(self.test_table_def)
+
+        created = await self.handler.create("test_table", {"name": "cas_test", "value": "bound"})
+
+        updated = await self.handler.update(
+            "test_table",
+            {"id": created.id, "value": "bound"},
+            {"value": "unbound"},
+        )
+
+        self.assertIsNotNone(updated)
+        self.assertEqual(updated.value, "unbound")
+
+    async def test_update_returns_none_when_filter_matches_no_row(self):
+        """compare-and-set 条件不匹配（行已被并发修改）时仍返回 None。"""
+        await self.handler.init_table(self.test_table_def)
+
+        created = await self.handler.create("test_table", {"name": "cas_stale", "value": "bound"})
+
+        updated = await self.handler.update(
+            "test_table",
+            {"id": created.id, "value": "stale"},
+            {"value": "never"},
+        )
+
+        self.assertIsNone(updated)
+
     async def test_delete(self):
         """测试删除记录"""
         await self.handler.init_table(self.test_table_def)
