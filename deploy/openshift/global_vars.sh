@@ -63,7 +63,7 @@ declare -A DEPLOY_VARS=(
     ["MYSQL_ROOT_PASSWORD"]="Root@123456"
     ["POSTGRES_PASSWORD"]="Root@123456"
     ["MINIO_ROOT_USER"]="minioadmin"
-    ["MINIO_ROOT_PASSWORD"]="Root@123456"
+    ["MINIO_ROOT_PASSWORD"]="Minio@123456"
 
     ["DB_TYPE"]="mariadb"                # 数据库类型：mariadb | mysql | postgresql
     ["DB_HOST"]=""
@@ -103,6 +103,10 @@ declare -A DEPLOY_VARS=(
 
     # agent-runtime 三模式部署形态（routing | off；full 待开放）
     ["AGENT_RUNTIME_DEPLOY_MODE"]="routing"
+    # 沙箱镜像（SANDBOX_TYPE=jiuwenbox 时必填；off/kata 不需要）
+    ["JIUWENBOX_IMAGE"]=""
+    # jiuwenbox 沙箱监听端口（与 ee 部署约定一致）
+    ["JIUWENBOX_PORT"]="8321"
     # 禁 EVAL 兼容模式（on 与历史行为一致；客户 Redis 禁用 EVAL 时设 off）
     ["AGENT_RUNTIME_REDIS_LUA"]="off"
     ["SANDBOX_TYPE"]="off"
