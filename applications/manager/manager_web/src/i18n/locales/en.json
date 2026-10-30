@@ -1130,7 +1130,8 @@
       "guides": "Feature Guides",
       "guideAgent": "Agent Management",
       "guidePool": "Runtime Template Management",
-      "guideCluster": "Cluster Management"
+      "guideCluster": "Cluster Management",
+      "guideSkillPrebuilt": "Preset Skills"
     }
   },
   "userConsole": {
