@@ -104,14 +104,52 @@ component_deps() {
 }
 
 # 组件 → 存在性探测所在命名空间：
-#   基础服务（mariadb/mysql/postgresql/minio）→ BASE_SVC_NS
-#   （k8s 形态=default 集群共享实例；openshift 形态=本 ns，两者同值，行为不变）
+#   基础服务（mariadb/mysql/postgresql/minio）：
+#     本次部署目标内 → KCTL_NS（实例将由本次部署落到本 ns，跳过探测）
+#     否则按内置实例定位：本 ns → default，均未命中兜底 BASE_SVC_NS；
+#     探测结果缓存 _SVC_NS_<svc>，进程内只探测一次
 #   其余组件 → 本命名空间（KCTL_NS）
 component_ns() {
   case "$1" in
-    mariadb|mysql|postgresql|minio) echo "${DEPLOY_VARS["BASE_SVC_NS"]:-$KCTL_NS}";;
+    mariadb|mysql|postgresql|minio)
+      if in_array "$1" "${TARGETS[@]:-}"; then
+        echo "$KCTL_NS"
+        return 0
+      fi
+      local cache_key="_SVC_NS_$1" ns
+      ns="${DEPLOY_VARS[$cache_key]:-}"
+      if [ -z "$ns" ]; then
+        ns=$(_resolve_builtin_svc_ns "$1")
+        DEPLOY_VARS[$cache_key]="$ns"
+      fi
+      echo "$ns";;
     *)                              echo "$KCTL_NS";;
   esac
+}
+
+# 内置基础服务实例定位：本 ns 命中优先，其次 default 共享实例；均未命中输出
+# BASE_SVC_NS（部署预期位置：k8s=default / openshift=本 ns）。
+# 探测需集群通道（kctl_check_vars 之后可用）；探测失败视同未命中，走兜底
+_resolve_builtin_svc_ns() { # $1=svc（mariadb|mysql|postgresql|minio）→ stdout: ns
+  local svc="$1" p code
+  if ! p=$(kctl_kind_path StatefulSet "$KCTL_NS"); then
+    echo "${DEPLOY_VARS["BASE_SVC_NS"]}"
+    return 0
+  fi
+  code=$(kctl_http GET "$p/$svc" /dev/null)
+  if [ "$code" = 200 ]; then
+    echo "$KCTL_NS"
+    return 0
+  fi
+  if [ "$KCTL_NS" != "default" ]; then
+    p=$(kctl_kind_path StatefulSet "default")
+    code=$(kctl_http GET "$p/$svc" /dev/null)
+    if [ "$code" = 200 ]; then
+      echo "default"
+      return 0
+    fi
+  fi
+  echo "${DEPLOY_VARS["BASE_SVC_NS"]}"
 }
 
 # 组件 → 存在性探测用的 kind/name（依赖预检与卸载存活检查共用，须覆盖全部组件）。
@@ -144,9 +182,9 @@ dep_hint() {
     redis)  echo "随 ./deploy.sh up 自动拉起";;
     mariadb|mysql|postgresql|minio)
       if is_k8s_cluster; then
-        echo "k8s 形态复用 default 命名空间的共享实例（本次探测 ns: ${DEPLOY_VARS["BASE_SVC_NS"]:-default}），缺失请在该命名空间先行部署或联系管理员"
+        echo "内置实例消费顺序: 本 ns → default；缺失可在本 ns 执行 ./deploy.sh up $1"
       else
-        echo "先执行 ./deploy.sh up $1"
+        echo "先执行 ./deploy.sh up $1（部署为本 ns 实例，消费时优先于 default）"
       fi;;
     *)      echo "先执行 ./deploy.sh up $1";;
   esac
