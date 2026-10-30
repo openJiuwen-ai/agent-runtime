@@ -9,6 +9,7 @@ import overviewMd from '../../docs/overview.md?raw';
 import agentManagerMd from '../../docs/guides/agent_manager.md?raw';
 import agentPoolManagerMd from '../../docs/guides/agent_pool_manager.md?raw';
 import clusterManagerMd from '../../docs/guides/cluster_manager.md?raw';
+import skillPrebuiltMd from '../../docs/guides/skill_prebuilt.md?raw';
 
 const docImages = import.meta.glob<string>('../../docs/assets/*.png', {
   eager: true,
@@ -16,7 +17,13 @@ const docImages = import.meta.glob<string>('../../docs/assets/*.png', {
   import: 'default',
 });
 
-type DocKey = 'getting-started' | 'overview' | 'guide-agent' | 'guide-pool' | 'guide-cluster';
+type DocKey =
+  | 'getting-started'
+  | 'overview'
+  | 'guide-agent'
+  | 'guide-pool'
+  | 'guide-cluster'
+  | 'guide-skill-prebuilt';
 
 type TocEntry = {
   key: DocKey;
@@ -33,6 +40,12 @@ const TOC: TocEntry[] = [
   { key: 'guide-agent', labelKey: 'docs.toc.guideAgent', fallbackZh: 'Agent模板管理', group: 'guides' },
   { key: 'guide-pool', labelKey: 'docs.toc.guidePool', fallbackZh: '运行时模板管理', group: 'guides' },
   { key: 'guide-cluster', labelKey: 'docs.toc.guideCluster', fallbackZh: '集群管理', group: 'guides' },
+  {
+    key: 'guide-skill-prebuilt',
+    labelKey: 'docs.toc.guideSkillPrebuilt',
+    fallbackZh: '预置Skill',
+    group: 'guides',
+  },
 ];
 
 const DOC_SOURCES: Record<DocKey, string> = {
@@ -41,6 +54,7 @@ const DOC_SOURCES: Record<DocKey, string> = {
   'guide-agent': agentManagerMd,
   'guide-pool': agentPoolManagerMd,
   'guide-cluster': clusterManagerMd,
+  'guide-skill-prebuilt': skillPrebuiltMd,
 };
 
 /** 图片路径映射：md 里的 `.\assets\xxx.png` → 构建产物 URL */
