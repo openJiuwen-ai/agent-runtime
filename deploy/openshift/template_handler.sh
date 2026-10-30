@@ -73,5 +73,6 @@ render_templates() {
   apply_k8s_extras "${wanted[@]}"
   apply_runtime_mode_extras "${wanted[@]}"
   apply_sandbox_type_extras "${wanted[@]}"
+  apply_jiuwenbox_extras "${wanted[@]}"
   apply_dev_code_mounts "${wanted[@]}"
 }
