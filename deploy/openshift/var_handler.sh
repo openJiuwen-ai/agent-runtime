@@ -58,18 +58,32 @@ resolve_deploy_mode_vars() {
 }
 
 # 沙箱类型：枚举校验（off | jiuwenbox | kata），注入逻辑见 k8s_handler.sh
-# apply_sandbox_type_extras（渲染后处理）
+# apply_sandbox_type_extras / apply_jiuwenbox_extras（渲染后处理）
 # - off：保持原样，不注入沙箱运行时
 # - kata：AgentServer 沙箱 Pod 注入 runtimeClassName: kata（集群须预装 Kata
 #   Containers 并创建 RuntimeClass kata，否则 Pod 无法启动）
-# - jiuwenbox：预留类型，暂未实现——按 off 处理并提示
+# - jiuwenbox：AgentServer Pod 注入 jiuwenbox 沙箱 sidecar（须配 JIUWENBOX_IMAGE/
+#   JIUWENBOX_PORT；仅 k8s 形态，openshift SCC 拒绝特权容器）
 resolve_sandbox_type_vars() {
   local val="${DEPLOY_VARS["SANDBOX_TYPE"]:-}"
   case "$val" in
     off|kata) ;;
     jiuwenbox)
-      warning "SANDBOX_TYPE=jiuwenbox 尚未实现，本次按 off 处理（保持原样）"
-      DEPLOY_VARS["SANDBOX_TYPE"]="off";;
+      # 沙箱需 root + SYS_ADMIN/NET_ADMIN + seccomp Unconfined 运行，OCP 默认
+      # restricted-v2 全部拒绝，需客户手工绑 privileged SCC——暂不支持
+      if [ "${DEPLOY_VARS["CLUSTER_TYPE"]}" = openshift ]; then
+        error "CLUSTER_TYPE=openshift 暂不支持 SANDBOX_TYPE=jiuwenbox（沙箱需特权容器能力，待开放）"
+      fi
+      local img="${DEPLOY_VARS["JIUWENBOX_IMAGE"]:-}"
+      [ -n "$img" ] \
+        || error "SANDBOX_TYPE=jiuwenbox 需要 JIUWENBOX_IMAGE（检查 $CUSTOM_ENV_FILE）"
+      [[ "$img" =~ ^[A-Za-z0-9._:@/-]+$ ]] \
+        || error "JIUWENBOX_IMAGE 含非法字符（仅允许字母数字._:@/-）: $img"
+      # 端口：1-65535 正整数（sidecar containerPort 与 JIUWENBOX_URL 同源引用）；
+      # 留空沿用内置默认 8321
+      local port="${DEPLOY_VARS["JIUWENBOX_PORT"]:-8321}"
+      [[ "$port" =~ ^[1-9][0-9]*$ ]] && [ "$port" -le 65535 ] 2>/dev/null \
+        || error "JIUWENBOX_PORT 非法（须为 1-65535 的正整数）: $port";;
     *)
       error "SANDBOX_TYPE 非法（off | jiuwenbox | kata）: $val";;
   esac
@@ -357,7 +371,7 @@ check_vars() {
   check_image_vars
   check_replicas_vars
   resolve_deploy_mode_vars         # 三模式派生：gateway 条件 env + off 单副本校验
-  resolve_sandbox_type_vars        # 沙箱类型枚举校验（jiuwenbox 预留降级为 off）
+  resolve_sandbox_type_vars        # 沙箱类型枚举校验（off|kata|jiuwenbox，jiuwenbox 仅 k8s）
   check_storage_class_vars
   check_optional_vars
   check_identity_sso_vars          # 企业 SSO 三元组"全空或全配"校验（up + identity 时生效，门禁在函数内）

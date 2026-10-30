@@ -452,7 +452,12 @@ apply_runtime_mode_extras() { # $@=本次渲染的清单文件名
 #   · agentserver.json → config_sync 载荷 rawdata.templates（full 模式 runtime 按需
 #     创建的沙箱 Pod；runtime 侧按模板级白名单解析，未知键暂忽略——消费生效待
 #     runtime 打通 runtimeClassName 字段后自然解锁）
-# - jiuwenbox：预留（resolve_sandbox_type_vars 已降级为 off，此处不会出现）
+# - jiuwenbox：AgentServer Pod 注入 jiuwenbox 沙箱 sidecar 容器（root + SYS_ADMIN/
+#   NET_ADMIN + unconfined seccomp + /sys/fs/cgroup hostPath——容器隔离强依赖）。
+#   OCP 前置：Pod 的 ServiceAccount 须绑定 anyuid/privileged SCC，否则沙箱起不来
+#   · agentserver.yaml → StatefulSet Pod 模板（off/routing 模式预启动的沙箱 Pod）
+#   · agentserver.json → config_sync 载荷 rawdata.containers + sidecar_container_ids
+#     （full 模式 runtime 按需创建的沙箱 Pod）
 apply_sandbox_type_extras() { # $@=本次渲染的清单文件名
   [ "${DEPLOY_VARS["SANDBOX_TYPE"]}" = kata ] || return 0
   local f
@@ -471,6 +476,89 @@ apply_sandbox_type_extras() { # $@=本次渲染的清单文件名
         [ "$(yq -r '.rawdata.templates[0].runtimeClassName' "$CONF_DIR/$f")" = "kata" ] \
           || error "runtimeClassName 注入校验失败: $f"
         info "沙箱后处理：agentserver.json 注入 runtimeClassName: kata";;
+    esac
+  done
+}
+
+# jiuwenbox 沙箱 sidecar 注入（SANDBOX_TYPE=jiuwenbox）：
+# - agentserver.yaml → StatefulSet 追加 sidecar 容器 + cgroup hostPath 卷；
+#   sidecar 与主容器挂载完全一致（工作区根 + run/ 遮蔽），保证与主进程文件级 IPC 同径
+# - agentserver.json → config_sync 载荷追加 c-jiuwenbox 容器 + sidecar_container_ids
+#   + hp-cgroup 卷（与 ee 部署的 config_sync 载荷同规格）
+_apply_jiuwenbox_sidecar_yaml() { # $1=agentserver.yaml
+  local img="${DEPLOY_VARS["JIUWENBOX_IMAGE"]}" port="${DEPLOY_VARS["JIUWENBOX_PORT"]:-8321}"
+  yq -i '(select(.kind == "StatefulSet").spec.template.spec.containers) |= (. + [{
+    "name": "jiuwenbox",
+    "image": "'"${img}"'",
+    "imagePullPolicy": "IfNotPresent",
+    "ports": [{"containerPort": '"${port}"'}],
+    "env": [
+      {"name": "JIUWENBOX_LISTEN", "value": "http://0.0.0.0:'"${port}"'"},
+      {"name": "JIUWENBOX_POLICY_PATH", "value": "/app/jiuwenswarm/jiuwenbox/src/jiuwenbox/configs/enterprise-policy.yaml"},
+      {"name": "JIUWENSWARM_DATA_DIR", "value": "/home/app/.jiuwenswarm"},
+      {"name": "POD_NAME", "valueFrom": {"fieldRef": {"fieldPath": "metadata.name"}}},
+      {"name": "TZ", "value": "Asia/Shanghai"}
+    ],
+    "securityContext": {"runAsUser": 0, "runAsGroup": 0,
+      "capabilities": {"add": ["SYS_ADMIN", "NET_ADMIN"]},
+      "seccompProfile": {"type": "Unconfined"}},
+    "readinessProbe": {"tcpSocket": {"port": '"${port}"'}, "initialDelaySeconds": 10, "periodSeconds": 5},
+    "volumeMounts": [
+      {"name": "agentserver-data", "mountPath": "/home/app/.jiuwenswarm"},
+      {"name": "agentserver-data", "mountPath": "/home/app/.jiuwenswarm/run", "subPathExpr": "run/$(POD_NAME)"},
+      {"name": "hp-cgroup", "mountPath": "/sys/fs/cgroup"}
+    ]
+  }])' "$1"
+  yq -i '(select(.kind == "StatefulSet").spec.template.spec.volumes) |= (. + [{"name": "hp-cgroup", "hostPath": {"path": "/sys/fs/cgroup", "type": "Directory"}}])' "$1"
+  # 注入校验：StatefulSet 须有 jiuwenbox 容器 + hp-cgroup 卷
+  [ "$(yq 'select(.kind == "StatefulSet").spec.template.spec.containers[] | select(.name == "jiuwenbox") | .name' "$1")" = "jiuwenbox" ]     || error "jiuwenbox sidecar 注入校验失败: $1"
+  [ "$(yq 'select(.kind == "StatefulSet").spec.template.spec.volumes[] | select(.name == "hp-cgroup") | .name' "$1")" = "hp-cgroup" ]     || error "hp-cgroup 卷注入校验失败: $1"
+}
+
+_apply_jiuwenbox_sidecar_json() { # $1=agentserver.json
+  local img="${DEPLOY_VARS["JIUWENBOX_IMAGE"]}" port="${DEPLOY_VARS["JIUWENBOX_PORT"]:-8321}"
+  yq -i -o=json '
+    .rawdata.containers += [{
+      "container_id": "c-jiuwenbox",
+      "name": "jiuwenbox",
+      "image": "'"${img}"'",
+      "imagePullPolicy": "IfNotPresent",
+      "ports": [{"containerPort": '"${port}"'}],
+      "env": [
+        {"name": "JIUWENBOX_LISTEN", "value": "http://0.0.0.0:'"${port}"'"},
+        {"name": "JIUWENSWARM_DATA_DIR", "value": "/home/app/.jiuwenswarm"},
+        {"name": "TZ", "value": "Asia/Shanghai"}
+      ],
+      "securityContext": {"runAsUser": 0, "runAsGroup": 0,
+        "capabilities": {"add": ["SYS_ADMIN", "NET_ADMIN"]},
+        "seccompProfile": {"type": "Unconfined"}},
+      "readinessProbe": {"tcpSocket": {"port": '"${port}"'}, "initialDelaySeconds": 10, "periodSeconds": 5},
+      "volumeMounts": [
+        {"name": "data", "mountPath": "/home/app/.jiuwenswarm"},
+        {"name": "hp-cgroup", "mountPath": "/sys/fs/cgroup"}
+      ]
+    }] |
+    .rawdata.templates[].sidecar_container_ids = ["c-jiuwenbox"] |
+    .rawdata.templates[].volumes += [{"name": "hp-cgroup", "hostPath": {"path": "/sys/fs/cgroup", "type": "Directory"}}]
+  ' "$1"
+  # 注入校验：config_sync 载荷须含 c-jiuwenbox 容器 + sidecar_container_ids
+  [ "$(yq -r '.rawdata.containers[].container_id' "$1" | grep -c c-jiuwenbox)" -ge 1 ]     || error "jiuwenbox sidecar 注入校验失败: $1"
+  [ "$(yq -r '.rawdata.templates[0].sidecar_container_ids[]' "$1" | grep -c c-jiuwenbox)" -ge 1 ]     || error "sidecar_container_ids 注入校验失败: $1"
+}
+
+apply_jiuwenbox_extras() { # $@=本次渲染的清单文件名
+  [ "${DEPLOY_VARS["SANDBOX_TYPE"]}" = jiuwenbox ] || return 0
+  local f
+  for f in "$@"; do
+    case "$f" in
+      agentserver.yaml)
+        [ -f "$CONF_DIR/$f" ] || continue
+        _apply_jiuwenbox_sidecar_yaml "$CONF_DIR/$f"
+        info "沙箱后处理：agentserver.yaml 注入 jiuwenbox sidecar";;
+      agentserver.json)
+        [ -f "$CONF_DIR/$f" ] || continue
+        _apply_jiuwenbox_sidecar_json "$CONF_DIR/$f"
+        info "沙箱后处理：agentserver.json 注入 jiuwenbox sidecar";;
     esac
   done
 }

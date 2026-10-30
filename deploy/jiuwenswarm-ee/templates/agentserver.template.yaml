@@ -66,7 +66,7 @@ spec:
           volumeMounts:
             - name: data
               mountPath: <<SWARM_HOME>>/.jiuwenswarm
-        # jiuwenbox 沙箱 sidecar：JIUWENBOX_ENABLED=false 时由 agentserver_handler 整体移除
+        # jiuwenbox 沙箱 sidecar：SANDBOX_TYPE 非 jiuwenbox 时由 agentserver_handler 整体移除
         - name: <<JIUWENBOX_NAME>>
           image: <<JIUWENBOX_IMAGE>>
           imagePullPolicy: IfNotPresent

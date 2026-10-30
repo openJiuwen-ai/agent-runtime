@@ -22,10 +22,11 @@ data:
   GATEWAY_DB_TYPE: <<DB_TYPE>>
   GATEWAY_DB_USER: <<DB_USER>>
   HOME: /home/app
-  JIUWENBOX_ENABLED: "false"
-  JIUWENBOX_URL: http://127.0.0.1:8321
+  JIUWENBOX_URL: "http://127.0.0.1:<<JIUWENBOX_PORT>>"
   JIUWENSWARM_CONFIG_DIR: /app/config
   JIUWENSWARM_EDITION: enterprise
+  # 沙箱类型（update_conf.py 据此决定是否写入 sandbox 域；jiuwenbox 才启用）
+  SANDBOX_TYPE: "<<SANDBOX_TYPE>>"
   JIUWENSWARM_GC_RECLAIM_INTERVAL: "60"
   JIUWENSWARM_SESSION_ADAPTER_IDLE_TTL_SEC: "180"
   LLM_SSL_VERIFY: "False"

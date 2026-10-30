@@ -175,8 +175,8 @@ list_workload_resources() { # $1=yaml 清单（单文件）
 }
 
 # 组件 → 期望镜像（渲染后 conf 清单中工作负载第一个容器的镜像；取不到输出空串）
-component_expected_image() { # $1=组件
-  local comp="$1" f yaml res img
+component_expected_images() { # $1=组件 → 空格分隔的全部期望镜像（主+sidecar，去重）
+  local comp="$1" f yaml res img out=""
   local -a reslist=()
   local file_list; file_list=$(component_files "$comp") || return 0
   for f in $file_list; do
@@ -184,28 +184,41 @@ component_expected_image() { # $1=组件
     [ -f "$yaml" ] || continue
     mapfile -t reslist < <(list_workload_resources "$yaml")
     for res in "${reslist[@]}"; do
-      img=$(yq -r '.spec.template.spec.containers[0].image' "$res")
-      if [ "$img" != "null" ] && [ -n "$img" ]; then printf '%s' "$img"; return 0; fi
+      for img in $(yq -r '.spec.template.spec.containers[].image' "$res" 2>/dev/null); do
+        [ "$img" = "null" ] || [ -z "$img" ] && continue
+        case " $out " in *" $img "*) continue;; esac   # 去重
+        out="$out $img"
+      done
     done
   done
-  return 0
+  printf '%s' "${out# }"
 }
 
-# 读取指定标签下 Pod 的 "total ready imgok"（ready=就绪数；imgok=请求镜像与期望一致的 Pod 数）。
+# 读取指定标签下 Pod 的 "total ready imgok"（Pod 级口径，适配多容器 Pod）：
+# total=Pod 数；ready=全部容器就绪的 Pod 数；imgok=全部容器镜像都在期望集合内
+# 的 Pod 数（期望集合为空格分隔多值——主容器+沙箱 sidecar 镜像不同，各自匹配）。
 # 仅拉取 PodList 小响应。镜像比对取 spec.containers[].image（创建时原样保留，与渲染清单同形）；
 # status.containerStatuses[].image 会被 k8s 规范化（如 redis:7-alpine →
 # docker.io/library/redis:7-alpine），不可直接比对
-read_pods() { # $1=label selector $2=期望镜像（空=不校验镜像）
+read_pods() { # $1=label selector $2=期望镜像（空格分隔多值；空=不校验镜像）
   local sel="$1" want_img="${2:-}" resp code total ready imgok
   [ -n "${KCTL_TOKEN:-}" ] || { echo "0 0 0"; return 0; }
   resp="$(kctl_tmpdir)/pods.json"
   code=$(kctl_http GET "/api/v1/namespaces/$KCTL_NS/pods?labelSelector=$sel" "$resp")
   [ "$code" = 200 ] || { echo "0 0 0"; return 0; }
   total=$(yq '.items | length' "$resp" 2>/dev/null)
-  ready=$(yq '[.items[].status.containerStatuses[] | select(.ready == true)] | length' "$resp" 2>/dev/null)
+  # Pod 级就绪：有容器状态且全部容器 ready（主+sidecar 多容器 Pod 需全部就绪）
+  ready=$(yq '[.items[] | select((.status.containerStatuses // []) | length > 0) | select([.status.containerStatuses[].ready] | all)] | length' "$resp" 2>/dev/null)
   if [ -n "$want_img" ]; then
+    # Pod 级镜像校验：Pod 的全部容器镜像都在期望集合内（期望集合空格分隔多值）
+    local -a exp=($want_img)
+    local json_arr="" img
+    for img in "${exp[@]}"; do
+      [ -n "$json_arr" ] && json_arr+=","
+      json_arr+="\"$img\""
+    done
     # snap 版 yq 不支持 --arg，镜像值内嵌表达式（已过 check_vars 白名单校验）
-    imgok=$(yq "[.items[].spec.containers[] | select(.image == \"$want_img\")] | length" "$resp" 2>/dev/null)
+    imgok=$(yq "[.items[] | select(([.spec.containers[]?.image] | unique) - [$json_arr] | length == 0)] | length" "$resp" 2>/dev/null)
   else
     imgok=$total
   fi
@@ -255,7 +268,7 @@ wait_ready() { # $1=组件
     return 0
   fi
   label=$(component_label "$comp")
-  want_img=$(component_expected_image "$comp")
+  want_img=$(component_expected_images "$comp")
   iters=$(( ${WAIT_TIMEOUT_SECS:-300} / 10 ))
   (( iters >= 1 )) || iters=1   # 预算不足 10s 时至少轮询一次
   for ((i = 1; i <= iters; i++)); do
