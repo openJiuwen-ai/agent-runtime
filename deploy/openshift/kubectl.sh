@@ -310,6 +310,46 @@ kctl_delete_pods_by_label() { # $1=namespace $2=labelSelector
   done
 }
 
+# 确保目标 namespace/Project 存在。供编排层（deploy.sh up 前置）调用；
+# CLI 入口 kctl_main 不调用，保持 kubectl -f 语义（不隐式创建 namespace）。
+# k8s 形态走 _kctl_k8s_ensure_namespace；openshift 形态走 _kctl_oc_ensure_namespace
+kctl_ensure_namespace() { # $1=namespace
+  if is_k8s_cluster; then
+    _kctl_k8s_ensure_namespace "$1"
+    return 0
+  fi
+  _kctl_oc_ensure_namespace "$1"
+}
+
+# openshift 形态实现：探测不可靠（普通用户 GET cluster-scope 资源可能 403），
+# 以创建结果为准，仅 409 视为已存在放行。
+# 走 projectrequests（oc new-project 同款 API）：平台按 project request 模板补全
+# 脚手架，创建者自动获得该项目 admin 角色绑定（直接 POST Project 无此效果）
+_kctl_oc_ensure_namespace() { # $1=namespace
+  local ns="$1" body resp code
+  [ -n "$ns" ] || return 0
+  body="$(kctl_tmpdir)/ns-body"
+  resp="$(kctl_tmpdir)/ns-resp"
+  code=$(kctl_http GET "/apis/project.openshift.io/v1/projects/$ns" "$resp")
+  if [ "$code" = 200 ]; then
+    return 0
+  fi
+  cat > "$body" <<EOF
+apiVersion: project.openshift.io/v1
+kind: ProjectRequest
+metadata:
+  name: $ns
+EOF
+  code=$(kctl_http POST "/apis/project.openshift.io/v1/projectrequests" \
+    "$resp" "$body")
+  case "$code" in
+    200|201) info "project $ns 不存在，已自动创建";;
+    409)     info "project $ns 已存在";;
+    403)     error "无创建 Project 权限（HTTP 403）：请管理员预建 oc new-project $ns 后重跑";;
+    *)       error "project $ns 创建失败 → HTTP $code: $(head -c 300 "$resp" 2>/dev/null)";;
+  esac
+}
+
 # kctl_run VERB FILE...（VERB=apply|create|replace|delete）
 kctl_run() {
   [ $# -ge 1 ] || error "用法: kctl_run VERB FILE..."

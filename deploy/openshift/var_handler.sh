@@ -220,11 +220,10 @@ resolve_manager_web_resolver() {
 # 派生出的 ENABLE_EXTERNAL_DB / ENABLE_EXTERNAL_REDIS 供渲染与依赖预检消费。
 # NFS 同类派生在 k8s_handler.sh resolve_nfs_vars（k8s 形态专属）。
 #
-# 基础服务（mariadb/mysql/postgresql/minio）所在命名空间 BASE_SVC_NS：
-#   k8s 形态       → default（集群共享一套公用基础服务，部署工具不在业务 ns 部署这四类组件，
-#                     内置 DB/MinIO 地址派生与存在性探测均指向 default）
-#   openshift 形态 → 本命名空间（试用集群仅有单 ns 权限，行为与历史一致）
-# 注意：Redis 不在共享范围（各 ns 内置自己的 redis，见 resolve_redis_vars）。
+# 基础服务（mariadb/mysql/postgresql/minio）所在命名空间 BASE_SVC_NS——集群内未命中
+# 任何实例时的部署预期位置（k8s=default 共享 / openshift=本 ns）。
+# 内置实例实际消费位置由 resolve_builtin_svc_locations 在 up 前动态定位（本 ns → default）。
+# Redis 不在共享范围（各 ns 内置自己的 redis，见 resolve_redis_vars）。
 resolve_base_svc_ns() {
   if is_k8s_cluster; then
     DEPLOY_VARS["BASE_SVC_NS"]="default"
@@ -234,8 +233,34 @@ resolve_base_svc_ns() {
   return 0
 }
 
-# 数据库连接检查与派生（DB_HOST 空=内置：headless 服务名按 DB_TYPE+BASE_SVC_NS 派生
-# （k8s 形态即复用 default 命名空间的共享实例）；填写=外部数据库，地址原样使用）。
+# 内置基础服务实例定位：按 本 ns → default 顺序探测，命中即改写 DB_HOST/OBS_URL
+# 指向实际实例；均未命中维持 BASE_SVC_NS 静态派生值（由部署/preflight 接手）。
+# 外挂模式（DB_HOST/OBS_URL 已配置）地址原样使用，不经本函数。
+# 须在 kctl_check_vars 之后调用（探测走集群通道）；--render-only 不经过本函数
+resolve_builtin_svc_locations() {
+  local svc ns host
+  if [ "${DEPLOY_VARS["ENABLE_EXTERNAL_DB"]}" != "true" ]; then
+    svc="${DEPLOY_VARS["DB_TYPE"]}"
+    ns=$(component_ns "$svc")
+    host="${svc}-headless.${ns}"
+    if [ "$host" != "${DEPLOY_VARS["DB_HOST"]}" ]; then
+      info "内置 ${svc} 实例定位: ${DEPLOY_VARS["DB_HOST"]} → ${host}"
+      DEPLOY_VARS["DB_HOST"]="$host"
+    fi
+  fi
+  if [ "${DEPLOY_VARS["ENABLE_EXTERNAL_OBS"]}" != "true" ]; then
+    ns=$(component_ns "minio")
+    host="minio-headless.${ns}:9000"
+    if [ "$host" != "${DEPLOY_VARS["OBS_URL"]}" ]; then
+      info "内置 minio 实例定位: ${DEPLOY_VARS["OBS_URL"]} → ${host}"
+      DEPLOY_VARS["OBS_URL"]="$host"
+    fi
+  fi
+  return 0
+}
+
+# 数据库连接检查与派生。DB_HOST 空=内置：headless 服务名按 DB_TYPE+BASE_SVC_NS 静态派生
+# （up 时由 resolve_builtin_svc_locations 按实况改写）；填写=外部数据库，地址原样使用。
 # 端口/用户留空按 DB_TYPE 取默认，
 # 密码优先级（语义对齐 jiuwenswarm-ee 的全局统一账号）：
 #   外部数据库：DB_PASSWORD > DB_TYPE 对应凭证变量（MARIADB/MYSQL/POSTGRES_ROOT_PASSWORD），均空报错
@@ -321,9 +346,8 @@ resolve_redis_vars() {
 # 填写=外部 OBS/S3 兼容服务（bucket 与 AK/SK 必填）
 resolve_obs_vars() {
   if [ -z "${DEPLOY_VARS["OBS_URL"]:-}" ]; then
-    # 内置 MinIO：地址/凭证全部强制派生（忽略用户残留的外部 AK/SK，避免凭证错配）
-    # 地址指向 BASE_SVC_NS 的 minio-headless（StatefulSet 治理服务，headless DNS 解析到 Pod IP；
-    # k8s 形态即 default 命名空间的共享 MinIO，见 resolve_base_svc_ns）
+    # 内置 MinIO：地址/凭证强制派生（忽略残留的外部 AK/SK，避免凭证错配）。
+    # 地址静态指向 BASE_SVC_NS 的 minio-headless，up 时由 resolve_builtin_svc_locations 按实况改写
     DEPLOY_VARS["ENABLE_EXTERNAL_OBS"]="false"   # 内置 MinIO
     DEPLOY_VARS["OBS_URL"]="minio-headless.${DEPLOY_VARS["BASE_SVC_NS"]}:9000"
     DEPLOY_VARS["OBS_SECURE"]="false"
