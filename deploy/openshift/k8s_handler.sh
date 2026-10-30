@@ -704,8 +704,8 @@ resolve_dev_mode_vars() {
 }
 
 # k8s 形态：up 前置——目标 namespace 不存在时自动创建（down 不调用本函数）
-# openshift 形态直接跳过：namespace 是 cluster-scope 资源，普通项目用户 GET/POST 均会 403，
-# 探测/自动创建都不可靠；Project 由管理员/平台预建（oc new-project），工具不做隐式创建
+# 由统一入口 kctl_ensure_namespace（kubectl.sh）按集群形态分流调用；
+# openshift 形态走 ProjectRequest API（_kctl_oc_ensure_namespace，同在 kubectl.sh），不经本函数
 # get 退出码非 0 不等于不存在（无 get namespaces 权限/网络故障同样非 0）：
 # 以 create 结果为准，仅 AlreadyExists 视为已存在放行，其余错误连同 kubectl stderr 报出
 _kctl_k8s_ensure_namespace() { # $1=namespace

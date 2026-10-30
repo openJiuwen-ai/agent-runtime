@@ -51,7 +51,7 @@ DEPS_K8S=(yq kubectl)
 # DEPLOY_VARS 提供通用默认值；可被 .env.custom 覆盖
 declare -A DEPLOY_VARS=(
     # ----- 通用（双形态） -----
-    ["NAMESPACE"]="rapheale-dev"
+    ["NAMESPACE"]="default"
     ["RENDER_ONLY"]="false"
     ["CLUSTER_TYPE"]="openshift"
     ["CLUSTER_API_SERVER"]=""            # openshift 形态必填（http(s) URL），留空自动探测（oc/kubeconfig）；k8s 形态走 kubeconfig，留空
