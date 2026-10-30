@@ -124,7 +124,7 @@
     "scopeGroupClose": "）",
     "emptyTemplate": "该集群还没有受控专家",
     "emptyGroup": "该集群还没有受控专家团",
-    "deleteConfirm": "从该集群移除 {{id}}？",
+    "deleteConfirm": "从该集群移除{{kind}}「{{name}}」？",
     "duplicate": "该集群已经有这个包"
   },
   "guide": {
@@ -1132,6 +1132,7 @@
       "guideAgent": "Agent Management",
       "guidePool": "Runtime Template Management",
       "guideCluster": "Cluster Management",
+      "guideExpertPackage": "专家包配置",
       "guideSkillPrebuilt": "Preset Skills"
     }
   },

@@ -458,7 +458,12 @@ export function InstanceExpertPackagesTab({ instanceId }: Props) {
 
       <ConfirmDialog
         open={deleteTarget !== null}
-        message={t('expertPackages.deleteConfirm', { id: deleteTarget?.id || '' })}
+        message={t('expertPackages.deleteConfirm', {
+          kind: deleteTarget ? kindLabel(deleteTarget.kind) : '',
+          name: deleteTarget
+            ? (catalogName(deleteTarget.kind, deleteTarget.id) || deleteTarget.id)
+            : '',
+        })}
         danger
         onConfirm={() => void removeRow()}
         onClose={() => setDeleteTarget(null)}
