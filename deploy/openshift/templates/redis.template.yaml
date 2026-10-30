@@ -36,6 +36,10 @@ spec:
           imagePullPolicy: IfNotPresent
           args:
             - redis-server
+            # 禁用 RDB 快照：不挂持久卷（纯缓存），且 /data 属镜像层，随机 UID 不可写，
+            # 默认 save 策略会 BGSAVE 失败 → MISCONF 拒写
+            - --save
+            - ""
             # ACL：禁用 default 用户（不能用 --requirepass 替代，它会隐式重新启用 default）；
             # 值必须加引号：裸写的 on 会被 kubectl 解析为 bool，> 开头会直接导致 YAML 解析失败
             - --user
