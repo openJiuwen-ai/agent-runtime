@@ -35,7 +35,6 @@ import { RolesEditPage } from './pages/iam/RolesEditPage';
 import { ApprovalPage } from './pages/approval/ApprovalPage';
 import { ApprovalEditPage } from './pages/approval/ApprovalEditPage';
 import { AgentTemplatesPage } from './pages/templates/AgentTemplatesPage';
-import { ExpertPackagesPage } from './pages/templates/ExpertPackagesPage';
 import { A2AManagementPage } from './pages/templates/A2AManagementPage';
 import { getProductName } from './utils/env';
 import {
@@ -195,9 +194,6 @@ function RouteView() {
   if (path === '/agent-templates') {
     return <AgentTemplatesPage />;
   }
-  if (path === '/expert-packages') {
-    return <ExpertPackagesPage />;
-  }
   const instanceAccess = matchRoute('/instances/:id/access', path);
   if (instanceAccess) {
     return <InstanceDetailPage instanceId={instanceAccess.id} tab="access" />;
@@ -209,6 +205,10 @@ function RouteView() {
   const instanceAgentResources = matchRoute('/instances/:id/agent-resources', path);
   if (instanceAgentResources) {
     return <InstanceDetailPage instanceId={instanceAgentResources.id} tab="agentResources" />;
+  }
+  const instanceExpertPackages = matchRoute('/instances/:id/expert-packages', path);
+  if (instanceExpertPackages) {
+    return <InstanceDetailPage instanceId={instanceExpertPackages.id} tab="expertPackages" />;
   }
   const instanceServiceResources = matchRoute('/instances/:id/service-resources', path);
   if (instanceServiceResources) {

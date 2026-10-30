@@ -1,22 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ApiError, PackageAllowlistApi, InstanceApi, OrgApi, UserApi } from '../../services/api';
-import type { PackageAllowlistPackage, PackageAllowlistCatalogItem } from '../../types/applicationConfig';
-import type { InstanceSummary } from '../../types/instance';
-import { Empty } from '../../components/Empty';
-import { ConfirmDialog } from '../../components/ConfirmDialog';
-import { MatchExprEditor } from '../../components/MatchExprEditor';
-import { Modal, ModalCancelButton } from '../../components/Modal';
-import { useAsync } from '../../hooks/useAsync';
-import { toast } from '../../stores/uiStore';
-import { useRouter } from '../../router';
+import { ApiError, PackageAllowlistApi, OrgApi, UserApi } from '../../../services/api';
+import type { PackageAllowlistPackage, PackageAllowlistCatalogItem } from '../../../types/applicationConfig';
+import { Empty } from '../../../components/Empty';
+import { ConfirmDialog } from '../../../components/ConfirmDialog';
+import { MatchExprEditor } from '../../../components/MatchExprEditor';
+import { Modal, ModalCancelButton } from '../../../components/Modal';
+import { useAsync } from '../../../hooks/useAsync';
+import { toast } from '../../../stores/uiStore';
 import {
   AGENT_RESOURCE_MATCH_FIELDS,
   describeMatchExprScope,
   matchExprToEditorString,
   type MatchField,
   type MatchOp,
-} from '../../utils/matchExpr';
+} from '../../../utils/matchExpr';
 
 type Kind = PackageAllowlistPackage['kind'];
 
@@ -46,18 +44,18 @@ function packageKey(kind: string, id: string): string {
   return `${kind}\n${id}`;
 }
 
-export function ExpertPackagesPage() {
+interface Props {
+  instanceId: string;
+}
+
+export function InstanceExpertPackagesTab({ instanceId }: Props) {
   const { t } = useTranslation();
-  const { navigate } = useRouter();
-  const [clusters, setClusters] = useState<InstanceSummary[]>([]);
-  const [clustersLoading, setClustersLoading] = useState(true);
-  const [clusterId, setClusterId] = useState('');
   const [kindTab, setKindTab] = useState<Kind>('agent_template');
   const [packages, setPackages] = useState<PackageAllowlistPackage[]>([]);
   const [catalog, setCatalog] = useState<PackageAllowlistCatalogItem[]>([]);
   const [catalogError, setCatalogError] = useState('');
   const [catalogLoading, setCatalogLoading] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
@@ -103,35 +101,7 @@ export function ExpertPackagesPage() {
     return { text: described.display, title: described.raw };
   }, [allLabel, resolveScopeName, t]);
 
-  useEffect(() => {
-    let cancelled = false;
-    setClustersLoading(true);
-    InstanceApi.list({ page: 1, page_size: 100, sort_by: 'jiuwenclaw_name', sort_order: 'asc' })
-      .then((page) => {
-        if (cancelled) return;
-        const items = page.items || [];
-        setClusters(items);
-        setClusterId((current) => current || items[0]?.jiuwenclaw_id || '');
-      })
-      .catch((e) => {
-        if (!cancelled) {
-          toast('danger', e instanceof ApiError ? e.detail : (e as Error).message);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setClustersLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   const reload = useCallback(async (instanceId: string) => {
-    if (!instanceId) {
-      setPackages([]);
-      setLoadError(null);
-      return;
-    }
     const gen = ++loadGen.current;
     setLoading(true);
     setLoadError(null);
@@ -153,11 +123,6 @@ export function ExpertPackagesPage() {
   }, []);
 
   const reloadCatalog = useCallback(async (instanceId: string) => {
-    if (!instanceId) {
-      setCatalog([]);
-      setCatalogError('');
-      return;
-    }
     const gen = ++catalogGen.current;
     setCatalogLoading(true);
     try {
@@ -175,15 +140,14 @@ export function ExpertPackagesPage() {
   }, []);
 
   useEffect(() => {
-    void reload(clusterId);
-    void reloadCatalog(clusterId);
-  }, [clusterId, reload, reloadCatalog]);
+    void reload(instanceId);
+    void reloadCatalog(instanceId);
+  }, [instanceId, reload, reloadCatalog]);
 
   const publish = async (next: PackageAllowlistPackage[]) => {
-    if (!clusterId) return false;
     setSaving(true);
     try {
-      const data = await PackageAllowlistApi.upsert(clusterId, { packages: next });
+      const data = await PackageAllowlistApi.upsert(instanceId, { packages: next });
       setPackages(data.packages || []);
       toast('success', t('success.saved'));
       return true;
@@ -268,8 +232,7 @@ export function ExpertPackagesPage() {
   const tabGranted = new Set(
     packages.filter((item) => item.kind === kindTab).map((item) => item.id),
   );
-  const canAdd = Boolean(clusterId)
-    && !saving
+  const canAdd = !saving
     && !loading
     && !catalogLoading
     && catalog.some((item) => item.kind === kindTab && !tabGranted.has(item.id));
@@ -316,38 +279,13 @@ export function ExpertPackagesPage() {
           </div>
         </div>
         <div className="flex min-w-0 flex-1 flex-nowrap items-center justify-end gap-2">
-          <select
-            className="select min-w-0 flex-1"
-            aria-label={t('guide.selectCluster')}
-            value={clusterId}
-            disabled={
-              clustersLoading
-              || clusters.length === 0
-              || loading
-              || catalogLoading
-              || saving
-              || modalOpen
-            }
-            onChange={(event) => {
-              setLoading(true);
-              setCatalogLoading(true);
-              setClusterId(event.target.value);
-            }}
-          >
-            {clusters.length === 0 && <option value="">{t('guide.selectCluster')}</option>}
-            {clusters.map((item) => (
-              <option key={item.jiuwenclaw_id} value={item.jiuwenclaw_id}>
-                {item.jiuwenclaw_name}
-              </option>
-            ))}
-          </select>
           <button
             className="btn sm"
             onClick={() => {
-              void reload(clusterId);
-              void reloadCatalog(clusterId);
+              void reload(instanceId);
+              void reloadCatalog(instanceId);
             }}
-            disabled={!clusterId || loading}
+            disabled={loading}
           >
             {t('common.refresh')}
           </button>
@@ -376,17 +314,8 @@ export function ExpertPackagesPage() {
       </div>
 
       <div className="card !p-0">
-        {clustersLoading || loading ? (
+        {loading ? (
           <div className="p-4 text-sm text-muted">{t('common.loading')}</div>
-        ) : clusters.length === 0 ? (
-          <div className="p-4">
-            <Empty text={t('guide.noClusters')} />
-            <div className="flex justify-center pb-4">
-              <button className="btn sm" onClick={() => navigate('/instances')}>
-                {t('nav.instances')}
-              </button>
-            </div>
-          </div>
         ) : loadError ? (
           <div className="p-4 text-sm text-danger">
             {t('errors.loadFailed', { detail: loadError })}
