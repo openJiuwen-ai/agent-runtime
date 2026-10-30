@@ -52,8 +52,8 @@ gen_agentserver_file() {
         yq eval 'select(.kind == "Deployment").spec.template.spec.volumes |= map(select(.name == "data") |= {"name": "data", "nfs": {"server": "'"${DEPLOY_VARS["NFS_SERVER_ADDR"]}"'", "path": "'"${nfs_path}"'"}} // .)' -i "${file}"
     fi
 
-    # 沙箱可插拔：JIUWENBOX_ENABLED=false 时移除 jiuwenbox sidecar 及其 hp-cgroup 卷
-    if [ "${DEPLOY_VARS["JIUWENBOX_ENABLED"]}" != "true" ]; then
+    # 沙箱可插拔：SANDBOX_TYPE 非 jiuwenbox 时移除 jiuwenbox sidecar 及其 hp-cgroup 卷
+    if [ "${DEPLOY_VARS["SANDBOX_TYPE"]}" != "jiuwenbox" ]; then
         yq eval 'select(.kind == "Deployment").spec.template.spec.containers
             |= map(select(.name != "'"${DEPLOY_VARS["JIUWENBOX_NAME"]}"'"))' -i "${file}"
         yq eval 'select(.kind == "Deployment").spec.template.spec.volumes
