@@ -109,6 +109,13 @@ class Settings(BaseSettings):
         validation_alias="WORKSPACE_QUOTA_ENABLED",
     )
 
+    agent_client_registration_enabled: bool = Field(
+        default=False, validation_alias="MANAGER_AGENT_CLIENT_REGISTRATION_ENABLED"
+    )
+    agent_client_registration_config_file: str = Field(
+        default="", validation_alias="MANAGER_AGENT_CLIENT_REGISTRATION_CONFIG_FILE"
+    )
+
     @property
     def host(self) -> str:
         return self.rest_host

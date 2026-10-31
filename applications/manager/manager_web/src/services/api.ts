@@ -811,6 +811,20 @@ export const A2AAccessPolicyTemplateApi = {
     }),
 };
 
+export const AgentClientRegistrationApi = {
+  capabilities: () => http<{ enabled: boolean; configured: boolean; reason?: string }>(
+    '/v1/integrations/keycloak/agent-client-registrations/capabilities',
+  ),
+  register: (registration_id: string, template_name: string) =>
+    http<import('../utils/agentClientRegistration').AgentClientCredentials>(
+      '/v1/integrations/keycloak/agent-client-registrations',
+      { method: 'POST', body: { registration_id, template_name } },
+    ),
+  cancel: (id: string) => http<{ deleted: boolean }>(
+    `/v1/integrations/keycloak/agent-client-registrations/${encodeURIComponent(id)}`, { method: 'DELETE' },
+  ),
+};
+
 export const AgentTemplateApi = {
   list: (params?: {
     page?: number;

@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next';
+import type { ReactNode } from 'react';
 import { isExamplePrefixed, jsonContentForValidation } from '../utils/jsonExample';
 
 interface JsonFieldProps {
@@ -8,9 +9,11 @@ interface JsonFieldProps {
   onChange: (val: string) => void;
   placeholder?: string;
   rows?: number;
+  labelActions?: ReactNode;
+  readOnly?: boolean;
 }
 
-export function JsonField({ label, hint, value, onChange, placeholder, rows = 6 }: JsonFieldProps) {
+export function JsonField({ label, hint, value, onChange, placeholder, rows = 6, labelActions, readOnly }: JsonFieldProps) {
   const { t } = useTranslation();
   const jsonText = jsonContentForValidation(value);
   let error: string | null = null;
@@ -28,6 +31,7 @@ export function JsonField({ label, hint, value, onChange, placeholder, rows = 6 
       <div className="flex items-center justify-between gap-2 mb-1 flex-wrap">
         <div className="flex items-center gap-2 min-w-0">
           <label className="label !mb-0">{label}</label>
+          {labelActions}
           {showExampleTag && (
             <span className="pill sm muted shrink-0">{t('instanceConfig.permissions.exampleTag')}</span>
           )}
@@ -41,6 +45,7 @@ export function JsonField({ label, hint, value, onChange, placeholder, rows = 6 
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         spellCheck={false}
+        readOnly={readOnly}
       />
       {error && <div className="text-[11px] text-danger mt-1">{error}</div>}
     </div>
