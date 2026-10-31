@@ -568,17 +568,29 @@ apply_jiuwenbox_extras() { # $@=本次渲染的清单文件名
 # 仅 CLUSTER_TYPE=k8s 支持（openshift SCC 禁止 hostPath）
 
 # 给清单内工作负载（Deployment/StatefulSet，如 agentserver）的首个容器追加一个 hostPath
-# 代码挂载（volume + volumeMount）
+# 代码挂载（volume + volumeMount）；agentserver.json（full 模式 config_sync 载荷，runtime
+# 按其建 Pod）等价处理：卷注入 rawdata.templates[].volumes，挂载注入 c-agentserver 容器
 # 注：select(...).path |= 是更新运算符（非管道 select），yq 对不匹配的文档原样保留，
 # 多文档清单（工作负载 + Service）不会丢文档——勿改成 select(...) | .path = 值 的管道形式
 add_code_mount() { # $1=清单文件 $2=卷名 $3=宿主机路径 $4=容器内路径 $5=hostPath.type(默认 Directory)
   local file="$1" name="$2" host_path="$3" mount_path="$4" host_type="${5:-Directory}"
-  yq -i '
-    select(.kind == "Deployment" or .kind == "StatefulSet").spec.template.spec.containers[0].volumeMounts
-      |= ((. // []) + [{"name": "'"${name}"'", "mountPath": "'"${mount_path}"'"}])
-    | select(.kind == "Deployment" or .kind == "StatefulSet").spec.template.spec.volumes
-      |= ((. // []) + [{"name": "'"${name}"'", "hostPath": {"path": "'"${host_path}"'", "type": "'"${host_type}"'"}}])
-  ' "$file"
+  case "$file" in
+    *.json)
+      # config_sync 载荷按 container_id 定位容器，卷按模板注入（-o=json 保持 JSON 格式）
+      yq -i -o=json '
+        (.rawdata.containers[] | select(.container_id == "c-agentserver").volumeMounts)
+          |= ((. // []) + [{"name": "'"${name}"'", "mountPath": "'"${mount_path}"'"}])
+        | .rawdata.templates[].volumes
+          |= ((. // []) + [{"name": "'"${name}"'", "hostPath": {"path": "'"${host_path}"'", "type": "'"${host_type}"'"}}])
+      ' "$file";;
+    *)
+      yq -i '
+        select(.kind == "Deployment" or .kind == "StatefulSet").spec.template.spec.containers[0].volumeMounts
+          |= ((. // []) + [{"name": "'"${name}"'", "mountPath": "'"${mount_path}"'"}])
+        | select(.kind == "Deployment" or .kind == "StatefulSet").spec.template.spec.volumes
+          |= ((. // []) + [{"name": "'"${name}"'", "hostPath": {"path": "'"${host_path}"'", "type": "'"${host_type}"'"}}])
+      ' "$file";;
+  esac
 }
 
 mount_swarm_code() { # jiuwenswarm 仓库 → 镜像内代码根
@@ -652,7 +664,7 @@ apply_dev_code_mounts() { # $@=本次渲染的清单文件名
   fetch_current_node_name
   local f comp
   for f in "$@"; do
-    comp="${f%.yaml}"
+    comp="${f%.yaml}"; comp="${comp%.json}"   # agentserver.json（full 模式 runtime 建 Pod 的载荷）与 agentserver.yaml 同按 agentserver 处理
     case "$comp" in
       agentserver|gateway)
         mount_swarm_code "$CONF_DIR/$f"; mount_runtime_pkg "$CONF_DIR/$f"; mount_core_pkg "$CONF_DIR/$f";;
@@ -667,8 +679,11 @@ apply_dev_code_mounts() { # $@=本次渲染的清单文件名
       *) continue;;   # mariadb/minio/redis/secret 等基础服务不挂代码
     esac
     # hostPath 是节点本地的，工作负载（Deployment/StatefulSet，如 agentserver）固定到代码所在节点
-    # （更新运算符写法不丢多文档中的 Service）
-    yq -i 'select(.kind == "Deployment" or .kind == "StatefulSet").spec.template.spec.nodeName = "'"${DEPLOY_VARS["CURRENT_NODE_NAME"]}"'"' "$CONF_DIR/$f"
+    # agentserver.json 走模板级 nodeName（config_sync 合法键，runtime 建 Pod 时透传）
+    case "$f" in
+      *.json) yq -i -o=json '.rawdata.templates[].nodeName = "'"${DEPLOY_VARS["CURRENT_NODE_NAME"]}"'"' "$CONF_DIR/$f";;
+      *)      yq -i 'select(.kind == "Deployment" or .kind == "StatefulSet").spec.template.spec.nodeName = "'"${DEPLOY_VARS["CURRENT_NODE_NAME"]}"'"' "$CONF_DIR/$f";;
+    esac
     info "dev 模式后处理完成: $comp（节点 ${DEPLOY_VARS["CURRENT_NODE_NAME"]}）"
   done
   return 0
