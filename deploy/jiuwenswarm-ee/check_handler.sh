@@ -451,11 +451,12 @@ check_if_gateway_up() {
     fi
 
     # 解析配置口 NodePort（模型/agent 模板下发依赖）；gateway 已确认部署，读不到即环境异常
+    # Manager config API 已并入 WEB_PORT 统一应用，NodePort 暴露的端口名为 web-ws
     local gw_port=$(kubectl get service "${DEPLOY_VARS["GATEWAY_NAME"]}-nodeport" \
         -n "${DEPLOY_VARS["NAMESPACE"]}" \
-        -o jsonpath='{.spec.ports[?(@.name=="config-http")].nodePort}')
+        -o jsonpath='{.spec.ports[?(@.name=="web-ws")].nodePort}')
     if [ -z "${gw_port}" ]; then
-        error "Failed to read nodePort (config-http) from service ${DEPLOY_VARS["GATEWAY_NAME"]}-nodeport in namespace ${DEPLOY_VARS["NAMESPACE"]}"
+        error "Failed to read nodePort (web-ws) from service ${DEPLOY_VARS["GATEWAY_NAME"]}-nodeport in namespace ${DEPLOY_VARS["NAMESPACE"]}"
     fi
     DEPLOY_VARS["GATEWAY_CONFIG_HTTP_NODE_PORT"]="${gw_port}"
 }

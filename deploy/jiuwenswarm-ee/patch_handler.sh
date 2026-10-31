@@ -229,7 +229,8 @@ install_model_patch() {
     local model_template_id="default-model"
 
     # 下发前确认 gateway config NodePort 真正可达(等 kube-proxy 规则生效)。
-    # gateway readinessProbe 即 /api/v1/ready on config-http(8775),与下发同端口。
+    # gateway readinessProbe 即 /api/v1/ready on web-ws(WEB_PORT),与下发同端口
+    # (Manager config API 已并入统一 Web 应用,不再有独立 config-http 服务)。
     wait_http_ready "${host}" "${gw_node_port}" "/api/v1/ready" "gateway NodePort"
 
     # 1. 下发 model_template（数据一：模型凭据）
