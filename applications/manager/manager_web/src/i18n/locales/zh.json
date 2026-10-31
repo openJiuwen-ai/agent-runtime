@@ -698,7 +698,7 @@
     "templateName": "模板名称",
     "templateDescription": "模板描述",
     "mcpName": "MCP 名称",
-    "mcpNameHint": "运行时 servers[] 中的唯一名称，如 demo-tools",
+    "mcpNameHint": "运行时 servers 中的唯一名称，如 demo-tools",
     "transport": "传输方式",
     "url": "服务地址",
     "urlHint": "例如 https://mcp.example.com/mcp",

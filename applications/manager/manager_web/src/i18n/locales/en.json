@@ -698,7 +698,7 @@
     "templateName": "Template Name",
     "templateDescription": "Template Description",
     "mcpName": "MCP Name",
-    "mcpNameHint": "Unique name in runtime servers[], e.g. demo-tools",
+    "mcpNameHint": "Unique name in runtime servers, e.g. demo-tools",
     "transport": "Transport",
     "url": "Server URL",
     "urlHint": "e.g. https://mcp.example.com/mcp",
