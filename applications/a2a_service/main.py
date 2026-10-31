@@ -31,7 +31,7 @@ def main() -> None:
         port=settings.fastapi_port,
         workers=settings.fastapi_workers if not settings.fastapi_debug else 1,
         reload=settings.fastapi_debug,
-        log_level=settings.log_level.lower(),
+        log_level=(settings.log_level or "info").lower(),
         loop="auto",
     )
 
