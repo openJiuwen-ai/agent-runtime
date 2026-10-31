@@ -9,6 +9,7 @@ import overviewMd from '../../docs/overview.md?raw';
 import agentManagerMd from '../../docs/guides/agent_manager.md?raw';
 import agentPoolManagerMd from '../../docs/guides/agent_pool_manager.md?raw';
 import clusterManagerMd from '../../docs/guides/cluster_manager.md?raw';
+import expertPackageMd from '../../docs/guides/expert_package.md?raw';
 import skillPrebuiltMd from '../../docs/guides/skill_prebuilt.md?raw';
 
 const docImages = import.meta.glob<string>('../../docs/assets/*.png', {
@@ -23,6 +24,7 @@ type DocKey =
   | 'guide-agent'
   | 'guide-pool'
   | 'guide-cluster'
+  | 'guide-expert-package'
   | 'guide-skill-prebuilt';
 
 type TocEntry = {
@@ -40,6 +42,7 @@ const TOC: TocEntry[] = [
   { key: 'guide-agent', labelKey: 'docs.toc.guideAgent', fallbackZh: 'Agent模板管理', group: 'guides' },
   { key: 'guide-pool', labelKey: 'docs.toc.guidePool', fallbackZh: '运行时模板管理', group: 'guides' },
   { key: 'guide-cluster', labelKey: 'docs.toc.guideCluster', fallbackZh: '集群管理', group: 'guides' },
+  { key: 'guide-expert-package', labelKey: 'docs.toc.guideExpertPackage', fallbackZh: '专家包配置', group: 'guides' },
   {
     key: 'guide-skill-prebuilt',
     labelKey: 'docs.toc.guideSkillPrebuilt',
@@ -54,6 +57,7 @@ const DOC_SOURCES: Record<DocKey, string> = {
   'guide-agent': agentManagerMd,
   'guide-pool': agentPoolManagerMd,
   'guide-cluster': clusterManagerMd,
+  'guide-expert-package': expertPackageMd,
   'guide-skill-prebuilt': skillPrebuiltMd,
 };
 

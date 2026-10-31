@@ -124,7 +124,7 @@
     "scopeGroupClose": ")",
     "emptyTemplate": "This cluster has no controlled experts",
     "emptyGroup": "This cluster has no controlled expert teams",
-    "deleteConfirm": "Remove {{id}} from this cluster?",
+    "deleteConfirm": "Remove {{kind}} \"{{name}}\" from this cluster?",
     "duplicate": "This package is already on the cluster"
   },
   "guide": {
@@ -1131,6 +1131,7 @@
       "guideAgent": "Agent Management",
       "guidePool": "Runtime Template Management",
       "guideCluster": "Cluster Management",
+      "guideExpertPackage": "Expert Package Configuration",
       "guideSkillPrebuilt": "Preset Skills"
     }
   },
