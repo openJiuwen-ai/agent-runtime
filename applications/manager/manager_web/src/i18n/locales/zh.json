@@ -1154,6 +1154,16 @@
     "chatLoadingSlow": "加载较慢,请稍候…"
   },
   "agentTemplate": {
+    "registration": {
+      "button": "注册 Agent 客户端",
+      "pending": "正在注册…",
+      "success": "Agent 客户端已注册，凭据已填入自定义配置。保存模板后生效。",
+      "failed": "Agent 客户端注册失败，请重试。",
+      "cleanupFailed": "未能清理本次未保存的 Agent 客户端，请稍后检查。",
+      "alreadyConfigured": "已有客户端凭据，保留当前配置。",
+      "showSecret": "显示并编辑密钥",
+      "hideSecret": "隐藏密钥"
+    },
     "title": "Agent模板",
     "subtitle": "维护可复用的Agent模板，供实例绑定使用",
     "new": "新建 Agent模板",

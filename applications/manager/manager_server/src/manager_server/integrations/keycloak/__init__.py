@@ -1,0 +1,1 @@
+"""Keycloak Agent client registration."""

@@ -1153,6 +1153,16 @@
     "chatLoadingSlow": "Taking longer than usual. Please wait…"
   },
   "agentTemplate": {
+    "registration": {
+      "button": "Register Agent client",
+      "pending": "Registering…",
+      "success": "Agent client registered and credentials filled in. Save the template to apply them.",
+      "failed": "Agent client registration failed. Please retry.",
+      "cleanupFailed": "The unsaved Agent client could not be removed. Please check it later.",
+      "alreadyConfigured": "Client credentials already exist and will be preserved.",
+      "showSecret": "Show and edit secret",
+      "hideSecret": "Hide secret"
+    },
     "title": "Agent Templates",
     "subtitle": "Maintain reusable Agent templates for instance binding",
     "new": "New Agent Template",
