@@ -204,6 +204,12 @@ export function TeamQuotaPolicyTab({ instanceId }: { instanceId: string }) {
             </div>
           </div>
           <div className="page-subtitle truncate pl-3">{t('instanceDetail.teamQuota.subtitle')}</div>
+          <div className="mt-2 pl-3 text-sm text-muted">
+            <div className="font-medium text-[var(--text-strong)]">
+              {t('instanceDetail.teamQuota.effectiveTitle')}
+            </div>
+            <div className="mt-0.5 whitespace-normal">{t('instanceDetail.teamQuota.effectiveRule')}</div>
+          </div>
         </div>
 
         <div className="card !p-0">
