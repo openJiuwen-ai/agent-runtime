@@ -78,6 +78,10 @@ spec:
           value: "0.0.0.0"
         - name: MANAGER_REST_PORT
           value: "<<MANAGER_REST_PORT>>"
+        - name: MANAGER_AGENT_CLIENT_REGISTRATION_ENABLED
+          value: "<<MANAGER_AGENT_CLIENT_REGISTRATION_ENABLED>>"
+        - name: MANAGER_AGENT_CLIENT_REGISTRATION_CONFIG_FILE
+          value: "<<MANAGER_AGENT_CLIENT_REGISTRATION_CONFIG_FILE>>"
         - name: MANAGER_DB_TYPE
           value: "<<DB_TYPE>>"
         - name: MANAGER_DB_HOST
