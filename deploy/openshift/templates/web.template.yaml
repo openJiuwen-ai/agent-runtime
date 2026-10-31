@@ -41,7 +41,7 @@ spec:
             - name: LOGIN_AUTH_SIMULATE
               value: "false"
             - name: WEB_TRANSPORT
-              value: "http"
+              value: "websocket"
             - name: WEB_REQUEST_TIMEOUT_SECONDS
               value: "15"
             - name: WORKSPACE_QUOTA_ENABLED

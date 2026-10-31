@@ -102,7 +102,7 @@ spec:
   type: ClusterIP                             # 集群内部访问，不需要外网
 
 ---
-# NodePort Service：供外连接， 只暴露 config-http 端口
+# NodePort Service：供外连接， 只暴露统一 Web 端口（Manager config API 已并入 WEB_PORT）
 apiVersion: v1
 kind: Service
 metadata:
@@ -111,9 +111,9 @@ metadata:
 spec:
   type: NodePort
   ports:
-    - name: config-http
-      port: <<GATEWAY_CONFIG_HTTP_PORT>>
-      targetPort: <<GATEWAY_CONFIG_HTTP_PORT>>
+    - name: web-ws
+      port: <<WEB_PORT>>
+      targetPort: <<WEB_PORT>>
       nodePort: <<GATEWAY_CONFIG_HTTP_NODE_PORT>>
   selector:
     app: <<GATEWAY_NAME>>
