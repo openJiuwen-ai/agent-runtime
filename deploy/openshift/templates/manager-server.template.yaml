@@ -69,9 +69,11 @@ spec:
         - name: MANAGER_DB_PORT
           value: "<<DB_PORT>>"
         - name: MANAGER_DB_USER
-          value: "<<DB_USER>>"
+          value: "<<MANAGER_DB_USER>>"
         - name: MANAGER_DB_NAME
-          value: "manager_<<NAMESPACE>>"
+          value: "<<MANAGER_DB_NAME>>"
+        - name: MANAGER_PG_SCHEMA
+          value: "<<MANAGER_PG_SCHEMA>>"
         - name: IDENTITY_PUBLIC_KEY_URL
           value: "http://jiuwenswarm-identity:8770/v1/auth/public_key"
         # 三模式部署形态（off 时 manager 跳过 Runtime 探活；routing/full 探活 agent-runtime /healthz）

@@ -12,11 +12,12 @@ component_managed() {
 
 # 组件缺失时是否由 resolve_targets 自动补齐（仅轻量共享依赖；
 # 基础服务较重——PVC/建库初始化，缺失走 preflight 报错由人工决策；
-# redis 在外挂模式（REDIS_HOST 已配置）下不自动补齐）
+# redis 以外挂模式（ENABLE_EXTERNAL_REDIS）为判据：外挂不自动补齐/不参与回收，
+# 内置模式 REDIS_HOST 虽由 resolve_redis_vars 派生为非空，仍视为可自动补齐）
 component_autoprovision() {
   case "$1" in
     secret) return 0;;
-    redis)  [ -z "${DEPLOY_VARS["REDIS_HOST"]:-}" ] && return 0;;
+    redis)  [ "${DEPLOY_VARS["ENABLE_EXTERNAL_REDIS"]}" != "true" ] && return 0;;
     *) return 1;;
   esac
 }

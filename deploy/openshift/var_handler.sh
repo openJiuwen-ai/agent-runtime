@@ -319,6 +319,45 @@ resolve_db_vars() {
       && DEPLOY_VARS["DB_ROOT_PASSWORD"]="${DEPLOY_VARS["DB_PASSWORD"]}"
     [ -n "${DEPLOY_VARS["DB_ROOT_PASSWORD"]:-}" ] || error "外部数据库未配置密码：请在 $CUSTOM_ENV_FILE 设置 DB_PASSWORD（或 DB_TYPE 对应的 MARIADB_ROOT_PASSWORD/MYSQL_ROOT_PASSWORD/POSTGRES_PASSWORD）"
   fi
+
+  resolve_module_db_vars
+  return 0
+}
+
+# 分库配置派生（规则与 jiuwenswarm-ee 的 set_db_var 对齐）：
+#   <MODULE>_DB_NAME：mysql/mariadb → <module>_<NAMESPACE>（按 db 隔离实例）；
+#                     postgresql → <module>（按 db 隔离实例）；用户已设则原样
+#   <MODULE>_PG_SCHEMA：仅 postgresql 生效，未设取 NAMESPACE（按 schema 隔离实例）；
+#                     mysql/mariadb 下留空，占位符行经 OPTIONAL_VARS 删除
+#   <MODULE>_DB_USER / <MODULE>_DB_PASSWORD：模块专属优先，未设继承全局统一账号
+#                     （DB_USER / DB_ROOT_PASSWORD），最终值必非空
+# 模块集：GATEWAY WEB IDENTITY MANAGER RUNTIME；AGENTSERVER 密码跟随 GATEWAY
+# （agentserver 连接 gateway 库，secret 中 AGENTSERVER_DB_PASSWORD 渲染 GATEWAY 值）
+resolve_module_db_vars() {
+  local module lmodule var
+  for module in GATEWAY WEB IDENTITY MANAGER RUNTIME; do
+    lmodule="${module,,}"
+    var="${module}_DB_NAME"
+    if [ -z "${DEPLOY_VARS[$var]:-}" ]; then
+      if [ "${DEPLOY_VARS["DB_TYPE"]}" = "postgresql" ]; then
+        DEPLOY_VARS[$var]="$lmodule"
+      else
+        DEPLOY_VARS[$var]="${lmodule}_${DEPLOY_VARS["NAMESPACE"]}"
+      fi
+    fi
+    var="${module}_PG_SCHEMA"
+    if [ -z "${DEPLOY_VARS[$var]:-}" ] && [ "${DEPLOY_VARS["DB_TYPE"]}" = "postgresql" ]; then
+      DEPLOY_VARS[$var]="${DEPLOY_VARS["NAMESPACE"]}"
+    fi
+    var="${module}_DB_USER"
+    if [ -z "${DEPLOY_VARS[$var]:-}" ]; then
+      DEPLOY_VARS[$var]="${DEPLOY_VARS["DB_USER"]}"
+    fi
+    var="${module}_DB_PASSWORD"
+    if [ -z "${DEPLOY_VARS[$var]:-}" ]; then
+      DEPLOY_VARS[$var]="${DEPLOY_VARS["DB_ROOT_PASSWORD"]}"
+    fi
+  done
   return 0
 }
 

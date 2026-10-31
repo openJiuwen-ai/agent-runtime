@@ -53,9 +53,11 @@ spec:
             - name: IDENTITY_DB_TYPE
               value: "<<DB_TYPE>>"
             - name: IDENTITY_DB_USER
-              value: "<<DB_USER>>"
+              value: "<<IDENTITY_DB_USER>>"
             - name: IDENTITY_DB_NAME
-              value: "identity_<<NAMESPACE>>"
+              value: "<<IDENTITY_DB_NAME>>"
+            - name: IDENTITY_PG_SCHEMA
+              value: "<<IDENTITY_PG_SCHEMA>>"
             - name: IDENTITY_SEED_ADMIN
               value: "true"
             - name: IDENTITY_SEED_USER1
