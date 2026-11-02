@@ -671,7 +671,7 @@ apply_dev_code_mounts() { # $@=本次渲染的清单文件名
       web)
         [ "${DEPLOY_VARS["IS_MOUNT_WEB_CODE"]}" = "true" ] || continue
         mount_swarm_code "$CONF_DIR/$f"; mount_web_nginx_template "$CONF_DIR/$f";;
-      identity|manager-server)
+      identity|manager-server|runtime)
         mount_runtime_code "$CONF_DIR/$f";;
       manager-web)
         [ "${DEPLOY_VARS["IS_MOUNT_MANAGER_WEB_CODE"]}" = "true" ] || continue
