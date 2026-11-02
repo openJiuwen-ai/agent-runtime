@@ -1,0 +1,8 @@
+{
+  "admin_base_url": "https://sso.example.com/admin/realms/company",
+  "token_url": "https://sso.example.com/realms/company/protocol/openid-connect/token",
+  "management_client_id": "studio-backend",
+  "management_client_secret": "YOUR_MANAGEMENT_CLIENT_SECRET",
+  "agent_token_audience": "egress_gateway",
+  "ca_bundle": null
+}
