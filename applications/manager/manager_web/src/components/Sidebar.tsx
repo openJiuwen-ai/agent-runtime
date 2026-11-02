@@ -48,6 +48,7 @@ export function Sidebar() {
     '/extension-config-templates',
     '/mcp-templates',
     '/a2a-management',
+    '/expert-packages',
   ];
   const agentResourceActive = agentResourceChildPaths.some(
     (p) => path === p || path.startsWith(`${p}/`),
@@ -186,6 +187,18 @@ export function Sidebar() {
       icon: (
         <svg className="w-4 h-4 nav-item__icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M8 9l3 3-3 3m5 0h3M5 5h14a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2z" />
+        </svg>
+      ),
+    },
+    {
+      key: 'expert-packages',
+      pathPrefix: '/expert-packages',
+      href: '/expert-packages',
+      label: t('nav.expertPackages'),
+      icon: (
+        <svg className="w-4 h-4 nav-item__icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z" />
+          <path strokeLinecap="round" strokeLinejoin="round" d="M12 12l8-4.5M12 12v9M12 12L4 7.5" />
         </svg>
       ),
     },

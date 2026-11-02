@@ -36,6 +36,7 @@ import { ApprovalPage } from './pages/approval/ApprovalPage';
 import { ApprovalEditPage } from './pages/approval/ApprovalEditPage';
 import { AgentTemplatesPage } from './pages/templates/AgentTemplatesPage';
 import { A2AManagementPage } from './pages/templates/A2AManagementPage';
+import { ExpertPackagesPage } from './pages/expertPackages/ExpertPackagesPage';
 import { getProductName } from './utils/env';
 import {
   ApiError,
@@ -143,6 +144,9 @@ function RouteView() {
   if (path === '/a2a-management') {
     return <A2AManagementPage />;
   }
+  if (path === '/expert-packages') {
+    return <ExpertPackagesPage />;
+  }
   if (path === '/service-config-templates') {
     return <ServiceConfigTemplatesPage />;
   }
@@ -205,10 +209,6 @@ function RouteView() {
   const instanceAgentResources = matchRoute('/instances/:id/agent-resources', path);
   if (instanceAgentResources) {
     return <InstanceDetailPage instanceId={instanceAgentResources.id} tab="agentResources" />;
-  }
-  const instanceExpertPackages = matchRoute('/instances/:id/expert-packages', path);
-  if (instanceExpertPackages) {
-    return <InstanceDetailPage instanceId={instanceExpertPackages.id} tab="expertPackages" />;
   }
   const instanceServiceResources = matchRoute('/instances/:id/service-resources', path);
   if (instanceServiceResources) {
