@@ -311,6 +311,8 @@
         "grantedBy": "Granted By",
         "loginPolicy": "Login Permission",
         "loginPolicyHint": "Deny takes priority over allow",
+        "uploadSkillPolicy": "Skill Upload Permission",
+        "uploadSkillPolicyHint": "Allows this user/org to upload Skill packages; independent of login permission",
         "loginAllow": "Allow",
         "loginDeny": "Deny",
         "expiresAt": "Expires At",
@@ -1297,7 +1299,8 @@
     "businessType": "Approval Type",
     "subjectTitle": "Title",
     "types": {
-      "workspace_quota_expand": "Quota Approval"
+      "workspace_quota_expand": "Quota Approval",
+      "skill_upload_permission": "Skill Upload Permission"
     },
     "orderNum": "Order Number",
     "applicant": "Applicant",
@@ -1307,6 +1310,9 @@
     "group": "Organization",
     "bot": "Bot",
     "workspace": "Workspace",
+    "skillUploadUser": "Granted user",
+    "skillUploadGrant": "Granted upload permission",
+    "skillUploadGrantCreated": "Personal grant row created",
     "createdAt": "Submitted At",
     "noOrg": "No organization",
     "noApprover": "No approver",

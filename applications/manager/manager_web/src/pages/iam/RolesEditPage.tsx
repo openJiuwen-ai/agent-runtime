@@ -21,6 +21,7 @@ import {
   AuthzRoleUser,
   hasPermission,
   IamUser,
+  isApprovalEnabled,
   isWorkspaceQuotaEnabled,
   isWorkspaceQuotaPermission,
   PermissionDefinition,
@@ -211,7 +212,8 @@ export function RolesEditPage({ roleId }: { roleId?: string }) {
     };
   }, [isNew, navigate, roleId, t]);
 
-  const workspaceQuotaEnabled = isWorkspaceQuotaEnabled(user);
+  // 审批权限项在配额关闭时也必须可见：Skill 上传审批复用 approval:* 门禁。
+  const workspaceQuotaEnabled = isWorkspaceQuotaEnabled(user) || isApprovalEnabled(user);
   const scopedPermissions = useMemo(() => {
     const base = isSystem
       ? permissions.filter((permission) => selected.has(permission.permission_id))

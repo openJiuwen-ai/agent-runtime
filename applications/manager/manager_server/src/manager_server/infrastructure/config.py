@@ -116,6 +116,12 @@ class Settings(BaseSettings):
         default="", validation_alias="MANAGER_AGENT_CLIENT_REGISTRATION_CONFIG_FILE"
     )
 
+    # 企业版 Skill 上传资格申请与审批。默认开启；置 false 可整体下线该能力。
+    skill_upload_approval_enabled: bool = Field(
+        default=True,
+        validation_alias="SKILL_UPLOAD_APPROVAL_ENABLED",
+    )
+
     @property
     def host(self) -> str:
         return self.rest_host
