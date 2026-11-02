@@ -106,7 +106,8 @@ _SECCTX_WIRE_KEYS = frozenset({
     "seccompProfile", "appArmorProfile"})
 
 # 模板级 volumes:K8s 卷源键 → 内部 kind
-_VOLUME_WIRE_SOURCES = ("hostPath", "configMap", "persistentVolumeClaim", "nfs")
+_VOLUME_WIRE_SOURCES = ("hostPath", "configMap", "persistentVolumeClaim",
+                       "nfs", "emptyDir")
 
 
 def _int(value: Any, where: str, key: str, *, minimum: int,
@@ -637,6 +638,13 @@ def canonical_volumes(value: Any, where: str) -> dict[str, dict[str, Any]]:
                           source.get("claimName"),
                           f"{entry_where}.persistentVolumeClaim", "claimName",
                           max_len=253)}
+        elif source_key == "emptyDir":
+            # 卷源无参数(固定 {}):Pod 生命周期内的临时空目录,按模板卷名引用
+            if source:
+                raise InvalidParams(
+                    f"{entry_where}.emptyDir must be an empty object, "
+                    f"got {source!r}")
+            volume = {"kind": "empty_dir"}
         else:  # nfs
             volume = {"kind": "nfs",
                       "nfs_server": _nonempty_str(
@@ -665,15 +673,17 @@ def fuse_mounts(spec: dict[str, Any], volumes: dict[str, dict[str, Any]],
                 where: str, role: str) -> dict[str, Any]:
     """volumeMounts × volumes join → 原始 fused 挂载。
 
-    返回 {host_path_mounts, configmap_mounts, pvc_mounts, nfs_mounts};
-    四者是 mounts.py 规范形函数的**输入**(raw 条目,调用方决定过
+    返回 {host_path_mounts, configmap_mounts, pvc_mounts, nfs_mounts,
+    empty_dir_mounts};
+    五者是 mounts.py 规范形函数的**输入**(raw 条目,调用方决定过
     canonical_* 还是直接交 validate_*)。源类型相关规则在此落定:subPath
-    仅 configMap、readOnly 缺省按源类型(cm→true、hp/pvc/nfs→false)。
+    仅 configMap、readOnly 缺省按源类型(cm→true、hp/pvc/nfs/ed→false)。
     NFS 与 PVC 同构:卷源(server/path)属模板级 volumes(pod 级),主/
     sidecar 容器一律按名引用挂载,条数/挂载点不限(K8s 语义,不加限制)。
     """
     host: list[dict] = []
     cm: list[dict] = []
+    ed: list[dict] = []
     pvc: list[dict] = []
     nfs: list[dict] = []
     for i, mount in enumerate(spec.get("volume_mounts") or []):
@@ -685,7 +695,7 @@ def fuse_mounts(spec: dict[str, Any], volumes: dict[str, dict[str, Any]],
                 "the template volumes")
         kind = volume["kind"]
         read_only = mount["read_only"]
-        if mount["sub_path"] is not None and kind != "configmap":
+        if mount["sub_path"] is not None and kind not in ("configmap", "empty_dir"):
             raise InvalidParams(
                 f"{mount_where}.subPath is only supported on configMap "
                 f"volume mounts, not {kind}")
@@ -704,13 +714,19 @@ def fuse_mounts(spec: dict[str, Any], volumes: dict[str, dict[str, Any]],
             pvc.append({"claim_name": volume["claim_name"],
                         "mount_path": mount["mount_path"],
                         "read_only": False if read_only is None else read_only})
+        elif kind == "empty_dir":
+            # 同模板卷名的 emptyDir 跨容器共享同一空目录(Pod 级去重键)
+            ed.append({"volume_name": mount["name"],
+                       "mount_path": mount["mount_path"],
+                       "read_only": False if read_only is None else read_only})
         else:  # nfs
             nfs.append({"server": volume["nfs_server"],
                         "path": volume["nfs_path"],
                         "mount_path": mount["mount_path"],
                         "read_only": False if read_only is None else read_only})
     return {"host_path_mounts": host, "configmap_mounts": cm,
-            "pvc_mounts": pvc, "nfs_mounts": nfs}
+            "pvc_mounts": pvc, "nfs_mounts": nfs,
+            "empty_dir_mounts": ed}
 
 
 # -------------------------------------------------------------- 投影:内部规范形 → canonical/旧形
@@ -740,6 +756,7 @@ def build_canonical(spec: dict[str, Any],
         "configmap_mounts": fused["configmap_mounts"],
         "pvc_mounts": fused["pvc_mounts"],
         "nfs_mounts": fused["nfs_mounts"],
+        "empty_dir_mounts": fused["empty_dir_mounts"],
         "security_context": spec["security_context"],
         "readiness_probe": spec["readiness_probe"],
     }, where, role=role)

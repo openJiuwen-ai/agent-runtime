@@ -64,8 +64,12 @@
             "mountPath": "<<CORE_POD_PKG_PATH>>"
           },
           {
-            "name": "data",
-            "mountPath": "<<SWARM_HOME>>/.jiuwenswarm"
+            "name": "agentserver-domain",
+            "mountPath": "<<SWARM_HOME>>/.jiuwenswarm/domain"
+          },
+          {
+            "name": "agentserver-infra",
+            "mountPath": "<<SWARM_HOME>>/.jiuwenswarm/infra"
           }
         ]
       },
@@ -126,8 +130,8 @@
             "mountPath": "<<SWARM_POD_CODE_PATH>>"
           },
           {
-            "name": "data",
-            "mountPath": "<<SWARM_HOME>>/.jiuwenswarm"
+            "name": "agentserver-domain",
+            "mountPath": "<<SWARM_HOME>>/.jiuwenswarm/domain"
           }
         ]
       }

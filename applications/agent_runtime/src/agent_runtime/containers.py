@@ -7,11 +7,11 @@ sidecars.py 24 键两套形状——2026-08 拆表时为保 deploy_ver 指纹连
 历史包袱;开发阶段无生产存量,指纹一次性重置换「加容器字段只改一处」
 (canonical 定义 + 渲染分支,spec_fields/Template/投影不再逐字段重复)。
 
-canonical 13 键::
+canonical 14 键::
 
     name image image_pull_policy ports env env_from resources
     host_path_mounts configmap_mounts pvc_mounts nfs
-    security_context readiness_probe
+    empty_dir_mounts security_context readiness_probe
 
 - ``ports``:``[{name: str|None, container_port: int}] | None``。main 恰一个
   ``name="sse"``(gateway 直连契约)+ 至多一个 ``name="http"``,固定序
@@ -45,6 +45,7 @@ from typing import Any, Optional
 from .errors import InvalidParams
 from .mounts import (
     canonical_configmap_mounts,
+    canonical_empty_dir_mounts,
     canonical_host_path_mounts,
     canonical_nfs_mounts,
     canonical_pvc_mounts,
@@ -93,7 +94,8 @@ _RESOURCE_KEYS = tuple(RESOURCES_DEFAULT)
 _CONTAINER_KEYS = frozenset({
     "name", "image", "image_pull_policy", "command", "args", "ports", "env",
     "env_from", "resources", "host_path_mounts", "configmap_mounts",
-    "pvc_mounts", "nfs_mounts", "security_context", "readiness_probe",
+    "pvc_mounts", "nfs_mounts", "empty_dir_mounts", "security_context",
+    "readiness_probe",
 })
 
 _ENV_FROM_ITEM_KEYS = frozenset({"prefix", "secret_ref", "config_map_ref"})
@@ -462,6 +464,8 @@ def canonical_container(item: Any, where: str, *, role: str) -> dict[str, Any]:
             item.get("pvc_mounts") or [], f"{where}.pvc_mounts"),
         "nfs_mounts": canonical_nfs_mounts(
             item.get("nfs_mounts") or [], f"{where}.nfs_mounts"),
+        "empty_dir_mounts": canonical_empty_dir_mounts(
+            item.get("empty_dir_mounts") or [], f"{where}.empty_dir_mounts"),
         "security_context": _canonical_secctx(
             item.get("security_context"), where),
         "readiness_probe": probe,
@@ -486,6 +490,7 @@ def default_main_container() -> dict[str, Any]:
         "configmap_mounts": [],
         "pvc_mounts": [],
         "nfs_mounts": [],
+        "empty_dir_mounts": [],
         "security_context": dict(SECCTX_DEFAULT),
         "readiness_probe": dict(MAIN_PROBE_DEFAULT),
     }

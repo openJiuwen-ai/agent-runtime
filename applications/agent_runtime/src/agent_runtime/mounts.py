@@ -35,6 +35,7 @@ _MOUNT_KEYS_BY_TYPE = {
         {"config_map_name", "mount_path", "sub_path", "items", "read_only"}),
     "pvc_mounts": frozenset({"claim_name", "mount_path", "read_only"}),
     "nfs_mounts": frozenset({"server", "path", "mount_path", "read_only"}),
+    "empty_dir_mounts": frozenset({"volume_name", "mount_path", "read_only"}),
 }
 
 
@@ -233,6 +234,30 @@ def canonical_nfs_mounts(value: Any, where: str) -> list[dict[str, Any]]:
 
 # -------------------------------------------------------------- 归一/校验入口
 
+def canonical_empty_dir_mounts(value: Any, where: str) -> list[dict[str, Any]]:
+    """emptyDir 挂载 → 规范形(卷源无参数,挂载按模板卷名引用)。
+
+    volume_name = 模板级卷名(Pod 级去重键:同名 emptyDir 跨容器共享同一
+    空目录);非法 raise InvalidParams。
+    """
+    if not isinstance(value, list):
+        raise InvalidParams(f"{where} must be a list, got {value!r}")
+    mounts: list[dict[str, Any]] = []
+    for j, item in enumerate(value):
+        mount_where = f"{where}[{j}]"
+        if not isinstance(item, dict):
+            raise InvalidParams(f"{mount_where} must be an object, got {item!r}")
+        _unknown_keys(item, "empty_dir_mounts", mount_where)
+        mounts.append({
+            "volume_name": _check_resource_name(
+                item.get("volume_name"), mount_where, "volume_name"),
+            "mount_path": _check_mount_path(item.get("mount_path"), mount_where),
+            "read_only": _check_bool(item.get("read_only"), mount_where,
+                                     "read_only", False),
+        })
+    return _sorted_mounts(mounts)
+
+
 def normalize_mounts(
         value: Any, kind: str,
 ) -> Optional[list[dict[str, Any]]]:
@@ -243,6 +268,7 @@ def normalize_mounts(
         "configmap_mounts": canonical_configmap_mounts,
         "pvc_mounts": canonical_pvc_mounts,
         "nfs_mounts": canonical_nfs_mounts,
+        "empty_dir_mounts": canonical_empty_dir_mounts,
     }[kind]
     if not isinstance(value, list):
         return None

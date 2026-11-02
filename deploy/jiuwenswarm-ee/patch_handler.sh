@@ -64,7 +64,7 @@ post_and_validate() {
     success "POST ${url} ok (http=${code})"
 }
 
-# 按存储模式注入 data 卷(.jiuwenswarm 数据目录):模板里不再预置 PVC 卷,
+# 按存储模式注入 agentserver-domain 卷(.jiuwenswarm 业务区):模板里不再预置 PVC 卷,
 # 由本函数按 SWARM_MOUNT_TYPE 二选一注入——
 #   pvc: StorageClass 动态供给的持久卷(claimName=SWARM_PVC)
 #   nfs: 直连 NFS 共享目录(server=NFS_SERVER_ADDR,
@@ -76,7 +76,7 @@ inject_data_volume() {
     local data_volume
     if [ "${mount_type}" == "pvc" ]; then
         data_volume="$(jq -n --arg claim "${DEPLOY_VARS["SWARM_PVC"]}" \
-            '{name: "data", persistentVolumeClaim: {claimName: $claim}}')"
+            '{name: "agentserver-domain", persistentVolumeClaim: {claimName: $claim}}')"
     elif [ "${mount_type}" == "nfs" ]; then
         if [ -z "${DEPLOY_VARS["NFS_SERVER_ADDR"]:-}" ]; then
             error "SWARM_MOUNT_TYPE=nfs requires NFS_SERVER_ADDR (external) or a deployed built-in NFS"
@@ -85,12 +85,14 @@ inject_data_volume() {
         local nfs_share="${DEPLOY_VARS["NFS_SHARE_PATH"]%/}"
         data_volume="$(jq -n --arg server "${DEPLOY_VARS["NFS_SERVER_ADDR"]}" \
             --arg path "${nfs_share}/jiuwenswarm/${DEPLOY_VARS["NAMESPACE"]}" \
-            '{name: "data", nfs: {server: $server, path: $path}}')"
+            '{name: "agentserver-domain", nfs: {server: $server, path: $path}}')"
     else
         error "Unsupported SWARM_MOUNT_TYPE '${mount_type}' (expect pvc/nfs)"
     fi
+    # 私有卷 agentserver-infra(emptyDir)与数据卷同批注入:run/config/auth 等
+    # infra 卷（emptyDir）与 domain 卷（PVC/NFS）同级互不嵌套：系统数据落 system/，业务数据落 domain/
     jq --argjson volume "${data_volume}" \
-        '.rawdata.templates[].volumes += [$volume]' \
+        '.rawdata.templates[].volumes += [$volume, [{"name": "agentserver-infra", "emptyDir": {}}]]' \
         "${CONFIG["AS_JSON_FILE"]}" > "${CONFIG["AS_JSON_FILE"]}.tmp" && mv -f "${CONFIG["AS_JSON_FILE"]}.tmp" "${CONFIG["AS_JSON_FILE"]}"
 }
 

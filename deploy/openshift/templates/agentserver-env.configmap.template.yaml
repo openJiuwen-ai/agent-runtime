@@ -24,7 +24,6 @@ data:
   GATEWAY_PG_SCHEMA: <<GATEWAY_PG_SCHEMA>>
   HOME: /home/app
   JIUWENBOX_URL: "http://127.0.0.1:<<JIUWENBOX_PORT>>"
-  JIUWENSWARM_CONFIG_DIR: /app/config
   JIUWENSWARM_EDITION: enterprise
   # 沙箱类型（update_conf.py 据此决定是否写入 sandbox 域；jiuwenbox 才启用）
   SANDBOX_TYPE: "<<SANDBOX_TYPE>>"
