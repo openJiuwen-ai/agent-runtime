@@ -11,7 +11,8 @@
 #   ./deploy.sh up mariadb --render-only  # 只渲染本次目标清单到 conf/，不连接集群
 #
 # 配置与渲染：templates/ 为清单模板（<<VAR>> 占位符），镜像名与 namespace 统一维护在
-# .env.custom；up/down 前渲染到 conf/（渲染产物即部署清单）。
+# .env.custom；up 前渲染到 conf/（渲染产物即部署清单）；down 不渲染，直接消费
+# conf/ 现有清单（按部署时资源名卸载），缺失时提示先 down --render-only 补齐。
 #
 # 约束：agentserver 先于 gateway 部署（gateway 启动依赖 agentserver），脚本已保证；
 # 命令幂等，可重复执行，已存在资源跳过；副本/镜像与配置不一致时自动 PATCH 对齐。
@@ -62,7 +63,35 @@ main() {
     preflight
     run_phase apply "部署" "${TARGETS[@]}"
   else
-    render_templates
+    # 卸载不渲染，直接消费 conf/ 现有清单（上次 up 渲染的部署时形态）：
+    # 资源名与在役资源一致，模板漂移也不会漏删；conf/ 产物不被 down 覆盖。
+    # 非 K8s 清单（agentserver.json）卸载不消费，缺失不校验
+    local missing=() cf
+    for comp in "${TARGETS[@]}"; do
+      for cf in $(component_files "$comp"); do
+        case "$cf" in *.json) continue;; esac
+        [ -f "$CONF_DIR/$cf" ] || missing+=("$cf")
+      done
+    done
+    if [ "${#missing[@]}" -gt 0 ]; then
+      error "conf/ 缺卸载所需清单: ${missing[*]}
+先执行 ./deploy.sh up --render-only 补齐渲染（产物落 conf/），再执行 down"
+    fi
+    # kubectl delete -f 以清单内 namespace 为准（-n 不同也不改写删除目标）：
+    # 校验 conf/ 内嵌 ns 与 -n 一致，防卸载错命名空间或静默删空
+    local probe_ns=""
+    for comp in "${TARGETS[@]}"; do
+      for cf in $(component_files "$comp"); do
+        case "$cf" in *.json) continue;; esac
+        [ -f "$CONF_DIR/$cf" ] || continue
+        probe_ns=$(yq -r '.metadata.namespace // ""' "$CONF_DIR/$cf" 2>/dev/null | head -1)
+        break 2
+      done
+    done
+    if [ -n "$probe_ns" ] && [ "$probe_ns" != "$KCTL_NS" ]; then
+      error "conf/ 清单 namespace=$probe_ns 与卸载目标 -n $KCTL_NS 不一致
+用 -n $probe_ns 卸载，或 ./deploy.sh up --render-only 重新渲染"
+    fi
     local reversed=() i
     for ((i=${#TARGETS[@]}-1; i>=0; i--)); do reversed+=("${TARGETS[$i]}"); done
     warning "卸载将删除资源与数据（PVC 数据一并删除且不可恢复）"
