@@ -44,10 +44,10 @@ export function Sidebar() {
     '/model-templates',
     '/embedding-templates',
     '/skill-prebuilt-templates',
-    '/expert-package-templates',
     '/safety-guardrails',
     '/extension-config-templates',
     '/mcp-templates',
+    '/expert-package-templates',
     '/a2a-management',
   ];
   const agentResourceActive = agentResourceChildPaths.some(
@@ -146,18 +146,6 @@ export function Sidebar() {
       ),
     },
     {
-      key: 'expert-package-templates',
-      pathPrefix: '/expert-package-templates',
-      href: '/expert-package-templates',
-      label: t('nav.expertPackages'),
-      icon: (
-        <svg className="w-4 h-4 nav-item__icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M4 7h16M4 12h16M4 17h10" />
-          <circle cx="18" cy="17" r="2" />
-        </svg>
-      ),
-    },
-    {
       key: 'safety-guardrails',
       pathPrefix: '/safety-guardrails',
       href: '/safety-guardrails',
@@ -199,6 +187,18 @@ export function Sidebar() {
       icon: (
         <svg className="w-4 h-4 nav-item__icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M8 9l3 3-3 3m5 0h3M5 5h14a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2z" />
+        </svg>
+      ),
+    },
+    {
+      key: 'expert-package-templates',
+      pathPrefix: '/expert-package-templates',
+      href: '/expert-package-templates',
+      label: t('nav.expertPackages'),
+      icon: (
+        <svg className="w-4 h-4 nav-item__icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M4 7h16M4 12h16M4 17h10" />
+          <circle cx="18" cy="17" r="2" />
         </svg>
       ),
     },
