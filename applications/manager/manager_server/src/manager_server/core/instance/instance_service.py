@@ -13,6 +13,7 @@ from manager_server.core.instance.config_host_probe import (
     runtime_probe_enabled,
 )
 from manager_server.infrastructure.common import resolve_order_by
+from manager_server.infrastructure.dev_mode import offline_dev_enabled
 from manager_server.infrastructure.utils import iso_datetime, new_uuid4, utc_now
 from manager_server.models.instance_models import INSTANCE_INFO_TABLE_DEF
 from manager_server.models.link_binding_models import INSTANCE_LINK_BINDING_TABLE_DEF
@@ -623,6 +624,7 @@ class InstanceService:
         self._handler = handler
 
     async def create(self, body: CreateInstanceBody) -> dict:
+        offline = offline_dev_enabled()
         jiuwenclaw_id = await generate_unique_jiuwenclaw_id(self._handler)
         gateway_host = _norm_host(body.gateway_host)
         runtime_host = _norm_host(body.runtime_host)
@@ -684,7 +686,7 @@ class InstanceService:
         }
         row = await create_instance_row(self._handler, row_data)
 
-        if gateway_host:
+        if gateway_host and not offline:
             # 创建时已探活成功：立即置 online（不等待周期扫描）
             await apply_health_probe_result(
                 self._handler,
@@ -694,7 +696,7 @@ class InstanceService:
             )
             row = await get_instance_row(self._handler, jiuwenclaw_id) or row
 
-        if runtime_probe_enabled() and runtime_host:
+        if runtime_probe_enabled() and runtime_host and not offline:
             from manager_server.core.instance.runtime_identity import (
                 fetch_runtime_identity_from_health,
             )
@@ -713,7 +715,7 @@ class InstanceService:
             )
             row = await get_instance_row(self._handler, jiuwenclaw_id) or row
 
-        if user_web_host:
+        if user_web_host and not offline:
             await apply_health_probe_result(
                 self._handler,
                 jiuwenclaw_id=jiuwenclaw_id,

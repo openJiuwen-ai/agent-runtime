@@ -132,3 +132,7 @@ applications/agent_runtime/logs/
 
 # 本地渲染实例（含真实密码）
 applications/agent_runtime/deploy/agent_runtime.env
+
+# Isolated Manager local development
+.venv-manager/
+.manager-dev/

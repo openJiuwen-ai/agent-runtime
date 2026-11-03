@@ -18,7 +18,7 @@ interface RouterValue {
   path: string;
   params: URLSearchParams;
   /** 接收子路径(如 ``/instances``),自动补上 basename 后跳转。 */
-  navigate: (path: string) => void;
+  navigate: (path: string, options?: { replace?: boolean }) => void;
 }
 
 export function useRouter(): RouterValue {
@@ -33,9 +33,9 @@ export function useRouter(): RouterValue {
   }
 
   const navigate = useCallback(
-    (target: string) => {
+    (target: string, options?: { replace?: boolean }) => {
       const sub = target.startsWith('/') ? target : `/${target}`;
-      navigateRR(`${basename}${sub}`);
+      navigateRR(`${basename}${sub}`, options);
     },
     [basename, navigateRR],
   );

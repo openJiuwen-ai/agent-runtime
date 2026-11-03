@@ -26,6 +26,7 @@ import { useRouter } from '../../router';
 import { toast } from '../../stores/uiStore';
 import { formatTime, truncate } from '../../utils/format';
 import { ResourceExportButton, ResourceImportButton } from '../../components/ResourceImportExport';
+import { WorkspaceNote } from '../../components/WorkspaceNote';
 
 type RoleSortField = 'name' | 'role_id' | 'description' | 'updated_at';
 
@@ -175,7 +176,7 @@ export function RolesPage() {
 
   return (
     <>
-    <div className="flex min-w-0 flex-col gap-4">
+    <div className="iam-workspace flex min-w-0 flex-col gap-4">
       <div className="page-header w-full min-w-0 flex-wrap items-start gap-y-3">
         <div className="min-w-[7.5rem] max-w-[20rem] shrink-0 sm:max-w-[32rem]">
           <div className="page-title truncate" title={t('roles.title')}>
@@ -219,7 +220,7 @@ export function RolesPage() {
       </div>
 
       <div className="flex w-full min-w-0 shrink-0 flex-col gap-4">
-        <div className="card !p-0">
+        <div className="card iam-table-card !p-0">
           {loading ? (
             <div className="p-4 text-sm text-muted">{t('common.loading')}</div>
           ) : error ? (
@@ -436,6 +437,9 @@ export function RolesPage() {
           />
         )}
       </div>
+      <WorkspaceNote title={t('roles.bannerTitle')}>
+        {t('roles.bannerText')}
+      </WorkspaceNote>
     </div>
 
     <ConfirmDialog

@@ -6,6 +6,9 @@ service_config_container（容器模板，供运行时模板绑定）。
 from __future__ import annotations
 
 from typing import Annotated
+import json
+import os
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from openjiuwen_runtime.foundation.db.handler import DBHandler
@@ -895,6 +898,31 @@ async def delete_mcp_template(
     return ResponseModel(
         code=200, message="success", data={"deleted": True, "template_id": template_id}
     )
+
+
+# --- deployment generated runtime config discovery ---
+
+@templates_router.get("/service-config-templates/agentserver-discovery", response_model=ResponseModel)
+async def discover_agentserver_config():
+    """Read deployment-generated agentserver.json on the Manager host.
+
+    The path is explicit through AGENTSERVER_JSON_PATH or MANAGER_DEPLOY_TOOL_DIR;
+    the browser never needs access to the server filesystem.
+    """
+    candidates = []
+    configured = os.getenv("AGENTSERVER_JSON_PATH")
+    tool_dir = os.getenv("MANAGER_DEPLOY_TOOL_DIR")
+    if configured:
+        candidates.append(Path(configured))
+    if tool_dir:
+        candidates.append(Path(tool_dir) / "conf" / "agentserver.json")
+    for path in candidates:
+        try:
+            if path.is_file():
+                return ResponseModel(code=200, message="success", data={"found": True, "source": str(path), "config": json.loads(path.read_text(encoding="utf-8"))})
+        except (OSError, json.JSONDecodeError) as exc:
+            return ResponseModel(code=200, message="config_error", data={"found": False, "source": str(path), "error": str(exc)})
+    return ResponseModel(code=200, message="not_found", data={"found": False, "configured": bool(candidates)})
 
 
 # --- service_config_template ---

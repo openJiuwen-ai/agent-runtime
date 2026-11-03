@@ -1,3 +1,4 @@
+import { agentResourceReferencesPath } from '../../utils/agentTemplateNavigation';
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAsync } from '../../hooks/useAsync';
@@ -286,13 +287,13 @@ export function ExtensionTemplatesPage() {
                   </td>
                   <td className="whitespace-nowrap">
                     {row.reference_count > 0 ? (
-                      <span
+                      <button type="button"
                         className="tag cursor-pointer"
                         title={t('extensionTemplate.referenceHint')}
-                        onClick={() => navigate('/agent-templates')}
+                        onClick={() => navigate(agentResourceReferencesPath('extension', row.template_id, row.template_name))}
                       >
                         {row.reference_count}
-                      </span>
+                      </button>
                     ) : (
                       <span className="text-[11px] text-muted">0</span>
                     )}

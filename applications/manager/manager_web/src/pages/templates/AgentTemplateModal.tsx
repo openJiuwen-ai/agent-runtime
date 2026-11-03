@@ -21,7 +21,7 @@ interface Props {
   open: boolean;
   template: AgentTemplate | null;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (saved: AgentTemplate) => void;
 }
 
 const FIELD_MAX_LENGTH = {
@@ -105,6 +105,7 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
   const customConfig = parseCustomConfig(form.custom_config_json);
 
   const submit = async () => {
+    if (saving) return;
     if (customConfig.error) {
       toast('warn', t('agentTemplate.customConfigInvalid'));
       return;
@@ -132,7 +133,7 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
 
     const body = {
       template_name: form.template_name.trim(),
-      description: form.description.trim() || undefined,
+      description: form.description.trim(),
       agent_tags: fromCommaList(form.agent_tags),
       template_ref: form.template_ref,
       data: form.custom_config_json !== customConfigText(template?.data ?? null)
@@ -142,14 +143,13 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
 
     setSaving(true);
     try {
-      if (template) {
-        await AgentTemplateApi.update(template.template_id, body);
-      } else {
-        await AgentTemplateApi.create(body);
-      }
+      const saved = template
+        ? await AgentTemplateApi.update(template.template_id, body)
+        : await AgentTemplateApi.create(body);
       toast('success', t('success.saved'));
       bumpGuideRevision();
-      onSaved();
+      markClean(form);
+      onSaved(saved);
     } catch (e) {
       toast('danger', t('errors.saveFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
     } finally {
@@ -177,6 +177,7 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
         <div className="md:col-span-2">
           <FieldLabel required>{t('agentTemplate.templateName')}</FieldLabel>
           <LimitedTextInput
+            ariaLabel={t('agentTemplate.templateName')}
             value={form.template_name}
             maxLength={FIELD_MAX_LENGTH.template_name}
             onChange={(v) => update('template_name', v)}
@@ -185,6 +186,7 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
         <div className="md:col-span-2">
           <FieldLabel>{t('agentTemplate.templateDescription')}</FieldLabel>
           <LimitedTextInput
+            ariaLabel={t('agentTemplate.templateDescription')}
             value={form.description}
             maxLength={FIELD_MAX_LENGTH.description}
             onChange={(v) => update('description', v)}
@@ -194,6 +196,7 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
           <FieldLabel>{t('agentTemplate.agentTags')}</FieldLabel>
           <input
             className="input"
+            aria-label={t('agentTemplate.agentTags')}
             placeholder={t('agentTemplate.agentTagsHint')}
             value={form.agent_tags}
             onChange={(e) => update('agent_tags', e.target.value)}
@@ -202,6 +205,8 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
         <div className="md:col-span-2">
           <TemplateRefEditor
             key={template?.template_id ?? 'new'}
+            resourceLinksInNewTab
+            collapseOptional
             label={t('agentTemplate.templateRef')}
             hint={t('agentTemplate.templateRefHint')}
             requiredSlots={['default_model']}
@@ -209,7 +214,8 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
             onChange={(v) => update('template_ref', v)}
           />
         </div>
-        <div className="md:col-span-2" data-testid="agent-template-custom-config">
+        <details className="md:col-span-2" data-testid="agent-template-custom-config" open={customConfig.error ? true : undefined}>
+          <summary className="cursor-pointer text-sm font-medium mb-3">{t('agentTemplate.customConfig')}</summary>
           <JsonField
             label={t('agentTemplate.customConfig')}
             value={form.custom_config_json}
@@ -223,7 +229,7 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
               {t('agentTemplate.customConfigInvalid')}
             </div>
           )}
-        </div>
+        </details>
       </div>
       {template && <ConfigRefreshCostHint scope="template" />}
     </Modal>

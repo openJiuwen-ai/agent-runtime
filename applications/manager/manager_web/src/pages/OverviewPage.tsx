@@ -1,237 +1,46 @@
-import { useMemo } from 'react';
+import { useSetupJourney } from '../components/SetupJourney';
+import { collectPages, allComponentsConnected } from '../utils/overview';
 import { useTranslation } from 'react-i18next';
 import { InstanceApi, SystemApi } from '../services/api';
 import { useAsync } from '../hooks/useAsync';
-import { useClustersGuideStatus, useDefinitionPresence } from '../hooks/useGuideStatus';
-import { StatusBadge } from '../components/StatusBadge';
-import { WarnBadge, type WarnBadgeLink } from '../components/WarnBadge';
 import { useRouter } from '../router';
+import { StatusBadge } from '../components/StatusBadge';
+import { WorkspaceNote } from '../components/WorkspaceNote';
 
-function Icon({ d }: { d: string }) {
-  return (
-    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6}>
-      <path strokeLinecap="round" strokeLinejoin="round" d={d} />
-    </svg>
-  );
-}
+export const loadOverviewInstances = () => collectPages((page, page_size) => InstanceApi.list({ page, page_size }));
 
 export function OverviewPage() {
-  const { t } = useTranslation();
+  const { i18n } = useTranslation();
+  const zh = i18n.language.startsWith('zh');
+  const tr = (cn: string, en: string) => zh ? cn : en;
   const { navigate } = useRouter();
-  const { agentDefined, poolDefined, instanceCreated, modelDefined } = useDefinitionPresence();
-
+  const instances = useAsync(loadOverviewInstances, []);
   const health = useAsync(() => SystemApi.health(), []);
-  const instances = useAsync(() => InstanceApi.list({ page: 1, page_size: 200 }), []);
-
-  const instanceTotal = instances.data?.total ?? 0;
-
-  /** 各集群的引导告警（与集群管理页方块右上角叹号同源），有任一集群告警时汇总为一项 */
-  const clusterIds = useMemo(
-    () => (instances.data?.items ?? []).map((it) => it.jiuwenclaw_id),
-    [instances.data],
-  );
-  const alertsByInstance = useClustersGuideStatus(clusterIds);
-  const hasClusterAlerts = Object.values(alertsByInstance).some((alerts) => alerts.length > 0);
-
-  /** 与左侧导航栏叹号提示同源的汇总：按导航栏顺序（模型 → Agent模板 → 运行时模板 → 集群 → 集群管理告警）展示 */
-  const quickNavLinks: WarnBadgeLink[] = [];
-  if (modelDefined === false) {
-    quickNavLinks.push({ label: t('guide.missingItem', { item: t('nav.modelTemplates') }), to: '/model-templates', openTarget: 'modelTemplateNew' });
-  }
-  if (agentDefined === false) {
-    quickNavLinks.push({ label: t('guide.missingItem', { item: t('nav.agentManagement') }), to: '/agent-templates', openTarget: 'agentTemplateNew' });
-  }
-  if (poolDefined === false) {
-    quickNavLinks.push({ label: t('guide.missingItem', { item: t('nav.serviceConfigTemplates') }), to: '/service-config-templates/new' });
-  }
-  if (instanceCreated === false) {
-    quickNavLinks.push({ label: t('guide.missingItem', { item: t('nav.instances') }), to: '/instances', openTarget: 'instanceCreate' });
-  }
-  if (hasClusterAlerts) {
-    quickNavLinks.push({ label: t('guide.clusterAlerts'), to: '/instances' });
-  }
-
-  const statusDist = useMemo(() => {
-    const items = instances.data?.items ?? [];
-    const map = { ok: 0, warn: 0, danger: 0, muted: 0 };
-    for (const it of items) {
-      const s = (it.gateway_status ?? '').toLowerCase();
-      if (['online', 'ready', 'running'].includes(s) || s === 'active') map.ok += 1;
-      else if (['pending', 'restarting', 'starting'].includes(s)) map.warn += 1;
-      else if (['offline', 'failed', 'error'].includes(s)) map.danger += 1;
-      else map.muted += 1;
-    }
-    return { ...map, total: items.length };
-  }, [instances.data]);
-
-  const seg = (n: number) => (statusDist.total ? `${(n / statusDist.total) * 100}%` : '0%');
-
-  return (
-    <div className="flex flex-col gap-4">
-      <div className="page-header">
-        <div>
-          <div className="page-title">{t('overview.title')}</div>
-          <div className="page-subtitle">{t('overview.subtitle')}</div>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            className="btn sm"
-            onClick={() => {
-              void health.reload();
-              void instances.reload();
-            }}
-          >
-            {t('common.refresh')}
-          </button>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-        {/* Manager 健康 */}
-        <div className="card kpi-card">
-          <div className="kpi-card__head">
-            <span className="kpi-card__label">{t('overview.managerHealth')}</span>
-            <span className={`kpi-card__icon ${health.data?.status === 'ok' ? 'ok' : 'warn'}`}>
-              <Icon d="M9 12.75l2.25 2.25 4.5-4.5M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </span>
-          </div>
-          <div className="kpi-card__value flex items-center gap-2">
-            <StatusBadge
-              status={health.error ? 'offline' : health.data?.status === 'ok' ? 'ok' : 'pending'}
-              label={health.error ? 'offline' : (health.data?.status ?? '-')}
-            />
-          </div>
-          <div className="kpi-card__meta">
-            <span className="text-[11px] text-muted mono">{t('overview.managerHealth')}</span>
-          </div>
-        </div>
-
-        {/* 集群总数（div + role=button，避免 button UA 样式导致内容不与其他卡片对齐） */}
-        <div
-          className="card kpi-card cursor-pointer"
-          role="button"
-          tabIndex={0}
-          onClick={() => navigate('/instances')}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') navigate('/instances');
-          }}
-          aria-label={t('overview.totalClusters')}
-        >
-          <div className="kpi-card__head">
-            <span className="kpi-card__label">{t('overview.totalClusters')}</span>
-            <span className="kpi-card__icon">
-              <Icon d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zm0 9.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zm9.75-9.75A2.25 2.25 0 0115.75 3.75H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25A2.25 2.25 0 0113.5 8.25V6zm0 9.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z" />
-            </span>
-          </div>
-          <div className="kpi-card__value">
-            {instanceTotal}
-            <span className="unit">{t('overview.unitClusters')}</span>
-          </div>
-          <div className="kpi-card__meta" />
-        </div>
-
-        {/* 在线服务数 */}
-        <div className="card kpi-card">
-          <div className="kpi-card__head">
-            <span className="kpi-card__label">{t('overview.activeServices')}</span>
-            <span className="kpi-card__icon ok">
-              <Icon d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
-            </span>
-          </div>
-          <div className="kpi-card__value">
-            {statusDist.ok}
-            <span className="unit">/ {statusDist.total} 在线</span>
-          </div>
-          <div className="kpi-card__meta">
-            <div className="stat-bar w-full">
-              <div className="stat-bar__seg ok" style={{ width: seg(statusDist.ok) }} title={`online ${statusDist.ok}`} />
-              <div className="stat-bar__seg warn" style={{ width: seg(statusDist.warn) }} title={`warn ${statusDist.warn}`} />
-              <div className="stat-bar__seg danger" style={{ width: seg(statusDist.danger) }} title={`offline ${statusDist.danger}`} />
-              <div className="stat-bar__seg muted" style={{ width: seg(statusDist.muted) }} title={`other ${statusDist.muted}`} />
-            </div>
-          </div>
-          <div className="kpi-card__meta">
-            <span className="flex items-center gap-1"><span className="statusDot ok" />{statusDist.ok}</span>
-            <span className="flex items-center gap-1"><span className="statusDot warn" />{statusDist.warn}</span>
-            <span className="flex items-center gap-1"><span className="statusDot" />{statusDist.danger}</span>
-            <span className="flex items-center gap-1"><span className="statusDot muted" />{statusDist.muted}</span>
-          </div>
-        </div>
-
-        {/* 快速导航 */}
-        <div className="card kpi-card">
-          <div className="kpi-card__head">
-            <span className="kpi-card__label">{t('overview.quickNav')}</span>
-          </div>
-          <div className="kpi-card__value flex items-center gap-2">
-            {quickNavLinks.length > 0 ? (
-              <WarnBadge className="!h-6 !w-6 !text-[12px] opacity-100" links={quickNavLinks} />
-            ) : (
-              <span
-                className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-ok text-ok text-[11px] font-bold leading-none cursor-help"
-                title={t('overview.noAlerts')}
-              >
-                ✓
-              </span>
-            )}
-            <span className="text-sm text-text">{t('overview.unconfiguredItems')}</span>
-            {quickNavLinks.length > 0 && (
-              <span className="text-[11px] text-muted mono">({quickNavLinks.length})</span>
-            )}
-          </div>
-          <div className="kpi-card__meta">
-            <span className="text-[11px] text-muted">
-              {quickNavLinks.length > 0
-                ? quickNavLinks.map((l) => l.label).join('、')
-                : t('overview.noAlerts')}
-            </span>
-          </div>
-        </div>
-      </div>
-
-      <div className="card !p-0">
-        <div className="card-header" style={{ padding: '16px 18px 8px' }}>
-          <div className="section-title">
-            <span className="section-title__bar" />
-            {t('nav.instances')}
-            <span className="section-title__count">{instances.data?.items?.length ?? 0}</span>
-          </div>
-          <button className="btn ghost sm" onClick={() => navigate('/instances')}>
-            {t('common.view')} →
-          </button>
-        </div>
-        {instances.data && instances.data.items.length > 0 ? (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>name</th>
-                <th>{t('topology.gatewayStatus')}</th>
-                <th>{t('topology.namespace')}</th>
-                <th>{t('topology.space')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {instances.data.items.slice(0, 8).map((it) => (
-                <tr
-                  key={it.jiuwenclaw_id}
-                  className="row-clickable"
-                  onClick={() => navigate(`/instances/${it.jiuwenclaw_id}`)}
-                >
-                  <td>
-                    <div className="text-text-strong font-medium">{it.jiuwenclaw_name}</div>
-                    <div className="text-[11px] text-muted mono">{it.jiuwenclaw_id}</div>
-                  </td>
-                  <td><StatusBadge status={it.gateway_status} /></td>
-                  <td className="mono text-xs">{it.namespace}</td>
-                  <td><span className="tag">{it.space_id}</span></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        ) : (
-          <div className="text-sm text-muted px-4 py-6">{t('overview.noInstances')}</div>
-        )}
-      </div>
+  const rows = instances.data || [];
+  const healthy = rows.filter(allComponentsConnected);
+  const attention = rows.filter(r => !healthy.includes(r));
+  const steps = [
+    [tr('准备模型与工具', 'Prepare models & tools'), tr('连接模型，配置技能和外部工具。', 'Connect models, skills and external tools.'), '/model-templates'],
+    [tr('创建服务实例', 'Create a service instance'), tr('登记实际运行 Agent 的集群和连接地址。', 'Register the cluster where Agents will run.'), '/configuration-wizard?from=cluster'],
+    [tr('配置集群工作台', 'Configure the cluster workspace'), tr('完成准入、运行资源和 Agent 绑定。', 'Complete admission, runtime and Agent bindings.'), '/instances'],
+    [tr('检查并完成', 'Review and finish'), tr('核对组件状态并进入用户面对话。', 'Verify components and open the user console.'), '/instances'],
+  ];
+  return <div className="workspace-overview">
+    <div className="page-header"><div><div className="workspace-eyebrow">WORKSPACE</div><h1 className="page-title">{tr('管理总览', 'Management overview')}</h1><p className="page-subtitle">{tr('从服务连接到 Agent 使用，掌握配置与运行环境。', 'Manage service connectivity, Agent configuration and environments.')}</p></div>
+      <button className="btn" disabled={instances.loading || health.loading} onClick={() => { void instances.reload(); void health.reload(); }}>{tr('刷新状态', 'Refresh')}</button></div>
+    <div className="overview-metrics">
+      <div className="card"><span className="text-muted">{tr('管理 API', 'Management API')}</span><strong>{health.loading ? '…' : health.error ? tr('连接失败', 'Unavailable') : health.data?.status === 'ok' ? tr('连接正常', 'Connected') : tr('状态未知', 'Unknown')}</strong><small>{health.error || tr('仅表示管理服务可访问', 'Management service connectivity only')}</small></div>
+      <div className="card"><span className="text-muted">{tr('服务实例', 'Service instances')}</span><strong>{instances.data ? rows.length : '—'}</strong><small>{tr('已接入管理的服务环境', 'Registered service environments')}</small></div>
+      <div className="card"><span className="text-muted">{tr('组件连接正常', 'Components connected')}</span><strong>{instances.data ? healthy.length : '—'}</strong><small>Gateway · Runtime · User Web</small></div>
+      <div className="card"><span className="text-muted">{tr('待检查实例', 'Instances to inspect')}</span><strong>{instances.data ? attention.length : '—'}</strong><small>{tr('存在离线或未知组件', 'Offline or unknown components')}</small></div>
     </div>
-  );
+    {instances.error && <div className="card text-danger" role="alert">{tr('无法读取实例：', 'Unable to load instances: ')}{instances.error}</div>}
+    <section className="card overview-environments"><div className="card-header"><div><h2>{tr('服务环境', 'Service environments')}</h2><p className="text-muted text-sm">{tr('探活状态不代表 Agent 请求成功；进入实例进一步检查配置。', 'Connectivity does not guarantee successful Agent execution.')}</p></div><button className="btn" onClick={() => navigate('/instances')}>{tr('管理实例', 'Manage instances')} →</button></div>
+      {instances.loading ? <p role="status" className="overview-empty">{tr('正在读取服务状态…', 'Loading service status…')}</p> : instances.data && !rows.length ? <div className="overview-empty"><h3>{tr('还没有接入服务实例', 'No service instances connected')}</h3><p>{tr('先准备能力资源，再接入环境并配置 Agent 使用范围。', 'Prepare resources, connect an environment and configure Agent access.')}</p><button className="btn primary" onClick={() => navigate('/configuration-wizard?from=cluster')}>{tr('新建集群', 'Create a cluster')} →</button></div> : instances.data && <div className="table-wrap"><table className="table"><thead><tr><th>{tr('名称', 'Name')}</th><th>Gateway</th><th>Runtime</th><th>User Web</th><th>{tr('操作', 'Actions')}</th></tr></thead><tbody>{[...attention, ...healthy].slice(0, 8).map(r => <tr key={r.jiuwenclaw_id}><td><b>{r.jiuwenclaw_name}</b><div className="text-muted text-xs">{r.namespace || '—'}</div></td><td><StatusBadge status={r.gateway_status} /></td><td><StatusBadge status={r.runtime_status} /></td><td><StatusBadge status={r.user_web_status} /></td><td><button className="btn ghost sm" onClick={() => navigate(`/instances/${r.jiuwenclaw_id}/status`)}>{tr('检查', 'Inspect')} →</button></td></tr>)}</tbody></table></div>}
+    </section>
+    <section><div className="card-header"><h2>{tr('让 Agent 可用的四个步骤', 'Four steps to make an Agent available')}</h2><span className="text-muted text-sm">{tr('配置路径', 'Configuration guide')}</span></div><div className="overview-steps">{steps.map(([name, desc, href], n) => <button className="card overview-step" key={name} onClick={() => { useSetupJourney.getState().open(n); navigate(href); }}><span className="step-number">0{n + 1}</span><h3>{name} <span aria-hidden="true">↗</span></h3><p>{desc}</p></button>)}</div></section>
+    <WorkspaceNote title={tr('从资源准备到集群配置', 'From resource preparation to cluster setup')}>
+      {tr('资源中心准备可复用定义，Agent模板管理负责组合能力，集群管理负责将准入、运行资源和 Agent 绑定到实际环境。', 'The resource catalog prepares reusable definitions, Agent management composes capabilities, and cluster management binds admission, runtime and Agents to a real environment.')}
+    </WorkspaceNote>
+  </div>;
 }

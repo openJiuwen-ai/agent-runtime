@@ -20,11 +20,16 @@ import { toast } from '../../stores/uiStore';
 import { formatTime } from '../../utils/format';
 import { isValidIdentityId, sanitizeIdentityIdInput } from '../../utils/identityId';
 import { ResourceExportButton, ResourceImportButton } from '../../components/ResourceImportExport';
+import { WorkspaceNote } from '../../components/WorkspaceNote';
+import { useRouter } from '../../router';
+import { admissionClusterReturnPath } from '../../utils/admissionNavigation';
 
 type UserSortField = 'user_id' | 'display_name' | 'status' | 'updated_at';
 
 export function UsersPage() {
   const { t } = useTranslation();
+  const { params, navigate } = useRouter();
+  const admissionReturn = admissionClusterReturnPath(params);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const { searchInput, setSearchInput, searchQuery } = useListSearch();
@@ -121,7 +126,7 @@ export function UsersPage() {
 
   return (
     <>
-      <div className="flex min-w-0 flex-col gap-4">
+      <div className="iam-workspace flex min-w-0 flex-col gap-4">
         <div className="page-header w-full min-w-0 flex-wrap items-start gap-y-3">
           <div className="min-w-[7.5rem] max-w-[12rem] shrink-0 sm:max-w-[16rem]">
             <div className="page-title truncate" title={t('iam.users')}>
@@ -132,6 +137,7 @@ export function UsersPage() {
             </div>
           </div>
           <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
+            {admissionReturn && <button className="btn sm" onClick={() => navigate(admissionReturn)}>← 返回集群准入</button>}
             <ListSearchInput
               value={searchInput}
               onChange={setSearchInput}
@@ -161,7 +167,7 @@ export function UsersPage() {
         </div>
 
         <div className="flex w-full min-w-0 shrink-0 flex-col gap-4">
-          <div className="card !p-0">
+          <div className="card iam-table-card !p-0">
             {loading ? (
               <div className="p-4 text-sm text-muted">{t('common.loading')}</div>
             ) : error ? (
@@ -305,6 +311,9 @@ export function UsersPage() {
             />
           )}
         </div>
+        <WorkspaceNote title={t('iam.usersBannerTitle')}>
+          {t('iam.usersBannerText')}
+        </WorkspaceNote>
       </div>
 
       {editing !== undefined && (

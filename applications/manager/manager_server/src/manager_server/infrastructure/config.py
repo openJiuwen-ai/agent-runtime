@@ -26,6 +26,9 @@ class Settings(BaseSettings):
 
     rest_host: str = Field(default="0.0.0.0", validation_alias="MANAGER_REST_HOST")
     rest_port: int = Field(default=8765, validation_alias="MANAGER_REST_PORT")
+    # Explicit local UI development only; normal deployments retain strict probes/pushes.
+    local_dev: bool = Field(default=False, validation_alias="MANAGER_LOCAL_DEV")
+    dev_offline: bool = Field(default=False, validation_alias="MANAGER_DEV_OFFLINE")
 
     db_type: str = Field(default="sqlite", validation_alias="MANAGER_DB_TYPE")
     sqlite_path: str = Field(default="manager.db", validation_alias="MANAGER_SQLITE_PATH")

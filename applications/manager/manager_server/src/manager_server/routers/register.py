@@ -67,6 +67,12 @@ def _build_api_router() -> APIRouter:
     async def health_check() -> dict[str, str]:
         return {"status": "ok"}
 
+    @root_router.get("/dev-mode", tags=["System"])
+    async def development_mode() -> dict:
+        from manager_server.infrastructure.dev_mode import offline_dev_enabled
+
+        return {"offline": offline_dev_enabled()}
+
     @root_router.get("/manager-ws/status", tags=["System"])
     async def manager_ws_status() -> dict:
         """兼容旧前端：配置下发已改为 HTTP，WS 服务已移除。"""

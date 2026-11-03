@@ -26,6 +26,8 @@ import {
 import { Switch } from '../../../components/Switch';
 import { HintTooltip } from '../../../components/HintTooltip';
 import { formatTime } from '../../../utils/format';
+import { useAdmissionHandoff } from '../../../hooks/useAdmissionHandoff';
+import { collectPages } from '../../../utils/overview';
 
 const IA = 'instanceDetail.accessPanel.instance';
 
@@ -76,13 +78,15 @@ type UserSortField =
 export function InstanceUsersTab({ instanceId }: Props) {
   const { t } = useTranslation();
 
-  const { data: usersData, reload: reloadUsers } = useAsync(() => UserApi.list(), []);
+  const { data: usersData, reload: reloadUsers } = useAsync(
+    () => collectPages((page, page_size) => UserApi.list({ page, page_size })), [],
+  );
   const { data: bindingData, loading, reload: reloadBinding } = useAsync(
     () => InstanceBindingApi.listUsers(instanceId),
     [instanceId],
   );
 
-  const allUsers = usersData?.items ?? [];
+  const allUsers = usersData ?? [];
 
   const userGrantById = useMemo(() => {
     const m = new Map<string, InstanceGrant>();
@@ -111,6 +115,7 @@ export function InstanceUsersTab({ instanceId }: Props) {
   const [pageSize, setPageSize] = useState(20);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [showAdd, setShowAdd] = useState(false);
+  const admissionHandoff = useAdmissionHandoff(instanceId, 'users', () => setShowAdd(true));
 
   /** 引导跳转：其他页面点「未配置准入用户」跳过来时自动打开添加准入用户弹框 */
   useGuideAutoOpen('accessUsers', () => setShowAdd(true));
@@ -424,7 +429,8 @@ export function InstanceUsersTab({ instanceId }: Props) {
           title={t(`${IA}.addUsers`)}
           candidates={candidates}
           showExpiresAt
-          manageLink={{ page: t('iam.users'), to: '/users' }}
+          initialDraft={admissionHandoff.initialDraft}
+          manageLink={{ page: t('iam.users'), to: admissionHandoff.managePath, onPrepare: admissionHandoff.prepare }}
           onConfirm={async ({ ids, expires_at, login_policy }) => {
             await InstanceBindingApi.bindUsers(instanceId, ids, { expires_at, login_policy });
             toast('success', t('success.saved'));
@@ -432,7 +438,7 @@ export function InstanceUsersTab({ instanceId }: Props) {
             reloadUsers();
             bumpGuideRevision();
           }}
-          onClose={() => setShowAdd(false)}
+          onClose={() => { admissionHandoff.clear(); setShowAdd(false); }}
         />
       )}
 

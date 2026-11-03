@@ -26,6 +26,8 @@ import {
 import { Switch } from '../../../components/Switch';
 import { HintTooltip } from '../../../components/HintTooltip';
 import { formatTime } from '../../../utils/format';
+import { useAdmissionHandoff } from '../../../hooks/useAdmissionHandoff';
+import { collectPages } from '../../../utils/overview';
 
 const IA = 'instanceDetail.accessPanel.instance';
 
@@ -76,13 +78,15 @@ type OrgSortField =
 export function InstanceOrgsTab({ instanceId }: Props) {
   const { t } = useTranslation();
 
-  const { data: orgsData, reload: reloadOrgs } = useAsync(() => OrgApi.list(), []);
+  const { data: orgsData, reload: reloadOrgs } = useAsync(
+    () => collectPages((page, page_size) => OrgApi.list({ page, page_size })), [],
+  );
   const { data: bindingData, loading, reload: reloadBinding } = useAsync(
     () => InstanceBindingApi.listOrgs(instanceId),
     [instanceId],
   );
 
-  const allOrgs = orgsData?.items ?? [];
+  const allOrgs = orgsData ?? [];
 
   const orgGrantById = useMemo(() => {
     const m = new Map<string, InstanceGrant>();
@@ -111,6 +115,7 @@ export function InstanceOrgsTab({ instanceId }: Props) {
   const [pageSize, setPageSize] = useState(20);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [showAdd, setShowAdd] = useState(false);
+  const admissionHandoff = useAdmissionHandoff(instanceId, 'orgs', () => setShowAdd(true));
 
   /** 引导跳转：其他页面点「未配置准入组织」跳过来时自动打开添加准入组织弹框 */
   useGuideAutoOpen('accessOrgs', () => setShowAdd(true));
@@ -424,7 +429,8 @@ export function InstanceOrgsTab({ instanceId }: Props) {
           title={t(`${IA}.addOrgs`)}
           candidates={candidates}
           showExpiresAt
-          manageLink={{ page: t('iam.orgs'), to: '/orgs' }}
+          initialDraft={admissionHandoff.initialDraft}
+          manageLink={{ page: t('iam.orgs'), to: admissionHandoff.managePath, onPrepare: admissionHandoff.prepare }}
           onConfirm={async ({ ids, expires_at, login_policy }) => {
             await InstanceBindingApi.bindOrgs(instanceId, ids, { expires_at, login_policy });
             toast('success', t('success.saved'));
@@ -432,7 +438,7 @@ export function InstanceOrgsTab({ instanceId }: Props) {
             reloadOrgs();
             bumpGuideRevision();
           }}
-          onClose={() => setShowAdd(false)}
+          onClose={() => { admissionHandoff.clear(); setShowAdd(false); }}
         />
       )}
 

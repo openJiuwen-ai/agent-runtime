@@ -3,11 +3,14 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Literal
+from urllib.parse import urlsplit
 
 import httpx
 
+from manager_server.infrastructure.dev_mode import offline_dev_enabled
 from manager_server.security.link_mtls import ManagerLinkMTLSConfig
 
 Side = Literal["gateway", "runtime", "user_web"]
@@ -97,6 +100,8 @@ async def check_config_host_alive(
     timeout: float = _DEFAULT_TIMEOUT,
 ) -> bool:
     """健康检查是否成功（失败返回 False，不抛异常）。"""
+    if offline_dev_enabled():
+        return False
     try:
         await probe_config_host(base_url, side=side, timeout=timeout)
         return True
@@ -112,6 +117,17 @@ async def require_config_hosts_reachable(
     timeout: float = _DEFAULT_TIMEOUT,
 ) -> None:
     """对非空的 Gateway / Runtime / User Web host 依次探活；任一失败即抛错。"""
+    if offline_dev_enabled():
+        hosts = (("gateway", gateway_host), ("runtime", runtime_host), ("user_web", user_web_host))
+        for side, host in hosts:
+            if host:
+                parsed = urlsplit(str(host).strip())
+                if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+                    raise ValueError(f"{side} host must be an http(s) URL")
+        logging.getLogger(__name__).warning(
+            "[LocalOffline] reachability validation skipped; components remain unverified"
+        )
+        return
     if gateway_host:
         await probe_config_host(gateway_host, side="gateway", timeout=timeout)
     if runtime_host:

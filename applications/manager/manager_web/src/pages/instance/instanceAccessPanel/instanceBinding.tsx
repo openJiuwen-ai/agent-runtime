@@ -7,6 +7,7 @@ import { GuideLink } from '../../../components/GuideLink';
 import { useFormDirty } from '../../../hooks/useFormDirty';
 import { ApiError } from '../../../services/api';
 import { toast } from '../../../stores/uiStore';
+import { type AdmissionDraft, emptyAdmissionDraft } from '../../../utils/admissionNavigation';
 
 export interface Candidate { id: string; label: string; sub?: string }
 
@@ -18,7 +19,7 @@ export type AddToInstanceConfirmPayload = {
 
 /** 通用"添加到实例"选择器：候选（已排除在册者）搜索 + 多选 + 可选过期时间/登录权限 → onConfirm。 */
 export function AddToInstanceModal({
-  title, candidates, onConfirm, onClose, showExpiresAt = false, manageLink,
+  title, candidates, onConfirm, onClose, showExpiresAt = false, manageLink, initialDraft = emptyAdmissionDraft,
 }: {
   title: string;
   candidates: Candidate[];
@@ -26,19 +27,21 @@ export function AddToInstanceModal({
   onClose: () => void;
   showExpiresAt?: boolean;
   /** 可选：弹窗底部「前往 xxx 页面 →」导航链接，点击关闭弹窗并跳转对应页面 */
-  manageLink?: { page: string; to: string };
+  manageLink?: { page: string; to: string; onPrepare?: (draft: AdmissionDraft) => void };
+  initialDraft?: AdmissionDraft;
 }) {
   const { t } = useTranslation();
   const { markClean, isDirty } = useFormDirty(true);
-  const [sel, setSel] = useState<Set<string>>(new Set());
+  const [sel, setSel] = useState<Set<string>>(() => new Set(initialDraft.ids));
   const [q, setQ] = useState('');
-  const [expiresAt, setExpiresAt] = useState('');
-  const [loginPolicy, setLoginPolicy] = useState<'allow' | 'deny'>('allow');
+  const [expiresAt, setExpiresAt] = useState(initialDraft.expiresAt);
+  const [loginPolicy, setLoginPolicy] = useState<'allow' | 'deny'>(initialDraft.loginPolicy);
   const [busy, setBusy] = useState(false);
   const filtered = useMemo(() => {
     const kw = q.trim().toLowerCase();
     return kw ? candidates.filter((c) => c.label.toLowerCase().includes(kw) || c.id.toLowerCase().includes(kw)) : candidates;
   }, [candidates, q]);
+  const selectedIds = candidates.filter(candidate => sel.has(candidate.id)).map(candidate => candidate.id);
 
   useEffect(() => {
     markClean({ ids: [] as string[], expiresAt: '', loginPolicy: 'allow' as const });
@@ -62,7 +65,7 @@ export function AddToInstanceModal({
     setBusy(true);
     try {
       await onConfirm({
-        ids: Array.from(sel),
+        ids: selectedIds,
         expires_at: expiresAt ? new Date(expiresAt).toISOString() : null,
         login_policy: loginPolicy,
       });
@@ -83,8 +86,8 @@ export function AddToInstanceModal({
       footer={
         <>
           <ModalCancelButton className="btn" />
-          <button className="btn primary" style={{ marginLeft: 8 }} disabled={busy || sel.size === 0} onClick={submit}>
-            {t('common.confirm', { defaultValue: '确定' })}{sel.size ? `（${sel.size}）` : ''}
+          <button className="btn primary" style={{ marginLeft: 8 }} disabled={busy || selectedIds.length === 0} onClick={submit}>
+            {t('common.confirm', { defaultValue: '确定' })}{selectedIds.length ? `（${selectedIds.length}）` : ''}
           </button>
         </>
       }
@@ -155,7 +158,7 @@ export function AddToInstanceModal({
             page={manageLink.page}
             to={manageLink.to}
             className="text-xs text-muted hover:text-accent hover:underline"
-            onNavigate={onClose}
+            onNavigate={() => manageLink.onPrepare ? manageLink.onPrepare(draft) : onClose()}
           />
         </div>
       )}

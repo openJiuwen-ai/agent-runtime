@@ -26,6 +26,7 @@ import {
   isValidIdentityId,
   sanitizeIdentityIdInput,
 } from '../../utils/identityId';
+import { admissionCatalogPath, admissionClusterReturnPath, admissionOrgPath } from '../../utils/admissionNavigation';
 
 type Section = 'basic' | 'members';
 
@@ -97,7 +98,9 @@ export function OrgsEditPage({
   initialSection?: Section;
 }) {
   const { t } = useTranslation();
-  const { navigate } = useRouter();
+  const { navigate, params } = useRouter();
+  const admissionReturn = admissionClusterReturnPath(params);
+  const catalogPath = admissionCatalogPath('orgs', params);
   const isNew = !groupId;
   const [section, setSection] = useState<Section>(initialSection);
   const [loading, setLoading] = useState(!isNew);
@@ -116,7 +119,7 @@ export function OrgsEditPage({
   useEffect(() => {
     if (isNew || !groupId) return;
     if (isNoOrgGroupId(groupId)) {
-      navigate('/orgs');
+      navigate(catalogPath);
       return;
     }
     let cancelled = false;
@@ -126,7 +129,7 @@ export function OrgsEditPage({
         const org = await OrgApi.get(groupId);
         if (cancelled) return;
         if (isNoOrgGroupId(org.group_id)) {
-          navigate('/orgs');
+          navigate(catalogPath);
           return;
         }
         setFormGroupId(clipField(org.group_id, FIELD_MAX_LENGTH.group_id));
@@ -140,7 +143,7 @@ export function OrgsEditPage({
       } catch (error) {
         if (cancelled) return;
         toast('danger', t('errors.loadFailed', { detail: errorMessage(error) }));
-        navigate('/orgs');
+        navigate(catalogPath);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -148,7 +151,7 @@ export function OrgsEditPage({
     return () => {
       cancelled = true;
     };
-  }, [groupId, isNew, navigate, t]);
+  }, [groupId, isNew, navigate, t, catalogPath]);
 
   const tabs = useMemo(() => {
     const items: Array<{ id: Section; label: string; count?: number }> = [
@@ -184,7 +187,7 @@ export function OrgsEditPage({
           display_name: displayName.trim().slice(0, FIELD_MAX_LENGTH.display_name),
         });
         toast('success', t('success.created'));
-        navigate(`/orgs/${encodeURIComponent(created.group_id)}`);
+        navigate(admissionOrgPath(created.group_id, params));
       } else if (groupId) {
         await OrgApi.update(groupId, {
           display_name: displayName.trim().slice(0, FIELD_MAX_LENGTH.display_name),
@@ -213,7 +216,7 @@ export function OrgsEditPage({
           <button
             type="button"
             className="btn ghost sm shrink-0"
-            onClick={() => navigate('/orgs')}
+            onClick={() => navigate(catalogPath)}
             aria-label={t('iam.orgs')}
             title={t('iam.backToOrgs')}
           >
@@ -246,6 +249,7 @@ export function OrgsEditPage({
         </div>
 
         <div className="flex min-w-0 flex-wrap items-center justify-end gap-2 lg:justify-self-end">
+          {admissionReturn && <button className="btn sm" onClick={() => navigate(admissionReturn)}>← 返回集群准入</button>}
           {canWrite && section === 'basic' && (
             <button
               className="btn primary sm"

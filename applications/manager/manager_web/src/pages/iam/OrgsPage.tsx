@@ -17,12 +17,15 @@ import { ApiError, Org, OrgApi } from '../../services/api';
 import { toast } from '../../stores/uiStore';
 import { formatTime } from '../../utils/format';
 import { ResourceExportButton, ResourceImportButton } from '../../components/ResourceImportExport';
+import { WorkspaceNote } from '../../components/WorkspaceNote';
+import { admissionClusterReturnPath, admissionOrgPath } from '../../utils/admissionNavigation';
 
 type OrgSortField = 'group_id' | 'display_name' | 'status' | 'updated_at';
 
 export function OrgsPage() {
   const { t } = useTranslation();
-  const { navigate } = useRouter();
+  const { navigate, params } = useRouter();
+  const admissionReturn = admissionClusterReturnPath(params);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const { searchInput, setSearchInput, searchQuery } = useListSearch();
@@ -117,7 +120,7 @@ export function OrgsPage() {
 
   return (
     <>
-      <div className="flex min-w-0 flex-col gap-4">
+      <div className="iam-workspace flex min-w-0 flex-col gap-4">
         <div className="page-header w-full min-w-0 flex-wrap items-start gap-y-3">
           <div className="min-w-[7.5rem] max-w-[12rem] shrink-0 sm:max-w-[16rem]">
             <div className="page-title truncate" title={t('iam.orgs')}>
@@ -128,6 +131,7 @@ export function OrgsPage() {
             </div>
           </div>
           <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
+            {admissionReturn && <button className="btn sm" onClick={() => navigate(admissionReturn)}>← 返回集群准入</button>}
             <ListSearchInput
               value={searchInput}
               onChange={setSearchInput}
@@ -147,14 +151,14 @@ export function OrgsPage() {
             {selectedIds.size > 0 && (
               <span className="text-xs text-muted">{t('importExport.selected', { count: selectedIds.size })}</span>
             )}
-            <button className="btn primary sm" onClick={() => navigate('/orgs/new')}>
+            <button className="btn primary sm" onClick={() => navigate(admissionOrgPath('new', params))}>
               + {t('iam.newOrg')}
             </button>
           </div>
         </div>
 
         <div className="flex w-full min-w-0 shrink-0 flex-col gap-4">
-          <div className="card !p-0">
+          <div className="card iam-table-card !p-0">
             {loading ? (
               <div className="p-4 text-sm text-muted">{t('common.loading')}</div>
             ) : error ? (
@@ -272,7 +276,7 @@ export function OrgsPage() {
                               <button
                                 className="btn sm ghost"
                                 onClick={() =>
-                                  navigate(`/orgs/${encodeURIComponent(o.group_id)}`)
+                                  navigate(admissionOrgPath(o.group_id, params))
                                 }
                               >
                                 {t('common.edit')}
@@ -303,6 +307,9 @@ export function OrgsPage() {
             />
           )}
         </div>
+        <WorkspaceNote title={t('iam.orgsBannerTitle')}>
+          {t('iam.orgsBannerText')}
+        </WorkspaceNote>
       </div>
 
       <ConfirmDialog

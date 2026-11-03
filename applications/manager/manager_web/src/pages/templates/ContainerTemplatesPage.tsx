@@ -20,7 +20,9 @@ import type { ContainerTemplate } from '../../types';
 import { formatTime, truncate } from '../../utils/format';
 import { parseConfigSyncImport } from '../../utils/serviceConfigExport';
 import { useRouter } from '../../router';
+import { runtimeCatalogPath, runtimeClusterReturnPath } from '../../utils/runtimeResourceNavigation';
 import { ContainerTemplateModal } from './ContainerTemplateModal';
+import { WorkspaceNote } from '../../components/WorkspaceNote';
 
 type ContainerTemplateSortField = 'template_name' | 'container_id' | 'updated_at';
 
@@ -30,7 +32,9 @@ type ContainerTemplateSortField = 'template_name' | 'container_id' | 'updated_at
  */
 export function ContainerTemplatesPage() {
   const { t } = useTranslation();
-  const { navigate } = useRouter();
+  const { params, navigate } = useRouter();
+  const runtimeCatalog = runtimeCatalogPath('service-config-templates', params);
+  const clusterReturnPath = runtimeClusterReturnPath(params);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [enabledFilter, setEnabledFilter] = useState('');
@@ -91,7 +95,12 @@ export function ContainerTemplatesPage() {
           const text = String(reader.result ?? '');
           const parsed = JSON.parse(text) as unknown;
           const { body, templateCount } = parseConfigSyncImport(parsed);
-          await ServiceConfigTemplateApi.create(body);
+          const saved = await ServiceConfigTemplateApi.create(body);
+          if (clusterReturnPath && saved.enabled) {
+            const context = new URLSearchParams(params);
+            context.set('preparedRuntime', saved.template_id);
+            navigate(runtimeCatalogPath('container-templates', context), { replace: true });
+          }
           toast(
             'success',
             templateCount > 1
@@ -161,6 +170,15 @@ export function ContainerTemplatesPage() {
   return (
     <>
       <div className="flex min-w-0 flex-col gap-4">
+        {clusterReturnPath && (
+          <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+            <span className="text-muted">正在为当前集群准备容器模板。下一步在运行规格中选择容器，再回集群绑定运行资源。</span>
+            <div className="flex flex-wrap gap-2">
+              <button className="btn sm" onClick={() => navigate(clusterReturnPath)}>← 返回集群运行资源</button>
+              <button className="btn sm primary" onClick={() => navigate(runtimeCatalog)}>继续准备运行规格 →</button>
+            </div>
+          </div>
+        )}
         <div className="page-header w-full min-w-0 flex-wrap items-start gap-y-3">
           <div className="min-w-[7.5rem] max-w-[20rem] shrink-0 sm:max-w-[32rem]">
             <div className="page-title">{t('containerTemplate.title')}</div>
@@ -263,7 +281,7 @@ export function ContainerTemplatesPage() {
                           <span
                             className="tag cursor-pointer"
                             title={t('containerTemplate.referenceHint')}
-                            onClick={() => navigate('/service-config-templates')}
+                            onClick={() => navigate(runtimeCatalog)}
                           >
                             {row.reference_count}
                           </span>
@@ -288,6 +306,9 @@ export function ContainerTemplatesPage() {
         {data ? (
           <Pagination page={page} pageSize={pageSize} total={data.total ?? data.items.length} onChange={(nextPage, nextSize) => { setPage(nextPage); setPageSize(nextSize); }} />
         ) : null}
+        <WorkspaceNote title="容器模板是运行时的“软件包装方式”" action={<button className="btn sm" type="button" onClick={() => navigate(runtimeCatalog)}>查看运行规格 →</button>}>
+          先准备 AgentServer、Sandbox 等镜像和容器参数，再在运行规格中组装成运行池。
+        </WorkspaceNote>
       </div>
       <ContainerTemplateModal
         open={modalOpen}

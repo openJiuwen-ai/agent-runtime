@@ -1,6 +1,7 @@
 import type { ChangeEvent, CompositionEvent } from 'react';
 
 interface LimitedTextInputProps {
+  ariaLabel?: string;
   value: string;
   onChange: (value: string) => void;
   maxLength: number;
@@ -21,6 +22,7 @@ function duringImeComposition(event: ChangeEvent<HTMLInputElement>): boolean {
 }
 
 export function LimitedTextInput({
+  ariaLabel,
   value,
   onChange,
   maxLength,
@@ -46,6 +48,7 @@ export function LimitedTextInput({
       <input
         className={`input flex-1 min-w-0 ${className ?? ''}`}
         type={type}
+        aria-label={ariaLabel}
         value={value}
         maxLength={maxLength}
         placeholder={placeholder}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Modal, ModalCancelButton } from '../../../components/Modal';
 import { MatchExprEditor } from '../../../components/MatchExprEditor';
@@ -33,6 +33,14 @@ import {
   type ColumnSortValue,
 } from '../../../components/TableColumnSort';
 import { HintTooltip } from '../../../components/HintTooltip';
+import { useRouter } from '../../../router';
+import { useAuth } from '../../../auth/AuthContext';
+import { collectPages } from '../../../utils/overview';
+import { runtimeCatalogPath } from '../../../utils/runtimeResourceNavigation';
+import {
+  applyRuntimeTemplateChoice, consumeRuntimeBindingAction, emptyRuntimeBindingDraft,
+  readRuntimeBindingDraft, runtimeBindingDraftKey, writeRuntimeBindingDraft, type RuntimeBindingDraft,
+} from '../../../utils/runtimeBindingDraft';
 
 interface Props {
   instanceId: string;
@@ -76,6 +84,13 @@ function summarizeMatchExpr(expr: InstanceServiceResource['match_expr'], allLabe
 
 export function InstanceServiceResourceTab({ instanceId }: Props) {
   const { t } = useTranslation();
+  const { navigate, path, params } = useRouter();
+  const { user } = useAuth();
+  const handoffKey = runtimeBindingDraftKey(user?.user_id || '', instanceId);
+  const requestedTemplate = params.get('runtimeTemplate');
+  const requestCreate = params.get('create') === '1';
+  const [restoredDraftKey, setRestoredDraftKey] = useState<string | null>(null);
+  const draftSaveWarned = useRef(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const { searchInput, setSearchInput, searchQuery } = useListSearch();
@@ -103,7 +118,7 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
     setPage(1);
   };
 
-  const { data: rosterData, loading, reload } = useAsync(
+  const { data: rosterData, loading, error: rosterError, reload } = useAsync(
     () =>
       InstanceServiceResourceApi.listInstanceResources(instanceId, {
         page,
@@ -115,12 +130,12 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
       }),
     [instanceId, page, pageSize, searchQuery, enabledFilter, sortBy, sortOrder],
   );
-  const { data: catalogData } = useAsync(
-    () => ServiceConfigTemplateApi.list({ page: 1, page_size: 200 }),
+  const catalogState = useAsync(
+    () => collectPages((page, page_size) => ServiceConfigTemplateApi.list({ page, page_size })),
     [],
   );
   const items = rosterData?.items ?? [];
-  const catalog = catalogData?.items ?? [];
+  const catalog = catalogState.data ?? [];
   const templateNameById = useMemo(() => {
     const map = new Map<string, string>();
     for (const item of catalog) {
@@ -131,6 +146,17 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
 
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [showAdd, setShowAdd] = useState(false);
+
+  useEffect(() => {
+    if (requestCreate || requestedTemplate) setShowAdd(true);
+  }, [requestCreate, requestedTemplate]);
+
+  // An ordinary catalog return resumes the saved binding even without a selection.
+  useEffect(() => {
+    try {
+      if (readRuntimeBindingDraft(window.sessionStorage, handoffKey)) setShowAdd(true);
+    } catch { /* Storage may be disabled. */ }
+  }, [handoffKey]);
 
   /** 引导跳转：其他页面点「未配置 运行时」跳过来时自动打开添加运行时弹框 */
   useGuideAutoOpen('serviceResourceAdd', () => setShowAdd(true));
@@ -172,22 +198,71 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
   }, [searchQuery]);
 
   useEffect(() => {
-    if (!showAdd) return;
-    markAddClean({
-      addTemplateId: '',
-      addResourceName: '',
-      addResourceDesc: '',
-      addPriority: 0,
-      addMatchExpr: '',
-      addExpiresAt: '',
-    });
-    setAddTemplateId('');
-    setAddResourceName('');
-    setAddResourceDesc('');
-    setAddPriority(0);
-    setAddMatchExpr('');
-    setAddExpiresAt('');
-  }, [showAdd, markAddClean]);
+    if (!showAdd) { setRestoredDraftKey(null); return; }
+    draftSaveWarned.current = false;
+    let draft = { ...emptyRuntimeBindingDraft };
+    try { draft = readRuntimeBindingDraft(window.sessionStorage, handoffKey) || draft; } catch { /* Storage may be disabled. */ }
+    const priority = draft.addPriority === null ? NaN : draft.addPriority;
+    markAddClean({ ...draft, addPriority: priority });
+    setAddTemplateId(draft.addTemplateId);
+    setAddResourceName(draft.addResourceName);
+    setAddResourceDesc(draft.addResourceDesc);
+    setAddPriority(priority);
+    setAddMatchExpr(draft.addMatchExpr);
+    setAddExpiresAt(draft.addExpiresAt);
+    setRestoredDraftKey(handoffKey);
+  }, [showAdd, markAddClean, handoffKey]);
+
+  const persistAddDraft = useCallback((draft: RuntimeBindingDraft) => {
+    try {
+      if (writeRuntimeBindingDraft(window.sessionStorage, handoffKey, draft)) return true;
+    } catch { /* Browser storage access itself can be disabled. */ }
+    if (!draftSaveWarned.current) {
+      draftSaveWarned.current = true;
+      toast('warn', t('redesign.draftUnavailable', { defaultValue: '无法暂存绑定草稿，返回后需重新填写。' }));
+    }
+    return false;
+  }, [handoffKey, t]);
+
+  // Persist only after restoration for this exact account/cluster. Handle an
+  // asynchronous directory choice in the same write to prevent an older form
+  // snapshot from undoing the selected template during its render transition.
+  useEffect(() => {
+    if (!showAdd || restoredDraftKey !== handoffKey) return;
+    let draft: RuntimeBindingDraft = {
+      addTemplateId, addResourceName, addResourceDesc,
+      addPriority, addMatchExpr, addExpiresAt,
+    };
+    const canConsumeAction = (requestedTemplate || requestCreate) && !catalogState.loading && !!catalogState.data;
+    if (canConsumeAction && requestedTemplate) {
+      const result = applyRuntimeTemplateChoice(draft, requestedTemplate, catalogState.data!);
+      draft = result.draft;
+      setAddTemplateId(draft.addTemplateId);
+      setAddResourceName(draft.addResourceName);
+      if (result.error) {
+        toast('warn', result.error === 'disabled'
+          ? t('redesign.runtimeTemplateDisabled', { defaultValue: '返回的运行规格已停用，请重新选择可用运行规格。' })
+          : t('redesign.runtimeTemplateMissing', { defaultValue: '返回的运行规格已不存在，请重新选择。' }));
+      }
+    }
+    persistAddDraft(draft);
+    if (canConsumeAction) navigate(consumeRuntimeBindingAction(path, params), { replace: true });
+  }, [showAdd, restoredDraftKey, handoffKey, requestedTemplate, requestCreate, catalogState.loading, catalogState.data, addTemplateId, addResourceName, addResourceDesc, addPriority, addMatchExpr, addExpiresAt, persistAddDraft, params, path, navigate, t]);
+
+  function clearHandoffDraft() {
+    setRestoredDraftKey(null);
+    try { window.sessionStorage.removeItem(handoffKey); } catch { /* Storage may be disabled. */ }
+  }
+
+  function closeAdd() {
+    clearHandoffDraft();
+    setShowAdd(false);
+    if (requestCreate || requestedTemplate) navigate(consumeRuntimeBindingAction(path, params), { replace: true });
+  }
+
+  function prepareCatalogHandoff() {
+    if (persistAddDraft(addDraft)) markAddClean(addDraft);
+  }
 
   useEffect(() => {
     if (editing) {
@@ -223,6 +298,7 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
   const candidates = catalog.map((b) => ({
     id: b.template_id,
     label: b.template_name,
+    enabled: b.enabled,
   }));
 
   function templateLabel(refTemplateId: string): string {
@@ -287,6 +363,7 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
       toast('success', t('success.saved'));
       setEditing(null);
       reload();
+      bumpGuideRevision();
     } catch (e) {
       toast('danger', e instanceof ApiError ? e.detail : String(e));
     } finally {
@@ -331,6 +408,8 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
       <div className="card !p-0">
         {loading ? (
           <div className="p-4 text-sm text-muted">{t('common.loading')}</div>
+        ) : rosterError ? (
+          <div className="p-4 text-sm text-danger" role="alert">{t('errors.loadFailed', { detail: rosterError })}<button type="button" className="btn sm ml-2" onClick={() => void reload()}>{t('common.refresh')}</button></div>
         ) : (
           <div className="overflow-x-auto">
             <table className="table w-max min-w-full">
@@ -499,6 +578,7 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
                                 .then(() => {
                                   toast('success', t('success.saved'));
                                   reload();
+                                  bumpGuideRevision();
                                 })
                                 .catch((e) =>
                                   toast('danger', e instanceof ApiError ? e.detail : String(e)),
@@ -549,7 +629,7 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
           open
           size="lg"
           title={t(`${sr}.add`)}
-          onClose={() => setShowAdd(false)}
+          onClose={closeAdd}
           dirty={isAddDirty(addDraft)}
           footer={
             <>
@@ -557,13 +637,13 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
               <button
                 className="btn primary"
                 style={{ marginLeft: 8 }}
-                disabled={busy || !addTemplateId || !addResourceName.trim() || !Number.isInteger(addPriority)}
+                disabled={busy || restoredDraftKey !== handoffKey || !!requestedTemplate || catalogState.loading || !!catalogState.error || !catalog.some(item => item.template_id === addTemplateId && item.enabled !== false) || !addResourceName.trim() || !Number.isInteger(addPriority)}
                 onClick={async () => {
                   if (!addResourceName.trim()) {
                     toast('warn', t('policies.fieldRequired', { field: t(`${sr}.resourceName`) }));
                     return;
                   }
-                  if (!addTemplateId) {
+                  if (!catalog.some(item => item.template_id === addTemplateId && item.enabled !== false)) {
                     toast('warn', t('policies.fieldRequired', { field: t(`${sr}.template`) }));
                     return;
                   }
@@ -587,6 +667,7 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
                       expires_at: addExpiresAt ? new Date(addExpiresAt).toISOString() : null,
                     });
                     toast('success', t('success.saved'));
+                    clearHandoffDraft();
                     setShowAdd(false);
                     setAddTemplateId('');
                     setAddResourceName('');
@@ -634,6 +715,7 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
             <select
               className="select mt-1 w-full"
               value={addTemplateId}
+              disabled={catalogState.loading || !!catalogState.error || !!requestedTemplate}
               onChange={(e) => {
                 const selectedTemplateId = e.target.value;
                 setAddTemplateId(selectedTemplateId);
@@ -645,13 +727,15 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
             >
               <option value="">{t('common.pleaseSelect')}</option>
               {candidates.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.label}({c.id})
+                <option key={c.id} value={c.id} disabled={c.enabled === false}>
+                  {c.label}({c.id}){c.enabled === false ? ` · ${t('common.disabled')}` : ''}
                 </option>
               ))}
             </select>
+            {catalogState.loading && <p className="text-xs text-muted mt-1">{t('common.loading')}</p>}
+            {catalogState.error && <div className="mt-1 flex items-center gap-2 text-sm text-danger" role="alert"><span>{catalogState.error}</span><button type="button" className="btn ghost sm" onClick={() => void catalogState.reload()}>{t('common.refresh')}</button></div>}
             <div className="mt-1">
-              <GuideLink page={t('nav.serviceConfigTemplates')} to="/service-config-templates" />
+              <GuideLink page={t('nav.serviceConfigTemplates')} to={runtimeCatalogPath('service-config-templates', params, instanceId)} onNavigate={prepareCatalogHandoff} />
             </div>
           </label>
           <label className="block mb-3">

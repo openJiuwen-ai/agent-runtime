@@ -72,7 +72,7 @@
   "nav": {
     "platform": "控制台",
     "overview": "总览",
-    "instances": "集群管理",
+    "instances": "服务实例",
     "config": "工作台",
     "agentResources": "Agent资源",
     "runtimeResources": "运行时资源",
@@ -85,8 +85,8 @@
     "a2aManagement": "A2A管理",
     "extensionTemplates": "扩展配置",
     "mcpTemplates": "MCP配置",
-    "agentManagement": "Agent模板",
-    "serviceConfigTemplates": "运行时模板",
+    "agentManagement": "Agent模板管理",
+    "serviceConfigTemplates": "运行规格",
     "iam": "身份中心",
     "users": "用户",
     "orgs": "组织",
@@ -144,8 +144,8 @@
     "clusterAlerts": "集群存在未配置项"
   },
   "safetyGuardrails": {
-    "title": "安全护栏",
-    "subtitle": "配置 Agent 安全护栏策略",
+    "title": "工具安全策略",
+    "subtitle": "管理创建 Agent 时可配置的工具安全护栏",
     "empty": "暂无安全护栏",
     "new": "新建安全护栏",
     "edit": "编辑安全护栏",
@@ -181,8 +181,8 @@
     "noInstances": "暂未发现集群，可在「集群管理」中新建。"
   },
   "topology": {
-    "title": "集群管理",
-    "subtitle": "管理 {{productName}} 集群",
+    "title": "服务实例",
+    "subtitle": "管理接入已部署好的 JiuwenSwarm 运行实例（包括 Gateway、Runtime、User Web等）",
     "createInstance": "新建集群",
     "instanceStatus": "集群状态",
     "gatewayStatus": "Gateway 状态",
@@ -262,7 +262,7 @@
       "access": "集群准入",
       "clusterConfig": "集群配置",
       "config": "基础配置",
-      "status": "状态监控",
+      "status": "连接状态",
       "quotaManagement": "配额管理",
       "tokenQuota": "Token配额",
       "cost": "成本统计",
@@ -326,7 +326,7 @@
         "serviceResource": "运行时"
       },
       "agent": {
-        "title": "Agent",
+        "title": "Agent绑定",
         "subtitle": "基于 Agent模板 接入并管理 Agent，配置各 Agent 的授权范围",
         "agentLabel": "Agent模板",
         "agentInstance": "Agent实例",
@@ -350,7 +350,7 @@
         "resourceDescPlaceholder": "请输入资源描述（可选）"
       },
       "serviceResource": {
-        "title": "运行时",
+        "title": "运行资源",
         "subtitle": "基于 运行时模板 创建并管理实例池，配置各池的调度策略，实例在会话触发时按需分配",
         "template": "运行时模板",
         "scopeLabel": "授权范围",
@@ -631,7 +631,7 @@
   },
   "modelTemplate": {
     "title": "模型",
-    "subtitle": "维护大语言模型模板",
+    "subtitle": "管理创建 Agent 时可使用的模型配置",
     "new": "新建模型",
     "edit": "编辑模型",
     "templateName": "模板名称",
@@ -666,8 +666,8 @@
     "deleteConfirm": "确认删除该模型模板？该模板可能被多个实例资源引用，请确认无副作用。"
   },
   "embeddingTemplate": {
-    "title": "Embedding模型",
-    "subtitle": "维护向量模型模板",
+    "title": "向量模型",
+    "subtitle": "管理可用于知识库或向量检索的 Embedding 模型配置",
     "new": "新建 Embedding模型",
     "edit": "编辑 Embedding模型",
     "templateName": "模板名称",
@@ -691,8 +691,8 @@
     "deleteConfirm": "确认删除该 Embedding 模板？该模板可能被多个实例资源引用，请确认无副作用。"
   },
   "mcpTemplate": {
-    "title": "MCP配置",
-    "subtitle": "维护可在 Agent 模板中引用的远程 MCP 服务",
+    "title": "MCP服务",
+    "subtitle": "管理创建 Agent 时可配置的 MCP 服务",
     "new": "新建 MCP配置",
     "edit": "编辑 MCP配置",
     "templateName": "模板名称",
@@ -723,7 +723,7 @@
   },
   "extensionTemplate": {
     "title": "扩展配置",
-    "subtitle": "维护可在Agent处调用的扩展配置模板，支持调用定制化钩子函数",
+    "subtitle": "管理添加高级运行或集成扩展配置",
     "new": "新建扩展配置",
     "edit": "编辑扩展配置",
     "templateName": "模板名称",
@@ -753,8 +753,8 @@
     "deleteConfirm": "确认删除该扩展模板？"
   },
   "skillWhitelistTemplate": {
-    "title": "预置 Skill",
-    "subtitle": "维护 Agent 可调用的预置 Skill 模板（SPI Provider 或受控 URL）",
+    "title": "预置技能源",
+    "subtitle": "管理创建 Agent 时可添加的预置技能源",
     "new": "新建预置 Skill",
     "edit": "编辑预置 Skill",
     "templateName": "模板名称",
@@ -792,8 +792,8 @@
     "deleteConfirm": "确认删除该预置 Skill 模板？该模板可能被多个实例资源引用，请确认无副作用。"
   },
   "serviceConfigTemplate": {
-    "title": "运行时模板",
-    "subtitle": "维护实例池参数和容器运行模板",
+    "title": "运行规格",
+    "subtitle": "由容器模板组装成的可调度、可扩缩的 Agent 运行池方案（Runtime Profile）",
     "new": "新建运行时模板",
     "edit": "编辑运行时模板",
     "backToList": "返回运行时模板列表",
@@ -984,10 +984,28 @@
   },
   "iam": {
     "users": "用户管理",
-    "usersSubtitle": "管理用户与角色",
+    "usersSubtitle": "管理用户",
+    "usersEyebrow": "访问授权 / 用户",
+    "usersBannerTitle": "先准备身份，再配置谁能进入集群",
+    "usersBannerText": "用户是授权关系中的“谁”。在这里维护登录身份和启用状态；进入哪个集群、可以使用哪些 Agent，要在集群配置工作台中继续设置。",
+    "usersDirectory": "用户目录",
+    "usersDirectoryHint": "维护登录身份、状态和后续授权关系",
+    "usersTotal": "目录用户",
+    "usersActive": "当前页启用",
+    "usersIdentity": "身份来源",
+    "usersIdentityHint": "本地与企业身份统一展示",
     "usersSearchPlaceholder": "搜索用户 ID、显示名",
     "orgs": "组织管理",
     "orgsSubtitle": "管理组织与成员归属",
+    "orgsEyebrow": "访问授权 / 组织",
+    "orgsBannerTitle": "用组织批量管理成员的访问范围",
+    "orgsBannerText": "组织把用户聚合成可管理的业务范围。先维护成员归属，再到集群配置工作台为组织配置准入和 Agent 使用范围。",
+    "orgsDirectory": "组织目录",
+    "orgsDirectoryHint": "维护组织、成员归属和启用状态",
+    "orgsTotal": "组织总数",
+    "orgsActive": "当前页启用",
+    "orgsMembers": "成员关系",
+    "orgsMembersHint": "成员配置在组织详情中维护",
     "orgsSearchPlaceholder": "搜索组织 ID、显示名",
     "gotoOrgsLink": "前往 组织管理 页面",
     "gotoUsersLink": "前往 用户管理 页面",
@@ -1152,6 +1170,8 @@
     "chatLoadingSlow": "加载较慢,请稍候…"
   },
   "agentTemplate": {
+    "optionalResources": "可选能力配置",
+    "resourceTabHint": "资源管理在新标签页打开；添加完成后返回此处，刷新选项即可继续，已填内容会保留。",
     "title": "Agent模板",
     "subtitle": "维护可复用的Agent模板，供实例绑定使用",
     "new": "新建 Agent模板",
@@ -1173,7 +1193,7 @@
   "templateRefEditor": {},
   "containerTemplate": {
     "title": "容器模板",
-    "subtitle": "维护 AgentServer 与 Sandbox 容器的可复用运行规格，供运行时模板绑定",
+    "subtitle": "管理 Agent 运行时所使用的“软件镜像和容器包装方式”",
     "empty": "暂无容器模板",
     "new": "新建容器模板",
     "edit": "编辑容器模板",
@@ -1223,6 +1243,17 @@
   "roles": {
     "title": "角色管理",
     "subtitle": "配置角色、权限和授权",
+    "eyebrow": "访问授权 / 角色",
+    "bannerTitle": "角色决定可以做什么",
+    "bannerText": "角色把权限点组合成可复用的管理职责。先在这里定义角色和权限，再将角色指派给用户；集群准入仍在集群配置工作台中完成。",
+    "directory": "角色目录",
+    "directoryHint": "查看角色类型、权限范围和用户指派",
+    "directoryHint": "查看角色类型、权限范围和用户指派",
+    "total": "角色总数",
+    "enabled": "当前页启用",
+    "assigneesSummary": "已指派用户",
+    "systemSummary": "系统角色",
+    "systemSummaryHint": "内置角色不可直接修改权限",
     "new": "新建角色",
     "edit": "编辑角色",
     "backToList": "返回角色列表",
@@ -1338,5 +1369,16 @@
       "success": "已同步到 Gateway",
       "failed": "Gateway 同步失败"
     }
+  },
+  "redesign": {
+    "advancedDeployment": "高级部署设置",
+    "capacityTimeout": "容量与超时",
+    "connected": "组件连接正常",
+    "inspect": "连接状态待检查",
+    "inspectInstance": "检查实例"
+  },
+  "a2aManagement": {
+    "title": "A2A管理",
+    "subtitle": "管理用于 Agent 间协作的 A2A 能力配置"
   }
 }

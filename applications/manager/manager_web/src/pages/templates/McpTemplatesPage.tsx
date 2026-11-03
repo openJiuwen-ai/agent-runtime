@@ -1,3 +1,4 @@
+import { agentResourceReferencesPath } from '../../utils/agentTemplateNavigation';
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
@@ -226,13 +227,13 @@ export function McpTemplatesPage() {
                       </td>
                       <td className="whitespace-nowrap">
                         {row.reference_count > 0 ? (
-                          <span
+                          <button type="button"
                             className="tag cursor-pointer"
                             title={t('mcpTemplate.referenceHint')}
-                            onClick={() => navigate('/agent-templates')}
+                            onClick={() => navigate(agentResourceReferencesPath('mcp', row.template_id, row.template_name))}
                           >
                             {row.reference_count}
-                          </span>
+                          </button>
                         ) : (
                           <span className="text-[11px] text-muted">0</span>
                         )}

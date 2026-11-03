@@ -3,15 +3,6 @@ import { useTranslation } from 'react-i18next';
 import { HintTooltip } from './HintTooltip';
 import { GuideLink } from './GuideLink';
 import {
-  EmbeddingTemplateApi,
-  ExtensionTemplateApi,
-  McpTemplateApi,
-  ModelTemplateApi,
-  PermissionsTemplateApi,
-  A2AAccessPolicyTemplateApi,
-  SkillPrebuiltTemplateApi,
-} from '../services/api';
-import {
   TEMPLATE_REF_EDITOR_SLOTS,
   isMultiValueTemplateRefSlot,
   isTemplateRefEditorSlot,
@@ -20,10 +11,8 @@ import {
   type TemplateRefMap,
 } from '../utils/templateRef';
 
-export interface TemplateOption {
-  template_id: string;
-  label: string;
-}
+import { loadTemplateOptions, type TemplateOption } from '../services/templateOptions';
+export { loadTemplateOptions } from '../services/templateOptions';
 
 /** 槽位 → 对应资源管理页路径（用于「前往 xxx 页添加配置」引导跳转） */
 const SLOT_CONFIG_PATH: Record<string, string> = {
@@ -72,6 +61,8 @@ function SelectChevron({ open = false }: { open?: boolean }) {
 
 interface TemplateRefEditorProps {
   label?: string;
+  resourceLinksInNewTab?: boolean;
+  collapseOptional?: boolean;
   hint?: string;
   required?: boolean;
   /** 星号标注在指定槽位标签右侧（如 default_model），而非整体标题 */
@@ -80,47 +71,6 @@ interface TemplateRefEditorProps {
   onChange: (value: TemplateRefMap) => void;
 }
 
-export async function loadTemplateOptions(): Promise<Record<string, TemplateOption[]>> {
-  const pageSize = 200;
-  const [models, embeddings, skills, extensions, mcps, permissions, a2aPolicies] = await Promise.all([
-    ModelTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
-    EmbeddingTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
-    SkillPrebuiltTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
-    ExtensionTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
-    McpTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
-    PermissionsTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
-    A2AAccessPolicyTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
-  ]);
-
-  const toOpt = (id: string, name: string): TemplateOption => ({
-    template_id: id,
-    label: name ? `${name} (${id})` : id,
-  });
-
-  const modelOptions = (models.items ?? []).map((m) => toOpt(m.template_id, m.template_name));
-  const bySlot: Record<string, TemplateOption[]> = {};
-  for (const slot of [
-    'default_model',
-    'video_model',
-    'audio_model',
-    'vision_model',
-    'image_gen_model',
-  ] as const) {
-    bySlot[slot] = modelOptions;
-  }
-
-  bySlot.embedding_model = (embeddings.items ?? []).map((t) =>
-    toOpt(t.template_id, t.template_name),
-  );
-  bySlot.skill_prebuilt = (skills.items ?? []).map((t) => toOpt(t.template_id, t.template_name));
-  bySlot.extension_config = (extensions.items ?? []).map((t) => toOpt(t.template_id, t.template_name));
-  bySlot.mcp = (mcps.items ?? []).map((t) => toOpt(t.template_id, t.template_name));
-  bySlot.permissions = (permissions.items ?? []).map((t) => toOpt(t.template_id, t.template_name));
-  bySlot.a2a_access_policy = (a2aPolicies.items ?? []).map((t) =>
-    toOpt(t.policy_id, `${t.policy_name} · ${t.mode}`),
-  );
-  return bySlot;
-}
 
 function extractTemplateIds(refs: string[] | undefined): string[] {
   if (!refs?.length) return [];
@@ -312,6 +262,8 @@ function CheckboxSelect({
 
 export function TemplateRefEditor({
   label,
+  resourceLinksInNewTab = false,
+  collapseOptional = false,
   hint,
   required,
   requiredSlots,
@@ -323,13 +275,22 @@ export function TemplateRefEditor({
   const extraSlotsRef = useRef<TemplateRefMap>(extraSlotsFromMap(value));
   const [templateOptions, setTemplateOptions] = useState<Record<string, TemplateOption[]>>({});
   const [loadingTemplates, setLoadingTemplates] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [revision, setRevision] = useState(0);
+  const [optionalOpen, setOptionalOpen] = useState(false);
 
   const emit = useCallback(
-    (next: Record<TemplateRefEditorSlot, string[]>) => {
+    (next: Record<TemplateRefEditorSlot, string[]>, changedSlot: TemplateRefEditorSlot) => {
       setEditor(next);
-      onChange(serializeEditorValue(next, extraSlotsRef.current));
+      // A selection edits only its own slot. Preserve imported fallback/dynamic
+      // references in other slots instead of flattening them as a side effect.
+      const serialized = serializeEditorValue(next, extraSlotsRef.current);
+      const updated = { ...value };
+      if (serialized[changedSlot]?.length) updated[changedSlot] = serialized[changedSlot];
+      else delete updated[changedSlot];
+      onChange(updated);
     },
-    [onChange],
+    [onChange, value],
   );
 
   useEffect(() => {
@@ -343,20 +304,22 @@ export function TemplateRefEditor({
   useEffect(() => {
     let cancelled = false;
     setLoadingTemplates(true);
+    setLoadError(null);
     void loadTemplateOptions()
       .then((opts) => {
         if (!cancelled) setTemplateOptions(opts);
       })
+      .catch((error: Error) => { if (!cancelled) setLoadError(error.message); })
       .finally(() => {
         if (!cancelled) setLoadingTemplates(false);
       });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [revision]);
 
   const setSlotIds = (slot: TemplateRefEditorSlot, ids: string[]) => {
-    emit({ ...editor, [slot]: ids });
+    emit({ ...editor, [slot]: ids }, slot);
   };
 
   return (
@@ -368,12 +331,17 @@ export function TemplateRefEditor({
         </label>
         {hint && <span className="text-[11px] text-muted">{hint}</span>}
       </div>
+      <div className="flex flex-wrap items-center gap-2 mb-2 text-xs text-muted">
+        {resourceLinksInNewTab && <span>{t('agentTemplate.resourceTabHint')}</span>}
+        <button type="button" className="btn ghost sm" disabled={loadingTemplates} onClick={() => setRevision(v => v + 1)}>{t('common.refresh')}</button>
+      </div>
+      {loadError && <div role="alert" className="text-danger text-sm mb-2">{t('errors.loadFailed', { detail: loadError })}</div>}
       {loadingTemplates && (
         <div className="text-[11px] text-muted mb-2">{t('policies.templateRef.loadingTemplates')}</div>
       )}
 
       <div className="flex flex-col gap-2">
-        {TEMPLATE_REF_EDITOR_SLOTS.map((slot) => {
+        {TEMPLATE_REF_EDITOR_SLOTS.filter(slot => !collapseOptional || optionalOpen || requiredSlots?.includes(slot)).map((slot) => {
           const options = templateOptions[slot] ?? [];
           const selected = editor[slot] ?? [];
           const multi = isMultiValueTemplateRefSlot(slot);
@@ -398,6 +366,7 @@ export function TemplateRefEditor({
                 ) : (
                   <select
                     className="select h-10 w-full"
+                    aria-label={t(`policies.templateRef.slots.${slot}`, { defaultValue: slot })}
                     value={selected[0] ?? ''}
                     onChange={(e) => setSlotIds(slot, e.target.value ? [e.target.value] : [])}
                   >
@@ -413,19 +382,16 @@ export function TemplateRefEditor({
                   </select>
                 )}
               </div>
-              {showHint && (
-                <HintTooltip className="ml-1.5 self-center" text="">
-                  <GuideLink
-                    page={t(hintPageKey)}
-                    to={configPath!}
-                    className="text-[11px] leading-snug text-accent hover:text-accent-hover hover:underline"
-                  />
-                </HintTooltip>
-              )}
+              {showHint && (resourceLinksInNewTab
+                ? <a href={`/manager${configPath}`} target="_blank" rel="noopener noreferrer" className="text-xs text-accent hover:underline self-center max-w-28">{t('guide.gotoPageLink', { page: t(hintPageKey) })} ↗</a>
+                : <HintTooltip className="ml-1.5 self-center" text={t('guide.gotoPageLink', { page: t(hintPageKey) })}>
+                  <GuideLink page={t(hintPageKey)} to={configPath!} className="text-[11px] leading-snug text-accent hover:text-accent-hover hover:underline" />
+                </HintTooltip>)}
             </div>
           );
         })}
       </div>
+      {collapseOptional && <button type="button" className="btn ghost sm mt-3" aria-expanded={optionalOpen} onClick={() => setOptionalOpen(value => !value)}>{optionalOpen ? '−' : '+'} {t('agentTemplate.optionalResources')} · {TEMPLATE_REF_EDITOR_SLOTS.filter(slot => !requiredSlots?.includes(slot) && value[slot]?.length).length}</button>}
     </div>
   );
 }

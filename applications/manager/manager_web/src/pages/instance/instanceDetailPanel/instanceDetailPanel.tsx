@@ -7,19 +7,27 @@ interface Props {
   instance: { data?: InstanceDetail | null };
   onOpenEditConnectivity: () => void;
   onRefresh: () => void;
+  onCheckConnectivity: () => void;
+  onOpenUserConsole: () => void;
+  probing: boolean;
+  openingConsole: boolean;
+  checkResult: string;
 }
 
-export function InstanceDetailPanel({ instance, onOpenEditConnectivity, onRefresh }: Props) {
-  const { t } = useTranslation();
+export function InstanceDetailPanel({ instance, onOpenEditConnectivity, onRefresh, onCheckConnectivity, onOpenUserConsole, probing, openingConsole, checkResult }: Props) {
+  const { t, i18n } = useTranslation();
+  const zh = i18n.language.startsWith('zh');
   const d = instance.data;
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="page-header justify-end">
-        <button className="btn sm" onClick={onRefresh}>
+      <div className="page-header">
+        <h2 className="page-title text-base">{zh ? '连接状态' : 'Connection status'}</h2>
+        <div className="flex flex-wrap gap-2"><button className="btn sm" onClick={onRefresh}>
           {t('common.refresh')}
-        </button>
+        </button><button className="btn sm" disabled={probing} onClick={onCheckConnectivity}>{probing ? (zh ? '检查中…' : 'Checking…') : (zh ? '检查连接（全部集群）' : 'Check connections (all clusters)')}</button><button className="btn primary sm" disabled={openingConsole} onClick={onOpenUserConsole}>{openingConsole ? (zh ? '正在检查身份…' : 'Checking identity…') : (zh ? '进入当前集群用户面' : 'Open this cluster in user console')} →</button></div>
       </div>
+      {checkResult && <p className="text-sm text-muted" role="status">{checkResult}</p>}
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
         <div className="card">

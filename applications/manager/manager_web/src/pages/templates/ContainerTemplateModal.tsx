@@ -18,7 +18,7 @@ interface Props {
   /** 编辑目标；null = 新建 */
   template: ContainerTemplate | null;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (saved: ContainerTemplate) => void;
 }
 
 const FIELD_MAX_LENGTH = {
@@ -360,13 +360,11 @@ export function ContainerTemplateModal({ open, template, onClose, onSaved }: Pro
 
     setSaving(true);
     try {
-      if (template) {
-        await ContainerTemplateApi.update(template.template_id, body as ContainerTemplateUpdateBody);
-      } else {
-        await ContainerTemplateApi.create(body);
-      }
+      const saved = template
+        ? await ContainerTemplateApi.update(template.template_id, body as ContainerTemplateUpdateBody)
+        : await ContainerTemplateApi.create(body);
       toast('success', t('success.saved'));
-      onSaved();
+      onSaved(saved);
     } catch (error) {
       toast(
         'danger',

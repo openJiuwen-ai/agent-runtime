@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from manager_server import __version__
 from manager_server.infrastructure.config import settings
+from manager_server.infrastructure.dev_mode import offline_dev_enabled
 from manager_server.infrastructure.db import create_db_handler, database_config_summary
 from manager_server.infrastructure.logger import configure_logging, get_logger
 from manager_server.models.table_init import init_all_tables
@@ -25,6 +26,11 @@ _log = get_logger(__name__)
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     configure_logging()
+    if offline_dev_enabled():
+        _log.warning(
+            "LOCAL OFFLINE DEVELOPMENT: cluster probes and config delivery are simulated; "
+            "no runtime deployment."
+        )
     db_handler = create_db_handler()
     await db_handler.init_database()
     await db_handler.connect()

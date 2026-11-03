@@ -12,6 +12,7 @@ import {
 } from '../../services/api';
 import { toast } from '../../stores/uiStore';
 import { formatTime } from '../../utils/format';
+import { WorkspaceNote } from '../../components/WorkspaceNote';
 
 function formatBytes(value: number | undefined): string {
   if (value === undefined || !Number.isFinite(value)) return '—';
@@ -333,6 +334,9 @@ export function ApprovalEditPage({ orderNum }: { orderNum: string }) {
           </section>
         </aside>
       </div>
+      <WorkspaceNote title="审批结果需要等待同步确认">
+        审批动作记录在当前页面，集群是否真正应用变更请以“同步状态”和对应集群状态页为准。
+      </WorkspaceNote>
     </div>
   );
 }

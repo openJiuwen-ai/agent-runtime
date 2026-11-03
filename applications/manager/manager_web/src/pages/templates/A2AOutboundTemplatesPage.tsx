@@ -1,3 +1,4 @@
+import { agentResourceReferencesPath } from '../../utils/agentTemplateNavigation';
 import { useEffect, useState, type ReactNode } from 'react';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { Empty } from '../../components/Empty';
@@ -51,7 +52,7 @@ export function A2AOutboundTemplatesPage({ embedded = false, header, tabs }: { e
             <td><div className="mono text-xs break-all">{row.source_url}</div><div className="text-xs text-muted">{String(row.selected_interface.protocol_binding || '')}</div></td>
             <td><span className="badge">r{row.card_revision}</span>{row.pending_revision && <span className="badge ml-1 text-warning">待确认</span>} {row.last_error_code && <div className="text-xs text-danger">{row.last_error_summary}</div>}</td>
             <td><Switch checked={row.enabled} onChange={(enabled) => void action(() => A2AOutboundTemplateApi.update(row.template_id, { enabled }))} /></td>
-            <td>{row.reference_count > 0 ? <span className="tag cursor-pointer" title="点击查看生效策略覆盖了该 Agent 的模板" onClick={() => navigate('/agent-templates')}>{row.reference_count}</span> : <span className="text-[11px] text-muted">0</span>}</td>
+            <td>{row.reference_count > 0 ? <button type="button" className="tag cursor-pointer" title="点击查看生效策略覆盖了该 Agent 的模板" onClick={() => navigate(agentResourceReferencesPath('a2a-outbound', row.template_id, row.template_name))}>{row.reference_count}</button> : <span className="text-[11px] text-muted">0</span>}</td>
             <td className="text-xs text-muted whitespace-nowrap">{formatTime(row.last_checked_at)}</td>
             <td className="whitespace-nowrap"><div className="flex gap-1"><ResourceExportButton resourceType="a2a-agent" resourceIds={[row.template_id]} /><button className="btn sm ghost" onClick={() => void action(() => A2AOutboundTemplateApi.refresh(row.template_id))}>检查 Card</button>{row.pending_revision && <><button className="btn sm" onClick={() => void action(() => A2AOutboundTemplateApi.confirmRevision(row.template_id, true))}>接受</button><button className="btn sm ghost" onClick={() => void action(() => A2AOutboundTemplateApi.confirmRevision(row.template_id, false))}>拒绝</button></>}<button className="btn sm ghost" onClick={() => { setEditing(row); setModalOpen(true); }}>编辑</button><button className="btn sm danger" onClick={() => setDeleting(row)}>删除</button></div></td>
           </tr>)}</tbody></table>}

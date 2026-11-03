@@ -144,8 +144,8 @@
     "clusterAlerts": "Clusters have unconfigured items"
   },
   "safetyGuardrails": {
-    "title": "Safety Guardrails",
-    "subtitle": "Configure Agent safety guardrail policies",
+    "title": "Tool safety policies",
+    "subtitle": "Configure restrictions and reference them in the Agent.",
     "empty": "No safety guardrails yet",
     "new": "New Safety Guardrail",
     "edit": "Edit Safety Guardrail",
@@ -262,7 +262,7 @@
       "access": "Cluster Access",
       "clusterConfig": "Cluster Config",
       "config": "Basic Config",
-      "status": "Status Monitor",
+      "status": "Connection status",
       "quotaManagement": "Quota Management",
       "tokenQuota": "Token Quota",
       "cost": "Cost Analytics",
@@ -326,7 +326,7 @@
         "serviceResource": "Runtime"
       },
       "agent": {
-        "title": "Agent",
+        "title": "Agent bindings",
         "subtitle": "Onboard and manage Agents based on Agent Templates, and configure the authorization scope of each Agent",
         "agentLabel": "Agent Template",
         "agentInstance": "Agent Instance",
@@ -350,7 +350,7 @@
         "resourceDescPlaceholder": "Enter resource description (optional)"
       },
       "serviceResource": {
-        "title": "Runtime",
+        "title": "Runtime resources",
         "subtitle": "Create and manage instance pools based on Runtime Templates, configure the scheduling policy of each pool; instances are allocated on demand when a session triggers",
         "template": "Runtime Template",
         "scopeLabel": "Authorization Scope",
@@ -631,7 +631,7 @@
   },
   "modelTemplate": {
     "title": "Models",
-    "subtitle": "Maintain large language model templates",
+    "subtitle": "Create or inspect the model for this Agent.",
     "new": "New Model",
     "edit": "Edit Model",
     "templateName": "Template Name",
@@ -666,8 +666,8 @@
     "deleteConfirm": "Delete this model template? It may be referenced by instance resources."
   },
   "embeddingTemplate": {
-    "title": "Embedding Models",
-    "subtitle": "Maintain embedding model templates",
+    "title": "Embedding models",
+    "subtitle": "Configure embeddings when using knowledge bases or vector search.",
     "new": "New Embedding Model",
     "edit": "Edit Embedding Model",
     "templateName": "Template Name",
@@ -691,8 +691,8 @@
     "deleteConfirm": "Delete this embedding template? It may be referenced by instance resources."
   },
   "mcpTemplate": {
-    "title": "MCP Config",
-    "subtitle": "Manage remote MCP servers that Agent templates can reference",
+    "title": "MCP services",
+    "subtitle": "Configure MCP for external capabilities.",
     "new": "New MCP Config",
     "edit": "Edit MCP Config",
     "templateName": "Template Name",
@@ -722,8 +722,8 @@
     "customConfigReserved": "Custom configuration cannot contain base fields: {{fields}}"
   },
   "extensionTemplate": {
-    "title": "Extension Config",
-    "subtitle": "Maintain extension config templates callable on Agent, with support for custom hook functions",
+    "title": "Extensions",
+    "subtitle": "Add advanced runtime or integration extensions when needed.",
     "new": "New Extension Config",
     "edit": "Edit Extension Config",
     "templateName": "Template Name",
@@ -753,8 +753,8 @@
     "deleteConfirm": "Delete this extension template?"
   },
   "skillWhitelistTemplate": {
-    "title": "Preset Skills",
-    "subtitle": "Maintain preset Skill templates (SPI Provider or controlled URL)",
+    "title": "Prebuilt skill sources",
+    "subtitle": "Add skills for your use case.",
     "new": "New Preset Skill",
     "edit": "Edit Preset Skill",
     "templateName": "Template Name",
@@ -985,9 +985,27 @@
   "iam": {
     "users": "User Management",
     "usersSubtitle": "Manage users and roles",
+    "usersEyebrow": "Access & authorization / Users",
+    "usersBannerTitle": "Prepare identities before deciding who can enter a cluster",
+    "usersBannerText": "Users are the “who” in an authorization relationship. Maintain login identities and status here; cluster access and Agent usage are configured in the cluster workspace.",
+    "usersDirectory": "User directory",
+    "usersDirectoryHint": "Maintain login identities, status, and authorization relationships",
+    "usersTotal": "Directory users",
+    "usersActive": "Enabled on this page",
+    "usersIdentity": "Identity sources",
+    "usersIdentityHint": "Local and enterprise identities are shown together",
     "usersSearchPlaceholder": "Search user ID or display name",
     "orgs": "Org Management",
     "orgsSubtitle": "Manage organizations and membership",
+    "orgsEyebrow": "Access & authorization / Organizations",
+    "orgsBannerTitle": "Use organizations to manage access in groups",
+    "orgsBannerText": "Organizations group users into a manageable business scope. Maintain membership here, then configure cluster access and Agent usage in the cluster workspace.",
+    "orgsDirectory": "Organization directory",
+    "orgsDirectoryHint": "Maintain organizations, membership, and enabled state",
+    "orgsTotal": "Total organizations",
+    "orgsActive": "Enabled on this page",
+    "orgsMembers": "Membership",
+    "orgsMembersHint": "Membership is maintained in organization details",
     "orgsSearchPlaceholder": "Search organization ID or display name",
     "gotoOrgsLink": "Go to Org Management",
     "gotoUsersLink": "Go to User Management",
@@ -1151,6 +1169,8 @@
     "chatLoadingSlow": "Taking longer than usual. Please wait…"
   },
   "agentTemplate": {
+    "optionalResources": "Optional capabilities",
+    "resourceTabHint": "Resource catalogs open in a new tab. Return here and refresh options to continue without losing your form.",
     "title": "Agent Templates",
     "subtitle": "Maintain reusable Agent templates for instance binding",
     "new": "New Agent Template",
@@ -1222,6 +1242,16 @@
   "roles": {
     "title": "Role Management",
     "subtitle": "Configure roles, permissions, and authorization",
+    "eyebrow": "Access & authorization / Roles",
+    "bannerTitle": "Roles decide what someone can do",
+    "bannerText": "Roles combine permission points into reusable responsibilities. Define roles and permissions here, then assign them to users; cluster access is completed in the cluster workspace.",
+    "directory": "Role directory",
+    "directoryHint": "Review role type, permission scope, and user assignments",
+    "total": "Total roles",
+    "enabled": "Enabled on this page",
+    "assigneesSummary": "Assigned users",
+    "systemSummary": "System roles",
+    "systemSummaryHint": "Built-in roles cannot have their permissions edited",
     "new": "New Role",
     "edit": "Edit Role",
     "backToList": "Back to roles",
@@ -1337,5 +1367,16 @@
       "success": "Synced to Gateway",
       "failed": "Gateway sync failed"
     }
+  },
+  "redesign": {
+    "advancedDeployment": "Advanced deployment settings",
+    "capacityTimeout": "Capacity and timeouts",
+    "connected": "Components connected",
+    "inspect": "Inspect connectivity",
+    "inspectInstance": "Inspect instance"
+  },
+  "a2aManagement": {
+    "title": "A2A management",
+    "subtitle": "Configure A2A when Agents need to collaborate."
   }
 }

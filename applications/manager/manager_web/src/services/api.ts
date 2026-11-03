@@ -279,6 +279,7 @@ function idpHttp<T>(path: string, opts: RequestOptions = {}): Promise<T> {
 
 export const SystemApi = {
   health: () => http<{ status: string }>('/health'),
+  developmentMode: () => http<{ offline: boolean }>('/dev-mode'),
   managerWsStatus: () => http<ManagerWsStatus>('/manager-ws/status'),
 };
 
@@ -1482,6 +1483,7 @@ export const PermissionsTemplateApi = {
 };
 
 export const ServiceConfigTemplateApi = {
+  discoverAgentserverConfig: () => http<{ found: boolean; source?: string; configured?: boolean; error?: string; config?: unknown }>('/v1/service-config-templates/agentserver-discovery'),
   list: (params?: {
     page?: number;
     page_size?: number;

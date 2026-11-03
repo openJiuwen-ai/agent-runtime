@@ -1,41 +1,27 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useAuth } from '../../auth/AuthContext';
 import { useAsync } from '../../hooks/useAsync';
 import { useFormDirty } from '../../hooks/useFormDirty';
-import { useClusterGuideStatus } from '../../hooks/useGuideStatus';
+import { InstanceApi, UserConsoleApi, ApiError } from '../../services/api';
 import { useRouter } from '../../router';
-import { InstanceApi, ApiError, hasPermission, isWorkspaceQuotaEnabled } from '../../services/api';
 import { Modal, ModalCancelButton } from '../../components/Modal';
 import { LimitedTextInput } from '../../components/LimitedTextInput';
-import { WarnBadge, type WarnBadgeLink } from '../../components/WarnBadge';
-import { useGuideMissingLabel } from '../../components/GuideLink';
+import { bumpGuideRevision } from '../../stores/guideStore';
 import { toast } from '../../stores/uiStore';
 import { isValidHttpUrl } from '../../utils/url';
-import { InstanceConfigPanel } from './instanceConfigPanel/InstanceConfigPanel';
 import { InstanceDetailPanel } from './instanceDetailPanel/instanceDetailPanel';
 import { InstanceAccessPanel } from './instanceAccessPanel/InstanceAccessPanel';
 import { InstanceAgentResourceTab } from './instanceResourcePanel/InstanceAgentResourceTab';
 import { InstanceServiceResourceTab } from './instanceResourcePanel/InstanceServiceResourceTab';
-import { WorkspaceQuotaPanel } from './instanceQuotaPanel/WorkspaceQuotaPanel';
-import { TeamQuotaPanel } from './instanceQuotaPanel/TeamQuotaPanel';
-import { InstancePlaceholderPanel } from './InstancePlaceholderPanel';
 import { InstanceExpertPackagesTab } from './instanceResourcePanel/InstanceExpertPackagesTab';
+import { WorkspaceNote } from '../../components/WorkspaceNote';
+import { isMockInstanceId, mockInstanceDetail } from '../../config/mockManager';
+import { ClusterWorkspaceNavigation, ClusterWorkspaceReturnAction, type ClusterWorkspaceSection } from '../../components/ClusterWorkspaceNavigation';
+import { MockClusterTabPanel } from './MockClusterTabPanel';
+import { ClusterOtherSettingsPanel } from './ClusterOtherSettingsPanel';
+import { clusterPagePath } from '../../utils/clusterNavigation';
 
-export type InstancePageTab =
-  | 'access'
-  | 'clusterConfig'
-  | 'agentResources'
-  | 'expertPackages'
-  | 'serviceResources'
-  | 'config'
-  | 'status'
-  | 'quotaManagement'
-  | 'workspaceQuota'
-  | 'teamQuota'
-  | 'tokenQuota'
-  | 'cost'
-  | 'audit';
+export type InstancePageTab = 'access' | 'agentResources' | 'expertPackages' | 'serviceResources' | 'otherSettings' | 'status';
 
 interface Props {
   instanceId: string;
@@ -66,15 +52,13 @@ function FieldLabel({ children, required }: { children: ReactNode; required?: bo
 }
 
 export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
-  const { t } = useTranslation();
-  const { navigate } = useRouter();
-  const { user } = useAuth();
-  const canReadQuota = hasPermission(user, 'quota:read');
-  const workspaceQuotaEnabled = isWorkspaceQuotaEnabled(user);
-  const missingLabel = useGuideMissingLabel();
-  const instance = useAsync(() => InstanceApi.get(instanceId), [instanceId]);
-  const { hasAccessUser, hasAccessOrg, hasAgentResource, hasPoolResource } =
-    useClusterGuideStatus(instanceId);
+  const { t, i18n } = useTranslation();
+  const instance = useAsync(() => isMockInstanceId(instanceId) ? Promise.resolve(mockInstanceDetail) : InstanceApi.get(instanceId), [instanceId]);
+  const mock = isMockInstanceId(instanceId);
+  const { navigate, params } = useRouter();
+  const [probing, setProbing] = useState(false);
+  const [openingConsole, setOpeningConsole] = useState(false);
+  const [checkResult, setCheckResult] = useState('');
 
   const [editOpen, setEditOpen] = useState(false);
   const [connectivityForm, setConnectivityForm] = useState<ConnectivityForm>({
@@ -86,84 +70,34 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
   });
   const { markClean, isDirty } = useFormDirty(editOpen);
 
-  const mainTabs: { key: InstancePageTab; label: string; href: string }[] = [
-    { key: 'access', label: t('instanceDetail.tabs.access'), href: `/instances/${instanceId}/access` },
-    { key: 'clusterConfig', label: t('instanceDetail.tabs.clusterConfig'), href: `/instances/${instanceId}/cluster-config` },
-    { key: 'status', label: t('instanceDetail.tabs.status'), href: `/instances/${instanceId}/status` },
-    { key: 'quotaManagement', label: t('instanceDetail.tabs.quotaManagement'), href: `/instances/${instanceId}/quota` },
-    { key: 'cost', label: t('instanceDetail.tabs.cost'), href: `/instances/${instanceId}/cost` },
-    { key: 'audit', label: t('instanceDetail.tabs.audit'), href: `/instances/${instanceId}/audit` },
-  ];
-
-  /** 「集群配置」下的子页签（Agent / 运行时 / 专家包 / 基础配置） */
-  const clusterConfigSubTabs: { key: InstancePageTab; label: string; href: string }[] = [
-    { key: 'agentResources', label: t('instanceDetail.resourcePanel.tabs.agent'), href: `/instances/${instanceId}/agent-resources` },
-    { key: 'serviceResources', label: t('instanceDetail.resourcePanel.tabs.serviceResource'), href: `/instances/${instanceId}/service-resources` },
-    { key: 'expertPackages', label: t('nav.expertPackages'), href: `/instances/${instanceId}/expert-packages` },
-    { key: 'config', label: t('instanceDetail.tabs.config'), href: `/instances/${instanceId}/config` },
-  ];
-  const inClusterConfig =
-    tab === 'clusterConfig' ||
-    clusterConfigSubTabs.some((it) => it.key === tab);
-
-  /** 「配额管理」下的子页签（用户空间配额 / Token 配额）；特性关闭时仍展示 Tab，内容区留白。 */
-  const quotaSubTabs = useMemo(() => {
-    const all: { key: InstancePageTab; label: string; href: string }[] = [
-      {
-        key: 'workspaceQuota',
-        label: t('instanceDetail.tabs.workspaceQuota'),
-        href: `/instances/${instanceId}/workspace-quota`,
-      },
-      {
-        key: 'teamQuota',
-        label: t('instanceDetail.tabs.teamQuota'),
-        href: `/instances/${instanceId}/team-quota`,
-      },
-      {
-        key: 'tokenQuota',
-        label: t('instanceDetail.tabs.tokenQuota'),
-        href: `/instances/${instanceId}/token-quota`,
-      },
-    ];
-    return all.filter((item) => item.key === 'tokenQuota' || canReadQuota);
-  }, [canReadQuota, instanceId, t]);
-  const inQuotaManagement =
-    tab === 'quotaManagement' ||
-    tab === 'workspaceQuota' ||
-    tab === 'teamQuota' ||
-    tab === 'tokenQuota';
-  const activeQuotaTab: InstancePageTab =
-    tab === 'tokenQuota'
-      ? 'tokenQuota'
-      : tab === 'teamQuota' && canReadQuota
-        ? 'teamQuota'
-        : canReadQuota
-          ? 'workspaceQuota'
-          : 'tokenQuota';
-
-  /** 引导状态：准入（用户/组织均未配置）、Agent 与 运行时（任一未配置），提示项可点击跳转并自动打开添加弹框 */
-  const accessWarnLinks =
-    hasAccessUser === false && hasAccessOrg === false
-      ? [
-          { label: missingLabel(t('instanceDetail.accessPanel.instance.users')), to: `/instances/${instanceId}/access`, openTarget: 'accessUsers' as const },
-          { label: missingLabel(t('instanceDetail.accessPanel.instance.orgs')), to: `/instances/${instanceId}/access`, openTarget: 'accessOrgs' as const },
-        ]
-      : undefined;
-  const clusterConfigWarnLinks: WarnBadgeLink[] = [];
-  if (hasAgentResource === false) {
-    clusterConfigWarnLinks.push({
-      label: missingLabel(t('instanceDetail.resourcePanel.tabs.agent')),
-      to: `/instances/${instanceId}/agent-resources`,
-      openTarget: 'agentResourceAdd',
-    });
-  }
-  if (hasPoolResource === false) {
-    clusterConfigWarnLinks.push({
-      label: missingLabel(t('instanceDetail.resourcePanel.tabs.serviceResource')),
-      to: `/instances/${instanceId}/service-resources`,
-      openTarget: 'serviceResourceAdd',
-    });
-  }
+  const zh = i18n.language.startsWith('zh');
+  const tabContext: Record<string, { title: string; body: string }> = {
+    access: {
+      title: zh ? '先决定谁能进入这个集群' : 'Start with who can enter this cluster',
+      body: zh ? '选择可以进入当前集群的用户或组织，两者至少配置一种。保存后先配置运行资源，再绑定 Agent；已保存配置可随时重新查看和修改。' : 'Allow users or organizations into this cluster, then configure runtime resources and Agent bindings. Saved settings can be reviewed at any time.',
+    },
+    status: {
+      title: zh ? '确认连接状态，再验证配置是否可用' : 'Confirm connectivity before validating configuration',
+      body: zh ? '探活只代表管理面能访问组件；Agent 是否能运行，还要同时满足准入、Agent 授权和运行资源条件。' : 'Health checks show management connectivity. Agent execution also requires admission, Agent access and runtime resources.',
+    },
+    agentResources: {
+      title: zh ? '决定谁能使用哪些 Agent' : 'Choose who can use each Agent',
+      body: zh ? '这里保存的是当前集群的 Agent 使用授权，不会修改全局 Agent 定义。' : 'These are Agent access bindings for this cluster; the global Agent definition remains unchanged.',
+    },
+    serviceResources: {
+      title: zh ? '为 Agent 选择实际运行资源' : 'Choose the runtime resources for Agents',
+      body: zh ? '运行规格是可复用定义；只有在当前集群启用后，运行时才会参与调度。' : 'Runtime profiles are reusable definitions and only participate in scheduling after being enabled for this cluster.',
+    },
+    expertPackages: {
+      title: zh ? '为当前集群控制可安装的专家包' : 'Control expert packages for this cluster',
+      body: zh ? '专家包按 Agent 模板或 Agent 分组授权，保存后由当前集群的运行环境读取。' : 'Grant packages by Agent template or group; the current cluster runtime reads the saved allowlist.',
+    },
+    otherSettings: {
+      title: zh ? '集中管理当前集群的运行策略' : 'Manage cluster policies in one place',
+      body: zh ? '通过左侧目录定位日志配置和配额管理，每项独立保存；成本统计与业务审计尚未开放。目录切换保留本页未保存的填写内容。' : 'Use the directory to find logging and quota settings. Save each section independently; cost and business audit are not available yet. Moving between sections retains unsaved edits.',
+    },
+  };
+  const context = tabContext[tab] ?? tabContext.access;
 
   const handleOpenEditConnectivity = () => {
     const d = instance.data;
@@ -221,156 +155,84 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
       toast('success', t('success.saved'));
       setEditOpen(false);
       void instance.reload();
+      bumpGuideRevision();
     } catch (e) {
       toast('danger', t('errors.saveFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
     }
   };
 
+  const checkConnectivity = async () => {
+    if (probing || mock) return;
+    setProbing(true);
+    setCheckResult('');
+    try {
+      const result = await InstanceApi.probeHealth();
+      await instance.reload();
+      setCheckResult(zh ? `检查结束：共检查 ${result.probed} 个组件地址，跳过 ${result.skipped} 个。当前集群的实际结果见下方组件状态。` : `Checked ${result.probed} component endpoints; skipped ${result.skipped}. Review this cluster's component status below.`);
+    } catch (cause) {
+      toast('danger', zh ? `连接检查失败：${cause instanceof ApiError ? cause.detail : (cause as Error).message}` : `Connectivity check failed: ${(cause as Error).message}`);
+    } finally { setProbing(false); }
+  };
+
+  const openUserConsole = async () => {
+    if (openingConsole || mock) return;
+    setOpeningConsole(true);
+    setCheckResult('');
+    try {
+      const { contexts } = await UserConsoleApi.agentContexts();
+      if (!contexts.some(row => row.jiuwenclaw_id === instanceId)) {
+        setCheckResult(zh ? '当前登录身份没有此集群的可用 Agent 上下文。请核对该身份的准入和 Agent 使用范围，或使用已获准的测试账号登录用户面。' : 'This identity has no Agent context in this cluster. Check admission and Agent scope, or sign into the user console with an admitted test account.');
+        return;
+      }
+      await UserConsoleApi.setActiveCluster(instanceId);
+      window.location.assign('/chat/');
+    } catch (cause) {
+      toast('danger', zh ? `无法进入当前集群用户面：${cause instanceof ApiError ? cause.detail : (cause as Error).message}` : `Could not open user console: ${(cause as Error).message}`);
+    } finally { setOpeningConsole(false); }
+  };
+
+  const sections: Record<InstancePageTab, ClusterWorkspaceSection> = {
+    access: 'access', agentResources: 'agent-resources', expertPackages: 'expert-packages',
+    serviceResources: 'service-resources', otherSettings: 'other-settings', status: 'status',
+  };
+  const section = sections[tab];
+  if (instance.loading && !instance.data) return <div className="card">{t('common.loading')}</div>;
+  if (instance.error || !instance.data) return <div className="card text-danger" role="alert">{instance.error || t('common.empty')}<button className="btn ml-3" onClick={() => void instance.reload()}>{t('common.refresh')}</button><button className="btn ml-2" onClick={() => navigate('/instances')}>{zh ? '返回集群管理' : 'Return to clusters'}</button></div>;
+
   return (
     <>
-      <div className="flex min-w-0 flex-col gap-4 overflow-x-auto">
-        <div className="page-header flex w-full min-w-0 shrink-0 flex-col items-stretch gap-3 lg:grid lg:grid-cols-[1fr_auto_1fr] lg:items-center lg:gap-4">
-          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 lg:justify-self-start">
-            <button
-              type="button"
-              className="btn ghost sm shrink-0"
-              onClick={() => navigate('/instances')}
-              aria-label={t('topology.title')}
-              title={t('topology.title')}
-            >
-              ←
-            </button>
-            <div className="min-w-0 max-w-full flex-1 sm:max-w-[16rem] sm:flex-none">
-              <div
-                className="page-title truncate"
-                title={instance.data?.jiuwenclaw_name ?? undefined}
-              >
-                {instance.data?.jiuwenclaw_name ?? '…'}
-              </div>
-              <div className="text-[11px] text-muted mono truncate" title={instanceId}>
-                {instanceId}
-              </div>
-            </div>
-          </div>
-
-          <div className="tabs-bar max-w-full shrink-0 self-center overflow-x-auto lg:justify-self-center">
-            {mainTabs.map((it) => {
-              const warnLinks =
-                it.key === 'access'
-                  ? accessWarnLinks
-                  : it.key === 'clusterConfig'
-                    ? clusterConfigWarnLinks
-                    : undefined;
-              const active =
-                it.key === 'clusterConfig'
-                  ? inClusterConfig
-                  : it.key === 'quotaManagement'
-                    ? inQuotaManagement
-                    : tab === it.key;
-              return (
-                <button
-                  key={it.key}
-                  onClick={() => navigate(it.href)}
-                  className={`tab ${active ? 'active' : ''}`}
-                >
-                  {it.label}
-                  {warnLinks && warnLinks.length > 0 && (
-                    <WarnBadge className="ml-1.5" links={warnLinks} />
-                  )}
-                </button>
-              );
-            })}
-          </div>
-
-          <div aria-hidden="true" className="hidden min-w-0 lg:block" />
-        </div>
-
-        {inClusterConfig && (
-          <div className="tabs-bar max-w-full shrink-0 overflow-x-auto">
-            {clusterConfigSubTabs.map((it) => {
-              const warnLinks: WarnBadgeLink[] | undefined =
-                it.key === 'agentResources' && hasAgentResource === false
-                  ? [{ label: missingLabel(t('instanceDetail.resourcePanel.tabs.agent')), to: `/instances/${instanceId}/agent-resources`, openTarget: 'agentResourceAdd' as const }]
-                  : it.key === 'serviceResources' && hasPoolResource === false
-                    ? [{ label: missingLabel(t('instanceDetail.resourcePanel.tabs.serviceResource')), to: `/instances/${instanceId}/service-resources`, openTarget: 'serviceResourceAdd' as const }]
-                    : undefined;
-              return (
-                <button
-                  key={it.key}
-                  onClick={() => navigate(it.href)}
-                  className={`tab ${tab === it.key ? 'active' : ''}`}
-                >
-                  {it.label}
-                  {warnLinks && warnLinks.length > 0 && (
-                    <WarnBadge className="ml-1.5" links={warnLinks} />
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        )}
-
-        {inQuotaManagement && (
-          <div className="tabs-bar max-w-full shrink-0 overflow-x-auto">
-            {quotaSubTabs.map((it) => (
-              <button
-                key={it.key}
-                onClick={() => navigate(it.href)}
-                className={`tab ${activeQuotaTab === it.key ? 'active' : ''}`}
-              >
-                {it.label}
-              </button>
-            ))}
-          </div>
-        )}
-
+      <div className="flex min-w-0 shrink-0 flex-col gap-4">
+        <ClusterWorkspaceNavigation
+          instanceId={instanceId}
+          name={instance.data?.jiuwenclaw_name ?? instanceId}
+          section={section}
+        />
         <div className="w-full min-w-0 shrink-0">
+          {tab === 'agentResources' && <div className="flex flex-wrap items-center justify-end gap-2 mb-3"><button className="btn sm" onClick={() => navigate(clusterPagePath(instanceId, 'expert-packages', params))}>{zh ? '专家包管理' : 'Expert packages'} →</button></div>}
+          {tab === 'expertPackages' && <button className="btn ghost sm mb-3" onClick={() => navigate(clusterPagePath(instanceId, 'agent-resources', params))}>← {zh ? '返回 Agent绑定' : 'Back to Agent bindings'}</button>}
+          {tab === 'otherSettings' ? <ClusterOtherSettingsPanel instanceId={instanceId} /> : mock ? <MockClusterTabPanel tab={tab} /> : <>
           {tab === 'access' && <InstanceAccessPanel instanceId={instanceId} />}
-          {(tab === 'clusterConfig' || tab === 'agentResources') && (
+          {tab === 'agentResources' && (
             <InstanceAgentResourceTab instanceId={instanceId} />
           )}
           {tab === 'expertPackages' && <InstanceExpertPackagesTab instanceId={instanceId} />}
           {tab === 'serviceResources' && <InstanceServiceResourceTab instanceId={instanceId} />}
-          {tab === 'config' && <InstanceConfigPanel instanceId={instanceId} />}
           {tab === 'status' && (
             <InstanceDetailPanel
               instance={instance}
               onOpenEditConnectivity={handleOpenEditConnectivity}
               onRefresh={() => void instance.reload()}
+              onCheckConnectivity={() => void checkConnectivity()}
+              onOpenUserConsole={() => void openUserConsole()}
+              probing={probing}
+              openingConsole={openingConsole}
+              checkResult={checkResult}
             />
           )}
-          {inQuotaManagement && activeQuotaTab === 'workspaceQuota' && (
-            workspaceQuotaEnabled ? (
-              <WorkspaceQuotaPanel instanceId={instanceId} />
-            ) : (
-              <InstancePlaceholderPanel
-                titleKey="instanceDetail.workspaceQuota.title"
-                subtitleKey="instanceDetail.workspaceQuota.subtitle"
-              />
-            )
-          )}
-          {inQuotaManagement && activeQuotaTab === 'teamQuota' && (
-            <TeamQuotaPanel instanceId={instanceId} />
-          )}
-          {inQuotaManagement && activeQuotaTab === 'tokenQuota' && (
-            <InstancePlaceholderPanel
-              titleKey="instanceDetail.tokenQuota.title"
-              subtitleKey="instanceDetail.tokenQuota.subtitle"
-            />
-          )}
-          {tab === 'cost' && (
-            <InstancePlaceholderPanel
-              titleKey="instanceDetail.cost.title"
-              subtitleKey="instanceDetail.cost.subtitle"
-            />
-          )}
-          {tab === 'audit' && (
-            <InstancePlaceholderPanel
-              titleKey="instanceDetail.audit.title"
-              subtitleKey="instanceDetail.audit.subtitle"
-            />
-          )}
+          </>}
         </div>
+        <ClusterWorkspaceReturnAction instanceId={instanceId} />
+        <WorkspaceNote title={context.title}>{context.body}</WorkspaceNote>
       </div>
 
       <Modal

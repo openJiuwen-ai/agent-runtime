@@ -13,6 +13,7 @@ import httpx
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 
 from manager_server.infrastructure.config import settings
+from manager_server.infrastructure.dev_mode import offline_dev_enabled
 from manager_server.infrastructure.db import get_db_handler
 from manager_server.infrastructure.logger import get_logger
 from manager_server.manager_config_push.endpoint import (
@@ -134,6 +135,16 @@ async def gateway_request(
     """
     jid = str(jiuwenclaw_id or "").strip()
     endpoint = await require_gateway_endpoint(jid)
+    if offline_dev_enabled():
+        logger.warning(
+            "[LocalOffline] simulated gateway request: %s %s instance=%s", method.upper(), path, jid
+        )
+        return {
+            "success_flag": True,
+            "result": {"items": [], "simulated": True},
+            "transport": "local-offline",
+            "simulated": True,
+        }
     payload = dict(business or {})
     network_target = None
     if path.startswith("/api/v1/a2a-outbound-templates") and _contains_credential_replace(
@@ -203,6 +214,11 @@ async def runtime_request(
     """
     jid = str(jiuwenclaw_id or "").strip()
     endpoint = await require_runtime_endpoint(jid)
+    if offline_dev_enabled():
+        logger.warning(
+            "[LocalOffline] simulated runtime request: %s %s instance=%s", method.upper(), path, jid
+        )
+        return {"ok": True, "simulated": True, "transport": "local-offline"}
     resp = await http_request(
         jid,
         "runtime",

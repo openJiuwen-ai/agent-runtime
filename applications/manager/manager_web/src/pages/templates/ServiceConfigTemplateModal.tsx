@@ -10,8 +10,9 @@ import { LimitedTextInput } from '../../components/LimitedTextInput';
 import { Modal, ModalCancelButton } from '../../components/Modal';
 import { useFormDirty } from '../../hooks/useFormDirty';
 import { ContainerTemplateApi, ServiceConfigTemplateApi, ApiError } from '../../services/api';
-import { useRouter } from '../../router';
 import { toast } from '../../stores/uiStore';
+import { bumpGuideRevision } from '../../stores/guideStore';
+import { ContainerTemplateModal } from './ContainerTemplateModal';
 import { isValidUnixAbsPath } from '../../utils/path';
 import { findUnsafeTextField } from '../../utils/safeText';
 import type {
@@ -160,12 +161,11 @@ interface Props {
   /** 编辑目标；null = 新建 */
   template: ServiceConfigTemplate | null;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (saved: ServiceConfigTemplate) => void;
 }
 
 export function ServiceConfigTemplateModal({ open, template, onClose, onSaved }: Props) {
   const { t } = useTranslation();
-  const { navigate } = useRouter();
   const { markClean, isDirty } = useFormDirty(open);
   const [form, setForm] = useState<FormState>(emptyForm);
   const [saving, setSaving] = useState(false);
@@ -174,6 +174,9 @@ export function ServiceConfigTemplateModal({ open, template, onClose, onSaved }:
   const [sourceTemplateId, setSourceTemplateId] = useState<string | undefined>();
   /** 容器模板目录（绑定选择器数据源） */
   const [containerOptions, setContainerOptions] = useState<ContainerTemplate[]>([]);
+  const [containerModalOpen, setContainerModalOpen] = useState(false);
+
+  useEffect(() => { if (!open) setContainerModalOpen(false); }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -306,13 +309,11 @@ export function ServiceConfigTemplateModal({ open, template, onClose, onSaved }:
 
     setSaving(true);
     try {
-      if (template) {
-        await ServiceConfigTemplateApi.update(template.template_id, body);
-      } else {
-        await ServiceConfigTemplateApi.create(body);
-      }
+      const saved = template
+        ? await ServiceConfigTemplateApi.update(template.template_id, body)
+        : await ServiceConfigTemplateApi.create(body);
       toast('success', t('success.saved'));
-      onSaved();
+      onSaved(saved);
     } catch (e) {
       toast(
         'danger',
@@ -326,8 +327,9 @@ export function ServiceConfigTemplateModal({ open, template, onClose, onSaved }:
   };
 
   return (
+    <>
     <Modal
-      open={open}
+      open={open && !containerModalOpen}
       title={template ? t('serviceConfigTemplate.edit') : t('serviceConfigTemplate.new')}
       onClose={onClose}
       dirty={isDirty(form)}
@@ -359,6 +361,9 @@ export function ServiceConfigTemplateModal({ open, template, onClose, onSaved }:
             onChange={(v) => update('description', v)}
           />
         </div>
+        <details className="md:col-span-2 runtime-advanced">
+          <summary>{t('redesign.advancedDeployment')}</summary>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 mt-4">
         <div>
           <FieldLabel>{t('serviceConfigTemplate.nodeName')}</FieldLabel>
           <LimitedTextInput
@@ -403,6 +408,9 @@ export function ServiceConfigTemplateModal({ open, template, onClose, onSaved }:
             onChange={(v) => update('kubeconfig', v)}
           />
         </div>
+          </div>
+        </details>
+        <GroupLabel>{t('redesign.capacityTimeout')}</GroupLabel>
         <div>
           <label className="label">{t('serviceConfigTemplate.readyTimeout')}</label>
           <input
@@ -518,9 +526,10 @@ export function ServiceConfigTemplateModal({ open, template, onClose, onSaved }:
               </div>
             )}
           <div>
-            <button type="button" className="btn ghost sm" onClick={() => navigate('/container-templates')}>
-              {t('serviceConfigTemplate.goCreateContainerTemplate')}
+            <button type="button" className="btn ghost sm" onClick={() => setContainerModalOpen(true)}>
+              + {t('containerTemplate.new')}
             </button>
+            <span className="ml-2 text-[11px] text-muted">创建后回到这里继续编辑，当前填写内容会保留。</span>
           </div>
         </div>
 
@@ -583,5 +592,17 @@ export function ServiceConfigTemplateModal({ open, template, onClose, onSaved }:
         </div>
       </div>
     </Modal>
+    <ContainerTemplateModal
+      open={open && containerModalOpen}
+      template={null}
+      onClose={() => setContainerModalOpen(false)}
+      onSaved={(saved) => {
+        setContainerOptions((current) => [...current.filter((item) => item.template_id !== saved.template_id), saved]);
+        if (!form.main_container_id) update('main_container_id', saved.container_id);
+        setContainerModalOpen(false);
+        bumpGuideRevision();
+      }}
+    />
+    </>
   );
 }

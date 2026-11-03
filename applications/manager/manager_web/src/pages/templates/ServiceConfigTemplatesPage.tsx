@@ -19,12 +19,14 @@ import { toast } from '../../stores/uiStore';
 import { bumpGuideRevision } from '../../stores/guideStore';
 import { formatTime, truncate } from '../../utils/format';
 import { useRouter } from '../../router';
+import { runtimeCatalogPath, runtimeClusterReturnPath } from '../../utils/runtimeResourceNavigation';
 import {
   downloadJson,
   exportFilename,
   exportTemplateRawdata,
   parseConfigSyncImport,
 } from '../../utils/serviceConfigExport';
+import { WorkspaceNote } from '../../components/WorkspaceNote';
 
 type ServiceConfigTemplateSortField =
   | 'template_name'
@@ -44,7 +46,11 @@ export function ServiceConfigTemplatesPage({
   autoEditId?: string;
 }) {
   const { t } = useTranslation();
-  const { navigate } = useRouter();
+  const { params, navigate } = useRouter();
+  const catalogPath = runtimeCatalogPath('service-config-templates', params);
+  const clusterReturnPath = runtimeClusterReturnPath(params);
+  const preparedRuntime = params.get('preparedRuntime');
+  const preparedReturnPath = preparedRuntime ? runtimeClusterReturnPath(params, preparedRuntime) : null;
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const { searchInput, setSearchInput, searchQuery } = useListSearch();
@@ -96,12 +102,14 @@ export function ServiceConfigTemplatesPage({
   const importInputRef = useRef<HTMLInputElement>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<ServiceConfigTemplate | null>(null);
-  const [autoHandled, setAutoHandled] = useState(false);
+  const handledAutoAction = useRef('');
 
   /** 经由 /new 或 /:templateId 进入时自动打开弹窗；关闭后回到列表 URL */
   useEffect(() => {
-    if (autoHandled) return;
-    setAutoHandled(true);
+    const action = autoNew ? 'new' : autoEditId || '';
+    if (!action) { handledAutoAction.current = ''; return; }
+    if (handledAutoAction.current === action) return;
+    handledAutoAction.current = action;
     if (autoNew) {
       setEditing(null);
       setModalOpen(true);
@@ -120,14 +128,30 @@ export function ServiceConfigTemplatesPage({
               detail: e instanceof ApiError ? e.detail : (e as Error).message,
             }),
           );
-          navigate('/service-config-templates');
+          navigate(catalogPath, { replace: true });
         });
     }
-  }, [autoNew, autoEditId, autoHandled, navigate, t]);
+  }, [autoNew, autoEditId, navigate, t, catalogPath]);
 
   const closeAndBack = () => {
     setModalOpen(false);
-    if (autoNew || autoEditId) navigate('/service-config-templates');
+    if (autoNew || autoEditId) navigate(catalogPath, { replace: true });
+  };
+
+  const recordPreparedRuntime = (saved: ServiceConfigTemplate) => {
+    const context = new URLSearchParams(params);
+    if (clusterReturnPath && saved.enabled) context.set('preparedRuntime', saved.template_id);
+    else if (context.get('preparedRuntime') === saved.template_id) context.delete('preparedRuntime');
+    if (clusterReturnPath || autoNew || autoEditId) {
+      navigate(runtimeCatalogPath('service-config-templates', context), { replace: true });
+    }
+  };
+
+  const clearPreparedRuntime = (id: string) => {
+    if (params.get('preparedRuntime') !== id) return;
+    const context = new URLSearchParams(params);
+    context.delete('preparedRuntime');
+    navigate(runtimeCatalogPath('service-config-templates', context), { replace: true });
   };
 
   useEffect(() => {
@@ -153,6 +177,24 @@ export function ServiceConfigTemplatesPage({
     })();
   };
 
+  const handleDiscoverServerConfig = async () => {
+    setImporting(true);
+    try {
+      const result = await ServiceConfigTemplateApi.discoverAgentserverConfig();
+      if (!result.found || result.config === undefined) {
+        toast('danger', result.configured ? t('serviceConfigTemplate.serverConfigNotFound', { defaultValue: '服务器未找到 agentserver.json，请检查部署工具目录配置。' }) : t('serviceConfigTemplate.serverConfigUnavailable', { defaultValue: '服务端未配置部署工具目录；请使用本地文件导入。' }));
+        return;
+      }
+      const { body, templateCount } = parseConfigSyncImport(result.config);
+      const saved = await ServiceConfigTemplateApi.create(body);
+      recordPreparedRuntime(saved);
+      toast('success', templateCount > 1 ? t('serviceConfigTemplate.importOkFirstOfMany', { count: templateCount }) : t('serviceConfigTemplate.importOk'));
+      void reload(); bumpGuideRevision();
+    } catch (err) {
+      toast('danger', t('serviceConfigTemplate.importFailed', { detail: err instanceof ApiError ? err.detail : err instanceof Error ? err.message : String(err) }));
+    } finally { setImporting(false); }
+  };
+
   const handleImportFile = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
@@ -165,7 +207,8 @@ export function ServiceConfigTemplatesPage({
           const text = String(reader.result ?? '');
           const parsed = JSON.parse(text) as unknown;
           const { body, templateCount } = parseConfigSyncImport(parsed);
-          await ServiceConfigTemplateApi.create(body);
+          const saved = await ServiceConfigTemplateApi.create(body);
+          recordPreparedRuntime(saved);
           toast(
             'success',
             templateCount > 1
@@ -206,6 +249,7 @@ export function ServiceConfigTemplatesPage({
     setTogglingId(row.template_id);
     try {
       await ServiceConfigTemplateApi.update(row.template_id, { enabled });
+      if (!enabled) clearPreparedRuntime(row.template_id);
       if (enabledFilter !== '' && enabled !== (enabledFilter === 'true')) {
         setItems((list) => list.filter((item) => item.template_id !== row.template_id));
       }
@@ -223,6 +267,15 @@ export function ServiceConfigTemplatesPage({
   return (
     <>
       <div className="flex min-w-0 flex-col gap-4">
+        {clusterReturnPath && (
+          <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+            <span className="text-muted">正在为当前集群准备运行规格。保存模板后，还需要返回集群添加运行资源绑定。</span>
+            <div className="flex flex-wrap gap-2">
+              <button className="btn sm" onClick={() => navigate(clusterReturnPath)}>← 返回集群运行资源</button>
+              {preparedReturnPath && <button className="btn sm primary" onClick={() => navigate(preparedReturnPath)}>绑定刚保存的运行规格 →</button>}
+            </div>
+          </div>
+        )}
         <div className="page-header w-full min-w-0 flex-wrap items-start gap-y-3">
           <div className="min-w-[7.5rem] max-w-[20rem] shrink-0 sm:max-w-[32rem]">
             <div className="page-title truncate" title={t('serviceConfigTemplate.title')}>
@@ -249,6 +302,9 @@ export function ServiceConfigTemplatesPage({
             className="hidden"
             onChange={handleImportFile}
           />
+          <button className="btn sm" disabled={importing} onClick={() => void handleDiscoverServerConfig()} title={t('serviceConfigTemplate.discoverServerHint', { defaultValue: '从 Manager 服务端读取部署期间生成的 agentserver.json' })}>
+            {t('serviceConfigTemplate.discoverServer', { defaultValue: '从服务器发现' })}
+          </button>
           <button
             className="btn sm"
             disabled={importing}
@@ -268,6 +324,24 @@ export function ServiceConfigTemplatesPage({
           </button>
         </div>
       </div>
+
+      <section className="environment-overview-grid">
+        <article className="card environment-overview-card">
+          <div className="environment-overview-card__label">已启用运行池</div>
+          <strong>{items.filter((item) => item.enabled).length}</strong>
+          <p>可在集群配置工作台中绑定到目标服务实例。</p>
+        </article>
+        <article className="card environment-overview-card">
+          <div className="environment-overview-card__label">运行规格模板</div>
+          <strong>{items.length}</strong>
+          <p>由容器模板组装成可调度、可扩缩的运行池方案。</p>
+        </article>
+        <article className="card environment-overview-card environment-overview-card--accent">
+          <div className="environment-overview-card__label">生效关系</div>
+          <strong>3 层</strong>
+          <p>容器模板 → 运行规格 → 服务实例 → Agent。</p>
+        </article>
+      </section>
 
       <div className="flex w-full min-w-0 shrink-0 flex-col gap-4">
       <div className="card !p-0">
@@ -358,6 +432,16 @@ export function ServiceConfigTemplatesPage({
                   <td className="mono text-[11px] text-muted whitespace-nowrap">{formatTime(row.updated_at)}</td>
                   <td className="whitespace-nowrap min-w-[12rem]">
                     <div className="flex items-center gap-1">
+                      {clusterReturnPath && (
+                        <button
+                          className="btn sm primary"
+                          disabled={!row.enabled}
+                          title={row.enabled ? '返回集群填写绑定范围并保存' : '请先启用此运行规格'}
+                          onClick={() => { const target = runtimeClusterReturnPath(params, row.template_id); if (target) navigate(target); }}
+                        >
+                          绑定到当前集群
+                        </button>
+                      )}
                       <button
                         className="btn sm ghost"
                         onClick={() => {
@@ -394,6 +478,9 @@ export function ServiceConfigTemplatesPage({
           }}
         />
       )}
+      <WorkspaceNote title="运行规格决定 Agent 使用哪套运行资源" action={<button className="btn sm" onClick={() => navigate(runtimeCatalogPath('container-templates', params))}>管理容器模板 →</button>}>
+        运行规格由容器模板组装而成，必须在具体服务实例中启用后，Agent 才能使用它运行。
+      </WorkspaceNote>
       </div>
       </div>
 
@@ -401,11 +488,11 @@ export function ServiceConfigTemplatesPage({
         open={modalOpen}
         template={editing}
         onClose={closeAndBack}
-        onSaved={() => {
+        onSaved={(saved) => {
           setModalOpen(false);
           bumpGuideRevision();
           void reload();
-          if (autoNew || autoEditId) navigate('/service-config-templates');
+          recordPreparedRuntime(saved);
         }}
       />
 
@@ -417,6 +504,7 @@ export function ServiceConfigTemplatesPage({
           if (!delTarget) return;
           try {
             await ServiceConfigTemplateApi.remove(delTarget.template_id);
+            clearPreparedRuntime(delTarget.template_id);
             toast('success', t('success.deleted'));
             void reload();
             bumpGuideRevision();
