@@ -20,6 +20,7 @@ from manager_server.core.template.a2a_discovery_settings import A2ADiscoverySett
 from manager_server.core.template.embedding_template import (
     EmbeddingTemplateService,
 )
+from manager_server.core.template.expert_package_template import ExpertPackageTemplateService
 from manager_server.core.template.extension_config_template import (
     ExtensionConfigTemplateService,
 )
@@ -56,6 +57,9 @@ from manager_server.schemas.template_schemas import (
     EmbeddingTemplateCreateBody,
     EmbeddingTemplateListQuery,
     EmbeddingTemplateUpdateBody,
+    ExpertPackageTemplateCreateBody,
+    ExpertPackageTemplateListQuery,
+    ExpertPackageTemplateUpdateBody,
     ExtensionConfigTemplateCreateBody,
     ExtensionConfigTemplateListQuery,
     ExtensionConfigTemplateUpdateBody,
@@ -106,6 +110,10 @@ def _extension_config_template_svc(handler: DBHandler) -> ExtensionConfigTemplat
 
 def _skill_prebuilt_template_svc(handler: DBHandler) -> SkillPrebuiltTemplateService:
     return SkillPrebuiltTemplateService(handler)
+
+
+def _expert_package_template_svc(handler: DBHandler) -> ExpertPackageTemplateService:
+    return ExpertPackageTemplateService(handler)
 
 
 def _permissions_template_svc(handler: DBHandler) -> PermissionsTemplateService:
@@ -738,6 +746,86 @@ async def delete_skill_prebuilt_template(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not ok:
         raise HTTPException(status_code=404, detail="skill prebuilt template not found")
+    return ResponseModel(
+        code=200, message="success", data={"deleted": True, "template_id": template_id}
+    )
+
+
+# --- expert_package_template ---
+
+
+@templates_router.post("/expert-package-templates", response_model=ResponseModel)
+async def create_expert_package_template(
+    body: ExpertPackageTemplateCreateBody,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    svc = _expert_package_template_svc(handler)
+    try:
+        data = await svc.create(body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ResponseModel(code=200, message="success", data=data.model_dump())
+
+
+@templates_router.get("/expert-package-templates", response_model=ResponseModel)
+async def list_expert_package_templates(
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+    query: Annotated[ExpertPackageTemplateListQuery, Query()],
+):
+    svc = _expert_package_template_svc(handler)
+    try:
+        data = await svc.list_templates(query)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ResponseModel(code=200, message="success", data=data)
+
+
+@templates_router.get(
+    "/expert-package-templates/{template_id}", response_model=ResponseModel
+)
+async def get_expert_package_template(
+    template_id: TemplateIdPath,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    svc = _expert_package_template_svc(handler)
+    row = await svc.get(template_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="expert package template not found")
+    return ResponseModel(code=200, message="success", data=row.model_dump())
+
+
+@templates_router.patch(
+    "/expert-package-templates/{template_id}", response_model=ResponseModel
+)
+async def update_expert_package_template(
+    template_id: TemplateIdPath,
+    body: ExpertPackageTemplateUpdateBody,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    svc = _expert_package_template_svc(handler)
+    try:
+        row = await svc.update(template_id, body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if row is None:
+        raise HTTPException(status_code=404, detail="expert package template not found")
+    return ResponseModel(code=200, message="success", data=row.model_dump())
+
+
+@templates_router.delete(
+    "/expert-package-templates/{template_id}", response_model=ResponseModel
+)
+async def delete_expert_package_template(
+    template_id: TemplateIdPath,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    svc = _expert_package_template_svc(handler)
+    try:
+        ok = await svc.delete(template_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not ok:
+        raise HTTPException(status_code=404, detail="expert package template not found")
     return ResponseModel(
         code=200, message="success", data={"deleted": True, "template_id": template_id}
     )

@@ -47,8 +47,8 @@ export function Sidebar() {
     '/safety-guardrails',
     '/extension-config-templates',
     '/mcp-templates',
+    '/expert-package-templates',
     '/a2a-management',
-    '/expert-packages',
   ];
   const agentResourceActive = agentResourceChildPaths.some(
     (p) => path === p || path.startsWith(`${p}/`),
@@ -191,14 +191,14 @@ export function Sidebar() {
       ),
     },
     {
-      key: 'expert-packages',
-      pathPrefix: '/expert-packages',
-      href: '/expert-packages',
+      key: 'expert-package-templates',
+      pathPrefix: '/expert-package-templates',
+      href: '/expert-package-templates',
       label: t('nav.expertPackages'),
       icon: (
         <svg className="w-4 h-4 nav-item__icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z" />
-          <path strokeLinecap="round" strokeLinejoin="round" d="M12 12l8-4.5M12 12v9M12 12L4 7.5" />
+          <path strokeLinecap="round" strokeLinejoin="round" d="M4 7h16M4 12h16M4 17h10" />
+          <circle cx="18" cy="17" r="2" />
         </svg>
       ),
     },

@@ -113,6 +113,7 @@ export function ConfigGuideMenu() {
     { label: t('nav.a2aManagement'), to: '/a2a-management' },
     { label: t('nav.extensionTemplates'), to: '/extension-config-templates' },
     { label: t('nav.mcpTemplates'), to: '/mcp-templates' },
+    { label: t('nav.expertPackages'), to: '/expert-package-templates' },
   ];
 
   const clusterTabs = selectedId

@@ -1078,3 +1078,77 @@ class ServiceConfigTemplateOut(BaseModel):
     data: dict[str, Any] | None
     created_at: str | None
     updated_at: str | None
+
+
+ExpertPackageKind = Literal["agent_template", "agent_group"]
+
+
+class ExpertPackageItem(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    kind: ExpertPackageKind
+    asset_id: str = Field(..., min_length=1, max_length=128)
+    version: str = Field(default="", max_length=64)
+
+
+def _assign_normalized_packages(model: Any) -> None:
+    from manager_server.core.template.expert_package_template import normalize_package_items
+
+    if model.packages is None:
+        return
+    model.packages = [ExpertPackageItem(**item) for item in normalize_package_items(model.packages)]
+
+
+class ExpertPackageTemplateCreateBody(SafeTextMixin):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    template_name: str = Field(..., min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=512)
+    packages: list[ExpertPackageItem] = Field(..., min_length=1)
+    enabled: bool = True
+
+    @model_validator(mode="after")
+    def _normalize_packages(self) -> ExpertPackageTemplateCreateBody:
+        _assign_normalized_packages(self)
+        return self
+
+
+class ExpertPackageTemplateUpdateBody(SafeTextMixin):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    template_name: str | None = Field(default=None, min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=512)
+    packages: list[ExpertPackageItem] | None = Field(default=None, min_length=1)
+    enabled: bool | None = None
+
+    @model_validator(mode="after")
+    def _normalize_packages(self) -> ExpertPackageTemplateUpdateBody:
+        _assign_normalized_packages(self)
+        return self
+
+
+class ExpertPackageTemplateListQuery(BaseModel):
+    page: int = Field(1, ge=1)
+    page_size: int = Field(20, ge=1, le=200)
+    enabled: bool | None = None
+    search: str | None = Field(
+        default=None,
+        description="按 template_id、template_name、description 和 packages 里的 Hub 标识模糊搜索",
+    )
+    sort_by: str | None = Field(
+        default=None,
+        description="排序字段：template_name、description、updated_at",
+    )
+    sort_order: str | None = Field(default=None, description="排序方向：asc、desc")
+
+
+class ExpertPackageTemplateOut(BaseModel):
+    id: int
+    template_id: str
+    template_name: str
+    description: str | None
+    packages: list[ExpertPackageItem]
+    enabled: bool
+    reference_count: int = 0
+    created_at: str | None
+    updated_at: str | None

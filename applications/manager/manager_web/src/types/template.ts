@@ -120,6 +120,40 @@ export interface ExtensionConfigTemplateCreateBody {
 
 export type ExtensionConfigTemplateUpdateBody = Partial<ExtensionConfigTemplateCreateBody>;
 
+export type ExpertPackageKind = 'agent_template' | 'agent_group';
+
+export interface ExpertPackageItem {
+  kind: ExpertPackageKind;
+  asset_id: string;
+  version: string;
+}
+
+export interface ExpertPackageTemplate {
+  id: number;
+  template_id: string;
+  template_name: string;
+  description?: string | null;
+  packages: ExpertPackageItem[];
+  enabled: boolean;
+  reference_count: number;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface ExpertPackageTemplateCreateBody {
+  template_name: string;
+  description?: string;
+  packages: ExpertPackageItem[];
+  enabled?: boolean;
+}
+
+export type ExpertPackageTemplateUpdateBody = Partial<{
+  template_name: string;
+  description: string | null;
+  packages: ExpertPackageItem[];
+  enabled: boolean;
+}>;
+
 export interface SkillPrebuiltTemplate {
   id: number;
   template_id: string;

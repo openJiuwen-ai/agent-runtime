@@ -122,6 +122,15 @@ class Settings(BaseSettings):
         validation_alias="SKILL_UPLOAD_APPROVAL_ENABLED",
     )
 
+    # Hub 平台包清单。与用户面同一变量，不跟某个集群走。
+    team_skills_hub_base_url: str = Field(
+        default="https://swarmskills.openjiuwen.com",
+        validation_alias="TEAM_SKILLS_HUB_BASE_URL",
+    )
+    team_skills_hub_timeout: float = Field(
+        default=30.0, validation_alias="TEAM_SKILLS_HUB_TIMEOUT"
+    )
+
     @property
     def host(self) -> str:
         return self.rest_host

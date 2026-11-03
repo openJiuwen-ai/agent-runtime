@@ -79,6 +79,12 @@ _SIMPLE_KINDS = (
     CatalogKind("model", "model_template", "Model", ("model_template",)),
     CatalogKind("embedding", "embedding_template", "EmbeddingModel", ("embedding_template",)),
     CatalogKind("skill", "skill_prebuilt_template", "PrebuiltSkill", ("skill_prebuilt_template",)),
+    CatalogKind(
+        "expert-package",
+        "expert_package_template",
+        "ExpertPackage",
+        ("expert_package_template",),
+    ),
     CatalogKind("guardrail", "permissions_template", "SafetyGuardrail", ("permissions_template",)),
     CatalogKind(
         "extension", "extension_config_template", "ExtensionConfig", ("extension_config_template",)
@@ -91,6 +97,7 @@ _AGENT_DEP_TABLES = (
     "model_template",
     "embedding_template",
     "skill_prebuilt_template",
+    "expert_package_template",
     "extension_config_template",
     "mcp_template",
     "permissions_template",
