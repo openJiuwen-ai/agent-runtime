@@ -21,6 +21,9 @@ function approvalTypeLabel(
   if (businessType === 'workspace_quota_expand') {
     return t('approvals.types.workspace_quota_expand');
   }
+  if (businessType === 'skill_upload_permission') {
+    return t('approvals.types.skill_upload_permission');
+  }
   return businessType;
 }
 

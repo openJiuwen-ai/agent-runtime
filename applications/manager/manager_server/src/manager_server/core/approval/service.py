@@ -13,6 +13,10 @@ from sqlalchemy import insert, select, update
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection
 
+from manager_server.core.instance_access.instance_grant_service import (
+    UPLOAD_POLICY_ALLOW,
+    apply_upload_permission_in_tx,
+)
 from manager_server.core.quota.workspace_quota_policy import (
     APPROVAL_POLICY_PRIORITY,
     SOURCE_APPROVAL,
@@ -24,16 +28,19 @@ from manager_server.models.approval_models import (
     APPROVAL_ORDER_TABLE_DEF,
     APPROVAL_RECORD_TABLE_DEF,
 )
+from manager_server.models.instance_access_models import INSTANCE_GRANT_TABLE_DEF
 from manager_server.models.quota_models import WORKSPACE_QUOTA_POLICY_TABLE_DEF
 
 _ORDER_TABLE = APPROVAL_ORDER_TABLE_DEF.table_name
 _RECORD_TABLE = APPROVAL_RECORD_TABLE_DEF.table_name
 _POLICY_TABLE = WORKSPACE_QUOTA_POLICY_TABLE_DEF.table_name
+_GRANT_TABLE = INSTANCE_GRANT_TABLE_DEF.table_name
 _CAP = 100_000
 _SUBMIT_TRANSACTION_ATTEMPTS = 5
 _log = get_logger(__name__)
 
 WORKSPACE_QUOTA_EXPAND = "workspace_quota_expand"
+SKILL_UPLOAD_PERMISSION = "skill_upload_permission"
 VALID_STATUSES = frozenset({"pending", "approved", "rejected", "cancelled"})
 VALID_ACTIONS = frozenset({"approve", "reject"})
 _FALLBACK_LIMIT_BYTES = 10 * 1024**4
@@ -299,6 +306,163 @@ class ApprovalService:
             reason=reason,
             approver_id=approver_id,
         )
+
+    async def submit_skill_upload_permission(
+        self,
+        *,
+        applicant_id: str,
+        group_id: str,
+        bot_id: str,
+        cluster_id: str,
+        reason: str,
+        approver_id: str,
+    ) -> dict[str, Any]:
+        """提交 Skill 上传资格申请；审批人校验与配额扩容申请一致。"""
+        applicant_id = applicant_id.strip()
+        group_id = group_id.strip()
+        bot_id = bot_id.strip()
+        cluster_id = cluster_id.strip()
+        reason = reason.strip()
+        approver_id = approver_id.strip()
+        if not all((applicant_id, bot_id, cluster_id, reason, approver_id)):
+            raise ValueError(
+                "applicant, bot, cluster, reason and approver are required"
+            )
+        if len(reason) > 1024:
+            raise ValueError("reason must not exceed 1024 characters")
+        if approver_id == applicant_id:
+            raise ValueError("applicant cannot designate self as approver")
+        await self._ensure_valid_approver(approver_id)
+        return await self._submit_skill_upload_permission_transactionally(
+            applicant_id=applicant_id,
+            group_id=group_id,
+            bot_id=bot_id,
+            cluster_id=cluster_id,
+            reason=reason,
+            approver_id=approver_id,
+        )
+
+    async def _submit_skill_upload_permission_transactionally(
+        self,
+        *,
+        applicant_id: str,
+        group_id: str,
+        bot_id: str,
+        cluster_id: str,
+        reason: str,
+        approver_id: str,
+    ) -> dict[str, Any]:
+        """串行化同一申请键的检查与写入，避免并发创建重复未结束单。"""
+        if not isinstance(self._h, SQLAlchemyHandler):
+            raise TypeError("approval submission requires a SQLAlchemy database handler")
+        engine = self._h.get_engine()
+        if engine is None:
+            raise RuntimeError("database must be connected before submitting approval")
+        table = self._h.get_table(_ORDER_TABLE)
+        dialect = engine.dialect.name
+
+        for attempt in range(_SUBMIT_TRANSACTION_ATTEMPTS):
+            try:
+                async with engine.connect() as connection:
+                    if dialect == "sqlite":
+                        await connection.exec_driver_sql("BEGIN IMMEDIATE")
+                        try:
+                            result = await self._submit_skill_upload_permission_in_transaction(
+                                connection,
+                                table,
+                                applicant_id=applicant_id,
+                                group_id=group_id,
+                                bot_id=bot_id,
+                                cluster_id=cluster_id,
+                                reason=reason,
+                                approver_id=approver_id,
+                            )
+                        except BaseException:
+                            await connection.rollback()
+                            raise
+                        await connection.commit()
+                        return result
+
+                    serial_connection = await connection.execution_options(
+                        isolation_level="SERIALIZABLE"
+                    )
+                    async with serial_connection.begin():
+                        result = await self._submit_skill_upload_permission_in_transaction(
+                            serial_connection,
+                            table,
+                            applicant_id=applicant_id,
+                            group_id=group_id,
+                            bot_id=bot_id,
+                            cluster_id=cluster_id,
+                            reason=reason,
+                            approver_id=approver_id,
+                        )
+                    return result
+            except DBAPIError as exc:
+                if (
+                    attempt + 1 >= _SUBMIT_TRANSACTION_ATTEMPTS
+                    or not _is_retryable_transaction_error(exc)
+                ):
+                    raise
+                await asyncio.sleep(0.02 * (2**attempt))
+
+        raise RuntimeError("approval submission transaction retries exhausted")
+
+    @staticmethod
+    async def _submit_skill_upload_permission_in_transaction(
+        connection: AsyncConnection,
+        table: Any,
+        *,
+        applicant_id: str,
+        group_id: str,
+        bot_id: str,
+        cluster_id: str,
+        reason: str,
+        approver_id: str,
+    ) -> dict[str, Any]:
+        query = (
+            select(table)
+            .where(
+                table.c.applicant_id == applicant_id,
+                table.c.cluster_id == cluster_id,
+                table.c.business_type == SKILL_UPLOAD_PERMISSION,
+                table.c.status == "pending",
+            )
+            .with_for_update()
+        )
+        pending = (await connection.execute(query)).mappings().first()
+        if pending is not None:
+            return {
+                "order_num": str(pending["order_num"]),
+                "status": "pending",
+                "reused": True,
+            }
+
+        now = utc_now()
+        order_num = f"apr_{new_uuid4().replace('-', '')}"
+        await connection.execute(
+            insert(table).values(
+                cluster_id=cluster_id,
+                order_num=order_num,
+                title="Skill 上传权限申请",
+                applicant_id=applicant_id,
+                approver_id=approver_id,
+                group_id=group_id,
+                bot_id=bot_id,
+                status="pending",
+                finished_at=None,
+                business_type=SKILL_UPLOAD_PERMISSION,
+                reason=reason,
+                apply_data={"capability": "skill_upload"},
+                result_data=None,
+                data=None,
+                created_at=now,
+                created_by=applicant_id,
+                updated_at=now,
+                updated_by=applicant_id,
+            )
+        )
+        return {"order_num": order_num, "status": "pending", "reused": False}
 
     async def _submit_workspace_quota_expand_transactionally(
         self,
@@ -567,6 +731,42 @@ class ApprovalService:
         if approver_id not in set(allowed):
             raise ValueError("approver must hold approval:act permission")
 
+    async def latest_open_order(
+        self, *, applicant_id: str, cluster_id: str, business_type: str
+    ) -> dict[str, Any] | None:
+        """最近一张 pending / rejected 的单（撤回不计），供资格状态展示。"""
+        rows = await self._h.list_records(
+            _ORDER_TABLE,
+            {
+                "applicant_id": applicant_id.strip(),
+                "cluster_id": cluster_id.strip(),
+                "business_type": business_type,
+            },
+            limit=_CAP,
+            offset=0,
+        )
+        rows = [
+            row
+            for row in rows
+            if str(_g(row, "status") or "") in {"pending", "rejected"}
+        ]
+        if not rows:
+            return None
+        rows.sort(key=lambda row: _g(row, "id") or 0, reverse=True)
+        row = rows[0]
+        order_num = str(_g(row, "order_num") or "")
+        status = str(_g(row, "status") or "")
+        reject_comment = ""
+        if status == "rejected":
+            comments = await self._latest_reject_comments([order_num])
+            reject_comment = comments.get(order_num) or ""
+        return {
+            "order_num": order_num,
+            "status": status,
+            "reject_comment": reject_comment,
+            "created_at": iso_datetime(_g(row, "created_at")),
+        }
+
     async def _latest_reject_comments(self, order_nums: list[str]) -> dict[str, str]:
         """取各单最近一次驳回意见，供申请人补正时参考。"""
         comments: dict[str, str] = {}
@@ -740,6 +940,17 @@ class ApprovalService:
             )
             return {"order_num": order_num, "status": "rejected", "policy_id": None}
 
+        business_type = str(_g(row, "business_type") or "")
+        if business_type == SKILL_UPLOAD_PERMISSION:
+            # 权限类审批在事务内自行写审批记录与单据状态，不再走下方公共写入。
+            return await self._approve_skill_upload_permission(
+                order_num=order_num,
+                operator_id=operator_id,
+                comment=comment,
+            )
+
+        # 其余业务类型沿用原有配额批准路径：配额单的 business_type 一律有值，
+        # 这里不为未知类型新增失败分支，避免改变既有行为。
         policy, sync_result = await self._apply_workspace_quota(row, operator_id)
         now = utc_now()
         await self._append_record(
@@ -795,6 +1006,147 @@ class ApprovalService:
             },
         )
         return {"order_num": order_num, "status": "cancelled"}
+
+    async def _approve_skill_upload_permission(
+        self,
+        *,
+        order_num: str,
+        operator_id: str,
+        comment: str | None,
+    ) -> dict[str, Any]:
+        """批准：授权写入、审批记录与单据状态在同一事务内完成。"""
+        if not isinstance(self._h, SQLAlchemyHandler):
+            raise TypeError("approval requires a SQLAlchemy database handler")
+        engine = self._h.get_engine()
+        if engine is None:
+            raise RuntimeError("database must be connected before approving")
+        tables = {
+            "order": self._h.get_table(_ORDER_TABLE),
+            "record": self._h.get_table(_RECORD_TABLE),
+            "grant": self._h.get_table(_GRANT_TABLE),
+        }
+        dialect = engine.dialect.name
+
+        for attempt in range(_SUBMIT_TRANSACTION_ATTEMPTS):
+            try:
+                async with engine.connect() as connection:
+                    if dialect == "sqlite":
+                        await connection.exec_driver_sql("BEGIN IMMEDIATE")
+                        try:
+                            result = await self._approve_skill_upload_permission_in_transaction(
+                                connection,
+                                tables,
+                                order_num=order_num,
+                                operator_id=operator_id,
+                                comment=comment,
+                            )
+                        except BaseException:
+                            await connection.rollback()
+                            raise
+                        await connection.commit()
+                        return result
+
+                    serial_connection = await connection.execution_options(
+                        isolation_level="SERIALIZABLE"
+                    )
+                    async with serial_connection.begin():
+                        result = await self._approve_skill_upload_permission_in_transaction(
+                            serial_connection,
+                            tables,
+                            order_num=order_num,
+                            operator_id=operator_id,
+                            comment=comment,
+                        )
+                    return result
+            except DBAPIError as exc:
+                if (
+                    attempt + 1 >= _SUBMIT_TRANSACTION_ATTEMPTS
+                    or not _is_retryable_transaction_error(exc)
+                ):
+                    raise
+                await asyncio.sleep(0.02 * (2**attempt))
+
+        raise RuntimeError("approval transaction retries exhausted")
+
+    @staticmethod
+    async def _approve_skill_upload_permission_in_transaction(
+        connection: AsyncConnection,
+        tables: dict[str, Any],
+        *,
+        order_num: str,
+        operator_id: str,
+        comment: str | None,
+    ) -> dict[str, Any]:
+        order_table = tables["order"]
+        record_table = tables["record"]
+        grant_table = tables["grant"]
+
+        query = (
+            select(order_table)
+            .where(order_table.c.order_num == order_num)
+            .with_for_update()
+        )
+        row = (await connection.execute(query)).mappings().first()
+        if row is None:
+            raise ValueError("approval order not found")
+        if str(row["status"]) != "pending":
+            raise ValueError("only pending approval can be approved")
+        applicant_id = str(row["applicant_id"])
+        if applicant_id == operator_id:
+            raise PermissionError("applicant cannot approve or reject own request")
+
+        cluster_id = str(row["cluster_id"])
+        grant = await apply_upload_permission_in_tx(
+            connection,
+            grant_table,
+            jiuwenclaw_id=cluster_id,
+            user_id=applicant_id,
+            operator_id=operator_id,
+            order_num=order_num,
+        )
+        result_data = {
+            "user_id": applicant_id,
+            "cluster_id": cluster_id,
+            "upload_skill_policy": UPLOAD_POLICY_ALLOW,
+            "grant_created": bool(grant.get("created")),
+        }
+        now = utc_now()
+        await connection.execute(
+            insert(record_table).values(
+                record_id=f"arr_{new_uuid4().replace('-', '')}",
+                order_num=order_num,
+                operator_id=operator_id,
+                action="approve",
+                comment=strip_optional(comment),
+                data={"result_data": result_data},
+                created_at=now,
+                created_by=operator_id,
+                updated_at=now,
+                updated_by=operator_id,
+            )
+        )
+        await connection.execute(
+            update(order_table)
+            .where(order_table.c.order_num == order_num)
+            .values(
+                status="approved",
+                approver_id=operator_id,
+                finished_at=now,
+                result_data=result_data,
+                updated_at=now,
+                updated_by=operator_id,
+            )
+        )
+        _log.info(
+            "skill upload permission approved applicant_id=%s cluster_id=%s "
+            "order_num=%s operator_id=%s grant_created=%s",
+            applicant_id,
+            cluster_id,
+            order_num,
+            operator_id,
+            result_data["grant_created"],
+        )
+        return {"order_num": order_num, "status": "approved", "result_data": result_data}
 
     async def _apply_workspace_quota(
         self, order: Any, operator_id: str

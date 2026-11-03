@@ -107,6 +107,8 @@ spec:
           value: "<<AGENT_RUNTIME_SYNC_TIMEOUT>>"
         - name: WORKSPACE_QUOTA_ENABLED
           value: "<<WORKSPACE_QUOTA_ENABLED>>"
+        - name: SKILL_UPLOAD_APPROVAL_ENABLED
+          value: "<<SKILL_UPLOAD_APPROVAL_ENABLED>>"
         - name: MANAGER_WS_ENABLED
           value: "true"
         - name: MANAGER_WS_HOST

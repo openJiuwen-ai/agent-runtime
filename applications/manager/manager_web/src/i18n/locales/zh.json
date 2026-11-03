@@ -314,6 +314,8 @@
         "grantedBy": "授权人",
         "loginPolicy": "登录权限",
         "loginPolicyHint": "拒绝优先级高于允许",
+        "uploadSkillPolicy": "Skill 上传权限",
+        "uploadSkillPolicyHint": "允许后该用户/组织可上传 Skill 包；与登录权限互不影响",
         "loginAllow": "允许",
         "loginDeny": "拒绝",
         "expiresAt": "过期时间",
@@ -1301,7 +1303,8 @@
     "businessType": "审批类型",
     "subjectTitle": "标题",
     "types": {
-      "workspace_quota_expand": "配额审批"
+      "workspace_quota_expand": "配额审批",
+      "skill_upload_permission": "Skill 上传授权"
     },
     "orderNum": "审批单号",
     "applicant": "申请人",
@@ -1311,6 +1314,9 @@
     "group": "组织",
     "bot": "Bot",
     "workspace": "工作区",
+    "skillUploadUser": "获授权用户",
+    "skillUploadGrant": "授予的上传权限",
+    "skillUploadGrantCreated": "已新建个人准入行",
     "createdAt": "申请时间",
     "noOrg": "无组织",
     "noApprover": "无审批人",

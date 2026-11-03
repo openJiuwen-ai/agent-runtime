@@ -341,6 +341,14 @@ export function isWorkspaceQuotaEnabled(_user?: AuthUser | null): boolean {
   );
 }
 
+/** 审批中心是否可用：配额特性或 Skill 上传审批特性任一开启。 */
+export function isApprovalEnabled(_user?: AuthUser | null): boolean {
+  if (isWorkspaceQuotaEnabled(_user)) return true;
+  return coerceRuntimeBool(
+    typeof window !== 'undefined' ? window.__SKILL_UPLOAD_APPROVAL_ENABLED__ : undefined,
+  );
+}
+
 /** 配额 / 审批权限码（特性关闭时管理面角色权限 UI 隐藏）。 */
 export function isWorkspaceQuotaPermission(permissionId: string): boolean {
   return permissionId.startsWith('quota:') || permissionId.startsWith('approval:');
@@ -597,22 +605,44 @@ export interface ApprovalOrder {
   updated_at: string | null;
 }
 
+export interface ApprovalQuotaApplyData {
+  workspace_key: string;
+  current_limit_bytes: number;
+  requested_limit_bytes: number;
+  used_bytes: number;
+  usage_percent: number;
+  source_policy_id: string;
+}
+
+export interface ApprovalSkillUploadApplyData {
+  capability?: string;
+}
+
+export interface ApprovalQuotaResultData {
+  policy_id: string;
+  limit_bytes: number;
+  sync_status: 'success' | 'failed';
+  sync_detail?: string | null;
+}
+
+export interface ApprovalSkillUploadResultData {
+  user_id: string;
+  cluster_id: string;
+  upload_skill_policy: 'allow';
+  grant_created?: boolean;
+}
+
 export interface ApprovalDetail extends ApprovalOrder {
   reason: string;
-  apply_data: {
-    workspace_key: string;
-    current_limit_bytes: number;
-    requested_limit_bytes: number;
-    used_bytes: number;
-    usage_percent: number;
-    source_policy_id: string;
-  };
-  result_data: {
-    policy_id: string;
-    limit_bytes: number;
-    sync_status: 'success' | 'failed';
-    sync_detail?: string | null;
-  } | null;
+  apply_data:
+    | ApprovalQuotaApplyData
+    | ApprovalSkillUploadApplyData
+    | Record<string, unknown>;
+  result_data:
+    | ApprovalQuotaResultData
+    | ApprovalSkillUploadResultData
+    | Record<string, unknown>
+    | null;
   finished_at: string | null;
   records: ApprovalRecord[];
 }
@@ -629,7 +659,12 @@ export const ApprovalApi = {
   get: (orderNum: string) =>
     http<ApprovalDetail>(`/v1/approvals/${encodeURIComponent(orderNum)}`),
   act: (orderNum: string, action: 'approve' | 'reject', comment?: string) =>
-    http<{ order_num: string; status: string; policy_id: string | null }>(
+    http<{
+      order_num: string;
+      status: string;
+      policy_id?: string | null;
+      result_data?: Record<string, unknown>;
+    }>(
       `/v1/approvals/${encodeURIComponent(orderNum)}/actions`,
       { method: 'POST', body: { action, comment } },
     ),
@@ -999,6 +1034,7 @@ export const InstanceServiceResourceApi = {
 
 /** 实例准入绑定 instance_grant 行。 */
 export type LoginPolicy = 'allow' | 'deny';
+export type UploadSkillPolicy = 'allow' | 'deny';
 
 export interface InstanceGrant {
   id: number;
@@ -1007,6 +1043,8 @@ export interface InstanceGrant {
   subject_id: string;
   granted_by: string | null;
   login_policy: LoginPolicy | string;
+  /** Skill 上传资格；与登录权限互不影响，默认拒绝。 */
+  upload_skill_policy?: UploadSkillPolicy | string;
   expires_at: string | null;
   enabled: boolean;
   data: Record<string, unknown> | null;
@@ -1016,6 +1054,7 @@ export interface InstanceGrant {
 
 export type InstanceBindOptions = {
   login_policy?: LoginPolicy;
+  upload_skill_policy?: UploadSkillPolicy;
   expires_at?: string | null;
   enabled?: boolean;
 };
@@ -1043,6 +1082,7 @@ export const InstanceBindingApi = {
     body: {
       enabled?: boolean;
       login_policy?: LoginPolicy;
+      upload_skill_policy?: UploadSkillPolicy;
       expires_at?: string | null;
       clear_expires_at?: boolean;
     },
@@ -1077,6 +1117,7 @@ export const InstanceBindingApi = {
     body: {
       enabled?: boolean;
       login_policy?: LoginPolicy;
+      upload_skill_policy?: UploadSkillPolicy;
       expires_at?: string | null;
       clear_expires_at?: boolean;
     },

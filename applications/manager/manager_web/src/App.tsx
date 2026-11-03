@@ -44,7 +44,7 @@ import {
   canAccessManager,
   hasPermission,
   isPlatformAdmin,
-  isWorkspaceQuotaEnabled,
+  isApprovalEnabled,
   UserConsoleApi,
 } from './services/api';
 
@@ -91,7 +91,7 @@ function RouteView() {
   const platformAdmin = isPlatformAdmin(user);
 
   if (!platformAdmin) {
-    const approvalUiEnabled = isWorkspaceQuotaEnabled(user);
+    const approvalUiEnabled = isApprovalEnabled(user);
     if (path === '/approvals' && approvalUiEnabled && hasPermission(user, 'approval:read')) {
       return <ApprovalPage />;
     }
@@ -183,14 +183,14 @@ function RouteView() {
     return <RolesEditPage roleId={roleEdit.roleId} />;
   }
   if (path === '/approvals') {
-    if (!isWorkspaceQuotaEnabled(user)) {
+    if (!isApprovalEnabled(user)) {
       return <div className="card text-sm text-muted">{t('auth.noPagePermission')}</div>;
     }
     return <ApprovalPage />;
   }
   const approvalEdit = matchRoute('/approvals/:orderNum', path);
   if (approvalEdit) {
-    if (!isWorkspaceQuotaEnabled(user)) {
+    if (!isApprovalEnabled(user)) {
       return <div className="card text-sm text-muted">{t('auth.noPagePermission')}</div>;
     }
     return <ApprovalEditPage orderNum={approvalEdit.orderNum} />;
@@ -303,7 +303,7 @@ function Shell() {
 /** 已登录用户的默认落地页:平台/管理员类型角色→/manager,有限权限→对应页,否则→/user。 */
 function roleHome(user: AuthUser): string {
   if (isPlatformAdmin(user) || user.manager_access) return '/manager';
-  if (isWorkspaceQuotaEnabled(user) && hasPermission(user, 'approval:read')) {
+  if (isApprovalEnabled(user) && hasPermission(user, 'approval:read')) {
     return '/manager/approvals';
   }
   if (hasPermission(user, 'iam:role:read')) return '/manager/roles';
