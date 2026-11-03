@@ -19,6 +19,7 @@ import { InstanceAgentResourceTab } from './instanceResourcePanel/InstanceAgentR
 import { InstanceServiceResourceTab } from './instanceResourcePanel/InstanceServiceResourceTab';
 import { WorkspaceQuotaPanel } from './instanceQuotaPanel/WorkspaceQuotaPanel';
 import { TeamQuotaPanel } from './instanceQuotaPanel/TeamQuotaPanel';
+import { InstanceSkillUploadPanel } from './instanceSkillUploadPanel/InstanceSkillUploadPanel';
 import { InstancePlaceholderPanel } from './InstancePlaceholderPanel';
 import { InstanceExpertPackagesTab } from './instanceResourcePanel/InstanceExpertPackagesTab';
 
@@ -34,6 +35,7 @@ export type InstancePageTab =
   | 'workspaceQuota'
   | 'teamQuota'
   | 'tokenQuota'
+  | 'skillUpload'
   | 'cost'
   | 'audit';
 
@@ -93,6 +95,7 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
     { key: 'quotaManagement', label: t('instanceDetail.tabs.quotaManagement'), href: `/instances/${instanceId}/quota` },
     { key: 'cost', label: t('instanceDetail.tabs.cost'), href: `/instances/${instanceId}/cost` },
     { key: 'audit', label: t('instanceDetail.tabs.audit'), href: `/instances/${instanceId}/audit` },
+    { key: 'skillUpload', label: t('instanceDetail.tabs.skillUpload'), href: `/instances/${instanceId}/skill-upload` },
   ];
 
   /** 「集群配置」下的子页签（Agent / 运行时 / 专家包 / 基础配置） */
@@ -370,6 +373,7 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
               subtitleKey="instanceDetail.audit.subtitle"
             />
           )}
+          {tab === 'skillUpload' && <InstanceSkillUploadPanel instanceId={instanceId} />}
         </div>
       </div>
 

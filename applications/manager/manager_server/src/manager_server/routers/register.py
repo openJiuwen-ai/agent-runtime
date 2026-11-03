@@ -9,11 +9,14 @@ from .agent_client_registration_routers import registration_router
 from .approval_routers import approval_router
 from .auth_guards import get_current_user, require_admin
 from .authz_routers import authz_router
+from .iam_directory_routers import iam_directory_router
 from .import_export_routers import import_export_router
 from .instance_access_routers import gateway_lookup_router, instance_grant_router
+from .internal_routers import internal_router
 from .instance_resource_routers import instance_resource_router
 from .instance_routers import instance_router
 from .quota_routers import quota_router
+from .skill_upload_routers import skill_upload_router
 from .template_routers import templates_router
 from .user_console_routers import public_user_console_router, user_console_router
 
@@ -29,6 +32,10 @@ def _build_api_router() -> APIRouter:
     # they would accidentally require BOTH a permission and an admin role.
     v1_router.include_router(authz_router, tags=["Authorization"])
     v1_router.include_router(approval_router, tags=["Approvals"])
+    # 身份目录查询（admin）：供 skill_upload 授权选择器拉组织/用户目录。
+    v1_router.include_router(iam_directory_router, prefix="/iam/directory", tags=["IAM Directory"])
+    # Skill 上传授权：管理员直授与审批共用的授权记录。
+    v1_router.include_router(skill_upload_router, tags=["Skill Upload Grants"])
     # 用户控制台：当前用户可见 Agent + 用户面选路。
     v1_router.include_router(user_console_router, prefix="/user-console", tags=["User Console"])
     admin_router = APIRouter(dependencies=[Depends(require_admin)])
@@ -63,6 +70,11 @@ def _build_api_router() -> APIRouter:
     v1_router.include_router(admin_router)
     root_router.include_router(
         public_user_console_router, prefix="/v1/user-console", tags=["User Console"]
+    )
+
+    # 内部服务间 API（Gateway → Manager）：不走 JWT，由 X-Internal-Token 鉴权。
+    root_router.include_router(
+        internal_router, prefix="/v1", tags=["Internal"]
     )
 
     @root_router.get("/health", tags=["System"])

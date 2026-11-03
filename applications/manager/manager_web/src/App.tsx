@@ -32,6 +32,7 @@ import { OrgsPage } from './pages/iam/OrgsPage';
 import { OrgsEditPage } from './pages/iam/OrgsEditPage';
 import { RolesPage } from './pages/iam/RolesPage';
 import { RolesEditPage } from './pages/iam/RolesEditPage';
+import { SkillUploadGrantsPage } from './pages/iam/SkillUploadGrantsPage';
 import { ApprovalPage } from './pages/approval/ApprovalPage';
 import { ApprovalEditPage } from './pages/approval/ApprovalEditPage';
 import { AgentTemplatesPage } from './pages/templates/AgentTemplatesPage';
@@ -43,7 +44,6 @@ import {
   canAccessManager,
   hasPermission,
   isPlatformAdmin,
-  isWorkspaceQuotaEnabled,
   UserConsoleApi,
 } from './services/api';
 
@@ -90,12 +90,14 @@ function RouteView() {
   const platformAdmin = isPlatformAdmin(user);
 
   if (!platformAdmin) {
-    const approvalUiEnabled = isWorkspaceQuotaEnabled(user);
-    if (path === '/approvals' && approvalUiEnabled && hasPermission(user, 'approval:read')) {
+    // 审批中心服务多种业务（工作区扩容 / Skill 上传资格等），不再仅由配额开关守卫；
+    // 只要持有 approval:read 即可进入。
+    const approvalUiEnabled = hasPermission(user, 'approval:read');
+    if (path === '/approvals' && approvalUiEnabled) {
       return <ApprovalPage />;
     }
     const approvalEditLimited = matchRoute('/approvals/:orderNum', path);
-    if (approvalEditLimited && approvalUiEnabled && hasPermission(user, 'approval:read')) {
+    if (approvalEditLimited && approvalUiEnabled) {
       return <ApprovalEditPage orderNum={approvalEditLimited.orderNum} />;
     }
     if (hasPermission(user, 'iam:role:read')) {
@@ -110,9 +112,11 @@ function RouteView() {
         return <RolesEditPage roleId={roleEdit.roleId} />;
       }
     }
+    if (path === '/skills/upload-permissions' && hasPermission(user, 'skill:upload:read')) {
+      return <SkillUploadGrantsPage />;
+    }
     return <div className="card text-sm text-muted">{t('auth.noPagePermission')}</div>;
   }
-
   if (path === '/overview' || path === '/') {
     return <OverviewPage />;
   }
@@ -179,14 +183,14 @@ function RouteView() {
     return <RolesEditPage roleId={roleEdit.roleId} />;
   }
   if (path === '/approvals') {
-    if (!isWorkspaceQuotaEnabled(user)) {
+    if (!hasPermission(user, 'approval:read')) {
       return <div className="card text-sm text-muted">{t('auth.noPagePermission')}</div>;
     }
     return <ApprovalPage />;
   }
   const approvalEdit = matchRoute('/approvals/:orderNum', path);
   if (approvalEdit) {
-    if (!isWorkspaceQuotaEnabled(user)) {
+    if (!hasPermission(user, 'approval:read')) {
       return <div className="card text-sm text-muted">{t('auth.noPagePermission')}</div>;
     }
     return <ApprovalEditPage orderNum={approvalEdit.orderNum} />;
@@ -251,6 +255,10 @@ function RouteView() {
   if (instanceAudit) {
     return <InstanceDetailPage instanceId={instanceAudit.id} tab="audit" />;
   }
+  const instanceSkillUpload = matchRoute('/instances/:id/skill-upload', path);
+  if (instanceSkillUpload) {
+    return <InstanceDetailPage instanceId={instanceSkillUpload.id} tab="skillUpload" />;
+  }
   const detail = matchRoute('/instances/:id', path);
   if (detail) {
     return <InstanceDetailPage instanceId={detail.id} tab="access" />;
@@ -303,7 +311,7 @@ function Shell() {
 /** 已登录用户的默认落地页:平台/管理员类型角色→/manager,有限权限→对应页,否则→/user。 */
 function roleHome(user: AuthUser): string {
   if (isPlatformAdmin(user) || user.manager_access) return '/manager';
-  if (isWorkspaceQuotaEnabled(user) && hasPermission(user, 'approval:read')) {
+  if (hasPermission(user, 'approval:read')) {
     return '/manager/approvals';
   }
   if (hasPermission(user, 'iam:role:read')) return '/manager/roles';

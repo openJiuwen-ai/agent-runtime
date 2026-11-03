@@ -247,6 +247,13 @@ export function Sidebar() {
       label: t('nav.roles'),
       icon: iamIcon('M12 3l7 4v5c0 4.5-2.9 7.8-7 9-4.1-1.2-7-4.5-7-9V7l7-4zm-3 9l2 2 4-4'),
     }] : []),
+    ...(hasPermission(user, 'skill:upload:read') ? [{
+      key: 'skills-upload-grants',
+      pathPrefix: '/skills/upload-permissions',
+      href: '/skills/upload-permissions',
+      label: t('nav.skillUploadGrants'),
+      icon: iamIcon('M12 3v12m0 0l4-4m-4 4l-4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2'),
+    }] : []),
   ];
 
   const renderItem = (item: NavItem, nested = false, warnLinks?: WarnBadgeLink[]) => {

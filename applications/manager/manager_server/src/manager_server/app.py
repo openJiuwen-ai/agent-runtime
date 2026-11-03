@@ -10,7 +10,11 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from manager_server import __version__
 from manager_server.infrastructure.config import settings
-from manager_server.infrastructure.db import create_db_handler, database_config_summary
+from manager_server.infrastructure.db import (
+    create_db_handler,
+    database_config_summary,
+    get_identity_db_handler,
+)
 from manager_server.infrastructure.logger import configure_logging, get_logger
 from manager_server.models.table_init import init_all_tables
 from manager_server.routers.register import router_register
@@ -29,6 +33,14 @@ async def lifespan(application: FastAPI):
     await db_handler.init_database()
     await db_handler.connect()
     await init_all_tables(db_handler)
+    # 身份目录库（identity）：只读连接，供 skill_upload 组织授权反查、
+    # 管理面授权选择器拉目录。handler 可能未配置（None），跳过即可。
+    identity_handler = get_identity_db_handler()
+    if identity_handler is not None:
+        try:
+            await identity_handler.connect()
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("identity db connect failed; org-based grants degrade: %s", exc)
     # 身份/账号种子已移至独立认证服务(jiuwenclaw_identity);管理库不再播种用户/组织。
     # 加载/生成 Manager 签名密钥对（Ed25519），供握手下发公钥与下发加签使用。
     set_manager_signing_key(await get_or_create_manager_signing_key(db_handler))
@@ -50,6 +62,11 @@ async def lifespan(application: FastAPI):
         await scan_task
     except asyncio.CancelledError:
         pass
+    if identity_handler is not None:
+        try:
+            await identity_handler.disconnect()
+        except Exception:  # noqa: BLE001
+            pass
     await db_handler.disconnect()
     _log.info("shutdown")
 

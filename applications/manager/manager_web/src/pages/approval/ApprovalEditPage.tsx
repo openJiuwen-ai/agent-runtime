@@ -43,6 +43,9 @@ function approvalTypeLabel(
   if (businessType === 'workspace_quota_expand') {
     return t('approvals.types.workspace_quota_expand');
   }
+  if (businessType === 'skill_upload_permission') {
+    return t('approvals.types.skill_upload_permission');
+  }
   return businessType;
 }
 
@@ -76,6 +79,7 @@ export function ApprovalEditPage({ orderNum }: { orderNum: string }) {
     && data.applicant_id !== user?.user_id
     && hasPermission(user, 'approval:act');
   const canAct = canDecide || canRetry;
+  const isQuota = data?.business_type === 'workspace_quota_expand';
 
   useEffect(() => setComment(''), [orderNum]);
 
@@ -170,10 +174,12 @@ export function ApprovalEditPage({ orderNum }: { orderNum: string }) {
                 value={formatApprovalGroup(data.group_id, t('approvals.noOrg'))}
               />
               <MetaItem label={t('approvals.bot')} value={data.bot_id} />
-              <MetaItem
-                label={t('approvals.workspace')}
-                value={<span className="mono text-[12px]">{data.apply_data.workspace_key}</span>}
-              />
+              {isQuota && (
+                <MetaItem
+                  label={t('approvals.workspace')}
+                  value={<span className="mono text-[12px]">{data.apply_data.workspace_key}</span>}
+                />
+              )}
             </dl>
           </section>
 
@@ -181,7 +187,8 @@ export function ApprovalEditPage({ orderNum }: { orderNum: string }) {
             <div className="card-header">
               <div className="card-title">{t('approvals.sectionApply')}</div>
             </div>
-            <div className="approval-sheet__quota">
+            {isQuota ? (
+              <div className="approval-sheet__quota">
               <div className="approval-sheet__quota-cell">
                 <div className="approval-sheet__quota-label">{t('approvals.currentLimit')}</div>
                 <div className="approval-sheet__quota-value">
@@ -203,12 +210,26 @@ export function ApprovalEditPage({ orderNum }: { orderNum: string }) {
                 <div className="approval-sheet__quota-hint">
                   {t('approvals.usagePercent', {
                     percent: Number.isFinite(data.apply_data.usage_percent)
-                      ? Math.round(data.apply_data.usage_percent)
+                      ? Math.round(Number(data.apply_data.usage_percent))
                       : '—',
                   })}
                 </div>
               </div>
-            </div>
+              </div>
+            ) : (
+              <dl className="approval-sheet__meta">
+                <MetaItem
+                  label={t('approvals.subjectType')}
+                  value={data.apply_data.subject_type === 'org'
+                    ? t('approvals.subjectTypes.org')
+                    : t('approvals.subjectTypes.user')}
+                />
+                <MetaItem
+                  label={t('approvals.subjectId')}
+                  value={<span className="mono text-[12px]">{data.apply_data.subject_id || '—'}</span>}
+                />
+              </dl>
+            )}
             <div className="approval-sheet__reason">
               <div className="field-label">{t('approvals.reason')}</div>
               <div className="approval-sheet__reason-body whitespace-pre-wrap">
@@ -223,22 +244,40 @@ export function ApprovalEditPage({ orderNum }: { orderNum: string }) {
                 <div className="card-title">{t('approvals.effectResult')}</div>
               </div>
               <dl className="approval-sheet__meta">
-                <MetaItem
-                  label={t('approvals.policyId')}
-                  value={<span className="mono text-[12px]">{data.result_data.policy_id}</span>}
-                />
-                <MetaItem
-                  label={t('approvals.effectedLimit')}
-                  value={formatBytes(data.result_data.limit_bytes)}
-                />
-                <MetaItem
-                  label={t('approvals.syncStatus')}
-                  value={(
-                    <span className={data.result_data.sync_status === 'success' ? 'text-success' : 'text-danger'}>
-                      {t(`approvals.sync.${data.result_data.sync_status}`)}
-                    </span>
-                  )}
-                />
+                {isQuota && (
+                  <MetaItem
+                    label={t('approvals.policyId')}
+                    value={<span className="mono text-[12px]">{data.result_data.policy_id}</span>}
+                  />
+                )}
+                {isQuota && (
+                  <MetaItem
+                    label={t('approvals.effectedLimit')}
+                    value={formatBytes(data.result_data.limit_bytes)}
+                  />
+                )}
+                {!isQuota && (
+                  <MetaItem
+                    label={t('approvals.subjectId')}
+                    value={<span className="mono text-[12px]">{data.result_data.subject_id || data.applicant_id}</span>}
+                  />
+                )}
+                {!isQuota && data.result_data.permission_id && (
+                  <MetaItem
+                    label={t('approvals.permissionId')}
+                    value={<span className="mono text-[12px]">{data.result_data.permission_id}</span>}
+                  />
+                )}
+                {data.result_data.sync_status && (
+                  <MetaItem
+                    label={t('approvals.syncStatus')}
+                    value={(
+                      <span className={data.result_data.sync_status === 'success' ? 'text-success' : 'text-danger'}>
+                        {t(`approvals.sync.${data.result_data.sync_status}`)}
+                      </span>
+                    )}
+                  />
+                )}
                 {data.result_data.sync_detail && (
                   <MetaItem
                     label={t('approvals.syncDetail')}

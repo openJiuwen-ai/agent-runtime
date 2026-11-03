@@ -21,6 +21,8 @@ from openjiuwen_runtime.foundation.db.handler import DBHandler
 from pydantic import BaseModel, Field
 
 from manager_server.core.approval import ApprovalService
+from manager_server.core.approval.service import SKILL_UPLOAD_PERMISSION
+from manager_server.core.skill_upload import SkillUploadPermissionService
 from manager_server.core.user_console import UserConsoleService
 from manager_server.core.user_console.user_face_upstream import (
     JIUWENCLAW_ID_COOKIE,
@@ -31,6 +33,7 @@ from manager_server.infrastructure.db import get_db_handler
 from manager_server.routers.auth_guards import get_current_user
 from manager_server.schemas.approval_schemas import UserConsoleExpandSubmitBody
 from manager_server.schemas.common_schemas import ResponseModel
+from manager_server.schemas.skill_upload_schemas import UserConsoleSkillUploadSubmitBody
 
 WORKSPACE_QUOTA_FEATURE_DISABLED = "WORKSPACE_QUOTA_FEATURE_DISABLED"
 
@@ -190,6 +193,88 @@ async def submit_workspace_expand(
             requested_limit_bytes=body.requested_limit_bytes,
             reason=body.reason,
             used_bytes=body.used_bytes,
+            approver_id=body.approver_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _ok(result)
+
+
+@user_console_router.get(
+    "/skills/upload-permission",
+    response_model=ResponseModel,
+)
+async def get_skill_upload_permission(
+    handler: _Handler,
+    user: _CurUser,
+    context_id: Annotated[str | None, Query(max_length=64, description="企业实例 id")] = None,
+    jiuwenclaw_id: Annotated[str | None, Cookie(alias=JIUWENCLAW_ID_COOKIE)] = None,
+):
+    """当前用户的 Skill 上传资格；与管理员直授、审批共用同一授权记录。
+
+    企业实例 id 优先取 ``context_id`` query，回退 ``jiuwenclaw_id`` Cookie
+    （兼容既有调用方）。
+    """
+    uid = _user_id(user)
+    groups = list(getattr(user, "groups", []) or [])
+    cid = str(context_id or jiuwenclaw_id or "").strip()
+    effective = await SkillUploadPermissionService(handler).effective(
+        cluster_id=cid,
+        user_id=uid,
+        groups=groups,
+    )
+    pending = await ApprovalService(handler).list_mine(
+        applicant_id=uid,
+        business_type=SKILL_UPLOAD_PERMISSION,
+        status="pending",
+    )
+    pending_order_num = str(pending[0].get("order_num") or "") if pending else None
+    application_status = "pending" if pending_order_num else ("approved" if effective.get("allowed") else "none")
+    return _ok(
+        {
+            "allowed": bool(effective.get("allowed")),
+            "application_status": application_status,
+            "order_num": pending_order_num,
+        }
+    )
+
+
+@user_console_router.post(
+    "/skills/upload-permission-requests",
+    response_model=ResponseModel,
+)
+async def submit_skill_upload_request(
+    body: UserConsoleSkillUploadSubmitBody,
+    handler: _Handler,
+    user: _CurUser,
+    authorization: Annotated[str | None, Header()] = None,
+):
+    """普通用户申请 Skill 上传资格；上下文取自真实用户会话并做准入校验。
+
+    申请人身份取自 JWT（``_user_id(user)``），不信任客户端 body 指定的申请人；
+    ``context_id`` 为当前可信上下文引用，经 ``user_can_access_context`` 校验
+    该用户确实能访问此三元组后方可创建审批单。
+    """
+    uid = _user_id(user)
+    groups = list(getattr(user, "groups", []) or [])
+    allowed = await UserConsoleService(handler).user_can_access_context(
+        uid,
+        jiuwenclaw_id=body.context_id,
+        group_id=body.group_id,
+        bot_id=body.bot_id,
+        groups=groups,
+        authorization=authorization,
+    )
+    if not allowed:
+        raise HTTPException(status_code=403, detail="context not admitted")
+    try:
+        result = await ApprovalService(handler).submit_skill_upload_permission(
+            applicant_id=uid,
+            groups=groups,
+            cluster_id=body.context_id,
+            group_id=body.group_id,
+            bot_id=body.bot_id,
+            reason=body.reason,
             approver_id=body.approver_id,
         )
     except ValueError as exc:

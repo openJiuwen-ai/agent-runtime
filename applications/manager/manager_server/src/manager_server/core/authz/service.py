@@ -76,6 +76,22 @@ PERMISSION_SEEDS: tuple[dict[str, str], ...] = (
         "scope": "admin",
     },
     {
+        "permission_id": "skill:upload:read",
+        "name": "查看 Skill 上传授权",
+        "description": "查看用户/组织的 Skill 上传资格授权记录",
+        "resource_type": "skill",
+        "action": "read",
+        "scope": "admin",
+    },
+    {
+        "permission_id": "skill:upload:grant",
+        "name": "管理 Skill 上传授权",
+        "description": "直接授予或撤销用户/组织的 Skill 上传资格",
+        "resource_type": "skill",
+        "action": "grant",
+        "scope": "admin",
+    },
+    {
         "permission_id": "iam:role:read",
         "name": "查看角色",
         "description": "查看角色、权限和角色指派",

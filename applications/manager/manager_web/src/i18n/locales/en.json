@@ -93,6 +93,7 @@
     "bots": "Agent Templates",
     "approvalRequests": "Approval Requests",
     "roles": "Roles",
+    "skillUploadGrants": "Skill Upload Grants",
     "approvals": "Approval Center",
     "todo": "To-do",
     "todoWithCount": "To-do, {{count}} pending"
@@ -269,7 +270,8 @@
       "audit": "Business Audit",
       "resources": "Cluster Resources",
       "workspaceQuota": "User Space Quota",
-      "teamQuota": "Team Quota"
+      "teamQuota": "Team Quota",
+      "skillUpload": "Skill Upload Grants"
     },
     "placeholder": {
       "empty": "Coming soon"
@@ -1297,7 +1299,15 @@
     "businessType": "Approval Type",
     "subjectTitle": "Title",
     "types": {
-      "workspace_quota_expand": "Quota Approval"
+      "workspace_quota_expand": "Quota Approval",
+      "skill_upload_permission": "Skill Upload Permission Request"
+    },
+    "subjectType": "Grant Subject Type",
+    "subjectId": "Grant Subject",
+    "permissionId": "Permission Record ID",
+    "subjectTypes": {
+      "user": "User",
+      "org": "Organization"
     },
     "orderNum": "Order Number",
     "applicant": "Applicant",
@@ -1349,5 +1359,49 @@
       "success": "Synced to Gateway",
       "failed": "Gateway sync failed"
     }
+  },
+  "skillUpload": {
+    "title": "Skill Upload Grants",
+    "subtitle": "Admins can grant users or organizations directly; approved requests write the same grant records",
+    "searchPlaceholder": "Search subject ID, grantor, or order number",
+    "cluster": "Cluster",
+    "subjectType": "Subject Type",
+    "subjectId": "Subject",
+    "subjectTypes": {
+      "user": "User",
+      "org": "Organization"
+    },
+    "source": "Source",
+    "grantedBy": "Granted By",
+    "sourceOrderNum": "Order Number",
+    "expiresAt": "Expires At",
+    "neverExpires": "Never",
+  "enabled": "Enabled",
+  "enabledTrue": "Enabled",
+  "enabledFalse": "Disabled",
+    "actions": "Actions",
+    "add": "Add Grant",
+    "revoke": "Revoke",
+    "revokeConfirm": "Revoke the selected Skill upload grants?",
+    "addTitle": "Add Skill Upload Grant",
+    "subjectTypeLabel": "Subject Type",
+    "idsLabel": "Select users / orgs",
+    "idsPlaceholder": "u001, u002",
+    "dirSearchPlaceholder": "Search name or ID to filter directory",
+    "dirEmpty": "Directory empty or loading",
+    "selectedCount": "{{count}} selected",
+    "expiresLabel": "Expires At (empty = never)",
+    "save": "Save",
+    "saved": "Grant saved",
+    "revoked": "Grant revoked",
+    "userSection": "User Grants",
+    "orgSection": "Organization Grants",
+    "addUser": "Add User Grant",
+    "addOrg": "Add Org Grant",
+    "sources": {
+      "admin": "Admin Grant",
+      "approval": "Approval"
+    },
+    "empty": "No grants"
   }
 }
