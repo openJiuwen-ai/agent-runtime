@@ -40,7 +40,9 @@ _ALLOWED_SORT_FIELDS = frozenset({
 def assert_selectable_hub_asset(asset_id: str) -> str:
     """Hub 标识必须能出现在新建页清单里。隐藏的四个包不能写入组合。"""
     asset = str(asset_id or "").strip()
-    if not asset or asset in {".", ".."} or len(asset) > 128 or "/" in asset or "\\" in asset:
+    if not asset or len(asset) > 128 or asset in {".", ".."}:
+        raise ValueError("invalid hub asset id")
+    if "/" in asset or "\\" in asset:
         raise ValueError("invalid hub asset id")
     if asset in HIDDEN_HUB_ASSET_IDS:
         raise ValueError("hidden hub asset cannot be included in an expert package")
