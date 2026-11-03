@@ -19,12 +19,24 @@ _PKG_ROOT = Path(__file__).resolve().parents[3]
 logger = get_logger(__name__)
 
 _db_handler: DBHandler | None = None
+_identity_db_handler: DBHandler | None = None
 
 
 def get_db_handler() -> DBHandler:
     if _db_handler is None:
         raise RuntimeError("Database handler is not initialized; call create_db_handler first.")
     return _db_handler
+
+
+def get_identity_db_handler() -> DBHandler:
+    """身份目录库（identity）只读句柄。
+
+    用于 skill_upload 组织授权反查用户所属组织、管理面授权选择器拉目录。
+    未配置或初始化失败时返回 None（调用方需自行兜底为空列表，不影响主流程）。
+    """
+    if _identity_db_handler is None:
+        return None  # type: ignore[return-value]
+    return _identity_db_handler
 
 
 def _sqlite_handler_from_settings(cfg: Settings) -> SQLiteHandler:
@@ -91,7 +103,41 @@ def create_db_handler(cfg: Settings | None = None) -> DBHandler:
             f"Unsupported db_type: {db_type}. Use 'sqlite', 'mysql' or 'postgresql'."
         )
 
+    # 身份目录库：与主库同类型；初始化失败仅告警，不阻断启动（组织授权降级为不生效）。
+    _create_identity_db_handler(active)
+
     return _db_handler
+
+
+def _create_identity_db_handler(active: Settings) -> None:
+    """创建身份目录库只读句柄；失败仅告警，返回 None。"""
+    global _identity_db_handler
+    _identity_db_handler = None
+    try:
+        id_type = str(active.identity_db_type or "").strip().lower() or "sqlite"
+        if is_sqlite(id_type):
+            _identity_db_handler = SQLiteHandler(active.identity_db_name or "identity")
+        elif is_mysql(id_type):
+            _identity_db_handler = MySQLHandler(
+                host=active.identity_db_host,
+                port=int(active.identity_db_port),
+                user=active.identity_db_user,
+                password=active.identity_db_password,
+                database=active.identity_db_name,
+            )
+        elif is_postgresql(id_type):
+            _identity_db_handler = PostgreSQLHandler(
+                host=active.identity_db_host,
+                port=int(active.identity_db_port),
+                user=active.identity_db_user,
+                password=active.identity_db_password,
+                database=active.identity_db_name,
+                schema="public",
+            )
+        logger.info("Using identity database: %s", id_type)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Identity database handler init failed; org-based grants degrade: %s", exc)
+        _identity_db_handler = None
 
 
 def database_config_summary(cfg: Settings | None = None) -> dict[str, Any]:

@@ -30,6 +30,10 @@ from manager_server.models.key_models import (
     MANAGER_IDENTITY_TABLE_DEF,
 )
 from manager_server.models.link_binding_models import INSTANCE_LINK_BINDING_TABLE_DEF
+from manager_server.models.skill_upload_models import (
+    SKILL_UPLOAD_PERMISSION_TABLE_DEF,
+    SKILL_UPLOAD_TABLE_DEFINITIONS,
+)
 from manager_server.models.template_models import (
     A2A_ACCESS_POLICY_TEMPLATE_TABLE_DEF,
     A2A_DISCOVERY_SETTINGS_TABLE_DEF,
@@ -77,6 +81,7 @@ ALL_TABLE_DEFINITIONS = (
     *AUTHZ_TABLE_DEFINITIONS,
     *QUOTA_TABLE_DEFINITIONS,
     *APPROVAL_TABLE_DEFINITIONS,
+    *SKILL_UPLOAD_TABLE_DEFINITIONS,
 )
 
 
@@ -116,6 +121,127 @@ async def _migrate_a2a_discovery_settings(handler: DBHandler) -> None:
                 dialect == "postgresql" and sqlstate in {"42701", "42703"}
             ) or (dialect == "mysql" and errno in {1060, 1091})
             if not column_race or attempt == 2:
+                raise
+
+
+async def _migrate_skill_upload_permission(handler: DBHandler) -> None:
+    """``skill_upload_permission`` 旧表 schema 升级到新 schema。
+
+    覆盖两代 schema 变更：
+    1. 早期表无 ``cluster_id`` 列、唯一索引为 ``(subject_type, subject_id)``；
+       新 schema 增 ``cluster_id`` 列、唯一索引改为
+       ``(cluster_id, subject_type, subject_id)``。
+    2. 旧版用 ``status`` 字符串列（active/disabled/revoked）；
+       新 schema 按设计 §10.2 改为 ``enabled`` 布尔列。
+
+    ``init_table`` 的 ``extend_existing`` + ``create_all`` 对已存在表只补索引不改列，
+    建索引或新列时会因缺列报错导致 manager 启动失败；本函数幂等补列 + 切换索引 +
+    数据迁移，重复启动不报错。
+    """
+    if not isinstance(handler, SQLAlchemyHandler):
+        return
+
+    table_name = SKILL_UPLOAD_PERMISSION_TABLE_DEF.table_name
+    legacy_index = "ix_skill_upload_permission_subject_type_subject_id"
+    new_index = "ix_skill_upload_permission_cluster_id_subject_type_subject_id"
+
+    def migrate(sync_connection) -> None:
+        inspector = inspect(sync_connection)
+        existing_tables = set(inspector.get_table_names())
+        if table_name not in existing_tables:
+            # init_table 尚未建表；迁移交给 create_all 完成。
+            return
+        columns = {item["name"] for item in inspector.get_columns(table_name)}
+        quote = sync_connection.dialect.identifier_preparer.quote
+        dialect = sync_connection.dialect.name
+
+        # 1. 补 cluster_id 列
+        if "cluster_id" not in columns:
+            sync_connection.execute(
+                text(
+                    f"ALTER TABLE {quote(table_name)} ADD COLUMN "
+                    f"{quote('cluster_id')} VARCHAR(64) NOT NULL DEFAULT ''"
+                )
+            )
+
+        # 2. 删除旧唯一索引（仅当列名匹配旧 schema 时）
+        existing_indexes = {idx["name"] for idx in inspector.get_indexes(table_name)}
+        if legacy_index in existing_indexes:
+            if dialect == "mysql":
+                sync_connection.execute(
+                    text(f"ALTER TABLE {quote(table_name)} DROP INDEX {quote(legacy_index)}")
+                )
+            else:
+                sync_connection.execute(
+                    text(f"DROP INDEX {quote(legacy_index)}")
+                )
+
+        # 3. 创建新唯一索引（如尚未存在）
+        existing_indexes_after = {
+            idx["name"] for idx in inspector.get_indexes(table_name)
+        }
+        if new_index not in existing_indexes_after:
+            sync_connection.execute(
+                text(
+                    f"CREATE UNIQUE INDEX {quote(new_index)} ON {quote(table_name)} "
+                    f"({quote('cluster_id')}, {quote('subject_type')}, {quote('subject_id')})"
+                )
+            )
+
+        # 4. status 列 → enabled 列（设计 §10.2：布尔）
+        #    幂等：只在 status 列存在且 enabled 列不存在时迁移数据后删 status。
+        columns_after = {item["name"] for item in inspect(sync_connection).get_columns(table_name)}
+        if "status" in columns_after and "enabled" not in columns_after:
+            # 先加 enabled 列（默认 false，避免 NOT NULL 无默认值）
+            if dialect == "mysql":
+                sync_connection.execute(
+                    text(
+                        f"ALTER TABLE {quote(table_name)} ADD COLUMN "
+                        f"{quote('enabled')} TINYINT(1) NOT NULL DEFAULT 0"
+                    )
+                )
+            else:
+                sync_connection.execute(
+                    text(
+                        f"ALTER TABLE {quote(table_name)} ADD COLUMN "
+                        f"{quote('enabled')} BOOLEAN NOT NULL DEFAULT 0"
+                    )
+                )
+            # 迁移数据：status='active' → enabled=1；其余（disabled/revoked）→ 0
+            sync_connection.execute(
+                text(
+                    f"UPDATE {quote(table_name)} SET {quote('enabled')} = "
+                    f"CASE WHEN {quote('status')} = 'active' THEN 1 ELSE 0 END"
+                )
+            )
+            # 删除旧 status 列
+            if dialect == "mysql":
+                sync_connection.execute(
+                    text(f"ALTER TABLE {quote(table_name)} DROP COLUMN {quote('status')}")
+                )
+            else:
+                sync_connection.execute(
+                    text(f"ALTER TABLE {quote(table_name)} DROP COLUMN {quote('status')}")
+                )
+
+    # 与 _migrate_a2a_discovery_settings 一致：并发实例同时改 schema 时，
+    # MySQL/PostgreSQL 会因重复 DDL 报错；捕获 column/index race 重试。
+    for attempt in range(3):
+        try:
+            async with handler.engine.begin() as connection:
+                await connection.run_sync(migrate)
+            return
+        except DBAPIError as exc:
+            dialect = handler.engine.dialect.name
+            sqlstate = getattr(exc.orig, "sqlstate", None) or getattr(exc.orig, "pgcode", None)
+            errno = exc.orig.args[0] if exc.orig.args else None
+            # MySQL: 1060=dup column, 1091=can't drop missing index, 1061=dup key name
+            # PostgreSQL: 42701=dup column, 42703=undefined column, 42P07=dup table
+            schema_race = (
+                (dialect == "postgresql" and sqlstate in {"42701", "42703", "42P07"})
+                or (dialect == "mysql" and errno in {1060, 1061, 1091})
+            )
+            if not schema_race or attempt == 2:
                 raise
 
 
@@ -198,6 +324,7 @@ async def init_all_tables(handler: DBHandler) -> None:
         await handler.init_table(table_def)
     await _ensure_team_quota_org_column(handler)
     await _migrate_a2a_discovery_settings(handler)
+    await _migrate_skill_upload_permission(handler)
     from manager_server.core.authz import seed_authz_defaults
 
     await seed_authz_defaults(handler)

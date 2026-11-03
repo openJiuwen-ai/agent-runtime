@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -115,6 +115,43 @@ class Settings(BaseSettings):
     agent_client_registration_config_file: str = Field(
         default="", validation_alias="MANAGER_AGENT_CLIENT_REGISTRATION_CONFIG_FILE"
     )
+
+    # 内部服务间鉴权令牌（如 Gateway → Manager 复查 Skill 上传资格）。
+    # 留空时禁用内部接口；部署时显式配置。
+    manager_internal_token: str = Field(
+        default="",
+        validation_alias="MANAGER_INTERNAL_TOKEN",
+    )
+
+    # 身份中心目录库（identity）：只读访问组织/用户/成员关系，
+    # 供 skill_upload 组织授权反查用户所属组织、管理面授权选择器拉目录。
+    # 部署通常与 manager 库共享同一 MySQL 实例（仅库名不同）；未显式配置
+    # host/port/user/password 时回退到 manager 库连接参数（见下方 validator）。
+    identity_db_type: str = Field(default="", validation_alias="IDENTITY_DB_TYPE")
+    identity_db_host: str = Field(default="", validation_alias="IDENTITY_DB_HOST")
+    identity_db_port: int = Field(default=0, validation_alias="IDENTITY_DB_PORT")
+    identity_db_user: str = Field(default="", validation_alias="IDENTITY_DB_USER")
+    identity_db_password: str = Field(default="", validation_alias="IDENTITY_DB_PASSWORD")
+    identity_db_name: str = Field(default="", validation_alias="IDENTITY_DB_NAME")
+
+    @model_validator(mode="after")
+    def _fill_identity_db_defaults(self) -> "Settings":
+        """identity 库连接参数缺省时回退到 manager 库（同实例不同库名）。"""
+        if not self.identity_db_type:
+            self.identity_db_type = self.db_type
+        if not self.identity_db_host:
+            self.identity_db_host = self.db_host
+        if not self.identity_db_port:
+            self.identity_db_port = self.db_port
+        if not self.identity_db_user:
+            self.identity_db_user = self.db_user
+        if not self.identity_db_password:
+            self.identity_db_password = self.db_password
+        if not self.identity_db_name:
+            # manager 库名为 manager_<ns>，identity 库名约定为 identity_<ns>；
+            # 无法从 manager 库名机械推导 identity 库名，需显式配置。默认 "identity"。
+            self.identity_db_name = "identity"
+        return self
 
     @property
     def host(self) -> str:

@@ -93,6 +93,7 @@
     "bots": "Agent模板",
     "approvalRequests": "审批申请",
     "roles": "角色",
+    "skillUploadGrants": "Skill 上传授权",
     "approvals": "审批中心",
     "todo": "待办",
     "todoWithCount": "待办，{{count}} 条"
@@ -272,7 +273,8 @@
       "audit": "业务审计",
       "resources": "集群资源",
       "workspaceQuota": "用户空间配额",
-      "teamQuota": "团队配额"
+      "teamQuota": "团队配额",
+      "skillUpload": "Skill 上传授权"
     },
     "placeholder": {
       "empty": "功能开发中，敬请期待"
@@ -1301,7 +1303,15 @@
     "businessType": "审批类型",
     "subjectTitle": "标题",
     "types": {
-      "workspace_quota_expand": "配额审批"
+      "workspace_quota_expand": "配额审批",
+      "skill_upload_permission": "Skill 上传资格申请"
+    },
+    "subjectType": "授权主体类型",
+    "subjectId": "授权主体",
+    "permissionId": "授权记录 ID",
+    "subjectTypes": {
+      "user": "用户",
+      "org": "组织"
     },
     "orderNum": "审批单号",
     "applicant": "申请人",
@@ -1353,5 +1363,49 @@
       "success": "已同步到 Gateway",
       "failed": "Gateway 同步失败"
     }
+  },
+  "skillUpload": {
+    "title": "Skill 上传授权",
+    "subtitle": "管理员可直接授权用户或组织；审批通过后写入同一授权记录",
+    "searchPlaceholder": "搜索主体 ID、授权人或申请单号",
+    "cluster": "企业实例",
+    "subjectType": "授权类型",
+    "subjectId": "授权主体",
+    "subjectTypes": {
+      "user": "用户",
+      "org": "组织"
+    },
+    "source": "来源",
+    "grantedBy": "授权人",
+    "sourceOrderNum": "申请单号",
+    "expiresAt": "有效期至",
+    "neverExpires": "长期有效",
+  "enabled": "启用",
+  "enabledTrue": "已启用",
+  "enabledFalse": "已停用",
+    "actions": "操作",
+    "add": "新增授权",
+    "revoke": "撤销",
+    "revokeConfirm": "确认撤销所选主体的 Skill 上传授权？",
+    "addTitle": "新增 Skill 上传授权",
+    "subjectTypeLabel": "授权对象",
+    "idsLabel": "选择用户 / 组织",
+    "idsPlaceholder": "u001, u002",
+    "dirSearchPlaceholder": "搜索名称或 ID 过滤目录",
+    "dirEmpty": "目录为空或加载中",
+    "selectedCount": "已选 {{count}} 项",
+    "expiresLabel": "有效期（留空表示长期有效）",
+    "save": "保存",
+    "saved": "授权已保存",
+    "revoked": "授权已撤销",
+    "userSection": "用户授权",
+    "orgSection": "组织授权",
+    "addUser": "添加用户授权",
+    "addOrg": "添加组织授权",
+    "sources": {
+      "admin": "管理员授权",
+      "approval": "审批通过"
+    },
+    "empty": "暂无授权记录"
   }
 }

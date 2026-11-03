@@ -600,18 +600,24 @@ export interface ApprovalOrder {
 export interface ApprovalDetail extends ApprovalOrder {
   reason: string;
   apply_data: {
-    workspace_key: string;
-    current_limit_bytes: number;
-    requested_limit_bytes: number;
-    used_bytes: number;
-    usage_percent: number;
-    source_policy_id: string;
+    workspace_key?: string;
+    current_limit_bytes?: number;
+    requested_limit_bytes?: number;
+    used_bytes?: number;
+    usage_percent?: number;
+    source_policy_id?: string;
+    subject_type?: string;
+    subject_id?: string;
+    [key: string]: unknown;
   };
   result_data: {
-    policy_id: string;
-    limit_bytes: number;
-    sync_status: 'success' | 'failed';
+    policy_id?: string;
+    permission_id?: number;
+    limit_bytes?: number;
+    subject_id?: string;
+    sync_status?: 'success' | 'failed';
     sync_detail?: string | null;
+    [key: string]: unknown;
   } | null;
   finished_at: string | null;
   records: ApprovalRecord[];
@@ -629,10 +635,63 @@ export const ApprovalApi = {
   get: (orderNum: string) =>
     http<ApprovalDetail>(`/v1/approvals/${encodeURIComponent(orderNum)}`),
   act: (orderNum: string, action: 'approve' | 'reject', comment?: string) =>
-    http<{ order_num: string; status: string; policy_id: string | null }>(
+    http<{ order_num: string; status: string; policy_id: string | null; permission_id?: number | null }>(
       `/v1/approvals/${encodeURIComponent(orderNum)}/actions`,
       { method: 'POST', body: { action, comment } },
     ),
+};
+
+export interface SkillUploadPermission {
+  id: number;
+  cluster_id: string;
+  subject_type: 'user' | 'org';
+  subject_id: string;
+  source: 'admin' | 'approval';
+  source_order_num: string | null;
+  enabled: boolean;
+  granted_by: string | null;
+  expires_at: string | null;
+  updated_by: string | null;
+  updated_at: string | null;
+  data: Record<string, unknown> | null;
+  created_at: string | null;
+}
+
+export const SkillUploadApi = {
+  list: (params?: {
+    cluster_id?: string;
+    subject_type?: 'user' | 'org';
+    source?: 'admin' | 'approval';
+    enabled?: boolean;
+    search?: string;
+    page?: number;
+    page_size?: number;
+  }) => http<PageResult<SkillUploadPermission>>('/v1/skills/upload-permissions', {
+    query: params,
+  }),
+  grant: (body: {
+    cluster_id: string;
+    subject_type: 'user' | 'org';
+    ids: string[];
+    expires_at?: string | null;
+    enabled?: boolean;
+  }) => http<{ cluster_id: string; subject_type: string; created: string[]; updated: string[] }>(
+    '/v1/skills/upload-permissions',
+    { method: 'POST', body },
+  ),
+  update: (id: number, body: {
+    enabled?: boolean;
+    expires_at?: string | null;
+    clear_expires_at?: boolean;
+  }) => http<SkillUploadPermission>(`/v1/skills/upload-permissions/${id}`, {
+    method: 'PATCH',
+    body,
+  }),
+  revoke: (body: { cluster_id: string; subject_type: 'user' | 'org'; ids: string[] }) =>
+    http<{ cluster_id: string; subject_type: string; revoked: string[] }>('/v1/skills/upload-permissions', {
+      method: 'DELETE',
+      body,
+    }),
 };
 export type MatchExpr = string | string[];
 /** instance_agent_resource 表一行（授权即实例化）。 */
