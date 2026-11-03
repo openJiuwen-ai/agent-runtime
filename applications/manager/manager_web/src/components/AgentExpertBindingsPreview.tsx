@@ -6,6 +6,8 @@ import { InstanceApi, PackageAllowlistApi } from '../services/api';
 import { collectPages } from '../utils/overview';
 import { readAgentExpertDraft, type AgentExpertSelection } from '../utils/agentExpertDraft';
 
+import './AgentCapabilityCards.css';
+
 const keyOf = (item: AgentExpertSelection) => `${item.kind}:${item.id}`;
 
 /** UI contract preview only. Never serialize these selections into template_ref or allowlists. */
@@ -32,14 +34,15 @@ export function AgentExpertBindingsPreview({ value, onChange, disabled = false, 
   const query = new URLSearchParams({ returnTo });
   if (validSource) query.set('cluster', validSource);
 
-  return <section className="card !p-4 agent-expert-preview">
-    <div className="flex items-start justify-between gap-3">
-      <div><strong>{tr('专家与专家包 · 可选', 'Experts & packages · Optional')}</strong><span className="tag ml-2">{tr('绑定预览', 'Binding preview')}</span>
-        <p className="text-xs text-muted mt-1">{tr('选择此 Agent 要使用的专家能力；集群绑定该模板时将一并使用。', 'Choose expert capabilities for this Agent. The planned flow uses them with the template when bound to a cluster.')}</p>
+  return <section className="agent-capability-card agent-expert-preview">
+    <div className="agent-capability-card__header">
+      <div className="agent-capability-card__heading"><strong>{tr('专家与专家包 · 可选', 'Experts & packages · Optional')}</strong><span className="tag ml-2">{tr('绑定预览', 'Binding preview')}</span>
+        <p className="text-xs text-muted mt-1">{tr('选择此 Agent 计划使用的专家能力；模板级绑定待后端接入。', 'Choose expert capabilities for this Agent. The planned flow uses them with the template when bound to a cluster.')}</p>
       </div>
-      <button type="button" className="btn ghost sm" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>{expanded ? tr('收起', 'Collapse') : tr('选择资源', 'Select resources')} · {value.length}</button>
+      <a className="btn sm agent-capability-card__link" href={`/manager/expert-packages?${query}`} target="_blank" rel="noopener noreferrer">{tr('前往专家与专家包', 'Open experts & packages')} ↗</a>
     </div>
     <p className="text-xs text-muted mt-2">{tr('待后端接口接入：当前选择仅作为本浏览器中的模板预览保存，不会下发或改变集群授权。', 'Backend integration pending: selections are saved as a browser-local template preview only and do not change cluster grants.')}</p>
+    <div className="agent-expert-preview__selection"><span className="text-xs text-muted">{tr(`已选择 ${value.length} 项`, `${value.length} selected`)}</span><button type="button" className="btn sm" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>{expanded ? tr('收起选择', 'Hide selection') : tr('选择资源', 'Select resources')}</button></div>
     {value.length > 0 && <div className="flex flex-wrap gap-2 mt-3">{value.map(item => <span className="tag" key={keyOf(item)}>{item.display_name || item.id}<button type="button" disabled={disabled} className="ml-2" aria-label={tr('移除 ', 'Remove ') + (item.display_name || item.id)} onClick={() => onChange(value.filter(row => keyOf(row) !== keyOf(item)))}>×</button></span>)}</div>}
     {onSavePreview && <button type="button" disabled={disabled} className="btn sm mt-3" onClick={onSavePreview}>{tr('保存绑定预览', 'Save binding preview')}</button>}
     {expanded && <div className="mt-4 flex flex-col gap-3">
@@ -48,7 +51,6 @@ export function AgentExpertBindingsPreview({ value, onChange, disabled = false, 
           <option value="">{tr('选择已接入的集群目录', 'Choose a connected cluster catalog')}</option>
           {(clusters.data ?? []).map(cluster => <option key={cluster.jiuwenclaw_id} value={cluster.jiuwenclaw_id}>{cluster.jiuwenclaw_name}</option>)}
         </select></label>
-        <a className="btn sm self-end" href={`/manager/expert-packages?${query}`} target="_blank" rel="noopener noreferrer">{tr('打开资源中心', 'Open resource center')} ↗</a>
         <button type="button" className="btn sm self-end" disabled={catalog.loading || clusters.loading} onClick={() => { void clusters.reload(); void catalog.reload(); }}>{tr('刷新', 'Refresh')}</button>
       </div>
       <p className="text-xs text-muted">{tr('当前通过集群连接读取 Hub 目录；此处的来源只用于读取资源，不决定模板在哪个集群生效。', 'The current API reads Hub catalogs through a cluster connection. This source does not determine where the template is used.')}</p>

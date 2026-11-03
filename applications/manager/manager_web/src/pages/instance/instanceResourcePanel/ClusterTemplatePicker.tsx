@@ -16,12 +16,12 @@ interface Props {
 
 /** Match the admission picker, with a single template choice per resource binding. */
 export function ClusterTemplatePicker({ kind, candidates, value, onChange, loading, error, disabled, onReload, onManage }: Props) {
-  const { i18n } = useTranslation();
+  const { t, i18n } = useTranslation();
   const tr = (cn: string, en: string) => i18n.language.startsWith('zh') ? cn : en;
   const radioName = useId();
   const [query, setQuery] = useState('');
   const subject = kind === 'runtime' ? tr('运行规格', 'runtime profiles') : tr('Agent 模板', 'Agent templates');
-  const page = kind === 'runtime' ? tr('运行规格', 'runtime profiles') : tr('Agent模板管理', 'Agent templates');
+  const page = kind === 'runtime' ? t('serviceConfigTemplate.title', { defaultValue: '运行时模板管理' }) : tr('Agent模板管理', 'Agent templates');
   const returnLabel = kind === 'runtime' ? tr('返回集群运行资源', 'Return to cluster runtime resources') : tr('返回集群配置', 'Return to cluster');
   const keyword = query.trim().toLowerCase();
   const filtered = candidates.filter(item => `${item.label} ${item.id}`.toLowerCase().includes(keyword));

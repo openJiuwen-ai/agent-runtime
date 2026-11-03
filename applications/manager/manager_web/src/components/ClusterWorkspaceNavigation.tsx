@@ -1,6 +1,5 @@
 import { useTranslation } from 'react-i18next';
 import { useRouter } from '../router';
-import type { ClusterSetupProgress } from '../utils/clusterSetupProgress';
 import { clusterNavigationGroup, clusterPagePath, type ClusterWorkspaceSection } from '../utils/clusterNavigation';
 import { templateReturnPath } from '../utils/agentFlowContext';
 
@@ -11,7 +10,6 @@ export function ClusterWorkspaceNavigation({ instanceId, name, section, onRefres
   instanceId: string;
   name: string;
   section: ClusterWorkspaceSection;
-  progress?: ClusterSetupProgress | null;
   onRefresh?: () => void;
 }) {
   const { i18n } = useTranslation();
@@ -37,7 +35,7 @@ export function ClusterWorkspaceNavigation({ instanceId, name, section, onRefres
       <h1 className="page-title min-w-0 truncate" title={name}>{name}</h1>
       <div className="cluster-workspace-header__actions">
         {params.has('returnTo') && <button type="button" className="btn" onClick={() => navigate(templateReturnPath(params.get('returnTo')))}>{tr('返回 Agent 模板', 'Return to Agent templates')}</button>}
-        {isWorkbench && onRefresh && <button type="button" className="btn" onClick={onRefresh}>{tr('刷新进度', 'Refresh progress')}</button>}
+        {isWorkbench && onRefresh && <button type="button" className="btn" onClick={onRefresh}>{tr('刷新配置', 'Refresh configuration')}</button>}
         {!isWorkbench && <button type="button" className="btn" onClick={() => to('cluster-config')}>{tr('返回配置工作台', 'Configuration workspace')}</button>}
         <button type="button" className="btn" onClick={() => navigate('/instances')}>← {tr('集群管理', 'Clusters')}</button>
       </div>

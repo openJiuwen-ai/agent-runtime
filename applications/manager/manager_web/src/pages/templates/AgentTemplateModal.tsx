@@ -268,36 +268,22 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
         </>
       }
     >
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        <div className="md:col-span-2">
-          <FieldLabel required>{t('agentTemplate.templateName')}</FieldLabel>
-          <LimitedTextInput
-            ariaLabel={t('agentTemplate.templateName')}
-            value={form.template_name}
-            maxLength={FIELD_MAX_LENGTH.template_name}
-            onChange={(v) => update('template_name', v)}
-          />
+      <div className="grid grid-cols-1 gap-4">
+        <div className="agent-template-identity">
+          <div>
+            <FieldLabel required>{t('agentTemplate.templateName')}</FieldLabel>
+            <LimitedTextInput ariaLabel={t('agentTemplate.templateName')} value={form.template_name} maxLength={FIELD_MAX_LENGTH.template_name} onChange={(value) => update('template_name', value)} />
+          </div>
+          <div>
+            <FieldLabel>{t('agentTemplate.agentTags')}</FieldLabel>
+            <input className="input" aria-label={t('agentTemplate.agentTags')} placeholder={t('agentTemplate.agentTagsHint')} value={form.agent_tags} onChange={(event) => update('agent_tags', event.target.value)} />
+          </div>
         </div>
-        <div className="md:col-span-2">
+        <div>
           <FieldLabel>{t('agentTemplate.templateDescription')}</FieldLabel>
-          <LimitedTextInput
-            ariaLabel={t('agentTemplate.templateDescription')}
-            value={form.description}
-            maxLength={FIELD_MAX_LENGTH.description}
-            onChange={(v) => update('description', v)}
-          />
+          <LimitedTextInput ariaLabel={t('agentTemplate.templateDescription')} value={form.description} maxLength={FIELD_MAX_LENGTH.description} onChange={(value) => update('description', value)} />
         </div>
-        <div className="md:col-span-2">
-          <FieldLabel>{t('agentTemplate.agentTags')}</FieldLabel>
-          <input
-            className="input"
-            aria-label={t('agentTemplate.agentTags')}
-            placeholder={t('agentTemplate.agentTagsHint')}
-            value={form.agent_tags}
-            onChange={(e) => update('agent_tags', e.target.value)}
-          />
-        </div>
-        <div className="md:col-span-2">
+        <div>
           <TemplateRefEditor
             key={template?.template_id ?? 'new'}
             resourceLinksInNewTab
@@ -307,42 +293,46 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
             requiredSlots={['default_model']}
             value={form.template_ref}
             onChange={(v) => update('template_ref', v)}
+            optionalSelectedCount={(expertPreview.length ? 1 : 0) + (customConfig.value.length ? 1 : 0)}
+            expandOptional={!!customConfig.error}
+            optionalContent={(
+              <>
+                <AgentExpertBindingsPreview value={expertPreview} onChange={setExpertPreview} disabled={saving || registering || closing}
+                  returnTo={template ? `/agent-templates/${encodeURIComponent(template.template_id)}` : '/agent-templates'}
+                  onSavePreview={template ? saveExpertPreview : undefined} />
+                <details className="agent-capability-card agent-template-custom-config" data-testid="agent-template-custom-config" open={customConfig.error ? true : undefined}>
+                  <summary className="cursor-pointer text-sm font-medium mb-3">{t('agentTemplate.customConfig')}</summary>
+                  <JsonField
+                    label={t('agentTemplate.customConfig')}
+                    value={hideSecrets ? maskAgentClientSecrets(customConfig.value) : form.custom_config_json}
+                    onChange={(value) => update('custom_config_json', value)}
+                    placeholder={'[\n  {\n    "xxx": "yyy",\n    "xxxz": "asdasd"\n  }\n]'}
+                    rows={7}
+                    readOnly={registering || hideSecrets || closing || saving}
+                    labelActions={<>
+                      {registrationConfig.enabled && <button type="button" className="btn ghost sm" onClick={() => void registerClient()}
+                        disabled={!registrationConfig.configured || registering || saving || closing
+                          || !form.template_name.trim() || customConfig.error !== null || credentialsExist}
+                        title={credentialsExist ? t('agentTemplate.registration.alreadyConfigured') : registrationConfig.reason}>
+                        {t(registering ? 'agentTemplate.registration.pending' : 'agentTemplate.registration.button')}
+                      </button>}
+                      {containsSecret && <button type="button" className="btn ghost sm" onClick={() => setShowSecrets((value) => !value)}>
+                        {t(showSecrets ? 'agentTemplate.registration.hideSecret' : 'agentTemplate.registration.showSecret')}
+                      </button>}
+                    </>}
+                  />
+                  {registrationConfig.enabled && !registrationConfig.configured && <p className="text-[11px] text-danger mt-1">{registrationConfig.reason}</p>}
+                  <p className="text-[11px] text-muted mt-1">{t('agentTemplate.customConfigHint')}</p>
+                  {customConfig.error === 'objectArray' && (
+                    <div className="text-[11px] text-danger mt-1" role="alert">
+                      {t('agentTemplate.customConfigInvalid')}
+                    </div>
+                  )}
+                </details>
+              </>
+            )}
           />
         </div>
-        <div className="md:col-span-2">
-          <AgentExpertBindingsPreview value={expertPreview} onChange={setExpertPreview} disabled={saving || registering || closing}
-            returnTo={template ? `/agent-templates/${encodeURIComponent(template.template_id)}` : '/agent-templates'}
-            onSavePreview={template ? saveExpertPreview : undefined} />
-        </div>
-        <details className="md:col-span-2" data-testid="agent-template-custom-config" open={customConfig.error ? true : undefined}>
-          <summary className="cursor-pointer text-sm font-medium mb-3">{t('agentTemplate.customConfig')}</summary>
-          <JsonField
-            label={t('agentTemplate.customConfig')}
-            value={hideSecrets ? maskAgentClientSecrets(customConfig.value) : form.custom_config_json}
-            onChange={(value) => update('custom_config_json', value)}
-            placeholder={'[\n  {\n    "xxx": "yyy",\n    "xxxz": "asdasd"\n  }\n]'}
-            rows={7}
-            readOnly={registering || hideSecrets || closing || saving}
-            labelActions={<>
-              {registrationConfig.enabled && <button type="button" className="btn ghost sm" onClick={() => void registerClient()}
-                disabled={!registrationConfig.configured || registering || saving || closing
-                  || !form.template_name.trim() || customConfig.error !== null || credentialsExist}
-                title={credentialsExist ? t('agentTemplate.registration.alreadyConfigured') : registrationConfig.reason}>
-                {t(registering ? 'agentTemplate.registration.pending' : 'agentTemplate.registration.button')}
-              </button>}
-              {containsSecret && <button type="button" className="btn ghost sm" onClick={() => setShowSecrets((value) => !value)}>
-                {t(showSecrets ? 'agentTemplate.registration.hideSecret' : 'agentTemplate.registration.showSecret')}
-              </button>}
-            </>}
-          />
-          {registrationConfig.enabled && !registrationConfig.configured && <p className="text-[11px] text-danger mt-1">{registrationConfig.reason}</p>}
-          <p className="text-[11px] text-muted mt-1">{t('agentTemplate.customConfigHint')}</p>
-          {customConfig.error === 'objectArray' && (
-            <div className="text-[11px] text-danger mt-1" role="alert">
-              {t('agentTemplate.customConfigInvalid')}
-            </div>
-          )}
-        </details>
       </div>
       {template && <ConfigRefreshCostHint scope="template" />}
     </Modal>

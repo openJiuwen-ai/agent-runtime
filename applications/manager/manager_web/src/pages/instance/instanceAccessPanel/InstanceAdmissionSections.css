@@ -1,5 +1,5 @@
 .cluster-admission { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
-.cluster-admission-section { min-width: 0; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); scroll-margin-block: 20px; }
+.cluster-admission-section { flex: 0 0 auto; min-width: 0; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); scroll-margin-block: 20px; }
 .cluster-admission-section__header.page-header { padding: 18px 20px; margin: 0; border-bottom: 1px solid var(--border); border-radius: 10px 10px 0 0; background: var(--bg); }
 .cluster-admission-section__heading { min-width: 0; flex: 1 1 280px; }
 .cluster-admission-section__actions { flex: 1 1 460px; }
@@ -7,10 +7,11 @@
 .cluster-admission-section__actions .btn { flex-shrink: 0; }
 .cluster-admission-section__title { font-size: 16px; font-weight: 600; color: var(--text-strong); }
 .cluster-admission-section__description { margin-top: 5px; color: var(--muted); font-size: 12px; line-height: 1.6; }
-.cluster-admission-section__table { min-width: 0; overflow: hidden; border-radius: 0 0 10px 10px; }
+.cluster-admission-section__table { min-width: 0; padding: 8px 10px 10px; overflow: hidden; border-radius: 0 0 10px 10px; }
 .cluster-admission-section__footer { padding: 12px 20px 16px; border-top: 1px solid var(--border); }
 @media (max-width: 720px) {
   .cluster-admission { gap: 16px; }
   .cluster-admission-section__header.page-header { padding: 14px; }
+  .cluster-admission-section__table { padding: 8px; }
   .cluster-admission-section__footer { padding: 10px 14px 14px; }
 }

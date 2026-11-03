@@ -269,10 +269,10 @@ export function ServiceConfigTemplatesPage({
       <div className="flex min-w-0 flex-col gap-4">
         {clusterReturnPath && (
           <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
-            <span className="text-muted">正在为当前集群准备运行规格。保存模板后，还需要返回集群添加运行资源绑定。</span>
+            <span className="text-muted">正在为当前集群准备运行时模板。保存模板后，还需要返回集群添加运行资源绑定。</span>
             <div className="flex flex-wrap gap-2">
               <button className="btn sm" onClick={() => navigate(clusterReturnPath)}>← 返回集群运行资源</button>
-              {preparedReturnPath && <button className="btn sm primary" onClick={() => navigate(preparedReturnPath)}>绑定刚保存的运行规格 →</button>}
+              {preparedReturnPath && <button className="btn sm primary" onClick={() => navigate(preparedReturnPath)}>绑定刚保存的运行时模板 →</button>}
             </div>
           </div>
         )}
@@ -332,7 +332,7 @@ export function ServiceConfigTemplatesPage({
           <p>可在集群配置工作台中绑定到目标服务实例。</p>
         </article>
         <article className="card environment-overview-card">
-          <div className="environment-overview-card__label">运行规格模板</div>
+          <div className="environment-overview-card__label">运行时模板</div>
           <strong>{items.length}</strong>
           <p>由容器模板组装成可调度、可扩缩的运行池方案。</p>
         </article>

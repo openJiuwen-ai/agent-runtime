@@ -172,10 +172,10 @@ export function ContainerTemplatesPage() {
       <div className="flex min-w-0 flex-col gap-4">
         {clusterReturnPath && (
           <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
-            <span className="text-muted">正在为当前集群准备容器模板。下一步在运行规格中选择容器，再回集群绑定运行资源。</span>
+            <span className="text-muted">正在为当前集群准备容器模板。下一步在运行时模板管理中选择容器，再回集群绑定运行资源。</span>
             <div className="flex flex-wrap gap-2">
               <button className="btn sm" onClick={() => navigate(clusterReturnPath)}>← 返回集群运行资源</button>
-              <button className="btn sm primary" onClick={() => navigate(runtimeCatalog)}>继续准备运行规格 →</button>
+              <button className="btn sm primary" onClick={() => navigate(runtimeCatalog)}>前往运行时模板管理 →</button>
             </div>
           </div>
         )}
@@ -306,8 +306,8 @@ export function ContainerTemplatesPage() {
         {data ? (
           <Pagination page={page} pageSize={pageSize} total={data.total ?? data.items.length} onChange={(nextPage, nextSize) => { setPage(nextPage); setPageSize(nextSize); }} />
         ) : null}
-        <WorkspaceNote title="容器模板是运行时的“软件包装方式”" action={<button className="btn sm" type="button" onClick={() => navigate(runtimeCatalog)}>查看运行规格 →</button>}>
-          先准备 AgentServer、Sandbox 等镜像和容器参数，再在运行规格中组装成运行池。
+        <WorkspaceNote title="容器模板是运行时的“软件包装方式”" action={<button className="btn sm" type="button" onClick={() => navigate(runtimeCatalog)}>前往运行时模板管理 →</button>}>
+          先准备 AgentServer、Sandbox 等镜像和容器参数，再在运行时模板管理中组装成运行池。
         </WorkspaceNote>
       </div>
       <ContainerTemplateModal

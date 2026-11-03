@@ -13,12 +13,15 @@ export function Sidebar() {
   const admin = isPlatformAdmin(user);
   const groups = [
     { name: label('工作台', 'Workspace'), items: [
-      ['/overview', label('总览', 'Overview')], ['/agent-templates', label('Agent模板管理', 'Agent templates')], ['/instances', label('集群管理', 'Clusters')], ['/authorization', label('授权管理', 'Authorization')],
+      ['/overview', label('总览', 'Overview')],
+      ['/instances', label('集群管理', 'Clusters')],
+      ['/agent-templates', label('Agent模板管理', 'Agent templates')],
+      ['/service-config-templates', t('serviceConfigTemplate.title')],
+      ['/authorization', label('授权管理', 'Authorization')],
     ], show: admin },
     { name: label('资源中心', 'Resources'), items: resourceCatalog.map(resource => [resource.path, t(`${resource.key}.title`)]), show: admin },
     { name: label('运行环境', 'Environments'), items: [
       ['/container-templates', label('容器模板', 'Container templates')],
-      ['/service-config-templates', label('运行规格', 'Runtime profiles')],
     ], show: admin },
     { name: label('访问授权', 'Access & authorization'), items: [
       ...(admin ? [['/users', label('用户', 'Users')], ['/orgs', label('组织', 'Organizations')]] : []),

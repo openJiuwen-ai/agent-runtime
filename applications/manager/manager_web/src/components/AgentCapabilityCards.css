@@ -1,0 +1,23 @@
+.agent-capabilities { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.agent-capabilities__heading, .agent-capability-card__header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+.agent-capabilities__heading > :first-child, .agent-capability-card__heading { min-width: 0; flex: 1; }
+.agent-capability-card { min-width: 0; display: flex; flex-direction: column; gap: 12px; padding: 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); }
+.agent-capability-card__heading strong { font-size: 13px; font-weight: 600; color: var(--text-strong); }
+.agent-capability-card__heading p { margin-top: 5px; font-size: 12px; color: var(--muted); line-height: 1.6; }
+.agent-capability-card__link { flex-shrink: 0; white-space: nowrap; }
+.agent-capabilities__toggle { display: flex; width: 100%; justify-content: space-between; align-items: center; gap: 16px; padding: 14px 16px; text-align: left; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); }
+.agent-capabilities__toggle strong { font-size: 13px; }
+.agent-capabilities__toggle small { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; }
+.agent-capabilities__toggle-state { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.agent-capabilities__toggle:hover { border-color: var(--accent); }
+.agent-capabilities__toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.agent-capabilities__optional:not([hidden]) { display: flex; flex-direction: column; gap: 12px; }
+.agent-capability-card .agent-expert-preview__selection { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.agent-template-identity { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+.agent-template-custom-config > summary { cursor: pointer; font-size: 13px; font-weight: 600; }
+@media(max-width: 640px) {
+  .agent-template-identity { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .agent-capability-card__header { flex-wrap: wrap; gap: 10px; }
+  .agent-capability-card__heading { flex-basis: 100%; }
+  .agent-capability-card__link { margin-left: auto; }
+}

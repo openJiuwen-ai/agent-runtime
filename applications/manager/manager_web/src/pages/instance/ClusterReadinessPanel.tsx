@@ -6,6 +6,8 @@ import { useAsync } from '../../hooks/useAsync';
 import { ApiError, InstanceApi, UserConsoleApi } from '../../services/api';
 import type { ClusterSetupProgress } from '../../utils/clusterSetupProgress';
 import { clusterReadiness } from '../../utils/clusterReadiness';
+import { useRouter } from '../../router';
+import { clusterPagePath } from '../../utils/clusterNavigation';
 
 export function ClusterReadinessPanel({ data, refreshing, reload }: {
   data: ClusterSetupProgress;
@@ -14,6 +16,7 @@ export function ClusterReadinessPanel({ data, refreshing, reload }: {
 }) {
   const { i18n } = useTranslation();
   const { user } = useAuth();
+  const { navigate, params } = useRouter();
   const tr = (cn: string, en: string) => i18n.language.startsWith('zh') ? cn : en;
   const id = data.instance.jiuwenclaw_id;
   const contexts = useAsync(async () => {
@@ -58,10 +61,9 @@ export function ClusterReadinessPanel({ data, refreshing, reload }: {
   }
 
   return <aside className="card cluster-readiness" aria-label={tr('配置与使用检查', 'Configuration and access checks')}>
-    <div className="card-header"><h2>{tr('配置与使用检查', 'Configuration and access checks')}</h2></div>
+    <div className="card-header"><h2>{tr('配置与使用检查', 'Configuration and access checks')}</h2><button className="btn sm" title={tr('检查全部集群的组件连接，此处展示当前集群结果。', 'Check all clusters and show results for this cluster.')} disabled={probing || refreshing} onClick={() => void checkConnections()}>{probing ? tr('检查中…', 'Checking…') : tr('检查连接', 'Check connections')}</button></div>
     <div className="cluster-readiness__section">
-      <div className="flex flex-wrap items-center justify-between gap-2"><strong className="text-sm">{tr('组件连接', 'Component connectivity')}</strong><button className="btn sm" title={tr('检查全部集群的组件连接，此处展示当前集群结果。', 'Check all clusters and show results for this cluster.')} disabled={probing || refreshing} onClick={() => void checkConnections()}>{probing ? tr('检查中…', 'Checking…') : tr('检查连接', 'Check connections')}</button></div>
-      <div className="space-y-3 text-sm mt-3">{([['Gateway', data.instance.gateway_status], ['Runtime', data.instance.runtime_status], ['User Web', data.instance.user_web_status || 'pending']] as const).map(([label, status]) => <div key={label} className="flex justify-between gap-2"><span>{label}</span><StatusBadge status={status} /></div>)}</div>
+      <div className="cluster-readiness__connections" aria-label={tr('组件连接', 'Component connectivity')}>{([['Gateway', data.instance.gateway_status], ['Runtime', data.instance.runtime_status], ['User Web', data.instance.user_web_status || 'pending']] as const).map(([label, status]) => <div key={label} title={`${label}: ${status || 'pending'}`} aria-label={`${label}: ${status || 'pending'}`}><StatusBadge status={status || 'pending'} /><span className="text-xs text-muted">{label}</span></div>)}</div>
     </div>
     <div className="cluster-readiness__section">
       <strong className="text-sm">{tr('当前账号权限', 'Current account access')}</strong>
@@ -69,6 +71,7 @@ export function ClusterReadinessPanel({ data, refreshing, reload }: {
       {contexts.error && <><p className="text-xs text-danger mt-2" role="alert">{contexts.error}</p><button className="btn sm mt-2" onClick={() => void contexts.reload()}>{tr('重新检查权限', 'Retry access check')}</button></>}
     </div>
     <div className="cluster-readiness__actions">
+      <button type="button" className="btn w-full" onClick={() => navigate(clusterPagePath(id, 'access', params))}>{tr('前往配置权限', 'Configure access')}</button>
       <button className="btn primary w-full" disabled={readiness !== 'ready' || opening} onClick={() => void openConsole()}>{opening ? tr('正在进入…', 'Opening…') : tr('前往用户面验证', 'Test in user console')} →</button>
       {message && <p className="text-xs text-muted" role="status">{message}</p>}
       {error && <p className="text-xs text-danger" role="alert">{error}</p>}

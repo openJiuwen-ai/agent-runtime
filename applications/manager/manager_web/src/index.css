@@ -2144,8 +2144,6 @@ dialog.resource-preview::backdrop { background: rgb(0 0 0 / .24); }
 .wizard-step strong { color: inherit; font-size: 13px; }
 .wizard-step small { margin-top: 3px; color: var(--muted); font-size: 11px; line-height: 1.45; }
 .wizard-card { padding: 24px; }
-.wizard-progress { height: 6px; margin-bottom: 22px; overflow: hidden; border-radius: 999px; background: var(--secondary); }
-.wizard-progress span { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width .2s ease; }
 .wizard-help { max-width: 760px; margin-top: 8px; color: var(--muted); font-size: 13px; line-height: 1.7; }
 .wizard-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 20px; }
 .wizard-form-grid .label { min-width: 0; }
@@ -2212,10 +2210,6 @@ dialog.resource-preview::backdrop { background: rgb(0 0 0 / .24); }
 .cluster-workspace-subnav { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 0 2px; }
 .cluster-setup-card__number { display: grid; place-items: center; width: 28px; height: 28px; flex-shrink: 0; border-radius: 50%; background: var(--secondary); color: var(--muted); font-size: 12px; }
 .cluster-setup-card__number.complete { color: #047857; background: #d1fae5; }
-.cluster-setup-overview { display: flex; justify-content: space-between; align-items: center; gap: 24px; }
-.cluster-setup-overview__progress { width: 180px; flex-shrink: 0; }
-.cluster-setup-overview__progress > strong { display: block; font-size: 28px; color: var(--text-strong); }
-.cluster-setup-overview__progress > strong > span { font-size: 16px; font-weight: 400; color: var(--muted); }
 .cluster-setup-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
 .cluster-setup-card { display: flex; flex-direction: column; }
 .cluster-setup-card.next { border-color: var(--accent); }
@@ -2259,8 +2253,6 @@ dialog.resource-preview::backdrop { background: rgb(0 0 0 / .24); }
 .cluster-resource-list__actions--selection { flex: 0 0 auto; }
 .cluster-resource-list > .manager-page-table { min-height: clamp(320px, calc(100dvh - 580px), 900px); }
 .cluster-detail-footer { display: flex; flex-direction: column; gap: 16px; margin-top: auto; flex-shrink: 0; }
-.cluster-detail-page .cluster-admission-section__table { min-height: clamp(240px, calc((100dvh - 430px) / 2), 440px); background: var(--card); }
-.cluster-detail-page .cluster-admission-section__table > .overflow-x-auto { min-height: inherit; }
 .cluster-detail-page .cluster-setting-card .manager-page-table { min-height: 300px; }
 .cluster-detail-page .cluster-setting-card .card:has(> .overflow-x-auto > .table) { min-height: 300px; background: var(--card); }
 @media (max-width: 760px) {
@@ -2271,5 +2263,5 @@ dialog.resource-preview::backdrop { background: rgb(0 0 0 / .24); }
   .cluster-detail-footer { gap: 12px; }
 }
 @media(max-width: 1050px) { .cluster-setup-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media(max-width: 760px) { .cluster-setup-overview { flex-direction: column; align-items: stretch; } .cluster-setup-overview__progress { width: 100%; } .cluster-workspace-nav__item { padding: 10px 12px; } }
+@media(max-width: 760px) { .cluster-workspace-nav__item { padding: 10px 12px; } }
 @media(max-width: 480px) { .cluster-setup-grid { grid-template-columns: 1fr; } }

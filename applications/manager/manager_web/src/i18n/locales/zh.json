@@ -86,7 +86,7 @@
     "extensionTemplates": "扩展配置",
     "mcpTemplates": "MCP配置",
     "agentManagement": "Agent模板管理",
-    "serviceConfigTemplates": "运行规格",
+    "serviceConfigTemplates": "运行时模板管理",
     "iam": "身份中心",
     "users": "用户",
     "orgs": "组织",
@@ -796,7 +796,7 @@
     "deleteConfirm": "确认删除该预置 Skill 模板？该模板可能被多个实例资源引用，请确认无副作用。"
   },
   "serviceConfigTemplate": {
-    "title": "运行规格",
+    "title": "运行时模板管理",
     "subtitle": "由容器模板组装成的可调度、可扩缩的 Agent 运行池方案（Runtime Profile）",
     "new": "新建运行时模板",
     "edit": "编辑运行时模板",
