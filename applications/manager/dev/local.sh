@@ -52,4 +52,16 @@ echo "Manager: http://127.0.0.1:5273/manager"
 echo "Local credentials: admin/admin and user/user"
 echo "Logs: $STATE/{identity,manager,web}.log"
 echo "Offline UI development: $MANAGER_DEV_OFFLINE (use --live to restore real probes and config delivery)"
-wait
+# Exit if any child fails, so a service supervisor can restart the whole stack.
+# Bash 3.2 on macOS does not support wait -n.
+while true; do
+  for pid in "${pids[@]}"; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      code=0
+      wait "$pid" || code=$?
+      echo "Local Manager child $pid exited (code $code); stopping the stack." >&2
+      exit 1
+    fi
+  done
+  sleep 2
+done

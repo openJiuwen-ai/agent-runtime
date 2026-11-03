@@ -10,7 +10,23 @@ uv pip install --python .venv-manager/bin/python -e foundation -e service -e app
 npm --prefix applications/manager/manager_web ci
 ```
 
-启动（保持终端打开，Ctrl-C 停止全部服务）：
+macOS 后台启动（推荐用于持续调试）：
+
+```sh
+python3 applications/manager/dev/background.py start --offline
+python3 applications/manager/dev/background.py status
+```
+
+由当前用户登录会话中的 `launchd` 管理，不依赖终端或临时工具会话。某个子服务退出时，启动器会停止其余进程并交由 `launchd` 重启整套服务。只监听本机回环地址，沿用现有数据库，不添加系统级或开机登录自启项；退出 macOS 登录会话后需重新启动。启动日志为 `.manager-dev/local-service.log`。
+
+```sh
+python3 applications/manager/dev/background.py restart --offline
+python3 applications/manager/dev/background.py stop
+```
+
+`start` 不会重复启动已加载服务；改为真实联调需显式执行 `restart --live`。不要同时运行前台与后台两套服务。
+
+前台启动（保持终端打开，Ctrl-C 停止全部服务）：
 
 ```sh
 bash applications/manager/dev/local.sh
