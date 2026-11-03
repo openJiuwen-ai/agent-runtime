@@ -18,6 +18,8 @@ MCP_SLOT = "mcp"
 EMBEDDING_MODEL_SLOT = "embedding_model"
 PERMISSIONS_SLOT = "permissions"
 A2A_ACCESS_POLICY_SLOT = "a2a_access_policy"
+# 单值槽。写入值是 expert_package_template.template_id。一行里的 packages 才是 Hub 包。
+EXPERT_PACKAGE_SLOT = "expert_package"
 # 服务配置不进 agent ``template_ref``；仅用于 ``jid_template_ref.slot`` 区分 Runtime 映射。
 SERVICE_CONFIG_SLOT = "service_config"
 
@@ -29,12 +31,19 @@ _TEMPLATE_REF_SLOTS: tuple[str, ...] = (
     EMBEDDING_MODEL_SLOT,
     PERMISSIONS_SLOT,
     A2A_ACCESS_POLICY_SLOT,
+    EXPERT_PACKAGE_SLOT,
 )
 
 MODEL_TEMPLATE_SLOTS: frozenset[str] = frozenset(_MODEL_TEMPLATE_SLOTS)
 TEMPLATE_REF_SLOTS: frozenset[str] = frozenset(_TEMPLATE_REF_SLOTS)
 SINGLE_VALUE_TEMPLATE_REF_SLOTS: frozenset[str] = frozenset(
-    (*_MODEL_TEMPLATE_SLOTS, EMBEDDING_MODEL_SLOT, PERMISSIONS_SLOT, A2A_ACCESS_POLICY_SLOT)
+    (
+        *_MODEL_TEMPLATE_SLOTS,
+        EMBEDDING_MODEL_SLOT,
+        PERMISSIONS_SLOT,
+        A2A_ACCESS_POLICY_SLOT,
+        EXPERT_PACKAGE_SLOT,
+    )
 )
 
 DefaultTemplateMappingTypeLiteral = Literal[
@@ -49,6 +58,7 @@ DefaultTemplateMappingTypeLiteral = Literal[
     "embedding_model",
     "permissions",
     "a2a_access_policy",
+    "expert_package",
 ]
 
 MappingScopeTypeLiteral = Literal["user", "group", "bot"]
@@ -62,6 +72,7 @@ __all__ = (
     "EMBEDDING_MODEL_SLOT",
     "PERMISSIONS_SLOT",
     "A2A_ACCESS_POLICY_SLOT",
+    "EXPERT_PACKAGE_SLOT",
     "SERVICE_CONFIG_SLOT",
     "SINGLE_VALUE_TEMPLATE_REF_SLOTS",
     "TEMPLATE_REF_SLOTS",

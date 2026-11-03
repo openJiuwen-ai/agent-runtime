@@ -17,6 +17,7 @@ import { EmbeddingTemplatesPage } from './pages/templates/EmbeddingTemplatesPage
 import { ExtensionTemplatesPage } from './pages/templates/ExtensionTemplatesPage';
 import { McpTemplatesPage } from './pages/templates/McpTemplatesPage';
 import { SkillPrebuiltTemplatesPage } from './pages/templates/SkillPrebuiltTemplatesPage';
+import { ExpertPackageTemplatesPage } from './pages/templates/ExpertPackageTemplatesPage';
 import { ContainerTemplatesPage } from './pages/templates/ContainerTemplatesPage';
 import { ServiceConfigTemplatesPage } from './pages/templates/ServiceConfigTemplatesPage';
 import { SafetyGuardrailsPage } from './pages/templates/SafetyGuardrailsPage';
@@ -36,7 +37,6 @@ import { ApprovalPage } from './pages/approval/ApprovalPage';
 import { ApprovalEditPage } from './pages/approval/ApprovalEditPage';
 import { AgentTemplatesPage } from './pages/templates/AgentTemplatesPage';
 import { A2AManagementPage } from './pages/templates/A2AManagementPage';
-import { ExpertPackagesPage } from './pages/expertPackages/ExpertPackagesPage';
 import { getProductName } from './utils/env';
 import {
   ApiError,
@@ -135,6 +135,9 @@ function RouteView() {
   if (path === '/skill-prebuilt-templates') {
     return <SkillPrebuiltTemplatesPage />;
   }
+  if (path === '/expert-package-templates') {
+    return <ExpertPackageTemplatesPage />;
+  }
   if (path === '/container-templates') {
     return <ContainerTemplatesPage />;
   }
@@ -143,9 +146,6 @@ function RouteView() {
   }
   if (path === '/a2a-management') {
     return <A2AManagementPage />;
-  }
-  if (path === '/expert-packages') {
-    return <ExpertPackagesPage />;
   }
   if (path === '/service-config-templates') {
     return <ServiceConfigTemplatesPage />;

@@ -5,6 +5,7 @@ import { GuideLink } from './GuideLink';
 import {
   EmbeddingTemplateApi,
   ExtensionTemplateApi,
+  ExpertPackageTemplateApi,
   McpTemplateApi,
   ModelTemplateApi,
   PermissionsTemplateApi,
@@ -34,6 +35,7 @@ const SLOT_CONFIG_PATH: Record<string, string> = {
   image_gen_model: '/model-templates',
   embedding_model: '/embedding-templates',
   skill_prebuilt: '/skill-prebuilt-templates',
+  expert_package: '/expert-package-templates',
   extension_config: '/extension-config-templates',
   mcp: '/mcp-templates',
   permissions: '/safety-guardrails',
@@ -49,6 +51,7 @@ const SLOT_HINT_PAGE_KEY: Record<string, string> = {
   image_gen_model: 'nav.modelTemplates',
   embedding_model: 'nav.embeddingTemplates',
   skill_prebuilt: 'nav.skillWhitelistTemplates',
+  expert_package: 'nav.expertPackages',
   extension_config: 'nav.extensionTemplates',
   mcp: 'nav.mcpTemplates',
   permissions: 'nav.safetyGuardrails',
@@ -80,17 +83,27 @@ interface TemplateRefEditorProps {
   onChange: (value: TemplateRefMap) => void;
 }
 
+async function loadExpertPackageTemplates() {
+  try {
+    return await ExpertPackageTemplateApi.list({ page: 1, page_size: 200, enabled: true });
+  } catch {
+    return { items: [], total: 0, page: 1, page_size: 200 };
+  }
+}
+
 export async function loadTemplateOptions(): Promise<Record<string, TemplateOption[]>> {
   const pageSize = 200;
-  const [models, embeddings, skills, extensions, mcps, permissions, a2aPolicies] = await Promise.all([
-    ModelTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
-    EmbeddingTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
-    SkillPrebuiltTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
-    ExtensionTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
-    McpTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
-    PermissionsTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
-    A2AAccessPolicyTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
-  ]);
+  const [models, embeddings, skills, extensions, mcps, permissions, a2aPolicies, expertPackages] =
+    await Promise.all([
+      ModelTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
+      EmbeddingTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
+      SkillPrebuiltTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
+      ExtensionTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
+      McpTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
+      PermissionsTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
+      A2AAccessPolicyTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
+      loadExpertPackageTemplates(),
+    ]);
 
   const toOpt = (id: string, name: string): TemplateOption => ({
     template_id: id,
@@ -118,6 +131,9 @@ export async function loadTemplateOptions(): Promise<Record<string, TemplateOpti
   bySlot.permissions = (permissions.items ?? []).map((t) => toOpt(t.template_id, t.template_name));
   bySlot.a2a_access_policy = (a2aPolicies.items ?? []).map((t) =>
     toOpt(t.policy_id, `${t.policy_name} · ${t.mode}`),
+  );
+  bySlot.expert_package = (expertPackages.items ?? []).map((item) =>
+    toOpt(item.template_id, item.template_name),
   );
   return bySlot;
 }

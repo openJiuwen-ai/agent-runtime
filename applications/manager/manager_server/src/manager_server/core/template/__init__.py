@@ -1,5 +1,6 @@
 from manager_server.core.template.agent_template import AgentTemplateService
 from manager_server.core.template.embedding_template import EmbeddingTemplateService
+from manager_server.core.template.expert_package_template import ExpertPackageTemplateService
 from manager_server.core.template.extension_config_template import (
     ExtensionConfigTemplateService,
 )
@@ -19,6 +20,7 @@ __all__ = (
     "AgentTemplateService",
     "ModelTemplateService",
     "EmbeddingTemplateService",
+    "ExpertPackageTemplateService",
     "ExtensionConfigTemplateService",
     "PermissionsTemplateService",
     "McpTemplateService",

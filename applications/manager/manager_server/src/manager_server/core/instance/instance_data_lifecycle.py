@@ -17,9 +17,6 @@ from manager_server.core.application_config.log_masking_rule import (
 from manager_server.core.application_config.cron_policy import (
     push_cron_policy_sync_to_gateway,
 )
-from manager_server.core.application_config.package_allowlist import (
-    push_package_allowlist_sync_to_gateway,
-)
 from manager_server.core.application_config.logging_config import (
     push_logging_config_sync_to_gateway,
 )
@@ -56,7 +53,6 @@ from manager_server.models.application_config_models import (
     CRON_POLICY_TABLE_DEF,
     LOG_MASKING_RULE_TABLE_DEF,
     LOGGING_CONFIG_TABLE_DEF,
-    PACKAGE_ALLOWLIST_TABLE_DEF,
     _MEMORY_CONFIG_TABLE_DEF,
     _TASK_MEMORY_CONFIG_TABLE_DEF,
 )
@@ -70,7 +66,6 @@ _MANAGER_INSTANCE_TABLES = (
     LOG_MASKING_RULE_TABLE_DEF.table_name,
     LOGGING_CONFIG_TABLE_DEF.table_name,
     CRON_POLICY_TABLE_DEF.table_name,
-    PACKAGE_ALLOWLIST_TABLE_DEF.table_name,
     _TASK_MEMORY_CONFIG_TABLE_DEF.table_name,
     _MEMORY_CONFIG_TABLE_DEF.table_name,
     AUDIT_LOG_CONFIG_TABLE_DEF.table_name,
@@ -144,7 +139,6 @@ async def sync_data_to_gateway_on_register(
         ("memory", push_memory_config_sync_to_gateway, None),
         ("audit_log", push_audit_log_config_sync_to_gateway, None),
         ("cron_policy", push_cron_policy_sync_to_gateway, None),
-        ("package_allowlist", push_package_allowlist_sync_to_gateway, None),
         (
             "log_masking_rule",
             push_log_masking_rules_sync_to_gateway,

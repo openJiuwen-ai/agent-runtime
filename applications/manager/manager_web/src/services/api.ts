@@ -16,6 +16,9 @@ import type {
   ModelTemplateCreateBody,
   ModelTemplateUpdateBody,
   PageResult,
+  ExpertPackageTemplate,
+  ExpertPackageTemplateCreateBody,
+  ExpertPackageTemplateUpdateBody,
   SkillPrebuiltTemplate,
   SkillPrebuiltTemplateCreateBody,
   SkillPrebuiltTemplateUpdateBody,
@@ -40,9 +43,7 @@ import type {
   LoggingConfigUpsertBody,
   CronPolicy,
   CronPolicyUpsertBody,
-  PackageAllowlist,
-  PackageAllowlistUpsertBody,
-  PackageAllowlistCatalog,
+  PackageCatalog,
   AuditLogConfig,
   AuditLogConfigUpsertBody,
   WorkspaceQuotaPolicy,
@@ -1452,6 +1453,31 @@ export const ExtensionTemplateApi = {
     ),
 };
 
+export const ExpertPackageTemplateApi = {
+  list: (params?: {
+    page?: number;
+    page_size?: number;
+    enabled?: boolean;
+    search?: string;
+    sort_by?: 'template_name' | 'description' | 'updated_at';
+    sort_order?: 'asc' | 'desc';
+  }) => http<PageResult<ExpertPackageTemplate>>('/v1/expert-package-templates', { query: params }),
+  get: (id: string) =>
+    http<ExpertPackageTemplate>(`/v1/expert-package-templates/${encodeURIComponent(id)}`),
+  create: (body: ExpertPackageTemplateCreateBody) =>
+    http<ExpertPackageTemplate>('/v1/expert-package-templates', { method: 'POST', body }),
+  update: (id: string, body: ExpertPackageTemplateUpdateBody) =>
+    http<ExpertPackageTemplate>(`/v1/expert-package-templates/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body,
+    }),
+  remove: (id: string) =>
+    http<{ deleted: boolean; template_id: string }>(
+      `/v1/expert-package-templates/${encodeURIComponent(id)}`,
+      { method: 'DELETE' },
+    ),
+};
+
 export const SkillPrebuiltTemplateApi = {
   list: (params?: {
     page?: number;
@@ -1639,12 +1665,8 @@ export const CronPolicyApi = {
     http<void>(`${instanceBase(instanceId)}/cron-policy`, { method: 'DELETE' }),
 };
 
-export const PackageAllowlistApi = {
-  get: (instanceId: string) => http<PackageAllowlist>(`${instanceBase(instanceId)}/package-allowlists`),
-  catalog: (instanceId: string) =>
-    http<PackageAllowlistCatalog>(`${instanceBase(instanceId)}/package-allowlists/catalog`),
-  upsert: (instanceId: string, body: PackageAllowlistUpsertBody) =>
-    http<PackageAllowlist>(`${instanceBase(instanceId)}/package-allowlists`, { method: 'PUT', body }),
+export const PackageCatalogApi = {
+  catalog: () => http<PackageCatalog>('/v1/package-catalog'),
 };
 
 export const WorkspaceQuotaApi = {

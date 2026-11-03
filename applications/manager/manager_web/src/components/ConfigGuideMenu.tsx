@@ -109,6 +109,7 @@ export function ConfigGuideMenu() {
   const advancedItems = [
     { label: t('nav.embeddingTemplates'), to: '/embedding-templates' },
     { label: t('nav.skillWhitelistTemplates'), to: '/skill-prebuilt-templates' },
+    { label: t('nav.expertPackages'), to: '/expert-package-templates' },
     { label: t('nav.safetyGuardrails'), to: '/safety-guardrails' },
     { label: t('nav.a2aManagement'), to: '/a2a-management' },
     { label: t('nav.extensionTemplates'), to: '/extension-config-templates' },
