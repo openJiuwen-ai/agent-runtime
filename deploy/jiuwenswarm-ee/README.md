@@ -840,7 +840,25 @@ CORE_CODE_PATH=""
 # npm run build   # 每改一次代码，就需要运行一次；修改代码之后，不需要重启pod，除非你修改的是docker/web.nginx.conf.template
 
 IS_MOUNT_WEB_CODE="false"
+
+# 是否给 Manager Web 挂载 agent-runtime 源码
+# nginx 只读取构建产物，不会运行 Vite 或自动构建。开启前必须在代码所在节点执行：
+# cd "${RUNTIME_CODE_PATH}/applications/manager/manager_web"
+# npm ci
+# npm run build
+# 每次更新 Manager 前端代码后都需重新构建；只更新源码不会更新线上页面。
+IS_MOUNT_MANAGER_WEB_CODE="false"
 ```
+
+Manager Web 开启源码挂载时，整个 `RUNTIME_CODE_PATH` 会覆盖镜像中的
+`/app/agent-runtime`，镜像原有的 `dist` 也会被遮住。因此仅 `git pull` 后部署、
+但没有生成 `applications/manager/manager_web/dist/index.html`，会导致 nginx
+返回 404。部署工具会在挂载前检查入口 HTML 及其引用的 JS/CSS，缺失时中止并提示
+构建命令；不会自动安装依赖或构建。`manager-web` 的就绪检查也会请求
+`/index.html`，避免只有 nginx 进程存活就报告部署成功。
+
+请访问部署输出的 `MANAGER_WEB_NODE_PORT`；`MANAGER_SERVER_NODE_PORT` 是 API
+端口，直接访问它的 `/manager` 返回 404 属于预期行为。
 
 **源码路径变量与组件的对应关系：**
 

@@ -98,6 +98,39 @@ mount_runtime_code() {
         "${DEPLOY_VARS["RUNTIME_POD_CODE_PATH"]}"
 }
 
+# A hostPath over /app/agent-runtime hides the frontend bundled in the image.
+# nginx serves dist directly; copying React source alone cannot serve the UI.
+require_manager_web_build() {
+    local repo="$1"
+    if [[ "${repo}" != /* || ! -d "${repo}" ]]; then
+        error "IS_MOUNT_MANAGER_WEB_CODE=true requires an existing absolute RUNTIME_CODE_PATH: ${repo}"
+    fi
+    local web_dir="${repo}/applications/manager/manager_web"
+    local dist="${web_dir}/dist"
+    local build_command
+    printf -v build_command 'cd %q && npm ci && npm run build' "${web_dir}"
+
+    if [[ ! -r "${dist}/index.html" || ! -s "${dist}/index.html" ]]; then
+        error "Manager Web build is missing: ${dist}/index.html. The code mount hides the image frontend and would cause HTTP 404. Build on the code-hosting node first: ${build_command}"
+    fi
+
+    local asset script_count=0
+    while IFS= read -r asset; do
+        # Vite emits absolute /assets URLs; query strings do not name files.
+        asset="${asset%%\?*}"
+        asset="${asset%%\#*}"
+        if [[ ! -r "${dist}${asset}" || ! -s "${dist}${asset}" ]]; then
+            error "Manager Web build is incomplete: index.html references missing ${asset}. Rebuild before mounting: ${build_command}"
+        fi
+        case "${asset}" in *.js) script_count=$((script_count + 1)) ;; esac
+    done < <(grep -oE "(src|href)=[\"']/assets/[^\"']+[\"']" "${dist}/index.html" | sed -E "s/^[^=]+=[\"'](.*)[\"']$/\1/")
+
+    if [[ "${script_count}" -eq 0 ]]; then
+        error "Manager Web dist/index.html has no built JavaScript entry. Source index.html is not deployable. Build first: ${build_command}"
+    fi
+    info "Manager Web build verified: ${dist}"
+}
+
 # manager-web：把仓库 nginx 模板盖到镜像内 entrypoint 读取的路径。
 mount_manager_web_nginx_template() {
     [ -z "${DEPLOY_VARS["RUNTIME_CODE_PATH"]:-}" ] && return
@@ -167,6 +200,7 @@ enable_dev_mode_if_needed() {
             ;;
         manager-web)
             [ "${DEPLOY_VARS["IS_MOUNT_MANAGER_WEB_CODE"]}" != "true" ] && return
+            require_manager_web_build "${DEPLOY_VARS["RUNTIME_CODE_PATH"]:-}"
             mount_runtime_code "${file}"
             mount_manager_web_nginx_template "${file}"
             ;;

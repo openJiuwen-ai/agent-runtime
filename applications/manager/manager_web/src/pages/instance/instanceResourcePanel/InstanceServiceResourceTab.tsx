@@ -38,6 +38,7 @@ import { useAuth } from '../../../auth/AuthContext';
 import { collectPages } from '../../../utils/overview';
 import { runtimeCatalogPath } from '../../../utils/runtimeResourceNavigation';
 import { ClusterContentHeading } from '../ClusterContentHeading';
+import { serviceResourceUpdateBody } from '../../../utils/instanceResourceUpdate';
 import {
   applyRuntimeTemplateChoice, consumeRuntimeBindingAction, emptyRuntimeBindingDraft,
   readRuntimeBindingDraft, runtimeBindingDraftKey, writeRuntimeBindingDraft, type RuntimeBindingDraft,
@@ -357,13 +358,13 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
     }
     setBusy(true);
     try {
-      await InstanceServiceResourceApi.update(instanceId, editing.resource_id, {
+      await InstanceServiceResourceApi.update(instanceId, editing.resource_id, serviceResourceUpdateBody(editing, {
         match_exprs: [matchExpr],
         resource_name: editResourceName.trim(),
         resource_desc: editResourceDesc.trim() || null,
         priority: editPriority,
         expires_at: editExpiresAt ? new Date(editExpiresAt).toISOString() : null,
-      });
+      }));
       toast('success', t('success.saved'));
       setEditing(null);
       reload();
@@ -569,13 +570,7 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
                           <Switch
                             checked={row.enabled !== false}
                             onChange={(enabled) => {
-                              InstanceServiceResourceApi.update(instanceId, row.resource_id, {
-                                match_exprs: [matchExprToEditorString(row.match_expr)],
-                                resource_name: (row.resource_name ?? '').trim() || row.resource_id,
-                                resource_desc: row.resource_desc ?? null,
-                                priority: row.priority ?? 0,
-                                enabled,
-                              })
+                              InstanceServiceResourceApi.update(instanceId, row.resource_id, serviceResourceUpdateBody(row, { enabled }))
                                 .then(() => {
                                   toast('success', t('success.saved'));
                                   reload();

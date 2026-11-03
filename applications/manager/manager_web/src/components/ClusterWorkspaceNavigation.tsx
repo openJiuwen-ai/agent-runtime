@@ -34,30 +34,17 @@ export function ClusterWorkspaceNavigation({ instanceId, name, section, onRefres
 
   return <>
     <header className="cluster-workspace-header">
-      <div className="min-w-0">
-        <button className="btn ghost sm" onClick={() => navigate('/instances')}>← {tr('集群管理', 'Clusters')}</button>
-        <div className="mt-2 flex min-w-0 items-center gap-3"><h1 className="page-title truncate" title={name}>{name}</h1></div>
-        <p className="mt-1 text-xs text-muted mono break-all">{instanceId}</p>
+      <h1 className="page-title min-w-0 truncate" title={name}>{name}</h1>
+      <div className="cluster-workspace-header__actions">
+        {params.has('returnTo') && <button type="button" className="btn" onClick={() => navigate(templateReturnPath(params.get('returnTo')))}>{tr('返回 Agent 模板', 'Return to Agent templates')}</button>}
+        {isWorkbench && onRefresh && <button type="button" className="btn" onClick={onRefresh}>{tr('刷新进度', 'Refresh progress')}</button>}
+        {!isWorkbench && <button type="button" className="btn" onClick={() => to('cluster-config')}>{tr('返回配置工作台', 'Configuration workspace')}</button>}
+        <button type="button" className="btn" onClick={() => navigate('/instances')}>← {tr('集群管理', 'Clusters')}</button>
       </div>
-      <div className="flex shrink-0 flex-wrap items-center gap-2">
-        {params.has('returnTo') && <button className="btn ghost sm" onClick={() => navigate(templateReturnPath(params.get('returnTo')))}>{tr('返回 Agent 模板', 'Return to Agent templates')}</button>}
-        {isWorkbench && onRefresh && <button className="btn sm" onClick={onRefresh}>{tr('刷新进度', 'Refresh progress')}</button>}
-      </div>
+      <p className="cluster-workspace-header__id text-xs text-muted mono break-all">{instanceId}</p>
     </header>
     <nav className="cluster-workspace-nav" aria-label={tr('集群页面', 'Cluster pages')}>
       {main.map(item => <button key={item.key} type="button" className={`cluster-workspace-nav__item ${isSelected(item.key) ? 'active' : ''}`} aria-current={isSelected(item.key) ? 'page' : undefined} onClick={() => to(item.key)}>{item.label}</button>)}
     </nav>
   </>;
-}
-
-export function ClusterWorkspaceReturnAction({ instanceId }: { instanceId: string }) {
-  const { i18n } = useTranslation();
-  const { navigate, params } = useRouter();
-  const zh = i18n.language.startsWith('zh');
-  const target = (key: ClusterWorkspaceSection) => {
-    navigate(clusterPagePath(instanceId, key, params));
-  };
-  return <div className="cluster-page-actions">
-    <button className="btn" onClick={() => target('cluster-config')}>{zh ? '返回配置工作台' : 'Configuration workspace'}</button>
-  </div>;
 }

@@ -14,7 +14,7 @@ import { InstanceAccessPanel } from './instanceAccessPanel/InstanceAccessPanel';
 import { InstanceAgentResourceTab } from './instanceResourcePanel/InstanceAgentResourceTab';
 import { InstanceServiceResourceTab } from './instanceResourcePanel/InstanceServiceResourceTab';
 import { WorkspaceNote } from '../../components/WorkspaceNote';
-import { ClusterWorkspaceNavigation, ClusterWorkspaceReturnAction, type ClusterWorkspaceSection } from '../../components/ClusterWorkspaceNavigation';
+import { ClusterWorkspaceNavigation, type ClusterWorkspaceSection } from '../../components/ClusterWorkspaceNavigation';
 import { ClusterOtherSettingsPanel } from './ClusterOtherSettingsPanel';
 
 export type InstancePageTab = 'access' | 'agentResources' | 'serviceResources' | 'otherSettings' | 'status';
@@ -220,7 +220,6 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
           </>}
         </div>
         <footer className="cluster-detail-footer">
-          <ClusterWorkspaceReturnAction instanceId={instanceId} />
           <WorkspaceNote title={context.title}>{context.body}</WorkspaceNote>
         </footer>
       </div>

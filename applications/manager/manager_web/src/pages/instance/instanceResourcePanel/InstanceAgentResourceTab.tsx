@@ -41,6 +41,7 @@ import { applyAgentTemplateChoice, clusterBindingDraftKey, emptyClusterBindingDr
 import { AgentExpertPreviewSummary } from '../../../components/AgentExpertBindingsPreview';
 import { agentPreparationCatalogPath, consumeAgentBindingAction } from '../../../utils/agentFlowContext';
 import { ClusterContentHeading } from '../ClusterContentHeading';
+import { agentResourceUpdateBody } from '../../../utils/instanceResourceUpdate';
 
 interface Props {
   instanceId: string;
@@ -324,12 +325,12 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
     }
     setBusy(true);
     try {
-      await InstanceAgentResourceApi.update(instanceId, editing.resource_id, {
+      await InstanceAgentResourceApi.update(instanceId, editing.resource_id, agentResourceUpdateBody(editing, {
         match_exprs: [matchExpr],
         resource_name: editResourceName.trim(),
         resource_desc: editResourceDesc.trim() || null,
         expires_at: editExpiresAt ? new Date(editExpiresAt).toISOString() : null,
-      });
+      }));
       toast('success', t('success.saved'));
       setEditing(null);
       reload();
@@ -488,12 +489,8 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
                       <Switch
                         checked={a.enabled !== false}
                         onChange={(enabled) => {
-                          InstanceAgentResourceApi.update(instanceId, a.resource_id, {
-                            match_exprs: [matchExprToEditorString(a.match_expr)],
-                            resource_name: (a.resource_name ?? '').trim() || a.resource_id,
-                            resource_desc: a.resource_desc ?? null,
-                            enabled,
-                          }).then(() => { toast('success', t('success.saved')); reload(); bumpGuideRevision(); })
+                          InstanceAgentResourceApi.update(instanceId, a.resource_id, agentResourceUpdateBody(a, { enabled }))
+                            .then(() => { toast('success', t('success.saved')); reload(); bumpGuideRevision(); })
                             .catch((e) => toast('danger', e instanceof ApiError ? e.detail : String(e)));
                         }}
                         aria-label={a.enabled !== false ? t('common.enabled') : t('common.disabled')}
