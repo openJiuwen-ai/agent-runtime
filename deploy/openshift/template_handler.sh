@@ -5,7 +5,7 @@ _DEPLOY_TEMPLATE_HANDLER_SH=1
 # template_handler.sh —— 清单渲染
 # templates/ 下为 *.template.yaml 模板（<<VAR>> 占位符，如 <<AGENTSERVER_IMAGE>>、<<NAMESPACE>>），
 # 渲染时替换为 DEPLOY_VARS 对应值；产物输出到 conf/（*.template.yaml → 同名 *.yaml）。
-# up/down 前都要执行（down 依赖 conf 里的资源名与模板保持一致）
+# 仅 up 与 --render-only 执行：down 不渲染，直接消费 conf/ 现有清单（按部署时资源名卸载）
 
 # 提取模板中的 <<VAR>> 占位符（去重排序）
 extract_placeholders() { # $1=模板文件 → stdout: 占位符列表
@@ -68,7 +68,7 @@ render_templates() {
       in_array "$f" "${wanted[@]}" || wanted+=("$f")
     done
   done
-  info "渲染 ${#wanted[@]} 个清单 → conf/（目标: ${TARGETS[*]}）"
+  info "渲染 ${#wanted[@]} 个清单 → $CONF_DIR（目标: ${TARGETS[*]}）"
   apply_nfs_direct_mounts "${wanted[@]}"
   apply_k8s_extras "${wanted[@]}"
   apply_runtime_mode_extras "${wanted[@]}"

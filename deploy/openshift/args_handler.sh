@@ -30,6 +30,11 @@ parse_args() {
 
   [ -n "$CMD" ] || error "缺少命令 up|down（用法见 -h）"
 
+  # down 直接消费 conf/ 现有清单（按部署时资源名卸载），不支持重渲染：
+  # 清单缺失时按 main 里的提示先 up --render-only 补齐
+  [ "${DEPLOY_VARS["RENDER_ONLY"]}" = "true" ] && [ "$CMD" = down ] \
+    && error "down 不支持 --render-only（卸载直接消费 conf/ 现有清单；缺失时先 up --render-only 补齐）"
+
   # 目标组件：显式指定优先（按规范依赖序排列）；未指定则取组默认
   if [ ${#TARGETS[@]} -gt 0 ]; then
     TARGETS_EXPLICIT=1
@@ -58,7 +63,7 @@ usage() {
                     卸载后依赖方清零则自动回收）。默认 down 与 up 目标对称；
                     模式切换（routing→off）后遗留的 runtime 用 `down runtime` 清理
   -n NAMESPACE      指定 namespace（默认取 .env.custom 的 NAMESPACE）
-  --render-only     只渲染本次目标组件的清单到 conf/，不连接集群（核对/交付 yaml 用）
+  --render-only     只渲染本次目标组件的清单到 conf/，不连接集群（核对/交付 yaml 用；仅 up）
   -y                兼容保留参数，无实际作用（卸载不再需要确认）
 前置条件: 基础服务已拉起（./deploy.sh up mariadb minio，见 README）
 版本管理: 组件镜像名（含 amd64/arm64 架构段）统一维护在 .env.custom
