@@ -7,7 +7,7 @@ import { agentPreparationCatalogPath } from '../../utils/agentFlowContext';
 import { runtimeCatalogPath } from '../../utils/runtimeResourceNavigation';
 
 interface Props {
-  tab: 'access' | 'status' | 'agentResources' | 'serviceResources' | 'expertPackages' | 'config' | 'quota' | 'workspaceQuota' | 'teamQuota' | 'tokenQuota' | 'cost' | 'audit';
+  tab: 'access' | 'status' | 'agentResources' | 'serviceResources' | 'config' | 'quota' | 'workspaceQuota' | 'teamQuota' | 'tokenQuota' | 'cost' | 'audit';
 }
 
 const demoOrgs = [
@@ -116,9 +116,5 @@ export function MockClusterTabPanel({ tab }: Props) {
     </div>;
   }
 
-  return <div className="flex flex-col gap-4">
-    <Intro title={tr('专家包', 'Expert packages')} text={tr('按 Agent 模板或 Agent 分组控制当前集群可安装的专家包。', 'Control which expert packages are available in this cluster by Agent template or group.')} />
-    <div className="page-header"><div><h2 className="text-base font-semibold">{tr('当前集群的专家包白名单', 'Expert package allowlist')}</h2><p className="text-sm text-muted">{tr('这是可选扩展，不会替代准入或 Agent 使用授权。', 'This optional extension does not replace admission or Agent access.')}</p></div><DemoBadge /></div>
-    <section className="card !p-0 overflow-x-auto"><table className="table min-w-[760px]"><thead><tr><th>{tr('专家包', 'Package')}</th><th>{tr('授权对象', 'Granted to')}</th><th>{tr('版本', 'Version')}</th><th>{tr('状态', 'Status')}</th><th>{tr('操作', 'Actions')}</th></tr></thead><tbody><tr><td><strong>客服知识库增强包</strong><div className="mono text-xs text-muted">pkg-customer-knowledge</div></td><td><span className="tag">Agent 模板</span><div className="text-sm mt-1">客服助手</div></td><td className="mono">1.2.0</td><td><span className="tag">已允许</span></td><td><button className="btn ghost sm" onClick={() => navigate(clusterPath('agent-resources'))}>{tr('查看关联 Agent', 'View related Agent')}</button></td></tr><tr><td><strong>FAQ 检索工具包</strong><div className="mono text-xs text-muted">pkg-faq-search</div></td><td><span className="tag">Agent 分组</span><div className="text-sm mt-1">客服类 Agent</div></td><td className="mono">0.9.3</td><td><span className="tag">已允许</span></td><td><button className="btn ghost sm" onClick={() => navigate(clusterPath('cluster-config'))}>{tr('返回工作台', 'Cluster workspace')}</button></td></tr></tbody></table></section>
-  </div>;
+  return null;
 }

@@ -13,12 +13,17 @@ export function ResourceWorkspaceFrame({ children }: { children: ReactNode }) {
   const { path } = useRouter();
   const zh = i18n.language.startsWith('zh');
   const resource = resourceCatalog.find((entry) => entry.path === path);
+  const experts = path === '/expert-packages';
   return (
     <div className="resource-workspace">
       {children}
       <WorkspaceNote title={resource ? t(`${resource.key}.title`) : (zh ? '资源中心' : 'Resource catalog')}>
-        {resource && <>{t(`${resource.key}.subtitle`)}{zh ? '。' : '. '}</>}
-        {zh ? '保存后，在 Agent模板或集群配置中引用；修改已被引用的资源前，请先查看关联模板和集群。' : 'Reference saved resources from an Agent template or cluster configuration. Review linked templates and clusters before changing a referenced resource.'}
+        {experts ? (zh
+          ? '在资源目录查看专家与专家包，再到 Agent 模板选择能力。模板绑定目前为本浏览器预览，待后端接入；“集群发布”保留现有真实授权功能，保存只影响所选集群。'
+          : 'Browse experts and packages, then choose capabilities in an Agent template. Template binding is a browser-local preview pending backend support. Cluster publication retains the existing grant feature and saves only to the selected cluster.') : <>
+          {resource && <>{t(`${resource.key}.subtitle`)}{zh ? '。' : '. '}</>}
+          {zh ? '保存后，在 Agent模板或集群配置中引用；修改已被引用的资源前，请先查看关联模板和集群。' : 'Reference saved resources from an Agent template or cluster configuration. Review linked templates and clusters before changing a referenced resource.'}
+        </>}
       </WorkspaceNote>
     </div>
   );

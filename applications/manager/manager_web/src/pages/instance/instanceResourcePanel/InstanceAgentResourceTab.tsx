@@ -38,6 +38,7 @@ import { useRouter } from '../../../router';
 import { collectPages } from '../../../utils/overview';
 import { useAuth } from '../../../auth/AuthContext';
 import { applyAgentTemplateChoice, clusterBindingDraftKey, emptyClusterBindingDraft, readClusterBindingDraft, readClusterBindingHandoff, writeClusterBindingDraft, type ClusterBindingDraft } from '../../../utils/agentDraft';
+import { AgentExpertPreviewSummary } from '../../../components/AgentExpertBindingsPreview';
 import { agentPreparationCatalogPath, consumeAgentBindingAction } from '../../../utils/agentFlowContext';
 
 interface Props {
@@ -632,6 +633,7 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
             {catalogState.loading && <p className="text-xs text-muted mt-2" role="status">{t('common.loading')}</p>}
             {catalogState.error && <div className="text-xs text-danger mt-2" role="alert">{t('errors.loadFailed', { detail: catalogState.error })}<button type="button" className="btn ghost sm" onClick={() => void catalogState.reload()}>{t('common.refresh')}</button></div>}
           </label>
+          {addAgentId && <AgentExpertPreviewSummary templateId={addAgentId} />}
           <label className="block mb-3">
             <FieldLabel>{t('instanceDetail.resourcePanel.agent.scopeLabel')}</FieldLabel>
             <div className="mt-1">
@@ -702,6 +704,7 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
               {templateLabel(editing.ref_template_id)}({editing.ref_template_id})
             </div>
           </label>
+          <AgentExpertPreviewSummary templateId={editing.ref_template_id} />
           <label className="block mb-3">
             <FieldLabel>{t('instanceDetail.resourcePanel.agent.scopeLabel')}</FieldLabel>
             <div className="mt-1">

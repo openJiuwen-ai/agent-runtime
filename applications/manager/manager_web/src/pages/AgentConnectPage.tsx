@@ -14,6 +14,7 @@ import { MatchExprEditor } from '../components/MatchExprEditor';
 import { ConfigRefreshCostHint } from '../components/ConfigRefreshCostHint';
 import { AGENT_RESOURCE_MATCH_FIELDS, parseMatchExpr, validateMatchExprModel } from '../utils/matchExpr';
 import { WorkspaceNote } from '../components/WorkspaceNote';
+import { AgentExpertPreviewSummary } from '../components/AgentExpertBindingsPreview';
 
 export function AgentConnectPage({ id }: { id: string }) {
   const { user } = useAuth();
@@ -99,6 +100,7 @@ function AgentConnectForm({ id, draftKey }: { id: string; draftKey: string }) {
       {checks.error && <div role="alert"><p className="text-danger">{checks.error}</p><button className="btn" onClick={() => void checks.reload()}>{tr('重试检查', 'Retry checks')}</button></div>}
       {checks.data?.instance === instance && <div className="binding-checks"><p>{tr('同一 Agent 已有绑定：', 'Existing bindings for this Agent: ')}{checks.data.existing}</p><p>{checks.data.runtimeCount ? tr('集群已有启用的运行规格，仍需核对授权条件能否命中。', 'Enabled runtime profiles exist; matching conditions still require verification.') : tr('集群没有启用的运行规格。可以先保存绑定，但还不能确认 Agent 可运行。', 'No enabled runtime profiles. You can save the binding, but execution is not confirmed.')}</p>{checks.data.existing > 0 && <p>{tr('再次保存会新增一条绑定，不会覆盖已有授权。', 'Saving adds a binding; it does not replace existing grants.')}</p>}</div>}
       <ConfigRefreshCostHint /></>}
+      <AgentExpertPreviewSummary templateId={id} />
       {agent.data && !agent.data.enabled && <p role="alert">{tr('此模板已停用，请返回模板管理启用后再绑定。', 'Enable this Agent definition before binding.')}</p>}
       {error && <p className="text-danger" role="alert">{error}</p>}
       <div className="connect-actions"><button className="btn" disabled={step === 0 || saving} onClick={() => setStep(step - 1)}>{tr('上一步', 'Back')}</button>{step < 2 ? <button className="btn primary" disabled={!canContinue || (step === 1 && !!validateMatchExprModel(parseMatchExpr(expr), AGENT_RESOURCE_MATCH_FIELDS))} onClick={() => setStep(step + 1)}>{tr('下一步', 'Next')}</button> : <button className="btn primary" disabled={!valid || saving} onClick={() => void save()}>{saving ? tr('正在保存…', 'Saving…') : tr('保存绑定配置', 'Save binding')}</button>}</div>

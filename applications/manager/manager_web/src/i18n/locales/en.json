@@ -80,7 +80,7 @@
     "modelTemplates": "Models",
     "embeddingTemplates": "Embedding Models",
     "skillWhitelistTemplates": "Preset Skills",
-    "expertPackages": "Expert Packages",
+    "expertPackages": "Experts & packages",
     "safetyGuardrails": "Safety Guardrails",
     "a2aManagement": "A2A Management",
     "extensionTemplates": "Extension Config",
@@ -98,6 +98,7 @@
     "todoWithCount": "To-do, {{count}} pending"
   },
   "expertPackages": {
+    "title": "Experts & packages",
     "subtitle": "Publish experts and expert teams per cluster. Packages and scopes stay on this page, and saving replaces the whole snapshot.",
     "add": "Add",
     "addTemplate": "Add expert",
@@ -122,9 +123,12 @@
     "scopeNameSep": ", ",
     "scopeGroupOpen": "(",
     "scopeGroupClose": ")",
+    "selectCluster": "Cluster",
+    "noClusters": "No clusters yet",
+    "goToClusters": "Go to Cluster Management",
     "emptyTemplate": "This cluster has no controlled experts",
     "emptyGroup": "This cluster has no controlled expert teams",
-    "deleteConfirm": "Remove {{id}} from this cluster?",
+    "deleteConfirm": "Remove {{kind}} \"{{name}}\" from this cluster?",
     "duplicate": "This package is already on the cluster"
   },
   "guide": {
@@ -1148,7 +1152,9 @@
       "guides": "Feature Guides",
       "guideAgent": "Agent Management",
       "guidePool": "Runtime Template Management",
-      "guideCluster": "Cluster Management"
+      "guideCluster": "Cluster Management",
+      "guideExpertPackage": "Expert Package Configuration",
+      "guideSkillPrebuilt": "Preset Skills"
     }
   },
   "userConsole": {
@@ -1171,6 +1177,16 @@
   "agentTemplate": {
     "optionalResources": "Optional capabilities",
     "resourceTabHint": "Resource catalogs open in a new tab. Return here and refresh options to continue without losing your form.",
+    "registration": {
+      "button": "Register Agent client",
+      "pending": "Registering…",
+      "success": "Agent client registered and credentials filled in. Save the template to apply them.",
+      "failed": "Agent client registration failed. Please retry.",
+      "cleanupFailed": "The unsaved Agent client could not be removed. Please check it later.",
+      "alreadyConfigured": "Client credentials already exist and will be preserved.",
+      "showSecret": "Show and edit secret",
+      "hideSecret": "Hide secret"
+    },
     "title": "Agent Templates",
     "subtitle": "Maintain reusable Agent templates for instance binding",
     "new": "New Agent Template",

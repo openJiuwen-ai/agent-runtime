@@ -89,9 +89,11 @@ spec:
             - name: OPENJIUWEN_SERVICE_DB_PORT
               value: "<<DB_PORT>>"
             - name: OPENJIUWEN_SERVICE_DB_NAME
-              value: "runtime_<<NAMESPACE>>"
+              value: "<<RUNTIME_DB_NAME>>"
             - name: OPENJIUWEN_SERVICE_DB_USER
-              value: "<<DB_USER>>"
+              value: "<<RUNTIME_DB_USER>>"
+            - name: OPENJIUWEN_SERVICE_PG_SCHEMA
+              value: "<<RUNTIME_PG_SCHEMA>>"
             # DB 口令经 envFrom secretRef 注入（OPENJIUWEN_SERVICE_DB_PASSWORD）
             # 禁 EVAL 环境兼容（on|off；on 与存量逐字节一致）
             - name: AGENT_RUNTIME_REDIS_LUA

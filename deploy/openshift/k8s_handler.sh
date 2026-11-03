@@ -568,17 +568,29 @@ apply_jiuwenbox_extras() { # $@=本次渲染的清单文件名
 # 仅 CLUSTER_TYPE=k8s 支持（openshift SCC 禁止 hostPath）
 
 # 给清单内工作负载（Deployment/StatefulSet，如 agentserver）的首个容器追加一个 hostPath
-# 代码挂载（volume + volumeMount）
+# 代码挂载（volume + volumeMount）；agentserver.json（full 模式 config_sync 载荷，runtime
+# 按其建 Pod）等价处理：卷注入 rawdata.templates[].volumes，挂载注入 c-agentserver 容器
 # 注：select(...).path |= 是更新运算符（非管道 select），yq 对不匹配的文档原样保留，
 # 多文档清单（工作负载 + Service）不会丢文档——勿改成 select(...) | .path = 值 的管道形式
 add_code_mount() { # $1=清单文件 $2=卷名 $3=宿主机路径 $4=容器内路径 $5=hostPath.type(默认 Directory)
   local file="$1" name="$2" host_path="$3" mount_path="$4" host_type="${5:-Directory}"
-  yq -i '
-    select(.kind == "Deployment" or .kind == "StatefulSet").spec.template.spec.containers[0].volumeMounts
-      |= ((. // []) + [{"name": "'"${name}"'", "mountPath": "'"${mount_path}"'"}])
-    | select(.kind == "Deployment" or .kind == "StatefulSet").spec.template.spec.volumes
-      |= ((. // []) + [{"name": "'"${name}"'", "hostPath": {"path": "'"${host_path}"'", "type": "'"${host_type}"'"}}])
-  ' "$file"
+  case "$file" in
+    *.json)
+      # config_sync 载荷按 container_id 定位容器，卷按模板注入（-o=json 保持 JSON 格式）
+      yq -i -o=json '
+        (.rawdata.containers[] | select(.container_id == "c-agentserver").volumeMounts)
+          |= ((. // []) + [{"name": "'"${name}"'", "mountPath": "'"${mount_path}"'"}])
+        | .rawdata.templates[].volumes
+          |= ((. // []) + [{"name": "'"${name}"'", "hostPath": {"path": "'"${host_path}"'", "type": "'"${host_type}"'"}}])
+      ' "$file";;
+    *)
+      yq -i '
+        select(.kind == "Deployment" or .kind == "StatefulSet").spec.template.spec.containers[0].volumeMounts
+          |= ((. // []) + [{"name": "'"${name}"'", "mountPath": "'"${mount_path}"'"}])
+        | select(.kind == "Deployment" or .kind == "StatefulSet").spec.template.spec.volumes
+          |= ((. // []) + [{"name": "'"${name}"'", "hostPath": {"path": "'"${host_path}"'", "type": "'"${host_type}"'"}}])
+      ' "$file";;
+  esac
 }
 
 mount_swarm_code() { # jiuwenswarm 仓库 → 镜像内代码根
@@ -652,14 +664,14 @@ apply_dev_code_mounts() { # $@=本次渲染的清单文件名
   fetch_current_node_name
   local f comp
   for f in "$@"; do
-    comp="${f%.yaml}"
+    comp="${f%.yaml}"; comp="${comp%.json}"   # agentserver.json（full 模式 runtime 建 Pod 的载荷）与 agentserver.yaml 同按 agentserver 处理
     case "$comp" in
       agentserver|gateway)
         mount_swarm_code "$CONF_DIR/$f"; mount_runtime_pkg "$CONF_DIR/$f"; mount_core_pkg "$CONF_DIR/$f";;
       web)
         [ "${DEPLOY_VARS["IS_MOUNT_WEB_CODE"]}" = "true" ] || continue
         mount_swarm_code "$CONF_DIR/$f"; mount_web_nginx_template "$CONF_DIR/$f";;
-      identity|manager-server)
+      identity|manager-server|runtime)
         mount_runtime_code "$CONF_DIR/$f";;
       manager-web)
         [ "${DEPLOY_VARS["IS_MOUNT_MANAGER_WEB_CODE"]}" = "true" ] || continue
@@ -667,8 +679,11 @@ apply_dev_code_mounts() { # $@=本次渲染的清单文件名
       *) continue;;   # mariadb/minio/redis/secret 等基础服务不挂代码
     esac
     # hostPath 是节点本地的，工作负载（Deployment/StatefulSet，如 agentserver）固定到代码所在节点
-    # （更新运算符写法不丢多文档中的 Service）
-    yq -i 'select(.kind == "Deployment" or .kind == "StatefulSet").spec.template.spec.nodeName = "'"${DEPLOY_VARS["CURRENT_NODE_NAME"]}"'"' "$CONF_DIR/$f"
+    # agentserver.json 走模板级 nodeName（config_sync 合法键，runtime 建 Pod 时透传）
+    case "$f" in
+      *.json) yq -i -o=json '.rawdata.templates[].nodeName = "'"${DEPLOY_VARS["CURRENT_NODE_NAME"]}"'"' "$CONF_DIR/$f";;
+      *)      yq -i 'select(.kind == "Deployment" or .kind == "StatefulSet").spec.template.spec.nodeName = "'"${DEPLOY_VARS["CURRENT_NODE_NAME"]}"'"' "$CONF_DIR/$f";;
+    esac
     info "dev 模式后处理完成: $comp（节点 ${DEPLOY_VARS["CURRENT_NODE_NAME"]}）"
   done
   return 0
@@ -704,8 +719,8 @@ resolve_dev_mode_vars() {
 }
 
 # k8s 形态：up 前置——目标 namespace 不存在时自动创建（down 不调用本函数）
-# openshift 形态直接跳过：namespace 是 cluster-scope 资源，普通项目用户 GET/POST 均会 403，
-# 探测/自动创建都不可靠；Project 由管理员/平台预建（oc new-project），工具不做隐式创建
+# 由统一入口 kctl_ensure_namespace（kubectl.sh）按集群形态分流调用；
+# openshift 形态走 ProjectRequest API（_kctl_oc_ensure_namespace，同在 kubectl.sh），不经本函数
 # get 退出码非 0 不等于不存在（无 get namespaces 权限/网络故障同样非 0）：
 # 以 create 结果为准，仅 AlreadyExists 视为已存在放行，其余错误连同 kubectl stderr 报出
 _kctl_k8s_ensure_namespace() { # $1=namespace

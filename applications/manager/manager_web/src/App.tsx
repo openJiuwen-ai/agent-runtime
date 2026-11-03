@@ -46,6 +46,7 @@ import { ApprovalEditPage } from './pages/approval/ApprovalEditPage';
 import { A2AManagementPage } from './pages/templates/A2AManagementPage';
 import { ResourceWorkspaceFrame } from './components/ResourceWorkspaceFrame';
 import { WorkspaceNote } from './components/WorkspaceNote';
+import { ExpertPackagesPage } from './pages/expertPackages/ExpertPackagesPage';
 import { getProductName } from './utils/env';
 import {
   ApiError,
@@ -170,6 +171,9 @@ function RouteView() {
   if (path === '/a2a-management') {
     return <ResourceWorkspaceFrame><A2AManagementPage /></ResourceWorkspaceFrame>;
   }
+  if (path === '/expert-packages') {
+    return <ExpertPackagesPage />;
+  }
   if (path === '/service-config-templates') {
     return <ServiceConfigTemplatesPage />;
   }
@@ -218,6 +222,8 @@ function RouteView() {
     }
     return <ApprovalEditPage orderNum={approvalEdit.orderNum} />;
   }
+  const legacyExperts = matchRoute('/instances/:id/expert-packages', path);
+  if (legacyExperts) return <Navigate to={'/manager' + canonicalClusterPath(legacyExperts.id, 'expert-packages', params)} replace />;
   const clusterRoute = matchRoute('/instances/:id/:section', path) || matchRoute('/instances/:id', path);
   if (clusterRoute) {
     const section = canonicalClusterSection(clusterRoute.section, isWorkspaceQuotaEnabled(user));
@@ -226,7 +232,7 @@ function RouteView() {
     if (section === 'cluster-config') return <ClusterConfigWorkbenchPage key={clusterRoute.id} instanceId={clusterRoute.id} />;
     const tabs: Record<string, InstancePageTab> = {
       access: 'access', 'service-resources': 'serviceResources', 'agent-resources': 'agentResources',
-      'expert-packages': 'expertPackages', 'other-settings': 'otherSettings', status: 'status',
+      'other-settings': 'otherSettings', status: 'status',
     };
     return <InstanceDetailPage key={clusterRoute.id + ':' + section} instanceId={clusterRoute.id} tab={tabs[section]} />;
   }

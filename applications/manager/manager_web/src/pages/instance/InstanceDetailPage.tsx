@@ -13,15 +13,13 @@ import { InstanceDetailPanel } from './instanceDetailPanel/instanceDetailPanel';
 import { InstanceAccessPanel } from './instanceAccessPanel/InstanceAccessPanel';
 import { InstanceAgentResourceTab } from './instanceResourcePanel/InstanceAgentResourceTab';
 import { InstanceServiceResourceTab } from './instanceResourcePanel/InstanceServiceResourceTab';
-import { InstanceExpertPackagesTab } from './instanceResourcePanel/InstanceExpertPackagesTab';
 import { WorkspaceNote } from '../../components/WorkspaceNote';
 import { isMockInstanceId, mockInstanceDetail } from '../../config/mockManager';
 import { ClusterWorkspaceNavigation, ClusterWorkspaceReturnAction, type ClusterWorkspaceSection } from '../../components/ClusterWorkspaceNavigation';
 import { MockClusterTabPanel } from './MockClusterTabPanel';
 import { ClusterOtherSettingsPanel } from './ClusterOtherSettingsPanel';
-import { clusterPagePath } from '../../utils/clusterNavigation';
 
-export type InstancePageTab = 'access' | 'agentResources' | 'expertPackages' | 'serviceResources' | 'otherSettings' | 'status';
+export type InstancePageTab = 'access' | 'agentResources' | 'serviceResources' | 'otherSettings' | 'status';
 
 interface Props {
   instanceId: string;
@@ -55,7 +53,7 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
   const { t, i18n } = useTranslation();
   const instance = useAsync(() => isMockInstanceId(instanceId) ? Promise.resolve(mockInstanceDetail) : InstanceApi.get(instanceId), [instanceId]);
   const mock = isMockInstanceId(instanceId);
-  const { navigate, params } = useRouter();
+  const { navigate } = useRouter();
   const [probing, setProbing] = useState(false);
   const [openingConsole, setOpeningConsole] = useState(false);
   const [checkResult, setCheckResult] = useState('');
@@ -87,10 +85,6 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
     serviceResources: {
       title: zh ? '为 Agent 选择实际运行资源' : 'Choose the runtime resources for Agents',
       body: zh ? '运行规格是可复用定义；只有在当前集群启用后，运行时才会参与调度。' : 'Runtime profiles are reusable definitions and only participate in scheduling after being enabled for this cluster.',
-    },
-    expertPackages: {
-      title: zh ? '为当前集群控制可安装的专家包' : 'Control expert packages for this cluster',
-      body: zh ? '专家包按 Agent 模板或 Agent 分组授权，保存后由当前集群的运行环境读取。' : 'Grant packages by Agent template or group; the current cluster runtime reads the saved allowlist.',
     },
     otherSettings: {
       title: zh ? '集中管理当前集群的运行策略' : 'Manage cluster policies in one place',
@@ -192,7 +186,7 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
   };
 
   const sections: Record<InstancePageTab, ClusterWorkspaceSection> = {
-    access: 'access', agentResources: 'agent-resources', expertPackages: 'expert-packages',
+    access: 'access', agentResources: 'agent-resources',
     serviceResources: 'service-resources', otherSettings: 'other-settings', status: 'status',
   };
   const section = sections[tab];
@@ -208,14 +202,11 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
           section={section}
         />
         <div className="w-full min-w-0 shrink-0">
-          {tab === 'agentResources' && <div className="flex flex-wrap items-center justify-end gap-2 mb-3"><button className="btn sm" onClick={() => navigate(clusterPagePath(instanceId, 'expert-packages', params))}>{zh ? '专家包管理' : 'Expert packages'} →</button></div>}
-          {tab === 'expertPackages' && <button className="btn ghost sm mb-3" onClick={() => navigate(clusterPagePath(instanceId, 'agent-resources', params))}>← {zh ? '返回 Agent绑定' : 'Back to Agent bindings'}</button>}
           {tab === 'otherSettings' ? <ClusterOtherSettingsPanel instanceId={instanceId} /> : mock ? <MockClusterTabPanel tab={tab} /> : <>
           {tab === 'access' && <InstanceAccessPanel instanceId={instanceId} />}
           {tab === 'agentResources' && (
             <InstanceAgentResourceTab instanceId={instanceId} />
           )}
-          {tab === 'expertPackages' && <InstanceExpertPackagesTab instanceId={instanceId} />}
           {tab === 'serviceResources' && <InstanceServiceResourceTab instanceId={instanceId} />}
           {tab === 'status' && (
             <InstanceDetailPanel

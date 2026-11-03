@@ -106,12 +106,10 @@ filter_targets_by_deploy_mode() {
   done
 }
 
-# k8s 形态：基础服务（mariadb/mysql/postgresql/minio）复用 default 命名空间的共享实例，
-# 禁止在业务命名空间部署——显式 `up <基础组件>` 直接报错（而非静默剔除，避免"以为部署了其实没部署"）。
-# 例外：目标 ns 本身就是共享 ns（`./deploy.sh -n default up mysql` 管理员预置场景）→ 放行。
-# 仅 up 流程调用（deploy.sh main 的 up 分支，置于 ensure_namespace 之前避免误建 ns）；
-# down 必须放行（存量业务 ns 基础服务需要可卸载），--render-only 经早退自然豁免（纯本地预览）。
-# 前置条件：KCTL_NS 已赋值、resolve_base_svc_ns 已执行
+# k8s 形态：业务 ns 部署基础服务放行并提示（本 ns 实例优先于 default 共享实例被消费）；
+# 目标 ns 为共享 ns 时（-n default）静默。
+# 仅 up 流程调用（置于 kctl_ensure_namespace 之前避免误建 ns）；down 必须放行；
+# --render-only 经早退自然豁免。前置条件：KCTL_NS 已赋值、resolve_base_svc_ns 已执行
 filter_targets_by_cluster_type() {
   is_k8s_cluster || return 0
   [ "$KCTL_NS" = "${DEPLOY_VARS["BASE_SVC_NS"]}" ] && return 0
@@ -122,7 +120,7 @@ filter_targets_by_cluster_type() {
     esac
   done
   [ ${#banned[@]} -eq 0 ] && return 0
-  error "CLUSTER_TYPE=k8s：基础服务(${banned[*]})复用 default 命名空间的共享实例，禁止在 ${KCTL_NS} 部署；共享实例缺失请先 'deploy.sh -n default up <组件>' 或联系管理员，本次请从 up 目标中剔除后重试"
+  warning "k8s 形态：将在 ${KCTL_NS} 部署基础服务(${banned[*]})，本 ns 实例优先于 default 共享实例被消费"
 }
 
 # up 预检：目标组件的硬依赖必须就位——secret/redis 已由 resolve_targets 补齐，
@@ -317,10 +315,11 @@ has_alive_dependents() { # $1=组件 → 0=有依赖方存活
   for other in "${ALL_COMPONENTS[@]}"; do
     in_array "$other" "${TARGETS[@]}" && continue
     in_array "$comp" $(component_deps "$other") || continue
-    # 跨命名空间不构成对象级依赖：k8s 形态基础服务在共享 ns（BASE_SVC_NS），用的是
-    # 共享侧自己的 Secret，与本 ns 的 Secret 对象无关——不算依赖方（否则共享实例
-    # 恒存活会把本 ns 的 Secret 永久钉住，down/gc 永不回收）
-    [ "$(component_ns "$other")" = "$comp_ns" ] || continue
+    # 同 ns 限定仅适用于本 ns 自有实例（secret/redis）；基础服务消费顺序为本 ns →
+    # default，跨 ns 依赖方同样构成存活依赖
+    if ! in_array "$comp" mariadb mysql postgresql minio; then
+      [ "$(component_ns "$other")" = "$comp_ns" ] || continue
+    fi
     dependents+=("$other")
   done
   [ ${#dependents[@]} -eq 0 ] && return 1

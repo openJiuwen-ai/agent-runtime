@@ -35,8 +35,10 @@ REPLICAS_VARS=(AGENT_SERVER_REPLICAS GATEWAY_REPLICAS WEB_REPLICAS IDENTITY_REPL
 # StorageClass 见 STORAGE_CLASS_VARS（check_storage_class_vars）；其余选填项见 check_optional_vars
 OPTIONAL_VARS=(
     DATA_STORAGE_CLASS WORKSPACE_STORAGE_CLASS OBS_PUBLIC_BASE_URL OBS_REGION OBS_SECURE REDIS_USER
+    GATEWAY_PG_SCHEMA WEB_PG_SCHEMA RUNTIME_PG_SCHEMA IDENTITY_PG_SCHEMA MANAGER_PG_SCHEMA
     IDENTITY_SSO_SERVER_URL IDENTITY_SSO_LOGIN_CLIENT_ID IDENTITY_SSO_TOKEN_AUDIENCE
     IDENTITY_FEDERATION_CONFIG_FILE
+    MANAGER_AGENT_CLIENT_REGISTRATION_CONFIG_FILE
     GATEWAY_AGENT_CLIENT_MODE GATEWAY_RUNTIME_MANAGER_URL AGENTSERVER_POD_DNS_LIST
 )
 
@@ -51,7 +53,7 @@ DEPS_K8S=(yq kubectl)
 # DEPLOY_VARS 提供通用默认值；可被 .env.custom 覆盖
 declare -A DEPLOY_VARS=(
     # ----- 通用（双形态） -----
-    ["NAMESPACE"]="rapheale-dev"
+    ["NAMESPACE"]="default"
     ["RENDER_ONLY"]="false"
     ["CLUSTER_TYPE"]="openshift"
     ["CLUSTER_API_SERVER"]=""            # openshift 形态必填（http(s) URL），留空自动探测（oc/kubeconfig）；k8s 形态走 kubeconfig，留空
@@ -71,6 +73,31 @@ declare -A DEPLOY_VARS=(
     ["DB_USER"]=""                       # 留空按 DB_TYPE 取默认（root/postgres）；外部数据库填写对应用户
     ["DB_PASSWORD"]=""                   # 外部数据库统一密码（语义对齐 jiuwenswarm-ee）；留空时内置模式按 DB_TYPE 取 ROOT_PASSWORD，外置模式两者均空报错
     ["ENABLE_EXTERNAL_DB"]="false"
+
+    # 分库配置（语义对齐 jiuwenswarm-ee；派生规则见 var_handler.sh resolve_module_db_vars）：
+    #   <MODULE>_DB_NAME 未设 → mysql/mariadb: <module>_<NAMESPACE>；postgresql: <module>
+    #   <MODULE>_PG_SCHEMA 未设 → postgresql 下取 NAMESPACE（仅 pg 生效）
+    #   <MODULE>_DB_USER/PASSWORD 未设 → 继承 DB_USER / DB_ROOT_PASSWORD
+    ["GATEWAY_DB_NAME"]=""
+    ["WEB_DB_NAME"]=""
+    ["RUNTIME_DB_NAME"]=""
+    ["IDENTITY_DB_NAME"]=""
+    ["MANAGER_DB_NAME"]=""
+    ["GATEWAY_PG_SCHEMA"]=""
+    ["WEB_PG_SCHEMA"]=""
+    ["RUNTIME_PG_SCHEMA"]=""
+    ["IDENTITY_PG_SCHEMA"]=""
+    ["MANAGER_PG_SCHEMA"]=""
+    ["GATEWAY_DB_USER"]=""
+    ["GATEWAY_DB_PASSWORD"]=""
+    ["WEB_DB_USER"]=""
+    ["WEB_DB_PASSWORD"]=""
+    ["RUNTIME_DB_USER"]=""
+    ["RUNTIME_DB_PASSWORD"]=""
+    ["IDENTITY_DB_USER"]=""
+    ["IDENTITY_DB_PASSWORD"]=""
+    ["MANAGER_DB_USER"]=""
+    ["MANAGER_DB_PASSWORD"]=""
 
     ["REDIS_USER"]=""                    # 留空 = default 用户（外挂 Redis 场景）；内置 Redis 由 resolve_redis_vars 派生 jiuwenswarm
     ["REDIS_PASSWORD"]="Root@123456"
@@ -142,10 +169,12 @@ declare -A DEPLOY_VARS=(
     ["IDENTITY_SSO_LOGIN_CLIENT_ID"]=""
     ["IDENTITY_SSO_TOKEN_AUDIENCE"]=""
     ["IDENTITY_FEDERATION_CONFIG_FILE"]=""
+    ["MANAGER_AGENT_CLIENT_REGISTRATION_ENABLED"]="false"
+    ["MANAGER_AGENT_CLIENT_REGISTRATION_CONFIG_FILE"]=""
     # dev 模式：hostPath 挂载宿主机代码调试（MODE=dev 仅 k8s 形态支持；Pod 固定到代码所在节点）
     ["MODE"]="product"                   # product | dev
     ["SWARM_CODE_PATH"]=""                # jiuwenswarm 仓库路径（挂载到 agentserver/gateway/web）
-    ["RUNTIME_CODE_PATH"]=""             # agent-runtime 仓库路径（挂载到 identity/manager-server/manager-web）
+    ["RUNTIME_CODE_PATH"]=""             # agent-runtime 仓库路径（挂载到 runtime/identity/manager-server/manager-web）
     ["CORE_CODE_PATH"]=""                # agent-core 仓库路径（openjiuwen 包挂载到 agentserver/gateway）
     ["IS_MOUNT_WEB_CODE"]="false"        # dev 模式下 web 是否挂载代码
     ["IS_MOUNT_MANAGER_WEB_CODE"]="false" # dev 模式下 manager-web 是否挂载代码

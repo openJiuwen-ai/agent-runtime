@@ -6,7 +6,6 @@ try {
   const {clusterPagePath,clusterNavigationGroup,canonicalClusterSection,canonicalClusterPath,clusterSetupSections}=await server.ssrLoadModule('/src/utils/clusterNavigation.ts');
   test('six primary tabs remain independent and related pages select their owner',()=>{
     for (const tab of ['cluster-config',...clusterSetupSections,'other-settings']) assert.equal(clusterNavigationGroup(tab),tab);
-    assert.equal(clusterNavigationGroup('expert-packages'),'agent-resources');
     for (const tab of ['config','workspace-quota','team-quota','token-quota','cost','audit']) assert.equal(clusterNavigationGroup(tab),'other-settings');
   });
   test('old URLs resolve without changing the intended module or cluster',()=>{
@@ -19,7 +18,7 @@ try {
   });
   test('navigation retains template handoff but drops page-specific modal and filter parameters',()=>{
     const context=new URLSearchParams({template:'agent/a',returnTo:'/agent-templates?search=hello',setup:'1',create:'1',focusTemplate:'old'});
-    for(const section of [...clusterSetupSections,'cluster-config','expert-packages','other-settings','setup']){
+    for(const section of [...clusterSetupSections,'cluster-config','other-settings','setup']){
       const url=new URL(clusterPagePath('cluster/a',section,context),'http://localhost');
       assert.equal(url.pathname,'/instances/cluster%2Fa/'+section);
       assert.equal(url.searchParams.get('template'),'agent/a');
@@ -56,6 +55,15 @@ try {
     assert.equal(canonicalClusterPath('id', 'status', context), '/instances/id/status');
     assert.equal(canonicalClusterPath('id', 'other-settings', new URLSearchParams({ setting: 'unknown' })), '/instances/id/other-settings');
     assert.equal(canonicalClusterPath('id', 'unknown', context), '/instances/id/cluster-config');
+  });
+  test('legacy expert bookmarks open the resource center with cluster and safe return context',()=>{
+    const context = new URLSearchParams({template:'agent/a',returnTo:'/agent-templates?search=one',setup:'1',create:'1'});
+    const url = new URL(canonicalClusterPath('cluster/a', 'expert-packages', context), 'http://localhost');
+    assert.equal(url.pathname, '/expert-packages');
+    assert.equal(url.searchParams.get('cluster'), 'cluster/a');
+    assert.equal(url.searchParams.get('returnTo'), clusterPagePath('cluster/a', 'agent-resources', context));
+    assert.equal(url.searchParams.has('create'), false);
+    assert.equal(canonicalClusterSection('expert-packages'), null);
   });
   test('unsafe return URLs remain inside the Agent catalog',()=>{
     const url=new URL(clusterPagePath('id','access',new URLSearchParams({returnTo:'https://evil.invalid/'})),'http://localhost');

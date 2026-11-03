@@ -5,8 +5,8 @@
 按本文步骤操作即可。
 
 说明：部署统一使用本目录脚本提交资源，部分环境直连 `kubectl apply` / `oc apply`
-会因大体积 schema 传输失败。文中命令均以某试用集群（命名空间 `rapheale-dev`）为
-**示例**，实际使用时替换为你自己的集群地址与命名空间。
+会因大体积 schema 传输失败。文中命令统一以 `<namespace>` 指代你的目标命名空间，
+使用时替换为你自己的集群地址与命名空间。
 
 ## 1. 准备与登录
 
@@ -16,8 +16,8 @@
 |---|---|---|
 | Console 地址 | OpenShift Web 控制台 URL | `https://console-openshift-console.apps.rm1.0a51.p1.openshiftapps.com/` |
 | API Server 地址 | `oc login --server=` 使用的 URL | `https://api.rm1.0a51.p1.openshiftapps.com:6443` |
-| 登录账号 | 具有目标项目 admin 权限的账号| `rapheale` |
-| 命名空间 | 部署目标项目名，对应 `.env.custom` 的 `NAMESPACE` | `rapheale-dev` |
+| 登录账号 | 具有目标项目 admin 权限的账号| `<账号>` |
+| 命名空间 | 部署目标项目名，对应 `.env.custom` 的 `NAMESPACE` | `<namespace>` |
 
 在可访问集群的机器上安装 oc 客户端（内含 kubectl）：
 
@@ -31,7 +31,7 @@ tar -xzf oc-linux.tar.gz && mv oc /usr/local/bin/ && oc version
 
 ```bash
 oc login --token=sha256~xxxxxxxx --server=https://api.rm1.0a51.p1.openshiftapps.com:6443
-oc project rapheale-dev
+oc project <namespace>
 kubectl get pods   # 确认登录成功
 ```
 
@@ -157,11 +157,11 @@ MinIO 的 Console / S3 API 是 HTTP 服务，协议上可以走 Route，但当�
 临时排障访问可通过port-forward走**本地端口映射**：kubectl 把
 本机端口转发到集群内 Service。
 ```bash
-kubectl port-forward --address 0.0.0.0 -n rapheale-dev svc/mysql-headless 30306:3306
-kubectl port-forward --address 0.0.0.0 -n rapheale-dev svc/mariadb-headless 30307:3306
-kubectl port-forward --address 0.0.0.0 -n rapheale-dev svc/postgresql-headless 30433:5432
-kubectl port-forward --address 0.0.0.0 -n rapheale-dev svc/redis 30379:6379
-kubectl port-forward --address 0.0.0.0 -n rapheale-dev svc/minio 30901:9001    # MinIO Console，浏览器开 http://<部署机IP>:30901
+kubectl port-forward --address 0.0.0.0 -n <namespace> svc/mysql-headless 30306:3306
+kubectl port-forward --address 0.0.0.0 -n <namespace> svc/mariadb-headless 30307:3306
+kubectl port-forward --address 0.0.0.0 -n <namespace> svc/postgresql-headless 30433:5432
+kubectl port-forward --address 0.0.0.0 -n <namespace> svc/redis 30379:6379
+kubectl port-forward --address 0.0.0.0 -n <namespace> svc/minio 30901:9001    # MinIO Console，浏览器开 http://<部署机IP>:30901
 ```
 
 提示：`--address 0.0.0.0` 会把端口暴露到部署机所在网络，且凭据为部署默认值，

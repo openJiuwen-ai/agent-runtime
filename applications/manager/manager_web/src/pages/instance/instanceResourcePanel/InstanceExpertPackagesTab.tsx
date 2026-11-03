@@ -8,6 +8,8 @@ import { MatchExprEditor } from '../../../components/MatchExprEditor';
 import { Modal, ModalCancelButton } from '../../../components/Modal';
 import { useAsync } from '../../../hooks/useAsync';
 import { toast } from '../../../stores/uiStore';
+import { useRouter } from '../../../router';
+import { ListSearchInput } from '../../../components/ListSearchInput';
 import {
   AGENT_RESOURCE_MATCH_FIELDS,
   describeMatchExprScope,
@@ -44,13 +46,31 @@ function packageKey(kind: string, id: string): string {
   return `${kind}\n${id}`;
 }
 
-interface Props {
-  instanceId: string;
+export interface ExpertPackageCluster {
+  id: string;
+  name: string;
 }
 
-export function InstanceExpertPackagesTab({ instanceId }: Props) {
-  const { t } = useTranslation();
-  const [kindTab, setKindTab] = useState<Kind>('agent_template');
+interface Props {
+  instanceId: string;
+  clusters?: ExpertPackageCluster[];
+  clustersLoading?: boolean;
+  clustersError?: string | null;
+  onClusterChange?: (id: string) => void;
+}
+
+export function InstanceExpertPackagesTab({
+  instanceId,
+  clusters,
+  clustersLoading = false,
+  clustersError = null,
+  onClusterChange,
+}: Props) {
+  const { t, i18n } = useTranslation();
+  const zh = i18n.language.startsWith('zh');
+  const { path, params, navigate } = useRouter();
+  const [kindTab, setKindTab] = useState<Kind>(params.get('tab') === 'agent_group' ? 'agent_group' : 'agent_template');
+  const [search, setSearch] = useState('');
   const [packages, setPackages] = useState<PackageAllowlistPackage[]>([]);
   const [catalog, setCatalog] = useState<PackageAllowlistCatalogItem[]>([]);
   const [catalogError, setCatalogError] = useState('');
@@ -65,6 +85,21 @@ export function InstanceExpertPackagesTab({ instanceId }: Props) {
   const [deleteTarget, setDeleteTarget] = useState<PackageAllowlistPackage | null>(null);
   const loadGen = useRef(0);
   const catalogGen = useRef(0);
+  const instanceIdRef = useRef(instanceId);
+  instanceIdRef.current = instanceId;
+
+  useEffect(() => {
+    setKindTab(params.get('tab') === 'agent_group' ? 'agent_group' : 'agent_template');
+  }, [params]);
+
+  const changeKind = (kind: Kind) => {
+    setKindTab(kind);
+    setSearch('');
+    const query = new URLSearchParams(params);
+    query.set('tab', kind);
+    if (instanceId) query.set('cluster', instanceId);
+    navigate(`${path}?${query}`, { replace: true });
+  };
 
   const allLabel = t('instanceDetail.resourcePanel.agent.scopeAll');
   const { data: orgPage } = useAsync(() => OrgApi.list(), []);
@@ -140,14 +175,27 @@ export function InstanceExpertPackagesTab({ instanceId }: Props) {
   }, []);
 
   useEffect(() => {
+    if (!instanceId) {
+      loadGen.current += 1;
+      catalogGen.current += 1;
+      setPackages([]);
+      setCatalog([]);
+      setCatalogError('');
+      setLoadError(null);
+      setLoading(false);
+      setCatalogLoading(false);
+      return;
+    }
     void reload(instanceId);
     void reloadCatalog(instanceId);
   }, [instanceId, reload, reloadCatalog]);
 
   const publish = async (next: PackageAllowlistPackage[]) => {
+    const targetId = instanceId;
     setSaving(true);
     try {
-      const data = await PackageAllowlistApi.upsert(instanceId, { packages: next });
+      const data = await PackageAllowlistApi.upsert(targetId, { packages: next });
+      if (instanceIdRef.current !== targetId) return true;
       setPackages(data.packages || []);
       toast('success', t('success.saved'));
       return true;
@@ -228,12 +276,17 @@ export function InstanceExpertPackagesTab({ instanceId }: Props) {
     return name && name !== id ? name : '';
   };
 
-  const visiblePackages = packages.filter((row) => row.kind === kindTab);
+  const kindPackages = packages.filter((row) => row.kind === kindTab);
+  const searchText = search.trim().toLocaleLowerCase();
+  const visiblePackages = kindPackages.filter((row) => !searchText
+    || `${row.id} ${catalogName(row.kind, row.id)} ${presentScope(row.match_expr).text}`.toLocaleLowerCase().includes(searchText));
   const tabGranted = new Set(
     packages.filter((item) => item.kind === kindTab).map((item) => item.id),
   );
   const canAdd = !saving
     && !loading
+    && !loadError
+    && !!instanceId
     && !catalogLoading
     && catalog.some((item) => item.kind === kindTab && !tabGranted.has(item.id));
   const choices = catalog.filter((item) => item.kind === draft.kind);
@@ -271,99 +324,137 @@ export function InstanceExpertPackagesTab({ instanceId }: Props) {
     <div className="flex min-w-0 flex-col gap-4">
       <div className="page-header w-full min-w-0 flex-wrap items-start gap-y-3">
         <div className="min-w-[7.5rem] max-w-[20rem] shrink-0 sm:max-w-[32rem]">
-          <div className="page-title truncate" title={t('nav.expertPackages')}>
-            {t('nav.expertPackages')}
+          <div className="page-title truncate" title={t('expertPackages.title')}>
+            {t('expertPackages.title')}
           </div>
           <div className="page-subtitle" title={t('expertPackages.subtitle')}>
             {t('expertPackages.subtitle')}
           </div>
         </div>
-        <div className="flex min-w-0 flex-1 flex-nowrap items-center justify-end gap-2">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
+          {clusters ? (
+            <label className="flex min-w-0 basis-full items-center gap-2 text-sm sm:basis-auto sm:max-w-[38rem] sm:flex-1">
+              <span className="shrink-0 text-muted">{t('expertPackages.selectCluster')}</span>
+              <select
+                className="select min-w-0 flex-1 !w-auto"
+                value={instanceId}
+                aria-label={t('expertPackages.selectCluster')}
+                disabled={saving || modalOpen || deleteTarget !== null || clustersLoading || clusters.length === 0}
+                onChange={(event) => onClusterChange?.(event.target.value)}
+              >
+                {!instanceId || clusters.length !== 1 ? <option value="">{t('common.pleaseSelect')}</option> : null}
+                {clusters.map((cluster) => (
+                  <option key={cluster.id} value={cluster.id}>
+                    {cluster.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
           <button
-            className="btn sm"
+            className="btn sm shrink-0"
             onClick={() => {
               void reload(instanceId);
               void reloadCatalog(instanceId);
             }}
-            disabled={loading}
+            disabled={loading || saving || !instanceId}
           >
             {t('common.refresh')}
           </button>
-          <button className="btn primary sm" onClick={openCreate} disabled={!canAdd}>
+          <button className="btn primary sm shrink-0" onClick={openCreate} disabled={!canAdd}>
             + {t(kindTab === 'agent_group' ? 'expertPackages.addGroup' : 'expertPackages.addTemplate')}
           </button>
         </div>
       </div>
-      {catalogError ? (
-        <p className="text-sm text-muted">{t('expertPackages.catalogError', { message: catalogError })}</p>
-      ) : null}
-
-      <div className="tabs-bar max-w-full overflow-x-auto" role="tablist" aria-label={t('nav.expertPackages')}>
-        {tabs.map((it) => (
-          <button
-            key={it.key}
-            type="button"
-            role="tab"
-            aria-selected={kindTab === it.key}
-            className={`tab ${kindTab === it.key ? 'active' : ''}`}
-            onClick={() => setKindTab(it.key)}
-          >
-            {it.label}
+      {clustersLoading && !instanceId ? (
+        <div className="p-4 text-sm text-muted">{t('common.loading')}</div>
+      ) : clustersError ? (
+        <p className="text-sm text-danger">{clustersError}</p>
+      ) : clusters && clusters.length === 0 ? (
+        <div className="flex flex-col items-center gap-3">
+          <Empty text={t('expertPackages.noClusters')} />
+          <button type="button" className="btn" onClick={() => navigate('/instances')}>
+            {t('expertPackages.goToClusters')}
           </button>
-        ))}
-      </div>
+        </div>
+      ) : instanceId ? (
+        <>
+          {catalogError ? (
+            <p className="text-sm text-muted">{t('expertPackages.catalogError', { message: catalogError })}</p>
+          ) : null}
 
-      <div className="card !p-0">
-        {loading ? (
-          <div className="p-4 text-sm text-muted">{t('common.loading')}</div>
-        ) : loadError ? (
-          <div className="p-4 text-sm text-danger">
-            {t('errors.loadFailed', { detail: loadError })}
+          <div className="tabs-bar max-w-full overflow-x-auto" role="tablist" aria-label={t('expertPackages.title')}>
+            {tabs.map((it) => (
+              <button
+                key={it.key}
+                type="button"
+                role="tab"
+                aria-selected={kindTab === it.key}
+                className={`tab ${kindTab === it.key ? 'active' : ''}`}
+                onClick={() => changeKind(it.key)}
+              >
+                {it.label}<span className="ml-2 text-xs text-muted">{packages.filter((row) => row.kind === it.key).length}</span>
+              </button>
+            ))}
           </div>
-        ) : visiblePackages.length === 0 ? (
-          <Empty text={t(kindTab === 'agent_group' ? 'expertPackages.emptyGroup' : 'expertPackages.emptyTemplate')} />
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="table w-max min-w-full">
-              <thead>
-                <tr>
-                  <th>{t('expertPackages.packageId')}</th>
-                  <th>{t('instanceDetail.resourcePanel.agent.scopeLabel')}</th>
-                  <th>{t('common.actions')}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {visiblePackages.map((row) => {
-                  const scope = presentScope(row.match_expr);
-                  return (
-                    <tr key={packageKey(row.kind, row.id)}>
-                      <td className="break-all">
-                        {catalogName(row.kind, row.id) ? (
-                          <div className="text-text-strong">{catalogName(row.kind, row.id)}</div>
-                        ) : null}
-                        <div className="mono text-xs">{row.id}</div>
-                      </td>
-                      <td className="max-w-[24rem] break-words text-sm" title={scope.title}>
-                        {scope.text}
-                      </td>
-                      <td className="whitespace-nowrap">
-                        <div className="flex items-center gap-1">
-                          <button className="btn sm ghost" onClick={() => openEdit(row)} disabled={saving}>
-                            {t('common.edit')}
-                          </button>
-                          <button className="btn sm danger" onClick={() => setDeleteTarget(row)} disabled={saving}>
-                            {t('common.delete')}
-                          </button>
-                        </div>
-                      </td>
+
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="text-sm text-muted">{zh ? `已发布 ${kindPackages.length} 项` : `${kindPackages.length} published`}</div>
+            <ListSearchInput value={search} onChange={setSearch} placeholder={zh ? '搜索名称、包 ID 或使用范围' : 'Search name, package ID, or audience'} className="sm:!w-80" />
+          </div>
+          <div className="card !p-0">
+            {loading ? (
+              <div className="p-4 text-sm text-muted">{t('common.loading')}</div>
+            ) : loadError ? (
+              <div className="p-4 text-sm text-danger">
+                {t('errors.loadFailed', { detail: loadError })}
+              </div>
+            ) : visiblePackages.length === 0 ? (
+              <Empty text={searchText ? (zh ? '没有符合搜索条件的包' : 'No packages match this search') : t(kindTab === 'agent_group' ? 'expertPackages.emptyGroup' : 'expertPackages.emptyTemplate')} />
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="table w-max min-w-full">
+                  <thead>
+                    <tr>
+                      <th>{zh ? '名称 / 包 ID' : 'Name / package ID'}</th>
+                      <th>{t('instanceDetail.resourcePanel.agent.scopeLabel')}</th>
+                      <th>{t('common.actions')}</th>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                  </thead>
+                  <tbody>
+                    {visiblePackages.map((row) => {
+                      const scope = presentScope(row.match_expr);
+                      return (
+                        <tr key={packageKey(row.kind, row.id)}>
+                          <td className="break-all">
+                            {catalogName(row.kind, row.id) ? (
+                              <div className="text-text-strong">{catalogName(row.kind, row.id)}</div>
+                            ) : null}
+                            <div className="mono text-xs">{row.id}</div>
+                          </td>
+                          <td className="max-w-[24rem] break-words text-sm" title={scope.title}>
+                            {scope.text}
+                          </td>
+                          <td className="whitespace-nowrap">
+                            <div className="flex items-center gap-1">
+                              <button className="btn sm ghost" onClick={() => openEdit(row)} disabled={saving}>
+                                {t('common.edit')}
+                              </button>
+                              <button className="btn sm danger" onClick={() => setDeleteTarget(row)} disabled={saving}>
+                                {t('common.delete')}
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        </>
+      ) : <div className="card"><Empty text={zh ? '请先选择目标集群，查看和管理该集群已发布的专家与专家团。' : 'Choose a cluster to view and manage its published experts and teams.'} /></div>}
 
       <Modal
         open={modalOpen}
@@ -458,7 +549,12 @@ export function InstanceExpertPackagesTab({ instanceId }: Props) {
 
       <ConfirmDialog
         open={deleteTarget !== null}
-        message={t('expertPackages.deleteConfirm', { id: deleteTarget?.id || '' })}
+        message={t('expertPackages.deleteConfirm', {
+          kind: deleteTarget ? kindLabel(deleteTarget.kind) : '',
+          name: deleteTarget
+            ? (catalogName(deleteTarget.kind, deleteTarget.id) || deleteTarget.id)
+            : '',
+        })}
         danger
         onConfirm={() => void removeRow()}
         onClose={() => setDeleteTarget(null)}

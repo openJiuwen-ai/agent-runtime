@@ -80,7 +80,7 @@
     "modelTemplates": "模型",
     "embeddingTemplates": "Embedding模型",
     "skillWhitelistTemplates": "预置Skill",
-    "expertPackages": "专家包",
+    "expertPackages": "专家与专家包",
     "safetyGuardrails": "安全护栏",
     "a2aManagement": "A2A管理",
     "extensionTemplates": "扩展配置",
@@ -98,6 +98,7 @@
     "todoWithCount": "待办，{{count}} 条"
   },
   "expertPackages": {
+    "title": "专家与专家包",
     "subtitle": "按集群发布专家和专家团。同一页维护包和授权范围，保存后整份替换并下发。",
     "add": "添加",
     "addTemplate": "添加专家",
@@ -122,9 +123,12 @@
     "scopeNameSep": "、",
     "scopeGroupOpen": "（",
     "scopeGroupClose": "）",
+    "selectCluster": "集群",
+    "noClusters": "还没有集群",
+    "goToClusters": "前往集群管理",
     "emptyTemplate": "该集群还没有受控专家",
     "emptyGroup": "该集群还没有受控专家团",
-    "deleteConfirm": "从该集群移除 {{id}}？",
+    "deleteConfirm": "从该集群移除{{kind}}「{{name}}」？",
     "duplicate": "该集群已经有这个包"
   },
   "guide": {
@@ -1149,7 +1153,9 @@
       "guides": "功能指南",
       "guideAgent": "Agent Management",
       "guidePool": "Runtime Template Management",
-      "guideCluster": "Cluster Management"
+      "guideCluster": "Cluster Management",
+      "guideExpertPackage": "专家包配置",
+      "guideSkillPrebuilt": "Preset Skills"
     }
   },
   "userConsole": {
@@ -1172,6 +1178,16 @@
   "agentTemplate": {
     "optionalResources": "可选能力配置",
     "resourceTabHint": "资源管理在新标签页打开；添加完成后返回此处，刷新选项即可继续，已填内容会保留。",
+    "registration": {
+      "button": "注册 Agent 客户端",
+      "pending": "正在注册…",
+      "success": "Agent 客户端已注册，凭据已填入自定义配置。保存模板后生效。",
+      "failed": "Agent 客户端注册失败，请重试。",
+      "cleanupFailed": "未能清理本次未保存的 Agent 客户端，请稍后检查。",
+      "alreadyConfigured": "已有客户端凭据，保留当前配置。",
+      "showSecret": "显示并编辑密钥",
+      "hideSecret": "隐藏密钥"
+    },
     "title": "Agent模板",
     "subtitle": "维护可复用的Agent模板，供实例绑定使用",
     "new": "新建 Agent模板",
