@@ -82,6 +82,8 @@ export function InstanceExpertPackagesTab({
   const [deleteTarget, setDeleteTarget] = useState<PackageAllowlistPackage | null>(null);
   const loadGen = useRef(0);
   const catalogGen = useRef(0);
+  const instanceIdRef = useRef(instanceId);
+  instanceIdRef.current = instanceId;
 
   const allLabel = t('instanceDetail.resourcePanel.agent.scopeAll');
   const { data: orgPage } = useAsync(() => OrgApi.list(), []);
@@ -173,9 +175,11 @@ export function InstanceExpertPackagesTab({
   }, [instanceId, reload, reloadCatalog]);
 
   const publish = async (next: PackageAllowlistPackage[]) => {
+    const targetId = instanceId;
     setSaving(true);
     try {
-      const data = await PackageAllowlistApi.upsert(instanceId, { packages: next });
+      const data = await PackageAllowlistApi.upsert(targetId, { packages: next });
+      if (instanceIdRef.current !== targetId) return true;
       setPackages(data.packages || []);
       toast('success', t('success.saved'));
       return true;
@@ -314,7 +318,7 @@ export function InstanceExpertPackagesTab({
                 className="select min-w-0 flex-1 !w-auto"
                 value={instanceId}
                 aria-label={t('expertPackages.selectCluster')}
-                disabled={clustersLoading || clusters.length === 0}
+                disabled={saving || clustersLoading || clusters.length === 0}
                 onChange={(event) => onClusterChange?.(event.target.value)}
               >
                 {clusters.length !== 1 ? <option value="">{t('common.pleaseSelect')}</option> : null}
