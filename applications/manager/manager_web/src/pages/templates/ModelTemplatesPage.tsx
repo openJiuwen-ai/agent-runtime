@@ -170,7 +170,7 @@ export function ModelTemplatesPage() {
       </div>
 
       <div className="flex w-full min-w-0 shrink-0 flex-col gap-4">
-      <div className="card !p-0">
+      <div className="card manager-page-table !p-0">
         {loading ? (
           <div className="p-4 text-sm text-muted">{t('common.loading')}</div>
         ) : error ? (

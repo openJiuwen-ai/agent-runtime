@@ -30,7 +30,6 @@ function AgentConnectForm({ id, draftKey }: { id: string; draftKey: string }) {
   const { navigate, params } = useRouter();
   const requestedCluster = agentPreparationCluster(params) || '';
   const returnTo = templateReturnPath(params.get('returnTo'));
-  const demo = requestedCluster === 'mock-cluster-demo';
   const agent = useAsync(() => AgentTemplateApi.get(id), [id]);
   const instances = useAsync(loadOverviewInstances, []);
   const [draft] = useState(() => {
@@ -40,13 +39,13 @@ function AgentConnectForm({ id, draftKey }: { id: string; draftKey: string }) {
   const [instance, setInstance] = useState(draft.instance);
   const [name, setName] = useState(draft.name);
   const checks = useAsync(async () => {
-    if (!instance || demo || instance === 'mock-cluster-demo') return null;
+    if (!instance) return null;
     const [bindings, runtimes] = await Promise.all([
       collectPages((page, page_size) => InstanceAgentResourceApi.listInstanceAgentResources(instance, { page, page_size })),
       InstanceServiceResourceApi.listInstanceResources(instance, { page: 1, page_size: 1, enabled: true }),
     ]);
     return { instance, existing: bindings.filter(row => row.ref_template_id === id).length, runtimeCount: runtimes.total };
-  }, [instance, id, demo]);
+  }, [instance, id]);
   const [expr, setExpr] = useState(draft.expr);
   const [step, setStep] = useState(0);
   const [error, setError] = useState('');
@@ -54,40 +53,38 @@ function AgentConnectForm({ id, draftKey }: { id: string; draftKey: string }) {
   const [saved, setSaved] = useState(false);
   const [draftError, setDraftError] = useState(false);
   useEffect(() => {
-    if (demo) return;
     try {
       if (saved || (!instance && !name && !expr)) window.sessionStorage.removeItem(draftKey);
       else window.sessionStorage.setItem(draftKey, JSON.stringify({ instance, name, expr }));
       setDraftError(false);
     } catch { setDraftError(true); }
-  }, [draftKey, saved, instance, name, expr, demo]);
+  }, [draftKey, saved, instance, name, expr]);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   function discardDraft() {
     setConfirmDiscard(false);
     setInstance(requestedCluster); setName(''); setExpr(''); setStep(0); setError('');
   }
   useEffect(() => {
-    if (demo || saved || (!name && !expr)) return;
+    if (saved || (!name && !expr)) return;
     const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
-  }, [saved, name, expr, demo]);
+  }, [saved, name, expr]);
 
-  const canContinue = !demo && !agent.loading && !agent.error && !instances.loading && !instances.error && !!instance && !!instances.data?.some(row => row.jiuwenclaw_id === instance) && !!name.trim() && !!agent.data?.enabled;
+  const canContinue = !agent.loading && !agent.error && !instances.loading && !instances.error && !!instance && !!instances.data?.some(row => row.jiuwenclaw_id === instance) && !!name.trim() && !!agent.data?.enabled;
   const valid = canContinue && !checks.loading && !checks.error && checks.data?.instance === instance && !validateMatchExprModel(parseMatchExpr(expr), AGENT_RESOURCE_MATCH_FIELDS);
   function savedBindingPath() {
     const target = clusterPagePath(instance, 'agent-resources', savedAgentBindingContext(params, instance));
     return `${target}${target.includes('?') ? '&' : '?'}${new URLSearchParams({ focusTemplate: id })}`;
   }
   async function save() {
-    if (!valid || saving || saved || instance === 'mock-cluster-demo') return;
+    if (!valid || saving || saved) return;
     setSaving(true); setError('');
     try {
       await InstanceAgentResourceApi.create(instance, { ref_template_id: id, resource_name: name.trim(), match_exprs: [expr], enabled: true });
       bumpGuideRevision(); setSaved(true);
     } catch (e) { setError((e as Error).message); } finally { setSaving(false); }
   }
-  if (demo) return <section className="card overview-empty"><h1>{tr('当前为演示集群', 'Demo cluster')}</h1><p>{tr('演示数据不会写入真实配置，请返回集群查看演示绑定。', 'Demo data cannot write real configuration. Return to the cluster to view sample bindings.')}</p><button className="btn primary" onClick={() => navigate('/instances/mock-cluster-demo/agent-resources')}>{tr('返回演示集群', 'Return to demo cluster')}</button></section>;
   return <div className="workspace-overview"><div className="page-header"><div><button className="btn ghost sm" onClick={() => navigate(returnTo)}>← {tr('Agent模板管理', 'Agent templates')}</button><h1 className="page-title">{tr('绑定集群', 'Bind to a cluster')}</h1><p className="page-subtitle">{agent.data?.template_name || '…'} · {tr('选择集群，配置模板在该集群中的名称和使用范围。', 'Choose a cluster, a local Agent name and its usage scope.')}</p></div><button className="btn" onClick={() => navigate(`/agent-templates/${encodeURIComponent(id)}${templateFlowQuery(params)}`)}>{tr('查看模板详情', 'View template')}</button></div>
     {(agent.error || instances.error) && <div role="alert" className="card"><p className="text-danger">{agent.error || instances.error}</p><button className="btn mt-3" onClick={() => { void agent.reload(); void instances.reload(); }}>{tr('重新加载', 'Reload')}</button></div>}
     {!saved && (name || expr) && <div className="template-context"><div><strong>{tr('绑定草稿', 'Binding draft')}</strong><p role="status">{draftError ? tr('无法暂存草稿，离开前请保存配置。', 'Draft storage is unavailable. Save before leaving.') : tr('输入已暂存于当前标签页，返回此模板可继续。尚未提交到服务器。', 'Draft kept in this tab for this template. Not submitted to the server.')}</p></div><button className="btn sm" disabled={saving} onClick={() => setConfirmDiscard(true)}>{tr('清除草稿', 'Discard draft')}</button></div>}

@@ -17,7 +17,6 @@ export function AgentDetailPage({ id }: { id: string }) {
   const tr = (cn: string, en: string) => i18n.language.startsWith('zh') ? cn : en;
   const { navigate, params } = useRouter();
   const returnTo = templateReturnPath(params.get('returnTo'));
-  const demoContext = params.get('cluster') === 'mock-cluster-demo';
   const [editing, setEditing] = useState(false);
   const [revision, setRevision] = useState(0);
   const agent = useAsync(() => AgentTemplateApi.get(id), [id, revision]);
@@ -39,7 +38,7 @@ export function AgentDetailPage({ id }: { id: string }) {
   return <div className="workspace-overview">
     <div className="page-header">
       <div><button className="btn ghost sm" onClick={() => navigate(returnTo)}>← {tr('Agent模板管理', 'Agent templates')}</button><h1 className="page-title">{definition.template_name}</h1><p className="page-subtitle">{definition.description || tr('尚未填写描述', 'No description yet')}</p></div>
-      <div className="flex gap-2"><button className="btn" onClick={refresh}>{tr('刷新', 'Refresh')}</button><button className="btn" disabled={demoContext} onClick={() => setEditing(true)}>{tr('编辑模板', 'Edit template')}</button><button className="btn primary" disabled={!definition.enabled || demoContext} onClick={bindTemplate}>{tr('绑定集群', 'Bind to a cluster')}</button></div>
+      <div className="flex gap-2"><button className="btn" onClick={refresh}>{tr('刷新', 'Refresh')}</button><button className="btn" onClick={() => setEditing(true)}>{tr('编辑模板', 'Edit template')}</button><button className="btn primary" disabled={!definition.enabled} onClick={bindTemplate}>{tr('绑定集群', 'Bind to a cluster')}</button></div>
     </div>
     <section className="card"><dl className="connect-summary"><dt>{tr('模板状态', 'Definition status')}</dt><dd>{definition.enabled ? tr('已启用', 'Enabled') : tr('已停用', 'Disabled')}</dd><dt>{tr('标签', 'Tags')}</dt><dd>{definition.agent_tags?.join(' · ') || '—'}</dd><dt>{tr('更新时间', 'Updated')}</dt><dd>{formatTime(definition.updated_at)}</dd></dl><details className="mt-4"><summary>{tr('技术标识', 'Technical identifier')}</summary><code>{id}</code></details></section>
     <section className="card"><div className="card-header"><h2>{tr('能力与安全策略', 'Capabilities & policies')}</h2><span className="text-muted text-sm">{tr('定义引用，不代表运行时已加载', 'Definition references, not runtime confirmation')}</span></div>

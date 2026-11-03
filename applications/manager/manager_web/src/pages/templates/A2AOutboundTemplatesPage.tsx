@@ -44,7 +44,7 @@ export function A2AOutboundTemplatesPage({ embedded = false, header, tabs }: { e
         <div className="a2a-header-actions flex min-w-0 flex-nowrap items-center justify-end gap-2"><ListSearchInput value={searchInput} onChange={setSearchInput} placeholder="搜索名称、地址或标签" className="a2a-header-search py-0" /><button className="btn sm shrink-0" onClick={() => void reload()}>刷新</button><ResourceImportButton resourceType="a2a-agent" onImported={() => void reload()} className="btn sm shrink-0" /><button className="btn sm shrink-0" onClick={() => setSettingsOpen(true)}>网络访问设置</button><button className="btn primary sm shrink-0" onClick={() => { setEditing(null); setModalOpen(true); }}>+ 注册 A2A Agent</button></div>
       </div>
       {tabs}
-      <div className="card !p-0 overflow-x-auto">
+      <div className="card manager-page-table !p-0 overflow-x-auto">
         {loading ? <div className="p-4 text-muted">加载中…</div> : error ? <div className="p-4 text-danger">{error}</div> :
           <table className="table min-w-full"><thead><tr><th>Agent</th><th>地址 / 接口</th><th>Card 版本</th><th>状态</th><th>引用数</th><th>最近检查</th><th>操作</th></tr></thead><tbody>
           {!items.length ? <tr><td colSpan={7}><Empty text="暂无 A2A Agent" /></td></tr> : items.map((row) => <tr key={row.template_id}>

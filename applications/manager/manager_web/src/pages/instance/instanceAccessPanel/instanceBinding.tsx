@@ -3,11 +3,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Modal, ModalCancelButton } from '../../../components/Modal';
 import { HintTooltip } from '../../../components/HintTooltip';
-import { GuideLink } from '../../../components/GuideLink';
+import { useRouter } from '../../../router';
 import { useFormDirty } from '../../../hooks/useFormDirty';
 import { ApiError } from '../../../services/api';
 import { toast } from '../../../stores/uiStore';
 import { type AdmissionDraft, emptyAdmissionDraft } from '../../../utils/admissionNavigation';
+import './instanceBinding.css';
 
 export interface Candidate { id: string; label: string; sub?: string }
 
@@ -20,17 +21,26 @@ export type AddToInstanceConfirmPayload = {
 /** 通用"添加到实例"选择器：候选（已排除在册者）搜索 + 多选 + 可选过期时间/登录权限 → onConfirm。 */
 export function AddToInstanceModal({
   title, candidates, onConfirm, onClose, showExpiresAt = false, manageLink, initialDraft = emptyAdmissionDraft,
+  subjectKind, directoryCount, loading = false, error, onReload,
 }: {
   title: string;
   candidates: Candidate[];
+  subjectKind: 'users' | 'orgs';
+  directoryCount: number;
+  loading?: boolean;
+  error?: string | null;
+  onReload?: () => void;
   onConfirm: (payload: AddToInstanceConfirmPayload) => Promise<void>;
   onClose: () => void;
   showExpiresAt?: boolean;
-  /** 可选：弹窗底部「前往 xxx 页面 →」导航链接，点击关闭弹窗并跳转对应页面 */
+  /** 目录跳转前保存未完成的准入选择，返回后继续添加。 */
   manageLink?: { page: string; to: string; onPrepare?: (draft: AdmissionDraft) => void };
   initialDraft?: AdmissionDraft;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const { navigate } = useRouter();
+  const tr = (cn: string, en: string) => i18n.language.startsWith('zh') ? cn : en;
+  const subject = subjectKind === 'orgs' ? tr('组织', 'organizations') : tr('用户', 'users');
   const { markClean, isDirty } = useFormDirty(true);
   const [sel, setSel] = useState<Set<string>>(() => new Set(initialDraft.ids));
   const [q, setQ] = useState('');
@@ -42,6 +52,12 @@ export function AddToInstanceModal({
     return kw ? candidates.filter((c) => c.label.toLowerCase().includes(kw) || c.id.toLowerCase().includes(kw)) : candidates;
   }, [candidates, q]);
   const selectedIds = candidates.filter(candidate => sel.has(candidate.id)).map(candidate => candidate.id);
+  const canSelect = !loading && !error && candidates.length > 0;
+  const openDirectory = () => {
+    if (!manageLink) return;
+    if (manageLink.onPrepare) manageLink.onPrepare(draft); else onClose();
+    navigate(manageLink.to);
+  };
 
   useEffect(() => {
     markClean({ ids: [] as string[], expiresAt: '', loginPolicy: 'allow' as const });
@@ -62,6 +78,7 @@ export function AddToInstanceModal({
   }
 
   async function submit() {
+    if (busy || !canSelect || selectedIds.length === 0) return;
     setBusy(true);
     try {
       await onConfirm({
@@ -86,32 +103,36 @@ export function AddToInstanceModal({
       footer={
         <>
           <ModalCancelButton className="btn" />
-          <button className="btn primary" style={{ marginLeft: 8 }} disabled={busy || selectedIds.length === 0} onClick={submit}>
+          <button className="btn primary" style={{ marginLeft: 8 }} disabled={busy || !canSelect || selectedIds.length === 0} onClick={submit}>
             {t('common.confirm', { defaultValue: '确定' })}{selectedIds.length ? `（${selectedIds.length}）` : ''}
           </button>
         </>
       }
     >
-      <input
-        className="input"
-        placeholder={t('common.search', { defaultValue: '搜索' })}
-        value={q}
-        onChange={(e) => setQ(e.target.value)}
-        style={{ marginBottom: 8 }}
-      />
-      <div style={{ maxHeight: 300, overflow: 'auto', border: '1px solid var(--border, #ddd)', borderRadius: 6, padding: 8 }}>
+      {loading ? <div className="admission-picker-empty" role="status">{tr('正在读取可添加的', 'Loading available ')}{subject}…</div>
+        : error ? <div className="admission-picker-empty" role="alert"><strong>{tr('无法读取', 'Could not load ')}{subject}</strong><p>{error}</p><button className="btn" onClick={onReload}>{tr('重试', 'Retry')}</button></div>
+        : candidates.length === 0 ? <div className="admission-picker-empty">
+          <span className="admission-picker-empty__icon" aria-hidden="true">＋</span>
+          <h3>{directoryCount === 0 ? tr(`还没有${subject}，先到管理页创建`, `Create ${subject} to get started`) : tr(`所有${subject}都已添加到此集群`, `All ${subject} are already added`)}</h3>
+          <p>{directoryCount === 0 ? tr(`创建${subject}后，点击管理页的“返回集群准入”即可继续添加。`, 'Create an entry, then use “Return to cluster admission” to continue.') : tr(`可关闭弹窗调整已有准入规则，或前往管理页创建新的${subject}。`, 'Close this dialog to edit existing rules, or create another entry in the directory.')}</p>
+          {manageLink && <button className="btn primary" onClick={openDirectory}>{tr(`前往${manageLink.page}`, `Open ${manageLink.page}`)} →</button>}
+        </div> : <>
+        <div className="admission-picker-toolbar"><div><strong>{tr(`选择要添加的${subject}`, `Select ${subject}`)}</strong><p>{tr(`找不到${subject}？可先到管理页创建，再返回继续。`, 'Missing an entry? Create it in the directory, then return here.')}</p></div>{manageLink && <button className="btn" onClick={openDirectory}>{tr(`前往${manageLink.page}`, `Open ${manageLink.page}`)} →</button>}</div>
+        <input className="input w-full mb-2" aria-label={tr(`搜索${subject}`, `Search ${subject}`)} placeholder={tr(`搜索${subject}名称或 ID`, `Search ${subject} by name or ID`)} value={q} onChange={(e) => setQ(e.target.value)} />
+        <div className="admission-picker-list">
         {filtered.map((c) => (
-          <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0' }}>
+          <label key={c.id}>
             <input type="checkbox" checked={sel.has(c.id)} onChange={() => toggle(c.id)} />
-            <span>{c.label}</span>
-            {c.sub && <span className="text-xs text-muted mono">{c.sub}</span>}
+            <span className="min-w-0"><span className="block break-words">{c.label}</span>{c.sub && <span className="block text-xs text-muted mono break-all">{c.sub}</span>}</span>
           </label>
         ))}
         {filtered.length === 0 && (
-          <div className="text-xs text-muted">{t('iam.noCandidates', { defaultValue: '没有可添加的候选（都已在该实例）' })}</div>
+          <div className="admission-picker-empty"><p>{tr(`没有匹配“${q}”的${subject}`, `No ${subject} match “${q}”`)}</p><button className="btn sm" onClick={() => setQ('')}>{tr('清空搜索', 'Clear search')}</button></div>
         )}
       </div>
-      {showExpiresAt ? (
+      <p className="text-xs text-muted mt-2">{tr(`已选择 ${selectedIds.length} 项 · 前往管理页时保留当前选择和登录设置`, `${selectedIds.length} selected · Your selection and login settings are kept while you visit the directory`)}</p>
+      </>}
+      {showExpiresAt && canSelect ? (
         <>
           <label className="block mt-3">
             <span className="text-sm font-medium inline-flex items-center gap-1">
@@ -152,16 +173,6 @@ export function AddToInstanceModal({
           </label>
         </>
       ) : null}
-      {manageLink && (
-        <div className="mt-3">
-          <GuideLink
-            page={manageLink.page}
-            to={manageLink.to}
-            className="text-xs text-muted hover:text-accent hover:underline"
-            onNavigate={() => manageLink.onPrepare ? manageLink.onPrepare(draft) : onClose()}
-          />
-        </div>
-      )}
     </Modal>
   );
 }

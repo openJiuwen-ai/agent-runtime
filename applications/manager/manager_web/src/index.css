@@ -2037,7 +2037,6 @@ dialog.resource-preview::backdrop { background: rgb(0 0 0 / .24); }
 .authorization-check:last-child { border-bottom: 0; }
 .authorization-check strong { display: block; color: var(--text-strong); font-size: 14px; }
 .authorization-check p { margin: 4px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
-.authorization-relations { overflow: hidden; }
 @media(max-width: 800px) { .authorization-columns { grid-template-columns: 1fr; } .authorization-check { align-items: flex-start; flex-wrap: wrap; } .authorization-check .btn { margin-left: 20px; } }
 .environment-overview-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
 .environment-overview-card { min-height: 132px; }
@@ -2219,6 +2218,54 @@ dialog.resource-preview::backdrop { background: rgb(0 0 0 / .24); }
 .cluster-setup-card.next { border-color: var(--accent); }
 .cluster-setup-card > p:first-of-type { flex: 1; }
 .cluster-page-actions { display: flex; justify-content: space-between; gap: 12px; padding-top: 16px; border-top: 1px solid var(--border); }
+
+/* Keep list workspaces useful with only a few rows; row heights stay natural. */
+.manager-workspace .manager-page-table {
+  display: flex;
+  flex-direction: column;
+  flex: 1 0 auto;
+  min-height: clamp(320px, calc(100dvh - 440px), 900px);
+  min-width: 0;
+  background: var(--card);
+}
+.manager-page-table > :is(.overflow-x-auto, .table-wrap) { flex: 1 0 auto; min-width: 0; }
+.manager-workspace .manager-page-table .table,
+.manager-workspace .manager-page-table > .table { border: 0; flex-shrink: 0; }
+.manager-workspace .manager-page-table > .overview-empty { flex: 1; }
+.cluster-detail-page { flex: 1 0 auto; min-height: calc(100dvh - 100px); }
+.cluster-detail-body { flex: 1 0 auto; display: flex; flex-direction: column; }
+.cluster-detail-body > .cluster-resource-list { flex: 1 0 auto; }
+.cluster-resource-list__header > :first-child { flex: 1 1 20rem; }
+/* Move the toolbar as one unit when space is tight; keep its buttons beside the search. */
+.cluster-resource-list__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: 1 1 27rem;
+  min-width: 0;
+  max-width: 30rem;
+  margin-left: auto;
+}
+.cluster-resource-list__actions .cluster-resource-list__search {
+  flex: 1 1 0;
+  width: 0;
+  min-width: 0;
+  max-width: 20rem;
+}
+.cluster-resource-list__actions .btn { flex: 0 0 auto; white-space: nowrap; }
+.cluster-resource-list__actions--selection { flex: 0 0 auto; }
+.cluster-resource-list > .manager-page-table { min-height: clamp(320px, calc(100dvh - 580px), 900px); }
+.cluster-detail-footer { display: flex; flex-direction: column; gap: 16px; margin-top: auto; flex-shrink: 0; }
+.cluster-detail-page .cluster-admission-section__table { min-height: clamp(240px, calc((100dvh - 430px) / 2), 440px); background: var(--card); }
+.cluster-detail-page .cluster-admission-section__table > .overflow-x-auto { min-height: inherit; }
+.cluster-detail-page .cluster-setting-card .manager-page-table { min-height: 300px; }
+.cluster-detail-page .cluster-setting-card .card:has(> .overflow-x-auto > .table) { min-height: 300px; background: var(--card); }
+@media (max-width: 760px) {
+  .cluster-detail-page { min-height: calc(100dvh - 88px); }
+  .manager-workspace .manager-page-table { min-height: 320px; }
+  .cluster-detail-footer { gap: 12px; }
+}
 @media(max-width: 1050px) { .cluster-setup-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media(max-width: 760px) { .cluster-workspace-header, .cluster-setup-overview { flex-direction: column; align-items: stretch; } .cluster-setup-overview__progress { width: 100%; } .cluster-workspace-nav__item { padding: 10px 12px; } .cluster-page-actions { flex-wrap: wrap; } }
 @media(max-width: 480px) { .cluster-setup-grid { grid-template-columns: 1fr; } }

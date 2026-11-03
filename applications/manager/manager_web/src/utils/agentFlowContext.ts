@@ -37,7 +37,7 @@ export function agentPreparationCatalogPath(instanceId: string, params = new URL
   if (!cluster) return '/agent-templates';
   const query = clusterPreparationQuery(params);
   query.set('cluster', cluster);
-  if (create && cluster !== 'mock-cluster-demo') query.set('create', '1');
+  if (create) query.set('create', '1');
   return `/agent-templates?${query}`;
 }
 
@@ -46,11 +46,8 @@ export function agentClusterReturnPath(params: URLSearchParams, selectedTemplate
   const cluster = agentPreparationCluster(params);
   if (!cluster) return null;
   const query = clusterPreparationQuery(params);
-  if (cluster === 'mock-cluster-demo') query.delete('template');
-  else {
-    query.set('create', '1');
-    if (selectedTemplate) query.set('template', selectedTemplate);
-  }
+  query.set('create', '1');
+  if (selectedTemplate) query.set('template', selectedTemplate);
   return `/instances/${encodeURIComponent(cluster)}/agent-resources${query.size ? `?${query}` : ''}`;
 }
 

@@ -15,6 +15,20 @@ export function ConfigGuideMenu() {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelClose = () => {
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+    closeTimer.current = null;
+  };
+  const scheduleClose = () => {
+    cancelClose();
+    // Allow crossing the small gap between the trigger and the dropdown.
+    closeTimer.current = setTimeout(() => setOpen(false), 180);
+  };
+
+  useEffect(() => () => {
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+  }, []);
 
   useEffect(() => { setOpen(false); }, [path]);
 
@@ -52,9 +66,14 @@ export function ConfigGuideMenu() {
   }, [open]);
 
   if (!isPlatformAdmin(user)) return null;
-  return <div className="relative guide-menu-root" ref={rootRef}>
+  return <div className="relative guide-menu-root" ref={rootRef}
+    onPointerEnter={cancelClose}
+    onPointerLeave={(event) => { if (event.pointerType === 'mouse' || event.pointerType === 'pen') scheduleClose(); }}
+    onBlur={(event) => { if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node)) setOpen(false); }}>
     <button ref={triggerRef} type="button" className={`guide-trigger ${open ? 'guide-trigger--open' : ''}`}
-      aria-expanded={open} aria-controls="manager-setup-guide" onMouseEnter={() => setOpen(true)} onClick={() => setOpen(true)}>
+      aria-expanded={open} aria-controls="manager-setup-guide"
+      onPointerEnter={(event) => { if (event.pointerType !== 'touch') { cancelClose(); setOpen(true); } }}
+      onClick={() => { cancelClose(); setOpen(true); }}>
       <span aria-hidden="true">▦</span>{t('guide.configGuide')}<span aria-hidden="true">⌄</span>
     </button>
     {open && <div id="manager-setup-guide" className="guide-menu guide-menu--journey">

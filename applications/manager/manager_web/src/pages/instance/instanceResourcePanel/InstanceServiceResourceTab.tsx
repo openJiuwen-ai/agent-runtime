@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useTranslation } from 'react-i18next';
 import { Modal, ModalCancelButton } from '../../../components/Modal';
 import { MatchExprEditor } from '../../../components/MatchExprEditor';
-import { GuideLink } from '../../../components/GuideLink';
+import { ClusterTemplatePicker } from './ClusterTemplatePicker';
 import { useAsync } from '../../../hooks/useAsync';
 import { useFormDirty } from '../../../hooks/useFormDirty';
 import {
@@ -37,6 +37,7 @@ import { useRouter } from '../../../router';
 import { useAuth } from '../../../auth/AuthContext';
 import { collectPages } from '../../../utils/overview';
 import { runtimeCatalogPath } from '../../../utils/runtimeResourceNavigation';
+import { ClusterContentHeading } from '../ClusterContentHeading';
 import {
   applyRuntimeTemplateChoice, consumeRuntimeBindingAction, emptyRuntimeBindingDraft,
   readRuntimeBindingDraft, runtimeBindingDraftKey, writeRuntimeBindingDraft, type RuntimeBindingDraft,
@@ -261,7 +262,9 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
   }
 
   function prepareCatalogHandoff() {
-    if (persistAddDraft(addDraft)) markAddClean(addDraft);
+    if (!persistAddDraft(addDraft)) return;
+    markAddClean(addDraft);
+    navigate(runtimeCatalogPath('service-config-templates', params, instanceId));
   }
 
   useEffect(() => {
@@ -295,6 +298,7 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
     }
   }, [editing, instanceId, markEditClean]);
 
+  const canChooseTemplate = !catalogState.loading && !catalogState.error && catalog.some(item => item.enabled !== false);
   const candidates = catalog.map((b) => ({
     id: b.template_id,
     label: b.template_name,
@@ -375,20 +379,17 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
   const sr = 'instanceDetail.resourcePanel.serviceResource';
 
   return (
-    <div className="flex min-w-0 flex-col gap-4">
-      <div className="page-header w-full min-w-0 flex-wrap items-start gap-y-3">
-        <div className="min-w-[7.5rem] shrink-0">
-          <div className="page-title truncate">{t(`${sr}.title`)}</div>
-          <div className="page-subtitle truncate">{t(`${sr}.subtitle`)}</div>
-        </div>
-        <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
+    <div className="cluster-resource-list flex min-w-0 flex-col gap-4">
+      <div className="page-header cluster-resource-list__header w-full min-w-0 flex-wrap items-start gap-y-3">
+        <ClusterContentHeading section="serviceResources" />
+        <div className={`cluster-resource-list__actions${checked.size ? ' cluster-resource-list__actions--selection' : ''}`}>
           {checked.size === 0 ? (
             <>
               <ListSearchInput
                 value={searchInput}
                 onChange={setSearchInput}
                 placeholder={t(`${sr}.searchPlaceholder`)}
-                className="basis-full sm:basis-auto"
+                className="cluster-resource-list__search"
               />
               <button className="btn sm" onClick={() => void reload()}>
                 {t('common.refresh')}
@@ -405,7 +406,7 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
         </div>
       </div>
 
-      <div className="card !p-0">
+      <div className="card manager-page-table !p-0">
         {loading ? (
           <div className="p-4 text-sm text-muted">{t('common.loading')}</div>
         ) : rosterError ? (
@@ -627,7 +628,6 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
       {showAdd && (
         <Modal
           open
-          size="lg"
           title={t(`${sr}.add`)}
           onClose={closeAdd}
           dirty={isAddDirty(addDraft)}
@@ -689,88 +689,79 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
             </>
           }
         >
-          <label className="block mb-3">
-            <FieldLabel required>{t(`${sr}.resourceName`)}</FieldLabel>
-            <LimitedTextInput
-              className="mt-1"
-              value={addResourceName}
-              maxLength={FIELD_MAX_LENGTH.resource_name}
-              onChange={setAddResourceName}
-            />
-          </label>
-          <label className="block mb-3">
-            <FieldLabel>{t(`${sr}.resourceDesc`)}</FieldLabel>
-            <textarea
-              className="textarea mt-1 w-full min-h-[76px]"
-              value={addResourceDesc}
-              maxLength={FIELD_MAX_LENGTH.resource_desc}
-              onChange={(e) => setAddResourceDesc(clipField(e.target.value, FIELD_MAX_LENGTH.resource_desc))}
-            />
-            <div className="text-[11px] text-muted mt-1 text-right">
-              {addResourceDesc.length}/{FIELD_MAX_LENGTH.resource_desc}
-            </div>
-          </label>
-          <label className="block mb-3">
-            <FieldLabel required>{t(`${sr}.template`)}</FieldLabel>
-            <select
-              className="select mt-1 w-full"
-              value={addTemplateId}
-              disabled={catalogState.loading || !!catalogState.error || !!requestedTemplate}
-              onChange={(e) => {
-                const selectedTemplateId = e.target.value;
-                setAddTemplateId(selectedTemplateId);
-                const selected = catalog.find((item) => item.template_id === selectedTemplateId);
-                if (selected && !addResourceName.trim()) {
-                  setAddResourceName(clipField(selected.template_name || '', FIELD_MAX_LENGTH.resource_name));
-                }
-              }}
-            >
-              <option value="">{t('common.pleaseSelect')}</option>
-              {candidates.map((c) => (
-                <option key={c.id} value={c.id} disabled={c.enabled === false}>
-                  {c.label}({c.id}){c.enabled === false ? ` · ${t('common.disabled')}` : ''}
-                </option>
-              ))}
-            </select>
-            {catalogState.loading && <p className="text-xs text-muted mt-1">{t('common.loading')}</p>}
-            {catalogState.error && <div className="mt-1 flex items-center gap-2 text-sm text-danger" role="alert"><span>{catalogState.error}</span><button type="button" className="btn ghost sm" onClick={() => void catalogState.reload()}>{t('common.refresh')}</button></div>}
-            <div className="mt-1">
-              <GuideLink page={t('nav.serviceConfigTemplates')} to={runtimeCatalogPath('service-config-templates', params, instanceId)} onNavigate={prepareCatalogHandoff} />
-            </div>
-          </label>
-          <label className="block mb-3">
-            <div className="flex items-center gap-1">
-              <FieldLabel required>{t(`${sr}.priority`)}</FieldLabel>
-              <HintTooltip text={t(`${sr}.priorityHint`)} />
-            </div>
-            <input
-              className="input mt-1 w-full"
-              type="number"
-              step={1}
-              value={Number.isInteger(addPriority) ? addPriority : ''}
-              onChange={(e) => {
-                const raw = e.target.value;
-                setAddPriority(raw === '' ? NaN : Number(raw));
-              }}
-            />
-          </label>
-          <label className="block mb-3">
-            <FieldLabel>{t(`${sr}.scopeLabel`)}</FieldLabel>
-            <div className="mt-1">
-              <MatchExprEditor value={addMatchExpr} onChange={setAddMatchExpr} />
-            </div>
-          </label>
-          <label className="block">
-            <FieldLabel>{t(`${sr}.expiresAt`)}</FieldLabel>
-            <input
-              type="datetime-local"
-              className="input mt-1 w-full cursor-pointer"
-              value={addExpiresAt}
-              onChange={(e) => setAddExpiresAt(e.target.value)}
-              onClick={(e) => (e.target as HTMLInputElement).showPicker?.()}
-            />
-            <div className="text-[11px] text-muted mt-1">{t(`${sr}.expiresHint`)}</div>
-          </label>
+          <ClusterTemplatePicker
+            kind="runtime"
+            candidates={candidates}
+            value={addTemplateId}
+            loading={catalogState.loading}
+            error={catalogState.error}
+            disabled={!!requestedTemplate || restoredDraftKey !== handoffKey}
+            onReload={() => void catalogState.reload()}
+            onManage={prepareCatalogHandoff}
+            onChange={selectedTemplateId => {
+              setAddTemplateId(selectedTemplateId);
+              const selected = catalog.find(item => item.template_id === selectedTemplateId);
+              if (selected && !addResourceName.trim()) {
+                setAddResourceName(clipField(selected.template_name || '', FIELD_MAX_LENGTH.resource_name));
+              }
+            }}
+          />
+          {canChooseTemplate && <div className="mt-4">
+            <label className="block mb-3">
+              <FieldLabel required>{t(`${sr}.resourceName`)}</FieldLabel>
+              <LimitedTextInput
+                className="mt-1"
+                value={addResourceName}
+                maxLength={FIELD_MAX_LENGTH.resource_name}
+                onChange={setAddResourceName}
+              />
+            </label>
+            <label className="block mb-3">
+              <FieldLabel>{t(`${sr}.resourceDesc`)}</FieldLabel>
+              <textarea
+                className="textarea mt-1 w-full min-h-[76px]"
+                value={addResourceDesc}
+                maxLength={FIELD_MAX_LENGTH.resource_desc}
+                onChange={(e) => setAddResourceDesc(clipField(e.target.value, FIELD_MAX_LENGTH.resource_desc))}
+              />
+              <div className="text-[11px] text-muted mt-1 text-right">
+                {addResourceDesc.length}/{FIELD_MAX_LENGTH.resource_desc}
+              </div>
+            </label>
+            <label className="block mb-3">
+              <div className="flex items-center gap-1">
+                <FieldLabel required>{t(`${sr}.priority`)}</FieldLabel>
+                <HintTooltip text={t(`${sr}.priorityHint`)} />
+              </div>
+              <input
+                className="input mt-1 w-full"
+                type="number"
+                step={1}
+                value={Number.isInteger(addPriority) ? addPriority : ''}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  setAddPriority(raw === '' ? NaN : Number(raw));
+                }}
+              />
+            </label>
+            <label className="block mb-3">
+              <FieldLabel>{t(`${sr}.scopeLabel`)}</FieldLabel>
+              <div className="mt-1">
+                <MatchExprEditor value={addMatchExpr} onChange={setAddMatchExpr} />
+              </div>
+            </label>
+            <label className="block">
+              <FieldLabel>{t(`${sr}.expiresAt`)}</FieldLabel>
+              <input
+                type="datetime-local"
+                className="input mt-1 w-full cursor-pointer"
+                value={addExpiresAt}
+                onChange={(e) => setAddExpiresAt(e.target.value)}
+                onClick={(e) => (e.target as HTMLInputElement).showPicker?.()}
+              />
+              <div className="text-[11px] text-muted mt-1">{t(`${sr}.expiresHint`)}</div>
+            </label>
+          </div>}
         </Modal>
       )}
 

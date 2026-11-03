@@ -22,7 +22,6 @@ import { ApiError } from '../../services/api';
 import { ImportClusterModal } from './modal/ImportClusterModal';
 import { useGuideAutoOpen } from '../../hooks/useGuideAutoOpen';
 import { bumpGuideRevision } from '../../stores/guideStore';
-import { mockInstance } from '../../config/mockManager';
 import { WorkspaceNote } from '../../components/WorkspaceNote';
 
 type ViewMode = 'brief' | 'list';
@@ -107,7 +106,7 @@ function InstanceListTable({
 
   return (
     <>
-      <div className="card !p-0">
+      <div className="card manager-page-table !p-0">
         <div className="overflow-x-auto">
           <table className="table w-max min-w-full">
             <thead>
@@ -451,9 +450,7 @@ export function InstanceListPage() {
     localStorage.setItem(VIEW_MODE_STORAGE_KEY, mode);
   };
 
-  // Mock 集群用于没有后端实例时预览完整的集群配置工作台。
-  // 它只出现在卡片视图，不混入真实实例列表、分页和统计接口结果。
-  const renderClusterCard = (instance: InstanceSummary, demo = false) => {
+  const renderClusterCard = (instance: InstanceSummary) => {
     const connected = allComponentsConnected(instance);
     return (
       <article className="card cluster-card" key={instance.jiuwenclaw_id}>
@@ -463,7 +460,6 @@ export function InstanceListPage() {
             <div className="min-w-0">
             <div className="flex items-center gap-2">
               <h2 className="truncate text-base font-semibold">{instance.jiuwenclaw_name}</h2>
-              {demo && <span className="tag">{t('redesign.mockData', { defaultValue: '本地演示数据' })}</span>}
             </div>
             <p className="mono mt-1 truncate text-xs text-muted">{instance.jiuwenclaw_id} · {instance.namespace || 'default'}</p>
             </div>
@@ -471,15 +467,14 @@ export function InstanceListPage() {
           <span className={`pill sm ${connected ? 'ok' : 'warn'}`}>{connected ? t('redesign.connected', { defaultValue: '运行正常' }) : t('redesign.inspect', { defaultValue: '待检查' })}</span>
         </div>
         <div className="cluster-card__stats">
-          <div><span>{t('redesign.clusterAgents', { defaultValue: 'Agent' })}</span><strong>{demo ? 1 : '—'}</strong></div>
-          <div><span>{t('redesign.clusterAdmission', { defaultValue: '准入' })}</span><strong>{demo ? 3 : '—'}</strong></div>
-          <div><span>{t('redesign.clusterRuntimes', { defaultValue: '运行池' })}</span><strong>{demo ? 2 : '—'}</strong></div>
+          <div><span>{t('redesign.clusterAgents', { defaultValue: 'Agent' })}</span><strong>{'—'}</strong></div>
+          <div><span>{t('redesign.clusterAdmission', { defaultValue: '准入' })}</span><strong>{'—'}</strong></div>
+          <div><span>{t('redesign.clusterRuntimes', { defaultValue: '运行池' })}</span><strong>{'—'}</strong></div>
         </div>
-        {demo && <div className="cluster-card__notice"><span className="statusDot ok" />{t('redesign.mockClusterHint', { defaultValue: '用于预览集群配置工作台，数据不会写入服务端。' })}</div>}
-        {!demo && !connected && <div className="cluster-card__notice"><span className="statusDot" />{t('redesign.clusterNeedsInspection', { defaultValue: '部分组件需要检查，进入工作台继续配置。' })}</div>}
+        {!connected && <div className="cluster-card__notice"><span className="statusDot" />{t('redesign.clusterNeedsInspection', { defaultValue: '部分组件需要检查，进入工作台继续配置。' })}</div>}
         <div className="cluster-card__actions">
           <button type="button" className="btn" onClick={() => navigate(`/instances/${instance.jiuwenclaw_id}/cluster-config`)}>{t('redesign.clusterWorkbench', { defaultValue: '配置工作台' })}</button>
-          {!demo && <button type="button" className="btn primary" onClick={() => navigate(`/instances/${instance.jiuwenclaw_id}/setup`)}>{t('redesign.continueClusterSetup', { defaultValue: '继续配置' })} →</button>}
+          <button type="button" className="btn primary" onClick={() => navigate(`/instances/${instance.jiuwenclaw_id}/setup`)}>{t('redesign.continueClusterSetup', { defaultValue: '继续配置' })} →</button>
         </div>
       </article>
     );
@@ -514,9 +509,6 @@ export function InstanceListPage() {
               <div className="card text-sm text-danger">
                 {t('errors.loadFailed', { detail: instances.error })}
               </div>
-              <div className="cluster-card-grid">
-                {renderClusterCard(mockInstance, true)}
-              </div>
             </div>
           ) : viewMode === 'list' ? (
             <InstanceListTable
@@ -533,9 +525,10 @@ export function InstanceListPage() {
               userWebStatusFilter={userWebStatusFilter}
               onUserWebStatusFilterChange={handleUserWebStatusFilterChange}
             />
+          ) : !instances.data?.items.length ? (
+            <div className="card"><Empty text={t('common.empty')} /></div>
           ) : (
             <div className="cluster-card-grid">
-              {renderClusterCard(mockInstance, true)}
               {(instances.data?.items ?? []).map(it => renderClusterCard(it))}
             </div>
           )}

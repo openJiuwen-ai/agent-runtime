@@ -39,7 +39,6 @@ export function AgentWorkspacePage() {
   const invalidReference = !!(refType || refId) && (!refType || !refId || !Object.prototype.hasOwnProperty.call(agentReferenceSlots, refType));
   const resourceCatalog = agentResourceCatalogPath(refType);
   const cluster = agentPreparationCluster(params);
-  const demoContext = cluster === 'mock-cluster-demo';
   const currentPath = `${catalogPath}${params.size ? `?${params}` : ''}`;
   const [searchInput, setSearchInput] = useState(search);
   const [editing, setEditing] = useState<AgentTemplate | null>(null);
@@ -55,11 +54,11 @@ export function AgentWorkspacePage() {
     Object.entries(values).forEach(([key, value]) => value ? next.set(key, value) : next.delete(key));
     navigate(`${catalogPath}${next.size ? `?${next}` : ''}`, { replace: true });
   };
-  const create = () => { if (!demoContext) { setEditing(null); setOpen(true); } };
+  const create = () => { setEditing(null); setOpen(true); };
   useGuideAutoOpen('agentTemplateNew', create);
   useEffect(() => {
     if (params.get('create') !== '1') return;
-    if (!demoContext) { setEditing(null); setOpen(true); }
+    setEditing(null); setOpen(true);
     const next = new URLSearchParams(params); next.delete('create');
     navigate(`${catalogPath}${next.size ? `?${next}` : ''}`, { replace: true });
   }, [params, navigate]);
@@ -73,7 +72,7 @@ export function AgentWorkspacePage() {
       sort_order: sortDirection === 'asc' ? 'asc' : 'desc',
     }, refType, refId);
   }, [page, pageSize, search, status, sort, refType, refId]);
-  const context = useAsync(async () => cluster && cluster !== 'mock-cluster-demo' ? InstanceApi.get(cluster) : null, [cluster]);
+  const context = useAsync(async () => cluster ? InstanceApi.get(cluster) : null, [cluster]);
   const impact = useAsync(async () => more ? loadAgentBindings(more.template_id) : [], [more?.template_id]);
   const bindingCount = impact.data?.reduce((n, row) => n + row.resources.length, 0) || 0;
   useEffect(() => {
@@ -112,11 +111,11 @@ export function AgentWorkspacePage() {
     <div className="page-header agent-workspace-header">
       <div><h1 className="page-title">{tr('Agent模板管理', 'Agent templates')}</h1><p className="page-subtitle">{tr('组合模型、技能与工具，创建可在多个集群复用的 Agent 模板。', 'Compose models, skills and tools into Agent templates reusable across clusters.')}</p></div>
       <div className="agent-workspace-actions">
-        {!demoContext && <ResourceImportButton resourceType="agent-template" onImported={() => { bumpGuideRevision(); void result.reload(); }} />}
-        <button className="btn primary" disabled={demoContext} onClick={create}>+ {tr('新建 Agent模板', 'New Agent template')}</button>
+        <ResourceImportButton resourceType="agent-template" onImported={() => { bumpGuideRevision(); void result.reload(); }} />
+        <button className="btn primary" onClick={create}>+ {tr('新建 Agent模板', 'New Agent template')}</button>
       </div>
     </div>
-    {cluster && <div className="template-context" role="status"><div><strong>{tr('正在为集群准备模板', 'Preparing a template for a cluster')}{context.data ? ` · ${context.data.jiuwenclaw_name}` : ''}</strong><p>{cluster === 'mock-cluster-demo' ? tr('当前为演示集群，请返回集群查看演示绑定。', 'This is a demo cluster. Return to view sample bindings.') : context.error ? tr('集群信息读取失败。可继续管理模板，返回集群后重试。', 'Could not load cluster information. You can manage templates and retry in the cluster.') : tr('新建后返回此集群继续绑定，也可以直接选择下方已有模板。', 'Create a template and return to bind it, or select an existing template below.')}</p></div><button className="btn sm" onClick={() => returnToCluster()}>{tr('返回集群配置', 'Return to cluster')}</button></div>}
+    {cluster && <div className="template-context" role="status"><div><strong>{tr('正在为集群准备模板', 'Preparing a template for a cluster')}{context.data ? ` · ${context.data.jiuwenclaw_name}` : ''}</strong><p>{context.error ? tr('集群信息读取失败。可继续管理模板，返回集群后重试。', 'Could not load cluster information. You can manage templates and retry in the cluster.') : tr('新建后返回此集群继续绑定，也可以直接选择下方已有模板。', 'Create a template and return to bind it, or select an existing template below.')}</p></div><button className="btn sm" onClick={() => returnToCluster()}>{tr('返回集群配置', 'Return to cluster')}</button></div>}
     {saved && <div className="template-context template-saved" role="status"><div><strong>{tr('模板已保存', 'Template saved')} · {saved.template_name}</strong><p>{tr('接下来将模板绑定到集群，并在集群内检查准入和运行资源。', 'Next, bind it to a cluster and check admission and runtime resources there.')}</p></div><div className="flex flex-wrap gap-2"><button className="btn primary sm" onClick={() => navigate(bindPath(saved.template_id))}>{tr('绑定已有集群', 'Bind to a cluster')}</button><button className="btn sm" onClick={() => navigate(`/configuration-wizard?${new URLSearchParams({ template: saved.template_id, returnTo: currentPath })}`)}>{tr('新建集群并配置', 'Create and configure cluster')}</button><button className="btn ghost sm" onClick={() => setSaved(null)}>{tr('稍后配置', 'Later')}</button></div></div>}
     <section className="card agent-list-panel" aria-label={tr('Agent模板列表', 'Agent template list')}>
       <form className="agent-list-toolbar" onSubmit={event => { event.preventDefault(); updateQuery({ search: searchInput.trim(), page: null }); }}>
@@ -128,14 +127,14 @@ export function AgentWorkspacePage() {
         {filtered && <button className="btn ghost" type="button" onClick={clearFilters}>{tr('清除筛选', 'Clear filters')}</button>}
       </form>
       {(refType || refId) && <div className="template-filter-note flex justify-between items-center gap-2"><span>{tr('正在查看引用此资源的模板：', 'Templates referencing: ')}<strong>{params.get('refName') || refId || refType}</strong></span>{resourceCatalog && <button className="btn ghost sm" onClick={() => navigate(resourceCatalog)}>{tr('返回资源目录', 'Return to resource catalog')}</button>}</div>}
-      {result.error ? <div className="agent-list-message" role="alert"><p className="text-danger">{result.error}</p><button className="btn mt-3" onClick={() => void result.reload()}>{tr('重试', 'Retry')}</button></div> : result.loading ? <div className="agent-list-message" role="status">{tr('正在读取模板…', 'Loading templates…')}</div> : !result.data?.items.length ? <div className="overview-empty"><h3>{filtered ? tr('没有匹配的模板', 'No matching templates') : tr('创建第一个 Agent 模板', 'Create your first Agent template')}</h3><p>{filtered ? tr('请调整关键词、状态或资源筛选。', 'Adjust your search, status or resource filter.') : tr('填写名称并选择默认模型即可保存，之后再绑定到集群。', 'Enter a name and select a default model, then bind the saved template to a cluster.')}</p><button className="btn primary" onClick={filtered ? clearFilters : create}>{filtered ? tr('清除筛选', 'Clear filters') : tr('新建 Agent模板', 'New Agent template')}</button></div> : <div className="table-wrap"><table className="table agent-list-table template-catalog-table"><thead><tr><th>{tr('模板名称与用途', 'Template & purpose')}</th><th>{tr('能力配置', 'Capabilities')}</th><th>{tr('模板状态', 'Template status')}</th><th>{tr('更新时间', 'Updated')}</th><th>{tr('操作', 'Actions')}</th></tr></thead><tbody>{result.data.items.map(agent => {
+      {result.error ? <div className="agent-list-message" role="alert"><p className="text-danger">{result.error}</p><button className="btn mt-3" onClick={() => void result.reload()}>{tr('重试', 'Retry')}</button></div> : result.loading ? <div className="agent-list-message" role="status">{tr('正在读取模板…', 'Loading templates…')}</div> : !result.data?.items.length ? <div className="overview-empty"><h3>{filtered ? tr('没有匹配的模板', 'No matching templates') : tr('创建第一个 Agent 模板', 'Create your first Agent template')}</h3><p>{filtered ? tr('请调整关键词、状态或资源筛选。', 'Adjust your search, status or resource filter.') : tr('填写名称并选择默认模型即可保存，之后再绑定到集群。', 'Enter a name and select a default model, then bind the saved template to a cluster.')}</p><button className="btn primary" onClick={filtered ? clearFilters : create}>{filtered ? tr('清除筛选', 'Clear filters') : tr('新建 Agent模板', 'New Agent template')}</button></div> : <div className="table-wrap manager-page-table"><table className="table agent-list-table template-catalog-table"><thead><tr><th>{tr('模板名称与用途', 'Template & purpose')}</th><th>{tr('能力配置', 'Capabilities')}</th><th>{tr('模板状态', 'Template status')}</th><th>{tr('更新时间', 'Updated')}</th><th>{tr('操作', 'Actions')}</th></tr></thead><tbody>{result.data.items.map(agent => {
         const capabilities = Object.entries(agent.template_ref || {}).filter(([, refs]) => refs.length);
         return <tr key={agent.template_id}>
           <td><button className="agent-name-link" onClick={() => navigate(detailPath(agent.template_id))}>{agent.template_name}</button><p className="agent-list-description">{agent.description || tr('暂无描述', 'No description')}</p>{!!agent.agent_tags?.length && <div className="template-tags">{agent.agent_tags.slice(0, 3).map(tag => <span key={tag}>#{tag}</span>)}{agent.agent_tags.length > 3 && <span>+{agent.agent_tags.length - 3}</span>}</div>}</td>
           <td><div className="agent-list-capabilities">{capabilities.slice(0, 3).map(([slot, refs]) => <span className="tag" key={slot}>{t(`policies.templateRef.slots.${slot}`, { defaultValue: slot })}{refs.length > 1 ? ` · ${refs.length}` : ''}</span>)}{capabilities.length > 3 && <button className="btn ghost sm" onClick={() => navigate(detailPath(agent.template_id))}>+{capabilities.length - 3}</button>}{!capabilities.length && <span className="text-muted">{tr('待配置资源', 'No resources configured')}</span>}</div></td>
           <td><span className={`template-state ${agent.enabled ? 'is-enabled' : ''}`}><i aria-hidden="true" />{agent.enabled ? tr('已启用', 'Enabled') : tr('已停用', 'Disabled')}</span></td>
           <td className="agent-list-time">{formatTime(agent.updated_at)}</td>
-          <td><div className="agent-list-actions"><button className="btn ghost sm" disabled={demoContext} onClick={() => { setEditing(agent); setOpen(true); }}>{tr('编辑', 'Edit')}</button><button className="btn ghost sm" disabled={!agent.enabled || demoContext} title={!agent.enabled ? tr('请先启用模板', 'Enable this template first') : undefined} onClick={() => cluster ? returnToCluster(agent.template_id) : navigate(bindPath(agent.template_id))}>{cluster ? tr('选择并返回集群', 'Select for cluster') : tr('绑定集群', 'Bind to cluster')}</button><button className="btn ghost sm" disabled={demoContext} aria-label={`${tr('更多操作', 'More actions')} · ${agent.template_name}`} onClick={() => setMore(agent)}>···</button></div></td>
+          <td><div className="agent-list-actions"><button className="btn ghost sm" onClick={() => { setEditing(agent); setOpen(true); }}>{tr('编辑', 'Edit')}</button><button className="btn ghost sm" disabled={!agent.enabled} title={!agent.enabled ? tr('请先启用模板', 'Enable this template first') : undefined} onClick={() => cluster ? returnToCluster(agent.template_id) : navigate(bindPath(agent.template_id))}>{cluster ? tr('选择并返回集群', 'Select for cluster') : tr('绑定集群', 'Bind to cluster')}</button><button className="btn ghost sm" aria-label={`${tr('更多操作', 'More actions')} · ${agent.template_name}`} onClick={() => setMore(agent)}>···</button></div></td>
         </tr>;
       })}</tbody></table></div>}
       {result.data && <div className="agent-list-pagination"><Pagination page={page} pageSize={pageSize} total={result.data.total} loading={result.loading} error={result.error} onChange={(next, size) => updateQuery({ page: String(next), size: String(size) })} /></div>}
@@ -143,7 +142,7 @@ export function AgentWorkspacePage() {
     <WorkspaceNote title={tr('模板定义能力，集群决定使用方式', 'Templates define capabilities; clusters define their use')}>
       {tr('这里统一管理 Agent模板（也称 Agent定义）。模板可绑定到多个集群；集群内分别配置准入、运行资源和使用范围。启用模板不代表已部署或可以对话，完成绑定后请到集群配置工作台检查。', 'Agent templates (also called definitions) are managed here and can be reused by multiple clusters. Each cluster configures admission, runtime resources and usage scope. An enabled template is not a deployment or a readiness check; continue in the cluster workspace after binding.')}
     </WorkspaceNote>
-    <AgentTemplateModal open={open} template={editing} onClose={() => setOpen(false)} onSaved={agent => { setOpen(false); void result.reload(); if (!editing && cluster && cluster !== 'mock-cluster-demo') returnToCluster(agent.template_id); else if (!editing) setSaved(agent); }} />
+    <AgentTemplateModal open={open} template={editing} onClose={() => setOpen(false)} onSaved={agent => { setOpen(false); void result.reload(); if (!editing && cluster) returnToCluster(agent.template_id); else if (!editing) setSaved(agent); }} />
     <Modal open={!!more} title={`${tr('模板操作', 'Template actions')} · ${more?.template_name || ''}`} onClose={() => { if (!busy) setMore(null); }} footer={<button className="btn" disabled={busy} onClick={() => setMore(null)}>{tr('关闭', 'Close')}</button>}>
       {more && <div className="flex flex-col gap-4"><p className="text-muted text-sm">{impact.loading ? tr('正在检查集群引用…', 'Checking cluster bindings…') : impact.error || impact.data?.some(row => row.error) ? tr('部分集群引用读取失败，请先打开详情核对。', 'Some cluster bindings could not be checked. Review details first.') : tr(`该模板共有 ${bindingCount} 条集群绑定。`, `This template has ${bindingCount} cluster bindings.`)}</p><div className="flex flex-wrap gap-2"><button className="btn" onClick={() => navigate(detailPath(more.template_id))}>{tr('查看详情与绑定', 'View details and bindings')}</button><ResourceExportButton resourceType="agent-template" resourceIds={[more.template_id]} /><button className="btn" disabled={busy} onClick={() => { setConfirm({ row: more, action: 'toggle' }); setMore(null); }}>{more.enabled ? tr('停用模板', 'Disable template') : tr('启用模板', 'Enable template')}</button><button className="btn danger" disabled={busy} onClick={() => { setConfirm({ row: more, action: 'delete' }); setMore(null); }}>{tr('删除模板', 'Delete template')}</button></div><p className="text-muted text-sm">{tr('变更模板状态会影响引用它的集群；删除模板会同时清除它在各集群中的绑定。', 'Changing template status affects clusters referencing it. Deleting it also removes its cluster bindings.')}</p></div>}
     </Modal>

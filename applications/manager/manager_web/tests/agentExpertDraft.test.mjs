@@ -17,7 +17,7 @@ try {
     assert.deepEqual(read(storage,'admin','template-a'),[]);
     assert.deepEqual(read(storage,'admin','template-b'),rows);
   });
-  test('sanitizing preserves kind and demo identity without retaining API grants or credentials',()=>{
+  test('sanitizing preserves resource kind and discards retired demo entries and credentials',()=>{
     const rows=normalize([
       {kind:'agent_template',id:' a ',display_name:'Expert',version:'1',match_expr:'user_id in [admin]',client_secret:'secret'},
       {kind:'agent_template',id:'a'},
@@ -25,7 +25,7 @@ try {
       {kind:'agent_template',id:'a',demo:true},
       {kind:'unknown',id:'bad'}, {kind:'agent_template',id:'../bad'}, null,
     ]);
-    assert.deepEqual(rows,[{kind:'agent_template',id:'a',display_name:'Expert',version:'1'},{kind:'agent_group',id:'a'},{kind:'agent_template',id:'a',demo:true}]);
+    assert.deepEqual(rows,[{kind:'agent_template',id:'a',display_name:'Expert',version:'1'},{kind:'agent_group',id:'a'}]);
     assert.equal(JSON.stringify(rows).includes('secret'),false);
   });
   test('missing, invalid, future and unavailable preview storage is safe',()=>{

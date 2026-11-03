@@ -220,7 +220,7 @@ export function RolesPage() {
       </div>
 
       <div className="flex w-full min-w-0 shrink-0 flex-col gap-4">
-        <div className="card iam-table-card !p-0">
+        <div className="card manager-page-table iam-table-card !p-0">
           {loading ? (
             <div className="p-4 text-sm text-muted">{t('common.loading')}</div>
           ) : error ? (

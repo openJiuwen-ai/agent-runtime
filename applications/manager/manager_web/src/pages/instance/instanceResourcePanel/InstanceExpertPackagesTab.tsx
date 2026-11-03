@@ -402,7 +402,7 @@ export function InstanceExpertPackagesTab({
             <div className="text-sm text-muted">{zh ? `已发布 ${kindPackages.length} 项` : `${kindPackages.length} published`}</div>
             <ListSearchInput value={search} onChange={setSearch} placeholder={zh ? '搜索名称、包 ID 或使用范围' : 'Search name, package ID, or audience'} className="sm:!w-80" />
           </div>
-          <div className="card !p-0">
+          <div className="card manager-page-table !p-0">
             {loading ? (
               <div className="p-4 text-sm text-muted">{t('common.loading')}</div>
             ) : loadError ? (

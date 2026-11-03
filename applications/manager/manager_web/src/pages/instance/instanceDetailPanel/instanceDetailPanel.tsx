@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next';
 import { formatTime, relativeTime, safeStringify } from '../../../utils/format';
 import { StatusBadge } from '../../../components/StatusBadge';
 import type { InstanceDetail } from '../../../types';
+import { ClusterContentHeading } from '../ClusterContentHeading';
 
 interface Props {
   instance: { data?: InstanceDetail | null };
@@ -21,8 +22,8 @@ export function InstanceDetailPanel({ instance, onOpenEditConnectivity, onRefres
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="page-header">
-        <h2 className="page-title text-base">{zh ? '连接状态' : 'Connection status'}</h2>
+      <div className="page-header flex-wrap items-start gap-y-3">
+        <ClusterContentHeading section="status" />
         <div className="flex flex-wrap gap-2"><button className="btn sm" onClick={onRefresh}>
           {t('common.refresh')}
         </button><button className="btn sm" disabled={probing} onClick={onCheckConnectivity}>{probing ? (zh ? '检查中…' : 'Checking…') : (zh ? '检查连接（全部集群）' : 'Check connections (all clusters)')}</button><button className="btn primary sm" disabled={openingConsole} onClick={onOpenUserConsole}>{openingConsole ? (zh ? '正在检查身份…' : 'Checking identity…') : (zh ? '进入当前集群用户面' : 'Open this cluster in user console')} →</button></div>

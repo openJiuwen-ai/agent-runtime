@@ -26,8 +26,6 @@ try {
     for (const key of ['template', 'create', 'templateId']) assert.equal(consumed.has(key), false);
     assert.equal(agentClusterReturnPath(new URLSearchParams({ cluster: '//other.test' })), null);
     assert.equal(agentPreparationCatalogPath('../other'), '/agent-templates');
-    const demo = agentClusterReturnPath(new URLSearchParams({ cluster: 'mock-cluster-demo', template: 'old-agent' }), 'new-agent');
-    assert.equal(demo, '/instances/mock-cluster-demo/agent-resources');
   });
   test('chosen Agent keeps the existing binding scope and rejects stale templates', () => {
     const draft = { addAgentId: 'old', addResourceName: '客服', addResourceDesc: 'desc', addMatchExpr: 'user_id == "u"', addExpiresAt: '2027-01-01T10:00' };
@@ -62,7 +60,6 @@ try {
     const flow = new URLSearchParams(templateFlowQuery(new URLSearchParams({ returnTo: back, cluster: 'c1' })));
     assert.equal(flow.get('cluster'), 'c1');
     assert.equal(flow.get('returnTo'), templateReturnPath(back));
-    assert.equal(new URLSearchParams(templateFlowQuery(new URLSearchParams({ cluster: 'mock-cluster-demo' }))).get('cluster'), 'mock-cluster-demo');
   });
   test('cluster-to-template round trip retains all binding fields without mixing accounts or clusters', () => {
     assert.notEqual(clusterBindingDraftKey('u1', 'c1'), clusterBindingDraftKey('u2', 'c1'));

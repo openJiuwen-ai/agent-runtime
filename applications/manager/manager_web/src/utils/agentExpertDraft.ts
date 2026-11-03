@@ -3,7 +3,6 @@ export interface AgentExpertSelection {
   id: string;
   display_name?: string;
   version?: string;
-  demo?: boolean;
 }
 
 const storageKey = (accountId: string, templateId: string) =>
@@ -14,13 +13,12 @@ export function normalizeAgentExpertSelections(value: unknown): AgentExpertSelec
   if (!Array.isArray(value)) return [];
   const seen = new Set<string>();
   return value.flatMap(raw => {
-    if (!raw || typeof raw !== 'object' || !['agent_template', 'agent_group'].includes(raw.kind)
+    if (!raw || typeof raw !== 'object' || raw.demo === true || !['agent_template', 'agent_group'].includes(raw.kind)
       || typeof raw.id !== 'string' || !raw.id.trim() || raw.id.length > 128 || /[/\\\r\n]/.test(raw.id) || ['.', '..'].includes(raw.id.trim())) return [];
     const item: AgentExpertSelection = { kind: raw.kind, id: raw.id.trim() };
     if (typeof raw.display_name === 'string') item.display_name = raw.display_name.slice(0, 512);
     if (typeof raw.version === 'string') item.version = raw.version.slice(0, 128);
-    if (raw.demo === true) item.demo = true;
-    const key = `${item.demo ? 'demo' : 'hub'}:${item.kind}:${item.id}`;
+    const key = `${item.kind}:${item.id}`;
     if (seen.has(key)) return [];
     seen.add(key);
     return [item];

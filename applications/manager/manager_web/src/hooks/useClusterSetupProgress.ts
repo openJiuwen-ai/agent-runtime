@@ -1,25 +1,12 @@
 import { useAsync } from './useAsync';
 import { useGuideStore } from '../stores/guideStore';
 import { InstanceAgentResourceApi, InstanceApi, InstanceBindingApi, InstanceServiceResourceApi } from '../services/api';
-import { isMockInstanceId, mockAgentResources, mockInstanceDetail } from '../config/mockManager';
 import { collectPages } from '../utils/overview';
 import { useRouter } from '../router';
 import { deriveClusterSetupProgress, type ClusterSetupProgress } from '../utils/clusterSetupProgress';
 
 /** Read saved configuration, including every resource page, to make every re-entry deterministic. */
 export async function loadClusterSetupProgress(instanceId: string): Promise<ClusterSetupProgress> {
-  if (isMockInstanceId(instanceId)) {
-    return {
-      instance: mockInstanceDetail,
-      admission: { users: 2, orgs: 1, total: 3 },
-      runtime: { total: 2 },
-      agents: { total: mockAgentResources.length, items: mockAgentResources },
-      configurationComplete: true,
-      connected: true,
-      nextSection: 'status',
-      completedConfigurations: 3,
-    };
-  }
   const [instance, users, orgs, agents, runtimes] = await Promise.all([
     InstanceApi.get(instanceId),
     InstanceBindingApi.listUsers(instanceId),

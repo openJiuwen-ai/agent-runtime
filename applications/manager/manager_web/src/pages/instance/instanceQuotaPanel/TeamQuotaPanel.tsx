@@ -1,9 +1,8 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { TeamQuotaPolicyTab } from './TeamQuotaPolicyTab';
 import { TeamQuotaUsageTab } from './TeamQuotaUsageTab';
-
-type TeamQuotaTabKey = 'policy' | 'usage';
+import './QuotaSections.css';
 
 interface Props {
   instanceId: string;
@@ -11,31 +10,17 @@ interface Props {
 
 export function TeamQuotaPanel({ instanceId }: Props) {
   const { t } = useTranslation();
-  const [tab, setTab] = useState<TeamQuotaTabKey>('policy');
-
-  const tabs: { key: TeamQuotaTabKey; label: string }[] = [
-    { key: 'policy', label: t('instanceDetail.teamQuota.tabs.policy') },
-    { key: 'usage', label: t('instanceDetail.teamQuota.tabs.usage') },
-  ];
+  const [usageRevision, setUsageRevision] = useState(0);
+  const refreshUsage = useCallback(() => setUsageRevision(current => current + 1), []);
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="tabs-bar">
-        {tabs.map((it) => (
-          <button
-            key={it.key}
-            type="button"
-            onClick={() => setTab(it.key)}
-            className={`tab ${tab === it.key ? 'active' : ''}`}
-          >
-            {it.label}
-          </button>
-        ))}
-      </div>
-      <div>
-        {tab === 'policy' && <TeamQuotaPolicyTab instanceId={instanceId} />}
-        {tab === 'usage' && <TeamQuotaUsageTab instanceId={instanceId} />}
-      </div>
+    <div className="quota-sections">
+      <section className="quota-section" aria-label={t('instanceDetail.teamQuota.tabs.policy')}>
+        <TeamQuotaPolicyTab instanceId={instanceId} onChange={refreshUsage} />
+      </section>
+      <section className="quota-section" aria-label={t('instanceDetail.teamQuota.tabs.usage')}>
+        <TeamQuotaUsageTab instanceId={instanceId} refreshKey={usageRevision} />
+      </section>
     </div>
   );
 }

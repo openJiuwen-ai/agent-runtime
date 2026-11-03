@@ -33,13 +33,14 @@ import {
   TableColumnSort,
   type ColumnSortValue,
 } from '../../../components/TableColumnSort';
-import { GuideLink } from '../../../components/GuideLink';
+import { ClusterTemplatePicker } from './ClusterTemplatePicker';
 import { useRouter } from '../../../router';
 import { collectPages } from '../../../utils/overview';
 import { useAuth } from '../../../auth/AuthContext';
 import { applyAgentTemplateChoice, clusterBindingDraftKey, emptyClusterBindingDraft, readClusterBindingDraft, readClusterBindingHandoff, writeClusterBindingDraft, type ClusterBindingDraft } from '../../../utils/agentDraft';
 import { AgentExpertPreviewSummary } from '../../../components/AgentExpertBindingsPreview';
 import { agentPreparationCatalogPath, consumeAgentBindingAction } from '../../../utils/agentFlowContext';
+import { ClusterContentHeading } from '../ClusterContentHeading';
 
 interface Props {
   instanceId: string;
@@ -274,6 +275,7 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
     }
   }, [editing, instanceId, markEditClean]);
 
+  const canChooseTemplate = !catalogState.loading && !catalogState.error && catalog.some(item => item.enabled);
   const candidates = catalog.map((b) => ({ id: b.template_id, label: b.template_name, sub: b.template_id, enabled: b.enabled }));
 
   function templateLabel(refTemplateId: string): string {
@@ -342,20 +344,17 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
   const allMatchLabel = t('instanceDetail.resourcePanel.agent.scopeAll');
 
   return (
-    <div className="flex min-w-0 flex-col gap-4">
-      <div className="page-header w-full min-w-0 flex-wrap items-start gap-y-3">
-        <div className="min-w-[7.5rem] shrink-0">
-          <div className="page-title truncate">{t('instanceDetail.resourcePanel.agent.title')}</div>
-          <div className="page-subtitle truncate">{t('instanceDetail.resourcePanel.agent.subtitle')}</div>
-        </div>
-        <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
+    <div className="cluster-resource-list flex min-w-0 flex-col gap-4">
+      <div className="page-header cluster-resource-list__header w-full min-w-0 flex-wrap items-start gap-y-3">
+        <ClusterContentHeading section="agentResources" />
+        <div className={`cluster-resource-list__actions${checked.size ? ' cluster-resource-list__actions--selection' : ''}`}>
           {checked.size === 0 ? (
             <>
               <ListSearchInput
                 value={searchInput}
                 onChange={setSearchInput}
                 placeholder={t('instanceDetail.resourcePanel.agent.searchPlaceholder')}
-                className="basis-full sm:basis-auto"
+                className="cluster-resource-list__search"
               />
               <button className="btn sm" onClick={() => void reload()}>
                 {t('common.refresh')}
@@ -371,7 +370,7 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
           )}
         </div>
       </div>
-      <div className="card !p-0">
+      <div className="card manager-page-table !p-0">
         {focusTemplate && <div className="template-filter-note flex justify-between items-center gap-2"><span>{t('redesign.clusterTemplateFilter', { defaultValue: '仅显示此模板的绑定' })} · {templateLabel(focusTemplate)}</span><button className="btn ghost sm" onClick={() => { const next = new URLSearchParams(params); next.delete('focusTemplate'); navigate(`${path}${next.size ? `?${next}` : ''}`, { replace: true }); }}>{t('redesign.showAllBindings', { defaultValue: '查看全部绑定' })}</button></div>}
         {loading ? (
           <div className="p-4 text-sm text-muted">{t('common.loading')}</div>
@@ -531,7 +530,6 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
       {showAdd && (
         <Modal
           open
-          size="lg"
           title={t('instanceDetail.resourcePanel.agent.add')}
           onClose={closeAdd}
           dirty={isAddDirty(addDraft)}
@@ -543,7 +541,7 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
                 style={{ marginLeft: 8 }}
                 disabled={busy || restoredDraftKey !== handoffKey || !!requestedTemplate || catalogState.loading || !!catalogState.error || !catalog.some(item => item.template_id === addAgentId && item.enabled) || !addResourceName.trim()}
                 onClick={async () => {
-                  if (busy || instanceId === 'mock-cluster-demo') return;
+                  if (busy) return;
                   if (!addAgentId) {
                     toast('warn', t('policies.fieldRequired', { field: t('instanceDetail.resourcePanel.agent.agentLabel') }));
                     return;
@@ -586,76 +584,73 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
             </>
           }
         >
-          <label className="block mb-3">
-            <FieldLabel required>{t('instanceDetail.resourcePanel.agent.resourceName')}</FieldLabel>
-            <LimitedTextInput
-              className="mt-1"
-              value={addResourceName}
-              maxLength={FIELD_MAX_LENGTH.resource_name}
-              onChange={setAddResourceName}
-            />
-          </label>
-          <label className="block mb-3">
-            <FieldLabel>{t('instanceDetail.resourcePanel.agent.resourceDesc')}</FieldLabel>
-            <textarea
-              className="textarea mt-1 w-full min-h-[76px]"
-              value={addResourceDesc}
-              maxLength={FIELD_MAX_LENGTH.resource_desc}
-              onChange={(e) => setAddResourceDesc(clipField(e.target.value, FIELD_MAX_LENGTH.resource_desc))}
-            />
-            <div className="text-[11px] text-muted mt-1 text-right">
-              {addResourceDesc.length}/{FIELD_MAX_LENGTH.resource_desc}
-            </div>
-          </label>
-          <label className="block mb-3">
-            <FieldLabel required>{t('instanceDetail.resourcePanel.agent.agentLabel')}</FieldLabel>
-            <select
-              className="select mt-1 w-full"
-              value={addAgentId}
-              disabled={catalogState.loading || !!catalogState.error || !!requestedTemplate}
-              onChange={(e) => {
-                const selectedTemplateId = e.target.value;
-                setAddAgentId(selectedTemplateId);
-                const selected = catalog.find((item) => item.template_id === selectedTemplateId);
-                if (selected && !addResourceName.trim()) {
-                  setAddResourceName(clipField(selected.template_name || '', FIELD_MAX_LENGTH.resource_name));
-                }
-              }}
-            >
-              <option value="">{t('common.pleaseSelect')}</option>
-              {candidates.map((c) => (
-                <option key={c.id} value={c.id} disabled={!c.enabled}>{c.label}{!c.enabled ? ` · ${t('common.disabled')}` : ''}</option>
-              ))}
-            </select>
-            <div className="mt-1">
-              <GuideLink page={t('nav.agentManagement')} to={agentPreparationCatalogPath(instanceId, params, true)} onNavigate={() => { if (persistAddDraft(addDraft)) markAddClean(addDraft); }} />
-            </div>
-            {catalogState.loading && <p className="text-xs text-muted mt-2" role="status">{t('common.loading')}</p>}
-            {catalogState.error && <div className="text-xs text-danger mt-2" role="alert">{t('errors.loadFailed', { detail: catalogState.error })}<button type="button" className="btn ghost sm" onClick={() => void catalogState.reload()}>{t('common.refresh')}</button></div>}
-          </label>
-          {addAgentId && <AgentExpertPreviewSummary templateId={addAgentId} />}
-          <label className="block mb-3">
-            <FieldLabel>{t('instanceDetail.resourcePanel.agent.scopeLabel')}</FieldLabel>
-            <div className="mt-1">
-              <MatchExprEditor
-                value={addMatchExpr}
-                onChange={setAddMatchExpr}
-                allowedFields={AGENT_RESOURCE_MATCH_FIELDS}
+          <ClusterTemplatePicker
+            kind="agent"
+            candidates={candidates}
+            value={addAgentId}
+            loading={catalogState.loading}
+            error={catalogState.error}
+            disabled={!!requestedTemplate || restoredDraftKey !== handoffKey}
+            onReload={() => void catalogState.reload()}
+            onManage={() => {
+              if (!persistAddDraft(addDraft)) return;
+              markAddClean(addDraft);
+              navigate(agentPreparationCatalogPath(instanceId, params));
+            }}
+            onChange={selectedTemplateId => {
+              setAddAgentId(selectedTemplateId);
+              const selected = catalog.find(item => item.template_id === selectedTemplateId);
+              if (selected && !addResourceName.trim()) {
+                setAddResourceName(clipField(selected.template_name || '', FIELD_MAX_LENGTH.resource_name));
+              }
+            }}
+          />
+          {canChooseTemplate && <div className="mt-4">
+            <label className="block mb-3">
+              <FieldLabel required>{t('instanceDetail.resourcePanel.agent.resourceName')}</FieldLabel>
+              <LimitedTextInput
+                className="mt-1"
+                value={addResourceName}
+                maxLength={FIELD_MAX_LENGTH.resource_name}
+                onChange={setAddResourceName}
               />
-            </div>
-          </label>
-          <label className="block">
-            <FieldLabel>{t('instanceDetail.resourcePanel.agent.expiresAt')}</FieldLabel>
-            <input
-              type="datetime-local"
-              className="input mt-1 w-full cursor-pointer"
-              value={addExpiresAt}
-              onChange={(e) => setAddExpiresAt(e.target.value)}
-              onClick={(e) => (e.target as HTMLInputElement).showPicker?.()}
-            />
-            <div className="text-[11px] text-muted mt-1">{t('instanceDetail.resourcePanel.agent.expiresHint')}</div>
-          </label>
-          <ConfigRefreshCostHint />
+            </label>
+            <label className="block mb-3">
+              <FieldLabel>{t('instanceDetail.resourcePanel.agent.resourceDesc')}</FieldLabel>
+              <textarea
+                className="textarea mt-1 w-full min-h-[76px]"
+                value={addResourceDesc}
+                maxLength={FIELD_MAX_LENGTH.resource_desc}
+                onChange={(e) => setAddResourceDesc(clipField(e.target.value, FIELD_MAX_LENGTH.resource_desc))}
+              />
+              <div className="text-[11px] text-muted mt-1 text-right">
+                {addResourceDesc.length}/{FIELD_MAX_LENGTH.resource_desc}
+              </div>
+            </label>
+            {addAgentId && <AgentExpertPreviewSummary templateId={addAgentId} />}
+            <label className="block mb-3">
+              <FieldLabel>{t('instanceDetail.resourcePanel.agent.scopeLabel')}</FieldLabel>
+              <div className="mt-1">
+                <MatchExprEditor
+                  value={addMatchExpr}
+                  onChange={setAddMatchExpr}
+                  allowedFields={AGENT_RESOURCE_MATCH_FIELDS}
+                />
+              </div>
+            </label>
+            <label className="block">
+              <FieldLabel>{t('instanceDetail.resourcePanel.agent.expiresAt')}</FieldLabel>
+              <input
+                type="datetime-local"
+                className="input mt-1 w-full cursor-pointer"
+                value={addExpiresAt}
+                onChange={(e) => setAddExpiresAt(e.target.value)}
+                onClick={(e) => (e.target as HTMLInputElement).showPicker?.()}
+              />
+              <div className="text-[11px] text-muted mt-1">{t('instanceDetail.resourcePanel.agent.expiresHint')}</div>
+            </label>
+            <ConfigRefreshCostHint />
+          </div>}
         </Modal>
       )}
 

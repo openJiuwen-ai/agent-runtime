@@ -14,9 +14,7 @@ import { InstanceAccessPanel } from './instanceAccessPanel/InstanceAccessPanel';
 import { InstanceAgentResourceTab } from './instanceResourcePanel/InstanceAgentResourceTab';
 import { InstanceServiceResourceTab } from './instanceResourcePanel/InstanceServiceResourceTab';
 import { WorkspaceNote } from '../../components/WorkspaceNote';
-import { isMockInstanceId, mockInstanceDetail } from '../../config/mockManager';
 import { ClusterWorkspaceNavigation, ClusterWorkspaceReturnAction, type ClusterWorkspaceSection } from '../../components/ClusterWorkspaceNavigation';
-import { MockClusterTabPanel } from './MockClusterTabPanel';
 import { ClusterOtherSettingsPanel } from './ClusterOtherSettingsPanel';
 
 export type InstancePageTab = 'access' | 'agentResources' | 'serviceResources' | 'otherSettings' | 'status';
@@ -51,8 +49,7 @@ function FieldLabel({ children, required }: { children: ReactNode; required?: bo
 
 export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
   const { t, i18n } = useTranslation();
-  const instance = useAsync(() => isMockInstanceId(instanceId) ? Promise.resolve(mockInstanceDetail) : InstanceApi.get(instanceId), [instanceId]);
-  const mock = isMockInstanceId(instanceId);
+  const instance = useAsync(() => InstanceApi.get(instanceId), [instanceId]);
   const { navigate } = useRouter();
   const [probing, setProbing] = useState(false);
   const [openingConsole, setOpeningConsole] = useState(false);
@@ -88,7 +85,7 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
     },
     otherSettings: {
       title: zh ? '集中管理当前集群的运行策略' : 'Manage cluster policies in one place',
-      body: zh ? '通过左侧目录定位日志配置和配额管理，每项独立保存；成本统计与业务审计尚未开放。目录切换保留本页未保存的填写内容。' : 'Use the directory to find logging and quota settings. Save each section independently; cost and business audit are not available yet. Moving between sections retains unsaved edits.',
+      body: zh ? '通过目录定位日志配置和配额管理，每项独立保存；成本统计与业务审计尚未开放。目录跳转保留本页未保存的填写内容。' : 'Use the directory to find logging and quota settings. Save each section independently; cost and business audit are not available yet. Moving between sections retains unsaved edits.',
     },
   };
   const context = tabContext[tab] ?? tabContext.access;
@@ -156,7 +153,7 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
   };
 
   const checkConnectivity = async () => {
-    if (probing || mock) return;
+    if (probing) return;
     setProbing(true);
     setCheckResult('');
     try {
@@ -169,7 +166,7 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
   };
 
   const openUserConsole = async () => {
-    if (openingConsole || mock) return;
+    if (openingConsole) return;
     setOpeningConsole(true);
     setCheckResult('');
     try {
@@ -195,14 +192,14 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
 
   return (
     <>
-      <div className="flex min-w-0 shrink-0 flex-col gap-4">
+      <div className={`cluster-detail-page cluster-detail-page--${tab} flex min-w-0 flex-col gap-4`}>
         <ClusterWorkspaceNavigation
           instanceId={instanceId}
           name={instance.data?.jiuwenclaw_name ?? instanceId}
           section={section}
         />
-        <div className="w-full min-w-0 shrink-0">
-          {tab === 'otherSettings' ? <ClusterOtherSettingsPanel instanceId={instanceId} /> : mock ? <MockClusterTabPanel tab={tab} /> : <>
+        <div className="cluster-detail-body w-full min-w-0">
+          {tab === 'otherSettings' ? <ClusterOtherSettingsPanel instanceId={instanceId} /> : <>
           {tab === 'access' && <InstanceAccessPanel instanceId={instanceId} />}
           {tab === 'agentResources' && (
             <InstanceAgentResourceTab instanceId={instanceId} />
@@ -222,8 +219,10 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
           )}
           </>}
         </div>
-        <ClusterWorkspaceReturnAction instanceId={instanceId} />
-        <WorkspaceNote title={context.title}>{context.body}</WorkspaceNote>
+        <footer className="cluster-detail-footer">
+          <ClusterWorkspaceReturnAction instanceId={instanceId} />
+          <WorkspaceNote title={context.title}>{context.body}</WorkspaceNote>
+        </footer>
       </div>
 
       <Modal

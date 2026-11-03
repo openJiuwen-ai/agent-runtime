@@ -1,0 +1,14 @@
+.admission-picker-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+.admission-picker-toolbar strong { font-size: 14px; font-weight: 600; }
+.admission-picker-toolbar p { margin-top: 5px; font-size: 12px; color: var(--muted); line-height: 1.6; }
+.admission-picker-toolbar .btn { flex-shrink: 0; }
+.admission-picker-list { min-height: 180px; max-height: min(320px, 40dvh); overflow: auto; padding: 6px; border: 1px solid var(--border); border-radius: 10px; }
+.admission-picker-list > label { display: flex; align-items: center; gap: 10px; padding: 10px; border-radius: 6px; cursor: pointer; }
+.admission-picker-list > label:hover { background: var(--bg-hover); }
+.admission-picker-list > label:has(input:checked) { background: var(--accent-subtle); }
+.admission-picker-empty { min-height: 240px; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; gap: 16px; padding: 24px; border: 1px dashed var(--border); border-radius: 12px; background: var(--bg); }
+.admission-picker-empty h3 { font-size: 16px; font-weight: 600; }
+.admission-picker-empty p { max-width: 34em; font-size: 13px; line-height: 1.8; color: var(--muted); overflow-wrap: anywhere; }
+.admission-picker-empty__icon { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 12px; background: var(--accent-subtle); color: var(--accent); font-size: 24px; }
+.admission-picker-list > .admission-picker-empty { min-height: 164px; border: 0; background: transparent; }
+@media (max-width: 600px) { .admission-picker-toolbar { align-items: flex-start; flex-direction: column; gap: 10px; } }

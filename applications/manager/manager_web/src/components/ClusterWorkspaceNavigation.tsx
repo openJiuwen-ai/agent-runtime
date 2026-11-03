@@ -6,8 +6,8 @@ import { templateReturnPath } from '../utils/agentFlowContext';
 
 export type { ClusterWorkspaceSection } from '../utils/clusterNavigation';
 
-/** One navigation model for every page belonging to a cluster, including the demo. */
-export function ClusterWorkspaceNavigation({ instanceId, name, section, progress, onRefresh }: {
+/** One navigation model for every page belonging to a cluster, including setup flows. */
+export function ClusterWorkspaceNavigation({ instanceId, name, section, onRefresh }: {
   instanceId: string;
   name: string;
   section: ClusterWorkspaceSection;
@@ -36,13 +36,12 @@ export function ClusterWorkspaceNavigation({ instanceId, name, section, progress
     <header className="cluster-workspace-header">
       <div className="min-w-0">
         <button className="btn ghost sm" onClick={() => navigate('/instances')}>← {tr('集群管理', 'Clusters')}</button>
-        <div className="mt-2 flex min-w-0 items-center gap-3"><h1 className="page-title truncate" title={name}>{name}</h1>{instanceId === 'mock-cluster-demo' && <span className="tag shrink-0">{tr('演示集群', 'Demo')}</span>}</div>
+        <div className="mt-2 flex min-w-0 items-center gap-3"><h1 className="page-title truncate" title={name}>{name}</h1></div>
         <p className="mt-1 text-xs text-muted mono break-all">{instanceId}</p>
       </div>
       <div className="flex shrink-0 flex-wrap items-center gap-2">
         {params.has('returnTo') && <button className="btn ghost sm" onClick={() => navigate(templateReturnPath(params.get('returnTo')))}>{tr('返回 Agent 模板', 'Return to Agent templates')}</button>}
         {isWorkbench && onRefresh && <button className="btn sm" onClick={onRefresh}>{tr('刷新进度', 'Refresh progress')}</button>}
-        {isWorkbench && progress && <button className="btn primary sm" onClick={() => to(progress.nextSection)}>{progress.configurationComplete ? tr('检查并验证', 'Check and verify') : tr('继续配置', 'Continue setup')} →</button>}
       </div>
     </header>
     <nav className="cluster-workspace-nav" aria-label={tr('集群页面', 'Cluster pages')}>

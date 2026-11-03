@@ -30,7 +30,7 @@ bash applications/manager/dev/local.sh
 bash applications/manager/dev/local.sh --offline
 ```
 
-该参数设置 `MANAGER_DEV_OFFLINE=1`，仅允许与 `MANAGER_LOCAL_DEV=1`、回环监听地址和 SQLite 一起使用，默认关闭。页面会显示“本地离线开发”提示；也可通过 `GET http://127.0.0.1:18765/api/dev-mode` 查看 `offline` 状态。
+该参数设置 `MANAGER_DEV_OFFLINE=1`，仅允许与 `MANAGER_LOCAL_DEV=1`、回环监听地址和 SQLite 一起使用，默认关闭。通过启动日志或 `GET http://127.0.0.1:18765/api/dev-mode` 查看 `offline` 状态。
 
 - 集群创建、地址修改跳过 Gateway、Runtime、用户面的健康检查；新建组件保持 `pending`，后台和手动巡检也不会伪造在线状态。
 - 集群准入、Agent 绑定、运行规格绑定及应用配置仍经过 Manager 的业务校验，并保存到 `.manager-dev/manager.db`。需要下发的 Gateway/Runtime 请求返回标有 `simulated` 的开发回执，日志记录 `[LocalOffline]`。
@@ -58,7 +58,8 @@ npm --prefix applications/manager/manager_web run build
 npm --prefix applications/manager/manager_web test
 ```
 
-### 可选的界面演示数据
+### 开发依赖缓存
 
-启动本地环境后在仓库根目录执行 `.venv-manager/bin/python applications/manager/dev/demo.py`。
-脚本只访问固定的本机 18770/18765 端口，创建带 `[本地演示]` 前缀的 Agent 和停用模型；重复执行复用同名记录。模型地址为保留的 `.invalid` 域名，不连接真实模型，不创建服务实例或运行权限。此脚本不随服务自动运行。
+Vite 开发服务使用 `manager_web/node_modules/.vite-manager-dev`，与前端 SSR 测试使用的默认 `.vite` 缓存隔离，避免运行测试后出现 `504 Outdated Optimize Dep`。修改 Vite 配置后如自动重启未完成，可停止并重新执行本地启动命令，再刷新浏览器。
+
+前端仅展示 Manager API 返回的数据；已移除内置演示集群、演示专家目录和演示模板生成脚本。离线模式仍可通过正常配置流程保存测试数据。
