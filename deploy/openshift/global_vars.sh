@@ -71,10 +71,10 @@ declare -A DEPLOY_VARS=(
     ["DB_HOST"]=""
     ["DB_PORT"]=""                       # 留空按 DB_TYPE 取默认（3306/5432）；外部数据库填写对应端口
     ["DB_USER"]=""                       # 留空按 DB_TYPE 取默认（root/postgres）；外部数据库填写对应用户
-    ["DB_PASSWORD"]=""                   # 外部数据库统一密码（语义对齐 jiuwenswarm-ee）；留空时内置模式按 DB_TYPE 取 ROOT_PASSWORD，外置模式两者均空报错
+    ["DB_PASSWORD"]=""                   # 外部数据库统一密码；留空时内置模式按 DB_TYPE 取 ROOT_PASSWORD，外置模式两者均空报错
     ["ENABLE_EXTERNAL_DB"]="false"
 
-    # 分库配置（语义对齐 jiuwenswarm-ee；派生规则见 var_handler.sh resolve_module_db_vars）：
+    # 分库配置：
     #   <MODULE>_DB_NAME 未设 → mysql/mariadb: <module>_<NAMESPACE>；postgresql: <module>
     #   <MODULE>_PG_SCHEMA 未设 → postgresql 下取 NAMESPACE（仅 pg 生效）
     #   <MODULE>_DB_USER/PASSWORD 未设 → 继承 DB_USER / DB_ROOT_PASSWORD
