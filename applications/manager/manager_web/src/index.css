@@ -1975,7 +1975,7 @@ dialog.resource-preview::backdrop { background: rgb(0 0 0 / .24); }
 .cluster-card__stats strong { display: block; margin-top: 4px; color: var(--text-strong); font-size: 20px; }
 .cluster-card__notice { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: var(--font-size-xs); }
 .cluster-card__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: auto; }
-.cluster-card__management-actions { display: flex; gap: 8px; }
+.cluster-card__management-actions { display: flex; gap: 8px; margin-left: auto; }
 .btn.danger.cluster-delete-button { background: var(--danger-subtle); color: var(--danger); }
 .btn.danger.cluster-delete-button:hover { background: var(--danger-subtle); color: var(--danger); filter: brightness(.97); }
 @media(max-width: 1000px) { .cluster-card-grid { grid-template-columns: 1fr; } }
