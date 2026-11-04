@@ -6,11 +6,12 @@ import { toast } from '../stores/uiStore';
 import { Modal } from './Modal';
 
 /** Shared by the cluster catalog and workbench; deletion always requires confirmation. */
-export function ClusterManagementActions({ instanceId, name, onDeleted, compact = false }: {
+export function ClusterManagementActions({ instanceId, name, onDeleted, compact = false, size = compact ? 'sm' : 'md' }: {
   instanceId: string;
   name: string;
   onDeleted: () => void;
   compact?: boolean;
+  size?: 'sm' | 'md';
 }) {
   const { t, i18n } = useTranslation();
   const tr = (cn: string, en: string) => i18n.language.startsWith('zh') ? cn : en;
@@ -65,10 +66,10 @@ export function ClusterManagementActions({ instanceId, name, onDeleted, compact 
   }
 
   return <>
-    <button type="button" className={`btn${compact ? ' sm' : ''}`} disabled={exporting || deleting} onClick={() => void exportConfiguration()}>
+    <button type="button" className={`btn${size === 'sm' ? ' sm' : ''}`} disabled={exporting || deleting} onClick={() => void exportConfiguration()}>
       {exporting ? tr('导出中…', 'Exporting…') : compact ? t('topology.export') : tr('导出配置', 'Export configuration')}
     </button>
-    <button type="button" className={`btn danger cluster-delete-button${compact ? ' sm' : ''}`} disabled={exporting || deleting} onClick={() => { setError(null); setConfirmOpen(true); }}>
+    <button type="button" className={`btn danger cluster-delete-button${size === 'sm' ? ' sm' : ''}`} disabled={exporting || deleting} onClick={() => { setError(null); setConfirmOpen(true); }}>
       {compact ? t('common.delete') : tr('删除集群', 'Delete cluster')}
     </button>
     <Modal open={confirmOpen} title={tr('删除集群', 'Delete cluster')} onClose={() => { if (!deleting) setConfirmOpen(false); }} footer={<>

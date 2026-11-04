@@ -3,15 +3,14 @@ import { useTranslation } from 'react-i18next';
 import { useAuth } from '../auth/AuthContext';
 import { isPlatformAdmin } from '../services/api';
 import { SetupJourney, useSetupJourney } from './SetupJourney';
-import { matchRoute, useRouter } from '../router';
-import { clusterPagePath } from '../utils/clusterNavigation';
+import { useRouter } from '../router';
+import { readSetupGuide, setupGuideRouteCluster } from '../utils/setupGuide';
 
 export function ConfigGuideMenu() {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const { user } = useAuth();
-  const { navigate, path, params } = useRouter();
-  const cluster = matchRoute('/instances/:id/:section', path) || matchRoute('/instances/:id', path) || ((params.get('cluster') || params.get('admissionCluster')) ? { id: (params.get('cluster') || params.get('admissionCluster'))! } : null);
-  const zh = i18n.language.startsWith('zh');
+  const { path, params } = useRouter();
+  const routeCluster = setupGuideRouteCluster(path, params);
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
@@ -35,19 +34,20 @@ export function ConfigGuideMenu() {
   useEffect(() => {
     setOpen(false);
     const key = `manager:setup-journey:${user?.user_id || ''}`;
-    let stage = 0;
-    let showOptional = false;
+    let selection = readSetupGuide(null);
     try {
-      const saved = JSON.parse(localStorage.getItem(key) || 'null');
-      if (Number.isInteger(saved?.stage) && saved.stage >= 0 && saved.stage < 4) stage = saved.stage;
-      showOptional = saved?.showOptional === true;
+      selection = readSetupGuide(localStorage.getItem(key));
     } catch { /* Unavailable or invalid storage must not block navigation. */ }
-    useSetupJourney.setState({ stage, showOptional });
+    useSetupJourney.setState(selection);
     return useSetupJourney.subscribe(state => {
-      try { localStorage.setItem(key, JSON.stringify({ stage: state.stage, showOptional: state.showOptional })); }
+      try { localStorage.setItem(key, JSON.stringify({ version: 2, stage: state.stage, clusterId: state.clusterId, showOptional: state.showOptional })); }
       catch { /* Keep in-memory progress when storage is unavailable. */ }
     });
   }, [user?.user_id]);
+
+  useEffect(() => {
+    if (routeCluster) useSetupJourney.getState().selectCluster(routeCluster);
+  }, [routeCluster, user?.user_id]);
 
   useEffect(() => {
     if (!open) return;
@@ -77,7 +77,7 @@ export function ConfigGuideMenu() {
       <span aria-hidden="true">▦</span>{t('guide.configGuide')}<span aria-hidden="true">⌄</span>
     </button>
     {open && <div id="manager-setup-guide" className="guide-menu guide-menu--journey">
-      <div className="guide-menu__journey"><SetupJourney compact /><button type="button" className="btn sm" onClick={() => { setOpen(false); navigate(cluster ? clusterPagePath(cluster.id, 'cluster-config', params) : '/configuration-wizard?from=cluster'); }}>{cluster ? (zh ? '打开配置工作台' : 'Open cluster workspace') : (zh ? '新建集群' : 'Create a cluster')} →</button></div>
+      <div className="guide-menu__journey"><SetupJourney compact onNavigate={() => setOpen(false)} /></div>
     </div>}
   </div>;
 }

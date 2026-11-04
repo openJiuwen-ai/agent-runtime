@@ -424,7 +424,7 @@ export function InstanceListPage() {
         <div className="cluster-card__actions">
           <button type="button" className="btn" onClick={() => navigate(`/instances/${instance.jiuwenclaw_id}/cluster-config`)}>{t('redesign.clusterWorkbench', { defaultValue: '配置工作台' })}</button>
           <button type="button" className="btn primary" onClick={() => navigate(`/instances/${instance.jiuwenclaw_id}/setup`)}>{t('redesign.continueClusterSetup', { defaultValue: '继续配置' })} →</button>
-          <div className="cluster-card__management-actions"><ClusterManagementActions compact instanceId={instance.jiuwenclaw_id} name={instance.jiuwenclaw_name} onDeleted={refresh} /></div>
+          <div className="cluster-card__management-actions"><ClusterManagementActions compact size="md" instanceId={instance.jiuwenclaw_id} name={instance.jiuwenclaw_name} onDeleted={refresh} /></div>
         </div>
       </article>
     );
