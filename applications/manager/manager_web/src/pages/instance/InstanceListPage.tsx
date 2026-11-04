@@ -23,6 +23,7 @@ import { ImportClusterModal } from './modal/ImportClusterModal';
 import { useGuideAutoOpen } from '../../hooks/useGuideAutoOpen';
 import { bumpGuideRevision } from '../../stores/guideStore';
 import { WorkspaceNote } from '../../components/WorkspaceNote';
+import { ClusterCardStats } from './ClusterCardStats';
 
 type ViewMode = 'brief' | 'list';
 
@@ -466,16 +467,7 @@ export function InstanceListPage() {
           </div>
           <span className={`pill sm ${connected ? 'ok' : 'warn'}`}>{connected ? t('redesign.connected', { defaultValue: '运行正常' }) : t('redesign.inspect', { defaultValue: '待检查' })}</span>
         </div>
-        <div className="grid grid-cols-3 gap-2">
-          {[
-            ['Gateway', instance.gateway_status],
-            ['Runtime', instance.runtime_status],
-            ['User Web', instance.user_web_status],
-          ].map(([label, status]) => <div key={label} className="min-w-0 rounded-md border border-border bg-panel px-3 py-2.5">
-            <div className="mb-1 text-xs text-muted">{label}</div>
-            <StatusBadge status={status} />
-          </div>)}
-        </div>
+        <ClusterCardStats instanceId={instance.jiuwenclaw_id} />
         {!connected && <div className="cluster-card__notice"><span className="statusDot" />{t('redesign.clusterNeedsInspection', { defaultValue: '部分组件需要检查，进入工作台继续配置。' })}</div>}
         <div className="cluster-card__actions">
           <button type="button" className="btn" onClick={() => navigate(`/instances/${instance.jiuwenclaw_id}/cluster-config`)}>{t('redesign.clusterWorkbench', { defaultValue: '配置工作台' })}</button>
