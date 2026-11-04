@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next';
 import { useRouter } from '../router';
 import { clusterNavigationGroup, clusterPagePath, type ClusterWorkspaceSection } from '../utils/clusterNavigation';
 import { templateReturnPath } from '../utils/agentFlowContext';
+import { ClusterManagementActions } from './ClusterManagementActions';
 
 export type { ClusterWorkspaceSection } from '../utils/clusterNavigation';
 
@@ -32,12 +33,15 @@ export function ClusterWorkspaceNavigation({ instanceId, name, section, onRefres
 
   return <>
     <header className="cluster-workspace-header">
-      <h1 className="page-title min-w-0 truncate" title={name}>{name}</h1>
+      <div className="cluster-workspace-header__identity">
+        <h1 className="page-title min-w-0 truncate" title={name}>{name}</h1>
+        <button type="button" className="btn" onClick={() => navigate('/instances')}>← {tr('集群管理', 'Clusters')}</button>
+      </div>
       <div className="cluster-workspace-header__actions">
         {params.has('returnTo') && <button type="button" className="btn" onClick={() => navigate(templateReturnPath(params.get('returnTo')))}>{tr('返回 Agent 模板', 'Return to Agent templates')}</button>}
         {isWorkbench && onRefresh && <button type="button" className="btn" onClick={onRefresh}>{tr('刷新配置', 'Refresh configuration')}</button>}
+        {isWorkbench && <ClusterManagementActions instanceId={instanceId} name={name} onDeleted={() => navigate('/instances')} />}
         {!isWorkbench && <button type="button" className="btn" onClick={() => to('cluster-config')}>{tr('返回配置工作台', 'Configuration workspace')}</button>}
-        <button type="button" className="btn" onClick={() => navigate('/instances')}>← {tr('集群管理', 'Clusters')}</button>
       </div>
       <p className="cluster-workspace-header__id text-xs text-muted mono break-all">{instanceId}</p>
     </header>

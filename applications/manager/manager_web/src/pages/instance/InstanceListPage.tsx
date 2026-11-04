@@ -1,13 +1,13 @@
 import { allComponentsConnected } from '../../utils/overview';
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ImportExportApi, InstanceApi } from '../../services/api';
+import { InstanceApi } from '../../services/api';
 import type { InstanceSummary } from '../../types';
 import { useAsync } from '../../hooks/useAsync';
 import { useListSearch } from '../../hooks/useListSearch';
 import { useRouter } from '../../router';
 import { StatusBadge } from '../../components/StatusBadge';
-import { ConfirmDialog } from '../../components/ConfirmDialog';
+import { ClusterManagementActions } from '../../components/ClusterManagementActions';
 import { Empty } from '../../components/Empty';
 import { Pagination } from '../../components/Pagination';
 import { ListSearchInput } from '../../components/ListSearchInput';
@@ -40,24 +40,6 @@ type InstanceSortField =
 const VIEW_MODE_STORAGE_KEY = 'claw_manager_instance_view';
 
 const INSTANCE_STATUS_VALUES = ['online', 'pending', 'offline'] as const;
-
-async function exportCluster(instance: InstanceSummary, success: string, failed: string) {
-  try {
-    const { blob, filename } = await ImportExportApi.exportCluster(instance.jiuwenclaw_id);
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = filename;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    URL.revokeObjectURL(url);
-    toast('success', success);
-  } catch (e) {
-    const detail = e instanceof ApiError ? e.detail : (e as Error).message;
-    toast('danger', `${failed}${detail}`);
-  }
-}
 
 function readViewMode(): ViewMode {
   const saved = localStorage.getItem(VIEW_MODE_STORAGE_KEY);
@@ -95,7 +77,6 @@ function InstanceListTable({
 }) {
   const { t } = useTranslation();
   const { navigate } = useRouter();
-  const [deleteTarget, setDeleteTarget] = useState<InstanceSummary | null>(null);
 
   const statusFilterOptions = useMemo(
     () => [
@@ -254,19 +235,7 @@ function InstanceListTable({
                           {t('redesign.clusterWorkbench', { defaultValue: '配置工作台' })}
                         </button>
                         <button className="btn primary sm" onClick={() => navigate(`/instances/${encodeURIComponent(instance.jiuwenclaw_id)}/setup`)}>{t('redesign.continueClusterSetup', { defaultValue: '继续配置' })} →</button>
-                        <button
-                          className="btn sm"
-                          onClick={() => void exportCluster(
-                            instance,
-                            t('topology.exportSuccess'),
-                            t('topology.exportFailed'),
-                          )}
-                        >
-                          {t('topology.export')}
-                        </button>
-                        <button className="btn sm danger" onClick={() => setDeleteTarget(instance)}>
-                          {t('common.delete')}
-                        </button>
+                        <ClusterManagementActions compact instanceId={instance.jiuwenclaw_id} name={instance.jiuwenclaw_name} onDeleted={onChanged} />
                       </div>
                     </td>
                   </tr>
@@ -277,23 +246,6 @@ function InstanceListTable({
         </div>
       </div>
 
-      <ConfirmDialog
-        open={deleteTarget !== null}
-        message={t('topology.deleteConfirm')}
-        danger
-        onConfirm={async () => {
-          if (!deleteTarget) return;
-          try {
-            await InstanceApi.remove(deleteTarget.jiuwenclaw_id);
-            toast('success', t('success.deleted'));
-            bumpGuideRevision();
-            onChanged();
-          } catch (e) {
-            toast('danger', t('errors.deleteFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
-          }
-        }}
-        onClose={() => setDeleteTarget(null)}
-      />
     </>
   );
 }
@@ -472,6 +424,7 @@ export function InstanceListPage() {
         <div className="cluster-card__actions">
           <button type="button" className="btn" onClick={() => navigate(`/instances/${instance.jiuwenclaw_id}/cluster-config`)}>{t('redesign.clusterWorkbench', { defaultValue: '配置工作台' })}</button>
           <button type="button" className="btn primary" onClick={() => navigate(`/instances/${instance.jiuwenclaw_id}/setup`)}>{t('redesign.continueClusterSetup', { defaultValue: '继续配置' })} →</button>
+          <div className="cluster-card__management-actions"><ClusterManagementActions compact instanceId={instance.jiuwenclaw_id} name={instance.jiuwenclaw_name} onDeleted={refresh} /></div>
         </div>
       </article>
     );

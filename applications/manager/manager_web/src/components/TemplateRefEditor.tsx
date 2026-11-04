@@ -127,8 +127,10 @@ function CheckboxSelect({
   selected,
   onChange,
   label,
+  emptyMessage,
 }: {
   label: string;
+  emptyMessage: string;
   options: TemplateOption[];
   selected: string[];
   onChange: (ids: string[]) => void;
@@ -225,7 +227,7 @@ function CheckboxSelect({
 
   const display = selected.length
     ? selected.map((id) => labelById.get(id) ?? id).join(', ')
-    : t('policies.templateRef.none');
+    : options.length ? t('policies.templateRef.none') : emptyMessage;
   const items = [...orphanIds.map((id) => ({ template_id: id, label: id })), ...options];
 
   return (
@@ -246,7 +248,7 @@ function CheckboxSelect({
         className="dropdown-menu-surface fixed z-[80] max-h-56 overflow-auto"
       >
         {items.length === 0 ? (
-          <div className="px-3 py-2 text-xs text-muted">{t('policies.templateRef.noOptions')}</div>
+          <div className="px-3 py-2 text-xs text-muted">{emptyMessage}</div>
         ) : (
           items.map((opt) => (
             <label
@@ -285,7 +287,7 @@ export function TemplateRefEditor({
   const [editor, setEditor] = useState(() => editorValueFromMap(value));
   const extraSlotsRef = useRef<TemplateRefMap>(extraSlotsFromMap(value));
   const [templateOptions, setTemplateOptions] = useState<Record<string, TemplateOption[]>>({});
-  const [loadingTemplates, setLoadingTemplates] = useState(false);
+  const [loadingTemplates, setLoadingTemplates] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
   const [optionalOpen, setOptionalOpen] = useState(false);
@@ -333,6 +335,11 @@ export function TemplateRefEditor({
   const setSlotIds = (slot: TemplateRefEditorSlot, ids: string[]) => {
     emit({ ...editor, [slot]: ids }, slot);
   };
+  const emptyMessage = loadingTemplates
+    ? t('policies.templateRef.loadingTemplates')
+    : loadError ? tr('模版加载失败，请刷新重试', 'Templates failed to load. Refresh to retry.')
+      : tr('暂无可用模版', 'No templates available');
+  const optionalHint = tr('按需添加模型、技能、工具与扩展能力。', 'Add models, skills, tools and extensions as needed.');
 
   const slotDescription: Record<TemplateRefEditorSlot, string> = {
     default_model: tr('选择 Agent 对话和推理使用的默认模型。', 'Choose the default model for Agent conversations and reasoning.'),
@@ -362,10 +369,10 @@ export function TemplateRefEditor({
           ? <a href={`/manager${configPath}`} target="_blank" rel="noopener noreferrer" className="btn sm agent-capability-card__link">{t('guide.gotoPageLink', { page: t(hintPageKey) })} ↗</a>
           : <HintTooltip text={t('guide.gotoPageLink', { page: t(hintPageKey) })}><GuideLink page={t(hintPageKey)} to={configPath} className="btn sm agent-capability-card__link" /></HintTooltip>)}
       </div>
-      {multi ? <CheckboxSelect label={title} options={options} selected={selected} onChange={(ids) => setSlotIds(slot, ids)} /> : <select
+      {multi ? <CheckboxSelect label={title} emptyMessage={emptyMessage} options={options} selected={selected} onChange={(ids) => setSlotIds(slot, ids)} /> : <select
         className="select h-10 w-full" aria-label={title} value={selected[0] ?? ''}
         onChange={(e) => setSlotIds(slot, e.target.value ? [e.target.value] : [])}>
-        <option value="">{t('policies.templateRef.none')}</option>
+        <option value="" disabled={!options.length && !selected.length}>{options.length || selected.length ? t('policies.templateRef.none') : emptyMessage}</option>
         {selected[0] && !options.some((option) => option.template_id === selected[0]) && <option value={selected[0]}>{selected[0]}</option>}
         {options.map(option => <option key={option.template_id} value={option.template_id}>{option.label}</option>)}
       </select>}
@@ -385,7 +392,7 @@ export function TemplateRefEditor({
       {(collapseOptional ? TEMPLATE_REF_EDITOR_SLOTS.filter(slot => requiredSlots?.includes(slot)) : TEMPLATE_REF_EDITOR_SLOTS).map(renderSlot)}
       {collapseOptional ? <>
         <button type="button" className="agent-capabilities__toggle" aria-expanded={optionalOpen} onClick={() => setOptionalOpen(value => !value)}>
-          <span><strong>{t('agentTemplate.optionalResources')}</strong><small>{tr('按需添加模型、技能、工具与扩展能力。', 'Add models, skills, tools and extensions as needed.')}</small></span>
+          <span className="agent-capabilities__toggle-copy"><strong>{t('agentTemplate.optionalResources')}</strong><small title={optionalHint}>{optionalHint}</small></span>
           <span className="agent-capabilities__toggle-state">{optionalCount > 0 && <span className="tag">{tr(`已配置 ${optionalCount} 项`, `${optionalCount} configured`)}</span>}<SelectChevron open={optionalOpen} /></span>
         </button>
         <div className="agent-capabilities__optional" hidden={!optionalOpen}>

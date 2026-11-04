@@ -1974,7 +1974,10 @@ dialog.resource-preview::backdrop { background: rgb(0 0 0 / .24); }
 .cluster-card__stats span { display: block; color: var(--muted); font-size: var(--font-size-xs); }
 .cluster-card__stats strong { display: block; margin-top: 4px; color: var(--text-strong); font-size: 20px; }
 .cluster-card__notice { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: var(--font-size-xs); }
-.cluster-card__actions { display: flex; align-items: center; gap: 8px; margin-top: auto; }
+.cluster-card__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: auto; }
+.cluster-card__management-actions { display: flex; gap: 8px; margin-left: auto; }
+.btn.danger.cluster-delete-button { background: var(--danger); color: #fff; }
+.btn.danger.cluster-delete-button:hover { filter: brightness(.92); }
 @media(max-width: 1000px) { .cluster-card-grid { grid-template-columns: 1fr; } }
 .cluster-management-workspace { max-width: 1480px; margin: 0 auto; width: 100%; }
 .cluster-management-toolbar { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); }
@@ -2200,6 +2203,8 @@ dialog.resource-preview::backdrop { background: rgb(0 0 0 / .24); }
 
 /* Shared cluster navigation and saved configuration progress. */
 .cluster-workspace-header { display: grid; flex-shrink: 0; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px 16px; }
+.cluster-workspace-header__identity { display: flex; align-items: center; gap: 16px; min-width: 0; }
+.cluster-workspace-header__identity .btn { flex-shrink: 0; white-space: nowrap; }
 .cluster-workspace-header__actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
 .cluster-workspace-header__actions .btn { white-space: nowrap; }
 .cluster-workspace-header__id { grid-column: 1 / -1; }

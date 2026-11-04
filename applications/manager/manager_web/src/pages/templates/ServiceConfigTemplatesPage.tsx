@@ -27,6 +27,7 @@ import {
   parseConfigSyncImport,
 } from '../../utils/serviceConfigExport';
 import { WorkspaceNote } from '../../components/WorkspaceNote';
+import './ServiceConfigTemplatesPage.css';
 
 type ServiceConfigTemplateSortField =
   | 'template_name'
@@ -276,8 +277,8 @@ export function ServiceConfigTemplatesPage({
             </div>
           </div>
         )}
-        <div className="page-header w-full min-w-0 flex-wrap items-start gap-y-3">
-          <div className="min-w-[7.5rem] max-w-[20rem] shrink-0 sm:max-w-[32rem]">
+        <div className="page-header runtime-catalog-header w-full min-w-0 flex-wrap items-start gap-y-3">
+          <div className="runtime-catalog-header__identity">
             <div className="page-title truncate" title={t('serviceConfigTemplate.title')}>
               {t('serviceConfigTemplate.title')}
             </div>
@@ -285,12 +286,12 @@ export function ServiceConfigTemplatesPage({
               {t('serviceConfigTemplate.subtitle')}
             </div>
           </div>
-          <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
+          <div className="runtime-catalog-header__toolbar">
           <ListSearchInput
             value={searchInput}
             onChange={setSearchInput}
             placeholder={t('serviceConfigTemplate.searchPlaceholder')}
-            className="basis-full sm:basis-auto"
+            className="runtime-catalog-header__search"
           />
           <button className="btn sm" onClick={() => void reload()}>
             {t('common.refresh')}
@@ -324,24 +325,6 @@ export function ServiceConfigTemplatesPage({
           </button>
         </div>
       </div>
-
-      <section className="environment-overview-grid">
-        <article className="card environment-overview-card">
-          <div className="environment-overview-card__label">已启用运行池</div>
-          <strong>{items.filter((item) => item.enabled).length}</strong>
-          <p>可在集群配置工作台中绑定到目标服务实例。</p>
-        </article>
-        <article className="card environment-overview-card">
-          <div className="environment-overview-card__label">运行时模板</div>
-          <strong>{items.length}</strong>
-          <p>由容器模板组装成可调度、可扩缩的运行池方案。</p>
-        </article>
-        <article className="card environment-overview-card environment-overview-card--accent">
-          <div className="environment-overview-card__label">生效关系</div>
-          <strong>3 层</strong>
-          <p>容器模板 → 运行规格 → 服务实例 → Agent。</p>
-        </article>
-      </section>
 
       <div className="flex w-full min-w-0 shrink-0 flex-col gap-4">
       <div className="card manager-page-table !p-0">
