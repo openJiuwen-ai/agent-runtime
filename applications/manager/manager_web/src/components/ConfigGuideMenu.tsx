@@ -24,6 +24,8 @@ export function ConfigGuideMenu() {
     // Allow crossing the small gap between the trigger and the dropdown.
     closeTimer.current = setTimeout(() => setOpen(false), 180);
   };
+  const hasFocusedSelect = () => document.activeElement instanceof HTMLSelectElement
+    && rootRef.current?.contains(document.activeElement);
 
   useEffect(() => () => {
     if (closeTimer.current) clearTimeout(closeTimer.current);
@@ -54,21 +56,37 @@ export function ConfigGuideMenu() {
     const outside = (event: PointerEvent) => {
       if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
     };
+    const move = (event: PointerEvent) => {
+      if ((event.pointerType !== 'mouse' && event.pointerType !== 'pen') || !hasFocusedSelect() || !(event.target instanceof Element)) return;
+      // Native select popups live outside the DOM and can emit a false pointerleave.
+      // Resume hover dismissal only when a real page pointer event reaches the outside.
+      if (rootRef.current?.contains(event.target as Node)) cancelClose();
+      else if (!closeTimer.current) scheduleClose();
+    };
     const escape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') { setOpen(false); triggerRef.current?.focus(); }
     };
     document.addEventListener('pointerdown', outside);
+    document.addEventListener('pointermove', move);
     document.addEventListener('keydown', escape);
     return () => {
       document.removeEventListener('pointerdown', outside);
+      document.removeEventListener('pointermove', move);
       document.removeEventListener('keydown', escape);
+      cancelClose();
     };
   }, [open]);
 
   if (!isPlatformAdmin(user)) return null;
   return <div className="relative guide-menu-root" ref={rootRef}
     onPointerEnter={cancelClose}
-    onPointerLeave={(event) => { if (event.pointerType === 'mouse' || event.pointerType === 'pen') scheduleClose(); }}
+    onFocusCapture={(event) => { if (event.target instanceof HTMLSelectElement) cancelClose(); }}
+    onPointerDownCapture={(event) => { if (event.target instanceof HTMLSelectElement) cancelClose(); }}
+    onPointerLeave={(event) => {
+      if (event.pointerType !== 'mouse' && event.pointerType !== 'pen') return;
+      if (hasFocusedSelect() && !(event.relatedTarget instanceof Element)) { cancelClose(); return; }
+      scheduleClose();
+    }}
     onBlur={(event) => { if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node)) setOpen(false); }}>
     <button ref={triggerRef} type="button" className={`guide-trigger ${open ? 'guide-trigger--open' : ''}`}
       aria-expanded={open} aria-controls="manager-setup-guide"
