@@ -1,4 +1,3 @@
-import { SetupJourney } from '../components/SetupJourney';
 import { collectPages, allComponentsConnected } from '../utils/overview';
 import { useTranslation } from 'react-i18next';
 import { InstanceApi, SystemApi } from '../services/api';
@@ -32,7 +31,6 @@ export function OverviewPage() {
     <section className="card overview-environments"><div className="card-header"><h2>{tr('服务环境', 'Service environments')}</h2><button className="btn" onClick={() => navigate('/instances')}>{tr('管理集群实例', 'Manage cluster instances')} →</button></div>
       {instances.loading ? <p role="status" className="overview-empty">{tr('正在读取服务状态…', 'Loading service status…')}</p> : instances.data && !rows.length ? <div className="overview-empty"><h3>{tr('还没有接入服务实例', 'No service instances connected')}</h3><p>{tr('先准备能力资源，再接入环境并配置 Agent 使用范围。', 'Prepare resources, connect an environment and configure Agent access.')}</p><button className="btn primary" onClick={() => navigate('/configuration-wizard?from=cluster')}>{tr('新建集群', 'Create a cluster')} →</button></div> : instances.data && <div className="table-wrap"><table className="table"><thead><tr><th>{tr('名称', 'Name')}</th><th>Gateway</th><th>Runtime</th><th>User Web</th><th>{tr('操作', 'Actions')}</th></tr></thead><tbody>{[...attention, ...healthy].slice(0, 8).map(r => <tr key={r.jiuwenclaw_id}><td><b>{r.jiuwenclaw_name}</b><div className="text-muted text-xs">{r.namespace || '—'}</div></td><td><StatusBadge status={r.gateway_status} /></td><td><StatusBadge status={r.runtime_status} /></td><td><StatusBadge status={r.user_web_status} /></td><td><button className="btn ghost sm" onClick={() => navigate(`/instances/${r.jiuwenclaw_id}/status`)}>{tr('检查', 'Inspect')} →</button></td></tr>)}</tbody></table></div>}
     </section>
-    <SetupJourney />
     <WorkspaceNote title={tr('从资源准备到集群配置', 'From resource preparation to cluster setup')}>
       {tr('资源中心准备可复用定义，Agent模板管理负责组合能力，集群管理负责将准入、运行资源和 Agent 绑定到实际环境。', 'The resource catalog prepares reusable definitions, Agent management composes capabilities, and cluster management binds admission, runtime and Agents to a real environment.')}
     </WorkspaceNote>
