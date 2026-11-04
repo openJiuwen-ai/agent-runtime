@@ -598,6 +598,28 @@ mount_swarm_code() { # jiuwenswarm 仓库 → 镜像内代码根
   add_code_mount "$1" "swarm-code" "${DEPLOY_VARS["SWARM_CODE_PATH"]}" "${DEPLOY_VARS["SWARM_POD_CODE_PATH"]}"
 }
 
+# jiuwenbox sidecar 同挂 jiuwenswarm 仓库（dev 专用）：sandbox 镜像 editable 安装与
+# entrypoint 均走仓库原路径（Dockerfile.sandbox：JIUWENBOX_POLICY_PATH、
+# sandbox-entrypoint.sh，dev 模式依赖仓库挂载生效），生产镜像内置同路径副本不挂载；
+# 挂载策略对齐 deploy/jiuwenswarm-ee（sidecar 仅挂仓库，不挂 core/site-packages）
+mount_swarm_code_sidecar() { # $1=agentserver 清单（yaml 或 config_sync 载荷 json）
+  [ -n "${DEPLOY_VARS["SWARM_CODE_PATH"]:-}" ] || return 0
+  local file="$1" name="swarm-code" mount_path="${DEPLOY_VARS["SWARM_POD_CODE_PATH"]}"
+  case "$file" in
+    *.json)
+      yq -i -o=json '
+        (.rawdata.containers[] | select(.container_id == "c-jiuwenbox").volumeMounts)
+          |= ((. // []) + [{"name": "'"${name}"'", "mountPath": "'"${mount_path}"'"}])
+      ' "$file";;
+    *)
+      yq -i '
+        (select(.kind == "Deployment" or .kind == "StatefulSet").spec.template.spec.containers[]
+          | select(.name == "jiuwenbox").volumeMounts)
+          |= ((. // []) + [{"name": "'"${name}"'", "mountPath": "'"${mount_path}"'"}])
+      ' "$file";;
+  esac
+}
+
 mount_runtime_code() { # agent-runtime 仓库 → 镜像内代码根
   [ -n "${DEPLOY_VARS["RUNTIME_CODE_PATH"]:-}" ] || return 0
   add_code_mount "$1" "runtime-code" "${DEPLOY_VARS["RUNTIME_CODE_PATH"]}" "${DEPLOY_VARS["RUNTIME_POD_CODE_PATH"]}"
@@ -661,13 +683,13 @@ apply_dev_code_mounts() { # $@=本次渲染的清单文件名
   is_k8s_cluster || return 0
   [ "${CMD:-}" = "up" ] || return 0
   [ "${DEPLOY_VARS["MODE"]}" = "dev" ] || return 0
-  fetch_current_node_name
-  local f comp
+  local f comp node_fetched=""
   for f in "$@"; do
     comp="${f%.yaml}"; comp="${comp%.json}"   # agentserver.json（full 模式 runtime 建 Pod 的载荷）与 agentserver.yaml 同按 agentserver 处理
     case "$comp" in
       agentserver|gateway)
-        mount_swarm_code "$CONF_DIR/$f"; mount_runtime_pkg "$CONF_DIR/$f"; mount_core_pkg "$CONF_DIR/$f";;
+        mount_swarm_code "$CONF_DIR/$f"; mount_runtime_pkg "$CONF_DIR/$f"; mount_core_pkg "$CONF_DIR/$f"
+        [ "$comp" = agentserver ] && mount_swarm_code_sidecar "$CONF_DIR/$f";;
       web)
         [ "${DEPLOY_VARS["IS_MOUNT_WEB_CODE"]}" = "true" ] || continue
         mount_swarm_code "$CONF_DIR/$f"; mount_web_nginx_template "$CONF_DIR/$f";;
@@ -678,6 +700,8 @@ apply_dev_code_mounts() { # $@=本次渲染的清单文件名
         mount_runtime_code "$CONF_DIR/$f"; mount_manager_web_nginx_template "$CONF_DIR/$f";;
       *) continue;;   # mariadb/minio/redis/secret 等基础服务不挂代码
     esac
+    # 节点识别惰性执行：仅存在需挂载组件时才解析（纯基础服务渲染不依赖节点）
+    [ -n "$node_fetched" ] || { fetch_current_node_name; node_fetched=1; }
     # hostPath 是节点本地的，工作负载（Deployment/StatefulSet，如 agentserver）固定到代码所在节点
     # agentserver.json 走模板级 nodeName（config_sync 合法键，runtime 建 Pod 时透传）
     case "$f" in
@@ -705,9 +729,17 @@ resolve_dev_mode_vars() {
   [[ "$mode" =~ ^(product|dev)$ ]] || error "MODE 非法（product | dev）: $mode"
   [ "$mode" = "dev" ] || return 0
 
-  # --render-only 不做节点自动识别（nodeName 要写进清单），节点名必须显式给出
+  # --render-only 不做节点自动识别（nodeName 要写进清单）：仅当目标含需 dev 挂载的
+  # 组件（与 apply_dev_code_mounts 的挂载清单一致）时才要求显式节点名；
+  # redis/mariadb 等基础服务不挂代码、不固定节点，无节点名也应可单独渲染
   if [ "${DEPLOY_VARS["RENDER_ONLY"]}" = "true" ] && [ -z "${DEPLOY_VARS["CURRENT_NODE_NAME"]}" ]; then
-    error "MODE=dev + --render-only 需在 .env.custom 显式配置 CURRENT_NODE_NAME"
+    local comp
+    for comp in "${TARGETS[@]}"; do
+      case "$comp" in
+        agentserver|gateway|web|identity|manager-server|manager-web|runtime)
+          error "MODE=dev + --render-only 渲染含 dev 挂载组件（目标: ${TARGETS[*]}），需在 .env.custom 显式配置 CURRENT_NODE_NAME";;
+      esac
+    done
   fi
 
   [ -n "${DEPLOY_VARS["SWARM_CODE_PATH"]}" ] && require_abs_dir SWARM_CODE_PATH

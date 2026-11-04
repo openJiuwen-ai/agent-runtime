@@ -8,7 +8,7 @@ export const agentReferenceSlots: Record<string, string[]> = {
   model: ['default_model', 'video_model', 'audio_model', 'vision_model', 'image_gen_model'],
   embedding: ['embedding_model'], skill: ['skill_prebuilt'], mcp: ['mcp'],
   extension: ['extension_config'], permission: ['permissions'], 'a2a-policy': ['a2a_access_policy'],
-  'a2a-outbound': ['a2a_access_policy'],
+  'a2a-outbound': ['a2a_access_policy'], 'expert-package': ['expert_package'],
 };
 
 export function agentResourceReferencesPath(type: string, id: string, name: string): string {
@@ -26,6 +26,7 @@ export function agentResourceCatalogPath(type: string | null | undefined): strin
     permission: '/safety-guardrails',
     'a2a-policy': '/a2a-management?tab=policies',
     'a2a-outbound': '/a2a-management?tab=agents',
+    'expert-package': '/expert-package-templates',
   };
   return type && Object.prototype.hasOwnProperty.call(paths, type) ? paths[type] : null;
 }

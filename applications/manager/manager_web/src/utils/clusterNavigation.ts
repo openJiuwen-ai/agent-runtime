@@ -41,7 +41,7 @@ export function canonicalClusterSection(section: string | undefined, _workspaceE
 export function canonicalClusterPath(instanceId: string, section: string | undefined, context = new URLSearchParams(), workspaceEnabled = false): string {
   if (section === 'expert-packages') {
     const query = new URLSearchParams({ cluster: instanceId, returnTo: clusterPagePath(instanceId, 'agent-resources', context) });
-    return `/expert-packages?${query}`;
+    return `/expert-package-templates?${query}`;
   }
   const canonical = canonicalClusterSection(section, workspaceEnabled) || 'cluster-config';
   const [pathname, search = ''] = clusterPagePath(instanceId, canonical, context).split('?');

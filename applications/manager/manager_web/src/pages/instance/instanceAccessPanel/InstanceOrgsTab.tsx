@@ -6,6 +6,7 @@ import {
   InstanceBindingApi,
   InstanceGrant,
   LoginPolicy,
+  UploadSkillPolicy,
   Org,
   OrgApi,
 } from '../../../services/api';
@@ -326,6 +327,14 @@ export function InstanceOrgsTab({ instanceId }: Props) {
                     </div>
                   </th>
                   <th>
+                    <div className="th-filter">
+                      <span className="th-filter__label inline-flex items-center gap-1">
+                        {t(`${IA}.uploadSkillPolicy`)}
+                        <HintTooltip text={t(`${IA}.uploadSkillPolicyHint`)} />
+                      </span>
+                    </div>
+                  </th>
+                  <th>
                     <TableColumnSort
                       label={t(`${IA}.expiresAt`)}
                       value={sortBy === 'expires_at' ? sortOrder : ''}
@@ -373,7 +382,7 @@ export function InstanceOrgsTab({ instanceId }: Props) {
               <tbody>
                 {paged.length === 0 ? (
                   <tr>
-                    <td colSpan={8}>
+                    <td colSpan={9}>
                       <Empty text={t(`${IA}.noOrgs`)} />
                     </td>
                   </tr>
@@ -397,6 +406,16 @@ export function InstanceOrgsTab({ instanceId }: Props) {
                       }}
                       onChangeLoginPolicy={(login_policy) => {
                         InstanceBindingApi.updateOrgGrant(instanceId, o.group_id, { login_policy })
+                          .then(() => {
+                            toast('success', t('success.saved'));
+                            reloadBinding();
+                          })
+                          .catch((e) =>
+                            toast('danger', e instanceof ApiError ? e.detail : String(e)),
+                          );
+                      }}
+                      onChangeUploadPolicy={(upload_skill_policy) => {
+                        InstanceBindingApi.updateOrgGrant(instanceId, o.group_id, { upload_skill_policy })
                           .then(() => {
                             toast('success', t('success.saved'));
                             reloadBinding();
@@ -473,6 +492,7 @@ function OrgRow({
   onDelete,
   onToggleEnabled,
   onChangeLoginPolicy,
+  onChangeUploadPolicy,
 }: {
   org: BoundOrgRow;
   checked: boolean;
@@ -480,9 +500,13 @@ function OrgRow({
   onDelete: () => void;
   onToggleEnabled: (enabled: boolean) => void;
   onChangeLoginPolicy: (policy: LoginPolicy) => void;
+  onChangeUploadPolicy: (policy: UploadSkillPolicy) => void;
 }) {
   const { t } = useTranslation();
   const policy = (org.grant.login_policy === 'deny' ? 'deny' : 'allow') as LoginPolicy;
+  const uploadPolicy = (org.grant.upload_skill_policy === 'allow'
+    ? 'allow'
+    : 'deny') as UploadSkillPolicy;
   return (
     <tr>
       <td>
@@ -503,6 +527,17 @@ function OrgRow({
           value={policy}
           onChange={(e) => onChangeLoginPolicy(e.target.value === 'deny' ? 'deny' : 'allow')}
           aria-label={t(`${IA}.loginPolicy`)}
+        >
+          <option value="allow">{t(`${IA}.loginAllow`)}</option>
+          <option value="deny">{t(`${IA}.loginDeny`)}</option>
+        </select>
+      </td>
+      <td className="whitespace-nowrap">
+        <select
+          className="select sm !w-[5.75rem] !min-w-[5.75rem] !max-w-[5.75rem] !pl-1.5 !pr-8"
+          value={uploadPolicy}
+          onChange={(e) => onChangeUploadPolicy(e.target.value === 'allow' ? 'allow' : 'deny')}
+          aria-label={t(`${IA}.uploadSkillPolicy`)}
         >
           <option value="allow">{t(`${IA}.loginAllow`)}</option>
           <option value="deny">{t(`${IA}.loginDeny`)}</option>

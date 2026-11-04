@@ -37,12 +37,14 @@ from manager_server.models.template_models import (
     EXTENSION_CONFIG_TEMPLATE_TABLE_DEF,
     MCP_TEMPLATE_TABLE_DEF,
     MODEL_TEMPLATE_TABLE_DEF,
+    EXPERT_PACKAGE_TEMPLATE_TABLE_DEF,
     PERMISSIONS_TEMPLATE_TABLE_DEF,
     SKILL_PREBUILT_TEMPLATE_TABLE_DEF,
 )
 from manager_server.schemas.template_slot_schemas import (
     A2A_ACCESS_POLICY_SLOT,
     EMBEDDING_MODEL_SLOT,
+    EXPERT_PACKAGE_SLOT,
     EXTENSION_CONFIG_SLOT,
     MCP_SLOT,
     MODEL_TEMPLATE_SLOTS,
@@ -111,6 +113,11 @@ TEMPLATE_KIND_SPECS: dict[str, TemplateKindSpec] = {
         table_name=SKILL_PREBUILT_TEMPLATE_TABLE_DEF.table_name,
         slot_keys=frozenset({SKILL_PREBUILT_SLOT}),
     ),
+    "expert_package_templates": TemplateKindSpec(
+        config_section="expert_package_templates",
+        table_name=EXPERT_PACKAGE_TEMPLATE_TABLE_DEF.table_name,
+        slot_keys=frozenset({EXPERT_PACKAGE_SLOT}),
+    ),
     "permissions_templates": TemplateKindSpec(
         config_section="permissions_templates",
         table_name=PERMISSIONS_TEMPLATE_TABLE_DEF.table_name,
@@ -150,6 +157,7 @@ _TEMPLATE_HTTP_PATHS: dict[str, str] = {
     "embedding_templates": "/api/v1/embedding-templates",
     "extension_config_templates": "/api/v1/extension-config-templates",
     "skill_prebuilt_templates": "/api/v1/skill-prebuilt-templates",
+    "expert_package_templates": "/api/v1/expert-package-templates",
     "permissions_templates": "/api/v1/permissions-templates",
     "mcp_templates": "/api/v1/mcp-templates",
     AGENT_TEMPLATES_KIND: "/api/v1/agent-templates",
@@ -162,6 +170,7 @@ _ROW_TO_OUT_MODULES: dict[str, str] = {
     "model_templates": "manager_server.core.template.model_template",
     "embedding_templates": "manager_server.core.template.embedding_template",
     "skill_prebuilt_templates": "manager_server.core.template.skill_prebuilt_template",
+    "expert_package_templates": "manager_server.core.template.expert_package_template",
     "permissions_templates": "manager_server.core.template.permissions_template",
     "extension_config_templates": "manager_server.core.template.extension_config_template",
     "mcp_templates": "manager_server.core.template.mcp_template",

@@ -14,12 +14,14 @@ from manager_server.models.application_config_models import (
     LOG_MASKING_RULE_TABLE_DEF,
     LOGGING_CONFIG_TABLE_DEF,
     CRON_POLICY_TABLE_DEF,
-    PACKAGE_ALLOWLIST_TABLE_DEF,
 )
 from manager_server.models.approval_models import APPROVAL_TABLE_DEFINITIONS
 from manager_server.models.quota_models import QUOTA_TABLE_DEFINITIONS
 from manager_server.models.authz_models import AUTHZ_TABLE_DEFINITIONS
-from manager_server.models.instance_access_models import INSTANCE_ACCESS_TABLE_DEFINITIONS
+from manager_server.models.instance_access_models import (
+    INSTANCE_ACCESS_TABLE_DEFINITIONS,
+    INSTANCE_GRANT_TABLE_DEF,
+)
 from manager_server.models.instance_models import INSTANCE_INFO_TABLE_DEF
 from manager_server.models.instance_resource_models import INSTANCE_RESOURCE_TABLE_DEFINITIONS
 from manager_server.models.jid_template_ref_models import (
@@ -41,6 +43,7 @@ from manager_server.models.template_models import (
     MCP_TEMPLATE_TABLE_DEF,
     MODEL_TEMPLATE_TABLE_DEF,
     PERMISSIONS_TEMPLATE_TABLE_DEF,
+    EXPERT_PACKAGE_TEMPLATE_TABLE_DEF,
     SERVICE_CONFIG_CONTAINER_TABLE_DEF,
     SERVICE_CONFIG_TEMPLATE_TABLE_DEF,
     SKILL_PREBUILT_TEMPLATE_TABLE_DEF,
@@ -65,12 +68,12 @@ ALL_TABLE_DEFINITIONS = (
     EMBEDDING_TEMPLATE_TABLE_DEF,
     EXTENSION_CONFIG_TEMPLATE_TABLE_DEF,
     SKILL_PREBUILT_TEMPLATE_TABLE_DEF,
+    EXPERT_PACKAGE_TEMPLATE_TABLE_DEF,
     PERMISSIONS_TEMPLATE_TABLE_DEF,
     MCP_TEMPLATE_TABLE_DEF,
     SERVICE_CONFIG_CONTAINER_TABLE_DEF,
     SERVICE_CONFIG_TEMPLATE_TABLE_DEF,
     AGENT_TEMPLATE_TABLE_DEF,
-    PACKAGE_ALLOWLIST_TABLE_DEF,
     JID_TEMPLATE_REF_TABLE_DEF,
     *INSTANCE_ACCESS_TABLE_DEFINITIONS,
     *INSTANCE_RESOURCE_TABLE_DEFINITIONS,
@@ -192,12 +195,51 @@ async def _ensure_team_quota_org_column(handler: DBHandler) -> None:
         await connection.run_sync(upgrade)
 
 
+async def _ensure_instance_grant_upload_skill_policy(handler: DBHandler) -> None:
+    """存量 manager 库的 instance_grant 还没有上传资格列。"""
+    if not isinstance(handler, SQLAlchemyHandler):
+        return
+
+    def migrate(sync_connection) -> None:
+        table_name = INSTANCE_GRANT_TABLE_DEF.table_name
+        inspector = inspect(sync_connection)
+        if not inspector.has_table(table_name):
+            return
+        columns = {item["name"] for item in inspector.get_columns(table_name)}
+        if "upload_skill_policy" in columns:
+            return
+        quote = sync_connection.dialect.identifier_preparer.quote
+        sync_connection.execute(
+            text(
+                f"ALTER TABLE {quote(table_name)} ADD COLUMN "
+                f"{quote('upload_skill_policy')} VARCHAR(8) NOT NULL DEFAULT 'deny'"
+            )
+        )
+
+    # 并发实例可能已补列；失败事务先回滚再重试。
+    for attempt in range(3):
+        try:
+            async with handler.get_engine().begin() as connection:
+                await connection.run_sync(migrate)
+            return
+        except DBAPIError as exc:
+            dialect = handler.get_engine().dialect.name
+            sqlstate = getattr(exc.orig, "sqlstate", None) or getattr(exc.orig, "pgcode", None)
+            errno = exc.orig.args[0] if exc.orig.args else None
+            column_race = (
+                dialect == "postgresql" and sqlstate in {"42701", "42703"}
+            ) or (dialect == "mysql" and errno in {1060, 1091})
+            if not column_race or attempt == 2:
+                raise
+
+
 async def init_all_tables(handler: DBHandler) -> None:
     _ensure_bigint_type_support()
     for table_def in ALL_TABLE_DEFINITIONS:
         await handler.init_table(table_def)
     await _ensure_team_quota_org_column(handler)
     await _migrate_a2a_discovery_settings(handler)
+    await _ensure_instance_grant_upload_skill_policy(handler)
     from manager_server.core.authz import seed_authz_defaults
 
     await seed_authz_defaults(handler)

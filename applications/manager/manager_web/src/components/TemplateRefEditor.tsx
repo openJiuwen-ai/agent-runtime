@@ -24,6 +24,7 @@ const SLOT_CONFIG_PATH: Record<string, string> = {
   image_gen_model: '/model-templates',
   embedding_model: '/embedding-templates',
   skill_prebuilt: '/skill-prebuilt-templates',
+  expert_package: '/expert-package-templates',
   extension_config: '/extension-config-templates',
   mcp: '/mcp-templates',
   permissions: '/safety-guardrails',
@@ -39,6 +40,7 @@ const SLOT_HINT_PAGE_KEY: Record<string, string> = {
   image_gen_model: 'modelTemplate.title',
   embedding_model: 'embeddingTemplate.title',
   skill_prebuilt: 'skillWhitelistTemplate.title',
+  expert_package: 'expertPackageTemplate.title',
   extension_config: 'extensionTemplate.title',
   mcp: 'mcpTemplate.title',
   permissions: 'safetyGuardrails.title',
@@ -74,7 +76,6 @@ interface TemplateRefEditorProps {
   value: TemplateRefMap;
   onChange: (value: TemplateRefMap) => void;
 }
-
 
 function extractTemplateIds(refs: string[] | undefined): string[] {
   if (!refs?.length) return [];
@@ -353,6 +354,7 @@ export function TemplateRefEditor({
     mcp: tr('连接 Agent 可调用的 MCP 工具服务，可选择多个。', 'Connect one or more MCP tool services for this Agent.'),
     permissions: tr('设置 Agent 调用工具时遵循的安全策略。', 'Set the safety policy for Agent tool calls.'),
     a2a_access_policy: tr('限制此 Agent 可访问的外部 Agent 范围。', 'Limit the external Agents this Agent can access.'),
+    expert_package: tr('选择随 Agent 一起发布的专家与专家团组合。', 'Choose the experts and groups published with this Agent.'),
   };
   const renderSlot = (slot: TemplateRefEditorSlot) => {
     const options = templateOptions[slot] ?? [];

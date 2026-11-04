@@ -2,7 +2,7 @@ import { resourceCatalog } from '../config/resources';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../auth/AuthContext';
 import { useRouter } from '../router';
-import { hasPermission, isPlatformAdmin, isWorkspaceQuotaEnabled } from '../services/api';
+import { hasPermission, isPlatformAdmin, isApprovalEnabled } from '../services/api';
 
 export function Sidebar() {
   const { t, i18n } = useTranslation();
@@ -27,7 +27,7 @@ export function Sidebar() {
       ...((admin || hasPermission(user, 'iam:role:read')) ? [['/roles', label('角色', 'Roles')]] : []),
     ], show: admin || hasPermission(user, 'iam:role:read') },
     { name: label('运营', 'Operations'), items: [['/approvals', label('审批中心', 'Approvals')]],
-      show: isWorkspaceQuotaEnabled(user) && (admin || hasPermission(user, 'approval:read')) },
+      show: isApprovalEnabled(user) && (admin || hasPermission(user, 'approval:read')) },
   ];
   return <aside className="nav manager-nav" aria-label={label('主导航', 'Main navigation')}>
     {groups.filter(g => g.show).map(group => <section key={group.name} className="manager-nav-group">

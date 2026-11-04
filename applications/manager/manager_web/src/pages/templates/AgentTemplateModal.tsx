@@ -3,9 +3,6 @@ import { useTranslation } from 'react-i18next';
 import { ConfigRefreshCostHint } from '../../components/ConfigRefreshCostHint';
 import { Modal, ModalCancelButton } from '../../components/Modal';
 import { TemplateRefEditor } from '../../components/TemplateRefEditor';
-import { AgentExpertBindingsPreview } from '../../components/AgentExpertBindingsPreview';
-import { useAuth } from '../../auth/AuthContext';
-import { readAgentExpertDraft, writeAgentExpertDraft, type AgentExpertSelection } from '../../utils/agentExpertDraft';
 import { LimitedTextInput } from '../../components/LimitedTextInput';
 import { JsonField } from '../../components/JsonField';
 import { useFormDirty } from '../../hooks/useFormDirty';
@@ -86,10 +83,7 @@ function parseCustomConfig(text: string): {
 }
 
 export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) {
-  const { t, i18n } = useTranslation();
-  const { user } = useAuth();
-  const [expertPreview, setExpertPreview] = useState<AgentExpertSelection[]>([]);
-  const expertBaseline = useRef('[]');
+  const { t } = useTranslation();
   const { markClean, isDirty } = useFormDirty(open);
   const [form, setForm] = useState<FormState>(empty);
   const [saving, setSaving] = useState(false);
@@ -113,10 +107,6 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
       : empty;
     setForm(next);
     markClean(next);
-    let preview: AgentExpertSelection[] = [];
-    try { if (template) preview = readAgentExpertDraft(window.localStorage, user?.user_id || '', template.template_id); } catch { /* Storage may be disabled. */ }
-    setExpertPreview(preview);
-    expertBaseline.current = JSON.stringify(preview);
     registrationId.current = '';
     registration.current = null;
     setShowSecrets(false);
@@ -126,7 +116,7 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
       if (active) setRegistrationConfig({ ...value, reason: value.reason ?? '' });
     }).catch(() => undefined);
     return () => { active = false; };
-  }, [open, template, markClean, user?.user_id]);
+  }, [open, template, markClean]);
 
   const update = <K extends keyof FormState>(k: K, v: FormState[K]) =>
     setForm((s) => ({ ...s, [k]: v }));
@@ -135,19 +125,6 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
   const credentialsExist = hasAgentCredentials(customConfig.value);
   const containsSecret = customConfig.value.some((entry) => typeof entry.client_secret === 'string' && entry.client_secret);
   const hideSecrets = containsSecret && !showSecrets;
-  const saveExpertPreview = () => {
-    if (!template || saving || registering || closing) return;
-    let saved = false;
-    try { saved = writeAgentExpertDraft(window.localStorage, user?.user_id || '', template.template_id, expertPreview); } catch { /* Storage may be disabled. */ }
-    if (saved) {
-      expertBaseline.current = JSON.stringify(expertPreview);
-      setExpertPreview(current => [...current]);
-    }
-    toast(saved ? 'success' : 'warn', i18n.language.startsWith('zh')
-      ? saved ? '专家绑定预览已保存在本浏览器，尚未下发。' : '本浏览器无法保存专家绑定预览，请保留当前页面。'
-      : saved ? 'Expert binding preview saved in this browser; not deployed.' : 'Cannot save the preview in this browser. Keep this page open.');
-  };
-
   const registerClient = async () => {
     if (registering || customConfig.error || credentialsExist) return;
     setRegistering(true);
@@ -228,13 +205,6 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
       const saved = template
         ? await AgentTemplateApi.update(template.template_id, body)
         : await AgentTemplateApi.create(body);
-      // Preview is intentionally separate from the API payload until the backend
-      // defines template-level expert references and their runtime semantics.
-      if (expertPreview.length || expertBaseline.current !== '[]') {
-        let previewSaved = false;
-        try { previewSaved = writeAgentExpertDraft(window.localStorage, user?.user_id || '', saved.template_id, expertPreview); } catch { /* Report unavailable storage below. */ }
-        if (!previewSaved) toast('warn', i18n.language.startsWith('zh') ? 'Agent 模板已保存，但本浏览器无法保存专家绑定预览。' : 'Agent template saved, but the browser could not save the expert binding preview.');
-      }
       toast('success', t('success.saved'));
       if (registration.current && !customConfig.value.some((item) => item.client_id === registration.current?.client_id)) {
         await AgentClientRegistrationApi.cancel(registration.current.registration_id).catch(() => {
@@ -257,7 +227,7 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
       open={open}
       title={template ? t('agentTemplate.edit') : t('agentTemplate.new')}
       onClose={() => void close()}
-      dirty={isDirty(form) || JSON.stringify(expertPreview) !== expertBaseline.current}
+      dirty={isDirty(form)}
       size="lg"
       footer={
         <>
@@ -293,13 +263,10 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
             requiredSlots={['default_model']}
             value={form.template_ref}
             onChange={(v) => update('template_ref', v)}
-            optionalSelectedCount={(expertPreview.length ? 1 : 0) + (customConfig.value.length ? 1 : 0)}
+            optionalSelectedCount={customConfig.value.length ? 1 : 0}
             expandOptional={!!customConfig.error}
             optionalContent={(
               <>
-                <AgentExpertBindingsPreview value={expertPreview} onChange={setExpertPreview} disabled={saving || registering || closing}
-                  returnTo={template ? `/agent-templates/${encodeURIComponent(template.template_id)}` : '/agent-templates'}
-                  onSavePreview={template ? saveExpertPreview : undefined} />
                 <details className="agent-capability-card agent-template-custom-config" data-testid="agent-template-custom-config" open={customConfig.error ? true : undefined}>
                   <summary className="cursor-pointer text-sm font-medium mb-3">{t('agentTemplate.customConfig')}</summary>
                   <JsonField

@@ -97,40 +97,6 @@
     "todo": "To-do",
     "todoWithCount": "To-do, {{count}} pending"
   },
-  "expertPackages": {
-    "title": "Experts & packages",
-    "subtitle": "Publish experts and expert teams per cluster. Packages and scopes stay on this page, and saving replaces the whole snapshot.",
-    "add": "Add",
-    "addTemplate": "Add expert",
-    "addGroup": "Add expert team",
-    "edit": "Edit grant",
-    "kind": "Kind",
-    "kindTemplate": "Expert",
-    "kindGroup": "Expert team",
-    "packageId": "Package ID",
-    "pickPackage": "Choose from the Hub catalog",
-    "catalogError": "Hub catalog is unavailable: {{message}}",
-    "catalogKindEmpty": "This kind has no Hub package to choose",
-    "selectAll": "Select all",
-    "alreadyAdded": "Already added",
-    "scopeHint": "Leave empty for every admitted user on this cluster. For a trial, name only those users or their organization.",
-    "scopeUsers": "Users: {{names}}",
-    "scopeOrgs": "Organizations: {{names}}",
-    "scopeExcludeUsers": "Except users: {{names}}",
-    "scopeExcludeOrgs": "Except organizations: {{names}}",
-    "scopeOr": ", or ",
-    "scopeAnd": ", and ",
-    "scopeNameSep": ", ",
-    "scopeGroupOpen": "(",
-    "scopeGroupClose": ")",
-    "selectCluster": "Cluster",
-    "noClusters": "No clusters yet",
-    "goToClusters": "Go to Cluster Management",
-    "emptyTemplate": "This cluster has no controlled experts",
-    "emptyGroup": "This cluster has no controlled expert teams",
-    "deleteConfirm": "Remove {{kind}} \"{{name}}\" from this cluster?",
-    "duplicate": "This package is already on the cluster"
-  },
   "guide": {
     "gotoPageLink": "Go to {{page}}",
     "missingItem": "{{item}} not configured",
@@ -315,6 +281,8 @@
         "grantedBy": "Granted By",
         "loginPolicy": "Login Permission",
         "loginPolicyHint": "Deny takes priority over allow",
+        "uploadSkillPolicy": "Skill Upload Permission",
+        "uploadSkillPolicyHint": "Allows this user/org to upload Skill packages; independent of login permission",
         "loginAllow": "Allow",
         "loginDeny": "Deny",
         "expiresAt": "Expires At",
@@ -756,6 +724,30 @@
     "unsafeText": "{{field}} contains illegal HTML/script or suspected SQL injection content",
     "deleteConfirm": "Delete this extension template?"
   },
+  "expertPackageTemplate": {
+    "title": "Experts & packages",
+    "subtitle": "Group experts and expert teams into a template, bind it to an Agent, and publish it with the Agent",
+    "new": "New expert package",
+    "edit": "Edit expert package",
+    "templateName": "Template name",
+    "templateDescription": "Description",
+    "hubPackage": "Hub package",
+    "kind": {
+      "agent_template": "Expert",
+      "agent_group": "Expert team"
+    },
+    "catalogEmpty": "Hub has no packages to choose",
+    "pickRequired": "Select at least one Hub package",
+    "selectedCount": "{{count}} selected",
+    "packageSummaryLabel": "Contents",
+    "packageSummary": "{{experts}} experts · {{groups}} expert teams",
+    "updatedAt": "Updated",
+    "searchPlaceholder": "Search name, description, or Hub id",
+    "referenceCount": "References",
+    "referenceHint": "Open the Agent templates that reference this template",
+    "fieldRequired": "Fill in {{field}}",
+    "deleteConfirm": "Delete this expert package template? It cannot be deleted while an Agent template references it."
+  },
   "skillWhitelistTemplate": {
     "title": "Prebuilt skill sources",
     "subtitle": "Add skills for your use case.",
@@ -943,7 +935,8 @@
         "extension_config": "Extension config",
         "mcp": "MCP config",
         "permissions": "Safety guardrails",
-        "a2a_access_policy": "A2A access policy"
+        "a2a_access_policy": "A2A access policy",
+        "expert_package": "Experts & packages"
       },
       "none": "None",
       "noOptions": "No templates available"
@@ -1331,7 +1324,8 @@
     "businessType": "Approval Type",
     "subjectTitle": "Title",
     "types": {
-      "workspace_quota_expand": "Quota Approval"
+      "workspace_quota_expand": "Quota Approval",
+      "skill_upload_permission": "Skill Upload Permission"
     },
     "orderNum": "Order Number",
     "applicant": "Applicant",
@@ -1341,6 +1335,9 @@
     "group": "Organization",
     "bot": "Bot",
     "workspace": "Workspace",
+    "skillUploadUser": "Granted user",
+    "skillUploadGrant": "Granted upload permission",
+    "skillUploadGrantCreated": "Personal grant row created",
     "createdAt": "Submitted At",
     "noOrg": "No organization",
     "noApprover": "No approver",

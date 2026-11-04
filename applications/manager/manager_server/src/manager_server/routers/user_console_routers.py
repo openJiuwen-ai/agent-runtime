@@ -21,6 +21,7 @@ from openjiuwen_runtime.foundation.db.handler import DBHandler
 from pydantic import BaseModel, Field
 
 from manager_server.core.approval import ApprovalService
+from manager_server.core.skill_upload import SKILL_UPLOAD_PERMISSION, resolve_upload_permission
 from manager_server.core.user_console import UserConsoleService
 from manager_server.core.user_console.user_face_upstream import (
     JIUWENCLAW_ID_COOKIE,
@@ -31,8 +32,10 @@ from manager_server.infrastructure.db import get_db_handler
 from manager_server.routers.auth_guards import get_current_user
 from manager_server.schemas.approval_schemas import UserConsoleExpandSubmitBody
 from manager_server.schemas.common_schemas import ResponseModel
+from manager_server.schemas.skill_upload_schemas import SkillUploadPermissionSubmitBody
 
 WORKSPACE_QUOTA_FEATURE_DISABLED = "WORKSPACE_QUOTA_FEATURE_DISABLED"
+SKILL_UPLOAD_FEATURE_DISABLED = "SKILL_UPLOAD_FEATURE_DISABLED"
 
 _Handler = Annotated[DBHandler, Depends(get_db_handler)]
 _CurUser = Annotated[Any, Depends(get_current_user)]
@@ -195,6 +198,88 @@ async def submit_workspace_expand(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return _ok(result)
+
+
+@user_console_router.get(
+    "/skills/upload-permission",
+    response_model=ResponseModel,
+)
+async def get_skill_upload_permission(
+    handler: _Handler,
+    user: _CurUser,
+    jiuwenclaw_id: Annotated[str | None, Query(max_length=64)] = None,
+    active_cluster: Annotated[str | None, Cookie(alias=JIUWENCLAW_ID_COOKIE)] = None,
+):
+    """查询当前用户在本实例的 Skill 上传资格与最近申请状态。
+
+    实例标识优先取 query（前端上下文）；缺省时取用户面动态反代 Cookie。
+    ``allowed`` 只由授权行推导，不回落审批单状态。
+    """
+    if not settings.skill_upload_approval_enabled:
+        raise HTTPException(status_code=403, detail=SKILL_UPLOAD_FEATURE_DISABLED)
+    jid = str(jiuwenclaw_id or active_cluster or "").strip()
+    if not jid:
+        raise HTTPException(status_code=400, detail="jiuwenclaw_id is required")
+    uid = _user_id(user)
+    groups = list(getattr(user, "groups", []) or [])
+    admitted = await UserConsoleService(handler).user_can_access_instance(uid, jid, groups)
+    if not admitted:
+        raise HTTPException(status_code=403, detail="instance not admitted")
+    permission, latest = await resolve_upload_permission(
+        handler, cluster_id=jid, user_id=uid, groups=groups
+    )
+    data: dict[str, Any] = {
+        "jiuwenclaw_id": jid,
+        "allowed": bool(permission.get("allowed")),
+        "source": permission.get("source") or "none",
+        "application_status": None,
+        "order_num": None,
+        "reject_comment": None,
+        "checked_at": permission.get("checked_at"),
+    }
+    if latest is not None:
+        data["application_status"] = latest.get("status")
+        data["order_num"] = latest.get("order_num")
+        data["reject_comment"] = latest.get("reject_comment") or None
+    return _ok(data)
+
+
+@user_console_router.post(
+    "/skills/upload-permission-requests",
+    response_model=ResponseModel,
+)
+async def submit_skill_upload_permission_request(
+    body: SkillUploadPermissionSubmitBody,
+    handler: _Handler,
+    user: _CurUser,
+    authorization: Annotated[str | None, Header()] = None,
+):
+    """提交上传资格申请：校验上下文准入后建单，待管理面审批。"""
+    if not settings.skill_upload_approval_enabled:
+        raise HTTPException(status_code=403, detail=SKILL_UPLOAD_FEATURE_DISABLED)
+    uid = _user_id(user)
+    admitted = await UserConsoleService(handler).user_can_access_context(
+        uid,
+        jiuwenclaw_id=body.jiuwenclaw_id,
+        group_id=body.group_id,
+        bot_id=body.bot_id,
+        groups=list(getattr(user, "groups", []) or []),
+        authorization=authorization,
+    )
+    if not admitted:
+        raise HTTPException(status_code=403, detail="context not admitted")
+    try:
+        result = await ApprovalService(handler).submit_skill_upload_permission(
+            applicant_id=uid,
+            group_id=body.group_id,
+            bot_id=body.bot_id,
+            cluster_id=body.jiuwenclaw_id,
+            reason=body.reason,
+            approver_id=body.approver_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _ok({**result, "business_type": SKILL_UPLOAD_PERMISSION})
 
 
 @user_console_router.get(

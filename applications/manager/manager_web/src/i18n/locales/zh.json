@@ -97,40 +97,6 @@
     "todo": "待办",
     "todoWithCount": "待办，{{count}} 条"
   },
-  "expertPackages": {
-    "title": "专家与专家包",
-    "subtitle": "按集群发布专家和专家团。同一页维护包和授权范围，保存后整份替换并下发。",
-    "add": "添加",
-    "addTemplate": "添加专家",
-    "addGroup": "添加专家团",
-    "edit": "编辑授权",
-    "kind": "种类",
-    "kindTemplate": "专家",
-    "kindGroup": "专家团",
-    "packageId": "包 ID",
-    "pickPackage": "从 Hub 目录选择",
-    "catalogError": "Hub 目录暂时不可用：{{message}}",
-    "catalogKindEmpty": "该种类没有可选择的 Hub 包",
-    "selectAll": "全选",
-    "alreadyAdded": "已添加",
-    "scopeHint": "留空表示该集群已准入用户都能用。验证时只填那几位用户或他们所在的组织。",
-    "scopeUsers": "用户：{{names}}",
-    "scopeOrgs": "组织：{{names}}",
-    "scopeExcludeUsers": "排除用户：{{names}}",
-    "scopeExcludeOrgs": "排除组织：{{names}}",
-    "scopeOr": "，或 ",
-    "scopeAnd": "，且 ",
-    "scopeNameSep": "、",
-    "scopeGroupOpen": "（",
-    "scopeGroupClose": "）",
-    "selectCluster": "集群",
-    "noClusters": "还没有集群",
-    "goToClusters": "前往集群管理",
-    "emptyTemplate": "该集群还没有受控专家",
-    "emptyGroup": "该集群还没有受控专家团",
-    "deleteConfirm": "从该集群移除{{kind}}「{{name}}」？",
-    "duplicate": "该集群已经有这个包"
-  },
   "guide": {
     "gotoPageLink": "前往 {{page}} 页面",
     "missingItem": "未配置 {{item}}",
@@ -315,6 +281,8 @@
         "grantedBy": "授权人",
         "loginPolicy": "登录权限",
         "loginPolicyHint": "拒绝优先级高于允许",
+        "uploadSkillPolicy": "Skill 上传权限",
+        "uploadSkillPolicyHint": "允许后该用户/组织可上传 Skill 包；与登录权限互不影响",
         "loginAllow": "允许",
         "loginDeny": "拒绝",
         "expiresAt": "过期时间",
@@ -756,6 +724,30 @@
     "unsafeText": "{{field}} 含有非法 HTML/脚本或疑似 SQL 注入内容，请修改后重试",
     "deleteConfirm": "确认删除该扩展模板？"
   },
+  "expertPackageTemplate": {
+    "title": "专家与专家包",
+    "subtitle": "将专家和专家团组合成模板，在 Agent 模板中绑定并随 Agent 发布到集群",
+    "new": "新建专家包",
+    "edit": "编辑专家包",
+    "templateName": "模板名称",
+    "templateDescription": "模板描述",
+    "hubPackage": "Hub 包",
+    "kind": {
+      "agent_template": "专家",
+      "agent_group": "专家团"
+    },
+    "catalogEmpty": "Hub 暂时没有可选项",
+    "pickRequired": "请至少选择一个 Hub 包",
+    "selectedCount": "已选 {{count}} 个",
+    "packageSummaryLabel": "包含",
+    "packageSummary": "专家 {{experts}} 个 · 专家团 {{groups}} 个",
+    "updatedAt": "更新时间",
+    "searchPlaceholder": "搜索模板名称、描述、Hub 标识",
+    "referenceCount": "被引用",
+    "referenceHint": "点击查看引用了该模板的 Agent 模板",
+    "fieldRequired": "请填写{{field}}",
+    "deleteConfirm": "确认删除该专家包模板？被 Agent 模板引用时不能删除。"
+  },
   "skillWhitelistTemplate": {
     "title": "预置技能源",
     "subtitle": "管理创建 Agent 时可添加的预置技能源",
@@ -943,7 +935,8 @@
         "extension_config": "扩展配置",
         "mcp": "MCP配置",
         "permissions": "安全护栏",
-        "a2a_access_policy": "A2A 访问策略"
+        "a2a_access_policy": "A2A 访问策略",
+        "expert_package": "专家与专家包"
       },
       "none": "不选择",
       "noOptions": "暂无可选模板"
@@ -1264,7 +1257,6 @@
     "bannerText": "角色把权限点组合成可复用的管理职责。先在这里定义角色和权限，再将角色指派给用户；集群准入仍在集群配置工作台中完成。",
     "directory": "角色目录",
     "directoryHint": "查看角色类型、权限范围和用户指派",
-    "directoryHint": "查看角色类型、权限范围和用户指派",
     "total": "角色总数",
     "enabled": "当前页启用",
     "assigneesSummary": "已指派用户",
@@ -1333,7 +1325,8 @@
     "businessType": "审批类型",
     "subjectTitle": "标题",
     "types": {
-      "workspace_quota_expand": "配额审批"
+      "workspace_quota_expand": "配额审批",
+      "skill_upload_permission": "Skill 上传授权"
     },
     "orderNum": "审批单号",
     "applicant": "申请人",
@@ -1343,6 +1336,9 @@
     "group": "组织",
     "bot": "Bot",
     "workspace": "工作区",
+    "skillUploadUser": "获授权用户",
+    "skillUploadGrant": "授予的上传权限",
+    "skillUploadGrantCreated": "已新建个人准入行",
     "createdAt": "申请时间",
     "noOrg": "无组织",
     "noApprover": "无审批人",

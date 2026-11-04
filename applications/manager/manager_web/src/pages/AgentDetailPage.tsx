@@ -10,7 +10,6 @@ import { AgentTemplateModal } from './templates/AgentTemplateModal';
 import { bindingExpiry } from '../utils/agentDraft';
 import { formatTime } from '../utils/format';
 import { WorkspaceNote } from '../components/WorkspaceNote';
-import { AgentExpertPreviewSummary } from '../components/AgentExpertBindingsPreview';
 
 export function AgentDetailPage({ id }: { id: string }) {
   const { t, i18n } = useTranslation();
@@ -47,7 +46,6 @@ export function AgentDetailPage({ id }: { id: string }) {
       {references.data?.length === 0 && <p className="overview-empty">{tr('没有配置资源引用', 'No resource references configured')}</p>}
       <div className="agent-reference-list">{references.data?.map((row, index) => <div className="agent-reference" key={`${row.slot}-${row.id}-${index}`}><div><span className="text-muted text-xs">{t(`policies.templateRef.slots.${row.slot}`, { defaultValue: row.slot })}</span><h3>{row.name}</h3>{row.error && <p className="text-danger text-sm" role="alert">{tr('资源读取失败：', 'Resource could not be loaded: ')}{row.error}</p>}</div><span className="tag">{row.dynamic ? tr('运行时解析', 'Resolved at runtime') : row.error ? tr('待检查', 'Inspect') : row.enabled ? tr('已启用', 'Enabled') : tr('已停用', 'Disabled')}</span>{row.path && <a className="btn sm" href={`/manager${row.path}`} target="_blank" rel="noopener noreferrer">{tr('打开资源目录', 'Open catalog')} ↗</a>}</div>)}</div>
     </section>
-    <AgentExpertPreviewSummary templateId={id} />
     <section className="card"><div className="card-header"><h2>{tr('集群绑定与使用范围', 'Instance bindings & access')}</h2></div><p className="text-muted text-sm">{tr('以下为已保存的绑定。实例准入和运行规格需要分别检查。', 'Saved bindings are shown below. Check admission and runtime profiles separately.')}</p>
       {bindings.loading && <p role="status">{tr('正在检查实例绑定…', 'Checking instance bindings…')}</p>}
       {bindings.error && <p role="alert" className="text-danger">{bindings.error}</p>}

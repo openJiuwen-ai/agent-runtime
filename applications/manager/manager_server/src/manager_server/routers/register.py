@@ -4,7 +4,7 @@ import os
 
 from fastapi import APIRouter, Depends, FastAPI
 
-from .application_config_routers import application_config_router
+from .application_config_routers import application_config_router, package_catalog_router
 from .agent_client_registration_routers import registration_router
 from .approval_routers import approval_router
 from .auth_guards import get_current_user, require_admin
@@ -46,6 +46,7 @@ def _build_api_router() -> APIRouter:
         prefix=INSTANCES_PREFIX,
         tags=["Application Config"],
     )
+    admin_router.include_router(package_catalog_router, tags=["Application Config"])
     v1_router.include_router(
         quota_router,
         prefix=INSTANCES_PREFIX,

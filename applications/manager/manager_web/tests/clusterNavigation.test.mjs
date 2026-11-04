@@ -59,7 +59,7 @@ try {
   test('legacy expert bookmarks open the resource center with cluster and safe return context',()=>{
     const context = new URLSearchParams({template:'agent/a',returnTo:'/agent-templates?search=one',setup:'1',create:'1'});
     const url = new URL(canonicalClusterPath('cluster/a', 'expert-packages', context), 'http://localhost');
-    assert.equal(url.pathname, '/expert-packages');
+    assert.equal(url.pathname, '/expert-package-templates');
     assert.equal(url.searchParams.get('cluster'), 'cluster/a');
     assert.equal(url.searchParams.get('returnTo'), clusterPagePath('cluster/a', 'agent-resources', context));
     assert.equal(url.searchParams.has('create'), false);

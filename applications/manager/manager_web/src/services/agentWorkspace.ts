@@ -1,5 +1,5 @@
 import {
-  A2AAccessPolicyTemplateApi, EmbeddingTemplateApi, ExtensionTemplateApi,
+  A2AAccessPolicyTemplateApi, AgentTemplateApi, EmbeddingTemplateApi, ExtensionTemplateApi, ExpertPackageTemplateApi,
   InstanceAgentResourceApi, InstanceApi, McpTemplateApi, ModelTemplateApi,
   PermissionsTemplateApi, SkillPrebuiltTemplateApi, type AgentTemplate,
 } from './api';
@@ -10,6 +10,7 @@ const catalogs: Record<string, { get: (id: string) => Promise<{ template_name: s
   ...Object.fromEntries(['default_model', 'video_model', 'audio_model', 'vision_model', 'image_gen_model'].map(slot => [slot, { get: id => ModelTemplateApi.get(id), path: '/model-templates' }])),
   embedding_model: { get: id => EmbeddingTemplateApi.get(id), path: '/embedding-templates' },
   skill_prebuilt: { get: id => SkillPrebuiltTemplateApi.get(id), path: '/skill-prebuilt-templates' },
+  expert_package: { get: id => ExpertPackageTemplateApi.get(id), path: '/expert-package-templates' },
   extension_config: { get: id => ExtensionTemplateApi.get(id), path: '/extension-config-templates' },
   mcp: { get: id => McpTemplateApi.get(id), path: '/mcp-templates' },
   permissions: { get: id => PermissionsTemplateApi.get(id), path: '/safety-guardrails' },
@@ -54,4 +55,10 @@ export async function loadAgentBindings(templateId: string) {
     }
   }
   return results;
+}
+
+/** Show the saved package reference carried by an Agent binding, never browser-local preview data. */
+export async function loadAgentExpertPackages(templateId: string) {
+  const agent = await AgentTemplateApi.get(templateId);
+  return loadAgentReferences({ ...agent, template_ref: { expert_package: agent.template_ref?.expert_package ?? [] } });
 }

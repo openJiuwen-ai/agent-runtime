@@ -11,7 +11,7 @@ try {
   const { loadAgentTemplateCatalog, referencesResource } = await server.ssrLoadModule('/src/services/agentTemplateCatalog.ts');
   const { canonicalAgentPath, agentResourceReferencesPath, agentResourceCatalogPath } = await server.ssrLoadModule('/src/utils/agentTemplateNavigation.ts');
   await test('resource links round-trip safely to their corresponding catalogs and A2A tabs', () => {
-    for (const [type, path] of Object.entries({ model: '/model-templates', embedding: '/embedding-templates', skill: '/skill-prebuilt-templates', mcp: '/mcp-templates', extension: '/extension-config-templates', permission: '/safety-guardrails', 'a2a-policy': '/a2a-management?tab=policies', 'a2a-outbound': '/a2a-management?tab=agents' })) {
+    for (const [type, path] of Object.entries({ model: '/model-templates', embedding: '/embedding-templates', skill: '/skill-prebuilt-templates', mcp: '/mcp-templates', extension: '/extension-config-templates', permission: '/safety-guardrails', 'a2a-policy': '/a2a-management?tab=policies', 'a2a-outbound': '/a2a-management?tab=agents', 'expert-package': '/expert-package-templates' })) {
       assert.equal(agentResourceCatalogPath(type), path);
       const url = new URL(agentResourceReferencesPath(type, 'resource / & 1', '名称 & 1'), 'http://localhost');
       assert.equal(url.pathname, '/agent-templates');
@@ -34,13 +34,15 @@ try {
     assert.equal(new URL(url, 'http://localhost').searchParams.get('returnTo'), '/agent-templates?search=a&status=enabled');
   });
   await test('resource filter matches precise references in all model slots and fallback chains', () => {
-    const agent = { template_ref: { vision_model: ['${user::same-id} or model-2'], mcp: ['same-id'], a2a_access_policy: ['policy-a'] } };
+    const agent = { template_ref: { vision_model: ['${user::same-id} or model-2'], mcp: ['same-id'], a2a_access_policy: ['policy-a'], expert_package: ['expert-1'] } };
     assert.equal(referencesResource(agent, 'model', 'model-2'), true);
     assert.equal(referencesResource(agent, 'model', 'same-id'), false);
     assert.equal(referencesResource(agent, 'mcp', 'same-id'), true);
     assert.equal(referencesResource(agent, 'mcp', 'same'), false);
     assert.equal(referencesResource(agent, 'a2a-policy', 'policy-a'), true);
     assert.equal(referencesResource(agent, '__proto__', 'policy-a'), false);
+    assert.equal(referencesResource(agent, 'expert-package', 'expert-1'), true);
+    assert.equal(referencesResource(agent, 'expert-package', 'expert'), false);
   });
   await test('resource filtering reads every server page before slicing and does not hide errors', async () => {
     const calls = [];
@@ -58,15 +60,23 @@ try {
   });
   await test('template editor loads all resource pages and surfaces failed loads', async () => {
     const { loadTemplateOptions } = await server.ssrLoadModule('/src/services/templateOptions.ts');
-    for (const key of ['EmbeddingTemplateApi', 'ExtensionTemplateApi', 'McpTemplateApi', 'PermissionsTemplateApi', 'SkillPrebuiltTemplateApi', 'A2AAccessPolicyTemplateApi']) {
+    for (const key of ['EmbeddingTemplateApi', 'ExtensionTemplateApi', 'McpTemplateApi', 'PermissionsTemplateApi', 'SkillPrebuiltTemplateApi', 'A2AAccessPolicyTemplateApi', 'ExpertPackageTemplateApi']) {
       api[key].list = async () => ({ items: [], total: 0, page_size: 100 });
     }
     api.ModelTemplateApi.list = async ({ page, enabled }) => {
       assert.equal(enabled, true);
       return { items: [{ template_id: `model-${page}`, template_name: `Model ${page}` }], total: 2, page_size: 1 };
     };
+    api.ExpertPackageTemplateApi.list = async ({ page, enabled }) => {
+      assert.equal(enabled, true);
+      return { items: [{ template_id: `expert-${page}`, template_name: `Experts ${page}` }], total: 2, page_size: 1 };
+    };
     const options = await loadTemplateOptions();
     assert.deepEqual(options.default_model.map(option => option.template_id), ['model-1', 'model-2']);
+    assert.deepEqual(options.expert_package.map(option => option.template_id), ['expert-1', 'expert-2']);
+    api.ExpertPackageTemplateApi.list = async () => { throw new Error('Expert packages unavailable'); };
+    await assert.rejects(loadTemplateOptions, /Expert packages unavailable/);
+    api.ExpertPackageTemplateApi.list = async () => ({ items: [], total: 0 });
     api.McpTemplateApi.list = async () => { throw new Error('MCP unavailable'); };
     await assert.rejects(loadTemplateOptions, /MCP unavailable/);
   });

@@ -191,6 +191,31 @@ def extension_config_templates() -> list[tuple[str, dict[str, Any]]]:
     ]
 
 
+def expert_package_templates() -> list[tuple[str, dict[str, Any]]]:
+    return [
+        (
+            "E1",
+            {
+                "template_name": "销售专家组合",
+                "description": "Hub 上的销售专家和专家团",
+                "packages": [
+                    {
+                        "kind": "agent_template",
+                        "asset_id": "sales-expert",
+                        "version": "1.0.0",
+                    },
+                    {
+                        "kind": "agent_group",
+                        "asset_id": "sales-team",
+                        "version": "2.0.0",
+                    },
+                ],
+                "enabled": True,
+            },
+        ),
+    ]
+
+
 def skill_prebuilt_templates() -> list[tuple[str, dict[str, Any]]]:
     return [
         (

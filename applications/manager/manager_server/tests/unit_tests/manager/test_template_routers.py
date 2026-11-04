@@ -12,6 +12,7 @@ from demo_payloads import (
     model_templates,
     mcp_templates,
     service_config_templates,
+    expert_package_templates,
     skill_prebuilt_templates,
 )
 
@@ -21,6 +22,7 @@ _TEMPLATE_CASES = [
     ("/model-templates", model_templates()[0][1]),
     ("/extension-config-templates", extension_config_templates()[0][1]),
     ("/skill-prebuilt-templates", skill_prebuilt_templates()[0][1]),
+    ("/expert-package-templates", expert_package_templates()[0][1]),
     ("/mcp-templates", mcp_templates()[0][1]),
     ("/service-config-templates", service_config_templates()[0][1]),
 ]
@@ -186,6 +188,24 @@ async def test_service_config_template_out_bound_containers(manager_api: Manager
     }
     assert ref_by_cid.get("c-agentserver") == 1
     assert ref_by_cid.get("c-jiuwenbox") == 1
+
+
+@pytest.mark.asyncio
+async def test_expert_package_template_rejects_hidden_hub_asset(manager_api: ManagerApiHarness):
+    resp = await manager_api.http.post(
+        manager_api.templates_url("/expert-package-templates"),
+        json={
+            "template_name": "隐藏专家",
+            "packages": [
+                {
+                    "kind": "agent_template",
+                    "asset_id": "794db1bfe8884d6897d62d3584894a59",
+                },
+            ],
+        },
+    )
+    assert resp.status_code == 422
+    assert "hidden hub asset" in resp.text
 
 
 def _demo_container_wire(container_id: str) -> dict:

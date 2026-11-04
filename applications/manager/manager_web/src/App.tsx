@@ -45,7 +45,7 @@ import { ApprovalEditPage } from './pages/approval/ApprovalEditPage';
 import { A2AManagementPage } from './pages/templates/A2AManagementPage';
 import { ResourceWorkspaceFrame } from './components/ResourceWorkspaceFrame';
 import { WorkspaceNote } from './components/WorkspaceNote';
-import { ExpertPackagesPage } from './pages/expertPackages/ExpertPackagesPage';
+import { ExpertPackageTemplatesPage } from './pages/templates/ExpertPackageTemplatesPage';
 import { getProductName } from './utils/env';
 import {
   ApiError,
@@ -54,6 +54,7 @@ import {
   hasPermission,
   isPlatformAdmin,
   isWorkspaceQuotaEnabled,
+  isApprovalEnabled,
   UserConsoleApi,
 } from './services/api';
 
@@ -108,7 +109,7 @@ function RouteView() {
   }
 
   if (!platformAdmin) {
-    const approvalUiEnabled = isWorkspaceQuotaEnabled(user);
+    const approvalUiEnabled = isApprovalEnabled(user);
     if (path === '/approvals' && approvalUiEnabled && hasPermission(user, 'approval:read')) {
       return <ApprovalPage />;
     }
@@ -170,7 +171,10 @@ function RouteView() {
     return <ResourceWorkspaceFrame><A2AManagementPage /></ResourceWorkspaceFrame>;
   }
   if (path === '/expert-packages') {
-    return <ExpertPackagesPage />;
+    return <Navigate to={`/manager/expert-package-templates${params.size ? `?${params}` : ''}`} replace />;
+  }
+  if (path === '/expert-package-templates') {
+    return <ResourceWorkspaceFrame><ExpertPackageTemplatesPage /></ResourceWorkspaceFrame>;
   }
   if (path === '/service-config-templates') {
     return <ServiceConfigTemplatesPage />;
@@ -208,14 +212,14 @@ function RouteView() {
     return <><RolesEditPage roleId={roleEdit.roleId} /><WorkspaceNote title="角色用于管理访问权限">角色保存后可分配给用户；它与集群准入是两层关系，具体集群仍需单独配置。</WorkspaceNote></>;
   }
   if (path === '/approvals') {
-    if (!isWorkspaceQuotaEnabled(user)) {
+    if (!isApprovalEnabled(user)) {
       return <div className="card text-sm text-muted">{t('auth.noPagePermission')}</div>;
     }
     return <ApprovalPage />;
   }
   const approvalEdit = matchRoute('/approvals/:orderNum', path);
   if (approvalEdit) {
-    if (!isWorkspaceQuotaEnabled(user)) {
+    if (!isApprovalEnabled(user)) {
       return <div className="card text-sm text-muted">{t('auth.noPagePermission')}</div>;
     }
     return <ApprovalEditPage orderNum={approvalEdit.orderNum} />;
@@ -281,7 +285,7 @@ function Shell() {
 /** 已登录用户的默认落地页:平台/管理员类型角色→/manager,有限权限→对应页,否则→/user。 */
 function roleHome(user: AuthUser): string {
   if (isPlatformAdmin(user) || user.manager_access) return '/manager';
-  if (isWorkspaceQuotaEnabled(user) && hasPermission(user, 'approval:read')) {
+  if (isApprovalEnabled(user) && hasPermission(user, 'approval:read')) {
     return '/manager/approvals';
   }
   if (hasPermission(user, 'iam:role:read')) return '/manager/roles';

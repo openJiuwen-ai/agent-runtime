@@ -246,33 +246,16 @@ export interface CronPolicyUpsertBody {
   max_jobs_per_user: number;
 }
 
-export interface PackageAllowlistPackage {
+export interface PackageCatalogItem {
   kind: 'agent_template' | 'agent_group';
-  id: string;
-  match_expr?: string | string[] | null;
-}
-
-export interface PackageAllowlist {
-  id?: number;
-  jiuwenclaw_id: string;
-  packages: PackageAllowlistPackage[];
-  created_at?: string | null;
-  updated_at?: string | null;
-}
-
-export interface PackageAllowlistUpsertBody {
-  packages: PackageAllowlistPackage[];
-}
-
-export interface PackageAllowlistCatalogItem {
-  kind: PackageAllowlistPackage['kind'];
   id: string;
   display_name: string;
   version: string;
+  description?: string;
 }
 
-export interface PackageAllowlistCatalog {
-  items: PackageAllowlistCatalogItem[];
+export interface PackageCatalog {
+  items: PackageCatalogItem[];
   error?: string;
 }
 
