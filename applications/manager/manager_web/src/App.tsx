@@ -40,7 +40,6 @@ import { OrgsPage } from './pages/iam/OrgsPage';
 import { OrgsEditPage } from './pages/iam/OrgsEditPage';
 import { RolesPage } from './pages/iam/RolesPage';
 import { RolesEditPage } from './pages/iam/RolesEditPage';
-import { AuthorizationPage } from './pages/iam/AuthorizationPage';
 import { ApprovalPage } from './pages/approval/ApprovalPage';
 import { ApprovalEditPage } from './pages/approval/ApprovalEditPage';
 import { A2AManagementPage } from './pages/templates/A2AManagementPage';
@@ -100,13 +99,12 @@ function RouteView() {
   const { user } = useAuth();
   const platformAdmin = isPlatformAdmin(user);
 
-  // “授权”是访问授权目录的关系入口，不与角色页面重复。
-  // 有角色读取权限的受限管理员也可以进入它；实际变更仍在对应资源页完成。
+  // AuthorizationPage is retained for future use; old bookmarks return to an available page.
   if (path === '/authorization') {
     if (!platformAdmin && !hasPermission(user, 'iam:role:read')) {
       return <div className="card text-sm text-muted">{t('auth.noPagePermission')}</div>;
     }
-    return <AuthorizationPage />;
+    return <Navigate to={platformAdmin ? '/manager/overview' : '/manager/roles'} replace />;
   }
 
   if (!platformAdmin) {

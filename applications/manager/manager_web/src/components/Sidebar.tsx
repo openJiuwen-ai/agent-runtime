@@ -17,7 +17,6 @@ export function Sidebar() {
       ['/instances', label('集群管理', 'Clusters')],
       ['/agent-templates', label('Agent模板管理', 'Agent templates')],
       ['/service-config-templates', t('serviceConfigTemplate.title')],
-      ['/authorization', label('授权管理', 'Authorization')],
     ], show: admin },
     { name: label('资源中心', 'Resources'), items: resourceCatalog.map(resource => [resource.path, t(`${resource.key}.title`)]), show: admin },
     { name: label('运行环境', 'Environments'), items: [
