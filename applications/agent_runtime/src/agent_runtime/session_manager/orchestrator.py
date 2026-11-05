@@ -220,6 +220,21 @@ class SessionOrchestrator:
                     # scope 的 RM 配置
                     target_scope = scope_id
                     sttl = template.session_ttl
+                # routing：RM 伪 follower 可能把「已满的已登记 Pod」再交回来
+                # （RM 不读 SM 会话闸门）。本轮已 acquire+register 过仍
+                # need_acquire → 外部供给真不够，快失败，避免同 Pod 死循环。
+                if self.deploy_mode == "routing" and acquire_round >= 1:
+                    logger.warning(
+                        "route: routing acquire already tried, still "
+                        "need_acquire → exhausted: scope=%s request=%s "
+                        "acquire_round=%d",
+                        target_scope, request_id, acquire_round,
+                    )
+                    raise NoPodAvailable(
+                        f"scope {target_scope} 外部供给池已耗尽（routing 模式），"
+                        f"请扩容 StatefulSet 并注册新 Pod",
+                        retry_after=DEFAULT_RETRY_AFTER,
+                    )
                 if self.telemetry is not None:
                     self.telemetry.observe_acquire(target_scope, "need_acquire")
                 # acquire is not a session-slot reservation. Another route may

@@ -146,6 +146,47 @@ async def test_pool_exhausted_fast_fail_no_deploy(routing_runtime):
     assert await rt.rm_state.deploying_count(SCOPE) == 0
 
 
+@requires_lua
+async def test_concurrent_routes_peer_reuse_single_idle_pod(routing_runtime):
+    """注册后 Pod 在 RM idle、SM 候选空时并发 route：赢家 reuse，输家
+    复用已登记 Pod——全员落同一台，零「外部供给池耗尽」、零自建 deploy。"""
+    rt = routing_runtime
+    await _seed(rt, scope_concurrency=20, pod_concurrency=20)
+    await _register(rt, _entry("pod-a"))
+    assert await rt.rm_state.idle_pods(SCOPE) == ["pod-a"]
+    assert await rt.sm_state.scope_pod_ids(SCOPE) == []
+
+    results = await asyncio.gather(
+        *[rt.route(f"sess_{i}") for i in range(8)]
+    )
+    assert {r["pod_id"] for r in results} == {"pod-a"}
+    assert await rt.sm_state.scope_session_count(SCOPE) == 8
+    assert rt.k8s.deployed_specs == []
+    assert await rt.rm_state.deploying_count(SCOPE) == 0
+
+
+@requires_lua
+async def test_concurrent_routes_after_return_to_idle(routing_runtime):
+    """会话清空回 idle 后再并发 route：同样复用已登记 Pod，不误报耗尽。"""
+    rt = routing_runtime
+    await _seed(rt, scope_concurrency=20, pod_concurrency=20)
+    await _register(rt, _entry("pod-a"))
+    await rt.route("warm")
+    await rt.sm_state.evict("warm")
+    notified = await rt.sm_state.sweep_idle_notify(SCOPE, "pod-a")
+    assert notified is True
+    await rt.rm_orchestrator.idle_consider("pod-a", SCOPE)
+    assert await rt.rm_state.idle_pods(SCOPE) == ["pod-a"]
+    assert "pod-a" not in await rt.sm_state.scope_pod_ids(SCOPE)
+
+    results = await asyncio.gather(
+        *[rt.route(f"sess_{i}") for i in range(6)]
+    )
+    assert {r["pod_id"] for r in results} == {"pod-a"}
+    assert await rt.sm_state.scope_session_count(SCOPE) == 6
+    assert rt.k8s.deployed_specs == []
+
+
 # ---------------------------------------------------------------- 判死/收养
 
 
