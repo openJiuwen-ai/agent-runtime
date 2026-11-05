@@ -182,7 +182,7 @@ SPI（Skill Source Provider）是运行面的技能源扩展接口：把远端�
 | **SHA256**         | `136619520bc56bb502701b932a1faa5d022e85bb840f90c1fdedce4d627f333b`（可选）            |
 
 
-技能包 URL 须为可直接下载 zip 的合法 `http(s)` 直链（打开即下文件，不是网页预览页），例如把 zip 上传到对象存储（OBS / OSS / COS / S3 / MinIO）或 CDN / 静态文件托管后得到的下载地址；填写 SHA256 时可校验包完整性。
+技能包 URL 须为可直接下载 zip 的合法 `http(s)` 直链（打开即下文件，不是网页预览页），例如把 zip 上传到对象存储（OBS / OSS / COS / S3 / MinIO）或 CDN / 静态文件托管后得到的下载地址；填写 SHA256 时可校验包完整性。URL 主机还须在 AgentServer **下载域名白名单**内（见下文），否则运行面拒绝拉取。
 
 **SHA256 生成方式**：对 ZIP 计算摘要，填 **64 位小写 hex**。
 
@@ -193,10 +193,71 @@ Get-FileHash .\your-skill.zip -Algorithm SHA256   # Windows
 
 ![新建预置 Skill（URL 方式）](../assets/skill-prebuilt-url-create.png)
 
+## 下载域名白名单
+
+预置 Skill 安装时会从远端拉取技能包 ZIP。运行面（AgentServer）对下载 URL 的**主机名**做白名单校验，未命中则拒绝下载（SSRF 防护）。管理面「预置Skill」页本身没有单独的白名单字段，需按安装方式在部署侧或扩展配置中设置。
+
+| 安装方式 | 白名单配在哪里 | 说明 |
+| -------- | -------------- | ---- |
+| **URL**（`package_url`） | AgentServer 环境变量 | 两个变量**任一命中**即可；须 **HTTPS** |
+| **SPI**（技能源 ID + 版本 ID） | 技能源 `download_policy.allowed_hosts` | 不读下面两个环境变量；未配置且 Provider 也无默认白名单时直接拒绝 |
+
+### URL 方式：环境变量
+
+在部署工具的 `.env.custom`（或等价环境配置）中设置，渲染进 ConfigMap `jiuwenswarm-agentserver-env`，经 `envFrom` 注入 AgentServer：
+
+| 变量 | 作用 | 留空时 |
+| ---- | ---- | ------ |
+| `IMPORT_LOCAL_ALLOWED_DOWNLOAD_HOSTS` | 预置 Skill URL 安装、远程 ZIP 导入等 | 走代码默认（如 `*.obs.*.myhuaweicloud.com`） |
+| `TEAM_SKILLS_HUB_ALLOWED_DOWNLOAD_HOSTS` | 同上（与上一项 OR）；也覆盖 TeamSkillsHub 市场下载 | 走代码默认（官方 OBS 等） |
+
+规则写法：
+
+- 逗号分隔多个主机规则，例如 `cdn.example.com,*.obs.*.myhuaweicloud.com`
+- 支持单段通配 `*`（如 `*.obs.*.myhuaweicloud.com`）与后缀匹配（如 `.example.com`）
+- `package_url` 的主机名必须命中其中一条；协议须为 HTTPS
+
+`.env.custom` 示例：
+
+```bash
+IMPORT_LOCAL_ALLOWED_DOWNLOAD_HOSTS="cdn.example.com,*.obs.*.myhuaweicloud.com"
+# 可选；与上一行 OR，命中其一即可
+# TEAM_SKILLS_HUB_ALLOWED_DOWNLOAD_HOSTS="cdn.example.com,openjiuwen-market.obs.*.myhuaweicloud.com"
+```
+
+### SPI 方式：技能源 `allowed_hosts`
+
+SPI 安装使用技能源上的下载策略，**不回落**到上一节的环境变量：
+
+1. 优先：管理面扩展配置里 `custom_config.skill_sources[].download_policy.allowed_hosts`
+2. 其次：SPI Provider 声明的默认白名单（如内置 `swarmskillhub` 扩展包 `config.yaml` 的 `allowed_download_hosts`）
+3. 两者皆空：安装失败（fail-closed）
+
+`skill_sources` 配置片段示例（写入扩展配置模板的自定义配置）：
+
+```json
+{
+  "skill_sources": [
+    {
+      "source_id": "customer-hub",
+      "provider_type": "customerhub",
+      "enabled": true,
+      "download_policy": {
+        "allowed_hosts": ["cdn.acme.com", "*.obs.*.myhuaweicloud.com"]
+      }
+    }
+  ]
+}
+```
+
+预置 Skill 的「技能源 ID」须与此处 `source_id`（或内置默认源如 `swarmskillhub`）一致。安装时技能源会返回技能包的下载地址；该地址的**域名**必须在对应源的 `allowed_hosts` 中，否则拒绝下载。
+
 ## 注意事项
 
 - 优先使用可信的 SPI 技能源或内网受控 URL；URL 安装建议填写 SHA256
-- SPI 方式下 Skill ID、源 ID、版本 ID 需与技能源侧元数据一致；URL 方式下 Skill ID 可自定义
+- URL 方式须把 `package_url` 主机加入 AgentServer 下载白名单，否则同步预置技能时会报主机不在白名单
+- SPI 方式下 Skill ID、源 ID、版本 ID 需与技能源侧元数据一致，并保证该源已配置 `allowed_hosts`（或 Provider 默认白名单）；URL 方式下 Skill ID 可自定义
 - 仅创建预置模板而不绑定到 Agent 模板，不会下发到用户
 - 变更预置内容或 Agent 模板引用后，等待配置刷新推送到运行面；编辑保存时界面会提示刷新成本相关说明
+- 仅改 ConfigMap、不重启 AgentServer Pod 时，新白名单不会进入进程环境变量
 

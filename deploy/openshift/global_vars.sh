@@ -31,6 +31,8 @@ REPLICAS_VARS=(AGENT_SERVER_REPLICAS GATEWAY_REPLICAS WEB_REPLICAS IDENTITY_REPL
 # - IDENTITY_SSO_* / IDENTITY_FEDERATION_CONFIG_FILE：企业认证配置可留空
 # - GATEWAY_AGENT_CLIENT_MODE / GATEWAY_RUNTIME_MANAGER_URL / AGENTSERVER_POD_DNS_LIST：
 #   三模式派生变量（routing 注入，off/full 留空 → 对应 env 行删除）
+# - IMPORT_LOCAL_ALLOWED_DOWNLOAD_HOSTS / TEAM_SKILLS_HUB_ALLOWED_DOWNLOAD_HOSTS：
+#   预置 Skill URL / 远程 ZIP 下载白名单（留空 → ConfigMap 行删除，走 AgentServer 代码默认）
 # 格式校验与"允许留空"解耦（用户名/URL 不该按 DNS subdomain 误校验）：
 # StorageClass 见 STORAGE_CLASS_VARS（check_storage_class_vars）；其余选填项见 check_optional_vars
 OPTIONAL_VARS=(
@@ -40,6 +42,7 @@ OPTIONAL_VARS=(
     IDENTITY_FEDERATION_CONFIG_FILE
     MANAGER_AGENT_CLIENT_REGISTRATION_CONFIG_FILE
     GATEWAY_AGENT_CLIENT_MODE GATEWAY_RUNTIME_MANAGER_URL AGENTSERVER_POD_DNS_LIST
+    IMPORT_LOCAL_ALLOWED_DOWNLOAD_HOSTS TEAM_SKILLS_HUB_ALLOWED_DOWNLOAD_HOSTS
 )
 
 # StorageClass 变量：check_storage_class_vars 做 DNS subdomain 规范校验（留空走集群默认）
@@ -137,6 +140,9 @@ declare -A DEPLOY_VARS=(
     # 禁 EVAL 兼容模式（on 与历史行为一致；客户 Redis 禁用 EVAL 时设 off）
     ["AGENT_RUNTIME_REDIS_LUA"]="off"
     ["SANDBOX_TYPE"]="off"
+    # 预置 Skill URL / 远程导入下载白名单（逗号分隔）；留空不注入，走 AgentServer 代码默认
+    ["IMPORT_LOCAL_ALLOWED_DOWNLOAD_HOSTS"]=""
+    ["TEAM_SKILLS_HUB_ALLOWED_DOWNLOAD_HOSTS"]=""
 
     ["MARIADB_IMAGE"]="mariadb:11.8"
     ["MYSQL_IMAGE"]="mysql:8.0"

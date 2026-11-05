@@ -144,6 +144,12 @@ check_optional_vars() {
   val="${DEPLOY_VARS["REDIS_USER"]:-}"
   [ -z "$val" ] || [[ "$val" =~ ^[A-Za-z0-9._-]+$ ]] \
     || error "REDIS_USER 非法（仅允许字母数字与 ._-）: $val"
+  # 下载域名白名单：逗号分隔 host 规则（支持 * 通配、.suffix）
+  for _host_var in IMPORT_LOCAL_ALLOWED_DOWNLOAD_HOSTS TEAM_SKILLS_HUB_ALLOWED_DOWNLOAD_HOSTS; do
+    val="${DEPLOY_VARS[$_host_var]:-}"
+    [ -z "$val" ] || [[ "$val" =~ ^[A-Za-z0-9.*,_-]+$ ]] \
+      || error "${_host_var} 非法（逗号分隔主机规则，仅允许字母数字与 .*,_-）: $val"
+  done
 }
 
 check_identity_sso_vars() {
