@@ -6,6 +6,7 @@ from typing import Any
 
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 
+from manager_server.infrastructure.logger import get_logger
 from manager_server.infrastructure.match_expr import validate_match_expr
 from manager_server.infrastructure.utils import new_uuid4, utc_now
 from manager_server.manager_config_push import gateway_request
@@ -13,6 +14,9 @@ from manager_server.models.quota_models import TEAM_QUOTA_POLICY_TABLE_DEF
 
 _TABLE = TEAM_QUOTA_POLICY_TABLE_DEF.table_name
 _GATEWAY = "/api/v1/team-quota/policies"
+_RESYNC_PAGE_SIZE = 10_000
+
+logger = get_logger(__name__)
 
 
 def _g(row: Any, name: str, default: Any = None) -> Any:
@@ -64,6 +68,53 @@ class TeamQuotaPolicyService:
         items = [_policy_dict(r) for r in rows]
         items.sort(key=lambda r: int(r.get("priority") or 0), reverse=True)
         return {"items": items, "total": len(items)}
+
+    async def resync_all_to_gateway(self) -> dict[str, int]:
+        """Replay every Manager policy to Gateway after startup.
+
+        Older MariaDB deployments could store a policy only in Gateway-local
+        SQLite, because only ``GATEWAY_DB_TYPE=mysql`` used the shared database.
+        Replaying the Manager rows is safe and idempotent: Gateway upserts by
+        ``policy_id``, so a successful replay repairs the missing projection
+        without touching Manager state. A single failed cluster does not block
+        the remaining policies.
+        """
+        rows = await self._handler.list_records(
+            _TABLE,
+            {},
+            limit=_RESYNC_PAGE_SIZE,
+            offset=0,
+        )
+        synced = 0
+        failed = 0
+        for row in rows:
+            cid = str(_g(row, "cluster_id") or "").strip()
+            pid = str(_g(row, "policy_id") or "").strip()
+            if not cid:
+                failed += 1
+                logger.warning(
+                    "team_quota_resync_skipped missing_cluster_id policy_id=%s",
+                    pid,
+                )
+                continue
+            try:
+                await gateway_request(
+                    cid,
+                    "PUT",
+                    _GATEWAY,
+                    _gateway_body(_policy_dict(row)),
+                )
+            except Exception as exc:  # noqa: BLE001 - retry the rest independently
+                failed += 1
+                logger.warning(
+                    "team_quota_resync_failed cluster_id=%s policy_id=%s error=%s",
+                    cid,
+                    pid,
+                    exc,
+                )
+            else:
+                synced += 1
+        return {"total": len(rows), "synced": synced, "failed": failed}
 
     async def upsert(
         self,

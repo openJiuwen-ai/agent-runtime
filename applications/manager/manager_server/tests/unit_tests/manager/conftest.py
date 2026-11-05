@@ -195,6 +195,7 @@ _GATEWAY_REQUEST_MODULES = (
     "manager_server.core.template.push_agent_template_to_gateway",
     "manager_server.core.instance.instance_data_lifecycle",
     "manager_server.core.instance_resource.instance_agent_resource_service",
+    "manager_server.core.quota.team_quota_policy",
     "manager_server.core.quota.workspace_quota_policy",
 )
 
