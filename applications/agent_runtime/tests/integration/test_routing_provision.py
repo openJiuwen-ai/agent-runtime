@@ -148,8 +148,7 @@ async def test_pool_exhausted_fast_fail_no_deploy(routing_runtime):
 
 @requires_lua
 async def test_concurrent_routes_peer_reuse_single_idle_pod(routing_runtime):
-    """注册后 Pod 在 RM idle、SM 候选空时并发 route：赢家 reuse，输家
-    复用已登记 Pod——全员落同一台，零「外部供给池耗尽」、零自建 deploy。"""
+    """注册后 Pod 在 RM idle、SM 候选空时并发 route：赢家 reuse，输家复用已登记 Pod——全员落同一台，零「外部供给池耗尽」、零自建 deploy。"""
     rt = routing_runtime
     await _seed(rt, scope_concurrency=20, pod_concurrency=20)
     await _register(rt, _entry("pod-a"))
@@ -189,8 +188,7 @@ async def test_concurrent_routes_after_return_to_idle(routing_runtime):
 
 @requires_lua
 async def test_routing_tried_pods_allows_second_different_pod(routing_runtime):
-    """SM 候选已满后同一 route 内二次 acquire：交回新 pod_id 应放行
-    （旧 acquire_round>=1 会误杀；tried_pods 只拦同机）。"""
+    """SM 候选已满后同一 route 内二次 acquire：交回新 pod_id 应放行（旧 acquire_round>=1 会误杀；tried_pods 只拦同机）。"""
     rt = routing_runtime
     await _seed(rt, scope_concurrency=10, pod_concurrency=1)
     # 满载候选：ROUTE_PLACE → need_acquire
