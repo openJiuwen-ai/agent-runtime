@@ -689,6 +689,17 @@ export interface InstanceAgentResource {
 }
 /** @deprecated 使用 InstanceAgentResource */
 export type InstanceAgentResourceRecord = InstanceAgentResource;
+export interface AgentClientRegistrationCapabilities {
+  enabled: boolean;
+  configured: boolean;
+  reason?: string;
+}
+
+export interface AgentClientBinding {
+  client_id: string;
+  status: 'bound';
+}
+
 export interface AgentTemplate {
   id: number;
   template_id: string;
@@ -698,6 +709,7 @@ export interface AgentTemplate {
   template_ref: Record<string, string[]>;
   enabled: boolean;
   data: Record<string, unknown> | null;
+  keycloak_client?: AgentClientBinding | null;
   created_at: string | null;
   updated_at: string | null;
 }
@@ -848,16 +860,12 @@ export const A2AAccessPolicyTemplateApi = {
 };
 
 export const AgentClientRegistrationApi = {
-  capabilities: () => http<{ enabled: boolean; configured: boolean; reason?: string }>(
+  capabilities: () => http<AgentClientRegistrationCapabilities>(
     '/v1/integrations/keycloak/agent-client-registrations/capabilities',
   ),
-  register: (registration_id: string, template_name: string) =>
-    http<import('../utils/agentClientRegistration').AgentClientCredentials>(
-      '/v1/integrations/keycloak/agent-client-registrations',
-      { method: 'POST', body: { registration_id, template_name } },
-    ),
-  cancel: (id: string) => http<{ deleted: boolean }>(
-    `/v1/integrations/keycloak/agent-client-registrations/${encodeURIComponent(id)}`, { method: 'DELETE' },
+  register: (templateId: string, clientId: string) => http<AgentClientBinding>(
+    `/v1/agent-templates/${encodeURIComponent(templateId)}/keycloak-client`,
+    { method: 'POST', body: { client_id: clientId } },
   ),
 };
 

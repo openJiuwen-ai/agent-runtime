@@ -311,7 +311,12 @@ _CREATE_SCHEMAS: dict[str, Any] = {
 
 
 def _row_dict(row: Any, table_def: Any) -> dict[str, Any]:
-    return {column.name: getattr(row, column.name, None) for column in table_def.columns}
+    value = {column.name: getattr(row, column.name, None) for column in table_def.columns}
+    if table_def.table_name == "agent_template":
+        from manager_server.core.template.agent_template import public_agent_template_data
+
+        value["data"] = public_agent_template_data(value["data"])
+    return value
 
 
 def _columns(table_def: Any, *, excluded: set[str] | frozenset[str] = frozenset()) -> list[Any]:

@@ -14,7 +14,7 @@ import { ListSearchInput } from '../../components/ListSearchInput';
 import { useAsync } from '../../hooks/useAsync';
 import { useListSearch } from '../../hooks/useListSearch';
 import { useGuideAutoOpen } from '../../hooks/useGuideAutoOpen';
-import { AgentTemplate, AgentTemplateApi, ApiError } from '../../services/api';
+import { AgentClientRegistrationApi, AgentTemplate, AgentTemplateApi, ApiError } from '../../services/api';
 import { toast } from '../../stores/uiStore';
 import { bumpGuideRevision } from '../../stores/guideStore';
 import { formatTime, truncate } from '../../utils/format';
@@ -32,6 +32,7 @@ export function AgentTemplatesPage() {
   const [sortBy, setSortBy] = useState<AgentTemplateSortField | ''>('');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [modalOpen, setModalOpen] = useState(false);
+  const { data: registrationConfig } = useAsync(AgentClientRegistrationApi.capabilities);
 
   /** 引导跳转：其他页面点「未配置 Agent模板」跳过来时自动打开新建弹框 */
   useGuideAutoOpen('agentTemplateNew', () => {
@@ -282,16 +283,21 @@ export function AgentTemplatesPage() {
       <AgentTemplateModal
         open={modalOpen}
         template={editing}
+        registrationConfig={registrationConfig}
         onClose={() => setModalOpen(false)}
-        onSaved={() => {
-          setModalOpen(false);
+        onSaved={(options) => {
+          if (!options?.keepOpen) setModalOpen(false);
           void reload();
         }}
       />
 
       <ConfirmDialog
         open={!!delTarget}
-        message={t('agentTemplate.deleteConfirm', { name: delTarget?.template_name ?? '' })}
+        message={registrationConfig?.enabled && delTarget?.keycloak_client
+          ? t('agentTemplate.registration.deleteConfirm', {
+            name: delTarget.template_name, clientId: delTarget.keycloak_client.client_id,
+          })
+          : t('agentTemplate.deleteConfirm', { name: delTarget?.template_name ?? '' })}
         danger
         onConfirm={async () => {
           if (!delTarget) return;

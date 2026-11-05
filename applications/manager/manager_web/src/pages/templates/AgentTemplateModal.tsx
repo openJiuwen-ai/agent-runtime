@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ConfigRefreshCostHint } from '../../components/ConfigRefreshCostHint';
 import { Modal, ModalCancelButton } from '../../components/Modal';
@@ -6,11 +6,11 @@ import { TemplateRefEditor } from '../../components/TemplateRefEditor';
 import { LimitedTextInput } from '../../components/LimitedTextInput';
 import { JsonField } from '../../components/JsonField';
 import { useFormDirty } from '../../hooks/useFormDirty';
-import { AgentTemplate, AgentTemplateApi, AgentClientRegistrationApi, ApiError } from '../../services/api';
 import {
-  createRegistrationId, hasAgentCredentials, mergeAgentCredentials, maskAgentClientSecrets,
-  type AgentClientCredentials,
-} from '../../utils/agentClientRegistration';
+  AgentTemplate, AgentTemplateApi, AgentClientRegistrationApi, ApiError,
+  type AgentClientRegistrationCapabilities,
+} from '../../services/api';
+import { agentRegistrationErrorKey, hasAgentCredentials, maskAgentClientSecrets } from '../../utils/agentClientRegistration';
 import { toast } from '../../stores/uiStore';
 import { bumpGuideRevision } from '../../stores/guideStore';
 import { fromCommaList, toCommaList } from '../../utils/format';
@@ -24,14 +24,17 @@ import {
 interface Props {
   open: boolean;
   template: AgentTemplate | null;
+  registrationConfig: AgentClientRegistrationCapabilities | null;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (options?: { keepOpen: true }) => void;
 }
 
 const FIELD_MAX_LENGTH = {
   template_name: 128,
   description: 512,
 } as const;
+
+type RegistrationErrorKey = ReturnType<typeof agentRegistrationErrorKey> | 'saveFailed';
 
 function FieldLabel({ children, required }: { children: ReactNode; required?: boolean }) {
   return (
@@ -82,17 +85,19 @@ function parseCustomConfig(text: string): {
   }
 }
 
-export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) {
+export function AgentTemplateModal({ open, template, registrationConfig, onClose, onSaved }: Props) {
   const { t } = useTranslation();
   const { markClean, isDirty } = useFormDirty(open);
   const [form, setForm] = useState<FormState>(empty);
   const [saving, setSaving] = useState(false);
-  const [registrationConfig, setRegistrationConfig] = useState({ enabled: false, configured: false, reason: '' });
+  const [savedTemplate, setSavedTemplate] = useState<AgentTemplate | null>(null);
+  const [clientId, setClientId] = useState('');
+  const [registrationError, setRegistrationError] = useState<RegistrationErrorKey | null>(null);
   const [registering, setRegistering] = useState(false);
-  const [closing, setClosing] = useState(false);
   const [showSecrets, setShowSecrets] = useState(false);
-  const registrationId = useRef('');
-  const registration = useRef<AgentClientCredentials | null>(null);
+  const currentTemplate = savedTemplate ?? template;
+  const binding = currentTemplate?.keycloak_client;
+  const busy = saving || registering;
 
   useEffect(() => {
     if (!open) return;
@@ -107,15 +112,10 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
       : empty;
     setForm(next);
     markClean(next);
-    registrationId.current = '';
-    registration.current = null;
+    setSavedTemplate(null);
+    setClientId('');
+    setRegistrationError(null);
     setShowSecrets(false);
-    setRegistrationConfig({ enabled: false, configured: false, reason: '' });
-    let active = true;
-    void AgentClientRegistrationApi.capabilities().then((value) => {
-      if (active) setRegistrationConfig({ ...value, reason: value.reason ?? '' });
-    }).catch(() => undefined);
-    return () => { active = false; };
   }, [open, template, markClean]);
 
   const update = <K extends keyof FormState>(k: K, v: FormState[K]) =>
@@ -126,41 +126,7 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
   const containsSecret = customConfig.value.some((entry) => typeof entry.client_secret === 'string' && entry.client_secret);
   const hideSecrets = containsSecret && !showSecrets;
 
-  const registerClient = async () => {
-    if (registering || customConfig.error || credentialsExist) return;
-    setRegistering(true);
-    try {
-      if (!registrationId.current) registrationId.current = createRegistrationId();
-      const value = await AgentClientRegistrationApi.register(registrationId.current, form.template_name.trim());
-      registration.current = value;
-      const merged = mergeAgentCredentials(customConfig.value, value);
-      update('custom_config_json', JSON.stringify(merged, null, 2));
-      setShowSecrets(false);
-      toast('success', t('agentTemplate.registration.success'));
-    } catch (error) {
-      toast('danger', error instanceof ApiError ? error.detail : t('agentTemplate.registration.failed'));
-    } finally {
-      setRegistering(false);
-    }
-  };
-
-  const close = async () => {
-    if (registering || saving || closing) return;
-    setClosing(true);
-    try {
-      if (registration.current) await AgentClientRegistrationApi.cancel(registration.current.registration_id);
-      registration.current = null;
-      onClose();
-    } catch (error) {
-      toast('warn', error instanceof ApiError ? error.detail : t('agentTemplate.registration.cleanupFailed'));
-      onClose();
-    } finally {
-      setClosing(false);
-    }
-  };
-
-  const submit = async () => {
-    if (registering || closing || saving) return;
+  const templateBody = () => {
     if (customConfig.error) {
       toast('warn', t('agentTemplate.customConfigInvalid'));
       return;
@@ -186,35 +152,65 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
       return;
     }
 
-    const body = {
+    return {
       template_name: form.template_name.trim(),
       description: form.description.trim() || undefined,
       agent_tags: fromCommaList(form.agent_tags),
       template_ref: form.template_ref,
-      data: form.custom_config_json !== customConfigText(template?.data ?? null)
-        ? { ...(template?.data ?? {}), custom_config: customConfig.value,
-            ...(registration.current ? { agent_client_registration: {
-              registration_id: registration.current.registration_id,
-              client_uuid: registration.current.client_uuid,
-              client_id: registration.current.client_id,
-            } } : {}), }
+      data: form.custom_config_json !== customConfigText(currentTemplate?.data ?? null)
+        ? { ...(currentTemplate?.data ?? {}), custom_config: customConfig.value }
         : undefined,
     };
+  };
 
+  const registerClient = async () => {
+    const id = clientId.trim();
+    if (!registrationConfig?.enabled || !registrationConfig.configured
+      || busy || binding || credentialsExist || !id) return;
+    const body = currentTemplate ? undefined : templateBody();
+    if (!currentTemplate && !body) return;
+    setRegistering(true);
+    setRegistrationError(null);
+    let target = currentTemplate;
+    try {
+      if (!target && body) {
+        target = await AgentTemplateApi.create(body);
+        setSavedTemplate(target);
+        markClean(form);
+        onSaved({ keepOpen: true });
+      }
+      if (!target) return;
+      const result = await AgentClientRegistrationApi.register(target.template_id, id);
+      setSavedTemplate({ ...target, keycloak_client: { client_id: result.client_id, status: 'bound' } });
+      bumpGuideRevision();
+      onSaved({ keepOpen: true });
+      toast('success', t('agentTemplate.registration.success'));
+    } catch (error) {
+      const persisted = target ? await AgentTemplateApi.get(target.template_id).catch(() => null) : null;
+      if (persisted?.keycloak_client) {
+        setSavedTemplate(persisted);
+        onSaved({ keepOpen: true });
+      } else {
+        const key = error instanceof ApiError ? agentRegistrationErrorKey(error.status, error.raw) : 'failed';
+        setRegistrationError(target ? key : 'saveFailed');
+      }
+    } finally {
+      setRegistering(false);
+    }
+  };
+
+  const submit = async () => {
+    if (busy) return;
+    const body = templateBody();
+    if (!body) return;
     setSaving(true);
     try {
-      if (template) {
-        await AgentTemplateApi.update(template.template_id, body);
+      if (currentTemplate) {
+        await AgentTemplateApi.update(currentTemplate.template_id, body);
       } else {
         await AgentTemplateApi.create(body);
       }
       toast('success', t('success.saved'));
-      if (registration.current && !customConfig.value.some((item) => item.client_id === registration.current?.client_id)) {
-        await AgentClientRegistrationApi.cancel(registration.current.registration_id).catch(() => {
-          toast('warn', t('agentTemplate.registration.cleanupFailed'));
-        });
-      }
-      registration.current = null;
       bumpGuideRevision();
       onSaved();
     } catch (e) {
@@ -227,14 +223,14 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
   return (
     <Modal
       open={open}
-      title={template ? t('agentTemplate.edit') : t('agentTemplate.new')}
-      onClose={() => void close()}
+      title={currentTemplate ? t('agentTemplate.edit') : t('agentTemplate.new')}
+      onClose={() => { if (!busy) onClose(); }}
       dirty={isDirty(form)}
       size="lg"
       footer={
         <>
           <ModalCancelButton />
-          <button className="btn primary" onClick={() => void submit()} disabled={saving || registering || closing || customConfig.error !== null}>
+          <button className="btn primary" onClick={() => void submit()} disabled={busy || customConfig.error !== null}>
             {saving ? t('common.loading') : t('common.save')}
           </button>
         </>
@@ -266,6 +262,57 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
             onChange={(e) => update('agent_tags', e.target.value)}
           />
         </div>
+        {registrationConfig?.enabled && (
+          <section className="md:col-span-2 rounded-lg border border-border bg-bg-muted p-4" aria-labelledby="agent-client-title">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 id="agent-client-title" className="text-sm font-semibold text-text-strong">
+                {t('agentTemplate.registration.title')}
+              </h3>
+              <span className={binding ? 'pill ok sm' : 'pill muted sm'}>
+                {t(binding ? 'agentTemplate.registration.bound' : 'agentTemplate.registration.unbound')}
+              </span>
+            </div>
+            <p className="mt-1 text-xs text-muted">{t('agentTemplate.registration.secretHint')}</p>
+            <div className="mt-3 flex flex-wrap items-end gap-2">
+              <div className="min-w-[14rem] flex-1">
+                <label className="label" htmlFor="agent-client-id">Client ID</label>
+                <input
+                  id="agent-client-id"
+                  className="input font-mono"
+                  value={binding?.client_id ?? clientId}
+                  placeholder="customer-agent"
+                  onChange={(event) => setClientId(event.target.value)}
+                  readOnly={!!binding}
+                  disabled={!binding && (!registrationConfig.configured || busy || credentialsExist)}
+                  spellCheck={false}
+                />
+              </div>
+              {!binding && (
+                <button
+                  type="button"
+                  className="btn primary"
+                  onClick={() => void registerClient()}
+                  disabled={!registrationConfig.configured || busy || credentialsExist || !clientId.trim()
+                    || (!currentTemplate && (!form.template_name.trim() || customConfig.error !== null))}
+                >
+                  {t(registering ? 'agentTemplate.registration.pending'
+                    : registrationError ? 'agentTemplate.registration.retry'
+                    : currentTemplate ? 'agentTemplate.registration.button' : 'agentTemplate.registration.saveAndRegister')}
+                </button>
+              )}
+            </div>
+            {binding && <p className="mt-2 text-xs text-muted">{t('agentTemplate.registration.boundHint')}</p>}
+            {!binding && !currentTemplate && <p className="mt-2 text-xs text-muted">{t('agentTemplate.registration.saveHint')}</p>}
+            {!binding && credentialsExist && <p className="mt-2 text-xs text-muted">{t('agentTemplate.registration.alreadyConfigured')}</p>}
+            {!binding && !registrationConfig.configured && <p className="mt-2 text-xs text-danger" role="alert">{t('agentTemplate.registration.unconfigured')}</p>}
+            {registrationError && (
+              <div className="mt-3 rounded-md bg-danger-subtle px-3 py-2 text-xs text-danger" role="alert">
+                <p className="font-medium">{t(`agentTemplate.registration.${registrationError}`)}</p>
+                {!template && savedTemplate && <p className="mt-1">{t('agentTemplate.registration.savedHint')}</p>}
+              </div>
+            )}
+          </section>
+        )}
         <div className="md:col-span-2">
           <TemplateRefEditor
             key={template?.template_id ?? 'new'}
@@ -283,20 +330,11 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
             onChange={(value) => update('custom_config_json', value)}
             placeholder={'[\n  {\n    "xxx": "yyy",\n    "xxxz": "asdasd"\n  }\n]'}
             rows={7}
-            readOnly={registering || hideSecrets || closing || saving}
-            labelActions={<>
-              {registrationConfig.enabled && <button type="button" className="btn ghost sm" onClick={() => void registerClient()}
-                disabled={!registrationConfig.configured || registering || saving || closing
-                  || !form.template_name.trim() || customConfig.error !== null || credentialsExist}
-                title={credentialsExist ? t('agentTemplate.registration.alreadyConfigured') : registrationConfig.reason}>
-                {t(registering ? 'agentTemplate.registration.pending' : 'agentTemplate.registration.button')}
-              </button>}
-              {containsSecret && <button type="button" className="btn ghost sm" onClick={() => setShowSecrets((value) => !value)}>
-                {t(showSecrets ? 'agentTemplate.registration.hideSecret' : 'agentTemplate.registration.showSecret')}
-              </button>}
-            </>}
+            readOnly={busy || hideSecrets}
+            labelActions={containsSecret && <button type="button" className="btn ghost sm" onClick={() => setShowSecrets((value) => !value)}>
+              {t(showSecrets ? 'agentTemplate.registration.hideSecret' : 'agentTemplate.registration.showSecret')}
+            </button>}
           />
-          {registrationConfig.enabled && !registrationConfig.configured && <p className="text-[11px] text-danger mt-1">{registrationConfig.reason}</p>}
           <p className="text-[11px] text-muted mt-1">{t('agentTemplate.customConfigHint')}</p>
           {customConfig.error === 'objectArray' && (
             <div className="text-[11px] text-danger mt-1" role="alert">
@@ -305,7 +343,7 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
           )}
         </div>
       </div>
-      {template && <ConfigRefreshCostHint scope="template" />}
+      {currentTemplate && <ConfigRefreshCostHint scope="template" />}
     </Modal>
   );
 }
