@@ -638,8 +638,10 @@ mount_core_pkg() { # agent-core 的 openjiuwen 包 → site-packages
 }
 
 mount_web_nginx_template() { # web：仓库 nginx 模板与可选 upstream 脚本盖到镜像 entrypoint 读取路径
+  # openshift 部署专用副本(docker/openshift/),与 docker/ 原件解耦:
+  # 老镜像(nginxinc)构建仍用 docker/ 原件,UBI 镜像部署可独立调整互不影响
   add_code_mount "$1" "web-nginx-template" \
-    "${DEPLOY_VARS["SWARM_CODE_PATH"]}/docker/web.nginx.conf.template" \
+    "${DEPLOY_VARS["SWARM_CODE_PATH"]}/docker/openshift/web.nginx.conf.template" \
     "/etc/nginx/templates/default.conf.template" "File"
   add_code_mount "$1" "web-optional-upstreams" \
     "${DEPLOY_VARS["SWARM_CODE_PATH"]}/docker/web-optional-upstreams.sh" \
@@ -647,8 +649,9 @@ mount_web_nginx_template() { # web：仓库 nginx 模板与可选 upstream 脚�
 }
 
 mount_manager_web_nginx_template() { # manager-web：仓库 nginx 模板同上
+  # openshift 部署专用副本(docker/openshift/),与 docker/ 原件解耦(同 web 的处理)
   add_code_mount "$1" "manager-web-nginx-template" \
-    "${DEPLOY_VARS["RUNTIME_CODE_PATH"]}/docker/manager-web.nginx.conf.template" \
+    "${DEPLOY_VARS["RUNTIME_CODE_PATH"]}/docker/openshift/manager-web.nginx.conf.template" \
     "/etc/nginx/templates/default.conf.template" "File"
 }
 
