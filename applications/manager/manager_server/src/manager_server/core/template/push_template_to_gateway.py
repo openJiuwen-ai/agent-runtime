@@ -764,6 +764,10 @@ async def update_template_on_referencing_gateways(
     tid = str(template_id or "").strip()
     if not tid:
         return
+    if normalized == AGENT_TEMPLATES_KIND and "data" in updates:
+        from manager_server.core.template.agent_template import agent_template_gateway_data
+
+        updates = {**updates, "data": agent_template_gateway_data(updates["data"])}
     if normalized == "a2a_outbound_templates":
         if "data" not in updates:
             row = await handler.get(A2A_OUTBOUND_TEMPLATE_TABLE_DEF.table_name, {"template_id": tid})
@@ -820,7 +824,11 @@ async def update_template_on_referencing_gateways(
                     removed=added_pairs,
                 )
             if continue_on_error:
-                logger.exception("Template sync failed gateway=%s kind=%s template_id=%s", jid, normalized, tid)
+                if normalized == AGENT_TEMPLATES_KIND:
+                    logger.warning("Agent template sync failed gateway=%s template_id=%s error_type=%s",
+                                   jid, tid, type(exc).__name__)
+                else:
+                    logger.exception("Template sync failed gateway=%s kind=%s template_id=%s", jid, normalized, tid)
                 errors.append(exc)
                 continue
             raise
