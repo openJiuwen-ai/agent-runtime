@@ -6,10 +6,6 @@ deploy +1 → 达上限 MaxPodsReached。deploy 走 per-scope 锁串行（防并
 他副本在 deploy 时本请求短暂等待后重跑 ACQUIRE 复用其成果；锁输家进 follower
 等待室（上限 pc-1，overflow 快失败 PodsStartingUp=冷启动中，非 max_pods 封顶）。
 
-routing 模式（AGENT_RUNTIME_DEPLOY_MODE=routing）永不 deploy：need_deploy /
-max_reached 时若本 scope 已有登记 Pod 则直接交还（盖 idle 并发 reuse 误报
-耗尽）；确空才 MaxPodsReached。
-
 红线：错误路径必须清 deploying 占位（防 max_pods 永久虚高）。
 """
 
@@ -129,16 +125,6 @@ class ResourceOrchestrator:
 
                 if action == "max_reached":
                     await self.state.clear_deploy_token(scope_id, token)
-                    if self.deploy_mode == "routing":
-                        # idle 并发 reuse 后常见：pod 仍在 scope:pods →
-                        # total≥max_pods 得 max_reached，并非真无外部机。
-                        result = await self._reuse_registered_or_exhaust(
-                            scope_id, request_id)
-                        outcome = (
-                            f"routing_peer_reuse pod={result.get('pod_id', '?')}")
-                        if request_id:
-                            await self._idem_put(request_id, result)
-                        return result
                     outcome = "max_reached"
                     raise MaxPodsReached(f"scope {scope_id} reached max_pods")
 
@@ -163,16 +149,14 @@ class ResourceOrchestrator:
 
                 # action == need_deploy：选主串行 deploy
                 if self.deploy_mode == "routing":
-                    # routing 永不 deploy。idle 被并发 reuse 抢走时也会落到
-                    # need_deploy——有登记则交还，确空才耗尽（先清占位）。
+                    # routing 供给模式永不 deploy：走到此处 = 暖池空且未达
+                    # max_pods 判定——外部供给容量已耗尽,快失败(错误路径清
+                    # 占位红线保持;deploy 锁/follower 等待室语义不进入)
                     await self.state.clear_deploy_token(scope_id, token)
-                    result = await self._reuse_registered_or_exhaust(
-                        scope_id, request_id)
-                    outcome = (
-                        f"routing_peer_reuse pod={result.get('pod_id', '?')}")
-                    if request_id:
-                        await self._idem_put(request_id, result)
-                    return result
+                    outcome = "routing_exhausted"
+                    raise MaxPodsReached(
+                        f"scope {scope_id} external pool exhausted "
+                        f"(routing mode); register more pods")
                 lock_key = self.state.k.lock_deploy(scope_id)
                 lock_token = f"deploy-{token}"
                 if not await self.state.try_lock(lock_key, DEPLOY_LOCK_TTL, lock_token):
@@ -212,31 +196,6 @@ class ResourceOrchestrator:
                 self.telemetry.observe_acquire(
                     scope_id, outcome.split()[0] if outcome else "error"
                 )
-
-    async def _reuse_registered_or_exhaust(
-        self, scope_id: str, request_id: str = "",
-    ) -> dict[str, str]:
-        """routing：有已登记 Pod 则交还，否则 MaxPodsReached。
-
-        盖「idle 被并发 reuse 抢走」——输家复用仍在 scope:pods 的机。
-        不排队、不等待；会话是否已满由 SM route_place 再判。
-        """
-        for pod_id in await self.state.pod_ids(scope_id):
-            info = await self.state.pod_info(pod_id)
-            url = (info or {}).get("pod_sse_url") or ""
-            if not url:
-                continue
-            # 与 full follower_reuse 同款：若仍在 idle（罕见窗口）摘出，
-            # 防忙 Pod 被算成热备。
-            await self.state.pop_idle(pod_id, scope_id)
-            logger.info(
-                "routing peer reuses registered pod: scope=%s pod=%s "
-                "request=%s", scope_id, pod_id, request_id or "-",
-            )
-            return {"pod_id": pod_id, "pod_sse_url": url}
-        raise MaxPodsReached(
-            f"scope {scope_id} external pool exhausted "
-            f"(routing mode); register more pods")
 
     async def _follow_leader(
         self,
@@ -365,7 +324,9 @@ class ResourceOrchestrator:
             info = await self.k8s.deploy(pod_spec)
             norm = normalize_pod_spec(pod_spec)
             main = norm.get("main_container")
-            sse_port = main_sse_port(main)
+            # subprocess 部署的 Pod 端口动态分配（本机多进程不可共用模板声明口），
+            # deploy 回传实际发布口 published_port；K8s 模式恒 0 → 回退模板声明口。
+            sse_port = getattr(info, "published_port", 0) or main_sse_port(main)
             sse_url = self.link_mtls.agentserver_url(
                 pod_id=info.pod_id,
                 namespace=info.namespace,

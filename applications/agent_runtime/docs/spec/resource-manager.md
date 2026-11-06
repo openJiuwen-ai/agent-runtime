@@ -50,7 +50,7 @@
                     输家 → 清占位 → _follow_leader(follower 等待室) }
 ```
 
-`_deploy_and_register`:`k8s.deploy(pod_spec)`(create+wait Ready)→ 拼 `pod_sse_url = http://{pod_ip}:{sse_port}{sse_path}`(sse_port/health_path 取自 `main_container`(经 `normalize_pod_spec` 正规化 + `containers.main_sse_port/main_health_path` 单源读取)→ `LUA_REGISTER`(带 sse_port/health_path,Pod 烘焙自己的探测契约)。**deploy 与 REGISTER 都在 `except BaseException` 保护内**(红线:占位清理含取消路径;REGISTER 步失败不清占位一样虚占 max_pods);孤儿兜底删除**两级推导**——异常携带 pod_id/namespace(k8s.deploy 契约)优先,**否则用已到手的 `info`**(REGISTER 步的 Redis 异常/取消不带该属性,但物理 Pod 已建 Ready,不删就成 pods:all 之外的孤儿)。
+`_deploy_and_register`:`k8s.deploy(pod_spec)`(create+wait Ready)→ 拼 `pod_sse_url = http://{pod_ip}:{sse_port}{sse_path}`(sse_port 优先取 `PodDeployInfo.published_port`(subprocess 模式动态分配的实际 SSE 口,2026-11;K8s 模式恒 0)回退 `main_container` 声明口,health_path 取自 `main_container`(经 `normalize_pod_spec` 正规化 + `containers.main_sse_port/main_health_path` 单源读取)→ `LUA_REGISTER`(带 sse_port/health_path,Pod 烘焙自己的探测契约)。**deploy 与 REGISTER 都在 `except BaseException` 保护内**(红线:占位清理含取消路径;REGISTER 步失败不清占位一样虚占 max_pods);孤儿兜底删除**两级推导**——异常携带 pod_id/namespace(k8s.deploy 契约)优先,**否则用已到手的 `info`**(REGISTER 步的 Redis 异常/取消不带该属性,但物理 Pod 已建 Ready,不删就成 pods:all 之外的孤儿)。
 
 `_follow_leader`(M8,deploy 锁输家的等待室):
 - 准入走 `LUA_DEPLOY_FOLLOWER_GATE` 原子闸门,上限 `pod_concurrency - 1`(leader 会话之外新 Pod 恰剩这些槽);overflow 严格快失败 `PodsStartingUp`(冷启动中,非 max_pods 封顶;2026-09-21 前误挂 MaxPodsReached,客户端文案误导排障)。
