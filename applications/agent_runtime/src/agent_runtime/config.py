@@ -119,20 +119,22 @@ def _env_redis_lua(name: str) -> bool:
 
 
 def _env_deploy_mode(name: str) -> str:
-    """AGENT_RUNTIME_DEPLOY_MODE 专用解析：仅显式 full|routing，非法值启动 raise。
+    """AGENT_RUNTIME_DEPLOY_MODE 专用解析：仅显式 full|routing|subprocess，非法值启动 raise。
 
     full=自建/自删 agent-server Pod（缺省，行为不变）；routing=客户 StatefulSet
-    预建 + 注册，本服务只分配不建删、零 K8s API 调用（2026-10 routing 供给模式）。
+    预建 + 注册，本服务只分配不建删、零 K8s API 调用（2026-10 routing 供给模式）；
+    subprocess=本机进程级拉起 AgentServer（轻量单机形态，无 K8s 依赖，2026-11
+    jiuwenswarm-ee-lite）：pod_spec 容器规范形翻译为子进程命令/env，端口动态分配。
     同 _env_redis_lua 的 fail-fast 理由：模式配错静默回 full 会让受限权限环境
     以托管模式启动、首个 deploy/delete 才撞 403，掩盖部署配错。
     """
     raw = (os.getenv(name) or "").strip().lower()
     if not raw:
         return "full"
-    if raw in ("full", "routing"):
+    if raw in ("full", "routing", "subprocess"):
         return raw
     raise ValueError(
-        f"invalid {name}={os.getenv(name)!r}: 仅接受 full|routing（默认 full）"
+        f"invalid {name}={os.getenv(name)!r}: 仅接受 full|routing|subprocess（默认 full）"
     )
 
 
@@ -143,9 +145,10 @@ class AgentRuntimeConfig:
     mode: str = "server"                       # server | local（local=fake 依赖）
     kubeconfig: str | None = None              # 空 = 集群内 ServiceAccount
     default_namespace: str = "default"
-    # agent-server Pod 供给模式（AGENT_RUNTIME_DEPLOY_MODE=full|routing，默认
-    # full）：full=自建/自删；routing=客户 StatefulSet 预建 + register_pods 注册，
-    # 只分配不建删（零 K8s API 调用，SA 无需任何 pods 权限）
+    # agent-server Pod 供给模式（AGENT_RUNTIME_DEPLOY_MODE=full|routing|subprocess，
+    # 默认 full）：full=自建/自删；routing=客户 StatefulSet 预建 + register_pods
+    # 注册，只分配不建删（零 K8s API 调用，SA 无需任何 pods 权限）；
+    # subprocess=本机进程级拉起（轻量单机，无 K8s 依赖）
     deploy_mode: str = "full"
     # 周期任务（秒）；SM 设计 §7 / RM 设计 §5.4 默认表
     sweep_interval: int = 1                    # SM：到期 pass + 空 Pod pass

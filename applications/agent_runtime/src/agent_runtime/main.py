@@ -116,7 +116,13 @@ def build_resources(
         db = SQLiteHandler(
             os.getenv("AGENT_RUNTIME_SQLITE_PATH", "./agent_runtime_local.db")
         )
-        k8s = FakeK8sPodClient(default_namespace=arc.default_namespace)
+        if arc.deploy_mode == "subprocess":
+            # 轻量单机形态：进程级拉起 AgentServer（无 K8s 依赖）
+            from .resource_manager.subprocess_client import SubprocessPodClient
+
+            k8s: Any = SubprocessPodClient(default_namespace=arc.default_namespace)
+        else:
+            k8s = FakeK8sPodClient(default_namespace=arc.default_namespace)
         return redis_client, db, k8s
 
     from openjiuwen_runtime.service.bootstrap import (
@@ -131,12 +137,17 @@ def build_resources(
             "agent-runtime server 模式必须配置 DB"
             "（OPENJIUWEN_SERVICE_DB_TYPE=mysql|postgresql）"
         )
-    k8s = RealK8sPodClient(
-        kubeconfig=arc.kubeconfig,
-        default_namespace=arc.default_namespace,
-        link_mtls_config=link_mtls,
-        health_probe_timeout=arc.health_probe_timeout,
-    )
+    if arc.deploy_mode == "subprocess":
+        from .resource_manager.subprocess_client import SubprocessPodClient
+
+        k8s = SubprocessPodClient(default_namespace=arc.default_namespace)
+    else:
+        k8s = RealK8sPodClient(
+            kubeconfig=arc.kubeconfig,
+            default_namespace=arc.default_namespace,
+            link_mtls_config=link_mtls,
+            health_probe_timeout=arc.health_probe_timeout,
+        )
     return redis_client, db, k8s
 
 
@@ -319,6 +330,12 @@ class OrchestratorSystemContext(SystemContext):
             raise ValueError(
                 "AGENT_RUNTIME_DEPLOY_MODE=routing 与 link mTLS enforce 不兼容:"
                 "外部预建 Pod 无法注入 mTLS 物料(客户 StatefulSet 自管形态)")
+        # subprocess 供给模式同理（fail-fast）：本机进程形态没有 K8s link 物料
+        # 注入通道，enforce 组合会在首个探测/编址处晦涩报错。
+        if self.arc.deploy_mode == "subprocess" and self.link_mtls.enforced:
+            raise ValueError(
+                "AGENT_RUNTIME_DEPLOY_MODE=subprocess 与 link mTLS enforce 不兼容:"
+                "本机进程形态无法注入 mTLS 物料")
         # 无 Lua 模式先行置位（off 为显式声明，禁 EVAL 环境不发任何探测命令）：
         # - 进程级默认 → State 门面首次 eval 惰性固化；
         # - 框架层 memo → TickLock/选主/锁后端直接走 WATCH 路径，免首拍撞墙。
