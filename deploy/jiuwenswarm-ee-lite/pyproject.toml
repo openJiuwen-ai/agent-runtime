@@ -1,0 +1,79 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jiuwenswarm-ee-lite"
+version = "0.1.0"
+description = "Agent-Runtime session orchestration service (Session Manager + Resource Manager)"
+requires-python = ">=3.11.4"
+dependencies = [
+    "agent-runtime-orchestrator @ git+https://gitcode.com/openJiuwen/agent-runtime.git@develop#subdirectory=applications/agent_runtime",
+    "manager-server @ git+https://gitcode.com/openJiuwen/agent-runtime.git@develop#subdirectory=applications/manager/manager_server",
+    "identity-center @ git+https://gitcode.com/openJiuwen/agent-runtime.git@develop#subdirectory=applications/manager/identity_center",
+    "workswarm @ git+https://gitcode.com/cyz95/jiuwenclaw.git@develop",
+    # "openjiuwen-runtime-foundation @ git+https://gitcode.com/openJiuwen/agent-runtime.git@develop#subdirectory=foundation",
+    "psutil>=5.9",
+    # workswarm -> skillnet-ai==0.0.16 要求 pydantic>=2.12.5,与 foundation/service 的 ==2.11.7
+    # 不相交;统一 override 到 >=2.12.5(向后兼容)。
+    "pydantic>=2.11.7,<3",
+    "python-dotenv>=1.0.0",
+    "uvicorn[standard]==0.42.0",
+]
+
+[project.scripts]
+jiuwenswarm-lite = "jiuwenswarm_ee_lite.cli:main"
+
+[project.optional-dependencies]
+# local：开发/测试环境（fakeredis + fake K8s，无外部依赖）
+local = [
+    "fakeredis>=2.20",
+]
+# server：部署环境（真 Redis / MySQL 或 PostgreSQL / K8s）
+server = [
+    "kubernetes_asyncio==35.0.0",
+    "aiomysql>=0.2",
+    "asyncpg>=0.29",
+    "httpx>=0.27",
+]
+
+[dependency-groups]
+dev = [
+    "fakeredis[lua]>=2.20",
+    "httpx>=0.27",
+    "pytest==8.3.5",
+    "pytest-asyncio==1.2.0",
+    "pytest-mock==3.14.0",
+]
+
+[tool.uv]
+default-groups = ["dev"]
+# foundation 的 git URL 根项目不再直接声明: uv 0.7.20 对"根直接声明 + workswarm 内声明
+# 同一条 git URL"会误报 Requirements contain conflicting URLs(两条 URL 字节一致仍冲突),
+# 现由 workswarm 内的 URL 要求统一提供 foundation。
+# service 钉死 fastapi==0.115.11(starlette<0.47)与 workswarm 要求 starlette>=0.49.1 不相交;
+# agent_runtime 钉死 pydantic==2.11.7 与 workswarm->skillnet-ai 要求 pydantic>=2.12.5 不相交;
+# override 去钉,让 uv 选兼容两侧的新版(fastapi 0.162.x / pydantic 2.12.x)。
+override-dependencies = ["fastapi>=0.115,<1.0", "pydantic>=2.12.5,<3"]
+
+# 开发期将四个 git 依赖指到本地仓库(可编辑安装),本地改动即时生效。
+# 需要按 pyproject 中的 git 地址安装时: uv sync --no-sources
+# [tool.uv.sources]
+# agent-runtime-orchestrator = { path = "../agent_runtime", editable = true }
+# manager-server = { path = "../manager/manager_server", editable = true }
+# identity-center = { path = "../manager/identity_center", editable = true }
+# openjiuwen-runtime-foundation = { path = "../../foundation", editable = true }
+
+[[tool.uv.index]]
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "e2e: 全栈端到端用例（需要 jiuwenswarm-lite 栈就绪）",
+]

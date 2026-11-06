@@ -1,0 +1,55 @@
+{
+  "containers": [
+    {
+      "container_id": "lite-agent",
+      "name": "agent",
+      "image": "local/agentserver:lite",
+      "imagePullPolicy": "IfNotPresent",
+      "ports": [
+        {
+          "name": "sse",
+          "containerPort": 18092
+        }
+      ],
+      "env": [
+        {
+          "name": "JIUWENSWARM_EDITION",
+          "value": "enterprise"
+        },
+        {
+          "name": "JIUWENSWARM_CONFIG_SOURCE",
+          "value": "enterprise"
+        },
+        {
+          "name": "GATEWAY_DB_TYPE",
+          "value": "sqlite"
+        },
+        {
+          "name": "GATEWAY_SQLITE_PATH",
+          "value": "${GATEWAY_SQLITE_PATH}"
+        },
+        {
+          "name": "GATEWAY_EPHEMERAL_BACKEND",
+          "value": "memory"
+        }
+      ]
+    }
+  ],
+  "templates": [
+    {
+      "template_id": "03ab6d6d-7cda-4044-bc24-3c3b8b031032",
+      "template_name": "lite-service",
+      "pod_name": "agentserver",
+      "namespace": "",
+      "sse_path": "/sse",
+      "scope_concurrency": 300,
+      "pod_concurrency": 100,
+      "session_ttl": 60,
+      "pod_ttl": 300,
+      "min_idle_pods": 1,
+      "ready_timeout": 300,
+      "main_container_id": "lite-agent"
+    }
+  ],
+  "scopes": []
+}
