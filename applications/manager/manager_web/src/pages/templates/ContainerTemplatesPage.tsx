@@ -23,6 +23,7 @@ import { useRouter } from '../../router';
 import { runtimeCatalogPath, runtimeClusterReturnPath } from '../../utils/runtimeResourceNavigation';
 import { ContainerTemplateModal } from './ContainerTemplateModal';
 import { WorkspaceNote } from '../../components/WorkspaceNote';
+import './ServiceConfigTemplatesPage.css';
 
 type ContainerTemplateSortField = 'template_name' | 'container_id' | 'updated_at';
 
@@ -31,7 +32,8 @@ type ContainerTemplateSortField = 'template_name' | 'container_id' | 'updated_at
  * 供运行时模板绑定（binding 关系见运行时模板编辑页）。
  */
 export function ContainerTemplatesPage() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const tr = (cn: string, en: string) => i18n.language.startsWith('zh') ? cn : en;
   const { params, navigate } = useRouter();
   const runtimeCatalog = runtimeCatalogPath('service-config-templates', params);
   const clusterReturnPath = runtimeClusterReturnPath(params);
@@ -152,6 +154,7 @@ export function ContainerTemplatesPage() {
     setTogglingId(row.template_id);
     try {
       await ContainerTemplateApi.update(row.template_id, { enabled });
+      bumpGuideRevision();
       toast('success', t('success.saved'));
     } catch (toggleError) {
       setItems((current) =>
@@ -179,13 +182,13 @@ export function ContainerTemplatesPage() {
             </div>
           </div>
         )}
-        <div className="page-header w-full min-w-0 flex-wrap items-start gap-y-3">
-          <div className="min-w-[7.5rem] max-w-[20rem] shrink-0 sm:max-w-[32rem]">
+        <div className="page-header runtime-catalog-header w-full min-w-0 flex-wrap items-start gap-y-3">
+          <div className="runtime-catalog-header__identity">
             <div className="page-title">{t('containerTemplate.title')}</div>
             <div className="page-subtitle">{t('containerTemplate.subtitle')}</div>
           </div>
-          <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
-            <ListSearchInput value={searchInput} onChange={setSearchInput} placeholder={t('containerTemplate.searchPlaceholder')} className="basis-full sm:basis-auto" />
+          <div className="runtime-catalog-header__toolbar">
+            <ListSearchInput value={searchInput} onChange={setSearchInput} placeholder={t('containerTemplate.searchPlaceholder')} className="runtime-catalog-header__search" />
             <button className="btn sm" onClick={() => void reload()}>{t('common.refresh')}</button>
             <input
               ref={importInputRef}
@@ -264,7 +267,10 @@ export function ContainerTemplatesPage() {
                   ) : items.map((row) => (
                     <tr key={row.template_id}>
                       <td className="align-top">
-                        <div className="font-medium text-text-strong">{row.template_name}</div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium text-text-strong">{row.template_name}</span>
+                          {!!row.data?.deployment_default && <span className="tag shrink-0">{tr('默认', 'Default')}</span>}
+                        </div>
                         <div className="mono text-[11px] text-muted">{row.template_id}</div>
                       </td>
                       <td className="mono max-w-[14rem] break-all text-xs" title={row.container_id}>
@@ -306,8 +312,8 @@ export function ContainerTemplatesPage() {
         {data ? (
           <Pagination page={page} pageSize={pageSize} total={data.total ?? data.items.length} onChange={(nextPage, nextSize) => { setPage(nextPage); setPageSize(nextSize); }} />
         ) : null}
-        <WorkspaceNote title="容器模板是运行时的“软件包装方式”" action={<button className="btn sm" type="button" onClick={() => navigate(runtimeCatalog)}>前往运行时模板管理 →</button>}>
-          先准备 AgentServer、Sandbox 等镜像和容器参数，再在运行时模板管理中组装成运行池。
+        <WorkspaceNote title="容器模板由运行时模板统一引用" action={<button className="btn sm" type="button" onClick={() => navigate(runtimeCatalog)}>前往运行时模板管理 →</button>}>
+          容器模板定义镜像、环境变量和挂载。可在运行时模板中组合容器，再将运行时模板绑定到集群。
         </WorkspaceNote>
       </div>
       <ContainerTemplateModal

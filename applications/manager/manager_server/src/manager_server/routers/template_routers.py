@@ -38,6 +38,10 @@ from manager_server.core.template.service_config_container import (
 from manager_server.core.template.service_config_template import (
     ServiceConfigTemplateService,
 )
+from manager_server.core.template.deployment_defaults import (
+    deployment_defaults_status,
+    initialize_deployment_defaults,
+)
 from manager_server.core.template.skill_prebuilt_template import (
     SkillPrebuiltTemplateService,
 )
@@ -1014,6 +1018,16 @@ async def discover_agentserver_config():
 
 
 # --- service_config_template ---
+
+
+@templates_router.get("/service-config-templates/deployment-defaults", response_model=ResponseModel)
+async def get_deployment_defaults(handler: Annotated[DBHandler, Depends(get_db_handler)]):
+    return ResponseModel(code=200, message="success", data=await deployment_defaults_status(handler))
+
+
+@templates_router.post("/service-config-templates/deployment-defaults/initialize", response_model=ResponseModel)
+async def prepare_deployment_defaults(handler: Annotated[DBHandler, Depends(get_db_handler)]):
+    return ResponseModel(code=200, message="success", data=await initialize_deployment_defaults(handler))
 
 
 @templates_router.post("/service-config-templates", response_model=ResponseModel)

@@ -46,7 +46,8 @@ export function ServiceConfigTemplatesPage({
   autoNew?: boolean;
   autoEditId?: string;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const tr = (cn: string, en: string) => i18n.language.startsWith('zh') ? cn : en;
   const { params, navigate } = useRouter();
   const catalogPath = runtimeCatalogPath('service-config-templates', params);
   const clusterReturnPath = runtimeClusterReturnPath(params);
@@ -178,24 +179,6 @@ export function ServiceConfigTemplatesPage({
     })();
   };
 
-  const handleDiscoverServerConfig = async () => {
-    setImporting(true);
-    try {
-      const result = await ServiceConfigTemplateApi.discoverAgentserverConfig();
-      if (!result.found || result.config === undefined) {
-        toast('danger', result.configured ? t('serviceConfigTemplate.serverConfigNotFound', { defaultValue: '服务器未找到 agentserver.json，请检查部署工具目录配置。' }) : t('serviceConfigTemplate.serverConfigUnavailable', { defaultValue: '服务端未配置部署工具目录；请使用本地文件导入。' }));
-        return;
-      }
-      const { body, templateCount } = parseConfigSyncImport(result.config);
-      const saved = await ServiceConfigTemplateApi.create(body);
-      recordPreparedRuntime(saved);
-      toast('success', templateCount > 1 ? t('serviceConfigTemplate.importOkFirstOfMany', { count: templateCount }) : t('serviceConfigTemplate.importOk'));
-      void reload(); bumpGuideRevision();
-    } catch (err) {
-      toast('danger', t('serviceConfigTemplate.importFailed', { detail: err instanceof ApiError ? err.detail : err instanceof Error ? err.message : String(err) }));
-    } finally { setImporting(false); }
-  };
-
   const handleImportFile = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
@@ -250,6 +233,7 @@ export function ServiceConfigTemplatesPage({
     setTogglingId(row.template_id);
     try {
       await ServiceConfigTemplateApi.update(row.template_id, { enabled });
+      bumpGuideRevision();
       if (!enabled) clearPreparedRuntime(row.template_id);
       if (enabledFilter !== '' && enabled !== (enabledFilter === 'true')) {
         setItems((list) => list.filter((item) => item.template_id !== row.template_id));
@@ -287,45 +271,41 @@ export function ServiceConfigTemplatesPage({
             </div>
           </div>
           <div className="runtime-catalog-header__toolbar">
-          <ListSearchInput
-            value={searchInput}
-            onChange={setSearchInput}
-            placeholder={t('serviceConfigTemplate.searchPlaceholder')}
-            className="runtime-catalog-header__search"
-          />
-          <button className="btn sm" onClick={() => void reload()}>
-            {t('common.refresh')}
-          </button>
-          <input
-            ref={importInputRef}
-            type="file"
-            accept="application/json,.json"
-            className="hidden"
-            onChange={handleImportFile}
-          />
-          <button className="btn sm" disabled={importing} onClick={() => void handleDiscoverServerConfig()} title={t('serviceConfigTemplate.discoverServerHint', { defaultValue: '从 Manager 服务端读取部署期间生成的 agentserver.json' })}>
-            {t('serviceConfigTemplate.discoverServer', { defaultValue: '从服务器发现' })}
-          </button>
-          <button
-            className="btn sm"
-            disabled={importing}
-            title={t('containerTemplate.importRuntimeAndContainerHint')}
-            onClick={() => importInputRef.current?.click()}
-          >
-            {importing ? t('common.loading') : t('serviceConfigTemplate.import')}
-          </button>
-          <button
-            className="btn primary sm"
-            onClick={() => {
-              setEditing(null);
-              setModalOpen(true);
-            }}
-          >
-            + {t('serviceConfigTemplate.new')}
-          </button>
+            <ListSearchInput
+              value={searchInput}
+              onChange={setSearchInput}
+              placeholder={t('serviceConfigTemplate.searchPlaceholder')}
+              className="runtime-catalog-header__search"
+            />
+            <button className="btn sm" onClick={() => void reload()}>
+              {t('common.refresh')}
+            </button>
+            <input
+              ref={importInputRef}
+              type="file"
+              accept="application/json,.json"
+              className="hidden"
+              onChange={handleImportFile}
+            />
+            <button
+              className="btn sm"
+              disabled={importing}
+              title={t('containerTemplate.importRuntimeAndContainerHint')}
+              onClick={() => importInputRef.current?.click()}
+            >
+              {importing ? t('common.loading') : t('serviceConfigTemplate.import')}
+            </button>
+            <button
+              className="btn primary sm"
+              onClick={() => {
+                setEditing(null);
+                setModalOpen(true);
+              }}
+            >
+              + {t('serviceConfigTemplate.new')}
+            </button>
+          </div>
         </div>
-      </div>
-
       <div className="flex w-full min-w-0 shrink-0 flex-col gap-4">
       <div className="card manager-page-table !p-0">
         {loading ? (
@@ -390,7 +370,10 @@ export function ServiceConfigTemplatesPage({
               ) : items.map((row) => (
                 <tr key={row.template_id}>
                   <td className="align-top">
-                    <div className="text-text-strong font-medium break-words">{row.template_name}</div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-text-strong font-medium break-words">{row.template_name}</span>
+                      {!!row.data?.deployment_default && <span className="tag shrink-0">{tr('默认', 'Default')}</span>}
+                    </div>
                     <div className="text-[11px] text-muted mono break-all" title={row.template_id}>
                       {row.template_id}
                     </div>
@@ -461,8 +444,8 @@ export function ServiceConfigTemplatesPage({
           }}
         />
       )}
-      <WorkspaceNote title="运行规格决定 Agent 使用哪套运行资源" action={<button className="btn sm" onClick={() => navigate(runtimeCatalogPath('container-templates', params))}>管理容器模板 →</button>}>
-        运行规格由容器模板组装而成，必须在具体服务实例中启用后，Agent 才能使用它运行。
+      <WorkspaceNote title="模板准备好后，在集群中绑定运行资源" action={<button className="btn sm" onClick={() => navigate(runtimeCatalogPath('container-templates', params))}>管理容器模板 →</button>}>
+        运行时模板引用容器模板，定义运行池与调度方式。绑定到集群后，可按组织、用户或 Agent 设置使用范围。
       </WorkspaceNote>
       </div>
       </div>

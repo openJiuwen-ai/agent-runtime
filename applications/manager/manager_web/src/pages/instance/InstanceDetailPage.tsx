@@ -85,7 +85,7 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
     },
     otherSettings: {
       title: zh ? '集中管理当前集群的运行策略' : 'Manage cluster policies in one place',
-      body: zh ? '通过目录定位日志配置和配额管理，每项独立保存；成本统计与业务审计尚未开放。目录跳转保留本页未保存的填写内容。' : 'Use the directory to find logging and quota settings. Save each section independently; cost and business audit are not available yet. Moving between sections retains unsaved edits.',
+      body: zh ? '通过目录定位日志配置和配额管理，每项独立保存。目录跳转保留本页未保存的填写内容。' : 'Use the directory to find logging and quota settings. Save each section independently. Moving between sections retains unsaved edits.',
     },
   };
   const context = tabContext[tab] ?? tabContext.access;

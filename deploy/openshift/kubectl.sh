@@ -43,6 +43,7 @@ source "$_KCTL_DIR/global_vars.sh"
 source "$_KCTL_DIR/var_handler.sh"
 # k8s 形态专属函数（_kctl_k8s_* 通道实现、渲染后处理）；独立执行本脚本时也需要
 source "$_KCTL_DIR/k8s_handler.sh"
+source "$_KCTL_DIR/manager_defaults_handler.sh"
 
 # 临时目录随进程退出清理（kapply-<PID> 按进程隔离）；SIGINT/SIGTERM 转发为正常退出以触发本 trap
 trap 'rm -rf "$_KCTL_DIR/kapply-$$"' EXIT
@@ -235,7 +236,14 @@ kctl_apply_resource() { # $1=资源文件
   local resp; resp="$(kctl_tmpdir)/resp"
   local code; code=$(kctl_http GET "$KCTL_PATH/$KCTL_NAME" "$resp")
   case "$code" in
-    200) info "$KCTL_LK/$KCTL_NAME unchanged（已存在，更新用 replace）"; return 0;;
+    200)
+      # Only the managed runtime-default Secret and its Manager mount need
+      # content updates. Preserve the usual skip/replace policy for other fields.
+      if is_manager_runtime_defaults_resource "$1"; then
+        update_existing_manager_runtime_defaults "$1" "$resp" || error "Manager 默认模板交付更新失败"
+        return 0
+      fi
+      info "$KCTL_LK/$KCTL_NAME unchanged（已存在，更新用 replace）"; return 0;;
     404) ;;
     *)   kctl_show_err "$code" "$resp";;
   esac

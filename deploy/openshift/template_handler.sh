@@ -75,4 +75,9 @@ render_templates() {
   apply_sandbox_type_extras "${wanted[@]}"
   apply_jiuwenbox_extras "${wanted[@]}"
   apply_dev_code_mounts "${wanted[@]}"
+  # Use the final runtime payload, including NFS, sandbox and dev-code changes.
+  if in_array manager-server.yaml "${wanted[@]}"; then
+    render_manager_runtime_defaults "$CONF_DIR/manager-server.yaml" "$CONF_DIR/agentserver.json" "${DEPLOY_VARS[NAMESPACE]}" \
+      || error "Manager 默认运行时模板交付失败"
+  fi
 }

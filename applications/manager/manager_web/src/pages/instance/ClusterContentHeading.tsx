@@ -12,7 +12,7 @@ export function ClusterContentHeading({ section }: Props) {
   const headings = {
     serviceResources: {
       title: tr('当前集群的运行资源', 'Runtime resources for this cluster'),
-      description: tr('运行规格目录是可复用定义，本页决定它是否在当前集群生效。', 'The catalog stores reusable profiles; this page activates them for the current cluster.'),
+      description: tr('运行时模板是可复用定义，本页决定它是否在当前集群生效。', 'The catalog stores reusable runtime templates; this page activates them for the current cluster.'),
     },
     agentResources: {
       title: tr('当前集群已绑定 Agent', 'Agents bound to this cluster'),

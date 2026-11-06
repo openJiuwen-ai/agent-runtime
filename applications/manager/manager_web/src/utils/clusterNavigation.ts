@@ -3,11 +3,11 @@ import { templateReturnPath } from './agentFlowContext';
 export const clusterSetupSections = ['access', 'service-resources', 'agent-resources', 'status'] as const;
 export type ClusterWorkspaceSection = 'cluster-config' | typeof clusterSetupSections[number] | 'other-settings' | 'config' | 'workspace-quota' | 'team-quota' | 'token-quota' | 'cost' | 'audit';
 export type ClusterNavigationGroup = 'cluster-config' | typeof clusterSetupSections[number] | 'other-settings';
-export const clusterSettingSections = ['log-masking', 'logging', 'audit-log', 'cron-quota', 'workspace-quota', 'team-quota', 'token-quota', 'cost', 'business-audit'] as const;
+export const clusterSettingSections = ['log-masking', 'logging', 'audit-log', 'cron-quota', 'workspace-quota', 'team-quota'] as const;
 export type ClusterSettingSection = typeof clusterSettingSections[number];
 const legacySettingSections: Record<string, ClusterSettingSection> = {
   'workspace-quota': 'workspace-quota', 'team-quota': 'team-quota',
-  'token-quota': 'token-quota', cost: 'cost', audit: 'business-audit',
+  'token-quota': 'log-masking', cost: 'log-masking', audit: 'log-masking',
 };
 
 export function clusterNavigationGroup(section: ClusterWorkspaceSection): ClusterNavigationGroup {

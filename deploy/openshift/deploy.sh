@@ -29,6 +29,7 @@ source "$SCRIPT_DIR/envfile_handler.sh"
 source "$SCRIPT_DIR/args_handler.sh"
 source "$SCRIPT_DIR/component_handler.sh"
 source "$SCRIPT_DIR/template_handler.sh"
+source "$SCRIPT_DIR/manager_defaults_handler.sh"
 source "$SCRIPT_DIR/k8s_handler.sh"
 source "$SCRIPT_DIR/deploy_handler.sh"
 

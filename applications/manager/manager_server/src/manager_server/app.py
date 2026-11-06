@@ -14,6 +14,7 @@ from manager_server.infrastructure.dev_mode import offline_dev_enabled
 from manager_server.infrastructure.db import create_db_handler, database_config_summary
 from manager_server.infrastructure.logger import configure_logging, get_logger
 from manager_server.models.table_init import init_all_tables
+from manager_server.core.template.deployment_defaults import bootstrap_deployment_defaults
 from manager_server.routers.register import router_register
 from manager_server.schedulers.heartbeat_scanner import run_heartbeat_scan_loop
 from manager_server.security.keys import get_or_create_manager_signing_key
@@ -35,6 +36,7 @@ async def lifespan(application: FastAPI):
     await db_handler.init_database()
     await db_handler.connect()
     await init_all_tables(db_handler)
+    await bootstrap_deployment_defaults(db_handler)
     # 身份/账号种子已移至独立认证服务(jiuwenclaw_identity);管理库不再播种用户/组织。
     # 加载/生成 Manager 签名密钥对（Ed25519），供握手下发公钥与下发加签使用。
     set_manager_signing_key(await get_or_create_manager_signing_key(db_handler))

@@ -10,6 +10,23 @@
 
 本地开发时，**先启动身份中心，再启动管理 API，最后启动前端**。
 
+## 部署推荐运行环境
+
+普通配置流程为：准备模型和 Agent 模板 → 创建集群 → 在「运行资源」中绑定部署推荐运行时模板 → 检查连接并验证对话。容器模板描述镜像、环境变量与挂载；运行时模板引用这些容器并设置调度参数；集群绑定决定适用范围与优先级。部署生成的模板已包含前两层配置，通常无需手动填写。
+
+新版部署工具将最终渲染的 `conf/agentserver.json` 通过只读 Secret 交给 Manager Server。Manager 启动时将它转换为真实的容器模板和运行时模板，生成的模板直接显示在普通模板列表中，名称旁标注“默认”，不需要从浏览器选择 Linux 服务器上的文件。需同步更新 **Manager Server、Manager Web 和部署工具**，仅更新前端不能启用自动准备。具体命令见 [OCP 部署说明](../../deploy/openshift/README.md#manager-默认运行时模板) 和 [EE 部署说明](../../deploy/jiuwenswarm-ee/README.md)。
+
+服务器进程可通过环境变量 `AGENTSERVER_JSON_PATH` 指定可读的最终渲染文件；旧的 `MANAGER_DEPLOY_TOOL_DIR/conf/agentserver.json` 路径仍兼容。`MANAGER_RUNTIME_DEFAULTS_ENABLED=false` 只关闭启动时自动初始化，管理员仍可通过下面的初始化接口显式生成。文件缺失或非法不会阻止 Manager 启动，可通过服务端日志或状态接口检查原因；模板列表不会生成占位数据。
+
+管理员接口（使用现有管理认证）：
+
+| 接口 | 行为 |
+| --- | --- |
+| `GET /api/v1/service-config-templates/deployment-defaults` | 只读检查文件与已生成模板，返回状态、配置指纹和模板摘要 |
+| `POST /api/v1/service-config-templates/deployment-defaults/initialize` | 幂等生成或补齐本配置版本的模板，不创建集群绑定 |
+
+相同配置重复初始化不会新增副本；配置变化生成新快照，已有模板、人工修改及集群绑定均保留。部署文件中的 `scopes` 不会自动成为集群授权。模板依赖原部署的镜像、存储、Secret/ConfigMap 和节点，跨部署复用时需核对这些依赖。模板生成成功不代表已验证实际 Agent 对话。
+
 ---
 
 ## 环境要求

@@ -39,6 +39,29 @@ kubectl get pods   # 确认登录成功
 
 可配置变量的含义与默认值详见同目录 `.env.example`。
 
+### Manager 默认运行时模板
+
+使用包含此功能的部署工具和 Manager Server 后，同一部署目录中最终渲染的
+`conf/agentserver.json` 会在 `up manager` 时自动交付给 Manager。无需把 Linux
+服务器上的文件下载到浏览器电脑，也无需先手填容器模板。
+
+```bash
+./deploy.sh up -n <namespace> runtime   # 渲染并部署运行时；完整产品部署已执行过可跳过
+./deploy.sh up -n <namespace> manager
+```
+
+工具将最终配置（含存储、sidecar、开发模式等后处理结果）放入同命名空间的
+`jiuwenswarm-manager-runtime-defaults` Secret，并只读挂载到 Manager 的
+`/etc/manager/runtime-defaults/agentserver.json`。Manager 启动时幂等创建配套的
+运行时模板和容器模板，集群仍需显式绑定运行时模板。配置变化后重新 `up manager`
+会更新 Secret 并滚动更新 Manager；新配置生成新的模板快照，不覆盖已定制模板和已有绑定。
+
+仅部署 Manager、目录中还没有 `agentserver.json` 时，Manager 可正常启动但不会
+生成推荐模板。可先运行 `./deploy.sh up -n <namespace> runtime --render-only`
+生成配置，再重新 `up manager`；这不会启动 Runtime，但模板能否运行仍取决于
+实际 Runtime、存储和环境配置是否部署齐全。不同命名空间的历史 JSON 会被拒绝，
+需要按目标 `-n` 重新渲染。JSON 和生成的 Manager 清单可能含凭据，请按部署配置管理。
+
 
 ## 3. 部署 / 卸载
 

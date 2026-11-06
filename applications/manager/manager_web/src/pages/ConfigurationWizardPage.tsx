@@ -66,7 +66,7 @@ function ClusterCreationForm({ draftKey, template, returnTo }: { draftKey: strin
   const flow = [
     [tr('创建服务实例', 'Create service instance'), tr('保存集群名称和服务地址', 'Save the cluster identity and endpoints')],
     [tr('集群准入', 'Cluster admission'), tr('允许哪些用户或组织进入', 'Choose who can enter')],
-    [tr('运行资源', 'Runtime resources'), tr('启用运行规格并设置适用范围', 'Enable runtime profiles and their scope')],
+    [tr('运行资源', 'Runtime resources'), tr('绑定运行时模板并设置适用范围', 'Bind a runtime template and set its scope')],
     [tr('Agent 绑定', 'Agent bindings'), tr('选择模板并设置使用范围', 'Select templates and their access scope')],
     [tr('检查并验证', 'Check and verify'), tr('检查组件连接和实际对话', 'Check connectivity and an actual conversation')],
   ];

@@ -103,7 +103,8 @@ declare -A ARGS=(
 
 
 # ==== All available modules ====
-declare -ga ALL_MODULES=("NFS" "NFS-SC" "RABBITMQ" "MARIADB" "MYSQL" "POSTGRESQL" "MINIO" "LOG" "JINA" "PROXY" "MONITOR" "GATEWAY" "WEB" "MANAGER" "RUNTIME" "AGENTSERVER")
+# Runtime renders agentserver.json before Manager consumes it as default templates.
+declare -ga ALL_MODULES=("NFS" "NFS-SC" "RABBITMQ" "MARIADB" "MYSQL" "POSTGRESQL" "MINIO" "LOG" "JINA" "PROXY" "MONITOR" "GATEWAY" "WEB" "RUNTIME" "AGENTSERVER" "MANAGER")
 
 declare -ga MODULES=()
 

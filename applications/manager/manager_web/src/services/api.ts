@@ -1565,7 +1565,20 @@ export const PermissionsTemplateApi = {
     ),
 };
 
+export interface DeploymentDefaultsStatus {
+  status: 'unconfigured' | 'not_found' | 'invalid' | 'available' | 'ready';
+  source?: string;
+  fingerprint?: string;
+  message?: string;
+  templates: { template_id: string; template_name: string; enabled: boolean; customized?: boolean }[];
+  namespaces?: string[];
+  container_count: number;
+  created?: number;
+}
+
 export const ServiceConfigTemplateApi = {
+  deploymentDefaults: () => http<DeploymentDefaultsStatus>('/v1/service-config-templates/deployment-defaults'),
+  initializeDeploymentDefaults: () => http<DeploymentDefaultsStatus>('/v1/service-config-templates/deployment-defaults/initialize', { method: 'POST' }),
   discoverAgentserverConfig: () => http<{ found: boolean; source?: string; configured?: boolean; error?: string; config?: unknown }>('/v1/service-config-templates/agentserver-discovery'),
   list: (params?: {
     page?: number;

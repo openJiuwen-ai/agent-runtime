@@ -33,7 +33,7 @@ try {
       ['config', 'logMasking', 'log-masking'], ['config', 'logging', 'logging'],
       ['config', 'auditLog', 'audit-log'], ['config', 'cronPolicy', 'cron-quota'],
       ['workspace-quota', '', 'workspace-quota'], ['team-quota', '', 'team-quota'],
-      ['token-quota', '', 'token-quota'], ['cost', '', 'cost'], ['audit', '', 'business-audit'],
+      ['token-quota', '', 'log-masking'], ['cost', '', 'log-masking'], ['audit', '', 'log-masking'],
     ];
     for (const [section, configTab, setting] of mappings) {
       const context = new URLSearchParams({ configTab, templateId: 'agent/a', returnTo: '/agent-templates?search=a', setup: '1', create: '1' });
@@ -54,6 +54,9 @@ try {
     assert.equal(canonicalClusterPath('id', 'other-settings', context), '/instances/id/other-settings?setting=logging');
     assert.equal(canonicalClusterPath('id', 'status', context), '/instances/id/status');
     assert.equal(canonicalClusterPath('id', 'other-settings', new URLSearchParams({ setting: 'unknown' })), '/instances/id/other-settings');
+    for (const setting of ['token-quota', 'cost', 'business-audit']) {
+      assert.equal(canonicalClusterPath('id', 'other-settings', new URLSearchParams({ setting })), '/instances/id/other-settings');
+    }
     assert.equal(canonicalClusterPath('id', 'unknown', context), '/instances/id/cluster-config');
   });
   test('legacy expert bookmarks open the resource center with cluster and safe return context',()=>{

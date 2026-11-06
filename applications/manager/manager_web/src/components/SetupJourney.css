@@ -16,7 +16,9 @@
 .setup-guide-task-heading h3 { font-size: 14px; font-weight: 600; }
 .setup-guide-task-heading > span { font-size: 12px; color: var(--muted); }
 .setup-guide-tasks { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); gap: 10px; }
-.setup-guide-task { display: flex; flex-direction: column; gap: 8px; padding: 14px; text-align: left; border: 1px solid var(--border); border-radius: 8px; background: var(--card); }
+.setup-guide-tasks--resources { grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr)); }
+.setup-guide-tasks--resources .setup-guide-task { min-height: 104px; }
+.setup-guide-task { min-width: 0; display: flex; flex-direction: column; gap: 8px; padding: 14px; text-align: left; border: 1px solid var(--border); border-radius: 8px; background: var(--card); }
 .setup-guide-task strong { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; font-weight: 600; }
 .setup-guide-task strong > span { color: var(--accent); }
 .setup-guide-task > span { font-size: 12px; color: var(--muted); line-height: 1.6; }
@@ -26,6 +28,8 @@
 .setup-guide-task:disabled strong > span { visibility: hidden; }
 .setup-guide-optional { display: grid; gap: 10px; }
 .setup-guide-optional > .btn { justify-self: start; }
+.setup-guide .btn.setup-guide-optional__toggle { border-color: var(--accent); background: var(--accent-subtle); color: var(--accent); font-weight: 600; }
+.setup-guide .btn.setup-guide-optional__toggle:hover { background: var(--accent-subtle); box-shadow: 0 0 0 1px var(--accent); }
 .setup-guide-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--border); padding-top: 12px; }
 .setup-guide-footer > span { flex: 1 1 220px; font-size: 12px; color: var(--muted); line-height: 1.6; }
 .setup-guide-footer > div { display: flex; gap: 8px; }

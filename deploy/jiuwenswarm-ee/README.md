@@ -6,6 +6,23 @@ JiuwenSwarm 企业级部署工具是适配 Kubernetes 集群的一站式自动�
 
 ## 1. 环境准备
 
+### Manager 自动准备运行时模板
+
+使用包含此功能的部署工具和 Manager Server 后，先部署 Runtime，再在同一部署目录、
+同一命名空间执行 `./deploy.sh up -n <namespace> manager`，即可将最终渲染的
+`conf/agentserver.json` 交付给 Manager。完整部署中脚本已保证 Runtime 先于 Manager。
+Manager 会自动准备配套的运行时模板和容器模板，无需下载服务器文件到本地浏览器。
+生成的模板会在模板列表中标注“默认”，随后在集群的“运行资源”页面选择模板进行绑定；镜像、环境和调度的手动创建仅供高级定制。
+
+配置通过 `jiuwenswarm-manager-runtime-defaults` Secret 只读挂载到
+`/etc/manager/runtime-defaults/agentserver.json`。重新部署 Manager 会更新变化的配置并
+触发滚动更新；重复配置不会重复创建，版本配置变化生成新的快照，不覆盖已有模板和集群绑定。
+
+若仅部署 Manager 且 JSON 尚未生成，部署日志会提示待准备，Manager 本身仍正常启动。可先运行
+`./deploy.sh up -n <namespace> runtime --render-only` 生成配置，再重新部署 Manager。
+仅渲染不会启动 Runtime，使用模板前仍需部署相关 Runtime、存储和环境资源。
+目标命名空间不匹配时应重新渲染。JSON 和生成的 Manager 清单可能含凭据，请按部署配置管理。
+
 ### 1.1 基础环境要求
 
 **安装JiuwenSwarm前，请确保满足以下要求：**
