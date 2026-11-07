@@ -17,12 +17,6 @@ check_cluster_type_var() {
 #   AgentServer 固定单副本，配置多副本视为矛盾
 resolve_deploy_mode_vars() {
   local mode="${DEPLOY_VARS["AGENT_RUNTIME_DEPLOY_MODE"]:-}"
-  # openshift 集群暂不支持 full 模式：受限 SCC 环境无法授予 Pod 操作权限，
-  # 且 RS 配额等受限（见 .env.example 模式说明）；k8s 形态不受限。
-  # 本函数在 check_vars 主链执行，error 直接终止部署
-  if [ "$mode" = full ] && ! is_k8s_cluster; then
-    error "AGENT_RUNTIME_DEPLOY_MODE=full 暂不支持 openshift 集群（CLUSTER_TYPE=openshift）：受限环境无法授予 Pod 操作权限，请改用 routing/off，或改用 CLUSTER_TYPE=k8s 形态部署"
-  fi
   case "$mode" in
     routing|full)
       DEPLOY_VARS["GATEWAY_AGENT_CLIENT_MODE"]="runtime"
