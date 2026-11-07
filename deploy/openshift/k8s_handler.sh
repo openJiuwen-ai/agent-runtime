@@ -482,7 +482,7 @@ apply_sandbox_type_extras() { # $@=本次渲染的清单文件名
 
 # jiuwenbox 沙箱 sidecar 注入（SANDBOX_TYPE=jiuwenbox）：
 # - agentserver.yaml → StatefulSet 追加 sidecar 容器 + cgroup hostPath 卷；
-#   sidecar 与主容器挂载完全一致（工作区根 + run/ 遮蔽），保证与主进程文件级 IPC 同径
+#   sidecar 挂业务卷 domain/，与主进程保持工作区文件级 IPC 同径
 # - agentserver.json → config_sync 载荷追加 c-jiuwenbox 容器 + sidecar_container_ids
 #   + hp-cgroup 卷（与 ee 部署的 config_sync 载荷同规格）
 _apply_jiuwenbox_sidecar_yaml() { # $1=agentserver.yaml
@@ -504,8 +504,7 @@ _apply_jiuwenbox_sidecar_yaml() { # $1=agentserver.yaml
       "seccompProfile": {"type": "Unconfined"}},
     "readinessProbe": {"tcpSocket": {"port": '"${port}"'}, "initialDelaySeconds": 10, "periodSeconds": 5},
     "volumeMounts": [
-      {"name": "agentserver-data", "mountPath": "/home/app/.jiuwenswarm"},
-      {"name": "agentserver-data", "mountPath": "/home/app/.jiuwenswarm/run", "subPathExpr": "run/$(POD_NAME)"},
+      {"name": "agentserver-data", "mountPath": "/home/app/.jiuwenswarm/domain"},
       {"name": "hp-cgroup", "mountPath": "/sys/fs/cgroup"}
     ]
   }])' "$1"
@@ -534,7 +533,7 @@ _apply_jiuwenbox_sidecar_json() { # $1=agentserver.json
         "seccompProfile": {"type": "Unconfined"}},
       "readinessProbe": {"tcpSocket": {"port": '"${port}"'}, "initialDelaySeconds": 10, "periodSeconds": 5},
       "volumeMounts": [
-        {"name": "data", "mountPath": "/home/app/.jiuwenswarm"},
+        {"name": "data", "mountPath": "/home/app/.jiuwenswarm/domain"},
         {"name": "hp-cgroup", "mountPath": "/sys/fs/cgroup"}
       ]
     }] |

@@ -64,8 +64,10 @@ spec:
             - configMapRef:
                 name: <<AGENT_SERVER_ENV_CM_NAME>>
           volumeMounts:
-            - name: data
-              mountPath: <<SWARM_HOME>>/.jiuwenswarm
+            - name: agentserver-domain
+              mountPath: <<SWARM_HOME>>/.jiuwenswarm/domain
+            - name: agentserver-infra
+              mountPath: <<SWARM_HOME>>/.jiuwenswarm/infra
         # jiuwenbox 沙箱 sidecar：SANDBOX_TYPE 非 jiuwenbox 时由 agentserver_handler 整体移除
         - name: <<JIUWENBOX_NAME>>
           image: <<JIUWENBOX_IMAGE>>
@@ -96,12 +98,14 @@ spec:
           volumeMounts:
             - name: hp-cgroup
               mountPath: /sys/fs/cgroup
-            - name: data
-              mountPath: <<SWARM_HOME>>/.jiuwenswarm
+            - name: agentserver-domain
+              mountPath: <<SWARM_HOME>>/.jiuwenswarm/domain
       volumes:
-        - name: data
+        - name: agentserver-domain
           persistentVolumeClaim:
             claimName: <<SWARM_PVC>>
+        - name: agentserver-infra
+          emptyDir: {}
         - name: hp-cgroup
           hostPath:
             path: /sys/fs/cgroup
