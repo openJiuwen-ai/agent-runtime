@@ -126,7 +126,8 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
             DeployResult: 部署结果
         """
         deployment_id = ctx.deployment_id
-        logger.info("Deploying subprocess: deployment_id=%s, host=%s", ctx.deployment_id, ctx.host)
+        host = ctx.host or self.default_host or "127.0.0.1"
+        logger.info("Deploying subprocess: deployment_id=%s, host=%s", ctx.deployment_id, host)
         try:
             subprocess_params = ctx.params or SubprocessParams()
             whl_path = subprocess_params.whl_path
@@ -225,7 +226,7 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
                 logger.error("Process exited for %s: %s", deployment_id, error_msg)
                 raise RuntimeError(f"Process exited: {error_msg}")
 
-            url = f"http://{settings.IP}:{port}/"
+            url = f"http://{settings.IP or host}:{port}/"
             logger.info(
                 "Deployment %s succeeded, PID: %s, URL: %s",
                 deployment_id,
