@@ -1,0 +1,11 @@
+# 本地运行产物（单机数据/日志/工作区，不进 git）
+data/
+# 依赖仓代码，运行产物
+resources/jiuwenswarm
+# uv venv
+.venv/
+__pycache__/
+*.pyc
+
+# 本地配置(真实环境变量优先;样例见 .env.example)
+.env
