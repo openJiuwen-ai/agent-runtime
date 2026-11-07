@@ -8,7 +8,6 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 LoginPolicy = Literal["allow", "deny"]
-UploadSkillPolicy = Literal["allow", "deny"]
 
 
 class InstanceBindBody(BaseModel):
@@ -16,7 +15,6 @@ class InstanceBindBody(BaseModel):
 
     ids: list[str] = Field(..., min_length=1, max_length=1000)
     login_policy: LoginPolicy = "allow"
-    upload_skill_policy: UploadSkillPolicy = "deny"
     expires_at: datetime | None = None
     enabled: bool = True
 
@@ -28,11 +26,10 @@ class InstanceUnbindBody(BaseModel):
 
 
 class InstanceGrantUpdateBody(BaseModel):
-    """更新单条 instance_grant（启用 / 登录权限 / Skill 上传权限 / 过期时间）。"""
+    """更新单条 instance_grant（启用 / 登录权限 / 过期时间）。"""
 
     enabled: bool | None = None
     login_policy: LoginPolicy | None = None
-    upload_skill_policy: UploadSkillPolicy | None = None
     expires_at: datetime | None = None
     # 显式清空过期时间（与 expires_at=null 在 JSON 中难以区分时使用）
     clear_expires_at: bool = False

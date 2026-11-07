@@ -281,8 +281,6 @@
         "grantedBy": "Granted By",
         "loginPolicy": "Login Permission",
         "loginPolicyHint": "Deny takes priority over allow",
-        "uploadSkillPolicy": "Skill Upload Permission",
-        "uploadSkillPolicyHint": "Allows this user/org to upload Skill packages; independent of login permission",
         "loginAllow": "Allow",
         "loginDeny": "Deny",
         "expiresAt": "Expires At",
@@ -1311,8 +1309,16 @@
     "subjectTitle": "Title",
     "types": {
       "workspace_quota_expand": "Quota Approval",
-      "skill_upload_permission": "Skill Upload Permission"
+      "skill_upload": "Skill Upload Approval"
     },
+    "skillUploadTitle": "Upload skill {{name}}",
+    "skillName": "Skill Name",
+    "skillPackage": "Skill Package",
+    "skillDownload": "Download Package",
+    "skillDownloadFailed": "Download failed: {{detail}}",
+    "skillPackageRetention": "The original package can be downloaded until {{expiresAt}}. After that, ask the uploader to upload it again.",
+    "skillPackageExpired": "The original package has expired. Ask the uploader to upload it again.",
+    "skillPackageUnavailable": "The original package cannot be fetched right now (object storage unreachable or content check failed). Please try again later.",
     "orderNum": "Order Number",
     "applicant": "Applicant",
     "approver": "Approver",
@@ -1321,9 +1327,6 @@
     "group": "Organization",
     "bot": "Bot",
     "workspace": "Workspace",
-    "skillUploadUser": "Granted user",
-    "skillUploadGrant": "Granted upload permission",
-    "skillUploadGrantCreated": "Personal grant row created",
     "createdAt": "Submitted At",
     "noOrg": "No organization",
     "noApprover": "No approver",
@@ -1355,12 +1358,14 @@
       "pending": "Pending",
       "approved": "Approved",
       "rejected": "Rejected",
-      "cancelled": "Cancelled"
+      "cancelled": "Cancelled",
+      "expired": "Expired"
     },
     "actions": {
       "approve": "Approve",
       "reject": "Reject",
-      "cancel": "Cancel"
+      "cancel": "Cancel",
+      "install": "Install"
     },
     "sync": {
       "success": "Synced to Gateway",

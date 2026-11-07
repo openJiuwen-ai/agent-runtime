@@ -32,13 +32,9 @@ def _inject_manager_web_runtime_config(document: str) -> str:
     from manager_server.infrastructure.config import settings
 
     enabled = bool(settings.workspace_quota_enabled)
-    skill_upload_enabled = bool(settings.skill_upload_approval_enabled)
     return document.replace(
         "__WORKSPACE_QUOTA_ENABLED_VALUE__",
         "true" if enabled else "false",
-    ).replace(
-        "__SKILL_UPLOAD_APPROVAL_ENABLED_VALUE__",
-        "true" if skill_upload_enabled else "false",
     )
 
 

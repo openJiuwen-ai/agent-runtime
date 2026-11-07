@@ -342,12 +342,9 @@ export function isWorkspaceQuotaEnabled(_user?: AuthUser | null): boolean {
   );
 }
 
-/** 审批中心是否可用：配额特性或 Skill 上传审批特性任一开启。 */
+/** 审批中心随管理面常显；具体菜单与操作仍由 approval:read 等权限控制。 */
 export function isApprovalEnabled(_user?: AuthUser | null): boolean {
-  if (isWorkspaceQuotaEnabled(_user)) return true;
-  return coerceRuntimeBool(
-    typeof window !== 'undefined' ? window.__SKILL_UPLOAD_APPROVAL_ENABLED__ : undefined,
-  );
+  return true;
 }
 
 /** 配额 / 审批权限码（特性关闭时管理面角色权限 UI 隐藏）。 */
@@ -586,7 +583,7 @@ export interface ApprovalRecord {
   record_id: string;
   order_num: string;
   operator_id: string;
-  action: 'approve' | 'reject' | 'cancel';
+  action: 'approve' | 'reject' | 'cancel' | 'install';
   comment: string | null;
   created_at: string | null;
 }
@@ -595,7 +592,7 @@ export interface ApprovalOrder {
   order_num: string;
   business_type: string;
   title: string;
-  status: 'pending' | 'approved' | 'rejected' | 'cancelled';
+  status: 'pending' | 'approved' | 'rejected' | 'cancelled' | 'expired';
   applicant_id: string;
   approver_id: string | null;
   group_id: string;
@@ -604,6 +601,10 @@ export interface ApprovalOrder {
   reason?: string;
   created_at: string | null;
   updated_at: string | null;
+  /** 审批单失效时间；为空表示不过期（历史单据）。 */
+  expires_at?: string | null;
+  /** 列表与详情都返回；前端按业务类型本地化渲染标题。 */
+  apply_data?: ApprovalQuotaApplyData | ApprovalSkillUploadApplyData | Record<string, unknown>;
 }
 
 export interface ApprovalQuotaApplyData {
@@ -616,7 +617,18 @@ export interface ApprovalQuotaApplyData {
 }
 
 export interface ApprovalSkillUploadApplyData {
-  capability?: string;
+  upload_id: string;
+  skill_name: string;
+  skill_version?: string | null;
+  /** 原始包在 stage 时的保留截止时间（声明值，仅用于展示）。 */
+  stage_expires_at?: string | null;
+  package: {
+    filename?: string;
+    /** 对象存储中的原始包键；manager 按它直读。 */
+    object_key?: string;
+    sha256?: string;
+    size_bytes?: number;
+  };
 }
 
 export interface ApprovalQuotaResultData {
@@ -626,24 +638,13 @@ export interface ApprovalQuotaResultData {
   sync_detail?: string | null;
 }
 
-export interface ApprovalSkillUploadResultData {
-  user_id: string;
-  cluster_id: string;
-  upload_skill_policy: 'allow';
-  grant_created?: boolean;
-}
-
 export interface ApprovalDetail extends ApprovalOrder {
   reason: string;
   apply_data:
     | ApprovalQuotaApplyData
     | ApprovalSkillUploadApplyData
     | Record<string, unknown>;
-  result_data:
-    | ApprovalQuotaResultData
-    | ApprovalSkillUploadResultData
-    | Record<string, unknown>
-    | null;
+  result_data: ApprovalQuotaResultData | Record<string, unknown> | null;
   finished_at: string | null;
   records: ApprovalRecord[];
 }
@@ -669,6 +670,36 @@ export const ApprovalApi = {
       `/v1/approvals/${encodeURIComponent(orderNum)}/actions`,
       { method: 'POST', body: { action, comment } },
     ),
+  /** 下载技能上传审批单里的原始包；由 Manager 代理拉取并校验 sha256。 */
+  downloadSkillPackage: async (
+    orderNum: string,
+  ): Promise<{ blob: Blob; filename: string }> => {
+    const path = `/v1/approvals/${encodeURIComponent(orderNum)}/skill-package`;
+    const url = resolveRequestUrl(API_BASE, path, '');
+    const headers: Record<string, string> = {};
+    if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+    let response = await fetch(url, { headers });
+    if (response.status === 401 && accessToken && await tryRefresh()) {
+      if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+      response = await fetch(url, { headers });
+    }
+    if (!response.ok) {
+      const text = await response.text();
+      let detail: unknown = response.statusText;
+      try { detail = (JSON.parse(text) as { detail?: unknown }).detail ?? detail; } catch { /* noop */ }
+      throw new ApiError(response.status, formatApiErrorDetail(detail));
+    }
+    const disposition = response.headers.get('Content-Disposition') || '';
+    const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+    const plain = disposition.match(/filename="?([^";]+)"?/i)?.[1];
+    let filename = `${orderNum}.zip`;
+    if (encoded) {
+      try { filename = decodeURIComponent(encoded); } catch { /* 保底单号 */ }
+    } else if (plain) {
+      filename = plain;
+    }
+    return { blob: await response.blob(), filename };
+  },
 };
 export type MatchExpr = string | string[];
 /** instance_agent_resource 表一行（授权即实例化）。 */
@@ -1043,7 +1074,6 @@ export const InstanceServiceResourceApi = {
 
 /** 实例准入绑定 instance_grant 行。 */
 export type LoginPolicy = 'allow' | 'deny';
-export type UploadSkillPolicy = 'allow' | 'deny';
 
 export interface InstanceGrant {
   id: number;
@@ -1052,8 +1082,6 @@ export interface InstanceGrant {
   subject_id: string;
   granted_by: string | null;
   login_policy: LoginPolicy | string;
-  /** Skill 上传资格；与登录权限互不影响，默认拒绝。 */
-  upload_skill_policy?: UploadSkillPolicy | string;
   expires_at: string | null;
   enabled: boolean;
   data: Record<string, unknown> | null;
@@ -1063,7 +1091,6 @@ export interface InstanceGrant {
 
 export type InstanceBindOptions = {
   login_policy?: LoginPolicy;
-  upload_skill_policy?: UploadSkillPolicy;
   expires_at?: string | null;
   enabled?: boolean;
 };
@@ -1091,7 +1118,6 @@ export const InstanceBindingApi = {
     body: {
       enabled?: boolean;
       login_policy?: LoginPolicy;
-      upload_skill_policy?: UploadSkillPolicy;
       expires_at?: string | null;
       clear_expires_at?: boolean;
     },
@@ -1126,7 +1152,6 @@ export const InstanceBindingApi = {
     body: {
       enabled?: boolean;
       login_policy?: LoginPolicy;
-      upload_skill_policy?: UploadSkillPolicy;
       expires_at?: string | null;
       clear_expires_at?: boolean;
     },

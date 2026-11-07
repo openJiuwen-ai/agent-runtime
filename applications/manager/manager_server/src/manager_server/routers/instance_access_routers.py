@@ -69,7 +69,6 @@ async def grant_instance_users(
                 body.ids,
                 granted_by=_granted_by(user),
                 login_policy=body.login_policy,
-                upload_skill_policy=body.upload_skill_policy,
                 expires_at=body.expires_at,
                 enabled=body.enabled,
             )
@@ -93,7 +92,6 @@ async def update_instance_user_grant(
             user_id,
             enabled=body.enabled,
             login_policy=body.login_policy,
-            upload_skill_policy=body.upload_skill_policy,
             expires_at=body.expires_at,
             clear_expires_at=body.clear_expires_at,
             granted_by=_granted_by(user),
@@ -134,7 +132,6 @@ async def grant_instance_orgs(
                 body.ids,
                 granted_by=_granted_by(user),
                 login_policy=body.login_policy,
-                upload_skill_policy=body.upload_skill_policy,
                 expires_at=body.expires_at,
                 enabled=body.enabled,
             )
@@ -158,7 +155,6 @@ async def update_instance_org_grant(
             group_id,
             enabled=body.enabled,
             login_policy=body.login_policy,
-            upload_skill_policy=body.upload_skill_policy,
             expires_at=body.expires_at,
             clear_expires_at=body.clear_expires_at,
             granted_by=_granted_by(user),

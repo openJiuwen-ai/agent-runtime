@@ -464,7 +464,13 @@ OBS_SECURE="false"
 # 对象存储区域标识
 # 本工具内置部署的 MinIO：无需配置；外部 OBS：按需填写
 OBS_REGION=""
+
+# 技能上传包保留天数：manager 与 AgentServer 必须配置同值
+# 默认 7，最小 1，非法值回落 7；不设上限
+SKILL_UPLOAD_RETENTION_DAYS="7"
 ```
+
+**技能上传审批说明：** manager 会复用上述 OBS 地址与 AK/SK 只读原始技能包，因此对接外部 OBS 时该凭据需具备对象读取权限；包保留期由部署工具按对象最后修改时间统一清理，无需额外配置 OBS/MinIO 的 lifecycle 规则。
 
 ### 3.5 部署日志管理服务（可选部署）
 为便于统一采集、查看与治理业务日志，本部署工具提供可自选部署的日志管理模块，基于 Fluent Bit + Vector 架构实现全链路日志采集与处理能力。
