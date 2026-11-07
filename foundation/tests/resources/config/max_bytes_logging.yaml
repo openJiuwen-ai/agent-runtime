@@ -14,7 +14,7 @@ handlers:
     stream: ext://sys.stdout
 
   file:
-    class: openjiuwen_runtime.management.sdk.foundation.log.handler.CompressedRotatingFileHandler
+    class: openjiuwen_runtime.foundation.log.handler.CompressedRotatingFileHandler
     level: DEBUG
     formatter: standard
     filename: logs/deployment_service.log
