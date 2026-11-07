@@ -157,9 +157,13 @@ class Settings(BaseSettings):
             return {}
         try:
             defaults = json.loads(config_path.read_text(encoding="utf-8"))
-            return defaults
-        except (json.JSONDecodeError, TypeError) as e:
+        except (json.JSONDecodeError, TypeError):
             return {}
+        # 合法 JSON 也可能不是对象（[] / "x" / 1）：按同一条 best-effort 规则忽略，
+        # 否则调用方 `{**defaults}` 会抛 TypeError，把配置形状错误变成 500。
+        if not isinstance(defaults, dict):
+            return {}
+        return defaults
 
 
     # 自动从 .env 读取
