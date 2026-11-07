@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 
 from openjiuwen_runtime.foundation.db.handler import DBHandler
-from sqlalchemy import insert, select, update
 
 from manager_server.infrastructure.match_expr import iter_equality_binds
 from manager_server.infrastructure.utils import iso_datetime, strip_optional, utc_now
@@ -23,14 +22,6 @@ LOGIN_POLICY_DENY = "deny"
 LoginPolicy = Literal["allow", "deny"]
 _VALID_LOGIN_POLICIES = frozenset({LOGIN_POLICY_ALLOW, LOGIN_POLICY_DENY})
 
-UPLOAD_POLICY_ALLOW = "allow"
-UPLOAD_POLICY_DENY = "deny"
-UploadPolicy = Literal["allow", "deny"]
-_VALID_UPLOAD_POLICIES = frozenset({UPLOAD_POLICY_ALLOW, UPLOAD_POLICY_DENY})
-
-_NO_ORG_GROUP_ID = "__none__"
-_SKILL_UPLOAD_CREATED_FOR = "skill_upload"
-
 
 def _g(row: Any, key: str, default: Any = None) -> Any:
     return getattr(row, key, default)
@@ -43,27 +34,11 @@ def normalize_login_policy(value: Any, *, default: str = LOGIN_POLICY_ALLOW) -> 
     return raw
 
 
-def normalize_upload_policy(value: Any, *, default: str = UPLOAD_POLICY_DENY) -> str:
-    raw = str(value if value is not None else default).strip().lower()
-    if raw not in _VALID_UPLOAD_POLICIES:
-        raise ValueError(f"upload_skill_policy must be one of {sorted(_VALID_UPLOAD_POLICIES)}")
-    return raw
-
-
 def _login_policy_of(row: Any) -> str:
     try:
         return normalize_login_policy(_g(row, "login_policy"), default=LOGIN_POLICY_ALLOW)
     except ValueError:
         return LOGIN_POLICY_ALLOW
-
-
-def _upload_policy_of(row: Any) -> str:
-    try:
-        return normalize_upload_policy(
-            _g(row, "upload_skill_policy"), default=UPLOAD_POLICY_DENY
-        )
-    except ValueError:
-        return UPLOAD_POLICY_DENY
 
 
 def _grant_expired(expires_at: Any) -> bool:
@@ -93,7 +68,6 @@ def grant_out(row: Any) -> dict[str, Any]:
         "subject_id": _g(row, "subject_id"),
         "granted_by": _g(row, "granted_by"),
         "login_policy": _login_policy_of(row),
-        "upload_skill_policy": _upload_policy_of(row),
         "expires_at": iso_datetime(_g(row, "expires_at")),
         "enabled": bool(_g(row, "enabled", True)),
         "data": _g(row, "data"),
@@ -102,32 +76,7 @@ def grant_out(row: Any) -> dict[str, Any]:
     }
 
 
-def pick_upload_grant(
-    rows: list[Any] | tuple[Any, ...], *, user_id: str, member_groups: Any
-) -> str:
-    """从已加载的授权行判定上传资格来源：``user`` / ``org`` / ``none``。
 
-    只统计启用且未过期的行；任一 ``allow`` 命中即允许，用户行 ``deny`` 不否决
-    组织行的 ``allow``（与登录准入的 deny 优先语义不同）。
-    """
-    groups = {str(g).strip() for g in (member_groups or ()) if str(g).strip()}
-    groups.discard(_NO_ORG_GROUP_ID)
-    uid = str(user_id).strip()
-    for row in rows:
-        if not _active(row) or _upload_policy_of(row) != UPLOAD_POLICY_ALLOW:
-            continue
-        subject_type = str(_g(row, "subject_type") or "")
-        subject_id = str(_g(row, "subject_id") or "")
-        if subject_type == SUBJECT_USER and subject_id == uid:
-            return "user"
-    for row in rows:
-        if not _active(row) or _upload_policy_of(row) != UPLOAD_POLICY_ALLOW:
-            continue
-        if str(_g(row, "subject_type") or "") == SUBJECT_ORG and str(
-            _g(row, "subject_id") or ""
-        ) in groups:
-            return "org"
-    return "none"
 
 
 async def ensure_instance_grant(
@@ -138,7 +87,6 @@ async def ensure_instance_grant(
     *,
     granted_by: str | None = None,
     login_policy: str = LOGIN_POLICY_ALLOW,
-    upload_skill_policy: str = UPLOAD_POLICY_DENY,
     expires_at: datetime | None = None,
     enabled: bool = True,
 ) -> None:
@@ -147,7 +95,6 @@ async def ensure_instance_grant(
     if not sid:
         return
     policy = normalize_login_policy(login_policy)
-    upload_policy = normalize_upload_policy(upload_skill_policy)
     filters = {
         "jiuwenclaw_id": jiuwenclaw_id,
         "subject_type": subject_type,
@@ -162,7 +109,6 @@ async def ensure_instance_grant(
             **filters,
             "granted_by": strip_optional(granted_by),
             "login_policy": policy,
-            "upload_skill_policy": upload_policy,
             "expires_at": expires_at,
             "enabled": enabled,
             "data": None,
@@ -181,64 +127,7 @@ async def auto_bind_from_match_expr(handler: DBHandler, jiuwenclaw_id: str, expr
             await ensure_instance_grant(handler, jiuwenclaw_id, SUBJECT_USER, value)
 
 
-async def apply_upload_permission_in_tx(
-    connection: Any,
-    table: Any,
-    *,
-    jiuwenclaw_id: str,
-    user_id: str,
-    operator_id: str,
-    order_num: str,
-) -> dict[str, Any]:
-    """在给定事务连接上把该用户的个人上传资格置为允许。
 
-    个人准入行不存在时新建一行（``login_policy=allow``）：申请人批准时已通过实例
-    准入，因此不构成额外授权；副作用与限制见设计 D-04 与 9.2。
-    """
-    sid = str(user_id).strip()
-    if not sid:
-        raise ValueError("user_id required")
-    now = utc_now()
-    query = (
-        select(table)
-        .where(
-            table.c.jiuwenclaw_id == jiuwenclaw_id,
-            table.c.subject_type == SUBJECT_USER,
-            table.c.subject_id == sid,
-        )
-        .with_for_update()
-    )
-    row = (await connection.execute(query)).mappings().first()
-    if row is None:
-        await connection.execute(
-            insert(table).values(
-                jiuwenclaw_id=jiuwenclaw_id,
-                subject_type=SUBJECT_USER,
-                subject_id=sid,
-                granted_by=operator_id,
-                login_policy=LOGIN_POLICY_ALLOW,
-                upload_skill_policy=UPLOAD_POLICY_ALLOW,
-                expires_at=None,
-                enabled=True,
-                data={
-                    "created_for": _SKILL_UPLOAD_CREATED_FOR,
-                    "source_order_num": order_num,
-                },
-                created_at=now,
-                updated_at=now,
-            )
-        )
-        return {"subject_id": sid, "created": True, "upload_skill_policy": UPLOAD_POLICY_ALLOW}
-    await connection.execute(
-        update(table)
-        .where(table.c.id == row["id"])
-        .values(
-            upload_skill_policy=UPLOAD_POLICY_ALLOW,
-            granted_by=operator_id,
-            updated_at=now,
-        )
-    )
-    return {"subject_id": sid, "created": False, "upload_skill_policy": UPLOAD_POLICY_ALLOW}
 
 
 class InstanceGrantService:
@@ -267,12 +156,10 @@ class InstanceGrantService:
         *,
         granted_by: str | None = None,
         login_policy: str = LOGIN_POLICY_ALLOW,
-        upload_skill_policy: str = UPLOAD_POLICY_DENY,
         expires_at: datetime | None = None,
         enabled: bool = True,
     ) -> dict[str, Any]:
         policy = normalize_login_policy(login_policy)
-        upload_policy = normalize_upload_policy(upload_skill_policy)
         added, skipped = [], []
         for raw in entity_ids:
             eid = str(raw).strip()
@@ -293,7 +180,6 @@ class InstanceGrantService:
                 eid,
                 granted_by=granted_by,
                 login_policy=policy,
-                upload_skill_policy=upload_policy,
                 expires_at=expires_at,
                 enabled=enabled,
             )
@@ -308,7 +194,6 @@ class InstanceGrantService:
         *,
         enabled: bool | None = None,
         login_policy: str | None = None,
-        upload_skill_policy: str | None = None,
         expires_at: datetime | None = None,
         clear_expires_at: bool = False,
         granted_by: str | None = None,
@@ -329,8 +214,6 @@ class InstanceGrantService:
             patch["enabled"] = enabled
         if login_policy is not None:
             patch["login_policy"] = normalize_login_policy(login_policy)
-        if upload_skill_policy is not None:
-            patch["upload_skill_policy"] = normalize_upload_policy(upload_skill_policy)
         if clear_expires_at:
             patch["expires_at"] = None
         elif expires_at is not None:
@@ -413,45 +296,7 @@ class InstanceGrantService:
             return False
         return any(_login_policy_of(r) == LOGIN_POLICY_ALLOW for r in matched)
 
-    async def effective_upload_policy(
-        self, jiuwenclaw_id: str, user_id: str, member_groups: Any
-    ) -> dict[str, Any]:
-        """上传资格：先要求实例准入，再按"任一 allow 命中"聚合（无 deny 否决）。"""
-        groups = {str(g).strip() for g in (member_groups or ()) if str(g).strip()}
-        groups.discard(_NO_ORG_GROUP_ID)
-        if not await self.is_admitted(jiuwenclaw_id, user_id, groups):
-            return {"allowed": False, "source": "none"}
-        rows = await self._subject_rows(jiuwenclaw_id, user_id, groups)
-        source = pick_upload_grant(rows, user_id=user_id, member_groups=groups)
-        return {"allowed": source != "none", "source": source}
 
-    async def _subject_rows(
-        self, jiuwenclaw_id: str, user_id: str, member_groups: set[str]
-    ) -> list[Any]:
-        """加载判定所需的行：该用户的个人行 + 其所属组织的组织行。"""
-        rows: list[Any] = []
-        user_row = await self._h.get(
-            _TABLE,
-            {
-                "jiuwenclaw_id": jiuwenclaw_id,
-                "subject_type": SUBJECT_USER,
-                "subject_id": user_id,
-            },
-        )
-        if user_row is not None:
-            rows.append(user_row)
-        for gid in sorted(member_groups):
-            org_row = await self._h.get(
-                _TABLE,
-                {
-                    "jiuwenclaw_id": jiuwenclaw_id,
-                    "subject_type": SUBJECT_ORG,
-                    "subject_id": gid,
-                },
-            )
-            if org_row is not None:
-                rows.append(org_row)
-        return rows
 
 
 class GatewayBindingService:
@@ -474,7 +319,6 @@ class GatewayBindingService:
         *,
         granted_by: str | None = None,
         login_policy: str = LOGIN_POLICY_ALLOW,
-        upload_skill_policy: str = UPLOAD_POLICY_DENY,
         expires_at: datetime | None = None,
         enabled: bool = True,
     ) -> dict[str, Any]:
@@ -484,7 +328,6 @@ class GatewayBindingService:
             entity_ids,
             granted_by=granted_by,
             login_policy=login_policy,
-            upload_skill_policy=upload_skill_policy,
             expires_at=expires_at,
             enabled=enabled,
         )
@@ -496,7 +339,6 @@ class GatewayBindingService:
         *,
         enabled: bool | None = None,
         login_policy: str | None = None,
-        upload_skill_policy: str | None = None,
         expires_at: datetime | None = None,
         clear_expires_at: bool = False,
         granted_by: str | None = None,
@@ -507,7 +349,6 @@ class GatewayBindingService:
             subject_id,
             enabled=enabled,
             login_policy=login_policy,
-            upload_skill_policy=upload_skill_policy,
             expires_at=expires_at,
             clear_expires_at=clear_expires_at,
             granted_by=granted_by,

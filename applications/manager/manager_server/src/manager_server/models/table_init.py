@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 from openjiuwen_runtime.foundation.db.sqlalchemy_handler import SQLAlchemyHandler
+from openjiuwen_runtime.foundation.log import get_logger
 from sqlalchemy import inspect, text
 from sqlalchemy.exc import DBAPIError
 
@@ -48,6 +49,8 @@ from manager_server.models.template_models import (
     SERVICE_CONFIG_TEMPLATE_TABLE_DEF,
     SKILL_PREBUILT_TEMPLATE_TABLE_DEF,
 )
+
+_log = get_logger(__name__)
 
 ALL_TABLE_DEFINITIONS = (
     INSTANCE_INFO_TABLE_DEF,
@@ -195,8 +198,49 @@ async def _ensure_team_quota_org_column(handler: DBHandler) -> None:
         await connection.run_sync(upgrade)
 
 
-async def _ensure_instance_grant_upload_skill_policy(handler: DBHandler) -> None:
-    """存量 manager 库的 instance_grant 还没有上传资格列。"""
+async def _ensure_approval_order_expires_at(handler: DBHandler) -> None:
+    """Existing manager databases keep the old approval_order shape.
+
+    foundation.init_table() 只建表与补索引，不会给已有表加列；旧库必须先补列再建索引。
+    """
+
+    def upgrade(connection):
+        inspector = inspect(connection)
+        if not inspector.has_table("approval_order"):
+            return
+        cols = {col["name"] for col in inspector.get_columns("approval_order")}
+        if "expires_at" in cols:
+            return
+        dialect = connection.dialect.name
+        column_type = "DATETIME(3)" if dialect == "mysql" else (
+            "TIMESTAMP" if dialect == "postgresql" else "DATETIME"
+        )
+        quote = connection.dialect.identifier_preparer.quote
+        connection.execute(text(
+            f"ALTER TABLE {quote('approval_order')} "
+            f"ADD COLUMN {quote('expires_at')} {column_type} NULL"
+        ))
+
+    for attempt in range(3):
+        try:
+            async with handler.get_engine().begin() as connection:
+                await connection.run_sync(upgrade)
+            return
+        except DBAPIError as exc:
+            dialect = handler.get_engine().dialect.name
+            sqlstate = getattr(exc.orig, "sqlstate", None) or getattr(exc.orig, "pgcode", None)
+            errno = exc.orig.args[0] if exc.orig.args else None
+            column_race = (
+                (dialect == "postgresql" and sqlstate == "42701")
+                or (dialect == "mysql" and errno == 1060)
+                or "duplicate column" in str(exc.orig).lower()
+            )
+            if not column_race or attempt == 2:
+                raise
+
+
+async def _drop_instance_grant_upload_skill_policy(handler: DBHandler) -> None:
+    """永久下线上传资格列；重复启动幂等。"""
     if not isinstance(handler, SQLAlchemyHandler):
         return
 
@@ -206,40 +250,44 @@ async def _ensure_instance_grant_upload_skill_policy(handler: DBHandler) -> None
         if not inspector.has_table(table_name):
             return
         columns = {item["name"] for item in inspector.get_columns(table_name)}
-        if "upload_skill_policy" in columns:
+        if "upload_skill_policy" not in columns:
             return
         quote = sync_connection.dialect.identifier_preparer.quote
         sync_connection.execute(
             text(
-                f"ALTER TABLE {quote(table_name)} ADD COLUMN "
-                f"{quote('upload_skill_policy')} VARCHAR(8) NOT NULL DEFAULT 'deny'"
+                f"ALTER TABLE {quote(table_name)} "
+                f"DROP COLUMN {quote('upload_skill_policy')}"
             )
         )
 
-    # 并发实例可能已补列；失败事务先回滚再重试。
-    for attempt in range(3):
-        try:
-            async with handler.get_engine().begin() as connection:
-                await connection.run_sync(migrate)
-            return
-        except DBAPIError as exc:
-            dialect = handler.get_engine().dialect.name
-            sqlstate = getattr(exc.orig, "sqlstate", None) or getattr(exc.orig, "pgcode", None)
-            errno = exc.orig.args[0] if exc.orig.args else None
-            column_race = (
-                dialect == "postgresql" and sqlstate in {"42701", "42703"}
-            ) or (dialect == "mysql" and errno in {1060, 1091})
-            if not column_race or attempt == 2:
-                raise
+    try:
+        async with handler.get_engine().begin() as connection:
+            await connection.run_sync(migrate)
+    except DBAPIError as exc:
+        dialect = handler.get_engine().dialect.name
+        sqlstate = getattr(exc.orig, "sqlstate", None) or getattr(exc.orig, "pgcode", None)
+        errno = exc.orig.args[0] if exc.orig.args else None
+        message = str(exc.orig).lower()
+        already_dropped = (
+            (dialect == "postgresql" and sqlstate == "42703")
+            or (dialect == "mysql" and errno == 1091)
+            or "no such column" in message
+            or "does not exist" in message
+        )
+        if not already_dropped:
+            # 删除失败不中止启动：新代码已不再引用该列。
+            _log.warning("drop instance_grant.upload_skill_policy failed: %s", exc)
 
 
 async def init_all_tables(handler: DBHandler) -> None:
     _ensure_bigint_type_support()
+    # 必须在表循环之前补列：init_table 建索引会因缺列失败。
+    await _ensure_approval_order_expires_at(handler)
     for table_def in ALL_TABLE_DEFINITIONS:
         await handler.init_table(table_def)
     await _ensure_team_quota_org_column(handler)
     await _migrate_a2a_discovery_settings(handler)
-    await _ensure_instance_grant_upload_skill_policy(handler)
+    await _drop_instance_grant_upload_skill_policy(handler)
     from manager_server.core.authz import seed_authz_defaults
 
     await seed_authz_defaults(handler)

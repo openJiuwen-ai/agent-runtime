@@ -281,8 +281,6 @@
         "grantedBy": "授权人",
         "loginPolicy": "登录权限",
         "loginPolicyHint": "拒绝优先级高于允许",
-        "uploadSkillPolicy": "Skill 上传权限",
-        "uploadSkillPolicyHint": "允许后该用户/组织可上传 Skill 包；与登录权限互不影响",
         "loginAllow": "允许",
         "loginDeny": "拒绝",
         "expiresAt": "过期时间",
@@ -1312,8 +1310,16 @@
     "subjectTitle": "标题",
     "types": {
       "workspace_quota_expand": "配额审批",
-      "skill_upload_permission": "Skill 上传授权"
+      "skill_upload": "技能上传审批"
     },
+    "skillUploadTitle": "上传技能 {{name}}",
+    "skillName": "技能名",
+    "skillPackage": "技能包",
+    "skillDownload": "下载原包",
+    "skillDownloadFailed": "下载失败：{{detail}}",
+    "skillPackageRetention": "原包下载有效期至 {{expiresAt}}；逾期需上传人重新上传。",
+    "skillPackageExpired": "原包已过期，请让上传人重新上传。",
+    "skillPackageUnavailable": "暂时无法拉取原始包（对象存储不可达或内容校验失败），请稍后重试。",
     "orderNum": "审批单号",
     "applicant": "申请人",
     "approver": "审批人",
@@ -1322,9 +1328,6 @@
     "group": "组织",
     "bot": "Bot",
     "workspace": "工作区",
-    "skillUploadUser": "获授权用户",
-    "skillUploadGrant": "授予的上传权限",
-    "skillUploadGrantCreated": "已新建个人准入行",
     "createdAt": "申请时间",
     "noOrg": "无组织",
     "noApprover": "无审批人",
@@ -1356,12 +1359,14 @@
       "pending": "待审批",
       "approved": "已通过",
       "rejected": "已驳回",
-      "cancelled": "已撤回"
+      "cancelled": "已撤回",
+      "expired": "已过期"
     },
     "actions": {
       "approve": "通过",
       "reject": "驳回",
-      "cancel": "撤回"
+      "cancel": "撤回",
+      "install": "安装"
     },
     "sync": {
       "success": "已同步到 Gateway",

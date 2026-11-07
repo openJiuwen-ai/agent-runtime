@@ -14,6 +14,7 @@ from manager_server.infrastructure.db import create_db_handler, database_config_
 from manager_server.infrastructure.logger import configure_logging, get_logger
 from manager_server.models.table_init import init_all_tables
 from manager_server.routers.register import router_register
+from manager_server.schedulers.approval_expirer import run_approval_expirer_loop
 from manager_server.schedulers.heartbeat_scanner import run_heartbeat_scan_loop
 from manager_server.security.keys import get_or_create_manager_signing_key
 from manager_server.security.sign_provider import set_manager_signing_key
@@ -38,6 +39,9 @@ async def lifespan(application: FastAPI):
 
     stop = asyncio.Event()
     scan_task = asyncio.create_task(run_heartbeat_scan_loop(stop, db_handler, redis_client))
+    expire_task = asyncio.create_task(
+        run_approval_expirer_loop(stop, db_handler, redis_client)
+    )
     _log.info(
         "startup",
         version=__version__,
@@ -46,10 +50,12 @@ async def lifespan(application: FastAPI):
     yield
     stop.set()
     scan_task.cancel()
-    try:
-        await scan_task
-    except asyncio.CancelledError:
-        pass
+    expire_task.cancel()
+    for task in (scan_task, expire_task):
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
     await db_handler.disconnect()
     _log.info("shutdown")
 

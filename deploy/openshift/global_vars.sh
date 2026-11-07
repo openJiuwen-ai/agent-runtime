@@ -122,6 +122,8 @@ declare -A DEPLOY_VARS=(
     ["OBS_SECURE"]=""                    # 内置：忽略（强制 false）；外部：true/false（留空默认 false）
     ["OBS_REGION"]=""                    # 内置：忽略（强制 default）；外部：区域标识（留空则由 SDK 决定）
     ["ENABLE_EXTERNAL_OBS"]="false"
+    # 技能上传包保留天数：manager 与 AgentServer 必须同值，默认 7，最小 1（非法值回落 7）
+    ["SKILL_UPLOAD_RETENTION_DAYS"]="7"
 
     ["AGENT_SERVER_REPLICAS"]="1"
     ["GATEWAY_REPLICAS"]="1"
