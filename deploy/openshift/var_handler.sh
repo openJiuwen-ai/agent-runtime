@@ -277,7 +277,7 @@ resolve_builtin_svc_locations() {
 # 数据库连接检查与派生。DB_HOST 空=内置：headless 服务名按 DB_TYPE+BASE_SVC_NS 静态派生
 # （up 时由 resolve_builtin_svc_locations 按实况改写）；填写=外部数据库，地址原样使用。
 # 端口/用户留空按 DB_TYPE 取默认，
-# 密码优先级（语义对齐 jiuwenswarm-ee 的全局统一账号）：
+# 密码优先级：
 #   外部数据库：DB_PASSWORD > DB_TYPE 对应凭证变量（MARIADB/MYSQL/POSTGRES_ROOT_PASSWORD），均空报错
 #   内置数据库：按 DB_TYPE 从对应凭证变量映射到 DB_ROOT_PASSWORD（忽略 DB_PASSWORD）
 #               （k8s 形态"内置"= default 共享实例，凭据即共享实例部署时的 root 密码）
@@ -324,7 +324,7 @@ resolve_db_vars() {
   return 0
 }
 
-# 分库配置派生（规则与 jiuwenswarm-ee 的 set_db_var 对齐）：
+# 分库配置派生：
 #   <MODULE>_DB_NAME：mysql/mariadb → <module>_<NAMESPACE>（按 db 隔离实例）；
 #                     postgresql → <module>（按 db 隔离实例）；用户已设则原样
 #   <MODULE>_PG_SCHEMA：仅 postgresql 生效，未设取 NAMESPACE（按 schema 隔离实例）；
