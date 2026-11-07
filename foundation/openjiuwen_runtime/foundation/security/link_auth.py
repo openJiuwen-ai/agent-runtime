@@ -169,7 +169,13 @@ def verify_signature(
         raise LinkAuthError(f"bad token payload: {exc}") from exc
 
     # 用内嵌公钥验签：证明持令牌者握有该公钥对应的私钥。
-    if not _p.ed25519_verify(_p.b64d(pub), payload_b64.encode("ascii"), sig):
+    # 公钥由令牌携带、不可信：非法 base64 必须按 LinkAuthError 拒绝，
+    # 不能把 binascii.Error 泄漏给 verify_token 的调用方（observe 模式应放行并记日志）。
+    try:
+        pub_raw = _p.b64d(pub)
+    except (ValueError, TypeError) as exc:
+        raise LinkAuthError(f"bad public key encoding: {exc}") from exc
+    if not _p.ed25519_verify(pub_raw, payload_b64.encode("ascii"), sig):
         raise LinkAuthError("bad signature")
 
     try:
