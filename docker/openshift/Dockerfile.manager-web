@@ -24,7 +24,7 @@ FROM ${NGINX_IMAGE}
 
 USER root
 
-COPY docker/manager-web.nginx.conf.template /etc/nginx/templates/default.conf.template
+COPY docker/openshift/manager-web.nginx.conf.template /etc/nginx/templates/default.conf.template
 COPY docker/openshift/manager-web-nginx-start.sh /app/agent-runtime/docker/openshift/manager-web-nginx-start.sh
 RUN chmod +x /app/agent-runtime/docker/openshift/manager-web-nginx-start.sh
 # worker 进程用户:s2i 启动链路启用 nss_wrapper,用户查询走 passwd.template 生成的
