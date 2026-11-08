@@ -18,8 +18,7 @@ import {
   AuthzApi,
   AuthzRole,
   hasPermission,
-  isWorkspaceQuotaEnabled,
-  isWorkspaceQuotaPermission,
+  isRolePermissionVisible,
   PermissionDefinition,
 } from '../../services/api';
 import { useRouter } from '../../router';
@@ -94,8 +93,6 @@ export function RolesPage() {
 
   const canWrite = hasPermission(user, 'iam:role:write');
   const canOpenEditor = canWrite || hasPermission(user, 'iam:role:read');
-  const workspaceQuotaEnabled = isWorkspaceQuotaEnabled(user);
-
   const sortOptions = useMemo(
     () => [
       { value: 'asc' as const, label: t('common.sortAsc') },
@@ -315,9 +312,9 @@ export function RolesPage() {
                       </td>
                     </tr>
                   ) : items.map((role) => {
-                    const visiblePermissionIds = workspaceQuotaEnabled
-                      ? role.permission_ids
-                      : role.permission_ids.filter((id) => !isWorkspaceQuotaPermission(id));
+                    const visiblePermissionIds = role.permission_ids.filter((id) =>
+                      isRolePermissionVisible(id),
+                    );
                     const groups = permissionCountByGroup(
                       visiblePermissionIds,
                       permissions,
