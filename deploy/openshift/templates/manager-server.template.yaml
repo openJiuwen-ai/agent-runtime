@@ -99,7 +99,7 @@ spec:
         - name: AGENT_RUNTIME_SYNC_TIMEOUT
           value: "10"
         - name: WORKSPACE_QUOTA_ENABLED
-          value: "false"
+          value: "<<WORKSPACE_QUOTA_ENABLED>>"
         - name: SKILL_UPLOAD_APPROVAL_ENABLED
           value: "true"
         - name: MANAGER_WS_ENABLED

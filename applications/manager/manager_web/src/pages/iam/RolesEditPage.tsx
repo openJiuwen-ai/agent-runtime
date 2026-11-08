@@ -21,9 +21,7 @@ import {
   AuthzRoleUser,
   hasPermission,
   IamUser,
-  isApprovalEnabled,
-  isWorkspaceQuotaEnabled,
-  isWorkspaceQuotaPermission,
+  isRolePermissionVisible,
   PermissionDefinition,
   UserApi,
 } from '../../services/api';
@@ -212,24 +210,22 @@ export function RolesEditPage({ roleId }: { roleId?: string }) {
     };
   }, [isNew, navigate, roleId, t]);
 
-  // 审批权限项在配额关闭时也必须可见：Skill 上传审批复用 approval:* 门禁。
-  const workspaceQuotaEnabled = isWorkspaceQuotaEnabled(user) || isApprovalEnabled(user);
+  // quota:* 跟配额开关；approval:* 跟审批开关（Skill 上传审批可单独开启）。
   const scopedPermissions = useMemo(() => {
     const base = isSystem
       ? permissions.filter((permission) => selected.has(permission.permission_id))
       : permissions;
-    if (workspaceQuotaEnabled) return base;
-    return base.filter((permission) => !isWorkspaceQuotaPermission(permission.permission_id));
-  }, [isSystem, permissions, selected, workspaceQuotaEnabled]);
+    return base.filter((permission) => isRolePermissionVisible(permission.permission_id));
+  }, [isSystem, permissions, selected]);
   const permissionGroups = useMemo(
     () => groupPermissionItems(scopedPermissions),
     [scopedPermissions],
   );
 
-  const visibleSelectedCount = useMemo(() => {
-    if (workspaceQuotaEnabled) return selected.size;
-    return [...selected].filter((id) => !isWorkspaceQuotaPermission(id)).length;
-  }, [selected, workspaceQuotaEnabled]);
+  const visibleSelectedCount = useMemo(
+    () => [...selected].filter((id) => isRolePermissionVisible(id)).length,
+    [selected],
+  );
 
   const tabs = useMemo(() => {
     const items: Array<{ id: Section; label: string; count?: number }> = [

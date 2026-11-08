@@ -177,6 +177,8 @@ declare -A DEPLOY_VARS=(
     ["IDENTITY_FEDERATION_CONFIG_FILE"]=""
     ["MANAGER_AGENT_CLIENT_REGISTRATION_ENABLED"]="false"
     ["MANAGER_AGENT_CLIENT_REGISTRATION_CONFIG_FILE"]=""
+    # 用户空间配额特性开关（Manager / Gateway / AgentServer / User Web / Manager Web 共用）
+    ["WORKSPACE_QUOTA_ENABLED"]="false"
     # dev 模式：hostPath 挂载宿主机代码调试（MODE=dev 仅 k8s 形态支持；Pod 固定到代码所在节点）
     ["MODE"]="product"                   # product | dev
     ["SWARM_CODE_PATH"]=""                # jiuwenswarm 仓库路径（挂载到 agentserver/gateway/web）

@@ -350,9 +350,25 @@ export function isApprovalEnabled(_user?: AuthUser | null): boolean {
   );
 }
 
-/** 配额 / 审批权限码（特性关闭时管理面角色权限 UI 隐藏）。 */
-export function isWorkspaceQuotaPermission(permissionId: string): boolean {
-  return permissionId.startsWith('quota:') || permissionId.startsWith('approval:');
+/** 配额权限码。 */
+export function isQuotaPermission(permissionId: string): boolean {
+  return permissionId.startsWith('quota:');
+}
+
+/** 审批权限码。 */
+export function isApprovalPermission(permissionId: string): boolean {
+  return permissionId.startsWith('approval:');
+}
+
+/**
+ * 角色权限 UI 是否展示该权限码。
+ * - ``quota:*``：仅 ``WORKSPACE_QUOTA_ENABLED`` 开启时可见（不影响 Skill 审批）
+ * - ``approval:*``：配额或 Skill 上传审批任一开启时可见
+ */
+export function isRolePermissionVisible(permissionId: string): boolean {
+  if (isQuotaPermission(permissionId)) return isWorkspaceQuotaEnabled();
+  if (isApprovalPermission(permissionId)) return isApprovalEnabled();
+  return true;
 }
 
 export function hasPermission(user: AuthUser | null, permissionId: string): boolean {
