@@ -202,7 +202,6 @@ declare -A DEPLOY_VARS=(
     ["JIUWENBOX_NAME"]="jiuwenbox"
     ["JIUWENBOX_PORT"]="8321"
     ["JIUWENSWARM_SSL_VERIFY"]="false"
-    ["JIUWENSWARM_CONFIG_DIR"]="/app/config"
     ["JIUWENSWARM_LINK_MTLS_MODE"]="off"
     ["LINK_PREPARED"]="false"
     ["JIUWENSWARM_REQUEST_EXT_FORWARD_HEADERS"]=""

@@ -2,10 +2,13 @@
 # 说明：
 #   - 镜像为 OpenShift 适配版，适配 restricted-v2 SCC（强制随机 uid，不指定 runAsUser/fsGroup）
 #   - 配置经 Secret jiuwenswarm-secret-configmap 与 ConfigMap jiuwenswarm-agentserver-env 注入
-#   - 数据卷挂载 PVC jiuwenswarm-pvc 至 /home/app/.jiuwenswarm：workspace_{tenant}/、
-#     config/、auth/、agent/ 等多副本共享（租户会话可能落在任意 pod，工作区必须全局可见）；
-#     仅 ~/.jiuwenswarm/run（supervisor IPC unix socket，路径固定）按 Pod 隔离，
-#     经同卷深路径遮蔽挂载实现（subPathExpr: run/$(POD_NAME)，子目录自动创建）
+#   - 数据卷拆两区挂载（domain/infra 分区契约）：
+#     · 共享卷 PVC jiuwenswarm-pvc → /home/app/.jiuwenswarm/domain：workspace_{tenant}/、
+#       agent/、runtime_state/ 等多副本共享（租户会话可能落在任意 pod，必须全局可见）
+#     · 私有卷 agentserver-infra（emptyDir，随 Pod 生灭）→ /home/app/.jiuwenswarm/infra：
+#       run/（supervisor IPC socket）、config/、auth/、logs/、runtime/、tokenizers/
+#       等 Pod 私有数据（run/ 位于系统卷，天然按 Pod 隔离）
+#   - 数据根 /home/app/.jiuwenswarm 自身不挂载，仅作两个分区目录的命名空间
 #   - StatefulSet + headless Service：每 Pod 稳定 DNS
 #     jiuwenswarm-agentserver-{i}.jiuwenswarm-agentserver-headless.<ns>.svc.cluster.local
 #     （Pod 重建后 IP 变、DNS 不变，健康探测与会话路由地址跨重启稳定）
@@ -79,14 +82,15 @@ spec:
                 name: jiuwenswarm-agentserver-env
           volumeMounts:
             - name: agentserver-data
-              mountPath: /home/app/.jiuwenswarm
-            - name: agentserver-data
-              mountPath: /home/app/.jiuwenswarm/run
-              subPathExpr: run/$(POD_NAME)
+              mountPath: /home/app/.jiuwenswarm/domain
+            - name: agentserver-infra
+              mountPath: /home/app/.jiuwenswarm/infra
       volumes:
         - name: agentserver-data
           persistentVolumeClaim:
             claimName: jiuwenswarm-pvc
+        - name: agentserver-infra
+          emptyDir: {}
 ---
 # headless Service：StatefulSet 治理服务（clusterIP: None），提供每 Pod 稳定 DNS
 apiVersion: v1

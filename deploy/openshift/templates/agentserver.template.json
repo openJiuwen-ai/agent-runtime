@@ -45,7 +45,11 @@
         "volumeMounts": [
           {
             "name": "data",
-            "mountPath": "/home/app/.jiuwenswarm"
+            "mountPath": "/home/app/.jiuwenswarm/domain"
+          },
+          {
+            "name": "agentserver-infra",
+            "mountPath": "/home/app/.jiuwenswarm/infra"
           }
         ]
       }
@@ -70,6 +74,10 @@
             "persistentVolumeClaim": {
               "claimName": "jiuwenswarm-pvc"
             }
+          },
+          {
+            "name": "agentserver-infra",
+            "emptyDir": {}
           }
         ]
       }
