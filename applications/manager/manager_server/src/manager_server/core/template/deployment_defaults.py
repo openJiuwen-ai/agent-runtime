@@ -11,10 +11,11 @@ import hashlib
 import json
 import os
 import re
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from uuid import NAMESPACE_URL, uuid5
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 from pydantic import ValidationError
@@ -28,6 +29,8 @@ from manager_server.infrastructure.utils import utc_now
 from manager_server.schemas.template_schemas import (
     ServiceConfigContainerCreateBody,
     ServiceConfigTemplateCreateBody,
+    ServiceConfigTemplateOut,
+    DeploymentDefaultsRestoreBody,
 )
 
 _log = get_logger(__name__)
@@ -233,6 +236,134 @@ async def _inspect(handler: DBHandler, plan: DeploymentPlan) -> dict[str, Any]:
 async def deployment_defaults_status(handler: DBHandler) -> dict[str, Any]:
     plan = read_deployment_plan()
     return plan if isinstance(plan, dict) else await _inspect(handler, plan)
+
+
+class DeploymentDefaultsChanged(ValueError):
+    """The deployment source changed after the user loaded the form."""
+
+
+def _preview_container_id(container_id: str) -> str:
+    # These IDs only identify unsaved form choices, never catalog records.
+    return f"default-preview-{uuid5(NAMESPACE_URL, container_id).hex}"
+
+
+def _template_body(row: dict[str, Any]) -> ServiceConfigTemplateCreateBody:
+    return ServiceConfigTemplateCreateBody(**{
+        key: deepcopy(value) for key, value in row.items()
+        if key in ServiceConfigTemplateCreateBody.model_fields
+    })
+
+
+def preview_deployment_defaults() -> dict[str, Any]:
+    """Read the original deployment source without creating or repairing DB rows."""
+    plan = read_deployment_plan()
+    if isinstance(plan, dict):
+        return plan
+    by_id = {row["container_id"]: row for row in plan.containers}
+    templates = []
+    for row in plan.templates:
+        body = _template_body(row)
+        ids = [body.main_container_id, *(body.sidecar_container_ids or [])]
+        containers = []
+        for cid in ids:
+            container = by_id[cid]
+            draft_id = _preview_container_id(cid)
+            containers.append({
+                "container_id": draft_id, "template_id": draft_id,
+                "template_name": container["data"]["_meta"]["template_name"],
+                "image": container["image"], "enabled": True,
+            })
+        body.main_container_id = _preview_container_id(body.main_container_id)
+        body.sidecar_container_ids = [_preview_container_id(cid) for cid in body.sidecar_container_ids or []]
+        templates.append({
+            "source_template_id": row["data"]["deployment_default"]["source_template_id"],
+            "template": body.model_dump(mode="json"), "containers": containers,
+        })
+    return _status(
+        "available", "默认配置已读取，保存后创建新的运行时模板与所需容器模板。",
+        source=plan.source, fingerprint=plan.fingerprint, templates=templates,
+        container_count=len(plan.containers),
+    )
+
+
+async def restore_deployment_defaults(
+    handler: DBHandler, request: DeploymentDefaultsRestoreBody,
+) -> ServiceConfigTemplateOut:
+    """Save a form loaded from deployment defaults, without overwriting any record.
+
+    Default containers are read again on the server and copied to fresh IDs in the
+    same transaction as the runtime template. A damaged or deleted catalog entry
+    therefore cannot affect recovery, and cancelling a preview leaves no records.
+    """
+    plan = read_deployment_plan()
+    if isinstance(plan, dict):
+        raise ValueError(plan["message"])
+    if request.fingerprint != plan.fingerprint:
+        raise DeploymentDefaultsChanged("部署默认配置已更新，请重新读取默认模板后保存。")
+    source = next((row for row in plan.templates if
+        row["data"]["deployment_default"]["source_template_id"] == request.source_template_id), None)
+    if source is None:
+        raise ValueError("所选默认模板不存在，请重新读取默认模板。")
+
+    values = _template_body(source).model_dump()
+    # Omitted bindings still mean fresh source copies, never possibly modified
+    # or deleted deterministic catalog rows from the initial bootstrap.
+    values["main_container_id"] = _preview_container_id(source["main_container_id"])
+    values["sidecar_container_ids"] = [
+        _preview_container_id(cid) for cid in source.get("sidecar_container_ids") or []
+    ]
+    values.update(request.template.model_dump(exclude_unset=True))
+    # Keep source metadata while accepting non-reserved form metadata. The
+    # recovery path never accepts inline container writes or deployment grants.
+    data = deepcopy(source.get("data") or {})
+    data.update(deepcopy(request.template.data or {}))
+    data["deployment_default"] = deepcopy(source["data"]["deployment_default"])
+    sync = data.get("config_sync")
+    data["config_sync"] = {
+        **({key: value for key, value in sync.items() if key not in {"containers", "scopes"}}
+           if isinstance(sync, dict) else {}),
+        "source_template_id": request.source_template_id,
+    }
+    values["data"] = data
+    body = ServiceConfigTemplateCreateBody(**values)
+    main = (body.main_container_id or "").strip()
+    sidecars = body.sidecar_container_ids or []
+    if not main or any(not cid.strip() for cid in sidecars):
+        raise ValueError("请选择主容器，并补全 Sidecar 容器选择。")
+    ids = [main, *sidecars]
+    if len(ids) != len(set(ids)):
+        raise ValueError("主容器和 Sidecar 不能重复选择同一个容器模板。")
+
+    source_ids = {source["main_container_id"], *(source.get("sidecar_container_ids") or [])}
+    draft_containers = {
+        _preview_container_id(row["container_id"]): row
+        for row in plan.containers if row["container_id"] in source_ids
+    }
+    mapped = {cid: f"restore-{uuid4().hex}" for cid in ids if cid in draft_containers}
+    now = utc_now()
+    template_id = str(uuid4())
+    async with handler.session_factory() as session:
+        async with session.begin():
+            containers = handler.get_table(_CONTAINERS)
+            for cid in ids:
+                if cid in mapped:
+                    row = deepcopy(draft_containers[cid])
+                    row.update(container_id=mapped[cid], created_at=now, updated_at=now)
+                    await session.execute(containers.insert().values(**row))
+                else:
+                    if cid.startswith("default-preview-"):
+                        raise ValueError("默认容器选择已失效，请重新读取默认模板。")
+                    existing = await session.execute(select(containers.c.container_id).where(containers.c.container_id == cid))
+                    if existing.first() is None:
+                        raise ValueError("所选容器模板已不存在，请重新选择。")
+            body.main_container_id = mapped.get(main, main)
+            body.sidecar_container_ids = [mapped.get(cid, cid) for cid in sidecars]
+            row = ServiceConfigTemplateService._build_row_for_create(body, template_id=template_id, data=data)
+            row.update(created_at=now, updated_at=now)
+            await session.execute(handler.get_table(_TEMPLATES).insert().values(**row))
+    saved = await ServiceConfigTemplateService(handler).get(template_id)
+    assert saved is not None
+    return saved
 
 
 async def _insert_plan(handler: DBHandler, plan: DeploymentPlan) -> int:

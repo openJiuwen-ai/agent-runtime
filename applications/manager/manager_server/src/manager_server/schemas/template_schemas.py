@@ -1001,6 +1001,14 @@ class ServiceConfigTemplateCreateBody(SafeTextMixin):
     data: dict[str, Any] | None = None
 
 
+class DeploymentDefaultsRestoreBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
+    source_template_id: str = Field(min_length=1, max_length=512)
+    template: ServiceConfigTemplateCreateBody
+
+
 class ServiceConfigTemplateUpdateBody(SafeTextMixin):
     model_config = ConfigDict(str_strip_whitespace=True)
 

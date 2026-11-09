@@ -1,5 +1,6 @@
 {
   "common": {
+    "optional": "Optional",
     "ok": "OK",
     "cancel": "Cancel",
     "close": "Close",
@@ -788,6 +789,13 @@
     "deleteConfirm": "Delete this preset Skill template? It may be referenced by instance resources."
   },
   "serviceConfigTemplate": {
+    "basicInfo": "Basic information",
+    "containerSetup": "Container configuration",
+    "containerSetupHint": "Select a main container and optionally add supporting containers such as Sandbox.",
+    "selectedContainers": "{{count}} selected",
+    "adjustAsNeeded": "Adjust as needed",
+    "deploymentStorage": "Deployment and storage",
+    "advancedParameters": "Advanced settings",
     "title": "Runtime Template Management",
     "subtitle": "Maintain AgentServer session parameters and container runtime templates",
     "new": "New Runtime Template",

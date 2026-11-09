@@ -1,5 +1,6 @@
 {
   "common": {
+    "optional": "可选",
     "ok": "确定",
     "cancel": "取消",
     "close": "关闭",
@@ -788,6 +789,13 @@
     "deleteConfirm": "确认删除该预置 Skill 模板？该模板可能被多个实例资源引用，请确认无副作用。"
   },
   "serviceConfigTemplate": {
+    "basicInfo": "基本信息",
+    "containerSetup": "容器配置",
+    "containerSetupHint": "选择主容器，按需添加 Sandbox 等辅助容器。",
+    "selectedContainers": "已选 {{count}} 个",
+    "adjustAsNeeded": "按需调整",
+    "deploymentStorage": "部署与存储",
+    "advancedParameters": "高级参数",
     "title": "运行时模板管理",
     "subtitle": "由容器模板组装成的可调度、可扩缩的 Agent 运行池方案（Runtime Profile）",
     "new": "新建运行时模板",

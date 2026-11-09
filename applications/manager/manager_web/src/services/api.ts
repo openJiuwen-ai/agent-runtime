@@ -32,6 +32,7 @@ import type {
   ServiceConfigTemplateCreateBody,
   ServiceConfigTemplateUpdateBody,
   ContainerTemplate,
+  ServiceConfigContainerBrief,
   ContainerTemplateCreateBody,
   ContainerTemplateUpdateBody,
   ResponseModel,
@@ -1576,7 +1577,23 @@ export interface DeploymentDefaultsStatus {
   created?: number;
 }
 
+export interface DeploymentDefaultPreviewItem {
+  source_template_id: string;
+  template: ServiceConfigTemplateCreateBody;
+  containers: ServiceConfigContainerBrief[];
+}
+
+export interface DeploymentDefaultsPreview {
+  status: 'unconfigured' | 'not_found' | 'invalid' | 'available';
+  message?: string;
+  fingerprint?: string;
+  templates: DeploymentDefaultPreviewItem[];
+}
+
 export const ServiceConfigTemplateApi = {
+  previewDeploymentDefaults: () => http<DeploymentDefaultsPreview>('/v1/service-config-templates/deployment-defaults/preview'),
+  restoreDeploymentDefaults: (body: { fingerprint: string; source_template_id: string; template: ServiceConfigTemplateCreateBody }) =>
+    http<ServiceConfigTemplate>('/v1/service-config-templates/deployment-defaults/restore', { method: 'POST', body }),
   deploymentDefaults: () => http<DeploymentDefaultsStatus>('/v1/service-config-templates/deployment-defaults'),
   initializeDeploymentDefaults: () => http<DeploymentDefaultsStatus>('/v1/service-config-templates/deployment-defaults/initialize', { method: 'POST' }),
   discoverAgentserverConfig: () => http<{ found: boolean; source?: string; configured?: boolean; error?: string; config?: unknown }>('/v1/service-config-templates/agentserver-discovery'),

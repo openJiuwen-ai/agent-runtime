@@ -39,8 +39,11 @@ from manager_server.core.template.service_config_template import (
     ServiceConfigTemplateService,
 )
 from manager_server.core.template.deployment_defaults import (
+    DeploymentDefaultsChanged,
     deployment_defaults_status,
     initialize_deployment_defaults,
+    preview_deployment_defaults,
+    restore_deployment_defaults,
 )
 from manager_server.core.template.skill_prebuilt_template import (
     SkillPrebuiltTemplateService,
@@ -83,6 +86,7 @@ from manager_server.schemas.template_schemas import (
     ServiceConfigContainerListQuery,
     ServiceConfigContainerUpdateBody,
     ServiceConfigTemplateCreateBody,
+    DeploymentDefaultsRestoreBody,
     ServiceConfigTemplateListQuery,
     ServiceConfigTemplateUpdateBody,
     SkillPrebuiltTemplateCreateBody,
@@ -1028,6 +1032,25 @@ async def get_deployment_defaults(handler: Annotated[DBHandler, Depends(get_db_h
 @templates_router.post("/service-config-templates/deployment-defaults/initialize", response_model=ResponseModel)
 async def prepare_deployment_defaults(handler: Annotated[DBHandler, Depends(get_db_handler)]):
     return ResponseModel(code=200, message="success", data=await initialize_deployment_defaults(handler))
+
+
+@templates_router.get("/service-config-templates/deployment-defaults/preview", response_model=ResponseModel)
+async def get_deployment_defaults_preview():
+    return ResponseModel(code=200, message="success", data=preview_deployment_defaults())
+
+
+@templates_router.post("/service-config-templates/deployment-defaults/restore", response_model=ResponseModel)
+async def save_deployment_defaults_copy(
+    body: DeploymentDefaultsRestoreBody,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    try:
+        saved = await restore_deployment_defaults(handler, body)
+    except DeploymentDefaultsChanged as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ResponseModel(code=200, message="success", data=saved.model_dump())
 
 
 @templates_router.post("/service-config-templates", response_model=ResponseModel)
