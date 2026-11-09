@@ -31,6 +31,9 @@ class PodDeployInfo:
     pod_ip: str
     host_ip: str = ""
     node_name: str = ""
+    # 实际对外发布的 SSE 端口（deploy_mode=subprocess 时本机多进程端口动态分配，
+    # ≠ 模板声明的 containerPort；K8s 模式恒 0=未提供，上层回退 main_sse_port）。
+    published_port: int = 0
 
 
 @dataclass(frozen=True)

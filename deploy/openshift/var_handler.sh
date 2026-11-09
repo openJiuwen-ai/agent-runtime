@@ -17,12 +17,6 @@ check_cluster_type_var() {
 #   AgentServer 固定单副本，配置多副本视为矛盾
 resolve_deploy_mode_vars() {
   local mode="${DEPLOY_VARS["AGENT_RUNTIME_DEPLOY_MODE"]:-}"
-  # openshift 集群暂不支持 full 模式：受限 SCC 环境无法授予 Pod 操作权限，
-  # 且 RS 配额等受限（见 .env.example 模式说明）；k8s 形态不受限。
-  # 本函数在 check_vars 主链执行，error 直接终止部署
-  if [ "$mode" = full ] && ! is_k8s_cluster; then
-    error "AGENT_RUNTIME_DEPLOY_MODE=full 暂不支持 openshift 集群（CLUSTER_TYPE=openshift）：受限环境无法授予 Pod 操作权限，请改用 routing/off，或改用 CLUSTER_TYPE=k8s 形态部署"
-  fi
   case "$mode" in
     routing|full)
       DEPLOY_VARS["GATEWAY_AGENT_CLIENT_MODE"]="runtime"
@@ -144,6 +138,12 @@ check_optional_vars() {
   val="${DEPLOY_VARS["REDIS_USER"]:-}"
   [ -z "$val" ] || [[ "$val" =~ ^[A-Za-z0-9._-]+$ ]] \
     || error "REDIS_USER 非法（仅允许字母数字与 ._-）: $val"
+  # 下载域名白名单：逗号分隔 host 规则（支持 * 通配、.suffix）
+  for _host_var in IMPORT_LOCAL_ALLOWED_DOWNLOAD_HOSTS TEAM_SKILLS_HUB_ALLOWED_DOWNLOAD_HOSTS; do
+    val="${DEPLOY_VARS[$_host_var]:-}"
+    [ -z "$val" ] || [[ "$val" =~ ^[A-Za-z0-9.*,_-]+$ ]] \
+      || error "${_host_var} 非法（逗号分隔主机规则，仅允许字母数字与 .*,_-）: $val"
+  done
 }
 
 check_identity_sso_vars() {
@@ -277,7 +277,7 @@ resolve_builtin_svc_locations() {
 # 数据库连接检查与派生。DB_HOST 空=内置：headless 服务名按 DB_TYPE+BASE_SVC_NS 静态派生
 # （up 时由 resolve_builtin_svc_locations 按实况改写）；填写=外部数据库，地址原样使用。
 # 端口/用户留空按 DB_TYPE 取默认，
-# 密码优先级（语义对齐 jiuwenswarm-ee 的全局统一账号）：
+# 密码优先级：
 #   外部数据库：DB_PASSWORD > DB_TYPE 对应凭证变量（MARIADB/MYSQL/POSTGRES_ROOT_PASSWORD），均空报错
 #   内置数据库：按 DB_TYPE 从对应凭证变量映射到 DB_ROOT_PASSWORD（忽略 DB_PASSWORD）
 #               （k8s 形态"内置"= default 共享实例，凭据即共享实例部署时的 root 密码）
@@ -324,7 +324,7 @@ resolve_db_vars() {
   return 0
 }
 
-# 分库配置派生（规则与 jiuwenswarm-ee 的 set_db_var 对齐）：
+# 分库配置派生：
 #   <MODULE>_DB_NAME：mysql/mariadb → <module>_<NAMESPACE>（按 db 隔离实例）；
 #                     postgresql → <module>（按 db 隔离实例）；用户已设则原样
 #   <MODULE>_PG_SCHEMA：仅 postgresql 生效，未设取 NAMESPACE（按 schema 隔离实例）；

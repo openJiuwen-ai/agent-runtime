@@ -80,10 +80,12 @@ def _render_volume_mounts(
         config_map: list[dict[str, Any]] | None = None,
         pvc: list[dict[str, Any]] | None = None,
         nfs: list[dict[str, Any]] | None = None,
+        empty_dir: list[dict[str, Any]] | None = None,
         hp_seen: dict[tuple[str, Any], str] | None = None,
         cm_seen: dict[tuple, str] | None = None,
         pvc_seen: dict[str, str] | None = None,
         nfs_seen: dict[tuple[str, str], str] | None = None,
+        ed_seen: dict[str, str] | None = None,
 ) -> tuple[list[Any], list[Any]]:
     """规范形挂载列表 → (Pod 级 volumes, 容器 volume_mounts)。
 
@@ -103,7 +105,7 @@ def _render_volume_mounts(
     volumes: list[Any] = []
     mounts: list[Any] = []
     for prefix, mlist in (("hp", host_path), ("cm", config_map),
-                          ("pvc", pvc), ("nfs", nfs)):
+                          ("pvc", pvc), ("nfs", nfs), ("ed", empty_dir)):
         for mi, m in enumerate(mlist or []):
             volume_name = _scoped_volume_name(prefix, owner, idx, mi)
             if prefix == "hp":
@@ -163,7 +165,8 @@ def _render_volume_mounts(
                     name=volume_name, mount_path=m["mount_path"],
                     read_only=m["read_only"],
                 ))
-            else:  # pvc: 同 claim 跨容器只建一个共享卷,主+sidecar 都引用它
+            elif prefix == "pvc":
+                # 同 claim 跨容器只建一个共享卷,主+sidecar 都引用它
                 claim = m["claim_name"]
                 if pvc_seen is not None and claim in pvc_seen:
                     volume_name = pvc_seen[claim]
@@ -177,6 +180,22 @@ def _render_volume_mounts(
                     ))
                     if pvc_seen is not None:
                         pvc_seen[claim] = volume_name
+                mounts.append(c.V1VolumeMount(
+                    name=volume_name, mount_path=m["mount_path"],
+                    read_only=m["read_only"],
+                ))
+            else:  # ed: 同模板卷名只建一个 emptyDir 卷,跨容器共享同一空目录
+                share = m["volume_name"]
+                if ed_seen is not None and share in ed_seen:
+                    volume_name = ed_seen[share]
+                else:
+                    volume_name = _scoped_volume_name("ed", owner, idx, mi)
+                    volumes.append(c.V1Volume(
+                        name=volume_name,
+                        empty_dir=c.V1EmptyDirVolumeSource(),
+                    ))
+                    if ed_seen is not None:
+                        ed_seen[share] = volume_name
                 mounts.append(c.V1VolumeMount(
                     name=volume_name, mount_path=m["mount_path"],
                     read_only=m["read_only"],
@@ -427,6 +446,7 @@ class RealK8sPodClient(K8sPodClient):
             cm_seen: dict[tuple, str] | None = None,
             pvc_seen: dict[str, str] | None = None,
             nfs_seen: dict[tuple[str, str], str] | None = None,
+            ed_seen: dict[str, str] | None = None,
     ) -> tuple[Any, list[Any], dict[str, str]]:
         """单个容器(canonical,见 containers.py)→ (V1Container, 挂载卷, Pod annotation)。
 
@@ -448,10 +468,13 @@ class RealK8sPodClient(K8sPodClient):
                                         "configmap_mounts"),
             pvc=normalize_mounts(cont.get("pvc_mounts"), "pvc_mounts"),
             nfs=normalize_mounts(cont.get("nfs_mounts"), "nfs_mounts"),
+            empty_dir=normalize_mounts(cont.get("empty_dir_mounts"),
+                                       "empty_dir_mounts"),
             hp_seen=hp_seen,
             cm_seen=cm_seen,
             pvc_seen=pvc_seen,
             nfs_seen=nfs_seen,
+            ed_seen=ed_seen,
         )
 
         resources = None
@@ -580,9 +603,11 @@ class RealK8sPodClient(K8sPodClient):
         cm_seen: dict[tuple, str] = {}  # 同 (name, items) 的 ConfigMap
         pvc_seen: dict[str, str] = {}  # 同 claim 的 PVC
         nfs_seen: dict[tuple[str, str], str] = {}  # 同 server+path 的 NFS
+        ed_seen: dict[str, str] = {}  # 同模板卷名的 emptyDir
         container, volumes, annotations = self._build_container(
             c, main, role=MAIN_ROLE, idx=0, pod_id=pod_id, hp_seen=hp_seen,
-            cm_seen=cm_seen, pvc_seen=pvc_seen, nfs_seen=nfs_seen)
+            cm_seen=cm_seen, pvc_seen=pvc_seen, nfs_seen=nfs_seen,
+            ed_seen=ed_seen)
         # ---- sidecar 容器(通用机制,canonical 见 containers.py;无 sidecars
         # 时零改动:annotations=None、containers=[main] 与历史逐字节一致)
         containers: list[Any] = [container]
@@ -591,7 +616,7 @@ class RealK8sPodClient(K8sPodClient):
                 self._build_container(c, sc, role=SIDECAR_ROLE, idx=idx,
                                       pod_id=pod_id, hp_seen=hp_seen,
                                       cm_seen=cm_seen, pvc_seen=pvc_seen,
-                                      nfs_seen=nfs_seen))
+                                      nfs_seen=nfs_seen, ed_seen=ed_seen))
             containers.append(sc_container)
             volumes.extend(sc_volumes)
             annotations.update(sc_annotations)

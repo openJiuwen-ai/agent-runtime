@@ -10,10 +10,15 @@ import json
 import os
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from openjiuwen_runtime.foundation.db.handler import DBHandler
+from pydantic import BaseModel, ConfigDict, Field
 
-from manager_server.core.template.agent_template import AgentTemplateService
+from manager_server.core.template.agent_template import (
+    AgentTemplateService,
+    RegistrationUnavailable,
+    TemplateMutationBusy,
+)
 from manager_server.core.template.a2a_access_policy_template import (
     A2AAccessPolicyTemplateService,
 )
@@ -51,7 +56,9 @@ from manager_server.core.template.deployment_defaults import (
 from manager_server.core.template.skill_prebuilt_template import (
     SkillPrebuiltTemplateService,
 )
+from manager_server.infrastructure.config import settings
 from manager_server.infrastructure.db import get_db_handler
+from manager_server.integrations.keycloak.agent_clients import RegistrationConflict, RegistrationError
 from manager_server.routers.auth_guards import require_admin
 from manager_server.schemas.common_schemas import ResponseModel
 from manager_server.schemas.template_schemas import (
@@ -420,6 +427,35 @@ async def get_agent_template(
     return ResponseModel(code=200, message="success", data=row)
 
 
+class AgentClientRegistrationBody(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    client_id: str = Field(min_length=1, max_length=255)
+
+
+@templates_router.post("/agent-templates/{template_id}/keycloak-client", response_model=ResponseModel)
+async def register_agent_client(
+    template_id: TemplateIdPath,
+    body: AgentClientRegistrationBody,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+    response: Response,
+):
+    response.headers["Cache-Control"] = "no-store"
+    if not settings.agent_client_registration_enabled:
+        raise HTTPException(status_code=404, detail="Agent client registration is disabled")
+    try:
+        binding = await _agent_template_svc(handler).register_client(template_id, body.client_id)
+    except RegistrationUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+    except RegistrationConflict as exc:
+        raise HTTPException(status_code=409, detail={"code": exc.code, "message": str(exc)}) from None
+    except RegistrationError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from None
+    if binding is None:
+        raise HTTPException(status_code=404, detail="agent_template not found")
+    return ResponseModel(code=200, message="success", data=binding)
+
+
 @templates_router.patch(
     "/agent-templates/{template_id}",
     response_model=ResponseModel,
@@ -431,6 +467,10 @@ async def update_agent_template(
 ):
     try:
         row = await _agent_template_svc(handler).update(template_id, body)
+    except TemplateMutationBusy as exc:
+        raise HTTPException(status_code=409, detail={"code": exc.code, "message": str(exc)}) from None
+    except RegistrationError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from None
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if row is None:
@@ -446,7 +486,17 @@ async def delete_agent_template(
     template_id: TemplateIdPath,
     handler: Annotated[DBHandler, Depends(get_db_handler)],
 ):
-    ok = await _agent_template_svc(handler).delete(template_id)
+    try:
+        ok = await _agent_template_svc(handler).delete(template_id)
+    except TemplateMutationBusy as exc:
+        raise HTTPException(status_code=409, detail={"code": exc.code, "message": str(exc)}) from None
+    except RegistrationUnavailable:
+        raise HTTPException(
+            status_code=503,
+            detail="Enable and configure Keycloak registration before deleting a bound template",
+        ) from None
+    except RegistrationError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from None
     if not ok:
         raise HTTPException(status_code=404, detail="agent_template not found")
     return ResponseModel(code=200, message="success", data={"deleted": True})

@@ -53,6 +53,15 @@ class Settings(BaseSettings):
     # 巡检锁 TTL（毫秒）：< 扫描间隔，扫描结束自动过期，无需释放
     scan_lock_ttl_ms: int = Field(default=30000, validation_alias="MANAGER_SCAN_LOCK_TTL_MS")
 
+    # ---- OBS（只读读取技能上传审批包；凭据复用 AgentServer 的 AK/SK）----
+    obs_url: str = Field(default="", validation_alias="OBS_URL")
+    obs_bucket: str = Field(default="", validation_alias="OBS_BUCKET")
+    obs_access_key: str = Field(default="", validation_alias="OBS_ACCESS_KEY")
+    obs_secret_key: str = Field(default="", validation_alias="OBS_SECRET_KEY")
+    obs_region: str = Field(default="default", validation_alias="OBS_REGION")
+    # 用字符串接收，避免非法布尔值在 import 阶段让管理面起不来
+    obs_secure: str = Field(default="false", validation_alias="OBS_SECURE")
+
     # ========== 配置下发字段级加密（信封加密，密钥握手分发） ==========
     config_enc_enabled: bool = Field(
         default=False, validation_alias="CLAWMANAGER_CONFIG_ENC_ENABLED"
@@ -117,12 +126,6 @@ class Settings(BaseSettings):
     )
     agent_client_registration_config_file: str = Field(
         default="", validation_alias="MANAGER_AGENT_CLIENT_REGISTRATION_CONFIG_FILE"
-    )
-
-    # 企业版 Skill 上传资格申请与审批。默认开启；置 false 可整体下线该能力。
-    skill_upload_approval_enabled: bool = Field(
-        default=True,
-        validation_alias="SKILL_UPLOAD_APPROVAL_ENABLED",
     )
 
     # Hub 平台包清单。与用户面同一变量，不跟某个集群走。

@@ -11,7 +11,7 @@ import {
   isNoOrgGroupId,
   type ApprovalQuotaApplyData,
   type ApprovalQuotaResultData,
-  type ApprovalSkillUploadResultData,
+  type ApprovalSkillUploadApplyData,
 } from '../../services/api';
 import { toast } from '../../stores/uiStore';
 import { formatTime } from '../../utils/format';
@@ -47,22 +47,25 @@ function approvalTypeLabel(
   if (businessType === 'workspace_quota_expand') {
     return t('approvals.types.workspace_quota_expand');
   }
-  if (businessType === 'skill_upload_permission') {
-    return t('approvals.types.skill_upload_permission');
+  if (businessType === 'skill_upload') {
+    return t('approvals.types.skill_upload');
   }
   return businessType;
 }
 
-function formatApprovalUploadPolicy(
+/** 标题由 manager 落库，技能上传的前缀在这里按当前语言重拼，技能名保持原样。 */
+function approvalTitle(
   t: ReturnType<typeof useTranslation>['t'],
-  result: ApprovalSkillUploadResultData,
+  order: { business_type: string; title: string; apply_data?: unknown },
 ): string {
-  const policy = result.upload_skill_policy === 'allow'
-    ? t('instanceDetail.accessPanel.instance.loginAllow')
-    : t('instanceDetail.accessPanel.instance.loginDeny');
-  return result.grant_created
-    ? `${policy} · ${t('approvals.skillUploadGrantCreated')}`
-    : policy;
+  const raw = (order.title || '').trim();
+  if (order.business_type === 'skill_upload' && order.apply_data) {
+    const skillName = String(
+      (order.apply_data as ApprovalSkillUploadApplyData).skill_name || '',
+    ).trim();
+    if (skillName) return t('approvals.skillUploadTitle', { name: skillName });
+  }
+  return raw;
 }
 
 function MetaItem({ label, value }: { label: string; value: ReactNode }) {
@@ -91,9 +94,16 @@ export function ApprovalEditPage({ orderNum }: { orderNum: string }) {
   const quotaResult = data?.business_type === 'workspace_quota_expand' && data.result_data
     ? (data.result_data as ApprovalQuotaResultData)
     : null;
-  const skillResult = data?.business_type === 'skill_upload_permission' && data.result_data
-    ? (data.result_data as ApprovalSkillUploadResultData)
+  // 管理面只看「技能名 + 下载」，其余描述符字段一律不展示。
+  const skillApply = data?.business_type === 'skill_upload'
+    ? (data.apply_data as ApprovalSkillUploadApplyData)
     : null;
+  // 审批单失效时间由 manager 计算；对象存储里的原包按同一保留期清理。
+  const skillPackageExpiresAt = data?.expires_at || '';
+  const skillPackageExpired = data?.status === 'expired'
+    || (Boolean(skillPackageExpiresAt)
+      && new Date(skillPackageExpiresAt).getTime() <= Date.now());
+  const [downloading, setDownloading] = useState(false);
 
   // 指定审批人的单据只有被指定人可操作（与后端 act() 的门禁一致）；
   // 未指定审批人的历史单据仍允许任一持审批权限者处理。
@@ -124,6 +134,31 @@ export function ApprovalEditPage({ orderNum }: { orderNum: string }) {
     }
   };
 
+  const downloadSkillPackage = async () => {
+    setDownloading(true);
+    try {
+      const { blob, filename } = await ApprovalApi.downloadSkillPackage(orderNum);
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(objectUrl);
+    } catch (downloadError) {
+      const status = downloadError instanceof ApiError ? downloadError.status : 0;
+      const key = status === 410
+        ? 'approvals.skillPackageExpired'
+        : status === 502
+          ? 'approvals.skillPackageUnavailable'
+          : 'approvals.skillDownloadFailed';
+      toast('danger', t(key, { detail: errorMessage(downloadError) }));
+    } finally {
+      setDownloading(false);
+    }
+  };
+
   if (loading) {
     return <div className="p-4 text-sm text-muted">{t('common.loading')}</div>;
   }
@@ -149,6 +184,8 @@ export function ApprovalEditPage({ orderNum }: { orderNum: string }) {
     );
   }
 
+  const displayTitle = approvalTitle(t, data) || approvalTypeLabel(t, data.business_type);
+
   return (
     <div className="approval-sheet flex min-w-0 flex-col gap-4 overflow-x-auto">
       <div className="page-header flex w-full min-w-0 shrink-0 items-start gap-3">
@@ -164,8 +201,8 @@ export function ApprovalEditPage({ orderNum }: { orderNum: string }) {
           </button>
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
-              <div className="page-title truncate" title={data.title || approvalTypeLabel(t, data.business_type)}>
-                {data.title || approvalTypeLabel(t, data.business_type)}
+              <div className="page-title truncate" title={displayTitle}>
+                {displayTitle}
               </div>
               <StatusBadge
                 status={data.status}
@@ -245,6 +282,60 @@ export function ApprovalEditPage({ orderNum }: { orderNum: string }) {
                 </div>
               </div>
             )}
+            {skillApply && (
+              <div className="approval-sheet__quota">
+                <div className="approval-sheet__quota-cell is-request">
+                  <div className="approval-sheet__quota-label">
+                    {t('approvals.skillName')}
+                  </div>
+                  <div className="approval-sheet__quota-value break-all">
+                    {skillApply.skill_name || '—'}
+                  </div>
+                </div>
+                <div className="approval-sheet__quota-cell">
+                  <div className="approval-sheet__quota-label">
+                    {t('approvals.skillPackage')}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      className="btn sm"
+                      disabled={skillPackageExpired}
+                      onClick={() => navigate(`/approvals/${encodeURIComponent(orderNum)}/skill-preview`)}
+                      data-testid="approval-skill-package-preview"
+                    >
+                      {t('approvals.skillPreview')}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn sm"
+                      disabled={downloading || skillPackageExpired}
+                      onClick={() => void downloadSkillPackage()}
+                      data-testid="approval-skill-package-download"
+                    >
+                      {downloading ? t('common.loading') : t('approvals.skillDownload')}
+                    </button>
+                  </div>
+                  {skillPackageExpired ? (
+                    <div
+                      className="approval-sheet__quota-hint text-danger"
+                      data-testid="approval-skill-package-expiry"
+                    >
+                      {t('approvals.skillPackageExpired')}
+                    </div>
+                  ) : skillPackageExpiresAt ? (
+                    <div
+                      className="approval-sheet__quota-hint"
+                      data-testid="approval-skill-package-expiry"
+                    >
+                      {t('approvals.skillPackageRetention', {
+                        expiresAt: formatTime(skillPackageExpiresAt),
+                      })}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            )}
             <div className="approval-sheet__reason">
               <div className="field-label">{t('approvals.reason')}</div>
               <div className="approval-sheet__reason-body whitespace-pre-wrap">
@@ -253,7 +344,7 @@ export function ApprovalEditPage({ orderNum }: { orderNum: string }) {
             </div>
           </section>
 
-          {(quotaResult || skillResult) && (
+          {quotaResult && (
             <section className="card approval-sheet__section">
               <div className="card-header">
                 <div className="card-title">{t('approvals.effectResult')}</div>
@@ -283,18 +374,6 @@ export function ApprovalEditPage({ orderNum }: { orderNum: string }) {
                         value={<span className="text-xs text-muted">{quotaResult.sync_detail}</span>}
                       />
                     )}
-                  </>
-                )}
-                {skillResult && (
-                  <>
-                    <MetaItem
-                      label={t('approvals.skillUploadUser')}
-                      value={<span className="mono text-[12px]">{skillResult.user_id}</span>}
-                    />
-                    <MetaItem
-                      label={t('approvals.skillUploadGrant')}
-                      value={formatApprovalUploadPolicy(t, skillResult)}
-                    />
                   </>
                 )}
               </dl>

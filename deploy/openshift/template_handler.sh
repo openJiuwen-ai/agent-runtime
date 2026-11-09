@@ -20,8 +20,9 @@ replace_placeholder() { # $1=占位符 $2=目标文件
   # 变量值已通过 check_vars 白名单校验（awk gsub 替换串中 & 与 \ 为特殊字符）
   # 可选变量（OPTIONAL_VARS）留空时，占位符独占行值的整行删除（如 storageClassName 走集群默认）
   if [ -z "$var_value" ]; then
+    # 匹配 KEY: <<PH>> / KEY: "<<PH>>" / KEY: '<<PH>>'（ConfigMap 值常需引号包 * 等特殊字符）
     awk -v ph="${placeholder}" '
-      $0 ~ ("^[[:space:]]*[A-Za-z0-9_-]+:[[:space:]]*" ph "[[:space:]]*$") { next }
+      $0 ~ ("^[[:space:]]*[A-Za-z0-9_-]+:[[:space:]]*([\"'\'']?)(" ph ")([\"'\'']?)[[:space:]]*$") { next }
       { gsub(ph, ""); print }' \
       "$destfile" > "$destfile.tmp" && mv -f "$destfile.tmp" "$destfile" \
       || error "占位符替换失败: ${placeholder} → ${destfile}"

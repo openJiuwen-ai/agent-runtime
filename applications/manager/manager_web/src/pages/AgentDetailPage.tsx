@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { agentClusterReturnPath, savedAgentBindingContext, templateFlowQuery, templateReturnPath } from '../utils/agentFlowContext';
 import { clusterPagePath } from '../utils/clusterNavigation';
 import { useTranslation } from 'react-i18next';
-import { AgentTemplateApi } from '../services/api';
+import { AgentClientRegistrationApi, AgentTemplateApi } from '../services/api';
 import { loadAgentBindings, loadAgentReferences } from '../services/agentWorkspace';
 import { useAsync } from '../hooks/useAsync';
 import { useRouter } from '../router';
@@ -18,6 +18,7 @@ export function AgentDetailPage({ id }: { id: string }) {
   const returnTo = templateReturnPath(params.get('returnTo'));
   const [editing, setEditing] = useState(false);
   const [revision, setRevision] = useState(0);
+  const { data: registrationConfig } = useAsync(AgentClientRegistrationApi.capabilities);
   const agent = useAsync(() => AgentTemplateApi.get(id), [id, revision]);
   const references = useAsync(async () => loadAgentReferences(await AgentTemplateApi.get(id)), [id, revision]);
   const bindings = useAsync(() => loadAgentBindings(id), [id, revision]);
@@ -52,7 +53,14 @@ export function AgentDetailPage({ id }: { id: string }) {
       {bindings.data && !bound.length && <div className="overview-empty">{tr('尚未绑定集群', 'Not bound to any instance')}</div>}
       {bound.map(({ instance, resources, error }) => <div className="agent-binding" key={instance.jiuwenclaw_id}><div className="flex justify-between gap-2"><h3>{instance.jiuwenclaw_name}</h3><button className="btn sm" onClick={() => navigate(bindingPath(instance.jiuwenclaw_id))}>{tr('管理绑定', 'Manage bindings')} →</button></div>{error ? <p className="text-danger" role="alert">{error}</p> : resources.map(resource => <div key={resource.resource_id} className="binding-resource"><strong>{resource.resource_name || definition.template_name}</strong><span className="tag">{resource.enabled ? tr('绑定已启用', 'Binding enabled') : tr('绑定已停用', 'Binding disabled')}</span><p className="text-sm text-muted">{bindingExpiry(resource.expires_at) === 'expired' ? tr('已过期：', 'Expired: ') : bindingExpiry(resource.expires_at) === 'unknown' ? tr('有效期格式异常：', 'Invalid expiry: ') : tr('有效期至：', 'Expires: ')}{resource.expires_at ? formatTime(resource.expires_at) : tr('长期有效', 'No expiry')}</p><details><summary>{tr('查看授权条件', 'View access conditions')}</summary><pre>{typeof resource.match_expr === 'string' ? resource.match_expr || tr('实例内已准入的全体用户', 'All admitted users') : JSON.stringify(resource.match_expr)}</pre></details></div>)}</div>)}
     </section>
-    <AgentTemplateModal open={editing} template={definition} onClose={() => setEditing(false)} onSaved={() => { setEditing(false); refresh(); }} />
+    <AgentTemplateModal open={editing} template={definition} registrationConfig={registrationConfig}
+      onClose={() => { setEditing(false); refresh(); }}
+      onSaved={(_saved, options) => {
+        // Keep the editor mounted while registration updates its saved template.
+        if (options?.keepOpen) return;
+        setEditing(false);
+        refresh();
+      }} />
     <WorkspaceNote title={tr('Agent模板与集群绑定分开配置', 'Agent definition and cluster activation are separate steps')}>
       {tr('当前页维护 Agent 的能力组合；要让它在实际环境中可用，请回到集群配置工作台完成准入、运行资源和 Agent 绑定。', 'This page maintains the Agent capability composition. Return to the cluster workspace to configure admission, runtime resources and the binding that makes it available.')}
     </WorkspaceNote>

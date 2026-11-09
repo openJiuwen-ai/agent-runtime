@@ -11,7 +11,7 @@ import {
 import { useAsync } from '../../hooks/useAsync';
 import { useListSearch } from '../../hooks/useListSearch';
 import { useRouter } from '../../router';
-import { ApprovalApi, type ApprovalOrder } from '../../services/api';
+import { ApprovalApi, type ApprovalOrder, type ApprovalSkillUploadApplyData } from '../../services/api';
 import { formatTime } from '../../utils/format';
 import { WorkspaceNote } from '../../components/WorkspaceNote';
 
@@ -22,10 +22,25 @@ function approvalTypeLabel(
   if (businessType === 'workspace_quota_expand') {
     return t('approvals.types.workspace_quota_expand');
   }
-  if (businessType === 'skill_upload_permission') {
-    return t('approvals.types.skill_upload_permission');
+  if (businessType === 'skill_upload') {
+    return t('approvals.types.skill_upload');
   }
   return businessType;
+}
+
+/** 标题由 manager 落库，技能上传的前缀在这里按当前语言重拼，技能名保持原样。 */
+function approvalTitle(
+  t: ReturnType<typeof useTranslation>['t'],
+  order: { business_type: string; title: string; apply_data?: unknown },
+): string {
+  const raw = (order.title || '').trim();
+  if (order.business_type === 'skill_upload' && order.apply_data) {
+    const skillName = String(
+      (order.apply_data as ApprovalSkillUploadApplyData).skill_name || '',
+    ).trim();
+    if (skillName) return t('approvals.skillUploadTitle', { name: skillName });
+  }
+  return raw;
 }
 
 export function ApprovalPage() {
@@ -60,6 +75,7 @@ export function ApprovalPage() {
     { value: 'approved', label: t('approvals.status.approved') },
     { value: 'rejected', label: t('approvals.status.rejected') },
     { value: 'cancelled', label: t('approvals.status.cancelled') },
+    { value: 'expired', label: t('approvals.status.expired') },
   ], [t]);
   const sortOptions = useMemo(() => [
     { value: 'asc' as const, label: t('common.sortAsc') },
@@ -153,7 +169,7 @@ export function ApprovalPage() {
                   <tr><td colSpan={8}><Empty text={t('common.empty')} /></td></tr>
                 ) : items.map((order) => {
                   const reason = (order.reason || '').trim() || '—';
-                  const title = (order.title || '').trim() || '—';
+                  const title = approvalTitle(t, order) || '—';
                   return (
                     <tr key={order.order_num}>
                       <td>

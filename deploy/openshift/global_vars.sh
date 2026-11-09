@@ -31,6 +31,8 @@ REPLICAS_VARS=(AGENT_SERVER_REPLICAS GATEWAY_REPLICAS WEB_REPLICAS IDENTITY_REPL
 # - IDENTITY_SSO_* / IDENTITY_FEDERATION_CONFIG_FILE：企业认证配置可留空
 # - GATEWAY_AGENT_CLIENT_MODE / GATEWAY_RUNTIME_MANAGER_URL / AGENTSERVER_POD_DNS_LIST：
 #   三模式派生变量（routing 注入，off/full 留空 → 对应 env 行删除）
+# - IMPORT_LOCAL_ALLOWED_DOWNLOAD_HOSTS / TEAM_SKILLS_HUB_ALLOWED_DOWNLOAD_HOSTS：
+#   预置 Skill URL / 远程 ZIP 下载白名单（留空 → ConfigMap 行删除，走 AgentServer 代码默认）
 # 格式校验与"允许留空"解耦（用户名/URL 不该按 DNS subdomain 误校验）：
 # StorageClass 见 STORAGE_CLASS_VARS（check_storage_class_vars）；其余选填项见 check_optional_vars
 OPTIONAL_VARS=(
@@ -40,6 +42,7 @@ OPTIONAL_VARS=(
     IDENTITY_FEDERATION_CONFIG_FILE
     MANAGER_AGENT_CLIENT_REGISTRATION_CONFIG_FILE
     GATEWAY_AGENT_CLIENT_MODE GATEWAY_RUNTIME_MANAGER_URL AGENTSERVER_POD_DNS_LIST
+    IMPORT_LOCAL_ALLOWED_DOWNLOAD_HOSTS TEAM_SKILLS_HUB_ALLOWED_DOWNLOAD_HOSTS
 )
 
 # StorageClass 变量：check_storage_class_vars 做 DNS subdomain 规范校验（留空走集群默认）
@@ -71,10 +74,10 @@ declare -A DEPLOY_VARS=(
     ["DB_HOST"]=""
     ["DB_PORT"]=""                       # 留空按 DB_TYPE 取默认（3306/5432）；外部数据库填写对应端口
     ["DB_USER"]=""                       # 留空按 DB_TYPE 取默认（root/postgres）；外部数据库填写对应用户
-    ["DB_PASSWORD"]=""                   # 外部数据库统一密码（语义对齐 jiuwenswarm-ee）；留空时内置模式按 DB_TYPE 取 ROOT_PASSWORD，外置模式两者均空报错
+    ["DB_PASSWORD"]=""                   # 外部数据库统一密码；留空时内置模式按 DB_TYPE 取 ROOT_PASSWORD，外置模式两者均空报错
     ["ENABLE_EXTERNAL_DB"]="false"
 
-    # 分库配置（语义对齐 jiuwenswarm-ee；派生规则见 var_handler.sh resolve_module_db_vars）：
+    # 分库配置：
     #   <MODULE>_DB_NAME 未设 → mysql/mariadb: <module>_<NAMESPACE>；postgresql: <module>
     #   <MODULE>_PG_SCHEMA 未设 → postgresql 下取 NAMESPACE（仅 pg 生效）
     #   <MODULE>_DB_USER/PASSWORD 未设 → 继承 DB_USER / DB_ROOT_PASSWORD
@@ -119,6 +122,8 @@ declare -A DEPLOY_VARS=(
     ["OBS_SECURE"]=""                    # 内置：忽略（强制 false）；外部：true/false（留空默认 false）
     ["OBS_REGION"]=""                    # 内置：忽略（强制 default）；外部：区域标识（留空则由 SDK 决定）
     ["ENABLE_EXTERNAL_OBS"]="false"
+    # 技能上传包保留天数：manager 与 AgentServer 必须同值，默认 7，最小 1（非法值回落 7）
+    ["SKILL_UPLOAD_RETENTION_DAYS"]="7"
 
     ["AGENT_SERVER_REPLICAS"]="1"
     ["GATEWAY_REPLICAS"]="1"
@@ -137,6 +142,9 @@ declare -A DEPLOY_VARS=(
     # 禁 EVAL 兼容模式（on 与历史行为一致；客户 Redis 禁用 EVAL 时设 off）
     ["AGENT_RUNTIME_REDIS_LUA"]="off"
     ["SANDBOX_TYPE"]="off"
+    # 预置 Skill URL / 远程导入下载白名单（逗号分隔）；留空不注入，走 AgentServer 代码默认
+    ["IMPORT_LOCAL_ALLOWED_DOWNLOAD_HOSTS"]=""
+    ["TEAM_SKILLS_HUB_ALLOWED_DOWNLOAD_HOSTS"]=""
 
     ["MARIADB_IMAGE"]="mariadb:11.8"
     ["MYSQL_IMAGE"]="mysql:8.0"
@@ -171,6 +179,8 @@ declare -A DEPLOY_VARS=(
     ["IDENTITY_FEDERATION_CONFIG_FILE"]=""
     ["MANAGER_AGENT_CLIENT_REGISTRATION_ENABLED"]="false"
     ["MANAGER_AGENT_CLIENT_REGISTRATION_CONFIG_FILE"]=""
+    # 用户空间配额特性开关（Manager / Gateway / AgentServer / User Web / Manager Web 共用）
+    ["WORKSPACE_QUOTA_ENABLED"]="false"
     # dev 模式：hostPath 挂载宿主机代码调试（MODE=dev 仅 k8s 形态支持；Pod 固定到代码所在节点）
     ["MODE"]="product"                   # product | dev
     ["SWARM_CODE_PATH"]=""                # jiuwenswarm 仓库路径（挂载到 agentserver/gateway/web）

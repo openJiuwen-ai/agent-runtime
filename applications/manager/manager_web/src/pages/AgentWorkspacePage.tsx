@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AgentTemplateApi, ApiError, InstanceApi, type AgentTemplate } from '../services/api';
+import { AgentClientRegistrationApi, AgentTemplateApi, ApiError, InstanceApi, type AgentTemplate } from '../services/api';
 import { loadAgentTemplateCatalog } from '../services/agentTemplateCatalog';
 import { loadAgentBindings } from '../services/agentWorkspace';
 import { agentReferenceSlots, agentResourceCatalogPath } from '../utils/agentTemplateNavigation';
@@ -47,6 +47,7 @@ export function AgentWorkspacePage() {
   const [more, setMore] = useState<AgentTemplate | null>(null);
   const [confirm, setConfirm] = useState<{ row: AgentTemplate; action: 'delete' | 'toggle' } | null>(null);
   const [busy, setBusy] = useState(false);
+  const { data: registrationConfig } = useAsync(AgentClientRegistrationApi.capabilities);
   useEffect(() => setSearchInput(search), [search]);
 
   const updateQuery = (values: Record<string, string | null>) => {
@@ -142,7 +143,13 @@ export function AgentWorkspacePage() {
     <WorkspaceNote title={tr('模板定义能力，集群决定使用方式', 'Templates define capabilities; clusters define their use')}>
       {tr('这里统一管理 Agent模板（也称 Agent定义）。模板可绑定到多个集群；集群内分别配置准入、运行资源和使用范围。启用模板不代表已部署或可以对话，完成绑定后请到集群配置工作台检查。', 'Agent templates (also called definitions) are managed here and can be reused by multiple clusters. Each cluster configures admission, runtime resources and usage scope. An enabled template is not a deployment or a readiness check; continue in the cluster workspace after binding.')}
     </WorkspaceNote>
-    <AgentTemplateModal open={open} template={editing} onClose={() => setOpen(false)} onSaved={agent => { setOpen(false); void result.reload(); if (!editing && cluster) returnToCluster(agent.template_id); else if (!editing) setSaved(agent); }} />
+    <AgentTemplateModal open={open} template={editing} registrationConfig={registrationConfig} onClose={() => setOpen(false)} onSaved={(agent, options) => {
+      void result.reload();
+      if (options?.keepOpen) return;
+      setOpen(false);
+      if (!editing && cluster) returnToCluster(agent.template_id);
+      else if (!editing) setSaved(agent);
+    }} />
     <Modal open={!!more} title={`${tr('模板操作', 'Template actions')} · ${more?.template_name || ''}`} onClose={() => { if (!busy) setMore(null); }} footer={<button className="btn" disabled={busy} onClick={() => setMore(null)}>{tr('关闭', 'Close')}</button>}>
       {more && <div className="flex flex-col gap-4"><p className="text-muted text-sm">{impact.loading ? tr('正在检查集群引用…', 'Checking cluster bindings…') : impact.error || impact.data?.some(row => row.error) ? tr('部分集群引用读取失败，请先打开详情核对。', 'Some cluster bindings could not be checked. Review details first.') : tr(`该模板共有 ${bindingCount} 条集群绑定。`, `This template has ${bindingCount} cluster bindings.`)}</p><div className="flex flex-wrap gap-2"><button className="btn" onClick={() => navigate(detailPath(more.template_id))}>{tr('查看详情与绑定', 'View details and bindings')}</button><ResourceExportButton resourceType="agent-template" resourceIds={[more.template_id]} /><button className="btn" disabled={busy} onClick={() => { setConfirm({ row: more, action: 'toggle' }); setMore(null); }}>{more.enabled ? tr('停用模板', 'Disable template') : tr('启用模板', 'Enable template')}</button><button className="btn danger" disabled={busy} onClick={() => { setConfirm({ row: more, action: 'delete' }); setMore(null); }}>{tr('删除模板', 'Delete template')}</button></div><p className="text-muted text-sm">{tr('变更模板状态会影响引用它的集群；删除模板会同时清除它在各集群中的绑定。', 'Changing template status affects clusters referencing it. Deleting it also removes its cluster bindings.')}</p></div>}
     </Modal>

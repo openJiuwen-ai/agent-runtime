@@ -324,7 +324,9 @@ class ResourceOrchestrator:
             info = await self.k8s.deploy(pod_spec)
             norm = normalize_pod_spec(pod_spec)
             main = norm.get("main_container")
-            sse_port = main_sse_port(main)
+            # subprocess 部署的 Pod 端口动态分配（本机多进程不可共用模板声明口），
+            # deploy 回传实际发布口 published_port；K8s 模式恒 0 → 回退模板声明口。
+            sse_port = getattr(info, "published_port", 0) or main_sse_port(main)
             sse_url = self.link_mtls.agentserver_url(
                 pod_id=info.pod_id,
                 namespace=info.namespace,

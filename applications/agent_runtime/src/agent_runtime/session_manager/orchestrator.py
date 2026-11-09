@@ -134,6 +134,10 @@ class SessionOrchestrator:
         route_ok = False
         route_code: str | None = None
         acquire_round = 0
+        # routing：本请求已向 RM 要过、试过的 pod_id。peer-reuse 可能反复
+        # 交回同一台已满机——只有「又拿到已试过的同一台」才快失败；换机 /
+        # 刚回暖拿到新 pod_id 仍允许再 acquire（细于 acquire_round>=1）。
+        tried_pods: set[str] = set()
         try:
             while True:
                 # 总预算：need_acquire 一轮可触发完整 deploy（ready_timeout 量级），
@@ -234,6 +238,21 @@ class SessionOrchestrator:
                 pod_id, sse_url = await self._acquire_pod(
                     target_scope, template, acquire_id
                 )
+                # routing：RM 不读 SM 闸门，peer-reuse 可能交回已满机。
+                # 同一 pod_id 再交回 → 真耗尽（防同机空转）；新 pod_id 放行。
+                if self.deploy_mode == "routing" and pod_id in tried_pods:
+                    logger.warning(
+                        "route: routing re-acquired tried pod → exhausted: "
+                        "scope=%s request=%s pod=%s tried=%s",
+                        target_scope, request_id, pod_id, sorted(tried_pods),
+                    )
+                    raise NoPodAvailable(
+                        f"scope {target_scope} 外部供给池已耗尽（routing 模式），"
+                        f"请扩容 StatefulSet 并注册新 Pod",
+                        retry_after=DEFAULT_RETRY_AFTER,
+                    )
+                if self.deploy_mode == "routing":
+                    tried_pods.add(pod_id)
                 acquire_round += 1
                 await self.state.register_pod(
                     target_scope, pod_id, sse_url, template.deploy_ver()

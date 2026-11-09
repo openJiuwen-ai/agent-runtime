@@ -40,7 +40,7 @@ gen_agentserver_file() {
     render_config_template "${CONFIG["AS_TEMPLATE_FILE"]}" "${file}" "DEPLOY_VARS"
     enable_dev_mode_if_needed "${file}" agentserver
 
-    # data 卷按存储模式二选一（与 patch_handler.inject_data_volume 语义对齐）：
+    # agentserver-domain 卷按存储模式二选一：
     #   pvc: 模板默认（claimName=SWARM_PVC）
     #   nfs: 直连 NFS 共享目录（server=NFS_SERVER_ADDR, path=<share>/jiuwenswarm/<NAMESPACE>）
     if [ "${DEPLOY_VARS["SWARM_MOUNT_TYPE"]}" == "nfs" ]; then
@@ -49,7 +49,7 @@ gen_agentserver_file() {
         fi
         local nfs_share="${DEPLOY_VARS["NFS_SHARE_PATH"]%/}"
         local nfs_path="${nfs_share}/jiuwenswarm/${DEPLOY_VARS["NAMESPACE"]}"
-        yq eval 'select(.kind == "Deployment").spec.template.spec.volumes |= map(select(.name == "data") |= {"name": "data", "nfs": {"server": "'"${DEPLOY_VARS["NFS_SERVER_ADDR"]}"'", "path": "'"${nfs_path}"'"}} // .)' -i "${file}"
+        yq eval 'select(.kind == "Deployment").spec.template.spec.volumes |= map(select(.name == "agentserver-domain") |= {"name": "agentserver-domain", "nfs": {"server": "'"${DEPLOY_VARS["NFS_SERVER_ADDR"]}"'", "path": "'"${nfs_path}"'"}} // .)' -i "${file}"
     fi
 
     # 沙箱可插拔：SANDBOX_TYPE 非 jiuwenbox 时移除 jiuwenbox sidecar 及其 hp-cgroup 卷

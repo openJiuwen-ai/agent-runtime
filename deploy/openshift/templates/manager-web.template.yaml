@@ -40,9 +40,7 @@ spec:
             - name: MANAGER_WEB_RESOLVER
               value: "<<MANAGER_WEB_RESOLVER>>"
             - name: WORKSPACE_QUOTA_ENABLED
-              value: "false"
-            - name: SKILL_UPLOAD_APPROVAL_ENABLED
-              value: "true"
+              value: "<<WORKSPACE_QUOTA_ENABLED>>"
             - name: TZ
               value: "Asia/Shanghai"
 ---

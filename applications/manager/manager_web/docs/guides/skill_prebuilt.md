@@ -8,11 +8,13 @@
 
 与其他技能来源的对比：
 
-| 来源 | 谁决定可用 | 用户侧表现 |
-| ---- | ---------- | ---------- |
-| **预置 Skill** | 管理员在管理面配置并绑定到 Agent 模板 | 自动出现在「我的技能 → 预置」；不可编辑、卸载、发布；可启停 |
-| **内置技能** | 产品打包随版本提供 | 在技能广场以「预置/内置」展示并可安装；与管理面下发的预置 Skill 不是同一来源 |
-| **用户自装** | 用户从技能广场或本地导入 | 可安装、卸载、启停、按需管理 |
+
+| 来源           | 谁决定可用                  | 用户侧表现                                      |
+| ------------ | ---------------------- | ------------------------------------------ |
+| **预置 Skill** | 管理员在管理面配置并绑定到 Agent 模板 | 自动出现在「我的技能 → 预置」；不可编辑、卸载、发布；可启停            |
+| **内置技能**     | 产品打包随版本提供              | 在技能广场以「预置/内置」展示并可安装；与管理面下发的预置 Skill 不是同一来源 |
+| **用户自装**     | 用户从技能广场或本地导入           | 可安装、卸载、启停、按需管理                             |
+
 
 典型用途：
 
@@ -30,7 +32,11 @@
 4. 用户登录用户面使用对应 Agent 时，运行时自动同步预置技能
 5. 用户可在技能页查看、启停预置技能，并在对话中调用
 
+
+
 ## 管理面配置
+
+
 
 ### 入口与列表
 
@@ -40,17 +46,21 @@
 
 ### 新建预置 Skill
 
+![新建预置 Skill 入口](../assets/skill-prebuilt-create-entry.png)
+
 点击 **新建预置 Skill**，填写以下信息：
 
-| 字段 | 说明 |
-| ---- | ---- |
-| **模板名称** | 必填，管理面展示用名称 |
-| **模板描述** | 可选，说明用途 |
-| **Skill ID** | 必填；SPI 须与技能源侧一致（如 `c0f2e4ba2d7d4cb2b6050de03b92db5b`）；URL 方式可自定义（如 `search/weather`） |
-| **技能源 ID + 版本 ID** | 二者同时填写时走 **SPI Provider** 安装（如 `swarmskillhub` + `1.0.0`） |
-| **技能包 URL** | 未走 SPI 时必填，须为合法 `http(s)` 直链；走 URL 安装 |
-| **作者** | 可选，会随模板下发并写入安装账本 |
-| **SHA256** | 可选，仅 URL 安装时用于完整性校验（64 位小写十六进制）；SPI 路径忽略 |
+
+| 字段                 | 说明                                                                                   |
+| ------------------ | ------------------------------------------------------------------------------------ |
+| **模板名称**           | 必填，管理面展示用名称                                                                          |
+| **模板描述**           | 可选，说明用途                                                                              |
+| **Skill ID**       | 必填；SPI 须与技能源侧一致（如 `c0f2e4ba2d7d4cb2b6050de03b92db5b`）；URL 方式可自定义（如 `search/weather`） |
+| **技能源 ID + 版本 ID** | 二者同时填写时走 **SPI Provider** 安装（如 `swarmskillhub` + `1.0.0`）                            |
+| **技能包 URL**        | 未走 SPI 时必填，须为合法 `http(s)` 直链；走 URL 安装                                                |
+| **作者**             | 可选，会随模板下发并写入安装账本                                                                     |
+| **SHA256**         | 可选，仅 URL 安装时用于完整性校验（64 位小写十六进制）；SPI 路径忽略                                             |
+
 
 安装来源二选一：填齐技能源 ID 与版本 ID 走 SPI；否则必须提供合法的技能包 URL。
 
@@ -63,6 +73,8 @@
 - **删除**：若仍被 Agent 模板引用，需先解除引用再删；删除前请确认无副作用
 - **被引用**：列表「被引用」列显示引用该模板的 Agent 模板数量，可跳转至 Agent 模板页查看
 
+
+
 ### 导入与导出
 
 页面提供模板级迁移能力，方便在不同管理面环境之间搬迁配置：
@@ -73,6 +85,8 @@
 导入的是管理面模板配置，不会直接替用户安装技能包；仍需在 Agent 模板中引用后才会下发。
 
 ### 绑定到 Agent 模板
+
+![绑定预置 Skill 到 Agent 模板](../assets/skill-prebuilt-bind-agent-template.png)
 
 预置 Skill 模板本身不会自动对所有用户生效，必须挂到 **Agent 模板** 的「预置 Skill」引用中：
 
@@ -85,6 +99,8 @@
 之后用户使用该 Agent 时，运行面会按清单同步预置技能。
 
 ## 用户面使用
+
+![用户面预置技能](../assets/skill-prebuilt-user-skills.png)
 
 用户登录用户面、进入已授权的 Agent 后：
 
@@ -100,44 +116,148 @@
 - 管理员从 Agent 模板移除某预置项后，对应预置技能会在下次同步时从工作区移除
 - 用户自行安装的技能不受预置清单移除影响
 
+
+
 ## 示例
 
 以下在 **Agent 资源 → 预置Skill** 点击 **新建预置 Skill** 时填写。安装来源二选一：SPI 或 URL。两种方式保存后，都还需在 Agent 模板中勾选该预置 Skill 才会下发。
 
 ### SPI 方式
 
-适用于已接入技能源（SPI Provider）的场景，由源 ID + 版本定位制品。
+适用于已接入技能源（SPI Provider）的场景。
 
-| 字段 | 示例值 |
-| ---- | ------ |
-| **模板名称** | 预置 PDF 解析 |
-| **模板描述** | 销售组强制预置 |
-| **Skill ID** | `c0f2e4ba2d7d4cb2b6050de03b92db5b` |
-| **技能源 ID** | `swarmskillhub` |
-| **版本 ID** | `1.0.0` |
-| **技能包 URL** | 留空（走 SPI 时不作安装入口） |
-| **SHA256** | 可不填（SPI 路径忽略） |
+SPI（Skill Source Provider）是运行面的技能源扩展接口：把远端技能市场适配成统一的搜、取下载地址、下载、验签能力。管理面预置 Skill 走 SPI 时，只填写**技能源 ID（**`source_id`**）+ Skill ID + 版本 ID**；真正安装时由运行面按 `source_id` 找到已注册的 Provider，调用 `get_artifact` 取得技能包 ZIP 直链等信息，再下载并安装到工作区。
 
-填齐技能源 ID 与版本 ID 后保存即可。Skill ID、源 ID、版本 ID 需与技能源侧元数据一致。
+是否需要开发 SPI 扩展包，取决于技能源是否已经接入：
+
+
+| 场景                             | 是否需要开发 SPI 扩展包 | 说明                                                  |
+| ------------------------------ | -------------- | --------------------------------------------------- |
+| 使用已接入的技能源（如内置 `swarmskillhub`） | 否              | 管理员在预置 Skill 中填写技能源 ID、Skill ID、版本 ID 即可            |
+| 对接尚未接入的第三方技能市场                 | 是              | 需开发者编写 SPI 扩展包并随 AgentServer 部署加载；仅靠管理面填写预置字段无法完成对接 |
+
+
+对接第三方技能市场时，开发者大致需要：
+
+1. 编写扩展包（`extension.yaml` + `extension.py`）
+2. 实现 `SkillSourceProvider`（至少 `search`、`get_artifact` 等）
+3. 实现 `SkillSourceExtension` 工厂（声明 `provider_type`，用 `create_provider(config)` 按配置造实例）
+4. 在 `register_extensions` 中注册工厂，并随 AgentServer 部署加载
+
+补充：
+
+- `provider_type`：工厂类型（一类市场协议/实现）；同一工厂可绑定多个源实例
+- `source_id`：具体源实例 ID；预置 Skill 的「技能源 ID」填此值，运行时据此选择 Provider
+- 同一协议可复用同一工厂，用不同 `source_id`、endpoint 等配置区分多个源
+- 管理面还可通过 `skill_sources` 下发额外源；`provider_type` 未注册时无法使用
+
+配置示例：
+
+
+| 字段           | 示例值                                    |
+| ------------ | -------------------------------------- |
+| **模板名称**     | 劳动者权益分析团队（必填）                          |
+| **模板描述**     | —（可选）                                  |
+| **Skill ID** | `c0f2e4ba2d7d4cb2b6050de03b92db5b`（必填） |
+| **技能源 ID**   | `swarmskillhub`（必填）                    |
+| **版本 ID**    | `1.0.0`（必填）                            |
+| **技能包 URL**  | —（不填）                                  |
+| **SHA256**   | —（不填）                                  |
+
+
+![新建预置 Skill（SPI 方式）](../assets/skill-prebuilt-spi-create.png)
 
 ### URL 方式
 
 适用于没有 SPI 技能源、直接提供技能包直链的场景。Skill ID 可自定义。
 
-| 字段 | 示例值 |
-| ---- | ------ |
-| **模板名称** | 天气 Skill（URL） |
-| **模板描述** | 用于查询城市天气 |
-| **Skill ID** | `search/weather`（可自定义） |
-| **技能包 URL** | `https://artifacts.example.com/skills/weather-1.0.0.zip` |
-| **技能源 ID / 版本 ID** | 留空 |
-| **SHA256** | `f3a1b2c4d5e6f7890abcdef1234567890abcdef1234567890abcdef123456789`（可选） |
 
-URL 须为合法 `http(s)` 直链；填写 SHA256 时可校验包完整性。
+| 字段                 | 示例值                                                                               |
+| ------------------ | --------------------------------------------------------------------------------- |
+| **模板名称**           | 小学生课程团队（必填）                                                                       |
+| **模板描述**           | —（可选）                                                                             |
+| **Skill ID**       | `primary-school-tutoring-team`（必填，可自定义）                                           |
+| **技能包 URL**        | `https://artifacts.example.com/skills/primary-school-tutoring-team-1.0.0.zip`（必填） |
+| **技能源 ID / 版本 ID** | —（不填）                                                                             |
+| **SHA256**         | `136619520bc56bb502701b932a1faa5d022e85bb840f90c1fdedce4d627f333b`（可选）            |
+
+
+技能包 URL 须为可直接下载 zip 的合法 `http(s)` 直链（打开即下文件，不是网页预览页），例如把 zip 上传到对象存储（OBS / OSS / COS / S3 / MinIO）或 CDN / 静态文件托管后得到的下载地址；填写 SHA256 时可校验包完整性。URL 主机还须在 AgentServer **下载域名白名单**内（见下文），否则运行面拒绝拉取。
+
+**SHA256 生成方式**：对 ZIP 计算摘要，填 **64 位小写 hex**。
+
+```bash
+sha256sum your-skill.zip          # Linux / macOS
+Get-FileHash .\your-skill.zip -Algorithm SHA256   # Windows
+```
+
+![新建预置 Skill（URL 方式）](../assets/skill-prebuilt-url-create.png)
+
+## 下载域名白名单
+
+预置 Skill 安装时会从远端拉取技能包 ZIP。运行面（AgentServer）对下载 URL 的**主机名**做白名单校验，未命中则拒绝下载（SSRF 防护）。管理面「预置Skill」页本身没有单独的白名单字段，需按安装方式在部署侧或扩展配置中设置。
+
+| 安装方式 | 白名单配在哪里 | 说明 |
+| -------- | -------------- | ---- |
+| **URL**（`package_url`） | AgentServer 环境变量 | 两个变量**任一命中**即可；须 **HTTPS** |
+| **SPI**（技能源 ID + 版本 ID） | 技能源 `download_policy.allowed_hosts` | 不读下面两个环境变量；未配置且 Provider 也无默认白名单时直接拒绝 |
+
+### URL 方式：环境变量
+
+在部署工具的 `.env.custom`（或等价环境配置）中设置，渲染进 ConfigMap `jiuwenswarm-agentserver-env`，经 `envFrom` 注入 AgentServer：
+
+| 变量 | 作用 | 留空时 |
+| ---- | ---- | ------ |
+| `IMPORT_LOCAL_ALLOWED_DOWNLOAD_HOSTS` | 预置 Skill URL 安装、远程 ZIP 导入等 | 走代码默认（如 `*.obs.*.myhuaweicloud.com`） |
+| `TEAM_SKILLS_HUB_ALLOWED_DOWNLOAD_HOSTS` | 同上（与上一项 OR）；也覆盖 TeamSkillsHub 市场下载 | 走代码默认（官方 OBS 等） |
+
+规则写法：
+
+- 逗号分隔多个主机规则，例如 `cdn.example.com,*.obs.*.myhuaweicloud.com`
+- 支持单段通配 `*`（如 `*.obs.*.myhuaweicloud.com`）与后缀匹配（如 `.example.com`）
+- `package_url` 的主机名必须命中其中一条；协议须为 HTTPS
+
+`.env.custom` 示例：
+
+```bash
+IMPORT_LOCAL_ALLOWED_DOWNLOAD_HOSTS="cdn.example.com,*.obs.*.myhuaweicloud.com"
+# 可选；与上一行 OR，命中其一即可
+# TEAM_SKILLS_HUB_ALLOWED_DOWNLOAD_HOSTS="cdn.example.com,openjiuwen-market.obs.*.myhuaweicloud.com"
+```
+
+### SPI 方式：技能源 `allowed_hosts`
+
+SPI 安装使用技能源上的下载策略，**不回落**到上一节的环境变量：
+
+1. 优先：管理面扩展配置里 `custom_config.skill_sources[].download_policy.allowed_hosts`
+2. 其次：SPI Provider 声明的默认白名单（如内置 `swarmskillhub` 扩展包 `config.yaml` 的 `allowed_download_hosts`）
+3. 两者皆空：安装失败（fail-closed）
+
+`skill_sources` 配置片段示例（写入扩展配置模板的自定义配置）：
+
+```json
+{
+  "skill_sources": [
+    {
+      "source_id": "customer-hub",
+      "provider_type": "customerhub",
+      "enabled": true,
+      "download_policy": {
+        "allowed_hosts": ["cdn.acme.com", "*.obs.*.myhuaweicloud.com"]
+      }
+    }
+  ]
+}
+```
+
+预置 Skill 的「技能源 ID」须与此处 `source_id`（或内置默认源如 `swarmskillhub`）一致。安装时技能源会返回技能包的下载地址；该地址的**域名**必须在对应源的 `allowed_hosts` 中，否则拒绝下载。
 
 ## 注意事项
 
 - 优先使用可信的 SPI 技能源或内网受控 URL；URL 安装建议填写 SHA256
-- SPI 方式下 Skill ID、源 ID、版本 ID 需与技能源侧元数据一致；URL 方式下 Skill ID 可自定义
+- URL 方式须把 `package_url` 主机加入 AgentServer 下载白名单，否则同步预置技能时会报主机不在白名单
+- SPI 方式下 Skill ID、源 ID、版本 ID 需与技能源侧元数据一致，并保证该源已配置 `allowed_hosts`（或 Provider 默认白名单）；URL 方式下 Skill ID 可自定义
 - 仅创建预置模板而不绑定到 Agent 模板，不会下发到用户
 - 变更预置内容或 Agent 模板引用后，等待配置刷新推送到运行面；编辑保存时界面会提示刷新成本相关说明
+- 仅改 ConfigMap、不重启 AgentServer Pod 时，新白名单不会进入进程环境变量
+

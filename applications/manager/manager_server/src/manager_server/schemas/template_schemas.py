@@ -184,7 +184,14 @@ def normalize_model_template_data(value: Any) -> dict[str, Any] | None:
 
 
 
+MANAGED_AGENT_CLIENT_KEY = "keycloak_client"
+AGENT_TEMPLATE_OPERATION_KEY = "_jiuwen_template_operation"
+
+
 def validate_agent_template_data(data: dict[str, Any] | None) -> dict[str, Any] | None:
+    for key in (MANAGED_AGENT_CLIENT_KEY, AGENT_TEMPLATE_OPERATION_KEY):
+        if data is not None and key in data:
+            raise ValueError(f"data.{key} is managed by the server")
     if data is not None and "custom_config" in data:
         config = data["custom_config"]
         if not isinstance(config, list) or any(not isinstance(item, dict) for item in config):

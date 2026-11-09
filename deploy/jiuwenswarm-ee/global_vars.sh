@@ -203,7 +203,6 @@ declare -A DEPLOY_VARS=(
     ["JIUWENBOX_NAME"]="jiuwenbox"
     ["JIUWENBOX_PORT"]="8321"
     ["JIUWENSWARM_SSL_VERIFY"]="false"
-    ["JIUWENSWARM_CONFIG_DIR"]="/app/config"
     ["JIUWENSWARM_LINK_MTLS_MODE"]="off"
     ["LINK_PREPARED"]="false"
     ["JIUWENSWARM_REQUEST_EXT_FORWARD_HEADERS"]=""
@@ -252,6 +251,8 @@ declare -A DEPLOY_VARS=(
     ["OBS_REGION"]="default"
     ["OBS_SECRET_KEY"]="Minio@123456"
     ["OBS_SECURE"]="false"
+    # 技能上传包保留天数：manager 与 AgentServer 必须同值，默认 7，最小 1（非法值回落 7）
+    ["SKILL_UPLOAD_RETENTION_DAYS"]="7"
     ["OBSERVABILITY_ENABLED"]="true"
     ["OTEL_ENABLED"]="true"
     ["OTEL_IMAGE"]="otel/opentelemetry-collector-contrib:0.104.0"
@@ -298,7 +299,6 @@ declare -A DEPLOY_VARS=(
     ["WEB_REQUEST_TIMEOUT_SECONDS"]="15"
     ["WEB_WS_PORT"]="19000"
     ["WORKSPACE_QUOTA_ENABLED"]="false"
-    ["SKILL_UPLOAD_APPROVAL_ENABLED"]="true"
 )
 
 declare -A OYR_COMPONENTS=(

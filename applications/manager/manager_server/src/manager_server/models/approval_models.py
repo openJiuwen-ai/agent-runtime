@@ -20,6 +20,7 @@ APPROVAL_ORDER_TABLE_DEF = TableDefinition(
         ColumnDefinition("group_id", "string", length=64, nullable=True),
         ColumnDefinition("bot_id", "string", length=64, nullable=False),
         ColumnDefinition("status", "string", length=16, nullable=False),
+        ColumnDefinition("expires_at", "datetime3", nullable=True),
         ColumnDefinition("finished_at", "datetime3", nullable=True),
         ColumnDefinition("business_type", "string", length=64, nullable=False),
         ColumnDefinition("reason", "string", length=1024, nullable=False),
@@ -33,6 +34,7 @@ APPROVAL_ORDER_TABLE_DEF = TableDefinition(
     ],
     indexes=[
         IndexDefinition(["order_num"], unique=True),
+        IndexDefinition(["business_type", "status", "expires_at"]),
     ],
 )
 

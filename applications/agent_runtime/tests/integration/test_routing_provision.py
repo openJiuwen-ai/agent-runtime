@@ -146,6 +146,96 @@ async def test_pool_exhausted_fast_fail_no_deploy(routing_runtime):
     assert await rt.rm_state.deploying_count(SCOPE) == 0
 
 
+@requires_lua
+async def test_concurrent_routes_peer_reuse_single_idle_pod(routing_runtime):
+    """注册后 Pod 在 RM idle、SM 候选空时并发 route：赢家 reuse，输家复用已登记 Pod——全员落同一台，零「外部供给池耗尽」、零自建 deploy。"""
+    rt = routing_runtime
+    await _seed(rt, scope_concurrency=20, pod_concurrency=20)
+    await _register(rt, _entry("pod-a"))
+    assert await rt.rm_state.idle_pods(SCOPE) == ["pod-a"]
+    assert await rt.sm_state.scope_pod_ids(SCOPE) == []
+
+    results = await asyncio.gather(
+        *[rt.route(f"sess_{i}") for i in range(8)]
+    )
+    assert {r["pod_id"] for r in results} == {"pod-a"}
+    assert await rt.sm_state.scope_session_count(SCOPE) == 8
+    assert rt.k8s.deployed_specs == []
+    assert await rt.rm_state.deploying_count(SCOPE) == 0
+
+
+@requires_lua
+async def test_concurrent_routes_after_return_to_idle(routing_runtime):
+    """会话清空回 idle 后再并发 route：同样复用已登记 Pod，不误报耗尽。"""
+    rt = routing_runtime
+    await _seed(rt, scope_concurrency=20, pod_concurrency=20)
+    await _register(rt, _entry("pod-a"))
+    await rt.route("warm")
+    await rt.sm_state.evict("warm")
+    notified = await rt.sm_state.sweep_idle_notify(SCOPE, "pod-a")
+    assert notified is True
+    await rt.rm_orchestrator.idle_consider("pod-a", SCOPE)
+    assert await rt.rm_state.idle_pods(SCOPE) == ["pod-a"]
+    assert "pod-a" not in await rt.sm_state.scope_pod_ids(SCOPE)
+
+    results = await asyncio.gather(
+        *[rt.route(f"sess_{i}") for i in range(6)]
+    )
+    assert {r["pod_id"] for r in results} == {"pod-a"}
+    assert await rt.sm_state.scope_session_count(SCOPE) == 6
+    assert rt.k8s.deployed_specs == []
+
+
+@requires_lua
+async def test_routing_tried_pods_allows_second_different_pod(routing_runtime):
+    """SM 候选已满后同一 route 内二次 acquire：交回新 pod_id 应放行（旧 acquire_round>=1 会误杀；tried_pods 只拦同机）。"""
+    rt = routing_runtime
+    await _seed(rt, scope_concurrency=10, pod_concurrency=1)
+    # 满载候选：ROUTE_PLACE → need_acquire
+    await rt.sm_state.register_pod(
+        SCOPE, "pod-a", "http://pod-a.as-svc:8080/sse", "v1")
+    await rt.sm_state.redis.sadd(
+        rt.sm_state.k.pod_sessions(SCOPE, "pod-a"), "stub_a")
+    await rt.sm_state.redis.sadd(
+        rt.sm_state.k.scope_sessions(SCOPE), "stub_a")
+
+    seq = iter([
+        {"pod_id": "pod-a", "pod_sse_url": "http://pod-a.as-svc:8080/sse"},
+        {"pod_id": "pod-b", "pod_sse_url": "http://pod-b.as-svc:8080/sse"},
+    ])
+
+    async def _fake_acquire(**_kwargs):
+        return next(seq)
+
+    rt.orchestrator.rm.acquire = _fake_acquire  # type: ignore[method-assign]
+    r = await rt.route("sess_new")
+    assert r["pod_id"] == "pod-b"
+
+
+@requires_lua
+async def test_routing_tried_pods_rejects_same_pod_loop(routing_runtime):
+    """二次 acquire 仍交回已试过的同一台 → 外部供给耗尽（防同机空转）。"""
+    rt = routing_runtime
+    await _seed(rt, scope_concurrency=10, pod_concurrency=1)
+    await rt.sm_state.register_pod(
+        SCOPE, "pod-a", "http://pod-a.as-svc:8080/sse", "v1")
+    await rt.sm_state.redis.sadd(
+        rt.sm_state.k.pod_sessions(SCOPE, "pod-a"), "stub_a")
+    await rt.sm_state.redis.sadd(
+        rt.sm_state.k.scope_sessions(SCOPE), "stub_a")
+
+    async def _always_pod_a(**_kwargs):
+        return {
+            "pod_id": "pod-a",
+            "pod_sse_url": "http://pod-a.as-svc:8080/sse",
+        }
+
+    rt.orchestrator.rm.acquire = _always_pod_a  # type: ignore[method-assign]
+    with pytest.raises(NoPodAvailable) as exc_info:
+        await rt.route("sess_new")
+    assert "外部供给池" in str(exc_info.value)
+
+
 # ---------------------------------------------------------------- 判死/收养
 
 

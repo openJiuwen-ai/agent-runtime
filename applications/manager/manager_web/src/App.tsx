@@ -42,6 +42,7 @@ import { RolesPage } from './pages/iam/RolesPage';
 import { RolesEditPage } from './pages/iam/RolesEditPage';
 import { ApprovalPage } from './pages/approval/ApprovalPage';
 import { ApprovalEditPage } from './pages/approval/ApprovalEditPage';
+import { ApprovalSkillPreviewPage } from './pages/approval/ApprovalSkillPreviewPage';
 import { A2AManagementPage } from './pages/templates/A2AManagementPage';
 import { ResourceWorkspaceFrame } from './components/ResourceWorkspaceFrame';
 import { WorkspaceNote } from './components/WorkspaceNote';
@@ -112,6 +113,10 @@ function RouteView() {
     const approvalUiEnabled = isApprovalEnabled(user);
     if (path === '/approvals' && approvalUiEnabled && hasPermission(user, 'approval:read')) {
       return <ApprovalPage />;
+    }
+    const approvalSkillPreviewLimited = matchRoute('/approvals/:orderNum/skill-preview', path);
+    if (approvalSkillPreviewLimited && approvalUiEnabled && hasPermission(user, 'approval:read')) {
+      return <ApprovalSkillPreviewPage orderNum={approvalSkillPreviewLimited.orderNum} />;
     }
     const approvalEditLimited = matchRoute('/approvals/:orderNum', path);
     if (approvalEditLimited && approvalUiEnabled && hasPermission(user, 'approval:read')) {
@@ -216,6 +221,13 @@ function RouteView() {
       return <div className="card text-sm text-muted">{t('auth.noPagePermission')}</div>;
     }
     return <ApprovalPage />;
+  }
+  const approvalSkillPreview = matchRoute('/approvals/:orderNum/skill-preview', path);
+  if (approvalSkillPreview) {
+    if (!isApprovalEnabled(user)) {
+      return <div className="card text-sm text-muted">{t('auth.noPagePermission')}</div>;
+    }
+    return <ApprovalSkillPreviewPage orderNum={approvalSkillPreview.orderNum} />;
   }
   const approvalEdit = matchRoute('/approvals/:orderNum', path);
   if (approvalEdit) {

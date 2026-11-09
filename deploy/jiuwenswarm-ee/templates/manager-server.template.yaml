@@ -107,8 +107,20 @@ spec:
           value: "<<AGENT_RUNTIME_SYNC_TIMEOUT>>"
         - name: WORKSPACE_QUOTA_ENABLED
           value: "<<WORKSPACE_QUOTA_ENABLED>>"
-        - name: SKILL_UPLOAD_APPROVAL_ENABLED
-          value: "<<SKILL_UPLOAD_APPROVAL_ENABLED>>"
+        # 技能上传审批：manager 按 object_key 直读原始包（凭据复用 AgentServer 的 AK/SK）
+        - name: OBS_URL
+          value: "<<OBS_URL>>"
+        - name: OBS_BUCKET
+          value: "<<OBS_BUCKET>>"
+        - name: OBS_ACCESS_KEY
+          value: "<<OBS_ACCESS_KEY>>"
+        - name: OBS_REGION
+          value: "<<OBS_REGION>>"
+        - name: OBS_SECURE
+          value: "<<OBS_SECURE>>"
+        # 包保留天数：与 AgentServer 必须同值，默认 7，最小 1
+        - name: SKILL_UPLOAD_RETENTION_DAYS
+          value: "<<SKILL_UPLOAD_RETENTION_DAYS>>"
         - name: MANAGER_WS_ENABLED
           value: "true"
         - name: MANAGER_WS_HOST

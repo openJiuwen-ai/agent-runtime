@@ -1,0 +1,241 @@
+# =====================================================================
+# Manager Web nginx 配置模板(UBI 镜像专用)
+#
+# 由 docker/openshift/manager-web-nginx-start.sh 在启动时 envsubst 渲染:
+#   /etc/nginx/templates/default.conf.template → /opt/app-root/etc/nginx.d/default.conf
+# 环境变量与部署注入的同名 env 一致(必须全部提供):
+#   MANAGER_WEB_PORT / MANAGER_WEB_PROXY_TARGET / MANAGER_WEB_IDP_TARGET /
+#   MANAGER_WEB_RESOLVER / WORKSPACE_QUOTA_ENABLED
+# 默认上游回退仍由 Manager Server 读取 MANAGER_WEB_USER_WEB_TARGET /
+#   MANAGER_WEB_GATEWAY_HTTP_TARGET / MANAGER_WEB_GATEWAY_WS_TARGET
+#
+# 用户面(/chat、/gateway-api、/file-api、/share-api、/ws):
+#   auth_request → Manager GET /api/v1/user-console/user-face-upstream
+#   按 Cookie jiuwenclaw_id 下发 X-*-Upstream 头 → 变量 proxy_pass
+#
+# 已知差异(相对 manager_web.py):
+#   1) 401 响应体为固定 JSON;403 等状态码不透传 body
+#   2) idp/Manager 不可达时 auth_request 可能返回 500
+#   3) WS 鉴权失败返回 HTTP 401(Python 版为 WS close 4401)
+#   4) /chat/ 与 /chat/index.html 的 GET 一律过鉴权
+# =====================================================================
+
+# UBI 镜像 worker 以 nginx(uid 998) 运行,而 /var/lib/nginx/tmp 父目录属主为
+# default(uid 1001) 且 2770,worker 无法穿越,缓冲区落盘即 Permission denied
+# 并中途掐断响应(浏览器表现为 ERR_INCOMPLETE_CHUNKED_ENCODING)。统一指向 /tmp。
+proxy_temp_path /tmp/proxy_temp;
+client_body_temp_path /tmp/client_body_temp;
+fastcgi_temp_path /tmp/fastcgi_temp;
+uwsgi_temp_path /tmp/uwsgi_temp;
+scgi_temp_path /tmp/scgi_temp;
+
+# Authorization 头优先,缺失时用统一登录 cookie 拼 Bearer
+map $http_authorization $mgr_authz {
+    default $http_authorization;
+    ""      "Bearer $cookie_openjiuwen_access_token";
+}
+
+# WebSocket upgrade
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ""      "";
+}
+
+# 变量 upstream 运行时 DNS
+resolver ${MANAGER_WEB_RESOLVER} valid=10s ipv6=off;
+
+server {
+    listen ${MANAGER_WEB_PORT};
+    server_name _;
+
+    # Python 版对请求体大小无限制(文件上传走 /file-api)
+    client_max_body_size 0;
+
+    # 上游不做压缩(httpx 中继语义:响应原文透传),出口压缩由 nginx 负责
+    proxy_set_header Accept-Encoding "";
+    proxy_http_version 1.1;
+    proxy_connect_timeout 10s;
+    proxy_send_timeout 30s;
+    proxy_read_timeout 30s;
+
+    root /app/agent-runtime/applications/manager/manager_web/dist;
+    index index.html;
+
+    gzip on;
+    gzip_vary on;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+
+    # ---------- index.html 运行时配置注入（WORKSPACE_QUOTA_ENABLED） ----------
+    sub_filter '__WORKSPACE_QUOTA_ENABLED_VALUE__' '${WORKSPACE_QUOTA_ENABLED}';
+    sub_filter_once on;
+    sub_filter_types text/html;
+
+    # ---------- 鉴权+选路子请求(合并为一个 auth_request) ----------
+    location = /_resolve_user_face {
+        internal;
+        proxy_pass ${MANAGER_WEB_PROXY_TARGET}/api/v1/user-console/user-face-upstream;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header Authorization $mgr_authz;
+        proxy_set_header Cookie $http_cookie;
+        proxy_set_header Accept-Encoding "";
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 10s;
+    }
+
+    # 401:与 Python 版同款 JSON 体
+    error_page 401 = @auth401;
+    location @auth401 {
+        default_type application/json;
+        return 401 '{"detail":"Not authenticated"}';
+    }
+
+    # ---------- /api、/manager-api → Manager Server /api(免鉴权) ----------
+    # /api 的 307 斜杠规范化会携带集群内部地址,proxy_redirect 改写回外部
+    # 路径(对齐 Python 版 follow_redirects=True 的服务端跟随语义)
+    location = /api         { return 307 /api/; }
+    location = /manager-api { return 307 /manager-api/; }
+    location ^~ /api/ {
+        proxy_pass ${MANAGER_WEB_PROXY_TARGET};
+        proxy_redirect ${MANAGER_WEB_PROXY_TARGET}/ /;
+    }
+    location ^~ /manager-api/ {
+        rewrite ^/manager-api/(.*)$ /api/$1 break;
+        proxy_pass ${MANAGER_WEB_PROXY_TARGET};
+        proxy_redirect ${MANAGER_WEB_PROXY_TARGET}/ /;
+    }
+
+    # ---------- /idp → Identity(免鉴权,认证服务自身校验) ----------
+    location = /idp { return 307 /idp/; }
+    location ^~ /idp/ {
+        rewrite ^/idp/(.*)$ /$1 break;
+        proxy_pass ${MANAGER_WEB_IDP_TARGET};
+    }
+
+    # ---------- /gateway-api → 实例 Gateway HTTP /api(动态上游 + SSE) ----------
+    location = /gateway-api { return 307 /gateway-api/; }
+    location ^~ /gateway-api/ {
+        auth_request /_resolve_user_face;
+        auth_request_set $gw_http_up $upstream_http_x_gateway_http_upstream;
+        error_page 401 = @auth401;
+        # 注意:不可用 if ($gw_http_up="") — if 在 rewrite 阶段早于 auth_request，会恒 502
+        rewrite ^/gateway-api/(.*)$ /api/$1 break;
+        proxy_pass $gw_http_up;
+        proxy_set_header Host $proxy_host;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
+    # ---------- /file-api、/share-api → 实例 Gateway HTTP(动态上游) ----------
+    location = /file-api  { return 307 /file-api/; }
+    location = /share-api { return 307 /share-api/; }
+    location ^~ /file-api/ {
+        auth_request /_resolve_user_face;
+        auth_request_set $gw_http_up $upstream_http_x_gateway_http_upstream;
+        error_page 401 = @auth401;
+        proxy_pass $gw_http_up;
+        proxy_set_header Host $proxy_host;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+    location ^~ /share-api/ {
+        auth_request /_resolve_user_face;
+        auth_request_set $gw_http_up $upstream_http_x_gateway_http_upstream;
+        error_page 401 = @auth401;
+        proxy_pass $gw_http_up;
+        proxy_set_header Host $proxy_host;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+
+    # ---------- /ws → 实例 Gateway WebSocket(动态上游) ----------
+    location = /ws {
+        auth_request /_resolve_user_face;
+        auth_request_set $gw_ws_up $upstream_http_x_gateway_ws_upstream;
+        error_page 401 = @auth401;
+        proxy_pass $gw_ws_up;
+        proxy_set_header Host $proxy_host;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Accept-Encoding "";
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+    location /ws/ {
+        auth_request /_resolve_user_face;
+        auth_request_set $gw_ws_up $upstream_http_x_gateway_ws_upstream;
+        error_page 401 = @auth401;
+        proxy_pass $gw_ws_up;
+        proxy_set_header Host $proxy_host;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Accept-Encoding "";
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
+    # ---------- /chat → 实例 User Web(动态上游,prefix 剥离) ----------
+    location = /chat { return 307 /chat/; }
+    location = /chat/ {
+        auth_request /_resolve_user_face;
+        auth_request_set $user_web_up $upstream_http_x_user_web_upstream;
+        error_page 401 = @chat_auth;
+        rewrite ^/chat/$ / break;
+        proxy_pass $user_web_up;
+        proxy_set_header Host $proxy_host;
+        proxy_read_timeout 300s;
+    }
+    location = /chat/index.html {
+        auth_request /_resolve_user_face;
+        auth_request_set $user_web_up $upstream_http_x_user_web_upstream;
+        error_page 401 = @chat_auth;
+        rewrite ^/chat/(.*)$ /$1 break;
+        proxy_pass $user_web_up;
+        proxy_set_header Host $proxy_host;
+        proxy_read_timeout 300s;
+    }
+    location ^~ /chat/assets/ {
+        auth_request /_resolve_user_face;
+        auth_request_set $user_web_up $upstream_http_x_user_web_upstream;
+        error_page 401 = @auth401;
+        rewrite ^/chat/(.*)$ /$1 break;
+        proxy_pass $user_web_up;
+        proxy_set_header Host $proxy_host;
+        proxy_read_timeout 300s;
+        proxy_hide_header Cache-Control;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+    }
+    location ^~ /chat/ {
+        auth_request /_resolve_user_face;
+        auth_request_set $user_web_up $upstream_http_x_user_web_upstream;
+        error_page 401 = @auth401;
+        rewrite ^/chat/(.*)$ /$1 break;
+        proxy_pass $user_web_up;
+        proxy_set_header Host $proxy_host;
+        proxy_read_timeout 300s;
+    }
+
+    location @chat_auth {
+        if ($http_sec_fetch_dest ~* ^document$) {
+            return 302 /auth;
+        }
+        default_type application/json;
+        return 401 '{"detail":"Not authenticated"}';
+    }
+
+    # ---------- SPA 静态资源 ----------
+    location ^~ /assets/ {
+        try_files $uri =404;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+    }
+    location = /index.html {
+        add_header Cache-Control "no-cache, must-revalidate";
+    }
+    # SPA history 深链(/auth、/manager/*、/user/*)回退 index.html
+    location / {
+        try_files $uri $uri/ /index.html;
+        add_header Cache-Control "no-cache, must-revalidate";
+    }
+}
