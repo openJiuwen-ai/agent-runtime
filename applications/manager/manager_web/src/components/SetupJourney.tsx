@@ -46,7 +46,7 @@ export function SetupJourney({ compact = false, onNavigate }: { compact?: boolea
   const go = (href: string | null) => { if (href) { onNavigate?.(); navigate(href); } };
   const current = Math.max(0, Math.min(stage, 3));
   const stages = [
-    { title: tr('准备模型', 'Prepare models'), summary: tr('连接模型，按需添加技能与工具。', 'Connect a model and optionally add skills and tools.') },
+    { title: tr('准备资源', 'Prepare resources'), summary: tr('连接模型，按需添加技能与工具。', 'Connect a model and optionally add skills and tools.') },
     { title: tr('准备模板', 'Prepare templates'), summary: tr('定义 Agent 能力和运行方式。', 'Define Agent capabilities and runtime settings.') },
     { title: tr('配置集群', 'Configure a cluster'), summary: tr('完成准入、运行资源和 Agent 绑定。', 'Configure admission, runtime resources and Agent bindings.') },
     { title: tr('验证使用', 'Verify usage'), summary: tr('检查连接、账号权限与实际对话。', 'Check connectivity, account access and a real conversation.') },

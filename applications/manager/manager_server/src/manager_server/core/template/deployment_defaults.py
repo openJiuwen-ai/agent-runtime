@@ -22,7 +22,7 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from manager_server.core.template.service_config_container import wire_to_row
+from manager_server.core.template.service_config_container import ServiceConfigContainerService, wire_to_row
 from manager_server.core.template.service_config_template import ServiceConfigTemplateService
 from manager_server.infrastructure.logger import get_logger
 from manager_server.infrastructure.utils import utc_now
@@ -31,6 +31,8 @@ from manager_server.schemas.template_schemas import (
     ServiceConfigTemplateCreateBody,
     ServiceConfigTemplateOut,
     DeploymentDefaultsRestoreBody,
+    ContainerDeploymentDefaultsRestoreBody,
+    ServiceConfigContainerOut,
 )
 
 _log = get_logger(__name__)
@@ -240,6 +242,84 @@ async def deployment_defaults_status(handler: DBHandler) -> dict[str, Any]:
 
 class DeploymentDefaultsChanged(ValueError):
     """The deployment source changed after the user loaded the form."""
+
+
+class DefaultContainerConflict(ValueError):
+    """The requested copy ID is already in use; existing containers are untouched."""
+
+
+def _container_body(row: dict[str, Any]) -> ServiceConfigContainerCreateBody:
+    values = {
+        key: deepcopy(value) for key, value in row.items()
+        if key in ServiceConfigContainerCreateBody.model_fields
+    }
+    values.update(deepcopy(row["data"]["_meta"]))
+    return ServiceConfigContainerCreateBody(**values)
+
+
+def preview_default_containers() -> dict[str, Any]:
+    """Expose editable deployment containers to administrators without DB writes."""
+    plan = read_deployment_plan()
+    if isinstance(plan, dict):
+        return plan
+    templates = []
+    for row in plan.containers:
+        body = _container_body(row)
+        # A fresh copy ID is editable in the form. It never names the bootstrap row.
+        body.container_id = f"restore-{uuid4().hex}"
+        templates.append({
+            "source_container_id": row["data"]["deployment_default"]["source_container_id"],
+            "template": body.model_dump(mode="json"),
+        })
+    return _status(
+        "available", "默认容器配置已读取，检查后保存为新的容器模板。",
+        source=plan.source, fingerprint=plan.fingerprint, templates=templates,
+        container_count=len(templates),
+    )
+
+
+async def restore_default_container(
+    handler: DBHandler, request: ContainerDeploymentDefaultsRestoreBody,
+) -> ServiceConfigContainerOut:
+    """Create one independent container copy; never mutate templates or bindings."""
+    plan = read_deployment_plan()
+    if isinstance(plan, dict):
+        raise ValueError(plan["message"])
+    if request.fingerprint != plan.fingerprint:
+        raise DeploymentDefaultsChanged("部署默认配置已更新，请重新读取默认模板后保存。")
+    source = next((row for row in plan.containers if
+        row["data"]["deployment_default"]["source_container_id"] == request.source_container_id), None)
+    if source is None:
+        raise ValueError("所选默认容器不存在，请重新读取默认模板。")
+    values = _container_body(source).model_dump()
+    values.update(request.template.model_dump(exclude_unset=True))
+    data = deepcopy(source.get("data") or {})
+    data.update(deepcopy(request.template.data or {}))
+    data["deployment_default"] = deepcopy(source["data"]["deployment_default"])
+    sync = data.get("config_sync")
+    if isinstance(sync, dict):
+        data["config_sync"] = {key: value for key, value in sync.items() if key not in {"containers", "scopes"}}
+    values["data"] = data
+    body = ServiceConfigContainerCreateBody(**values)
+    row = wire_to_row(body.model_dump())
+    row["data"]["_meta"] = {
+        "template_name": body.template_name, "description": body.description, "enabled": body.enabled,
+    }
+    now = utc_now()
+    row.update(created_at=now, updated_at=now)
+    try:
+        async with handler.session_factory() as session:
+            async with session.begin():
+                table = handler.get_table(_CONTAINERS)
+                existing = await session.execute(select(table.c.container_id).where(table.c.container_id == body.container_id))
+                if existing.first() is not None:
+                    raise DefaultContainerConflict("容器 ID 已存在，请修改后保存；已有容器配置不会被覆盖。")
+                await session.execute(table.insert().values(**row))
+    except IntegrityError as exc:
+        raise DefaultContainerConflict("容器 ID 已存在，请修改后保存；已有容器配置不会被覆盖。") from exc
+    saved = await ServiceConfigContainerService(handler).get(body.container_id)
+    assert saved is not None
+    return saved
 
 
 def _preview_container_id(container_id: str) -> str:

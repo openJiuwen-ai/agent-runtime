@@ -1,0 +1,9 @@
+.container-template-fields { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.runtime-template-form .container-template-json { min-height: 96px; font-family: var(--mono); font-size: 12px; line-height: 1.7; resize: vertical; }
+.container-template-check { display: flex; align-items: center; gap: 8px; width: fit-content; font-size: 12px; line-height: 1.6; cursor: pointer; }
+.container-template-check input { width: 15px; height: 15px; flex-shrink: 0; accent-color: var(--accent); }
+.container-template-fields .runtime-template-disclosure--nested { align-self: stretch; }
+@media (max-width: 620px) {
+  .container-template-fields { gap: 12px; }
+  .container-template-fields .runtime-template-disclosure__meta { text-align: right; }
+}

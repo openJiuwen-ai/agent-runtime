@@ -1621,7 +1621,22 @@ export const ServiceConfigTemplateApi = {
     ),
 };
 
+export interface DeploymentContainerPreviewItem {
+  source_container_id: string;
+  template: ContainerTemplateCreateBody;
+}
+
+export interface DeploymentContainerPreview {
+  status: 'unconfigured' | 'not_found' | 'invalid' | 'available';
+  message?: string;
+  fingerprint?: string;
+  templates: DeploymentContainerPreviewItem[];
+}
+
 export const ContainerTemplateApi = {
+  previewDeploymentDefaults: () => http<DeploymentContainerPreview>('/v1/container-templates/deployment-defaults/preview'),
+  restoreDeploymentDefaults: (body: { fingerprint: string; source_container_id: string; template: ContainerTemplateCreateBody }) =>
+    http<ContainerTemplate>('/v1/container-templates/deployment-defaults/restore', { method: 'POST', body }),
   list: (params?: {
     page?: number;
     page_size?: number;

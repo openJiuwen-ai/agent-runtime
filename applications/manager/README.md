@@ -26,10 +26,14 @@
 | `POST /api/v1/service-config-templates/deployment-defaults/initialize` | 幂等生成或补齐本配置版本的模板，不创建集群绑定 |
 | `GET /api/v1/service-config-templates/deployment-defaults/preview` | 读取部署文件中的原始配置与容器摘要，仅填充表单，不写数据库 |
 | `POST /api/v1/service-config-templates/deployment-defaults/restore` | 提交预览指纹、源模板标识与表单，事务创建新的运行时模板和所需容器副本 |
+| `GET /api/v1/container-templates/deployment-defaults/preview` | 只读获取原始默认容器配置，预分配新容器 ID，供表单选择及修改 |
+| `POST /api/v1/container-templates/deployment-defaults/restore` | 校验配置指纹后保存独立容器副本；ID 已存在时返回 409，不覆盖原容器 |
 
 相同配置重复初始化不会新增副本；配置变化生成新快照，已有模板、人工修改及集群绑定均保留。部署文件中的 `scopes` 不会自动成为集群授权。模板依赖原部署的镜像、存储、Secret/ConfigMap 和节点，跨部署复用时需核对这些依赖。模板生成成功不代表已验证实际 Agent 对话。
 
 默认模板被误删或改错时，可在「新建运行时模板」中点击「读取默认模板」。该操作始终读取服务端部署文件，用户检查或调整表单后再保存；已有填写内容会先提示替换。保存只复制仍被选中的默认容器，也支持改选目录中的现有容器，不覆盖原模板或集群绑定。若部署文件在读取后发生变化，保存返回 409 并要求重新读取；文件未接入、缺失或非法时明确报错，不生成替代配置。此功能需要同时更新 Manager Server 和 Manager Web。
+
+「新建容器模板」也支持读取默认模板，有多个容器时可选择其中一项。读取和取消不会写库，保存后再由运行时模板引用新容器。表单保留环境变量引用、启动命令、安全上下文、探针及扩展资源字段；高级分组可查看完整 JSON 配置。
 
 ---
 

@@ -432,6 +432,8 @@ export interface ContainerTemplate {
   volume_mounts?: unknown[] | null;
   security_context?: Record<string, unknown> | null;
   readiness_probe?: Record<string, unknown> | null;
+  command?: string[] | null;
+  args?: string[] | null;
   /** 只读：引用该容器模板的运行时模板数量 */
   reference_count: number;
   enabled: boolean;
@@ -442,22 +444,22 @@ export interface ContainerTemplate {
 
 export interface ContainerTemplateCreateBody {
   template_name: string;
-  description?: string;
+  description?: string | null;
   container_id: string;
   name?: string;
   image?: string;
   image_pull_policy?: string;
-  ports?: unknown[];
-  env?: unknown[];
-  env_from?: unknown[];
-  resources?: Record<string, unknown>;
-  volume_mounts?: unknown[];
-  security_context?: Record<string, unknown>;
-  readiness_probe?: Record<string, unknown>;
-  command?: string[];
-  args?: string[];
+  ports?: unknown[] | null;
+  env?: unknown[] | null;
+  env_from?: unknown[] | null;
+  resources?: Record<string, unknown> | null;
+  volume_mounts?: unknown[] | null;
+  security_context?: Record<string, unknown> | null;
+  readiness_probe?: Record<string, unknown> | null;
+  command?: string[] | null;
+  args?: string[] | null;
   enabled?: boolean;
-  data?: Record<string, unknown>;
+  data?: Record<string, unknown> | null;
 }
 
 export type ContainerTemplateUpdateBody = Partial<ContainerTemplateCreateBody>;

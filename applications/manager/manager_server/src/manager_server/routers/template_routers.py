@@ -40,10 +40,13 @@ from manager_server.core.template.service_config_template import (
 )
 from manager_server.core.template.deployment_defaults import (
     DeploymentDefaultsChanged,
+    DefaultContainerConflict,
     deployment_defaults_status,
     initialize_deployment_defaults,
     preview_deployment_defaults,
     restore_deployment_defaults,
+    preview_default_containers,
+    restore_default_container,
 )
 from manager_server.core.template.skill_prebuilt_template import (
     SkillPrebuiltTemplateService,
@@ -83,6 +86,7 @@ from manager_server.schemas.template_schemas import (
     PermissionsTemplateListQuery,
     PermissionsTemplateUpdateBody,
     ServiceConfigContainerCreateBody,
+    ContainerDeploymentDefaultsRestoreBody,
     ServiceConfigContainerListQuery,
     ServiceConfigContainerUpdateBody,
     ServiceConfigTemplateCreateBody,
@@ -1128,6 +1132,25 @@ async def delete_service_config_template(
 
 
 # --- service_config_container（容器模板）---
+
+
+@templates_router.get("/container-templates/deployment-defaults/preview", response_model=ResponseModel)
+async def get_default_container_preview():
+    return ResponseModel(code=200, message="success", data=preview_default_containers())
+
+
+@templates_router.post("/container-templates/deployment-defaults/restore", response_model=ResponseModel)
+async def save_default_container_copy(
+    body: ContainerDeploymentDefaultsRestoreBody,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    try:
+        saved = await restore_default_container(handler, body)
+    except (DeploymentDefaultsChanged, DefaultContainerConflict) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ResponseModel(code=200, message="success", data=saved.model_dump())
 
 
 @templates_router.post("/container-templates", response_model=ResponseModel)
