@@ -21,10 +21,6 @@ INSTANCE_GRANT_TABLE_DEF = TableDefinition(
         ColumnDefinition("subject_id", "string", length=64, nullable=False),
         ColumnDefinition("granted_by", "string", length=64, nullable=True),
         ColumnDefinition("login_policy", "string", length=16, nullable=False, default="allow"),
-        # Skill 上传资格：取值与 login_policy 相同、互不影响；无授权即拒绝。
-        ColumnDefinition(
-            "upload_skill_policy", "string", length=8, nullable=False, default="deny"
-        ),
         ColumnDefinition("expires_at", "datetime", nullable=True),
         ColumnDefinition("enabled", "boolean", nullable=False, default=True),
         ColumnDefinition("data", "json", nullable=True),

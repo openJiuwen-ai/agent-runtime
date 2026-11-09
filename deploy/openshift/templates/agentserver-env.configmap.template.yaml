@@ -38,6 +38,8 @@ data:
   OBS_REGION: <<OBS_REGION>>
   OBS_SECURE: "<<OBS_SECURE>>"
   OBS_URL: <<OBS_URL>>
+  # 技能上传包保留天数（manager 与 AgentServer 必须同值；默认 7，最小 1）
+  SKILL_UPLOAD_RETENTION_DAYS: "<<SKILL_UPLOAD_RETENTION_DAYS>>"
   OTEL_ENABLED: "true"
   OTEL_EXPORTER_OTLP_ENDPOINT: http://jiuwenswarm-otel-collector:4318
   OTEL_EXPORTER_OTLP_PROTOCOL: http

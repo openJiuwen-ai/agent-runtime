@@ -11,6 +11,7 @@ function statusKind(status?: string | null): 'ok' | 'warn' | 'danger' | 'muted' 
   if (s === 'active') return 'ok';
   if (['pending', 'restarting', 'starting'].includes(s)) return 'warn';
   if (['offline', 'failed', 'error', 'unreachable', 'shutdown', 'rejected'].includes(s)) return 'danger';
+  if (['cancelled', 'expired'].includes(s)) return 'muted';
   return 'muted';
 }
 

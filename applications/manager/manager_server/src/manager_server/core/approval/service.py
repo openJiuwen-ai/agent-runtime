@@ -4,19 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime, timezone
 from typing import Any
 
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 from openjiuwen_runtime.foundation.db.sqlalchemy_handler import SQLAlchemyHandler
 from openjiuwen_runtime.foundation.log import get_logger
-from sqlalchemy import insert, select, update
+from sqlalchemy import and_, insert, or_, select, update
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from manager_server.core.instance_access.instance_grant_service import (
-    UPLOAD_POLICY_ALLOW,
-    apply_upload_permission_in_tx,
-)
 from manager_server.core.quota.workspace_quota_policy import (
     APPROVAL_POLICY_PRIORITY,
     SOURCE_APPROVAL,
@@ -28,23 +25,25 @@ from manager_server.models.approval_models import (
     APPROVAL_ORDER_TABLE_DEF,
     APPROVAL_RECORD_TABLE_DEF,
 )
-from manager_server.models.instance_access_models import INSTANCE_GRANT_TABLE_DEF
 from manager_server.models.quota_models import WORKSPACE_QUOTA_POLICY_TABLE_DEF
 
 _ORDER_TABLE = APPROVAL_ORDER_TABLE_DEF.table_name
 _RECORD_TABLE = APPROVAL_RECORD_TABLE_DEF.table_name
 _POLICY_TABLE = WORKSPACE_QUOTA_POLICY_TABLE_DEF.table_name
-_GRANT_TABLE = INSTANCE_GRANT_TABLE_DEF.table_name
 _CAP = 100_000
 _SUBMIT_TRANSACTION_ATTEMPTS = 5
 _log = get_logger(__name__)
 
 WORKSPACE_QUOTA_EXPAND = "workspace_quota_expand"
-SKILL_UPLOAD_PERMISSION = "skill_upload_permission"
-VALID_STATUSES = frozenset({"pending", "approved", "rejected", "cancelled"})
+SKILL_UPLOAD = "skill_upload"
+VALID_STATUSES = frozenset({"pending", "approved", "rejected", "cancelled", "expired"})
 VALID_ACTIONS = frozenset({"approve", "reject"})
 _FALLBACK_LIMIT_BYTES = 10 * 1024**4
 _FALLBACK_POLICY_ID = "local_default"
+
+
+class ApprovalOrderExpiredError(ValueError):
+    """审批单已失效：同一 upload_id 重提，或过期的单仍被操作。"""
 
 
 def _g(row: Any, key: str, default: Any = None) -> Any:
@@ -64,6 +63,59 @@ def _json_value(value: Any, default: Any) -> Any:
             # the documented representation for a single match expression.
             return value
     return value
+
+
+def _as_utc(value: Any) -> datetime | None:
+    """把 DB 时间或 ISO 字符串归一为 UTC；空值或非法值返回 None。"""
+    if isinstance(value, datetime):
+        parsed = value
+    elif value:
+        try:
+            parsed = datetime.fromisoformat(str(value).strip())
+        except ValueError:
+            return None
+    else:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _skill_upload_order_active(row: Any) -> bool:
+    """进行中：pending，或 approved 但尚未装成功；``expires_at`` 为空视为不过期。"""
+    status = str(_g(row, "status") or "")
+    if status not in {"pending", "approved"}:
+        return False
+    expires = _as_utc(_g(row, "expires_at"))
+    if expires is not None and expires <= datetime.now(timezone.utc):
+        return False
+    if status == "approved":
+        result = _json_value(_g(row, "result_data"), {})
+        if (
+            isinstance(result, dict)
+            and str(result.get("install_status") or "") == "installed"
+        ):
+            return False
+    return True
+
+
+def _skill_upload_order_expired(row: Any) -> bool:
+    if str(_g(row, "business_type") or "") != SKILL_UPLOAD:
+        return False
+    if str(_g(row, "status") or "") != "pending":
+        return False
+    expires = _as_utc(_g(row, "expires_at"))
+    return expires is not None and expires <= datetime.now(timezone.utc)
+
+
+def _skill_upload_order_matches(row: Any, skill_name: str, digest: str) -> bool:
+    """同名技能或同包（目录树 digest）都算重复提交。"""
+    row_apply = _json_value(_g(row, "apply_data"), {})
+    if not isinstance(row_apply, dict):
+        return False
+    if str(row_apply.get("skill_name") or "") == skill_name:
+        return True
+    return bool(digest) and str(row_apply.get("digest") or "") == digest
 
 
 def _escape_expr_value(value: str) -> str:
@@ -110,11 +162,13 @@ def _order_out(row: Any, *, detail: bool = False) -> dict[str, Any]:
         "reason": _g(row, "reason") or "",
         "created_at": iso_datetime(_g(row, "created_at")),
         "updated_at": iso_datetime(_g(row, "updated_at")),
+        "expires_at": iso_datetime(_g(row, "expires_at")),
+        # 列表也要用：前端按业务类型 + apply_data 本地化渲染标题。
+        "apply_data": _json_value(_g(row, "apply_data"), {}),
     }
     if detail:
         output.update(
             {
-                "apply_data": _json_value(_g(row, "apply_data"), {}),
                 "result_data": _json_value(_g(row, "result_data"), None),
                 "finished_at": iso_datetime(_g(row, "finished_at")),
             }
@@ -307,7 +361,45 @@ class ApprovalService:
             approver_id=approver_id,
         )
 
-    async def submit_skill_upload_permission(
+    async def find_active_skill_upload(
+        self,
+        *,
+        applicant_id: str,
+        cluster_id: str,
+        skill_name: str,
+        digest: str,
+    ) -> dict[str, Any] | None:
+        """上传暂存后预检：同名或同包已有进行中单时返回该单，否则 None。
+
+        仅作提示，真正的判重仍在建单事务内完成。
+        """
+        rows = await self._h.list_records(
+            _ORDER_TABLE,
+            {
+                "applicant_id": applicant_id,
+                "cluster_id": cluster_id,
+                "business_type": SKILL_UPLOAD,
+                "status": ["pending", "approved"],
+            },
+            limit=100,
+            # 审批单永久保留，历史已安装单会持续堆积；按主键倒序取最新的一批，
+            # 避免进行中的单被挤出 limit 窗口（真正判重仍在建单事务内）。
+            order_by=[("id", True)],
+        )
+        for row in rows:
+            if not _skill_upload_order_active(row):
+                continue
+            if not _skill_upload_order_matches(row, skill_name, digest):
+                continue
+            return {
+                "order_num": str(_g(row, "order_num")),
+                "status": str(_g(row, "status")),
+                "reused": True,
+                "approver_id": _g(row, "approver_id"),
+            }
+        return None
+
+    async def submit_skill_upload(
         self,
         *,
         applicant_id: str,
@@ -316,33 +408,40 @@ class ApprovalService:
         cluster_id: str,
         reason: str,
         approver_id: str,
+        apply_data: dict[str, Any],
+        order_num: str,
+        expires_at: datetime,
     ) -> dict[str, Any]:
-        """提交 Skill 上传资格申请；审批人校验与配额扩容申请一致。"""
+        """按包上传审批建单：单号由 upload_id 决定，天然幂等。"""
         applicant_id = applicant_id.strip()
-        group_id = group_id.strip()
+        group_id = (group_id or "").strip()
         bot_id = bot_id.strip()
         cluster_id = cluster_id.strip()
         reason = reason.strip()
         approver_id = approver_id.strip()
-        if not all((applicant_id, bot_id, cluster_id, reason, approver_id)):
+        order_num = order_num.strip()
+        if not all(
+            (applicant_id, bot_id, cluster_id, reason, approver_id, order_num)
+        ):
             raise ValueError(
-                "applicant, bot, cluster, reason and approver are required"
+                "applicant, bot, cluster, reason, approver and order are required"
             )
-        if len(reason) > 1024:
-            raise ValueError("reason must not exceed 1024 characters")
         if approver_id == applicant_id:
             raise ValueError("applicant cannot designate self as approver")
         await self._ensure_valid_approver(approver_id)
-        return await self._submit_skill_upload_permission_transactionally(
+        return await self._submit_skill_upload_transactionally(
             applicant_id=applicant_id,
             group_id=group_id,
             bot_id=bot_id,
             cluster_id=cluster_id,
             reason=reason,
             approver_id=approver_id,
+            apply_data=apply_data,
+            order_num=order_num,
+            expires_at=expires_at,
         )
 
-    async def _submit_skill_upload_permission_transactionally(
+    async def _submit_skill_upload_transactionally(
         self,
         *,
         applicant_id: str,
@@ -351,8 +450,11 @@ class ApprovalService:
         cluster_id: str,
         reason: str,
         approver_id: str,
+        apply_data: dict[str, Any],
+        order_num: str,
+        expires_at: datetime,
     ) -> dict[str, Any]:
-        """串行化同一申请键的检查与写入，避免并发创建重复未结束单。"""
+        """串行化「同单号幂等 + 进行中单复用」检查与写入。"""
         if not isinstance(self._h, SQLAlchemyHandler):
             raise TypeError("approval submission requires a SQLAlchemy database handler")
         engine = self._h.get_engine()
@@ -367,7 +469,7 @@ class ApprovalService:
                     if dialect == "sqlite":
                         await connection.exec_driver_sql("BEGIN IMMEDIATE")
                         try:
-                            result = await self._submit_skill_upload_permission_in_transaction(
+                            result = await self._submit_skill_upload_in_transaction(
                                 connection,
                                 table,
                                 applicant_id=applicant_id,
@@ -376,6 +478,9 @@ class ApprovalService:
                                 cluster_id=cluster_id,
                                 reason=reason,
                                 approver_id=approver_id,
+                                apply_data=apply_data,
+                                order_num=order_num,
+                                expires_at=expires_at,
                             )
                         except BaseException:
                             await connection.rollback()
@@ -387,7 +492,7 @@ class ApprovalService:
                         isolation_level="SERIALIZABLE"
                     )
                     async with serial_connection.begin():
-                        result = await self._submit_skill_upload_permission_in_transaction(
+                        result = await self._submit_skill_upload_in_transaction(
                             serial_connection,
                             table,
                             applicant_id=applicant_id,
@@ -396,6 +501,9 @@ class ApprovalService:
                             cluster_id=cluster_id,
                             reason=reason,
                             approver_id=approver_id,
+                            apply_data=apply_data,
+                            order_num=order_num,
+                            expires_at=expires_at,
                         )
                     return result
             except DBAPIError as exc:
@@ -409,7 +517,7 @@ class ApprovalService:
         raise RuntimeError("approval submission transaction retries exhausted")
 
     @staticmethod
-    async def _submit_skill_upload_permission_in_transaction(
+    async def _submit_skill_upload_in_transaction(
         connection: AsyncConnection,
         table: Any,
         *,
@@ -419,50 +527,87 @@ class ApprovalService:
         cluster_id: str,
         reason: str,
         approver_id: str,
+        apply_data: dict[str, Any],
+        order_num: str,
+        expires_at: datetime,
     ) -> dict[str, Any]:
-        query = (
-            select(table)
-            .where(
-                table.c.applicant_id == applicant_id,
-                table.c.cluster_id == cluster_id,
-                table.c.business_type == SKILL_UPLOAD_PERMISSION,
-                table.c.status == "pending",
+        existing = (
+            await connection.execute(
+                select(table)
+                .where(table.c.order_num == order_num)
+                .with_for_update()
             )
-            .with_for_update()
-        )
-        pending = (await connection.execute(query)).mappings().first()
-        if pending is not None:
+        ).mappings().first()
+        if existing is not None:
+            if str(existing["applicant_id"]) != applicant_id:
+                raise PermissionError("approval request belongs to another user")
+            if _skill_upload_order_expired(existing):
+                raise ApprovalOrderExpiredError(
+                    "approval request has expired; please upload again"
+                )
             return {
-                "order_num": str(pending["order_num"]),
-                "status": "pending",
+                "order_num": order_num,
+                "status": str(existing["status"]),
                 "reused": True,
+                "approver_id": existing["approver_id"],
+            }
+
+        skill_name = str(apply_data.get("skill_name") or "")
+        digest = str(apply_data.get("digest") or "")
+        active_rows = (
+            await connection.execute(
+                select(table)
+                .where(
+                    table.c.applicant_id == applicant_id,
+                    table.c.cluster_id == cluster_id,
+                    table.c.business_type == SKILL_UPLOAD,
+                    table.c.status.in_(["pending", "approved"]),
+                )
+                .with_for_update()
+            )
+        ).mappings().all()
+        for row in active_rows:
+            if not _skill_upload_order_active(row):
+                continue
+            if not _skill_upload_order_matches(row, skill_name, digest):
+                continue
+            return {
+                "order_num": str(row["order_num"]),
+                "status": str(row["status"]),
+                "reused": True,
+                "approver_id": row["approver_id"],
             }
 
         now = utc_now()
-        order_num = f"apr_{new_uuid4().replace('-', '')}"
         await connection.execute(
             insert(table).values(
                 cluster_id=cluster_id,
                 order_num=order_num,
-                title="Skill 上传权限申请",
+                title=f"上传技能 {skill_name}",
                 applicant_id=applicant_id,
                 approver_id=approver_id,
                 group_id=group_id,
                 bot_id=bot_id,
                 status="pending",
                 finished_at=None,
-                business_type=SKILL_UPLOAD_PERMISSION,
+                business_type=SKILL_UPLOAD,
                 reason=reason,
-                apply_data={"capability": "skill_upload"},
+                apply_data=apply_data,
                 result_data=None,
                 data=None,
+                expires_at=expires_at,
                 created_at=now,
                 created_by=applicant_id,
                 updated_at=now,
                 updated_by=applicant_id,
             )
         )
-        return {"order_num": order_num, "status": "pending", "reused": False}
+        return {
+            "order_num": order_num,
+            "status": "pending",
+            "reused": False,
+            "approver_id": approver_id,
+        }
 
     async def _submit_workspace_quota_expand_transactionally(
         self,
@@ -647,6 +792,7 @@ class ApprovalService:
                     todo_rows.append(row)
             rows = todo_rows
         rows = _filter_orders_by_search(rows, search)
+        rows = await self.refresh_skill_upload_expiry(rows)
         rows.sort(key=lambda row: _g(row, "created_at"), reverse=True)
         return [_order_out(row) for row in rows]
 
@@ -674,10 +820,11 @@ class ApprovalService:
             filters["status"] = status
         rows = await self._h.list_records(_ORDER_TABLE, filters, limit=_CAP, offset=0)
         rows = _filter_orders_by_search(rows, search)
+        rows = await self.refresh_skill_upload_expiry(rows)
         rows.sort(key=lambda row: _g(row, "created_at"), reverse=True)
         pool = await self._current_approvers(exclude_user_id=applicant_id)
         pool_by_id = {item["user_id"]: item for item in pool}
-        reject_comments = await self._latest_reject_comments(
+        reject_comments = await self.latest_reject_comments(
             [
                 str(_g(row, "order_num") or "")
                 for row in rows
@@ -731,43 +878,7 @@ class ApprovalService:
         if approver_id not in set(allowed):
             raise ValueError("approver must hold approval:act permission")
 
-    async def latest_open_order(
-        self, *, applicant_id: str, cluster_id: str, business_type: str
-    ) -> dict[str, Any] | None:
-        """最近一张 pending / rejected 的单（撤回不计），供资格状态展示。"""
-        rows = await self._h.list_records(
-            _ORDER_TABLE,
-            {
-                "applicant_id": applicant_id.strip(),
-                "cluster_id": cluster_id.strip(),
-                "business_type": business_type,
-            },
-            limit=_CAP,
-            offset=0,
-        )
-        rows = [
-            row
-            for row in rows
-            if str(_g(row, "status") or "") in {"pending", "rejected"}
-        ]
-        if not rows:
-            return None
-        rows.sort(key=lambda row: _g(row, "id") or 0, reverse=True)
-        row = rows[0]
-        order_num = str(_g(row, "order_num") or "")
-        status = str(_g(row, "status") or "")
-        reject_comment = ""
-        if status == "rejected":
-            comments = await self._latest_reject_comments([order_num])
-            reject_comment = comments.get(order_num) or ""
-        return {
-            "order_num": order_num,
-            "status": status,
-            "reject_comment": reject_comment,
-            "created_at": iso_datetime(_g(row, "created_at")),
-        }
-
-    async def _latest_reject_comments(self, order_nums: list[str]) -> dict[str, str]:
+    async def latest_reject_comments(self, order_nums: list[str]) -> dict[str, str]:
         """取各单最近一次驳回意见，供申请人补正时参考。"""
         comments: dict[str, str] = {}
         for order_num in order_nums:
@@ -865,7 +976,7 @@ class ApprovalService:
         records.sort(key=lambda item: _g(item, "created_at"))
         return {**_order_out(row, detail=True), "records": [_record_out(item) for item in records]}
 
-    async def _append_record(
+    async def append_record(
         self,
         *,
         order_num: str,
@@ -890,6 +1001,122 @@ class ApprovalService:
                 "updated_by": operator_id,
             },
         )
+
+    async def _transition_pending(
+        self, *, order_num: str, values: dict[str, Any]
+    ) -> bool:
+        """仅当单据仍为 pending 且未过期时更新；返回是否命中。"""
+        if not isinstance(self._h, SQLAlchemyHandler):
+            row = await self._h.get(_ORDER_TABLE, {"order_num": order_num})
+            if row is None or str(_g(row, "status") or "") != "pending":
+                return False
+            await self._h.update(_ORDER_TABLE, {"order_num": order_num}, values)
+            return True
+        table = self._h.get_table(_ORDER_TABLE)
+        async with self._h.get_engine().begin() as connection:
+            result = await connection.execute(
+                update(table)
+                .where(
+                    table.c.order_num == order_num,
+                    table.c.status == "pending",
+                    or_(
+                        table.c.expires_at.is_(None),
+                        table.c.expires_at > utc_now(),
+                    ),
+                )
+                .values(**values)
+            )
+        return bool(result.rowcount)
+
+    async def _raise_action_conflict(self, order_num: str) -> None:
+        if await self.expire_skill_upload_order(order_num):
+            raise ApprovalOrderExpiredError("approval request has expired")
+        raise ValueError(
+            "only pending approval or failed approved sync can be acted on"
+        )
+
+    async def expire_skill_upload_order(self, order_num: str) -> bool:
+        """单据已过期但仍 pending 时置为 expired；返回是否发生更新。"""
+        row = await self._h.get(_ORDER_TABLE, {"order_num": order_num})
+        if row is None or not _skill_upload_order_expired(row):
+            return False
+        now = utc_now()
+        values = {"status": "expired", "updated_at": now, "updated_by": "system"}
+        if not isinstance(self._h, SQLAlchemyHandler):
+            await self._h.update(
+                _ORDER_TABLE,
+                {"order_num": order_num, "status": "pending"},
+                values,
+            )
+            return True
+        table = self._h.get_table(_ORDER_TABLE)
+        async with self._h.get_engine().begin() as connection:
+            result = await connection.execute(
+                update(table)
+                .where(
+                    table.c.order_num == order_num,
+                    table.c.status == "pending",
+                    table.c.expires_at.is_not(None),
+                    table.c.expires_at <= now,
+                )
+                .values(**values)
+            )
+        return bool(result.rowcount)
+
+    async def expire_overdue_orders(self) -> int:
+        """定时收敛：把过期但仍 pending 的技能上传单批量置为 expired。"""
+        if not isinstance(self._h, SQLAlchemyHandler):
+            return 0
+        table = self._h.get_table(_ORDER_TABLE)
+        now = utc_now()
+        async with self._h.get_engine().begin() as connection:
+            result = await connection.execute(
+                update(table)
+                .where(
+                    table.c.business_type == SKILL_UPLOAD,
+                    table.c.status == "pending",
+                    table.c.expires_at.is_not(None),
+                    table.c.expires_at <= now,
+                )
+                .values(status="expired", updated_at=now, updated_by="system")
+            )
+        return int(result.rowcount or 0)
+
+    async def refresh_skill_upload_expiry(self, rows: list[Any]) -> list[Any]:
+        """读路径懒刷新：先落库再返回最新行。"""
+        overdue = [
+            str(_g(row, "order_num") or "")
+            for row in rows
+            if _skill_upload_order_expired(row)
+        ]
+        if not overdue:
+            return rows
+        now = utc_now()
+        values = {"status": "expired", "updated_at": now, "updated_by": "system"}
+        if isinstance(self._h, SQLAlchemyHandler):
+            table = self._h.get_table(_ORDER_TABLE)
+            async with self._h.get_engine().begin() as connection:
+                await connection.execute(
+                    update(table)
+                    .where(
+                        table.c.order_num.in_(overdue),
+                        table.c.status == "pending",
+                        table.c.expires_at.is_not(None),
+                        table.c.expires_at <= now,
+                    )
+                    .values(**values)
+                )
+        else:
+            for order_num in overdue:
+                await self._h.update(_ORDER_TABLE, {"order_num": order_num}, values)
+        replacements: dict[str, Any] = {}
+        for order_num in overdue:
+            latest = await self._h.get(_ORDER_TABLE, {"order_num": order_num})
+            if latest is not None:
+                replacements[order_num] = latest
+        return [
+            replacements.get(str(_g(row, "order_num") or ""), row) for row in rows
+        ]
 
     async def act(
         self,
@@ -920,40 +1147,57 @@ class ApprovalService:
             raise PermissionError("only the designated approver can act on this request")
 
         if action == "reject":
-            await self._append_record(
+            now = utc_now()
+            updated = await self._transition_pending(
+                order_num=order_num,
+                values={
+                    "status": "rejected",
+                    "approver_id": operator_id,
+                    "finished_at": None,
+                    "result_data": None,
+                    "updated_at": now,
+                    "updated_by": operator_id,
+                },
+            )
+            if not updated:
+                await self._raise_action_conflict(order_num)
+            await self.append_record(
                 order_num=order_num,
                 operator_id=operator_id,
                 action="reject",
                 comment=comment,
             )
-            await self._h.update(
-                _ORDER_TABLE,
-                {"order_num": order_num},
-                {
-                    "status": "rejected",
+            return {"order_num": order_num, "status": "rejected", "policy_id": None}
+
+        if str(_g(row, "business_type") or "") == SKILL_UPLOAD:
+            # 批准只推进单据；技能安装在用户进入技能页后由 Gateway 复核触发。
+            now = utc_now()
+            skill_result_data = {"install_status": "pending"}
+            updated = await self._transition_pending(
+                order_num=order_num,
+                values={
+                    "status": "approved",
                     "approver_id": operator_id,
-                    "finished_at": None,
-                    "result_data": None,
-                    "updated_at": utc_now(),
+                    "finished_at": now,
+                    "result_data": skill_result_data,
+                    "updated_at": now,
                     "updated_by": operator_id,
                 },
             )
-            return {"order_num": order_num, "status": "rejected", "policy_id": None}
-
-        business_type = str(_g(row, "business_type") or "")
-        if business_type == SKILL_UPLOAD_PERMISSION:
-            # 权限类审批在事务内自行写审批记录与单据状态，不再走下方公共写入。
-            return await self._approve_skill_upload_permission(
+            if not updated:
+                await self._raise_action_conflict(order_num)
+            await self.append_record(
                 order_num=order_num,
                 operator_id=operator_id,
+                action="approve",
                 comment=comment,
+                data={"result_data": skill_result_data},
             )
+            return {"order_num": order_num, "status": "approved", "policy_id": None}
 
-        # 其余业务类型沿用原有配额批准路径：配额单的 business_type 一律有值，
-        # 这里不为未知类型新增失败分支，避免改变既有行为。
         policy, sync_result = await self._apply_workspace_quota(row, operator_id)
         now = utc_now()
-        await self._append_record(
+        await self.append_record(
             order_num=order_num,
             operator_id=operator_id,
             action="approve",
@@ -984,9 +1228,11 @@ class ApprovalService:
             return None
         if _g(row, "applicant_id") != operator_id:
             raise PermissionError("only applicant can cancel request")
+        if str(_g(row, "business_type") or "") == SKILL_UPLOAD:
+            raise PermissionError("skill upload requests cannot be cancelled")
         if _g(row, "status") != "pending":
             raise ValueError("only pending request can be cancelled")
-        await self._append_record(
+        await self.append_record(
             order_num=order_num,
             operator_id=operator_id,
             action="cancel",
@@ -1006,147 +1252,6 @@ class ApprovalService:
             },
         )
         return {"order_num": order_num, "status": "cancelled"}
-
-    async def _approve_skill_upload_permission(
-        self,
-        *,
-        order_num: str,
-        operator_id: str,
-        comment: str | None,
-    ) -> dict[str, Any]:
-        """批准：授权写入、审批记录与单据状态在同一事务内完成。"""
-        if not isinstance(self._h, SQLAlchemyHandler):
-            raise TypeError("approval requires a SQLAlchemy database handler")
-        engine = self._h.get_engine()
-        if engine is None:
-            raise RuntimeError("database must be connected before approving")
-        tables = {
-            "order": self._h.get_table(_ORDER_TABLE),
-            "record": self._h.get_table(_RECORD_TABLE),
-            "grant": self._h.get_table(_GRANT_TABLE),
-        }
-        dialect = engine.dialect.name
-
-        for attempt in range(_SUBMIT_TRANSACTION_ATTEMPTS):
-            try:
-                async with engine.connect() as connection:
-                    if dialect == "sqlite":
-                        await connection.exec_driver_sql("BEGIN IMMEDIATE")
-                        try:
-                            result = await self._approve_skill_upload_permission_in_transaction(
-                                connection,
-                                tables,
-                                order_num=order_num,
-                                operator_id=operator_id,
-                                comment=comment,
-                            )
-                        except BaseException:
-                            await connection.rollback()
-                            raise
-                        await connection.commit()
-                        return result
-
-                    serial_connection = await connection.execution_options(
-                        isolation_level="SERIALIZABLE"
-                    )
-                    async with serial_connection.begin():
-                        result = await self._approve_skill_upload_permission_in_transaction(
-                            serial_connection,
-                            tables,
-                            order_num=order_num,
-                            operator_id=operator_id,
-                            comment=comment,
-                        )
-                    return result
-            except DBAPIError as exc:
-                if (
-                    attempt + 1 >= _SUBMIT_TRANSACTION_ATTEMPTS
-                    or not _is_retryable_transaction_error(exc)
-                ):
-                    raise
-                await asyncio.sleep(0.02 * (2**attempt))
-
-        raise RuntimeError("approval transaction retries exhausted")
-
-    @staticmethod
-    async def _approve_skill_upload_permission_in_transaction(
-        connection: AsyncConnection,
-        tables: dict[str, Any],
-        *,
-        order_num: str,
-        operator_id: str,
-        comment: str | None,
-    ) -> dict[str, Any]:
-        order_table = tables["order"]
-        record_table = tables["record"]
-        grant_table = tables["grant"]
-
-        query = (
-            select(order_table)
-            .where(order_table.c.order_num == order_num)
-            .with_for_update()
-        )
-        row = (await connection.execute(query)).mappings().first()
-        if row is None:
-            raise ValueError("approval order not found")
-        if str(row["status"]) != "pending":
-            raise ValueError("only pending approval can be approved")
-        applicant_id = str(row["applicant_id"])
-        if applicant_id == operator_id:
-            raise PermissionError("applicant cannot approve or reject own request")
-
-        cluster_id = str(row["cluster_id"])
-        grant = await apply_upload_permission_in_tx(
-            connection,
-            grant_table,
-            jiuwenclaw_id=cluster_id,
-            user_id=applicant_id,
-            operator_id=operator_id,
-            order_num=order_num,
-        )
-        result_data = {
-            "user_id": applicant_id,
-            "cluster_id": cluster_id,
-            "upload_skill_policy": UPLOAD_POLICY_ALLOW,
-            "grant_created": bool(grant.get("created")),
-        }
-        now = utc_now()
-        await connection.execute(
-            insert(record_table).values(
-                record_id=f"arr_{new_uuid4().replace('-', '')}",
-                order_num=order_num,
-                operator_id=operator_id,
-                action="approve",
-                comment=strip_optional(comment),
-                data={"result_data": result_data},
-                created_at=now,
-                created_by=operator_id,
-                updated_at=now,
-                updated_by=operator_id,
-            )
-        )
-        await connection.execute(
-            update(order_table)
-            .where(order_table.c.order_num == order_num)
-            .values(
-                status="approved",
-                approver_id=operator_id,
-                finished_at=now,
-                result_data=result_data,
-                updated_at=now,
-                updated_by=operator_id,
-            )
-        )
-        _log.info(
-            "skill upload permission approved applicant_id=%s cluster_id=%s "
-            "order_num=%s operator_id=%s grant_created=%s",
-            applicant_id,
-            cluster_id,
-            order_num,
-            operator_id,
-            result_data["grant_created"],
-        )
-        return {"order_num": order_num, "status": "approved", "result_data": result_data}
 
     async def _apply_workspace_quota(
         self, order: Any, operator_id: str

@@ -5,7 +5,7 @@
 #   /etc/nginx/templates/default.conf.template → /opt/app-root/etc/nginx.d/default.conf
 # 环境变量与部署注入的同名 env 一致(必须全部提供):
 #   MANAGER_WEB_PORT / MANAGER_WEB_PROXY_TARGET / MANAGER_WEB_IDP_TARGET /
-#   MANAGER_WEB_RESOLVER / WORKSPACE_QUOTA_ENABLED / SKILL_UPLOAD_APPROVAL_ENABLED
+#   MANAGER_WEB_RESOLVER / WORKSPACE_QUOTA_ENABLED
 # 默认上游回退仍由 Manager Server 读取 MANAGER_WEB_USER_WEB_TARGET /
 #   MANAGER_WEB_GATEWAY_HTTP_TARGET / MANAGER_WEB_GATEWAY_WS_TARGET
 #
@@ -65,9 +65,8 @@ server {
     gzip_vary on;
     gzip_types text/css application/javascript application/json image/svg+xml;
 
-    # ---------- index.html 运行时配置注入（WORKSPACE_QUOTA_ENABLED / SKILL_UPLOAD_APPROVAL_ENABLED） ----------
+    # ---------- index.html 运行时配置注入（WORKSPACE_QUOTA_ENABLED） ----------
     sub_filter '__WORKSPACE_QUOTA_ENABLED_VALUE__' '${WORKSPACE_QUOTA_ENABLED}';
-    sub_filter '__SKILL_UPLOAD_APPROVAL_ENABLED_VALUE__' '${SKILL_UPLOAD_APPROVAL_ENABLED}';
     sub_filter_once on;
     sub_filter_types text/html;
 
