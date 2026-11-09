@@ -7,7 +7,6 @@ import {
   InstanceBindingApi,
   InstanceGrant,
   LoginPolicy,
-  UploadSkillPolicy,
   UserApi,
 } from '../../../services/api';
 import { AddToInstanceModal } from './instanceBinding';
@@ -322,14 +321,6 @@ export function InstanceUsersTab({ instanceId }: Props) {
                     </div>
                   </th>
                   <th>
-                    <div className="th-filter">
-                      <span className="th-filter__label inline-flex items-center gap-1">
-                        {t(`${IA}.uploadSkillPolicy`)}
-                        <HintTooltip text={t(`${IA}.uploadSkillPolicyHint`)} />
-                      </span>
-                    </div>
-                  </th>
-                  <th>
                     <TableColumnSort
                       label={t(`${IA}.expiresAt`)}
                       value={sortBy === 'expires_at' ? sortOrder : ''}
@@ -377,7 +368,7 @@ export function InstanceUsersTab({ instanceId }: Props) {
               <tbody>
                 {paged.length === 0 ? (
                   <tr>
-                    <td colSpan={9}>
+                    <td colSpan={8}>
                       <Empty text={t(`${IA}.noUsers`)} />
                     </td>
                   </tr>
@@ -401,16 +392,6 @@ export function InstanceUsersTab({ instanceId }: Props) {
                       }}
                       onChangeLoginPolicy={(login_policy) => {
                         InstanceBindingApi.updateUserGrant(instanceId, u.user_id, { login_policy })
-                          .then(() => {
-                            toast('success', t('success.saved'));
-                            reloadBinding();
-                          })
-                          .catch((e) =>
-                            toast('danger', e instanceof ApiError ? e.detail : String(e)),
-                          );
-                      }}
-                      onChangeUploadPolicy={(upload_skill_policy) => {
-                        InstanceBindingApi.updateUserGrant(instanceId, u.user_id, { upload_skill_policy })
                           .then(() => {
                             toast('success', t('success.saved'));
                             reloadBinding();
@@ -477,7 +458,6 @@ function UserRow({
   onDelete,
   onToggleEnabled,
   onChangeLoginPolicy,
-  onChangeUploadPolicy,
 }: {
   user: BoundUserRow;
   checked: boolean;
@@ -485,13 +465,9 @@ function UserRow({
   onDelete: () => void;
   onToggleEnabled: (enabled: boolean) => void;
   onChangeLoginPolicy: (policy: LoginPolicy) => void;
-  onChangeUploadPolicy: (policy: UploadSkillPolicy) => void;
 }) {
   const { t } = useTranslation();
   const policy = (user.grant.login_policy === 'deny' ? 'deny' : 'allow') as LoginPolicy;
-  const uploadPolicy = (user.grant.upload_skill_policy === 'allow'
-    ? 'allow'
-    : 'deny') as UploadSkillPolicy;
   return (
     <tr>
       <td>
@@ -512,17 +488,6 @@ function UserRow({
           value={policy}
           onChange={(e) => onChangeLoginPolicy(e.target.value === 'deny' ? 'deny' : 'allow')}
           aria-label={t(`${IA}.loginPolicy`)}
-        >
-          <option value="allow">{t(`${IA}.loginAllow`)}</option>
-          <option value="deny">{t(`${IA}.loginDeny`)}</option>
-        </select>
-      </td>
-      <td className="whitespace-nowrap">
-        <select
-          className="select sm !w-[5.75rem] !min-w-[5.75rem] !max-w-[5.75rem] !pl-1.5 !pr-8"
-          value={uploadPolicy}
-          onChange={(e) => onChangeUploadPolicy(e.target.value === 'allow' ? 'allow' : 'deny')}
-          aria-label={t(`${IA}.uploadSkillPolicy`)}
         >
           <option value="allow">{t(`${IA}.loginAllow`)}</option>
           <option value="deny">{t(`${IA}.loginDeny`)}</option>

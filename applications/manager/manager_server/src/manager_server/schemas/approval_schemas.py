@@ -12,7 +12,7 @@ class ApprovalListQuery(BaseModel):
 
     business_type: str | None = Field(default=None, max_length=64)
     view: Literal["todo", "mine"] | None = None
-    status: Literal["pending", "approved", "rejected", "cancelled"] | None = None
+    status: Literal["pending", "approved", "rejected", "cancelled", "expired"] | None = None
     group_id: str | None = Field(default=None, max_length=64)
     search: str | None = Field(
         default=None,
