@@ -265,7 +265,6 @@ export function AgentTemplatesPage() {
                             </button>
                             <button
                               className="btn sm danger"
-                              disabled={(row.reference_count ?? 0) > 0}
                               title={(row.reference_count ?? 0) > 0
                                 ? t('agentTemplate.deleteBlockedHint', { count: row.reference_count ?? 0 })
                                 : undefined}
