@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 class PermissionListQuery(BaseModel):
     enabled: bool | None = None
-    scope: Literal["admin", "org", "user"] | None = None
+    scope: Literal["admin", "user"] | None = None
     search: str | None = Field(
         default=None,
         max_length=256,
@@ -22,7 +22,7 @@ class RoleListQuery(BaseModel):
     page: int = Field(1, ge=1)
     page_size: int = Field(20, ge=1, le=200)
     enabled: bool | None = None
-    scope: Literal["admin", "org", "user"] | None = None
+    scope: Literal["admin", "user"] | None = None
     search: str | None = Field(
         default=None,
         max_length=256,
@@ -45,14 +45,14 @@ class RoleCreateBody(BaseModel):
     )
     name: str = Field(..., min_length=1, max_length=128)
     description: str | None = Field(default=None, max_length=512)
-    scope: Literal["admin", "org", "user"] = "admin"
+    scope: Literal["admin", "user"] = "admin"
     permission_ids: list[str] = Field(default_factory=list, max_length=128)
 
 
 class RoleUpdateBody(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=128)
     description: str | None = Field(default=None, max_length=512)
-    scope: Literal["admin", "org", "user"] | None = None
+    scope: Literal["admin", "user"] | None = None
     enabled: bool | None = None
     permission_ids: list[str] | None = Field(default=None, max_length=128)
 

@@ -613,7 +613,7 @@
     "apiBase": "API Base",
     "apiKey": "API Key",
     "modelId": "模型ID",
-    "modelProvider": "Provider",
+    "modelProvider": "协议",
     "parameters": "模型参数",
     "headers": "请求头",
     "headersHint": "调用 LLM 时作为自定义请求头",
@@ -624,7 +624,7 @@
     "enableFunctionCalling": "启用 Function Calling",
     "verifySsl": "校验 SSL",
     "filterType": "按类型筛选",
-    "searchPlaceholder": "搜索模板 ID、模板名称、模板描述、Provider、模型ID、模型类型、API Base",
+    "searchPlaceholder": "搜索模板 ID、模板名称、模板描述、协议、模型ID、模型类型、API Base",
     "referenceCount": "被引用",
     "referenceHint": "点击查看引用了该模板的 Agent 模板",
     "updatedAt": "更新时间",
@@ -1298,7 +1298,6 @@
     },
     "scopes": {
       "admin": "admin",
-      "org": "org",
       "user": "user"
     }
   },

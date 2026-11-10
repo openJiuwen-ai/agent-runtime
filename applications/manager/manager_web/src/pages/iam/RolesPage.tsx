@@ -126,7 +126,7 @@ export function RolesPage() {
         enabled: enabledFilter === '' ? undefined : enabledFilter === 'true',
         scope: scopeFilter === ''
           ? undefined
-          : (scopeFilter as 'admin' | 'org' | 'user'),
+          : (scopeFilter as 'admin' | 'user'),
         sort_by: sortBy || undefined,
         sort_order: sortBy ? sortOrder : undefined,
       }),
@@ -267,7 +267,6 @@ export function RolesPage() {
                         options={[
                           { value: '', label: t('common.all') },
                           { value: 'admin', label: t('roles.scopes.admin') },
-                          { value: 'org', label: t('roles.scopes.org') },
                           { value: 'user', label: t('roles.scopes.user') },
                         ]}
                         onChange={(value) => {
@@ -350,7 +349,9 @@ export function RolesPage() {
                         <td>
                           <div className="flex flex-wrap items-center gap-1">
                             <span className="badge">
-                              {t(`roles.scopes.${role.scope}`)}
+                              {role.scope === 'admin' || role.scope === 'user'
+                                ? t(`roles.scopes.${role.scope}`)
+                                : role.scope}
                             </span>
                             {role.is_system && (
                               <span className="pill sm muted" title={t('roles.systemHint')}>

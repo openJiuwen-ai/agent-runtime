@@ -32,8 +32,14 @@ import {
   sanitizeIdentityIdInput,
 } from '../../utils/identityId';
 
-type Scope = 'admin' | 'org' | 'user';
+type Scope = 'admin' | 'user';
 type Section = 'basic' | 'permissions' | 'assignees';
+
+const KNOWN_SCOPES: readonly Scope[] = ['admin', 'user'];
+
+function isKnownScope(value: string): value is Scope {
+  return (KNOWN_SCOPES as readonly string[]).includes(value);
+}
 
 type PermissionItem = Pick<
   PermissionDefinition,
@@ -190,6 +196,11 @@ export function RolesEditPage({ roleId }: { roleId?: string }) {
       try {
         const role = await AuthzApi.getRole(roleId);
         if (cancelled) return;
+        if (!isKnownScope(role.scope)) {
+          toast('danger', t('errors.loadFailed', { detail: role.scope }));
+          navigate('/roles');
+          return;
+        }
         setRoleMeta(role);
         setFormRoleId(clipField(role.role_id, FIELD_MAX_LENGTH.role_id));
         setName(clipField(role.name, FIELD_MAX_LENGTH.name));
@@ -456,7 +467,6 @@ export function RolesEditPage({ roleId }: { roleId?: string }) {
                 required
               >
                 <option value="admin">{t('roles.scopes.admin')}</option>
-                <option value="org">{t('roles.scopes.org')}</option>
                 <option value="user">{t('roles.scopes.user')}</option>
               </select>
             </div>

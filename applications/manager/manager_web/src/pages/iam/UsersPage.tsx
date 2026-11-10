@@ -1,4 +1,4 @@
-import { ChangeEvent, useEffect, useMemo, useState } from 'react';
+import { ChangeEvent, type CSSProperties, type ReactNode, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import * as XLSX from 'xlsx';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
@@ -20,6 +20,23 @@ import { toast } from '../../stores/uiStore';
 import { formatTime } from '../../utils/format';
 import { isValidIdentityId, sanitizeIdentityIdInput } from '../../utils/identityId';
 import { ResourceExportButton, ResourceImportButton } from '../../components/ResourceImportExport';
+
+function FieldLabel({
+  children,
+  required,
+  style,
+}: {
+  children: ReactNode;
+  required?: boolean;
+  style?: CSSProperties;
+}) {
+  return (
+    <label className="label" style={style}>
+      {children}
+      {required ? <span className="text-danger ml-0.5" aria-hidden="true">*</span> : null}
+    </label>
+  );
+}
 
 type UserSortField = 'user_id' | 'display_name' | 'status' | 'updated_at';
 
@@ -565,7 +582,7 @@ function UserModal({ user, onClose, onSaved }: { user: IamUser | null; onClose: 
     >
       {!isEdit && (
         <>
-          <label className="label">{t('iam.username')}</label>
+          <FieldLabel required>{t('iam.username')}</FieldLabel>
           <input
             className="input mono"
             value={username}
@@ -576,15 +593,17 @@ function UserModal({ user, onClose, onSaved }: { user: IamUser | null; onClose: 
         </>
       )}
 
-      <label className="label" style={{ marginTop: isEdit ? 0 : 12 }}>{t('iam.displayName')}</label>
+      <FieldLabel required style={{ marginTop: isEdit ? 0 : 12 }}>{t('iam.displayName')}</FieldLabel>
       <input className="input" value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
 
-      <label className="label" style={{ marginTop: 12 }}>{isEdit ? t('iam.resetPassword') : t('iam.password')}</label>
+      <FieldLabel required={!isEdit} style={{ marginTop: 12 }}>
+        {isEdit ? t('iam.resetPassword') : t('iam.password')}
+      </FieldLabel>
       <input className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
 
       {isEdit && (
         <>
-          <label className="label" style={{ marginTop: 12 }}>{t('iam.status')}</label>
+          <FieldLabel style={{ marginTop: 12 }}>{t('iam.status')}</FieldLabel>
           <select className="select" value={status} onChange={(e) => setStatus(e.target.value)}>
             <option value="active">active</option>
             <option value="disabled">disabled</option>
