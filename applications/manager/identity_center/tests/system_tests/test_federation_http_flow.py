@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from urllib.parse import parse_qs, urlsplit
 
+import pytest
 from fastapi.testclient import TestClient
 
 from identity_center.app import create_app
@@ -17,11 +18,12 @@ def _query_value(url: str, name: str) -> str:
     return values[0]
 
 
-def test_federation_http_flow_issues_normal_identity_token(tmp_path, monkeypatch):
+@pytest.mark.parametrize("public_prefix", ["", "/portal/idp"])
+def test_federation_http_flow_issues_normal_identity_token(tmp_path, monkeypatch, public_prefix):
     monkeypatch.setattr(settings, "db_type", "sqlite")
     monkeypatch.setattr(settings, "sqlite_path", str(tmp_path / "identity.db"))
     monkeypatch.setattr(settings, "federation_demo_enabled", True)
-    monkeypatch.setattr(settings, "federation_public_path_prefix", "")
+    monkeypatch.setattr(settings, "federation_public_path_prefix", public_prefix)
     monkeypatch.setattr(settings, "seed_admin", False)
     monkeypatch.setattr(settings, "seed_user1", False)
 
@@ -41,16 +43,18 @@ def test_federation_http_flow_issues_normal_identity_token(tmp_path, monkeypatch
         assert client.get("/v1/auth/federation/connections?surface=manager").json() == {"connections": []}
         assert client.get("/v1/auth/federation/enterprise-demo/login?surface=manager").status_code == 404
 
-        started = client.get(
-            "/v1/auth/federation/enterprise-demo/login",
-            params={"return_to": "/auth"},
-            follow_redirects=False,
-        )
+        login_url = "/v1/auth/federation/enterprise-demo/login"
+        for untrusted in ("//other.example/auth", "/other-app/auth"):
+            assert client.get(login_url, params={"return_to": untrusted}).status_code == 400
+        assert client.get(
+            login_url, params={"surface": "manager"}, headers={"X-Jiuwen-Web-Surface": "user"},
+        ).status_code == 403
+        started = client.get(login_url, follow_redirects=False)
         assert started.status_code == 303
         upstream_url = started.headers["location"]
-        assert upstream_url.startswith("/v1/auth/federation/demo/idp/login?")
+        assert upstream_url.startswith(f"{public_prefix}/v1/auth/federation/demo/idp/login?")
 
-        provider_page = client.get(upstream_url)
+        provider_page = client.get(upstream_url.removeprefix(public_prefix))
         assert provider_page.status_code == 200
         assert "Local simulation only" in provider_page.text
 
@@ -71,6 +75,9 @@ def test_federation_http_flow_issues_normal_identity_token(tmp_path, monkeypatch
             follow_redirects=False,
         )
         assert callback.status_code == 303
+        assert urlsplit(callback.headers["location"]).path == (
+            f"{public_prefix.removesuffix('/idp')}/auth"
+        )
         code = _query_value(callback.headers["location"], "federation_code")
 
         wrong_surface = client.post("/v1/auth/federation/exchange?surface=manager", json={"code": code})
@@ -85,7 +92,10 @@ def test_federation_http_flow_issues_normal_identity_token(tmp_path, monkeypatch
         assert decode_access_token(token)["surface"] == "user"
         refresh_body = {"refresh_token": exchanged.json()["refresh_token"]}
         assert client.post("/v1/auth/refresh?surface=manager", json=refresh_body).status_code == 401
-        rotated = client.post("/v1/auth/refresh?surface=user", json=refresh_body)
+        assert client.post(
+            "/v1/auth/refresh", headers={"X-Jiuwen-Web-Surface": "manager"}, json=refresh_body,
+        ).status_code == 401
+        rotated = client.post("/v1/auth/refresh", json=refresh_body)
         assert rotated.status_code == 200
         assert decode_access_token(rotated.json()["access_token"])["surface"] == "user"
         switch = client.post(

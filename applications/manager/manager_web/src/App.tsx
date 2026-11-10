@@ -310,14 +310,8 @@ function Shell() {
   );
 }
 
-/** 已登录用户的默认落地页:平台/管理员类型角色→/manager，有限权限进入对应页。 */
 function roleHome(user: AuthUser): string | null {
-  if (isPlatformAdmin(user) || user.manager_access) return '/manager';
-  if (isApprovalEnabled(user) && hasPermission(user, 'approval:read')) {
-    return '/manager/approvals';
-  }
-  if (hasPermission(user, 'iam:role:read')) return '/manager/roles';
-  return null;
+  return canAccessManager(user) ? '/manager' : null;
 }
 
 /** /auth:已登录则按角色跳走,否则展示登录页。 */
@@ -328,7 +322,7 @@ function AuthRoute() {
   return <LoginPage denied={Boolean(user)} />;
 }
 
-/** 登录 + 角色守卫:未登录→/auth;要求管理面但无资格→/user。 */
+/** 登录 + 角色守卫:未登录→/auth;要求管理面但无资格→/auth。 */
 function RequireAuth({ manager, children }: { manager?: boolean; children: ReactNode }) {
   const { user } = useAuth();
   if (!user) return <Navigate to="/auth" replace />;

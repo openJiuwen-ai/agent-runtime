@@ -231,8 +231,6 @@ def services_fixture(tmp_path_factory):
                 urls["manager"],
                 "--idp-target",
                 urls["identity"],
-                "--user-web-target",
-                urls["user_web"],
             ],
             append_url_path(urls["manager_web"], "/"),
         )
@@ -283,26 +281,23 @@ def test_login_role_crud_proxy_and_downstream_persistence(services):
     # Login identity is separate from product authorization.
     me = call("GET", "/api/v1/authz/me")
     assert me["is_platform_admin"] and "platform_admin" in me["role_ids"]
-    regular = call("GET", append_url_path(user_web, "/manager-api/v1/authz/me"), headers=user)
+    regular_session = login(client, web, "user1", password)
+    management_user = {"Authorization": "Bearer " + regular_session["access_token"]}
+    regular = call("GET", append_url_path(web, "/api/v1/authz/me"), headers=management_user)
     assert not regular["manager_access"] and not regular["is_platform_admin"]
-    for origin, prefix in (
-        (manager, "/api"),
-        (web, "/api"),
-        (web, "/manager-api"),
-        (user_web, "/manager-api"),
-    ):
-        for headers, status in (({}, 401), ({"Authorization": "Bearer bogus"}, 401), (user, 403)):
-            call(
-                "GET",
-                append_url_path(origin, prefix, "/v1/instances/"),
-                headers=headers,
-                status=status,
-            )
-        call(
-            "DELETE",
-            append_url_path(origin, prefix, "/v1/user-console/active-cluster"),
-            headers={},
-        )
+    for origin in (manager, web):
+        for headers, status in (
+            ({}, 401),
+            ({"Authorization": "Bearer bogus"}, 401),
+            (management_user, 403),
+            (user, 403),
+        ):
+            call("GET", append_url_path(origin, "/api/v1/instances/"), headers=headers, status=status)
+    for origin in (web, user_web):
+        call("GET", append_url_path(origin, "/manager-api/v1/instances/"), status=404)
+    call("GET", append_url_path(user_web, "/manager-api/v1/authz/me"), headers=user, status=404)
+    call("DELETE", append_url_path(web, "/api/v1/user-console/active-cluster"), status=404)
+    call("DELETE", append_url_path(user_web, "/manager-api/v1/user-console/active-cluster"), headers={})
 
     instance = call(
         "POST",
@@ -348,10 +343,6 @@ def test_login_role_crud_proxy_and_downstream_persistence(services):
     call("DELETE", f"/api/v1/model-templates/{tid}", headers=user, status=403)
     assert call("GET", f"/api/v1/model-templates/{tid}")["template_id"] == tid
     call("DELETE", f"/api/v1/model-templates/{tid}")
-
-    management_session = login(client, web, "user1", password)
-    management_user = {"Authorization": "Bearer " + management_session["access_token"]}
-    call("GET", "/api/v1/instances/", headers=management_user, status=403)
 
     # Role changes are authoritative for an ALREADY issued management token.
     call(
@@ -547,14 +538,14 @@ def test_real_browser_login_and_authenticated_manager_navigation(services):
         page.locator("#login-username").fill("user1")
         page.locator("#login-password").fill(password)
         page.locator('button[type="submit"]').click()
-        expect(page.get_by_role("heading", name="暂无可用 Agent", exact=True)).to_be_visible(
+        expect(page.get_by_text("此账号没有管理面权限。", exact=True)).to_be_visible(
             timeout=15000
         )
         page.goto(append_url_path(urls["manager_web"], "/manager/instances"))
-        expect(page.get_by_role("heading", name="暂无可用 Agent", exact=True)).to_be_visible(
+        expect(page.get_by_text("此账号没有管理面权限。", exact=True)).to_be_visible(
             timeout=15000
         )
-        assert "/manager" not in page.url
+        assert httpx.URL(page.url).path == "/auth"
         page.screenshot(path=str(directory / "regular-user-boundary.png"), full_page=True)
         context.close()
         browser.close()
@@ -568,12 +559,17 @@ def test_real_access_expiry_refresh_rotation_and_logout(services):
     exp = jwt.decode(token, options={"verify_signature": False})["exp"]
     time.sleep(max(0, exp - time.time() + 0.2))
     response = client.get(
-        append_url_path(urls["user_web"], "/manager-api/v1/instances/"),
+        append_url_path(urls["manager_web"], "/api/v1/instances/"),
         headers={"Authorization": "Bearer " + token},
     )
     assert response.status_code == 401
-    refreshed = client.post(
+    wrong_surface = client.post(
         append_url_path(urls["user_web"], "/idp/v1/auth/refresh"),
+        json={"refresh_token": session["refresh_token"]},
+    )
+    assert wrong_surface.status_code == 401
+    refreshed = client.post(
+        append_url_path(urls["manager_web"], "/idp/v1/auth/refresh"),
         json={"refresh_token": session["refresh_token"]},
     )
     assert refreshed.status_code == 200

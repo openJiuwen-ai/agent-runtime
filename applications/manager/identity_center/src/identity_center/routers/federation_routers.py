@@ -159,7 +159,7 @@ async def begin_login(
     connection_id: str,
     request: Request,
     service: _Service,
-    return_to: str = Query(default="/auth"),
+    return_to: str | None = Query(default=None),
     surface: LoginSurface | None = None,
 ):
     try:
@@ -169,7 +169,8 @@ async def begin_login(
         if not re.fullmatch(r"[A-Za-z0-9_-]{43,128}", binding):
             binding = secrets.token_urlsafe(32)
         login_url = await service.begin_login(
-            connection_id, return_to, browser_binding=binding if bound else None
+            connection_id, return_to or service.login_path(connection_id),
+            browser_binding=binding if bound else None,
         )
     except UnknownFederationConnection as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -222,7 +223,7 @@ async def complete_oidc_login(connection_id: str, request: Request, service: _Se
         _log.warning(
             "federation.oidc_login_failed", connection_id=connection_id, reason=str(exc)
         )
-        redirect_url = "/auth?federation_error=authentication_failed"
+        redirect_url = f"{service.login_path(connection_id)}?federation_error=authentication_failed"
     return RedirectResponse(
         redirect_url, status_code=status.HTTP_303_SEE_OTHER, headers=_PRIVATE_HEADERS
     )

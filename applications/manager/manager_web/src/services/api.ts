@@ -91,9 +91,6 @@ let accessToken: string | null = localStorage.getItem(ACCESS_KEY);
 let refreshToken: string | null = localStorage.getItem(REFRESH_KEY);
 let unauthorizedHandler: (() => void) | null = null;
 
-// Remove the legacy cookie used by the embedded user console. Cookies are shared across ports.
-document.cookie = `${ACCESS_KEY}=; Path=/; Max-Age=0; SameSite=Strict`;
-
 export function setTokens(access: string | null, refresh?: string | null): void {
   accessToken = access;
   if (access) localStorage.setItem(ACCESS_KEY, access);

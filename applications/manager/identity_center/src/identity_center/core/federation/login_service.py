@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import re
 import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -116,6 +117,13 @@ class IdentityFederationService:
         prefix = str(self._settings.federation_public_path_prefix or "").strip()
         prefix = prefix.rstrip("/")
         return f"{prefix}{normalized_path}" if prefix else normalized_path
+
+    def login_path(self, connection_id: str) -> str:
+        if self.surface(connection_id) == "user":
+            public_prefix = self.public_path("/").rstrip("/")
+            if re.fullmatch(r"(?:/[A-Za-z0-9_-][A-Za-z0-9._~-]*)+/idp", public_prefix):
+                return f"{public_prefix.removesuffix('/idp')}/auth"
+        return "/auth"
 
     def _registration(self, connection_id: str) -> ConfiguredFederation:
         registration = self._connections.get(connection_id)
@@ -251,7 +259,7 @@ class IdentityFederationService:
         coordinator = self._require_coordinator(connection_id)
         if self.requires_browser_binding(connection_id) and not browser_binding:
             raise FederationError("OIDC login must be bound to a browser")
-        safe_return_to = _validate_return_to(return_to)
+        safe_return_to = _validate_return_to(return_to, self.login_path(connection_id))
         request_id = secrets.token_urlsafe(32)
         now = utc_now()
         async with self._system_context.transaction() as session:
@@ -572,7 +580,7 @@ class IdentityFederationService:
                     )
 
 
-def _validate_return_to(value: str) -> str:
+def _validate_return_to(value: str, login_path: str = "/auth") -> str:
     normalized = str(value or "/auth").strip() or "/auth"
     parsed = urlsplit(normalized)
     has_external_origin = bool(parsed.scheme or parsed.netloc)
@@ -580,10 +588,10 @@ def _validate_return_to(value: str) -> str:
     invalid_target = len(normalized) > 512 or has_external_origin or parsed.fragment
     if (
         invalid_target
-        or parsed.path != "/auth"
+        or parsed.path not in ("/auth", login_path)
         or any(key in reserved for key, _ in parse_qsl(parsed.query))
     ):
-        raise FederationError("federation return_to must be the local /auth route")
+        raise FederationError("federation return_to must be a local login route")
     return urlunsplit(("", "", parsed.path, parsed.query, ""))
 
 
