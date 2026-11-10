@@ -127,7 +127,7 @@ async def _registration_service():
         raise RegistrationUnavailable(str(exc)) from None
 
 
-def agent_template_out(row: Any) -> dict[str, Any]:
+def agent_template_out(row: Any, *, reference_count: int = 0) -> dict[str, Any]:
     tags = _g(row, "agent_tags")
     if tags is not None and not isinstance(tags, list):
         tags = list(tags) if tags else None
@@ -142,6 +142,7 @@ def agent_template_out(row: Any) -> dict[str, Any]:
         "template_ref": read_template_ref_from_row(row),
         "enabled": bool(_g(row, "enabled", True)),
         "data": public_agent_template_data(data),
+        "reference_count": reference_count,
         "created_at": iso_datetime(_g(row, "created_at")),
         "updated_at": iso_datetime(_g(row, "updated_at")),
     }
@@ -153,10 +154,28 @@ def agent_template_out(row: Any) -> dict[str, Any]:
 
 def row_to_sync(row: Any) -> dict[str, Any]:
     payload = agent_template_out(row)
-    for key in ("id", "created_at", "updated_at", "keycloak_client"):
+    for key in ("id", "created_at", "updated_at", "keycloak_client", "reference_count"):
         payload.pop(key, None)
     payload["data"] = agent_template_gateway_data(_g(row, "data"))
     return payload
+
+
+async def _reference_counts(handler: DBHandler) -> dict[str, int]:
+    """批量取各 Agent 模板的 Agent 引用数（局部导入避免循环依赖）。"""
+    from manager_server.core.template.push_template_to_gateway import (
+        count_agent_reference_counts,
+    )
+
+    return await count_agent_reference_counts(handler)
+
+
+async def _reference_count(handler: DBHandler, template_id: str) -> int:
+    """取单个 Agent 模板的 Agent 引用数（局部导入避免循环依赖）。"""
+    from manager_server.core.template.push_template_to_gateway import (
+        count_agent_references_for_template,
+    )
+
+    return await count_agent_references_for_template(handler, template_id)
 
 
 class AgentTemplateService:
@@ -185,13 +204,17 @@ class AgentTemplateService:
         order_by = resolve_order_by(
             query.sort_by, query.sort_order, allowed_sort_fields=_ALLOWED_SORT_FIELDS
         )
+        reference_counts = await _reference_counts(self._h)
         search_query = (query.search or "").strip()
         if search_query:
             rows = await self._h.list_records(
                 _AGENT_TPL, filters, limit=10_000, offset=0, order_by=order_by
             )
             items = [
-                agent_template_out(row)
+                agent_template_out(
+                    row,
+                    reference_count=reference_counts.get(str(row.template_id), 0),
+                )
                 for row in rows
                 if _matches_search(row, search_query)
             ]
@@ -206,7 +229,13 @@ class AgentTemplateService:
         )
         total = await self._h.count_records(_AGENT_TPL, filters)
         return {
-            "items": [agent_template_out(r) for r in rows],
+            "items": [
+                agent_template_out(
+                    r,
+                    reference_count=reference_counts.get(str(r.template_id), 0),
+                )
+                for r in rows
+            ],
             "total": total,
             "page": page,
             "page_size": page_size,
@@ -216,7 +245,10 @@ class AgentTemplateService:
         row = await self._h.get(_AGENT_TPL, {"template_id": template_id})
         if row is None:
             return None
-        return agent_template_out(row)
+        return agent_template_out(
+            row,
+            reference_count=await _reference_count(self._h, template_id),
+        )
 
     async def create(self, body: AgentTemplateCreateBody) -> dict[str, Any]:
         await self._validate_a2a_policy_ref(body.template_ref)
@@ -407,16 +439,27 @@ class AgentTemplateService:
                 if binding:
                     updates["data"][MANAGED_AGENT_CLIENT_KEY] = binding
             if not updates:
-                return agent_template_out(operation.row)
+                return agent_template_out(
+                    operation.row,
+                    reference_count=await _reference_count(self._h, template_id),
+                )
 
             await update_template_on_referencing_gateways(self._h, AGENT_TEMPLATES_KIND, template_id, updates)
             await self._finish_template(operation, changes=updates)
         return await self.get(template_id)
 
     async def delete(self, template_id: str) -> bool:
+        """删除 Agent 模板：仍被实例上的 Agent 引用时拒绝删除。"""
+        from manager_server.core.template.push_template_to_gateway import (
+            assert_agent_template_deletable,
+        )
+
         async with self._reserve_template(template_id) as operation:
             if operation is None:
                 return False
+            # 在预留锁内校验，尽量缩小与“新增 Agent 授权”的竞态窗口
+            await assert_agent_template_deletable(self._h, template_id)
+
             binding = (operation.data or {}).get(MANAGED_AGENT_CLIENT_KEY)
             if binding:
                 service = await _registration_service()

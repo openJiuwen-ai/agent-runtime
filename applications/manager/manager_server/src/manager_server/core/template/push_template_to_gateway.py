@@ -328,7 +328,12 @@ async def _count_slot_pairs_from_agent_resources(
     handler: DBHandler,
     jiuwenclaw_id: str,
 ) -> Counter[tuple[str, str]]:
-    """每个 ``resource_id`` 对其 ``agent_template.template_ref`` 贡献一组 slot 引用。"""
+    """每个 Agent 模板对其 ``agent_template.template_ref`` 贡献一组 slot 引用。
+
+    计数单位是 **Agent 模板**，与增量路径 ``_apply_slot_pair_delta`` 保持一致：同一模板
+    在本实例绑定多个 Agent 资源也只计 1。否则 rebuild 会把 ``ref_count`` 写成资源数，
+    后续逐个删除资源时每次只 -1，残留计数会让被引用模板永远删不掉。
+    """
     counter: Counter[tuple[str, str]] = Counter()
     rows = await handler.list_records(
         INSTANCE_AGENT_RESOURCE_TABLE_DEF.table_name,
@@ -336,16 +341,12 @@ async def _count_slot_pairs_from_agent_resources(
         limit=_LIST_ALL_CAP,
         offset=0,
     )
-    seen: set[tuple[str, str]] = set()
+    seen_templates: set[str] = set()
     for row in rows:
         template_id = str(getattr(row, "ref_template_id", "") or "").strip()
-        resource_id = str(getattr(row, "resource_id", "") or "").strip()
-        if not template_id or not resource_id:
+        if not template_id or template_id in seen_templates:
             continue
-        dedupe_key = (template_id, resource_id)
-        if dedupe_key in seen:
-            continue
-        seen.add(dedupe_key)
+        seen_templates.add(template_id)
         tpl_row = await handler.get(
             AGENT_TEMPLATE_TABLE_DEF.table_name,
             {"template_id": template_id},
@@ -1307,12 +1308,54 @@ async def assert_template_deletable(
         )
 
 
+async def count_agent_references_for_template(handler: DBHandler, template_id: str) -> int:
+    """统计仍绑定指定 Agent 模板的 Agent 数（distinct ``(jiuwenclaw_id, resource_id)``）。"""
+    return await _count_agent_template_resource_references(handler, template_id)
+
+
+async def count_agent_reference_counts(handler: DBHandler) -> dict[str, int]:
+    """批量统计各 Agent 模板的 Agent 引用数，供列表页展示与前端禁用删除按钮。"""
+    counts: dict[str, int] = {}
+    seen: set[tuple[str, str, str]] = set()
+    rows = await handler.list_records(
+        INSTANCE_AGENT_RESOURCE_TABLE_DEF.table_name,
+        {},
+        limit=_LIST_ALL_CAP,
+        offset=0,
+    )
+    for row in rows:
+        tid = str(getattr(row, "ref_template_id", "") or "").strip()
+        jid = str(getattr(row, "jiuwenclaw_id", "") or "").strip()
+        rid = str(getattr(row, "resource_id", "") or "").strip()
+        if not tid or not jid or not rid:
+            continue
+        key = (tid, jid, rid)
+        if key in seen:
+            continue
+        seen.add(key)
+        counts[tid] = counts.get(tid, 0) + 1
+    return counts
+
+
+async def assert_agent_template_deletable(handler: DBHandler, template_id: str) -> None:
+    """删除 Agent 模板前校验：仍被实例上的 Agent 引用时拒绝删除。"""
+    ref_count = await count_agent_references_for_template(handler, template_id)
+    if ref_count > 0:
+        raise ValueError(
+            f"cannot delete template: {ref_count} agent reference(s) exist, "
+            "remove references from agent first"
+        )
+
+
 __all__ = (
     "AGENT_TEMPLATES_KIND",
     "ORDINARY_TEMPLATE_KIND_ORDER",
     "TEMPLATE_KIND_ORDER",
     "TEMPLATE_KIND_SPECS",
+    "assert_agent_template_deletable",
     "assert_template_deletable",
+    "count_agent_reference_counts",
+    "count_agent_references_for_template",
     "count_agent_template_reference_counts",
     "count_config_effective_policy_references_for_template",
     "delete_agent_template_on_gateway",

@@ -1172,7 +1172,7 @@
       "savedHint": "The template is saved. Retrying uses this same template.",
       "unconfigured": "Keycloak registration is unavailable. Contact your administrator.",
       "boundHint": "Registration is complete and the Client ID is locked.",
-      "deleteConfirm": "Delete template “{{name}}”? This removes its permissions on all instances and deletes the bound Keycloak client “{{clientId}}”."
+      "deleteConfirm": "Delete template “{{name}}”? A template still referenced by agents cannot be deleted. Deleting also removes the bound Keycloak client “{{clientId}}”."
     },
     "title": "Agent Templates",
     "subtitle": "Maintain reusable Agent templates for instance binding",
@@ -1189,8 +1189,11 @@
     "customConfigInvalid": "Enter a JSON array whose elements are objects.",
     "searchPlaceholder": "Search template ID, name, description, or tags",
     "updatedAt": "UPDATED AT",
+    "referenceCount": "AGENT REFS",
+    "referenceHint": "How many agents currently reference this template; a referenced template cannot be deleted.",
+    "deleteBlockedHint": "Still referenced by {{count}} agent(s). Remove them from the cluster first.",
     "fieldRequired": "Please fill in {{field}}",
-    "deleteConfirm": "Delete agent template \"{{name}}\"? Instance grants will also be removed."
+    "deleteConfirm": "Delete agent template \"{{name}}\"? A template still referenced by agents cannot be deleted; remove those agents from the cluster first."
   },
   "templateRefEditor": {},
   "containerTemplate": {
