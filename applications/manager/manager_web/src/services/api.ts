@@ -505,7 +505,7 @@ export interface PermissionDefinition {
   description: string | null;
   resource_type: string;
   action: string;
-  scope: 'admin' | 'org' | 'user';
+  scope: string;
   enabled: boolean;
 }
 
@@ -513,7 +513,7 @@ export interface AuthzRole {
   role_id: string;
   name: string;
   description: string | null;
-  scope: 'admin' | 'org' | 'user';
+  scope: string;
   is_system: boolean;
   enabled: boolean;
   permission_ids: string[];
@@ -538,14 +538,14 @@ export interface AuthzRoleUser {
 export const AuthzApi = {
   permissions: (params?: {
     enabled?: boolean;
-    scope?: 'admin' | 'org' | 'user';
+    scope?: 'admin' | 'user';
     search?: string;
   }) => http<{ items: PermissionDefinition[] }>('/v1/authz/permissions', { query: params }),
   roles: (params?: {
     page?: number;
     page_size?: number;
     enabled?: boolean;
-    scope?: 'admin' | 'org' | 'user';
+    scope?: 'admin' | 'user';
     search?: string;
     sort_by?: 'name' | 'description' | 'updated_at' | 'role_id';
     sort_order?: 'asc' | 'desc';
@@ -556,7 +556,7 @@ export const AuthzApi = {
     role_id: string;
     name: string;
     description?: string | null;
-    scope: 'admin' | 'org' | 'user';
+    scope: 'admin' | 'user';
     permission_ids: string[];
   }) => http<AuthzRole>('/v1/authz/roles', { method: 'POST', body }),
   updateRole: (
@@ -564,7 +564,7 @@ export const AuthzApi = {
     body: {
       name?: string;
       description?: string | null;
-      scope?: 'admin' | 'org' | 'user';
+      scope?: 'admin' | 'user';
       enabled?: boolean;
       permission_ids?: string[];
     },

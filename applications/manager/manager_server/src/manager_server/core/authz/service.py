@@ -39,7 +39,7 @@ _DEFAULT_ROLE_USER_ORDER_BY: list[tuple[str, bool]] = [("user_id", False)]
 _log = get_logger(__name__)
 
 PLATFORM_ADMIN_ROLE_ID = "platform_admin"
-VALID_SCOPES = frozenset({"admin", "org", "user"})
+VALID_SCOPES = frozenset({"admin", "user"})
 _ROLE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 PERMISSION_SEEDS: tuple[dict[str, str], ...] = (

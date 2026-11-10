@@ -614,7 +614,7 @@
     "apiBase": "API Base",
     "apiKey": "API Key",
     "modelId": "Model ID",
-    "modelProvider": "Provider",
+    "modelProvider": "Protocol",
     "parameters": "Model Parameters",
     "headers": "Headers",
     "headersHint": "Sent as custom request headers when calling the LLM",
@@ -625,7 +625,7 @@
     "enableFunctionCalling": "Function Calling",
     "verifySsl": "Verify SSL",
     "filterType": "Filter by type",
-    "searchPlaceholder": "Search template ID, name, description, provider, model ID, type, or API base",
+    "searchPlaceholder": "Search template ID, name, description, protocol, model ID, type, or API base",
     "referenceCount": "References",
     "referenceHint": "Click to view agent templates referencing this template",
     "updatedAt": "UPDATED AT",
@@ -1387,7 +1387,6 @@
     },
     "scopes": {
       "admin": "admin",
-      "org": "org",
       "user": "user"
     }
   },
