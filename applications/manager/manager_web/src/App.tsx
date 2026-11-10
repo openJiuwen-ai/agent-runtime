@@ -12,6 +12,8 @@ import { OverviewPage } from './pages/OverviewPage';
 import { DocsPage } from './pages/DocsPage';
 import { InstanceListPage } from './pages/instance/InstanceListPage';
 import { InstanceDetailPage } from './pages/instance/InstanceDetailPage';
+import { DeploymentListPage } from './pages/deployment/DeploymentListPage';
+import { DeploymentDetailPage } from './pages/deployment/DeploymentDetailPage';
 import { ModelTemplatesPage } from './pages/templates/ModelTemplatesPage';
 import { EmbeddingTemplatesPage } from './pages/templates/EmbeddingTemplatesPage';
 import { ExtensionTemplatesPage } from './pages/templates/ExtensionTemplatesPage';
@@ -266,6 +268,13 @@ function RouteView() {
   const detail = matchRoute('/instances/:id', path);
   if (detail) {
     return <InstanceDetailPage instanceId={detail.id} tab="access" />;
+  }
+  if (path === '/deployments') {
+    return <DeploymentListPage />;
+  }
+  const deploymentDetail = matchRoute('/deployments/:id', path);
+  if (deploymentDetail) {
+    return <DeploymentDetailPage deploymentId={deploymentDetail.id} />;
   }
   return <OverviewPage />;
 }

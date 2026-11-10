@@ -127,6 +127,49 @@ kubectl get pods   # 确认登录成功
 ./kubectl.sh -n <ns> -f xxx.yaml         # yaml 未显式写 namespace 时的兜底
 ```
 
+### 3.3 程序化调用（管理面「直接启动部署」）
+
+deploy.sh 可被程序（manager-server 部署模块）以子进程方式调用。工具树可只读共享，
+每任务经环境变量重定向各自的输出目录，互不干扰：
+
+| 环境变量 | 作用 | 默认 |
+|---|---|---|
+| `DEPLOY_ENV_FILE` | `.env.custom` 路径（每任务独立生成） | `<工具树>/.env.custom` |
+| `DEPLOY_CONF_DIR` | 渲染产物 conf/ 目录 | `<工具树>/conf` |
+| `DEPLOY_TEMPLATE_DIR` | 模板目录 | `<工具树>/templates` |
+| `DEPLOY_TMP_DIR` | kubectl 临时目录（kapply-*） | 工具树 |
+| `DEPLOY_JSON_PROGRESS` | `1` 时输出结构化进度行 | 不输出 |
+| `KUBECONFIG` | 集群凭证（k8s 形态经 kubectl 隐式解析） | kubectl 默认解析 |
+
+结构化进度以 `@@DEPLOY_JSON@@` 前缀单行输出到 stdout（其余行为人读日志，含 ANSI 色码）：
+
+```
+@@DEPLOY_JSON@@{"event":"phase","phase":"validate","state":"start"}
+@@DEPLOY_JSON@@{"event":"phase","phase":"render","state":"ok"}
+@@DEPLOY_JSON@@{"event":"component","component":"redis","index":"2","total":"5","state":"start"}
+@@DEPLOY_JSON@@{"event":"component","component":"redis","index":"2","total":"5","state":"ok"}
+@@DEPLOY_JSON@@{"event":"summary","status":"success","elapsed":"210"}
+```
+
+失败时 `error()` 统一发出 fail 事件（组件级优先，其次阶段级）与 `summary status=failed`
+终态行后退出码 1。`TOOL_VERSION` 文件为工具版本戳（随工具树分发，供调用方记录）。
+
+程序化部署的集群凭证注入见 `.env.example` 的 `MANAGER_DEPLOY_KUBECONFIG_SECRET`
+（manager-server 模板渲染后处理，留空不生效）。运维要点：
+
+```bash
+# 预建 kubeconfig Secret（manager 与产品面同集群时用集群管理员 kubeconfig）
+kubectl -n <manager-ns> create secret generic manager-deploy-kubeconfig \
+  --from-file=kubeconfig=/root/.kube/config
+
+# .env.custom 启用注入后重新渲染并生效（manager up 或 up --render-only + apply）
+MANAGER_DEPLOY_KUBECONFIG_SECRET="manager-deploy-kubeconfig"
+```
+
+凭证边界：manager-server 的 ServiceAccount 保持**零 k8s RBAC**；kubeconfig 只读挂载
+进容器、仅注入部署子进程环境（`KUBECONFIG`），管理面 Web 服务本身不经手集群凭证。
+轮换 = 重建 Secret 后滚动重启 manager-server。
+
 
 ## 4. 访问服务
 

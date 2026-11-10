@@ -73,6 +73,7 @@
     "platform": "Console",
     "overview": "Overview",
     "instances": "Cluster Management",
+    "deployments": "Deployments",
     "config": "Workspace",
     "agentResources": "Agent Resources",
     "runtimeResources": "Runtime Resources",
@@ -964,6 +965,95 @@
         "user_id": "User",
         "bot_id": "Agent"
       }
+    }
+  },
+  "deployments": {
+    "title": "Deployments",
+    "subtitle": "Deploy product components into a target namespace from the management plane",
+    "create": "New Deployment",
+    "createTitle": "Create Deployment Task",
+    "createSuccess": "Deployment task created",
+    "deployDisabled": "Deployment is disabled by the administrator",
+    "unavailable": "The deployment toolkit is unavailable; only historical tasks can be viewed",
+    "defaultsLoadFailed": "Failed to load deployment defaults. Advanced overrides are unavailable when creating.",
+    "searchPlaceholder": "Search task ID, namespace, or instance name",
+    "cancelConfirm": "Cancel deployment task {{id}}? The running deployment process will be terminated.",
+    "cancelSuccess": "Cancellation requested",
+    "cancelFailed": "Cancel failed: {{detail}}",
+    "cancelRequested": "Cancelling",
+    "columns": {
+      "taskId": "Task ID",
+      "instanceName": "Instance Name",
+      "deployMode": "Deploy Mode",
+      "phase": "Phase",
+      "createdAt": "Created At"
+    },
+    "status": {
+      "pending": "Pending",
+      "running": "Running",
+      "success": "Succeeded",
+      "failed": "Failed",
+      "cancelled": "Cancelled",
+      "interrupted": "Interrupted"
+    },
+    "phase": {
+      "pending": "Pending",
+      "validate": "Validate",
+      "render": "Render",
+      "preflight": "Preflight",
+      "apply": "Apply",
+      "finished": "Finished"
+    },
+    "mode": {
+      "full": "Full",
+      "routing": "Routing",
+      "fullHint": "Do not pre-start AgentServer; it is created on demand after configuration delivery",
+      "routingHint": "Deploy a standalone AgentServer and include it in routing"
+    },
+    "form": {
+      "instanceName": "Instance Name",
+      "instanceNameHint": "Instance name auto-registered after a successful deployment",
+      "namespaceHint": "Target Kubernetes namespace for the deployment",
+      "deployMode": "Deploy Mode",
+      "waitTimeout": "Wait Budget (seconds)",
+      "waitTimeoutPlaceholder": "Use the toolkit default",
+      "waitTimeoutHint": "Pod readiness wait budget, 60-14400 seconds",
+      "waitTimeoutInvalid": "The wait budget must be an integer between 60 and 14400",
+      "advanced": "Advanced Overrides",
+      "imageTag": "Bulk Image Tag",
+      "imageTagPlaceholder": "e.g. 0.0.10",
+      "imageTagHint": "Applied to all *_IMAGE keys as you type",
+      "envGroupImages": "Images",
+      "envGroupReplicas": "Replicas",
+      "envGroupOthers": "Others",
+      "envSensitivePlaceholder": "Leave empty to keep the default",
+      "envHint": "Only filled or changed keys are submitted; leave sensitive keys empty to keep saved defaults"
+    },
+    "detail": {
+      "toolVersion": "Tool Version",
+      "exitCode": "Exit Code",
+      "startedAt": "Started At",
+      "finishedAt": "Finished At",
+      "errorSummary": "Failure Summary",
+      "interruptedHint": "The task was interrupted (e.g. by a service restart). You may start a new deployment.",
+      "gotoInstance": "View Instance"
+    },
+    "progress": {
+      "title": "Progress",
+      "components": "Components",
+      "noComponents": "No component progress yet"
+    },
+    "logs": {
+      "title": "Deployment Logs",
+      "streaming": "Streaming",
+      "truncated": "Logs truncated",
+      "truncatedHint": "Early logs were truncated due to size limits. See the server for the full log.",
+      "followTail": "Follow tail",
+      "empty": "No logs yet",
+      "loadFailed": "Failed to load logs: {{detail}}"
+    },
+    "actions": {
+      "cancel": "Cancel"
     }
   },
   "errors": {

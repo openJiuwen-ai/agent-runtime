@@ -73,6 +73,7 @@
     "platform": "控制台",
     "overview": "总览",
     "instances": "集群管理",
+    "deployments": "启动部署",
     "config": "工作台",
     "agentResources": "Agent资源",
     "runtimeResources": "运行时资源",
@@ -964,6 +965,95 @@
         "user_id": "用户",
         "bot_id": "Agent"
       }
+    }
+  },
+  "deployments": {
+    "title": "启动部署",
+    "subtitle": "从管理面一键部署产品组件到目标命名空间",
+    "create": "新建部署",
+    "createTitle": "新建部署任务",
+    "createSuccess": "部署任务已创建",
+    "deployDisabled": "部署功能已被管理员关闭",
+    "unavailable": "部署工具当前不可用，仅可查看历史任务",
+    "defaultsLoadFailed": "默认部署参数加载失败，创建时可暂不覆盖高级参数",
+    "searchPlaceholder": "搜索任务 ID、命名空间、实例名",
+    "cancelConfirm": "确认取消部署任务 {{id}}？正在运行的部署进程将被终止。",
+    "cancelSuccess": "已请求取消",
+    "cancelFailed": "取消失败：{{detail}}",
+    "cancelRequested": "取消中",
+    "columns": {
+      "taskId": "任务 ID",
+      "instanceName": "实例名",
+      "deployMode": "部署模式",
+      "phase": "阶段",
+      "createdAt": "创建时间"
+    },
+    "status": {
+      "pending": "排队中",
+      "running": "运行中",
+      "success": "已成功",
+      "failed": "已失败",
+      "cancelled": "已取消",
+      "interrupted": "已中断"
+    },
+    "phase": {
+      "pending": "等待中",
+      "validate": "校验",
+      "render": "渲染",
+      "preflight": "预检",
+      "apply": "部署",
+      "finished": "完成"
+    },
+    "mode": {
+      "full": "完整 (full)",
+      "routing": "路由 (routing)",
+      "fullHint": "不预启动 AgentServer，由管理面下发配置后按需拉起",
+      "routingHint": "部署独立 AgentServer 并纳入路由"
+    },
+    "form": {
+      "instanceName": "实例名",
+      "instanceNameHint": "部署成功后自动注册的实例名称",
+      "namespaceHint": "部署目标 Kubernetes 命名空间",
+      "deployMode": "部署模式",
+      "waitTimeout": "等待预算（秒）",
+      "waitTimeoutPlaceholder": "默认使用工具预算",
+      "waitTimeoutHint": "Pod 就绪等待预算，范围 60–14400 秒",
+      "waitTimeoutInvalid": "等待预算须为 60–14400 之间的整数",
+      "advanced": "高级参数覆盖",
+      "imageTag": "镜像 Tag 批量修改",
+      "imageTagPlaceholder": "如 0.0.10",
+      "imageTagHint": "输入后应用到全部 *_IMAGE 镜像键",
+      "envGroupImages": "镜像",
+      "envGroupReplicas": "副本",
+      "envGroupOthers": "其他",
+      "envSensitivePlaceholder": "留空则沿用默认值",
+      "envHint": "仅提交填写或修改的键；密码类键留空表示沿用已保存的默认值"
+    },
+    "detail": {
+      "toolVersion": "工具版本",
+      "exitCode": "退出码",
+      "startedAt": "开始时间",
+      "finishedAt": "结束时间",
+      "errorSummary": "失败原因",
+      "interruptedHint": "任务因服务重启等原因被中断，可重新发起部署",
+      "gotoInstance": "查看实例"
+    },
+    "progress": {
+      "title": "部署进度",
+      "components": "组件进度",
+      "noComponents": "暂无组件进度"
+    },
+    "logs": {
+      "title": "部署日志",
+      "streaming": "实时跟踪中",
+      "truncated": "日志已截断",
+      "truncatedHint": "早期日志因长度限制被截断，完整日志请查看服务端",
+      "followTail": "回到底部",
+      "empty": "暂无日志",
+      "loadFailed": "日志加载失败：{{detail}}"
+    },
+    "actions": {
+      "cancel": "取消"
     }
   },
   "errors": {

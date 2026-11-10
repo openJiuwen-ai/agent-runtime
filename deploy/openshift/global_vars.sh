@@ -5,9 +5,11 @@ _DEPLOY_GLOBAL_VARS_SH=1
 # global_vars.sh —— 全局变量与默认配置
 # SCRIPT_DIR 由入口 deploy.sh 定义；独立 source 时自行推导
 SCRIPT_DIR="${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
-CONF_DIR="$SCRIPT_DIR/conf"
-TEMPLATE_DIR="$SCRIPT_DIR/templates"
-CUSTOM_ENV_FILE="$SCRIPT_DIR/.env.custom"
+# 目录可经进程环境变量重定向（程序化调用场景：共享只读工具树 + 每任务独立的
+# conf/临时目录/.env.custom，见 README「程序化调用」一节）；命令行交互使用无需设置
+CONF_DIR="${DEPLOY_CONF_DIR:-$SCRIPT_DIR/conf}"
+TEMPLATE_DIR="${DEPLOY_TEMPLATE_DIR:-$SCRIPT_DIR/templates}"
+CUSTOM_ENV_FILE="${DEPLOY_ENV_FILE:-$SCRIPT_DIR/.env.custom}"
 
 # ---------- 组件清单 ----------
 
@@ -179,6 +181,12 @@ declare -A DEPLOY_VARS=(
     ["IDENTITY_FEDERATION_CONFIG_FILE"]=""
     ["MANAGER_AGENT_CLIENT_REGISTRATION_ENABLED"]="false"
     ["MANAGER_AGENT_CLIENT_REGISTRATION_CONFIG_FILE"]=""
+    # manager-server 程序化部署凭证：kubeconfig 所在 Secret 名（k8s 形态）。
+    # 留空不注入（默认，行为不变）；非空时渲染后处理向 manager-server.yaml 注入
+    # Secret 卷（只读挂 /etc/manager/deploy-kubeconfig）+ env MANAGER_DEPLOY_KUBECONFIG，
+    # 供 manager-server「管理面启动部署」功能以子进程代跑 deploy.sh（KUBECONFIG 只传子进程，
+    # manager-server SA 自身保持零 k8s RBAC）。Secret 由运维预建，键名 kubeconfig
+    ["MANAGER_DEPLOY_KUBECONFIG_SECRET"]=""
     # 用户空间配额特性开关（Manager / Gateway / AgentServer / User Web / Manager Web 共用）
     ["WORKSPACE_QUOTA_ENABLED"]="false"
     # dev 模式：hostPath 挂载宿主机代码调试（MODE=dev 仅 k8s 形态支持；Pod 固定到代码所在节点）

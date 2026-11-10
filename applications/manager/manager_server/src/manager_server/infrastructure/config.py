@@ -134,6 +134,38 @@ class Settings(BaseSettings):
         default=30.0, validation_alias="TEAM_SKILLS_HUB_TIMEOUT"
     )
 
+    # ---- 管理面启动部署（manager-server 以子进程代跑 deploy.sh）----
+    # 总开关（默认开；工具树/kubeconfig 不可用时创建任务返回 503）
+    deploy_enabled: bool = Field(
+        default=True, validation_alias="MANAGER_DEPLOY_ENABLED"
+    )
+    # deploy/openshift 工具树：留空自动探测（镜像内 /app/agent-runtime/deploy/openshift
+    # → 源码仓 deploy/openshift）
+    deploy_tool_dir: str = Field(default="", validation_alias="MANAGER_DEPLOY_TOOL_DIR")
+    # 部署子进程用的 kubeconfig（k8s 形态 kubectl 隐式解析；随 Secret 卷注入）
+    deploy_kubeconfig: str = Field(
+        default="", validation_alias="MANAGER_DEPLOY_KUBECONFIG"
+    )
+    # 全局并发部署任务数
+    deploy_max_concurrent: int = Field(
+        default=2, validation_alias="MANAGER_DEPLOY_MAX_CONCURRENT"
+    )
+    # 单任务预算（秒）：超时 SIGTERM 进程组，任务置 failed
+    deploy_task_timeout_seconds: int = Field(
+        default=3600, validation_alias="MANAGER_DEPLOY_TASK_TIMEOUT_SECONDS"
+    )
+    # 任务日志落库上限（行数 / 字节数，超限截断并写标记行）
+    deploy_log_max_lines: int = Field(
+        default=4000, validation_alias="MANAGER_DEPLOY_LOG_MAX_LINES"
+    )
+    deploy_log_max_bytes: int = Field(
+        default=524288, validation_alias="MANAGER_DEPLOY_LOG_MAX_BYTES"
+    )
+    # running 任务心跳超时（秒）：超过判定孤儿（owner 副本死亡）置 interrupted
+    deploy_heartbeat_stale_seconds: int = Field(
+        default=180, validation_alias="MANAGER_DEPLOY_HEARTBEAT_STALE_SECONDS"
+    )
+
     @property
     def host(self) -> str:
         return self.rest_host

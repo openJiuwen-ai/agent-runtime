@@ -33,7 +33,7 @@ _DEPLOY_KUBECTL_SH=1
 # CLUSTER_TYPE=k8s：kubectl + kubeconfig 认证，--server/--token 与 oc 逻辑不生效
 
 # 本脚本所在目录
-_KCTL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_KCTL_DIR="${DEPLOY_TMP_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 
 source "$_KCTL_DIR/common.sh"
 source "$_KCTL_DIR/envfile_handler.sh"

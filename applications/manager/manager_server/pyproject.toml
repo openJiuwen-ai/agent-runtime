@@ -25,6 +25,8 @@ dependencies = [
     "openjiuwen-runtime-foundation",
     "websockets>=12.0,<16",
     "asyncpg>=0.29",
+    # 管理面启动部署：预建产品库直连共享 MySQL/MariaDB（foundation 传递依赖显式化）
+    "aiomysql>=0.2",
     "cryptography>=42.0",
     "croniter>=2.0",
     "PyJWT>=2.8",
