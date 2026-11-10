@@ -35,9 +35,11 @@ source "$SCRIPT_DIR/deploy_handler.sh"
 # ---------- Main ----------
 
 main() {
+  progress_json phase phase=validate state=start
   read_env_from_file "$CUSTOM_ENV_FILE" DEPLOY_VARS
   parse_args "$@"
   check_vars
+  progress_json phase phase=validate state=ok
   filter_targets_by_external_mode
   filter_targets_by_deploy_mode   # 三模式目标派生（up 专属；down 模式无关）
   KCTL_NS="${DEPLOY_VARS["NAMESPACE"]}"   # 全部组件的 namespace 由 .env.custom / -n 统一控制
@@ -45,8 +47,11 @@ main() {
   # --render-only：只渲染清单（纯本地 awk，不需要集群连接与 oc token）
   if [ "${DEPLOY_VARS["RENDER_ONLY"]}" = "true" ]; then
     info "--render-only：只渲染清单，不连接集群"
+    _CURRENT_PHASE=render; progress_json phase phase=render state=start
     render_templates
     success "渲染完成 → $CONF_DIR"
+    progress_json phase phase=render state=ok
+    progress_json summary status=success elapsed="$SECONDS"
     return 0
   fi
 
@@ -59,9 +64,16 @@ main() {
     resolve_builtin_svc_locations   # 内置基础服务实例定位（本 ns → default），渲染前执行
     resolve_targets        # 可拉起依赖（redis）集群缺失时自动纳入
     info "部署目标: ${TARGETS[*]}"
+    _CURRENT_PHASE=render; progress_json phase phase=render state=start
     render_templates
+    progress_json phase phase=render state=ok
+    _CURRENT_PHASE=preflight; progress_json phase phase=preflight state=start
     preflight
+    progress_json phase phase=preflight state=ok
+    _CURRENT_PHASE=apply; progress_json phase phase=apply state=start
     run_phase apply "部署" "${TARGETS[@]}"
+    progress_json phase phase=apply state=ok
+    progress_json summary status=success elapsed="$SECONDS"
   else
     # 卸载不渲染，直接消费 conf/ 现有清单（上次 up 渲染的部署时形态）：
     # 资源名与在役资源一致，模板漂移也不会漏删；conf/ 产物不被 down 覆盖。
@@ -96,7 +108,9 @@ main() {
     for ((i=${#TARGETS[@]}-1; i>=0; i--)); do reversed+=("${TARGETS[$i]}"); done
     warning "卸载将删除资源与数据（PVC 数据一并删除且不可恢复）"
     info "卸载目标（倒序）: ${reversed[*]}"
+    _CURRENT_PHASE=delete; progress_json phase phase=delete state=start
     KCTL_IGNORE_NOT_FOUND=1 run_phase delete "卸载" "${reversed[@]}"
+    progress_json phase phase=delete state=ok
     gc_orphan_shared_deps   # secret/redis 已无存活依赖方时自动回收
     # full 模式：runtime 创建的 AgentServer 是裸 Pod（无 owner 控制器），runtime
     # 组件卸载后无人回收——按标签兜底清理。仅 full 生效：routing/off 的
@@ -105,6 +119,7 @@ main() {
       && in_array runtime "${TARGETS[@]}"; then
       kctl_delete_pods_by_label "$KCTL_NS" "jiuwenswarm-component=agentserver"
     fi
+    progress_json summary status=success elapsed="$SECONDS"
   fi
 }
 

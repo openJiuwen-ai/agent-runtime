@@ -404,6 +404,32 @@ apply_k8s_extras() { # $@=本次渲染的清单文件名
   done
 }
 
+# ---------- manager-server 部署凭证注入（管理面程序化部署） ----------
+
+# MANAGER_DEPLOY_KUBECONFIG_SECRET 非空时向 manager-server.yaml 的 Deployment 注入：
+#   pod 卷（引用该 Secret）+ 容器只读 subPath 挂载 /etc/manager/deploy-kubeconfig
+#   + env MANAGER_DEPLOY_KUBECONFIG（指向挂载路径）
+# 供 manager-server「管理面启动部署」功能以子进程代跑 deploy.sh：KUBECONFIG 仅注入部署
+# 子进程，manager-server SA 自身保持零 k8s RBAC。留空（默认）不做任何改写
+apply_manager_deploy_credentials() { # $@=本次渲染的清单文件名
+  local secret="${DEPLOY_VARS["MANAGER_DEPLOY_KUBECONFIG_SECRET"]}"
+  [ -n "$secret" ] || return 0
+  local f
+  for f in "$@"; do
+    case "${f%.yaml}" in manager-server) ;; *) continue;; esac
+    [ -f "$CONF_DIR/$f" ] || continue
+    yq -i '
+      (select(.kind == "Deployment").spec.template.spec.volumes) |=
+        ((. // []) + [{"name": "manager-deploy-kubeconfig", "secret": {"secretName": "'"$secret"'"}}])
+      | (select(.kind == "Deployment").spec.template.spec.containers[0].volumeMounts) |=
+        ((. // []) + [{"name": "manager-deploy-kubeconfig", "mountPath": "/etc/manager/deploy-kubeconfig", "subPath": "kubeconfig", "readOnly": true}])
+      | (select(.kind == "Deployment").spec.template.spec.containers[0].env) |=
+        ((. // []) + [{"name": "MANAGER_DEPLOY_KUBECONFIG", "value": "/etc/manager/deploy-kubeconfig"}])
+    ' "$CONF_DIR/$f" || error "manager-server 部署凭证注入失败: $f"
+    info "manager-server 部署凭证后处理：注入 kubeconfig Secret 卷（$secret）"
+  done
+}
+
 # ---------- agent-runtime / manager-server 三模式后处理 ----------
 
 # 按部署模式修整渲染产物：

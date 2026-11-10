@@ -298,9 +298,13 @@ deploy_component() { # $1=组件 $2=序号 $3=总数
     esac
   done
   info "[$idx/$n] $comp（yaml: $file_list）"
+  _CURRENT_COMPONENT="$comp"
+  progress_json component component="$comp" index="$idx" total="$n" state=start
   kctl_run apply "${paths[@]}"
   ensure_workload "${paths[@]}"
   wait_ready "$comp"
+  progress_json component component="$comp" index="$idx" total="$n" state=ok
+  _CURRENT_COMPONENT=""
 }
 
 # 组件是否仍被集群中存活的组件依赖——本次卸载目标中的不算（会一并删除）。
@@ -362,13 +366,19 @@ delete_component() { # $1=组件 $2=序号 $3=总数
     esac
   done
   info "[$idx/$n] $comp（yaml: $file_list）"
+  _CURRENT_COMPONENT="$comp"
+  progress_json component component="$comp" index="$idx" total="$n" state=start
   if has_alive_dependents "$comp"; then
     warning "$comp 仍被集群中存活组件依赖，跳过删除"
+    progress_json component component="$comp" index="$idx" total="$n" state=ok message="skipped"
+    _CURRENT_COMPONENT=""
     return 0
   fi
   kctl_run delete "${paths[@]}"
   DOWN_DELETED_ANY=1
   wait_deleted "$comp"
+  progress_json component component="$comp" index="$idx" total="$n" state=ok
+  _CURRENT_COMPONENT=""
 }
 
 # down 末尾回收孤儿共享依赖（secret/redis）：已无存活依赖方时自动卸载；
