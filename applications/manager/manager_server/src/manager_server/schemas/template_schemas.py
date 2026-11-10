@@ -254,7 +254,7 @@ class ModelTemplateCreateBody(SafeTextMixin):
     model_id: str = Field(..., min_length=1, max_length=128)
     model_provider: str = Field(..., min_length=1, max_length=64)
     parameters: dict[str, Any] | None = None
-    timeout: int = Field(default=60, ge=1)
+    timeout: int = Field(default=360, ge=1)
     retry_count: int = Field(default=3, ge=0)
     enable_streaming: bool = True
     enable_function_calling: bool = True
