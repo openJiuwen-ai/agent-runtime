@@ -31,7 +31,7 @@ MODEL_TEMPLATE_TABLE_DEF = TableDefinition(
         ColumnDefinition("model_id", "string", length=128, nullable=False),
         ColumnDefinition("model_provider", "string", length=64, nullable=False),
         ColumnDefinition("parameters", "json", nullable=True),
-        ColumnDefinition("timeout", "integer", nullable=False, default=60),
+        ColumnDefinition("timeout", "integer", nullable=False, default=360),
         ColumnDefinition("retry_count", "integer", nullable=False, default=3),
         ColumnDefinition("enable_streaming", "boolean", nullable=False, default=True),
         ColumnDefinition("enable_function_calling", "boolean", nullable=False, default=True),

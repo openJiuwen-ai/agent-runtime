@@ -105,7 +105,7 @@ const empty: FormState = {
   model_id: '',
   model_provider: 'OpenAI',
   parameters: '',
-  timeout: 60,
+  timeout: 360,
   retry_count: 3,
   enable_streaming: true,
   enable_function_calling: true,
