@@ -516,3 +516,34 @@ class TestStreamCtx:
         ctrl._process_chunk('{"data":{"node_type":"End"}}', ctx)
         events = ctrl._on_stream_end(ctx)
         assert events[0].execution_completed.result == "final"
+
+
+# ════════════════════════════════════════════════════════════════════
+# TLS 校验配置：默认开启，可通过环境变量 / 构造参数覆盖
+# ════════════════════════════════════════════════════════════════════
+
+
+class TestTlsVerify:
+    @staticmethod
+    def test_default_is_verification_enabled(monkeypatch):
+        monkeypatch.delenv("VERSATILE_PROXY_TLS_VERIFY", raising=False)
+        ctrl = VersatileController("http://h/")
+        assert ctrl._tls_verify is True
+
+    @staticmethod
+    def test_env_can_disable_verification(monkeypatch):
+        monkeypatch.setenv("VERSATILE_PROXY_TLS_VERIFY", "false")
+        ctrl = VersatileController("http://h/")
+        assert ctrl._tls_verify is False
+
+    @staticmethod
+    def test_env_accepts_ca_bundle_path(monkeypatch):
+        monkeypatch.setenv("VERSATILE_PROXY_TLS_VERIFY", "/etc/ssl/private-ca.pem")
+        ctrl = VersatileController("http://h/")
+        assert ctrl._tls_verify == "/etc/ssl/private-ca.pem"
+
+    @staticmethod
+    def test_explicit_argument_overrides_env(monkeypatch):
+        monkeypatch.setenv("VERSATILE_PROXY_TLS_VERIFY", "false")
+        ctrl = VersatileController("http://h/", tls_verify=True)
+        assert ctrl._tls_verify is True
