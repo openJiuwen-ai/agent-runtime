@@ -93,6 +93,22 @@ export function Sidebar() {
         </svg>
       ),
     },
+    {
+      key: 'deployments',
+      pathPrefix: '/deployments',
+      href: '/deployments',
+      label: t('nav.deployments'),
+      icon: (
+        <svg className="w-4 h-4 nav-item__icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+          {/* 火箭发射：管理面一键部署产品组件 */}
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="M15.59 14.37a6 6 0 01-5.84 7.38v-4.8m5.84-2.58a14.98 14.98 0 006.16-12.12A14.98 14.98 0 009.63 8.41m5.96 5.96a14.93 14.93 0 01-5.84 2.58m-.12-8.54a6 6 0 00-7.38 5.84h4.8m2.58-5.84a14.93 14.93 0 00-2.58 5.84m2.7 2.7c-.1.02-.21.04-.31.06a15.09 15.09 0 01-2.45-2.45c.02-.1.04-.21.06-.31m-2.24 2.39a4.49 4.49 0 00-1.76 4.3 4.49 4.49 0 004.31-1.75M16.5 9a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z"
+          />
+        </svg>
+      ),
+    },
   ];
 
   const agentManagementItem: NavItem = {

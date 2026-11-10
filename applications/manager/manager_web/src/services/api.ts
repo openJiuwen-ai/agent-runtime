@@ -62,6 +62,12 @@ import type {
   A2AOutboundTemplateUpdateBody,
   A2AAccessPolicyTemplate,
   A2AAccessPolicyTemplateBody,
+  CreateDeploymentBody,
+  DeploymentCreateResult,
+  DeploymentDefaults,
+  DeploymentLogChunk,
+  DeploymentTaskDetail,
+  DeploymentTaskSummary,
 } from '../types';
 
 // 平台管理 API(claw_manager) 与 认证/目录 API(独立认证服务) 两个反代前缀。
@@ -1459,6 +1465,44 @@ export const ImportExportApi = {
       reused_objects: number;
       pending_sync: string[];
     }>(`/v1/import-export/cluster/import?confirmation_token=${encodeURIComponent(confirmationToken)}`, file),
+};
+
+// ---------- Deployments ----------
+
+/** 管理面启动部署（/v1/deployments，admin 子树：产品面 up + 幂等重跑升级）。 */
+export const DeploymentApi = {
+  /** 默认部署参数（密码掩码）+ 工具版本 + 可用性。 */
+  getDefaults: () => http<DeploymentDefaults>('/v1/deployments/defaults'),
+  /** 更新默认部署参数（白名单键；值为 "******" 的键服务端忽略）。 */
+  updateDefaults: (body: { env: Record<string, string> }) =>
+    http<{ env: Record<string, string> }>('/v1/deployments/defaults', {
+      method: 'PUT',
+      body,
+    }),
+  /** 创建部署任务；400 校验 / 409 同命名空间活跃任务 / 503 功能不可用（detail 中文）。 */
+  create: (body: CreateDeploymentBody) =>
+    http<DeploymentCreateResult>('/v1/deployments/', { method: 'POST', body }),
+  list: (params?: {
+    page?: number;
+    page_size?: number;
+    status?: string;
+    namespace?: string;
+    /** 按任务 ID / 命名空间 / 实例名 / 状态模糊搜索 */
+    search?: string;
+  }) => http<PageResult<DeploymentTaskSummary>>('/v1/deployments/', { query: params }),
+  get: (id: string) =>
+    http<DeploymentTaskDetail>(`/v1/deployments/${encodeURIComponent(id)}`),
+  /** 增量拉取任务日志（after_seq 游标）。 */
+  listLogs: (id: string, afterSeq = 0, limit = 500) =>
+    http<DeploymentLogChunk>(`/v1/deployments/${encodeURIComponent(id)}/logs`, {
+      query: { after_seq: afterSeq, limit },
+    }),
+  /** 取消任务（running → 请求标记；终态冲突 409）。 */
+  cancel: (id: string) =>
+    http<{ deployment_id: string; status: string }>(
+      `/v1/deployments/${encodeURIComponent(id)}/cancel`,
+      { method: 'POST' },
+    ),
 };
 
 // ---------- Templates ----------
