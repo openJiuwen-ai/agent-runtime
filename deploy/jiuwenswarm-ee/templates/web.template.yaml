@@ -32,6 +32,12 @@ spec:
             - secretRef:
                 name: <<SECRET_CM_NAME>>
           env:
+            - name: USER_WEB_IDP_TARGET
+              value: "http://<<IDENTITY_NAME>>:<<IDENTITY_REST_PORT>>"
+            - name: USER_WEB_MANAGER_TARGET
+              value: "http://<<MANAGER_SERVER_NAME>>:<<MANAGER_REST_PORT>>"
+            - name: USER_WEB_RESOLVER
+              value: "<<MANAGER_WEB_RESOLVER>>"
             - name: WEB_HTTP_PORT
               value: "<<WEB_HTTP_PORT>>"
             - name: JIUWENSWARM_EDITION

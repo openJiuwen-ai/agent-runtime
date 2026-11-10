@@ -32,6 +32,7 @@ from identity_center.models.identity_models import (
     FEDERATION_ROLE_MAPPING_TABLE_DEF,
 )
 from identity_center.security.federation_code import open_token, seal_token
+from identity_center.security.tokens import LoginSurface
 
 from .connections import (
     ConfiguredFederation,
@@ -125,6 +126,14 @@ class IdentityFederationService:
     def flow(self, connection_id: str) -> str:
         return self._registration(connection_id).flow
 
+    def surface(self, connection_id: str) -> LoginSurface:
+        options = self._registration(connection_id).options
+        return options.surface if options else "user"
+
+    def require_surface(self, connection_id: str, surface: LoginSurface) -> None:
+        if self.surface(connection_id) != surface:
+            raise UnknownFederationConnection("unknown federation connection")
+
     async def browser_configuration(self, connection_id: str) -> dict[str, Any]:
         registration = self._registration(connection_id)
         options = registration.options
@@ -160,7 +169,7 @@ class IdentityFederationService:
             registration.connection, identity
         )
         result = await IdentityAuthService(self._handler).issue_for_user_id(
-            principal.user_id
+            principal.user_id, surface=self.surface(connection_id)
         )
         if isinstance(result, dict) and options.handoff_access_token:
             result["federation"] = {
@@ -337,11 +346,17 @@ class IdentityFederationService:
                     "token_type": "Bearer",
                 },
             }
-        code = await self._create_login_code(principal.user_id, data=code_data)
+        code = await self._create_login_code(
+            principal.user_id, data={**(code_data or {}), "surface": self.surface(connection_id)}
+        )
         return _append_query(return_to, {"federation_code": code}), principal
 
     async def exchange_code(
-        self, code: str, *, browser_binding: str | None = None
+        self,
+        code: str,
+        *,
+        surface: LoginSurface = "user",
+        browser_binding: str | None = None,
     ) -> dict[str, Any] | str:
         code_hash = _hash_code(code)
         async with self._system_context.transaction() as session:
@@ -354,6 +369,8 @@ class IdentityFederationService:
             if row is None:
                 return "invalid_federation_code"
             data = row.get("data") or {}
+            if data.get("surface") != surface:
+                return "invalid_federation_code"
             if data.get("browser_hash") and not _matches_browser(data, browser_binding):
                 return "invalid_federation_code"
             deleted = await session.execute(
@@ -366,7 +383,7 @@ class IdentityFederationService:
             if _as_utc(row["expires_at"]) <= utc_now():
                 return "invalid_federation_code"
             user_id = str(row["user_id"])
-        result = await IdentityAuthService(self._handler).issue_for_user_id(user_id)
+        result = await IdentityAuthService(self._handler).issue_for_user_id(user_id, surface=surface)
         if isinstance(result, dict) and data.get("federation"):
             federation = dict(data["federation"])
             federation["access_token"] = open_token(federation["access_token"], user_id)

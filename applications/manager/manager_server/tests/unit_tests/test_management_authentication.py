@@ -26,7 +26,7 @@ from manager_server.infrastructure.db import get_db_handler
 from manager_server.infrastructure.utils import utc_now
 from manager_server.models.authz_models import AUTHZ_ROLE_USER_TABLE_DEF
 from manager_server.models.table_init import init_all_tables
-from manager_server.routers.auth_guards import get_current_user, require_admin
+from manager_server.routers.auth_guards import get_current_user, require_admin, require_user_surface
 from manager_server.routers.register import router_register
 from manager_server.security import jwt_verify
 
@@ -47,6 +47,11 @@ USER_SCOPED = {
     ("GET", "/api/v1/user-console/approvals/candidates"),
     ("GET", "/api/v1/user-console/approvals/mine"),
     ("POST", "/api/v1/user-console/approvals/{order_num}/cancel"),
+    ("GET", "/api/v1/user-console/skills/upload-requests"),
+    ("POST", "/api/v1/user-console/skills/upload-requests"),
+    ("GET", "/api/v1/user-console/skills/upload-requests/active"),
+    ("GET", "/api/v1/user-console/skills/upload-requests/{order_num}"),
+    ("POST", "/api/v1/user-console/skills/upload-requests/{order_num}/install-result"),
 }
 LEGACY_MODULES = {
     "template_routers",
@@ -90,6 +95,8 @@ def assert_route_policy(app):
             assert get_current_user in dependencies, f"missing authentication: {key}"
             if key in USER_SCOPED:
                 assert require_admin not in dependencies and not permissions, key
+                if route.path.startswith("/api/v1/user-console/"):
+                    assert require_user_surface in dependencies, key
             elif route.endpoint.__module__.rsplit(".", 1)[-1] in LEGACY_MODULES:
                 assert require_admin in dependencies, f"missing legacy admin guard: {key}"
             else:
@@ -155,6 +162,7 @@ def token(key, subject="regular", **changes):
         "exp": now + 600,
         "iat": now,
         "typ": "access",
+        "surface": "manager",
         "groups": [],
         "is_admin": False,
     }
@@ -294,7 +302,7 @@ async def test_local_roles_not_identity_admin_and_permission_boundaries(secure_a
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("claim", ["exp", "iat", "sub", "iss", "aud", "typ"])
+@pytest.mark.parametrize("claim", ["exp", "iat", "sub", "iss", "aud", "typ", "surface"])
 async def test_required_access_claims(secure_api, signing_key, claim):
     client, _ = secure_api
     claims = jwt.decode(token(signing_key), options={"verify_signature": False})
@@ -400,3 +408,14 @@ async def test_cookie_or_identity_header_cannot_replace_bearer(secure_api, signi
         "/api/v1/instances/", headers={"X-User-Id": "admin", "X-Is-Admin": "true"}
     )
     assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_same_admin_identity_requires_the_correct_session_surface(secure_api, signing_key):
+    client, _ = secure_api
+    management = {"Authorization": "Bearer " + token(signing_key, "admin", surface="manager")}
+    user = {"Authorization": "Bearer " + token(signing_key, "admin", surface="user")}
+    assert (await client.get("/api/v1/instances/", headers=management)).status_code == 200
+    assert (await client.get("/api/v1/instances/", headers=user)).status_code == 403
+    assert (await client.get("/api/v1/user-console/agent-contexts", headers=management)).status_code == 403
+    assert (await client.get("/api/v1/user-console/agent-contexts", headers=user)).status_code == 200

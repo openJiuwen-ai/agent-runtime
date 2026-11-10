@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from identity_center.app import create_app
 from identity_center.infrastructure.config import settings
+from identity_center.security.tokens import decode_access_token
 
 
 def _query_value(url: str, name: str) -> str:
@@ -32,9 +33,13 @@ def test_federation_http_flow_issues_normal_identity_token(tmp_path, monkeypatch
                 {
                     "connection_id": "enterprise-demo",
                     "name": "Enterprise Demo SSO",
+                    "flow": "server_code",
                 }
             ]
         }
+
+        assert client.get("/v1/auth/federation/connections?surface=manager").json() == {"connections": []}
+        assert client.get("/v1/auth/federation/enterprise-demo/login?surface=manager").status_code == 404
 
         started = client.get(
             "/v1/auth/federation/enterprise-demo/login",
@@ -68,12 +73,26 @@ def test_federation_http_flow_issues_normal_identity_token(tmp_path, monkeypatch
         assert callback.status_code == 303
         code = _query_value(callback.headers["location"], "federation_code")
 
+        wrong_surface = client.post("/v1/auth/federation/exchange?surface=manager", json={"code": code})
+        assert wrong_surface.status_code == 401
+
         exchanged = client.post(
             "/v1/auth/federation/exchange",
             json={"code": code},
         )
         assert exchanged.status_code == 200
         token = exchanged.json()["access_token"]
+        assert decode_access_token(token)["surface"] == "user"
+        refresh_body = {"refresh_token": exchanged.json()["refresh_token"]}
+        assert client.post("/v1/auth/refresh?surface=manager", json=refresh_body).status_code == 401
+        rotated = client.post("/v1/auth/refresh?surface=user", json=refresh_body)
+        assert rotated.status_code == 200
+        assert decode_access_token(rotated.json()["access_token"])["surface"] == "user"
+        switch = client.post(
+            "/v1/auth/federation/user-switch", json={"challenge": "a" * 64},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert switch.status_code == 404
 
         replay = client.post(
             "/v1/auth/federation/exchange",
@@ -94,7 +113,7 @@ def test_federation_http_flow_issues_normal_identity_token(tmp_path, monkeypatch
             "/v1/users/",
             headers={"Authorization": f"Bearer {token}"},
         )
-        assert admin_api.status_code == 200
+        assert admin_api.status_code == 403
 
         started_again = client.get(
             "/v1/auth/federation/enterprise-demo/login",
@@ -135,9 +154,33 @@ def test_federation_http_flow_issues_normal_identity_token(tmp_path, monkeypatch
         assert downgraded_me.status_code == 200
         assert downgraded_me.json()["user_id"] == me.json()["user_id"]
         assert downgraded_me.json()["is_admin"] is False
-        # IdP 目录 API 不再用 is_admin 守卫；平台权限改由 Manager 角色控制
-        still_allowed = client.get(
+        # IdP 角色声明不会让用户面会话获得管理面目录访问权。
+        still_denied = client.get(
             "/v1/users/",
             headers={"Authorization": f"Bearer {downgraded_token}"},
         )
-        assert still_allowed.status_code == 200
+        assert still_denied.status_code == 403
+
+
+def test_directory_accepts_manager_session_without_manager_service(tmp_path, monkeypatch):
+    password = "directory-test-password"
+    monkeypatch.setattr(settings, "db_type", "sqlite")
+    monkeypatch.setattr(settings, "sqlite_path", str(tmp_path / "identity.db"))
+    monkeypatch.setattr(settings, "federation_demo_enabled", False)
+    monkeypatch.setattr(settings, "seed_admin", False)
+    monkeypatch.setattr(settings, "seed_user1", True)
+    monkeypatch.setattr(settings, "user1_password", password)
+
+    with TestClient(create_app()) as client:
+        login = client.post(
+            "/v1/auth/token",
+            data={"username": "user1", "password": password},
+            headers={"X-Jiuwen-Web-Surface": "manager"},
+        )
+        assert login.status_code == 200
+        token = login.json()["access_token"]
+        assert decode_access_token(token)["surface"] == "manager"
+
+        headers = {"Authorization": f"Bearer {token}", "X-Jiuwen-Web-Surface": "manager"}
+        assert client.get("/v1/users/", headers=headers).status_code == 200
+        assert client.get("/v1/orgs/", headers=headers).status_code == 200

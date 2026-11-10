@@ -1,4 +1,4 @@
-import { Component, ReactNode, useEffect, useState } from 'react';
+import { Component, ReactNode } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Sidebar } from './components/Sidebar';
@@ -40,13 +40,11 @@ import { AgentTemplatesPage } from './pages/templates/AgentTemplatesPage';
 import { A2AManagementPage } from './pages/templates/A2AManagementPage';
 import { getProductName } from './utils/env';
 import {
-  ApiError,
   AuthUser,
   canAccessManager,
   hasPermission,
   isPlatformAdmin,
   isApprovalEnabled,
-  UserConsoleApi,
 } from './services/api';
 
 interface ErrorBoundaryState {
@@ -312,21 +310,22 @@ function Shell() {
   );
 }
 
-/** 已登录用户的默认落地页:平台/管理员类型角色→/manager,有限权限→对应页,否则→/user。 */
-function roleHome(user: AuthUser): string {
+/** 已登录用户的默认落地页:平台/管理员类型角色→/manager，有限权限进入对应页。 */
+function roleHome(user: AuthUser): string | null {
   if (isPlatformAdmin(user) || user.manager_access) return '/manager';
   if (isApprovalEnabled(user) && hasPermission(user, 'approval:read')) {
     return '/manager/approvals';
   }
   if (hasPermission(user, 'iam:role:read')) return '/manager/roles';
-  return '/user';
+  return null;
 }
 
 /** /auth:已登录则按角色跳走,否则展示登录页。 */
 function AuthRoute() {
   const { user } = useAuth();
-  if (user) return <Navigate to={roleHome(user)} replace />;
-  return <LoginPage />;
+  const home = user && roleHome(user);
+  if (home) return <Navigate to={home} replace />;
+  return <LoginPage denied={Boolean(user)} />;
 }
 
 /** 登录 + 角色守卫:未登录→/auth;要求管理面但无资格→/user。 */
@@ -334,7 +333,7 @@ function RequireAuth({ manager, children }: { manager?: boolean; children: React
   const { user } = useAuth();
   if (!user) return <Navigate to="/auth" replace />;
   if (manager && !canAccessManager(user)) {
-    return <Navigate to="/user" replace />;
+    return <Navigate to="/auth" replace />;
   }
   return <>{children}</>;
 }
@@ -342,86 +341,7 @@ function RequireAuth({ manager, children }: { manager?: boolean; children: React
 /** 根/未知路径:按登录态与角色重定向。 */
 function RootRedirect() {
   const { user } = useAuth();
-  return <Navigate to={user ? roleHome(user) : '/auth'} replace />;
-}
-
-function readCookie(name: string): string {
-  const prefix = `${name}=`;
-  for (const part of document.cookie.split(';')) {
-    const item = part.trim();
-    if (item.startsWith(prefix)) {
-      return decodeURIComponent(item.slice(prefix.length));
-    }
-  }
-  return '';
-}
-
-/**
- * /chat 由 nginx 按 Cookie jiuwenclaw_id 动态反代 User Web，不能使用 SPA 内部 Navigate。
- * 保留 /user 作为角色落地地址：先写入 active-cluster Cookie，再跳 /chat/。
- * 无 Agent 上下文时仍进入 /chat/，由 User Web EnterpriseEntry 展示空态与「返回登录页」。
- */
-function UserWebRedirect() {
-  const { t } = useTranslation();
-  const { logout } = useAuth();
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const { contexts } = await UserConsoleApi.agentContexts();
-        if (cancelled) return;
-        if (!contexts.length) {
-          // 无上下文：先清残留 HttpOnly jiuwenclaw_id，再交给 User Web 空态页
-          // （否则上一用户选中的实例 Cookie 会让 auth_request 对当前用户 403）
-          try {
-            await UserConsoleApi.clearActiveCluster();
-          } catch {
-            /* 忽略 */
-          }
-          if (!cancelled) {
-            window.location.replace('/chat/');
-          }
-          return;
-        }
-        const cookieJid = readCookie('jiuwenclaw_id');
-        const preferred =
-          contexts.find((item) => item.jiuwenclaw_id === cookieJid)?.jiuwenclaw_id ??
-          contexts[0].jiuwenclaw_id;
-        await UserConsoleApi.setActiveCluster(preferred);
-        if (!cancelled) {
-          window.location.replace('/chat/');
-        }
-      } catch (e) {
-        if (!cancelled) {
-          setError(
-            e instanceof ApiError ? e.detail : (e as Error).message || t('auth.clusterSelectFailed'),
-          );
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [t]);
-
-  if (error) {
-    return (
-      <div className="flex flex-col items-center justify-center h-screen gap-3 text-muted">
-        <div>{error}</div>
-        <div className="flex gap-2">
-          <button className="btn" onClick={() => window.location.reload()}>
-            {t('common.refresh')}
-          </button>
-          <button className="btn btn-primary" onClick={() => void logout()}>
-            {t('auth.backToLogin')}
-          </button>
-        </div>
-      </div>
-    );
-  }
-  return <div className="flex items-center justify-center h-screen text-muted">{t('auth.loading')}</div>;
+  return <Navigate to={(user && roleHome(user)) || '/auth'} replace />;
 }
 
 function Gate() {
@@ -449,15 +369,6 @@ function Gate() {
             <RouterProvider basename="/manager">
               <Shell />
             </RouterProvider>
-          </RequireAuth>
-        }
-      />
-      {/* 用户面：通过页面级跳转进入同源 /chat，不再套 Manager Web iframe。 */}
-      <Route
-        path="/user/*"
-        element={
-          <RequireAuth>
-            <UserWebRedirect />
           </RequireAuth>
         }
       />

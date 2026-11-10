@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, FastAPI
 from .application_config_routers import application_config_router, package_catalog_router
 from .agent_client_registration_routers import registration_router
 from .approval_routers import approval_router
-from .auth_guards import get_current_user, require_admin
+from .auth_guards import get_current_user, require_admin, require_user_surface
 from .authz_routers import authz_router
 from .import_export_routers import import_export_router
 from .instance_access_routers import gateway_lookup_router, instance_grant_router
@@ -30,7 +30,10 @@ def _build_api_router() -> APIRouter:
     v1_router.include_router(authz_router, tags=["Authorization"])
     v1_router.include_router(approval_router, tags=["Approvals"])
     # 用户控制台：当前用户可见 Agent + 用户面选路。
-    v1_router.include_router(user_console_router, prefix="/user-console", tags=["User Console"])
+    v1_router.include_router(
+        user_console_router, prefix="/user-console", tags=["User Console"],
+        dependencies=[Depends(require_user_surface)],
+    )
     admin_router = APIRouter(dependencies=[Depends(require_admin)])
     admin_router.include_router(registration_router, tags=["Agent Client Registration"])
     admin_router.include_router(templates_router, tags=["Templates"])

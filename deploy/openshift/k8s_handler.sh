@@ -381,6 +381,10 @@ apply_k8s_extras() { # $@=本次渲染的清单文件名
         ensure_node_port MANAGER_WEB_NODE_PORT
         append_nodeport_svc "$CONF_DIR/manager-web.yaml" jiuwenswarm-manager-web-nodeport \
           jiuwenswarm-manager-web "${DEPLOY_VARS["MANAGER_WEB_NODE_PORT"]}" http 5273;;
+      web.yaml)
+        ensure_node_port WEB_NODE_PORT jiuwenswarm-web-nodeport
+        append_nodeport_svc "$CONF_DIR/web.yaml" jiuwenswarm-web-nodeport \
+          jiuwenswarm-web "${DEPLOY_VARS["WEB_NODE_PORT"]}" http 5173;;
       minio.yaml)
         ensure_node_port MINIO_API_NODE_PORT minio-api-nodeport
         ensure_node_port MINIO_CONSOLE_NODE_PORT minio-console-nodeport

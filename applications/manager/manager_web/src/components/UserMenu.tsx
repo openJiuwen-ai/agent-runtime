@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../auth/AuthContext';
-import { canAccessManager, isPlatformAdmin } from '../services/api';
+import { isPlatformAdmin } from '../services/api';
 
 function initialsOf(name: string | null | undefined, fallback: string): string {
   const text = (name || fallback || '?').trim();
@@ -13,7 +13,7 @@ function initialsOf(name: string | null | undefined, fallback: string): string {
   return text.slice(0, 2).toUpperCase();
 }
 
-/** 顶栏圆形身份入口：弹出卡片可进入用户面 / 退出登录。 */
+/** 顶栏圆形身份入口：弹出卡片可退出登录。 */
 export function UserMenu() {
   const { t } = useTranslation();
   const { user, logout } = useAuth();
@@ -72,19 +72,6 @@ export function UserMenu() {
             <div className="user-menu__role">{roleLabel}</div>
           </div>
           <div className="user-menu__actions">
-            {canAccessManager(user) && (
-              <button
-                type="button"
-                className="dropdown-menu-option user-menu__action"
-                role="menuitem"
-                onClick={() => {
-                  setOpen(false);
-                  window.location.href = '/user';
-                }}
-              >
-                {t('auth.switchToUser')}
-              </button>
-            )}
             <button
               type="button"
               className="dropdown-menu-option user-menu__action is-danger"

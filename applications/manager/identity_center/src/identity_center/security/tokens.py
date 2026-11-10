@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import timedelta
-from typing import Any
+from typing import Any, Literal
 
 import jwt
 
@@ -18,6 +18,7 @@ from identity_center.infrastructure.utils import utc_now
 from identity_center.security.jwt_keys import private_pem, public_pem
 
 _ALG = "RS256"
+LoginSurface = Literal["manager", "user"]
 
 
 def issue_access_token(
@@ -26,6 +27,7 @@ def issue_access_token(
     display_name: str | None = None,
     is_admin: bool = False,
     groups: list[str] | None = None,
+    surface: LoginSurface = "manager",
 ) -> tuple[str, int]:
     """返回 (access_token, expires_in_seconds)。"""
     now = utc_now()
@@ -41,6 +43,7 @@ def issue_access_token(
         "exp": now + timedelta(seconds=ttl),
         "jti": str(uuid.uuid4()),
         "typ": "access",
+        "surface": surface,
     }
     token = jwt.encode(payload, private_pem(), algorithm=_ALG)
     return token, ttl

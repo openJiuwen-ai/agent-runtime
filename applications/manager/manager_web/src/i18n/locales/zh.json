@@ -1094,6 +1094,8 @@
     "roleManager": "管理面角色"
   },
   "auth": {
+    "language": "界面语言",
+    "managerAccessRequired": "此账号没有管理面权限。",
     "loginTitle": "{{productName}} 管理台登录",
     "username": "用户名",
     "password": "密码",
@@ -1112,8 +1114,7 @@
     "clusterSelectFailed": "选择集群失败，请重试。",
     "errBadCredentials": "用户名或密码错误。",
     "errDisabled": "该账户已被禁用,请联系管理员。",
-    "noPagePermission": "当前角色没有访问此管理页面的权限。",
-    "switchToUser": "进入用户面"
+    "noPagePermission": "当前角色没有访问此管理页面的权限。"
   },
   "docs": {
     "entry": "DOCS",

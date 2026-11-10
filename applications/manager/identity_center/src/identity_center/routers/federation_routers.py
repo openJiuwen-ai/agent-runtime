@@ -16,7 +16,8 @@ from openjiuwen_runtime.service import (
 
 from identity_center.core.federation import IdentityFederationService
 from identity_center.infrastructure.logger import get_logger
-from identity_center.routers.deps import get_current_claims
+from identity_center.security.tokens import LoginSurface
+from identity_center.routers.deps import get_current_claims, login_surface
 from identity_center.schemas.federation_schemas import (
     FederatedTokenResponse,
     FederationAccessToken,
@@ -46,8 +47,9 @@ _Claims = Annotated[dict, Depends(get_current_claims)]
 
 
 @federation_router.get("/connections", response_model=FederationConnectionsOut)
-async def list_connections(service: _Service):
+async def list_connections(request: Request, service: _Service, surface: LoginSurface | None = None):
     """List enabled enterprise login choices without exposing issuer details."""
+    surface = login_surface(request, surface) or "user"
     return FederationConnectionsOut(
         connections=[
             FederationConnectionOut(
@@ -56,6 +58,7 @@ async def list_connections(service: _Service):
                 flow=service.flow(connection.connection_id),
             )
             for connection in service.connections
+            if service.surface(connection.connection_id) == surface
         ]
     )
 
@@ -64,10 +67,12 @@ async def list_connections(service: _Service):
     "/{connection_id}/configuration", response_model=FederationBrowserConfiguration
 )
 async def browser_configuration(
-    connection_id: str, response: Response, service: _Service
+    connection_id: str, request: Request, response: Response, service: _Service,
+    surface: LoginSurface | None = None,
 ):
     response.headers.update(_PRIVATE_HEADERS)
     try:
+        service.require_surface(connection_id, login_surface(request, surface) or "user")
         return await service.browser_configuration(connection_id)
     except UnknownFederationConnection as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -81,7 +86,8 @@ async def browser_configuration(
     response_model_exclude_none=True,
 )
 async def browser_token_login(
-    connection_id: str, request: Request, response: Response, service: _Service
+    connection_id: str, request: Request, response: Response, service: _Service,
+    surface: LoginSurface | None = None,
 ):
     response.headers.update(_PRIVATE_HEADERS)
     scheme, _, token = request.headers.get("Authorization", "").partition(" ")
@@ -92,6 +98,7 @@ async def browser_token_login(
             headers=_PRIVATE_HEADERS,
         )
     try:
+        service.require_surface(connection_id, login_surface(request, surface) or "user")
         result = await service.login_with_access_token(connection_id, token.strip())
     except UnknownFederationConnection as exc:
         raise HTTPException(
@@ -131,6 +138,7 @@ async def refresh_handoff(
             headers=_PRIVATE_HEADERS,
         )
     try:
+        service.require_surface(connection_id, claims["surface"])
         return await service.refresh_token_handoff(
             connection_id, token.strip(), str(claims["sub"])
         )
@@ -152,8 +160,10 @@ async def begin_login(
     request: Request,
     service: _Service,
     return_to: str = Query(default="/auth"),
+    surface: LoginSurface | None = None,
 ):
     try:
+        service.require_surface(connection_id, login_surface(request, surface) or "user")
         bound = service.requires_browser_binding(connection_id)
         binding = request.cookies.get(service.browser_cookie_name, "")
         if not re.fullmatch(r"[A-Za-z0-9_-]{43,128}", binding):
@@ -185,6 +195,8 @@ async def begin_login(
 async def complete_oidc_login(connection_id: str, request: Request, service: _Service):
     """OIDC query callback: only a server-validated identity can create a local code."""
     try:
+        if surface := login_surface(request):
+            service.require_surface(connection_id, surface)
         if not service.requires_browser_binding(connection_id):
             raise HTTPException(
                 status_code=405, detail="this provider requires a POST callback"
@@ -273,6 +285,8 @@ async def complete_login(connection_id: str, request: Request, service: _Service
     form_data = await request.form()
     parameters = {key: str(value) for key, value in form_data.items()}
     try:
+        if surface := login_surface(request):
+            service.require_surface(connection_id, surface)
         if service.requires_browser_binding(connection_id):
             raise HTTPException(status_code=405, detail="OIDC requires a GET callback")
         redirect_url, _ = await service.complete_callback(
@@ -294,9 +308,11 @@ async def exchange_code(
     request: Request,
     response: Response,
     service: _Service,
+    surface: LoginSurface | None = None,
 ):
     result = await service.exchange_code(
-        body.code, browser_binding=request.cookies.get(service.browser_cookie_name)
+        body.code, surface=login_surface(request, surface) or "user",
+        browser_binding=request.cookies.get(service.browser_cookie_name),
     )
     if isinstance(result, str):
         status_code = (
