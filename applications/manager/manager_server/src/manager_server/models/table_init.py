@@ -17,6 +17,11 @@ from manager_server.models.application_config_models import (
     CRON_POLICY_TABLE_DEF,
 )
 from manager_server.models.approval_models import APPROVAL_TABLE_DEFINITIONS
+from manager_server.models.deployment_models import (
+    DEPLOYMENT_DEFAULT_ENV_TABLE_DEF,
+    DEPLOYMENT_LOG_TABLE_DEF,
+    DEPLOYMENT_TASK_TABLE_DEF,
+)
 from manager_server.models.quota_models import QUOTA_TABLE_DEFINITIONS
 from manager_server.models.authz_models import AUTHZ_TABLE_DEFINITIONS
 from manager_server.models.instance_access_models import (
@@ -83,6 +88,9 @@ ALL_TABLE_DEFINITIONS = (
     *AUTHZ_TABLE_DEFINITIONS,
     *QUOTA_TABLE_DEFINITIONS,
     *APPROVAL_TABLE_DEFINITIONS,
+    DEPLOYMENT_TASK_TABLE_DEF,
+    DEPLOYMENT_LOG_TABLE_DEF,
+    DEPLOYMENT_DEFAULT_ENV_TABLE_DEF,
 )
 
 

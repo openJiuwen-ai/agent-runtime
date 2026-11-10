@@ -9,6 +9,7 @@ from .agent_client_registration_routers import registration_router
 from .approval_routers import approval_router
 from .auth_guards import get_current_user, require_admin
 from .authz_routers import authz_router
+from .deployment_routers import deployment_router
 from .import_export_routers import import_export_router
 from .instance_access_routers import gateway_lookup_router, instance_grant_router
 from .instance_resource_routers import instance_resource_router
@@ -61,6 +62,8 @@ def _build_api_router() -> APIRouter:
     )
     # 反查：一批实体各授权了哪些实例。
     admin_router.include_router(gateway_lookup_router, tags=["Instance Access"])
+    # 管理面启动部署（产品面 up + 幂等重跑升级；/defaults 字面路由先于 /{id} 注册）
+    admin_router.include_router(deployment_router, prefix="/deployments", tags=["Deployments"])
     v1_router.include_router(admin_router)
     root_router.include_router(
         public_user_console_router, prefix="/v1/user-console", tags=["User Console"]

@@ -44,6 +44,22 @@ _ROLE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 PERMISSION_SEEDS: tuple[dict[str, str], ...] = (
     {
+        "permission_id": "deployment:read",
+        "name": "查看部署任务",
+        "description": "查看管理面发起的产品面部署任务与日志（v1 访问挂 admin 守卫，此权限为后续角色化预留）",
+        "resource_type": "deployment",
+        "action": "read",
+        "scope": "admin",
+    },
+    {
+        "permission_id": "deployment:execute",
+        "name": "发起部署",
+        "description": "发起/取消产品面部署任务、修改默认部署参数（v1 访问挂 admin 守卫，此权限为后续角色化预留）",
+        "resource_type": "deployment",
+        "action": "execute",
+        "scope": "admin",
+    },
+    {
         "permission_id": "quota:read",
         "name": "查看配额",
         "description": "查看配额策略、生效结果与用量排行",

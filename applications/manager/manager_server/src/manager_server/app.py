@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from manager_server import __version__
+from manager_server.core.deployment.service import run_deployment_executor_loop
 from manager_server.infrastructure.config import settings
 from manager_server.infrastructure.db import create_db_handler, database_config_summary
 from manager_server.infrastructure.logger import configure_logging, get_logger
@@ -42,6 +43,10 @@ async def lifespan(application: FastAPI):
     expire_task = asyncio.create_task(
         run_approval_expirer_loop(stop, db_handler, redis_client)
     )
+    # 管理面启动部署：后台认领 pending 部署任务（子进程代跑 deploy.sh）
+    deploy_task = asyncio.create_task(
+        run_deployment_executor_loop(stop, db_handler, redis_client)
+    )
     _log.info(
         "startup",
         version=__version__,
@@ -51,7 +56,8 @@ async def lifespan(application: FastAPI):
     stop.set()
     scan_task.cancel()
     expire_task.cancel()
-    for task in (scan_task, expire_task):
+    deploy_task.cancel()
+    for task in (scan_task, expire_task, deploy_task):
         try:
             await task
         except asyncio.CancelledError:
