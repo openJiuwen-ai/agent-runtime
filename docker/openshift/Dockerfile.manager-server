@@ -6,7 +6,21 @@ FROM ${BASE_IMAGE}:${IMAGE_VERSION}
 
 ARG PIP_EXTRA_ARGS="-i https://mirrors.aliyun.com/pypi/simple/"
 
-# kubectl/yq 随 base 层分发（docker/openshift/Dockerfile.base 按构建机 arch 自适应安装）
+# 管理面启动部署运行依赖：kubectl + yq（构建机架构自适应，华为云 OBS 源）。
+# 仅 manager-server 需要（部署模块以子进程代跑 deploy.sh）；yq 统一装 mikefarah Go 版
+# （两变体上游来源不一：openshift base 已内置、k8s base 为不兼容的 apt 版——自装同版
+# 保持一致）。构建期 root 安装，运行期 SCC 随机 uid（/usr/local/bin 755 任意 uid 可执行）
+RUN case "$(uname -m)" in \
+        x86_64)  ARCH=amd64 ;; \
+        aarch64) ARCH=arm64 ;; \
+        *) echo "unsupported arch: $(uname -m)" >&2; exit 1 ;; \
+    esac \
+    && curl -fsSL "https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/jiuwenswarm/software/kubectl-linux-${ARCH}" -o /usr/local/bin/kubectl \
+    && chmod +x /usr/local/bin/kubectl \
+    && kubectl version --client >/dev/null \
+    && curl -fsSL "https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/jiuwenswarm/software/yq_linux_${ARCH}" -o /usr/local/bin/yq \
+    && chmod +x /usr/local/bin/yq \
+    && yq --version
 
 RUN uv pip install --system -e "./applications/manager/manager_server" \
     ${PIP_EXTRA_ARGS}
