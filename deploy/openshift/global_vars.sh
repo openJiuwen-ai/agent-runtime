@@ -35,6 +35,8 @@ REPLICAS_VARS=(AGENT_SERVER_REPLICAS GATEWAY_REPLICAS WEB_REPLICAS IDENTITY_REPL
 #   三模式派生变量（routing 注入，off/full 留空 → 对应 env 行删除）
 # - IMPORT_LOCAL_ALLOWED_DOWNLOAD_HOSTS / TEAM_SKILLS_HUB_ALLOWED_DOWNLOAD_HOSTS：
 #   预置 Skill URL / 远程 ZIP 下载白名单（留空 → ConfigMap 行删除，走 AgentServer 代码默认）
+# - AGENT_SERVER_REACT_MAX_ITER：主 Agent 一轮调用的模型往返上限
+#   （留空 → ConfigMap 行删除，生成配置不写 react.max_iterations，与个人版一样不限制）
 # 格式校验与"允许留空"解耦（用户名/URL 不该按 DNS subdomain 误校验）：
 # StorageClass 见 STORAGE_CLASS_VARS（check_storage_class_vars）；其余选填项见 check_optional_vars
 OPTIONAL_VARS=(
@@ -45,6 +47,7 @@ OPTIONAL_VARS=(
     MANAGER_AGENT_CLIENT_REGISTRATION_CONFIG_FILE
     GATEWAY_AGENT_CLIENT_MODE GATEWAY_RUNTIME_MANAGER_URL AGENTSERVER_POD_DNS_LIST
     IMPORT_LOCAL_ALLOWED_DOWNLOAD_HOSTS TEAM_SKILLS_HUB_ALLOWED_DOWNLOAD_HOSTS
+    AGENT_SERVER_REACT_MAX_ITER
 )
 
 # StorageClass 变量：check_storage_class_vars 做 DNS subdomain 规范校验（留空走集群默认）
@@ -127,6 +130,7 @@ declare -A DEPLOY_VARS=(
     # 技能上传包保留天数：manager 与 AgentServer 必须同值，默认 7，最小 1（非法值回落 7）
     ["SKILL_UPLOAD_RETENTION_DAYS"]="7"
 
+    ["AGENT_SERVER_REACT_MAX_ITER"]=""   # 留空=不注入，主 Agent 不限制轮次；正整数=上限
     ["AGENT_SERVER_REPLICAS"]="1"
     ["GATEWAY_REPLICAS"]="1"
     ["WEB_REPLICAS"]="1"
