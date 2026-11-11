@@ -10,7 +10,7 @@ import asyncio
 import hashlib
 import os
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import SplitResult, urlsplit
 
 from manager_server.core.skill_upload.errors import (
     SkillUploadError,
@@ -35,6 +35,31 @@ def _obs_http_client() -> Any:
     )
 
 
+def _obs_authority(parsed: SplitResult, bucket: str) -> tuple[str, bool]:
+    """Return the SDK endpoint and whether virtual-host addressing is required.
+
+    Mirrors ``AttachmentStore.from_env()`` in AgentServer so manager and
+    agentserver sign requests against Huawei OBS the same way.
+    """
+    regional_host = (parsed.hostname or "").rstrip(".")
+    # A bucket-prefixed OBS setting still uses the regional endpoint in MinIO so
+    # it adds the bucket exactly once when signing requests.
+    if regional_host.startswith(f"{bucket}.obs."):
+        regional_host = regional_host.removeprefix(f"{bucket}.")
+    if not (
+        regional_host.startswith("obs.")
+        and ".myhuaweicloud." in regional_host
+    ):
+        return parsed.netloc, False
+    if parsed.username is not None:
+        raise ValueError("OBS_URL must not contain user information")
+    default_port = 443 if parsed.scheme == "https" else 80
+    port = parsed.port
+    if port not in (None, default_port):
+        return f"{regional_host}:{port}", True
+    return regional_host, True
+
+
 def _store() -> tuple[Any, str]:
     from minio import Minio
 
@@ -54,14 +79,22 @@ def _store() -> tuple[Any, str]:
         or parsed.path not in {"", "/"}
     ):
         raise SkillUploadUnavailableError("object storage endpoint is invalid")
+    try:
+        authority, virtual_host = _obs_authority(parsed, bucket)
+    except ValueError as exc:
+        raise SkillUploadUnavailableError(
+            "object storage endpoint is invalid"
+        ) from exc
     client = Minio(
-        parsed.netloc,
+        authority,
         access_key=access,
         secret_key=secret,
         secure=parsed.scheme == "https",
         region=str(settings.obs_region or "default"),
         http_client=_obs_http_client(),
     )
+    if virtual_host:
+        client.enable_virtual_style_endpoint()
     return client, bucket
 
 
