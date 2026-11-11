@@ -185,6 +185,7 @@ def guarded_app(p):
         return {"ok": True}
 
     @app.post("/api/session/route")
+    @app.post("/api/session/rebind")
     async def route():
         return {"ok": True}
 
@@ -234,12 +235,15 @@ def test_actual_tls_roles_pins_headers_stream_and_revocation(bundle):
                 async with httpx.AsyncClient(
                     **gateway.client_kwargs(role="runtime")
                 ) as gw:
-                    assert (
-                        await gw.post(
-                            urljoin(url, "/api/session/route"),
-                            headers=gateway.headers(),
-                        )
-                    ).status_code == 200
+                    for path in ("/api/session/route", "/api/session/rebind"):
+                        assert (
+                            await gw.post(urljoin(url, path), headers=gateway.headers())
+                        ).status_code == 200
+                assert (
+                    await client.post(
+                        urljoin(url, "/api/session/rebind"), headers=manager.headers()
+                    )
+                ).status_code == 403
                 # Same-CA certificate loses its authorization WITHOUT a TLS restart.
                 peers = runtime.current()["peers"]
                 peers.pop("manager")

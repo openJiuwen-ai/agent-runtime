@@ -332,6 +332,7 @@ class LinkProfile:
                 if path
                 in {
                     "/api/session/route",
+                    "/api/session/rebind",
                     "/api/session/touch",
                     "/api/session/cleanup",
                     "/api/session/config_refresh",
