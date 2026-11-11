@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 
 from identity_center.core.auth import IdentityAuthService
 from identity_center.infrastructure.db import get_db_handler
-from identity_center.routers.deps import get_current_claims
+from identity_center.routers.deps import get_current_claims, login_surface
 from identity_center.schemas.auth_schemas import (
     LogoutBody,
     RefreshBody,
@@ -18,6 +18,7 @@ from identity_center.schemas.auth_schemas import (
     UserOut,
 )
 from identity_center.security.jwt_keys import public_pem
+from identity_center.security.tokens import LoginSurface
 
 _Handler = Annotated[DBHandler, Depends(get_db_handler)]
 _Claims = Annotated[dict[str, Any], Depends(get_current_claims)]
@@ -43,12 +44,16 @@ def _raise(code: str) -> None:
 async def token(
     form: Annotated[OAuth2PasswordRequestForm, Depends()],
     handler: _Handler,
+    request: Request,
+    surface: LoginSurface | None = None,
 ):
     """OAuth2 密码流：表单 username/password → 签发 access JWT + refresh。
 
     （Swagger 右上角 Authorize 即调用此端点。）
     """
-    result = await IdentityAuthService(handler).login(form.username, form.password)
+    result = await IdentityAuthService(handler).login(
+        form.username, form.password, surface=login_surface(request, surface) or "manager",
+    )
     if isinstance(result, str):
         _raise(result)
     return TokenResponse(**{k: result[k] for k in ("access_token", "token_type", "expires_in", "refresh_token")})
@@ -78,8 +83,12 @@ async def my_orgs(claims: _Claims, handler: _Handler):
 
 
 @auth_router.post("/refresh", response_model=TokenResponse)
-async def refresh(body: RefreshBody, handler: _Handler):
-    result = await IdentityAuthService(handler).refresh(body.refresh_token)
+async def refresh(
+    body: RefreshBody, handler: _Handler, request: Request, surface: LoginSurface | None = None,
+):
+    result = await IdentityAuthService(handler).refresh(
+        body.refresh_token, surface=login_surface(request, surface),
+    )
     if isinstance(result, str):
         _raise(result)
     return TokenResponse(**{k: result[k] for k in ("access_token", "token_type", "expires_in", "refresh_token")})

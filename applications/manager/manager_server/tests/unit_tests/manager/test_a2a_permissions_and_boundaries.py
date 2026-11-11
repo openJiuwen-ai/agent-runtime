@@ -29,7 +29,7 @@ async def test_a2a_management_routes_require_admin(manager_api: ManagerApiHarnes
     assert unauthenticated.status_code == 401
 
     async def regular_user():
-        return SimpleNamespace(user_id="user-1", is_admin=False, groups=[])
+        return SimpleNamespace(user_id="user-1", surface="manager", is_admin=False, groups=[])
 
     manager_api.app.dependency_overrides[get_current_user] = regular_user
     cases = (

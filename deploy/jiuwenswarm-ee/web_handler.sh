@@ -28,6 +28,7 @@ gen_web_file() {
 render_web_files() {
     render_secret_configmap
     ensure_available_port "WEB_NODE_PORT"
+    resolve_manager_web_resolver
     gen_web_file
     success "Web module is rendered."
 }

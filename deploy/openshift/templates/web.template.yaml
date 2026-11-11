@@ -34,6 +34,12 @@ spec:
             - secretRef:
                 name: jiuwenswarm-secret-configmap
           env:
+            - name: USER_WEB_IDP_TARGET
+              value: "http://jiuwenswarm-identity:8770"
+            - name: USER_WEB_MANAGER_TARGET
+              value: "http://jiuwenswarm-manager-server:8765"
+            - name: USER_WEB_RESOLVER
+              value: "<<MANAGER_WEB_RESOLVER>>"
             - name: WEB_HTTP_PORT
               value: "5173"
             - name: JIUWENSWARM_EDITION
@@ -80,3 +86,20 @@ spec:
       port: 19000
       targetPort: 19000
   type: ClusterIP
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: jiuwenswarm-web
+  namespace: <<NAMESPACE>>
+  annotations:
+    haproxy.router.openshift.io/timeout: 300s
+spec:
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  to:
+    kind: Service
+    name: jiuwenswarm-web

@@ -103,22 +103,10 @@ let accessToken: string | null = localStorage.getItem(ACCESS_KEY);
 let refreshToken: string | null = localStorage.getItem(REFRESH_KEY);
 let unauthorizedHandler: (() => void) | null = null;
 
-function syncAccessCookie(access: string | null): void {
-  const secure = window.location.protocol === 'https:' ? '; Secure' : '';
-  if (access) {
-    document.cookie = `${ACCESS_KEY}=${encodeURIComponent(access)}; Path=/; SameSite=Strict${secure}`;
-  } else {
-    document.cookie = `${ACCESS_KEY}=; Path=/; Max-Age=0; SameSite=Strict${secure}`;
-  }
-}
-
-syncAccessCookie(accessToken);
-
 export function setTokens(access: string | null, refresh?: string | null): void {
   accessToken = access;
   if (access) localStorage.setItem(ACCESS_KEY, access);
   else localStorage.removeItem(ACCESS_KEY);
-  syncAccessCookie(access);
   if (refresh !== undefined) {
     refreshToken = refresh;
     if (refresh) localStorage.setItem(REFRESH_KEY, refresh);
@@ -206,7 +194,7 @@ function buildQuery(query?: RequestOptions['query']) {
 async function tryRefresh(): Promise<boolean> {
   if (!refreshToken) return false;
   try {
-    const resp = await fetch(`${IDP_BASE}/v1/auth/refresh`, {
+    const resp = await fetch(`${IDP_BASE}/v1/auth/refresh?surface=manager`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ refresh_token: refreshToken }),
@@ -231,7 +219,7 @@ function resolveRequestUrl(base: string, path: string, query: string): string {
 async function requestCore<T>(
   base: string, path: string, opts: RequestOptions, unwrap: boolean, retried = false,
 ): Promise<T> {
-  // User Web and the optional renewal frame share the same platform session.
+  // Read the latest tokens if another management tab renewed the session.
   accessToken = localStorage.getItem(ACCESS_KEY);
   refreshToken = localStorage.getItem(REFRESH_KEY);
   const url = resolveRequestUrl(base, path, buildQuery(opts.query));
@@ -399,7 +387,7 @@ export const AuthApi = {
   /** OAuth2 密码流：表单 POST /token → 存 access+refresh，再取 /me 返回用户。 */
   login: async (username: string, password: string): Promise<AuthUser> => {
     const body = new URLSearchParams({ username, password });
-    const resp = await fetch(`${IDP_BASE}/v1/auth/token`, {
+    const resp = await fetch(`${IDP_BASE}/v1/auth/token?surface=manager`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body,
@@ -420,16 +408,16 @@ export const AuthApi = {
     return withManagerAuthorization(await idpHttp<AuthUser>('/v1/auth/me'));
   },
   federationConnections: () =>
-    idpHttp<{ connections: FederationConnection[] }>('/v1/auth/federation/connections'),
+    idpHttp<{ connections: FederationConnection[] }>('/v1/auth/federation/connections?surface=manager'),
   federationConfiguration: (connectionId: string) =>
-    idpHttp<FederationConfiguration>(`/v1/auth/federation/${encodeURIComponent(connectionId)}/configuration`),
+    idpHttp<FederationConfiguration>(`/v1/auth/federation/${encodeURIComponent(connectionId)}/configuration?surface=manager`),
   refreshFederationHandoff: (connectionId: string, token: string) =>
     idpHttp<NonNullable<TokenResponse['federation']>>(`/v1/auth/federation/${encodeURIComponent(connectionId)}/token-handoff`, {
       method: 'POST', body: {}, headers: { 'X-User-Token': `Bearer ${token}` },
     }),
   confirmFederationToken: async (connectionId: string, token: string): Promise<AuthUser> => {
     // This endpoint authenticates the customer JWT, not a platform JWT.
-    const response = await fetch(`${IDP_BASE}/v1/auth/federation/${encodeURIComponent(connectionId)}/token-login`, {
+    const response = await fetch(`${IDP_BASE}/v1/auth/federation/${encodeURIComponent(connectionId)}/token-login?surface=manager`, {
       method: 'POST', credentials: 'same-origin',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: '{}',
@@ -448,11 +436,11 @@ export const AuthApi = {
   beginFederatedLogin: (connectionId: string): void => {
     const connection = encodeURIComponent(connectionId);
     window.location.assign(
-      `${IDP_BASE}/v1/auth/federation/${connection}/login?return_to=${encodeURIComponent('/auth')}`,
+      `${IDP_BASE}/v1/auth/federation/${connection}/login?surface=manager&return_to=${encodeURIComponent('/auth')}`,
     );
   },
   exchangeFederationCode: async (code: string): Promise<AuthUser> => {
-    const t = await idpHttp<TokenResponse>('/v1/auth/federation/exchange', {
+    const t = await idpHttp<TokenResponse>('/v1/auth/federation/exchange?surface=manager', {
       method: 'POST',
       body: { code },
     });
@@ -471,10 +459,6 @@ export const AuthApi = {
         await idpHttp('/v1/auth/logout', { method: 'POST', body: { refresh_token: refreshToken } });
       }
     } catch { /* 忽略登出请求错误 */ }
-    try {
-      // HttpOnly jiuwenclaw_id 只能由后端清；残留会导致下一用户 /chat 403
-      await UserConsoleApi.clearActiveCluster();
-    } catch { /* 忽略清 Cookie 失败 */ }
     clearTokens();
     try {
       const { endBrowserSession } = await import('../auth/federation/client');
@@ -1305,47 +1289,6 @@ export interface UserGateway {
   space_id?: string;
   gateway_endpoint: string | null;
 }
-
-/** 用户控制台：可访问的 Agent 上下文（bot_id + group_id + user_id + jiuwenclaw_id）。 */
-export interface UserAgentContext {
-  bot_id: string;
-  group_id: string;
-  user_id: string;
-  jiuwenclaw_id: string;
-  /** 实例/集群展示名 */
-  jiuwenclaw_name: string;
-  /** 稳定展示标识：agent_ + agent_id（43 位 base62）；无 Agent 配置模板 id 时回退 resource_name */
-  agent_name: string;
-  /** 43 位 base62 可逆编码（运行时模板 + Agent 配置模板）；旧数据可能为空 */
-  agent_id?: string;
-  /** 运行时模板 id；无匹配运行时模板时为空串 */
-  runtime_template_id?: string;
-  /** Agent 配置模板 id（instance_agent_resource.ref_template_id） */
-  agent_template_id?: string;
-  /** Agent 资源展示名（人类可读，用于回退展示） */
-  resource_name?: string;
-  group_name: string;
-}
-
-// 当前登录用户视角：身份来自 JWT；组合由 instance_grant + instance_agent_resource 算出。
-export const UserConsoleApi = {
-  orgs: async () => {
-    const data = await idpHttp<{ orgs: Org[] }>('/v1/auth/me/orgs');
-    return { orgs: excludeNoOrgItems(data.orgs) };
-  },
-  agentContexts: () => http<{ contexts: UserAgentContext[]; empty_reason?: 'no_grant' | 'no_agent_template' | null }>('/v1/user-console/agent-contexts'),
-  /** 设置用户面动态反代 Cookie（jiuwenclaw_id） */
-  setActiveCluster: (jiuwenclaw_id: string) =>
-    http<{ jiuwenclaw_id: string }>('/v1/user-console/active-cluster', {
-      method: 'POST',
-      body: { jiuwenclaw_id },
-    }),
-  /** 清除用户面动态反代 Cookie（登出 / 无上下文进 /chat 前） */
-  clearActiveCluster: () =>
-    http<{ cleared: boolean }>('/v1/user-console/active-cluster', {
-      method: 'DELETE',
-    }),
-};
 
 // ---------- Instances ----------
 
