@@ -15,3 +15,17 @@ COPY --chown=app:app . /app/agent-runtime/
 RUN uv pip install --system -e "./foundation" \
     -e "./service" \
     ${PIP_EXTRA_ARGS}
+
+# 管理面启动部署运行依赖：kubectl + yq（构建机架构自适应，华为云 OBS 源）。
+# 所有 python 组件共用本层；yq 覆盖基础镜像可能残留的旧版本（/usr/local/bin 优先于 /usr/bin）
+RUN case "$(uname -m)" in \
+        x86_64)  ARCH=amd64 ;; \
+        aarch64) ARCH=arm64 ;; \
+        *) echo "unsupported arch: $(uname -m)" >&2; exit 1 ;; \
+    esac \
+    && curl -fsSL "https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/jiuwenswarm/software/kubectl-linux-${ARCH}" -o /usr/local/bin/kubectl \
+    && chmod +x /usr/local/bin/kubectl \
+    && kubectl version --client >/dev/null \
+    && curl -fsSL "https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/jiuwenswarm/software/yq_linux_${ARCH}" -o /usr/local/bin/yq \
+    && chmod +x /usr/local/bin/yq \
+    && yq --version

@@ -6,16 +6,7 @@ FROM ${BASE_IMAGE}:${IMAGE_VERSION}
 
 ARG PIP_EXTRA_ARGS="-i https://mirrors.aliyun.com/pypi/simple/"
 
-# 管理面启动部署：deploy/openshift 工具树运行依赖（构建期为 root，运行期 SCC 随机 uid，
-# 装到 /usr/local/bin 保证任意 uid 可执行；amd64 与集群节点架构一致）
-ARG KUBECTL_VERSION=v1.30.14
-ARG YQ_VERSION=v4.49.2
-RUN curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" -o /usr/local/bin/kubectl \
-    && echo "$(curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl.sha256")  /usr/local/bin/kubectl" | sha256sum -c - \
-    && chmod +x /usr/local/bin/kubectl \
-    && curl -fsSL "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" -o /usr/local/bin/yq \
-    && chmod +x /usr/local/bin/yq \
-    && /usr/local/bin/yq --version
+# kubectl/yq 随 base 层分发（docker/openshift/Dockerfile.base 按构建机 arch 自适应安装）
 
 RUN uv pip install --system -e "./applications/manager/manager_server" \
     ${PIP_EXTRA_ARGS}
