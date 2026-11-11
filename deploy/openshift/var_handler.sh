@@ -144,6 +144,9 @@ check_optional_vars() {
     [ -z "$val" ] || [[ "$val" =~ ^[A-Za-z0-9.*,_-]+$ ]] \
       || error "${_host_var} 非法（逗号分隔主机规则，仅允许字母数字与 .*,_-）: $val"
   done
+  val="${DEPLOY_VARS["AGENT_SERVER_REACT_MAX_ITER"]:-}"
+  [ -z "$val" ] || [[ "$val" =~ ^[1-9][0-9]*$ ]] \
+    || error "AGENT_SERVER_REACT_MAX_ITER 非法（留空表示不限制，或填写正整数）: $val"
 }
 
 check_identity_sso_vars() {
