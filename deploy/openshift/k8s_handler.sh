@@ -406,6 +406,31 @@ apply_k8s_extras() { # $@=本次渲染的清单文件名
 
 # ---------- manager-server 部署凭证注入（管理面程序化部署） ----------
 
+# manager up 的前置步骤：MANAGER_DEPLOY_KUBECONFIG_SECRET 非空且目标 ns 中该 Secret
+# 不存在时，从部署机当前 kubeconfig（$KUBECONFIG 或 ~/.kube/config）自动创建。
+# 避免渲染清单引用了 Secret 而实际缺失，manager-server 卡在 ContainerCreating。
+# 安全门：仅 k8s 形态（openshift 请手工创建）；仅 manager-server 在本次目标里
+#（普通产品面 up 不在产品 ns 凭空建凭证）；已存在不覆盖（可能是刻意放置的最小权限
+# 凭证）。down 不回收：凭证独立于组件生命周期，跨 up 幂等复用。
+ensure_manager_deploy_kubeconfig_secret() {
+  local secret="${DEPLOY_VARS["MANAGER_DEPLOY_KUBECONFIG_SECRET"]}"
+  [ -n "$secret" ] || return 0
+  in_array manager-server "${TARGETS[@]}" || return 0
+  is_k8s_cluster || { warning "openshift 形态不自动创建部署凭证 Secret（$secret），请手工预建"; return 0; }
+  local src="${KUBECONFIG:-$HOME/.kube/config}"
+  if [ ! -f "$src" ]; then
+    error "MANAGER_DEPLOY_KUBECONFIG_SECRET=$secret 已配置，但部署机 kubeconfig 不存在: $src
+请先手工创建: kubectl -n $KCTL_NS create secret generic $secret --from-file=kubeconfig=<文件>"
+  fi
+  if kubectl -n "$KCTL_NS" get secret "$secret" >/dev/null 2>&1; then
+    info "部署凭证 Secret 已存在: $secret（沿用，不覆盖）"
+    return 0
+  fi
+  kubectl -n "$KCTL_NS" create secret generic "$secret" --from-file=kubeconfig="$src" \
+    || error "创建部署凭证 Secret 失败: $secret"
+  success "已从 $src 自动创建部署凭证 Secret: $secret（ns: $KCTL_NS）"
+}
+
 # MANAGER_DEPLOY_KUBECONFIG_SECRET 非空时向 manager-server.yaml 的 Deployment 注入：
 #   pod 卷（引用该 Secret）+ 容器只读 subPath 挂载 /etc/manager/deploy-kubeconfig
 #   + env MANAGER_DEPLOY_KUBECONFIG（指向挂载路径）

@@ -70,6 +70,7 @@ main() {
     _CURRENT_PHASE=preflight; progress_json phase phase=preflight state=start
     preflight
     progress_json phase phase=preflight state=ok
+    ensure_manager_deploy_kubeconfig_secret   # 部署凭证缺失时自动从本地 kubeconfig 创建（manager up 前置）
     _CURRENT_PHASE=apply; progress_json phase phase=apply state=start
     run_phase apply "部署" "${TARGETS[@]}"
     progress_json phase phase=apply state=ok
