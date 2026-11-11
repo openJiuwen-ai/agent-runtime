@@ -37,15 +37,21 @@ _MIN_ENV = {
 class TestMergeEnv:
     def test_whitelist_rejects_unknown_key(self):
         with pytest.raises(ValueError, match="不支持的配置键"):
-            merge_env({}, {"CLUSTER_TYPE": "k8s"})
+            merge_env({}, {"EVIL_KEY": "x"})
 
     def test_forced_env_always_applied(self):
-        # CLUSTER_TYPE/MODE 不在白名单：请求传入直接拒绝，强制值由服务端写入
-        with pytest.raises(ValueError, match="不支持的配置键"):
-            merge_env({}, {"CLUSTER_TYPE": "openshift"})
-        with pytest.raises(ValueError, match="不支持的配置键"):
-            merge_env({}, {"MODE": "dev"})
+        # CLUSTER_TYPE/MODE 不在白名单：请求传入忽略，强制值由服务端写入
+        merged = merge_env(_MIN_ENV, {"CLUSTER_TYPE": "openshift", "MODE": "dev"})
+        assert merged["CLUSTER_TYPE"] == "k8s"
+        assert merged["MODE"] == "product"
         merged = merge_env(_MIN_ENV, {})
+        assert merged["CLUSTER_TYPE"] == "k8s"
+        assert merged["MODE"] == "product"
+
+    def test_forced_keys_in_defaults_tolerated(self):
+        # 存量脏数据（defaults 表混入强制键）不让任务创建失败（E2E 实测回归）
+        poisoned = {**_MIN_ENV, "CLUSTER_TYPE": "openshift", "MODE": "dev"}
+        merged = merge_env(poisoned, {})
         assert merged["CLUSTER_TYPE"] == "k8s"
         assert merged["MODE"] == "product"
 

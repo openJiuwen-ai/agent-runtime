@@ -67,6 +67,12 @@ async def test_defaults_update_and_mask_roundtrip(manager_api, tool_available):
     )
     assert resp.status_code == 400
 
+    # PUT 之后存储不得混入强制键（历史 bug：混入后 POST 创建任务报"不支持的配置键"）
+    resp = await manager_api.http.get(f"{_DEPLOYMENTS}/defaults")
+    stored = resp.json()["data"]["env"]
+    assert "CLUSTER_TYPE" not in stored
+    assert "MODE" not in stored
+
 
 async def test_create_list_get_flow(manager_api, tool_available):
     resp = await manager_api.http.post(

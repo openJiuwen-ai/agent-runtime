@@ -117,11 +117,17 @@ def validate_env_value(key: str, value: str) -> str:
 
 
 def merge_env(defaults: dict, overrides: dict) -> dict:
-    """默认 env 与请求覆盖合并（白名单过滤 + 逐值校验）。"""
+    """默认 env 与请求覆盖合并（白名单过滤 + 逐值校验）。
+
+    输入源里的强制键（FORCED_ENV，如历史误存的 CLUSTER_TYPE/MODE）静默忽略——
+    它们由服务端统一写死，不应因存量脏数据让后续任务创建失败。
+    """
     merged: dict[str, str] = {}
     for source in (defaults or {}, overrides or {}):
         for raw_key, raw_value in source.items():
             key = str(raw_key).strip().upper()
+            if key in FORCED_ENV:
+                continue
             if key not in ALLOWED_ENV_KEYS:
                 raise ValueError(f"不支持的配置键: {key}")
             if raw_value is None:

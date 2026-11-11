@@ -293,6 +293,10 @@ class DeploymentService:
         }
         validated = merge_env({}, incoming)
         merged = {**current, **validated}
+        # 强制键由服务端在每次部署时写死，不得落入存储（历史 bug：merge_env 的返回值
+        # 含 FORCED_ENV，曾随本接口写库，导致后续任务创建报"不支持的配置键"）
+        for forced_key in env_builder.FORCED_ENV:
+            merged.pop(forced_key, None)
         await self._handler.update(
             _DEFAULTS_TABLE,
             {"id": _DEFAULTS_ROW_ID},
