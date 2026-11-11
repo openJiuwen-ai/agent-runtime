@@ -17,7 +17,9 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from adapters.versatile_controller import VersatileController, _FORWARD_HEADER_WHITELIST
@@ -547,3 +549,59 @@ class TestTlsVerify:
         monkeypatch.setenv("VERSATILE_PROXY_TLS_VERIFY", "false")
         ctrl = VersatileController("http://h/", tls_verify=True)
         assert ctrl._tls_verify is True
+
+
+# ════════════════════════════════════════════════════════════════════
+# _tls_verify 是否真的被 httpx.AsyncClient 消费（属性取值只是中间状态，
+# 安全价值全部落在 dispatch_stream 里构造 client 的那一行）
+# ════════════════════════════════════════════════════════════════════
+
+
+def _make_tls_probe_client():
+    """构造一个 AsyncClient 替身：进入 async with 后在 stream 处立刻抛连接错误。
+
+    dispatch_stream 捕获 httpx.RequestError 后会重新抛出，用例据此提前结束，
+    无需构造完整的 SSE 响应。
+    """
+    client = AsyncMock()
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=False)
+    client.build_request = MagicMock(return_value=httpx.Request("POST", "http://h/"))
+    client.stream = MagicMock(side_effect=httpx.ConnectError("stop before stream"))
+    return client
+
+
+class TestTlsVerifyAppliedToClient:
+    @staticmethod
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("env_value", "ctor_kwargs", "expected"),
+        [
+            (None, {}, True),
+            ("false", {}, False),
+            ("/etc/ssl/private-ca.pem", {}, "/etc/ssl/private-ca.pem"),
+            ("false", {"tls_verify": True}, True),
+        ],
+    )
+    async def test_httpx_client_receives_resolved_verify(
+        monkeypatch,
+        env_value,
+        ctor_kwargs,
+        expected,
+    ):
+        if env_value is None:
+            monkeypatch.delenv("VERSATILE_PROXY_TLS_VERIFY", raising=False)
+        else:
+            monkeypatch.setenv("VERSATILE_PROXY_TLS_VERIFY", env_value)
+        ctrl = VersatileController("http://h/", **ctor_kwargs)
+
+        patcher = patch(
+            "adapters.versatile_proxy.httpx.AsyncClient",
+            return_value=_make_tls_probe_client(),
+        )
+        with patcher as client_cls, pytest.raises(httpx.ConnectError):
+            async for _ in ctrl.dispatch_stream("c-1", body={}):
+                pass
+
+        assert client_cls.call_count == 1, "dispatch_stream 应当构造且仅构造一个 AsyncClient"
+        assert client_cls.call_args.kwargs["verify"] == expected
