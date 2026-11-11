@@ -44,7 +44,10 @@ async def get_current_user(
         ) from exc
     except PublicKeyUnavailableError as exc:
         raise HTTPException(status_code=503, detail="authentication service unavailable") from exc
+    if claims.get("surface") not in ("manager", "user"):
+        raise HTTPException(status_code=401, detail="login required")
     return SimpleNamespace(
+        surface=claims["surface"],
         user_id=str(claims.get("sub") or ""),
         # 兼容旧代码读取；权限判定不得依赖该字段
         is_admin=False,
@@ -53,8 +56,20 @@ async def get_current_user(
     )
 
 
+async def require_user_surface(user: Annotated[Any, Depends(get_current_user)]) -> Any:
+    if user.surface != "user":
+        raise HTTPException(status_code=403, detail="user session required")
+    return user
+
+
+async def require_manager_surface(user: Annotated[Any, Depends(get_current_user)]) -> Any:
+    if user.surface != "manager":
+        raise HTTPException(status_code=403, detail="manager session required")
+    return user
+
+
 async def require_admin(
-    user: Annotated[Any, Depends(get_current_user)],
+    user: Annotated[Any, Depends(require_manager_surface)],
     handler: Annotated[DBHandler, Depends(get_db_handler)],
 ) -> Any:
     """平台级管理 API 守卫：platform_admin 或任意 admin 类型角色。"""
@@ -68,7 +83,7 @@ def require_permission(permission_id: str):
     """构造产品权限依赖；JWT 只负责身份，权限从 Manager 本地授权表解析。"""
 
     async def dependency(
-        user: Annotated[Any, Depends(get_current_user)],
+        user: Annotated[Any, Depends(require_manager_surface)],
         handler: Annotated[DBHandler, Depends(get_db_handler)],
     ) -> Any:
         if not await AuthzService(handler).has_permission(user, permission_id):

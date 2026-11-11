@@ -1,13 +1,14 @@
 import { useTranslation } from 'react-i18next';
 
 export function LanguageSwitcher() {
-  const { i18n } = useTranslation();
+  const { i18n, t } = useTranslation();
   const isZh = i18n.language.startsWith('zh');
 
   return (
-    <div className="flex items-center gap-1 rounded-lg bg-secondary/60 px-2 py-1">
+    <div className="flex items-center gap-1 rounded-lg bg-secondary/60 px-2 py-1" role="group" aria-label={t('auth.language')}>
       <button
         type="button"
+        aria-pressed={isZh}
         onClick={() => i18n.changeLanguage('zh')}
         className={`text-xs px-2 py-1 rounded ${isZh ? 'bg-accent text-white font-medium' : 'text-muted hover:text-text'}`}
       >
@@ -15,6 +16,7 @@ export function LanguageSwitcher() {
       </button>
       <button
         type="button"
+        aria-pressed={!isZh}
         onClick={() => i18n.changeLanguage('en')}
         className={`text-xs px-2 py-1 rounded ${!isZh ? 'bg-accent text-white font-medium' : 'text-muted hover:text-text'}`}
       >

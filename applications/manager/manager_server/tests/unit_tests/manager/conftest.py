@@ -227,7 +227,7 @@ def _install_push_mocks(
 
 
 @pytest_asyncio.fixture
-async def manager_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+async def manager_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest):
     """可写 SQLite + mock push 的 Manager API 客户端。"""
     sim = _GatewayAckSimulator()
     _install_push_mocks(monkeypatch, sim)
@@ -257,7 +257,7 @@ async def manager_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     # Business-only fixture. Security tests use real JWTs and do not override
     # authentication or authorization dependencies.
     def _current_user() -> SimpleNamespace:
-        return SimpleNamespace(user_id="admin", is_admin=False, groups=[])
+        return SimpleNamespace(user_id="admin", surface=getattr(request, "param", "manager"), is_admin=False, groups=[])
 
     app.dependency_overrides[get_current_user] = _current_user
 

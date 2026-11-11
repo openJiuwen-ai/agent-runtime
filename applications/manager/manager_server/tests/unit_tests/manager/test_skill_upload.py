@@ -689,6 +689,7 @@ async def test_list_mine_marks_overdue_order_expired(manager_api) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("manager_api", ["user"], indirect=True)
 async def test_upload_request_status_filter_accepts_expired_only(manager_api) -> None:
     """`status` 契约：expired 合法；cancelled 与未知值在路由层被拒绝。"""
     service = SkillUploadService(manager_api.handler)
@@ -901,6 +902,7 @@ async def test_list_mine_page_beyond_last_has_no_next(manager_api) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("manager_api", ["user"], indirect=True)
 async def test_upload_request_page_bounds_are_rejected(manager_api) -> None:
     """分页参数契约：page 从 1 开始，page_size 上限 50，越界由路由拒绝。"""
     for params in ({"page": 0}, {"page_size": 0}, {"page_size": 51}):

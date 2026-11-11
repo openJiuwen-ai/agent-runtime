@@ -59,7 +59,7 @@ spec:
       targetPort: 5273
   type: ClusterIP
 ---
-# Route：管理面/用户面统一入口（登录认证、用户面 /chat、网关代理都走这个 nginx）
+# Route：管理面独立入口
 # openshift 独有资源；k8s 形态由 k8s_handler.apply_k8s_extras 剥离，改用 NodePort
 # host 省略 → Router 自动分配 <name>-<namespace>.<集群ingress域名>
 apiVersion: route.openshift.io/v1

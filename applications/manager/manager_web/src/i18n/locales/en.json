@@ -1093,6 +1093,8 @@
     "roleManager": "Management role"
   },
   "auth": {
+    "language": "Interface language",
+    "managerAccessRequired": "This account does not have management access.",
     "loginTitle": "{{productName}} Manager Login",
     "username": "Username",
     "password": "Password",
@@ -1111,8 +1113,7 @@
     "clusterSelectFailed": "Failed to select a cluster. Please try again.",
     "errBadCredentials": "Incorrect username or password.",
     "errDisabled": "This account has been disabled. Please contact an administrator.",
-    "noPagePermission": "Your role does not allow access to this management page.",
-    "switchToUser": "Go to User Console"
+    "noPagePermission": "Your role does not allow access to this management page."
   },
   "docs": {
     "entry": "DOCS",

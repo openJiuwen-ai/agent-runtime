@@ -1,11 +1,12 @@
 import { FormEvent, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../auth/AuthContext';
+import { LanguageSwitcher } from '../components/LanguageSwitcher';
 import { ApiError, AuthApi, FederationConnection } from '../services/api';
 import { getProductName } from '../utils/env';
 import { beginBrowserLogin } from '../auth/federation/client';
 
-export function LoginPage() {
+export function LoginPage({ denied = false }: { denied?: boolean }) {
   const { t } = useTranslation();
   const { completeFederatedLogin, login } = useAuth();
   const [username, setUsername] = useState('');
@@ -33,7 +34,7 @@ export function LoginPage() {
     const params = new URLSearchParams(window.location.search);
     if (params.has('federation_error')) {
       window.history.replaceState({}, '', '/auth');
-      setError(t('auth.federationFailed'));
+      setError('auth.federationFailed');
       return;
     }
     const code = params.get('federation_code');
@@ -42,9 +43,9 @@ export function LoginPage() {
     setSubmitting(true);
     window.history.replaceState({}, '', '/auth');
     void completeFederatedLogin(code)
-      .catch(() => setError(t('auth.federationFailed')))
+      .catch(() => setError('auth.federationFailed'))
       .finally(() => setSubmitting(false));
-  }, [completeFederatedLogin, t]);
+  }, [completeFederatedLogin]);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -56,11 +57,11 @@ export function LoginPage() {
       // 后端用稳定 code(auth_bad_credentials / auth_disabled)→ 映射到双语文案;
       // 未知错误回退到通用句子,保证始终是规整句子。
       const codeMsg: Record<string, string> = {
-        auth_bad_credentials: t('auth.errBadCredentials'),
-        auth_disabled: t('auth.errDisabled'),
+        auth_bad_credentials: 'auth.errBadCredentials',
+        auth_disabled: 'auth.errDisabled',
       };
       const detail = err instanceof ApiError ? err.detail : '';
-      setError(codeMsg[detail] ?? t('auth.loginFailed'));
+      setError(codeMsg[detail] ?? 'auth.loginFailed');
     } finally {
       setSubmitting(false);
     }
@@ -73,7 +74,7 @@ export function LoginPage() {
       if (connection.flow === 'browser_pkce') await beginBrowserLogin(connection.connection_id);
       else AuthApi.beginFederatedLogin(connection.connection_id);
     } catch {
-      setError(t('auth.federationFailed'));
+      setError('auth.federationFailed');
       setSubmitting(false);
     }
   }
@@ -81,6 +82,9 @@ export function LoginPage() {
   return (
     <div className="flex items-center justify-center h-screen p-8">
       <form className="card" style={{ width: 360 }} onSubmit={onSubmit}>
+        <div className="mb-2 flex justify-end">
+          <LanguageSwitcher />
+        </div>
         <div className="flex items-center gap-2 mb-4">
           <img src="/logo.svg" alt={getProductName()} style={{ height: 28 }} />
           <div className="card-title">{t('auth.loginTitle')}</div>
@@ -106,7 +110,8 @@ export function LoginPage() {
           onChange={(e) => setPassword(e.target.value)}
         />
 
-        {error && <div className="text-danger text-sm mt-3">{error}</div>}
+        {denied && !error && <div className="text-danger text-sm mt-3">{t('auth.managerAccessRequired')}</div>}
+        {error && <div className="text-danger text-sm mt-3" role="alert">{t(error)}</div>}
 
         <button className="btn primary mt-4" type="submit" disabled={submitting || !username || !password} style={{ width: '100%' }}>
           {submitting ? t('auth.loggingIn') : t('auth.login')}
