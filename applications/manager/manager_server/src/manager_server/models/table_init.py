@@ -15,6 +15,7 @@ from manager_server.models.application_config_models import (
     LOG_MASKING_RULE_TABLE_DEF,
     LOGGING_CONFIG_TABLE_DEF,
     CRON_POLICY_TABLE_DEF,
+    USER_PREFERENCE_DEFAULT_TABLE_DEF,
 )
 from manager_server.models.approval_models import APPROVAL_TABLE_DEFINITIONS
 from manager_server.models.quota_models import QUOTA_TABLE_DEFINITIONS
@@ -61,6 +62,7 @@ ALL_TABLE_DEFINITIONS = (
     LOG_MASKING_RULE_TABLE_DEF,
     LOGGING_CONFIG_TABLE_DEF,
     CRON_POLICY_TABLE_DEF,
+    USER_PREFERENCE_DEFAULT_TABLE_DEF,
     _MEMORY_CONFIG_TABLE_DEF,
     AUDIT_LOG_CONFIG_TABLE_DEF,
     A2A_OUTBOUND_TEMPLATE_TABLE_DEF,
@@ -279,6 +281,52 @@ async def _drop_instance_grant_upload_skill_policy(handler: DBHandler) -> None:
             _log.warning("drop instance_grant.upload_skill_policy failed: %s", exc)
 
 
+async def _ensure_user_preference_default_extras_column(handler: DBHandler) -> None:
+    """旧库补 ``user_preference_default.extras``。"""
+
+    def upgrade(connection):
+        inspector = inspect(connection)
+        table_name = USER_PREFERENCE_DEFAULT_TABLE_DEF.table_name
+        if not inspector.has_table(table_name):
+            return
+        cols = {col["name"] for col in inspector.get_columns(table_name)}
+        if "extras" in cols:
+            return
+        quote = connection.dialect.identifier_preparer.quote
+        dialect = connection.dialect.name
+        if dialect == "postgresql":
+            col_type = "JSONB"
+        elif dialect == "mysql":
+            col_type = "JSON"
+        else:
+            col_type = "TEXT"
+        connection.execute(
+            text(
+                f"ALTER TABLE {quote(table_name)} "
+                f"ADD COLUMN {quote('extras')} {col_type} NULL"
+            )
+        )
+
+    for attempt in range(3):
+        try:
+            async with handler.get_engine().begin() as connection:
+                await connection.run_sync(upgrade)
+            return
+        except DBAPIError as exc:
+            dialect = handler.get_engine().dialect.name
+            sqlstate = getattr(exc.orig, "sqlstate", None) or getattr(
+                exc.orig, "pgcode", None
+            )
+            errno = exc.orig.args[0] if exc.orig.args else None
+            column_race = (
+                (dialect == "postgresql" and sqlstate == "42701")
+                or (dialect == "mysql" and errno == 1060)
+                or "duplicate column" in str(exc.orig).lower()
+            )
+            if not column_race or attempt == 2:
+                raise
+
+
 async def init_all_tables(handler: DBHandler) -> None:
     _ensure_bigint_type_support()
     # 必须在表循环之前补列：init_table 建索引会因缺列失败。
@@ -288,6 +336,7 @@ async def init_all_tables(handler: DBHandler) -> None:
     await _ensure_team_quota_org_column(handler)
     await _migrate_a2a_discovery_settings(handler)
     await _drop_instance_grant_upload_skill_policy(handler)
+    await _ensure_user_preference_default_extras_column(handler)
     from manager_server.core.authz import seed_authz_defaults
 
     await seed_authz_defaults(handler)

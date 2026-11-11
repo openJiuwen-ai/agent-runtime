@@ -43,6 +43,8 @@ import type {
   LoggingConfigUpsertBody,
   CronPolicy,
   CronPolicyUpsertBody,
+  UserPreferenceDefault,
+  UserPreferenceDefaultUpsertBody,
   PackageCatalog,
   AuditLogConfig,
   AuditLogConfigUpsertBody,
@@ -1762,6 +1764,16 @@ export const CronPolicyApi = {
     http<CronPolicy>(`${instanceBase(instanceId)}/cron-policy`, { method: 'PUT', body }),
   remove: (instanceId: string) =>
     http<void>(`${instanceBase(instanceId)}/cron-policy`, { method: 'DELETE' }),
+};
+
+export const UserPreferenceDefaultApi = {
+  get: (instanceId: string) =>
+    http<UserPreferenceDefault>(`${instanceBase(instanceId)}/user-preference-default`),
+  upsert: (instanceId: string, body: UserPreferenceDefaultUpsertBody) =>
+    http<UserPreferenceDefault>(`${instanceBase(instanceId)}/user-preference-default`, {
+      method: 'PUT',
+      body,
+    }),
 };
 
 export const PackageCatalogApi = {
