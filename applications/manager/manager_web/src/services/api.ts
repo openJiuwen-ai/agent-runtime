@@ -812,6 +812,7 @@ export interface AgentTemplate {
   template_ref: Record<string, string[]>;
   enabled: boolean;
   data: Record<string, unknown> | null;
+  reference_count?: number;
   keycloak_client?: AgentClientBinding | null;
   created_at: string | null;
   updated_at: string | null;

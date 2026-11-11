@@ -175,6 +175,7 @@ export function AgentTemplatesPage() {
                       </th>
                       <th>{t('agentTemplate.agentTags')}</th>
                       <th>{t('agentTemplate.templateRef')}</th>
+                      <th>{t('agentTemplate.referenceCount')}</th>
                       <th>
                         <TableColumnFilter
                           label={t('common.enabled')}
@@ -204,7 +205,7 @@ export function AgentTemplatesPage() {
                   <tbody>
                     {items.length === 0 ? (
                       <tr>
-                        <td colSpan={7}>
+                        <td colSpan={8}>
                           <Empty text={t('common.empty')} />
                         </td>
                       </tr>
@@ -231,6 +232,15 @@ export function AgentTemplatesPage() {
                           <JsonHoverPreview value={row.template_ref} />
                         </td>
                         <td className="whitespace-nowrap">
+                          {(row.reference_count ?? 0) > 0 ? (
+                            <span className="tag" title={t('agentTemplate.referenceHint')}>
+                              {row.reference_count}
+                            </span>
+                          ) : (
+                            <span className="text-[11px] text-muted">0</span>
+                          )}
+                        </td>
+                        <td className="whitespace-nowrap">
                           <Switch
                             checked={row.enabled}
                             disabled={togglingId === row.template_id}
@@ -253,7 +263,13 @@ export function AgentTemplatesPage() {
                             >
                               {t('common.edit')}
                             </button>
-                            <button className="btn sm danger" onClick={() => setDelTarget(row)}>
+                            <button
+                              className="btn sm danger"
+                              title={(row.reference_count ?? 0) > 0
+                                ? t('agentTemplate.deleteBlockedHint', { count: row.reference_count ?? 0 })
+                                : undefined}
+                              onClick={() => setDelTarget(row)}
+                            >
                               {t('common.delete')}
                             </button>
                           </div>

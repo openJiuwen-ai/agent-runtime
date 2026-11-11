@@ -482,6 +482,8 @@ async def delete_agent_template(
         ) from None
     except RegistrationError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not ok:
         raise HTTPException(status_code=404, detail="agent_template not found")
     return ResponseModel(code=200, message="success", data={"deleted": True})
