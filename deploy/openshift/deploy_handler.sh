@@ -159,7 +159,7 @@ preflight() {
   done
 }
 
-# 输出单文件清单中的工作负载资源路径（Deployment/StatefulSet，逐行）；
+# 输出单文件清单中的工作负载资源路径（Deployment/StatefulSet/DaemonSet，逐行）；
 # 多文档 yaml 先经 kctl_split_resources 拆分。调用方须 mapfile 收齐后遍历：
 # 拆分产物在共享临时目录，下次拆分即 rm，管道直读 + 中途退出会读到被删文件
 list_workload_resources() { # $1=yaml 清单（单文件）
@@ -167,7 +167,7 @@ list_workload_resources() { # $1=yaml 清单（单文件）
   kctl_split_resources "$1" "$(kctl_tmpdir)" || return 0
   for res in "${KCTL_RESOURCES[@]}"; do
     kctl_resource_fields "$res"
-    [ "$KCTL_KIND" = Deployment ] || [ "$KCTL_KIND" = StatefulSet ] || continue
+    [ "$KCTL_KIND" = Deployment ] || [ "$KCTL_KIND" = StatefulSet ] || [ "$KCTL_KIND" = DaemonSet ] || continue
     printf '%s\n' "$res"
   done
 }
@@ -192,14 +192,14 @@ component_expected_images() { # $1=组件 → 空格分隔的全部期望镜像�
   printf '%s' "${out# }"
 }
 
-# 读取指定标签下 Pod 的 "total ready imgok"（Pod 级口径，适配多容器 Pod）：
-# total=Pod 数；ready=全部容器就绪的 Pod 数；imgok=全部容器镜像都在期望集合内
+# 读取指定标签下 Pod 的 "total ready imgmatch"（Pod 级口径，适配多容器 Pod）：
+# total=Pod 数；ready=全部容器就绪的 Pod 数；imgmatch=全部容器镜像都与渲染清单一致
 # 的 Pod 数（期望集合为空格分隔多值——主容器+沙箱 sidecar 镜像不同，各自匹配）。
 # 仅拉取 PodList 小响应。镜像比对取 spec.containers[].image（创建时原样保留，与渲染清单同形）；
 # status.containerStatuses[].image 会被 k8s 规范化（如 redis:7-alpine →
 # docker.io/library/redis:7-alpine），不可直接比对
 read_pods() { # $1=label selector $2=期望镜像（空格分隔多值；空=不校验镜像）
-  local sel="$1" want_img="${2:-}" resp code total ready imgok
+  local sel="$1" want_img="${2:-}" resp code total ready imgmatch
   [ -n "${KCTL_TOKEN:-}" ] || { echo "0 0 0"; return 0; }
   resp="$(kctl_tmpdir)/pods.json"
   code=$(kctl_http GET "/api/v1/namespaces/$KCTL_NS/pods?labelSelector=$sel" "$resp")
@@ -216,11 +216,11 @@ read_pods() { # $1=label selector $2=期望镜像（空格分隔多值；空=不
       json_arr+="\"$img\""
     done
     # snap 版 yq 不支持 --arg，镜像值内嵌表达式（已过 check_vars 白名单校验）
-    imgok=$(yq "[.items[] | select(([.spec.containers[]?.image] | unique) - [$json_arr] | length == 0)] | length" "$resp" 2>/dev/null)
+    imgmatch=$(yq "[.items[] | select(([.spec.containers[]?.image] | unique) - [$json_arr] | length == 0)] | length" "$resp" 2>/dev/null)
   else
-    imgok=$total
+    imgmatch=$total
   fi
-  echo "${total:-0} ${ready:-0} ${imgok:-0}"
+  echo "${total:-0} ${ready:-0} ${imgmatch:-0}"
 }
 
 # 确保工作负载副本数与镜像和渲染清单一致
@@ -259,7 +259,7 @@ ensure_workload() {
 
 # 等待组件达到就绪策略（每 10s 轮询，预算 WAIT_TIMEOUT_SECS 默认 300s）
 wait_ready() { # $1=组件
-  local comp="$1" label mode i iters total ready imgok want_img
+  local comp="$1" label mode i iters total ready imgmatch want_img
   mode=$(component_wait_mode "$comp")
   if [ "$mode" = none ]; then   # 非工作负载组件（如共享 Secret），apply 成功即就绪
     success "$comp 就绪"
@@ -270,13 +270,13 @@ wait_ready() { # $1=组件
   iters=$(( ${WAIT_TIMEOUT_SECS:-300} / 10 ))
   (( iters >= 1 )) || iters=1   # 预算不足 10s 时至少轮询一次
   for ((i = 1; i <= iters; i++)); do
-    read -r total ready imgok <<< "$(read_pods "$label" "$want_img")"
+    read -r total ready imgmatch <<< "$(read_pods "$label" "$want_img")"
     if [ "$total" -gt 0 ]; then
-      if [ "$mode" = "all" ] && [ "$ready" -eq "$total" ] && [ "$imgok" -eq "$total" ]; then
+      if [ "$mode" = "all" ] && [ "$ready" -eq "$total" ] && [ "$imgmatch" -eq "$total" ]; then
         success "$comp 就绪（$ready/$total）"
         return 0
       fi
-      [ $((i % 3)) -eq 1 ] && info "等 Pod 就绪…（就绪 $ready/$total，期望镜像就位 $imgok/$total）"
+      [ $((i % 3)) -eq 1 ] && info "等 Pod 就绪…（就绪 $ready/$total，镜像匹配 $imgmatch/$total）"
     else
       [ $((i % 3)) -eq 1 ] && info "等 Pod 出现…"
     fi

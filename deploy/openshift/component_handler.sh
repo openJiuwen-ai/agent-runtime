@@ -56,6 +56,7 @@ component_files() {
     identity)       echo "identity.yaml";;
     manager-server) echo "manager-server.yaml";;
     manager-web)    echo "manager-web.yaml";;
+    log)            echo "log.yaml";;
     *)              return 1;;
   esac
 }
@@ -75,6 +76,7 @@ component_label() {
     identity)       echo "app=jiuwenswarm-identity";;
     manager-server) echo "app=jiuwenswarm-manager-server";;
     manager-web)    echo "app=jiuwenswarm-manager-web";;
+    log)            echo "app=fluent-bit";;
   esac
 }
 
@@ -101,6 +103,7 @@ component_deps() {
     identity)       echo "secret ${DEPLOY_VARS["DB_TYPE"]}";;
     manager-server) echo "secret ${DEPLOY_VARS["DB_TYPE"]} redis";;
     runtime)        echo "secret ${DEPLOY_VARS["DB_TYPE"]} redis";;
+    log)            echo "";;   # 无 K8s 依赖：读节点 /var/log，全 ns 采集，与业务组件零耦合
   esac
 }
 
@@ -172,6 +175,7 @@ component_probe() {
     identity)       echo "Deployment/jiuwenswarm-identity";;
     manager-server) echo "Deployment/jiuwenswarm-manager-server";;
     manager-web)    echo "Deployment/jiuwenswarm-manager-web";;
+    log)            echo "DaemonSet/fluent-bit";;
     *)              return 1;;
   esac
 }

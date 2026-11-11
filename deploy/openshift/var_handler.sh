@@ -440,5 +440,20 @@ check_vars() {
   check_optional_vars
   check_identity_sso_vars          # 企业 SSO 三元组"全空或全配"校验（up + identity 时生效，门禁在函数内）
   resolve_dev_mode_vars            # 函数在 k8s_handler.sh（MODE=dev 校验与派生）
+  resolve_log_vars                 # log 组件派生：LOG_SINK_INPUT 按 COLLECT_LOG_MASK_ENABLED 取值
+}
+
+# log 组件变量派生（log.template.yaml）
+# - LOG_SINK_INPUT：vector 落盘 sink 的输入 transform，按 COLLECT_LOG_MASK_ENABLED 取值
+# - CURRENT_NODE_NAME：vector 经 nodeName 固定在 SWARM_LOG_DIR（hostPath）所在节点，留空报错
+resolve_log_vars() {
+  if [ "${DEPLOY_VARS["COLLECT_LOG_MASK_ENABLED"]}" = "true" ]; then
+    DEPLOY_VARS["LOG_SINK_INPUT"]="mask_sensitive"
+  else
+    DEPLOY_VARS["LOG_SINK_INPUT"]="filter_and_parse"
+  fi
+  if in_array log "${TARGETS[@]:-}" && [ -z "${DEPLOY_VARS["CURRENT_NODE_NAME"]}" ]; then
+    error "log 组件需要 CURRENT_NODE_NAME（vector 须钉在 SWARM_LOG_DIR=${DEPLOY_VARS["SWARM_LOG_DIR"]} 所在节点；检查 $CUSTOM_ENV_FILE）"
+  fi
 }
 

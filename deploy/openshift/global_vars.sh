@@ -13,13 +13,15 @@ CUSTOM_ENV_FILE="$SCRIPT_DIR/.env.custom"
 
 # 全部组件的规范依赖序（up 按此序排列；down 倒序）。
 # secret 必须在最前：基础服务与产品组件的密码统一经 jiuwenswarm-secret-configmap 注入
-ALL_COMPONENTS=(secret mariadb mysql postgresql minio redis runtime agentserver gateway web identity manager-server manager-web)
+# log 置于末位：与 db/minio 同类的基础服务——一次部署长期运行，不进默认 up/down 循环
+# （无被依赖方，与其他组件零耦合；显式 up log / down log 管理）
+ALL_COMPONENTS=(secret log mariadb mysql postgresql minio redis runtime agentserver gateway web identity manager-server manager-web)
 
 UP_TARGETS=(secret redis agentserver gateway web)         # up 默认目标（规范依赖序）
 MANAGER_TARGETS=(identity manager-server manager-web)     # manager 组
 
 # 镜像名变量清单，与 templates/ 下 <<XXX_IMAGE>> 占位符一一对应
-IMAGE_VARS=(AGENTSERVER_IMAGE GATEWAY_IMAGE WEB_IMAGE IDENTITY_IMAGE MANAGER_SERVER_IMAGE MANAGER_WEB_IMAGE MARIADB_IMAGE MYSQL_IMAGE POSTGRESQL_IMAGE REDIS_IMAGE MINIO_IMAGE)
+IMAGE_VARS=(AGENTSERVER_IMAGE GATEWAY_IMAGE WEB_IMAGE IDENTITY_IMAGE MANAGER_SERVER_IMAGE MANAGER_WEB_IMAGE MARIADB_IMAGE MYSQL_IMAGE POSTGRESQL_IMAGE REDIS_IMAGE MINIO_IMAGE FLUENT_BIT_IMAGE VECTOR_IMAGE)
 
 # 副本数变量清单，与 templates/ 下 <<XXX_REPLICAS>> 占位符一一对应
 REPLICAS_VARS=(AGENT_SERVER_REPLICAS GATEWAY_REPLICAS WEB_REPLICAS IDENTITY_REPLICAS MANAGER_SERVER_REPLICAS MANAGER_WEB_REPLICAS AGENT_RUNTIME_REPLICAS)
@@ -151,6 +153,16 @@ declare -A DEPLOY_VARS=(
     ["POSTGRESQL_IMAGE"]="postgres:16"
     ["REDIS_IMAGE"]="redis:7-alpine"
     ["MINIO_IMAGE"]="quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z"
+
+    # ----- 日志采集组件（log：fluent-bit DaemonSet + vector 落盘接收器） -----
+    ["FLUENT_BIT_NAME"]="fluent-bit"
+    [ "FLUENT_BIT_IMAGE"]="fluent/fluent-bit:3.2.10"
+    ["VECTOR_NAME"]="vector-receiver"
+    ["VECTOR_IMAGE"]="timberio/vector:0.40.0-alpine"
+    ["SWARM_LOG_DIR"]="${HOME}/swarm_logs"  # 宿主机日志落盘目录（hostPath；vector 钉在 CURRENT_NODE_NAME 节点）
+    ["COLLECT_LOG_MASK_ENABLED"]="false"    # 落盘前脱敏开关（resolve_log_vars 派生 LOG_SINK_INPUT）
+    ["LOG_SINK_INPUT"]="filter_and_parse"   # 派生值：mask on→mask_sensitive / off→filter_and_parse
+    ["VAR_LIB_DOCKER_PATH"]="/var/lib/containerd"  # openshift 形态固定 containerd
 
 
     # ----- 仅 k8s 形态（CLUSTER_TYPE=k8s，openshift 下不生效） -----

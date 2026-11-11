@@ -16,9 +16,12 @@ data:
         Name              tail
         Tag               kube.*
         # 源头过滤：只采集满足命名空间和 Pod 前缀的文件，极大减少节点无效 IO
+        # 不配置 DB：轮转 offset 不跨重启残留
         Path              /var/log/pods/*_jiuwenswarm*/*/*.log
         Parser            cri_or_docker
-        DB                /var/lib/fluent-bit/positions.db
+        Read_from_Head    On
+        Inotify_Watcher   Off
+        Refresh_Interval  5
         Mem_Buf_Limit     50MB
         Skip_Long_Lines   On
 
@@ -112,8 +115,6 @@ spec:
             - name: varlib
               mountPath: <<VAR_LIB_DOCKER_PATH>>
               readOnly: true
-            - name: positions-db
-              mountPath: /var/lib/fluent-bit
       volumes:
         - name: config
           configMap:
@@ -124,10 +125,6 @@ spec:
         - name: varlib
           hostPath:
             path: <<VAR_LIB_DOCKER_PATH>>
-        - name: positions-db
-          hostPath:
-            path: /var/lib/fluent-bit
-            type: DirectoryOrCreate   # 宿主机没有就自动建
 
 ---
 apiVersion: v1

@@ -48,26 +48,25 @@ parse_args() {
 
 usage() {
   cat <<'EOF'
-用法: deploy.sh [manager] [组件...] <up|down> [-n NAMESPACE] [--render-only] [-y]
-  up                拉起产品组件（按 AGENT_RUNTIME_DEPLOY_MODE 派生，见 .env.example）:
+用法: deploy.sh [manager] [组件...] <up|down> [-n NAMESPACE] [--render-only]
+  up                部署缺省目标（产品组件，按 AGENT_RUNTIME_DEPLOY_MODE 派生，见 .env.example）:
                     off:     secret → redis → agentserver → gateway → web
-                    routing: 同上 + runtime（会话粘性路由，零 K8s 权限）
-                    full:    secret → redis → runtime → gateway → web
-                             （AgentServer 由 runtime 按需创建，自动注入 Pod 操作 RBAC）
-  manager up        拉起管理套件: identity → manager-server → manager-web
-                    （依赖的 secret / redis 集群缺失时自动拉起，已有则复用）
-  up mariadb        只部署/渲染指定组件；可多选，如: up mariadb minio
-                    基础服务四件套: mariadb / mysql / postgresql / minio（数据库三选一）
-  down [组件...]    卸载目标（倒序删除；共享依赖 secret/redis 仍被存活组件依赖时保留，
-                    卸载后依赖方清零则自动回收）。默认 down 与 up 目标对称；
-                    模式切换（routing→off）后遗留的 runtime 用 `down runtime` 清理
-  -n NAMESPACE      指定 namespace（默认取 .env.custom 的 NAMESPACE）
-  --render-only     只渲染本次目标组件的清单到 conf/，不连接集群（核对/交付 yaml 用；仅 up）
-  -y                兼容保留参数，无实际作用（卸载不再需要确认）
-前置条件: 基础服务已拉起（./deploy.sh up mariadb minio，见 README）
-版本管理: 组件镜像名（含 amd64/arm64 架构段）统一维护在 .env.custom
-示例: ./deploy.sh up && ./deploy.sh manager up
-      ./deploy.sh up mariadb --render-only   # 只渲染 mariadb 清单
+                    routing: secret → redis → runtime → agentserver → gateway → web
+                    full:    secret → redis → runtime → gateway → web（AgentServer 由 runtime 按需创建）
+  manager up        部署管理套件: identity → manager-server → manager-web
+  up <组件>...      部署指定组件（可多选，自动按依赖序执行）:
+                    基础服务: mariadb / mysql / postgresql / minio（数据库三选一）、log（日志采集，一次部署长期运行）
+                    共享依赖: secret / redis（目标组件缺失依赖时自动补齐）
+  down [组件...]    卸载指定组件（按依赖逆序；缺省目标与 up 对称）。
+                    secret / redis 仍被在役组件依赖时自动保留；
+                    模式切换（routing→off）后遗留的 runtime 需显式 down runtime 清理
+  -n NAMESPACE      指定 namespace（缺省取 .env.custom 的 NAMESPACE）
+  --render-only     仅渲染目标组件清单到 conf/，不连接集群（仅 up）
+前置条件: 产品组件依赖数据库与对象存储: ./deploy.sh up mariadb minio（数据库三选一，详见 README）
+镜像版本: 组件镜像由 .env.custom 的 *_IMAGE 变量管理，up 时自动滚动更新
+示例: ./deploy.sh up mariadb minio && ./deploy.sh up && ./deploy.sh manager up
+      ./deploy.sh up log                    # 部署日志采集（基础服务，部署一次长期运行）
+      ./deploy.sh up mariadb --render-only  # 仅渲染 mariadb 清单
       ./deploy.sh -n other-ns up --render-only
 EOF
 }

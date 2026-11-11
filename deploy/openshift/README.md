@@ -56,7 +56,7 @@ kubectl get pods   # 确认登录成功
 ./deploy.sh -n other-ns up --render-only   # 指定 namespace 渲染
 ```
 
-可指定的组件：基础服务 `mariadb / mysql / postgresql / minio`，共享依赖
+可指定的组件：基础服务 `mariadb / mysql / postgresql / minio / log`，共享依赖
 `secret / redis`，产品组件 `agentserver / gateway / web`，管理套件
 `identity / manager-server / manager-web`。
 
@@ -84,6 +84,7 @@ kubectl get pods   # 确认登录成功
 完整部署顺序（从零开始）：
 
 ```bash
+./deploy.sh up log        # 日志采集（可选；一次部署长期运行，业务不依赖）
 ./deploy.sh up mariadb    # 数据库（三选一: mariadb / mysql / postgresql，默认用 MariaDB）
 ./deploy.sh up minio      # 对象存储
 ./deploy.sh up            # 产品组件（按 AGENT_RUNTIME_DEPLOY_MODE 派生，见 .env.example）:
