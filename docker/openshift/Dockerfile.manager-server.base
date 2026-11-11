@@ -1,0 +1,10 @@
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+USER root
+ARG ARCH=amd64
+
+RUN curl -fL https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/jiuwenswarm/software/kubectl-linux-${ARCH} \
+      -o /usr/local/bin/kubectl \
+    && chmod +x /usr/local/bin/kubectl \
+    && kubectl version --client

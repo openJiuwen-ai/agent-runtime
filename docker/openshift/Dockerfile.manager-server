@@ -1,16 +1,28 @@
-# manager-server — Manager 业务服务（OpenShift / 非 root）
 ARG BASE_IMAGE
-ARG IMAGE_VERSION
-FROM ${BASE_IMAGE}:${IMAGE_VERSION}
+FROM ${BASE_IMAGE}
 
+USER root
 
 ARG PIP_EXTRA_ARGS="-i https://mirrors.aliyun.com/pypi/simple/"
 
-RUN uv pip install --system -e "./applications/manager/manager_server" \
-    ${PIP_EXTRA_ARGS}
+RUN groupadd --gid 1000 app \
+    && useradd --uid 1000 --gid 1000 --create-home --shell /bin/bash app \
+    && mkdir -p /app/agent-runtime \
+    && chown 1000:0 /app/agent-runtime /home/app \
+    && chmod -R g+rwX /app/agent-runtime /home/app
 
 WORKDIR /app/agent-runtime
-ENV PATH=/usr/local/bin:$PATH:/home/app/.local/bin
+COPY --chown=1000:0 . /app/agent-runtime/
+RUN chgrp -R 0 /app/agent-runtime && chmod -R g+rwX /app/agent-runtime
+
+# manager-server 仅依赖 foundation，不依赖 service
+RUN uv pip install --system -e "./foundation" \
+    -e "./applications/manager/manager_server" \
+    ${PIP_EXTRA_ARGS}
+
+ENV HOME=/home/app \
+    PATH=/usr/local/bin:$PATH:/home/app/.local/bin \
+    PYTHONUNBUFFERED=1
 
 EXPOSE 8765 8766
 CMD ["manager-server"]
