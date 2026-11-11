@@ -134,6 +134,11 @@ class DeploymentService:
 
         now = utc_now()
         deployment_id = f"dp-{uuid.uuid4().hex[:20]}"
+        # deploy_mode 必须持久化进 params.env：_execute_task 认领时按
+        # defaults_snapshot + params.env 重新 merge 生成 .env.custom，
+        # 只存顶层字段会导致实际执行回落到 defaults 里的模式（E2E 实测回归）
+        params = body.model_dump(exclude_none=True)
+        params.setdefault("env", {})["AGENT_RUNTIME_DEPLOY_MODE"] = deploy_mode
         row_data = {
             "deployment_id": deployment_id,
             "namespace": namespace,
@@ -141,7 +146,7 @@ class DeploymentService:
             "deploy_mode": deploy_mode,
             "status": "pending",
             "phase": "pending",
-            "params": body.model_dump(exclude_none=True),
+            "params": params,
             "defaults_snapshot": defaults,
             "tool_version": read_tool_version(),
             "created_by": actor or "system",
@@ -383,7 +388,12 @@ async def register_instance_for_namespace(handler: DBHandler, task: dict) -> tup
         row = await InstanceService(handler).create(body)
     except ValueError as exc:
         return None, f"部署成功但实例自动注册失败: {exc}（可手工登记）"
-    return str(getattr(row, "jiuwenclaw_id", "") or ""), None
+    # InstanceService.create 返回 dict（或行对象），两种形态都取 jiuwenclaw_id
+    if isinstance(row, dict):
+        jid = str(row.get("jiuwenclaw_id", "") or "")
+    else:
+        jid = str(getattr(row, "jiuwenclaw_id", "") or "")
+    return jid, None
 
 
 # ---------- 执行器循环 ----------
@@ -438,14 +448,18 @@ async def _execute_task(handler: DBHandler, task: dict) -> None:
             jid, note = await register_instance_for_namespace(handler, task)
         except Exception as exc:  # noqa: BLE001
             jid, note = None, f"实例自动注册异常: {exc}"
-        progress = dict(result.get("progress") or {})
+        # 不能用 result 重建 progress：runner.run() 只返回状态三元组，
+        # 终态进度已由 runner 落库——此处读回现有进度仅附加 auto_register 备注，
+        # 否则会把组件时间线/日志截断标记清空（E2E 实测回归）
+        row = await handler.get(_TASK_TABLE, {"deployment_id": deployment_id})
+        progress = dict(getattr(row, "progress", None) or {}) if row is not None else {}
         if note:
             progress["auto_register"] = note
         await handler.update(
             _TASK_TABLE,
             {"deployment_id": deployment_id},
             {
-                "instance_jid": jid,
+                "instance_jid": jid or None,
                 "progress": progress,
                 "updated_at": utc_now(),
             },

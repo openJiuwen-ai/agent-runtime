@@ -99,6 +99,8 @@ async def test_create_list_get_flow(manager_api, tool_available):
     detail = resp.json()["data"]
     assert detail["status"] == "pending"
     assert detail["deploy_mode"] == "full"
+    # deploy_mode 必须持久化进 params.env（执行器按 defaults+params.env 重新 merge）
+    assert detail["params"]["env"]["AGENT_RUNTIME_DEPLOY_MODE"] == "full"
     assert "defaults_snapshot" not in detail   # 不外露（含密码）
 
     # 日志：任务未跑，空集
