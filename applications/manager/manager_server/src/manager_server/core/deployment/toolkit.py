@@ -52,13 +52,8 @@ def check_tool_available(tool_dir: Path | None = None) -> tuple[bool, str]:
     return True, ""
 
 
-def parse_env_example(tool_dir: Path | None = None) -> dict:
-    """解析工具树 .env.example 为键值 dict（默认参数播种用；兼容带/不带引号）。
-
-    行内注释（``KEY=value  # 注释``）一并剥离——example 的值均为占位演示，
-    不存在合法含 ``#`` 的默认值。
-    """
-    path = (tool_dir or resolve_tool_dir()) / ".env.example"
+def _parse_env_file(path: Path) -> dict:
+    """解析 env 键值文件（兼容带/不带引号、行内注释；.env.custom 与 .env.example 共用）。"""
     result: dict[str, str] = {}
     try:
         content = path.read_text(encoding="utf-8")
@@ -74,6 +69,20 @@ def parse_env_example(tool_dir: Path | None = None) -> dict:
         if key.isidentifier():
             result[key] = value
     return result
+
+
+def parse_env_example(tool_dir: Path | None = None) -> dict:
+    """解析工具树 .env.example（占位演示值，播种的最低优先源）。"""
+    return _parse_env_file((tool_dir or resolve_tool_dir()) / ".env.example")
+
+
+def parse_env_custom(tool_dir: Path | None = None) -> dict:
+    """解析工具树 .env.custom（版本化部署配置，播种的最高优先源）。
+
+    CLI 部署机上它天然存在；镜像/dev 挂载形态需随构建或拷贝带入工具树——
+    它带着该版本全部镜像 tag，manager 据此播种出可直接发起部署的 defaults。
+    """
+    return _parse_env_file((tool_dir or resolve_tool_dir()) / ".env.custom")
 
 
 # global_vars.sh declare -A DEPLOY_VARS 的默认值行：["KEY"]="VALUE"

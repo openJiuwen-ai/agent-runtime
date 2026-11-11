@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import pytest
+from asyncio import run as asyncio_run
 
 from manager_server.core.deployment.env_builder import (
     ALLOWED_ENV_KEYS,
@@ -181,3 +182,58 @@ class TestMask:
         # 白名单键要么可校验、要么属于镜像/副本/形态分组（防手滑加入未处理键）
         assert "AGENT_RUNTIME_DEPLOY_MODE" in ALLOWED_ENV_KEYS
         assert "CLUSTER_TYPE" not in ALLOWED_ENV_KEYS
+
+
+class TestSeedingFromEnvCustom:
+    """播种优先级：工具树 .env.custom（版本化清单）> 工具默认 > example。"""
+
+    def test_env_custom_wins(self, tmp_path, monkeypatch):
+        from manager_server.core.deployment import toolkit, service as svc_mod
+
+        tool_dir = tmp_path / "tool"
+        tool_dir.mkdir()
+        (tool_dir / "deploy.sh").write_text("#!/bin/sh\n")
+        monkeypatch.setattr(toolkit, "resolve_tool_dir", lambda: tool_dir)
+        # 工具默认 + example + 版本化 custom
+        (tool_dir / "global_vars.sh").write_text(
+            'declare -A DEPLOY_VARS=(\n    ["GATEWAY_IMAGE"]="example/gw:public"\n)\n'
+        )
+        (tool_dir / ".env.example").write_text('GATEWAY_IMAGE="example/gw:example"\nDB_TYPE=mariadb\n')
+        (tool_dir / ".env.custom").write_text(
+            'GATEWAY_IMAGE="swr.example/jiuwenswarm-core:0.0.16y"\n'
+            'AGENT_RUNTIME_IMAGE="swr.example/jiuwenswarm-agent-runtime:0.0.16y"\n'
+            'CLUSTER_TYPE=k8s\n'   # 白名单外 → 过滤
+        )
+
+        class _H:  # 最小 handler：get_defaults 直接走播种分支
+            async def get(self, table, filters):
+                return None
+
+            async def create(self, table, data):
+                return None
+
+        seeded = asyncio_run(svc_mod.DeploymentService(_H()).get_defaults())
+        assert seeded["GATEWAY_IMAGE"] == "swr.example/jiuwenswarm-core:0.0.16y"
+        assert seeded["AGENT_RUNTIME_IMAGE"] == "swr.example/jiuwenswarm-agent-runtime:0.0.16y"
+        assert "CLUSTER_TYPE" not in seeded
+        assert seeded["DB_TYPE"] == "mariadb"   # example 次优先仍生效
+
+    def test_env_custom_absent_falls_back(self, tmp_path, monkeypatch):
+        from manager_server.core.deployment import toolkit, service as svc_mod
+
+        tool_dir = tmp_path / "tool"
+        tool_dir.mkdir()
+        monkeypatch.setattr(toolkit, "resolve_tool_dir", lambda: tool_dir)
+        (tool_dir / "global_vars.sh").write_text(
+            'declare -A DEPLOY_VARS=(\n    ["MARIADB_IMAGE"]="mariadb:11.8"\n)\n'
+        )
+
+        class _H:
+            async def get(self, table, filters):
+                return None
+
+            async def create(self, table, data):
+                return None
+
+        seeded = asyncio_run(svc_mod.DeploymentService(_H()).get_defaults())
+        assert seeded["MARIADB_IMAGE"] == "mariadb:11.8"

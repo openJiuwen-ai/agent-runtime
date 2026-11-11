@@ -27,6 +27,7 @@ from manager_server.core.deployment.env_builder import (
 from manager_server.core.deployment.runner import DeployRunner
 from manager_server.core.deployment.toolkit import (
     check_tool_available,
+    parse_env_custom,
     parse_env_example,
     parse_tool_defaults,
     read_tool_version,
@@ -260,11 +261,15 @@ class DeploymentService:
             stored = getattr(row, "env_json", None)
             if isinstance(stored, dict):
                 return dict(stored)
-        # 首次播种：工具内置默认（global_vars.sh DEPLOY_VARS，镜像清单等真源）
-        # + .env.example 非空值覆盖；白名单过滤 + 逐值校验。
+        # 首次播种优先级：.env.custom（版本化部署配置，含本版镜像 tag）>
+        # global_vars.sh 工具默认 > .env.example 占位值；白名单过滤 + 逐值校验。
         # 空值不入库：写了 KEY="" 会覆盖 deploy 工具的内置默认（如 root 密码），
         # 跳过即让 global_vars.sh 默认值生效。
-        seed_source = {**parse_tool_defaults(), **parse_env_example()}
+        seed_source = {
+            **parse_tool_defaults(),
+            **parse_env_example(),
+            **parse_env_custom(),
+        }
         seeded: dict[str, str] = {}
         for key, value in seed_source.items():
             if key not in env_builder.ALLOWED_ENV_KEYS or not str(value).strip():
