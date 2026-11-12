@@ -15,6 +15,7 @@ from manager_server.models.application_config_models import (
     LOG_MASKING_RULE_TABLE_DEF,
     LOGGING_CONFIG_TABLE_DEF,
     CRON_POLICY_TABLE_DEF,
+    USER_PREFERENCE_DEFAULT_TABLE_DEF,
 )
 from manager_server.models.approval_models import APPROVAL_TABLE_DEFINITIONS
 from manager_server.models.quota_models import QUOTA_TABLE_DEFINITIONS
@@ -61,6 +62,7 @@ ALL_TABLE_DEFINITIONS = (
     LOG_MASKING_RULE_TABLE_DEF,
     LOGGING_CONFIG_TABLE_DEF,
     CRON_POLICY_TABLE_DEF,
+    USER_PREFERENCE_DEFAULT_TABLE_DEF,
     _MEMORY_CONFIG_TABLE_DEF,
     AUDIT_LOG_CONFIG_TABLE_DEF,
     A2A_OUTBOUND_TEMPLATE_TABLE_DEF,
@@ -288,6 +290,7 @@ async def init_all_tables(handler: DBHandler) -> None:
     await _ensure_team_quota_org_column(handler)
     await _migrate_a2a_discovery_settings(handler)
     await _drop_instance_grant_upload_skill_policy(handler)
+    # user_preference_default 首发即含 extras，无需再跑补列迁移。
     from manager_server.core.authz import seed_authz_defaults
 
     await seed_authz_defaults(handler)
