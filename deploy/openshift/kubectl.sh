@@ -32,8 +32,10 @@ _DEPLOY_KUBECTL_SH=1
 # token 覆盖顺序：--token > 环境变量 TOKEN > oc 登录态
 # CLUSTER_TYPE=k8s：kubectl + kubeconfig 认证，--server/--token 与 oc 逻辑不生效
 
-# 本脚本所在目录
-_KCTL_DIR="${DEPLOY_TMP_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+# 本脚本所在目录（库文件 source 根；不随 DEPLOY_TMP_DIR 改变）
+_KCTL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# 临时目录根（kapply-<PID>）：可经 DEPLOY_TMP_DIR 重定向（程序化调用：工具树只读共享）
+_KCTL_TMP_ROOT="${DEPLOY_TMP_DIR:-$_KCTL_DIR}"
 
 source "$_KCTL_DIR/common.sh"
 source "$_KCTL_DIR/envfile_handler.sh"
@@ -45,7 +47,7 @@ source "$_KCTL_DIR/var_handler.sh"
 source "$_KCTL_DIR/k8s_handler.sh"
 
 # 临时目录随进程退出清理（kapply-<PID> 按进程隔离）；SIGINT/SIGTERM 转发为正常退出以触发本 trap
-trap 'rm -rf "$_KCTL_DIR/kapply-$$"' EXIT
+trap 'rm -rf "$_KCTL_TMP_ROOT/kapply-$$"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
@@ -90,7 +92,7 @@ kctl_check_vars() {
 # 惰性创建临时目录：kapply-<PID> 按进程隔离，命令替换内多次调用返回同一目录；
 # 路径须位于 $HOME 内且非隐藏（snap 版 yq 沙箱要求），退出时由 EXIT trap 清理
 kctl_tmpdir() {
-  KCTL_TMP="$_KCTL_DIR/kapply-$$"
+  KCTL_TMP="$_KCTL_TMP_ROOT/kapply-$$"
   mkdir -p "$KCTL_TMP"
   printf '%s' "$KCTL_TMP"
 }

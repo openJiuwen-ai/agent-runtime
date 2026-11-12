@@ -170,19 +170,24 @@ def build_env_custom(env: dict, *, namespace: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def derive_db_connection(env: dict) -> dict:
-    """从合并 env 派生共享数据库连接信息（对齐 resolve_db_vars + global_vars 默认值）。"""
-    db_type = env.get("DB_TYPE", "mariadb")
+def derive_db_connection(env: dict, *, tool_defaults: dict | None = None) -> dict:
+    """从合并 env 派生共享数据库连接信息。
+
+    未显式配置的键回落 deploy 工具内置默认（global_vars.sh 的 DEPLOY_VARS，经
+    ``tool_defaults`` 动态传入——与 deploy.sh 实际执行保持同一真源，避免硬编码
+    副本漂移）；最终兜底为与 global_vars 当前值一致的常量，防 tool_defaults 缺失。
+    """
+    defaults = tool_defaults or {}
+    db_type = env.get("DB_TYPE") or defaults.get("DB_TYPE") or "mariadb"
     default_host = f"{db_type}-headless.default"   # k8s 形态内置 = default 共享实例
-    default_port = "5432" if db_type == "postgresql" else "3306"
-    default_user = "postgres" if db_type == "postgresql" else "root"
+    default_port = defaults.get("DB_PORT") or ("5432" if db_type == "postgresql" else "3306")
+    default_user = defaults.get("DB_USER") or ("postgres" if db_type == "postgresql" else "root")
     root_password_keys = {
         "mariadb": "MARIADB_ROOT_PASSWORD",
         "mysql": "MYSQL_ROOT_PASSWORD",
         "postgresql": "POSTGRES_PASSWORD",
     }
-    # 未显式配置时回落 deploy 工具内置默认密码（global_vars.sh；.env.example 留空占位）
-    tool_default_passwords = {"mariadb": "Root@123456", "mysql": "Root@123456", "postgresql": "Root@123456"}
+    fallback_passwords = {"mariadb": "Root@123456", "mysql": "Root@123456", "postgresql": "Root@123456"}
     return {
         "db_type": db_type,
         "host": env.get("DB_HOST") or default_host,
@@ -190,7 +195,8 @@ def derive_db_connection(env: dict) -> dict:
         "user": env.get("DB_USER") or default_user,
         "password": env.get("DB_PASSWORD")
         or env.get(root_password_keys[db_type], "")
-        or tool_default_passwords[db_type],
+        or defaults.get(root_password_keys[db_type], "")
+        or fallback_passwords[db_type],
     }
 
 
@@ -231,11 +237,16 @@ def derive_instance_hosts(namespace: str) -> dict:
     }
 
 
+def is_sensitive_key(key: str) -> bool:
+    """键是否为密码/密钥类（注入侧剔除与掩码共用的判定）。"""
+    return any(marker in key.upper() for marker in SENSITIVE_KEY_MARKERS)
+
+
 def mask_sensitive_env(env: dict) -> dict:
     """API 响应用：密码/密钥类值替换为掩码（键含标记即掩码）。"""
     masked: dict[str, str] = {}
     for key, value in env.items():
-        if any(marker in key.upper() for marker in SENSITIVE_KEY_MARKERS) and value:
+        if is_sensitive_key(key) and value:
             masked[key] = "******"
         else:
             masked[key] = value

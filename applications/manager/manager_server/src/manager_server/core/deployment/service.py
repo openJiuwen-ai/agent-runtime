@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -28,6 +29,7 @@ from manager_server.core.deployment.runner import DeployRunner
 from manager_server.core.deployment.toolkit import (
     check_tool_available,
     parse_env_custom,
+    parse_tool_defaults,
     read_tool_version,
 )
 from manager_server.core.instance.instance_service import InstanceService
@@ -308,6 +310,51 @@ class DeploymentService:
         return merged
 
 
+# ---------- 启动同步：manager up 注入的 .env.custom 快照 ----------
+
+async def sync_defaults_from_snapshot(handler: DBHandler) -> int:
+    """启动时按 ``MANAGER_DEPLOY_ENV_JSON``（manager up 渲染注入的 .env.custom 快照，
+    非敏感键）刷新部署默认参数。
+
+    注入键覆盖存量值——.env.custom 是这些键的权威来源，版本升级重新 manager up 后
+    重启即自动跟进新镜像 tag；操作员经 defaults 接口配置的其他键保留。
+    快照未注入（如本地源码运行）时不做任何事。
+    """
+    raw = (settings.deploy_env_snapshot or "").strip()
+    if not raw:
+        return 0
+    try:
+        snapshot = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        _log.warning("deployment_snapshot_invalid_json", error=str(exc))
+        return 0
+    updates: dict[str, str] = {}
+    for raw_key, raw_value in snapshot.items():
+        key = str(raw_key).strip().upper()
+        if (
+            key not in env_builder.ALLOWED_ENV_KEYS
+            or env_builder.is_sensitive_key(key)   # 与注入侧同策：敏感键不入 defaults（Deployment env 明文）
+            or raw_value is None
+            or not str(raw_value).strip()
+        ):
+            continue
+        try:
+            updates[key] = env_builder.validate_env_value(key, str(raw_value))
+        except ValueError:
+            continue
+    if not updates:
+        return 0
+    current = await DeploymentService(handler).get_defaults()
+    merged = {**current, **updates}
+    await handler.update(
+        _DEFAULTS_TABLE,
+        {"id": _DEFAULTS_ROW_ID},
+        {"env_json": merged, "updated_at": utc_now(), "updated_by": "env-snapshot"},
+    )
+    _log.info("deployment_defaults_synced", keys=len(updates))
+    return len(updates)
+
+
 # ---------- 前置步骤：预建产品库 ----------
 
 async def ensure_product_databases(env: dict, *, namespace: str) -> None:
@@ -316,7 +363,7 @@ async def ensure_product_databases(env: dict, *, namespace: str) -> None:
     复用 foundation 的 ``init_database``（幂等；PG 走 AUTOCOMMIT + 23505 处理）：
     mysql/mariadb 按库隔离 ``<module>_<ns>``；postgresql 库共享、按 schema 隔离。
     """
-    conn = derive_db_connection(env)
+    conn = derive_db_connection(env, tool_defaults=parse_tool_defaults())
     targets = derive_product_databases(env, namespace=namespace)
     if conn["db_type"] == "postgresql":
         from openjiuwen_runtime.foundation.db.postgresql_handler import (

@@ -170,3 +170,38 @@ async def test_get_missing_returns_404(manager_api, tool_available):
     assert resp.status_code == 404
     resp = await manager_api.http.get(f"{_DEPLOYMENTS}/dp-nothing/logs")
     assert resp.status_code == 404
+
+
+async def test_defaults_sync_from_snapshot(manager_api, tool_available, monkeypatch):
+    """manager up 注入的快照在启动同步时覆盖 defaults（开箱即用链路）。"""
+    from manager_server.core.deployment import service as service_mod
+    from manager_server.infrastructure.config import settings
+
+    monkeypatch.setattr(
+        settings,
+        "deploy_env_snapshot",
+        '{"GATEWAY_IMAGE":"swr.example/gw:16y","MARIADB_ROOT_PASSWORD":"should-drop",'
+        '"EVIL_KEY":"x","DB_TYPE":"mysql"}',
+    )
+    synced = await service_mod.sync_defaults_from_snapshot(manager_api.handler)
+    assert synced == 2   # 敏感键与白名单外键被剔除
+
+    resp = await manager_api.http.get(f"{_DEPLOYMENTS}/defaults")
+    env = resp.json()["data"]["env"]
+    assert env["GATEWAY_IMAGE"] == "swr.example/gw:16y"
+    assert env["DB_TYPE"] == "mysql"
+    assert "MARIADB_ROOT_PASSWORD" not in env   # 注入侧已剔除敏感键
+    assert "EVIL_KEY" not in env
+
+    # 二次同步：覆盖旧值（版本升级跟进），操作员自配键保留
+    monkeypatch.setattr(
+        settings, "deploy_env_snapshot", '{"GATEWAY_IMAGE":"swr.example/gw:17y"}'
+    )
+    await manager_api.http.put(
+        f"{_DEPLOYMENTS}/defaults", json={"env": {"WEB_REPLICAS": "2"}}
+    )
+    await service_mod.sync_defaults_from_snapshot(manager_api.handler)
+    resp = await manager_api.http.get(f"{_DEPLOYMENTS}/defaults")
+    env = resp.json()["data"]["env"]
+    assert env["GATEWAY_IMAGE"] == "swr.example/gw:17y"   # 跟进新版
+    assert env["WEB_REPLICAS"] == "2"                     # 操作员键保留

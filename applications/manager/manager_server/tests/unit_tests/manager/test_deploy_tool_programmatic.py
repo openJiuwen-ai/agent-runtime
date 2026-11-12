@@ -120,3 +120,47 @@ def _first_namespace(manifest: Path) -> str:
         capture_output=True, text=True, check=True,
     )
     return out.stdout.strip().splitlines()[0]
+
+
+async def test_manager_render_injects_env_snapshot(tmp_path: Path):
+    """manager up 渲染时把 .env.custom 非敏感键注入 MANAGER_DEPLOY_ENV_JSON（敏感键剔除）。"""
+    import subprocess
+
+    tool_dir = resolve_tool_dir()
+    work = tmp_path / "work"
+    (work / "conf").mkdir(parents=True)
+    env_file = work / ".env.custom"
+    env_file.write_text(
+        _MIN_ENV_CUSTOM
+        + 'MARIADB_ROOT_PASSWORD="Root@123456"\n'
+        + 'DB_TYPE="mysql"\n',
+        encoding="utf-8",
+    )
+    sub_env = dict(os.environ)
+    sub_env.update(
+        {
+            "DEPLOY_ENV_FILE": str(env_file),
+            "DEPLOY_CONF_DIR": str(work / "conf"),
+            "DEPLOY_TMP_DIR": str(work / "tmp"),
+        }
+    )
+    (work / "tmp").mkdir()
+    proc = await asyncio.create_subprocess_exec(
+        "bash", "deploy.sh", "-n", "ut-snap", "manager", "up", "--render-only",
+        cwd=str(tool_dir), env=sub_env,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+    )
+    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=120)
+    assert proc.returncode == 0, stdout.decode()
+
+    manifest = work / "conf" / "manager-server.yaml"
+    assert manifest.is_file()
+    value = subprocess.run(
+        ["yq", ".spec.template.spec.containers[0].env[] | select(.name == \"MANAGER_DEPLOY_ENV_JSON\") | .value", str(manifest)],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    snapshot = json.loads(value)
+    assert snapshot["GATEWAY_IMAGE"].endswith(":1.0")
+    assert snapshot["DB_TYPE"] == "mysql"
+    assert "MARIADB_ROOT_PASSWORD" not in snapshot   # 敏感键剔除
+    assert "CLUSTER_TYPE" not in snapshot or snapshot["CLUSTER_TYPE"] == "k8s"  # 文件里写了才带

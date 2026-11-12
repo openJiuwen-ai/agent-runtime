@@ -404,6 +404,35 @@ apply_k8s_extras() { # $@=本次渲染的清单文件名
   done
 }
 
+# ---------- manager-server 部署默认参数快照注入（开箱即用） ----------
+
+# manager up 渲染时把 .env.custom 的非敏感键值（镜像清单/副本数/部署模式等）以 JSON
+# 注入 manager-server 的 env MANAGER_DEPLOY_ENV_JSON；manager-server 每次启动据此刷新
+# 部署默认参数（defaults 表）——免镜像改动、免手工配置，且随每次 manager up 重新注入，
+# 版本升级（换镜像 tag）后重启即自动跟进。
+# 敏感键（密码/密钥类，Deployment env 明文可见）不注入，经 defaults 接口单独配置；
+# 仅取单行完整键值（`KEY="value"` 或 `KEY=value`），多行跨行值不注入。
+apply_manager_deploy_env_snapshot() { # $@=本次渲染的清单文件名
+  local f key val json=""
+  for f in "$@"; do
+    case "${f%.yaml}" in manager-server) ;; *) continue;; esac
+    [ -f "$CONF_DIR/$f" ] || continue
+    while IFS='=' read -r key val; do
+      case "$key" in ""|\#*) continue;; esac
+      [[ "$key" =~ (PASSWORD|SECRET|TOKEN|ACCESS_KEY)$ ]] && continue
+      val="${val%\"}"; val="${val#\"}"
+      val="${val//\\/\\\\}"; val="${val//\"/\\\"}"
+      json="${json:+$json,}\"$key\":\"$val\""
+    done < <(grep -E '^[A-Za-z0-9_]+="[^"]*"$|^[A-Za-z0-9_]+=[^="#]*$' "$CUSTOM_ENV_FILE")
+    [ -n "$json" ] || return 0
+    SNAP_JSON="{$json}" yq -i \
+      '(select(.kind == "Deployment").spec.template.spec.containers[0].env) |=
+        ((. // []) + [{"name": "MANAGER_DEPLOY_ENV_JSON", "value": strenv(SNAP_JSON)}])' "$CONF_DIR/$f" \
+      || error "manager-server 部署默认参数快照注入失败: $f"
+    info "manager-server defaults 快照注入：非敏感键已随清单下发（共 $(echo "$json" | grep -oE '(^|,)"[A-Za-z0-9_]+"' | wc -l | awk '{print $1}') 键）"
+  done
+}
+
 # ---------- manager-server 部署凭证注入（管理面程序化部署） ----------
 
 # manager up 的前置步骤：MANAGER_DEPLOY_KUBECONFIG_SECRET 非空且目标 ns 中该 Secret
