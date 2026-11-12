@@ -333,6 +333,7 @@ class StandaloneCatalogImportService:
             "model_template",
             "embedding_template",
             "skill_prebuilt_template",
+            "expert_package_template",
             "extension_config_template",
             "mcp_template",
             "permissions_template",
