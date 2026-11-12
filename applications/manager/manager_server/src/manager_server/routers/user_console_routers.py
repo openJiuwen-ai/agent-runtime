@@ -75,7 +75,9 @@ async def list_my_agent_contexts(
     """根据 instance_grant + instance_agent_resource 返回可访问组合。
 
     业务键：``bot_id`` / ``group_id`` / ``user_id``（均为 id）。
-    返回 ``agent_name`` / ``group_name`` / ``jiuwenclaw_name`` 展示字段，以及 ``jiuwenclaw_id``。
+    返回 ``agent_name``（``agent_`` + 43 位 ``agent_id``，稳定展示标识）、
+    ``agent_id`` / ``runtime_template_id`` / ``agent_template_id``、
+    ``resource_name``（人类可读资源名）以及 ``group_name`` / ``jiuwenclaw_name``。
     """
     contexts = await UserConsoleService(handler).list_accessible_contexts(
         getattr(user, "user_id"),

@@ -14,6 +14,11 @@ from openjiuwen_runtime.foundation.db.handler import DBHandler
 
 from manager_server.core.instance_access import InstanceGrantService
 from manager_server.core.instance_access.instance_grant_service import SUBJECT_ORG, SUBJECT_USER
+from manager_server.core.instance_resource.runtime_config_sync import (
+    build_service_scope_index,
+    resolve_service_template_id,
+)
+from manager_server.core.user_console.agent_identity import try_build_agent_identity
 from manager_server.infrastructure.config import settings
 from manager_server.infrastructure.match_expr import evaluate_match_expr
 from manager_server.infrastructure.utils import utc_now
@@ -101,7 +106,13 @@ class UserConsoleService:
         """返回用户可选用的上下文列表。
 
         业务键均为 id：``bot_id`` / ``group_id`` / ``user_id`` / ``jiuwenclaw_id``。
-        展示字段：``agent_name`` / ``group_name`` / ``jiuwenclaw_name``。
+
+        ``agent_id`` 由 ``runtime_template_id`` + ``agent_template_id`` 经 base62
+        可逆编码得到（43 字符，见 ``agent_identity`` 模块），``agent_name`` 为
+        ``agent_`` + ``agent_id``，是用户面下拉与持久化使用的**稳定展示标识**；
+        人类可读的资源名保留在 ``resource_name``，仅在无法生成 ``agent_id`` 时
+        作为 ``agent_name`` 的回退值。运行时模板按 ``(priority ASC, scope_id ASC)``
+        first-fit 解析，与 Runtime 选路一致。
         """
         uid = str(user_id or "").strip()
         if not uid:
@@ -136,6 +147,9 @@ class UserConsoleService:
                 _GRANT, {"jiuwenclaw_id": jid}, limit=_CAP, offset=0
             )
             cluster_name = name_by_jid.get(jid) or jid
+            scope_index = (
+                await build_service_scope_index(self._h, jid) if rows else []
+            )
             for r in rows:
                 if not bool(_g(r, "enabled", True)) or _grant_expired(_g(r, "expires_at")):
                     continue
@@ -143,7 +157,8 @@ class UserConsoleService:
                 if not bot_id:
                     continue
                 expr = _g(r, "match_expr")
-                agent_name = str(_g(r, "resource_name") or "").strip() or bot_id
+                agent_template_id = str(_g(r, "ref_template_id") or "").strip()
+                resource_name = str(_g(r, "resource_name") or "").strip()
                 for group_id, group_name in candidate_groups:
                     if not evaluate_match_expr(
                         expr, user_id=uid, group_id=group_id, bot_id=""
@@ -153,17 +168,37 @@ class UserConsoleService:
                     if key in seen:
                         continue
                     seen.add(key)
+                    runtime_template_id = resolve_service_template_id(
+                        scope_index,
+                        user_id=uid,
+                        group_id=group_id,
+                        bot_id=bot_id,
+                    )
+                    identity = try_build_agent_identity(
+                        runtime_template_id, agent_template_id
+                    )
+                    if identity:
+                        agent_id, agent_name = identity
+                    else:
+                        agent_id = ""
+                        agent_name = resource_name or bot_id
                     out.append(
                         {
                             "bot_id": bot_id,
                             "group_id": group_id,
                             "user_id": uid,
                             "jiuwenclaw_id": jid,
+                            "runtime_template_id": runtime_template_id,
+                            "agent_template_id": agent_template_id,
+                            "agent_id": agent_id,
                             "agent_name": agent_name,
+                            "resource_name": resource_name,
                             "group_name": group_name,
                             "jiuwenclaw_name": cluster_name,
                         }
                     )
+        # 用户面下拉只展示 agent_name（agent_ + agent_id），按其排序保证
+        # 接口返回顺序与展示顺序一致；它是稳定标识，不是人类可读名称。
         out.sort(
             key=lambda x: (
                 str(x.get("agent_name") or ""),
