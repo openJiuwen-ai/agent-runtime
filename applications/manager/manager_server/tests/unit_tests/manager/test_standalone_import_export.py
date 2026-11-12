@@ -5,7 +5,7 @@ from io import BytesIO
 
 import pytest
 from conftest import ManagerApiHarness
-from demo_payloads import model_templates
+from demo_payloads import expert_package_templates, model_templates
 from openpyxl import load_workbook
 
 from manager_server.core.authz import AuthzService
@@ -76,6 +76,62 @@ async def test_model_xlsx_round_trip_preserves_business_id(manager_api: ManagerA
 
     duplicate = await h.http.post(
         "/api/v1/import-export/model/preflight",
+        content=payload,
+        headers={
+            "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        },
+    )
+    assert duplicate.status_code == 200
+    assert duplicate.json()["data"]["summary"]["reuse"] == 1
+
+
+@pytest.mark.asyncio
+async def test_expert_package_xlsx_round_trip_preserves_business_id(manager_api: ManagerApiHarness):
+    h = manager_api
+    _, create_body = expert_package_templates()[0]
+    created = await h.post_json("/expert-package-templates", create_body)
+    template_id = created["template_id"]
+
+    exported = await h.http.post(
+        "/api/v1/import-export/expert-package/export",
+        json={"resource_ids": [template_id]},
+    )
+    assert exported.status_code == 200, exported.text
+    payload = exported.content
+
+    await h.delete_ok(f"/expert-package-templates/{template_id}")
+    preflight = await h.http.post(
+        "/api/v1/import-export/expert-package/preflight",
+        content=payload,
+        headers={
+            "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        },
+    )
+    assert preflight.status_code == 200, preflight.text
+    report = preflight.json()["data"]
+    assert report["can_import"] is True
+    assert report["summary"]["create"] == 1
+
+    imported = await h.http.post(
+        "/api/v1/import-export/expert-package/import",
+        params={"confirmation_token": report["confirmation_token"]},
+        content=payload,
+        headers={
+            "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        },
+    )
+    assert imported.status_code == 200, imported.text
+    assert imported.json()["data"]["created_manager_objects"] == 1
+
+    restored = await h.get_json(f"/expert-package-templates/{template_id}")
+    assert restored["template_id"] == template_id
+    assert restored["packages"] == create_body["packages"]
+    assert restored["template_name"] == create_body["template_name"]
+    assert restored["description"] == create_body["description"]
+    assert restored["enabled"] == create_body["enabled"]
+
+    duplicate = await h.http.post(
+        "/api/v1/import-export/expert-package/preflight",
         content=payload,
         headers={
             "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
