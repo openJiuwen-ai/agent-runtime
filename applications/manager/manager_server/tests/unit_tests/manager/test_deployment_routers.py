@@ -21,15 +21,26 @@ def tool_available(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(service_mod, "check_tool_available", lambda: (True, ""))
 
 
-async def test_defaults_seeded_and_masked(manager_api, tool_available):
+async def test_defaults_seeded_and_masked(manager_api, tool_available, monkeypatch):
+    # 播种源固定注入（.env.custom 唯一真源；不依赖仓里可能存在的未跟踪文件）
+    from manager_server.core.deployment import service as service_mod
+
+    monkeypatch.setattr(
+        service_mod,
+        "parse_env_custom",
+        lambda *a, **k: {
+            "MARIADB_IMAGE": "swr.example/mariadb-amd64:11.8",
+            "MARIADB_ROOT_PASSWORD": "Root@123456",
+            "CLUSTER_TYPE": "k8s",   # 白名单外 → 不播种
+        },
+    )
     resp = await manager_api.http.get(f"{_DEPLOYMENTS}/defaults")
     assert resp.status_code == 200
     data = resp.json()["data"]
     assert data["available"] is True
     assert "tool_version" in data
     env = data["env"]
-    # .env.example 播种：镜像类透出；密码类为空占位不入库（掩码仅对非空值）
-    assert env.get("MARIADB_IMAGE")
+    assert env["MARIADB_IMAGE"] == "swr.example/mariadb-amd64:11.8"
     assert "CLUSTER_TYPE" not in env   # 白名单外不播种
     for key, value in env.items():
         if "PASSWORD" in key or "SECRET" in key:

@@ -28,10 +28,7 @@ from manager_server.core.deployment.runner import DeployRunner
 from manager_server.core.deployment.toolkit import (
     check_tool_available,
     parse_env_custom,
-    parse_env_example,
-    parse_tool_defaults,
     read_tool_version,
-    resolve_tool_dir,
 )
 from manager_server.core.instance.instance_service import InstanceService
 from manager_server.infrastructure.config import settings
@@ -261,17 +258,13 @@ class DeploymentService:
             stored = getattr(row, "env_json", None)
             if isinstance(stored, dict):
                 return dict(stored)
-        # 首次播种优先级：.env.custom（版本化部署配置，含本版镜像 tag）>
-        # global_vars.sh 工具默认 > .env.example 占位值；白名单过滤 + 逐值校验。
-        # 空值不入库：写了 KEY="" 会覆盖 deploy 工具的内置默认（如 root 密码），
-        # 跳过即让 global_vars.sh 默认值生效。
-        seed_source = {
-            **parse_tool_defaults(),
-            **parse_env_example(),
-            **parse_env_custom(),
-        }
+        # 首次播种：.env.custom（版本化部署配置，含本版镜像 tag）是唯一真源——
+        # global_vars 工具默认 / .env.example 占位值与版本化清单混排会产生看似完整
+        # 实则版本不一致的默认参数，宁缺毋滥：.env.custom 缺失或未覆盖的键不播种，
+        # 由操作员经 defaults 接口显式补全（deploy.sh 执行时对未设键按自身默认派生）。
+        # 空值不入库：写了 KEY="" 会覆盖 deploy 工具的内置默认（如 root 密码）。
         seeded: dict[str, str] = {}
-        for key, value in seed_source.items():
+        for key, value in parse_env_custom().items():
             if key not in env_builder.ALLOWED_ENV_KEYS or not str(value).strip():
                 continue
             try:

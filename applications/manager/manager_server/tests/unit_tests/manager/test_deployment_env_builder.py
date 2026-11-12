@@ -185,16 +185,16 @@ class TestMask:
 
 
 class TestSeedingFromEnvCustom:
-    """播种优先级：工具树 .env.custom（版本化清单）> 工具默认 > example。"""
+    """播种来源：.env.custom 是唯一真源；缺失或未覆盖的键一律不播种。"""
 
-    def test_env_custom_wins(self, tmp_path, monkeypatch):
+    def test_env_custom_is_sole_source(self, tmp_path, monkeypatch):
         from manager_server.core.deployment import toolkit, service as svc_mod
 
         tool_dir = tmp_path / "tool"
         tool_dir.mkdir()
         (tool_dir / "deploy.sh").write_text("#!/bin/sh\n")
         monkeypatch.setattr(toolkit, "resolve_tool_dir", lambda: tool_dir)
-        # 工具默认 + example + 版本化 custom
+        # 工具默认 + example 提供干扰值；版本化 custom 只提供两个镜像
         (tool_dir / "global_vars.sh").write_text(
             'declare -A DEPLOY_VARS=(\n    ["GATEWAY_IMAGE"]="example/gw:public"\n)\n'
         )
@@ -213,20 +213,23 @@ class TestSeedingFromEnvCustom:
                 return None
 
         seeded = asyncio_run(svc_mod.DeploymentService(_H()).get_defaults())
-        assert seeded["GATEWAY_IMAGE"] == "swr.example/jiuwenswarm-core:0.0.16y"
-        assert seeded["AGENT_RUNTIME_IMAGE"] == "swr.example/jiuwenswarm-agent-runtime:0.0.16y"
-        assert "CLUSTER_TYPE" not in seeded
-        assert seeded["DB_TYPE"] == "mariadb"   # example 次优先仍生效
+        # 唯一真源：不被工具默认/example 稀释，未覆盖键（DB_TYPE 等）不播种
+        assert seeded == {
+            "GATEWAY_IMAGE": "swr.example/jiuwenswarm-core:0.0.16y",
+            "AGENT_RUNTIME_IMAGE": "swr.example/jiuwenswarm-agent-runtime:0.0.16y",
+        }
 
-    def test_env_custom_absent_falls_back(self, tmp_path, monkeypatch):
+    def test_env_custom_absent_seeds_empty(self, tmp_path, monkeypatch):
         from manager_server.core.deployment import toolkit, service as svc_mod
 
         tool_dir = tmp_path / "tool"
         tool_dir.mkdir()
         monkeypatch.setattr(toolkit, "resolve_tool_dir", lambda: tool_dir)
+        # 仅有工具默认/example，没有 .env.custom → 播种为空（其余来源不准确，宁缺毋滥）
         (tool_dir / "global_vars.sh").write_text(
             'declare -A DEPLOY_VARS=(\n    ["MARIADB_IMAGE"]="mariadb:11.8"\n)\n'
         )
+        (tool_dir / ".env.example").write_text('MARIADB_IMAGE="mariadb:11.8"\n')
 
         class _H:
             async def get(self, table, filters):
@@ -236,4 +239,4 @@ class TestSeedingFromEnvCustom:
                 return None
 
         seeded = asyncio_run(svc_mod.DeploymentService(_H()).get_defaults())
-        assert seeded["MARIADB_IMAGE"] == "mariadb:11.8"
+        assert seeded == {}
