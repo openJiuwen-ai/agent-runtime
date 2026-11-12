@@ -11,7 +11,10 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 
-from manager_server.core.deployment.env_builder import mask_sensitive_env
+from manager_server.core.deployment.env_builder import (
+    MANAGER_PLANE_IMAGE_KEYS,
+    mask_sensitive_env,
+)
 from manager_server.core.deployment.service import (
     DeploymentError,
     DeploymentService,
@@ -41,14 +44,19 @@ def _svc(handler: DBHandler) -> DeploymentService:
 async def get_deployment_defaults(
     handler: Annotated[DBHandler, Depends(get_db_handler)],
 ):
-    """默认部署参数（密码掩码）+ 工具版本 + 可用性。"""
+    """默认部署参数（密码掩码；管理面组件镜像不展示——部署功能只部署产品面）+ 工具版本 + 可用性。"""
     available, reason = check_tool_available()
     defaults = await _svc(handler).get_defaults()
+    visible = {
+        key: value
+        for key, value in defaults.items()
+        if key not in MANAGER_PLANE_IMAGE_KEYS
+    }
     return ResponseModel(
         code=200,
         message="success",
         data={
-            "env": mask_sensitive_env(defaults),
+            "env": mask_sensitive_env(visible),
             "tool_version": read_tool_version(),
             "deploy_enabled": bool(settings.deploy_enabled),
             "available": available,
