@@ -9,7 +9,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from manager_server import __version__
-from manager_server.core.deployment.service import run_deployment_executor_loop
+from manager_server.core.deployment.service import (
+    run_deployment_executor_loop,
+    sync_defaults_from_snapshot,
+)
 from manager_server.infrastructure.config import settings
 from manager_server.infrastructure.db import create_db_handler, database_config_summary
 from manager_server.infrastructure.logger import configure_logging, get_logger
@@ -37,6 +40,9 @@ async def lifespan(application: FastAPI):
 
     # Redis：心跳巡检选主的分布式锁
     redis_client = build_redis_client(settings)
+
+    # manager up 注入的 .env.custom 快照 → 刷新部署默认参数（开箱即用；未注入则跳过）
+    await sync_defaults_from_snapshot(db_handler)
 
     stop = asyncio.Event()
     scan_task = asyncio.create_task(run_heartbeat_scan_loop(stop, db_handler, redis_client))

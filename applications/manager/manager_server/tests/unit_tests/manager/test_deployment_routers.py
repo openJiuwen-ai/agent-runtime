@@ -21,16 +21,30 @@ def tool_available(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(service_mod, "check_tool_available", lambda: (True, ""))
 
 
-async def test_defaults_seeded_and_masked(manager_api, tool_available):
+async def test_defaults_seeded_and_masked(manager_api, tool_available, monkeypatch):
+    # 播种源固定注入（.env.custom 唯一真源；不依赖仓里可能存在的未跟踪文件）
+    from manager_server.core.deployment import service as service_mod
+
+    monkeypatch.setattr(
+        service_mod,
+        "parse_env_custom",
+        lambda *a, **k: {
+            "MARIADB_IMAGE": "swr.example/mariadb-amd64:11.8",
+            "MANAGER_SERVER_IMAGE": "swr.example/manager-server:15y",
+            "MARIADB_ROOT_PASSWORD": "Root@123456",
+            "CLUSTER_TYPE": "k8s",   # 白名单外 → 不播种
+        },
+    )
     resp = await manager_api.http.get(f"{_DEPLOYMENTS}/defaults")
     assert resp.status_code == 200
     data = resp.json()["data"]
     assert data["available"] is True
     assert "tool_version" in data
     env = data["env"]
-    # .env.example 播种：镜像类透出；密码类为空占位不入库（掩码仅对非空值）
-    assert env.get("MARIADB_IMAGE")
+    assert env["MARIADB_IMAGE"] == "swr.example/mariadb-amd64:11.8"
     assert "CLUSTER_TYPE" not in env   # 白名单外不播种
+    assert "MANAGER_SERVER_IMAGE" not in env   # 管理面镜像不展示（产品面才经部署）
+    assert "MANAGER_WEB_REPLICAS" not in env   # 管理面副本同样不展示
     for key, value in env.items():
         if "PASSWORD" in key or "SECRET" in key:
             assert value in ("", "******")
@@ -67,6 +81,12 @@ async def test_defaults_update_and_mask_roundtrip(manager_api, tool_available):
     )
     assert resp.status_code == 400
 
+    # PUT 之后存储不得混入强制键（历史 bug：混入后 POST 创建任务报"不支持的配置键"）
+    resp = await manager_api.http.get(f"{_DEPLOYMENTS}/defaults")
+    stored = resp.json()["data"]["env"]
+    assert "CLUSTER_TYPE" not in stored
+    assert "MODE" not in stored
+
 
 async def test_create_list_get_flow(manager_api, tool_available):
     resp = await manager_api.http.post(
@@ -93,6 +113,8 @@ async def test_create_list_get_flow(manager_api, tool_available):
     detail = resp.json()["data"]
     assert detail["status"] == "pending"
     assert detail["deploy_mode"] == "full"
+    # deploy_mode 必须持久化进 params.env（执行器按 defaults+params.env 重新 merge）
+    assert detail["params"]["env"]["AGENT_RUNTIME_DEPLOY_MODE"] == "full"
     assert "defaults_snapshot" not in detail   # 不外露（含密码）
 
     # 日志：任务未跑，空集
@@ -151,3 +173,38 @@ async def test_get_missing_returns_404(manager_api, tool_available):
     assert resp.status_code == 404
     resp = await manager_api.http.get(f"{_DEPLOYMENTS}/dp-nothing/logs")
     assert resp.status_code == 404
+
+
+async def test_defaults_sync_from_snapshot(manager_api, tool_available, monkeypatch):
+    """manager up 注入的快照在启动同步时覆盖 defaults（开箱即用链路）。"""
+    from manager_server.core.deployment import service as service_mod
+    from manager_server.infrastructure.config import settings
+
+    monkeypatch.setattr(
+        settings,
+        "deploy_env_snapshot",
+        '{"GATEWAY_IMAGE":"swr.example/gw:16y","MARIADB_ROOT_PASSWORD":"should-drop",'
+        '"EVIL_KEY":"x","DB_TYPE":"mysql"}',
+    )
+    synced = await service_mod.sync_defaults_from_snapshot(manager_api.handler)
+    assert synced == 2   # 敏感键与白名单外键被剔除
+
+    resp = await manager_api.http.get(f"{_DEPLOYMENTS}/defaults")
+    env = resp.json()["data"]["env"]
+    assert env["GATEWAY_IMAGE"] == "swr.example/gw:16y"
+    assert env["DB_TYPE"] == "mysql"
+    assert "MARIADB_ROOT_PASSWORD" not in env   # 注入侧已剔除敏感键
+    assert "EVIL_KEY" not in env
+
+    # 二次同步：覆盖旧值（版本升级跟进），操作员自配键保留
+    monkeypatch.setattr(
+        settings, "deploy_env_snapshot", '{"GATEWAY_IMAGE":"swr.example/gw:17y"}'
+    )
+    await manager_api.http.put(
+        f"{_DEPLOYMENTS}/defaults", json={"env": {"WEB_REPLICAS": "2"}}
+    )
+    await service_mod.sync_defaults_from_snapshot(manager_api.handler)
+    resp = await manager_api.http.get(f"{_DEPLOYMENTS}/defaults")
+    env = resp.json()["data"]["env"]
+    assert env["GATEWAY_IMAGE"] == "swr.example/gw:17y"   # 跟进新版
+    assert env["WEB_REPLICAS"] == "2"                     # 操作员键保留

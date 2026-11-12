@@ -77,4 +77,5 @@ render_templates() {
   apply_jiuwenbox_extras "${wanted[@]}"
   apply_dev_code_mounts "${wanted[@]}"
   apply_manager_deploy_credentials "${wanted[@]}"
+  apply_manager_deploy_env_snapshot "${wanted[@]}"
 }

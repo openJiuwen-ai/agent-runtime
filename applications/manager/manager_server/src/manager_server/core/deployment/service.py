@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -27,10 +28,9 @@ from manager_server.core.deployment.env_builder import (
 from manager_server.core.deployment.runner import DeployRunner
 from manager_server.core.deployment.toolkit import (
     check_tool_available,
-    parse_env_example,
+    parse_env_custom,
     parse_tool_defaults,
     read_tool_version,
-    resolve_tool_dir,
 )
 from manager_server.core.instance.instance_service import InstanceService
 from manager_server.infrastructure.config import settings
@@ -134,6 +134,11 @@ class DeploymentService:
 
         now = utc_now()
         deployment_id = f"dp-{uuid.uuid4().hex[:20]}"
+        # deploy_mode 必须持久化进 params.env：_execute_task 认领时按
+        # defaults_snapshot + params.env 重新 merge 生成 .env.custom，
+        # 只存顶层字段会导致实际执行回落到 defaults 里的模式（E2E 实测回归）
+        params = body.model_dump(exclude_none=True)
+        params.setdefault("env", {})["AGENT_RUNTIME_DEPLOY_MODE"] = deploy_mode
         row_data = {
             "deployment_id": deployment_id,
             "namespace": namespace,
@@ -141,7 +146,7 @@ class DeploymentService:
             "deploy_mode": deploy_mode,
             "status": "pending",
             "phase": "pending",
-            "params": body.model_dump(exclude_none=True),
+            "params": params,
             "defaults_snapshot": defaults,
             "tool_version": read_tool_version(),
             "created_by": actor or "system",
@@ -255,13 +260,13 @@ class DeploymentService:
             stored = getattr(row, "env_json", None)
             if isinstance(stored, dict):
                 return dict(stored)
-        # 首次播种：工具内置默认（global_vars.sh DEPLOY_VARS，镜像清单等真源）
-        # + .env.example 非空值覆盖；白名单过滤 + 逐值校验。
-        # 空值不入库：写了 KEY="" 会覆盖 deploy 工具的内置默认（如 root 密码），
-        # 跳过即让 global_vars.sh 默认值生效。
-        seed_source = {**parse_tool_defaults(), **parse_env_example()}
+        # 首次播种：.env.custom（版本化部署配置，含本版镜像 tag）是唯一真源——
+        # global_vars 工具默认 / .env.example 占位值与版本化清单混排会产生看似完整
+        # 实则版本不一致的默认参数，宁缺毋滥：.env.custom 缺失或未覆盖的键不播种，
+        # 由操作员经 defaults 接口显式补全（deploy.sh 执行时对未设键按自身默认派生）。
+        # 空值不入库：写了 KEY="" 会覆盖 deploy 工具的内置默认（如 root 密码）。
         seeded: dict[str, str] = {}
-        for key, value in seed_source.items():
+        for key, value in parse_env_custom().items():
             if key not in env_builder.ALLOWED_ENV_KEYS or not str(value).strip():
                 continue
             try:
@@ -293,12 +298,61 @@ class DeploymentService:
         }
         validated = merge_env({}, incoming)
         merged = {**current, **validated}
+        # 强制键由服务端在每次部署时写死，不得落入存储（历史 bug：merge_env 的返回值
+        # 含 FORCED_ENV，曾随本接口写库，导致后续任务创建报"不支持的配置键"）
+        for forced_key in env_builder.FORCED_ENV:
+            merged.pop(forced_key, None)
         await self._handler.update(
             _DEFAULTS_TABLE,
             {"id": _DEFAULTS_ROW_ID},
             {"env_json": merged, "updated_at": utc_now(), "updated_by": actor},
         )
         return merged
+
+
+# ---------- 启动同步：manager up 注入的 .env.custom 快照 ----------
+
+async def sync_defaults_from_snapshot(handler: DBHandler) -> int:
+    """启动时按 ``MANAGER_DEPLOY_ENV_JSON``（manager up 渲染注入的 .env.custom 快照，
+    非敏感键）刷新部署默认参数。
+
+    注入键覆盖存量值——.env.custom 是这些键的权威来源，版本升级重新 manager up 后
+    重启即自动跟进新镜像 tag；操作员经 defaults 接口配置的其他键保留。
+    快照未注入（如本地源码运行）时不做任何事。
+    """
+    raw = (settings.deploy_env_snapshot or "").strip()
+    if not raw:
+        return 0
+    try:
+        snapshot = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        _log.warning("deployment_snapshot_invalid_json", error=str(exc))
+        return 0
+    updates: dict[str, str] = {}
+    for raw_key, raw_value in snapshot.items():
+        key = str(raw_key).strip().upper()
+        if (
+            key not in env_builder.ALLOWED_ENV_KEYS
+            or env_builder.is_sensitive_key(key)   # 与注入侧同策：敏感键不入 defaults（Deployment env 明文）
+            or raw_value is None
+            or not str(raw_value).strip()
+        ):
+            continue
+        try:
+            updates[key] = env_builder.validate_env_value(key, str(raw_value))
+        except ValueError:
+            continue
+    if not updates:
+        return 0
+    current = await DeploymentService(handler).get_defaults()
+    merged = {**current, **updates}
+    await handler.update(
+        _DEFAULTS_TABLE,
+        {"id": _DEFAULTS_ROW_ID},
+        {"env_json": merged, "updated_at": utc_now(), "updated_by": "env-snapshot"},
+    )
+    _log.info("deployment_defaults_synced", keys=len(updates))
+    return len(updates)
 
 
 # ---------- 前置步骤：预建产品库 ----------
@@ -309,7 +363,7 @@ async def ensure_product_databases(env: dict, *, namespace: str) -> None:
     复用 foundation 的 ``init_database``（幂等；PG 走 AUTOCOMMIT + 23505 处理）：
     mysql/mariadb 按库隔离 ``<module>_<ns>``；postgresql 库共享、按 schema 隔离。
     """
-    conn = derive_db_connection(env)
+    conn = derive_db_connection(env, tool_defaults=parse_tool_defaults())
     targets = derive_product_databases(env, namespace=namespace)
     if conn["db_type"] == "postgresql":
         from openjiuwen_runtime.foundation.db.postgresql_handler import (
@@ -379,7 +433,12 @@ async def register_instance_for_namespace(handler: DBHandler, task: dict) -> tup
         row = await InstanceService(handler).create(body)
     except ValueError as exc:
         return None, f"部署成功但实例自动注册失败: {exc}（可手工登记）"
-    return str(getattr(row, "jiuwenclaw_id", "") or ""), None
+    # InstanceService.create 返回 dict（或行对象），两种形态都取 jiuwenclaw_id
+    if isinstance(row, dict):
+        jid = str(row.get("jiuwenclaw_id", "") or "")
+    else:
+        jid = str(getattr(row, "jiuwenclaw_id", "") or "")
+    return jid, None
 
 
 # ---------- 执行器循环 ----------
@@ -434,14 +493,18 @@ async def _execute_task(handler: DBHandler, task: dict) -> None:
             jid, note = await register_instance_for_namespace(handler, task)
         except Exception as exc:  # noqa: BLE001
             jid, note = None, f"实例自动注册异常: {exc}"
-        progress = dict(result.get("progress") or {})
+        # 不能用 result 重建 progress：runner.run() 只返回状态三元组，
+        # 终态进度已由 runner 落库——此处读回现有进度仅附加 auto_register 备注，
+        # 否则会把组件时间线/日志截断标记清空（E2E 实测回归）
+        row = await handler.get(_TASK_TABLE, {"deployment_id": deployment_id})
+        progress = dict(getattr(row, "progress", None) or {}) if row is not None else {}
         if note:
             progress["auto_register"] = note
         await handler.update(
             _TASK_TABLE,
             {"deployment_id": deployment_id},
             {
-                "instance_jid": jid,
+                "instance_jid": jid or None,
                 "progress": progress,
                 "updated_at": utc_now(),
             },

@@ -92,6 +92,19 @@ ALLOWED_ENV_KEYS = frozenset(
 # 密码/密钥类键（API 响应须掩码）
 SENSITIVE_KEY_MARKERS = ("PASSWORD", "SECRET", "ACCESS_KEY")
 
+# 管理面组件键（镜像 + 副本）：部署功能只部署产品面（manager 组不经其部署），
+# 这些键对使用方无意义，defaults 响应不展示；但任务生成 .env.custom 时仍需取值
+# （deploy.sh 的 check_image_vars 无条件校验全量 IMAGE_VARS），故仅展示层过滤、
+# 存储保持完整
+MANAGER_PLANE_ENV_KEYS = (
+    "IDENTITY_IMAGE",
+    "MANAGER_SERVER_IMAGE",
+    "MANAGER_WEB_IMAGE",
+    "IDENTITY_REPLICAS",
+    "MANAGER_SERVER_REPLICAS",
+    "MANAGER_WEB_REPLICAS",
+)
+
 # 服务端强制写死、不接受请求/默认表覆盖的键
 FORCED_ENV = {
     "CLUSTER_TYPE": "k8s",   # 管理面启动部署仅支持 k8s 形态
@@ -117,11 +130,17 @@ def validate_env_value(key: str, value: str) -> str:
 
 
 def merge_env(defaults: dict, overrides: dict) -> dict:
-    """默认 env 与请求覆盖合并（白名单过滤 + 逐值校验）。"""
+    """默认 env 与请求覆盖合并（白名单过滤 + 逐值校验）。
+
+    输入源里的强制键（FORCED_ENV，如历史误存的 CLUSTER_TYPE/MODE）静默忽略——
+    它们由服务端统一写死，不应因存量脏数据让后续任务创建失败。
+    """
     merged: dict[str, str] = {}
     for source in (defaults or {}, overrides or {}):
         for raw_key, raw_value in source.items():
             key = str(raw_key).strip().upper()
+            if key in FORCED_ENV:
+                continue
             if key not in ALLOWED_ENV_KEYS:
                 raise ValueError(f"不支持的配置键: {key}")
             if raw_value is None:
@@ -164,19 +183,24 @@ def build_env_custom(env: dict, *, namespace: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def derive_db_connection(env: dict) -> dict:
-    """从合并 env 派生共享数据库连接信息（对齐 resolve_db_vars + global_vars 默认值）。"""
-    db_type = env.get("DB_TYPE", "mariadb")
+def derive_db_connection(env: dict, *, tool_defaults: dict | None = None) -> dict:
+    """从合并 env 派生共享数据库连接信息。
+
+    未显式配置的键回落 deploy 工具内置默认（global_vars.sh 的 DEPLOY_VARS，经
+    ``tool_defaults`` 动态传入——与 deploy.sh 实际执行保持同一真源，避免硬编码
+    副本漂移）；最终兜底为与 global_vars 当前值一致的常量，防 tool_defaults 缺失。
+    """
+    defaults = tool_defaults or {}
+    db_type = env.get("DB_TYPE") or defaults.get("DB_TYPE") or "mariadb"
     default_host = f"{db_type}-headless.default"   # k8s 形态内置 = default 共享实例
-    default_port = "5432" if db_type == "postgresql" else "3306"
-    default_user = "postgres" if db_type == "postgresql" else "root"
+    default_port = defaults.get("DB_PORT") or ("5432" if db_type == "postgresql" else "3306")
+    default_user = defaults.get("DB_USER") or ("postgres" if db_type == "postgresql" else "root")
     root_password_keys = {
         "mariadb": "MARIADB_ROOT_PASSWORD",
         "mysql": "MYSQL_ROOT_PASSWORD",
         "postgresql": "POSTGRES_PASSWORD",
     }
-    # 未显式配置时回落 deploy 工具内置默认密码（global_vars.sh；.env.example 留空占位）
-    tool_default_passwords = {"mariadb": "Root@123456", "mysql": "Root@123456", "postgresql": "Root@123456"}
+    fallback_passwords = {"mariadb": "Root@123456", "mysql": "Root@123456", "postgresql": "Root@123456"}
     return {
         "db_type": db_type,
         "host": env.get("DB_HOST") or default_host,
@@ -184,7 +208,8 @@ def derive_db_connection(env: dict) -> dict:
         "user": env.get("DB_USER") or default_user,
         "password": env.get("DB_PASSWORD")
         or env.get(root_password_keys[db_type], "")
-        or tool_default_passwords[db_type],
+        or defaults.get(root_password_keys[db_type], "")
+        or fallback_passwords[db_type],
     }
 
 
@@ -225,11 +250,16 @@ def derive_instance_hosts(namespace: str) -> dict:
     }
 
 
+def is_sensitive_key(key: str) -> bool:
+    """键是否为密码/密钥类（注入侧剔除与掩码共用的判定）。"""
+    return any(marker in key.upper() for marker in SENSITIVE_KEY_MARKERS)
+
+
 def mask_sensitive_env(env: dict) -> dict:
     """API 响应用：密码/密钥类值替换为掩码（键含标记即掩码）。"""
     masked: dict[str, str] = {}
     for key, value in env.items():
-        if any(marker in key.upper() for marker in SENSITIVE_KEY_MARKERS) and value:
+        if is_sensitive_key(key) and value:
             masked[key] = "******"
         else:
             masked[key] = value

@@ -275,3 +275,82 @@ async def test_json_events_are_valid_json(handler, fake_tool, fast_ticks, tmp_pa
     result = await _run(handler, task)
     assert result["status"] == "success"
     assert _parse_json_lines_ok('@@DEPLOY_JSON@@{"event":"phase","phase":"render","state":"ok"}')
+
+
+async def test_execute_task_success_preserves_progress(handler, monkeypatch):
+    """成功后置更新不得清空 runner 落库的进度，且正确写 instance_jid（E2E 回归）。"""
+    from manager_server.core.deployment import service as service_mod
+    from manager_server.infrastructure.utils import utc_now
+
+    _TASK = DEPLOYMENT_TASK_TABLE_DEF.table_name
+    task = await _make_task(handler, "dp-exec-1")
+    task["params"] = {
+        "namespace": "ns-run",
+        "jiuwenclaw_name": "run-instance",
+        "deploy_mode": "full",
+        "env": {"AGENT_RUNTIME_DEPLOY_MODE": "full"},
+    }
+
+    final_progress = {
+        "components": {"redis": {"state": "ok", "index": 2, "total": 5}},
+        "log_truncated": False,
+    }
+
+    class _FakeRunner:
+        def __init__(self, h, t, env_content, *, wait_timeout_secs=None):
+            self._handler = h
+            self._id = t["deployment_id"]
+
+        async def run(self):
+            await self._handler.update(
+                _TASK,
+                {"deployment_id": self._id},
+                {
+                    "status": "success",
+                    "phase": "finished",
+                    "exit_code": 0,
+                    "error_summary": None,
+                    "progress": final_progress,
+                    "finished_at": utc_now(),
+                },
+            )
+            return {"status": "success", "exit_code": 0, "error_summary": None}
+
+    monkeypatch.setattr(service_mod, "DeployRunner", _FakeRunner)
+    monkeypatch.setattr(service_mod, "ensure_product_databases", _fake_noop)
+    monkeypatch.setattr(
+        service_mod, "register_instance_for_namespace", _fake_register_ok
+    )
+    await service_mod._execute_task(handler, task)
+    row = await handler.get(_TASK, {"deployment_id": "dp-exec-1"})
+    assert row.status == "success"
+    assert row.instance_jid == "jid-abc"
+    progress = dict(row.progress or {})
+    assert progress.get("components", {}).get("redis", {}).get("state") == "ok"
+    assert progress.get("log_truncated") is False
+    assert "auto_register" not in progress   # 注册成功无备注
+
+    # 注册失败路径：记录 auto_register 备注，instance_jid 置空
+    task2 = await _make_task(handler, "dp-exec-2")
+    task2["params"] = dict(task["params"])
+    monkeypatch.setattr(
+        service_mod, "register_instance_for_namespace", _fake_register_fail
+    )
+    await service_mod._execute_task(handler, task2)
+    row2 = await handler.get(_TASK, {"deployment_id": "dp-exec-2"})
+    assert row2.status == "success"
+    assert not row2.instance_jid
+    progress2 = dict(row2.progress or {})
+    assert "注册失败" in progress2.get("auto_register", "")
+
+
+async def _fake_noop(env, *, namespace):
+    return None
+
+
+async def _fake_register_ok(handler, task):
+    return "jid-abc", None
+
+
+async def _fake_register_fail(handler, task):
+    return None, "部署成功但实例自动注册失败: 注册失败（可手工登记）"

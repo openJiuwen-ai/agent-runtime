@@ -146,6 +146,10 @@ class Settings(BaseSettings):
     deploy_kubeconfig: str = Field(
         default="", validation_alias="MANAGER_DEPLOY_KUBECONFIG"
     )
+    # manager up 注入的 .env.custom 快照（JSON，非敏感键）；启动时据此刷新部署默认参数
+    deploy_env_snapshot: str = Field(
+        default="", validation_alias="MANAGER_DEPLOY_ENV_JSON"
+    )
     # 全局并发部署任务数
     deploy_max_concurrent: int = Field(
         default=2, validation_alias="MANAGER_DEPLOY_MAX_CONCURRENT"

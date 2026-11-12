@@ -201,18 +201,24 @@ export function CreateDeploymentModal({ open, defaults, onClose, onCreated }: Pr
         : t('deployments.form.envSensitivePlaceholder')
       : masked ?? '';
     return (
-      <div key={key} className="flex items-center gap-2">
+      <div
+        key={key}
+        className="flex items-center gap-2"
+        title={sensitive ? key : `${key} = ${masked ?? ''}`}
+      >
         <span className="mono text-[11px] text-muted shrink-0 basis-[14rem] truncate" title={key}>
           {key}
         </span>
-        <LimitedTextInput
-          className="mono text-xs"
-          value={envDraft[key] ?? ''}
-          maxLength={512}
-          placeholder={placeholder}
-          type={sensitive ? 'password' : 'text'}
-          onChange={(value) => setEnvDraft((prev) => ({ ...prev, [key]: value }))}
-        />
+        <div className="flex-1 min-w-0" title={sensitive ? undefined : masked}>
+          <LimitedTextInput
+            className="mono text-xs"
+            value={envDraft[key] ?? ''}
+            maxLength={512}
+            placeholder={placeholder}
+            type={sensitive ? 'password' : 'text'}
+            onChange={(value) => setEnvDraft((prev) => ({ ...prev, [key]: value }))}
+          />
+        </div>
       </div>
     );
   };

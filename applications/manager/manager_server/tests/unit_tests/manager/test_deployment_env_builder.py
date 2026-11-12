@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import pytest
+from asyncio import run as asyncio_run
 
 from manager_server.core.deployment.env_builder import (
     ALLOWED_ENV_KEYS,
@@ -37,15 +38,21 @@ _MIN_ENV = {
 class TestMergeEnv:
     def test_whitelist_rejects_unknown_key(self):
         with pytest.raises(ValueError, match="不支持的配置键"):
-            merge_env({}, {"CLUSTER_TYPE": "k8s"})
+            merge_env({}, {"EVIL_KEY": "x"})
 
     def test_forced_env_always_applied(self):
-        # CLUSTER_TYPE/MODE 不在白名单：请求传入直接拒绝，强制值由服务端写入
-        with pytest.raises(ValueError, match="不支持的配置键"):
-            merge_env({}, {"CLUSTER_TYPE": "openshift"})
-        with pytest.raises(ValueError, match="不支持的配置键"):
-            merge_env({}, {"MODE": "dev"})
+        # CLUSTER_TYPE/MODE 不在白名单：请求传入忽略，强制值由服务端写入
+        merged = merge_env(_MIN_ENV, {"CLUSTER_TYPE": "openshift", "MODE": "dev"})
+        assert merged["CLUSTER_TYPE"] == "k8s"
+        assert merged["MODE"] == "product"
         merged = merge_env(_MIN_ENV, {})
+        assert merged["CLUSTER_TYPE"] == "k8s"
+        assert merged["MODE"] == "product"
+
+    def test_forced_keys_in_defaults_tolerated(self):
+        # 存量脏数据（defaults 表混入强制键）不让任务创建失败（E2E 实测回归）
+        poisoned = {**_MIN_ENV, "CLUSTER_TYPE": "openshift", "MODE": "dev"}
+        merged = merge_env(poisoned, {})
         assert merged["CLUSTER_TYPE"] == "k8s"
         assert merged["MODE"] == "product"
 
@@ -175,3 +182,61 @@ class TestMask:
         # 白名单键要么可校验、要么属于镜像/副本/形态分组（防手滑加入未处理键）
         assert "AGENT_RUNTIME_DEPLOY_MODE" in ALLOWED_ENV_KEYS
         assert "CLUSTER_TYPE" not in ALLOWED_ENV_KEYS
+
+
+class TestSeedingFromEnvCustom:
+    """播种来源：.env.custom 是唯一真源；缺失或未覆盖的键一律不播种。"""
+
+    def test_env_custom_is_sole_source(self, tmp_path, monkeypatch):
+        from manager_server.core.deployment import toolkit, service as svc_mod
+
+        tool_dir = tmp_path / "tool"
+        tool_dir.mkdir()
+        (tool_dir / "deploy.sh").write_text("#!/bin/sh\n")
+        monkeypatch.setattr(toolkit, "resolve_tool_dir", lambda: tool_dir)
+        # 工具默认 + example 提供干扰值；版本化 custom 只提供两个镜像
+        (tool_dir / "global_vars.sh").write_text(
+            'declare -A DEPLOY_VARS=(\n    ["GATEWAY_IMAGE"]="example/gw:public"\n)\n'
+        )
+        (tool_dir / ".env.example").write_text('GATEWAY_IMAGE="example/gw:example"\nDB_TYPE=mariadb\n')
+        (tool_dir / ".env.custom").write_text(
+            'GATEWAY_IMAGE="swr.example/jiuwenswarm-core:0.0.16y"\n'
+            'AGENT_RUNTIME_IMAGE="swr.example/jiuwenswarm-agent-runtime:0.0.16y"\n'
+            'CLUSTER_TYPE=k8s\n'   # 白名单外 → 过滤
+        )
+
+        class _H:  # 最小 handler：get_defaults 直接走播种分支
+            async def get(self, table, filters):
+                return None
+
+            async def create(self, table, data):
+                return None
+
+        seeded = asyncio_run(svc_mod.DeploymentService(_H()).get_defaults())
+        # 唯一真源：不被工具默认/example 稀释，未覆盖键（DB_TYPE 等）不播种
+        assert seeded == {
+            "GATEWAY_IMAGE": "swr.example/jiuwenswarm-core:0.0.16y",
+            "AGENT_RUNTIME_IMAGE": "swr.example/jiuwenswarm-agent-runtime:0.0.16y",
+        }
+
+    def test_env_custom_absent_seeds_empty(self, tmp_path, monkeypatch):
+        from manager_server.core.deployment import toolkit, service as svc_mod
+
+        tool_dir = tmp_path / "tool"
+        tool_dir.mkdir()
+        monkeypatch.setattr(toolkit, "resolve_tool_dir", lambda: tool_dir)
+        # 仅有工具默认/example，没有 .env.custom → 播种为空（其余来源不准确，宁缺毋滥）
+        (tool_dir / "global_vars.sh").write_text(
+            'declare -A DEPLOY_VARS=(\n    ["MARIADB_IMAGE"]="mariadb:11.8"\n)\n'
+        )
+        (tool_dir / ".env.example").write_text('MARIADB_IMAGE="mariadb:11.8"\n')
+
+        class _H:
+            async def get(self, table, filters):
+                return None
+
+            async def create(self, table, data):
+                return None
+
+        seeded = asyncio_run(svc_mod.DeploymentService(_H()).get_defaults())
+        assert seeded == {}

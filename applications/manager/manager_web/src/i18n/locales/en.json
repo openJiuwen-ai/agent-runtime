@@ -997,7 +997,8 @@
       "instanceName": "Instance Name",
       "deployMode": "Deploy Mode",
       "phase": "Phase",
-      "createdAt": "Created At"
+      "createdAt": "Created At",
+      "result": "Result"
     },
     "status": {
       "pending": "Pending",
