@@ -21,6 +21,9 @@ from manager_server.core.application_config.hub_package_catalog import (
 from manager_server.core.application_config.logging_config import LoggingConfigService
 from manager_server.core.application_config.memory_config import MemoryConfigService
 from manager_server.core.application_config.audit_log_config import AuditLogConfigService
+from manager_server.core.application_config.user_preference_default import (
+    UserPreferenceDefaultService,
+)
 from manager_server.infrastructure.db import get_db_handler
 from manager_server.schemas.application_config_schemas import (
     LogMaskingRuleCreateBody,
@@ -47,6 +50,10 @@ def _logging_config_svc(handler: DBHandler) -> LoggingConfigService:
 
 def _cron_policy_svc(handler: DBHandler) -> CronPolicyService:
     return CronPolicyService(handler)
+
+
+def _user_preference_default_svc(handler: DBHandler) -> UserPreferenceDefaultService:
+    return UserPreferenceDefaultService(handler)
 
 
 def _memory_config_svc(handler: DBHandler) -> MemoryConfigService:
@@ -272,6 +279,49 @@ async def delete_cron_policy(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return ResponseModel(code=200, message="success")
+
+
+class UserPreferenceDefaultUpsertRequest(BaseModel):
+    preferred_language: str = Field(..., min_length=2, max_length=8)
+    # 未传=不覆盖；显式 null=清空；对象=覆盖。
+    extras: dict[str, Any] | None = Field(default=None)
+
+
+@application_config_router.put(
+    "/{jiuwenclaw_id}/user-preference-default", response_model=ResponseModel
+)
+async def upsert_user_preference_default(
+    jiuwenclaw_id: str,
+    body: UserPreferenceDefaultUpsertRequest,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    """写集群默认语言：先推 Gateway ``__default__``，成功后再写 MDB 镜像。无 DELETE。"""
+    svc = _user_preference_default_svc(handler)
+    fields = body.model_dump(exclude_unset=True)
+    preferred_language = fields.pop("preferred_language")
+    try:
+        data = await svc.upsert(
+            jiuwenclaw_id=jiuwenclaw_id,
+            preferred_language=preferred_language,
+            **fields,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ResponseModel(code=200, message="success", data=data)
+
+
+@application_config_router.get(
+    "/{jiuwenclaw_id}/user-preference-default", response_model=ResponseModel
+)
+async def get_user_preference_default(
+    jiuwenclaw_id: str,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    svc = _user_preference_default_svc(handler)
+    data = await svc.get(jiuwenclaw_id=jiuwenclaw_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="user preference default not found")
+    return ResponseModel(code=200, message="success", data=data)
 
 
 class TaskMemoryUpsertRequest(BaseModel):

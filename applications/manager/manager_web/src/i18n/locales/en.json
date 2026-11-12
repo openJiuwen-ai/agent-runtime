@@ -463,8 +463,19 @@
       "logging": "Log Levels",
       "auditLog": "Audit Log",
       "cronPolicy": "Scheduled Tasks",
+      "advanced": "Advanced",
       "permissions": "Permissions",
       "workspaceQuota": "User Space Quota"
+    },
+    "advanced": {
+      "intro": "Default reply language for users who have not set a personal preference. Saving writes the Manager mirror and pushes Gateway's user_preference __default__ row; it does not rewrite AgentServer config.yaml. Users can override this in the Web settings page.",
+      "managed": "Manager-managed default language",
+      "preferredLanguage": "Default language",
+      "preferredLanguageHint": "Only applies to users without a personal preference; existing personal settings are unchanged.",
+      "lang": {
+        "zh": "Chinese",
+        "en": "English"
+      }
     },
     "logMasking": {
       "new": "New Rule",

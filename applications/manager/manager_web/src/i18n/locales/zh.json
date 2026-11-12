@@ -463,8 +463,19 @@
       "logging": "日志级别",
       "auditLog": "审计日志",
       "cronPolicy": "定时任务",
+      "advanced": "高级配置",
       "permissions": "权限配置",
       "workspaceQuota": "用户空间配额"
+    },
+    "advanced": {
+      "intro": "设置本集群未单独配置语言的用户所使用的默认回复语言。保存后写入 Manager 镜像并下发 Gateway 用户习惯表默认行；不会改写各 AgentServer 的 config.yaml。用户可在 Web 设置页覆盖为自己的语言。",
+      "managed": "Manager 已托管默认语言",
+      "preferredLanguage": "默认语言",
+      "preferredLanguageHint": "仅影响尚未设置个人语言的用户；已设置个人偏好的用户不受影响。",
+      "lang": {
+        "zh": "中文",
+        "en": "English"
+      }
     },
     "logMasking": {
       "new": "新建脱敏规则",
