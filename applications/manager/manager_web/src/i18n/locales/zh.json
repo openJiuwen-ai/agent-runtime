@@ -986,7 +986,8 @@
       "instanceName": "实例名",
       "deployMode": "部署模式",
       "phase": "阶段",
-      "createdAt": "创建时间"
+      "createdAt": "创建时间",
+      "result": "部署结果"
     },
     "status": {
       "pending": "排队中",

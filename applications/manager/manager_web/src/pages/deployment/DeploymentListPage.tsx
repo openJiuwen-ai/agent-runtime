@@ -44,7 +44,7 @@ function DeploymentListTable({
                 <th className="min-w-[8rem]">{t('topology.namespace')}</th>
                 <th className="min-w-[9rem]">{t('deployments.columns.instanceName')}</th>
                 <th className="whitespace-nowrap">{t('deployments.columns.deployMode')}</th>
-                <th className="whitespace-nowrap">{t('topology.instanceStatus')}</th>
+                <th className="whitespace-nowrap">{t('deployments.columns.result')}</th>
                 <th className="whitespace-nowrap">{t('deployments.columns.phase')}</th>
                 <th className="whitespace-nowrap">{t('instanceForm.createdBy')}</th>
                 <th className="whitespace-nowrap min-w-[10.5rem]">
