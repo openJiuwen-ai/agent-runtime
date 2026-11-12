@@ -44,6 +44,7 @@ async def test_defaults_seeded_and_masked(manager_api, tool_available, monkeypat
     assert env["MARIADB_IMAGE"] == "swr.example/mariadb-amd64:11.8"
     assert "CLUSTER_TYPE" not in env   # 白名单外不播种
     assert "MANAGER_SERVER_IMAGE" not in env   # 管理面镜像不展示（产品面才经部署）
+    assert "MANAGER_WEB_REPLICAS" not in env   # 管理面副本同样不展示
     for key, value in env.items():
         if "PASSWORD" in key or "SECRET" in key:
             assert value in ("", "******")

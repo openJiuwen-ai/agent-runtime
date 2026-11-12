@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 
 from manager_server.core.deployment.env_builder import (
-    MANAGER_PLANE_IMAGE_KEYS,
+    MANAGER_PLANE_ENV_KEYS,
     mask_sensitive_env,
 )
 from manager_server.core.deployment.service import (
@@ -50,7 +50,7 @@ async def get_deployment_defaults(
     visible = {
         key: value
         for key, value in defaults.items()
-        if key not in MANAGER_PLANE_IMAGE_KEYS
+        if key not in MANAGER_PLANE_ENV_KEYS
     }
     return ResponseModel(
         code=200,

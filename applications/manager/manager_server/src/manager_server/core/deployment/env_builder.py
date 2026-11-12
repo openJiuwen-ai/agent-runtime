@@ -92,10 +92,18 @@ ALLOWED_ENV_KEYS = frozenset(
 # 密码/密钥类键（API 响应须掩码）
 SENSITIVE_KEY_MARKERS = ("PASSWORD", "SECRET", "ACCESS_KEY")
 
-# 管理面组件镜像键：部署功能只部署产品面（manager 组不经其部署），这些键对使用方
-# 无意义，defaults 响应不展示；但任务生成 .env.custom 时仍需取值（deploy.sh 的
-# check_image_vars 无条件校验全量 IMAGE_VARS），故仅从展示层过滤、存储保持完整
-MANAGER_PLANE_IMAGE_KEYS = ("IDENTITY_IMAGE", "MANAGER_SERVER_IMAGE", "MANAGER_WEB_IMAGE")
+# 管理面组件键（镜像 + 副本）：部署功能只部署产品面（manager 组不经其部署），
+# 这些键对使用方无意义，defaults 响应不展示；但任务生成 .env.custom 时仍需取值
+# （deploy.sh 的 check_image_vars 无条件校验全量 IMAGE_VARS），故仅展示层过滤、
+# 存储保持完整
+MANAGER_PLANE_ENV_KEYS = (
+    "IDENTITY_IMAGE",
+    "MANAGER_SERVER_IMAGE",
+    "MANAGER_WEB_IMAGE",
+    "IDENTITY_REPLICAS",
+    "MANAGER_SERVER_REPLICAS",
+    "MANAGER_WEB_REPLICAS",
+)
 
 # 服务端强制写死、不接受请求/默认表覆盖的键
 FORCED_ENV = {
