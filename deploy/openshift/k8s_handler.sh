@@ -411,6 +411,8 @@ apply_k8s_extras() { # $@=本次渲染的清单文件名
 # 部署默认参数（defaults 表）——免镜像改动、免手工配置，且随每次 manager up 重新注入，
 # 版本升级（换镜像 tag）后重启即自动跟进。
 # 敏感键（密码/密钥类，Deployment env 明文可见）不注入，经 defaults 接口单独配置；
+# 工具内部/强制键不注入：NAMESPACE 由任务参数指定、MODE 在管理面链路恒为 product
+# （dev 挂载仅 CLI 部署使用）、CLUSTER_TYPE/RENDER_ONLY 等为工具自管；
 # 仅取单行完整键值（`KEY="value"` 或 `KEY=value`），多行跨行值不注入。
 apply_manager_deploy_env_snapshot() { # $@=本次渲染的清单文件名
   local f key val json=""
@@ -419,6 +421,7 @@ apply_manager_deploy_env_snapshot() { # $@=本次渲染的清单文件名
     [ -f "$CONF_DIR/$f" ] || continue
     while IFS='=' read -r key val; do
       case "$key" in ""|\#*) continue;; esac
+      case "$key" in NAMESPACE|MODE|CLUSTER_TYPE|RENDER_ONLY|SCOPE|CMD) continue;; esac
       [[ "$key" =~ (PASSWORD|SECRET|TOKEN|ACCESS_KEY)$ ]] && continue
       val="${val%\"}"; val="${val#\"}"
       val="${val//\\/\\\\}"; val="${val//\"/\\\"}"

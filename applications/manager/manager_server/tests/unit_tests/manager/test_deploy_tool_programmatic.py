@@ -133,7 +133,8 @@ async def test_manager_render_injects_env_snapshot(tmp_path: Path):
     env_file.write_text(
         _MIN_ENV_CUSTOM
         + 'MARIADB_ROOT_PASSWORD="Root@123456"\n'
-        + 'DB_TYPE="mysql"\n',
+        + 'DB_TYPE="mysql"\n'
+        + 'MODE=product\n',
         encoding="utf-8",
     )
     sub_env = dict(os.environ)
@@ -163,4 +164,5 @@ async def test_manager_render_injects_env_snapshot(tmp_path: Path):
     assert snapshot["GATEWAY_IMAGE"].endswith(":1.0")
     assert snapshot["DB_TYPE"] == "mysql"
     assert "MARIADB_ROOT_PASSWORD" not in snapshot   # 敏感键剔除
-    assert "CLUSTER_TYPE" not in snapshot or snapshot["CLUSTER_TYPE"] == "k8s"  # 文件里写了才带
+    assert "MODE" not in snapshot                     # 工具内部/强制键剔除（管理面恒 product）
+    assert "CLUSTER_TYPE" not in snapshot             # 工具内部键剔除
