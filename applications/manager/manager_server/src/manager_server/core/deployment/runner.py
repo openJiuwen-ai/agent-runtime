@@ -143,10 +143,11 @@ class DeployRunner:
             if not (tool_dir / "deploy.sh").is_file():
                 raise FileNotFoundError(f"{tool_dir}/deploy.sh")
             if self._action == "down":
-                # down 不渲染、直接消费 conf/ 现有清单：先补渲染（down 目标集）再卸载，
+                # down 不渲染、直接消费 conf/ 现有清单：本任务的 work_dir 是新目录，
+                # 按 deploy.sh 约定先用 up --render-only 补齐清单再执行倒序卸载，
                 # 两步共用同一 work_dir（env/conf 隔离）
                 exit_code = await self._exec(
-                    tool_dir, sub_env, ["-n", self._namespace, "down", "--render-only"], deadline
+                    tool_dir, sub_env, ["-n", self._namespace, "up", "--render-only"], deadline
                 )
                 if exit_code == 0:
                     exit_code = await self._exec(
