@@ -133,8 +133,8 @@ declare -A DEPLOY_VARS=(
     ["MANAGER_WEB_REPLICAS"]="1"
     ["AGENT_RUNTIME_REPLICAS"]="1"
 
-    # agent-runtime 三模式部署形态（routing | off；full 待开放）
-    ["AGENT_RUNTIME_DEPLOY_MODE"]="routing"
+    # agent-runtime 三模式部署形态（routing | off | full），默认 full
+    ["AGENT_RUNTIME_DEPLOY_MODE"]="full"
     # 沙箱镜像（SANDBOX_TYPE=jiuwenbox 时必填；off/kata 不需要）
     ["JIUWENBOX_IMAGE"]=""
     # jiuwenbox 沙箱监听端口（与 ee 部署约定一致）
@@ -184,7 +184,8 @@ declare -A DEPLOY_VARS=(
     ["WORKSPACE_QUOTA_ENABLED"]="false"
     # dev 模式：hostPath 挂载宿主机代码调试（MODE=dev 仅 k8s 形态支持；Pod 固定到代码所在节点）
     ["MODE"]="product"                   # product | dev
-    ["SWARM_CODE_PATH"]=""                # jiuwenswarm 仓库路径（挂载到 agentserver/gateway/web）
+    ["SWARM_CODE_PATH"]=""                # jiuwenswarm 仓库路径（挂载到 agentserver/web）
+    ["GATEWAY_CODE_PATH"]=""             # agent-gateway 仓库路径（挂载到 gateway）
     ["RUNTIME_CODE_PATH"]=""             # agent-runtime 仓库路径（挂载到 runtime/identity/manager-server/manager-web）
     ["CORE_CODE_PATH"]=""                # agent-core 仓库路径（openjiuwen 包挂载到 agentserver/gateway）
     ["IS_MOUNT_WEB_CODE"]="false"        # dev 模式下 web 是否挂载代码
@@ -192,6 +193,7 @@ declare -A DEPLOY_VARS=(
     ["CURRENT_NODE_NAME"]=""             # 代码所在节点；留空=按本机 hostname/IP 自动识别
     # Pod 侧代码路径（按镜像内布局，一般无需修改）
     ["SWARM_POD_CODE_PATH"]="/app/jiuwenswarm"
+    ["GATEWAY_POD_CODE_PATH"]="/app/agent-gateway"
     ["RUNTIME_POD_CODE_PATH"]="/app/agent-runtime"
     ["RUNTIME_POD_PKG_PATH"]="/usr/local/lib/python3.11/site-packages/openjiuwen_runtime"
     ["CORE_POD_PKG_PATH"]="/usr/local/lib/python3.11/site-packages/openjiuwen"
