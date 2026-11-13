@@ -489,6 +489,46 @@ apply_sandbox_type_extras() { # $@=本次渲染的清单文件名
 #   sidecar 挂业务卷 domain/，与主进程保持工作区文件级 IPC 同径
 # - agentserver.json → config_sync 载荷追加 c-jiuwenbox 容器 + sidecar_container_ids
 #   + hp-cgroup 卷（与 ee 部署的 config_sync 载荷同规格）
+# - securityContext 除 root + SYS_ADMIN/NET_ADMIN + seccomp Unconfined 外，
+#   另须关闭 AppArmor：containerd 默认 profile（cri-containerd.apparmor.d）
+#   deny mount，`ip netns add` 卡死在 mount --make-shared /var/run/netns
+#   （Permission denied），warm pool 启动失败。
+#   关闭方式按集群版本分派（is_k8s_version_ge 1.31）：
+#   · yaml 清单（routing）：≥ v1.31 用 securityContext.appArmorProfile 字段
+#     （KEP-4157，v1.31 beta 默认开启）；< v1.31 或版本未知走 legacy pod 注解
+#   · config_sync 载荷（json，full）：模板级键白名单不支持注解，只能用字段，
+#     无降级路径 → < v1.31 预检报错（v1.30 须开 AppArmorFields 特性门；低版本
+#     apiserver 不识别该字段：strict 拒收或被静默丢弃，沙箱回退默认 profile 起不来）
+
+# ---------- Kubernetes 集群版本探测与比较 ----------
+# 版本取自 apiserver /version，进程内缓存（多清单渲染只探测一次）；minor 兼容发行版
+# 后缀（如 "31+"、"31.3-gke.0"，取数字前缀）。RENDER_ONLY / 连不上集群 → 保持 unknown，
+# is_k8s_version_ge 一律判否，调用方按"保守降级"处理。
+_K8S_VERSION_STR="unknown" # 已探测到的集群版本 major.minor；unknown=RENDER_ONLY/探测失败
+_k8s_version_probe() { # 填充 _K8S_VERSION_STR（已探测或 RENDER_ONLY 时跳过）
+  [ "${_K8S_VERSION_STR}" != "unknown" ] && return 0
+  [ "${DEPLOY_VARS["RENDER_ONLY"]:-}" = "true" ] && return 0
+  local raw major minor
+  raw=$(kubectl get --raw=/version 2>/dev/null) || raw=""
+  major=$(printf '%s' "${raw}" | yq -r '.major // ""' 2>/dev/null) || major=""
+  minor=$(printf '%s' "${raw}" | yq -r '.minor // ""' 2>/dev/null | tr -dc '0-9') || minor=""
+  if [ -n "${major}" ] && [ -n "${minor}" ]; then
+    _K8S_VERSION_STR="${major}.${minor}"
+  fi
+}
+
+# 集群版本 ≥ 目标版本判定。用法: is_k8s_version_ge <major.minor>（如 1.25 / 1.31，兼容 v 前缀）
+# ≥ → rc 0；< 或版本未知 → rc 1
+is_k8s_version_ge() {
+  [ $# -eq 1 ] || error "is_k8s_version_ge: 须传 1 个 major.minor 版本参数"
+  local want="${1#v}"
+  [[ "${want}" =~ ^[0-9]+\.[0-9]+$ ]] || error "is_k8s_version_ge: 版本参数须为 major.minor 形式: $1"
+  _k8s_version_probe
+  [ "${_K8S_VERSION_STR}" = "unknown" ] && return 1
+  local wm="${want%%.*}" wn="${want#*.}" gm="${_K8S_VERSION_STR%%.*}" gn="${_K8S_VERSION_STR#*.}"
+  [ "${gm}" -gt "${wm}" ] || { [ "${gm}" -eq "${wm}" ] && [ "${gn}" -ge "${wn}" ]; }
+}
+
 _apply_jiuwenbox_sidecar_yaml() { # $1=agentserver.yaml
   local img="${DEPLOY_VARS["JIUWENBOX_IMAGE"]}" port="${DEPLOY_VARS["JIUWENBOX_PORT"]:-8321}"
   yq -i '(select(.kind == "StatefulSet").spec.template.spec.containers) |= (. + [{
@@ -516,9 +556,32 @@ _apply_jiuwenbox_sidecar_yaml() { # $1=agentserver.yaml
   # 注入校验：StatefulSet 须有 jiuwenbox 容器 + hp-cgroup 卷
   [ "$(yq 'select(.kind == "StatefulSet").spec.template.spec.containers[] | select(.name == "jiuwenbox") | .name' "$1")" = "jiuwenbox" ]     || error "jiuwenbox sidecar 注入校验失败: $1"
   [ "$(yq 'select(.kind == "StatefulSet").spec.template.spec.volumes[] | select(.name == "hp-cgroup") | .name' "$1")" = "hp-cgroup" ]     || error "hp-cgroup 卷注入校验失败: $1"
+  # 关闭 AppArmor 按集群版本分派（containerd 默认 profile deny mount 会卡死
+  # `ip netns add`，warm pool 起不来，须显式 Unconfined）
+  if is_k8s_version_ge 1.31; then
+    # ≥ v1.31：securityContext.appArmorProfile 字段（新 API，apiserver 原生校验）
+    yq -i '(select(.kind == "StatefulSet").spec.template.spec.containers[] | select(.name == "jiuwenbox").securityContext) |= (. + {"appArmorProfile": {"type": "Unconfined"}})' "$1"
+    [ "$(yq 'select(.kind == "StatefulSet").spec.template.spec.containers[] | select(.name == "jiuwenbox") | .securityContext.appArmorProfile.type' "$1")" = "Unconfined" ]     || error "jiuwenbox appArmorProfile 注入校验失败: $1"
+    info "jiuwenbox AppArmor 关闭：appArmorProfile 字段（集群 v${_K8S_VERSION_STR}）"
+  else
+    # < v1.31 / 版本未知（RENDER_ONLY、连不上集群）：legacy pod 注解，全版本可用
+    yq -i '(select(.kind == "StatefulSet").spec.template.metadata.annotations) |= ((. // {}) + {"container.apparmor.security.beta.kubernetes.io/jiuwenbox": "unconfined"})' "$1"
+    [ "$(yq 'select(.kind == "StatefulSet").spec.template.metadata.annotations["container.apparmor.security.beta.kubernetes.io/jiuwenbox"]' "$1")" = "unconfined" ]     || error "jiuwenbox appArmor 注解注入校验失败: $1"
+    info "jiuwenbox AppArmor 关闭：legacy pod 注解（集群 v${_K8S_VERSION_STR}）"
+  fi
 }
 
 _apply_jiuwenbox_sidecar_json() { # $1=agentserver.json
+  # full 模式无注解降级路径（模板级键白名单不支持注解）：< v1.31 的 apiserver 会
+  # 拒收（strict）或静默丢弃 appArmorProfile 字段，沙箱回退默认 profile 起不来，
+  # 预检直接拦下；RENDER_ONLY/连不上集群（版本未知）仅告警放行，由用户自行确认
+  if ! is_k8s_version_ge 1.31; then
+    if [ "${_K8S_VERSION_STR}" = "unknown" ]; then
+      warning "无法探测集群版本（RENDER_ONLY/离线渲染），请自行确认集群 ≥ v1.31：full 模式 jiuwenbox 依赖 securityContext.appArmorProfile 字段"
+    else
+      error "full 模式 jiuwenbox 关闭 AppArmor 仅支持 appArmorProfile 字段，要求集群 ≥ v1.31（当前 v${_K8S_VERSION_STR}）；低版本请改用 routing 模式"
+    fi
+  fi
   local img="${DEPLOY_VARS["JIUWENBOX_IMAGE"]}" port="${DEPLOY_VARS["JIUWENBOX_PORT"]:-8321}"
   yq -i -o=json '
     .rawdata.containers += [{
@@ -534,7 +597,8 @@ _apply_jiuwenbox_sidecar_json() { # $1=agentserver.json
       ],
       "securityContext": {"runAsUser": 0, "runAsGroup": 0,
         "capabilities": {"add": ["SYS_ADMIN", "NET_ADMIN"]},
-        "seccompProfile": {"type": "Unconfined"}},
+        "seccompProfile": {"type": "Unconfined"},
+        "appArmorProfile": {"type": "Unconfined"}},
       "readinessProbe": {"tcpSocket": {"port": '"${port}"'}, "initialDelaySeconds": 10, "periodSeconds": 5},
       "volumeMounts": [
         {"name": "data", "mountPath": "/home/app/.jiuwenswarm/domain"},
@@ -544,9 +608,10 @@ _apply_jiuwenbox_sidecar_json() { # $1=agentserver.json
     .rawdata.templates[].sidecar_container_ids = ["c-jiuwenbox"] |
     .rawdata.templates[].volumes += [{"name": "hp-cgroup", "hostPath": {"path": "/sys/fs/cgroup", "type": "Directory"}}]
   ' "$1"
-  # 注入校验：config_sync 载荷须含 c-jiuwenbox 容器 + sidecar_container_ids
+  # 注入校验：config_sync 载荷须含 c-jiuwenbox 容器 + sidecar_container_ids + appArmorProfile
   [ "$(yq -r '.rawdata.containers[].container_id' "$1" | grep -c c-jiuwenbox)" -ge 1 ]     || error "jiuwenbox sidecar 注入校验失败: $1"
   [ "$(yq -r '.rawdata.templates[0].sidecar_container_ids[]' "$1" | grep -c c-jiuwenbox)" -ge 1 ]     || error "sidecar_container_ids 注入校验失败: $1"
+  [ "$(yq -r '.rawdata.containers[] | select(.container_id == "c-jiuwenbox") | .securityContext.appArmorProfile.type' "$1")" = "Unconfined" ]     || error "jiuwenbox appArmorProfile 注入校验失败: $1"
 }
 
 apply_jiuwenbox_extras() { # $@=本次渲染的清单文件名
@@ -599,6 +664,14 @@ add_code_mount() { # $1=清单文件 $2=卷名 $3=宿主机路径 $4=容器内�
 mount_swarm_code() { # jiuwenswarm 仓库 → 镜像内代码根
   [ -n "${DEPLOY_VARS["SWARM_CODE_PATH"]:-}" ] || return 0
   add_code_mount "$1" "swarm-code" "${DEPLOY_VARS["SWARM_CODE_PATH"]}" "${DEPLOY_VARS["SWARM_POD_CODE_PATH"]}"
+}
+
+mount_gateway_code() { # agent-gateway 仓库 → 镜像内代码根
+  if [ -z "${DEPLOY_VARS["GATEWAY_CODE_PATH"]:-}" ]; then
+    warning "GATEWAY_CODE_PATH 未设置：gateway 使用镜像内置代码（dev 模式下改动不生效）"
+    return 0
+  fi
+  add_code_mount "$1" "gateway-code" "${DEPLOY_VARS["GATEWAY_CODE_PATH"]}" "${DEPLOY_VARS["GATEWAY_POD_CODE_PATH"]}"
 }
 
 # jiuwenbox sidecar 同挂 jiuwenswarm 仓库（dev 专用）：sandbox 镜像 editable 安装与
@@ -694,8 +767,9 @@ apply_dev_code_mounts() { # $@=本次渲染的清单文件名
     comp="${f%.yaml}"; comp="${comp%.json}"   # agentserver.json（full 模式 runtime 建 Pod 的载荷）与 agentserver.yaml 同按 agentserver 处理
     case "$comp" in
       agentserver|gateway)
-        mount_swarm_code "$CONF_DIR/$f"; mount_runtime_pkg "$CONF_DIR/$f"; mount_core_pkg "$CONF_DIR/$f"
-        [ "$comp" = agentserver ] && mount_swarm_code_sidecar "$CONF_DIR/$f";;
+        mount_runtime_pkg "$CONF_DIR/$f"; mount_core_pkg "$CONF_DIR/$f"
+        [ "$comp" = agentserver ] && { mount_swarm_code "$CONF_DIR/$f"; mount_swarm_code_sidecar "$CONF_DIR/$f"; }
+        [ "$comp" = gateway ] && mount_gateway_code "$CONF_DIR/$f";;
       web)
         [ "${DEPLOY_VARS["IS_MOUNT_WEB_CODE"]}" = "true" ] || continue
         mount_swarm_code "$CONF_DIR/$f"; mount_web_nginx_template "$CONF_DIR/$f";;
@@ -750,7 +824,7 @@ resolve_dev_mode_vars() {
 
   [ -n "${DEPLOY_VARS["SWARM_CODE_PATH"]}" ] && require_abs_dir SWARM_CODE_PATH
   local v
-  for v in RUNTIME_CODE_PATH CORE_CODE_PATH; do
+  for v in RUNTIME_CODE_PATH CORE_CODE_PATH GATEWAY_CODE_PATH; do
     [ -n "${DEPLOY_VARS[$v]}" ] && require_abs_dir "$v"
   done
   return 0
