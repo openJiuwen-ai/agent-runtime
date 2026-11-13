@@ -365,7 +365,9 @@ async def ensure_product_databases(env: dict, *, namespace: str) -> None:
     复用 foundation 的 ``init_database``（幂等；PG 走 AUTOCOMMIT + 23505 处理）：
     mysql/mariadb 按库隔离 ``<module>_<ns>``；postgresql 库共享、按 schema 隔离。
     """
-    conn = derive_db_connection(env, tool_defaults=parse_tool_defaults())
+    conn = derive_db_connection(
+        env, tool_defaults=parse_tool_defaults(), namespace=namespace
+    )
     targets = derive_product_databases(env, namespace=namespace)
     if conn["db_type"] == "postgresql":
         from openjiuwen_runtime.foundation.db.postgresql_handler import (

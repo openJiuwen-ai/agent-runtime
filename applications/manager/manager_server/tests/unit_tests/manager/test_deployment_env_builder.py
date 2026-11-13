@@ -291,3 +291,24 @@ class TestOcpClusterType:
         monkeypatch.setattr(_shutil, "which", lambda c: "/usr/bin/" + c)
         ok, reason = toolkit.check_tool_available()
         assert ok, reason
+
+
+class TestOcpDbHost:
+    """内置 DB 实例地址随形态：k8s=default 共享；openshift=任务目标 ns。"""
+
+    def test_k8s_default_host(self):
+        conn = derive_db_connection({"DB_TYPE": "mariadb", "CLUSTER_TYPE": "k8s"})
+        assert conn["host"] == "mariadb-headless.default"
+
+    def test_openshift_namespace_host(self):
+        conn = derive_db_connection(
+            {"DB_TYPE": "mariadb", "CLUSTER_TYPE": "openshift"}, namespace="proj-x"
+        )
+        assert conn["host"] == "mariadb-headless.proj-x"
+
+    def test_external_host_unaffected(self):
+        conn = derive_db_connection(
+            {"DB_TYPE": "mariadb", "CLUSTER_TYPE": "openshift", "DB_HOST": "db.example"},
+            namespace="proj-x",
+        )
+        assert conn["host"] == "db.example"

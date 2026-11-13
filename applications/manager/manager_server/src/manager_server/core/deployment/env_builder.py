@@ -200,16 +200,22 @@ def build_env_custom(env: dict, *, namespace: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def derive_db_connection(env: dict, *, tool_defaults: dict | None = None) -> dict:
+def derive_db_connection(
+    env: dict, *, tool_defaults: dict | None = None, namespace: str | None = None
+) -> dict:
     """从合并 env 派生共享数据库连接信息。
 
     未显式配置的键回落 deploy 工具内置默认（global_vars.sh 的 DEPLOY_VARS，经
     ``tool_defaults`` 动态传入——与 deploy.sh 实际执行保持同一真源，避免硬编码
     副本漂移）；最终兜底为与 global_vars 当前值一致的常量，防 tool_defaults 缺失。
+    内置实例所在 ns 随形态：k8s = default 共享；openshift = 任务目标 ns
+    （BASE_SVC_NS 语义，resolve_builtin_svc_locations 本 ns 优先）。
     """
     defaults = tool_defaults or {}
     db_type = env.get("DB_TYPE") or defaults.get("DB_TYPE") or "mariadb"
-    default_host = f"{db_type}-headless.default"   # k8s 形态内置 = default 共享实例
+    cluster_type = (env.get("CLUSTER_TYPE") or "k8s").lower()
+    svc_ns = namespace if (cluster_type == "openshift" and namespace) else "default"
+    default_host = f"{db_type}-headless.{svc_ns}"
     default_port = defaults.get("DB_PORT") or ("5432" if db_type == "postgresql" else "3306")
     default_user = defaults.get("DB_USER") or ("postgres" if db_type == "postgresql" else "root")
     root_password_keys = {
