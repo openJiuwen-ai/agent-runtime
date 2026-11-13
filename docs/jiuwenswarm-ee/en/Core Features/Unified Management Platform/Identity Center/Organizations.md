@@ -9,7 +9,7 @@ Administrators manage organizations and memberships under **Identity Center → 
 1. Sign in to Manager as a platform administrator and go to **Identity Center → Orgs**.
 2. Select **New Org**, enter the basic information, and save.
 3. On the **Members** tab, add users who are already registered in the identity center. See [Users](Users.md) for account creation steps.
-4. Open the target cluster and configure cluster admission and access to Agents and runtimes for the organization. See [Quick Start (Chinese)](../../../../zh/快速开始/快速上手.md) for the steps.
+4. Open the target cluster and configure cluster admission and access to Agents and runtimes for the organization. See [Quick Start](../../../Getting%20Started/Quick%20Start.md) for the steps.
 
 ## Manager Configuration
 

@@ -2,7 +2,7 @@
 
 ## Overview
 
-A role is a set of permissions. Administrators configure roles under **Identity Center → Roles** in Manager, then assign them to users. A user's permissions come from all their effective assignments. The role must be enabled and the assignment must be within its validity period. Configure cluster admission and resource access for Agents in the target cluster. See [Quick Start (Chinese)](../../../../zh/快速开始/快速上手.md) for the steps.
+A role is a set of permissions. Administrators configure roles under **Identity Center → Roles** in Manager, then assign them to users. A user's permissions come from all their effective assignments. The role must be enabled and the assignment must be within its validity period. Configure cluster admission and resource access for Agents in the target cluster. See [Quick Start](../../../Getting%20Started/Quick%20Start.md) for the steps.
 
 The built-in platform administrator role has the ID `platform_admin`. Its role type, permissions, and enabled status are read-only on the role page. The built-in role cannot be deleted.
 
@@ -59,7 +59,7 @@ Access to **Deployments** currently requires platform administrator access. The 
 
 #### How Feature Flags Affect Permissions
 
-- **Workspace quota**. `WORKSPACE_QUOTA_ENABLED` is off by default. When it is off, the role page hides **View Quota** and **Manage Quota**, and clearing the search box shows the six remaining `admin` permissions. The workspace quota APIs are disabled as well. To enable quota, set `WORKSPACE_QUOTA_ENABLED=true` in `.env.custom` in the enterprise deployment directory and apply the configuration through the deployment process. See section **18. Workspace Quota** in the [Manager API Reference (Chinese)](../../../../zh/开发文档/接口文档/管理面接口文档.md) for the flag requirement and the [Cluster Deployment Guide (Chinese)](../../../../zh/快速开始/集群部署指南.md) for deployment steps.
+- **Workspace quota**. `WORKSPACE_QUOTA_ENABLED` is off by default. When it is off, the role page hides **View Quota** and **Manage Quota**, and clearing the search box shows the six remaining `admin` permissions. The workspace quota APIs are disabled as well. To enable quota, set `WORKSPACE_QUOTA_ENABLED=true` in `.env.custom` in the enterprise deployment directory and apply the configuration through the deployment process. See section **18. Workspace Quota** in the [Manager API Reference (Chinese)](../../../../zh/开发文档/接口文档/管理面接口文档.md) for the flag requirement and the [Cluster Deployment Guide](../../../Getting%20Started/Cluster%20Deployment%20Guide.md) for deployment steps.
 - **Approvals**. **View Approvals** and **Process Approvals** remain available when workspace quota is off. Their respective permissions still control approval lists, details, and actions. Requests to expand workspace quotas require the quota feature to be enabled. See **Workspace Quota** and **Approvals** in the [Manager API Reference (Chinese)](../../../../zh/开发文档/接口文档/管理面接口文档.md) for API permissions and flag requirements.
 
 ### Assign a Role to Users

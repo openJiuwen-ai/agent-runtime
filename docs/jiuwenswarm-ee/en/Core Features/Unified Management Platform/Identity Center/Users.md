@@ -11,7 +11,7 @@ After users join an organization, administrators can configure cluster admission
 1. Sign in to Manager as a platform administrator and go to **Identity Center → Users**.
 2. Select **New User** to create an account, or **Batch Create** to create multiple accounts at once.
 3. To grant access by organization, go to **Identity Center → Orgs**, open the target organization, and add users on the **Members** tab.
-4. Configure admission to the target cluster for the user or their organization. To enable Agent conversations, configure Agent and runtime access for the user as well. See [Quick Start (Chinese)](../../../../zh/快速开始/快速上手.md) for the steps.
+4. Configure admission to the target cluster for the user or their organization. To enable Agent conversations, configure Agent and runtime access for the user as well. See [Quick Start](../../../Getting%20Started/Quick%20Start.md) for the steps.
 
 ## Manager Configuration
 
