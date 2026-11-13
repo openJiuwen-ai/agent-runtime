@@ -6,7 +6,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: jiuwenswarm-identity
-  namespace: <<NAMESPACE>>
+  namespace: "<<NAMESPACE>>"
 spec:
   selector:
     app: jiuwenswarm-identity
@@ -20,7 +20,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: jiuwenswarm-identity
-  namespace: <<NAMESPACE>>
+  namespace: "<<NAMESPACE>>"
 spec:
   replicas: <<IDENTITY_REPLICAS>>
   selector:

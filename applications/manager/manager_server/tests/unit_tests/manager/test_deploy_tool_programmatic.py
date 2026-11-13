@@ -166,3 +166,23 @@ async def test_manager_render_injects_env_snapshot(tmp_path: Path):
     assert "MARIADB_ROOT_PASSWORD" not in snapshot   # 敏感键剔除
     assert "MODE" not in snapshot                     # 工具内部/强制键剔除（管理面恒 product）
     assert "CLUSTER_TYPE" not in snapshot             # 工具内部键剔除
+
+
+async def test_numeric_namespace_renders_quoted(tmp_path: Path):
+    """纯数字命名空间合法（K8s DNS label），模板必须引号包裹防 YAML 解析成整数
+    （线上实测回归：ns=111 渲染出 namespace: 111 → kubectl unmarshal number 失败）。"""
+    import subprocess
+
+    code, output, conf_dir, _ = await _run_render_only(tmp_path, "111")
+    assert code == 0, output
+    for manifest in ("gateway.yaml", "redis.yaml", "runtime.yaml"):
+        ns = subprocess.run(
+            ["yq", ".metadata.namespace | type", str(conf_dir / manifest)],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        assert ns == "!!str", f"{manifest} 命名空间应为字符串: {ns}"
+    cm = subprocess.run(
+        ["yq", ".data.NAMESPACE | type", str(conf_dir / "gateway-env.configmap.yaml")],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert cm == "!!str"
