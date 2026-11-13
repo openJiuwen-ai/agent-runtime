@@ -43,10 +43,10 @@ def test_manager_frontend_serves_and_relays(frontends) -> None:
     assert r.status_code == 200
     assert "<div id=\"root\">" in r.text, "manager web index.html 缺 #root"
 
-    # /idp → identity 反代(public_key 无鉴权,JSON 可解析即链路通)
+    # /idp → identity 反代(public_key 无鉴权;新版 identity 返回 PEM 裸文本)
     r = httpx.get(f"{base}/idp/v1/auth/public_key", timeout=10)
     assert r.status_code == 200, r.text
-    assert r.json(), "public_key 空响应"
+    assert "BEGIN PUBLIC KEY" in r.text, "public_key 缺 PEM 体"
 
     # /api → manager 反代(无 token 401/403 = 到达 manager 而非代理错误)
     r = httpx.get(f"{base}/api/v1/authz/me", timeout=10)

@@ -239,10 +239,13 @@ def build_frontend_specs(cfg: LiteConfig) -> list[ServiceSpec]:
         env={
             # 生产同款 env(web.template.yaml):代理目标=gateway 统一 Web 口,
             # 逐请求运行时配置注入用 edition/transport/auth-simulate。
+            # 企业版前端不走 WebSocket 与 gateway 建链,只走 HTTP 链路——
+            # WEB_TRANSPORT 必须与 JIUWENSWARM_EDITION=enterprise 配对为 http
+            # (app_web 注入 window.__JIUWEN_WEB_TRANSPORT__,优先级高于前端默认)。
             "GATEWAY_URL": cfg.gateway_url,
             "WEB_PORT": str(cfg.gateway_web_port),
             "JIUWENSWARM_EDITION": "enterprise",
-            "WEB_TRANSPORT": "websocket",
+            "WEB_TRANSPORT": "http",
             "LOGIN_AUTH_SIMULATE": "false",
             "JIUWENSWARM_DATA_DIR": str(cfg.user_web_workspace),
             "JIUWENSWARM_HOME": str(cfg.user_web_workspace),

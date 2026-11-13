@@ -11,14 +11,19 @@ dependencies = [
     "agent-runtime-orchestrator @ git+https://gitcode.com/openJiuwen/agent-runtime.git@develop#subdirectory=applications/agent_runtime",
     "manager-server @ git+https://gitcode.com/openJiuwen/agent-runtime.git@develop#subdirectory=applications/manager/manager_server",
     "identity-center @ git+https://gitcode.com/openJiuwen/agent-runtime.git@develop#subdirectory=applications/manager/identity_center",
-    "workswarm @ git+https://gitcode.com/cyz95/jiuwenclaw.git@develop",
+    "workswarm @ git+https://gitcode.com/openJiuwen/jiuwenclaw.git@develop",
+    # gateway 已拆独立仓;显式直依赖以便 tool.uv.sources 把它重定向到本地
+    # 检出(覆盖 workswarm 传递依赖里的 git pin),本地改动即时生效。
+    "agent-gateway",
     # "openjiuwen-runtime-foundation @ git+https://gitcode.com/openJiuwen/agent-runtime.git@develop#subdirectory=foundation",
     "psutil>=5.9",
     # workswarm -> skillnet-ai==0.0.16 要求 pydantic>=2.12.5,与 foundation/service 的 ==2.11.7
     # 不相交;统一 override 到 >=2.12.5(向后兼容)。
     "pydantic>=2.11.7,<3",
     "python-dotenv>=1.0.0",
-    "uvicorn[standard]==0.42.0",
+    # 新 workswarm(0.2.8)→agent-gateway 要求 uvicorn>=0.52.1,而 agent_runtime 各包
+    # 钉 ==0.42.0/>=0.42,<0.47 不相交;跟着 agent-gateway 走,并经 override 去钉全图。
+    "uvicorn[standard]>=0.52.1,<1.0",
     # CLI 输出走 click.echo(G.LOG.02);原本即 uvicorn 的传递依赖,此处显式声明
     "click>=7.0",
 ]
@@ -56,7 +61,21 @@ default-groups = ["dev"]
 # service 钉死 fastapi==0.115.11(starlette<0.47)与 workswarm 要求 starlette>=0.49.1 不相交;
 # agent_runtime 钉死 pydantic==2.11.7 与 workswarm->skillnet-ai 要求 pydantic>=2.12.5 不相交;
 # override 去钉,让 uv 选兼容两侧的新版(fastapi 0.162.x / pydantic 2.12.x)。
-override-dependencies = ["fastapi>=0.115,<1.0", "pydantic>=2.12.5,<3"]
+override-dependencies = [
+    "fastapi>=0.115,<1.0",
+    "pydantic>=2.12.5,<3",
+    # 新 workswarm(0.2.8)依赖 agent-gateway,其与 workswarm 各自声明同一条
+    # foundation git URL;uv 0.7.20 对"两条字节一致的 URL 要求"仍误报 conflicting
+    # URLs → 用带 URL 的 override 统一成一条(裸名 override 会去 PyPI 找,不可用)。
+    "openjiuwen-runtime-foundation @ git+https://gitcode.com/openJiuwen/agent-runtime.git@develop#subdirectory=foundation",
+    # agent-gateway: 根声明(经 tool.uv.sources 指本地)与 workswarm 传递 git pin
+    # (develop tip 漂移)URL 冲突 → override 统一成本地路径;根声明的
+    # tool.uv.sources 仍叠加 editable,本地改动即时生效。
+    "agent-gateway @ file:///E:/code/cyz95/agent-gateway",
+    # agent_runtime 各包钉 uvicorn==0.42.0/>=0.42,<0.47,与 agent-gateway 要求的
+    # >=0.52.1,<1.0 不相交 → 全图统一到后者。
+    "uvicorn[standard]>=0.52.1,<1.0",
+]
 
 # 开发期将四个 git 依赖指到本地仓库(可编辑安装),本地改动即时生效。
 # 需要按 pyproject 中的 git 地址安装时: uv sync --no-sources
@@ -65,6 +84,11 @@ override-dependencies = ["fastapi>=0.115,<1.0", "pydantic>=2.12.5,<3"]
 # manager-server = { path = "../manager/manager_server", editable = true }
 # identity-center = { path = "../manager/identity_center", editable = true }
 # openjiuwen-runtime-foundation = { path = "../../foundation", editable = true }
+
+# gateway 独立仓(自 workswarm 0.2.8 起为其传递依赖):强制重定向到本地检出,
+# 相对路径 = E:\code\cyz95\agent-gateway;本地企业版适配改动见该仓 git log。
+[tool.uv.sources]
+agent-gateway = { path = "../../../agent-gateway", editable = true }
 
 [[tool.uv.index]]
 url = "https://pypi.tuna.tsinghua.edu.cn/simple"

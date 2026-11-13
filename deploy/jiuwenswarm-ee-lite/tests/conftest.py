@@ -23,6 +23,7 @@ if str(SRC) not in sys.path:
 
 from jiuwenswarm_ee_lite.config import LiteConfig  # noqa: E402
 from jiuwenswarm_ee_lite.launcher import start as stack_start  # noqa: E402
+from jiuwenswarm_ee_lite.spec import POD_COMPAT_DIR  # noqa: E402
 
 from .helpers.identity_client import IdentityClient  # noqa: E402
 
@@ -89,9 +90,9 @@ def identity(stack: LiteConfig) -> IdentityClient:
 
 
 @pytest.fixture(scope="session")
-def admin_token(identity: IdentityClient) -> str:
-    """播种管理员 admin 的 access token。"""
-    return identity.login("admin", "admin123")["access_token"]
+def admin_token(cfg: LiteConfig, identity: IdentityClient) -> str:
+    """播种管理员 admin 的 access token（密码同 launcher 注入：LITE_ADMIN_PASSWORD）。"""
+    return identity.login("admin", cfg.admin_password)["access_token"]
 
 
 @pytest.fixture(scope="session")
@@ -149,6 +150,9 @@ def chat_setup(manager_api, cfg, mock_llm):
         "env": [
             {"name": "JIUWENSWARM_EDITION", "value": "enterprise"},
             {"name": "JIUWENSWARM_CONFIG_SOURCE", "value": "enterprise"},
+            # pod 兼容垫片（sitecustomize：checkpointer 企业模式回退本地 sqlite,
+            # 新版 workswarm 硬性要求 MySQL/PG 共享库,轻量形态无外部 DB）
+            {"name": "PYTHONPATH", "value": str(POD_COMPAT_DIR)},
             {"name": "API_BASE", "value": mock_llm.base_url},
             {"name": "API_KEY", "value": "sk-e2e-mock"},
             {"name": "MODEL_NAME", "value": "mock-model"},

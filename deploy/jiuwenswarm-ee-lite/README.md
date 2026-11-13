@@ -32,8 +32,7 @@ jiuwenswarm 企业版**轻量单机部署**：无 Docker、无 K8s、无外部 R
 
 ```bash
 # 1) 依赖安装(uv,Python 3.11–3.13)
-uv sync                     # 本地 editable 源(四个 git 依赖指到本地仓库)
-# 按纯 git 地址安装: uv sync --no-sources
+GIT_LFS_SKIP_SMUDGE=1 uv sync                
 
 # 2) 启动全栈(identity → manager → runtime → gateway 按序就绪)
 uv run jiuwenswarm-lite start
@@ -62,7 +61,7 @@ uv run jiuwenswarm-lite frontend stop     # 停止前端进程
 | 前端 | 源码位置(原地构建) | 端口 | 生产入口(与 K8s 镜像同语义,免 nginx) |
 |---|---|---|---|
 | 管理面 manager-web | `<外层仓>/applications/manager/manager_web` | 19003 | `python -m manager_server.manager_web`:/api→manager /idp→identity /chat→用户面前端 /gateway-api,/ws→gateway |
-| 用户面 user-web | `<本仓>/resources/jiuwenswarm/jiuwenswarm/channels/web/frontend`(jiuwenclaw 克隆,**build 时自动 git clone**,见下) | 19012 | `python -m jiuwenswarm.channels.web.app_web`:/api,/ws→gateway(语义对齐 docker/web.nginx.conf.template) |
+| 用户面 user-web | `<本仓>/resources/jiuwenswarm/jiuwenswarm/channels/web/frontend`(jiuwenclaw 克隆,**build 时自动 git clone**,见下) | 19012 | `python -m jiuwenswarm.channels.web.app_web`:/api,/ws,/gateway-api(改写/api)→gateway(语义对齐 docker/web.nginx.conf.template) |
 
 - 用户面前端克隆:`frontend build` 发现 `resources/jiuwenswarm` 缺失时自动执行
   `git clone --depth 1 -b <分支> <地址>`,地址/分支由 `LITE_JIUWENCLAW_URL` /
@@ -72,6 +71,13 @@ uv run jiuwenswarm-lite frontend stop     # 停止前端进程
 - 构建直接发生在源码目录,`node_modules/`、`dist/` 留在源码处;`frontend build` 缺省 dist 已存在跳过,`--force` 重建。
 - 用户面前端的 vite 配置加载期解析包内 `../../../scripts` 兄弟目录(即 `resources/jiuwenswarm/jiuwenswarm/scripts`),克隆天然包含,缺失时 build 前有预检报错。
 - 用户面前端进程工作区独立:`data/user_web_workspace/`(防与 gateway 工作区互踩)。
+- `/gateway-api` 代理补丁:企业版前端(`getGatewayApiRoot`)以 `/gateway-api` 为
+  Gateway HTTP 根(生产 nginx 有 `/gateway-api/ → /api/` 改写),app_web 的
+  `_is_api_route` 已补同语义改写。该补丁**双写两处**:克隆源码
+  `resources/jiuwenswarm/.../app_web.py`(随上游提交)与运行时 venv 副本
+  `.venv/Lib/site-packages/jiuwenswarm/channels/web/app_web.py`——
+  **`uv sync` 重装 workswarm 会冲掉 venv 副本**,重装后需从克隆副本对齐;
+  上游化(jiuwenclaw/workswarm)后可移除本条。
 - 进程簿记独立:`data/frontend.pid.json`——核心 `start/stop/status/env` 五命令行为完全不变。
 - 核心五服务未启动时先 `uv run jiuwenswarm-lite start` 再 `frontend start`。
 

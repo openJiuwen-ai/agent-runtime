@@ -27,6 +27,11 @@ from pathlib import Path
 from .config import LiteConfig
 
 
+# pod 兼容垫片目录（sitecustomize：恢复旧版 checkpointer 企业模式本地
+# sqlite 回退语义；种子模板经 ${LITE_POD_COMPAT_PATH} 引用，测试夹具直用绝对路径）。
+POD_COMPAT_DIR = Path(__file__).resolve().parent / "_pod_compat"
+
+
 def _py_paths(cfg: LiteConfig, parts: tuple[str, ...]) -> str:
     """服务子进程的确定性模块搜索路径（os.pathsep 连接，压过继承环境）。
 
@@ -124,6 +129,12 @@ def _spec(cfg: LiteConfig, name: str) -> ServiceSpec:
             cmd=[py, "-m", "agent_runtime.cli",
                  "--mode", "local", "--port", str(cfg.runtime_port)],
             env={
+                # pod 模板 env ${VAR} 的展开源之二：_pod_compat 垫片目录
+                # （sitecustomize 恢复旧版 checkpointer"企业模式回退本地
+                # sqlite"语义；新版硬性要求 MySQL/PG 共享库,轻量形态无外部
+                # DB,见 _pod_compat/sitecustomize.py 与种子 JSON 的
+                # PYTHONPATH=${LITE_POD_COMPAT_PATH} 注入）。
+                "LITE_POD_COMPAT_PATH": str(POD_COMPAT_DIR),
                 "PYTHONPATH": _py_paths(cfg, (
                     "applications/agent_runtime/src",
                     "service",
@@ -154,15 +165,15 @@ def _spec(cfg: LiteConfig, name: str) -> ServiceSpec:
     if name == "gateway":
         return ServiceSpec(
             name="gateway",
-            cmd=[py, "-m", "gateway.app_gateway"],
+            cmd=[py, "-m", "agent_gateway.app_gateway"],
             env={
                 "WEB_HOST": "127.0.0.1",
                 "WEB_PORT": str(cfg.gateway_web_port),
                 "GATEWAY_HOST": "127.0.0.1",
                 "GATEWAY_PORT": str(cfg.gateway_tui_port),
                 "JIUWENSWARM_EDITION": "enterprise",
-                # 企业版 ephemeral 降级内存后端（单机无 Redis；jiuwenclaw
-                # gateway/storage_assembly/setup.py 的 env 门控分支）
+                # 企业版 ephemeral 降级内存后端（单机无 Redis；agent-gateway
+                # storage_assembly/setup.py 的 env 门控分支）
                 "GATEWAY_EPHEMERAL_BACKEND": "memory",
                 "JIUWENSWARM_DATA_DIR": str(cfg.gateway_workspace),
                 # 防工作区 .env override=True 抢走端口类 env（CLI 启动器模式）

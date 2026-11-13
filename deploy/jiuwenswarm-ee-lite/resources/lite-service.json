@@ -21,6 +21,10 @@
           "value": "enterprise"
         },
         {
+          "name": "PYTHONPATH",
+          "value": "${LITE_POD_COMPAT_PATH}"
+        },
+        {
           "name": "GATEWAY_DB_TYPE",
           "value": "sqlite"
         },
