@@ -64,12 +64,14 @@ class DeployRunner:
         env_content: str,
         *,
         wait_timeout_secs: int | None = None,
+        action: str = "up",
     ) -> None:
         self._handler = handler
         self._deployment_id = task["deployment_id"]
         self._namespace = task["namespace"]
         self._env_content = env_content
         self._wait_timeout_secs = wait_timeout_secs
+        self._action = "down" if action == "down" else "up"
 
         self._work_dir = Path(tempfile.mkdtemp(prefix=f"deploy-{self._deployment_id}-"))
         self._phase = "validate"
@@ -140,19 +142,20 @@ class DeployRunner:
         try:
             if not (tool_dir / "deploy.sh").is_file():
                 raise FileNotFoundError(f"{tool_dir}/deploy.sh")
-            proc = await asyncio.create_subprocess_exec(
-                "bash",
-                "deploy.sh",
-                "-n",
-                self._namespace,
-                "up",
-                cwd=str(tool_dir),
-                env=sub_env,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-                start_new_session=True,
-            )
-            exit_code = await self._pump(proc, deadline)
+            if self._action == "down":
+                # down 不渲染、直接消费 conf/ 现有清单：先补渲染（down 目标集）再卸载，
+                # 两步共用同一 work_dir（env/conf 隔离）
+                exit_code = await self._exec(
+                    tool_dir, sub_env, ["-n", self._namespace, "down", "--render-only"], deadline
+                )
+                if exit_code == 0:
+                    exit_code = await self._exec(
+                        tool_dir, sub_env, ["-n", self._namespace, "down"], deadline
+                    )
+            else:
+                exit_code = await self._exec(
+                    tool_dir, sub_env, ["-n", self._namespace, "up"], deadline
+                )
         except FileNotFoundError as exc:
             exit_code = -1
             self._fail_message = f"部署工具不可用: {exc}"
@@ -190,6 +193,22 @@ class DeployRunner:
             exit_code=exit_code,
         )
         return {"status": status, "exit_code": exit_code, "error_summary": error_summary}
+
+    async def _exec(
+        self, tool_dir: Path, sub_env: dict, args: list[str], deadline: float
+    ) -> int:
+        """起一个 deploy.sh 子进程并泵完输出，返回退出码。"""
+        proc = await asyncio.create_subprocess_exec(
+            "bash",
+            "deploy.sh",
+            *args,
+            cwd=str(tool_dir),
+            env=sub_env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            start_new_session=True,
+        )
+        return await self._pump(proc, deadline)
 
     # ---------- 输出泵与周期职责 ----------
 

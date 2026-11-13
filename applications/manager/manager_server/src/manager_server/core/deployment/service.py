@@ -73,6 +73,7 @@ def _row_to_dict(row: Any) -> dict:
         params["env"] = mask_sensitive_env(params["env"])
     return {
         "deployment_id": getattr(row, "deployment_id", ""),
+        "action": str(params.get("action") or "up"),
         "namespace": getattr(row, "namespace", ""),
         "jiuwenclaw_name": getattr(row, "jiuwenclaw_name", ""),
         "deploy_mode": getattr(row, "deploy_mode", ""),
@@ -95,7 +96,7 @@ def _row_to_dict(row: Any) -> dict:
 
 def _summary_of(row_dict: dict) -> dict:
     return {key: row_dict[key] for key in (
-        "deployment_id", "namespace", "jiuwenclaw_name", "deploy_mode", "status",
+        "deployment_id", "action", "namespace", "jiuwenclaw_name", "deploy_mode", "status",
         "phase", "instance_jid", "error_summary", "created_by",
         "created_at", "started_at", "finished_at",
     )}
@@ -139,6 +140,7 @@ class DeploymentService:
         # 只存顶层字段会导致实际执行回落到 defaults 里的模式（E2E 实测回归）
         params = body.model_dump(exclude_none=True)
         params.setdefault("env", {})["AGENT_RUNTIME_DEPLOY_MODE"] = deploy_mode
+        params["action"] = str(getattr(body, "action", "up") or "up")
         row_data = {
             "deployment_id": deployment_id,
             "namespace": namespace,
@@ -457,15 +459,17 @@ def _task_fields(row: Any) -> dict:
 
 
 async def _execute_task(handler: DBHandler, task: dict) -> None:
-    """单任务执行：前置建库 → 子进程部署 → 成功后自动注册。"""
+    """单任务执行：前置建库（仅 up）→ 子进程部署/卸载 → 成功后自动注册（仅 up）。"""
     deployment_id = task["deployment_id"]
     namespace = task["namespace"]
+    action = str((task.get("params") or {}).get("action") or "up")
     try:
         merged = merge_env(
             task.get("defaults_snapshot") or {},
             dict((task.get("params") or {}).get("env") or {}),
         )
-        await ensure_product_databases(merged, namespace=namespace)
+        if action != "down":
+            await ensure_product_databases(merged, namespace=namespace)
     except Exception as exc:  # noqa: BLE001
         _log.warning(
             "deployment_precheck_failed", deployment_id=deployment_id, error=str(exc)
@@ -485,30 +489,44 @@ async def _execute_task(handler: DBHandler, task: dict) -> None:
 
     env_content = build_env_custom(merged, namespace=namespace)
     wait_timeout = (task.get("params") or {}).get("wait_timeout_secs")
-    runner = DeployRunner(handler, task, env_content, wait_timeout_secs=wait_timeout)
+    runner = DeployRunner(
+        handler, task, env_content, wait_timeout_secs=wait_timeout, action=action
+    )
     result = await runner.run()
 
-    if result.get("status") == "success":
-        try:
-            jid, note = await register_instance_for_namespace(handler, task)
-        except Exception as exc:  # noqa: BLE001
-            jid, note = None, f"实例自动注册异常: {exc}"
-        # 不能用 result 重建 progress：runner.run() 只返回状态三元组，
-        # 终态进度已由 runner 落库——此处读回现有进度仅附加 auto_register 备注，
-        # 否则会把组件时间线/日志截断标记清空（E2E 实测回归）
+    if result.get("status") != "success":
+        return
+    if action == "down":
+        # 卸载成功：不动实例记录与数据库（数据保留），提示后续手工清理
         row = await handler.get(_TASK_TABLE, {"deployment_id": deployment_id})
         progress = dict(getattr(row, "progress", None) or {}) if row is not None else {}
-        if note:
-            progress["auto_register"] = note
+        progress["undeploy"] = "卸载完成；实例记录与业务数据库未自动清理，可在集群管理删除实例"
         await handler.update(
             _TASK_TABLE,
             {"deployment_id": deployment_id},
-            {
-                "instance_jid": jid or None,
-                "progress": progress,
-                "updated_at": utc_now(),
-            },
+            {"progress": progress, "updated_at": utc_now()},
         )
+        return
+    try:
+        jid, note = await register_instance_for_namespace(handler, task)
+    except Exception as exc:  # noqa: BLE001
+        jid, note = None, f"实例自动注册异常: {exc}"
+    # 不能用 result 重建 progress：runner.run() 只返回状态三元组，
+    # 终态进度已由 runner 落库——此处读回现有进度仅附加 auto_register 备注，
+    # 否则会把组件时间线/日志截断标记清空（E2E 实测回归）
+    row = await handler.get(_TASK_TABLE, {"deployment_id": deployment_id})
+    progress = dict(getattr(row, "progress", None) or {}) if row is not None else {}
+    if note:
+        progress["auto_register"] = note
+    await handler.update(
+        _TASK_TABLE,
+        {"deployment_id": deployment_id},
+        {
+            "instance_jid": jid or None,
+            "progress": progress,
+            "updated_at": utc_now(),
+        },
+    )
 
 
 async def reconcile_stale(handler: DBHandler) -> int:

@@ -1066,6 +1066,14 @@
     },
     "actions": {
       "cancel": "Cancel"
+    },
+    "action": {
+      "label": "Action",
+      "up": "Deploy",
+      "down": "Undeploy",
+      "upHint": "Deploy/upgrade product components into the target namespace (idempotent)",
+      "downHint": "Remove product components from the target namespace (reverse order; PVC data is deleted and unrecoverable). Instance records and databases are kept.",
+      "downTag": "Undeploy"
     }
   },
   "errors": {
