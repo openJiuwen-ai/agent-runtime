@@ -180,9 +180,12 @@ async def test_numeric_namespace_renders_quoted(tmp_path: Path):
             ["yq", ".metadata.namespace | type", str(conf_dir / manifest)],
             capture_output=True, text=True, check=True,
         ).stdout.strip()
-        assert ns == "!!str", f"{manifest} 命名空间应为字符串: {ns}"
+        types = [line for line in ns.splitlines() if line and line != "---"]
+        assert types and all(t == "!!str" for t in types), (
+            f"{manifest} 命名空间应为字符串: {types}"
+        )
     cm = subprocess.run(
         ["yq", ".data.NAMESPACE | type", str(conf_dir / "gateway-env.configmap.yaml")],
         capture_output=True, text=True, check=True,
     ).stdout.strip()
-    assert cm == "!!str"
+    assert cm == "!!str", f"ConfigMap NAMESPACE 应为字符串: {cm}"
