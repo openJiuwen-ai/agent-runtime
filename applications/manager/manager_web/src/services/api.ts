@@ -1268,7 +1268,16 @@ export interface UserAgentContext {
   jiuwenclaw_id: string;
   /** 实例/集群展示名 */
   jiuwenclaw_name: string;
+  /** 稳定展示标识：agent_ + agent_id（43 位 base62）；无 Agent 模板 id 时回退 resource_name */
   agent_name: string;
+  /** 43 位 base62 可逆编码（运行时模板 + Agent 模板）；旧数据可能为空 */
+  agent_id?: string;
+  /** 运行时模板 id；无匹配运行时模板时为空串 */
+  runtime_template_id?: string;
+  /** Agent 模板 id（instance_agent_resource.ref_template_id） */
+  agent_template_id?: string;
+  /** Agent 资源展示名（人类可读，用于回退展示） */
+  resource_name?: string;
   group_name: string;
 }
 
