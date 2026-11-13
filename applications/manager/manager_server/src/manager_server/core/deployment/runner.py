@@ -31,6 +31,12 @@ from manager_server.models.deployment_models import (
 )
 
 _log = get_logger(__name__)
+
+
+class _TokenMissingError(RuntimeError):
+    """openshift 形态部署凭证 token 不可读。"""
+
+
 _TASK_TABLE = DEPLOYMENT_TASK_TABLE_DEF.table_name
 _LOG_TABLE = DEPLOYMENT_LOG_TABLE_DEF.table_name
 
@@ -140,6 +146,16 @@ class DeployRunner:
         )
         exit_code: int | None = None
         try:
+            if (settings.deploy_cluster_type or "k8s").strip().lower() == "openshift":
+                # token 只进子进程环境（kubectl.sh 的 TOKEN 覆盖链），不写 .env.custom——
+                # 避免凭证落入任务 env 快照/日志/DB
+                token_path = (settings.deploy_token or "").strip()
+                token = Path(token_path).read_text(encoding="utf-8").strip() if token_path else ""
+                if not token:
+                    raise _TokenMissingError(
+                        f"部署凭证 token 文件缺失或为空: {token_path or '（未配置 MANAGER_DEPLOY_TOKEN）'}"
+                    )
+                sub_env["TOKEN"] = token
             if not (tool_dir / "deploy.sh").is_file():
                 raise FileNotFoundError(f"{tool_dir}/deploy.sh")
             if self._action == "down":
@@ -157,6 +173,9 @@ class DeployRunner:
                 exit_code = await self._exec(
                     tool_dir, sub_env, ["-n", self._namespace, "up"], deadline
                 )
+        except _TokenMissingError as exc:
+            exit_code = -1
+            self._fail_message = str(exc)
         except FileNotFoundError as exc:
             exit_code = -1
             self._fail_message = f"部署工具不可用: {exc}"

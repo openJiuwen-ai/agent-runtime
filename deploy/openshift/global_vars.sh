@@ -65,6 +65,7 @@ declare -A DEPLOY_VARS=(
     ["RENDER_ONLY"]="false"
     ["CLUSTER_TYPE"]="openshift"
     ["CLUSTER_API_SERVER"]=""            # openshift 形态必填（http(s) URL），留空自动探测（oc/kubeconfig）；k8s 形态走 kubeconfig，留空
+    ["CLUSTER_API_INSECURE"]="true"      # openshift 形态 curl 是否 -k：自签/内网 CA 不在信任库保持 true（默认）；false 须系统 CA 可验证服务端证书
     ["BASE_SVC_NS"]=""                   # 基础服务所在 ns
      ["DATA_STORAGE_CLASS"]=""
     ["WORKSPACE_STORAGE_CLASS"]=""
@@ -191,6 +192,9 @@ declare -A DEPLOY_VARS=(
     # 供 manager-server「管理面启动部署」功能以子进程代跑 deploy.sh（KUBECONFIG 只传子进程，
     # manager-server SA 自身保持零 k8s RBAC）。Secret 由运维预建，键名 kubeconfig
     ["MANAGER_DEPLOY_KUBECONFIG_SECRET"]=""
+    # manager-server 程序化部署凭证（openshift 形态）：token 所在 Secret 名，留空取默认名
+    ["MANAGER_DEPLOY_TOKEN_SECRET"]=""   # 默认 manager-deploy-token；键名 token
+    ["MANAGER_DEPLOY_TOKEN_FILE"]=""     # 自动创建 Secret 的 token 来源文件；留空则尝试 oc whoami -t
     # 用户空间配额特性开关（Manager / Gateway / AgentServer / User Web / Manager Web 共用）
     ["WORKSPACE_QUOTA_ENABLED"]="false"
     # dev 模式：hostPath 挂载宿主机代码调试（MODE=dev 仅 k8s 形态支持；Pod 固定到代码所在节点）

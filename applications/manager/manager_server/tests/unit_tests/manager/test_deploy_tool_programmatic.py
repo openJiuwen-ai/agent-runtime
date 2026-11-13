@@ -189,3 +189,106 @@ async def test_numeric_namespace_renders_quoted(tmp_path: Path):
         capture_output=True, text=True, check=True,
     ).stdout.strip()
     assert cm == "!!str", f"ConfigMap NAMESPACE 应为字符串: {cm}"
+
+
+def _run_render_only_sync(env_custom: str, args: list[str], work: Path) -> tuple[int, str]:
+    import subprocess
+
+    (work / "conf").mkdir(parents=True, exist_ok=True)
+    (work / "tmp").mkdir(exist_ok=True)
+    env_file = work / ".env.custom"
+    env_file.write_text(env_custom, encoding="utf-8")
+    sub_env = dict(os.environ)
+    sub_env.update(
+        {
+            "DEPLOY_ENV_FILE": str(env_file),
+            "DEPLOY_CONF_DIR": str(work / "conf"),
+            "DEPLOY_TMP_DIR": str(work / "tmp"),
+        }
+    )
+    proc = subprocess.run(
+        ["bash", "deploy.sh", *args],
+        cwd=str(resolve_tool_dir()),
+        env=sub_env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    return proc.returncode, proc.stdout + proc.stderr
+
+
+def test_check_dependency_openshift_token_skips_oc(monkeypatch, tmp_path):
+    """TOKEN 在手时 openshift 形态免 oc（PATH 掏空仍应通过 check_dependency）。"""
+    import subprocess
+
+    tool_dir = resolve_tool_dir()
+    env_custom = _MIN_ENV_CUSTOM.replace("CLUSTER_TYPE=k8s", "CLUSTER_TYPE=openshift")
+    work = tmp_path / "w"
+    env_file = work / ".env.custom"
+    env_file.parent.mkdir(parents=True)
+    env_file.write_text(env_custom, encoding="utf-8")
+    # source 级：掏空 PATH + TOKEN 注入，调 check_dependency 期待不因缺 oc 报错
+    # stub bin：只放 yq（隔离 PATH；本机 oc 存在与否不影响用例）
+    stub_bin = tmp_path / "bin"
+    stub_bin.mkdir()
+    yq_path = subprocess.run(["sh", "-c", "command -v yq"], capture_output=True, text=True).stdout.strip()
+    (stub_bin / "yq").symlink_to(yq_path)
+    base_env = {"PATH": f"{stub_bin}:/usr/bin:/bin", "HOME": "/root"}
+    script = (
+        "set -e; source ./kubectl.sh\n"
+        'declare -A DEPLOY_VARS=( ["CLUSTER_TYPE"]="openshift" )\n'
+        "check_dependency && echo DEP_OK\n"
+    )
+    proc = subprocess.run(
+        ["bash", "-c", script],
+        cwd=str(tool_dir),
+        env={**base_env, "TOKEN": "sha256~x"},
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert "DEP_OK" in proc.stdout, proc.stdout + proc.stderr
+    # 反证：无 TOKEN 时缺 oc 应报错
+    proc2 = subprocess.run(
+        ["bash", "-c", script],
+        cwd=str(tool_dir),
+        env=dict(base_env),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert "DEP_OK" not in proc2.stdout
+    assert "oc" in (proc2.stdout + proc2.stderr)
+
+
+async def test_openshift_render_injects_token_credential(tmp_path: Path):
+    """openshift 形态 manager 渲染：token 卷/env 三件套 + Route 保留。"""
+    import subprocess
+
+    env_custom = _MIN_ENV_CUSTOM.replace(
+        "CLUSTER_TYPE=k8s", "CLUSTER_TYPE=openshift\nCLUSTER_API_SERVER=https://api.ocp.example:6443"
+    ).replace('AGENT_RUNTIME_DEPLOY_MODE="full"', 'AGENT_RUNTIME_DEPLOY_MODE="routing"')
+    work = tmp_path / "ocp"
+    code, output = _run_render_only_sync(env_custom, ["-n", "ut-ocp", "manager", "up", "--render-only"], work)
+    assert code == 0, output
+
+    manifest = work / "conf" / "manager-server.yaml"
+    envs = subprocess.run(
+        ["yq", "-o=json", 'select(.kind == "Deployment") | .spec.template.spec.containers[0].env', str(manifest)],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    names = {e["name"]: e.get("value") for e in json.loads(envs)}
+    assert names.get("MANAGER_DEPLOY_TOKEN") == "/etc/manager/deploy-token"
+    assert names.get("MANAGER_DEPLOY_CLUSTER_TYPE") == "openshift"
+    assert names.get("MANAGER_DEPLOY_API_SERVER") == "https://api.ocp.example:6443"
+    vols = subprocess.run(
+        ["yq", '-o=json', 'select(.kind == "Deployment") | .spec.template.spec.volumes', str(manifest)],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    assert any(v.get("secret", {}).get("secretName") == "manager-deploy-token" for v in json.loads(vols))
+    # Route 不被剥离（openshift 形态）
+    kinds = subprocess.run(
+        ["yq", '.kind', str(work / "conf" / "manager-web.yaml")],
+        capture_output=True, text=True, check=True,
+    ).stdout.split()
+    assert "Route" in kinds
