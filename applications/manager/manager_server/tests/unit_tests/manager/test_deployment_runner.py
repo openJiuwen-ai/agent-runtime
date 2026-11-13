@@ -384,7 +384,7 @@ async def test_down_action_two_step(handler, fake_tool, fast_ticks):
     contents = [r.content for r in logs]
     assert any(c == "ARGS: -n ns-run up --render-only" for c in contents)
     assert any(c == "ARGS: -n ns-run down" for c in contents)
-    assert not any("up" in c and c.startswith("ARGS:") for c in contents)
+    assert not any(c == "ARGS: -n ns-run up" for c in contents)   # 不应执行真实 up
 
 
 async def test_execute_down_skips_db_and_register(handler, monkeypatch):
