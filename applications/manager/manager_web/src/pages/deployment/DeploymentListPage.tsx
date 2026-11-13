@@ -67,9 +67,13 @@ function DeploymentListTable({
                     <tr key={task.deployment_id}>
                       <td>
                         <div className="flex items-center gap-1.5">
-                          {task.action === 'down' && (
+                          {task.action === 'down' ? (
                             <span className="pill warn shrink-0" title={t('deployments.action.downHint')}>
                               {t('deployments.action.downTag')}
+                            </span>
+                          ) : (
+                            <span className="pill info shrink-0" title={t('deployments.action.upHint')}>
+                              {t('deployments.action.upTag')}
                             </span>
                           )}
                           <div className="mono text-[11px] text-muted break-all" title={task.deployment_id}>

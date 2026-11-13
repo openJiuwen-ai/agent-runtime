@@ -73,7 +73,7 @@
     "platform": "控制台",
     "overview": "总览",
     "instances": "集群管理",
-    "deployments": "启动部署",
+    "deployments": "部署管理",
     "config": "工作台",
     "agentResources": "Agent资源",
     "runtimeResources": "运行时资源",
@@ -981,7 +981,7 @@
   "deployments": {
     "title": "启动部署",
     "subtitle": "从管理面一键部署产品组件到目标命名空间",
-    "create": "新建部署",
+    "create": "新建任务",
     "createTitle": "新建部署任务",
     "createSuccess": "部署任务已创建",
     "deployDisabled": "部署功能已被管理员关闭",
@@ -1073,7 +1073,8 @@
       "down": "卸载",
       "upHint": "部署/升级产品组件到目标命名空间（幂等，重跑即升级）",
       "downHint": "卸载该命名空间的产品组件（倒序删除，PVC 数据一并删除且不可恢复）；实例记录与数据库不自动清理",
-      "downTag": "卸载"
+      "downTag": "卸载",
+      "upTag": "部署"
     }
   },
   "errors": {
