@@ -1003,8 +1003,8 @@
     "status": {
       "pending": "排队中",
       "running": "运行中",
-      "success": "已成功",
-      "failed": "已失败",
+      "success": "成功",
+      "failed": "失败",
       "cancelled": "已取消",
       "interrupted": "已中断"
     },

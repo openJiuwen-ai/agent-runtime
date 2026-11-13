@@ -1003,7 +1003,7 @@
     "status": {
       "pending": "Pending",
       "running": "Running",
-      "success": "Succeeded",
+      "success": "Success",
       "failed": "Failed",
       "cancelled": "Cancelled",
       "interrupted": "Interrupted"
