@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -72,6 +73,27 @@ async def lifespan(application: FastAPI):
     _log.info("shutdown")
 
 
+def cors_middleware_kwargs(raw_origins: str) -> dict[str, Any]:
+    """来源白名单 → CORSMiddleware 参数。
+
+    通配源与携带凭证互斥：CORS 规范不允许 ``Access-Control-Allow-Origin: *`` 与
+    ``Access-Control-Allow-Credentials`` 同现，否则 Starlette 会把任意请求的
+    Origin 原样回显并附凭证头。空配置 = 只允许同源（受支持拓扑经 manager-web
+    单源反代，浏览器不跨源），因此也无需携带凭证。
+    """
+    origins = [item.strip() for item in raw_origins.split(",") if item.strip()]
+    allow_credentials = bool(origins)
+    if "*" in origins:
+        allow_credentials = False
+        _log.warning("cors_wildcard_disables_credentials", origins=origins)
+    return {
+        "allow_origins": origins,
+        "allow_credentials": allow_credentials,
+        "allow_methods": ["*"],
+        "allow_headers": ["*"],
+    }
+
+
 def create_app() -> FastAPI:
     application = FastAPI(
         title="manager-server",
@@ -83,10 +105,7 @@ def create_app() -> FastAPI:
     )
     application.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        **cors_middleware_kwargs(settings.cors_allow_origins),
     )
     router_register(application)
     return application
