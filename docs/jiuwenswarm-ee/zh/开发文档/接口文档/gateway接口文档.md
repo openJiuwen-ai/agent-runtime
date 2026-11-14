@@ -28,16 +28,6 @@
 | 读接口 | 有列表 / 详情 | 模板与多数应用配置 **无** GET/列表；用量等少数只读接口除外 |
 
 
-**同进程其它面（本文不展开）**
-
-
-| 面 | 前缀 / 端口 | 说明 |
-| --- | --- | --- |
-| 用户 Web HTTP | `/api/v1/*`（含 auth、sessions、chat 等） | 响应信封为 `{request_id, ok, data, metadata}`；见用户面接口文档 |
-| 文件 / 分享 / 轨迹 | `/file-api`、`/share-api`、`/api/trajectory` | 用户面能力 |
-| A2A 入站 | 独立服务，默认 **19100**，`/a2a` | 非 Config Receiver |
-
-
 配置下发与 Runtime 通知见 [配置下发及生效设计](../设计文档/配置下发及生效设计.md)。
 
 
