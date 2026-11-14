@@ -297,7 +297,8 @@ async def test_execute_task_success_preserves_progress(handler, monkeypatch):
     }
 
     class _FakeRunner:
-        def __init__(self, h, t, env_content, *, wait_timeout_secs=None):
+        def __init__(self, h, t, env_content, *, wait_timeout_secs=None, action="up"):
+            assert action == "up"
             self._handler = h
             self._id = t["deployment_id"]
 
@@ -354,3 +355,130 @@ async def _fake_register_ok(handler, task):
 
 async def _fake_register_fail(handler, task):
     return None, "部署成功但实例自动注册失败: 注册失败（可手工登记）"
+
+
+async def test_down_action_two_step(handler, fake_tool, fast_ticks):
+    """卸载动作两步执行：先 down --render-only 补渲染，再 down 消费清单。"""
+    _write_script(
+        fake_tool,
+        "\n".join(
+            [
+                'echo "ARGS: $*"',
+                'echo "@@DEPLOY_JSON@@{\\"event\\":\\"summary\\",\\"status\\":\\"success\\",\\"elapsed\\":\\"1\\"}"',
+                "exit 0",
+            ]
+        ),
+    )
+    task = await _make_task(handler, "dp-run-down")
+    runner = DeployRunner(handler, task, 'NAMESPACE="ns-run"\n', action="down")
+    result = await runner.run()
+    assert result["status"] == "success"
+    logs = list(
+        await handler.list_records(
+            DEPLOYMENT_LOG_TABLE_DEF.table_name,
+            {"deployment_id": "dp-run-down"},
+            limit=100,
+            offset=0,
+        )
+    )
+    contents = [r.content for r in logs]
+    assert any(c == "ARGS: -n ns-run up --render-only" for c in contents)
+    assert any(c == "ARGS: -n ns-run down" for c in contents)
+    assert not any(c == "ARGS: -n ns-run up" for c in contents)   # 不应执行真实 up
+
+
+async def test_execute_down_skips_db_and_register(handler, monkeypatch):
+    from manager_server.core.deployment import service as service_mod
+    from manager_server.infrastructure.utils import utc_now as _now
+
+    _TASK = DEPLOYMENT_TASK_TABLE_DEF.table_name
+    task = await _make_task(handler, "dp-exec-down")
+    task["params"] = {
+        "namespace": "ns-run",
+        "jiuwenclaw_name": "run-instance",
+        "deploy_mode": "full",
+        "action": "down",
+        "env": {"AGENT_RUNTIME_DEPLOY_MODE": "full"},
+    }
+
+    class _FakeRunner:
+        def __init__(self, h, t, env_content, *, wait_timeout_secs=None, action="up"):
+            assert action == "down"
+
+        async def run(self):
+            await self._h.update(
+                _TASK,
+                {"deployment_id": self._id},
+                {"status": "success", "phase": "finished", "exit_code": 0,
+                 "error_summary": None, "progress": {"phases": {"delete": "ok"}},
+                 "finished_at": _now()},
+            )
+            return {"status": "success", "exit_code": 0, "error_summary": None}
+
+    # 构造带 handler 引用的实例（避免 __init__ 签名耦合）
+    def _make(h, t, env_content, *, wait_timeout_secs=None, action="up"):
+        r = object.__new__(_FakeRunner)
+        r._h, r._id = h, t["deployment_id"]
+        return r
+
+    async def _fail_ensure(env, *, namespace):
+        raise AssertionError("down 不应预建库")
+
+    async def _fail_register(handler, task):
+        raise AssertionError("down 不应注册实例")
+
+    monkeypatch.setattr(service_mod, "DeployRunner", _make)
+    monkeypatch.setattr(service_mod, "ensure_product_databases", _fail_ensure)
+    monkeypatch.setattr(service_mod, "register_instance_for_namespace", _fail_register)
+    await service_mod._execute_task(handler, task)
+    row = await handler.get(_TASK, {"deployment_id": "dp-exec-down"})
+    assert row.status == "success"
+    progress = dict(row.progress or {})
+    assert "卸载完成" in progress.get("undeploy", "")
+    assert not row.instance_jid
+
+
+async def test_openshift_token_injected_to_subprocess_only(handler, fake_tool, fast_ticks, monkeypatch):
+    """openshift 形态：TOKEN 进子进程 env，不落入任务 .env.custom。"""
+    from manager_server.infrastructure.config import settings
+
+    monkeypatch.setattr(settings, "deploy_cluster_type", "openshift")
+    token_file = fake_tool / "token"
+    token_file.write_text("sha256~secret-token")
+    monkeypatch.setattr(settings, "deploy_token", str(token_file))
+    _write_script(
+        fake_tool,
+        "\n".join(
+            [
+                'echo "TOKEN_IN_ENV=$([ -n "$TOKEN" ] && echo yes || echo no)"',
+                'grep -q "^TOKEN=" "$DEPLOY_ENV_FILE" && echo ENVFILE_HAS_TOKEN || echo ENVFILE_CLEAN',
+                'echo "@@DEPLOY_JSON@@{\\"event\\":\\"summary\\",\\"status\\":\\"success\\",\\"elapsed\\":\\"1\\"}"',
+                "exit 0",
+            ]
+        ),
+    )
+    task = await _make_task(handler, "dp-ocp-token")
+    result = await _run(handler, task)
+    assert result["status"] == "success"
+    logs = list(
+        await handler.list_records(
+            DEPLOYMENT_LOG_TABLE_DEF.table_name,
+            {"deployment_id": "dp-ocp-token"},
+            limit=100,
+            offset=0,
+        )
+    )
+    contents = [r.content for r in logs]
+    assert "TOKEN_IN_ENV=yes" in contents
+    assert "ENVFILE_CLEAN" in contents
+
+
+async def test_openshift_token_missing_fails_fast(handler, fake_tool, fast_ticks, monkeypatch):
+    from manager_server.infrastructure.config import settings
+
+    monkeypatch.setattr(settings, "deploy_cluster_type", "openshift")
+    monkeypatch.setattr(settings, "deploy_token", "")
+    task = await _make_task(handler, "dp-ocp-notoken")
+    result = await _run(handler, task)
+    assert result["status"] == "failed"
+    assert "token 文件缺失" in (result["error_summary"] or "")

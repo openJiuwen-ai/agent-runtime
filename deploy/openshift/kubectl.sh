@@ -53,12 +53,15 @@ trap 'exit 143' TERM
 
 # ---------- 基础设施 ----------
 
-# 校验运行依赖（按 CLUSTER_TYPE 选用：openshift 走 curl + oc 登录态，k8s 走 kubectl + kubeconfig）
+# 校验运行依赖（按 CLUSTER_TYPE 选用：openshift 走 curl + token，k8s 走 kubectl + kubeconfig）
+# openshift 形态 oc 仅用于登录态发现（whoami -t / --show-server）——TOKEN 环境变量
+# 在手时运行期零 oc 调用（数据面纯 curl），故 oc 免检（管理面部署子进程依赖此放宽）
 check_dependency() {
   if is_k8s_cluster; then
     require_cmds "${DEPS_K8S[@]}"
   else
-    require_cmds "${DEPS_OPENSHIFT[@]}"
+    require_cmds curl yq
+    [ -n "${TOKEN:-}" ] || require_cmds oc
   fi
 }
 
@@ -102,12 +105,13 @@ kctl_tmpdir() {
 kctl_http() { # $1=method $2=path $3=resp文件 $4=body文件(可选)
   is_k8s_cluster && { _kctl_k8s_http "$1" "$2" "$3"; return 0; }
   local method="$1" url="$KCTL_SERVER$2" out="$3" body="${4:-}" code n
+  local insecure; [ "${DEPLOY_VARS["CLUSTER_API_INSECURE"]:-true}" = "false" ] || insecure="-k"
   for n in 1 2 3; do
     if [ -n "$body" ]; then
-      code=$(curl -s -m 60 -H "Authorization: Bearer $KCTL_TOKEN" -H "Content-Type: application/yaml" \
+      code=$(curl -s -m 60 $insecure -H "Authorization: Bearer $KCTL_TOKEN" -H "Content-Type: application/yaml" \
              -o "$out" -w "%{http_code}" -X "$method" --data-binary @"$body" "$url")
     else
-      code=$(curl -s -m 60 -H "Authorization: Bearer $KCTL_TOKEN" \
+      code=$(curl -s -m 60 $insecure -H "Authorization: Bearer $KCTL_TOKEN" \
              -o "$out" -w "%{http_code}" -X "$method" "$url")
     fi
     if [ -n "$code" ] && [ "$code" != "000" ]; then printf '%s' "$code"; return 0; fi
@@ -120,7 +124,8 @@ kctl_http() { # $1=method $2=path $3=resp文件 $4=body文件(可选)
 # CLUSTER_TYPE=k8s 时改走 kubectl 通道（_kctl_k8s_patch）
 _kctl_patch() { # $1=Content-Type $2=资源路径 $3=JSON体 $4=resp文件
   is_k8s_cluster && { _kctl_k8s_patch "$@"; return 0; }
-  curl -s -m 60 -H "Authorization: Bearer $KCTL_TOKEN" -H "Content-Type: $1" \
+  local insecure; [ "${DEPLOY_VARS["CLUSTER_API_INSECURE"]:-true}" = "false" ] || insecure="-k"
+  curl -s -m 60 $insecure -H "Authorization: Bearer $KCTL_TOKEN" -H "Content-Type: $1" \
        -o "$4" -w "%{http_code}" -X PATCH --data-binary "$3" "$KCTL_SERVER$2"
 }
 

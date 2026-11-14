@@ -34,8 +34,11 @@ def read_tool_version(tool_dir: Path | None = None) -> str:
 
 
 def check_tool_available(tool_dir: Path | None = None) -> tuple[bool, str]:
-    """部署前置检查：deploy.sh 存在、kubectl/yq 可用（deploy.sh up 实际执行依赖）。
+    """部署前置检查（按集群形态分派）。
 
+    - k8s：deploy.sh 存在、kubectl/yq 可用、kubeconfig 文件存在；
+    - openshift：deploy.sh 存在、curl/yq 可用（TOKEN 注入子进程，免 oc）、
+      token 文件存在。
     返回 ``(available, reason)``；不可用时 reason 说明缺什么（API 据此返回 503）。
     """
     if not settings.deploy_enabled:
@@ -43,6 +46,15 @@ def check_tool_available(tool_dir: Path | None = None) -> tuple[bool, str]:
     directory = tool_dir or resolve_tool_dir()
     if not (directory / "deploy.sh").is_file():
         return False, f"部署工具树不可用: {directory}"
+    cluster_type = (settings.deploy_cluster_type or "k8s").strip().lower()
+    if cluster_type == "openshift":
+        missing = [cmd for cmd in ("curl", "yq") if shutil.which(cmd) is None]
+        if missing:
+            return False, f"缺少依赖命令: {', '.join(missing)}"
+        token_path = (settings.deploy_token or "").strip()
+        if not token_path or not Path(token_path).is_file():
+            return False, f"部署凭证 token 文件不存在: {token_path or '（未配置 MANAGER_DEPLOY_TOKEN）'}"
+        return True, ""
     missing = [cmd for cmd in ("kubectl", "yq") if shutil.which(cmd) is None]
     if missing:
         return False, f"缺少依赖命令: {', '.join(missing)}"

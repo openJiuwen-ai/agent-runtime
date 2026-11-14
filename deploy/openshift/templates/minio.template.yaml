@@ -15,7 +15,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: minio-headless
-  namespace: <<NAMESPACE>>
+  namespace: "<<NAMESPACE>>"
 spec:
   clusterIP: None
   ports:
@@ -32,7 +32,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: minio-pvc
-  namespace: <<NAMESPACE>>
+  namespace: "<<NAMESPACE>>"
 spec:
   accessModes:
     - ReadWriteOnce
@@ -45,7 +45,7 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: minio
-  namespace: <<NAMESPACE>>
+  namespace: "<<NAMESPACE>>"
 spec:
   serviceName: minio-headless
   replicas: 1

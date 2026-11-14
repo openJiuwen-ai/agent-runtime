@@ -86,6 +86,9 @@ ALLOWED_ENV_KEYS = frozenset(
         "WORKSPACE_STORAGE_CLASS",
         # NodePort
         "MANAGER_WEB_NODE_PORT",
+        # openshift 形态集群接入（API 地址 / 自签开关；经快照-defaults-任务链路流动）
+        "CLUSTER_API_SERVER",
+        "CLUSTER_API_INSECURE",
     }
 )
 
@@ -105,11 +108,21 @@ MANAGER_PLANE_ENV_KEYS = (
     "MANAGER_WEB_REPLICAS",
 )
 
-# 服务端强制写死、不接受请求/默认表覆盖的键
-FORCED_ENV = {
-    "CLUSTER_TYPE": "k8s",   # 管理面启动部署仅支持 k8s 形态
-    "MODE": "product",       # 代码挂载 dev 模式不经管理面
-}
+# 强制键名：不接受请求/默认表传入（值由服务端写死；CLUSTER_TYPE 取值随集群形态）
+FORCED_KEY_NAMES = frozenset({"CLUSTER_TYPE", "MODE"})
+# 兼容旧引用（测试等）：k8s 形态下的强制键值
+FORCED_ENV = {"CLUSTER_TYPE": "k8s", "MODE": "product"}
+
+
+def forced_env() -> dict:
+    """服务端强制键：CLUSTER_TYPE 随 manager 所在集群形态（MANAGER_DEPLOY_CLUSTER_TYPE
+    渲染注入），非法值回落 k8s；MODE 恒为 product（dev 代码挂载仅 CLI 部署语义）。"""
+    from manager_server.infrastructure.config import settings
+
+    cluster_type = (settings.deploy_cluster_type or "k8s").strip().lower()
+    if cluster_type not in ("k8s", "openshift"):
+        cluster_type = "k8s"
+    return {"CLUSTER_TYPE": cluster_type, "MODE": "product"}
 
 
 def validate_env_value(key: str, value: str) -> str:
@@ -126,6 +139,10 @@ def validate_env_value(key: str, value: str) -> str:
         raise ValueError(f"AGENT_RUNTIME_DEPLOY_MODE 仅支持 {'/'.join(VALID_DEPLOY_MODES)}")
     if key == "DB_TYPE" and text not in VALID_DB_TYPES:
         raise ValueError(f"DB_TYPE 仅支持 {'/'.join(VALID_DB_TYPES)}")
+    if key == "CLUSTER_API_SERVER" and not re.match(r"^https?://[A-Za-z0-9._:/-]+$", text):
+        raise ValueError(f"CLUSTER_API_SERVER 须为 http(s) URL: {text}")
+    if key == "CLUSTER_API_INSECURE" and text not in ("true", "false"):
+        raise ValueError("CLUSTER_API_INSECURE 仅支持 true/false")
     return text
 
 
@@ -139,14 +156,14 @@ def merge_env(defaults: dict, overrides: dict) -> dict:
     for source in (defaults or {}, overrides or {}):
         for raw_key, raw_value in source.items():
             key = str(raw_key).strip().upper()
-            if key in FORCED_ENV:
+            if key in FORCED_KEY_NAMES:
                 continue
             if key not in ALLOWED_ENV_KEYS:
                 raise ValueError(f"不支持的配置键: {key}")
             if raw_value is None:
                 continue
             merged[key] = validate_env_value(key, str(raw_value))
-    merged.update(FORCED_ENV)
+    merged.update(forced_env())
     return merged
 
 
@@ -183,16 +200,22 @@ def build_env_custom(env: dict, *, namespace: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def derive_db_connection(env: dict, *, tool_defaults: dict | None = None) -> dict:
+def derive_db_connection(
+    env: dict, *, tool_defaults: dict | None = None, namespace: str | None = None
+) -> dict:
     """从合并 env 派生共享数据库连接信息。
 
     未显式配置的键回落 deploy 工具内置默认（global_vars.sh 的 DEPLOY_VARS，经
     ``tool_defaults`` 动态传入——与 deploy.sh 实际执行保持同一真源，避免硬编码
     副本漂移）；最终兜底为与 global_vars 当前值一致的常量，防 tool_defaults 缺失。
+    内置实例所在 ns 随形态：k8s = default 共享；openshift = 任务目标 ns
+    （BASE_SVC_NS 语义，resolve_builtin_svc_locations 本 ns 优先）。
     """
     defaults = tool_defaults or {}
     db_type = env.get("DB_TYPE") or defaults.get("DB_TYPE") or "mariadb"
-    default_host = f"{db_type}-headless.default"   # k8s 形态内置 = default 共享实例
+    cluster_type = (env.get("CLUSTER_TYPE") or "k8s").lower()
+    svc_ns = namespace if (cluster_type == "openshift" and namespace) else "default"
+    default_host = f"{db_type}-headless.{svc_ns}"
     default_port = defaults.get("DB_PORT") or ("5432" if db_type == "postgresql" else "3306")
     default_user = defaults.get("DB_USER") or ("postgres" if db_type == "postgresql" else "root")
     root_password_keys = {
