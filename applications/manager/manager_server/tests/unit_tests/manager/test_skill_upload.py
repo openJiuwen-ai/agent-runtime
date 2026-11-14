@@ -709,6 +709,7 @@ async def test_upload_request_status_filter_accepts_expired_only(manager_api) ->
     assert [item["order_num"] for item in expired.json()["data"]["items"]] == [
         order_num
     ]
+    assert expired.json()["data"]["total"] == 1
 
     mine = await manager_api.http.get(
         "/api/v1/user-console/approvals/mine",
@@ -725,8 +726,8 @@ async def test_upload_request_status_filter_accepts_expired_only(manager_api) ->
 
 
 @pytest.mark.asyncio
-async def test_list_mine_pages_with_has_next(manager_api) -> None:
-    """分页只取到当前页之后一条，用 has_next 表示是否还有下一页。"""
+async def test_list_mine_pages_with_total(manager_api) -> None:
+    """分页返回精确总数；has_next 由总数推导，保留一个版本兼容旧前端。"""
     service = SkillUploadService(manager_api.handler)
     for index in range(3):
         await _submit(
@@ -747,8 +748,8 @@ async def test_list_mine_pages_with_has_next(manager_api) -> None:
         page_size=2,
     )
     assert len(first["items"]) == 2
+    assert first["total"] == 3
     assert first["has_next"] is True
-    assert "total" not in first
 
     second = await service.list_mine(
         applicant_id="u_app",
@@ -759,6 +760,7 @@ async def test_list_mine_pages_with_has_next(manager_api) -> None:
         page_size=2,
     )
     assert len(second["items"]) == 1
+    assert second["total"] == 3
     assert second["has_next"] is False
 
 
@@ -795,6 +797,7 @@ async def test_list_mine_scans_past_scope_filtered_rows(manager_api) -> None:
     )
 
     assert [item["order_num"] for item in listing["items"]] == [history_num]
+    assert listing["total"] == 1
     assert listing["has_next"] is False
 
 
@@ -819,6 +822,7 @@ async def test_list_mine_status_expired_catches_just_expired(manager_api) -> Non
     )
 
     assert [item["order_num"] for item in listing["items"]] == [order_num]
+    assert listing["total"] == 1
     assert listing["has_next"] is False
 
 
@@ -861,8 +865,8 @@ async def test_list_mine_scope_splits_active_and_history(manager_api) -> None:
         {"status": "approved", "result_data": {"install_status": "installed"}},
     )
 
-    async def order_nums(scope: str) -> list[str]:
-        listing = await service.list_mine(
+    async def listing_of(scope: str) -> dict:
+        return await service.list_mine(
             applicant_id="u_app",
             cluster_id=None,
             scope=scope,
@@ -870,15 +874,24 @@ async def test_list_mine_scope_splits_active_and_history(manager_api) -> None:
             page=1,
             page_size=10,
         )
-        return [item["order_num"] for item in listing["items"]]
 
-    assert await order_nums("active") == [pending_num]
-    assert set(await order_nums("history")) == {rejected_num, installed_num}
-    assert set(await order_nums("all")) == {
+    active = await listing_of("active")
+    history = await listing_of("history")
+    everything = await listing_of("all")
+
+    assert [item["order_num"] for item in active["items"]] == [pending_num]
+    assert active["total"] == 1
+    assert {item["order_num"] for item in history["items"]} == {
+        rejected_num,
+        installed_num,
+    }
+    assert history["total"] == 2
+    assert {item["order_num"] for item in everything["items"]} == {
         pending_num,
         rejected_num,
         installed_num,
     }
+    assert everything["total"] == 3
 
 
 @pytest.mark.asyncio
@@ -897,6 +910,7 @@ async def test_list_mine_page_beyond_last_has_no_next(manager_api) -> None:
     )
 
     assert listing["items"] == []
+    assert listing["total"] == 1
     assert listing["has_next"] is False
 
 
