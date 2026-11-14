@@ -183,6 +183,9 @@ declare -A DEPLOY_VARS=(
     ["IDENTITY_SSO_LOGIN_CLIENT_ID"]=""
     ["IDENTITY_SSO_TOKEN_AUDIENCE"]=""
     ["IDENTITY_FEDERATION_CONFIG_FILE"]=""
+    # 用户面选路 Cookie（jiuwenclaw_id）的 Secure：auto 按请求协议判（跨 Pod 反代判成 http）；
+    # true/false 强制。入口终结 TLS 的部署置 true。
+    ["MANAGER_ACTIVE_CLUSTER_COOKIE_SECURE"]="auto"
     ["MANAGER_AGENT_CLIENT_REGISTRATION_ENABLED"]="false"
     ["MANAGER_AGENT_CLIENT_REGISTRATION_CONFIG_FILE"]=""
     # manager-server 程序化部署凭证：kubeconfig 所在 Secret 名（k8s 形态）。
