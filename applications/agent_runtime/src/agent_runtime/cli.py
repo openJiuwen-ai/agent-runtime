@@ -41,7 +41,7 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     from .config import AgentRuntimeConfig
     from .link_mtls import LinkMTLSConfig
-    from .logsetup import configure_logging
+    from .logsetup import configure_logging, uvicorn_log_level
     from .main import create_app
 
     # 日志收口必须在框架 import 之后（其导入期 setup_logging→dictConfig 会
@@ -59,7 +59,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         application.asgi,
         host=settings.host,
         port=settings.port,
-        log_level=os.getenv("AGENT_RUNTIME_LOG_LEVEL", "info").strip().lower(),
+        log_level=uvicorn_log_level(),
         **link_mtls.uvicorn_ssl_kwargs(),
     )
 
