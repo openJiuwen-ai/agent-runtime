@@ -492,6 +492,12 @@ class SQLAlchemyHandler(DBHandler):
                 return await self.get(table_name, filters)
             # 自增列的旧值已经对不上。主键还在就按主键回读，否则丢掉自增列。
             read_filters = self._filters_for_reread(model, filters, data)
+            # A filter column may itself be updated (state/epoch transitions):
+            # re-read with the values this statement wrote, not with the stale
+            # filter values, or the successful update returns None.
+            for key, value in data.items():
+                if key in read_filters and not getattr(value, "sql_column_increment", False):
+                    read_filters[key] = value
             return await self.get(table_name, read_filters)
 
     async def delete(self, table_name: str, filters: dict) -> bool:
