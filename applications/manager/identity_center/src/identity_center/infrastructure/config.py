@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     # ---- HTTP ----
     rest_host: str = Field(default="0.0.0.0", validation_alias="IDENTITY_REST_HOST")
     rest_port: int = Field(default=8770, validation_alias="IDENTITY_REST_PORT")
+    # CORS 允许的浏览器来源（逗号分隔）。空 = 只允许同源（受支持拓扑经 manager-web 单源反代）
+    cors_allow_origins: str = Field(default="", validation_alias="IDENTITY_CORS_ALLOW_ORIGINS")
 
     # ---- 数据库（独立身份库；DBHandler 抽象，sqlite/mysql/postgresql 通用）----
     db_type: str = Field(default="sqlite", validation_alias="IDENTITY_DB_TYPE")
