@@ -100,6 +100,8 @@ spec:
           value: "10"
         - name: WORKSPACE_QUOTA_ENABLED
           value: "<<WORKSPACE_QUOTA_ENABLED>>"
+        - name: MANAGER_ACTIVE_CLUSTER_COOKIE_SECURE
+          value: "<<MANAGER_ACTIVE_CLUSTER_COOKIE_SECURE>>"
         # 技能上传审批：manager 按 object_key 直读原始包（OBS_ACCESS_KEY/OBS_SECRET_KEY 由 Secret 注入）
         - name: OBS_URL
           value: "<<OBS_URL>>"

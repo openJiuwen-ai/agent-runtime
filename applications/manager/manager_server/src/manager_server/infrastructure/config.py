@@ -118,6 +118,14 @@ class Settings(BaseSettings):
         validation_alias="WORKSPACE_QUOTA_ENABLED",
     )
 
+    # ---- 用户面选路 Cookie（jiuwenclaw_id）的 Secure 属性 ----
+    # auto（默认）：按请求实际到达的协议，HTTPS 才加 Secure，保证 HTTP NodePort 部署可用；
+    # true / false：强制加 / 不加。用字符串接收，避免非法值在 import 阶段让管理面起不来
+    # （与上方 obs_secure 同一理由）。
+    active_cluster_cookie_secure: str = Field(
+        default="auto", validation_alias="MANAGER_ACTIVE_CLUSTER_COOKIE_SECURE"
+    )
+
     agent_client_registration_enabled: bool = Field(
         default=False, validation_alias="MANAGER_AGENT_CLIENT_REGISTRATION_ENABLED"
     )

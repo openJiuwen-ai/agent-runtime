@@ -107,6 +107,8 @@ spec:
           value: "<<AGENT_RUNTIME_SYNC_TIMEOUT>>"
         - name: WORKSPACE_QUOTA_ENABLED
           value: "<<WORKSPACE_QUOTA_ENABLED>>"
+        - name: MANAGER_ACTIVE_CLUSTER_COOKIE_SECURE
+          value: "<<MANAGER_ACTIVE_CLUSTER_COOKIE_SECURE>>"
         # 技能上传审批：manager 按 object_key 直读原始包（凭据复用 AgentServer 的 AK/SK）
         - name: OBS_URL
           value: "<<OBS_URL>>"

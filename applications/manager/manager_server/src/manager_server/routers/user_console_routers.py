@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Query, Response
+from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Query, Request, Response
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 from pydantic import BaseModel, Field
 
@@ -56,6 +56,19 @@ class ActiveClusterBody(BaseModel):
     jiuwenclaw_id: str = Field(..., min_length=1, max_length=64)
 
 
+_COOKIE_SECURE_VALUES = {"true": True, "false": False}
+
+
+def active_cluster_cookie_secure(request: Request) -> bool:
+    """``jiuwenclaw_id`` 的 Secure 取值；``set_cookie`` 与 ``delete_cookie`` 必须一致。
+
+    只认 ``request.url.scheme``：``X-Forwarded-Proto`` 由 uvicorn 的 ProxyHeadersMiddleware
+    在可信对端下改写 scheme，应用层不重复解析，避免客户端伪造该头把 Secure 剥掉。
+    """
+    forced = _COOKIE_SECURE_VALUES.get(settings.active_cluster_cookie_secure.strip().lower())
+    return forced if forced is not None else request.url.scheme == "https"
+
+
 user_console_router = APIRouter()
 # Logout cleanup must also work with expired tokens; only this cookie-only
 # endpoint is mounted outside the authenticated business subtree.
@@ -93,6 +106,7 @@ async def list_my_agent_contexts(
     dependencies=[Depends(get_current_user)],
 )
 async def set_active_cluster(
+    request: Request,
     body: ActiveClusterBody,
     response: Response,
     handler: _Handler,
@@ -113,13 +127,14 @@ async def set_active_cluster(
         path="/",
         httponly=True,
         samesite="lax",
+        secure=active_cluster_cookie_secure(request),
         max_age=60 * 60 * 24 * 30,
     )
     return _ok({"jiuwenclaw_id": jid})
 
 
 @public_user_console_router.delete("/active-cluster", response_model=ResponseModel)
-async def clear_active_cluster(response: Response):
+async def clear_active_cluster(request: Request, response: Response):
     """清除用户面动态反代 Cookie（登出 / 换用户 / 无上下文进入 /chat 前调用）。
 
     不要求登录：登出时 token 可能已失效，但仍须清掉 HttpOnly ``jiuwenclaw_id``，
@@ -130,6 +145,7 @@ async def clear_active_cluster(response: Response):
         path="/",
         httponly=True,
         samesite="lax",
+        secure=active_cluster_cookie_secure(request),
     )
     return _ok({"cleared": True})
 

@@ -174,6 +174,9 @@ declare -A DEPLOY_VARS=(
     ["GATEWAY_WS_PORT"]="19000"
     ["IDENTITY_ADMIN_PASSWORD"]="admin"
     ["IDENTITY_FEDERATION_CONFIG_FILE"]=""
+    # 用户面选路 Cookie（jiuwenclaw_id）的 Secure：auto 按请求协议判（跨 Pod 反代判成 http）；
+    # true/false 强制。入口终结 TLS 的部署置 true。
+    ["MANAGER_ACTIVE_CLUSTER_COOKIE_SECURE"]="auto"
     ["MANAGER_AGENT_CLIENT_REGISTRATION_ENABLED"]="false"
     ["MANAGER_AGENT_CLIENT_REGISTRATION_CONFIG_FILE"]=""
     ["IDENTITY_FEDERATION_CODE_TTL"]="60"
