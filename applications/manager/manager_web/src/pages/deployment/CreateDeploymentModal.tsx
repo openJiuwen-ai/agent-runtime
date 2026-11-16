@@ -96,6 +96,7 @@ export function CreateDeploymentModal({ open, defaults, onClose, onCreated }: Pr
   const { t } = useTranslation();
   const [namespace, setNamespace] = useState('');
   const [name, setName] = useState('');
+  const [action, setAction] = useState<'up' | 'down'>('up');
   const [deployMode, setDeployMode] = useState<DeploymentDeployMode>('full');
   const [waitTimeout, setWaitTimeout] = useState('');
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -173,11 +174,14 @@ export function CreateDeploymentModal({ open, defaults, onClose, onCreated }: Pr
     setSaving(true);
     try {
       const result = await DeploymentApi.create({
+        action,
         namespace: namespace.trim().slice(0, NAMESPACE_MAX_LENGTH),
         jiuwenclaw_name: name.trim().slice(0, NAME_MAX_LENGTH),
         deploy_mode: deployMode,
-        ...(Object.keys(env).length > 0 ? { env } : {}),
-        ...(waitTimeoutSecs !== undefined ? { wait_timeout_secs: waitTimeoutSecs } : {}),
+        ...(action === 'up' && Object.keys(env).length > 0 ? { env } : {}),
+        ...(action === 'up' && waitTimeoutSecs !== undefined
+          ? { wait_timeout_secs: waitTimeoutSecs }
+          : {}),
       });
       toast('success', t('deployments.createSuccess'));
       onCreated(result.deployment_id);
@@ -239,6 +243,35 @@ export function CreateDeploymentModal({ open, defaults, onClose, onCreated }: Pr
       }
     >
       <div className="flex flex-col gap-3">
+        <div>
+          <FieldLabel required>{t('deployments.action.label')}</FieldLabel>
+          <div className="flex gap-2" role="radiogroup">
+            <button
+              type="button"
+              role="radio"
+              aria-checked={action === 'up'}
+              className={`btn sm ${action === 'up' ? 'primary' : 'ghost'}`}
+              onClick={() => setAction('up')}
+            >
+              {t('deployments.action.up')}
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={action === 'down'}
+              className={`btn sm ${action === 'down' ? 'danger' : 'ghost'}`}
+              onClick={() => setAction('down')}
+            >
+              {t('deployments.action.down')}
+            </button>
+          </div>
+          <p className="text-xs text-muted mt-1">
+            {action === 'up'
+              ? t('deployments.action.upHint')
+              : t('deployments.action.downHint')}
+          </p>
+        </div>
+
         <div className="grid gap-3 sm:grid-cols-2">
           <div>
             <FieldLabel required>{t('instanceForm.namespace')}</FieldLabel>
@@ -261,7 +294,7 @@ export function CreateDeploymentModal({ open, defaults, onClose, onCreated }: Pr
           </div>
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className={`grid gap-3 sm:grid-cols-2 ${action === 'down' ? 'hidden' : ''}`}>
           <div>
             <FieldLabel required>{t('deployments.form.deployMode')}</FieldLabel>
             <select
@@ -293,11 +326,13 @@ export function CreateDeploymentModal({ open, defaults, onClose, onCreated }: Pr
           </div>
         </div>
 
-        <HostPreview label={t('instanceForm.gatewayHost')} value={hostsPreview.gateway} />
-        <HostPreview label={t('instanceForm.runtimeHost')} value={hostsPreview.runtime} />
-        <HostPreview label={t('instanceForm.userWebHost')} value={hostsPreview.userWeb} />
+        <div className={action === 'down' ? 'hidden' : ''}>
+          <HostPreview label={t('instanceForm.gatewayHost')} value={hostsPreview.gateway} />
+          <HostPreview label={t('instanceForm.runtimeHost')} value={hostsPreview.runtime} />
+          <HostPreview label={t('instanceForm.userWebHost')} value={hostsPreview.userWeb} />
+        </div>
 
-        <div className="border-t border-border pt-2">
+        <div className={`border-t border-border pt-2 ${action === 'down' ? 'hidden' : ''}`}>
           <button
             type="button"
             className="btn ghost sm"

@@ -150,6 +150,12 @@ class Settings(BaseSettings):
     deploy_env_snapshot: str = Field(
         default="", validation_alias="MANAGER_DEPLOY_ENV_JSON"
     )
+    # 部署目标集群形态（渲染钩子注入；决定凭证通道与生成 .env.custom 的 CLUSTER_TYPE）
+    deploy_cluster_type: str = Field(
+        default="k8s", validation_alias="MANAGER_DEPLOY_CLUSTER_TYPE"
+    )
+    # openshift 形态部署凭证：token 文件路径（只读挂载进容器）
+    deploy_token: str = Field(default="", validation_alias="MANAGER_DEPLOY_TOKEN")
     # 全局并发部署任务数
     deploy_max_concurrent: int = Field(
         default=2, validation_alias="MANAGER_DEPLOY_MAX_CONCURRENT"

@@ -981,8 +981,8 @@
   "deployments": {
     "title": "Deployments",
     "subtitle": "Deploy product components into a target namespace from the management plane",
-    "create": "New Deployment",
-    "createTitle": "Create Deployment Task",
+    "create": "New Task",
+    "createTitle": "New Deployment Task",
     "createSuccess": "Deployment task created",
     "deployDisabled": "Deployment is disabled by the administrator",
     "unavailable": "The deployment toolkit is unavailable; only historical tasks can be viewed",
@@ -1003,7 +1003,7 @@
     "status": {
       "pending": "Pending",
       "running": "Running",
-      "success": "Succeeded",
+      "success": "Success",
       "failed": "Failed",
       "cancelled": "Cancelled",
       "interrupted": "Interrupted"
@@ -1066,6 +1066,15 @@
     },
     "actions": {
       "cancel": "Cancel"
+    },
+    "action": {
+      "label": "Action",
+      "up": "Deploy",
+      "down": "Undeploy",
+      "upHint": "Deploy/upgrade product components into the target namespace (idempotent)",
+      "downHint": "Remove product components from the target namespace (reverse order; PVC data is deleted and unrecoverable). Instance records and databases are kept.",
+      "downTag": "Undeploy",
+      "upTag": "Deploy"
     }
   },
   "errors": {

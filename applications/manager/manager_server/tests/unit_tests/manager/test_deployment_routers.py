@@ -112,6 +112,7 @@ async def test_create_list_get_flow(manager_api, tool_available):
     assert resp.status_code == 200
     detail = resp.json()["data"]
     assert detail["status"] == "pending"
+    assert detail["action"] == "up"
     assert detail["deploy_mode"] == "full"
     # deploy_mode 必须持久化进 params.env（执行器按 defaults+params.env 重新 merge）
     assert detail["params"]["env"]["AGENT_RUNTIME_DEPLOY_MODE"] == "full"
@@ -208,3 +209,21 @@ async def test_defaults_sync_from_snapshot(manager_api, tool_available, monkeypa
     env = resp.json()["data"]["env"]
     assert env["GATEWAY_IMAGE"] == "swr.example/gw:17y"   # 跟进新版
     assert env["WEB_REPLICAS"] == "2"                     # 操作员键保留
+
+
+async def test_create_down_action_task(manager_api, tool_available):
+    resp = await manager_api.http.post(
+        f"{_DEPLOYMENTS}/",
+        json={
+            "namespace": "ns-down",
+            "jiuwenclaw_name": "down-instance",
+            "action": "down",
+            "env": _BASE_ENV,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    deployment_id = resp.json()["data"]["deployment_id"]
+    resp = await manager_api.http.get(f"{_DEPLOYMENTS}/{deployment_id}")
+    detail = resp.json()["data"]
+    assert detail["action"] == "down"
+    assert detail["params"]["action"] == "down"

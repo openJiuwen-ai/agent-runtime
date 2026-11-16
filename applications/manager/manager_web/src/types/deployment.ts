@@ -49,6 +49,7 @@ export interface DeploymentProgress {
 
 export interface DeploymentTaskSummary {
   deployment_id: string;
+  action?: string;
   namespace: string;
   jiuwenclaw_name: string;
   deploy_mode: string;
@@ -85,6 +86,7 @@ export interface DeploymentLogChunk {
 }
 
 export interface CreateDeploymentBody {
+  action?: 'up' | 'down';
   namespace: string;
   jiuwenclaw_name: string;
   deploy_mode: DeploymentDeployMode;

@@ -8,6 +8,9 @@ from pydantic import BaseModel, Field
 
 
 class DeploymentCreateBody(BaseModel):
+    action: Literal["up", "down"] = Field(
+        default="up", description="up=部署/升级（幂等重跑）；down=卸载该命名空间产品面"
+    )
     namespace: str = Field(..., min_length=1, max_length=63, description="目标命名空间")
     jiuwenclaw_name: str = Field(
         ..., min_length=1, max_length=128, description="部署成功后自动注册的实例名称"
@@ -26,6 +29,7 @@ class DeploymentCreateBody(BaseModel):
 
 class DeploymentTaskSummary(BaseModel):
     deployment_id: str
+    action: str = Field(default="up", description="up=部署；down=卸载")
     namespace: str
     jiuwenclaw_name: str
     deploy_mode: str

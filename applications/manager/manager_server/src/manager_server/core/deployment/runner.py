@@ -31,6 +31,12 @@ from manager_server.models.deployment_models import (
 )
 
 _log = get_logger(__name__)
+
+
+class _TokenMissingError(RuntimeError):
+    """openshift 形态部署凭证 token 不可读。"""
+
+
 _TASK_TABLE = DEPLOYMENT_TASK_TABLE_DEF.table_name
 _LOG_TABLE = DEPLOYMENT_LOG_TABLE_DEF.table_name
 
@@ -64,12 +70,14 @@ class DeployRunner:
         env_content: str,
         *,
         wait_timeout_secs: int | None = None,
+        action: str = "up",
     ) -> None:
         self._handler = handler
         self._deployment_id = task["deployment_id"]
         self._namespace = task["namespace"]
         self._env_content = env_content
         self._wait_timeout_secs = wait_timeout_secs
+        self._action = "down" if action == "down" else "up"
 
         self._work_dir = Path(tempfile.mkdtemp(prefix=f"deploy-{self._deployment_id}-"))
         self._phase = "validate"
@@ -138,21 +146,36 @@ class DeployRunner:
         )
         exit_code: int | None = None
         try:
+            if (settings.deploy_cluster_type or "k8s").strip().lower() == "openshift":
+                # token 只进子进程环境（kubectl.sh 的 TOKEN 覆盖链），不写 .env.custom——
+                # 避免凭证落入任务 env 快照/日志/DB
+                token_path = (settings.deploy_token or "").strip()
+                token = Path(token_path).read_text(encoding="utf-8").strip() if token_path else ""
+                if not token:
+                    raise _TokenMissingError(
+                        f"部署凭证 token 文件缺失或为空: {token_path or '（未配置 MANAGER_DEPLOY_TOKEN）'}"
+                    )
+                sub_env["TOKEN"] = token
             if not (tool_dir / "deploy.sh").is_file():
                 raise FileNotFoundError(f"{tool_dir}/deploy.sh")
-            proc = await asyncio.create_subprocess_exec(
-                "bash",
-                "deploy.sh",
-                "-n",
-                self._namespace,
-                "up",
-                cwd=str(tool_dir),
-                env=sub_env,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-                start_new_session=True,
-            )
-            exit_code = await self._pump(proc, deadline)
+            if self._action == "down":
+                # down 不渲染、直接消费 conf/ 现有清单：本任务的 work_dir 是新目录，
+                # 按 deploy.sh 约定先用 up --render-only 补齐清单再执行倒序卸载，
+                # 两步共用同一 work_dir（env/conf 隔离）
+                exit_code = await self._exec(
+                    tool_dir, sub_env, ["-n", self._namespace, "up", "--render-only"], deadline
+                )
+                if exit_code == 0:
+                    exit_code = await self._exec(
+                        tool_dir, sub_env, ["-n", self._namespace, "down"], deadline
+                    )
+            else:
+                exit_code = await self._exec(
+                    tool_dir, sub_env, ["-n", self._namespace, "up"], deadline
+                )
+        except _TokenMissingError as exc:
+            exit_code = -1
+            self._fail_message = str(exc)
         except FileNotFoundError as exc:
             exit_code = -1
             self._fail_message = f"部署工具不可用: {exc}"
@@ -190,6 +213,22 @@ class DeployRunner:
             exit_code=exit_code,
         )
         return {"status": status, "exit_code": exit_code, "error_summary": error_summary}
+
+    async def _exec(
+        self, tool_dir: Path, sub_env: dict, args: list[str], deadline: float
+    ) -> int:
+        """起一个 deploy.sh 子进程并泵完输出，返回退出码。"""
+        proc = await asyncio.create_subprocess_exec(
+            "bash",
+            "deploy.sh",
+            *args,
+            cwd=str(tool_dir),
+            env=sub_env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            start_new_session=True,
+        )
+        return await self._pump(proc, deadline)
 
     # ---------- 输出泵与周期职责 ----------
 

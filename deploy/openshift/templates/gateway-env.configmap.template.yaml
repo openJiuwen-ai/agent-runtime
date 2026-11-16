@@ -4,7 +4,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: jiuwenswarm-gateway-envfile
-  namespace: <<NAMESPACE>>
+  namespace: "<<NAMESPACE>>"
 data:
   AGENT_SERVER_URL: ws://jiuwenswarm-agentserver:18092
   DEPLOYMENT_MODE: distributed
@@ -38,7 +38,7 @@ data:
   LOG_ROOT_PATH: /home/app/.logs
   LOG_TO_FILE_ENABLED: "true"
   MODE: product
-  NAMESPACE: <<NAMESPACE>>
+  NAMESPACE: "<<NAMESPACE>>"
   OBS_BUCKET: <<OBS_BUCKET>>
   OBS_REGION: <<OBS_REGION>>
   OBS_SECURE: "<<OBS_SECURE>>"

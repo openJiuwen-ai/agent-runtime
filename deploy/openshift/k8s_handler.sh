@@ -438,52 +438,96 @@ apply_manager_deploy_env_snapshot() { # $@=本次渲染的清单文件名
 
 # ---------- manager-server 部署凭证注入（管理面程序化部署） ----------
 
-# manager up 的前置步骤：MANAGER_DEPLOY_KUBECONFIG_SECRET 非空且目标 ns 中该 Secret
-# 不存在时，从部署机当前 kubeconfig（$KUBECONFIG 或 ~/.kube/config）自动创建。
+# manager up 的前置步骤：部署凭证 Secret 缺失时自动创建（双形态）。
 # 避免渲染清单引用了 Secret 而实际缺失，manager-server 卡在 ContainerCreating。
-# 安全门：仅 k8s 形态（openshift 请手工创建）；仅 manager-server 在本次目标里
-#（普通产品面 up 不在产品 ns 凭空建凭证）；已存在不覆盖（可能是刻意放置的最小权限
-# 凭证）。down 不回收：凭证独立于组件生命周期，跨 up 幂等复用。
-ensure_manager_deploy_kubeconfig_secret() {
-  local secret="${DEPLOY_VARS["MANAGER_DEPLOY_KUBECONFIG_SECRET"]}"
-  [ -n "$secret" ] || return 0
+# - k8s 形态：MANAGER_DEPLOY_KUBECONFIG_SECRET 非空时，从部署机 kubeconfig
+#   （$KUBECONFIG 或 ~/.kube/config）创建；
+# - openshift 形态：token 取 MANAGER_DEPLOY_TOKEN_FILE 指定文件，否则本机 oc 登录态
+#   （oc whoami -t；OAuth token 会过期，生产建议专用 SA 长期 token 手工预建）。
+# 创建统一走 kctl 通道（两形态一致；openshift 无 kubectl）。
+# 安全门：仅 manager-server 在本次目标里；已存在不覆盖（保护手工预建的长期凭证）；
+# openshift 取不到 token 时 warning 放行（pod 卡 ContainerCreating 有明确事件）。
+# down 不回收：凭证独立于组件生命周期，跨 up 幂等复用。
+ensure_manager_deploy_credentials() {
   in_array manager-server "${TARGETS[@]}" || return 0
-  is_k8s_cluster || { warning "openshift 形态不自动创建部署凭证 Secret（$secret），请手工预建"; return 0; }
-  local src="${KUBECONFIG:-$HOME/.kube/config}"
-  if [ ! -f "$src" ]; then
-    error "MANAGER_DEPLOY_KUBECONFIG_SECRET=$secret 已配置，但部署机 kubeconfig 不存在: $src
+  local secret key value
+  if is_k8s_cluster; then
+    secret="${DEPLOY_VARS["MANAGER_DEPLOY_KUBECONFIG_SECRET"]}"
+    [ -n "$secret" ] || return 0
+    local src="${KUBECONFIG:-$HOME/.kube/config}"
+    if [ ! -f "$src" ]; then
+      error "MANAGER_DEPLOY_KUBECONFIG_SECRET=$secret 已配置，但部署机 kubeconfig 不存在: $src
 请先手工创建: kubectl -n $KCTL_NS create secret generic $secret --from-file=kubeconfig=<文件>"
+    fi
+    key="kubeconfig"; value="$(base64 -w0 "$src")"
+  else
+    secret="${DEPLOY_VARS["MANAGER_DEPLOY_TOKEN_SECRET"]:-manager-deploy-token}"
+    local token_file="${DEPLOY_VARS["MANAGER_DEPLOY_TOKEN_FILE"]:-}"
+    if [ -n "$token_file" ] && [ -f "$token_file" ]; then
+      value="$(tr -d '\r\n' < "$token_file" | base64 -w0)"
+    elif command -v oc >/dev/null 2>&1; then
+      local tok; tok="$(oc whoami -t 2>/dev/null)"
+      [ -n "$tok" ] || { warning "oc 登录态取不到 token，请手工预建 Secret $secret（或配 MANAGER_DEPLOY_TOKEN_FILE）"; return 0; }
+      value="$(printf '%s' "$tok" | base64 -w0)"
+    else
+      warning "无法自动获取 token（无 MANAGER_DEPLOY_TOKEN_FILE 且本机无 oc），请手工预建 Secret $secret"
+      return 0
+    fi
+    key="token"
   fi
-  if kubectl -n "$KCTL_NS" get secret "$secret" >/dev/null 2>&1; then
-    info "部署凭证 Secret 已存在: $secret（沿用，不覆盖）"
-    return 0
-  fi
-  kubectl -n "$KCTL_NS" create secret generic "$secret" --from-file=kubeconfig="$src" \
-    || error "创建部署凭证 Secret 失败: $secret"
-  success "已从 $src 自动创建部署凭证 Secret: $secret（ns: $KCTL_NS）"
+  _ensure_deploy_secret_via_kctl "$KCTL_NS" "$secret" "$key" "$value"     && success "已自动创建部署凭证 Secret: $secret（ns: $KCTL_NS）"
+  return 0
 }
 
-# MANAGER_DEPLOY_KUBECONFIG_SECRET 非空时向 manager-server.yaml 的 Deployment 注入：
-#   pod 卷（引用该 Secret）+ 容器只读 subPath 挂载 /etc/manager/deploy-kubeconfig
-#   + env MANAGER_DEPLOY_KUBECONFIG（指向挂载路径）
-# 供 manager-server「管理面启动部署」功能以子进程代跑 deploy.sh：KUBECONFIG 仅注入部署
-# 子进程，manager-server SA 自身保持零 k8s RBAC。留空（默认）不做任何改写
+# 经 kctl 通道探测/创建部署凭证 Secret（404 → POST；已存在沿用；探测异常 warning 放行）
+_ensure_deploy_secret_via_kctl() { # $1=ns $2=secret名 $3=键名 $4=base64值
+  local ns="$1" secret="$2" key="$3" value="$4" code resp body
+  resp="$(kctl_tmpdir)/ensure-deploy-secret"
+  code=$(kctl_http GET "/api/v1/namespaces/$ns/secrets/$secret" "$resp")
+  case "$code" in
+    200) info "部署凭证 Secret 已存在: $secret（沿用，不覆盖）"; return 1;;
+    404) ;;
+    *)   warning "部署凭证 Secret 探测失败（HTTP $code），跳过自动创建"; return 1;;
+  esac
+  body="$(printf '{"apiVersion":"v1","kind":"Secret","metadata":{"name":"%s","namespace":"%s"},"type":"Opaque","data":{"%s":"%s"}}' "$secret" "$ns" "$key" "$value")"
+  code=$(kctl_http POST "/api/v1/namespaces/$ns/secrets" "$resp" "$body")
+  case "$code" in
+    200|201) return 0;;
+    409) info "部署凭证 Secret 已存在: $secret（并发创建，沿用）"; return 1;;
+    *)   error "创建部署凭证 Secret 失败: HTTP $code $(head -c 200 "$resp" 2>/dev/null)";;
+  esac
+}
+
+# manager-server 部署凭证注入（双形态，按本次部署的 CLUSTER_TYPE 分流）：
+# - k8s：MANAGER_DEPLOY_KUBECONFIG_SECRET 非空时注入 Secret 卷（只读 subPath 挂
+#   /etc/manager/deploy-kubeconfig）+ env MANAGER_DEPLOY_KUBECONFIG；
+# - openshift：注入 token Secret 卷（/etc/manager/deploy-token）+ env
+#   MANAGER_DEPLOY_TOKEN / MANAGER_DEPLOY_API_SERVER。
+# 两形态都注入 env MANAGER_DEPLOY_CLUSTER_TYPE（manager-server 据此选定部署子进程的
+# 形态与凭证通道）。manager-server SA 自身保持零集群 RBAC。
 apply_manager_deploy_credentials() { # $@=本次渲染的清单文件名
-  local secret="${DEPLOY_VARS["MANAGER_DEPLOY_KUBECONFIG_SECRET"]}"
-  [ -n "$secret" ] || return 0
-  local f
+  local f secret mounts envs
+  if is_k8s_cluster; then
+    secret="${DEPLOY_VARS["MANAGER_DEPLOY_KUBECONFIG_SECRET"]}"
+    [ -n "$secret" ] || return 0
+    mounts='[{"name": "manager-deploy-credential", "mountPath": "/etc/manager/deploy-kubeconfig", "subPath": "kubeconfig", "readOnly": true}]'
+    envs='[{"name": "MANAGER_DEPLOY_KUBECONFIG", "value": "/etc/manager/deploy-kubeconfig"}, {"name": "MANAGER_DEPLOY_CLUSTER_TYPE", "value": "k8s"}]'
+    local vol='{"name": "manager-deploy-credential", "secret": {"secretName": "'"$secret"'"}}'
+  else
+    secret="${DEPLOY_VARS["MANAGER_DEPLOY_TOKEN_SECRET"]:-manager-deploy-token}"
+    mounts='[{"name": "manager-deploy-credential", "mountPath": "/etc/manager/deploy-token", "subPath": "token", "readOnly": true}]'
+    envs='[{"name": "MANAGER_DEPLOY_TOKEN", "value": "/etc/manager/deploy-token"}, {"name": "MANAGER_DEPLOY_CLUSTER_TYPE", "value": "openshift"}, {"name": "MANAGER_DEPLOY_API_SERVER", "value": "'"${DEPLOY_VARS["CLUSTER_API_SERVER"]}"'"}]'
+    local vol='{"name": "manager-deploy-credential", "secret": {"secretName": "'"$secret"'"}}'
+  fi
   for f in "$@"; do
     case "${f%.yaml}" in manager-server) ;; *) continue;; esac
     [ -f "$CONF_DIR/$f" ] || continue
-    yq -i '
-      (select(.kind == "Deployment").spec.template.spec.volumes) |=
-        ((. // []) + [{"name": "manager-deploy-kubeconfig", "secret": {"secretName": "'"$secret"'"}}])
-      | (select(.kind == "Deployment").spec.template.spec.containers[0].volumeMounts) |=
-        ((. // []) + [{"name": "manager-deploy-kubeconfig", "mountPath": "/etc/manager/deploy-kubeconfig", "subPath": "kubeconfig", "readOnly": true}])
-      | (select(.kind == "Deployment").spec.template.spec.containers[0].env) |=
-        ((. // []) + [{"name": "MANAGER_DEPLOY_KUBECONFIG", "value": "/etc/manager/deploy-kubeconfig"}])
+    VOL_JSON="$vol" MOUNTS_JSON="$mounts" ENVS_JSON="$envs" yq -i '
+      (select(.kind == "Deployment").spec.template.spec.volumes) |= ((. // []) + [strenv(VOL_JSON) | from_json])
+      | (select(.kind == "Deployment").spec.template.spec.containers[0].volumeMounts) |= ((. // []) + (strenv(MOUNTS_JSON) | from_json))
+      | (select(.kind == "Deployment").spec.template.spec.containers[0].env) |= ((. // []) + (strenv(ENVS_JSON) | from_json))
     ' "$CONF_DIR/$f" || error "manager-server 部署凭证注入失败: $f"
-    info "manager-server 部署凭证后处理：注入 kubeconfig Secret 卷（$secret）"
+    info "manager-server 部署凭证后处理：注入 $secret 凭证卷（$(is_k8s_cluster && echo kubeconfig || echo token)）"
   done
 }
 

@@ -155,7 +155,11 @@ deploy.sh 可被程序（manager-server 部署模块）以子进程方式调用�
 终态行后退出码 1。`TOOL_VERSION` 文件为工具版本戳（随工具树分发，供调用方记录）。
 
 程序化部署的集群凭证注入见 `.env.example` 的 `MANAGER_DEPLOY_KUBECONFIG_SECRET`
-（manager-server 模板渲染后处理，留空不生效）。运维要点：
+（k8s 形态，kubeconfig）/ `MANAGER_DEPLOY_TOKEN_SECRET`（openshift 形态，token），
+manager-server 模板渲染后处理自动挂载；manager up 前置步骤会在 Secret 缺失时自动创建
+（k8s 从部署机 kubeconfig；openshift 从 MANAGER_DEPLOY_TOKEN_FILE 或 oc 登录态）。
+openshift 形态免 oc：TOKEN 环境变量在手时 check_dependency 不再要求 oc（数据面纯 curl，
+`CLUSTER_API_INSECURE` 控制自签 -k，默认 true）。运维要点：
 
 ```bash
 # 预建 kubeconfig Secret（manager 与产品面同集群时用集群管理员 kubeconfig）
