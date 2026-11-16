@@ -70,6 +70,7 @@ render_templates() {
     done
   done
   info "渲染 ${#wanted[@]} 个清单 → $CONF_DIR（目标: ${TARGETS[*]}）"
+  apply_nfs_extras "${wanted[@]}"
   apply_nfs_direct_mounts "${wanted[@]}"
   apply_k8s_extras "${wanted[@]}"
   apply_runtime_mode_extras "${wanted[@]}"

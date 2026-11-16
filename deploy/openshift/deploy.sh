@@ -91,17 +91,21 @@ main() {
 先执行 ./deploy.sh up --render-only 补齐渲染（产物落 conf/），再执行 down"
     fi
     # kubectl delete -f 以清单内 namespace 为准（-n 不同也不改写删除目标）：
-    # 校验 conf/ 内嵌 ns 与 -n 一致，防卸载错命名空间或静默删空
-    local probe_ns=""
+    # 校验 conf/ 内嵌 ns 与 -n 一致，防卸载错命名空间或静默删空；
+    # 例外：组件实际 ns（component_ns，如 nfs 按基础服务规则定位）与
+    # -n 解耦，内嵌 ns 命中组件实际 ns 时放行
+    local probe_ns="" probe_comp=""
     for comp in "${TARGETS[@]}"; do
       for cf in $(component_files "$comp"); do
         case "$cf" in *.json) continue;; esac
         [ -f "$CONF_DIR/$cf" ] || continue
+        probe_comp="$comp"
         probe_ns=$(yq -r '.metadata.namespace // ""' "$CONF_DIR/$cf" 2>/dev/null | head -1)
         break 2
       done
     done
-    if [ -n "$probe_ns" ] && [ "$probe_ns" != "$KCTL_NS" ]; then
+    if [ -n "$probe_ns" ] && [ "$probe_ns" != "$KCTL_NS" ] \
+      && [ "$probe_ns" != "$(component_ns "$probe_comp")" ]; then
       error "conf/ 清单 namespace=$probe_ns 与卸载目标 -n $KCTL_NS 不一致
 用 -n $probe_ns 卸载，或 ./deploy.sh up --render-only 重新渲染"
     fi

@@ -116,16 +116,51 @@ filter_targets_by_cluster_type() {
   local comp banned=()
   for comp in "${TARGETS[@]}"; do
     case "$comp" in
-      mariadb|mysql|postgresql|minio) banned+=("$comp");;
+      nfs|mariadb|mysql|postgresql|minio) banned+=("$comp");;
     esac
   done
   [ ${#banned[@]} -eq 0 ] && return 0
   warning "k8s 形态：将在 ${KCTL_NS} 部署基础服务(${banned[*]})，本 ns 实例优先于 default 共享实例被消费"
 }
 
+# nfs / nfs-sc 单例预检：nfs-server 以 hostNetwork 绑定节点 2049 端口、nfs-sc 含集群级
+# 资源（ClusterRole/StorageClass）且供给器以同名 PROVISIONER_NAME 争抢 PVC 事件——
+# 二者全集群仅能存活一套。全命名空间按 label 列举同名实例，目标 ns 之外已存在时拦截
+# 本次部署（目标 ns 内已存在 = 幂等重部署，放行）；探测失败不拦截（fail-safe）
+preflight_singleton_nfs() {
+  local comp sel resp code ns_list
+  for comp in nfs nfs-sc; do
+    in_array "$comp" "${TARGETS[@]:-}" || continue
+    case "$comp" in
+      nfs)    sel="app=${DEPLOY_VARS["NFS_NAME"]}";;
+      nfs-sc) sel="app=${DEPLOY_VARS["NFS_SC_DNAME"]}";;
+    esac
+    resp="$(kctl_tmpdir)/nfs-singleton.json"
+    code=$(kctl_http GET "/apis/apps/v1/deployments?labelSelector=$sel" "$resp")
+    if [ "$code" != 200 ]; then
+      warning "$comp 单例预检跳过（实例列举失败 → HTTP $code），无法确认集群内是否已有实例"
+      continue
+    fi
+    ns_list=$(NS="$KCTL_NS" yq -r \
+      '[.items[] | select(.metadata.namespace != strenv(NS)) | .metadata.namespace] | unique | join(", ")' \
+      "$resp" 2>/dev/null)
+    [ -n "$ns_list" ] \
+      && error "检测到 $comp 实例已存在于命名空间: ${ns_list}——${comp} 全集群仅能存活一套（hostNetwork 端口绑定 / 集群级 StorageClass），请勿重复部署；共享实例可直接消费（依赖组件照常部署）"
+    # 目标 ns 内已存在实例：放行（幂等重部署），但规格将被本次渲染清单覆盖——
+    # 若该实例并非本工具此前部署（如集群预置的共享 NFS server），提示人工核对
+    local self_ns_cnt
+    self_ns_cnt=$(NS="$KCTL_NS" yq -r \
+      '[.items[] | select(.metadata.namespace == strenv(NS))] | length' "$resp" 2>/dev/null)
+    [ "${self_ns_cnt:-0}" -gt 0 ] \
+      && warning "$comp 在 ${KCTL_NS} 已存在实例：本次部署将按渲染清单更新其规格（镜像/导出/宿主机目录）；若该实例并非本工具部署，请先核对再继续"
+  done
+  return 0
+}
+
 # up 预检：目标组件的硬依赖必须就位——secret/redis 已由 resolve_targets 补齐，
 # 此处拦截基础服务（mariadb/minio 等）缺失
 preflight() {
+  preflight_singleton_nfs
   local comp dep code
   local probes=()
   for comp in "${TARGETS[@]}"; do
@@ -141,6 +176,8 @@ preflight() {
         && continue
       # 外部 OBS：不检查内置 MinIO 组件
       [ "${DEPLOY_VARS["ENABLE_EXTERNAL_OBS"]}" = "true" ] && in_array "$dep" minio && continue
+      # 外部 NFS：不检查内置 nfs 组件
+      [ "${DEPLOY_VARS["ENABLE_EXTERNAL_NFS"]}" = "true" ] && in_array "$dep" nfs && continue
       component_autoprovision "$dep" && continue         # 自动补齐依赖由 resolve_targets 兜底
       component_probe "$dep" >/dev/null || continue      # 无探测方式的依赖（如 pvc）跳过
       in_array "$dep" "${probes[@]}" && continue         # 去重
@@ -287,6 +324,18 @@ wait_ready() { # $1=组件
 
 # ---------- 部署 / 卸载 ----------
 
+# 组件 → apply 前置动作（部署节点本机操作）：
+#   nfs-server 经 nodeName 固定调度到运行部署工具的节点，导出根为该节点 hostPath；
+#   模板的 DirectoryOrCreate 兜底创建的目录归 root 且默认权限，NFS 客户端按随机
+#   uid 挂载写入必须 777（EE 部署同款处理），故 apply 前在本机显式创建并授权
+component_prepare() { # $1=组件
+  case "$1" in
+    nfs)  local p="${DEPLOY_VARS["NFS_HOST_PATH"]}"
+          mkdir -p "$p" || error "NFS 导出根目录创建失败: $p（检查部署节点本地权限）"
+          chmod -R 777 "$p" || error "NFS 导出根目录授权失败: $p（须 777 供随机 uid 客户端写入）";;
+  esac
+}
+
 deploy_component() { # $1=组件 $2=序号 $3=总数
   local comp="$1" idx="$2" n="$3" f file_list
   file_list=$(component_files "$comp") || error "未知组件: $comp"
@@ -300,9 +349,15 @@ deploy_component() { # $1=组件 $2=序号 $3=总数
   info "[$idx/$n] $comp（yaml: $file_list）"
   _CURRENT_COMPONENT="$comp"
   progress_json component component="$comp" index="$idx" total="$n" state=start
+  # 集群操作按组件实际所在 ns 定位（nfs 等共享实例内嵌 namespace ≠ -n 场景）；
+  # 其余组件 component_ns 恒等于 KCTL_NS，覆写为无感
+  local saved_ns="$KCTL_NS"
+  KCTL_NS="$(component_ns "$comp")"
+  component_prepare "$comp"
   kctl_run apply "${paths[@]}"
   ensure_workload "${paths[@]}"
   wait_ready "$comp"
+  KCTL_NS="$saved_ns"
   progress_json component component="$comp" index="$idx" total="$n" state=ok
   _CURRENT_COMPONENT=""
 }
@@ -320,8 +375,8 @@ has_alive_dependents() { # $1=组件 → 0=有依赖方存活
     in_array "$other" "${TARGETS[@]}" && continue
     in_array "$comp" $(component_deps "$other") || continue
     # 同 ns 限定仅适用于本 ns 自有实例（secret/redis）；基础服务消费顺序为本 ns →
-    # default，跨 ns 依赖方同样构成存活依赖
-    if ! in_array "$comp" mariadb mysql postgresql minio; then
+    # default，跨 ns 依赖方同样构成存活依赖；nfs 为跨 ns 共享挂载源，同等豁免
+    if ! in_array "$comp" mariadb mysql postgresql minio nfs; then
       [ "$(component_ns "$other")" = "$comp_ns" ] || continue
     fi
     dependents+=("$other")
@@ -368,15 +423,20 @@ delete_component() { # $1=组件 $2=序号 $3=总数
   info "[$idx/$n] $comp（yaml: $file_list）"
   _CURRENT_COMPONENT="$comp"
   progress_json component component="$comp" index="$idx" total="$n" state=start
+  # 删除等待与部署同理按组件实际所在 ns 定位（清单内嵌 namespace 与 -n 解耦）
+  local saved_ns="$KCTL_NS"
+  KCTL_NS="$(component_ns "$comp")"
   if has_alive_dependents "$comp"; then
     warning "$comp 仍被集群中存活组件依赖，跳过删除"
     progress_json component component="$comp" index="$idx" total="$n" state=ok message="skipped"
     _CURRENT_COMPONENT=""
+    KCTL_NS="$saved_ns"
     return 0
   fi
   kctl_run delete "${paths[@]}"
   DOWN_DELETED_ANY=1
   wait_deleted "$comp"
+  KCTL_NS="$saved_ns"
   progress_json component component="$comp" index="$idx" total="$n" state=ok
   _CURRENT_COMPONENT=""
 }

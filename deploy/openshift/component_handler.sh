@@ -25,6 +25,8 @@ component_autoprovision() {
 # 组件 → conf/ 下 yaml 清单（依赖序：envfile/secret 在前，PVC 次之，工作负载最后）
 component_files() {
   case "$1" in
+    nfs)            echo "nfs.yaml";;
+    nfs-sc)         echo "nfs-sc.yaml";;
     mariadb)        echo "mariadb.yaml";;
     mysql)          echo "mysql.yaml";;
     postgresql)     echo "postgresql.yaml";;
@@ -63,6 +65,8 @@ component_files() {
 # 组件 → Pod 就绪探测标签
 component_label() {
   case "$1" in
+    nfs)            echo "app=${DEPLOY_VARS["NFS_NAME"]}";;
+    nfs-sc)         echo "app=${DEPLOY_VARS["NFS_SC_DNAME"]}";;
     mariadb)        echo "app=mariadb";;
     mysql)          echo "app=mysql";;
     postgresql)     echo "app=postgresql";;
@@ -84,14 +88,21 @@ component_wait_mode() {
   case "$1" in secret) echo "none";; *) echo "all";; esac
 }
 
+# k8s 形态内置 NFS 模式的 nfs 组件依赖声明（外部 NFS / openshift 形态不依赖 nfs 组件）：
+# mariadb/mysql/postgresql/minio/agentserver 数据卷直连挂载 NFS（redis 纯缓存不挂卷）
+component_nfs_dep() {
+  is_k8s_cluster && [ "${DEPLOY_VARS["ENABLE_EXTERNAL_NFS"]}" != "true" ] && echo "nfs"
+}
+
 # 组件 → 运行期硬依赖（up 预检：前置组件不在本次目标里就必须已在集群）
 component_deps() {
   case "$1" in
-    mariadb)        echo "secret";;
-    mysql)          echo "secret";;
-    postgresql)     echo "secret";;
-    minio)          echo "secret";;
-    agentserver)    echo "secret ${DEPLOY_VARS["DB_TYPE"]} minio";;
+    nfs)            echo "";;
+    mariadb)        echo "secret $(component_nfs_dep)";;
+    mysql)          echo "secret $(component_nfs_dep)";;
+    postgresql)     echo "secret $(component_nfs_dep)";;
+    minio)          echo "secret $(component_nfs_dep)";;
+    agentserver)    echo "secret ${DEPLOY_VARS["DB_TYPE"]} minio $(component_nfs_dep)";;
     gateway)        if [ "${DEPLOY_VARS["AGENT_RUNTIME_DEPLOY_MODE"]}" = full ]; then
                       echo "secret ${DEPLOY_VARS["DB_TYPE"]} redis minio"
                     else
@@ -105,14 +116,14 @@ component_deps() {
 }
 
 # 组件 → 存在性探测所在命名空间：
-#   基础服务（mariadb/mysql/postgresql/minio）：
+#   nfs 与基础服务（mariadb/mysql/postgresql/minio）同规则：
 #     本次部署目标内 → KCTL_NS（实例将由本次部署落到本 ns，跳过探测）
 #     否则按内置实例定位：本 ns → default，均未命中兜底 BASE_SVC_NS；
 #     探测结果缓存 _SVC_NS_<svc>，进程内只探测一次
 #   其余组件 → 本命名空间（KCTL_NS）
 component_ns() {
   case "$1" in
-    mariadb|mysql|postgresql|minio)
+    nfs|nfs-sc|mariadb|mysql|postgresql|minio)
       if in_array "$1" "${TARGETS[@]:-}"; then
         echo "$KCTL_NS"
         return 0
@@ -130,21 +141,24 @@ component_ns() {
 
 # 内置基础服务实例定位：本 ns 命中优先，其次 default 共享实例；均未命中输出
 # BASE_SVC_NS（部署预期位置：k8s=default / openshift=本 ns）。
-# 探测需集群通道（kctl_check_vars 之后可用）；探测失败视同未命中，走兜底
-_resolve_builtin_svc_ns() { # $1=svc（mariadb|mysql|postgresql|minio）→ stdout: ns
-  local svc="$1" p code
-  if ! p=$(kctl_kind_path StatefulSet "$KCTL_NS"); then
+# 探测对象取 component_probe（kind/name：基础服务为 StatefulSet/<svc>，nfs 为
+# Deployment/<NFS_NAME>）。探测需集群通道（kctl_check_vars 之后可用）；
+# 探测失败视同未命中，走兜底
+_resolve_builtin_svc_ns() { # $1=svc（nfs|mariadb|mysql|postgresql|minio）→ stdout: ns
+  local svc="$1" p code probe
+  probe=$(component_probe "$svc") || { echo "${DEPLOY_VARS["BASE_SVC_NS"]}"; return 0; }
+  if ! p=$(kctl_kind_path "${probe%%/*}" "$KCTL_NS"); then
     echo "${DEPLOY_VARS["BASE_SVC_NS"]}"
     return 0
   fi
-  code=$(kctl_http GET "$p/$svc" /dev/null)
+  code=$(kctl_http GET "$p/${probe#*/}" /dev/null)
   if [ "$code" = 200 ]; then
     echo "$KCTL_NS"
     return 0
   fi
   if [ "$KCTL_NS" != "default" ]; then
-    p=$(kctl_kind_path StatefulSet "default")
-    code=$(kctl_http GET "$p/$svc" /dev/null)
+    p=$(kctl_kind_path "${probe%%/*}" "default")
+    code=$(kctl_http GET "$p/${probe#*/}" /dev/null)
     if [ "$code" = 200 ]; then
       echo "default"
       return 0
@@ -160,6 +174,8 @@ _resolve_builtin_svc_ns() { # $1=svc（mariadb|mysql|postgresql|minio）→ stdo
 component_probe() {
   case "$1" in
     secret)         echo "Secret/jiuwenswarm-secret-configmap";;
+    nfs)            echo "Deployment/${DEPLOY_VARS["NFS_NAME"]}";;
+    nfs-sc)         echo "Deployment/${DEPLOY_VARS["NFS_SC_DNAME"]}";;
     mariadb)        echo "StatefulSet/mariadb";;
     mysql)          echo "StatefulSet/mysql";;
     postgresql)     echo "StatefulSet/postgresql";;
@@ -181,6 +197,7 @@ dep_hint() {
   case "$1" in
     secret) echo "随 ./deploy.sh up 自动拉起（各组件共用的配置 Secret）";;
     redis)  echo "随 ./deploy.sh up 自动拉起";;
+    nfs)    echo "内置实例消费顺序: 本 ns → default；缺失可在本 ns 执行 ./deploy.sh up nfs（hostNetwork 绑定节点 2049 端口，全集群仅能存活一套，推荐 -n default 部署共享实例）";;
     mariadb|mysql|postgresql|minio)
       if is_k8s_cluster; then
         echo "内置实例消费顺序: 本 ns → default；缺失可在本 ns 执行 ./deploy.sh up $1"
