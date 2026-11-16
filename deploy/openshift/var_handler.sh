@@ -425,12 +425,62 @@ resolve_obs_vars() {
 # check_vars 统一入口（deploy.sh main 调用）；kubectl.sh 的 kctl_check_vars 复用部分校验。
 # 基础组件（NFS / 数据库 / Redis）的内置/外置派生集中在「基础服务模式」节；
 # NFS 相关函数在 k8s_handler.sh（直连挂载仅 k8s 形态使用），MODE=dev 相关在 k8s_handler.sh。
+# nfs / nfs-sc 组件目标守卫（TARGETS 含二者之一时生效）。
+# nfs-server（仅 k8s 形态）：命名空间规则与 mariadb 等基础服务一致——部署落 NAMESPACE，
+# 消费按 本 ns → default 定位；卸载均经 component_ns(nfs) 定位（与 deploy_component 的
+# ns 覆写一致）。外部 NFS 模式下内置组件无意义，同样拦截。
+# nfs-sc（双形态通用）：openshift 形态无内置 NFS server，须指定外挂地址。
+# 前置：parse_args 已完成（TARGETS 可用）、resolve_nfs_vars 已派生 ENABLE_EXTERNAL_NFS
+check_nfs_component_vars() {
+  local has_nfs=0 has_sc=0
+  in_array nfs "${TARGETS[@]:-}" && has_nfs=1
+  in_array nfs-sc "${TARGETS[@]:-}" && has_sc=1
+  [ "$has_nfs" = 1 ] || [ "$has_sc" = 1 ] || return 0
+  # nfs-server：仅 k8s 形态；外部 NFS 模式下内置组件无意义
+  if [ "$has_nfs" = 1 ]; then
+    is_k8s_cluster \
+      || error "nfs 组件仅 CLUSTER_TYPE=k8s 支持：openshift 形态存储走 PVC，不使用 NFS server 组件"
+    [ "${DEPLOY_VARS["ENABLE_EXTERNAL_NFS"]}" = "true" ] \
+      && error "已配置外部 NFS（NFS_SERVER_ADDR=${DEPLOY_VARS["NFS_SERVER_ADDR"]}）：内置 nfs 组件无需部署，请从目标剔除 nfs"
+    # 固定调度节点识别：up（连集群）必须成功——nfs-server 的 nodeName 与导出根
+    # hostPath 都以部署节点为准；--render-only 离线渲染允许留空（nodeName 整行
+    # 删除 + apply_nfs_extras 告警，正式部署须在集群可达环境重新渲染）
+    [ "${DEPLOY_VARS["RENDER_ONLY"]}" = "true" ] || fetch_current_node_name
+  fi
+  # nfs-sc：双形态通用，数据源必须可达
+  if [ "$has_sc" = 1 ]; then
+    if is_k8s_cluster && [ "${DEPLOY_VARS["ENABLE_EXTERNAL_NFS"]}" != "true" ]; then
+      # k8s 内置模式：数据源 = 内置 NFS server 的节点地址（须先 up nfs，此处自动解析回填）
+      [ -n "${DEPLOY_VARS["NFS_SERVER_ADDR"]}" ] || {
+        local ip
+        ip=$(_resolve_builtin_nfs_server) \
+          || error "内置模式下 nfs-sc 渲染须解析内置 NFS server 地址（见 stderr）；或改填外部 NFS_SERVER_ADDR"
+        DEPLOY_VARS["NFS_SERVER_ADDR"]="$ip"
+        info "nfs-sc 数据源: 内置 NFS server（${ip}）"
+      }
+    elif ! is_k8s_cluster && [ -z "${DEPLOY_VARS["NFS_SERVER_ADDR"]}" ]; then
+      error "openshift 形态部署 nfs-sc 须指定外挂 NFS server：请在 .env.custom 填写 NFS_SERVER_ADDR（内置 NFS server 组件仅 k8s 形态支持）"
+    fi
+    # 内置 nfs-sc 供给模式：存储类留空时自动指向供给器生成的 StorageClass；
+    # 用户已配置视为外挂 StorageClass（见 2.1.4），不覆盖
+    local auto=0
+    [ -n "${DEPLOY_VARS["DATA_STORAGE_CLASS"]}" ] \
+      || { DEPLOY_VARS["DATA_STORAGE_CLASS"]="${DEPLOY_VARS["NFS_SC_NAME"]}"; auto=1; }
+    [ -n "${DEPLOY_VARS["WORKSPACE_STORAGE_CLASS"]}" ] \
+      || { DEPLOY_VARS["WORKSPACE_STORAGE_CLASS"]="${DEPLOY_VARS["NFS_SC_NAME"]}"; auto=1; }
+    if [ "$auto" = 1 ]; then
+      info "nfs-sc 供给模式: 留空的 DATA/WORKSPACE_STORAGE_CLASS 自动指向 ${DEPLOY_VARS["NFS_SC_NAME"]}（已配置的值视为外挂 StorageClass，不覆盖）"
+    fi
+  fi
+}
+
 check_vars() {
   check_cluster_type_var
   check_namespace_var
   resolve_base_svc_ns               # 基础服务所在 ns：k8s→default（共享），openshift→本 ns；须先于 DB/OBS 派生
   resolve_api_server_var           # 校验 + 留空时自动探测回填（oc/kubeconfig）
   resolve_nfs_vars                 # 函数在 k8s_handler.sh（k8s 形态专属，含外挂模式派生）
+  check_nfs_component_vars         # nfs 组件目标守卫（仅 TARGETS 含 nfs 时生效）
   resolve_db_vars
   resolve_redis_vars
   resolve_obs_vars                 # OBS_URL 空=内置 MinIO 自动派生；外部校验必填项

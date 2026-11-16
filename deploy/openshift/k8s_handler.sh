@@ -23,26 +23,31 @@ _ENSURED_NODE_PORTS=""
 # 定位内置 NFS server Pod。
 # 注意：失败用 return 1 + stderr 提示，不能在函数内 error()——命令替换 $(...) 中
 # error 的 exit 1 只退出子 shell，报错文本（stdout）会被父 shell 捕获成返回值
-builtin_nfs_pod() { # → stdout: Pod 名；失败原因 → stderr；rc 1=未找到
-  local pod
-  pod=$(kubectl get pods -n "${DEPLOY_VARS["NFS_POD_NAMESPACE"]}" \
-    -l "${DEPLOY_VARS["NFS_POD_LABEL"]}" \
-    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-  if [ -z "$pod" ]; then
-    echo "未找到内置 NFS server Pod（${DEPLOY_VARS["NFS_POD_NAMESPACE"]}，label ${DEPLOY_VARS["NFS_POD_LABEL"]}）" >&2
-    return 1
-  fi
-  printf '%s' "$pod"
+builtin_nfs_pod() { # → stdout: "<ns> <Pod名>"；失败原因 → stderr；rc 1=未找到
+  # 实例定位与基础服务同规则（本 ns → BASE_SVC_NS，自动去重）：nfs-server 为
+  # hostNetwork 单例（绑定节点 2049 端口），全集群仅能存活一套，共享实例推荐部署在 default
+  local pod ns seen=" "
+  for ns in "$KCTL_NS" "${DEPLOY_VARS["BASE_SVC_NS"]}"; do
+    [ -n "$ns" ] || continue
+    case "$seen" in *" $ns "*) continue;; esac
+    seen="$seen$ns "
+    pod=$(kubectl get pods -n "$ns" -l "app=${DEPLOY_VARS["NFS_NAME"]}" \
+      -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    [ -n "$pod" ] && { printf '%s %s' "$ns" "$pod"; return 0; }
+  done
+  echo "未找到内置 NFS server Pod（探测 ns:${seen}label app=${DEPLOY_VARS["NFS_NAME"]}）：请先 ./deploy.sh up nfs，或改配外部 NFS（NFS_SERVER_ADDR）" >&2
+  return 1
 }
 
 # 内置 NFS server 的挂载地址 = Pod 所在节点 IP（数据目录在节点 hostPath 下）
 _resolve_builtin_nfs_server() { # → stdout: 节点 IP；失败原因 → stderr；rc 1=失败
-  local pod ip
-  pod=$(builtin_nfs_pod) || return 1
-  ip=$(kubectl get pod "$pod" -n "${DEPLOY_VARS["NFS_POD_NAMESPACE"]}" \
+  local out ns pod ip
+  out=$(builtin_nfs_pod) || return 1
+  read -r ns pod <<< "$out"
+  ip=$(kubectl get pod "$pod" -n "$ns" \
     -o jsonpath='{.status.hostIP}' 2>/dev/null)
   if [ -z "$ip" ]; then
-    echo "内置 NFS server Pod ${pod} 尚无 hostIP（可能未就绪/正在重建）" >&2
+    echo "内置 NFS server Pod $ns/$pod 尚无 hostIP（可能未就绪/正在重建）" >&2
     return 1
   fi
   printf '%s' "$ip"
@@ -58,11 +63,12 @@ prepare_nfs_path() { # $1=组件
   local root="${DEPLOY_VARS["NFS_POD_PATH"]%/}"
   local share="${DEPLOY_VARS["NFS_SHARE_PATH"]%/}"
   local dir="${root}${share}/${DEPLOY_VARS["NAMESPACE"]}/${comp}"
-  local pod
-  pod=$(builtin_nfs_pod) \
+  local out ns pod
+  out=$(builtin_nfs_pod) \
     || error "未找到内置 NFS server Pod，无法创建数据目录 $dir（原因见 stderr 输出）"
-  info "创建 NFS 数据目录: ${dir}（Pod $pod）"
-  kubectl exec "$pod" -n "${DEPLOY_VARS["NFS_POD_NAMESPACE"]}" \
+  read -r ns pod <<< "$out"
+  info "创建 NFS 数据目录: $ns/${dir}（Pod $pod）"
+  kubectl exec "$pod" -n "$ns" \
     -- sh -c "mkdir -p '${dir}' && chmod 777 '${dir}'" \
     || error "NFS 数据目录创建失败: $dir"
 }
@@ -71,7 +77,8 @@ prepare_nfs_path() { # $1=组件
 # 内置/外置唯一判据为 NFS_SERVER_ADDR 是否为空；设置时须为主机名或 IP，
 # 共享根路径须为绝对路径
 resolve_nfs_vars() {
-  is_k8s_cluster || return 0
+  # 双形态校验：NFS_SERVER_ADDR/NFS_SHARE_PATH 除 k8s 直连挂载外，还被 nfs-sc
+  # 供给组件（双形态）消费；ENABLE_EXTERNAL_NFS 供 k8s 形态直连挂载派生使用
   local val="${DEPLOY_VARS["NFS_SERVER_ADDR"]:-}"
   if [ -n "$val" ]; then
     DEPLOY_VARS["ENABLE_EXTERNAL_NFS"]="true"    # 外部 NFS server
@@ -119,6 +126,16 @@ apply_nfs_direct_mounts() { # $@=本次渲染的清单文件名
   # 仅 up 改写数据卷并准备目录：down 只需 conf 里的资源名与集群一致（卷形态不影响按名删除），
   # 且拆除时内置 NFS Pod 可能已先被删——此时解析 NFS 地址不应阻塞卸载
   [ "${CMD:-}" = "up" ] || return 0
+
+  # 仅处理带数据卷的组件（mariadb/mysql/postgresql/minio/agentserver），
+  # 其清单按 <组件>-data 卷名改写为 NFS 直连挂载；其余清单（含 nfs 自身）不涉及
+  local -a need=() cmp
+  for cmp in mariadb mysql postgresql minio agentserver; do
+    in_array "$cmp.yaml" "$@" && need+=("$cmp")
+  done
+  in_array "agentserver.json" "$@" && need+=("agentserver.json")
+  [ ${#need[@]} -gt 0 ] || return 0
+
   local base="${DEPLOY_VARS["NFS_SHARE_PATH"]}"
   base="${base%/}"
   local ns="${DEPLOY_VARS["NAMESPACE"]}"
@@ -804,7 +821,22 @@ fetch_current_node_name() {
       return 0
     }
   done
-  error "无法识别当前节点（本机可能不是集群节点）：MODE=dev 需在 .env.custom 配置 CURRENT_NODE_NAME"
+  error "无法识别当前节点（本机可能不是集群节点）：需在 .env.custom 配置 CURRENT_NODE_NAME（MODE=dev 代码挂载 / nfs-server 节点固定场景）"
+}
+
+# nfs 组件渲染后处理：nodeName 兜底告警（仅 nfs.yaml；--render-only 离线渲染无法
+# 识别部署节点时 nodeName 整行删除，Pod 可调度到任意节点，hostPath 数据随节点漂移）
+apply_nfs_extras() { # $@=本次渲染的清单文件名
+  local f
+  for f in "$@"; do
+    [ "$f" = nfs.yaml ] || continue
+    [ -f "$CONF_DIR/$f" ] || continue
+    if [ -z "${DEPLOY_VARS["CURRENT_NODE_NAME"]}" ]; then
+      warning "CURRENT_NODE_NAME 未识别：nfs-server 的 nodeName 已留空，Pod 可调度到任意节点（hostPath 数据随节点漂移）；正式部署请在集群可达环境重新渲染，或显式配置 CURRENT_NODE_NAME"
+    elif [ "${DEPLOY_VARS["CURRENT_NODE_NAME"]}" != "$(hostname)" ]; then
+      warning "NFS 导出根 ${DEPLOY_VARS["NFS_HOST_PATH"]} 须存在于节点 ${DEPLOY_VARS["CURRENT_NODE_NAME"]}：本机（$(hostname)）与其不一致时，请在该节点手工创建目录并 chmod 777"
+    fi
+  done
 }
 
 # MODE=dev 的渲染后处理：按组件挂载代码并固定节点；openshift 形态忽略 MODE=dev

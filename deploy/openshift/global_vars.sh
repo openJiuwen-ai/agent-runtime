@@ -14,14 +14,15 @@ CUSTOM_ENV_FILE="${DEPLOY_ENV_FILE:-$SCRIPT_DIR/.env.custom}"
 # ---------- 组件清单 ----------
 
 # 全部组件的规范依赖序（up 按此序排列；down 倒序）。
-# secret 必须在最前：基础服务与产品组件的密码统一经 jiuwenswarm-secret-configmap 注入
-ALL_COMPONENTS=(secret mariadb mysql postgresql minio redis runtime agentserver gateway web identity manager-server manager-web)
+# secret 必须在最前：基础服务与产品组件的密码统一经 jiuwenswarm-secret-configmap 注入；
+# nfs 紧随其后：k8s 形态下 mariadb/mysql/postgresql/minio/agentserver 的数据卷直连挂载 NFS
+ALL_COMPONENTS=(secret nfs nfs-sc mariadb mysql postgresql minio redis runtime agentserver gateway web identity manager-server manager-web)
 
 UP_TARGETS=(secret redis agentserver gateway web)         # up 默认目标（规范依赖序）
 MANAGER_TARGETS=(identity manager-server manager-web)     # manager 组
 
 # 镜像名变量清单，与 templates/ 下 <<XXX_IMAGE>> 占位符一一对应
-IMAGE_VARS=(AGENTSERVER_IMAGE GATEWAY_IMAGE WEB_IMAGE IDENTITY_IMAGE MANAGER_SERVER_IMAGE MANAGER_WEB_IMAGE MARIADB_IMAGE MYSQL_IMAGE POSTGRESQL_IMAGE REDIS_IMAGE MINIO_IMAGE)
+IMAGE_VARS=(AGENTSERVER_IMAGE GATEWAY_IMAGE WEB_IMAGE IDENTITY_IMAGE MANAGER_SERVER_IMAGE MANAGER_WEB_IMAGE MARIADB_IMAGE MYSQL_IMAGE POSTGRESQL_IMAGE REDIS_IMAGE MINIO_IMAGE NFS_IMAGE NFS_SC_IMAGE)
 
 # 副本数变量清单，与 templates/ 下 <<XXX_REPLICAS>> 占位符一一对应
 REPLICAS_VARS=(AGENT_SERVER_REPLICAS GATEWAY_REPLICAS WEB_REPLICAS IDENTITY_REPLICAS MANAGER_SERVER_REPLICAS MANAGER_WEB_REPLICAS AGENT_RUNTIME_REPLICAS)
@@ -48,6 +49,7 @@ OPTIONAL_VARS=(
     GATEWAY_AGENT_CLIENT_MODE GATEWAY_RUNTIME_MANAGER_URL AGENTSERVER_POD_DNS_LIST
     IMPORT_LOCAL_ALLOWED_DOWNLOAD_HOSTS TEAM_SKILLS_HUB_ALLOWED_DOWNLOAD_HOSTS
     AGENT_SERVER_REACT_MAX_ITER
+    CURRENT_NODE_NAME
 )
 
 # StorageClass 变量：check_storage_class_vars 做 DNS subdomain 规范校验（留空走集群默认）
@@ -131,6 +133,37 @@ declare -A DEPLOY_VARS=(
     # 技能上传包保留天数：manager 与 AgentServer 必须同值，默认 7，最小 1（非法值回落 7）
     ["SKILL_UPLOAD_RETENTION_DAYS"]="7"
 
+    # 企业统一认证（双形态通用，k8s / openshift 均生效）
+    ["IDENTITY_SSO_SERVER_URL"]=""
+    ["IDENTITY_SSO_LOGIN_CLIENT_ID"]=""
+    ["IDENTITY_SSO_TOKEN_AUDIENCE"]=""
+    ["IDENTITY_FEDERATION_CONFIG_FILE"]=""
+    ["MANAGER_AGENT_CLIENT_REGISTRATION_ENABLED"]="false"
+    ["MANAGER_AGENT_CLIENT_REGISTRATION_CONFIG_FILE"]=""
+    # 用户空间配额特性开关（双形态通用：Manager / Gateway / AgentServer / User Web / Manager Web 共用）
+    ["WORKSPACE_QUOTA_ENABLED"]="false"
+
+    # NFS 存储数据源（双形态通用：k8s 直连挂载与 nfs-sc 供给组件共用）
+    # NFS_SERVER_ADDR：k8s 形态留空=内置 NFS server（./deploy.sh up nfs）；
+    #   openshift 形态部署 nfs-sc 时必填外挂地址（内置 NFS server 仅 k8s 形态支持）
+    ["NFS_SERVER_ADDR"]=""
+    ["NFS_SHARE_PATH"]="/"               # NFS v4 导出根（伪根）下的共享根，须绝对路径
+    # NFS 存储供给组件 nfs-sc（双形态通用）：提供标准 StorageClass，业务 PVC 动态申领 NFS 子目录
+    ["NFS_SC_NAME"]="jiuwenswarm-storage"        # 生成的 StorageClass 名（可被 DATA/WORKSPACE_STORAGE_CLASS 引用）
+    ["NFS_SC_DNAME"]="nfs-provisioner"   # 供给组件资源名（=PROVISIONER_NAME）
+    ["NFS_SC_IMAGE"]="registry.k8s.io/sig-storage/nfs-subdir-external-provisioner:v4.0.2"
+    # manager-server 程序化部署凭证（双形态通用，自动创建两形态均支持）：
+    # - k8s 形态：kubeconfig Secret（来自部署机 $KUBECONFIG / ~/.kube/config，键名 kubeconfig）
+    # - openshift 形态：token Secret（取 MANAGER_DEPLOY_TOKEN_FILE 或本机 oc whoami -t，键名 token）
+    # 非空时渲染后处理向 manager-server.yaml 注入 Secret 卷 + env（按形态注入
+    # MANAGER_DEPLOY_KUBECONFIG / MANAGER_DEPLOY_TOKEN / MANAGER_DEPLOY_API_SERVER），
+    # 供 manager-server「管理面启动部署」功能以子进程代跑 deploy.sh（凭证仅传部署
+    # 子进程，manager-server SA 自身保持零集群 RBAC）。已存在不覆盖；down 不回收
+    ["MANAGER_DEPLOY_KUBECONFIG_SECRET"]=""
+    # manager-server 程序化部署凭证（openshift 形态）：token 所在 Secret 名，留空取默认名
+    ["MANAGER_DEPLOY_TOKEN_SECRET"]=""   # 默认 manager-deploy-token；键名 token
+    ["MANAGER_DEPLOY_TOKEN_FILE"]=""     # 自动创建 Secret 的 token 来源文件；留空则尝试 oc whoami -t
+
     ["AGENT_SERVER_REACT_MAX_ITER"]=""   # 留空=不注入，主 Agent 不限制轮次；正整数=上限
     ["AGENT_SERVER_REPLICAS"]="1"
     ["GATEWAY_REPLICAS"]="1"
@@ -160,16 +193,18 @@ declare -A DEPLOY_VARS=(
     ["MINIO_IMAGE"]="quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z"
 
 
-    # ----- 仅 k8s 形态（CLUSTER_TYPE=k8s，openshift 下不生效） -----
-    # NFS 直连挂载：PVC 卷改写为 NFS 直连挂载
-    # NFS_SERVER_ADDR 空=使用内置 NFS server；非空=外部 NFS server
-    ["NFS_SERVER_ADDR"]=""               # NFS 服务器地址（可选）
-    ["NFS_SHARE_PATH"]="/"               # 共享根路径（须绝对路径），数据落 <该路径>/<NAMESPACE>/<组件>
-    ["ENABLE_EXTERNAL_NFS"]="false"
-    # 内置 NFS server Pod 定位（NFS_SERVER_ADDR 留空时使用）
+    # ⛔⛔⛔ k8s 形态专属配置区（本行以下、直至文末「到此结束」标记）            ⛔⛔⛔
+    # ⛔⛔⛔ 仅 CLUSTER_TYPE=k8s 生效；openshift 形态部署时，本区变量整段不生效 ⛔⛔⛔
+    # ⛔⛔⛔ 新增【通用】配置严禁写入本区：请加到上方通用区                      ⛔⛔⛔
+    # NFS 直连挂载：PVC 卷改写为 NFS 直连挂载（数据源 NFS_SERVER_ADDR/NFS_SHARE_PATH 见通用区）
+    ["ENABLE_EXTERNAL_NFS"]="false"      # NFS_SERVER_ADDR 空=false（内置 server）／非空=true（外部）
+    # 内置 NFS server 组件（./deploy.sh up nfs 部署；默认固定调度到运行部署工具的节点）
+    # 命名空间规则与 mariadb 等基础服务一致（部署落 NAMESPACE，消费按 本 ns → default 定位）；
+    # hostNetwork 绑定节点 2049 端口，全集群仅能存活一套，推荐 -n default 部署共享实例
+    ["NFS_NAME"]="nfs-server"            # 资源名与 Pod label（app=<NFS_NAME>，消费侧按其定位）
+    ["NFS_IMAGE"]="ghcr.io/obeone/nfs-server:2.2.2"
+    ["NFS_HOST_PATH"]="/data/nfs"        # 部署节点上的数据目录，默认 /data/nfs
     ["NFS_POD_PATH"]="/exports"          # 内置 NFS Pod 内的导出根（hostPath 挂载点）
-    ["NFS_POD_NAMESPACE"]="default"      # 内置 NFS Pod 所在 namespace
-    ["NFS_POD_LABEL"]="app=nfs-server"   # 内置 NFS Pod 的 label 选择器
     # manager-web NodePort Service：外部经 http://<节点IP>:<nodePort> 访问
     ["MANAGER_WEB_NODE_PORT"]=""         # 留空=从下方范围自动分配；.env.custom 可固定端口
     ["NODE_PORT_RANGE_START"]="30000"    # 自动分配范围下界
@@ -179,24 +214,6 @@ declare -A DEPLOY_VARS=(
     ["MARIADB_NODE_PORT"]=""             # k8s 形态 mariadb NodePort，留空自动分配
     ["MYSQL_NODE_PORT"]=""               # k8s 形态 mysql NodePort，留空自动分配
     ["POSTGRESQL_NODE_PORT"]=""          # k8s 形态 postgresql NodePort，留空自动分配
-    # 企业统一认证
-    ["IDENTITY_SSO_SERVER_URL"]=""
-    ["IDENTITY_SSO_LOGIN_CLIENT_ID"]=""
-    ["IDENTITY_SSO_TOKEN_AUDIENCE"]=""
-    ["IDENTITY_FEDERATION_CONFIG_FILE"]=""
-    ["MANAGER_AGENT_CLIENT_REGISTRATION_ENABLED"]="false"
-    ["MANAGER_AGENT_CLIENT_REGISTRATION_CONFIG_FILE"]=""
-    # manager-server 程序化部署凭证：kubeconfig 所在 Secret 名（k8s 形态）。
-    # 留空不注入（默认，行为不变）；非空时渲染后处理向 manager-server.yaml 注入
-    # Secret 卷（只读挂 /etc/manager/deploy-kubeconfig）+ env MANAGER_DEPLOY_KUBECONFIG，
-    # 供 manager-server「管理面启动部署」功能以子进程代跑 deploy.sh（KUBECONFIG 只传子进程，
-    # manager-server SA 自身保持零 k8s RBAC）。Secret 由运维预建，键名 kubeconfig
-    ["MANAGER_DEPLOY_KUBECONFIG_SECRET"]=""
-    # manager-server 程序化部署凭证（openshift 形态）：token 所在 Secret 名，留空取默认名
-    ["MANAGER_DEPLOY_TOKEN_SECRET"]=""   # 默认 manager-deploy-token；键名 token
-    ["MANAGER_DEPLOY_TOKEN_FILE"]=""     # 自动创建 Secret 的 token 来源文件；留空则尝试 oc whoami -t
-    # 用户空间配额特性开关（Manager / Gateway / AgentServer / User Web / Manager Web 共用）
-    ["WORKSPACE_QUOTA_ENABLED"]="false"
     # dev 模式：hostPath 挂载宿主机代码调试（MODE=dev 仅 k8s 形态支持；Pod 固定到代码所在节点）
     ["MODE"]="product"                   # product | dev
     ["SWARM_CODE_PATH"]=""                # jiuwenswarm 仓库路径（挂载到 agentserver/gateway/web）
