@@ -102,6 +102,7 @@ render_manager_files() {
     render_config_template "${CONFIG["MANAGER_WEB_TEMPLATE_FILE"]}" "${manager_web_file}" "DEPLOY_VARS"
     enable_dev_mode_if_needed "${manager_web_file}" manager-web
     add_resource_if_set "MANAGER_WEB" "${manager_web_file}"
+    link_mtls_render manager-web "${manager_web_file}"
     success "Manager module is rendered."
 }
 

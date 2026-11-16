@@ -71,7 +71,15 @@ def test_ten_calendar_years_and_no_renew_on_validation():
     before = copy.deepcopy(bundle)
     summary = validate_bundle(bundle)
     assert bundle == before
-    assert set(summary["roles"]) == {"gateway", "runtime", "agentserver", "manager"}
+    assert set(summary["roles"]) == {"gateway", "runtime", "agentserver", "manager", "web", "manager-web"}
+    assert bundle["materials"]["web"]["binding-id"] == bundle["mtls_binding_id"]
+    assert bundle["materials"]["web"]["binding-epoch"] == "1"
+    legacy = copy.deepcopy(bundle)
+    del legacy["materials"]["web"], legacy["materials"]["manager-web"]
+    assert set(validate_bundle(legacy)["roles"]) == {"gateway", "runtime", "agentserver", "manager"}
+    bundle["materials"]["web"]["binding-epoch"] = "2"
+    with pytest.raises(LinkProfileError, match="User Web material does not match binding"):
+        validate_bundle(bundle)
     assert "PRIVATE KEY" not in json.dumps(summary)
     assert "ca.key" not in json.dumps(bundle)
 

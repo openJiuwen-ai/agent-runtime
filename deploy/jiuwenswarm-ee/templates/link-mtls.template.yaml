@@ -33,3 +33,22 @@ headlessService:
       - name: https
         port: 8766
         targetPort: 8766
+webHttpUpstream:
+  tls: |
+    proxy_ssl_certificate /etc/jiuwenswarm/link-mtls/nginx/tls.crt;
+    proxy_ssl_certificate_key /etc/jiuwenswarm/link-mtls/nginx/tls.key;
+    proxy_ssl_trusted_certificate /etc/jiuwenswarm/link-mtls/nginx/ca.crt;
+    proxy_ssl_verify on;
+    proxy_ssl_server_name on;
+  binding:
+    web: |
+      resolver ${NGINX_LOCAL_RESOLVERS} valid=5s ipv6=off;
+      set $link_gateway_web_upstream ${LINK_GATEWAY_WEB_HTTPS_UPSTREAM};
+      proxy_set_header Accept-Encoding "";
+      proxy_set_header X-Jiuwenswarm-Mtls-Binding-Id "${JIUWENSWARM_MTLS_BINDING_ID}";
+      proxy_set_header X-Jiuwenswarm-Mtls-Binding-Epoch "${JIUWENSWARM_MTLS_BINDING_EPOCH}";
+    manager-web: |
+      auth_request_set $gw_binding_id $upstream_http_x_jiuwenswarm_mtls_binding_id;
+      auth_request_set $gw_binding_epoch $upstream_http_x_jiuwenswarm_mtls_binding_epoch;
+      proxy_set_header X-Jiuwenswarm-Mtls-Binding-Id $gw_binding_id;
+      proxy_set_header X-Jiuwenswarm-Mtls-Binding-Epoch $gw_binding_epoch;

@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 from typing import Annotated, Any, Literal
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Query, Response
 from openjiuwen_runtime.foundation.db.handler import DBHandler
@@ -31,6 +32,7 @@ from manager_server.infrastructure.db import get_db_handler
 from manager_server.routers.auth_guards import get_current_user
 from manager_server.schemas.approval_schemas import UserConsoleExpandSubmitBody
 from manager_server.schemas.common_schemas import ResponseModel
+from manager_server.security.link_mtls import ManagerLinkMTLSConfig, ManagerLinkMTLSError
 
 WORKSPACE_QUOTA_FEATURE_DISABLED = "WORKSPACE_QUOTA_FEATURE_DISABLED"
 
@@ -134,6 +136,7 @@ async def resolve_user_face_upstream(
     handler: _Handler,
     user: _CurUser,
     jiuwenclaw_id: Annotated[str | None, Cookie(alias=JIUWENCLAW_ID_COOKIE)] = None,
+    gateway_web: Annotated[bool, Header(alias="X-Jiuwenswarm-Resolve-Gateway-Web")] = False,
 ) -> Response:
     """鉴权 + 按 Cookie 下发用户面上游 origin（供 nginx ``auth_request_set``）。
 
@@ -153,6 +156,24 @@ async def resolve_user_face_upstream(
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
     headers = upstreams.as_headers()
+    if gateway_web:
+        try:
+            config = ManagerLinkMTLSConfig.from_env()
+            if config.enforced:
+                upstream = urlsplit(upstreams.gateway_http)
+                if (
+                    upstream.scheme not in {"http", "https"} or not upstream.hostname
+                    or not upstream.port or upstream.username or upstream.password
+                    or upstream.path or upstream.query or upstream.fragment
+                ):
+                    raise ManagerLinkMTLSError("Invalid Gateway Web upstream origin")
+                headers["X-Gateway-Http-Upstream"] = f"https://{upstream.netloc}"
+                if jiuwenclaw_id and jiuwenclaw_id.strip():
+                    headers.update(await config.binding_headers(handler, jiuwenclaw_id))
+                else:
+                    headers.update(config.profile.headers())
+        except (ValueError, OSError):
+            raise HTTPException(status_code=403, detail="Gateway Web link unavailable") from None
     headers["Cache-Control"] = "no-store"
     return Response(status_code=200, content=b"", headers=headers)
 

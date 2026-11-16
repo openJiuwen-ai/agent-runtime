@@ -231,6 +231,7 @@ check_if_db_up() {
 
     local db_type_upper="${db_type^^}"
     local name="${DEPLOY_VARS["${db_type_upper}_NAME"]}"
+    local module
 
     # Build-In DB server
     if [[ -z "${DEPLOY_VARS["DB_HOST"]:-}" || "${DEPLOY_VARS["DB_HOST"]}" == "${name}-headless.default" ]]; then

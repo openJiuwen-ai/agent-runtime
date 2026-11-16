@@ -151,7 +151,7 @@ async def test_real_image_worker_db_restore_protocol(settings, backend):
         result = await worker.dispatch(
             {"action": "ensure", "settings": settings, "existing": {}}
         )
-        assert result["summary"]["reused"] is False and len(result["secrets"]) == 4
+        assert result["summary"]["reused"] is False and len(result["secrets"]) == 6
         existing = {
             s["metadata"]["labels"]["jiuwenswarm-link-role"]: s
             for s in result["secrets"]

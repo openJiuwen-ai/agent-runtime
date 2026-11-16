@@ -24,7 +24,17 @@ from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 from .link_profile import ROLES, LinkProfileError, _authority
 
 SCHEMA_VERSION = 1
-FILES = frozenset({"ca.crt", "tls.crt", "tls.key", "profile.json"})
+WEB_ROLES = frozenset({"web", "manager-web"})
+TLS_FILES = frozenset({"ca.crt", "tls.crt", "tls.key"})
+
+
+def _usages(role: str) -> list[x509.ObjectIdentifier]:
+    usages = []
+    if role in {"gateway", "runtime", "agentserver"}:
+        usages.append(ExtendedKeyUsageOID.SERVER_AUTH)
+    if role != "agentserver":
+        usages.append(ExtendedKeyUsageOID.CLIENT_AUTH)
+    return usages
 
 
 def ten_year_expiry(now: datetime) -> datetime:
@@ -43,11 +53,16 @@ def issue_bundle(
     mtls_deployment_id: str,
     endpoints: dict[str, str],
     sans: dict[str, list[str]] | None = None,
+    mtls_binding_id: str | None = None,
     mtls_binding_epoch: int = 1,
     now: datetime | None = None,
 ) -> dict:
     """Random first issuance: all roles, ten calendar years, CA key discarded."""
-    if not mtls_deployment_id or len(mtls_deployment_id) > 64 or mtls_binding_epoch < 1:
+    if (
+        not 1 <= len(mtls_deployment_id) <= 64
+        or mtls_binding_epoch < 1
+        or (mtls_binding_id is not None and not 1 <= len(mtls_binding_id) <= 64)
+    ):
         raise LinkProfileError("invalid mTLS deployment ID or binding epoch")
     if set(endpoints) - ROLES or set(sans or {}) - ROLES:
         raise LinkProfileError("unknown certificate role")
@@ -75,7 +90,7 @@ def issue_bundle(
     )
     ca_pem = issuer.public_bytes(serialization.Encoding.PEM).decode()
     materials, pins = {}, {}
-    for role in sorted(ROLES):
+    for role in sorted(ROLES | WEB_ROLES):
         key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         hosts = set((sans or {}).get(role, []))
         if role in endpoints:
@@ -86,11 +101,6 @@ def issue_bundle(
                 names.append(x509.IPAddress(ipaddress.ip_address(host)))
             except ValueError:
                 names.append(x509.DNSName(host))
-        usages = []
-        if role != "manager":
-            usages.append(ExtendedKeyUsageOID.SERVER_AUTH)
-        if role != "agentserver":
-            usages.append(ExtendedKeyUsageOID.CLIENT_AUTH)
         builder = (
             x509.CertificateBuilder()
             .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, role)]))
@@ -102,14 +112,15 @@ def issue_bundle(
             .add_extension(
                 x509.BasicConstraints(ca=False, path_length=None), critical=True
             )
-            .add_extension(x509.ExtendedKeyUsage(usages), critical=False)
+            .add_extension(x509.ExtendedKeyUsage(_usages(role)), critical=False)
         )
         if names:
             builder = builder.add_extension(
                 x509.SubjectAlternativeName(names), critical=False
             )
         cert = builder.sign(issuer_key, hashes.SHA256())
-        pins[role] = [_fingerprint(cert)]
+        if role in ROLES:
+            pins[role] = [_fingerprint(cert)]
         materials[role] = {
             "ca.crt": ca_pem,
             "tls.crt": cert.public_bytes(serialization.Encoding.PEM).decode(),
@@ -119,7 +130,11 @@ def issue_bundle(
                 serialization.NoEncryption(),
             ).decode(),
         }
-    mtls_binding_id = str(uuid.uuid4())
+    mtls_binding_id = mtls_binding_id or str(uuid.uuid4())
+    materials["web"].update({
+        "binding-id": mtls_binding_id,
+        "binding-epoch": str(mtls_binding_epoch),
+    })
     for role in sorted(ROLES):
         materials[role]["profile.json"] = json.dumps(
             {
@@ -172,7 +187,8 @@ def validate_bundle(
 
 def _validate_bundle(bundle, *, now, endpoints, sans):
     now = now or datetime.now(timezone.utc)
-    if bundle["schema_version"] != SCHEMA_VERSION or set(bundle["materials"]) != ROLES:
+    roles = set(bundle["materials"])
+    if bundle["schema_version"] != SCHEMA_VERSION or roles not in (ROLES, ROLES | WEB_ROLES):
         raise LinkProfileError("unsupported or incomplete certificate bundle")
     if (
         not bundle["mtls_deployment_id"]
@@ -182,7 +198,12 @@ def _validate_bundle(bundle, *, now, endpoints, sans):
         raise LinkProfileError("invalid stored binding")
     summaries, pins, ca_values, profiles, public_keys = {}, {}, set(), [], set()
     for role, files in bundle["materials"].items():
-        if set(files) != FILES:
+        required_files = TLS_FILES
+        if role in ROLES:
+            required_files |= {"profile.json"}
+        elif role == "web":
+            required_files |= {"binding-id", "binding-epoch"}
+        if set(files) != required_files:
             raise LinkProfileError("certificate bundle has missing or unexpected files")
         ca = x509.load_pem_x509_certificate(files["ca.crt"].encode())
         cert = x509.load_pem_x509_certificate(files["tls.crt"].encode())
@@ -220,11 +241,21 @@ def _validate_bundle(bundle, *, now, endpoints, sans):
         usages = set(
             cert.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
         )
-        expected = {ExtendedKeyUsageOID.SERVER_AUTH} if role != "manager" else set()
-        if role != "agentserver":
-            expected.add(ExtendedKeyUsageOID.CLIENT_AUTH)
-        if usages != expected:
+        if usages != set(_usages(role)):
             raise LinkProfileError("incorrect role certificate usage")
+        ca_values.add(_fingerprint(ca))
+        summaries[role] = {
+            "fingerprint": _fingerprint(cert),
+            "sans": [],
+            "not_after": cert.not_valid_after_utc.isoformat(),
+        }
+        if role in WEB_ROLES:
+            if role == "web" and (
+                files["binding-id"] != bundle["mtls_binding_id"]
+                or files["binding-epoch"] != str(bundle["mtls_binding_epoch"])
+            ):
+                raise LinkProfileError("persisted User Web material does not match binding")
+            continue
         profile = json.loads(files["profile.json"])
         expected_profile = {
             "version": 1,
@@ -260,17 +291,12 @@ def _validate_bundle(bundle, *, now, endpoints, sans):
             raise LinkProfileError(
                 "required certificate SAN changed; explicit rotation required"
             )
-        pins[role] = [_fingerprint(cert)]
-        ca_values.add(_fingerprint(ca))
+        pins[role] = [summaries[role]["fingerprint"]]
         profiles.append(profile)
-        summaries[role] = {
-            "fingerprint": pins[role][0],
-            "sans": sorted(actual),
-            "not_after": cert.not_valid_after_utc.isoformat(),
-        }
-    if len(ca_values) != 1 or len({v[0] for v in pins.values()}) != len(ROLES):
+        summaries[role]["sans"] = sorted(actual)
+    if len(ca_values) != 1 or len({v["fingerprint"] for v in summaries.values()}) != len(roles):
         raise LinkProfileError("roles require distinct keys and a consistent issuer")
-    if len(public_keys) != len(ROLES):
+    if len(public_keys) != len(roles):
         raise LinkProfileError("roles require distinct private keys")
     if any(p["endpoints"] != profiles[0]["endpoints"] for p in profiles):
         raise LinkProfileError("role profiles disagree about managed endpoints")
