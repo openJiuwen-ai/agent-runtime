@@ -96,7 +96,7 @@ export function SafetyGuardrailsModal({ open, template, onClose, onSaved }: Prop
 
     const body: PermissionsTemplateCreateBody | PermissionsTemplateUpdateBody = {
       template_name: templateName.trim(),
-      description: description.trim() || undefined,
+      description: description.trim() || null,
       body: permissionsFormStateToBody(form),
     };
 

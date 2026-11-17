@@ -51,7 +51,7 @@ export function A2AAccessPolicyModal({ open, policy, onClose, onSaved }: Props) 
     if (!name.trim()) return;
     setSaving(true);
     try {
-      const body = { policy_name: name.trim(), description: description.trim() || undefined, mode, member_template_ids: members, enabled };
+      const body = { policy_name: name.trim(), description: description.trim() || null, mode, member_template_ids: members, enabled };
       if (policy) await A2AAccessPolicyTemplateApi.update(policy.policy_id, body);
       else await A2AAccessPolicyTemplateApi.create(body);
       toast('success', '保存成功'); onSaved();

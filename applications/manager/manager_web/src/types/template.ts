@@ -27,14 +27,14 @@ export interface ModelTemplate {
 
 export interface ModelTemplateCreateBody {
   template_name: string;
-  description?: string;
+  description?: string | null;
   model_type: ModelTypeValue;
-  model_tags?: string[];
+  model_tags?: string[] | null;
   api_base: string;
   api_key: string;
   model_id: string;
   model_provider: string;
-  parameters?: Record<string, unknown>;
+  parameters?: Record<string, unknown> | null;
   timeout?: number;
   retry_count?: number;
   enable_streaming?: boolean;
@@ -68,8 +68,8 @@ export interface EmbeddingTemplate {
 
 export interface EmbeddingTemplateCreateBody {
   template_name: string;
-  description?: string;
-  embed_tags?: string[];
+  description?: string | null;
+  embed_tags?: string[] | null;
   api_base: string;
   api_key: string;
   model_id: string;
@@ -109,7 +109,7 @@ export interface ExtensionConfigTemplate {
 
 export interface ExtensionConfigTemplateCreateBody {
   template_name: string;
-  description?: string;
+  description?: string | null;
   component: string;
   hook_type: string;
   hook_config: HookConfig;
@@ -142,7 +142,7 @@ export interface ExpertPackageTemplate {
 
 export interface ExpertPackageTemplateCreateBody {
   template_name: string;
-  description?: string;
+  description?: string | null;
   packages: ExpertPackageItem[];
   enabled?: boolean;
 }
@@ -173,7 +173,7 @@ export interface SkillPrebuiltTemplate {
 
 export interface SkillPrebuiltTemplateCreateBody {
   template_name: string;
-  description?: string;
+  description?: string | null;
   skill_id: string;
   package_url?: string;
   source_id?: string;
@@ -218,7 +218,7 @@ export interface McpTemplate {
 
 export interface McpTemplateCreateBody {
   template_name: string;
-  description?: string;
+  description?: string | null;
   mcp_entry: McpEntry;
   enabled?: boolean;
   data?: Record<string, unknown>;
@@ -242,7 +242,7 @@ export interface PermissionsTemplate {
 
 export interface PermissionsTemplateCreateBody {
   template_name: string;
-  description?: string;
+  description?: string | null;
   enabled?: boolean;
   body: Record<string, unknown>;
   data?: Record<string, unknown>;
@@ -284,13 +284,13 @@ export interface ServiceConfigTemplate {
 
 export interface ServiceConfigTemplateCreateBody {
   template_name: string;
-  description?: string;
+  description?: string | null;
   namespace?: string;
-  node_name?: string;
+  node_name?: string | null;
   fs_group?: number | null;
   pod_name?: string;
   sse_path?: string;
-  kubeconfig?: string;
+  kubeconfig?: string | null;
   ready_timeout?: number;
   ready_poll_interval?: number;
   main_container_id?: string;
@@ -353,7 +353,7 @@ export interface A2ADiscoverySettings {
 export interface A2AOutboundTemplateCreateBody {
   discovery_id: string;
   template_name: string;
-  description?: string;
+  description?: string | null;
   a2a_tags?: string[];
   credential?: string;
   connect_timeout_seconds?: number;
@@ -363,7 +363,7 @@ export interface A2AOutboundTemplateCreateBody {
 
 export interface A2AOutboundTemplateUpdateBody {
   template_name?: string;
-  description?: string;
+  description?: string | null;
   a2a_tags?: string[];
   credential?: string;
   clear_credential?: boolean;
@@ -390,7 +390,7 @@ export interface A2AAccessPolicyTemplate {
 
 export interface A2AAccessPolicyTemplateBody {
   policy_name: string;
-  description?: string;
+  description?: string | null;
   mode: A2AAccessPolicyMode;
   member_template_ids: string[];
   enabled?: boolean;
@@ -442,18 +442,18 @@ export interface ContainerTemplate {
 
 export interface ContainerTemplateCreateBody {
   template_name: string;
-  description?: string;
+  description?: string | null;
   container_id: string;
   name?: string;
   image?: string;
   image_pull_policy?: string;
-  ports?: unknown[];
-  env?: unknown[];
-  env_from?: unknown[];
-  resources?: Record<string, unknown>;
-  volume_mounts?: unknown[];
-  security_context?: Record<string, unknown>;
-  readiness_probe?: Record<string, unknown>;
+  ports?: unknown[] | null;
+  env?: unknown[] | null;
+  env_from?: unknown[] | null;
+  resources?: Record<string, unknown> | null;
+  volume_mounts?: unknown[] | null;
+  security_context?: Record<string, unknown> | null;
+  readiness_probe?: Record<string, unknown> | null;
   command?: string[];
   args?: string[];
   enabled?: boolean;

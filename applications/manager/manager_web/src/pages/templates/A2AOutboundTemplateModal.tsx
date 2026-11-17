@@ -77,14 +77,14 @@ export function A2AOutboundTemplateModal({ open, template, onClose, onSaved }: P
             ? { credential }
             : {};
         await A2AOutboundTemplateApi.update(template.template_id, {
-          template_name: name.trim(), description: description.trim() || undefined,
+          template_name: name.trim(), description: description.trim() || null,
           a2a_tags, ...credentialUpdate, connect_timeout_seconds: connectTimeout,
           sync_wait_seconds: syncWait,
         });
       } else if (candidate) {
         await A2AOutboundTemplateApi.create({
           discovery_id: candidate.discovery_id, template_name: name.trim(),
-          description: description.trim() || undefined, a2a_tags, credential,
+          description: description.trim() || null, a2a_tags, credential,
           connect_timeout_seconds: connectTimeout, sync_wait_seconds: syncWait, enabled: true,
         });
       }

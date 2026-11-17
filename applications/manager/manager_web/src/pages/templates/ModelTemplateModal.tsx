@@ -268,14 +268,14 @@ export function ModelTemplateModal({ open, template, onClose, onSaved }: Props) 
 
     const body: ModelTemplateCreateBody | ModelTemplateUpdateBody = {
       template_name: form.template_name.trim(),
-      description: form.description.trim() || undefined,
+      description: form.description.trim() || null,
       model_type: modelTypeList,
       model_tags: fromCommaList(form.model_tags),
       api_base: form.api_base.trim(),
       api_key: form.api_key,
       model_id: form.model_id.trim(),
       model_provider: form.model_provider.trim(),
-      parameters: form.parameters.trim() ? tryParseJson(form.parameters, {}) : undefined,
+      parameters: form.parameters.trim() ? tryParseJson(form.parameters, {}) : null,
       timeout: form.timeout,
       retry_count: form.retry_count,
       enable_streaming: form.enable_streaming,

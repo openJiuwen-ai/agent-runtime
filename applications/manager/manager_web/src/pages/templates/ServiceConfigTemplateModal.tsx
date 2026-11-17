@@ -66,7 +66,7 @@ const emptyForm = (): FormState => ({
 });
 
 function opt(v: string) {
-  return v.trim() || undefined;
+  return v.trim() || null;
 }
 
 function formatJson(value: unknown): string {

@@ -220,7 +220,7 @@ export function McpTemplateModal({ open, template, onClose, onSaved }: Props) {
 
     const body: McpTemplateCreateBody | McpTemplateUpdateBody = {
       template_name: form.template_name.trim(),
-      description: form.description.trim() || undefined,
+      description: form.description.trim() || null,
       mcp_entry: buildMcpEntry(form, parsedHeaders, customConfig),
     };
 

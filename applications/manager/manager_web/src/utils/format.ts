@@ -35,9 +35,9 @@ export function toCommaList(value: string[] | undefined | null): string {
   return value.join(',');
 }
 
-export function fromCommaList(value: string): string[] | undefined {
+export function fromCommaList(value: string): string[] | null {
   const v = value.trim();
-  if (!v) return undefined;
+  if (!v) return null;
   return v
     .split(',')
     .map((x) => x.trim())

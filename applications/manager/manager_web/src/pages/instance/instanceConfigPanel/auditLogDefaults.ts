@@ -124,9 +124,9 @@ export function toUpsertBody(form: AuditLogFormState): AuditLogConfigUpsertBody 
       ...form.format,
       timestamp_format: TIMESTAMP_FORMAT_FIXED,
     },
-    data_center: form.data_center.trim() || undefined,
-    system_code: form.system_code.trim() || undefined,
-    node: form.node.trim() || undefined,
+    data_center: form.data_center.trim() || null,
+    system_code: form.system_code.trim() || null,
+    node: form.node.trim() || null,
   };
 }
 
