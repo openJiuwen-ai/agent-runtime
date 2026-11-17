@@ -286,6 +286,7 @@ async def push_agent_resources_sync_to_gateway(
     resource_ids: list[str] = []
     seen_resources: set[str] = set()
     template_ids: set[str] = set()
+    resource_templates: dict[str, set[str]] = {}
     for row in rows:
         rid = str(_g(row, "resource_id") or "").strip()
         tid = str(_g(row, "ref_template_id") or "").strip()
@@ -294,27 +295,53 @@ async def push_agent_resources_sync_to_gateway(
         if rid and rid not in seen_resources:
             seen_resources.add(rid)
             resource_ids.append(rid)
+        if rid and tid:
+            # 一个资源可被授权多个 agent 模板：按集合记录，失败判断不能只看一条。
+            resource_templates.setdefault(rid, set()).add(tid)
 
     synced_templates = 0
+    failed_templates: dict[str, str] = {}
     for tid in sorted(template_ids):
         tpl_row = await handler.get(_AGENT_TPL, {"template_id": tid})
         if tpl_row is None:
+            # 模板行缺失：记入 failed，引用它的资源一并跳过，避免网关悬空引用。
+            failed_templates[tid] = "agent template row not found"
             continue
-        await ensure_referenced_templates_on_gateway(
-            handler,
-            jid,
-            read_template_ref_from_row(tpl_row),
-        )
-        await upsert_agent_template_on_gateway(handler, jid, tid)
+        try:
+            await ensure_referenced_templates_on_gateway(
+                handler,
+                jid,
+                read_template_ref_from_row(tpl_row),
+            )
+            await upsert_agent_template_on_gateway(handler, jid, tid)
+        except ValueError as exc:
+            # 单个模板依赖不可解析时告警并跳过，不阻断同批其余 agent 资源下发；
+            # 失败明细记入返回值，避免「网关缺模板却报成功」。
+            logger.warning(
+                "[push_agent_template] skip agent template %s on bulk sync: %s", tid, exc
+            )
+            failed_templates[tid] = str(exc)
+            continue
         synced_templates += 1
 
     synced_resources = 0
     for rid in resource_ids:
+        failed_ref = sorted(
+            t for t in resource_templates.get(rid, ()) if t in failed_templates
+        )
+        if failed_ref:
+            # 引用的任一 agent 模板下发失败：资源一并跳过，避免网关出现悬空引用。
+            logger.warning(
+                "[push_agent_template] skip agent resource %s: template(s) %s failed to sync",
+                rid,
+                ", ".join(failed_ref),
+            )
+            continue
         payload = await _build_agent_resource_payload(handler, jid, rid)
         await _upsert_agent_resource_on_gateway(jid, payload)
         synced_resources += 1
 
-    return {
+    result = {
         "success_flag": True,
         "result": {
             "agent_templates": synced_templates,
@@ -322,6 +349,10 @@ async def push_agent_resources_sync_to_gateway(
         },
         "transport": "http",
     }
+    if failed_templates:
+        result["success_flag"] = False
+        result["result"]["failed"] = failed_templates
+    return result
 
 
 __all__ = (
