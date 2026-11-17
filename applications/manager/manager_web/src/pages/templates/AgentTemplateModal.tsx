@@ -14,7 +14,6 @@ import {
 import { agentRegistrationErrorKey, hasAgentCredentials, maskAgentClientSecrets } from '../../utils/agentClientRegistration';
 import { toast } from '../../stores/uiStore';
 import { bumpGuideRevision } from '../../stores/guideStore';
-import { fromCommaList, toCommaList } from '../../utils/format';
 import { jsonContentForValidation } from '../../utils/jsonExample';
 import {
   findSingleValueTemplateRefViolation,
@@ -49,7 +48,6 @@ function FieldLabel({ children, required }: { children: ReactNode; required?: bo
 interface FormState {
   template_name: string;
   description: string;
-  agent_tags: string;
   template_ref: TemplateRefMap;
   custom_config_json: string;
   upload_local_skill: boolean;
@@ -58,7 +56,6 @@ interface FormState {
 const empty: FormState = {
   template_name: '',
   description: '',
-  agent_tags: '',
   template_ref: {},
   custom_config_json: '',
   upload_local_skill: false,
@@ -108,7 +105,6 @@ export function AgentTemplateModal({ open, template, registrationConfig, onClose
       ? {
           template_name: template.template_name.slice(0, FIELD_MAX_LENGTH.template_name),
           description: (template.description ?? '').slice(0, FIELD_MAX_LENGTH.description),
-          agent_tags: toCommaList(template.agent_tags),
           template_ref: normalizeTemplateRefFromApi(template.template_ref),
           custom_config_json: customConfigText(template.data),
           upload_local_skill: template.data?.upload_local_skill === true,
@@ -167,7 +163,6 @@ export function AgentTemplateModal({ open, template, registrationConfig, onClose
     return {
       template_name: form.template_name.trim(),
       description: form.description.trim() || null,
-      agent_tags: fromCommaList(form.agent_tags),
       template_ref: form.template_ref,
       data: nextData,
     };
@@ -253,13 +248,9 @@ export function AgentTemplateModal({ open, template, registrationConfig, onClose
             <LimitedTextInput ariaLabel={t('agentTemplate.templateName')} value={form.template_name} maxLength={FIELD_MAX_LENGTH.template_name} onChange={(value) => update('template_name', value)} />
           </div>
           <div>
-            <FieldLabel>{t('agentTemplate.agentTags')}</FieldLabel>
-            <input className="input" aria-label={t('agentTemplate.agentTags')} placeholder={t('agentTemplate.agentTagsHint')} value={form.agent_tags} onChange={(event) => update('agent_tags', event.target.value)} />
+            <FieldLabel>{t('agentTemplate.templateDescription')}</FieldLabel>
+            <LimitedTextInput ariaLabel={t('agentTemplate.templateDescription')} value={form.description} maxLength={FIELD_MAX_LENGTH.description} onChange={(value) => update('description', value)} />
           </div>
-        </div>
-        <div>
-          <FieldLabel>{t('agentTemplate.templateDescription')}</FieldLabel>
-          <LimitedTextInput ariaLabel={t('agentTemplate.templateDescription')} value={form.description} maxLength={FIELD_MAX_LENGTH.description} onChange={(value) => update('description', value)} />
         </div>
         {registrationConfig?.enabled && (
           <section className="agent-capability-card" aria-labelledby="agent-client-title">

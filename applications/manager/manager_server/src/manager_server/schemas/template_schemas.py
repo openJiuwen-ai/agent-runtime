@@ -207,7 +207,6 @@ class AgentTemplateCreateBody(SafeTextMixin):
 
     template_name: str = Field(..., min_length=1, max_length=128)
     description: str | None = Field(default=None, max_length=512)
-    agent_tags: list[str] | None = None
     template_ref: TemplateRefField = Field(default_factory=dict)
     enabled: bool = True
     data: AgentTemplateData = None
@@ -218,7 +217,6 @@ class AgentTemplateUpdateBody(SafeTextMixin):
 
     template_name: str | None = Field(default=None, min_length=1, max_length=128)
     description: str | None = Field(default=None, max_length=512)
-    agent_tags: list[str] | None = None
     template_ref: OptionalTemplateRefField = None
     enabled: bool | None = None
     data: AgentTemplateData = None
@@ -233,7 +231,7 @@ class AgentTemplateListQuery(BaseModel):
     search: str | None = Field(
         default=None,
         max_length=256,
-        description="按 template_id、template_name、description、agent_tags 模糊搜索",
+        description="按 template_id、template_name、description 模糊搜索",
     )
     sort_by: str | None = Field(
         default=None,
@@ -248,7 +246,6 @@ class ModelTemplateCreateBody(SafeTextMixin):
     template_name: str = Field(..., min_length=1, max_length=128)
     description: str | None = Field(default=None, max_length=512)
     model_type: list[ModelTypeLiteral] = Field(default_factory=list)
-    model_tags: list[str] | None = None
     api_base: ApiBaseUrl
     api_key: str = Field(..., min_length=1)
     model_id: str = Field(..., min_length=1, max_length=128)
@@ -256,8 +253,6 @@ class ModelTemplateCreateBody(SafeTextMixin):
     parameters: dict[str, Any] | None = None
     timeout: int = Field(default=360, ge=1)
     retry_count: int = Field(default=3, ge=0)
-    enable_streaming: bool = True
-    enable_function_calling: bool = True
     verify_ssl: bool = False
     enabled: bool = True
     data: dict[str, Any] | None = None
@@ -274,7 +269,6 @@ class ModelTemplateUpdateBody(SafeTextMixin):
     template_name: str | None = Field(default=None, min_length=1, max_length=128)
     description: str | None = Field(default=None, max_length=512)
     model_type: list[ModelTypeLiteral] | None = None
-    model_tags: list[str] | None = None
     api_base: ApiBaseUrl | None = None
     api_key: str | None = Field(default=None, min_length=1)
     model_id: str | None = Field(default=None, min_length=1, max_length=128)
@@ -282,8 +276,6 @@ class ModelTemplateUpdateBody(SafeTextMixin):
     parameters: dict[str, Any] | None = None
     timeout: int | None = Field(default=None, ge=1)
     retry_count: int | None = Field(default=None, ge=0)
-    enable_streaming: bool | None = None
-    enable_function_calling: bool | None = None
     verify_ssl: bool | None = None
     enabled: bool | None = None
     data: dict[str, Any] | None = None
@@ -300,7 +292,6 @@ class ModelTemplateOut(BaseModel):
     template_name: str
     description: str | None
     model_type: list[str]
-    model_tags: list[str] | None
     api_base: str
     api_key: str
     model_id: str
@@ -308,8 +299,6 @@ class ModelTemplateOut(BaseModel):
     parameters: dict[str, Any] | None
     timeout: int
     retry_count: int
-    enable_streaming: bool
-    enable_function_calling: bool
     verify_ssl: bool
     enabled: bool
     reference_count: int = 0
@@ -356,7 +345,6 @@ class EmbeddingTemplateCreateBody(SafeTextMixin):
 
     template_name: str = Field(..., min_length=1, max_length=128)
     description: str | None = Field(default=None, max_length=512)
-    embed_tags: list[str] | None = None
     api_base: ApiBaseUrl
     api_key: str = Field(..., min_length=1)
     model_id: str = Field(..., min_length=1, max_length=128)
@@ -378,7 +366,6 @@ class EmbeddingTemplateUpdateBody(SafeTextMixin):
 
     template_name: str | None = Field(default=None, min_length=1, max_length=128)
     description: str | None = Field(default=None, max_length=512)
-    embed_tags: list[str] | None = None
     api_base: ApiBaseUrl | None = None
     api_key: str | None = Field(default=None, min_length=1)
     model_id: str | None = Field(default=None, min_length=1, max_length=128)
@@ -394,7 +381,6 @@ class EmbeddingTemplateOut(BaseModel):
     template_id: str
     template_name: str
     description: str | None
-    embed_tags: list[str] | None
     api_base: str
     api_key: str
     model_id: str
@@ -594,7 +580,6 @@ class A2AOutboundTemplateCreateBody(SafeTextMixin):
     discovery_id: str = Field(..., min_length=1, max_length=128)
     template_name: str = Field(..., min_length=1, max_length=128)
     description: str | None = Field(default=None, max_length=512)
-    a2a_tags: list[str] | None = None
     credential: str | None = Field(default=None, max_length=4096)
     connect_timeout_seconds: float = Field(default=10.0, gt=0)
     sync_wait_seconds: float = Field(default=120.0, gt=0)
@@ -628,7 +613,6 @@ class A2AOutboundTemplateUpdateBody(SafeTextMixin):
 
     template_name: str | None = Field(default=None, min_length=1, max_length=128)
     description: str | None = Field(default=None, max_length=512)
-    a2a_tags: list[str] | None = None
     credential: str | None = Field(default=None, max_length=4096)
     clear_credential: bool = False
     connect_timeout_seconds: float | None = Field(default=None, gt=0)
@@ -657,7 +641,6 @@ class A2AOutboundTemplateOut(BaseModel):
     template_id: str
     template_name: str
     description: str | None
-    a2a_tags: list[str] | None
     source_url: str
     card_path: str
     agent_card: dict[str, Any]

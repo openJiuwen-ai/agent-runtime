@@ -53,16 +53,12 @@ def _matches_search(row: Any, query: str) -> bool:
 
 
 def row_to_out(row: Any, *, reference_count: int = 0) -> ModelTemplateOut:
-    model_tags = row.model_tags
-    if model_tags is not None and not isinstance(model_tags, list):
-        model_tags = list(model_tags) if model_tags else None
     return ModelTemplateOut(
         id=row.id,
         template_id=str(row.template_id),
         template_name=row.template_name,
         description=row.description,
         model_type=row.model_type,
-        model_tags=model_tags,
         api_base=row.api_base,
         api_key=row.api_key,
         model_id=row.model_id,
@@ -70,8 +66,6 @@ def row_to_out(row: Any, *, reference_count: int = 0) -> ModelTemplateOut:
         parameters=row.parameters,
         timeout=row.timeout,
         retry_count=row.retry_count,
-        enable_streaming=row.enable_streaming,
-        enable_function_calling=row.enable_function_calling,
         verify_ssl=row.verify_ssl,
         enabled=row.enabled,
         reference_count=reference_count,
@@ -100,7 +94,6 @@ class ModelTemplateService:
             "template_name": body.template_name,
             "description": body.description,
             "model_type": body.model_type,
-            "model_tags": body.model_tags,
             "api_base": body.api_base,
             "api_key": body.api_key,
             "model_id": body.model_id,
@@ -108,8 +101,6 @@ class ModelTemplateService:
             "parameters": body.parameters,
             "timeout": body.timeout,
             "retry_count": body.retry_count,
-            "enable_streaming": body.enable_streaming,
-            "enable_function_calling": body.enable_function_calling,
             "verify_ssl": body.verify_ssl,
             "enabled": body.enabled,
             "data": body.data,

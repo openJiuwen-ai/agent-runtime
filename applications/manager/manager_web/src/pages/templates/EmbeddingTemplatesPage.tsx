@@ -185,7 +185,6 @@ export function EmbeddingTemplatesPage() {
                         onChange={(value) => handleSortChange('model_id', value)}
                       />
                     </th>
-                    <th>{t('embeddingTemplate.embedTags')}</th>
                     <th>
                       <TableColumnSort
                         label={t('embeddingTemplate.apiBase')}
@@ -220,7 +219,7 @@ export function EmbeddingTemplatesPage() {
                 </thead>
                 <tbody>
                   {items.length === 0 ? (
-                    <tr><td colSpan={10}><Empty text={t('common.empty')} /></td></tr>
+                    <tr><td colSpan={9}><Empty text={t('common.empty')} /></td></tr>
                   ) : items.map((row) => (
                     <tr key={row.template_id}>
                       <td className="align-top">
@@ -232,11 +231,6 @@ export function EmbeddingTemplatesPage() {
                       </td>
                       <td className="whitespace-nowrap"><span className="tag">{row.model_provider}</span></td>
                       <td className="mono max-w-[18rem] break-all text-xs">{row.model_id}</td>
-                      <td className="max-w-[14rem]">
-                        <div className="flex flex-wrap gap-1">
-                          {(row.embed_tags ?? []).map((tag) => <span key={tag} className="tag">{tag}</span>)}
-                        </div>
-                      </td>
                       <td className="mono max-w-[14rem] text-[11px] text-muted" title={row.api_base}>
                         {truncate(row.api_base, 36)}
                       </td>

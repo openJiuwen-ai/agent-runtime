@@ -19,7 +19,6 @@ export function A2AOutboundTemplateModal({ open, template, onClose, onSaved }: P
   const [candidate, setCandidate] = useState<A2ADiscoveryCandidate | null>(null);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const [tags, setTags] = useState('');
   const [credential, setCredential] = useState('');
   const [initialCredential, setInitialCredential] = useState('');
   const [clearCredential, setClearCredential] = useState(false);
@@ -34,7 +33,6 @@ export function A2AOutboundTemplateModal({ open, template, onClose, onSaved }: P
     setUrl(template?.source_url ?? '');
     setName(template?.template_name ?? '');
     setDescription(template?.description ?? '');
-    setTags(template?.a2a_tags?.join(', ') ?? '');
     setCredential('');
     setInitialCredential('');
     setClearCredential(false);
@@ -70,7 +68,6 @@ export function A2AOutboundTemplateModal({ open, template, onClose, onSaved }: P
   const save = async () => {
     if (!name.trim() || (!template && !candidate)) return;
     setSaving(true);
-    const a2a_tags = tags.split(',').map((x) => x.trim()).filter(Boolean);
     try {
       if (template) {
         const credentialUpdate = clearCredential
@@ -80,13 +77,13 @@ export function A2AOutboundTemplateModal({ open, template, onClose, onSaved }: P
             : {};
         await A2AOutboundTemplateApi.update(template.template_id, {
           template_name: name.trim(), description: description.trim() || null,
-          a2a_tags, ...credentialUpdate, connect_timeout_seconds: connectTimeout,
+          ...credentialUpdate, connect_timeout_seconds: connectTimeout,
           sync_wait_seconds: syncWait,
         });
       } else if (candidate) {
         await A2AOutboundTemplateApi.create({
           discovery_id: candidate.discovery_id, template_name: name.trim(),
-          description: description.trim() || null, a2a_tags, credential,
+          description: description.trim() || null, credential,
           connect_timeout_seconds: connectTimeout, sync_wait_seconds: syncWait, enabled: true,
         });
       }
@@ -105,8 +102,7 @@ export function A2AOutboundTemplateModal({ open, template, onClose, onSaved }: P
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         {!template && <div className="md:col-span-2"><label className="label">{t('a2a.urlLabel')}</label><div className="flex gap-2"><input className="input flex-1" value={url} onChange={(e) => { setUrl(e.target.value); setCandidate(null); }} /><button className="btn" disabled={saving} onClick={() => void discover()}>{t('a2a.discover')}</button></div></div>}
         {candidate && <div className="md:col-span-2 card text-xs"><div className="font-medium">{t('a2a.discoveredName', { name: String(candidate.agent_card.name || '') })}</div><div className="mono text-muted break-all">{candidate.card_url}</div><div className="text-muted">JSON-RPC · {String(candidate.selected_interface.protocol_version || t('a2a.unknownVersion'))}</div></div>}
-        <div><label className="label">{t('a2a.displayName')}</label><input className="input" maxLength={128} value={name} onChange={(e) => setName(e.target.value)} /></div>
-        <div><label className="label">{t('a2a.tagsLabel')}</label><input className="input" value={tags} onChange={(e) => setTags(e.target.value)} /></div>
+        <div className="md:col-span-2"><label className="label">{t('a2a.displayName')}</label><input className="input" maxLength={128} value={name} onChange={(e) => setName(e.target.value)} /></div>
         <div className="md:col-span-2"><label className="label">{t('a2a.description')}</label><input className="input" maxLength={512} value={description} onChange={(e) => setDescription(e.target.value)} /></div>
         <div className="md:col-span-2"><label className="label">{t('a2a.credential')}</label><input className="input" type="password" maxLength={4096} disabled={!credentialLoaded || clearCredential} value={credential} onChange={(e) => setCredential(e.target.value)} />{template?.credential_configured && <label className="mt-2 flex items-center gap-2 text-sm"><input type="checkbox" disabled={!credentialLoaded} checked={clearCredential} onChange={(e) => setClearCredential(e.target.checked)} />{t('a2a.clearSavedCredential')}</label>}</div>
         <div><label className="label">{t('a2a.connectTimeout')}</label><input className="input" type="number" min={0.1} value={connectTimeout} onChange={(e) => setConnectTimeout(Number(e.target.value))} /></div>
