@@ -17,7 +17,7 @@ export interface LogMaskingRule {
 
 export interface LogMaskingRuleCreateBody {
   rule_name: string;
-  description?: string;
+  description?: string | null;
   pattern: string;
   replacement?: string;
   priority?: number;

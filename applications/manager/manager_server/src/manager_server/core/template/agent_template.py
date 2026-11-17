@@ -431,12 +431,19 @@ class AgentTemplateService:
         async with self._reserve_template(template_id) as operation:
             if operation is None:
                 return None
-            updates = body.model_dump(exclude_none=True)
+            updates = body.model_dump(exclude_unset=True)
             if "description" in updates:
                 updates["description"] = strip_optional(body.description)
+            # exclude_unset 会保留显式 null；这些列不允许被清空，剔除以免写库/校验踩坑
+            for key in ("enabled", "template_name", "template_ref"):
+                if updates.get(key) is None:
+                    updates.pop(key, None)
             if "data" in updates:
                 binding = (operation.data or {}).get(MANAGED_AGENT_CLIENT_KEY)
-                if binding:
+                if not isinstance(updates.get("data"), dict):
+                    # 显式 data: null 不能整列清空（托管 Agent client 绑在 data 里）
+                    updates.pop("data", None)
+                elif binding:
                     updates["data"][MANAGED_AGENT_CLIENT_KEY] = binding
             if not updates:
                 return agent_template_out(

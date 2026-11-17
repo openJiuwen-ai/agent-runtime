@@ -987,8 +987,8 @@ export const AgentTemplateApi = {
   get: (id: string) => http<AgentTemplate>(`/v1/agent-templates/${encodeURIComponent(id)}`),
   create: (body: {
     template_name: string;
-    description?: string;
-    agent_tags?: string[];
+    description?: string | null;
+    agent_tags?: string[] | null;
     template_ref?: Record<string, string[]>;
     enabled?: boolean;
     data?: Record<string, unknown> | null;
@@ -997,8 +997,8 @@ export const AgentTemplateApi = {
     id: string,
     body: {
       template_name?: string;
-      description?: string;
-      agent_tags?: string[];
+      description?: string | null;
+      agent_tags?: string[] | null;
       template_ref?: Record<string, string[]>;
       enabled?: boolean;
       data?: Record<string, unknown> | null;

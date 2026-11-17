@@ -154,7 +154,7 @@ export function AgentTemplateModal({ open, template, registrationConfig, onClose
 
     return {
       template_name: form.template_name.trim(),
-      description: form.description.trim() || undefined,
+      description: form.description.trim() || null,
       agent_tags: fromCommaList(form.agent_tags),
       template_ref: form.template_ref,
       data: form.custom_config_json !== customConfigText(currentTemplate?.data ?? null)

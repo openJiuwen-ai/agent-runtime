@@ -240,9 +240,9 @@ class InstanceServiceResourceService:
             existing = await self._h.list_records(_GRANT, target_filters, limit=_CAP, offset=0)
         resolved_resource_id = normalized_resource_id or new_uuid4()
         existing_name = str(_g(existing[0], "resource_name") or "").strip() if existing else ""
-        existing_desc = str(_g(existing[0], "resource_desc") or "").strip() if existing else ""
         resolved_name = (resource_name or "").strip() or existing_name or None
-        resolved_desc = (resource_desc or "").strip() or existing_desc or None
+        # 更新为整份覆盖：空描述表示清空，不再回退到旧值
+        resolved_desc = strip_optional(resource_desc)
         if not resolved_name:
             raise ValueError("resource_name is required")
 

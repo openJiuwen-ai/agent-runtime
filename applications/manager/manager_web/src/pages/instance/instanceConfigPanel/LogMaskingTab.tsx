@@ -160,7 +160,7 @@ export function LogMaskingTab({ instanceId }: { instanceId: string }) {
 
     const body = {
       rule_name: form.rule_name.trim(),
-      description: form.description.trim() || undefined,
+      description: form.description.trim() || null,
       pattern: form.pattern.trim(),
       replacement: form.replacement.trim(),
       priority: form.priority,

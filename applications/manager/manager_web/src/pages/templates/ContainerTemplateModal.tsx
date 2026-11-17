@@ -119,9 +119,9 @@ function formatEnv(env: unknown): string {
   return '';
 }
 
-function parseEnv(text: string): { ok: true; value?: { name: string; value: string }[] } | { ok: false } {
+function parseEnv(text: string): { ok: true; value?: { name: string; value: string }[] | null } | { ok: false } {
   const trimmed = text.trim();
-  if (!trimmed) return { ok: true, value: undefined };
+  if (!trimmed) return { ok: true, value: null };
   const out: { name: string; value: string }[] = [];
   for (const line of trimmed.split(/\r?\n/)) {
     const s = line.trim();
@@ -130,12 +130,12 @@ function parseEnv(text: string): { ok: true; value?: { name: string; value: stri
     if (eq <= 0) return { ok: false };
     out.push({ name: s.slice(0, eq).trim(), value: s.slice(eq + 1) });
   }
-  return { ok: true, value: out.length ? out : undefined };
+  return { ok: true, value: out.length ? out : null };
 }
 
-function parseJsonArray(text: string): { ok: true; value?: Record<string, unknown>[] } | { ok: false } {
+function parseJsonArray(text: string): { ok: true; value?: Record<string, unknown>[] | null } | { ok: false } {
   const trimmed = text.trim();
-  if (!trimmed) return { ok: true, value: undefined };
+  if (!trimmed) return { ok: true, value: null };
   try {
     const parsed = JSON.parse(trimmed) as unknown;
     if (!Array.isArray(parsed)) return { ok: false };
@@ -343,7 +343,7 @@ export function ContainerTemplateModal({ open, template, onClose, onSaved }: Pro
 
     const body: ContainerTemplateCreateBody = {
       template_name: form.template_name.trim(),
-      description: form.description.trim() || undefined,
+      description: form.description.trim() || null,
       container_id: form.container_id.trim(),
       name: form.name.trim(),
       image: form.image.trim(),
@@ -351,9 +351,9 @@ export function ContainerTemplateModal({ open, template, onClose, onSaved }: Pro
       ports: ports.value,
       env: env.value,
       env_from: envFrom.value,
-      resources: Object.keys(resources).length ? resources : undefined,
+      resources: Object.keys(resources).length ? resources : null,
       volume_mounts: mounts.value,
-      security_context: Object.keys(securityContext).length ? securityContext : undefined,
+      security_context: Object.keys(securityContext).length ? securityContext : null,
       readiness_probe: probe,
       enabled: template ? template.enabled : true,
     };
