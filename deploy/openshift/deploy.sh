@@ -3,7 +3,7 @@
 # openshift 形态经 curl 直连 Kubernetes REST API，k8s 形态走 kubectl CLI）
 #
 # 用法（详见 usage 与 README）：
-#   ./deploy.sh up                        # 拉起产品组件: secret → redis → agentserver → gateway → web
+#   ./deploy.sh up                        # 拉起产品组件，包含 user-backend 和 web
 #   ./deploy.sh manager up                # 拉起管理套件: identity → manager-server → manager-web
 #   ./deploy.sh up mariadb [minio ...]    # 按组件部署（基础服务/共享依赖/产品/管理组件均可）
 #   ./deploy.sh down [组件...]            # 卸载（倒序删除；共享依赖有人用则保留；等 Pod 删净）

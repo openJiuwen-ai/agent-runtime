@@ -261,6 +261,10 @@ ensure_workload() {
 wait_ready() { # $1=组件
   local comp="$1" label mode i iters total ready imgok want_img
   mode=$(component_wait_mode "$comp")
+  if [ "$mode" = submitted ]; then
+    info "$comp 已部署，Kubernetes 将在 Identity 和数据库视图可用后标记就绪"
+    return 0
+  fi
   if [ "$mode" = none ]; then   # 非工作负载组件（如共享 Secret），apply 成功即就绪
     success "$comp 就绪"
     return 0

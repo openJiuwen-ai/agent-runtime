@@ -82,6 +82,19 @@ async def my_orgs(claims: _Claims, handler: _Handler):
     return {"orgs": orgs}
 
 
+@auth_router.get("/user-session")
+async def user_session(claims: _Claims, handler: _Handler):
+    """Return the active user and their current organizations for user-plane authorization."""
+    if claims.get("surface") != "user":
+        raise HTTPException(status_code=403, detail="user session required")
+    service = IdentityAuthService(handler)
+    user_id = str(claims.get("sub") or "")
+    user = await service.get_user(user_id)
+    if user is None or str(getattr(user, "status", "")) != "active":
+        raise HTTPException(status_code=401, detail="user not found or disabled")
+    return {"user_id": user_id, "orgs": await service.list_my_orgs(user_id)}
+
+
 @auth_router.post("/refresh", response_model=TokenResponse)
 async def refresh(
     body: RefreshBody, handler: _Handler, request: Request, surface: LoginSurface | None = None,

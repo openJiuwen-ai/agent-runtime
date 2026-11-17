@@ -113,6 +113,21 @@ check_replicas_vars() {
   done
 }
 
+check_user_backend_vars() {
+  [ "$CMD" = up ] && in_array user-backend "${TARGETS[@]}" || return 0
+  local img="${DEPLOY_VARS[USER_BACKEND_IMAGE]}"
+  local replicas="${DEPLOY_VARS[USER_BACKEND_REPLICAS]}"
+  local db_user="${DEPLOY_VARS[USER_BACKEND_DB_USER]}"
+  [[ "$img" =~ ^[A-Za-z0-9._:@/-]+$ ]] \
+    || error "USER_BACKEND_IMAGE 未设置或格式无效（检查 $CUSTOM_ENV_FILE）"
+  [[ "$replicas" =~ ^[1-9][0-9]*$ ]] \
+    || error "USER_BACKEND_REPLICAS 须为正整数"
+  [[ "$db_user" =~ [^[:space:]] && "${db_user,,}" != root && "${db_user,,}" != postgres ]] \
+    || error "请在 $CUSTOM_ENV_FILE 的 USER_BACKEND_DB_USER 中设置专用只读账号"
+  [ -n "${DEPLOY_VARS[USER_BACKEND_DB_PASSWORD]}" ] \
+    || error "请在 $CUSTOM_ENV_FILE 中设置 USER_BACKEND_DB_PASSWORD"
+}
+
 # StorageClass：DNS subdomain 规范；留空使用集群默认（STORAGE_CLASS_VARS）
 check_storage_class_vars() {
   local v val
@@ -435,6 +450,7 @@ check_vars() {
   resolve_manager_web_resolver     # MANAGER_WEB_RESOLVER 为空时按形态/环境自动解析
   check_image_vars
   check_replicas_vars
+  check_user_backend_vars
   resolve_deploy_mode_vars         # 三模式派生：gateway 条件 env + off 单副本校验
   resolve_sandbox_type_vars        # 沙箱类型枚举校验（off|kata|jiuwenbox，jiuwenbox 仅 k8s）
   check_storage_class_vars

@@ -38,6 +38,8 @@ spec:
               value: "http://jiuwenswarm-identity:8770"
             - name: USER_WEB_MANAGER_TARGET
               value: "http://jiuwenswarm-manager-server:8765"
+            - name: USER_WEB_BACKEND_TARGET
+              value: "http://jiuwenswarm-user-backend:8780"
             - name: USER_WEB_RESOLVER
               value: "<<MANAGER_WEB_RESOLVER>>"
             - name: WEB_HTTP_PORT

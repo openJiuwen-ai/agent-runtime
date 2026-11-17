@@ -74,8 +74,9 @@ kubectl get pods   # 确认登录成功
 - **卸载保护**：`down` 时组件若仍被集群中存活的组件依赖（如 manager-server 还在时卸载
   产品组），secret / redis 会自动保留，不会被误删；
 - **幂等**：可重复执行，已存在的资源自动跳过；副本数被人为调整过会自动恢复；
-- **就绪等待**：`up` 每个组件部署后轮询等待 Pod 就绪、`down` 等待 Pod 删净
-  （默认预算 300s，可 `WAIT_TIMEOUT_SECS=600 ./deploy.sh up` 调整，首次拉取镜像建议调大）；
+- **就绪等待**：`up` 部署后轮询等待 Pod 就绪，`down` 等待 Pod 删净
+  （默认预算 300s，可 `WAIT_TIMEOUT_SECS=600 ./deploy.sh up` 调整，首次拉取镜像建议调大）。
+  `user-backend` 提交后继续部署，Kubernetes 在 Identity 和数据库只读视图可用后将其标记为就绪；
 - **render-only**：`--render-only` 只渲染本次目标组件的清单到 `conf/`，不连接集群，
   用于核对 / 交付部署清单；
 - **副本数可配置**：见第 2 节 `*_REPLICAS` 变量；
@@ -87,12 +88,15 @@ kubectl get pods   # 确认登录成功
 ./deploy.sh up mariadb    # 数据库（三选一: mariadb / mysql / postgresql，默认用 MariaDB）
 ./deploy.sh up minio      # 对象存储
 ./deploy.sh up            # 产品组件（按 AGENT_RUNTIME_DEPLOY_MODE 派生，见 .env.example）:
-                          #   off:     secret → redis → agentserver → gateway → web
-                          #   routing: secret → redis → runtime → agentserver → gateway → web
-                          #   full:    secret → redis → runtime → gateway → web
+                          #   off:     secret → redis → agentserver → gateway → user-backend → web
+                          #   routing: secret → redis → runtime → agentserver → gateway → user-backend → web
+                          #   full:    secret → redis → runtime → gateway → user-backend → web
                           #          （AgentServer 由 runtime 按需创建，自动注入 Pod 操作 RBAC）
 ./deploy.sh up manager   # 管理套件: identity → manager-server → manager-web
 ```
+
+在 `.env.custom` 填写独立的 `USER_BACKEND_IMAGE`。默认 `up` 会创建用户面前后端，也可通过
+`up user-backend` 和 `up web` 分别部署。
 
 数据库说明：`templates/` 下同时提供 mysql / postgresql 模板，供需要替换数据库的场景
 选用，部署命令相同（如 `./deploy.sh up mysql`）。产品栈默认对接 MariaDB，换库时需
@@ -102,7 +106,7 @@ kubectl get pods   # 确认登录成功
 
 ```bash
 ./deploy.sh down manager   # 卸载管理套件（倒序: manager-web → manager-server → identity）
-./deploy.sh down           # 卸载产品组件（倒序: web → gateway → agentserver → redis → secret）
+./deploy.sh down           # 卸载产品组件（倒序: web → user-backend → gateway → 其余组件）
 ./deploy.sh down minio     # 卸载minio服务
 ./deploy.sh down mariadb   # 卸载数据库
 ```

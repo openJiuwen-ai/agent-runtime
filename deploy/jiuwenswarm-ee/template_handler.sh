@@ -165,6 +165,9 @@ enable_dev_mode_if_needed() {
         manager-server | runtime | identity)
             mount_runtime_code "${file}"
             ;;
+        user-backend)
+            mount_swarm_code "${file}"
+            ;;
         manager-web)
             [ "${DEPLOY_VARS["IS_MOUNT_MANAGER_WEB_CODE"]}" != "true" ] && return
             mount_runtime_code "${file}"

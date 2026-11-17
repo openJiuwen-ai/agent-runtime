@@ -773,6 +773,9 @@ apply_dev_code_mounts() { # $@=本次渲染的清单文件名
       web)
         [ "${DEPLOY_VARS["IS_MOUNT_WEB_CODE"]}" = "true" ] || continue
         mount_swarm_code "$CONF_DIR/$f"; mount_web_nginx_template "$CONF_DIR/$f";;
+      user-backend)
+        [ -n "${DEPLOY_VARS["SWARM_CODE_PATH"]}" ] || continue
+        mount_swarm_code "$CONF_DIR/$f";;
       identity|manager-server|runtime)
         mount_runtime_code "$CONF_DIR/$f";;
       manager-web)
@@ -818,6 +821,8 @@ resolve_dev_mode_vars() {
       case "$comp" in
         agentserver|gateway|web|identity|manager-server|manager-web|runtime)
           error "MODE=dev + --render-only 渲染含 dev 挂载组件（目标: ${TARGETS[*]}），需在 .env.custom 显式配置 CURRENT_NODE_NAME";;
+        user-backend)
+          [ -z "${DEPLOY_VARS["SWARM_CODE_PATH"]}" ] || error "挂载 user-backend 源码时，需在 .env.custom 显式配置 CURRENT_NODE_NAME";;
       esac
     done
   fi
