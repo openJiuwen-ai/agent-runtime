@@ -18,7 +18,7 @@ export interface ModelTemplate {
   enable_function_calling: boolean;
   verify_ssl: boolean;
   enabled: boolean;
-  /** 只读：在 Agent 模板各模型槽位引用本模板的 Agent 模板数 */
+  /** 只读：在 Agent 配置模板各模型槽位引用本模板的 Agent 配置模板数 */
   reference_count: number;
   data?: Record<string, unknown> | null;
   created_at?: string | null;
@@ -59,7 +59,7 @@ export interface EmbeddingTemplate {
   parameters?: Record<string, unknown> | null;
   client_config?: Record<string, unknown> | null;
   enabled: boolean;
-  /** 只读：在 Agent 模板 embedding_model 槽位引用本模板的 Agent 模板数 */
+  /** 只读：在 Agent 配置模板 embedding_model 槽位引用本模板的 Agent 配置模板数 */
   reference_count: number;
   data?: Record<string, unknown> | null;
   created_at?: string | null;
@@ -100,7 +100,7 @@ export interface ExtensionConfigTemplate {
   hook_config: HookConfig;
   custom_config?: Record<string, unknown> | null;
   enabled: boolean;
-  /** 只读：在 Agent 模板 extension_config 槽位引用本模板的 Agent 模板数 */
+  /** 只读：在 Agent 配置模板 extension_config 槽位引用本模板的 Agent 配置模板数 */
   reference_count: number;
   data?: Record<string, unknown> | null;
   created_at?: string | null;
@@ -164,7 +164,7 @@ export interface SkillPrebuiltTemplate {
   source_id?: string | null;
   version_id?: string | null;
   enabled: boolean;
-  /** 只读：在 Agent 模板 skill_prebuilt 槽位引用本模板的 Agent 模板数 */
+  /** 只读：在 Agent 配置模板 skill_prebuilt 槽位引用本模板的 Agent 配置模板数 */
   reference_count: number;
   data?: Record<string, unknown> | null;
   created_at?: string | null;
@@ -209,7 +209,7 @@ export interface McpTemplate {
   description?: string | null;
   mcp_entry: McpEntry;
   enabled: boolean;
-  /** 只读：在 Agent 模板 mcp 槽位引用本模板的 Agent 模板数 */
+  /** 只读：在 Agent 配置模板 mcp 槽位引用本模板的 Agent 配置模板数 */
   reference_count: number;
   data?: Record<string, unknown> | null;
   created_at?: string | null;
@@ -232,7 +232,7 @@ export interface PermissionsTemplate {
   template_name: string;
   description?: string | null;
   enabled: boolean;
-  /** 只读：在 Agent 模板 permissions 槽位引用本模板的 Agent 模板数 */
+  /** 只读：在 Agent 配置模板 permissions 槽位引用本模板的 Agent 配置模板数 */
   reference_count: number;
   body: Record<string, unknown>;
   data?: Record<string, unknown> | null;
@@ -324,7 +324,7 @@ export interface A2AOutboundTemplate {
   connect_timeout_seconds: number;
   sync_wait_seconds: number;
   enabled: boolean;
-  /** 只读：生效出站集合覆盖本模板的 Agent 模板数 */
+  /** 只读：生效出站集合覆盖本模板的 Agent 配置模板数 */
   reference_count: number;
   pending_revision?: Record<string, unknown> | null;
   last_checked_at?: string | null;

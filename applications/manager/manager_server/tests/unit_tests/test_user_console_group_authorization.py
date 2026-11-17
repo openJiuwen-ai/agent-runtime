@@ -468,6 +468,61 @@ async def test_agent_name_encodes_empty_runtime_template() -> None:
 
 
 @pytest.mark.asyncio
+async def test_agent_name_prefers_active_agent_definition_name() -> None:
+    runtime_a = _uuid("runtime-A")
+    agent_tpl = _uuid("agent-tpl-A")
+    agents = [_resource(resource_id="bot-1", ref_template_id=agent_tpl)]
+    services = [_service_resource(resource_id="svc", ref_template_id=runtime_a)]
+    templates = {runtime_a: _service_template(runtime_a)}
+    handler = _context_handler(agents, services, templates)
+    original = handler.list_records.side_effect
+    definitions = [
+        SimpleNamespace(
+            agent_id=build_agent_id(runtime_a, agent_tpl),
+            agent_name="Sales Agent",
+            agent_config_template_id=agent_tpl,
+            runtime_template_id=runtime_a,
+            deleted=False,
+        ),
+        SimpleNamespace(
+            agent_id=build_agent_id(runtime_a, agent_tpl),
+            agent_name="Stale Name",
+            agent_config_template_id=agent_tpl,
+            runtime_template_id=runtime_a,
+            deleted=True,
+        ),
+    ]
+
+    async def list_records(table: str, *args, **kwargs):
+        if table == "agent_definition":
+            filters = kwargs.get("filters")
+            if filters is None and args and isinstance(args[0], dict):
+                filters = args[0]
+            if (filters or {}).get("deleted") is False:
+                return [row for row in definitions if not row.deleted]
+            return definitions
+        return await original(table, *args, **kwargs)
+
+    handler.list_records.side_effect = list_records
+    service = UserConsoleService(handler)
+
+    with ExitStack() as stack:
+        _apply_common_patches(stack)
+        stack.enter_context(
+            patch.object(
+                runtime_config_sync,
+                "service_template_wire",
+                AsyncMock(return_value=({}, [])),
+            )
+        )
+        result = await service.list_accessible_contexts("alice", ["g-1"])
+
+    item = result[0]
+    assert item["agent_id"] == build_agent_id(runtime_a, agent_tpl)
+    assert item["agent_name"] == "Sales Agent"
+
+
+@pytest.mark.asyncio
 async def test_agent_name_falls_back_for_non_uuid_template_id() -> None:
     agents = [_resource(resource_id="bot-1", resource_name="Sales", ref_template_id="legacy-tpl")]
     handler = _context_handler(agents, [], {})

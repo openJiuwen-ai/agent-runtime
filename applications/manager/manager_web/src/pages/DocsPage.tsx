@@ -39,7 +39,7 @@ type TocEntry = {
 const TOC: TocEntry[] = [
   { key: 'getting-started', labelKey: 'docs.toc.getting-started', fallbackZh: '快速开局' },
   { key: 'overview', labelKey: 'docs.toc.overview', fallbackZh: '产品总览' },
-  { key: 'guide-agent', labelKey: 'docs.toc.guideAgent', fallbackZh: 'Agent模板管理', group: 'guides' },
+  { key: 'guide-agent', labelKey: 'docs.toc.guideAgent', fallbackZh: 'Agent配置模板管理', group: 'guides' },
   { key: 'guide-pool', labelKey: 'docs.toc.guidePool', fallbackZh: '运行时模板管理', group: 'guides' },
   { key: 'guide-cluster', labelKey: 'docs.toc.guideCluster', fallbackZh: '集群管理', group: 'guides' },
   { key: 'guide-expert-package', labelKey: 'docs.toc.guideExpertPackage', fallbackZh: '专家包配置', group: 'guides' },

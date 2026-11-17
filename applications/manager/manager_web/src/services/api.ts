@@ -479,7 +479,7 @@ export const AuthApi = {
   },
 };
 
-// ---------- IAM（组织 / 用户 / Agent 模板）----------
+// ---------- IAM（组织 / 用户 / Agent 配置模板）----------
 
 export interface Org {
   group_id: string;
@@ -1009,6 +1009,33 @@ export const AgentTemplateApi = {
 };
 export const BotApi = AgentTemplateApi;
 
+/** Agent 模板（agent_definition）：有效 Agent 配置模板 × 有效运行时模板的派生目录。 */
+export interface AgentDefinition {
+  agent_id: string;
+  agent_name: string;
+  agent_config_template_id: string;
+  agent_config_template_name: string | null;
+  runtime_template_id: string;
+  runtime_template_name: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export const AgentDefinitionApi = {
+  list: (params?: {
+    page?: number;
+    page_size?: number;
+    search?: string;
+    sort_by?: 'agent_name' | 'agent_id' | 'created_at' | 'updated_at';
+    sort_order?: 'asc' | 'desc';
+  }) => http<PageResult<AgentDefinition>>('/v1/agent-definitions/', { query: params }),
+  rename: (agentId: string, agentName: string) =>
+    http<AgentDefinition>(
+      `/v1/agent-definitions/${encodeURIComponent(agentId)}`,
+      { method: 'PATCH', body: { agent_name: agentName } },
+    ),
+};
+
 /** 实例 Agent 资源（instance_agent_resource，admin）。 */
 export const InstanceAgentResourceApi = {
   listInstanceAgentResources: (
@@ -1268,13 +1295,13 @@ export interface UserAgentContext {
   jiuwenclaw_id: string;
   /** 实例/集群展示名 */
   jiuwenclaw_name: string;
-  /** 稳定展示标识：agent_ + agent_id（43 位 base62）；无 Agent 模板 id 时回退 resource_name */
+  /** 稳定展示标识：agent_ + agent_id（43 位 base62）；无 Agent 配置模板 id 时回退 resource_name */
   agent_name: string;
-  /** 43 位 base62 可逆编码（运行时模板 + Agent 模板）；旧数据可能为空 */
+  /** 43 位 base62 可逆编码（运行时模板 + Agent 配置模板）；旧数据可能为空 */
   agent_id?: string;
   /** 运行时模板 id；无匹配运行时模板时为空串 */
   runtime_template_id?: string;
-  /** Agent 模板 id（instance_agent_resource.ref_template_id） */
+  /** Agent 配置模板 id（instance_agent_resource.ref_template_id） */
   agent_template_id?: string;
   /** Agent 资源展示名（人类可读，用于回退展示） */
   resource_name?: string;

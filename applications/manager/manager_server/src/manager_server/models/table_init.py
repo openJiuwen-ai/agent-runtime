@@ -17,6 +17,7 @@ from manager_server.models.application_config_models import (
     CRON_POLICY_TABLE_DEF,
     USER_PREFERENCE_DEFAULT_TABLE_DEF,
 )
+from manager_server.models.agent_definition_models import AGENT_DEFINITION_TABLE_DEF
 from manager_server.models.approval_models import APPROVAL_TABLE_DEFINITIONS
 from manager_server.models.deployment_models import (
     DEPLOYMENT_DEFAULT_ENV_TABLE_DEF,
@@ -84,6 +85,7 @@ ALL_TABLE_DEFINITIONS = (
     SERVICE_CONFIG_CONTAINER_TABLE_DEF,
     SERVICE_CONFIG_TEMPLATE_TABLE_DEF,
     AGENT_TEMPLATE_TABLE_DEF,
+    AGENT_DEFINITION_TABLE_DEF,
     JID_TEMPLATE_REF_TABLE_DEF,
     *INSTANCE_ACCESS_TABLE_DEFINITIONS,
     *INSTANCE_RESOURCE_TABLE_DEFINITIONS,

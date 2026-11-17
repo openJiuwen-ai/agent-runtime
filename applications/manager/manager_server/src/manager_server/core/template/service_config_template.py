@@ -46,6 +46,13 @@ def _g(row: Any, key: str, default: Any = None) -> Any:
     return getattr(row, key, default)
 
 
+async def _sync_agent_definitions(handler: DBHandler) -> None:
+    """派生数据同步；失败只告警，不阻塞模板增删改。"""
+    from manager_server.core.agent_definition.sync import reconcile_agent_definitions
+
+    await reconcile_agent_definitions(handler)
+
+
 async def _assert_service_config_deletable(
     handler: DBHandler,
     template_id: str,
@@ -202,7 +209,9 @@ class ServiceConfigTemplateService:
         payload.setdefault("created_at", now)
         payload.setdefault("updated_at", now)
         created = await self._handler.create(_TABLE, payload)
-        return await row_to_out(self._handler, created)
+        result = await row_to_out(self._handler, created)
+        await _sync_agent_definitions(self._handler)
+        return result
 
     async def get(self, template_id: str) -> ServiceConfigTemplateOut | None:
         row = await self._handler.get(_TABLE, {"template_id": template_id})
@@ -310,6 +319,7 @@ class ServiceConfigTemplateService:
         await update_service_template_on_referencing_runtimes(
             self._handler, template_id
         )
+        await _sync_agent_definitions(self._handler)
         return await row_to_out(self._handler, row)
 
     async def delete(self, template_id: str) -> bool:
@@ -318,4 +328,7 @@ class ServiceConfigTemplateService:
             return False
         await _assert_service_config_deletable(self._handler, template_id)
         # 容器表为全局目录，删模板不级联删 container 行（可能被其它模板引用）。
-        return await self._handler.delete(_TABLE, {"template_id": template_id})
+        deleted = await self._handler.delete(_TABLE, {"template_id": template_id})
+        if deleted:
+            await _sync_agent_definitions(self._handler)
+        return deleted
