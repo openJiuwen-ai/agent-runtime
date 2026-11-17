@@ -815,7 +815,6 @@ export interface AgentTemplate {
   template_id: string;
   template_name: string;
   description: string | null;
-  agent_tags: string[] | null;
   template_ref: Record<string, string[]>;
   enabled: boolean;
   data: Record<string, unknown> | null;
@@ -997,7 +996,6 @@ export const AgentTemplateApi = {
   create: (body: {
     template_name: string;
     description?: string | null;
-    agent_tags?: string[] | null;
     template_ref?: Record<string, string[]>;
     enabled?: boolean;
     data?: Record<string, unknown> | null;
@@ -1007,7 +1005,6 @@ export const AgentTemplateApi = {
     body: {
       template_name?: string;
       description?: string | null;
-      agent_tags?: string[] | null;
       template_ref?: Record<string, string[]>;
       enabled?: boolean;
       data?: Record<string, unknown> | null;

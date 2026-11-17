@@ -55,7 +55,6 @@ def model_templates() -> list[tuple[str, dict[str, Any]]]:
                 "template_name": "全局兜底-经济型",
                 "description": "无服务/Agent 命中时使用",
                 "model_type": ["default"],
-                "model_tags": ["chat"],
                 "api_base": "https://api.openai.com/v1",
                 "api_key": "sk-demo-global",
                 "model_id": "gpt-4o-mini",
@@ -83,7 +82,6 @@ def model_templates() -> list[tuple[str, dict[str, Any]]]:
             {
                 "template_name": "VIP-加强对话",
                 "model_type": ["default", "vision"],
-                "model_tags": ["chat", "vision"],
                 "api_base": "https://api.openai.com/v1",
                 "api_key": "sk-demo-vip",
                 "model_id": "gpt-5",

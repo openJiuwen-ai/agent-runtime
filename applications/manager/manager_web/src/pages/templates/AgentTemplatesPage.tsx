@@ -182,7 +182,6 @@ export function AgentTemplatesPage() {
                           onChange={(value) => handleSortChange('description', value)}
                         />
                       </th>
-                      <th>{t('agentTemplate.agentTags')}</th>
                       <th>{t('agentTemplate.templateRef')}</th>
                       <th>{t('agentTemplate.referenceCount')}</th>
                       <th>
@@ -214,7 +213,7 @@ export function AgentTemplatesPage() {
                   <tbody>
                     {items.length === 0 ? (
                       <tr>
-                        <td colSpan={8}>
+                        <td colSpan={7}>
                           <Empty text={t('common.empty')} />
                         </td>
                       </tr>
@@ -228,14 +227,6 @@ export function AgentTemplatesPage() {
                         </td>
                         <td className="text-[11px] text-muted max-w-[14rem]" title={row.description ?? undefined}>
                           {row.description ? truncate(row.description, 48) : '—'}
-                        </td>
-                        <td className="whitespace-nowrap">
-                          <div className="flex items-center gap-1 flex-wrap">
-                            {(row.agent_tags ?? []).map((tag) => (
-                              <span key={tag} className="tag">{tag}</span>
-                            ))}
-                            {!row.agent_tags?.length && <span className="text-muted text-xs">—</span>}
-                          </div>
                         </td>
                         <td className="min-w-[12rem] max-w-[20rem] align-top">
                           <JsonHoverPreview value={row.template_ref} />

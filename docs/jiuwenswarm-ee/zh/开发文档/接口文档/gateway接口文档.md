@@ -210,12 +210,9 @@ Manager REST 写
 | `model_provider` | string | 是 | 1–64 |
 | `description` | string | 否 | ≤512 |
 | `model_type` | string[] | 否 | — |
-| `model_tags` | string[] | 否 | — |
 | `parameters` | object | 否 | 推理参数 |
 | `timeout` | int | 否 | `>=1` |
 | `retry_count` | int | 否 | `>=0` |
-| `enable_streaming` | bool | 否 | — |
-| `enable_function_calling` | bool | 否 | — |
 | `verify_ssl` | bool | 否 | — |
 | `enabled` | bool | 否 | — |
 | `data` | object | 否 | 可含 `headers`（对象，键值均为字符串；最多 50 项） |
@@ -230,7 +227,6 @@ Manager REST 写
   "template_name": "兜底-经济型",
   "description": "Fallback Agent 使用",
   "model_type": ["default"],
-  "model_tags": ["chat"],
   "api_base": "https://api.openai.com/v1",
   "api_key": "sk-demo-global",
   "model_id": "gpt-4o-mini",
@@ -319,7 +315,6 @@ Manager REST 写
 | `model_id` | string | 是 | — |
 | `model_provider` | string | 是 | — |
 | `description` | string | 否 | ≤512 |
-| `embed_tags` | string[] | 否 | — |
 | `parameters` | object | 否 | — |
 | `client_config` | object | 否 | — |
 | `enabled` | bool | 否 | — |
@@ -642,7 +637,6 @@ Manager REST 写
 | `template_name` | string | 是 | — |
 | `template_ref` | object | 否 | `dict[str, list[str]]`，缺省 `{}`；服务端会规范化 |
 | `description` | string | 否 | — |
-| `agent_tags` | string[] | 否 | — |
 | `enabled` | bool | 否 | — |
 | `data` | object | 否 | — |
 
@@ -657,7 +651,6 @@ Manager REST 写
     "model": ["a1000001-0000-4000-8000-0000000000m1"],
     "mcp": ["mcp-0001"]
   },
-  "agent_tags": ["sales"],
   "enabled": true
 }
 ```
@@ -703,7 +696,6 @@ Manager REST 写
 | `credential` | object | 是 | 见下；创建时 **禁止** `operation=keep` |
 | `updated_at` | datetime | 是 | — |
 | `description` | string | 否 | — |
-| `a2a_tags` | string[] | 否 | — |
 | `data` | object | 否 | 可含 `network_policy` |
 
 

@@ -9,7 +9,6 @@ import { useFormDirty } from '../../hooks/useFormDirty';
 import { AgentTemplate, AgentTemplateApi, ApiError } from '../../services/api';
 import { toast } from '../../stores/uiStore';
 import { bumpGuideRevision } from '../../stores/guideStore';
-import { fromCommaList, toCommaList } from '../../utils/format';
 import { jsonContentForValidation } from '../../utils/jsonExample';
 import {
   findSingleValueTemplateRefViolation,
@@ -41,7 +40,6 @@ function FieldLabel({ children, required }: { children: ReactNode; required?: bo
 interface FormState {
   template_name: string;
   description: string;
-  agent_tags: string;
   template_ref: TemplateRefMap;
   custom_config_json: string;
 }
@@ -49,7 +47,6 @@ interface FormState {
 const empty: FormState = {
   template_name: '',
   description: '',
-  agent_tags: '',
   template_ref: {},
   custom_config_json: '',
 };
@@ -92,7 +89,6 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
       ? {
           template_name: template.template_name.slice(0, FIELD_MAX_LENGTH.template_name),
           description: (template.description ?? '').slice(0, FIELD_MAX_LENGTH.description),
-          agent_tags: toCommaList(template.agent_tags),
           template_ref: normalizeTemplateRefFromApi(template.template_ref),
           custom_config_json: customConfigText(template.data),
         }
@@ -134,7 +130,6 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
     return {
       template_name: form.template_name.trim(),
       description: form.description.trim() || null,
-      agent_tags: fromCommaList(form.agent_tags),
       template_ref: form.template_ref,
       data: form.custom_config_json !== customConfigText(currentTemplate?.data ?? null)
         ? { ...(currentTemplate?.data ?? {}), custom_config: customConfig.value }
@@ -194,15 +189,6 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
             value={form.description}
             maxLength={FIELD_MAX_LENGTH.description}
             onChange={(v) => update('description', v)}
-          />
-        </div>
-        <div className="md:col-span-2">
-          <FieldLabel>{t('agentTemplate.agentTags')}</FieldLabel>
-          <input
-            className="input"
-            placeholder={t('agentTemplate.agentTagsHint')}
-            value={form.agent_tags}
-            onChange={(e) => update('agent_tags', e.target.value)}
           />
         </div>
         <div className="md:col-span-2">

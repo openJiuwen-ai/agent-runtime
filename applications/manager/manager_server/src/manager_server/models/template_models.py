@@ -33,8 +33,6 @@ MODEL_TEMPLATE_TABLE_DEF = TableDefinition(
         ColumnDefinition("parameters", "json", nullable=True),
         ColumnDefinition("timeout", "integer", nullable=False, default=360),
         ColumnDefinition("retry_count", "integer", nullable=False, default=3),
-        ColumnDefinition("enable_streaming", "boolean", nullable=False, default=True),
-        ColumnDefinition("enable_function_calling", "boolean", nullable=False, default=True),
         ColumnDefinition("verify_ssl", "boolean", nullable=False, default=False),
         ColumnDefinition("enabled", "boolean", nullable=False, default=True),
         ColumnDefinition("data", "json", nullable=True),
