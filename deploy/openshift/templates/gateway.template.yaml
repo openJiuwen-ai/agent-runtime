@@ -43,7 +43,7 @@ spec:
               containerPort: 19001
           readinessProbe:
             httpGet:
-              path: /api/v1/ready
+              path: /api/v1/health
               port: web-ws
             initialDelaySeconds: 10
             periodSeconds: 5
@@ -51,7 +51,7 @@ spec:
             failureThreshold: 3
           livenessProbe:
             httpGet:
-              path: /api/health
+              path: /api/v1/health
               port: web-ws
             initialDelaySeconds: 30
             periodSeconds: 20
