@@ -104,6 +104,7 @@ export function CreateDeploymentModal({ open, defaults, onClose, onCreated }: Pr
   const [imageTag, setImageTag] = useState('');
   /** 逐键覆盖草稿（仅填写的键会提交；密码键留空不提交） */
   const [envDraft, setEnvDraft] = useState<Record<string, string>>({});
+  const [envText, setEnvText] = useState('');
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -193,6 +194,29 @@ export function CreateDeploymentModal({ open, defaults, onClose, onCreated }: Pr
     } finally {
       setSaving(false);
     }
+  };
+
+  const importEnvText = () => {
+    const imported: Record<string, string> = {};
+    for (const raw of envText.split('\n')) {
+      const line = raw.trim();
+      if (!line || line.startsWith('#') || !line.includes('=')) continue;
+      const eq = line.indexOf('=');
+      const key = line.slice(0, eq).trim();
+      const value = line.slice(eq + 1).trim();
+      if (!/^[A-Za-z0-9_]+$/.test(key)) continue;
+      imported[key] =
+        value.length >= 2 && value[0] === value[value.length - 1] && (value[0] === '"' || value[0] === "'")
+          ? value.slice(1, -1)
+          : value;
+    }
+    const keys = Object.keys(imported);
+    if (keys.length === 0) {
+      toast('warn', t('deployments.form.envImportEmpty'));
+      return;
+    }
+    setEnvDraft((prev) => ({ ...imported, ...prev }));
+    toast('success', t('deployments.form.envImportDone', { count: keys.length }));
   };
 
   const renderEnvRow = (key: string) => {
@@ -353,6 +377,22 @@ export function CreateDeploymentModal({ open, defaults, onClose, onCreated }: Pr
           </button>
           {advancedOpen && (
             <div className="flex flex-col gap-3 mt-2">
+              <div>
+                <FieldLabel>{t('deployments.form.envImport')}</FieldLabel>
+                <textarea
+                  className="input mono text-xs min-h-[7rem]"
+                  value={envText}
+                  placeholder={t('deployments.form.envImportPlaceholder')}
+                  onChange={(e) => setEnvText(e.target.value)}
+                  spellCheck={false}
+                />
+                <div className="flex items-center gap-2 mt-1">
+                  <button type="button" className="btn sm" onClick={importEnvText}>
+                    {t('deployments.form.envImportBtn')}
+                  </button>
+                </div>
+              </div>
+
               <div>
                 <FieldLabel>{t('deployments.form.imageTag')}</FieldLabel>
                 <input

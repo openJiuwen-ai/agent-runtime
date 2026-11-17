@@ -18,8 +18,9 @@ import {
 import { TableColumnFilter } from '../../components/TableColumnFilter';
 import { formatTime } from '../../utils/format';
 import { toast } from '../../stores/uiStore';
-import { ApiError } from '../../services/api';
+import { ApiError, DeploymentApi } from '../../services/api';
 import { ImportClusterModal } from './modal/ImportClusterModal';
+import { CreateDeploymentModal } from '../deployment/CreateDeploymentModal';
 import { useGuideAutoOpen } from '../../hooks/useGuideAutoOpen';
 import { bumpGuideRevision } from '../../stores/guideStore';
 import { WorkspaceNote } from '../../components/WorkspaceNote';
@@ -235,7 +236,7 @@ function InstanceListTable({
                           {t('redesign.clusterWorkbench', { defaultValue: '配置工作台' })}
                         </button>
                         <button className="btn primary sm" onClick={() => navigate(`/instances/${encodeURIComponent(instance.jiuwenclaw_id)}/setup`)}>{t('redesign.continueClusterSetup', { defaultValue: '继续配置' })} →</button>
-                        <ClusterManagementActions compact instanceId={instance.jiuwenclaw_id} name={instance.jiuwenclaw_name} onDeleted={onChanged} />
+                        <ClusterManagementActions compact instanceId={instance.jiuwenclaw_id} name={instance.jiuwenclaw_name} namespace={instance.namespace} onDeleted={onChanged} />
                       </div>
                     </td>
                   </tr>
@@ -300,7 +301,9 @@ export function InstanceListPage() {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [viewMode, setViewMode] = useState<ViewMode>(() => readViewMode());
   const [importOpen, setImportOpen] = useState(false);
+  const [deployOpen, setDeployOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const deployDefaults = useAsync(() => DeploymentApi.getDefaults(), []);
 
   /** 引导跳转：其他页面点「未创建集群」跳过来时自动打开新建弹框 */
   useGuideAutoOpen('instanceCreate', () => navigate('/configuration-wizard?from=cluster'));
@@ -424,7 +427,7 @@ export function InstanceListPage() {
         <div className="cluster-card__actions">
           <button type="button" className="btn" onClick={() => navigate(`/instances/${instance.jiuwenclaw_id}/cluster-config`)}>{t('redesign.clusterWorkbench', { defaultValue: '配置工作台' })}</button>
           <button type="button" className="btn primary" onClick={() => navigate(`/instances/${instance.jiuwenclaw_id}/setup`)}>{t('redesign.continueClusterSetup', { defaultValue: '继续配置' })} →</button>
-          <div className="cluster-card__management-actions"><ClusterManagementActions compact size="md" instanceId={instance.jiuwenclaw_id} name={instance.jiuwenclaw_name} onDeleted={refresh} /></div>
+          <div className="cluster-card__management-actions"><ClusterManagementActions compact size="md" instanceId={instance.jiuwenclaw_id} name={instance.jiuwenclaw_name} namespace={instance.namespace} onDeleted={refresh} /></div>
         </div>
       </article>
     );
@@ -447,7 +450,14 @@ export function InstanceListPage() {
           <ViewModeToggle value={viewMode} onChange={handleViewModeChange} />
           <button className="btn sm" disabled={refreshing} onClick={() => void handleRefresh()}>{refreshing ? t('common.loading') : t('common.refresh')}</button>
           <button className="btn sm" onClick={() => setImportOpen(true)}>{t('topology.import')}</button>
-          <button className="btn primary sm" onClick={() => navigate('/configuration-wizard?from=cluster')}>+ {t('redesign.createCluster', { defaultValue: '新建集群' })}</button>
+          <button
+            className="btn primary sm"
+            title={t('deployments.action.upHint')}
+            onClick={() => setDeployOpen(true)}
+          >
+            + {t('topology.deployCluster')}
+          </button>
+          <button className="btn sm" onClick={() => navigate('/configuration-wizard?from=cluster')}>+ {t('redesign.createCluster', { defaultValue: '新建集群' })}</button>
         </div>
         </div>
 
@@ -500,6 +510,15 @@ export function InstanceListPage() {
         </div>
       </div>
 
+      <CreateDeploymentModal
+        open={deployOpen}
+        defaults={deployDefaults.data ?? null}
+        onClose={() => setDeployOpen(false)}
+        onCreated={(deploymentId) => {
+          setDeployOpen(false);
+          void navigate(`/deployments/${deploymentId}`);
+        }}
+      />
       <ImportClusterModal
         open={importOpen}
         onClose={() => setImportOpen(false)}

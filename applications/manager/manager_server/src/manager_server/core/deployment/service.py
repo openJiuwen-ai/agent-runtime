@@ -114,7 +114,9 @@ class DeploymentService:
             raise DeploymentError(f"部署功能不可用: {reason}", status_code=503)
         namespace = str(body.namespace or "").strip()
         defaults = await self.get_defaults()
-        overrides = dict(body.env or {})
+        # .env.custom 全量文本导入：解析后作为覆盖基底，显式 env 键优先于文本键
+        parsed_text = env_builder.parse_env_custom_text(body.env_custom_text or "")
+        overrides = {**parsed_text, **dict(body.env or {})}
         deploy_mode = str(body.deploy_mode or "full").strip()
         overrides.setdefault("AGENT_RUNTIME_DEPLOY_MODE", deploy_mode)
         merged = merge_env(defaults, overrides)
@@ -139,7 +141,15 @@ class DeploymentService:
         # defaults_snapshot + params.env 重新 merge 生成 .env.custom，
         # 只存顶层字段会导致实际执行回落到 defaults 里的模式（E2E 实测回归）
         params = body.model_dump(exclude_none=True)
-        params.setdefault("env", {})["AGENT_RUNTIME_DEPLOY_MODE"] = deploy_mode
+        # 文本导入的键必须折叠进持久化 params.env：_execute_task 认领时按
+        # defaults_snapshot + params.env 重新 merge，只存显式 env 会丢导入值
+        # （与 deploy_mode 持久化同类问题）；原始文本不落库（减少一份敏感明文）
+        params.pop("env_custom_text", None)
+        persist_text = {
+            k: v for k, v in parsed_text.items() if k not in env_builder.FORCED_KEY_NAMES
+        }
+        params["env"] = {**persist_text, **dict(params.get("env") or {})}
+        params["env"]["AGENT_RUNTIME_DEPLOY_MODE"] = deploy_mode
         params["action"] = str(getattr(body, "action", "up") or "up")
         row_data = {
             "deployment_id": deployment_id,
