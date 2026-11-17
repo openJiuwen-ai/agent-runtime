@@ -8,7 +8,7 @@ metadata:
 data:
   AGENT_SERVER_URL: ws://jiuwenswarm-agentserver:18092
   DEPLOYMENT_MODE: distributed
-  EXTENSION_DIRS: /app/jiuwenswarm/packages/jiuwenswarm-ee/gateway/extensions
+  EXTENSION_DIRS: /app/agent-gateway/agent_gateway/extensions
   GATEWAY_AGENT_CLIENT_MODE: <<GATEWAY_AGENT_CLIENT_MODE>>
   GATEWAY_AGENT_HTTP_MAX_CONNECTIONS: "200"
   GATEWAY_AGENT_HTTP_MAX_KEEPALIVE: "20"
