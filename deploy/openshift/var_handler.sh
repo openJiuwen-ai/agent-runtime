@@ -126,7 +126,6 @@ check_user_backend_vars() {
     || error "请在 $CUSTOM_ENV_FILE 的 USER_BACKEND_DB_USER 中设置专用只读账号"
   [ -n "${DEPLOY_VARS[USER_BACKEND_DB_PASSWORD]}" ] \
     || error "请在 $CUSTOM_ENV_FILE 中设置 USER_BACKEND_DB_PASSWORD"
-  DEPLOY_VARS[USER_BACKEND_DB_PASSWORD_ENCODED]=$(printf '%s' "${DEPLOY_VARS[USER_BACKEND_DB_PASSWORD]}" | base64 | tr -d '\n')
 }
 
 # StorageClass：DNS subdomain 规范；留空使用集群默认（STORAGE_CLASS_VARS）
@@ -452,6 +451,8 @@ check_vars() {
   check_image_vars
   check_replicas_vars
   check_user_backend_vars
+  # 基础组件也可先创建共用 Secret；渲染前保留密码原始字节，避免被模板替换改写。
+  DEPLOY_VARS[USER_BACKEND_DB_PASSWORD_ENCODED]=$(printf '%s' "${DEPLOY_VARS[USER_BACKEND_DB_PASSWORD]}" | base64 | tr -d '\n')
   resolve_deploy_mode_vars         # 三模式派生：gateway 条件 env + off 单副本校验
   resolve_sandbox_type_vars        # 沙箱类型枚举校验（off|kata|jiuwenbox，jiuwenbox 仅 k8s）
   check_storage_class_vars

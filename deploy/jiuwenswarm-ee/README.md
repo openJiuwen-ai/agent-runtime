@@ -221,8 +221,8 @@ JiuwenSwarm_DeployTool_<VERSION>_<ARCH>_product/
 每当升级新版本服务时，对于**NFS、NFS-SC、MariaDB、MySQL、PostgreSQL、MinIO、Log** 等全局基础依赖组件应尽量保持不变，无需重复部署。**Redis** 已改为按命名空间独立部署、随业务实例隔离（不支持单独部署），升级业务模块时各命名空间下的 Redis 实例保持不变即可。仅需对业务服务**Gateway、Web、AgentRuntime**进行版本替换：在旧版本部署目录中，依次卸载业务模块；随后切换至新版本部署工具目录，启动对应新版业务模块。
 
 默认 `deploy.sh up` 同时部署 `web` 和 `user-backend`。在 `.env.custom` 填写
-`USER_BACKEND_IMAGE`、`USER_BACKEND_DB_USER` 和 `USER_BACKEND_DB_PASSWORD`。该 DB 账号只读取
-Manager DB 的共享视图，密码发布到用户面后端专用的 Kubernetes Secret。Identity 和数据库只读视图可用后，
+`USER_BACKEND_IMAGE`、`USER_BACKEND_DB_USER` 和 `USER_BACKEND_DB_PASSWORD`。该独立 DB 账号只读取
+Manager DB 的共享视图，密码与其他组件凭据一起写入共用 Kubernetes Secret。Identity 和数据库只读视图可用后，
 后端 Pod 进入就绪状态。
 
 ### 2.3 配置参数（选填）

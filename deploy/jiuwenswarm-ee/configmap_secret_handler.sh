@@ -7,12 +7,15 @@ render_secret_configmap() {
     local name="${DEPLOY_VARS["SECRET_CM_NAME"]}"
     local file="${CONFIG["SECRET_CM_FILE"]}"
 
-    # 本次部署负责写入的密码键。
+    # 本次部署负责写入的密码键，包含共用 Manager DB 的用户面只读账号。
     local own_keys=()
     local m
     for m in "${DB_MODULES[@]}"; do
         own_keys+=("${m}_DB_PASSWORD")
     done
+    if [[ " ${MODULES[*]} " == *" USER-BACKEND "* ]]; then
+        own_keys+=("USER_BACKEND_DB_PASSWORD")
+    fi
     own_keys+=("REDIS_PASSWORD" "OBS_SECRET_KEY")
 
     local key skey b64
@@ -51,6 +54,7 @@ uninstall_secret_configmap() {
         "${DEPLOY_VARS["GATEWAY_NAME"]}"
         "${DEPLOY_VARS["MANAGER_SERVER_NAME"]}"
         "${DEPLOY_VARS["WEB_NAME"]}"
+        "jiuwenswarm-user-backend"
         "${DEPLOY_VARS["AGENT_RUNTIME_NAME"]}"
         "${DEPLOY_VARS["AGENT_SERVER_NAME"]}"
     )

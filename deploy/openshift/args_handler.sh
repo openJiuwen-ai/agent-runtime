@@ -38,6 +38,10 @@ parse_args() {
   # 目标组件：显式指定优先（按规范依赖序排列）；未指定则取组默认
   if [ ${#TARGETS[@]} -gt 0 ]; then
     TARGETS_EXPLICIT=1
+    if [ "$CMD" = up ] && in_array user-backend "${TARGETS[@]}" \
+        && ! in_array secret "${TARGETS[@]}"; then
+      TARGETS+=(secret)
+    fi
     sort_targets
   elif [ "$SCOPE" = manager ]; then
     TARGETS=("${MANAGER_TARGETS[@]}")
