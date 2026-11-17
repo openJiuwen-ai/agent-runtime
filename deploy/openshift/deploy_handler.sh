@@ -38,6 +38,86 @@ filter_targets_by_external_mode() {
   TARGETS=("${no_redis[@]}")
 }
 
+# nfs 目标统一解析（up 与 down 对称）：nfs 为部署/卸载的唯一用户入口目标（nfs-sc 显式
+# 指定仅限 up --render-only 手动渲染入口，parse_args 校验），实际组件集按部署平台自动派生：
+#   openshift 形态          → nfs-sc（内置 NFS server 为 privileged + hostNetwork，
+#                             openshift 默认 SCC 不放行）
+#   k8s + 外部 NFS          → nfs-sc（内置 server 无需部署，供给器以外部 NFS 为数据源；
+#                             按 NFS_SERVER_ADDR 配置判定，--render-only 离线渲染同样生效）
+#   k8s + 内置模式（NFS_SERVER_ADDR 留空）：
+#     amd64 部署节点        → nfs + nfs-sc（server 与供给链一次拉起，业务 PVC 即刻可用）
+#     非 amd64 部署节点     → nfs-sc（NFS server 在 arm64 等架构上运行极不稳定；
+#                             须配置外部 NFS_SERVER_ADDR 作为数据源）
+#     --render-only         → 离线无法探测节点架构，目标保持原样（正式部署时再按架构自适应）
+#   down 优先按 conf/ 上次部署产物对账卸载（up 部署了什么就卸载什么，不受当前环境配置
+#   漂移影响）；conf/ 无 NFS 产物时回退到与 up 相同的环境判定
+# 前置条件：parse_args 与 check_dependency 已完成（节点架构探测依赖 kubectl；节点识别依赖 yq）；
+# 须先于 check_vars 调用，使 check_nfs_component_vars / resolve_storage_class_vars 看到解析后的目标
+filter_targets_by_nfs_platform() {
+  case "${CMD:-}" in
+    up | down) ;;
+    *) return 0 ;;
+  esac
+  in_array nfs "${TARGETS[@]:-}" || return 0
+  local verb="启动" keep_nfs=1 need_sc=0 comp arch
+  [ "$CMD" = down ] && verb="卸载"
+  if [ "$CMD" = down ] && { [ -f "$CONF_DIR/nfs.yaml" ] || [ -f "$CONF_DIR/nfs-sc.yaml" ]; }; then
+    # 按 conf/ 产物对账：上次部署了哪个 NFS 组件就卸哪个（清单缺失由 main 前置校验拦截）
+    [ -f "$CONF_DIR/nfs.yaml" ] || keep_nfs=0
+    [ -f "$CONF_DIR/nfs-sc.yaml" ] && need_sc=1
+    local conf_nfs=无 conf_sc=无
+    [ -f "$CONF_DIR/nfs.yaml" ] && conf_nfs=有
+    [ -f "$CONF_DIR/nfs-sc.yaml" ] && conf_sc=有
+    info "按 conf/ 上次部署产物卸载（nfs-server 清单: ${conf_nfs}，nfs-sc 清单: ${conf_sc}）"
+  elif ! is_k8s_cluster; then
+    keep_nfs=0
+    need_sc=1
+    info "openshift 集群，${verb} nfs-sc"
+  elif [ -n "${DEPLOY_VARS["NFS_SERVER_ADDR"]:-}" ]; then
+    keep_nfs=0
+    need_sc=1
+    info "外部 NFS（${DEPLOY_VARS["NFS_SERVER_ADDR"]}），${verb} nfs-sc"
+  elif [ "${DEPLOY_VARS["RENDER_ONLY"]}" = "true" ]; then
+    return 0   # k8s 内置模式离线渲染：无法探测节点架构，目标保持原样（正式部署时再自适应）
+  elif [ "$CMD" = up ]; then
+    fetch_current_node_name
+    arch=$(kubectl get node "${DEPLOY_VARS["CURRENT_NODE_NAME"]}" \
+      -o jsonpath='{.status.nodeInfo.architecture}' 2>/dev/null)
+    [ -n "$arch" ] \
+      || error "无法读取节点 ${DEPLOY_VARS["CURRENT_NODE_NAME"]} 架构（status.nodeInfo.architecture 为空），nfs 目标平台自适应失败"
+    need_sc=1
+    if [ "$arch" != amd64 ]; then
+      keep_nfs=0
+      info "${arch} 架构节点 k8s 集群，${verb} nfs-sc"
+      warning "未配置 NFS_SERVER_ADDR：nfs-sc 数据源缺失，请先在 .env.custom 配置指向外部 NFS server"
+    else
+      info "amd64 架构节点 k8s 集群，${verb} nfs + nfs-sc"
+    fi
+  else
+    # down 回退（conf/ 无 NFS 产物）：卸载不被节点识别 / 架构探测失败阻塞——
+    # 失败时按 nfs + nfs-sc 双组件兜底（不存在即空操作）
+    arch=$(kubectl get nodes -o json 2>/dev/null \
+      | HOST="$(hostname)" yq -r '.items[] | select(.status.addresses[]? | select(.type == "Hostname") | .address == strenv(HOST)) | .status.nodeInfo.architecture' 2>/dev/null | head -1)
+    need_sc=1
+    if [ -z "$arch" ]; then
+      warning "无法识别部署节点架构，本次卸载按 nfs + nfs-sc 双组件兜底"
+    elif [ "$arch" != amd64 ]; then
+      keep_nfs=0
+      info "${arch} 架构节点 k8s 集群，${verb} nfs-sc"
+    else
+      info "amd64 架构节点 k8s 集群，${verb} nfs + nfs-sc"
+    fi
+  fi
+  local -a adjusted=()
+  for comp in "${TARGETS[@]}"; do
+    [ "$comp" = nfs ] && [ "$keep_nfs" = 0 ] && comp=nfs-sc
+    in_array "$comp" "${adjusted[@]}" || adjusted+=("$comp")
+  done
+  [ "$need_sc" = 1 ] && ! in_array nfs-sc "${adjusted[@]}" && adjusted+=("nfs-sc")
+  TARGETS=("${adjusted[@]}")
+  sort_targets
+}
+
 resolve_targets() {
   local comp dep
   local -a extra=()
@@ -243,7 +323,7 @@ read_pods() { # $1=label selector $2=期望镜像（空格分隔多值；空=不
   [ "$code" = 200 ] || { echo "0 0 0"; return 0; }
   total=$(yq '.items | length' "$resp" 2>/dev/null)
   # Pod 级就绪：有容器状态且全部容器 ready（主+sidecar 多容器 Pod 需全部就绪）
-  ready=$(yq '[.items[] | select((.status.containerStatuses // []) | length > 0) | select([.status.containerStatuses[].ready] | all)] | length' "$resp" 2>/dev/null)
+  ready=$(yq '[.items[] | select(.metadata.deletionTimestamp == null) | select((.status.containerStatuses // []) | length > 0) | select([.status.containerStatuses[].ready] | all)] | length' "$resp" 2>/dev/null)
   if [ -n "$want_img" ]; then
     # Pod 级镜像校验：Pod 的全部容器镜像都在期望集合内（期望集合空格分隔多值）
     local -a exp=($want_img)
