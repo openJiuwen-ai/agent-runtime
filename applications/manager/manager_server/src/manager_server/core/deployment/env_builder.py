@@ -125,6 +125,28 @@ def forced_env() -> dict:
     return {"CLUSTER_TYPE": cluster_type, "MODE": "product"}
 
 
+def parse_env_custom_text(text: str) -> dict:
+    """解析用户粘贴的 .env.custom 全量文本（单行 KEY="value" / KEY=value）。
+
+    跳过注释与空行；引号成对剥离；未识别行忽略（宽容导入）。多行跨行值不支持
+    （校验层本身禁引号/换行注入）。键值白名单与合法性由 merge_env 统一把关。
+    """
+    result: dict[str, str] = {}
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        if not key.isidentifier():
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        result[key] = value
+    return result
+
+
 def validate_env_value(key: str, value: str) -> str:
     """校验单个 env 值，返回归一化后的值；非法抛 ``ValueError``。"""
     text = str(value).strip()

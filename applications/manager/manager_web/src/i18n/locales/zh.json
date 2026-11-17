@@ -154,7 +154,7 @@
   "topology": {
     "title": "集群管理",
     "subtitle": "管理 {{productName}} 集群",
-    "createInstance": "新建集群",
+    "createInstance": "注册集群",
     "instanceStatus": "集群状态",
     "gatewayStatus": "Gateway 状态",
     "runtimeStatus": "Runtime 状态",
@@ -198,7 +198,14 @@
     "preflightBlocked": "预检发现阻塞项，请修改 Excel 或处理目标环境冲突后重新选择文件。",
     "importSuccess": "导入完成：创建 {{created}} 项，复用 {{reused}} 项",
     "exportSuccess": "集群配置 Excel 已导出",
-    "exportFailed": "导出失败："
+    "exportFailed": "导出失败：",
+    "deployCluster": "部署集群",
+    "unbind": "解绑",
+    "unbindConfirm": "解绑仅移除管理面的注册记录（探活/授权/配置下发），不影响集群本身运行。确认解绑该集群？",
+    "unbindSuccess": "已解绑",
+    "undeploy": "卸载",
+    "undeployConfirm": "将向命名空间 {{ns}} 发起卸载任务（倒序删除产品组件，PVC 数据一并删除且不可恢复），并解绑该集群的注册记录。确认继续？",
+    "undeployStarted": "卸载任务已发起，正在跳转任务详情"
   },
   "instanceForm": {
     "name": "集群名称",
@@ -1039,7 +1046,12 @@
       "envGroupReplicas": "副本",
       "envGroupOthers": "其他",
       "envSensitivePlaceholder": "留空则沿用默认值",
-      "envHint": "仅提交填写或修改的键；密码类键留空表示沿用已保存的默认值"
+      "envHint": "仅提交填写或修改的键；密码类键留空表示沿用已保存的默认值",
+      "envImport": "从 .env.custom 导入",
+      "envImportPlaceholder": "粘贴完整 .env.custom 文本，解析后覆盖下方对应键",
+      "envImportBtn": "解析导入",
+      "envImportDone": "已导入 {{count}} 个键（导入值可在此逐键修改）",
+      "envImportEmpty": "未解析到有效的 KEY=value 行"
     },
     "detail": {
       "toolVersion": "工具版本",

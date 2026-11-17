@@ -22,6 +22,11 @@ class DeploymentCreateBody(BaseModel):
         default_factory=dict,
         description="默认参数覆盖（白名单键：镜像/副本/外置 DB/Redis/OBS 等）",
     )
+    env_custom_text: str | None = Field(
+        default=None,
+        max_length=32768,
+        description=".env.custom 全量文本导入（解析后作为覆盖，显式 env 优先于文本）",
+    )
     wait_timeout_secs: int | None = Field(
         default=None, ge=60, le=14400, description="Pod 就绪等待预算（透传 deploy.sh）"
     )
