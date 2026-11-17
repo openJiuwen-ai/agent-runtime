@@ -15,12 +15,13 @@ from manager_server.infrastructure.db import create_db_handler
 async def create_views(connection: AsyncConnection, schema: str | None = None) -> None:
     """Publish stable, explicitly enumerated projections."""
     dialect = connection.dialect
+    mysql_family = dialect.name in {"mysql", "mariadb"}
     quote = dialect.identifier_preparer.quote
     prefix = f"{quote(schema)}." if schema else ""
     if dialect.name == "postgresql":
         http = "data ->> 'gateway_web_http_host'"
         ws = "data ->> 'gateway_web_ws_host'"
-    elif dialect.name == "mysql":
+    elif mysql_family:
         http = "NULLIF(JSON_UNQUOTE(JSON_EXTRACT(data, '$.gateway_web_http_host')), 'null')"
         ws = "NULLIF(JSON_UNQUOTE(JSON_EXTRACT(data, '$.gateway_web_ws_host')), 'null')"
     else:
@@ -34,7 +35,7 @@ async def create_views(connection: AsyncConnection, schema: str | None = None) -
          "jiuwenclaw_id, resource_id, resource_name, match_expr, enabled, expires_at"),
     )
     for view, table, columns in views:
-        security = "SQL SECURITY DEFINER " if dialect.name == "mysql" else ""
+        security = "SQL SECURITY DEFINER " if mysql_family else ""
         await connection.execute(text(
             f"CREATE OR REPLACE {security}VIEW {prefix}{quote(view)} "
             f"AS SELECT {columns} FROM {prefix}{quote(table)}"

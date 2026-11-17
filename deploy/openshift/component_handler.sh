@@ -103,7 +103,7 @@ component_deps() {
                       echo "secret ${DEPLOY_VARS["DB_TYPE"]} redis minio agentserver"
                     fi;;
     web)            echo "secret minio";;
-    user-backend)   echo "secret ${DEPLOY_VARS["DB_TYPE"]}";;
+    user-backend)   echo "${DEPLOY_VARS["DB_TYPE"]}";;
     identity)       echo "secret ${DEPLOY_VARS["DB_TYPE"]}";;
     manager-server) echo "secret ${DEPLOY_VARS["DB_TYPE"]} redis";;
     runtime)        echo "secret ${DEPLOY_VARS["DB_TYPE"]} redis";;

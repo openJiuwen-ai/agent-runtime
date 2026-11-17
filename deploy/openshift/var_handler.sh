@@ -126,6 +126,7 @@ check_user_backend_vars() {
     || error "请在 $CUSTOM_ENV_FILE 的 USER_BACKEND_DB_USER 中设置专用只读账号"
   [ -n "${DEPLOY_VARS[USER_BACKEND_DB_PASSWORD]}" ] \
     || error "请在 $CUSTOM_ENV_FILE 中设置 USER_BACKEND_DB_PASSWORD"
+  DEPLOY_VARS[USER_BACKEND_DB_PASSWORD_ENCODED]=$(printf '%s' "${DEPLOY_VARS[USER_BACKEND_DB_PASSWORD]}" | base64 | tr -d '\n')
 }
 
 # StorageClass：DNS subdomain 规范；留空使用集群默认（STORAGE_CLASS_VARS）
