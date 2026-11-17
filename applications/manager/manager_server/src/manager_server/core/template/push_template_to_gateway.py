@@ -39,6 +39,7 @@ from manager_server.models.template_models import (
     MODEL_TEMPLATE_TABLE_DEF,
     EXPERT_PACKAGE_TEMPLATE_TABLE_DEF,
     PERMISSIONS_TEMPLATE_TABLE_DEF,
+    REACT_TEMPLATE_TABLE_DEF,
     SKILL_PREBUILT_TEMPLATE_TABLE_DEF,
 )
 from manager_server.schemas.template_slot_schemas import (
@@ -49,8 +50,13 @@ from manager_server.schemas.template_slot_schemas import (
     MCP_SLOT,
     MODEL_TEMPLATE_SLOTS,
     PERMISSIONS_SLOT,
+    REACT_SLOT,
     SERVICE_CONFIG_SLOT,
     SKILL_PREBUILT_SLOT,
+)
+from manager_server.core.template.compressor_model_resolver import (
+    find_react_templates_referencing_model,
+    resolve_react_body_models,
 )
 
 logger = get_logger(__name__)
@@ -123,6 +129,11 @@ TEMPLATE_KIND_SPECS: dict[str, TemplateKindSpec] = {
         table_name=PERMISSIONS_TEMPLATE_TABLE_DEF.table_name,
         slot_keys=frozenset({PERMISSIONS_SLOT}),
     ),
+    "react_templates": TemplateKindSpec(
+        config_section="react_templates",
+        table_name=REACT_TEMPLATE_TABLE_DEF.table_name,
+        slot_keys=frozenset({REACT_SLOT}),
+    ),
     "extension_config_templates": TemplateKindSpec(
         config_section="extension_config_templates",
         table_name=EXTENSION_CONFIG_TEMPLATE_TABLE_DEF.table_name,
@@ -159,6 +170,7 @@ _TEMPLATE_HTTP_PATHS: dict[str, str] = {
     "skill_prebuilt_templates": "/api/v1/skill-prebuilt-templates",
     "expert_package_templates": "/api/v1/expert-package-templates",
     "permissions_templates": "/api/v1/permissions-templates",
+    "react_templates": "/api/v1/react-templates",
     "mcp_templates": "/api/v1/mcp-templates",
     AGENT_TEMPLATES_KIND: "/api/v1/agent-templates",
 }
@@ -172,6 +184,7 @@ _ROW_TO_OUT_MODULES: dict[str, str] = {
     "skill_prebuilt_templates": "manager_server.core.template.skill_prebuilt_template",
     "expert_package_templates": "manager_server.core.template.expert_package_template",
     "permissions_templates": "manager_server.core.template.permissions_template",
+    "react_templates": "manager_server.core.template.react_template",
     "extension_config_templates": "manager_server.core.template.extension_config_template",
     "mcp_templates": "manager_server.core.template.mcp_template",
     AGENT_TEMPLATES_KIND: "manager_server.core.template.agent_template",
@@ -716,6 +729,17 @@ async def _build_sync_payloads(
             payload = row_to_sync(row)
             if _normalize_kind(kind) == "a2a_outbound_templates":
                 payload = await _with_a2a_network_policy(handler, payload)
+            if _normalize_kind(kind) == "react_templates" and isinstance(payload.get("body"), dict):
+                try:
+                    payload["body"] = await resolve_react_body_models(handler, payload["body"])
+                except ValueError as exc:
+                    # 单条 react 模板的模型引用解析失败不应中止整批同步。
+                    logger.warning(
+                        "[push_template] skip react template %s: %s",
+                        payload.get("template_id"),
+                        exc,
+                    )
+                    continue
             templates.append(payload)
     return templates
 
@@ -774,6 +798,16 @@ async def update_template_on_referencing_gateways(
             row = await handler.get(A2A_OUTBOUND_TEMPLATE_TABLE_DEF.table_name, {"template_id": tid})
             updates = {**updates, "data": getattr(row, "data", None)}
         updates = await _with_a2a_network_policy(handler, updates, network_policy)
+
+    # react 模板下发用「已解析模型」的 body；此处不原地改 updates，保证调用方落库仍存
+    # model_template_id（引用），仅在本次推送里内联 model/model_client。
+    push_updates = updates
+    if normalized == "react_templates" and isinstance(updates.get("body"), dict):
+        push_updates = {
+            **updates,
+            "body": await resolve_react_body_models(handler, updates["body"]),
+        }
+
     reachable = set(await _referencing_reachable_jids(handler, normalized, tid))
     all_refs = await collect_referenced_jiuwenclaw_ids_for_template(handler, tid, normalized)
 
@@ -813,7 +847,7 @@ async def update_template_on_referencing_gateways(
                 removed=set(),
             )
         try:
-            await _update_template_on_gateway(jid, normalized, tid, updates)
+            await _update_template_on_gateway(jid, normalized, tid, push_updates)
         except Exception as exc:
             # The Manager row is still unchanged. Roll back the provisional dependency
             # references so a retry cannot double-count them.
@@ -1290,6 +1324,47 @@ async def delete_agent_template_on_gateway(
     await _delete_template_on_gateway(jiuwenclaw_id, AGENT_TEMPLATES_KIND, template_id)
 
 
+async def resync_react_templates_referencing_model(
+    handler: DBHandler,
+    model_template_id: str,
+) -> None:
+    """模型模板更新后，重推引用了它的 react 模板（解析出最新 model/model_client 内联推送）。
+
+    失败只记日志，不阻断模型模板本身的更新。
+    """
+    tid = str(model_template_id or "").strip()
+    if not tid:
+        return
+    try:
+        react_ids = await find_react_templates_referencing_model(handler, tid)
+        for react_id in sorted(react_ids):
+            row = await handler.get(
+                REACT_TEMPLATE_TABLE_DEF.table_name, {"template_id": react_id}
+            )
+            if row is None:
+                continue
+            data = getattr(row, "data", None)
+            body = data if isinstance(data, dict) else {}
+            try:
+                await update_template_on_referencing_gateways(
+                    handler,
+                    "react_templates",
+                    react_id,
+                    {"body": body},
+                    continue_on_error=True,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[react_resync] react template %s resync after model %s update failed: %s",
+                    react_id,
+                    tid,
+                    exc,
+                )
+    except Exception as exc:
+        # resync 为 best-effort：扫描/取行任何异常都不应把已成功的模型更新升级为失败。
+        logger.warning("[react_resync] model %s resync scan failed: %s", tid, exc)
+
+
 async def assert_template_deletable(
     handler: DBHandler,
     template_id: str,
@@ -1363,6 +1438,7 @@ __all__ = (
     "ensure_referenced_templates_on_gateway",
     "rebuild_jid_template_ref_for_gateway",
     "reconcile_a2a_projection_on_referencing_gateways",
+    "resync_react_templates_referencing_model",
     "slot_template_pairs_from_template_ref",
     "sync_gateway_templates_after_template_ref_change",
     "sync_new_a2a_outbound_to_gateways",

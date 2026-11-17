@@ -11,6 +11,10 @@ from manager_server.core.template.push_template_to_gateway import (
     count_agent_template_reference_counts,
     update_template_on_referencing_gateways,
     delete_template_on_referencing_gateways,
+    resync_react_templates_referencing_model,
+)
+from manager_server.core.template.compressor_model_resolver import (
+    count_react_model_references,
 )
 from manager_server.schemas.template_schemas import (
     ModelTemplateCreateBody,
@@ -236,6 +240,9 @@ class ModelTemplateService:
         )
         if row is None:
             return None
+        # 模型模板变更已落库后再重推引用它的 react 模板，
+        # 确保 resolver 读到的是最新模型配置（避免网关内联过期配置）。
+        await resync_react_templates_referencing_model(self._handler, template_id)
         counts = await self._reference_counts()
         return row_to_out(row, reference_count=counts.get(str(row.template_id), 0))
 
@@ -245,6 +252,11 @@ class ModelTemplateService:
         )
         if row is None:
             return False
+        react_refs = await count_react_model_references(self._handler, template_id)
+        if react_refs > 0:
+            raise ValueError(
+                f"cannot delete model template: referenced by {react_refs} react template(s)"
+            )
         await assert_template_deletable(
             self._handler, template_id, "model_templates"
         )
