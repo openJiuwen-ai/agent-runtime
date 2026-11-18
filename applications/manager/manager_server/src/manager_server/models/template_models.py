@@ -145,6 +145,7 @@ EXPERT_PACKAGE_TEMPLATE_TABLE_DEF = TableDefinition(
         ColumnDefinition("description", "string", length=512, nullable=True),
         ColumnDefinition("packages", "json", nullable=False),
         ColumnDefinition("enabled", "boolean", nullable=False, default=True),
+        ColumnDefinition("revision", "integer", nullable=False, default=0),
         ColumnDefinition("created_at", "datetime", nullable=False),
         ColumnDefinition("updated_at", "datetime", nullable=False),
     ],

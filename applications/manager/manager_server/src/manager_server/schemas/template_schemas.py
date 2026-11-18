@@ -1127,9 +1127,9 @@ class ExpertPackageTemplateUpdateBody(SafeTextMixin):
     description: str | None = Field(default=None, max_length=512)
     packages: list[ExpertPackageItem] | None = Field(default=None, min_length=1)
     enabled: bool | None = None
-    expected_updated_at: str | None = Field(
+    expected_revision: int | None = Field(
         default=None,
-        description="打开编辑时的 updated_at；与库中不一致时返回 409，防止静默覆盖",
+        description="打开编辑时的 revision；与库中不一致时返回 409，防止静默覆盖",
     )
 
     @model_validator(mode="after")
@@ -1160,6 +1160,7 @@ class ExpertPackageTemplateOut(BaseModel):
     description: str | None
     packages: list[ExpertPackageItem]
     enabled: bool
+    revision: int = 0
     reference_count: int = 0
     created_at: str | None
     updated_at: str | None

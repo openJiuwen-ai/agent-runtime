@@ -209,14 +209,14 @@ async def test_expert_package_template_rejects_hidden_hub_asset(manager_api: Man
 
 
 @pytest.mark.asyncio
-async def test_expert_package_template_stale_expected_updated_at_returns_409(
+async def test_expert_package_template_revision_occ_returns_409(
     manager_api: ManagerApiHarness,
 ):
-    """带过期 expected_updated_at 的保存应 409，避免双开编辑静默覆盖。"""
+    """创建 revision=0；正确 expected_revision 保存涨到 1；再用 0 保存应 409。"""
     h = manager_api
     created = await h.post_json("/expert-package-templates", expert_package_templates()[0][1])
     template_id = created["template_id"]
-    stale_updated_at = created["updated_at"]
+    assert created["revision"] == 0
 
     first = await h.patch_json(
         f"/expert-package-templates/{template_id}",
@@ -238,10 +238,10 @@ async def test_expert_package_template_stale_expected_updated_at_returns_409(
                     "version": "1.0.0",
                 },
             ],
-            "expected_updated_at": stale_updated_at,
+            "expected_revision": 0,
         },
     )
-    assert first["updated_at"] != stale_updated_at
+    assert first["revision"] == 1
     assert {item["asset_id"] for item in first["packages"]} == {
         "sales-expert",
         "sales-team",
@@ -258,7 +258,7 @@ async def test_expert_package_template_stale_expected_updated_at_returns_409(
                     "version": "1.0.0",
                 },
             ],
-            "expected_updated_at": stale_updated_at,
+            "expected_revision": 0,
         },
     )
     assert resp.status_code == 409
@@ -266,6 +266,7 @@ async def test_expert_package_template_stale_expected_updated_at_returns_409(
     assert detail["code"] == "stale_template"
 
     current = await h.get_json(f"/expert-package-templates/{template_id}")
+    assert current["revision"] == 1
     assert {item["asset_id"] for item in current["packages"]} == {
         "sales-expert",
         "sales-team",
@@ -274,43 +275,43 @@ async def test_expert_package_template_stale_expected_updated_at_returns_409(
 
 
 @pytest.mark.asyncio
-async def test_expert_package_template_enabled_toggle_then_stale_edit_returns_409(
+async def test_expert_package_template_enabled_toggle_bumps_revision(
     manager_api: ManagerApiHarness,
 ):
-    """启停推进 updated_at 后，仍带旧令牌编辑应 409（列表未回写时的服务端表现）。"""
+    """仅 PATCH enabled 也涨 revision；旧 revision 编辑 409；用开关返回值编辑 200。"""
     h = manager_api
     created = await h.post_json("/expert-package-templates", expert_package_templates()[0][1])
     template_id = created["template_id"]
-    stale_updated_at = created["updated_at"]
+    assert created["revision"] == 0
 
     toggled = await h.patch_json(
         f"/expert-package-templates/{template_id}",
         {"enabled": False},
     )
     assert toggled["enabled"] is False
-    assert toggled["updated_at"] != stale_updated_at
+    assert toggled["revision"] == 1
 
     resp = await h.http.patch(
         h.templates_url(f"/expert-package-templates/{template_id}"),
         json={
             "template_name": created["template_name"],
             "packages": created["packages"],
-            "expected_updated_at": stale_updated_at,
+            "expected_revision": 0,
         },
     )
     assert resp.status_code == 409
     assert resp.json()["detail"]["code"] == "stale_template"
 
-    # 用开关返回的新令牌应能保存成功
     ok = await h.patch_json(
         f"/expert-package-templates/{template_id}",
         {
             "template_name": created["template_name"],
             "packages": created["packages"],
-            "expected_updated_at": toggled["updated_at"],
+            "expected_revision": toggled["revision"],
         },
     )
     assert ok["template_id"] == template_id
+    assert ok["revision"] == 2
 
 
 def _demo_container_wire(container_id: str) -> dict:

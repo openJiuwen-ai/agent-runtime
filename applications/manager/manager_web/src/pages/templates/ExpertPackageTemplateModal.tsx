@@ -126,9 +126,7 @@ export function ExpertPackageTemplateModal({ open, template, onClose, onSaved, o
           template_name: templateName,
           description: description.trim(),
           packages,
-          ...(template.updated_at
-            ? { expected_updated_at: template.updated_at }
-            : {}),
+          expected_revision: template.revision ?? 0,
         });
       } else {
         await ExpertPackageTemplateApi.create({
