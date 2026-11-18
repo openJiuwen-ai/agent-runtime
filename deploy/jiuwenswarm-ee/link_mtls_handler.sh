@@ -127,7 +127,7 @@ link_mtls_worker() (
     fi
     if [[ "$action" == ensure || "$action" == status ]]; then
         [[ "$action" != ensure ]] || link_mtls_preflight || return 1
-        for role in gateway runtime agentserver manager; do
+        for role in gateway runtime agentserver manager web manager-web; do
             previous=$(link_mtls_kube get secret "jiuwenswarm-link-$role" --ignore-not-found -o json) || return 1
             existing=$(printf '%s\n%s' "$existing" "${previous:-null}" |
                 jq -cs --arg role "$role" '.[0] + {($role):.[1]}') || return 1
@@ -170,7 +170,7 @@ link_mtls_call() (
     if [[ "$action" == ensure ]]; then
         printf '%s' "$result" | jq -e '
             (.summary.mtls_deployment_id | type == "string" and length > 0) and
-            ([.secrets[].metadata.name] | sort == ["jiuwenswarm-link-agentserver","jiuwenswarm-link-gateway","jiuwenswarm-link-manager","jiuwenswarm-link-runtime"]) and
+            ([.secrets[].metadata.name] | sort == ["jiuwenswarm-link-agentserver","jiuwenswarm-link-gateway","jiuwenswarm-link-manager","jiuwenswarm-link-manager-web","jiuwenswarm-link-runtime","jiuwenswarm-link-web"]) and
             all(.secrets[]; .kind == "Secret" and (.data | type == "object"))' >/dev/null || {
             echo 'Invalid certificate preparation response; refusing installation' >&2; return 1;
         }
@@ -219,6 +219,8 @@ link_mtls_render() (
         --arg domain "${DEPLOY_VARS[AGENT_RUNTIME_LINK_MTLS_CLUSTER_DOMAIN]}" \
         --arg headless "${DEPLOY_VARS[AGENT_SERVER_NAME]}" \
         --arg port "$([[ "$role" == gateway ]] && printf '%s' "${DEPLOY_VARS[GATEWAY_CONFIG_HTTP_PORT]}" || printf '%s' "${DEPLOY_VARS[AGENT_RUNTIME_PORT]}")" \
+        --arg gateway "${DEPLOY_VARS[GATEWAY_NAME]}" \
+        --arg web_port "${DEPLOY_VARS[GATEWAY_WEB_HTTP_PORT]}" \
         --arg code "${DEPLOY_VARS[LINK_SYNC_CODE]:-}" \
         --slurpfile parts <(yq -o=json '.' "${SCRIPT_DIR}/templates/link-mtls.template.yaml") '
         def put($v): map(select(.name != $v.name)) + [$v];
@@ -228,7 +230,40 @@ link_mtls_render() (
         def python_path($paths): env("PYTHONPATH"; ($paths + [.env[]? | select(.name=="PYTHONPATH") | .value | select(length>0)]) | join(":"));
         def source_volume:
             .volumes = ((.volumes // []) | put({name:"link-runtime-source",hostPath:{path:$source,type:"Directory"}}));
-        if $role == "agentserver" then
+        if $role == "web" or $role == "manager-web" then
+            if $mode != "enforce" then .[]
+            else
+                ("jiuwenswarm-link-" + $role) as $secret |
+                ($secret + "-nginx") as $config |
+                ([.[] | select(.kind=="Deployment")][0].metadata.namespace) as $namespace |
+                map(if .kind != "Deployment" then . else
+                    .spec.template.spec |= (
+                        .volumes += [
+                            {name:"link-web-client",secret:{secretName:$secret,defaultMode:288,
+                                items:[{key:"tls.crt",path:"tls.crt"},{key:"tls.key",path:"tls.key"},{key:"ca.crt",path:"ca.crt"}]}},
+                            {name:"link-web-nginx",configMap:{name:$config}}
+                        ] |
+                        .containers |= map(if .name != $role then . else
+                            .volumeMounts += [
+                                {name:"link-web-client",mountPath:"/etc/jiuwenswarm/link-mtls/nginx",readOnly:true},
+                                {name:"link-web-nginx",mountPath:"/etc/nginx/templates/jiuwenswarm-link",readOnly:true}
+                            ] |
+                            if $role != "web" then . else
+                                env("GATEWAY_WEB_HTTP_URL";"$link_gateway_web_upstream") |
+                                env("LINK_GATEWAY_WEB_HTTPS_UPSTREAM";"https://"+$gateway+"."+$namespace+".svc."+$domain+":"+$web_port) |
+                                env("NGINX_ENTRYPOINT_LOCAL_RESOLVERS";"1") |
+                                .env += [
+                                    {name:"JIUWENSWARM_MTLS_BINDING_ID",valueFrom:{secretKeyRef:{name:$secret,key:"binding-id"}}},
+                                    {name:"JIUWENSWARM_MTLS_BINDING_EPOCH",valueFrom:{secretKeyRef:{name:$secret,key:"binding-epoch"}}}
+                                ]
+                            end
+                        end)
+                    )
+                end)[] ,
+                {apiVersion:"v1",kind:"ConfigMap",metadata:{name:$config,namespace:$namespace},
+                 data:{"gateway.conf.template":($parts[0].webHttpUpstream.tls + $parts[0].webHttpUpstream.binding[$role])}}
+            end
+        elif $role == "agentserver" then
             if $mode == "enforce" and $dev == "dev" then
                 .[0] | .rawdata.templates |= map(source_volume) |
                 [.rawdata.templates[].main_container_id] as $ids |
@@ -251,6 +286,12 @@ link_mtls_render() (
                         ($volume + (if $copy then "-source" else "" end)) as $src |
                         ("/etc/jiuwenswarm/link-mtls/"+$role) as $mount |
                         .volumes = ((.volumes // []) | put({name:$src,secret:{secretName:("jiuwenswarm-link-"+$role),defaultMode:(if $copy then 292 else 256 end)}})) |
+                        (if $role=="gateway" then
+                            .volumes += [{name:"link-web-peers",projected:{sources:[
+                                {secret:{name:"jiuwenswarm-link-web",optional:true,items:[{key:"tls.crt",path:"web.crt"}]}},
+                                {secret:{name:"jiuwenswarm-link-manager-web",optional:true,items:[{key:"tls.crt",path:"manager-web.crt"}]}}
+                            ]}}]
+                         else . end) |
                         (if $copy then
                             .volumes |= put($parts[0].privateVolume) |
                             if any((.containers + (.initContainers // []))[]; .name=="link-material-init" or .name=="link-material-sync") then error("reserved link helper name") else . end |
@@ -264,15 +305,25 @@ link_mtls_render() (
                             .volumeMounts = ((.volumeMounts // []) | put({name:$volume,mountPath:$mount,readOnly:true})) |
                             (if $copy then env("JIUWENSWARM_LINK_MTLS_PROFILE";$mount+"/private/identity/profile.json") else . end) |
                             (if $role=="runtime" then env("AGENT_RUNTIME_LINK_MTLS_AGENTSERVER_SECRET";"jiuwenswarm-link-agentserver") | env("AGENT_RUNTIME_LINK_MTLS_HEADLESS_SERVICE";$headless) | env("AGENT_RUNTIME_LINK_MTLS_CLUSTER_DOMAIN";$domain)
-                             elif $role=="gateway" then env("GATEWAY_CONFIG_PUBLIC_SCHEME";"https") else . end) |
+                             elif $role=="gateway" then
+                                env("GATEWAY_CONFIG_PUBLIC_SCHEME";"https") |
+                                .volumeMounts += [{name:"link-web-peers",mountPath:"/etc/jiuwenswarm/link-mtls/web-peers",readOnly:true}]
+                             else . end) |
                             (if $role=="gateway" or $role=="runtime" then
                                 ("import urllib.request; from openjiuwen_runtime.foundation.security.link_profile import load_service_identity; p=load_service_identity(\u0027"+$role+"\u0027); o=urllib.request.build_opener(urllib.request.ProxyHandler({}),urllib.request.HTTPSHandler(context=p.ssl_context())); r=o.open(\u0027https://127.0.0.1:"+$port+(if $role=="gateway" then "/api/v1/ready" else "/healthz" end)+"\u0027,timeout=3); assert r.status==200") as $probe |
                                 reduce ["readinessProbe","livenessProbe","startupProbe"][] as $p (. ; if has($p) then .[$p] |= (del(.httpGet,.tcpSocket,.grpc) | .exec={command:["python","-c",$probe]} | .timeoutSeconds=([(.timeoutSeconds // 1),5]|max)) else . end)
+                             else . end) |
+                            (if $role=="gateway" and has("readinessProbe") then
+                                .readinessProbe.exec.command[2] += ("; r=o.open(\u0027https://127.0.0.1:"+$web_port+"/api/v1/health\u0027,timeout=3); assert r.status==200") |
+                                .readinessProbe.timeoutSeconds = ([.readinessProbe.timeoutSeconds,8]|max)
                              else . end) |
                             (if $dev=="dev" then source_mount | python_path(["/app/link-runtime-source/foundation","/app/link-runtime-source/service",(if $role=="runtime" then "/app/link-runtime-source/applications/agent_runtime/src" elif $role=="manager" then "/app/link-runtime-source/applications/manager/manager_server/src" else $claw end)]) else . end)
                         end) | if $dev=="dev" then source_volume else . end
                     end)
             end)[]
-        end' | yq -p=json -P '.' > "$temporary" || return 1
+        end' |
+        # Keep string values such as Runtime's "on" through Kubernetes YAML decoding.
+        yq -p=json -P '(.. | select(tag == "!!str" and test("(?i)^(y|yes|n|no|on|off)$"))) style = "double"' \
+            > "$temporary" || return 1
     if [[ "$role" == agentserver ]]; then yq -o=json '.' "$temporary" > "$file"; else mv -f "$temporary" "$file"; fi
 )

@@ -20,7 +20,7 @@ from typing import Awaitable, TypeVar
 
 from sqlalchemy import MetaData, Table, inspect, select
 
-from .link_certificate_bundle import materialize_role, validate_bundle
+from .link_certificate_bundle import WEB_ROLES, materialize_role, validate_bundle
 from .link_material_store import _read_bundle, ensure, sync_runtime
 from .link_profile import LinkProfile, LinkProfileError
 
@@ -166,7 +166,7 @@ def validate_existing_secrets(bundle, existing):
     for role, secret in existing.items():
         if secret is None:
             continue
-        wanted = bundle["materials"][role]
+        wanted = bundle["materials"].get(role)
         try:
             actual = {
                 key: base64.b64decode(value, validate=True).decode()
@@ -222,6 +222,10 @@ async def dispatch(message):
                     existing_secret=any(message.get("existing", {}).values()),
                 ),
             )
+            if not WEB_ROLES.issubset(bundle["materials"]):
+                raise LinkProfileError(
+                    "the existing deployment needs coordinated certificate replacement for Gateway Web mTLS"
+                )
             validate_existing_secrets(bundle, message.get("existing", {}))
             await _database_stage(
                 "Runtime public binding synchronization",

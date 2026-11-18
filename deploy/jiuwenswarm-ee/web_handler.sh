@@ -43,6 +43,7 @@ render_web_files() {
     render_secret_configmap
     ensure_available_port "WEB_NODE_PORT"
     gen_web_file
+    link_mtls_render web "${CONFIG[WEB_FILE]}"
     success "Web module is rendered."
 }
 

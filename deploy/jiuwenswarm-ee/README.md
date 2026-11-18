@@ -851,3 +851,14 @@ IS_MOUNT_WEB_CODE="false"
 | `CORE_CODE_PATH` | 挂载 openjiuwen 核心包 | 不涉及 | 挂载 openjiuwen 核心包 | 挂载（需 `IS_MOUNT_WEB_CODE=true`） |
 
 说明：AgentServer 为多容器 Pod（jiuwenclaw-agentserver + jiuwenbox），其源码挂载随服务模板一并生效；任一源码路径变量留空时，AgentServer 服务模板中对应的 hostPath 挂载会被自动剔除，继续使用镜像内置代码。
+
+## Gateway Web HTTP 的 mTLS
+
+`JIUWENSWARM_LINK_MTLS_MODE=enforce` 同时保护 Gateway Web HTTP（默认 19002）。首次签发时，部署工具用同一部署 CA 为两个 Nginx 签发专用客户端证书，并随原有证书一起持久化。使用旧证书包的部署需要协调替换证书包。Gateway 只挂载客户端公开证书，其指纹授权仅用于 19002。
+
+| Secret | 需要的键 |
+| --- | --- |
+| `jiuwenswarm-link-manager-web` | `tls.crt`、`tls.key`、`ca.crt` |
+| `jiuwenswarm-link-web` | `tls.crt`、`tls.key`、`ca.crt`、`binding-id`、`binding-epoch` |
+
+Manager Web 从现有鉴权子请求获取所选实例的绑定。独立 User Web 使用部署方提供的本地 Gateway 绑定值，并沿用其现有登录及接入配置。两个入口均由 Nginx 直接通过 mTLS 转发到 Gateway。上游服务名须包含在 Gateway 证书的 SAN 中。
