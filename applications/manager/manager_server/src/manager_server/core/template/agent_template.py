@@ -43,6 +43,7 @@ _A2A_POLICY_TPL = A2A_ACCESS_POLICY_TEMPLATE_TABLE_DEF.table_name
 _template_mutation_locks: WeakValueDictionary[str, Lock] = WeakValueDictionary()
 _MUTATION_TIMEOUT = 120
 _ROLLBACK_TIMEOUT = 60
+_SYNC_TIMEOUT = 30
 # The lease outlives the forward operation and both compensating requests.
 _MUTATION_LEASE = 300
 _ALLOWED_SORT_FIELDS = frozenset({
@@ -125,6 +126,17 @@ async def _registration_service():
         return await run_in_threadpool(load_registration_service, settings)
     except RegistrationError as exc:
         raise RegistrationUnavailable(str(exc)) from None
+
+
+async def _sync_agent_definitions(handler: DBHandler) -> None:
+    """派生数据同步；失败或超时只告警，不阻塞模板增删改。"""
+    from manager_server.core.agent_definition.sync import reconcile_agent_definitions
+
+    try:
+        async with timeout(_SYNC_TIMEOUT):
+            await reconcile_agent_definitions(handler)
+    except TimeoutError:
+        _log.warning("[Template] agent_definition sync timed out")
 
 
 def agent_template_out(row: Any, *, reference_count: int = 0) -> dict[str, Any]:
@@ -272,6 +284,7 @@ class AgentTemplateService:
         created = await self.get(template_id)
         if created is None:  # pragma: no cover
             raise RuntimeError(f"agent_template just created but missing: {template_id}")
+        await _sync_agent_definitions(self._h)
         return created
 
     @asynccontextmanager
@@ -453,6 +466,7 @@ class AgentTemplateService:
 
             await update_template_on_referencing_gateways(self._h, AGENT_TEMPLATES_KIND, template_id, updates)
             await self._finish_template(operation, changes=updates)
+        await _sync_agent_definitions(self._h)
         return await self.get(template_id)
 
     async def delete(self, template_id: str) -> bool:
@@ -472,6 +486,7 @@ class AgentTemplateService:
                 service = await _registration_service()
                 await service.delete(template_id, binding)
             await self._finish_template(operation, deleting=True)
+        await _sync_agent_definitions(self._h)
         _log.info("[Template] agent_template.delete", template_id=template_id)
         return True
 

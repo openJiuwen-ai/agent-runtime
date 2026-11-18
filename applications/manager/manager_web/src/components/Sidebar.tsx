@@ -248,6 +248,17 @@ export function Sidebar() {
         </svg>
       ),
     },
+    {
+      key: 'agent-definitions',
+      pathPrefix: '/agent-definitions',
+      href: '/agent-definitions',
+      label: t('nav.agentDefinitions'),
+      icon: (
+        <svg className="w-4 h-4 nav-item__icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c.251.023.501.05.75.082m-.75-.082a24.301 24.301 0 014.5 0m-4.5 0v5.714c0 .597.237 1.17.659 1.591L14.25 14.5M13.5 21l-.75-3.5M10.5 21l.75-3.5M6 9h12" />
+        </svg>
+      ),
+    },
   ];
 
   const iamIcon = (d: string) => (

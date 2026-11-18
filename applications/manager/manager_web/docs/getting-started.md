@@ -115,11 +115,11 @@ unzip <部署工具安装包>.zip
 
 ![新建模型](assets/image-20260912155039086.png)
 
-### 新建 Agent模板
+### 新建 Agent 配置模板
 
-新建 Agent模板，用于配置用户可对话的 Agent。
+新建 Agent 配置模板，用于配置用户可对话的 Agent。
 
-![新建Agent模板](assets/image-20260912155054886.png)
+![新建 Agent 配置模板](assets/image-20260912155054886.png)
 
 ### 新建运行时模板
 

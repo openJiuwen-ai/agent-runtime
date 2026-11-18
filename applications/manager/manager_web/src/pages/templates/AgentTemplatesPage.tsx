@@ -34,7 +34,7 @@ export function AgentTemplatesPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const { data: registrationConfig } = useAsync(AgentClientRegistrationApi.capabilities);
 
-  /** 引导跳转：其他页面点「未配置 Agent模板」跳过来时自动打开新建弹框 */
+  /** 引导跳转：其他页面点「未配置 Agent 配置模板」跳过来时自动打开新建弹框 */
   useGuideAutoOpen('agentTemplateNew', () => {
     setEditing(null);
     setModalOpen(true);

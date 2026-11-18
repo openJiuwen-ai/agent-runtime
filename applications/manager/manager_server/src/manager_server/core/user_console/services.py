@@ -23,8 +23,10 @@ from manager_server.infrastructure.config import settings
 from manager_server.infrastructure.match_expr import evaluate_match_expr
 from manager_server.infrastructure.utils import utc_now
 from manager_server.models.instance_resource_models import INSTANCE_AGENT_RESOURCE_TABLE_DEF
+from manager_server.models.agent_definition_models import AGENT_DEFINITION_TABLE_DEF
 
 _GRANT = INSTANCE_AGENT_RESOURCE_TABLE_DEF.table_name
+_AGENT_DEFINITION = AGENT_DEFINITION_TABLE_DEF.table_name
 _INSTANCE_INFO = "instance_info"
 _CAP = 100_000
 _NO_ORG_GROUP_ID = "__none__"
@@ -108,11 +110,10 @@ class UserConsoleService:
         业务键均为 id：``bot_id`` / ``group_id`` / ``user_id`` / ``jiuwenclaw_id``。
 
         ``agent_id`` 由 ``runtime_template_id`` + ``agent_template_id`` 经 base62
-        可逆编码得到（43 字符，见 ``agent_identity`` 模块），``agent_name`` 为
-        ``agent_`` + ``agent_id``，是用户面下拉与持久化使用的**稳定展示标识**；
-        人类可读的资源名保留在 ``resource_name``，仅在无法生成 ``agent_id`` 时
-        作为 ``agent_name`` 的回退值。运行时模板按 ``(priority ASC, scope_id ASC)``
-        first-fit 解析，与 Runtime 选路一致。
+        可逆编码得到（43 字符，见 ``agent_identity`` 模块）；``agent_name`` 优先取
+        Agent 模板（``agent_definition``）中的自定义名称，未命中时回退
+        ``agent_`` + ``agent_id``；无法生成 ``agent_id`` 时回退为资源名。运行时模板按
+        ``(priority ASC, scope_id ASC)`` first-fit 解析，与 Runtime 选路一致。
         """
         uid = str(user_id or "").strip()
         if not uid:
@@ -140,6 +141,7 @@ class UserConsoleService:
             return []
 
         name_by_jid = await self._instance_display_names(admitted)
+        name_by_pair = await self._agent_definition_names()
         seen: set[tuple[str, str, str, str]] = set()
         out: list[dict[str, Any]] = []
         for jid in sorted(admitted):
@@ -178,10 +180,16 @@ class UserConsoleService:
                         runtime_template_id, agent_template_id
                     )
                     if identity:
-                        agent_id, agent_name = identity
+                        agent_id, fallback_name = identity
                     else:
                         agent_id = ""
-                        agent_name = resource_name or bot_id
+                        fallback_name = resource_name or bot_id
+                    agent_name = (
+                        name_by_pair.get(
+                            (agent_template_id, str(runtime_template_id or ""))
+                        )
+                        or fallback_name
+                    )
                     out.append(
                         {
                             "bot_id": bot_id,
@@ -197,8 +205,8 @@ class UserConsoleService:
                             "jiuwenclaw_name": cluster_name,
                         }
                     )
-        # 用户面下拉只展示 agent_name（agent_ + agent_id），按其排序保证
-        # 接口返回顺序与展示顺序一致；它是稳定标识，不是人类可读名称。
+        # 用户面下拉只展示 agent_name（默认 agent_ + agent_id，可由管理员改名），
+        # 按其排序保证接口返回顺序与展示顺序一致。
         out.sort(
             key=lambda x: (
                 str(x.get("agent_name") or ""),
@@ -210,6 +218,23 @@ class UserConsoleService:
             )
         )
         return out
+
+    async def _agent_definition_names(self) -> dict[tuple[str, str], str]:
+        """有效 Agent 模板的 ``(Agent 配置模板 id, 运行时模板 id)`` → 自定义名称。"""
+        rows = await self._h.list_records(
+            _AGENT_DEFINITION, {"deleted": False}, limit=_CAP, offset=0
+        )
+        names: dict[tuple[str, str], str] = {}
+        for row in rows:
+            name = str(_g(row, "agent_name") or "").strip()
+            if not name:
+                continue
+            key = (
+                str(_g(row, "agent_config_template_id") or ""),
+                str(_g(row, "runtime_template_id") or ""),
+            )
+            names[key] = name
+        return names
 
     async def _instance_display_names(self, jids: set[str]) -> dict[str, str]:
         """``jiuwenclaw_id`` → ``jiuwenclaw_name``（缺省回退为 id）。"""
