@@ -208,6 +208,71 @@ async def test_expert_package_template_rejects_hidden_hub_asset(manager_api: Man
     assert "hidden hub asset" in resp.text
 
 
+@pytest.mark.asyncio
+async def test_expert_package_template_stale_expected_updated_at_returns_409(
+    manager_api: ManagerApiHarness,
+):
+    """带过期 expected_updated_at 的保存应 409，避免双开编辑静默覆盖。"""
+    h = manager_api
+    created = await h.post_json("/expert-package-templates", expert_package_templates()[0][1])
+    template_id = created["template_id"]
+    stale_updated_at = created["updated_at"]
+
+    first = await h.patch_json(
+        f"/expert-package-templates/{template_id}",
+        {
+            "packages": [
+                {
+                    "kind": "agent_template",
+                    "asset_id": "sales-expert",
+                    "version": "1.0.0",
+                },
+                {
+                    "kind": "agent_group",
+                    "asset_id": "sales-team",
+                    "version": "2.0.0",
+                },
+                {
+                    "kind": "agent_template",
+                    "asset_id": "extra-expert",
+                    "version": "1.0.0",
+                },
+            ],
+            "expected_updated_at": stale_updated_at,
+        },
+    )
+    assert first["updated_at"] != stale_updated_at
+    assert {item["asset_id"] for item in first["packages"]} == {
+        "sales-expert",
+        "sales-team",
+        "extra-expert",
+    }
+
+    resp = await h.http.patch(
+        h.templates_url(f"/expert-package-templates/{template_id}"),
+        json={
+            "packages": [
+                {
+                    "kind": "agent_template",
+                    "asset_id": "sales-expert",
+                    "version": "1.0.0",
+                },
+            ],
+            "expected_updated_at": stale_updated_at,
+        },
+    )
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert detail["code"] == "stale_template"
+
+    current = await h.get_json(f"/expert-package-templates/{template_id}")
+    assert {item["asset_id"] for item in current["packages"]} == {
+        "sales-expert",
+        "sales-team",
+        "extra-expert",
+    }
+
+
 def _demo_container_wire(container_id: str) -> dict:
     return {
         "container_id": container_id,

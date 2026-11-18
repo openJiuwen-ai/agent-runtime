@@ -1127,6 +1127,10 @@ class ExpertPackageTemplateUpdateBody(SafeTextMixin):
     description: str | None = Field(default=None, max_length=512)
     packages: list[ExpertPackageItem] | None = Field(default=None, min_length=1)
     enabled: bool | None = None
+    expected_updated_at: str | None = Field(
+        default=None,
+        description="打开编辑时的 updated_at；与库中不一致时返回 409，防止静默覆盖",
+    )
 
     @model_validator(mode="after")
     def _normalize_packages(self) -> ExpertPackageTemplateUpdateBody:

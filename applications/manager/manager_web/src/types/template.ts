@@ -152,6 +152,8 @@ export type ExpertPackageTemplateUpdateBody = Partial<{
   description: string | null;
   packages: ExpertPackageItem[];
   enabled: boolean;
+  /** 打开编辑时的 updated_at；与服务端不一致时返回 409 */
+  expected_updated_at: string;
 }>;
 
 export interface SkillPrebuiltTemplate {

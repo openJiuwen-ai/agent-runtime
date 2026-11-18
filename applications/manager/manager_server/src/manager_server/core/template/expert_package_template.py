@@ -37,6 +37,10 @@ _ALLOWED_SORT_FIELDS = frozenset({
 })
 
 
+class ExpertPackageTemplateConflict(Exception):
+    """专家包模板已被他人修改，拒绝用过期快照覆盖。"""
+
+
 def assert_selectable_hub_asset(asset_id: str) -> str:
     """Hub 标识必须能出现在新建页清单里。隐藏的四个包不能写入组合。"""
     asset = str(asset_id or "").strip()
@@ -224,9 +228,16 @@ class ExpertPackageTemplateService:
         body: ExpertPackageTemplateUpdateBody,
     ) -> ExpertPackageTemplateOut | None:
         updates = body.model_dump(exclude_unset=True)
+        expected_updated_at = updates.pop("expected_updated_at", None)
         existing = await self._handler.get(_TABLE, {"template_id": template_id})
         if existing is None:
             return None
+        if expected_updated_at is not None:
+            current = iso_datetime(getattr(existing, "updated_at", None))
+            if current != str(expected_updated_at).strip():
+                raise ExpertPackageTemplateConflict(
+                    "expert package template was modified by another editor"
+                )
         if "packages" in updates:
             updates["packages"] = normalize_package_items(updates["packages"])
         if not updates:

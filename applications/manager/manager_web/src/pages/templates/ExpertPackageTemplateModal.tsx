@@ -124,6 +124,9 @@ export function ExpertPackageTemplateModal({ open, template, onClose, onSaved }:
           template_name: templateName,
           description: description.trim(),
           packages,
+          ...(template.updated_at
+            ? { expected_updated_at: template.updated_at }
+            : {}),
         });
       } else {
         await ExpertPackageTemplateApi.create({
@@ -136,6 +139,11 @@ export function ExpertPackageTemplateModal({ open, template, onClose, onSaved }:
       toast('success', t('success.saved'));
       onSaved();
     } catch (error) {
+      if (error instanceof ApiError && error.status === 409) {
+        toast('danger', t('expertPackageTemplate.conflictStale'));
+        onSaved();
+        return;
+      }
       toast('danger', t('errors.saveFailed', {
         detail: error instanceof ApiError ? error.detail : (error as Error).message,
       }));
