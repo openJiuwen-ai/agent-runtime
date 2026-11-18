@@ -208,6 +208,112 @@ async def test_expert_package_template_rejects_hidden_hub_asset(manager_api: Man
     assert "hidden hub asset" in resp.text
 
 
+@pytest.mark.asyncio
+async def test_expert_package_template_revision_occ_returns_409(
+    manager_api: ManagerApiHarness,
+):
+    """创建 revision=0；正确 expected_revision 保存涨到 1；再用 0 保存应 409。"""
+    h = manager_api
+    created = await h.post_json("/expert-package-templates", expert_package_templates()[0][1])
+    template_id = created["template_id"]
+    assert created["revision"] == 0
+
+    first = await h.patch_json(
+        f"/expert-package-templates/{template_id}",
+        {
+            "packages": [
+                {
+                    "kind": "agent_template",
+                    "asset_id": "sales-expert",
+                    "version": "1.0.0",
+                },
+                {
+                    "kind": "agent_group",
+                    "asset_id": "sales-team",
+                    "version": "2.0.0",
+                },
+                {
+                    "kind": "agent_template",
+                    "asset_id": "extra-expert",
+                    "version": "1.0.0",
+                },
+            ],
+            "expected_revision": 0,
+        },
+    )
+    assert first["revision"] == 1
+    assert {item["asset_id"] for item in first["packages"]} == {
+        "sales-expert",
+        "sales-team",
+        "extra-expert",
+    }
+
+    resp = await h.http.patch(
+        h.templates_url(f"/expert-package-templates/{template_id}"),
+        json={
+            "packages": [
+                {
+                    "kind": "agent_template",
+                    "asset_id": "sales-expert",
+                    "version": "1.0.0",
+                },
+            ],
+            "expected_revision": 0,
+        },
+    )
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert detail["code"] == "stale_template"
+
+    current = await h.get_json(f"/expert-package-templates/{template_id}")
+    assert current["revision"] == 1
+    assert {item["asset_id"] for item in current["packages"]} == {
+        "sales-expert",
+        "sales-team",
+        "extra-expert",
+    }
+
+
+@pytest.mark.asyncio
+async def test_expert_package_template_enabled_toggle_bumps_revision(
+    manager_api: ManagerApiHarness,
+):
+    """仅 PATCH enabled 也涨 revision；旧 revision 编辑 409；用开关返回值编辑 200。"""
+    h = manager_api
+    created = await h.post_json("/expert-package-templates", expert_package_templates()[0][1])
+    template_id = created["template_id"]
+    assert created["revision"] == 0
+
+    toggled = await h.patch_json(
+        f"/expert-package-templates/{template_id}",
+        {"enabled": False},
+    )
+    assert toggled["enabled"] is False
+    assert toggled["revision"] == 1
+
+    resp = await h.http.patch(
+        h.templates_url(f"/expert-package-templates/{template_id}"),
+        json={
+            "template_name": created["template_name"],
+            "packages": created["packages"],
+            "expected_revision": 0,
+        },
+    )
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["code"] == "stale_template"
+
+    ok = await h.patch_json(
+        f"/expert-package-templates/{template_id}",
+        {
+            "template_name": created["template_name"],
+            "packages": created["packages"],
+            "expected_revision": toggled["revision"],
+        },
+    )
+    assert ok["template_id"] == template_id
+    assert ok["revision"] == 2
+
+
 def _demo_container_wire(container_id: str) -> dict:
     return {
         "container_id": container_id,

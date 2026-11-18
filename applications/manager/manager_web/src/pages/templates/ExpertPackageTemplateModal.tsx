@@ -11,6 +11,8 @@ interface Props {
   template: ExpertPackageTemplate | null;
   onClose: () => void;
   onSaved: () => void;
+  /** 409 冲突：关弹窗并刷新列表，语义与 onSaved 分离。 */
+  onConflict: () => void;
 }
 
 interface Selection {
@@ -33,7 +35,7 @@ function itemKey(item: { kind: string; id: string }) {
   return `${item.kind}:${item.id}`;
 }
 
-export function ExpertPackageTemplateModal({ open, template, onClose, onSaved }: Props) {
+export function ExpertPackageTemplateModal({ open, template, onClose, onSaved, onConflict }: Props) {
   const { t } = useTranslation();
   const editing = template !== null;
   const [catalog, setCatalog] = useState<PackageCatalogItem[]>([]);
@@ -124,6 +126,7 @@ export function ExpertPackageTemplateModal({ open, template, onClose, onSaved }:
           template_name: templateName,
           description: description.trim(),
           packages,
+          expected_revision: template.revision ?? 0,
         });
       } else {
         await ExpertPackageTemplateApi.create({
@@ -136,6 +139,11 @@ export function ExpertPackageTemplateModal({ open, template, onClose, onSaved }:
       toast('success', t('success.saved'));
       onSaved();
     } catch (error) {
+      if (error instanceof ApiError && error.status === 409) {
+        toast('danger', t('expertPackageTemplate.conflictStale'));
+        onConflict();
+        return;
+      }
       toast('danger', t('errors.saveFailed', {
         detail: error instanceof ApiError ? error.detail : (error as Error).message,
       }));

@@ -30,11 +30,20 @@ _TABLE = EXPERT_PACKAGE_TEMPLATE_TABLE_DEF.table_name
 _KIND = "expert_package_templates"
 _LIST_ALL_CAP = 10_000
 _PACKAGE_KINDS = frozenset({"agent_template", "agent_group"})
+_CONTENT_UPDATE_FIELDS = frozenset({"template_name", "description", "packages"})
 _ALLOWED_SORT_FIELDS = frozenset({
     "template_name",
     "description",
     "updated_at",
 })
+
+
+class ExpertPackageTemplateConflict(Exception):
+    """专家包模板已被他人修改，拒绝用过期快照覆盖。"""
+
+
+def _row_revision(row: Any) -> int:
+    return int(getattr(row, "revision", 0) or 0)
 
 
 def assert_selectable_hub_asset(asset_id: str) -> str:
@@ -121,6 +130,7 @@ def row_to_out(row: Any, *, reference_count: int = 0) -> ExpertPackageTemplateOu
         description=row.description,
         packages=[ExpertPackageItem(**item) for item in packages_from_row(row)],
         enabled=row.enabled,
+        revision=_row_revision(row),
         reference_count=reference_count,
         created_at=iso_datetime(row.created_at),
         updated_at=iso_datetime(row.updated_at),
@@ -149,6 +159,7 @@ class ExpertPackageTemplateService:
                 "description": body.description,
                 "packages": packages,
                 "enabled": body.enabled,
+                "revision": 0,
                 "created_at": now,
                 "updated_at": now,
             },
@@ -224,14 +235,57 @@ class ExpertPackageTemplateService:
         body: ExpertPackageTemplateUpdateBody,
     ) -> ExpertPackageTemplateOut | None:
         updates = body.model_dump(exclude_unset=True)
+        expected_raw = updates.pop("expected_revision", None)
         existing = await self._handler.get(_TABLE, {"template_id": template_id})
         if existing is None:
             return None
+
+        content_touched = bool(_CONTENT_UPDATE_FIELDS.intersection(updates))
+        expected_provided = expected_raw is not None
+        if content_touched and not expected_provided:
+            raise ExpertPackageTemplateConflict(
+                "expert package template content update requires expected_revision"
+            )
+
+        current = _row_revision(existing)
+        expected: int | None = None
+        if expected_provided:
+            expected = int(expected_raw)
+            if expected != current:
+                raise ExpertPackageTemplateConflict(
+                    "expert package template was modified by another editor"
+                )
+
         if "packages" in updates:
             updates["packages"] = normalize_package_items(updates["packages"])
         if not updates:
             counts = await self._reference_counts()
             return row_to_out(existing, reference_count=counts.get(str(existing.template_id), 0))
+
+        new_revision = current + 1
+        payload = dict(updates)
+        payload["revision"] = new_revision
+        payload["updated_at"] = utc_now()
+
+        filters: dict[str, Any] = {"template_id": template_id}
+        if expected is not None:
+            filters["revision"] = expected
+
+        row = await self._handler.update(_TABLE, filters, payload)
+        if row is None:
+            current_row = await self._handler.get(_TABLE, {"template_id": template_id})
+            if current_row is None:
+                return None
+            if expected is not None:
+                # filter 含旧 revision 时 handler 回读可能失败；写成功则当前值等于本次写入。
+                if _row_revision(current_row) == new_revision:
+                    row = current_row
+                else:
+                    raise ExpertPackageTemplateConflict(
+                        "expert package template was modified by another editor"
+                    )
+            else:
+                return None
 
         await update_template_on_referencing_gateways(
             self._handler,
@@ -239,11 +293,6 @@ class ExpertPackageTemplateService:
             template_id,
             updates,
         )
-        payload = dict(updates)
-        payload["updated_at"] = utc_now()
-        row = await self._handler.update(_TABLE, {"template_id": template_id}, payload)
-        if row is None:
-            return None
         counts = await self._reference_counts()
         return row_to_out(row, reference_count=counts.get(str(row.template_id), 0))
 

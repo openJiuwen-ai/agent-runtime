@@ -25,7 +25,10 @@ from manager_server.core.template.a2a_discovery_settings import A2ADiscoverySett
 from manager_server.core.template.embedding_template import (
     EmbeddingTemplateService,
 )
-from manager_server.core.template.expert_package_template import ExpertPackageTemplateService
+from manager_server.core.template.expert_package_template import (
+    ExpertPackageTemplateConflict,
+    ExpertPackageTemplateService,
+)
 from manager_server.core.template.extension_config_template import (
     ExtensionConfigTemplateService,
 )
@@ -857,6 +860,11 @@ async def update_expert_package_template(
     svc = _expert_package_template_svc(handler)
     try:
         row = await svc.update(template_id, body)
+    except ExpertPackageTemplateConflict as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "stale_template", "message": str(exc)},
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if row is None:

@@ -135,6 +135,7 @@ export interface ExpertPackageTemplate {
   description?: string | null;
   packages: ExpertPackageItem[];
   enabled: boolean;
+  revision: number;
   reference_count: number;
   created_at?: string | null;
   updated_at?: string | null;
@@ -152,6 +153,8 @@ export type ExpertPackageTemplateUpdateBody = Partial<{
   description: string | null;
   packages: ExpertPackageItem[];
   enabled: boolean;
+  /** 打开编辑时的 revision；与服务端不一致时返回 409 */
+  expected_revision: number;
 }>;
 
 export interface SkillPrebuiltTemplate {
