@@ -25,9 +25,6 @@ spec:
             - name: http
               containerPort: <<WEB_HTTP_PORT>>
               protocol: TCP
-            - name: websocket
-              containerPort: <<WEB_WS_PORT>>
-              protocol: TCP
           envFrom:
             - secretRef:
                 name: <<SECRET_CM_NAME>>
@@ -77,9 +74,6 @@ spec:
     - name: http
       port: <<WEB_HTTP_PORT>>
       targetPort: <<WEB_HTTP_PORT>>
-    - name: websocket
-      port: <<WEB_WS_PORT>>         # Service 端口
-      targetPort: <<WEB_WS_PORT>>   # 容器端口
   type: ClusterIP                             # 集群内部访问，不需要外网
 
 ---

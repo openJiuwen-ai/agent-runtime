@@ -152,28 +152,10 @@ server {
 
     # ---------- /ws → 实例 Gateway WebSocket(动态上游) ----------
     location = /ws {
-        auth_request /_resolve_user_face;
-        auth_request_set $gw_ws_up $upstream_http_x_gateway_ws_upstream;
-        error_page 401 = @auth401;
-        proxy_pass $gw_ws_up;
-        proxy_set_header Host $proxy_host;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection $connection_upgrade;
-        proxy_set_header Accept-Encoding "";
-        proxy_read_timeout 3600s;
-        proxy_send_timeout 3600s;
+        return 404;
     }
     location /ws/ {
-        auth_request /_resolve_user_face;
-        auth_request_set $gw_ws_up $upstream_http_x_gateway_ws_upstream;
-        error_page 401 = @auth401;
-        proxy_pass $gw_ws_up;
-        proxy_set_header Host $proxy_host;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection $connection_upgrade;
-        proxy_set_header Accept-Encoding "";
-        proxy_read_timeout 3600s;
-        proxy_send_timeout 3600s;
+        return 404;
     }
 
     # ---------- /chat → 实例 User Web(动态上游,prefix 剥离) ----------
