@@ -52,7 +52,12 @@ export function ExpertPackageTemplatesPage() {
     );
     setTogglingId(row.template_id);
     try {
-      await ExpertPackageTemplateApi.update(row.template_id, { enabled });
+      const updated = await ExpertPackageTemplateApi.update(row.template_id, { enabled });
+      setItems((list) =>
+        list.map((item) =>
+          item.template_id === row.template_id ? { ...item, ...updated } : item,
+        ),
+      );
       toast('success', t('success.saved'));
     } catch (e) {
       setItems((list) =>
@@ -210,6 +215,10 @@ export function ExpertPackageTemplatesPage() {
         template={editing}
         onClose={() => setModalOpen(false)}
         onSaved={() => {
+          setModalOpen(false);
+          void reload();
+        }}
+        onConflict={() => {
           setModalOpen(false);
           void reload();
         }}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from openjiuwen_runtime.foundation.db.handler import DBHandler
@@ -39,6 +40,46 @@ _ALLOWED_SORT_FIELDS = frozenset({
 
 class ExpertPackageTemplateConflict(Exception):
     """专家包模板已被他人修改，拒绝用过期快照覆盖。"""
+
+
+def _parse_updated_at(value: Any) -> datetime | None:
+    """把接口里的 updated_at 或库里的 datetime 收成 UTC aware。"""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        text = str(value).strip()
+        if not text:
+            return None
+        try:
+            dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("invalid expected_updated_at") from exc
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _db_updated_at(value: Any) -> datetime | None:
+    """条件更新用的库侧时间：MariaDB DATETIME 多为 naive UTC。"""
+    parsed = _parse_updated_at(value)
+    if parsed is None:
+        return None
+    return parsed.replace(tzinfo=None)
+
+
+def _next_updated_at(previous: Any) -> datetime:
+    """MariaDB DATETIME 只到秒；同一秒内连写会让 CAS 失效，必要时进到下一秒。"""
+    now = utc_now()
+    prev = _parse_updated_at(previous)
+    if prev is None:
+        return now
+    prev_sec = prev.replace(microsecond=0)
+    now_sec = now.replace(microsecond=0)
+    if now_sec <= prev_sec:
+        return (prev_sec + timedelta(seconds=1)).replace(tzinfo=timezone.utc)
+    return now
 
 
 def assert_selectable_hub_asset(asset_id: str) -> str:
@@ -228,21 +269,56 @@ class ExpertPackageTemplateService:
         body: ExpertPackageTemplateUpdateBody,
     ) -> ExpertPackageTemplateOut | None:
         updates = body.model_dump(exclude_unset=True)
-        expected_updated_at = updates.pop("expected_updated_at", None)
+        expected_raw = updates.pop("expected_updated_at", None)
         existing = await self._handler.get(_TABLE, {"template_id": template_id})
         if existing is None:
             return None
-        if expected_updated_at is not None:
-            current = iso_datetime(getattr(existing, "updated_at", None))
-            if current != str(expected_updated_at).strip():
-                raise ExpertPackageTemplateConflict(
-                    "expert package template was modified by another editor"
-                )
+        expected_dt = _db_updated_at(expected_raw) if expected_raw is not None else None
+        if expected_raw is not None and expected_dt is None:
+            raise ValueError("invalid expected_updated_at")
         if "packages" in updates:
             updates["packages"] = normalize_package_items(updates["packages"])
         if not updates:
             counts = await self._reference_counts()
             return row_to_out(existing, reference_count=counts.get(str(existing.template_id), 0))
+
+        payload = dict(updates)
+        new_updated_at = (
+            _next_updated_at(getattr(existing, "updated_at", None))
+            if expected_dt is not None
+            else utc_now()
+        )
+        # 条件更新写入 naive UTC，与 MariaDB DATETIME 对齐。
+        payload["updated_at"] = (
+            new_updated_at.replace(tzinfo=None)
+            if new_updated_at.tzinfo is not None
+            else new_updated_at
+        )
+        filters: dict[str, Any] = {"template_id": template_id}
+        if expected_dt is not None:
+            filters["updated_at"] = expected_dt
+
+        row = await self._handler.update(_TABLE, filters, payload)
+        if row is None:
+            current = await self._handler.get(_TABLE, {"template_id": template_id})
+            if current is None:
+                return None
+            if expected_dt is not None:
+                # filter 含旧 updated_at 时 handler 回读可能失败；写成功则当前值等于本次写入。
+                written = _db_updated_at(payload["updated_at"])
+                current_at = _db_updated_at(getattr(current, "updated_at", None))
+                if (
+                    written is not None
+                    and current_at is not None
+                    and current_at.replace(microsecond=0) == written.replace(microsecond=0)
+                ):
+                    row = current
+                else:
+                    raise ExpertPackageTemplateConflict(
+                        "expert package template was modified by another editor"
+                    )
+            else:
+                return None
 
         await update_template_on_referencing_gateways(
             self._handler,
@@ -250,11 +326,6 @@ class ExpertPackageTemplateService:
             template_id,
             updates,
         )
-        payload = dict(updates)
-        payload["updated_at"] = utc_now()
-        row = await self._handler.update(_TABLE, {"template_id": template_id}, payload)
-        if row is None:
-            return None
         counts = await self._reference_counts()
         return row_to_out(row, reference_count=counts.get(str(row.template_id), 0))
 

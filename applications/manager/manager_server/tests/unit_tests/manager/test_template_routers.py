@@ -273,6 +273,46 @@ async def test_expert_package_template_stale_expected_updated_at_returns_409(
     }
 
 
+@pytest.mark.asyncio
+async def test_expert_package_template_enabled_toggle_then_stale_edit_returns_409(
+    manager_api: ManagerApiHarness,
+):
+    """启停推进 updated_at 后，仍带旧令牌编辑应 409（列表未回写时的服务端表现）。"""
+    h = manager_api
+    created = await h.post_json("/expert-package-templates", expert_package_templates()[0][1])
+    template_id = created["template_id"]
+    stale_updated_at = created["updated_at"]
+
+    toggled = await h.patch_json(
+        f"/expert-package-templates/{template_id}",
+        {"enabled": False},
+    )
+    assert toggled["enabled"] is False
+    assert toggled["updated_at"] != stale_updated_at
+
+    resp = await h.http.patch(
+        h.templates_url(f"/expert-package-templates/{template_id}"),
+        json={
+            "template_name": created["template_name"],
+            "packages": created["packages"],
+            "expected_updated_at": stale_updated_at,
+        },
+    )
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["code"] == "stale_template"
+
+    # 用开关返回的新令牌应能保存成功
+    ok = await h.patch_json(
+        f"/expert-package-templates/{template_id}",
+        {
+            "template_name": created["template_name"],
+            "packages": created["packages"],
+            "expected_updated_at": toggled["updated_at"],
+        },
+    )
+    assert ok["template_id"] == template_id
+
+
 def _demo_container_wire(container_id: str) -> dict:
     return {
         "container_id": container_id,
