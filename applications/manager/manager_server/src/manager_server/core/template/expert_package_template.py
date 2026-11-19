@@ -262,30 +262,19 @@ class ExpertPackageTemplateService:
             counts = await self._reference_counts()
             return row_to_out(existing, reference_count=counts.get(str(existing.template_id), 0))
 
-        new_revision = current + 1
         payload = dict(updates)
-        payload["revision"] = new_revision
+        payload["revision"] = current + 1
         payload["updated_at"] = utc_now()
 
-        filters: dict[str, Any] = {"template_id": template_id}
-        if expected is not None:
-            filters["revision"] = expected
-
+        filters: dict[str, Any] = {"id": existing.id, "revision": current}
         row = await self._handler.update(_TABLE, filters, payload)
         if row is None:
             current_row = await self._handler.get(_TABLE, {"template_id": template_id})
             if current_row is None:
                 return None
-            if expected is not None:
-                # filter 含旧 revision 时 handler 回读可能失败；写成功则当前值等于本次写入。
-                if _row_revision(current_row) == new_revision:
-                    row = current_row
-                else:
-                    raise ExpertPackageTemplateConflict(
-                        "expert package template was modified by another editor"
-                    )
-            else:
-                return None
+            raise ExpertPackageTemplateConflict(
+                "expert package template was modified by another editor"
+            )
 
         await update_template_on_referencing_gateways(
             self._handler,
