@@ -56,6 +56,9 @@ declare -A CONFIG=(
     ["WEB_TEMPLATE_FILE"]="${TEMPLATE_DIR}/web.template.yaml"
     ["WEB_FILE"]="${CONFIG_DIR}/web.yaml"
 
+    ["USER_BACKEND_TEMPLATE_FILE"]="${TEMPLATE_DIR}/user-backend.template.yaml"
+    ["USER_BACKEND_FILE"]="${CONFIG_DIR}/user-backend.yaml"
+
     ["MANAGER_SERVER_TEMPLATE_FILE"]="${TEMPLATE_DIR}/manager-server.template.yaml"
     ["MANAGER_SERVER_FILE"]="${CONFIG_DIR}/manager-server.yaml"
 
@@ -103,7 +106,7 @@ declare -A ARGS=(
 
 
 # ==== All available modules ====
-declare -ga ALL_MODULES=("NFS" "NFS-SC" "RABBITMQ" "MARIADB" "MYSQL" "POSTGRESQL" "MINIO" "LOG" "JINA" "PROXY" "MONITOR" "GATEWAY" "WEB" "MANAGER" "RUNTIME" "AGENTSERVER")
+declare -ga ALL_MODULES=("NFS" "NFS-SC" "RABBITMQ" "MARIADB" "MYSQL" "POSTGRESQL" "MINIO" "LOG" "JINA" "PROXY" "MONITOR" "GATEWAY" "USER-BACKEND" "WEB" "MANAGER" "RUNTIME" "AGENTSERVER")
 
 declare -ga MODULES=()
 
@@ -112,6 +115,10 @@ declare -ga MODULES=()
 declare -ga DB_MODULES=()
 
 declare -A DEPLOY_VARS=(
+    ["USER_BACKEND_IMAGE"]=""
+    ["USER_BACKEND_REPLICAS"]="1"
+    ["USER_BACKEND_DB_USER"]=""
+    ["USER_BACKEND_DB_PASSWORD"]=""
     ["AGENT_RUNTIME_ENABLED"]="true"
     ["AGENT_RUNTIME_DEPLOY_MODE"]="full"
     ["AGENT_RUNTIME_HEALTH_PROBE_TIMEOUT"]="3.0"

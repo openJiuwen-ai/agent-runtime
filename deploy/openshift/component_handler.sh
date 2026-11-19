@@ -52,6 +52,7 @@ component_files() {
                       echo "agentserver-env.configmap.yaml swarm-pvc.yaml agentserver.yaml"
                     fi;;
     gateway)        echo "gateway-env.configmap.yaml gateway.yaml";;
+    user-backend)   echo "user-backend.yaml";;
     web)            echo "web.yaml";;
     identity)       echo "identity.yaml";;
     manager-server) echo "manager-server.yaml";;
@@ -71,6 +72,7 @@ component_label() {
     runtime)        echo "app=jiuwenswarm-agent-runtime";;
     agentserver)    echo "app=jiuwenswarm-agentserver";;
     gateway)        echo "app=jiuwenswarm-gateway";;
+    user-backend)   echo "app=jiuwenswarm-user-backend";;
     web)            echo "app=jiuwenswarm-web";;
     identity)       echo "app=jiuwenswarm-identity";;
     manager-server) echo "app=jiuwenswarm-manager-server";;
@@ -78,10 +80,13 @@ component_label() {
   esac
 }
 
-# 组件 → Pod 就绪等待策略：secret 非工作负载（apply 成功即就绪）；
-# 其余工作负载（含 gateway distributed 多副本）等全部副本 Ready
+# user-backend 提交后由 Kubernetes 探测就绪，Identity 可随 manager 稍后启动。
 component_wait_mode() {
-  case "$1" in secret) echo "none";; *) echo "all";; esac
+  case "$1" in
+    secret) echo "none";;
+    user-backend) echo "submitted";;
+    *) echo "all";;
+  esac
 }
 
 # 组件 → 运行期硬依赖（up 预检：前置组件不在本次目标里就必须已在集群）
@@ -98,6 +103,7 @@ component_deps() {
                       echo "secret ${DEPLOY_VARS["DB_TYPE"]} redis minio agentserver"
                     fi;;
     web)            echo "secret minio";;
+    user-backend)   echo "secret ${DEPLOY_VARS["DB_TYPE"]}";;
     identity)       echo "secret ${DEPLOY_VARS["DB_TYPE"]}";;
     manager-server) echo "secret ${DEPLOY_VARS["DB_TYPE"]} redis";;
     runtime)        echo "secret ${DEPLOY_VARS["DB_TYPE"]} redis";;
@@ -168,6 +174,7 @@ component_probe() {
     runtime)        echo "Deployment/jiuwenswarm-agent-runtime";;
     agentserver)    echo "StatefulSet/jiuwenswarm-agentserver";;
     gateway)        echo "Deployment/jiuwenswarm-gateway";;
+    user-backend)   echo "Deployment/jiuwenswarm-user-backend";;
     web)            echo "Deployment/jiuwenswarm-web";;
     identity)       echo "Deployment/jiuwenswarm-identity";;
     manager-server) echo "Deployment/jiuwenswarm-manager-server";;

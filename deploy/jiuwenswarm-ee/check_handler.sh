@@ -96,6 +96,18 @@ check_vars() {
         DB_MODULES+=("IDENTITY")
     fi
 
+    if [[ "$CMD" != down && " ${MODULES[*]} " == *" USER-BACKEND "* ]]; then
+        local db_user="${DEPLOY_VARS[USER_BACKEND_DB_USER]}"
+        [[ "${DEPLOY_VARS[USER_BACKEND_IMAGE]}" =~ ^[A-Za-z0-9._:@/-]+$ ]] \
+            || error "Set a valid USER_BACKEND_IMAGE in .env.custom."
+        [[ "${DEPLOY_VARS[USER_BACKEND_REPLICAS]}" =~ ^[1-9][0-9]*$ ]] \
+            || error "USER_BACKEND_REPLICAS must be a positive integer."
+        [[ "$db_user" =~ [^[:space:]] && "${db_user,,}" != root && "${db_user,,}" != postgres ]] \
+            || error "Set a dedicated read-only USER_BACKEND_DB_USER in .env.custom."
+        [ -n "${DEPLOY_VARS[USER_BACKEND_DB_PASSWORD]}" ] \
+            || error "Set USER_BACKEND_DB_PASSWORD in .env.custom."
+    fi
+
     # Gateway ConfigPoll：由副本数派生，不接受用户直接配置 GATEWAY_CONFIG_POLL_*。
     # 多副本（>1）打开轮询以便各 Pod 从共享库热更；单副本关闭。
     local gateway_replicas="${DEPLOY_VARS["GATEWAY_REPLICAS"]:-1}"

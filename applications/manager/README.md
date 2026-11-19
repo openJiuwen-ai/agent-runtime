@@ -319,3 +319,29 @@ MANAGER_WEB_RESOLVER=kube-dns.kube-system.svc.cluster.local
 | `npm run build` | 构建前端静态资源到 `manager_web/dist/` |
 
 > 以上 Python 命令均需在已激活的虚拟环境中执行（uv 或 pip 安装后均可直接使用）。
+
+### 企业用户面后端
+
+为企业用户面创建专用数据库账号，在 Manager 初始化表之后用具有建视图权限的账号执行
+`python3 -m manager_server.core.user_console.shared_views`。沿用 Manager 的数据库名和
+schema。PostgreSQL 需授予该读账号相应 schema 的 `USAGE`。逐个对下列视图授予
+`SELECT`，并确认该账号直查数据表或写视图会被数据库拒绝。
+
+- `user_access_instance`
+- `user_access_instance_grant`
+- `user_access_agent_resource`
+
+在部署工具 `.env.custom` 中填写 `USER_BACKEND_IMAGE`、`USER_BACKEND_DB_USER` 和
+`USER_BACKEND_DB_PASSWORD`。部署工具按现有流程把密码写入 `jiuwenswarm-secret-configmap`，
+用户面后端读取其中的 `USER_BACKEND_DB_PASSWORD`。
+
+OpenShift 模式下，已有的 Secret 按原有流程更新。填写配置后执行
+`./deploy.sh up secret --render-only`，再执行 `./kubectl.sh replace -f conf/configmap-secret.yaml`。
+
+两套企业部署工具的 `deploy.sh up` 都包含 `web` 和 `user-backend`，也可以
+分别执行 `deploy.sh up web` 和 `deploy.sh up user-backend`。后端镜像启动
+Swarm 的 `jiuwenswarm.channels.web.app_web:create_enterprise_app`，通过独立的
+集群内 Service 接收 Web 请求。默认 `deploy.sh down` 按产品组件的顺序一起卸载。
+
+部署工具创建用户面后端 Pod 后继续部署。若先执行 `deploy.sh up`，后端会在
+`deploy.sh manager up` 启动 Identity 且只读账号可以访问三张视图后进入就绪状态。

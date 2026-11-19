@@ -12,7 +12,7 @@ parse_args() {
                 CMD="${args[$i]}"
                 i=$((i+1))
                 ;;
-            nfs|nfs-sc|rabbitmq|mariadb|mysql|postgresql|minio|log|jina|proxy|monitor|gateway|web|manager|runtime|agentserver)
+            nfs|nfs-sc|rabbitmq|mariadb|mysql|postgresql|minio|log|jina|proxy|monitor|gateway|user-backend|web|manager|runtime|agentserver)
                 MODULES+=("${args[$i]^^}")
                 i=$((i+1))
                 ;;
@@ -65,9 +65,9 @@ parse_args() {
 
 process_modules() {
     if [ "${DEPLOY_VARS["AGENT_RUNTIME_ENABLED"]}" == "false" ]; then
-        MODULES=("MONITOR" "GATEWAY" "WEB" "AGENTSERVER")
+        MODULES=("MONITOR" "GATEWAY" "USER-BACKEND" "WEB" "AGENTSERVER")
     else
-        MODULES=("MONITOR" "GATEWAY" "WEB" "RUNTIME")
+        MODULES=("MONITOR" "GATEWAY" "USER-BACKEND" "WEB" "RUNTIME")
     fi
 }
 
@@ -92,6 +92,7 @@ Modules (Optional):
   proxy     Proxy module (deploys to default namespace, ignores -n parameter)
   monitor   Observability module
   gateway   Gateway service module
+  user-backend  Enterprise user backend module
   web       Web frontend module
   runtime   Agent-Runtime module (dynamic agentserver pods; requires AGENT_RUNTIME_ENABLED=true)
   agentserver  AgentServer module (Deployment+Service; requires AGENT_RUNTIME_ENABLED=false)
