@@ -337,6 +337,52 @@ async def _ensure_user_preference_default_extras_column(handler: DBHandler) -> N
                 raise
 
 
+async def _ensure_expert_package_revision_column(handler: DBHandler) -> None:
+    """旧库补 ``expert_package_template.revision``（乐观锁令牌）。"""
+
+    def upgrade(connection):
+        inspector = inspect(connection)
+        table_name = EXPERT_PACKAGE_TEMPLATE_TABLE_DEF.table_name
+        if not inspector.has_table(table_name):
+            return
+        cols = {col["name"] for col in inspector.get_columns(table_name)}
+        if "revision" in cols:
+            return
+        quote = connection.dialect.identifier_preparer.quote
+        dialect = connection.dialect.name
+        if dialect == "postgresql":
+            col_type = "INTEGER"
+        elif dialect == "mysql":
+            col_type = "INT"
+        else:
+            col_type = "INTEGER"
+        connection.execute(
+            text(
+                f"ALTER TABLE {quote(table_name)} "
+                f"ADD COLUMN {quote('revision')} {col_type} NOT NULL DEFAULT 0"
+            )
+        )
+
+    for attempt in range(3):
+        try:
+            async with handler.get_engine().begin() as connection:
+                await connection.run_sync(upgrade)
+            return
+        except DBAPIError as exc:
+            dialect = handler.get_engine().dialect.name
+            sqlstate = getattr(exc.orig, "sqlstate", None) or getattr(
+                exc.orig, "pgcode", None
+            )
+            errno = exc.orig.args[0] if exc.orig.args else None
+            column_race = (
+                (dialect == "postgresql" and sqlstate == "42701")
+                or (dialect == "mysql" and errno == 1060)
+                or "duplicate column" in str(exc.orig).lower()
+            )
+            if not column_race or attempt == 2:
+                raise
+
+
 async def init_all_tables(handler: DBHandler) -> None:
     _ensure_bigint_type_support()
     # 必须在表循环之前补列：init_table 建索引会因缺列失败。
@@ -347,6 +393,7 @@ async def init_all_tables(handler: DBHandler) -> None:
     await _migrate_a2a_discovery_settings(handler)
     await _drop_instance_grant_upload_skill_policy(handler)
     await _ensure_user_preference_default_extras_column(handler)
+    await _ensure_expert_package_revision_column(handler)
     from manager_server.core.authz import seed_authz_defaults
 
     await seed_authz_defaults(handler)

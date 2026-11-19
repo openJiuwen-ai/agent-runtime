@@ -761,7 +761,8 @@
     "referenceCount": "References",
     "referenceHint": "Open the Agent config templates that reference this template",
     "fieldRequired": "Fill in {{field}}",
-    "deleteConfirm": "Delete this expert package template? It cannot be deleted while an Agent config template references it."
+    "deleteConfirm": "Delete this expert package template? It cannot be deleted while an Agent config template references it.",
+    "conflictStale": "This expert package was changed elsewhere. Reopen it, then save again."
   },
   "skillWhitelistTemplate": {
     "title": "Preset Skills",

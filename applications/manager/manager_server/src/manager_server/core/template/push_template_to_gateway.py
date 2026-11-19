@@ -162,7 +162,15 @@ _TEMPLATE_HTTP_PATHS: dict[str, str] = {
     "mcp_templates": "/api/v1/mcp-templates",
     AGENT_TEMPLATES_KIND: "/api/v1/agent-templates",
 }
-_PUSH_DROP_KEYS = frozenset({"id", "created_at", "updated_at", "jiuwenclaw_id"})
+_PUSH_DROP_KEYS = frozenset({
+    "id",
+    "created_at",
+    "updated_at",
+    "jiuwenclaw_id",
+})
+_PUSH_KIND_DROP_KEYS: dict[str, frozenset[str]] = {
+    "expert_package_templates": frozenset({"revision"}),
+}
 
 _ROW_TO_OUT_MODULES: dict[str, str] = {
     "a2a_outbound_templates": "manager_server.core.template.a2a_outbound_template",
@@ -197,8 +205,9 @@ def _template_base_path(kind: str) -> str:
     return _TEMPLATE_HTTP_PATHS[_normalize_kind(kind)]
 
 
-def _clean_template(template: dict[str, Any]) -> dict[str, Any]:
-    return {k: v for k, v in template.items() if k not in _PUSH_DROP_KEYS}
+def _clean_template(template: dict[str, Any], kind: str) -> dict[str, Any]:
+    drop = _PUSH_DROP_KEYS | _PUSH_KIND_DROP_KEYS.get(_normalize_kind(kind), frozenset())
+    return {k: v for k, v in template.items() if k not in drop}
 
 
 async def _create_template_on_gateway(
@@ -208,7 +217,7 @@ async def _create_template_on_gateway(
     **kwargs: Any,
 ) -> dict[str, Any]:
     section = _normalize_kind(kind)
-    payload = _clean_template(template)
+    payload = _clean_template(template, section)
     if section in {"a2a_outbound_templates", "a2a_access_policies"}:
         payload["updated_at"] = template.get("updated_at")
     return await gateway_request(
