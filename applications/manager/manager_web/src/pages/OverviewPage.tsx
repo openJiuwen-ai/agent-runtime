@@ -140,7 +140,7 @@ export function OverviewPage() {
           </div>
           <div className="kpi-card__value">
             {statusDist.ok}
-            <span className="unit">/ {statusDist.total} 在线</span>
+            <span className="unit">{t('overview.onlineOfTotal', { total: statusDist.total })}</span>
           </div>
           <div className="kpi-card__meta">
             <div className="stat-bar w-full">

@@ -120,6 +120,7 @@ function MultiSelectDropdown({
   onChange: (values: string[]) => void;
   placeholder?: string;
 }) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
   const ref = useRef<HTMLDivElement>(null);
@@ -159,7 +160,7 @@ function MultiSelectDropdown({
         <div className="absolute left-0 top-full mt-1 z-[9999] w-full min-w-[12rem] max-h-[200px] overflow-auto rounded border border-[var(--border)] bg-[var(--card)] shadow-lg">
           <input
             className="input w-full !border-0 !border-b !rounded-none !text-xs"
-            placeholder="搜索..."
+            placeholder={t('common.search')}
             value={q}
             onChange={(e) => setQ(e.target.value)}
             autoFocus
@@ -171,7 +172,7 @@ function MultiSelectDropdown({
               <span className="text-muted mono text-[10px] ml-auto shrink-0">{o.id.length > 12 ? o.id.slice(0, 12) + '…' : o.id}</span>
             </label>
           ))}
-          {filtered.length === 0 && <div className="px-2 py-2 text-xs text-muted">无匹配项</div>}
+          {filtered.length === 0 && <div className="px-2 py-2 text-xs text-muted">{t('common.noMatches')}</div>}
         </div>
       )}
     </div>
