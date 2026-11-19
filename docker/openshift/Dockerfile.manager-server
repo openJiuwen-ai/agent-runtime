@@ -15,8 +15,12 @@ WORKDIR /app/agent-runtime
 COPY --chown=1000:0 . /app/agent-runtime/
 RUN chgrp -R 0 /app/agent-runtime && chmod -R g+rwX /app/agent-runtime
 
-# manager-server 仅依赖 foundation，不依赖 service
-RUN uv pip install --system -e "./foundation" \
+# manager-server 启动会 import openjiuwen_runtime.service.bootstrap（多副本选主 Redis）。
+# 仅装 foundation / manager_server 会导致
+# ModuleNotFoundError: No module named 'openjiuwen_runtime.service'。
+RUN uv pip install --system \
+    -e "./foundation" \
+    -e "./service" \
     -e "./applications/manager/manager_server" \
     ${PIP_EXTRA_ARGS}
 
