@@ -5,7 +5,13 @@ FROM ${BASE_IMAGE}:${IMAGE_VERSION}
 ARG PIP_EXTRA_ARGS="-i https://mirrors.aliyun.com/pypi/simple/"
 
 
-RUN uv pip install --system -e "./applications/manager/manager_server" \
+# manager-server 启动会 import openjiuwen_runtime.service.bootstrap（多副本选主 Redis）。
+# manager_server 的 pyproject 目前只声明 foundation，不装 service 则运行期
+# ModuleNotFoundError: No module named 'openjiuwen_runtime.service'。
+RUN uv pip install --system \
+    -e "./foundation" \
+    -e "./service" \
+    -e "./applications/manager/manager_server" \
     ${PIP_EXTRA_ARGS}
 
 USER app
