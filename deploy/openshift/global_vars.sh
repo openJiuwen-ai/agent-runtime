@@ -16,9 +16,9 @@ CUSTOM_ENV_FILE="${DEPLOY_ENV_FILE:-$SCRIPT_DIR/.env.custom}"
 # 全部组件的规范依赖序（up 按此序排列；down 倒序）。
 # secret 必须在最前：基础服务与产品组件的密码统一经 jiuwenswarm-secret-configmap 注入；
 # nfs 紧随其后：k8s 形态下 mariadb/mysql/postgresql/minio/agentserver 的数据卷直连挂载 NFS
-ALL_COMPONENTS=(secret nfs nfs-sc mariadb mysql postgresql minio redis runtime agentserver gateway web identity manager-server manager-web)
+ALL_COMPONENTS=(secret nfs nfs-sc mariadb mysql postgresql minio redis runtime agentserver gateway user-backend web identity manager-server manager-web)
 
-UP_TARGETS=(secret redis agentserver gateway web)         # up 默认目标（规范依赖序）
+UP_TARGETS=(secret redis agentserver gateway user-backend web) # up 默认目标（规范依赖序）
 MANAGER_TARGETS=(identity manager-server manager-web)     # manager 组
 
 # 镜像名变量清单，与 templates/ 下 <<XXX_IMAGE>> 占位符一一对应
@@ -47,7 +47,7 @@ OPTIONAL_VARS=(
     GATEWAY_PG_SCHEMA WEB_PG_SCHEMA RUNTIME_PG_SCHEMA IDENTITY_PG_SCHEMA MANAGER_PG_SCHEMA
     IDENTITY_SSO_SERVER_URL IDENTITY_SSO_LOGIN_CLIENT_ID IDENTITY_SSO_TOKEN_AUDIENCE
     IDENTITY_FEDERATION_CONFIG_FILE WEB_NODE_PORT
-    MANAGER_AGENT_CLIENT_REGISTRATION_CONFIG_FILE
+    MANAGER_AGENT_CLIENT_REGISTRATION_CONFIG_FILE USER_BACKEND_DB_PASSWORD_ENCODED
     GATEWAY_AGENT_CLIENT_MODE GATEWAY_RUNTIME_MANAGER_URL AGENTSERVER_POD_DNS_LIST
     IMPORT_LOCAL_ALLOWED_DOWNLOAD_HOSTS TEAM_SKILLS_HUB_ALLOWED_DOWNLOAD_HOSTS
     TEAM_SKILLS_HUB_BASE_URL
@@ -65,6 +65,8 @@ DEPS_K8S=(yq kubectl)
 # ---------- 部署变量默认值 ----------
 # DEPLOY_VARS 提供通用默认值；可被 .env.custom 覆盖
 declare -A DEPLOY_VARS=(
+    ["USER_BACKEND_IMAGE"]=""
+    ["USER_BACKEND_REPLICAS"]="1"
     # ----- 通用（双形态） -----
     ["NAMESPACE"]="default"
     ["RENDER_ONLY"]="false"
@@ -112,6 +114,8 @@ declare -A DEPLOY_VARS=(
     ["IDENTITY_DB_PASSWORD"]=""
     ["MANAGER_DB_USER"]=""
     ["MANAGER_DB_PASSWORD"]=""
+    ["USER_BACKEND_DB_USER"]=""
+    ["USER_BACKEND_DB_PASSWORD"]=""
 
     ["REDIS_USER"]=""                    # 留空 = default 用户（外挂 Redis 场景）；内置 Redis 由 resolve_redis_vars 派生 jiuwenswarm
     ["REDIS_PASSWORD"]="Root@123456"

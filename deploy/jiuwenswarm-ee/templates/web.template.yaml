@@ -36,6 +36,8 @@ spec:
               value: "http://<<IDENTITY_NAME>>:<<IDENTITY_REST_PORT>>"
             - name: USER_WEB_MANAGER_TARGET
               value: "http://<<MANAGER_SERVER_NAME>>:<<MANAGER_REST_PORT>>"
+            - name: USER_WEB_BACKEND_TARGET
+              value: "http://jiuwenswarm-user-backend:8780"
             - name: USER_WEB_RESOLVER
               value: "<<MANAGER_WEB_RESOLVER>>"
             - name: WEB_HTTP_PORT

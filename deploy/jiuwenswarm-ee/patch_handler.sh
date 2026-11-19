@@ -92,7 +92,7 @@ inject_data_volume() {
     # 私有卷 agentserver-infra(emptyDir)与数据卷同批注入:run/config/auth 等
     # infra 卷（emptyDir）与 domain 卷（PVC/NFS）同级互不嵌套：系统数据落 system/，业务数据落 domain/
     jq --argjson volume "${data_volume}" \
-        '.rawdata.templates[].volumes += [$volume, [{"name": "agentserver-infra", "emptyDir": {}}]]' \
+        '.rawdata.templates[].volumes += [$volume, {"name": "agentserver-infra", "emptyDir": {}}]' \
         "${CONFIG["AS_JSON_FILE"]}" > "${CONFIG["AS_JSON_FILE"]}.tmp" && mv -f "${CONFIG["AS_JSON_FILE"]}.tmp" "${CONFIG["AS_JSON_FILE"]}"
 }
 
