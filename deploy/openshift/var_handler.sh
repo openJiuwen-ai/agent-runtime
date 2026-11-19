@@ -122,8 +122,6 @@ check_storage_class_vars() {
   done
 }
 
-# 其余选填项（OPTIONAL_VARS 中除 StorageClass 外）按各自语义校验（均允许留空）。
-# 各白名单字符集均排除 & 与 \：渲染经 awk gsub 替换，替换串中这两个字符特殊（见 replace_placeholder）
 check_optional_vars() {
   local val
   val="${DEPLOY_VARS["OBS_PUBLIC_BASE_URL"]:-}"
@@ -202,6 +200,8 @@ resolve_api_server_var() {
 #                    → 本机 /etc/resolv.conf 私网 nameserver（RFC1918 校验，防 render-only 写入公网 DNS）
 #                    → kube-dns 服务名兜底
 resolve_manager_web_resolver() {
+  # down 不渲染清单，解析 resolver 无意义，静默跳过
+  [ "${CMD:-}" = down ] && return 0
   [ -n "${DEPLOY_VARS["MANAGER_WEB_RESOLVER"]:-}" ] && return 0
   if ! is_k8s_cluster; then
     DEPLOY_VARS["MANAGER_WEB_RESOLVER"]="dns-default.openshift-dns.svc.cluster.local"
@@ -275,6 +275,82 @@ resolve_builtin_svc_locations() {
     fi
   fi
   return 0
+}
+# openshift 形态 StorageClass 解析（须在集群可达后执行，调用点见 deploy.sh up 分支）：
+# DATA_STORAGE_CLASS/WORKSPACE_STORAGE_CLASS 留空时自动指向内置 nfs-sc 供给组件生成的 StorageClass
+# （NFS_SC_NAME，默认 jiuwenswarm-storage）；该供给组件未部署时直接报错退出——
+# 避免 PVC 静默悬空（SC 为 null 且集群无默认 StorageClass）导致 Pod 卡 Pending。
+# 显式配置的值视为外挂 StorageClass，不覆盖（见集群部署指南 2.1.3）。
+# 本次目标含 nfs-sc 时 check_nfs_component_vars 已先行回填（SC 由本次创建，无需查集群），
+# 此函数仅兜底业务组件单独部署（targets 不含 nfs-sc）的场景。
+# k8s 形态数据卷走 NFS 直连挂载、不渲染 PVC，无需解析，直接跳过。
+# 存储类派生（MOUNT_TYPE=sc / openshift 形态）：DATA/WORKSPACE_STORAGE_CLASS 留空时，
+# 若 nfs-sc 供给组件在本次部署目标中、或已存在于集群（本 ns → default 定位），自动指向
+# 其生成的 StorageClass（NFS_SC_NAME）；用户已配置视为外挂 StorageClass，不覆盖。
+# 自动填充后校验 StorageClass 真实存在（404 → 指引部署 nfs-sc 或显式配置）。
+# --render-only 不经过本函数（不连集群，无法探测；nfs-sc 在目标中时由
+# check_nfs_component_vars 在 check_vars 阶段填充）。
+# 须在 kctl_check_vars 之后调用（探测走集群通道）。
+resolve_storage_class_vars() {
+  # 存储类解析（sc 模式 / openshift 形态）：为 DATA/WORKSPACE_STORAGE_CLASS 解析出
+  # 确定可用的 StorageClass，渲染的 PVC 全部显式指定，杜绝 Pod 因 PVC 未绑定卡 Pending：
+  #   1. 已配置 → 校验集群中存在，不存在报错退出；
+  #   2. 留空且集群中存在 NFS 存储供给组件（本 ns → default 定位）→ 指向其 StorageClass（NFS_SC_NAME）；
+  #   3. 留空且无供给组件 → 使用集群默认 StorageClass（is-default-class 注解），无默认报错退出。
+  # nfs 直连模式不消费存储类，直接跳过。--render-only 不经过本函数（不连集群）。
+  # 须在 kctl_check_vars 之后调用（探测走集群通道）。
+  is_k8s_cluster && [ "${DEPLOY_VARS["MOUNT_TYPE"]:-sc}" != sc ] && return 0
+  local out code
+  out="$(kctl_tmpdir)/sc-resolve.json"
+  local v val
+  # 本次目标含 nfs-sc：指向 NFS_SC_NAME 的值由本次创建，集群中尚不存在，
+  # 跳过存在性校验（用户配置的其他值仍须已存在）
+  local sc_pending=0
+  in_array nfs-sc "${TARGETS[@]:-}" && sc_pending=1
+  for v in "${STORAGE_CLASS_VARS[@]}"; do
+    val="${DEPLOY_VARS[$v]:-}"
+    [ -n "$val" ] || continue
+    [ "$sc_pending" = 1 ] && [ "$val" = "${DEPLOY_VARS["NFS_SC_NAME"]}" ] && continue
+    code=$(kctl_http GET "$(kctl_kind_path StorageClass)/$val" "$out")
+    [ "$code" = 200 ] \
+      || error "StorageClass $val 不存在（HTTP $code）：$v 配置有误，请修正，或部署 NFS 存储供给组件（./deploy.sh up nfs）"
+    info "$v → $val（已确认集群中存在）"
+  done
+  local need_resolve=0
+  for v in "${STORAGE_CLASS_VARS[@]}"; do
+    [ -z "${DEPLOY_VARS[$v]:-}" ] && need_resolve=1
+  done
+  [ "$need_resolve" = 1 ] || return 0
+  # 留空的变量：优先指向 NFS 存储供给组件的 StorageClass
+  local prov_exists=0
+  in_array nfs-sc "${TARGETS[@]:-}" && prov_exists=1
+  if [ "$prov_exists" = 0 ] && component_probe nfs-sc >/dev/null 2>&1; then
+    [ "$(component_probe_code nfs-sc)" = 200 ] && prov_exists=1
+  fi
+  if [ "$prov_exists" = 1 ]; then
+    for v in "${STORAGE_CLASS_VARS[@]}"; do
+      [ -n "${DEPLOY_VARS[$v]:-}" ] && continue
+      DEPLOY_VARS[$v]="${DEPLOY_VARS["NFS_SC_NAME"]}"
+      code=$(kctl_http GET "$(kctl_kind_path StorageClass)/${DEPLOY_VARS[$v]}" "$out")
+      [ "$code" = 200 ] \
+        || error "StorageClass ${DEPLOY_VARS[$v]} 不存在（HTTP $code）：供给组件在但 StorageClass 缺失，请检查 nfs-sc 部署状态"
+      info "$v → ${DEPLOY_VARS[$v]}（NFS 存储供给组件）"
+    done
+    return 0
+  fi
+  # 无供给组件：使用集群默认 StorageClass（is-default-class 注解）
+  code=$(kctl_http GET "/apis/storage.k8s.io/v1/storageclasses" "$out")
+  [ "$code" = 200 ] || error "无法列举集群 StorageClass（HTTP $code）：请检查集群连接与凭证"
+  local default_sc
+  default_sc=$(yq -r '([.items[] | select(.metadata.annotations."storageclass.kubernetes.io/is-default-class" == "true")][0].metadata.name) // ""' "$out" 2>/dev/null)
+  [ -n "$default_sc" ] \
+    || error "集群无默认 StorageClass，且 NFS 存储供给组件未部署：PVC 将无法绑定（Pod 卡 Pending）。
+请任选其一：./deploy.sh up nfs 部署 NFS 存储供给组件（自动解析为 nfs-sc）；或在 .env.custom 配置 DATA_STORAGE_CLASS / WORKSPACE_STORAGE_CLASS；或为集群中某个 StorageClass 添加默认注解"
+  for v in "${STORAGE_CLASS_VARS[@]}"; do
+    [ -n "${DEPLOY_VARS[$v]:-}" ] && continue
+    DEPLOY_VARS[$v]="$default_sc"
+    info "$v → 集群默认 StorageClass $default_sc"
+  done
 }
 
 # 数据库连接检查与派生。DB_HOST 空=内置：headless 服务名按 DB_TYPE+BASE_SVC_NS 静态派生
@@ -426,22 +502,34 @@ resolve_obs_vars() {
 # 基础组件（NFS / 数据库 / Redis）的内置/外置派生集中在「基础服务模式」节；
 # NFS 相关函数在 k8s_handler.sh（直连挂载仅 k8s 形态使用），MODE=dev 相关在 k8s_handler.sh。
 # nfs / nfs-sc 组件目标守卫（TARGETS 含二者之一时生效）。
+# nfs 为部署/卸载的唯一用户入口目标（nfs-sc 显式指定仅限 up --render-only 手动渲染入口，
+# parse_args 校验），实际组件集由 filter_targets_by_nfs_platform 按形态/外挂 NFS/节点架构
+# 解析——进入本函数时 nfs 仅存在于 k8s 内置模式（openshift / 外部 NFS 场景已解析为 nfs-sc）。
 # nfs-server（仅 k8s 形态）：命名空间规则与 mariadb 等基础服务一致——部署落 NAMESPACE，
 # 消费按 本 ns → default 定位；卸载均经 component_ns(nfs) 定位（与 deploy_component 的
-# ns 覆写一致）。外部 NFS 模式下内置组件无意义，同样拦截。
+# ns 覆写一致）。
 # nfs-sc（双形态通用）：openshift 形态无内置 NFS server，须指定外挂地址。
 # 前置：parse_args 已完成（TARGETS 可用）、resolve_nfs_vars 已派生 ENABLE_EXTERNAL_NFS
 check_nfs_component_vars() {
+  # down 只消费 conf/ 现有清单卸载，不做渲染前置校验与解析，静默跳过
+  [ "${CMD:-}" = down ] && return 0
+  # MOUNT_TYPE（k8s 形态存储挂载模式）校验
+  if is_k8s_cluster; then
+    [[ "${DEPLOY_VARS["MOUNT_TYPE"]:-sc}" =~ ^(nfs|sc)$ ]]       || error "MOUNT_TYPE 非法（仅支持 nfs | sc）: ${DEPLOY_VARS["MOUNT_TYPE"]}"
+    [ "${DEPLOY_VARS["MOUNT_TYPE"]}" = sc ] && [ "${DEPLOY_VARS["RENDER_ONLY"]}" != "true" ]       && [ -z "${DEPLOY_VARS["DATA_STORAGE_CLASS"]}" ] && [ -z "${DEPLOY_VARS["WORKSPACE_STORAGE_CLASS"]}" ]       && ! in_array nfs-sc "${TARGETS[@]:-}"       && info "存储类未配置，将自动解析（已有供给组件优先，其次集群默认 StorageClass）"
+  fi
   local has_nfs=0 has_sc=0
   in_array nfs "${TARGETS[@]:-}" && has_nfs=1
   in_array nfs-sc "${TARGETS[@]:-}" && has_sc=1
   [ "$has_nfs" = 1 ] || [ "$has_sc" = 1 ] || return 0
-  # nfs-server：仅 k8s 形态；外部 NFS 模式下内置组件无意义
+  # nfs-server：仅 k8s 形态内置模式可达（openshift / 外部 NFS 已由
+  # filter_targets_by_nfs_platform 解析为 nfs-sc）。
+  # 部署守卫仅对 up 生效——down 是卸载操作，不得被"无需部署"类检查拦截
   if [ "$has_nfs" = 1 ]; then
-    is_k8s_cluster \
-      || error "nfs 组件仅 CLUSTER_TYPE=k8s 支持：openshift 形态存储走 PVC，不使用 NFS server 组件"
-    [ "${DEPLOY_VARS["ENABLE_EXTERNAL_NFS"]}" = "true" ] \
-      && error "已配置外部 NFS（NFS_SERVER_ADDR=${DEPLOY_VARS["NFS_SERVER_ADDR"]}）：内置 nfs 组件无需部署，请从目标剔除 nfs"
+    if [ "$CMD" = up ]; then
+      is_k8s_cluster \
+        || error "nfs 组件仅 CLUSTER_TYPE=k8s 支持：openshift 形态存储走 PVC，不使用 NFS server 组件"
+    fi
     # 固定调度节点识别：up（连集群）必须成功——nfs-server 的 nodeName 与导出根
     # hostPath 都以部署节点为准；--render-only 离线渲染允许留空（nodeName 整行
     # 删除 + apply_nfs_extras 告警，正式部署须在集群可达环境重新渲染）
@@ -453,7 +541,16 @@ check_nfs_component_vars() {
       # k8s 内置模式：数据源 = 内置 NFS server 的节点地址（须先 up nfs，此处自动解析回填）
       [ -n "${DEPLOY_VARS["NFS_SERVER_ADDR"]}" ] || {
         local ip
-        ip=$(_resolve_builtin_nfs_server) \
+        ip=$(_resolve_builtin_nfs_server) || ip=""
+        if [ -z "$ip" ] && in_array nfs "${TARGETS[@]:-}"; then
+          # 本次 up 一并拉起内置 nfs-server（filter_targets_by_nfs_platform 补齐）：
+          # Pod 尚未运行，解析回退到部署节点 InternalIP——nfs-server hostNetwork
+          # 绑定节点 2049，供给器 Pod 就绪重试后即可连上
+          ip=$(kubectl get node "${DEPLOY_VARS["CURRENT_NODE_NAME"]:-}" \
+            -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null)
+          [ -n "$ip" ] && info "nfs-sc 数据源: 内置 NFS server 部署节点 ${DEPLOY_VARS["CURRENT_NODE_NAME"]}（本次一并拉起，待其就绪）"
+        fi
+        [ -n "$ip" ] \
           || error "内置模式下 nfs-sc 渲染须解析内置 NFS server 地址（见 stderr）；或改填外部 NFS_SERVER_ADDR"
         DEPLOY_VARS["NFS_SERVER_ADDR"]="$ip"
         info "nfs-sc 数据源: 内置 NFS server（${ip}）"
@@ -462,15 +559,14 @@ check_nfs_component_vars() {
       error "openshift 形态部署 nfs-sc 须指定外挂 NFS server：请在 .env.custom 填写 NFS_SERVER_ADDR（内置 NFS server 组件仅 k8s 形态支持）"
     fi
     # 内置 nfs-sc 供给模式：存储类留空时自动指向供给器生成的 StorageClass；
-    # 用户已配置视为外挂 StorageClass（见 2.1.4），不覆盖
-    local auto=0
+    # 用户已配置视为外挂 StorageClass（见 2.1.3），不覆盖
+    local auto_data=0 auto_ws=0
     [ -n "${DEPLOY_VARS["DATA_STORAGE_CLASS"]}" ] \
-      || { DEPLOY_VARS["DATA_STORAGE_CLASS"]="${DEPLOY_VARS["NFS_SC_NAME"]}"; auto=1; }
+      || { DEPLOY_VARS["DATA_STORAGE_CLASS"]="${DEPLOY_VARS["NFS_SC_NAME"]}"; auto_data=1; }
     [ -n "${DEPLOY_VARS["WORKSPACE_STORAGE_CLASS"]}" ] \
-      || { DEPLOY_VARS["WORKSPACE_STORAGE_CLASS"]="${DEPLOY_VARS["NFS_SC_NAME"]}"; auto=1; }
-    if [ "$auto" = 1 ]; then
-      info "nfs-sc 供给模式: 留空的 DATA/WORKSPACE_STORAGE_CLASS 自动指向 ${DEPLOY_VARS["NFS_SC_NAME"]}（已配置的值视为外挂 StorageClass，不覆盖）"
-    fi
+      || { DEPLOY_VARS["WORKSPACE_STORAGE_CLASS"]="${DEPLOY_VARS["NFS_SC_NAME"]}"; auto_ws=1; }
+    [ "$auto_data" = 1 ] && info "DATA_STORAGE_CLASS → ${DEPLOY_VARS["DATA_STORAGE_CLASS"]}（NFS 存储供给组件）"
+    [ "$auto_ws" = 1 ] && info "WORKSPACE_STORAGE_CLASS → ${DEPLOY_VARS["WORKSPACE_STORAGE_CLASS"]}（NFS 存储供给组件）"
   fi
 }
 

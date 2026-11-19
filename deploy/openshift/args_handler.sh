@@ -35,6 +35,13 @@ parse_args() {
   [ "${DEPLOY_VARS["RENDER_ONLY"]}" = "true" ] && [ "$CMD" = down ] \
     && error "down 不支持 --render-only（卸载直接消费 conf/ 现有清单；缺失时先 up --render-only 补齐）"
 
+  # nfs-sc 显式目标仅限 up --render-only：离线渲染无法探测节点架构，作为手动指定渲染入口
+  # （正式部署/卸载一律走 nfs 统一入口，由 filter_targets_by_nfs_platform 自动解析组件集）
+  if in_array nfs-sc "${TARGETS[@]}" \
+    && { [ "$CMD" != up ] || [ "${DEPLOY_VARS["RENDER_ONLY"]}" != "true" ]; }; then
+    error "nfs-sc 仅支持随 up --render-only 显式指定（离线渲染无法探测节点架构的手动渲染入口）；部署/卸载统一使用 nfs 目标（工具按形态/外挂 NFS/节点架构自动解析组件集）"
+  fi
+
   # 目标组件：显式指定优先（按规范依赖序排列）；未指定则取组默认
   if [ ${#TARGETS[@]} -gt 0 ]; then
     TARGETS_EXPLICIT=1
@@ -58,6 +65,11 @@ usage() {
                     （依赖的 secret / redis 集群缺失时自动拉起，已有则复用）
   up mariadb        只部署/渲染指定组件；可多选，如: up mariadb minio
                     基础服务四件套: mariadb / mysql / postgresql / minio（数据库三选一）
+  up nfs            NFS 存储统一入口，实际组件集自动解析:
+                    openshift / 外部 NFS / 非 amd64 节点 → nfs-sc（存储供给组件）
+                    k8s amd64 内置模式   → nfs + nfs-sc（NFS server + 存储供给一次拉起）
+  up nfs-sc         仅限搭配 --render-only：离线渲染无法探测节点架构时的手动渲染入口；
+                    正式部署/卸载不支持，统一走 nfs 目标
   down [组件...]    卸载目标（倒序删除；共享依赖 secret/redis 仍被存活组件依赖时保留，
                     卸载后依赖方清零则自动回收）。默认 down 与 up 目标对称；
                     模式切换（routing→off）后遗留的 runtime 用 `down runtime` 清理

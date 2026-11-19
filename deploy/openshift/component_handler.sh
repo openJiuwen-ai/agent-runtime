@@ -35,10 +35,10 @@ component_files() {
     redis)          echo "redis.yaml";;
     runtime)        if [ "${DEPLOY_VARS["AGENT_RUNTIME_DEPLOY_MODE"]}" = full ]; then
                       # full：AgentServer 由 runtime 按需创建——预创建其 env ConfigMap 与
-                      # 工作区存储（openshift 形态 PVC；k8s 形态走 NFS 直连，卷在
-                      # agentserver.json 内由 apply_nfs_direct_mounts 改写），并渲染
-                      # config_sync 载荷（manager-web 导入运行时模板用，无沙箱容器）
-                      if is_k8s_cluster; then
+                      # 工作区存储（openshift 形态与 k8s+sc 模式为 PVC；k8s+nfs 模式走
+                      # NFS 直连，卷在 agentserver.json 内由 apply_nfs_direct_mounts 改写），
+                      # 并渲染 config_sync 载荷（manager-web 导入运行时模板用，无沙箱容器）
+                      if nfs_direct_mode; then
                         echo "agentserver-env.configmap.yaml runtime.yaml agentserver.json"
                       else
                         echo "agentserver-env.configmap.yaml swarm-pvc.yaml runtime.yaml agentserver.json"
@@ -48,7 +48,7 @@ component_files() {
                       # （scope/模板契约 + 预建 Pod 注册的模板来源）
                       echo "runtime.yaml agentserver.json"
                     fi;;
-    agentserver)    if is_k8s_cluster; then
+    agentserver)    if nfs_direct_mode; then
                       echo "agentserver-env.configmap.yaml agentserver.yaml"
                     else
                       echo "agentserver-env.configmap.yaml swarm-pvc.yaml agentserver.yaml"
@@ -88,10 +88,15 @@ component_wait_mode() {
   case "$1" in secret) echo "none";; *) echo "all";; esac
 }
 
-# k8s 形态内置 NFS 模式的 nfs 组件依赖声明（外部 NFS / openshift 形态不依赖 nfs 组件）：
-# mariadb/mysql/postgresql/minio/agentserver 数据卷直连挂载 NFS（redis 纯缓存不挂卷）
+# k8s 形态存储挂载模式判定：nfs=数据卷直连挂载；sc=PVC+StorageClass 动态供给（默认）
+nfs_direct_mode() {
+  is_k8s_cluster && [ "${DEPLOY_VARS["MOUNT_TYPE"]:-sc}" = nfs ]
+}
+
+# nfs 组件依赖声明（仅 nfs 直连模式）：mariadb/mysql/postgresql/minio/agentserver 数据卷
+# 直连挂载 NFS（redis 纯缓存不挂卷）；sc 模式与 openshift 形态走 PVC，不依赖 nfs 组件
 component_nfs_dep() {
-  is_k8s_cluster && [ "${DEPLOY_VARS["ENABLE_EXTERNAL_NFS"]}" != "true" ] && echo "nfs"
+  nfs_direct_mode && [ "${DEPLOY_VARS["ENABLE_EXTERNAL_NFS"]}" != "true" ] && echo "nfs"
 }
 
 # 组件 → 运行期硬依赖（up 预检：前置组件不在本次目标里就必须已在集群）

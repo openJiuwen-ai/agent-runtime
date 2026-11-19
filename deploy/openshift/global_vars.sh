@@ -52,7 +52,7 @@ OPTIONAL_VARS=(
     CURRENT_NODE_NAME
 )
 
-# StorageClass 变量：check_storage_class_vars 做 DNS subdomain 规范校验（留空走集群默认）
+# StorageClass 变量：check_storage_class_vars 做 DNS subdomain 规范校验（留空由 resolve_storage_class_vars 在 up 时解析）
 STORAGE_CLASS_VARS=(DATA_STORAGE_CLASS WORKSPACE_STORAGE_CLASS)
 
 # 运行依赖清单（check_dependency 按 CLUSTER_TYPE 选用；kubectl --raw 需 ≥1.20）
@@ -145,11 +145,11 @@ declare -A DEPLOY_VARS=(
 
     # NFS 存储数据源（双形态通用：k8s 直连挂载与 nfs-sc 供给组件共用）
     # NFS_SERVER_ADDR：k8s 形态留空=内置 NFS server（./deploy.sh up nfs）；
-    #   openshift 形态部署 nfs-sc 时必填外挂地址（内置 NFS server 仅 k8s 形态支持）
+    #   openshift 形态部署 nfs-sc（./deploy.sh up nfs）时必填外挂地址（内置 NFS server 仅 k8s 形态支持）
     ["NFS_SERVER_ADDR"]=""
     ["NFS_SHARE_PATH"]="/"               # NFS v4 导出根（伪根）下的共享根，须绝对路径
     # NFS 存储供给组件 nfs-sc（双形态通用）：提供标准 StorageClass，业务 PVC 动态申领 NFS 子目录
-    ["NFS_SC_NAME"]="jiuwenswarm-storage"        # 生成的 StorageClass 名（可被 DATA/WORKSPACE_STORAGE_CLASS 引用）
+    ["NFS_SC_NAME"]="jiuwenswarm-storage"        # 生成的 StorageClass 名（可被 DATA_STORAGE_CLASS/WORKSPACE_STORAGE_CLASS 引用）
     ["NFS_SC_DNAME"]="nfs-provisioner"   # 供给组件资源名（=PROVISIONER_NAME）
     ["NFS_SC_IMAGE"]="registry.k8s.io/sig-storage/nfs-subdir-external-provisioner:v4.0.2"
     # manager-server 程序化部署凭证（双形态通用，自动创建两形态均支持）：
@@ -196,7 +196,11 @@ declare -A DEPLOY_VARS=(
     # ⛔⛔⛔ k8s 形态专属配置区（本行以下、直至文末「到此结束」标记）            ⛔⛔⛔
     # ⛔⛔⛔ 仅 CLUSTER_TYPE=k8s 生效；openshift 形态部署时，本区变量整段不生效 ⛔⛔⛔
     # ⛔⛔⛔ 新增【通用】配置严禁写入本区：请加到上方通用区                      ⛔⛔⛔
-    # NFS 直连挂载：PVC 卷改写为 NFS 直连挂载（数据源 NFS_SERVER_ADDR/NFS_SHARE_PATH 见通用区）
+    # 存储挂载模式（k8s 形态）：sc=PVC + StorageClass 动态供给（默认，与 openshift 形态一致）
+    #                       nfs=数据卷直连挂载 NFS（历史行为，显式选择）
+    # 数据源均为 NFS_SERVER_ADDR/NFS_SHARE_PATH（见通用区）；openshift 形态无此变量（恒为 sc 模式）
+    ["MOUNT_TYPE"]="sc"
+    # NFS 直连挂载：PVC 卷改写为 NFS 直连挂载（数据源 NFS_SERVER_ADDR/NFS_SHARE_PATH 见通用区；仅 MOUNT_TYPE=nfs）
     ["ENABLE_EXTERNAL_NFS"]="false"      # NFS_SERVER_ADDR 空=false（内置 server）／非空=true（外部）
     # 内置 NFS server 组件（./deploy.sh up nfs 部署；默认固定调度到运行部署工具的节点）
     # 命名空间规则与 mariadb 等基础服务一致（部署落 NAMESPACE，消费按 本 ns → default 定位）；

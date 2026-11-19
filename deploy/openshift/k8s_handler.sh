@@ -27,7 +27,8 @@ builtin_nfs_pod() { # → stdout: "<ns> <Pod名>"；失败原因 → stderr；rc
   # 实例定位与基础服务同规则（本 ns → BASE_SVC_NS，自动去重）：nfs-server 为
   # hostNetwork 单例（绑定节点 2049 端口），全集群仅能存活一套，共享实例推荐部署在 default
   local pod ns seen=" "
-  for ns in "$KCTL_NS" "${DEPLOY_VARS["BASE_SVC_NS"]}"; do
+  # KCTL_NS 在 main 于 check_vars 之后才赋值；check_vars 内经本函数探测时取 NAMESPACE 兜底
+  for ns in "${KCTL_NS:-${DEPLOY_VARS["NAMESPACE"]:-}}" "${DEPLOY_VARS["BASE_SVC_NS"]}"; do
     [ -n "$ns" ] || continue
     case "$seen" in *" $ns "*) continue;; esac
     seen="$seen$ns "
@@ -122,7 +123,7 @@ _nfs_rewrite_file() { # $1=conf 清单 $2=卷名 $3=nfs路径 $4=server
 # CLUSTER_TYPE=k8s 的渲染后处理入口；其余形态 no-op
 # 按需改写：仅处理本次渲染产物（render_templates 传入的清单），conf/ 中其他文件不动；
 apply_nfs_direct_mounts() { # $@=本次渲染的清单文件名
-  is_k8s_cluster || return 0
+  nfs_direct_mode || return 0   # MOUNT_TYPE=sc / openshift 形态：数据卷保持 PVC，不改写
   # 仅 up 改写数据卷并准备目录：down 只需 conf 里的资源名与集群一致（卷形态不影响按名删除），
   # 且拆除时内置 NFS Pod 可能已先被删——此时解析 NFS 地址不应阻塞卸载
   [ "${CMD:-}" = "up" ] || return 0
@@ -290,23 +291,14 @@ _kctl_k8s_replace_resource() { # $1=资源文件
 }
 
 _kctl_k8s_delete_resource() { # $1=资源文件
+  # --wait=false：删除请求发出即返回，不阻塞等待资源消失（PVC 的 pvc-protection
+  # finalizer 会持有到 Pod 终止，阻塞式删除会被卡死）；Pod 终止由组件级
+  # wait_deleted 统一等待并受预算约束。--ignore-not-found 由 KCTL_IGNORE_NOT_FOUND 控制
   local err code out
   err="$(kctl_tmpdir)/k8s-err"
-  if [ "${KCTL_IGNORE_NOT_FOUND:-0}" = 1 ]; then
-    out=$(kubectl delete -f "$1" --ignore-not-found 2> "$err") \
-      || { code=$(_kctl_k8s_err_code "$(cat "$err")"); kctl_show_err "$code" "$err"; }
-    info "${out:-$KCTL_LK/$KCTL_NAME not found（已忽略）}"
-    return 0
-  fi
-  if kubectl delete -f "$1" > /dev/null 2> "$err"; then
-    success "$KCTL_LK/$KCTL_NAME deleted"
-  else
-    code=$(_kctl_k8s_err_code "$(cat "$err")")
-    if [ "$code" = 404 ]; then
-      error "Error from server (NotFound): $KCTL_LK/$KCTL_NAME"
-    fi
-    kctl_show_err "$code" "$err"
-  fi
+  out=$(kubectl delete -f "$1" --ignore-not-found --wait=false 2> "$err") \
+    || { code=$(_kctl_k8s_err_code "$(cat "$err")"); kctl_show_err "$code" "$err"; }
+  [ -n "$out" ] && info "删除: $(echo "$out" | sed 's/ deleted//g; s/ from [^ ]* namespace//g' | tr '\n' ' ' | sed 's/  */ /g; s/ $//')"
 }
 
 # 单端口占用判断：本机监听（netstat/ss）+ 集群 nodePort 绑定（kubectl 获取后 yq 解析）
@@ -506,7 +498,11 @@ _ensure_deploy_secret_via_kctl() { # $1=ns $2=secret名 $3=键名 $4=base64值
     404) ;;
     *)   warning "部署凭证 Secret 探测失败（HTTP $code），跳过自动创建"; return 1;;
   esac
-  body="$(printf '{"apiVersion":"v1","kind":"Secret","metadata":{"name":"%s","namespace":"%s"},"type":"Opaque","data":{"%s":"%s"}}' "$secret" "$ns" "$key" "$value")"
+  # kctl_http 第4参数约定为 body 文件路径（内部 --data-binary @file），须先落盘再传，
+  # 直接传内容字符串会被 curl 当文件名（报 error encountered when reading a file → HTTP 000）
+  body="$(kctl_tmpdir)/ensure-deploy-secret-body"
+  printf '{"apiVersion":"v1","kind":"Secret","metadata":{"name":"%s","namespace":"%s"},"type":"Opaque","data":{"%s":"%s"}}' \
+    "$secret" "$ns" "$key" "$value" > "$body"
   code=$(kctl_http POST "/api/v1/namespaces/$ns/secrets" "$resp" "$body")
   case "$code" in
     200|201) return 0;;
