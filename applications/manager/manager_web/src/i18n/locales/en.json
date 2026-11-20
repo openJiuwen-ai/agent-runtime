@@ -543,6 +543,7 @@
   "instanceConfig": {
     "tabs": {
       "logMasking": "Log Masking",
+      "contentMasking": "Content Masking",
       "logging": "Log Levels",
       "auditLog": "Audit Log",
       "cronPolicy": "Scheduled Tasks",
@@ -581,6 +582,25 @@
       "searchPlaceholder": "Search rule ID, name, description, match regex pattern, replacement, priority, or source",
       "fieldRequired": "Please fill in {{field}}",
       "deleteConfirm": "Delete this log masking rule?"
+    },
+    "contentMasking": {
+      "intro": "Configure masking rules for web-facing content (answers, reasoning, tool results, history replay). Only the copy shown in the web UI is affected.",
+      "managed": "Manager managed",
+      "resetToYaml": "Delete pushed config",
+      "deleteConfirm": "Delete the pushed content masking config? Gateway will fall back to sensitive_mask in config.yaml.",
+      "deleted": "Pushed config deleted; Gateway falls back to config.yaml",
+      "globalSwitch": "Global switch",
+      "globalSwitchHint": "When off, no rules are applied and original content is shown.",
+      "rules": "Masking rules",
+      "rulesHint": "Up to {{max}} rules; matches are replaced with same-length asterisks.",
+      "addRule": "Add rule",
+      "ruleTitle": "Rule name",
+      "rulePattern": "Match pattern",
+      "rulePatternPlaceholder": "e.g. (\\d{4})\\d{4}(\\d{4})",
+      "emptyRules": "No rules configured",
+      "ruleRequired": "Rule name and pattern are required",
+      "patternInvalid": "Invalid regular expression: {{detail}}",
+      "maxRules": "Up to {{max}} rules"
     },
     "cronPolicy": {
       "intro": "Limits how many scheduled tasks a user can have running at once in the Web panel. Default is 5. It only blocks enabling a new task, starting a paused task, or turning a paused task on from the panel. Tasks created in chat, the TUI, or with a cron expression, and tasks that are already running, stay as they are and are not deleted or stopped. 0 means the panel cannot enable any new running task. Without a managed value the instance uses local config.yaml, which also defaults to 5.",
