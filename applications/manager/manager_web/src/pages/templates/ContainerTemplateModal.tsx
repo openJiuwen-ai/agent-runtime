@@ -175,7 +175,8 @@ function GroupLabel({ children }: { children: ReactNode }) {
 
 function containerTemplateToForm(row: ContainerTemplate): FormState {
   const form: FormState = { ...empty };
-  form.template_name = row.template_name;
+  // 导入落库的存量行可能缺 data._meta.template_name，回退到容器 name
+  form.template_name = row.template_name || row.name || '';
   form.description = row.description ?? '';
   form.container_id = row.container_id;
   form.name = row.name || 'agent';

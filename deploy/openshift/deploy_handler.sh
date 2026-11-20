@@ -437,6 +437,10 @@ deploy_component() { # $1=组件 $2=序号 $3=总数
   kctl_run apply "${paths[@]}"
   ensure_workload "${paths[@]}"
   wait_ready "$comp"
+  # runtime 含 agentserver.json 时，就绪后上传到 OBS 供管理面「导入默认配置」
+  if in_array "agentserver.json" $file_list; then
+    upload_agentserver_default_config
+  fi
   KCTL_NS="$saved_ns"
   progress_json component component="$comp" index="$idx" total="$n" state=ok
   _CURRENT_COMPONENT=""
@@ -516,6 +520,10 @@ delete_component() { # $1=组件 $2=序号 $3=总数
   kctl_run delete "${paths[@]}"
   DOWN_DELETED_ANY=1
   wait_deleted "$comp"
+  # 与 deploy 对称：卸载含 agentserver.json 的组件时尽量删除 OBS 默认配置对象
+  if in_array "agentserver.json" $file_list; then
+    delete_agentserver_default_config
+  fi
   KCTL_NS="$saved_ns"
   progress_json component component="$comp" index="$idx" total="$n" state=ok
   _CURRENT_COMPONENT=""

@@ -46,6 +46,7 @@ OPTIONAL_VARS=(
     IDENTITY_SSO_SERVER_URL IDENTITY_SSO_LOGIN_CLIENT_ID IDENTITY_SSO_TOKEN_AUDIENCE
     IDENTITY_FEDERATION_CONFIG_FILE
     MANAGER_AGENT_CLIENT_REGISTRATION_CONFIG_FILE
+    AGENT_RUNTIME_DEFAULT_CONF_PATH
     GATEWAY_AGENT_CLIENT_MODE GATEWAY_RUNTIME_MANAGER_URL AGENTSERVER_POD_DNS_LIST
     IMPORT_LOCAL_ALLOWED_DOWNLOAD_HOSTS TEAM_SKILLS_HUB_ALLOWED_DOWNLOAD_HOSTS
     AGENT_SERVER_REACT_MAX_ITER
@@ -130,6 +131,8 @@ declare -A DEPLOY_VARS=(
     ["OBS_SECURE"]=""                    # 内置：忽略（强制 false）；外部：true/false（留空默认 false）
     ["OBS_REGION"]=""                    # 内置：忽略（强制 default）；外部：区域标识（留空则由 SDK 决定）
     ["ENABLE_EXTERNAL_OBS"]="false"
+    # 默认运行时配置 object key（上传与 manager「导入默认配置」共用）；{ns} → NAMESPACE
+    ["AGENT_RUNTIME_DEFAULT_CONF_PATH"]="defaults/{ns}/agentserver.json"
     # 技能上传包保留天数：manager 与 AgentServer 必须同值，默认 7，最小 1（非法值回落 7）
     ["SKILL_UPLOAD_RETENTION_DAYS"]="7"
 

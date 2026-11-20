@@ -173,15 +173,34 @@ async def upsert_wire_containers(
         existing = await handler.get(_TABLE, {"container_id": row["container_id"]})
         if existing is None:
             payload = dict(row)
+            # 导入/默认配置的 wire 无模板元数据：写入默认 _meta，避免编辑弹窗名称为空
+            seed_meta = {
+                "template_name": _default_template_name(
+                    wire,
+                    container_id=str(row["container_id"]),
+                    name=str(row.get("name") or ""),
+                ),
+                "description": wire.get("description"),
+                "enabled": True if wire.get("enabled") is None else bool(wire.get("enabled")),
+            }
+            payload["data"] = _merge_meta(payload.get("data"), seed_meta)
             payload["created_at"] = now
             payload["updated_at"] = now
             await handler.create(_TABLE, payload)
         else:
             payload = dict(row)
-            # 保留目录条目的模板元数据（data._meta）不被 wire 覆盖
-            existing_meta = _meta_of(existing)
-            if existing_meta:
-                payload["data"] = _merge_meta(payload["data"], existing_meta)
+            # 保留目录条目的模板元数据（data._meta）不被 wire 覆盖；
+            # 存量无 template_name 时补默认名，避免列表/编辑一直空白
+            existing_meta = dict(_meta_of(existing))
+            if not str(existing_meta.get("template_name") or "").strip():
+                existing_meta["template_name"] = _default_template_name(
+                    wire,
+                    container_id=str(row["container_id"]),
+                    name=str(_g(existing, "name") or row.get("name") or ""),
+                )
+            if "enabled" not in existing_meta:
+                existing_meta["enabled"] = True
+            payload["data"] = _merge_meta(payload["data"], existing_meta)
             payload["updated_at"] = now
             await handler.update(_TABLE, {"container_id": row["container_id"]}, payload)
 
@@ -273,16 +292,39 @@ async def list_referencing_template_ids(
     return [tid for tid in out if tid]
 
 
+def _default_template_name(wire_or_row: Any, *, container_id: str, name: str) -> str:
+    """wire 导入常无 _meta：用 wire.template_name → 容器 name → container_id 兜底。"""
+    if isinstance(wire_or_row, dict):
+        for key in ("template_name", "name"):
+            text = str(wire_or_row.get(key) or "").strip()
+            if text:
+                return text
+    else:
+        meta = _meta_of(wire_or_row)
+        text = str(meta.get("template_name") or "").strip()
+        if text:
+            return text
+        text = str(_g(wire_or_row, "name") or "").strip()
+        if text:
+            return text
+    text = str(name or "").strip()
+    if text:
+        return text
+    return str(container_id or "").strip()
+
+
 def _container_row_to_out(row: Any, *, reference_count: int = 0) -> ServiceConfigContainerOut:
     meta = _meta_of(row)
+    cid = str(_g(row, "container_id") or "")
+    cname = str(_g(row, "name") or "agent")
     return ServiceConfigContainerOut(
         id=_g(row, "id", 0),
         # API 主键与 container_id 同值（表结构无独立 template_id 列）
-        template_id=str(_g(row, "container_id") or ""),
-        template_name=str(meta.get("template_name") or ""),
+        template_id=cid,
+        template_name=_default_template_name(row, container_id=cid, name=cname),
         description=meta.get("description"),
-        container_id=str(_g(row, "container_id") or ""),
-        name=str(_g(row, "name") or "agent"),
+        container_id=cid,
+        name=cname,
         image=str(_g(row, "image") or ""),
         image_pull_policy=str(_g(row, "image_pull_policy") or "IfNotPresent"),
         ports=_g(row, "ports") if isinstance(_g(row, "ports"), list) else None,
@@ -512,12 +554,15 @@ async def bound_container_briefs(
         row = await load_row_by_container_id(handler, cid)
         if row is None:
             continue
-        meta = _meta_of(row)
         briefs.append(
             {
                 "container_id": cid,
                 "template_id": str(_g(row, "container_id") or ""),
-                "template_name": str(meta.get("template_name") or ""),
+                "template_name": _default_template_name(
+                    row,
+                    container_id=cid,
+                    name=str(_g(row, "name") or ""),
+                ),
                 "image": str(_g(row, "image") or ""),
             }
         )
