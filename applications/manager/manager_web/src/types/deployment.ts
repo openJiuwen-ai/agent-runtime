@@ -89,7 +89,7 @@ export interface CreateDeploymentBody {
   action?: 'up' | 'down';
   namespace: string;
   jiuwenclaw_name: string;
-  deploy_mode: DeploymentDeployMode;
+  deploy_mode?: DeploymentDeployMode;
   env?: Record<string, string>;
   wait_timeout_secs?: number;
 }

@@ -19,6 +19,8 @@ import { formatTime, relativeTime } from '../../utils/format';
 import { toast } from '../../stores/uiStore';
 import { ApiError } from '../../services/api';
 import { CreateInstanceModal } from './modal/CreateInstanceModal';
+import { CreateDeploymentModal } from '../deployment/CreateDeploymentModal';
+import { DeploymentApi } from '../../services/api';
 import { ImportClusterModal } from './modal/ImportClusterModal';
 import { useGuideAutoOpen } from '../../hooks/useGuideAutoOpen';
 import { useClustersGuideStatus } from '../../hooks/useGuideStatus';
@@ -79,6 +81,7 @@ function InstanceTopoCard({
   const { t } = useTranslation();
   const { navigate } = useRouter();
   const [confirmDel, setConfirmDel] = useState(false);
+  const [confirmUndeploy, setConfirmUndeploy] = useState(false);
   const detailHref = `/instances/${instance.jiuwenclaw_id}`;
 
   return (
@@ -192,24 +195,33 @@ function InstanceTopoCard({
         </button>
         <button
           className="btn sm danger"
-          title={t('topology.deleteConfirm')}
+          title={t('topology.undeployConfirm', { ns: instance.namespace })}
+          onClick={(e) => {
+            e.stopPropagation();
+            setConfirmUndeploy(true);
+          }}
+        >
+          {t('topology.undeploy')}
+        </button>
+        <button
+          className="btn sm"
+          title={t('topology.unbindConfirm')}
           onClick={(e) => {
             e.stopPropagation();
             setConfirmDel(true);
           }}
         >
-          {t('common.delete')}
+          {t('topology.unbind')}
         </button>
       </div>
 
       <ConfirmDialog
         open={confirmDel}
-        message={t('topology.deleteConfirm')}
-        danger
+        message={t('topology.unbindConfirm')}
         onConfirm={async () => {
           try {
             await InstanceApi.remove(instance.jiuwenclaw_id);
-            toast('success', t('success.deleted'));
+            toast('success', t('topology.unbindSuccess'));
             bumpGuideRevision();
             onChanged();
           } catch (e) {
@@ -217,6 +229,28 @@ function InstanceTopoCard({
           }
         }}
         onClose={() => setConfirmDel(false)}
+      />
+      <ConfirmDialog
+        open={confirmUndeploy}
+        message={t('topology.undeployConfirm', { ns: instance.namespace })}
+        danger
+        onConfirm={async () => {
+          try {
+            const created = await DeploymentApi.create({
+              action: 'down',
+              namespace: instance.namespace,
+              jiuwenclaw_name: instance.jiuwenclaw_name,
+            });
+            await InstanceApi.remove(instance.jiuwenclaw_id).catch(() => undefined);
+            toast('success', t('topology.undeployStarted'));
+            bumpGuideRevision();
+            onChanged();
+            void navigate(`/deployments/${created.deployment_id}`);
+          } catch (e) {
+            toast('danger', t('errors.saveFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
+          }
+        }}
+        onClose={() => setConfirmUndeploy(false)}
       />
     </div>
   );
@@ -491,6 +525,8 @@ function ViewModeToggle({
 }
 
 export function InstanceListPage() {
+  const { navigate } = useRouter();
+  const deployDefaults = useAsync(() => DeploymentApi.getDefaults(), []);
   const { t } = useTranslation();
   const { searchInput, setSearchInput, searchQuery } = useListSearch();
   const [gatewayStatusFilter, setGatewayStatusFilter] = useState<string>('');
@@ -502,6 +538,7 @@ export function InstanceListPage() {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [viewMode, setViewMode] = useState<ViewMode>(() => readViewMode());
   const [createOpen, setCreateOpen] = useState(false);
+  const [deployOpen, setDeployOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -655,8 +692,15 @@ export function InstanceListPage() {
             <button className="btn sm" onClick={() => setImportOpen(true)}>
               {t('topology.import')}
             </button>
-            <button className="btn primary sm" onClick={() => setCreateOpen(true)}>
-              + {t('topology.createInstance')}
+            <button
+              className="btn primary sm"
+              title={t('deployments.action.upHint')}
+              onClick={() => setDeployOpen(true)}
+            >
+              + {t('topology.deployCluster')}
+            </button>
+            <button className="btn sm" onClick={() => setCreateOpen(true)}>
+              {t('topology.createInstance')}
             </button>
           </div>
         </div>
@@ -714,6 +758,15 @@ export function InstanceListPage() {
         </div>
       </div>
 
+      <CreateDeploymentModal
+        open={deployOpen}
+        defaults={deployDefaults.data ?? null}
+        onClose={() => setDeployOpen(false)}
+        onCreated={(deploymentId) => {
+          setDeployOpen(false);
+          void navigate(`/deployments/${deploymentId}`);
+        }}
+      />
       <CreateInstanceModal
         open={createOpen}
         onClose={() => setCreateOpen(false)}
