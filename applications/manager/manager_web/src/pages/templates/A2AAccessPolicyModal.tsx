@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Modal, ModalCancelButton } from '../../components/Modal';
 import { ConfigRefreshCostHint } from '../../components/ConfigRefreshCostHint';
 import { A2AAccessPolicyTemplateApi, A2AOutboundTemplateApi, ApiError } from '../../services/api';
@@ -8,6 +9,7 @@ import type { A2AAccessPolicyMode, A2AAccessPolicyTemplate, A2AOutboundTemplate 
 interface Props { open: boolean; policy: A2AAccessPolicyTemplate | null; onClose: () => void; onSaved: () => void; }
 
 export function A2AAccessPolicyModal({ open, policy, onClose, onSaved }: Props) {
+  const { t } = useTranslation();
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [mode, setMode] = useState<A2AAccessPolicyMode>('allowlist');
@@ -54,23 +56,23 @@ export function A2AAccessPolicyModal({ open, policy, onClose, onSaved }: Props) 
       const body = { policy_name: name.trim(), description: description.trim() || null, mode, member_template_ids: members, enabled };
       if (policy) await A2AAccessPolicyTemplateApi.update(policy.policy_id, body);
       else await A2AAccessPolicyTemplateApi.create(body);
-      toast('success', '保存成功'); onSaved();
+      toast('success', t('success.saved')); onSaved();
     } catch (e) { toast('danger', e instanceof ApiError ? e.detail : (e as Error).message); }
     finally { setSaving(false); }
   };
 
-  return <Modal open={open} title={policy ? '编辑访问策略' : '新建访问策略'} onClose={onClose} size="lg"
-    footer={<><ModalCancelButton /><button className="btn primary" disabled={saving || !name.trim()} onClick={() => void save()}>保存</button></>}>
+  return <Modal open={open} title={policy ? t('a2a.editPolicyTitle') : t('a2a.newPolicyTitle')} onClose={onClose} size="lg"
+    footer={<><ModalCancelButton /><button className="btn primary" disabled={saving || !name.trim()} onClick={() => void save()}>{t('common.save')}</button></>}>
     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-      <div><label className="label">策略名称</label><input className="input" maxLength={128} value={name} onChange={(e) => setName(e.target.value)} /></div>
-      <div><label className="label">策略模式</label><select className="select" value={mode} onChange={(e) => setMode(e.target.value as A2AAccessPolicyMode)}><option value="allowlist">白名单</option><option value="denylist">黑名单</option></select></div>
-      <div className="md:col-span-2"><label className="label">描述</label><input className="input" maxLength={512} value={description} onChange={(e) => setDescription(e.target.value)} /></div>
-      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />启用策略</label>
-      <div className="md:col-span-2"><label className="label">A2A Agent 成员</label>
-        <div className="text-xs text-muted mb-2">{mode === 'allowlist' ? '空白名单将拒绝访问全部 A2A Agent。' : '空黑名单将允许访问全部已注册 A2A Agent；停用状态会在执行时另行过滤。'}</div>
-        <input className="input mb-2" aria-label="搜索 A2A Agent" placeholder="搜索 Agent 名称或 ID" value={agentSearch} onChange={(e) => setAgentSearch(e.target.value)} />
+      <div><label className="label">{t('a2a.policyName')}</label><input className="input" maxLength={128} value={name} onChange={(e) => setName(e.target.value)} /></div>
+      <div><label className="label">{t('a2a.policyMode')}</label><select className="select" value={mode} onChange={(e) => setMode(e.target.value as A2AAccessPolicyMode)}><option value="allowlist">{t('a2a.modeAllowlist')}</option><option value="denylist">{t('a2a.modeDenylist')}</option></select></div>
+      <div className="md:col-span-2"><label className="label">{t('a2a.description')}</label><input className="input" maxLength={512} value={description} onChange={(e) => setDescription(e.target.value)} /></div>
+      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />{t('a2a.enablePolicy')}</label>
+      <div className="md:col-span-2"><label className="label">{t('a2a.policyMembers')}</label>
+        <div className="text-xs text-muted mb-2">{mode === 'allowlist' ? t('a2a.allowlistHint') : t('a2a.denylistHint')}</div>
+        <input className="input mb-2" aria-label={t('a2a.searchAgentAria')} placeholder={t('a2a.searchAgentPlaceholder')} value={agentSearch} onChange={(e) => setAgentSearch(e.target.value)} />
         <div className="card !p-3 h-[258px] overflow-y-auto space-y-2">
-          {!agents.length ? <div className="text-sm text-muted">暂无已注册 A2A Agent</div> : !filteredAgents.length ? <div className="text-sm text-muted">未找到匹配的 A2A Agent</div> : filteredAgents.map((agent) => <label key={agent.template_id} className="flex min-h-10 items-start gap-2 text-sm"><input type="checkbox" checked={members.includes(agent.template_id)} onChange={() => toggleMember(agent.template_id)} /><span><span className="font-medium">{agent.template_name}</span><span className="block text-xs text-muted mono">{agent.template_id}</span></span></label>)}
+          {!agents.length ? <div className="text-sm text-muted">{t('a2a.noRegisteredAgents')}</div> : !filteredAgents.length ? <div className="text-sm text-muted">{t('a2a.noMatchingAgents')}</div> : filteredAgents.map((agent) => <label key={agent.template_id} className="flex min-h-10 items-start gap-2 text-sm"><input type="checkbox" checked={members.includes(agent.template_id)} onChange={() => toggleMember(agent.template_id)} /><span><span className="font-medium">{agent.template_name}</span><span className="block text-xs text-muted mono">{agent.template_id}</span></span></label>)}
         </div>
       </div>
     </div>

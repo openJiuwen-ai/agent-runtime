@@ -1,3 +1,4 @@
+import i18n from '../i18n';
 import { clearFederationSession, setFederationToken } from '../auth/federation/session';
 import type { FederationConfiguration, FederationConnection } from '../auth/federation/types';
 import type {
@@ -158,7 +159,7 @@ export function formatApiErrorDetail(detail: unknown): string {
         return '';
       })
       .filter(Boolean);
-    return messages.join('；') || '请求参数校验失败';
+    return messages.join('；') || i18n.t('errors.validationFailed');
   }
   if (typeof detail === 'object') {
     const obj = detail as Record<string, unknown>;
