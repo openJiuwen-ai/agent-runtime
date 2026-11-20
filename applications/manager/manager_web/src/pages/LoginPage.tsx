@@ -5,7 +5,6 @@ import { LanguageSwitcher } from '../components/LanguageSwitcher';
 import { ApiError, AuthApi, FederationConnection } from '../services/api';
 import { getProductName } from '../utils/env';
 import { beginBrowserLogin } from '../auth/federation/client';
-import { LanguageSwitcher } from '../components/LanguageSwitcher';
 
 export function LoginPage({ denied = false }: { denied?: boolean }) {
   const { t } = useTranslation();
@@ -86,9 +85,6 @@ export function LoginPage({ denied = false }: { denied?: boolean }) {
         <LanguageSwitcher />
       </div>
       <form className="card" style={{ width: 360 }} onSubmit={onSubmit}>
-        <div className="mb-2 flex justify-end">
-          <LanguageSwitcher />
-        </div>
         <div className="flex items-center gap-2 mb-4">
           <img src="/logo.svg" alt={getProductName()} style={{ height: 28 }} />
           <div className="card-title">{t('auth.loginTitle')}</div>

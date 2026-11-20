@@ -117,6 +117,32 @@ class TestValidateMergedEnv:
             validate_merged_env(merged, namespace="team-a")
 
 
+def test_user_backend_parameters_survive_task_generation():
+    values = {
+        "USER_BACKEND_IMAGE": "swr.example/user-backend:1.0",
+        "USER_BACKEND_REPLICAS": "2",
+        "USER_BACKEND_DB_USER": "user_backend_team_a",
+        "USER_BACKEND_DB_PASSWORD": "Readonly@1",
+        "WEB_NODE_PORT": "30080",
+    }
+    merged = merge_env({}, values)
+    content = build_env_custom(merged, namespace="team-a")
+    for key, value in values.items():
+        assert f'{key}="{value}"' in content
+    masked = mask_sensitive_env(merged)
+    assert masked["USER_BACKEND_DB_PASSWORD"] == "******"
+    assert masked["USER_BACKEND_DB_USER"] == "user_backend_team_a"
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [("USER_BACKEND_IMAGE", "bad image"), ("USER_BACKEND_REPLICAS", "0")],
+)
+def test_user_backend_rejects_invalid_task_parameters(key, value):
+    with pytest.raises(ValueError):
+        merge_env({}, {key: value})
+
+
 class TestBuildEnvCustom:
     def test_lines_are_quoted_and_namespace_first(self):
         content = build_env_custom({"GATEWAY_REPLICAS": "2"}, namespace="team-a")

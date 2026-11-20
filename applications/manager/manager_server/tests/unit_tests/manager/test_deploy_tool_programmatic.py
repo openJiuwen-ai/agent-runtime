@@ -29,6 +29,7 @@ MINIO_IMAGE="quay.io/minio/minio:latest"
 AGENTSERVER_IMAGE="example/jiuwenswarm-core:1.0"
 GATEWAY_IMAGE="example/jiuwenswarm-core:1.0"
 WEB_IMAGE="example/jiuwenswarm-web:1.0"
+USER_BACKEND_IMAGE="example/jiuwenswarm-user-backend:1.0"
 IDENTITY_IMAGE="example/jiuwenswarm-identity:1.0"
 MANAGER_SERVER_IMAGE="example/jiuwenswarm-manager-server:1.0"
 MANAGER_WEB_IMAGE="example/jiuwenswarm-manager-web:1.0"
@@ -92,7 +93,7 @@ async def test_render_only_isolated_dirs_and_json_progress(tmp_path: Path):
     assert any(e.get("status") == "success" for e in events if e.get("event") == "summary")
 
     # 产物落每任务隔离目录，full 模式产品面清单齐全
-    for manifest in ("redis.yaml", "runtime.yaml", "gateway.yaml", "web.yaml"):
+    for manifest in ("redis.yaml", "runtime.yaml", "gateway.yaml", "user-backend.yaml", "web.yaml"):
         assert (conf_dir / manifest).is_file(), f"缺渲染产物 {manifest}"
     # env 隔离：工具树自身 conf/ 不被创建/污染
     assert not (resolve_tool_dir() / "conf" / "gateway.yaml").exists()
@@ -233,6 +234,7 @@ def test_check_dependency_openshift_token_skips_oc(monkeypatch, tmp_path):
     stub_bin.mkdir()
     yq_path = subprocess.run(["sh", "-c", "command -v yq"], capture_output=True, text=True).stdout.strip()
     (stub_bin / "yq").symlink_to(yq_path)
+    bash = shutil.which("bash") or "bash"
     base_env = {"PATH": f"{stub_bin}:/usr/bin:/bin", "HOME": "/root"}
     script = (
         "set -e; source ./kubectl.sh\n"
@@ -240,7 +242,7 @@ def test_check_dependency_openshift_token_skips_oc(monkeypatch, tmp_path):
         "check_dependency && echo DEP_OK\n"
     )
     proc = subprocess.run(
-        ["bash", "-c", script],
+        [bash, "-c", script],
         cwd=str(tool_dir),
         env={**base_env, "TOKEN": "sha256~x"},
         capture_output=True,
@@ -250,7 +252,7 @@ def test_check_dependency_openshift_token_skips_oc(monkeypatch, tmp_path):
     assert "DEP_OK" in proc.stdout, proc.stdout + proc.stderr
     # 反证：无 TOKEN 时缺 oc 应报错
     proc2 = subprocess.run(
-        ["bash", "-c", script],
+        [bash, "-c", script],
         cwd=str(tool_dir),
         env=dict(base_env),
         capture_output=True,

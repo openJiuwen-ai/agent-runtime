@@ -33,6 +33,7 @@ from manager_server.security import jwt_verify
 PUBLIC = {
     ("GET", "/"),
     ("GET", "/api/health"),
+    ("GET", "/api/dev-mode"),
     ("GET", "/api/manager-ws/status"),
     ("DELETE", "/api/v1/user-console/active-cluster"),
 }

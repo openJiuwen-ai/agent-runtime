@@ -196,7 +196,8 @@ async def begin_login(
 async def complete_oidc_login(connection_id: str, request: Request, service: _Service):
     """OIDC query callback: only a server-validated identity can create a local code."""
     try:
-        if surface := login_surface(request):
+        surface = login_surface(request)
+        if surface:
             service.require_surface(connection_id, surface)
         if not service.requires_browser_binding(connection_id):
             raise HTTPException(
@@ -286,7 +287,8 @@ async def complete_login(connection_id: str, request: Request, service: _Service
     form_data = await request.form()
     parameters = {key: str(value) for key, value in form_data.items()}
     try:
-        if surface := login_surface(request):
+        surface = login_surface(request)
+        if surface:
             service.require_surface(connection_id, surface)
         if service.requires_browser_binding(connection_id):
             raise HTTPException(status_code=405, detail="OIDC requires a GET callback")
