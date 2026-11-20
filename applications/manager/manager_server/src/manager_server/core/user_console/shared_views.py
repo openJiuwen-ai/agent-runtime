@@ -1,15 +1,131 @@
-"""Create the Manager projections before starting a user backend.
-
-Run with Manager's database configuration. Grant the service account SELECT on
-each view separately with the database's provisioning credentials.
-"""
+"""Initialize the user-plane views and read-only account during Manager startup."""
 
 import asyncio
+import hashlib
+import os
+import re
 
+from openjiuwen_runtime.foundation.db.handler import DBHandler
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncConnection
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from manager_server.infrastructure.db import create_db_handler
+
+_VIEWS = ("user_access_instance", "user_access_instance_grant", "user_access_agent_resource")
+
+
+async def _create_reader(
+    connection: AsyncConnection, username: str, password: str, schema: str | None = None,
+) -> None:
+    database = connection.engine.url.database
+    quote = connection.dialect.identifier_preparer.quote
+    if connection.dialect.name in {"mysql", "mariadb"}:
+        account = {"name": username, "host": "%", "password": password}
+        await connection.execute(text(
+            "CREATE USER IF NOT EXISTS :name@:host IDENTIFIED BY :password"
+        ), account)
+        grants = await connection.execute(text("SHOW GRANTS FOR :name@:host"), account)
+        allowed = ("GRANT USAGE ON *.* TO ", *(
+            f"GRANT SELECT ON {database}.{view} TO " for view in _VIEWS
+        ))
+        for row in grants:
+            grant = row[0].replace('`', '').replace('"', '')
+            if not grant.startswith(allowed) or "WITH GRANT OPTION" in grant:
+                raise ValueError("User-plane account already has permissions beyond its shared views")
+        for view in _VIEWS:
+            await connection.execute(text(
+                f"GRANT SELECT ON {quote(database)}.{quote(view)} TO :name@:host"
+            ), account)
+        return
+
+    roles = await connection.execute(text(
+        "SELECT rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls "
+        "FROM pg_roles WHERE rolname = :name"
+    ), {"name": username})
+    role = roles.one_or_none()
+    if role is None:
+        literal = (await connection.execute(
+            text("SELECT quote_literal(CAST(:password AS text))"), {"password": password},
+        )).scalar_one()
+        await connection.exec_driver_sql(f"CREATE ROLE {quote(username)} LOGIN PASSWORD {literal}")
+    elif any(role):
+        raise ValueError("User-plane account must not have PostgreSQL administrative privileges")
+    member = await connection.execute(text(
+        "SELECT 1 FROM pg_auth_members WHERE member = "
+        "(SELECT oid FROM pg_roles WHERE rolname = :name)"
+    ), {"name": username})
+    if member.first():
+        raise ValueError("User-plane account must not inherit other database roles")
+    schema = schema or "public"
+    privileges = await connection.execute(text(
+        "SELECT table_schema, table_name, privilege_type, is_grantable "
+        "FROM information_schema.table_privileges WHERE grantee = :name"
+    ), {"name": username})
+    for row in privileges:
+        if (
+            row.table_schema != schema or row.table_name not in _VIEWS
+            or row.privilege_type != "SELECT" or row.is_grantable == "YES"
+        ):
+            raise ValueError("User-plane account already has permissions beyond its shared views")
+    await connection.execute(text(f"GRANT CONNECT ON DATABASE {quote(database)} TO {quote(username)}"))
+    await connection.execute(text(f"GRANT USAGE ON SCHEMA {quote(schema)} TO {quote(username)}"))
+    for view in _VIEWS:
+        await connection.execute(text(
+            f"GRANT SELECT ON {quote(schema)}.{quote(view)} TO {quote(username)}"
+        ))
+
+
+async def initialize_user_access(handler: DBHandler) -> None:
+    """Complete shared access after the existing Manager tables have been created."""
+    username = os.getenv("USER_BACKEND_DB_USER", "")
+    if not username:
+        return
+    password = os.getenv("USER_BACKEND_DB_PASSWORD", "")
+    if (
+        not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,31}", username)
+        or username.lower() in {"root", "postgres"}
+        or username == getattr(handler, "user", None)
+        or not password
+    ):
+        raise ValueError("A separate user-plane account and password are required")
+    engine = handler.get_engine()
+    schema = getattr(handler, "schema", None)
+    if engine.dialect.name not in {"mysql", "mariadb", "postgresql"}:
+        raise ValueError("User-plane database initialization requires MySQL/MariaDB or PostgreSQL")
+    lock = "user_access_" + hashlib.sha256(f"{engine.url.database}/{username}".encode()).hexdigest()[:40]
+    try:
+        async with engine.begin() as connection:
+            if engine.dialect.name == "postgresql":
+                await connection.execute(
+                    text("SELECT pg_advisory_xact_lock(hashtext(:name))"), {"name": lock},
+                )
+                await create_views(connection, schema)
+                await _create_reader(connection, username, password, schema)
+            else:
+                acquired = await connection.execute(text("SELECT GET_LOCK(:name, 30)"), {"name": lock})
+                if acquired.scalar() != 1:
+                    raise RuntimeError("Timed out waiting for user-plane database initialization")
+                try:
+                    await create_views(connection, schema)
+                    await _create_reader(connection, username, password, schema)
+                finally:
+                    await connection.execute(text("SELECT RELEASE_LOCK(:name)"), {"name": lock})
+        reader = create_async_engine(
+            engine.url.set(username=username, password=password), poolclass=NullPool,
+            hide_parameters=True,
+        )
+        try:
+            async with reader.connect() as connection:
+                await connection.execute(text("SELECT 1"))
+        finally:
+            await reader.dispose()
+    except SQLAlchemyError:
+        # DDL failures must not expose password literals or connection parameters.
+        raise RuntimeError(
+            "User-plane DB initialization failed; check provisioning privileges and account credentials"
+        ) from None
 
 
 async def create_views(connection: AsyncConnection, schema: str | None = None) -> None:

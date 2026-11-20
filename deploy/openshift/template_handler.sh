@@ -17,7 +17,7 @@ replace_placeholder() { # $1=占位符 $2=目标文件
   local placeholder="$1" destfile="$2"
   local var_name="${placeholder#<<}"; var_name="${var_name%>>}"
   local var_value="${DEPLOY_VARS[$var_name]:-}"
-  # 变量值已通过 check_vars 白名单校验（awk gsub 替换串中 & 与 \ 为特殊字符）
+  # Quoted YAML values are encoded below; other placeholders retain their literal bytes.
   # 可选变量（OPTIONAL_VARS）留空时，占位符独占行值的整行删除（如 storageClassName 走集群默认）
   if [ -z "$var_value" ]; then
     # 匹配 KEY: <<PH>> / KEY: "<<PH>>" / KEY: '<<PH>>'（ConfigMap 值常需引号包 * 等特殊字符）
@@ -28,7 +28,27 @@ replace_placeholder() { # $1=占位符 $2=目标文件
       || error "占位符替换失败: ${placeholder} → ${destfile}"
     return 0
   fi
-  awk -v ph="${placeholder}" -v val="${var_value}" '{ gsub(ph, val); print }' \
+  # JSON quoting is valid YAML and preserves password quotes, backslashes and newlines.
+  local quoted_value
+  quoted_value=$(DEPLOY_TEMPLATE_VALUE="$var_value" yq -n -o=json 'strenv(DEPLOY_TEMPLATE_VALUE)') \
+    || error "Cannot encode template variable: $var_name"
+  DEPLOY_TEMPLATE_VALUE="$var_value" DEPLOY_TEMPLATE_QUOTED="$quoted_value" \
+    awk -v ph="${placeholder}" '
+      {
+        rest = $0; out = ""
+        while ((pos = index(rest, ph)) > 0) {
+          before = substr(rest, 1, pos - 1)
+          after = substr(rest, pos + length(ph))
+          left = substr(before, length(before), 1); right = substr(after, 1, 1)
+          if ((left == "\"" || left == "\047") && left == right) {
+            out = out substr(before, 1, length(before) - 1) ENVIRON["DEPLOY_TEMPLATE_QUOTED"]
+            rest = substr(after, 2)
+          } else {
+            out = out before ENVIRON["DEPLOY_TEMPLATE_VALUE"]; rest = after
+          }
+        }
+        print out rest
+      }' \
     "$destfile" > "$destfile.tmp" && mv -f "$destfile.tmp" "$destfile" \
     || error "占位符替换失败: ${placeholder} → ${destfile}"
 }
