@@ -1,8 +1,8 @@
 """Agent 模板（agent_definition）表定义。
 
-由有效 Agent 配置模板 × 有效运行时模板派生；``(agent_config_template_id,
-runtime_template_id)`` 唯一，``agent_id`` 为 1.0 算法生成的 43 位稳定标识。
-模板停用/删除时逻辑失效（``deleted=1``），物理行保留以便恢复时沿用自定义名称。
+由管理员手动维护：``(agent_config_template_id, runtime_template_id)`` 唯一，
+``agent_id`` 仍按两者的组合稳定生成；模板名称列不再写入，列表按模板 id 实时查询。
+``deleted`` / ``deleted_reason`` 与快照列保留以兼容历史数据，当前逻辑不再使用。
 """
 
 from __future__ import annotations

@@ -1348,11 +1348,15 @@ async def count_agent_reference_counts(handler: DBHandler) -> dict[str, int]:
 
 async def assert_agent_template_deletable(handler: DBHandler, template_id: str) -> None:
     """删除 Agent 模板前校验：仍被实例上的 Agent 引用时拒绝删除。"""
+    from manager_server.core.template.errors import TemplateInUseError
+
     ref_count = await count_agent_references_for_template(handler, template_id)
     if ref_count > 0:
-        raise ValueError(
+        raise TemplateInUseError(
+            "agent_config_referenced_by_instances",
+            ref_count,
             f"cannot delete template: {ref_count} agent reference(s) exist, "
-            "remove references from agent first"
+            "remove references from agent first",
         )
 
 

@@ -75,16 +75,17 @@ async def list_my_agent_contexts(
     """根据 instance_grant + instance_agent_resource 返回可访问组合。
 
     业务键：``bot_id`` / ``group_id`` / ``user_id``（均为 id）。
-    返回 ``agent_name``（``agent_`` + 43 位 ``agent_id``，稳定展示标识）、
-    ``agent_id`` / ``runtime_template_id`` / ``agent_template_id``、
-    ``resource_name``（人类可读资源名）以及 ``group_name`` / ``jiuwenclaw_name``。
+    返回 ``agent_name``、``agent_id`` / ``runtime_template_id`` /
+    ``agent_template_id``、``resource_name``、``group_name`` /
+    ``jiuwenclaw_name``；列表为空时附带 ``empty_reason``：
+    ``no_grant``（无授权/无匹配）或 ``no_agent_template``（未配置 Agent 模板）。
     """
-    contexts = await UserConsoleService(handler).list_accessible_contexts(
+    data = await UserConsoleService(handler).list_accessible_contexts_with_meta(
         getattr(user, "user_id"),
         getattr(user, "groups", []),
         authorization=authorization,
     )
-    return _ok({"contexts": contexts})
+    return _ok(data)
 
 
 @user_console_router.post(
