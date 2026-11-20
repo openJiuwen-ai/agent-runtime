@@ -12,6 +12,7 @@ from manager_server.core.template.push_agent_template_to_gateway import (
     build_agent_resource_gateway_payload,
     delete_agent_resource_from_gateway,
     sync_agent_resource_to_gateway,
+    unload_agent_template_if_unreferenced,
 )
 from manager_server.infrastructure.common import resolve_order_by
 from manager_server.infrastructure.logger import get_logger
@@ -134,6 +135,7 @@ class InstanceAgentResourceService:
         resource_id: str,
         match_exprs: list[Any],
         *,
+        ref_template_id: str | None = None,
         resource_name: str | None = None,
         resource_desc: str | None = None,
         granted_by: str | None = None,
@@ -154,12 +156,16 @@ class InstanceAgentResourceService:
         )
         if not existing:
             raise LookupError(f"instance agent resource not found: {rid}")
-        template_id = str(_g(existing[0], "ref_template_id") or "")
+        old_template_id = str(_g(existing[0], "ref_template_id") or "").strip()
+        template_id = (ref_template_id or "").strip() or old_template_id
+        if not template_id:
+            raise ValueError("ref_template_id is required")
         return await self._write_grants(
             jiuwenclaw_id,
             template_id,
             match_exprs,
             resource_id=rid,
+            previous_template_id=old_template_id,
             resource_name=resource_name,
             resource_desc=resource_desc,
             granted_by=granted_by,
@@ -175,6 +181,7 @@ class InstanceAgentResourceService:
         match_exprs: list[Any],
         *,
         resource_id: str | None = None,
+        previous_template_id: str | None = None,
         resource_name: str | None = None,
         resource_desc: str | None = None,
         granted_by: str | None = None,
@@ -197,15 +204,24 @@ class InstanceAgentResourceService:
             if _g(r, "resource_id")
         }
         was_first_for_template = len(before_resource_ids) == 0
-        target_filters: dict[str, Any] = {"jiuwenclaw_id": jiuwenclaw_id, "ref_template_id": template_id}
+        # 更新按 resource_id 定位（支持改绑模板）；创建无 existing
+        existing: list[Any] = []
         if normalized_resource_id:
-            target_filters["resource_id"] = normalized_resource_id
-        existing = await self._h.list_records(_GRANT, target_filters, limit=_CAP, offset=0)
+            existing = await self._h.list_records(
+                _GRANT,
+                {"jiuwenclaw_id": jiuwenclaw_id, "resource_id": normalized_resource_id},
+                limit=_CAP,
+                offset=0,
+            )
         resolved_resource_id = normalized_resource_id or new_uuid4()
         existing_name = str(_g(existing[0], "resource_name") or "").strip() if existing else ""
         resolved_name = (resource_name or "").strip() or existing_name or None
         # 更新为整份覆盖：空描述表示清空，不再回退到旧值
         resolved_desc = strip_optional(resource_desc)
+        old_template_id = (
+            (previous_template_id or "").strip()
+            or (str(_g(existing[0], "ref_template_id") or "").strip() if existing else "")
+        )
 
         merged_expr = merge_match_exprs(match_exprs)
         now = utc_now()
@@ -249,13 +265,35 @@ class InstanceAgentResourceService:
         )
 
         if normalized_resource_id:
-            await _delete_where(self._h, _GRANT, target_filters, "id")
+            await _delete_where(
+                self._h,
+                _GRANT,
+                {"jiuwenclaw_id": jiuwenclaw_id, "resource_id": normalized_resource_id},
+                "id",
+            )
         await self._h.create(_GRANT, grant_row)
         await auto_bind_from_match_expr(self._h, jiuwenclaw_id, merged_expr)
+        # 改绑：旧模板若已无引用，从 Gateway 卸载（不删当前 resource）。
+        # Manager 已落库：卸载失败只告警，避免接口 500 导致前端重试却再也清不掉旧模板。
+        if old_template_id and old_template_id != template_id:
+            try:
+                await unload_agent_template_if_unreferenced(
+                    self._h, jiuwenclaw_id, old_template_id
+                )
+            except Exception as exc:  # noqa: BLE001
+                _log.warning(
+                    "[InstanceResource] unload old agent template failed after rebind "
+                    "jiuwenclaw_id=%s resource_id=%s old_template_id=%s: %s",
+                    jiuwenclaw_id,
+                    resolved_resource_id,
+                    old_template_id,
+                    exc,
+                )
         _log.info(
             "[InstanceResource] instance_agent_resource.write",
             jiuwenclaw_id=jiuwenclaw_id,
             template_id=template_id,
+            previous_template_id=old_template_id or None,
             resource_id=resolved_resource_id,
             n=1,
         )

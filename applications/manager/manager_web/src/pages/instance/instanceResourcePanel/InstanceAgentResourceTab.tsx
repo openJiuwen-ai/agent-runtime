@@ -112,7 +112,10 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
       }),
     [instanceId, page, pageSize, searchQuery, enabledFilter, sortBy, sortOrder],
   );
-  const { data: catalogData } = useAsync(() => AgentTemplateApi.list(), []);
+  const { data: catalogData, loading: catalogLoading } = useAsync(
+    () => AgentTemplateApi.list({ page: 1, page_size: 200 }),
+    [],
+  );
   const agents = rosterData?.items ?? [];
   const catalog = catalogData?.items ?? [];
   const templateNameById = useMemo(() => {
@@ -136,6 +139,7 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
   const [addMatchExpr, setAddMatchExpr] = useState('');
   const [addExpiresAt, setAddExpiresAt] = useState('');
   const [editing, setEditing] = useState<InstanceAgentResource | null>(null);
+  const [editAgentId, setEditAgentId] = useState('');
   const [editResourceName, setEditResourceName] = useState('');
   const [editResourceDesc, setEditResourceDesc] = useState('');
   const [matchExpr, setMatchExpr] = useState('');
@@ -145,7 +149,7 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
   const { markClean: markEditClean, isDirty: isEditDirty } = useFormDirty(!!editing);
 
   const addDraft = { addAgentId, addResourceName, addResourceDesc, addMatchExpr, addExpiresAt };
-  const editDraft = { editResourceName, editResourceDesc, matchExpr, editExpiresAt };
+  const editDraft = { editAgentId, editResourceName, editResourceDesc, matchExpr, editExpiresAt };
 
   useEffect(() => {
     setChecked(new Set());
@@ -175,6 +179,7 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
   useEffect(() => {
     if (editing) {
       const nextMatch = matchExprToEditorString(editing.match_expr);
+      const nextAgentId = editing.ref_template_id || '';
       const nextName = clipField(editing.resource_name ?? '', FIELD_MAX_LENGTH.resource_name);
       const nextDesc = clipField(editing.resource_desc ?? '', FIELD_MAX_LENGTH.resource_desc);
       let nextExpires = '';
@@ -183,16 +188,19 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
         nextExpires = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
       }
       setMatchExpr(nextMatch);
+      setEditAgentId(nextAgentId);
       setEditResourceName(nextName);
       setEditResourceDesc(nextDesc);
       setEditExpiresAt(nextExpires);
       markEditClean({
+        editAgentId: nextAgentId,
         editResourceName: nextName,
         editResourceDesc: nextDesc,
         matchExpr: nextMatch,
         editExpiresAt: nextExpires,
       });
     } else {
+      setEditAgentId('');
       setEditResourceName('');
       setEditResourceDesc('');
       setEditExpiresAt('');
@@ -204,6 +212,12 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
   function templateLabel(refTemplateId: string): string {
     return templateNameById.get(refTemplateId) || refTemplateId;
   }
+
+  // 当前绑定不在 catalog 时仍展示，避免空下拉却能保存
+  const editCandidates =
+    editAgentId && !candidates.some((c) => c.id === editAgentId)
+      ? [{ id: editAgentId, label: templateLabel(editAgentId), sub: editAgentId }, ...candidates]
+      : candidates;
 
   function toggleCheck(id: string) {
     setChecked((prev) => {
@@ -240,6 +254,10 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
       toast('warn', t('policies.fieldRequired', { field: t('instanceDetail.resourcePanel.agent.resourceName') }));
       return;
     }
+    if (!editAgentId.trim()) {
+      toast('warn', t('policies.fieldRequired', { field: t('instanceDetail.resourcePanel.agent.agentLabel') }));
+      return;
+    }
     const err = validateMatchExprModel(parseMatchExpr(matchExpr), AGENT_RESOURCE_MATCH_FIELDS);
     if (err) {
       toast('danger', t('policies.matchExpr.invalid'));
@@ -248,6 +266,7 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
     setBusy(true);
     try {
       await InstanceAgentResourceApi.update(instanceId, editing.resource_id, {
+        ref_template_id: editAgentId.trim(),
         match_exprs: [matchExpr],
         resource_name: editResourceName.trim(),
         resource_desc: editResourceDesc.trim() || null,
@@ -412,6 +431,7 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
                         checked={a.enabled !== false}
                         onChange={(enabled) => {
                           InstanceAgentResourceApi.update(instanceId, a.resource_id, {
+                            ref_template_id: a.ref_template_id,
                             match_exprs: [matchExprToEditorString(a.match_expr)],
                             resource_name: (a.resource_name ?? '').trim() || a.resource_id,
                             resource_desc: a.resource_desc ?? null,
@@ -586,7 +606,12 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
           footer={
             <>
               <ModalCancelButton className="btn" />
-              <button className="btn primary" style={{ marginLeft: 8 }} disabled={busy} onClick={() => void saveInstanceAgentResource()}>
+              <button
+                className="btn primary"
+                style={{ marginLeft: 8 }}
+                disabled={busy || catalogLoading}
+                onClick={() => void saveInstanceAgentResource()}
+              >
                 {t('common.save')}
               </button>
             </>
@@ -614,9 +639,22 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
             </div>
           </label>
           <label className="block mb-3">
-            <FieldLabel>{t('instanceDetail.resourcePanel.agent.agentLabel')}</FieldLabel>
-            <div className="input mt-1 w-full !bg-[var(--bg-muted)] cursor-not-allowed">
-              {templateLabel(editing.ref_template_id)}({editing.ref_template_id})
+            <FieldLabel required>{t('instanceDetail.resourcePanel.agent.agentLabel')}</FieldLabel>
+            <select
+              className="select mt-1 w-full"
+              value={editAgentId}
+              disabled={catalogLoading}
+              onChange={(e) => setEditAgentId(e.target.value)}
+            >
+              <option value="">{t('common.pleaseSelect')}</option>
+              {editCandidates.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.label}({c.id})
+                </option>
+              ))}
+            </select>
+            <div className="text-[11px] text-muted mt-1">
+              {t('instanceDetail.resourcePanel.agent.rebindHint')}
             </div>
           </label>
           <label className="block mb-3">

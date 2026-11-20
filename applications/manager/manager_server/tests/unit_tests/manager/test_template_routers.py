@@ -17,6 +17,7 @@ from demo_payloads import (
     expert_package_templates,
     skill_prebuilt_templates,
 )
+from manager_server.infrastructure import config as config_mod
 
 pytestmark = pytest.mark.unit
 
@@ -382,3 +383,55 @@ def _demo_container_wire(container_id: str) -> dict:
         "image": "jiuwenclaw/jiuwenbox:latest",
         "imagePullPolicy": "IfNotPresent",
     }
+
+
+@pytest.mark.asyncio
+async def test_service_config_default_rawdata(
+    manager_api: ManagerApiHarness,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """default-rawdata：OBS 对象缺失 404；存在则原样返回 JSON。"""
+    import json
+
+    from httpx import codes
+
+    h = manager_api
+    monkeypatch.setattr(config_mod.settings, "deploy_namespace", "wx")
+    monkeypatch.setattr(
+        config_mod.settings,
+        "agent_runtime_default_conf_path",
+        "defaults/{ns}/agentserver.json",
+    )
+
+    async def _missing(_key: str, **_kwargs):
+        raise FileNotFoundError("object not found")
+
+    monkeypatch.setattr(
+        "manager_server.infrastructure.obs.fetch_object_bytes",
+        _missing,
+    )
+    resp = await h.http.get(h.templates_url("/service-config-templates/default-rawdata"))
+    assert resp.status_code == codes.NOT_FOUND
+
+    payload = {
+        "type": "config_sync",
+        "rawdata": {
+            "containers": [{"container_id": "c-agentserver"}],
+            "templates": [{"template_id": "default", "template_name": "default"}],
+            "scopes": [],
+        },
+    }
+
+    expected_key = config_mod.settings.resolved_agent_runtime_default_conf_path
+    assert expected_key == "defaults/wx/agentserver.json"
+
+    async def _present(key: str, **_kwargs):
+        assert key == expected_key
+        return json.dumps(payload).encode("utf-8")
+
+    monkeypatch.setattr(
+        "manager_server.infrastructure.obs.fetch_object_bytes",
+        _present,
+    )
+    data = await h.get_json("/service-config-templates/default-rawdata")
+    assert data == payload

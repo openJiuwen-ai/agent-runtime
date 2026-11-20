@@ -1,16 +1,13 @@
-"""企业版 Skill 上传审批：manager 只读访问 OBS 中的原始包。
+"""企业版 Skill 上传审批：在基础 OBS 客户端之上做包元数据 / sha256 校验。
 
-凭据复用 AgentServer 的 AK/SK；本模块只调用 ``StatObject`` / ``GetObject``。
-SDK 采用惰性导入：对象存储不可用时只影响下载接口，不应拖垮管理面启动。
+通用连接与 ``GetObject`` 见 ``manager_server.infrastructure.obs``。
 """
 
 from __future__ import annotations
 
 import asyncio
 import hashlib
-import os
 from typing import Any
-from urllib.parse import SplitResult, urlsplit
 
 from manager_server.core.skill_upload.errors import (
     SkillUploadError,
@@ -18,84 +15,22 @@ from manager_server.core.skill_upload.errors import (
     SkillUploadPackageUnavailableError,
     SkillUploadUnavailableError,
 )
+from manager_server.infrastructure import obs as obs_infra
 from manager_server.infrastructure.config import settings
 
 _PACKAGE_MAX_BYTES = 50 * 1024 * 1024
-_SSL_VERIFY_OFF = {"", "0", "false", "no", "off"}
-
-
-def _obs_http_client() -> Any:
-    from urllib3 import PoolManager, Timeout
-
-    verify = os.getenv("JIUWENSWARM_SSL_VERIFY", "false").strip().lower() not in _SSL_VERIFY_OFF
-    return PoolManager(
-        timeout=Timeout(connect=5, read=60),
-        retries=False,
-        cert_reqs="CERT_REQUIRED" if verify else "CERT_NONE",
-    )
-
-
-def _obs_authority(parsed: SplitResult, bucket: str) -> tuple[str, bool]:
-    """Return the SDK endpoint and whether virtual-host addressing is required.
-
-    Mirrors ``AttachmentStore.from_env()`` in AgentServer so manager and
-    agentserver sign requests against Huawei OBS the same way.
-    """
-    regional_host = (parsed.hostname or "").rstrip(".")
-    # A bucket-prefixed OBS setting still uses the regional endpoint in MinIO so
-    # it adds the bucket exactly once when signing requests.
-    if regional_host.startswith(f"{bucket}.obs."):
-        regional_host = regional_host.removeprefix(f"{bucket}.")
-    if not (
-        regional_host.startswith("obs.")
-        and ".myhuaweicloud." in regional_host
-    ):
-        return parsed.netloc, False
-    if parsed.username is not None:
-        raise ValueError("OBS_URL must not contain user information")
-    default_port = 443 if parsed.scheme == "https" else 80
-    port = parsed.port
-    if port not in (None, default_port):
-        return f"{regional_host}:{port}", True
-    return regional_host, True
 
 
 def _store() -> tuple[Any, str]:
-    from minio import Minio
-
-    endpoint = str(settings.obs_url or "").strip()
-    access = str(settings.obs_access_key or "").strip()
-    secret = str(settings.obs_secret_key or "").strip()
-    bucket = str(settings.obs_bucket or "").strip()
-    if not all((endpoint, access, secret, bucket)):
-        raise SkillUploadUnavailableError("object storage is not configured")
-    secure = str(settings.obs_secure or "").strip().lower() in {"true", "1", "yes"}
-    parsed = urlsplit(
-        endpoint if "://" in endpoint else f"{'https' if secure else 'http'}://{endpoint}"
-    )
-    if (
-        parsed.scheme not in {"http", "https"}
-        or not parsed.netloc
-        or parsed.path not in {"", "/"}
-    ):
-        raise SkillUploadUnavailableError("object storage endpoint is invalid")
+    """技能包路径使用的客户端；将基础设施错误映射为 SkillUpload*。"""
     try:
-        authority, virtual_host = _obs_authority(parsed, bucket)
-    except ValueError as exc:
+        return obs_infra.get_client()
+    except obs_infra.ObsNotConfiguredError as exc:
+        raise SkillUploadUnavailableError("object storage is not configured") from exc
+    except obs_infra.ObsEndpointInvalidError as exc:
         raise SkillUploadUnavailableError(
             "object storage endpoint is invalid"
         ) from exc
-    client = Minio(
-        authority,
-        access_key=access,
-        secret_key=secret,
-        secure=parsed.scheme == "https",
-        region=str(settings.obs_region or "default"),
-        http_client=_obs_http_client(),
-    )
-    if virtual_host:
-        client.enable_virtual_style_endpoint()
-    return client, bucket
 
 
 def _map_storage_error(exc: Any) -> SkillUploadError:

@@ -37,8 +37,11 @@ AGENT_DEFINITION_TABLE_DEF = TableDefinition(
     ],
     indexes=[
         IndexDefinition(["agent_id"], unique=True),
+        # PG 标识符上限 63；自动生成的 ix_<table>_<cols...> 会超长
         IndexDefinition(
-            ["agent_config_template_id", "runtime_template_id"], unique=True
+            ["agent_config_template_id", "runtime_template_id"],
+            unique=True,
+            name="uq_agent_id_rt_id",
         ),
         IndexDefinition(["runtime_template_id"], unique=False),
         IndexDefinition(["agent_name"], unique=False),

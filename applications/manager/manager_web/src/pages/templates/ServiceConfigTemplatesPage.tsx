@@ -153,6 +153,19 @@ export function ServiceConfigTemplatesPage({
     })();
   };
 
+  const importParsedConfig = async (parsed: unknown) => {
+    const { body, templateCount } = parseConfigSyncImport(parsed);
+    await ServiceConfigTemplateApi.create(body);
+    toast(
+      'success',
+      templateCount > 1
+        ? t('serviceConfigTemplate.importOkFirstOfMany', { count: templateCount })
+        : t('serviceConfigTemplate.importOk'),
+    );
+    void reload();
+    bumpGuideRevision();
+  };
+
   const handleImportFile = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
@@ -164,16 +177,7 @@ export function ServiceConfigTemplatesPage({
         try {
           const text = String(reader.result ?? '');
           const parsed = JSON.parse(text) as unknown;
-          const { body, templateCount } = parseConfigSyncImport(parsed);
-          await ServiceConfigTemplateApi.create(body);
-          toast(
-            'success',
-            templateCount > 1
-              ? t('serviceConfigTemplate.importOkFirstOfMany', { count: templateCount })
-              : t('serviceConfigTemplate.importOk'),
-          );
-          void reload();
-          bumpGuideRevision();
+          await importParsedConfig(parsed);
         } catch (err) {
           toast(
             'danger',
@@ -195,6 +199,35 @@ export function ServiceConfigTemplatesPage({
       toast('danger', t('serviceConfigTemplate.importFailed', { detail: 'read error' }));
     };
     reader.readAsText(file, 'UTF-8');
+  };
+
+  const handleImportDefault = () => {
+    if (importing) return;
+    void (async () => {
+      setImporting(true);
+      try {
+        const parsed = await ServiceConfigTemplateApi.getDefaultRawdata();
+        await importParsedConfig(parsed);
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 404) {
+          toast('danger', t('serviceConfigTemplate.importDefaultMissing'));
+        } else {
+          toast(
+            'danger',
+            t('serviceConfigTemplate.importFailed', {
+              detail:
+                err instanceof ApiError
+                  ? err.detail
+                  : err instanceof Error
+                    ? err.message
+                    : String(err),
+            }),
+          );
+        }
+      } finally {
+        setImporting(false);
+      }
+    })();
   };
 
   const toggleEnabled = async (row: ServiceConfigTemplate, enabled: boolean) => {
@@ -256,6 +289,14 @@ export function ServiceConfigTemplatesPage({
             onClick={() => importInputRef.current?.click()}
           >
             {importing ? t('common.loading') : t('serviceConfigTemplate.import')}
+          </button>
+          <button
+            className="btn sm"
+            disabled={importing}
+            title={t('serviceConfigTemplate.importDefaultHint')}
+            onClick={handleImportDefault}
+          >
+            {importing ? t('common.loading') : t('serviceConfigTemplate.importDefault')}
           </button>
           <button
             className="btn primary sm"

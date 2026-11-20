@@ -5,7 +5,8 @@ service_config_container（容器模板，供运行时模板绑定）。
 
 from __future__ import annotations
 
-from typing import Annotated
+import json
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from openjiuwen_runtime.foundation.db.handler import DBHandler
@@ -1072,6 +1073,46 @@ async def list_service_config_templates(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return ResponseModel(code=200, message="success", data=data)
+
+
+@templates_router.get(
+    "/service-config-templates/default-rawdata",
+    response_model=ResponseModel,
+)
+async def get_service_config_default_rawdata() -> ResponseModel:
+    """从 OBS/MinIO 读取部署上传的默认 agentserver.json（字面路径须先于 /{template_id}）。"""
+    from manager_server.infrastructure.obs import (
+        ObsError,
+        ObsNotConfiguredError,
+        ObsUnavailableError,
+        fetch_object_bytes,
+    )
+
+    object_key = settings.resolved_agent_runtime_default_conf_path
+    try:
+        payload = await fetch_object_bytes(object_key)
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail="default agentserver config not found",
+        ) from exc
+    except ObsNotConfiguredError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ObsUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ObsError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    try:
+        raw: Any = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"default agentserver config is not valid JSON: {exc}",
+        ) from exc
+    return ResponseModel(code=200, message="success", data=raw)
 
 
 @templates_router.get("/service-config-templates/{template_id}", response_model=ResponseModel)

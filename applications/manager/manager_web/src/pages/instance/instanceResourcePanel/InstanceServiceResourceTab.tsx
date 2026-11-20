@@ -115,7 +115,7 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
       }),
     [instanceId, page, pageSize, searchQuery, enabledFilter, sortBy, sortOrder],
   );
-  const { data: catalogData } = useAsync(
+  const { data: catalogData, loading: catalogLoading } = useAsync(
     () => ServiceConfigTemplateApi.list({ page: 1, page_size: 200 }),
     [],
   );
@@ -143,6 +143,7 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
   const [addMatchExpr, setAddMatchExpr] = useState('');
   const [addExpiresAt, setAddExpiresAt] = useState('');
   const [editing, setEditing] = useState<InstanceServiceResource | null>(null);
+  const [editTemplateId, setEditTemplateId] = useState('');
   const [editResourceName, setEditResourceName] = useState('');
   const [editResourceDesc, setEditResourceDesc] = useState('');
   const [editPriority, setEditPriority] = useState(0);
@@ -160,7 +161,14 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
     addMatchExpr,
     addExpiresAt,
   };
-  const editDraft = { editResourceName, editResourceDesc, editPriority, matchExpr, editExpiresAt };
+  const editDraft = {
+    editTemplateId,
+    editResourceName,
+    editResourceDesc,
+    editPriority,
+    matchExpr,
+    editExpiresAt,
+  };
 
   useEffect(() => {
     setChecked(new Set());
@@ -192,6 +200,7 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
   useEffect(() => {
     if (editing) {
       const nextMatch = matchExprToEditorString(editing.match_expr);
+      const nextTemplateId = editing.ref_template_id || '';
       const nextName = clipField(editing.resource_name ?? '', FIELD_MAX_LENGTH.resource_name);
       const nextDesc = clipField(editing.resource_desc ?? '', FIELD_MAX_LENGTH.resource_desc);
       const nextPriority = editing.priority ?? 0;
@@ -201,11 +210,13 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
         nextExpires = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
       }
       setMatchExpr(nextMatch);
+      setEditTemplateId(nextTemplateId);
       setEditResourceName(nextName);
       setEditResourceDesc(nextDesc);
       setEditPriority(nextPriority);
       setEditExpiresAt(nextExpires);
       markEditClean({
+        editTemplateId: nextTemplateId,
         editResourceName: nextName,
         editResourceDesc: nextDesc,
         editPriority: nextPriority,
@@ -213,6 +224,7 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
         editExpiresAt: nextExpires,
       });
     } else {
+      setEditTemplateId('');
       setEditResourceName('');
       setEditResourceDesc('');
       setEditPriority(0);
@@ -228,6 +240,12 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
   function templateLabel(refTemplateId: string): string {
     return templateNameById.get(refTemplateId) || refTemplateId;
   }
+
+  // 当前绑定不在 catalog（已删 / 超 200 / 列表失败）时仍展示，避免空下拉却能保存
+  const editCandidates =
+    editTemplateId && !candidates.some((c) => c.id === editTemplateId)
+      ? [{ id: editTemplateId, label: templateLabel(editTemplateId) }, ...candidates]
+      : candidates;
 
   function toggleCheck(id: string) {
     setChecked((prev) => {
@@ -266,6 +284,10 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
       toast('warn', t('policies.fieldRequired', { field: t('instanceDetail.resourcePanel.serviceResource.resourceName') }));
       return;
     }
+    if (!editTemplateId.trim()) {
+      toast('warn', t('policies.fieldRequired', { field: t('instanceDetail.resourcePanel.serviceResource.template') }));
+      return;
+    }
     if (!Number.isInteger(editPriority)) {
       toast('warn', t('policies.fieldRequired', { field: t('instanceDetail.resourcePanel.serviceResource.priority') }));
       return;
@@ -278,6 +300,7 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
     setBusy(true);
     try {
       await InstanceServiceResourceApi.update(instanceId, editing.resource_id, {
+        ref_template_id: editTemplateId.trim(),
         match_exprs: [matchExpr],
         resource_name: editResourceName.trim(),
         resource_desc: editResourceDesc.trim() || null,
@@ -490,6 +513,7 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
                             checked={row.enabled !== false}
                             onChange={(enabled) => {
                               InstanceServiceResourceApi.update(instanceId, row.resource_id, {
+                                ref_template_id: row.ref_template_id,
                                 match_exprs: [matchExprToEditorString(row.match_expr)],
                                 resource_name: (row.resource_name ?? '').trim() || row.resource_id,
                                 resource_desc: row.resource_desc ?? null,
@@ -705,7 +729,7 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
               <button
                 className="btn primary"
                 style={{ marginLeft: 8 }}
-                disabled={busy}
+                disabled={busy || catalogLoading}
                 onClick={() => void saveInstanceServiceResource()}
               >
                 {t('common.save')}
@@ -735,10 +759,21 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
             </div>
           </label>
           <label className="block mb-3">
-            <FieldLabel>{t(`${sr}.template`)}</FieldLabel>
-            <div className="input mt-1 w-full !bg-[var(--bg-muted)] cursor-not-allowed">
-              {templateLabel(editing.ref_template_id)}({editing.ref_template_id})
-            </div>
+            <FieldLabel required>{t(`${sr}.template`)}</FieldLabel>
+            <select
+              className="select mt-1 w-full"
+              value={editTemplateId}
+              disabled={catalogLoading}
+              onChange={(e) => setEditTemplateId(e.target.value)}
+            >
+              <option value="">{t('common.pleaseSelect')}</option>
+              {editCandidates.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.label}({c.id})
+                </option>
+              ))}
+            </select>
+            <div className="text-[11px] text-muted mt-1">{t(`${sr}.rebindHint`)}</div>
           </label>
           <label className="block mb-3">
             <div className="flex items-center gap-1">

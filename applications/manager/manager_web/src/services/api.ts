@@ -1072,6 +1072,7 @@ export const InstanceAgentResourceApi = {
     jid: string,
     resourceId: string,
     body: {
+      ref_template_id: string;
       match_exprs: MatchExpr[];
       resource_name: string;
       resource_desc?: string | null;
@@ -1155,6 +1156,7 @@ export const InstanceServiceResourceApi = {
     jid: string,
     resourceId: string,
     body: {
+      ref_template_id: string;
       match_exprs: MatchExpr[];
       resource_name: string;
       resource_desc?: string | null;
@@ -1755,6 +1757,8 @@ export const ServiceConfigTemplateApi = {
   }) => http<PageResult<ServiceConfigTemplate>>('/v1/service-config-templates', { query: params }),
   get: (id: string) =>
     http<ServiceConfigTemplate>(`/v1/service-config-templates/${encodeURIComponent(id)}`),
+  /** 部署发布的默认 agentserver.json（Envelope 或 rawdata 三段式） */
+  getDefaultRawdata: () => http<unknown>('/v1/service-config-templates/default-rawdata'),
   create: (body: ServiceConfigTemplateCreateBody) =>
     http<ServiceConfigTemplate>('/v1/service-config-templates', { method: 'POST', body }),
   update: (id: string, body: ServiceConfigTemplateUpdateBody) =>
