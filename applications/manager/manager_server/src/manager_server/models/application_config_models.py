@@ -92,6 +92,25 @@ LOGGING_CONFIG_TABLE_DEF = TableDefinition(
     ],
 )
 
+# 网页出站内容脱敏配置：单文档，整段 PUT 覆盖，与 Gateway content_masking_config 对齐。
+CONTENT_MASKING_CONFIG_TABLE_DEF = TableDefinition(
+    table_name="content_masking_config",
+    columns=[
+        ColumnDefinition("id", "integer", primary_key=True, autoincrement=True, nullable=False),
+        ColumnDefinition("jiuwenclaw_id", "string", length=64, nullable=False),
+        ColumnDefinition("enabled", "boolean", nullable=False, default=False),
+        # [{"title": str, "pattern": str}]，最多 32 条
+        ColumnDefinition("rules", "json", nullable=False),
+        ColumnDefinition("source", "string", length=16, nullable=False, default="manager"),
+        ColumnDefinition("revision", "integer", nullable=False, default=1),
+        ColumnDefinition("created_at", "datetime", nullable=False),
+        ColumnDefinition("updated_at", "datetime", nullable=False),
+    ],
+    indexes=[
+        IndexDefinition(["jiuwenclaw_id"], unique=True),
+    ],
+)
+
 _TASK_MEMORY_CONFIG_TABLE_DEF = TableDefinition(
     table_name="task_memory_config",
     columns=[

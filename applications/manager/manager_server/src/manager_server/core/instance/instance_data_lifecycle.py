@@ -20,6 +20,9 @@ from manager_server.core.application_config.cron_policy import (
 from manager_server.core.application_config.logging_config import (
     push_logging_config_sync_to_gateway,
 )
+from manager_server.core.application_config.content_masking_config import (
+    push_content_masking_config_sync_to_gateway,
+)
 from manager_server.core.application_config.user_preference_default import (
     push_user_preference_default_sync_to_gateway,
 )
@@ -53,6 +56,7 @@ from manager_server.models.jid_template_ref_models import (
 )
 from manager_server.models.application_config_models import (
     AUDIT_LOG_CONFIG_TABLE_DEF,
+    CONTENT_MASKING_CONFIG_TABLE_DEF,
     CRON_POLICY_TABLE_DEF,
     LOG_MASKING_RULE_TABLE_DEF,
     LOGGING_CONFIG_TABLE_DEF,
@@ -69,6 +73,7 @@ _LIST_ALL_CAP = 10_000
 _MANAGER_INSTANCE_TABLES = (
     LOG_MASKING_RULE_TABLE_DEF.table_name,
     LOGGING_CONFIG_TABLE_DEF.table_name,
+    CONTENT_MASKING_CONFIG_TABLE_DEF.table_name,
     CRON_POLICY_TABLE_DEF.table_name,
     USER_PREFERENCE_DEFAULT_TABLE_DEF.table_name,
     _TASK_MEMORY_CONFIG_TABLE_DEF.table_name,
@@ -153,6 +158,11 @@ async def sync_data_to_gateway_on_register(
             "log_masking_rule",
             push_log_masking_rules_sync_to_gateway,
             _seed_log_masking_if_needed,
+        ),
+        (
+            "content_masking",
+            push_content_masking_config_sync_to_gateway,
+            None,
         ),
     ):
         try:

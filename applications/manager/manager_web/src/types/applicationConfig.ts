@@ -234,6 +234,28 @@ export interface LoggingConfigUpsertBody {
   full?: LogLevel | null;
 }
 
+/** 网页出站内容脱敏规则：与 Gateway content_masking_config.rules 同构 */
+export interface ContentMaskingRule {
+  title: string;
+  pattern: string;
+}
+
+export interface ContentMaskingConfig {
+  id?: number;
+  jiuwenclaw_id: string;
+  enabled: boolean;
+  rules: ContentMaskingRule[];
+  source?: string;
+  revision?: number;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface ContentMaskingConfigUpsertBody {
+  enabled: boolean;
+  rules: ContentMaskingRule[];
+}
+
 export interface CronPolicy {
   id?: number;
   jiuwenclaw_id: string;

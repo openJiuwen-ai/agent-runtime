@@ -543,6 +543,7 @@
   "instanceConfig": {
     "tabs": {
       "logMasking": "日志脱敏",
+      "contentMasking": "内容脱敏",
       "logging": "日志级别",
       "auditLog": "审计日志",
       "cronPolicy": "定时任务",
@@ -581,6 +582,25 @@
       "searchPlaceholder": "搜索规则ID、名称、描述、匹配正则表达式、替换文本、优先级、来源",
       "fieldRequired": "请填写{{field}}",
       "deleteConfirm": "确认删除该日志脱敏规则？"
+    },
+    "contentMasking": {
+      "intro": "配置网页端展示内容的脱敏规则（回答、思考过程、工具结果、历史回放）。仅影响用户网页看到的副本，不改历史文件，也不改送给模型的上下文。",
+      "managed": "Manager 托管",
+      "resetToYaml": "删除下发配置",
+      "deleteConfirm": "确认删除内容脱敏下发配置？Gateway 将回退使用 config.yaml 中的 sensitive_mask。",
+      "deleted": "已删除下发配置，Gateway 将回退使用 config.yaml",
+      "globalSwitch": "全局开关",
+      "globalSwitchHint": "关闭时所有规则不生效，原文直出。",
+      "rules": "脱敏规则",
+      "rulesHint": "最多 {{max}} 条；命中内容替换为等长星号。",
+      "addRule": "新增规则",
+      "ruleTitle": "规则名称",
+      "rulePattern": "匹配正则",
+      "rulePatternPlaceholder": "例如 (\\d{4})\\d{4}(\\d{4})",
+      "emptyRules": "暂未配置规则",
+      "ruleRequired": "请填写规则名称和匹配正则",
+      "patternInvalid": "正则表达式无效：{{detail}}",
+      "maxRules": "最多配置 {{max}} 条规则"
     },
     "cronPolicy": {
       "intro": "限制用户在 Web 面板里同时处于运行中的定时任务个数。默认 5。只拦截面板上的新建启用、启动暂停任务，以及把暂停任务改成启用。通过对话、TUI、Cron 表达式创建，以及已经在运行的任务，不受这次调整影响，也不会被删除或停止。0 表示不能再从面板启用新的运行任务。未托管时使用实例本地 config.yaml，缺省同样是 5。",

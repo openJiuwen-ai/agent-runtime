@@ -42,6 +42,8 @@ import type {
   ListItemsResult,
   LoggingConfig,
   LoggingConfigUpsertBody,
+  ContentMaskingConfig,
+  ContentMaskingConfigUpsertBody,
   CronPolicy,
   CronPolicyUpsertBody,
   UserPreferenceDefault,
@@ -1842,6 +1844,18 @@ export const LoggingApi = {
     http<LoggingConfig>(`${instanceBase(instanceId)}/logging`, { method: 'PUT', body }),
   remove: (instanceId: string) =>
     http<void>(`${instanceBase(instanceId)}/logging`, { method: 'DELETE' }),
+};
+
+export const ContentMaskingApi = {
+  get: (instanceId: string) =>
+    http<ContentMaskingConfig>(`${instanceBase(instanceId)}/content-masking`),
+  upsert: (instanceId: string, body: ContentMaskingConfigUpsertBody) =>
+    http<ContentMaskingConfig>(`${instanceBase(instanceId)}/content-masking`, {
+      method: 'PUT',
+      body,
+    }),
+  remove: (instanceId: string) =>
+    http<void>(`${instanceBase(instanceId)}/content-masking`, { method: 'DELETE' }),
 };
 
 export const CronPolicyApi = {
