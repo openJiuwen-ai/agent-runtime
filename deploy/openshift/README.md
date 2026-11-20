@@ -95,9 +95,10 @@ kubectl get pods   # 确认登录成功
 ./deploy.sh up manager   # 管理套件: identity → manager-server → manager-web
 ```
 
-在 `.env.custom` 填写 `USER_BACKEND_IMAGE`、`USER_BACKEND_DB_USER` 和
-`USER_BACKEND_DB_PASSWORD`。该独立 DB 账号只读取 Manager DB 的共享视图，密码与其他组件凭据一起
-写入共用 Kubernetes Secret。默认 `up` 会创建用户面前后端，也可通过 `up user-backend` 和
+在 `.env.custom` 填写 `USER_BACKEND_IMAGE`；`USER_BACKEND_DB_USER` 和
+`USER_BACKEND_DB_PASSWORD` 可留空，自动使用按 namespace 派生的只读账号及内置默认密码。
+Manager 建库建表后自动创建共享视图、账号和 SELECT 授权，密码与其他组件凭据一起写入共用 Secret。
+默认 `up` 会创建用户面前后端，也可通过 `up user-backend` 和
 `up web` 分别部署。
 
 数据库说明：`templates/` 下同时提供 mysql / postgresql 模板，供需要替换数据库的场景
