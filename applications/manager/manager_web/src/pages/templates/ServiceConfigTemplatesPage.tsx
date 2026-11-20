@@ -18,6 +18,7 @@ import { ServiceConfigTemplateModal } from './ServiceConfigTemplateModal';
 import { toast } from '../../stores/uiStore';
 import { bumpGuideRevision } from '../../stores/guideStore';
 import { formatTime, truncate } from '../../utils/format';
+import { templateInUseMessage } from '../../utils/templateInUse';
 import { useRouter } from '../../router';
 import {
   downloadJson,
@@ -214,7 +215,8 @@ export function ServiceConfigTemplatesPage({
       setItems((list) =>
         list.map((item) => (item.template_id === row.template_id ? { ...item, enabled: previous } : item)),
       );
-      toast('danger', t('errors.saveFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
+      const localized = templateInUseMessage(e, t);
+      toast('danger', localized ?? t('errors.saveFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
     } finally {
       setTogglingId(null);
     }
@@ -421,7 +423,8 @@ export function ServiceConfigTemplatesPage({
             void reload();
             bumpGuideRevision();
           } catch (e) {
-            toast('danger', t('errors.deleteFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
+            const localized = templateInUseMessage(e, t);
+            toast('danger', localized ?? t('errors.deleteFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
           }
         }}
         onClose={() => setDelTarget(null)}

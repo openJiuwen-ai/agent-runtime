@@ -11,6 +11,7 @@ from typing import Any
 
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 
+from manager_server.core.template.errors import TemplateInUseError
 from manager_server.core.template.service_config_container import (
     bound_container_briefs,
     extract_wire_containers,
@@ -46,13 +47,6 @@ def _g(row: Any, key: str, default: Any = None) -> Any:
     return getattr(row, key, default)
 
 
-async def _sync_agent_definitions(handler: DBHandler) -> None:
-    """派生数据同步；失败只告警，不阻塞模板增删改。"""
-    from manager_server.core.agent_definition.sync import reconcile_agent_definitions
-
-    await reconcile_agent_definitions(handler)
-
-
 async def _assert_service_config_deletable(
     handler: DBHandler,
     template_id: str,
@@ -66,9 +60,29 @@ async def _assert_service_config_deletable(
         {"ref_template_id": tid},
     )
     if grant_count > 0:
-        raise ValueError(
+        raise TemplateInUseError(
+            "runtime_referenced_by_services",
+            grant_count,
             f"cannot delete template: {grant_count} instance service "
-            "resource reference(s) exist, remove grants first"
+            "resource reference(s) exist, remove grants first",
+        )
+
+
+async def _assert_no_agent_definitions(
+    handler: DBHandler, template_id: str, *, action: str
+) -> None:
+    """模板被 Agent 模板引用时拒绝删除/停用，避免出现悬空组合。"""
+    import manager_server.core.agent_definition.service as agent_definition_service
+
+    ref_count = await agent_definition_service.count_runtime_template_references(
+        handler, template_id
+    )
+    if ref_count > 0:
+        raise TemplateInUseError(
+            "agent_definitions_referenced",
+            ref_count,
+            f"cannot {action} template: {ref_count} agent template(s) reference it, "
+            "delete those agent templates first",
         )
 
 
@@ -209,9 +223,7 @@ class ServiceConfigTemplateService:
         payload.setdefault("created_at", now)
         payload.setdefault("updated_at", now)
         created = await self._handler.create(_TABLE, payload)
-        result = await row_to_out(self._handler, created)
-        await _sync_agent_definitions(self._handler)
-        return result
+        return await row_to_out(self._handler, created)
 
     async def get(self, template_id: str) -> ServiceConfigTemplateOut | None:
         row = await self._handler.get(_TABLE, {"template_id": template_id})
@@ -303,6 +315,11 @@ class ServiceConfigTemplateService:
         if "main_container_id" in updates or "sidecar_container_ids" in updates:
             await _assert_bound_containers_exist(self._handler, body)
 
+        if updates.get("enabled") is False and bool(_g(existing, "enabled", True)):
+            await _assert_no_agent_definitions(
+                self._handler, template_id, action="disable"
+            )
+
         payload = dict(updates)
         payload["updated_at"] = utc_now()
         row = await self._handler.update(
@@ -319,7 +336,6 @@ class ServiceConfigTemplateService:
         await update_service_template_on_referencing_runtimes(
             self._handler, template_id
         )
-        await _sync_agent_definitions(self._handler)
         return await row_to_out(self._handler, row)
 
     async def delete(self, template_id: str) -> bool:
@@ -327,8 +343,8 @@ class ServiceConfigTemplateService:
         if row is None:
             return False
         await _assert_service_config_deletable(self._handler, template_id)
+        await _assert_no_agent_definitions(
+            self._handler, template_id, action="delete"
+        )
         # 容器表为全局目录，删模板不级联删 container 行（可能被其它模板引用）。
-        deleted = await self._handler.delete(_TABLE, {"template_id": template_id})
-        if deleted:
-            await _sync_agent_definitions(self._handler)
-        return deleted
+        return bool(await self._handler.delete(_TABLE, {"template_id": template_id}))

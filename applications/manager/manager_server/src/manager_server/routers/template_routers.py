@@ -22,6 +22,7 @@ from manager_server.core.template.a2a_access_policy_template import (
 from manager_server.core.template.a2a_outbound_template import A2AOutboundTemplateService
 from manager_server.core.template.a2a_discovery import A2ADiscoveryError, create_candidate
 from manager_server.core.template.a2a_discovery_settings import A2ADiscoverySettingsService
+from manager_server.core.template.errors import TemplateInUseError
 from manager_server.core.template.embedding_template import (
     EmbeddingTemplateService,
 )
@@ -456,6 +457,11 @@ async def update_agent_template(
         raise HTTPException(status_code=409, detail={"code": exc.code, "message": str(exc)}) from None
     except RegistrationError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from None
+    except TemplateInUseError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": exc.code, "message": str(exc), "count": exc.count},
+        ) from None
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if row is None:
@@ -482,6 +488,11 @@ async def delete_agent_template(
         ) from None
     except RegistrationError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from None
+    except TemplateInUseError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": exc.code, "message": str(exc), "count": exc.count},
+        ) from None
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not ok:
@@ -1090,6 +1101,11 @@ async def update_service_config_template(
     svc = _service_config_template_svc(handler)
     try:
         row = await svc.update(template_id, body)
+    except TemplateInUseError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": exc.code, "message": str(exc), "count": exc.count},
+        ) from None
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if row is None:
@@ -1105,6 +1121,11 @@ async def delete_service_config_template(
     svc = _service_config_template_svc(handler)
     try:
         ok = await svc.delete(template_id)
+    except TemplateInUseError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": exc.code, "message": str(exc), "count": exc.count},
+        ) from None
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not ok:

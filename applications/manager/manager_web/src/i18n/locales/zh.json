@@ -112,6 +112,7 @@
     "newModel": "新建模型",
     "newAgentDefinition": "新建 Agent 配置模板",
     "newPoolDefinition": "新建运行时模板",
+    "newAgentTemplate": "新建 Agent 模板",
     "newContainerTemplate": "新建容器模板",
     "noClusters": "暂无集群，请先在集群管理中新建",
     "selectCluster": "选择集群",
@@ -1312,7 +1313,7 @@
   },
   "agentDefinition": {
     "title": "Agent模板",
-    "subtitle": "由 Agent 配置模板与运行时模板生成，名称可自定义",
+    "subtitle": "为 Agent 配置模板与运行时模板的组合配置 Agent 名称",
     "searchPlaceholder": "搜索 Agent Name 或 Agent ID",
     "column": {
       "name": "Agent 名称",
@@ -1320,15 +1321,30 @@
       "agentConfig": "Agent 配置模板",
       "runtime": "运行时模板"
     },
+    "new": "新增 Agent 模板",
+    "createTitle": "新增 Agent 模板",
+    "createHint": "Agent ID 由所选的 Agent 配置模板与运行时模板组合生成，保存后不可修改。",
+    "selectAgentConfig": "请选择 Agent 配置模板",
+    "selectRuntime": "请选择运行时模板",
+    "templateRequired": "请选择 Agent 配置模板和运行时模板",
+    "templateUnavailable": "所选模板不存在或已停用，请重新选择",
+    "combinationDuplicated": "该模板组合已存在 Agent 模板，请勿重复新增",
+    "noTemplates": "暂无可用的 Agent 配置模板或运行时模板，请先新增并启用。",
     "edit": "编辑",
     "editTitle": "编辑 Agent 名称",
-    "editHint": "Agent 名称在有效 Agent 模板内全局唯一（不区分大小写），最长 128 个字符。",
-    "empty": "暂无 Agent 模板，请先创建并启用 Agent 配置模板与运行时模板",
+    "editHint": "Agent 名称在 Agent 模板内全局唯一（不区分大小写），最长 128 个字符。",
+    "deleteConfirm": "删除后该 Agent 将从用户面移除，名称也不再保留。确定删除？",
+    "empty": "暂无 Agent 模板，请点击右上角「新增 Agent 模板」创建",
     "nameRequired": "请填写 Agent 名称",
     "nameTooLong": "Agent 名称不能超过 128 个字符",
     "nameDuplicated": "该 Agent 名称已被占用，请换一个",
     "copyId": "复制 Agent ID",
     "copied": "已复制"
+  },
+  "templateInUse": {
+    "agentDefinitions": "该模板被 {{count}} 个 Agent 模板引用，请先删除对应的 Agent 模板",
+    "agentConfigInstances": "该模板仍被 {{count}} 个集群 Agent 引用，请先解除引用",
+    "runtimeServices": "该模板仍被 {{count}} 个集群运行时资源引用，请先解除引用"
   },
   "templateRefEditor": {},
   "containerTemplate": {

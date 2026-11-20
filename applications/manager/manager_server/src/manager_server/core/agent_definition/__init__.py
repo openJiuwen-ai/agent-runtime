@@ -1,1 +1,1 @@
-"""Agent 模板（agent_definition）：派生同步与管理面查询/改名。"""
+"""Agent 模板（agent_definition）：管理面手动维护的 Agent 名称目录。"""

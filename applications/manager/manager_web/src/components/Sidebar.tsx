@@ -37,7 +37,7 @@ export function Sidebar() {
       : Promise.resolve({ items: [], total: 0, page: 1, page_size: 50 }),
     [platformAdmin],
   );
-  const { agentDefined, poolDefined, instanceCreated, modelDefined } =
+  const { agentDefined, agentDefinitionDefined, poolDefined, instanceCreated, modelDefined } =
     useDefinitionPresence(platformAdmin);
 
   const agentResourceChildPaths = [
@@ -405,9 +405,15 @@ export function Sidebar() {
           renderItem(
             item,
             false,
-            poolDefined === false
+            item.key === 'service-config-templates' && poolDefined === false
               ? [{ label: missingLabel(t('nav.serviceConfigTemplates')), to: '/service-config-templates/new' }]
-              : undefined,
+              : item.key === 'agent-definitions' && agentDefinitionDefined === false
+                ? [{
+                    label: missingLabel(t('nav.agentDefinitions')),
+                    to: '/agent-definitions',
+                    openTarget: 'agentDefinitionNew',
+                  }]
+                : undefined,
           ),
         )}
           </div>

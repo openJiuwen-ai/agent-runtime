@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { Empty } from '../../components/Empty';
 import { LimitedTextInput } from '../../components/LimitedTextInput';
 import { ListSearchInput } from '../../components/ListSearchInput';
@@ -7,16 +8,32 @@ import { Modal, ModalCancelButton } from '../../components/Modal';
 import { Pagination } from '../../components/Pagination';
 import { useAsync } from '../../hooks/useAsync';
 import { useFormDirty } from '../../hooks/useFormDirty';
+import { useGuideAutoOpen } from '../../hooks/useGuideAutoOpen';
 import { useListSearch } from '../../hooks/useListSearch';
-import { AgentDefinitionApi, ApiError, type AgentDefinition } from '../../services/api';
+import {
+  AgentDefinitionApi,
+  AgentTemplateApi,
+  ApiError,
+  ServiceConfigTemplateApi,
+  type AgentDefinition,
+} from '../../services/api';
+import { bumpGuideRevision } from '../../stores/guideStore';
 import { toast } from '../../stores/uiStore';
 import { truncate } from '../../utils/format';
 
 const NAME_MAX_LENGTH = 128;
+const TEMPLATE_PAGE_SIZE = 200;
+
+/** 从 ApiError 里取后端返回的错误码（``detail.code``）。 */
+function apiErrorCode(error: unknown): string | undefined {
+  if (!(error instanceof ApiError)) return undefined;
+  const raw = error.raw as { detail?: { code?: string } } | undefined;
+  return raw?.detail?.code;
+}
 
 /**
- * Agent 模板列表：Agent 配置模板 × 运行时模板的派生目录。
- * 管理面只允许改 Agent Name；行由模板变更自动维护。
+ * Agent 模板列表：管理员手动新增「Agent 配置模板 + 运行时模板」组合，
+ * 维护每个组合（agent_id）对应的 Agent 名称。
  */
 export function AgentDefinitionsPage() {
   const { t } = useTranslation();
@@ -24,6 +41,8 @@ export function AgentDefinitionsPage() {
   const [pageSize, setPageSize] = useState(20);
   const { searchInput, setSearchInput, searchQuery } = useListSearch();
   const [editing, setEditing] = useState<AgentDefinition | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<AgentDefinition | null>(null);
 
   const { data, loading, error, reload } = useAsync(
     () => AgentDefinitionApi.list({
@@ -35,6 +54,8 @@ export function AgentDefinitionsPage() {
   );
 
   useEffect(() => setPage(1), [searchQuery]);
+  // 从总览/侧边栏的「未配置 Agent 模板」跳转过来时，自动打开新增弹窗。
+  useGuideAutoOpen('agentDefinitionNew', () => setCreating(true));
 
   const items = data?.items ?? [];
 
@@ -62,6 +83,9 @@ export function AgentDefinitionsPage() {
               placeholder={t('agentDefinition.searchPlaceholder')}
               className="basis-full sm:basis-auto"
             />
+            <button className="btn sm primary" onClick={() => setCreating(true)}>
+              + {t('agentDefinition.new')}
+            </button>
             <button className="btn sm" onClick={() => void reload()}>
               {t('common.refresh')}
             </button>
@@ -130,12 +154,20 @@ export function AgentDefinitionsPage() {
                         </div>
                       </td>
                       <td className="whitespace-nowrap align-top">
-                        <button
-                          className="btn sm ghost"
-                          onClick={() => setEditing(row)}
-                        >
-                          {t('agentDefinition.edit')}
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            className="btn sm ghost"
+                            onClick={() => setEditing(row)}
+                          >
+                            {t('agentDefinition.edit')}
+                          </button>
+                          <button
+                            className="btn sm danger"
+                            onClick={() => setDeleteTarget(row)}
+                          >
+                            {t('common.delete')}
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -156,6 +188,15 @@ export function AgentDefinitionsPage() {
           />
         ) : null}
       </div>
+      <CreateAgentDefinitionModal
+        open={creating}
+        onClose={() => setCreating(false)}
+        onSaved={() => {
+          setCreating(false);
+          void reload();
+          bumpGuideRevision();
+        }}
+      />
       <RenameAgentNameModal
         row={editing}
         onClose={() => setEditing(null)}
@@ -164,7 +205,211 @@ export function AgentDefinitionsPage() {
           void reload();
         }}
       />
+      <ConfirmDialog
+        open={!!deleteTarget}
+        danger
+        message={t('agentDefinition.deleteConfirm')}
+        onConfirm={async () => {
+          if (!deleteTarget) return;
+          try {
+            await AgentDefinitionApi.remove(deleteTarget.agent_id);
+            toast('success', t('success.deleted'));
+            setDeleteTarget(null);
+            void reload();
+            bumpGuideRevision();
+          } catch (e) {
+            toast('danger', t('errors.deleteFailed', {
+              detail: e instanceof ApiError ? e.detail : (e as Error).message,
+            }));
+          }
+        }}
+        onClose={() => setDeleteTarget(null)}
+      />
     </>
+  );
+}
+
+function CreateAgentDefinitionModal({
+  open,
+  onClose,
+  onSaved,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const { t } = useTranslation();
+  const [configTemplates, setConfigTemplates] = useState<{ id: string; name: string }[]>([]);
+  const [runtimeTemplates, setRuntimeTemplates] = useState<{ id: string; name: string }[]>([]);
+  const [loadingTemplates, setLoadingTemplates] = useState(false);
+  const [configId, setConfigId] = useState('');
+  const [runtimeId, setRuntimeId] = useState('');
+  const [name, setName] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState('');
+
+  useEffect(() => {
+    if (!open) return;
+    setConfigId('');
+    setRuntimeId('');
+    setName('');
+    setFormError('');
+    let cancelled = false;
+    setLoadingTemplates(true);
+    void (async () => {
+      try {
+        const [configs, runtimes] = await Promise.all([
+          AgentTemplateApi.list({ page: 1, page_size: TEMPLATE_PAGE_SIZE, enabled: true }),
+          ServiceConfigTemplateApi.list({ page: 1, page_size: TEMPLATE_PAGE_SIZE, enabled: true }),
+        ]);
+        if (cancelled) return;
+        setConfigTemplates(
+          configs.items.map((item) => ({ id: item.template_id, name: item.template_name })),
+        );
+        setRuntimeTemplates(
+          runtimes.items.map((item) => ({ id: item.template_id, name: item.template_name })),
+        );
+      } catch (e) {
+        if (!cancelled) {
+          toast('danger', t('errors.loadFailed', {
+            detail: e instanceof ApiError ? e.detail : (e as Error).message,
+          }));
+        }
+      } finally {
+        if (!cancelled) setLoadingTemplates(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, t]);
+
+  const noTemplates = !loadingTemplates
+    && (configTemplates.length === 0 || runtimeTemplates.length === 0);
+
+  const submit = async () => {
+    if (saving) return;
+    const value = name.trim();
+    if (!configId || !runtimeId) {
+      setFormError(t('agentDefinition.templateRequired'));
+      return;
+    }
+    if (!value) {
+      setFormError(t('agentDefinition.nameRequired'));
+      return;
+    }
+    if (value.length > NAME_MAX_LENGTH) {
+      setFormError(t('agentDefinition.nameTooLong'));
+      return;
+    }
+    setSaving(true);
+    setFormError('');
+    try {
+      await AgentDefinitionApi.create({
+        agent_config_template_id: configId,
+        runtime_template_id: runtimeId,
+        agent_name: value,
+      });
+      toast('success', t('success.saved'));
+      onSaved();
+    } catch (e) {
+      const code = apiErrorCode(e);
+      if (code === 'agent_name_duplicated') {
+        setFormError(t('agentDefinition.nameDuplicated'));
+        return;
+      }
+      if (code === 'agent_id_duplicated') {
+        setFormError(t('agentDefinition.combinationDuplicated'));
+        return;
+      }
+      if (code === 'template_unavailable') {
+        setFormError(t('agentDefinition.templateUnavailable'));
+        return;
+      }
+      toast('danger', t('errors.saveFailed', {
+        detail: e instanceof ApiError ? e.detail : (e as Error).message,
+      }));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal
+      open={open}
+      title={t('agentDefinition.createTitle')}
+      onClose={() => { if (!saving) onClose(); }}
+      footer={
+        <>
+          <ModalCancelButton />
+          <button
+            className="btn primary"
+            onClick={() => void submit()}
+            disabled={saving || loadingTemplates || noTemplates}
+          >
+            {saving ? t('common.loading') : t('common.save')}
+          </button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-2">
+          <label className="label">
+            {t('agentDefinition.column.agentConfig')}
+            <span className="text-danger ml-0.5" aria-hidden="true">*</span>
+          </label>
+          <select
+            className="select"
+            value={configId}
+            onChange={(e) => { setConfigId(e.target.value); setFormError(''); }}
+            disabled={loadingTemplates}
+            aria-required="true"
+          >
+            <option value="" disabled hidden>{t('agentDefinition.selectAgentConfig')}</option>
+            {configTemplates.map((item) => (
+              <option key={item.id} value={item.id}>{item.name}</option>
+            ))}
+          </select>
+        </div>
+        <div className="flex flex-col gap-2">
+          <label className="label">
+            {t('agentDefinition.column.runtime')}
+            <span className="text-danger ml-0.5" aria-hidden="true">*</span>
+          </label>
+          <select
+            className="select"
+            value={runtimeId}
+            onChange={(e) => { setRuntimeId(e.target.value); setFormError(''); }}
+            disabled={loadingTemplates}
+            aria-required="true"
+          >
+            <option value="" disabled hidden>{t('agentDefinition.selectRuntime')}</option>
+            {runtimeTemplates.map((item) => (
+              <option key={item.id} value={item.id}>{item.name}</option>
+            ))}
+          </select>
+        </div>
+        <div className="flex flex-col gap-2">
+          <label className="label">
+            {t('agentDefinition.column.name')}
+            <span className="text-danger ml-0.5" aria-hidden="true">*</span>
+          </label>
+          <LimitedTextInput
+            value={name}
+            maxLength={NAME_MAX_LENGTH}
+            required
+            onChange={(value) => { setName(value); setFormError(''); }}
+          />
+          <p className="text-[11px] text-muted">{t('agentDefinition.createHint')}</p>
+        </div>
+        {noTemplates ? (
+          <div className="text-[11px] text-warn">{t('agentDefinition.noTemplates')}</div>
+        ) : null}
+        {formError ? (
+          <div className="text-[11px] text-danger" role="alert">{formError}</div>
+        ) : null}
+      </div>
+    </Modal>
   );
 }
 
@@ -236,10 +481,14 @@ function RenameAgentNameModal({
       }
     >
       <div className="flex flex-col gap-2">
-        <label className="label">{t('agentDefinition.column.name')}</label>
+        <label className="label">
+          {t('agentDefinition.column.name')}
+          <span className="text-danger ml-0.5" aria-hidden="true">*</span>
+        </label>
         <LimitedTextInput
           value={name}
           maxLength={NAME_MAX_LENGTH}
+          required
           onChange={(value) => {
             setName(value);
             setDuplicated(false);

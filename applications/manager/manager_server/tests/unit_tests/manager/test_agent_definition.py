@@ -1,16 +1,19 @@
-"""Agent 模板（agent_definition）同步、查询与改名测试。"""
+"""Agent 模板（agent_definition）手动维护测试。"""
 
 from __future__ import annotations
 
 import uuid
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from manager_server.core.agent_definition.service import (
+    AgentDefinitionExists,
     AgentDefinitionService,
     AgentNameDuplicated,
+    TemplateUnavailable,
 )
-from manager_server.core.agent_definition.sync import reconcile_agent_definitions
+from manager_server.core.user_console.agent_identity import build_agent_id
 from manager_server.infrastructure.utils import utc_now
 from manager_server.schemas.agent_definition_schemas import AgentDefinitionListQuery
 
@@ -54,266 +57,245 @@ async def _rows(handler):
 
 
 @pytest.mark.asyncio
-async def test_reconcile_creates_cartesian_product(manager_api) -> None:
+async def test_create_and_list_resolves_template_names(manager_api) -> None:
     handler = manager_api.handler
-    cfg_a, cfg_b = _uuid("cfg-a"), _uuid("cfg-b")
-    rt_a, rt_b = _uuid("rt-a"), _uuid("rt-b")
+    cfg_a, cfg_b, rt = _uuid("cfg-a"), _uuid("cfg-b"), _uuid("rt-a")
     await _seed_cfg(handler, cfg_a, "Cfg A")
     await _seed_cfg(handler, cfg_b, "Cfg B")
-    await _seed_rt(handler, rt_a, "Rt A")
-    await _seed_rt(handler, rt_b, "Rt B")
+    await _seed_rt(handler, rt, "Rt A")
+    service = AgentDefinitionService(handler)
 
-    counts = await reconcile_agent_definitions(handler)
+    first = await service.create(cfg_a, rt, "Sales Agent")
+    second = await service.create(cfg_b, rt, "Support Agent")
 
-    assert counts["created"] == 4
-    rows = await _rows(handler)
-    assert {
-        (row.agent_config_template_id, row.runtime_template_id) for row in rows
-    } == {(c, r) for c in (cfg_a, cfg_b) for r in (rt_a, rt_b)}
-    assert all(row.agent_name == f"agent_{row.agent_id}" for row in rows)
-    assert all(row.deleted is False for row in rows)
-    assert all(row.agent_config_template_name for row in rows)
-    assert all(row.runtime_template_name for row in rows)
+    assert first["agent_id"] == build_agent_id(rt, cfg_a)
+    assert first["agent_config_template_name"] == "Cfg A"
+    assert first["runtime_template_name"] == "Rt A"
+    assert second["agent_id"] != first["agent_id"]
+
+    page = await service.list(AgentDefinitionListQuery())
+    assert page["total"] == 2
+    names = {item["agent_name"] for item in page["items"]}
+    assert names == {"Sales Agent", "Support Agent"}
 
 
 @pytest.mark.asyncio
-async def test_reconcile_disable_and_restore_keeps_custom_name(manager_api) -> None:
+async def test_create_rejects_duplicate_combination(manager_api) -> None:
     handler = manager_api.handler
     cfg, rt = _uuid("cfg-a"), _uuid("rt-a")
     await _seed_cfg(handler, cfg, "Cfg A")
     await _seed_rt(handler, rt, "Rt A")
-    await reconcile_agent_definitions(handler)
-    row = (await _rows(handler))[0]
-
     service = AgentDefinitionService(handler)
-    renamed = await service.rename(row.agent_id, "My Agent")
-    assert renamed is not None and renamed["agent_name"] == "My Agent"
+    await service.create(cfg, rt, "First")
 
-    await handler.update("agent_template", {"template_id": cfg}, {"enabled": False})
-    counts = await reconcile_agent_definitions(handler)
-    assert counts["disabled"] == 1
-    row = (await _rows(handler))[0]
-    assert row.deleted is True
-    assert row.deleted_reason == "upstream_unavailable"
-    assert row.agent_name == "My Agent"  # 失效仍保留自定义名
-
-    await handler.update("agent_template", {"template_id": cfg}, {"enabled": True})
-    counts = await reconcile_agent_definitions(handler)
-    assert counts["restored"] == 1
-    row = (await _rows(handler))[0]
-    assert row.deleted is False
-    assert row.agent_name == "My Agent"
+    with pytest.raises(AgentDefinitionExists):
+        await service.create(cfg, rt, "Second")
 
 
 @pytest.mark.asyncio
-async def test_reconcile_restore_falls_back_to_default_name_on_conflict(manager_api) -> None:
-    """恢复时自定义名已被有效行占用：回退默认名并恢复，不抢别人名字。"""
+async def test_create_rejects_duplicate_name_case_insensitive(manager_api) -> None:
     handler = manager_api.handler
-    cfg_a, cfg_b, rt = _uuid("cfg-dup-a"), _uuid("cfg-dup-b"), _uuid("rt-dup")
+    cfg_a, cfg_b, rt = _uuid("cfg-a"), _uuid("cfg-b"), _uuid("rt-a")
     await _seed_cfg(handler, cfg_a, "Cfg A")
     await _seed_cfg(handler, cfg_b, "Cfg B")
     await _seed_rt(handler, rt, "Rt A")
-    await reconcile_agent_definitions(handler)
-
-    target = next(
-        row for row in await _rows(handler) if row.agent_config_template_id == cfg_a
-    )
-    other = next(
-        row for row in await _rows(handler) if row.agent_config_template_id == cfg_b
-    )
-    default_name = target.agent_name
-    agent_id = target.agent_id
     service = AgentDefinitionService(handler)
-    await service.rename(agent_id, "Shared")
+    await service.create(cfg_a, rt, "Sales")
 
-    await handler.update("agent_template", {"template_id": cfg_a}, {"enabled": False})
-    assert (await reconcile_agent_definitions(handler))["disabled"] == 1
-
-    # 失效行的名字不占名，另一个有效行可以占用它
-    await service.rename(other.agent_id, "Shared")
-
-    await handler.update("agent_template", {"template_id": cfg_a}, {"enabled": True})
-    counts = await reconcile_agent_definitions(handler)
-    assert counts["restored"] == 1
-    assert counts["renamed"] == 1
-    assert counts["conflicted"] == 0
-
-    target = next(
-        row for row in await _rows(handler) if row.agent_config_template_id == cfg_a
-    )
-    other = next(
-        row for row in await _rows(handler) if row.agent_config_template_id == cfg_b
-    )
-    assert target.deleted is False
-    assert target.agent_name == default_name
-    assert other.agent_name == "Shared"
-
-
-@pytest.mark.asyncio
-async def test_reconcile_restore_stays_disabled_when_default_name_taken(manager_api) -> None:
-    """自定义名与默认名同时被占用：保持失效，不覆盖任何有效行。"""
-    handler = manager_api.handler
-    cfg_a, cfg_b, cfg_c = _uuid("cfg-taken-a"), _uuid("cfg-taken-b"), _uuid("cfg-taken-c")
-    rt = _uuid("rt-taken")
-    await _seed_cfg(handler, cfg_a, "Cfg A")
-    await _seed_cfg(handler, cfg_b, "Cfg B")
-    await _seed_cfg(handler, cfg_c, "Cfg C")
-    await _seed_rt(handler, rt, "Rt A")
-    await reconcile_agent_definitions(handler)
-
-    target = next(
-        row for row in await _rows(handler) if row.agent_config_template_id == cfg_a
-    )
-    agent_id = target.agent_id
-    default_name = target.agent_name
-    service = AgentDefinitionService(handler)
-    await service.rename(agent_id, "Shared")
-
-    await handler.update("agent_template", {"template_id": cfg_a}, {"enabled": False})
-    assert (await reconcile_agent_definitions(handler))["disabled"] == 1
-
-    rows = await _rows(handler)
-    second = next(row for row in rows if row.agent_config_template_id == cfg_b)
-    third = next(row for row in rows if row.agent_config_template_id == cfg_c)
-    await service.rename(second.agent_id, "Shared")
-    await service.rename(third.agent_id, default_name)
-
-    await handler.update("agent_template", {"template_id": cfg_a}, {"enabled": True})
-    counts = await reconcile_agent_definitions(handler)
-    assert counts["restored"] == 0
-    assert counts["renamed"] == 0
-    assert counts["conflicted"] == 1
-
-    target = next(
-        row for row in await _rows(handler) if row.agent_config_template_id == cfg_a
-    )
-    assert target.deleted is True
-    assert target.deleted_reason == "upstream_unavailable"
-    assert target.agent_name == "Shared"
-
-
-@pytest.mark.asyncio
-async def test_reconcile_refreshes_snapshot_names_and_is_idempotent(manager_api) -> None:
-    handler = manager_api.handler
-    cfg, rt = _uuid("cfg-a"), _uuid("rt-a")
-    await _seed_cfg(handler, cfg, "Cfg Old")
-    await _seed_rt(handler, rt, "Rt Old")
-    await reconcile_agent_definitions(handler)
-
-    await handler.update("agent_template", {"template_id": cfg}, {"template_name": "Cfg New"})
-    counts = await reconcile_agent_definitions(handler)
-    assert counts["updated"] == 1
-    row = (await _rows(handler))[0]
-    assert row.agent_config_template_name == "Cfg New"
-    assert row.runtime_template_name == "Rt Old"
-
-    counts = await reconcile_agent_definitions(handler)
-    assert counts == {
-        "created": 0,
-        "restored": 0,
-        "renamed": 0,
-        "updated": 0,
-        "disabled": 0,
-        "conflicted": 0,
-        "failed": 0,
-    }
-
-
-@pytest.mark.asyncio
-async def test_disabled_source_templates_do_not_generate_rows(manager_api) -> None:
-    handler = manager_api.handler
-    await _seed_cfg(handler, _uuid("cfg-a"), "Cfg A", enabled=False)
-    await _seed_rt(handler, _uuid("rt-a"), "Rt A")
-    await reconcile_agent_definitions(handler)
-    assert await _rows(handler) == []
-
-
-@pytest.mark.asyncio
-async def test_rename_rejects_case_insensitive_duplicate(manager_api) -> None:
-    handler = manager_api.handler
-    cfg, rt_a, rt_b = _uuid("cfg-a"), _uuid("rt-a"), _uuid("rt-b")
-    await _seed_cfg(handler, cfg, "Cfg A")
-    await _seed_rt(handler, rt_a, "Rt A")
-    await _seed_rt(handler, rt_b, "Rt B")
-    await reconcile_agent_definitions(handler)
-    rows = await _rows(handler)
-    first, second = rows[0], rows[1]
-
-    service = AgentDefinitionService(handler)
-    await service.rename(first.agent_id, "Sales")
     with pytest.raises(AgentNameDuplicated):
-        await service.rename(second.agent_id, "sALES")
+        await service.create(cfg_b, rt, " sALES ")
 
 
 @pytest.mark.asyncio
-async def test_rename_ignores_disabled_rows(manager_api) -> None:
+@pytest.mark.parametrize("case", ["cfg_disabled", "rt_disabled", "cfg_missing"])
+async def test_create_requires_enabled_templates(manager_api, case: str) -> None:
+    handler = manager_api.handler
+    cfg, rt = _uuid(f"cfg-{case}"), _uuid(f"rt-{case}")
+    if case != "cfg_missing":
+        await _seed_cfg(handler, cfg, "Cfg", enabled=case != "cfg_disabled")
+    await _seed_rt(handler, rt, "Rt", enabled=case != "rt_disabled")
+    service = AgentDefinitionService(handler)
+
+    with pytest.raises(TemplateUnavailable):
+        await service.create(cfg, rt, "Agent")
+
+
+@pytest.mark.asyncio
+async def test_rename_updates_name_and_rejects_duplicate(manager_api) -> None:
+    handler = manager_api.handler
+    cfg_a, cfg_b, rt = _uuid("cfg-a"), _uuid("cfg-b"), _uuid("rt-a")
+    await _seed_cfg(handler, cfg_a, "Cfg A")
+    await _seed_cfg(handler, cfg_b, "Cfg B")
+    await _seed_rt(handler, rt, "Rt A")
+    service = AgentDefinitionService(handler)
+    first = await service.create(cfg_a, rt, "Sales")
+    second = await service.create(cfg_b, rt, "Support")
+
+    renamed = await service.rename(first["agent_id"], " Sales CN ")
+    assert renamed is not None and renamed["agent_name"] == "Sales CN"
+
+    with pytest.raises(AgentNameDuplicated):
+        await service.rename(second["agent_id"], "sales cn")
+
+    assert await service.rename("missing", "X") is None
+
+
+@pytest.mark.asyncio
+async def test_delete_then_recreate_reuses_agent_id_but_not_name(manager_api) -> None:
     handler = manager_api.handler
     cfg, rt = _uuid("cfg-a"), _uuid("rt-a")
     await _seed_cfg(handler, cfg, "Cfg A")
     await _seed_rt(handler, rt, "Rt A")
-    await reconcile_agent_definitions(handler)
-    row = (await _rows(handler))[0]
-    await handler.update(
+    service = AgentDefinitionService(handler)
+    created = await service.create(cfg, rt, "Sales")
+
+    assert await service.delete(created["agent_id"]) is True
+    assert await _rows(handler) == []
+    assert await service.delete(created["agent_id"]) is False
+
+    recreated = await service.create(cfg, rt, "Sales Reborn")
+    assert recreated["agent_id"] == created["agent_id"]
+    assert recreated["agent_name"] == "Sales Reborn"
+
+
+@pytest.mark.asyncio
+async def test_historical_row_is_listed_and_deletable(manager_api) -> None:
+    handler = manager_api.handler
+    cfg, rt = _uuid("cfg-a"), _uuid("rt-a")
+    await _seed_cfg(handler, cfg, "Cfg A")
+    await _seed_rt(handler, rt, "Rt A")
+    now = utc_now()
+    await handler.create(
         "agent_definition",
-        {"agent_id": row.agent_id},
-        {"deleted": True, "deleted_reason": "upstream_unavailable"},
+        {
+            "agent_id": build_agent_id(rt, cfg),
+            "agent_name": "Legacy Name",
+            "agent_config_template_id": cfg,
+            "runtime_template_id": rt,
+            "agent_config_template_name": "old snapshot",
+            "runtime_template_name": "old snapshot",
+            "deleted": True,
+            "deleted_reason": "upstream_unavailable",
+            "created_at": now,
+            "updated_at": now,
+        },
     )
     service = AgentDefinitionService(handler)
-    assert await service.rename(row.agent_id, "Ghost") is None
+
+    page = await service.list(AgentDefinitionListQuery())
+    assert page["total"] == 1
+    assert page["items"][0]["agent_name"] == "Legacy Name"
+    # 名称按模板 id 实时取，不再使用库内快照。
+    assert page["items"][0]["agent_config_template_name"] == "Cfg A"
+
+    renamed = await service.rename(build_agent_id(rt, cfg), "Legacy Renamed")
+    assert renamed is not None
+    assert await service.delete(build_agent_id(rt, cfg)) is True
 
 
 @pytest.mark.asyncio
-async def test_list_paginates_and_searches(manager_api) -> None:
+async def test_api_create_rename_delete_status_codes(manager_api) -> None:
     handler = manager_api.handler
-    cfg = _uuid("cfg-a")
+    cfg, rt = _uuid("cfg-a"), _uuid("rt-a")
     await _seed_cfg(handler, cfg, "Cfg A")
-    for index in range(3):
-        await _seed_rt(handler, _uuid(f"rt-{index}"), f"Rt {index}")
-    await reconcile_agent_definitions(handler)
-    service = AgentDefinitionService(handler)
+    await _seed_rt(handler, rt, "Rt A")
 
-    page = await service.list(AgentDefinitionListQuery(page=1, page_size=2))
-    assert page["total"] == 3 and len(page["items"]) == 2
+    resp = await manager_api.http.post(
+        "/api/v1/agent-definitions/",
+        json={
+            "agent_config_template_id": cfg,
+            "runtime_template_id": rt,
+            "agent_name": "   ",
+        },
+    )
+    assert resp.status_code == 422
 
-    rows = await _rows(handler)
-    target = rows[0].agent_id
-    found = await service.list(AgentDefinitionListQuery(search=target[:10]))
-    assert found["total"] >= 1
-    assert all(target[:10] in item["agent_id"] for item in found["items"])
-
-
-@pytest.mark.asyncio
-async def test_api_list_rename_and_conflicts(manager_api) -> None:
-    handler = manager_api.handler
-    cfg, rt_a, rt_b = _uuid("cfg-a"), _uuid("rt-a"), _uuid("rt-b")
-    await _seed_cfg(handler, cfg, "Cfg A")
-    await _seed_rt(handler, rt_a, "Rt A")
-    await _seed_rt(handler, rt_b, "Rt B")
-    await reconcile_agent_definitions(handler)
-    rows = await _rows(handler)
-    first, second = rows[0], rows[1]
-
-    resp = await manager_api.http.get("/api/v1/agent-definitions/")
-    assert resp.status_code == 200
-    assert resp.json()["data"]["total"] == 2
-
-    resp = await manager_api.http.patch(
-        f"/api/v1/agent-definitions/{first.agent_id}", json={"agent_name": " Sales "}
+    resp = await manager_api.http.post(
+        "/api/v1/agent-definitions/",
+        json={
+            "agent_config_template_id": cfg,
+            "runtime_template_id": rt,
+            "agent_name": " Sales ",
+        },
     )
     assert resp.status_code == 200
-    assert resp.json()["data"]["agent_name"] == "Sales"
+    created = resp.json()["data"]
+    assert created["agent_name"] == "Sales"
+    agent_id = created["agent_id"]
 
-    resp = await manager_api.http.patch(
-        f"/api/v1/agent-definitions/{second.agent_id}", json={"agent_name": "sales"}
+    resp = await manager_api.http.post(
+        "/api/v1/agent-definitions/",
+        json={
+            "agent_config_template_id": cfg,
+            "runtime_template_id": rt,
+            "agent_name": "Other",
+        },
     )
     assert resp.status_code == 409
+    assert resp.json()["detail"]["code"] == "agent_id_duplicated"
 
     resp = await manager_api.http.patch(
-        f"/api/v1/agent-definitions/{second.agent_id}", json={"agent_name": "   "}
+        f"/api/v1/agent-definitions/{agent_id}", json={"agent_name": "Sales Renamed"}
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 200
+    assert resp.json()["data"]["agent_name"] == "Sales Renamed"
 
     resp = await manager_api.http.patch(
-        "/api/v1/agent-definitions/unknown", json={"agent_name": "x"}
+        "/api/v1/agent-definitions/missing", json={"agent_name": "X"}
     )
     assert resp.status_code == 404
+
+    resp = await manager_api.http.delete(f"/api/v1/agent-definitions/{agent_id}")
+    assert resp.status_code == 200
+    resp = await manager_api.http.delete(f"/api/v1/agent-definitions/{agent_id}")
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_create_maps_unique_violation_to_conflict(manager_api, monkeypatch) -> None:
+    handler = manager_api.handler
+    cfg, rt = _uuid("cfg-integrity"), _uuid("rt-integrity")
+    await _seed_cfg(handler, cfg, "Cfg A")
+    await _seed_rt(handler, rt, "Rt A")
+    service = AgentDefinitionService(handler)
+    original = handler.create
+
+    async def boom(table, payload):
+        if table == "agent_definition":
+            raise IntegrityError("insert", {}, Exception("duplicate key"))
+        return await original(table, payload)
+
+    monkeypatch.setattr(handler, "create", boom)
+    with pytest.raises(AgentDefinitionExists):
+        await service.create(cfg, rt, "Agent")
+
+
+@pytest.mark.asyncio
+async def test_template_delete_and_disable_blocked_by_reference(manager_api) -> None:
+    handler = manager_api.handler
+    cfg, rt = _uuid("cfg-a"), _uuid("rt-a")
+    await _seed_cfg(handler, cfg, "Cfg A")
+    await _seed_rt(handler, rt, "Rt A")
+    await AgentDefinitionService(handler).create(cfg, rt, "Sales")
+
+    resp = await manager_api.http.patch(
+        f"/api/v1/agent-templates/{cfg}", json={"enabled": False}
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["code"] == "agent_definitions_referenced"
+    assert resp.json()["detail"]["count"] == 1
+
+    resp = await manager_api.http.delete(f"/api/v1/agent-templates/{cfg}")
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["code"] == "agent_definitions_referenced"
+
+    resp = await manager_api.http.patch(
+        f"/api/v1/service-config-templates/{rt}", json={"enabled": False}
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["code"] == "agent_definitions_referenced"
+    assert resp.json()["detail"]["count"] == 1
+
+    resp = await manager_api.http.delete(f"/api/v1/service-config-templates/{rt}")
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["code"] == "agent_definitions_referenced"
