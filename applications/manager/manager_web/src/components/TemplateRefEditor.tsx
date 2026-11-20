@@ -9,6 +9,7 @@ import {
   McpTemplateApi,
   ModelTemplateApi,
   PermissionsTemplateApi,
+  ReactTemplateApi,
   A2AAccessPolicyTemplateApi,
   SkillPrebuiltTemplateApi,
 } from '../services/api';
@@ -39,6 +40,7 @@ const SLOT_CONFIG_PATH: Record<string, string> = {
   extension_config: '/extension-config-templates',
   mcp: '/mcp-templates',
   permissions: '/safety-guardrails',
+  react: '/react-templates',
   a2a_access_policy: '/a2a-management?tab=policies',
 };
 
@@ -55,6 +57,7 @@ const SLOT_HINT_PAGE_KEY: Record<string, string> = {
   extension_config: 'nav.extensionTemplates',
   mcp: 'nav.mcpTemplates',
   permissions: 'nav.safetyGuardrails',
+  react: 'nav.reactTemplates',
   a2a_access_policy: 'nav.a2aManagement',
 };
 
@@ -93,7 +96,7 @@ async function loadExpertPackageTemplates() {
 
 export async function loadTemplateOptions(): Promise<Record<string, TemplateOption[]>> {
   const pageSize = 200;
-  const [models, embeddings, skills, extensions, mcps, permissions, a2aPolicies, expertPackages] =
+  const [models, embeddings, skills, extensions, mcps, permissions, reacts, a2aPolicies, expertPackages] =
     await Promise.all([
       ModelTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
       EmbeddingTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
@@ -101,6 +104,12 @@ export async function loadTemplateOptions(): Promise<Record<string, TemplateOpti
       ExtensionTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
       McpTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
       PermissionsTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
+      ReactTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }).catch(() => ({
+        items: [],
+        total: 0,
+        page: 1,
+        page_size: pageSize,
+      })),
       A2AAccessPolicyTemplateApi.list({ page: 1, page_size: pageSize, enabled: true }),
       loadExpertPackageTemplates(),
     ]);
@@ -129,6 +138,7 @@ export async function loadTemplateOptions(): Promise<Record<string, TemplateOpti
   bySlot.extension_config = (extensions.items ?? []).map((t) => toOpt(t.template_id, t.template_name));
   bySlot.mcp = (mcps.items ?? []).map((t) => toOpt(t.template_id, t.template_name));
   bySlot.permissions = (permissions.items ?? []).map((t) => toOpt(t.template_id, t.template_name));
+  bySlot.react = (reacts.items ?? []).map((t) => toOpt(t.template_id, t.template_name));
   bySlot.a2a_access_policy = (a2aPolicies.items ?? []).map((t) =>
     toOpt(t.policy_id, `${t.policy_name} · ${t.mode}`),
   );

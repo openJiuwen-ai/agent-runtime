@@ -37,6 +37,7 @@ from manager_server.core.template.mcp_template import McpTemplateService
 from manager_server.core.template.permissions_template import (
     PermissionsTemplateService,
 )
+from manager_server.core.template.react_template import ReactTemplateService
 from manager_server.core.template.service_config_container import (
     ServiceConfigContainerService,
 )
@@ -82,6 +83,9 @@ from manager_server.schemas.template_schemas import (
     PermissionsTemplateCreateBody,
     PermissionsTemplateListQuery,
     PermissionsTemplateUpdateBody,
+    ReactTemplateCreateBody,
+    ReactTemplateListQuery,
+    ReactTemplateUpdateBody,
     ServiceConfigContainerCreateBody,
     ServiceConfigContainerListQuery,
     ServiceConfigContainerUpdateBody,
@@ -128,6 +132,10 @@ def _expert_package_template_svc(handler: DBHandler) -> ExpertPackageTemplateSer
 
 def _permissions_template_svc(handler: DBHandler) -> PermissionsTemplateService:
     return PermissionsTemplateService(handler)
+
+
+def _react_template_svc(handler: DBHandler) -> ReactTemplateService:
+    return ReactTemplateService(handler)
 
 
 def _mcp_template_svc(handler: DBHandler) -> McpTemplateService:
@@ -963,6 +971,83 @@ async def delete_permissions_template(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not ok:
         raise HTTPException(status_code=404, detail="permissions template not found")
+    return ResponseModel(
+        code=200, message="success", data={"deleted": True, "template_id": template_id}
+    )
+
+
+# --- react_template ---
+
+
+@templates_router.post("/react-templates", response_model=ResponseModel)
+async def create_react_template(
+    body: ReactTemplateCreateBody,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    svc = _react_template_svc(handler)
+    try:
+        data = await svc.create(body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ResponseModel(code=200, message="success", data=data.model_dump())
+
+
+@templates_router.get("/react-templates", response_model=ResponseModel)
+async def list_react_templates(
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+    query: Annotated[ReactTemplateListQuery, Query()],
+):
+    svc = _react_template_svc(handler)
+    try:
+        data = await svc.list_templates(query)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ResponseModel(code=200, message="success", data=data)
+
+
+@templates_router.get("/react-templates/{template_id}", response_model=ResponseModel)
+async def get_react_template(
+    template_id: TemplateIdPath,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    svc = _react_template_svc(handler)
+    try:
+        row = await svc.get(template_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if row is None:
+        raise HTTPException(status_code=404, detail="react template not found")
+    return ResponseModel(code=200, message="success", data=row.model_dump())
+
+
+@templates_router.patch("/react-templates/{template_id}", response_model=ResponseModel)
+async def update_react_template(
+    template_id: TemplateIdPath,
+    body: ReactTemplateUpdateBody,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    svc = _react_template_svc(handler)
+    try:
+        row = await svc.update(template_id, body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if row is None:
+        raise HTTPException(status_code=404, detail="react template not found")
+    return ResponseModel(code=200, message="success", data=row.model_dump())
+
+
+@templates_router.delete("/react-templates/{template_id}", response_model=ResponseModel)
+async def delete_react_template(
+    template_id: TemplateIdPath,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    svc = _react_template_svc(handler)
+    try:
+        ok = await svc.delete(template_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not ok:
+        raise HTTPException(status_code=404, detail="react template not found")
     return ResponseModel(
         code=200, message="success", data={"deleted": True, "template_id": template_id}
     )

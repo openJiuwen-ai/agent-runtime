@@ -24,6 +24,7 @@ import { ContainerTemplatesPage } from './pages/templates/ContainerTemplatesPage
 import { ServiceConfigTemplatesPage } from './pages/templates/ServiceConfigTemplatesPage';
 import { AgentDefinitionsPage } from './pages/templates/AgentDefinitionsPage';
 import { SafetyGuardrailsPage } from './pages/templates/SafetyGuardrailsPage';
+import { ReactTemplatesPage } from './pages/templates/ReactTemplatesPage';
 import { matchRoute, RouterProvider, useRouter } from './router';
 import { AuthProvider, useAuth } from './auth/AuthContext';
 import { LoginPage } from './pages/LoginPage';
@@ -151,6 +152,9 @@ function RouteView() {
   }
   if (path === '/safety-guardrails') {
     return <SafetyGuardrailsPage />;
+  }
+  if (path === '/react-templates') {
+    return <ReactTemplatesPage />;
   }
   if (path === '/a2a-management') {
     return <A2AManagementPage />;

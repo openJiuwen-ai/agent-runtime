@@ -29,6 +29,9 @@ import type {
   PermissionsTemplate,
   PermissionsTemplateCreateBody,
   PermissionsTemplateUpdateBody,
+  ReactTemplate,
+  ReactTemplateCreateBody,
+  ReactTemplateUpdateBody,
   ServiceConfigTemplate,
   ServiceConfigTemplateCreateBody,
   ServiceConfigTemplateUpdateBody,
@@ -1741,6 +1744,31 @@ export const PermissionsTemplateApi = {
   remove: (id: string) =>
     http<{ deleted: boolean; template_id: string }>(
       `/v1/permissions-templates/${encodeURIComponent(id)}`,
+      { method: 'DELETE' }
+    ),
+};
+
+export const ReactTemplateApi = {
+  list: (params?: {
+    page?: number;
+    page_size?: number;
+    enabled?: boolean;
+    search?: string;
+    sort_by?: 'template_name' | 'description' | 'updated_at';
+    sort_order?: 'asc' | 'desc';
+  }) => http<PageResult<ReactTemplate>>('/v1/react-templates', { query: params }),
+  get: (id: string) =>
+    http<ReactTemplate>(`/v1/react-templates/${encodeURIComponent(id)}`),
+  create: (body: ReactTemplateCreateBody) =>
+    http<ReactTemplate>('/v1/react-templates', { method: 'POST', body }),
+  update: (id: string, body: ReactTemplateUpdateBody) =>
+    http<ReactTemplate>(`/v1/react-templates/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body,
+    }),
+  remove: (id: string) =>
+    http<{ deleted: boolean; template_id: string }>(
+      `/v1/react-templates/${encodeURIComponent(id)}`,
       { method: 'DELETE' }
     ),
 };
