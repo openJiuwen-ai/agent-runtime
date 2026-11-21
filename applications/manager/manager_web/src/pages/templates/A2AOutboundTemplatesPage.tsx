@@ -16,8 +16,20 @@ import { A2AOutboundTemplateModal } from './A2AOutboundTemplateModal';
 import { A2ADiscoverySettingsModal } from './A2ADiscoverySettingsModal';
 import { ResourceExportButton, ResourceImportButton } from '../../components/ResourceImportExport';
 
+/** Manager 短码与 Gateway `A2A_*` 均在词表显式列出；未命中用 summary / code 兜底。 */
+function a2aErrorLabel(
+  t: ReturnType<typeof useTranslation>['t'],
+  i18n: ReturnType<typeof useTranslation>['i18n'],
+  code: string,
+  summary?: string | null,
+): string {
+  const path = `a2a.errors.${code}`;
+  if (i18n.exists(path)) return t(path);
+  return (summary || '').trim() || code;
+}
+
 export function A2AOutboundTemplatesPage({ embedded = false, header, tabs }: { embedded?: boolean; header?: ReactNode; tabs?: ReactNode }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { navigate } = useRouter();
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
@@ -51,7 +63,11 @@ export function A2AOutboundTemplatesPage({ embedded = false, header, tabs }: { e
           {!items.length ? <tr><td colSpan={7}><Empty text={t('a2a.emptyAgents')} /></td></tr> : items.map((row) => <tr key={row.template_id}>
             <td><div className="font-medium">{row.template_name}</div><div className="text-xs text-muted">{truncate(row.description || '', 42) || '—'}</div></td>
             <td><div className="mono text-xs break-all">{row.source_url}</div><div className="text-xs text-muted">{String(row.selected_interface.protocol_binding || '')}</div></td>
-            <td><span className="badge">r{row.card_revision}</span>{row.pending_revision && <span className="badge ml-1 text-warning">{t('a2a.pendingConfirm')}</span>} {row.last_error_code && <div className="text-xs text-danger">{row.last_error_summary}</div>}</td>
+            <td><span className="badge">r{row.card_revision}</span>{row.pending_revision && <span className="badge ml-1 text-warning">{t('a2a.pendingConfirm')}</span>} {row.last_error_code && (
+              <div className="text-xs text-danger">
+                {a2aErrorLabel(t, i18n, row.last_error_code, row.last_error_summary)}
+              </div>
+            )}</td>
             <td><Switch checked={row.enabled} onChange={(enabled) => void action(() => A2AOutboundTemplateApi.update(row.template_id, { enabled }))} /></td>
             <td>{row.reference_count > 0 ? <span className="tag cursor-pointer" title={t('a2a.agentReferenceTitle')} onClick={() => navigate('/agent-templates')}>{row.reference_count}</span> : <span className="text-[11px] text-muted">0</span>}</td>
             <td className="text-xs text-muted whitespace-nowrap">{formatTime(row.last_checked_at)}</td>
