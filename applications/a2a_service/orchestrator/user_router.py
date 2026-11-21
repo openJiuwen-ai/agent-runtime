@@ -786,7 +786,7 @@ async def dispatch(
             async def limited_generate():
                 with bind_context(http_request_tag_context.log_context):
                     try:
-                        yield f"data: {json.dumps(rejection, ensure_ascii=False)}\\n\\n"
+                        yield f"data: {json.dumps(rejection, ensure_ascii=False)}\n\n"
                     finally:
                         duration_ms = int(time.time() * 1000) - request_started_ms
                         to_logger(
