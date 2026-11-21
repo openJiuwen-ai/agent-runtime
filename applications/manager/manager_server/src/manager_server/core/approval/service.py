@@ -583,7 +583,7 @@ class ApprovalService:
             insert(table).values(
                 cluster_id=cluster_id,
                 order_num=order_num,
-                title=f"上传技能 {skill_name}",
+                title=f"Upload skill {skill_name}",
                 applicant_id=applicant_id,
                 approver_id=approver_id,
                 group_id=group_id,
@@ -740,7 +740,7 @@ class ApprovalService:
             insert(table).values(
                 cluster_id=cluster_id,
                 order_num=order_num,
-                title="工作区扩容",
+                title="Workspace expansion",
                 applicant_id=applicant_id,
                 approver_id=approver_id,
                 group_id=group_id,
