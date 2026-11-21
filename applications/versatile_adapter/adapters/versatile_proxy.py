@@ -9,6 +9,7 @@ VersatileProxy — HTTP+SSE 流式调用基类。
 """
 from __future__ import annotations
 
+import os
 from typing import AsyncGenerator, Optional
 
 from abc import abstractmethod
@@ -20,6 +21,35 @@ from event.events import (
     AdapterEvent,
 )
 from adapters.base_adapter import BaseAdapter
+
+
+TLS_VERIFY_ENV = "VERSATILE_PROXY_TLS_VERIFY"
+_TRUTHY = {"1", "true", "yes", "on"}
+_FALSY = {"0", "false", "no", "off"}
+
+
+def resolve_tls_verify(raw: Optional[str] = None) -> bool | str:
+    """Resolve the TLS verification setting for outgoing Versatile requests.
+
+    Defaults to full verification (``True``). ``VERSATILE_PROXY_TLS_VERIFY`` may be
+    set to a falsy token to disable verification for a trusted intranet endpoint, or
+    to a CA bundle path to trust a private CA.
+    """
+    value = (raw if raw is not None else os.getenv(TLS_VERIFY_ENV, "")).strip()
+    if not value:
+        return True
+    lowered = value.casefold()
+    if lowered in _TRUTHY:
+        return True
+    if lowered in _FALSY:
+        logger.warning(
+            "[VersatileProxy] TLS verification disabled via {}={}；仅应在可信内网环境使用",
+            TLS_VERIFY_ENV,
+            value,
+        )
+        return False
+    # Any other value is treated as a CA bundle path.
+    return value
 
 
 class VersatileStreamCtx:
@@ -52,11 +82,18 @@ class VersatileProxy(BaseAdapter):
         timeout: int = 600,
         headers_template: Optional[dict] = None,
         forward_header_whitelist: Optional[set[str]] = None,
+        tls_verify: bool | str | None = None,
     ) -> None:
         self._url_template = url_template
         self._timeout = timeout
         self._headers_template = dict(headers_template) if headers_template else {}
         self._forward_header_whitelist = forward_header_whitelist
+        if tls_verify is None:
+            self._tls_verify = resolve_tls_verify()
+        elif isinstance(tls_verify, bool):
+            self._tls_verify = tls_verify
+        else:
+            self._tls_verify = resolve_tls_verify(str(tls_verify))
 
     # ── 子类可覆盖的钩子 ─────────────────────────────────────
 
@@ -118,7 +155,7 @@ class VersatileProxy(BaseAdapter):
         try:
             limits = httpx.Limits(max_keepalive_connections=5, max_connections=10)
             timeout = httpx.Timeout(self._timeout, read=None)
-            async with httpx.AsyncClient(verify=False, limits=limits, timeout=timeout) as client:
+            async with httpx.AsyncClient(verify=self._tls_verify, limits=limits, timeout=timeout) as client:
                 request = client.build_request("POST", url, json=request_body, headers=req_headers, params=params)
                 await self._log_request(request)
 
