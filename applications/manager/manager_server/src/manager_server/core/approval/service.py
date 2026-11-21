@@ -183,13 +183,23 @@ def _is_todo_for_operator(row: Any, operator_id: str) -> bool:
 
 
 def _order_search_blob(row: Any) -> str:
-    return " ".join(
-        [
-            str(_g(row, "order_num") or ""),
-            str(_g(row, "title") or ""),
-            str(_g(row, "reason") or ""),
-        ]
-    ).lower()
+    """单号 / 落库 title / 原因，外加业务类型的中英标题别名（与前端展示一致）。"""
+    parts = [
+        str(_g(row, "order_num") or ""),
+        str(_g(row, "title") or ""),
+        str(_g(row, "reason") or ""),
+    ]
+    business_type = str(_g(row, "business_type") or "")
+    if business_type == WORKSPACE_QUOTA_EXPAND:
+        parts.extend(["工作区扩容", "Workspace expansion"])
+    elif business_type == SKILL_UPLOAD:
+        parts.extend(["上传技能", "Upload skill"])
+        apply_data = _json_value(_g(row, "apply_data"), {})
+        if isinstance(apply_data, dict):
+            skill_name = str(apply_data.get("skill_name") or "").strip()
+            if skill_name:
+                parts.append(skill_name)
+    return " ".join(parts).lower()
 
 
 def _filter_orders_by_search(rows: list[Any], search: str | None) -> list[Any]:
