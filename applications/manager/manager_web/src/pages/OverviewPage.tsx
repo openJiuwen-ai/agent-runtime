@@ -1,3 +1,4 @@
+import { collectPages } from '../utils/overview';
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { InstanceApi, SystemApi } from '../services/api';
@@ -14,6 +15,8 @@ function Icon({ d }: { d: string }) {
     </svg>
   );
 }
+
+export const loadOverviewInstances = () => collectPages((page, page_size) => InstanceApi.list({ page, page_size }));
 
 export function OverviewPage() {
   const { t } = useTranslation();

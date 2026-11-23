@@ -1099,7 +1099,7 @@
         "mcp": "MCP config",
         "permissions": "Safety guardrails",
         "a2a_access_policy": "A2A access policy",
-        "expert_package": "Expert package"
+        "expert_package": "Experts & packages"
       },
       "none": "None",
       "noOptions": "No templates available"
@@ -1458,7 +1458,9 @@
     "referenceHint": "How many agents currently reference this template; a referenced template cannot be deleted.",
     "deleteBlockedHint": "Still referenced by {{count}} agent(s). Remove them from the cluster first.",
     "fieldRequired": "Please fill in {{field}}",
-    "deleteConfirm": "Delete Agent config template \"{{name}}\"? A template still referenced by agents cannot be deleted; remove those agents from the cluster first."
+    "deleteConfirm": "Delete Agent config template \"{{name}}\"? A template still referenced by agents cannot be deleted; remove those agents from the cluster first.",
+    "optionalResources": "Optional capabilities",
+    "resourceTabHint": "Resource catalogs open in a new tab. Return here and refresh options to continue without losing your form."
   },
   "agentDefinition": {
     "title": "Agent Templates",

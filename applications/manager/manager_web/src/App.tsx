@@ -1,3 +1,7 @@
+import { canonicalAgentPath } from './utils/agentTemplateNavigation';
+import { AgentDetailPage } from './pages/AgentDetailPage';
+import { AgentWorkspacePage } from './pages/AgentWorkspacePage';
+import { AgentConnectPage } from './pages/AgentConnectPage';
 import { ConfigurationWizardPage } from './pages/ConfigurationWizardPage';
 import { Component, ReactNode, useEffect, useState } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
@@ -43,7 +47,6 @@ import { RolesEditPage } from './pages/iam/RolesEditPage';
 import { ApprovalPage } from './pages/approval/ApprovalPage';
 import { ApprovalEditPage } from './pages/approval/ApprovalEditPage';
 import { ApprovalSkillPreviewPage } from './pages/approval/ApprovalSkillPreviewPage';
-import { AgentTemplatesPage } from './pages/templates/AgentTemplatesPage';
 import { A2AManagementPage } from './pages/templates/A2AManagementPage';
 import { getProductName } from './utils/env';
 import {
@@ -127,6 +130,13 @@ function RouteView() {
     return <div className="card text-sm text-muted">{t('auth.noPagePermission')}</div>;
   }
 
+  const legacyAgentPath = canonicalAgentPath(path);
+  if (legacyAgentPath) return <Navigate to={`/manager${legacyAgentPath}${params.size ? `?${params}` : ''}`} replace />;
+  if (path === '/agent-templates') return <AgentWorkspacePage />;
+  const connect = matchRoute('/agent-templates/:id/connect', path);
+  if (connect) return <AgentConnectPage key={connect.id} id={connect.id} />;
+  const agentDetail = matchRoute('/agent-templates/:id', path);
+  if (agentDetail) return <AgentDetailPage key={agentDetail.id} id={agentDetail.id} />;
   if (path === '/configuration-wizard') return <ConfigurationWizardPage />;
   if (path === '/overview' || path === '/') {
     return <OverviewPage />;
@@ -218,9 +228,6 @@ function RouteView() {
       return <div className="card text-sm text-muted">{t('auth.noPagePermission')}</div>;
     }
     return <ApprovalEditPage orderNum={approvalEdit.orderNum} />;
-  }
-  if (path === '/agent-templates') {
-    return <AgentTemplatesPage />;
   }
   const legacyExperts = matchRoute('/instances/:id/expert-packages', path);
   if (legacyExperts) return <Navigate to={'/manager' + canonicalClusterPath(legacyExperts.id, 'expert-packages', params)} replace />;

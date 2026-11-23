@@ -1014,7 +1014,7 @@ export const AgentTemplateApi = {
 };
 export const BotApi = AgentTemplateApi;
 
-/** Agent 模板（agent_definition）：有效 Agent 配置模板 × 有效运行时模板的派生目录。 */
+/** Agent 模板（agent_definition）：管理员手动创建的 Agent 配置模板与运行时模板组合。 */
 export interface AgentDefinition {
   agent_id: string;
   agent_name: string;

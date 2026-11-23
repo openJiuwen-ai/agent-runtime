@@ -26,7 +26,7 @@ interface Props {
   template: AgentTemplate | null;
   registrationConfig: AgentClientRegistrationCapabilities | null;
   onClose: () => void;
-  onSaved: (options?: { keepOpen: true }) => void;
+  onSaved: (saved: AgentTemplate, options?: { keepOpen: true }) => void;
 }
 
 const FIELD_MAX_LENGTH = {
@@ -177,19 +177,20 @@ export function AgentTemplateModal({ open, template, registrationConfig, onClose
         target = await AgentTemplateApi.create(body);
         setSavedTemplate(target);
         markClean(form);
-        onSaved({ keepOpen: true });
+        onSaved(target, { keepOpen: true });
       }
       if (!target) return;
       const result = await AgentClientRegistrationApi.register(target.template_id, id);
-      setSavedTemplate({ ...target, keycloak_client: { client_id: result.client_id, status: 'bound' } });
+      const registered: AgentTemplate = { ...target, keycloak_client: { client_id: result.client_id, status: 'bound' } };
+      setSavedTemplate(registered);
       bumpGuideRevision();
-      onSaved({ keepOpen: true });
+      onSaved(registered, { keepOpen: true });
       toast('success', t('agentTemplate.registration.success'));
     } catch (error) {
       const persisted = target ? await AgentTemplateApi.get(target.template_id).catch(() => null) : null;
       if (persisted?.keycloak_client) {
         setSavedTemplate(persisted);
-        onSaved({ keepOpen: true });
+        onSaved(persisted, { keepOpen: true });
       } else {
         const key = error instanceof ApiError ? agentRegistrationErrorKey(error.status, error.raw) : 'failed';
         setRegistrationError(target ? key : 'saveFailed');
@@ -205,14 +206,13 @@ export function AgentTemplateModal({ open, template, registrationConfig, onClose
     if (!body) return;
     setSaving(true);
     try {
-      if (currentTemplate) {
-        await AgentTemplateApi.update(currentTemplate.template_id, body);
-      } else {
-        await AgentTemplateApi.create(body);
-      }
+      const saved = currentTemplate
+        ? await AgentTemplateApi.update(currentTemplate.template_id, body)
+        : await AgentTemplateApi.create(body);
       toast('success', t('success.saved'));
       bumpGuideRevision();
-      onSaved();
+      markClean(form);
+      onSaved(saved);
     } catch (e) {
       toast('danger', t('errors.saveFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
     } finally {
@@ -236,34 +236,23 @@ export function AgentTemplateModal({ open, template, registrationConfig, onClose
         </>
       }
     >
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        <div className="md:col-span-2">
-          <FieldLabel required>{t('agentTemplate.templateName')}</FieldLabel>
-          <LimitedTextInput
-            value={form.template_name}
-            maxLength={FIELD_MAX_LENGTH.template_name}
-            onChange={(v) => update('template_name', v)}
-          />
+      <div className="grid grid-cols-1 gap-4">
+        <div className="agent-template-identity">
+          <div>
+            <FieldLabel required>{t('agentTemplate.templateName')}</FieldLabel>
+            <LimitedTextInput ariaLabel={t('agentTemplate.templateName')} value={form.template_name} maxLength={FIELD_MAX_LENGTH.template_name} onChange={(value) => update('template_name', value)} />
+          </div>
+          <div>
+            <FieldLabel>{t('agentTemplate.agentTags')}</FieldLabel>
+            <input className="input" aria-label={t('agentTemplate.agentTags')} placeholder={t('agentTemplate.agentTagsHint')} value={form.agent_tags} onChange={(event) => update('agent_tags', event.target.value)} />
+          </div>
         </div>
-        <div className="md:col-span-2">
+        <div>
           <FieldLabel>{t('agentTemplate.templateDescription')}</FieldLabel>
-          <LimitedTextInput
-            value={form.description}
-            maxLength={FIELD_MAX_LENGTH.description}
-            onChange={(v) => update('description', v)}
-          />
-        </div>
-        <div className="md:col-span-2">
-          <FieldLabel>{t('agentTemplate.agentTags')}</FieldLabel>
-          <input
-            className="input"
-            placeholder={t('agentTemplate.agentTagsHint')}
-            value={form.agent_tags}
-            onChange={(e) => update('agent_tags', e.target.value)}
-          />
+          <LimitedTextInput ariaLabel={t('agentTemplate.templateDescription')} value={form.description} maxLength={FIELD_MAX_LENGTH.description} onChange={(value) => update('description', value)} />
         </div>
         {registrationConfig?.enabled && (
-          <section className="md:col-span-2 rounded-lg border border-border bg-bg-muted p-4" aria-labelledby="agent-client-title">
+          <section className="agent-capability-card" aria-labelledby="agent-client-title">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h3 id="agent-client-title" className="text-sm font-semibold text-text-strong">
                 {t('agentTemplate.registration.title')}
@@ -313,34 +302,43 @@ export function AgentTemplateModal({ open, template, registrationConfig, onClose
             )}
           </section>
         )}
-        <div className="md:col-span-2">
+        <div>
           <TemplateRefEditor
             key={template?.template_id ?? 'new'}
+            resourceLinksInNewTab
+            collapseOptional
             label={t('agentTemplate.templateRef')}
             hint={t('agentTemplate.templateRefHint')}
             requiredSlots={['default_model']}
             value={form.template_ref}
             onChange={(v) => update('template_ref', v)}
+            optionalSelectedCount={customConfig.value.length ? 1 : 0}
+            expandOptional={!!customConfig.error}
+            optionalContent={(
+              <>
+                <details className="agent-capability-card agent-template-custom-config" data-testid="agent-template-custom-config" open={customConfig.error ? true : undefined}>
+                  <summary className="cursor-pointer text-sm font-medium mb-3">{t('agentTemplate.customConfig')}</summary>
+                  <JsonField
+                    label={t('agentTemplate.customConfig')}
+                    value={hideSecrets ? maskAgentClientSecrets(customConfig.value) : form.custom_config_json}
+                    onChange={(value) => update('custom_config_json', value)}
+                    placeholder={'[\n  {\n    "xxx": "yyy",\n    "xxxz": "asdasd"\n  }\n]'}
+                    rows={7}
+                    readOnly={busy || hideSecrets}
+                    labelActions={containsSecret && <button type="button" className="btn ghost sm" onClick={() => setShowSecrets((value) => !value)}>
+                      {t(showSecrets ? 'agentTemplate.registration.hideSecret' : 'agentTemplate.registration.showSecret')}
+                    </button>}
+                  />
+                  <p className="text-[11px] text-muted mt-1">{t('agentTemplate.customConfigHint')}</p>
+                  {customConfig.error === 'objectArray' && (
+                    <div className="text-[11px] text-danger mt-1" role="alert">
+                      {t('agentTemplate.customConfigInvalid')}
+                    </div>
+                  )}
+                </details>
+              </>
+            )}
           />
-        </div>
-        <div className="md:col-span-2" data-testid="agent-template-custom-config">
-          <JsonField
-            label={t('agentTemplate.customConfig')}
-            value={hideSecrets ? maskAgentClientSecrets(customConfig.value) : form.custom_config_json}
-            onChange={(value) => update('custom_config_json', value)}
-            placeholder={'[\n  {\n    "xxx": "yyy",\n    "xxxz": "asdasd"\n  }\n]'}
-            rows={7}
-            readOnly={busy || hideSecrets}
-            labelActions={containsSecret && <button type="button" className="btn ghost sm" onClick={() => setShowSecrets((value) => !value)}>
-              {t(showSecrets ? 'agentTemplate.registration.hideSecret' : 'agentTemplate.registration.showSecret')}
-            </button>}
-          />
-          <p className="text-[11px] text-muted mt-1">{t('agentTemplate.customConfigHint')}</p>
-          {customConfig.error === 'objectArray' && (
-            <div className="text-[11px] text-danger mt-1" role="alert">
-              {t('agentTemplate.customConfigInvalid')}
-            </div>
-          )}
         </div>
       </div>
       {currentTemplate && <ConfigRefreshCostHint scope="template" />}

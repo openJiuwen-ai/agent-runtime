@@ -1099,7 +1099,7 @@
         "mcp": "MCP配置",
         "permissions": "安全护栏",
         "a2a_access_policy": "A2A 访问策略",
-        "expert_package": "专家包"
+        "expert_package": "专家与专家包"
       },
       "none": "不选择",
       "noOptions": "暂无可选模板"
@@ -1459,7 +1459,9 @@
     "referenceHint": "当前有多少个 Agent 引用了该模板；被引用时不能删除。",
     "deleteBlockedHint": "仍被 {{count}} 个 Agent 引用，请先在集群管理中移除这些 Agent。",
     "fieldRequired": "请填写{{field}}",
-    "deleteConfirm": "确认删除 Agent 配置模板「{{name}}」？被 Agent 引用的模板不能删除，请先在集群管理中移除引用该模板的 Agent。"
+    "deleteConfirm": "确认删除 Agent 配置模板「{{name}}」？被 Agent 引用的模板不能删除，请先在集群管理中移除引用该模板的 Agent。",
+    "optionalResources": "可选能力配置",
+    "resourceTabHint": "资源管理在新标签页打开；添加完成后返回此处，刷新选项即可继续，已填内容会保留。"
   },
   "agentDefinition": {
     "title": "Agent模板",
