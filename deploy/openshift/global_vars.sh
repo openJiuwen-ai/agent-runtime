@@ -36,6 +36,8 @@ REPLICAS_VARS=(AGENT_SERVER_REPLICAS GATEWAY_REPLICAS WEB_REPLICAS IDENTITY_REPL
 #   三模式派生变量（routing 注入，off/full 留空 → 对应 env 行删除）
 # - IMPORT_LOCAL_ALLOWED_DOWNLOAD_HOSTS / TEAM_SKILLS_HUB_ALLOWED_DOWNLOAD_HOSTS：
 #   预置 Skill URL / 远程 ZIP 下载白名单（留空 → ConfigMap 行删除，走 AgentServer 代码默认）
+# - TEAM_SKILLS_HUB_BASE_URL：TeamSkills Hub 基址（留空 → 行删除，走代码默认
+#   https://swarmskills.openjiuwen.com；填写 → 注入 gateway/agentserver/manager-server）
 # - AGENT_SERVER_REACT_MAX_ITER：主 Agent 一轮调用的模型往返上限
 #   （留空 → ConfigMap 行删除，生成配置不写 react.max_iterations，与个人版一样不限制）
 # 格式校验与"允许留空"解耦（用户名/URL 不该按 DNS subdomain 误校验）：
@@ -49,6 +51,7 @@ OPTIONAL_VARS=(
     AGENT_RUNTIME_DEFAULT_CONF_PATH
     GATEWAY_AGENT_CLIENT_MODE GATEWAY_RUNTIME_MANAGER_URL AGENTSERVER_POD_DNS_LIST
     IMPORT_LOCAL_ALLOWED_DOWNLOAD_HOSTS TEAM_SKILLS_HUB_ALLOWED_DOWNLOAD_HOSTS
+    TEAM_SKILLS_HUB_BASE_URL
     AGENT_SERVER_REACT_MAX_ITER
     CURRENT_NODE_NAME
 )
@@ -188,6 +191,8 @@ declare -A DEPLOY_VARS=(
     # 预置 Skill URL / 远程导入下载白名单（逗号分隔）；留空不注入，走 AgentServer 代码默认
     ["IMPORT_LOCAL_ALLOWED_DOWNLOAD_HOSTS"]=""
     ["TEAM_SKILLS_HUB_ALLOWED_DOWNLOAD_HOSTS"]=""
+    # TeamSkills Hub 基址；留空不注入，走代码默认 https://swarmskills.openjiuwen.com
+    ["TEAM_SKILLS_HUB_BASE_URL"]=""
 
     ["MARIADB_IMAGE"]="mariadb:11.8"
     ["MYSQL_IMAGE"]="mysql:8.0"
