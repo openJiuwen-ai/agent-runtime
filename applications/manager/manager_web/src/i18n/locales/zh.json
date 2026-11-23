@@ -1406,32 +1406,6 @@
     "chatLoadingSlow": "加载较慢,请稍候…"
   },
   "agentTemplate": {
-    "registration": {
-      "button": "注册 Agent 客户端",
-      "pending": "正在注册…",
-      "success": "Agent 客户端已绑定到此模板。",
-      "failed": "注册失败，请重试。",
-      "clientIdConflict": "该 Client ID 已被使用，请换一个 Client ID。",
-      "removeManualCredentials": "如需注册托管客户端，请先从自定义配置中移除已不再使用的手工凭据，保存后重试。",
-      "alreadyBound": "该模板已绑定客户端，请刷新后查看。",
-      "templateBusy": "该模板正在更新，请稍后重试。",
-      "keycloakFailed": "Keycloak 未能完成注册，请重试。",
-      "alreadyConfigured": "已有客户端凭据，保留当前配置。",
-      "showSecret": "显示并编辑密钥",
-      "hideSecret": "隐藏密钥",
-      "title": "Keycloak Agent 客户端",
-      "saveAndRegister": "保存并注册",
-      "retry": "重试注册",
-      "saveFailed": "保存模板失败，请重试。",
-      "bound": "已绑定",
-      "unbound": "未绑定",
-      "secretHint": "Client ID 由你指定，密钥由系统托管。",
-      "saveHint": "系统会先保存模板。注册失败时，可以在同一模板里重试。",
-      "savedHint": "模板已保存，重试会沿用这个模板。",
-      "unconfigured": "Keycloak 注册配置不可用，请联系管理员。",
-      "boundHint": "该模板已完成注册，Client ID 已锁定。",
-      "deleteConfirm": "确定删除模板「{{name}}」吗？被 Agent 引用的模板不能删除；删除会一并移除绑定的 Keycloak 客户端「{{clientId}}」。"
-    },
     "title": "Agent配置模板",
     "subtitle": "维护可复用的 Agent 配置模板，供集群 Agent 绑定使用",
     "new": "新建 Agent 配置模板",
@@ -1481,7 +1455,30 @@
     "nameTooLong": "Agent 名称不能超过 128 个字符",
     "nameDuplicated": "该 Agent 名称已被占用，请换一个",
     "copyId": "复制 Agent ID",
-    "copied": "已复制"
+    "copied": "已复制",
+    "keycloak": {
+      "button": "Keycloak注册",
+      "title": "Keycloak 注册",
+      "bound": "已注册",
+      "unbound": "未注册",
+      "hint": "使用当前 Agent ID 注册，密钥由系统托管，不在前端展示。",
+      "register": "注册",
+      "retry": "重试注册",
+      "remove": "删除 Keycloak 注册",
+      "confirmRemove": "确认删除注册",
+      "registering": "正在注册，请稍候…",
+      "deleting": "正在删除注册，请稍候…",
+      "removeHint": "删除后，此 Agent 将无法使用该凭据访问 MCP。Agent 模板会保留，之后可以重新注册。",
+      "unconfigured": "注册配置不可用，请联系管理员检查 Keycloak 配置。",
+      "deleteAgentConfirm": "确认删除 Agent 模板「{{name}}」及其 Keycloak 注册？",
+      "errors": {
+        "client_id_in_use": "该 Agent ID 已被其他 Keycloak 客户端占用，请联系管理员处理。",
+        "bound_client_cleanup_unavailable": "该 Agent 仍绑定 Keycloak 客户端，请启用注册功能并检查注册配置文件后重试删除。",
+        "template_busy": "相关模板正在处理中，请稍后重试。",
+        "load_failed": "读取注册状态失败，请关闭弹窗后重试。",
+        "request_failed": "Keycloak 操作失败，请检查配置或网络后重试。"
+      }
+    }
   },
   "templateInUse": {
     "agentDefinitions": "该模板被 {{count}} 个 Agent 模板引用，请先删除对应的 Agent 模板",

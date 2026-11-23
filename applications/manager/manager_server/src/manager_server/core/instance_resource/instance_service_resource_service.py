@@ -84,6 +84,14 @@ class InstanceServiceResourceService:
         self._h = handler
         self._tpl = ServiceConfigTemplateService(handler)
 
+    async def _refresh_agent_clients(self, jiuwenclaw_id: str, resource_rows: list[Any]) -> None:
+        from manager_server.core.agent_definition.keycloak_client import refresh_gateway_agent_clients
+
+        try:
+            await refresh_gateway_agent_clients(self._h, jiuwenclaw_id, runtime_resources=resource_rows)
+        except Exception as exc:
+            raise ValueError("failed to refresh Agent credentials on Gateway; please retry") from exc
+
     async def list_grants(self, template_id: str, jiuwenclaw_id: str | None = None) -> list[dict[str, Any]]:
         filters: dict[str, Any] = {"ref_template_id": template_id}
         if jiuwenclaw_id:
@@ -304,6 +312,8 @@ class InstanceServiceResourceService:
         except Exception as exc:
             raise ValueError(f"failed to sync to runtime: {exc}") from exc
 
+        await self._refresh_agent_clients(jiuwenclaw_id, projected)
+
         if normalized_resource_id:
             await _delete_where(
                 self._h,
@@ -363,6 +373,8 @@ class InstanceServiceResourceService:
             )
         except Exception as exc:
             raise ValueError(f"failed to sync to runtime: {exc}") from exc
+
+        await self._refresh_agent_clients(jiuwenclaw_id, projected)
 
         for r in rows:
             await self._h.delete(_GRANT, {"id": _g(r, "id")})
@@ -425,6 +437,8 @@ class InstanceServiceResourceService:
             )
         except Exception as exc:
             raise ValueError(f"failed to sync to runtime: {exc}") from exc
+
+        await self._refresh_agent_clients(jiuwenclaw_id, projected)
 
         for r in rows:
             await self._h.delete(_GRANT, {"id": _g(r, "id")})

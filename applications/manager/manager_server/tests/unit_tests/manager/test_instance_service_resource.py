@@ -141,6 +141,7 @@ async def test_update_rebinds_template_keeps_resource_id():
     svc = InstanceServiceResourceService(handler)
 
     with (
+        patch.object(svc, "_refresh_agent_clients", new_callable=AsyncMock),
         patch.object(
             ServiceConfigTemplateService,
             "get",
@@ -228,6 +229,7 @@ async def test_rebind_skips_unrecord_when_sibling_still_uses_old_template():
     svc = InstanceServiceResourceService(handler)
 
     with (
+        patch.object(svc, "_refresh_agent_clients", new_callable=AsyncMock),
         patch.object(
             ServiceConfigTemplateService,
             "get",
