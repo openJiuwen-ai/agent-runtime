@@ -548,11 +548,12 @@ apply_manager_deploy_credentials() { # $@=本次渲染的清单文件名
 # object key 取 AGENT_RUNTIME_DEFAULT_CONF_PATH（默认 defaults/{ns}/agentserver.json），
 # {ns} → NAMESPACE，与 manager-server GET default-rawdata 一致。
 _agentserver_default_object_key() {
-  local tpl ns
-  tpl="${DEPLOY_VARS["AGENT_RUNTIME_DEFAULT_CONF_PATH"]:-defaults/{ns}/agentserver.json}"
+  local tpl ns pat="{ns}"
+  tpl="${DEPLOY_VARS["AGENT_RUNTIME_DEFAULT_CONF_PATH"]:-}"
+  [ -n "$tpl" ] || tpl="defaults/{ns}/agentserver.json"
   ns="${DEPLOY_VARS["NAMESPACE"]:-default}"
   [ -n "$ns" ] || ns="default"
-  echo "${tpl//\{ns\}/${ns}}"
+  echo "${tpl//$pat/$ns}"
 }
 
 _obs_put_script() {
