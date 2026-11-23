@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from asyncio import CancelledError, Lock, timeout
+from asyncio import Lock, timeout
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from time import time
@@ -12,18 +12,14 @@ from weakref import WeakValueDictionary
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 from openjiuwen_runtime.foundation.db.sqlalchemy_handler import SQLAlchemyHandler
 from sqlalchemy import delete, select, update
-from starlette.concurrency import run_in_threadpool
 
 from manager_server.infrastructure.common import resolve_order_by
-from manager_server.infrastructure.config import settings
 from manager_server.infrastructure.logger import get_logger
 from manager_server.infrastructure.template_ref import read_template_ref_from_row
 from manager_server.infrastructure.utils import iso_datetime, new_uuid4, strip_optional, utc_now
 from manager_server.integrations.keycloak.agent_clients import (
-    KeycloakAgentClients,
     RegistrationConflict,
     RegistrationError,
-    load_registration_service,
 )
 from manager_server.models.instance_resource_models import INSTANCE_AGENT_RESOURCE_TABLE_DEF
 from manager_server.models.template_models import AGENT_TEMPLATE_TABLE_DEF
@@ -42,8 +38,7 @@ _AGENT_TPL = AGENT_TEMPLATE_TABLE_DEF.table_name
 _A2A_POLICY_TPL = A2A_ACCESS_POLICY_TEMPLATE_TABLE_DEF.table_name
 _template_mutation_locks: WeakValueDictionary[str, Lock] = WeakValueDictionary()
 _MUTATION_TIMEOUT = 120
-_ROLLBACK_TIMEOUT = 60
-# The lease outlives the forward operation and both compensating requests.
+# The lease outlives the network operation.
 _MUTATION_LEASE = 300
 _ALLOWED_SORT_FIELDS = frozenset({
     "template_name",
@@ -88,21 +83,6 @@ def public_agent_template_data(data: dict | None) -> dict | None:
     return {key: value for key, value in data.items() if key != MANAGED_AGENT_CLIENT_KEY} or None
 
 
-def agent_template_gateway_data(data: dict | None) -> dict | None:
-    data = _template_data(data)
-    binding = (data or {}).get(MANAGED_AGENT_CLIENT_KEY)
-    if not binding:
-        return data
-    visible = public_agent_template_data(data) or {}
-    # The AgentServer reads the first complete credential pair in custom_config.
-    credentials = {"client_id": binding["client_id"], "client_secret": binding["client_secret"]}
-    return {**visible, "custom_config": [credentials, *(visible.get("custom_config") or [])]}
-
-
-class RegistrationUnavailable(RegistrationError):
-    """Registration is disabled or cannot be configured."""
-
-
 class TemplateMutationBusy(RegistrationConflict):
     def __init__(self):
         super().__init__("This template is being changed. Retry shortly.", code="template_busy")
@@ -114,13 +94,6 @@ class _TemplateMutation:
     data: dict | None
     operation_id: str
     completed: bool = False
-
-
-async def _registration_service():
-    try:
-        return await run_in_threadpool(load_registration_service, settings)
-    except RegistrationError as exc:
-        raise RegistrationUnavailable(str(exc)) from None
 
 
 async def _assert_no_agent_definitions(
@@ -146,7 +119,6 @@ async def _assert_no_agent_definitions(
 
 def agent_template_out(row: Any, *, reference_count: int = 0) -> dict[str, Any]:
     data = _g(row, "data")
-    binding = (data or {}).get(MANAGED_AGENT_CLIENT_KEY)
     result = {
         "id": _g(row, "id"),
         "template_id": _g(row, "template_id"),
@@ -160,16 +132,13 @@ def agent_template_out(row: Any, *, reference_count: int = 0) -> dict[str, Any]:
         "updated_at": iso_datetime(_g(row, "updated_at")),
     }
 
-    if binding:
-        result["keycloak_client"] = {"client_id": binding["client_id"], "status": "bound"}
     return result
 
 
 def row_to_sync(row: Any) -> dict[str, Any]:
     payload = agent_template_out(row)
-    for key in ("id", "created_at", "updated_at", "keycloak_client", "reference_count"):
+    for key in ("id", "created_at", "updated_at", "reference_count"):
         payload.pop(key, None)
-    payload["data"] = agent_template_gateway_data(_g(row, "data"))
     return payload
 
 
@@ -299,9 +268,12 @@ class AgentTemplateService:
             yield session, table, result.one_or_none()
 
     @asynccontextmanager
-    async def _reserve_template(self, template_id: str):
+    async def reserve_template(self, template_id: str):
+        """Reserve a template for configuration updates or Agent client dispatch."""
         # Keep local callers ordered, and reserve the row across Manager processes.
         lock = _template_mutation_locks.setdefault(template_id, Lock())
+        if lock.locked():
+            raise TemplateMutationBusy()
         async with lock:
             async with self._lock_template(template_id) as (session, table, row):
                 operation = None
@@ -350,88 +322,6 @@ class AgentTemplateService:
                 await session.execute(update(table).where(table.c.id == row.id).values(**values))
         operation.completed = True
 
-    async def register_client(self, template_id: str, client_id: str) -> dict[str, Any] | None:
-        from manager_server.core.template.push_template_to_gateway import (
-            AGENT_TEMPLATES_KIND,
-            update_template_on_referencing_gateways,
-        )
-
-        service = await _registration_service()
-        async with self._reserve_template(template_id) as operation:
-            if operation is None:
-                return None
-            data = operation.data or {}
-            binding = data.get(MANAGED_AGENT_CLIENT_KEY)
-            if binding:
-                if binding["client_id"] != client_id:
-                    raise RegistrationConflict("This template is already bound", code="template_already_bound")
-                return {"client_id": client_id, "status": "bound"}
-            if any(
-                isinstance(entry.get("client_id"), str) and entry["client_id"].strip()
-                and isinstance(entry.get("client_secret"), str) and entry["client_secret"].strip()
-                for entry in (data.get("custom_config") or [])
-                if isinstance(entry, dict)
-            ):
-                raise RegistrationConflict(
-                    "Remove the manual credentials from custom configuration, save, and retry registration.",
-                    code="manual_credentials_present",
-                )
-
-            binding = None
-            stage = "keycloak_registration"
-            try:
-                binding = await service.register(template_id, client_id, operation.row.template_name)
-                new_data = {**data, MANAGED_AGENT_CLIENT_KEY: binding}
-                stage = "gateway_distribution"
-                await update_template_on_referencing_gateways(
-                    self._h, AGENT_TEMPLATES_KIND, template_id, {"data": new_data},
-                )
-                stage = "database_commit"
-                await self._finish_template(operation, changes={"data": new_data})
-            except (Exception, CancelledError) as exc:
-                _log.warning("Agent client registration failed", template_id=template_id,
-                             stage=stage, error_type=type(exc).__name__)
-                if binding is not None:
-                    try:
-                        await self._rollback_registration(operation, service, binding)
-                    except Exception as rollback_error:
-                        _log.warning("Agent client rollback incomplete", template_id=template_id,
-                                     error_type=type(rollback_error).__name__)
-                if binding is None or isinstance(exc, CancelledError):
-                    raise
-                raise RegistrationError("Could not save and distribute Agent client credentials") from None
-        return {"client_id": client_id, "status": "bound"}
-
-    async def _rollback_registration(
-        self, operation: _TemplateMutation, service: KeycloakAgentClients, binding: dict,
-    ) -> None:
-        from manager_server.core.template.push_template_to_gateway import (
-            AGENT_TEMPLATES_KIND,
-            update_template_on_referencing_gateways,
-        )
-
-        template_id = operation.row.template_id
-        row = await self._h.get(_AGENT_TPL, {"template_id": template_id})
-        if row is None or _operation(row.data).get("id") != operation.operation_id:
-            return
-        try:
-            async with timeout(_ROLLBACK_TIMEOUT):
-                await update_template_on_referencing_gateways(
-                    self._h, AGENT_TEMPLATES_KIND, template_id, {"data": operation.data}, continue_on_error=True,
-                )
-        except Exception as exc:
-            _log.warning("Agent client distribution rollback incomplete", template_id=template_id,
-                         error_type=type(exc).__name__)
-        else:
-            _log.info("Agent client distribution rolled back", template_id=template_id)
-        try:
-            async with timeout(_ROLLBACK_TIMEOUT):
-                await service.delete(template_id, binding)
-        except (RegistrationError, TimeoutError) as exc:
-            _log.warning("Agent client cleanup incomplete", template_id=template_id, error_type=type(exc).__name__)
-        else:
-            _log.info("Uncommitted Agent client cleaned up", template_id=template_id)
-
     async def update(self, template_id: str, body: AgentTemplateUpdateBody) -> dict[str, Any] | None:
         from manager_server.core.template.push_template_to_gateway import (
             AGENT_TEMPLATES_KIND,
@@ -440,7 +330,7 @@ class AgentTemplateService:
 
         if body.template_ref is not None:
             await self._validate_a2a_policy_ref(body.template_ref)
-        async with self._reserve_template(template_id) as operation:
+        async with self.reserve_template(template_id) as operation:
             if operation is None:
                 return None
             updates = body.model_dump(exclude_unset=True)
@@ -450,13 +340,6 @@ class AgentTemplateService:
             for key in ("enabled", "template_name", "template_ref"):
                 if updates.get(key) is None:
                     updates.pop(key, None)
-            if "data" in updates:
-                binding = (operation.data or {}).get(MANAGED_AGENT_CLIENT_KEY)
-                if not isinstance(updates.get("data"), dict):
-                    # 显式 data: null 不能整列清空（托管 Agent client 绑在 data 里）
-                    updates.pop("data", None)
-                elif binding:
-                    updates["data"][MANAGED_AGENT_CLIENT_KEY] = binding
             if not updates:
                 return agent_template_out(
                     operation.row,
@@ -479,7 +362,7 @@ class AgentTemplateService:
             assert_agent_template_deletable,
         )
 
-        async with self._reserve_template(template_id) as operation:
+        async with self.reserve_template(template_id) as operation:
             if operation is None:
                 return False
             # 在预留锁内校验，尽量缩小与“新增 Agent 授权”的竞态窗口
@@ -488,10 +371,6 @@ class AgentTemplateService:
                 self._h, config_template_id=template_id, action="delete"
             )
 
-            binding = (operation.data or {}).get(MANAGED_AGENT_CLIENT_KEY)
-            if binding:
-                service = await _registration_service()
-                await service.delete(template_id, binding)
             await self._finish_template(operation, deleting=True)
         _log.info("[Template] agent_template.delete", template_id=template_id)
         return True

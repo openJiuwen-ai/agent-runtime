@@ -67,7 +67,10 @@ def agent_definition_out(
     config_template_name: str | None = None,
     runtime_template_name: str | None = None,
 ) -> dict[str, Any]:
+    from manager_server.core.agent_definition.keycloak_client import client_status
+
     return {
+        "keycloak_client": client_status(row),
         "agent_id": str(_g(row, "agent_id") or ""),
         "agent_name": str(_g(row, "agent_name") or ""),
         "agent_config_template_id": str(_g(row, "agent_config_template_id") or ""),
@@ -261,12 +264,9 @@ class AgentDefinitionService:
         return _out_with_names(updated, cfg_names, rt_names)
 
     async def delete(self, agent_id: str) -> bool:
-        """物理删除；行不存在返回 ``False``。"""
-        row = await self._h.get(_TABLE, {"agent_id": agent_id})
-        if row is None:
-            return False
-        await self._h.delete(_TABLE, {"agent_id": agent_id})
-        return True
+        from manager_server.core.agent_definition.keycloak_client import AgentClientService
+
+        return await AgentClientService(self._h).remove(agent_id, delete_agent=True)
 
     async def _assert_name_free(
         self, name: str, *, skip_agent_id: str | None = None

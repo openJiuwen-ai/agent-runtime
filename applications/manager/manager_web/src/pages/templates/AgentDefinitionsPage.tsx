@@ -12,6 +12,7 @@ import { useGuideAutoOpen } from '../../hooks/useGuideAutoOpen';
 import { useListSearch } from '../../hooks/useListSearch';
 import {
   AgentDefinitionApi,
+  AgentClientRegistrationApi,
   AgentTemplateApi,
   ApiError,
   ServiceConfigTemplateApi,
@@ -20,6 +21,7 @@ import {
 import { bumpGuideRevision } from '../../stores/guideStore';
 import { toast } from '../../stores/uiStore';
 import { truncate } from '../../utils/format';
+import { AgentKeycloakModal } from './AgentKeycloakModal';
 
 const NAME_MAX_LENGTH = 128;
 const TEMPLATE_PAGE_SIZE = 200;
@@ -41,6 +43,8 @@ export function AgentDefinitionsPage() {
   const [pageSize, setPageSize] = useState(20);
   const { searchInput, setSearchInput, searchQuery } = useListSearch();
   const [editing, setEditing] = useState<AgentDefinition | null>(null);
+  const [keycloakRow, setKeycloakRow] = useState<AgentDefinition | null>(null);
+  const { data: registrationConfig } = useAsync(AgentClientRegistrationApi.capabilities);
   const [creating, setCreating] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<AgentDefinition | null>(null);
 
@@ -106,7 +110,7 @@ export function AgentDefinitionsPage() {
               </div>
             ) : (
               <div className="overflow-x-auto">
-                <table className="table w-max min-w-full">
+                <table className={registrationConfig?.enabled ? 'table w-full min-w-[56rem]' : 'table w-max min-w-full'}>
                   <thead>
                     <tr>
                       <th className="cell-keep-case">{t('agentDefinition.column.name')}</th>
@@ -161,6 +165,17 @@ export function AgentDefinitionsPage() {
                         </td>
                         <td className="whitespace-nowrap min-w-[9.5rem] align-top">
                           <div className="flex items-center gap-1">
+                            {registrationConfig?.enabled && (
+                              <button
+                                type="button"
+                                className={row.keycloak_client?.status === 'bound'
+                                  ? 'btn sm !border-green-600/30 !bg-green-500/10 !text-green-700 dark:!text-green-400'
+                                  : 'btn sm !border-primary/30 !bg-primary/10 !text-primary'}
+                                onClick={() => setKeycloakRow(row)}
+                              >
+                                {t('agentDefinition.keycloak.button')} ｜ {t(`agentDefinition.keycloak.${row.keycloak_client?.status === 'bound' ? 'bound' : 'unbound'}`)}
+                              </button>
+                            )}
                             <button
                               className="btn sm ghost"
                               onClick={() => setEditing(row)}
@@ -195,6 +210,8 @@ export function AgentDefinitionsPage() {
           ) : null}
         </div>
       </div>
+      {keycloakRow && <AgentKeycloakModal key={keycloakRow.agent_id} row={keycloakRow}
+        capabilities={registrationConfig} onClose={() => setKeycloakRow(null)} onChanged={() => void reload()} />}
       <CreateAgentDefinitionModal
         open={creating}
         onClose={() => setCreating(false)}
@@ -215,7 +232,9 @@ export function AgentDefinitionsPage() {
       <ConfirmDialog
         open={!!deleteTarget}
         danger
-        message={t('agentDefinition.deleteConfirm')}
+        message={deleteTarget?.keycloak_client?.status === 'bound'
+          ? t('agentDefinition.keycloak.deleteAgentConfirm', { name: deleteTarget.agent_name })
+          : t('agentDefinition.deleteConfirm')}
         onConfirm={async () => {
           if (!deleteTarget) return;
           try {
@@ -225,8 +244,15 @@ export function AgentDefinitionsPage() {
             void reload();
             bumpGuideRevision();
           } catch (e) {
+            const code = e instanceof ApiError
+              ? (e.raw as { detail?: { code?: string } })?.detail?.code : undefined;
             toast('danger', t('errors.deleteFailed', {
-              detail: e instanceof ApiError ? e.detail : (e as Error).message,
+              detail: code === 'bound_client_cleanup_unavailable'
+                ? t('agentDefinition.keycloak.errors.bound_client_cleanup_unavailable')
+                : deleteTarget.keycloak_client?.status === 'bound' && e instanceof ApiError
+                && [409, 502, 503].includes(e.status)
+                ? t('agentDefinition.keycloak.errors.request_failed')
+                : e instanceof ApiError ? e.detail : (e as Error).message,
             }));
           }
         }}
