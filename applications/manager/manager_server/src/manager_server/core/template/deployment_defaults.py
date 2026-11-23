@@ -140,7 +140,9 @@ def build_deployment_plan(document: Any, source: str) -> DeploymentPlan:
         # Runtime does not yet implement runtimeClassName. Do not silently drop
         # sandbox isolation requested by a deployment and call it usable.
         if wire.get("runtimeClassName"):
-            raise ValueError("runtimeClassName is not supported by the current Runtime; cannot import this deployment safely")
+            raise ValueError(
+                "runtimeClassName is not supported by the current Runtime; cannot import this deployment safely"
+            )
         _validate_fields(
             wire, set(ServiceConfigTemplateCreateBody.model_fields) | {"template_id", "nodeName", "fsGroup"},
             {"nodeName": "node_name", "fsGroup": "fs_group"},
@@ -163,12 +165,16 @@ def build_deployment_plan(document: Any, source: str) -> DeploymentPlan:
             fs_group=wire.get("fsGroup", wire.get("fs_group")),
         )
         data = dict(wire.get("data") or {})
-        data["deployment_default"] = {"fingerprint": fingerprint, "source_template_id": wire["template_id"], "source": source}
+        data["deployment_default"] = {
+            "fingerprint": fingerprint,
+            "source_template_id": wire["template_id"],
+            "source": source,
+        }
         data["config_sync"] = {"source_template_id": wire["template_id"]}
         values["data"] = data
         body = ServiceConfigTemplateCreateBody(**values)
         tid = str(uuid5(NAMESPACE_URL, fingerprint + ':template:' + wire["template_id"]))
-        row = ServiceConfigTemplateService._build_row_for_create(body, template_id=tid, data=data)
+        row = ServiceConfigTemplateService.build_row_for_create(body, template_id=tid, data=data)
         row.update(created_at=now, updated_at=now)
         template_rows.append(row)
     return DeploymentPlan(source, fingerprint, container_rows, template_rows)
@@ -211,20 +217,33 @@ async def _inspect(handler: DBHandler, plan: DeploymentPlan) -> dict[str, Any]:
         valid = True
         for cid in ids:
             container = existing_containers.get(cid) or await handler.get(_CONTAINERS, {"container_id": cid})
-            if container is None or not container.image or not (container.data or {}).get("_meta", {}).get("enabled", True):
+            if (
+                container is None
+                or not container.image
+                or not (container.data or {}).get("_meta", {}).get("enabled", True)
+            ):
                 valid = False
         customized = any(
             getattr(row, key, None) != value
             for key, value in expected.items() if key not in {"created_at", "updated_at"}
-        ) or any(
-            existing_containers.get(expected_container["container_id"]) is not None and any(
-                getattr(existing_containers[expected_container["container_id"]], key, None) != value
-                for key, value in expected_container.items() if key not in {"created_at", "updated_at"}
-            )
-            for expected_container in plan.containers
-            if expected_container["container_id"] in ids
         )
-        summaries.append({"template_id": row.template_id, "template_name": row.template_name, "enabled": bool(row.enabled and valid), "customized": customized})
+        for expected_container in plan.containers:
+            cid = expected_container["container_id"]
+            container = existing_containers.get(cid)
+            if cid not in ids or container is None:
+                continue
+            if any(
+                getattr(container, key, None) != value
+                for key, value in expected_container.items() if key not in {"created_at", "updated_at"}
+            ):
+                customized = True
+                break
+        summaries.append({
+            "template_id": row.template_id,
+            "template_name": row.template_name,
+            "enabled": bool(row.enabled and valid),
+            "customized": customized,
+        })
     complete = len(summaries) == len(plan.templates) and all(existing_containers.values())
     return _status(
         "ready" if complete else "available",
@@ -311,14 +330,17 @@ async def restore_default_container(
         async with handler.session_factory() as session:
             async with session.begin():
                 table = handler.get_table(_CONTAINERS)
-                existing = await session.execute(select(table.c.container_id).where(table.c.container_id == body.container_id))
+                existing = await session.execute(
+                    select(table.c.container_id).where(table.c.container_id == body.container_id)
+                )
                 if existing.first() is not None:
                     raise DefaultContainerConflict("容器 ID 已存在，请修改后保存；已有容器配置不会被覆盖。")
                 await session.execute(table.insert().values(**row))
     except IntegrityError as exc:
         raise DefaultContainerConflict("容器 ID 已存在，请修改后保存；已有容器配置不会被覆盖。") from exc
     saved = await ServiceConfigContainerService(handler).get(body.container_id)
-    assert saved is not None
+    if saved is None:
+        raise RuntimeError("restored container template could not be read back")
     return saved
 
 
@@ -433,16 +455,19 @@ async def restore_deployment_defaults(
                 else:
                     if cid.startswith("default-preview-"):
                         raise ValueError("默认容器选择已失效，请重新读取默认模板。")
-                    existing = await session.execute(select(containers.c.container_id).where(containers.c.container_id == cid))
+                    existing = await session.execute(
+                        select(containers.c.container_id).where(containers.c.container_id == cid)
+                    )
                     if existing.first() is None:
                         raise ValueError("所选容器模板已不存在，请重新选择。")
             body.main_container_id = mapped.get(main, main)
             body.sidecar_container_ids = [mapped.get(cid, cid) for cid in sidecars]
-            row = ServiceConfigTemplateService._build_row_for_create(body, template_id=template_id, data=data)
+            row = ServiceConfigTemplateService.build_row_for_create(body, template_id=template_id, data=data)
             row.update(created_at=now, updated_at=now)
             await session.execute(handler.get_table(_TEMPLATES).insert().values(**row))
     saved = await ServiceConfigTemplateService(handler).get(template_id)
-    assert saved is not None
+    if saved is None:
+        raise RuntimeError("restored runtime template could not be read back")
     return saved
 
 

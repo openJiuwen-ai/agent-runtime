@@ -1,16 +1,25 @@
 """Deployment defaults use actual DB rows and preserve already-bound revisions."""
 import asyncio
 import json
+from unittest.mock import AsyncMock
 
 import pytest
 
 from manager_server.core.template.deployment_defaults import (
     bootstrap_deployment_defaults,
     initialize_deployment_defaults,
+    restore_default_container,
+    restore_deployment_defaults,
 )
+from manager_server.core.template.service_config_container import ServiceConfigContainerService
+from manager_server.core.template.service_config_template import ServiceConfigTemplateService
 from manager_server.core.instance_resource.runtime_config_sync import service_template_wire
 from manager_server.core.instance_resource.runtime_config_sync import build_runtime_config
 from manager_server.infrastructure.utils import utc_now
+from manager_server.schemas.template_schemas import (
+    ContainerDeploymentDefaultsRestoreBody,
+    DeploymentDefaultsRestoreBody,
+)
 
 
 def config(image="example/agent:v1"):
@@ -50,7 +59,9 @@ async def test_status_is_readonly_initialize_is_idempotent_and_preserves_wire(ma
     assert second["created"] == 0
     assert first["templates"] == second["templates"]
     assert "config" not in first
-    template = await manager_api.handler.get("service_config_template", {"template_id": first["templates"][0]["template_id"]})
+    template = await manager_api.handler.get(
+        "service_config_template", {"template_id": first["templates"][0]["template_id"]},
+    )
     wire, containers = await service_template_wire(manager_api.handler, template)
     assert wire["nodeName"] == "node-1"
     assert wire["fsGroup"] == 1000
@@ -78,7 +89,10 @@ async def test_new_deployment_does_not_overwrite_existing_or_custom_templates(ma
     first = await initialize_deployment_defaults(manager_api.handler)
     old_id = first["templates"][0]["template_id"]
     old = await manager_api.handler.get("service_config_template", {"template_id": old_id})
-    await manager_api.handler.update("service_config_template", {"template_id": old_id}, {"template_name": "my customization", "enabled": False})
+    await manager_api.handler.update(
+        "service_config_template", {"template_id": old_id},
+        {"template_name": "my customization", "enabled": False},
+    )
     same = await initialize_deployment_defaults(manager_api.handler)
     assert same["templates"][0]["template_name"] == "my customization"
     assert same["templates"][0]["enabled"] is False
@@ -139,7 +153,9 @@ async def test_multiple_templates_created_and_deleted_container_repaired(manager
     result = await initialize_deployment_defaults(manager_api.handler)
     assert result["created"] == 2
     assert len(result["templates"]) == 2
-    row = await manager_api.handler.get("service_config_template", {"template_id": result["templates"][0]["template_id"]})
+    row = await manager_api.handler.get(
+        "service_config_template", {"template_id": result["templates"][0]["template_id"]},
+    )
     await manager_api.handler.delete("service_config_container", {"container_id": row.main_container_id})
     assert (await manager_api.get_json("/service-config-templates/deployment-defaults"))["status"] == "available"
     assert (await initialize_deployment_defaults(manager_api.handler))["status"] == "ready"
@@ -162,13 +178,18 @@ async def test_deployment_endpoints_require_admin(manager_api, deployed):
         raise HTTPException(status_code=403, detail="admin required")
     manager_api.app.dependency_overrides[require_admin] = deny
     for method, suffix in [("GET", ""), ("POST", "/initialize")]:
-        response = await manager_api.http.request(method, f"/api/v1/service-config-templates/deployment-defaults{suffix}")
+        response = await manager_api.http.request(
+            method, f"/api/v1/service-config-templates/deployment-defaults{suffix}",
+        )
         assert response.status_code == 403
     assert await manager_api.handler.count_records("service_config_template", {}) == 0
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("section,key", [("containers", "unexpectedSetting"), ("templates", "unexpectedSetting"), ("templates", "node_name")])
+@pytest.mark.parametrize(
+    "section,key",
+    [("containers", "unexpectedSetting"), ("templates", "unexpectedSetting"), ("templates", "node_name")],
+)
 async def test_unsupported_or_ambiguous_fields_fail_before_writes(manager_api, deployed, section, key):
     payload = config()
     payload["rawdata"][section][0][key] = "private-value"
@@ -182,6 +203,7 @@ async def test_unsupported_or_ambiguous_fields_fail_before_writes(manager_api, d
 @pytest.mark.asyncio
 async def test_database_failure_rolls_back_all_template_rows(manager_api, deployed, monkeypatch):
     original = manager_api.handler.get_table
+
     def fail_template_table(name):
         if name == "service_config_template":
             raise RuntimeError("synthetic write failure")
@@ -212,7 +234,9 @@ async def test_preview_reads_original_source_and_does_not_modify_catalog(manager
     tid = initial['templates'][0]['template_id']
     original = await manager_api.handler.get('service_config_template', {'template_id': tid})
     await manager_api.handler.update('service_config_template', {'template_id': tid}, {'pod_concurrency': 999})
-    await manager_api.handler.update('service_config_container', {'container_id': original.main_container_id}, {'image': 'damaged:image'})
+    await manager_api.handler.update(
+        'service_config_container', {'container_id': original.main_container_id}, {'image': 'damaged:image'},
+    )
     preview = await _preview(manager_api)
     assert preview['status'] == 'available'
     chosen = preview['templates'][0]
@@ -243,9 +267,14 @@ async def test_restore_copies_original_containers_and_keeps_existing_records(man
         'priority': 7, 'enabled': True, 'granted_by': 'admin',
         'created_at': utc_now(), 'updated_at': utc_now(),
     })
-    await manager_api.handler.update('service_config_container', {'container_id': original.main_container_id}, {'image': 'custom:image'})
+    await manager_api.handler.update(
+        'service_config_container', {'container_id': original.main_container_id}, {'image': 'custom:image'},
+    )
     preview = await _preview(manager_api)
-    restored = await manager_api.post_json('/service-config-templates/deployment-defaults/restore', _restore_body(preview, template_name='恢复默认', pod_concurrency=50))
+    restored = await manager_api.post_json(
+        '/service-config-templates/deployment-defaults/restore',
+        _restore_body(preview, template_name='恢复默认', pod_concurrency=50),
+    )
     assert restored['template_id'] != tid
     assert restored['main_container_id'] != original.main_container_id
     assert restored['main_container_id'].startswith('restore-')
@@ -268,15 +297,22 @@ async def test_restore_copies_original_containers_and_keeps_existing_records(man
 
 
 @pytest.mark.asyncio
-async def test_restore_after_delete_supports_multiple_source_templates_and_discards_unselected_containers(manager_api, deployed):
+async def test_restore_after_delete_supports_multiple_source_templates_and_discards_unselected_containers(
+    manager_api, deployed,
+):
     payload = config()
     payload['rawdata']['containers'].append({'container_id': 'side', 'image': 'example/side:v1'})
-    payload['rawdata']['templates'].append({**payload['rawdata']['templates'][0], 'template_id': 'second', 'sidecar_container_ids': ['side']})
+    payload['rawdata']['templates'].append({
+        **payload['rawdata']['templates'][0], 'template_id': 'second', 'sidecar_container_ids': ['side'],
+    })
     deployed.write_text(json.dumps(payload))
     preview = await _preview(manager_api)
     assert len(preview['templates']) == 2
     assert len(preview['templates'][1]['containers']) == 2
-    restored = await manager_api.post_json('/service-config-templates/deployment-defaults/restore', _restore_body(preview, 1, sidecar_container_ids=[]))
+    restored = await manager_api.post_json(
+        '/service-config-templates/deployment-defaults/restore',
+        _restore_body(preview, 1, sidecar_container_ids=[]),
+    )
     assert restored['data']['config_sync']['source_template_id'] == 'second'
     assert restored['sidecar_container_ids'] == []
     assert await manager_api.handler.count_records('service_config_template', {}) == 1
@@ -286,11 +322,17 @@ async def test_restore_after_delete_supports_multiple_source_templates_and_disca
 @pytest.mark.asyncio
 async def test_restore_allows_existing_container_selection_without_upsert(manager_api, deployed):
     initialized = await initialize_deployment_defaults(manager_api.handler)
-    row = await manager_api.handler.get('service_config_template', {'template_id': initialized['templates'][0]['template_id']})
-    await manager_api.handler.update('service_config_container', {'container_id': row.main_container_id}, {'image': 'custom:image'})
+    row = await manager_api.handler.get(
+        'service_config_template', {'template_id': initialized['templates'][0]['template_id']},
+    )
+    await manager_api.handler.update(
+        'service_config_container', {'container_id': row.main_container_id}, {'image': 'custom:image'},
+    )
     preview = await _preview(manager_api)
     body = _restore_body(preview, main_container_id=row.main_container_id)
-    body['template']['data']['config_sync']['containers'] = [{'container_id': row.main_container_id, 'image': 'injected:image'}]
+    body['template']['data']['config_sync']['containers'] = [
+        {'container_id': row.main_container_id, 'image': 'injected:image'},
+    ]
     body['template']['data']['config_sync']['scopes'] = [{'scope_id': 'injected'}]
     body['template']['data']['custom'] = {'keep': True}
     restored = await manager_api.post_json('/service-config-templates/deployment-defaults/restore', body)
@@ -305,7 +347,9 @@ async def test_restore_allows_existing_container_selection_without_upsert(manage
 async def test_restore_rejects_changed_source_without_writes(manager_api, deployed):
     preview = await _preview(manager_api)
     deployed.write_text(json.dumps(config('example/agent:v2')))
-    response = await manager_api.http.post('/api/v1/service-config-templates/deployment-defaults/restore', json=_restore_body(preview))
+    response = await manager_api.http.post(
+        '/api/v1/service-config-templates/deployment-defaults/restore', json=_restore_body(preview),
+    )
     assert response.status_code == 409
     assert '重新读取' in response.json()['detail']
     assert await manager_api.handler.count_records('service_config_container', {}) == 0
@@ -345,8 +389,13 @@ async def test_restore_invalid_selection_rolls_back_new_containers(manager_api, 
     assert await manager_api.handler.count_records('service_config_container', {}) == 0
     assert await manager_api.handler.count_records('service_config_template', {}) == 0
     chosen = preview['templates'][0]['template']['main_container_id']
-    for changes in [dict(main_container_id=''), dict(sidecar_container_ids=[chosen]), dict(main_container_id='default-preview-invalid')]:
-        response = await manager_api.http.post('/api/v1/service-config-templates/deployment-defaults/restore', json=_restore_body(preview, **changes))
+    for changes in [
+        dict(main_container_id=''), dict(sidecar_container_ids=[chosen]),
+        dict(main_container_id='default-preview-invalid'),
+    ]:
+        response = await manager_api.http.post(
+            '/api/v1/service-config-templates/deployment-defaults/restore', json=_restore_body(preview, **changes),
+        )
         assert response.status_code == 400
     assert await manager_api.handler.count_records('service_config_container', {}) == 0
 
@@ -356,7 +405,9 @@ async def test_preview_unconfigured_and_missing_source_restore_are_explicit(mana
     preview = await _preview(manager_api)
     deployed.unlink()
     assert (await _preview(manager_api))['status'] == 'not_found'
-    response = await manager_api.http.post('/api/v1/service-config-templates/deployment-defaults/restore', json=_restore_body(preview))
+    response = await manager_api.http.post(
+        '/api/v1/service-config-templates/deployment-defaults/restore', json=_restore_body(preview),
+    )
     assert response.status_code == 400
     monkeypatch.delenv('AGENTSERVER_JSON_PATH')
     assert (await _preview(manager_api))['status'] == 'unconfigured'
@@ -369,12 +420,15 @@ async def test_preview_and_restore_require_admin(manager_api, deployed):
     from manager_server.routers.auth_guards import require_admin
 
     preview = await _preview(manager_api)
+
     async def deny():
         raise HTTPException(status_code=403, detail='admin required')
     manager_api.app.dependency_overrides[require_admin] = deny
     response = await manager_api.http.get('/api/v1/service-config-templates/deployment-defaults/preview')
     assert response.status_code == 403
-    response = await manager_api.http.post('/api/v1/service-config-templates/deployment-defaults/restore', json=_restore_body(preview))
+    response = await manager_api.http.post(
+        '/api/v1/service-config-templates/deployment-defaults/restore', json=_restore_body(preview),
+    )
     assert response.status_code == 403
     assert await manager_api.handler.count_records('service_config_container', {}) == 0
 
@@ -393,9 +447,33 @@ def _container_restore_body(preview, index=0, **changes):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["container", "runtime"])
+async def test_restore_missing_readback_raises_explicit_error(manager_api, deployed, monkeypatch, kind):
+    if kind == "container":
+        preview = await _container_preview(manager_api)
+        request = ContainerDeploymentDefaultsRestoreBody(**_container_restore_body(preview))
+        service = ServiceConfigContainerService
+        restore = restore_default_container
+    else:
+        preview = await _preview(manager_api)
+        request = DeploymentDefaultsRestoreBody(**_restore_body(preview))
+        service = ServiceConfigTemplateService
+        restore = restore_deployment_defaults
+    readback = AsyncMock(return_value=None)
+    monkeypatch.setattr(service, "get", readback)
+    with pytest.raises(RuntimeError, match=f"restored {kind} template could not be read back"):
+        await restore(manager_api.handler, request)
+    readback.assert_awaited_once()
+    assert await manager_api.handler.count_records('service_config_container', {}) == 1
+    assert await manager_api.handler.count_records('service_config_template', {}) == (kind == "runtime")
+
+
+@pytest.mark.asyncio
 async def test_container_preview_is_readonly_and_recovers_original_after_edit_or_delete(manager_api, deployed):
     initialized = await initialize_deployment_defaults(manager_api.handler)
-    runtime = await manager_api.handler.get('service_config_template', {'template_id': initialized['templates'][0]['template_id']})
+    runtime = await manager_api.handler.get(
+        'service_config_template', {'template_id': initialized['templates'][0]['template_id']},
+    )
     cid = runtime.main_container_id
     await manager_api.handler.update('service_config_container', {'container_id': cid}, {'image': 'damaged:image'})
     preview = await _container_preview(manager_api)
@@ -429,12 +507,21 @@ async def test_container_restore_preserves_full_configuration_and_existing_bindi
     initialized = await initialize_deployment_defaults(manager_api.handler)
     tid = initialized['templates'][0]['template_id']
     original = await manager_api.handler.get('service_config_template', {'template_id': tid})
-    await manager_api.handler.update('service_config_container', {'container_id': original.main_container_id}, {'image': 'custom:image'})
+    await manager_api.handler.update(
+        'service_config_container', {'container_id': original.main_container_id}, {'image': 'custom:image'},
+    )
     preview = await _container_preview(manager_api)
-    restored = await manager_api.post_json('/container-templates/deployment-defaults/restore', _container_restore_body(preview, template_name='restored copy'))
+    restored = await manager_api.post_json(
+        '/container-templates/deployment-defaults/restore',
+        _container_restore_body(preview, template_name='restored copy'),
+    )
     assert restored['template_name'] == 'restored copy'
     assert restored['container_id'] != original.main_container_id
-    for db_key, wire_key in [('env', 'env'), ('env_from', 'envFrom'), ('command', 'command'), ('args', 'args'), ('resources', 'resources'), ('security_context', 'securityContext'), ('readiness_probe', 'readinessProbe'), ('volume_mounts', 'volumeMounts')]:
+    for db_key, wire_key in [
+        ('env', 'env'), ('env_from', 'envFrom'), ('command', 'command'), ('args', 'args'),
+        ('resources', 'resources'), ('security_context', 'securityContext'),
+        ('readiness_probe', 'readinessProbe'), ('volume_mounts', 'volumeMounts'),
+    ]:
         assert restored[db_key] == wire[wire_key]
     assert restored['data']['extension'] == {'keep': True}
     assert restored['data']['deployment_default']['source_container_id'] == 'c-agent'
@@ -449,12 +536,20 @@ async def test_container_restore_preserves_full_configuration_and_existing_bindi
 @pytest.mark.asyncio
 async def test_container_restore_supports_multiple_defaults_and_explicit_empty_fields(manager_api, deployed):
     payload = config()
-    payload['rawdata']['containers'].append({'container_id': 'sandbox', 'name': 'sandbox', 'image': 'example/sandbox:v1', 'args': ['--start'], 'resources': {'limits': {'cpu': '2'}}})
+    payload['rawdata']['containers'].append({
+        'container_id': 'sandbox', 'name': 'sandbox', 'image': 'example/sandbox:v1',
+        'args': ['--start'], 'resources': {'limits': {'cpu': '2'}},
+    })
     deployed.write_text(json.dumps(payload))
     preview = await _container_preview(manager_api)
     assert len(preview['templates']) == 2
-    request = _container_restore_body(preview, 1, description='', args=[], resources={}, readiness_probe=None, enabled=False)
-    request['template']['data'].update(deployment_default={'source_container_id': 'forged'}, config_sync={'containers': [{'container_id': 'injected'}], 'scopes': [{'scope_id': 'default'}]})
+    request = _container_restore_body(
+        preview, 1, description='', args=[], resources={}, readiness_probe=None, enabled=False,
+    )
+    request['template']['data'].update(
+        deployment_default={'source_container_id': 'forged'},
+        config_sync={'containers': [{'container_id': 'injected'}], 'scopes': [{'scope_id': 'default'}]},
+    )
     restored = await manager_api.post_json('/container-templates/deployment-defaults/restore', request)
     assert restored['image'] == 'example/sandbox:v1'
     assert restored['description'] == ''
@@ -510,12 +605,15 @@ async def test_container_preview_and_restore_require_admin(manager_api, deployed
     from manager_server.routers.auth_guards import require_admin
 
     preview = await _container_preview(manager_api)
+
     async def deny():
         raise HTTPException(status_code=403, detail='admin required')
     manager_api.app.dependency_overrides[require_admin] = deny
     response = await manager_api.http.get('/api/v1/container-templates/deployment-defaults/preview')
     assert response.status_code == 403
-    response = await manager_api.http.post('/api/v1/container-templates/deployment-defaults/restore', json=_container_restore_body(preview))
+    response = await manager_api.http.post(
+        '/api/v1/container-templates/deployment-defaults/restore', json=_container_restore_body(preview),
+    )
     assert response.status_code == 403
     assert await manager_api.handler.count_records('service_config_container', {}) == 0
 

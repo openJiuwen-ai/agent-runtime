@@ -72,12 +72,11 @@ async def test_expert_package_published_with_agent_and_exported_as_dependency(
     assert row["template_id"] == expert_id
     extras = workbook["90_ExtraFields"]
     extra_headers = [str(cell.value or "") for cell in extras[1]]
-    exported_fields = {
-        row["field_path"]: row["value"]
-        for cells in list(extras.rows)[1:]
-        if (row := dict(zip(extra_headers, [cell.value for cell in cells])))["object_type"]
-        == "expert_package_template" and row["object_id"] == expert_id
-    }
+    exported_fields = {}
+    for cells in list(extras.rows)[1:]:
+        row = dict(zip(extra_headers, [cell.value for cell in cells]))
+        if row["object_type"] == "expert_package_template" and row["object_id"] == expert_id:
+            exported_fields[row["field_path"]] = row["value"]
     assert exported_fields == {
         f"packages[{index}].{key}": value
         for index, package in enumerate(expert_body["packages"])
@@ -89,11 +88,10 @@ async def test_expert_package_published_with_agent_and_exported_as_dependency(
         f"/expert-package-templates/{expert_id}",
         {"packages": updated_packages, "expected_revision": expert["revision"]},
     )
-    updates = [
-        body for instance_id, method, path, body in h.gateway_sim.calls
-        if instance_id == jid and method == "PATCH"
-        and path == f"/api/v1/expert-package-templates/{expert_id}"
-    ]
+    updates = []
+    for instance_id, method, path, body in h.gateway_sim.calls:
+        if instance_id == jid and method == "PATCH" and path == f"/api/v1/expert-package-templates/{expert_id}":
+            updates.append(body)
     assert updates[-1]["packages"] == updated_packages
 
     deleted = await h.http.delete(h.templates_url(f"/expert-package-templates/{expert_id}"))

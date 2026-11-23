@@ -1090,9 +1090,17 @@ async def discover_agentserver_config():
     for path in candidates:
         try:
             if path.is_file():
-                return ResponseModel(code=200, message="success", data={"found": True, "source": str(path), "config": json.loads(path.read_text(encoding="utf-8"))})
+                return ResponseModel(
+                    code=200,
+                    message="success",
+                    data={"found": True, "source": str(path), "config": json.loads(path.read_text(encoding="utf-8"))},
+                )
         except (OSError, json.JSONDecodeError) as exc:
-            return ResponseModel(code=200, message="config_error", data={"found": False, "source": str(path), "error": str(exc)})
+            return ResponseModel(
+                code=200,
+                message="config_error",
+                data={"found": False, "source": str(path), "error": str(exc)},
+            )
     return ResponseModel(code=200, message="not_found", data={"found": False, "configured": bool(candidates)})
 
 

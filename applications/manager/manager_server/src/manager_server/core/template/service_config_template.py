@@ -180,7 +180,7 @@ class ServiceConfigTemplateService:
         self._handler = handler
 
     @staticmethod
-    def _build_row_for_create(
+    def build_row_for_create(
         body: ServiceConfigTemplateCreateBody, *, template_id: str, data: dict[str, Any] | None
     ) -> dict[str, Any]:
         return {
@@ -217,7 +217,7 @@ class ServiceConfigTemplateService:
             await upsert_wire_containers(self._handler, wires)
         await _assert_bound_containers_exist(self._handler, body)
         template_uuid = new_uuid4()
-        row = self._build_row_for_create(body, template_id=template_uuid, data=data)
+        row = self.build_row_for_create(body, template_id=template_uuid, data=data)
         now = utc_now()
         payload = dict(row)
         payload.setdefault("created_at", now)
