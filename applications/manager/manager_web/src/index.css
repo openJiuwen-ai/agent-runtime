@@ -2000,3 +2000,43 @@ button, input, textarea, select { font: inherit; color: inherit; }
     --shell-topbar-height: 60px;
   }
 }
+
+/* Manager workspace: task-oriented navigation and operational overview. */
+.manager-workspace .nav { width: 224px; }
+.manager-nav { padding: 20px 12px; gap: 20px; overflow-y: auto; }
+.manager-nav-group h2 { margin: 0 12px 8px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .08em; }
+.manager-nav .nav-item { min-height: 36px; border-radius: 7px; font-size: 13px; gap: 10px; }
+.nav-marker { width: 5px; height: 5px; border: 1px solid currentColor; border-radius: 2px; opacity: .65; }
+.manager-nav .active .nav-marker { background: currentColor; }
+.manager-nav-note { margin-top: auto; padding: 16px 12px 4px; color: var(--muted); font-size: 11px; }
+.manager-workspace .content { min-width: 0; }
+.manager-workspace .card { box-shadow: none; border-radius: 10px; }
+.manager-workspace .page-title { font-size: 24px; font-weight: 650; }
+.manager-workspace .table th:last-child, .manager-workspace .table td:last-child { position:sticky; right:0; background:var(--card); z-index:2; }
+.manager-workspace .table th:last-child { z-index:21; }
+.manager-workspace .tabs-bar { justify-content:flex-start; border-radius:8px; }
+.manager-workspace .table { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--card); }
+.manager-workspace .table thead th { padding: 12px 16px; color: var(--muted); background: var(--panel-strong); font-size: 11px; font-weight: 650; letter-spacing: .03em; text-transform: none; }
+.manager-workspace .table tbody td { padding: 15px 16px; background: var(--card); }
+.manager-workspace .table tbody tr + tr td { border-top: 1px solid var(--border); }
+.manager-workspace .table tbody tr:hover td { background: var(--bg-hover); }
+.manager-workspace .table-wrap { overflow-x: auto; border-radius: 10px; }
+.manager-workspace .card:has(> .overflow-x-auto), .manager-workspace .card:has(> .table-wrap) { box-shadow: var(--shadow-sm), inset 0 1px 0 var(--card-highlight); }
+.workspace-note { display: flex; align-items: center; gap: 14px; padding: 14px 18px; border-color: var(--border-accent); background: linear-gradient(100deg, var(--accent-subtle), transparent 72%); }
+.workspace-note__icon { display: grid; width: 32px; height: 32px; flex: 0 0 32px; place-items: center; border: 1px solid var(--border-accent); border-radius: 9px; color: var(--accent); background: var(--card); font-size: 18px; }
+.workspace-note strong { color: var(--text-strong); font-size: 13px; }
+.workspace-note p { margin-top: 3px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+@media(max-width: 700px) { .workspace-note { align-items: flex-start; } }
+/* Keep list workspaces useful with only a few rows; row heights stay natural. */
+.manager-workspace .manager-page-table {
+  display: flex;
+  flex-direction: column;
+  flex: 1 0 auto;
+  min-height: clamp(320px, calc(100dvh - 440px), 900px);
+  min-width: 0;
+  background: var(--card);
+}
+.manager-page-table > :is(.overflow-x-auto, .table-wrap) { flex: 1 0 auto; min-width: 0; }
+.manager-workspace .manager-page-table .table,
+.manager-workspace .manager-page-table > .table { border: 0; flex-shrink: 0; }
+.manager-workspace .manager-page-table > .overview-empty { flex: 1; }

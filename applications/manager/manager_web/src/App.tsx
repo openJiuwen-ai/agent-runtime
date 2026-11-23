@@ -286,7 +286,7 @@ function RouteView() {
 function Shell() {
   const { t } = useTranslation();
   return (
-    <div className="shell">
+    <div className="shell manager-workspace">
       <header className="topbar">
         <div className="brand">
           <img src="/logo.svg" alt={getProductName()} className="brand-logo-img" />
@@ -318,7 +318,6 @@ function Shell() {
       <Sidebar />
       <main className="content">
         <RouteView />
-        <div className="ai-disclaimer">{t('footer.aiNotice')}</div>
       </main>
       <Toaster />
     </div>

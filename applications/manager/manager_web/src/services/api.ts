@@ -291,6 +291,7 @@ function idpHttp<T>(path: string, opts: RequestOptions = {}): Promise<T> {
 
 export const SystemApi = {
   health: () => http<{ status: string }>('/health'),
+  developmentMode: () => http<{ offline: boolean }>('/dev-mode'),
   managerWsStatus: () => http<ManagerWsStatus>('/manager-ws/status'),
 };
 
