@@ -11,7 +11,11 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
-from manager_server.core.approval.service import ApprovalService, WORKSPACE_QUOTA_EXPAND
+from manager_server.core.approval.service import (
+    ApprovalService,
+    SKILL_UPLOAD,
+    WORKSPACE_QUOTA_EXPAND,
+)
 from manager_server.infrastructure.db import get_db_handler
 from manager_server.routers.auth_guards import get_current_user
 
@@ -42,7 +46,7 @@ def _order_row(**overrides):
     row = {
         "order_num": "apr_01",
         "business_type": WORKSPACE_QUOTA_EXPAND,
-        "title": "工作区扩容",
+        "title": "Workspace expansion",
         "status": "pending",
         "applicant_id": "u_app",
         "approver_id": None,
@@ -171,7 +175,7 @@ async def test_list_orders_todo_filters_by_search():
                 order_num="apr_alpha",
                 applicant_id="u_app",
                 approver_id="u_admin",
-                title="工作区扩容",
+                title="Workspace expansion",
                 reason="磁盘告急",
             ),
             _order_row(
@@ -210,12 +214,22 @@ async def test_list_mine_filters_by_search():
     handler = AsyncMock()
     handler.list_records = AsyncMock(
         return_value=[
-            _order_row(order_num="apr_01", title="工作区扩容", reason="项目交付产出较多"),
+            _order_row(order_num="apr_01", title="Workspace expansion", reason="项目交付产出较多"),
             _order_row(
                 order_num="apr_02",
+                # 非扩容/技能类型，避免标题别名干扰单号与原因搜索断言。
+                business_type="other",
                 title="另一单",
                 reason="磁盘告急",
                 created_at=datetime(2026, 3, 18, 10, 0, 0, tzinfo=UTC),
+            ),
+            _order_row(
+                order_num="apr_03",
+                business_type=SKILL_UPLOAD,
+                title="Upload skill foo-skill",
+                reason="需要新工具",
+                apply_data={"skill_name": "foo-skill", "digest": "d1"},
+                created_at=datetime(2026, 3, 19, 10, 0, 0, tzinfo=UTC),
             ),
         ]
     )
@@ -225,11 +239,17 @@ async def test_list_mine_filters_by_search():
         patch(_LOOKUP, new_callable=AsyncMock, return_value={}),
     ):
         by_order = await svc.list_mine(applicant_id="u_app", search="APR_02")
-        by_title = await svc.list_mine(applicant_id="u_app", search="工作区")
+        by_title = await svc.list_mine(applicant_id="u_app", search="Workspace")
+        by_zh_workspace = await svc.list_mine(applicant_id="u_app", search="工作区")
+        by_zh_skill = await svc.list_mine(applicant_id="u_app", search="上传技能")
+        by_skill_name = await svc.list_mine(applicant_id="u_app", search="foo-skill")
         by_reason = await svc.list_mine(applicant_id="u_app", search="磁盘")
         miss = await svc.list_mine(applicant_id="u_app", search="不存在的关键字")
     assert [item["order_num"] for item in by_order] == ["apr_02"]
     assert [item["order_num"] for item in by_title] == ["apr_01"]
+    assert [item["order_num"] for item in by_zh_workspace] == ["apr_01"]
+    assert [item["order_num"] for item in by_zh_skill] == ["apr_03"]
+    assert [item["order_num"] for item in by_skill_name] == ["apr_03"]
     assert [item["order_num"] for item in by_reason] == ["apr_02"]
     assert miss == []
 
@@ -412,7 +432,7 @@ async def test_list_mine_includes_current_approvers_when_pending():
         items = await svc.list_mine(applicant_id="u_app")
     assert len(items) == 1
     assert items[0]["business_type"] == WORKSPACE_QUOTA_EXPAND
-    assert items[0]["title"] == "工作区扩容"
+    assert items[0]["title"] == "Workspace expansion"
     assert items[0]["apply_data"]["requested_limit_bytes"] == 20_000
     assert items[0]["latest_reject_comment"] == ""
     assert items[0]["current_approvers"] == [
@@ -509,7 +529,7 @@ async def test_http_submit_and_mine_routes(monkeypatch):
                 {
                     "order_num": "apr_01",
                     "business_type": WORKSPACE_QUOTA_EXPAND,
-                    "title": "工作区扩容",
+                    "title": "Workspace expansion",
                     "status": "pending",
                     "reason": "需要扩容",
                     "apply_data": {"requested_limit_bytes": 20000},

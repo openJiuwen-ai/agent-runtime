@@ -372,7 +372,7 @@ async def test_find_active_survives_more_than_limit_installed_history(
             {
                 "cluster_id": "cluster_a",
                 "order_num": f"apr_history_{index:03d}",
-                "title": "上传技能 history-skill",
+                "title": "Upload skill history-skill",
                 "applicant_id": "u_app",
                 "bot_id": "bot1",
                 "status": "approved",
