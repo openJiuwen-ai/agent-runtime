@@ -110,6 +110,8 @@ render_manager_files() {
     render_config_template "${CONFIG["MANAGER_WEB_TEMPLATE_FILE"]}" "${manager_web_file}" "DEPLOY_VARS"
     enable_dev_mode_if_needed "${manager_web_file}" manager-web
     add_resource_if_set "MANAGER_WEB" "${manager_web_file}"
+    render_manager_runtime_defaults "${CONFIG[MANAGER_SERVER_FILE]}" "${CONFIG[AS_JSON_FILE]}" "${DEPLOY_VARS[NAMESPACE]}" \
+        || error "Manager 默认运行时模板交付失败"
     success "Manager module is rendered."
 }
 
