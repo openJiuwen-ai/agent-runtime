@@ -943,6 +943,14 @@ class ServiceConfigContainerUpdateBody(SafeTextMixin):
     data: dict[str, Any] | None = None
 
 
+class ContainerDeploymentDefaultsRestoreBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
+    source_container_id: str = Field(min_length=1, max_length=512)
+    template: ServiceConfigContainerCreateBody
+
+
 class ServiceConfigContainerListQuery(BaseModel):
     page: int = Field(1, ge=1)
     page_size: int = Field(20, ge=1, le=200)
@@ -1006,6 +1014,14 @@ class ServiceConfigTemplateCreateBody(SafeTextMixin):
     session_ttl: int = Field(default=60, ge=1, le=_SERVICE_INT_MAX)
     enabled: bool = True
     data: dict[str, Any] | None = None
+
+
+class DeploymentDefaultsRestoreBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
+    source_template_id: str = Field(min_length=1, max_length=512)
+    template: ServiceConfigTemplateCreateBody
 
 
 class ServiceConfigTemplateUpdateBody(SafeTextMixin):
