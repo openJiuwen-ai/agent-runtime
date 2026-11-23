@@ -112,7 +112,7 @@ Return to the **repository root**, then run:
 
 ```bash
 cd ..
-bash scripts/run-server.sh
+bash scripts/deploy_dev_server.sh
 ```
 
 **Windows (PowerShell)**

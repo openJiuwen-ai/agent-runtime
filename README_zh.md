@@ -109,7 +109,8 @@ cp .env.example .env
 Linux / macOS:
 
 ```bash
-bash scripts/run-server.sh
+cd ..
+bash scripts/deploy_dev_server.sh
 ```
 
 Windows（PowerShell）:
