@@ -20,12 +20,15 @@ import { bumpGuideRevision } from '../../stores/guideStore';
 import { formatTime, truncate } from '../../utils/format';
 import { templateInUseMessage } from '../../utils/templateInUse';
 import { useRouter } from '../../router';
+import { runtimeCatalogPath, runtimeClusterReturnPath } from '../../utils/runtimeResourceNavigation';
 import {
   downloadJson,
   exportFilename,
   exportTemplateRawdata,
   parseConfigSyncImport,
 } from '../../utils/serviceConfigExport';
+import { WorkspaceNote } from '../../components/WorkspaceNote';
+import './ServiceConfigTemplatesPage.css';
 
 type ServiceConfigTemplateSortField =
   | 'template_name'
@@ -44,8 +47,13 @@ export function ServiceConfigTemplatesPage({
   autoNew?: boolean;
   autoEditId?: string;
 }) {
-  const { t } = useTranslation();
-  const { navigate } = useRouter();
+  const { t, i18n } = useTranslation();
+  const tr = (cn: string, en: string) => i18n.language.startsWith('zh') ? cn : en;
+  const { params, navigate } = useRouter();
+  const catalogPath = runtimeCatalogPath('service-config-templates', params);
+  const clusterReturnPath = runtimeClusterReturnPath(params);
+  const preparedRuntime = params.get('preparedRuntime');
+  const preparedReturnPath = preparedRuntime ? runtimeClusterReturnPath(params, preparedRuntime) : null;
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const { searchInput, setSearchInput, searchQuery } = useListSearch();
@@ -97,12 +105,14 @@ export function ServiceConfigTemplatesPage({
   const importInputRef = useRef<HTMLInputElement>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<ServiceConfigTemplate | null>(null);
-  const [autoHandled, setAutoHandled] = useState(false);
+  const handledAutoAction = useRef('');
 
   /** 经由 /new 或 /:templateId 进入时自动打开弹窗；关闭后回到列表 URL */
   useEffect(() => {
-    if (autoHandled) return;
-    setAutoHandled(true);
+    const action = autoNew ? 'new' : autoEditId || '';
+    if (!action) { handledAutoAction.current = ''; return; }
+    if (handledAutoAction.current === action) return;
+    handledAutoAction.current = action;
     if (autoNew) {
       setEditing(null);
       setModalOpen(true);
@@ -121,14 +131,30 @@ export function ServiceConfigTemplatesPage({
               detail: e instanceof ApiError ? e.detail : (e as Error).message,
             }),
           );
-          navigate('/service-config-templates');
+          navigate(catalogPath, { replace: true });
         });
     }
-  }, [autoNew, autoEditId, autoHandled, navigate, t]);
+  }, [autoNew, autoEditId, navigate, t, catalogPath]);
 
   const closeAndBack = () => {
     setModalOpen(false);
-    if (autoNew || autoEditId) navigate('/service-config-templates');
+    if (autoNew || autoEditId) navigate(catalogPath, { replace: true });
+  };
+
+  const recordPreparedRuntime = (saved: ServiceConfigTemplate) => {
+    const context = new URLSearchParams(params);
+    if (clusterReturnPath && saved.enabled) context.set('preparedRuntime', saved.template_id);
+    else if (context.get('preparedRuntime') === saved.template_id) context.delete('preparedRuntime');
+    if (clusterReturnPath || autoNew || autoEditId) {
+      navigate(runtimeCatalogPath('service-config-templates', context), { replace: true });
+    }
+  };
+
+  const clearPreparedRuntime = (id: string) => {
+    if (params.get('preparedRuntime') !== id) return;
+    const context = new URLSearchParams(params);
+    context.delete('preparedRuntime');
+    navigate(runtimeCatalogPath('service-config-templates', context), { replace: true });
   };
 
   useEffect(() => {
@@ -156,7 +182,8 @@ export function ServiceConfigTemplatesPage({
 
   const importParsedConfig = async (parsed: unknown) => {
     const { body, templateCount } = parseConfigSyncImport(parsed);
-    await ServiceConfigTemplateApi.create(body);
+    const saved = await ServiceConfigTemplateApi.create(body);
+    recordPreparedRuntime(saved);
     toast(
       'success',
       templateCount > 1
@@ -240,6 +267,8 @@ export function ServiceConfigTemplatesPage({
     setTogglingId(row.template_id);
     try {
       await ServiceConfigTemplateApi.update(row.template_id, { enabled });
+      bumpGuideRevision();
+      if (!enabled) clearPreparedRuntime(row.template_id);
       if (enabledFilter !== '' && enabled !== (enabledFilter === 'true')) {
         setItems((list) => list.filter((item) => item.template_id !== row.template_id));
       }
@@ -258,8 +287,17 @@ export function ServiceConfigTemplatesPage({
   return (
     <>
       <div className="flex min-w-0 flex-col gap-4">
-        <div className="page-header w-full min-w-0 flex-wrap items-start gap-y-3">
-          <div className="min-w-[7.5rem] max-w-[20rem] shrink-0 sm:max-w-[32rem]">
+        {clusterReturnPath && (
+          <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+            <span className="text-muted">正在为当前集群准备运行时模板。保存模板后，还需要返回集群添加运行资源绑定。</span>
+            <div className="flex flex-wrap gap-2">
+              <button className="btn sm" onClick={() => navigate(clusterReturnPath)}>← 返回集群运行资源</button>
+              {preparedReturnPath && <button className="btn sm primary" onClick={() => navigate(preparedReturnPath)}>绑定刚保存的运行时模板 →</button>}
+            </div>
+          </div>
+        )}
+        <div className="page-header runtime-catalog-header w-full min-w-0 flex-wrap items-start gap-y-3">
+          <div className="runtime-catalog-header__identity">
             <div className="page-title truncate" title={t('serviceConfigTemplate.title')}>
               {t('serviceConfigTemplate.title')}
             </div>
@@ -267,53 +305,52 @@ export function ServiceConfigTemplatesPage({
               {t('serviceConfigTemplate.subtitle')}
             </div>
           </div>
-          <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
-          <ListSearchInput
-            value={searchInput}
-            onChange={setSearchInput}
-            placeholder={t('serviceConfigTemplate.searchPlaceholder')}
-            className="basis-full sm:basis-auto"
-          />
-          <button className="btn sm" onClick={() => void reload()}>
-            {t('common.refresh')}
-          </button>
-          <input
-            ref={importInputRef}
-            type="file"
-            accept="application/json,.json"
-            className="hidden"
-            onChange={handleImportFile}
-          />
-          <button
-            className="btn sm"
-            disabled={importing}
-            title={t('containerTemplate.importRuntimeAndContainerHint')}
-            onClick={() => importInputRef.current?.click()}
-          >
-            {importing ? t('common.loading') : t('serviceConfigTemplate.import')}
-          </button>
-          <button
-            className="btn sm"
-            disabled={importing}
-            title={t('serviceConfigTemplate.importDefaultHint')}
-            onClick={handleImportDefault}
-          >
-            {importing ? t('common.loading') : t('serviceConfigTemplate.importDefault')}
-          </button>
-          <button
-            className="btn primary sm"
-            onClick={() => {
-              setEditing(null);
-              setModalOpen(true);
-            }}
-          >
-            + {t('serviceConfigTemplate.new')}
-          </button>
+          <div className="runtime-catalog-header__toolbar">
+            <ListSearchInput
+              value={searchInput}
+              onChange={setSearchInput}
+              placeholder={t('serviceConfigTemplate.searchPlaceholder')}
+              className="runtime-catalog-header__search"
+            />
+            <button className="btn sm" onClick={() => void reload()}>
+              {t('common.refresh')}
+            </button>
+            <input
+              ref={importInputRef}
+              type="file"
+              accept="application/json,.json"
+              className="hidden"
+              onChange={handleImportFile}
+            />
+            <button
+              className="btn sm"
+              disabled={importing}
+              title={t('containerTemplate.importRuntimeAndContainerHint')}
+              onClick={() => importInputRef.current?.click()}
+            >
+              {importing ? t('common.loading') : t('serviceConfigTemplate.import')}
+            </button>
+            <button
+              className="btn sm"
+              disabled={importing}
+              title={t('serviceConfigTemplate.importDefaultHint')}
+              onClick={handleImportDefault}
+            >
+              {importing ? t('common.loading') : t('serviceConfigTemplate.importDefault')}
+            </button>
+            <button
+              className="btn primary sm"
+              onClick={() => {
+                setEditing(null);
+                setModalOpen(true);
+              }}
+            >
+              + {t('serviceConfigTemplate.new')}
+            </button>
+          </div>
         </div>
-      </div>
-
       <div className="flex w-full min-w-0 shrink-0 flex-col gap-4">
-      <div className="card !p-0">
+      <div className="card manager-page-table !p-0">
         {loading ? (
           <div className="p-4 text-sm text-muted">{t('common.loading')}</div>
         ) : error ? (
@@ -376,7 +413,10 @@ export function ServiceConfigTemplatesPage({
               ) : items.map((row) => (
                 <tr key={row.template_id}>
                   <td className="align-top">
-                    <div className="text-text-strong font-medium break-words">{row.template_name}</div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-text-strong font-medium break-words">{row.template_name}</span>
+                      {!!row.data?.deployment_default && <span className="tag shrink-0">{tr('默认', 'Default')}</span>}
+                    </div>
                     <div className="text-[11px] text-muted mono break-all" title={row.template_id}>
                       {row.template_id}
                     </div>
@@ -401,6 +441,16 @@ export function ServiceConfigTemplatesPage({
                   <td className="mono text-[11px] text-muted whitespace-nowrap">{formatTime(row.updated_at)}</td>
                   <td className="whitespace-nowrap min-w-[12rem]">
                     <div className="flex items-center gap-1">
+                      {clusterReturnPath && (
+                        <button
+                          className="btn sm primary"
+                          disabled={!row.enabled}
+                          title={row.enabled ? '返回集群填写绑定范围并保存' : '请先启用此运行规格'}
+                          onClick={() => { const target = runtimeClusterReturnPath(params, row.template_id); if (target) navigate(target); }}
+                        >
+                          绑定到当前集群
+                        </button>
+                      )}
                       <button
                         className="btn sm ghost"
                         onClick={() => {
@@ -437,6 +487,9 @@ export function ServiceConfigTemplatesPage({
           }}
         />
       )}
+      <WorkspaceNote title="模板准备好后，在集群中绑定运行资源" action={<button className="btn sm" onClick={() => navigate(runtimeCatalogPath('container-templates', params))}>管理容器模板 →</button>}>
+        运行时模板引用容器模板，定义运行池与调度方式。绑定到集群后，可按组织、用户或 Agent 设置使用范围。
+      </WorkspaceNote>
       </div>
       </div>
 
@@ -444,11 +497,11 @@ export function ServiceConfigTemplatesPage({
         open={modalOpen}
         template={editing}
         onClose={closeAndBack}
-        onSaved={() => {
+        onSaved={(saved) => {
           setModalOpen(false);
           bumpGuideRevision();
           void reload();
-          if (autoNew || autoEditId) navigate('/service-config-templates');
+          recordPreparedRuntime(saved);
         }}
       />
 
@@ -460,6 +513,7 @@ export function ServiceConfigTemplatesPage({
           if (!delTarget) return;
           try {
             await ServiceConfigTemplateApi.remove(delTarget.template_id);
+            clearPreparedRuntime(delTarget.template_id);
             toast('success', t('success.deleted'));
             void reload();
             bumpGuideRevision();

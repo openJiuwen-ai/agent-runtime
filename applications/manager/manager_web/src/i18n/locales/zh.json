@@ -91,7 +91,7 @@
     "extensionTemplates": "扩展配置",
     "mcpTemplates": "MCP配置",
     "agentManagement": "Agent配置模板",
-    "serviceConfigTemplates": "运行时模板",
+    "serviceConfigTemplates": "运行时模板管理",
     "agentDefinitions": "Agent模板",
     "iam": "身份中心",
     "users": "用户",
@@ -941,8 +941,8 @@
     "deleteConfirm": "确认删除该预置 Skill 模板？该模板可能被多个实例资源引用，请确认无副作用。"
   },
   "serviceConfigTemplate": {
-    "title": "运行时模板",
-    "subtitle": "维护实例池参数和容器运行模板",
+    "title": "运行时模板管理",
+    "subtitle": "由容器模板组装成的可调度、可扩缩的 Agent 运行池方案（Runtime Profile）",
     "new": "新建运行时模板",
     "edit": "编辑运行时模板",
     "backToList": "返回运行时模板列表",
@@ -1053,7 +1053,14 @@
     "importOk": "已导入并创建运行时模板",
     "importOkFirstOfMany": "文件含 {{count}} 个模板，已导入第一个并创建运行时模板",
     "importFailed": "导入失败：{{detail}}",
-    "deleteConfirm": "确认删除该运行时模板？该模板可能被多个实例资源引用，请确认无副作用。"
+    "deleteConfirm": "确认删除该运行时模板？该模板可能被多个实例资源引用，请确认无副作用。",
+    "basicInfo": "基本信息",
+    "containerSetup": "容器配置",
+    "containerSetupHint": "选择主容器，按需添加 Sandbox 等辅助容器。",
+    "selectedContainers": "已选 {{count}} 个",
+    "adjustAsNeeded": "按需调整",
+    "deploymentStorage": "部署与存储",
+    "advancedParameters": "高级参数"
   },
   "policies": {
     "fieldRequired": "请填写{{field}}",
@@ -1492,7 +1499,7 @@
   "templateRefEditor": {},
   "containerTemplate": {
     "title": "容器模板",
-    "subtitle": "维护 AgentServer 与 Sandbox 容器的可复用运行规格，供运行时模板绑定",
+    "subtitle": "管理 Agent 运行时所使用的“软件镜像和容器包装方式”",
     "empty": "暂无容器模板",
     "new": "新建容器模板",
     "edit": "编辑容器模板",
@@ -1688,5 +1695,9 @@
       "success": "已同步到 Gateway",
       "failed": "Gateway 同步失败"
     }
+  },
+  "redesign": {
+    "advancedDeployment": "高级部署设置",
+    "capacityTimeout": "容量与超时"
   }
 }
