@@ -14,6 +14,9 @@ export default defineConfig(() => {
 
   return {
     envDir,
+    // SSR tests create configFile:false servers using Vite's default cache.
+    // Keep the live app's optimized dependencies separate from those servers.
+    cacheDir: path.resolve(__dirname, 'node_modules/.vite-manager-dev'),
     plugins: [react()],
     resolve: {
       alias: {
