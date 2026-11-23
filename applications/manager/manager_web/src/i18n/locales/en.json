@@ -85,7 +85,7 @@
     "modelTemplates": "Models",
     "embeddingTemplates": "Embedding Models",
     "skillWhitelistTemplates": "Preset Skills",
-    "expertPackages": "Expert packages",
+    "expertPackages": "Experts & packages",
     "safetyGuardrails": "Safety Guardrails",
     "a2aManagement": "A2A Management",
     "extensionTemplates": "Extension Config",
@@ -121,8 +121,8 @@
     "clusterAlerts": "Clusters have unconfigured items"
   },
   "safetyGuardrails": {
-    "title": "Safety Guardrails",
-    "subtitle": "Configure Agent safety guardrail policies",
+    "title": "Tool safety policies",
+    "subtitle": "Configure restrictions and reference them in the Agent.",
     "empty": "No safety guardrails yet",
     "new": "New Safety Guardrail",
     "edit": "Edit Safety Guardrail",
@@ -755,7 +755,7 @@
   },
   "modelTemplate": {
     "title": "Models",
-    "subtitle": "Maintain large language model templates",
+    "subtitle": "Create or inspect the model for this Agent.",
     "new": "New Model",
     "edit": "Edit Model",
     "templateName": "Template Name",
@@ -790,8 +790,8 @@
     "deleteConfirm": "Delete this model template? It may be referenced by instance resources."
   },
   "embeddingTemplate": {
-    "title": "Embedding Models",
-    "subtitle": "Maintain embedding model templates",
+    "title": "Embedding models",
+    "subtitle": "Configure embeddings when using knowledge bases or vector search.",
     "new": "New Embedding Model",
     "edit": "Edit Embedding Model",
     "templateName": "Template Name",
@@ -815,7 +815,7 @@
     "deleteConfirm": "Delete this embedding template? It may be referenced by instance resources."
   },
   "mcpTemplate": {
-    "title": "MCP Config",
+    "title": "MCP services",
     "subtitle": "Manage remote MCP servers that Agent config templates can reference",
     "new": "New MCP Config",
     "edit": "Edit MCP Config",
@@ -846,8 +846,8 @@
     "customConfigReserved": "Custom configuration cannot contain base fields: {{fields}}"
   },
   "extensionTemplate": {
-    "title": "Extension Config",
-    "subtitle": "Maintain extension config templates callable on Agent, with support for custom hook functions",
+    "title": "Extensions",
+    "subtitle": "Add advanced runtime or integration extensions when needed.",
     "new": "New Extension Config",
     "edit": "Edit Extension Config",
     "templateName": "Template Name",
@@ -877,7 +877,7 @@
     "deleteConfirm": "Delete this extension template?"
   },
   "expertPackageTemplate": {
-    "title": "Expert packages",
+    "title": "Experts & packages",
     "subtitle": "Bundle Hub packages into one template, then select it on an Agent config template",
     "new": "New expert package",
     "edit": "Edit expert package",
@@ -902,8 +902,8 @@
     "conflictStale": "This expert package was changed elsewhere. Reopen it, then save again."
   },
   "skillWhitelistTemplate": {
-    "title": "Preset Skills",
-    "subtitle": "Maintain preset Skill templates (SPI Provider or controlled URL)",
+    "title": "Prebuilt skill sources",
+    "subtitle": "Add skills for your use case.",
     "new": "New Preset Skill",
     "edit": "Edit Preset Skill",
     "templateName": "Template Name",
@@ -1355,7 +1355,25 @@
     "agentTags": "Tags",
     "templateRef": "Template references",
     "templateRefHint": "Config templates referenced by this Agent; unconfigured slots fall back to policy defaults.",
-    "roleManager": "Management role"
+    "roleManager": "Management role",
+    "usersEyebrow": "Access & authorization / Users",
+    "usersBannerTitle": "Prepare identities before deciding who can enter a cluster",
+    "usersBannerText": "Users are the “who” in an authorization relationship. Maintain login identities and status here; cluster access and Agent usage are configured in the cluster workspace.",
+    "usersDirectory": "User directory",
+    "usersDirectoryHint": "Maintain login identities, status, and authorization relationships",
+    "usersTotal": "Directory users",
+    "usersActive": "Enabled on this page",
+    "usersIdentity": "Identity sources",
+    "usersIdentityHint": "Local and enterprise identities are shown together",
+    "orgsEyebrow": "Access & authorization / Organizations",
+    "orgsBannerTitle": "Use organizations to manage access in groups",
+    "orgsBannerText": "Organizations group users into a manageable business scope. Maintain membership here, then configure cluster access and Agent usage in the cluster workspace.",
+    "orgsDirectory": "Organization directory",
+    "orgsDirectoryHint": "Maintain organizations, membership, and enabled state",
+    "orgsTotal": "Total organizations",
+    "orgsActive": "Enabled on this page",
+    "orgsMembers": "Membership",
+    "orgsMembersHint": "Membership is maintained in organization details"
   },
   "auth": {
     "loginTitle": "{{productName}} Manager Login",
@@ -1603,7 +1621,17 @@
     "scopes": {
       "admin": "admin",
       "user": "user"
-    }
+    },
+    "eyebrow": "Access & authorization / Roles",
+    "bannerTitle": "Roles decide what someone can do",
+    "bannerText": "Roles combine permission points into reusable responsibilities. Define roles and permissions here, then assign them to users; cluster access is completed in the cluster workspace.",
+    "directory": "Role directory",
+    "directoryHint": "Review role type, permission scope, and user assignments",
+    "total": "Total roles",
+    "enabled": "Enabled on this page",
+    "assigneesSummary": "Assigned users",
+    "systemSummary": "System roles",
+    "systemSummaryHint": "Built-in roles cannot have their permissions edited"
   },
   "approvals": {
     "title": "Approval Center",
@@ -1703,5 +1731,9 @@
     "connected": "Components connected",
     "inspect": "Inspect connectivity",
     "inspectInstance": "Inspect instance"
+  },
+  "a2aManagement": {
+    "title": "A2A management",
+    "subtitle": "Configure A2A when Agents need to collaborate."
   }
 }

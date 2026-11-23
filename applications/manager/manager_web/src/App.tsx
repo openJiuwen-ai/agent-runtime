@@ -27,7 +27,6 @@ import { EmbeddingTemplatesPage } from './pages/templates/EmbeddingTemplatesPage
 import { ExtensionTemplatesPage } from './pages/templates/ExtensionTemplatesPage';
 import { McpTemplatesPage } from './pages/templates/McpTemplatesPage';
 import { SkillPrebuiltTemplatesPage } from './pages/templates/SkillPrebuiltTemplatesPage';
-import { ExpertPackageTemplatesPage } from './pages/templates/ExpertPackageTemplatesPage';
 import { ContainerTemplatesPage } from './pages/templates/ContainerTemplatesPage';
 import { ServiceConfigTemplatesPage } from './pages/templates/ServiceConfigTemplatesPage';
 import { AgentDefinitionsPage } from './pages/templates/AgentDefinitionsPage';
@@ -48,6 +47,9 @@ import { ApprovalPage } from './pages/approval/ApprovalPage';
 import { ApprovalEditPage } from './pages/approval/ApprovalEditPage';
 import { ApprovalSkillPreviewPage } from './pages/approval/ApprovalSkillPreviewPage';
 import { A2AManagementPage } from './pages/templates/A2AManagementPage';
+import { ResourceWorkspaceFrame } from './components/ResourceWorkspaceFrame';
+import { WorkspaceNote } from './components/WorkspaceNote';
+import { ExpertPackageTemplatesPage } from './pages/templates/ExpertPackageTemplatesPage';
 import { getProductName } from './utils/env';
 import {
   ApiError,
@@ -102,6 +104,14 @@ function RouteView() {
   const { user } = useAuth();
   const platformAdmin = isPlatformAdmin(user);
 
+  // AuthorizationPage is retained for future use; old bookmarks return to an available page.
+  if (path === '/authorization') {
+    if (!platformAdmin && !hasPermission(user, 'iam:role:read')) {
+      return <div className="card text-sm text-muted">{t('auth.noPagePermission')}</div>;
+    }
+    return <Navigate to={platformAdmin ? '/manager/overview' : '/manager/roles'} replace />;
+  }
+
   if (!platformAdmin) {
     const approvalUiEnabled = isApprovalEnabled(user);
     if (path === '/approvals' && approvalUiEnabled && hasPermission(user, 'approval:read')) {
@@ -133,11 +143,11 @@ function RouteView() {
   const legacyAgentPath = canonicalAgentPath(path);
   if (legacyAgentPath) return <Navigate to={`/manager${legacyAgentPath}${params.size ? `?${params}` : ''}`} replace />;
   if (path === '/agent-templates') return <AgentWorkspacePage />;
+  if (path === '/configuration-wizard') return <ConfigurationWizardPage />;
   const connect = matchRoute('/agent-templates/:id/connect', path);
   if (connect) return <AgentConnectPage key={connect.id} id={connect.id} />;
   const agentDetail = matchRoute('/agent-templates/:id', path);
   if (agentDetail) return <AgentDetailPage key={agentDetail.id} id={agentDetail.id} />;
-  if (path === '/configuration-wizard') return <ConfigurationWizardPage />;
   if (path === '/overview' || path === '/') {
     return <OverviewPage />;
   }
@@ -145,31 +155,34 @@ function RouteView() {
     return <InstanceListPage />;
   }
   if (path === '/model-templates') {
-    return <ModelTemplatesPage />;
+    return <ResourceWorkspaceFrame><ModelTemplatesPage /></ResourceWorkspaceFrame>;
   }
   if (path === '/embedding-templates') {
-    return <EmbeddingTemplatesPage />;
+    return <ResourceWorkspaceFrame><EmbeddingTemplatesPage /></ResourceWorkspaceFrame>;
   }
   if (path === '/extension-config-templates') {
-    return <ExtensionTemplatesPage />;
+    return <ResourceWorkspaceFrame><ExtensionTemplatesPage /></ResourceWorkspaceFrame>;
   }
   if (path === '/mcp-templates') {
-    return <McpTemplatesPage />;
+    return <ResourceWorkspaceFrame><McpTemplatesPage /></ResourceWorkspaceFrame>;
   }
   if (path === '/skill-prebuilt-templates') {
-    return <SkillPrebuiltTemplatesPage />;
-  }
-  if (path === '/expert-package-templates') {
-    return <ExpertPackageTemplatesPage />;
+    return <ResourceWorkspaceFrame><SkillPrebuiltTemplatesPage /></ResourceWorkspaceFrame>;
   }
   if (path === '/container-templates') {
     return <ContainerTemplatesPage />;
   }
   if (path === '/safety-guardrails') {
-    return <SafetyGuardrailsPage />;
+    return <ResourceWorkspaceFrame><SafetyGuardrailsPage /></ResourceWorkspaceFrame>;
   }
   if (path === '/a2a-management') {
-    return <A2AManagementPage />;
+    return <ResourceWorkspaceFrame><A2AManagementPage /></ResourceWorkspaceFrame>;
+  }
+  if (path === '/expert-packages') {
+    return <Navigate to={`/manager/expert-package-templates${params.size ? `?${params}` : ''}`} replace />;
+  }
+  if (path === '/expert-package-templates') {
+    return <ResourceWorkspaceFrame><ExpertPackageTemplatesPage /></ResourceWorkspaceFrame>;
   }
   if (path === '/service-config-templates') {
     return <ServiceConfigTemplatesPage />;
@@ -193,21 +206,21 @@ function RouteView() {
     return <OrgsPage />;
   }
   if (path === '/orgs/new') {
-    return <OrgsEditPage />;
+    return <><OrgsEditPage /><WorkspaceNote title="组织用于管理成员范围">先保存组织基本信息，再在成员页维护用户归属；集群准入仍需回到具体集群配置。</WorkspaceNote></>;
   }
   const orgEdit = matchRoute('/orgs/:groupId', path);
   if (orgEdit) {
-    return <OrgsEditPage groupId={orgEdit.groupId} />;
+    return <><OrgsEditPage groupId={orgEdit.groupId} /><WorkspaceNote title="组织用于管理成员范围">先保存组织基本信息，再在成员页维护用户归属；集群准入仍需回到具体集群配置。</WorkspaceNote></>;
   }
   if (path === '/roles') {
     return <RolesPage />;
   }
   if (path === '/roles/new') {
-    return <RolesEditPage />;
+    return <><RolesEditPage /><WorkspaceNote title="角色用于管理访问权限">角色保存后可分配给用户；它与集群准入是两层关系，具体集群仍需单独配置。</WorkspaceNote></>;
   }
   const roleEdit = matchRoute('/roles/:roleId', path);
   if (roleEdit) {
-    return <RolesEditPage roleId={roleEdit.roleId} />;
+    return <><RolesEditPage roleId={roleEdit.roleId} /><WorkspaceNote title="角色用于管理访问权限">角色保存后可分配给用户；它与集群准入是两层关系，具体集群仍需单独配置。</WorkspaceNote></>;
   }
   if (path === '/approvals') {
     if (!isApprovalEnabled(user)) {

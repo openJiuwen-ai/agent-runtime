@@ -13,10 +13,14 @@ import { toast } from '../../stores/uiStore';
 import { formatTime, truncate } from '../../utils/format';
 import { useRouter } from '../../router';
 import { ResourceExportButton, ResourceImportButton } from '../../components/ResourceImportExport';
+import { agentResourceReferencesPath } from '../../utils/agentTemplateNavigation';
+import { expertResourceReturnPath } from '../../utils/expertResourceNavigation';
 
 export function ExpertPackageTemplatesPage() {
-  const { t } = useTranslation();
-  const { navigate } = useRouter();
+  const { t, i18n } = useTranslation();
+  const { navigate, params } = useRouter();
+  const returnPath = expertResourceReturnPath(params.get('returnTo'));
+  const zh = i18n.language.startsWith('zh');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const { searchInput, setSearchInput, searchQuery } = useListSearch();
@@ -74,6 +78,11 @@ export function ExpertPackageTemplatesPage() {
   return (
     <>
       <div className="flex min-w-0 flex-col gap-4">
+        {returnPath && <div><button type="button" className="btn" onClick={() => navigate(returnPath)}>
+          {returnPath.startsWith('/instances/')
+            ? (zh ? '← 返回来源集群的 Agent绑定' : '← Back to source cluster Agent bindings')
+            : (zh ? '← 返回 Agent模板' : '← Back to Agent template')}
+        </button></div>}
         <div className="page-header w-full min-w-0 flex-wrap items-start gap-y-3">
           <div className="min-w-[7.5rem] max-w-[20rem] shrink-0 sm:max-w-[32rem]">
             <div className="page-title truncate" title={t('expertPackageTemplate.title')}>
@@ -161,7 +170,7 @@ export function ExpertPackageTemplatesPage() {
                             <span
                               className="tag cursor-pointer"
                               title={t('expertPackageTemplate.referenceHint')}
-                              onClick={() => navigate('/agent-templates')}
+                              onClick={() => navigate(agentResourceReferencesPath('expert-package', row.template_id, row.template_name))}
                             >
                               {row.reference_count}
                             </span>
