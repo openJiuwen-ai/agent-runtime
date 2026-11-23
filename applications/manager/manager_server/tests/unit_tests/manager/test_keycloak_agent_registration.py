@@ -12,6 +12,9 @@ import pytest
 from fastapi import HTTPException
 
 from manager_server.core.template import agent_template, push_template_to_gateway as push
+from manager_server.core.agent_definition import keycloak_client as clients
+from manager_server.core.agent_definition.service import AgentDefinitionService
+from manager_server.infrastructure.utils import new_uuid4, utc_now
 from manager_server.infrastructure.config import Settings
 from manager_server.schemas.template_schemas import AGENT_TEMPLATE_OPERATION_KEY
 from manager_server.integrations.keycloak.agent_clients import (
@@ -35,6 +38,8 @@ PATH = "/api/v1/integrations/keycloak/agent-client-registrations"
 
 class KeycloakSimulator:
     def __init__(self):
+        self.expected_client_id = CLIENT_ID
+        self.queried_client_ids = []
         self.client = None
         self.mappers = []
         self.created = 0
@@ -60,7 +65,8 @@ class KeycloakSimulator:
         assert request.headers["Authorization"] == "Bearer admin-token"
         if path.endswith("/clients"):
             if method == "GET":
-                assert request.url.params["clientId"] == CLIENT_ID
+                self.queried_client_ids.append(request.url.params["clientId"])
+                assert request.url.params["clientId"] == self.expected_client_id
                 if self.created and self.lookup_failure == "http":
                     return httpx.Response(503)
                 if self.created and self.lookup_failure == "invalid_json":
@@ -70,6 +76,7 @@ class KeycloakSimulator:
                 return httpx.Response(200, json=[self.client] if self.client else [])
             self.created += 1
             body = json.loads(request.content)
+            assert body["clientId"] == self.expected_client_id
             assert body["publicClient"] is False and body["serviceAccountsEnabled"] is True
             assert body["standardFlowEnabled"] is False
             self.client = {**body, "id": "internal-client-uuid"}
@@ -146,6 +153,7 @@ async def test_registration_retry_reuses_client_and_secret(keycloak_service):
     second = await service.register(TEMPLATE_ID, CLIENT_ID, "Renamed Agent")
     assert first == second
     assert first["client_secret"] == "generated-secret"
+    assert simulator.queried_client_ids[0] == CLIENT_ID
     assert simulator.created == 1 and len(simulator.mappers) == 1 and simulator.probes == 2
     assert simulator.mappers[0]["config"]["included.custom.audience"] == "tools-gateway"
 
@@ -207,6 +215,9 @@ async def test_feature_off_and_invalid_configuration_do_not_break_manager(manage
     monkeypatch.setattr(routes.settings, "agent_client_registration_config_file", str(tmp_path / "missing.json"))
     response = await manager_api.http.get(f"{PATH}/capabilities")
     assert response.json() == {"enabled": False, "configured": False}
+    for method in ("GET", "POST", "DELETE"):
+        response = await manager_api.http.request(method, f"/api/v1/agent-definitions/{TEMPLATE_ID}/keycloak-client")
+        assert response.status_code == 404
     response = await manager_api.http.post(
         f"/api/v1/agent-templates/{TEMPLATE_ID}/keycloak-client", json={"client_id": CLIENT_ID},
     )
@@ -221,7 +232,7 @@ async def test_feature_off_and_invalid_configuration_do_not_break_manager(manage
 def enabled_registration(monkeypatch, keycloak_service):
     service, simulator = keycloak_service
     monkeypatch.setattr(routes.settings, "agent_client_registration_enabled", True)
-    monkeypatch.setattr(agent_template, "load_registration_service", lambda _: service)
+    monkeypatch.setattr(clients, "load_registration_service", lambda _: service)
     return service, simulator
 
 
@@ -240,150 +251,167 @@ async def _create_template(http, **fields):
     return f"/api/v1/agent-templates/{template_id}", template_id
 
 
+async def _create_agent(manager_api, *, data=None):
+    path, config_id = await _create_template(manager_api.http, data=data)
+    runtime_id = new_uuid4()
+    now = utc_now()
+    await manager_api.handler.create("service_config_template", {
+        "template_id": runtime_id, "template_name": "Runtime", "enabled": True,
+        "created_at": now, "updated_at": now,
+    })
+    row = await AgentDefinitionService(manager_api.handler).create(config_id, runtime_id, "Agent")
+    return "/api/v1/agent-definitions/" + row["agent_id"], row, path
+
+
 @pytest.mark.asyncio
-async def test_registration_save_preserves_json_and_protects_bound_client(
+async def test_binding_uses_agent_id_keeps_config_and_dispatches_secret_privately(
     manager_api, monkeypatch, enabled_registration,
 ):
     _, simulator = enabled_registration
     _reference_gateway(monkeypatch)
     http = manager_api.http
-    entries = [{"client_id": "manual-id"}, {"timeout": 30}]
-    original_data = {"custom_config": entries, "extra": {"preserve": True}}
-    path, template_id = await _create_template(http, data=original_data)
-    responses = await asyncio.gather(*(
-        http.post(f"{path}/keycloak-client", json={"client_id": CLIENT_ID}) for _ in range(2)
-    ))
-    for response in responses:
-        assert response.status_code == 200
-        assert response.headers["Cache-Control"] == "no-store"
-        assert response.json()["data"] == {"client_id": CLIENT_ID, "status": "bound"}
-    assert simulator.created == 1 and simulator.probes == 1
-    credentials = {"client_id": CLIENT_ID, "client_secret": "generated-secret"}
-    expected_data = {**original_data, "custom_config": [credentials, *entries]}
-    assert manager_api.gateway_sim.calls == [("gateway-1", "PATCH", path, {"data": expected_data})]
-
-    await push.upsert_agent_template_on_gateway(manager_api.handler, "gateway-1", template_id)
-    _, method, gateway_path, payload = manager_api.gateway_sim.calls[-1]
-    assert method == "POST" and gateway_path == "/api/v1/agent-templates"
-    assert payload["data"] == expected_data and "keycloak_client" not in payload
-
-    response = await http.get(path)
+    original = {"custom_config": [{"client_id": "unrelated-partial"}, {"timeout": 30}], "extra": True}
+    path, agent, config_path = await _create_agent(manager_api, data=original)
+    simulator.expected_client_id = agent["agent_id"]
+    endpoint = path + "/keycloak-client"
+    response = await http.post(endpoint)
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["client_id"] == agent["agent_id"]
+    assert response.json()["data"]["status"] == "bound"
     assert "generated-secret" not in response.text
-    assert response.json()["data"]["data"] == original_data
-    updated = await http.patch(path, json={"data": {"custom_config": [{"timeout": 60}]}})
+    assert simulator.client["attributes"]["jiuwen.agent_id"] == agent["agent_id"]
+    assert simulator.queried_client_ids[0] == agent["agent_id"]
+    assert (await http.post(endpoint)).status_code == 200
+    assert simulator.created == 1 and simulator.probes == 1
+    assert (await http.get(config_path)).json()["data"]["data"] == original
+    assert (await http.post(config_path + "/keycloak-client")).status_code == 404
+    assert "generated-secret" not in (await http.get("/api/v1/agent-definitions/")).text
+    payload = manager_api.gateway_sim.calls[-1][3]["data"]
+    assert payload["custom_config"] == original["custom_config"]
+    assert payload["managed_agent_clients"][agent["agent_id"]]["client_secret"] == "generated-secret"
+    assert "_jiuwen_template_operation" not in payload
+    updated = await http.patch(config_path, json={"data": {"custom_config": [{"timeout": 60}]}})
     assert updated.status_code == 200
-    assert updated.json()["data"]["keycloak_client"]["client_id"] == CLIENT_ID
-    assert updated.json()["data"]["data"] == {"custom_config": [{"timeout": 60}]}
-    assert manager_api.gateway_sim.calls[-1][3]["data"]["custom_config"] == [credentials, {"timeout": 60}]
-    for key in ("keycloak_client", AGENT_TEMPLATE_OPERATION_KEY):
-        rejected = await http.patch(path, json={"data": {key: {}}})
-        assert rejected.status_code == 422
+    assert manager_api.gateway_sim.calls[-1][3]["data"]["managed_agent_clients"] == payload["managed_agent_clients"]
+    await push.upsert_agent_template_on_gateway(manager_api.handler, "gateway-1", agent["agent_config_template_id"])
+    assert manager_api.gateway_sim.calls[-1][3]["data"]["managed_agent_clients"] == payload["managed_agent_clients"]
+    assert (await http.delete(endpoint)).json()["data"]["status"] == "unbound"
+    assert simulator.deleted == 1
+    assert manager_api.gateway_sim.calls[-1][3]["data"]["managed_agent_clients"] == {}
+    assert (await http.post(endpoint)).status_code == 200
+    assert simulator.created == 2
     assert (await http.delete(path)).status_code == 200
-    assert simulator.deleted == 1 and (await http.get(path)).status_code == 404
+    assert simulator.deleted == 2
+    assert (await http.get(endpoint)).status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_registration_conflicts_report_the_reason_and_preserve_manual_credentials(
-    manager_api, enabled_registration,
-):
-    _, simulator = enabled_registration
-    http = manager_api.http
-    entries = [{"client_id": "manual-client", "client_secret": "manual-secret"}]
-    path, _ = await _create_template(http, data={"custom_config": entries})
-    body = {"client_id": CLIENT_ID}
-
-    rejected = await http.post(f"{path}/keycloak-client", json=body)
-    assert rejected.status_code == 409
-    assert rejected.json()["detail"]["code"] == "manual_credentials_present"
-    assert "save" in rejected.json()["detail"]["message"]
-    assert (await http.get(path)).json()["data"]["data"]["custom_config"] == entries
-    assert simulator.created == 0
-
-    assert (await http.patch(path, json={"data": {"custom_config": []}})).status_code == 200
-    assert (await http.post(f"{path}/keycloak-client", json=body)).status_code == 200
-    rejected = await http.post(f"{path}/keycloak-client", json={"client_id": "other-client"})
-    assert rejected.status_code == 409
-    assert rejected.json()["detail"]["code"] == "template_already_bound"
-
-    other, _ = await _create_template(http)
-    rejected = await http.post(f"{other}/keycloak-client", json=body)
-    assert rejected.status_code == 409
-    assert rejected.json()["detail"]["code"] == "client_id_in_use"
-    assert simulator.created == 1 and simulator.deleted == 0
-
-
-@pytest.mark.asyncio
-async def test_slow_gateway_does_not_hold_sqlite_write_lock_or_allow_same_template_changes(
+async def test_custom_json_is_independent_and_registration_failure_is_retryable(
     manager_api, monkeypatch, enabled_registration,
 ):
     _reference_gateway(monkeypatch)
-    gateway_waiting, gateway_resume = asyncio.Event(), asyncio.Event()
-
-    async def slow_gateway(*args, **kwargs):
-        gateway_waiting.set()
-        await gateway_resume.wait()
-        return await manager_api.gateway_sim.gateway_request(*args, **kwargs)
-
-    monkeypatch.setattr(push, "gateway_request", slow_gateway)
+    _, simulator = enabled_registration
     http = manager_api.http
-    path, _ = await _create_template(http)
-    registration = asyncio.create_task(http.post(f"{path}/keycloak-client", json={"client_id": CLIENT_ID}))
+    original = {"custom_config": [{"client_id": "ordinary", "client_secret": "keep", "timeout": 30}]}
+    path, agent, config_path = await _create_agent(manager_api, data=original)
+    simulator.expected_client_id = agent["agent_id"]
+    endpoint = path + "/keycloak-client"
+    simulator.mapper_failure = True
+    assert (await http.post(endpoint)).status_code == 502
+    status = (await http.get(endpoint)).json()["data"]
+    assert status["status"] == "unbound" and status["operation"] is None and status["error"]
+    simulator.mapper_failure = False
+    assert (await http.post(endpoint)).status_code == 200
+    assert (await http.get(endpoint)).json()["data"]["error"] is None
+    assert simulator.client["clientId"] == agent["agent_id"]
+    assert (await http.get(config_path)).json()["data"]["data"] == original
+    payload = manager_api.gateway_sim.calls[-1][3]["data"]
+    assert payload["custom_config"] == original["custom_config"]
+    assert payload["managed_agent_clients"][agent["agent_id"]]["client_secret"] == "generated-secret"
+    assert (await http.delete(endpoint)).status_code == 200
+    assert (await http.get(config_path)).json()["data"]["data"] == original
+
+
+@pytest.mark.asyncio
+async def test_unregistration_failure_preserves_binding_and_delete_retry(manager_api, monkeypatch, enabled_registration):
+    service, simulator = enabled_registration
+    path, agent, _ = await _create_agent(manager_api)
+    simulator.expected_client_id = agent["agent_id"]
+    endpoint = path + "/keycloak-client"
+    assert (await manager_api.http.post(endpoint)).status_code == 200
+    delete = service.delete
+
+    async def fail(*args):
+        raise RegistrationError("Keycloak unavailable")
+
+    monkeypatch.setattr(service, "delete", fail)
+    assert (await manager_api.http.delete(endpoint)).status_code == 502
+    status = (await manager_api.http.get(endpoint)).json()["data"]
+    assert status["status"] == "bound" and status["error"]["action"] == "delete"
+    assert (await manager_api.http.delete(path)).status_code == 502
+    monkeypatch.setattr(service, "delete", delete)
+    assert (await manager_api.http.delete(path)).status_code == 200
+    assert simulator.deleted == 1
+
+
+@pytest.mark.asyncio
+async def test_slow_gateway_releases_database_transaction_and_serializes_binding(manager_api, monkeypatch, enabled_registration):
+    _, simulator = enabled_registration
+    _reference_gateway(monkeypatch)
+    path, agent, config_path = await _create_agent(manager_api)
+    simulator.expected_client_id = agent["agent_id"]
+    entered, release = asyncio.Event(), asyncio.Event()
+    original_push = push._update_template_on_gateway
+
+    async def slow(*args):
+        entered.set()
+        await release.wait()
+        return await original_push(*args)
+
+    monkeypatch.setattr(push, "_update_template_on_gateway", slow)
+    task = asyncio.create_task(manager_api.http.post(path + "/keycloak-client"))
     try:
-        await asyncio.wait_for(gateway_waiting.wait(), timeout=2)
-        # The other caller has a separate process-local lock registry.
-        monkeypatch.setattr(agent_template, "_template_mutation_locks", WeakValueDictionary())
-        assert (await asyncio.wait_for(_create_template(http), timeout=2))[0] != path
-        current = await http.get(path)
-        assert current.json()["data"]["data"] is None and AGENT_TEMPLATE_OPERATION_KEY not in current.text
-        for method, url, kwargs in (
-            ("PATCH", path, {"json": {"template_name": "Concurrent"}}),
-            ("DELETE", path, {}),
-            ("POST", f"{path}/keycloak-client", {"json": {"client_id": CLIENT_ID}}),
-        ):
-            rejected = await http.request(method, url, **kwargs)
-            assert rejected.status_code == 409
-            assert rejected.json()["detail"]["code"] == "template_busy"
+        await asyncio.wait_for(entered.wait(), 5)
+        response = await manager_api.http.get(path + "/keycloak-client")
+        assert response.json()["data"]["operation"] == "register"
+        assert response.json()["data"]["status"] == "unbound"
+        assert (await manager_api.http.post(path + "/keycloak-client")).status_code == 409
+        assert (await manager_api.http.delete(path)).status_code == 409
+        assert (await manager_api.http.patch(config_path, json={"description": "busy"})).status_code == 409
+        # An unrelated SQLite writer is not held behind network I/O.
+        await asyncio.wait_for(_create_template(manager_api.http, template_name="Other"), 2)
     finally:
-        gateway_resume.set()
-        result = await asyncio.wait_for(registration, timeout=5)
-    assert result.status_code == 200
+        release.set()
+        await task
+    assert task.result().status_code == 200
 
 
 @pytest.mark.asyncio
-async def test_gateway_failure_rolls_back_registration_and_allows_retry(
-    manager_api, monkeypatch, enabled_registration,
-):
+async def test_gateway_failure_compensates_and_allows_retry(manager_api, monkeypatch, enabled_registration):
     _, simulator = enabled_registration
     _reference_gateway(monkeypatch)
-    original = manager_api.gateway_sim.gateway_request
-    http = manager_api.http
-    path, template_id = await _create_template(http, data={"custom_config": [{"timeout": 30}]})
+    path, agent, _ = await _create_agent(manager_api)
+    simulator.expected_client_id = agent["agent_id"]
+    original_push = push._update_template_on_gateway
 
-    async def fail_distribution(jid, method, url, payload, **kwargs):
-        if payload["data"]["custom_config"][0].get("client_secret"):
-            raise ValueError("Gateway rejected credential value generated-secret")
-        return await original(jid, method, url, payload, **kwargs)
+    async def fail(*args):
+        raise RuntimeError("upstream failed")
 
-    monkeypatch.setattr(push, "gateway_request", fail_distribution)
-    response = await http.post(f"{path}/keycloak-client", json={"client_id": CLIENT_ID})
-    assert response.status_code == 502 and "generated-secret" not in response.text
-    assert simulator.deleted == 1 and simulator.client is None
-    assert manager_api.gateway_sim.calls[-1][3] == {"data": {"custom_config": [{"timeout": 30}]}}
-    row = await manager_api.handler.get("agent_template", {"template_id": template_id})
-    assert row.data == {"custom_config": [{"timeout": 30}]}
-
-    monkeypatch.setattr(push, "gateway_request", original)
-    assert (await http.post(f"{path}/keycloak-client", json={"client_id": CLIENT_ID})).status_code == 200
+    monkeypatch.setattr(push, "_update_template_on_gateway", fail)
+    response = await manager_api.http.post(path + "/keycloak-client")
+    assert response.status_code == 502
+    assert simulator.deleted == 1
+    assert (await manager_api.http.get(path + "/keycloak-client")).json()["data"]["status"] == "unbound"
+    monkeypatch.setattr(push, "_update_template_on_gateway", original_push)
+    assert (await manager_api.http.post(path + "/keycloak-client")).status_code == 200
 
 
 @pytest.mark.asyncio
 async def test_registration_requires_platform_admin(manager_api, monkeypatch):
-    def deny():
-        raise HTTPException(status_code=403, detail="admin required")
+    async def deny():
+        raise HTTPException(status_code=403)
     manager_api.app.dependency_overrides[require_admin] = deny
-    response = await manager_api.http.post(
-        f"/api/v1/agent-templates/{TEMPLATE_ID}/keycloak-client", json={"client_id": CLIENT_ID},
-    )
+    response = await manager_api.http.post(f"/api/v1/agent-definitions/{TEMPLATE_ID}/keycloak-client")
     assert response.status_code == 403
 
 
@@ -448,3 +476,133 @@ def test_configuration_and_ca_changes_invalidate_cached_service(monkeypatch, tmp
     assert changed is not rotated
     assert changed.config.agent_token_audience == "new-audience"
     assert len(contexts) == 3
+
+
+@pytest.mark.asyncio
+async def test_existing_database_adds_definition_data_without_reset(manager_api):
+    from sqlalchemy import text
+    from manager_server.models.table_init import _ensure_agent_definition_data_column
+    path, agent, _ = await _create_agent(manager_api)
+    engine = manager_api.handler.get_engine()
+    async with engine.begin() as connection:
+        await connection.execute(text("ALTER TABLE agent_definition DROP COLUMN data"))
+    await _ensure_agent_definition_data_column(manager_api.handler)
+    await _ensure_agent_definition_data_column(manager_api.handler)
+    row = await manager_api.handler.get("agent_definition", {"agent_id": agent["agent_id"]})
+    assert row.agent_name == agent["agent_name"] and row.data is None
+
+
+@pytest.mark.asyncio
+async def test_disabled_feature_keeps_manual_credentials_and_ordinary_deletion(manager_api, monkeypatch):
+    monkeypatch.setattr(routes.settings, "agent_client_registration_enabled", False)
+    original = {"custom_config": [{"client_id": "existing", "client_secret": "existing-secret"}]}
+    path, agent, config_path = await _create_agent(manager_api, data=original)
+    for method in ("GET", "POST", "DELETE"):
+        assert (await manager_api.http.request(method, path + "/keycloak-client")).status_code == 404
+    assert (await manager_api.http.delete(path)).status_code == 200
+    assert (await manager_api.http.get(config_path)).json()["data"]["data"] == original
+    assert (await manager_api.http.delete(config_path)).status_code == 200
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_bound_agent_requires_cleanup_configuration_before_deletion(
+    manager_api, monkeypatch, tmp_path, enabled_registration, enabled,
+):
+    _, simulator = enabled_registration
+    path, agent, _ = await _create_agent(manager_api)
+    simulator.expected_client_id = agent["agent_id"]
+    assert (await manager_api.http.post(path + "/keycloak-client")).status_code == 200
+    monkeypatch.setattr(clients, "load_registration_service", agent_clients.load_registration_service)
+    monkeypatch.setattr(routes.settings, "agent_client_registration_enabled", enabled)
+    monkeypatch.setattr(routes.settings, "agent_client_registration_config_file", str(tmp_path / "missing.json"))
+    response = await manager_api.http.delete(path)
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "bound_client_cleanup_unavailable"
+    assert "Enable and configure" in response.json()["detail"]["message"]
+    row = await manager_api.handler.get("agent_definition", {"agent_id": agent["agent_id"]})
+    assert row.data[clients.BINDING]["client_id"] == agent["agent_id"]
+    assert simulator.deleted == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_unbound_agent_deletion_never_loads_keycloak_configuration(manager_api, monkeypatch, tmp_path, enabled):
+    monkeypatch.setattr(routes.settings, "agent_client_registration_enabled", enabled)
+    monkeypatch.setattr(routes.settings, "agent_client_registration_config_file", str(tmp_path / "missing.json"))
+
+    def unexpected_load(_settings):
+        pytest.fail("Ordinary Agent deletion must not load Keycloak configuration")
+
+    monkeypatch.setattr(clients, "load_registration_service", unexpected_load)
+    path, _, _ = await _create_agent(manager_api)
+    assert (await manager_api.http.delete(path)).status_code == 200
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_reservation_release_failure_preserves_original_error(
+    manager_api, monkeypatch, enabled_registration, cancelled,
+):
+    _, agent, _ = await _create_agent(manager_api)
+    service = clients.AgentClientService(manager_api.handler)
+    keycloak, _ = enabled_registration
+    failure = asyncio.CancelledError("cancelled") if cancelled else RegistrationError("original failure")
+
+    async def fail_registration(*_args):
+        raise failure
+
+    async def fail_release(_operation):
+        raise RuntimeError("database unavailable during release")
+
+    monkeypatch.setattr(service, "_finish", fail_release)
+    monkeypatch.setattr(keycloak, "register", fail_registration)
+    with pytest.raises(type(failure)) as caught:
+        await service.register(agent["agent_id"])
+    assert caught.value is failure
+
+
+@pytest.mark.asyncio
+async def test_reservation_release_failure_without_original_error_is_reported(
+    manager_api, monkeypatch, enabled_registration,
+):
+    path, agent, _ = await _create_agent(manager_api)
+    _, simulator = enabled_registration
+    simulator.expected_client_id = agent["agent_id"]
+    assert (await manager_api.http.post(path + "/keycloak-client")).status_code == 200
+    service = clients.AgentClientService(manager_api.handler)
+
+    async def fail_release(_operation):
+        raise RuntimeError("database unavailable during release")
+
+    monkeypatch.setattr(service, "_finish", fail_release)
+    with pytest.raises(RuntimeError, match="database unavailable during release"):
+        await service.register(agent["agent_id"])
+
+
+@pytest.mark.asyncio
+async def test_cancelled_registration_compensates_and_preserves_cancellation(
+    manager_api, monkeypatch, enabled_registration,
+):
+    _, simulator = enabled_registration
+    _, agent, _ = await _create_agent(manager_api)
+    simulator.expected_client_id = agent["agent_id"]
+    service = clients.AgentClientService(manager_api.handler)
+    entered = asyncio.Event()
+
+    async def block_dispatch(_row, binding, **_kwargs):
+        if binding:
+            entered.set()
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr(service, "_dispatch", block_dispatch)
+    task = asyncio.create_task(service.register(agent["agent_id"]))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    row = await manager_api.handler.get("agent_definition", {"agent_id": agent["agent_id"]})
+    assert clients.BINDING not in row.data and clients.OPERATION not in row.data
+    assert simulator.deleted == 1

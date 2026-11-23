@@ -385,6 +385,33 @@ async def _ensure_expert_package_revision_column(handler: DBHandler) -> None:
                 raise
 
 
+async def _ensure_agent_definition_data_column(handler: DBHandler) -> None:
+    """Add nullable binding storage to existing installations without resetting data."""
+    def upgrade(connection):
+        inspector = inspect(connection)
+        table_name = AGENT_DEFINITION_TABLE_DEF.table_name
+        if not inspector.has_table(table_name):
+            return
+        if "data" in {col["name"] for col in inspector.get_columns(table_name)}:
+            return
+        quote = connection.dialect.identifier_preparer.quote
+        connection.execute(text(
+            f"ALTER TABLE {quote(table_name)} ADD COLUMN {quote('data')} JSON"
+        ))
+
+    try:
+        async with handler.get_engine().begin() as connection:
+            await connection.run_sync(upgrade)
+    except DBAPIError:
+        # Another Manager may have performed the same additive upgrade.
+        async with handler.get_engine().begin() as connection:
+            exists = await connection.run_sync(lambda conn: "data" in {
+                col["name"] for col in inspect(conn).get_columns(AGENT_DEFINITION_TABLE_DEF.table_name)
+            })
+        if not exists:
+            raise
+
+
 async def init_all_tables(handler: DBHandler) -> None:
     _ensure_bigint_type_support()
     # 必须在表循环之前补列：init_table 建索引会因缺列失败。
@@ -396,6 +423,7 @@ async def init_all_tables(handler: DBHandler) -> None:
     await _drop_instance_grant_upload_skill_policy(handler)
     await _ensure_user_preference_default_extras_column(handler)
     await _ensure_expert_package_revision_column(handler)
+    await _ensure_agent_definition_data_column(handler)
     from manager_server.core.authz import seed_authz_defaults
 
     await seed_authz_defaults(handler)

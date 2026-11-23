@@ -128,19 +128,19 @@ class KeycloakAgentClients:
         http.headers["Authorization"] = f"Bearer {token}"
 
     @staticmethod
-    def _ownership(template_id: str) -> dict[str, str]:
-        return {"jiuwen.managed_by": MANAGED_BY, "jiuwen.template_id": template_id}
+    def _ownership(agent_id: str) -> dict[str, str]:
+        return {"jiuwen.managed_by": MANAGED_BY, "jiuwen.agent_id": agent_id}
 
-    def _check_owner(self, row: dict, template_id: str, client_id: str) -> None:
+    def _check_owner(self, row: dict, agent_id: str, client_id: str) -> None:
         attributes = row.get("attributes")
         if (
             row.get("clientId") != client_id
             or not isinstance(attributes, dict)
-            or any(attributes.get(key) != value for key, value in self._ownership(template_id).items())
+            or any(attributes.get(key) != value for key, value in self._ownership(agent_id).items())
         ):
             raise RegistrationConflict("Client ID is already in use")
 
-    async def _find(self, http: httpx.AsyncClient, template_id: str, client_id: str) -> dict | None:
+    async def _find(self, http: httpx.AsyncClient, agent_id: str, client_id: str) -> dict | None:
         response = await self._request(
             http, "GET", self._endpoint("clients"), "查询 Agent 客户端",
             params={"clientId": client_id, "search": "false"},
@@ -151,7 +151,7 @@ class KeycloakAgentClients:
             return None
         if len(matches) != 1 or not isinstance(matches[0].get("id"), str) or not matches[0]["id"]:
             raise RegistrationConflict("Client ID is already in use")
-        self._check_owner(matches[0], template_id, client_id)
+        self._check_owner(matches[0], agent_id, client_id)
         return matches[0]
 
     def _created_client_id(self, response: httpx.Response) -> str | None:
@@ -169,11 +169,11 @@ class KeycloakAgentClients:
         return None
 
     async def _rollback_creation(
-        self, http: httpx.AsyncClient, client_uuid: str | None, template_id: str, client_id: str,
+        self, http: httpx.AsyncClient, client_uuid: str | None, agent_id: str, client_id: str,
     ) -> None:
         try:
             if client_uuid is None:
-                row = await self._find(http, template_id, client_id)
+                row = await self._find(http, agent_id, client_id)
                 if row is None:
                     return
                 client_uuid = row["id"]
@@ -182,7 +182,7 @@ class KeycloakAgentClients:
                 "清理未保存的 Agent 客户端", allowed=(404,),
             )
         except RegistrationError:
-            logger.warning("Agent client rollback incomplete: template_id=%s", template_id)
+            logger.warning("Agent client rollback incomplete: agent_id=%s", agent_id)
 
     async def _ensure_audience(self, http: httpx.AsyncClient, row: dict) -> None:
         url = self._endpoint("clients", row["id"], "protocol-mappers", "models")
@@ -208,28 +208,28 @@ class KeycloakAgentClients:
                    and mapper["config"].get("access.token.claim") == "true"
                    for mapper in mappers)
 
-    async def register(self, template_id: str, client_id: str, template_name: str) -> dict:
+    async def register(self, agent_id: str, client_id: str, agent_name: str) -> dict:
         async with self._client() as http:
             await self._authorize(http)
-            row = await self._find(http, template_id, client_id)
+            row = await self._find(http, agent_id, client_id)
             created = False
             created_id = None
             try:
                 if row is None:
                     body = {
-                        "clientId": client_id, "name": template_name,
+                        "clientId": client_id, "name": agent_name,
                         "enabled": True, "protocol": "openid-connect", "publicClient": False,
                         "clientAuthenticatorType": "client-secret", "serviceAccountsEnabled": True,
                         "standardFlowEnabled": False, "implicitFlowEnabled": False,
                         "directAccessGrantsEnabled": False,
-                        "attributes": self._ownership(template_id),
+                        "attributes": self._ownership(agent_id),
                     }
                     response = await self._request(http, "POST", self._endpoint("clients"),
                                                    "创建 Agent 客户端", json=body, allowed=(409,))
                     created = response.status_code == 201
                     if created:
                         created_id = self._created_client_id(response)
-                    row = await self._find(http, template_id, client_id)
+                    row = await self._find(http, agent_id, client_id)
                     if row is None:
                         if response.status_code == 409:
                             raise RegistrationConflict("Client ID is already in use")
@@ -259,12 +259,12 @@ class KeycloakAgentClients:
                 if created:
                     try:
                         async with timeout(30):
-                            await self._rollback_creation(http, created_id, template_id, client_id)
+                            await self._rollback_creation(http, created_id, agent_id, client_id)
                     except TimeoutError:
-                        logger.warning("Agent client rollback timed out: template_id=%s", template_id)
+                        logger.warning("Agent client rollback timed out: agent_id=%s", agent_id)
                 raise
 
-    async def delete(self, template_id: str, binding: dict) -> None:
+    async def delete(self, agent_id: str, binding: dict) -> None:
         if binding["admin_base_url"] != self.config.admin_base_url:
             raise RegistrationError("Keycloak 注册配置与绑定的 Realm 不一致")
         async with self._client() as http:
@@ -274,7 +274,7 @@ class KeycloakAgentClients:
             if response.status_code == 404:
                 return
             self._check_owner(self._json(response, dict, "查询绑定的 Agent 客户端"),
-                              template_id, binding["client_id"])
+                              agent_id, binding["client_id"])
             await self._request(http, "DELETE", url, "删除绑定的 Agent 客户端", allowed=(404,))
 
 

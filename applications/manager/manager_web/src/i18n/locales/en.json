@@ -1405,32 +1405,6 @@
     "chatLoadingSlow": "Taking longer than usual. Please wait…"
   },
   "agentTemplate": {
-    "registration": {
-      "button": "Register Agent client",
-      "pending": "Registering…",
-      "success": "The Agent client is bound to this template.",
-      "failed": "Registration failed. Please retry.",
-      "clientIdConflict": "This Client ID is already in use. Choose another Client ID.",
-      "removeManualCredentials": "To register a managed client, remove the manual credentials from the custom configuration once they are no longer in use, save, and retry.",
-      "alreadyBound": "This template already has a bound client. Refresh to see the binding.",
-      "templateBusy": "This template is being updated. Please retry shortly.",
-      "keycloakFailed": "Keycloak could not complete registration. Please retry.",
-      "alreadyConfigured": "Client credentials already exist and will be preserved.",
-      "showSecret": "Show and edit secret",
-      "hideSecret": "Hide secret",
-      "title": "Keycloak Agent client",
-      "saveAndRegister": "Save and register",
-      "retry": "Retry registration",
-      "saveFailed": "Could not save the template. Please retry.",
-      "bound": "Bound",
-      "unbound": "Unbound",
-      "secretHint": "Enter a Client ID. The system manages the secret.",
-      "saveHint": "The template is saved first. If registration fails, you can retry on the same template.",
-      "savedHint": "The template is saved. Retrying uses this same template.",
-      "unconfigured": "Keycloak registration is unavailable. Contact your administrator.",
-      "boundHint": "Registration is complete and the Client ID is locked.",
-      "deleteConfirm": "Delete template “{{name}}”? A template still referenced by agents cannot be deleted. Deleting also removes the bound Keycloak client “{{clientId}}”."
-    },
     "title": "Agent Config Templates",
     "subtitle": "Maintain reusable Agent config templates for cluster Agent binding",
     "new": "New Agent Config Template",
@@ -1480,7 +1454,30 @@
     "nameTooLong": "Agent Name must be at most 128 characters",
     "nameDuplicated": "This Agent Name is already taken. Choose another one.",
     "copyId": "Copy Agent ID",
-    "copied": "Copied"
+    "copied": "Copied",
+    "keycloak": {
+      "button": "Keycloak",
+      "title": "Keycloak registration",
+      "bound": "Registered",
+      "unbound": "Not registered",
+      "hint": "The current Agent ID is used as the Client ID. The system manages the secret; it is never displayed here.",
+      "register": "Register",
+      "retry": "Retry registration",
+      "remove": "Delete Keycloak registration",
+      "confirmRemove": "Confirm deletion",
+      "registering": "Registering, please wait…",
+      "deleting": "Deleting registration, please wait…",
+      "removeHint": "This Agent will no longer be able to use these credentials to access MCP. The Agent template is kept and can be registered again.",
+      "unconfigured": "Registration configuration is unavailable. Ask an administrator to check the Keycloak settings.",
+      "deleteAgentConfirm": "Delete Agent template “{{name}}” and its Keycloak registration?",
+      "errors": {
+        "client_id_in_use": "This Agent ID is already used by another Keycloak client. Contact an administrator.",
+        "bound_client_cleanup_unavailable": "This Agent still has a Keycloak client. Enable registration and check its configuration file, then retry deletion.",
+        "template_busy": "A related template is being changed. Please retry shortly.",
+        "load_failed": "Could not load registration status. Close this dialog and try again.",
+        "request_failed": "The Keycloak operation failed. Check configuration or connectivity and retry."
+      }
+    }
   },
   "templateInUse": {
     "agentDefinitions": "This template is referenced by {{count}} Agent Template(s). Delete those Agent Templates first.",
