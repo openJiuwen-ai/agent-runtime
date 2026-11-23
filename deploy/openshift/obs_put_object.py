@@ -21,6 +21,19 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+class ObsHttpError(RuntimeError):
+    """带 HTTP 状态码的 OBS 请求失败（避免仅靠错误文案子串判断）。"""
+
+    def __init__(self, method: str, status: int, detail: str = "") -> None:
+        self.method = method
+        self.status = int(status)
+        self.detail = detail
+        msg = f"OBS {method} failed: HTTP {self.status}"
+        if detail:
+            msg = f"{msg} {detail}"
+        super().__init__(msg)
+
+
 def _sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -55,19 +68,22 @@ def _request(
     endpoint: str,
     secure: bool,
     bucket: str,
-    object_key: str,
+    object_key: str = "",
     access_key: str,
     secret_key: str,
     region: str,
     body: bytes = b"",
     content_type: str = "application/octet-stream",
-) -> None:
+) -> int:
     scheme, netloc, _ = _split_endpoint(endpoint, secure)
     key = object_key.lstrip("/")
-    # path-style: http://host/bucket/key
-    canonical_uri = "/" + bucket + "/" + "/".join(
-        urllib.parse.quote(part, safe="-_.~") for part in key.split("/")
-    )
+    # path-style: http://host/bucket[/key...]；建桶 / HeadBucket 时无 object key
+    if key:
+        canonical_uri = "/" + bucket + "/" + "/".join(
+            urllib.parse.quote(part, safe="-_.~") for part in key.split("/")
+        )
+    else:
+        canonical_uri = "/" + urllib.parse.quote(bucket, safe="-_.~")
     url = f"{scheme}://{netloc}{canonical_uri}"
 
     now = dt.datetime.now(dt.timezone.utc)
@@ -78,12 +94,12 @@ def _request(
     content_length = str(len(body))
 
     headers = {
-        "content-type": content_type,
         "host": host,
         "x-amz-content-sha256": payload_hash,
         "x-amz-date": amz_date,
     }
-    if method == "PUT":
+    if method in {"PUT", "POST"}:
+        headers["content-type"] = content_type
         headers["content-length"] = content_length
 
     signed_header_items = sorted(headers.items())
@@ -121,29 +137,87 @@ def _request(
     )
 
     req_headers = {
-        "Content-Type": content_type,
         "Host": host,
         "X-Amz-Content-Sha256": payload_hash,
         "X-Amz-Date": amz_date,
         "Authorization": authorization,
     }
-    if method == "PUT":
+    if method in {"PUT", "POST"}:
+        req_headers["Content-Type"] = content_type
         req_headers["Content-Length"] = content_length
 
-    request = urllib.request.Request(url, data=body if method != "DELETE" else None, method=method)
+    data = body if method not in {"GET", "HEAD", "DELETE"} else None
+    request = urllib.request.Request(url, data=data, method=method)
     for hk, hv in req_headers.items():
         request.add_header(hk, hv)
 
     try:
         with urllib.request.urlopen(request, timeout=60) as resp:
-            status = getattr(resp, "status", 200)
+            status = int(getattr(resp, "status", 200) or 200)
             if status >= 400:
-                raise RuntimeError(f"OBS {method} failed: HTTP {status}")
+                raise ObsHttpError(method, status)
+            return status
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")[:500]
-        raise RuntimeError(f"OBS {method} failed: HTTP {exc.code} {detail}") from exc
+        raise ObsHttpError(method, int(exc.code), detail) from exc
     except urllib.error.URLError as exc:
         raise RuntimeError(f"OBS {method} unreachable: {exc}") from exc
+
+
+def _ensure_bucket(
+    *,
+    endpoint: str,
+    secure: bool,
+    bucket: str,
+    access_key: str,
+    secret_key: str,
+    region: str,
+) -> None:
+    """桶不存在则创建；HeadBucket 无权限时跳过，交由后续对象 PUT 决定成败。"""
+    common = dict(
+        endpoint=endpoint,
+        secure=secure,
+        bucket=bucket,
+        access_key=access_key,
+        secret_key=secret_key,
+        region=region,
+    )
+    try:
+        _request(method="HEAD", object_key="", **common)
+        return
+    except ObsHttpError as exc:
+        # 最小权限 AK 常无 HeadBucket：403 时不阻断，避免桶已存在却上传失败
+        if exc.status in {401, 403}:
+            # 桶可能已存在但 AK 无 HeadBucket：不阻断，交由后续对象 PUT 判定
+            logger.warning(
+                "HeadBucket 鉴权不足，跳过建桶检查: s3://%s (HTTP %s)",
+                bucket,
+                exc.status,
+            )
+            return
+        if exc.status != 404 and "NoSuchBucket" not in exc.detail:
+            raise
+    try:
+        _request(method="PUT", object_key="", body=b"", **common)
+        logger.info("created OBS bucket s3://%s", bucket)
+    except ObsHttpError as exc:
+        # 并发建桶竞态：视为已存在
+        already_exists = (
+            exc.status == 409
+            or "BucketAlreadyOwnedByYou" in exc.detail
+            or "BucketAlreadyExists" in exc.detail
+        )
+        if already_exists:
+            return
+        # 无建桶权限：交由对象 PUT；桶真缺失时 PUT 会再报错
+        if exc.status in {401, 403}:
+            logger.warning(
+                "CreateBucket 鉴权不足，跳过建桶: s3://%s (HTTP %s)",
+                bucket,
+                exc.status,
+            )
+            return
+        raise
 
 
 def main() -> int:
@@ -189,6 +263,14 @@ def main() -> int:
             logger.error("file not found: %s", path)
             return 1
         body = path.read_bytes()
+        _ensure_bucket(
+            endpoint=args.endpoint,
+            secure=secure,
+            bucket=args.bucket,
+            access_key=args.access_key,
+            secret_key=args.secret_key,
+            region=args.region or "default",
+        )
         _request(
             method="PUT",
             endpoint=args.endpoint,
