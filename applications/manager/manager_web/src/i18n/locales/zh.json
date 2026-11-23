@@ -877,7 +877,7 @@
   },
   "expertPackageTemplate": {
     "title": "专家包",
-    "subtitle": "把一组 Hub 包收成一套模板，再在 Agent 配置模板里选择",
+    "subtitle": "把一组专家和专家团收成一套模板，再在 Agent 配置模板里选择",
     "new": "新建专家包",
     "edit": "编辑专家包",
     "templateName": "模板名称",
@@ -888,7 +888,7 @@
       "agent_group": "专家团"
     },
     "catalogEmpty": "Hub 暂时没有可选项",
-    "pickRequired": "请至少选择一个 Hub 包",
+    "pickRequired": "请至少选择一个专家或专家团",
     "selectedCount": "已选 {{count}} 个",
     "packageSummaryLabel": "包含",
     "packageSummary": "专家 {{experts}} 个 · 专家团 {{groups}} 个",

@@ -224,7 +224,6 @@ export function ExpertPackageTemplateModal({ open, template, onClose, onSaved, o
         <LimitedTextInput value={description} onChange={setDescription} maxLength={512} />
       </div>
       <div>
-        <FieldLabel required>{t('expertPackageTemplate.hubPackage')}</FieldLabel>
         {catalogError && !catalogLoading && catalog.length === 0 ? (
           <div className="mb-2 text-sm text-muted">{t('expertPackageTemplate.catalogEmpty')}</div>
         ) : null}
