@@ -61,6 +61,15 @@ resolve_deploy_mode_vars() {
 #   SYS_ADMIN/NET_ADMIN + seccomp/AppArmor Unconfined）
 resolve_sandbox_type_vars() {
   local val="${DEPLOY_VARS["SANDBOX_TYPE"]:-}"
+  # 未设置时按 CLUSTER_TYPE 派生默认值：k8s → jiuwenbox，openshift → off
+  if [ -z "$val" ]; then
+    case "${DEPLOY_VARS["CLUSTER_TYPE"]:-}" in
+      k8s)       val="jiuwenbox" ;;
+      openshift) val="off" ;;
+    esac
+    DEPLOY_VARS["SANDBOX_TYPE"]="$val"
+    info "SANDBOX_TYPE 未设置，按 CLUSTER_TYPE 派生: $val"
+  fi
   case "$val" in
     off|kata) ;;
     jiuwenbox)
@@ -588,7 +597,7 @@ check_vars() {
   check_image_vars
   check_replicas_vars
   resolve_deploy_mode_vars         # 三模式派生：gateway 条件 env + off 单副本校验
-  resolve_sandbox_type_vars        # 沙箱类型枚举校验（off|kata|jiuwenbox，jiuwenbox 仅 k8s）
+  resolve_sandbox_type_vars        # 沙箱类型：未设置按 CLUSTER_TYPE 派生（k8s→jiuwenbox、openshift→off）；显式设置走枚举校验
   check_storage_class_vars
   check_optional_vars
   check_identity_sso_vars          # 企业 SSO 三元组"全空或全配"校验（up + identity 时生效，门禁在函数内）

@@ -184,7 +184,7 @@ declare -A DEPLOY_VARS=(
     ["JIUWENBOX_PORT"]="8321"
     # 禁 EVAL 兼容模式（on 与历史行为一致；客户 Redis 禁用 EVAL 时设 off）
     ["AGENT_RUNTIME_REDIS_LUA"]="off"
-    ["SANDBOX_TYPE"]="off"
+    ["SANDBOX_TYPE"]=""                    # 留空按 CLUSTER_TYPE 派生（k8s→jiuwenbox、openshift→off）
     # 预置 Skill URL / 远程导入下载白名单（逗号分隔）；留空不注入，走 AgentServer 代码默认
     ["IMPORT_LOCAL_ALLOWED_DOWNLOAD_HOSTS"]=""
     ["TEAM_SKILLS_HUB_ALLOWED_DOWNLOAD_HOSTS"]=""
@@ -235,6 +235,7 @@ declare -A DEPLOY_VARS=(
     # Pod 侧代码路径（按镜像内布局，一般无需修改）
     ["SWARM_POD_CODE_PATH"]="/app/jiuwenswarm"
     ["GATEWAY_POD_CODE_PATH"]="/app/agent-gateway"
+    ["GATEWAY_POD_PKG_PATH"]="/usr/local/lib/python3.11/site-packages/agent_gateway"
     ["RUNTIME_POD_CODE_PATH"]="/app/agent-runtime"
     ["RUNTIME_POD_PKG_PATH"]="/usr/local/lib/python3.11/site-packages/openjiuwen_runtime"
     ["CORE_POD_PKG_PATH"]="/usr/local/lib/python3.11/site-packages/openjiuwen"
