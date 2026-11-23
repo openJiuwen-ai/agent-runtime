@@ -45,6 +45,7 @@ export function Sidebar() {
     '/embedding-templates',
     '/skill-prebuilt-templates',
     '/safety-guardrails',
+    '/react-templates',
     '/extension-config-templates',
     '/mcp-templates',
     '/expert-package-templates',
@@ -169,6 +170,17 @@ export function Sidebar() {
       icon: (
         <svg className="w-4 h-4 nav-item__icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M12 3l8 4v5c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V7l8-4z" />
+        </svg>
+      ),
+    },
+    {
+      key: 'react-templates',
+      pathPrefix: '/react-templates',
+      href: '/react-templates',
+      label: t('nav.reactTemplates'),
+      icon: (
+        <svg className="w-4 h-4 nav-item__icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M7 7h10v10H7zM9 3v2M15 3v2M9 19v2M15 19v2M3 9h2M3 15h2M19 9h2M19 15h2" />
         </svg>
       ),
     },
