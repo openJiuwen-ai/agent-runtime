@@ -66,6 +66,11 @@ async def test_sync_data_pushes_application_configs():
             return_value=ack,
         ),
         patch(
+            "manager_server.core.instance.instance_data_lifecycle.push_content_masking_config_sync_to_gateway",
+            new_callable=AsyncMock,
+            return_value=ack,
+        ) as content_masking_mock,
+        patch(
             "manager_server.core.instance.instance_data_lifecycle._seed_log_masking_if_needed",
             new_callable=AsyncMock,
         ),
@@ -82,12 +87,14 @@ async def test_sync_data_pushes_application_configs():
     audit_mock.assert_awaited_once_with(handler, "jid-app")
     cron_mock.assert_awaited_once_with(handler, "jid-app")
     pref_mock.assert_awaited_once_with(handler, "jid-app")
+    content_masking_mock.assert_awaited_once_with(handler, "jid-app")
     assert "logging" in results
     assert "task_memory" in results
     assert "memory" in results
     assert "audit_log" in results
     assert "cron_policy" in results
     assert "user_preference_default" in results
+    assert results["content_masking"] == ack
     assert "permissions" not in results
 
 

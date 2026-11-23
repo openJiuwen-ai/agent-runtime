@@ -17,8 +17,10 @@ _BASE_ENV = {"AGENT_RUNTIME_IMAGE": "swr.example/agent-runtime:1.0"}
 def tool_available(monkeypatch: pytest.MonkeyPatch):
     """跳过 kubectl/yq/kubeconfig 环境探测（单元测试不依赖宿主机工具）。"""
     from manager_server.core.deployment import service as service_mod
+    from manager_server.routers import deployment_routers as router_mod
 
     monkeypatch.setattr(service_mod, "check_tool_available", lambda: (True, ""))
+    monkeypatch.setattr(router_mod, "check_tool_available", lambda: (True, ""))
 
 
 async def test_defaults_seeded_and_masked(manager_api, tool_available, monkeypatch):
