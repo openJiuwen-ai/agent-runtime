@@ -2090,6 +2090,17 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .agent-list-pagination { padding: 12px 20px; border-top: 1px solid var(--border); }
 .agent-list-message { padding: 48px 20px; text-align: center; }
 @media (max-width: 700px) { .agent-list-toolbar { padding: 12px; } .agent-list-search { width: 100%; } .agent-list-pagination { padding: 12px; overflow-x: auto; } }
+.setup-journey { border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 10px; padding: 16px 20px; margin-bottom: 20px; background: var(--card); flex-shrink: 0; }
+.setup-journey-heading, .setup-journey-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.setup-stage-nav { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
+.setup-stage-nav button { padding: 6px 12px; color: var(--muted); border-radius: 6px; }
+.setup-stage-nav .active { color: var(--accent); background: var(--accent-subtle); font-weight: 600; }
+.setup-task-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }
+.setup-task-list button { display: flex; flex-direction: column; gap: 8px; text-align: left; padding: 12px; border: 1px solid var(--border); border-radius: 8px; }
+.setup-task-list button:hover, .setup-task-list .current { border-color: var(--accent); }
+.setup-task-list span, .setup-journey-footer > span { color: var(--muted); font-size: 12px; line-height: 1.6; }
+.setup-task-list small { color: var(--accent); }
+.setup-journey-footer { margin-top: 14px; }
 dialog.resource-preview { position: fixed; inset: 0 0 0 auto; margin: 0; height: 100dvh; max-height: 100dvh; width: min(520px, 100vw); max-width: 100vw; padding: 28px; border: 0; border-left: 1px solid var(--border); background: var(--card); color: var(--text); overflow-y: auto; }
 dialog.resource-preview[open] { display: flex; flex-direction: column; gap: 24px; }
 dialog.resource-preview::backdrop { background: rgb(0 0 0 / .24); }
@@ -2125,6 +2136,50 @@ dialog.resource-preview::backdrop { background: rgb(0 0 0 / .24); }
 .cluster-card__identity { display: flex; align-items: center; gap: 12px; }
 .cluster-card__identity-icon { display: grid; width: 36px; height: 36px; place-items: center; flex: 0 0 36px; border-radius: 10px; background: var(--accent-subtle); color: var(--accent); font-weight: 750; }
 .cluster-card__notice { padding: 8px 10px; border-radius: 7px; background: var(--bg-accent); }
+.guide-menu-root { position: relative; }
+.guide-menu { grid-template-columns: minmax(430px, 1.4fr) repeat(2, minmax(190px, 1fr)); min-width: min(920px, calc(100vw - 32px)); max-height: min(78vh, 720px); overflow-y: auto; }
+.guide-menu__journey { grid-column: 1 / -1; min-width: 0; }
+.guide-menu__journey .setup-journey { margin: 0; border: 0; padding: 0; background: transparent; }
+.guide-menu__journey .setup-journey-heading { padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+.guide-menu__journey .setup-stage-nav { margin-top: 10px; }
+.setup-journey--popover .setup-journey-footer > span { max-width: 520px; }
+.guide-menu__divider { grid-column: 1 / -1; height: 1px; background: var(--border); }
+@media (max-width: 900px) { .guide-menu { grid-template-columns: 1fr 1fr; min-width: min(680px, calc(100vw - 24px)); } .guide-menu__journey, .guide-menu__divider { grid-column: 1 / -1; } }
+@media (max-width: 700px) { .guide-menu { left: -80px; grid-template-columns: 1fr; min-width: min(360px, calc(100vw - 24px)); padding: 12px; gap: 14px; } }
+.guide-menu__journey .setup-task-list { grid-template-columns: repeat(4, minmax(150px, 1fr)); }
+.guide-menu__journey .setup-task-list button { min-height: 92px; }
+@media (max-width: 900px) { .guide-menu__journey .setup-task-list { grid-template-columns: repeat(2, minmax(150px, 1fr)); } }
+@media (max-width: 700px) { .guide-menu__journey .setup-task-list { grid-template-columns: 1fr; } }
+.guide-menu--journey { display: block; width: min(920px, calc(100vw - 32px)); min-width: 0; }
+.guide-menu--journey .guide-menu__journey { margin-bottom: 14px; }
+.guide-resource-heading { display: flex; flex-direction: column; gap: 4px; margin: 14px 0 10px; }
+.guide-resource-heading span { color: var(--muted); font-size: 12px; }
+.guide-resource-cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.guide-resource-card { display: flex; flex-direction: column; gap: 8px; min-height: 82px; padding: 12px; text-align: left; border: 1px solid var(--border); border-radius: 8px; background: transparent; }
+.guide-resource-card:hover { border-color: var(--accent); background: var(--bg-hover); }
+.guide-resource-card strong { font-size: 13px; }
+.guide-resource-card strong span { float: right; color: var(--accent); }
+.guide-resource-card > span { color: var(--muted); font-size: 12px; line-height: 1.5; }
+@media (max-width: 800px) { .guide-resource-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 500px) { .guide-menu--journey { left: -80px; width: min(360px, calc(100vw - 24px)); } .guide-resource-cards { grid-template-columns: 1fr; } }
+.setup-task-list--stage-1, .setup-task-list--stage-2, .setup-task-list--stage-3 { display: flex; flex-direction: column; }
+.setup-task-list--stage-1 button, .setup-task-list--stage-2 button, .setup-task-list--stage-3 button { min-height: 76px; }
+.setup-optional-toggle { display: inline-flex; align-items: center; gap: 8px; margin: 14px auto 0; padding: 7px 14px; color: var(--accent); font-size: 12px; border: 1px solid var(--border); border-radius: 999px; }
+.setup-optional-toggle:hover { background: var(--bg-hover); border-color: var(--accent); }
+.setup-task-list--optional { margin-top: 10px; }
+.setup-task-list--optional button { min-height: 76px; }
+.guide-menu__journey .setup-task-list--stage-1 button, .guide-menu__journey .setup-task-list--stage-2 button, .guide-menu__journey .setup-task-list--stage-3 button { min-height: 76px; }
+
+/* Stage-specific card sizing: one task is a wide card; multiple tasks share a row. */
+.setup-task-list--stage-1 { display: grid; grid-template-columns: minmax(0, 1fr); }
+.setup-task-list--stage-2, .setup-task-list--stage-3 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.setup-task-list--stage-2 button, .setup-task-list--stage-3 button { min-height: 92px; }
+@media (max-width: 700px) { .setup-task-list--stage-2, .setup-task-list--stage-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+/* Override popover's generic four-column rule by stage. */
+.guide-menu__journey .setup-task-list--stage-1 { display: grid; grid-template-columns: minmax(0, 1fr); }
+.guide-menu__journey .setup-task-list--stage-2, .guide-menu__journey .setup-task-list--stage-3 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.setup-task-list--stage-0, .guide-menu__journey .setup-task-list--stage-0 { display: grid; grid-template-columns: minmax(0, 1fr); }
+@media (max-width: 700px) { .guide-menu__journey .setup-task-list--stage-2, .guide-menu__journey .setup-task-list--stage-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
 /* Authorization workspace follows the prototype's preparation -> effective scope -> relation flow. */
 .authorization-workspace { max-width: 1480px; margin: 0 auto; width: 100%; }
