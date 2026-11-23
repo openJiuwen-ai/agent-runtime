@@ -5,9 +5,9 @@ import { useAsync } from '../../../hooks/useAsync';
 import { TeamQuotaApi } from '../../../services/api';
 import type { TeamQuotaUsage } from '../../../types';
 
-export function TeamQuotaUsageTab({ instanceId }: { instanceId: string }) {
+export function TeamQuotaUsageTab({ instanceId, refreshKey = 0 }: { instanceId: string; refreshKey?: number }) {
   const { t } = useTranslation();
-  const { data, loading, error, reload } = useAsync(() => TeamQuotaApi.listUsage(instanceId), [instanceId]);
+  const { data, loading, error, reload } = useAsync(() => TeamQuotaApi.listUsage(instanceId), [instanceId, refreshKey]);
   const items = data?.items ?? [];
   const orgs = data?.orgs ?? [];
   const [open, setOpen] = useState<Record<string, boolean>>({});
@@ -15,21 +15,21 @@ export function TeamQuotaUsageTab({ instanceId }: { instanceId: string }) {
   const rowKey = (row: TeamQuotaUsage) => `${row.user_id}/${row.group_id}/${row.bot_id}`;
 
   return (
-    <div className="flex min-w-0 flex-col gap-4">
-      <div className="page-header mb-0 w-full min-w-0 flex-wrap gap-y-3">
-        <div className="page-title min-w-[7.5rem] shrink-0 truncate">
-          {t('instanceDetail.teamQuota.tabs.usage')}
+    <div className="quota-section__content">
+      <div className="page-header quota-section__header">
+        <div className="quota-section__heading">
+          <h5 className="quota-section__title">{t('instanceDetail.teamQuota.tabs.usage')}</h5>
+          <p className="quota-section__description">{t('instanceDetail.teamQuota.usage.subtitle')}</p>
         </div>
-        <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
+        <div className="quota-section__actions">
           <button className="btn sm" onClick={() => void reload()}>
             {t('common.refresh')}
           </button>
         </div>
       </div>
-      <div className="page-subtitle truncate pl-3">{t('instanceDetail.teamQuota.usage.subtitle')}</div>
 
       {!loading && !error && orgs.length > 0 ? (
-        <div className="card !p-0">
+        <div className="card manager-page-table !p-0">
           <div className="px-4 py-3 text-sm font-medium">{t('instanceDetail.teamQuota.usage.orgsTitle')}</div>
           <div className="overflow-x-auto">
             <table className="table w-max min-w-full">
@@ -54,7 +54,7 @@ export function TeamQuotaUsageTab({ instanceId }: { instanceId: string }) {
         </div>
       ) : null}
 
-      <div className="card !p-0">
+      <div className="card manager-page-table !p-0">
         {loading ? (
           <div className="p-4 text-sm text-muted">{t('common.loading')}</div>
         ) : error ? (

@@ -270,8 +270,8 @@
     }
   },
   "topology": {
-    "title": "集群管理",
-    "subtitle": "管理 {{productName}} 集群",
+    "title": "服务实例",
+    "subtitle": "管理接入已部署好的 JiuwenSwarm 运行实例（包括 Gateway、Runtime、User Web等）",
     "createInstance": "新建集群",
     "instanceStatus": "集群状态",
     "gatewayStatus": "Gateway 状态",
@@ -351,7 +351,7 @@
       "access": "集群准入",
       "clusterConfig": "集群配置",
       "config": "基础配置",
-      "status": "状态监控",
+      "status": "连接状态",
       "quotaManagement": "配额管理",
       "tokenQuota": "Token配额",
       "cost": "成本统计",
@@ -1698,6 +1698,9 @@
   },
   "redesign": {
     "advancedDeployment": "高级部署设置",
-    "capacityTimeout": "容量与超时"
+    "capacityTimeout": "容量与超时",
+    "connected": "组件连接正常",
+    "inspect": "连接状态待检查",
+    "inspectInstance": "检查实例"
   }
 }

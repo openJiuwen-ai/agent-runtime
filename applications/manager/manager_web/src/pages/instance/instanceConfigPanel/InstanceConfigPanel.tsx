@@ -1,5 +1,5 @@
-import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useRouter } from '../../../router';
 import { LogMaskingTab } from './LogMaskingTab';
 import { ContentMaskingTab } from './ContentMaskingTab';
 import { LoggingTab } from './LoggingTab';
@@ -15,7 +15,14 @@ interface Props {
 
 export function InstanceConfigPanel({ instanceId }: Props) {
   const { t } = useTranslation();
-  const [tab, setTab] = useState<ConfigTabKey>('logMasking');
+  const { path, params, navigate } = useRouter();
+  const requestedTab = params.get('configTab');
+  const tab: ConfigTabKey = ['logging', 'auditLog', 'cronPolicy'].includes(requestedTab || '') ? requestedTab as ConfigTabKey : 'logMasking';
+  const setTab = (nextTab: ConfigTabKey) => {
+    const query = new URLSearchParams(params);
+    query.set('configTab', nextTab);
+    navigate(`${path}?${query}`);
+  };
 
   const tabs: { key: ConfigTabKey; label: string }[] = [
     { key: 'logMasking', label: t('instanceConfig.tabs.logMasking') },

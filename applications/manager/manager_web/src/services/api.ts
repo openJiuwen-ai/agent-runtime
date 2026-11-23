@@ -1331,7 +1331,7 @@ export const UserConsoleApi = {
     const data = await idpHttp<{ orgs: Org[] }>('/v1/auth/me/orgs');
     return { orgs: excludeNoOrgItems(data.orgs) };
   },
-  agentContexts: () => http<{ contexts: UserAgentContext[] }>('/v1/user-console/agent-contexts'),
+  agentContexts: () => http<{ contexts: UserAgentContext[]; empty_reason?: 'no_grant' | 'no_agent_template' | null }>('/v1/user-console/agent-contexts'),
   /** 设置用户面动态反代 Cookie（jiuwenclaw_id） */
   setActiveCluster: (jiuwenclaw_id: string) =>
     http<{ jiuwenclaw_id: string }>('/v1/user-console/active-cluster', {

@@ -351,7 +351,7 @@
       "access": "Cluster Access",
       "clusterConfig": "Cluster Config",
       "config": "Basic Config",
-      "status": "Status Monitor",
+      "status": "Connection status",
       "quotaManagement": "Quota Management",
       "tokenQuota": "Token Quota",
       "cost": "Cost Analytics",
@@ -1697,6 +1697,9 @@
   },
   "redesign": {
     "advancedDeployment": "Advanced deployment settings",
-    "capacityTimeout": "Capacity and timeouts"
+    "capacityTimeout": "Capacity and timeouts",
+    "connected": "Components connected",
+    "inspect": "Inspect connectivity",
+    "inspectInstance": "Inspect instance"
   }
 }

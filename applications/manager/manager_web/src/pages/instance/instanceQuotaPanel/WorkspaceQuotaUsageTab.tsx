@@ -179,7 +179,7 @@ function TopUsageBars({
   );
 }
 
-export function WorkspaceQuotaUsageTab({ instanceId }: { instanceId: string }) {
+export function WorkspaceQuotaUsageTab({ instanceId, refreshKey = 0 }: { instanceId: string; refreshKey?: number }) {
   const { t } = useTranslation();
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
@@ -198,7 +198,7 @@ export function WorkspaceQuotaUsageTab({ instanceId }: { instanceId: string }) {
         status: (statusFilter || undefined) as WorkspaceQuotaUsageStatus | undefined,
         search: searchQuery || undefined,
       }),
-    [instanceId, page, pageSize, statusFilter, searchQuery],
+    [instanceId, page, pageSize, statusFilter, searchQuery, refreshKey],
   );
 
   const rows = data?.items ?? [];
@@ -221,30 +221,25 @@ export function WorkspaceQuotaUsageTab({ instanceId }: { instanceId: string }) {
   );
 
   return (
-    <div className="flex min-w-0 flex-col gap-4">
-      <div className="min-w-0">
-        <div className="page-header mb-0 w-full min-w-0 flex-wrap gap-y-3">
-          <div className="page-title min-w-[7.5rem] shrink-0 truncate">
-            {t('instanceDetail.workspaceQuota.usage.title')}
-          </div>
-          <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
-            <ListSearchInput
-              value={searchInput}
-              onChange={setSearchInput}
-              placeholder={t('instanceDetail.workspaceQuota.usage.searchPlaceholder')}
-              className="basis-full sm:basis-auto"
-            />
-            <button type="button" className="btn sm" onClick={() => void reload()}>
-              {t('common.refresh')}
-            </button>
-          </div>
+    <div className="quota-section__content">
+      <div className="page-header quota-section__header">
+        <div className="quota-section__heading">
+          <h5 className="quota-section__title">{t('instanceDetail.workspaceQuota.usage.title')}</h5>
+          <p className="quota-section__description">{t('instanceDetail.workspaceQuota.usage.subtitle')}</p>
         </div>
-        <div className="page-subtitle truncate pl-3">
-          {t('instanceDetail.workspaceQuota.usage.subtitle')}
+        <div className="quota-section__search-actions">
+          <ListSearchInput
+            value={searchInput}
+            onChange={setSearchInput}
+            placeholder={t('instanceDetail.workspaceQuota.usage.searchPlaceholder')}
+          />
+          <button type="button" className="btn sm" onClick={() => void reload()}>
+            {t('common.refresh')}
+          </button>
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="quota-section__spaced grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard
           label={t('instanceDetail.workspaceQuota.usage.subjectCount')}
           hint={t('instanceDetail.workspaceQuota.usage.subjectCountHint')}
@@ -294,7 +289,7 @@ export function WorkspaceQuotaUsageTab({ instanceId }: { instanceId: string }) {
         </div>
       </div>
 
-      <div className="card !p-0">
+      <div className="card manager-page-table !p-0">
         {loading ? (
           <div className="p-4 text-sm text-muted">{t('common.loading')}</div>
         ) : error ? (

@@ -1,3 +1,4 @@
+import { ConfigurationWizardPage } from './pages/ConfigurationWizardPage';
 import { Component, ReactNode, useEffect, useState } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -11,7 +12,10 @@ import { ApprovalTodoButton } from './components/ApprovalTodoButton';
 import { OverviewPage } from './pages/OverviewPage';
 import { DocsPage } from './pages/DocsPage';
 import { InstanceListPage } from './pages/instance/InstanceListPage';
-import { InstanceDetailPage } from './pages/instance/InstanceDetailPage';
+import { InstanceDetailPage, type InstancePageTab } from './pages/instance/InstanceDetailPage';
+import { ClusterConfigWorkbenchPage } from './pages/instance/ClusterConfigWorkbenchPage';
+import { ClusterSetupResumePage } from './pages/instance/ClusterSetupResumePage';
+import { canonicalClusterSection, canonicalClusterPath } from './utils/clusterNavigation';
 import { DeploymentListPage } from './pages/deployment/DeploymentListPage';
 import { DeploymentDetailPage } from './pages/deployment/DeploymentDetailPage';
 import { ModelTemplatesPage } from './pages/templates/ModelTemplatesPage';
@@ -48,6 +52,7 @@ import {
   canAccessManager,
   hasPermission,
   isPlatformAdmin,
+  isWorkspaceQuotaEnabled,
   isApprovalEnabled,
   UserConsoleApi,
 } from './services/api';
@@ -90,7 +95,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryStat
 
 function RouteView() {
   const { t } = useTranslation();
-  const { path } = useRouter();
+  const { path, params } = useRouter();
   const { user } = useAuth();
   const platformAdmin = isPlatformAdmin(user);
 
@@ -122,6 +127,7 @@ function RouteView() {
     return <div className="card text-sm text-muted">{t('auth.noPagePermission')}</div>;
   }
 
+  if (path === '/configuration-wizard') return <ConfigurationWizardPage />;
   if (path === '/overview' || path === '/') {
     return <OverviewPage />;
   }
@@ -216,62 +222,19 @@ function RouteView() {
   if (path === '/agent-templates') {
     return <AgentTemplatesPage />;
   }
-  const instanceAccess = matchRoute('/instances/:id/access', path);
-  if (instanceAccess) {
-    return <InstanceDetailPage instanceId={instanceAccess.id} tab="access" />;
-  }
-  const instanceClusterConfig = matchRoute('/instances/:id/cluster-config', path);
-  if (instanceClusterConfig) {
-    return <InstanceDetailPage instanceId={instanceClusterConfig.id} tab="agentResources" />;
-  }
-  const instanceAgentResources = matchRoute('/instances/:id/agent-resources', path);
-  if (instanceAgentResources) {
-    return <InstanceDetailPage instanceId={instanceAgentResources.id} tab="agentResources" />;
-  }
-  const instanceServiceResources = matchRoute('/instances/:id/service-resources', path);
-  if (instanceServiceResources) {
-    return <InstanceDetailPage instanceId={instanceServiceResources.id} tab="serviceResources" />;
-  }
-  // 旧「实例资源/全局配置」页签 URL（已并入「集群配置」页签组，分别落子页签）
-  const legacyResources = matchRoute('/instances/:id/resources', path);
-  if (legacyResources) {
-    return <InstanceDetailPage instanceId={legacyResources.id} tab="agentResources" />;
-  }
-  const legacyConfig = matchRoute('/instances/:id/config', path);
-  if (legacyConfig) {
-    return <InstanceDetailPage instanceId={legacyConfig.id} tab="config" />;
-  }
-  const instanceStatus = matchRoute('/instances/:id/status', path);
-  if (instanceStatus) {
-    return <InstanceDetailPage instanceId={instanceStatus.id} tab="status" />;
-  }
-  const instanceQuota = matchRoute('/instances/:id/quota', path);
-  if (instanceQuota) {
-    return <InstanceDetailPage instanceId={instanceQuota.id} tab="workspaceQuota" />;
-  }
-  const instanceWorkspaceQuota = matchRoute('/instances/:id/workspace-quota', path);
-  if (instanceWorkspaceQuota) {
-    return <InstanceDetailPage instanceId={instanceWorkspaceQuota.id} tab="workspaceQuota" />;
-  }
-  const instanceTeamQuota = matchRoute('/instances/:id/team-quota', path);
-  if (instanceTeamQuota) {
-    return <InstanceDetailPage instanceId={instanceTeamQuota.id} tab="teamQuota" />;
-  }
-  const instanceTokenQuota = matchRoute('/instances/:id/token-quota', path);
-  if (instanceTokenQuota) {
-    return <InstanceDetailPage instanceId={instanceTokenQuota.id} tab="tokenQuota" />;
-  }
-  const instanceCost = matchRoute('/instances/:id/cost', path);
-  if (instanceCost) {
-    return <InstanceDetailPage instanceId={instanceCost.id} tab="cost" />;
-  }
-  const instanceAudit = matchRoute('/instances/:id/audit', path);
-  if (instanceAudit) {
-    return <InstanceDetailPage instanceId={instanceAudit.id} tab="audit" />;
-  }
-  const detail = matchRoute('/instances/:id', path);
-  if (detail) {
-    return <InstanceDetailPage instanceId={detail.id} tab="access" />;
+  const legacyExperts = matchRoute('/instances/:id/expert-packages', path);
+  if (legacyExperts) return <Navigate to={'/manager' + canonicalClusterPath(legacyExperts.id, 'expert-packages', params)} replace />;
+  const clusterRoute = matchRoute('/instances/:id/:section', path) || matchRoute('/instances/:id', path);
+  if (clusterRoute) {
+    const section = canonicalClusterSection(clusterRoute.section, isWorkspaceQuotaEnabled(user));
+    if (!section || clusterRoute.section !== section) return <Navigate to={'/manager' + canonicalClusterPath(clusterRoute.id, clusterRoute.section, params, isWorkspaceQuotaEnabled(user))} replace />;
+    if (section === 'setup') return <ClusterSetupResumePage key={clusterRoute.id} instanceId={clusterRoute.id} />;
+    if (section === 'cluster-config') return <ClusterConfigWorkbenchPage key={clusterRoute.id} instanceId={clusterRoute.id} />;
+    const tabs: Record<string, InstancePageTab> = {
+      access: 'access', 'service-resources': 'serviceResources', 'agent-resources': 'agentResources',
+      'other-settings': 'otherSettings', status: 'status',
+    };
+    return <InstanceDetailPage key={clusterRoute.id + ':' + section} instanceId={clusterRoute.id} tab={tabs[section]} />;
   }
   if (path === '/deployments') {
     return <DeploymentListPage />;

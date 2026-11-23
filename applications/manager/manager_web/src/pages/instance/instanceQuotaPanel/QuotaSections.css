@@ -1,0 +1,20 @@
+.quota-sections { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+.quota-section { min-width: 0; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); }
+.quota-section__content { display: flex; flex-direction: column; gap: 0; min-width: 0; }
+.quota-section__header.page-header { align-items: flex-start; flex-wrap: wrap; gap: 12px; padding: 16px 18px; margin: 0; border-bottom: 1px solid var(--border); border-radius: 10px 10px 0 0; background: var(--bg); }
+.quota-section__heading { flex: 1 1 280px; min-width: 0; }
+.quota-section__title { font-size: 14px; font-weight: 600; color: var(--text-strong); }
+.quota-section__description { margin-top: 5px; font-size: 12px; line-height: 1.6; color: var(--muted); }
+.quota-section__actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.quota-section__content > .card { border: 0; border-radius: 0; box-shadow: none; }
+.quota-section__content > .card:last-child { border-radius: 0 0 10px 10px; }
+.quota-section__content > .card + .card { border-top: 1px solid var(--border); }
+@media (max-width: 720px) {
+  .quota-sections { gap: 16px; }
+  .quota-section__header.page-header { padding: 14px; }
+}
+
+.quota-section__content > .quota-section__spaced { padding: 16px 18px; }
+.quota-section__header .quota-section__search-actions { display: flex; align-items: center; gap: 8px; flex: 1 1 22rem; min-width: 0; max-width: 30rem; margin-left: auto; }
+.quota-section__search-actions .input { flex: 1 1 0; min-width: 0; width: 0; max-width: 20rem; }
+.quota-section__search-actions .btn { flex: 0 0 auto; white-space: nowrap; }
