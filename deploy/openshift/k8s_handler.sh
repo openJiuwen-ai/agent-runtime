@@ -713,6 +713,11 @@ mount_core_pkg() { # agent-core 的 openjiuwen 包 → site-packages
   add_code_mount "$1" "core-code" "${DEPLOY_VARS["CORE_CODE_PATH"]}/openjiuwen" "${DEPLOY_VARS["CORE_POD_PKG_PATH"]}"
 }
 
+mount_gateway_pkg() { # agent-gateway 的 agent_gateway 包 → site-packages（jiuwenswarm 运行期依赖，与 core 同族）
+  [ -n "${DEPLOY_VARS["GATEWAY_CODE_PATH"]:-}" ] || return 0
+  add_code_mount "$1" "gateway-pkg" "${DEPLOY_VARS["GATEWAY_CODE_PATH"]}/agent_gateway" "${DEPLOY_VARS["GATEWAY_POD_PKG_PATH"]}"
+}
+
 mount_web_nginx_template() { # web：仓库 nginx 模板与可选 upstream 脚本盖到镜像 entrypoint 读取路径
   # openshift 部署专用副本(docker/openshift/),与 docker/ 原件解耦:
   # 老镜像(nginxinc)构建仍用 docker/ 原件,UBI 镜像部署可独立调整互不影响
@@ -766,10 +771,12 @@ apply_dev_code_mounts() { # $@=本次渲染的清单文件名
   for f in "$@"; do
     comp="${f%.yaml}"; comp="${comp%.json}"   # agentserver.json（full 模式 runtime 建 Pod 的载荷）与 agentserver.yaml 同按 agentserver 处理
     case "$comp" in
-      agentserver|gateway)
+      agentserver)
+        mount_runtime_pkg "$CONF_DIR/$f"; mount_core_pkg "$CONF_DIR/$f"; mount_gateway_pkg "$CONF_DIR/$f"
+        mount_swarm_code "$CONF_DIR/$f"; mount_swarm_code_sidecar "$CONF_DIR/$f";;
+      gateway)
         mount_runtime_pkg "$CONF_DIR/$f"; mount_core_pkg "$CONF_DIR/$f"
-        [ "$comp" = agentserver ] && { mount_swarm_code "$CONF_DIR/$f"; mount_swarm_code_sidecar "$CONF_DIR/$f"; }
-        [ "$comp" = gateway ] && mount_gateway_code "$CONF_DIR/$f";;
+        mount_gateway_code "$CONF_DIR/$f";;
       web)
         [ "${DEPLOY_VARS["IS_MOUNT_WEB_CODE"]}" = "true" ] || continue
         mount_swarm_code "$CONF_DIR/$f"; mount_web_nginx_template "$CONF_DIR/$f";;
