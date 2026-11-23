@@ -715,6 +715,9 @@ async def _build_sync_payloads(
     handler: DBHandler,
     kind: str,
     template_ids: set[str],
+    *,
+    jiuwenclaw_id: str | None = None,
+    runtime_resources: list | None = None,
 ) -> list[dict[str, Any]]:
     spec = TEMPLATE_KIND_SPECS[_normalize_kind(kind)]
     row_to_sync = _resolve_row_to_sync(kind)
@@ -723,6 +726,15 @@ async def _build_sync_payloads(
         row = await handler.get(spec.table_name, {spec.id_field: template_id})
         if row is not None:
             payload = row_to_sync(row)
+            if _normalize_kind(kind) == AGENT_TEMPLATES_KIND:
+                from manager_server.core.agent_definition.keycloak_client import gateway_agent_data
+
+                if not jiuwenclaw_id:
+                    raise ValueError("jiuwenclaw_id is required for Agent credential dispatch")
+                payload["data"] = await gateway_agent_data(
+                    handler, template_id, payload.get("data"), jiuwenclaw_id=jiuwenclaw_id,
+                    runtime_resources=runtime_resources,
+                )
             if _normalize_kind(kind) == "a2a_outbound_templates":
                 payload = await _with_a2a_network_policy(handler, payload)
             templates.append(payload)
@@ -752,7 +764,7 @@ async def sync_referenced_templates_to_gateway(
     for kind in TEMPLATE_KIND_ORDER:
         normalized = _normalize_kind(kind)
         referenced_ids = await collect_referenced_template_ids_for_gateway(handler, jid, normalized)
-        templates = await _build_sync_payloads(handler, normalized, referenced_ids)
+        templates = await _build_sync_payloads(handler, normalized, referenced_ids, jiuwenclaw_id=jid)
         results[kind] = await _sync_templates_on_gateway(jid, normalized, templates)
     return results
 
@@ -765,6 +777,7 @@ async def update_template_on_referencing_gateways(
     *,
     network_policy: dict[str, bool] | None = None,
     continue_on_error: bool = False,
+    agent_client_overrides: dict | None = None,
 ) -> None:
     """向引用了该模板的可达 Gateway PATCH 更新。
 
@@ -774,10 +787,6 @@ async def update_template_on_referencing_gateways(
     tid = str(template_id or "").strip()
     if not tid:
         return
-    if normalized == AGENT_TEMPLATES_KIND and "data" in updates:
-        from manager_server.core.template.agent_template import agent_template_gateway_data
-
-        updates = {**updates, "data": agent_template_gateway_data(updates["data"])}
     if normalized == "a2a_outbound_templates":
         if "data" not in updates:
             row = await handler.get(A2A_OUTBOUND_TEMPLATE_TABLE_DEF.table_name, {"template_id": tid})
@@ -822,7 +831,14 @@ async def update_template_on_referencing_gateways(
                 removed=set(),
             )
         try:
-            await _update_template_on_gateway(jid, normalized, tid, updates)
+            gateway_updates = updates
+            if normalized == AGENT_TEMPLATES_KIND and "data" in updates:
+                from manager_server.core.agent_definition.keycloak_client import gateway_agent_data
+
+                gateway_updates = {**updates, "data": await gateway_agent_data(
+                    handler, tid, updates["data"], jiuwenclaw_id=jid, overrides=agent_client_overrides,
+                )}
+            await _update_template_on_gateway(jid, normalized, tid, gateway_updates)
         except Exception as exc:
             # The Manager row is still unchanged. Roll back the provisional dependency
             # references so a retry cannot double-count them.
@@ -1280,12 +1296,17 @@ async def upsert_agent_template_on_gateway(
     handler: DBHandler,
     jiuwenclaw_id: str,
     template_id: str,
+    *,
+    runtime_resources: list | None = None,
 ) -> None:
     """将单个 agent 模板 POST 到 Gateway（create/upsert 语义）。"""
     tid = str(template_id or "").strip()
     if not tid:
         raise ValueError("template_id is required")
-    payloads = await _build_sync_payloads(handler, AGENT_TEMPLATES_KIND, {tid})
+    payloads = await _build_sync_payloads(
+        handler, AGENT_TEMPLATES_KIND, {tid}, jiuwenclaw_id=jiuwenclaw_id,
+        runtime_resources=runtime_resources,
+    )
     if not payloads:
         raise ValueError(f"agent_template not found: {tid}")
     await _create_template_on_gateway(jiuwenclaw_id, AGENT_TEMPLATES_KIND, payloads[0])

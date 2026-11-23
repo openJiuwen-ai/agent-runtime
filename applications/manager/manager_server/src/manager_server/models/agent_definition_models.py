@@ -32,6 +32,7 @@ AGENT_DEFINITION_TABLE_DEF = TableDefinition(
         ColumnDefinition("runtime_template_name", "string", length=128, nullable=True),
         ColumnDefinition("deleted", "boolean", nullable=False, default=False),
         ColumnDefinition("deleted_reason", "string", length=32, nullable=True),
+        ColumnDefinition("data", "json", nullable=True),
         ColumnDefinition("created_at", "datetime", nullable=False),
         ColumnDefinition("updated_at", "datetime", nullable=False),
     ],
