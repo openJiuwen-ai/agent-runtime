@@ -20,6 +20,7 @@ from openjiuwen_runtime.foundation.db.handler import DBHandler
 
 from manager_server.core.template.service_config_container import load_wires_for_template
 from manager_server.infrastructure.logger import get_logger
+from manager_server.infrastructure.match_expr import evaluate_match_expr
 from manager_server.infrastructure.utils import iso_datetime
 from manager_server.manager_config_push.client import runtime_request
 from manager_server.models.instance_resource_models import INSTANCE_SERVICE_RESOURCE_TABLE_DEF
@@ -79,6 +80,87 @@ def _scope_id(resource_id: str) -> str:
     if not safe:
         safe = uuid.uuid5(uuid.NAMESPACE_URL, resource_id).hex
     return f"service-{safe}"[:128]
+
+
+async def build_service_scope_index(
+    handler: DBHandler, jiuwenclaw_id: str
+) -> list[dict[str, Any]]:
+    """Build the runtime scope index for one instance.
+
+    Mirrors the filters in :func:`build_runtime_config` so the resolved template
+    matches what is actually synced to Runtime: skip disabled/expired resources,
+    missing/disabled service templates, and templates unable to form a split
+    payload. Entries are sorted by ``(priority, scope_id)``, the same first-fit
+    order Runtime uses.
+    """
+    resources = await handler.list_records(
+        INSTANCE_SERVICE_RESOURCE_TABLE_DEF.table_name,
+        {"jiuwenclaw_id": jiuwenclaw_id},
+        limit=_CAP,
+        offset=0,
+    )
+
+    usable: dict[str, bool] = {}
+    entries: list[dict[str, Any]] = []
+    for resource in resources:
+        rid = str(_g(resource, "resource_id") or "").strip()
+        if not rid:
+            continue
+        if not bool(_g(resource, "enabled", True)) or _is_expired(
+            _g(resource, "expires_at")
+        ):
+            continue
+
+        template_id = str(_g(resource, "ref_template_id") or "").strip()
+        if not template_id:
+            continue
+
+        if template_id not in usable:
+            service = await handler.get(
+                SERVICE_CONFIG_TEMPLATE_TABLE_DEF.table_name,
+                {"template_id": template_id},
+            )
+            ok = service is not None and bool(_g(service, "enabled", True))
+            if ok:
+                ok = (await service_template_wire(handler, service)) is not None
+            usable[template_id] = ok
+        if not usable[template_id]:
+            _log.warning(
+                "runtime scope skipped for agent name: unusable service template %s",
+                template_id,
+            )
+            continue
+
+        entries.append(
+            {
+                "scope_id": _scope_id(rid),
+                "priority": int(_g(resource, "priority", 0) or 0),
+                "ref_template_id": template_id,
+                "match_expr": _g(resource, "match_expr"),
+            }
+        )
+
+    entries.sort(key=lambda item: (item["priority"], item["scope_id"]))
+    return entries
+
+
+def resolve_service_template_id(
+    entries: list[dict[str, Any]],
+    *,
+    user_id: str,
+    group_id: str,
+    bot_id: str,
+) -> str:
+    """Return the first matching runtime template id, or ``""`` when none match."""
+    for entry in entries:
+        if evaluate_match_expr(
+            entry.get("match_expr"),
+            user_id=user_id,
+            group_id=group_id,
+            bot_id=bot_id,
+        ):
+            return str(entry.get("ref_template_id") or "").strip()
+    return ""
 
 
 def _comparison_to_expression(node: ast.Compare) -> dict[str, Any]:

@@ -129,11 +129,11 @@ class SkillUploadService:
             "business_type": SKILL_UPLOAD,
             **({"cluster_id": cluster_id} if cluster_id else {}),
         }
-        # 不统计精确总数：只扫描到当前页之后的一条，用 has_next 表示是否还有下一页。
-        want = page * page_size + 1
+        # scope/status 依赖 result_data 与过期时间，无法下推 SQL；这里扫完申请人的全部
+        # 单据得出精确总数（个人量级，块大小 _SCAN_CHUNK）。
         matched: list[Any] = []
         offset = 0
-        while len(matched) < want:
+        while True:
             batch = await self._h.list_records(
                 _ORDER_TABLE,
                 filters,
@@ -151,9 +151,11 @@ class SkillUploadService:
             if len(batch) < _SCAN_CHUNK:
                 break
 
+        total = len(matched)
         start = (page - 1) * page_size
         page_rows = matched[start:start + page_size]
-        has_next = len(matched) > start + page_size
+        # has_next 保留一个版本，兼容未更新的前端；新前端用 total 计算。
+        has_next = start + page_size < total
         comments = await self._approvals.latest_reject_comments(
             [str(_g(row, "order_num") or "") for row in page_rows]
         )
@@ -165,6 +167,7 @@ class SkillUploadService:
             "items": items,
             "page": page,
             "page_size": page_size,
+            "total": total,
             "has_next": has_next,
         }
 

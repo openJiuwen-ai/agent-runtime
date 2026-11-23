@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from conftest import ManagerApiHarness
@@ -15,6 +17,7 @@ from demo_payloads import (
     expert_package_templates,
     skill_prebuilt_templates,
 )
+from manager_server.infrastructure import config as config_mod
 
 pytestmark = pytest.mark.unit
 
@@ -208,6 +211,171 @@ async def test_expert_package_template_rejects_hidden_hub_asset(manager_api: Man
     assert "hidden hub asset" in resp.text
 
 
+@pytest.mark.asyncio
+async def test_expert_package_template_revision_occ_returns_409(
+    manager_api: ManagerApiHarness,
+):
+    """创建 revision=0；正确 expected_revision 保存涨到 1；再用 0 保存应 409。"""
+    h = manager_api
+    created = await h.post_json("/expert-package-templates", expert_package_templates()[0][1])
+    template_id = created["template_id"]
+    assert created["revision"] == 0
+
+    first = await h.patch_json(
+        f"/expert-package-templates/{template_id}",
+        {
+            "packages": [
+                {
+                    "kind": "agent_template",
+                    "asset_id": "sales-expert",
+                    "version": "1.0.0",
+                },
+                {
+                    "kind": "agent_group",
+                    "asset_id": "sales-team",
+                    "version": "2.0.0",
+                },
+                {
+                    "kind": "agent_template",
+                    "asset_id": "extra-expert",
+                    "version": "1.0.0",
+                },
+            ],
+            "expected_revision": 0,
+        },
+    )
+    assert first["revision"] == 1
+    assert {item["asset_id"] for item in first["packages"]} == {
+        "sales-expert",
+        "sales-team",
+        "extra-expert",
+    }
+
+    resp = await h.http.patch(
+        h.templates_url(f"/expert-package-templates/{template_id}"),
+        json={
+            "packages": [
+                {
+                    "kind": "agent_template",
+                    "asset_id": "sales-expert",
+                    "version": "1.0.0",
+                },
+            ],
+            "expected_revision": 0,
+        },
+    )
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert detail["code"] == "stale_template"
+
+    current = await h.get_json(f"/expert-package-templates/{template_id}")
+    assert current["revision"] == 1
+    assert {item["asset_id"] for item in current["packages"]} == {
+        "sales-expert",
+        "sales-team",
+        "extra-expert",
+    }
+
+
+@pytest.mark.asyncio
+async def test_expert_package_template_enabled_toggle_bumps_revision(
+    manager_api: ManagerApiHarness,
+):
+    """仅 PATCH enabled 也涨 revision；旧 revision 编辑 409；用开关返回值编辑 200。"""
+    h = manager_api
+    created = await h.post_json("/expert-package-templates", expert_package_templates()[0][1])
+    template_id = created["template_id"]
+    assert created["revision"] == 0
+
+    toggled = await h.patch_json(
+        f"/expert-package-templates/{template_id}",
+        {"enabled": False},
+    )
+    assert toggled["enabled"] is False
+    assert toggled["revision"] == 1
+
+    resp = await h.http.patch(
+        h.templates_url(f"/expert-package-templates/{template_id}"),
+        json={
+            "template_name": created["template_name"],
+            "packages": created["packages"],
+            "expected_revision": 0,
+        },
+    )
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["code"] == "stale_template"
+
+    ok = await h.patch_json(
+        f"/expert-package-templates/{template_id}",
+        {
+            "template_name": created["template_name"],
+            "packages": created["packages"],
+            "expected_revision": toggled["revision"],
+        },
+    )
+    assert ok["template_id"] == template_id
+    assert ok["revision"] == 2
+
+
+@pytest.mark.asyncio
+async def test_expert_package_template_concurrent_same_revision(
+    manager_api: ManagerApiHarness,
+):
+    """同 expected_revision 并发保存：一成一 409，库内容属于成功方。"""
+    h = manager_api
+    created = await h.post_json("/expert-package-templates", expert_package_templates()[0][1])
+    template_id = created["template_id"]
+    assert created["revision"] == 0
+
+    body_a = {
+        "template_name": "concurrent-winner-a",
+        "packages": [
+            {
+                "kind": "agent_template",
+                "asset_id": "sales-expert",
+                "version": "1.0.0",
+            },
+        ],
+        "expected_revision": 0,
+    }
+    body_b = {
+        "template_name": "concurrent-winner-b",
+        "packages": [
+            {
+                "kind": "agent_group",
+                "asset_id": "sales-team",
+                "version": "2.0.0",
+            },
+        ],
+        "expected_revision": 0,
+    }
+
+    resp_a, resp_b = await asyncio.gather(
+        h.http.patch(
+            h.templates_url(f"/expert-package-templates/{template_id}"),
+            json=body_a,
+        ),
+        h.http.patch(
+            h.templates_url(f"/expert-package-templates/{template_id}"),
+            json=body_b,
+        ),
+    )
+    statuses = {resp_a.status_code, resp_b.status_code}
+    assert statuses == {200, 409}
+    loser = resp_a if resp_a.status_code == 409 else resp_b
+    winner = resp_a if resp_a.status_code == 200 else resp_b
+    assert loser.json()["detail"]["code"] == "stale_template"
+    winner_data = winner.json()["data"]
+    assert winner_data["revision"] == 1
+
+    current = await h.get_json(f"/expert-package-templates/{template_id}")
+    assert current["revision"] == 1
+    assert current["template_name"] == winner_data["template_name"]
+    assert {item["asset_id"] for item in current["packages"]} == {
+        item["asset_id"] for item in winner_data["packages"]
+    }
+
+
 def _demo_container_wire(container_id: str) -> dict:
     return {
         "container_id": container_id,
@@ -215,3 +383,55 @@ def _demo_container_wire(container_id: str) -> dict:
         "image": "jiuwenclaw/jiuwenbox:latest",
         "imagePullPolicy": "IfNotPresent",
     }
+
+
+@pytest.mark.asyncio
+async def test_service_config_default_rawdata(
+    manager_api: ManagerApiHarness,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """default-rawdata：OBS 对象缺失 404；存在则原样返回 JSON。"""
+    import json
+
+    from httpx import codes
+
+    h = manager_api
+    monkeypatch.setattr(config_mod.settings, "deploy_namespace", "wx")
+    monkeypatch.setattr(
+        config_mod.settings,
+        "agent_runtime_default_conf_path",
+        "defaults/{ns}/agentserver.json",
+    )
+
+    async def _missing(_key: str, **_kwargs):
+        raise FileNotFoundError("object not found")
+
+    monkeypatch.setattr(
+        "manager_server.infrastructure.obs.fetch_object_bytes",
+        _missing,
+    )
+    resp = await h.http.get(h.templates_url("/service-config-templates/default-rawdata"))
+    assert resp.status_code == codes.NOT_FOUND
+
+    payload = {
+        "type": "config_sync",
+        "rawdata": {
+            "containers": [{"container_id": "c-agentserver"}],
+            "templates": [{"template_id": "default", "template_name": "default"}],
+            "scopes": [],
+        },
+    }
+
+    expected_key = config_mod.settings.resolved_agent_runtime_default_conf_path
+    assert expected_key == "defaults/wx/agentserver.json"
+
+    async def _present(key: str, **_kwargs):
+        assert key == expected_key
+        return json.dumps(payload).encode("utf-8")
+
+    monkeypatch.setattr(
+        "manager_server.infrastructure.obs.fetch_object_bytes",
+        _present,
+    )
+    data = await h.get_json("/service-config-templates/default-rawdata")
+    assert data == payload

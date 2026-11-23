@@ -23,26 +23,32 @@ _ENSURED_NODE_PORTS=""
 # 定位内置 NFS server Pod。
 # 注意：失败用 return 1 + stderr 提示，不能在函数内 error()——命令替换 $(...) 中
 # error 的 exit 1 只退出子 shell，报错文本（stdout）会被父 shell 捕获成返回值
-builtin_nfs_pod() { # → stdout: Pod 名；失败原因 → stderr；rc 1=未找到
-  local pod
-  pod=$(kubectl get pods -n "${DEPLOY_VARS["NFS_POD_NAMESPACE"]}" \
-    -l "${DEPLOY_VARS["NFS_POD_LABEL"]}" \
-    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-  if [ -z "$pod" ]; then
-    echo "未找到内置 NFS server Pod（${DEPLOY_VARS["NFS_POD_NAMESPACE"]}，label ${DEPLOY_VARS["NFS_POD_LABEL"]}）" >&2
-    return 1
-  fi
-  printf '%s' "$pod"
+builtin_nfs_pod() { # → stdout: "<ns> <Pod名>"；失败原因 → stderr；rc 1=未找到
+  # 实例定位与基础服务同规则（本 ns → BASE_SVC_NS，自动去重）：nfs-server 为
+  # hostNetwork 单例（绑定节点 2049 端口），全集群仅能存活一套，共享实例推荐部署在 default
+  local pod ns seen=" "
+  # KCTL_NS 在 main 于 check_vars 之后才赋值；check_vars 内经本函数探测时取 NAMESPACE 兜底
+  for ns in "${KCTL_NS:-${DEPLOY_VARS["NAMESPACE"]:-}}" "${DEPLOY_VARS["BASE_SVC_NS"]}"; do
+    [ -n "$ns" ] || continue
+    case "$seen" in *" $ns "*) continue;; esac
+    seen="$seen$ns "
+    pod=$(kubectl get pods -n "$ns" -l "app=${DEPLOY_VARS["NFS_NAME"]}" \
+      -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    [ -n "$pod" ] && { printf '%s %s' "$ns" "$pod"; return 0; }
+  done
+  echo "未找到内置 NFS server Pod（探测 ns:${seen}label app=${DEPLOY_VARS["NFS_NAME"]}）：请先 ./deploy.sh up nfs，或改配外部 NFS（NFS_SERVER_ADDR）" >&2
+  return 1
 }
 
 # 内置 NFS server 的挂载地址 = Pod 所在节点 IP（数据目录在节点 hostPath 下）
 _resolve_builtin_nfs_server() { # → stdout: 节点 IP；失败原因 → stderr；rc 1=失败
-  local pod ip
-  pod=$(builtin_nfs_pod) || return 1
-  ip=$(kubectl get pod "$pod" -n "${DEPLOY_VARS["NFS_POD_NAMESPACE"]}" \
+  local out ns pod ip
+  out=$(builtin_nfs_pod) || return 1
+  read -r ns pod <<< "$out"
+  ip=$(kubectl get pod "$pod" -n "$ns" \
     -o jsonpath='{.status.hostIP}' 2>/dev/null)
   if [ -z "$ip" ]; then
-    echo "内置 NFS server Pod ${pod} 尚无 hostIP（可能未就绪/正在重建）" >&2
+    echo "内置 NFS server Pod $ns/$pod 尚无 hostIP（可能未就绪/正在重建）" >&2
     return 1
   fi
   printf '%s' "$ip"
@@ -58,11 +64,12 @@ prepare_nfs_path() { # $1=组件
   local root="${DEPLOY_VARS["NFS_POD_PATH"]%/}"
   local share="${DEPLOY_VARS["NFS_SHARE_PATH"]%/}"
   local dir="${root}${share}/${DEPLOY_VARS["NAMESPACE"]}/${comp}"
-  local pod
-  pod=$(builtin_nfs_pod) \
+  local out ns pod
+  out=$(builtin_nfs_pod) \
     || error "未找到内置 NFS server Pod，无法创建数据目录 $dir（原因见 stderr 输出）"
-  info "创建 NFS 数据目录: ${dir}（Pod $pod）"
-  kubectl exec "$pod" -n "${DEPLOY_VARS["NFS_POD_NAMESPACE"]}" \
+  read -r ns pod <<< "$out"
+  info "创建 NFS 数据目录: $ns/${dir}（Pod $pod）"
+  kubectl exec "$pod" -n "$ns" \
     -- sh -c "mkdir -p '${dir}' && chmod 777 '${dir}'" \
     || error "NFS 数据目录创建失败: $dir"
 }
@@ -71,7 +78,8 @@ prepare_nfs_path() { # $1=组件
 # 内置/外置唯一判据为 NFS_SERVER_ADDR 是否为空；设置时须为主机名或 IP，
 # 共享根路径须为绝对路径
 resolve_nfs_vars() {
-  is_k8s_cluster || return 0
+  # 双形态校验：NFS_SERVER_ADDR/NFS_SHARE_PATH 除 k8s 直连挂载外，还被 nfs-sc
+  # 供给组件（双形态）消费；ENABLE_EXTERNAL_NFS 供 k8s 形态直连挂载派生使用
   local val="${DEPLOY_VARS["NFS_SERVER_ADDR"]:-}"
   if [ -n "$val" ]; then
     DEPLOY_VARS["ENABLE_EXTERNAL_NFS"]="true"    # 外部 NFS server
@@ -115,10 +123,20 @@ _nfs_rewrite_file() { # $1=conf 清单 $2=卷名 $3=nfs路径 $4=server
 # CLUSTER_TYPE=k8s 的渲染后处理入口；其余形态 no-op
 # 按需改写：仅处理本次渲染产物（render_templates 传入的清单），conf/ 中其他文件不动；
 apply_nfs_direct_mounts() { # $@=本次渲染的清单文件名
-  is_k8s_cluster || return 0
+  nfs_direct_mode || return 0   # MOUNT_TYPE=sc / openshift 形态：数据卷保持 PVC，不改写
   # 仅 up 改写数据卷并准备目录：down 只需 conf 里的资源名与集群一致（卷形态不影响按名删除），
   # 且拆除时内置 NFS Pod 可能已先被删——此时解析 NFS 地址不应阻塞卸载
   [ "${CMD:-}" = "up" ] || return 0
+
+  # 仅处理带数据卷的组件（mariadb/mysql/postgresql/minio/agentserver），
+  # 其清单按 <组件>-data 卷名改写为 NFS 直连挂载；其余清单（含 nfs 自身）不涉及
+  local -a need=() cmp
+  for cmp in mariadb mysql postgresql minio agentserver; do
+    in_array "$cmp.yaml" "$@" && need+=("$cmp")
+  done
+  in_array "agentserver.json" "$@" && need+=("agentserver.json")
+  [ ${#need[@]} -gt 0 ] || return 0
+
   local base="${DEPLOY_VARS["NFS_SHARE_PATH"]}"
   base="${base%/}"
   local ns="${DEPLOY_VARS["NAMESPACE"]}"
@@ -273,23 +291,14 @@ _kctl_k8s_replace_resource() { # $1=资源文件
 }
 
 _kctl_k8s_delete_resource() { # $1=资源文件
+  # --wait=false：删除请求发出即返回，不阻塞等待资源消失（PVC 的 pvc-protection
+  # finalizer 会持有到 Pod 终止，阻塞式删除会被卡死）；Pod 终止由组件级
+  # wait_deleted 统一等待并受预算约束。--ignore-not-found 由 KCTL_IGNORE_NOT_FOUND 控制
   local err code out
   err="$(kctl_tmpdir)/k8s-err"
-  if [ "${KCTL_IGNORE_NOT_FOUND:-0}" = 1 ]; then
-    out=$(kubectl delete -f "$1" --ignore-not-found 2> "$err") \
-      || { code=$(_kctl_k8s_err_code "$(cat "$err")"); kctl_show_err "$code" "$err"; }
-    info "${out:-$KCTL_LK/$KCTL_NAME not found（已忽略）}"
-    return 0
-  fi
-  if kubectl delete -f "$1" > /dev/null 2> "$err"; then
-    success "$KCTL_LK/$KCTL_NAME deleted"
-  else
-    code=$(_kctl_k8s_err_code "$(cat "$err")")
-    if [ "$code" = 404 ]; then
-      error "Error from server (NotFound): $KCTL_LK/$KCTL_NAME"
-    fi
-    kctl_show_err "$code" "$err"
-  fi
+  out=$(kubectl delete -f "$1" --ignore-not-found --wait=false 2> "$err") \
+    || { code=$(_kctl_k8s_err_code "$(cat "$err")"); kctl_show_err "$code" "$err"; }
+  [ -n "$out" ] && info "删除: $(echo "$out" | sed 's/ deleted//g; s/ from [^ ]* namespace//g' | tr '\n' ' ' | sed 's/  */ /g; s/ $//')"
 }
 
 # 单端口占用判断：本机监听（netstat/ss）+ 集群 nodePort 绑定（kubectl 获取后 yq 解析）
@@ -438,53 +447,218 @@ apply_manager_deploy_env_snapshot() { # $@=本次渲染的清单文件名
 
 # ---------- manager-server 部署凭证注入（管理面程序化部署） ----------
 
-# manager up 的前置步骤：MANAGER_DEPLOY_KUBECONFIG_SECRET 非空且目标 ns 中该 Secret
-# 不存在时，从部署机当前 kubeconfig（$KUBECONFIG 或 ~/.kube/config）自动创建。
+# manager up 的前置步骤：部署凭证 Secret 缺失时自动创建（双形态）。
 # 避免渲染清单引用了 Secret 而实际缺失，manager-server 卡在 ContainerCreating。
-# 安全门：仅 k8s 形态（openshift 请手工创建）；仅 manager-server 在本次目标里
-#（普通产品面 up 不在产品 ns 凭空建凭证）；已存在不覆盖（可能是刻意放置的最小权限
-# 凭证）。down 不回收：凭证独立于组件生命周期，跨 up 幂等复用。
-ensure_manager_deploy_kubeconfig_secret() {
-  local secret="${DEPLOY_VARS["MANAGER_DEPLOY_KUBECONFIG_SECRET"]}"
-  [ -n "$secret" ] || return 0
+# - k8s 形态：MANAGER_DEPLOY_KUBECONFIG_SECRET 非空时，从部署机 kubeconfig
+#   （$KUBECONFIG 或 ~/.kube/config）创建；
+# - openshift 形态：token 取 MANAGER_DEPLOY_TOKEN_FILE 指定文件，否则本机 oc 登录态
+#   （oc whoami -t；OAuth token 会过期，生产建议专用 SA 长期 token 手工预建）。
+# 创建统一走 kctl 通道（两形态一致；openshift 无 kubectl）。
+# 安全门：仅 manager-server 在本次目标里；已存在不覆盖（保护手工预建的长期凭证）；
+# openshift 取不到 token 时 warning 放行（pod 卡 ContainerCreating 有明确事件）。
+# down 不回收：凭证独立于组件生命周期，跨 up 幂等复用。
+ensure_manager_deploy_credentials() {
   in_array manager-server "${TARGETS[@]}" || return 0
-  is_k8s_cluster || { warning "openshift 形态不自动创建部署凭证 Secret（$secret），请手工预建"; return 0; }
-  local src="${KUBECONFIG:-$HOME/.kube/config}"
-  if [ ! -f "$src" ]; then
-    error "MANAGER_DEPLOY_KUBECONFIG_SECRET=$secret 已配置，但部署机 kubeconfig 不存在: $src
+  local secret key value
+  if is_k8s_cluster; then
+    secret="${DEPLOY_VARS["MANAGER_DEPLOY_KUBECONFIG_SECRET"]}"
+    [ -n "$secret" ] || return 0
+    local src="${KUBECONFIG:-$HOME/.kube/config}"
+    if [ ! -f "$src" ]; then
+      error "MANAGER_DEPLOY_KUBECONFIG_SECRET=$secret 已配置，但部署机 kubeconfig 不存在: $src
 请先手工创建: kubectl -n $KCTL_NS create secret generic $secret --from-file=kubeconfig=<文件>"
+    fi
+    key="kubeconfig"; value="$(base64 -w0 "$src")"
+  else
+    secret="${DEPLOY_VARS["MANAGER_DEPLOY_TOKEN_SECRET"]:-manager-deploy-token}"
+    local token_file="${DEPLOY_VARS["MANAGER_DEPLOY_TOKEN_FILE"]:-}"
+    if [ -n "$token_file" ] && [ -f "$token_file" ]; then
+      value="$(tr -d '\r\n' < "$token_file" | base64 -w0)"
+    elif command -v oc >/dev/null 2>&1; then
+      local tok; tok="$(oc whoami -t 2>/dev/null)"
+      [ -n "$tok" ] || { warning "oc 登录态取不到 token，请手工预建 Secret $secret（或配 MANAGER_DEPLOY_TOKEN_FILE）"; return 0; }
+      value="$(printf '%s' "$tok" | base64 -w0)"
+    else
+      warning "无法自动获取 token（无 MANAGER_DEPLOY_TOKEN_FILE 且本机无 oc），请手工预建 Secret $secret"
+      return 0
+    fi
+    key="token"
   fi
-  if kubectl -n "$KCTL_NS" get secret "$secret" >/dev/null 2>&1; then
-    info "部署凭证 Secret 已存在: $secret（沿用，不覆盖）"
-    return 0
-  fi
-  kubectl -n "$KCTL_NS" create secret generic "$secret" --from-file=kubeconfig="$src" \
-    || error "创建部署凭证 Secret 失败: $secret"
-  success "已从 $src 自动创建部署凭证 Secret: $secret（ns: $KCTL_NS）"
+  _ensure_deploy_secret_via_kctl "$KCTL_NS" "$secret" "$key" "$value"     && success "已自动创建部署凭证 Secret: $secret（ns: $KCTL_NS）"
+  return 0
 }
 
-# MANAGER_DEPLOY_KUBECONFIG_SECRET 非空时向 manager-server.yaml 的 Deployment 注入：
-#   pod 卷（引用该 Secret）+ 容器只读 subPath 挂载 /etc/manager/deploy-kubeconfig
-#   + env MANAGER_DEPLOY_KUBECONFIG（指向挂载路径）
-# 供 manager-server「管理面启动部署」功能以子进程代跑 deploy.sh：KUBECONFIG 仅注入部署
-# 子进程，manager-server SA 自身保持零 k8s RBAC。留空（默认）不做任何改写
+# 经 kctl 通道探测/创建部署凭证 Secret（404 → POST；已存在沿用；探测异常 warning 放行）
+_ensure_deploy_secret_via_kctl() { # $1=ns $2=secret名 $3=键名 $4=base64值
+  local ns="$1" secret="$2" key="$3" value="$4" code resp body
+  resp="$(kctl_tmpdir)/ensure-deploy-secret"
+  code=$(kctl_http GET "/api/v1/namespaces/$ns/secrets/$secret" "$resp")
+  case "$code" in
+    200) info "部署凭证 Secret 已存在: $secret（沿用，不覆盖）"; return 1;;
+    404) ;;
+    *)   warning "部署凭证 Secret 探测失败（HTTP $code），跳过自动创建"; return 1;;
+  esac
+  # kctl_http 第4参数约定为 body 文件路径（内部 --data-binary @file），须先落盘再传，
+  # 直接传内容字符串会被 curl 当文件名（报 error encountered when reading a file → HTTP 000）
+  body="$(kctl_tmpdir)/ensure-deploy-secret-body"
+  printf '{"apiVersion":"v1","kind":"Secret","metadata":{"name":"%s","namespace":"%s"},"type":"Opaque","data":{"%s":"%s"}}' \
+    "$secret" "$ns" "$key" "$value" > "$body"
+  code=$(kctl_http POST "/api/v1/namespaces/$ns/secrets" "$resp" "$body")
+  case "$code" in
+    200|201) return 0;;
+    409) info "部署凭证 Secret 已存在: $secret（并发创建，沿用）"; return 1;;
+    *)   error "创建部署凭证 Secret 失败: HTTP $code $(head -c 200 "$resp" 2>/dev/null)";;
+  esac
+}
+
+# manager-server 部署凭证注入（双形态，按本次部署的 CLUSTER_TYPE 分流）：
+# - k8s：MANAGER_DEPLOY_KUBECONFIG_SECRET 非空时注入 Secret 卷（只读 subPath 挂
+#   /etc/manager/deploy-kubeconfig）+ env MANAGER_DEPLOY_KUBECONFIG；
+# - openshift：注入 token Secret 卷（/etc/manager/deploy-token）+ env
+#   MANAGER_DEPLOY_TOKEN / MANAGER_DEPLOY_API_SERVER。
+# 两形态都注入 env MANAGER_DEPLOY_CLUSTER_TYPE（manager-server 据此选定部署子进程的
+# 形态与凭证通道）。manager-server SA 自身保持零集群 RBAC。
 apply_manager_deploy_credentials() { # $@=本次渲染的清单文件名
-  local secret="${DEPLOY_VARS["MANAGER_DEPLOY_KUBECONFIG_SECRET"]}"
-  [ -n "$secret" ] || return 0
-  local f
+  local f secret mounts envs
+  if is_k8s_cluster; then
+    secret="${DEPLOY_VARS["MANAGER_DEPLOY_KUBECONFIG_SECRET"]}"
+    [ -n "$secret" ] || return 0
+    mounts='[{"name": "manager-deploy-credential", "mountPath": "/etc/manager/deploy-kubeconfig", "subPath": "kubeconfig", "readOnly": true}]'
+    envs='[{"name": "MANAGER_DEPLOY_KUBECONFIG", "value": "/etc/manager/deploy-kubeconfig"}, {"name": "MANAGER_DEPLOY_CLUSTER_TYPE", "value": "k8s"}]'
+    local vol='{"name": "manager-deploy-credential", "secret": {"secretName": "'"$secret"'"}}'
+  else
+    secret="${DEPLOY_VARS["MANAGER_DEPLOY_TOKEN_SECRET"]:-manager-deploy-token}"
+    mounts='[{"name": "manager-deploy-credential", "mountPath": "/etc/manager/deploy-token", "subPath": "token", "readOnly": true}]'
+    envs='[{"name": "MANAGER_DEPLOY_TOKEN", "value": "/etc/manager/deploy-token"}, {"name": "MANAGER_DEPLOY_CLUSTER_TYPE", "value": "openshift"}, {"name": "MANAGER_DEPLOY_API_SERVER", "value": "'"${DEPLOY_VARS["CLUSTER_API_SERVER"]}"'"}]'
+    local vol='{"name": "manager-deploy-credential", "secret": {"secretName": "'"$secret"'"}}'
+  fi
   for f in "$@"; do
     case "${f%.yaml}" in manager-server) ;; *) continue;; esac
     [ -f "$CONF_DIR/$f" ] || continue
-    yq -i '
-      (select(.kind == "Deployment").spec.template.spec.volumes) |=
-        ((. // []) + [{"name": "manager-deploy-kubeconfig", "secret": {"secretName": "'"$secret"'"}}])
-      | (select(.kind == "Deployment").spec.template.spec.containers[0].volumeMounts) |=
-        ((. // []) + [{"name": "manager-deploy-kubeconfig", "mountPath": "/etc/manager/deploy-kubeconfig", "subPath": "kubeconfig", "readOnly": true}])
-      | (select(.kind == "Deployment").spec.template.spec.containers[0].env) |=
-        ((. // []) + [{"name": "MANAGER_DEPLOY_KUBECONFIG", "value": "/etc/manager/deploy-kubeconfig"}])
+    VOL_JSON="$vol" MOUNTS_JSON="$mounts" ENVS_JSON="$envs" yq -i '
+      (select(.kind == "Deployment").spec.template.spec.volumes) |= ((. // []) + [strenv(VOL_JSON) | from_json])
+      | (select(.kind == "Deployment").spec.template.spec.containers[0].volumeMounts) |= ((. // []) + (strenv(MOUNTS_JSON) | from_json))
+      | (select(.kind == "Deployment").spec.template.spec.containers[0].env) |= ((. // []) + (strenv(ENVS_JSON) | from_json))
     ' "$CONF_DIR/$f" || error "manager-server 部署凭证注入失败: $f"
-    info "manager-server 部署凭证后处理：注入 kubeconfig Secret 卷（$secret）"
+    info "manager-server 部署凭证后处理：注入 $secret 凭证卷（$(is_k8s_cluster && echo kubeconfig || echo token)）"
   done
+}
+
+# 管理面「导入默认配置」：把渲染完成的 agentserver.json 上传到 OBS/MinIO
+# object key 取 AGENT_RUNTIME_DEFAULT_CONF_PATH（默认 defaults/{ns}/agentserver.json），
+# {ns} → NAMESPACE，与 manager-server GET default-rawdata 一致。
+_agentserver_default_object_key() {
+  local tpl ns
+  tpl="${DEPLOY_VARS["AGENT_RUNTIME_DEFAULT_CONF_PATH"]:-defaults/{ns}/agentserver.json}"
+  ns="${DEPLOY_VARS["NAMESPACE"]:-default}"
+  [ -n "$ns" ] || ns="default"
+  echo "${tpl//\{ns\}/${ns}}"
+}
+
+_obs_put_script() {
+  # 与本部署包同目录，保证单独打包 openshift 时仍能带上
+  echo "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/obs_put_object.py"
+}
+
+# 部署机上传用的 OBS 地址：集群内 DNS（minio-headless.*）在宿主机不可解析。
+# 内置 MinIO → 节点 IP + API NodePort；外部 OBS → 沿用 OBS_URL。
+_obs_endpoint_for_host() {
+  local endpoint="${DEPLOY_VARS["OBS_URL"]:-}"
+  if [ "${DEPLOY_VARS["ENABLE_EXTERNAL_OBS"]:-}" = "true" ]; then
+    echo "$endpoint"
+    return 0
+  fi
+  local node_ip="" node_port="" ns svc
+  node_port="${DEPLOY_VARS["MINIO_API_NODE_PORT"]:-}"
+  ns="${DEPLOY_VARS["BASE_SVC_NS"]:-default}"
+  if [ -z "$node_port" ] && command -v kubectl >/dev/null 2>&1; then
+    for svc in minio-nodeport minio-api-nodeport; do
+      node_port=$(kubectl get svc -n "$ns" "$svc" \
+        -o jsonpath='{.spec.ports[?(@.port==9000)].nodePort}' 2>/dev/null || true)
+      [ -n "$node_port" ] && break
+    done
+  fi
+  if [ -n "${DEPLOY_VARS["CURRENT_NODE_NAME"]:-}" ] && command -v kubectl >/dev/null 2>&1; then
+    node_ip=$(kubectl get node "${DEPLOY_VARS["CURRENT_NODE_NAME"]}" \
+      -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || true)
+  fi
+  [ -n "$node_ip" ] || node_ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+  if [ -n "$node_ip" ] && [ -n "$node_port" ]; then
+    echo "${node_ip}:${node_port}"
+    return 0
+  fi
+  # 兜底：仍返回集群内地址（可能在宿主机失败，由调用方报错）
+  echo "$endpoint"
+}
+
+# 上传默认运行时配置到对象存储（须在 agentserver.json 全部后处理之后、且非 render-only）
+upload_agentserver_default_config() {
+  local src="$CONF_DIR/agentserver.json"
+  [ -f "$src" ] || return 0
+  [ "${DEPLOY_VARS["RENDER_ONLY"]:-}" = "true" ] && return 0
+  local endpoint bucket access secret
+  endpoint="$(_obs_endpoint_for_host)"
+  bucket="${DEPLOY_VARS["OBS_BUCKET"]:-}"
+  access="${DEPLOY_VARS["OBS_ACCESS_KEY"]:-}"
+  secret="${DEPLOY_VARS["OBS_SECRET_KEY"]:-}"
+  if [ -z "$endpoint" ] || [ -z "$bucket" ] || [ -z "$access" ] || [ -z "$secret" ]; then
+    warning "OBS 未配置完整，跳过上传默认 agentserver.json（管理面「导入默认配置」将不可用）"
+    return 0
+  fi
+  local key script
+  key="$(_agentserver_default_object_key)"
+  script="$(_obs_put_script)"
+  # 「导入默认配置」为可选增值能力：上传失败只告警，不阻断已就绪的 runtime 部署
+  if [ ! -f "$script" ]; then
+    warning "缺少 OBS 上传脚本，跳过上传默认 agentserver.json: $script"
+    return 0
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    warning "未找到 python3，跳过上传默认 agentserver.json（管理面「导入默认配置」将不可用）"
+    return 0
+  fi
+  info "上传默认运行时配置 → s3://$bucket/$key（endpoint=$endpoint）"
+  if ! python3 "$script" \
+    --endpoint "$endpoint" \
+    --bucket "$bucket" \
+    --access-key "$access" \
+    --secret-key "$secret" \
+    --region "${DEPLOY_VARS["OBS_REGION"]:-default}" \
+    --secure "${DEPLOY_VARS["OBS_SECURE"]:-false}" \
+    --object-key "$key" \
+    --file "$src"; then
+    warning "上传默认 agentserver.json 失败（可稍后手动补传）: s3://$bucket/$key"
+    return 0
+  fi
+  success "默认运行时配置已上传: s3://$bucket/$key"
+}
+
+# 卸载时尽量删除对象（缺失/不可达仅告警，不阻断 down）
+delete_agentserver_default_config() {
+  local endpoint bucket access secret
+  endpoint="$(_obs_endpoint_for_host)"
+  bucket="${DEPLOY_VARS["OBS_BUCKET"]:-}"
+  access="${DEPLOY_VARS["OBS_ACCESS_KEY"]:-}"
+  secret="${DEPLOY_VARS["OBS_SECRET_KEY"]:-}"
+  if [ -z "$endpoint" ] || [ -z "$bucket" ] || [ -z "$access" ] || [ -z "$secret" ]; then
+    return 0
+  fi
+  local key script
+  key="$(_agentserver_default_object_key)"
+  script="$(_obs_put_script)"
+  [ -f "$script" ] || return 0
+  command -v python3 >/dev/null 2>&1 || return 0
+  python3 "$script" \
+    --endpoint "$endpoint" \
+    --bucket "$bucket" \
+    --access-key "$access" \
+    --secret-key "$secret" \
+    --region "${DEPLOY_VARS["OBS_REGION"]:-default}" \
+    --secure "${DEPLOY_VARS["OBS_SECURE"]:-false}" \
+    --object-key "$key" \
+    --delete \
+    && info "已删除默认运行时配置对象: s3://$bucket/$key" \
+    || warning "删除默认运行时配置对象失败（可忽略）: s3://$bucket/$key"
 }
 
 # ---------- agent-runtime / manager-server 三模式后处理 ----------
@@ -760,7 +934,22 @@ fetch_current_node_name() {
       return 0
     }
   done
-  error "无法识别当前节点（本机可能不是集群节点）：MODE=dev 需在 .env.custom 配置 CURRENT_NODE_NAME"
+  error "无法识别当前节点（本机可能不是集群节点）：需在 .env.custom 配置 CURRENT_NODE_NAME（MODE=dev 代码挂载 / nfs-server 节点固定场景）"
+}
+
+# nfs 组件渲染后处理：nodeName 兜底告警（仅 nfs.yaml；--render-only 离线渲染无法
+# 识别部署节点时 nodeName 整行删除，Pod 可调度到任意节点，hostPath 数据随节点漂移）
+apply_nfs_extras() { # $@=本次渲染的清单文件名
+  local f
+  for f in "$@"; do
+    [ "$f" = nfs.yaml ] || continue
+    [ -f "$CONF_DIR/$f" ] || continue
+    if [ -z "${DEPLOY_VARS["CURRENT_NODE_NAME"]}" ]; then
+      warning "CURRENT_NODE_NAME 未识别：nfs-server 的 nodeName 已留空，Pod 可调度到任意节点（hostPath 数据随节点漂移）；正式部署请在集群可达环境重新渲染，或显式配置 CURRENT_NODE_NAME"
+    elif [ "${DEPLOY_VARS["CURRENT_NODE_NAME"]}" != "$(hostname)" ]; then
+      warning "NFS 导出根 ${DEPLOY_VARS["NFS_HOST_PATH"]} 须存在于节点 ${DEPLOY_VARS["CURRENT_NODE_NAME"]}：本机（$(hostname)）与其不一致时，请在该节点手工创建目录并 chmod 777"
+    fi
+  done
 }
 
 # MODE=dev 的渲染后处理：按组件挂载代码并固定节点；openshift 形态忽略 MODE=dev

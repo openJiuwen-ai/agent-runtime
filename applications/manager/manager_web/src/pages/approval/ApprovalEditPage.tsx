@@ -52,12 +52,15 @@ function approvalTypeLabel(
   return businessType;
 }
 
-/** 标题由 manager 落库，技能上传的前缀在这里按当前语言重拼，技能名保持原样。 */
+/** 标题由 manager 落库；技能上传与工作区扩容在这里按当前语言重拼，技能名保持原样。 */
 function approvalTitle(
   t: ReturnType<typeof useTranslation>['t'],
   order: { business_type: string; title: string; apply_data?: unknown },
 ): string {
   const raw = (order.title || '').trim();
+  if (order.business_type === 'workspace_quota_expand') {
+    return t('approvals.workspaceExpandTitle');
+  }
   if (order.business_type === 'skill_upload' && order.apply_data) {
     const skillName = String(
       (order.apply_data as ApprovalSkillUploadApplyData).skill_name || '',

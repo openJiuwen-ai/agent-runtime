@@ -36,8 +36,9 @@ class VersatileWorkflow(VersatileProxy):
         headers_template: Optional[dict] = None,
         forward_header_whitelist: Optional[set[str]] = None,
         workflow_result_node: Optional[str] = None,
+        tls_verify: bool | str | None = None,
     ) -> None:
-        super().__init__(url_template, timeout, headers_template, forward_header_whitelist)
+        super().__init__(url_template, timeout, headers_template, forward_header_whitelist, tls_verify)
         self._workflow_id = workflow_id
         self._workflow_result_node = workflow_result_node
 

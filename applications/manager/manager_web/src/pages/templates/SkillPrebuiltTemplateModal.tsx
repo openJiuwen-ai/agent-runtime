@@ -174,7 +174,7 @@ export function SkillPrebuiltTemplateModal({ open, template, onClose, onSaved }:
       return;
     }
 
-    const description = form.description.trim() || undefined;
+    const description = form.description.trim() || null;
     const data = buildTemplateData(template?.data ?? undefined, form.author, form.sha256, provider);
 
     setSaving(true);

@@ -6,7 +6,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: jiuwenswarm-redis
-  namespace: <<NAMESPACE>>
+  namespace: "<<NAMESPACE>>"
 spec:
   ports:
     - name: redis
@@ -19,7 +19,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: jiuwenswarm-redis
-  namespace: <<NAMESPACE>>
+  namespace: "<<NAMESPACE>>"
 spec:
   replicas: 1
   selector:

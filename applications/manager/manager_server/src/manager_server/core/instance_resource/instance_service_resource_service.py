@@ -127,6 +127,7 @@ class InstanceServiceResourceService:
         resource_id: str,
         match_exprs: list[Any],
         *,
+        ref_template_id: str | None = None,
         resource_name: str | None = None,
         resource_desc: str | None = None,
         priority: int = 0,
@@ -148,12 +149,16 @@ class InstanceServiceResourceService:
         )
         if not existing:
             raise LookupError(f"instance service resource not found: {rid}")
-        template_id = str(_g(existing[0], "ref_template_id") or "")
+        old_template_id = str(_g(existing[0], "ref_template_id") or "").strip()
+        template_id = (ref_template_id or "").strip() or old_template_id
+        if not template_id:
+            raise ValueError("ref_template_id is required")
         return await self._write_grants(
             jiuwenclaw_id,
             template_id,
             match_exprs,
             resource_id=rid,
+            previous_template_id=old_template_id,
             resource_name=resource_name,
             resource_desc=resource_desc,
             priority=priority,
@@ -219,6 +224,7 @@ class InstanceServiceResourceService:
         match_exprs: list[Any],
         *,
         resource_id: str | None = None,
+        previous_template_id: str | None = None,
         resource_name: str | None = None,
         resource_desc: str | None = None,
         priority: int = 0,
@@ -230,21 +236,26 @@ class InstanceServiceResourceService:
         if await self._tpl.get(template_id) is None:
             raise ValueError(f"service_config_template not found: {template_id}")
         normalized_resource_id = (resource_id or "").strip() or None
-        target_filters: dict[str, Any] = {
-            "jiuwenclaw_id": jiuwenclaw_id,
-            "ref_template_id": template_id,
-        }
+        # 更新按 resource_id 定位（支持改绑模板）
         existing: list[Any] = []
         if normalized_resource_id:
-            target_filters["resource_id"] = normalized_resource_id
-            existing = await self._h.list_records(_GRANT, target_filters, limit=_CAP, offset=0)
+            existing = await self._h.list_records(
+                _GRANT,
+                {"jiuwenclaw_id": jiuwenclaw_id, "resource_id": normalized_resource_id},
+                limit=_CAP,
+                offset=0,
+            )
         resolved_resource_id = normalized_resource_id or new_uuid4()
         existing_name = str(_g(existing[0], "resource_name") or "").strip() if existing else ""
-        existing_desc = str(_g(existing[0], "resource_desc") or "").strip() if existing else ""
         resolved_name = (resource_name or "").strip() or existing_name or None
-        resolved_desc = (resource_desc or "").strip() or existing_desc or None
+        # 更新为整份覆盖：空描述表示清空，不再回退到旧值
+        resolved_desc = strip_optional(resource_desc)
         if not resolved_name:
             raise ValueError("resource_name is required")
+        old_template_id = (
+            (previous_template_id or "").strip()
+            or (str(_g(existing[0], "ref_template_id") or "").strip() if existing else "")
+        )
 
         await self._assert_unique_enabled_priority(
             jiuwenclaw_id=jiuwenclaw_id,
@@ -284,7 +295,7 @@ class InstanceServiceResourceService:
             rid = str(_g(r, "resource_id") or "").strip()
             if rid:
                 before_resource_ids.add(rid)
-        is_new_resource = resolved_resource_id not in before_resource_ids
+        is_new_for_template = resolved_resource_id not in before_resource_ids
         projected = self._project_upsert(current, resolved_resource_id, grant_row)
         try:
             await sync_runtime_config(
@@ -294,17 +305,41 @@ class InstanceServiceResourceService:
             raise ValueError(f"failed to sync to runtime: {exc}") from exc
 
         if normalized_resource_id:
-            await _delete_where(self._h, _GRANT, target_filters, "id")
+            await _delete_where(
+                self._h,
+                _GRANT,
+                {"jiuwenclaw_id": jiuwenclaw_id, "resource_id": normalized_resource_id},
+                "id",
+            )
         await self._h.create(_GRANT, grant_row)
         await auto_bind_from_match_expr(self._h, jiuwenclaw_id, merged_expr)
-        if is_new_resource:
+        if is_new_for_template:
             await record_service_template_ref_on_runtime(
                 self._h, jiuwenclaw_id, template_id
             )
+        # 改绑：仅当本实例已无其它 resource 引用旧模板时才 unrecord，
+        # 避免 R1/R2 同绑 tpl-old 时改绑 R1 把仍被 R2 使用的旧模板索引清掉。
+        if old_template_id and old_template_id != template_id:
+            remaining = await self._h.list_records(
+                _GRANT,
+                {"jiuwenclaw_id": jiuwenclaw_id, "ref_template_id": old_template_id},
+                limit=_CAP,
+                offset=0,
+            )
+            still_referenced = any(
+                str(_g(r, "resource_id") or "").strip()
+                not in {"", resolved_resource_id}
+                for r in remaining
+            )
+            if not still_referenced:
+                await unrecord_service_template_ref_on_runtime(
+                    self._h, jiuwenclaw_id, old_template_id
+                )
         _log.info(
             "[InstanceResource] instance_service_resource.write",
             jiuwenclaw_id=jiuwenclaw_id,
             template_id=template_id,
+            previous_template_id=old_template_id or None,
             resource_id=resolved_resource_id,
             n=1,
         )
@@ -332,9 +367,20 @@ class InstanceServiceResourceService:
         for r in rows:
             await self._h.delete(_GRANT, {"id": _g(r, "id")})
         if ref_template_id:
-            await unrecord_service_template_ref_on_runtime(
-                self._h, jiuwenclaw_id, ref_template_id
+            siblings = await self._h.list_records(
+                _GRANT,
+                {"jiuwenclaw_id": jiuwenclaw_id, "ref_template_id": ref_template_id},
+                limit=_CAP,
+                offset=0,
             )
+            still_referenced = any(
+                str(_g(r, "resource_id") or "").strip() not in {"", rid}
+                for r in siblings
+            )
+            if not still_referenced:
+                await unrecord_service_template_ref_on_runtime(
+                    self._h, jiuwenclaw_id, ref_template_id
+                )
         _log.info(
             "[InstanceResource] instance_service_resource.remove",
             jiuwenclaw_id=jiuwenclaw_id,

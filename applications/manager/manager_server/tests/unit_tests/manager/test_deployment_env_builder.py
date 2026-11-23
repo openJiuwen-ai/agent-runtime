@@ -240,3 +240,75 @@ class TestSeedingFromEnvCustom:
 
         seeded = asyncio_run(svc_mod.DeploymentService(_H()).get_defaults())
         assert seeded == {}
+
+
+class TestOcpClusterType:
+    """openshift 形态：强制键随 manager 所在集群切换，API 地址入白名单。"""
+
+    def test_forced_cluster_type_openshift(self, monkeypatch):
+        from manager_server.infrastructure.config import settings
+
+        monkeypatch.setattr(settings, "deploy_cluster_type", "openshift")
+        merged = merge_env(_MIN_ENV, {})
+        assert merged["CLUSTER_TYPE"] == "openshift"
+        assert merged["MODE"] == "product"
+
+    def test_forced_cluster_type_invalid_falls_back(self, monkeypatch):
+        from manager_server.infrastructure.config import settings
+
+        monkeypatch.setattr(settings, "deploy_cluster_type", " bogus ")
+        assert merge_env(_MIN_ENV, {})["CLUSTER_TYPE"] == "k8s"
+
+    def test_cluster_api_server_whitelisted_and_validated(self):
+        merged = merge_env(
+            _MIN_ENV,
+            {"CLUSTER_API_SERVER": "https://api.ocp.example:6443", "CLUSTER_API_INSECURE": "true"},
+        )
+        assert merged["CLUSTER_API_SERVER"] == "https://api.ocp.example:6443"
+        with pytest.raises(ValueError, match="http\\(s\\) URL"):
+            merge_env(_MIN_ENV, {"CLUSTER_API_SERVER": "ftp://bad"})
+        with pytest.raises(ValueError, match="true/false"):
+            merge_env(_MIN_ENV, {"CLUSTER_API_INSECURE": "yes"})
+
+    def test_tool_available_openshift_branch(self, monkeypatch, tmp_path):
+        import shutil as _shutil
+        from manager_server.core.deployment import toolkit
+        from manager_server.infrastructure.config import settings
+
+        tool_dir = tmp_path / "tool"
+        tool_dir.mkdir()
+        (tool_dir / "deploy.sh").write_text("#!/bin/sh\n")
+        token_file = tmp_path / "token"
+        token_file.write_text("sha256~abc")
+
+        monkeypatch.setattr(toolkit, "resolve_tool_dir", lambda: tool_dir)
+        monkeypatch.setattr(settings, "deploy_cluster_type", "openshift")
+        monkeypatch.setattr(settings, "deploy_token", str(tmp_path / "missing"))
+        ok, reason = toolkit.check_tool_available()
+        assert not ok and "token" in reason
+
+        monkeypatch.setattr(settings, "deploy_token", str(token_file))
+        monkeypatch.setattr(_shutil, "which", lambda c: "/usr/bin/" + c)
+        ok, reason = toolkit.check_tool_available()
+        assert ok, reason
+
+
+class TestOcpDbHost:
+    """内置 DB 实例地址随形态：k8s=default 共享；openshift=任务目标 ns。"""
+
+    def test_k8s_default_host(self):
+        conn = derive_db_connection({"DB_TYPE": "mariadb", "CLUSTER_TYPE": "k8s"})
+        assert conn["host"] == "mariadb-headless.default"
+
+    def test_openshift_namespace_host(self):
+        conn = derive_db_connection(
+            {"DB_TYPE": "mariadb", "CLUSTER_TYPE": "openshift"}, namespace="proj-x"
+        )
+        assert conn["host"] == "mariadb-headless.proj-x"
+
+    def test_external_host_unaffected(self):
+        conn = derive_db_connection(
+            {"DB_TYPE": "mariadb", "CLUSTER_TYPE": "openshift", "DB_HOST": "db.example"},
+            namespace="proj-x",
+        )
+        assert conn["host"] == "db.example"

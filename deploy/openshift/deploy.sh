@@ -38,6 +38,10 @@ main() {
   progress_json phase phase=validate state=start
   read_env_from_file "$CUSTOM_ENV_FILE" DEPLOY_VARS
   parse_args "$@"
+  # 依赖检查须先于 check_vars：nfs 目标会在 check_vars 内经 fetch_current_node_name
+  # 消费 yq（缺依赖时其内部管道静默失败，只剩误导性的"无法识别当前节点"报错）
+  [ "${DEPLOY_VARS["RENDER_ONLY"]}" = "true" ] || check_dependency
+  filter_targets_by_nfs_platform   # nfs 目标统一解析：openshift / 外部 NFS / 非 amd64 节点 → nfs-sc；k8s amd64 内置 → nfs + nfs-sc；down 按 conf/ 产物对账
   check_vars
   progress_json phase phase=validate state=ok
   filter_targets_by_external_mode
@@ -55,13 +59,13 @@ main() {
     return 0
   fi
 
-  check_dependency
   kctl_check_vars
 
   if [ "$CMD" = up ]; then
     filter_targets_by_cluster_type   # k8s 形态：基础服务复用 default 共享实例，禁在本 ns up（-n default 预置放行）；仅 up 生效
     kctl_ensure_namespace "$KCTL_NS"   # 仅 up：目标 ns/Project 缺失时自动创建；无权限降级警告继续；down 不创建
     resolve_builtin_svc_locations   # 内置基础服务实例定位（本 ns → default），渲染前执行
+    resolve_storage_class_vars      # 存储类派生（nfs-sc 在目标或集群已存在时自动填充），渲染前执行
     resolve_targets        # 可拉起依赖（redis）集群缺失时自动纳入
     info "部署目标: ${TARGETS[*]}"
     _CURRENT_PHASE=render; progress_json phase phase=render state=start
@@ -70,7 +74,7 @@ main() {
     _CURRENT_PHASE=preflight; progress_json phase phase=preflight state=start
     preflight
     progress_json phase phase=preflight state=ok
-    ensure_manager_deploy_kubeconfig_secret   # 部署凭证缺失时自动从本地 kubeconfig 创建（manager up 前置）
+    ensure_manager_deploy_credentials   # 部署凭证 Secret 缺失时自动创建（双形态，manager up 前置）
     _CURRENT_PHASE=apply; progress_json phase phase=apply state=start
     run_phase apply "部署" "${TARGETS[@]}"
     progress_json phase phase=apply state=ok
@@ -79,29 +83,37 @@ main() {
     # 卸载不渲染，直接消费 conf/ 现有清单（上次 up 渲染的部署时形态）：
     # 资源名与在役资源一致，模板漂移也不会漏删；conf/ 产物不被 down 覆盖。
     # 非 K8s 清单（agentserver.json）卸载不消费，缺失不校验
-    local missing=() cf
+    local missing=() miss_comps=() cf comp
     for comp in "${TARGETS[@]}"; do
+      local need_render=0
       for cf in $(component_files "$comp"); do
         case "$cf" in *.json) continue;; esac
-        [ -f "$CONF_DIR/$cf" ] || missing+=("$cf")
+        [ -f "$CONF_DIR/$cf" ] || { missing+=("$cf"); need_render=1; }
       done
+      [ "$need_render" = 1 ] || continue
+      [ "$comp" = nfs-sc ] && comp=nfs   # nfs-sc 由 nfs 目标统一解析（非用户入口），缺失提示回 nfs
+      in_array "$comp" "${miss_comps[@]}" || miss_comps+=("$comp")
     done
-    if [ "${#missing[@]}" -gt 0 ]; then
+    if [ ${#missing[@]} -gt 0 ]; then
       error "conf/ 缺卸载所需清单: ${missing[*]}
-先执行 ./deploy.sh up --render-only 补齐渲染（产物落 conf/），再执行 down"
+先执行 ./deploy.sh up ${miss_comps[*]} --render-only 补齐渲染（产物落 conf/），再执行 down"
     fi
     # kubectl delete -f 以清单内 namespace 为准（-n 不同也不改写删除目标）：
-    # 校验 conf/ 内嵌 ns 与 -n 一致，防卸载错命名空间或静默删空
-    local probe_ns=""
+    # 校验 conf/ 内嵌 ns 与 -n 一致，防卸载错命名空间或静默删空；
+    # 例外：组件实际 ns（component_ns，如 nfs 按基础服务规则定位）与
+    # -n 解耦，内嵌 ns 命中组件实际 ns 时放行
+    local probe_ns="" probe_comp=""
     for comp in "${TARGETS[@]}"; do
       for cf in $(component_files "$comp"); do
         case "$cf" in *.json) continue;; esac
         [ -f "$CONF_DIR/$cf" ] || continue
+        probe_comp="$comp"
         probe_ns=$(yq -r '.metadata.namespace // ""' "$CONF_DIR/$cf" 2>/dev/null | head -1)
         break 2
       done
     done
-    if [ -n "$probe_ns" ] && [ "$probe_ns" != "$KCTL_NS" ]; then
+    if [ -n "$probe_ns" ] && [ "$probe_ns" != "$KCTL_NS" ] \
+      && [ "$probe_ns" != "$(component_ns "$probe_comp")" ]; then
       error "conf/ 清单 namespace=$probe_ns 与卸载目标 -n $KCTL_NS 不一致
 用 -n $probe_ns 卸载，或 ./deploy.sh up --render-only 重新渲染"
     fi

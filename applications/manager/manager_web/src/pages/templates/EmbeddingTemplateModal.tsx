@@ -123,7 +123,7 @@ export function EmbeddingTemplateModal({ open, template, onClose, onSaved }: Pro
 
     const body: EmbeddingTemplateCreateBody | EmbeddingTemplateUpdateBody = {
       template_name: form.template_name.trim(),
-      description: form.description.trim() || undefined,
+      description: form.description.trim() || null,
       embed_tags: fromCommaList(form.embed_tags),
       api_base: form.api_base.trim(),
       api_key: form.api_key,

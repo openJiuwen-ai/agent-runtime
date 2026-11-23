@@ -205,6 +205,78 @@ async def sync_agent_resource_to_gateway(
     )
 
 
+async def unload_agent_template_if_unreferenced(
+    handler: DBHandler,
+    jiuwenclaw_id: str,
+    template_id: str,
+    *,
+    remaining_resources_after: int | None = None,
+) -> None:
+    """实例上已无 resource 引用该 agent 模板时，卸槽位并删除 Gateway 上的 agent 模板。
+
+    不删除 instance-agent-resource（改绑场景下 resource 仍在，只是换了模板）。
+    ``remaining_resources_after`` 为调用方已知的剩余引用数；``None`` 时现场统计。
+    """
+    jid = str(jiuwenclaw_id or "").strip()
+    tid = str(template_id or "").strip()
+    if not jid or not tid:
+        return
+
+    if remaining_resources_after is None:
+        remaining = await _count_distinct_resources_for_template(handler, jid, tid)
+    else:
+        remaining = max(0, int(remaining_resources_after))
+    if remaining > 0:
+        logger.info(
+            "[push_agent_template] template still referenced jiuwenclaw_id=%s "
+            "template_id=%s by %d resource(s)",
+            jid,
+            tid,
+            remaining,
+        )
+        return
+
+    # 清理为尽力而为：改绑场景常在 Manager 落库之后调用；Gateway 失败/404
+    # 不应让上层改绑接口变成 500，否则旧模板残留且重试无法再卸载。
+    try:
+        tpl_row = await handler.get(_AGENT_TPL, {"template_id": tid})
+        if tpl_row is not None:
+            await _apply_slot_pair_delta(
+                handler,
+                jid,
+                added=set(),
+                removed=slot_template_pairs_from_template_ref(
+                    read_template_ref_from_row(tpl_row)
+                ),
+            )
+        await delete_agent_template_on_gateway(jid, tid)
+    except Exception as exc:  # noqa: BLE001
+        detail = str(exc)
+        if "status=404" in detail or "not found" in detail.lower():
+            logger.info(
+                "[push_agent_template] unload skipped (already absent) "
+                "jiuwenclaw_id=%s template_id=%s detail=%s",
+                jid,
+                tid,
+                detail,
+            )
+            return
+        logger.warning(
+            "[push_agent_template] unload failed (best-effort) "
+            "jiuwenclaw_id=%s template_id=%s: %s",
+            jid,
+            tid,
+            exc,
+        )
+        return
+    logger.info(
+        "[push_agent_template] unloaded unused agent_template "
+        "jiuwenclaw_id=%s template_id=%s",
+        jid,
+        tid,
+    )
+
+
 async def delete_agent_resource_from_gateway(
     handler: DBHandler,
     jiuwenclaw_id: str,
@@ -225,42 +297,18 @@ async def delete_agent_resource_from_gateway(
         return
 
     await _delete_agent_resource_on_gateway(jid, rid)
-
-    if not tid:
-        return
-
-    if remaining_resources_after is None:
-        remaining = await _count_distinct_resources_for_template(handler, jid, tid)
-    else:
-        remaining = max(0, int(remaining_resources_after))
-    if remaining > 0:
-        logger.info(
-            "[push_agent_template] resource removed jiuwenclaw_id=%s resource_id=%s "
-            "template_id=%s still referenced by %d resource(s)",
-            jid,
-            rid,
-            tid,
-            remaining,
-        )
-        return
-
-    tpl_row = await handler.get(_AGENT_TPL, {"template_id": tid})
-    if tpl_row is not None:
-        await _apply_slot_pair_delta(
-            handler,
-            jid,
-            added=set(),
-            removed=slot_template_pairs_from_template_ref(
-                read_template_ref_from_row(tpl_row)
-            ),
-        )
-    await delete_agent_template_on_gateway(jid, tid)
     logger.info(
-        "[push_agent_template] removed resource and agent_template "
-        "jiuwenclaw_id=%s resource_id=%s template_id=%s",
+        "[push_agent_template] resource removed jiuwenclaw_id=%s resource_id=%s "
+        "template_id=%s",
         jid,
         rid,
+        tid or "-",
+    )
+    await unload_agent_template_if_unreferenced(
+        handler,
+        jid,
         tid,
+        remaining_resources_after=remaining_resources_after,
     )
 
 
@@ -360,4 +408,5 @@ __all__ = (
     "delete_agent_resource_from_gateway",
     "push_agent_resources_sync_to_gateway",
     "sync_agent_resource_to_gateway",
+    "unload_agent_template_if_unreferenced",
 )

@@ -1,3 +1,4 @@
+import i18n from '../i18n';
 import { clearFederationSession, setFederationToken } from '../auth/federation/session';
 import type { FederationConfiguration, FederationConnection } from '../auth/federation/types';
 import type {
@@ -44,6 +45,8 @@ import type {
   ListItemsResult,
   LoggingConfig,
   LoggingConfigUpsertBody,
+  ContentMaskingConfig,
+  ContentMaskingConfigUpsertBody,
   CronPolicy,
   CronPolicyUpsertBody,
   UserPreferenceDefault,
@@ -161,7 +164,7 @@ export function formatApiErrorDetail(detail: unknown): string {
         return '';
       })
       .filter(Boolean);
-    return messages.join('；') || '请求参数校验失败';
+    return messages.join('；') || i18n.t('errors.validationFailed');
   }
   if (typeof detail === 'object') {
     const obj = detail as Record<string, unknown>;
@@ -482,7 +485,7 @@ export const AuthApi = {
   },
 };
 
-// ---------- IAM（组织 / 用户 / Agent 模板）----------
+// ---------- IAM（组织 / 用户 / Agent 配置模板）----------
 
 export interface Org {
   group_id: string;
@@ -990,8 +993,8 @@ export const AgentTemplateApi = {
   get: (id: string) => http<AgentTemplate>(`/v1/agent-templates/${encodeURIComponent(id)}`),
   create: (body: {
     template_name: string;
-    description?: string;
-    agent_tags?: string[];
+    description?: string | null;
+    agent_tags?: string[] | null;
     template_ref?: Record<string, string[]>;
     enabled?: boolean;
     data?: Record<string, unknown> | null;
@@ -1000,8 +1003,8 @@ export const AgentTemplateApi = {
     id: string,
     body: {
       template_name?: string;
-      description?: string;
-      agent_tags?: string[];
+      description?: string | null;
+      agent_tags?: string[] | null;
       template_ref?: Record<string, string[]>;
       enabled?: boolean;
       data?: Record<string, unknown> | null;
@@ -1011,6 +1014,43 @@ export const AgentTemplateApi = {
     http<{ deleted: boolean }>(`/v1/agent-templates/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 };
 export const BotApi = AgentTemplateApi;
+
+/** Agent 模板（agent_definition）：有效 Agent 配置模板 × 有效运行时模板的派生目录。 */
+export interface AgentDefinition {
+  agent_id: string;
+  agent_name: string;
+  agent_config_template_id: string;
+  agent_config_template_name: string | null;
+  runtime_template_id: string;
+  runtime_template_name: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export const AgentDefinitionApi = {
+  list: (params?: {
+    page?: number;
+    page_size?: number;
+    search?: string;
+    sort_by?: 'agent_name' | 'agent_id' | 'created_at' | 'updated_at';
+    sort_order?: 'asc' | 'desc';
+  }) => http<PageResult<AgentDefinition>>('/v1/agent-definitions/', { query: params }),
+  create: (body: {
+    agent_config_template_id: string;
+    runtime_template_id: string;
+    agent_name: string;
+  }) => http<AgentDefinition>('/v1/agent-definitions/', { method: 'POST', body }),
+  rename: (agentId: string, agentName: string) =>
+    http<AgentDefinition>(
+      `/v1/agent-definitions/${encodeURIComponent(agentId)}`,
+      { method: 'PATCH', body: { agent_name: agentName } },
+    ),
+  remove: (agentId: string) =>
+    http<{ deleted: boolean; agent_id: string }>(
+      `/v1/agent-definitions/${encodeURIComponent(agentId)}`,
+      { method: 'DELETE' },
+    ),
+};
 
 /** 实例 Agent 资源（instance_agent_resource，admin）。 */
 export const InstanceAgentResourceApi = {
@@ -1048,6 +1088,7 @@ export const InstanceAgentResourceApi = {
     jid: string,
     resourceId: string,
     body: {
+      ref_template_id: string;
       match_exprs: MatchExpr[];
       resource_name: string;
       resource_desc?: string | null;
@@ -1131,6 +1172,7 @@ export const InstanceServiceResourceApi = {
     jid: string,
     resourceId: string,
     body: {
+      ref_template_id: string;
       match_exprs: MatchExpr[];
       resource_name: string;
       resource_desc?: string | null;
@@ -1271,7 +1313,16 @@ export interface UserAgentContext {
   jiuwenclaw_id: string;
   /** 实例/集群展示名 */
   jiuwenclaw_name: string;
+  /** 稳定展示标识：agent_ + agent_id（43 位 base62）；无 Agent 配置模板 id 时回退 resource_name */
   agent_name: string;
+  /** 43 位 base62 可逆编码（运行时模板 + Agent 配置模板）；旧数据可能为空 */
+  agent_id?: string;
+  /** 运行时模板 id；无匹配运行时模板时为空串 */
+  runtime_template_id?: string;
+  /** Agent 配置模板 id（instance_agent_resource.ref_template_id） */
+  agent_template_id?: string;
+  /** Agent 资源展示名（人类可读，用于回退展示） */
+  resource_name?: string;
   group_name: string;
 }
 
@@ -1747,6 +1798,8 @@ export const ServiceConfigTemplateApi = {
   }) => http<PageResult<ServiceConfigTemplate>>('/v1/service-config-templates', { query: params }),
   get: (id: string) =>
     http<ServiceConfigTemplate>(`/v1/service-config-templates/${encodeURIComponent(id)}`),
+  /** 部署发布的默认 agentserver.json（Envelope 或 rawdata 三段式） */
+  getDefaultRawdata: () => http<unknown>('/v1/service-config-templates/default-rawdata'),
   create: (body: ServiceConfigTemplateCreateBody) =>
     http<ServiceConfigTemplate>('/v1/service-config-templates', { method: 'POST', body }),
   update: (id: string, body: ServiceConfigTemplateUpdateBody) =>
@@ -1829,6 +1882,18 @@ export const LoggingApi = {
     http<LoggingConfig>(`${instanceBase(instanceId)}/logging`, { method: 'PUT', body }),
   remove: (instanceId: string) =>
     http<void>(`${instanceBase(instanceId)}/logging`, { method: 'DELETE' }),
+};
+
+export const ContentMaskingApi = {
+  get: (instanceId: string) =>
+    http<ContentMaskingConfig>(`${instanceBase(instanceId)}/content-masking`),
+  upsert: (instanceId: string, body: ContentMaskingConfigUpsertBody) =>
+    http<ContentMaskingConfig>(`${instanceBase(instanceId)}/content-masking`, {
+      method: 'PUT',
+      body,
+    }),
+  remove: (instanceId: string) =>
+    http<void>(`${instanceBase(instanceId)}/content-masking`, { method: 'DELETE' }),
 };
 
 export const CronPolicyApi = {

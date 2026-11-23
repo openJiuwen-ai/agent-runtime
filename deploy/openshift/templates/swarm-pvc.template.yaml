@@ -4,7 +4,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: jiuwenswarm-pvc
-  namespace: <<NAMESPACE>>
+  namespace: "<<NAMESPACE>>"
 spec:
   storageClassName: <<WORKSPACE_STORAGE_CLASS>>
   accessModes:

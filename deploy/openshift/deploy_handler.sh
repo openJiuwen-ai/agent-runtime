@@ -38,6 +38,86 @@ filter_targets_by_external_mode() {
   TARGETS=("${no_redis[@]}")
 }
 
+# nfs 目标统一解析（up 与 down 对称）：nfs 为部署/卸载的唯一用户入口目标（nfs-sc 显式
+# 指定仅限 up --render-only 手动渲染入口，parse_args 校验），实际组件集按部署平台自动派生：
+#   openshift 形态          → nfs-sc（内置 NFS server 为 privileged + hostNetwork，
+#                             openshift 默认 SCC 不放行）
+#   k8s + 外部 NFS          → nfs-sc（内置 server 无需部署，供给器以外部 NFS 为数据源；
+#                             按 NFS_SERVER_ADDR 配置判定，--render-only 离线渲染同样生效）
+#   k8s + 内置模式（NFS_SERVER_ADDR 留空）：
+#     amd64 部署节点        → nfs + nfs-sc（server 与供给链一次拉起，业务 PVC 即刻可用）
+#     非 amd64 部署节点     → nfs-sc（NFS server 在 arm64 等架构上运行极不稳定；
+#                             须配置外部 NFS_SERVER_ADDR 作为数据源）
+#     --render-only         → 离线无法探测节点架构，目标保持原样（正式部署时再按架构自适应）
+#   down 优先按 conf/ 上次部署产物对账卸载（up 部署了什么就卸载什么，不受当前环境配置
+#   漂移影响）；conf/ 无 NFS 产物时回退到与 up 相同的环境判定
+# 前置条件：parse_args 与 check_dependency 已完成（节点架构探测依赖 kubectl；节点识别依赖 yq）；
+# 须先于 check_vars 调用，使 check_nfs_component_vars / resolve_storage_class_vars 看到解析后的目标
+filter_targets_by_nfs_platform() {
+  case "${CMD:-}" in
+    up | down) ;;
+    *) return 0 ;;
+  esac
+  in_array nfs "${TARGETS[@]:-}" || return 0
+  local verb="启动" keep_nfs=1 need_sc=0 comp arch
+  [ "$CMD" = down ] && verb="卸载"
+  if [ "$CMD" = down ] && { [ -f "$CONF_DIR/nfs.yaml" ] || [ -f "$CONF_DIR/nfs-sc.yaml" ]; }; then
+    # 按 conf/ 产物对账：上次部署了哪个 NFS 组件就卸哪个（清单缺失由 main 前置校验拦截）
+    [ -f "$CONF_DIR/nfs.yaml" ] || keep_nfs=0
+    [ -f "$CONF_DIR/nfs-sc.yaml" ] && need_sc=1
+    local conf_nfs=无 conf_sc=无
+    [ -f "$CONF_DIR/nfs.yaml" ] && conf_nfs=有
+    [ -f "$CONF_DIR/nfs-sc.yaml" ] && conf_sc=有
+    info "按 conf/ 上次部署产物卸载（nfs-server 清单: ${conf_nfs}，nfs-sc 清单: ${conf_sc}）"
+  elif ! is_k8s_cluster; then
+    keep_nfs=0
+    need_sc=1
+    info "openshift 集群，${verb} nfs-sc"
+  elif [ -n "${DEPLOY_VARS["NFS_SERVER_ADDR"]:-}" ]; then
+    keep_nfs=0
+    need_sc=1
+    info "外部 NFS（${DEPLOY_VARS["NFS_SERVER_ADDR"]}），${verb} nfs-sc"
+  elif [ "${DEPLOY_VARS["RENDER_ONLY"]}" = "true" ]; then
+    return 0   # k8s 内置模式离线渲染：无法探测节点架构，目标保持原样（正式部署时再自适应）
+  elif [ "$CMD" = up ]; then
+    fetch_current_node_name
+    arch=$(kubectl get node "${DEPLOY_VARS["CURRENT_NODE_NAME"]}" \
+      -o jsonpath='{.status.nodeInfo.architecture}' 2>/dev/null)
+    [ -n "$arch" ] \
+      || error "无法读取节点 ${DEPLOY_VARS["CURRENT_NODE_NAME"]} 架构（status.nodeInfo.architecture 为空），nfs 目标平台自适应失败"
+    need_sc=1
+    if [ "$arch" != amd64 ]; then
+      keep_nfs=0
+      info "${arch} 架构节点 k8s 集群，${verb} nfs-sc"
+      warning "未配置 NFS_SERVER_ADDR：nfs-sc 数据源缺失，请先在 .env.custom 配置指向外部 NFS server"
+    else
+      info "amd64 架构节点 k8s 集群，${verb} nfs + nfs-sc"
+    fi
+  else
+    # down 回退（conf/ 无 NFS 产物）：卸载不被节点识别 / 架构探测失败阻塞——
+    # 失败时按 nfs + nfs-sc 双组件兜底（不存在即空操作）
+    arch=$(kubectl get nodes -o json 2>/dev/null \
+      | HOST="$(hostname)" yq -r '.items[] | select(.status.addresses[]? | select(.type == "Hostname") | .address == strenv(HOST)) | .status.nodeInfo.architecture' 2>/dev/null | head -1)
+    need_sc=1
+    if [ -z "$arch" ]; then
+      warning "无法识别部署节点架构，本次卸载按 nfs + nfs-sc 双组件兜底"
+    elif [ "$arch" != amd64 ]; then
+      keep_nfs=0
+      info "${arch} 架构节点 k8s 集群，${verb} nfs-sc"
+    else
+      info "amd64 架构节点 k8s 集群，${verb} nfs + nfs-sc"
+    fi
+  fi
+  local -a adjusted=()
+  for comp in "${TARGETS[@]}"; do
+    [ "$comp" = nfs ] && [ "$keep_nfs" = 0 ] && comp=nfs-sc
+    in_array "$comp" "${adjusted[@]}" || adjusted+=("$comp")
+  done
+  [ "$need_sc" = 1 ] && ! in_array nfs-sc "${adjusted[@]}" && adjusted+=("nfs-sc")
+  TARGETS=("${adjusted[@]}")
+  sort_targets
+}
+
 resolve_targets() {
   local comp dep
   local -a extra=()
@@ -116,16 +196,51 @@ filter_targets_by_cluster_type() {
   local comp banned=()
   for comp in "${TARGETS[@]}"; do
     case "$comp" in
-      mariadb|mysql|postgresql|minio) banned+=("$comp");;
+      nfs|mariadb|mysql|postgresql|minio) banned+=("$comp");;
     esac
   done
   [ ${#banned[@]} -eq 0 ] && return 0
   warning "k8s 形态：将在 ${KCTL_NS} 部署基础服务(${banned[*]})，本 ns 实例优先于 default 共享实例被消费"
 }
 
+# nfs / nfs-sc 单例预检：nfs-server 以 hostNetwork 绑定节点 2049 端口、nfs-sc 含集群级
+# 资源（ClusterRole/StorageClass）且供给器以同名 PROVISIONER_NAME 争抢 PVC 事件——
+# 二者全集群仅能存活一套。全命名空间按 label 列举同名实例，目标 ns 之外已存在时拦截
+# 本次部署（目标 ns 内已存在 = 幂等重部署，放行）；探测失败不拦截（fail-safe）
+preflight_singleton_nfs() {
+  local comp sel resp code ns_list
+  for comp in nfs nfs-sc; do
+    in_array "$comp" "${TARGETS[@]:-}" || continue
+    case "$comp" in
+      nfs)    sel="app=${DEPLOY_VARS["NFS_NAME"]}";;
+      nfs-sc) sel="app=${DEPLOY_VARS["NFS_SC_DNAME"]}";;
+    esac
+    resp="$(kctl_tmpdir)/nfs-singleton.json"
+    code=$(kctl_http GET "/apis/apps/v1/deployments?labelSelector=$sel" "$resp")
+    if [ "$code" != 200 ]; then
+      warning "$comp 单例预检跳过（实例列举失败 → HTTP $code），无法确认集群内是否已有实例"
+      continue
+    fi
+    ns_list=$(NS="$KCTL_NS" yq -r \
+      '[.items[] | select(.metadata.namespace != strenv(NS)) | .metadata.namespace] | unique | join(", ")' \
+      "$resp" 2>/dev/null)
+    [ -n "$ns_list" ] \
+      && error "检测到 $comp 实例已存在于命名空间: ${ns_list}——${comp} 全集群仅能存活一套（hostNetwork 端口绑定 / 集群级 StorageClass），请勿重复部署；共享实例可直接消费（依赖组件照常部署）"
+    # 目标 ns 内已存在实例：放行（幂等重部署），但规格将被本次渲染清单覆盖——
+    # 若该实例并非本工具此前部署（如集群预置的共享 NFS server），提示人工核对
+    local self_ns_cnt
+    self_ns_cnt=$(NS="$KCTL_NS" yq -r \
+      '[.items[] | select(.metadata.namespace == strenv(NS))] | length' "$resp" 2>/dev/null)
+    [ "${self_ns_cnt:-0}" -gt 0 ] \
+      && warning "$comp 在 ${KCTL_NS} 已存在实例：本次部署将按渲染清单更新其规格（镜像/导出/宿主机目录）；若该实例并非本工具部署，请先核对再继续"
+  done
+  return 0
+}
+
 # up 预检：目标组件的硬依赖必须就位——secret/redis 已由 resolve_targets 补齐，
 # 此处拦截基础服务（mariadb/minio 等）缺失
 preflight() {
+  preflight_singleton_nfs
   local comp dep code
   local probes=()
   for comp in "${TARGETS[@]}"; do
@@ -141,6 +256,8 @@ preflight() {
         && continue
       # 外部 OBS：不检查内置 MinIO 组件
       [ "${DEPLOY_VARS["ENABLE_EXTERNAL_OBS"]}" = "true" ] && in_array "$dep" minio && continue
+      # 外部 NFS：不检查内置 nfs 组件
+      [ "${DEPLOY_VARS["ENABLE_EXTERNAL_NFS"]}" = "true" ] && in_array "$dep" nfs && continue
       component_autoprovision "$dep" && continue         # 自动补齐依赖由 resolve_targets 兜底
       component_probe "$dep" >/dev/null || continue      # 无探测方式的依赖（如 pvc）跳过
       in_array "$dep" "${probes[@]}" && continue         # 去重
@@ -206,7 +323,7 @@ read_pods() { # $1=label selector $2=期望镜像（空格分隔多值；空=不
   [ "$code" = 200 ] || { echo "0 0 0"; return 0; }
   total=$(yq '.items | length' "$resp" 2>/dev/null)
   # Pod 级就绪：有容器状态且全部容器 ready（主+sidecar 多容器 Pod 需全部就绪）
-  ready=$(yq '[.items[] | select((.status.containerStatuses // []) | length > 0) | select([.status.containerStatuses[].ready] | all)] | length' "$resp" 2>/dev/null)
+  ready=$(yq '[.items[] | select(.metadata.deletionTimestamp == null) | select((.status.containerStatuses // []) | length > 0) | select([.status.containerStatuses[].ready] | all)] | length' "$resp" 2>/dev/null)
   if [ -n "$want_img" ]; then
     # Pod 级镜像校验：Pod 的全部容器镜像都在期望集合内（期望集合空格分隔多值）
     local -a exp=($want_img)
@@ -287,6 +404,18 @@ wait_ready() { # $1=组件
 
 # ---------- 部署 / 卸载 ----------
 
+# 组件 → apply 前置动作（部署节点本机操作）：
+#   nfs-server 经 nodeName 固定调度到运行部署工具的节点，导出根为该节点 hostPath；
+#   模板的 DirectoryOrCreate 兜底创建的目录归 root 且默认权限，NFS 客户端按随机
+#   uid 挂载写入必须 777（EE 部署同款处理），故 apply 前在本机显式创建并授权
+component_prepare() { # $1=组件
+  case "$1" in
+    nfs)  local p="${DEPLOY_VARS["NFS_HOST_PATH"]}"
+          mkdir -p "$p" || error "NFS 导出根目录创建失败: $p（检查部署节点本地权限）"
+          chmod -R 777 "$p" || error "NFS 导出根目录授权失败: $p（须 777 供随机 uid 客户端写入）";;
+  esac
+}
+
 deploy_component() { # $1=组件 $2=序号 $3=总数
   local comp="$1" idx="$2" n="$3" f file_list
   file_list=$(component_files "$comp") || error "未知组件: $comp"
@@ -300,9 +429,19 @@ deploy_component() { # $1=组件 $2=序号 $3=总数
   info "[$idx/$n] $comp（yaml: $file_list）"
   _CURRENT_COMPONENT="$comp"
   progress_json component component="$comp" index="$idx" total="$n" state=start
+  # 集群操作按组件实际所在 ns 定位（nfs 等共享实例内嵌 namespace ≠ -n 场景）；
+  # 其余组件 component_ns 恒等于 KCTL_NS，覆写为无感
+  local saved_ns="$KCTL_NS"
+  KCTL_NS="$(component_ns "$comp")"
+  component_prepare "$comp"
   kctl_run apply "${paths[@]}"
   ensure_workload "${paths[@]}"
   wait_ready "$comp"
+  # runtime 含 agentserver.json 时，就绪后上传到 OBS 供管理面「导入默认配置」
+  if in_array "agentserver.json" $file_list; then
+    upload_agentserver_default_config
+  fi
+  KCTL_NS="$saved_ns"
   progress_json component component="$comp" index="$idx" total="$n" state=ok
   _CURRENT_COMPONENT=""
 }
@@ -320,8 +459,8 @@ has_alive_dependents() { # $1=组件 → 0=有依赖方存活
     in_array "$other" "${TARGETS[@]}" && continue
     in_array "$comp" $(component_deps "$other") || continue
     # 同 ns 限定仅适用于本 ns 自有实例（secret/redis）；基础服务消费顺序为本 ns →
-    # default，跨 ns 依赖方同样构成存活依赖
-    if ! in_array "$comp" mariadb mysql postgresql minio; then
+    # default，跨 ns 依赖方同样构成存活依赖；nfs 为跨 ns 共享挂载源，同等豁免
+    if ! in_array "$comp" mariadb mysql postgresql minio nfs; then
       [ "$(component_ns "$other")" = "$comp_ns" ] || continue
     fi
     dependents+=("$other")
@@ -368,15 +507,24 @@ delete_component() { # $1=组件 $2=序号 $3=总数
   info "[$idx/$n] $comp（yaml: $file_list）"
   _CURRENT_COMPONENT="$comp"
   progress_json component component="$comp" index="$idx" total="$n" state=start
+  # 删除等待与部署同理按组件实际所在 ns 定位（清单内嵌 namespace 与 -n 解耦）
+  local saved_ns="$KCTL_NS"
+  KCTL_NS="$(component_ns "$comp")"
   if has_alive_dependents "$comp"; then
     warning "$comp 仍被集群中存活组件依赖，跳过删除"
     progress_json component component="$comp" index="$idx" total="$n" state=ok message="skipped"
     _CURRENT_COMPONENT=""
+    KCTL_NS="$saved_ns"
     return 0
   fi
   kctl_run delete "${paths[@]}"
   DOWN_DELETED_ANY=1
   wait_deleted "$comp"
+  # 与 deploy 对称：卸载含 agentserver.json 的组件时尽量删除 OBS 默认配置对象
+  if in_array "agentserver.json" $file_list; then
+    delete_agentserver_default_config
+  fi
+  KCTL_NS="$saved_ns"
   progress_json component component="$comp" index="$idx" total="$n" state=ok
   _CURRENT_COMPONENT=""
 }

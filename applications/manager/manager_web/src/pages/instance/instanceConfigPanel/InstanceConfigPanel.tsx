@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { LogMaskingTab } from './LogMaskingTab';
+import { ContentMaskingTab } from './ContentMaskingTab';
 import { LoggingTab } from './LoggingTab';
 import { AuditLogTab } from './AuditLogTab';
 import { CronPolicyTab } from './CronPolicyTab';
 import { AdvancedConfigTab } from './AdvancedConfigTab';
 
-type ConfigTabKey = 'logMasking' | 'logging' | 'auditLog' | 'cronPolicy' | 'advanced';
+type ConfigTabKey = 'logMasking' | 'contentMasking' | 'logging' | 'auditLog' | 'cronPolicy' | 'advanced';
 
 interface Props {
   instanceId: string;
@@ -18,6 +19,7 @@ export function InstanceConfigPanel({ instanceId }: Props) {
 
   const tabs: { key: ConfigTabKey; label: string }[] = [
     { key: 'logMasking', label: t('instanceConfig.tabs.logMasking') },
+    { key: 'contentMasking', label: t('instanceConfig.tabs.contentMasking') },
     { key: 'logging', label: t('instanceConfig.tabs.logging') },
     { key: 'auditLog', label: t('instanceConfig.tabs.auditLog') },
     { key: 'cronPolicy', label: t('instanceConfig.tabs.cronPolicy') },
@@ -40,6 +42,7 @@ export function InstanceConfigPanel({ instanceId }: Props) {
 
       <div>
         {tab === 'logMasking' && <LogMaskingTab instanceId={instanceId} />}
+        {tab === 'contentMasking' && <ContentMaskingTab instanceId={instanceId} />}
         {tab === 'logging' && <LoggingTab instanceId={instanceId} />}
         {tab === 'auditLog' && <AuditLogTab instanceId={instanceId} />}
         {tab === 'cronPolicy' && <CronPolicyTab instanceId={instanceId} />}

@@ -18,6 +18,7 @@ import { AgentClientRegistrationApi, AgentTemplate, AgentTemplateApi, ApiError }
 import { toast } from '../../stores/uiStore';
 import { bumpGuideRevision } from '../../stores/guideStore';
 import { formatTime, truncate } from '../../utils/format';
+import { templateInUseMessage } from '../../utils/templateInUse';
 import { AgentTemplateModal } from './AgentTemplateModal';
 import { ResourceExportButton, ResourceImportButton } from '../../components/ResourceImportExport';
 
@@ -34,7 +35,7 @@ export function AgentTemplatesPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const { data: registrationConfig } = useAsync(AgentClientRegistrationApi.capabilities);
 
-  /** 引导跳转：其他页面点「未配置 Agent模板」跳过来时自动打开新建弹框 */
+  /** 引导跳转：其他页面点「未配置 Agent 配置模板」跳过来时自动打开新建弹框 */
   useGuideAutoOpen('agentTemplateNew', () => {
     setEditing(null);
     setModalOpen(true);
@@ -105,7 +106,8 @@ export function AgentTemplatesPage() {
       setItems((list) =>
         list.map((item) => (item.template_id === row.template_id ? { ...item, enabled: previous } : item)),
       );
-      toast('danger', t('errors.saveFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
+      const localized = templateInUseMessage(e, t);
+      toast('danger', localized ?? t('errors.saveFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
     } finally {
       setTogglingId(null);
     }
@@ -323,7 +325,8 @@ export function AgentTemplatesPage() {
             void reload();
             bumpGuideRevision();
           } catch (e) {
-            toast('danger', t('errors.deleteFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
+            const localized = templateInUseMessage(e, t);
+            toast('danger', localized ?? t('errors.deleteFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
           }
         }}
         onClose={() => setDelTarget(null)}

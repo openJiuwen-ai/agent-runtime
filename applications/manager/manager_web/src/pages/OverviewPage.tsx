@@ -18,7 +18,7 @@ function Icon({ d }: { d: string }) {
 export function OverviewPage() {
   const { t } = useTranslation();
   const { navigate } = useRouter();
-  const { agentDefined, poolDefined, instanceCreated, modelDefined } = useDefinitionPresence();
+  const { agentDefined, agentDefinitionDefined, poolDefined, instanceCreated, modelDefined } = useDefinitionPresence();
 
   const health = useAsync(() => SystemApi.health(), []);
   const instances = useAsync(() => InstanceApi.list({ page: 1, page_size: 200 }), []);
@@ -33,7 +33,7 @@ export function OverviewPage() {
   const alertsByInstance = useClustersGuideStatus(clusterIds);
   const hasClusterAlerts = Object.values(alertsByInstance).some((alerts) => alerts.length > 0);
 
-  /** 与左侧导航栏叹号提示同源的汇总：按导航栏顺序（模型 → Agent模板 → 运行时模板 → 集群 → 集群管理告警）展示 */
+  /** 与左侧导航栏叹号提示同源的汇总：按导航栏顺序（模型 → Agent 配置模板 → 运行时模板 → Agent 模板 → 集群 → 集群管理告警）展示 */
   const quickNavLinks: WarnBadgeLink[] = [];
   if (modelDefined === false) {
     quickNavLinks.push({ label: t('guide.missingItem', { item: t('nav.modelTemplates') }), to: '/model-templates', openTarget: 'modelTemplateNew' });
@@ -43,6 +43,9 @@ export function OverviewPage() {
   }
   if (poolDefined === false) {
     quickNavLinks.push({ label: t('guide.missingItem', { item: t('nav.serviceConfigTemplates') }), to: '/service-config-templates/new' });
+  }
+  if (agentDefinitionDefined === false) {
+    quickNavLinks.push({ label: t('guide.missingItem', { item: t('nav.agentDefinitions') }), to: '/agent-definitions', openTarget: 'agentDefinitionNew' });
   }
   if (instanceCreated === false) {
     quickNavLinks.push({ label: t('guide.missingItem', { item: t('nav.instances') }), to: '/instances', openTarget: 'instanceCreate' });
@@ -140,7 +143,7 @@ export function OverviewPage() {
           </div>
           <div className="kpi-card__value">
             {statusDist.ok}
-            <span className="unit">/ {statusDist.total} 在线</span>
+            <span className="unit">{t('overview.onlineOfTotal', { total: statusDist.total })}</span>
           </div>
           <div className="kpi-card__meta">
             <div className="stat-bar w-full">

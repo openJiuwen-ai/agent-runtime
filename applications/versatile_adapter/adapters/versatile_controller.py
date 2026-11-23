@@ -41,9 +41,10 @@ class VersatileController(VersatileProxy):
         headers_template: Optional[dict] = None,
         forward_header_whitelist: Optional[set[str]] = None,
         workflow_result_node: Optional[str] = None,
+        tls_verify: bool | str | None = None,
     ) -> None:
         header_whitelist = forward_header_whitelist if forward_header_whitelist else _FORWARD_HEADER_WHITELIST
-        super().__init__(url_template, timeout, headers_template, header_whitelist)
+        super().__init__(url_template, timeout, headers_template, header_whitelist, tls_verify)
         self._workflow_result_node = workflow_result_node
 
     def _process_chunk(self, chunk: str, ctx: VersatileStreamCtx) -> list[AdapterEvent]:

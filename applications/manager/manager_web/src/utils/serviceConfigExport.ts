@@ -6,8 +6,9 @@
  * 导出强制 split：template 仅带 refs，容器规格从容器模板目录按绑定解析
  * （Out.data 不再内联 containers；解析不到时回退存量 data 内联，旧文件过渡）。
  * 导入兼容旧 inline wire：前端合成 containers 写入 data.config_sync。
+ * 导入始终重映射 container_id（如 c-agentserver-<uuid后12位>）并新建容器行，
+ * 避免按固定 id upsert 覆盖已被其它运行时模板引用的共享容器。
  */
-import { ContainerTemplateApi } from '../services/api';
 import type {
   ContainerTemplate,
   ServiceConfigTemplate,
@@ -47,6 +48,76 @@ function optInt(v: unknown): number | undefined {
   if (v == null || v === '') return undefined;
   const n = Number(v);
   return Number.isFinite(n) ? Math.trunc(n) : undefined;
+}
+
+/** 与 Manager / Runtime container_id 上限对齐。 */
+const CONTAINER_ID_MAX = 100;
+
+function shortImportSuffix(): string {
+  // UUID 末段即为 12 位 hex（xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx）
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID().replace(/-/g, '').slice(-12);
+  }
+  return `${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`.slice(
+    -12,
+  );
+}
+
+/** `c-agentserver` + 短后缀 → `c-agentserver-<uuid后12位>`，超长时截断基名。 */
+export function remapContainerId(oldId: string, suffix: string): string {
+  const sep = '-';
+  const budget = CONTAINER_ID_MAX - sep.length - suffix.length;
+  const base = oldId.slice(0, Math.max(1, budget));
+  return `${base}${sep}${suffix}`;
+}
+
+/**
+ * 导入 CreateBody：把 data.config_sync.containers 的 container_id 全部换成新 id，
+ * 并同步 main / sidecar 引用。同一批导入共用一个短后缀，便于对照。
+ */
+export function remapCreateBodyContainerIds(
+  body: ServiceConfigTemplateCreateBody,
+): ServiceConfigTemplateCreateBody {
+  const data = asRecord(body.data);
+  const sync = asRecord(data?.config_sync);
+  const containers = asArray(sync?.containers).filter(asRecord) as Record<
+    string,
+    unknown
+  >[];
+  if (!containers.length) return body;
+
+  const suffix = shortImportSuffix();
+  const idMap = new Map<string, string>();
+  const remappedContainers = containers.map((c) => {
+    const oldId = optStr(c.container_id);
+    if (!oldId) return { ...c };
+    let newId = idMap.get(oldId);
+    if (!newId) {
+      newId = remapContainerId(oldId, suffix);
+      idMap.set(oldId, newId);
+    }
+    return { ...c, container_id: newId };
+  });
+
+  const mapId = (id: string | undefined | null): string | undefined => {
+    if (!id) return id ?? undefined;
+    return idMap.get(id) ?? id;
+  };
+
+  return {
+    ...body,
+    main_container_id: mapId(body.main_container_id),
+    sidecar_container_ids: body.sidecar_container_ids?.map(
+      (id) => mapId(id) || id,
+    ),
+    data: {
+      ...(data ?? {}),
+      config_sync: {
+        ...(sync ?? {}),
+        containers: remappedContainers,
+      },
+    },
+  };
 }
 
 function envListToMap(env: unknown): Record<string, string> | undefined {
@@ -264,6 +335,8 @@ export async function exportTemplateRawdata(
     let catalogRows = catalog;
     if (!catalogRows) {
       try {
+        // 动态导入，避免本模块被纯解析/单测加载时拉起 api.ts（依赖 localStorage）
+        const { ContainerTemplateApi } = await import('../services/api');
         catalogRows = (await ContainerTemplateApi.list({ page: 1, page_size: 200 })).items ?? [];
       } catch {
         catalogRows = [];
@@ -412,7 +485,7 @@ export function parseConfigSyncImport(parsed: unknown): {
     looksLikeInlineWire(root)
   ) {
     return {
-      body: wireTemplateToCreateBody(root, []),
+      body: remapCreateBodyContainerIds(wireTemplateToCreateBody(root, [])),
       templateCount: 1,
     };
   } else {
@@ -439,7 +512,9 @@ export function parseConfigSyncImport(parsed: unknown): {
   }
 
   return {
-    body: wireTemplateToCreateBody(templates[0], containers, { scopes }),
+    body: remapCreateBodyContainerIds(
+      wireTemplateToCreateBody(templates[0], containers, { scopes }),
+    ),
     templateCount: templates.length,
   };
 }

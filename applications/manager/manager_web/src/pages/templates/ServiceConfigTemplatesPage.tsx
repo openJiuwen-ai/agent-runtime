@@ -18,6 +18,7 @@ import { ServiceConfigTemplateModal } from './ServiceConfigTemplateModal';
 import { toast } from '../../stores/uiStore';
 import { bumpGuideRevision } from '../../stores/guideStore';
 import { formatTime, truncate } from '../../utils/format';
+import { templateInUseMessage } from '../../utils/templateInUse';
 import { useRouter } from '../../router';
 import {
   downloadJson,
@@ -153,6 +154,19 @@ export function ServiceConfigTemplatesPage({
     })();
   };
 
+  const importParsedConfig = async (parsed: unknown) => {
+    const { body, templateCount } = parseConfigSyncImport(parsed);
+    await ServiceConfigTemplateApi.create(body);
+    toast(
+      'success',
+      templateCount > 1
+        ? t('serviceConfigTemplate.importOkFirstOfMany', { count: templateCount })
+        : t('serviceConfigTemplate.importOk'),
+    );
+    void reload();
+    bumpGuideRevision();
+  };
+
   const handleImportFile = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
@@ -164,16 +178,7 @@ export function ServiceConfigTemplatesPage({
         try {
           const text = String(reader.result ?? '');
           const parsed = JSON.parse(text) as unknown;
-          const { body, templateCount } = parseConfigSyncImport(parsed);
-          await ServiceConfigTemplateApi.create(body);
-          toast(
-            'success',
-            templateCount > 1
-              ? t('serviceConfigTemplate.importOkFirstOfMany', { count: templateCount })
-              : t('serviceConfigTemplate.importOk'),
-          );
-          void reload();
-          bumpGuideRevision();
+          await importParsedConfig(parsed);
         } catch (err) {
           toast(
             'danger',
@@ -197,6 +202,35 @@ export function ServiceConfigTemplatesPage({
     reader.readAsText(file, 'UTF-8');
   };
 
+  const handleImportDefault = () => {
+    if (importing) return;
+    void (async () => {
+      setImporting(true);
+      try {
+        const parsed = await ServiceConfigTemplateApi.getDefaultRawdata();
+        await importParsedConfig(parsed);
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 404) {
+          toast('danger', t('serviceConfigTemplate.importDefaultMissing'));
+        } else {
+          toast(
+            'danger',
+            t('serviceConfigTemplate.importFailed', {
+              detail:
+                err instanceof ApiError
+                  ? err.detail
+                  : err instanceof Error
+                    ? err.message
+                    : String(err),
+            }),
+          );
+        }
+      } finally {
+        setImporting(false);
+      }
+    })();
+  };
+
   const toggleEnabled = async (row: ServiceConfigTemplate, enabled: boolean) => {
     if (togglingId) return;
     const previous = row.enabled;
@@ -214,7 +248,8 @@ export function ServiceConfigTemplatesPage({
       setItems((list) =>
         list.map((item) => (item.template_id === row.template_id ? { ...item, enabled: previous } : item)),
       );
-      toast('danger', t('errors.saveFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
+      const localized = templateInUseMessage(e, t);
+      toast('danger', localized ?? t('errors.saveFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
     } finally {
       setTogglingId(null);
     }
@@ -256,6 +291,14 @@ export function ServiceConfigTemplatesPage({
             onClick={() => importInputRef.current?.click()}
           >
             {importing ? t('common.loading') : t('serviceConfigTemplate.import')}
+          </button>
+          <button
+            className="btn sm"
+            disabled={importing}
+            title={t('serviceConfigTemplate.importDefaultHint')}
+            onClick={handleImportDefault}
+          >
+            {importing ? t('common.loading') : t('serviceConfigTemplate.importDefault')}
           </button>
           <button
             className="btn primary sm"
@@ -421,7 +464,8 @@ export function ServiceConfigTemplatesPage({
             void reload();
             bumpGuideRevision();
           } catch (e) {
-            toast('danger', t('errors.deleteFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
+            const localized = templateInUseMessage(e, t);
+            toast('danger', localized ?? t('errors.deleteFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
           }
         }}
         onClose={() => setDelTarget(null)}

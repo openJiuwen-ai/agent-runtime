@@ -14,6 +14,9 @@ from manager_server.core.application_config.task_memory_config import (TaskMemor
 from manager_server.core.application_config.log_masking_rule import (
     LogMaskingRuleService,
 )
+from manager_server.core.application_config.content_masking_config import (
+    ContentMaskingConfigService,
+)
 from manager_server.core.application_config.cron_policy import CronPolicyService
 from manager_server.core.application_config.hub_package_catalog import (
     fetch_platform_package_catalog,
@@ -46,6 +49,10 @@ def _log_masking_rule_svc(handler: DBHandler) -> LogMaskingRuleService:
 
 def _logging_config_svc(handler: DBHandler) -> LoggingConfigService:
     return LoggingConfigService(handler)
+
+
+def _content_masking_svc(handler: DBHandler) -> ContentMaskingConfigService:
+    return ContentMaskingConfigService(handler)
 
 
 def _cron_policy_svc(handler: DBHandler) -> CronPolicyService:
@@ -211,6 +218,75 @@ async def delete_logging_config(
     handler: Annotated[DBHandler, Depends(get_db_handler)],
 ):
     svc = _logging_config_svc(handler)
+    try:
+        await svc.delete(jiuwenclaw_id=jiuwenclaw_id)
+    except ValueError as exc:
+        if "not found" in str(exc):
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ResponseModel(code=200, message="success")
+
+
+class ContentMaskingRuleRequest(BaseModel):
+    """网页出站脱敏规则：与 Gateway ``content_masking_config.rules`` 同构。"""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    title: str = Field(..., min_length=1, max_length=64)
+    pattern: str = Field(..., min_length=1, max_length=256)
+
+
+class ContentMaskingUpsertRequest(BaseModel):
+    """整段内容脱敏配置（单文档）；PUT 全量替换，DELETE 回退 config.yaml。"""
+
+    model_config = ConfigDict(str_strip_whitespace=True, extra="ignore")
+
+    enabled: bool = False
+    rules: list[ContentMaskingRuleRequest] = Field(default_factory=list, max_length=32)
+
+
+@application_config_router.put(
+    "/{jiuwenclaw_id}/content-masking", response_model=ResponseModel
+)
+async def upsert_content_masking(
+    jiuwenclaw_id: str,
+    body: ContentMaskingUpsertRequest,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    svc = _content_masking_svc(handler)
+    try:
+        data = await svc.upsert(
+            jiuwenclaw_id=jiuwenclaw_id,
+            enabled=body.enabled,
+            rules=[rule.model_dump() for rule in body.rules],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ResponseModel(code=200, message="success", data=data)
+
+
+@application_config_router.get(
+    "/{jiuwenclaw_id}/content-masking", response_model=ResponseModel
+)
+async def get_content_masking(
+    jiuwenclaw_id: str,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    svc = _content_masking_svc(handler)
+    data = await svc.get(jiuwenclaw_id=jiuwenclaw_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="content masking config not found")
+    return ResponseModel(code=200, message="success", data=data)
+
+
+@application_config_router.delete(
+    "/{jiuwenclaw_id}/content-masking", response_model=ResponseModel
+)
+async def delete_content_masking(
+    jiuwenclaw_id: str,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    svc = _content_masking_svc(handler)
     try:
         await svc.delete(jiuwenclaw_id=jiuwenclaw_id)
     except ValueError as exc:

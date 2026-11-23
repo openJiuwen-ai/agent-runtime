@@ -22,6 +22,7 @@ import { SkillPrebuiltTemplatesPage } from './pages/templates/SkillPrebuiltTempl
 import { ExpertPackageTemplatesPage } from './pages/templates/ExpertPackageTemplatesPage';
 import { ContainerTemplatesPage } from './pages/templates/ContainerTemplatesPage';
 import { ServiceConfigTemplatesPage } from './pages/templates/ServiceConfigTemplatesPage';
+import { AgentDefinitionsPage } from './pages/templates/AgentDefinitionsPage';
 import { SafetyGuardrailsPage } from './pages/templates/SafetyGuardrailsPage';
 import { ReactTemplatesPage } from './pages/templates/ReactTemplatesPage';
 import { matchRoute, RouterProvider, useRouter } from './router';
@@ -169,6 +170,9 @@ function RouteView() {
   if (serviceConfigEdit) {
     // 编辑已改为列表页内弹窗；保留 /:templateId URL 兼容历史链接
     return <ServiceConfigTemplatesPage autoEditId={serviceConfigEdit.templateId} />;
+  }
+  if (path === '/agent-definitions') {
+    return <AgentDefinitionsPage />;
   }
   if (path === '/users') {
     return <UsersPage />;

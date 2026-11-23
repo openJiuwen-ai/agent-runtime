@@ -175,7 +175,7 @@ export function ExtensionTemplateModal({ open, template, onClose, onSaved }: Pro
 
     const body: ExtensionConfigTemplateCreateBody | ExtensionConfigTemplateUpdateBody = {
       template_name: form.template_name.trim(),
-      description: form.description.trim() || undefined,
+      description: form.description.trim() || null,
       component: form.component.trim(),
       hook_type: form.hook_type.trim(),
       hook_config: buildHookConfig(form),

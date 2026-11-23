@@ -127,6 +127,27 @@ async def _registration_service():
         raise RegistrationUnavailable(str(exc)) from None
 
 
+async def _assert_no_agent_definitions(
+    handler: DBHandler, *, config_template_id: str, action: str
+) -> None:
+    """模板被 Agent 模板引用时拒绝删除/停用，避免出现悬空组合。"""
+    from manager_server.core.agent_definition.service import (
+        count_agent_config_template_references,
+    )
+    from manager_server.core.template.errors import TemplateInUseError
+
+    ref_count = await count_agent_config_template_references(
+        handler, config_template_id
+    )
+    if ref_count > 0:
+        raise TemplateInUseError(
+            "agent_definitions_referenced",
+            ref_count,
+            f"cannot {action} template: {ref_count} agent template(s) reference it, "
+            "delete those agent templates first",
+        )
+
+
 def agent_template_out(row: Any, *, reference_count: int = 0) -> dict[str, Any]:
     tags = _g(row, "agent_tags")
     if tags is not None and not isinstance(tags, list):
@@ -431,17 +452,30 @@ class AgentTemplateService:
         async with self._reserve_template(template_id) as operation:
             if operation is None:
                 return None
-            updates = body.model_dump(exclude_none=True)
+            updates = body.model_dump(exclude_unset=True)
             if "description" in updates:
                 updates["description"] = strip_optional(body.description)
+            # exclude_unset 会保留显式 null；这些列不允许被清空，剔除以免写库/校验踩坑
+            for key in ("enabled", "template_name", "template_ref"):
+                if updates.get(key) is None:
+                    updates.pop(key, None)
             if "data" in updates:
                 binding = (operation.data or {}).get(MANAGED_AGENT_CLIENT_KEY)
-                if binding:
+                if not isinstance(updates.get("data"), dict):
+                    # 显式 data: null 不能整列清空（托管 Agent client 绑在 data 里）
+                    updates.pop("data", None)
+                elif binding:
                     updates["data"][MANAGED_AGENT_CLIENT_KEY] = binding
             if not updates:
                 return agent_template_out(
                     operation.row,
                     reference_count=await _reference_count(self._h, template_id),
+                )
+            if updates.get("enabled") is False and bool(
+                _g(operation.row, "enabled", True)
+            ):
+                await _assert_no_agent_definitions(
+                    self._h, config_template_id=template_id, action="disable"
                 )
 
             await update_template_on_referencing_gateways(self._h, AGENT_TEMPLATES_KIND, template_id, updates)
@@ -449,7 +483,7 @@ class AgentTemplateService:
         return await self.get(template_id)
 
     async def delete(self, template_id: str) -> bool:
-        """删除 Agent 模板：仍被实例上的 Agent 引用时拒绝删除。"""
+        """删除 Agent 模板：仍被实例上的 Agent 或 Agent 模板引用时拒绝删除。"""
         from manager_server.core.template.push_template_to_gateway import (
             assert_agent_template_deletable,
         )
@@ -459,6 +493,9 @@ class AgentTemplateService:
                 return False
             # 在预留锁内校验，尽量缩小与“新增 Agent 授权”的竞态窗口
             await assert_agent_template_deletable(self._h, template_id)
+            await _assert_no_agent_definitions(
+                self._h, config_template_id=template_id, action="delete"
+            )
 
             binding = (operation.data or {}).get(MANAGED_AGENT_CLIENT_KEY)
             if binding:

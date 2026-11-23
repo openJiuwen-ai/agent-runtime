@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, FastAPI
 
 from .application_config_routers import application_config_router, package_catalog_router
 from .agent_client_registration_routers import registration_router
+from .agent_definition_routers import agent_definition_router
 from .approval_routers import approval_router
 from .auth_guards import get_current_user, require_admin
 from .authz_routers import authz_router
@@ -35,6 +36,7 @@ def _build_api_router() -> APIRouter:
     admin_router = APIRouter(dependencies=[Depends(require_admin)])
     admin_router.include_router(registration_router, tags=["Agent Client Registration"])
     admin_router.include_router(templates_router, tags=["Templates"])
+    admin_router.include_router(agent_definition_router, tags=["Agent Definitions"])
     admin_router.include_router(import_export_router, tags=["Import Export"])
     admin_router.include_router(instance_resource_router, tags=["Instance Resource"])
     admin_router.include_router(

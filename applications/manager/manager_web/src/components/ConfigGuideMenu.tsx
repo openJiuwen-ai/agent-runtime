@@ -103,6 +103,7 @@ export function ConfigGuideMenu() {
     { label: t('guide.newAgentDefinition'), to: '/agent-templates' },
     { label: t('guide.newContainerTemplate'), to: '/container-templates' },
     { label: t('guide.newPoolDefinition'), to: '/service-config-templates' },
+    { label: t('guide.newAgentTemplate'), to: '/agent-definitions' },
     { label: t('topology.createInstance'), to: '/instances' },
   ];
 

@@ -3,6 +3,7 @@ import { create } from 'zustand';
 /** 引导跳转后由目标页面自动打开的添加弹框 */
 export type GuideOpenTarget =
   | 'agentTemplateNew'
+  | 'agentDefinitionNew'
   | 'modelTemplateNew'
   | 'containerTemplateNew'
   | 'instanceCreate'

@@ -4,6 +4,7 @@ import { useAuth } from '../auth/AuthContext';
 import { ApiError, AuthApi, FederationConnection } from '../services/api';
 import { getProductName } from '../utils/env';
 import { beginBrowserLogin } from '../auth/federation/client';
+import { LanguageSwitcher } from '../components/LanguageSwitcher';
 
 export function LoginPage() {
   const { t } = useTranslation();
@@ -79,7 +80,10 @@ export function LoginPage() {
   }
 
   return (
-    <div className="flex items-center justify-center h-screen p-8">
+    <div className="relative flex items-center justify-center h-screen p-8">
+      <div className="absolute right-6 top-6" data-testid="login-language-switcher">
+        <LanguageSwitcher />
+      </div>
       <form className="card" style={{ width: 360 }} onSubmit={onSubmit}>
         <div className="flex items-center gap-2 mb-4">
           <img src="/logo.svg" alt={getProductName()} style={{ height: 28 }} />

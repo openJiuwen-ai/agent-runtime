@@ -95,6 +95,7 @@ async def update_instance_agent_resource(
     try:
         items = await InstanceAgentResourceService(handler).update_resource(
             jid, resource_id, body.match_exprs,
+            ref_template_id=body.ref_template_id,
             resource_name=body.resource_name, resource_desc=body.resource_desc,
             granted_by=None, enabled=body.enabled,
             expires_at=body.expires_at, data=body.data,
@@ -171,6 +172,7 @@ async def update_instance_service_resource(
     try:
         items = await InstanceServiceResourceService(handler).update_resource(
             jid, resource_id, body.match_exprs,
+            ref_template_id=body.ref_template_id,
             resource_name=body.resource_name, resource_desc=body.resource_desc,
             priority=body.priority, granted_by=None,
             enabled=body.enabled, expires_at=body.expires_at, data=body.data,

@@ -1204,6 +1204,8 @@ button, input, textarea, select { font: inherit; color: inherit; }
     border-bottom: 1px solid var(--border);
     background: var(--panel-strong);
   }
+  /* 中英混排列名保留书写大小写（如「Agent 名称」「Agent ID」） */
+  .table thead th.cell-keep-case { text-transform: none; }
   /* 展开下拉时整列表头置于相邻列之上，避免菜单被右侧列标题遮挡 */
   .table thead th:has(.th-filter__btn.open) {
     z-index: 130;

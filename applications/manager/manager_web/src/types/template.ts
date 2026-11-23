@@ -18,7 +18,7 @@ export interface ModelTemplate {
   enable_function_calling: boolean;
   verify_ssl: boolean;
   enabled: boolean;
-  /** 只读：在 Agent 模板各模型槽位引用本模板的 Agent 模板数 */
+  /** 只读：在 Agent 配置模板各模型槽位引用本模板的 Agent 配置模板数 */
   reference_count: number;
   data?: Record<string, unknown> | null;
   created_at?: string | null;
@@ -27,14 +27,14 @@ export interface ModelTemplate {
 
 export interface ModelTemplateCreateBody {
   template_name: string;
-  description?: string;
+  description?: string | null;
   model_type: ModelTypeValue;
-  model_tags?: string[];
+  model_tags?: string[] | null;
   api_base: string;
   api_key: string;
   model_id: string;
   model_provider: string;
-  parameters?: Record<string, unknown>;
+  parameters?: Record<string, unknown> | null;
   timeout?: number;
   retry_count?: number;
   enable_streaming?: boolean;
@@ -59,7 +59,7 @@ export interface EmbeddingTemplate {
   parameters?: Record<string, unknown> | null;
   client_config?: Record<string, unknown> | null;
   enabled: boolean;
-  /** 只读：在 Agent 模板 embedding_model 槽位引用本模板的 Agent 模板数 */
+  /** 只读：在 Agent 配置模板 embedding_model 槽位引用本模板的 Agent 配置模板数 */
   reference_count: number;
   data?: Record<string, unknown> | null;
   created_at?: string | null;
@@ -68,8 +68,8 @@ export interface EmbeddingTemplate {
 
 export interface EmbeddingTemplateCreateBody {
   template_name: string;
-  description?: string;
-  embed_tags?: string[];
+  description?: string | null;
+  embed_tags?: string[] | null;
   api_base: string;
   api_key: string;
   model_id: string;
@@ -100,7 +100,7 @@ export interface ExtensionConfigTemplate {
   hook_config: HookConfig;
   custom_config?: Record<string, unknown> | null;
   enabled: boolean;
-  /** 只读：在 Agent 模板 extension_config 槽位引用本模板的 Agent 模板数 */
+  /** 只读：在 Agent 配置模板 extension_config 槽位引用本模板的 Agent 配置模板数 */
   reference_count: number;
   data?: Record<string, unknown> | null;
   created_at?: string | null;
@@ -109,7 +109,7 @@ export interface ExtensionConfigTemplate {
 
 export interface ExtensionConfigTemplateCreateBody {
   template_name: string;
-  description?: string;
+  description?: string | null;
   component: string;
   hook_type: string;
   hook_config: HookConfig;
@@ -135,6 +135,7 @@ export interface ExpertPackageTemplate {
   description?: string | null;
   packages: ExpertPackageItem[];
   enabled: boolean;
+  revision: number;
   reference_count: number;
   created_at?: string | null;
   updated_at?: string | null;
@@ -142,7 +143,7 @@ export interface ExpertPackageTemplate {
 
 export interface ExpertPackageTemplateCreateBody {
   template_name: string;
-  description?: string;
+  description?: string | null;
   packages: ExpertPackageItem[];
   enabled?: boolean;
 }
@@ -152,6 +153,8 @@ export type ExpertPackageTemplateUpdateBody = Partial<{
   description: string | null;
   packages: ExpertPackageItem[];
   enabled: boolean;
+  /** 打开编辑时的 revision；与服务端不一致时返回 409 */
+  expected_revision: number;
 }>;
 
 export interface SkillPrebuiltTemplate {
@@ -164,7 +167,7 @@ export interface SkillPrebuiltTemplate {
   source_id?: string | null;
   version_id?: string | null;
   enabled: boolean;
-  /** 只读：在 Agent 模板 skill_prebuilt 槽位引用本模板的 Agent 模板数 */
+  /** 只读：在 Agent 配置模板 skill_prebuilt 槽位引用本模板的 Agent 配置模板数 */
   reference_count: number;
   data?: Record<string, unknown> | null;
   created_at?: string | null;
@@ -173,7 +176,7 @@ export interface SkillPrebuiltTemplate {
 
 export interface SkillPrebuiltTemplateCreateBody {
   template_name: string;
-  description?: string;
+  description?: string | null;
   skill_id: string;
   package_url?: string;
   source_id?: string;
@@ -209,7 +212,7 @@ export interface McpTemplate {
   description?: string | null;
   mcp_entry: McpEntry;
   enabled: boolean;
-  /** 只读：在 Agent 模板 mcp 槽位引用本模板的 Agent 模板数 */
+  /** 只读：在 Agent 配置模板 mcp 槽位引用本模板的 Agent 配置模板数 */
   reference_count: number;
   data?: Record<string, unknown> | null;
   created_at?: string | null;
@@ -218,7 +221,7 @@ export interface McpTemplate {
 
 export interface McpTemplateCreateBody {
   template_name: string;
-  description?: string;
+  description?: string | null;
   mcp_entry: McpEntry;
   enabled?: boolean;
   data?: Record<string, unknown>;
@@ -232,7 +235,7 @@ export interface PermissionsTemplate {
   template_name: string;
   description?: string | null;
   enabled: boolean;
-  /** 只读：在 Agent 模板 permissions 槽位引用本模板的 Agent 模板数 */
+  /** 只读：在 Agent 配置模板 permissions 槽位引用本模板的 Agent 配置模板数 */
   reference_count: number;
   body: Record<string, unknown>;
   data?: Record<string, unknown> | null;
@@ -242,7 +245,7 @@ export interface PermissionsTemplate {
 
 export interface PermissionsTemplateCreateBody {
   template_name: string;
-  description?: string;
+  description?: string | null;
   enabled?: boolean;
   body: Record<string, unknown>;
   data?: Record<string, unknown>;
@@ -309,13 +312,13 @@ export interface ServiceConfigTemplate {
 
 export interface ServiceConfigTemplateCreateBody {
   template_name: string;
-  description?: string;
+  description?: string | null;
   namespace?: string;
-  node_name?: string;
+  node_name?: string | null;
   fs_group?: number | null;
   pod_name?: string;
   sse_path?: string;
-  kubeconfig?: string;
+  kubeconfig?: string | null;
   ready_timeout?: number;
   ready_poll_interval?: number;
   main_container_id?: string;
@@ -349,7 +352,7 @@ export interface A2AOutboundTemplate {
   connect_timeout_seconds: number;
   sync_wait_seconds: number;
   enabled: boolean;
-  /** 只读：生效出站集合覆盖本模板的 Agent 模板数 */
+  /** 只读：生效出站集合覆盖本模板的 Agent 配置模板数 */
   reference_count: number;
   pending_revision?: Record<string, unknown> | null;
   last_checked_at?: string | null;
@@ -378,7 +381,7 @@ export interface A2ADiscoverySettings {
 export interface A2AOutboundTemplateCreateBody {
   discovery_id: string;
   template_name: string;
-  description?: string;
+  description?: string | null;
   a2a_tags?: string[];
   credential?: string;
   connect_timeout_seconds?: number;
@@ -388,7 +391,7 @@ export interface A2AOutboundTemplateCreateBody {
 
 export interface A2AOutboundTemplateUpdateBody {
   template_name?: string;
-  description?: string;
+  description?: string | null;
   a2a_tags?: string[];
   credential?: string;
   clear_credential?: boolean;
@@ -415,7 +418,7 @@ export interface A2AAccessPolicyTemplate {
 
 export interface A2AAccessPolicyTemplateBody {
   policy_name: string;
-  description?: string;
+  description?: string | null;
   mode: A2AAccessPolicyMode;
   member_template_ids: string[];
   enabled?: boolean;
@@ -467,18 +470,18 @@ export interface ContainerTemplate {
 
 export interface ContainerTemplateCreateBody {
   template_name: string;
-  description?: string;
+  description?: string | null;
   container_id: string;
   name?: string;
   image?: string;
   image_pull_policy?: string;
-  ports?: unknown[];
-  env?: unknown[];
-  env_from?: unknown[];
-  resources?: Record<string, unknown>;
-  volume_mounts?: unknown[];
-  security_context?: Record<string, unknown>;
-  readiness_probe?: Record<string, unknown>;
+  ports?: unknown[] | null;
+  env?: unknown[] | null;
+  env_from?: unknown[] | null;
+  resources?: Record<string, unknown> | null;
+  volume_mounts?: unknown[] | null;
+  security_context?: Record<string, unknown> | null;
+  readiness_probe?: Record<string, unknown> | null;
   command?: string[];
   args?: string[];
   enabled?: boolean;

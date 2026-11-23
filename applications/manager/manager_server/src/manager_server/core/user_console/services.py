@@ -14,12 +14,19 @@ from openjiuwen_runtime.foundation.db.handler import DBHandler
 
 from manager_server.core.instance_access import InstanceGrantService
 from manager_server.core.instance_access.instance_grant_service import SUBJECT_ORG, SUBJECT_USER
+from manager_server.core.instance_resource.runtime_config_sync import (
+    build_service_scope_index,
+    resolve_service_template_id,
+)
+from manager_server.core.user_console.agent_identity import try_build_agent_identity
 from manager_server.infrastructure.config import settings
 from manager_server.infrastructure.match_expr import evaluate_match_expr
 from manager_server.infrastructure.utils import utc_now
 from manager_server.models.instance_resource_models import INSTANCE_AGENT_RESOURCE_TABLE_DEF
+from manager_server.models.agent_definition_models import AGENT_DEFINITION_TABLE_DEF
 
 _GRANT = INSTANCE_AGENT_RESOURCE_TABLE_DEF.table_name
+_AGENT_DEFINITION = AGENT_DEFINITION_TABLE_DEF.table_name
 _INSTANCE_INFO = "instance_info"
 _CAP = 100_000
 _NO_ORG_GROUP_ID = "__none__"
@@ -98,14 +105,52 @@ class UserConsoleService:
         *,
         authorization: str | None = None,
     ) -> list[dict[str, Any]]:
-        """返回用户可选用的上下文列表。
+        """返回用户可选用的上下文列表（兼容旧调用方）。"""
+        contexts, _ = await self._list_accessible_contexts(
+            user_id, groups, authorization=authorization
+        )
+        return contexts
+
+    async def list_accessible_contexts_with_meta(
+        self,
+        user_id: str,
+        groups: list[str] | None = None,
+        *,
+        authorization: str | None = None,
+    ) -> dict[str, Any]:
+        """返回上下文列表与空态原因。
+
+        ``empty_reason``：``no_grant``（无授权/无匹配）或
+        ``no_agent_template``（有授权但管理面未新增 Agent 模板）。
+        """
+        contexts, matched = await self._list_accessible_contexts(
+            user_id, groups, authorization=authorization
+        )
+        empty_reason = None
+        if not contexts:
+            empty_reason = "no_agent_template" if matched else "no_grant"
+        return {"contexts": contexts, "empty_reason": empty_reason}
+
+    async def _list_accessible_contexts(
+        self,
+        user_id: str,
+        groups: list[str] | None = None,
+        *,
+        authorization: str | None = None,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """返回 ``(上下文列表, 过滤前有授权的组合数)``。
 
         业务键均为 id：``bot_id`` / ``group_id`` / ``user_id`` / ``jiuwenclaw_id``。
-        展示字段：``agent_name`` / ``group_name`` / ``jiuwenclaw_name``。
+
+        ``agent_id`` 由 ``runtime_template_id`` + ``agent_template_id`` 经 base62
+        可逆编码得到（43 字符，见 ``agent_identity`` 模块）；只返回已在管理面
+        Agent 模板（``agent_definition``）中配置过的组合，名称取该表中的名称。
+        未配置的组合不展示；运行时模板按 ``(priority ASC, scope_id ASC)``
+        first-fit 解析，与 Runtime 选路一致。
         """
         uid = str(user_id or "").strip()
         if not uid:
-            return []
+            return [], 0
 
         jwt_groups = {
             str(item).strip() for item in (groups or []) if str(item).strip()
@@ -126,16 +171,21 @@ class UserConsoleService:
 
         admitted = await self._admitted_instance_ids(uid, member_groups)
         if not admitted:
-            return []
+            return [], 0
 
         name_by_jid = await self._instance_display_names(admitted)
+        name_by_pair = await self._agent_definition_names()
         seen: set[tuple[str, str, str, str]] = set()
         out: list[dict[str, Any]] = []
+        matched = 0
         for jid in sorted(admitted):
             rows = await self._h.list_records(
                 _GRANT, {"jiuwenclaw_id": jid}, limit=_CAP, offset=0
             )
             cluster_name = name_by_jid.get(jid) or jid
+            scope_index = (
+                await build_service_scope_index(self._h, jid) if rows else []
+            )
             for r in rows:
                 if not bool(_g(r, "enabled", True)) or _grant_expired(_g(r, "expires_at")):
                     continue
@@ -143,7 +193,8 @@ class UserConsoleService:
                 if not bot_id:
                     continue
                 expr = _g(r, "match_expr")
-                agent_name = str(_g(r, "resource_name") or "").strip() or bot_id
+                agent_template_id = str(_g(r, "ref_template_id") or "").strip()
+                resource_name = str(_g(r, "resource_name") or "").strip()
                 for group_id, group_name in candidate_groups:
                     if not evaluate_match_expr(
                         expr, user_id=uid, group_id=group_id, bot_id=""
@@ -153,17 +204,43 @@ class UserConsoleService:
                     if key in seen:
                         continue
                     seen.add(key)
+                    matched += 1
+                    runtime_template_id = resolve_service_template_id(
+                        scope_index,
+                        user_id=uid,
+                        group_id=group_id,
+                        bot_id=bot_id,
+                    )
+                    identity = try_build_agent_identity(
+                        runtime_template_id, agent_template_id
+                    )
+                    if identity is None:
+                        continue
+                    agent_id = identity[0]
+                    configured_name = name_by_pair.get(
+                        (agent_template_id, str(runtime_template_id or ""))
+                    )
+                    if not configured_name:
+                        # 管理面未新增该组合：用户面不展示。
+                        continue
+                    agent_name = configured_name
                     out.append(
                         {
                             "bot_id": bot_id,
                             "group_id": group_id,
                             "user_id": uid,
                             "jiuwenclaw_id": jid,
+                            "runtime_template_id": runtime_template_id,
+                            "agent_template_id": agent_template_id,
+                            "agent_id": agent_id,
                             "agent_name": agent_name,
+                            "resource_name": resource_name,
                             "group_name": group_name,
                             "jiuwenclaw_name": cluster_name,
                         }
                     )
+        # 用户面下拉只展示 agent_name（默认 agent_ + agent_id，可由管理员改名），
+        # 按其排序保证接口返回顺序与展示顺序一致。
         out.sort(
             key=lambda x: (
                 str(x.get("agent_name") or ""),
@@ -174,7 +251,24 @@ class UserConsoleService:
                 str(x.get("jiuwenclaw_id") or ""),
             )
         )
-        return out
+        return out, matched
+
+    async def _agent_definition_names(self) -> dict[tuple[str, str], str]:
+        """Agent 模板的 ``(Agent 配置模板 id, 运行时模板 id)`` → 名称。"""
+        rows = await self._h.list_records(
+            _AGENT_DEFINITION, {}, limit=_CAP, offset=0
+        )
+        names: dict[tuple[str, str], str] = {}
+        for row in rows:
+            name = str(_g(row, "agent_name") or "").strip()
+            if not name:
+                continue
+            key = (
+                str(_g(row, "agent_config_template_id") or ""),
+                str(_g(row, "runtime_template_id") or ""),
+            )
+            names[key] = name
+        return names
 
     async def _instance_display_names(self, jids: set[str]) -> dict[str, str]:
         """``jiuwenclaw_id`` → ``jiuwenclaw_name``（缺省回退为 id）。"""
