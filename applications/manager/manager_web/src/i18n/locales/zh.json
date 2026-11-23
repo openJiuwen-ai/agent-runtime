@@ -882,7 +882,6 @@
     "edit": "编辑专家包",
     "templateName": "模板名称",
     "templateDescription": "模板描述",
-    "hubPackage": "Hub 包",
     "kind": {
       "agent_template": "专家",
       "agent_group": "专家团"

@@ -882,7 +882,6 @@
     "edit": "Edit expert package",
     "templateName": "Template name",
     "templateDescription": "Description",
-    "hubPackage": "Hub package",
     "kind": {
       "agent_template": "Expert",
       "agent_group": "Expert team"
