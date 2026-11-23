@@ -26,6 +26,8 @@ import {
 import { Switch } from '../../../components/Switch';
 import { HintTooltip } from '../../../components/HintTooltip';
 import { formatTime } from '../../../utils/format';
+import { useAdmissionHandoff } from '../../../hooks/useAdmissionHandoff';
+import { collectPages } from '../../../utils/overview';
 
 const IA = 'instanceDetail.accessPanel.instance';
 
@@ -76,13 +78,15 @@ type UserSortField =
 export function InstanceUsersTab({ instanceId }: Props) {
   const { t } = useTranslation();
 
-  const { data: usersData, reload: reloadUsers } = useAsync(() => UserApi.list(), []);
-  const { data: bindingData, loading, reload: reloadBinding } = useAsync(
+  const { data: usersData, loading: directoryLoading, error: directoryError, reload: reloadUsers } = useAsync(
+    () => collectPages((page, page_size) => UserApi.list({ page, page_size })), [],
+  );
+  const { data: bindingData, loading, error: bindingError, reload: reloadBinding } = useAsync(
     () => InstanceBindingApi.listUsers(instanceId),
     [instanceId],
   );
 
-  const allUsers = usersData?.items ?? [];
+  const allUsers = usersData ?? [];
 
   const userGrantById = useMemo(() => {
     const m = new Map<string, InstanceGrant>();
@@ -111,6 +115,7 @@ export function InstanceUsersTab({ instanceId }: Props) {
   const [pageSize, setPageSize] = useState(20);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [showAdd, setShowAdd] = useState(false);
+  const admissionHandoff = useAdmissionHandoff(instanceId, 'users', () => setShowAdd(true));
 
   /** 引导跳转：其他页面点「未配置准入用户」跳过来时自动打开添加准入用户弹框 */
   useGuideAutoOpen('accessUsers', () => setShowAdd(true));
@@ -230,20 +235,20 @@ export function InstanceUsersTab({ instanceId }: Props) {
     .map((u) => ({ id: u.user_id, label: u.display_name, sub: u.user_id }));
 
   return (
-    <div className="flex min-w-0 flex-col gap-4">
-      <div className="page-header w-full min-w-0 flex-wrap items-start gap-y-3">
-        <div className="min-w-[7.5rem] shrink-0">
-          <div className="page-title truncate">{t(`${IA}.users`)}</div>
-          <div className="page-subtitle truncate">{t(`${IA}.usersHint`)}</div>
+    <div className="flex min-w-0 flex-col">
+      <div className="page-header cluster-admission-section__header w-full min-w-0 flex-wrap items-start gap-y-3">
+        <div className="cluster-admission-section__heading">
+          <h3 id="cluster-admission-users-title" className="cluster-admission-section__title">{t(`${IA}.users`)}</h3>
+          <p className="cluster-admission-section__description">{t(`${IA}.usersHint`)}</p>
         </div>
-        <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
+        <div className="cluster-admission-section__actions flex min-w-0 flex-wrap items-center justify-end gap-2">
           {checked.size === 0 ? (
             <>
               <ListSearchInput
                 value={searchInput}
                 onChange={setSearchInput}
                 placeholder={t(`${IA}.searchUsersPlaceholder`)}
-                className="basis-full sm:basis-auto"
+                className="cluster-admission-section__search"
               />
               <button className="btn sm" onClick={() => void reloadBinding()}>
                 {t('common.refresh')}
@@ -260,7 +265,7 @@ export function InstanceUsersTab({ instanceId }: Props) {
         </div>
       </div>
 
-      <div className="card !p-0">
+      <div className="cluster-admission-section__table">
         {loading ? (
           <div className="p-4 text-sm text-muted">{t('common.loading')}</div>
         ) : (
@@ -409,22 +414,32 @@ export function InstanceUsersTab({ instanceId }: Props) {
         )}
       </div>
 
-      <Pagination
-        page={page}
-        pageSize={pageSize}
-        total={filtered.length}
-        onChange={(p, ps) => {
-          setPage(p);
-          setPageSize(ps);
-        }}
-      />
+      {filtered.length > 0 && (
+        <div className="cluster-admission-section__footer">
+          <Pagination
+            page={page}
+            pageSize={pageSize}
+            total={filtered.length}
+            onChange={(p, ps) => {
+              setPage(p);
+              setPageSize(ps);
+            }}
+          />
+        </div>
+      )}
 
       {showAdd && (
         <AddToInstanceModal
           title={t(`${IA}.addUsers`)}
           candidates={candidates}
+          subjectKind="users"
+          directoryCount={allUsers.length}
+          loading={directoryLoading || loading}
+          error={directoryError || bindingError}
+          onReload={() => { void reloadUsers(); void reloadBinding(); }}
           showExpiresAt
-          manageLink={{ page: t('iam.users'), to: '/users' }}
+          initialDraft={admissionHandoff.initialDraft}
+          manageLink={{ page: t('iam.users'), to: admissionHandoff.managePath, onPrepare: admissionHandoff.prepare }}
           onConfirm={async ({ ids, expires_at, login_policy }) => {
             await InstanceBindingApi.bindUsers(instanceId, ids, { expires_at, login_policy });
             toast('success', t('success.saved'));
@@ -432,7 +447,7 @@ export function InstanceUsersTab({ instanceId }: Props) {
             reloadUsers();
             bumpGuideRevision();
           }}
-          onClose={() => setShowAdd(false)}
+          onClose={() => { admissionHandoff.clear(); setShowAdd(false); }}
         />
       )}
 

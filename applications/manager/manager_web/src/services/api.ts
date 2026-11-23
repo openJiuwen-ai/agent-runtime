@@ -1093,6 +1093,7 @@ export const InstanceAgentResourceApi = {
       resource_desc?: string | null;
       enabled?: boolean;
       expires_at?: string | null;
+      data?: Record<string, unknown> | null;
     },
   ) =>
     http<{ items: InstanceAgentResource[] }>(
@@ -1178,6 +1179,7 @@ export const InstanceServiceResourceApi = {
       priority?: number;
       enabled?: boolean;
       expires_at?: string | null;
+      data?: Record<string, unknown> | null;
     },
   ) =>
     http<{ items: InstanceServiceResource[] }>(

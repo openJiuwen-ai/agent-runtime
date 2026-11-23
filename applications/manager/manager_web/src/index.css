@@ -2261,6 +2261,27 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .cluster-detail-page { flex: 1 0 auto; min-height: calc(100dvh - 100px); }
 .cluster-detail-body { flex: 1 0 auto; display: flex; flex-direction: column; }
 .cluster-detail-body > .cluster-resource-list { flex: 1 0 auto; }
+.cluster-resource-list__header > :first-child { flex: 1 1 20rem; }
+/* Move the toolbar as one unit when space is tight; keep its buttons beside the search. */
+.cluster-resource-list__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: 1 1 27rem;
+  min-width: 0;
+  max-width: 30rem;
+  margin-left: auto;
+}
+.cluster-resource-list__actions .cluster-resource-list__search {
+  flex: 1 1 0;
+  width: 0;
+  min-width: 0;
+  max-width: 20rem;
+}
+.cluster-resource-list__actions .btn { flex: 0 0 auto; white-space: nowrap; }
+.cluster-resource-list__actions--selection { flex: 0 0 auto; }
+.cluster-resource-list > .manager-page-table { min-height: clamp(320px, calc(100dvh - 580px), 900px); }
 .cluster-detail-footer { display: flex; flex-direction: column; gap: 16px; margin-top: auto; flex-shrink: 0; }
 .cluster-detail-page .cluster-setting-card .manager-page-table { min-height: 300px; }
 .cluster-detail-page .cluster-setting-card .card:has(> .overflow-x-auto > .table) { min-height: 300px; background: var(--card); }

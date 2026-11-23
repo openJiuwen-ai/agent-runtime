@@ -415,7 +415,7 @@
         "serviceResource": "Runtime"
       },
       "agent": {
-        "title": "Agent",
+        "title": "Agent bindings",
         "subtitle": "Onboard and manage Agents based on Agent config templates, and configure the authorization scope of each Agent",
         "agentLabel": "Agent Config Template",
         "agentInstance": "Agent Instance",
@@ -440,7 +440,7 @@
         "resourceDescPlaceholder": "Enter resource description (optional)"
       },
       "serviceResource": {
-        "title": "Runtime",
+        "title": "Runtime resources",
         "subtitle": "Create and manage instance pools based on Runtime Templates, configure the scheduling policy of each pool; instances are allocated on demand when a session triggers",
         "template": "Runtime Template",
         "scopeLabel": "Authorization Scope",

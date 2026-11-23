@@ -415,7 +415,7 @@
         "serviceResource": "运行时"
       },
       "agent": {
-        "title": "Agent",
+        "title": "Agent绑定",
         "subtitle": "基于 Agent 配置模板接入并管理 Agent，配置各 Agent 的授权范围",
         "agentLabel": "Agent配置模板",
         "agentInstance": "Agent实例",
@@ -440,7 +440,7 @@
         "resourceDescPlaceholder": "请输入资源描述（可选）"
       },
       "serviceResource": {
-        "title": "运行时",
+        "title": "运行资源",
         "subtitle": "基于 运行时模板 创建并管理实例池，配置各池的调度策略，实例在会话触发时按需分配",
         "template": "运行时模板",
         "scopeLabel": "授权范围",
