@@ -1032,10 +1032,20 @@ export const AgentDefinitionApi = {
     sort_by?: 'agent_name' | 'agent_id' | 'created_at' | 'updated_at';
     sort_order?: 'asc' | 'desc';
   }) => http<PageResult<AgentDefinition>>('/v1/agent-definitions/', { query: params }),
+  create: (body: {
+    agent_config_template_id: string;
+    runtime_template_id: string;
+    agent_name: string;
+  }) => http<AgentDefinition>('/v1/agent-definitions/', { method: 'POST', body }),
   rename: (agentId: string, agentName: string) =>
     http<AgentDefinition>(
       `/v1/agent-definitions/${encodeURIComponent(agentId)}`,
       { method: 'PATCH', body: { agent_name: agentName } },
+    ),
+  remove: (agentId: string) =>
+    http<{ deleted: boolean; agent_id: string }>(
+      `/v1/agent-definitions/${encodeURIComponent(agentId)}`,
+      { method: 'DELETE' },
     ),
 };
 

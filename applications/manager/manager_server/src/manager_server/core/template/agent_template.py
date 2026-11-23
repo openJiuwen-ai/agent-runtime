@@ -43,7 +43,6 @@ _A2A_POLICY_TPL = A2A_ACCESS_POLICY_TEMPLATE_TABLE_DEF.table_name
 _template_mutation_locks: WeakValueDictionary[str, Lock] = WeakValueDictionary()
 _MUTATION_TIMEOUT = 120
 _ROLLBACK_TIMEOUT = 60
-_SYNC_TIMEOUT = 30
 # The lease outlives the forward operation and both compensating requests.
 _MUTATION_LEASE = 300
 _ALLOWED_SORT_FIELDS = frozenset({
@@ -128,15 +127,25 @@ async def _registration_service():
         raise RegistrationUnavailable(str(exc)) from None
 
 
-async def _sync_agent_definitions(handler: DBHandler) -> None:
-    """派生数据同步；失败或超时只告警，不阻塞模板增删改。"""
-    from manager_server.core.agent_definition.sync import reconcile_agent_definitions
+async def _assert_no_agent_definitions(
+    handler: DBHandler, *, config_template_id: str, action: str
+) -> None:
+    """模板被 Agent 模板引用时拒绝删除/停用，避免出现悬空组合。"""
+    from manager_server.core.agent_definition.service import (
+        count_agent_config_template_references,
+    )
+    from manager_server.core.template.errors import TemplateInUseError
 
-    try:
-        async with timeout(_SYNC_TIMEOUT):
-            await reconcile_agent_definitions(handler)
-    except TimeoutError:
-        _log.warning("[Template] agent_definition sync timed out")
+    ref_count = await count_agent_config_template_references(
+        handler, config_template_id
+    )
+    if ref_count > 0:
+        raise TemplateInUseError(
+            "agent_definitions_referenced",
+            ref_count,
+            f"cannot {action} template: {ref_count} agent template(s) reference it, "
+            "delete those agent templates first",
+        )
 
 
 def agent_template_out(row: Any, *, reference_count: int = 0) -> dict[str, Any]:
@@ -284,7 +293,6 @@ class AgentTemplateService:
         created = await self.get(template_id)
         if created is None:  # pragma: no cover
             raise RuntimeError(f"agent_template just created but missing: {template_id}")
-        await _sync_agent_definitions(self._h)
         return created
 
     @asynccontextmanager
@@ -463,14 +471,19 @@ class AgentTemplateService:
                     operation.row,
                     reference_count=await _reference_count(self._h, template_id),
                 )
+            if updates.get("enabled") is False and bool(
+                _g(operation.row, "enabled", True)
+            ):
+                await _assert_no_agent_definitions(
+                    self._h, config_template_id=template_id, action="disable"
+                )
 
             await update_template_on_referencing_gateways(self._h, AGENT_TEMPLATES_KIND, template_id, updates)
             await self._finish_template(operation, changes=updates)
-        await _sync_agent_definitions(self._h)
         return await self.get(template_id)
 
     async def delete(self, template_id: str) -> bool:
-        """删除 Agent 模板：仍被实例上的 Agent 引用时拒绝删除。"""
+        """删除 Agent 模板：仍被实例上的 Agent 或 Agent 模板引用时拒绝删除。"""
         from manager_server.core.template.push_template_to_gateway import (
             assert_agent_template_deletable,
         )
@@ -480,13 +493,15 @@ class AgentTemplateService:
                 return False
             # 在预留锁内校验，尽量缩小与“新增 Agent 授权”的竞态窗口
             await assert_agent_template_deletable(self._h, template_id)
+            await _assert_no_agent_definitions(
+                self._h, config_template_id=template_id, action="delete"
+            )
 
             binding = (operation.data or {}).get(MANAGED_AGENT_CLIENT_KEY)
             if binding:
                 service = await _registration_service()
                 await service.delete(template_id, binding)
             await self._finish_template(operation, deleting=True)
-        await _sync_agent_definitions(self._h)
         _log.info("[Template] agent_template.delete", template_id=template_id)
         return True
 

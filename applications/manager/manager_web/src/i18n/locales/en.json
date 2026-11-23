@@ -113,6 +113,7 @@
     "newModel": "New Model",
     "newAgentDefinition": "New Agent Config Template",
     "newPoolDefinition": "New Runtime Template",
+    "newAgentTemplate": "New Agent Template",
     "newContainerTemplate": "New Container Template",
     "noClusters": "No clusters yet. Create one in Cluster Management first.",
     "selectCluster": "Select cluster",
@@ -1416,7 +1417,7 @@
   },
   "agentDefinition": {
     "title": "Agent Templates",
-    "subtitle": "Generated from Agent config templates and runtime templates; names are customizable",
+    "subtitle": "Assign Agent names to combinations of Agent config templates and runtime templates",
     "searchPlaceholder": "Search Agent Name or Agent ID",
     "column": {
       "name": "Agent Name",
@@ -1424,15 +1425,30 @@
       "agentConfig": "Agent Config Template",
       "runtime": "Runtime Template"
     },
+    "new": "New Agent Template",
+    "createTitle": "New Agent Template",
+    "createHint": "The Agent ID is derived from the selected Agent config template and runtime template, and cannot be changed later.",
+    "selectAgentConfig": "Select an Agent config template",
+    "selectRuntime": "Select a runtime template",
+    "templateRequired": "Select both an Agent config template and a runtime template",
+    "templateUnavailable": "The selected template is missing or disabled. Select another one.",
+    "combinationDuplicated": "An Agent Template already exists for this template pair.",
+    "noTemplates": "No enabled Agent config templates or runtime templates. Create and enable them first.",
     "edit": "Edit",
     "editTitle": "Edit Agent Name",
-    "editHint": "Agent Name is unique among active Agent templates (case-insensitive) and up to 128 characters.",
-    "empty": "No Agent templates yet. Create and enable at least one Agent config template and one runtime template.",
+    "editHint": "Agent Name is unique among Agent templates (case-insensitive) and up to 128 characters.",
+    "deleteConfirm": "Deleting removes this Agent from the user workspace and discards its name. Continue?",
+    "empty": "No Agent templates yet. Click \"New Agent Template\" to create one.",
     "nameRequired": "Agent Name is required",
     "nameTooLong": "Agent Name must be at most 128 characters",
     "nameDuplicated": "This Agent Name is already taken. Choose another one.",
     "copyId": "Copy Agent ID",
     "copied": "Copied"
+  },
+  "templateInUse": {
+    "agentDefinitions": "This template is referenced by {{count}} Agent Template(s). Delete those Agent Templates first.",
+    "agentConfigInstances": "This template is still used by {{count}} instance Agent(s). Remove those references first.",
+    "runtimeServices": "This template is still used by {{count}} instance runtime resource(s). Remove those references first."
   },
   "templateRefEditor": {},
   "containerTemplate": {

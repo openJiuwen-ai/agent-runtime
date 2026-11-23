@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class AgentDefinitionListQuery(BaseModel):
-    """Agent 模板列表查询参数；固定只返回有效行（``deleted=0``）。"""
+    """Agent 模板列表查询参数。"""
 
     page: int = Field(1, ge=1)
     page_size: int = Field(20, ge=1, le=200)
@@ -22,7 +22,15 @@ class AgentDefinitionListQuery(BaseModel):
     sort_order: str | None = Field(default=None, description="排序方向：asc、desc")
 
 
+class AgentDefinitionCreateBody(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    agent_config_template_id: str = Field(..., min_length=1, max_length=100)
+    runtime_template_id: str = Field(..., min_length=1, max_length=100)
+    agent_name: str = Field(..., min_length=1, max_length=128)
+
+
 class AgentDefinitionRenameBody(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    agent_name: str = Field(..., max_length=128)
+    agent_name: str = Field(..., min_length=1, max_length=128)

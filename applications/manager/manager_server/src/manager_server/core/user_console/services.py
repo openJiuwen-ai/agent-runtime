@@ -105,19 +105,52 @@ class UserConsoleService:
         *,
         authorization: str | None = None,
     ) -> list[dict[str, Any]]:
-        """返回用户可选用的上下文列表。
+        """返回用户可选用的上下文列表（兼容旧调用方）。"""
+        contexts, _ = await self._list_accessible_contexts(
+            user_id, groups, authorization=authorization
+        )
+        return contexts
+
+    async def list_accessible_contexts_with_meta(
+        self,
+        user_id: str,
+        groups: list[str] | None = None,
+        *,
+        authorization: str | None = None,
+    ) -> dict[str, Any]:
+        """返回上下文列表与空态原因。
+
+        ``empty_reason``：``no_grant``（无授权/无匹配）或
+        ``no_agent_template``（有授权但管理面未新增 Agent 模板）。
+        """
+        contexts, matched = await self._list_accessible_contexts(
+            user_id, groups, authorization=authorization
+        )
+        empty_reason = None
+        if not contexts:
+            empty_reason = "no_agent_template" if matched else "no_grant"
+        return {"contexts": contexts, "empty_reason": empty_reason}
+
+    async def _list_accessible_contexts(
+        self,
+        user_id: str,
+        groups: list[str] | None = None,
+        *,
+        authorization: str | None = None,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """返回 ``(上下文列表, 过滤前有授权的组合数)``。
 
         业务键均为 id：``bot_id`` / ``group_id`` / ``user_id`` / ``jiuwenclaw_id``。
 
         ``agent_id`` 由 ``runtime_template_id`` + ``agent_template_id`` 经 base62
-        可逆编码得到（43 字符，见 ``agent_identity`` 模块）；``agent_name`` 优先取
-        Agent 模板（``agent_definition``）中的自定义名称，未命中时回退
-        ``agent_`` + ``agent_id``；无法生成 ``agent_id`` 时回退为资源名。运行时模板按
-        ``(priority ASC, scope_id ASC)`` first-fit 解析，与 Runtime 选路一致。
+        可逆编码得到（43 字符，见 ``agent_identity`` 模块）；只返回已在管理面
+        Agent 模板（``agent_definition``）中配置过的组合，名称取该表中的名称。
+        未配置的组合不展示；运行时模板按 ``(priority ASC, scope_id ASC)``
+        first-fit 解析，与 Runtime 选路一致。
         """
         uid = str(user_id or "").strip()
         if not uid:
-            return []
+            return [], 0
 
         jwt_groups = {
             str(item).strip() for item in (groups or []) if str(item).strip()
@@ -138,12 +171,13 @@ class UserConsoleService:
 
         admitted = await self._admitted_instance_ids(uid, member_groups)
         if not admitted:
-            return []
+            return [], 0
 
         name_by_jid = await self._instance_display_names(admitted)
         name_by_pair = await self._agent_definition_names()
         seen: set[tuple[str, str, str, str]] = set()
         out: list[dict[str, Any]] = []
+        matched = 0
         for jid in sorted(admitted):
             rows = await self._h.list_records(
                 _GRANT, {"jiuwenclaw_id": jid}, limit=_CAP, offset=0
@@ -170,6 +204,7 @@ class UserConsoleService:
                     if key in seen:
                         continue
                     seen.add(key)
+                    matched += 1
                     runtime_template_id = resolve_service_template_id(
                         scope_index,
                         user_id=uid,
@@ -179,17 +214,16 @@ class UserConsoleService:
                     identity = try_build_agent_identity(
                         runtime_template_id, agent_template_id
                     )
-                    if identity:
-                        agent_id, fallback_name = identity
-                    else:
-                        agent_id = ""
-                        fallback_name = resource_name or bot_id
-                    agent_name = (
-                        name_by_pair.get(
-                            (agent_template_id, str(runtime_template_id or ""))
-                        )
-                        or fallback_name
+                    if identity is None:
+                        continue
+                    agent_id = identity[0]
+                    configured_name = name_by_pair.get(
+                        (agent_template_id, str(runtime_template_id or ""))
                     )
+                    if not configured_name:
+                        # 管理面未新增该组合：用户面不展示。
+                        continue
+                    agent_name = configured_name
                     out.append(
                         {
                             "bot_id": bot_id,
@@ -217,12 +251,12 @@ class UserConsoleService:
                 str(x.get("jiuwenclaw_id") or ""),
             )
         )
-        return out
+        return out, matched
 
     async def _agent_definition_names(self) -> dict[tuple[str, str], str]:
-        """有效 Agent 模板的 ``(Agent 配置模板 id, 运行时模板 id)`` → 自定义名称。"""
+        """Agent 模板的 ``(Agent 配置模板 id, 运行时模板 id)`` → 名称。"""
         rows = await self._h.list_records(
-            _AGENT_DEFINITION, {"deleted": False}, limit=_CAP, offset=0
+            _AGENT_DEFINITION, {}, limit=_CAP, offset=0
         )
         names: dict[tuple[str, str], str] = {}
         for row in rows:
