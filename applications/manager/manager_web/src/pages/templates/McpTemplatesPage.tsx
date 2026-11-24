@@ -17,6 +17,10 @@ import { ApiError, McpTemplateApi } from '../../services/api';
 import { toast } from '../../stores/uiStore';
 import type { McpTemplate } from '../../types';
 import { formatTime, truncate } from '../../utils/format';
+import {
+  disableBlockedByReferences,
+  templateInUseMessage,
+} from '../../utils/templateInUse';
 import { McpTemplateModal } from './McpTemplateModal';
 import { ResourceExportButton, ResourceImportButton } from '../../components/ResourceImportExport';
 
@@ -89,6 +93,11 @@ export function McpTemplatesPage() {
 
   const toggleEnabled = async (row: McpTemplate, enabled: boolean) => {
     if (togglingId) return;
+    const blocked = disableBlockedByReferences(enabled, row.reference_count, t);
+    if (blocked) {
+      toast('warn', blocked);
+      return;
+    }
     const previous = row.enabled;
     setItems((current) =>
       current.map((item) => (item.template_id === row.template_id ? { ...item, enabled } : item)),
@@ -106,7 +115,8 @@ export function McpTemplatesPage() {
           item.template_id === row.template_id ? { ...item, enabled: previous } : item,
         ),
       );
-      toast('danger', t('errors.saveFailed', {
+      const localized = templateInUseMessage(toggleError, t);
+      toast('danger', localized ?? t('errors.saveFailed', {
         detail: toggleError instanceof ApiError ? toggleError.detail : (toggleError as Error).message,
       }));
     } finally {

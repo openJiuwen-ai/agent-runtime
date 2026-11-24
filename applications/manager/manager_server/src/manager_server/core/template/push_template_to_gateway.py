@@ -1320,22 +1320,37 @@ async def delete_agent_template_on_gateway(
     await _delete_template_on_gateway(jiuwenclaw_id, AGENT_TEMPLATES_KIND, template_id)
 
 
-async def assert_template_deletable(
+async def assert_template_not_referenced(
     handler: DBHandler,
     template_id: str,
     kind: str,
+    *,
+    action: str = "delete",
 ) -> None:
-    """删除模板前校验：若仍被 Agent 资源 / 模板引用则拒绝删除。"""
+    """删除/禁用模板前校验：若仍被 Agent 配置模板引用则拒绝。"""
+    from manager_server.core.template.errors import TemplateInUseError
+
     ref_count = await count_config_effective_policy_references_for_template(
         handler,
         template_id,
         kind,
     )
     if ref_count > 0:
-        raise ValueError(
-            f"cannot delete template: {ref_count} template "
-            "reference(s) exist, remove references from agent templates first"
+        raise TemplateInUseError(
+            "agent_templates_referenced",
+            ref_count,
+            f"cannot {action} template: {ref_count} template "
+            "reference(s) exist, remove references from agent templates first",
         )
+
+
+async def assert_template_deletable(
+    handler: DBHandler,
+    template_id: str,
+    kind: str,
+) -> None:
+    """删除模板前校验：若仍被 Agent 资源 / 模板引用则拒绝删除。"""
+    await assert_template_not_referenced(handler, template_id, kind, action="delete")
 
 
 async def count_agent_references_for_template(handler: DBHandler, template_id: str) -> int:
@@ -1388,6 +1403,7 @@ __all__ = (
     "TEMPLATE_KIND_SPECS",
     "assert_agent_template_deletable",
     "assert_template_deletable",
+    "assert_template_not_referenced",
     "count_agent_reference_counts",
     "count_agent_references_for_template",
     "count_agent_template_reference_counts",

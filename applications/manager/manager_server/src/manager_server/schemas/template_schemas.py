@@ -906,7 +906,7 @@ class ServiceConfigContainerCreateBody(SafeTextMixin):
     description: str | None = Field(default=None, max_length=512)
     container_id: str = Field(..., min_length=1, max_length=100)
     name: str = Field(default="agent", max_length=128)
-    image: str = Field(default="", max_length=512)
+    image: str = Field(..., min_length=1, max_length=512)
     image_pull_policy: str = Field(default="IfNotPresent", max_length=64)
     ports: list[dict[str, Any]] | None = None
     env: list[dict[str, Any]] | None = None
@@ -928,7 +928,7 @@ class ServiceConfigContainerUpdateBody(SafeTextMixin):
     description: str | None = Field(default=None, max_length=512)
     container_id: str | None = Field(default=None, min_length=1, max_length=100)
     name: str | None = Field(default=None, max_length=128)
-    image: str | None = Field(default=None, max_length=512)
+    image: str | None = Field(default=None, min_length=1, max_length=512)
     image_pull_policy: str | None = Field(default=None, max_length=64)
     ports: list[dict[str, Any]] | None = None
     env: list[dict[str, Any]] | None = None

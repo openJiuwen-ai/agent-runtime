@@ -1482,7 +1482,8 @@
   "templateInUse": {
     "agentDefinitions": "该模板被 {{count}} 个 Agent 模板引用，请先删除对应的 Agent 模板",
     "agentConfigInstances": "该模板仍被 {{count}} 个集群 Agent 引用，请先解除引用",
-    "runtimeServices": "该模板仍被 {{count}} 个集群运行时资源引用，请先解除引用"
+    "runtimeServices": "该模板仍被 {{count}} 个集群运行时资源引用，请先解除引用",
+    "agentTemplates": "该资源仍被 {{count}} 个 Agent 配置模板引用，无法禁用或删除，请先解除引用"
   },
   "templateRefEditor": {},
   "containerTemplate": {

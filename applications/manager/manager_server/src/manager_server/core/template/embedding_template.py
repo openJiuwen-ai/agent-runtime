@@ -8,6 +8,7 @@ from openjiuwen_runtime.foundation.db.handler import DBHandler
 
 from manager_server.core.template.push_template_to_gateway import (
     assert_template_deletable,
+    assert_template_not_referenced,
     count_agent_template_reference_counts,
     update_template_on_referencing_gateways,
     delete_template_on_referencing_gateways,
@@ -188,6 +189,10 @@ class EmbeddingTemplateService:
         if not updates:
             counts = await self._reference_counts()
             return row_to_out(existing, reference_count=counts.get(str(existing.template_id), 0))
+        if updates.get("enabled") is False and bool(getattr(existing, "enabled", True)):
+            await assert_template_not_referenced(
+                self._handler, template_id, "embedding_templates", action="disable"
+            )
         await update_template_on_referencing_gateways(
             self._handler,
             "embedding_templates",

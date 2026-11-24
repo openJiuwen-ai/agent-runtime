@@ -256,6 +256,10 @@ export function ContainerTemplateModal({ open, template, onClose, onSaved }: Pro
       toast('warn', t('containerTemplate.fieldRequired', { field: t('containerTemplate.containerName') }));
       return;
     }
+    if (!form.image.trim()) {
+      toast('warn', t('containerTemplate.fieldRequired', { field: t('containerTemplate.image') }));
+      return;
+    }
     const ports = parseJsonArray(form.ports_json);
     if (!ports.ok) {
       toast('warn', t('containerTemplate.jsonArrayInvalid', { field: t('containerTemplate.ports') }));

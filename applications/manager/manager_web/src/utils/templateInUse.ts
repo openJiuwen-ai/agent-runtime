@@ -7,7 +7,18 @@ const CODE_TO_KEY: Record<string, string> = {
   agent_definitions_referenced: 'templateInUse.agentDefinitions',
   agent_config_referenced_by_instances: 'templateInUse.agentConfigInstances',
   runtime_referenced_by_services: 'templateInUse.runtimeServices',
+  agent_templates_referenced: 'templateInUse.agentTemplates',
 };
+
+/** 禁用前检查：仍被 Agent 配置模板引用则返回本地化提示。 */
+export function disableBlockedByReferences(
+  enabled: boolean,
+  referenceCount: number | undefined,
+  t: Translate,
+): string | undefined {
+  if (enabled || (referenceCount ?? 0) <= 0) return undefined;
+  return t('templateInUse.agentTemplates', { count: referenceCount ?? 0 });
+}
 
 /** 模板被引用时的本地化提示；不是该类错误时返回 `undefined`。 */
 export function templateInUseMessage(
