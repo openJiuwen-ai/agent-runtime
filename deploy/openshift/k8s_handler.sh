@@ -128,10 +128,10 @@ apply_nfs_direct_mounts() { # $@=本次渲染的清单文件名
   # 且拆除时内置 NFS Pod 可能已先被删——此时解析 NFS 地址不应阻塞卸载
   [ "${CMD:-}" = "up" ] || return 0
 
-  # 仅处理带数据卷的组件（mariadb/mysql/postgresql/minio/agentserver），
+  # 仅处理带数据卷的组件（mariadb/mysql/postgresql/minio/agentserver/gateway），
   # 其清单按 <组件>-data 卷名改写为 NFS 直连挂载；其余清单（含 nfs 自身）不涉及
   local -a need=() cmp
-  for cmp in mariadb mysql postgresql minio agentserver; do
+  for cmp in mariadb mysql postgresql minio agentserver gateway; do
     in_array "$cmp.yaml" "$@" && need+=("$cmp")
   done
   in_array "agentserver.json" "$@" && need+=("agentserver.json")
@@ -163,7 +163,7 @@ apply_nfs_direct_mounts() { # $@=本次渲染的清单文件名
   # 改写范围遵循约定：模板 <组件>.yaml，卷名 <组件>-data，数据目录 <base>/<ns>/<组件>；
   # 卷名与模板不符时 _nfs_rewrite_volume 的结果校验会报错拦截
   local cmp
-  for cmp in mariadb mysql postgresql minio agentserver; do
+  for cmp in mariadb mysql postgresql minio agentserver gateway; do
     in_array "$cmp.yaml" "$@" || continue
     _nfs_rewrite_file "$CONF_DIR/$cmp.yaml" "${cmp}-data" "$base/$ns/$cmp" "$server"
     info "NFS 直连改写完成: $server:$base/$ns/$cmp"
@@ -633,7 +633,7 @@ apply_sandbox_type_extras() { # $@=本次渲染的清单文件名
 
 # jiuwenbox 沙箱 sidecar 注入（SANDBOX_TYPE=jiuwenbox）：
 # - agentserver.yaml → StatefulSet 追加 sidecar 容器 + cgroup hostPath 卷；
-#   sidecar 挂业务卷 domain/，与主进程保持工作区文件级 IPC 同径
+#   sidecar 挂业务卷 profile/，与主进程保持工作区文件级 IPC 同径
 # - agentserver.json → config_sync 载荷追加 c-jiuwenbox 容器 + sidecar_container_ids
 #   + hp-cgroup 卷（与 ee 部署的 config_sync 载荷同规格）
 # - securityContext 除 root + SYS_ADMIN/NET_ADMIN + seccomp Unconfined 外，
@@ -699,7 +699,7 @@ _apply_jiuwenbox_sidecar_yaml() { # $1=agentserver.yaml
       "seccompProfile": {"type": "Unconfined"}},
     "readinessProbe": {"tcpSocket": {"port": '"${port}"'}, "initialDelaySeconds": 10, "periodSeconds": 5},
     "volumeMounts": [
-      {"name": "agentserver-data", "mountPath": "/home/app/.jiuwenswarm/domain"},
+      {"name": "agentserver-data", "mountPath": "/home/app/.jiuwenswarm/profile"},
       {"name": "hp-cgroup", "mountPath": "/sys/fs/cgroup"}
     ]
   }])' "$1"
@@ -744,7 +744,7 @@ _apply_jiuwenbox_sidecar_json() { # $1=agentserver.json
         "appArmorProfile": {"type": "Unconfined"}},
       "readinessProbe": {"tcpSocket": {"port": '"${port}"'}, "initialDelaySeconds": 10, "periodSeconds": 5},
       "volumeMounts": [
-        {"name": "data", "mountPath": "/home/app/.jiuwenswarm/domain"},
+        {"name": "data", "mountPath": "/home/app/.jiuwenswarm/profile"},
         {"name": "hp-cgroup", "mountPath": "/sys/fs/cgroup"}
       ]
     }] |
