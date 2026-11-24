@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Literal
+from urllib.parse import urljoin
 
 import httpx
 from pydantic import BaseModel, StrictBool, StrictStr
@@ -35,20 +36,19 @@ class DirectoryAuthorizationClient:
         manager_base_url: str,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
-        base_url = manager_base_url.strip().rstrip("/")
-        self._endpoint = base_url + "/api/v1/authz/me" if base_url else ""
+        self._base_url = manager_base_url.strip()
         self._http = httpx.AsyncClient(
             timeout=3.0, trust_env=False, follow_redirects=False, transport=transport,
         )
 
     async def is_directory_admin(self, token: str, user_id: str) -> bool:
         """Check the supplied session's latest eligibility, bound to its subject."""
-        if not self._endpoint:
+        if not self._base_url:
             raise AuthorizationUnavailableError("authorization endpoint is not configured")
         try:
             async with asyncio.timeout(3.0):
                 response = await self._http.get(
-                    self._endpoint,
+                    urljoin(self._base_url, "/api/v1/authz/me"),
                     headers={"Authorization": f"Bearer {token}"},
                 )
                 if response.status_code == 401:

@@ -36,13 +36,14 @@ async def test_authorization_queries_the_same_subject_on_every_request():
     assert all(str(request.url) == "https://authorization.test/api/v1/authz/me" for request in requests)
 
 
-@pytest.mark.parametrize("target", [
-    "http://manager-a:8876",
-    "http://manager-a:8876/",
-    " http://manager-a:8876/ ",
+@pytest.mark.parametrize("target,expected", [
+    ("http://manager-a:8876", "http://manager-a:8876/api/v1/authz/me"),
+    ("http://manager-a:8876/", "http://manager-a:8876/api/v1/authz/me"),
+    (" http://manager-a:8876/ ", "http://manager-a:8876/api/v1/authz/me"),
+    ("http://[::1]:8765/", "http://[::1]:8765/api/v1/authz/me"),
 ])
 @pytest.mark.asyncio
-async def test_existing_manager_target_configures_authorization(monkeypatch, target):
+async def test_existing_manager_target_configures_authorization(monkeypatch, target, expected):
     monkeypatch.setenv("MANAGER_WEB_PROXY_TARGET", target)
     config = Settings(_env_file=None)
     requests = []
@@ -59,7 +60,7 @@ async def test_existing_manager_target_configures_authorization(monkeypatch, tar
     finally:
         await client.close()
     assert len(requests) == 1
-    assert str(requests[0].url) == "http://manager-a:8876/api/v1/authz/me"
+    assert str(requests[0].url) == expected
     assert requests[0].headers["Authorization"] == "Bearer session-A"
 
 
@@ -128,6 +129,20 @@ async def test_missing_endpoint_makes_no_outbound_request():
         pytest.fail("missing endpoint must not make an outbound request")
 
     client = DirectoryAuthorizationClient("", httpx.MockTransport(unexpected_request))
+    try:
+        with pytest.raises(AuthorizationUnavailableError):
+            await client.is_directory_admin("session-A", "A")
+    finally:
+        await client.close()
+
+
+@pytest.mark.parametrize("target", ["http://[invalid", "http://manager-a:invalid"])
+@pytest.mark.asyncio
+async def test_invalid_target_is_unavailable_without_blocking_client_creation(target):
+    def unexpected_request(request):
+        pytest.fail("invalid target must not make an outbound request")
+
+    client = DirectoryAuthorizationClient(target, httpx.MockTransport(unexpected_request))
     try:
         with pytest.raises(AuthorizationUnavailableError):
             await client.is_directory_admin("session-A", "A")
