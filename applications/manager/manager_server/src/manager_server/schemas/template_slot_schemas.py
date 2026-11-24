@@ -17,6 +17,7 @@ EXTENSION_CONFIG_SLOT = "extension_config"
 MCP_SLOT = "mcp"
 EMBEDDING_MODEL_SLOT = "embedding_model"
 PERMISSIONS_SLOT = "permissions"
+REACT_SLOT = "react"
 A2A_ACCESS_POLICY_SLOT = "a2a_access_policy"
 # 单值槽。写入值是 expert_package_template.template_id。一行里的 packages 才是 Hub 包。
 EXPERT_PACKAGE_SLOT = "expert_package"
@@ -30,6 +31,7 @@ _TEMPLATE_REF_SLOTS: tuple[str, ...] = (
     MCP_SLOT,
     EMBEDDING_MODEL_SLOT,
     PERMISSIONS_SLOT,
+    REACT_SLOT,
     A2A_ACCESS_POLICY_SLOT,
     EXPERT_PACKAGE_SLOT,
 )
@@ -41,6 +43,7 @@ SINGLE_VALUE_TEMPLATE_REF_SLOTS: frozenset[str] = frozenset(
         *_MODEL_TEMPLATE_SLOTS,
         EMBEDDING_MODEL_SLOT,
         PERMISSIONS_SLOT,
+        REACT_SLOT,
         A2A_ACCESS_POLICY_SLOT,
         EXPERT_PACKAGE_SLOT,
     )
@@ -57,6 +60,7 @@ DefaultTemplateMappingTypeLiteral = Literal[
     "mcp",
     "embedding_model",
     "permissions",
+    "react",
     "a2a_access_policy",
     "expert_package",
 ]
@@ -71,6 +75,7 @@ __all__ = (
     "MCP_SLOT",
     "EMBEDDING_MODEL_SLOT",
     "PERMISSIONS_SLOT",
+    "REACT_SLOT",
     "A2A_ACCESS_POLICY_SLOT",
     "EXPERT_PACKAGE_SLOT",
     "SERVICE_CONFIG_SLOT",
