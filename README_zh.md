@@ -116,6 +116,7 @@ bash scripts/deploy_dev_server.sh
 Windows（PowerShell）:
 
 ```powershell
+cd ..
 .\scripts\run-server.ps1
 ```
 
