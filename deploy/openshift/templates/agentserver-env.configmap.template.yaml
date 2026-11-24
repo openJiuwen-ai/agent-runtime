@@ -52,6 +52,8 @@ data:
   # 预置 Skill / 远程 ZIP 下载域名白名单（逗号分隔；支持 *.obs.*.x、.suffix）；留空走代码默认
   IMPORT_LOCAL_ALLOWED_DOWNLOAD_HOSTS: "<<IMPORT_LOCAL_ALLOWED_DOWNLOAD_HOSTS>>"
   TEAM_SKILLS_HUB_ALLOWED_DOWNLOAD_HOSTS: "<<TEAM_SKILLS_HUB_ALLOWED_DOWNLOAD_HOSTS>>"
+  # TeamSkills Hub 基址；留空不注入，走代码默认 https://swarmskills.openjiuwen.com
+  TEAM_SKILLS_HUB_BASE_URL: "<<TEAM_SKILLS_HUB_BASE_URL>>"
   TZ: Asia/Shanghai
   REDIS_MODE: <<REDIS_MODE>>
   REDIS_HOST: <<REDIS_HOST>>
