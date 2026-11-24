@@ -548,14 +548,14 @@ apply_manager_deploy_credentials() { # $@=本次渲染的清单文件名
 # object key 取 AGENT_RUNTIME_DEFAULT_CONF_PATH（默认 defaults/{ns}/agentserver.json），
 # {ns} → NAMESPACE，与 manager-server GET default-rawdata 一致。
 _agentserver_default_object_key() {
-  local tpl ns
+  local tpl ns pat="{ns}"
   # Keep the literal {ns} outside parameter expansion: its closing brace would
   # otherwise terminate ${...:-...} and corrupt both default and custom keys.
   tpl="${DEPLOY_VARS["AGENT_RUNTIME_DEFAULT_CONF_PATH"]:-}"
   [ -n "$tpl" ] || tpl='defaults/{ns}/agentserver.json'
   ns="${DEPLOY_VARS["NAMESPACE"]:-default}"
   [ -n "$ns" ] || ns="default"
-  echo "${tpl//\{ns\}/${ns}}"
+  echo "${tpl//$pat/$ns}"
 }
 
 _obs_put_script() {
@@ -672,6 +672,8 @@ delete_agentserver_default_config() {
 #   routing/off 不注入（零 K8s 权限形态）
 # - manager-server + 非 routing：剥除 AGENTSERVER_POD_DNS_LIST env 条目
 #   （静态注册清单仅 routing 消费；off/full 不需要该环境变量）
+# - manager-server + TEAM_SKILLS_HUB_BASE_URL 留空：剥除残留 env
+#   （两行式 name/value 在 replace_placeholder 只删 value 行，避免空串覆盖代码默认）
 apply_runtime_mode_extras() { # $@=本次渲染的清单文件名
   local mode="${DEPLOY_VARS["AGENT_RUNTIME_DEPLOY_MODE"]}" f
   for f in "$@"; do
@@ -693,8 +695,13 @@ apply_runtime_mode_extras() { # $@=本次渲染的清单文件名
         info "runtime 模式后处理：full → 注入 Pod 操作 RBAC"
         ;;
       manager-server)
-        [ "$mode" = routing ] && continue
         [ -f "$CONF_DIR/$f" ] || continue
+        # Hub 基址与部署模式无关：留空时各 mode 都要剥残留 name
+        if [ -z "${DEPLOY_VARS["TEAM_SKILLS_HUB_BASE_URL"]:-}" ]; then
+          yq -i '(select(.kind == "Deployment").spec.template.spec.containers[0].env) |= map(select(.name != "TEAM_SKILLS_HUB_BASE_URL"))' "$CONF_DIR/$f"
+          info "manager-server 后处理：TEAM_SKILLS_HUB_BASE_URL 留空 → 剥除 env"
+        fi
+        [ "$mode" = routing ] && continue
         yq -i '(select(.kind == "Deployment").spec.template.spec.containers[0].env) |= map(select(.name != "AGENTSERVER_POD_DNS_LIST"))' "$CONF_DIR/$f"
         info "manager-server 模式后处理：$mode → 剥除静态注册清单 env"
         ;;

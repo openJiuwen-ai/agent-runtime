@@ -266,9 +266,11 @@ def _context_handler(
     templates: dict[str, SimpleNamespace],
     instances: list[SimpleNamespace] | None = None,
     definitions: list[SimpleNamespace] | None = None,
+    agent_templates: list[SimpleNamespace] | None = None,
 ) -> AsyncMock:
     instances = instances or [_instance("gw-1", "集群一号")]
     definitions = definitions or []
+    agent_templates = agent_templates or []
 
     async def list_records(table: str, *args, **kwargs):
         filters = kwargs.get("filters")
@@ -278,6 +280,8 @@ def _context_handler(
             return instances
         if table == "agent_definition":
             return definitions
+        if table == "agent_template":
+            return agent_templates
         source = (
             service_resources
             if table == "instance_service_resource"
@@ -617,3 +621,63 @@ async def test_empty_reason_none_when_contexts_present() -> None:
 
     assert len(data["contexts"]) == 1
     assert data["empty_reason"] is None
+
+
+@pytest.mark.asyncio
+async def test_agent_template_upload_local_skill_flag_defaults_to_false() -> None:
+    enabled_tpl = _uuid("agent-tpl-upload-on")
+    disabled_tpl = _uuid("agent-tpl-upload-off")
+    missing_tpl = _uuid("agent-tpl-upload-missing")
+    string_tpl = _uuid("agent-tpl-upload-string")
+    agent_templates = [
+        SimpleNamespace(
+            template_id=enabled_tpl, data={"upload_local_skill": True}
+        ),
+        SimpleNamespace(template_id=disabled_tpl, data={}),
+        SimpleNamespace(template_id=missing_tpl, data=None),
+        SimpleNamespace(
+            template_id=string_tpl, data={"upload_local_skill": "true"}
+        ),
+    ]
+    agents = [
+        _resource(resource_id="bot-upload-on", ref_template_id=enabled_tpl),
+        _resource(resource_id="bot-upload-off", ref_template_id=disabled_tpl),
+        _resource(resource_id="bot-upload-missing", ref_template_id=missing_tpl),
+        _resource(resource_id="bot-upload-string", ref_template_id=string_tpl),
+    ]
+    definitions = [
+        _definition(enabled_tpl, "", "Upload On"),
+        _definition(disabled_tpl, "", "Upload Off"),
+        _definition(missing_tpl, "", "Upload Missing"),
+        _definition(string_tpl, "", "Upload String"),
+    ]
+    handler = _context_handler(
+        agents,
+        [],
+        {},
+        definitions=definitions,
+        agent_templates=agent_templates,
+    )
+    service = UserConsoleService(handler)
+
+    with ExitStack() as stack:
+        _apply_common_patches(stack)
+        stack.enter_context(
+            patch.object(
+                runtime_config_sync,
+                "service_template_wire",
+                AsyncMock(return_value=({}, [])),
+            )
+        )
+        result = await service.list_accessible_contexts("alice", ["g-1"])
+
+    flags = {
+        item["agent_template_id"]: item["allow_local_skill_upload"]
+        for item in result
+    }
+    assert flags == {
+        enabled_tpl: True,
+        disabled_tpl: False,
+        missing_tpl: False,
+        string_tpl: False,
+    }

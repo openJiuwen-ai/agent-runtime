@@ -136,6 +136,9 @@ class Settings(BaseSettings):
     team_skills_hub_timeout: float = Field(
         default=30.0, validation_alias="TEAM_SKILLS_HUB_TIMEOUT"
     )
+    team_skills_hub_verify_ssl: bool = Field(
+        default=True, validation_alias="TEAM_SKILLS_HUB_VERIFY_SSL"
+    )
 
     # ---- 管理面启动部署（manager-server 以子进程代跑 deploy.sh）----
     # 总开关（默认开；工具树/kubeconfig 不可用时创建任务返回 503）
