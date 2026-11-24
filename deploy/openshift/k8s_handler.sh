@@ -493,12 +493,14 @@ apply_sandbox_type_extras() { # $@=本次渲染的清单文件名
 #   另须关闭 AppArmor：containerd 默认 profile（cri-containerd.apparmor.d）
 #   deny mount，`ip netns add` 卡死在 mount --make-shared /var/run/netns
 #   （Permission denied），warm pool 启动失败。
-#   关闭方式按集群版本分派（is_k8s_version_ge 1.31）：
-#   · yaml 清单（routing）：≥ v1.31 用 securityContext.appArmorProfile 字段
+#   关闭方式按载荷形态分派：
+#   · yaml 清单（routing）：清单直发 apiserver，须按集群版本分派
+#     （is_k8s_version_ge 1.31）：≥ v1.31 用 securityContext.appArmorProfile 字段
 #     （KEP-4157，v1.31 beta 默认开启）；< v1.31 或版本未知走 legacy pod 注解
-#   · config_sync 载荷（json，full）：模板级键白名单不支持注解，只能用字段，
-#     无降级路径 → < v1.31 预检报错（v1.30 须开 AppArmorFields 特性门；低版本
-#     apiserver 不识别该字段：strict 拒收或被静默丢弃，沙箱回退默认 profile 起不来）
+#   · config_sync 载荷（json，full）：与集群版本无关——载荷由 runtime 解析，
+#     容器契约支持 securityContext.appArmorProfile，渲染 Pod 时统一以
+#     legacy pod 注解（container.apparmor.security.beta.kubernetes.io/<名>:
+#     unconfined）落地，该字段不经 apiserver
 
 # ---------- Kubernetes 集群版本探测与比较 ----------
 # 版本取自 apiserver /version，进程内缓存（多清单渲染只探测一次）；minor 兼容发行版
@@ -572,16 +574,8 @@ _apply_jiuwenbox_sidecar_yaml() { # $1=agentserver.yaml
 }
 
 _apply_jiuwenbox_sidecar_json() { # $1=agentserver.json
-  # full 模式无注解降级路径（模板级键白名单不支持注解）：< v1.31 的 apiserver 会
-  # 拒收（strict）或静默丢弃 appArmorProfile 字段，沙箱回退默认 profile 起不来，
-  # 预检直接拦下；RENDER_ONLY/连不上集群（版本未知）仅告警放行，由用户自行确认
-  if ! is_k8s_version_ge 1.31; then
-    if [ "${_K8S_VERSION_STR}" = "unknown" ]; then
-      warning "无法探测集群版本（RENDER_ONLY/离线渲染），请自行确认集群 ≥ v1.31：full 模式 jiuwenbox 依赖 securityContext.appArmorProfile 字段"
-    else
-      error "full 模式 jiuwenbox 关闭 AppArmor 仅支持 appArmorProfile 字段，要求集群 ≥ v1.31（当前 v${_K8S_VERSION_STR}）；低版本请改用 routing 模式"
-    fi
-  fi
+  # appArmorProfile 由 runtime 渲染 Pod 时转成 legacy pod 注解落地
+  # （不经 apiserver），与集群版本无关，无需按版本分派。
   local img="${DEPLOY_VARS["JIUWENBOX_IMAGE"]}" port="${DEPLOY_VARS["JIUWENBOX_PORT"]:-8321}"
   yq -i -o=json '
     .rawdata.containers += [{
