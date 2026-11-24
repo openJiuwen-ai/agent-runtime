@@ -17,6 +17,11 @@ import { ApiError, McpTemplateApi } from '../../services/api';
 import { toast } from '../../stores/uiStore';
 import type { McpTemplate } from '../../types';
 import { formatTime, truncate } from '../../utils/format';
+import {
+  deleteBlockedByReferences,
+  disableBlockedByReferences,
+  templateInUseMessage,
+} from '../../utils/templateInUse';
 import { McpTemplateModal } from './McpTemplateModal';
 import { ResourceExportButton, ResourceImportButton } from '../../components/ResourceImportExport';
 
@@ -89,6 +94,11 @@ export function McpTemplatesPage() {
 
   const toggleEnabled = async (row: McpTemplate, enabled: boolean) => {
     if (togglingId) return;
+    const blocked = disableBlockedByReferences(enabled, row.reference_count, t);
+    if (blocked) {
+      toast('warn', blocked);
+      return;
+    }
     const previous = row.enabled;
     setItems((current) =>
       current.map((item) => (item.template_id === row.template_id ? { ...item, enabled } : item)),
@@ -106,12 +116,22 @@ export function McpTemplatesPage() {
           item.template_id === row.template_id ? { ...item, enabled: previous } : item,
         ),
       );
-      toast('danger', t('errors.saveFailed', {
+      const localized = templateInUseMessage(toggleError, t, 'disable');
+      toast('danger', localized ?? t('errors.saveFailed', {
         detail: toggleError instanceof ApiError ? toggleError.detail : (toggleError as Error).message,
       }));
     } finally {
       setTogglingId(null);
     }
+  };
+
+  const requestDelete = (row: McpTemplate) => {
+    const blocked = deleteBlockedByReferences(row.reference_count, t);
+    if (blocked) {
+      toast('warn', blocked);
+      return;
+    }
+    setDeleteTarget(row);
   };
 
   return (
@@ -252,7 +272,7 @@ export function McpTemplatesPage() {
                           >
                             {t('common.edit')}
                           </button>
-                          <button className="btn sm danger" onClick={() => setDeleteTarget(row)}>
+                          <button className="btn sm danger" onClick={() => requestDelete(row)}>
                             {t('common.delete')}
                           </button>
                         </div>
@@ -296,7 +316,8 @@ export function McpTemplatesPage() {
             toast('success', t('success.deleted'));
             void reload();
           } catch (deleteError) {
-            toast('danger', t('errors.deleteFailed', {
+            const localized = templateInUseMessage(deleteError, t, 'delete');
+            toast('danger', localized ?? t('errors.deleteFailed', {
               detail: deleteError instanceof ApiError ? deleteError.detail : (deleteError as Error).message,
             }));
           }

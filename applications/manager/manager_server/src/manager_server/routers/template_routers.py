@@ -146,6 +146,16 @@ def _agent_template_svc(handler: DBHandler) -> AgentTemplateService:
     return AgentTemplateService(handler)
 
 
+def _http_from_value_error(exc: ValueError) -> HTTPException:
+    """ValueError → 400；TemplateInUseError 保留 code/count 供前端本地化。"""
+    if isinstance(exc, TemplateInUseError):
+        return HTTPException(
+            status_code=400,
+            detail={"code": exc.code, "message": str(exc), "count": exc.count},
+        )
+    return HTTPException(status_code=400, detail=str(exc))
+
+
 # --- a2a_outbound_template ---
 
 
@@ -264,7 +274,7 @@ async def delete_a2a_outbound_template(
     try:
         deleted = await _a2a_outbound_template_svc(handler).delete(template_id)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     if not deleted:
         raise HTTPException(status_code=404, detail="a2a outbound template not found")
     return ResponseModel(code=200, message="success", data={"deleted": True})
@@ -302,7 +312,7 @@ async def confirm_a2a_outbound_template_revision(
             template_id, accept=body.accept
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     if row is None:
         raise HTTPException(status_code=404, detail="a2a outbound template not found")
     return ResponseModel(code=200, message="success", data=row.model_dump())
@@ -319,7 +329,7 @@ async def create_a2a_access_policy(
     try:
         data = await _a2a_access_policy_template_svc(handler).create(body)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     return ResponseModel(code=200, message="success", data=data.model_dump())
 
 
@@ -352,7 +362,7 @@ async def update_a2a_access_policy(
     try:
         row = await _a2a_access_policy_template_svc(handler).update(policy_id, body)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     if row is None:
         raise HTTPException(status_code=404, detail="a2a access policy not found")
     return ResponseModel(code=200, message="success", data=row.model_dump())
@@ -366,7 +376,7 @@ async def delete_a2a_access_policy(
     try:
         deleted = await _a2a_access_policy_template_svc(handler).delete(policy_id)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     if not deleted:
         raise HTTPException(status_code=404, detail="a2a access policy not found")
     return ResponseModel(code=200, message="success", data={"deleted": True})
@@ -398,7 +408,7 @@ async def create_agent_template(
             code=200, message="success", data=await _agent_template_svc(handler).create(body)
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
 
 
 @templates_router.get(
@@ -436,7 +446,7 @@ async def update_agent_template(
             detail={"code": exc.code, "message": str(exc), "count": exc.count},
         ) from None
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     if row is None:
         raise HTTPException(status_code=404, detail="agent_template not found")
     return ResponseModel(code=200, message="success", data=row)
@@ -462,7 +472,7 @@ async def delete_agent_template(
             detail={"code": exc.code, "message": str(exc), "count": exc.count},
         ) from None
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     if not ok:
         raise HTTPException(status_code=404, detail="agent_template not found")
     return ResponseModel(code=200, message="success", data={"deleted": True})
@@ -480,7 +490,7 @@ async def create_model_template(
     try:
         data = await svc.create(body)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     return ResponseModel(code=200, message="success", data=data.model_dump())
 
 
@@ -493,7 +503,7 @@ async def list_model_templates(
     try:
         data = await svc.list_templates(query)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     return ResponseModel(code=200, message="success", data=data)
 
 
@@ -506,7 +516,7 @@ async def get_model_template(
     try:
         row = await svc.get(template_id)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     if row is None:
         raise HTTPException(status_code=404, detail="model template not found")
     return ResponseModel(code=200, message="success", data=row.model_dump())
@@ -522,7 +532,7 @@ async def update_model_template(
     try:
         row = await svc.update(template_id, body)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     if row is None:
         raise HTTPException(status_code=404, detail="model template not found")
     return ResponseModel(code=200, message="success", data=row.model_dump())
@@ -537,7 +547,7 @@ async def delete_model_template(
     try:
         ok = await svc.delete(template_id)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     if not ok:
         raise HTTPException(status_code=404, detail="model template not found")
     return ResponseModel(
@@ -557,7 +567,7 @@ async def create_embedding_template(
     try:
         data = await svc.create(body)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     return ResponseModel(code=200, message="success", data=data.model_dump())
 
 
@@ -570,7 +580,7 @@ async def list_embedding_templates(
     try:
         data = await svc.list_templates(query)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     return ResponseModel(code=200, message="success", data=data)
 
 
@@ -583,7 +593,7 @@ async def get_embedding_template(
     try:
         row = await svc.get(template_id)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     if row is None:
         raise HTTPException(status_code=404, detail="embedding template not found")
     return ResponseModel(code=200, message="success", data=row.model_dump())
@@ -599,7 +609,7 @@ async def update_embedding_template(
     try:
         row = await svc.update(template_id, body)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     if row is None:
         raise HTTPException(status_code=404, detail="embedding template not found")
     return ResponseModel(code=200, message="success", data=row.model_dump())
@@ -614,7 +624,7 @@ async def delete_embedding_template(
     try:
         ok = await svc.delete(template_id)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     if not ok:
         raise HTTPException(status_code=404, detail="embedding template not found")
     return ResponseModel(
@@ -634,7 +644,7 @@ async def create_extension_config_template(
     try:
         data = await svc.create(body)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     return ResponseModel(code=200, message="success", data=data.model_dump())
 
 
@@ -647,7 +657,7 @@ async def list_extension_config_templates(
     try:
         data = await svc.list_templates(query)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     return ResponseModel(code=200, message="success", data=data)
 
 
@@ -660,7 +670,7 @@ async def get_extension_config_template(
     try:
         row = await svc.get(template_id)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     if row is None:
         raise HTTPException(status_code=404, detail="extension config template not found")
     return ResponseModel(code=200, message="success", data=row.model_dump())
@@ -676,7 +686,7 @@ async def update_extension_config_template(
     try:
         row = await svc.update(template_id, body)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     if row is None:
         raise HTTPException(status_code=404, detail="extension config template not found")
     return ResponseModel(code=200, message="success", data=row.model_dump())
@@ -691,7 +701,7 @@ async def delete_extension_config_template(
     try:
         ok = await svc.delete(template_id)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     if not ok:
         raise HTTPException(status_code=404, detail="extension config template not found")
     return ResponseModel(
@@ -711,7 +721,7 @@ async def create_skill_prebuilt_template(
     try:
         data = await svc.create(body)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     return ResponseModel(code=200, message="success", data=data.model_dump())
 
 
@@ -724,7 +734,7 @@ async def list_skill_prebuilt_templates(
     try:
         data = await svc.list_templates(query)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     return ResponseModel(code=200, message="success", data=data)
 
 
@@ -739,7 +749,7 @@ async def get_skill_prebuilt_template(
     try:
         row = await svc.get(template_id)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     if row is None:
         raise HTTPException(status_code=404, detail="skill prebuilt template not found")
     return ResponseModel(code=200, message="success", data=row.model_dump())
@@ -757,7 +767,7 @@ async def update_skill_prebuilt_template(
     try:
         row = await svc.update(template_id, body)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     if row is None:
         raise HTTPException(status_code=404, detail="skill prebuilt template not found")
     return ResponseModel(code=200, message="success", data=row.model_dump())
@@ -774,7 +784,7 @@ async def delete_skill_prebuilt_template(
     try:
         ok = await svc.delete(template_id)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     if not ok:
         raise HTTPException(status_code=404, detail="skill prebuilt template not found")
     return ResponseModel(
@@ -794,7 +804,7 @@ async def create_expert_package_template(
     try:
         data = await svc.create(body)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     return ResponseModel(code=200, message="success", data=data.model_dump())
 
 
@@ -807,7 +817,7 @@ async def list_expert_package_templates(
     try:
         data = await svc.list_templates(query)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     return ResponseModel(code=200, message="success", data=data)
 
 
@@ -842,7 +852,7 @@ async def update_expert_package_template(
             detail={"code": "stale_template", "message": str(exc)},
         ) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     if row is None:
         raise HTTPException(status_code=404, detail="expert package template not found")
     return ResponseModel(code=200, message="success", data=row.model_dump())
@@ -859,7 +869,7 @@ async def delete_expert_package_template(
     try:
         ok = await svc.delete(template_id)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     if not ok:
         raise HTTPException(status_code=404, detail="expert package template not found")
     return ResponseModel(
@@ -879,7 +889,7 @@ async def create_permissions_template(
     try:
         data = await svc.create(body)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     return ResponseModel(code=200, message="success", data=data.model_dump())
 
 
@@ -892,7 +902,7 @@ async def list_permissions_templates(
     try:
         data = await svc.list_templates(query)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     return ResponseModel(code=200, message="success", data=data)
 
 
@@ -905,7 +915,7 @@ async def get_permissions_template(
     try:
         row = await svc.get(template_id)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     if row is None:
         raise HTTPException(status_code=404, detail="permissions template not found")
     return ResponseModel(code=200, message="success", data=row.model_dump())
@@ -921,7 +931,7 @@ async def update_permissions_template(
     try:
         row = await svc.update(template_id, body)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     if row is None:
         raise HTTPException(status_code=404, detail="permissions template not found")
     return ResponseModel(code=200, message="success", data=row.model_dump())
@@ -936,7 +946,7 @@ async def delete_permissions_template(
     try:
         ok = await svc.delete(template_id)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     if not ok:
         raise HTTPException(status_code=404, detail="permissions template not found")
     return ResponseModel(
@@ -956,7 +966,7 @@ async def create_mcp_template(
     try:
         data = await svc.create(body)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     return ResponseModel(code=200, message="success", data=data.model_dump())
 
 
@@ -969,7 +979,7 @@ async def list_mcp_templates(
     try:
         data = await svc.list_templates(query)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     return ResponseModel(code=200, message="success", data=data)
 
 
@@ -982,7 +992,7 @@ async def get_mcp_template(
     try:
         row = await svc.get(template_id)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     if row is None:
         raise HTTPException(status_code=404, detail="mcp template not found")
     return ResponseModel(code=200, message="success", data=row.model_dump())
@@ -998,7 +1008,7 @@ async def update_mcp_template(
     try:
         row = await svc.update(template_id, body)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     if row is None:
         raise HTTPException(status_code=404, detail="mcp template not found")
     return ResponseModel(code=200, message="success", data=row.model_dump())
@@ -1013,7 +1023,7 @@ async def delete_mcp_template(
     try:
         ok = await svc.delete(template_id)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     if not ok:
         raise HTTPException(status_code=404, detail="mcp template not found")
     return ResponseModel(
@@ -1033,7 +1043,7 @@ async def create_service_config_template(
     try:
         data = await svc.create(body)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     return ResponseModel(code=200, message="success", data=data.model_dump())
 
 
@@ -1046,7 +1056,7 @@ async def list_service_config_templates(
     try:
         data = await svc.list_templates(query)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     return ResponseModel(code=200, message="success", data=data)
 
 
@@ -1099,7 +1109,7 @@ async def get_service_config_template(
     try:
         row = await svc.get(template_id)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     if row is None:
         raise HTTPException(status_code=404, detail="service config template not found")
     return ResponseModel(code=200, message="success", data=row.model_dump())
@@ -1120,7 +1130,7 @@ async def update_service_config_template(
             detail={"code": exc.code, "message": str(exc), "count": exc.count},
         ) from None
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     if row is None:
         raise HTTPException(status_code=404, detail="service config template not found")
     return ResponseModel(code=200, message="success", data=row.model_dump())
@@ -1140,7 +1150,7 @@ async def delete_service_config_template(
             detail={"code": exc.code, "message": str(exc), "count": exc.count},
         ) from None
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     if not ok:
         raise HTTPException(status_code=404, detail="service config template not found")
     return ResponseModel(
@@ -1160,7 +1170,7 @@ async def create_container_template(
     try:
         data = await svc.create(body)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     return ResponseModel(code=200, message="success", data=data.model_dump())
 
 
@@ -1173,7 +1183,7 @@ async def list_container_templates(
     try:
         data = await svc.list_containers(query)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     return ResponseModel(code=200, message="success", data=data)
 
 
@@ -1186,7 +1196,7 @@ async def get_container_template(
     try:
         row = await svc.get(template_id)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     if row is None:
         raise HTTPException(status_code=404, detail="container template not found")
     return ResponseModel(code=200, message="success", data=row.model_dump())
@@ -1202,7 +1212,7 @@ async def update_container_template(
     try:
         row = await svc.update(template_id, body)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     if row is None:
         raise HTTPException(status_code=404, detail="container template not found")
     return ResponseModel(code=200, message="success", data=row.model_dump())
@@ -1217,7 +1227,7 @@ async def delete_container_template(
     try:
         ok = await svc.delete(template_id)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_from_value_error(exc) from None
     if not ok:
         raise HTTPException(status_code=404, detail="container template not found")
     return ResponseModel(

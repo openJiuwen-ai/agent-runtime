@@ -297,7 +297,7 @@ declare -A DEPLOY_VARS=(
     ["WEB_REPLICAS"]="2"
     ["WEB_REQUEST_TIMEOUT_SECONDS"]="15"
     ["WEB_WS_PORT"]="19000"
-    ["WORKSPACE_QUOTA_ENABLED"]="false"
+    ["WORKSPACE_QUOTA_ENABLED"]="true"
 )
 
 declare -A OYR_COMPONENTS=(

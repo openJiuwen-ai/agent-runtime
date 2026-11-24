@@ -8,6 +8,7 @@ from openjiuwen_runtime.foundation.db.handler import DBHandler
 
 from manager_server.core.template.push_template_to_gateway import (
     assert_template_deletable,
+    assert_template_not_referenced,
     count_agent_template_reference_counts,
     update_template_on_referencing_gateways,
     delete_template_on_referencing_gateways,
@@ -214,6 +215,11 @@ class SkillPrebuiltTemplateService:
         existing = await self._handler.get(_TABLE, {"template_id": template_id})
         if existing is None:
             return None
+
+        if updates.get("enabled") is False and bool(getattr(existing, "enabled", True)):
+            await assert_template_not_referenced(
+                self._handler, template_id, _KIND, action="disable"
+            )
 
         merged = {
             "skill_id": updates.get("skill_id", existing.skill_id),
