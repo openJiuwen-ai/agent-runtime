@@ -877,18 +877,17 @@
   },
   "expertPackageTemplate": {
     "title": "Expert packages",
-    "subtitle": "Bundle Hub packages into one template, then select it on an Agent config template",
+    "subtitle": "Bundle experts and expert groups into one template, then select it on an Agent config template",
     "new": "New expert package",
     "edit": "Edit expert package",
     "templateName": "Template name",
     "templateDescription": "Description",
-    "hubPackage": "Hub package",
     "kind": {
       "agent_template": "Expert",
       "agent_group": "Expert team"
     },
     "catalogEmpty": "Hub has no packages to choose",
-    "pickRequired": "Select at least one Hub package",
+    "pickRequired": "Select at least one expert or expert group",
     "selectedCount": "{{count}} selected",
     "packageSummaryLabel": "Contents",
     "packageSummary": "{{experts}} experts · {{groups}} expert teams",

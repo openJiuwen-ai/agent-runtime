@@ -115,6 +115,9 @@ spec:
         # 包保留天数：与 AgentServer 必须同值，默认 7，最小 1
         - name: SKILL_UPLOAD_RETENTION_DAYS
           value: "<<SKILL_UPLOAD_RETENTION_DAYS>>"
+        # TeamSkills Hub 基址；留空不注入，走代码默认 https://swarmskills.openjiuwen.com
+        - name: TEAM_SKILLS_HUB_BASE_URL
+          value: "<<TEAM_SKILLS_HUB_BASE_URL>>"
         - name: MANAGER_WS_ENABLED
           value: "true"
         - name: MANAGER_WS_HOST

@@ -127,6 +127,9 @@ check_optional_vars() {
   val="${DEPLOY_VARS["OBS_PUBLIC_BASE_URL"]:-}"
   [ -z "$val" ] || [[ "$val" =~ ^(https?://)?[A-Za-z0-9._:/-]+$ ]] \
     || error "OBS_PUBLIC_BASE_URL 非法（须为 http(s) URL 或域名）: $val"
+  val="${DEPLOY_VARS["TEAM_SKILLS_HUB_BASE_URL"]:-}"
+  [ -z "$val" ] || [[ "$val" =~ ^(https?://)?[A-Za-z0-9._:/-]+$ ]] \
+    || error "TEAM_SKILLS_HUB_BASE_URL 非法（须为 http(s) URL 或域名）: $val"
   val="${DEPLOY_VARS["OBS_SECURE"]:-}"
   [ -z "$val" ] || [[ "$val" =~ ^(true|false)$ ]] \
     || error "OBS_SECURE 非法（须为 true 或 false）: $val"

@@ -73,3 +73,5 @@ data:
   WEB_HOST: 0.0.0.0
   WEB_PORT: "19000"
   WORKSPACE_QUOTA_ENABLED: "<<WORKSPACE_QUOTA_ENABLED>>"
+  # TeamSkills Hub 基址；留空不注入，走代码默认 https://swarmskills.openjiuwen.com
+  TEAM_SKILLS_HUB_BASE_URL: "<<TEAM_SKILLS_HUB_BASE_URL>>"
