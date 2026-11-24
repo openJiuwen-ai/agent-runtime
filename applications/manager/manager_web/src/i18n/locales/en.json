@@ -787,7 +787,7 @@
     "timeoutMin": "Timeout must be greater than 0",
     "retryCountMin": "Retry count cannot be negative",
     "unsafeText": "{{field}} contains illegal HTML/script or suspected SQL injection content",
-    "deleteConfirm": "Delete this model template? It may be referenced by instance resources."
+    "deleteConfirm": "Delete this model template?"
   },
   "embeddingTemplate": {
     "title": "Embedding models",
@@ -812,7 +812,7 @@
     "fieldRequired": "Please fill in {{field}}",
     "apiBaseInvalid": "API Base must be a valid http(s) URL, e.g. https://api.example.com/v1",
     "unsafeText": "{{field}} contains illegal HTML/script or suspected SQL injection content",
-    "deleteConfirm": "Delete this embedding template? It may be referenced by instance resources."
+    "deleteConfirm": "Delete this embedding template?"
   },
   "mcpTemplate": {
     "title": "MCP services",
@@ -839,7 +839,7 @@
     "timeoutInvalid": "Timeout must be a positive number",
     "headersMustBeObject": "Headers must be a JSON object",
     "unsafeText": "{{field}} contains illegal HTML/script or suspected SQL injection content",
-    "deleteConfirm": "Delete this MCP template? It cannot be deleted while referenced by Agent config templates.",
+    "deleteConfirm": "Delete this MCP template?",
     "customConfig": "Custom configuration (JSON object, optional)",
     "customConfigHint": "Service-level additional settings. Leave blank or enter {} to clear custom configuration.",
     "customConfigInvalid": "Custom configuration must be a JSON object.",
@@ -897,7 +897,7 @@
     "referenceCount": "References",
     "referenceHint": "Open the Agent config templates that reference this template",
     "fieldRequired": "Fill in {{field}}",
-    "deleteConfirm": "Delete this expert package template? It cannot be deleted while an Agent config template references it.",
+    "deleteConfirm": "Delete this expert package template?",
     "conflictStale": "This expert package was changed elsewhere. Reopen it, then save again."
   },
   "skillWhitelistTemplate": {
@@ -937,7 +937,7 @@
     "fieldRequired": "Please fill in {{field}}",
     "skillSourceInvalid": "Package URL must be a valid http(s) URL, e.g. https://artifacts.example.com/a.zip",
     "unsafeText": "{{field}} contains illegal HTML/script or suspected SQL injection content",
-    "deleteConfirm": "Delete this preset Skill template? It may be referenced by instance resources."
+    "deleteConfirm": "Delete this preset Skill template?"
   },
   "serviceConfigTemplate": {
     "title": "Runtime Template Management",
@@ -1052,7 +1052,7 @@
     "importOk": "Imported and created a runtime template",
     "importOkFirstOfMany": "File has {{count}} templates; imported the first one",
     "importFailed": "Import failed: {{detail}}",
-    "deleteConfirm": "Delete this runtime template? It may be referenced by instance resources.",
+    "deleteConfirm": "Delete this runtime template?",
     "basicInfo": "Basic information",
     "containerSetup": "Container configuration",
     "containerSetupHint": "Select a main container and optionally add supporting containers such as Sandbox.",
@@ -1299,7 +1299,11 @@
     "globalAll": "Global (everyone)",
     "visibleOrgs": "Visible to these orgs",
     "visibleUsers": "Visible to these users",
-    "confirmDeleteOrg": "Delete org “{{name}}”? (removes its memberships & visibility)",
+    "confirmDeleteOrg": "Delete org “{{name}}”? Its memberships will also be removed.",
+    "orgReferencedNoDelete": "This org is still referenced in {{count}} place(s) (cluster admission / Agent auth scope / quota policies, etc.). Remove those references before deleting.",
+    "orgReferencedNoDisable": "This org is still referenced in {{count}} place(s) (cluster admission / Agent auth scope / quota policies, etc.). Remove those references before disabling.",
+    "userReferencedNoDelete": "This user is still referenced in {{count}} place(s) (cluster admission / Agent auth scope / quota policies, etc.). Remove those references before deleting.",
+    "userReferencedNoDisable": "This user is still referenced in {{count}} place(s) (cluster admission / Agent auth scope / quota policies, etc.). Remove those references before disabling.",
     "confirmDeleteUser": "Delete user “{{name}}” ({{id}})?",
     "confirmDeleteBot": "Delete agent template \"{{name}}\"? Instance grants will also be removed.",
     "addUser": "Add users",
@@ -1478,7 +1482,7 @@
     "referenceHint": "How many agents currently reference this template; a referenced template cannot be deleted.",
     "deleteBlockedHint": "Still referenced by {{count}} agent(s). Remove them from the cluster first.",
     "fieldRequired": "Please fill in {{field}}",
-    "deleteConfirm": "Delete Agent config template \"{{name}}\"? A template still referenced by agents cannot be deleted; remove those agents from the cluster first.",
+    "deleteConfirm": "Delete Agent config template \"{{name}}\"?",
     "optionalResources": "Optional capabilities",
     "resourceTabHint": "Resource catalogs open in a new tab. Return here and refresh options to continue without losing your form."
   },
@@ -1514,9 +1518,10 @@
   },
   "templateInUse": {
     "agentDefinitions": "This template is referenced by {{count}} Agent Template(s). Delete those Agent Templates first.",
-    "agentConfigInstances": "This template is still used by {{count}} instance Agent(s). Remove those references first.",
-    "runtimeServices": "This template is still used by {{count}} instance runtime resource(s). Remove those references first.",
-    "agentTemplates": "This resource is still referenced by {{count}} Agent config template(s). Remove those references before disabling or deleting it."
+    "agentConfigInstances": "This template is still used by {{count}} instance Agent(s). Remove those references before continuing.",
+    "runtimeServices": "This template is still used by {{count}} instance runtime resource(s). Remove those references before continuing.",
+    "agentTemplatesDisable": "This resource is still referenced by {{count}} Agent config template(s). Remove those references before disabling it.",
+    "agentTemplatesDelete": "This resource is still referenced by {{count}} Agent config template(s). Remove those references before deleting it."
   },
   "templateRefEditor": {},
   "containerTemplate": {

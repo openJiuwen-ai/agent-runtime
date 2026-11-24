@@ -12,6 +12,7 @@ import { ExpertPackageTemplateModal } from './ExpertPackageTemplateModal';
 import { toast } from '../../stores/uiStore';
 import { formatTime, truncate } from '../../utils/format';
 import {
+  deleteBlockedByReferences,
   disableBlockedByReferences,
   templateInUseMessage,
 } from '../../utils/templateInUse';
@@ -78,11 +79,20 @@ export function ExpertPackageTemplatesPage() {
           item.template_id === row.template_id ? { ...item, enabled: previous } : item,
         ),
       );
-      const localized = templateInUseMessage(e, t);
+      const localized = templateInUseMessage(e, t, 'disable');
       toast('danger', localized ?? t('errors.saveFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
     } finally {
       setTogglingId(null);
     }
+  };
+
+  const requestDelete = (row: ExpertPackageTemplate) => {
+    const blocked = deleteBlockedByReferences(row.reference_count, t);
+    if (blocked) {
+      toast('warn', blocked);
+      return;
+    }
+    setDelTarget(row);
   };
 
   return (
@@ -203,7 +213,7 @@ export function ExpertPackageTemplatesPage() {
                             >
                               {t('common.edit')}
                             </button>
-                            <button className="btn sm danger" onClick={() => setDelTarget(row)}>
+                            <button className="btn sm danger" onClick={() => requestDelete(row)}>
                               {t('common.delete')}
                             </button>
                           </div>
@@ -253,7 +263,8 @@ export function ExpertPackageTemplatesPage() {
             toast('success', t('success.deleted'));
             void reload();
           } catch (e) {
-            toast('danger', t('errors.deleteFailed', {
+            const localized = templateInUseMessage(e, t, 'delete');
+            toast('danger', localized ?? t('errors.deleteFailed', {
               detail: e instanceof ApiError ? e.detail : (e as Error).message,
             }));
           }

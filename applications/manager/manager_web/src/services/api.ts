@@ -1279,6 +1279,28 @@ export const InstanceBindingApi = {
     http<{ bindings: Record<string, string[]> }>('/v1/org-gateways', {
       query: { group_ids: groupIds.join(',') },
     }),
+  /** 删除/禁用组织前：统计 manager 侧引用（准入 / Agent 授权范围 / 配额策略） */
+  orgReferences: (groupId: string) =>
+    http<{
+      group_id: string;
+      total: number;
+      instance_grants: number;
+      agent_resources: number;
+      service_resources: number;
+      workspace_quota_policies: number;
+      team_quota_policies: number;
+    }>(`/v1/org-references/${encodeURIComponent(groupId)}`),
+  /** 删除/禁用用户前：统计 manager 侧引用（准入 / Agent 授权范围 / 配额策略） */
+  userReferences: (userId: string) =>
+    http<{
+      user_id: string;
+      total: number;
+      instance_grants: number;
+      agent_resources: number;
+      service_resources: number;
+      workspace_quota_policies: number;
+      team_quota_policies: number;
+    }>(`/v1/user-references/${encodeURIComponent(userId)}`),
 };
 
 export interface UserGateway {
