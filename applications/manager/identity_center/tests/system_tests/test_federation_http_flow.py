@@ -172,7 +172,7 @@ def test_federation_http_flow_issues_normal_identity_token(tmp_path, monkeypatch
         assert still_denied.status_code == 403
 
 
-def test_directory_accepts_manager_session_without_manager_service(tmp_path, monkeypatch):
+def test_directory_requires_authorization_without_blocking_identity(tmp_path, monkeypatch):
     password = "directory-test-password"
     monkeypatch.setattr(settings, "db_type", "sqlite")
     monkeypatch.setattr(settings, "sqlite_path", str(tmp_path / "identity.db"))
@@ -180,6 +180,7 @@ def test_directory_accepts_manager_session_without_manager_service(tmp_path, mon
     monkeypatch.setattr(settings, "seed_admin", False)
     monkeypatch.setattr(settings, "seed_user1", True)
     monkeypatch.setattr(settings, "user1_password", password)
+    monkeypatch.setattr(settings, "manager_base_url", "")
 
     with TestClient(create_app()) as client:
         login = client.post(
@@ -192,5 +193,16 @@ def test_directory_accepts_manager_session_without_manager_service(tmp_path, mon
         assert decode_access_token(token)["surface"] == "manager"
 
         headers = {"Authorization": f"Bearer {token}", "X-Jiuwen-Web-Surface": "manager"}
-        assert client.get("/v1/users/", headers=headers).status_code == 200
-        assert client.get("/v1/orgs/", headers=headers).status_code == 200
+        assert client.get("/v1/users/", headers=headers).status_code == 503
+        assert client.get("/v1/orgs/", headers=headers).status_code == 503
+        assert client.get("/v1/auth/me", headers=headers).status_code == 200
+
+        user_login = client.post(
+            "/v1/auth/token", data={"username": "user1", "password": password},
+            headers={"X-Jiuwen-Web-Surface": "user"},
+        )
+        assert user_login.status_code == 200
+        user_headers = {"Authorization": "Bearer " + user_login.json()["access_token"]}
+        assert client.get("/v1/auth/user-session", headers=user_headers).status_code == 200
+        assert client.get("/v1/auth/me/orgs", headers=user_headers).status_code == 200
+        assert client.get("/v1/auth/public_key").status_code == 200

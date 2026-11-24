@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     rest_host: str = Field(default="0.0.0.0", validation_alias="IDENTITY_REST_HOST")
     rest_port: int = Field(default=8770, validation_alias="IDENTITY_REST_PORT")
 
+    # Reuse the existing Manager Server target for directory-management checks.
+    manager_base_url: str = Field(default="", validation_alias="MANAGER_WEB_PROXY_TARGET")
+
     # ---- 数据库（独立身份库；DBHandler 抽象，sqlite/mysql/postgresql 通用）----
     db_type: str = Field(default="sqlite", validation_alias="IDENTITY_DB_TYPE")
     sqlite_path: str = Field(default="identity.db", validation_alias="IDENTITY_SQLITE_PATH")

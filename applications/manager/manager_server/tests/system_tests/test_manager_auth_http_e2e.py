@@ -93,6 +93,7 @@ def services_fixture(tmp_path_factory):
             "MANAGER_SQLITE_PATH": str(directory / "manager.db"),
             "MANAGER_DB_TYPE": "sqlite",
             "IDENTITY_PUBLIC_KEY_URL": append_url_path(urls["identity"], "/v1/auth/public_key"),
+            "MANAGER_WEB_PROXY_TARGET": urls["manager"],
             "REDIS_URL": "",
             "MANAGER_HEARTBEAT_SCAN_INTERVAL_SECONDS": "3600",
             "AGENT_RUNTIME_SQLITE_PATH": str(directory / "runtime.db"),
