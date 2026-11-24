@@ -454,7 +454,7 @@ def test_container_spec_from_row_none_and_corrupt():
 # -------------------------------------------------------------- build_canonical(C2 内核)
 
 def test_build_canonical_main_golden():
-    """wire 主容器 + volumes → canonical 黄金 dict(13 键,指纹/传输/渲染同形)。"""
+    """wire 主容器 + volumes → canonical 黄金 dict(14 键,指纹/传输/渲染同形)。"""
     from agent_runtime.session_manager.container_spec import build_canonical
     spec = parse_container_spec(MAIN_FULL, "containers[0]", role=MAIN_ROLE)
     volumes = canonical_volumes(list(MAIN_VOLUMES.values()), "volumes")
@@ -481,6 +481,7 @@ def test_build_canonical_main_golden():
                         "mount_path": "/var/lib/agent", "read_only": False}],
         "nfs_mounts": [{"server": "10.0.0.1", "path": "/export",
                         "mount_path": "/mnt/nfs", "read_only": False}],
+        "empty_dir_mounts": [],
         "security_context": {"run_as_user": 1000, "run_as_group": 1000,
                              "privileged": False, "capabilities_add": [],
                              "capabilities_drop": [],
