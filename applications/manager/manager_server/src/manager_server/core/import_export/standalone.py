@@ -19,6 +19,10 @@ from sqlalchemy import insert
 from manager_server.core.template.push_template_to_gateway import (
     slot_template_pairs_from_template_ref,
 )
+from manager_server.core.template.compressor_model_resolver import (
+    extract_react_model_template_ids,
+)
+from manager_server.infrastructure.logger import get_logger
 
 from .cluster import (
     _INLINE_LIST_FIELDS,
@@ -53,6 +57,8 @@ from .roles import (
     role_preflight_actions,
 )
 from .workbook import SENSITIVE_REDACTED
+
+logger = get_logger(__name__)
 
 _EXTRA_HEADERS = ["object_type", "object_id", "field_path", "value_type", "value"]
 _USER_HEADERS = [
@@ -101,6 +107,7 @@ _AGENT_DEP_TABLES = (
     "extension_config_template",
     "mcp_template",
     "permissions_template",
+    "react_template",
     "a2a_outbound_template",
     "a2a_access_policy_template",
 )
@@ -337,6 +344,7 @@ class StandaloneCatalogImportService:
             "extension_config_template",
             "mcp_template",
             "permissions_template",
+            "react_template",
             "a2a_outbound_template",
             "a2a_access_policy_template",
             "agent_template",
@@ -455,6 +463,26 @@ class AgentTemplateAdapter(CatalogAdapter):
                     continue
                 values.append(_row_dict(row, DEF_BY_TABLE[table]))
             rows[table] = values
+
+        # react 模板的 data body 引用模型模板；补充收集这些被引用的 model_template 行。
+        react_model_ids: set[str] = set()
+        for react_row in rows.get("react_template", []):
+            data = react_row.get("data")
+            if not isinstance(data, dict):
+                # data 非 dict（异常数据）时无法提取模型引用，记日志避免静默漏收集模型行。
+                logger.warning(
+                    "[export] react template %s data is not a dict; skip model collection",
+                    react_row.get("template_id"),
+                )
+                continue
+            react_model_ids.update(extract_react_model_template_ids(data))
+        if react_model_ids:
+            model_rows = rows.setdefault("model_template", [])
+            existing = {str(r.get("template_id") or "") for r in model_rows}
+            for model_id in sorted(react_model_ids - existing):
+                row = await context.handler.get("model_template", {"template_id": model_id})
+                if row is not None:
+                    model_rows.append(_row_dict(row, DEF_BY_TABLE["model_template"]))
 
         policies = rows.get("a2a_access_policy_template", [])
         if policies:
@@ -893,10 +921,56 @@ class RoleAdapter:
         }
 
 
+class ReactTemplateAdapter(CatalogAdapter):
+    """React 目录适配器：导出携带 body 引用的 model_template 行，避免导入后悬空模型引用。"""
+
+    def __init__(self) -> None:
+        super().__init__(
+            CatalogKind(
+                "react",
+                "react_template",
+                "ReactTemplate",
+                ("model_template", "react_template"),
+            )
+        )
+
+    async def export_many(
+        self, context: ImportExportContext, resource_ids: list[str]
+    ) -> WorkbookData:
+        react_rows = await _rows_by_ids(context.handler, "react_template", resource_ids)
+        rows: dict[str, list[dict[str, Any]]] = {"react_template": react_rows}
+        model_ids: set[str] = set()
+        for react_row in react_rows:
+            data = react_row.get("data")
+            if not isinstance(data, dict):
+                # data 非 dict（异常数据）时无法提取模型引用，记日志避免静默漏收集模型行。
+                logger.warning(
+                    "[export] react template %s data is not a dict; skip model collection",
+                    react_row.get("template_id"),
+                )
+                continue
+            model_ids.update(extract_react_model_template_ids(data))
+        if model_ids:
+            values: list[dict[str, Any]] = []
+            for model_id in sorted(model_ids):
+                row = await context.handler.get("model_template", {"template_id": model_id})
+                if row is not None:
+                    values.append(_row_dict(row, DEF_BY_TABLE["model_template"]))
+            rows["model_template"] = values
+        return _manager_workbook(
+            resource_type=self.resource_type,
+            resource_ids=resource_ids,
+            label=self.kind.label,
+            rows_by_table=rows,
+            tables=self.kind.allowed_tables,
+        )
+
+
 for _kind in _SIMPLE_KINDS:
     adapter_registry.register(CatalogAdapter(_kind))
 adapter_registry.register(A2APolicyAdapter())
 adapter_registry.register(AgentTemplateAdapter())
+adapter_registry.register(ReactTemplateAdapter())
 adapter_registry.register(UserAdapter())
 adapter_registry.register(OrganizationAdapter())
 adapter_registry.register(RoleAdapter())

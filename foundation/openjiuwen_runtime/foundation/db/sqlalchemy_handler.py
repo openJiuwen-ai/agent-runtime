@@ -383,6 +383,55 @@ class SQLAlchemyHandler(DBHandler):
             )
         logger.debug("Table initialized: table_name=%s", table_def.table_name)
 
+    async def _reflect_unregistered_model(self, table_name: str) -> Any:
+        """未注册表自愈：从库内反射结构生成可查询模型。
+
+        企业版跨仓消费场景（agentserver 读 gateway 库 react_template 等新表）
+        依赖各服务 pin 的存储栈版本对齐；旧注册表未登记的表在此按需反射，
+        避免直接拒绝查询。反射失败仍按未初始化处理。
+        """
+        try:
+            from sqlalchemy import MetaData
+            from sqlalchemy.ext.automap import automap_base
+
+            meta = MetaData()
+            async with await self._get_session() as session:
+                conn = await session.connection()
+                await conn.run_sync(
+                    lambda sync_conn: meta.reflect(bind=sync_conn, only=[table_name])
+                )
+            if table_name not in meta.tables:
+                return None
+            base = automap_base(metadata=meta)
+            base.prepare()
+            model = getattr(base.classes, table_name, None)
+            if model is not None:
+                self._table_models[table_name] = model
+                logger.info(
+                    "[foundation] unregistered table reflected: table=%s",
+                    table_name,
+                )
+            return model
+        except Exception:
+            logger.warning(
+                "[foundation] table reflection failed: table=%s",
+                table_name,
+                exc_info=True,
+            )
+            return None
+
+    async def _resolve_model(self, table_name: str) -> Any:
+        """读路径统一取模型：注册表未命中时尝试反射自愈（见 _reflect_unregistered_model）。
+
+        仅读路径使用。写路径（create/update/delete）保持注册表强约束：
+        反射出的 automap 模型不携带 TableDef 的默认值/审计字段逻辑，
+        且未注册表的写请求属于存储栈版本错配，应显式失败而非静默打通。
+        """
+        model = self._table_models.get(table_name)
+        if not model:
+            model = await self._reflect_unregistered_model(table_name)
+        return model
+
     async def _get_session(self) -> AsyncSession:
         return self.session_factory()
 
@@ -420,7 +469,7 @@ class SQLAlchemyHandler(DBHandler):
 
     async def get(self, table_name: str, filters: dict) -> Optional[Any]:
         logger.debug("Getting record: table=%s, filters=%s", table_name, filters)
-        model = self._table_models.get(table_name)
+        model = await self._resolve_model(table_name)
         if not model:
             logger.error("Table not initialized: table=%s", table_name)
             raise ValueError(f"Table {table_name} not initialized")
@@ -524,7 +573,7 @@ class SQLAlchemyHandler(DBHandler):
             limit,
             offset,
         )
-        model = self._table_models.get(table_name)
+        model = await self._resolve_model(table_name)
         if not model:
             logger.error("Table not initialized: table=%s", table_name)
             raise ValueError(f"Table {table_name} not initialized")
@@ -566,7 +615,7 @@ class SQLAlchemyHandler(DBHandler):
             table_name,
             filters,
         )
-        model = self._table_models.get(table_name)
+        model = await self._resolve_model(table_name)
         if not model:
             logger.error("Table not initialized: table=%s", table_name)
             raise ValueError(f"Table {table_name} not initialized")

@@ -39,6 +39,7 @@ from manager_server.models.template_models import (
     MODEL_TEMPLATE_TABLE_DEF,
     EXPERT_PACKAGE_TEMPLATE_TABLE_DEF,
     PERMISSIONS_TEMPLATE_TABLE_DEF,
+    REACT_TEMPLATE_TABLE_DEF,
     SKILL_PREBUILT_TEMPLATE_TABLE_DEF,
 )
 from manager_server.schemas.template_slot_schemas import (
@@ -49,8 +50,13 @@ from manager_server.schemas.template_slot_schemas import (
     MCP_SLOT,
     MODEL_TEMPLATE_SLOTS,
     PERMISSIONS_SLOT,
+    REACT_SLOT,
     SERVICE_CONFIG_SLOT,
     SKILL_PREBUILT_SLOT,
+)
+from manager_server.core.template.compressor_model_resolver import (
+    find_react_templates_referencing_model,
+    resolve_react_body_models,
 )
 
 logger = get_logger(__name__)
@@ -123,6 +129,11 @@ TEMPLATE_KIND_SPECS: dict[str, TemplateKindSpec] = {
         table_name=PERMISSIONS_TEMPLATE_TABLE_DEF.table_name,
         slot_keys=frozenset({PERMISSIONS_SLOT}),
     ),
+    "react_templates": TemplateKindSpec(
+        config_section="react_templates",
+        table_name=REACT_TEMPLATE_TABLE_DEF.table_name,
+        slot_keys=frozenset({REACT_SLOT}),
+    ),
     "extension_config_templates": TemplateKindSpec(
         config_section="extension_config_templates",
         table_name=EXTENSION_CONFIG_TEMPLATE_TABLE_DEF.table_name,
@@ -159,6 +170,7 @@ _TEMPLATE_HTTP_PATHS: dict[str, str] = {
     "skill_prebuilt_templates": "/api/v1/skill-prebuilt-templates",
     "expert_package_templates": "/api/v1/expert-package-templates",
     "permissions_templates": "/api/v1/permissions-templates",
+    "react_templates": "/api/v1/react-templates",
     "mcp_templates": "/api/v1/mcp-templates",
     AGENT_TEMPLATES_KIND: "/api/v1/agent-templates",
 }
@@ -180,6 +192,7 @@ _ROW_TO_OUT_MODULES: dict[str, str] = {
     "skill_prebuilt_templates": "manager_server.core.template.skill_prebuilt_template",
     "expert_package_templates": "manager_server.core.template.expert_package_template",
     "permissions_templates": "manager_server.core.template.permissions_template",
+    "react_templates": "manager_server.core.template.react_template",
     "extension_config_templates": "manager_server.core.template.extension_config_template",
     "mcp_templates": "manager_server.core.template.mcp_template",
     AGENT_TEMPLATES_KIND: "manager_server.core.template.agent_template",
@@ -715,18 +728,63 @@ async def _build_sync_payloads(
     handler: DBHandler,
     kind: str,
     template_ids: set[str],
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """构建同步载荷，返回 ``(payloads, skipped)``。
+
+    ``skipped`` 记录因 react body 模型解析失败而被跳过的 ``template_id -> 错误信息``；
+    调用方据此决定向上抛出或写入同步结果，避免网关缺模板却返回成功。
+    """
     spec = TEMPLATE_KIND_SPECS[_normalize_kind(kind)]
     row_to_sync = _resolve_row_to_sync(kind)
     templates: list[dict[str, Any]] = []
+    skipped: dict[str, str] = {}
     for template_id in sorted(template_ids):
         row = await handler.get(spec.table_name, {spec.id_field: template_id})
         if row is not None:
             payload = row_to_sync(row)
             if _normalize_kind(kind) == "a2a_outbound_templates":
                 payload = await _with_a2a_network_policy(handler, payload)
+            if _normalize_kind(kind) == "react_templates":
+                # 门槛必须用原始行数据：row_to_out 会把 NULL/非 dict 的 data 兜底成空 dict，
+                # 按 payload["body"] 判断会让跳过分支不可达，空 body 照样下发清空网关配置。
+                if not isinstance(getattr(row, "data", None), dict):
+                    logger.warning(
+                        "[push_template] skip react template %s: data is null or not a dict",
+                        payload.get("template_id"),
+                    )
+                    skipped[str(payload.get("template_id") or template_id)] = (
+                        "react data is null or not a dict"
+                    )
+                    continue
+                try:
+                    payload["body"] = await resolve_react_body_models(handler, payload["body"])
+                except ValueError as exc:
+                    # 单条 react 模板的模型引用解析失败不中止整批同步，但需让调用方可观测。
+                    logger.warning(
+                        "[push_template] skip react template %s: %s",
+                        payload.get("template_id"),
+                        exc,
+                    )
+                    skipped[str(payload.get("template_id") or template_id)] = str(exc)
+                    continue
+            if _normalize_kind(kind) == AGENT_TEMPLATES_KIND:
+                # Agent 模板下发前校验其 template_ref 引用的 react 模板可解析：
+                # 任一 react 引用悬空都会让 Agent 运行期失败，跳过并让调用方可观测，
+                # 避免网关出现悬空 template_ref（覆盖全量同步/ensure/upsert 全部路径）。
+                ref_pairs = slot_template_pairs_from_template_ref(read_template_ref_from_row(row))
+                react_ids = {i for slot, i in ref_pairs if slot == REACT_SLOT}
+                try:
+                    await _validate_react_templates_resolvable(
+                        handler, react_ids, f"agent template {template_id}"
+                    )
+                except ValueError as exc:
+                    logger.warning(
+                        "[push_template] skip agent template %s: %s", template_id, exc
+                    )
+                    skipped[str(template_id)] = str(exc)
+                    continue
             templates.append(payload)
-    return templates
+    return templates, skipped
 
 
 async def _with_a2a_network_policy(
@@ -752,9 +810,34 @@ async def sync_referenced_templates_to_gateway(
     for kind in TEMPLATE_KIND_ORDER:
         normalized = _normalize_kind(kind)
         referenced_ids = await collect_referenced_template_ids_for_gateway(handler, jid, normalized)
-        templates = await _build_sync_payloads(handler, normalized, referenced_ids)
-        results[kind] = await _sync_templates_on_gateway(jid, normalized, templates)
+        templates, skipped = await _build_sync_payloads(handler, normalized, referenced_ids)
+        result = await _sync_templates_on_gateway(jid, normalized, templates)
+        if skipped:
+            # 记录解析失败的模板，避免网关缺模板仍返回成功。
+            result = {**result, "failed": skipped, "success_flag": False}
+        results[kind] = result
     return results
+
+
+async def _validate_react_templates_resolvable(
+    handler: DBHandler, react_ids: set[str], owner: str
+) -> None:
+    """校验引用的 react 模板可解析，避免 Agent 模板带着悬空 template_ref 下发网关。"""
+    for item_id in sorted(react_ids):
+        react_row = await handler.get(
+            REACT_TEMPLATE_TABLE_DEF.table_name, {"template_id": item_id}
+        )
+        if react_row is None:
+            raise ValueError(f"react template {item_id} referenced by {owner} not found")
+        data = getattr(react_row, "data", None)
+        if not isinstance(data, dict):
+            raise ValueError(f"react template {item_id} data is null or not a dict")
+        try:
+            await resolve_react_body_models(handler, data)
+        except ValueError as exc:
+            raise ValueError(
+                f"react template {item_id} referenced by {owner} unresolvable: {exc}"
+            ) from exc
 
 
 async def update_template_on_referencing_gateways(
@@ -783,6 +866,24 @@ async def update_template_on_referencing_gateways(
             row = await handler.get(A2A_OUTBOUND_TEMPLATE_TABLE_DEF.table_name, {"template_id": tid})
             updates = {**updates, "data": getattr(row, "data", None)}
         updates = await _with_a2a_network_policy(handler, updates, network_policy)
+
+    # react 模板下发用「已解析模型」的 body；此处不原地改 updates，保证调用方落库仍存
+    # model_template_id（引用），仅在本次推送里内联 model/model_client。
+    push_updates = updates
+    if normalized == "react_templates" and isinstance(updates.get("body"), dict):
+        try:
+            resolved_body = await resolve_react_body_models(handler, updates["body"])
+        except ValueError as exc:
+            # 解析失败（如 model_template_id 指向已删除的模型模板）时遵循 continue_on_error：
+            # 仅记日志并跳过本次推送（resync 场景），否则向上抛出让调用方感知，不绕过该开关。
+            if continue_on_error:
+                logger.warning(
+                    "[push_template] react body resolve failed template_id=%s: %s", tid, exc
+                )
+                return
+            raise
+        push_updates = {**updates, "body": resolved_body}
+
     reachable = set(await _referencing_reachable_jids(handler, normalized, tid))
     all_refs = await collect_referenced_jiuwenclaw_ids_for_template(handler, tid, normalized)
 
@@ -795,6 +896,14 @@ async def update_template_on_referencing_gateways(
     ):
         existing = await handler.get(AGENT_TEMPLATE_TABLE_DEF.table_name, {"template_id": tid})
         old_template_ref = read_template_ref_from_row(existing) if existing is not None else {}
+
+    if old_template_ref is not None:
+        # Agent 模板下发前校验其新 template_ref 引用的全部 react 模板可解析（不限新增）：
+        # 网关 PATCH 会写入完整 template_ref，任一 react 引用悬空都会造成运行期失败。
+        # 此时未做任何网关/计数变更，状态原样、可安全重试。
+        react_pairs = slot_template_pairs_from_template_ref(new_template_ref)
+        react_ids = {i for slot, i in react_pairs if slot == REACT_SLOT}
+        await _validate_react_templates_resolvable(handler, react_ids, f"agent template {tid}")
 
     errors: list[Exception] = []
     for jid in sorted(all_refs):
@@ -822,7 +931,7 @@ async def update_template_on_referencing_gateways(
                 removed=set(),
             )
         try:
-            await _update_template_on_gateway(jid, normalized, tid, updates)
+            await _update_template_on_gateway(jid, normalized, tid, push_updates)
         except Exception as exc:
             # The Manager row is still unchanged. Roll back the provisional dependency
             # references so a retry cannot double-count them.
@@ -1013,7 +1122,7 @@ async def _reconcile_a2a_projection(
     )
     now = utc_now()
     for tid in sorted(desired - current):
-        payloads = await _build_sync_payloads(handler, "a2a_outbound_templates", {tid})
+        payloads, _ = await _build_sync_payloads(handler, "a2a_outbound_templates", {tid})
         if payloads:
             await _create_template_on_gateway(jiuwenclaw_id, "a2a_outbound_templates", payloads[0])
             await _adjust_ref_count(
@@ -1068,6 +1177,10 @@ async def _apply_slot_pair_delta(
     for _, tid in removed:
         tid_delta[tid] -= 1
 
+    # 先解析全部载荷（含 react body 模型解析）：解析失败的模板仅告警并跳过（不创建、
+    # 不更新其引用计数，留给重试触发），其余模板照常增删与计数——一处失败不应阻断整批引用变更。
+    actions: list[tuple[str, str, dict[str, Any] | None]] = []
+    skip_ref_tids: set[str] = set()
     for tid in sorted(affected_template_ids):
         before = before_totals[tid]
         after = before + tid_delta[tid]
@@ -1075,17 +1188,35 @@ async def _apply_slot_pair_delta(
         if kind is None:
             continue
         if before <= 0 < after:
-            payloads = await _build_sync_payloads(handler, kind, {tid})
+            payloads, skipped = await _build_sync_payloads(handler, kind, {tid})
+            if skipped:
+                logger.warning(
+                    "[push_template] skip unresolvable template(s) on slot delta: %s",
+                    "; ".join(f"{tid}({err})" for tid, err in sorted(skipped.items())),
+                )
+                skip_ref_tids.add(tid)
+                continue
             if not payloads:
                 continue
-            await _create_template_on_gateway(jid, kind, payloads[0])
+            actions.append((tid, kind, payloads[0]))
         elif before > 0 >= after:
+            actions.append((tid, kind, None))
+
+    # 解析成功的模板统一做网关增删。
+    for tid, kind, payload in actions:
+        if payload is None:
             await _delete_template_on_gateway(jid, kind, tid)
+        else:
+            await _create_template_on_gateway(jid, kind, payload)
 
     now = utc_now()
     for slot, tid in removed:
+        if tid in skip_ref_tids:
+            continue
         await _adjust_ref_count(handler, jid, slot, tid, -1, now=now)
     for slot, tid in added:
+        if tid in skip_ref_tids:
+            continue
         await _adjust_ref_count(handler, jid, slot, tid, 1, now=now)
 
 
@@ -1237,7 +1368,15 @@ async def ensure_referenced_templates_on_gateway(
             continue
         by_kind.setdefault(kind, set()).add(tid)
     for kind, template_ids in sorted(by_kind.items()):
-        payloads = await _build_sync_payloads(handler, kind, template_ids)
+        payloads, skipped = await _build_sync_payloads(handler, kind, template_ids)
+        if skipped:
+            # 解析失败仅告警并跳过，继续下发其余模板：此处处于多模板/多资源的批量下发
+            # 链路上，一处 react 解析失败不应阻断无关的 agent 资源下发。
+            logger.warning(
+                "[push_template] skip unresolvable %s template(s) on ensure: %s",
+                kind,
+                "; ".join(f"{tid}({err})" for tid, err in sorted(skipped.items())),
+            )
         for tmpl in payloads:
             await _create_template_on_gateway(jiuwenclaw_id, kind, tmpl)
 
@@ -1285,8 +1424,13 @@ async def upsert_agent_template_on_gateway(
     tid = str(template_id or "").strip()
     if not tid:
         raise ValueError("template_id is required")
-    payloads = await _build_sync_payloads(handler, AGENT_TEMPLATES_KIND, {tid})
+    payloads, skipped = await _build_sync_payloads(handler, AGENT_TEMPLATES_KIND, {tid})
     if not payloads:
+        if skipped:
+            raise ValueError(
+                f"agent template {tid} skipped: "
+                + "; ".join(f"{k}({v})" for k, v in sorted(skipped.items()))
+            )
         raise ValueError(f"agent_template not found: {tid}")
     await _create_template_on_gateway(jiuwenclaw_id, AGENT_TEMPLATES_KIND, payloads[0])
 
@@ -1321,6 +1465,49 @@ async def assert_template_not_referenced(
             f"cannot {action} template: {ref_count} template "
             "reference(s) exist, remove references from agent templates first",
         )
+
+
+async def resync_react_templates_referencing_model(
+    handler: DBHandler,
+    model_template_id: str,
+) -> None:
+    """模型模板更新后，重推引用了它的 react 模板（解析出最新 model/model_client 内联推送）。
+
+    失败只记日志，不阻断模型模板本身的更新。
+    """
+    tid = str(model_template_id or "").strip()
+    if not tid:
+        return
+    try:
+        react_ids = await find_react_templates_referencing_model(handler, tid)
+        for react_id in sorted(react_ids):
+            row = await handler.get(
+                REACT_TEMPLATE_TABLE_DEF.table_name, {"template_id": react_id}
+            )
+            if row is None:
+                continue
+            data = getattr(row, "data", None)
+            if not isinstance(data, dict):
+                # data 为 NULL/非 dict 时跳过：用空 body PATCH 会清空网关侧 react 配置。
+                continue
+            try:
+                await update_template_on_referencing_gateways(
+                    handler,
+                    "react_templates",
+                    react_id,
+                    {"body": data},
+                    continue_on_error=True,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[react_resync] react template %s resync after model %s update failed: %s",
+                    react_id,
+                    tid,
+                    exc,
+                )
+    except Exception as exc:
+        # resync 为 best-effort：扫描/取行任何异常都不应把已成功的模型更新升级为失败。
+        logger.warning("[react_resync] model %s resync scan failed: %s", tid, exc)
 
 
 async def assert_template_deletable(
@@ -1392,6 +1579,7 @@ __all__ = (
     "ensure_referenced_templates_on_gateway",
     "rebuild_jid_template_ref_for_gateway",
     "reconcile_a2a_projection_on_referencing_gateways",
+    "resync_react_templates_referencing_model",
     "slot_template_pairs_from_template_ref",
     "sync_gateway_templates_after_template_ref_change",
     "sync_new_a2a_outbound_to_gateways",
