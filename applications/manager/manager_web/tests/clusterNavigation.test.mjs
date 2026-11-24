@@ -32,7 +32,7 @@ try {
     const mappings = [
       ['config', 'logMasking', 'log-masking'], ['config', 'contentMasking', 'content-masking'], ['config', 'logging', 'logging'],
       ['config', 'auditLog', 'audit-log'], ['config', 'cronPolicy', 'cron-quota'],
-      ['config', 'advanced', 'advanced'],
+      ['config', 'other', 'other'], ['config', 'advanced', 'other'],
       ['workspace-quota', '', 'workspace-quota'], ['team-quota', '', 'team-quota'],
       ['token-quota', '', 'log-masking'], ['cost', '', 'log-masking'], ['audit', '', 'log-masking'],
     ];
@@ -53,7 +53,8 @@ try {
   test('settings refresh retains valid anchors and unrelated pages drop them',()=>{
     const context = new URLSearchParams({ setting: 'logging' });
     assert.equal(canonicalClusterPath('id', 'other-settings', context), '/instances/id/other-settings?setting=logging');
-    assert.equal(canonicalClusterPath('id', 'other-settings', new URLSearchParams({ setting: 'advanced' })), '/instances/id/other-settings?setting=advanced');
+    assert.equal(canonicalClusterPath('id', 'other-settings', new URLSearchParams({ setting: 'other' })), '/instances/id/other-settings?setting=other');
+    assert.equal(canonicalClusterPath('id', 'other-settings', new URLSearchParams({ setting: 'advanced' })), '/instances/id/other-settings?setting=other');
     assert.equal(canonicalClusterPath('id', 'status', context), '/instances/id/status');
     assert.equal(canonicalClusterPath('id', 'other-settings', new URLSearchParams({ setting: 'unknown' })), '/instances/id/other-settings');
     for (const setting of ['token-quota', 'cost', 'business-audit']) {
