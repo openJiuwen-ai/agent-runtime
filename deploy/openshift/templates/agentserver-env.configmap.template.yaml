@@ -15,7 +15,7 @@ data:
   SWARM_POD_CODE_PATH: /app/jiuwenswarm
   DB_CONNECT_TIMEOUT: "15"
   DISABLED_TOOLS: search_skill,install_skill,uninstall_skill,code,web_search,fetch_webpage,skill_acceleration_exec,deepresearch_execute,deepresearch_stream,deepresearch_prepare_rewrite,deepresearch_commit_rewrite,deepresearch_generate_rewrite_html,wiki_ingest,wiki_query,wiki_lint,memory_search,audio_transcription,audio_question_answering,prepare_skill_evolution,evolve_review_task,evolve_skill_experiences,list_skill_experiences,read_skill_experiences,simplify_skill_experiences,get_current_goal,submit_goal_report
-  EXTENSION_DIRS: /app/jiuwenswarm/packages/jiuwenswarm-ee/agentserver/extensions
+  EXTENSION_DIRS: /app/jiuwenswarm/jiuwenswarm/extensions
   GATEWAY_DB_HOST: <<DB_HOST>>
   GATEWAY_DB_NAME: <<GATEWAY_DB_NAME>>
   GATEWAY_DB_PORT: "<<DB_PORT>>"
