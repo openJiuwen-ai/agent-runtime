@@ -147,7 +147,7 @@ declare -A DEPLOY_VARS=(
     ["MANAGER_AGENT_CLIENT_REGISTRATION_ENABLED"]="false"
     ["MANAGER_AGENT_CLIENT_REGISTRATION_CONFIG_FILE"]=""
     # 用户空间配额特性开关（双形态通用：Manager / Gateway / AgentServer / User Web / Manager Web 共用）
-    ["WORKSPACE_QUOTA_ENABLED"]="false"
+    ["WORKSPACE_QUOTA_ENABLED"]="true"
 
     # NFS 存储数据源（双形态通用：k8s 直连挂载与 nfs-sc 供给组件共用）
     # NFS_SERVER_ADDR：k8s 形态留空=内置 NFS server（./deploy.sh up nfs）；
