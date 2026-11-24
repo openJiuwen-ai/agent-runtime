@@ -57,6 +57,22 @@ CRON_POLICY_TABLE_DEF = TableDefinition(
     ],
 )
 
+USER_PREFERENCE_DEFAULT_TABLE_DEF = TableDefinition(
+    table_name="user_preference_default",
+    columns=[
+        ColumnDefinition("id", "integer", primary_key=True, autoincrement=True, nullable=False),
+        ColumnDefinition("jiuwenclaw_id", "string", length=64, nullable=False),
+        ColumnDefinition("preferred_language", "string", length=8, nullable=False),
+        # 与 Gateway 默认行对齐；本期 UI 可不暴露。
+        ColumnDefinition("extras", "json", nullable=True),
+        ColumnDefinition("created_at", "datetime", nullable=False),
+        ColumnDefinition("updated_at", "datetime", nullable=False),
+    ],
+    indexes=[
+        IndexDefinition(["jiuwenclaw_id"], unique=True),
+    ],
+)
+
 LOGGING_CONFIG_TABLE_DEF = TableDefinition(
     table_name="logging_config",
     columns=[

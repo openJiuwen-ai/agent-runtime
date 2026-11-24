@@ -246,6 +246,23 @@ export interface CronPolicyUpsertBody {
   max_jobs_per_user: number;
 }
 
+export type PreferredLanguage = 'zh' | 'en';
+
+export interface UserPreferenceDefault {
+  id?: number;
+  jiuwenclaw_id: string;
+  preferred_language: PreferredLanguage;
+  extras?: Record<string, unknown> | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface UserPreferenceDefaultUpsertBody {
+  preferred_language: PreferredLanguage;
+  /** 未传则不覆盖服务端已有 extras。 */
+  extras?: Record<string, unknown> | null;
+}
+
 export interface PackageCatalogItem {
   kind: 'agent_template' | 'agent_group';
   id: string;
