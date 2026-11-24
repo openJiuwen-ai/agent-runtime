@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -12,6 +11,7 @@ import pytest
 from manager_server.core.application_config.hub_package_catalog import (
     fetch_platform_package_catalog,
 )
+from manager_server.infrastructure.config import Settings
 
 pytestmark = pytest.mark.unit
 
@@ -83,23 +83,29 @@ calls: list[tuple[str, dict]] = []
 
 
 @pytest.mark.asyncio
-async def test_catalog_reads_hub_platform_not_a_cluster() -> None:
+@pytest.mark.parametrize(("verify_env", "expected_verify"), [(None, True), ("false", False)])
+async def test_catalog_reads_hub_platform_not_a_cluster(
+    monkeypatch, verify_env: str | None, expected_verify: bool,
+) -> None:
+    monkeypatch.setenv("TEAM_SKILLS_HUB_BASE_URL", "https://hub.example")
+    if verify_env is None:
+        monkeypatch.delenv("TEAM_SKILLS_HUB_VERIFY_SSL", raising=False)
+    else:
+        monkeypatch.setenv("TEAM_SKILLS_HUB_VERIFY_SSL", verify_env)
     calls.clear()
     with (
         patch(
             "manager_server.core.application_config.hub_package_catalog.settings",
-            SimpleNamespace(
-                team_skills_hub_base_url="https://hub.example",
-                team_skills_hub_timeout=30,
-            ),
+            Settings(_env_file=None),
         ),
         patch(
             "manager_server.core.application_config.hub_package_catalog.httpx.AsyncClient",
-            _HubClient,
-        ),
+            return_value=_HubClient(),
+        ) as client_factory,
     ):
         payload = await fetch_platform_package_catalog()
 
+    assert client_factory.call_args.kwargs["verify"] is expected_verify
     assert calls == [
         ("https://hub.example/api/v1/plugins", {
             "plugin_type": "agent-template",
