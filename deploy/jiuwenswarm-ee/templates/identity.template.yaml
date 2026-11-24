@@ -49,6 +49,8 @@ spec:
           value: "0.0.0.0"
         - name: IDENTITY_REST_PORT
           value: "<<IDENTITY_REST_PORT>>"
+        - name: IDENTITY_AUTHORIZATION_URL
+          value: "http://<<MANAGER_SERVER_NAME>>:<<MANAGER_REST_PORT>>/api/v1/authz/me"
         - name: IDENTITY_DB_TYPE
           value: "<<DB_TYPE>>"
         - name: IDENTITY_DB_HOST

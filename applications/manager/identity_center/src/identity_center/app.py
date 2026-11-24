@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from identity_center import __version__
+from identity_center.core.authorization import DirectoryAuthorizationClient
 from identity_center.infrastructure.config import settings
 from identity_center.infrastructure.db import create_db_handler, database_config_summary
 from identity_center.infrastructure.logger import configure_logging, get_logger
@@ -52,10 +53,16 @@ async def lifespan(application: FastAPI):
         audience=settings.jwt_audience,
         access_ttl=settings.access_ttl_seconds,
     )
-    yield
-    await federation_service.close()
-    await db_handler.disconnect()
-    _log.info("shutdown")
+    # Constructing the client performs no authorization-service request.
+    directory_authorizer = DirectoryAuthorizationClient(settings.authorization_url)
+    application.state.directory_authorizer = directory_authorizer
+    try:
+        yield
+    finally:
+        await directory_authorizer.close()
+        await federation_service.close()
+        await db_handler.disconnect()
+        _log.info("shutdown")
 
 
 def create_app() -> FastAPI:

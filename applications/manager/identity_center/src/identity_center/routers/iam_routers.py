@@ -1,4 +1,4 @@
-"""身份目录管理 API：组织 / 用户 / 成员（全部 admin 守卫，校验 JWT 的 is_admin claim）。"""
+"""Directory APIs guarded by the caller's current management eligibility."""
 
 from __future__ import annotations
 

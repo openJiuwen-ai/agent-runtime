@@ -46,6 +46,8 @@ spec:
               value: "0.0.0.0"
             - name: IDENTITY_REST_PORT
               value: "8770"
+            - name: IDENTITY_AUTHORIZATION_URL
+              value: "http://jiuwenswarm-manager-server:8765/api/v1/authz/me"
             - name: IDENTITY_DB_HOST
               value: "<<DB_HOST>>"
             - name: IDENTITY_DB_PORT
