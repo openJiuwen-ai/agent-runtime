@@ -57,14 +57,24 @@ resolve_deploy_mode_vars() {
 # - kata：AgentServer 沙箱 Pod 注入 runtimeClassName: kata（集群须预装 Kata
 #   Containers 并创建 RuntimeClass kata，否则 Pod 无法启动）
 # - jiuwenbox：AgentServer Pod 注入 jiuwenbox 沙箱 sidecar（须配 JIUWENBOX_IMAGE/
-#   JIUWENBOX_PORT；仅 k8s 形态，openshift SCC 拒绝特权容器）
+#   JIUWENBOX_PORT；仅 k8s 形态，openshift SCC 拒绝特权容器；sidecar 需 root +
+#   SYS_ADMIN/NET_ADMIN + seccomp/AppArmor Unconfined）
 resolve_sandbox_type_vars() {
   local val="${DEPLOY_VARS["SANDBOX_TYPE"]:-}"
+  # 未设置时按 CLUSTER_TYPE 派生默认值：k8s → jiuwenbox，openshift → off
+  if [ -z "$val" ]; then
+    case "${DEPLOY_VARS["CLUSTER_TYPE"]:-}" in
+      k8s)       val="jiuwenbox" ;;
+      openshift) val="off" ;;
+    esac
+    DEPLOY_VARS["SANDBOX_TYPE"]="$val"
+    info "SANDBOX_TYPE 未设置，按 CLUSTER_TYPE 派生: $val"
+  fi
   case "$val" in
     off|kata) ;;
     jiuwenbox)
-      # 沙箱需 root + SYS_ADMIN/NET_ADMIN + seccomp Unconfined 运行，OCP 默认
-      # restricted-v2 全部拒绝，需客户手工绑 privileged SCC——暂不支持
+      # 沙箱需 root + SYS_ADMIN/NET_ADMIN + seccomp/AppArmor Unconfined 运行，
+      # OCP 默认 restricted-v2 全部拒绝，需客户手工绑 privileged SCC——暂不支持
       if [ "${DEPLOY_VARS["CLUSTER_TYPE"]}" = openshift ]; then
         error "CLUSTER_TYPE=openshift 暂不支持 SANDBOX_TYPE=jiuwenbox（沙箱需特权容器能力，待开放）"
       fi
@@ -587,7 +597,7 @@ check_vars() {
   check_image_vars
   check_replicas_vars
   resolve_deploy_mode_vars         # 三模式派生：gateway 条件 env + off 单副本校验
-  resolve_sandbox_type_vars        # 沙箱类型枚举校验（off|kata|jiuwenbox，jiuwenbox 仅 k8s）
+  resolve_sandbox_type_vars        # 沙箱类型：未设置按 CLUSTER_TYPE 派生（k8s→jiuwenbox、openshift→off）；显式设置走枚举校验
   check_storage_class_vars
   check_optional_vars
   check_identity_sso_vars          # 企业 SSO 三元组"全空或全配"校验（up + identity 时生效，门禁在函数内）

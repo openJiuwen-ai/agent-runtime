@@ -176,15 +176,15 @@ declare -A DEPLOY_VARS=(
     ["MANAGER_WEB_REPLICAS"]="1"
     ["AGENT_RUNTIME_REPLICAS"]="1"
 
-    # agent-runtime 三模式部署形态（routing | off；full 待开放）
-    ["AGENT_RUNTIME_DEPLOY_MODE"]="routing"
+    # agent-runtime 三模式部署形态（routing | off | full），默认 full
+    ["AGENT_RUNTIME_DEPLOY_MODE"]="full"
     # 沙箱镜像（SANDBOX_TYPE=jiuwenbox 时必填；off/kata 不需要）
     ["JIUWENBOX_IMAGE"]=""
     # jiuwenbox 沙箱监听端口（与 ee 部署约定一致）
     ["JIUWENBOX_PORT"]="8321"
     # 禁 EVAL 兼容模式（on 与历史行为一致；客户 Redis 禁用 EVAL 时设 off）
     ["AGENT_RUNTIME_REDIS_LUA"]="off"
-    ["SANDBOX_TYPE"]="off"
+    ["SANDBOX_TYPE"]=""                    # 留空按 CLUSTER_TYPE 派生（k8s→jiuwenbox、openshift→off）
     # 预置 Skill URL / 远程导入下载白名单（逗号分隔）；留空不注入，走 AgentServer 代码默认
     ["IMPORT_LOCAL_ALLOWED_DOWNLOAD_HOSTS"]=""
     ["TEAM_SKILLS_HUB_ALLOWED_DOWNLOAD_HOSTS"]=""
@@ -225,7 +225,8 @@ declare -A DEPLOY_VARS=(
     ["POSTGRESQL_NODE_PORT"]=""          # k8s 形态 postgresql NodePort，留空自动分配
     # dev 模式：hostPath 挂载宿主机代码调试（MODE=dev 仅 k8s 形态支持；Pod 固定到代码所在节点）
     ["MODE"]="product"                   # product | dev
-    ["SWARM_CODE_PATH"]=""                # jiuwenswarm 仓库路径（挂载到 agentserver/gateway/web）
+    ["SWARM_CODE_PATH"]=""                # jiuwenswarm 仓库路径（挂载到 agentserver/web）
+    ["GATEWAY_CODE_PATH"]=""             # agent-gateway 仓库路径（挂载到 gateway）
     ["RUNTIME_CODE_PATH"]=""             # agent-runtime 仓库路径（挂载到 runtime/identity/manager-server/manager-web）
     ["CORE_CODE_PATH"]=""                # agent-core 仓库路径（openjiuwen 包挂载到 agentserver/gateway）
     ["IS_MOUNT_WEB_CODE"]="false"        # dev 模式下 web 是否挂载代码
@@ -233,6 +234,8 @@ declare -A DEPLOY_VARS=(
     ["CURRENT_NODE_NAME"]=""             # 代码所在节点；留空=按本机 hostname/IP 自动识别
     # Pod 侧代码路径（按镜像内布局，一般无需修改）
     ["SWARM_POD_CODE_PATH"]="/app/jiuwenswarm"
+    ["GATEWAY_POD_CODE_PATH"]="/app/agent-gateway"
+    ["GATEWAY_POD_PKG_PATH"]="/usr/local/lib/python3.11/site-packages/agent_gateway"
     ["RUNTIME_POD_CODE_PATH"]="/app/agent-runtime"
     ["RUNTIME_POD_PKG_PATH"]="/usr/local/lib/python3.11/site-packages/openjiuwen_runtime"
     ["CORE_POD_PKG_PATH"]="/usr/local/lib/python3.11/site-packages/openjiuwen"
