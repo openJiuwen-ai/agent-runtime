@@ -15,6 +15,7 @@ from .import_export_routers import import_export_router
 from .instance_access_routers import gateway_lookup_router, instance_grant_router
 from .instance_resource_routers import instance_resource_router
 from .instance_routers import instance_router
+from .org_cleanup_routers import org_cleanup_router
 from .quota_routers import quota_router
 from .template_routers import templates_router
 from .user_console_routers import public_user_console_router, user_console_router
@@ -58,6 +59,7 @@ def _build_api_router() -> APIRouter:
         prefix=INSTANCES_PREFIX,
         tags=["Quota"],
     )
+    v1_router.include_router(org_cleanup_router, tags=["Organization Cleanup"])
 
     # 实例准入：用户/组织 ↔ 实例授权（instance_grant）。
     admin_router.include_router(
