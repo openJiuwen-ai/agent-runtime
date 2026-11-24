@@ -253,6 +253,31 @@ export interface PermissionsTemplateCreateBody {
 
 export type PermissionsTemplateUpdateBody = Partial<PermissionsTemplateCreateBody>;
 
+/** React 运行策略模板（企业版 config.yaml::react 段上移管理面）。 */
+export interface ReactTemplate {
+  id: number;
+  template_id: string;
+  template_name: string;
+  description?: string | null;
+  enabled: boolean;
+  /** 只读：在 Agent 模板 react 槽位引用本模板的 Agent 模板数 */
+  reference_count: number;
+  body: Record<string, unknown>;
+  data?: Record<string, unknown> | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface ReactTemplateCreateBody {
+  template_name: string;
+  description?: string;
+  enabled?: boolean;
+  body: Record<string, unknown>;
+  data?: Record<string, unknown>;
+}
+
+export type ReactTemplateUpdateBody = Partial<ReactTemplateCreateBody>;
+
 export interface ServiceConfigTemplate {
   id: number;
   template_id: string;

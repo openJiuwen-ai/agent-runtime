@@ -9,6 +9,7 @@ from manager_server.core.template.model_template import ModelTemplateService
 from manager_server.core.template.permissions_template import (
     PermissionsTemplateService,
 )
+from manager_server.core.template.react_template import ReactTemplateService
 from manager_server.core.template.service_config_template import (
     ServiceConfigTemplateService,
 )
@@ -23,6 +24,7 @@ __all__ = (
     "ExpertPackageTemplateService",
     "ExtensionConfigTemplateService",
     "PermissionsTemplateService",
+    "ReactTemplateService",
     "McpTemplateService",
     "SkillPrebuiltTemplateService",
     "ServiceConfigTemplateService",

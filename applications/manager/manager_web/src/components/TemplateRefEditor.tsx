@@ -28,22 +28,14 @@ const SLOT_CONFIG_PATH: Record<string, string> = {
   extension_config: '/extension-config-templates',
   mcp: '/mcp-templates',
   permissions: '/safety-guardrails',
+  react: '/react-templates',
   a2a_access_policy: '/a2a-management?tab=policies',
 };
 
 /** 槽位 → 引导页面名称（用于「前往 {页面} 页面 →」链接文案） */
 const SLOT_HINT_PAGE_KEY: Record<string, string> = {
-  default_model: 'modelTemplate.title',
-  video_model: 'modelTemplate.title',
-  audio_model: 'modelTemplate.title',
-  vision_model: 'modelTemplate.title',
-  image_gen_model: 'modelTemplate.title',
-  embedding_model: 'embeddingTemplate.title',
-  skill_prebuilt: 'skillWhitelistTemplate.title',
-  expert_package: 'expertPackageTemplate.title',
-  extension_config: 'extensionTemplate.title',
-  mcp: 'mcpTemplate.title',
   permissions: 'safetyGuardrails.title',
+  react: 'reactTemplates.title',
   a2a_access_policy: 'a2aManagement.title',
 };
 
