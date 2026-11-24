@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAsync } from '../../hooks/useAsync';
 import { useFormDirty } from '../../hooks/useFormDirty';
-import { InstanceApi, UserConsoleApi, ApiError } from '../../services/api';
+import { InstanceApi, ApiError } from '../../services/api';
 import { useRouter } from '../../router';
 import { Modal, ModalCancelButton } from '../../components/Modal';
 import { LimitedTextInput } from '../../components/LimitedTextInput';
@@ -52,7 +52,6 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
   const instance = useAsync(() => InstanceApi.get(instanceId), [instanceId]);
   const { navigate } = useRouter();
   const [probing, setProbing] = useState(false);
-  const [openingConsole, setOpeningConsole] = useState(false);
   const [checkResult, setCheckResult] = useState('');
 
   const [editOpen, setEditOpen] = useState(false);
@@ -165,23 +164,6 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
     } finally { setProbing(false); }
   };
 
-  const openUserConsole = async () => {
-    if (openingConsole) return;
-    setOpeningConsole(true);
-    setCheckResult('');
-    try {
-      const { contexts } = await UserConsoleApi.agentContexts();
-      if (!contexts.some(row => row.jiuwenclaw_id === instanceId)) {
-        setCheckResult(zh ? '当前登录身份没有此集群的可用 Agent 上下文。请核对该身份的准入和 Agent 使用范围，或使用已获准的测试账号登录用户面。' : 'This identity has no Agent context in this cluster. Check admission and Agent scope, or sign into the user console with an admitted test account.');
-        return;
-      }
-      await UserConsoleApi.setActiveCluster(instanceId);
-      window.location.assign('/chat/');
-    } catch (cause) {
-      toast('danger', zh ? `无法进入当前集群用户面：${cause instanceof ApiError ? cause.detail : (cause as Error).message}` : `Could not open user console: ${(cause as Error).message}`);
-    } finally { setOpeningConsole(false); }
-  };
-
   const sections: Record<InstancePageTab, ClusterWorkspaceSection> = {
     access: 'access', agentResources: 'agent-resources',
     serviceResources: 'service-resources', otherSettings: 'other-settings', status: 'status',
@@ -211,9 +193,7 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
               onOpenEditConnectivity={handleOpenEditConnectivity}
               onRefresh={() => void instance.reload()}
               onCheckConnectivity={() => void checkConnectivity()}
-              onOpenUserConsole={() => void openUserConsole()}
               probing={probing}
-              openingConsole={openingConsole}
               checkResult={checkResult}
             />
           )}

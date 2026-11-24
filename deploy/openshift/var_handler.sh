@@ -122,6 +122,36 @@ check_replicas_vars() {
   done
 }
 
+resolve_user_backend_db_vars() {
+  local user="${DEPLOY_VARS[USER_BACKEND_DB_USER]:-}"
+  if [ -z "$user" ]; then
+    user="user_backend_${DEPLOY_VARS[NAMESPACE]//-/_}"
+    if [ "${#user}" -gt 32 ]; then
+      user="user_backend_$(printf '%s' "${DEPLOY_VARS[NAMESPACE]}" | sha256sum | cut -c1-16)"
+    fi
+  fi
+  DEPLOY_VARS[USER_BACKEND_DB_USER]="$user"
+  [ -n "${DEPLOY_VARS[USER_BACKEND_DB_PASSWORD]:-}" ] \
+    || DEPLOY_VARS[USER_BACKEND_DB_PASSWORD]="$USER_BACKEND_DEFAULT_DB_PASSWORD"
+}
+
+check_user_backend_vars() {
+  [ "$CMD" = up ] || return 0
+  in_array user-backend "${TARGETS[@]}" || in_array manager-server "${TARGETS[@]}" || return 0
+  local db_user="${DEPLOY_VARS[USER_BACKEND_DB_USER]}"
+  [[ "$db_user" =~ ^[a-zA-Z_][a-zA-Z0-9_]{0,31}$ && "${db_user,,}" != root && "${db_user,,}" != postgres ]] \
+    || error "USER_BACKEND_DB_USER must be a dedicated account (1-32 letters, digits or underscores)"
+  [ -n "${DEPLOY_VARS[USER_BACKEND_DB_PASSWORD]}" ] \
+    || error "请在 $CUSTOM_ENV_FILE 中设置 USER_BACKEND_DB_PASSWORD"
+  in_array user-backend "${TARGETS[@]}" || return 0
+  local img="${DEPLOY_VARS[USER_BACKEND_IMAGE]}"
+  local replicas="${DEPLOY_VARS[USER_BACKEND_REPLICAS]}"
+  [[ "$img" =~ ^[A-Za-z0-9._:@/-]+$ ]] \
+    || error "USER_BACKEND_IMAGE 未设置或格式无效（检查 $CUSTOM_ENV_FILE）"
+  [[ "$replicas" =~ ^[1-9][0-9]*$ ]] \
+    || error "USER_BACKEND_REPLICAS 须为正整数"
+}
+
 # StorageClass：DNS subdomain 规范；留空使用集群默认（STORAGE_CLASS_VARS）
 check_storage_class_vars() {
   local v val
@@ -591,11 +621,13 @@ check_vars() {
   resolve_nfs_vars                 # 函数在 k8s_handler.sh（k8s 形态专属，含外挂模式派生）
   check_nfs_component_vars         # nfs 组件目标守卫（仅 TARGETS 含 nfs 时生效）
   resolve_db_vars
+  resolve_user_backend_db_vars
   resolve_redis_vars
   resolve_obs_vars                 # OBS_URL 空=内置 MinIO 自动派生；外部校验必填项
   resolve_manager_web_resolver     # MANAGER_WEB_RESOLVER 为空时按形态/环境自动解析
   check_image_vars
   check_replicas_vars
+  check_user_backend_vars
   resolve_deploy_mode_vars         # 三模式派生：gateway 条件 env + off 单副本校验
   resolve_sandbox_type_vars        # 沙箱类型：未设置按 CLUSTER_TYPE 派生（k8s→jiuwenbox、openshift→off）；显式设置走枚举校验
   check_storage_class_vars

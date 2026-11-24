@@ -45,6 +45,10 @@ parse_args() {
   # 目标组件：显式指定优先（按规范依赖序排列）；未指定则取组默认
   if [ ${#TARGETS[@]} -gt 0 ]; then
     TARGETS_EXPLICIT=1
+    if [ "$CMD" = up ] && in_array user-backend "${TARGETS[@]}" \
+        && ! in_array secret "${TARGETS[@]}"; then
+      TARGETS+=(secret)
+    fi
     sort_targets
   elif [ "$SCOPE" = manager ]; then
     TARGETS=("${MANAGER_TARGETS[@]}")
@@ -57,13 +61,15 @@ usage() {
   cat <<'EOF'
 用法: deploy.sh [manager] [组件...] <up|down> [-n NAMESPACE] [--render-only] [-y]
   up                拉起产品组件（按 AGENT_RUNTIME_DEPLOY_MODE 派生，见 .env.example）:
-                    off:     secret → redis → agentserver → gateway → web
+                    off:     secret → redis → agentserver → gateway → user-backend → web
                     routing: 同上 + runtime（会话粘性路由，零 K8s 权限）
-                    full:    secret → redis → runtime → gateway → web
+                    full:    secret → redis → runtime → gateway → user-backend → web
                              （AgentServer 由 runtime 按需创建，自动注入 Pod 操作 RBAC）
   manager up        拉起管理套件: identity → manager-server → manager-web
                     （依赖的 secret / redis 集群缺失时自动拉起，已有则复用）
   up mariadb        只部署/渲染指定组件；可多选，如: up mariadb minio
+  up user-backend   单独部署用户面后端（镜像由 USER_BACKEND_IMAGE 指定）
+  up web            单独部署用户面前端
                     基础服务四件套: mariadb / mysql / postgresql / minio（数据库三选一）
   up nfs            NFS 存储统一入口，实际组件集自动解析:
                     openshift / 外部 NFS / 非 amd64 节点 → nfs-sc（存储供给组件）

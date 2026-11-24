@@ -9,13 +9,11 @@ interface Props {
   onOpenEditConnectivity: () => void;
   onRefresh: () => void;
   onCheckConnectivity: () => void;
-  onOpenUserConsole: () => void;
   probing: boolean;
-  openingConsole: boolean;
   checkResult: string;
 }
 
-export function InstanceDetailPanel({ instance, onOpenEditConnectivity, onRefresh, onCheckConnectivity, onOpenUserConsole, probing, openingConsole, checkResult }: Props) {
+export function InstanceDetailPanel({ instance, onOpenEditConnectivity, onRefresh, onCheckConnectivity, probing, checkResult }: Props) {
   const { t, i18n } = useTranslation();
   const zh = i18n.language.startsWith('zh');
   const d = instance.data;
@@ -26,9 +24,10 @@ export function InstanceDetailPanel({ instance, onOpenEditConnectivity, onRefres
         <ClusterContentHeading section="status" />
         <div className="flex flex-wrap gap-2"><button className="btn sm" onClick={onRefresh}>
           {t('common.refresh')}
-        </button><button className="btn sm" disabled={probing} onClick={onCheckConnectivity}>{probing ? (zh ? '检查中…' : 'Checking…') : (zh ? '检查连接（全部集群）' : 'Check connections (all clusters)')}</button><button className="btn primary sm" disabled={openingConsole} onClick={onOpenUserConsole}>{openingConsole ? (zh ? '正在检查身份…' : 'Checking identity…') : (zh ? '进入当前集群用户面' : 'Open this cluster in user console')} →</button></div>
+        </button><button className="btn sm" disabled={probing} onClick={onCheckConnectivity}>{probing ? (zh ? '检查中…' : 'Checking…') : (zh ? '检查连接（全部集群）' : 'Check connections (all clusters)')}</button></div>
       </div>
       {checkResult && <p className="text-sm text-muted" role="status">{checkResult}</p>}
+      <p className="text-sm text-muted">{zh ? '请从独立的用户面入口登录，选择此集群和 Agent 验证对话。' : 'Sign in at the separate user console and select this cluster and an Agent to verify chat.'}</p>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
         <div className="card">

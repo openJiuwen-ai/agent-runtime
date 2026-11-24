@@ -24,6 +24,7 @@ IMAGE_ENV_KEYS = (
     "AGENTSERVER_IMAGE",
     "GATEWAY_IMAGE",
     "WEB_IMAGE",
+    "USER_BACKEND_IMAGE",
     "IDENTITY_IMAGE",
     "MANAGER_SERVER_IMAGE",
     "MANAGER_WEB_IMAGE",
@@ -40,6 +41,7 @@ REPLICA_ENV_KEYS = (
     "AGENT_SERVER_REPLICAS",
     "GATEWAY_REPLICAS",
     "WEB_REPLICAS",
+    "USER_BACKEND_REPLICAS",
     "IDENTITY_REPLICAS",
     "MANAGER_SERVER_REPLICAS",
     "MANAGER_WEB_REPLICAS",
@@ -61,6 +63,8 @@ ALLOWED_ENV_KEYS = frozenset(
         "DB_PORT",
         "DB_USER",
         "DB_PASSWORD",
+        "USER_BACKEND_DB_USER",
+        "USER_BACKEND_DB_PASSWORD",
         "MARIADB_ROOT_PASSWORD",
         "MYSQL_ROOT_PASSWORD",
         "POSTGRES_PASSWORD",
@@ -86,6 +90,7 @@ ALLOWED_ENV_KEYS = frozenset(
         "WORKSPACE_STORAGE_CLASS",
         # NodePort
         "MANAGER_WEB_NODE_PORT",
+        "WEB_NODE_PORT",
         # openshift 形态集群接入（API 地址 / 自签开关；经快照-defaults-任务链路流动）
         "CLUSTER_API_SERVER",
         "CLUSTER_API_INSECURE",

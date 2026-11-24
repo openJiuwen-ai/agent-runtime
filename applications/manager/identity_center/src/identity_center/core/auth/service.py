@@ -25,7 +25,7 @@ from identity_center.models.identity_models import (
     IDENTITY_USER_TABLE_DEF,
     NO_ORG_GROUP_ID,
 )
-from identity_center.security.tokens import issue_access_token
+from identity_center.security.tokens import LoginSurface, issue_access_token
 
 _log = get_logger(__name__)
 
@@ -58,7 +58,7 @@ class IdentityAuthService:
         gids = [str(getattr(r, "group_id", "")) for r in rows]
         return [g for g in gids if g and g != NO_ORG_GROUP_ID]
 
-    async def _issue_for(self, user: Any) -> dict[str, Any]:
+    async def _issue_for(self, user: Any, surface: LoginSurface) -> dict[str, Any]:
         user_id = str(user.user_id)
         groups = await self._load_groups(user_id)
         access, expires_in = issue_access_token(
@@ -66,6 +66,7 @@ class IdentityAuthService:
             display_name=getattr(user, "display_name", None),
             is_admin=bool(getattr(user, "is_admin", False)),
             groups=groups,
+            surface=surface,
         )
         now = utc_now()
         refresh = secrets.token_urlsafe(32)
@@ -74,6 +75,7 @@ class IdentityAuthService:
             {
                 "refresh_token": refresh,
                 "user_id": user_id,
+                "data": {"surface": surface},
                 "expires_at": now + timedelta(seconds=int(settings.refresh_ttl_seconds)),
                 "created_at": now,
                 "updated_at": now,
@@ -88,7 +90,8 @@ class IdentityAuthService:
         }
 
     async def login(
-        self, username: str, password: str, *, provider: str = _DEFAULT_PROVIDER
+        self, username: str, password: str, *, provider: str = _DEFAULT_PROVIDER,
+        surface: LoginSurface = "manager",
     ) -> dict[str, Any] | str:
         """成功返回 token 束 + user；失败返回 ``"bad_credentials"`` / ``"disabled"``。"""
         prov = get_provider(provider)
@@ -104,23 +107,31 @@ class IdentityAuthService:
         if str(getattr(user, "status", "")) != "active":
             return "disabled"
         _log.info("[Auth] login.ok", user_id=user_id, provider=provider)
-        return await self._issue_for(user)
+        return await self._issue_for(user, surface)
 
-    async def issue_for_user_id(self, user_id: str) -> dict[str, Any] | str:
+    async def issue_for_user_id(
+        self, user_id: str, *, surface: LoginSurface = "manager"
+    ) -> dict[str, Any] | str:
         """Issue the normal local token bundle for an already authenticated user."""
         user = await self._h.get(_IDENTITY_USER, {"user_id": user_id})
         if user is None:
             return "bad_credentials"
         if str(getattr(user, "status", "")) != "active":
             return "disabled"
-        return await self._issue_for(user)
+        return await self._issue_for(user, surface)
 
-    async def refresh(self, refresh_token: str) -> dict[str, Any] | str:
+    async def refresh(
+        self, refresh_token: str, *, surface: LoginSurface | None = None
+    ) -> dict[str, Any] | str:
         """用 refresh 换新 access（并轮换 refresh）。失败返回 ``"invalid_refresh"``。"""
         if not refresh_token:
             return "invalid_refresh"
         sess = await self._h.get(_AUTH_SESSION, {"refresh_token": refresh_token})
         if sess is None:
+            return "invalid_refresh"
+        data = getattr(sess, "data", None)
+        bound_surface = data.get("surface") if isinstance(data, dict) else None
+        if bound_surface not in ("manager", "user") or (surface and surface != bound_surface):
             return "invalid_refresh"
         expires_at = getattr(sess, "expires_at", None)
         if expires_at is not None:
@@ -135,7 +146,7 @@ class IdentityAuthService:
             return "invalid_refresh"
         # 轮换：撤销旧 refresh，签发新束
         await self._h.delete(_AUTH_SESSION, {"refresh_token": refresh_token})
-        return await self._issue_for(user)
+        return await self._issue_for(user, bound_surface)
 
     async def logout(self, refresh_token: str) -> None:
         if refresh_token:
