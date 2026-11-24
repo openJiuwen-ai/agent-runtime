@@ -656,7 +656,9 @@ _k8s_version_probe() { # 填充 _K8S_VERSION_STR（已探测或 RENDER_ONLY 时�
   local raw major minor
   raw=$(kubectl get --raw=/version 2>/dev/null) || raw=""
   major=$(printf '%s' "${raw}" | yq -r '.major // ""' 2>/dev/null) || major=""
-  minor=$(printf '%s' "${raw}" | yq -r '.minor // ""' 2>/dev/null | tr -dc '0-9') || minor=""
+  major="${major%%[!0-9]*}"
+  minor=$(printf '%s' "${raw}" | yq -r '.minor // ""' 2>/dev/null) || minor=""
+  minor="${minor%%[!0-9]*}"
   if [ -n "${major}" ] && [ -n "${minor}" ]; then
     _K8S_VERSION_STR="${major}.${minor}"
   fi
