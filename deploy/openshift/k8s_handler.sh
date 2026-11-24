@@ -549,8 +549,10 @@ apply_manager_deploy_credentials() { # $@=本次渲染的清单文件名
 # {ns} → NAMESPACE，与 manager-server GET default-rawdata 一致。
 _agentserver_default_object_key() {
   local tpl ns pat="{ns}"
+  # Keep the literal {ns} outside parameter expansion: its closing brace would
+  # otherwise terminate ${...:-...} and corrupt both default and custom keys.
   tpl="${DEPLOY_VARS["AGENT_RUNTIME_DEFAULT_CONF_PATH"]:-}"
-  [ -n "$tpl" ] || tpl="defaults/{ns}/agentserver.json"
+  [ -n "$tpl" ] || tpl='defaults/{ns}/agentserver.json'
   ns="${DEPLOY_VARS["NAMESPACE"]:-default}"
   [ -n "$ns" ] || ns="default"
   echo "${tpl//$pat/$ns}"

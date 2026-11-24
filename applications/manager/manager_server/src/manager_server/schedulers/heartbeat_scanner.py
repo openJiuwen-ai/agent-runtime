@@ -10,6 +10,7 @@ from openjiuwen_runtime.foundation.db.handler import DBHandler
 from manager_server.core.instance.config_host_probe import check_config_host_alive
 from manager_server.core.instance.instance_service import apply_health_probe_result
 from manager_server.infrastructure.config import settings
+from manager_server.infrastructure.dev_mode import offline_dev_enabled
 from manager_server.infrastructure.logger import get_logger
 from manager_server.models.instance_models import INSTANCE_INFO_TABLE_DEF
 
@@ -50,6 +51,13 @@ async def _probe_one_side(
 async def scan_instance_health_once(handler: DBHandler) -> dict[str, int]:
     """对所有带探活地址的实例做一轮探活。"""
     rows = await handler.list_records(_TABLE, {}, limit=10_000, offset=0)
+    if offline_dev_enabled():
+        skipped = sum(
+            bool(getattr(row, f"{side}_host", None))
+            for row in rows
+            for side in ("gateway", "runtime", "user_web")
+        )
+        return {"probed": 0, "alive": 0, "dead": 0, "skipped": skipped}
     sem = asyncio.Semaphore(_PROBE_CONCURRENCY)
 
     async def _guarded(coro):

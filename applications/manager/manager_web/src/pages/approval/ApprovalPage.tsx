@@ -13,6 +13,7 @@ import { useListSearch } from '../../hooks/useListSearch';
 import { useRouter } from '../../router';
 import { ApprovalApi, type ApprovalOrder, type ApprovalSkillUploadApplyData } from '../../services/api';
 import { formatTime } from '../../utils/format';
+import { WorkspaceNote } from '../../components/WorkspaceNote';
 
 function approvalTypeLabel(
   t: ReturnType<typeof useTranslation>['t'],
@@ -118,7 +119,7 @@ export function ApprovalPage() {
         </div>
       </div>
 
-      <div className="card !p-0">
+      <div className="card manager-page-table !p-0">
         {loading ? (
           <div className="p-4 text-sm text-muted">{t('common.loading')}</div>
         ) : error ? (
@@ -212,6 +213,9 @@ export function ApprovalPage() {
           </div>
         )}
       </div>
+      <WorkspaceNote title="审批只处理需要人工确认的变更">
+        审批列表展示配额申请等需要人工确认的操作。批准后系统还会同步到对应集群，详情页中的同步状态才代表最终生效结果。
+      </WorkspaceNote>
     </div>
   );
 }

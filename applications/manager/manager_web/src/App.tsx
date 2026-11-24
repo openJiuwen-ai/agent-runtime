@@ -1,3 +1,8 @@
+import { canonicalAgentPath } from './utils/agentTemplateNavigation';
+import { AgentDetailPage } from './pages/AgentDetailPage';
+import { AgentWorkspacePage } from './pages/AgentWorkspacePage';
+import { AgentConnectPage } from './pages/AgentConnectPage';
+import { ConfigurationWizardPage } from './pages/ConfigurationWizardPage';
 import { Component, ReactNode, useEffect, useState } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -11,7 +16,10 @@ import { ApprovalTodoButton } from './components/ApprovalTodoButton';
 import { OverviewPage } from './pages/OverviewPage';
 import { DocsPage } from './pages/DocsPage';
 import { InstanceListPage } from './pages/instance/InstanceListPage';
-import { InstanceDetailPage } from './pages/instance/InstanceDetailPage';
+import { InstanceDetailPage, type InstancePageTab } from './pages/instance/InstanceDetailPage';
+import { ClusterConfigWorkbenchPage } from './pages/instance/ClusterConfigWorkbenchPage';
+import { ClusterSetupResumePage } from './pages/instance/ClusterSetupResumePage';
+import { canonicalClusterSection, canonicalClusterPath } from './utils/clusterNavigation';
 import { DeploymentListPage } from './pages/deployment/DeploymentListPage';
 import { DeploymentDetailPage } from './pages/deployment/DeploymentDetailPage';
 import { ModelTemplatesPage } from './pages/templates/ModelTemplatesPage';
@@ -19,7 +27,6 @@ import { EmbeddingTemplatesPage } from './pages/templates/EmbeddingTemplatesPage
 import { ExtensionTemplatesPage } from './pages/templates/ExtensionTemplatesPage';
 import { McpTemplatesPage } from './pages/templates/McpTemplatesPage';
 import { SkillPrebuiltTemplatesPage } from './pages/templates/SkillPrebuiltTemplatesPage';
-import { ExpertPackageTemplatesPage } from './pages/templates/ExpertPackageTemplatesPage';
 import { ContainerTemplatesPage } from './pages/templates/ContainerTemplatesPage';
 import { ServiceConfigTemplatesPage } from './pages/templates/ServiceConfigTemplatesPage';
 import { AgentDefinitionsPage } from './pages/templates/AgentDefinitionsPage';
@@ -39,8 +46,10 @@ import { RolesEditPage } from './pages/iam/RolesEditPage';
 import { ApprovalPage } from './pages/approval/ApprovalPage';
 import { ApprovalEditPage } from './pages/approval/ApprovalEditPage';
 import { ApprovalSkillPreviewPage } from './pages/approval/ApprovalSkillPreviewPage';
-import { AgentTemplatesPage } from './pages/templates/AgentTemplatesPage';
 import { A2AManagementPage } from './pages/templates/A2AManagementPage';
+import { ResourceWorkspaceFrame } from './components/ResourceWorkspaceFrame';
+import { WorkspaceNote } from './components/WorkspaceNote';
+import { ExpertPackageTemplatesPage } from './pages/templates/ExpertPackageTemplatesPage';
 import { getProductName } from './utils/env';
 import {
   ApiError,
@@ -48,6 +57,7 @@ import {
   canAccessManager,
   hasPermission,
   isPlatformAdmin,
+  isWorkspaceQuotaEnabled,
   isApprovalEnabled,
   UserConsoleApi,
 } from './services/api';
@@ -90,9 +100,17 @@ class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryStat
 
 function RouteView() {
   const { t } = useTranslation();
-  const { path } = useRouter();
+  const { path, params } = useRouter();
   const { user } = useAuth();
   const platformAdmin = isPlatformAdmin(user);
+
+  // AuthorizationPage is retained for future use; old bookmarks return to an available page.
+  if (path === '/authorization') {
+    if (!platformAdmin && !hasPermission(user, 'iam:role:read')) {
+      return <div className="card text-sm text-muted">{t('auth.noPagePermission')}</div>;
+    }
+    return <Navigate to={platformAdmin ? '/manager/overview' : '/manager/roles'} replace />;
+  }
 
   if (!platformAdmin) {
     const approvalUiEnabled = isApprovalEnabled(user);
@@ -122,6 +140,14 @@ function RouteView() {
     return <div className="card text-sm text-muted">{t('auth.noPagePermission')}</div>;
   }
 
+  const legacyAgentPath = canonicalAgentPath(path);
+  if (legacyAgentPath) return <Navigate to={`/manager${legacyAgentPath}${params.size ? `?${params}` : ''}`} replace />;
+  if (path === '/agent-templates') return <AgentWorkspacePage />;
+  if (path === '/configuration-wizard') return <ConfigurationWizardPage />;
+  const connect = matchRoute('/agent-templates/:id/connect', path);
+  if (connect) return <AgentConnectPage key={connect.id} id={connect.id} />;
+  const agentDetail = matchRoute('/agent-templates/:id', path);
+  if (agentDetail) return <AgentDetailPage key={agentDetail.id} id={agentDetail.id} />;
   if (path === '/overview' || path === '/') {
     return <OverviewPage />;
   }
@@ -129,31 +155,34 @@ function RouteView() {
     return <InstanceListPage />;
   }
   if (path === '/model-templates') {
-    return <ModelTemplatesPage />;
+    return <ResourceWorkspaceFrame><ModelTemplatesPage /></ResourceWorkspaceFrame>;
   }
   if (path === '/embedding-templates') {
-    return <EmbeddingTemplatesPage />;
+    return <ResourceWorkspaceFrame><EmbeddingTemplatesPage /></ResourceWorkspaceFrame>;
   }
   if (path === '/extension-config-templates') {
-    return <ExtensionTemplatesPage />;
+    return <ResourceWorkspaceFrame><ExtensionTemplatesPage /></ResourceWorkspaceFrame>;
   }
   if (path === '/mcp-templates') {
-    return <McpTemplatesPage />;
+    return <ResourceWorkspaceFrame><McpTemplatesPage /></ResourceWorkspaceFrame>;
   }
   if (path === '/skill-prebuilt-templates') {
-    return <SkillPrebuiltTemplatesPage />;
-  }
-  if (path === '/expert-package-templates') {
-    return <ExpertPackageTemplatesPage />;
+    return <ResourceWorkspaceFrame><SkillPrebuiltTemplatesPage /></ResourceWorkspaceFrame>;
   }
   if (path === '/container-templates') {
     return <ContainerTemplatesPage />;
   }
   if (path === '/safety-guardrails') {
-    return <SafetyGuardrailsPage />;
+    return <ResourceWorkspaceFrame><SafetyGuardrailsPage /></ResourceWorkspaceFrame>;
   }
   if (path === '/a2a-management') {
-    return <A2AManagementPage />;
+    return <ResourceWorkspaceFrame><A2AManagementPage /></ResourceWorkspaceFrame>;
+  }
+  if (path === '/expert-packages') {
+    return <Navigate to={`/manager/expert-package-templates${params.size ? `?${params}` : ''}`} replace />;
+  }
+  if (path === '/expert-package-templates') {
+    return <ResourceWorkspaceFrame><ExpertPackageTemplatesPage /></ResourceWorkspaceFrame>;
   }
   if (path === '/service-config-templates') {
     return <ServiceConfigTemplatesPage />;
@@ -177,21 +206,21 @@ function RouteView() {
     return <OrgsPage />;
   }
   if (path === '/orgs/new') {
-    return <OrgsEditPage />;
+    return <><OrgsEditPage /><WorkspaceNote title="组织用于管理成员范围">先保存组织基本信息，再在成员页维护用户归属；集群准入仍需回到具体集群配置。</WorkspaceNote></>;
   }
   const orgEdit = matchRoute('/orgs/:groupId', path);
   if (orgEdit) {
-    return <OrgsEditPage groupId={orgEdit.groupId} />;
+    return <><OrgsEditPage groupId={orgEdit.groupId} /><WorkspaceNote title="组织用于管理成员范围">先保存组织基本信息，再在成员页维护用户归属；集群准入仍需回到具体集群配置。</WorkspaceNote></>;
   }
   if (path === '/roles') {
     return <RolesPage />;
   }
   if (path === '/roles/new') {
-    return <RolesEditPage />;
+    return <><RolesEditPage /><WorkspaceNote title="角色用于管理访问权限">角色保存后可分配给用户；它与集群准入是两层关系，具体集群仍需单独配置。</WorkspaceNote></>;
   }
   const roleEdit = matchRoute('/roles/:roleId', path);
   if (roleEdit) {
-    return <RolesEditPage roleId={roleEdit.roleId} />;
+    return <><RolesEditPage roleId={roleEdit.roleId} /><WorkspaceNote title="角色用于管理访问权限">角色保存后可分配给用户；它与集群准入是两层关系，具体集群仍需单独配置。</WorkspaceNote></>;
   }
   if (path === '/approvals') {
     if (!isApprovalEnabled(user)) {
@@ -213,65 +242,19 @@ function RouteView() {
     }
     return <ApprovalEditPage orderNum={approvalEdit.orderNum} />;
   }
-  if (path === '/agent-templates') {
-    return <AgentTemplatesPage />;
-  }
-  const instanceAccess = matchRoute('/instances/:id/access', path);
-  if (instanceAccess) {
-    return <InstanceDetailPage instanceId={instanceAccess.id} tab="access" />;
-  }
-  const instanceClusterConfig = matchRoute('/instances/:id/cluster-config', path);
-  if (instanceClusterConfig) {
-    return <InstanceDetailPage instanceId={instanceClusterConfig.id} tab="agentResources" />;
-  }
-  const instanceAgentResources = matchRoute('/instances/:id/agent-resources', path);
-  if (instanceAgentResources) {
-    return <InstanceDetailPage instanceId={instanceAgentResources.id} tab="agentResources" />;
-  }
-  const instanceServiceResources = matchRoute('/instances/:id/service-resources', path);
-  if (instanceServiceResources) {
-    return <InstanceDetailPage instanceId={instanceServiceResources.id} tab="serviceResources" />;
-  }
-  // 旧「实例资源/全局配置」页签 URL（已并入「集群配置」页签组，分别落子页签）
-  const legacyResources = matchRoute('/instances/:id/resources', path);
-  if (legacyResources) {
-    return <InstanceDetailPage instanceId={legacyResources.id} tab="agentResources" />;
-  }
-  const legacyConfig = matchRoute('/instances/:id/config', path);
-  if (legacyConfig) {
-    return <InstanceDetailPage instanceId={legacyConfig.id} tab="config" />;
-  }
-  const instanceStatus = matchRoute('/instances/:id/status', path);
-  if (instanceStatus) {
-    return <InstanceDetailPage instanceId={instanceStatus.id} tab="status" />;
-  }
-  const instanceQuota = matchRoute('/instances/:id/quota', path);
-  if (instanceQuota) {
-    return <InstanceDetailPage instanceId={instanceQuota.id} tab="workspaceQuota" />;
-  }
-  const instanceWorkspaceQuota = matchRoute('/instances/:id/workspace-quota', path);
-  if (instanceWorkspaceQuota) {
-    return <InstanceDetailPage instanceId={instanceWorkspaceQuota.id} tab="workspaceQuota" />;
-  }
-  const instanceTeamQuota = matchRoute('/instances/:id/team-quota', path);
-  if (instanceTeamQuota) {
-    return <InstanceDetailPage instanceId={instanceTeamQuota.id} tab="teamQuota" />;
-  }
-  const instanceTokenQuota = matchRoute('/instances/:id/token-quota', path);
-  if (instanceTokenQuota) {
-    return <InstanceDetailPage instanceId={instanceTokenQuota.id} tab="tokenQuota" />;
-  }
-  const instanceCost = matchRoute('/instances/:id/cost', path);
-  if (instanceCost) {
-    return <InstanceDetailPage instanceId={instanceCost.id} tab="cost" />;
-  }
-  const instanceAudit = matchRoute('/instances/:id/audit', path);
-  if (instanceAudit) {
-    return <InstanceDetailPage instanceId={instanceAudit.id} tab="audit" />;
-  }
-  const detail = matchRoute('/instances/:id', path);
-  if (detail) {
-    return <InstanceDetailPage instanceId={detail.id} tab="access" />;
+  const legacyExperts = matchRoute('/instances/:id/expert-packages', path);
+  if (legacyExperts) return <Navigate to={'/manager' + canonicalClusterPath(legacyExperts.id, 'expert-packages', params)} replace />;
+  const clusterRoute = matchRoute('/instances/:id/:section', path) || matchRoute('/instances/:id', path);
+  if (clusterRoute) {
+    const section = canonicalClusterSection(clusterRoute.section, isWorkspaceQuotaEnabled(user));
+    if (!section || clusterRoute.section !== section) return <Navigate to={'/manager' + canonicalClusterPath(clusterRoute.id, clusterRoute.section, params, isWorkspaceQuotaEnabled(user))} replace />;
+    if (section === 'setup') return <ClusterSetupResumePage key={clusterRoute.id} instanceId={clusterRoute.id} />;
+    if (section === 'cluster-config') return <ClusterConfigWorkbenchPage key={clusterRoute.id} instanceId={clusterRoute.id} />;
+    const tabs: Record<string, InstancePageTab> = {
+      access: 'access', 'service-resources': 'serviceResources', 'agent-resources': 'agentResources',
+      'other-settings': 'otherSettings', status: 'status',
+    };
+    return <InstanceDetailPage key={clusterRoute.id + ':' + section} instanceId={clusterRoute.id} tab={tabs[section]} />;
   }
   if (path === '/deployments') {
     return <DeploymentListPage />;
@@ -286,7 +269,7 @@ function RouteView() {
 function Shell() {
   const { t } = useTranslation();
   return (
-    <div className="shell">
+    <div className="shell manager-workspace">
       <header className="topbar">
         <div className="brand">
           <img src="/logo.svg" alt={getProductName()} className="brand-logo-img" />
@@ -318,7 +301,6 @@ function Shell() {
       <Sidebar />
       <main className="content">
         <RouteView />
-        <div className="ai-disclaimer">{t('footer.aiNotice')}</div>
       </main>
       <Toaster />
     </div>

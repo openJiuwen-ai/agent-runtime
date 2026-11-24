@@ -26,6 +26,8 @@ import {
 import { Switch } from '../../../components/Switch';
 import { HintTooltip } from '../../../components/HintTooltip';
 import { formatTime } from '../../../utils/format';
+import { useAdmissionHandoff } from '../../../hooks/useAdmissionHandoff';
+import { collectPages } from '../../../utils/overview';
 
 const IA = 'instanceDetail.accessPanel.instance';
 
@@ -76,13 +78,15 @@ type OrgSortField =
 export function InstanceOrgsTab({ instanceId }: Props) {
   const { t } = useTranslation();
 
-  const { data: orgsData, reload: reloadOrgs } = useAsync(() => OrgApi.list(), []);
-  const { data: bindingData, loading, reload: reloadBinding } = useAsync(
+  const { data: orgsData, loading: directoryLoading, error: directoryError, reload: reloadOrgs } = useAsync(
+    () => collectPages((page, page_size) => OrgApi.list({ page, page_size })), [],
+  );
+  const { data: bindingData, loading, error: bindingError, reload: reloadBinding } = useAsync(
     () => InstanceBindingApi.listOrgs(instanceId),
     [instanceId],
   );
 
-  const allOrgs = orgsData?.items ?? [];
+  const allOrgs = orgsData ?? [];
 
   const orgGrantById = useMemo(() => {
     const m = new Map<string, InstanceGrant>();
@@ -111,6 +115,7 @@ export function InstanceOrgsTab({ instanceId }: Props) {
   const [pageSize, setPageSize] = useState(20);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [showAdd, setShowAdd] = useState(false);
+  const admissionHandoff = useAdmissionHandoff(instanceId, 'orgs', () => setShowAdd(true));
 
   /** 引导跳转：其他页面点「未配置准入组织」跳过来时自动打开添加准入组织弹框 */
   useGuideAutoOpen('accessOrgs', () => setShowAdd(true));
@@ -230,20 +235,20 @@ export function InstanceOrgsTab({ instanceId }: Props) {
     .map((o) => ({ id: o.group_id, label: o.display_name, sub: o.group_id }));
 
   return (
-    <div className="flex min-w-0 flex-col gap-4">
-      <div className="page-header w-full min-w-0 flex-wrap items-start gap-y-3">
-        <div className="min-w-[7.5rem] shrink-0">
-          <div className="page-title truncate">{t(`${IA}.orgs`)}</div>
-          <div className="page-subtitle truncate">{t(`${IA}.orgsHint`)}</div>
+    <div className="flex min-w-0 flex-col">
+      <div className="page-header cluster-admission-section__header w-full min-w-0 flex-wrap items-start gap-y-3">
+        <div className="cluster-admission-section__heading">
+          <h3 id="cluster-admission-orgs-title" className="cluster-admission-section__title">{t(`${IA}.orgs`)}</h3>
+          <p className="cluster-admission-section__description">{t(`${IA}.orgsHint`)}</p>
         </div>
-        <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
+        <div className="cluster-admission-section__actions flex min-w-0 flex-wrap items-center justify-end gap-2">
           {checked.size === 0 ? (
             <>
               <ListSearchInput
                 value={searchInput}
                 onChange={setSearchInput}
                 placeholder={t(`${IA}.searchOrgsPlaceholder`)}
-                className="basis-full sm:basis-auto"
+                className="cluster-admission-section__search"
               />
               <button className="btn sm" onClick={() => void reloadBinding()}>
                 {t('common.refresh')}
@@ -260,7 +265,7 @@ export function InstanceOrgsTab({ instanceId }: Props) {
         </div>
       </div>
 
-      <div className="card !p-0">
+      <div className="cluster-admission-section__table">
         {loading ? (
           <div className="p-4 text-sm text-muted">{t('common.loading')}</div>
         ) : (
@@ -409,22 +414,32 @@ export function InstanceOrgsTab({ instanceId }: Props) {
         )}
       </div>
 
-      <Pagination
-        page={page}
-        pageSize={pageSize}
-        total={filtered.length}
-        onChange={(p, ps) => {
-          setPage(p);
-          setPageSize(ps);
-        }}
-      />
+      {filtered.length > 0 && (
+        <div className="cluster-admission-section__footer">
+          <Pagination
+            page={page}
+            pageSize={pageSize}
+            total={filtered.length}
+            onChange={(p, ps) => {
+              setPage(p);
+              setPageSize(ps);
+            }}
+          />
+        </div>
+      )}
 
       {showAdd && (
         <AddToInstanceModal
           title={t(`${IA}.addOrgs`)}
           candidates={candidates}
+          subjectKind="orgs"
+          directoryCount={allOrgs.length}
+          loading={directoryLoading || loading}
+          error={directoryError || bindingError}
+          onReload={() => { void reloadOrgs(); void reloadBinding(); }}
           showExpiresAt
-          manageLink={{ page: t('iam.orgs'), to: '/orgs' }}
+          initialDraft={admissionHandoff.initialDraft}
+          manageLink={{ page: t('iam.orgs'), to: admissionHandoff.managePath, onPrepare: admissionHandoff.prepare }}
           onConfirm={async ({ ids, expires_at, login_policy }) => {
             await InstanceBindingApi.bindOrgs(instanceId, ids, { expires_at, login_policy });
             toast('success', t('success.saved'));
@@ -432,7 +447,7 @@ export function InstanceOrgsTab({ instanceId }: Props) {
             reloadOrgs();
             bumpGuideRevision();
           }}
-          onClose={() => setShowAdd(false)}
+          onClose={() => { admissionHandoff.clear(); setShowAdd(false); }}
         />
       )}
 

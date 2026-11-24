@@ -353,6 +353,11 @@ async def test_sync_data_includes_audit_log_push():
             return_value=ack,
         ),
         patch(
+            "manager_server.core.instance.instance_data_lifecycle.push_user_preference_default_sync_to_gateway",
+            new_callable=AsyncMock,
+            return_value=ack,
+        ),
+        patch(
             "manager_server.core.instance.instance_data_lifecycle.push_audit_log_config_sync_to_gateway",
             new_callable=AsyncMock,
             return_value=ack,
@@ -364,6 +369,11 @@ async def test_sync_data_includes_audit_log_push():
         ),
         patch(
             "manager_server.core.instance.instance_data_lifecycle.push_log_masking_rules_sync_to_gateway",
+            new_callable=AsyncMock,
+            return_value=ack,
+        ),
+        patch(
+            "manager_server.core.instance.instance_data_lifecycle.push_content_masking_config_sync_to_gateway",
             new_callable=AsyncMock,
             return_value=ack,
         ),

@@ -1,12 +1,13 @@
+import { allComponentsConnected } from '../../utils/overview';
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ImportExportApi, InstanceApi } from '../../services/api';
+import { InstanceApi } from '../../services/api';
 import type { InstanceSummary } from '../../types';
 import { useAsync } from '../../hooks/useAsync';
 import { useListSearch } from '../../hooks/useListSearch';
 import { useRouter } from '../../router';
 import { StatusBadge } from '../../components/StatusBadge';
-import { ConfirmDialog } from '../../components/ConfirmDialog';
+import { ClusterManagementActions } from '../../components/ClusterManagementActions';
 import { Empty } from '../../components/Empty';
 import { Pagination } from '../../components/Pagination';
 import { ListSearchInput } from '../../components/ListSearchInput';
@@ -15,15 +16,14 @@ import {
   type ColumnSortValue,
 } from '../../components/TableColumnSort';
 import { TableColumnFilter } from '../../components/TableColumnFilter';
-import { formatTime, relativeTime } from '../../utils/format';
+import { formatTime } from '../../utils/format';
 import { toast } from '../../stores/uiStore';
 import { ApiError } from '../../services/api';
-import { CreateInstanceModal } from './modal/CreateInstanceModal';
 import { ImportClusterModal } from './modal/ImportClusterModal';
 import { useGuideAutoOpen } from '../../hooks/useGuideAutoOpen';
-import { useClustersGuideStatus } from '../../hooks/useGuideStatus';
-import { WarnBadge, type WarnBadgeLink } from '../../components/WarnBadge';
 import { bumpGuideRevision } from '../../stores/guideStore';
+import { WorkspaceNote } from '../../components/WorkspaceNote';
+import { ClusterCardStats } from './ClusterCardStats';
 
 type ViewMode = 'brief' | 'list';
 
@@ -41,185 +41,11 @@ const VIEW_MODE_STORAGE_KEY = 'claw_manager_instance_view';
 
 const INSTANCE_STATUS_VALUES = ['online', 'pending', 'offline'] as const;
 
-async function exportCluster(instance: InstanceSummary, success: string, failed: string) {
-  try {
-    const { blob, filename } = await ImportExportApi.exportCluster(instance.jiuwenclaw_id);
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = filename;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    URL.revokeObjectURL(url);
-    toast('success', success);
-  } catch (e) {
-    const detail = e instanceof ApiError ? e.detail : (e as Error).message;
-    toast('danger', `${failed}${detail}`);
-  }
-}
-
 function readViewMode(): ViewMode {
   const saved = localStorage.getItem(VIEW_MODE_STORAGE_KEY);
   if (saved === 'list') return 'list';
   if (saved === 'brief' || saved === 'compact') return 'brief';
   return 'brief';
-}
-
-function InstanceTopoCard({
-  instance,
-  onChanged,
-  alertLinks,
-}: {
-  instance: InstanceSummary;
-  onChanged: () => void;
-  /** 该集群的引导告警项（未配置准入/Agent/运行时），右上角叹号汇总 */
-  alertLinks?: WarnBadgeLink[];
-}) {
-  const { t } = useTranslation();
-  const { navigate } = useRouter();
-  const [confirmDel, setConfirmDel] = useState(false);
-  const detailHref = `/instances/${instance.jiuwenclaw_id}`;
-
-  return (
-    <div
-      className="instance-card cursor-pointer"
-      title={t('topology.cardClickHint')}
-      onClick={() => navigate(detailHref)}
-    >
-      <div className="instance-card__header">
-        <div className="instance-card__identity min-w-0">
-          <div className="brand-logo shrink-0" aria-hidden>
-            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M9 17h6m-3-3v3M7 8h10M5 5h14a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2z" />
-            </svg>
-          </div>
-          <div className="min-w-0">
-            <div className="instance-card__name truncate" title={instance.jiuwenclaw_name}>
-              {instance.jiuwenclaw_name}
-            </div>
-            <div className="instance-card__id mono truncate" title={instance.jiuwenclaw_id}>
-              {instance.jiuwenclaw_id}
-            </div>
-          </div>
-        </div>
-        {alertLinks && alertLinks.length > 0 && (
-          <div className="ml-auto shrink-0 relative -top-1 -right-1">
-            <WarnBadge className="opacity-100" links={alertLinks} />
-          </div>
-        )}
-      </div>
-
-      <div className="instance-card__status">
-        <div className="instance-card__status-row">
-          <span className="instance-card__status-label">
-            {t('topology.gateway')}
-            <StatusBadge status={instance.gateway_status} />
-          </span>
-          <span
-            className="instance-card__probe mono"
-            title={instance.gateway_last_alive ? formatTime(instance.gateway_last_alive) : undefined}
-          >
-            {t('topology.lastAlive')} {relativeTime(instance.gateway_last_alive)}
-          </span>
-        </div>
-        <div className="instance-card__status-row">
-          <span className="instance-card__status-label">
-            {t('topology.runtime')}
-            <StatusBadge status={instance.runtime_status} />
-          </span>
-          <span
-            className="instance-card__probe mono"
-            title={instance.runtime_last_alive ? formatTime(instance.runtime_last_alive) : undefined}
-          >
-            {t('topology.lastAlive')} {relativeTime(instance.runtime_last_alive)}
-          </span>
-        </div>
-        <div className="instance-card__status-row">
-          <span className="instance-card__status-label">
-            {t('topology.userWeb')}
-            <StatusBadge status={instance.user_web_status || 'pending'} />
-          </span>
-          <span
-            className="instance-card__probe mono"
-            title={instance.user_web_last_alive ? formatTime(instance.user_web_last_alive) : undefined}
-          >
-            {t('topology.lastAlive')} {relativeTime(instance.user_web_last_alive)}
-          </span>
-        </div>
-      </div>
-
-      <div className="instance-card__actions">
-        <button
-          className="btn sm"
-          title={t('topology.export')}
-          onClick={(e) => {
-            e.stopPropagation();
-            void exportCluster(instance, t('topology.exportSuccess'), t('topology.exportFailed'));
-          }}
-        >
-          {t('topology.export')}
-        </button>
-        <button
-          className="btn sm"
-          title={t('instanceDetail.tabs.access')}
-          onClick={(e) => {
-            e.stopPropagation();
-            navigate(`${detailHref}/access`);
-          }}
-        >
-          {t('topology.cardAccess')}
-        </button>
-        <button
-          className="btn sm"
-          title={t('instanceDetail.tabs.clusterConfig')}
-          onClick={(e) => {
-            e.stopPropagation();
-            navigate(`${detailHref}/cluster-config`);
-          }}
-        >
-          {t('topology.cardConfig')}
-        </button>
-        <button
-          className="btn sm"
-          title={t('instanceDetail.tabs.status')}
-          onClick={(e) => {
-            e.stopPropagation();
-            navigate(`${detailHref}/status`);
-          }}
-        >
-          {t('topology.cardStatus')}
-        </button>
-        <button
-          className="btn sm danger"
-          title={t('topology.deleteConfirm')}
-          onClick={(e) => {
-            e.stopPropagation();
-            setConfirmDel(true);
-          }}
-        >
-          {t('common.delete')}
-        </button>
-      </div>
-
-      <ConfirmDialog
-        open={confirmDel}
-        message={t('topology.deleteConfirm')}
-        danger
-        onConfirm={async () => {
-          try {
-            await InstanceApi.remove(instance.jiuwenclaw_id);
-            toast('success', t('success.deleted'));
-            bumpGuideRevision();
-            onChanged();
-          } catch (e) {
-            toast('danger', t('errors.deleteFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
-          }
-        }}
-        onClose={() => setConfirmDel(false)}
-      />
-    </div>
-  );
 }
 
 function InstanceListTable({
@@ -251,7 +77,6 @@ function InstanceListTable({
 }) {
   const { t } = useTranslation();
   const { navigate } = useRouter();
-  const [deleteTarget, setDeleteTarget] = useState<InstanceSummary | null>(null);
 
   const statusFilterOptions = useMemo(
     () => [
@@ -263,7 +88,7 @@ function InstanceListTable({
 
   return (
     <>
-      <div className="card !p-0">
+      <div className="card manager-page-table !p-0">
         <div className="overflow-x-auto">
           <table className="table w-max min-w-full">
             <thead>
@@ -407,21 +232,10 @@ function InstanceListTable({
                           className="btn sm"
                           onClick={() => navigate(`/instances/${instance.jiuwenclaw_id}`)}
                         >
-                          {t('topology.viewDetail')}
+                          {t('redesign.clusterWorkbench', { defaultValue: '配置工作台' })}
                         </button>
-                        <button
-                          className="btn sm"
-                          onClick={() => void exportCluster(
-                            instance,
-                            t('topology.exportSuccess'),
-                            t('topology.exportFailed'),
-                          )}
-                        >
-                          {t('topology.export')}
-                        </button>
-                        <button className="btn sm danger" onClick={() => setDeleteTarget(instance)}>
-                          {t('common.delete')}
-                        </button>
+                        <button className="btn primary sm" onClick={() => navigate(`/instances/${encodeURIComponent(instance.jiuwenclaw_id)}/setup`)}>{t('redesign.continueClusterSetup', { defaultValue: '继续配置' })} →</button>
+                        <ClusterManagementActions compact instanceId={instance.jiuwenclaw_id} name={instance.jiuwenclaw_name} onDeleted={onChanged} />
                       </div>
                     </td>
                   </tr>
@@ -432,23 +246,6 @@ function InstanceListTable({
         </div>
       </div>
 
-      <ConfirmDialog
-        open={deleteTarget !== null}
-        message={t('topology.deleteConfirm')}
-        danger
-        onConfirm={async () => {
-          if (!deleteTarget) return;
-          try {
-            await InstanceApi.remove(deleteTarget.jiuwenclaw_id);
-            toast('success', t('success.deleted'));
-            bumpGuideRevision();
-            onChanged();
-          } catch (e) {
-            toast('danger', t('errors.deleteFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
-          }
-        }}
-        onClose={() => setDeleteTarget(null)}
-      />
     </>
   );
 }
@@ -491,6 +288,7 @@ function ViewModeToggle({
 }
 
 export function InstanceListPage() {
+  const { navigate } = useRouter();
   const { t } = useTranslation();
   const { searchInput, setSearchInput, searchQuery } = useListSearch();
   const [gatewayStatusFilter, setGatewayStatusFilter] = useState<string>('');
@@ -501,12 +299,11 @@ export function InstanceListPage() {
   const [sortBy, setSortBy] = useState<InstanceSortField | ''>('');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [viewMode, setViewMode] = useState<ViewMode>(() => readViewMode());
-  const [createOpen, setCreateOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
   /** 引导跳转：其他页面点「未创建集群」跳过来时自动打开新建弹框 */
-  useGuideAutoOpen('instanceCreate', () => setCreateOpen(true));
+  useGuideAutoOpen('instanceCreate', () => navigate('/configuration-wizard?from=cluster'));
 
   const sortOptions = useMemo(
     () => [
@@ -580,25 +377,6 @@ export function InstanceListPage() {
     void instances.reload();
   };
 
-  /** 各集群引导告警（未配置准入用户/组织、Agent、运行时），用于方块右上角叹号 */
-  const clusterIds = useMemo(
-    () => (instances.data?.items ?? []).map((it) => it.jiuwenclaw_id),
-    [instances.data],
-  );
-  const alertsByInstance = useClustersGuideStatus(clusterIds);
-  const clusterAlertLinks = (instanceId: string): WarnBadgeLink[] => {
-    const labels: Record<string, string> = {
-      accessUsers: t('instanceDetail.accessPanel.instance.users'),
-      accessOrgs: t('instanceDetail.accessPanel.instance.orgs'),
-      agentResource: t('instanceDetail.resourcePanel.tabs.agent'),
-      poolResource: t('instanceDetail.resourcePanel.tabs.serviceResource'),
-    };
-    return (alertsByInstance[instanceId] ?? []).map((a) => ({
-      label: t('guide.missingItem', { item: labels[a.labelKey] ?? a.labelKey }),
-      to: a.to,
-      openTarget: a.openTarget,
-    }));
-  };
 
   const handleRefresh = async () => {
     if (refreshing) return;
@@ -625,48 +403,62 @@ export function InstanceListPage() {
     localStorage.setItem(VIEW_MODE_STORAGE_KEY, mode);
   };
 
+  const renderClusterCard = (instance: InstanceSummary) => {
+    const connected = allComponentsConnected(instance);
+    return (
+      <article className="card cluster-card" key={instance.jiuwenclaw_id}>
+        <div className="cluster-card__head">
+          <div className="cluster-card__identity min-w-0">
+            <div className="cluster-card__identity-icon" aria-hidden="true">⌁</div>
+            <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h2 className="truncate text-base font-semibold">{instance.jiuwenclaw_name}</h2>
+            </div>
+            <p className="mono mt-1 truncate text-xs text-muted">{instance.jiuwenclaw_id} · {instance.namespace || 'default'}</p>
+            </div>
+          </div>
+          <span className={`pill sm ${connected ? 'ok' : 'warn'}`}>{connected ? t('redesign.connected', { defaultValue: '运行正常' }) : t('redesign.inspect', { defaultValue: '待检查' })}</span>
+        </div>
+        <ClusterCardStats instanceId={instance.jiuwenclaw_id} />
+        {!connected && <div className="cluster-card__notice"><span className="statusDot" />{t('redesign.clusterNeedsInspection', { defaultValue: '部分组件需要检查，进入工作台继续配置。' })}</div>}
+        <div className="cluster-card__actions">
+          <button type="button" className="btn" onClick={() => navigate(`/instances/${instance.jiuwenclaw_id}/cluster-config`)}>{t('redesign.clusterWorkbench', { defaultValue: '配置工作台' })}</button>
+          <button type="button" className="btn primary" onClick={() => navigate(`/instances/${instance.jiuwenclaw_id}/setup`)}>{t('redesign.continueClusterSetup', { defaultValue: '继续配置' })} →</button>
+          <div className="cluster-card__management-actions"><ClusterManagementActions compact size="md" instanceId={instance.jiuwenclaw_id} name={instance.jiuwenclaw_name} onDeleted={refresh} /></div>
+        </div>
+      </article>
+    );
+  };
+
   return (
     <>
-      <div className="flex min-w-0 flex-col gap-4">
+      <div className="cluster-management-workspace flex min-w-0 flex-col gap-4">
         <div className="page-header w-full min-w-0 flex-wrap items-start gap-y-3">
           <div className="min-w-[7.5rem] max-w-[12rem] shrink-0 sm:max-w-[16rem]">
-            <div className="page-title truncate" title={t('topology.title')}>
-              {t('topology.title')}
+            <div className="page-title truncate" title={t('redesign.clusterManagement', { defaultValue: '集群管理' })}>
+              {t('redesign.clusterManagement', { defaultValue: '集群管理' })}
             </div>
-            <div className="page-subtitle truncate" title={t('topology.subtitle')}>
-              {t('topology.subtitle')}
+            <div className="page-subtitle truncate" title={t('redesign.clusterManagementSubtitle', { defaultValue: '服务实例是 Agent 真正运行的环境；进入集群后可继续配置准入、运行资源和 Agent。' })}>
+              {t('redesign.clusterManagementSubtitle', { defaultValue: '服务实例是 Agent 真正运行的环境；进入集群后可继续配置准入、运行资源和 Agent。' })}
             </div>
           </div>
-          <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
-            <ListSearchInput
-              value={searchInput}
-              onChange={setSearchInput}
-              placeholder={t('topology.searchPlaceholder')}
-              className="basis-full sm:basis-auto"
-            />
-            <ViewModeToggle value={viewMode} onChange={handleViewModeChange} />
-            <button
-              className="btn sm"
-              disabled={refreshing}
-              onClick={() => void handleRefresh()}
-            >
-              {refreshing ? t('common.loading') : t('common.refresh')}
-            </button>
-            <button className="btn sm" onClick={() => setImportOpen(true)}>
-              {t('topology.import')}
-            </button>
-            <button className="btn primary sm" onClick={() => setCreateOpen(true)}>
-              + {t('topology.createInstance')}
-            </button>
-          </div>
+        <div className="cluster-management-toolbar">
+          <ListSearchInput value={searchInput} onChange={setSearchInput} placeholder={t('topology.searchPlaceholder')} className="min-w-0 flex-1" />
+          <ViewModeToggle value={viewMode} onChange={handleViewModeChange} />
+          <button className="btn sm" disabled={refreshing} onClick={() => void handleRefresh()}>{refreshing ? t('common.loading') : t('common.refresh')}</button>
+          <button className="btn sm" onClick={() => setImportOpen(true)}>{t('topology.import')}</button>
+          <button className="btn primary sm" onClick={() => navigate('/configuration-wizard?from=cluster')}>+ {t('redesign.createCluster', { defaultValue: '新建集群' })}</button>
+        </div>
         </div>
 
         <div className="flex w-full min-w-0 shrink-0 flex-col gap-4">
           {instances.loading ? (
             <div className="text-sm text-muted">{t('common.loading')}</div>
           ) : instances.error ? (
-            <div className="card text-sm text-danger">
-              {t('errors.loadFailed', { detail: instances.error })}
+            <div className="flex flex-col gap-4">
+              <div className="card text-sm text-danger">
+                {t('errors.loadFailed', { detail: instances.error })}
+              </div>
             </div>
           ) : viewMode === 'list' ? (
             <InstanceListTable
@@ -683,20 +475,11 @@ export function InstanceListPage() {
               userWebStatusFilter={userWebStatusFilter}
               onUserWebStatusFilterChange={handleUserWebStatusFilterChange}
             />
-          ) : !instances.data || instances.data.items.length === 0 ? (
-            <div className="card">
-              <Empty text={t('overview.noInstances')} />
-            </div>
+          ) : !instances.data?.items.length ? (
+            <div className="card"><Empty text={t('common.empty')} /></div>
           ) : (
-            <div className="instance-card-grid">
-              {instances.data.items.map((it) => (
-                <InstanceTopoCard
-                  key={it.jiuwenclaw_id}
-                  instance={it}
-                  onChanged={refresh}
-                  alertLinks={clusterAlertLinks(it.jiuwenclaw_id)}
-                />
-              ))}
+            <div className="cluster-card-grid">
+              {(instances.data?.items ?? []).map(it => renderClusterCard(it))}
             </div>
           )}
 
@@ -711,18 +494,12 @@ export function InstanceListPage() {
               }}
             />
           )}
+          <WorkspaceNote title="服务实例是 Agent 真正运行的环境">
+            新建集群从登记连接信息开始，再按“集群准入 → 运行资源 → Agent 绑定 → 状态检查”完成配置；中途离开后点击“继续配置”，会根据已保存的配置进入下一项。
+          </WorkspaceNote>
         </div>
       </div>
 
-      <CreateInstanceModal
-        open={createOpen}
-        onClose={() => setCreateOpen(false)}
-        onCreated={() => {
-          setCreateOpen(false);
-          bumpGuideRevision();
-          refresh();
-        }}
-      />
       <ImportClusterModal
         open={importOpen}
         onClose={() => setImportOpen(false)}

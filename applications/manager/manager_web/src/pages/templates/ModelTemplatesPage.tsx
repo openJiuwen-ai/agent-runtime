@@ -1,3 +1,4 @@
+import { agentResourceReferencesPath } from '../../utils/agentTemplateNavigation';
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAsync } from '../../hooks/useAsync';
@@ -169,7 +170,7 @@ export function ModelTemplatesPage() {
       </div>
 
       <div className="flex w-full min-w-0 shrink-0 flex-col gap-4">
-      <div className="card !p-0">
+      <div className="card manager-page-table !p-0">
         {loading ? (
           <div className="p-4 text-sm text-muted">{t('common.loading')}</div>
         ) : error ? (
@@ -339,13 +340,13 @@ export function ModelTemplatesPage() {
                     </td>
                     <td className="whitespace-nowrap">
                       {row.reference_count > 0 ? (
-                        <span
+                        <button type="button"
                           className="tag cursor-pointer"
                           title={t('modelTemplate.referenceHint')}
-                          onClick={() => navigate('/agent-templates')}
+                          onClick={() => navigate(agentResourceReferencesPath('model', row.template_id, row.template_name))}
                         >
                           {row.reference_count}
-                        </span>
+                        </button>
                       ) : (
                         <span className="text-[11px] text-muted">0</span>
                       )}

@@ -20,7 +20,10 @@ import type { ContainerTemplate } from '../../types';
 import { formatTime, truncate } from '../../utils/format';
 import { parseConfigSyncImport } from '../../utils/serviceConfigExport';
 import { useRouter } from '../../router';
+import { runtimeCatalogPath, runtimeClusterReturnPath } from '../../utils/runtimeResourceNavigation';
 import { ContainerTemplateModal } from './ContainerTemplateModal';
+import { WorkspaceNote } from '../../components/WorkspaceNote';
+import './ServiceConfigTemplatesPage.css';
 
 type ContainerTemplateSortField = 'template_name' | 'container_id' | 'updated_at';
 
@@ -29,8 +32,11 @@ type ContainerTemplateSortField = 'template_name' | 'container_id' | 'updated_at
  * 供运行时模板绑定（binding 关系见运行时模板编辑页）。
  */
 export function ContainerTemplatesPage() {
-  const { t } = useTranslation();
-  const { navigate } = useRouter();
+  const { t, i18n } = useTranslation();
+  const tr = (cn: string, en: string) => i18n.language.startsWith('zh') ? cn : en;
+  const { params, navigate } = useRouter();
+  const runtimeCatalog = runtimeCatalogPath('service-config-templates', params);
+  const clusterReturnPath = runtimeClusterReturnPath(params);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [enabledFilter, setEnabledFilter] = useState('');
@@ -91,7 +97,12 @@ export function ContainerTemplatesPage() {
           const text = String(reader.result ?? '');
           const parsed = JSON.parse(text) as unknown;
           const { body, templateCount } = parseConfigSyncImport(parsed);
-          await ServiceConfigTemplateApi.create(body);
+          const saved = await ServiceConfigTemplateApi.create(body);
+          if (clusterReturnPath && saved.enabled) {
+            const context = new URLSearchParams(params);
+            context.set('preparedRuntime', saved.template_id);
+            navigate(runtimeCatalogPath('container-templates', context), { replace: true });
+          }
           toast(
             'success',
             templateCount > 1
@@ -143,6 +154,7 @@ export function ContainerTemplatesPage() {
     setTogglingId(row.template_id);
     try {
       await ContainerTemplateApi.update(row.template_id, { enabled });
+      bumpGuideRevision();
       toast('success', t('success.saved'));
     } catch (toggleError) {
       setItems((current) =>
@@ -161,13 +173,22 @@ export function ContainerTemplatesPage() {
   return (
     <>
       <div className="flex min-w-0 flex-col gap-4">
-        <div className="page-header w-full min-w-0 flex-wrap items-start gap-y-3">
-          <div className="min-w-[7.5rem] max-w-[20rem] shrink-0 sm:max-w-[32rem]">
+        {clusterReturnPath && (
+          <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+            <span className="text-muted">正在为当前集群准备容器模板。下一步在运行时模板管理中选择容器，再回集群绑定运行资源。</span>
+            <div className="flex flex-wrap gap-2">
+              <button className="btn sm" onClick={() => navigate(clusterReturnPath)}>← 返回集群运行资源</button>
+              <button className="btn sm primary" onClick={() => navigate(runtimeCatalog)}>前往运行时模板管理 →</button>
+            </div>
+          </div>
+        )}
+        <div className="page-header runtime-catalog-header w-full min-w-0 flex-wrap items-start gap-y-3">
+          <div className="runtime-catalog-header__identity">
             <div className="page-title">{t('containerTemplate.title')}</div>
             <div className="page-subtitle">{t('containerTemplate.subtitle')}</div>
           </div>
-          <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
-            <ListSearchInput value={searchInput} onChange={setSearchInput} placeholder={t('containerTemplate.searchPlaceholder')} className="basis-full sm:basis-auto" />
+          <div className="runtime-catalog-header__toolbar">
+            <ListSearchInput value={searchInput} onChange={setSearchInput} placeholder={t('containerTemplate.searchPlaceholder')} className="runtime-catalog-header__search" />
             <button className="btn sm" onClick={() => void reload()}>{t('common.refresh')}</button>
             <input
               ref={importInputRef}
@@ -189,7 +210,7 @@ export function ContainerTemplatesPage() {
             </button>
           </div>
         </div>
-        <div className="card !p-0">
+        <div className="card manager-page-table !p-0">
           {loading ? (
             <div className="p-4 text-sm text-muted">{t('common.loading')}</div>
           ) : error ? (
@@ -246,7 +267,10 @@ export function ContainerTemplatesPage() {
                   ) : items.map((row) => (
                     <tr key={row.template_id}>
                       <td className="align-top">
-                        <div className="font-medium text-text-strong">{row.template_name}</div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium text-text-strong">{row.template_name}</span>
+                          {!!row.data?.deployment_default && <span className="tag shrink-0">{tr('默认', 'Default')}</span>}
+                        </div>
                         <div className="mono text-[11px] text-muted">{row.template_id}</div>
                       </td>
                       <td className="mono max-w-[14rem] break-all text-xs" title={row.container_id}>
@@ -263,7 +287,7 @@ export function ContainerTemplatesPage() {
                           <span
                             className="tag cursor-pointer"
                             title={t('containerTemplate.referenceHint')}
-                            onClick={() => navigate('/service-config-templates')}
+                            onClick={() => navigate(runtimeCatalog)}
                           >
                             {row.reference_count}
                           </span>
@@ -288,6 +312,9 @@ export function ContainerTemplatesPage() {
         {data ? (
           <Pagination page={page} pageSize={pageSize} total={data.total ?? data.items.length} onChange={(nextPage, nextSize) => { setPage(nextPage); setPageSize(nextSize); }} />
         ) : null}
+        <WorkspaceNote title="容器模板由运行时模板统一引用" action={<button className="btn sm" type="button" onClick={() => navigate(runtimeCatalog)}>前往运行时模板管理 →</button>}>
+          容器模板定义镜像、环境变量和挂载。可在运行时模板中组合容器，再将运行时模板绑定到集群。
+        </WorkspaceNote>
       </div>
       <ContainerTemplateModal
         open={modalOpen}

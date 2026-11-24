@@ -21,6 +21,7 @@ import {
 } from '../utils/matchExpr';
 import { AgentTemplateApi, OrgApi, UserApi } from '../services/api';
 import { useAsync } from '../hooks/useAsync';
+import { collectPages } from '../utils/overview';
 
 interface SelectOption { id: string; label: string }
 
@@ -32,7 +33,7 @@ function useFieldOptions(field: MatchField): SelectOption[] {
   const { data: users } = useAsync(() => UserApi.list(), []);
   const loadAgents = allowedFields.includes('bot_id');
   const { data: agents } = useAsync(
-    () => (loadAgents ? AgentTemplateApi.list() : Promise.resolve({ items: [] as { template_id: string; template_name?: string }[] })),
+    async () => ({ items: loadAgents ? await collectPages((page, page_size) => AgentTemplateApi.list({ page, page_size })) : [] }),
     [loadAgents],
   );
 

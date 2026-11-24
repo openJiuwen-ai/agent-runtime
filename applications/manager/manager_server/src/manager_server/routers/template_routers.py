@@ -6,6 +6,8 @@ service_config_container（容器模板，供运行时模板绑定）。
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -44,6 +46,16 @@ from manager_server.core.template.service_config_container import (
 )
 from manager_server.core.template.service_config_template import (
     ServiceConfigTemplateService,
+)
+from manager_server.core.template.deployment_defaults import (
+    DeploymentDefaultsChanged,
+    DefaultContainerConflict,
+    deployment_defaults_status,
+    initialize_deployment_defaults,
+    preview_deployment_defaults,
+    restore_deployment_defaults,
+    preview_default_containers,
+    restore_default_container,
 )
 from manager_server.core.template.skill_prebuilt_template import (
     SkillPrebuiltTemplateService,
@@ -85,9 +97,11 @@ from manager_server.schemas.template_schemas import (
     PermissionsTemplateListQuery,
     PermissionsTemplateUpdateBody,
     ServiceConfigContainerCreateBody,
+    ContainerDeploymentDefaultsRestoreBody,
     ServiceConfigContainerListQuery,
     ServiceConfigContainerUpdateBody,
     ServiceConfigTemplateCreateBody,
+    DeploymentDefaultsRestoreBody,
     ServiceConfigTemplateListQuery,
     ServiceConfigTemplateUpdateBody,
     SkillPrebuiltTemplateCreateBody,
@@ -1057,7 +1071,69 @@ async def delete_mcp_template(
     )
 
 
+# --- deployment generated runtime config discovery ---
+
+@templates_router.get("/service-config-templates/agentserver-discovery", response_model=ResponseModel)
+async def discover_agentserver_config():
+    """Read deployment-generated agentserver.json on the Manager host.
+
+    The path is explicit through AGENTSERVER_JSON_PATH or MANAGER_DEPLOY_TOOL_DIR;
+    the browser never needs access to the server filesystem.
+    """
+    candidates = []
+    configured = os.getenv("AGENTSERVER_JSON_PATH")
+    tool_dir = os.getenv("MANAGER_DEPLOY_TOOL_DIR")
+    if configured:
+        candidates.append(Path(configured))
+    if tool_dir:
+        candidates.append(Path(tool_dir) / "conf" / "agentserver.json")
+    for path in candidates:
+        try:
+            if path.is_file():
+                return ResponseModel(
+                    code=200,
+                    message="success",
+                    data={"found": True, "source": str(path), "config": json.loads(path.read_text(encoding="utf-8"))},
+                )
+        except (OSError, json.JSONDecodeError) as exc:
+            return ResponseModel(
+                code=200,
+                message="config_error",
+                data={"found": False, "source": str(path), "error": str(exc)},
+            )
+    return ResponseModel(code=200, message="not_found", data={"found": False, "configured": bool(candidates)})
+
+
 # --- service_config_template ---
+
+
+@templates_router.get("/service-config-templates/deployment-defaults", response_model=ResponseModel)
+async def get_deployment_defaults(handler: Annotated[DBHandler, Depends(get_db_handler)]):
+    return ResponseModel(code=200, message="success", data=await deployment_defaults_status(handler))
+
+
+@templates_router.post("/service-config-templates/deployment-defaults/initialize", response_model=ResponseModel)
+async def prepare_deployment_defaults(handler: Annotated[DBHandler, Depends(get_db_handler)]):
+    return ResponseModel(code=200, message="success", data=await initialize_deployment_defaults(handler))
+
+
+@templates_router.get("/service-config-templates/deployment-defaults/preview", response_model=ResponseModel)
+async def get_deployment_defaults_preview():
+    return ResponseModel(code=200, message="success", data=preview_deployment_defaults())
+
+
+@templates_router.post("/service-config-templates/deployment-defaults/restore", response_model=ResponseModel)
+async def save_deployment_defaults_copy(
+    body: DeploymentDefaultsRestoreBody,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    try:
+        saved = await restore_deployment_defaults(handler, body)
+    except DeploymentDefaultsChanged as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ResponseModel(code=200, message="success", data=saved.model_dump())
 
 
 @templates_router.post("/service-config-templates", response_model=ResponseModel)
@@ -1185,6 +1261,25 @@ async def delete_service_config_template(
 
 
 # --- service_config_container（容器模板）---
+
+
+@templates_router.get("/container-templates/deployment-defaults/preview", response_model=ResponseModel)
+async def get_default_container_preview():
+    return ResponseModel(code=200, message="success", data=preview_default_containers())
+
+
+@templates_router.post("/container-templates/deployment-defaults/restore", response_model=ResponseModel)
+async def save_default_container_copy(
+    body: ContainerDeploymentDefaultsRestoreBody,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    try:
+        saved = await restore_default_container(handler, body)
+    except (DeploymentDefaultsChanged, DefaultContainerConflict) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ResponseModel(code=200, message="success", data=saved.model_dump())
 
 
 @templates_router.post("/container-templates", response_model=ResponseModel)

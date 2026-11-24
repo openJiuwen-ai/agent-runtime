@@ -33,6 +33,7 @@ import type {
   ServiceConfigTemplateCreateBody,
   ServiceConfigTemplateUpdateBody,
   ContainerTemplate,
+  ServiceConfigContainerBrief,
   ContainerTemplateCreateBody,
   ContainerTemplateUpdateBody,
   ResponseModel,
@@ -291,6 +292,7 @@ function idpHttp<T>(path: string, opts: RequestOptions = {}): Promise<T> {
 
 export const SystemApi = {
   health: () => http<{ status: string }>('/health'),
+  developmentMode: () => http<{ offline: boolean }>('/dev-mode'),
   managerWsStatus: () => http<ManagerWsStatus>('/manager-ws/status'),
 };
 
@@ -1012,7 +1014,7 @@ export const AgentTemplateApi = {
 };
 export const BotApi = AgentTemplateApi;
 
-/** Agent 模板（agent_definition）：有效 Agent 配置模板 × 有效运行时模板的派生目录。 */
+/** Agent 模板（agent_definition）：管理员手动创建的 Agent 配置模板与运行时模板组合。 */
 export interface AgentDefinition {
   agent_id: string;
   agent_name: string;
@@ -1091,6 +1093,7 @@ export const InstanceAgentResourceApi = {
       resource_desc?: string | null;
       enabled?: boolean;
       expires_at?: string | null;
+      data?: Record<string, unknown> | null;
     },
   ) =>
     http<{ items: InstanceAgentResource[] }>(
@@ -1176,6 +1179,7 @@ export const InstanceServiceResourceApi = {
       priority?: number;
       enabled?: boolean;
       expires_at?: string | null;
+      data?: Record<string, unknown> | null;
     },
   ) =>
     http<{ items: InstanceServiceResource[] }>(
@@ -1329,7 +1333,7 @@ export const UserConsoleApi = {
     const data = await idpHttp<{ orgs: Org[] }>('/v1/auth/me/orgs');
     return { orgs: excludeNoOrgItems(data.orgs) };
   },
-  agentContexts: () => http<{ contexts: UserAgentContext[] }>('/v1/user-console/agent-contexts'),
+  agentContexts: () => http<{ contexts: UserAgentContext[]; empty_reason?: 'no_grant' | 'no_agent_template' | null }>('/v1/user-console/agent-contexts'),
   /** 设置用户面动态反代 Cookie（jiuwenclaw_id） */
   setActiveCluster: (jiuwenclaw_id: string) =>
     http<{ jiuwenclaw_id: string }>('/v1/user-console/active-cluster', {
@@ -1759,7 +1763,37 @@ export const PermissionsTemplateApi = {
     ),
 };
 
+export interface DeploymentDefaultsStatus {
+  status: 'unconfigured' | 'not_found' | 'invalid' | 'available' | 'ready';
+  source?: string;
+  fingerprint?: string;
+  message?: string;
+  templates: { template_id: string; template_name: string; enabled: boolean; customized?: boolean }[];
+  namespaces?: string[];
+  container_count: number;
+  created?: number;
+}
+
+export interface DeploymentDefaultPreviewItem {
+  source_template_id: string;
+  template: ServiceConfigTemplateCreateBody;
+  containers: ServiceConfigContainerBrief[];
+}
+
+export interface DeploymentDefaultsPreview {
+  status: 'unconfigured' | 'not_found' | 'invalid' | 'available';
+  message?: string;
+  fingerprint?: string;
+  templates: DeploymentDefaultPreviewItem[];
+}
+
 export const ServiceConfigTemplateApi = {
+  previewDeploymentDefaults: () => http<DeploymentDefaultsPreview>('/v1/service-config-templates/deployment-defaults/preview'),
+  restoreDeploymentDefaults: (body: { fingerprint: string; source_template_id: string; template: ServiceConfigTemplateCreateBody }) =>
+    http<ServiceConfigTemplate>('/v1/service-config-templates/deployment-defaults/restore', { method: 'POST', body }),
+  deploymentDefaults: () => http<DeploymentDefaultsStatus>('/v1/service-config-templates/deployment-defaults'),
+  initializeDeploymentDefaults: () => http<DeploymentDefaultsStatus>('/v1/service-config-templates/deployment-defaults/initialize', { method: 'POST' }),
+  discoverAgentserverConfig: () => http<{ found: boolean; source?: string; configured?: boolean; error?: string; config?: unknown }>('/v1/service-config-templates/agentserver-discovery'),
   list: (params?: {
     page?: number;
     page_size?: number;
@@ -1786,7 +1820,22 @@ export const ServiceConfigTemplateApi = {
     ),
 };
 
+export interface DeploymentContainerPreviewItem {
+  source_container_id: string;
+  template: ContainerTemplateCreateBody;
+}
+
+export interface DeploymentContainerPreview {
+  status: 'unconfigured' | 'not_found' | 'invalid' | 'available';
+  message?: string;
+  fingerprint?: string;
+  templates: DeploymentContainerPreviewItem[];
+}
+
 export const ContainerTemplateApi = {
+  previewDeploymentDefaults: () => http<DeploymentContainerPreview>('/v1/container-templates/deployment-defaults/preview'),
+  restoreDeploymentDefaults: (body: { fingerprint: string; source_container_id: string; template: ContainerTemplateCreateBody }) =>
+    http<ContainerTemplate>('/v1/container-templates/deployment-defaults/restore', { method: 'POST', body }),
   list: (params?: {
     page?: number;
     page_size?: number;

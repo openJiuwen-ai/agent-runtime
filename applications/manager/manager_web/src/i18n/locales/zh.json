@@ -43,7 +43,8 @@
     "pleaseSelect": "请选择",
     "updatedAt": "更新时间",
     "configRefreshCost": "保存后将下发到网关并触发运行时强制刷新（config_refresh）：该运行时下全部 AgentServer Pod 会优雅日落并按新配置重建。存量会话不受影响；重建期间新会话可能冷启动变慢，短时间内连续变更可能被容量保护暂时拒绝，稍后会自动恢复。",
-    "configRefreshCostTemplate": "该模板已被实例引用时，保存将把变更下发到网关并触发运行时强制刷新（config_refresh）：对应运行时下全部 AgentServer Pod 优雅日落并按新配置重建。存量会话不受影响；重建期间新会话可能冷启动变慢，短时间内连续变更可能被容量保护暂时拒绝，稍后会自动恢复。"
+    "configRefreshCostTemplate": "该模板已被实例引用时，保存将把变更下发到网关并触发运行时强制刷新（config_refresh）：对应运行时下全部 AgentServer Pod 优雅日落并按新配置重建。存量会话不受影响；重建期间新会话可能冷启动变慢，短时间内连续变更可能被容量保护暂时拒绝，稍后会自动恢复。",
+    "optional": "可选"
   },
   "importExport": {
     "import": "导入",
@@ -84,13 +85,13 @@
     "modelTemplates": "模型",
     "embeddingTemplates": "Embedding模型",
     "skillWhitelistTemplates": "预置Skill",
-    "expertPackages": "专家包",
+    "expertPackages": "专家与专家包",
     "safetyGuardrails": "安全护栏",
     "a2aManagement": "A2A管理",
     "extensionTemplates": "扩展配置",
     "mcpTemplates": "MCP配置",
     "agentManagement": "Agent配置模板",
-    "serviceConfigTemplates": "运行时模板",
+    "serviceConfigTemplates": "运行时模板管理",
     "agentDefinitions": "Agent模板",
     "iam": "身份中心",
     "users": "用户",
@@ -120,8 +121,8 @@
     "clusterAlerts": "集群存在未配置项"
   },
   "safetyGuardrails": {
-    "title": "安全护栏",
-    "subtitle": "配置 Agent 安全护栏策略",
+    "title": "工具安全策略",
+    "subtitle": "管理创建 Agent 时可配置的工具安全护栏",
     "empty": "暂无安全护栏",
     "new": "新建安全护栏",
     "edit": "编辑安全护栏",
@@ -269,8 +270,8 @@
     }
   },
   "topology": {
-    "title": "集群管理",
-    "subtitle": "管理 {{productName}} 集群",
+    "title": "服务实例",
+    "subtitle": "管理接入已部署好的 JiuwenSwarm 运行实例（包括 Gateway、Runtime、User Web等）",
     "createInstance": "新建集群",
     "instanceStatus": "集群状态",
     "gatewayStatus": "Gateway 状态",
@@ -350,7 +351,7 @@
       "access": "集群准入",
       "clusterConfig": "集群配置",
       "config": "基础配置",
-      "status": "状态监控",
+      "status": "连接状态",
       "quotaManagement": "配额管理",
       "tokenQuota": "Token配额",
       "cost": "成本统计",
@@ -414,7 +415,7 @@
         "serviceResource": "运行时"
       },
       "agent": {
-        "title": "Agent",
+        "title": "Agent绑定",
         "subtitle": "基于 Agent 配置模板接入并管理 Agent，配置各 Agent 的授权范围",
         "agentLabel": "Agent配置模板",
         "agentInstance": "Agent实例",
@@ -439,7 +440,7 @@
         "resourceDescPlaceholder": "请输入资源描述（可选）"
       },
       "serviceResource": {
-        "title": "运行时",
+        "title": "运行资源",
         "subtitle": "基于 运行时模板 创建并管理实例池，配置各池的调度策略，实例在会话触发时按需分配",
         "template": "运行时模板",
         "scopeLabel": "授权范围",
@@ -754,7 +755,7 @@
   },
   "modelTemplate": {
     "title": "模型",
-    "subtitle": "维护大语言模型模板",
+    "subtitle": "管理创建 Agent 时可使用的模型配置",
     "new": "新建模型",
     "edit": "编辑模型",
     "templateName": "模板名称",
@@ -789,8 +790,8 @@
     "deleteConfirm": "确认删除该模型模板？该模板可能被多个实例资源引用，请确认无副作用。"
   },
   "embeddingTemplate": {
-    "title": "Embedding模型",
-    "subtitle": "维护向量模型模板",
+    "title": "向量模型",
+    "subtitle": "管理可用于知识库或向量检索的 Embedding 模型配置",
     "new": "新建 Embedding模型",
     "edit": "编辑 Embedding模型",
     "templateName": "模板名称",
@@ -814,7 +815,7 @@
     "deleteConfirm": "确认删除该 Embedding 模板？该模板可能被多个实例资源引用，请确认无副作用。"
   },
   "mcpTemplate": {
-    "title": "MCP配置",
+    "title": "MCP服务",
     "subtitle": "维护可在 Agent 配置模板中引用的远程 MCP 服务",
     "new": "新建 MCP配置",
     "edit": "编辑 MCP配置",
@@ -846,7 +847,7 @@
   },
   "extensionTemplate": {
     "title": "扩展配置",
-    "subtitle": "维护可在Agent处调用的扩展配置模板，支持调用定制化钩子函数",
+    "subtitle": "管理添加高级运行或集成扩展配置",
     "new": "新建扩展配置",
     "edit": "编辑扩展配置",
     "templateName": "模板名称",
@@ -876,7 +877,7 @@
     "deleteConfirm": "确认删除该扩展模板？"
   },
   "expertPackageTemplate": {
-    "title": "专家包",
+    "title": "专家与专家包",
     "subtitle": "把一组专家和专家团收成一套模板，再在 Agent 配置模板里选择",
     "new": "新建专家包",
     "edit": "编辑专家包",
@@ -900,8 +901,8 @@
     "conflictStale": "专家包已被他人修改，请重新打开编辑后再保存。"
   },
   "skillWhitelistTemplate": {
-    "title": "预置 Skill",
-    "subtitle": "维护 Agent 可调用的预置 Skill 模板（SPI Provider 或受控 URL）",
+    "title": "预置技能源",
+    "subtitle": "管理创建 Agent 时可添加的预置技能源",
     "new": "新建预置 Skill",
     "edit": "编辑预置 Skill",
     "templateName": "模板名称",
@@ -939,8 +940,8 @@
     "deleteConfirm": "确认删除该预置 Skill 模板？该模板可能被多个实例资源引用，请确认无副作用。"
   },
   "serviceConfigTemplate": {
-    "title": "运行时模板",
-    "subtitle": "维护实例池参数和容器运行模板",
+    "title": "运行时模板管理",
+    "subtitle": "由容器模板组装成的可调度、可扩缩的 Agent 运行池方案（Runtime Profile）",
     "new": "新建运行时模板",
     "edit": "编辑运行时模板",
     "backToList": "返回运行时模板列表",
@@ -1051,7 +1052,14 @@
     "importOk": "已导入并创建运行时模板",
     "importOkFirstOfMany": "文件含 {{count}} 个模板，已导入第一个并创建运行时模板",
     "importFailed": "导入失败：{{detail}}",
-    "deleteConfirm": "确认删除该运行时模板？该模板可能被多个实例资源引用，请确认无副作用。"
+    "deleteConfirm": "确认删除该运行时模板？该模板可能被多个实例资源引用，请确认无副作用。",
+    "basicInfo": "基本信息",
+    "containerSetup": "容器配置",
+    "containerSetupHint": "选择主容器，按需添加 Sandbox 等辅助容器。",
+    "selectedContainers": "已选 {{count}} 个",
+    "adjustAsNeeded": "按需调整",
+    "deploymentStorage": "部署与存储",
+    "advancedParameters": "高级参数"
   },
   "policies": {
     "fieldRequired": "请填写{{field}}",
@@ -1090,7 +1098,7 @@
         "mcp": "MCP配置",
         "permissions": "安全护栏",
         "a2a_access_policy": "A2A 访问策略",
-        "expert_package": "专家包"
+        "expert_package": "专家与专家包"
       },
       "none": "不选择",
       "noOptions": "暂无可选模板"
@@ -1235,7 +1243,7 @@
   },
   "iam": {
     "users": "用户管理",
-    "usersSubtitle": "管理用户与角色",
+    "usersSubtitle": "管理用户",
     "usersSearchPlaceholder": "搜索用户 ID、显示名",
     "orgs": "组织管理",
     "orgsSubtitle": "管理组织与成员归属",
@@ -1347,7 +1355,25 @@
     "agentTags": "标签",
     "templateRef": "配置模板引用",
     "templateRefHint": "本 Agent 配置模板引用的各槽位配置；未配置的槽位运行时回落策略默认。",
-    "roleManager": "管理面角色"
+    "roleManager": "管理面角色",
+    "usersEyebrow": "访问授权 / 用户",
+    "usersBannerTitle": "先准备身份，再配置谁能进入集群",
+    "usersBannerText": "用户是授权关系中的“谁”。在这里维护登录身份和启用状态；进入哪个集群、可以使用哪些 Agent，要在集群配置工作台中继续设置。",
+    "usersDirectory": "用户目录",
+    "usersDirectoryHint": "维护登录身份、状态和后续授权关系",
+    "usersTotal": "目录用户",
+    "usersActive": "当前页启用",
+    "usersIdentity": "身份来源",
+    "usersIdentityHint": "本地与企业身份统一展示",
+    "orgsEyebrow": "访问授权 / 组织",
+    "orgsBannerTitle": "用组织批量管理成员的访问范围",
+    "orgsBannerText": "组织把用户聚合成可管理的业务范围。先维护成员归属，再到集群配置工作台为组织配置准入和 Agent 使用范围。",
+    "orgsDirectory": "组织目录",
+    "orgsDirectoryHint": "维护组织、成员归属和启用状态",
+    "orgsTotal": "组织总数",
+    "orgsActive": "当前页启用",
+    "orgsMembers": "成员关系",
+    "orgsMembersHint": "成员配置在组织详情中维护"
   },
   "auth": {
     "loginTitle": "{{productName}} 管理台登录",
@@ -1452,7 +1478,9 @@
     "referenceHint": "当前有多少个 Agent 引用了该模板；被引用时不能删除。",
     "deleteBlockedHint": "仍被 {{count}} 个 Agent 引用，请先在集群管理中移除这些 Agent。",
     "fieldRequired": "请填写{{field}}",
-    "deleteConfirm": "确认删除 Agent 配置模板「{{name}}」？被 Agent 引用的模板不能删除，请先在集群管理中移除引用该模板的 Agent。"
+    "deleteConfirm": "确认删除 Agent 配置模板「{{name}}」？被 Agent 引用的模板不能删除，请先在集群管理中移除引用该模板的 Agent。",
+    "optionalResources": "可选能力配置",
+    "resourceTabHint": "资源管理在新标签页打开；添加完成后返回此处，刷新选项即可继续，已填内容会保留。"
   },
   "agentDefinition": {
     "title": "Agent模板",
@@ -1492,7 +1520,7 @@
   "templateRefEditor": {},
   "containerTemplate": {
     "title": "容器模板",
-    "subtitle": "维护 AgentServer 与 Sandbox 容器的可复用运行规格，供运行时模板绑定",
+    "subtitle": "管理 Agent 运行时所使用的“软件镜像和容器包装方式”",
     "empty": "暂无容器模板",
     "new": "新建容器模板",
     "edit": "编辑容器模板",
@@ -1595,7 +1623,17 @@
     "scopes": {
       "admin": "admin",
       "user": "user"
-    }
+    },
+    "eyebrow": "访问授权 / 角色",
+    "bannerTitle": "角色决定可以做什么",
+    "bannerText": "角色把权限点组合成可复用的管理职责。先在这里定义角色和权限，再将角色指派给用户；集群准入仍在集群配置工作台中完成。",
+    "directory": "角色目录",
+    "directoryHint": "查看角色类型、权限范围和用户指派",
+    "total": "角色总数",
+    "enabled": "当前页启用",
+    "assigneesSummary": "已指派用户",
+    "systemSummary": "系统角色",
+    "systemSummaryHint": "内置角色不可直接修改权限"
   },
   "approvals": {
     "title": "审批中心",
@@ -1688,5 +1726,16 @@
       "success": "已同步到 Gateway",
       "failed": "Gateway 同步失败"
     }
+  },
+  "redesign": {
+    "advancedDeployment": "高级部署设置",
+    "capacityTimeout": "容量与超时",
+    "connected": "组件连接正常",
+    "inspect": "连接状态待检查",
+    "inspectInstance": "检查实例"
+  },
+  "a2aManagement": {
+    "title": "A2A管理",
+    "subtitle": "管理用于 Agent 间协作的 A2A 能力配置"
   }
 }

@@ -1,0 +1,8 @@
+.runtime-catalog-header__identity { flex: 1 1 280px; min-width: 0; max-width: 32rem; }
+.runtime-catalog-header__toolbar { display: flex; flex: 1 1 620px; min-width: 0; align-items: center; justify-content: flex-end; gap: 8px; }
+.runtime-catalog-header__toolbar > .runtime-catalog-header__search { flex: 1 1 220px; width: auto; min-width: 120px; max-width: 260px; }
+.runtime-catalog-header__toolbar > .btn { flex: 0 0 auto; white-space: nowrap; }
+@media (max-width: 720px) {
+  .runtime-catalog-header__toolbar { flex-wrap: wrap; }
+  .runtime-catalog-header__toolbar > .runtime-catalog-header__search { flex-basis: 100%; max-width: none; }
+}

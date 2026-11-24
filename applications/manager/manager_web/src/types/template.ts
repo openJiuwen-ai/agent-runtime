@@ -435,6 +435,8 @@ export interface ContainerTemplate {
   volume_mounts?: unknown[] | null;
   security_context?: Record<string, unknown> | null;
   readiness_probe?: Record<string, unknown> | null;
+  command?: string[] | null;
+  args?: string[] | null;
   /** 只读：引用该容器模板的运行时模板数量 */
   reference_count: number;
   enabled: boolean;
@@ -457,10 +459,10 @@ export interface ContainerTemplateCreateBody {
   volume_mounts?: unknown[] | null;
   security_context?: Record<string, unknown> | null;
   readiness_probe?: Record<string, unknown> | null;
-  command?: string[];
-  args?: string[];
+  command?: string[] | null;
+  args?: string[] | null;
   enabled?: boolean;
-  data?: Record<string, unknown>;
+  data?: Record<string, unknown> | null;
 }
 
 export type ContainerTemplateUpdateBody = Partial<ContainerTemplateCreateBody>;

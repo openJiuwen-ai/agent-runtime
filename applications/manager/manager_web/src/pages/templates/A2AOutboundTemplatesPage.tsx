@@ -1,3 +1,4 @@
+import { agentResourceReferencesPath } from '../../utils/agentTemplateNavigation';
 import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
@@ -57,7 +58,7 @@ export function A2AOutboundTemplatesPage({ embedded = false, header, tabs }: { e
         <div className="a2a-header-actions flex min-w-0 flex-nowrap items-center justify-end gap-2"><ListSearchInput value={searchInput} onChange={setSearchInput} placeholder={t('a2a.searchAgentsPlaceholder')} className="a2a-header-search py-0" /><button className="btn sm shrink-0" onClick={() => void reload()}>{t('common.refresh')}</button><ResourceImportButton resourceType="a2a-agent" onImported={() => void reload()} className="btn sm shrink-0" /><button className="btn sm shrink-0" onClick={() => setSettingsOpen(true)}>{t('a2a.networkSettings')}</button><button className="btn primary sm shrink-0" onClick={() => { setEditing(null); setModalOpen(true); }}>{t('a2a.registerAgent')}</button></div>
       </div>
       {tabs}
-      <div className="card !p-0 overflow-x-auto">
+      <div className="card manager-page-table !p-0 overflow-x-auto">
         {loading ? <div className="p-4 text-muted">{t('common.loading')}</div> : error ? <div className="p-4 text-danger">{error}</div> :
           <table className="table min-w-full"><thead><tr><th>{t('a2a.table.agent')}</th><th>{t('a2a.table.address')}</th><th>{t('a2a.table.cardVersion')}</th><th>{t('a2a.table.status')}</th><th>{t('a2a.table.referenceCount')}</th><th>{t('a2a.table.lastChecked')}</th><th>{t('common.actions')}</th></tr></thead><tbody>
           {!items.length ? <tr><td colSpan={7}><Empty text={t('a2a.emptyAgents')} /></td></tr> : items.map((row) => <tr key={row.template_id}>
@@ -69,7 +70,7 @@ export function A2AOutboundTemplatesPage({ embedded = false, header, tabs }: { e
               </div>
             )}</td>
             <td><Switch checked={row.enabled} onChange={(enabled) => void action(() => A2AOutboundTemplateApi.update(row.template_id, { enabled }))} /></td>
-            <td>{row.reference_count > 0 ? <span className="tag cursor-pointer" title={t('a2a.agentReferenceTitle')} onClick={() => navigate('/agent-templates')}>{row.reference_count}</span> : <span className="text-[11px] text-muted">0</span>}</td>
+            <td>{row.reference_count > 0 ? <button type="button" className="tag cursor-pointer" title={t('a2a.agentReferenceTitle')} onClick={() => navigate(agentResourceReferencesPath('a2a-outbound', row.template_id, row.template_name))}>{row.reference_count}</button> : <span className="text-[11px] text-muted">0</span>}</td>
             <td className="text-xs text-muted whitespace-nowrap">{formatTime(row.last_checked_at)}</td>
             <td className="whitespace-nowrap"><div className="flex gap-1"><ResourceExportButton resourceType="a2a-agent" resourceIds={[row.template_id]} /><button className="btn sm ghost" onClick={() => void action(() => A2AOutboundTemplateApi.refresh(row.template_id))}>{t('a2a.checkCard')}</button>{row.pending_revision && <><button className="btn sm" onClick={() => void action(() => A2AOutboundTemplateApi.confirmRevision(row.template_id, true))}>{t('a2a.accept')}</button><button className="btn sm ghost" onClick={() => void action(() => A2AOutboundTemplateApi.confirmRevision(row.template_id, false))}>{t('a2a.reject')}</button></>}<button className="btn sm ghost" onClick={() => { setEditing(row); setModalOpen(true); }}>{t('common.edit')}</button><button className="btn sm danger" onClick={() => setDeleting(row)}>{t('common.delete')}</button></div></td>
           </tr>)}</tbody></table>}

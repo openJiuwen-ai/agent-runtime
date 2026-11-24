@@ -25,6 +25,14 @@ spec:
             - name: http
               containerPort: <<MANAGER_WEB_PORT>>
               protocol: TCP
+          # A running nginx process does not guarantee that mounted dist exists.
+          readinessProbe:
+            httpGet:
+              path: /index.html
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            timeoutSeconds: 2
           env:
             - name: MANAGER_WEB_HOST
               value: "0.0.0.0"

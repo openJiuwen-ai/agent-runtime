@@ -175,7 +175,7 @@ function FieldLabel({ children, required }: { children: ReactNode; required?: bo
   );
 }
 
-export function WorkspaceQuotaPolicyTab({ instanceId }: { instanceId: string }) {
+export function WorkspaceQuotaPolicyTab({ instanceId, onChange }: { instanceId: string; onChange?: () => void }) {
   const { t } = useTranslation();
   const { user } = useAuth();
   const canWrite = hasPermission(user, 'quota:write');
@@ -328,6 +328,7 @@ export function WorkspaceQuotaPolicyTab({ instanceId }: { instanceId: string }) 
       setModalOpen(false);
       setLowerOpen(false);
       await reload();
+      onChange?.();
     } catch (e) {
       toast('danger', t('errors.saveFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
     } finally {
@@ -356,6 +357,7 @@ export function WorkspaceQuotaPolicyTab({ instanceId }: { instanceId: string }) 
       await WorkspaceQuotaApi.update(instanceId, row.policy_id, { enabled });
       toast('success', t('success.saved'));
       await reload();
+      onChange?.();
     } catch (e) {
       toast('danger', t('errors.saveFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
     } finally {
@@ -369,6 +371,7 @@ export function WorkspaceQuotaPolicyTab({ instanceId }: { instanceId: string }) 
       await WorkspaceQuotaApi.remove(instanceId, row.policy_id);
       toast('success', t('success.deleted'));
       await reload();
+      onChange?.();
     } catch (e) {
       toast('danger', t('errors.deleteFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
     }
@@ -376,39 +379,36 @@ export function WorkspaceQuotaPolicyTab({ instanceId }: { instanceId: string }) 
 
   return (
     <>
-      <div className="flex min-w-0 flex-col gap-4">
-        <div className="min-w-0">
-          <div className="page-header mb-0 w-full min-w-0 flex-wrap gap-y-3">
-            <div className="page-title min-w-[7.5rem] shrink-0 truncate">
-              {t('instanceDetail.workspaceQuota.tabs.policy')}
-            </div>
-            <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
-              <ListSearchInput
-                value={searchInput}
-                onChange={setSearchInput}
-                placeholder={t('instanceDetail.workspaceQuota.searchPlaceholder')}
-                className="basis-full sm:basis-auto"
-              />
-              <button className="btn sm" onClick={() => void reload()}>
-                {t('common.refresh')}
-              </button>
-              {canWrite && (
-                <button
-                  className="btn primary sm"
-                  onClick={() => {
-                    setEditing(null);
-                    setModalOpen(true);
-                  }}
-                >
-                  + {t('instanceDetail.workspaceQuota.new')}
-                </button>
-              )}
-            </div>
+      <div className="quota-section__content">
+        <div className="page-header quota-section__header">
+          <div className="quota-section__heading">
+            <h5 className="quota-section__title">{t('instanceDetail.workspaceQuota.tabs.policy')}</h5>
+            <p className="quota-section__description">{t('instanceDetail.workspaceQuota.subtitle')}</p>
           </div>
-          <div className="page-subtitle truncate pl-3">{t('instanceDetail.workspaceQuota.subtitle')}</div>
+          <div className="quota-section__search-actions">
+            <ListSearchInput
+              value={searchInput}
+              onChange={setSearchInput}
+              placeholder={t('instanceDetail.workspaceQuota.searchPlaceholder')}
+            />
+            <button className="btn sm" onClick={() => void reload()}>
+              {t('common.refresh')}
+            </button>
+            {canWrite && (
+              <button
+                className="btn primary sm"
+                onClick={() => {
+                  setEditing(null);
+                  setModalOpen(true);
+                }}
+              >
+                + {t('instanceDetail.workspaceQuota.new')}
+              </button>
+            )}
+          </div>
         </div>
 
-        <div className="card !p-0">
+        <div className="card manager-page-table !p-0">
           {loading ? (
             <div className="p-4 text-sm text-muted">{t('common.loading')}</div>
           ) : error ? (

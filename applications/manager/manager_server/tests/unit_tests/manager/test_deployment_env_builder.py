@@ -283,12 +283,12 @@ class TestOcpClusterType:
 
         monkeypatch.setattr(toolkit, "resolve_tool_dir", lambda: tool_dir)
         monkeypatch.setattr(settings, "deploy_cluster_type", "openshift")
+        monkeypatch.setattr(_shutil, "which", lambda c: "/usr/bin/" + c)
         monkeypatch.setattr(settings, "deploy_token", str(tmp_path / "missing"))
         ok, reason = toolkit.check_tool_available()
         assert not ok and "token" in reason
 
         monkeypatch.setattr(settings, "deploy_token", str(token_file))
-        monkeypatch.setattr(_shutil, "which", lambda c: "/usr/bin/" + c)
         ok, reason = toolkit.check_tool_available()
         assert ok, reason
 
