@@ -18,6 +18,11 @@ import { ListSearchInput } from '../../components/ListSearchInput';
 import { SkillPrebuiltTemplateModal } from './SkillPrebuiltTemplateModal';
 import { toast } from '../../stores/uiStore';
 import { formatTime, truncate } from '../../utils/format';
+import {
+  deleteBlockedByReferences,
+  disableBlockedByReferences,
+  templateInUseMessage,
+} from '../../utils/templateInUse';
 import { useRouter } from '../../router';
 import { ResourceExportButton, ResourceImportButton } from '../../components/ResourceImportExport';
 
@@ -113,6 +118,11 @@ export function SkillPrebuiltTemplatesPage() {
 
   const toggleEnabled = async (row: SkillPrebuiltTemplate, enabled: boolean) => {
     if (togglingId) return;
+    const blocked = disableBlockedByReferences(enabled, row.reference_count, t);
+    if (blocked) {
+      toast('warn', blocked);
+      return;
+    }
     const previous = row.enabled;
     setItems((list) =>
       list.map((item) => (item.template_id === row.template_id ? { ...item, enabled } : item)),
@@ -128,10 +138,20 @@ export function SkillPrebuiltTemplatesPage() {
       setItems((list) =>
         list.map((item) => (item.template_id === row.template_id ? { ...item, enabled: previous } : item)),
       );
-      toast('danger', t('errors.saveFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
+      const localized = templateInUseMessage(e, t, 'disable');
+      toast('danger', localized ?? t('errors.saveFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
     } finally {
       setTogglingId(null);
     }
+  };
+
+  const requestDelete = (row: SkillPrebuiltTemplate) => {
+    const blocked = deleteBlockedByReferences(row.reference_count, t);
+    if (blocked) {
+      toast('warn', blocked);
+      return;
+    }
+    setDelTarget(row);
   };
 
   return (
@@ -304,7 +324,7 @@ export function SkillPrebuiltTemplatesPage() {
                       >
                         {t('common.edit')}
                       </button>
-                      <button className="btn sm danger" onClick={() => setDelTarget(row)}>
+                      <button className="btn sm danger" onClick={() => requestDelete(row)}>
                         {t('common.delete')}
                       </button>
                     </div>
@@ -353,7 +373,8 @@ export function SkillPrebuiltTemplatesPage() {
             toast('success', t('success.deleted'));
             void reload();
           } catch (e) {
-            toast('danger', t('errors.deleteFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
+            const localized = templateInUseMessage(e, t, 'delete');
+            toast('danger', localized ?? t('errors.deleteFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
           }
         }}
         onClose={() => setDelTarget(null)}

@@ -5,5 +5,12 @@ from .service import (
     AuthzService,
     seed_authz_defaults,
 )
+from .identity_reference_count import count_org_references, count_user_references
 
-__all__ = ("PLATFORM_ADMIN_ROLE_ID", "AuthzService", "seed_authz_defaults")
+__all__ = (
+    "PLATFORM_ADMIN_ROLE_ID",
+    "AuthzService",
+    "count_org_references",
+    "count_user_references",
+    "seed_authz_defaults",
+)
