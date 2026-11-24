@@ -11,7 +11,7 @@ interface Props {
 
 const OPTIONS: PreferredLanguage[] = ['zh', 'en'];
 
-export function AdvancedConfigTab({ instanceId }: Props) {
+export function OtherConfigTab({ instanceId }: Props) {
   const { t } = useTranslation();
   const [language, setLanguage] = useState<PreferredLanguage>('zh');
   const [loading, setLoading] = useState(true);
@@ -87,7 +87,7 @@ export function AdvancedConfigTab({ instanceId }: Props) {
           <>
             <span className="pill sm ok">
               <span className="statusDot ok" />
-              {t('instanceConfig.advanced.managed')}
+              {t('instanceConfig.other.managed')}
             </span>
             {updatedAt && (
               <span className="text-[11px] text-muted mono">{formatTime(updatedAt)}</span>
@@ -102,12 +102,12 @@ export function AdvancedConfigTab({ instanceId }: Props) {
         </button>
       </div>
 
-      <p className="text-[12px] text-muted leading-relaxed">{t('instanceConfig.advanced.intro')}</p>
+      <p className="text-[12px] text-muted leading-relaxed">{t('instanceConfig.other.intro')}</p>
 
       <div className="card">
-        <label className="label">{t('instanceConfig.advanced.preferredLanguage')}</label>
+        <label className="label">{t('instanceConfig.other.preferredLanguage')}</label>
         <p className="text-[11px] text-muted mb-1">
-          {t('instanceConfig.advanced.preferredLanguageHint')}
+          {t('instanceConfig.other.preferredLanguageHint')}
         </p>
         <select
           className="input w-full max-w-xs"
@@ -116,7 +116,7 @@ export function AdvancedConfigTab({ instanceId }: Props) {
         >
           {OPTIONS.map((opt) => (
             <option key={opt} value={opt}>
-              {t(`instanceConfig.advanced.lang.${opt}`)}
+              {t(`instanceConfig.other.lang.${opt}`)}
             </option>
           ))}
         </select>

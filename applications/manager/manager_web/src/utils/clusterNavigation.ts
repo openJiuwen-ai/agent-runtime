@@ -3,11 +3,15 @@ import { templateReturnPath } from './agentFlowContext';
 export const clusterSetupSections = ['access', 'service-resources', 'agent-resources', 'status'] as const;
 export type ClusterWorkspaceSection = 'cluster-config' | typeof clusterSetupSections[number] | 'other-settings' | 'config' | 'workspace-quota' | 'team-quota' | 'token-quota' | 'cost' | 'audit';
 export type ClusterNavigationGroup = 'cluster-config' | typeof clusterSetupSections[number] | 'other-settings';
-export const clusterSettingSections = ['log-masking', 'content-masking', 'logging', 'audit-log', 'cron-quota', 'workspace-quota', 'team-quota', 'advanced'] as const;
+export const clusterSettingSections = ['log-masking', 'content-masking', 'logging', 'audit-log', 'cron-quota', 'workspace-quota', 'team-quota', 'other'] as const;
 export type ClusterSettingSection = typeof clusterSettingSections[number];
 const legacySettingSections: Record<string, ClusterSettingSection> = {
   'workspace-quota': 'workspace-quota', 'team-quota': 'team-quota',
   'token-quota': 'log-masking', cost: 'log-masking', audit: 'log-masking',
+};
+/** Legacy ``setting`` / ``configTab`` values that still land on a current section. */
+const legacySettingQueries: Record<string, ClusterSettingSection> = {
+  advanced: 'other',
 };
 
 export function clusterNavigationGroup(section: ClusterWorkspaceSection): ClusterNavigationGroup {
@@ -47,11 +51,21 @@ export function canonicalClusterPath(instanceId: string, section: string | undef
   const [pathname, search = ''] = clusterPagePath(instanceId, canonical, context).split('?');
   const query = new URLSearchParams(search);
   if (canonical === 'other-settings') {
-    const configTabs: Record<string, ClusterSettingSection> = { logMasking: 'log-masking', contentMasking: 'content-masking', logging: 'logging', auditLog: 'audit-log', cronPolicy: 'cron-quota', advanced: 'advanced' };
+    const configTabs: Record<string, ClusterSettingSection> = {
+      logMasking: 'log-masking',
+      contentMasking: 'content-masking',
+      logging: 'logging',
+      auditLog: 'audit-log',
+      cronPolicy: 'cron-quota',
+      other: 'other',
+      advanced: 'other',
+    };
     const requested = context.get('setting');
     const setting = section === 'config' ? configTabs[context.get('configTab') || ''] || 'log-masking'
       : section === 'quota' ? clusterQuotaSection(workspaceEnabled)
-      : legacySettingSections[section || ''] || (clusterSettingSections.includes(requested as ClusterSettingSection) ? requested : null);
+      : legacySettingSections[section || '']
+        || legacySettingQueries[requested || '']
+        || (clusterSettingSections.includes(requested as ClusterSettingSection) ? requested as ClusterSettingSection : null);
     if (setting) query.set('setting', setting);
   }
   return `${pathname}${query.size ? `?${query}` : ''}`;

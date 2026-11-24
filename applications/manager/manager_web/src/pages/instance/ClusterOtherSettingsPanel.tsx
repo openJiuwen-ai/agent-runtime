@@ -9,7 +9,7 @@ import { ContentMaskingTab } from './instanceConfigPanel/ContentMaskingTab';
 import { LoggingTab } from './instanceConfigPanel/LoggingTab';
 import { AuditLogTab } from './instanceConfigPanel/AuditLogTab';
 import { CronPolicyTab } from './instanceConfigPanel/CronPolicyTab';
-import { AdvancedConfigTab } from './instanceConfigPanel/AdvancedConfigTab';
+import { OtherConfigTab } from './instanceConfigPanel/OtherConfigTab';
 import { WorkspaceQuotaPanel } from './instanceQuotaPanel/WorkspaceQuotaPanel';
 import { TeamQuotaPanel } from './instanceQuotaPanel/TeamQuotaPanel';
 import './ClusterOtherSettingsPanel.css';
@@ -26,7 +26,9 @@ export function ClusterOtherSettingsPanel({ instanceId }: { instanceId: string }
   const admin = isPlatformAdmin(user);
   const quotaRead = hasPermission(user, 'quota:read');
   const workspaceEnabled = isWorkspaceQuotaEnabled(user);
-  const requested = params.get('setting');
+  const requestedRaw = params.get('setting');
+  // 旧书签 setting=advanced → 默认语言区段 other
+  const requested = requestedRaw === 'advanced' ? 'other' : requestedRaw;
   const initial = clusterSettingSections.includes(requested as ClusterSettingSection) ? requested as ClusterSettingSection : 'log-masking';
   const [active, setActive] = useState<ClusterSettingSection>(initial);
   const compactDirectory = useRef<HTMLLabelElement>(null);
@@ -140,18 +142,18 @@ export function ClusterOtherSettingsPanel({ instanceId }: { instanceId: string }
       { id: 'workspace-quota', title: tr('用户空间配额', 'Workspace quotas'), description: tr('按用户、组织或 Agent 范围设置空间容量、提醒阈值和使用上限。', 'Set capacity, warning thresholds and limits by user, organization or Agent scope.'), unavailable: quotaOnly || (!workspaceEnabled ? tr('用户空间配额未启用', 'Workspace quotas are disabled') : undefined), content: quotaRead && workspaceEnabled && <WorkspaceQuotaPanel instanceId={instanceId} /> },
       { id: 'team-quota', title: tr('团队配额', 'Team quotas'), description: tr('设置每用户、每组织的团队数量上限，以及每个团队的成员规模。', 'Limit teams per user or organization and members per team.'), unavailable: quotaOnly, content: quotaRead && <TeamQuotaPanel instanceId={instanceId} /> },
     ] },
-    { id: 'preferences', title: tr('用户偏好', 'User preferences'), description: tr('设置当前集群的默认用户偏好。', 'Set default user preferences for this cluster.'), items: [
-      { id: 'advanced', title: tr('默认语言', 'Default language'), description: tr('设置用户面的默认界面语言，用户仍可自行切换。', 'Set the default interface language for the user console. Users can still choose their own language.'), unavailable: adminOnly, content: admin && <AdvancedConfigTab instanceId={instanceId} /> },
+    { id: 'other-config', title: tr('其他配置', 'Other'), description: tr('集群级杂项配置，与日志和配额无关的默认偏好等。', 'Cluster-level miscellaneous settings such as default preferences.'), items: [
+      { id: 'other', title: tr('默认语言', 'Default language'), description: tr('设置用户面的默认界面语言，用户仍可自行切换。', 'Set the default interface language for the user console. Users can still choose their own language.'), unavailable: adminOnly, content: admin && <OtherConfigTab instanceId={instanceId} /> },
     ] },
   ];
 
   return <section className="cluster-settings" aria-label={tr('其他配置', 'Other settings')}>
     <div className="cluster-settings-layout">
       <label className="cluster-settings-compact-directory" ref={compactDirectory}><span>{tr('定位配置', 'Jump to setting')}</span><select className="select" value={active} onChange={event => locate(event.target.value as ClusterSettingSection)}>{groups.map(group => <optgroup key={group.id} label={group.title}>{group.items.map(item => <option key={item.id} value={item.id}>{item.title}{item.unavailable ? ` · ${item.unavailable}` : ''}</option>)}</optgroup>)}</select></label>
-      <nav className="cluster-settings-directory" aria-label={tr('其他配置目录', 'Settings directory')}>{groups.map(group => <div className="cluster-settings-directory__group" key={group.id}>{group.items.length > 1 && <h3>{group.title}</h3>}{group.items.map(item => <button key={item.id} className={`cluster-settings-directory__item ${active === item.id ? 'active' : ''}`} aria-current={active === item.id ? 'location' : undefined} aria-controls={`cluster-setting-${item.id}`} onClick={() => locate(item.id)}><span>{item.title}</span>{item.unavailable && <span className="cluster-settings-directory__status">{tr('受限', 'Restricted')}</span>}</button>)}</div>)}</nav>
+      <nav className="cluster-settings-directory" aria-label={tr('其他配置目录', 'Settings directory')}>{groups.map(group => <div className="cluster-settings-directory__group" key={group.id}><h3>{group.title}</h3>{group.items.map(item => <button key={item.id} className={`cluster-settings-directory__item ${active === item.id ? 'active' : ''}`} aria-current={active === item.id ? 'location' : undefined} aria-controls={`cluster-setting-${item.id}`} onClick={() => locate(item.id)}><span>{item.title}</span>{item.unavailable && <span className="cluster-settings-directory__status">{tr('受限', 'Restricted')}</span>}</button>)}</div>)}</nav>
       <div className="cluster-settings-scroll" role="region" aria-label={tr('配置内容', 'Settings content')}>
         <div className="cluster-settings-content" ref={content}>{groups.map(group => <div className="cluster-settings-group" key={group.id}>
-          {group.items.length > 1 && <header className="cluster-settings-group__header"><h3>{group.title}</h3><p>{group.description}</p></header>}
+          <header className="cluster-settings-group__header"><h3>{group.title}</h3><p>{group.description}</p></header>
           {group.items.map(item => <section id={`cluster-setting-${item.id}`} key={item.id} ref={node => { if (node) sections.current[item.id] = node; }} className="cluster-setting-card" aria-labelledby={`cluster-setting-title-${item.id}`}>
             <header className="cluster-setting-card__header"><div><h4 id={`cluster-setting-title-${item.id}`}>{item.title}</h4><p>{item.description}</p></div><span className={`tag ${item.unavailable ? '' : 'cluster-setting-card__badge'}`}>{item.unavailable || tr('独立保存', 'Save independently')}</span></header>
             <div className="cluster-setting-card__body">{item.unavailable ? <div className="cluster-settings-unavailable"><span aria-hidden="true">⊘</span><div><strong>{item.unavailable}</strong><p>{item.id === 'workspace-quota' && !workspaceEnabled ? tr('此集群环境尚未开启用户空间配额能力，团队配额可单独使用。', 'Workspace quotas are disabled for this environment. Team quotas remain independent.') : tr('请联系管理员确认当前账号的配置权限。', 'Ask an administrator about the required access.')}</p></div></div> : item.content}</div>
