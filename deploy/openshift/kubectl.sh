@@ -244,7 +244,7 @@ kctl_apply_resource() { # $1=资源文件
   local code; code=$(kctl_http GET "$KCTL_PATH/$KCTL_NAME" "$resp")
   case "$code" in
     200)
-      # Only the managed runtime-default Secret and its Manager mount need
+      # Only the managed runtime-default ConfigMap and its Manager mount need
       # content updates. Preserve the usual skip/replace policy for other fields.
       if is_manager_runtime_defaults_resource "$1"; then
         update_existing_manager_runtime_defaults "$1" "$resp" || error "Manager 默认模板交付更新失败"

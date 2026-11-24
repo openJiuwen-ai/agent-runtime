@@ -2,8 +2,10 @@
 # Keep this file identical in openshift/ and jiuwenswarm-ee/: each directory is
 # distributed as a standalone deployment tool. No cluster access during render.
 
-# Deliver the final, postprocessed config_sync payload to Manager. Never use a
-# node-local hostPath: Manager may run on a different node from the deploy tool.
+# Deliver the final, postprocessed config_sync payload to Manager via a
+# read-only ConfigMap. Never use a node-local hostPath: Manager may run on a
+# different node from the deploy tool. The payload is template configuration,
+# not credentials: a ConfigMap keeps it inspectable and avoids Secret semantics.
 render_manager_runtime_defaults() (
   local manifest="$1" source_json="$2" namespace="$3"
   local tmp_manifest tmp_output checksum bytes
@@ -13,11 +15,17 @@ render_manager_runtime_defaults() (
     return 0
   fi
   command -v yq >/dev/null 2>&1 || error "交付 Manager 默认模板需要 mikefarah/yq v4"
-  command -v base64 >/dev/null 2>&1 || error "交付 Manager 默认模板需要 base64"
   bytes=$(wc -c < "$source_json")
-  # kubectl client-side apply also stores base64 data in last-applied, whose
-  # annotation limit is 256KiB (smaller than the Secret's 1MiB payload limit).
-  [ "$bytes" -le 180000 ] || error "agentserver.json 超过 180KB 交付上限（kubectl apply 注解限制），请精简配置"
+  # Carrier is a ConfigMap with raw (non-base64) JSON. Binding limits:
+  # k8s form applies via `kubectl apply` client-side, which stores the whole
+  # manifest in the last-applied annotation (256KiB total) → ~240KB payload;
+  # openshift form POSTs/PUTs raw manifests (no annotation) → ConfigMap's
+  # API-server object limit (1MiB) applies.
+  if is_k8s_cluster; then
+    [ "$bytes" -le 240000 ] || error "agentserver.json 超过 240KB 交付上限（k8s kubectl apply 注解限制），请精简配置"
+  else
+    [ "$bytes" -le $((1024 * 1024 - 24 * 1024)) ] || error "agentserver.json 超过 1MiB ConfigMap 交付上限，请精简配置"
+  fi
   # Parse strictly as JSON; avoid dumping a payload which may contain credentials.
   if ! yq -p=json -e '
       .type == "config_sync" and
@@ -46,11 +54,11 @@ render_manager_runtime_defaults() (
   trap 'rm -f "$tmp_manifest" "$tmp_output"' EXIT
   tmp_output=$(mktemp "${manifest}.defaults-output.XXXXXX") || error "无法创建 Manager 默认模板输出清单"
   MANAGER_DEFAULTS_CHECKSUM="$checksum" yq eval '
-    select(.kind != "Secret" or .metadata.name != "jiuwenswarm-manager-runtime-defaults") |
+    select(.kind != "ConfigMap" or .metadata.name != "jiuwenswarm-manager-runtime-defaults") |
     (. | select(.kind == "Deployment") | .spec.template.metadata.annotations."jiuwenswarm.io/runtime-defaults-sha256") = strenv(MANAGER_DEFAULTS_CHECKSUM) |
     (. | select(.kind == "Deployment") | .spec.template.spec.volumes) =
       ((.spec.template.spec.volumes // [] | map(select(.name != "manager-runtime-defaults"))) + [{
-        "name": "manager-runtime-defaults", "secret": {"secretName": "jiuwenswarm-manager-runtime-defaults", "defaultMode": 292}
+        "name": "manager-runtime-defaults", "configMap": {"name": "jiuwenswarm-manager-runtime-defaults", "defaultMode": 292}
       }]) |
     (. | select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == "manager") | .env) |=
       ((. // [] | map(select(.name != "AGENTSERVER_JSON_PATH" and .name != "MANAGER_RUNTIME_DEFAULTS_ENABLED"))) + [
@@ -62,23 +70,25 @@ render_manager_runtime_defaults() (
         "name": "manager-runtime-defaults", "mountPath": "/etc/manager/runtime-defaults", "readOnly": true
       }])
     ' "$manifest" > "$tmp_manifest" || error "Manager 默认模板挂载渲染失败"
-  # Secret is first so it exists before Manager starts. down consumes this same
-  # manifest and removes it along with Manager. Never log encoded/plain payloads.
+  # ConfigMap is first so it exists before Manager starts. down consumes this
+  # same manifest and removes it along with Manager. The payload is embedded as
+  # a literal YAML block scalar (raw JSON, no base64); indentation is safe as
+  # block scalars are taken literally.
   {
-    printf 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: jiuwenswarm-manager-runtime-defaults\n  namespace: "%s"\n  annotations:\n    jiuwenswarm.io/runtime-defaults-sha256: "%s"\ntype: Opaque\ndata:\n  agentserver.json: ' "$namespace" "$checksum"
-    base64 < "$source_json" | tr -d '\r\n'
-    printf '\n---\n'
+    printf 'apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: jiuwenswarm-manager-runtime-defaults\n  namespace: "%s"\n  annotations:\n    jiuwenswarm.io/runtime-defaults-sha256: "%s"\ndata:\n  agentserver.json: |\n' "$namespace" "$checksum"
+    sed 's/^/    /' "$source_json"
+    printf -- '---\n'
     cat "$tmp_manifest"
   } > "$tmp_output"
   mv -f "$tmp_output" "$manifest" || error "Manager 默认模板清单保存失败"
-  info "Manager 默认模板已交付：$source_json → 只读 Secret（启动时自动初始化，不自动绑定集群）"
+  info "Manager 默认模板已交付：$source_json → 只读 ConfigMap（启动时自动初始化，不自动绑定集群）"
 )
 
-# OpenShift's lightweight apply skips existing resources. Update only the Secret
-# owned by this feature and the Manager Pod fields which consume it. K8s/EE use
-# native kubectl apply and do not call this function.
+# OpenShift's lightweight apply skips existing resources. Update only the
+# ConfigMap owned by this feature and the Manager Pod fields which consume it.
+# K8s/EE use native kubectl apply and do not call this function.
 is_manager_runtime_defaults_resource() {
-  yq -e '(.kind == "Secret" and .metadata.name == "jiuwenswarm-manager-runtime-defaults" and
+  yq -e '(.kind == "ConfigMap" and .metadata.name == "jiuwenswarm-manager-runtime-defaults" and
     .metadata.annotations."jiuwenswarm.io/runtime-defaults-sha256" != null) or
     (.kind == "Deployment" and .spec.template.metadata.annotations."jiuwenswarm.io/runtime-defaults-sha256" != null)' "$1" >/dev/null 2>&1
 }
@@ -87,7 +97,7 @@ update_existing_manager_runtime_defaults() (
   local desired="$1" current="$2" checksum old_checksum patch existing_patch code tmp
   checksum=$(yq -r '.metadata.annotations."jiuwenswarm.io/runtime-defaults-sha256" // .spec.template.metadata.annotations."jiuwenswarm.io/runtime-defaults-sha256" // ""' "$desired")
   [ -n "$checksum" ] || return 1
-  if [ "$KCTL_KIND" = Secret ] && [ "$KCTL_NAME" = jiuwenswarm-manager-runtime-defaults ]; then
+  if [ "$KCTL_KIND" = ConfigMap ] && [ "$KCTL_NAME" = jiuwenswarm-manager-runtime-defaults ]; then
     old_checksum=$(yq -r '.metadata.annotations."jiuwenswarm.io/runtime-defaults-sha256" // ""' "$current")
     if [ "$old_checksum" = "$checksum" ] && MANAGER_DEFAULTS_DESIRED="$desired" yq -e '
       .data."agentserver.json" == load(strenv(MANAGER_DEFAULTS_DESIRED)).data."agentserver.json"
@@ -96,13 +106,13 @@ update_existing_manager_runtime_defaults() (
     tmp=$(mktemp "${desired}.update.XXXXXX")
     trap 'rm -f "$tmp"' EXIT
     # Retain resourceVersion and unrelated metadata/data. File-backed PUT avoids
-    # placing credentials in command arguments and the OS argument-size limit.
+    # the OS argument-size limit for large payloads.
     MANAGER_DEFAULTS_DESIRED="$desired" yq eval '
       .data."agentserver.json" = load(strenv(MANAGER_DEFAULTS_DESIRED)).data."agentserver.json" |
       .metadata.annotations."jiuwenswarm.io/runtime-defaults-sha256" = load(strenv(MANAGER_DEFAULTS_DESIRED)).metadata.annotations."jiuwenswarm.io/runtime-defaults-sha256"
-      ' "$current" > "$tmp" || error "Manager 默认模板 Secret 更新渲染失败"
+      ' "$current" > "$tmp" || error "Manager 默认模板 ConfigMap 更新渲染失败"
     code=$(kctl_http PUT "$KCTL_PATH/$KCTL_NAME" "$current" "$tmp")
-    [ "$code" = 200 ] || error "Manager 默认模板 Secret 更新失败 → HTTP $code"
+    [ "$code" = 200 ] || error "Manager 默认模板 ConfigMap 更新失败 → HTTP $code"
     success "$KCTL_LK/$KCTL_NAME updated"
     return 0
   fi

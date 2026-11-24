@@ -96,9 +96,6 @@ spec:
           value: "http://jiuwenswarm-gateway.<<NAMESPACE>>.svc.cluster.local:19000"
         - name: NAMESPACE
           value: "<<NAMESPACE>>"
-        # 「导入默认配置」OBS object key 模板；{ns} 由 Manager 按 NAMESPACE 替换
-        - name: AGENT_RUNTIME_DEFAULT_CONF_PATH
-          value: "<<AGENT_RUNTIME_DEFAULT_CONF_PATH>>"
         - name: AGENT_RUNTIME_SYNC_TIMEOUT
           value: "10"
         - name: WORKSPACE_QUOTA_ENABLED
