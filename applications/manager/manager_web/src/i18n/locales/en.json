@@ -1444,6 +1444,8 @@
     "customConfig": "Custom configuration (JSON array, optional)",
     "customConfigHint": "Enter an array of JSON objects for AgentServer. Agents referencing this template share the configuration. Leave blank or enter [] to clear it.",
     "customConfigInvalid": "Enter a JSON array whose elements are objects.",
+    "uploadLocalSkill": "Upload local Skill",
+    "uploadLocalSkillHint": "When enabled, Agents using this template can upload local Skill packages.",
     "searchPlaceholder": "Search template ID, name, description, or tags",
     "updatedAt": "UPDATED AT",
     "referenceCount": "AGENT REFS",

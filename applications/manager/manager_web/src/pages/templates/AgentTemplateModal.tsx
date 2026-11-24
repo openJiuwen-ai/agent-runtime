@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ConfigRefreshCostHint } from '../../components/ConfigRefreshCostHint';
 import { Modal, ModalCancelButton } from '../../components/Modal';
+import { Switch } from '../../components/Switch';
 import { TemplateRefEditor } from '../../components/TemplateRefEditor';
 import { LimitedTextInput } from '../../components/LimitedTextInput';
 import { JsonField } from '../../components/JsonField';
@@ -51,6 +52,7 @@ interface FormState {
   agent_tags: string;
   template_ref: TemplateRefMap;
   custom_config_json: string;
+  upload_local_skill: boolean;
 }
 
 const empty: FormState = {
@@ -59,6 +61,7 @@ const empty: FormState = {
   agent_tags: '',
   template_ref: {},
   custom_config_json: '',
+  upload_local_skill: false,
 };
 
 function customConfigText(data: AgentTemplate['data']): string {
@@ -108,6 +111,7 @@ export function AgentTemplateModal({ open, template, registrationConfig, onClose
           agent_tags: toCommaList(template.agent_tags),
           template_ref: normalizeTemplateRefFromApi(template.template_ref),
           custom_config_json: customConfigText(template.data),
+          upload_local_skill: template.data?.upload_local_skill === true,
         }
       : empty;
     setForm(next);
@@ -152,14 +156,20 @@ export function AgentTemplateModal({ open, template, registrationConfig, onClose
       return;
     }
 
+    const nextData: Record<string, unknown> = {
+      ...(currentTemplate?.data ?? {}),
+    };
+    if (form.custom_config_json !== customConfigText(currentTemplate?.data ?? null)) {
+      nextData.custom_config = customConfig.value;
+    }
+    nextData.upload_local_skill = form.upload_local_skill;
+
     return {
       template_name: form.template_name.trim(),
       description: form.description.trim() || null,
       agent_tags: fromCommaList(form.agent_tags),
       template_ref: form.template_ref,
-      data: form.custom_config_json !== customConfigText(currentTemplate?.data ?? null)
-        ? { ...(currentTemplate?.data ?? {}), custom_config: customConfig.value }
-        : undefined,
+      data: nextData,
     };
   };
 
@@ -341,6 +351,20 @@ export function AgentTemplateModal({ open, template, registrationConfig, onClose
               {t('agentTemplate.customConfigInvalid')}
             </div>
           )}
+        </div>
+        <div className="md:col-span-2" data-testid="agent-template-upload-local-skill">
+          <div className="flex items-center justify-between gap-4 rounded-lg border border-border px-3 py-3">
+            <div>
+              <div className="label mb-0">{t('agentTemplate.uploadLocalSkill')}</div>
+              <p className="mt-1 text-xs text-muted">{t('agentTemplate.uploadLocalSkillHint')}</p>
+            </div>
+            <Switch
+              checked={form.upload_local_skill}
+              onChange={(value) => update('upload_local_skill', value)}
+              disabled={busy}
+              aria-label={t('agentTemplate.uploadLocalSkill')}
+            />
+          </div>
         </div>
       </div>
       {currentTemplate && <ConfigRefreshCostHint scope="template" />}

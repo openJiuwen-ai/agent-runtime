@@ -6,6 +6,7 @@ instance_grant 在 core/instance_access；instance_agent_resource 在 core/insta
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import Any
 
@@ -24,9 +25,11 @@ from manager_server.infrastructure.match_expr import evaluate_match_expr
 from manager_server.infrastructure.utils import utc_now
 from manager_server.models.instance_resource_models import INSTANCE_AGENT_RESOURCE_TABLE_DEF
 from manager_server.models.agent_definition_models import AGENT_DEFINITION_TABLE_DEF
+from manager_server.models.template_models import AGENT_TEMPLATE_TABLE_DEF
 
 _GRANT = INSTANCE_AGENT_RESOURCE_TABLE_DEF.table_name
 _AGENT_DEFINITION = AGENT_DEFINITION_TABLE_DEF.table_name
+_AGENT_TEMPLATE = AGENT_TEMPLATE_TABLE_DEF.table_name
 _INSTANCE_INFO = "instance_info"
 _CAP = 100_000
 _NO_ORG_GROUP_ID = "__none__"
@@ -175,6 +178,7 @@ class UserConsoleService:
 
         name_by_jid = await self._instance_display_names(admitted)
         name_by_pair = await self._agent_definition_names()
+        template_flags = await self._agent_template_flags()
         seen: set[tuple[str, str, str, str]] = set()
         out: list[dict[str, Any]] = []
         matched = 0
@@ -235,6 +239,9 @@ class UserConsoleService:
                             "agent_id": agent_id,
                             "agent_name": agent_name,
                             "resource_name": resource_name,
+                            "allow_local_skill_upload": template_flags.get(
+                                agent_template_id, False
+                            ),
                             "group_name": group_name,
                             "jiuwenclaw_name": cluster_name,
                         }
@@ -252,6 +259,28 @@ class UserConsoleService:
             )
         )
         return out, matched
+
+    async def _agent_template_flags(self) -> dict[str, bool]:
+        """Agent 配置模板的扩展开关；缺失或非法一律按 false 处理。"""
+        rows = await self._h.list_records(
+            _AGENT_TEMPLATE, {}, limit=_CAP, offset=0
+        )
+        flags: dict[str, bool] = {}
+        for row in rows:
+            template_id = str(_g(row, "template_id") or "").strip()
+            if not template_id:
+                continue
+            data = _g(row, "data")
+            if isinstance(data, str):
+                try:
+                    data = json.loads(data)
+                except ValueError:
+                    data = None
+            flags[template_id] = bool(
+                isinstance(data, dict)
+                and data.get("upload_local_skill") is True
+            )
+        return flags
 
     async def _agent_definition_names(self) -> dict[tuple[str, str], str]:
         """Agent 模板的 ``(Agent 配置模板 id, 运行时模板 id)`` → 名称。"""
