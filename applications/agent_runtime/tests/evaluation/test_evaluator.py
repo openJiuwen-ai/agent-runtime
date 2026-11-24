@@ -37,8 +37,8 @@ async def _make_evaluator(llm: LLMClient):
     collector = EvaluationCollector(
         eval_state=eval_state, sm_state=sm_state, rm_state=rm_state,
     )
-    await redis.hset("{resource_manager}:resource:scope:s1:config",
-                     mapping={"min_idle_pods": "5"})
+    # 走 RM 唯一写点（同时登记 scope 索引——known_scope_ids 只读索引不扫库）
+    await rm_state.save_scope_config("s1", {"min_idle_pods": "5"})
     arc = AgentRuntimeConfig()
     evaluator = Evaluator(
         collector=collector, llm=llm, state=eval_state, arc=arc,

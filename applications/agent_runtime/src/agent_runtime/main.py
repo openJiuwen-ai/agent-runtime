@@ -55,7 +55,13 @@ from .resource_manager.facade import ResourceManagerFacade
 from .resource_manager.k8s import FakeK8sPodClient, RealK8sPodClient
 from .resource_manager.orchestrator import ResourceOrchestrator
 from .resource_manager.state import ResourceState
-from .resource_manager.sweeper import ResourceSweeper
+from .resource_manager.sweeper import (
+    AUTOSCALE_TICK_TIMEOUT,
+    RECLAIM_TICK_TIMEOUT,
+    RECONCILE_TICK_TIMEOUT,
+    WATCH_TICK_TIMEOUT,
+    ResourceSweeper,
+)
 from .session_manager.config_store import (
     ROUTING_SCOPE_TABLE_DEF,
     SERVICE_CONFIG_CONTAINER_TABLE_DEF,
@@ -77,16 +83,14 @@ app_errors.register_codes()
 # 各后台 job 单次 tick 上限（防 redis/k8s IO 抖动挂死 _run_forever 循环；
 # 正常 tick 远低于这些值，超时取消本拍记日志、下一拍重试）：
 # - sm_sweep：到期 evict（≤1000/拍）+ 空 Pod 扫描，纯 redis 快操作；
-# - rm_autoscale：最重路径为 deploy 等 Ready（ready_timeout 默认 300s，
-#   对齐 DEPLOY_LOCK_TTL=360 再留余量）；
-# - rm_reclaim / rm_watch / rm_reconcile：逐 Pod 的 k8s delete/get_pod/健康
-#   探测（httpx 3s/次），按 Pod 规模给足宽限。
+# - rm_* 四项：取 sweeper 的权威常量（tick 级执行锁 TTL 由同一组常量派生，
+#   两处各写一份必漂移——2026-11 事故里 reclaim 的锁 TTL=2s 而单拍上限 60s）。
 TICK_TIMEOUTS = {
     "sm_sweep": 30,
-    "rm_autoscale": 370,
-    "rm_reclaim": 60,
-    "rm_watch": 300,
-    "rm_reconcile": 300,
+    "rm_autoscale": AUTOSCALE_TICK_TIMEOUT,
+    "rm_reclaim": RECLAIM_TICK_TIMEOUT,
+    "rm_watch": WATCH_TICK_TIMEOUT,
+    "rm_reconcile": RECONCILE_TICK_TIMEOUT,
     # sys_sample：逐 scope 单键读写,快操作
     "sys_sample": 30,
     # sys_eval：LLM timeout(默认 60s,eval_llm_timeout 可调但须小于此值)
@@ -262,6 +266,7 @@ class OrchestratorSystemContext(SystemContext):
             instance_id=self.instance_id,
         )
         self._telemetry_task: asyncio.Task | None = None
+        self._reindex_task: asyncio.Task | None = None
 
     def _build_jobs(self) -> list[Any]:
         """全部后台任务（tick 级选主锁；多副本全局单副本执行写操作）。"""
@@ -372,6 +377,13 @@ class OrchestratorSystemContext(SystemContext):
                 interval_by_name.get(job.name, "?"),
                 TICK_TIMEOUTS.get(job.name),
             )
+        # RM scope 索引回填（存量库一次性迁移,2026-11）：常态枚举读索引集合,
+        # 本任务是「索引建立前的存量 scope」的唯一来源。**必须后台跑**——公用
+        # 大库上这一次全库 SCAN 可达数分钟(现网 113 万键实测 390s),阻塞 start
+        # 会把就绪探针拖死。多副本由 Redis 租约互斥,完成后标记永久生效。
+        self._reindex_task = asyncio.create_task(
+            self._reindex_rm_scopes(), name="rm-scope-reindex"
+        )
         # 计数缓冲 flusher:每副本独立(选主 job 会漏非 leader 副本的缓冲),
         # drain → 同槽 HINCRBY 批量聚合;失败留到下轮(计数只延后不丢)
         self._telemetry_task = asyncio.create_task(
@@ -447,6 +459,34 @@ class OrchestratorSystemContext(SystemContext):
             if deltas:
                 await self.eval_state.bump_counters(scope_id, deltas)
 
+    async def _reindex_rm_scopes(self) -> None:
+        """RM scope 索引回填（后台一次性；``AGENT_RUNTIME_RM_SCOPE_REINDEX``）。
+
+        - ``auto``（缺省）：无完成标记才扫，一个 Redis 只付一次；
+        - ``off``：永不扫（索引靠 config_sync 下发自建——**存量库上会让
+          autoscale/reclaim 在首次 config_sync 前看不到任何 scope**，仅在
+          确知索引已建好或库大到不能扫时使用）；
+        - ``force``：无条件重扫（运维修索引漂移）。
+        """
+        mode = self.arc.rm_scope_reindex
+        if mode == "off":
+            self.logger.info(
+                "rm scope reindex skipped (AGENT_RUNTIME_RM_SCOPE_REINDEX=off)")
+            return
+        try:
+            count = await self.rm_sweeper.state.reindex_scopes(
+                force=(mode == "force"))
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - 回填失败不影响已建索引的常态枚举
+            self.logger.exception(
+                "rm scope reindex failed (steady-state enumeration still reads "
+                "the index set; retry on next start or set "
+                "AGENT_RUNTIME_RM_SCOPE_REINDEX=force)")
+            return
+        if count < 0:
+            self.logger.debug("rm scope reindex not needed (already seeded)")
+
     async def jobs_snapshot(self) -> list[dict[str, Any]]:
         """诊断用：7 个后台任务的间隔/超时/计数器/当前 leader（/visualization/overview）。"""
         intervals = self._job_intervals()
@@ -495,6 +535,15 @@ class OrchestratorSystemContext(SystemContext):
             except Exception:  # noqa: BLE001
                 self.logger.exception("telemetry flush task failed on cancel")
             self._telemetry_task = None
+        if self._reindex_task is not None:
+            self._reindex_task.cancel()
+            try:
+                await self._reindex_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:  # noqa: BLE001
+                self.logger.exception("rm scope reindex task failed on cancel")
+            self._reindex_task = None
         # 终结 drain:停机前把缓冲余量尽量落 Redis(失败只留痕,计数延后无害)
         try:
             await asyncio.wait_for(

@@ -335,6 +335,90 @@ async def test_update_pool_config_with_pod_spec_refreshes_deploy_ver(runtime):
     assert "agentserver:9.0" in cfg["pod_spec_json"]
 
 
+# ------------------------------------------- 退役 scope 的空壳回收（2026-11）
+
+
+@requires_lua
+async def test_retired_scope_forgotten_once_drained(runtime):
+    """config_sync 扩散③ 推 retired=1 → 排空干净后 reconcile 删 config 出索引。
+
+    改前 scope:config 既无 TTL 也无删除点：被删 scope 永久留库，每次
+    config_sync 对它重推 min_idle=0、autoscale/reclaim 每拍遍历它。
+    """
+    await runtime.seed_template()
+    await _deploy_one(runtime)
+    assert SCOPE in await runtime.rm_state.known_scope_ids()
+
+    # 退役推送（= 扩散③ 的载荷形状：min_idle=0 + retired）
+    await runtime.rm_facade.update_pool_config(
+        SCOPE, {"min_idle_pods": 0, "max_pods": 2, "pod_ttl": 300, "retired": 1})
+    assert (await runtime.rm_state.load_scope_config(SCOPE))["retired"] == "1"
+
+    # 还有 Pod 在池里 → 不动（存量会话还在其上服务）
+    await runtime.rm_sweeper.reconcile_once()
+    assert SCOPE in await runtime.rm_state.known_scope_ids()
+
+    # 排空（会话结束 → idle → 回收）后才遗忘
+    for pod_id in await runtime.rm_state.pod_ids(SCOPE):
+        await runtime.rm_state.purge(pod_id)
+    await runtime.rm_sweeper.reconcile_once()
+    assert await runtime.rm_state.known_scope_ids() == []
+    assert await runtime.rm_state.load_scope_config(SCOPE) == {}
+
+
+@requires_lua
+async def test_active_scope_with_zero_min_idle_is_never_forgotten(runtime):
+    """按需供给的生效 scope（min_idle=0 且静息零 Pod）不得被当成僵尸删掉。
+
+    红线：判据必须是 retired 标记而非 min_idle==0——误删它的 config 会让
+    下一次 route 的 acquire 拿到 no_config 而冷启失败。
+    """
+    await runtime.seed_template()
+    await runtime.rm_facade.update_pool_config(
+        SCOPE, {"min_idle_pods": 0, "max_pods": 2, "pod_ttl": 300})
+    assert (await runtime.rm_state.load_scope_config(SCOPE))["retired"] == "0"
+
+    await runtime.rm_sweeper.reconcile_once()
+    assert SCOPE in await runtime.rm_state.known_scope_ids()
+    # 仍可冷启（config 在 → acquire 不是 no_config）
+    assert (await runtime.route("sess_cold"))["pod_id"]
+
+
+@requires_lua
+async def test_retired_flag_cleared_when_scope_revived(runtime):
+    """复活推送（扩散①）恒置 retired=0，不会被下一拍 reconcile 删掉。"""
+    await runtime.seed_template()
+    await runtime.rm_facade.update_pool_config(
+        SCOPE, {"min_idle_pods": 0, "retired": 1})
+    await runtime.rm_facade.update_pool_config(SCOPE, {"min_idle_pods": 1})
+    assert (await runtime.rm_state.load_scope_config(SCOPE))["retired"] == "0"
+    await runtime.rm_sweeper.reconcile_once()
+    assert SCOPE in await runtime.rm_state.known_scope_ids()
+
+
+# ------------------------------------------- tick 锁租约（2026-11 现网事故）
+
+
+def test_tick_lock_ttls_cover_tick_timeouts():
+    """执行锁 TTL 必须 ≥ 单拍上限，且与 main.TICK_TIMEOUTS 同源不漂移。
+
+    事故形态：autoscale/reclaim 的锁 TTL 写死 2s 而实跑 60~185s → 锁早过期，
+    另一副本可并发进同一拍（reclaim 侧无 lock_deploy 兜底）。
+    """
+    from agent_runtime import main as rt_main
+    from agent_runtime.resource_manager import sweeper as sw
+
+    pairs = {
+        "rm_autoscale": (sw.AUTOSCALE_TICK_TIMEOUT, sw.AUTOSCALE_LOCK_TTL),
+        "rm_reclaim": (sw.RECLAIM_TICK_TIMEOUT, sw.RECLAIM_LOCK_TTL),
+        "rm_watch": (sw.WATCH_TICK_TIMEOUT, sw.WATCH_LOCK_TTL),
+        "rm_reconcile": (sw.RECONCILE_TICK_TIMEOUT, sw.RECONCILE_LOCK_TTL),
+    }
+    for job, (timeout, lock_ttl) in pairs.items():
+        assert rt_main.TICK_TIMEOUTS[job] == timeout, job
+        assert lock_ttl > timeout, job
+
+
 # ---------------------------------------------------------------- generation(场景 M-R)
 
 @requires_lua
