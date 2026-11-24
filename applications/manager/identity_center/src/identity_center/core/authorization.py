@@ -32,10 +32,11 @@ class DirectoryAuthorizationClient:
 
     def __init__(
         self,
-        endpoint: str,
+        manager_base_url: str,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
-        self._endpoint = endpoint.strip()
+        base_url = manager_base_url.strip().rstrip("/")
+        self._endpoint = base_url + "/api/v1/authz/me" if base_url else ""
         self._http = httpx.AsyncClient(
             timeout=3.0, trust_env=False, follow_redirects=False, transport=transport,
         )

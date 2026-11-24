@@ -180,7 +180,7 @@ def test_directory_requires_authorization_without_blocking_identity(tmp_path, mo
     monkeypatch.setattr(settings, "seed_admin", False)
     monkeypatch.setattr(settings, "seed_user1", True)
     monkeypatch.setattr(settings, "user1_password", password)
-    monkeypatch.setattr(settings, "authorization_url", "")
+    monkeypatch.setattr(settings, "manager_base_url", "")
 
     with TestClient(create_app()) as client:
         login = client.post(

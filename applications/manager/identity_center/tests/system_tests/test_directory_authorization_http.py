@@ -23,10 +23,11 @@ def directory_client(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "seed_user1", True)
     monkeypatch.setattr(settings, "admin_password", password)
     monkeypatch.setattr(settings, "user1_password", password)
-    monkeypatch.setattr(settings, "authorization_url", "https://authorization.test/me")
+    monkeypatch.setattr(settings, "manager_base_url", "https://authorization.test")
     context = SimpleNamespace(decisions={"admin": True, "user1": False}, calls=[], status=200)
 
     def authorize(request):
+        assert str(request.url) == "https://authorization.test/api/v1/authz/me"
         token = request.headers["Authorization"].removeprefix("Bearer ")
         user_id = decode_access_token(token)["sub"]
         context.calls.append(user_id)

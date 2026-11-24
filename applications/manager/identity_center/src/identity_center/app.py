@@ -54,7 +54,7 @@ async def lifespan(application: FastAPI):
         access_ttl=settings.access_ttl_seconds,
     )
     # Constructing the client performs no authorization-service request.
-    directory_authorizer = DirectoryAuthorizationClient(settings.authorization_url)
+    directory_authorizer = DirectoryAuthorizationClient(settings.manager_base_url)
     application.state.directory_authorizer = directory_authorizer
     try:
         yield
