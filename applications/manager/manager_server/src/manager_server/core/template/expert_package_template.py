@@ -10,6 +10,7 @@ from openjiuwen_runtime.foundation.db.handler import DBHandler
 from manager_server.core.application_config.hub_package_catalog import HIDDEN_HUB_ASSET_IDS
 from manager_server.core.template.push_template_to_gateway import (
     assert_template_deletable,
+    assert_template_not_referenced,
     count_agent_template_reference_counts,
     delete_template_on_referencing_gateways,
     update_template_on_referencing_gateways,
@@ -261,6 +262,11 @@ class ExpertPackageTemplateService:
         if not updates:
             counts = await self._reference_counts()
             return row_to_out(existing, reference_count=counts.get(str(existing.template_id), 0))
+
+        if updates.get("enabled") is False and bool(getattr(existing, "enabled", True)):
+            await assert_template_not_referenced(
+                self._handler, template_id, _KIND, action="disable"
+            )
 
         payload = dict(updates)
         payload["revision"] = current + 1

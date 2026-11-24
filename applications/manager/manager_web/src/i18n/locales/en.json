@@ -1515,7 +1515,8 @@
   "templateInUse": {
     "agentDefinitions": "This template is referenced by {{count}} Agent Template(s). Delete those Agent Templates first.",
     "agentConfigInstances": "This template is still used by {{count}} instance Agent(s). Remove those references first.",
-    "runtimeServices": "This template is still used by {{count}} instance runtime resource(s). Remove those references first."
+    "runtimeServices": "This template is still used by {{count}} instance runtime resource(s). Remove those references first.",
+    "agentTemplates": "This resource is still referenced by {{count}} Agent config template(s). Remove those references before disabling or deleting it."
   },
   "templateRefEditor": {},
   "containerTemplate": {
