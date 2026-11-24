@@ -255,6 +255,30 @@ PERMISSIONS_TEMPLATE_TABLE_DEF = TableDefinition(
     ],
 )
 
+# React 运行策略模板：react 配置整段存 data JSON（不再拆列）。
+REACT_TEMPLATE_TABLE_DEF = TableDefinition(
+    table_name="react_template",
+    columns=[
+        ColumnDefinition(
+            "id",
+            "integer",
+            primary_key=True,
+            autoincrement=True,
+            nullable=False,
+        ),
+        ColumnDefinition("template_id", "string", length=100, nullable=False),
+        ColumnDefinition("template_name", "string", length=128, nullable=False),
+        ColumnDefinition("description", "string", length=512, nullable=True),
+        ColumnDefinition("enabled", "boolean", nullable=False, default=True),
+        ColumnDefinition("data", "json", nullable=True),
+        ColumnDefinition("created_at", "datetime", nullable=False),
+        ColumnDefinition("updated_at", "datetime", nullable=False),
+    ],
+    indexes=[
+        IndexDefinition(["template_id"], unique=True),
+    ],
+)
+
 # 容器规格目录（与 Runtime service_config_container 对齐；平台全局，不带 jiuwenclaw_id）。
 # 模板经 main_container_id / sidecar_container_ids 引用；create/update 时 UPSERT 本表。
 # command/args 与 Runtime 对齐（存量库须手工 ALTER 补列）。

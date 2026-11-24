@@ -790,6 +790,54 @@ class PermissionsTemplateOut(BaseModel):
     updated_at: str | None
 
 
+class ReactTemplateCreateBody(SafeTextMixin):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    template_name: str = Field(..., min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=512)
+    enabled: bool = True
+    body: dict[str, Any] = Field(
+        ...,
+        description=("完整 react 段，结构与 config.yaml::react 一致（不含模型三键）"),
+    )
+
+
+class ReactTemplateUpdateBody(SafeTextMixin):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    template_name: str | None = Field(default=None, min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=512)
+    enabled: bool | None = None
+    body: dict[str, Any] | None = None
+
+
+class ReactTemplateListQuery(BaseModel):
+    page: int = Field(1, ge=1)
+    page_size: int = Field(20, ge=1, le=200)
+    enabled: bool | None = None
+    search: str | None = Field(
+        default=None,
+        description="按 template_id、template_name、description 模糊搜索",
+    )
+    sort_by: str | None = Field(
+        default=None,
+        description="排序字段：template_name、description、updated_at",
+    )
+    sort_order: str | None = Field(default=None, description="排序方向：asc、desc")
+
+
+class ReactTemplateOut(BaseModel):
+    id: int
+    template_id: str
+    template_name: str
+    description: str | None
+    enabled: bool
+    reference_count: int = 0
+    body: dict[str, Any]
+    created_at: str | None
+    updated_at: str | None
+
+
 _VALID_MCP_TRANSPORTS = frozenset(
     {
         "stdio",
