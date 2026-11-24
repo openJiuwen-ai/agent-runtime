@@ -139,7 +139,12 @@ async def fetch_platform_package_catalog() -> dict[str, Any]:
         base_url = _hub_base_url()
         timeout = float(settings.team_skills_hub_timeout or 30.0)
         items: list[dict[str, Any]] = []
-        async with httpx.AsyncClient(timeout=timeout, trust_env=False, follow_redirects=False) as client:
+        async with httpx.AsyncClient(
+            timeout=timeout,
+            trust_env=False,
+            follow_redirects=False,
+            verify=settings.team_skills_hub_verify_ssl,
+        ) as client:
             for kind, plugin_type in _HUB_PLUGIN_TYPES:
                 items.extend(await _list_hub_kind(client, base_url, kind, plugin_type))
     except Exception:  # noqa: BLE001
