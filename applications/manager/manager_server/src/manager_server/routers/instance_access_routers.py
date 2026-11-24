@@ -12,7 +12,9 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 
+from manager_server.core.authz import count_org_references, count_user_references
 from manager_server.core.instance_access import org_gateway_service, user_gateway_service
+
 from manager_server.infrastructure.db import get_db_handler
 from manager_server.infrastructure.jiuwenclaw_id import validate_jiuwenclaw_id
 from manager_server.routers.auth_guards import require_admin
@@ -186,3 +188,21 @@ async def list_user_instance_grants(handler: _Handler, user_ids: str = Query(def
 async def list_org_instance_grants(handler: _Handler, group_ids: str = Query(default="")):
     ids = [x for x in group_ids.split(",") if x.strip()]
     return _ok({"bindings": await org_gateway_service(handler).list_instances_for(ids)})
+
+
+@gateway_lookup_router.get("/org-references/{group_id}", response_model=ResponseModel)
+async def get_org_references(group_id: str, handler: _Handler):
+    """删除/禁用组织前：统计 manager 侧准入 / Agent 授权范围 / 配额策略引用。"""
+    try:
+        return _ok(await count_org_references(handler, group_id))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@gateway_lookup_router.get("/user-references/{user_id}", response_model=ResponseModel)
+async def get_user_references(user_id: str, handler: _Handler):
+    """删除/禁用用户前：统计 manager 侧准入 / Agent 授权范围 / 配额策略引用。"""
+    try:
+        return _ok(await count_user_references(handler, user_id))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
