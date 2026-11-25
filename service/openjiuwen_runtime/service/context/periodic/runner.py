@@ -488,17 +488,22 @@ class JobRunner:
                 self._loop_alive_at = time.monotonic()
 
                 # 长睡之后再对表，集合窗口用较新的偏移
+                sync_t0 = time.monotonic()
                 now2 = await self._sync_now()
+                sync_cost = time.monotonic() - sync_t0
                 if not self._generation_current(generation):
                     return
                 if now2 is None:
                     continue
-                if self._missed_fire(now2, planned_fire=next_ts, wake_at=wake_at):
+                if self._missed_fire(now2, planned_fire=next_ts,
+                                     wake_at=wake_at, slack=sync_cost):
                     logger.info(
-                        "missed fire, skip tick: job=%s planned=%s now=%s",
+                        "missed fire, skip tick: job=%s planned=%s now=%s "
+                        "clock_sync_ms=%.1f",
                         self._name,
                         next_ts,
                         now2,
+                        sync_cost * 1000,
                     )
                     continue
                 await self._safe_tick(planned_fire=next_ts, now=now2)
@@ -524,17 +529,24 @@ class JobRunner:
                 )
                 await asyncio.sleep(_TIME_FAIL_SLEEP_SEC)
 
-    def _missed_fire(self, now: float, *, planned_fire: float, wake_at: float) -> bool:
+    def _missed_fire(self, now: float, *, planned_fire: float, wake_at: float,
+                     slack: float = 0.0) -> bool:
         """睡过头：本拍不开火，下一圈按新时间对齐到下一拍。
 
         - 已进入再下一拍（``now >= next_fire(planned)``）：一定跳过。
         - 本该提前醒来（集合窗口）却已经过了开火点：也跳过。
         - gather=0 时睡到 T 可能有几毫秒抖动，只要还没到下一拍仍打。
+
+        ``slack`` = 醒来后那次 Redis 对表（``TIME``）的实测耗时，从判据里扣掉
+        （2026-11）：它发生在**醒来之后**，不是睡过头。否则 RTT 超过集合窗口
+        （默认 80ms）的环境里，1s 间隔任务每拍都被判 missed fire 而整拍丢弃
+        ——现网 1Hz 的 sm_sweep 因此长期不执行到期驱逐。
         """
+        woke_at = now - max(slack, 0.0)
         following = self._schedule.next_fire_time(planned_fire)
-        if now >= following:
+        if woke_at >= following:
             return True
-        return wake_at < planned_fire and now > planned_fire
+        return wake_at < planned_fire and woke_at > planned_fire
 
     async def _invoke_on_tick(self) -> bool:
         """跑业务回调；若协调器支持失锁事件，失锁则取消回调。

@@ -209,15 +209,20 @@ lock:config_sync 串行化(忙→409 CONFIG_SYNC_BUSY;基线 TTL 60 + **看门�
   丢 bump 的 scope 退化为软界(会话自然结束后 pod_ttl 回收)
 → eager 预热:每个**生效中** scope 推 push(sid, pool_config, deploy_subset)——必须带
   pod_spec(RM 才落 pod_spec_json/deploy_ver;autoscale 无请求预热 min_idle 的依赖);
-  过期 scope 推 min_idle=0 停预热(与被删同款;enabled 已删,「关」=从载荷删除)
+  过期 scope 推 min_idle=0 停预热(与被删同款;enabled 已删,「关」=从载荷删除)。
+  **仍在载荷里 ⇒ 不带 `retired`**(RM 侧恒写 retired=0):过期只停预热,不是退役——
+  续期后无需等下一次 sync 才能冷启
 → 候选集版本收敛(声明式,非 one-shot):对**每个生效中** scope 把 deploy_ver ≠ 当前版本的
   Pod ZREM 出候选——不由 diff 驱动,写 DB 后中途失败/同载荷重试(diff==none)也每拍
   重算,旧版 Pod 不会无限期接新流量
 → 删除处理:目标集 = **RM 已知 scope(known_rm_scopes 回调)∪ DB 旧 scope** − 本批;
   **本批新删的 scope(s∈DB 旧集)先 `_bump_or_warn` 再推** push(sid,
-  {**旧模板池参数, min_idle_pods:0}, None)——同款日落排空(仅首删一次,rm_known
-  里的陈年旧删每拍只重推不重复 bump);RM config 键是幻影预热的真源,只看 DB(删行
-  后失忆)的话一次推送失败后 min_idle=0 永远补不上
+  {**旧模板池参数, min_idle_pods:0, **retired:1**}, None)——同款日落排空(仅首删一次,
+  rm_known 里的陈年旧删每拍只重推不重复 bump);RM config 键是幻影预热的真源,只看 DB
+  (删行后失忆)的话一次推送失败后 min_idle=0 永远补不上。**`retired:1`**(2026-11)是
+  RM 侧 reconcile 删 config + 出 scope 索引的唯一判据——否则被删 scope 的 config 永久
+  留库(每拍遍历 + 每次 sync 重推),陈年旧删只增不减;排空干净后被遗忘,此后目标集
+  自然收缩(known_rm_scopes 不再含它)
 → 响应 {ok, templates_synced/deleted, **containers_synced/deleted**, scopes_synced/deleted, affected_scopes, **routing_sunset(路由性排除日落集,2026-09)**, wildcard_present}
 ```
 

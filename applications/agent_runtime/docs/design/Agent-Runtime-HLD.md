@@ -717,12 +717,15 @@ flowchart TB
 | `resource:scope:{scope_id}:pods` | ZSET | pod_id(score=创建序) | 该 scope 全部 Pod(in_use ∪ idle);`ZCARD` 参与 `max_pods` 判定 |
 | `resource:scope:{scope_id}:idle` | SET | idle 的 pod_id | **SCARD = idle Pod 数**(autoscale / reclaim 闸门;acquire 从此取暖 Pod) |
 | `resource:scope:{scope_id}:declared` | HASH | pod 名 → JSON{host, declared_ts} | **routing 模式外部 Pod 声明表**(2026-10-routing-deploy-mode);成员资格 = 版本/代次豁免唯一判据(五点共用:LUA_ACQUIRE 过滤/reclaim/has_lagged_pods/sunset_pending_pods/SM 软摘除);scope 删除 DEL → 外部 Pod 回归既有日落 |
-| `resource:scope:{scope_id}:config` | HASH | min_idle_pods / max_pods / pod_ttl / pod_concurrency / deploy_ver / pod_spec_json / generation | config_sync 对**每个存活 scope 主动写入/刷新**(带 pod_spec——无请求 scope 的 autoscale 预热依赖 pod_spec_json;**不含 generation**——代次只经 config_refresh 的 HINCRBY 单调递增,推送永不重置);首 acquire 也会兜底写入;被删 scope 推 `min_idle=0` 停预热自然排空 |
+| `resource:scope:{scope_id}:config` | HASH | min_idle_pods / max_pods / pod_ttl / pod_concurrency / deploy_ver / pod_spec_json / generation | config_sync 对**每个存活 scope 主动写入/刷新**(带 pod_spec——无请求 scope 的 autoscale 预热依赖 pod_spec_json;**不含 generation**——代次只经 config_refresh 的 HINCRBY 单调递增,推送永不重置);首 acquire 也会兜底写入;被删 scope 推 `min_idle=0` + **`retired=1`** 停预热自然排空(退役标记,2026-11:reconcile 在该 scope 排空干净后删本键并出索引——本键原先无 TTL 也无任何删除点,陈年旧删只增不减;**判据不得用 min_idle==0 代替**,按需供给的生效 scope 合法地 min_idle=0 且静息零 Pod) |
 | `resource:scope:{scope_id}:deploying` | ZSET | deploy 占位 token(uuid) → deadline(秒级时间戳) | 计入 `max_pods` 判定(防并发 deploy 超配);register / 失败时清;score=deadline 供闸门/autoscale 原子清崩溃遗留(硬崩后占位不永久虚占容量) |
 | `resource:scope:{scope_id}:deploy_followers` | ZSET | deploy 锁输家的 request_id → deadline | follower 等待室(M8):`ZCARD ≤ pod_concurrency-1`;检测 leader Pod 注册即复用;score=deadline 供闸门清崩溃遗留 |
 | `resource:pod:{pod_id}:info` | HASH | scope_id / pod_sse_url / pod_ip / namespace / phase / created_ts / deploy_ver / sse_port / health_path / generation | Pod 元信息;`scope_id` 标识所属池;`deploy_ver` 供 acquire 版本过滤(只发当前版本暖 Pod);`generation` 为注册时刻代次烙印(REGISTER 在 Redis 服务端读 scope:config,与 bump 原子排队——config_refresh 的日落判定用) |
 | `resource:pod:{pod_id}:idle_since` | STRING | idle 起始时间戳 | reclaim 计时(aged ≥ `pod_ttl` 回收) |
 | `resource:pods:all` | SET | 全部 pod_id | 孤儿对账 / 枚举 |
+| `resource:scopes:all` | SET | 全部 scope_id | **scope 枚举唯一常态源**(`known_scope_ids` = SMEMBERS;2026-11-scope-index-no-scan)。禁止退化为 `SCAN MATCH` —— 其代价 ∝ 整库键数而非命中数,公用 Redis(DBSIZE=113 万)实测单次 390s 命中 6,而 autoscale/reclaim 是 1s 一拍。写点 = save_scope_config / bump_generation(同槽单事务 SADD),删点 = reconcile 的 `forget_scope`(retired 且空壳) |
+| `resource:scopes:declared` | SET | 有声明表的 scope_id | 声明表枚举源(routing 收养循环),同上 |
+| `resource:scopes:reindexed` / `:reindex_lease` | STRING | 回填完成标记 / 互斥租约(EX 1800) | 存量库一次性索引回填(启动期后台 SCAN,一个 Redis 只付一次;`AGENT_RUNTIME_RM_SCOPE_REINDEX`) |
 | `lock:rm:deploy:{scope_id}` | STRING(NX EX) | 选主标记 | per-scope deploy 串行(防并发 deploy 超配) |
 | `lock:rm:autoscale` | STRING(NX EX) | 选主标记 | autoscale tick 级选主 |
 | `lock:rm:reclaim` | STRING(NX EX) | 选主标记 | reclaim tick 级选主 |

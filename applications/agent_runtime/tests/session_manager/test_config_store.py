@@ -294,6 +294,29 @@ async def test_deleted_scope_gets_min_idle_zero(runtime):
     assert len(drop_pushes) == 1
     pool, spec = drop_pushes[0][1], drop_pushes[0][2]
     assert pool["min_idle_pods"] == 0 and spec is None
+    # 退役标记（2026-11）：RM 侧 reconcile 凭它在排空后删 config + 出索引，
+    # 否则被删 scope 的 config 永久留库、每拍都被遍历/重推
+    assert pool["retired"] == 1
+
+
+async def test_expired_scope_push_is_not_marked_retired(runtime):
+    """过期 scope 推 min_idle=0 但**不**退役——它仍在载荷里（落库、可续期）。
+
+    红线：retired 只由「从载荷消失」触发（扩散③，含 enabled=false 的缺席）；
+    把「过期」也算退役会让 RM 删掉 config，续期后要等下一次 config_sync
+    才能冷启。
+    """
+    past = (datetime.now(timezone.utc) - timedelta(hours=1)
+            ).isoformat().replace("+00:00", "Z")
+    await runtime.config_store.config_sync(_payload(
+        [_tpl("tpl-1"), _tpl("tpl-fb")],
+        [_scope("s-exp", "tpl-1", index=0, expires_at=past),
+         _scope("fallback", "tpl-fb", index=100)],
+    ))
+    pushes = [p for p in runtime.pool_pushes if p[0] == "s-exp"]
+    assert pushes and int(pushes[-1][1]["min_idle_pods"]) == 0
+    assert pushes[-1][2] is None                       # 不预热
+    assert not pushes[-1][1].get("retired")
 
 
 # -------------------------------------------------------------- A/B 类扩散(沿用语义)

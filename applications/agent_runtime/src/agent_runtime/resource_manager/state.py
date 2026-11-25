@@ -33,6 +33,16 @@ DEPLOY_TOKEN_TTL = 360
 # 单次 Lua eval 超过该时长告警（即 Redis 延迟探针；正常 <1ms）
 _SLOW_EVAL_MS = 200.0
 
+# scope 索引回填（存量迁移/人工修复）的全库 SCAN 页大小。**只在 reindex 路径
+# 使用**——常态枚举走索引集合 SMEMBERS，不扫库（2026-11 现网事故：公用 Redis
+# DBSIZE=113 万时一次 `SCAN MATCH` 全库遍历耗时 390s，见
+# docs/feature/2026-11-scope-index-no-scan.md）。页大小从 200 提到 2000：
+# 回填往返数降一个数量级，单页服务端耗时仍在亚毫秒级。
+_REINDEX_SCAN_COUNT = 2000
+
+# 回填互斥租约 TTL（防多副本同时扫库；崩溃后经此窗口可重试）
+_REINDEX_LEASE_TTL = 1800
+
 
 def _script_tag(script: str) -> str:
     """Lua 源 → 常量名（诊断用；未知源返回 8 字符指纹）。"""
@@ -119,6 +129,30 @@ class RMKeys:
     def pods_all(self) -> str:
         """SET: 全部 pod_id（孤儿对账 / 枚举）。"""
         return f"{self.prefix}:resource:pods:all"
+
+    # ---- scope 索引（2026-11：取代全库 SCAN 枚举）
+    def scopes_index(self) -> str:
+        """SET: 全部已知 scope_id —— ``known_scope_ids`` 的唯一常态枚举源。
+
+        写点 = ``save_scope_config`` / ``bump_generation``（与 config 哈希同
+        一事务 SADD），删点 = ``forget_scope``。**不得退化为 SCAN 枚举**：
+        公用 Redis 上 `SCAN MATCH` 的代价 ∝ 整库键数（现网 113 万键实测单次
+        390s），而 autoscale/reclaim 是 1s 一拍。索引漂移（人工删键/回填中断）
+        由 config_sync 每次下发对全部存量 scope 重新 SADD 自愈。
+        """
+        return f"{self.prefix}:resource:scopes:all"
+
+    def declared_index(self) -> str:
+        """SET: 有外部声明表的 scope_id（``declared_scope_ids`` 枚举源，同上）。"""
+        return f"{self.prefix}:resource:scopes:declared"
+
+    def scopes_reindexed(self) -> str:
+        """STRING: 索引已回填完成标记（一个 Redis 只付一次全库 SCAN）。"""
+        return f"{self.prefix}:resource:scopes:reindexed"
+
+    def scopes_reindex_lease(self) -> str:
+        """STRING: 回填互斥租约（多副本同时启动只有一个扫库；带 TTL 可重试）。"""
+        return f"{self.prefix}:resource:scopes:reindex_lease"
 
     # ---- 选主锁（deploy per-scope；autoscale / reclaim / watch / reconcile tick 级）
     def lock_deploy(self, scope_id: str) -> str:
@@ -311,19 +345,57 @@ class ResourceState:
         return {s(k_): s(v) for k_, v in raw.items()}
 
     async def save_scope_config(self, scope_id: str, mapping: dict[str, Any]) -> None:
-        await self.redis.hset(
-            self.k.scope_config(scope_id), mapping={k_: str(v) for k_, v in mapping.items()}
-        )
+        """写池参数缓存 **并把 scope 登记进索引集合**（同槽单事务，一次往返）。
+
+        索引先 SADD 后 HSET（同事务无中间态；退化到非事务客户端时也保证
+        「有 config 必在索引里」这个方向——反向的索引多余成员无害：
+        ``load_scope_config`` 空 → min_idle=0 → autoscale/reclaim 跳过）。
+        """
+        async with self.redis.pipeline(transaction=True) as pipe:
+            pipe.sadd(self.k.scopes_index(), scope_id)
+            pipe.hset(
+                self.k.scope_config(scope_id),
+                mapping={k_: str(v) for k_, v in mapping.items()},
+            )
+            await pipe.execute()
 
     async def bump_generation(self, scope_id: str) -> int:
         """scope 代次 +1（HINCRBY 原子自增），返回新代次。
 
         config_refresh 的日落标记唯一写点：save_scope_config 的 mapping 永不含
         generation（config_sync 推送不重置代次，只单调递增）。缺省键从 1 起。
+        HINCRBY 会建 config 哈希（refresh 先 bump 后 push），故同样补索引 SADD。
         """
-        return to_int(await self.redis.hincrby(
-            self.k.scope_config(scope_id), "generation", 1
-        ))
+        async with self.redis.pipeline(transaction=True) as pipe:
+            pipe.sadd(self.k.scopes_index(), scope_id)
+            pipe.hincrby(self.k.scope_config(scope_id), "generation", 1)
+            resp = await pipe.execute()
+        return to_int(resp[-1])
+
+    async def forget_scope(self, scope_id: str) -> bool:
+        """彻底遗忘一个已退役且空壳的 scope（reconcile 的空壳回收，2026-11）。
+
+        删 config / drain_until / 占位 ZSET / 候选 ZSET / idle SET 并 SREM 两个
+        索引——**调用方必须先确认该 scope 无 Pod、无占位、无声明**（见
+        ``ResourceSweeper._sweep_retired_scopes``）。不删 declared（声明表非空
+        的 scope 不在回收条件内，整键删除语义见 ``drop_declared``）。
+
+        存在性：config 键无 TTL、原先也无任何删除点，被删 scope 的 config 会
+        永久留在库里——每次 config_sync 对它重推 min_idle=0、autoscale 每拍
+        遍历它（现网 6 个 scope 里 5 个是这种僵尸）。
+        """
+        async with self.redis.pipeline(transaction=True) as pipe:
+            pipe.delete(
+                self.k.scope_config(scope_id),
+                self.k.scope_drain_until(scope_id),
+                self.k.scope_deploying(scope_id),
+                self.k.scope_pods(scope_id),
+                self.k.scope_idle(scope_id),
+            )
+            pipe.srem(self.k.scopes_index(), scope_id)
+            pipe.srem(self.k.declared_index(), scope_id)
+            await pipe.execute()
+        return True
 
     async def drain_until(self, scope_id: str) -> int | None:
         """排空截止时间戳；None = 无活跃排空纪元（或已过期，兜底语义 = 立即回收）。"""
@@ -363,10 +435,15 @@ class ResourceState:
     # -------------------------------------------------------------- 外部声明表（routing 模式）
 
     async def add_declared(self, scope_id: str, entries: dict[str, str]) -> None:
-        """写声明（HSET 覆盖幂等；name → JSON 串，见 RMKeys.scope_declared）。"""
+        """写声明（HSET 覆盖幂等；name → JSON 串，见 RMKeys.scope_declared）。
+
+        同事务 SADD 声明索引（``declared_scope_ids`` 的枚举源）。
+        """
         if entries:
-            await self.redis.hset(self.k.scope_declared(scope_id),
-                                  mapping=entries)
+            async with self.redis.pipeline(transaction=True) as pipe:
+                pipe.sadd(self.k.declared_index(), scope_id)
+                pipe.hset(self.k.scope_declared(scope_id), mapping=entries)
+                await pipe.execute()
 
     async def declared_entries(self, scope_id: str) -> dict[str, str]:
         """全部声明：pod 名 → JSON{host, declared_ts}（解码 s() 同池读惯例）。"""
@@ -379,37 +456,43 @@ class ResourceState:
         return sorted(s(n) for n in names)
 
     async def remove_declared(self, scope_id: str, names: list[str]) -> int:
-        """注销部分声明（deregister_pods）；返回实际删除数。"""
+        """注销部分声明（deregister_pods）；返回实际删除数。
+
+        删空则 SREM 声明索引（残留空成员本身无害——``declared_entries`` 为空
+        时 adopt 循环空转——但不留它更干净）。
+        """
         if not names:
             return 0
-        return to_int(await self.redis.hdel(
+        removed = to_int(await self.redis.hdel(
             self.k.scope_declared(scope_id), *names))
+        if removed and not await self.redis.exists(self.k.scope_declared(scope_id)):
+            await self.redis.srem(self.k.declared_index(), scope_id)
+        return removed
 
     async def drop_declared(self, scope_id: str) -> int:
         """清空该 scope 声明表（scope 删除/路由性排除；返回删除 field 数）。
 
         语义后果：外部 Pod 失去版本/代次豁免 → 既有 gen-lag 日落回收接管
         （purge 仍不物理删）。HDEL 逐项 vs DEL 整键：DEL 更彻底（含未知残留
-        field），且 declared 键无 TTL 语义，整删安全。
+        field），且 declared 键无 TTL 语义，整删安全。索引同步 SREM。
         """
         entries = await self.declared_entries(scope_id)
         if entries:
-            await self.redis.delete(self.k.scope_declared(scope_id))
+            async with self.redis.pipeline(transaction=True) as pipe:
+                pipe.delete(self.k.scope_declared(scope_id))
+                pipe.srem(self.k.declared_index(), scope_id)
+                await pipe.execute()
+        else:
+            await self.redis.srem(self.k.declared_index(), scope_id)
         return len(entries)
 
     async def declared_scope_ids(self) -> list[str]:
-        """扫全部声明表键（adopt 循环的遍历源）。
+        """有外部声明表的 scope（adopt 循环的遍历源）——读索引集合，不扫库。
 
-        与 known_scope_ids 同款 scan_iter 驱动（cluster 游标 {节点:游标} dict
-        的手写循环陷阱见其注释，2026-09-20 issue #4581）。
+        见 ``RMKeys.declared_index`` / ``known_scope_ids`` 的同款论证。
         """
-        pattern = f"{self.prefix}resource:scope:*:declared"
-        scope_ids: list[str] = []
-        async for key in self.redis.scan_iter(match=pattern, count=200):
-            # {resource_manager}:resource:scope:{scope_id}:declared → scope_id
-            parts = s(key).split(":")
-            scope_ids.append(parts[-2])
-        return sorted(set(scope_ids))
+        members = await self.redis.smembers(self.k.declared_index())
+        return sorted(s(m) for m in members)
 
     async def has_scope_config(self, scope_id: str) -> bool:
         return to_int(
@@ -458,7 +541,25 @@ class ResourceState:
         return to_int(await self.redis.zcard(self.k.scope_deploying(scope_id)))
 
     async def known_scope_ids(self) -> list[str]:
-        """扫全部 scope:config 键（autoscale / reclaim 的 per-scope 遍历源）。
+        """RM 已知的全部 scope（autoscale / reclaim / reconcile / 评估的遍历源）。
+
+        **读索引集合 SMEMBERS，一次往返，与库大小无关。** 2026-11 前这里是
+        ``SCAN MATCH {prefix}resource:scope:*:config``——代价 ∝ 整库键数而非
+        命中数，现网公用 Redis（DBSIZE=113 万）实测单次 390s 命中 6 个；6 个
+        调用点（autoscale/reclaim 1s 一拍、reconcile 两遍、sys_sample、
+        sys_eval、config_sync 扩散③）常态并发扫库，互相拖慢到每拍必超时：
+        reclaim/sys_sample 连续 1000+ 拍一次没跑完（超时即从游标 0 重来，
+        自持风暴），并把普通命令延迟抬高 100 倍。详见
+        docs/feature/2026-11-scope-index-no-scan.md。
+
+        索引缺失的存量库由 ``reindex_scopes``（启动期一次性、互斥租约）回填；
+        漂移由 config_sync 每次下发重新 SADD 自愈。
+        """
+        members = await self.redis.smembers(self.k.scopes_index())
+        return sorted(s(m) for m in members)
+
+    async def scan_scope_ids(self) -> list[str]:
+        """全库 SCAN 枚举 scope（**仅回填/诊断用**，常态走 known_scope_ids）。
 
         分页续扫交由客户端 ``scan_iter`` 驱动：cluster 的 SCAN 默认扫全部
         主节点，游标返回 {节点: 游标} dict（单实例/fakeredis 为 int），续扫
@@ -466,13 +567,58 @@ class ResourceState:
         曾把整个 dict 当游标回传，键空间一页扫不完即 DataError，配置查询/
         autoscale/reclaim 全断（2026-09-20 issue #4581）。
         """
-        pattern = f"{self.prefix}resource:scope:*:config"
+        return await self._scan_suffix("config")
+
+    async def scan_declared_scope_ids(self) -> list[str]:
+        """全库 SCAN 枚举声明表 scope（仅回填/诊断用，同 scan_scope_ids）。"""
+        return await self._scan_suffix("declared")
+
+    async def _scan_suffix(self, suffix: str) -> list[str]:
+        pattern = f"{self.prefix}resource:scope:*:{suffix}"
         scope_ids: list[str] = []
-        async for key in self.redis.scan_iter(match=pattern, count=200):
-            # {resource_manager}:resource:scope:{scope_id}:config → scope_id
+        async for key in self.redis.scan_iter(
+                match=pattern, count=_REINDEX_SCAN_COUNT):
+            # {resource_manager}:resource:scope:{scope_id}:<suffix> → scope_id
             parts = s(key).split(":")
             scope_ids.append(parts[-2])
         return sorted(set(scope_ids))
+
+    async def reindex_scopes(self, *, force: bool = False) -> int:
+        """存量迁移：全库 SCAN 一次，把既有 scope 回填进索引集合。
+
+        返回回填的 scope 数；``-1`` = 本次跳过（已回填过，或另一副本正持租约）。
+
+        - 幂等且**一个 Redis 只付一次**（完成标记无 TTL）；多副本同时启动由
+          租约（TTL ``_REINDEX_LEASE_TTL``）互斥，中途崩溃不留完成标记 → 租约
+          过期后下次启动重试。
+        - ``force=True`` 跳过标记与租约（运维手工修复索引漂移用）。
+        - 调用方应**后台跑**：公用大库上这一次扫描可达数分钟，不得阻塞就绪。
+        """
+        if not force:
+            if await self.redis.get(self.k.scopes_reindexed()):
+                return -1
+            if not await self.redis.set(
+                    self.k.scopes_reindex_lease(), "1",
+                    nx=True, ex=_REINDEX_LEASE_TTL):
+                return -1
+        t0 = time.monotonic()
+        config_ids = await self.scan_scope_ids()
+        declared_ids = await self.scan_declared_scope_ids()
+        async with self.redis.pipeline(transaction=True) as pipe:
+            if config_ids:
+                pipe.sadd(self.k.scopes_index(), *config_ids)
+            if declared_ids:
+                pipe.sadd(self.k.declared_index(), *declared_ids)
+            pipe.set(self.k.scopes_reindexed(), "1")
+            await pipe.execute()
+        logger.info(
+            "rm scope index rebuilt from full scan: scopes=%d declared=%d "
+            "duration_ms=%.0f force=%s (one-off migration; steady state reads "
+            "the index set)",
+            len(config_ids), len(declared_ids),
+            (time.monotonic() - t0) * 1000, force,
+        )
+        return len(config_ids)
 
     # -------------------------------------------------------------- 健康探测（场景 N）
 

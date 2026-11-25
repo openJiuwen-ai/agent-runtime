@@ -1093,11 +1093,15 @@ class ConfigStore:
             if sid in old_scopes:
                 await self._bump_or_warn(sid)
             old_tpl = old_templates.get(old_scopes[sid].template_id) if sid in old_scopes else None
+            # retired=1：本 scope 已不在任何载荷里 → RM 的 reconcile 在它排空
+            # 干净后删掉 config 并出索引（否则 config 键永不删，每拍遍历 +
+            # 每次 sync 重推的僵尸只增不减）。生效/禁用 scope 走扩散①，恒
+            # retired=0——禁用 ≠ 退役，重新启用时无需等 RM 侧重建。
             pool = (
-                {**old_tpl.pool_config(), "min_idle_pods": 0}
+                {**old_tpl.pool_config(), "min_idle_pods": 0, "retired": 1}
                 if old_tpl is not None
                 else {"min_idle_pods": 0, "max_pods": 1, "pod_ttl": 300,
-                      "session_ttl": 60}
+                      "session_ttl": 60, "retired": 1}
             )
             await self._push_or_warn(sid, pool, None)
             # routing 模式：清外部声明表（warn-only，同 push 先例——DB 已提交）。

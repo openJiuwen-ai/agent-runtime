@@ -433,6 +433,7 @@ class SystemContext:
         lock_key: str = "",
         run_on_start: bool = False,
         tick_timeout_sec: float | None = None,
+        lock_ttl_sec: int | None = None,
     ) -> "JobRunner":
         """用本进程的 redis / instance_id 组装主备周期任务。"""
         from .periodic import create_single_leader_job
@@ -446,6 +447,7 @@ class SystemContext:
             lock_key=lock_key,
             run_on_start=run_on_start,
             tick_timeout_sec=tick_timeout_sec,
+            lock_ttl_sec=lock_ttl_sec,
         )
 
     # -------------------------------------------------------------- 请求上下文

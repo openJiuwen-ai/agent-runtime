@@ -273,7 +273,7 @@
   "topology": {
     "title": "Cluster Management",
     "subtitle": "Manage {{productName}} clusters",
-    "createInstance": "Create Cluster",
+    "createInstance": "Register Cluster",
     "instanceStatus": "Status",
     "gatewayStatus": "Gateway Status",
     "runtimeStatus": "Runtime Status",
@@ -317,7 +317,14 @@
     "preflightBlocked": "Preflight found blocking issues. Update the workbook or resolve target conflicts, then select it again.",
     "importSuccess": "Import complete: {{created}} created, {{reused}} reused",
     "exportSuccess": "Cluster configuration Excel exported",
-    "exportFailed": "Export failed: "
+    "exportFailed": "Export failed: ",
+    "deployCluster": "Deploy Cluster",
+    "unbind": "Unbind",
+    "unbindConfirm": "Unbinding only removes the registration record (probing/authorization/config push); the cluster itself keeps running. Unbind this cluster?",
+    "unbindSuccess": "Unbound",
+    "undeploy": "Undeploy",
+    "undeployConfirm": "This will create an undeploy task for namespace {{ns}} (reverse-order removal; PVC data is deleted and unrecoverable) and unbind the cluster registration. Continue?",
+    "undeployStarted": "Undeploy task created, opening task detail"
   },
   "instanceForm": {
     "name": "Cluster Name",
@@ -1186,7 +1193,12 @@
       "envGroupReplicas": "Replicas",
       "envGroupOthers": "Others",
       "envSensitivePlaceholder": "Leave empty to keep the default",
-      "envHint": "Only filled or changed keys are submitted; leave sensitive keys empty to keep saved defaults"
+      "envHint": "Only filled or changed keys are submitted; leave sensitive keys empty to keep saved defaults",
+      "envImport": "从 .env.custom 导入",
+      "envImportPlaceholder": "粘贴完整 .env.custom 文本，解析后覆盖下方对应键",
+      "envImportBtn": "解析导入",
+      "envImportDone": "已导入 {{count}} 个键（导入值可在此逐键修改）",
+      "envImportEmpty": "未解析到有效的 KEY=value 行"
     },
     "detail": {
       "toolVersion": "Tool Version",

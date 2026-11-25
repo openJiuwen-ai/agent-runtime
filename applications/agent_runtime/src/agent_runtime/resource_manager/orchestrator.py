@@ -421,6 +421,12 @@ class ResourceOrchestrator:
             "max_pods": int(pool_config.get("max_pods", 1)),
             "pod_ttl": int(pool_config.get("pod_ttl", 300)),
             "session_ttl": int(pool_config.get("session_ttl", 600)),
+            # 退役标记（2026-11）：config_sync 扩散③（被删 scope 推 min_idle=0）
+            # 置 1，扩散①/refresh 的正常下发恒置 0（复活即清）。reconcile 的空壳
+            # 回收只认这个标记——**不能用 min_idle==0 代替**：按需供给的生效
+            # scope 合法地 min_idle=0 且静息时零 Pod，误删它的 config 会让下一次
+            # route 的 acquire 拿到 no_config 而冷启失败。
+            "retired": 1 if pool_config.get("retired") else 0,
         }
         if pod_spec is not None:
             mapping["deploy_ver"] = _deploy_ver(pod_spec)

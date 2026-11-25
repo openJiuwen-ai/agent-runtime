@@ -103,18 +103,12 @@ async def test_scope_inventory_union_and_phases():
 
     # s-active 推 RM config → active;s-off 在快照已过期 → disabled;
     # s-ghost 只在 RM(config_sync drain 收敛推过 min_idle=0)→ orphan
-    await redis.hset(
-        "{resource_manager}:resource:scope:s-active:config",
-        mapping={"min_idle_pods": "1", "max_pods": "2"},
-    )
-    await redis.hset(
-        "{resource_manager}:resource:scope:s-off:config",
-        mapping={"min_idle_pods": "0"},
-    )
-    await redis.hset(
-        "{resource_manager}:resource:scope:s-ghost:config",
-        mapping={"min_idle_pods": "0"},
-    )
+    # 一律走 save_scope_config(RM 的唯一写点):它同时登记 scope 索引,而
+    # known_scope_ids 自 2026-11 起只读索引、不扫库
+    await collector.rm.save_scope_config(
+        "s-active", {"min_idle_pods": "1", "max_pods": "2"})
+    await collector.rm.save_scope_config("s-off", {"min_idle_pods": "0"})
+    await collector.rm.save_scope_config("s-ghost", {"min_idle_pods": "0"})
 
     rows = {r["scope_id"]: r for r in await collector.scope_inventory()}
     assert set(rows) == {"s-active", "s-off", "s-ghost"}
