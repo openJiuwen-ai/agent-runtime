@@ -13,7 +13,13 @@ from sqlalchemy.pool import NullPool
 
 from manager_server.infrastructure.db import create_db_handler
 
-_VIEWS = ("user_access_instance", "user_access_instance_grant", "user_access_agent_resource")
+_VIEWS = (
+    "user_access_instance",
+    "user_access_instance_grant",
+    "user_access_agent_resource",
+    "user_access_agent_definition",
+    "user_access_instance_service_resource",
+)
 
 
 async def _create_reader(
@@ -151,6 +157,13 @@ async def create_views(connection: AsyncConnection, schema: str | None = None) -
          f"jiuwenclaw_id, jiuwenclaw_name, {http} AS gateway_http, {ws} AS gateway_ws"),
         ("user_access_instance_grant", "instance_grant",
          "jiuwenclaw_id, subject_type, subject_id, login_policy, enabled, expires_at"),
+        # The user plane only needs the Agent template name to gate the entry
+        # list; template payloads and identifiers other than the pair key stay
+        # inside Manager.
+        ("user_access_agent_definition", "agent_definition",
+         "agent_config_template_id, runtime_template_id, agent_name"),
+        ("user_access_instance_service_resource", "instance_service_resource",
+         "jiuwenclaw_id, resource_id, ref_template_id, priority, match_expr, enabled, expires_at"),
     )
     for view, table, columns in views:
         security = "SQL SECURITY DEFINER " if mysql_family else ""
