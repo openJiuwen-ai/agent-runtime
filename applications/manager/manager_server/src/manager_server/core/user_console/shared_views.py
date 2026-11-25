@@ -151,8 +151,6 @@ async def create_views(connection: AsyncConnection, schema: str | None = None) -
          f"jiuwenclaw_id, jiuwenclaw_name, {http} AS gateway_http, {ws} AS gateway_ws"),
         ("user_access_instance_grant", "instance_grant",
          "jiuwenclaw_id, subject_type, subject_id, login_policy, enabled, expires_at"),
-        ("user_access_agent_resource", "instance_agent_resource",
-         "jiuwenclaw_id, resource_id, resource_name, match_expr, enabled, expires_at"),
     )
     for view, table, columns in views:
         security = "SQL SECURITY DEFINER " if mysql_family else ""
@@ -160,6 +158,30 @@ async def create_views(connection: AsyncConnection, schema: str | None = None) -
             f"CREATE OR REPLACE {security}VIEW {prefix}{quote(view)} "
             f"AS SELECT {columns} FROM {prefix}{quote(table)}"
         ))
+    agent_select = (
+        "r.jiuwenclaw_id, r.resource_id, r.resource_name, r.match_expr, "
+        "r.enabled, r.expires_at, r.ref_template_id, "
+    )
+    if mysql_family:
+        agent_select += (
+            "CASE WHEN JSON_TYPE(JSON_EXTRACT(t.data, '$.upload_local_skill')) = 'BOOLEAN' "
+            "AND JSON_UNQUOTE(JSON_EXTRACT(t.data, '$.upload_local_skill')) = 'true' "
+            "THEN 1 ELSE 0 END AS upload_local_skill"
+        )
+        security = "SQL SECURITY DEFINER "
+    else:
+        agent_select += (
+            "COALESCE((CAST(t.data AS jsonb) -> 'upload_local_skill') = 'true'::jsonb, false) "
+            "AS upload_local_skill"
+        )
+        security = ""
+    await connection.execute(text(
+        f"CREATE OR REPLACE {security}VIEW {prefix}{quote('user_access_agent_resource')} "
+        f"AS SELECT {agent_select} "
+        f"FROM {prefix}{quote('instance_agent_resource')} r "
+        f"LEFT JOIN {prefix}{quote('agent_template')} t "
+        f"ON t.template_id = r.ref_template_id"
+    ))
 
 
 async def _main() -> None:
