@@ -17,12 +17,12 @@ export function ResourceWorkspaceFrame({ children }: { children: ReactNode }) {
   return (
     <div className="resource-workspace">
       {children}
-      <WorkspaceNote title={resource ? t(`${resource.key}.title`) : (zh ? '资源中心' : 'Resource catalog')}>
+      <WorkspaceNote title={resource ? t(`${resource.key}.title`) : t('nav.agentResources')}>
         {experts ? (zh
-          ? '将专家与专家团组合为可复用模板，在 Agent 模板中引用；发布 Agent 时，所选专家能力会随模板一起下发。'
-          : 'Compose experts and expert groups into reusable templates, then reference them in an Agent template. The selected capabilities are delivered when the Agent is published.') : <>
+          ? '将专家与专家团组合为可复用模板，在 Agent 中引用；发布 Agent 时，所选专家能力会随模板一起下发。'
+          : 'Compose experts and expert groups into reusable templates, then reference them in an Agent. The selected capabilities are delivered when the Agent is published.') : <>
           {resource && <>{t(`${resource.key}.subtitle`)}{zh ? '。' : '. '}</>}
-          {zh ? '保存后，在 Agent模板或集群配置中引用；修改已被引用的资源前，请先查看关联模板和集群。' : 'Reference saved resources from an Agent template or cluster configuration. Review linked templates and clusters before changing a referenced resource.'}
+          {zh ? '保存后，在 Agent 或集群配置中引用；修改已被引用的资源前，请先查看关联模板和集群。' : 'Reference saved resources from an Agent or cluster configuration. Review linked templates and clusters before changing a referenced resource.'}
         </>}
       </WorkspaceNote>
     </div>

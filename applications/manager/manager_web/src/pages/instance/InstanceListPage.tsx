@@ -495,7 +495,7 @@ export function InstanceListPage() {
             />
           )}
           <WorkspaceNote title="服务实例是 Agent 真正运行的环境">
-            新建集群从登记连接信息开始，再按“集群准入 → 运行资源 → Agent 绑定 → 状态检查”完成配置；中途离开后点击“继续配置”，会根据已保存的配置进入下一项。
+            新建集群从登记连接信息开始，再按“集群准入 → 运行资源 → Agent资源 → 状态检查”完成配置；中途离开后点击“继续配置”，会根据已保存的配置进入下一项。
           </WorkspaceNote>
         </div>
       </div>

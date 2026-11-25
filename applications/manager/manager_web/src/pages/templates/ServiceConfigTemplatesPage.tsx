@@ -487,8 +487,8 @@ export function ServiceConfigTemplatesPage({
           }}
         />
       )}
-      <WorkspaceNote title="模板准备好后，在集群中绑定运行资源" action={<button className="btn sm" onClick={() => navigate(runtimeCatalogPath('container-templates', params))}>管理容器模板 →</button>}>
-        运行时模板引用容器模板，定义运行池与调度方式。绑定到集群后，可按组织、用户或 Agent 设置使用范围。
+      <WorkspaceNote title="模板准备好后，在集群中绑定运行资源" action={<button className="btn sm" onClick={() => navigate(runtimeCatalogPath('container-templates', params))}>管理容器 →</button>}>
+        运行时引用容器，定义运行池与调度方式。绑定到集群后，可按组织、用户或 Agent 设置使用范围。
       </WorkspaceNote>
       </div>
       </div>

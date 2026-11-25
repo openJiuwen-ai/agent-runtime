@@ -37,7 +37,7 @@ export function AgentDetailPage({ id }: { id: string }) {
 
   return <div className="workspace-overview">
     <div className="page-header">
-      <div><button className="btn ghost sm" onClick={() => navigate(returnTo)}>← {tr('Agent配置模板', 'Agent configuration templates')}</button><h1 className="page-title">{definition.template_name}</h1><p className="page-subtitle">{definition.description || tr('尚未填写描述', 'No description yet')}</p></div>
+      <div><button className="btn ghost sm" onClick={() => navigate(returnTo)}>← {t('agentTemplate.title')}</button><h1 className="page-title">{definition.template_name}</h1><p className="page-subtitle">{definition.description || tr('尚未填写描述', 'No description yet')}</p></div>
       <div className="flex gap-2"><button className="btn" onClick={refresh}>{tr('刷新', 'Refresh')}</button><button className="btn" onClick={() => setEditing(true)}>{tr('编辑模板', 'Edit template')}</button><button className="btn primary" disabled={!definition.enabled} onClick={bindTemplate}>{tr('绑定集群', 'Bind to a cluster')}</button></div>
     </div>
     <section className="card"><dl className="connect-summary"><dt>{tr('模板状态', 'Template status')}</dt><dd>{definition.enabled ? tr('已启用', 'Enabled') : tr('已停用', 'Disabled')}</dd><dt>{tr('标签', 'Tags')}</dt><dd>{definition.agent_tags?.join(' · ') || '—'}</dd><dt>{tr('更新时间', 'Updated')}</dt><dd>{formatTime(definition.updated_at)}</dd></dl><details className="mt-4"><summary>{tr('技术标识', 'Technical identifier')}</summary><code>{id}</code></details></section>

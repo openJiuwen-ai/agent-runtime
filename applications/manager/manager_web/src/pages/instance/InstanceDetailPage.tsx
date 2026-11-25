@@ -75,8 +75,8 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
       body: zh ? '探活只代表管理面能访问组件；Agent 是否能运行，还要同时满足准入、Agent 授权和运行资源条件。' : 'Health checks show management connectivity. Agent execution also requires admission, Agent access and runtime resources.',
     },
     agentResources: {
-      title: zh ? '决定谁能使用哪些 Agent' : 'Choose who can use each Agent',
-      body: zh ? '这里保存的是当前集群的 Agent 使用授权，不会修改全局 Agent 定义。' : 'These are Agent access bindings for this cluster; the global Agent definition remains unchanged.',
+      title: zh ? '为集群选择可用的 Agent 资源' : 'Choose the Agent resources for this cluster',
+      body: zh ? 'Agent 是可复用定义；只有在当前集群绑定并设置授权范围后，用户面才会向目标用户提供。' : 'Agents are reusable definitions and only become available to users after being bound and authorized for this cluster.',
     },
     serviceResources: {
       title: zh ? '为 Agent 选择实际运行资源' : 'Choose the runtime resources for Agents',

@@ -15,8 +15,8 @@ export function ClusterContentHeading({ section }: Props) {
       description: tr('运行时模板是可复用定义，本页决定它是否在当前集群生效。', 'The catalog stores reusable runtime templates; this page activates them for the current cluster.'),
     },
     agentResources: {
-      title: tr('当前集群已绑定 Agent', 'Agents bound to this cluster'),
-      description: tr('授权条件为空时，表示当前集群内所有已准入身份。', 'An empty condition means all admitted identities in this cluster.'),
+      title: tr('当前集群的 Agent 资源', 'Agent resources for this cluster'),
+      description: tr('Agent 是可复用定义，本页决定它是否在当前集群生效，以及谁可以使用。', 'Agents are reusable definitions; this page decides whether they apply to this cluster and who can use them.'),
     },
     status: {
       title: tr('服务连接', 'Service connectivity'),

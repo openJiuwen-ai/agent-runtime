@@ -25,7 +25,7 @@ export function AgentConnectPage({ id }: { id: string }) {
 }
 
 function AgentConnectForm({ id, draftKey }: { id: string; draftKey: string }) {
-  const { i18n } = useTranslation();
+  const { t, i18n } = useTranslation();
   const tr = (cn: string, en: string) => i18n.language.startsWith('zh') ? cn : en;
   const { navigate, params } = useRouter();
   const requestedCluster = agentPreparationCluster(params) || '';
@@ -85,7 +85,7 @@ function AgentConnectForm({ id, draftKey }: { id: string; draftKey: string }) {
       bumpGuideRevision(); setSaved(true);
     } catch (e) { setError((e as Error).message); } finally { setSaving(false); }
   }
-  return <div className="workspace-overview"><div className="page-header"><div><button className="btn ghost sm" onClick={() => navigate(returnTo)}>← {tr('Agent配置模板', 'Agent configuration templates')}</button><h1 className="page-title">{tr('绑定集群', 'Bind to a cluster')}</h1><p className="page-subtitle">{agent.data?.template_name || '…'} · {tr('选择集群，配置模板在该集群中的名称和使用范围。', 'Choose a cluster, a local Agent name and its usage scope.')}</p></div><button className="btn" onClick={() => navigate(`/agent-templates/${encodeURIComponent(id)}${templateFlowQuery(params)}`)}>{tr('查看模板详情', 'View template')}</button></div>
+  return <div className="workspace-overview"><div className="page-header"><div><button className="btn ghost sm" onClick={() => navigate(returnTo)}>← {t('agentTemplate.title')}</button><h1 className="page-title">{tr('绑定集群', 'Bind to a cluster')}</h1><p className="page-subtitle">{agent.data?.template_name || '…'} · {tr('选择集群，配置模板在该集群中的名称和使用范围。', 'Choose a cluster, a local Agent name and its usage scope.')}</p></div><button className="btn" onClick={() => navigate(`/agent-templates/${encodeURIComponent(id)}${templateFlowQuery(params)}`)}>{tr('查看模板详情', 'View template')}</button></div>
     {(agent.error || instances.error) && <div role="alert" className="card"><p className="text-danger">{agent.error || instances.error}</p><button className="btn mt-3" onClick={() => { void agent.reload(); void instances.reload(); }}>{tr('重新加载', 'Reload')}</button></div>}
     {!saved && (name || expr) && <div className="template-context"><div><strong>{tr('绑定草稿', 'Binding draft')}</strong><p role="status">{draftError ? tr('无法暂存草稿，离开前请保存配置。', 'Draft storage is unavailable. Save before leaving.') : tr('输入已暂存于当前标签页，返回此模板可继续。尚未提交到服务器。', 'Draft kept in this tab for this template. Not submitted to the server.')}</p></div><button className="btn sm" disabled={saving} onClick={() => setConfirmDiscard(true)}>{tr('清除草稿', 'Discard draft')}</button></div>}
     {confirmDiscard && !saved && <section className="card" role="alert"><p>{tr('清除尚未保存的绑定配置？此操作会清空名称、实例和授权条件。', 'Discard this draft? The name, instance and access conditions will be cleared.')}</p><div className="flex gap-2"><button className="btn" onClick={() => setConfirmDiscard(false)}>{tr('继续编辑', 'Keep editing')}</button><button className="btn" disabled={saving} onClick={discardDraft}>{tr('确认清除', 'Confirm discard')}</button></div></section>}

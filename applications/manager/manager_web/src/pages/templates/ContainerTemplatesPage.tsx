@@ -175,10 +175,10 @@ export function ContainerTemplatesPage() {
       <div className="flex min-w-0 flex-col gap-4">
         {clusterReturnPath && (
           <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
-            <span className="text-muted">正在为当前集群准备容器模板。下一步在运行时模板管理中选择容器，再回集群绑定运行资源。</span>
+            <span className="text-muted">正在为当前集群准备容器。下一步在运行时中选择容器，再回集群绑定运行资源。</span>
             <div className="flex flex-wrap gap-2">
               <button className="btn sm" onClick={() => navigate(clusterReturnPath)}>← 返回集群运行资源</button>
-              <button className="btn sm primary" onClick={() => navigate(runtimeCatalog)}>前往运行时模板管理 →</button>
+              <button className="btn sm primary" onClick={() => navigate(runtimeCatalog)}>前往运行时 →</button>
             </div>
           </div>
         )}
@@ -312,8 +312,8 @@ export function ContainerTemplatesPage() {
         {data ? (
           <Pagination page={page} pageSize={pageSize} total={data.total ?? data.items.length} onChange={(nextPage, nextSize) => { setPage(nextPage); setPageSize(nextSize); }} />
         ) : null}
-        <WorkspaceNote title="容器模板由运行时模板统一引用" action={<button className="btn sm" type="button" onClick={() => navigate(runtimeCatalog)}>前往运行时模板管理 →</button>}>
-          容器模板定义镜像、环境变量和挂载。可在运行时模板中组合容器，再将运行时模板绑定到集群。
+        <WorkspaceNote title="容器由运行时统一引用" action={<button className="btn sm" type="button" onClick={() => navigate(runtimeCatalog)}>前往运行时 →</button>}>
+          容器定义镜像、环境变量和挂载。可在运行时中组合容器，再将运行时绑定到集群。
         </WorkspaceNote>
       </div>
       <ContainerTemplateModal
