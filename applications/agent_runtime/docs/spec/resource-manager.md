@@ -1,5 +1,15 @@
 # resource_manager(RM)规格
 
+## Secret 文件卷（2026-11）
+
+`_render_volume_mounts` 将 `secret_mounts` 转为只读 V1VolumeMount 和
+V1SecretVolumeSource；`sec-` 卷名按 Secret 名称与 items 跨主/sidecar 去重。
+Secret 内容由 kubelet 获取，Runtime 不读取。Secret 必须存在于 Pod namespace。
+`_deploy_ver` 与 SM 共用 deploy_fingerprint；旧缓存补齐 empty_dir_mounts /
+secret_mounts，空 Secret 字段不改变新增字段前的已存 Pod hash。
+K8s 真实验证入口：`scripts/verify_secret_volume.py`，创建临时 Secret/Pod
+验证实际 AgentServer 就绪和 HTTPX CA 校验，结束后清理。
+
 > Pod 池管理:acquire(扩容决策)、后台任务(autoscale/reclaim/watch/reconcile)、K8s 适配。
 > **无 App/端口/prefix**,纯进程内 Facade + 后台任务。**不读 SM 的容量键**(per-Pod 容量闸门在 SM 侧)。
 > Lua 全文:`lua_scripts.py` 与 `../design/resource-manager-design.md` 双份,改时同步。

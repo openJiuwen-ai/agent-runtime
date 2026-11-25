@@ -63,7 +63,7 @@ _HOSTPATH_NAME_RE = re.compile(r"[^a-z0-9-]+")
 def _scoped_volume_name(prefix: str, name: str, idx: int, mount_idx: int) -> str:
     """容器挂载卷名:{prefix} 前缀 + 容器名净化 + 双索引后缀,防同 Pod 多容器
     多挂载撞名(沿老 SDK K8sServiceHandler 约定);DNS-1123,整体 ≤63。
-    前缀:hp-(hostPath)/cm-(ConfigMap)/pvc-(PVC)/nfs-(NFS 共享卷)。"""
+    前缀:hp-(hostPath)/cm-(ConfigMap)/sec-(Secret)/pvc-(PVC)/nfs-(NFS 共享卷)。"""
     sanitized = _HOSTPATH_NAME_RE.sub("-", (name or "").lower()).strip("-") or f"c{idx}"
     suffix = f"-{idx}-{mount_idx}"
     return f"{prefix}-{sanitized[:63 - len(prefix) - 1 - len(suffix)]}{suffix}"
@@ -78,11 +78,13 @@ def _render_volume_mounts(
         c: Any, owner: str, idx: int, *,
         host_path: list[dict[str, Any]] | None = None,
         config_map: list[dict[str, Any]] | None = None,
+        secret: list[dict[str, Any]] | None = None,
         pvc: list[dict[str, Any]] | None = None,
         nfs: list[dict[str, Any]] | None = None,
         empty_dir: list[dict[str, Any]] | None = None,
         hp_seen: dict[tuple[str, Any], str] | None = None,
         cm_seen: dict[tuple, str] | None = None,
+        secret_seen: dict[tuple, str] | None = None,
         pvc_seen: dict[str, str] | None = None,
         nfs_seen: dict[tuple[str, str], str] | None = None,
         ed_seen: dict[str, str] | None = None,
@@ -105,6 +107,7 @@ def _render_volume_mounts(
     volumes: list[Any] = []
     mounts: list[Any] = []
     for prefix, mlist in (("hp", host_path), ("cm", config_map),
+                          ("sec", secret),
                           ("pvc", pvc), ("nfs", nfs), ("ed", empty_dir)):
         for mi, m in enumerate(mlist or []):
             volume_name = _scoped_volume_name(prefix, owner, idx, mi)
@@ -146,6 +149,26 @@ def _render_volume_mounts(
                 mounts.append(c.V1VolumeMount(
                     name=volume_name, mount_path=m["mount_path"],
                     sub_path=m["sub_path"], read_only=m["read_only"],
+                ))
+            elif prefix == "sec":
+                items = ([c.V1KeyToPath(key=e["key"], path=e["path"])
+                          for e in m["items"]] if m["items"] else None)
+                share = (m["secret_name"],
+                         tuple((e["key"], e["path"])
+                               for e in (m["items"] or [])))
+                if secret_seen is not None and share in secret_seen:
+                    volume_name = secret_seen[share]
+                else:
+                    volumes.append(c.V1Volume(
+                        name=volume_name,
+                        secret=c.V1SecretVolumeSource(
+                            secret_name=m["secret_name"], items=items),
+                    ))
+                    if secret_seen is not None:
+                        secret_seen[share] = volume_name
+                mounts.append(c.V1VolumeMount(
+                    name=volume_name, mount_path=m["mount_path"],
+                    sub_path=m["sub_path"], read_only=True,
                 ))
             elif prefix == "nfs":
                 # 同一 NFS 共享(同 server+path)跨容器只建一个卷,主+sidecar
@@ -444,6 +467,7 @@ class RealK8sPodClient(K8sPodClient):
             pod_id: str = "",
             hp_seen: dict[tuple[str, Any], str] | None = None,
             cm_seen: dict[tuple, str] | None = None,
+            secret_seen: dict[tuple, str] | None = None,
             pvc_seen: dict[str, str] | None = None,
             nfs_seen: dict[tuple[str, str], str] | None = None,
             ed_seen: dict[str, str] | None = None,
@@ -466,12 +490,15 @@ class RealK8sPodClient(K8sPodClient):
                                        "host_path_mounts"),
             config_map=normalize_mounts(cont.get("configmap_mounts"),
                                         "configmap_mounts"),
+            secret=normalize_mounts(cont.get("secret_mounts"),
+                                    "secret_mounts"),
             pvc=normalize_mounts(cont.get("pvc_mounts"), "pvc_mounts"),
             nfs=normalize_mounts(cont.get("nfs_mounts"), "nfs_mounts"),
             empty_dir=normalize_mounts(cont.get("empty_dir_mounts"),
                                        "empty_dir_mounts"),
             hp_seen=hp_seen,
             cm_seen=cm_seen,
+            secret_seen=secret_seen,
             pvc_seen=pvc_seen,
             nfs_seen=nfs_seen,
             ed_seen=ed_seen,
@@ -601,12 +628,14 @@ class RealK8sPodClient(K8sPodClient):
         # 跨容器共享卷登记簿:同源只建一个 Pod 级卷,主+sidecar 复用卷名
         hp_seen: dict[tuple[str, Any], str] = {}  # 同 (path, type) 的 hostPath
         cm_seen: dict[tuple, str] = {}  # 同 (name, items) 的 ConfigMap
+        secret_seen: dict[tuple, str] = {}  # 同 (name, items) 的 Secret
         pvc_seen: dict[str, str] = {}  # 同 claim 的 PVC
         nfs_seen: dict[tuple[str, str], str] = {}  # 同 server+path 的 NFS
         ed_seen: dict[str, str] = {}  # 同模板卷名的 emptyDir
         container, volumes, annotations = self._build_container(
             c, main, role=MAIN_ROLE, idx=0, pod_id=pod_id, hp_seen=hp_seen,
             cm_seen=cm_seen, pvc_seen=pvc_seen, nfs_seen=nfs_seen,
+            secret_seen=secret_seen,
             ed_seen=ed_seen)
         # ---- sidecar 容器(通用机制,canonical 见 containers.py;无 sidecars
         # 时零改动:annotations=None、containers=[main] 与历史逐字节一致)
@@ -615,7 +644,8 @@ class RealK8sPodClient(K8sPodClient):
             sc_container, sc_volumes, sc_annotations = (
                 self._build_container(c, sc, role=SIDECAR_ROLE, idx=idx,
                                       pod_id=pod_id, hp_seen=hp_seen,
-                                      cm_seen=cm_seen, pvc_seen=pvc_seen,
+                                      cm_seen=cm_seen, secret_seen=secret_seen,
+                                      pvc_seen=pvc_seen,
                                       nfs_seen=nfs_seen, ed_seen=ed_seen))
             containers.append(sc_container)
             volumes.extend(sc_volumes)

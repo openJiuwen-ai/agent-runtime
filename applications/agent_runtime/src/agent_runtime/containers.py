@@ -1,22 +1,22 @@
 # coding: utf-8
 """容器规范形(单一 canonical,主/sidecar 共用)——SM 校验/水合 + RM 渲染共享。
 
-2026-09 统一重构:主容器与 sidecar 共用一个 canonical 形(13 键,role 不影响
+2026-09 统一重构:主容器与 sidecar 共用一个 canonical 形(role 不影响
 键集,只影响值域与默认值)。此前主容器是 Template 扁平字段、sidecar 是
 sidecars.py 24 键两套形状——2026-08 拆表时为保 deploy_ver 指纹连续而保留的
 历史包袱;开发阶段无生产存量,指纹一次性重置换「加容器字段只改一处」
 (canonical 定义 + 渲染分支,spec_fields/Template/投影不再逐字段重复)。
 
-canonical 14 键::
+canonical 容器字段::
 
-    name image image_pull_policy ports env env_from resources
-    host_path_mounts configmap_mounts pvc_mounts nfs
+    name image image_pull_policy command args ports env env_from resources
+    host_path_mounts configmap_mounts secret_mounts pvc_mounts nfs_mounts
     empty_dir_mounts security_context readiness_probe
 
 - ``ports``:``[{name: str|None, container_port: int}] | None``。main 恰一个
   ``name="sse"``(gateway 直连契约)+ 至多一个 ``name="http"``,固定序
   ``[sse, http?]``;sidecar 至多一个**无名**端口(纯声明性)。
-- ``nfs``:``{server, path, mount_path} | None``,main 独有(sidecar 恒 None)。
+- ``nfs_mounts``:主容器与 sidecar 均支持的 NFS 挂载列表。
 - ``security_context``:7 键恒满,主/sidecar 全量一致(2026-09-11 决策 B:
   主容器特权面放开,安全策略归管理面)。``readiness_probe``:5 键恒满;main 恒 http 且 ``timeout=None``
   (= 不支持,非未设置),sidecar 可 tcp/http 缺省带 timeout(period 默认
@@ -49,6 +49,7 @@ from .mounts import (
     canonical_host_path_mounts,
     canonical_nfs_mounts,
     canonical_pvc_mounts,
+    canonical_secret_mounts,
     check_resource_name,
     find_mount_path_conflicts,
 )
@@ -94,6 +95,7 @@ _RESOURCE_KEYS = tuple(RESOURCES_DEFAULT)
 _CONTAINER_KEYS = frozenset({
     "name", "image", "image_pull_policy", "command", "args", "ports", "env",
     "env_from", "resources", "host_path_mounts", "configmap_mounts",
+    "secret_mounts",
     "pvc_mounts", "nfs_mounts", "empty_dir_mounts", "security_context",
     "readiness_probe",
 })
@@ -460,6 +462,8 @@ def canonical_container(item: Any, where: str, *, role: str) -> dict[str, Any]:
             item.get("host_path_mounts") or [], f"{where}.host_path_mounts"),
         "configmap_mounts": canonical_configmap_mounts(
             item.get("configmap_mounts") or [], f"{where}.configmap_mounts"),
+        "secret_mounts": canonical_secret_mounts(
+            item.get("secret_mounts") or [], f"{where}.secret_mounts"),
         "pvc_mounts": canonical_pvc_mounts(
             item.get("pvc_mounts") or [], f"{where}.pvc_mounts"),
         "nfs_mounts": canonical_nfs_mounts(
@@ -488,6 +492,7 @@ def default_main_container() -> dict[str, Any]:
         "resources": dict(RESOURCES_DEFAULT),
         "host_path_mounts": [],
         "configmap_mounts": [],
+        "secret_mounts": [],
         "pvc_mounts": [],
         "nfs_mounts": [],
         "empty_dir_mounts": [],
@@ -587,6 +592,8 @@ def validate_pod_containers(
          canonical_main["host_path_mounts"]),
         (f"{where}.main_container.configmap_mounts",
          canonical_main["configmap_mounts"]),
+        (f"{where}.main_container.secret_mounts",
+         canonical_main["secret_mounts"]),
         (f"{where}.main_container.pvc_mounts",
          canonical_main["pvc_mounts"]),
         (f"{where}.main_container.nfs_mounts",
@@ -627,6 +634,8 @@ def validate_pod_containers(
              sc["host_path_mounts"]),
             (f"{where}.sidecars[{i}].configmap_mounts",
              sc["configmap_mounts"]),
+            (f"{where}.sidecars[{i}].secret_mounts",
+             sc["secret_mounts"]),
             (f"{where}.sidecars[{i}].pvc_mounts", sc["pvc_mounts"]),
             (f"{where}.sidecars[{i}].nfs_mounts", sc["nfs_mounts"]),
         ])
@@ -662,7 +671,8 @@ def normalize_pod_spec(spec: dict[str, Any]) -> dict[str, Any]:
 
     为什么承重:deploy_ver 是跨版本派生契约,未来加容器字段(新键默认值 ==
     旧行为)时,Redis 里未刷新的旧 pod_spec_json 经此正规化后与新算指纹相等
-    → 零伪 A 类日落;行为性新键(默认值 ≠ 旧行为)应当日落,日落正确。
+    已存 Pod hash 的跨版本兼容由 spec_fields.deploy_fingerprint 另外处理。
+    行为性新键(默认值 ≠ 旧行为)应当日落,日落正确。
     与 canonical_container 的分工:那边 fail-fast 拒坏值(写路径),这边
     best-effort 补缺(读路径,老缓存友好)。
     """
@@ -710,8 +720,8 @@ def _fill_defaults(item: dict[str, Any], role: str) -> Optional[dict[str, Any]]:
         resources = {}
     out["resources"] = {
         key: resources.get(key) for key in _RESOURCE_KEYS}
-    for key in ("host_path_mounts", "configmap_mounts", "pvc_mounts",
-                "nfs_mounts"):
+    for key in ("host_path_mounts", "configmap_mounts", "secret_mounts", "pvc_mounts",
+                "nfs_mounts", "empty_dir_mounts"):
         if not isinstance(out.get(key), list):
             out[key] = []
     secctx = out.get("security_context")

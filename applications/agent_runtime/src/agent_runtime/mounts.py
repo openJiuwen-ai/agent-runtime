@@ -1,10 +1,8 @@
 # coding: utf-8
-"""容器卷挂载(hostPath / ConfigMap / PVC / NFS)——SM 校验/归一 + RM 渲染共享。
+"""容器卷挂载(hostPath / ConfigMap / Secret / PVC / NFS)——SM 校验/归一 + RM 渲染共享。
 
-主 agent 容器(Template ``agent_host_path_mounts`` / ``agent_configmap_mounts`` /
-``agent_pvc_mounts`` / ``agent_nfs_mounts``)与 sidecar 容器(sidecars 各自的
-``host_path_mounts`` / ``configmap_mounts`` / ``pvc_mounts`` / ``nfs_mounts``)
-共用同一套规范形与校验;SM 与 RM 共用本模块,不引入 SM↔RM 相互 import
+主 agent 容器与 sidecar 容器的 hostPath、ConfigMap、Secret、PVC、NFS、
+emptyDir 挂载共用同一套规范形与校验;SM 与 RM 共用本模块,不引入 SM↔RM 相互 import
 (与 spec_fields/sidecars 同款顶层共享先例)。
 
 指纹不变式(★,同 sidecars.py):规范形填满全部默认键 + 列表按 mount_path 升序;
@@ -33,6 +31,8 @@ _MOUNT_KEYS_BY_TYPE = {
         {"host_path", "mount_path", "read_only", "host_path_type"}),
     "configmap_mounts": frozenset(
         {"config_map_name", "mount_path", "sub_path", "items", "read_only"}),
+    "secret_mounts": frozenset(
+        {"secret_name", "mount_path", "sub_path", "items", "read_only"}),
     "pvc_mounts": frozenset({"claim_name", "mount_path", "read_only"}),
     "nfs_mounts": frozenset({"server", "path", "mount_path", "read_only"}),
     "empty_dir_mounts": frozenset({"volume_name", "mount_path", "read_only"}),
@@ -173,6 +173,55 @@ def canonical_configmap_mounts(value: Any, where: str) -> list[dict[str, Any]]:
     return _sorted_mounts(mounts)
 
 
+# -------------------------------------------------------------- Secret
+
+def canonical_secret_mounts(value: Any, where: str) -> list[dict[str, Any]]:
+    """Secret 挂载规范形；内容不进入模板或日志，只保存名称与键映射。"""
+    if not isinstance(value, list):
+        raise InvalidParams(f"{where} must be a list, got {value!r}")
+    mounts: list[dict[str, Any]] = []
+    for j, item in enumerate(value):
+        mount_where = f"{where}[{j}]"
+        if not isinstance(item, dict):
+            raise InvalidParams(f"{mount_where} must be an object, got {item!r}")
+        _unknown_keys(item, "secret_mounts", mount_where)
+        items_raw = item.get("items")
+        items: Optional[list[dict[str, str]]] = None
+        if items_raw is not None:
+            if not isinstance(items_raw, list):
+                raise InvalidParams(f"{mount_where}.items must be a list, got {items_raw!r}")
+            items = []
+            for k, entry in enumerate(items_raw):
+                entry_where = f"{mount_where}.items[{k}]"
+                if not isinstance(entry, dict) or set(entry) != {"key", "path"}:
+                    raise InvalidParams(
+                        f"{entry_where} must have exactly 'key' and 'path'")
+                key = entry["key"]
+                if not isinstance(key, str) or not key:
+                    raise InvalidParams(f"{entry_where}.key must be non-empty")
+                path = _check_sub_path(entry["path"], f"{entry_where}.path")
+                if path is None or path.startswith("..") or ".." in path.split("/"):
+                    raise InvalidParams(
+                        f"{entry_where}.path must be a non-empty relative path "
+                        "without '..' components or prefix")
+                items.append({"key": key, "path": path})
+            items.sort(key=lambda e: e["key"])
+        read_only = _check_bool(item.get("read_only"), mount_where,
+                                "read_only", True)
+        if not read_only:
+            raise InvalidParams(f"{mount_where}.read_only must be true for Secret")
+        mounts.append({
+            "secret_name": _check_resource_name(
+                item.get("secret_name"), mount_where, "secret_name"),
+            "mount_path": _check_mount_path(item.get("mount_path"), mount_where),
+            "sub_path": _check_sub_path(item.get("sub_path"),
+                                        f"{mount_where}.sub_path"),
+            "items": items,
+            "read_only": True,
+        })
+    return _sorted_mounts(mounts)
+
+
 # -------------------------------------------------------------- PVC
 
 def canonical_pvc_mounts(value: Any, where: str) -> list[dict[str, Any]]:
@@ -266,6 +315,7 @@ def normalize_mounts(
     canonical = {
         "host_path_mounts": canonical_host_path_mounts,
         "configmap_mounts": canonical_configmap_mounts,
+        "secret_mounts": canonical_secret_mounts,
         "pvc_mounts": canonical_pvc_mounts,
         "nfs_mounts": canonical_nfs_mounts,
         "empty_dir_mounts": canonical_empty_dir_mounts,
@@ -288,8 +338,7 @@ def find_mount_path_conflicts(
 ) -> Optional[str]:
     """同一容器内 mount_path 重复检测(K8s 会拒,这里 fail-fast 到 400)。
 
-    mount_lists: [(来源标签, 挂载规范形列表)];四类挂载(hostPath/ConfigMap/
-    PVC/NFS)各自列表一起查重。
+    mount_lists: [(来源标签, 挂载规范形列表)]；所有挂载类型一起查重。
     """
     seen: dict[str, str] = {}
     for source, mounts in mount_lists:

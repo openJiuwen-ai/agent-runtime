@@ -57,6 +57,8 @@ MAIN_FULL = {
     "resources": {"cpu_request": "500m", "memory_request": "1Gi",
                   "cpu_limit": "2", "memory_limit": "4Gi"},
     "host_path_mounts": [],
+    "secret_mounts": [],
+    "empty_dir_mounts": [],
     "configmap_mounts": [{"config_map_name": "agent-cm",
                           "mount_path": "/etc/agent/config.yaml",
                           "sub_path": "config.yaml", "items": None,
@@ -93,7 +95,7 @@ def _spec(main=None, sidecars=None) -> dict:
 # -------------------------------------------------------------- canonical 规范形
 
 def test_canonical_main_full_fields_roundtrip():
-    """全量主容器 → canonical:13 键、显式值全保留(幂等输入)。"""
+    """全量主容器 → canonical:缺省键填满、显式值全保留(幂等输入)。"""
     out = canonical_container(MAIN_FULL, "main", role="main")
     assert set(out) == set(MAIN_FULL)
     assert out == MAIN_FULL
@@ -482,9 +484,10 @@ def test_normalize_pod_spec_tolerates_garbage_and_keeps_unknown_keys():
 # -------------------------------------------------------------- deploy_ver 基线冻结(承重)
 
 def test_canonical_deploy_ver_baseline_frozen():
-    """统一规范形指纹基线冻结(2026-09-11 rebase 合入上游 fs_group/command/
-    args/nfs_mounts 后二次重置;前序常量 026cfcf9a6b31721(扁平时代)与
-    0ac9bf7494973132(13 键 canonical)均随作废)。
+    """冻结未修改 develop f74cd06 的实际指纹(已包含 empty_dir_mounts)。
+
+    上游旧常量早于 emptyDir 功能；此处以升级前代码实算值为准，
+    加入空 secret_mounts 后必须仍与已注册 Pod 的指纹一致。
 
     同值必同 deploy_ver 的红线在新形状上继续承重:基线漂移 = 非加字段/
     非语义的公式变化 = 全量伪 A 类日落,必须在此拦下。
@@ -493,7 +496,7 @@ def test_canonical_deploy_ver_baseline_frozen():
     main, _ = validate_pod_containers(
         {"name": "agent", "image": "img:1"}, [], "t")
     assert Template(template_id="x", main_container=main).deploy_ver() \
-        == "80bd09a60f8c470c"
+        == "b898eaf85996a46f"
     sc_main, sc = validate_pod_containers(
         {"name": "agent", "image": "img:1"},
         [{"name": "jiuwenbox", "image": "box:1",
@@ -501,11 +504,11 @@ def test_canonical_deploy_ver_baseline_frozen():
           "env": {"A": "b"},
           "host_path_mounts": [{"host_path": "/h", "mount_path": "/m"}]}], "t")
     assert Template(template_id="x", main_container=sc_main,
-                    sidecars=sc).deploy_ver() == "e4c697572c185b0a"
+                    sidecars=sc).deploy_ver() == "b51b9b791b45e43c"
     env_main, _ = validate_pod_containers(
         {"name": "agent", "image": "img:1", "env": {"K": "v"}}, [], "t")
     assert Template(template_id="x", main_container=env_main).deploy_ver() \
-        == "c19f1e18236e2ab1"
+        == "b60995704c5fbb11"
 
 
 def test_sidecars_change_changes_deploy_ver():

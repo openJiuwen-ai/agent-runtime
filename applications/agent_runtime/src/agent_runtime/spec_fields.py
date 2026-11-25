@@ -5,11 +5,11 @@
 - POLICY_FIELDS   策略字段（B 类）：控制面读时使用，变更不日落老 Pod。
 
 2026-09 统一规范形起，容器级配置以**整体**进指纹：
-``main_container`` / ``sidecars``（containers.py canonical，13 键全填满）。
+``main_container`` / ``sidecars``（containers.py canonical，缺省键全填满）。
 **加/改容器字段不再动本文件**——canonical 整体序列化进 deploy_ver,
 只需改 containers.py（canonical 定义）+ RM 渲染分支。RM 侧对旧缓存
 （缺新键的 pod_spec_json）以 containers.normalize_pod_spec 补缺省后
-同指纹（新键默认值 == 旧行为时零伪日落）。
+得到一致的新结构；跨版本保留已存 hash 还需 deploy_fingerprint 的空字段投影。
 
 deploy_ver = DEPLOY_VER_FIELDS 的 hash 指纹（不含 kubeconfig——虽在 deploy
 子集但例外：只影响新 deploy 操作，不日落）。SM（Template.deploy_ver）与 RM
@@ -17,6 +17,11 @@ deploy_ver = DEPLOY_VER_FIELDS 的 hash 指纹（不含 kubeconfig——虽在 d
 """
 
 from __future__ import annotations
+
+from typing import Any
+
+from .containers import normalize_pod_spec
+from .util import fingerprint
 
 DEPLOY_FIELDS: tuple[str, ...] = (
     # Pod 级字段（模板表模板级行列）
@@ -42,3 +47,19 @@ POLICY_FIELDS: tuple[str, ...] = (
     "pod_ttl",
     "min_idle_pods",
 )
+
+
+def deploy_fingerprint(spec: dict[str, Any]) -> str:
+    """SM/RM 共用部署指纹；无 Secret 时兼容新增该字段之前的版本。
+
+    缺省补齐只解决旧配置重新计算的一致性。已注册 Pod 的 hash 不会重算，
+    因此空 secret_mounts 只在指纹投影中省略；非空挂载完整参与计算。
+    原始配置和渲染规范形保留字段，调用方的字典不会被修改。
+    """
+    normalized = normalize_pod_spec(spec)
+    containers = [normalized.get("main_container"),
+                  *(normalized.get("sidecars") or [])]
+    for container in containers:
+        if isinstance(container, dict) and container.get("secret_mounts") == []:
+            container.pop("secret_mounts")
+    return fingerprint({name: normalized.get(name) for name in DEPLOY_VER_FIELDS})

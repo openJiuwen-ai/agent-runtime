@@ -1,5 +1,13 @@
 # service-core 规格(组装 / 配置 / 错误码 / 字段分类 / 部署)
 
+## 部署指纹兼容（2026-11）
+
+SM Template.deploy_ver 与 RM _deploy_ver 统一调用
+`spec_fields.deploy_fingerprint`：先 normalize_pod_spec 补缺，再仅在 hash
+投影中省略空 secret_mounts。非空 Secret 保留全部字段参与指纹；不改输入
+配置及 Pod 渲染结构。兼容基线是包含 empty_dir_mounts 的版本，历史 13/15 键
+指纹不恢复。补缺省与保持已存 hash 是两项独立机制，不可相互替代。
+
 > 覆盖 `src/agent_runtime/` 顶层文件:`main.py`、`cli.py`、`config.py`、`errors.py`、`spec_fields.py`、`util.py`,及可观测性三件:`logsetup.py`(日志装配)、`metrics.py`(请求指标)、`visualization_api.py`(可视化端点)。
 > SM/RM 模块内文件见 [session-manager.md](session-manager.md) / [resource-manager.md](resource-manager.md)。
 
