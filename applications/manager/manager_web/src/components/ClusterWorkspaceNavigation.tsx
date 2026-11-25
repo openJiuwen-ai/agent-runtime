@@ -24,7 +24,7 @@ export function ClusterWorkspaceNavigation({ instanceId, name, section, onRefres
     { key: 'cluster-config', label: tr('配置工作台', 'Configuration workspace') },
     { key: 'access', label: tr('集群准入', 'Admission') },
     { key: 'service-resources', label: tr('运行资源', 'Runtime resources') },
-    { key: 'agent-resources', label: tr('Agent绑定', 'Agent bindings') },
+    { key: 'agent-resources', label: tr('Agent资源', 'Agent resources') },
     { key: 'other-settings', label: tr('其他配置', 'Other settings') },
     { key: 'status', label: tr('连接状态', 'Connection status') },
   ];

@@ -27,7 +27,7 @@ export function ClusterConfigWorkbenchPage({ instanceId }: { instanceId: string 
   const steps = [
     { section: 'access', title: tr('集群准入', 'Cluster admission'), text: tr('选择可以进入当前集群的用户或组织。', 'Choose the users or organizations allowed to enter this cluster.'), summary: tr(`${data.admission.users} 个用户 · ${data.admission.orgs} 个组织`, `${data.admission.users} users · ${data.admission.orgs} organizations`), complete: data.admission.total > 0 },
     { section: 'service-resources', title: tr('运行资源', 'Runtime resources'), text: tr('选择运行时模板，设置适用范围与优先级。', 'Choose runtime templates and set their scope and priority.'), summary: tr(`${data.runtime.total} 个有效运行时绑定`, `${data.runtime.total} active runtime bindings`), complete: data.runtime.total > 0 },
-    { section: 'agent-resources', title: tr('Agent 绑定', 'Agent bindings'), text: tr('绑定 Agent 模板，设置谁可以使用。', 'Bind Agent templates and choose who can use them.'), summary: tr(`${data.agents.total} 个有效 Agent 绑定`, `${data.agents.total} active Agent bindings`), complete: data.agents.total > 0 },
+    { section: 'agent-resources', title: tr('Agent资源', 'Agent resources'), text: tr('绑定 Agent，设置谁可以使用。', 'Bind Agents and choose who can use them.'), summary: tr(`${data.agents.total} 个有效 Agent 资源`, `${data.agents.total} active Agent resources`), complete: data.agents.total > 0 },
     { section: 'status', title: tr('检查并验证', 'Check and verify'), text: tr('检查组件连接，再到用户面验证实际对话。', 'Check component connectivity, then verify a conversation in the user console.'), summary: data.connected ? tr('组件已连接 · 对话需实际验证', 'Components connected · Conversation not verified') : tr('组件连接待检查', 'Connectivity needs checking'), complete: data.connected },
   ];
   const optionalSettings = [
@@ -51,6 +51,6 @@ export function ClusterConfigWorkbenchPage({ instanceId }: { instanceId: string 
       </section>
       <ClusterReadinessPanel key={instanceId} data={data} refreshing={state.loading} reload={state.reload} />
     </div>
-    <WorkspaceNote title={tr('集群配置工作台', 'Cluster configuration workspace')}>{tr('本页汇总当前集群的准入、运行资源和 Agent 绑定。进度以已保存且有效的配置为准；实际可用还需要使用范围相互匹配、组件连接正常，并通过用户面对话验证。', 'This page summarizes admission, runtime resources and Agent bindings for this cluster. Progress reflects saved active settings. Actual use also requires matching scopes, healthy components and a verified conversation.')}</WorkspaceNote>
+    <WorkspaceNote title={tr('集群配置工作台', 'Cluster configuration workspace')}>{tr('本页汇总当前集群的准入、运行资源和 Agent 资源。进度以已保存且有效的配置为准；实际可用还需要使用范围相互匹配、组件连接正常，并通过用户面对话验证。', 'This page summarizes admission, runtime resources and Agent resources for this cluster. Progress reflects saved active settings. Actual use also requires matching scopes, healthy components and a verified conversation.')}</WorkspaceNote>
   </div>;
 }

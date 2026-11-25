@@ -56,9 +56,9 @@ export function SetupJourney({ compact = false, onNavigate }: { compact?: boolea
       { title: tr('模型', 'Models'), description: tr('添加可调用的模型，供 Agent 模板选择。', 'Add callable models for Agent templates.'), href: '/model-templates' },
     ],
     [
-      { title: tr('Agent配置模板', 'Agent configuration templates'), description: tr('选择默认模型，按需组合技能和工具；保存为可复用的 Agent 模板。', 'Choose a default model and optional skills and tools, then save a reusable Agent template.'), href: agentPreparationCatalogPath(targetId, preparationContext) },
-      { title: tr('运行时模板管理', 'Runtime templates'), description: tr('管理可复用的运行时模板，在集群中绑定使用。', 'Manage reusable runtime templates and bind them to a cluster.'), href: runtimeCatalogPath('service-config-templates', preparationContext, targetId) },
-      { title: tr('Agent模板', 'Agent templates'), description: tr('选择 Agent 配置模板和运行时模板，手动创建可供用户面使用的 Agent。', 'Select an Agent configuration template and a runtime template to create an Agent for the user console.'), href: '/agent-definitions' },
+      { title: tr('Agent', 'Agent'), description: tr('选择默认模型，按需组合技能和工具；保存为可复用的 Agent 配置。', 'Choose a default model and optional skills and tools, then save a reusable Agent configuration.'), href: agentPreparationCatalogPath(targetId, preparationContext) },
+      { title: tr('运行时', 'Runtime'), description: tr('管理可复用的运行时配置，在集群中绑定使用。', 'Manage reusable runtime profiles and bind them to a cluster.'), href: runtimeCatalogPath('service-config-templates', preparationContext, targetId) },
+      { title: tr('Agent模板', 'Agent templates'), description: tr('选择 Agent 和运行时，手动创建可供用户面使用的 Agent。', 'Select an Agent and a runtime to create an Agent for the user console.'), href: '/agent-definitions' },
     ],
   ];
   const optional: GuideTask[] = [
@@ -67,7 +67,7 @@ export function SetupJourney({ compact = false, onNavigate }: { compact?: boolea
     { title: tr('工具安全策略', 'Tool safety policies'), description: tr('约束工具调用权限与行为。', 'Control tool permissions and behavior.'), href: '/safety-guardrails' },
     { title: tr('向量模型', 'Embedding models'), description: tr('为检索提供文本向量能力。', 'Provide embeddings for retrieval.'), href: '/embedding-templates' },
     { title: tr('A2A管理', 'A2A management'), description: tr('管理外部 Agent 接入与访问策略。', 'Manage external Agents and access policies.'), href: '/a2a-management' },
-    { title: tr('专家与专家包', 'Experts and packages'), description: tr('组合专家能力，在 Agent 模板中引用。', 'Compose expert capabilities and reference them in Agent templates.'), href: '/expert-package-templates' },
+    { title: tr('专家包', 'Expert packages'), description: tr('组合专家能力，在 Agent 中引用。', 'Compose expert capabilities and reference them in Agents.'), href: '/expert-package-templates' },
     { title: tr('扩展配置', 'Extensions'), description: tr('添加业务需要的扩展参数。', 'Add extension settings for your workload.'), href: '/extension-config-templates' },
   ];
   const renderTask = (task: GuideTask) => <button type="button" key={task.title} className={`setup-guide-task ${task.href.split('?')[0] === path ? 'is-current' : ''}`} onClick={() => go(task.href)}>
