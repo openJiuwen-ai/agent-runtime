@@ -241,10 +241,10 @@ export function TeamQuotaPolicyTab({ instanceId, onChange }: { instanceId: strin
                   ) : (
                     rows.map((row) => (
                       <tr key={row.policy_id}>
-                        <td>
-                          <div className="font-medium">{row.policy_name}</div>
+                        <td className="max-w-[14rem] align-top">
+                          <div className="font-medium break-words">{row.policy_name}</div>
                           {row.policy_desc ? (
-                            <div className="text-xs text-muted">{row.policy_desc}</div>
+                            <div className="text-xs text-muted break-words">{row.policy_desc}</div>
                           ) : null}
                         </td>
                         <td>
