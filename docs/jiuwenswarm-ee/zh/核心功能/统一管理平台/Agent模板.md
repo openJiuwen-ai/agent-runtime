@@ -57,32 +57,11 @@
 
 此例用于展示 JSON 结构。编辑时，留空或填写 `[]` 并保存可清空已有的自定义配置。
 
-#### Keycloak Agent 客户端
-
-通过「Keycloak Agent 客户端」可以在已有 Keycloak Realm 中创建 Agent 专用的 OIDC 客户端，并将它绑定到当前 Agent 模板。客户端启用服务账号，用于 Agent 获取访问令牌。引用同一模板的 Agent 共用该客户端。员工单点登录使用独立的客户端，配置方法见[企业认证服务接入](../../开发者指南/接口文档/企业认证服务接入.md)。
-
-**启用注册功能**
-
-- 注册功能默认关闭。部署管理员在部署工具的 `.env.custom` 中设置 `MANAGER_AGENT_CLIENT_REGISTRATION_ENABLED=true`，将注册配置文件挂载到 Manager Server 容器，并把容器内的路径填入 `MANAGER_AGENT_CLIENT_REGISTRATION_CONFIG_FILE`。应用配置后，Agent 模板的新建或编辑弹框会显示「Keycloak Agent 客户端」。
-- 注册配置需指定目标 Realm 的 Admin API 地址及令牌地址、管理客户端凭据，以及 Agent 访问令牌的受众。管理客户端需启用服务账号，并获授目标 Realm 的客户端管理权限，例如 `realm-management` 下的 `manage-clients`。字段见[注册配置示例](https://gitcode.com/openJiuwen/agent-runtime/blob/develop/applications/manager/config/keycloak-agent-registration.example.json)。若区域提示「Keycloak 注册配置不可用」，检查容器内的文件路径、读取权限及配置内容。
-
-**注册并绑定客户端**
-
-1. 新建模板时，先填写模板名称并选择默认模型，在「Keycloak Agent 客户端」中输入目标 Realm 内可用的 **Client ID**，点击「保存并注册」。已有模板可打开「编辑」，输入 Client ID 后点击「注册 Agent 客户端」。
-
-   ![填写 Client ID 并保存注册](../../assets/核心功能/统一管理平台/Agent模板/agent-template-keycloak-01-register.png)
-
-2. Manager Server 调用 Keycloak 创建客户端，配置访问令牌受众，并用新客户端凭据验证能否获取访问令牌。成功后页面显示「已绑定」，Client ID 锁定。客户端密钥由 Manager Server 托管，页面只显示 Client ID 和绑定状态。模板配置到集群后，Manager 会随模板向运行面下发托管凭据。
-
-   ![Keycloak Agent 客户端已绑定到模板](../../assets/核心功能/统一管理平台/Agent模板/agent-template-keycloak-02-bound.png)
-
-3. 按下文的「配置到集群」完成模板配置和授权。新建模板时若注册失败，已保存的模板可直接重试。若提示 Client ID 已被使用，换一个 ID。已有模板若配置过完整的手工凭据，须先移除该凭据并保存，再注册托管客户端。
-
 ### 编辑、禁用与删除
 
 - **编辑**：点击行内「编辑」，可修改模板信息和槽位引用。模板已配置到集群时，保存后变更会下发到网关并生效。
 - **禁用**：通过列表中「已启用」列的开关启用或禁用。禁用后，已配置到集群中引用该模板的 Agent 将读取不到该模板的配置。
-- **删除**：点击行内「删除」。仍被集群中的 Agent 引用时删除会失败，需先在「控制台 → 集群管理」的集群配置中移除引用该模板的 Agent。删除已绑定的模板时，系统会一并删除其托管的 Keycloak 客户端。
+- **删除**：点击行内「删除」。仍被集群中的 Agent 引用时删除会失败，需先在「控制台 → 集群管理」的集群配置中移除引用该模板的 Agent。
 
 ### 配置到集群
 
