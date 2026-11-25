@@ -141,11 +141,9 @@ def row_to_wire(row: Any) -> dict[str, Any]:
         value = _g(row, db_key)
         if value is not None:
             wire[wire_key] = value
-    data = _g(row, "data")
-    if isinstance(data, dict):
-        wire_data = {k: v for k, v in data.items() if k != _META_KEY}
-        if wire_data:
-            wire["data"] = wire_data
+    # data 列是 manager 内部簿记（_meta / deployment_default，供"重新导入
+    # 默认配置"在管理面比对），不出管理面：runtime 容器 wire 白名单不含
+    # data（出现即 400 VALIDATION），下发会拒绝整个 config_sync。
     return wire
 
 
