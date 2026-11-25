@@ -1,15 +1,5 @@
 # session_manager(SM)规格
 
-## Secret 文件卷（2026-11）
-
-`volumes[].secret` 支持 `secretName` 和可选 `items[{key,path}]`。
-与容器 `volumeMounts` 按名称关联后生成 `secret_mounts`，主/sidecar 均支持，
-缺省为空列表；挂载只读，可选 subPath。未支持的 Secret 源字段明确拒绝。
-现有 volumes/volume_mounts JSON 列持久化引用，无需增加数据库列。
-Template.deploy_ver 使用共用 deploy_fingerprint，空 Secret 字段只在 hash
-投影中省略，兼容新增字段前已注册 Pod 的版本。详见
-[功能记录](../feature/2026-11-secret-volume-mounts.md)。
-
 > 会话编排:route/touch HTTP 端点、配置层(config_sync 全量下发 + config_refresh 强制刷新 + 路由匹配)、老化 sweeper。
 > **持唯一 App**(`/api/session`:8091),注册 5 个 handler。与 RM 互调只走进程内 Facade,**不直读 RM Redis key**。
 > Lua 全文:`lua_scripts.py` 与 `../design/session-manager-design.md` 双份,改时同步。
