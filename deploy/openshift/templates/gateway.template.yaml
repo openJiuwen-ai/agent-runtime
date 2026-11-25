@@ -2,6 +2,11 @@
 # 说明：
 #   - 镜像为 OpenShift 适配版，适配 restricted-v2 SCC（强制随机 uid，不指定 runAsUser/fsGroup）
 #   - 配置经 Secret jiuwenswarm-secret-configmap 与 ConfigMap jiuwenswarm-gateway-envfile 注入
+#   - 数据卷挂载（profile 分层契约，见 jiuwenswarm/common/paths.py）：
+#     · 共享卷 PVC gateway-pvc → /home/app/.jiuwenswarm/profile：统一用户数据目录，
+#       gateway 各副本共享同一数据卷（application_plugins/（运维部署的应用插件）等
+#       zone 级资产跨副本/跨 Pod 存活）；与 agentserver 数据卷相互独立
+#   - 数据根 /home/app/.jiuwenswarm 自身不挂载（Pod 本地存储），仅 profile/ 经共享卷挂载
 #   - 依赖前置：mariadb 已建库 gateway_<<NAMESPACE>> / web_<<NAMESPACE>>（utf8mb4）
 apiVersion: apps/v1
 kind: Deployment
@@ -67,6 +72,13 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: status.podIP
+          volumeMounts:
+            - name: gateway-data
+              mountPath: /home/app/.jiuwenswarm/profile
+      volumes:
+        - name: gateway-data
+          persistentVolumeClaim:
+            claimName: gateway-pvc
 ---
 # Service：提供稳定 DNS 域名，供集群内部访问
 apiVersion: v1

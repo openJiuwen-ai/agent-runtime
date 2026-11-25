@@ -53,7 +53,11 @@ component_files() {
                     else
                       echo "agentserver-env.configmap.yaml swarm-pvc.yaml agentserver.yaml"
                     fi;;
-    gateway)        echo "gateway-env.configmap.yaml gateway.yaml";;
+    gateway)        if nfs_direct_mode; then
+                      echo "gateway-env.configmap.yaml gateway.yaml"
+                    else
+                      echo "gateway-env.configmap.yaml gateway-pvc.yaml gateway.yaml"
+                    fi;;
     user-backend)   echo "user-backend.yaml";;
     web)            echo "web.yaml";;
     identity)       echo "identity.yaml";;
@@ -114,9 +118,9 @@ component_deps() {
     minio)          echo "secret $(component_nfs_dep)";;
     agentserver)    echo "secret ${DEPLOY_VARS["DB_TYPE"]} minio $(component_nfs_dep)";;
     gateway)        if [ "${DEPLOY_VARS["AGENT_RUNTIME_DEPLOY_MODE"]}" = full ]; then
-                      echo "secret ${DEPLOY_VARS["DB_TYPE"]} redis minio"
+                      echo "secret ${DEPLOY_VARS["DB_TYPE"]} redis minio $(component_nfs_dep)"
                     else
-                      echo "secret ${DEPLOY_VARS["DB_TYPE"]} redis minio agentserver"
+                      echo "secret ${DEPLOY_VARS["DB_TYPE"]} redis minio agentserver $(component_nfs_dep)"
                     fi;;
     web)            echo "secret minio";;
     user-backend)   echo "secret ${DEPLOY_VARS["DB_TYPE"]}";;
