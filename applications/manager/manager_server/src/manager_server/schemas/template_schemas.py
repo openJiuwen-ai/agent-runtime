@@ -1,7 +1,7 @@
 """模板 API 请求/响应模型。
 
 涵盖 model_template、extension_config_template、skill_prebuilt_template、
-permissions_template、service_config_template、agent_template。
+permissions_template、execution_guard_template、service_config_template、agent_template。
 """
 
 from __future__ import annotations
@@ -252,7 +252,6 @@ class ModelTemplateCreateBody(SafeTextMixin):
     model_provider: str = Field(..., min_length=1, max_length=64)
     parameters: dict[str, Any] | None = None
     timeout: int = Field(default=360, ge=1)
-    retry_count: int = Field(default=3, ge=0)
     verify_ssl: bool = False
     enabled: bool = True
     data: dict[str, Any] | None = None
@@ -275,7 +274,6 @@ class ModelTemplateUpdateBody(SafeTextMixin):
     model_provider: str | None = Field(default=None, min_length=1, max_length=64)
     parameters: dict[str, Any] | None = None
     timeout: int | None = Field(default=None, ge=1)
-    retry_count: int | None = Field(default=None, ge=0)
     verify_ssl: bool | None = None
     enabled: bool | None = None
     data: dict[str, Any] | None = None
@@ -761,6 +759,57 @@ class PermissionsTemplateListQuery(BaseModel):
 
 
 class PermissionsTemplateOut(BaseModel):
+    id: int
+    template_id: str
+    template_name: str
+    description: str | None
+    enabled: bool
+    reference_count: int = 0
+    body: dict[str, Any]
+    data: dict[str, Any] | None
+    created_at: str | None
+    updated_at: str | None
+
+
+class ExecutionGuardTemplateCreateBody(SafeTextMixin):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    template_name: str = Field(..., min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=512)
+    enabled: bool = True
+    body: dict[str, Any] = Field(
+        ...,
+        description="完整 execution_guard 段，含模型异常检测与循环断路器",
+    )
+    data: dict[str, Any] | None = None
+
+
+class ExecutionGuardTemplateUpdateBody(SafeTextMixin):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    template_name: str | None = Field(default=None, min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=512)
+    enabled: bool | None = None
+    body: dict[str, Any] | None = None
+    data: dict[str, Any] | None = None
+
+
+class ExecutionGuardTemplateListQuery(BaseModel):
+    page: int = Field(1, ge=1)
+    page_size: int = Field(20, ge=1, le=200)
+    enabled: bool | None = None
+    search: str | None = Field(
+        default=None,
+        description="按 template_id、template_name、description 模糊搜索",
+    )
+    sort_by: str | None = Field(
+        default=None,
+        description="排序字段：template_name、description、updated_at",
+    )
+    sort_order: str | None = Field(default=None, description="排序方向：asc、desc")
+
+
+class ExecutionGuardTemplateOut(BaseModel):
     id: int
     template_id: str
     template_name: str

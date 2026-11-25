@@ -1,5 +1,6 @@
 """模板表定义：model_template、embedding_template、extension_config_template、
-skill_prebuilt_template、expert_package_template、permissions_template、A2A 模板、
+skill_prebuilt_template、expert_package_template、permissions_template、
+execution_guard_template、A2A 模板、
 service_config_container、service_config_template、agent_template（id 自增主键；对外引用 UUID 业务键）。
 """
 
@@ -231,6 +232,30 @@ A2A_ACCESS_POLICY_TEMPLATE_TABLE_DEF = TableDefinition(
 
 PERMISSIONS_TEMPLATE_TABLE_DEF = TableDefinition(
     table_name="permissions_template",
+    columns=[
+        ColumnDefinition(
+            "id",
+            "integer",
+            primary_key=True,
+            autoincrement=True,
+            nullable=False,
+        ),
+        ColumnDefinition("template_id", "string", length=100, nullable=False),
+        ColumnDefinition("template_name", "string", length=128, nullable=False),
+        ColumnDefinition("description", "string", length=512, nullable=True),
+        ColumnDefinition("enabled", "boolean", nullable=False, default=True),
+        ColumnDefinition("body", "json", nullable=False),
+        ColumnDefinition("data", "json", nullable=True),
+        ColumnDefinition("created_at", "datetime", nullable=False),
+        ColumnDefinition("updated_at", "datetime", nullable=False),
+    ],
+    indexes=[
+        IndexDefinition(["template_id"], unique=True),
+    ],
+)
+
+EXECUTION_GUARD_TEMPLATE_TABLE_DEF = TableDefinition(
+    table_name="execution_guard_template",
     columns=[
         ColumnDefinition(
             "id",

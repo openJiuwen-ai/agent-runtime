@@ -29,6 +29,9 @@ import type {
   PermissionsTemplate,
   PermissionsTemplateCreateBody,
   PermissionsTemplateUpdateBody,
+  ExecutionGuardTemplate,
+  ExecutionGuardTemplateCreateBody,
+  ExecutionGuardTemplateUpdateBody,
   ServiceConfigTemplate,
   ServiceConfigTemplateCreateBody,
   ServiceConfigTemplateUpdateBody,
@@ -1697,6 +1700,31 @@ export const McpTemplateApi = {
     http<{ deleted: boolean; template_id: string }>(
       `/v1/mcp-templates/${encodeURIComponent(id)}`,
       { method: 'DELETE' },
+    ),
+};
+
+export const ExecutionGuardTemplateApi = {
+  list: (params?: {
+    page?: number;
+    page_size?: number;
+    enabled?: boolean;
+    search?: string;
+    sort_by?: 'template_name' | 'description' | 'updated_at';
+    sort_order?: 'asc' | 'desc';
+  }) => http<PageResult<ExecutionGuardTemplate>>('/v1/execution-guard-templates', { query: params }),
+  get: (id: string) =>
+    http<ExecutionGuardTemplate>(`/v1/execution-guard-templates/${encodeURIComponent(id)}`),
+  create: (body: ExecutionGuardTemplateCreateBody) =>
+    http<ExecutionGuardTemplate>('/v1/execution-guard-templates', { method: 'POST', body }),
+  update: (id: string, body: ExecutionGuardTemplateUpdateBody) =>
+    http<ExecutionGuardTemplate>(`/v1/execution-guard-templates/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body,
+    }),
+  remove: (id: string) =>
+    http<{ deleted: boolean; template_id: string }>(
+      `/v1/execution-guard-templates/${encodeURIComponent(id)}`,
+      { method: 'DELETE' }
     ),
 };
 
