@@ -6,7 +6,6 @@ export interface ModelTemplate {
   template_name: string;
   description?: string | null;
   model_type: ModelTypeValue;
-  model_tags?: string[] | null;
   api_base: string;
   api_key: string;
   model_id: string;
@@ -14,8 +13,6 @@ export interface ModelTemplate {
   parameters?: Record<string, unknown> | null;
   timeout: number;
   retry_count: number;
-  enable_streaming: boolean;
-  enable_function_calling: boolean;
   verify_ssl: boolean;
   enabled: boolean;
   /** 只读：在 Agent 配置模板各模型槽位引用本模板的 Agent 配置模板数 */
@@ -29,7 +26,6 @@ export interface ModelTemplateCreateBody {
   template_name: string;
   description?: string | null;
   model_type: ModelTypeValue;
-  model_tags?: string[] | null;
   api_base: string;
   api_key: string;
   model_id: string;
@@ -37,8 +33,6 @@ export interface ModelTemplateCreateBody {
   parameters?: Record<string, unknown> | null;
   timeout?: number;
   retry_count?: number;
-  enable_streaming?: boolean;
-  enable_function_calling?: boolean;
   verify_ssl?: boolean;
   enabled?: boolean;
   data?: Record<string, unknown>;
@@ -51,7 +45,6 @@ export interface EmbeddingTemplate {
   template_id: string;
   template_name: string;
   description?: string | null;
-  embed_tags?: string[] | null;
   api_base: string;
   api_key: string;
   model_id: string;
@@ -69,7 +62,6 @@ export interface EmbeddingTemplate {
 export interface EmbeddingTemplateCreateBody {
   template_name: string;
   description?: string | null;
-  embed_tags?: string[] | null;
   api_base: string;
   api_key: string;
   model_id: string;
@@ -316,7 +308,6 @@ export interface A2AOutboundTemplate {
   template_id: string;
   template_name: string;
   description?: string | null;
-  a2a_tags?: string[] | null;
   source_url: string;
   card_path: string;
   agent_card: Record<string, unknown>;
@@ -357,7 +348,6 @@ export interface A2AOutboundTemplateCreateBody {
   discovery_id: string;
   template_name: string;
   description?: string | null;
-  a2a_tags?: string[];
   credential?: string;
   connect_timeout_seconds?: number;
   sync_wait_seconds?: number;
@@ -367,7 +357,6 @@ export interface A2AOutboundTemplateCreateBody {
 export interface A2AOutboundTemplateUpdateBody {
   template_name?: string;
   description?: string | null;
-  a2a_tags?: string[];
   credential?: string;
   clear_credential?: boolean;
   connect_timeout_seconds?: number;

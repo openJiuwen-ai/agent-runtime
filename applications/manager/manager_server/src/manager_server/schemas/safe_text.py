@@ -46,13 +46,6 @@ SAFE_TEXT_FIELD_NAMES: frozenset[str] = frozenset(
         "agent_runtime",
     }
 )
-SAFE_TEXT_LIST_FIELD_NAMES: frozenset[str] = frozenset(
-    {
-        "model_tags",
-        "embed_tags",
-        "a2a_tags",
-    }
-)
 
 
 def is_safe_text(value: str) -> bool:
@@ -88,7 +81,7 @@ def _check_value(value: Any) -> None:
 
 def enforce_safe_text_on_model(model: BaseModel) -> None:
     """对模型中已设置的安全文本字段做统一拦截。"""
-    for name in SAFE_TEXT_FIELD_NAMES | SAFE_TEXT_LIST_FIELD_NAMES:
+    for name in SAFE_TEXT_FIELD_NAMES:
         if name not in model.model_fields_set:
             continue
         _check_value(getattr(model, name, None))
