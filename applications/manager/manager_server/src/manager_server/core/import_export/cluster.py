@@ -147,19 +147,18 @@ TABLE_SPECS: tuple[TableSpec, ...] = (
         "10_AgentTemplates",
         AGENT_TEMPLATE_TABLE_DEF,
         ("template_id",),
-        frozenset({"template_ref", "agent_tags"}),
+        frozenset({"template_ref"}),
     ),
     TableSpec(
         "12_ModelTemplates",
         MODEL_TEMPLATE_TABLE_DEF,
         ("template_id",),
-        frozenset({"model_type", "model_tags"}),
+        frozenset({"model_type"}),
     ),
     TableSpec(
         "13_EmbeddingTemplates",
         EMBEDDING_TEMPLATE_TABLE_DEF,
         ("template_id",),
-        frozenset({"embed_tags"}),
     ),
     TableSpec("14_SkillTemplates", SKILL_PREBUILT_TEMPLATE_TABLE_DEF, ("template_id",)),
     TableSpec("29_ExpertPackageTemplates", EXPERT_PACKAGE_TEMPLATE_TABLE_DEF, ("template_id",)),
@@ -171,7 +170,7 @@ TABLE_SPECS: tuple[TableSpec, ...] = (
         "19_A2AAgents",
         A2A_OUTBOUND_TEMPLATE_TABLE_DEF,
         ("template_id",),
-        frozenset(_A2A_RUNTIME_FIELDS | {"a2a_tags"}),
+        frozenset(_A2A_RUNTIME_FIELDS),
     ),
     TableSpec(
         "20_A2APolicies",
@@ -292,10 +291,7 @@ _SHEET_ORDER = (
 _INLINE_LIST_FIELDS = {
     "instance_agent_resource": ("match_expr",),
     "instance_service_resource": ("match_expr",),
-    "agent_template": ("agent_tags",),
-    "model_template": ("model_type", "model_tags"),
-    "embedding_template": ("embed_tags",),
-    "a2a_outbound_template": ("a2a_tags",),
+    "model_template": ("model_type",),
     "service_config_container": ("command", "args"),
 }
 

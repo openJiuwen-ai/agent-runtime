@@ -217,7 +217,6 @@ def _model_templates() -> list[tuple[str, dict[str, Any]]]:
                 "template_name": "兜底-经济型",
                 "description": "Fallback Agent 使用",
                 "model_type": ["default"],
-                "model_tags": ["chat"],
                 "api_base": "https://api.openai.com/v1",
                 "api_key": "sk-demo-global",
                 "model_id": "gpt-4o-mini",
@@ -232,7 +231,6 @@ def _model_templates() -> list[tuple[str, dict[str, Any]]]:
             {
                 "template_name": "销售组-标准型",
                 "model_type": ["default", "vision"],
-                "model_tags": ["chat", "vision"],
                 "api_base": "https://api.openai.com/v1",
                 "api_key": "sk-demo-sales",
                 "model_id": "gpt-4o",
@@ -246,7 +244,6 @@ def _model_templates() -> list[tuple[str, dict[str, Any]]]:
             {
                 "template_name": "VIP-加强对话",
                 "model_type": ["default", "vision"],
-                "model_tags": ["chat", "vision"],
                 "api_base": "https://api.openai.com/v1",
                 "api_key": "sk-demo-vip",
                 "model_id": "gpt-5",
@@ -261,7 +258,6 @@ def _model_templates() -> list[tuple[str, dict[str, Any]]]:
                 "template_name": "生图模型",
                 "description": "演示 image_gen 槽位；各 Agent 模板共用",
                 "model_type": ["image_gen"],
-                "model_tags": ["image_gen"],
                 "api_base": "https://api.openai.com/v1",
                 "api_key": "sk-demo-image-gen",
                 "model_id": "gpt-image-1",
@@ -281,7 +277,6 @@ def _embedding_templates() -> list[tuple[str, dict[str, Any]]]:
             {
                 "template_name": "兜底向量模型",
                 "description": "Fallback Agent 记忆检索",
-                "embed_tags": ["memory", "fallback"],
                 "api_base": "https://api.openai.com/v1",
                 "api_key": "sk-demo-embed-global",
                 "model_id": "text-embedding-3-small",
@@ -297,7 +292,6 @@ def _embedding_templates() -> list[tuple[str, dict[str, Any]]]:
             {
                 "template_name": "销售组向量模型",
                 "description": "销售 Agent 记忆检索",
-                "embed_tags": ["memory", "sales"],
                 "api_base": "https://api.openai.com/v1",
                 "api_key": "sk-demo-embed-sales",
                 "model_id": "text-embedding-3-large",
@@ -313,7 +307,6 @@ def _embedding_templates() -> list[tuple[str, dict[str, Any]]]:
             {
                 "template_name": "VIP 向量模型",
                 "description": "VIP Agent 记忆检索",
-                "embed_tags": ["memory", "vip"],
                 "api_base": "https://api.openai.com/v1",
                 "api_key": "sk-demo-embed-vip",
                 "model_id": "text-embedding-3-large",
@@ -546,7 +539,6 @@ def seed_demo_config(client: ManagerClient) -> dict[str, Any]:
             {
                 "template_name": "VIP Agent 模板",
                 "description": "alice VIP：M3/M4/B3/W1/E3",
-                "agent_tags": ["vip", "demo"],
                 "template_ref": {
                     "default_model": [m3],
                     "vision_model": [m3],
@@ -567,7 +559,6 @@ def seed_demo_config(client: ManagerClient) -> dict[str, Any]:
             {
                 "template_name": "销售组 Agent 模板",
                 "description": "销售通道：M2/M4/B2/W1+W2/E1+E2",
-                "agent_tags": ["sales", "demo"],
                 "template_ref": {
                     "default_model": [m2],
                     "vision_model": [m2],
@@ -588,7 +579,6 @@ def seed_demo_config(client: ManagerClient) -> dict[str, Any]:
             {
                 "template_name": "兜底 Agent 模板",
                 "description": "通用兜底：M1/M4/B1/W3/E4",
-                "agent_tags": ["fallback", "demo"],
                 "template_ref": {
                     "default_model": [m1],
                     "vision_model": [m1],

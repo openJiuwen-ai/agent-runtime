@@ -56,14 +56,10 @@ def _matches_search(row: Any, query: str) -> bool:
     needle = query.strip().lower()
     if not needle:
         return True
-    tags = _g(row, "agent_tags") or []
-    if tags is not None and not isinstance(tags, list):
-        tags = list(tags) if tags else []
     fields = [
         str(_g(row, "template_id", "") or ""),
         str(_g(row, "template_name", "") or ""),
         str(_g(row, "description", "") or ""),
-        *(str(tag) for tag in tags),
     ]
     return any(needle in field.lower() for field in fields)
 
@@ -122,16 +118,12 @@ async def _assert_no_agent_definitions(
 
 
 def agent_template_out(row: Any, *, reference_count: int = 0) -> dict[str, Any]:
-    tags = _g(row, "agent_tags")
-    if tags is not None and not isinstance(tags, list):
-        tags = list(tags) if tags else None
     data = _g(row, "data")
     result = {
         "id": _g(row, "id"),
         "template_id": _g(row, "template_id"),
         "template_name": _g(row, "template_name"),
         "description": _g(row, "description"),
-        "agent_tags": tags,
         "template_ref": read_template_ref_from_row(row),
         "enabled": bool(_g(row, "enabled", True)),
         "data": public_agent_template_data(data),
@@ -250,7 +242,6 @@ class AgentTemplateService:
                 "template_id": template_id,
                 "template_name": body.template_name,
                 "description": strip_optional(body.description),
-                "agent_tags": body.agent_tags,
                 "template_ref": body.template_ref or {},
                 "enabled": body.enabled,
                 "data": body.data,
