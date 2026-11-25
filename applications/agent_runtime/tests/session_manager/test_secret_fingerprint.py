@@ -36,11 +36,13 @@ def test_secret_reference_changes_version_and_order_does_not(target):
     mount = {"secret_name": "shared-ca", "mount_path": "/etc/ca",
              "items": [{"key": "root", "path": "root.pem"},
                        {"key": "issuer", "path": "issuer.pem"}]}
+
     def template(value):
         main = {"image": "agent:1"}
         side = {"name": "box", "image": "box:1"}
         (main if target == "main" else side)["secret_mounts"] = value
         return Template(template_id="t", main_container=main, sidecars=[side])
+
     original = template([mount])
     assert original.deploy_ver() == _deploy_ver(original.deploy_subset())
     assert original.deploy_ver() != template([]).deploy_ver()
