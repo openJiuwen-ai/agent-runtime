@@ -385,6 +385,63 @@ async def _ensure_expert_package_revision_column(handler: DBHandler) -> None:
                 raise
 
 
+async def _drop_model_template_retired_flags(handler: DBHandler) -> None:
+    """Drop retired model_template flags that reject inserts after the code removal.
+
+    ``enable_streaming`` / ``enable_function_calling`` were removed from the table
+    definition, but existing MariaDB/MySQL schemas still keep them as NOT NULL
+    without defaults, so creating a model fails with OperationalError 1364.
+
+    DROP 失败不中止启动：新代码已不再读写这两列；与
+    ``_drop_instance_grant_upload_skill_policy`` 保持同一策略。
+    """
+    if not isinstance(handler, SQLAlchemyHandler):
+        return
+
+    retired = ("enable_streaming", "enable_function_calling")
+
+    def migrate(sync_connection) -> None:
+        table_name = MODEL_TEMPLATE_TABLE_DEF.table_name
+        inspector = inspect(sync_connection)
+        if not inspector.has_table(table_name):
+            return
+        columns = {item["name"] for item in inspector.get_columns(table_name)}
+        quote = sync_connection.dialect.identifier_preparer.quote
+        dropped: list[str] = []
+        for column in retired:
+            if column not in columns:
+                continue
+            sync_connection.execute(
+                text(
+                    f"ALTER TABLE {quote(table_name)} "
+                    f"DROP COLUMN {quote(column)}"
+                )
+            )
+            dropped.append(column)
+        if dropped:
+            _log.info("dropped model_template columns: %s", ", ".join(dropped))
+
+    try:
+        async with handler.get_engine().begin() as connection:
+            await connection.run_sync(migrate)
+    except DBAPIError as exc:
+        dialect = handler.get_engine().dialect.name
+        sqlstate = getattr(exc.orig, "sqlstate", None) or getattr(exc.orig, "pgcode", None)
+        errno = exc.orig.args[0] if exc.orig.args else None
+        message = str(exc.orig).lower()
+        already_dropped = (
+            (dialect == "postgresql" and sqlstate == "42703")
+            or (dialect == "mysql" and errno == 1091)
+            or "no such column" in message
+            or "does not exist" in message
+        )
+        if not already_dropped:
+            _log.warning(
+                "drop model_template.enable_streaming/enable_function_calling failed: %s",
+                exc,
+            )
+
+
 async def init_all_tables(handler: DBHandler) -> None:
     _ensure_bigint_type_support()
     # 必须在表循环之前补列：init_table 建索引会因缺列失败。
@@ -394,6 +451,7 @@ async def init_all_tables(handler: DBHandler) -> None:
     await _ensure_team_quota_org_column(handler)
     await _migrate_a2a_discovery_settings(handler)
     await _drop_instance_grant_upload_skill_policy(handler)
+    await _drop_model_template_retired_flags(handler)
     await _ensure_user_preference_default_extras_column(handler)
     await _ensure_expert_package_revision_column(handler)
     from manager_server.core.authz import seed_authz_defaults
