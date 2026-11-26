@@ -248,19 +248,21 @@ def main():
     for attempt in range(3):
         try:
             with tempfile.TemporaryDirectory() as temp:
-                digest = prepare(
+                return prepare(
                     store, names(args.hosts), Path(temp), args.ca_output, service=args.service,
                     manager_namespace=os.environ.get("WEB_TLS_MANAGER_NAMESPACE"),
                 )
-                sys.stdout.write(f"{digest}\n")
-            return
         except FileExistsError:
             if attempt == 2:
                 raise
 
 
 if __name__ == "__main__":
+    # deploy.sh captures only the leaf digest from stdout; diagnostics stay on stderr.
+    digest_logger = logging.getLogger("web_tls.digest")
+    digest_logger.addHandler(logging.StreamHandler(sys.stdout))
+    digest_logger.propagate = False
     try:
-        main()
+        digest_logger.info("%s", main())
     except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as exc:
         sys.exit(f"User Web TLS: {exc}")
