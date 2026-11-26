@@ -21,8 +21,8 @@ from uuid import uuid4
 from ..containers import main_health_path, main_sse_port, normalize_pod_spec
 from ..errors import DeployFailed, InvalidParams, MaxPodsReached, PodsStartingUp
 from ..link_mtls import LinkMTLSConfig
-from ..spec_fields import DEPLOY_VER_FIELDS
-from ..util import fingerprint, key_unsafe, now_ts
+from ..spec_fields import deploy_fingerprint
+from ..util import key_unsafe, now_ts
 from .k8s import DEFAULT_READY_TIMEOUT, K8sPodClient
 from .models import PodDeployInfo
 from .state import ResourceState
@@ -48,8 +48,7 @@ def _deploy_ver(pod_spec: dict[str, Any]) -> str:
     先过 normalize_pod_spec(只补 canonical 缺省键不改值):pod_spec 可能来自
     Redis pod_spec_json 缓存——未来加容器字段后旧缓存缺新键,补默认(==旧行为)
     后与新算指纹相等 → 零伪 A 类日落;行为性新键应当日落,日落正确。"""
-    norm = normalize_pod_spec(pod_spec)
-    return fingerprint({f: norm.get(f) for f in DEPLOY_VER_FIELDS})
+    return deploy_fingerprint(pod_spec)
 
 
 class ResourceOrchestrator:

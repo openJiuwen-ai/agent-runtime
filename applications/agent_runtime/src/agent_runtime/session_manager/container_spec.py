@@ -106,8 +106,8 @@ _SECCTX_WIRE_KEYS = frozenset({
     "seccompProfile", "appArmorProfile"})
 
 # 模板级 volumes:K8s 卷源键 → 内部 kind
-_VOLUME_WIRE_SOURCES = ("hostPath", "configMap", "persistentVolumeClaim",
-                       "nfs", "emptyDir")
+_VOLUME_WIRE_SOURCES = ("hostPath", "configMap", "secret",
+                       "persistentVolumeClaim", "nfs", "emptyDir")
 
 
 def _int(value: Any, where: str, key: str, *, minimum: int,
@@ -632,6 +632,20 @@ def canonical_volumes(value: Any, where: str) -> dict[str, dict[str, Any]]:
                 volume["items"] = list(items)  # 键集校验由 fuse canonical 兜
             else:
                 volume["items"] = None
+        elif source_key == "secret":
+            unknown = set(source) - {"secretName", "items"}
+            if unknown:
+                raise InvalidParams(
+                    f"{entry_where}.secret unknown keys {sorted(unknown)}")
+            volume = {"kind": "secret",
+                      "secret_name": _nonempty_str(
+                          source.get("secretName"), f"{entry_where}.secret",
+                          "secretName", max_len=253)}
+            items = source.get("items")
+            if items is not None and not isinstance(items, list):
+                raise InvalidParams(
+                    f"{entry_where}.secret.items must be a list, got {items!r}")
+            volume["items"] = list(items) if items is not None else None
         elif source_key == "persistentVolumeClaim":
             volume = {"kind": "pvc",
                       "claim_name": _nonempty_str(
@@ -673,16 +687,18 @@ def fuse_mounts(spec: dict[str, Any], volumes: dict[str, dict[str, Any]],
                 where: str, role: str) -> dict[str, Any]:
     """volumeMounts × volumes join → 原始 fused 挂载。
 
-    返回 {host_path_mounts, configmap_mounts, pvc_mounts, nfs_mounts,
-    empty_dir_mounts};
-    五者是 mounts.py 规范形函数的**输入**(raw 条目,调用方决定过
+    返回 {host_path_mounts, configmap_mounts, secret_mounts, pvc_mounts,
+    nfs_mounts, empty_dir_mounts};
+    六者是 mounts.py 规范形函数的**输入**(raw 条目,调用方决定过
     canonical_* 还是直接交 validate_*)。源类型相关规则在此落定:subPath
-    仅 configMap、readOnly 缺省按源类型(cm→true、hp/pvc/nfs/ed→false)。
+    支持 configMap/Secret/emptyDir；readOnly 缺省按源类型
+    (cm/secret→true、hp/pvc/nfs/ed→false)。
     NFS 与 PVC 同构:卷源(server/path)属模板级 volumes(pod 级),主/
     sidecar 容器一律按名引用挂载,条数/挂载点不限(K8s 语义,不加限制)。
     """
     host: list[dict] = []
     cm: list[dict] = []
+    secret: list[dict] = []
     ed: list[dict] = []
     pvc: list[dict] = []
     nfs: list[dict] = []
@@ -695,9 +711,11 @@ def fuse_mounts(spec: dict[str, Any], volumes: dict[str, dict[str, Any]],
                 "the template volumes")
         kind = volume["kind"]
         read_only = mount["read_only"]
-        if mount["sub_path"] is not None and kind not in ("configmap", "empty_dir"):
+        if mount["sub_path"] is not None and kind not in (
+                "configmap", "secret", "empty_dir"):
             raise InvalidParams(
-                f"{mount_where}.subPath is only supported on configMap "
+                f"{mount_where}.subPath is only supported on configMap, secret "
+                "or emptyDir "
                 f"volume mounts, not {kind}")
         if kind == "host_path":
             host.append({"host_path": volume["host_path"],
@@ -710,6 +728,12 @@ def fuse_mounts(spec: dict[str, Any], volumes: dict[str, dict[str, Any]],
                        "sub_path": mount["sub_path"],
                        "items": volume["items"],
                        "read_only": True if read_only is None else read_only})
+        elif kind == "secret":
+            secret.append({"secret_name": volume["secret_name"],
+                           "mount_path": mount["mount_path"],
+                           "sub_path": mount["sub_path"],
+                           "items": volume["items"],
+                           "read_only": True if read_only is None else read_only})
         elif kind == "pvc":
             pvc.append({"claim_name": volume["claim_name"],
                         "mount_path": mount["mount_path"],
@@ -725,6 +749,7 @@ def fuse_mounts(spec: dict[str, Any], volumes: dict[str, dict[str, Any]],
                         "mount_path": mount["mount_path"],
                         "read_only": False if read_only is None else read_only})
     return {"host_path_mounts": host, "configmap_mounts": cm,
+            "secret_mounts": secret,
             "pvc_mounts": pvc, "nfs_mounts": nfs,
             "empty_dir_mounts": ed}
 
@@ -734,9 +759,9 @@ def fuse_mounts(spec: dict[str, Any], volumes: dict[str, dict[str, Any]],
 def build_canonical(spec: dict[str, Any],
                     volumes: dict[str, dict[str, Any]],
                     where: str, *, role: str) -> dict[str, Any]:
-    """容器内部规范形(14 键 unfused)+ 模板 volumes → canonical(15 键)。
+    """容器内部规范形(unfused)+ 模板 volumes → canonical。
 
-    fuse_mounts(join 卷,四挂载族)组装 canonical 输入,交
+    fuse_mounts(join 卷,六挂载族)组装 canonical 输入,交
     containers.canonical_container 幂等收口(默认填满/挂载排序/校验)。
     产物 = Template.main_container / sidecars 元素 / pod_spec 容器段
     (同一直径,指纹/传输/渲染三处同形)。
@@ -754,6 +779,7 @@ def build_canonical(spec: dict[str, Any],
         "resources": spec["resources"],
         "host_path_mounts": fused["host_path_mounts"],
         "configmap_mounts": fused["configmap_mounts"],
+        "secret_mounts": fused["secret_mounts"],
         "pvc_mounts": fused["pvc_mounts"],
         "nfs_mounts": fused["nfs_mounts"],
         "empty_dir_mounts": fused["empty_dir_mounts"],

@@ -6,7 +6,7 @@ template 字段定义见 HLD §3.1「数据结构定义」。DB 列名与 wire �
 service_ttl/min_idle_services,存量库须 RENAME COLUMN)。
 
 2026-09 统一规范形:容器级配置(主/sidecar)以 containers.py canonical
-(dict,13 键全填满)携带——``main_container`` 单容器 + ``sidecars`` 列表,
+(dict,缺省键全填满)携带——``main_container`` 单容器 + ``sidecars`` 列表,
 不再平铺 ~23 个 agent_* 字段(历史包袱,加字段要改六处的根因)。
 
 scope 定义(scope_id/index/引用模板/路由规则集)由 config_sync 全量下发,
@@ -28,8 +28,7 @@ from ..containers import (
     normalize_container,
     normalize_containers,
 )
-from ..spec_fields import DEPLOY_VER_FIELDS, POLICY_FIELDS  # noqa: F401 - 字段分类定义
-from ..util import fingerprint
+from ..spec_fields import DEPLOY_VER_FIELDS, POLICY_FIELDS, deploy_fingerprint  # noqa: F401
 
 
 @dataclass(frozen=True)
@@ -117,7 +116,7 @@ class Template:
 
     def deploy_ver(self) -> str:
         """A 类字段 hash 指纹（不含 kubeconfig）。新旧不等即 A 类变更（场景 M）。"""
-        return fingerprint({name: getattr(self, name) for name in DEPLOY_VER_FIELDS})
+        return deploy_fingerprint(self.deploy_subset())
 
     def pool_config(self) -> dict[str, Any]:
         """acquire/update_pool_config 下发 RM 的池参数。

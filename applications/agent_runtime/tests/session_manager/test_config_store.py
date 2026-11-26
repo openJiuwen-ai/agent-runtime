@@ -776,7 +776,7 @@ _SIDECAR = {
     "readiness_probe_type": "tcp",
 }
 
-# _SIDECAR 经 wire → canonical 的期望形态(13 键全填满)
+# _SIDECAR 经 wire → canonical 的期望形态(所有缺省键填满)
 _SIDECAR_CANONICAL = {
     "name": "jiuwenbox",
     "image": "jiuwenbox-amd64:0.0.1",
@@ -798,6 +798,7 @@ _SIDECAR_CANONICAL = {
                           "mount_path": "/sys/fs/cgroup",
                           "read_only": False, "host_path_type": None}],
     "configmap_mounts": [], "pvc_mounts": [], "nfs_mounts": [],
+    "empty_dir_mounts": [], "secret_mounts": [],
     "readiness_probe": {"probe_type": "tcp", "path": "/health",
                         "initial_delay": 5, "period": 10, "timeout": 3},
 }
@@ -1152,6 +1153,26 @@ async def test_split_sync_persists_rows_and_routes(runtime):
 
     outcome = await runtime.route("s1")
     assert outcome["pod_sse_url"].startswith("http://")
+
+
+@requires_lua
+async def test_secret_volume_sync_database_and_route(runtime):
+    """Secret 名称/key 经过 config_sync、DB 回读、route 后完整到达 RM。"""
+    from agent_runtime.session_manager.config_store import TEMPLATE_TABLE
+    payload = _split_payload([_main_container(
+        env=[{"name": "SSL_CERT_FILE", "value": "/etc/ca/ca.pem"}],
+        volumeMounts=[{"name": "ca", "mountPath": "/etc/ca"}])],
+        [_split_tpl("tpl-secret", volumes=[{"name": "ca", "secret": {
+            "secretName": "shared-ca", "items": [{"key": "root.pem", "path": "ca.pem"}]}}])])
+    await runtime.config_store.config_sync(payload)
+    row = await runtime.db.get(TEMPLATE_TABLE, {"template_id": "tpl-secret"})
+    assert row.volumes[0]["secret_name"] == "shared-ca"
+    template = await runtime.config_store.get_template("tpl-secret")
+    await runtime.route("secret-session")
+    spec = runtime.k8s.deployed_specs[0]
+    assert spec["main_container"]["secret_mounts"] == template.main_container["secret_mounts"]
+    assert spec["main_container"]["secret_mounts"][0]["read_only"] is True
+    assert spec["main_container"]["env"]["SSL_CERT_FILE"] == "/etc/ca/ca.pem"
 
 
 @requires_lua
