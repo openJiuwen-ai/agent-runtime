@@ -99,16 +99,22 @@ export function InstanceOrgsTab({ instanceId }: Props) {
     [bindingData?.group_ids, orgGrantById],
   );
 
+  /** 以准入记录为准；目录中已删除的组织仍展示，避免库里有绑定但列表空白。 */
   const boundOrgs = useMemo((): BoundOrgRow[] => {
-    return allOrgs
-      .filter((o) => boundOrgIds.has(o.group_id))
-      .map((o) => {
-        const grant = orgGrantById.get(o.group_id);
-        if (!grant) return null;
-        return { ...o, grant };
-      })
-      .filter((x): x is BoundOrgRow => x != null);
-  }, [allOrgs, boundOrgIds, orgGrantById]);
+    const directory = new Map(allOrgs.map((o) => [o.group_id, o]));
+    return (bindingData?.items ?? []).map((grant) => {
+      const org = directory.get(grant.subject_id);
+      if (org) return { ...org, grant };
+      return {
+        group_id: grant.subject_id,
+        display_name: t(`${IA}.missingOrg`),
+        status: 'missing',
+        created_at: null,
+        updated_at: null,
+        grant,
+      };
+    });
+  }, [allOrgs, bindingData?.items, t]);
 
   const { searchInput, setSearchInput, searchQuery } = useListSearch();
   const [page, setPage] = useState(1);
@@ -489,7 +495,9 @@ function OrgRow({
         <input type="checkbox" checked={checked} onChange={onToggle} />
       </td>
       <td className="align-top">
-        <div className="text-text-strong font-medium break-words">{org.display_name}</div>
+        <div className={`font-medium break-words ${org.status === 'missing' ? 'text-danger' : 'text-text-strong'}`}>
+          {org.display_name}
+        </div>
         <div className="text-[11px] text-muted mono break-all" title={org.group_id}>
           {org.group_id}
         </div>

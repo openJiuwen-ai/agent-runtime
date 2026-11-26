@@ -22,8 +22,10 @@ import { ApiError, DeploymentApi } from '../../services/api';
 import { ImportClusterModal } from './modal/ImportClusterModal';
 import { CreateDeploymentModal } from '../deployment/CreateDeploymentModal';
 import { useGuideAutoOpen } from '../../hooks/useGuideAutoOpen';
+import { useClustersGuideStatus } from '../../hooks/useGuideStatus';
 import { bumpGuideRevision } from '../../stores/guideStore';
 import { WorkspaceNote } from '../../components/WorkspaceNote';
+import { WarnBadge, type WarnBadgeLink } from '../../components/WarnBadge';
 import { ClusterCardStats } from './ClusterCardStats';
 
 type ViewMode = 'brief' | 'list';
@@ -32,10 +34,8 @@ type InstanceSortField =
   | 'jiuwenclaw_name'
   | 'gateway_status'
   | 'runtime_status'
-  | 'user_web_status'
   | 'gateway_last_alive'
   | 'runtime_last_alive'
-  | 'user_web_last_alive'
   | 'updated_at';
 
 const VIEW_MODE_STORAGE_KEY = 'claw_manager_instance_view';
@@ -60,8 +60,6 @@ function InstanceListTable({
   onGatewayStatusFilterChange,
   runtimeStatusFilter,
   onRuntimeStatusFilterChange,
-  userWebStatusFilter,
-  onUserWebStatusFilterChange,
 }: {
   items: InstanceSummary[];
   onChanged: () => void;
@@ -73,8 +71,6 @@ function InstanceListTable({
   onGatewayStatusFilterChange: (value: string) => void;
   runtimeStatusFilter: string;
   onRuntimeStatusFilterChange: (value: string) => void;
-  userWebStatusFilter: string;
-  onUserWebStatusFilterChange: (value: string) => void;
 }) {
   const { t } = useTranslation();
   const { navigate } = useRouter();
@@ -141,25 +137,6 @@ function InstanceListTable({
                   </div>
                 </th>
                 <th>
-                  <div className="th-filter">
-                    <span className="th-filter__label">{t('topology.userWebStatus')}</span>
-                    <TableColumnSort
-                      iconOnly
-                      label={t('topology.userWebStatus')}
-                      value={sortBy === 'user_web_status' ? sortOrder : ''}
-                      options={sortOptions}
-                      onChange={(value) => onSortChange('user_web_status', value)}
-                    />
-                    <TableColumnFilter
-                      iconOnly
-                      label={t('topology.userWebStatus')}
-                      value={userWebStatusFilter}
-                      options={statusFilterOptions}
-                      onChange={onUserWebStatusFilterChange}
-                    />
-                  </div>
-                </th>
-                <th>
                   <TableColumnSort
                     label={t('topology.gatewayLastAlive')}
                     value={sortBy === 'gateway_last_alive' ? sortOrder : ''}
@@ -177,14 +154,6 @@ function InstanceListTable({
                 </th>
                 <th>
                   <TableColumnSort
-                    label={t('topology.userWebLastAlive')}
-                    value={sortBy === 'user_web_last_alive' ? sortOrder : ''}
-                    options={sortOptions}
-                    onChange={(value) => onSortChange('user_web_last_alive', value)}
-                  />
-                </th>
-                <th>
-                  <TableColumnSort
                     label={t('topology.modifiedAt')}
                     value={sortBy === 'updated_at' ? sortOrder : ''}
                     options={sortOptions}
@@ -197,7 +166,7 @@ function InstanceListTable({
             <tbody>
               {items.length === 0 ? (
                 <tr>
-                  <td colSpan={9}>
+                  <td colSpan={7}>
                     <Empty text={t('common.empty')} />
                   </td>
                 </tr>
@@ -218,17 +187,11 @@ function InstanceListTable({
                     <td className="whitespace-nowrap">
                       <StatusBadge status={instance.runtime_status} />
                     </td>
-                    <td className="whitespace-nowrap">
-                      <StatusBadge status={instance.user_web_status || 'pending'} />
-                    </td>
                     <td className="mono text-[11px] text-muted whitespace-nowrap" title={formatTime(instance.gateway_last_alive)}>
                       {formatTime(instance.gateway_last_alive)}
                     </td>
                     <td className="mono text-[11px] text-muted whitespace-nowrap" title={formatTime(instance.runtime_last_alive)}>
                       {formatTime(instance.runtime_last_alive)}
-                    </td>
-                    <td className="mono text-[11px] text-muted whitespace-nowrap" title={formatTime(instance.user_web_last_alive)}>
-                      {formatTime(instance.user_web_last_alive)}
                     </td>
                     <td className="mono text-[11px] text-muted whitespace-nowrap" title={formatTime(instance.updated_at)}>
                       {formatTime(instance.updated_at)}
@@ -304,7 +267,6 @@ export function InstanceListPage() {
   const { searchInput, setSearchInput, searchQuery } = useListSearch();
   const [gatewayStatusFilter, setGatewayStatusFilter] = useState<string>('');
   const [runtimeStatusFilter, setRuntimeStatusFilter] = useState<string>('');
-  const [userWebStatusFilter, setUserWebStatusFilter] = useState<string>('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [sortBy, setSortBy] = useState<InstanceSortField | ''>('');
@@ -337,11 +299,6 @@ export function InstanceListPage() {
     setPage(1);
   };
 
-  const handleUserWebStatusFilterChange = (value: string) => {
-    setUserWebStatusFilter(value);
-    setPage(1);
-  };
-
   const handleSortChange = (field: InstanceSortField, value: ColumnSortValue) => {
     if (value === '') {
       setSortBy('');
@@ -368,7 +325,6 @@ export function InstanceListPage() {
         page_size: pageSize,
         gateway_status: gatewayStatusFilter || undefined,
         runtime_status: runtimeStatusFilter || undefined,
-        user_web_status: userWebStatusFilter || undefined,
         search: searchQuery,
         sort_by: apiSortBy,
         sort_order: apiSortOrder,
@@ -376,7 +332,6 @@ export function InstanceListPage() {
     [
       gatewayStatusFilter,
       runtimeStatusFilter,
-      userWebStatusFilter,
       page,
       pageSize,
       searchQuery,
@@ -390,6 +345,25 @@ export function InstanceListPage() {
     void instances.reload();
   };
 
+  /** 各集群引导告警（未配置准入用户/组织、Agent、运行时），用于卡片右上角叹号 */
+  const clusterIds = useMemo(
+    () => (instances.data?.items ?? []).map((it) => it.jiuwenclaw_id),
+    [instances.data],
+  );
+  const alertsByInstance = useClustersGuideStatus(clusterIds);
+  const clusterAlertLinks = (instanceId: string): WarnBadgeLink[] => {
+    const labels: Record<string, string> = {
+      accessUsers: t('instanceDetail.accessPanel.instance.users'),
+      accessOrgs: t('instanceDetail.accessPanel.instance.orgs'),
+      agentResource: t('instanceDetail.resourcePanel.tabs.agent'),
+      poolResource: t('instanceDetail.resourcePanel.tabs.serviceResource'),
+    };
+    return (alertsByInstance[instanceId] ?? []).map((a) => ({
+      label: t('guide.missingItem', { item: labels[a.labelKey] ?? a.labelKey }),
+      to: a.to,
+      openTarget: a.openTarget,
+    }));
+  };
 
   const handleRefresh = async () => {
     if (refreshing) return;
@@ -418,6 +392,7 @@ export function InstanceListPage() {
 
   const renderClusterCard = (instance: InstanceSummary) => {
     const connected = allComponentsConnected(instance);
+    const alertLinks = clusterAlertLinks(instance.jiuwenclaw_id);
     return (
       <article className="card cluster-card" key={instance.jiuwenclaw_id}>
         <div className="cluster-card__head">
@@ -430,7 +405,12 @@ export function InstanceListPage() {
             <p className="mono mt-1 truncate text-xs text-muted">{instance.jiuwenclaw_id} · {instance.namespace || 'default'}</p>
             </div>
           </div>
-          <span className={`pill sm ${connected ? 'ok' : 'warn'}`}>{connected ? t('redesign.connected') : t('redesign.inspect')}</span>
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            {alertLinks.length > 0 && (
+              <WarnBadge className="opacity-100" links={alertLinks} />
+            )}
+            <span className={`pill sm ${connected ? 'ok' : 'warn'}`}>{connected ? t('redesign.connected') : t('redesign.inspect')}</span>
+          </div>
         </div>
         <ClusterCardStats instanceId={instance.jiuwenclaw_id} />
         {!connected && <div className="cluster-card__notice"><span className="statusDot" />{t('redesign.clusterNeedsInspection')}</div>}
@@ -503,8 +483,6 @@ export function InstanceListPage() {
               onGatewayStatusFilterChange={handleGatewayStatusFilterChange}
               runtimeStatusFilter={runtimeStatusFilter}
               onRuntimeStatusFilterChange={handleRuntimeStatusFilterChange}
-              userWebStatusFilter={userWebStatusFilter}
-              onUserWebStatusFilterChange={handleUserWebStatusFilterChange}
             />
           ) : !instances.data?.items.length ? (
             <div className="card"><Empty text={t('common.empty')} /></div>

@@ -189,7 +189,8 @@ def main() -> None:
         default=settings.manager_web_idp_target,
         help="Identity service base URL for /idp relay.",
     )
-    for legacy_option in ("--user-web-target", "--gateway-http-target", "--gateway-ws-target"):
+    for legacy_option in ("--gateway-http-target", "--gateway-ws-target", "--user-web-target"):
+        # --user-web-target 仅为兼容旧启动参数，管理面已不再反代 User Web
         parser.add_argument(legacy_option, help=argparse.SUPPRESS)
     parser.add_argument(
         "--log-level",

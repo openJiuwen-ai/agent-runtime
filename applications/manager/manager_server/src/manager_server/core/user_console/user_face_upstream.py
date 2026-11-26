@@ -1,8 +1,9 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """用户面动态上游解析（nginx auth_request 子请求）。
 
-按 Cookie ``jiuwenclaw_id`` 解析 Manager 可达的 User Web / Gateway 上游；
-缺 Cookie 或实例未配置时回退 ``MANAGER_WEB_*_TARGET``。
+按 Cookie ``jiuwenclaw_id`` 解析 Manager 可达的 Gateway 上游（HTTP/WS 均取
+``instance_info.gateway_host``）；缺 Cookie 或实例未配置时回退
+``MANAGER_WEB_GATEWAY_*_TARGET``。
 
 nginx 变量 ``proxy_pass`` 的 ``resolver`` **不会**使用 ``/etc/resolv.conf`` 的
 search 域，因此短名 ``svc`` / ``svc.ns`` 会 Host not found；下发前扩成
@@ -28,7 +29,6 @@ from manager_server.infrastructure.logger import get_logger
 
 JIUWENCLAW_ID_COOKIE = "jiuwenclaw_id"
 
-_HDR_USER_WEB = "X-User-Web-Upstream"
 _HDR_GATEWAY_HTTP = "X-Gateway-Http-Upstream"
 _HDR_GATEWAY_WS = "X-Gateway-Ws-Upstream"
 
@@ -62,13 +62,11 @@ _PUBLIC_TLDS = frozenset(
 
 @dataclass(frozen=True, slots=True)
 class UserFaceUpstreams:
-    user_web: str
     gateway_http: str
     gateway_ws: str
 
     def as_headers(self) -> dict[str, str]:
         return {
-            _HDR_USER_WEB: self.user_web,
             _HDR_GATEWAY_HTTP: self.gateway_http,
             _HDR_GATEWAY_WS: self.gateway_ws,
         }
@@ -154,7 +152,6 @@ def coerce_http_upstream(raw: str) -> str:
 
 def _defaults() -> UserFaceUpstreams:
     return UserFaceUpstreams(
-        user_web=coerce_http_upstream(settings.manager_web_user_web_target),
         gateway_http=coerce_http_upstream(settings.manager_web_gateway_http_target),
         gateway_ws=coerce_http_upstream(settings.manager_web_gateway_ws_target),
     )
@@ -191,7 +188,7 @@ async def resolve_user_face_upstreams(
     groups: list[str] | None,
     jiuwenclaw_id: str | None,
 ) -> UserFaceUpstreams:
-    """解析当前请求应反代的上游；无 Cookie 时直接回退默认。
+    """解析当前请求应反代的 Gateway 上游；无 Cookie 时直接回退默认。
 
     Raises:
         PermissionError: Cookie 指向的实例当前用户无权访问。
@@ -213,7 +210,6 @@ async def resolve_user_face_upstreams(
             "user_face_upstream_cache_hit",
             user_id=uid,
             jiuwenclaw_id=jid or None,
-            user_web=cached.user_web,
             gateway_http=cached.gateway_http,
             gateway_ws=cached.gateway_ws,
         )
@@ -224,7 +220,6 @@ async def resolve_user_face_upstreams(
         _log.info(
             "user_face_upstream_defaults",
             user_id=uid,
-            user_web=defaults.user_web,
             gateway_http=defaults.gateway_http,
             gateway_ws=defaults.gateway_ws,
         )
@@ -234,15 +229,12 @@ async def resolve_user_face_upstreams(
     if row is None:
         raise LookupError(f"instance not found: {jid}")
 
-    data = getattr(row, "data", None)
-    data_dict = dict(data) if isinstance(data, dict) else {}
-    raw_user_web = getattr(row, "user_web_host", None)
+    raw_gateway = getattr(row, "gateway_host", None)
     resolved = UserFaceUpstreams(
-        user_web=_pick(raw_user_web, defaults.user_web),
-        gateway_http=_pick(data_dict.get("gateway_web_http_host"), defaults.gateway_http),
-        gateway_ws=_pick(data_dict.get("gateway_web_ws_host"), defaults.gateway_ws),
+        gateway_http=_pick(raw_gateway, defaults.gateway_http),
+        gateway_ws=_pick(raw_gateway, defaults.gateway_ws),
     )
-    if not resolved.user_web or not resolved.gateway_http or not resolved.gateway_ws:
+    if not resolved.gateway_http or not resolved.gateway_ws:
         raise LookupError(f"instance upstream incomplete: {jid}")
 
     _cache_set(cache_key, resolved)
@@ -250,10 +242,7 @@ async def resolve_user_face_upstreams(
         "user_face_upstream_resolved",
         user_id=uid,
         jiuwenclaw_id=jid,
-        raw_user_web=raw_user_web,
-        raw_gateway_http=data_dict.get("gateway_web_http_host"),
-        raw_gateway_ws=data_dict.get("gateway_web_ws_host"),
-        user_web=resolved.user_web,
+        raw_gateway_host=raw_gateway,
         gateway_http=resolved.gateway_http,
         gateway_ws=resolved.gateway_ws,
     )

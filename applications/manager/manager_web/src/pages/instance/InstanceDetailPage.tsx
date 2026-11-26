@@ -29,9 +29,6 @@ const HOST_MAX = 512;
 type ConnectivityForm = {
   gateway_host: string;
   runtime_host: string;
-  user_web_host: string;
-  gateway_web_http_host: string;
-  gateway_web_ws_host: string;
 };
 
 function FieldLabel({ children, required }: { children: ReactNode; required?: boolean }) {
@@ -58,9 +55,6 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
   const [connectivityForm, setConnectivityForm] = useState<ConnectivityForm>({
     gateway_host: '',
     runtime_host: '',
-    user_web_host: '',
-    gateway_web_http_host: '',
-    gateway_web_ws_host: '',
   });
   const { markClean, isDirty } = useFormDirty(editOpen);
 
@@ -94,9 +88,6 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
     const next: ConnectivityForm = {
       gateway_host: d?.gateway_host ?? '',
       runtime_host: d?.runtime_host ?? '',
-      user_web_host: d?.user_web_host ?? '',
-      gateway_web_http_host: d?.gateway_web_http_host ?? '',
-      gateway_web_ws_host: d?.gateway_web_ws_host ?? '',
     };
     setConnectivityForm(next);
     markClean(next);
@@ -106,14 +97,9 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
   const submitConnectivity = async () => {
     const gateway = connectivityForm.gateway_host.trim();
     const runtime = connectivityForm.runtime_host.trim();
-    const userWeb = connectivityForm.user_web_host.trim();
-    const gatewayWebHttp = connectivityForm.gateway_web_http_host.trim();
-    const gatewayWebWs = connectivityForm.gateway_web_ws_host.trim();
     const requiredChecks: { label: string; invalid: boolean }[] = [
       { label: t('instanceForm.gatewayHost'), invalid: !gateway },
       { label: t('instanceForm.runtimeHost'), invalid: !runtime },
-      { label: t('instanceForm.userWebHost'), invalid: !userWeb },
-      { label: t('instanceForm.gatewayWebHttpHost'), invalid: !gatewayWebHttp },
     ];
     const missing = requiredChecks.find((item) => item.invalid);
     if (missing) {
@@ -123,9 +109,6 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
     const hostsToValidate: { value: string; field: string }[] = [
       { value: gateway, field: t('instanceForm.gatewayHost') },
       { value: runtime, field: t('instanceForm.runtimeHost') },
-      { value: userWeb, field: t('instanceForm.userWebHost') },
-      { value: gatewayWebHttp, field: t('instanceForm.gatewayWebHttpHost') },
-      { value: gatewayWebWs, field: t('instanceForm.gatewayWebWsHost') },
     ];
     for (const host of hostsToValidate) {
       if (!host.value) continue;
@@ -138,9 +121,6 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
       await InstanceApi.update(instanceId, {
         gateway_host: gateway,
         runtime_host: runtime,
-        user_web_host: userWeb,
-        gateway_web_http_host: gatewayWebHttp,
-        gateway_web_ws_host: gatewayWebWs,
       });
       toast('success', t('success.saved'));
       setEditOpen(false);
@@ -238,36 +218,6 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
               maxLength={HOST_MAX}
               onChange={(runtime_host) =>
                 setConnectivityForm((prev) => ({ ...prev, runtime_host }))
-              }
-            />
-          </div>
-          <div>
-            <FieldLabel required>{t('instanceForm.userWebHost')}</FieldLabel>
-            <LimitedTextInput
-              value={connectivityForm.user_web_host}
-              maxLength={HOST_MAX}
-              onChange={(user_web_host) =>
-                setConnectivityForm((prev) => ({ ...prev, user_web_host }))
-              }
-            />
-          </div>
-          <div>
-            <FieldLabel required>{t('instanceForm.gatewayWebHttpHost')}</FieldLabel>
-            <LimitedTextInput
-              value={connectivityForm.gateway_web_http_host}
-              maxLength={HOST_MAX}
-              onChange={(gateway_web_http_host) =>
-                setConnectivityForm((prev) => ({ ...prev, gateway_web_http_host }))
-              }
-            />
-          </div>
-          <div>
-            <FieldLabel>{t('instanceForm.gatewayWebWsHost')}</FieldLabel>
-            <LimitedTextInput
-              value={connectivityForm.gateway_web_ws_host}
-              maxLength={HOST_MAX}
-              onChange={(gateway_web_ws_host) =>
-                setConnectivityForm((prev) => ({ ...prev, gateway_web_ws_host }))
               }
             />
           </div>

@@ -59,9 +59,6 @@ function ClusterCreationForm({ draftKey, template, returnTo }: { draftKey: strin
   const endpointFields = [
     { key: 'gateway' as const, label: t('instanceForm.gatewayHost'), required: true },
     { key: 'runtime' as const, label: t('instanceForm.runtimeHost'), required: true },
-    { key: 'web' as const, label: t('instanceForm.userWebHost'), required: true },
-    { key: 'gatewayHttp' as const, label: t('instanceForm.gatewayWebHttpHost'), required: true },
-    { key: 'gatewayWs' as const, label: t('instanceForm.gatewayWebWsHost'), required: false },
   ];
   const flow = [
     [tr('创建服务实例', 'Create service instance'), tr('保存集群名称和服务地址', 'Save the cluster identity and endpoints')],
@@ -96,8 +93,7 @@ function ClusterCreationForm({ draftKey, template, returnTo }: { draftKey: strin
       const created = await InstanceApi.create({
         jiuwenclaw_name: draft.name.trim(), description: draft.description.trim() || undefined,
         namespace, space_id: 'default', created_by: user?.user_id || 'manager',
-        gateway_host: hosts.gateway.trim(), runtime_host: hosts.runtime.trim(), user_web_host: hosts.web.trim(),
-        gateway_web_http_host: hosts.gatewayHttp.trim(), gateway_web_ws_host: hosts.gatewayWs.trim() || undefined,
+        gateway_host: hosts.gateway.trim(), runtime_host: hosts.runtime.trim(),
       });
       try { clearClusterCreationDraft(sessionStorage, draftKey); } catch { /* Creation has already succeeded. */ }
       bumpGuideRevision();
@@ -149,7 +145,7 @@ function ClusterCreationForm({ draftKey, template, returnTo }: { draftKey: strin
               <button type="button" role="tab" aria-selected={draft.hostMode === 'auto'} className={'tab ' + (draft.hostMode === 'auto' ? 'active' : '')} onClick={() => update({ hostMode: 'auto' })}>{tr('自动生成', 'Auto generate')}</button>
               <button type="button" role="tab" aria-selected={draft.hostMode === 'manual'} className={'tab ' + (draft.hostMode === 'manual' ? 'active' : '')} onClick={() => update({ ...(endpointFields.every(field => !draft[field.key]) ? autoHosts : {}), hostMode: 'manual' })}>{tr('手动填写', 'Manual')}</button>
             </div>
-            <p className="mt-2 text-xs text-muted">{draft.hostMode === 'auto' ? tr('按 Kubernetes 服务名和命名空间生成；跨网络访问时请切换为手动填写。', 'Generated from Kubernetes services and namespace. Use manual entry when accessing across networks.') : tr('Gateway WebSocket 填写 HTTP(S) 基地址，未填写时由服务使用默认值。', 'Enter the HTTP(S) base URL for Gateway WebSocket. Leave it blank to use the service default.')}</p>
+            <p className="mt-2 text-xs text-muted">{draft.hostMode === 'auto' ? tr('按 Kubernetes 服务名和命名空间生成；跨网络访问时请切换为手动填写。', 'Generated from Kubernetes services and namespace. Use manual entry when accessing across networks.') : tr('填写 Manager 可以访问的 Gateway 与 Runtime 地址。', 'Enter Gateway and Runtime endpoints reachable from Manager.')}</p>
             {draft.hostMode === 'auto' ? <div className="wizard-endpoint-preview">{endpointFields.map(field => <div key={field.key}><span>{field.label}</span><code>{autoHosts[field.key]}</code></div>)}</div> : <div className="wizard-form-grid">{endpointFields.map(field => <label className="label" key={field.key} htmlFor={'cluster-create-' + field.key}>{field.label}{field.required && <span className="text-danger"> *</span>}<input id={'cluster-create-' + field.key} className="input mono" value={draft[field.key]} maxLength={512} onChange={event => update({ [field.key]: event.target.value })} placeholder="http://host:port" /></label>)}</div>}
           </fieldset>
           {error && <p className="mt-4 text-sm text-danger break-words" role="alert">{error}</p>}

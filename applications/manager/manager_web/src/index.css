@@ -1703,8 +1703,13 @@ button, input, textarea, select { font: inherit; color: inherit; }
   }
 
   /* --- 可选的 page header 装饰条 --- */
-  .page-header .page-title { position: relative; padding-left: 12px; }
-  .page-header .page-title::before {
+  .page-header .page-title,
+  .cluster-workspace-header__identity .page-title {
+    position: relative;
+    padding-left: 12px;
+  }
+  .page-header .page-title::before,
+  .cluster-workspace-header__identity .page-title::before {
     content: "";
     position: absolute;
     left: 0; top: 4px; bottom: 4px;
@@ -2450,7 +2455,7 @@ dialog.resource-preview::backdrop { background: rgb(0 0 0 / .24); }
 .cluster-workspace-header__actions .btn { white-space: nowrap; }
 .cluster-workspace-header__id { grid-column: 1 / -1; }
 .cluster-workspace-nav { display: flex; flex-shrink: 0; gap: 4px; overflow-x: auto; border-bottom: 1px solid var(--border); }
-.cluster-workspace-nav__item { flex: 0 0 auto; padding: 12px 16px; border-bottom: 2px solid transparent; color: var(--muted); font-size: 13px; font-weight: 500; }
+.cluster-workspace-nav__item { display: inline-flex; align-items: center; flex: 0 0 auto; padding: 12px 16px; border-bottom: 2px solid transparent; color: var(--muted); font-size: 13px; font-weight: 500; }
 .cluster-workspace-nav__item:hover { color: var(--accent); background: var(--accent-subtle); }
 .cluster-workspace-nav__item.active { color: var(--accent); border-bottom-color: var(--accent); }
 .cluster-workspace-subnav { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 0 2px; }

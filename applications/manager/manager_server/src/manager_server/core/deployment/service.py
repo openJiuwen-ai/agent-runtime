@@ -435,9 +435,6 @@ async def register_instance_for_namespace(handler: DBHandler, task: dict) -> tup
         created_by=task.get("created_by") or "manager-deploy",
         gateway_host=hosts["gateway_host"],
         runtime_host=hosts["runtime_host"],
-        user_web_host=hosts["user_web_host"],
-        gateway_web_http_host=hosts["gateway_web_http_host"],
-        gateway_web_ws_host=hosts["gateway_web_ws_host"],
         data={
             "deploy_source": "manager-deploy",
             "deployment_id": task["deployment_id"],

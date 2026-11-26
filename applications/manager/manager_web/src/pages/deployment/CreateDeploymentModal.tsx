@@ -18,13 +18,11 @@ interface Props {
 const HOST_SVC = {
   gateway: 'jiuwenswarm-gateway',
   runtime: 'jiuwenswarm-agent-runtime',
-  web: 'jiuwenswarm-web',
 } as const;
 
 const HOST_PORT = {
   gatewayConfig: 19000,
   runtimeConfig: 8091,
-  userWeb: 5173,
 } as const;
 
 /** K8s DNS label：小写字母/数字/连字符，不以连字符首尾，最长 63 */
@@ -43,7 +41,6 @@ function buildHostsPreview(ns: string) {
   return {
     gateway: `http://${HOST_SVC.gateway}.${namespace}:${HOST_PORT.gatewayConfig}`,
     runtime: `http://${HOST_SVC.runtime}.${namespace}:${HOST_PORT.runtimeConfig}`,
-    userWeb: `https://${HOST_SVC.web}.${namespace}:${HOST_PORT.userWeb}`,
   };
 }
 
@@ -353,7 +350,6 @@ export function CreateDeploymentModal({ open, defaults, onClose, onCreated }: Pr
         <div className={action === 'down' ? 'hidden' : ''}>
           <HostPreview label={t('instanceForm.gatewayHost')} value={hostsPreview.gateway} />
           <HostPreview label={t('instanceForm.runtimeHost')} value={hostsPreview.runtime} />
-          <HostPreview label={t('instanceForm.userWebHost')} value={hostsPreview.userWeb} />
         </div>
 
         <div className={`border-t border-border pt-2 ${action === 'down' ? 'hidden' : ''}`}>

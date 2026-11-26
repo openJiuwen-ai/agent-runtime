@@ -6,7 +6,6 @@ export default defineConfig(() => {
   const envDir = path.resolve(__dirname, '..')
   const managerTarget = process.env.MANAGER_WEB_PROXY_TARGET || 'http://127.0.0.1:8765'
   const idpTarget = process.env.MANAGER_WEB_IDP_TARGET || 'http://127.0.0.1:8770'
-  const userWebTarget = process.env.MANAGER_WEB_USER_WEB_TARGET || 'http://127.0.0.1:5173'
   const gatewayHttpTarget =
     process.env.MANAGER_WEB_GATEWAY_HTTP_TARGET || 'http://127.0.0.1:19002'
   const gatewayWsTarget =
@@ -26,11 +25,9 @@ export default defineConfig(() => {
     server: {
       port: 5273,
       strictPort: true,
-      // 与生产入口同一套路由前缀：/api→管理 API、/idp→认证中心、
-      // /chat→User Web、/ws→Gateway WebSocket、/gateway-api 及文件路由→Gateway Web HTTP。
-      // 三段 SPA 路由(/auth /user /manager)由 vite 开发服务器自动回退 index.html。
-      // proxy target 统一读 MANAGER_WEB_*（与生产 manager-web Python 入口同一套 env，避免两套变量）
-      // 本地开发默认 127.0.0.1；容器内由 manager-web.template.yaml 注入集群 DNS
+      // 与生产入口同一套路由前缀：/api→管理 API、/idp→认证中心。
+      // /chat、/ws、/gateway-api 等用户面路由由独立 User Web 提供，管理面开发代理不再转发。
+      // proxy target 统一读 MANAGER_WEB_*（与生产 manager-web 入口同一套 env）
       proxy: {
         '/gateway-api': {
           target: gatewayHttpTarget,
@@ -42,12 +39,6 @@ export default defineConfig(() => {
         '/file-api': { target: gatewayHttpTarget, changeOrigin: true },
         '/share-api': { target: gatewayHttpTarget, changeOrigin: true },
         '/ws': { target: gatewayWsTarget, ws: true, changeOrigin: true },
-        '/chat': {
-          target: userWebTarget,
-          ws: true,
-          changeOrigin: true,
-          rewrite: (requestPath) => requestPath.replace(/^\/chat/, '') || '/',
-        },
         '/manager-api': {
           target: managerTarget,
           changeOrigin: true,

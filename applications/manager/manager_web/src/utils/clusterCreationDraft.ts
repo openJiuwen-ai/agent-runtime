@@ -6,13 +6,10 @@ export interface ClusterCreationDraft {
   hostMode: ClusterCreationHostMode;
   gateway: string;
   runtime: string;
-  web: string;
-  gatewayHttp: string;
-  gatewayWs: string;
 }
 export const emptyClusterCreationDraft: ClusterCreationDraft = {
   name: '', description: '', namespace: 'default', hostMode: 'auto',
-  gateway: '', runtime: '', web: '', gatewayHttp: '', gatewayWs: '',
+  gateway: '', runtime: '',
 };
 export function clusterCreationDraftKey(userId: string, template = '', returnTo = ''): string {
   return 'manager:cluster-creation-draft:' + JSON.stringify([userId, template, returnTo]);
@@ -42,8 +39,5 @@ export function clusterCreationHosts(namespace: string) {
   return {
     gateway: 'http://jiuwenswarm-gateway' + suffix + ':19000',
     runtime: 'http://jiuwenswarm-agent-runtime' + suffix + ':8091',
-    web: 'https://jiuwenswarm-web' + suffix + ':5173',
-    gatewayHttp: 'http://jiuwenswarm-gateway' + suffix + ':19000',
-    gatewayWs: 'http://jiuwenswarm-gateway' + suffix + ':19000',
   };
 }

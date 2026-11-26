@@ -104,8 +104,6 @@ spec:
         - name: IDENTITY_PUBLIC_KEY_URL
           value: "http://<<IDENTITY_NAME>>:<<IDENTITY_REST_PORT>>/v1/auth/public_key"
         # nginx 变量 proxy_pass 需 FQDN；短名作回退时由 Manager 扩成 *.svc.cluster.local
-        - name: MANAGER_WEB_USER_WEB_TARGET
-          value: "https://<<WEB_NAME>>.<<NAMESPACE>>.svc.cluster.local:<<WEB_HTTP_PORT>>"
         - name: MANAGER_WEB_GATEWAY_HTTP_TARGET
           value: "http://<<GATEWAY_NAME>>.<<NAMESPACE>>.svc.cluster.local:<<WEB_PORT>>"
         - name: MANAGER_WEB_GATEWAY_WS_TARGET

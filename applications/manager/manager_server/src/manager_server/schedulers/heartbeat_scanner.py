@@ -1,4 +1,4 @@
-"""定时巡检：Manager 主动探活 Gateway / Runtime / User Web，更新 online/offline。"""
+"""定时巡检：Manager 主动探活 Gateway / Runtime，更新 online/offline。"""
 
 from __future__ import annotations
 
@@ -55,7 +55,7 @@ async def scan_instance_health_once(handler: DBHandler) -> dict[str, int]:
         skipped = sum(
             bool(getattr(row, f"{side}_host", None))
             for row in rows
-            for side in ("gateway", "runtime", "user_web")
+            for side in ("gateway", "runtime")
         )
         return {"probed": 0, "alive": 0, "dead": 0, "skipped": skipped}
     sem = asyncio.Semaphore(_PROBE_CONCURRENCY)
@@ -71,7 +71,6 @@ async def scan_instance_health_once(handler: DBHandler) -> dict[str, int]:
             continue
         gw_host = getattr(row, "gateway_host", None)
         rt_host = getattr(row, "runtime_host", None)
-        web_host = str(getattr(row, "user_web_host", "") or "").strip().rstrip("/") or None
         if gw_host:
             tasks.append(
                 _guarded(
@@ -85,14 +84,6 @@ async def scan_instance_health_once(handler: DBHandler) -> dict[str, int]:
                 _guarded(
                     _probe_one_side(
                         handler, jiuwenclaw_id=jid, side="runtime", host=rt_host
-                    )
-                )
-            )
-        if web_host:
-            tasks.append(
-                _guarded(
-                    _probe_one_side(
-                        handler, jiuwenclaw_id=jid, side="user_web", host=web_host
                     )
                 )
             )

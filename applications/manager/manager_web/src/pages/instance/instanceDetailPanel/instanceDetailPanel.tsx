@@ -46,18 +46,6 @@ export function InstanceDetailPanel({ instance, onOpenEditConnectivity, onRefres
             <div className="truncate" title={d?.runtime_host ?? ''}>
               {d?.runtime_host ?? '-'}
             </div>
-            <div className="text-muted whitespace-nowrap">user web</div>
-            <div className="truncate" title={d?.user_web_host ?? ''}>
-              {d?.user_web_host ?? '-'}
-            </div>
-            <div className="text-muted whitespace-nowrap">gateway web http</div>
-            <div className="truncate" title={d?.gateway_web_http_host ?? ''}>
-              {d?.gateway_web_http_host ?? '-'}
-            </div>
-            <div className="text-muted whitespace-nowrap">gateway web ws</div>
-            <div className="truncate" title={d?.gateway_web_ws_host ?? ''}>
-              {d?.gateway_web_ws_host ?? '-'}
-            </div>
           </div>
         </div>
 
@@ -78,13 +66,6 @@ export function InstanceDetailPanel({ instance, onOpenEditConnectivity, onRefres
               {d?.runtime_status ? <StatusBadge status={d.runtime_status} /> : '-'}
               <span className="mono text-muted" title={relativeTime(d?.runtime_last_alive)}>
                 {formatTime(d?.runtime_last_alive)}
-              </span>
-            </div>
-            <div className="text-muted">user web</div>
-            <div className="flex items-center gap-2">
-              {d?.user_web_status ? <StatusBadge status={d.user_web_status} /> : <StatusBadge status="pending" />}
-              <span className="mono text-muted" title={relativeTime(d?.user_web_last_alive)}>
-                {formatTime(d?.user_web_last_alive)}
               </span>
             </div>
             <div className="text-muted">created</div>

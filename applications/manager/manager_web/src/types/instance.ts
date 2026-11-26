@@ -9,11 +9,6 @@ export interface InstanceSummary {
   runtime_host: string;
   runtime_status: string;
   runtime_last_alive?: string | null;
-  user_web_status?: string;
-  user_web_last_alive?: string | null;
-  user_web_host?: string | null;
-  gateway_web_http_host?: string | null;
-  gateway_web_ws_host?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
 }
@@ -33,9 +28,6 @@ export interface CreateInstanceBody {
   created_by?: string;
   gateway_host: string;
   runtime_host: string;
-  user_web_host?: string;
-  gateway_web_http_host?: string;
-  gateway_web_ws_host?: string;
   data?: Record<string, unknown>;
 }
 
@@ -46,9 +38,6 @@ export interface UpdateInstanceBody {
   space_id?: string;
   gateway_host?: string;
   runtime_host?: string;
-  user_web_host?: string;
-  gateway_web_http_host?: string;
-  gateway_web_ws_host?: string;
   data?: Record<string, unknown>;
   updated_by?: string;
 }

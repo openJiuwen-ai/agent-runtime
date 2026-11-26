@@ -11,10 +11,7 @@ from openjiuwen_runtime.foundation.db.handler import DBHandler
 from openjiuwen_runtime.foundation.db.sqlalchemy_handler import SQLAlchemyHandler
 from sqlalchemy import insert
 
-from manager_server.core.instance.instance_service import (
-    _find_config_host_conflict,
-    _find_user_face_host_conflict,
-)
+from manager_server.core.instance.instance_service import _find_config_host_conflict
 from manager_server.core.template.model_template import MODEL_TEMPLATE_STORED_RETRY_COUNT
 from manager_server.core.template.push_template_to_gateway import (
     rebuild_jid_template_ref_for_gateway,
@@ -90,8 +87,6 @@ _INSTANCE_RUNTIME_FIELDS = {
     "gateway_last_alive",
     "runtime_status",
     "runtime_last_alive",
-    "user_web_status",
-    "user_web_last_alive",
 }
 _A2A_RUNTIME_FIELDS = {
     "pending_revision",
@@ -593,8 +588,6 @@ def _table_sheet(
     columns = _columns(spec.table_def, excluded=spec.excluded)
     headers = [column.name for column in columns if str(column.data_type).lower() != "json"]
     headers.extend(_INLINE_LIST_FIELDS.get(spec.table, ()))
-    if spec.table == "instance_info":
-        headers.extend(("gateway_web_http_host", "gateway_web_ws_host"))
     output: list[dict[str, Any]] = []
     sensitive: set[tuple[int, str]] = set()
     for row_index, source in enumerate(rows):
@@ -603,21 +596,6 @@ def _table_sheet(
         for column in columns:
             if str(column.data_type).lower() == "json":
                 value = redacted.get(column.name)
-                if (
-                    spec.table == "instance_info"
-                    and column.name == "data"
-                    and isinstance(value, dict)
-                ):
-                    value = {
-                        key: item
-                        for key, item in value.items()
-                        if key not in {"gateway_web_http_host", "gateway_web_ws_host"}
-                    }
-                    # Promoted face-host columns are decoded into ``data``
-                    # before ExtraFields.  An empty ``data`` leaf would replace
-                    # those hosts again, so omit it from the manifest.
-                    if not value:
-                        continue
                 if column.name in redacted:
                     leaves: list[tuple[str, str, Any]] = []
                     _flatten(value, column.name, leaves)
@@ -644,10 +622,6 @@ def _table_sheet(
                 record[field] = str(value)
             else:
                 record[field] = ""
-        if spec.table == "instance_info":
-            data = redacted.get("data") if isinstance(redacted.get("data"), dict) else {}
-            record["gateway_web_http_host"] = data.get("gateway_web_http_host")
-            record["gateway_web_ws_host"] = data.get("gateway_web_ws_host")
         output.append(record)
     return SheetData(
         name=spec.sheet,
@@ -958,11 +932,6 @@ def _decode_workbook(
                     value[field] = (
                         canonicalize_match_expr(items) if field == "match_expr" else items
                     )
-            if spec.table == "instance_info":
-                value.setdefault("data", {})
-                for field in ("gateway_web_http_host", "gateway_web_ws_host"):
-                    if raw.get(field) not in (None, ""):
-                        value["data"][field] = str(raw[field])
             decoded.append(value)
         rows_by_table[spec.table] = decoded
 
@@ -1398,7 +1367,7 @@ async def _instance_host_actions(
         cluster_id = str(row.get("jiuwenclaw_id") or "")
         if await handler.get("instance_info", {"jiuwenclaw_id": cluster_id}) is not None:
             continue
-        for column in ("gateway_host", "runtime_host", "user_web_host"):
+        for column in ("gateway_host", "runtime_host"):
             host = str(row.get(column) or "").strip()
             if not host:
                 actions.append(
@@ -1421,36 +1390,6 @@ async def _instance_host_actions(
                         "action": "conflict",
                         "detail": (
                             f"{column} is already used by instance "
-                            f"{getattr(conflict, 'jiuwenclaw_id', '')}"
-                        ),
-                    }
-                )
-        data = row.get("data") if isinstance(row.get("data"), dict) else {}
-        for key in ("gateway_web_http_host", "gateway_web_ws_host"):
-            host = str(data.get(key) or "").strip()
-            if key == "gateway_web_http_host" and not host:
-                actions.append(
-                    {
-                        "scope": "manager",
-                        "object_type": "instance_info",
-                        "object_id": cluster_id,
-                        "action": "missing_dependency",
-                        "detail": f"{key} is required",
-                    }
-                )
-                continue
-            if not host:
-                continue
-            conflict = await _find_user_face_host_conflict(handler, host, key=key)
-            if conflict is not None:
-                actions.append(
-                    {
-                        "scope": "manager",
-                        "object_type": "instance_info",
-                        "object_id": cluster_id,
-                        "action": "conflict",
-                        "detail": (
-                            f"{key} is already used by instance "
                             f"{getattr(conflict, 'jiuwenclaw_id', '')}"
                         ),
                     }
