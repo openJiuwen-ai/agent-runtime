@@ -6,9 +6,12 @@ import hashlib
 import http.client
 import ipaddress
 import json
+import logging
 import os
 from pathlib import Path
+import posixpath
 import re
+import shutil
 import ssl
 import subprocess
 import sys
@@ -32,8 +35,6 @@ class Secrets:
 
     def request(self, method, name, resource=None, *, kind="secret", namespace=None):
         namespace = namespace or self.namespace
-        suffix = "/" + name if name else ""
-        path = "/api/v1/namespaces/" + namespace + "/" + kind + "s" + suffix
         body = json.dumps(resource).encode() if resource else None
         if self.server:
             url = urlsplit(self.server)
@@ -47,7 +48,10 @@ class Secrets:
             try:
                 headers = {"Authorization": "Bearer " + os.environ["WEB_TLS_CLUSTER_TOKEN"],
                            "Content-Type": "application/json"}
-                conn.request(method, url.path.rstrip("/") + path, body, headers)
+                path = posixpath.join(url.path or "/", "api/v1/namespaces", namespace, f"{kind}s")
+                if name:
+                    path = posixpath.join(path, name)
+                conn.request(method, path, body, headers)
                 response = conn.getresponse()
                 data = response.read()
                 if response.status == 404 and method == "GET":
@@ -81,7 +85,13 @@ class Secrets:
 
 
 def openssl(*args, check=True):
-    return subprocess.run(["openssl", *args], check=check, capture_output=True)
+    directories = ["/usr/bin", "/bin", "/usr/local/bin"]
+    if sys.platform == "darwin":
+        directories[:0] = ["/opt/homebrew/opt/openssl@3/bin", "/usr/local/opt/openssl@3/bin"]
+    executable = shutil.which("openssl", path=os.pathsep.join(directories))
+    if executable is None:
+        raise FileNotFoundError("OpenSSL executable not found in system installation directories")
+    return subprocess.run([executable, *args], check=check, capture_output=True)
 
 
 def names(value):
@@ -176,7 +186,7 @@ def prepare(store, hosts, directory, ca_out, *, service="jiuwenswarm-web", manag
             if leaf:
                 raise ValueError(f"Restore {CA} before managing the existing certificate")
             openssl("req", "-x509", "-newkey", "rsa:3072", "-nodes", "-days", "1825",
-                    "-subj", "/CN=Jiuwen User Web Development CA " + store.namespace,
+                    "-subj", f"/CN=Jiuwen User Web Development CA {store.namespace}",
                     "-addext", "basicConstraints=critical,CA:TRUE,pathlen:0",
                     "-addext", "keyUsage=critical,keyCertSign,cRLSign", "-keyout", ca_key, "-out", ca_cert)
             ca = store.save(CA, "Opaque", {"ca.crt": ca_cert.read_bytes(), "ca.key": ca_key.read_bytes()})
@@ -198,8 +208,12 @@ def prepare(store, hosts, directory, ca_out, *, service="jiuwenswarm-web", manag
             openssl("x509", "-in", ca_cert, "-checkend", str(90 * 86400), "-noout")
             extensions = directory / "server.ext"
             alt_names = ",".join(kind + ":" + host for kind, host in sorted(hosts))
-            extensions.write_text("basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\n"
-                                  "extendedKeyUsage=serverAuth\nsubjectAltName=" + alt_names + "\n")
+            extensions.write_text(
+                "basicConstraints=critical,CA:FALSE\n"
+                "keyUsage=critical,digitalSignature,keyEncipherment\n"
+                "extendedKeyUsage=serverAuth\n"
+                f"subjectAltName={alt_names}\n"
+            )
             csr = directory / "server.csr"
             openssl("req", "-new", "-newkey", "rsa:2048", "-nodes", "-subj", "/CN=Jiuwen User Web",
                     "-keyout", key, "-out", csr)
@@ -216,13 +230,14 @@ def prepare(store, hosts, directory, ca_out, *, service="jiuwenswarm-web", manag
             output.write(probe_ca)
         os.replace(output.name, ca_out)
         fingerprint = openssl("x509", "-in", ca_out, "-noout", "-sha256", "-fingerprint").stdout.decode().strip()
-        print(f"User Web public CA: {ca_out} ({fingerprint})", file=sys.stderr)
+        logging.getLogger(__name__).info("User Web public CA: %s (%s)", ca_out, fingerprint)
     else:
         ca_out.unlink(missing_ok=True)
     return hashlib.sha256((directory / "tls.crt").read_bytes()).hexdigest()
 
 
 def main():
+    logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stderr)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("namespace")
     parser.add_argument("hosts")
@@ -233,8 +248,11 @@ def main():
     for attempt in range(3):
         try:
             with tempfile.TemporaryDirectory() as temp:
-                print(prepare(store, names(args.hosts), Path(temp), args.ca_output, service=args.service,
-                              manager_namespace=os.environ.get("WEB_TLS_MANAGER_NAMESPACE")))
+                digest = prepare(
+                    store, names(args.hosts), Path(temp), args.ca_output, service=args.service,
+                    manager_namespace=os.environ.get("WEB_TLS_MANAGER_NAMESPACE"),
+                )
+                sys.stdout.write(f"{digest}\n")
             return
         except FileExistsError:
             if attempt == 2:

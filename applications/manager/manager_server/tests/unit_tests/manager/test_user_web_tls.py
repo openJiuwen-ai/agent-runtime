@@ -4,6 +4,7 @@
 import base64
 import importlib.util
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -89,30 +90,19 @@ def test_ocp_web_reconciliation_emits_one_patch_per_resource(tmp_path):
     manager = (DEPLOY / "openshift/templates/manager-server.template.yaml").read_text()
     manager = manager.replace("<<MANAGER_SERVER_IMAGE>>", "manager:candidate").replace("<<NAMESPACE>>", "web-test")
     (tmp_path / "manager-server.yaml").write_text(manager)
-    script = """
-        set -eu
-        source "$1/kubectl.sh"
-        source "$1/deploy_handler.sh"
-        CONF_DIR="$2"
-        KCTL_NS=web-test
-        kctl_tmpdir() { echo "$CONF_DIR"; }
-        kctl_patch_strategic() { kctl_patch "$@"; }
-        kctl_patch() {
-            local name="${1##*/}" path="${1%/*}"
-            printf '%s' "$2" > "$CONF_DIR/${path##*/}-${name}.json"
-            echo 200
-        }
-        reconcile_web_tls
-        reconcile_manager_web_probe
-    """
-    subprocess.run(["bash", "-c", script, "web-test", DEPLOY / "openshift", tmp_path], check=True)
+    fixture = Path(__file__).resolve().parent / "fixtures" / "reconcile_web_tls.sh"
+    # Prefer the installed Bash (including Homebrew on macOS) and keep yq discoverable.
+    tool_path = os.pathsep.join(("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", os.environ["PATH"]))
+    subprocess.run([fixture, DEPLOY / "openshift", tmp_path], env={**os.environ, "PATH": tool_path}, check=True)
     pod = json.loads((tmp_path / "deployments-jiuwenswarm-web.json").read_text())["spec"]["template"]["spec"]
     assert pod["containers"][0]["image"] == "web:latest"
     assert pod["containers"][0]["readinessProbe"]["httpGet"]["scheme"] == "HTTPS"
     assert pod["volumes"][0]["secret"]["secretName"] == tls.LEAF
     assert json.loads((tmp_path / "services-jiuwenswarm-web.json").read_text())["spec"]["ports"][0]["name"] == "https"
-    assert json.loads((tmp_path / "routes-jiuwenswarm-web.json").read_text())["spec"]["tls"]["termination"] == "passthrough"
-    manager_pod = json.loads((tmp_path / "deployments-jiuwenswarm-manager-server.json").read_text())["spec"]["template"]["spec"]
+    route = json.loads((tmp_path / "routes-jiuwenswarm-web.json").read_text())
+    assert route["spec"]["tls"]["termination"] == "passthrough"
+    deployment = json.loads((tmp_path / "deployments-jiuwenswarm-manager-server.json").read_text())
+    manager_pod = deployment["spec"]["template"]["spec"]
     assert manager_pod["volumes"][0]["configMap"]["name"] == tls.PROBE_TRUST
     container = manager_pod["containers"][0]
     assert container["image"] == "manager:candidate"
