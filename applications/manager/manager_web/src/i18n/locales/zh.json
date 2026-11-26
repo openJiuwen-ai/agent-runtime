@@ -1889,10 +1889,6 @@
   "approvals": {
     "title": "审批中心",
     "subtitle": "查看和处理平台各类审批申请",
-    "bannerTitle": "审批只处理需要人工确认的变更",
-    "bannerText": "审批列表展示配额申请等需要人工确认的操作。批准后系统还会同步到对应集群，详情页中的同步状态才代表最终生效结果。",
-    "detailBannerTitle": "审批结果需要等待同步确认",
-    "detailBannerText": "批准只记录决策；最终是否生效以本页同步状态为准。",
     "searchPlaceholder": "搜索审批单号、标题或申请说明",
     "businessType": "审批类型",
     "subjectTitle": "标题",
@@ -2021,7 +2017,6 @@
     "authorizationNoteTitle": "先理解授权关系",
     "authorizationNoteText": "用户或组织是“谁”，角色是“能做什么”，服务实例是“在哪个集群生效”。先准备身份和角色，再到服务实例中配置集群准入及 Agent 使用范围。",
     "authorizationNoteAction": "去配置服务实例 →",
-    "emptyPlaceholder": "当前暂无可展示数据",
     "workbench": {
       "loading": "正在读取集群配置…",
       "loadFailed": "无法读取集群配置",

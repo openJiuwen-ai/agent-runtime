@@ -1888,10 +1888,6 @@
   "approvals": {
     "title": "Approval Center",
     "subtitle": "Review and process platform approval requests",
-    "bannerTitle": "Approvals only cover changes that need human confirmation",
-    "bannerText": "The list shows quota requests and other operations that need manual confirmation. After approval, the system still syncs to the target cluster; the sync status on the detail page is the final effective result.",
-    "detailBannerTitle": "Approval results need sync confirmation",
-    "detailBannerText": "Approving only records the decision. Final effect depends on the sync status shown on this page.",
     "searchPlaceholder": "Search by order number, title, or reason",
     "businessType": "Approval Type",
     "subjectTitle": "Title",
@@ -2020,7 +2016,6 @@
     "authorizationNoteTitle": "Understand authorization relationships first",
     "authorizationNoteText": "Users or organizations are “who”, roles are “what they can do”, and service instances are “where it takes effect”. Prepare identities and roles first, then configure cluster admission and Agent usage in a service instance.",
     "authorizationNoteAction": "Configure service instances →",
-    "emptyPlaceholder": "Nothing to show yet",
     "workbench": {
       "loading": "Loading cluster configuration…",
       "loadFailed": "Unable to load cluster configuration",
