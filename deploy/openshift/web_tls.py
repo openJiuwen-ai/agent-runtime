@@ -182,6 +182,11 @@ def prepare(store, hosts, directory, ca_out, *, service="jiuwenswarm-web", manag
             openssl("verify", "-CAfile", directory / "ca.crt", "-untrusted", directory / "tls.crt",
                     "-purpose", "sslserver", directory / "tls.crt")
             probe_ca = (directory / "ca.crt").read_bytes()
+        else:
+            logging.getLogger(__name__).info(
+                "%s has no ca.crt; Manager will verify the certificate using its own trust store when probing Web.",
+                LEAF,
+            )
     else:
         if not hosts:
             raise ValueError("Set WEB_TLS_HOSTS to the user Web address; use localhost for local forwarding only")

@@ -1,15 +1,20 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 """Exercise the certificate lifecycle using OpenSSL and an in-memory Secret API."""
 
+import asyncio
 import base64
 import importlib.util
 import json
+import logging
 import os
 from pathlib import Path
 import shutil
+import ssl
 import subprocess
 
 import pytest
+
+from manager_server.core.instance.config_host_probe import probe_config_host
 
 
 DEPLOY = Path(__file__).resolve().parents[6] / "deploy"
@@ -43,7 +48,7 @@ def test_standalone_deploy_tools_ship_same_certificate_helper():
     assert (DEPLOY / "jiuwenswarm-ee/web_tls.py").read_bytes() == SCRIPT.read_bytes()
 
 
-def test_public_names_and_custom_certificate_lifecycle(tmp_path):
+def test_public_names_and_custom_certificate_lifecycle(tmp_path, caplog):
     store = TestSecrets()
     ca = tmp_path / "root.pem"
     hosts = tls.names("web.example.test,192.0.2.12")
@@ -63,22 +68,75 @@ def test_public_names_and_custom_certificate_lifecycle(tmp_path):
         flag = "-verify_ip" if kind == "IP" else "-verify_hostname"
         tls.openssl("verify", "-CAfile", ca, flag, value, tmp_path / "tls.crt")
     assert tls.prepare(store, hosts.copy(), tmp_path, ca) == digest
-    changed = tls.prepare(store, tls.names("web.example.test"), tmp_path, ca)
+    hosts = tls.names("web.example.test")
+    changed = tls.prepare(store, hosts, tmp_path, ca)
     assert changed != digest
     assert root == ca.read_bytes()
     leaf = store.objects[tls.LEAF]
     del leaf["metadata"]["annotations"][tls.OWNER]
     del store.objects[tls.CA]
-    assert tls.prepare(store, tls.names("web.example.test"), tmp_path, ca) == changed
+    with caplog.at_level(logging.INFO):
+        assert tls.prepare(store, hosts, tmp_path, ca) == changed
+    assert "Manager will verify the certificate using its own trust store" in caplog.text
     with pytest.raises(ValueError, match=r"DNS other\.example\.test$"):
         tls.prepare(store, tls.names("other.example.test"), tmp_path, ca)
     assert store.objects == {tls.LEAF: leaf}
     assert cert_key not in store.maps["web-test"]["data"]
     assert not ca.exists()
+    # An explicitly supplied but unrelated CA must still stop deployment.
+    wrong_ca = tmp_path / "wrong-ca.pem"
+    tls.openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", "/CN=Other CA",
+                "-keyout", tmp_path / "wrong.key", "-out", wrong_ca)
+    leaf["data"]["ca.crt"] = base64.b64encode(wrong_ca.read_bytes()).decode()
+    with pytest.raises(subprocess.CalledProcessError):
+        tls.prepare(store, hosts, tmp_path, ca)
+    assert cert_key not in store.maps["web-test"]["data"]
     leaf["data"]["ca.crt"] = base64.b64encode(root).decode()
     assert tls.prepare(store, hosts=tls.names("web.example.test"), directory=tmp_path, ca_out=ca) == changed
     assert store.maps["web-test"]["data"] == {cert_key: root.decode()}
     assert store.objects[tls.LEAF] is leaf
+
+
+@pytest.mark.asyncio
+async def test_web_can_deploy_before_manager_verifies_custom_issuer(tmp_path, monkeypatch):
+    # Prepare a custom Secret signed by a private CA. Start Web before probing it.
+    store = TestSecrets()
+    ca = tmp_path / "issuer.pem"
+    hosts = tls.names("localhost")
+    digest = tls.prepare(store, hosts, tmp_path, ca, service="localhost")
+    issuer = ca.read_bytes()
+    leaf = store.objects[tls.LEAF]
+    del leaf["metadata"]["annotations"][tls.OWNER]
+    del store.objects[tls.CA]
+    store.maps.clear()
+    assert tls.prepare(store, hosts, tmp_path, ca, service="localhost") == digest
+    assert not store.maps and not ca.exists()
+
+    server_tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    server_tls.load_cert_chain(tmp_path / "tls.crt", tmp_path / "tls.key")
+    mount = tmp_path / "manager-ca"
+    mount.mkdir()
+    monkeypatch.setattr("manager_server.core.instance.config_host_probe._WEB_PROBE_CA", mount)
+    monkeypatch.setenv("MANAGER_WEB_USER_WEB_TARGET", "https://localhost.web-test.svc")
+    monkeypatch.setenv("NAMESPACE", "web-test")
+
+    async def serve(reader, writer):
+        await reader.readuntil(b"\r\n\r\n")
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+        await writer.drain()
+        writer.close()
+        await writer.wait_closed()
+
+    async with await asyncio.start_server(serve, "127.0.0.1", 0, ssl=server_tls) as server:
+        port = server.sockets[0].getsockname()[1]
+        url = f"https://localhost:{port}"
+        with pytest.raises(ValueError, match=r"ca\.crt of the jiuwenswarm-web-tls Secret"):
+            await probe_config_host(url, side="user_web")
+        leaf["data"]["ca.crt"] = base64.b64encode(issuer).decode()
+        assert tls.prepare(store, hosts, tmp_path, ca, service="localhost") == digest
+        cert_key = "localhost.web-test.crt"
+        (mount / cert_key).write_text(store.maps["web-test"]["data"][cert_key])
+        await probe_config_host(url, side="user_web")
 
 
 @pytest.mark.parametrize("missing", ["web-custom.web-test", "web-custom.web-test.svc.cluster.local", None])
@@ -91,6 +149,7 @@ def test_custom_certificate_covers_registered_and_configured_probe_hosts(tmp_pat
                 "-addext", f"subjectAltName={san}", "-keyout", key, "-out", cert)
     leaf = store.save(tls.LEAF, "kubernetes.io/tls", {"tls.crt": cert.read_bytes(), "tls.key": key.read_bytes()})
     del leaf["metadata"]["annotations"][tls.OWNER]
+    leaf["data"]["ca.crt"] = base64.b64encode(cert.read_bytes()).decode()
     public_hosts = tls.names("web.example.test")
     ca = tmp_path / "public-ca.crt"
     if missing:
