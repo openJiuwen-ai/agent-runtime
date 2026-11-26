@@ -446,6 +446,11 @@ export function LogMaskingTab({ instanceId }: { instanceId: string }) {
                   update('priority', raw === '' ? NaN : Number(raw));
                 }}
               />
+              {!Number.isNaN(form.priority) && !isInt32(form.priority) && (
+                <div className="text-[11px] text-danger mt-1" role="alert">
+                  {t('instanceConfig.logMasking.priorityInvalid')}
+                </div>
+              )}
             </div>
           </div>
           <div className="md:col-span-2">

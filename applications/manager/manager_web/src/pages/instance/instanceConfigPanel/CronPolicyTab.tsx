@@ -148,6 +148,11 @@ export function CronPolicyTab({ instanceId }: Props) {
           value={limit}
           onChange={(e) => setLimit(e.target.value)}
         />
+        {limit.trim() !== '' && !isNonNegativeInteger(limit) && (
+          <div className="text-[11px] text-danger mt-1" role="alert">
+            {t('instanceConfig.cronPolicy.invalid')}
+          </div>
+        )}
       </div>
 
       <ConfirmDialog

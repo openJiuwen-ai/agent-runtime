@@ -656,7 +656,7 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
               <button
                 className="btn primary"
                 style={{ marginLeft: 8 }}
-                disabled={busy || restoredDraftKey !== handoffKey || !!requestedTemplate || catalogState.loading || !!catalogState.error || !catalog.some(item => item.template_id === addTemplateId && item.enabled !== false) || !addResourceName.trim() || !isInt32(addPriority)}
+                disabled={busy || restoredDraftKey !== handoffKey || !!requestedTemplate || catalogState.loading || !!catalogState.error || !catalog.some(item => item.template_id === addTemplateId && item.enabled !== false) || !addResourceName.trim()}
                 onClick={async () => {
                   if (!addResourceName.trim()) {
                     toast('warn', t('policies.fieldRequired', { field: t(`${sr}.resourceName`) }));
@@ -764,6 +764,11 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
                   setAddPriority(raw === '' ? NaN : Number(raw));
                 }}
               />
+              {!Number.isNaN(addPriority) && !isInt32(addPriority) && (
+                <div className="text-[11px] text-danger mt-1" role="alert">
+                  {t(`${sr}.priorityInvalid`)}
+                </div>
+              )}
             </label>
             <label className="block mb-3">
               <FieldLabel>{t(`${sr}.scopeLabel`)}</FieldLabel>
@@ -864,6 +869,11 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
                 setEditPriority(raw === '' ? NaN : Number(raw));
               }}
             />
+            {!Number.isNaN(editPriority) && !isInt32(editPriority) && (
+              <div className="text-[11px] text-danger mt-1" role="alert">
+                {t(`${sr}.priorityInvalid`)}
+              </div>
+            )}
           </label>
           <label className="block mb-3">
             <FieldLabel>{t(`${sr}.scopeLabel`)}</FieldLabel>

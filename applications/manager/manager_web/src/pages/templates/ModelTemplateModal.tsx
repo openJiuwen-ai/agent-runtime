@@ -409,6 +409,11 @@ export function ModelTemplateModal({ open, template, onClose, onSaved }: Props) 
             value={form.timeout}
             onChange={(e) => update('timeout', Number(e.target.value))}
           />
+          {(!Number.isInteger(form.timeout) || form.timeout < 1 || form.timeout > INT32_MAX) && (
+            <div className="text-[11px] text-danger mt-1" role="alert">
+              {t('modelTemplate.timeoutMin')}
+            </div>
+          )}
         </div>
         <div className="md:col-span-2">
           <JsonField

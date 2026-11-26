@@ -703,6 +703,11 @@ export function WorkspaceQuotaPolicyTab({ instanceId, onChange }: { instanceId: 
                 value={Number.isInteger(form.priority) ? form.priority : ''}
                 onChange={(e) => update('priority', e.target.value === '' ? Number.NaN : Number(e.target.value))}
               />
+              {!Number.isNaN(form.priority) && !isNonNegInt32(form.priority) && (
+                <div className="text-[11px] text-danger mt-1" role="alert">
+                  {t('instanceDetail.workspaceQuota.invalidPriority')}
+                </div>
+              )}
             </div>
           </div>
           <div>
