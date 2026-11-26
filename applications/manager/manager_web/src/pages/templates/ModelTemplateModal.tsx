@@ -87,7 +87,6 @@ interface FormState {
   model_provider: string;
   parameters: string;
   timeout: number;
-  retry_count: number;
   verify_ssl: boolean;
   headers: string;
 }
@@ -102,7 +101,6 @@ const empty: FormState = {
   model_provider: 'OpenAI',
   parameters: '',
   timeout: 360,
-  retry_count: 3,
   verify_ssl: false,
   headers: '',
 };
@@ -167,7 +165,6 @@ export function ModelTemplateModal({ open, template, onClose, onSaved }: Props) 
           ),
           parameters: safeStringify(template.parameters ?? {}, 2),
           timeout: template.timeout,
-          retry_count: template.retry_count,
           verify_ssl: template.verify_ssl,
           headers: headersFromData(template.data),
         }
@@ -231,10 +228,6 @@ export function ModelTemplateModal({ open, template, onClose, onSaved }: Props) 
       toast('warn', t('modelTemplate.timeoutMin'));
       return;
     }
-    if (!Number.isFinite(form.retry_count) || form.retry_count < 0) {
-      toast('warn', t('modelTemplate.retryCountMin'));
-      return;
-    }
     const paramErr = checkJson(form.parameters);
     if (paramErr) {
       toast('danger', paramErr);
@@ -263,7 +256,6 @@ export function ModelTemplateModal({ open, template, onClose, onSaved }: Props) 
       model_provider: form.model_provider.trim(),
       parameters: form.parameters.trim() ? tryParseJson(form.parameters, {}) : null,
       timeout: form.timeout,
-      retry_count: form.retry_count,
       verify_ssl: form.verify_ssl,
     };
     const nextData = buildTemplateData(template?.data, parsedHeaders);
@@ -414,16 +406,6 @@ export function ModelTemplateModal({ open, template, onClose, onSaved }: Props) 
             min={1}
             value={form.timeout}
             onChange={(e) => update('timeout', Number(e.target.value))}
-          />
-        </div>
-        <div>
-          <FieldLabel required>{t('modelTemplate.retryCount')}</FieldLabel>
-          <input
-            className="input"
-            type="number"
-            min={0}
-            value={form.retry_count}
-            onChange={(e) => update('retry_count', Number(e.target.value))}
           />
         </div>
         <div className="md:col-span-2">

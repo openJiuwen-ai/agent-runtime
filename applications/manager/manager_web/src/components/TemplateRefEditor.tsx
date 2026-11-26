@@ -28,6 +28,7 @@ const SLOT_CONFIG_PATH: Record<string, string> = {
   extension_config: '/extension-config-templates',
   mcp: '/mcp-templates',
   permissions: '/safety-guardrails',
+  execution_guard: '/execution-guard-templates',
   a2a_access_policy: '/a2a-management?tab=policies',
 };
 
@@ -44,6 +45,7 @@ const SLOT_HINT_PAGE_KEY: Record<string, string> = {
   extension_config: 'extensionTemplate.title',
   mcp: 'mcpTemplate.title',
   permissions: 'safetyGuardrails.title',
+  execution_guard: 'executionGuardrails.title',
   a2a_access_policy: 'a2aManagement.title',
 };
 
@@ -353,6 +355,7 @@ export function TemplateRefEditor({
     extension_config: tr('组合可复用的扩展配置，可选择多个。', 'Combine one or more reusable extension configurations.'),
     mcp: tr('连接 Agent 可调用的 MCP 工具服务，可选择多个。', 'Connect one or more MCP tool services for this Agent.'),
     permissions: tr('设置 Agent 调用工具时遵循的安全策略。', 'Set the safety policy for Agent tool calls.'),
+    execution_guard: tr('设置模型输出打转、瞬时失败重试和工具循环断路。', 'Set repeat detection, transient retries, and the tool-loop circuit breaker.'),
     a2a_access_policy: tr('限制此 Agent 可访问的外部 Agent 范围。', 'Limit the external Agents this Agent can access.'),
     expert_package: tr('选择随 Agent 一起发布的专家与专家团组合。', 'Choose the experts and groups published with this Agent.'),
   };

@@ -15,6 +15,7 @@ from manager_server.core.instance.instance_service import (
     _find_config_host_conflict,
     _find_user_face_host_conflict,
 )
+from manager_server.core.template.model_template import MODEL_TEMPLATE_STORED_RETRY_COUNT
 from manager_server.core.template.push_template_to_gateway import (
     rebuild_jid_template_ref_for_gateway,
     slot_template_pairs_from_template_ref,
@@ -1133,6 +1134,9 @@ def _validate_import_rows(rows: dict[str, list[dict[str, Any]]]) -> list[dict[st
                     continue
                 # Business IDs and snapshot-only columns are not CreateBody fields.
                 row.update(normalized)
+                if table == "model_template":
+                    # 工作簿里的旧重试次数不再采用，写入列保留值。
+                    row["retry_count"] = MODEL_TEMPLATE_STORED_RETRY_COUNT
             missing = []
             for column in table_def.columns:
                 if column.nullable or column.autoincrement or column.name in _AUDIT_FIELDS:

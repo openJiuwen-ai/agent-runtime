@@ -25,6 +25,8 @@ from manager_server.infrastructure.utils import iso_datetime, new_uuid4, utc_now
 from manager_server.models.template_models import MODEL_TEMPLATE_TABLE_DEF
 
 _MODEL_TEMPLATE_TABLE = MODEL_TEMPLATE_TABLE_DEF.table_name
+# 列仍保留以满足非空约束。请求不再写入；重试次数改由执行护栏模板的 transient_max_retries 持有。
+MODEL_TEMPLATE_STORED_RETRY_COUNT = 3
 _ALLOWED_SORT_FIELDS = frozenset({
     "template_name",
     "description",
@@ -100,7 +102,7 @@ class ModelTemplateService:
             "model_provider": body.model_provider,
             "parameters": body.parameters,
             "timeout": body.timeout,
-            "retry_count": body.retry_count,
+            "retry_count": MODEL_TEMPLATE_STORED_RETRY_COUNT,
             "verify_ssl": body.verify_ssl,
             "enabled": body.enabled,
             "data": body.data,

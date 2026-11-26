@@ -39,6 +39,7 @@ from manager_server.models.template_models import (
     MODEL_TEMPLATE_TABLE_DEF,
     EXPERT_PACKAGE_TEMPLATE_TABLE_DEF,
     PERMISSIONS_TEMPLATE_TABLE_DEF,
+    EXECUTION_GUARD_TEMPLATE_TABLE_DEF,
     SKILL_PREBUILT_TEMPLATE_TABLE_DEF,
 )
 from manager_server.schemas.template_slot_schemas import (
@@ -48,6 +49,7 @@ from manager_server.schemas.template_slot_schemas import (
     EXTENSION_CONFIG_SLOT,
     MCP_SLOT,
     MODEL_TEMPLATE_SLOTS,
+    EXECUTION_GUARD_SLOT,
     PERMISSIONS_SLOT,
     SERVICE_CONFIG_SLOT,
     SKILL_PREBUILT_SLOT,
@@ -123,6 +125,11 @@ TEMPLATE_KIND_SPECS: dict[str, TemplateKindSpec] = {
         table_name=PERMISSIONS_TEMPLATE_TABLE_DEF.table_name,
         slot_keys=frozenset({PERMISSIONS_SLOT}),
     ),
+    "execution_guard_templates": TemplateKindSpec(
+        config_section="execution_guard_templates",
+        table_name=EXECUTION_GUARD_TEMPLATE_TABLE_DEF.table_name,
+        slot_keys=frozenset({EXECUTION_GUARD_SLOT}),
+    ),
     "extension_config_templates": TemplateKindSpec(
         config_section="extension_config_templates",
         table_name=EXTENSION_CONFIG_TEMPLATE_TABLE_DEF.table_name,
@@ -159,6 +166,7 @@ _TEMPLATE_HTTP_PATHS: dict[str, str] = {
     "skill_prebuilt_templates": "/api/v1/skill-prebuilt-templates",
     "expert_package_templates": "/api/v1/expert-package-templates",
     "permissions_templates": "/api/v1/permissions-templates",
+    "execution_guard_templates": "/api/v1/execution-guard-templates",
     "mcp_templates": "/api/v1/mcp-templates",
     AGENT_TEMPLATES_KIND: "/api/v1/agent-templates",
 }
@@ -180,6 +188,7 @@ _ROW_TO_OUT_MODULES: dict[str, str] = {
     "skill_prebuilt_templates": "manager_server.core.template.skill_prebuilt_template",
     "expert_package_templates": "manager_server.core.template.expert_package_template",
     "permissions_templates": "manager_server.core.template.permissions_template",
+    "execution_guard_templates": "manager_server.core.template.execution_guard_template",
     "extension_config_templates": "manager_server.core.template.extension_config_template",
     "mcp_templates": "manager_server.core.template.mcp_template",
     AGENT_TEMPLATES_KIND: "manager_server.core.template.agent_template",

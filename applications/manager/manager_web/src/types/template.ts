@@ -32,7 +32,6 @@ export interface ModelTemplateCreateBody {
   model_provider: string;
   parameters?: Record<string, unknown> | null;
   timeout?: number;
-  retry_count?: number;
   verify_ssl?: boolean;
   enabled?: boolean;
   data?: Record<string, unknown>;
@@ -244,6 +243,30 @@ export interface PermissionsTemplateCreateBody {
 }
 
 export type PermissionsTemplateUpdateBody = Partial<PermissionsTemplateCreateBody>;
+
+export interface ExecutionGuardTemplate {
+  id: number;
+  template_id: string;
+  template_name: string;
+  description?: string | null;
+  enabled: boolean;
+  /** 只读：在 Agent 配置模板 execution_guard 槽位引用本模板的 Agent 配置模板数 */
+  reference_count: number;
+  body: Record<string, unknown>;
+  data?: Record<string, unknown> | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface ExecutionGuardTemplateCreateBody {
+  template_name: string;
+  description?: string | null;
+  enabled?: boolean;
+  body: Record<string, unknown>;
+  data?: Record<string, unknown>;
+}
+
+export type ExecutionGuardTemplateUpdateBody = Partial<ExecutionGuardTemplateCreateBody>;
 
 export interface ServiceConfigTemplate {
   id: number;
