@@ -236,21 +236,41 @@ function RouteView() {
     return <OrgsPage />;
   }
   if (path === '/orgs/new') {
-    return <><OrgsEditPage /><WorkspaceNote title="组织用于管理成员范围">先保存组织基本信息，再在成员页维护用户归属；集群准入仍需回到具体集群配置。</WorkspaceNote></>;
+    return (
+      <>
+        <OrgsEditPage />
+        <WorkspaceNote title={t('iam.orgsEditBannerTitle')}>{t('iam.orgsEditBannerText')}</WorkspaceNote>
+      </>
+    );
   }
   const orgEdit = matchRoute('/orgs/:groupId', path);
   if (orgEdit) {
-    return <><OrgsEditPage groupId={orgEdit.groupId} /><WorkspaceNote title="组织用于管理成员范围">先保存组织基本信息，再在成员页维护用户归属；集群准入仍需回到具体集群配置。</WorkspaceNote></>;
+    return (
+      <>
+        <OrgsEditPage groupId={orgEdit.groupId} />
+        <WorkspaceNote title={t('iam.orgsEditBannerTitle')}>{t('iam.orgsEditBannerText')}</WorkspaceNote>
+      </>
+    );
   }
   if (path === '/roles') {
     return <RolesPage />;
   }
   if (path === '/roles/new') {
-    return <><RolesEditPage /><WorkspaceNote title="角色用于管理访问权限">角色保存后可分配给用户；它与集群准入是两层关系，具体集群仍需单独配置。</WorkspaceNote></>;
+    return (
+      <>
+        <RolesEditPage />
+        <WorkspaceNote title={t('roles.editBannerTitle')}>{t('roles.editBannerText')}</WorkspaceNote>
+      </>
+    );
   }
   const roleEdit = matchRoute('/roles/:roleId', path);
   if (roleEdit) {
-    return <><RolesEditPage roleId={roleEdit.roleId} /><WorkspaceNote title="角色用于管理访问权限">角色保存后可分配给用户；它与集群准入是两层关系，具体集群仍需单独配置。</WorkspaceNote></>;
+    return (
+      <>
+        <RolesEditPage roleId={roleEdit.roleId} />
+        <WorkspaceNote title={t('roles.editBannerTitle')}>{t('roles.editBannerText')}</WorkspaceNote>
+      </>
+    );
   }
   if (path === '/approvals') {
     if (!isApprovalEnabled(user)) {

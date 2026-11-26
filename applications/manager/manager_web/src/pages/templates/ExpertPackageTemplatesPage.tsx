@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAsync } from '../../hooks/useAsync';
 import { useListSearch } from '../../hooks/useListSearch';
-import { ExpertPackageTemplateApi, ApiError } from '../../services/api';
+import { ExpertPackageTemplateApi } from '../../services/api';
 import type { ExpertPackageTemplate } from '../../types';
 import { Pagination } from '../../components/Pagination';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
@@ -80,7 +80,7 @@ export function ExpertPackageTemplatesPage() {
         ),
       );
       const localized = templateInUseMessage(e, t, 'disable');
-      toast('danger', localized ?? t('errors.saveFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
+      toast('danger', localized ?? t('errors.saveFailedGeneric'));
     } finally {
       setTogglingId(null);
     }
@@ -264,9 +264,7 @@ export function ExpertPackageTemplatesPage() {
             void reload();
           } catch (e) {
             const localized = templateInUseMessage(e, t, 'delete');
-            toast('danger', localized ?? t('errors.deleteFailed', {
-              detail: e instanceof ApiError ? e.detail : (e as Error).message,
-            }));
+            toast('danger', localized ?? t('errors.deleteFailedGeneric'));
           }
         }}
         onClose={() => setDelTarget(null)}

@@ -13,7 +13,7 @@ import {
 } from '../../components/TableColumnSort';
 import { useAsync } from '../../hooks/useAsync';
 import { useListSearch } from '../../hooks/useListSearch';
-import { ApiError, EmbeddingTemplateApi } from '../../services/api';
+import { EmbeddingTemplateApi } from '../../services/api';
 import { toast } from '../../stores/uiStore';
 import type { EmbeddingTemplate } from '../../types';
 import { formatTime, truncate } from '../../utils/format';
@@ -111,9 +111,7 @@ export function EmbeddingTemplatesPage() {
         ),
       );
       const localized = templateInUseMessage(toggleError, t, 'disable');
-      toast('danger', localized ?? t('errors.saveFailed', {
-        detail: toggleError instanceof ApiError ? toggleError.detail : (toggleError as Error).message,
-      }));
+      toast('danger', localized ?? t('errors.saveFailedGeneric'));
     } finally {
       setTogglingId(null);
     }
@@ -314,9 +312,7 @@ export function EmbeddingTemplatesPage() {
             void reload();
           } catch (deleteError) {
             const localized = templateInUseMessage(deleteError, t, 'delete');
-            toast('danger', localized ?? t('errors.deleteFailed', {
-              detail: deleteError instanceof ApiError ? deleteError.detail : (deleteError as Error).message,
-            }));
+            toast('danger', localized ?? t('errors.deleteFailedGeneric'));
           }
         }}
         onClose={() => setDeleteTarget(null)}

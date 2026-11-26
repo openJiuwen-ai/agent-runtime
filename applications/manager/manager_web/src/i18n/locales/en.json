@@ -60,7 +60,21 @@
     "importSuccess": "Import complete: {{created}} created, {{reused}} reused",
     "exportSuccess": "Export complete",
     "exportFailed": "Export failed: {{detail}}",
-    "selected": "{{count}} selected"
+    "selected": "{{count}} selected",
+    "chooseFile": "Choose file",
+    "noFileChosen": "No file selected",
+    "importFailed": "Import failed",
+    "preflightFailed": "Preflight failed",
+    "colAction": "Action",
+    "colObjectType": "Object type",
+    "colObjectId": "Object ID",
+    "colDetail": "Detail",
+    "errors": {
+      "invalid_workbook": "The workbook is invalid or cannot be parsed.",
+      "unsupported_format": "Unsupported file format.",
+      "conflict": "Conflicts with an existing object.",
+      "missing_dependency": "A required dependency is missing."
+    }
   },
   "time": {
     "secondsAgo": "{{count}}s ago",
@@ -427,7 +441,23 @@
       "teamQuota": "Team Quota"
     },
     "placeholder": {
-      "empty": "Coming soon"
+      "empty": "Coming soon",
+      "eyebrow": "Cluster workbench · {{module}}",
+      "backendPending": "API pending",
+      "moduleUnavailable": "This release does not expose a data API for this module yet, so related data cannot be read or saved. Completing other configuration does not generate data here and does not affect supported cluster features.",
+      "whatYouCanDo": "What you can do now",
+      "whatYouCanDoHint": "Follow cluster configuration dependencies step by step instead of hunting for entries on an empty page.",
+      "configureAdmission": "Configure cluster admission",
+      "configureRuntime": "Configure runtime resources",
+      "bindAgent": "Bind Agents",
+      "viewStatus": "View status",
+      "backToWorkbench": "Back to configuration workbench",
+      "auditLabel": "Audit log",
+      "auditDescription": "Record cluster configuration, admission, and resource changes so you can see who did what and when.",
+      "costLabel": "Cost analytics",
+      "costDescription": "Summarize model calls and runtime consumption to build a trackable usage cost view.",
+      "tokenQuotaLabel": "Token quota",
+      "tokenQuotaDescription": "Limit Token usage for members or organizations in this cluster to avoid unexpected resource exhaustion."
     },
     "access": {
       "title": "Cluster Access",
@@ -1310,11 +1340,11 @@
       "envGroupOthers": "Others",
       "envSensitivePlaceholder": "Leave empty to keep the default",
       "envHint": "Only filled or changed keys are submitted; leave sensitive keys empty to keep saved defaults",
-      "envImport": "从 .env.custom 导入",
-      "envImportPlaceholder": "粘贴完整 .env.custom 文本，解析后覆盖下方对应键",
-      "envImportBtn": "解析导入",
-      "envImportDone": "已导入 {{count}} 个键（导入值可在此逐键修改）",
-      "envImportEmpty": "未解析到有效的 KEY=value 行"
+      "envImport": "Import from .env.custom",
+      "envImportPlaceholder": "Paste the full .env.custom text; parsed values overwrite matching keys below",
+      "envImportBtn": "Parse & import",
+      "envImportDone": "Imported {{count}} key(s) (you can edit each value below)",
+      "envImportEmpty": "No valid KEY=value lines found"
     },
     "detail": {
       "toolVersion": "Tool Version",
@@ -1355,7 +1385,9 @@
   "errors": {
     "loadFailed": "Load failed: {{detail}}",
     "saveFailed": "Save failed: {{detail}}",
+    "saveFailedGeneric": "Save failed",
     "deleteFailed": "Delete failed: {{detail}}",
+    "deleteFailedGeneric": "Delete failed",
     "invalidJson": "Invalid JSON: {{detail}}",
     "validationFailed": "Request parameter validation failed"
   },
@@ -1498,7 +1530,34 @@
     "orgsTotal": "Total organizations",
     "orgsActive": "Enabled on this page",
     "orgsMembers": "Membership",
-    "orgsMembersHint": "Membership is maintained in organization details"
+    "orgsMembersHint": "Membership is maintained in organization details",
+    "orgsEditBannerTitle": "Organizations define member scope",
+    "orgsEditBannerText": "Save the organization basics first, then manage membership on the Members tab. Cluster admission still needs to be configured per cluster.",
+    "authorizationTitle": "Authorization",
+    "authorizationSubtitle": "Connect identities, organizations, roles, and service instances to complete access control.",
+    "authorizationPrepare": "Prepare authorization",
+    "authorizationPrepareHint": "Prepare identities and roles that can be authorized.",
+    "authorizationOptional": "As needed",
+    "authorizationEffect": "Where it takes effect",
+    "authorizationEffectHint": "Admission and Agent usage scopes take effect in a specific cluster.",
+    "authorizationViewClusters": "View clusters",
+    "authorizationClusterAdmission": "Cluster admission",
+    "authorizationClusterAdmissionText": "Add users or organizations that are allowed to sign in to the target cluster.",
+    "authorizationAgentScope": "Agent usage scope",
+    "authorizationAgentScopeText": "Bind Agent templates in the target cluster and set which identities may use them.",
+    "authorizationSelectCluster": "Select cluster",
+    "authorizationUsersTitle": "Users",
+    "authorizationUsersText": "Maintain users that can be authorized and review their organizations.",
+    "authorizationUsersAction": "Manage users",
+    "authorizationOrgsTitle": "Organizations",
+    "authorizationOrgsText": "Manage members in groups, then authorize organizations on service instances.",
+    "authorizationOrgsAction": "Manage organizations",
+    "authorizationRolesTitle": "Roles",
+    "authorizationRolesText": "Define management and resource permissions that control who can configure the platform.",
+    "authorizationRolesAction": "Manage roles",
+    "authorizationInstancesTitle": "Service instances",
+    "authorizationInstancesText": "Open a service instance to configure cluster admission and Agent usage for users or organizations.",
+    "authorizationInstancesAction": "Configure service instances"
   },
   "auth": {
     "language": "Interface language",
@@ -1769,13 +1828,65 @@
     "eyebrow": "Access & authorization / Roles",
     "bannerTitle": "Roles decide what someone can do",
     "bannerText": "Roles combine permission points into reusable responsibilities. Define roles and permissions here, then assign them to users; cluster access is completed in the cluster workspace.",
+    "editBannerTitle": "Roles manage access permissions",
+    "editBannerText": "After saving, assign the role to users. Roles and cluster admission are separate layers; each cluster still needs its own access configuration.",
     "directory": "Role directory",
     "directoryHint": "Review role type, permission scope, and user assignments",
     "total": "Total roles",
     "enabled": "Enabled on this page",
     "assigneesSummary": "Assigned users",
     "systemSummary": "System roles",
-    "systemSummaryHint": "Built-in roles cannot have their permissions edited"
+    "systemSummaryHint": "Built-in roles cannot have their permissions edited",
+    "systemRoles": {
+      "platform_admin": {
+        "name": "Platform Administrator",
+        "description": "Built-in role with workspace quota, approval, and role management permissions"
+      }
+    },
+    "permissionTexts": {
+      "deployment": {
+        "read": {
+          "name": "View deployments",
+          "description": "View product-plane deployment tasks and logs initiated from Manager"
+        },
+        "execute": {
+          "name": "Run deployments",
+          "description": "Start or cancel product-plane deployments and edit default deployment parameters"
+        }
+      },
+      "quota": {
+        "read": {
+          "name": "View quotas",
+          "description": "View quota policies, effective results, and usage rankings"
+        },
+        "write": {
+          "name": "Manage quotas",
+          "description": "Create, update, disable, or delete quota policies"
+        }
+      },
+      "approval": {
+        "read": {
+          "name": "View approvals",
+          "description": "View expansion approval requests"
+        },
+        "act": {
+          "name": "Handle approvals",
+          "description": "Approve or reject expansion approval requests"
+        }
+      },
+      "iam": {
+        "role": {
+          "read": {
+            "name": "View roles",
+            "description": "View roles, permissions, and role assignments"
+          },
+          "write": {
+            "name": "Manage roles",
+            "description": "Create, update, or disable custom roles, bind permission codes, and assign roles to users"
+          }
+        }
+      }
+    }
   },
   "approvals": {
     "title": "Approval Center",
@@ -1905,6 +2016,9 @@
     "runtimeTemplateMissing": "The runtime template you returned from no longer exists. Select another one.",
     "clusterTemplateFilter": "Showing bindings for this template only",
     "showAllBindings": "Show all bindings",
+    "authorizationNoteTitle": "Understand authorization relationships first",
+    "authorizationNoteText": "Users or organizations are “who”, roles are “what they can do”, and service instances are “where it takes effect”. Prepare identities and roles first, then configure cluster admission and Agent usage in a service instance.",
+    "authorizationNoteAction": "Configure service instances →",
     "workbench": {
       "loading": "Loading cluster configuration…",
       "loadFailed": "Unable to load cluster configuration",

@@ -277,7 +277,7 @@ export function ServiceConfigTemplatesPage({
         list.map((item) => (item.template_id === row.template_id ? { ...item, enabled: previous } : item)),
       );
       const localized = templateInUseMessage(e, t, 'disable');
-      toast('danger', localized ?? t('errors.saveFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
+      toast('danger', localized ?? t('errors.saveFailedGeneric'));
     } finally {
       setTogglingId(null);
     }
@@ -518,7 +518,7 @@ export function ServiceConfigTemplatesPage({
             bumpGuideRevision();
           } catch (e) {
             const localized = templateInUseMessage(e, t, 'delete');
-            toast('danger', localized ?? t('errors.deleteFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
+            toast('danger', localized ?? t('errors.deleteFailedGeneric'));
           }
         }}
         onClose={() => setDelTarget(null)}
