@@ -27,6 +27,33 @@ logger = get_logger(__name__)
 LinkRole = Literal["gateway", "runtime"]
 
 
+def _reject_detail(resp: httpx.Response) -> str:
+    """从 Gateway/Runtime 错误响应抽出可读原因。
+
+    Runtime 失败信封用 ``error_message``（不是 FastAPI 的 ``detail``）；
+    优先读信封字段，避免把整段 JSON 原文甩给上层 toast。
+    """
+    text = (resp.text or "")[:500]
+    try:
+        body = resp.json()
+    except Exception:  # noqa: BLE001, S110
+        return text
+    if not isinstance(body, dict):
+        return text
+    message = body.get("error_message")
+    if isinstance(message, str) and message.strip():
+        return message.strip()
+    detail = body.get("detail")
+    if isinstance(detail, str) and detail.strip():
+        return detail.strip()
+    if isinstance(detail, dict):
+        for key in ("message", "error_message", "msg"):
+            value = detail.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return text
+
+
 def _contains_credential_replace(value: Any) -> bool:
     if isinstance(value, dict):
         if value.get("operation") == "replace" and "value" in value:
@@ -110,11 +137,11 @@ async def http_request(
         ) from exc
 
     if resp.status_code >= 400:
-        detail = resp.text[:500]
-        try:
-            detail = resp.json().get("detail") or detail
-        except Exception:  # noqa: BLE001, S110
-            pass
+        detail = _reject_detail(resp)
+        # Runtime 校验类 4xx：直接透传 error_message，不再包成
+        # "HTTP push rejected … detail='{整段 JSON}'"（P0：去掉传输层噪音）。
+        if role == "runtime" and 400 <= resp.status_code < 500 and detail:
+            raise ValueError(detail)
         raise ValueError(
             f"{role} HTTP push rejected status={resp.status_code} detail={detail!r}"
         )
