@@ -46,3 +46,10 @@ def test_unknown_field_is_rejected() -> None:
     body["model_anomaly_detection_rail"]["backoff_seconds"] = [0.5]
     with pytest.raises(ValueError, match="unknown fields: backoff_seconds"):
         validate_execution_guard_body(body)
+
+
+def test_int_above_int32_max_is_rejected() -> None:
+    body = copy.deepcopy(DEFAULT_EXECUTION_GUARD_BODY)
+    body["model_anomaly_detection_rail"]["max_retries"] = 2_147_483_648
+    with pytest.raises(ValueError, match="max_retries must be <= 2147483647"):
+        validate_execution_guard_body(body)

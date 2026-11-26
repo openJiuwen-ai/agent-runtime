@@ -22,6 +22,7 @@ from pydantic import (
 )
 
 from manager_server.schemas.safe_text import SafeTextMixin
+from manager_server.schemas.common_schemas import INT32_MAX
 
 from manager_server.infrastructure.template_ref import (
     normalize_template_ref,
@@ -251,7 +252,7 @@ class ModelTemplateCreateBody(SafeTextMixin):
     model_id: str = Field(..., min_length=1, max_length=128)
     model_provider: str = Field(..., min_length=1, max_length=64)
     parameters: dict[str, Any] | None = None
-    timeout: int = Field(default=360, ge=1)
+    timeout: int = Field(default=360, ge=1, le=INT32_MAX)
     verify_ssl: bool = False
     enabled: bool = True
     data: dict[str, Any] | None = None
@@ -273,7 +274,7 @@ class ModelTemplateUpdateBody(SafeTextMixin):
     model_id: str | None = Field(default=None, min_length=1, max_length=128)
     model_provider: str | None = Field(default=None, min_length=1, max_length=64)
     parameters: dict[str, Any] | None = None
-    timeout: int | None = Field(default=None, ge=1)
+    timeout: int | None = Field(default=None, ge=1, le=INT32_MAX)
     verify_ssl: bool | None = None
     enabled: bool | None = None
     data: dict[str, Any] | None = None
@@ -924,8 +925,7 @@ class McpTemplateOut(BaseModel):
 
 
 # 与库表类型上限一致：integer → 有符号 32 位
-
-_SERVICE_INT_MAX = 2_147_483_647
+_SERVICE_INT_MAX = INT32_MAX
 
 
 # --- service_config_container（容器模板）---

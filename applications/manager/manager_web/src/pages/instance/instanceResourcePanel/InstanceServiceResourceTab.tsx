@@ -39,6 +39,7 @@ import { collectPages } from '../../../utils/overview';
 import { runtimeCatalogPath } from '../../../utils/runtimeResourceNavigation';
 import { ClusterContentHeading } from '../ClusterContentHeading';
 import { serviceResourceUpdateBody, resourceExpiryForUpdate } from '../../../utils/instanceResourceUpdate';
+import { INT32_MAX, INT32_MIN, isInt32 } from '../../../utils/intBounds';
 import {
   applyRuntimeTemplateChoice, consumeRuntimeBindingAction, emptyRuntimeBindingDraft,
   readRuntimeBindingDraft, runtimeBindingDraftKey, writeRuntimeBindingDraft, type RuntimeBindingDraft,
@@ -369,8 +370,8 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
       toast('warn', t('policies.fieldRequired', { field: t('instanceDetail.resourcePanel.serviceResource.template') }));
       return;
     }
-    if (!Number.isInteger(editPriority)) {
-      toast('warn', t('policies.fieldRequired', { field: t('instanceDetail.resourcePanel.serviceResource.priority') }));
+    if (!isInt32(editPriority)) {
+      toast('warn', t('instanceDetail.resourcePanel.serviceResource.priorityInvalid'));
       return;
     }
     const err = validateMatchExprModel(parseMatchExpr(matchExpr));
@@ -655,7 +656,7 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
               <button
                 className="btn primary"
                 style={{ marginLeft: 8 }}
-                disabled={busy || restoredDraftKey !== handoffKey || !!requestedTemplate || catalogState.loading || !!catalogState.error || !catalog.some(item => item.template_id === addTemplateId && item.enabled !== false) || !addResourceName.trim() || !Number.isInteger(addPriority)}
+                disabled={busy || restoredDraftKey !== handoffKey || !!requestedTemplate || catalogState.loading || !!catalogState.error || !catalog.some(item => item.template_id === addTemplateId && item.enabled !== false) || !addResourceName.trim()}
                 onClick={async () => {
                   if (!addResourceName.trim()) {
                     toast('warn', t('policies.fieldRequired', { field: t(`${sr}.resourceName`) }));
@@ -665,8 +666,8 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
                     toast('warn', t('policies.fieldRequired', { field: t(`${sr}.template`) }));
                     return;
                   }
-                  if (!Number.isInteger(addPriority)) {
-                    toast('warn', t('policies.fieldRequired', { field: t(`${sr}.priority`) }));
+                  if (!isInt32(addPriority)) {
+                    toast('warn', t(`${sr}.priorityInvalid`));
                     return;
                   }
                   const err = validateMatchExprModel(parseMatchExpr(addMatchExpr));
@@ -755,12 +756,19 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
                 className="input mt-1 w-full"
                 type="number"
                 step={1}
+                min={INT32_MIN}
+                max={INT32_MAX}
                 value={Number.isInteger(addPriority) ? addPriority : ''}
                 onChange={(e) => {
                   const raw = e.target.value;
                   setAddPriority(raw === '' ? NaN : Number(raw));
                 }}
               />
+              {!Number.isNaN(addPriority) && !isInt32(addPriority) && (
+                <div className="text-[11px] text-danger mt-1" role="alert">
+                  {t(`${sr}.priorityInvalid`)}
+                </div>
+              )}
             </label>
             <label className="block mb-3">
               <FieldLabel>{t(`${sr}.scopeLabel`)}</FieldLabel>
@@ -853,12 +861,19 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
               className="input mt-1 w-full"
               type="number"
               step={1}
+              min={INT32_MIN}
+              max={INT32_MAX}
               value={Number.isInteger(editPriority) ? editPriority : ''}
               onChange={(e) => {
                 const raw = e.target.value;
                 setEditPriority(raw === '' ? NaN : Number(raw));
               }}
             />
+            {!Number.isNaN(editPriority) && !isInt32(editPriority) && (
+              <div className="text-[11px] text-danger mt-1" role="alert">
+                {t(`${sr}.priorityInvalid`)}
+              </div>
+            )}
           </label>
           <label className="block mb-3">
             <FieldLabel>{t(`${sr}.scopeLabel`)}</FieldLabel>

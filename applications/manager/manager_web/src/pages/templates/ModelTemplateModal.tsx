@@ -8,6 +8,7 @@ import { useFormDirty } from '../../hooks/useFormDirty';
 import { ModelTemplateApi, ApiError } from '../../services/api';
 import { toast } from '../../stores/uiStore';
 import { safeStringify } from '../../utils/format';
+import { INT32_MAX } from '../../utils/intBounds';
 import { jsonContentForValidation } from '../../utils/jsonExample';
 import { findUnsafeTextField } from '../../utils/safeText';
 import { isValidHttpUrl } from '../../utils/url';
@@ -224,7 +225,7 @@ export function ModelTemplateModal({ open, template, onClose, onSaved }: Props) 
       toast('warn', t('modelTemplate.unsafeText', { field: unsafeField }));
       return;
     }
-    if (!Number.isFinite(form.timeout) || form.timeout < 1) {
+    if (!Number.isInteger(form.timeout) || form.timeout < 1 || form.timeout > INT32_MAX) {
       toast('warn', t('modelTemplate.timeoutMin'));
       return;
     }
@@ -404,9 +405,15 @@ export function ModelTemplateModal({ open, template, onClose, onSaved }: Props) 
             className="input"
             type="number"
             min={1}
+            max={INT32_MAX}
             value={form.timeout}
             onChange={(e) => update('timeout', Number(e.target.value))}
           />
+          {(!Number.isInteger(form.timeout) || form.timeout < 1 || form.timeout > INT32_MAX) && (
+            <div className="text-[11px] text-danger mt-1" role="alert">
+              {t('modelTemplate.timeoutMin')}
+            </div>
+          )}
         </div>
         <div className="md:col-span-2">
           <JsonField

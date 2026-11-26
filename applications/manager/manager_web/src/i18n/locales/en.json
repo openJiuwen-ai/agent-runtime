@@ -44,7 +44,9 @@
     "updatedAt": "UPDATED AT",
     "configRefreshCost": "Saving pushes this change to the gateway and triggers a runtime-wide config refresh: all AgentServer pods are gracefully sunset and rebuilt with the new configuration. Existing sessions are unaffected; new sessions may cold-start slower during the rebuild, and rapid consecutive changes may be temporarily rejected by capacity protection until recovery.",
     "configRefreshCostTemplate": "If this template is referenced by an instance, saving pushes the change to the gateway and triggers a runtime-wide config refresh: all AgentServer pods of that runtime are gracefully sunset and rebuilt. Existing sessions are unaffected; new sessions may cold-start slower during the rebuild, and rapid consecutive changes may be temporarily rejected by capacity protection until recovery.",
-    "optional": "Optional"
+    "optional": "Optional",
+    "int32OutOfRange": "Must be an integer no greater than 2147483647",
+    "nonNegInt32OutOfRange": "Must be an integer from 0 to 2147483647"
   },
   "importExport": {
     "import": "Import",
@@ -511,6 +513,7 @@
         "scopeAll": "Available to all",
         "priority": "Priority",
         "priorityHint": "Smaller numbers win. Enabled policies in one cluster cannot share a priority.",
+        "priorityInvalid": "Enter an integer priority no greater than 2147483647",
         "grantedBy": "Granted By",
         "expiresAt": "Expires At",
         "neverExpires": "Never expires",
@@ -569,7 +572,7 @@
       "deleteMessage": "After deletion, subjects that matched this policy follow the next matching rule. Continue?",
       "invalidLimit": "Quota must be 0, a positive integer, or unlimited",
       "invalidPercent": "The block threshold must be greater than the warn threshold, and neither can be negative",
-      "invalidPriority": "Priority must be an integer ≥ 0",
+      "invalidPriority": "Priority must be an integer from 0 to 2147483647",
       "fieldRequired": "Please fill in {{field}}",
       "updatedAt": "UPDATED AT",
       "usage": {
@@ -622,7 +625,7 @@
       "maxTeammates": "Max team size (including leader)",
       "maxTeammatesHint": "Whole-team cap including the leader. 5 = leader + at most 4 teammates. Join does not occupy a seat; spawn does.",
       "updatedAt": "Updated at",
-      "invalidPriority": "Priority must be an integer",
+      "invalidPriority": "Priority must be an integer from 0 to 2147483647",
       "invalidLimit": "Limits must be integers from 1 to 1000",
       "invalidOrgLimit": "Max teams per org must be an integer from 0 to 1000. 0 means no cap",
       "fieldRequired": "Please fill in {{field}}",
@@ -674,7 +677,7 @@
       "replacement": "Replacement",
       "priority": "Priority",
       "priorityHint": "Masking rules are applied in ascending priority order. Enabled rules in one cluster cannot share a priority.",
-      "priorityInvalid": "Please enter a valid priority",
+      "priorityInvalid": "Enter an integer priority no greater than 2147483647",
       "withFingerprint": "With fingerprint",
       "withFingerprintHint": "When on, masked values include an irreversible fingerprint for correlating the same secret across logs; when off, only the replacement text is used.",
       "source": "Source",
@@ -713,7 +716,7 @@
       "deleted": "Managed config removed; Gateway will fall back to config.yaml",
       "maxJobs": "Running scheduled tasks allowed per user",
       "maxJobsHint": "Only enabled tasks that have not expired are counted. 0 means the panel cannot enable any new task.",
-      "invalid": "Enter an integer greater than or equal to 0"
+      "invalid": "Enter an integer from 0 to 2147483647"
     },
     "logging": {
       "intro": "Maps to config.yaml logging. Saving writes to Manager DB and hot-reloads Gateway; without managed config the instance uses local config.yaml.",
@@ -844,7 +847,7 @@
     "updatedAt": "UPDATED AT",
     "fieldRequired": "Please fill in {{field}}",
     "apiBaseInvalid": "API Base must be a valid http(s) URL, e.g. https://api.example.com/v1",
-    "timeoutMin": "Timeout must be greater than 0",
+    "timeoutMin": "Timeout must be a positive integer no greater than 2147483647",
     "retryCountMin": "Retry count cannot be negative",
     "unsafeText": "{{field}} contains illegal HTML/script or suspected SQL injection content",
     "deleteConfirm": "Delete this model template?"

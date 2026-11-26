@@ -22,6 +22,7 @@ import { ListSearchInput } from '../../../components/ListSearchInput';
 import { HintTooltip } from '../../../components/HintTooltip';
 import { toast } from '../../../stores/uiStore';
 import { formatTime, truncate } from '../../../utils/format';
+import { INT32_MAX, isNonNegInt32 } from '../../../utils/intBounds';
 import { matchExprToEditorString } from '../../../utils/matchExpr';
 
 const GIB = 1024 ** 3;
@@ -284,7 +285,7 @@ export function WorkspaceQuotaPolicyTab({ instanceId, onChange }: { instanceId: 
       toast('warn', t('instanceDetail.workspaceQuota.invalidLimit'));
       return;
     }
-    if (!Number.isInteger(form.priority) || form.priority < 0) {
+    if (!isNonNegInt32(form.priority)) {
       toast('warn', t('instanceDetail.workspaceQuota.invalidPriority'));
       return;
     }
@@ -697,9 +698,16 @@ export function WorkspaceQuotaPolicyTab({ instanceId, onChange }: { instanceId: 
                 className="input w-full"
                 type="number"
                 step={1}
+                min={0}
+                max={INT32_MAX}
                 value={Number.isInteger(form.priority) ? form.priority : ''}
                 onChange={(e) => update('priority', e.target.value === '' ? Number.NaN : Number(e.target.value))}
               />
+              {!Number.isNaN(form.priority) && !isNonNegInt32(form.priority) && (
+                <div className="text-[11px] text-danger mt-1" role="alert">
+                  {t('instanceDetail.workspaceQuota.invalidPriority')}
+                </div>
+              )}
             </div>
           </div>
           <div>

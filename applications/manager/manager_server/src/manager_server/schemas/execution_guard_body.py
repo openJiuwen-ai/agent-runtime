@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from manager_server.schemas.common_schemas import INT32_MAX
+
 _TOP_FIELDS = frozenset({"model_anomaly_detection_rail", "circuit_breaker"})
 _RAIL_FIELDS = frozenset({
     "enabled",
@@ -159,9 +161,13 @@ def _require_bool(value: Any, name: str) -> bool:
     return value
 
 
-def _require_int(value: Any, name: str, minimum: int) -> int:
+def _require_int(
+    value: Any, name: str, minimum: int, maximum: int = INT32_MAX
+) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise ValueError(f"{name} must be an integer")
     if value < minimum:
         raise ValueError(f"{name} must be >= {minimum}")
+    if value > maximum:
+        raise ValueError(f"{name} must be <= {maximum}")
     return value

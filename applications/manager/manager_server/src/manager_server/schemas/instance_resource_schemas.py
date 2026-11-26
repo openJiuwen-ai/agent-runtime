@@ -11,6 +11,7 @@ from manager_server.infrastructure.match_expr import (
     validate_agent_resource_match_expr,
     validate_match_expr,
 )
+from manager_server.schemas.common_schemas import INT32_MAX, INT32_MIN
 
 MatchExprField = Annotated[Any, BeforeValidator(validate_match_expr)]
 AgentMatchExprField = Annotated[Any, BeforeValidator(validate_agent_resource_match_expr)]
@@ -62,7 +63,8 @@ class CreateInstanceServiceResourceBody(BaseModel):
     match_exprs: list[MatchExprField] = Field(..., min_length=1)
     resource_name: str = Field(..., min_length=1, max_length=128)
     resource_desc: str | None = Field(default=None, max_length=512)
-    priority: int = 0  # 与 Runtime scope.index 同义：越小越优先
+    # 与 Runtime scope.index / match_index 同义：越小越优先；须落在 INT32。
+    priority: int = Field(default=0, ge=INT32_MIN, le=INT32_MAX)
     enabled: bool = True
     expires_at: datetime | None = None
     data: dict[str, Any] | None = None
@@ -76,7 +78,7 @@ class UpdateInstanceServiceResourceBody(BaseModel):
     match_exprs: list[MatchExprField] = Field(..., min_length=1)
     resource_name: str = Field(..., min_length=1, max_length=128)
     resource_desc: str | None = Field(default=None, max_length=512)
-    priority: int = 0  # 与 Runtime scope.index 同义：越小越优先
+    priority: int = Field(default=0, ge=INT32_MIN, le=INT32_MAX)
     enabled: bool = True
     expires_at: datetime | None = None
     data: dict[str, Any] | None = None
