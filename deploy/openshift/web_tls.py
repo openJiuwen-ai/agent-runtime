@@ -24,6 +24,7 @@ CA = "jiuwenswarm-web-dev-ca"
 PROBE_TRUST = "jiuwenswarm-web-probe-ca"
 OWNER = "jiuwenswarm.io/web-tls"
 RENEW_SECONDS = 30 * 24 * 60 * 60
+DIGEST_LOGGER = logging.getLogger("web_tls.digest")
 
 
 class Secrets:
@@ -236,7 +237,7 @@ def prepare(store, hosts, directory, ca_out, *, service="jiuwenswarm-web", manag
     return hashlib.sha256((directory / "tls.crt").read_bytes()).hexdigest()
 
 
-def main():
+def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stderr)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("namespace")
@@ -248,21 +249,23 @@ def main():
     for attempt in range(3):
         try:
             with tempfile.TemporaryDirectory() as temp:
-                return prepare(
+                digest = prepare(
                     store, names(args.hosts), Path(temp), args.ca_output, service=args.service,
                     manager_namespace=os.environ.get("WEB_TLS_MANAGER_NAMESPACE"),
                 )
         except FileExistsError:
             if attempt == 2:
                 raise
+        else:
+            DIGEST_LOGGER.info("%s", digest)
+            break
 
 
 if __name__ == "__main__":
     # deploy.sh captures only the leaf digest from stdout; diagnostics stay on stderr.
-    digest_logger = logging.getLogger("web_tls.digest")
-    digest_logger.addHandler(logging.StreamHandler(sys.stdout))
-    digest_logger.propagate = False
+    DIGEST_LOGGER.addHandler(logging.StreamHandler(sys.stdout))
+    DIGEST_LOGGER.propagate = False
     try:
-        digest_logger.info("%s", main())
+        main()
     except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as exc:
         sys.exit(f"User Web TLS: {exc}")
