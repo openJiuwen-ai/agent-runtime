@@ -737,6 +737,7 @@ _apply_jiuwenbox_sidecar_json() { # $1=agentserver.json
       "ports": [{"containerPort": '"${port}"'}],
       "env": [
         {"name": "JIUWENBOX_LISTEN", "value": "http://0.0.0.0:'"${port}"'"},
+        {"name": "JIUWENBOX_POLICY_PATH", "value": "/app/jiuwenswarm/jiuwenbox/src/jiuwenbox/configs/enterprise-policy.yaml"},
         {"name": "JIUWENSWARM_DATA_DIR", "value": "/home/app/.jiuwenswarm"},
         {"name": "TZ", "value": "Asia/Shanghai"}
       ],
