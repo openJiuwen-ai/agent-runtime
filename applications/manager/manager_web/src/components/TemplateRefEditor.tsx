@@ -349,7 +349,7 @@ export function TemplateRefEditor({
     vision_model: tr('为图像理解任务选择模型。', 'Choose a model for image understanding.'),
     image_gen_model: tr('为图片生成任务选择模型。', 'Choose a model for image generation.'),
     embedding_model: tr('选择文本向量化使用的模型。', 'Choose a model for text embeddings.'),
-    skill_prebuilt: tr('选择 Agent 可使用的预置技能源，可选择多个。', 'Select one or more prebuilt skill sources for this Agent.'),
+    skill_prebuilt: tr('选择 Agent 可使用的预置技能，可选择多个。', 'Select one or more prebuilt skills for this Agent.'),
     extension_config: tr('组合可复用的扩展配置，可选择多个。', 'Combine one or more reusable extension configurations.'),
     mcp: tr('连接 Agent 可调用的 MCP 工具服务，可选择多个。', 'Connect one or more MCP tool services for this Agent.'),
     permissions: tr('设置 Agent 调用工具时遵循的安全策略。', 'Set the safety policy for Agent tool calls.'),

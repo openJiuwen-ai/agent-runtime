@@ -793,6 +793,54 @@ button, input, textarea, select { font: inherit; color: inherit; }
     transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
   }
   .dropdown-menu-option:hover { background: var(--bg-hover); }
+  .dropdown-menu-option.selected {
+    color: var(--accent);
+    background: var(--accent-subtle);
+    font-weight: 500;
+  }
+
+  /* 技能源：可输入 + 右侧下拉箭头，视觉上像下拉框 */
+  .skill-source-combobox {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    min-width: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--card);
+  }
+  .skill-source-combobox:focus-within {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-glow, color-mix(in srgb, var(--accent) 22%, transparent));
+  }
+  .skill-source-combobox__input {
+    flex: 1 1 auto;
+    min-width: 0;
+    border: 0 !important;
+    box-shadow: none !important;
+    border-radius: var(--radius-md) 0 0 var(--radius-md);
+    background: transparent;
+  }
+  .skill-source-combobox__toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    flex-shrink: 0;
+    border: 0;
+    border-left: 1px solid var(--border);
+    background: var(--panel-strong, var(--panel));
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .skill-source-combobox__toggle:hover {
+    color: var(--text);
+    background: var(--bg-hover);
+  }
+  .skill-source-combobox__count {
+    padding: 0 10px 0 4px;
+  }
 
   .user-menu { flex-shrink: 0; }
   .user-menu__avatar {
@@ -1277,12 +1325,21 @@ button, input, textarea, select { font: inherit; color: inherit; }
   }
 
   /* 表头筛选/排序菜单展开时，避免被表格区域裁剪或分页条遮挡 */
-  .card:has(.th-filter__btn.open) {
+  .card:has(.th-filter__btn.open),
+  .card:has(.th-sort__btn.open) {
     position: relative;
     z-index: 50;
     overflow: visible;
   }
-  .card:has(.th-filter__btn.open) > .overflow-x-auto {
+  .card:has(.th-filter__btn.open) > .overflow-x-auto,
+  .card:has(.th-sort__btn.open) > .overflow-x-auto {
+    overflow: visible;
+  }
+  /* manager-workspace 表格默认 overflow:hidden，会裁掉第三项（如「技能包 URL」） */
+  .table:has(.th-filter__btn.open),
+  .table:has(.th-sort__btn.open),
+  .manager-workspace .table:has(.th-filter__btn.open),
+  .manager-workspace .table:has(.th-sort__btn.open) {
     overflow: visible;
   }
   .page-header:has(.th-filter__btn.open) {
@@ -2378,6 +2435,11 @@ dialog.resource-preview::backdrop { background: rgb(0 0 0 / .24); }
   min-height: clamp(320px, calc(100dvh - 440px), 900px);
   min-width: 0;
   background: var(--card);
+}
+/* Opt-in: hug content height (e.g. skill prebuilt list with few rows). */
+.manager-workspace .manager-page-table.manager-page-table--hug {
+  flex: 0 0 auto;
+  min-height: 0;
 }
 .manager-page-table > :is(.overflow-x-auto, .table-wrap) { flex: 1 0 auto; min-width: 0; }
 .manager-workspace .manager-page-table .table,

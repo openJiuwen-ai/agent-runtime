@@ -62,7 +62,7 @@ export function SetupJourney({ compact = false, onNavigate }: { compact?: boolea
     ],
   ];
   const optional: GuideTask[] = [
-    { title: tr('预置技能源', 'Prebuilt skills'), description: tr('为 Agent 提供可复用技能。', 'Provide reusable skills for Agents.'), href: '/skill-prebuilt-templates' },
+    { title: tr('预置技能', 'Prebuilt skills'), description: tr('为 Agent 提供可复用技能。', 'Provide reusable skills for Agents.'), href: '/skill-prebuilt-templates' },
     { title: tr('MCP服务', 'MCP services'), description: tr('连接外部工具服务。', 'Connect external tool services.'), href: '/mcp-templates' },
     { title: tr('工具安全策略', 'Tool safety policies'), description: tr('约束工具调用权限与行为。', 'Control tool permissions and behavior.'), href: '/safety-guardrails' },
     { title: tr('向量模型', 'Embedding models'), description: tr('为检索提供文本向量能力。', 'Provide embeddings for retrieval.'), href: '/embedding-templates' },

@@ -1,7 +1,7 @@
 /** Shared display order and terminology for the Agent resource catalog and setup guide. */
 export const resourceCatalog = [
   { path: '/model-templates', key: 'modelTemplate', guide: '模型', guideEn: 'Models', required: true },
-  { path: '/skill-prebuilt-templates', key: 'skillWhitelistTemplate', guide: '预置技能源', guideEn: 'Preset skills', required: false },
+  { path: '/skill-prebuilt-templates', key: 'skillWhitelistTemplate', guide: '预置技能', guideEn: 'Preset skills', required: false },
   { path: '/mcp-templates', key: 'mcpTemplate', guide: 'MCP服务', guideEn: 'MCP services', required: false },
   { path: '/safety-guardrails', key: 'safetyGuardrails', guide: '工具安全策略', guideEn: 'Tool safety policies', required: false },
   { path: '/embedding-templates', key: 'embeddingTemplate', guide: '向量模型', guideEn: 'Embedding models', required: false },
