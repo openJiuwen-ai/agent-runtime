@@ -58,7 +58,21 @@
     "importSuccess": "导入完成：新建 {{created}} 项，复用 {{reused}} 项",
     "exportSuccess": "导出完成",
     "exportFailed": "导出失败：{{detail}}",
-    "selected": "已选择 {{count}} 项"
+    "selected": "已选择 {{count}} 项",
+    "chooseFile": "选择文件",
+    "noFileChosen": "未选择文件",
+    "importFailed": "导入失败",
+    "preflightFailed": "预检失败",
+    "colAction": "操作",
+    "colObjectType": "对象类型",
+    "colObjectId": "对象 ID",
+    "colDetail": "详情",
+    "errors": {
+      "invalid_workbook": "工作簿无效或无法解析。",
+      "unsupported_format": "不支持的文件格式。",
+      "conflict": "与已有对象冲突。",
+      "missing_dependency": "缺少必要依赖。"
+    }
   },
   "time": {
     "secondsAgo": "{{count}}s 前",
@@ -425,7 +439,23 @@
       "teamQuota": "团队配额"
     },
     "placeholder": {
-      "empty": "功能开发中，敬请期待"
+      "empty": "功能开发中，敬请期待",
+      "eyebrow": "集群工作台 · {{module}}",
+      "backendPending": "接口准备中",
+      "moduleUnavailable": "当前版本尚未接入该模块的数据接口，暂不能读取或保存相关数据。完成其他配置不会自动生成这里的数据，不影响已支持的集群配置功能。",
+      "whatYouCanDo": "你现在可以做什么",
+      "whatYouCanDoHint": "按照集群配置依赖逐项完成，避免在空页面里反复寻找入口。",
+      "configureAdmission": "配置集群准入",
+      "configureRuntime": "配置运行资源",
+      "bindAgent": "绑定 Agent",
+      "viewStatus": "查看状态",
+      "backToWorkbench": "返回配置工作台",
+      "auditLabel": "审计记录",
+      "auditDescription": "记录集群配置、准入和资源变更，便于定位谁在什么时候做了什么。",
+      "costLabel": "成本分析",
+      "costDescription": "汇总模型调用和运行资源消耗，帮助团队建立可追踪的使用成本视图。",
+      "tokenQuotaLabel": "Token 配额",
+      "tokenQuotaDescription": "限制成员或组织在当前集群中的 Token 使用量，避免资源被意外耗尽。"
     },
     "access": {
       "title": "集群准入",
@@ -1352,7 +1382,9 @@
   "errors": {
     "loadFailed": "加载失败：{{detail}}",
     "saveFailed": "保存失败：{{detail}}",
+    "saveFailedGeneric": "保存失败",
     "deleteFailed": "删除失败：{{detail}}",
+    "deleteFailedGeneric": "删除失败",
     "invalidJson": "JSON 格式不正确：{{detail}}",
     "validationFailed": "请求参数校验失败"
   },
@@ -1496,7 +1528,34 @@
     "orgsTotal": "组织总数",
     "orgsActive": "当前页启用",
     "orgsMembers": "成员关系",
-    "orgsMembersHint": "成员配置在组织详情中维护"
+    "orgsMembersHint": "成员配置在组织详情中维护",
+    "orgsEditBannerTitle": "组织用于管理成员范围",
+    "orgsEditBannerText": "先保存组织基本信息，再在成员页维护用户归属；集群准入仍需回到具体集群配置。",
+    "authorizationTitle": "授权管理",
+    "authorizationSubtitle": "把身份、组织、角色与服务实例连接起来，完成最终的访问授权。",
+    "authorizationPrepare": "授权准备",
+    "authorizationPrepareHint": "先准备可被授权的身份和角色。",
+    "authorizationOptional": "按需配置",
+    "authorizationEffect": "生效位置",
+    "authorizationEffectHint": "准入和 Agent 使用范围在具体集群中生效。",
+    "authorizationViewClusters": "查看集群",
+    "authorizationClusterAdmission": "集群准入",
+    "authorizationClusterAdmissionText": "在目标集群中添加获准登录的用户或组织。",
+    "authorizationAgentScope": "Agent 使用范围",
+    "authorizationAgentScopeText": "在目标集群中绑定 Agent 模板，并设置可使用的身份范围。",
+    "authorizationSelectCluster": "选择集群",
+    "authorizationUsersTitle": "用户",
+    "authorizationUsersText": "维护可被授权的用户，并查看用户所属组织。",
+    "authorizationUsersAction": "管理用户",
+    "authorizationOrgsTitle": "组织",
+    "authorizationOrgsText": "用组织批量管理成员，再将组织授权到服务实例。",
+    "authorizationOrgsAction": "管理组织",
+    "authorizationRolesTitle": "角色",
+    "authorizationRolesText": "定义管理面和资源操作权限，控制谁可以进行配置。",
+    "authorizationRolesAction": "管理角色",
+    "authorizationInstancesTitle": "服务实例",
+    "authorizationInstancesText": "进入具体服务实例，为用户或组织配置集群准入和 Agent 使用范围。",
+    "authorizationInstancesAction": "配置服务实例"
   },
   "auth": {
     "language": "界面语言",
@@ -1767,17 +1826,73 @@
     "eyebrow": "访问授权 / 角色",
     "bannerTitle": "角色决定可以做什么",
     "bannerText": "角色把权限点组合成可复用的管理职责。先在这里定义角色和权限，再将角色指派给用户；集群准入仍在集群配置工作台中完成。",
+    "editBannerTitle": "角色用于管理访问权限",
+    "editBannerText": "角色保存后可分配给用户；它与集群准入是两层关系，具体集群仍需单独配置。",
     "directory": "角色目录",
     "directoryHint": "查看角色类型、权限范围和用户指派",
     "total": "角色总数",
     "enabled": "当前页启用",
     "assigneesSummary": "已指派用户",
     "systemSummary": "系统角色",
-    "systemSummaryHint": "内置角色不可直接修改权限"
+    "systemSummaryHint": "内置角色不可直接修改权限",
+    "system": {
+      "platform_admin": {
+        "name": "平台管理员",
+        "description": "系统预置角色，拥有工作区配额、审批与角色管理权限"
+      }
+    },
+    "permissions": {
+      "deployment": {
+        "read": {
+          "name": "查看部署任务",
+          "description": "查看管理面发起的产品面部署任务与日志"
+        },
+        "execute": {
+          "name": "发起部署",
+          "description": "发起/取消产品面部署任务、修改默认部署参数"
+        }
+      },
+      "quota": {
+        "read": {
+          "name": "查看配额",
+          "description": "查看配额策略、生效结果与用量排行"
+        },
+        "write": {
+          "name": "管理配额",
+          "description": "新增、修改、停用或删除配额策略"
+        }
+      },
+      "approval": {
+        "read": {
+          "name": "查看审批",
+          "description": "查看扩容审批单"
+        },
+        "act": {
+          "name": "处理审批",
+          "description": "通过或驳回扩容审批单"
+        }
+      },
+      "iam": {
+        "role": {
+          "read": {
+            "name": "查看角色",
+            "description": "查看角色、权限和角色指派"
+          },
+          "write": {
+            "name": "管理角色",
+            "description": "新建、修改、停用自定义角色，绑定权限码，以及把角色指派给用户"
+          }
+        }
+      }
+    }
   },
   "approvals": {
     "title": "审批中心",
     "subtitle": "查看和处理平台各类审批申请",
+    "bannerTitle": "审批只处理需要人工确认的变更",
+    "bannerText": "审批列表展示配额申请等需要人工确认的操作。批准后系统还会同步到对应集群，详情页中的同步状态才代表最终生效结果。",
+    "detailBannerTitle": "审批结果需要等待同步确认",
+    "detailBannerText": "批准只记录决策；最终是否生效以本页同步状态为准。",
     "searchPlaceholder": "搜索审批单号、标题或申请说明",
     "businessType": "审批类型",
     "subjectTitle": "标题",
@@ -1903,6 +2018,10 @@
     "runtimeTemplateMissing": "返回的运行时模板已不存在，请重新选择。",
     "clusterTemplateFilter": "仅显示此模板的绑定",
     "showAllBindings": "查看全部绑定",
+    "authorizationNoteTitle": "先理解授权关系",
+    "authorizationNoteText": "用户或组织是“谁”，角色是“能做什么”，服务实例是“在哪个集群生效”。先准备身份和角色，再到服务实例中配置集群准入及 Agent 使用范围。",
+    "authorizationNoteAction": "去配置服务实例 →",
+    "emptyPlaceholder": "当前暂无可展示数据",
     "workbench": {
       "loading": "正在读取集群配置…",
       "loadFailed": "无法读取集群配置",

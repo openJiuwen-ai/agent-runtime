@@ -24,6 +24,7 @@ import {
 import { useRouter } from '../../router';
 import { toast } from '../../stores/uiStore';
 import { formatTime, truncate } from '../../utils/format';
+import { displayRoleDescription, displayRoleName } from '../../utils/authzI18n';
 import { ResourceExportButton, ResourceImportButton } from '../../components/ResourceImportExport';
 import { WorkspaceNote } from '../../components/WorkspaceNote';
 
@@ -319,6 +320,8 @@ export function RolesPage() {
                       visiblePermissionIds,
                       permissions,
                     );
+                    const roleName = displayRoleName(role, t);
+                    const roleDescription = displayRoleDescription(role, t);
                     return (
                       <tr key={role.role_id}>
                         <td>
@@ -338,14 +341,14 @@ export function RolesPage() {
                         </td>
                         <td className="align-top">
                           <div className="font-medium text-text-strong break-words">
-                            {role.name}
+                            {roleName}
                           </div>
                         </td>
                         <td
                           className="text-[11px] text-muted max-w-[14rem]"
-                          title={role.description ?? undefined}
+                          title={roleDescription || undefined}
                         >
-                          {role.description ? truncate(role.description, 48) : '—'}
+                          {roleDescription ? truncate(roleDescription, 48) : '—'}
                         </td>
                         <td>
                           <div className="flex flex-wrap items-center gap-1">

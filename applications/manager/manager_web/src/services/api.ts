@@ -153,7 +153,7 @@ export function formatApiErrorDetail(detail: unknown): string {
         return '';
       })
       .filter(Boolean);
-    return messages.join('；') || i18n.t('errors.validationFailed');
+    return messages.join(', ') || i18n.t('errors.validationFailed');
   }
   if (typeof detail === 'object') {
     const obj = detail as Record<string, unknown>;

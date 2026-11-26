@@ -104,7 +104,7 @@ export function AddToInstanceModal({
         <>
           <ModalCancelButton className="btn" />
           <button className="btn primary" style={{ marginLeft: 8 }} disabled={busy || !canSelect || selectedIds.length === 0} onClick={submit}>
-            {t('common.confirm', { defaultValue: '确定' })}{selectedIds.length ? `（${selectedIds.length}）` : ''}
+            {t('common.confirm')}{selectedIds.length ? ` (${selectedIds.length})` : ''}
           </button>
         </>
       }
@@ -136,11 +136,9 @@ export function AddToInstanceModal({
         <>
           <label className="block mt-3">
             <span className="text-sm font-medium inline-flex items-center gap-1">
-              {t('instanceDetail.accessPanel.instance.loginPolicy', { defaultValue: '登录权限' })}
+              {t('instanceDetail.accessPanel.instance.loginPolicy')}
               <HintTooltip
-                text={t('instanceDetail.accessPanel.instance.loginPolicyHint', {
-                  defaultValue: '拒绝优先级高于允许',
-                })}
+                text={t('instanceDetail.accessPanel.instance.loginPolicyHint')}
               />
             </span>
             <select
@@ -149,16 +147,16 @@ export function AddToInstanceModal({
               onChange={(e) => setLoginPolicy(e.target.value === 'deny' ? 'deny' : 'allow')}
             >
               <option value="allow">
-                {t('instanceDetail.accessPanel.instance.loginAllow', { defaultValue: '允许' })}
+                {t('instanceDetail.accessPanel.instance.loginAllow')}
               </option>
               <option value="deny">
-                {t('instanceDetail.accessPanel.instance.loginDeny', { defaultValue: '拒绝' })}
+                {t('instanceDetail.accessPanel.instance.loginDeny')}
               </option>
             </select>
           </label>
           <label className="block mt-3">
             <span className="text-sm font-medium">
-              {t('instanceDetail.accessPanel.instance.expiresAt', { defaultValue: '过期时间' })}
+              {t('instanceDetail.accessPanel.instance.expiresAt')}
             </span>
             <input
               type="datetime-local"
@@ -168,7 +166,7 @@ export function AddToInstanceModal({
               onClick={(e) => (e.target as HTMLInputElement).showPicker?.()}
             />
             <div className="text-[11px] text-muted mt-1">
-              {t('instanceDetail.accessPanel.instance.expiresHint', { defaultValue: '留空表示永不过期' })}
+              {t('instanceDetail.accessPanel.instance.expiresHint')}
             </div>
           </label>
         </>

@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAsync } from '../../hooks/useAsync';
 import { useListSearch } from '../../hooks/useListSearch';
-import { SkillPrebuiltTemplateApi, ApiError } from '../../services/api';
+import { SkillPrebuiltTemplateApi } from '../../services/api';
 import type { SkillPrebuiltTemplate } from '../../types';
 import { Empty } from '../../components/Empty';
 import { Pagination } from '../../components/Pagination';
@@ -189,7 +189,7 @@ export function SkillPrebuiltTemplatesPage() {
         list.map((item) => (item.template_id === row.template_id ? { ...item, enabled: previous } : item)),
       );
       const localized = templateInUseMessage(e, t, 'disable');
-      toast('danger', localized ?? t('errors.saveFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
+      toast('danger', localized ?? t('errors.saveFailedGeneric'));
     } finally {
       setTogglingId(null);
     }
@@ -475,7 +475,7 @@ export function SkillPrebuiltTemplatesPage() {
             void reload();
           } catch (e) {
             const localized = templateInUseMessage(e, t, 'delete');
-            toast('danger', localized ?? t('errors.deleteFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
+            toast('danger', localized ?? t('errors.deleteFailedGeneric'));
           }
         }}
         onClose={() => setDelTarget(null)}

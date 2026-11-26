@@ -14,7 +14,7 @@ import {
 import { useAsync } from '../../hooks/useAsync';
 import { useListSearch } from '../../hooks/useListSearch';
 import { useRouter } from '../../router';
-import { ApiError, McpTemplateApi } from '../../services/api';
+import { McpTemplateApi } from '../../services/api';
 import { toast } from '../../stores/uiStore';
 import type { McpTemplate } from '../../types';
 import { formatTime, truncate } from '../../utils/format';
@@ -120,9 +120,7 @@ export function McpTemplatesPage() {
         ),
       );
       const localized = templateInUseMessage(toggleError, t, 'disable');
-      toast('danger', localized ?? t('errors.saveFailed', {
-        detail: toggleError instanceof ApiError ? toggleError.detail : (toggleError as Error).message,
-      }));
+      toast('danger', localized ?? t('errors.saveFailedGeneric'));
     } finally {
       setTogglingId(null);
     }
@@ -347,9 +345,7 @@ export function McpTemplatesPage() {
             void reload();
           } catch (deleteError) {
             const localized = templateInUseMessage(deleteError, t, 'delete');
-            toast('danger', localized ?? t('errors.deleteFailed', {
-              detail: deleteError instanceof ApiError ? deleteError.detail : (deleteError as Error).message,
-            }));
+            toast('danger', localized ?? t('errors.deleteFailedGeneric'));
           }
         }}
         onClose={() => setDeleteTarget(null)}
