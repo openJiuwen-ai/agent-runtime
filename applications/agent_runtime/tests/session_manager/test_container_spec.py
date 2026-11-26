@@ -405,6 +405,19 @@ def test_secret_item_requires_valid_projection_path(path):
         }], "secret_mounts")
 
 
+@pytest.mark.parametrize("items", [False, 0, "", {}])
+def test_secret_items_rejects_falsy_non_lists(items):
+    from agent_runtime.mounts import canonical_secret_mounts
+    with pytest.raises(InvalidParams, match="items must be a list"):
+        canonical_secret_mounts([{
+            "secret_name": "shared-ca", "mount_path": "/etc/ca", "items": items,
+        }], "secret_mounts")
+    with pytest.raises(InvalidParams, match="items must be a list"):
+        canonical_volumes([{
+            "name": "ca", "secret": {"secretName": "shared-ca", "items": items},
+        }], "volumes")
+
+
 @pytest.mark.parametrize("volumes,mounts,where_role,match", [
     # 悬挂引用
     ([], [{"name": "ghost", "mountPath": "/g"}], MAIN_ROLE, r"not defined"),

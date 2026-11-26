@@ -832,6 +832,27 @@ def test_build_pod_body_mounts_secret_ca_for_main_and_sidecar(client):
         assert mount["read_only"] is True
 
 
+@pytest.mark.parametrize("extra", [{}, {"items": None}, {"items": []}],
+                         ids=["omitted", "null", "empty"])
+def test_secret_empty_items_renders_shared_unfiltered_volume(client, extra):
+    mount = {"secret_name": "shared-ca", "mount_path": "/etc/ca", **extra}
+    spec = _base_spec(
+        main_container=_main(secret_mounts=[mount]),
+        sidecars=[dict(JIUWENBOX, secret_mounts=[mount])],
+    )
+    pod = client.build("pod-1", spec)
+    volumes = _prefix_volumes(pod, "sec")
+    assert len(volumes) == 1
+    assert volumes[0].kwargs["secret"].kwargs == {
+        "secret_name": "shared-ca", "items": None,
+    }
+    for container in pod.kwargs["spec"].kwargs["containers"]:
+        mounted = next(m.kwargs for m in container.kwargs["volume_mounts"]
+                       if m.kwargs["mount_path"] == "/etc/ca")
+        assert mounted["name"] == volumes[0].kwargs["name"]
+        assert mounted["read_only"] is True
+
+
 # pylint: enable=protected-access
 
 

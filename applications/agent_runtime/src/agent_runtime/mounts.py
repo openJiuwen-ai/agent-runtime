@@ -206,6 +206,8 @@ def canonical_secret_mounts(value: Any, where: str) -> list[dict[str, Any]]:
                         "without '..' components or prefix")
                 items.append({"key": key, "path": path})
             items.sort(key=lambda e: e["key"])
+            # 空列表与省略 items 均投射全部 key，规范形一致才能保持同指纹。
+            items = items or None
         read_only = _check_bool(item.get("read_only"), mount_where,
                                 "read_only", True)
         if not read_only:

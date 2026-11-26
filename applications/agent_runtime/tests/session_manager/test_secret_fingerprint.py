@@ -16,6 +16,33 @@ from agent_runtime.spec_fields import DEPLOY_VER_FIELDS
 from agent_runtime.util import fingerprint
 
 
+@pytest.mark.parametrize("role", ["main", "sidecar"])
+def test_secret_empty_items_matches_omitted_and_null(role):
+    """等价的 wire 配置必须得到相同容器规范形和 SM/RM 部署指纹。"""
+    containers = []
+    versions = []
+    for extra in ({}, {"items": None}, {"items": []}):
+        volumes = canonical_volumes([{
+            "name": "ca", "secret": {"secretName": "shared-ca", **extra},
+        }], "volumes")
+        spec = parse_container_spec({
+            "container_id": "c", "name": "probe", "image": "agent:1",
+            "volumeMounts": [{"name": "ca", "mountPath": "/etc/ca"}],
+        }, "container", role=role)
+        container = build_canonical(spec, volumes, "container", role=role)
+        template = Template(
+            template_id="t",
+            main_container=container if role == "main" else {"image": "agent:1"},
+            sidecars=[container] if role == "sidecar" else None,
+        )
+        containers.append(container)
+        versions.append(template.deploy_ver())
+        assert template.deploy_ver() == _deploy_ver(template.deploy_subset())
+    assert containers[0] == containers[1] == containers[2]
+    assert containers[0]["secret_mounts"][0]["items"] is None
+    assert versions[0] == versions[1] == versions[2]
+
+
 @pytest.mark.parametrize("sidecars", [None, [{"name": "box", "image": "box:1"}]])
 def test_no_secret_preserves_pre_upgrade_pod_hash(sidecars):
     template = Template(template_id="t", main_container={"image": "agent:1"},

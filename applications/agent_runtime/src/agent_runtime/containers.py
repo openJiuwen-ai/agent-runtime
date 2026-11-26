@@ -669,10 +669,12 @@ def normalize_pod_spec(spec: dict[str, Any]) -> dict[str, Any]:
     """pod_spec 指纹/渲染前置正规化:模板级字段透传,容器段**只补 canonical
     缺省键、绝不改已有值、不丢项**。
 
-    为什么承重:deploy_ver 是跨版本派生契约,未来加容器字段(新键默认值 ==
-    旧行为)时,Redis 里未刷新的旧 pod_spec_json 经此正规化后与新算指纹相等
-    已存 Pod hash 的跨版本兼容由 spec_fields.deploy_fingerprint 另外处理。
-    行为性新键(默认值 ≠ 旧行为)应当日落,日落正确。
+    deploy_ver 是跨版本派生契约。新增字段默认值等价于旧行为时，本函数
+    补齐旧 pod_spec_json 的缺省键，使新旧配置具有一致的容器结构。
+    补缺省不保证与已注册 Pod 的旧 hash 相等：该兼容性由
+    spec_fields.deploy_fingerprint 在 hash 投影中省略空 secret_mounts
+    保证，避免仅因新增空字段触发无意义日落。实际部署行为变化时，
+    指纹仍应变化并触发日落；未来新增字段须单独评估其指纹兼容策略。
     与 canonical_container 的分工:那边 fail-fast 拒坏值(写路径),这边
     best-effort 补缺(读路径,老缓存友好)。
     """
