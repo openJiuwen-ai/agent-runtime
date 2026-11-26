@@ -124,10 +124,13 @@ def check_leaf(directory, hosts):
     san = openssl("x509", "-in", cert, "-noout", "-ext", "subjectAltName").stdout
     if b"Subject Alternative Name" not in san:
         raise ValueError("Web TLS certificate is missing subjectAltName")
-    for kind, host in hosts:
-        flag = "-verify_ip" if kind == "IP" else "-verify_hostname"
-        openssl("verify", "-partial_chain", "-trusted", cert, "-purpose", "sslserver", flag, host, cert)
     openssl("verify", "-partial_chain", "-trusted", cert, "-purpose", "sslserver", cert)
+    for kind, host in sorted(hosts):
+        flag = "-verify_ip" if kind == "IP" else "-verify_hostname"
+        result = openssl("verify", "-partial_chain", "-trusted", cert, "-purpose", "sslserver", flag, host, cert,
+                         check=False)
+        if result.returncode:
+            raise ValueError(f"Web TLS certificate does not cover {kind} {host}")
     entries = set()
     for tag, value in re.findall(r"(DNS|IP Address):([^,\s]+)", san.decode()):
         if tag == "DNS":
@@ -170,7 +173,9 @@ def prepare(store, hosts, directory, ca_out, *, service="jiuwenswarm-web", manag
         if leaf.get("type") != "kubernetes.io/tls":
             raise ValueError(f"{LEAF} must be a kubernetes.io/tls Secret")
         export_fields(leaf, directory, ("tls.crt", "tls.key"))
-        check_leaf(directory, hosts)
+        # Manager registers the namespace-qualified name and also uses the full Service DNS name.
+        probe_names = names(f"{fq_service},{fq_service}.svc.cluster.local")
+        check_leaf(directory, hosts | probe_names)
         if leaf.get("data", {}).get("ca.crt"):
             export_fields(leaf, directory, ("ca.crt",))
             # tls.crt may also carry intermediate certificates.

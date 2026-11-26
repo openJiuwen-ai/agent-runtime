@@ -43,7 +43,7 @@ function buildHostsPreview(ns: string) {
   return {
     gateway: `http://${HOST_SVC.gateway}.${namespace}:${HOST_PORT.gatewayConfig}`,
     runtime: `http://${HOST_SVC.runtime}.${namespace}:${HOST_PORT.runtimeConfig}`,
-    userWeb: `http://${HOST_SVC.web}.${namespace}:${HOST_PORT.userWeb}`,
+    userWeb: `https://${HOST_SVC.web}.${namespace}:${HOST_PORT.userWeb}`,
   };
 }
 

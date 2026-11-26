@@ -36,7 +36,7 @@ const HOST_PORT = {
 const DEFAULT_MANUAL_HOSTS = {
   gatewayHost: `http://${HOST_SVC.gateway}:${HOST_PORT.gatewayConfig}`,
   runtimeHost: `http://${HOST_SVC.runtime}:${HOST_PORT.runtimeConfig}`,
-  userWebHost: `http://${HOST_SVC.web}:${HOST_PORT.userWeb}`,
+  userWebHost: `https://${HOST_SVC.web}:${HOST_PORT.userWeb}`,
   gatewayWebHttpHost: `http://${HOST_SVC.gateway}:${HOST_PORT.gatewayWebHttp}`,
   gatewayWebWsHost: `http://${HOST_SVC.gateway}:${HOST_PORT.gatewayWebWs}`,
 } as const;
@@ -69,7 +69,7 @@ function buildHostsFromNamespace(ns: string): HostBundle {
   return {
     gatewayHost: `http://${HOST_SVC.gateway}.${namespace}:${HOST_PORT.gatewayConfig}`,
     runtimeHost: `http://${HOST_SVC.runtime}.${namespace}:${HOST_PORT.runtimeConfig}`,
-    userWebHost: `http://${HOST_SVC.web}.${namespace}:${HOST_PORT.userWeb}`,
+    userWebHost: `https://${HOST_SVC.web}.${namespace}:${HOST_PORT.userWeb}`,
     gatewayWebHttpHost: `http://${HOST_SVC.gateway}.${namespace}:${HOST_PORT.gatewayWebHttp}`,
     gatewayWebWsHost: `http://${HOST_SVC.gateway}.${namespace}:${HOST_PORT.gatewayWebWs}`,
   };

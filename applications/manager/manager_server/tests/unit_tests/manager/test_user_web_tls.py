@@ -70,7 +70,7 @@ def test_public_names_and_custom_certificate_lifecycle(tmp_path):
     del leaf["metadata"]["annotations"][tls.OWNER]
     del store.objects[tls.CA]
     assert tls.prepare(store, tls.names("web.example.test"), tmp_path, ca) == changed
-    with pytest.raises(subprocess.CalledProcessError):
+    with pytest.raises(ValueError, match=r"DNS other\.example\.test$"):
         tls.prepare(store, tls.names("other.example.test"), tmp_path, ca)
     assert store.objects == {tls.LEAF: leaf}
     assert cert_key not in store.maps["web-test"]["data"]
@@ -79,6 +79,28 @@ def test_public_names_and_custom_certificate_lifecycle(tmp_path):
     assert tls.prepare(store, hosts=tls.names("web.example.test"), directory=tmp_path, ca_out=ca) == changed
     assert store.maps["web-test"]["data"] == {cert_key: root.decode()}
     assert store.objects[tls.LEAF] is leaf
+
+
+@pytest.mark.parametrize("missing", ["web-custom.web-test", "web-custom.web-test.svc.cluster.local", None])
+def test_custom_certificate_covers_registered_and_configured_probe_hosts(tmp_path, missing):
+    store = TestSecrets()
+    required = ["web.example.test", "web-custom.web-test", "web-custom.web-test.svc.cluster.local"]
+    san = ",".join(f"DNS:{host}" for host in required if host != missing)
+    key, cert = tmp_path / "customer.key", tmp_path / "customer.crt"
+    tls.openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", "/CN=web.example.test",
+                "-addext", f"subjectAltName={san}", "-keyout", key, "-out", cert)
+    leaf = store.save(tls.LEAF, "kubernetes.io/tls", {"tls.crt": cert.read_bytes(), "tls.key": key.read_bytes()})
+    del leaf["metadata"]["annotations"][tls.OWNER]
+    public_hosts = tls.names("web.example.test")
+    ca = tmp_path / "public-ca.crt"
+    if missing:
+        with pytest.raises(ValueError) as error:
+            tls.prepare(store, public_hosts, tmp_path, ca, service="web-custom")
+        assert str(error.value) == f"Web TLS certificate does not cover DNS {missing}"
+        assert not store.maps
+    else:
+        assert tls.prepare(store, public_hosts, tmp_path, ca, service="web-custom")
+    assert store.objects == {tls.LEAF: leaf}
 
 
 @pytest.mark.skipif(shutil.which("yq") is None, reason="deployment tool requires yq")
