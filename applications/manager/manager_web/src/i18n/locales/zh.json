@@ -45,7 +45,7 @@
     "configRefreshCost": "保存后将下发到网关并触发运行时强制刷新（config_refresh）：该运行时下全部 AgentServer Pod 会优雅日落并按新配置重建。存量会话不受影响；重建期间新会话可能冷启动变慢，短时间内连续变更可能被容量保护暂时拒绝，稍后会自动恢复。",
     "configRefreshCostTemplate": "该模板已被实例引用时，保存将把变更下发到网关并触发运行时强制刷新（config_refresh）：对应运行时下全部 AgentServer Pod 优雅日落并按新配置重建。存量会话不受影响；重建期间新会话可能冷启动变慢，短时间内连续变更可能被容量保护暂时拒绝，稍后会自动恢复。",
     "optional": "可选",
-    "int32OutOfRange": "须为 -2147483648～2147483647 的整数",
+    "int32OutOfRange": "须为整数，且不超过 2147483647",
     "nonNegInt32OutOfRange": "须为 0～2147483647 的整数"
   },
   "importExport": {
@@ -512,8 +512,8 @@
         "scopeLabel": "授权范围",
         "scopeAll": "全员可用",
         "priority": "优先级",
-        "priorityHint": "越小越优先。同一集群里，启用中的策略不能使用相同优先级。取值范围 -2147483648～2147483647。",
-        "priorityInvalid": "优先级须为 -2147483648～2147483647 的整数",
+        "priorityHint": "越小越优先。同一集群里，启用中的策略不能使用相同优先级。",
+        "priorityInvalid": "请填写整数优先级，且不超过 2147483647",
         "grantedBy": "授权人",
         "expiresAt": "过期时间",
         "neverExpires": "永不过期",
@@ -677,7 +677,7 @@
       "replacement": "替换文本",
       "priority": "优先级",
       "priorityHint": "按优先级从小到大依次应用脱敏规则。同一集群里，启用中的规则不能使用相同优先级。",
-      "priorityInvalid": "优先级须为 -2147483648～2147483647 的整数",
+      "priorityInvalid": "请填写整数优先级，且不超过 2147483647",
       "withFingerprint": "附带指纹",
       "withFingerprintHint": "开启后脱敏结果会附带不可逆指纹，便于在日志中关联同一敏感值；关闭则仅使用替换文本。",
       "source": "来源",
@@ -847,7 +847,7 @@
     "updatedAt": "更新时间",
     "fieldRequired": "请填写{{field}}",
     "apiBaseInvalid": "API Base 须为合法的 http(s) URL，例如 https://api.example.com/v1",
-    "timeoutMin": "超时须为 1～2147483647 的整数",
+    "timeoutMin": "超时须为正整数，且不超过 2147483647",
     "retryCountMin": "重试次数不能小于 0",
     "unsafeText": "{{field}} 含有非法 HTML/脚本或疑似 SQL 注入内容，请修改后重试",
     "deleteConfirm": "确认删除该模型模板？"

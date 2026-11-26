@@ -45,7 +45,7 @@
     "configRefreshCost": "Saving pushes this change to the gateway and triggers a runtime-wide config refresh: all AgentServer pods are gracefully sunset and rebuilt with the new configuration. Existing sessions are unaffected; new sessions may cold-start slower during the rebuild, and rapid consecutive changes may be temporarily rejected by capacity protection until recovery.",
     "configRefreshCostTemplate": "If this template is referenced by an instance, saving pushes the change to the gateway and triggers a runtime-wide config refresh: all AgentServer pods of that runtime are gracefully sunset and rebuilt. Existing sessions are unaffected; new sessions may cold-start slower during the rebuild, and rapid consecutive changes may be temporarily rejected by capacity protection until recovery.",
     "optional": "Optional",
-    "int32OutOfRange": "Must be an integer from -2147483648 to 2147483647",
+    "int32OutOfRange": "Must be an integer no greater than 2147483647",
     "nonNegInt32OutOfRange": "Must be an integer from 0 to 2147483647"
   },
   "importExport": {
@@ -512,8 +512,8 @@
         "scopeLabel": "Authorization Scope",
         "scopeAll": "Available to all",
         "priority": "Priority",
-        "priorityHint": "Smaller numbers win. Enabled policies in one cluster cannot share a priority. Range: -2147483648 to 2147483647.",
-        "priorityInvalid": "Priority must be an integer from -2147483648 to 2147483647",
+        "priorityHint": "Smaller numbers win. Enabled policies in one cluster cannot share a priority.",
+        "priorityInvalid": "Enter an integer priority no greater than 2147483647",
         "grantedBy": "Granted By",
         "expiresAt": "Expires At",
         "neverExpires": "Never expires",
@@ -677,7 +677,7 @@
       "replacement": "Replacement",
       "priority": "Priority",
       "priorityHint": "Masking rules are applied in ascending priority order. Enabled rules in one cluster cannot share a priority.",
-      "priorityInvalid": "Priority must be an integer from -2147483648 to 2147483647",
+      "priorityInvalid": "Enter an integer priority no greater than 2147483647",
       "withFingerprint": "With fingerprint",
       "withFingerprintHint": "When on, masked values include an irreversible fingerprint for correlating the same secret across logs; when off, only the replacement text is used.",
       "source": "Source",
@@ -847,7 +847,7 @@
     "updatedAt": "UPDATED AT",
     "fieldRequired": "Please fill in {{field}}",
     "apiBaseInvalid": "API Base must be a valid http(s) URL, e.g. https://api.example.com/v1",
-    "timeoutMin": "Timeout must be an integer from 1 to 2147483647",
+    "timeoutMin": "Timeout must be a positive integer no greater than 2147483647",
     "retryCountMin": "Retry count cannot be negative",
     "unsafeText": "{{field}} contains illegal HTML/script or suspected SQL injection content",
     "deleteConfirm": "Delete this model template?"
