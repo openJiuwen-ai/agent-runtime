@@ -50,3 +50,35 @@ export interface ManagerWsStatus {
   registered_jiuwenclaw_ids: string[];
   pid: number;
 }
+
+export type InstanceComponentType = 'gateway' | 'runtime' | 'agentserver';
+
+export interface InstanceComponentPod {
+  name: string;
+  phase: string;
+  ready: boolean;
+  restarts: number;
+  started_at?: string | null;
+  cpu?: string | null;
+  memory?: string | null;
+  cpu_limit?: string | null;
+  memory_limit?: string | null;
+}
+
+export interface InstanceComponentBlock {
+  type: InstanceComponentType;
+  status: string;
+  last_alive?: string | null;
+  pods: InstanceComponentPod[];
+  pods_error?: string | null;
+  metrics_error?: string | null;
+}
+
+export interface InstanceComponentStatus {
+  jiuwenclaw_id: string;
+  namespace: string;
+  k8s_error?: string | null;
+  components: InstanceComponentBlock[];
+  gateway_host?: string;
+  runtime_host?: string;
+}

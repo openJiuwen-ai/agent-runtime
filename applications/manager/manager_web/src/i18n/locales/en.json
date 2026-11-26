@@ -400,10 +400,12 @@
   "instanceDetail": {
     "title": "Cluster Detail",
     "services": "Managed Services",
-    "connectivity": "Connectivity",
+    "connectivity": "Component endpoints",
     "meta": "Status & Meta",
     "extraData": "Extra Data (instance_info.data)",
-    "editConnectivity": "Edit connectivity",
+    "editConnectivity": "Edit component endpoints",
+    "componentPods": "Component pods",
+    "metricsHint": "CPU/memory are instantaneous kubelet Summary samples",
     "editData": "Edit extra data",
     "tabs": {
       "access": "Cluster Access",
@@ -1944,7 +1946,7 @@
       "agentTitle": "Agent resources for this cluster",
       "agentDesc": "Agents are reusable definitions; this page decides whether they apply to this cluster and who can use them.",
       "statusTitle": "Service connectivity",
-      "statusDesc": "Review component connectivity, maintain service addresses and verify the cluster in the user console."
+      "statusDesc": "Maintain component endpoints and review component connectivity for the current cluster."
     },
     "cardStats": {
       "agents": "Agent",

@@ -22,6 +22,64 @@ spec:
       targetPort: 8766
   type: ClusterIP
 ---
+# 连接状态页只读库存：本 ns Pod list + kubelet Summary（nodes/proxy；不依赖 metrics-server）
+# imagePullSecrets 由部署脚本从同 ns default SA 同步，避免私有仓库拉取失败
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: jiuwenswarm-manager-server-sa
+  namespace: "<<NAMESPACE>>"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: jiuwenswarm-manager-server-inventory
+  namespace: "<<NAMESPACE>>"
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jiuwenswarm-manager-server-inventory
+  namespace: "<<NAMESPACE>>"
+subjects:
+  - kind: ServiceAccount
+    name: jiuwenswarm-manager-server-sa
+    namespace: "<<NAMESPACE>>"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: jiuwenswarm-manager-server-inventory
+---
+# Summary 用量：nodes/proxy（RBAC 无法限到 /stats/summary 路径；仅授予 get）
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: jiuwenswarm-manager-server-kubelet-summary-<<NAMESPACE>>
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["nodes/proxy"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: jiuwenswarm-manager-server-kubelet-summary-<<NAMESPACE>>
+subjects:
+  - kind: ServiceAccount
+    name: jiuwenswarm-manager-server-sa
+    namespace: "<<NAMESPACE>>"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: jiuwenswarm-manager-server-kubelet-summary-<<NAMESPACE>>
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -37,6 +95,7 @@ spec:
       labels:
         app: jiuwenswarm-manager-server
     spec:
+      serviceAccountName: jiuwenswarm-manager-server-sa
       volumes:
         - name: web-probe-ca
           configMap:

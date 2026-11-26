@@ -122,6 +122,14 @@ deploy_manager() {
 
     # manager-server
     exec_cmd kubectl apply -f ${CONFIG["MANAGER_SERVER_FILE"]}
+    # 专用 SA 不继承 default 拉取凭据：从同 ns default 同步 imagePullSecrets
+    local sa_name="${DEPLOY_VARS["MANAGER_SERVER_NAME"]}-sa"
+    local pull_json
+    pull_json=$(kubectl get sa default -n "${namespace}" -o jsonpath='{.imagePullSecrets}' 2>/dev/null || true)
+    if [[ -n "${pull_json}" && "${pull_json}" != "null" && "${pull_json}" != "[]" ]]; then
+        exec_cmd kubectl patch sa "${sa_name}" -n "${namespace}" \
+            --type merge -p "{\"imagePullSecrets\":${pull_json}}" || true
+    fi
     wait_k8s_resource_ready "deployment" "${DEPLOY_VARS["MANAGER_SERVER_NAME"]}" "${namespace}"
     success "MANAGER_SERVER_NODE_PORT: ${DEPLOY_VARS["MANAGER_SERVER_NODE_PORT"]}"
 

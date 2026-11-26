@@ -10,6 +10,7 @@ import type {
   ExtensionConfigTemplate,
   ExtensionConfigTemplateCreateBody,
   ExtensionConfigTemplateUpdateBody,
+  InstanceComponentStatus,
   InstanceDetail,
   InstanceSummary,
   ManagerWsStatus,
@@ -1353,6 +1354,8 @@ export const InstanceApi = {
       { method: 'POST' },
     ),
   get: (id: string) => http<InstanceDetail>(`/v1/instances/${encodeURIComponent(id)}`),
+  componentStatus: (id: string) =>
+    http<InstanceComponentStatus>(`/v1/instances/${encodeURIComponent(id)}/component-status`),
   create: (body: CreateInstanceBody) => http<InstanceSummary>('/v1/instances/', { method: 'POST', body }),
   update: (id: string, body: UpdateInstanceBody) =>
     http<InstanceDetail>(`/v1/instances/${encodeURIComponent(id)}`, { method: 'PATCH', body }),

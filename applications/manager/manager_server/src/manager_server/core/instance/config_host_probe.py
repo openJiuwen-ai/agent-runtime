@@ -5,9 +5,6 @@ from __future__ import annotations
 
 import logging
 import os
-import re
-import ssl
-from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
@@ -32,40 +29,6 @@ _GATEWAY_HEALTH_PATH = "/api/health"
 _RUNTIME_HEALTH_PATH = "/healthz"
 
 _DEFAULT_TIMEOUT = 5.0
-_WEB_PROBE_CA = Path("/etc/manager/web-probe-ca")
-_DNS_LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
-
-
-def _user_web_probe_target(base: str) -> tuple[str, Path | None]:
-    """Resolve a Web URL and the CA mount path for a deployment Service."""
-    parsed = urlsplit(base)
-    host = (parsed.hostname or "").rstrip(".")
-    target = urlsplit(os.getenv("MANAGER_WEB_USER_WEB_TARGET", ""))
-    service_names = {"jiuwenswarm-web"}
-    deployed_target = re.fullmatch(
-        rf"({_DNS_LABEL})\.{_DNS_LABEL}\.svc(?:\.cluster\.local)?", (target.hostname or "").rstrip("."),
-    )
-    if deployed_target:
-        service_names.add(deployed_target[1])
-    match = re.fullmatch(rf"({_DNS_LABEL})(?:\.({_DNS_LABEL})(?:\.svc(?:\.cluster\.local)?)?)?", host)
-    if parsed.scheme not in ("http", "https") or not match or match[1] not in service_names:
-        return base, None
-    namespace = match[2] or os.getenv("NAMESPACE", "")
-    cert = None
-    if re.fullmatch(_DNS_LABEL, namespace):
-        cert = _WEB_PROBE_CA / f"{match[1]}.{namespace}.crt"
-    # Existing registered Service URLs may still record the original HTTP scheme.
-    return parsed._replace(scheme="https").geturl(), cert
-
-
-def _issuer_not_trusted(exc: BaseException | None) -> bool:
-    """Inspect the TLS verification error wrapped by HTTPX and its transport."""
-    while exc is not None:
-        if isinstance(exc, ssl.SSLCertVerificationError):
-            # OpenSSL: missing issuer, self-signed chain, unverifiable leaf or untrusted issuer.
-            return exc.verify_code in {2, 18, 19, 20, 21, 27}
-        exc = exc.__cause__ or exc.__context__
-    return False
 
 
 def _health_path(side: Side) -> str:
@@ -96,28 +59,12 @@ async def probe_config_host(
     if not base.startswith(("http://", "https://")):
         raise ValueError(f"{side} host must be an http(s) URL, got {base_url!r}")
 
-    probe_ca = None
-    if side == "user_web":
-        try:
-            base, probe_ca = _user_web_probe_target(base)
-            client_kwargs["verify"] = (
-                ssl.create_default_context(cafile=probe_ca) if probe_ca and probe_ca.is_file() else True
-            )
-        except (OSError, ValueError) as exc:
-            raise ValueError(f"user_web probe trust configuration failed: {exc}") from exc
-
     path = _health_path(side)
     url = f"{base}{path}"
     try:
         async with httpx.AsyncClient(**client_kwargs) as client:
             resp = await client.get(url)
     except Exception as exc:  # noqa: BLE001
-        if probe_ca is not None and _issuer_not_trusted(exc):
-            raise ValueError(
-                f"user_web health check failed url={url}: {exc}. Check the intermediate certificates in tls.crt; "
-                "for a private issuer, supply its public CA in ca.crt of the jiuwenswarm-web-tls Secret "
-                "and redeploy Web."
-            ) from exc
         raise ValueError(f"{side} health check failed url={url}: {exc}") from exc
 
     if resp.status_code >= 400:
