@@ -1,0 +1,346 @@
+import { agentResourceReferencesPath } from '../../utils/agentTemplateNavigation';
+import { useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { useAsync } from '../../hooks/useAsync';
+import { useListSearch } from '../../hooks/useListSearch';
+import { AdvancedConfigTemplateApi, ApiError } from '../../services/api';
+import type { AdvancedConfigTemplate } from '../../types';
+import { Empty } from '../../components/Empty';
+import { Pagination } from '../../components/Pagination';
+import { ConfirmDialog } from '../../components/ConfirmDialog';
+import { Switch } from '../../components/Switch';
+import { TableColumnFilter } from '../../components/TableColumnFilter';
+import {
+  TableColumnSort,
+  type ColumnSortValue,
+} from '../../components/TableColumnSort';
+import { ListSearchInput } from '../../components/ListSearchInput';
+import { AdvancedConfigModal } from './AdvancedConfigModal';
+import { toast } from '../../stores/uiStore';
+import { formatTime, truncate } from '../../utils/format';
+import {
+  deleteBlockedByReferences,
+  disableBlockedByReferences,
+  templateInUseMessage,
+} from '../../utils/templateInUse';
+import { useRouter } from '../../router';
+import { enabledSwitchFields } from './advancedConfigSwitches';
+
+type AdvancedConfigSortField = 'template_name' | 'description' | 'updated_at';
+
+export function AdvancedConfigPage() {
+  const { t } = useTranslation();
+  const { navigate } = useRouter();
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const { searchInput, setSearchInput, searchQuery } = useListSearch();
+  const [enabledFilter, setEnabledFilter] = useState<string>('');
+  const [sortBy, setSortBy] = useState<AdvancedConfigSortField | ''>('');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+
+  const sortOptions = useMemo(
+    () => [
+      { value: 'asc' as const, label: t('common.sortAsc') },
+      { value: 'desc' as const, label: t('common.sortDesc') },
+      { value: '' as const, label: t('common.sortDefault') },
+    ],
+    [t],
+  );
+
+  const handleSortChange = (field: AdvancedConfigSortField, value: ColumnSortValue) => {
+    if (value === '') {
+      setSortBy('');
+      setSortOrder('asc');
+    } else {
+      setSortBy(field);
+      setSortOrder(value);
+    }
+    setPage(1);
+  };
+
+  useEffect(() => {
+    setPage(1);
+  }, [searchQuery]);
+
+  const { data, loading, error, reload } = useAsync(
+    () =>
+      AdvancedConfigTemplateApi.list({
+        page,
+        page_size: pageSize,
+        search: searchQuery,
+        enabled: enabledFilter === '' ? undefined : enabledFilter === 'true',
+        sort_by: sortBy || undefined,
+        sort_order: sortBy ? sortOrder : undefined,
+      }),
+    [page, pageSize, searchQuery, enabledFilter, sortBy, sortOrder]
+  );
+
+  const [items, setItems] = useState<AdvancedConfigTemplate[]>([]);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editing, setEditing] = useState<AdvancedConfigTemplate | null>(null);
+  const [delTarget, setDelTarget] = useState<AdvancedConfigTemplate | null>(null);
+  const [togglingId, setTogglingId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (data?.items) {
+      setItems(data.items);
+    }
+  }, [data]);
+
+  const toggleEnabled = async (row: AdvancedConfigTemplate, enabled: boolean) => {
+    if (togglingId) return;
+    const blocked = disableBlockedByReferences(enabled, row.reference_count, t);
+    if (blocked) {
+      toast('warn', blocked);
+      return;
+    }
+    const previous = row.enabled;
+    setItems((list) =>
+      list.map((item) => (item.template_id === row.template_id ? { ...item, enabled } : item)),
+    );
+    setTogglingId(row.template_id);
+    try {
+      await AdvancedConfigTemplateApi.update(row.template_id, { enabled });
+      if (enabledFilter !== '' && enabled !== (enabledFilter === 'true')) {
+        setItems((list) => list.filter((item) => item.template_id !== row.template_id));
+      }
+      toast('success', t('success.saved'));
+    } catch (e) {
+      setItems((list) =>
+        list.map((item) => (item.template_id === row.template_id ? { ...item, enabled: previous } : item)),
+      );
+      const localized = templateInUseMessage(e, t, 'disable');
+      toast('danger', localized ?? t('errors.saveFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
+    } finally {
+      setTogglingId(null);
+    }
+  };
+
+  const requestDelete = (row: AdvancedConfigTemplate) => {
+    const blocked = deleteBlockedByReferences(row.reference_count, t);
+    if (blocked) {
+      toast('warn', blocked);
+      return;
+    }
+    setDelTarget(row);
+  };
+
+  return (
+    <>
+      <div className="flex min-w-0 flex-col gap-4">
+        <div className="page-header w-full min-w-0 flex-wrap items-start gap-y-3">
+          <div className="min-w-[7.5rem] max-w-[20rem] shrink-0 sm:max-w-[32rem]">
+            <div className="page-title truncate" title={t('advancedConfigTemplates.title')}>
+              {t('advancedConfigTemplates.title')}
+            </div>
+            <div className="page-subtitle truncate" title={t('advancedConfigTemplates.subtitle')}>
+              {t('advancedConfigTemplates.subtitle')}
+            </div>
+          </div>
+          <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
+            <ListSearchInput
+              value={searchInput}
+              onChange={setSearchInput}
+              placeholder={t('advancedConfigTemplates.searchPlaceholder')}
+              className="basis-full sm:basis-auto"
+            />
+            <button className="btn sm" onClick={() => void reload()}>
+              {t('common.refresh')}
+            </button>
+            <button
+              className="btn primary sm"
+              onClick={() => {
+                setEditing(null);
+                setModalOpen(true);
+              }}
+            >
+              + {t('advancedConfigTemplates.new')}
+            </button>
+          </div>
+        </div>
+
+        <div className="flex w-full min-w-0 shrink-0 flex-col gap-4">
+          <div className="card manager-page-table !p-0">
+            {loading ? (
+              <div className="p-4 text-sm text-muted">{t('common.loading')}</div>
+            ) : error ? (
+              <div className="p-4 text-sm text-danger">{t('errors.loadFailed', { detail: error })}</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="table w-max min-w-full">
+                  <thead>
+                    <tr>
+                      <th>
+                        <TableColumnSort
+                          label={t('advancedConfigTemplates.templateName')}
+                          value={sortBy === 'template_name' ? sortOrder : ''}
+                          options={sortOptions}
+                          onChange={(value) => handleSortChange('template_name', value)}
+                        />
+                      </th>
+                      <th>
+                        <TableColumnSort
+                          label={t('advancedConfigTemplates.templateDescription')}
+                          value={sortBy === 'description' ? sortOrder : ''}
+                          options={sortOptions}
+                          onChange={(value) => handleSortChange('description', value)}
+                        />
+                      </th>
+                      <th>
+                        <TableColumnFilter
+                          label={t('common.enabled')}
+                          value={enabledFilter}
+                          options={[
+                            { value: '', label: t('common.all') },
+                            { value: 'true', label: t('common.enabled') },
+                            { value: 'false', label: t('common.disabled') },
+                          ]}
+                          onChange={(value) => {
+                            setEnabledFilter(value);
+                            setPage(1);
+                          }}
+                        />
+                      </th>
+                      <th>{t('advancedConfigTemplates.referenceCount')}</th>
+                      <th>
+                        <TableColumnSort
+                          label={t('advancedConfigTemplates.updatedAt')}
+                          value={sortBy === 'updated_at' ? sortOrder : ''}
+                          options={sortOptions}
+                          onChange={(value) => handleSortChange('updated_at', value)}
+                        />
+                      </th>
+                      <th className="whitespace-nowrap min-w-[9.5rem]">{t('common.actions')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {items.length === 0 ? (
+                      <tr>
+                        <td colSpan={6}>
+                          <Empty text={t('common.empty')} />
+                        </td>
+                      </tr>
+                    ) : (
+                      items.map((row) => {
+                        const onSwitches = enabledSwitchFields(row);
+                        return (
+                          <tr key={row.template_id}>
+                            <td className="align-top">
+                              <div className="text-text-strong font-medium break-words">{row.template_name}</div>
+                              <div className="text-[11px] text-muted mono break-all" title={row.template_id}>
+                                {row.template_id}
+                              </div>
+                            </td>
+                            <td className="text-[11px] text-muted max-w-[14rem]" title={row.description ?? undefined}>
+                              {row.description ? truncate(row.description, 48) : '—'}
+                            </td>
+                            <td className="whitespace-nowrap">
+                              <div className="flex flex-col gap-1.5">
+                                <Switch
+                                  checked={row.enabled}
+                                  disabled={togglingId === row.template_id}
+                                  aria-label={row.enabled ? t('common.enabled') : t('common.disabled')}
+                                  onChange={(enabled) => void toggleEnabled(row, enabled)}
+                                />
+                                <div className="flex flex-wrap gap-1">
+                                  {onSwitches.length === 0 ? (
+                                    <span className="text-[11px] text-muted">
+                                      {t('advancedConfigTemplates.noSwitchesOn')}
+                                    </span>
+                                  ) : (
+                                    onSwitches.map((key) => (
+                                      <span key={key} className="tag" title={t(`advancedConfigTemplates.fields.${key}`)}>
+                                        {t(`advancedConfigTemplates.switchShort.${key}`)}
+                                      </span>
+                                    ))
+                                  )}
+                                </div>
+                              </div>
+                            </td>
+                            <td className="whitespace-nowrap">
+                              {row.reference_count > 0 ? (
+                                <button
+                                  type="button"
+                                  className="tag cursor-pointer"
+                                  title={t('advancedConfigTemplates.referenceHint')}
+                                  onClick={() => navigate(agentResourceReferencesPath('advanced-config', row.template_id, row.template_name))}
+                                >
+                                  {row.reference_count}
+                                </button>
+                              ) : (
+                                <span className="text-[11px] text-muted">0</span>
+                              )}
+                            </td>
+                            <td className="mono text-[11px] text-muted whitespace-nowrap">
+                              {formatTime(row.updated_at)}
+                            </td>
+                            <td className="whitespace-nowrap min-w-[9.5rem]">
+                              <div className="flex items-center gap-1">
+                                <button
+                                  className="btn sm ghost"
+                                  onClick={() => {
+                                    setEditing(row);
+                                    setModalOpen(true);
+                                  }}
+                                >
+                                  {t('common.edit')}
+                                </button>
+                                <button className="btn sm danger" onClick={() => requestDelete(row)}>
+                                  {t('common.delete')}
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {data && (
+            <Pagination
+              page={page}
+              pageSize={pageSize}
+              total={data.total ?? data.items.length}
+              onChange={(p, ps) => {
+                setPage(p);
+                setPageSize(ps);
+              }}
+            />
+          )}
+        </div>
+      </div>
+
+      <AdvancedConfigModal
+        open={modalOpen}
+        template={editing}
+        onClose={() => setModalOpen(false)}
+        onSaved={() => {
+          setModalOpen(false);
+          void reload();
+        }}
+      />
+
+      <ConfirmDialog
+        open={!!delTarget}
+        message={t('advancedConfigTemplates.deleteConfirm')}
+        danger
+        onConfirm={async () => {
+          if (!delTarget) return;
+          try {
+            await AdvancedConfigTemplateApi.remove(delTarget.template_id);
+            toast('success', t('success.deleted'));
+            void reload();
+          } catch (e) {
+            const localized = templateInUseMessage(e, t, 'delete');
+            toast('danger', localized ?? t('errors.deleteFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
+          }
+        }}
+        onClose={() => setDelTarget(null)}
+      />
+    </>
+  );
+}

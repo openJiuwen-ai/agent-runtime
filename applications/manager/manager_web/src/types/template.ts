@@ -268,6 +268,38 @@ export interface ExecutionGuardTemplateCreateBody {
 
 export type ExecutionGuardTemplateUpdateBody = Partial<ExecutionGuardTemplateCreateBody>;
 
+export interface AdvancedConfigTemplate {
+  id: number;
+  template_id: string;
+  template_name: string;
+  description?: string | null;
+  enabled: boolean;
+  progressive_tool_enabled: boolean;
+  progressive_tool_optimize: boolean;
+  a4p_enabled: boolean;
+  auto_memory_enabled: boolean;
+  enable_kv_cache_affinity: boolean;
+  /** 只读：在 Agent 配置模板 advanced_config 槽位引用本模板的 Agent 配置模板数 */
+  reference_count: number;
+  data?: Record<string, unknown> | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface AdvancedConfigTemplateCreateBody {
+  template_name: string;
+  description?: string | null;
+  enabled?: boolean;
+  progressive_tool_enabled?: boolean;
+  progressive_tool_optimize?: boolean;
+  a4p_enabled?: boolean;
+  auto_memory_enabled?: boolean;
+  enable_kv_cache_affinity?: boolean;
+  data?: Record<string, unknown>;
+}
+
+export type AdvancedConfigTemplateUpdateBody = Partial<AdvancedConfigTemplateCreateBody>;
+
 export interface ServiceConfigTemplate {
   id: number;
   template_id: string;

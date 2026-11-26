@@ -1,7 +1,7 @@
 import {
   A2AAccessPolicyTemplateApi, AgentTemplateApi, EmbeddingTemplateApi, ExtensionTemplateApi, ExpertPackageTemplateApi,
   InstanceAgentResourceApi, InstanceApi, McpTemplateApi, ModelTemplateApi,
-  ExecutionGuardTemplateApi, PermissionsTemplateApi, SkillPrebuiltTemplateApi, type AgentTemplate,
+  ExecutionGuardTemplateApi, AdvancedConfigTemplateApi, PermissionsTemplateApi, SkillPrebuiltTemplateApi, type AgentTemplate,
 } from './api';
 import { collectPages } from '../utils/overview';
 import { parseRefChain } from '../utils/templateRef';
@@ -15,6 +15,7 @@ const catalogs: Record<string, { get: (id: string) => Promise<{ template_name: s
   mcp: { get: id => McpTemplateApi.get(id), path: '/mcp-templates' },
   permissions: { get: id => PermissionsTemplateApi.get(id), path: '/safety-guardrails' },
   execution_guard: { get: id => ExecutionGuardTemplateApi.get(id), path: '/execution-guard-templates' },
+  advanced_config: { get: id => AdvancedConfigTemplateApi.get(id), path: '/advanced-config-templates' },
   a2a_access_policy: { get: async id => { const policy = await A2AAccessPolicyTemplateApi.get(id); return { template_name: policy.policy_name, enabled: policy.enabled }; }, path: '/a2a-management?tab=policies' },
 };
 

@@ -12,6 +12,7 @@ export const TEMPLATE_REF_SLOTS = [
   'mcp',
   'permissions',
   'execution_guard',
+  'advanced_config',
   'a2a_access_policy',
   'expert_package',
 ] as const;
@@ -29,6 +30,7 @@ export const TEMPLATE_REF_EDITOR_SLOTS = [
   'mcp',
   'permissions',
   'execution_guard',
+  'advanced_config',
   'a2a_access_policy',
   'expert_package',
 ] as const;
@@ -39,7 +41,7 @@ export const MULTI_VALUE_TEMPLATE_REF_SLOTS = new Set<string>([
   'mcp',
 ]);
 
-/** 各槽位至多一条引用：默认/视频/音频/视觉/生图/Embedding 模型、安全护栏、执行护栏、专家包。 */
+/** 各槽位至多一条引用：默认/视频/音频/视觉/生图/Embedding 模型、安全护栏、执行护栏、高级配置、专家包。 */
 export const SINGLE_VALUE_TEMPLATE_REF_SLOTS = new Set<string>([
   'default_model',
   'video_model',
@@ -49,6 +51,7 @@ export const SINGLE_VALUE_TEMPLATE_REF_SLOTS = new Set<string>([
   'embedding_model',
   'permissions',
   'execution_guard',
+  'advanced_config',
   'a2a_access_policy',
   'expert_package',
 ]);

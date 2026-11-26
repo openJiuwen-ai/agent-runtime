@@ -822,6 +822,66 @@ class ExecutionGuardTemplateOut(BaseModel):
     updated_at: str | None
 
 
+class AdvancedConfigTemplateCreateBody(SafeTextMixin):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    template_name: str = Field(..., min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=512)
+    enabled: bool = True
+    progressive_tool_enabled: bool = True
+    progressive_tool_optimize: bool = False
+    a4p_enabled: bool = False
+    auto_memory_enabled: bool = False
+    enable_kv_cache_affinity: bool = False
+    data: dict[str, Any] | None = None
+
+
+class AdvancedConfigTemplateUpdateBody(SafeTextMixin):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    template_name: str | None = Field(default=None, min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=512)
+    enabled: bool | None = None
+    progressive_tool_enabled: bool | None = None
+    progressive_tool_optimize: bool | None = None
+    a4p_enabled: bool | None = None
+    auto_memory_enabled: bool | None = None
+    enable_kv_cache_affinity: bool | None = None
+    data: dict[str, Any] | None = None
+
+
+class AdvancedConfigTemplateListQuery(BaseModel):
+    page: int = Field(1, ge=1)
+    page_size: int = Field(20, ge=1, le=200)
+    enabled: bool | None = None
+    search: str | None = Field(
+        default=None,
+        description="按 template_id、template_name、description 模糊搜索",
+    )
+    sort_by: str | None = Field(
+        default=None,
+        description="排序字段：template_name、description、updated_at",
+    )
+    sort_order: str | None = Field(default=None, description="排序方向：asc、desc")
+
+
+class AdvancedConfigTemplateOut(BaseModel):
+    id: int
+    template_id: str
+    template_name: str
+    description: str | None
+    enabled: bool
+    reference_count: int = 0
+    progressive_tool_enabled: bool
+    progressive_tool_optimize: bool
+    a4p_enabled: bool
+    auto_memory_enabled: bool
+    enable_kv_cache_affinity: bool
+    data: dict[str, Any] | None
+    created_at: str | None
+    updated_at: str | None
+
+
 _VALID_MCP_TRANSPORTS = frozenset(
     {
         "stdio",

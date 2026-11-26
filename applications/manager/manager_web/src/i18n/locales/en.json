@@ -140,6 +140,41 @@
     "fieldRequired": "Please fill in {{field}}",
     "unsafeText": "{{field}} contains unsafe content"
   },
+  "advancedConfigTemplates": {
+    "title": "Advanced config",
+    "subtitle": "Manage advanced runtime capability switches for Agent templates to reference",
+    "new": "New advanced config",
+    "edit": "Edit advanced config",
+    "searchPlaceholder": "Search template ID, name, or description",
+    "referenceCount": "References",
+    "referenceHint": "Click to view Agent config templates referencing this template",
+    "templateName": "Template name",
+    "templateDescription": "Description",
+    "updatedAt": "Updated at",
+    "switchesSummary": "Enabled capabilities",
+    "noSwitchesOn": "None enabled",
+    "deleteConfirm": "Delete this advanced config template?",
+    "fieldRequired": "Please fill in {{field}}",
+    "unsafeText": "{{field}} contains unsafe content",
+    "sections": {
+      "switches": "Capability switches",
+      "switchesHint": "Agents referencing this template inherit these settings. The data field is not shown in this phase."
+    },
+    "switchShort": {
+      "progressive_tool_enabled": "Prog. tools",
+      "progressive_tool_optimize": "Tool optimize",
+      "a4p_enabled": "A4P",
+      "auto_memory_enabled": "Auto memory",
+      "enable_kv_cache_affinity": "KV affinity"
+    },
+    "fields": {
+      "progressive_tool_enabled": "Enable progressive tools",
+      "progressive_tool_optimize": "Enable progressive tool optimization",
+      "a4p_enabled": "Enable A4P",
+      "auto_memory_enabled": "Enable auto memory",
+      "enable_kv_cache_affinity": "Enable KV cache affinity"
+    }
+  },
   "executionGuardrails": {
     "title": "Execution guard",
     "subtitle": "Manage model-anomaly detection and the tool-loop circuit breaker for Agent templates",
@@ -1173,6 +1208,7 @@
         "mcp": "MCP config",
         "permissions": "Safety guardrails",
         "execution_guard": "Execution guard",
+        "advanced_config": "Advanced config",
         "a2a_access_policy": "A2A access policy",
         "expert_package": "Expert packages"
       },

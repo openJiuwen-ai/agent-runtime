@@ -5,6 +5,7 @@ import {
   McpTemplateApi,
   ModelTemplateApi,
   ExecutionGuardTemplateApi,
+  AdvancedConfigTemplateApi,
   PermissionsTemplateApi,
   A2AAccessPolicyTemplateApi,
   ExpertPackageTemplateApi,
@@ -16,7 +17,7 @@ export interface TemplateOption {
 }
 
 export async function loadTemplateOptions(): Promise<Record<string, TemplateOption[]>> {
-  const [models, embeddings, skills, extensions, mcps, permissions, executionGuards, a2aPolicies, expertPackages] = await Promise.all([
+  const [models, embeddings, skills, extensions, mcps, permissions, executionGuards, advancedConfigs, a2aPolicies, expertPackages] = await Promise.all([
     collectPages((page, page_size) => ModelTemplateApi.list({ page, page_size, enabled: true })),
     collectPages((page, page_size) => EmbeddingTemplateApi.list({ page, page_size, enabled: true })),
     collectPages((page, page_size) => SkillPrebuiltTemplateApi.list({ page, page_size, enabled: true })),
@@ -24,6 +25,7 @@ export async function loadTemplateOptions(): Promise<Record<string, TemplateOpti
     collectPages((page, page_size) => McpTemplateApi.list({ page, page_size, enabled: true })),
     collectPages((page, page_size) => PermissionsTemplateApi.list({ page, page_size, enabled: true })),
     collectPages((page, page_size) => ExecutionGuardTemplateApi.list({ page, page_size, enabled: true })),
+    collectPages((page, page_size) => AdvancedConfigTemplateApi.list({ page, page_size, enabled: true })),
     collectPages((page, page_size) => A2AAccessPolicyTemplateApi.list({ page, page_size, enabled: true })),
     collectPages((page, page_size) => ExpertPackageTemplateApi.list({ page, page_size, enabled: true })),
   ]);
@@ -53,6 +55,7 @@ export async function loadTemplateOptions(): Promise<Record<string, TemplateOpti
   bySlot.mcp = mcps.map((t) => toOpt(t.template_id, t.template_name));
   bySlot.permissions = permissions.map((t) => toOpt(t.template_id, t.template_name));
   bySlot.execution_guard = executionGuards.map((t) => toOpt(t.template_id, t.template_name));
+  bySlot.advanced_config = advancedConfigs.map((t) => toOpt(t.template_id, t.template_name));
   bySlot.a2a_access_policy = a2aPolicies.map((t) =>
     toOpt(t.policy_id, `${t.policy_name} · ${t.mode}`),
   );
