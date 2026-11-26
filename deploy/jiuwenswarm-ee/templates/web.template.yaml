@@ -17,12 +17,26 @@ spec:
     spec:
       securityContext:
         fsGroup: 0
+      volumes:
+        - name: web-tls
+          secret:
+            secretName: jiuwenswarm-web-tls
+            defaultMode: 0440
       containers:
         - name: web
           image: <<WEB_IMAGE>>
           imagePullPolicy: IfNotPresent
+          volumeMounts:
+            - name: web-tls
+              mountPath: /etc/nginx/web-tls
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              scheme: HTTPS
+              port: https
+              path: /auth
           ports:
-            - name: http
+            - name: https
               containerPort: <<WEB_HTTP_PORT>>
               protocol: TCP
             - name: websocket
@@ -82,7 +96,7 @@ spec:
   selector:
     app: <<WEB_NAME>>
   ports:
-    - name: http
+    - name: https
       port: <<WEB_HTTP_PORT>>
       targetPort: <<WEB_HTTP_PORT>>
     - name: websocket
@@ -100,7 +114,8 @@ metadata:
 spec:
   type: NodePort
   ports:
-    - port: <<WEB_HTTP_PORT>>                    # 集群内部端口
+    - name: https
+      port: <<WEB_HTTP_PORT>>                    # 集群内部端口
       targetPort: <<WEB_HTTP_PORT>>              # 容器端口
       nodePort: <<WEB_NODE_PORT>>   # 外部访问端口（30000-32767）
   selector:

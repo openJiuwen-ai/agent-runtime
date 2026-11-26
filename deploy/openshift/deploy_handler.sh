@@ -412,8 +412,71 @@ wait_ready() { # $1=组件
 #   nfs-server 经 nodeName 固定调度到运行部署工具的节点，导出根为该节点 hostPath；
 #   模板的 DirectoryOrCreate 兜底创建的目录归 root 且默认权限，NFS 客户端按随机
 #   uid 挂载写入必须 777（EE 部署同款处理），故 apply 前在本机显式创建并授权
+prepare_web_tls() {
+  local file="$CONF_DIR/web.yaml" hosts="${DEPLOY_VARS[WEB_TLS_HOSTS]}" route host code fingerprint
+  local tmp; tmp=$(kctl_tmpdir)
+  if ! is_k8s_cluster; then
+    route="$(kctl_kind_path Route "$KCTL_NS")/jiuwenswarm-web"
+    code=$(kctl_http GET "$route" "$tmp/web-route.json")
+    if [ "$code" = 404 ]; then
+      yq 'select(.kind == "Route")' "$file" > "$tmp/web-route.yaml"
+      kctl_apply_resource "$tmp/web-route.yaml"
+      code=$(kctl_http GET "$route" "$tmp/web-route.json")
+    fi
+    [ "$code" = 200 ] || error "Cannot read user Web Route (HTTP $code)"
+    host=$(yq -r '.spec.host // .status.ingress[0].host // ""' "$tmp/web-route.json")
+    [ -n "$host" ] || error "User Web Route has no assigned host; retry deployment after admission"
+    hosts="${hosts:+$hosts,}$host"
+    fingerprint=$(WEB_TLS_CLUSTER_SERVER="$KCTL_SERVER" WEB_TLS_CLUSTER_TOKEN="$KCTL_TOKEN" \
+      WEB_TLS_CLUSTER_INSECURE="${DEPLOY_VARS[CLUSTER_API_INSECURE]:-true}" \
+      python3 "$SCRIPT_DIR/web_tls.py" "$KCTL_NS" "$hosts" "$CONF_DIR/web-ca.crt") || error "Cannot prepare user Web TLS"
+  else
+    fingerprint=$(python3 "$SCRIPT_DIR/web_tls.py" "$KCTL_NS" "$hosts" "$CONF_DIR/web-ca.crt") || error "Cannot prepare user Web TLS"
+  fi
+  WEB_TLS_DIGEST="$fingerprint" yq -i 'with(select(.kind == "Deployment"); .spec.template.metadata.annotations."jiuwenswarm.io/web-tls-sha256" = strenv(WEB_TLS_DIGEST))' "$file"
+}
+
+# Existing OpenShift resources are skipped by kctl_run apply. Merge only Web's
+# listener, certificate, probe and rollout fields, preserving external resources.
+reconcile_web_tls() {
+  local file="$CONF_DIR/web.yaml" resp resource patch code
+  resp="$(kctl_tmpdir)/web-tls-response"
+  resource="$(kctl_kind_path Deployment "$KCTL_NS")/jiuwenswarm-web"
+  patch=$(yq 'select(.kind == "Deployment")' "$file" | yq -o=json -I=0 '.spec.template as $t |
+    {"spec":{"template":{"metadata":{"annotations":$t.metadata.annotations},
+    "spec":{"volumes":[$t.spec.volumes[] | select(.name == "web-tls")],
+    "containers":[$t.spec.containers[] | select(.name == "web") |
+    {"name":.name,"image":.image,"ports":[.ports[] | select(.name == "https")],"readinessProbe":.readinessProbe,
+    "volumeMounts":[.volumeMounts[] | select(.name == "web-tls")]}]}}}}' -) || error "Cannot render Web Deployment patch"
+  code=$(kctl_patch_strategic "$resource" "$patch" "$resp")
+  [ "$code" = 200 ] || error "Cannot update user Web Deployment (HTTP $code)"
+  resource="$(kctl_kind_path Service "$KCTL_NS")/jiuwenswarm-web"
+  code=$(kctl_patch_strategic "$resource" '{"spec":{"ports":[{"name":"https","port":5173,"protocol":"TCP","targetPort":5173}]}}' "$resp")
+  [ "$code" = 200 ] || error "Cannot update user Web Service (HTTP $code)"
+  resource="$(kctl_kind_path Route "$KCTL_NS")/jiuwenswarm-web"
+  code=$(kctl_patch "$resource" '{"spec":{"port":{"targetPort":"https"},"tls":{"termination":"passthrough","insecureEdgeTerminationPolicy":"None","certificate":null,"key":null,"caCertificate":null,"destinationCACertificate":null}}}' "$resp")
+  [ "$code" = 200 ] || error "Cannot update user Web Route (HTTP $code)"
+}
+
+# Existing OCP Deployments are reused. Reconcile the Manager probe volume and URL as well.
+reconcile_manager_web_probe() {
+  local resource patch code
+  resource="$(kctl_kind_path Deployment "$KCTL_NS")/jiuwenswarm-manager-server"
+  patch=$(yq 'select(.kind == "Deployment")' "$CONF_DIR/manager-server.yaml" | yq -o=json -I=0 '
+    .spec.template.spec as $s | {"spec":{"template":{"spec":{
+      "volumes":[$s.volumes[] | select(.name == "web-probe-ca")],
+      "containers":[$s.containers[] | select(.name == "manager") | {
+        "name":.name,"image":.image,"volumeMounts":[.volumeMounts[] | select(.name == "web-probe-ca")],
+        "env":[.env[] | select(.name == "MANAGER_WEB_USER_WEB_TARGET")]
+      }]
+    }}}}' -) || error "Cannot render Manager Web probe patch"
+  code=$(kctl_patch_strategic "$resource" "$patch" "$(kctl_tmpdir)/manager-probe-response")
+  [ "$code" = 200 ] || error "Cannot update Manager Web probe (HTTP $code)"
+}
+
 component_prepare() { # $1=组件
   case "$1" in
+    web) prepare_web_tls;;
     nfs)  local p="${DEPLOY_VARS["NFS_HOST_PATH"]}"
           mkdir -p "$p" || error "NFS 导出根目录创建失败: $p（检查部署节点本地权限）"
           chmod -R 777 "$p" || error "NFS 导出根目录授权失败: $p（须 777 供随机 uid 客户端写入）";;
@@ -439,6 +502,12 @@ deploy_component() { # $1=组件 $2=序号 $3=总数
   KCTL_NS="$(component_ns "$comp")"
   component_prepare "$comp"
   kctl_run apply "${paths[@]}"
+  if ! is_k8s_cluster; then
+    case "$comp" in
+      web) reconcile_web_tls;;
+      manager-server) reconcile_manager_web_probe;;
+    esac
+  fi
   ensure_workload "${paths[@]}"
   wait_ready "$comp"
   KCTL_NS="$saved_ns"

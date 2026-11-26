@@ -37,8 +37,17 @@ spec:
       labels:
         app: jiuwenswarm-manager-server
     spec:
+      volumes:
+        - name: web-probe-ca
+          configMap:
+            name: jiuwenswarm-web-probe-ca
+            optional: true
       containers:
       - name: manager
+        volumeMounts:
+        - name: web-probe-ca
+          mountPath: /etc/manager/web-probe-ca
+          readOnly: true
         image: <<MANAGER_SERVER_IMAGE>>
         imagePullPolicy: IfNotPresent
         ports:
@@ -91,7 +100,7 @@ spec:
           value: "<<AGENTSERVER_POD_DNS_LIST>>"
         # MANAGER_WEB_*_TARGET 为 manager-web nginx 的 proxy_pass 上游（nginx 要求 FQDN）
         - name: MANAGER_WEB_USER_WEB_TARGET
-          value: "http://jiuwenswarm-web.<<NAMESPACE>>.svc.cluster.local:5173"
+          value: "https://jiuwenswarm-web.<<NAMESPACE>>.svc.cluster.local:5173"
         - name: MANAGER_WEB_GATEWAY_HTTP_TARGET
           value: "http://jiuwenswarm-gateway.<<NAMESPACE>>.svc.cluster.local:19000"
         - name: MANAGER_WEB_GATEWAY_WS_TARGET

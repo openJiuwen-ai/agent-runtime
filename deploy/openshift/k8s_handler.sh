@@ -374,7 +374,9 @@ append_nodeport_svc() { # $1=conf文件 $2=Service名 $3=app标签 $4=nodePort $
     || error "NodePort Service 追加失败: $name"
   [ -n "$(yq 'select(.kind == "Service" and .metadata.name == "'"$name"'") | .spec.type' "$file")" ] \
     || error "NodePort Service 校验失败: $name"
-  info "NodePort Service 已追加: $name（nodePort=$node_port，外部访问 http://<节点IP>:$node_port）"
+  local scheme=http
+  [ "$pname" != https ] || scheme=https
+  info "NodePort Service 已追加: $name（nodePort=$node_port，外部访问 $scheme://<节点IP>:$node_port）"
 }
 
 # k8s 形态清单后处理分发（与 apply_nfs_direct_mounts 并列；其余形态 no-op）
@@ -393,7 +395,7 @@ apply_k8s_extras() { # $@=本次渲染的清单文件名
       web.yaml)
         ensure_node_port WEB_NODE_PORT jiuwenswarm-web-nodeport
         append_nodeport_svc "$CONF_DIR/web.yaml" jiuwenswarm-web-nodeport \
-          jiuwenswarm-web "${DEPLOY_VARS["WEB_NODE_PORT"]}" http 5173;;
+          jiuwenswarm-web "${DEPLOY_VARS["WEB_NODE_PORT"]}" https 5173;;
       minio.yaml)
         ensure_node_port MINIO_API_NODE_PORT minio-api-nodeport
         ensure_node_port MINIO_CONSOLE_NODE_PORT minio-console-nodeport

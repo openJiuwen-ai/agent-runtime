@@ -35,6 +35,10 @@ render_web_files() {
 
 deploy_web() {
 
+    local fingerprint
+    fingerprint=$(python3 "$(dirname "${BASH_SOURCE[0]}")/web_tls.py" "${DEPLOY_VARS[NAMESPACE]}" \
+        "${DEPLOY_VARS[WEB_TLS_HOSTS]}" "$CONFIG_DIR/web-ca.crt" --service "${DEPLOY_VARS[WEB_NAME]}") || error "Cannot prepare user Web TLS"
+    WEB_TLS_DIGEST="$fingerprint" yq -i 'with(select(.kind == "Deployment"); .spec.template.metadata.annotations."jiuwenswarm.io/web-tls-sha256" = strenv(WEB_TLS_DIGEST))' "${CONFIG[WEB_FILE]}"
     ensure_secret_configmap
     exec_cmd kubectl apply -f ${CONFIG["WEB_FILE"]}
     wait_k8s_resource_ready "deployment" "${DEPLOY_VARS["WEB_NAME"]}" "${DEPLOY_VARS["NAMESPACE"]}"

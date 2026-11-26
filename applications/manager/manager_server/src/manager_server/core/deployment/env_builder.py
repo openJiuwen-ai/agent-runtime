@@ -91,6 +91,7 @@ ALLOWED_ENV_KEYS = frozenset(
         # NodePort
         "MANAGER_WEB_NODE_PORT",
         "WEB_NODE_PORT",
+        "WEB_TLS_HOSTS",
         # openshift 形态集群接入（API 地址 / 自签开关；经快照-defaults-任务链路流动）
         "CLUSTER_API_SERVER",
         "CLUSTER_API_INSECURE",
@@ -294,7 +295,7 @@ def derive_instance_hosts(namespace: str) -> dict:
     return {
         "gateway_host": f"http://jiuwenswarm-gateway.{namespace}:19000",
         "runtime_host": f"http://jiuwenswarm-agent-runtime.{namespace}:8091",
-        "user_web_host": f"http://jiuwenswarm-web.{namespace}:5173",
+        "user_web_host": f"https://jiuwenswarm-web.{namespace}:5173",
         "gateway_web_http_host": f"http://jiuwenswarm-gateway.{namespace}:19000",
         "gateway_web_ws_host": f"http://jiuwenswarm-gateway.{namespace}:19000",
     }
