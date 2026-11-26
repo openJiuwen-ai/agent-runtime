@@ -385,6 +385,52 @@ async def _ensure_expert_package_revision_column(handler: DBHandler) -> None:
                 raise
 
 
+async def _ensure_expert_package_template_swarmflow_column(handler: DBHandler) -> None:
+    """旧库补 ``expert_package_template.swarmflow``（JSON，可空）。"""
+
+    def upgrade(connection):
+        inspector = inspect(connection)
+        table_name = EXPERT_PACKAGE_TEMPLATE_TABLE_DEF.table_name
+        if not inspector.has_table(table_name):
+            return
+        cols = {col["name"] for col in inspector.get_columns(table_name)}
+        if "swarmflow" in cols:
+            return
+        quote = connection.dialect.identifier_preparer.quote
+        dialect = connection.dialect.name
+        if dialect == "postgresql":
+            col_type = "JSONB"
+        elif dialect in ("mysql", "mariadb"):
+            col_type = "JSON"
+        else:
+            col_type = "TEXT"
+        connection.execute(
+            text(
+                f"ALTER TABLE {quote(table_name)} "
+                f"ADD COLUMN {quote('swarmflow')} {col_type} NULL"
+            )
+        )
+
+    for attempt in range(3):
+        try:
+            async with handler.get_engine().begin() as connection:
+                await connection.run_sync(upgrade)
+            return
+        except DBAPIError as exc:
+            dialect = handler.get_engine().dialect.name
+            sqlstate = getattr(exc.orig, "sqlstate", None) or getattr(
+                exc.orig, "pgcode", None
+            )
+            errno = exc.orig.args[0] if exc.orig.args else None
+            column_race = (
+                (dialect == "postgresql" and sqlstate == "42701")
+                or (dialect == "mysql" and errno == 1060)
+                or "duplicate column" in str(exc.orig).lower()
+            )
+            if not column_race or attempt == 2:
+                raise
+
+
 async def _drop_model_template_retired_flags(handler: DBHandler) -> None:
     """Drop retired model_template flags that reject inserts after the code removal.
 
@@ -454,6 +500,7 @@ async def init_all_tables(handler: DBHandler) -> None:
     await _drop_model_template_retired_flags(handler)
     await _ensure_user_preference_default_extras_column(handler)
     await _ensure_expert_package_revision_column(handler)
+    await _ensure_expert_package_template_swarmflow_column(handler)
     from manager_server.core.authz import seed_authz_defaults
 
     await seed_authz_defaults(handler)

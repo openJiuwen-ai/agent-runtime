@@ -893,7 +893,18 @@
     "referenceHint": "Open the Agent config templates that reference this template",
     "fieldRequired": "Fill in {{field}}",
     "deleteConfirm": "Delete this expert package template?",
-    "conflictStale": "This expert package was changed elsewhere. Reopen it, then save again."
+    "conflictStale": "This expert package was changed elsewhere. Reopen it, then save again.",
+    "swarmflowTitle": "Swarmflow Configuration",
+    "swarmflowAllowed": "Allow Swarmflow",
+    "swarmflowAllowedHint": "Enterprise capability gate; the client cannot force-enable it when off",
+    "swarmflowDefaultEnabled": "Enabled by default",
+    "swarmflowDefaultEnabledHint": "Default for new sessions; only effective when allowed",
+    "swarmflowMaxWorkflows": "Max workflows (per leader)",
+    "swarmflowAgentsPerRun": "Agents per run (optional)",
+    "swarmflowAgentsPerRunHint": "Leave empty for the engine default",
+    "swarmflowMaxAgentsTotal": "Total concurrent agents",
+    "swarmflowBudget": "Budget cap (optional)",
+    "swarmflowBudgetHint": "Leave empty for no cap"
   },
   "skillWhitelistTemplate": {
     "title": "Prebuilt skill sources",

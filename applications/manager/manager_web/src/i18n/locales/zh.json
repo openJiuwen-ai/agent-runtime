@@ -893,7 +893,18 @@
     "referenceHint": "点击查看引用了该模板的 Agent 配置模板",
     "fieldRequired": "请填写{{field}}",
     "deleteConfirm": "确认删除该专家包模板？",
-    "conflictStale": "专家包已被他人修改，请重新打开编辑后再保存。"
+    "conflictStale": "专家包已被他人修改，请重新打开编辑后再保存。",
+    "swarmflowTitle": "Swarmflow 配置",
+    "swarmflowAllowed": "允许使用 Swarmflow",
+    "swarmflowAllowedHint": "企业能力门禁，关闭时客户端不能强制开启",
+    "swarmflowDefaultEnabled": "默认启用",
+    "swarmflowDefaultEnabledHint": "新会话缺省选择，仅在企业允许时有效",
+    "swarmflowMaxWorkflows": "最大工作流数（同一 Leader）",
+    "swarmflowAgentsPerRun": "单工作流并发（可选）",
+    "swarmflowAgentsPerRunHint": "留空沿用引擎默认",
+    "swarmflowMaxAgentsTotal": "Agent 总并发",
+    "swarmflowBudget": "预算上限（可选）",
+    "swarmflowBudgetHint": "留空不设上限"
   },
   "skillWhitelistTemplate": {
     "title": "预置技能源",

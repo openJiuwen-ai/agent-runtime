@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from pydantic import ValidationError
+
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 
 from manager_server.core.application_config.hub_package_catalog import HIDDEN_HUB_ASSET_IDS
@@ -24,6 +26,7 @@ from manager_server.schemas.template_schemas import (
     ExpertPackageTemplateListQuery,
     ExpertPackageTemplateOut,
     ExpertPackageTemplateUpdateBody,
+    SwarmflowConfig,
 )
 from manager_server.schemas.template_slot_schemas import EXPERT_PACKAGE_SLOT
 
@@ -31,7 +34,7 @@ _TABLE = EXPERT_PACKAGE_TEMPLATE_TABLE_DEF.table_name
 _KIND = "expert_package_templates"
 _LIST_ALL_CAP = 10_000
 _PACKAGE_KINDS = frozenset({"agent_template", "agent_group"})
-_CONTENT_UPDATE_FIELDS = frozenset({"template_name", "description", "packages"})
+_CONTENT_UPDATE_FIELDS = frozenset({"template_name", "description", "packages", "swarmflow"})
 _ALLOWED_SORT_FIELDS = frozenset({
     "template_name",
     "description",
@@ -110,6 +113,24 @@ def packages_from_row(row: Any) -> list[dict[str, str]]:
     return packages
 
 
+def swarmflow_from_row(row: Any) -> SwarmflowConfig | None:
+    """读侧归一化：不满足键白名单/取值约束的脏数据一律按未配置处理。"""
+    raw = row.get("swarmflow") if isinstance(row, dict) else getattr(row, "swarmflow", None)
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return SwarmflowConfig.model_validate(raw)
+    except ValidationError:
+        return None
+
+
 def _matches_search(row: Any, query: str) -> bool:
     needle = query.strip().lower()
     if not needle:
@@ -130,6 +151,7 @@ def row_to_out(row: Any, *, reference_count: int = 0) -> ExpertPackageTemplateOu
         template_name=row.template_name,
         description=row.description,
         packages=[ExpertPackageItem(**item) for item in packages_from_row(row)],
+        swarmflow=swarmflow_from_row(row),
         enabled=row.enabled,
         revision=_row_revision(row),
         reference_count=reference_count,
@@ -159,6 +181,7 @@ class ExpertPackageTemplateService:
                 "template_name": body.template_name,
                 "description": body.description,
                 "packages": packages,
+                "swarmflow": body.swarmflow.model_dump() if body.swarmflow is not None else None,
                 "enabled": body.enabled,
                 "revision": 0,
                 "created_at": now,
@@ -237,6 +260,11 @@ class ExpertPackageTemplateService:
     ) -> ExpertPackageTemplateOut | None:
         updates = body.model_dump(exclude_unset=True)
         expected_raw = updates.pop("expected_revision", None)
+        if "swarmflow" in updates:
+            # exclude_unset 会级联进嵌套模型，这里整体落库避免存出缺键的 JSON。
+            updates["swarmflow"] = (
+                body.swarmflow.model_dump() if body.swarmflow is not None else None
+            )
         existing = await self._handler.get(_TABLE, {"template_id": template_id})
         if existing is None:
             return None

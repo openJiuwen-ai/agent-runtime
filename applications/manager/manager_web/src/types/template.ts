@@ -120,12 +120,23 @@ export interface ExpertPackageItem {
   version: string;
 }
 
+/** Swarmflow 企业策略（企业最小接入设计方案 §4.2），存于 expert_package_template.swarmflow JSON 列。 */
+export interface SwarmflowConfig {
+  allowed: boolean;
+  default_enabled: boolean;
+  max_workflows: number;
+  agents_per_run?: number | null;
+  max_agents_total: number;
+  swarmflow_budget?: number | null;
+}
+
 export interface ExpertPackageTemplate {
   id: number;
   template_id: string;
   template_name: string;
   description?: string | null;
   packages: ExpertPackageItem[];
+  swarmflow?: SwarmflowConfig | null;
   enabled: boolean;
   revision: number;
   reference_count: number;
@@ -137,6 +148,7 @@ export interface ExpertPackageTemplateCreateBody {
   template_name: string;
   description?: string | null;
   packages: ExpertPackageItem[];
+  swarmflow?: SwarmflowConfig | null;
   enabled?: boolean;
 }
 
@@ -144,6 +156,7 @@ export type ExpertPackageTemplateUpdateBody = Partial<{
   template_name: string;
   description: string | null;
   packages: ExpertPackageItem[];
+  swarmflow: SwarmflowConfig | null;
   enabled: boolean;
   /** 打开编辑时的 revision；与服务端不一致时返回 409 */
   expected_revision: number;
