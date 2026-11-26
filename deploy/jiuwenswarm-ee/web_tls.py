@@ -182,6 +182,16 @@ def prepare(store, hosts, directory, ca_out, *, service="jiuwenswarm-web", manag
             openssl("verify", "-CAfile", directory / "ca.crt", "-untrusted", directory / "tls.crt",
                     "-purpose", "sslserver", directory / "tls.crt")
             probe_ca = (directory / "ca.crt").read_bytes()
+        else:
+            # Without a supplied CA, Manager uses the system trust roots.
+            result = openssl("verify", "-untrusted", directory / "tls.crt", "-purpose", "sslserver",
+                             directory / "tls.crt", check=False)
+            if result.returncode:
+                raise ValueError(
+                    f"{LEAF}: cannot verify tls.crt using the default trust roots. "
+                    "Include intermediate certificates in tls.crt; for a private issuer, "
+                    "include its public CA certificate in ca.crt."
+                )
     else:
         if not hosts:
             raise ValueError("Set WEB_TLS_HOSTS to the user Web address; use localhost for local forwarding only")

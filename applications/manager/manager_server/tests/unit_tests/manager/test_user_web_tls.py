@@ -43,7 +43,7 @@ def test_standalone_deploy_tools_ship_same_certificate_helper():
     assert (DEPLOY / "jiuwenswarm-ee/web_tls.py").read_bytes() == SCRIPT.read_bytes()
 
 
-def test_public_names_and_custom_certificate_lifecycle(tmp_path):
+def test_public_names_and_custom_certificate_lifecycle(tmp_path, monkeypatch):
     store = TestSecrets()
     ca = tmp_path / "root.pem"
     hosts = tls.names("web.example.test,192.0.2.12")
@@ -63,13 +63,23 @@ def test_public_names_and_custom_certificate_lifecycle(tmp_path):
         flag = "-verify_ip" if kind == "IP" else "-verify_hostname"
         tls.openssl("verify", "-CAfile", ca, flag, value, tmp_path / "tls.crt")
     assert tls.prepare(store, hosts.copy(), tmp_path, ca) == digest
-    changed = tls.prepare(store, tls.names("web.example.test"), tmp_path, ca)
+    hosts = tls.names("web.example.test")
+    changed = tls.prepare(store, hosts, tmp_path, ca)
     assert changed != digest
     assert root == ca.read_bytes()
     leaf = store.objects[tls.LEAF]
     del leaf["metadata"]["annotations"][tls.OWNER]
     del store.objects[tls.CA]
-    assert tls.prepare(store, tls.names("web.example.test"), tmp_path, ca) == changed
+    with pytest.raises(ValueError, match=r"private issuer.*ca\.crt"):
+        tls.prepare(store, hosts, tmp_path, ca)
+    assert store.maps["web-test"]["data"] == {cert_key: root.decode()}
+    assert ca.read_bytes() == root
+    # A site whose CA is already trusted can omit ca.crt.
+    trust = tmp_path / "system-roots.pem"
+    trust.write_bytes(root)
+    monkeypatch.setenv("SSL_CERT_FILE", str(trust))
+    assert tls.prepare(store, hosts, tmp_path, ca) == changed
+    monkeypatch.delenv("SSL_CERT_FILE")
     with pytest.raises(ValueError, match=r"DNS other\.example\.test$"):
         tls.prepare(store, tls.names("other.example.test"), tmp_path, ca)
     assert store.objects == {tls.LEAF: leaf}
@@ -91,6 +101,7 @@ def test_custom_certificate_covers_registered_and_configured_probe_hosts(tmp_pat
                 "-addext", f"subjectAltName={san}", "-keyout", key, "-out", cert)
     leaf = store.save(tls.LEAF, "kubernetes.io/tls", {"tls.crt": cert.read_bytes(), "tls.key": key.read_bytes()})
     del leaf["metadata"]["annotations"][tls.OWNER]
+    leaf["data"]["ca.crt"] = base64.b64encode(cert.read_bytes()).decode()
     public_hosts = tls.names("web.example.test")
     ca = tmp_path / "public-ca.crt"
     if missing:
