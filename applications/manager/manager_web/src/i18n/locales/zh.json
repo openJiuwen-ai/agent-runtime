@@ -1835,13 +1835,13 @@
     "assigneesSummary": "已指派用户",
     "systemSummary": "系统角色",
     "systemSummaryHint": "内置角色不可直接修改权限",
-    "system": {
+    "systemRoles": {
       "platform_admin": {
         "name": "平台管理员",
         "description": "系统预置角色，拥有工作区配额、审批与角色管理权限"
       }
     },
-    "permissions": {
+    "permissionTexts": {
       "deployment": {
         "read": {
           "name": "查看部署任务",

@@ -15,14 +15,14 @@ type PermissionLike = {
   description?: string | null;
 };
 
-/** Map `deployment:read` → `roles.permissions.deployment.read` (avoid i18next `:` nsSeparator). */
+/** Map `deployment:read` → `roles.permissionTexts.deployment.read` (avoid i18next `:` nsSeparator). */
 function permissionKeyBase(permissionId: string): string {
-  return `roles.permissions.${permissionId.split(':').filter(Boolean).join('.')}`;
+  return `roles.permissionTexts.${permissionId.split(':').filter(Boolean).join('.')}`;
 }
 
 /** System / seeded role display name; custom roles keep API text. */
 export function displayRoleName(role: RoleLike, t: Translate): string {
-  const key = `roles.system.${role.role_id}.name`;
+  const key = `roles.systemRoles.${role.role_id}.name`;
   if ((role.is_system || role.role_id === 'platform_admin') && i18n.exists(key)) {
     return t(key);
   }
@@ -31,7 +31,7 @@ export function displayRoleName(role: RoleLike, t: Translate): string {
 
 /** System / seeded role description; custom roles keep API text. */
 export function displayRoleDescription(role: RoleLike, t: Translate): string {
-  const key = `roles.system.${role.role_id}.description`;
+  const key = `roles.systemRoles.${role.role_id}.description`;
   if ((role.is_system || role.role_id === 'platform_admin') && i18n.exists(key)) {
     return t(key);
   }

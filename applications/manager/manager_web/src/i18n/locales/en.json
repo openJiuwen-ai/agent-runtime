@@ -1834,13 +1834,13 @@
     "assigneesSummary": "Assigned users",
     "systemSummary": "System roles",
     "systemSummaryHint": "Built-in roles cannot have their permissions edited",
-    "system": {
+    "systemRoles": {
       "platform_admin": {
         "name": "Platform Administrator",
         "description": "Built-in role with workspace quota, approval, and role management permissions"
       }
     },
-    "permissions": {
+    "permissionTexts": {
       "deployment": {
         "read": {
           "name": "View deployments",
