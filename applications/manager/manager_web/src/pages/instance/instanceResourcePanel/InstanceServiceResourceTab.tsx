@@ -229,7 +229,7 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
     } catch { /* Browser storage access itself can be disabled. */ }
     if (!draftSaveWarned.current) {
       draftSaveWarned.current = true;
-      toast('warn', t('redesign.draftUnavailable', { defaultValue: '无法暂存绑定草稿，返回后需重新填写。' }));
+      toast('warn', t('redesign.draftUnavailable'));
     }
     return false;
   }, [handoffKey, t]);
@@ -251,8 +251,8 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
       setAddResourceName(draft.addResourceName);
       if (result.error) {
         toast('warn', result.error === 'disabled'
-          ? t('redesign.runtimeTemplateDisabled', { defaultValue: '返回的运行规格已停用，请重新选择可用运行规格。' })
-          : t('redesign.runtimeTemplateMissing', { defaultValue: '返回的运行规格已不存在，请重新选择。' }));
+          ? t('redesign.runtimeTemplateDisabled')
+          : t('redesign.runtimeTemplateMissing'));
       }
     }
     persistAddDraft(draft);

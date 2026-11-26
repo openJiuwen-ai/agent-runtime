@@ -101,7 +101,7 @@ export function ExpertPackageTemplatesPage() {
         {returnPath && <div><button type="button" className="btn" onClick={() => navigate(returnPath)}>
           {returnPath.startsWith('/instances/')
             ? (zh ? '← 返回来源集群的 Agent绑定' : '← Back to source cluster Agent bindings')
-            : (zh ? '← 返回 Agent模板' : '← Back to Agent template')}
+            : (zh ? '← 返回 Agent模板' : '← Back to Agent Templates')}
         </button></div>}
         <div className="page-header w-full min-w-0 flex-wrap items-start gap-y-3">
           <div className="min-w-[7.5rem] max-w-[20rem] shrink-0 sm:max-w-[32rem]">

@@ -212,7 +212,7 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
     } catch { /* Browser storage access itself can be disabled. */ }
     if (!draftSaveWarned.current) {
       draftSaveWarned.current = true;
-      toast('warn', t('redesign.draftUnavailable', { defaultValue: '无法暂存绑定草稿，返回后需重新填写。' }));
+      toast('warn', t('redesign.draftUnavailable'));
     }
     return false;
   }, [handoffKey, t]);
@@ -231,8 +231,8 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
       setAddResourceName(draft.addResourceName);
       if (selected.error) {
         toast('warn', selected.error === 'disabled'
-          ? t('redesign.templateDisabled', { defaultValue: '返回的 Agent 模板已停用，请重新选择可用模板。' })
-          : t('redesign.templateNotFound', { defaultValue: '返回的 Agent 模板已不存在，请重新选择。' }));
+          ? t('redesign.templateDisabled')
+          : t('redesign.templateNotFound'));
       }
     }
     persistAddDraft(draft);
@@ -388,7 +388,7 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
         </div>
       </div>
       <div className="card manager-page-table !p-0">
-        {focusTemplate && <div className="template-filter-note flex justify-between items-center gap-2"><span>{t('redesign.clusterTemplateFilter', { defaultValue: '仅显示此模板的绑定' })} · {templateLabel(focusTemplate)}</span><button className="btn ghost sm" onClick={() => { const next = new URLSearchParams(params); next.delete('focusTemplate'); navigate(`${path}${next.size ? `?${next}` : ''}`, { replace: true }); }}>{t('redesign.showAllBindings', { defaultValue: '查看全部绑定' })}</button></div>}
+        {focusTemplate && <div className="template-filter-note flex justify-between items-center gap-2"><span>{t('redesign.clusterTemplateFilter')} · {templateLabel(focusTemplate)}</span><button className="btn ghost sm" onClick={() => { const next = new URLSearchParams(params); next.delete('focusTemplate'); navigate(`${path}${next.size ? `?${next}` : ''}`, { replace: true }); }}>{t('redesign.showAllBindings')}</button></div>}
         {loading ? (
           <div className="p-4 text-sm text-muted">{t('common.loading')}</div>
         ) : rosterError ? (

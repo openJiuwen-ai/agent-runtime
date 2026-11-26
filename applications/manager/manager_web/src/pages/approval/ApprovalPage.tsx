@@ -102,11 +102,15 @@ export function ApprovalPage() {
   }, [allItems, applicant, businessType, createdAtSort, status]);
 
   return (
-    <div className="flex min-w-0 flex-col gap-4">
+    <div className="manager-page flex min-w-0 flex-col gap-4">
       <div className="page-header w-full min-w-0 flex-wrap items-start gap-y-3">
-        <div className="min-w-[12rem]">
-          <div className="page-title">{t('approvals.title')}</div>
-          <div className="page-subtitle">{t('approvals.subtitle')}</div>
+        <div className="min-w-[7.5rem] max-w-[20rem] shrink-0 sm:max-w-[32rem]">
+          <div className="page-title truncate" title={t('approvals.title')}>
+            {t('approvals.title')}
+          </div>
+          <div className="page-subtitle truncate" title={t('approvals.subtitle')}>
+            {t('approvals.subtitle')}
+          </div>
         </div>
         <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
           <ListSearchInput
@@ -119,103 +123,105 @@ export function ApprovalPage() {
         </div>
       </div>
 
-      <div className="card manager-page-table !p-0">
-        {loading ? (
-          <div className="p-4 text-sm text-muted">{t('common.loading')}</div>
-        ) : error ? (
-          <div className="p-4 text-sm text-danger">{t('errors.loadFailed', { detail: error })}</div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="table w-max min-w-full">
-              <thead>
-                <tr>
-                  <th>
-                    <TableColumnFilter
-                      label={t('approvals.businessType')}
-                      value={businessType}
-                      options={businessTypeOptions}
-                      onChange={setBusinessType}
-                    />
-                  </th>
-                  <th>{t('approvals.orderNum')}</th>
-                  <th>{t('approvals.subjectTitle')}</th>
-                  <th>
-                    <TableColumnFilter
-                      label={t('approvals.applicant')}
-                      value={applicant}
-                      options={applicantOptions}
-                      onChange={setApplicant}
-                    />
-                  </th>
-                  <th>
-                    <TableColumnFilter
-                      label={t('iam.status')}
-                      value={status}
-                      options={statusOptions}
-                      onChange={(value) => setStatus(value as ApprovalOrder['status'] | '')}
-                    />
-                  </th>
-                  <th>
-                    <TableColumnSort
-                      label={t('approvals.createdAt')}
-                      value={createdAtSort}
-                      options={sortOptions}
-                      onChange={setCreatedAtSort}
-                    />
-                  </th>
-                  <th>{t('approvals.reason')}</th>
-                  <th>{t('common.actions')}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.length === 0 ? (
-                  <tr><td colSpan={8}><Empty text={t('common.empty')} /></td></tr>
-                ) : items.map((order) => {
-                  const reason = (order.reason || '').trim() || '—';
-                  const title = approvalTitle(t, order) || '—';
-                  return (
-                    <tr key={order.order_num}>
-                      <td>
-                        <span className="badge">{approvalTypeLabel(t, order.business_type)}</span>
-                      </td>
-                      <td className="mono text-[11px] text-muted min-w-[16rem] max-w-[22rem] break-all select-all">
-                        {order.order_num}
-                      </td>
-                      <td className="max-w-[16rem]" title={title}>
-                        <div className="line-clamp-2">{title}</div>
-                      </td>
-                      <td className="mono text-[11px] break-all">{order.applicant_id}</td>
-                      <td>
-                        <StatusBadge
-                          status={order.status}
-                          label={t(`approvals.status.${order.status}`)}
-                        />
-                      </td>
-                      <td className="mono text-[11px] text-muted whitespace-nowrap">
-                        {formatTime(order.created_at)}
-                      </td>
-                      <td className="max-w-[20rem]" title={reason}>
-                        <div className="line-clamp-2 text-sm">{reason}</div>
-                      </td>
-                      <td>
-                        <button
-                          className="btn sm"
-                          onClick={() => navigate(`/approvals/${encodeURIComponent(order.order_num)}`)}
-                        >
-                          {t('common.detail')}
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
+      <div className="flex w-full min-w-0 shrink-0 flex-col gap-4">
+        <div className="card !p-0">
+          {loading ? (
+            <div className="p-4 text-sm text-muted">{t('common.loading')}</div>
+          ) : error ? (
+            <div className="p-4 text-sm text-danger">{t('errors.loadFailed', { detail: error })}</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="table w-max min-w-full">
+                <thead>
+                  <tr>
+                    <th>
+                      <TableColumnFilter
+                        label={t('approvals.businessType')}
+                        value={businessType}
+                        options={businessTypeOptions}
+                        onChange={setBusinessType}
+                      />
+                    </th>
+                    <th>{t('approvals.orderNum')}</th>
+                    <th>{t('approvals.subjectTitle')}</th>
+                    <th>
+                      <TableColumnFilter
+                        label={t('approvals.applicant')}
+                        value={applicant}
+                        options={applicantOptions}
+                        onChange={setApplicant}
+                      />
+                    </th>
+                    <th>
+                      <TableColumnFilter
+                        label={t('iam.status')}
+                        value={status}
+                        options={statusOptions}
+                        onChange={(value) => setStatus(value as ApprovalOrder['status'] | '')}
+                      />
+                    </th>
+                    <th>
+                      <TableColumnSort
+                        label={t('approvals.createdAt')}
+                        value={createdAtSort}
+                        options={sortOptions}
+                        onChange={setCreatedAtSort}
+                      />
+                    </th>
+                    <th>{t('approvals.reason')}</th>
+                    <th className="whitespace-nowrap min-w-[9.5rem]">{t('common.actions')}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.length === 0 ? (
+                    <tr><td colSpan={8}><Empty text={t('common.empty')} /></td></tr>
+                  ) : items.map((order) => {
+                    const reason = (order.reason || '').trim() || '—';
+                    const title = approvalTitle(t, order) || '—';
+                    return (
+                      <tr key={order.order_num}>
+                        <td className="whitespace-nowrap">
+                          <span className="badge">{approvalTypeLabel(t, order.business_type)}</span>
+                        </td>
+                        <td className="mono text-[11px] text-muted min-w-[16rem] max-w-[22rem] break-all select-all">
+                          {order.order_num}
+                        </td>
+                        <td className="max-w-[16rem]" title={title}>
+                          <div className="line-clamp-2 text-text-strong font-medium">{title}</div>
+                        </td>
+                        <td className="mono text-[11px] break-all">{order.applicant_id}</td>
+                        <td className="whitespace-nowrap">
+                          <StatusBadge
+                            status={order.status}
+                            label={t(`approvals.status.${order.status}`)}
+                          />
+                        </td>
+                        <td className="mono text-[11px] text-muted whitespace-nowrap">
+                          {formatTime(order.created_at)}
+                        </td>
+                        <td className="max-w-[20rem]" title={reason}>
+                          <div className="line-clamp-2 text-sm text-muted">{reason}</div>
+                        </td>
+                        <td className="whitespace-nowrap min-w-[9.5rem]">
+                          <button
+                            className="btn sm ghost"
+                            onClick={() => navigate(`/approvals/${encodeURIComponent(order.order_num)}`)}
+                          >
+                            {t('common.detail')}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+        <WorkspaceNote title={t('approvals.workspaceNoteTitle')}>
+          {t('approvals.workspaceNoteBody')}
+        </WorkspaceNote>
       </div>
-      <WorkspaceNote title="审批只处理需要人工确认的变更">
-        审批列表展示配额申请等需要人工确认的操作。批准后系统还会同步到对应集群，详情页中的同步状态才代表最终生效结果。
-      </WorkspaceNote>
     </div>
   );
 }

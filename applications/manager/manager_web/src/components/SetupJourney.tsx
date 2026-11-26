@@ -53,12 +53,12 @@ export function SetupJourney({ compact = false, onNavigate }: { compact?: boolea
   ];
   const tasks: GuideTask[][] = [
     [
-      { title: tr('模型', 'Models'), description: tr('添加可调用的模型，供 Agent 模板选择。', 'Add callable models for Agent templates.'), href: '/model-templates' },
+      { title: tr('模型', 'Models'), description: tr('添加可调用的模型，供 Agent模板选择。', 'Add callable models for Agent templates.'), href: '/model-templates' },
     ],
     [
-      { title: tr('Agent', 'Agent'), description: tr('选择默认模型，按需组合技能和工具；保存为可复用的 Agent 配置。', 'Choose a default model and optional skills and tools, then save a reusable Agent configuration.'), href: agentPreparationCatalogPath(targetId, preparationContext) },
-      { title: tr('运行时', 'Runtime'), description: tr('管理可复用的运行时配置，在集群中绑定使用。', 'Manage reusable runtime profiles and bind them to a cluster.'), href: runtimeCatalogPath('service-config-templates', preparationContext, targetId) },
-      { title: tr('Agent模板', 'Agent templates'), description: tr('选择 Agent 和运行时，手动创建可供用户面使用的 Agent。', 'Select an Agent and a runtime to create an Agent for the user console.'), href: '/agent-definitions' },
+      { title: tr('Agent模板', 'Agent Templates'), description: tr('选择默认模型，按需组合技能和工具；保存为可复用的 Agent模板。', 'Choose a default model and optional skills and tools, then save a reusable Agent template.'), href: agentPreparationCatalogPath(targetId, preparationContext) },
+      { title: tr('运行时模板', 'Runtime Templates'), description: tr('管理可复用的运行时模板，在集群中绑定使用。', 'Manage reusable runtime templates and bind them to a cluster.'), href: runtimeCatalogPath('service-config-templates', preparationContext, targetId) },
+      { title: tr('Agent ID', 'Agent ID'), description: tr('选择 Agent模板和运行时模板，手动创建可供用户面使用的 Agent ID。', 'Select an Agent template and a runtime template to create an Agent ID for the user console.'), href: '/agent-definitions' },
     ],
   ];
   const optional: GuideTask[] = [
@@ -100,7 +100,7 @@ export function SetupJourney({ compact = false, onNavigate }: { compact?: boolea
     {current === 2 && <div className="setup-guide-tasks">
       <button type="button" className="setup-guide-task" disabled={!targetId} onClick={() => go(to('access'))}><strong>{tr('集群准入', 'Cluster admission')}<span>→</span></strong><span>{tr('选择允许进入集群的用户与组织。', 'Choose the users and organizations allowed into the cluster.')}</span></button>
       <button type="button" className="setup-guide-task" disabled={!targetId} onClick={() => go(to('service-resources'))}><strong>{tr('绑定运行时模板', 'Bind a runtime template')}<span>→</span></strong><span>{tr('选择运行时模板，设置适用范围与优先级。', 'Choose a runtime template and set its scope and priority.')}</span></button>
-      <button type="button" className="setup-guide-task" disabled={!targetId} onClick={() => go(to('agent-resources'))}><strong>{tr('绑定 Agent', 'Bind an Agent')}<span>→</span></strong><span>{tr('选择 Agent 模板，并设置哪些准入身份可以使用。', 'Select an Agent template and grant access to admitted identities.')}</span></button>
+      <button type="button" className="setup-guide-task" disabled={!targetId} onClick={() => go(to('agent-resources'))}><strong>{tr('绑定 Agent模板', 'Bind an Agent template')}<span>→</span></strong><span>{tr('选择 Agent模板，并设置哪些准入身份可以使用。', 'Select an Agent template and grant access to admitted identities.')}</span></button>
     </div>}
     {current === 3 && <div className="setup-guide-tasks"><button type="button" className="setup-guide-task" disabled={!targetId} onClick={() => go(to('status'))}><strong>{tr('检查连接与验证对话', 'Check connections and verify a conversation')}<span>→</span></strong><span>{tr('检查当前集群的组件连接，再进入用户面验证账号权限及 Agent 对话。保存模板不代表已完成实际运行验证。', 'Check the cluster connections, then verify account access and an Agent conversation in the user console. Saving templates does not verify execution.')}</span></button></div>}
     {current === 0 && <div className="setup-guide-optional"><button type="button" className="btn sm setup-guide-optional__toggle" aria-expanded={showOptional} onClick={toggleOptional}>{showOptional ? '−' : '+'} {tr('可选能力资源', 'Optional capability resources')}</button>{showOptional && <div className="setup-guide-tasks setup-guide-tasks--resources">{optional.map(renderTask)}</div>}</div>}

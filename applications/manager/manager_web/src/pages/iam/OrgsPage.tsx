@@ -157,7 +157,7 @@ export function OrgsPage() {
     <>
       <div className="iam-workspace flex min-w-0 flex-col gap-4">
         <div className="page-header w-full min-w-0 flex-wrap items-start gap-y-3">
-          <div className="min-w-[7.5rem] max-w-[12rem] shrink-0 sm:max-w-[16rem]">
+          <div className="min-w-[7.5rem] max-w-[20rem] shrink-0 sm:max-w-[32rem]">
             <div className="page-title truncate" title={t('iam.orgs')}>
               {t('iam.orgs')}
             </div>
@@ -193,7 +193,7 @@ export function OrgsPage() {
         </div>
 
         <div className="flex w-full min-w-0 shrink-0 flex-col gap-4">
-          <div className="card manager-page-table iam-table-card !p-0">
+          <div className="card !p-0">
             {loading ? (
               <div className="p-4 text-sm text-muted">{t('common.loading')}</div>
             ) : error ? (

@@ -419,9 +419,8 @@ button, input, textarea, select { font: inherit; color: inherit; }
   }
   .nav-subgroup__chevron.open { transform: rotate(90deg); }
   .nav-subgroup__children {
-    margin-left: 6px;
-    padding-left: 6px;
-    border-left: 1px solid var(--border);
+    margin-left: 0;
+    padding-left: 0;
   }
 
   .nav-footer {
@@ -2058,19 +2057,65 @@ button, input, textarea, select { font: inherit; color: inherit; }
   }
 }
 
-/* Manager workspace: task-oriented navigation and operational overview. */
-.manager-workspace .nav { width: 224px; }
-.manager-nav { padding: 20px 12px; gap: 20px; overflow-y: auto; }
-.manager-nav-group h2 { margin: 0 12px 8px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .08em; }
-.manager-nav .nav-item { min-height: 36px; border-radius: 7px; font-size: 13px; gap: 10px; }
-.nav-marker { width: 5px; height: 5px; border: 1px solid currentColor; border-radius: 2px; opacity: .65; }
-.manager-nav .active .nav-marker { background: currentColor; }
-.manager-nav-note { margin-top: auto; padding: 16px 12px 4px; color: var(--muted); font-size: 11px; }
+/* Manager workspace: task-oriented navigation and operational overview.
+   Keep nav width in sync with the shell grid track (--shell-nav-width);
+   a fixed narrower width left a white gutter beside the sidebar on wide screens. */
+.manager-workspace .nav { width: 100%; }
+.manager-nav {
+  display: flex;
+  flex-direction: column;
+  padding: 16px 10px;
+  gap: 14px;
+  overflow-y: auto;
+}
+.manager-nav .nav-item,
+.manager-nav .nav-subgroup__toggle {
+  min-height: 36px;
+  border-radius: 8px;
+  font-size: 13px;
+  gap: 10px;
+}
+.manager-nav .nav-item__icon,
+.manager-nav .nav-subgroup__toggle .nav-item__icon {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  opacity: 0.9;
+}
+.manager-nav .nav-item__label {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.manager-nav .nav-subgroup__children {
+  margin-top: 2px;
+  margin-bottom: 2px;
+}
+.manager-nav .nav-footer {
+  margin-top: 8px;
+}
 .manager-workspace .content { min-width: 0; }
 .manager-workspace .card { box-shadow: none; border-radius: 10px; }
 .manager-workspace .page-title { font-size: 24px; font-weight: 650; }
-.workspace-overview { display: grid; gap: 28px; max-width: 1480px; margin: 0 auto; }
-.workspace-eyebrow { font-size: 10px; letter-spacing: .16em; color: var(--muted); margin-bottom: 8px; }
+/* Shared soft width for top-level list/catalog/ops pages.
+   True full-bleed is reserved for dense cluster workbenches (see .cluster-detail-page). */
+.manager-page,
+.workspace-overview,
+.cluster-management-workspace,
+.authorization-workspace,
+.resource-workspace,
+.iam-workspace,
+.wizard-workspace,
+.agent-workspace {
+  max-width: 1780px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.workspace-overview { display: grid; gap: 28px; }
 .overview-metrics { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 16px; }
 .overview-metrics .card { display: flex; flex-direction: column; gap: 14px; padding: 22px; }
 .overview-metrics strong { font-size: 28px; font-weight: 600; color: var(--text-strong); }
@@ -2097,18 +2142,23 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .agent-card-footer { display:flex; gap:8px; margin-top:auto; padding-top:16px; border-top:1px solid var(--border); }
 .connect-steps { display:flex; gap:24px; color:var(--muted); border-bottom:1px solid var(--border); padding-bottom:16px; }
 .connect-steps .active { color:var(--accent); font-weight:600; }
+/* Forms stay narrower than .manager-page; do not stretch fields to 1780px. */
 .connect-form { max-width:920px; padding:28px; display:grid; gap:20px; }
 .connect-actions { display:flex; justify-content:flex-end; gap:12px; border-top:1px solid var(--border); padding-top:20px; }
 .connect-summary { display:grid; grid-template-columns:140px 1fr; gap:16px; }
 .connect-summary dt { color:var(--muted); }
 .connect-summary dd { overflow-wrap:anywhere; }
-.manager-nav { display:flex; flex-direction:column; }
 .runtime-advanced { padding:16px; border:1px solid var(--border); border-radius:8px; }
 .runtime-advanced summary { cursor:pointer; font-weight:600; }
-.manager-workspace .table th:last-child, .manager-workspace .table td:last-child { position:sticky; right:0; background:var(--card); z-index:2; }
-.manager-workspace .table th:last-child { z-index:21; }
+.manager-workspace .table th:last-child,
+.manager-workspace .table td:last-child { position:sticky; right:0; z-index:2; }
+.manager-workspace .table th:last-child { background:var(--panel-strong); z-index:21; }
+.manager-workspace .table td:last-child { background:var(--card); }
+.manager-workspace .table tbody tr:hover td:last-child { background:var(--bg-hover); }
 .manager-workspace .tabs-bar { justify-content:flex-start; border-radius:8px; }
 .manager-workspace .table { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--card); }
+/* 表头筛选/排序展开时放开 overflow，避免菜单被表格本体裁剪（如模型类型下拉） */
+.manager-workspace .table:has(.th-filter__btn.open) { overflow: visible; }
 .manager-workspace .table thead th { padding: 12px 16px; color: var(--muted); background: var(--panel-strong); font-size: 11px; font-weight: 650; letter-spacing: .03em; text-transform: none; }
 .manager-workspace .table tbody td { padding: 15px 16px; background: var(--card); }
 .manager-workspace .table tbody tr + tr td { border-top: 1px solid var(--border); }
@@ -2125,17 +2175,9 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .binding-resource pre { white-space:pre-wrap; overflow-wrap:anywhere; }
 @media(max-width:800px) { .agent-reference { flex-wrap:wrap; } }
 
-/* Agent catalog follows the full-width resource management layout. */
-.agent-workspace { width: 100%; min-width: 0; display: flex; flex-direction: column; gap: 20px; }
-.agent-workspace-header { flex-wrap: wrap; align-items: flex-start; }
-.agent-workspace-header .page-title { font-size: 24px; }
-.agent-workspace-actions, .agent-list-toolbar, .agent-list-actions { display: flex; align-items: center; gap: 8px; }
-.agent-workspace-actions { flex-wrap: wrap; }
-.agent-list-panel { padding: 0; overflow: hidden; }
-.agent-list-toolbar { padding: 16px 20px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
-.agent-list-search { width: 340px; max-width: 100%; }
-.agent-list-toolbar .input { width: 100%; height: 36px; }
-.agent-list-table { width: 100%; min-width: 900px; }
+/* Agent catalog uses the same manager-page width as other resource catalogs. */
+.agent-workspace { min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+.agent-list-actions { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
 .agent-list-table td { vertical-align: middle; }
 .agent-list-table th:first-child { width: 34%; }
 .agent-name-link { color: var(--text-strong); font-weight: 600; text-align: left; overflow-wrap: anywhere; }
@@ -2143,10 +2185,6 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .agent-list-description { color: var(--muted); font-size: 12px; line-height: 1.6; margin-top: 5px; max-width: 440px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; white-space: normal; }
 .agent-list-capabilities { display: flex; flex-wrap: wrap; gap: 6px; max-width: 280px; }
 .agent-list-time { white-space: nowrap; color: var(--muted); font-size: 12px; }
-.agent-list-actions { white-space: nowrap; }
-.agent-list-pagination { padding: 12px 20px; border-top: 1px solid var(--border); }
-.agent-list-message { padding: 48px 20px; text-align: center; }
-@media (max-width: 700px) { .agent-list-toolbar { padding: 12px; } .agent-list-search { width: 100%; } .agent-list-pagination { padding: 12px; overflow-x: auto; } }
 .setup-journey { border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 10px; padding: 16px 20px; margin-bottom: 20px; background: var(--card); flex-shrink: 0; }
 .setup-journey-heading, .setup-journey-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .setup-stage-nav { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
@@ -2186,9 +2224,8 @@ dialog.resource-preview::backdrop { background: rgb(0 0 0 / .24); }
 .btn.danger.cluster-delete-button { background: var(--danger-subtle); color: var(--danger); }
 .btn.danger.cluster-delete-button:hover { background: var(--danger-subtle); color: var(--danger); filter: brightness(.97); }
 @media(max-width: 1000px) { .cluster-card-grid { grid-template-columns: 1fr; } }
-.cluster-management-workspace { max-width: 1480px; margin: 0 auto; width: 100%; }
-.cluster-management-toolbar { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); }
-.cluster-management-toolbar .input { min-width: 220px; }
+/* Cluster list table follows the same natural-width card style as model templates. */
+.cluster-list-table td { vertical-align: middle; }
 .cluster-card-grid .cluster-card { box-shadow: var(--shadow-sm), inset 0 1px 0 var(--card-highlight); }
 .cluster-card__identity { display: flex; align-items: center; gap: 12px; }
 .cluster-card__identity-icon { display: grid; width: 36px; height: 36px; place-items: center; flex: 0 0 36px; border-radius: 10px; background: var(--accent-subtle); color: var(--accent); font-weight: 750; }
@@ -2239,7 +2276,6 @@ dialog.resource-preview::backdrop { background: rgb(0 0 0 / .24); }
 @media (max-width: 700px) { .guide-menu__journey .setup-task-list--stage-2, .guide-menu__journey .setup-task-list--stage-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
 /* Authorization workspace follows the prototype's preparation -> effective scope -> relation flow. */
-.authorization-workspace { max-width: 1480px; margin: 0 auto; width: 100%; }
 .authorization-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .authorization-panel { min-width: 0; }
 .authorization-check-list { display: flex; flex-direction: column; }
@@ -2260,7 +2296,7 @@ dialog.resource-preview::backdrop { background: rgb(0 0 0 / .24); }
 .environment-callout p { margin-top: 3px; color: var(--muted); font-size: 12px; }
 .environment-callout .btn { margin-left: auto; flex-shrink: 0; }
 @media(max-width: 800px) { .environment-overview-grid { grid-template-columns: 1fr; } .environment-callout { align-items: flex-start; flex-wrap: wrap; } .environment-callout .btn { margin-left: 46px; } }
-.resource-workspace { display: flex; min-width: 0; flex-direction: column; gap: 16px; max-width: 1480px; margin: 0 auto; width: 100%; }
+.resource-workspace { display: flex; min-width: 0; flex-direction: column; gap: 16px; }
 .resource-context-strip { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:12px 16px; border:1px solid var(--border); border-radius:var(--radius-lg); background:linear-gradient(105deg,var(--panel-strong),var(--card)); }
 .resource-context-strip__eyebrow { display:block; color:var(--accent); font-size:10px; font-weight:700; letter-spacing:.12em; }
 .resource-context-strip strong { display:block; margin-top:3px; color:var(--text-strong); font-size:13px; }
@@ -2325,7 +2361,6 @@ dialog.resource-preview::backdrop { background: rgb(0 0 0 / .24); }
 .cluster-subpage-intro p { margin-top: 3px; color: var(--muted); font-size: 12px; line-height: 1.55; }
 
 /* IAM directories use the same preparation -> relationship visual language as the authorization workspace. */
-.iam-workspace { max-width: 1480px; width: 100%; margin: 0 auto; }
 .iam-eyebrow { color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .12em; text-transform: uppercase; }
 .iam-hero { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 20px 22px; border: 1px solid var(--border-accent); border-radius: 12px; background: linear-gradient(105deg, var(--accent-subtle), color-mix(in srgb, var(--card) 92%, transparent)); }
 .iam-hero__copy { display: flex; align-items: flex-start; gap: 14px; min-width: 0; }
@@ -2341,7 +2376,6 @@ dialog.resource-preview::backdrop { background: rgb(0 0 0 / .24); }
 .iam-metric small { display: block; margin-top: 6px; color: var(--muted); font-size: 11px; line-height: 1.45; }
 .iam-table-card { box-shadow: var(--shadow-sm), inset 0 1px 0 var(--card-highlight); }
 .iam-workspace .page-header { margin-top: 2px; }
-.wizard-workspace { max-width: 1480px; width: 100%; margin: 0 auto; }
 .wizard-header { align-items: flex-start; }
 .wizard-layout { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 16px; }
 .wizard-steps { align-self: start; padding: 16px; }
@@ -2410,8 +2444,8 @@ dialog.resource-preview::backdrop { background: rgb(0 0 0 / .24); }
 
 /* Shared cluster navigation and saved configuration progress. */
 .cluster-workspace-header { display: grid; flex-shrink: 0; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px 16px; }
-.cluster-workspace-header__identity { display: flex; align-items: center; gap: 16px; min-width: 0; }
-.cluster-workspace-header__identity .btn { flex-shrink: 0; white-space: nowrap; }
+.cluster-workspace-header__identity { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.cluster-workspace-header__identity .btn { flex-shrink: 0; }
 .cluster-workspace-header__actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
 .cluster-workspace-header__actions .btn { white-space: nowrap; }
 .cluster-workspace-header__id { grid-column: 1 / -1; }
@@ -2445,6 +2479,8 @@ dialog.resource-preview::backdrop { background: rgb(0 0 0 / .24); }
 .manager-workspace .manager-page-table .table,
 .manager-workspace .manager-page-table > .table { border: 0; flex-shrink: 0; }
 .manager-workspace .manager-page-table > .overview-empty { flex: 1; }
+/* Exception: cluster detail tabs stay full-bleed so dense resource tables can use the viewport.
+   Do not apply .manager-page here; top-level list/catalog pages use the shared soft width. */
 .cluster-detail-page { flex: 1 0 auto; min-height: calc(100dvh - 100px); }
 .cluster-detail-body { flex: 1 0 auto; display: flex; flex-direction: column; }
 .cluster-detail-body > .cluster-resource-list { flex: 1 0 auto; }
