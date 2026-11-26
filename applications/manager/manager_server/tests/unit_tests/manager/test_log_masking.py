@@ -86,7 +86,7 @@ async def test_push_log_masking_rules_sync_to_gateway():
         id=1,
         jiuwenclaw_id="sp-sync",
         rule_id="builtin_email",
-        rule_name="邮箱",
+        rule_name="Email",
         description=None,
         pattern=r"\b[a-z]+@example\.com\b",
         replacement="******",
