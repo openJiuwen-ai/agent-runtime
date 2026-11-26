@@ -197,8 +197,9 @@ async def resolve_user_face_upstreams(
 
     Raises:
         PermissionError: Cookie 指向的实例当前用户无权访问。
-        LookupError: Cookie 指向的实例不存在（``bypass_admission=True`` 时回退到
-            默认上游而非抛错，给 platform_admin 跨实例管理用）。
+        LookupError: Cookie 指向的实例不存在（``bypass_admission`` 不影响：
+            实例行不存在时仍 fail-closed 403，避免把请求静默路由到默认集群的
+            上游造成跨集群写错目标——issue #124 审查 #4）。
     """
     defaults = _defaults()
     jid = str(jiuwenclaw_id or "").strip()
@@ -233,20 +234,12 @@ async def resolve_user_face_upstreams(
 
     row = await get_instance_row(handler, jid)
     if row is None:
-        # platform_admin 跨实例管理：cookie 指向的实例在 manager_dyx 不存在
-        # （常见于从 user web 跳进来带别的集群的 jiuwenclaw_id）时，回退到
-        # 默认上游继续请求，让 gateway 决定能否服务，而不是直接 403。
-        if bypass_admission:
-            _cache_set(cache_key, defaults)
-            _log.info(
-                "user_face_upstream_bypass_missing_instance",
-                user_id=uid,
-                jiuwenclaw_id=jid,
-                user_web=defaults.user_web,
-                gateway_http=defaults.gateway_http,
-                gateway_ws=defaults.gateway_ws,
-            )
-            return defaults
+        # fail-closed（issue #124 审查 #4）：cookie 指向的实例在 manager_dyx 不存在
+        # 时，无论是否 platform_admin 都继续抛 LookupError（router 转 403）。回退到
+        # ``defaults`` 会把请求静默路由到**默认集群**的上游（manager 库里第一个集群），
+        # 与 cookie 指定的集群不同 —— 管理员后续的读写会落到错误的集群，属于跨集群
+        # 写错目标的高风险行为。platform_admin 跨实例管理时让其重新选择实例或要求
+        # 先建实例行，比静默路由错配安全。
         raise LookupError(f"instance not found: {jid}")
 
     raw_gateway = getattr(row, "gateway_host", None)

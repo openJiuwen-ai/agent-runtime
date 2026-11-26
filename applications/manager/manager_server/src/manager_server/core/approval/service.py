@@ -340,7 +340,14 @@ class ApprovalService:
         used_bytes: int | None = None,
         approver_id: str,
     ) -> dict[str, Any]:
-        """用户面提交：服务端解析生效配额与 workspace_key；used_bytes 可缺省为 0。"""
+        """用户面提交：服务端解析生效配额与 workspace_key；used_bytes 可缺省为 0。
+
+        ``agent_id`` 缺省为空串：用户面扩容申请语义不带 agent_id 维度
+        （申请时尚未选定 agent），故带 ``agent_id in (...)`` 的策略在此链路
+        上不参与匹配（``evaluate_match_expr`` 在 ctx["agent_id"]=="" 时对
+        该类表达式返回 False）。effective API 显式传 agent_id 时同一
+        workspace 可能解析出不同配额；这是预期行为，已在 issue #124 文档化。
+        """
         from manager_server.core.quota import WorkspaceQuotaPolicyService
 
         effective = await WorkspaceQuotaPolicyService(self._h).effective(
@@ -348,6 +355,8 @@ class ApprovalService:
             user_id=applicant_id,
             group_id=group_id,
             bot_id=bot_id,
+            # 显式传空 agent_id：扩容申请语义不带 agent 维度（issue #124 文档化）。
+            agent_id="",
         )
         if effective is None:
             current_limit_bytes = _FALLBACK_LIMIT_BYTES

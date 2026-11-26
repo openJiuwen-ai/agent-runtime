@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Query, Response
@@ -43,6 +44,39 @@ WORKSPACE_QUOTA_FEATURE_DISABLED = "WORKSPACE_QUOTA_FEATURE_DISABLED"
 
 _Handler = Annotated[DBHandler, Depends(get_db_handler)]
 _CurUser = Annotated[Any, Depends(get_current_user)]
+
+# platform_admin 判定按 uid 短 TTL 缓存（issue #124 审查 #3）：
+# resolve_user_face_upstream 是 nginx auth_request 子请求，每个用户面资源请求
+# 都会命中；AuthzService.is_platform_admin 内部至少 1 次 list_records + N 次 get
+# 且无内置缓存，裸查库会让 QPS 与 DB 查询量线性放大。platform_admin 状态变化
+# 不频繁（角色绑定由管理员操作），5s TTL 足够覆盖大部分 hot path。
+_PLATFORM_ADMIN_CACHE_TTL_S = 5.0
+_platform_admin_cache: dict[str, tuple[float, bool]] = {}
+
+
+async def _is_platform_admin_cached(handler: DBHandler, uid: str) -> bool:
+    """带 TTL 缓存的 is_platform_admin 判定。
+
+    DB 异常时降级为 False（router 转 403），避免 auth_request 返回 5xx 把
+    整个用户面拖成 500（issue #124 审查 #1）。
+    """
+    if not uid:
+        return False
+    now = time.monotonic()
+    hit = _platform_admin_cache.get(uid)
+    if hit is not None:
+        expires_at, value = hit
+        if expires_at > now:
+            return value
+        _platform_admin_cache.pop(uid, None)
+
+    try:
+        value = await AuthzService(handler).is_platform_admin(uid)
+    except Exception:  # noqa: BLE001 — DB 抖动/连接池耗尽等
+        # 降级：不让 auth_request 冒 5xx。失败不缓存，下一拍重试。
+        return False
+    _platform_admin_cache[uid] = (now + _PLATFORM_ADMIN_CACHE_TTL_S, value)
+    return value
 
 
 def _ok(data: Any = None) -> ResponseModel:
@@ -151,11 +185,16 @@ async def resolve_user_face_upstream(
 
     ``platform_admin`` 跳过 ``instance_grant`` 准入检查：平台管理员需要跨所有实例
     读取 gateway-api 资源（团队配额策略等），不应被逐实例授权表挡住。
+
+    ``is_platform_admin`` 判定按 ``uid`` 加短 TTL 缓存：本端点是 nginx
+    ``auth_request`` 子请求，每个用户面资源请求都会命中；``AuthzService.is_platform_admin``
+    内部至少 1 次 ``list_records`` + N 次 ``get`` 且无内置缓存，裸查库会让 QPS 与
+    DB 查询量线性放大。``platform_admin`` 状态变化不频繁（角色绑定由管理员操作），
+    5s TTL 足够覆盖大部分 hot path；DB 异常时降级为 ``bypass_admission=False``（403），
+    避免 auth_request 返回 5xx 把整个用户面拖成 500。
     """
     uid = str(getattr(user, "user_id", "") or "")
-    # platform_admin 跨实例管理，instance_grant 不强制覆盖所有用户/实例组合；
-    # 这里只判定是否平台管理员，不在 hot path 内做角色列表加载（authz 内部已缓存）。
-    bypass_admission = await AuthzService(handler).is_platform_admin(uid)
+    bypass_admission = await _is_platform_admin_cached(handler, uid)
     try:
         upstreams = await resolve_user_face_upstreams(
             handler,
