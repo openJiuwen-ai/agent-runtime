@@ -42,7 +42,7 @@ export function clusterCreationHosts(namespace: string) {
   return {
     gateway: 'http://jiuwenswarm-gateway' + suffix + ':19000',
     runtime: 'http://jiuwenswarm-agent-runtime' + suffix + ':8091',
-    web: 'http://jiuwenswarm-web' + suffix + ':5173',
+    web: 'https://jiuwenswarm-web' + suffix + ':5173',
     gatewayHttp: 'http://jiuwenswarm-gateway' + suffix + ':19000',
     gatewayWs: 'http://jiuwenswarm-gateway' + suffix + ':19000',
   };

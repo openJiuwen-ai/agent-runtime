@@ -51,8 +51,17 @@ spec:
     spec:
       securityContext:
         fsGroup: <<SWARM_FS_GROUP>>
+      volumes:
+        - name: web-probe-ca
+          configMap:
+            name: jiuwenswarm-web-probe-ca
+            optional: true
       containers:
       - name: manager
+        volumeMounts:
+        - name: web-probe-ca
+          mountPath: /etc/manager/web-probe-ca
+          readOnly: true
         image: <<MANAGER_SERVER_IMAGE>>
         securityContext:
           runAsUser: <<SWARM_USER>>
@@ -96,7 +105,7 @@ spec:
           value: "http://<<IDENTITY_NAME>>:<<IDENTITY_REST_PORT>>/v1/auth/public_key"
         # nginx 变量 proxy_pass 需 FQDN；短名作回退时由 Manager 扩成 *.svc.cluster.local
         - name: MANAGER_WEB_USER_WEB_TARGET
-          value: "http://<<WEB_NAME>>.<<NAMESPACE>>.svc.cluster.local:<<WEB_HTTP_PORT>>"
+          value: "https://<<WEB_NAME>>.<<NAMESPACE>>.svc.cluster.local:<<WEB_HTTP_PORT>>"
         - name: MANAGER_WEB_GATEWAY_HTTP_TARGET
           value: "http://<<GATEWAY_NAME>>.<<NAMESPACE>>.svc.cluster.local:<<WEB_PORT>>"
         - name: MANAGER_WEB_GATEWAY_WS_TARGET

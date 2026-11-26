@@ -110,3 +110,25 @@ async def test_require_probes_user_web_when_set():
 async def test_probe_rejects_non_http_url():
     with pytest.raises(ValueError, match="http"):
         await probe_config_host("gw.example:8080", side="gateway")
+
+
+def test_managed_web_probe_upgrade_and_scoped_trust(tmp_path, monkeypatch):
+    from manager_server.core.instance import config_host_probe as probe
+
+    monkeypatch.setattr(probe, "_WEB_PROBE_CA", tmp_path)
+    monkeypatch.setenv("NAMESPACE", "alpha")
+    monkeypatch.setenv("MANAGER_WEB_USER_WEB_TARGET", "https://web-custom.alpha.svc.cluster.local:5173")
+    cert = tmp_path / "web-custom.beta.crt"
+    cert.write_text("intentionally invalid CA")
+    assert probe._user_web_probe("http://jiuwenswarm-web.alpha:5173") == (
+        "https://jiuwenswarm-web.alpha:5173", True,
+    )
+    assert probe._user_web_probe("http://web-custom:5173") == ("https://web-custom:5173", True)
+    assert probe._user_web_probe("https://web.example.org") == ("https://web.example.org", True)
+    assert probe._user_web_probe("https://web-custom.beta.example.org") == (
+        "https://web-custom.beta.example.org", True,
+    )
+    with pytest.raises(OSError):
+        probe._user_web_probe("http://web-custom.beta.svc.cluster.local:5173")
+    monkeypatch.setenv("MANAGER_WEB_USER_WEB_TARGET", "http://localhost:5173")
+    assert probe._user_web_probe("http://localhost:5173") == ("http://localhost:5173", True)

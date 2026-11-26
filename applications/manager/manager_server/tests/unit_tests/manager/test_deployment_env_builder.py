@@ -192,7 +192,7 @@ class TestDerive:
         hosts = derive_instance_hosts("ns1")
         assert hosts["gateway_host"] == "http://jiuwenswarm-gateway.ns1:19000"
         assert hosts["runtime_host"] == "http://jiuwenswarm-agent-runtime.ns1:8091"
-        assert hosts["user_web_host"] == "http://jiuwenswarm-web.ns1:5173"
+        assert hosts["user_web_host"] == "https://jiuwenswarm-web.ns1:5173"
 
 
 class TestMask:

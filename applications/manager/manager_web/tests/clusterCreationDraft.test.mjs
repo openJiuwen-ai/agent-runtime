@@ -35,7 +35,7 @@ try {
     const hosts = clusterCreationHosts(' preview ');
     assert.equal(hosts.gateway, 'http://jiuwenswarm-gateway.preview:19000');
     assert.equal(hosts.runtime, 'http://jiuwenswarm-agent-runtime.preview:8091');
-    assert.equal(hosts.web, 'http://jiuwenswarm-web.preview:5173');
+    assert.equal(hosts.web, 'https://jiuwenswarm-web.preview:5173');
     assert.equal(hosts.gatewayWs, hosts.gatewayHttp);
     assert.equal(clusterCreationHosts('').gateway, 'http://jiuwenswarm-gateway.default:19000');
   });

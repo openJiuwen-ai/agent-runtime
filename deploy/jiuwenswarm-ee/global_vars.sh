@@ -299,6 +299,7 @@ declare -A DEPLOY_VARS=(
     ["VAR_LIB_DOCKER_PATH"]="/var/lib/containerd"
     ["VECTOR_IMAGE"]="timberio/vector:0.40.0-alpine"
     ["VECTOR_NAME"]="vector-receiver"
+    ["WEB_TLS_HOSTS"]=""
     ["WEB_HTTP_PORT"]="5173"
     ["WEB_NAME"]="jiuwenswarm-web"
     ["WEB_PORT"]="19000"

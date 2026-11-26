@@ -135,6 +135,9 @@ class DeployRunner:
                 "DEPLOY_JSON_PROGRESS": "1",
             }
         )
+        if os.environ.get("NAMESPACE"):
+            # Child Web installations publish only their public CA back to this Manager.
+            sub_env["WEB_TLS_MANAGER_NAMESPACE"] = os.environ["NAMESPACE"]
         kubeconfig = (settings.deploy_kubeconfig or "").strip()
         if kubeconfig:
             sub_env["KUBECONFIG"] = kubeconfig

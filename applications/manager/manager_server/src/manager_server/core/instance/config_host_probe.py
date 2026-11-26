@@ -5,6 +5,9 @@ from __future__ import annotations
 
 import logging
 import os
+import re
+import ssl
+from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
@@ -31,6 +34,32 @@ _RUNTIME_HEALTH_PATH = "/healthz"
 _USER_WEB_HEALTH_PATH = "/"
 
 _DEFAULT_TIMEOUT = 5.0
+_WEB_PROBE_CA = Path("/etc/manager/web-probe-ca")
+_DNS_LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+
+
+def _user_web_probe(base: str) -> tuple[str, ssl.SSLContext | bool]:
+    """Recognize deployment Service addresses and use only that Service's trust roots."""
+    parsed = urlsplit(base)
+    host = (parsed.hostname or "").rstrip(".")
+    target = urlsplit(os.getenv("MANAGER_WEB_USER_WEB_TARGET", ""))
+    service_names = {"jiuwenswarm-web"}
+    deployed_target = re.fullmatch(
+        rf"({_DNS_LABEL})\.{_DNS_LABEL}\.svc(?:\.cluster\.local)?", (target.hostname or "").rstrip("."),
+    )
+    if deployed_target:
+        service_names.add(deployed_target[1])
+    match = re.fullmatch(rf"({_DNS_LABEL})(?:\.({_DNS_LABEL})(?:\.svc(?:\.cluster\.local)?)?)?", host)
+    if parsed.scheme not in ("http", "https") or not match or match[1] not in service_names:
+        return base, True
+    namespace = match[2] or os.getenv("NAMESPACE", "")
+    verify: ssl.SSLContext | bool = True
+    if re.fullmatch(_DNS_LABEL, namespace):
+        cert = _WEB_PROBE_CA / f"{match[1]}.{namespace}.crt"
+        if cert.is_file():
+            verify = ssl.create_default_context(cafile=str(cert))
+    # Existing registered Service URLs may still record the original HTTP scheme.
+    return parsed._replace(scheme="https").geturl(), verify
 
 
 def _health_path(side: Side) -> str:
@@ -63,6 +92,12 @@ async def probe_config_host(
         client_kwargs.update(link_mtls.health_client_kwargs())
     if not base.startswith(("http://", "https://")):
         raise ValueError(f"{side} host must be an http(s) URL, got {base_url!r}")
+
+    if side == "user_web":
+        try:
+            base, client_kwargs["verify"] = _user_web_probe(base)
+        except (OSError, ValueError) as exc:
+            raise ValueError(f"user_web probe trust configuration failed: {exc}") from exc
 
     path = _health_path(side)
     url = f"{base}{path}" if path != "/" else f"{base}/"

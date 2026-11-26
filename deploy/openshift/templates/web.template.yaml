@@ -19,12 +19,26 @@ spec:
       labels:
         app: jiuwenswarm-web
     spec:
+      volumes:
+        - name: web-tls
+          secret:
+            secretName: jiuwenswarm-web-tls
+            defaultMode: 0440
       containers:
         - name: web
           image: <<WEB_IMAGE>>
           imagePullPolicy: IfNotPresent
+          volumeMounts:
+            - name: web-tls
+              mountPath: /etc/nginx/web-tls
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              scheme: HTTPS
+              port: https
+              path: /auth
           ports:
-            - name: http
+            - name: https
               containerPort: 5173
               protocol: TCP
             - name: websocket
@@ -81,7 +95,7 @@ spec:
   selector:
     app: jiuwenswarm-web
   ports:
-    - name: http
+    - name: https
       port: 5173
       targetPort: 5173
     - name: websocket
@@ -98,10 +112,10 @@ metadata:
     haproxy.router.openshift.io/timeout: 300s
 spec:
   port:
-    targetPort: http
+    targetPort: https
   tls:
-    termination: edge
-    insecureEdgeTerminationPolicy: Redirect
+    termination: passthrough
+    insecureEdgeTerminationPolicy: None
   to:
     kind: Service
     name: jiuwenswarm-web
