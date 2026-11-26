@@ -1146,6 +1146,23 @@ class ExpertPackageItem(BaseModel):
     version: str = Field(default="", max_length=64)
 
 
+class SwarmflowConfig(BaseModel):
+    """Swarmflow 企业策略（JSON 列）：键白名单 + 取值约束，创建/更新/出参共用。
+
+    仅允许 bool/int 字段且 ``extra="forbid"``，任意未知键、字符串值与
+    越界数值在入库前即被 422 拦截，不依赖自由文本安全校验。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    allowed: bool = True
+    default_enabled: bool = False
+    max_workflows: int = Field(default=16, ge=1, le=10_000)
+    agents_per_run: int | None = Field(default=None, ge=1, le=10_000)
+    max_agents_total: int = Field(default=64, ge=1, le=100_000)
+    swarmflow_budget: int | None = Field(default=None, ge=1, le=10_000_000)
+
+
 def _assign_normalized_packages(model: Any) -> None:
     from manager_server.core.template.expert_package_template import normalize_package_items
 
@@ -1160,6 +1177,7 @@ class ExpertPackageTemplateCreateBody(SafeTextMixin):
     template_name: str = Field(..., min_length=1, max_length=128)
     description: str | None = Field(default=None, max_length=512)
     packages: list[ExpertPackageItem] = Field(..., min_length=1)
+    swarmflow: SwarmflowConfig | None = None
     enabled: bool = True
 
     @model_validator(mode="after")
@@ -1174,6 +1192,7 @@ class ExpertPackageTemplateUpdateBody(SafeTextMixin):
     template_name: str | None = Field(default=None, min_length=1, max_length=128)
     description: str | None = Field(default=None, max_length=512)
     packages: list[ExpertPackageItem] | None = Field(default=None, min_length=1)
+    swarmflow: SwarmflowConfig | None = None
     enabled: bool | None = None
     expected_revision: int | None = Field(
         default=None,
@@ -1207,6 +1226,7 @@ class ExpertPackageTemplateOut(BaseModel):
     template_name: str
     description: str | None
     packages: list[ExpertPackageItem]
+    swarmflow: SwarmflowConfig | None = None
     enabled: bool
     revision: int = 0
     reference_count: int = 0

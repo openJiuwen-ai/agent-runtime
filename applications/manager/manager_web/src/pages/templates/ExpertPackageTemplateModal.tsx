@@ -2,9 +2,10 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Modal, ModalCancelButton } from '../../components/Modal';
 import { LimitedTextInput } from '../../components/LimitedTextInput';
+import { Switch } from '../../components/Switch';
 import { ExpertPackageTemplateApi, PackageCatalogApi, ApiError } from '../../services/api';
 import { toast } from '../../stores/uiStore';
-import type { ExpertPackageKind, ExpertPackageTemplate, PackageCatalogItem } from '../../types';
+import type { ExpertPackageKind, ExpertPackageTemplate, PackageCatalogItem, SwarmflowConfig } from '../../types';
 
 interface Props {
   open: boolean;
@@ -35,6 +36,31 @@ function itemKey(item: { kind: string; id: string }) {
   return `${item.kind}:${item.id}`;
 }
 
+const DEFAULT_SWARMFLOW: SwarmflowConfig = {
+  allowed: true,
+  default_enabled: false,
+  max_workflows: 16,
+  agents_per_run: null,
+  max_agents_total: 64,
+  swarmflow_budget: null,
+};
+
+/** 数字输入的草稿态：允许暂空（null），保存时统一校验，避免 onChange 回填默认值顶掉正在编辑的内容。 */
+type SwarmflowDraft = Omit<
+  SwarmflowConfig,
+  'max_workflows' | 'agents_per_run' | 'max_agents_total' | 'swarmflow_budget'
+> & {
+  max_workflows: number | null;
+  agents_per_run?: number | null;
+  max_agents_total: number | null;
+  swarmflow_budget?: number | null;
+};
+
+function parsePositiveInt(value: string): number | null {
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 1 ? n : null;
+}
+
 export function ExpertPackageTemplateModal({ open, template, onClose, onSaved, onConflict }: Props) {
   const { t } = useTranslation();
   const editing = template !== null;
@@ -44,6 +70,7 @@ export function ExpertPackageTemplateModal({ open, template, onClose, onSaved, o
   const [selected, setSelected] = useState<Selection[]>([]);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [swarmflow, setSwarmflow] = useState<SwarmflowDraft>(DEFAULT_SWARMFLOW);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -51,6 +78,7 @@ export function ExpertPackageTemplateModal({ open, template, onClose, onSaved, o
     if (template) {
       setName(template.template_name);
       setDescription(template.description || '');
+      setSwarmflow({ ...DEFAULT_SWARMFLOW, ...(template.swarmflow ?? {}) });
       setSelected((template.packages ?? []).map((item) => ({
         kind: item.kind,
         id: item.asset_id,
@@ -60,6 +88,7 @@ export function ExpertPackageTemplateModal({ open, template, onClose, onSaved, o
     } else {
       setName('');
       setDescription('');
+      setSwarmflow(DEFAULT_SWARMFLOW);
       setSelected([]);
     }
     setCatalogLoading(true);
@@ -114,6 +143,20 @@ export function ExpertPackageTemplateModal({ open, template, onClose, onSaved, o
       toast('danger', t('expertPackageTemplate.pickRequired'));
       return;
     }
+    const { max_workflows, max_agents_total } = swarmflow;
+    if (max_workflows === null) {
+      toast('danger', t('expertPackageTemplate.fieldRequired', {
+        field: t('expertPackageTemplate.swarmflowMaxWorkflows'),
+      }));
+      return;
+    }
+    if (max_agents_total === null) {
+      toast('danger', t('expertPackageTemplate.fieldRequired', {
+        field: t('expertPackageTemplate.swarmflowMaxAgentsTotal'),
+      }));
+      return;
+    }
+    const swarmflowPayload: SwarmflowConfig = { ...swarmflow, max_workflows, max_agents_total };
     const packages = selected.map((item) => ({
       kind: item.kind,
       asset_id: item.id,
@@ -126,6 +169,7 @@ export function ExpertPackageTemplateModal({ open, template, onClose, onSaved, o
           template_name: templateName,
           description: description.trim(),
           packages,
+          swarmflow: swarmflowPayload,
           expected_revision: template.revision ?? 0,
         });
       } else {
@@ -133,6 +177,7 @@ export function ExpertPackageTemplateModal({ open, template, onClose, onSaved, o
           template_name: templateName,
           description: description.trim(),
           packages,
+          swarmflow: swarmflowPayload,
           enabled: true,
         });
       }
@@ -222,6 +267,89 @@ export function ExpertPackageTemplateModal({ open, template, onClose, onSaved, o
       <div className="mb-4">
         <FieldLabel>{t('expertPackageTemplate.templateDescription')}</FieldLabel>
         <LimitedTextInput value={description} onChange={setDescription} maxLength={512} />
+      </div>
+      <div className="mb-4">
+        <div className="mb-2 text-sm font-medium">{t('expertPackageTemplate.swarmflowTitle')}</div>
+        <div className="rounded border border-border p-3">
+          <div className="flex items-center justify-between gap-3 py-1.5">
+            <div className="min-w-0">
+              <div className="text-sm">{t('expertPackageTemplate.swarmflowAllowed')}</div>
+              <div className="text-[11px] text-muted">{t('expertPackageTemplate.swarmflowAllowedHint')}</div>
+            </div>
+            <Switch
+              checked={swarmflow.allowed}
+              onChange={(value) => setSwarmflow((cur) => ({ ...cur, allowed: value }))}
+              aria-label={t('expertPackageTemplate.swarmflowAllowed')}
+            />
+          </div>
+          <div className="flex items-center justify-between gap-3 py-1.5">
+            <div className="min-w-0">
+              <div className="text-sm">{t('expertPackageTemplate.swarmflowDefaultEnabled')}</div>
+              <div className="text-[11px] text-muted">{t('expertPackageTemplate.swarmflowDefaultEnabledHint')}</div>
+            </div>
+            <Switch
+              checked={swarmflow.default_enabled}
+              onChange={(value) => setSwarmflow((cur) => ({ ...cur, default_enabled: value }))}
+              aria-label={t('expertPackageTemplate.swarmflowDefaultEnabled')}
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3 pt-2">
+            <div>
+              <label className="label">{t('expertPackageTemplate.swarmflowMaxWorkflows')}</label>
+              <input
+                type="number"
+                min={1}
+                step={1}
+                className="input w-full"
+                value={swarmflow.max_workflows ?? ''}
+                onChange={(e) =>
+                  setSwarmflow((cur) => ({ ...cur, max_workflows: parsePositiveInt(e.target.value) }))
+                }
+              />
+            </div>
+            <div>
+              <label className="label">{t('expertPackageTemplate.swarmflowAgentsPerRun')}</label>
+              <input
+                type="number"
+                min={1}
+                step={1}
+                className="input w-full"
+                placeholder={t('expertPackageTemplate.swarmflowAgentsPerRunHint')}
+                value={swarmflow.agents_per_run ?? ''}
+                onChange={(e) =>
+                  setSwarmflow((cur) => ({ ...cur, agents_per_run: parsePositiveInt(e.target.value) }))
+                }
+              />
+            </div>
+            <div>
+              <label className="label">{t('expertPackageTemplate.swarmflowMaxAgentsTotal')}</label>
+              <input
+                type="number"
+                min={1}
+                step={1}
+                className="input w-full"
+                value={swarmflow.max_agents_total ?? ''}
+                onChange={(e) =>
+                  setSwarmflow((cur) => ({ ...cur, max_agents_total: parsePositiveInt(e.target.value) }))
+                }
+              />
+            </div>
+            <div>
+              <label className="label">{t('expertPackageTemplate.swarmflowBudget')}</label>
+              <input
+                type="number"
+                min={1}
+                step={1}
+                className="input w-full"
+                placeholder={t('expertPackageTemplate.swarmflowBudgetHint')}
+                value={swarmflow.swarmflow_budget ?? ''}
+                onChange={(e) =>
+                  setSwarmflow((cur) => ({ ...cur, swarmflow_budget: parsePositiveInt(e.target.value) }))
+                }
+              />
+            </div>
+          </div>
+        </div>
       </div>
       <div>
         {catalogError && !catalogLoading && catalog.length === 0 ? (
