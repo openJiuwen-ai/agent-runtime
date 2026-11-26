@@ -154,31 +154,59 @@ function RouteView() {
     return <InstanceListPage />;
   }
   if (path === '/model-templates') {
-    return <ResourceWorkspaceFrame><ModelTemplatesPage /></ResourceWorkspaceFrame>;
+    return (
+      <div className="manager-page">
+        <ModelTemplatesPage />
+      </div>
+    );
   }
   if (path === '/embedding-templates') {
-    return <ResourceWorkspaceFrame><EmbeddingTemplatesPage /></ResourceWorkspaceFrame>;
+    return (
+      <div className="manager-page">
+        <EmbeddingTemplatesPage />
+      </div>
+    );
   }
   if (path === '/extension-config-templates') {
-    return <ResourceWorkspaceFrame><ExtensionTemplatesPage /></ResourceWorkspaceFrame>;
+    return (
+      <div className="manager-page">
+        <ExtensionTemplatesPage />
+      </div>
+    );
   }
   if (path === '/mcp-templates') {
-    return <ResourceWorkspaceFrame><McpTemplatesPage /></ResourceWorkspaceFrame>;
+    return (
+      <div className="manager-page">
+        <McpTemplatesPage />
+      </div>
+    );
   }
   if (path === '/skill-prebuilt-templates') {
-    return <ResourceWorkspaceFrame><SkillPrebuiltTemplatesPage /></ResourceWorkspaceFrame>;
+    return (
+      <div className="manager-page">
+        <SkillPrebuiltTemplatesPage />
+      </div>
+    );
   }
   if (path === '/container-templates') {
     return <ContainerTemplatesPage />;
   }
   if (path === '/safety-guardrails') {
-    return <ResourceWorkspaceFrame><SafetyGuardrailsPage /></ResourceWorkspaceFrame>;
+    return (
+      <div className="manager-page">
+        <SafetyGuardrailsPage />
+      </div>
+    );
   }
   if (path === '/execution-guard-templates') {
     return <ResourceWorkspaceFrame><ExecutionGuardrailsPage /></ResourceWorkspaceFrame>;
   }
   if (path === '/a2a-management') {
-    return <ResourceWorkspaceFrame><A2AManagementPage /></ResourceWorkspaceFrame>;
+    return (
+      <div className="manager-page">
+        <A2AManagementPage />
+      </div>
+    );
   }
   if (path === '/expert-packages') {
     return <Navigate to={`/manager/expert-package-templates${params.size ? `?${params}` : ''}`} replace />;

@@ -37,6 +37,13 @@
       - [Users](Core%20Features/Unified%20Management%20Platform/Identity%20Center/Users.md)
       - [Organizations](Core%20Features/Unified%20Management%20Platform/Identity%20Center/Organizations.md)
       - [Roles](Core%20Features/Unified%20Management%20Platform/Identity%20Center/Roles.md)
+  - User Guide
+    - [Sessions](Core%20Features/User%20Guide/Sessions.md)
+    - [Scheduled Tasks](Core%20Features/User%20Guide/Scheduled%20Tasks.md)
+    - [Experts](Core%20Features/User%20Guide/Experts.md)
+    - [Workspace](Core%20Features/User%20Guide/Workspace.md)
+    - [Team and Cluster Mode](Core%20Features/User%20Guide/Team%20and%20Cluster%20Mode.md)
+    - [Skills](Core%20Features/User%20Guide/Skills.md)
   - [Multi-Tenant Isolation](Core%20Features/Multi-Tenant%20Isolation.md)
   - [Resource Elasticity](Core%20Features/Resource%20Elasticity.md)
   - [End-to-End Security](Core%20Features/End-to-End%20Security.md)

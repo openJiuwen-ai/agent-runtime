@@ -114,8 +114,7 @@ interface Props {
 }
 
 export function ServiceConfigTemplateModal({ open, template, onClose, onSaved }: Props) {
-  const { t, i18n } = useTranslation();
-  const tr = (cn: string, en: string) => i18n.language.startsWith('zh') ? cn : en;
+  const { t } = useTranslation();
   const { markClean, isDirty } = useFormDirty(open);
   const [form, setForm] = useState<FormState>(() => runtimeTemplateForm());
   const [saving, setSaving] = useState(false);
@@ -192,7 +191,7 @@ export function ServiceConfigTemplateModal({ open, template, onClose, onSaved }:
       if (requestVersion.current !== version) return;
       setDefaultsPreview(preview);
       if (!preview.fingerprint || !preview.templates.length) {
-        setDefaultsError(preview.message || tr('暂无可读取的部署默认模板，请联系管理员检查部署配置。', 'No deployment defaults are available. Ask an administrator to check the deployment configuration.'));
+        setDefaultsError(preview.message || t('serviceConfigTemplate.defaultsUnavailable'));
         return;
       }
       setDefaultSelection(preview.templates[0].source_template_id);
@@ -204,21 +203,21 @@ export function ServiceConfigTemplateModal({ open, template, onClose, onSaved }:
     }
   };
 
-  const defaultTemplatePicker = !template && <section className="runtime-template-defaults" aria-label={tr('部署默认模板', 'Deployment defaults')}>
+  const defaultTemplatePicker = !template && <section className="runtime-template-defaults" aria-label={t('serviceConfigTemplate.defaultsSectionAria')}>
     <div className="runtime-template-defaults__header">
-      <div><h3>{tr('从默认配置开始', 'Start from the default configuration')}</h3><p>{tr('读取部署文件中的原始配置，填写完成后保存为新模板。', 'Read the original deployment configuration, then review and save a new template.')}</p></div>
-      <button type="button" className="btn" disabled={saving || loadingDefaults} onClick={() => void readDefaults()}>{loadingDefaults ? tr('读取中…', 'Reading…') : tr('读取默认模板', 'Read default template')}</button>
+      <div><h3>{t('serviceConfigTemplate.startFromDefault')}</h3><p>{t('serviceConfigTemplate.startFromDefaultHint')}</p></div>
+      <button type="button" className="btn" disabled={saving || loadingDefaults} onClick={() => void readDefaults()}>{loadingDefaults ? t('serviceConfigTemplate.reading') : t('serviceConfigTemplate.readDefaultTemplate')}</button>
     </div>
     {defaultsPreview && defaultsPreview.templates.length > 1 && <div className="runtime-template-defaults__selection">
-      <select className="select" aria-label={tr('选择默认模板', 'Choose a default template')} value={defaultSelection} disabled={loadingDefaults || saving} onChange={event => setDefaultSelection(event.target.value)}>{defaultsPreview.templates.map(item => <option key={item.source_template_id} value={item.source_template_id}>{item.template.template_name}</option>)}</select>
+      <select className="select" aria-label={t('serviceConfigTemplate.selectDefaultTemplate')} value={defaultSelection} disabled={loadingDefaults || saving} onChange={event => setDefaultSelection(event.target.value)}>{defaultsPreview.templates.map(item => <option key={item.source_template_id} value={item.source_template_id}>{item.template.template_name}</option>)}</select>
       <button type="button" className="btn" disabled={loadingDefaults || saving} onClick={() => {
         const item = defaultsPreview.templates.find(value => value.source_template_id === defaultSelection);
         if (item && defaultsPreview.fingerprint) chooseDefault(item, defaultsPreview.fingerprint);
-      }}>{tr('填入表单', 'Fill form')}</button>
+      }}>{t('serviceConfigTemplate.fillForm')}</button>
     </div>}
     {defaultsError && <p className="runtime-template-defaults__message text-danger" role="alert">{defaultsError}</p>}
-    {pendingDefault && <div className="runtime-template-defaults__confirm" role="group" aria-label={tr('替换当前填写内容', 'Replace current entries')}><p>{tr('读取默认模板会替换当前表单内容，是否继续？', 'Loading the default template will replace your current entries. Continue?')}</p><div className="runtime-template-defaults__actions"><button type="button" className="btn sm" onClick={() => setPendingDefault(null)}>{tr('保留当前填写', 'Keep current entries')}</button><button type="button" className="btn primary sm" onClick={() => applyDefault(pendingDefault.item, pendingDefault.fingerprint)}>{tr('替换当前填写', 'Replace entries')}</button></div></div>}
-    {loadedDefault && !pendingDefault && <p className="runtime-template-defaults__message" role="status">{tr('已读取默认配置。保存时创建新模板和配套容器，现有模板与集群绑定保持不变。', 'Default configuration loaded. Saving creates a new template and its containers; existing templates and cluster bindings are preserved.')}</p>}
+    {pendingDefault && <div className="runtime-template-defaults__confirm" role="group" aria-label={t('serviceConfigTemplate.replaceConfirmAria')}><p>{t('serviceConfigTemplate.replaceConfirm')}</p><div className="runtime-template-defaults__actions"><button type="button" className="btn sm" onClick={() => setPendingDefault(null)}>{t('serviceConfigTemplate.keepCurrent')}</button><button type="button" className="btn primary sm" onClick={() => applyDefault(pendingDefault.item, pendingDefault.fingerprint)}>{t('serviceConfigTemplate.replaceCurrent')}</button></div></div>}
+    {loadedDefault && !pendingDefault && <p className="runtime-template-defaults__message" role="status">{t('serviceConfigTemplate.defaultsLoaded')}</p>}
   </section>;
 
   const update = <K extends keyof FormState>(key: K, value: FormState[K]) =>
@@ -334,7 +333,7 @@ export function ServiceConfigTemplateModal({ open, template, onClose, onSaved }:
           {defaultTemplatePicker}
           <fieldset className="runtime-template-form__fields" disabled={saving || loadingDefaults}>
             <section className="runtime-template-section">
-              <GroupLabel>{t('serviceConfigTemplate.basicInfo', { defaultValue: '基本信息' })}</GroupLabel>
+              <GroupLabel>{t('serviceConfigTemplate.basicInfo')}</GroupLabel>
               <div className="runtime-template-grid">
                 <div className="runtime-template-field">
                   <FieldLabel required>{t('serviceConfigTemplate.templateName')}</FieldLabel>
@@ -360,8 +359,8 @@ export function ServiceConfigTemplateModal({ open, template, onClose, onSaved }:
 
             <section className="runtime-template-section">
               <div className="runtime-template-section__heading">
-                <GroupLabel hint={t('serviceConfigTemplate.containerSetupHint', { defaultValue: '选择主容器，按需添加 Sandbox 等辅助容器。' })}>
-                  {t('serviceConfigTemplate.containerSetup', { defaultValue: '容器配置' })}
+                <GroupLabel hint={t('serviceConfigTemplate.containerSetupHint')}>
+                  {t('serviceConfigTemplate.containerSetup')}
                 </GroupLabel>
                 <button type="button" className="btn sm" onClick={() => setContainerModalOpen(true)}>
                   + {t('containerTemplate.new')}
@@ -385,7 +384,7 @@ export function ServiceConfigTemplateModal({ open, template, onClose, onSaved }:
                 <summary>
                   <span className="runtime-template-disclosure__title">{t('serviceConfigTemplate.sidecarContainerBinding')}</span>
                   <span className="runtime-template-disclosure__meta">
-                    {form.sidecar_ids.length ? t('serviceConfigTemplate.selectedContainers', { count: form.sidecar_ids.length, defaultValue: `已选 ${form.sidecar_ids.length} 个` }) : t('common.optional', { defaultValue: '可选' })}
+                    {form.sidecar_ids.length ? t('serviceConfigTemplate.selectedContainers', { count: form.sidecar_ids.length }) : t('common.optional')}
                   </span>
                 </summary>
                 <div className="runtime-template-disclosure__body">
@@ -418,7 +417,7 @@ export function ServiceConfigTemplateModal({ open, template, onClose, onSaved }:
             <details className="runtime-template-disclosure">
               <summary>
                 <span className="runtime-template-disclosure__title">{t('redesign.capacityTimeout')}</span>
-                <span className="runtime-template-disclosure__meta">{t('serviceConfigTemplate.adjustAsNeeded', { defaultValue: '按需调整' })}</span>
+                <span className="runtime-template-disclosure__meta">{t('serviceConfigTemplate.adjustAsNeeded')}</span>
               </summary>
               <div className="runtime-template-disclosure__body runtime-template-grid">
                 {([
@@ -449,8 +448,8 @@ export function ServiceConfigTemplateModal({ open, template, onClose, onSaved }:
 
             <details className="runtime-template-disclosure">
               <summary>
-                <span className="runtime-template-disclosure__title">{t('serviceConfigTemplate.deploymentStorage', { defaultValue: '部署与存储' })}</span>
-                <span className="runtime-template-disclosure__meta">{t('serviceConfigTemplate.advancedParameters', { defaultValue: '高级参数' })}</span>
+                <span className="runtime-template-disclosure__title">{t('serviceConfigTemplate.deploymentStorage')}</span>
+                <span className="runtime-template-disclosure__meta">{t('serviceConfigTemplate.advancedParameters')}</span>
               </summary>
               <div className="runtime-template-disclosure__body runtime-template-grid">
                 <div className="runtime-template-field">

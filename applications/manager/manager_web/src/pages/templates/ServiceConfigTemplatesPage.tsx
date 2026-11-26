@@ -47,8 +47,7 @@ export function ServiceConfigTemplatesPage({
   autoNew?: boolean;
   autoEditId?: string;
 }) {
-  const { t, i18n } = useTranslation();
-  const tr = (cn: string, en: string) => i18n.language.startsWith('zh') ? cn : en;
+  const { t } = useTranslation();
   const { params, navigate } = useRouter();
   const catalogPath = runtimeCatalogPath('service-config-templates', params);
   const clusterReturnPath = runtimeClusterReturnPath(params);
@@ -286,18 +285,18 @@ export function ServiceConfigTemplatesPage({
 
   return (
     <>
-      <div className="flex min-w-0 flex-col gap-4">
+      <div className="manager-page flex min-w-0 flex-col gap-4">
         {clusterReturnPath && (
           <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
-            <span className="text-muted">正在为当前集群准备运行时模板。保存模板后，还需要返回集群添加运行资源绑定。</span>
+            <span className="text-muted">{t('serviceConfigTemplate.prepareClusterHint')}</span>
             <div className="flex flex-wrap gap-2">
-              <button className="btn sm" onClick={() => navigate(clusterReturnPath)}>← 返回集群运行资源</button>
-              {preparedReturnPath && <button className="btn sm primary" onClick={() => navigate(preparedReturnPath)}>绑定刚保存的运行时模板 →</button>}
+              <button className="btn sm" onClick={() => navigate(clusterReturnPath)}>{t('serviceConfigTemplate.backToClusterRuntime')}</button>
+              {preparedReturnPath && <button className="btn sm primary" onClick={() => navigate(preparedReturnPath)}>{t('serviceConfigTemplate.bindSavedRuntime')}</button>}
             </div>
           </div>
         )}
-        <div className="page-header runtime-catalog-header w-full min-w-0 flex-wrap items-start gap-y-3">
-          <div className="runtime-catalog-header__identity">
+        <div className="page-header w-full min-w-0 flex-wrap items-start gap-y-3">
+          <div className="min-w-[7.5rem] max-w-[20rem] shrink-0 sm:max-w-[32rem]">
             <div className="page-title truncate" title={t('serviceConfigTemplate.title')}>
               {t('serviceConfigTemplate.title')}
             </div>
@@ -305,12 +304,12 @@ export function ServiceConfigTemplatesPage({
               {t('serviceConfigTemplate.subtitle')}
             </div>
           </div>
-          <div className="runtime-catalog-header__toolbar">
+          <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
             <ListSearchInput
               value={searchInput}
               onChange={setSearchInput}
               placeholder={t('serviceConfigTemplate.searchPlaceholder')}
-              className="runtime-catalog-header__search"
+              className="basis-full sm:basis-auto"
             />
             <button className="btn sm" onClick={() => void reload()}>
               {t('common.refresh')}
@@ -350,7 +349,7 @@ export function ServiceConfigTemplatesPage({
           </div>
         </div>
       <div className="flex w-full min-w-0 shrink-0 flex-col gap-4">
-      <div className="card manager-page-table !p-0">
+      <div className="card !p-0">
         {loading ? (
           <div className="p-4 text-sm text-muted">{t('common.loading')}</div>
         ) : error ? (
@@ -415,7 +414,7 @@ export function ServiceConfigTemplatesPage({
                   <td className="align-top">
                     <div className="flex items-center gap-2">
                       <span className="text-text-strong font-medium break-words">{row.template_name}</span>
-                      {!!row.data?.deployment_default && <span className="tag shrink-0">{tr('默认', 'Default')}</span>}
+                      {!!row.data?.deployment_default && <span className="tag shrink-0">{t('serviceConfigTemplate.deploymentDefault')}</span>}
                     </div>
                     <div className="text-[11px] text-muted mono break-all" title={row.template_id}>
                       {row.template_id}
@@ -445,10 +444,10 @@ export function ServiceConfigTemplatesPage({
                         <button
                           className="btn sm primary"
                           disabled={!row.enabled}
-                          title={row.enabled ? '返回集群填写绑定范围并保存' : '请先启用此运行规格'}
+                          title={row.enabled ? t('serviceConfigTemplate.bindToClusterHint') : t('serviceConfigTemplate.enableFirstHint')}
                           onClick={() => { const target = runtimeClusterReturnPath(params, row.template_id); if (target) navigate(target); }}
                         >
-                          绑定到当前集群
+                          {t('serviceConfigTemplate.bindToCurrentCluster')}
                         </button>
                       )}
                       <button
@@ -487,8 +486,8 @@ export function ServiceConfigTemplatesPage({
           }}
         />
       )}
-      <WorkspaceNote title="模板准备好后，在集群中绑定运行资源" action={<button className="btn sm" onClick={() => navigate(runtimeCatalogPath('container-templates', params))}>管理容器 →</button>}>
-        运行时引用容器，定义运行池与调度方式。绑定到集群后，可按组织、用户或 Agent 设置使用范围。
+      <WorkspaceNote title={t('serviceConfigTemplate.workspaceNoteTitle')} action={<button className="btn sm" onClick={() => navigate(runtimeCatalogPath('container-templates', params))}>{t('serviceConfigTemplate.manageContainers')}</button>}>
+        {t('serviceConfigTemplate.workspaceNoteBody')}
       </WorkspaceNote>
       </div>
       </div>

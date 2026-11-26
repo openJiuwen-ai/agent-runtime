@@ -174,6 +174,7 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
 
   return (
     <>
+      {/* Full-bleed exception: cluster workbench tabs need the full content width. */}
       <div className={`cluster-detail-page cluster-detail-page--${tab} flex min-w-0 flex-col gap-4`}>
         <ClusterWorkspaceNavigation
           instanceId={instanceId}

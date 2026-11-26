@@ -97,15 +97,19 @@ export function ClusterManagementActions({ instanceId, name, namespace, onDelete
   }
 
   const busy = exporting || deleting || undeploying;
+  const sizeClass = size === 'sm' ? ' sm' : '';
+  // 列表操作列与模型页一致：小号 ghost；危险操作用 danger
+  const quietClass = `btn${sizeClass}${size === 'sm' ? ' ghost' : ''}`;
+  const dangerClass = `btn danger cluster-delete-button${sizeClass}`;
 
   return <>
-    <button type="button" className={`btn${size === 'sm' ? ' sm' : ''}`} disabled={busy} onClick={() => void exportConfiguration()}>
+    <button type="button" className={quietClass} disabled={busy} onClick={() => void exportConfiguration()}>
       {exporting ? tr('导出中…', 'Exporting…') : compact ? t('topology.export') : tr('导出配置', 'Export configuration')}
     </button>
-    {namespace && <button type="button" className={`btn danger cluster-delete-button${size === 'sm' ? ' sm' : ''}`} disabled={busy} onClick={() => { setError(null); setConfirmUndeployOpen(true); }}>
+    {namespace && <button type="button" className={dangerClass} disabled={busy} onClick={() => { setError(null); setConfirmUndeployOpen(true); }}>
       {t('topology.undeploy')}
     </button>}
-    <button type="button" className={`btn${size === 'sm' ? ' sm' : ''}`} disabled={busy} onClick={() => { setError(null); setConfirmOpen(true); }}>
+    <button type="button" className={quietClass} disabled={busy} onClick={() => { setError(null); setConfirmOpen(true); }}>
       {t('topology.unbind')}
     </button>
     <Modal open={confirmOpen} title={t('topology.unbind')} onClose={() => { if (!deleting) setConfirmOpen(false); }} footer={<>

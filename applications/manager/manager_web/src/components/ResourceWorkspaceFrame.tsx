@@ -7,6 +7,7 @@ import { useRouter } from '../router';
 /**
  * Resource pages share the same product rule: the catalog prepares reusable
  * definitions, while a specific Agent or cluster decides where they take effect.
+ * Width uses the shared .manager-page soft cap (1780px).
  */
 export function ResourceWorkspaceFrame({ children }: { children: ReactNode }) {
   const { t, i18n } = useTranslation();
@@ -15,7 +16,7 @@ export function ResourceWorkspaceFrame({ children }: { children: ReactNode }) {
   const resource = resourceCatalog.find((entry) => entry.path === path);
   const experts = path === '/expert-package-templates';
   return (
-    <div className="resource-workspace">
+    <div className="manager-page resource-workspace">
       {children}
       <WorkspaceNote title={resource ? t(`${resource.key}.title`) : t('nav.agentResources')}>
         {experts ? (zh

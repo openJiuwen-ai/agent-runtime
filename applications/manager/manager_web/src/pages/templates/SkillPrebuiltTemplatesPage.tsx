@@ -25,6 +25,7 @@ import {
 } from '../../utils/templateInUse';
 import { useRouter } from '../../router';
 import { ResourceExportButton, ResourceImportButton } from '../../components/ResourceImportExport';
+import { WorkspaceNote } from '../../components/WorkspaceNote';
 
 type SkillPrebuiltTemplateSortField =
   | 'template_name'
@@ -75,7 +76,8 @@ function InstallSourceCell({ row }: { row: SkillPrebuiltTemplate }) {
 }
 
 export function SkillPrebuiltTemplatesPage() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const zh = i18n.language.startsWith('zh');
   const { navigate } = useRouter();
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
@@ -238,7 +240,26 @@ export function SkillPrebuiltTemplatesPage() {
       </div>
 
       <div className="flex w-full min-w-0 shrink-0 flex-col gap-4">
-      <div className="card manager-page-table manager-page-table--hug !p-0">
+      <div className="card !p-0">
+        {loading ? (
+          <div className="p-4 text-sm text-muted">{t('common.loading')}</div>
+        ) : error ? (
+          <div className="p-4">
+            <div className="text-sm text-danger">{t('errors.loadFailed', { detail: error })}</div>
+            {installModeFilter ? (
+              <button
+                type="button"
+                className="btn sm mt-2"
+                onClick={() => {
+                  setInstallModeFilter('');
+                  setPage(1);
+                }}
+              >
+                {t('skillWhitelistTemplate.clearInstallFilter')}
+              </button>
+            ) : null}
+          </div>
+        ) : (
           <div className="overflow-x-auto">
           <table className="table w-max min-w-full">
             <thead>
@@ -310,29 +331,7 @@ export function SkillPrebuiltTemplatesPage() {
               </tr>
             </thead>
             <tbody>
-              {loading ? (
-                <tr>
-                  <td colSpan={8} className="p-4 text-sm text-muted">{t('common.loading')}</td>
-                </tr>
-              ) : error ? (
-                <tr>
-                  <td colSpan={8} className="p-4">
-                    <div className="text-sm text-danger">{t('errors.loadFailed', { detail: error })}</div>
-                    {installModeFilter ? (
-                      <button
-                        type="button"
-                        className="btn sm mt-2"
-                        onClick={() => {
-                          setInstallModeFilter('');
-                          setPage(1);
-                        }}
-                      >
-                        {t('skillWhitelistTemplate.clearInstallFilter')}
-                      </button>
-                    ) : null}
-                  </td>
-                </tr>
-              ) : pageItems.length === 0 ? (
+              {pageItems.length === 0 ? (
                 <tr>
                   <td colSpan={8}>
                     <Empty text={t('common.empty')} />
@@ -418,6 +417,7 @@ export function SkillPrebuiltTemplatesPage() {
             </tbody>
           </table>
           </div>
+        )}
       </div>
 
       {data && (
@@ -431,6 +431,14 @@ export function SkillPrebuiltTemplatesPage() {
           }}
         />
       )}
+
+      <WorkspaceNote title={t('skillWhitelistTemplate.title')}>
+        {t('skillWhitelistTemplate.subtitle')}
+        {zh ? '。' : '. '}
+        {zh
+          ? '保存后，在 Agent 或集群配置中引用；修改已被引用的资源前，请先查看关联模板和集群。'
+          : 'Reference saved resources from an Agent or cluster configuration. Review linked templates and clusters before changing a referenced resource.'}
+      </WorkspaceNote>
       </div>
       </div>
 

@@ -19,7 +19,7 @@ export function OverviewPage() {
   const healthy = rows.filter(allComponentsConnected);
   const attention = rows.filter(r => !healthy.includes(r));
   return <div className="workspace-overview">
-    <div className="page-header"><div><div className="workspace-eyebrow">WORKSPACE</div><h1 className="page-title">{tr('管理总览', 'Management overview')}</h1><p className="page-subtitle">{tr('从服务连接到 Agent 使用，掌握配置与运行环境。', 'Manage service connectivity, Agent configuration and environments.')}</p></div>
+    <div className="page-header"><div><h1 className="page-title">{tr('管理总览', 'Management overview')}</h1><p className="page-subtitle">{tr('从服务连接到 Agent 使用，掌握配置与运行环境。', 'Manage service connectivity, Agent configuration and environments.')}</p></div>
       <button className="btn" disabled={instances.loading || health.loading} onClick={() => { void instances.reload(); void health.reload(); }}>{tr('刷新状态', 'Refresh')}</button></div>
     <div className="overview-metrics">
       <div className="card"><span className="text-muted">{tr('管理 API', 'Management API')}</span><strong>{health.loading ? '…' : health.error ? tr('连接失败', 'Unavailable') : health.data?.status === 'ok' ? tr('连接正常', 'Connected') : tr('状态未知', 'Unknown')}</strong><small>{health.error || tr('表示管理服务是否可访问', 'Indicates whether the management service is accessible')}</small></div>
