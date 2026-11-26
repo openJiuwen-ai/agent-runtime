@@ -10,7 +10,6 @@ import { useFormDirty } from '../../hooks/useFormDirty';
 import { AgentTemplate, AgentTemplateApi, ApiError } from '../../services/api';
 import { toast } from '../../stores/uiStore';
 import { bumpGuideRevision } from '../../stores/guideStore';
-import { maskAgentClientSecrets } from '../../utils/agentClientRegistration';
 import { jsonContentForValidation } from '../../utils/jsonExample';
 import {
   findSingleValueTemplateRefViolation,
@@ -84,7 +83,6 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
   const { markClean, isDirty } = useFormDirty(open);
   const [form, setForm] = useState<FormState>(empty);
   const [saving, setSaving] = useState(false);
-  const [showSecrets, setShowSecrets] = useState(false);
   const currentTemplate = template;
   const busy = saving;
 
@@ -101,17 +99,12 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
       : empty;
     setForm(next);
     markClean(next);
-    setShowSecrets(false);
   }, [open, template, markClean]);
 
   const update = <K extends keyof FormState>(k: K, v: FormState[K]) =>
     setForm((s) => ({ ...s, [k]: v }));
 
   const customConfig = parseCustomConfig(form.custom_config_json);
-  const containsSecret = customConfig.value.some(
-    (entry) => typeof entry.client_secret === 'string' && entry.client_secret,
-  );
-  const hideSecrets = containsSecret && !showSecrets;
   const templateBody = () => {
     if (customConfig.error) {
       toast('warn', t('agentTemplate.customConfigInvalid'));
@@ -239,20 +232,11 @@ export function AgentTemplateModal({ open, template, onClose, onSaved }: Props) 
         <div className="md:col-span-2" data-testid="agent-template-custom-config">
           <JsonField
             label={t('agentTemplate.customConfig')}
-            value={hideSecrets ? maskAgentClientSecrets(customConfig.value) : form.custom_config_json}
+            value={form.custom_config_json}
             onChange={(value) => update('custom_config_json', value)}
             placeholder={'[\n  {\n    "xxx": "yyy",\n    "xxxz": "asdasd"\n  }\n]'}
             rows={7}
-            readOnly={busy || hideSecrets}
-            labelActions={containsSecret ? (
-              <button
-                type="button"
-                className="btn ghost sm"
-                onClick={() => setShowSecrets((value) => !value)}
-              >
-                {t(showSecrets ? 'agentTemplate.registration.hideSecret' : 'agentTemplate.registration.showSecret')}
-              </button>
-            ) : undefined}
+            readOnly={busy}
           />
           <p className="text-[11px] text-muted mt-1">{t('agentTemplate.customConfigHint')}</p>
           {customConfig.error === 'objectArray' && (

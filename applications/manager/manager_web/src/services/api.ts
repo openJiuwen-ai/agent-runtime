@@ -794,7 +794,9 @@ export interface AgentClientRegistrationCapabilities {
 
 export interface AgentClientBinding {
   client_id: string;
-  status: 'bound';
+  status: 'bound' | 'unbound';
+  operation: 'register' | 'delete' | null;
+  error: { action: 'register' | 'delete'; code: string } | null;
 }
 
 export interface AgentTemplate {
@@ -806,7 +808,6 @@ export interface AgentTemplate {
   enabled: boolean;
   data: Record<string, unknown> | null;
   reference_count?: number;
-  keycloak_client?: AgentClientBinding | null;
   created_at: string | null;
   updated_at: string | null;
 }
@@ -960,9 +961,14 @@ export const AgentClientRegistrationApi = {
   capabilities: () => http<AgentClientRegistrationCapabilities>(
     '/v1/integrations/keycloak/agent-client-registrations/capabilities',
   ),
-  register: (templateId: string, clientId: string) => http<AgentClientBinding>(
-    `/v1/agent-templates/${encodeURIComponent(templateId)}/keycloak-client`,
-    { method: 'POST', body: { client_id: clientId } },
+  get: (agentId: string) => http<AgentClientBinding>(
+    `/v1/agent-definitions/${encodeURIComponent(agentId)}/keycloak-client`,
+  ),
+  register: (agentId: string) => http<AgentClientBinding>(
+    `/v1/agent-definitions/${encodeURIComponent(agentId)}/keycloak-client`, { method: 'POST' },
+  ),
+  remove: (agentId: string) => http<AgentClientBinding>(
+    `/v1/agent-definitions/${encodeURIComponent(agentId)}/keycloak-client`, { method: 'DELETE' },
   ),
 };
 
@@ -1000,6 +1006,7 @@ export const BotApi = AgentTemplateApi;
 
 /** Agent 模板（agent_definition）：管理员手动创建的 Agent 配置模板与运行时模板组合。 */
 export interface AgentDefinition {
+  keycloak_client: AgentClientBinding;
   agent_id: string;
   agent_name: string;
   agent_config_template_id: string;

@@ -189,7 +189,7 @@ AGENT_TEMPLATE_OPERATION_KEY = "_jiuwen_template_operation"
 
 
 def validate_agent_template_data(data: dict[str, Any] | None) -> dict[str, Any] | None:
-    for key in (MANAGED_AGENT_CLIENT_KEY, AGENT_TEMPLATE_OPERATION_KEY):
+    for key in (MANAGED_AGENT_CLIENT_KEY, AGENT_TEMPLATE_OPERATION_KEY, "managed_agent_clients"):
         if data is not None and key in data:
             raise ValueError(f"data.{key} is managed by the server")
     if data is not None and "custom_config" in data:
