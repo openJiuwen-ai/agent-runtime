@@ -15,6 +15,7 @@ class WorkspaceQuotaEffectiveQuery(BaseModel):
     user_id: str = Field(..., min_length=1)
     group_id: str = Field(..., min_length=1)
     bot_id: str = Field(..., min_length=1)
+    agent_id: str = Field(default="", description="Agent 标识；为空表示不带 agent_id 维度匹配")
 
 
 class WorkspaceQuotaPolicyListQuery(BaseModel):

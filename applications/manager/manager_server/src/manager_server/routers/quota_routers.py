@@ -171,6 +171,7 @@ async def get_workspace_quota_effective(
         user_id=query.user_id,
         group_id=query.group_id,
         bot_id=query.bot_id,
+        agent_id=query.agent_id,
     )
     if data is None:
         raise HTTPException(status_code=404, detail="no matching workspace quota policy")

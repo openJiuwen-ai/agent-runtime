@@ -11,7 +11,7 @@ import ast
 import json
 from typing import Any, Iterator
 
-ALLOWED_MATCH_NAMES = frozenset({"user_id", "group_id", "bot_id"})
+ALLOWED_MATCH_NAMES = frozenset({"user_id", "group_id", "bot_id", "agent_id"})
 # Agent 资源授权范围仅用户 / 群组，不允许按 agent（bot_id）匹配。
 AGENT_RESOURCE_MATCH_NAMES = frozenset({"user_id", "group_id"})
 
@@ -122,6 +122,7 @@ def evaluate_match_expr(
     user_id: str = "",
     group_id: str = "",
     bot_id: str = "",
+    agent_id: str = "",
 ) -> bool:
     """对当前请求上下文求值；失败或不命中返回 ``False``。"""
     try:
@@ -132,6 +133,7 @@ def evaluate_match_expr(
             "user_id": str(user_id or ""),
             "group_id": str(group_id or ""),
             "bot_id": str(bot_id or ""),
+            "agent_id": str(agent_id or ""),
         }
         if isinstance(canon, list):
             return any(_eval_expr_string(item, ctx) for item in canon)

@@ -21,6 +21,7 @@ from openjiuwen_runtime.foundation.db.handler import DBHandler
 from pydantic import BaseModel, Field
 
 from manager_server.core.approval import ApprovalService
+from manager_server.core.authz.service import AuthzService
 from manager_server.core.skill_upload.errors import SkillUploadError
 from manager_server.core.skill_upload.service import SkillUploadService
 from manager_server.core.user_console import UserConsoleService
@@ -146,14 +147,22 @@ async def resolve_user_face_upstream(
 ) -> Response:
     """鉴权 + 按 Cookie 下发用户面上游 origin（供 nginx ``auth_request_set``）。
 
-    响应头：``X-Gateway-Http-Upstream`` / ``X-Gateway-Ws-Upstream``。
+    响应头：``X-User-Web-Upstream`` / ``X-Gateway-Http-Upstream`` / ``X-Gateway-Ws-Upstream``。
+
+    ``platform_admin`` 跳过 ``instance_grant`` 准入检查：平台管理员需要跨所有实例
+    读取 gateway-api 资源（团队配额策略等），不应被逐实例授权表挡住。
     """
+    uid = str(getattr(user, "user_id", "") or "")
+    # platform_admin 跨实例管理，instance_grant 不强制覆盖所有用户/实例组合；
+    # 这里只判定是否平台管理员，不在 hot path 内做角色列表加载（authz 内部已缓存）。
+    bypass_admission = await AuthzService(handler).is_platform_admin(uid)
     try:
         upstreams = await resolve_user_face_upstreams(
             handler,
-            user_id=str(getattr(user, "user_id", "") or ""),
+            user_id=uid,
             groups=list(getattr(user, "groups", []) or []),
             jiuwenclaw_id=jiuwenclaw_id,
+            bypass_admission=bypass_admission,
         )
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc

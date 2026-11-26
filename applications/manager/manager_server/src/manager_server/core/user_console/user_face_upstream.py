@@ -187,19 +187,25 @@ async def resolve_user_face_upstreams(
     user_id: str,
     groups: list[str] | None,
     jiuwenclaw_id: str | None,
+    bypass_admission: bool = False,
 ) -> UserFaceUpstreams:
     """解析当前请求应反代的 Gateway 上游；无 Cookie 时直接回退默认。
 
+    ``bypass_admission=True`` 跳过 ``instance_grant`` 准入检查，仅放行给
+    ``platform_admin`` 等特权调用方——平台管理员需要跨所有实例读取
+    gateway-api 资源（团队配额策略等），不应被逐实例授权表挡住。
+
     Raises:
         PermissionError: Cookie 指向的实例当前用户无权访问。
-        LookupError: Cookie 指向的实例不存在。
+        LookupError: Cookie 指向的实例不存在（``bypass_admission=True`` 时回退到
+            默认上游而非抛错，给 platform_admin 跨实例管理用）。
     """
     defaults = _defaults()
     jid = str(jiuwenclaw_id or "").strip()
     uid = str(user_id or "").strip()
     # Cache only upstream mappings, not authorization decisions: grants may be
     # revoked/disabled/expired and a refreshed token can have different groups.
-    if jid:
+    if jid and not bypass_admission:
         admitted = await UserConsoleService(handler).user_can_access_instance(uid, jid, groups)
         if not admitted:
             raise PermissionError(f"instance not admitted: {jid}")
@@ -227,6 +233,20 @@ async def resolve_user_face_upstreams(
 
     row = await get_instance_row(handler, jid)
     if row is None:
+        # platform_admin 跨实例管理：cookie 指向的实例在 manager_dyx 不存在
+        # （常见于从 user web 跳进来带别的集群的 jiuwenclaw_id）时，回退到
+        # 默认上游继续请求，让 gateway 决定能否服务，而不是直接 403。
+        if bypass_admission:
+            _cache_set(cache_key, defaults)
+            _log.info(
+                "user_face_upstream_bypass_missing_instance",
+                user_id=uid,
+                jiuwenclaw_id=jid,
+                user_web=defaults.user_web,
+                gateway_http=defaults.gateway_http,
+                gateway_ws=defaults.gateway_ws,
+            )
+            return defaults
         raise LookupError(f"instance not found: {jid}")
 
     raw_gateway = getattr(row, "gateway_host", None)

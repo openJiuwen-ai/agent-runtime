@@ -87,6 +87,7 @@ def select_effective_policy(
     user_id: str,
     group_id: str,
     bot_id: str,
+    agent_id: str = "",
 ) -> Any | None:
     """同一集群的启用行里，命中且 priority 最小的一条。"""
     hits: list[Any] = []
@@ -98,6 +99,7 @@ def select_effective_policy(
             user_id=user_id,
             group_id=group_id,
             bot_id=bot_id,
+            agent_id=agent_id,
         ):
             hits.append(row)
     if not hits:
@@ -295,6 +297,7 @@ class WorkspaceQuotaPolicyService:
         user_id: str,
         group_id: str,
         bot_id: str,
+        agent_id: str = "",
     ) -> dict[str, Any] | None:
         cid = cluster_id.strip()
         rows = await self.list_enabled(cluster_id=cid)
@@ -303,6 +306,7 @@ class WorkspaceQuotaPolicyService:
             user_id=user_id,
             group_id=group_id,
             bot_id=bot_id,
+            agent_id=agent_id,
         )
         if chosen is None:
             return None
