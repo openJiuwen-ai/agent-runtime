@@ -12,6 +12,11 @@ from manager_server.core.template.push_template_to_gateway import (
     count_agent_template_reference_counts,
     update_template_on_referencing_gateways,
     delete_template_on_referencing_gateways,
+    resync_react_templates_referencing_model,
+)
+from manager_server.core.template.compressor_model_resolver import (
+    count_react_model_reference_counts,
+    count_react_model_references,
 )
 from manager_server.schemas.template_schemas import (
     ModelTemplateCreateBody,
@@ -33,6 +38,20 @@ _ALLOWED_SORT_FIELDS = frozenset({
     "model_type",
     "api_base",
     "updated_at",
+})
+
+# 压缩器内联配置（model/model_client）只依赖这些字段：仅当它们变更时才需要
+# 重推引用本模型的 react 模板，避免改 template_name/description 等无关字段时额外全量重推。
+_RESOLVER_RELEVANT_FIELDS = frozenset({
+    "model_id",
+    "model_provider",
+    "api_key",
+    "api_base",
+    "timeout",
+    "retry_count",
+    "verify_ssl",
+    "parameters",
+    "data",
 })
 
 
@@ -80,10 +99,13 @@ class ModelTemplateService:
         self._handler = handler
 
     async def _reference_counts(self) -> dict[str, int]:
-        """被引用数：引用本类模板的 Agent 模板数（模型各槽位）。"""
-        return await count_agent_template_reference_counts(
+        """被引用数：Agent 模板各模型槽位引用数 + react 模板压缩器引用数（与删除保护同源）。"""
+        counts = await count_agent_template_reference_counts(
             self._handler, slot_keys=MODEL_TEMPLATE_SLOTS
         )
+        for model_id, num in (await count_react_model_reference_counts(self._handler)).items():
+            counts[model_id] = counts.get(model_id, 0) + num
+        return counts
 
     @staticmethod
     def _build_row_for_create(
@@ -233,6 +255,11 @@ class ModelTemplateService:
         )
         if row is None:
             return None
+        # 模型模板变更已落库后再重推引用它的 react 模板，
+        # 确保 resolver 读到的是最新模型配置（避免网关内联过期配置）。
+        # 仅当模型解析相关字段变化才重推；resync 内部已 try/except，失败只记日志不阻断更新。
+        if _RESOLVER_RELEVANT_FIELDS & updates.keys():
+            await resync_react_templates_referencing_model(self._handler, template_id)
         counts = await self._reference_counts()
         return row_to_out(row, reference_count=counts.get(str(row.template_id), 0))
 
@@ -242,6 +269,11 @@ class ModelTemplateService:
         )
         if row is None:
             return False
+        react_refs = await count_react_model_references(self._handler, template_id)
+        if react_refs > 0:
+            raise ValueError(
+                f"cannot delete model template: referenced by {react_refs} react template(s)"
+            )
         await assert_template_deletable(
             self._handler, template_id, "model_templates"
         )

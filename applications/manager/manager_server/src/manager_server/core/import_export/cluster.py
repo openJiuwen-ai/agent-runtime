@@ -19,7 +19,11 @@ from manager_server.core.template.push_template_to_gateway import (
     rebuild_jid_template_ref_for_gateway,
     slot_template_pairs_from_template_ref,
 )
+from manager_server.core.template.compressor_model_resolver import (
+    extract_react_model_template_ids,
+)
 from manager_server.infrastructure.config import settings
+from manager_server.infrastructure.logger import get_logger
 from manager_server.infrastructure.match_expr import (
     canonicalize_match_expr,
     iter_equality_binds,
@@ -51,6 +55,7 @@ from manager_server.models.template_models import (
     MCP_TEMPLATE_TABLE_DEF,
     MODEL_TEMPLATE_TABLE_DEF,
     PERMISSIONS_TEMPLATE_TABLE_DEF,
+    REACT_TEMPLATE_TABLE_DEF,
     SERVICE_CONFIG_CONTAINER_TABLE_DEF,
     SERVICE_CONFIG_TEMPLATE_TABLE_DEF,
     SKILL_PREBUILT_TEMPLATE_TABLE_DEF,
@@ -64,6 +69,7 @@ from manager_server.schemas.template_schemas import (
     McpTemplateCreateBody,
     ModelTemplateCreateBody,
     PermissionsTemplateCreateBody,
+    ReactTemplateCreateBody,
     ServiceConfigTemplateCreateBody,
     SkillPrebuiltTemplateCreateBody,
 )
@@ -82,6 +88,8 @@ from .roles import (
     role_preflight_actions,
 )
 from .workbook import SENSITIVE_REDACTED
+
+logger = get_logger(__name__)
 
 _AUDIT_FIELDS = {"id", "created_at", "updated_at", "created_by", "updated_by", "granted_by"}
 _INSTANCE_RUNTIME_FIELDS = {
@@ -165,6 +173,7 @@ TABLE_SPECS: tuple[TableSpec, ...] = (
     TableSpec("15_ExtensionTemplates", EXTENSION_CONFIG_TEMPLATE_TABLE_DEF, ("template_id",)),
     TableSpec("16_MCPTemplates", MCP_TEMPLATE_TABLE_DEF, ("template_id",)),
     TableSpec("17_PermissionTemplates", PERMISSIONS_TEMPLATE_TABLE_DEF, ("template_id",)),
+    TableSpec("35_ReactTemplates", REACT_TEMPLATE_TABLE_DEF, ("template_id",)),
     TableSpec("18_A2ASettings", A2A_DISCOVERY_SETTINGS_TABLE_DEF, ("settings_id",)),
     TableSpec(
         "19_A2AAgents",
@@ -218,6 +227,7 @@ _SLOT_TABLE = {
     "extension_config": "extension_config_template",
     "mcp": "mcp_template",
     "permissions": "permissions_template",
+    "react": "react_template",
     "a2a_access_policy": "a2a_access_policy_template",
 }
 
@@ -230,6 +240,7 @@ _IMPORT_ORDER = (
     "extension_config_template",
     "mcp_template",
     "permissions_template",
+    "react_template",
     "a2a_outbound_template",
     "a2a_access_policy_template",
     "service_config_container",
@@ -282,6 +293,7 @@ _SHEET_ORDER = (
     "32_RuntimeVolumes",
     "33_ContainerTemplates",
     "34_ContainerDetails",
+    "35_ReactTemplates",
     "40_Roles",
     "41_RolePermissions",
     "42_RoleAssignments",
@@ -303,6 +315,7 @@ _CREATE_SCHEMAS: dict[str, Any] = {
     "extension_config_template": ExtensionConfigTemplateCreateBody,
     "mcp_template": McpTemplateCreateBody,
     "permissions_template": PermissionsTemplateCreateBody,
+    "react_template": ReactTemplateCreateBody,
     "a2a_access_policy_template": A2AAccessPolicyTemplateCreateBody,
     "agent_template": AgentTemplateCreateBody,
     "service_config_template": ServiceConfigTemplateCreateBody,
@@ -541,6 +554,27 @@ async def _collect_rows(handler: DBHandler, jiuwenclaw_id: str) -> dict[str, lis
             if row is not None:
                 collected.append(_row_dict(row, table_def))
         rows[table] = collected
+
+    # react 模板的 data body 通过 model_template_id 引用模型模板；补充收集这些被引用的
+    # model_template 行，避免导出工作簿缺失仅被 react 引用的模型（如专用压缩器模型）。
+    react_model_ids: set[str] = set()
+    for react_row in rows.get("react_template", []):
+        data = react_row.get("data")
+        if not isinstance(data, dict):
+            # data 非 dict（异常数据）时无法提取模型引用，记日志避免静默漏收集模型行。
+            logger.warning(
+                "[export] react template %s data is not a dict; skip model collection",
+                react_row.get("template_id"),
+            )
+            continue
+        react_model_ids.update(extract_react_model_template_ids(data))
+    if react_model_ids:
+        model_rows = rows.setdefault("model_template", [])
+        existing = {str(r.get("template_id") or "") for r in model_rows}
+        for model_id in sorted(react_model_ids - existing):
+            row = await handler.get("model_template", {"template_id": model_id})
+            if row is not None:
+                model_rows.append(_row_dict(row, DEF_BY_TABLE["model_template"]))
 
     policies = rows.get("a2a_access_policy_template", [])
     if policies:
@@ -939,6 +973,10 @@ def _decode_workbook(
     for sheet_name, spec in SPEC_BY_SHEET.items():
         sheet = sheets.get(sheet_name)
         if sheet is None:
+            if spec.table == "react_template":
+                # 35_ReactTemplates 为本版本新增页：旧工作簿没有该页时按空处理，不阻断导入。
+                rows_by_table[spec.table] = []
+                continue
             raise ValueError(f"missing required sheet: {sheet_name}")
         columns = {
             column.name: column for column in _columns(spec.table_def, excluded=spec.excluded)
@@ -1117,6 +1155,31 @@ def _validate_import_rows(rows: dict[str, list[dict[str, Any]]]) -> list[dict[st
         for row in values:
             object_id = "|".join(str(v or "") for v in _unique_filters(table, row).values())
             if schema is not None:
+                # react_template 的传输字段是 body、落库列是 data；校验前归一，校验后写回 data。
+                # data 缺失/NULL 按空 body 校验（空 body 是合法 react 配置），不阻断导入；
+                # 其它非 dict 形态属脏数据：产出非阻断 warning，该行不入库
+                # （脏数据入库会导致后续推送被永久跳过），原值保留在工作簿中供人工修复。
+                if table == "react_template" and "body" not in row:
+                    data = row.get("data")
+                    if isinstance(data, dict):
+                        row["body"] = data
+                    else:
+                        row["body"] = {}
+                        if data is not None:
+                            actions.append(
+                                {
+                                    "scope": "workbook",
+                                    "object_type": table,
+                                    "object_id": object_id,
+                                    "action": "warning",
+                                    "detail": "react data is not a dict; "
+                                    "row skipped, fix the workbook row and re-import",
+                                }
+                            )
+                            row["_import_skip"] = True
+                            # 脏行立即跳过后续 schema/必填校验，避免用伪造的空 body
+                            # 派生出与「跳过」矛盾的 conflict/missing_dependency。
+                            continue
                 body = {key: value for key, value in row.items() if key in schema.model_fields}
                 try:
                     normalized = schema.model_validate(body).model_dump()
@@ -1133,6 +1196,12 @@ def _validate_import_rows(rows: dict[str, list[dict[str, Any]]]) -> list[dict[st
                     continue
                 # Business IDs and snapshot-only columns are not CreateBody fields.
                 row.update(normalized)
+                if table == "react_template" and "body" in normalized:
+                    # 仅 dict/缺失/NULL 的 data 用校验后的 body 归一；其它形态保留原值。
+                    original_data = row.get("data")
+                    if original_data is None or isinstance(original_data, dict):
+                        row["data"] = normalized["body"]
+                    row.pop("body", None)
             missing = []
             for column in table_def.columns:
                 if column.nullable or column.autoincrement or column.name in _AUDIT_FIELDS:
@@ -1151,6 +1220,14 @@ def _validate_import_rows(rows: dict[str, list[dict[str, Any]]]) -> list[dict[st
                         "detail": f"missing required field(s): {', '.join(missing)}",
                     }
                 )
+    # 移除标记为跳过的脏行（如 react data 非 dict）：避免脏数据入库后推送被永久跳过。
+    for table, values in rows.items():
+        kept = []
+        for row in values:
+            if row.pop("_import_skip", False):
+                continue
+            kept.append(row)
+        rows[table] = kept
     return actions
 
 
@@ -1499,6 +1576,11 @@ async def _dependency_actions(
             if table:
                 key = "policy_id" if table == "a2a_access_policy_template" else "template_id"
                 await require(table, key, template_id, "agent_template")
+    for item in rows.get("react_template", []):
+        data = item.get("data")
+        if isinstance(data, dict):
+            for model_id in extract_react_model_template_ids(data):
+                await require("model_template", "template_id", model_id, "react_template")
     for item in rows.get("service_config_template", []):
         await require(
             "service_config_container",
