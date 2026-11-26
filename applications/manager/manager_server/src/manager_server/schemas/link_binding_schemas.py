@@ -6,12 +6,14 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from manager_server.schemas.common_schemas import INT32_MAX
+
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 
 
 class LinkBindingCreateBody(BaseModel):
     mtls_binding_id: str = Field(..., min_length=1, max_length=64)
-    mtls_binding_epoch: int = Field(..., ge=1)
+    mtls_binding_epoch: int = Field(..., ge=1, le=INT32_MAX)
     mtls_gateway_endpoint: str = Field(..., min_length=1, max_length=128)
     mtls_runtime_endpoint: str = Field(..., min_length=1, max_length=128)
     manager_cert_fingerprint: str = Field(..., pattern=_SHA256_PATTERN)

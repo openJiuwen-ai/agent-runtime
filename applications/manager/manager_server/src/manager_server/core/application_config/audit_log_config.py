@@ -13,9 +13,26 @@ from openjiuwen_runtime.foundation.audit import (
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 
 from manager_server.manager_config_push import gateway_request
+from manager_server.schemas.common_schemas import INT32_MAX
 
 _AUDIT_LOG_CONFIG_TABLE = "audit_log_config"
 _GATEWAY_PATH = "/api/v1/audit-log"
+
+
+def _require_int32(
+    value: Any,
+    *,
+    field: str,
+    default: int,
+    minimum: int = 0,
+    maximum: int = INT32_MAX,
+) -> int:
+    raw = default if value is None else value
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        raise ValueError(f"{field} must be an integer")
+    if raw < minimum or raw > maximum:
+        raise ValueError(f"{field} must be between {minimum} and {maximum}")
+    return raw
 
 
 def _format_ts(dt: datetime | None) -> str | None:
@@ -95,7 +112,12 @@ def _project_flat_columns(body: Mapping[str, Any]) -> dict[str, Any]:
         "node": body.get("node"),
         "ntp_servers": servers,
         "ntp_sync_interval": str(ntp.get("sync_interval") or "300s"),
-        "ntp_max_offset_ms": int(ntp.get("max_offset_ms") or 500),
+        "ntp_max_offset_ms": _require_int32(
+            ntp.get("max_offset_ms"),
+            field="ntp.max_offset_ms",
+            default=500,
+            minimum=0,
+        ),
         "ntp_failover": bool(ntp.get("failover", True)),
     }
 

@@ -20,6 +20,7 @@ import { ListSearchInput } from '../../../components/ListSearchInput';
 import { HintTooltip } from '../../../components/HintTooltip';
 import { toast } from '../../../stores/uiStore';
 import { formatTime, truncate } from '../../../utils/format';
+import { INT32_MAX, INT32_MIN, isInt32 } from '../../../utils/intBounds';
 
 const SOURCE_OPTIONS = ['builtin', 'custom'] as const;
 
@@ -153,7 +154,7 @@ export function LogMaskingTab({ instanceId }: { instanceId: string }) {
       toast('warn', t('instanceConfig.logMasking.fieldRequired', { field: missing.label }));
       return;
     }
-    if (!Number.isFinite(form.priority)) {
+    if (!isInt32(form.priority)) {
       toast('warn', t('instanceConfig.logMasking.priorityInvalid'));
       return;
     }
@@ -437,6 +438,8 @@ export function LogMaskingTab({ instanceId }: { instanceId: string }) {
                 className="input w-full"
                 type="number"
                 step={1}
+                min={INT32_MIN}
+                max={INT32_MAX}
                 value={Number.isInteger(form.priority) ? form.priority : ''}
                 onChange={(e) => {
                   const raw = e.target.value;

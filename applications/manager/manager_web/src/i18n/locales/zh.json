@@ -44,7 +44,9 @@
     "updatedAt": "更新时间",
     "configRefreshCost": "保存后将下发到网关并触发运行时强制刷新（config_refresh）：该运行时下全部 AgentServer Pod 会优雅日落并按新配置重建。存量会话不受影响；重建期间新会话可能冷启动变慢，短时间内连续变更可能被容量保护暂时拒绝，稍后会自动恢复。",
     "configRefreshCostTemplate": "该模板已被实例引用时，保存将把变更下发到网关并触发运行时强制刷新（config_refresh）：对应运行时下全部 AgentServer Pod 优雅日落并按新配置重建。存量会话不受影响；重建期间新会话可能冷启动变慢，短时间内连续变更可能被容量保护暂时拒绝，稍后会自动恢复。",
-    "optional": "可选"
+    "optional": "可选",
+    "int32OutOfRange": "须为 -2147483648～2147483647 的整数",
+    "nonNegInt32OutOfRange": "须为 0～2147483647 的整数"
   },
   "importExport": {
     "import": "导入",
@@ -510,7 +512,8 @@
         "scopeLabel": "授权范围",
         "scopeAll": "全员可用",
         "priority": "优先级",
-        "priorityHint": "越小越优先。同一集群里，启用中的策略不能使用相同优先级。",
+        "priorityHint": "越小越优先。同一集群里，启用中的策略不能使用相同优先级。取值范围 -2147483648～2147483647。",
+        "priorityInvalid": "优先级须为 -2147483648～2147483647 的整数",
         "grantedBy": "授权人",
         "expiresAt": "过期时间",
         "neverExpires": "永不过期",
@@ -561,7 +564,7 @@
       "sourceApproval": "审批",
       "locked": "已锁定",
       "lockedHint": "审批来源策略已锁定，不可编辑配额与匹配范围；可停用或删除。改额度请走扩容审批。",
-      "invalidPriority": "优先级须为大于等于 0 的整数",
+      "invalidPriority": "优先级须为 0～2147483647 的整数",
       "disableTitle": "停用策略",
       "disableMessage": "停用后，原本命中这条策略的主体会改走下一条命中规则。确定停用？",
       "lowerTitle": "下调配额",
@@ -622,7 +625,7 @@
       "maxTeammates": "每团队最多人数（含 Leader）",
       "maxTeammatesHint": "整队上限，含 Leader。填 5 = Leader + 最多 4 名队员。join 不占额，spawn 才占。",
       "updatedAt": "更新时间",
-      "invalidPriority": "优先级须为整数",
+      "invalidPriority": "优先级须为 0～2147483647 的整数",
       "invalidLimit": "上限须为 1 到 1000 的整数",
       "invalidOrgLimit": "每组织最多团队数须为 0 到 1000 的整数，0 表示不限制",
       "fieldRequired": "请填写{{field}}",
@@ -674,7 +677,7 @@
       "replacement": "替换文本",
       "priority": "优先级",
       "priorityHint": "按优先级从小到大依次应用脱敏规则。同一集群里，启用中的规则不能使用相同优先级。",
-      "priorityInvalid": "请填写有效的优先级",
+      "priorityInvalid": "优先级须为 -2147483648～2147483647 的整数",
       "withFingerprint": "附带指纹",
       "withFingerprintHint": "开启后脱敏结果会附带不可逆指纹，便于在日志中关联同一敏感值；关闭则仅使用替换文本。",
       "source": "来源",
@@ -713,7 +716,7 @@
       "deleted": "已删除托管配置，Gateway 将回退到 config.yaml",
       "maxJobs": "每个用户允许运行的定时任务数",
       "maxJobsHint": "只统计当前启用且未过期的定时任务。填 0 时，面板不能再启用新任务。",
-      "invalid": "请填写大于或等于 0 的整数"
+      "invalid": "请填写 0～2147483647 的整数"
     },
     "logging": {
       "intro": "对应 config.yaml 的 logging 段。保存后写入 Manager DB 并下发至 Gateway 热更新；未托管时使用实例本地 config.yaml。",
@@ -844,7 +847,7 @@
     "updatedAt": "更新时间",
     "fieldRequired": "请填写{{field}}",
     "apiBaseInvalid": "API Base 须为合法的 http(s) URL，例如 https://api.example.com/v1",
-    "timeoutMin": "超时需大于 0",
+    "timeoutMin": "超时须为 1～2147483647 的整数",
     "retryCountMin": "重试次数不能小于 0",
     "unsafeText": "{{field}} 含有非法 HTML/脚本或疑似 SQL 注入内容，请修改后重试",
     "deleteConfirm": "确认删除该模型模板？"

@@ -6,13 +6,15 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from manager_server.schemas.common_schemas import INT32_MAX, INT32_MIN
+
 
 class LogMaskingRuleCreateBody(BaseModel):
     rule_name: str = Field(..., max_length=128)
     description: str | None = Field(default=None, max_length=512)
     pattern: str = Field(..., min_length=1)
     replacement: str | None = Field(default=None, max_length=64)
-    priority: int = 0
+    priority: int = Field(default=0, ge=INT32_MIN, le=INT32_MAX)
     with_fingerprint: bool = False
     enabled: bool = True
     data: dict[str, Any] | None = None
@@ -23,7 +25,7 @@ class LogMaskingRuleUpdateBody(BaseModel):
     description: str | None = Field(default=None, max_length=512)
     pattern: str | None = None
     replacement: str | None = Field(default=None, max_length=64)
-    priority: int | None = None
+    priority: int | None = Field(default=None, ge=INT32_MIN, le=INT32_MAX)
     with_fingerprint: bool | None = None
     enabled: bool | None = None
     data: dict[str, Any] | None = None
