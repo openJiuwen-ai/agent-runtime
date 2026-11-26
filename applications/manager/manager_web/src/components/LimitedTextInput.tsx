@@ -10,6 +10,11 @@ interface LimitedTextInputProps {
   placeholder?: string;
   disabled?: boolean;
   required?: boolean;
+  /** 关联 `<datalist id=…>`，用于可输入下拉建议 */
+  list?: string;
+  onFocus?: () => void;
+  onBlur?: () => void;
+  autoComplete?: string;
 }
 
 function truncate(value: string, limit: number): string {
@@ -31,6 +36,10 @@ export function LimitedTextInput({
   placeholder,
   disabled,
   required,
+  list,
+  onFocus,
+  onBlur,
+  autoComplete,
 }: LimitedTextInputProps) {
   const atLimit = value.length >= maxLength;
 
@@ -54,6 +63,10 @@ export function LimitedTextInput({
         placeholder={placeholder}
         disabled={disabled}
         required={required}
+        list={list}
+        autoComplete={autoComplete}
+        onFocus={onFocus}
+        onBlur={onBlur}
         onChange={syncValue}
         onCompositionEnd={syncAfterIme}
       />
