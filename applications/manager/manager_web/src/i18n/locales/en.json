@@ -1250,6 +1250,10 @@
       "noOptions": "No templates available"
     },
     "matchExpr": {
+      "clusterAgent": "Cluster Agent",
+      "unavailableAgent": "Unavailable Agent ({{id}})",
+      "unavailableAgentHint": "Some selected Agents are not available in this cluster. Remove them and select the intended cluster resources.",
+      "agentOptionsLoadFailed": "Failed to load Agent options: {{error}}",
       "modeAll": "Available to all",
       "modeCustom": "Partially available",
       "allHint": "Empty means match any user_id / group_id / bot_id.",
