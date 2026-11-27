@@ -67,7 +67,8 @@ export function SetupJourney({ compact = false, onNavigate }: { compact?: boolea
     { title: tr('工具安全策略', 'Tool safety policies'), description: tr('约束工具调用权限与行为。', 'Control tool permissions and behavior.'), href: '/safety-guardrails' },
     { title: tr('执行护栏', 'Execution guard'), description: tr('配置输出打转重试和工具循环断路。', 'Configure repeat retries and the tool-loop circuit breaker.'), href: '/execution-guard-templates' },
     { title: tr('向量模型', 'Embedding models'), description: tr('为检索提供文本向量能力。', 'Provide embeddings for retrieval.'), href: '/embedding-templates' },
-    { title: tr('A2A管理', 'A2A management'), description: tr('管理外部 Agent 接入与访问策略。', 'Manage external Agents and access policies.'), href: '/a2a-management' },
+    // A2A 管理页签暂时隐藏
+    // { title: tr('A2A管理', 'A2A management'), description: tr('管理外部 Agent 接入与访问策略。', 'Manage external Agents and access policies.'), href: '/a2a-management' },
     { title: tr('专家包', 'Expert packages'), description: tr('组合专家能力，在 Agent 中引用。', 'Compose expert capabilities and reference them in Agents.'), href: '/expert-package-templates' },
     { title: tr('扩展配置', 'Extensions'), description: tr('添加业务需要的扩展参数。', 'Add extension settings for your workload.'), href: '/extension-config-templates' },
   ];

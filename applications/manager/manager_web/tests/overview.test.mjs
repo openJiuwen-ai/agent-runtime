@@ -21,7 +21,7 @@ try {
   });
   test('Gateway alone cannot make an instance healthy', () => {
     assert.equal(allComponentsConnected({ gateway_status: 'online' }), false);
-    assert.equal(allComponentsConnected({ gateway_status: 'online', runtime_status: 'offline', user_web_status: 'online' }), false);
-    assert.equal(allComponentsConnected({ gateway_status: 'ONLINE', runtime_status: 'ready', user_web_status: 'online' }), true);
+    assert.equal(allComponentsConnected({ gateway_status: 'online', runtime_status: 'offline' }), false);
+    assert.equal(allComponentsConnected({ gateway_status: 'ONLINE', runtime_status: 'ready' }), true);
   });
 } finally { await server.close(); }

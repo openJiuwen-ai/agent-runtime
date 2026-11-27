@@ -286,13 +286,12 @@ MANAGER_WEB_HOST=127.0.0.1
 MANAGER_WEB_PORT=5273
 MANAGER_WEB_PROXY_TARGET=http://127.0.0.1:8765
 MANAGER_WEB_IDP_TARGET=http://127.0.0.1:8770
-MANAGER_WEB_USER_WEB_TARGET=http://127.0.0.1:5173
 MANAGER_WEB_GATEWAY_HTTP_TARGET=http://127.0.0.1:19002
 MANAGER_WEB_GATEWAY_WS_TARGET=http://127.0.0.1:19000
 MANAGER_WEB_RESOLVER=kube-dns.kube-system.svc.cluster.local
 ```
 
-生产 nginx 将 `/chat`、`/ws`、`/gateway-api`、`/file-api`、`/share-api` 按 Cookie `jiuwenclaw_id` 动态反代到各实例 `instance_info.user_web_host` 与 `instance_info.data` 中的 `gateway_web_*_host`（空则回退上述 `MANAGER_WEB_*_TARGET`）。`MANAGER_WEB_RESOLVER` 供变量 `proxy_pass` 做 DNS 解析（集群DNS的ClusterIP或完整服务名）。
+用户面独立入口按 Cookie `jiuwenclaw_id` 经 `user-face-upstream` 解析各集群 `gateway_host`（空则回退上述 `MANAGER_WEB_GATEWAY_*_TARGET`）。管理面不再配置或反代 User Web。
 
 完整变量列表见 `applications/manager/.env.example`。
 ---

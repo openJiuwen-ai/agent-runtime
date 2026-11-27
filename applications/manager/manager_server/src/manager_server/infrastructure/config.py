@@ -89,10 +89,6 @@ class Settings(BaseSettings):
         default="http://127.0.0.1:8770",
         validation_alias="MANAGER_WEB_IDP_TARGET",
     )
-    manager_web_user_web_target: str = Field(
-        default="http://127.0.0.1:5173",
-        validation_alias="MANAGER_WEB_USER_WEB_TARGET",
-    )
     manager_web_gateway_http_target: str = Field(
         default="http://127.0.0.1:19002",
         validation_alias="MANAGER_WEB_GATEWAY_HTTP_TARGET",

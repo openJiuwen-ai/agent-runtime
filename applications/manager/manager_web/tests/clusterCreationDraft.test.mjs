@@ -8,7 +8,7 @@ try {
     const map = new Map();
     const storage = { getItem: key => map.get(key) || null, setItem: (key, value) => map.set(key, value), removeItem: key => map.delete(key) };
     const key = clusterCreationDraftKey('admin', 'agent-a', '/agent-templates?search=客服');
-    const draft = { name: '测试集群', description: 'draft', namespace: 'test', hostMode: 'manual', gateway: 'http://gateway:1', runtime: 'http://runtime:2', web: 'http://web:3', gatewayHttp: 'http://gateway:4', gatewayWs: '' };
+    const draft = { name: '测试集群', description: 'draft', namespace: 'test', hostMode: 'manual', gateway: 'http://gateway:1', runtime: 'http://runtime:2' };
     saveClusterCreationDraft(storage, key, draft);
     assert.deepEqual(readClusterCreationDraft(storage, key), draft);
     clearClusterCreationDraft(storage, key);
@@ -35,8 +35,6 @@ try {
     const hosts = clusterCreationHosts(' preview ');
     assert.equal(hosts.gateway, 'http://jiuwenswarm-gateway.preview:19000');
     assert.equal(hosts.runtime, 'http://jiuwenswarm-agent-runtime.preview:8091');
-    assert.equal(hosts.web, 'https://jiuwenswarm-web.preview:5173');
-    assert.equal(hosts.gatewayWs, hosts.gatewayHttp);
     assert.equal(clusterCreationHosts('').gateway, 'http://jiuwenswarm-gateway.default:19000');
   });
 } finally { await server.close(); }

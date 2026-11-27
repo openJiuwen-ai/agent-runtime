@@ -146,7 +146,7 @@ async def resolve_user_face_upstream(
 ) -> Response:
     """鉴权 + 按 Cookie 下发用户面上游 origin（供 nginx ``auth_request_set``）。
 
-    响应头：``X-User-Web-Upstream`` / ``X-Gateway-Http-Upstream`` / ``X-Gateway-Ws-Upstream``。
+    响应头：``X-Gateway-Http-Upstream`` / ``X-Gateway-Ws-Upstream``。
     """
     try:
         upstreams = await resolve_user_face_upstreams(

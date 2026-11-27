@@ -308,9 +308,6 @@ def test_login_role_crud_proxy_and_downstream_persistence(services):
             "space_id": "auth-e2e",
             "gateway_host": urls["receiver"],
             "runtime_host": urls["runtime"],
-            "user_web_host": user_web,
-            "gateway_web_http_host": urls["receiver"],
-            "gateway_web_ws_host": urls["receiver"].replace("http://", "ws://"),
         },
     )
     jid = instance["jiuwenclaw_id"]
@@ -413,7 +410,6 @@ def test_login_role_crud_proxy_and_downstream_persistence(services):
         append_url_path(manager, "/api/v1/user-console/user-face-upstream"), headers=cookie_headers
     )
     assert resolved.status_code == 200
-    assert resolved.headers["x-user-web-upstream"] == user_web
     assert resolved.headers["cache-control"] == "no-store"
     call("GET", "/api/v1/instances/", headers=user, status=403)
     call("DELETE", append_url_path(scoped, "/users"), {"ids": ["user1"]})

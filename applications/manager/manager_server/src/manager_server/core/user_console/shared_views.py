@@ -144,17 +144,12 @@ async def create_views(connection: AsyncConnection, schema: str | None = None) -
     mysql_family = dialect.name in {"mysql", "mariadb"}
     quote = dialect.identifier_preparer.quote
     prefix = f"{quote(schema)}." if schema else ""
-    if dialect.name == "postgresql":
-        http = "data ->> 'gateway_web_http_host'"
-        ws = "data ->> 'gateway_web_ws_host'"
-    elif mysql_family:
-        http = "NULLIF(JSON_UNQUOTE(JSON_EXTRACT(data, '$.gateway_web_http_host')), 'null')"
-        ws = "NULLIF(JSON_UNQUOTE(JSON_EXTRACT(data, '$.gateway_web_ws_host')), 'null')"
-    else:
+    if dialect.name not in {"postgresql", "mysql", "mariadb"}:
         raise ValueError("User backend projections require PostgreSQL or MySQL/MariaDB")
     views = (
         ("user_access_instance", "instance_info",
-         f"jiuwenclaw_id, jiuwenclaw_name, {http} AS gateway_http, {ws} AS gateway_ws"),
+         "jiuwenclaw_id, jiuwenclaw_name, gateway_host AS gateway_http, "
+         "gateway_host AS gateway_ws"),
         ("user_access_instance_grant", "instance_grant",
          "jiuwenclaw_id, subject_type, subject_id, login_policy, enabled, expires_at"),
         # The user plane only needs the Agent template name to gate the entry

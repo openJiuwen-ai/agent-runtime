@@ -1,7 +1,6 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 """Exercise the certificate lifecycle using OpenSSL and an in-memory Secret API."""
 
-import asyncio
 import base64
 import importlib.util
 import json
@@ -9,13 +8,9 @@ import logging
 import os
 from pathlib import Path
 import shutil
-import ssl
 import subprocess
 
 import pytest
-
-from manager_server.core.instance.config_host_probe import probe_config_host
-
 
 DEPLOY = Path(__file__).resolve().parents[6] / "deploy"
 SCRIPT = DEPLOY / "openshift/web_tls.py"
@@ -97,48 +92,6 @@ def test_public_names_and_custom_certificate_lifecycle(tmp_path, caplog):
     assert store.objects[tls.LEAF] is leaf
 
 
-@pytest.mark.asyncio
-async def test_web_can_deploy_before_manager_verifies_custom_issuer(tmp_path, monkeypatch):
-    # Prepare a custom Secret signed by a private CA. Start Web before probing it.
-    store = TestSecrets()
-    ca = tmp_path / "issuer.pem"
-    hosts = tls.names("localhost")
-    digest = tls.prepare(store, hosts, tmp_path, ca, service="localhost")
-    issuer = ca.read_bytes()
-    leaf = store.objects[tls.LEAF]
-    del leaf["metadata"]["annotations"][tls.OWNER]
-    del store.objects[tls.CA]
-    store.maps.clear()
-    assert tls.prepare(store, hosts, tmp_path, ca, service="localhost") == digest
-    assert not store.maps and not ca.exists()
-
-    server_tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    server_tls.load_cert_chain(tmp_path / "tls.crt", tmp_path / "tls.key")
-    mount = tmp_path / "manager-ca"
-    mount.mkdir()
-    monkeypatch.setattr("manager_server.core.instance.config_host_probe._WEB_PROBE_CA", mount)
-    monkeypatch.setenv("MANAGER_WEB_USER_WEB_TARGET", "https://localhost.web-test.svc")
-    monkeypatch.setenv("NAMESPACE", "web-test")
-
-    async def serve(reader, writer):
-        await reader.readuntil(b"\r\n\r\n")
-        writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-        await writer.drain()
-        writer.close()
-        await writer.wait_closed()
-
-    async with await asyncio.start_server(serve, "127.0.0.1", 0, ssl=server_tls) as server:
-        port = server.sockets[0].getsockname()[1]
-        url = f"https://localhost:{port}"
-        with pytest.raises(ValueError, match=r"ca\.crt of the jiuwenswarm-web-tls Secret"):
-            await probe_config_host(url, side="user_web")
-        leaf["data"]["ca.crt"] = base64.b64encode(issuer).decode()
-        assert tls.prepare(store, hosts, tmp_path, ca, service="localhost") == digest
-        cert_key = "localhost.web-test.crt"
-        (mount / cert_key).write_text(store.maps["web-test"]["data"][cert_key])
-        await probe_config_host(url, side="user_web")
-
-
 @pytest.mark.parametrize("missing", ["web-custom.web-test", "web-custom.web-test.svc.cluster.local", None])
 def test_custom_certificate_covers_registered_and_configured_probe_hosts(tmp_path, missing):
     store = TestSecrets()
@@ -188,6 +141,8 @@ def test_ocp_web_reconciliation_emits_one_patch_per_resource(tmp_path):
     container = manager_pod["containers"][0]
     assert container["image"] == "manager:candidate"
     assert container["volumeMounts"][0]["readOnly"] is True
-    assert container["env"] == [
-        {"name": "MANAGER_WEB_USER_WEB_TARGET", "value": "https://jiuwenswarm-web.web-test.svc.cluster.local:5173"}
-    ]
+    # user_web 探活已移除：不再注入 MANAGER_WEB_USER_WEB_TARGET
+    assert not any(
+        isinstance(item, dict) and item.get("name") == "MANAGER_WEB_USER_WEB_TARGET"
+        for item in (container.get("env") or [])
+    )

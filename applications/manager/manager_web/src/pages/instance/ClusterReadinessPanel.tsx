@@ -33,7 +33,7 @@ export function ClusterReadinessPanel({ data, refreshing, reload }: {
   return <aside className="card cluster-readiness" aria-label={tr('配置与使用检查', 'Configuration and access checks')}>
     <div className="card-header"><h2>{tr('配置与使用检查', 'Configuration and access checks')}</h2><button className="btn sm" title={tr('检查全部集群的组件连接，此处展示当前集群结果。', 'Check all clusters and show results for this cluster.')} disabled={probing || refreshing} onClick={() => void checkConnections()}>{probing ? tr('检查中…', 'Checking…') : tr('检查连接', 'Check connections')}</button></div>
     <div className="cluster-readiness__section">
-      <div className="cluster-readiness__connections" aria-label={tr('组件连接', 'Component connectivity')}>{([['Gateway', data.instance.gateway_status], ['Runtime', data.instance.runtime_status], ['User Web', data.instance.user_web_status || 'pending']] as const).map(([label, status]) => <div key={label} title={`${label}: ${status || 'pending'}`} aria-label={`${label}: ${status || 'pending'}`}><StatusBadge status={status || 'pending'} /><span className="text-xs text-muted">{label}</span></div>)}</div>
+      <div className="cluster-readiness__connections" aria-label={tr('组件连接', 'Component connectivity')}>{([['Gateway', data.instance.gateway_status], ['Runtime', data.instance.runtime_status]] as const).map(([label, status]) => <div key={label} title={`${label}: ${status || 'pending'}`} aria-label={`${label}: ${status || 'pending'}`}><StatusBadge status={status || 'pending'} /><span className="text-xs text-muted">{label}</span></div>)}</div>
     </div>
     <div className="cluster-readiness__section">
       <strong className="text-sm">{tr('用户面验证', 'User console verification')}</strong>

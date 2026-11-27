@@ -10,6 +10,7 @@ import type {
   ExtensionConfigTemplate,
   ExtensionConfigTemplateCreateBody,
   ExtensionConfigTemplateUpdateBody,
+  InstanceComponentStatus,
   InstanceDetail,
   InstanceSummary,
   ManagerWsStatus,
@@ -1334,28 +1335,27 @@ export const InstanceApi = {
     page_size?: number;
     gateway_status?: string;
     runtime_status?: string;
-    user_web_status?: string;
     search?: string;
     sort_by?:
       | 'jiuwenclaw_name'
       | 'gateway_status'
       | 'runtime_status'
-      | 'user_web_status'
       | 'gateway_last_alive'
       | 'runtime_last_alive'
-      | 'user_web_last_alive'
       | 'namespace'
       | 'updated_at';
     sort_order?: 'asc' | 'desc';
   }) =>
     http<InstancePageRaw>('/v1/instances/', { query: params }),
-  /** 立即探活所有实例的 Gateway / Runtime / User Web，刷新 online/offline 状态。 */
+  /** 立即探活所有实例的 Gateway / Runtime，刷新 online/offline 状态。 */
   probeHealth: () =>
     http<{ probed: number; alive: number; dead: number; skipped: number }>(
       '/v1/instances/health-probe',
       { method: 'POST' },
     ),
   get: (id: string) => http<InstanceDetail>(`/v1/instances/${encodeURIComponent(id)}`),
+  componentStatus: (id: string) =>
+    http<InstanceComponentStatus>(`/v1/instances/${encodeURIComponent(id)}/component-status`),
   create: (body: CreateInstanceBody) => http<InstanceSummary>('/v1/instances/', { method: 'POST', body }),
   update: (id: string, body: UpdateInstanceBody) =>
     http<InstanceDetail>(`/v1/instances/${encodeURIComponent(id)}`, { method: 'PATCH', body }),

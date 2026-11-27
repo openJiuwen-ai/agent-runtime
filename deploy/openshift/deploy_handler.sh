@@ -458,7 +458,7 @@ reconcile_web_tls() {
   [ "$code" = 200 ] || error "Cannot update user Web Route (HTTP $code)"
 }
 
-# Existing OCP Deployments are reused. Reconcile the Manager probe volume and URL as well.
+# Existing OCP Deployments are reused. Reconcile the Manager probe CA volume (legacy mount).
 reconcile_manager_web_probe() {
   local resource patch code
   resource="$(kctl_kind_path Deployment "$KCTL_NS")/jiuwenswarm-manager-server"
@@ -466,12 +466,26 @@ reconcile_manager_web_probe() {
     .spec.template.spec as $s | {"spec":{"template":{"spec":{
       "volumes":[$s.volumes[] | select(.name == "web-probe-ca")],
       "containers":[$s.containers[] | select(.name == "manager") | {
-        "name":.name,"image":.image,"volumeMounts":[.volumeMounts[] | select(.name == "web-probe-ca")],
-        "env":[.env[] | select(.name == "MANAGER_WEB_USER_WEB_TARGET")]
+        "name":.name,"image":.image,"volumeMounts":[.volumeMounts[] | select(.name == "web-probe-ca")]
       }]
     }}}}' -) || error "Cannot render Manager Web probe patch"
   code=$(kctl_patch_strategic "$resource" "$patch" "$(kctl_tmpdir)/manager-probe-response")
   [ "$code" = 200 ] || error "Cannot update Manager Web probe (HTTP $code)"
+}
+
+# 专用 SA 不会自动继承 default 的镜像拉取凭据；从同 ns default SA 复制 imagePullSecrets。
+sync_manager_server_sa_pull_secrets() {
+  local sa_name="${1:-jiuwenswarm-manager-server-sa}"
+  local def_path sa_path resp code secrets
+  def_path="$(kctl_kind_path ServiceAccount "$KCTL_NS")/default"
+  sa_path="$(kctl_kind_path ServiceAccount "$KCTL_NS")/$sa_name"
+  resp="$(kctl_tmpdir)/default-sa-pull.json"
+  code=$(kctl_http GET "$def_path" "$resp")
+  [ "$code" = 200 ] || return 0
+  secrets=$(yq -o=json -I=0 '.imagePullSecrets // []' "$resp" 2>/dev/null) || secrets="[]"
+  [ "$secrets" = "[]" ] || [ -n "$secrets" ] || return 0
+  code=$(kctl_patch "$sa_path" "{\"imagePullSecrets\":$secrets}" "$(kctl_tmpdir)/manager-sa-pull-response")
+  [ "$code" = 200 ] || info "manager-server SA imagePullSecrets 同步跳过 (HTTP $code)"
 }
 
 component_prepare() { # $1=组件
@@ -508,6 +522,9 @@ deploy_component() { # $1=组件 $2=序号 $3=总数
       manager-server) reconcile_manager_web_probe;;
     esac
   fi
+  case "$comp" in
+    manager-server) sync_manager_server_sa_pull_secrets;;
+  esac
   ensure_workload "${paths[@]}"
   wait_ready "$comp"
   KCTL_NS="$saved_ns"

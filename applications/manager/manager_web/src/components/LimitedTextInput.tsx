@@ -1,4 +1,4 @@
-import type { ChangeEvent, CompositionEvent } from 'react';
+import type { ChangeEvent, CompositionEvent, KeyboardEvent } from 'react';
 
 interface LimitedTextInputProps {
   ariaLabel?: string;
@@ -14,7 +14,9 @@ interface LimitedTextInputProps {
   list?: string;
   onFocus?: () => void;
   onBlur?: () => void;
+  onKeyDown?: (event: KeyboardEvent<HTMLInputElement>) => void;
   autoComplete?: string;
+  autoFocus?: boolean;
 }
 
 function truncate(value: string, limit: number): string {
@@ -39,7 +41,9 @@ export function LimitedTextInput({
   list,
   onFocus,
   onBlur,
+  onKeyDown,
   autoComplete,
+  autoFocus,
 }: LimitedTextInputProps) {
   const atLimit = value.length >= maxLength;
 
@@ -65,8 +69,10 @@ export function LimitedTextInput({
         required={required}
         list={list}
         autoComplete={autoComplete}
+        autoFocus={autoFocus}
         onFocus={onFocus}
         onBlur={onBlur}
+        onKeyDown={onKeyDown}
         onChange={syncValue}
         onCompositionEnd={syncAfterIme}
       />

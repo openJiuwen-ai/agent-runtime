@@ -161,20 +161,21 @@ export function Sidebar() {
         </svg>
       ),
     },
-    {
-      key: 'a2a-management',
-      pathPrefix: '/a2a-management',
-      href: '/a2a-management',
-      label: t('nav.a2aManagement'),
-      icon: (
-        <svg className="w-4 h-4 nav-item__icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
-          <circle cx="6" cy="12" r="2" />
-          <circle cx="18" cy="6" r="2" />
-          <circle cx="18" cy="18" r="2" />
-          <path d="M8 11l8-4M8 13l8 4" />
-        </svg>
-      ),
-    },
+    // A2A 管理页签暂时隐藏
+    // {
+    //   key: 'a2a-management',
+    //   pathPrefix: '/a2a-management',
+    //   href: '/a2a-management',
+    //   label: t('nav.a2aManagement'),
+    //   icon: (
+    //     <svg className="w-4 h-4 nav-item__icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+    //       <circle cx="6" cy="12" r="2" />
+    //       <circle cx="18" cy="6" r="2" />
+    //       <circle cx="18" cy="18" r="2" />
+    //       <path d="M8 11l8-4M8 13l8 4" />
+    //     </svg>
+    //   ),
+    // },
     {
       key: 'expert-package-templates',
       pathPrefix: '/expert-package-templates',
@@ -354,7 +355,7 @@ export function Sidebar() {
       return [{ label: missingLabel(t('nav.agentTemplates')), to: '/agent-templates', openTarget: 'agentTemplateNew' }];
     }
     if (item.key === 'service-config-templates' && poolDefined === false) {
-      return [{ label: missingLabel(t('nav.runtimeTemplates')), to: '/service-config-templates' }];
+      return [{ label: missingLabel(t('nav.serviceConfigTemplates')), to: '/service-config-templates/new' }];
     }
     if (item.key === 'agent-definitions' && agentDefinitionDefined === false) {
       return [{ label: missingLabel(t('nav.agentDefinitions')), to: '/agent-definitions', openTarget: 'agentDefinitionNew' }];

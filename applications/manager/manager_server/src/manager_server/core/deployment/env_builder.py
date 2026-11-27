@@ -295,9 +295,6 @@ def derive_instance_hosts(namespace: str) -> dict:
     return {
         "gateway_host": f"http://jiuwenswarm-gateway.{namespace}:19000",
         "runtime_host": f"http://jiuwenswarm-agent-runtime.{namespace}:8091",
-        "user_web_host": f"https://jiuwenswarm-web.{namespace}:5173",
-        "gateway_web_http_host": f"http://jiuwenswarm-gateway.{namespace}:19000",
-        "gateway_web_ws_host": f"http://jiuwenswarm-gateway.{namespace}:19000",
     }
 
 
