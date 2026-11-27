@@ -5,7 +5,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from manager_server.manager_web import create_manager_web_app
+from manager_server.manager_web import _RECLAIM_TASKS, create_manager_web_app
 
 
 def _manager_app(tmp_path: Path):
@@ -144,3 +144,101 @@ async def test_manager_api_internal_redirect_is_resolved_by_proxy(
         "http://manager-api:8765/api/v1/instances?page=1&page_size=50",
         "http://manager-api:8765/api/v1/instances/?page=1&page_size=50",
     ]
+
+
+@pytest.mark.asyncio
+async def test_idp_delete_schedules_reclaim_off_the_response_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The identity response must not wait for the per-cluster cascade."""
+    import asyncio
+
+    import manager_server.manager_web as manager_web
+
+    app = _manager_app(tmp_path)
+    original_client = httpx.AsyncClient
+    calls: list[tuple[str, str | None]] = []
+    release = asyncio.Event()
+
+    async def _reclaim(
+        backend_url: str, group_id: str, authorization: str | None
+    ) -> None:
+        calls.append((group_id, authorization))
+        await release.wait()
+
+    async def upstream(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"code": 200, "data": {}})
+
+    def client_factory(*_args, **_kwargs) -> httpx.AsyncClient:
+        return original_client(transport=httpx.MockTransport(upstream))
+
+    monkeypatch.setattr("manager_server.manager_web.httpx.AsyncClient", client_factory)
+    monkeypatch.setattr(manager_web, "_reclaim_org_teams", _reclaim)
+    try:
+        async with original_client(
+            transport=httpx.ASGITransport(app=app), base_url="http://manager-web"
+        ) as client:
+            response = await asyncio.wait_for(
+                client.delete("/idp/v1/orgs/g1"), timeout=5
+            )
+            assert response.status_code == 200
+            for _ in range(5):
+                await asyncio.sleep(0)
+            # Still blocked on the gate: the response did not await it.
+            assert calls == [("g1", None)]
+    finally:
+        release.set()
+        await asyncio.gather(*list(_RECLAIM_TASKS))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "path", "expected"),
+    [
+        ("DELETE", "/idp/v1/orgs/g1", ("org", "g1")),
+        ("DELETE", "/idp/v1/orgs/g1/members/u1", ("user", "u1")),
+        ("DELETE", "/idp/v1/users/u1", ("user", "u1")),
+        ("PUT", "/idp/v1/users/u1/orgs", ("user", "u1")),
+    ],
+)
+async def test_idp_identity_change_reclaims_the_affected_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    method: str,
+    path: str,
+    expected: tuple[str, str],
+) -> None:
+    """Each identity change must reclaim the right entity, not a neighbouring one."""
+    import asyncio
+
+    import manager_server.manager_web as manager_web
+
+    app = _manager_app(tmp_path)
+    original_client = httpx.AsyncClient
+    calls: list[tuple[str, str, str | None]] = []
+
+    def _recorder(kind: str):
+        async def _reclaim(
+            backend_url: str, entity_id: str, authorization: str | None
+        ) -> None:
+            calls.append((kind, entity_id, authorization))
+
+        return _reclaim
+
+    async def upstream(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"code": 200, "data": {}})
+
+    def client_factory(*_args, **_kwargs) -> httpx.AsyncClient:
+        return original_client(transport=httpx.MockTransport(upstream))
+
+    monkeypatch.setattr("manager_server.manager_web.httpx.AsyncClient", client_factory)
+    monkeypatch.setattr(manager_web, "_reclaim_org_teams", _recorder("org"))
+    monkeypatch.setattr(manager_web, "_reclaim_user_teams", _recorder("user"))
+    async with original_client(
+        transport=httpx.ASGITransport(app=app), base_url="http://manager-web"
+    ) as client:
+        response = await client.request(method, path)
+    await asyncio.gather(*list(_RECLAIM_TASKS))
+    assert response.status_code == 200
+    assert calls == [(expected[0], expected[1], None)]
