@@ -279,6 +279,19 @@ function idpHttp<T>(path: string, opts: RequestOptions = {}): Promise<T> {
   return requestCore<T>(IDP_BASE, path, opts, false);
 }
 
+/**
+ * IAM 写操作成功后回收团队配额（B1）。
+ *
+ * 管理面 nginx 把 ``/idp`` 直接反代到 identity，manager-server 的级联钩子不在链路上，
+ * 因此由前端在删组织/删用户/移出成员/改组织成功后主动调用 reclaim 接口。
+ * 只做后台触发：失败仅记录日志，不阻塞也不影响已经完成的主操作。
+ */
+function reclaimTeams(path: string): void {
+  void http<unknown>(path, { method: 'POST' }).catch((error) => {
+    console.warn(`[reclaim-teams] ${path} failed`, error);
+  });
+}
+
 // ---------- System ----------
 
 export const SystemApi = {
@@ -860,12 +873,22 @@ export const OrgApi = {
   get: (gid: string) => idpHttp<Org>(`/v1/orgs/${encodeURIComponent(gid)}`),
   update: (gid: string, body: { display_name?: string; status?: string }) =>
     idpHttp<Org>(`/v1/orgs/${encodeURIComponent(gid)}`, { method: 'PATCH', body }),
-  remove: (gid: string) => idpHttp<{ deleted: boolean }>(`/v1/orgs/${encodeURIComponent(gid)}`, { method: 'DELETE' }),
+  remove: async (gid: string) => {
+    const result = await idpHttp<{ deleted: boolean }>(`/v1/orgs/${encodeURIComponent(gid)}`, { method: 'DELETE' });
+    reclaimTeams(`/v1/orgs/${encodeURIComponent(gid)}/reclaim-teams`);
+    return result;
+  },
   listMembers: (gid: string) => idpHttp<{ users: IamUser[] }>(`/v1/orgs/${encodeURIComponent(gid)}/members`),
   addMembers: (gid: string, user_ids: string[]) =>
     idpHttp<{ added: string[] }>(`/v1/orgs/${encodeURIComponent(gid)}/members`, { method: 'POST', body: { user_ids } }),
-  removeMember: (gid: string, userId: string) =>
-    idpHttp<{ removed: boolean }>(`/v1/orgs/${encodeURIComponent(gid)}/members/${encodeURIComponent(userId)}`, { method: 'DELETE' }),
+  removeMember: async (gid: string, userId: string) => {
+    const result = await idpHttp<{ removed: boolean }>(
+      `/v1/orgs/${encodeURIComponent(gid)}/members/${encodeURIComponent(userId)}`,
+      { method: 'DELETE' },
+    );
+    reclaimTeams(`/v1/users/${encodeURIComponent(userId)}/reclaim-teams`);
+    return result;
+  },
 };
 
 export const UserApi = {
@@ -885,9 +908,19 @@ export const UserApi = {
     idpHttp<IamUser>('/v1/users/', { method: 'POST', body }),
   update: (id: string, body: { display_name?: string; status?: string; password?: string }) =>
     idpHttp<IamUser>(`/v1/users/${encodeURIComponent(id)}`, { method: 'PATCH', body }),
-  remove: (id: string) => idpHttp<{ deleted: boolean }>(`/v1/users/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-  setOrgs: (id: string, group_ids: string[]) =>
-    idpHttp<{ group_ids: string[] }>(`/v1/users/${encodeURIComponent(id)}/orgs`, { method: 'PUT', body: { group_ids } }),
+  remove: async (id: string) => {
+    const result = await idpHttp<{ deleted: boolean }>(`/v1/users/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    reclaimTeams(`/v1/users/${encodeURIComponent(id)}/reclaim-teams`);
+    return result;
+  },
+  setOrgs: async (id: string, group_ids: string[]) => {
+    const result = await idpHttp<{ group_ids: string[] }>(
+      `/v1/users/${encodeURIComponent(id)}/orgs`,
+      { method: 'PUT', body: { group_ids } },
+    );
+    reclaimTeams(`/v1/users/${encodeURIComponent(id)}/reclaim-teams`);
+    return result;
+  },
   batchCreate: (
     users: Array<{ username: string; password: string; display_name?: string; orgs?: string[] }>,
   ) =>

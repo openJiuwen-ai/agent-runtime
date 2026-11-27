@@ -15,6 +15,7 @@ from .import_export_routers import import_export_router
 from .instance_access_routers import gateway_lookup_router, instance_grant_router
 from .instance_resource_routers import instance_resource_router
 from .instance_routers import instance_router
+from .org_cleanup_routers import org_cleanup_router
 from .quota_routers import quota_router
 from .template_routers import templates_router
 from .user_console_routers import public_user_console_router, user_console_router
@@ -65,6 +66,8 @@ def _build_api_router() -> APIRouter:
         prefix=INSTANCES_PREFIX,
         tags=["Instance Access"],
     )
+    # 身份变更（删组织/删用户/移出组织）后的团队级联清理。
+    admin_router.include_router(org_cleanup_router, tags=["Quota"])
     # 反查：一批实体各授权了哪些实例。
     admin_router.include_router(gateway_lookup_router, tags=["Instance Access"])
     # 管理面启动部署（产品面 up + 幂等重跑升级；/defaults 字面路由先于 /{id} 注册）
