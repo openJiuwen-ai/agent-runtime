@@ -1,110 +1,145 @@
 #!/usr/bin/env bash
-set -euo >/dev/null 2>&1
+# deploy.sh —— 组件部署/卸载入口（复用同目录 kubectl.sh 函数库；
+# openshift 形态经 curl 直连 Kubernetes REST API，k8s 形态走 kubectl CLI）
+#
+# 用法（详见 usage 与 README）：
+#   ./deploy.sh up                        # 拉起产品组件（用户面 web / web-server 由 `deploy.sh manager up` 部署）
+#   ./deploy.sh manager up                # 拉起管理套件与用户面: web-server → web → identity → manager-server → manager-web
+#   ./deploy.sh up mariadb [minio ...]    # 按组件部署（基础服务/共享依赖/产品/管理组件均可）
+#   ./deploy.sh down [组件...]            # 卸载（倒序删除；共享依赖有人用则保留；等 Pod 删净）
+#   ./deploy.sh -n other-ns up            # 指定 namespace（默认取 .env.custom 的 NAMESPACE）
+#   ./deploy.sh up mariadb --render-only  # 只渲染本次目标清单到 conf/，不连接集群
+#
+# 配置与渲染：templates/ 为清单模板（<<VAR>> 占位符），镜像名与 namespace 统一维护在
+# .env.custom；up 前渲染到 conf/（渲染产物即部署清单）；down 不渲染，直接消费
+# conf/ 现有清单（按部署时资源名卸载），缺失时提示先 down --render-only 补齐。
+#
+# 约束：agentserver 先于 gateway 部署（gateway 启动依赖 agentserver），脚本已保证；
+# 命令幂等，可重复执行，已存在资源跳过；副本/镜像与配置不一致时自动 PATCH 对齐。
+# 环境变量：WAIT_TIMEOUT_SECS —— Pod 就绪等待预算，默认 300s（首次拉取镜像建议调大）
+#
 
-source "common.sh"
-source "global_vars.sh"
-source "args_handler.sh"
-source "check_handler.sh"
-source "cmd_handler.sh"
-source "envfile_handler.sh"
-source "template_handler.sh"
-source "k8s_handler.sh"
-source "ports_handler.sh"
-source "nfs_handler.sh"
-source "mariadb_handler.sh"
-source "mysql_handler.sh"
-source "postgresql_handler.sh"
-source "minio_handler.sh"
-source "rabbitmq_handler.sh"
-source "redis_handler.sh"
-source "log_handler.sh"
-source "jina_handler.sh"
-source "proxy_handler.sh"
-source "configmap_secret_handler.sh"
-source "agentserver_handler.sh"
-source "gateway_handler.sh"
-source "manager_handler.sh"
-source "manager_defaults_handler.sh"
-source "user_backend_handler.sh"
-source "web_handler.sh"
-source "runtime_handler.sh"
-source "patch_handler.sh"
-source "link_mtls_handler.sh"
-source "observability_handler.sh"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-process_up() {
-    # MODULES是ALL_MODULES的子集，启动顺序正着来
-    local sorted_modules=()
-    for m in "${ALL_MODULES[@]}"; do
-        if [[ " ${MODULES[@]} " =~ " ${m} " ]]; then
-            sorted_modules+=("$m")
-        fi
-    done
-    info "sorted_modules=${sorted_modules[@]}"
+source "$SCRIPT_DIR/common.sh"
+source "$SCRIPT_DIR/kubectl.sh"
+source "$SCRIPT_DIR/global_vars.sh"
+source "$SCRIPT_DIR/var_handler.sh"
+source "$SCRIPT_DIR/envfile_handler.sh"
+source "$SCRIPT_DIR/args_handler.sh"
+source "$SCRIPT_DIR/component_handler.sh"
+source "$SCRIPT_DIR/template_handler.sh"
+source "$SCRIPT_DIR/manager_defaults_handler.sh"
+source "$SCRIPT_DIR/k8s_handler.sh"
+source "$SCRIPT_DIR/deploy_handler.sh"
 
-    if [ "${DEPLOY_VARS["RENDER_ONLY"]}" != "true" ]; then
-        local namespace="${DEPLOY_VARS["NAMESPACE"]}"
-        if [ ${namespace} != "default" ]; then
-            create_k8s_resource "ns" ${namespace}
-        fi
-        collect_k8s_cluster_info
-    fi
-    
-    exec_cmd mkdir -p ${CONFIG_DIR}
+# ---------- Main ----------
 
-    for module in "${sorted_modules[@]}"; do
-        local lmodule=${module,,}
-        local fname=${lmodule//-/_}
-
-        if [ "${DEPLOY_VARS["RENDER_ONLY"]}" == "true" ]; then
-            check_${fname}_up_dependency
-            render_${fname}_files
-        else
-            check_${fname}_up_dependency
-            case "$module" in GATEWAY|RUNTIME|MANAGER) link_mtls_prepare ;; esac
-            render_${fname}_files
-            deploy_${fname}
-        fi
-    done
-}
-
-
-process_down() {
-    if [ "${DEPLOY_VARS["RENDER_ONLY"]}" == "true" ]; then
-        return
-    fi
-
-
-    # MODULES是ALL_MODULES的子集，卸载顺序倒着来
-    local reversed_modules=()
-    for ((i=${#ALL_MODULES[@]}-1; i>=0; i--)); do
-        m="${ALL_MODULES[$i]}"
-        if [[ " ${MODULES[@]} " =~ " ${m} " ]]; then
-            reversed_modules+=("$m")
-        fi
-    done
-    info "reversed_modules=${reversed_modules[@]}"
-
-    for module in "${reversed_modules[@]}"; do
-        local lmodule=${module,,}
-        local fname=${lmodule//-/_}
-        uninstall_${fname}
-    done
-}
-
-process_restart() {
-    process_down
-    process_up
-}
-
-# ==================== Main function ====================
 main() {
-    read_env_from_file "${CUSTOM_ENV_FILE}" "DEPLOY_VARS"
-    parse_args "$@"
-    check_dependency
-    process_${CMD}
+  progress_json phase phase=validate state=start
+  read_env_from_file "$CUSTOM_ENV_FILE" DEPLOY_VARS
+  parse_args "$@"
+  # 依赖检查须先于 check_vars：nfs 目标会在 check_vars 内经 fetch_current_node_name
+  # 消费 yq（缺依赖时其内部管道静默失败，只剩误导性的"无法识别当前节点"报错）
+  [ "${DEPLOY_VARS["RENDER_ONLY"]}" = "true" ] || check_dependency
+  filter_targets_by_nfs_platform   # nfs 目标统一解析：openshift / 外部 NFS / 非 amd64 节点 → nfs-sc；k8s amd64 内置 → nfs + nfs-sc；down 按 conf/ 产物对账
+  check_vars
+  progress_json phase phase=validate state=ok
+  filter_targets_by_external_mode
+  filter_targets_by_deploy_mode   # 三模式目标派生（up 专属；down 模式无关）
+  KCTL_NS="${DEPLOY_VARS["NAMESPACE"]}"   # 全部组件的 namespace 由 .env.custom / -n 统一控制
+
+  # --render-only：只渲染清单（纯本地 awk，不需要集群连接与 oc token）
+  if [ "${DEPLOY_VARS["RENDER_ONLY"]}" = "true" ]; then
+    info "--render-only：只渲染清单，不连接集群"
+    _CURRENT_PHASE=render; progress_json phase phase=render state=start
+    render_templates
+    success "渲染完成 → $CONF_DIR"
+    progress_json phase phase=render state=ok
+    progress_json summary status=success elapsed="$SECONDS"
+    return 0
+  fi
+
+  kctl_check_vars
+
+  if [ "$CMD" = up ]; then
+    filter_targets_by_cluster_type   # k8s 形态：基础服务复用 default 共享实例，禁在本 ns up（-n default 预置放行）；仅 up 生效
+    kctl_ensure_namespace "$KCTL_NS"   # 仅 up：目标 ns/Project 缺失时自动创建；无权限降级警告继续；down 不创建
+    resolve_builtin_svc_locations   # 内置基础服务实例定位（本 ns → default），渲染前执行
+    resolve_storage_class_vars      # 存储类派生（nfs-sc 在目标或集群已存在时自动填充），渲染前执行
+    resolve_targets        # 可拉起依赖（redis）集群缺失时自动纳入
+    info "部署目标: ${TARGETS[*]}"
+    _CURRENT_PHASE=render; progress_json phase phase=render state=start
+    render_templates
+    progress_json phase phase=render state=ok
+    _CURRENT_PHASE=preflight; progress_json phase phase=preflight state=start
+    preflight
+    progress_json phase phase=preflight state=ok
+    ensure_manager_deploy_credentials   # 部署凭证 Secret 缺失时自动创建（双形态，manager up 前置）
+    _CURRENT_PHASE=apply; progress_json phase phase=apply state=start
+    run_phase apply "部署" "${TARGETS[@]}"
+    progress_json phase phase=apply state=ok
+    progress_json summary status=success elapsed="$SECONDS"
+  else
+    # 卸载不渲染，直接消费 conf/ 现有清单（上次 up 渲染的部署时形态）：
+    # 资源名与在役资源一致，模板漂移也不会漏删；conf/ 产物不被 down 覆盖。
+    # 非 K8s 清单（agentserver.json）卸载不消费，缺失不校验
+    local missing=() miss_comps=() cf comp
+    for comp in "${TARGETS[@]}"; do
+      local need_render=0
+      for cf in $(component_files "$comp"); do
+        case "$cf" in *.json) continue;; esac
+        [ -f "$CONF_DIR/$cf" ] || { missing+=("$cf"); need_render=1; }
+      done
+      [ "$need_render" = 1 ] || continue
+      [ "$comp" = nfs-sc ] && comp=nfs   # nfs-sc 由 nfs 目标统一解析（非用户入口），缺失提示回 nfs
+      in_array "$comp" "${miss_comps[@]}" || miss_comps+=("$comp")
+    done
+    if [ ${#missing[@]} -gt 0 ]; then
+      error "conf/ 缺卸载所需清单: ${missing[*]}
+先执行 ./deploy.sh up ${miss_comps[*]} --render-only 补齐渲染（产物落 conf/），再执行 down"
+    fi
+    # kubectl delete -f 以清单内 namespace 为准（-n 不同也不改写删除目标）：
+    # 校验 conf/ 内嵌 ns 与 -n 一致，防卸载错命名空间或静默删空；
+    # 例外：组件实际 ns（component_ns，如 nfs 按基础服务规则定位）与
+    # -n 解耦，内嵌 ns 命中组件实际 ns 时放行
+    local probe_ns="" probe_comp=""
+    for comp in "${TARGETS[@]}"; do
+      for cf in $(component_files "$comp"); do
+        case "$cf" in *.json) continue;; esac
+        [ -f "$CONF_DIR/$cf" ] || continue
+        probe_comp="$comp"
+        probe_ns=$(yq -r '.metadata.namespace // ""' "$CONF_DIR/$cf" 2>/dev/null | head -1)
+        break 2
+      done
+    done
+    if [ -n "$probe_ns" ] && [ "$probe_ns" != "$KCTL_NS" ] \
+      && [ "$probe_ns" != "$(component_ns "$probe_comp")" ]; then
+      error "conf/ 清单 namespace=$probe_ns 与卸载目标 -n $KCTL_NS 不一致
+用 -n $probe_ns 卸载，或 ./deploy.sh up --render-only 重新渲染"
+    fi
+    local reversed=() i
+    for ((i=${#TARGETS[@]}-1; i>=0; i--)); do reversed+=("${TARGETS[$i]}"); done
+    warning "卸载将删除资源与数据（PVC 数据一并删除且不可恢复）"
+    info "卸载目标（倒序）: ${reversed[*]}"
+    _CURRENT_PHASE=delete; progress_json phase phase=delete state=start
+    KCTL_IGNORE_NOT_FOUND=1 run_phase delete "卸载" "${reversed[@]}"
+    progress_json phase phase=delete state=ok
+    gc_orphan_shared_deps   # secret/redis 已无存活依赖方时自动回收
+    # full 模式：runtime 创建的 AgentServer 是裸 Pod（无 owner 控制器），runtime
+    # 组件卸载后无人回收——按标签兜底清理。仅 full 生效：routing/off 的
+    # AgentServer Pod 由 StatefulSet 托管，按该标签清理会误删在役 Pod
+    if [ "${DEPLOY_VARS["AGENT_RUNTIME_DEPLOY_MODE"]}" = full ] \
+      && in_array runtime "${TARGETS[@]}"; then
+      kctl_delete_pods_by_label "$KCTL_NS" "jiuwenswarm-component=agentserver"
+    fi
+    progress_json summary status=success elapsed="$SECONDS"
+  fi
 }
 
-
-# Execute main function
-main "$@"
+# 仅直接执行时跑 main；被 source 时只提供函数
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  set -uo pipefail
+  main "$@"
+  exit $?
+fi

@@ -17,15 +17,20 @@ render_manager_runtime_defaults() (
   command -v yq >/dev/null 2>&1 || error "交付 Manager 默认模板需要 mikefarah/yq v4"
   bytes=$(wc -c < "$source_json")
   # Carrier is a ConfigMap with raw (non-base64) JSON. Binding limits:
-  # k8s form applies via `kubectl apply` client-side, which stores the whole
-  # manifest in the last-applied annotation (256KiB total) → ~240KB payload;
-  # openshift form POSTs/PUTs raw manifests (no annotation) → ConfigMap's
-  # API-server object limit (1MiB) applies.
-  if is_k8s_cluster; then
-    [ "$bytes" -le 240000 ] || error "agentserver.json 超过 240KB 交付上限（k8s kubectl apply 注解限制），请精简配置"
-  else
-    [ "$bytes" -le $((1024 * 1024 - 24 * 1024)) ] || error "agentserver.json 超过 1MiB ConfigMap 交付上限，请精简配置"
-  fi
+  # kubectl-apply based trees (openshift tool in k8s form, and the ee tool)
+  # store the whole manifest in the last-applied annotation (256KiB total).
+  # The annotation is JSON-serialized, so quotes/newlines escape (~x1.2 for
+  # pretty JSON) — keep a conservative 180KB source cap there (still 1.33x the
+  # old Secret cap, which lost a third to base64). The openshift form (curl
+  # POST/PUT) writes no annotation → the ConfigMap object limit (1MiB) applies.
+  case "${DEPLOY_VARS["CLUSTER_TYPE"]:-}" in
+    openshift)
+      [ "$bytes" -le $((1024 * 1024 - 24 * 1024)) ] \
+        || error "agentserver.json 超过 1MiB ConfigMap 交付上限，请精简配置" ;;
+    *)
+      [ "$bytes" -le 180000 ] \
+        || error "agentserver.json 超过 180KB 交付上限（kubectl apply 注解限制），请精简配置" ;;
+  esac
   # Parse strictly as JSON; avoid dumping a payload which may contain credentials.
   if ! yq -p=json -e '
       .type == "config_sync" and

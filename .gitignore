@@ -10,10 +10,11 @@ dist/
 build/
 .next/
 out/
+deploy/jiuwenswarm-ee/conf
 
 # Environment variables
 .env
-deploy/openshift/.env.custom
+.env.custom*
 .env.local
 .env.development.local
 .env.test.local

@@ -1,68 +1,86 @@
+# jiuwenswarm-manager-web 部署清单（镜像 <<MANAGER_WEB_IMAGE>>，nginx 形态）
+# 说明：
+#   - 镜像基于 nginxinc/nginx-unprivileged，适配 restricted-v2 SCC（随机 uid，pid/temp 写 /tmp）
+#   - MANAGER_WEB_RESOLVER 留空=按集群形态自动解析（openshift 用 OCP CoreDNS 服务名，k8s 取 ClusterIP）
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: <<MANAGER_WEB_NAME>>
-  namespace: <<NAMESPACE>>
+  name: jiuwenswarm-manager-web
+  namespace: "<<NAMESPACE>>"
   labels:
-    app: <<MANAGER_WEB_NAME>>
+    app: jiuwenswarm-manager-web
 spec:
   replicas: <<MANAGER_WEB_REPLICAS>>
   selector:
     matchLabels:
-      app: <<MANAGER_WEB_NAME>>
+      app: jiuwenswarm-manager-web
   template:
     metadata:
       labels:
-        app: <<MANAGER_WEB_NAME>>
+        app: jiuwenswarm-manager-web
     spec:
-      securityContext:
-        fsGroup: 0
       containers:
         - name: manager-web
           image: <<MANAGER_WEB_IMAGE>>
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
-              containerPort: <<MANAGER_WEB_PORT>>
+              containerPort: 5273
               protocol: TCP
-          # A running nginx process does not guarantee that mounted dist exists.
-          readinessProbe:
-            httpGet:
-              path: /index.html
-              port: http
-            initialDelaySeconds: 2
-            periodSeconds: 5
-            timeoutSeconds: 2
           env:
             - name: MANAGER_WEB_HOST
               value: "0.0.0.0"
             - name: MANAGER_WEB_PORT
-              value: "<<MANAGER_WEB_PORT>>"
+              value: "5273"
             - name: MANAGER_WEB_PROXY_TARGET
-              value: "http://<<MANAGER_SERVER_NAME>>:<<MANAGER_REST_PORT>>"
+              value: "http://jiuwenswarm-manager-server:8765"
             - name: MANAGER_WEB_IDP_TARGET
-              value: "http://<<IDENTITY_NAME>>:<<IDENTITY_REST_PORT>>"
+              value: "http://jiuwenswarm-identity:8770"
             # nginx 变量 proxy_pass 需要 resolver
             - name: MANAGER_WEB_RESOLVER
               value: "<<MANAGER_WEB_RESOLVER>>"
             - name: WORKSPACE_QUOTA_ENABLED
               value: "<<WORKSPACE_QUOTA_ENABLED>>"
             - name: TZ
-              value: "<<TIMEZONE>>"
-
+              value: "Asia/Shanghai"
 ---
-# NodePort Service：供外连接
+# Service：集群内 DNS
 apiVersion: v1
 kind: Service
 metadata:
-  name: <<MANAGER_WEB_NAME>>-nodeport
-  namespace: <<NAMESPACE>>
+  name: jiuwenswarm-manager-web
+  namespace: "<<NAMESPACE>>"
 spec:
-  type: NodePort
+  selector:
+    app: jiuwenswarm-manager-web
   ports:
     - name: http
-      port: <<MANAGER_WEB_PORT>>
-      targetPort: <<MANAGER_WEB_PORT>>
-      nodePort: <<MANAGER_WEB_NODE_PORT>>
-  selector:
-    app: <<MANAGER_WEB_NAME>>
+      port: 5273
+      targetPort: 5273
+  type: ClusterIP
+---
+# Route：管理面独立入口
+# openshift 独有资源；k8s 形态由 k8s_handler.apply_k8s_extras 剥离，改用 NodePort
+# host 省略 → Router 自动分配 <name>-<namespace>.<集群ingress域名>
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: jiuwenswarm-manager-web
+  namespace: "<<NAMESPACE>>"
+  annotations:
+    # 聊天为 SSE 长连接：Route 默认 30s 空闲超时会掐断流式响应（前端报
+    # "Failed to fetch"），放宽到 300s；nginx 侧需保持 proxy_buffering off
+    # 或由 gateway 发送 X-Accel-Buffering: no，否则 keepalive 被缓冲、
+    # Route 仍会按无流量掐断
+    haproxy.router.openshift.io/timeout: 300s
+spec:
+  port:
+    targetPort: 5273
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  to:
+    kind: Service
+    name: jiuwenswarm-manager-web
+    weight: 100
+  wildcardPolicy: None

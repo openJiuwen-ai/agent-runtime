@@ -86,10 +86,10 @@ async def _create_reader(
 
 async def initialize_user_access(handler: DBHandler) -> None:
     """Complete shared access after the existing Manager tables have been created."""
-    username = os.getenv("USER_BACKEND_DB_USER", "")
+    username = os.getenv("WEB_SERVER_DB_USER", "")
     if not username:
         return
-    password = os.getenv("USER_BACKEND_DB_PASSWORD", "")
+    password = os.getenv("WEB_SERVER_DB_PASSWORD", "")
     is_dedicated_account = (
         username.lower() not in {"root", "postgres"}
         and username != getattr(handler, "user", None)

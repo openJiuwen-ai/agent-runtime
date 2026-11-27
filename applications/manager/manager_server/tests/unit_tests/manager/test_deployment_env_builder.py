@@ -117,12 +117,12 @@ class TestValidateMergedEnv:
             validate_merged_env(merged, namespace="team-a")
 
 
-def test_user_backend_parameters_survive_task_generation():
+def test_web_server_parameters_survive_task_generation():
     values = {
-        "USER_BACKEND_IMAGE": "swr.example/user-backend:1.0",
-        "USER_BACKEND_REPLICAS": "2",
-        "USER_BACKEND_DB_USER": "user_backend_team_a",
-        "USER_BACKEND_DB_PASSWORD": "Readonly@1",
+        "WEB_SERVER_IMAGE": "swr.example/web-server:1.0",
+        "WEB_SERVER_REPLICAS": "2",
+        "WEB_SERVER_DB_USER": "web_server_team_a",
+        "WEB_SERVER_DB_PASSWORD": "Readonly@1",
         "WEB_NODE_PORT": "30080",
     }
     merged = merge_env({}, values)
@@ -130,15 +130,15 @@ def test_user_backend_parameters_survive_task_generation():
     for key, value in values.items():
         assert f'{key}="{value}"' in content
     masked = mask_sensitive_env(merged)
-    assert masked["USER_BACKEND_DB_PASSWORD"] == "******"
-    assert masked["USER_BACKEND_DB_USER"] == "user_backend_team_a"
+    assert masked["WEB_SERVER_DB_PASSWORD"] == "******"
+    assert masked["WEB_SERVER_DB_USER"] == "web_server_team_a"
 
 
 @pytest.mark.parametrize(
     "key,value",
-    [("USER_BACKEND_IMAGE", "bad image"), ("USER_BACKEND_REPLICAS", "0")],
+    [("WEB_SERVER_IMAGE", "bad image"), ("WEB_SERVER_REPLICAS", "0")],
 )
-def test_user_backend_rejects_invalid_task_parameters(key, value):
+def test_web_server_rejects_invalid_task_parameters(key, value):
     with pytest.raises(ValueError):
         merge_env({}, {key: value})
 

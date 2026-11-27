@@ -1,69 +1,77 @@
-# 1. Headless Service：给 StatefulSet 提供稳定 DNS 域名
+# PostgreSQL 部署清单（OpenShift）
+# 说明：
+#   - 存储类经 DATA_STORAGE_CLASS 变量配置（.env.custom，留空走集群默认）动态供给（WaitForFirstConsumer）
+#   - 适配 restricted-v2 SCC：随机 uid 运行，fsGroup 由 SCC 注入；emptyDir 挂载 /var/run/postgresql（socket 目录）
+#   - 镜像经 POSTGRESQL_IMAGE 变量配置（.env.custom）
+# 访问：kubectl port-forward sts/postgresql 5433:5432
+#       psql -h 127.0.0.1 -p 5433 -U postgres（密码见 POSTGRES_PASSWORD）
 apiVersion: v1
 kind: Service
 metadata:
-  name: <<POSTGRESQL_NAME>>-headless
+  name: postgresql-headless
+  namespace: "<<NAMESPACE>>"
 spec:
   ports:
     - port: 5432
       targetPort: 5432
   clusterIP: None
   selector:
-    app: <<POSTGRESQL_NAME>>
-
+    app: postgresql
 ---
-# 2. NodePort Service：供外部工具连接 PostgreSQL
 apiVersion: v1
-kind: Service
+kind: PersistentVolumeClaim
 metadata:
-  name: <<POSTGRESQL_NAME>>-nodeport
+  name: postgresql-pvc
+  namespace: "<<NAMESPACE>>"
 spec:
-  type: NodePort
-  ports:
-    - port: 5432
-      targetPort: 5432
-      nodePort: <<POSTGRESQL_NODE_PORT>>
-  selector:
-    app: <<POSTGRESQL_NAME>>
-
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 4Gi
+  storageClassName: <<DATA_STORAGE_CLASS>>
 ---
-# 3. StatefulSet：PostgreSQL 有状态应用
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: <<POSTGRESQL_NAME>>
+  name: postgresql
+  namespace: "<<NAMESPACE>>"
 spec:
-  serviceName: <<POSTGRESQL_NAME>>-headless
+  serviceName: postgresql-headless
   replicas: 1
   selector:
     matchLabels:
-      app: <<POSTGRESQL_NAME>>
+      app: postgresql
   template:
     metadata:
       labels:
-        app: <<POSTGRESQL_NAME>>
+        app: postgresql
     spec:
       containers:
-        - name: <<POSTGRESQL_NAME>>
+        - name: postgresql
           image: <<POSTGRESQL_IMAGE>>
+          imagePullPolicy: IfNotPresent
           args:
             - -c
-            - max_connections=<<POSTGRESQL_MAX_CONNECTION>>
+            - max_connections=192
+          envFrom:
+            - secretRef:
+                name: jiuwenswarm-secret-configmap
           env:
-            - name: POSTGRES_PASSWORD
-              value: "<<POSTGRESQL_PASSWORD>>"
             - name: POSTGRES_HOST_AUTH_METHOD
               value: "scram-sha-256"
             - name: TZ
-              value: "<<TIMEZONE>>"
+              value: "Asia/Shanghai"
             - name: PGDATA
               value: "/var/lib/postgresql/data/pgdata"
           ports:
             - containerPort: 5432
-              name: <<POSTGRESQL_NAME>>
+              name: postgresql
           volumeMounts:
-            - name: <<POSTGRESQL_NAME>>-data
+            - name: postgresql-data
               mountPath: /var/lib/postgresql/data
+            - name: postgresql-run
+              mountPath: /var/run/postgresql
           livenessProbe:
             exec:
               command: ["pg_isready", "-U", "postgres"]
@@ -77,47 +85,8 @@ spec:
             periodSeconds: 5
             timeoutSeconds: 2
       volumes:
-        - name: <<POSTGRESQL_NAME>>-data
+        - name: postgresql-data
           persistentVolumeClaim:
-            claimName: <<POSTGRESQL_NAME>>-pvc
-
----
-apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: <<POSTGRESQL_NAME>>-pv
-  labels:
-    app: <<POSTGRESQL_NAME>>
-spec:
-  capacity:
-    storage: <<POSTGRESQL_STORAGE_SIZE>>
-  accessModes:
-    - ReadWriteOnce
-  persistentVolumeReclaimPolicy: Retain
-  storageClassName: ""
-  nfs:
-    server: <<NFS_SERVER_ADDR>>
-    path: <<NFS_SHARE_PATH>>/<<POSTGRESQL_NAME>>
-    readOnly: false
-  mountOptions:
-    - nfsvers=4
-    - soft        # 改成 soft！防止节点卡死
-    - timeo=600   # 超时时间：60秒
-    - retrans=2   # 重试2次
-    - noatime
-
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: <<POSTGRESQL_NAME>>-pvc
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: <<POSTGRESQL_STORAGE_SIZE>>
-  storageClassName: ""
-  selector:
-    matchLabels:
-      app: <<POSTGRESQL_NAME>>
+            claimName: postgresql-pvc
+        - name: postgresql-run
+          emptyDir: {}

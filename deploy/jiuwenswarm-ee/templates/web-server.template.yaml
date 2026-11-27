@@ -1,0 +1,74 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: jiuwenswarm-web-server
+  namespace: <<NAMESPACE>>
+spec:
+  selector:
+    app: jiuwenswarm-web-server
+  ports:
+    - name: http
+      port: 8780
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jiuwenswarm-web-server
+  namespace: <<NAMESPACE>>
+spec:
+  replicas: <<WEB_SERVER_REPLICAS>>
+  selector:
+    matchLabels:
+      app: jiuwenswarm-web-server
+  template:
+    metadata:
+      labels:
+        app: jiuwenswarm-web-server
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: web-server
+          image: <<WEB_SERVER_IMAGE>>
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8780
+          env:
+            - name: JIUWENSWARM_EDITION
+              value: "enterprise"
+            - name: WEB_SERVER_DB_USER
+              value: "<<WEB_SERVER_DB_USER>>"
+            - name: WEB_SERVER_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: jiuwenswarm-secret-configmap
+                  key: WEB_SERVER_DB_PASSWORD
+            - name: WEB_SERVER_DB_TYPE
+              value: "<<DB_TYPE>>"
+            - name: WEB_SERVER_DB_HOST
+              value: "<<DB_HOST>>"
+            - name: WEB_SERVER_DB_PORT
+              value: "<<DB_PORT>>"
+            - name: WEB_SERVER_DB_NAME
+              value: "<<MANAGER_DB_NAME>>"
+            - name: WEB_SERVER_PG_SCHEMA
+              value: "<<MANAGER_PG_SCHEMA>>"
+            - name: WEB_SERVER_IDENTITY_URL
+              value: "http://jiuwenswarm-identity:8770"
+            - name: WEB_SERVER_MANAGER_URL
+              value: "http://jiuwenswarm-manager-server:8765"
+            - name: WEB_SERVER_DEFAULT_GATEWAY_HTTP
+              value: "http://jiuwenswarm-gateway:19000"
+            - name: WEB_SERVER_DEFAULT_GATEWAY_WS
+              value: "http://jiuwenswarm-gateway:19000"
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 7
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http

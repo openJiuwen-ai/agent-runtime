@@ -1,57 +1,54 @@
+# jiuwenswarm-gateway 部署清单（镜像 <<GATEWAY_IMAGE>>）
+# 说明：
+#   - 镜像为 OpenShift 适配版，适配 restricted-v2 SCC（强制随机 uid，不指定 runAsUser/fsGroup）
+#   - 配置经 Secret jiuwenswarm-secret-configmap 与 ConfigMap jiuwenswarm-gateway-envfile 注入
+#   - 数据卷挂载（profile 分层契约，见 jiuwenswarm/common/paths.py）：
+#     · 共享卷 PVC gateway-pvc → /home/app/.jiuwenswarm/profile：统一用户数据目录，
+#       gateway 各副本共享同一数据卷（application_plugins/（运维部署的应用插件）等
+#       zone 级资产跨副本/跨 Pod 存活）；与 agentserver 数据卷相互独立
+#   - 数据根 /home/app/.jiuwenswarm 自身不挂载（Pod 本地存储），仅 profile/ 经共享卷挂载
+#   - 依赖前置：mariadb 已建库 gateway_<<NAMESPACE>> / web_<<NAMESPACE>>（utf8mb4）
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: <<GATEWAY_NAME>>
-  namespace: <<NAMESPACE>>
+  name: jiuwenswarm-gateway
+  namespace: "<<NAMESPACE>>"
   labels:
-    app: <<GATEWAY_NAME>>
+    app: jiuwenswarm-gateway
 spec:
   replicas: <<GATEWAY_REPLICAS>>
   selector:
     matchLabels:
-      app: <<GATEWAY_NAME>>
+      app: jiuwenswarm-gateway
   template:
     metadata:
       labels:
-        app: <<GATEWAY_NAME>>
+        app: jiuwenswarm-gateway
     spec:
-      securityContext:
-        fsGroup: <<SWARM_FS_GROUP>>
       affinity:
         podAntiAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:  # 软限制：优先把pod分开部署，但如果资源紧张、只有一个节点可用的时候，也允许它们挤在同一台机器上
-          - weight: 100                                     # 权重范围（1-100），取最高值，优先分开放置
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
             podAffinityTerm:
               labelSelector:
                 matchExpressions:
                 - key: app
                   operator: In
                   values:
-                  - <<GATEWAY_NAME>>
+                  - jiuwenswarm-gateway
               topologyKey: "kubernetes.io/hostname"
       containers:
         - name: gateway
           image: <<GATEWAY_IMAGE>>
           imagePullPolicy: IfNotPresent
-          securityContext:
-            runAsUser: <<SWARM_USER>>
-            runAsGroup: <<SWARM_GROUP>>
-          # 调试模式：gateway 崩溃后容器不退出（sleep 保活），便于进 Pod 排查。
-          # command: ["/bin/sh", "-c"]
-          # args: ["jiuwenswarm-gateway; echo '[debug-keepalive] gateway exited rc=$?, sleeping'; sleep infinity"]
           ports:
             - name: web-ws
-              containerPort: <<WEB_PORT>>
+              containerPort: 19000
             - name: http
-              containerPort: <<GATEWAY_HTTP_PORT>>
-            - name: web-http
-              containerPort: <<GATEWAY_WEB_HTTP_PORT>>
-            - name: config-http
-              containerPort: <<GATEWAY_CONFIG_HTTP_PORT>>
-          # active-standby：仅 PRIMARY Ready，保证 ClusterIP 流量打到主
+              containerPort: 19001
           readinessProbe:
             httpGet:
-              path: /api/v1/ready
+              path: /api/v1/health
               port: web-ws
             initialDelaySeconds: 10
             periodSeconds: 5
@@ -59,7 +56,7 @@ spec:
             failureThreshold: 3
           livenessProbe:
             httpGet:
-              path: /api/health
+              path: /api/v1/health
               port: web-ws
             initialDelaySeconds: 30
             periodSeconds: 20
@@ -67,53 +64,36 @@ spec:
             failureThreshold: 3
           envFrom:
             - secretRef:
-                name: <<SECRET_CM_NAME>>
+                name: jiuwenswarm-secret-configmap
             - configMapRef:
-                name: <<GATEWAY_ENV_FILE_CM_NAME>>
+                name: jiuwenswarm-gateway-envfile
           env:
             - name: POD_IP
               valueFrom:
                 fieldRef:
                   fieldPath: status.podIP
-
+          volumeMounts:
+            - name: gateway-data
+              mountPath: /home/app/.jiuwenswarm/profile
+      volumes:
+        - name: gateway-data
+          persistentVolumeClaim:
+            claimName: gateway-pvc
 ---
-# Service：提供稳定 DNS 域名, 供集群内部访问
+# Service：提供稳定 DNS 域名，供集群内部访问
 apiVersion: v1
 kind: Service
 metadata:
-  name: <<GATEWAY_NAME>>
-  namespace: <<NAMESPACE>>
+  name: jiuwenswarm-gateway
+  namespace: "<<NAMESPACE>>"
 spec:
   selector:
-    app: <<GATEWAY_NAME>>
+    app: jiuwenswarm-gateway
   ports:
     - name: web-ws
-      port: <<WEB_PORT>>
-      targetPort: <<WEB_PORT>>
+      port: 19000
+      targetPort: 19000
     - name: http
-      port: <<GATEWAY_HTTP_PORT>>
-      targetPort: <<GATEWAY_HTTP_PORT>>
-    - name: web-http
-      port: <<GATEWAY_WEB_HTTP_PORT>>
-      targetPort: <<GATEWAY_WEB_HTTP_PORT>>
-    - name: config-http
-      port: <<GATEWAY_CONFIG_HTTP_PORT>>
-      targetPort: <<GATEWAY_CONFIG_HTTP_PORT>>
-  type: ClusterIP                             # 集群内部访问，不需要外网
-
----
-# NodePort Service：供外连接， 只暴露统一 Web 端口（Manager config API 已并入 WEB_PORT）
-apiVersion: v1
-kind: Service
-metadata:
-  name: <<GATEWAY_NAME>>-nodeport
-  namespace: <<NAMESPACE>>
-spec:
-  type: NodePort
-  ports:
-    - name: web-ws
-      port: <<WEB_PORT>>
-      targetPort: <<WEB_PORT>>
-      nodePort: <<GATEWAY_CONFIG_HTTP_NODE_PORT>>
-  selector:
-    app: <<GATEWAY_NAME>>
+      port: 19001
+      targetPort: 19001
+  type: ClusterIP
