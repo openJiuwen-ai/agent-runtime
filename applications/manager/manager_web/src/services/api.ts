@@ -32,6 +32,9 @@ import type {
   ExecutionGuardTemplate,
   ExecutionGuardTemplateCreateBody,
   ExecutionGuardTemplateUpdateBody,
+  AdvancedConfigTemplate,
+  AdvancedConfigTemplateCreateBody,
+  AdvancedConfigTemplateUpdateBody,
   ServiceConfigTemplate,
   ServiceConfigTemplateCreateBody,
   ServiceConfigTemplateUpdateBody,
@@ -1731,6 +1734,31 @@ export const ExecutionGuardTemplateApi = {
   remove: (id: string) =>
     http<{ deleted: boolean; template_id: string }>(
       `/v1/execution-guard-templates/${encodeURIComponent(id)}`,
+      { method: 'DELETE' }
+    ),
+};
+
+export const AdvancedConfigTemplateApi = {
+  list: (params?: {
+    page?: number;
+    page_size?: number;
+    enabled?: boolean;
+    search?: string;
+    sort_by?: 'template_name' | 'description' | 'updated_at';
+    sort_order?: 'asc' | 'desc';
+  }) => http<PageResult<AdvancedConfigTemplate>>('/v1/advanced-config-templates', { query: params }),
+  get: (id: string) =>
+    http<AdvancedConfigTemplate>(`/v1/advanced-config-templates/${encodeURIComponent(id)}`),
+  create: (body: AdvancedConfigTemplateCreateBody) =>
+    http<AdvancedConfigTemplate>('/v1/advanced-config-templates', { method: 'POST', body }),
+  update: (id: string, body: AdvancedConfigTemplateUpdateBody) =>
+    http<AdvancedConfigTemplate>(`/v1/advanced-config-templates/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body,
+    }),
+  remove: (id: string) =>
+    http<{ deleted: boolean; template_id: string }>(
+      `/v1/advanced-config-templates/${encodeURIComponent(id)}`,
       { method: 'DELETE' }
     ),
 };

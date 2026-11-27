@@ -32,6 +32,7 @@ import { ServiceConfigTemplatesPage } from './pages/templates/ServiceConfigTempl
 import { AgentDefinitionsPage } from './pages/templates/AgentDefinitionsPage';
 import { SafetyGuardrailsPage } from './pages/templates/SafetyGuardrailsPage';
 import { ExecutionGuardrailsPage } from './pages/templates/ExecutionGuardrailsPage';
+import { AdvancedConfigPage } from './pages/templates/AdvancedConfigPage';
 import { matchRoute, RouterProvider, useRouter } from './router';
 import { AuthProvider, useAuth } from './auth/AuthContext';
 import { LoginPage } from './pages/LoginPage';
@@ -200,6 +201,9 @@ function RouteView() {
   }
   if (path === '/execution-guard-templates') {
     return <ResourceWorkspaceFrame><ExecutionGuardrailsPage /></ResourceWorkspaceFrame>;
+  }
+  if (path === '/advanced-config-templates') {
+    return <ResourceWorkspaceFrame><AdvancedConfigPage /></ResourceWorkspaceFrame>;
   }
   if (path === '/a2a-management') {
     return (

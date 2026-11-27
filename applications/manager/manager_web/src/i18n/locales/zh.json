@@ -161,6 +161,41 @@
     "fieldRequired": "请填写{{field}}",
     "unsafeText": "{{field}}含有不安全内容"
   },
+  "advancedConfigTemplates": {
+    "title": "高级配置",
+    "subtitle": "管理运行时高级能力开关，供 Agent 配置模板引用",
+    "new": "新建高级配置",
+    "edit": "编辑高级配置",
+    "searchPlaceholder": "搜索模板 ID、名称、描述",
+    "referenceCount": "被引用",
+    "referenceHint": "点击查看引用了该模板的 Agent 配置模板",
+    "templateName": "模板名称",
+    "templateDescription": "模板描述",
+    "updatedAt": "更新时间",
+    "switchesSummary": "已开启能力",
+    "noSwitchesOn": "均未开启",
+    "deleteConfirm": "确认删除该高级配置模板？",
+    "fieldRequired": "请填写{{field}}",
+    "unsafeText": "{{field}}含有不安全内容",
+    "sections": {
+      "switches": "能力开关",
+      "switchesHint": "保存后引用本模板的 Agent 将按此处配置生效；「data」字段本阶段不在界面展示。"
+    },
+    "switchShort": {
+      "progressive_tool_enabled": "渐进工具",
+      "progressive_tool_optimize": "工具优化",
+      "a4p_enabled": "A4P",
+      "auto_memory_enabled": "自动记忆",
+      "enable_kv_cache_affinity": "KV 亲和"
+    },
+    "fields": {
+      "progressive_tool_enabled": "启用渐进式工具",
+      "progressive_tool_optimize": "启用渐进式工具优化",
+      "a4p_enabled": "启用 A4P",
+      "auto_memory_enabled": "启用自动记忆",
+      "enable_kv_cache_affinity": "启用 KV 缓存亲和"
+    }
+  },
   "executionGuardrails": {
     "title": "执行护栏",
     "subtitle": "管理模型异常检测和循环断路器，供 Agent 配置模板引用",
@@ -1245,6 +1280,7 @@
         "mcp": "MCP配置",
         "permissions": "安全护栏",
         "execution_guard": "执行护栏",
+        "advanced_config": "高级配置",
         "a2a_access_policy": "A2A 访问策略",
         "expert_package": "专家包"
       },

@@ -282,6 +282,55 @@ EXECUTION_GUARD_TEMPLATE_TABLE_DEF = TableDefinition(
     ],
 )
 
+# 高级配置模板：五布尔列 + data 预留；经 agent_template.template_ref.advanced_config 引用。
+ADVANCED_CONFIG_TEMPLATE_TABLE_DEF = TableDefinition(
+    table_name="advanced_config_template",
+    columns=[
+        ColumnDefinition(
+            "id",
+            "integer",
+            primary_key=True,
+            autoincrement=True,
+            nullable=False,
+        ),
+        ColumnDefinition("template_id", "string", length=100, nullable=False),
+        ColumnDefinition("template_name", "string", length=128, nullable=False),
+        ColumnDefinition("description", "string", length=512, nullable=True),
+        ColumnDefinition("enabled", "boolean", nullable=False, default=True),
+        ColumnDefinition(
+            "progressive_tool_enabled",
+            "boolean",
+            nullable=False,
+            default=True,
+        ),
+        ColumnDefinition(
+            "progressive_tool_optimize",
+            "boolean",
+            nullable=False,
+            default=False,
+        ),
+        ColumnDefinition("a4p_enabled", "boolean", nullable=False, default=False),
+        ColumnDefinition(
+            "auto_memory_enabled",
+            "boolean",
+            nullable=False,
+            default=False,
+        ),
+        ColumnDefinition(
+            "enable_kv_cache_affinity",
+            "boolean",
+            nullable=False,
+            default=False,
+        ),
+        ColumnDefinition("data", "json", nullable=True),
+        ColumnDefinition("created_at", "datetime", nullable=False),
+        ColumnDefinition("updated_at", "datetime", nullable=False),
+    ],
+    indexes=[
+        IndexDefinition(["template_id"], unique=True),
+    ],
+)
+
 # 容器规格目录（与 Runtime service_config_container 对齐；平台全局，不带 jiuwenclaw_id）。
 # 模板经 main_container_id / sidecar_container_ids 引用；create/update 时 UPSERT 本表。
 # command/args 与 Runtime 对齐（存量库须手工 ALTER 补列）。
