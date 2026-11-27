@@ -129,7 +129,8 @@ def canonical_host_path_mounts(value: Any, where: str) -> list[dict[str, Any]]:
 
 def canonical_configmap_mounts(value: Any, where: str) -> list[dict[str, Any]]:
     """ConfigMap 挂载 → 规范形(沿老 SDK ConfigMapMount 语义:
-    config_map_name/mount_path/sub_path/items/read_only);非法 raise InvalidParams。"""
+    config_map_name/mount_path/sub_path/items/read_only);非法 raise InvalidParams。
+    """
     if not isinstance(value, list):
         raise fail(f"{where} must be a list, got {value!r}")
     mounts: list[dict[str, Any]] = []
@@ -262,7 +263,8 @@ def normalize_mounts(
         value: Any, kind: str,
 ) -> Optional[list[dict[str, Any]]]:
     """宽容归一(读路径防御,不抛):None/[]/非 list → None;坏项静默丢弃;
-    产物 = 规范形 + 按 mount_path 排序;空 → None。"""
+    产物 = 规范形 + 按 mount_path 排序;空 → None。
+    """
     canonical = {
         "host_path_mounts": canonical_host_path_mounts,
         "configmap_mounts": canonical_configmap_mounts,
