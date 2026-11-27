@@ -46,7 +46,7 @@ DEPLOYMENT_TASK_TABLE_DEF = TableDefinition(
         ColumnDefinition("params", "json", nullable=True),
         # 执行时实际使用的默认 env 快照（defaults 表当时的值）
         ColumnDefinition("defaults_snapshot", "json", nullable=True),
-        # 工具树版本戳（deploy/openshift/TOOL_VERSION）
+        # 工具树版本戳（deploy/jiuwenswarm-ee/TOOL_VERSION）
         ColumnDefinition("tool_version", "string", length=64, nullable=True),
         # 成功后自动注册出的实例 ID（注册失败为空，见 progress.auto_register）
         ColumnDefinition("instance_jid", "string", length=64, nullable=True),

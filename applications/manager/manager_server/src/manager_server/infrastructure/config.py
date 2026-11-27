@@ -141,8 +141,8 @@ class Settings(BaseSettings):
     deploy_enabled: bool = Field(
         default=True, validation_alias="MANAGER_DEPLOY_ENABLED"
     )
-    # deploy/openshift 工具树：留空自动探测（镜像内 /app/agent-runtime/deploy/openshift
-    # → 源码仓 deploy/openshift）
+    # deploy/jiuwenswarm-ee 工具树：留空自动探测（镜像内 /app/agent-runtime/deploy/jiuwenswarm-ee
+    # → 源码仓 deploy/jiuwenswarm-ee）
     deploy_tool_dir: str = Field(default="", validation_alias="MANAGER_DEPLOY_TOOL_DIR")
     # 部署子进程用的 kubeconfig（k8s 形态 kubectl 隐式解析；随 Secret 卷注入）
     deploy_kubeconfig: str = Field(

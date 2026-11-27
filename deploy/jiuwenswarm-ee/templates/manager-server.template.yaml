@@ -1,38 +1,26 @@
-# Service：提供稳定 DNS 域名, 供集群内部访问
+# jiuwenswarm-manager-server 部署清单（镜像 <<MANAGER_SERVER_IMAGE>>）
+# 说明：
+#   - 镜像为 OpenShift 适配版，适配 restricted-v2 SCC（强制随机 uid，不指定 runAsUser/fsGroup）
+#   - redis 连接：REDIS_URL 内嵌 URL 编码后的访问密码（@ → %40）
+#   - 依赖前置：mariadb 已建库 manager_<<NAMESPACE>>（utf8mb4）；identity 先行部署（公钥经
+#     IDENTITY_PUBLIC_KEY_URL 拉取）
+# Service：提供稳定 DNS 域名，供集群内部访问
 apiVersion: v1
 kind: Service
 metadata:
-  name: <<MANAGER_SERVER_NAME>>
-  namespace: <<NAMESPACE>>
+  name: jiuwenswarm-manager-server
+  namespace: "<<NAMESPACE>>"
 spec:
   selector:
-    app: <<MANAGER_SERVER_NAME>>
+    app: jiuwenswarm-manager-server
   ports:
     - name: rest
-      port: <<MANAGER_REST_PORT>>
-      targetPort: <<MANAGER_REST_PORT>>
+      port: 8765
+      targetPort: 8765
     - name: websocket
-      port: <<MANAGER_WS_PORT>>
-      targetPort: <<MANAGER_WS_PORT>>
-  type: ClusterIP                             # 集群内部访问，不需要外网
-
----
-# NodePort Service：供集群外部连接
-apiVersion: v1
-kind: Service
-metadata:
-  name: <<MANAGER_SERVER_NAME>>-nodeport
-  namespace: <<NAMESPACE>>
-spec:
-  type: NodePort
-  ports:
-    - name: rest
-      port: <<MANAGER_REST_PORT>>       # 集群内部端口
-      targetPort: <<MANAGER_REST_PORT>> # 容器端口
-      nodePort: <<MANAGER_SERVER_NODE_PORT>>   # 外部访问端口（30000-32767）
-  selector:
-    app: <<MANAGER_SERVER_NAME>>
-
+      port: 8766
+      targetPort: 8766
+  type: ClusterIP
 ---
 # 连接状态页只读库存：本 ns Pod list + kubelet Summary（nodes/proxy；不依赖 metrics-server）
 # imagePullSecrets：部署后请从同 ns default SA 同步，避免私有仓库拉取失败
@@ -95,21 +83,24 @@ roleRef:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: <<MANAGER_SERVER_NAME>>
-  namespace: <<NAMESPACE>>
+  name: jiuwenswarm-manager-server
+  namespace: "<<NAMESPACE>>"
 spec:
   replicas: <<MANAGER_SERVER_REPLICAS>>
   selector:
     matchLabels:
-      app: <<MANAGER_SERVER_NAME>>
+      app: jiuwenswarm-manager-server
   template:
     metadata:
       labels:
-        app: <<MANAGER_SERVER_NAME>>
+        app: jiuwenswarm-manager-server
     spec:
+<<<<<<< HEAD
       serviceAccountName: <<MANAGER_SERVER_NAME>>-sa
       securityContext:
         fsGroup: <<SWARM_FS_GROUP>>
+=======
+>>>>>>> 57c0a3f2 (refactor(docker): 镜像构建文件收敛 docker/jiuwenswarm-ee，基础镜像移仓 agent-runtime，部署工具将老版的删除，将新版收敛于deploy/jiuwenswarm-ee)
       volumes:
         - name: web-probe-ca
           configMap:
@@ -122,30 +113,28 @@ spec:
           mountPath: /etc/manager/web-probe-ca
           readOnly: true
         image: <<MANAGER_SERVER_IMAGE>>
-        securityContext:
-          runAsUser: <<SWARM_USER>>
-          runAsGroup: <<SWARM_GROUP>>
+        imagePullPolicy: IfNotPresent
         ports:
         - name: rest
-          containerPort: <<MANAGER_REST_PORT>>
+          containerPort: 8765
         - name: websocket
-          containerPort: <<MANAGER_WS_PORT>>
+          containerPort: 8766
         envFrom:
             - secretRef:
-                name: <<SECRET_CM_NAME>>
+                name: jiuwenswarm-secret-configmap
         env:
         - name: REDIS_URL
-          value: "<<REDIS_URL>>"
+          value: "<<REDIS_URL>>"  # 凭据经 REDIS_USER/REDIS_PASSWORD 注入
         - name: REDIS_USER
           value: "<<REDIS_USER>>"
         - name: REDIS_KEY_PREFIX
           value: "<<REDIS_KEY_PREFIX>>"
         - name: MANAGER_RABBITMQ_URL
-          value: "<<MANAGER_RABBITMQ_URL>>"
+          value: ""
         - name: MANAGER_REST_HOST
           value: "0.0.0.0"
         - name: MANAGER_REST_PORT
-          value: "<<MANAGER_REST_PORT>>"
+          value: "8765"
         - name: MANAGER_AGENT_CLIENT_REGISTRATION_ENABLED
           value: "<<MANAGER_AGENT_CLIENT_REGISTRATION_ENABLED>>"
         - name: MANAGER_AGENT_CLIENT_REGISTRATION_CONFIG_FILE
@@ -158,28 +147,44 @@ spec:
           value: "<<DB_PORT>>"
         - name: MANAGER_DB_USER
           value: "<<MANAGER_DB_USER>>"
+        - name: WEB_SERVER_DB_USER
+          value: "<<WEB_SERVER_DB_USER>>"
         - name: MANAGER_DB_NAME
           value: "<<MANAGER_DB_NAME>>"
+        - name: MANAGER_PG_SCHEMA
+          value: "<<MANAGER_PG_SCHEMA>>"
         - name: IDENTITY_PUBLIC_KEY_URL
+<<<<<<< HEAD
           value: "http://<<IDENTITY_NAME>>:<<IDENTITY_REST_PORT>>/v1/auth/public_key"
         # nginx 变量 proxy_pass 需 FQDN；短名作回退时由 Manager 扩成 *.svc.cluster.local
+=======
+          value: "http://jiuwenswarm-identity:8770/v1/auth/public_key"
+        # 三模式部署形态（off 时 manager 跳过 Runtime 探活；routing/full 探活 agent-runtime /healthz）
+        - name: AGENT_RUNTIME_DEPLOY_MODE
+          value: "<<AGENT_RUNTIME_DEPLOY_MODE>>"
+        # routing 模式：外部 AgentServer Pod 的 headless DNS 清单（manager 据此注册，
+        # 与 StatefulSet 副本数同源；off/full 为空）
+        - name: AGENTSERVER_POD_DNS_LIST
+          value: "<<AGENTSERVER_POD_DNS_LIST>>"
+        # MANAGER_WEB_*_TARGET 为 manager-web nginx 的 proxy_pass 上游（nginx 要求 FQDN）
+        - name: MANAGER_WEB_USER_WEB_TARGET
+          value: "https://jiuwenswarm-web.<<NAMESPACE>>.svc.cluster.local:5173"
+>>>>>>> 57c0a3f2 (refactor(docker): 镜像构建文件收敛 docker/jiuwenswarm-ee，基础镜像移仓 agent-runtime，部署工具将老版的删除，将新版收敛于deploy/jiuwenswarm-ee)
         - name: MANAGER_WEB_GATEWAY_HTTP_TARGET
-          value: "http://<<GATEWAY_NAME>>.<<NAMESPACE>>.svc.cluster.local:<<WEB_PORT>>"
+          value: "http://jiuwenswarm-gateway.<<NAMESPACE>>.svc.cluster.local:19000"
         - name: MANAGER_WEB_GATEWAY_WS_TARGET
-          value: "http://<<GATEWAY_NAME>>.<<NAMESPACE>>.svc.cluster.local:<<WEB_PORT>>"
+          value: "http://jiuwenswarm-gateway.<<NAMESPACE>>.svc.cluster.local:19000"
         - name: NAMESPACE
           value: "<<NAMESPACE>>"
         - name: AGENT_RUNTIME_SYNC_TIMEOUT
-          value: "<<AGENT_RUNTIME_SYNC_TIMEOUT>>"
+          value: "10"
         - name: WORKSPACE_QUOTA_ENABLED
           value: "<<WORKSPACE_QUOTA_ENABLED>>"
-        # 技能上传审批：manager 按 object_key 直读原始包（凭据复用 AgentServer 的 AK/SK）
+        # 技能上传审批：manager 按 object_key 直读原始包（OBS_ACCESS_KEY/OBS_SECRET_KEY 由 Secret 注入）
         - name: OBS_URL
           value: "<<OBS_URL>>"
         - name: OBS_BUCKET
           value: "<<OBS_BUCKET>>"
-        - name: OBS_ACCESS_KEY
-          value: "<<OBS_ACCESS_KEY>>"
         - name: OBS_REGION
           value: "<<OBS_REGION>>"
         - name: OBS_SECURE
@@ -187,11 +192,14 @@ spec:
         # 包保留天数：与 AgentServer 必须同值，默认 7，最小 1
         - name: SKILL_UPLOAD_RETENTION_DAYS
           value: "<<SKILL_UPLOAD_RETENTION_DAYS>>"
+        # TeamSkills Hub 基址；留空不注入，走代码默认 https://swarmskills.openjiuwen.com
+        - name: TEAM_SKILLS_HUB_BASE_URL
+          value: "<<TEAM_SKILLS_HUB_BASE_URL>>"
         - name: MANAGER_WS_ENABLED
           value: "true"
         - name: MANAGER_WS_HOST
           value: "0.0.0.0"
         - name: MANAGER_WS_PORT
-          value: "<<MANAGER_WS_PORT>>"
+          value: "8766"
         - name: TZ
-          value: "<<TIMEZONE>>"
+          value: "Asia/Shanghai"

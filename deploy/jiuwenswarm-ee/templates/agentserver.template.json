@@ -13,125 +13,39 @@
     "containers": [
       {
         "container_id": "c-agentserver",
-        "name": "<<AGENT_SERVER_NAME>>",
-        "image": "<<AGENT_SERVER_IMAGE>>",
+        "name": "jiuwenswarm-agentserver",
+        "image": "<<AGENTSERVER_IMAGE>>",
         "imagePullPolicy": "IfNotPresent",
         "ports": [
           {
             "name": "sse",
-            "containerPort": <<AGENT_SERVER_HTTP_PORT>>
+            "containerPort": 8766
           }
         ],
         "envFrom": [
           {
             "secretRef": {
-              "name": "<<SECRET_CM_NAME>>"
+              "name": "jiuwenswarm-secret-configmap"
             }
           },
           {
             "configMapRef": {
-              "name": "<<AGENT_SERVER_ENV_CM_NAME>>"
+              "name": "jiuwenswarm-agentserver-env"
             }
           }
         ],
-        "securityContext": {
-          "runAsUser": <<SWARM_USER>>,
-          "runAsGroup": <<SWARM_GROUP>>
-        },
         "readinessProbe": {
           "httpGet": {
             "path": "/api/v1/health",
-            "port": <<AGENT_SERVER_HTTP_PORT>>
+            "port": 8766
           },
           "initialDelaySeconds": 5,
           "periodSeconds": 10
         },
         "volumeMounts": [
           {
-            "name": "hp-code",
-            "mountPath": "<<SWARM_POD_CODE_PATH>>"
-          },
-          {
-            "name": "hp-rt-foundation",
-            "mountPath": "<<RUNTIME_POD_PKG_PATH>>/foundation"
-          },
-          {
-            "name": "hp-rt-management",
-            "mountPath": "<<RUNTIME_POD_PKG_PATH>>/management"
-          },
-          {
-            "name": "hp-openjiuwen",
-            "mountPath": "<<CORE_POD_PKG_PATH>>"
-          },
-          {
-            "name": "agentserver-domain",
-            "mountPath": "<<SWARM_HOME>>/.jiuwenswarm/domain"
-          },
-          {
-            "name": "agentserver-infra",
-            "mountPath": "<<SWARM_HOME>>/.jiuwenswarm/infra"
-          }
-        ]
-      },
-      {
-        "container_id": "c-jiuwenbox",
-        "name": "<<JIUWENBOX_NAME>>",
-        "image": "<<JIUWENBOX_IMAGE>>",
-        "imagePullPolicy": "IfNotPresent",
-        "ports": [
-          {
-            "containerPort": <<JIUWENBOX_PORT>>
-          }
-        ],
-        "env": [
-          {
-            "name": "JIUWENBOX_LISTEN",
-            "value": "http://0.0.0.0:<<JIUWENBOX_PORT>>"
-          },
-          {
-            "name": "JIUWENBOX_POLICY_PATH",
-            "value": "<<SWARM_POD_CODE_PATH>>/jiuwenbox/src/jiuwenbox/configs/enterprise-policy.yaml"
-          },
-          {
-            "name": "TZ",
-            "value": "<<TIMEZONE>>"
-          }
-        ],
-        "securityContext": {
-          "runAsUser": 0,
-          "runAsGroup": 0,
-          "capabilities": {
-            "add": [
-              "SYS_ADMIN",
-              "NET_ADMIN"
-            ]
-          },
-          "seccompProfile": {
-            "type": "Unconfined"
-          },
-          "appArmorProfile": {
-            "type": "Unconfined"
-          }
-        },
-        "readinessProbe": {
-          "tcpSocket": {
-            "port": <<JIUWENBOX_PORT>>
-          },
-          "initialDelaySeconds": 10,
-          "periodSeconds": 5
-        },
-        "volumeMounts": [
-          {
-            "name": "hp-cgroup",
-            "mountPath": "/sys/fs/cgroup"
-          },
-          {
-            "name": "hp-code",
-            "mountPath": "<<SWARM_POD_CODE_PATH>>"
-          },
-          {
-            "name": "agentserver-domain",
-            "mountPath": "<<SWARM_HOME>>/.jiuwenswarm/domain"
+            "name": "data",
+            "mountPath": "/home/app/.jiuwenswarm/profile"
           }
         ]
       }
@@ -139,15 +53,10 @@
     "templates": [
       {
         "template_id": "default",
-        "fsGroup": <<SWARM_FS_GROUP>>,
         "template_name": "default",
         "main_container_id": "c-agentserver",
-        "sidecar_container_ids": [
-          "c-jiuwenbox"
-        ],
-        "pod_name": "<<AGENT_SERVER_NAME>>",
+        "pod_name": "jiuwenswarm-agentserver",
         "namespace": "<<NAMESPACE>>",
-        "nodeName": "<<CURRENT_NODE_NAME>>",
         "sse_path": "/api/v1/events/stream",
         "scope_concurrency": 400,
         "pod_concurrency": 200,
@@ -157,38 +66,9 @@
         "ready_timeout": 240,
         "volumes": [
           {
-            "name": "hp-code",
-            "hostPath": {
-              "path": "<<SWARM_CODE_PATH>>",
-              "type": "Directory"
-            }
-          },
-          {
-            "name": "hp-rt-foundation",
-            "hostPath": {
-              "path": "<<RUNTIME_CODE_PATH>>/foundation/openjiuwen_runtime/foundation",
-              "type": "Directory"
-            }
-          },
-          {
-            "name": "hp-rt-management",
-            "hostPath": {
-              "path": "<<RUNTIME_CODE_PATH>>/management/openjiuwen_runtime/management",
-              "type": "Directory"
-            }
-          },
-          {
-            "name": "hp-openjiuwen",
-            "hostPath": {
-              "path": "<<CORE_CODE_PATH>>/openjiuwen",
-              "type": "Directory"
-            }
-          },
-          {
-            "name": "hp-cgroup",
-            "hostPath": {
-              "path": "/sys/fs/cgroup",
-              "type": "Directory"
+            "name": "data",
+            "persistentVolumeClaim": {
+              "claimName": "jiuwenswarm-pvc"
             }
           }
         ]

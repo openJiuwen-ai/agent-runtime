@@ -1,249 +1,107 @@
 #!/usr/bin/env bash
-set -euo >/dev/null 2>&1
+[ -n "${_DEPLOY_TEMPLATE_HANDLER_SH:-}" ] && return 0
+_DEPLOY_TEMPLATE_HANDLER_SH=1
 
-# === Extracts and deduplicates <<variable>> placeholders from template ===
-extract_placeholders() {
-    local templatefile="$1"
-    local -a placeholders=($(grep -oE '<<[^>]+>>' "${templatefile}" | sort -u))
-    echo "${placeholders[@]}"
+# template_handler.sh —— 清单渲染
+# templates/ 下为 *.template.yaml 模板（<<VAR>> 占位符，如 <<AGENTSERVER_IMAGE>>、<<NAMESPACE>>），
+# 渲染时替换为 DEPLOY_VARS 对应值；产物输出到 conf/（*.template.yaml → 同名 *.yaml）。
+# 仅 up 与 --render-only 执行：down 不渲染，直接消费 conf/ 现有清单（按部署时资源名卸载）
+
+# 提取模板中的 <<VAR>> 占位符（去重排序）
+extract_placeholders() { # $1=模板文件 → stdout: 占位符列表
+  grep -oE '<<[^>]+>>' "$1" | sort -u
 }
 
-# ==== Replaces <<variable>> placeholder with its value ===
-replace_placeholder() {
-    local placeholder="$1"
-    local destfile="$2"
-    local vars_arr_name=$3
-    local var_name=$(echo "${placeholder}" | sed -e 's/^<<//' -e 's/>>$//')
-    local arr_key_ref="${vars_arr_name}[${var_name}]"
-    local var_value="${!arr_key_ref:-}"
-
-    #info "  Replacing placeholder: ${placeholder} → ${var_value}"
-    if [ "${DEPLOY_VARS["OS_TYPE"]}" == "macos" ]; then
-        # macOS sed requires backup extension with -i
-        sed -i.bak "s|${placeholder}|${var_value}|g" "${destfile}"
-        rm -f "${destfile}.bak"
-    else
-        # Linux/Windows: use awk
-        awk -v ph="${placeholder}" -v val="${var_value}" '
-            { gsub(ph, val); print }
-        ' "${destfile}" > "${destfile}.tmp" && mv -f "${destfile}.tmp" "${destfile}"
-    fi
+# 将单个 <<VAR>> 占位符替换为 DEPLOY_VARS 中的值
+replace_placeholder() { # $1=占位符 $2=目标文件
+  local placeholder="$1" destfile="$2"
+  local var_name="${placeholder#<<}"; var_name="${var_name%>>}"
+  local var_value="${DEPLOY_VARS[$var_name]:-}"
+  # Quoted YAML values are encoded below; other placeholders retain their literal bytes.
+  # 可选变量（OPTIONAL_VARS）留空时，占位符独占行值的整行删除（如 storageClassName 走集群默认）
+  if [ -z "$var_value" ]; then
+    # 匹配 KEY: <<PH>> / KEY: "<<PH>>" / KEY: '<<PH>>'（ConfigMap 值常需引号包 * 等特殊字符）
+    awk -v ph="${placeholder}" '
+      $0 ~ ("^[[:space:]]*[A-Za-z0-9_-]+:[[:space:]]*([\"'\'']?)(" ph ")([\"'\'']?)[[:space:]]*$") { next }
+      { gsub(ph, ""); print }' \
+      "$destfile" > "$destfile.tmp" && mv -f "$destfile.tmp" "$destfile" \
+      || error "占位符替换失败: ${placeholder} → ${destfile}"
+    return 0
+  fi
+  # JSON quoting is valid YAML and preserves password quotes, backslashes and newlines.
+  local quoted_value
+  quoted_value=$(DEPLOY_TEMPLATE_VALUE="$var_value" yq -n -o=json 'strenv(DEPLOY_TEMPLATE_VALUE)') \
+    || error "Cannot encode template variable: $var_name"
+  DEPLOY_TEMPLATE_VALUE="$var_value" DEPLOY_TEMPLATE_QUOTED="$quoted_value" \
+    awk -v ph="${placeholder}" '
+      {
+        rest = $0; out = ""
+        while ((pos = index(rest, ph)) > 0) {
+          before = substr(rest, 1, pos - 1)
+          after = substr(rest, pos + length(ph))
+          left = substr(before, length(before), 1); right = substr(after, 1, 1)
+          if ((left == "\"" || left == "\047") && left == right) {
+            out = out substr(before, 1, length(before) - 1) ENVIRON["DEPLOY_TEMPLATE_QUOTED"]
+            rest = substr(after, 2)
+          } else {
+            out = out before ENVIRON["DEPLOY_TEMPLATE_VALUE"]; rest = after
+          }
+        }
+        print out rest
+      }' \
+    "$destfile" > "$destfile.tmp" && mv -f "$destfile.tmp" "$destfile" \
+    || error "占位符替换失败: ${placeholder} → ${destfile}"
 }
 
-# ==== Renders configuration from template and replaces variables ===
-render_config_template(){
-    local templatefile=$1
-    local destfile=$2
-    local var_name=$3
-    # Verify template file exists
-    if [ ! -f "${templatefile}" ]; then
-        error "Template file does not exist: ${templatefile}"
-    fi
-    info "Using template file: ${templatefile}"
-
-    # Extract all placeholders
-    local -a placeholders=($(extract_placeholders "${templatefile}"))
-    if [ ${#placeholders[@]} -eq 0 ]; then
-        warning "No <<variable_name>> format placeholders found in template file"
-    fi
-
-    # Copy template as target file
-    exec_cmd cp -f ${templatefile} ${destfile}
-
-    # Loop to replace each placeholder
-    info "Starting placeholder replacement..."
-    for placeholder in "${placeholders[@]}"; do
-        replace_placeholder "${placeholder}" "${destfile}" "${var_name}"
-    done
-
-    success "Generated config file: ${destfile}"
-}
-
-# Append a single hostPath code mount (volume + volumeMount) to the first
-# container of every Deployment in <file>.
-# 第 5 个参数可选：hostPath.type，默认 Directory；单文件用 File。
-add_code_mount() {
-    local file="$1" name="$2" host_path="$3" mount_path="$4"
-    local host_type="${5:-Directory}"
-    yq eval '
-        select(.kind == "Deployment").spec.template.spec.containers[0].volumeMounts
-            |= ((. // []) + [{
-                "name": "'"${name}"'",
-                "mountPath": "'"${mount_path}"'"
-            }])
-    ' -i "${file}"
-    yq eval '
-        select(.kind == "Deployment").spec.template.spec.volumes
-            |= ((. // []) + [{
-                "name": "'"${name}"'",
-                "hostPath": {
-                    "path": "'"${host_path}"'",
-                    "type": "'"${host_type}"'"
-                }
-            }])
-    ' -i "${file}"
-}
-
-mount_swarm_code() {
-    [ -z "${DEPLOY_VARS["SWARM_CODE_PATH"]:-}" ] && return
-    add_code_mount "$1" "swarm-code" \
-        "${DEPLOY_VARS["SWARM_CODE_PATH"]}" \
-        "${DEPLOY_VARS["SWARM_POD_CODE_PATH"]}"
-}
-
-mount_runtime_code() {
-    [ -z "${DEPLOY_VARS["RUNTIME_CODE_PATH"]:-}" ] && return
-    add_code_mount "$1" "runtime-code" \
-        "${DEPLOY_VARS["RUNTIME_CODE_PATH"]}" \
-        "${DEPLOY_VARS["RUNTIME_POD_CODE_PATH"]}"
-}
-
-# A hostPath over /app/agent-runtime hides the frontend bundled in the image.
-# nginx serves dist directly; copying React source alone cannot serve the UI.
-require_manager_web_build() {
-    local repo="$1"
-    if [[ "${repo}" != /* || ! -d "${repo}" ]]; then
-        error "IS_MOUNT_MANAGER_WEB_CODE=true requires an existing absolute RUNTIME_CODE_PATH: ${repo}"
-    fi
-    local web_dir="${repo}/applications/manager/manager_web"
-    local dist="${web_dir}/dist"
-    local build_command
-    printf -v build_command 'cd %q && npm ci && npm run build' "${web_dir}"
-
-    if [[ ! -r "${dist}/index.html" || ! -s "${dist}/index.html" ]]; then
-        error "Manager Web build is missing: ${dist}/index.html. The code mount hides the image frontend and would cause HTTP 404. Build on the code-hosting node first: ${build_command}"
-    fi
-
-    local asset script_count=0
-    while IFS= read -r asset; do
-        # Vite emits absolute /assets URLs; query strings do not name files.
-        asset="${asset%%\?*}"
-        asset="${asset%%\#*}"
-        if [[ ! -r "${dist}${asset}" || ! -s "${dist}${asset}" ]]; then
-            error "Manager Web build is incomplete: index.html references missing ${asset}. Rebuild before mounting: ${build_command}"
-        fi
-        case "${asset}" in *.js) script_count=$((script_count + 1)) ;; esac
-    done < <(grep -oE "(src|href)=[\"']/assets/[^\"']+[\"']" "${dist}/index.html" | sed -E "s/^[^=]+=[\"'](.*)[\"']$/\1/")
-
-    if [[ "${script_count}" -eq 0 ]]; then
-        error "Manager Web dist/index.html has no built JavaScript entry. Source index.html is not deployable. Build first: ${build_command}"
-    fi
-    info "Manager Web build verified: ${dist}"
-}
-
-# manager-web：把仓库 nginx 模板盖到镜像内 entrypoint 读取的路径。
-mount_manager_web_nginx_template() {
-    [ -z "${DEPLOY_VARS["RUNTIME_CODE_PATH"]:-}" ] && return
-    add_code_mount "$1" "manager-web-nginx-template" \
-        "${DEPLOY_VARS["RUNTIME_CODE_PATH"]}/docker/manager-web.nginx.conf.template" \
-        "/etc/nginx/templates/default.conf.template" \
-        "File"
-}
-
-# web：把仓库 nginx 模板与可选 upstream 脚本盖到镜像内 entrypoint 读取的路径。
-mount_web_nginx_template() {
-    [ -z "${DEPLOY_VARS["SWARM_CODE_PATH"]:-}" ] && return
-    add_code_mount "$1" "web-nginx-template" \
-        "${DEPLOY_VARS["SWARM_CODE_PATH"]}/docker/web.nginx.conf.template" \
-        "/etc/nginx/templates/default.conf.template" \
-        "File"
-    add_code_mount "$1" "web-optional-upstreams" \
-        "${DEPLOY_VARS["SWARM_CODE_PATH"]}/docker/web-optional-upstreams.sh" \
-        "/docker-entrypoint.d/40-optional-upstreams.sh" \
-        "File"
-}
-
-# observability：同上，覆盖 nginx 模板。
-mount_observability_nginx_template() {
-    [ -z "${DEPLOY_VARS["RUNTIME_CODE_PATH"]:-}" ] && return
-    add_code_mount "$1" "observability-nginx-template" \
-        "${DEPLOY_VARS["RUNTIME_CODE_PATH"]}/docker/observability.nginx.conf.template" \
-        "/etc/nginx/templates/default.conf.template" \
-        "File"
-}
-
-mount_runtime_pkg() {
-    [ -z "${DEPLOY_VARS["RUNTIME_CODE_PATH"]:-}" ] && return
-    local file="$1"
-    local src="${DEPLOY_VARS["RUNTIME_CODE_PATH"]}"
-    local dst="${DEPLOY_VARS["RUNTIME_POD_PKG_PATH"]}"
-    add_code_mount "${file}" "foundation-code" \
-        "${src}/foundation/openjiuwen_runtime/foundation" "${dst}/foundation"
-    add_code_mount "${file}" "management-code" \
-        "${src}/management/openjiuwen_runtime/management" "${dst}/management"
-}
-
-mount_core_pkg() {
-    [ -z "${DEPLOY_VARS["CORE_CODE_PATH"]:-}" ] && return
-    add_code_mount "$1" "core-code" \
-        "${DEPLOY_VARS["CORE_CODE_PATH"]}/openjiuwen" \
-        "${DEPLOY_VARS["CORE_POD_PKG_PATH"]}"
-}
-
-enable_dev_mode_if_needed() {
-    [ "${DEPLOY_VARS["MODE"]}" != "dev" ] && return
-
-    local file="$1" comp="$2"
-    case "${comp}" in
-        gateway | agentserver)
-            mount_swarm_code "${file}"
-            mount_runtime_pkg "${file}"
-            mount_core_pkg "${file}"
-            ;;
-        web)
-            [ "${DEPLOY_VARS["IS_MOUNT_WEB_CODE"]}" != "true" ] && return
-            mount_swarm_code "${file}"
-            mount_web_nginx_template "${file}"
-            ;;
-        manager-server | runtime | identity)
-            mount_runtime_code "${file}"
-            ;;
-        user-backend)
-            mount_swarm_code "${file}"
-            ;;
-        manager-web)
-            [ "${DEPLOY_VARS["IS_MOUNT_MANAGER_WEB_CODE"]}" != "true" ] && return
-            require_manager_web_build "${DEPLOY_VARS["RUNTIME_CODE_PATH"]:-}"
-            mount_runtime_code "${file}"
-            mount_manager_web_nginx_template "${file}"
-            ;;
-        observability)
-            [ "${DEPLOY_VARS["IS_MOUNT_OBSERVABILITY_CODE"]}" != "true" ] && return
-            mount_runtime_code "${file}"
-            mount_observability_nginx_template "${file}"
-            ;;
-        *)
-            warning "enable_dev_mode_if_needed: unknown component '${comp}', skipping"
-            return
-            ;;
+# 渲染 TARGETS 所需清单 → conf/：只处理本次目标组件关联的模板
+# 渲染单个组件的全部清单 → conf/（供 render_templates 与 down 孤儿回收复用）
+render_component_files() { # $1=组件 → stdout: 渲染的清单文件名（空格分隔）
+  local comp="$1" t f var_name
+  local -a files=()
+  mkdir -p "$CONF_DIR"
+  for f in $(component_files "$comp"); do
+    case "$f" in
+      *.json) t="$TEMPLATE_DIR/${f%.json}.template.json";;
+      *)      t="$TEMPLATE_DIR/${f%.yaml}.template.yaml";;
     esac
-
-    # Pin to the current master node (hostPath is local)
-    yq eval 'select(.kind == "Deployment").spec.template.spec.nodeName = "'"${DEPLOY_VARS["CURRENT_NODE_NAME"]}"'"' -i "${file}"
+    [ -f "$t" ] || error "目标组件缺清单模板: $t"
+    cp -f "$t" "$CONF_DIR/$f" || error "模板复制失败: $t"
+    for ph in $(extract_placeholders "$t"); do
+      var_name="${ph#<<}"; var_name="${var_name%>>}"
+      [ -n "${DEPLOY_VARS[$var_name]:-}" ] || in_array "$var_name" "${OPTIONAL_VARS[@]}" \
+        || error "变量未设置: $var_name（检查 $CUSTOM_ENV_FILE）"
+      replace_placeholder "$ph" "$CONF_DIR/$f"
+    done
+    files+=("$f")
+  done
+  printf '%s\n' "${files[*]}"
 }
 
-add_resource_if_set() {
-    local module="$1"  file="$2"
-    local kind_type="Deployment"
-
-    if [[ "${module}" == "MYSQL" || "${module}" == "POSTGRESQL" ]]; then
-        kind_type="StatefulSet"
-    fi
-
-    if [ -n "${DEPLOY_VARS["${module}_CPU_REQUEST"]:-}" ]; then
-        yq eval 'select(.kind == "'"${kind_type}"'").spec.template.spec.containers[0].resources.requests.cpu = "'"${DEPLOY_VARS["${module}_CPU_REQUEST"]}"'"' -i "${file}"
-    fi
-
-    if [ -n "${DEPLOY_VARS["${module}_MEMORY_REQUEST"]:-}" ]; then
-        yq eval 'select(.kind == "'"${kind_type}"'").spec.template.spec.containers[0].resources.requests.memory = "'"${DEPLOY_VARS["${module}_MEMORY_REQUEST"]}"'"' -i "${file}"
-    fi
-
-    if [ -n "${DEPLOY_VARS["${module}_CPU_LIMIT"]:-}" ]; then
-        yq eval 'select(.kind == "'"${kind_type}"'").spec.template.spec.containers[0].resources.limits.cpu = "'"${DEPLOY_VARS["${module}_CPU_LIMIT"]}"'"' -i "${file}"
-    fi
-
-    if [ -n "${DEPLOY_VARS["${module}_MEMORY_LIMIT"]:-}" ]; then
-        yq eval 'select(.kind == "'"${kind_type}"'").spec.template.spec.containers[0].resources.limits.memory = "'"${DEPLOY_VARS["${module}_MEMORY_LIMIT"]}"'"' -i "${file}"
-    fi
+render_templates() {
+  local comp out f
+  local -a wanted=()
+  # 变量派生（resolve_*）已统一在 check_vars 完成，此处只做清单渲染与后处理
+  for comp in "${TARGETS[@]}"; do
+    # 渲染在命令替换子 shell 中执行，error() 的 exit 只退出子 shell：
+    # 不检查退出码时错误文本会混入 out 被当清单文件名（表现为 stat conf/<错误文案>）
+    out=$(render_component_files "$comp") || error "组件 ${comp} 渲染失败（检查 $CUSTOM_ENV_FILE 与 templates/）"
+    for f in $out; do
+      in_array "$f" "${wanted[@]}" || wanted+=("$f")
+    done
+  done
+  info "渲染 ${#wanted[@]} 个清单 → $CONF_DIR（目标: ${TARGETS[*]}）"
+  apply_nfs_extras "${wanted[@]}"
+  apply_nfs_direct_mounts "${wanted[@]}"
+  apply_k8s_extras "${wanted[@]}"
+  apply_runtime_mode_extras "${wanted[@]}"
+  apply_sandbox_type_extras "${wanted[@]}"
+  apply_jiuwenbox_extras "${wanted[@]}"
+  apply_dev_code_mounts "${wanted[@]}"
+  apply_manager_deploy_credentials "${wanted[@]}"
+  apply_manager_deploy_env_snapshot "${wanted[@]}"
+  # Use the final runtime payload, including NFS, sandbox and dev-code changes.
+  if in_array manager-server.yaml "${wanted[@]}"; then
+    render_manager_runtime_defaults "$CONF_DIR/manager-server.yaml" "$CONF_DIR/agentserver.json" "${DEPLOY_VARS[NAMESPACE]}" \
+      || error "Manager 默认运行时模板交付失败"
+  fi
 }
-

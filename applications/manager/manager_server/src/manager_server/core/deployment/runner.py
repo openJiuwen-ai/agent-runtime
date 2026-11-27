@@ -1,6 +1,6 @@
 """部署子进程执行器：代跑 deploy.sh，采集结构化进度与日志，支持取消/超时。
 
-进度行契约见 deploy/openshift/README.md「程序化调用」：
+进度行契约见 deploy/jiuwenswarm-ee/README.md「程序化调用」：
 ``@@DEPLOY_JSON@@{"event":"phase|component|summary",...}``（值均为字符串）。
 子进程 ``start_new_session`` 独立进程组，取消/超时经 ``killpg`` 整组终止；
 deploy.sh 幂等，中断后重发任务即恢复。

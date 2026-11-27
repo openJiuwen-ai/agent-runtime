@@ -1,6 +1,6 @@
 """部署参数 → deploy.sh 的 .env.custom 生成与派生。
 
-白名单 + 校验规则与 deploy/openshift 的 var_handler.sh 对齐（命名空间 DNS label、
+白名单 + 校验规则与 deploy/jiuwenswarm-ee 的 var_handler.sh 对齐（命名空间 DNS label、
 镜像字符集、副本正整数、部署模式枚举）；CLUSTER_TYPE/MODE 由服务端强制写死，
 不接受请求传入。值不得包含引号/反斜杠/换行（bash env 读取器与 YAML 渲染的安全边界）。
 """
@@ -24,7 +24,7 @@ IMAGE_ENV_KEYS = (
     "AGENTSERVER_IMAGE",
     "GATEWAY_IMAGE",
     "WEB_IMAGE",
-    "USER_BACKEND_IMAGE",
+    "WEB_SERVER_IMAGE",
     "IDENTITY_IMAGE",
     "MANAGER_SERVER_IMAGE",
     "MANAGER_WEB_IMAGE",
@@ -41,7 +41,7 @@ REPLICA_ENV_KEYS = (
     "AGENT_SERVER_REPLICAS",
     "GATEWAY_REPLICAS",
     "WEB_REPLICAS",
-    "USER_BACKEND_REPLICAS",
+    "WEB_SERVER_REPLICAS",
     "IDENTITY_REPLICAS",
     "MANAGER_SERVER_REPLICAS",
     "MANAGER_WEB_REPLICAS",
@@ -63,8 +63,8 @@ ALLOWED_ENV_KEYS = frozenset(
         "DB_PORT",
         "DB_USER",
         "DB_PASSWORD",
-        "USER_BACKEND_DB_USER",
-        "USER_BACKEND_DB_PASSWORD",
+        "WEB_SERVER_DB_USER",
+        "WEB_SERVER_DB_PASSWORD",
         "MARIADB_ROOT_PASSWORD",
         "MYSQL_ROOT_PASSWORD",
         "POSTGRES_PASSWORD",

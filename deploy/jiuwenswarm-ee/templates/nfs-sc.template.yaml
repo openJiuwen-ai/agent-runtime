@@ -1,7 +1,27 @@
+# NFS 存储供给组件（./deploy.sh up nfs 自动解析，双形态通用）：基于 nfs-subdir-external-provisioner
+# 提供标准 StorageClass，业务 PVC 动态申领独立 NFS 子目录实现持久化挂载。
+# 数据源 = NFS_SERVER_ADDR / NFS_SHARE_PATH（双形态通用变量）：
+#   k8s 形态可留空地址复用内置 NFS server（./deploy.sh up nfs）；
+#   openshift 形态须填写外挂 NFS server（内置 NFS server 组件仅 k8s 形态支持）。
+# StorageClass / ClusterRole / ClusterRoleBinding 为集群级资源——全集群共享，
+# 只需也只能部署一次，请勿在多个命名空间重复部署。
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: <<NFS_SC_DNAME>>
+  namespace: <<NAMESPACE>>
+
+---
+# 长效 SA token：挂载给供给器使用，规避 projected token 轮换失效导致的 401 CrashLoop
+# （token controller 依下方注解自动填充 token / ca.crt / namespace；随 SA 删除自动回收）
+apiVersion: v1
+kind: Secret
+metadata:
+  name: <<NFS_SC_DNAME>>-token
+  namespace: <<NAMESPACE>>
+  annotations:
+    kubernetes.io/service-account.name: <<NFS_SC_DNAME>>
+type: kubernetes.io/service-account-token
 
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -30,7 +50,7 @@ metadata:
 subjects:
   - kind: ServiceAccount
     name: <<NFS_SC_DNAME>>
-    namespace: default
+    namespace: <<NAMESPACE>>
 roleRef:
   kind: ClusterRole
   name: <<NFS_SC_DNAME>>-runner
@@ -40,6 +60,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: leader-locking-<<NFS_SC_DNAME>>
+  namespace: <<NAMESPACE>>
 rules:
   - apiGroups: [""]
     resources: ["endpoints"]
@@ -50,6 +71,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: leader-locking-<<NFS_SC_DNAME>>
+  namespace: <<NAMESPACE>>
 subjects:
   - kind: ServiceAccount
     name: <<NFS_SC_DNAME>>
@@ -63,6 +85,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: <<NFS_SC_DNAME>>
+  namespace: <<NAMESPACE>>
 spec:
   replicas: 1
   selector:
@@ -76,12 +99,16 @@ spec:
         app: <<NFS_SC_DNAME>>
     spec:
       serviceAccount: <<NFS_SC_DNAME>>
+      automountServiceAccountToken: false
       containers:
         - name: <<NFS_SC_DNAME>>
           image: <<NFS_SC_IMAGE>>
           volumeMounts:
             - name: nfs-volume
               mountPath: /persistentvolumes
+            - name: sa-token
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
           env:
             - name: PROVISIONER_NAME
               value: <<NFS_SC_DNAME>>
@@ -94,6 +121,9 @@ spec:
           nfs:
             server: <<NFS_SERVER_ADDR>>
             path: <<NFS_SHARE_PATH>>
+        - name: sa-token
+          secret:
+            secretName: <<NFS_SC_DNAME>>-token
 
 ---
 apiVersion: storage.k8s.io/v1

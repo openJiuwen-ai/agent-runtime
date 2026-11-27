@@ -1,0 +1,39 @@
+ARG NODE_IMAGE=registry.access.redhat.com/ubi9/nodejs-22:1
+ARG NGINX_IMAGE=registry.access.redhat.com/ubi9/nginx-126:1
+
+# ---------- 阶段1:前端构建 ----------
+FROM ${NODE_IMAGE} AS web-builder
+
+USER root
+
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+ENV NPM_CONFIG_REGISTRY=${NPM_REGISTRY} \
+    VITE_PRODUCT_NAME=${VITE_PRODUCT_NAME}
+
+WORKDIR /build/applications/observability/web
+COPY applications/observability/web/package.json applications/observability/web/package-lock.json ./
+RUN npm install
+
+COPY applications/observability/web/ ./
+RUN npm run build
+
+# ---------- 阶段2:nginx 运行 ----------
+FROM ${NGINX_IMAGE}
+
+USER root
+
+COPY docker/jiuwenswarm-ee/observability.nginx.conf.template /etc/nginx/templates/default.conf.template
+COPY docker/jiuwenswarm-ee/observability-nginx-start.sh /app/agent-runtime/docker/jiuwenswarm-ee/observability-nginx-start.sh
+RUN chmod +x /app/agent-runtime/docker/jiuwenswarm-ee/observability-nginx-start.sh
+# worker 进程用户:s2i 启动链路启用 nss_wrapper,用户查询走 passwd.template 生成的
+# /opt/app-root/etc/passwd,master 以 root 运行时按编译默认用户 nginx 启动 worker,
+# 须保证该条目在 /etc/passwd 与 passwd.template 中同时存在
+RUN getent passwd nginx >/dev/null || useradd -M -s /sbin/nologin nginx \
+    && getent passwd nginx >> /opt/app-root/etc/passwd.template
+
+COPY --from=web-builder /build/applications/observability/web/dist \
+     /app/agent-runtime/applications/observability/web/dist
+
+CMD ["/app/agent-runtime/docker/jiuwenswarm-ee/observability-nginx-start.sh"]
+
+EXPOSE 5274

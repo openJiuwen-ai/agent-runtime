@@ -1,7 +1,7 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 """部署工具程序化调用契约测试：隔离目录 + --render-only + JSON 进度行可解析（离线）。
 
-验证 deploy/openshift 的 DEPLOY_ENV_FILE / DEPLOY_CONF_DIR / DEPLOY_TMP_DIR /
+验证 deploy/jiuwenswarm-ee 的 DEPLOY_ENV_FILE / DEPLOY_CONF_DIR / DEPLOY_TMP_DIR /
 DEPLOY_JSON_PROGRESS 环境变量覆盖（manager-server 部署模块依赖的调用契约）。
 """
 
@@ -30,11 +30,12 @@ AGENTSERVER_IMAGE="example/jiuwenswarm-core:1.0"
 GATEWAY_IMAGE="example/jiuwenswarm-core:1.0"
 JIUWENBOX_IMAGE="example/jiuwenswarm-sandbox:1.0"
 WEB_IMAGE="example/jiuwenswarm-web:1.0"
-USER_BACKEND_IMAGE="example/jiuwenswarm-user-backend:1.0"
+WEB_SERVER_IMAGE="example/jiuwenswarm-web-server:1.0"
 IDENTITY_IMAGE="example/jiuwenswarm-identity:1.0"
 MANAGER_SERVER_IMAGE="example/jiuwenswarm-manager-server:1.0"
 MANAGER_WEB_IMAGE="example/jiuwenswarm-manager-web:1.0"
 AGENT_RUNTIME_IMAGE="example/jiuwenswarm-agent-runtime:1.0"
+JIUWENBOX_IMAGE="example/jiuwenbox:1.0"
 AGENT_RUNTIME_DEPLOY_MODE="full"
 CLUSTER_TYPE=k8s
 """
@@ -93,9 +94,11 @@ async def test_render_only_isolated_dirs_and_json_progress(tmp_path: Path):
     assert "phase" in kinds and "summary" in kinds
     assert any(e.get("status") == "success" for e in events if e.get("event") == "summary")
 
-    # 产物落每任务隔离目录，full 模式产品面清单齐全
-    for manifest in ("redis.yaml", "runtime.yaml", "gateway.yaml", "user-backend.yaml", "web.yaml"):
+    # 产物落每任务隔离目录；up 只渲染产品面（用户面 web/web-server 随 manager 组渲染）
+    for manifest in ("redis.yaml", "runtime.yaml", "gateway.yaml"):
         assert (conf_dir / manifest).is_file(), f"缺渲染产物 {manifest}"
+    assert not (conf_dir / "web-server.yaml").exists()
+    assert not (conf_dir / "web.yaml").exists()
     # env 隔离：工具树自身 conf/ 不被创建/污染
     assert not (resolve_tool_dir() / "conf" / "gateway.yaml").exists()
     # 工作目录无 .env.custom 泄漏到工具树
@@ -159,7 +162,12 @@ async def test_manager_render_injects_env_snapshot(tmp_path: Path):
     manifest = work / "conf" / "manager-server.yaml"
     assert manifest.is_file()
     value = subprocess.run(
-        ["yq", ".spec.template.spec.containers[0].env[] | select(.name == \"MANAGER_DEPLOY_ENV_JSON\") | .value", str(manifest)],
+        [
+            "yq",
+            ".spec.template.spec.containers[0].env[]"
+            " | select(.name == \"MANAGER_DEPLOY_ENV_JSON\") | .value",
+            str(manifest),
+        ],
         capture_output=True, text=True, check=True,
     ).stdout.strip()
     snapshot = json.loads(value)
@@ -270,7 +278,10 @@ async def test_openshift_render_injects_token_credential(tmp_path: Path):
 
     env_custom = _MIN_ENV_CUSTOM.replace(
         "CLUSTER_TYPE=k8s", "CLUSTER_TYPE=openshift\nCLUSTER_API_SERVER=https://api.ocp.example:6443"
-    ).replace('AGENT_RUNTIME_DEPLOY_MODE="full"', 'AGENT_RUNTIME_DEPLOY_MODE="routing"')
+    ).replace(
+        'JIUWENBOX_IMAGE="example/jiuwenbox:1.0"\nAGENT_RUNTIME_DEPLOY_MODE="full"',
+        'AGENT_RUNTIME_DEPLOY_MODE="routing"',
+    )
     work = tmp_path / "ocp"
     code, output = _run_render_only_sync(env_custom, ["-n", "ut-ocp", "manager", "up", "--render-only"], work)
     assert code == 0, output
