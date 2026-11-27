@@ -43,12 +43,26 @@ def test_standalone_deploy_tools_ship_same_certificate_helper():
     assert (DEPLOY / "jiuwenswarm-ee/web_tls.py").read_bytes() == SCRIPT.read_bytes()
 
 
+def test_managed_certificate_defaults_to_localhost(tmp_path):
+    store = TestSecrets()
+    ca = tmp_path / "root.pem"
+    digest = tls.prepare(store, tls.names(""), tmp_path, ca)
+    root = ca.read_bytes()
+    cert = tmp_path / "tls.crt"
+    tls.openssl("verify", "-CAfile", ca, "-verify_hostname", "localhost", cert)
+    tls.openssl("verify", "-CAfile", ca, "-verify_ip", "127.0.0.1", cert)
+    assert tls.openssl("verify", "-CAfile", ca, "-verify_ip", "192.0.2.12", cert, check=False).returncode != 0
+    assert tls.prepare(store, tls.names("localhost"), tmp_path, ca) == digest
+
+    assert tls.prepare(store, tls.names("192.0.2.12"), tmp_path, ca) != digest
+    tls.openssl("verify", "-CAfile", ca, "-verify_ip", "192.0.2.12", cert)
+    assert ca.read_bytes() == root
+
+
 def test_public_names_and_custom_certificate_lifecycle(tmp_path, caplog):
     store = TestSecrets()
     ca = tmp_path / "root.pem"
     hosts = tls.names("web.example.test,192.0.2.12")
-    with pytest.raises(ValueError, match="WEB_TLS_HOSTS"):
-        tls.prepare(store, set(), tmp_path, ca)
     digest = tls.prepare(store, hosts.copy(), tmp_path, ca)
     root = ca.read_bytes()
     cert_key = "jiuwenswarm-web.web-test.crt"
@@ -111,7 +125,9 @@ def test_custom_certificate_covers_registered_and_configured_probe_hosts(tmp_pat
         assert str(error.value) == f"Web TLS certificate does not cover DNS {missing}"
         assert not store.maps
     else:
-        assert tls.prepare(store, public_hosts, tmp_path, ca, service="web-custom")
+        digest = tls.prepare(store, public_hosts, tmp_path, ca, service="web-custom")
+        assert digest
+        assert tls.prepare(store, set(), tmp_path, ca, service="web-custom") == digest
     assert store.objects == {tls.LEAF: leaf}
 
 
