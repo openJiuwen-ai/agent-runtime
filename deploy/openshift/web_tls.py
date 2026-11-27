@@ -188,8 +188,6 @@ def prepare(store, hosts, directory, ca_out, *, service="jiuwenswarm-web", manag
                 LEAF,
             )
     else:
-        if not hosts:
-            raise ValueError("Set WEB_TLS_HOSTS to the user Web address; use localhost for local forwarding only")
         hosts = hosts | service_names | names("localhost,127.0.0.1,::1")
         ca = store.request("GET", CA)
         ca_cert, ca_key = directory / "ca.crt", directory / "ca.key"
