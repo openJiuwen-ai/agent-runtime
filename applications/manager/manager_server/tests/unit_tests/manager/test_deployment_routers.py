@@ -9,8 +9,12 @@ pytestmark = pytest.mark.asyncio
 
 _DEPLOYMENTS = "/api/v1/deployments"
 
-# 与工具树校验对齐的最小 env（create 经 defaults 播种路径补全，这里只放关键项）
-_BASE_ENV = {"AGENT_RUNTIME_IMAGE": "swr.example/agent-runtime:1.0"}
+# 与工具树校验对齐的最小 env（create 经 defaults 播种路径补全，这里只放关键项；
+# k8s 形态 SANDBOX_TYPE 留空派生 jiuwenbox，创建校验要求沙箱镜像）
+_BASE_ENV = {
+    "AGENT_RUNTIME_IMAGE": "swr.example/agent-runtime:1.0",
+    "JIUWENBOX_IMAGE": "swr.example/jiuwenswarm-sandbox:1.0",
+}
 
 
 @pytest.fixture
