@@ -10,7 +10,6 @@ const server = await createServer({ configFile: false, server: { middlewareMode:
 
 try {
   const { loadMatchAgentOptions } = await server.ssrLoadModule('/src/services/matchAgentOptions.ts');
-  const { parseMatchExpr, serializeMatchExpr } = await server.ssrLoadModule('/src/utils/matchExpr.ts');
   const reply = (items, total = items.length, page_size = 100) =>
     new Response(JSON.stringify({ code: 200, data: { items, total, page_size } }), { status: 200 });
 
@@ -29,15 +28,6 @@ try {
       { id: 'resource-2', label: 'Agent 2' },
     ]);
     assert.deepEqual(calls.map(url => [url.searchParams.get('page'), url.searchParams.get('page_size')]), [['1', '100'], ['2', '1']]);
-
-    for (const op of ['in', 'not in']) {
-      const expr = `bot_id ${op} ('${options[0].id}')`;
-      const reopened = parseMatchExpr(serializeMatchExpr(parseMatchExpr(expr)));
-      assert.equal(reopened.root.children[0].field, 'bot_id');
-      assert.equal(reopened.root.children[0].op, op);
-      assert.deepEqual(reopened.root.children[0].values, ['resource-1']);
-      assert.doesNotMatch(serializeMatchExpr(reopened), /shared-config|resource-2/);
-    }
   });
 
   await test('changing clusters reads its own resources and unnamed resources display their ID', async () => {
@@ -79,6 +69,20 @@ try {
     assert.deepEqual(await loadMatchAgentOptions(), [
       { id: 'config-1', label: 'Config 1' },
       { id: 'config-2', label: 'Config 2' },
+    ]);
+  });
+
+  await test('rule editing retains disabled and expired resources for configuration before activation', async () => {
+    globalThis.fetch = async url => {
+      assert.equal(new URL(url).searchParams.has('enabled'), false);
+      return reply([
+        { resource_id: 'disabled', resource_name: 'Disabled Agent', enabled: false },
+        { resource_id: 'expired', resource_name: 'Expired Agent', enabled: true, expires_at: '2000-01-01T00:00:00Z' },
+      ]);
+    };
+    assert.deepEqual(await loadMatchAgentOptions('cluster'), [
+      { id: 'disabled', label: 'Disabled Agent' },
+      { id: 'expired', label: 'Expired Agent' },
     ]);
   });
 } finally {

@@ -7,6 +7,7 @@ export interface MatchAgentOption { id: string; label: string }
 export async function loadMatchAgentOptions(instanceId?: string): Promise<MatchAgentOption[]> {
   if (instanceId !== undefined) {
     if (!instanceId) return [];
+    // Rules may be prepared before activation or renewal; execution checks availability separately.
     const resources = await collectPages((page, page_size) =>
       InstanceAgentResourceApi.listInstanceAgentResources(instanceId, { page, page_size }),
     );
