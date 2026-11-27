@@ -16,6 +16,10 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from openjiuwen_runtime.foundation.config_contract.validate import (
+    format_validation_errors,
+    validate_service_config_payload,
+)
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 
 from manager_server.core.template.service_config_container import load_wires_for_template
@@ -259,17 +263,24 @@ def rule_groups_to_routing_rules(rules: list[dict[str, Any]]) -> str:
 async def service_template_wire(
     handler: DBHandler, row: Any
 ) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
-    """模板行 → (split 形态 template wire, containers)。
+    """模板行 → (split 形态 template wire, containers)（从 DB 加载容器）。"""
+    return service_template_wire_from_containers(
+        row, await load_wires_for_template(handler, row)
+    )
 
-    容器从 ``service_config_container`` 表加载（存量可回退 data.config_sync）。
-    必须具备 main_container_id 且在 loaded containers 中可解析；
-    缺 sidecar / 缺主容器 / 空 image 时返回 None（调用方跳过并告警）。
+
+def service_template_wire_from_containers(
+    row: Any, containers: list[dict[str, Any]]
+) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
+    """模板行 + 给定容器集合 → (split 形态 template wire, containers)。
+
+    纯函数：不读库，供「保存前预检」用内存中的目标容器集合替换 DB 旧值
+    （issue #203：容器模板更新时新值尚未落库）。
     """
     tid = str(_g(row, "template_id") or "")
     if not tid:
         return None
 
-    containers = await load_wires_for_template(handler, row)
     by_id = {str(c["container_id"]): c for c in containers}
 
     main_cid = _g(row, "main_container_id")
@@ -371,6 +382,34 @@ async def service_template_wire(
     return wire, used_containers
 
 
+def preflight_template_binding(
+    template_row: Any,
+    containers: list[dict[str, Any]],
+) -> None:
+    """保存前本地预检一个「模板 + 容器」组合（与 Runtime 共用 foundation 校验）。
+
+    不读库、不访问网络；非法组合直接抛 ``ValueError``，调用方必须在落库前调用。
+    已停用的模板不在下发投影里，跳过（否则会被当成“未引用容器”）。
+    """
+    if _g(template_row, "enabled", True) is False:
+        return
+    wired = service_template_wire_from_containers(template_row, containers)
+    if wired is None:
+        return
+    tpl_wire, used_containers = wired
+    errors = validate_service_config_payload({
+        "containers": used_containers,
+        "templates": [tpl_wire],
+        "scopes": [],
+    })
+    if errors:
+        tid = str(_g(template_row, "template_id") or "")
+        raise ValueError(
+            f"runtime config validation failed template_id={tid}: "
+            f"{format_validation_errors(errors)}"
+        )
+
+
 async def build_runtime_config(
     handler: DBHandler,
     jiuwenclaw_id: str,
@@ -454,6 +493,15 @@ async def build_runtime_config(
     }
 
 
+def validate_runtime_config_payload(rawdata: dict[str, Any]) -> list[dict[str, str]]:
+    """本地预检运行时要下发的投影（不访问网络、不落库）。
+
+    校验实现来自 ``foundation.config_contract``，与 Runtime ``config_sync``
+    使用同一套规则，避免 Manager 允许保存、Runtime 整包 400（issue #203）。
+    """
+    return validate_service_config_payload(rawdata)
+
+
 async def sync_runtime_config(
     handler: DBHandler,
     jiuwenclaw_id: str,
@@ -465,8 +513,16 @@ async def sync_runtime_config(
     目标地址取自该实例 ``runtime_host``（与 Gateway 下发对称）。
     调用方应在 Manager 落库前传入 ``resource_rows``（目标态），避免 Manager/Runtime 不一致。
     无 runtime endpoint 时跳过（返回 ``{skipped: True}``）；其它 HTTP 错误上抛。
+    下发前先用 foundation 本地校验投影，非法配置在写 Manager 库之前就被拒绝
+    （issue #203，与 Runtime config_sync 共用同一套规则）。
     """
     rawdata = await build_runtime_config(handler, jiuwenclaw_id, resource_rows=resource_rows)
+    errors = validate_runtime_config_payload(rawdata)
+    if errors:
+        raise ValueError(
+            f"runtime config validation failed jiuwenclaw_id={jiuwenclaw_id}: "
+            f"{format_validation_errors(errors)}"
+        )
     envelope = {
         "type": "config_sync",
         "metadata": {

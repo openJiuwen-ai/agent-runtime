@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -37,12 +36,17 @@ from uuid import uuid4
 
 from sqlalchemy import delete, insert, select, update
 
+from openjiuwen_runtime.foundation.config_contract.template_spec import (
+    TEMPLATE_INT_FIELDS,
+    TEMPLATE_LEVEL_FIELDS,
+    hydrate_containers,
+    template_split_kwargs,
+)
 from openjiuwen_runtime.foundation.db.table_def import (
     ColumnDefinition,
     TableDefinition,
 )
 
-from ..containers import validate_pod_containers
 from ..errors import ConfigNotFound, ConfigSyncBusy, InvalidParams
 from ..util import key_unsafe, now_ts, parse_datetime, s, utc_now
 from .container_spec import (
@@ -50,11 +54,8 @@ from .container_spec import (
     SIDECAR_ROLE,
     CONTAINER_TABLE,
     SERVICE_CONFIG_CONTAINER_TABLE_DEF,  # noqa: F401 - tests 经本模块复导出
-    build_canonical,
-    canonical_volumes,
     container_row_from_spec,
     container_spec_from_row,
-    mounted_volume_names,
     parse_container_spec,
     volumes_from_column,
     volumes_to_column,
@@ -161,44 +162,6 @@ _COLUMN_OF: dict[str, str] = {
     "data": "data",
 }
 
-_INT_FIELDS = frozenset({
-    "ready_timeout", "ready_poll_interval", "min_idle_pods", "pod_concurrency",
-    "pod_ttl", "scope_concurrency", "session_ttl",
-    "fs_group",
-})
-
-# legacy 内联容器键(2026-08 拆表前平铺在模板上的字段;三段式 wire 独占后
-# 只作为 mixed-400 检测的黑名单存在——出现在 template dict 即拒绝)
-_LEGACY_INLINE_CONTAINER_KEYS = frozenset({
-    "agent_image", "run_as_user", "run_as_group", "container_name",
-    "container_port", "port_name", "sse_port", "health_path", "agent_env",
-    "agent_env_from", "image_pull_policy", "readiness_initial_delay",
-    "readiness_period", "nfs_server", "nfs_path", "nfs_mount_path",
-    "agent_cpu_request", "agent_memory_request", "agent_cpu_limit",
-    "agent_memory_limit", "sidecars", "agent_host_path_mounts",
-    "agent_configmap_mounts", "agent_pvc_mounts", "agent_nfs_mounts",
-    "command", "args",
-})
-
-# 模板级字段(留在模板表;容器级由容器表水合为统一 canonical,见
-# container_spec.build_canonical)。三段式契约的 template dict 只认这些键 +
-# main_container_id/sidecar_container_ids/volumes;与 legacy 内联容器键
-# 并存 = mixed 形态 → 400。enabled 已删(2026-09-drop-enabled-fields):残留
-# 键由 _parse_payload 防御性剔除(真值 false 视为缺席)或静默忽略(真值 true)。
-TEMPLATE_LEVEL_FIELDS: tuple[str, ...] = (
-    "template_id", "template_name", "description", "data",
-    "namespace", "node_name", "fs_group", "pod_name", "sse_path",
-    "ready_timeout", "ready_poll_interval", "kubeconfig",
-    "scope_concurrency", "pod_concurrency", "session_ttl", "pod_ttl",
-    "min_idle_pods",
-)
-_SPLIT_REFERENCE_KEYS = frozenset(
-    {"main_container_id", "sidecar_container_ids", "volumes"})
-# 模板级 wire 键别名:K8s 派生字段用 K8s 拼写(nodeName);snake 双形态拒绝
-# (防静默二义——两个拼写同时给不同值无法仲裁,fail-fast)
-_TEMPLATE_WIRE_ALIASES = {"node_name": "nodeName",
-                          "fs_group": "fsGroup"}
-
 
 def _scope_row(scope: RoutingScopeDef) -> dict[str, Any]:
     """scope → DB 行（时间戳由 _upsert_row_tx 统一处理；expires_at 为
@@ -214,24 +177,6 @@ def _scope_row(scope: RoutingScopeDef) -> dict[str, Any]:
         "expires_at": scope.expires_at,
         "data": data if isinstance(data, dict) else None,
     }
-
-
-def _hydrate_containers(
-        main_spec: dict[str, Any],
-        sidecar_specs: list[dict[str, Any]],
-        volumes: dict[str, dict[str, Any]],
-        where: str,
-) -> dict[str, Any]:
-    """容器内部规范形 + 模板 volumes → ``{main_container, sidecars}``(canonical)。
-
-    读路径(行水合)与写路径(载荷解析)共用的唯一水合出口:build_canonical
-    ×2 → validate_pod_containers(≤8/重名/撞端口/挂载冲突)。
-    """
-    main = build_canonical(main_spec, volumes, where, role=MAIN_ROLE)
-    sidecars = [build_canonical(spec, volumes, where, role=SIDECAR_ROLE)
-                for spec in sidecar_specs]
-    main, sidecars = validate_pod_containers(main, sidecars, where)
-    return {"main_container": main, "sidecars": sidecars}
 
 
 def template_from_row(row: Any,
@@ -278,13 +223,13 @@ def template_from_row(row: Any,
     for field_name in TEMPLATE_LEVEL_FIELDS:
         column = _COLUMN_OF[field_name]
         value = getattr(row, column, None)
-        if field_name in _INT_FIELDS and value is not None:
+        if field_name in TEMPLATE_INT_FIELDS and value is not None:
             value = int(value)
         kwargs[field_name] = value
     if not isinstance(kwargs.get("data"), dict):
         kwargs["data"] = {}
     try:
-        kwargs.update(_hydrate_containers(
+        kwargs.update(hydrate_containers(
             main_spec, sidecar_specs, volumes, f"template {tid!r}"))
     except InvalidParams:
         logger.warning(
@@ -318,100 +263,12 @@ def template_from_split_payload(
 ) -> tuple[Template, dict[str, dict[str, Any]]]:
     """三段式 template dict(容器引用形态)→ (Template, 内部卷映射)。
 
-    模板级字段沿用 legacy 同款校验(int 严格/策略下界/node_name hostname);
-    主容器/sidecar 规格来自已解析容器规范形(container_spec),挂载经
-    volumes join;mixed 形态(引用键与 legacy 内联容器键并存)→ 400。
-    返回卷映射供调用方落 volumes 列(volumes_to_column)。
+    校验/水合与 Manager 保存前预检共用 foundation.config_contract.
+    template_spec(issue #203:两侧同一套规则);缺省模板级字段仍由 Template
+    dataclass 默认值补齐。返回卷映射供调用方落 volumes 列(volumes_to_column)。
     """
-    inline = {k for k in payload if k in _LEGACY_INLINE_CONTAINER_KEYS}
-    if inline:
-        raise InvalidParams(
-            f"template {template_id!r} mixes container references with inline "
-            f"legacy keys {sorted(inline)}; container config belongs in the "
-            "containers section"
-        )
-    defaults = Template(template_id=template_id)
-    kwargs: dict[str, Any] = {"template_id": template_id}
-    for field in TEMPLATE_LEVEL_FIELDS:
-        if field == "template_id":
-            continue
-        wire_key = _TEMPLATE_WIRE_ALIASES.get(field, field)
-        if wire_key != field and payload.get(field) is not None:
-            raise InvalidParams(
-                f"template {template_id!r}: use the k8s wire spelling "
-                f"{wire_key!r} for {field!r} in the split contract")
-        if payload.get(wire_key) is not None:
-            value = payload[wire_key]
-            if field in _INT_FIELDS:
-                if isinstance(value, bool) or not isinstance(value, (int, float, str)):
-                    raise InvalidParams(
-                        f"template field {field} must be an integer, got {value!r}"
-                    )
-                try:
-                    value = int(value)
-                except ValueError as exc:
-                    raise InvalidParams(
-                        f"template field {field} must be an integer, got {value!r}"
-                    ) from exc
-            kwargs[field] = value
-        else:
-            kwargs[field] = getattr(defaults, field)
-    _validate_policy_fields(template_id, kwargs)
-    if kwargs.get("node_name") == "":
-        kwargs["node_name"] = None
-    _validate_pod_placing_fields(template_id, kwargs)
-
-    main_cid = payload.get("main_container_id")
-    if not isinstance(main_cid, str) or not main_cid.strip():
-        raise InvalidParams(
-            f"template {template_id!r} requires a non-empty main_container_id"
-        )
-    main_spec = containers_by_id.get(main_cid)
-    if main_spec is None:
-        raise InvalidParams(
-            f"template {template_id!r} main_container_id {main_cid!r} not "
-            "present in the containers section"
-        )
-    volumes = canonical_volumes(
-        payload.get("volumes"), f"template {template_id!r}.volumes")
-
-    sidecar_ids = payload.get("sidecar_container_ids")
-    if sidecar_ids is None:
-        sidecar_ids = []
-    if not isinstance(sidecar_ids, list) or any(
-            not isinstance(cid, str) for cid in sidecar_ids):
-        raise InvalidParams(
-            f"template {template_id!r} sidecar_container_ids must be a list "
-            f"of container ids, got {sidecar_ids!r}"
-        )
-    if len(set(sidecar_ids)) != len(sidecar_ids):
-        raise InvalidParams(
-            f"template {template_id!r} sidecar_container_ids has duplicates: "
-            f"{sidecar_ids!r}"
-        )
-    sidecar_specs = []
-    for cid in sidecar_ids:
-        spec = containers_by_id.get(cid)
-        if spec is None:
-            raise InvalidParams(
-                f"template {template_id!r} sidecar_container_id {cid!r} not "
-                "present in the containers section"
-            )
-        sidecar_specs.append(spec)
-
-    # 未挂载卷(fail-fast,与未被引用容器对称:全量语义下 = 配置错误)
-    mounted = mounted_volume_names(main_spec)
-    for spec in sidecar_specs:
-        mounted |= mounted_volume_names(spec)
-    unused = sorted(set(volumes) - mounted)
-    if unused:
-        raise InvalidParams(
-            f"template {template_id!r} volumes not mounted by any container: "
-            f"{unused}"
-        )
-
-    where = f"template {template_id!r}"
-    kwargs.update(_hydrate_containers(main_spec, sidecar_specs, volumes, where))
+    kwargs, volumes = template_split_kwargs(
+        template_id, payload, containers_by_id)
     return Template(**kwargs), volumes
 
 
@@ -491,55 +348,6 @@ class ParsedSync:
     container_rows: dict[str, dict[str, Any]]    # container_id → DB 行列 dict
     scopes: dict[str, RoutingScopeDef]
     wildcard: bool
-
-# 策略字段下界（0/负值 = 拒绝服务配置：pod_concurrency=0 会部满 max_pods 个
-# 必然用不上的 Pod 后永久 scope_full）
-_POLICY_MINIMUMS = {
-    "scope_concurrency": 1,
-    "pod_concurrency": 1,
-    "session_ttl": 1,
-    "pod_ttl": 1,
-    "min_idle_pods": 0,
-    "ready_timeout": 1,
-}
-
-
-def _validate_policy_fields(template_id: str, kwargs: dict[str, Any]) -> None:
-    problems: list[str] = []
-    for field, minimum in _POLICY_MINIMUMS.items():
-        value = kwargs.get(field)
-        if isinstance(value, int) and value < minimum:
-            problems.append(f"{field}={value} < {minimum}")
-    if problems:
-        raise InvalidParams(
-            f"template {template_id!r} policy fields invalid: {'; '.join(problems)}"
-        )
-
-
-# 节点名按宽松 hostname 形态(字母/数字/'-'/'.';K8s 节点名 = DNS subdomain,
-# 云厂商 FQDN 形态带 '.',不宜收紧到 DNS label)
-_NODE_NAME_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$")
-
-
-def _validate_pod_placing_fields(template_id: str, kwargs: dict[str, Any]) -> None:
-    """节点绑定字段(node_name)校验(run_as 已随容器 canonical 校验)。
-
-    坏节点名要到 K8s API 侧才失败(Pod 永久 Pending 挂满 ready_timeout,
-    错误对下发方不可见)——提前到 config_sync 锁外,确定性 400。
-    """
-    for field in ("fs_group",):
-        value = kwargs.get(field)
-        if isinstance(value, int) and value < 0:
-            raise InvalidParams(
-                f"template {template_id!r} {field}={value} must be >= 0")
-    node_name = kwargs.get("node_name")
-    if node_name is not None and (
-            not isinstance(node_name, str)
-            or len(node_name) > 253
-            or not _NODE_NAME_RE.fullmatch(node_name)):
-        raise InvalidParams(
-            f"template {template_id!r} node_name={node_name!r} must be a "
-            "hostname (letters/digits/'-'/'.'; no spaces), <=253 chars")
 
 
 class ConfigStore:
