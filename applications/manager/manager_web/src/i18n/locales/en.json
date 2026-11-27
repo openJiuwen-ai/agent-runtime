@@ -1355,7 +1355,6 @@
       "finishedAt": "Finished At",
       "errorSummary": "Failure Summary",
       "interruptedHint": "The task was interrupted (e.g. by a service restart). You may start a new deployment.",
-      "gotoInstance": "查看实例",
       "gotoSetup": "Continue cluster setup",
       "gotoSetupHint": "Resume at the next unconfigured step: admission / runtime resources / Agent bindings / checks"
     },

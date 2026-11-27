@@ -447,3 +447,58 @@ async def test_k8s_manager_render_default_kubeconfig_credential(tmp_path: Path):
     assert code == 0, output
     content = (work_off / "conf" / "manager-server.yaml").read_text(encoding="utf-8")
     assert "MANAGER_DEPLOY_KUBECONFIG" not in content
+
+
+async def test_render_cross_namespace_covers_gateway_upstream(tmp_path: Path):
+    """跨 ns 定位覆盖全部产品面消费方：gateway 的 manager 上游同用 <<MANAGER_SVC_URL>>。"""
+    work = tmp_path / "gw"
+    code, output = _run_render_only_sync(
+        _MIN_ENV_CUSTOM + 'MANAGER_PLANE_NS="ut-mgr"\n',
+        ["-n", "ut-prod", "up", "--render-only"], work,
+    )
+    assert code == 0, output
+    content = (work / "conf" / "gateway-env.configmap.yaml").read_text(encoding="utf-8")
+    assert "GATEWAY_MANAGER_HTTP_URL: http://jiuwenswarm-manager-server.ut-mgr:8765" in content
+    # 未注入时回落同 ns 短名
+    work2 = tmp_path / "gw-plain"
+    code, output = _run_render_only_sync(
+        _MIN_ENV_CUSTOM, ["-n", "ut-prod2", "up", "--render-only"], work2,
+    )
+    assert code == 0, output
+    assert "GATEWAY_MANAGER_HTTP_URL: http://jiuwenswarm-manager-server:8765" in (
+        work2 / "conf" / "gateway-env.configmap.yaml"
+    ).read_text(encoding="utf-8")
+
+
+def test_missing_kubeconfig_disables_credential_injection(tmp_path: Path):
+    """kubeconfig 缺失：置空 MANAGER_DEPLOY_KUBECONFIG_SECRET，apply 阶段不再注入卷
+    （确保清单引用的 Secret 一定存在，manager-server 不因悬空引用卡 ContainerCreating）。"""
+    import subprocess
+
+    tool_dir = resolve_tool_dir()
+    bash = shutil.which("bash") or "bash"
+    empty_home = tmp_path / "home"
+    empty_home.mkdir()
+    script = (
+        "set -e; source ./kubectl.sh\n"
+        'DEPLOY_VARS["CLUSTER_TYPE"]="k8s"\n'
+        'TARGETS=(manager-server)\n'
+        'KCTL_NS="ut-ns"\n'
+        'ensure_manager_deploy_credentials\n'
+        'echo "SECRET_AFTER=${DEPLOY_VARS[MANAGER_DEPLOY_KUBECONFIG_SECRET]:-<empty>}"\n'
+    )
+    proc = subprocess.run(
+        [bash, "-c", script],
+        cwd=str(tool_dir),
+        env={
+            "PATH": "/usr/bin:/bin",
+            "HOME": str(empty_home),
+            "KUBECONFIG": str(tmp_path / "nonexistent"),
+        },
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    combined = proc.stdout + proc.stderr
+    assert "SECRET_AFTER=<empty>" in combined, combined
+    assert "跳过部署凭证注入" in combined

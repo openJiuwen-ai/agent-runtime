@@ -1355,7 +1355,6 @@
       "finishedAt": "结束时间",
       "errorSummary": "失败原因",
       "interruptedHint": "任务因服务重启等原因被中断，可重新发起部署",
-      "gotoInstance": "查看实例",
       "gotoSetup": "继续配置集群",
       "gotoSetupHint": "按已保存配置定位下一步：准入 / 运行资源 / Agent 绑定 / 检查"
     },

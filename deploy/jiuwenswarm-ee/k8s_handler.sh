@@ -471,10 +471,13 @@ ensure_manager_deploy_credentials() {
     [ -n "$secret" ] || return 0
     local src="${KUBECONFIG:-$HOME/.kube/config}"
     if [ ! -f "$src" ]; then
-      # 默认开后不能因凭证缺失阻断 manager up：放行并提示（pod 无凭证时部署任务
-      # 会在 validate 阶段给出明确 403 文案；预建 Secret 后重启即恢复）
-      warning "部署机 kubeconfig 不存在（$src），跳过部署凭证 Secret 创建；
+      # 凭证不可得时置空开关：apply_manager_deploy_credentials 据此跳过卷注入，
+      # 确保「清单引用的 Secret 一定存在」——否则 manager-server 卡
+      # ContainerCreating，管理面整体不可用。无凭证时 pod 正常启动，部署功能
+      # 降级为任务 validate 阶段的明确 403 文案；预建 Secret 后重跑 up 即恢复注入
+      warning "部署机 kubeconfig 不存在（$src），跳过部署凭证注入（不创建 Secret、不挂载卷）；
 可手工预建后重跑: kubectl -n $KCTL_NS create secret generic $secret --from-file=kubeconfig=<文件>"
+      DEPLOY_VARS["MANAGER_DEPLOY_KUBECONFIG_SECRET"]=""
       return 0
     fi
     key="kubeconfig"; value="$(base64 -w0 "$src")"
