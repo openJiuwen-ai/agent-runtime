@@ -1516,8 +1516,61 @@ async def _dependency_actions(
     return actions
 
 
+async def _runtime_config_actions(
+    handler: DBHandler,
+    rows: dict[str, list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    """导入前用与 Runtime config_sync 共用的 foundation 校验检查模板/容器组合。
+
+    与手工保存一致：非法组合作为阻塞项返回，导入不会落库；纯本地校验，
+    不依赖 Runtime 是否可达（issue #203）。
+    """
+    actions: list[dict[str, Any]] = []
+    templates = rows.get("service_config_template", [])
+    if not templates:
+        return actions
+
+    from manager_server.core.instance_resource.runtime_config_sync import (
+        preflight_template_binding,
+    )
+    from manager_server.core.template.service_config_container import (
+        load_wires_by_ids,
+        row_to_wire,
+    )
+
+    provided: dict[str, dict[str, Any]] = {}
+    for container in rows.get("service_config_container", []):
+        cid = str(container.get("container_id") or "")
+        if cid:
+            provided[cid] = row_to_wire(container)
+
+    for template in templates:
+        tid = str(template.get("template_id") or "")
+        if not tid:
+            continue
+        ids = [template.get("main_container_id"), *(template.get("sidecar_container_ids") or [])]
+        ids = [str(item) for item in ids if item]
+        missing = [cid for cid in ids if cid not in provided]
+        if missing:
+            provided.update(await load_wires_by_ids(handler, missing))
+        containers = [provided[cid] for cid in ids if cid in provided]
+        try:
+            preflight_template_binding(template, containers)
+        except ValueError as exc:
+            actions.append(
+                {
+                    "scope": "runtime",
+                    "object_type": "service_config_template",
+                    "object_id": tid,
+                    "action": "invalid_config",
+                    "detail": str(exc),
+                }
+            )
+    return actions
+
+
 def _report(actions: list[dict[str, Any]], resource_id: str) -> dict[str, Any]:
-    blocking = {"conflict", "missing_dependency", "missing_sensitive_value"}
+    blocking = {"conflict", "missing_dependency", "missing_sensitive_value", "invalid_config"}
     counts: dict[str, int] = {}
     for action in actions:
         key = str(action["action"])
@@ -1652,6 +1705,9 @@ class ClusterImportExportAdapter:
         actions.extend(await _manager_actions(context.handler, rows))
         actions.extend(await _instance_host_actions(context.handler, rows))
         actions.extend(await _dependency_actions(context.handler, rows))
+        actions.extend(
+            await _runtime_config_actions(context.handler, rows)
+        )
         actions.extend(await _a2a_semantic_actions(context.handler, rows))
         actions.extend(
             await role_preflight_actions(
