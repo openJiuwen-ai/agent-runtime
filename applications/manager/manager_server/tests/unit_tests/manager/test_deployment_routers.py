@@ -247,7 +247,9 @@ async def test_create_with_env_custom_text_import(manager_api, tool_available):
             "namespace": "ns-import",
             "jiuwenclaw_name": "import-instance",
             "env_custom_text": text,
-            "env": {"GATEWAY_REPLICAS": "5"},   # 显式优先于文本
+            # 与其它 create 用例一致：基础镜像项显式给，单元测试不依赖工具树
+            # .env.custom；显式 env 优先于文本
+            "env": {**_BASE_ENV, "GATEWAY_REPLICAS": "5"},
         },
     )
     assert resp.status_code == 200, resp.text
@@ -266,6 +268,7 @@ async def test_create_with_env_custom_text_import(manager_api, tool_available):
             "namespace": "ns-import2",
             "jiuwenclaw_name": "x",
             "env_custom_text": "EVIL_KEY=1",
+            "env": _BASE_ENV,
         },
     )
     assert resp.status_code == 400

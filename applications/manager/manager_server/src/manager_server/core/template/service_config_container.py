@@ -493,6 +493,56 @@ class ServiceConfigContainerService:
             payload["data"] = _merge_meta(_g(existing, "data"), meta)
         payload["updated_at"] = utc_now()
 
+        # 保存前预检（issue #203）：用与 Runtime config_sync 共用的 foundation
+        # 校验检查「更新后的容器 + 每个引用它的运行时模板」，不通过直接拒绝，
+        # 不写 Manager 库。
+        spec_keys = {
+            "image", "image_pull_policy", "ports", "env", "env_from",
+            "resources", "volume_mounts", "security_context",
+            "command", "args", "readiness_probe",
+        }
+        if not new_cid_is_rename and any(key in updates for key in spec_keys):
+            from manager_server.core.instance_resource.runtime_config_sync import (
+                preflight_template_binding,
+            )
+
+            merged = {
+                "container_id": old_cid,
+                "name": payload.get("name", _g(existing, "name")),
+                "image": payload.get("image", _g(existing, "image")),
+                "image_pull_policy": payload.get(
+                    "image_pull_policy", _g(existing, "image_pull_policy")
+                ),
+                "ports": payload.get("ports", _g(existing, "ports")),
+                "env": payload.get("env", _g(existing, "env")),
+                "env_from": payload.get("env_from", _g(existing, "env_from")),
+                "resources": payload.get("resources", _g(existing, "resources")),
+                "volume_mounts": payload.get(
+                    "volume_mounts", _g(existing, "volume_mounts")),
+                "security_context": payload.get(
+                    "security_context", _g(existing, "security_context")),
+                "command": payload.get("command", _g(existing, "command")),
+                "args": payload.get("args", _g(existing, "args")),
+                "readiness_probe": payload.get(
+                    "readiness_probe", _g(existing, "readiness_probe")),
+                "data": payload.get("data", _g(existing, "data")),
+            }
+            updated_wire = row_to_wire(merged)
+            for tid in await list_referencing_template_ids(self._handler, old_cid):
+                template_row = await self._handler.get(
+                    _SVC_TPL_TABLE, {"template_id": tid})
+                if template_row is None:
+                    continue
+                containers = await load_wires_for_template(
+                    self._handler, template_row)
+                containers = [
+                    updated_wire
+                    if str(c.get("container_id")) == old_cid
+                    else c
+                    for c in containers
+                ]
+                preflight_template_binding(template_row, containers)
+
         row = await self._handler.update(
             _TABLE, {"container_id": old_cid}, payload
         )
