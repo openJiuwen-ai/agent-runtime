@@ -104,6 +104,13 @@ def _validate_policy_fields(template_id: str, kwargs: dict[str, Any]) -> None:
         )
 
 
+def _valid_node_name(value: Any) -> bool:
+    """节点名:宽松 hostname(字母/数字/'-'/'.',≤253 字符)。"""
+    if not isinstance(value, str) or len(value) > 253:
+        return False
+    return bool(_NODE_NAME_RE.fullmatch(value))
+
+
 def _validate_pod_placing_fields(template_id: str, kwargs: dict[str, Any]) -> None:
     """节点绑定字段(node_name)校验(run_as 已随容器 canonical 校验)。
 
@@ -116,10 +123,7 @@ def _validate_pod_placing_fields(template_id: str, kwargs: dict[str, Any]) -> No
             fail(
                 f"template {template_id!r} {field}={value} must be >= 0")
     node_name = kwargs.get("node_name")
-    if node_name is not None and (
-            not isinstance(node_name, str)
-            or len(node_name) > 253
-            or not _NODE_NAME_RE.fullmatch(node_name)):
+    if node_name is not None and not _valid_node_name(node_name):
         fail(
             f"template {template_id!r} node_name={node_name!r} must be a "
             "hostname (letters/digits/'-'/'.'; no spaces), <=253 chars")
