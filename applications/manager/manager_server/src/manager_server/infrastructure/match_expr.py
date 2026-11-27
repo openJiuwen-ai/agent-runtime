@@ -1,8 +1,16 @@
 """``match_expr`` 写入校验与求值（与配置生效策略 / Gateway 约定同构）。
 
-仅允许引用 ``user_id`` / ``group_id`` / ``bot_id``；支持 ``==`` / ``!=`` / ``in`` / ``not in`` 运算符。
+默认仅允许引用 ``user_id`` / ``group_id`` / ``bot_id``；支持 ``==`` / ``!=`` / ``in`` / ``not in`` 运算符。
 空值 / 空数组 / 不含比较符的字符串视为全匹配。
 语法错误在**写入**时拒绝；**求值**失败视为不命中。
+
+域专用集合：
+- ``WORKSPACE_QUOTA_MATCH_NAMES``：workspace quota 策略额外允许 ``agent_id``
+  （issue #124：UI 在 workspace quota 策略里按 Agent 匹配时下发
+  ``agent_id in ('<resource_id>')``）。仅 workspace_quota_policy 的校验/求值使用。
+  其余域（service_resource / team_quota / agent_resource）保持默认边界，
+  避免管理员在那些域误写 ``agent_id`` 后写入通过、运行期 ctx 恒空 → 静默错配。
+- ``AGENT_RESOURCE_MATCH_NAMES``：Agent 资源授权范围仅用户 / 群组（禁止 bot_id）。
 """
 
 from __future__ import annotations
@@ -12,7 +20,9 @@ import json
 from typing import Any, Iterator
 
 ALLOWED_MATCH_NAMES = frozenset({"user_id", "group_id", "bot_id"})
-# Agent 资源授权范围仅用户 / 群组，不允许按 agent（bot_id）匹配。
+# workspace quota 策略专用（issue #124）：多允许 agent_id 维度匹配。
+WORKSPACE_QUOTA_MATCH_NAMES = frozenset({"user_id", "group_id", "bot_id", "agent_id"})
+# Agent 资源授权范围仅用户 / 群组，不允许按 bot_id 匹配。
 AGENT_RESOURCE_MATCH_NAMES = frozenset({"user_id", "group_id"})
 
 _INVALID_PREFIX = "invalid match_expr: "
@@ -122,6 +132,7 @@ def evaluate_match_expr(
     user_id: str = "",
     group_id: str = "",
     bot_id: str = "",
+    agent_id: str = "",
 ) -> bool:
     """对当前请求上下文求值；失败或不命中返回 ``False``。"""
     try:
@@ -132,6 +143,7 @@ def evaluate_match_expr(
             "user_id": str(user_id or ""),
             "group_id": str(group_id or ""),
             "bot_id": str(bot_id or ""),
+            "agent_id": str(agent_id or ""),
         }
         if isinstance(canon, list):
             return any(_eval_expr_string(item, ctx) for item in canon)
