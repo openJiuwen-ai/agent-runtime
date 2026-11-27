@@ -350,12 +350,19 @@ export function DeploymentDetailPage({ deploymentId }: Props) {
           <div className="text-xs text-muted break-all">{progress.auto_register}</div>
         )}
         {status === 'success' && detail.instance_jid && (
-          <div>
+          <div className="flex flex-wrap items-center gap-2">
             <button
               className="btn sm primary"
-              onClick={() => navigate(`/instances/${detail.instance_jid}`)}
+              title={t('deployments.detail.gotoSetupHint', { defaultValue: '按已保存配置定位下一步：准入 / 运行资源 / Agent 绑定 / 检查' })}
+              onClick={() => navigate(`/instances/${encodeURIComponent(detail.instance_jid!)}/setup`)}
             >
-              {t('deployments.detail.gotoInstance')}
+              {t('deployments.detail.gotoSetup', { defaultValue: '继续配置集群' })} →
+            </button>
+            <button
+              className="btn sm"
+              onClick={() => navigate(`/instances/${encodeURIComponent(detail.instance_jid!)}/cluster-config`)}
+            >
+              {t('redesign.clusterWorkbench', { defaultValue: '配置工作台' })}
             </button>
           </div>
         )}

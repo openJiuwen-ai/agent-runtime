@@ -22,6 +22,7 @@ import { ClusterSetupResumePage } from './pages/instance/ClusterSetupResumePage'
 import { canonicalClusterSection, canonicalClusterPath } from './utils/clusterNavigation';
 import { DeploymentListPage } from './pages/deployment/DeploymentListPage';
 import { DeploymentDetailPage } from './pages/deployment/DeploymentDetailPage';
+import { CreateDeploymentPage } from './pages/deployment/CreateDeploymentPage';
 import { ModelTemplatesPage } from './pages/templates/ModelTemplatesPage';
 import { EmbeddingTemplatesPage } from './pages/templates/EmbeddingTemplatesPage';
 import { ExtensionTemplatesPage } from './pages/templates/ExtensionTemplatesPage';
@@ -304,6 +305,9 @@ function RouteView() {
   }
   if (path === '/deployments') {
     return <DeploymentListPage />;
+  }
+  if (path === '/deployments/new') {
+    return <CreateDeploymentPage />;
   }
   const deploymentDetail = matchRoute('/deployments/:id', path);
   if (deploymentDetail) {

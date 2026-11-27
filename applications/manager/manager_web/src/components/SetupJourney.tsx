@@ -91,7 +91,7 @@ export function SetupJourney({ compact = false, onNavigate }: { compact?: boolea
         {(clusters.data || []).map(row => <option key={row.jiuwenclaw_id} value={row.jiuwenclaw_id}>{row.jiuwenclaw_name} · {row.jiuwenclaw_id.slice(0, 8)}</option>)}
       </select>
       <button type="button" className="btn primary sm" disabled={!targetId} title={!targetId ? tr('请先选择集群', 'Select a cluster first') : undefined} onClick={() => go(to('cluster-config'))}>{tr('前往配置工作台', 'Open configuration workspace')} →</button>
-      <button type="button" className="btn sm" onClick={() => { setClusterChoice(null); selectCluster(''); open(2); go('/configuration-wizard?from=cluster'); }}>{tr('新建集群', 'New cluster')}</button>
+      <button type="button" className="btn sm" onClick={() => { setClusterChoice(null); selectCluster(''); open(2); go('/configuration-wizard?from=cluster'); }}>{tr('注册集群', 'Register cluster')}</button>
     </div>}
     {current >= 2 && (clusters.error ? <p className="text-xs text-danger" role="alert">{clusters.error} <button type="button" className="btn ghost sm" onClick={() => void clusters.reload()}>{tr('重试', 'Retry')}</button></p> : requestedId && !clusters.loading && !selected && <p className="text-xs text-muted">{tr('之前的集群已不可用，请重新选择或新建。', 'The previous cluster is unavailable. Choose another or create one.')}</p>)}
     {current < 2 && <>

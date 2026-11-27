@@ -124,7 +124,7 @@ export function ClusterManagementActions({ instanceId, name, namespace, onDelete
       <button type="button" className="btn" disabled={undeploying} onClick={() => setConfirmUndeployOpen(false)}>{t('common.cancel')}</button>
       <button type="button" className="btn danger cluster-delete-button" disabled={undeploying} onClick={() => void undeployCluster()}>{undeploying ? tr('发起中…', 'Starting…') : t('common.confirm')}</button>
     </>}>
-      <p>{t('topology.undeployConfirm', { ns: namespace })}</p>
+      <p>{t('topology.undeployConfirm', { namespace, name })}</p>
       <p className="text-xs text-muted mono mt-2 break-all">{instanceId}</p>
       {error && <p className="text-sm text-danger mt-3" role="alert">{error}</p>}
     </Modal>}

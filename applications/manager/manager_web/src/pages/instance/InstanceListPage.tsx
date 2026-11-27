@@ -18,9 +18,8 @@ import {
 import { TableColumnFilter } from '../../components/TableColumnFilter';
 import { formatTime } from '../../utils/format';
 import { toast } from '../../stores/uiStore';
-import { ApiError, DeploymentApi } from '../../services/api';
+import { ApiError } from '../../services/api';
 import { ImportClusterModal } from './modal/ImportClusterModal';
-import { CreateDeploymentModal } from '../deployment/CreateDeploymentModal';
 import { useGuideAutoOpen } from '../../hooks/useGuideAutoOpen';
 import { useClustersGuideStatus } from '../../hooks/useGuideStatus';
 import { bumpGuideRevision } from '../../stores/guideStore';
@@ -273,9 +272,7 @@ export function InstanceListPage() {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [viewMode, setViewMode] = useState<ViewMode>(() => readViewMode());
   const [importOpen, setImportOpen] = useState(false);
-  const [deployOpen, setDeployOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const deployDefaults = useAsync(() => DeploymentApi.getDefaults(), []);
 
   /** 引导跳转：其他页面点「未创建集群」跳过来时自动打开新建弹框 */
   useGuideAutoOpen('instanceCreate', () => navigate('/configuration-wizard?from=cluster'));
@@ -452,7 +449,7 @@ export function InstanceListPage() {
             <button
               className="btn primary sm"
               title={t('deployments.action.upHint')}
-              onClick={() => setDeployOpen(true)}
+              onClick={() => navigate('/deployments/new')}
             >
               + {t('topology.deployCluster')}
             </button>
@@ -509,15 +506,6 @@ export function InstanceListPage() {
         </div>
       </div>
 
-      <CreateDeploymentModal
-        open={deployOpen}
-        defaults={deployDefaults.data ?? null}
-        onClose={() => setDeployOpen(false)}
-        onCreated={(deploymentId) => {
-          setDeployOpen(false);
-          void navigate(`/deployments/${deploymentId}`);
-        }}
-      />
       <ImportClusterModal
         open={importOpen}
         onClose={() => setImportOpen(false)}
