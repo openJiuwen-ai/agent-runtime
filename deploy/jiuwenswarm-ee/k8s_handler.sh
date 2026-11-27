@@ -471,8 +471,11 @@ ensure_manager_deploy_credentials() {
     [ -n "$secret" ] || return 0
     local src="${KUBECONFIG:-$HOME/.kube/config}"
     if [ ! -f "$src" ]; then
-      error "MANAGER_DEPLOY_KUBECONFIG_SECRET=$secret 已配置，但部署机 kubeconfig 不存在: $src
-请先手工创建: kubectl -n $KCTL_NS create secret generic $secret --from-file=kubeconfig=<文件>"
+      # 默认开后不能因凭证缺失阻断 manager up：放行并提示（pod 无凭证时部署任务
+      # 会在 validate 阶段给出明确 403 文案；预建 Secret 后重启即恢复）
+      warning "部署机 kubeconfig 不存在（$src），跳过部署凭证 Secret 创建；
+可手工预建后重跑: kubectl -n $KCTL_NS create secret generic $secret --from-file=kubeconfig=<文件>"
+      return 0
     fi
     key="kubeconfig"; value="$(base64 -w0 "$src")"
   else
@@ -494,9 +497,9 @@ ensure_manager_deploy_credentials() {
   return 0
 }
 
-# 经 kctl 通道探测/创建部署凭证 Secret（404 → POST；已存在沿用；探测异常 warning 放行）
+# 经 kctl 通道探测/创建部署凭证 Secret（404 → 创建；已存在沿用；探测异常 warning 放行）
 _ensure_deploy_secret_via_kctl() { # $1=ns $2=secret名 $3=键名 $4=base64值
-  local ns="$1" secret="$2" key="$3" value="$4" code resp body
+  local ns="$1" secret="$2" key="$3" value="$4" code resp body err
   resp="$(kctl_tmpdir)/ensure-deploy-secret"
   code=$(kctl_http GET "/api/v1/namespaces/$ns/secrets/$secret" "$resp")
   case "$code" in
@@ -504,8 +507,23 @@ _ensure_deploy_secret_via_kctl() { # $1=ns $2=secret名 $3=键名 $4=base64值
     404) ;;
     *)   warning "部署凭证 Secret 探测失败（HTTP $code），跳过自动创建"; return 1;;
   esac
-  # kctl_http 第4参数约定为 body 文件路径（内部 --data-binary @file），须先落盘再传，
-  # 直接传内容字符串会被 curl 当文件名（报 error encountered when reading a file → HTTP 000）
+  if is_k8s_cluster; then
+    # k8s 通道资源操作走文件动词（raw POST 不支持）：Secret 落清单后 kubectl create；
+    # AlreadyExists（409）视为并发创建沿用（探测 404 后的窄窗口竞态）
+    body="$(kctl_tmpdir)/ensure-deploy-secret.yaml"
+    printf 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: %s\n  namespace: %s\ntype: Opaque\ndata:\n  %s: %s\n' \
+      "$secret" "$ns" "$key" "$value" > "$body"
+    err="$(kctl_tmpdir)/ensure-deploy-secret.err"
+    if kubectl create -f "$body" >/dev/null 2>"$err"; then
+      return 0
+    fi
+    [ "$(_kctl_k8s_err_code "$(cat "$err")")" = 409 ] \
+      && { info "部署凭证 Secret 已存在: $secret（并发创建，沿用）"; return 1; }
+    error "创建部署凭证 Secret 失败: $(head -c 200 "$err" 2>/dev/null)"
+  fi
+  # openshift：curl 通道支持 raw POST。kctl_http 第4参数约定为 body 文件路径
+  # （内部 --data-binary @file），须先落盘再传，直接传内容字符串会被 curl 当文件名
+  # （报 error encountered when reading a file → HTTP 000）
   body="$(kctl_tmpdir)/ensure-deploy-secret-body"
   printf '{"apiVersion":"v1","kind":"Secret","metadata":{"name":"%s","namespace":"%s"},"type":"Opaque","data":{"%s":"%s"}}' \
     "$secret" "$ns" "$key" "$value" > "$body"

@@ -49,9 +49,9 @@ spec:
                 name: jiuwenswarm-secret-configmap
           env:
             - name: USER_WEB_IDP_TARGET
-              value: "http://jiuwenswarm-identity:8770"
+              value: "<<IDENTITY_SVC_URL>>"
             - name: USER_WEB_MANAGER_TARGET
-              value: "http://jiuwenswarm-manager-server:8765"
+              value: "<<MANAGER_SVC_URL>>"
             - name: USER_WEB_BACKEND_TARGET
               value: "http://jiuwenswarm-web-server:8780"
             - name: USER_WEB_RESOLVER

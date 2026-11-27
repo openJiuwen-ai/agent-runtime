@@ -76,6 +76,13 @@ declare -A DEPLOY_VARS=(
     ["CLUSTER_API_SERVER"]=""            # openshift 形态必填（http(s) URL），留空自动探测（oc/kubeconfig）；k8s 形态走 kubeconfig，留空
     ["CLUSTER_API_INSECURE"]="true"      # openshift 形态 curl 是否 -k：自签/内网 CA 不在信任库保持 true（默认）；false 须系统 CA 可验证服务端证书
     ["BASE_SVC_NS"]=""                   # 基础服务所在 ns
+    # 管理面所在 ns 与其服务对产品面的暴露地址：MANAGER_PLANE_NS 由 manager-server
+    # 程序化部署注入（其所在 pod ns）；CLI 单 ns 全量部署留空——identity/manager-server
+    # 与产品面同 ns，用同 ns 短名（下列默认值）。跨 ns 时 resolve_manager_plane_urls
+    # 自动改写为 <svc>.<ns>（web / web-server 的 IDP/manager 上游地址）。
+    ["MANAGER_PLANE_NS"]=""
+    ["IDENTITY_SVC_URL"]="http://jiuwenswarm-identity:8770"
+    ["MANAGER_SVC_URL"]="http://jiuwenswarm-manager-server:8765"
      ["DATA_STORAGE_CLASS"]=""
     ["WORKSPACE_STORAGE_CLASS"]=""
 
@@ -167,8 +174,10 @@ declare -A DEPLOY_VARS=(
     # 非空时渲染后处理向 manager-server.yaml 注入 Secret 卷 + env（按形态注入
     # MANAGER_DEPLOY_KUBECONFIG / MANAGER_DEPLOY_TOKEN / MANAGER_DEPLOY_API_SERVER），
     # 供 manager-server「管理面启动部署」功能以子进程代跑 deploy.sh（凭证仅传部署
-    # 子进程，manager-server SA 自身保持零集群 RBAC）。已存在不覆盖；down 不回收
-    ["MANAGER_DEPLOY_KUBECONFIG_SECRET"]=""
+    # 子进程，manager-server SA 自身保持零集群 RBAC）。已存在不覆盖；down 不回收。
+    # 默认开（开箱即用）：manager up 自动从部署机 kubeconfig 创建同名 Secret 并注入；
+    # 显式置空（MANAGER_DEPLOY_KUBECONFIG_SECRET=）可禁用（回落 pod SA，零 RBAC）
+    ["MANAGER_DEPLOY_KUBECONFIG_SECRET"]="manager-deploy-kubeconfig"
     # manager-server 程序化部署凭证（openshift 形态）：token 所在 Secret 名，留空取默认名
     ["MANAGER_DEPLOY_TOKEN_SECRET"]=""   # 默认 manager-deploy-token；键名 token
     ["MANAGER_DEPLOY_TOKEN_FILE"]=""     # 自动创建 Secret 的 token 来源文件；留空则尝试 oc whoami -t
