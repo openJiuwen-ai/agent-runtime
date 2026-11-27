@@ -16,7 +16,7 @@ export function agentResourceReferencesPath(type: string, id: string, name: stri
   return `${AGENT_TEMPLATE_PATH}?${new URLSearchParams({ refType: type, refId: id, refName: name })}`;
 }
 
-/** Return to the source catalog, retaining the relevant A2A tab. */
+/** Return to the source catalog when that resource still has a visible management page. */
 export function agentResourceCatalogPath(type: string | null | undefined): string | null {
   const paths: Record<string, string> = {
     model: '/model-templates',
@@ -26,8 +26,7 @@ export function agentResourceCatalogPath(type: string | null | undefined): strin
     extension: '/extension-config-templates',
     permission: '/safety-guardrails',
     'execution-guard': '/execution-guard-templates',
-    'a2a-policy': '/a2a-management?tab=policies',
-    'a2a-outbound': '/a2a-management?tab=agents',
+    // A2A 管理页暂隐藏：a2a-policy / a2a-outbound 不提供返回目录链接
     'expert-package': '/expert-package-templates',
   };
   return type && Object.prototype.hasOwnProperty.call(paths, type) ? paths[type] : null;

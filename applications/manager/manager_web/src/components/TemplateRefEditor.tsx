@@ -29,7 +29,7 @@ const SLOT_CONFIG_PATH: Record<string, string> = {
   mcp: '/mcp-templates',
   permissions: '/safety-guardrails',
   execution_guard: '/execution-guard-templates',
-  a2a_access_policy: '/a2a-management?tab=policies',
+  // A2A 管理页暂隐藏：不展示「前往 A2A 管理」死链
 };
 
 /** 槽位 → 引导页面名称（用于「前往 {页面} 页面 →」链接文案） */
@@ -46,7 +46,6 @@ const SLOT_HINT_PAGE_KEY: Record<string, string> = {
   mcp: 'mcpTemplate.title',
   permissions: 'safetyGuardrails.title',
   execution_guard: 'executionGuardrails.title',
-  a2a_access_policy: 'a2aManagement.title',
 };
 
 function SelectChevron({ open = false }: { open?: boolean }) {

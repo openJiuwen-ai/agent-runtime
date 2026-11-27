@@ -47,7 +47,6 @@ import { RolesEditPage } from './pages/iam/RolesEditPage';
 import { ApprovalPage } from './pages/approval/ApprovalPage';
 import { ApprovalEditPage } from './pages/approval/ApprovalEditPage';
 import { ApprovalSkillPreviewPage } from './pages/approval/ApprovalSkillPreviewPage';
-import { A2AManagementPage } from './pages/templates/A2AManagementPage';
 import { ResourceWorkspaceFrame } from './components/ResourceWorkspaceFrame';
 import { WorkspaceNote } from './components/WorkspaceNote';
 import { ExpertPackageTemplatesPage } from './pages/templates/ExpertPackageTemplatesPage';
@@ -201,12 +200,9 @@ function RouteView() {
   if (path === '/execution-guard-templates') {
     return <ResourceWorkspaceFrame><ExecutionGuardrailsPage /></ResourceWorkspaceFrame>;
   }
+  // A2A 管理页签暂时隐藏：旧书签与残留入口显式回到总览，避免静默落到末尾 OverviewPage
   if (path === '/a2a-management') {
-    return (
-      <div className="manager-page">
-        <A2AManagementPage />
-      </div>
-    );
+    return <Navigate to="/manager/overview" replace />;
   }
   if (path === '/expert-packages') {
     return <Navigate to={`/manager/expert-package-templates${params.size ? `?${params}` : ''}`} replace />;
