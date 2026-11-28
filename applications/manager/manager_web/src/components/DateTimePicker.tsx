@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -8,6 +9,11 @@ import {
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { joinDatetimeLocal, splitDatetimeLocal } from '../utils/datetimeLocal';
+import {
+  buildMonthCells,
+  formatCellDate,
+  type DayCell,
+} from '../utils/datetimePickerCalendar';
 
 /** Monday-first weekday order (matches zh Ant Design calendar). */
 const WEEKDAY_KEYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const;
@@ -24,13 +30,6 @@ interface DateTimePickerProps {
   'aria-label'?: string;
 }
 
-type DayCell = {
-  year: number;
-  month: number;
-  day: number;
-  inMonth: boolean;
-};
-
 function calendarDate(value: string): Date {
   const [year, month, day] = value.split('-').map(Number);
   return new Date(year!, month! - 1, day!);
@@ -44,41 +43,11 @@ function todayLocalDate(): string {
   return `${y}-${m}-${d}`;
 }
 
-function formatCellDate(year: number, month: number, day: number): string {
-  return `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-}
-
-/** Build calendar cells including adjacent-month days; week starts Monday; only complete weeks. */
-function buildMonthCells(year: number, month: number): DayCell[] {
-  const firstWeekday = new Date(year, month, 1).getDay();
-  const mondayOffset = (firstWeekday + 6) % 7;
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const daysInPrev = new Date(year, month, 0).getDate();
-  const prev = month === 0 ? { year: year - 1, month: 11 } : { year, month: month - 1 };
-  const next = month === 11 ? { year: year + 1, month: 0 } : { year, month: month + 1 };
-
-  const cells: DayCell[] = [];
-  for (let i = 0; i < mondayOffset; i++) {
-    cells.push({
-      year: prev.year,
-      month: prev.month,
-      day: daysInPrev - mondayOffset + 1 + i,
-      inMonth: false,
-    });
-  }
-  for (let day = 1; day <= daysInMonth; day++) {
-    cells.push({ year, month, day, inMonth: true });
-  }
-  let nextDay = 1;
-  while (cells.length % 7 !== 0) {
-    cells.push({
-      year: next.year,
-      month: next.month,
-      day: nextDay++,
-      inMonth: false,
-    });
-  }
-  return cells;
+function dayCellClassName(isSelected: boolean, isToday: boolean, inMonth: boolean): string {
+  if (isSelected) return 'bg-accent text-white';
+  if (isToday) return 'border border-accent text-accent hover:bg-accent-subtle';
+  if (inMonth) return 'text-text hover:bg-bg-hover';
+  return 'text-muted hover:bg-bg-hover';
 }
 
 /** Combined local datetime editor; value is `YYYY-MM-DDTHH:mm` or empty. */
@@ -101,8 +70,15 @@ export function DateTimePicker({
   const [panelStyle, setPanelStyle] = useState<CSSProperties>({});
   const hostRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const clearBtnRef = useRef<HTMLButtonElement>(null);
   const hourBtnRef = useRef<HTMLButtonElement>(null);
   const minuteBtnRef = useRef<HTMLButtonElement>(null);
+
+  const closePanel = useCallback(() => {
+    setOpen(false);
+    queueMicrotask(() => triggerRef.current?.focus());
+  }, []);
 
   useEffect(() => {
     if (!selectedDate) return;
@@ -118,7 +94,14 @@ export function DateTimePicker({
 
   useLayoutEffect(() => {
     if (!open || !hostRef.current) return;
-    const sync = () => {
+    const sync = (event?: Event) => {
+      if (
+        event?.type === 'scroll' &&
+        event.target instanceof Node &&
+        panelRef.current?.contains(event.target)
+      ) {
+        return;
+      }
       const rect = hostRef.current?.getBoundingClientRect();
       if (!rect) return;
       const panelW = Math.min(PANEL_WIDTH, Math.max(rect.width, 340));
@@ -146,17 +129,22 @@ export function DateTimePicker({
     };
   }, [open, panelView]);
 
+  useLayoutEffect(() => {
+    if (!open) return;
+    clearBtnRef.current?.focus();
+  }, [open]);
+
   useEffect(() => {
     if (!open) return;
     const onDown = (event: PointerEvent) => {
       const path = event.composedPath();
       if (hostRef.current && path.includes(hostRef.current)) return;
       if (panelRef.current && path.includes(panelRef.current)) return;
-      setOpen(false);
+      closePanel();
     };
     window.addEventListener('pointerdown', onDown, true);
     return () => window.removeEventListener('pointerdown', onDown, true);
-  }, [open]);
+  }, [open, closePanel]);
 
   useEffect(() => {
     if (!open) return;
@@ -168,11 +156,11 @@ export function DateTimePicker({
         setPanelView('day');
         return;
       }
-      setOpen(false);
+      closePanel();
     };
     document.addEventListener('keydown', onKey, true);
     return () => document.removeEventListener('keydown', onKey, true);
-  }, [open, panelView]);
+  }, [open, panelView, closePanel]);
 
   useLayoutEffect(() => {
     if (!open || panelView !== 'day') return;
@@ -204,7 +192,7 @@ export function DateTimePicker({
   function clear() {
     onChange('');
     setPanelView('day');
-    setOpen(false);
+    closePanel();
   }
 
   function pickToday() {
@@ -240,7 +228,7 @@ export function DateTimePicker({
     ? createPortal(
         <div
           ref={panelRef}
-          className="flex flex-col overflow-hidden rounded-lg border border-border bg-card shadow-lg"
+          className="flex flex-col overflow-hidden rounded-lg border border-border bg-[var(--card)] shadow-lg"
           style={panelStyle}
           role="dialog"
           aria-label={label}
@@ -278,7 +266,7 @@ export function DateTimePicker({
                     onClick={() => pickYear(y)}
                     className={`rounded-sm py-2 text-sm transition-colors ${
                       y === cursor.year
-                        ? 'bg-[#1677ff] text-white'
+                        ? 'bg-accent text-white'
                         : 'text-text hover:bg-bg-hover'
                     }`}
                   >
@@ -341,15 +329,11 @@ export function DateTimePicker({
                         key={cellDate}
                         type="button"
                         onClick={() => pickCell(cell)}
-                        className={`mx-auto my-0.5 flex h-6 w-6 items-center justify-center rounded-sm text-sm transition-colors ${
-                          isSelected
-                            ? 'bg-[#1677ff] text-white'
-                            : isToday
-                              ? 'border border-[#1677ff] text-[#1677ff] hover:bg-[#1677ff14]'
-                              : cell.inMonth
-                                ? 'text-text hover:bg-bg-hover'
-                                : 'text-muted hover:bg-bg-hover'
-                        }`}
+                        className={`mx-auto my-0.5 flex h-6 w-6 items-center justify-center rounded-sm text-sm transition-colors ${dayCellClassName(
+                          isSelected,
+                          isToday,
+                          cell.inMonth,
+                        )}`}
                       >
                         {cell.day}
                       </button>
@@ -370,7 +354,7 @@ export function DateTimePicker({
                         onClick={() => pickHour(hh)}
                         className={`block w-full py-1 text-center text-sm ${
                           selected
-                            ? 'bg-[#1677ff] text-white'
+                            ? 'bg-accent text-white'
                             : 'text-text hover:bg-bg-hover'
                         }`}
                       >
@@ -390,7 +374,7 @@ export function DateTimePicker({
                         onClick={() => pickMinute(mm)}
                         className={`block w-full py-1 text-center text-sm ${
                           selected
-                            ? 'bg-[#1677ff] text-white'
+                            ? 'bg-accent text-white'
                             : 'text-text hover:bg-bg-hover'
                         }`}
                       >
@@ -404,15 +388,16 @@ export function DateTimePicker({
           )}
           <div className="flex shrink-0 items-center justify-between border-t border-border px-3 py-1.5">
             <button
+              ref={clearBtnRef}
               type="button"
-              className="text-sm text-[#1677ff] hover:text-[#4096ff]"
+              className="text-sm text-accent hover:text-accent-hover"
               onClick={clear}
             >
               {t('dateTimePicker.clear')}
             </button>
             <button
               type="button"
-              className="text-sm text-[#1677ff] hover:text-[#4096ff]"
+              className="text-sm text-accent hover:text-accent-hover"
               onClick={pickToday}
             >
               {t('dateTimePicker.today')}
@@ -426,12 +411,16 @@ export function DateTimePicker({
   return (
     <div className={`relative ${className}`} ref={hostRef}>
       <button
+        ref={triggerRef}
         type="button"
         className="input mt-0 flex w-full cursor-pointer items-center gap-1.5 text-left"
         aria-label={label}
         aria-haspopup="dialog"
         aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          if (open) closePanel();
+          else setOpen(true);
+        }}
       >
         <span className={`min-w-0 flex-1 truncate ${value ? 'text-text' : 'text-muted'}`}>
           {display}
