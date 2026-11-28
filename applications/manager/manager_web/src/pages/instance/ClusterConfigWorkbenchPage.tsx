@@ -5,6 +5,7 @@ import { useClusterSetupProgress } from '../../hooks/useClusterSetupProgress';
 import { ClusterWorkspaceNavigation } from '../../components/ClusterWorkspaceNavigation';
 import { ClusterReadinessPanel } from './ClusterReadinessPanel';
 import { WorkspaceNote } from '../../components/WorkspaceNote';
+import { guidedClusterResumeStage, guidedClusterWizardPath } from '../../utils/clusterWizard';
 import './ClusterConfigWorkbenchPage.css';
 
 /** The stable home for a cluster. Re-entering always derives the next task from saved data. */
@@ -38,6 +39,7 @@ export function ClusterConfigWorkbenchPage({ instanceId }: { instanceId: string 
   ];
   return <div className="flex min-w-0 flex-col gap-4">
     <ClusterWorkspaceNavigation instanceId={instanceId} name={data.instance.jiuwenclaw_name} section="cluster-config" onRefresh={() => void state.reload()} />
+    <div className="flex flex-wrap items-center justify-between gap-3"><p className="text-sm text-muted">{tr('需要逐步指导时，可进入配置向导；下方仍可直接修改各项配置。', 'Use the guided flow for step-by-step setup, or edit individual settings below.')}</p><button type="button" className="btn" onClick={() => navigate(guidedClusterWizardPath(instanceId, guidedClusterResumeStage(data.nextSection), params))}>{tr('继续配置向导 →', 'Continue guided setup →')}</button></div>
     <section className="cluster-setup-grid" aria-label={tr('配置步骤', 'Setup steps')}>
       {steps.map((item, index) => <article className={`card cluster-setup-card ${item.section === data.nextSection ? 'next' : ''}`} key={item.section}>
         <div className="flex items-center justify-between gap-2"><span className={`cluster-setup-card__number ${item.complete ? 'complete' : ''}`}>{item.complete ? '✓' : index + 1}</span><span className={`pill sm ${item.complete ? 'ok' : ''}`}>{item.complete ? (index === 3 ? tr('已连接', 'Connected') : tr('已配置', 'Configured')) : (index === 3 ? tr('待检查', 'Needs checking') : tr('待配置', 'Needs setup'))}</span></div>

@@ -1,0 +1,30 @@
+.guided-cluster [hidden] { display: none !important; }
+.guided-cluster .wizard-main { min-width: 0; }
+.guided-cluster .wizard-steps { position: sticky; top: 16px; }
+.guided-cluster__back { display: flex; align-items: center; gap: 14px; margin-top: 16px; }
+.guided-cluster__back > span { color: var(--muted); font-size: 12px; }
+.wizard-verification__checks { display: grid; gap: 12px; margin-top: 24px; }
+.wizard-verification__check { display: flex; gap: 12px; align-items: flex-start; padding: 15px; border: 1px solid var(--border); border-radius: 10px; }
+.wizard-verification__icon { display: grid; place-items: center; width: 26px; height: 26px; flex: 0 0 26px; border-radius: 50%; color: var(--muted); background: var(--secondary); }
+.wizard-verification__check.is-ready .wizard-verification__icon { color: var(--accent); background: var(--accent-subtle); }
+.wizard-verification__check > div { flex: 1; min-width: 0; }
+.wizard-verification__check p { color: var(--muted); font-size: 12px; line-height: 1.65; margin-top: 5px; overflow-wrap: anywhere; }
+.wizard-verification__components { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; }
+.wizard-verification__components > span { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.wizard-verification__notice { padding: 14px 16px; margin-top: 18px; background: var(--accent-subtle); border-radius: 9px; font-size: 13px; line-height: 1.7; }
+@media(max-width: 760px) { .guided-cluster .wizard-steps { position: static; } .guided-cluster__back { align-items: flex-start; flex-direction: column; gap: 6px; } .wizard-verification__check { flex-wrap: wrap; } .wizard-verification__check > .btn { margin-left: 38px; } }
+@media(max-width: 760px) {
+  .shell:has(.wizard-workspace) { grid-template-columns: minmax(0, 1fr); grid-template-areas: "topbar" "content"; }
+  .shell:has(.wizard-workspace) > .manager-nav { display: none; }
+  .shell:has(.wizard-workspace) > .content { padding: 16px 12px; }
+  .shell:has(.wizard-workspace) > .topbar { padding: 0 12px; gap: 8px; overflow-x: auto; }
+  .shell:has(.wizard-workspace) .brand-text { display: none; }
+  .shell:has(.wizard-workspace) .topbar > div:last-child { gap: 6px; }
+  .shell:has(.wizard-workspace) .topbar > div:last-child > .btn:first-child { display: none; }
+  .guided-cluster .wizard-header { flex-direction: column; gap: 10px; }
+  .guided-cluster .wizard-header > .tag { align-self: flex-start; white-space: nowrap; }
+  .guided-cluster .wizard-steps ol { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .guided-cluster .wizard-step { padding: 9px 6px; gap: 7px; }
+  .guided-cluster .wizard-step small { display: none; }
+  .guided-cluster .wizard-step strong { overflow-wrap: anywhere; }
+}

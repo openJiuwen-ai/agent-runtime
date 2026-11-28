@@ -2304,7 +2304,26 @@ dialog.resource-preview::backdrop { background: rgb(0 0 0 / .24); }
 .wizard-form-wide { grid-column: 1 / -1; }
 .wizard-section-heading { display: flex; justify-content: space-between; gap: 12px; margin-top: 24px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
 .wizard-section-heading span { color: var(--muted); font-size: 12px; }
-.wizard-tabs { margin-top: 12px; }
+.wizard-field-help { display: block; margin-top: 6px; color: var(--muted); font-size: 12px; line-height: 1.65; font-weight: 400; }
+.wizard-namespace { margin-top: 16px; padding: 16px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg-accent); }
+.wizard-namespace .input { display: block; width: 100%; max-width: 420px; margin-top: 6px; }
+.wizard-namespace-suggestion { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-top: 10px; color: var(--muted); font-size: 12px; }
+.wizard-namespace-suggestion code { color: var(--accent); font-weight: 600; }
+.wizard-namespace-help { margin-top: 8px; font-size: 12px; color: var(--muted); }
+.wizard-namespace-help summary { width: fit-content; cursor: pointer; color: var(--accent); }
+.wizard-namespace-help p { margin: 8px 0; line-height: 1.7; }
+.wizard-namespace-help code { display: block; padding: 9px 12px; width: fit-content; max-width: 100%; overflow-wrap: anywhere; border: 1px solid var(--border); border-radius: 6px; background: var(--card); color: var(--text-strong); }
+.wizard-endpoints-heading { display: flex; align-items: flex-start; gap: 12px; margin-top: 20px; }
+.wizard-endpoints-heading > div { flex: 1; min-width: 0; }
+.wizard-endpoints-heading h3 { font-size: 13px; font-weight: 600; }
+.wizard-endpoints-heading .btn { flex-shrink: 0; }
+.wizard-endpoint-fields { display: grid; gap: 12px; margin-top: 14px; }
+.wizard-endpoint-field { display: grid; grid-template-columns: minmax(130px, .75fr) minmax(0, 2fr); align-items: center; gap: 12px; }
+.wizard-endpoint-field > span { min-width: 0; font-size: 12px; }
+.wizard-endpoint-field .input { width: 100%; min-width: 0; font-size: 12px; }
+.wizard-extra-endpoints { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
+.wizard-extra-endpoints summary { cursor: pointer; font-size: 13px; color: var(--text-strong); }
+.wizard-extra-endpoints summary > span { margin-left: 6px; color: var(--muted); font-size: 12px; }
 .wizard-endpoint-preview { display: grid; gap: 8px; margin-top: 12px; }
 .wizard-endpoint-preview > div { display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 12px; align-items: center; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-accent); }
 .wizard-endpoint-preview span { color: var(--muted); font-size: 12px; }
@@ -2320,6 +2339,8 @@ dialog.resource-preview::backdrop { background: rgb(0 0 0 / .24); }
 .wizard-review strong { text-align: right; }
 .wizard-actions { display: flex; justify-content: space-between; gap: 10px; margin-top: 26px; padding-top: 16px; border-top: 1px solid var(--border); }
 @media(max-width: 760px) { .wizard-layout { grid-template-columns: 1fr; } .wizard-form-grid { grid-template-columns: 1fr; } .wizard-form-wide { grid-column: auto; } .wizard-action-card { align-items: flex-start; flex-wrap: wrap; } .wizard-action-card .btn { margin-left: 50px; } }
+@media(max-width: 1000px) { .wizard-layout { grid-template-columns: 190px minmax(0, 1fr); } .wizard-card { padding: 20px; } .wizard-endpoint-field { grid-template-columns: 1fr; gap: 5px; } }
+@media(max-width: 760px) { .wizard-layout { grid-template-columns: 1fr; } .wizard-section-heading, .wizard-endpoints-heading { flex-wrap: wrap; } .wizard-card { padding: 18px; } .wizard-namespace { padding: 12px; } .wizard-namespace .input { max-width: none; } .wizard-extra-endpoints summary > span { display: block; margin: 4px 0 0 16px; } .wizard-actions { flex-wrap: wrap; } }
 @media(max-width: 980px) { .iam-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media(max-width: 700px) { .iam-hero { align-items: flex-start; flex-direction: column; padding: 16px; } .iam-hero .btn { margin-left: 50px; } .iam-metrics { grid-template-columns: 1fr; } }
 

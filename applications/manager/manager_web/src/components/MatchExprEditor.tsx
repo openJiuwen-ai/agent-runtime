@@ -26,27 +26,10 @@ import { collectPages } from '../utils/overview';
 interface SelectOption { id: string; label: string }
 
 const MatchFieldsContext = createContext<MatchField[]>(MATCH_FIELDS);
+const MatchOptionsContext = createContext<Partial<Record<MatchField, SelectOption[]>>>({});
 
 function useFieldOptions(field: MatchField): SelectOption[] {
-  const allowedFields = useContext(MatchFieldsContext);
-  const { data: orgs } = useAsync(() => OrgApi.list(), []);
-  const { data: users } = useAsync(() => UserApi.list(), []);
-  const loadAgents = allowedFields.includes('bot_id');
-  const { data: agents } = useAsync(
-    async () => ({ items: loadAgents ? await collectPages((page, page_size) => AgentTemplateApi.list({ page, page_size })) : [] }),
-    [loadAgents],
-  );
-
-  return useMemo(() => {
-    switch (field) {
-      case 'group_id':
-        return (orgs?.items ?? []).map((o) => ({ id: o.group_id, label: o.display_name || o.group_id }));
-      case 'user_id':
-        return (users?.items ?? []).map((u) => ({ id: u.user_id, label: u.display_name || u.user_id }));
-      case 'bot_id':
-        return (agents?.items ?? []).map((a) => ({ id: a.template_id, label: a.template_name || a.template_id }));
-    }
-  }, [field, orgs, users, agents]);
+  return useContext(MatchOptionsContext)[field] ?? [];
 }
 
 function TrashIcon() {
@@ -530,12 +513,15 @@ interface MatchExprEditorProps {
   onChange: (value: string) => void;
   /** 可选字段；默认 group/user/bot。Agent 资源传 user/group 即可。 */
   allowedFields?: MatchField[];
+  /** Refresh directory choices after identities or templates were created in a preceding step. */
+  revision?: number;
 }
 
 export function MatchExprEditor({
   value,
   onChange,
   allowedFields = MATCH_FIELDS,
+  revision = 0,
 }: MatchExprEditorProps) {
   const { t } = useTranslation();
   const fields = useMemo(
@@ -543,6 +529,21 @@ export function MatchExprEditor({
     [allowedFields],
   );
   const [model, setModel] = useState<MatchExprModel>(() => parseMatchExpr(value));
+  const loadOptions = model.mode === 'custom';
+  const loadAgents = fields.includes('bot_id');
+  const options = useAsync(async () => {
+    if (!loadOptions) return {};
+    const [orgs, users, agents] = await Promise.all([
+      collectPages((page, page_size) => OrgApi.list({ page, page_size })),
+      collectPages((page, page_size) => UserApi.list({ page, page_size })),
+      loadAgents ? collectPages((page, page_size) => AgentTemplateApi.list({ page, page_size })) : Promise.resolve([]),
+    ]);
+    return {
+      group_id: orgs.map(row => ({ id: row.group_id, label: row.display_name || row.group_id })),
+      user_id: users.map(row => ({ id: row.user_id, label: row.display_name || row.user_id })),
+      bot_id: agents.map(row => ({ id: row.template_id, label: row.template_name || row.template_id })),
+    };
+  }, [loadOptions, loadAgents, revision]);
   const lastEmittedRef = useRef(value);
 
   useEffect(() => {
@@ -577,8 +578,9 @@ export function MatchExprEditor({
   };
 
   return (
-    <MatchFieldsContext.Provider value={fields}>
+    <MatchFieldsContext.Provider value={fields}><MatchOptionsContext.Provider value={options.data ?? {}}>
       <div className="flex flex-col gap-2">
+        {loadOptions && options.error && <div className="text-xs text-danger" role="alert">{options.error}<button type="button" className="btn sm ml-2" onClick={() => void options.reload()}>{t('common.refresh')}</button></div>}
         <select
           className="select w-full max-w-xs"
           value={model.mode}
@@ -624,6 +626,6 @@ export function MatchExprEditor({
           </div>
         ) : null}
       </div>
-    </MatchFieldsContext.Provider>
+    </MatchOptionsContext.Provider></MatchFieldsContext.Provider>
   );
 }
