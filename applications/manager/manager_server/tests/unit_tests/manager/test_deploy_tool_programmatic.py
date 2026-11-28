@@ -35,7 +35,6 @@ IDENTITY_IMAGE="example/jiuwenswarm-identity:1.0"
 MANAGER_SERVER_IMAGE="example/jiuwenswarm-manager-server:1.0"
 MANAGER_WEB_IMAGE="example/jiuwenswarm-manager-web:1.0"
 AGENT_RUNTIME_IMAGE="example/jiuwenswarm-agent-runtime:1.0"
-JIUWENBOX_IMAGE="example/jiuwenbox:1.0"
 AGENT_RUNTIME_DEPLOY_MODE="full"
 CLUSTER_TYPE=k8s
 """
