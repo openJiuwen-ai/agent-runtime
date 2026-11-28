@@ -74,7 +74,6 @@ def _agent_body(*, credential: str = "secret-token") -> dict:
         "discovery_id": "replaced-by-test-helper",
         "template_name": "Weather Agent",
         "description": "Managed outbound agent",
-        "a2a_tags": ["weather"],
         "credential": credential,
         "connect_timeout_seconds": 5,
         "sync_wait_seconds": 30,

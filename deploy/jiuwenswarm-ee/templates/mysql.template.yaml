@@ -1,68 +1,72 @@
-# Headless Service：给 StatefulSet 提供稳定 DNS 域名
+# MySQL 部署清单（OpenShift）
+# 说明：
+#   - 存储类经 DATA_STORAGE_CLASS 变量配置（.env.custom，留空走集群默认）动态供给（WaitForFirstConsumer）
+#   - 适配 restricted-v2 SCC：随机 uid 运行，fsGroup 由 SCC 自动注入
+#   - 镜像经 MYSQL_IMAGE 变量配置（.env.custom）
+# 访问：oc port-forward sts/mysql 3306:3306
 apiVersion: v1
 kind: Service
 metadata:
-  name: <<MYSQL_NAME>>-headless
+  name: mysql-headless
+  namespace: "<<NAMESPACE>>"
 spec:
   ports:
     - port: 3306
       targetPort: 3306
-  clusterIP: None  # 关键：无头服务，StatefulSet 必须依赖
+  clusterIP: None
   selector:
-    app: <<MYSQL_NAME>>
-
+    app: mysql
 ---
-# NodePort Service：供外部工具连接 MySQL
 apiVersion: v1
-kind: Service
+kind: PersistentVolumeClaim
 metadata:
-  name: <<MYSQL_NAME>>-nodeport
+  name: mysql-pvc
+  namespace: "<<NAMESPACE>>"
 spec:
-  type: NodePort
-  ports:
-    - port: 3306       # 集群内部端口
-      targetPort: 3306 # 容器端口
-      nodePort: <<MYSQL_NODE_PORT>>  # 外部访问端口（30000-32767）
-  selector:
-    app: <<MYSQL_NAME>>
-
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 4Gi
+  storageClassName: <<DATA_STORAGE_CLASS>>
 ---
-# StatefulSet：MySQL 有状态应用（稳定网络 + 稳定存储）
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: <<MYSQL_NAME>>
+  name: mysql
+  namespace: "<<NAMESPACE>>"
 spec:
-  serviceName: <<MYSQL_NAME>>-headless  # 绑定 Headless Service
+  serviceName: mysql-headless
   replicas: 1
   selector:
     matchLabels:
-      app: <<MYSQL_NAME>>
+      app: mysql
   template:
     metadata:
       labels:
-        app: <<MYSQL_NAME>>
+        app: mysql
     spec:
       containers:
-        - name: <<MYSQL_NAME>>
+        - name: mysql
           image: <<MYSQL_IMAGE>>
           imagePullPolicy: IfNotPresent
           args:
             - --innodb_use_native_aio=0
             - --innodb_flush_method=O_DIRECT_NO_FSYNC
-            - --max-connections=<<MYSQL_MAX_CONNECTION>>
+            - --max-connections=400
+          envFrom:
+            - secretRef:
+                name: jiuwenswarm-secret-configmap
           env:
-            - name: MYSQL_ROOT_PASSWORD
-              value: "<<MYSQL_ROOT_PASSWORD>>"  # 生产环境请务必修改！
             - name: TZ
-              value: "<<TIMEZONE>>"
+              value: "Asia/Shanghai"
             - name: MYSQL_ROOT_HOST
-              value: "%"              # 允许 root 从任意地址登录（外部工具可用）
+              value: "%"
           ports:
             - containerPort: 3306
-              name: <<MYSQL_NAME>>
+              name: mysql
           volumeMounts:
-            - name: <<MYSQL_NAME>>-data
+            - name: mysql-data
               mountPath: /var/lib/mysql
           livenessProbe:
             tcpSocket:
@@ -77,49 +81,6 @@ spec:
             periodSeconds: 5
             timeoutSeconds: 2
       volumes:
-        - name: <<MYSQL_NAME>>-data
+        - name: mysql-data
           persistentVolumeClaim:
-            claimName: <<MYSQL_NAME>>-pvc
-
----
-# PV 持久化存储
-apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: <<MYSQL_NAME>>-pv
-  labels:
-    app: <<MYSQL_NAME>>
-spec:
-  capacity:
-    storage: <<MYSQL_STORAGE_SIZE>>
-  accessModes:
-    - ReadWriteOnce                       # RWX: 多个 Pod 可同时读写
-  persistentVolumeReclaimPolicy: Retain   # 删除 PVC 时保留数据
-  storageClassName: ""                    # 不使用 StorageClass
-  nfs:
-    server: <<NFS_SERVER_ADDR>>                   # NFS 服务器地址
-    path: <<NFS_SHARE_PATH>>/<<MYSQL_NAME>>       # NFS 共享路径
-    readOnly: false
-  mountOptions:
-    - nfsvers=4
-    - soft        # 改成 soft！防止节点卡死
-    - timeo=600   # 超时时间：60秒
-    - retrans=2   # 重试2次
-    - noatime
-
----
-# PVC 持久化存储（自动绑定 PV）
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: <<MYSQL_NAME>>-pvc
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: <<MYSQL_STORAGE_SIZE>>
-  storageClassName: ""       # 不使用 StorageClass
-  selector:
-    matchLabels:
-      app: <<MYSQL_NAME>>
+            claimName: mysql-pvc

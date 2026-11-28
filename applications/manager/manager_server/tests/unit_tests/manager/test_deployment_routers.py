@@ -9,8 +9,12 @@ pytestmark = pytest.mark.asyncio
 
 _DEPLOYMENTS = "/api/v1/deployments"
 
-# 与工具树校验对齐的最小 env（create 经 defaults 播种路径补全，这里只放关键项）
-_BASE_ENV = {"AGENT_RUNTIME_IMAGE": "swr.example/agent-runtime:1.0"}
+# 与工具树校验对齐的最小 env（create 经 defaults 播种路径补全，这里只放关键项；
+# k8s 形态 SANDBOX_TYPE 留空派生 jiuwenbox，创建校验要求沙箱镜像）
+_BASE_ENV = {
+    "AGENT_RUNTIME_IMAGE": "swr.example/agent-runtime:1.0",
+    "JIUWENBOX_IMAGE": "swr.example/jiuwenswarm-sandbox:1.0",
+}
 
 
 @pytest.fixture
@@ -229,3 +233,49 @@ async def test_create_down_action_task(manager_api, tool_available):
     detail = resp.json()["data"]
     assert detail["action"] == "down"
     assert detail["params"]["action"] == "down"
+
+
+async def test_create_with_env_custom_text_import(manager_api, tool_available):
+    """.env.custom 全量文本导入：解析生效、白名单拦脏键、显式 env 优先。"""
+    text = (
+        "# 注释行忽略\n"
+        'GATEWAY_REPLICAS="3"\n'
+        "WEB_REPLICAS=2\n"
+        "JIUWENBOX_IMAGE=swr.example/jiuwenswarm-sandbox:1.0\n"   # k8s 派生沙箱需镜像（不依赖本地 .env.custom 播种）
+        'MARIADB_ROOT_PASSWORD="Imported@123"\n'
+        "CLUSTER_TYPE=k8s\n"          # 强制键：merge 时忽略
+        "JUNK_LINE_WITHOUT_EQ\n"      # 无等号：宽容忽略
+    )
+    resp = await manager_api.http.post(
+        f"{_DEPLOYMENTS}/",
+        json={
+            "namespace": "ns-import",
+            "jiuwenclaw_name": "import-instance",
+            "env_custom_text": text,
+            # 与其它 create 用例一致：基础镜像项显式给，单元测试不依赖工具树
+            # .env.custom；显式 env 优先于文本
+            "env": {**_BASE_ENV, "GATEWAY_REPLICAS": "5"},
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    deployment_id = resp.json()["data"]["deployment_id"]
+    detail = (await manager_api.http.get(f"{_DEPLOYMENTS}/{deployment_id}")).json()["data"]
+    task_env = detail["params"]["env"]
+    assert task_env["GATEWAY_REPLICAS"] == "5"
+    assert task_env["WEB_REPLICAS"] == "2"
+    assert task_env["JIUWENBOX_IMAGE"].startswith("swr.example/")
+    assert task_env["MARIADB_ROOT_PASSWORD"] == "******"   # 敏感键出参掩码
+    assert "CLUSTER_TYPE" not in task_env
+
+    # 文本含白名单外键 → 400 且指出键名
+    resp = await manager_api.http.post(
+        f"{_DEPLOYMENTS}/",
+        json={
+            "namespace": "ns-import2",
+            "jiuwenclaw_name": "x",
+            "env_custom_text": "EVIL_KEY=1",
+            "env": _BASE_ENV,
+        },
+    )
+    assert resp.status_code == 400
+    assert "EVIL_KEY" in resp.json()["detail"]

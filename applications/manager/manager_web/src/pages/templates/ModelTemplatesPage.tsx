@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAsync } from '../../hooks/useAsync';
 import { useListSearch } from '../../hooks/useListSearch';
-import { ModelTemplateApi, ApiError } from '../../services/api';
+import { ModelTemplateApi } from '../../services/api';
 import type { ModelTemplate } from '../../types';
 import { Empty } from '../../components/Empty';
 import { Pagination } from '../../components/Pagination';
@@ -20,8 +20,14 @@ import { toast } from '../../stores/uiStore';
 import { bumpGuideRevision } from '../../stores/guideStore';
 import { useGuideAutoOpen } from '../../hooks/useGuideAutoOpen';
 import { formatTime, truncate } from '../../utils/format';
+import {
+  deleteBlockedByReferences,
+  disableBlockedByReferences,
+  templateInUseMessage,
+} from '../../utils/templateInUse';
 import { useRouter } from '../../router';
 import { ResourceExportButton, ResourceImportButton } from '../../components/ResourceImportExport';
+import { WorkspaceNote } from '../../components/WorkspaceNote';
 
 const MODEL_TYPE_OPTIONS = ['default', 'video', 'audio', 'vision', 'image_gen'] as const;
 const MODEL_PROVIDER_OPTIONS = [
@@ -43,8 +49,9 @@ type ModelTemplateSortField =
   | 'updated_at';
 
 export function ModelTemplatesPage() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { navigate } = useRouter();
+  const zh = i18n.language.startsWith('zh');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const { searchInput, setSearchInput, searchQuery } = useListSearch();
@@ -113,6 +120,11 @@ export function ModelTemplatesPage() {
 
   const toggleEnabled = async (row: ModelTemplate, enabled: boolean) => {
     if (togglingId) return;
+    const blocked = disableBlockedByReferences(enabled, row.reference_count, t);
+    if (blocked) {
+      toast('warn', blocked);
+      return;
+    }
     const previous = row.enabled;
     setItems((list) =>
       list.map((item) => (item.template_id === row.template_id ? { ...item, enabled } : item)),
@@ -128,10 +140,20 @@ export function ModelTemplatesPage() {
       setItems((list) =>
         list.map((item) => (item.template_id === row.template_id ? { ...item, enabled: previous } : item)),
       );
-      toast('danger', t('errors.saveFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
+      const localized = templateInUseMessage(e, t, 'disable');
+      toast('danger', localized ?? t('errors.saveFailedGeneric'));
     } finally {
       setTogglingId(null);
     }
+  };
+
+  const requestDelete = (row: ModelTemplate) => {
+    const blocked = deleteBlockedByReferences(row.reference_count, t);
+    if (blocked) {
+      toast('warn', blocked);
+      return;
+    }
+    setDelTarget(row);
   };
 
   return (
@@ -364,7 +386,7 @@ export function ModelTemplatesPage() {
                         >
                           {t('common.edit')}
                         </button>
-                        <button className="btn sm danger" onClick={() => setDelTarget(row)}>
+                        <button className="btn sm danger" onClick={() => requestDelete(row)}>
                           {t('common.delete')}
                         </button>
                       </div>
@@ -389,6 +411,13 @@ export function ModelTemplatesPage() {
           }}
         />
       )}
+      <WorkspaceNote title={t('modelTemplate.title')}>
+        {t('modelTemplate.subtitle')}
+        {zh ? '。' : '. '}
+        {zh
+          ? '保存后，在 Agent 或集群配置中引用；修改已被引用的资源前，请先查看关联模板和集群。'
+          : 'Reference saved resources from an Agent or cluster configuration. Review linked templates and clusters before changing a referenced resource.'}
+      </WorkspaceNote>
       </div>
       </div>
 
@@ -415,7 +444,8 @@ export function ModelTemplatesPage() {
             bumpGuideRevision();
             void reload();
           } catch (e) {
-            toast('danger', t('errors.deleteFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
+            const localized = templateInUseMessage(e, t, 'delete');
+            toast('danger', localized ?? t('errors.deleteFailedGeneric'));
           }
         }}
         onClose={() => setDelTarget(null)}

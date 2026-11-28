@@ -1,4 +1,4 @@
-import type { ChangeEvent, CompositionEvent } from 'react';
+import type { ChangeEvent, CompositionEvent, KeyboardEvent } from 'react';
 
 interface LimitedTextInputProps {
   ariaLabel?: string;
@@ -10,6 +10,13 @@ interface LimitedTextInputProps {
   placeholder?: string;
   disabled?: boolean;
   required?: boolean;
+  /** 关联 `<datalist id=…>`，用于可输入下拉建议 */
+  list?: string;
+  onFocus?: () => void;
+  onBlur?: () => void;
+  onKeyDown?: (event: KeyboardEvent<HTMLInputElement>) => void;
+  autoComplete?: string;
+  autoFocus?: boolean;
 }
 
 function truncate(value: string, limit: number): string {
@@ -31,6 +38,12 @@ export function LimitedTextInput({
   placeholder,
   disabled,
   required,
+  list,
+  onFocus,
+  onBlur,
+  onKeyDown,
+  autoComplete,
+  autoFocus,
 }: LimitedTextInputProps) {
   const atLimit = value.length >= maxLength;
 
@@ -54,6 +67,12 @@ export function LimitedTextInput({
         placeholder={placeholder}
         disabled={disabled}
         required={required}
+        list={list}
+        autoComplete={autoComplete}
+        autoFocus={autoFocus}
+        onFocus={onFocus}
+        onBlur={onBlur}
+        onKeyDown={onKeyDown}
         onChange={syncValue}
         onCompositionEnd={syncAfterIme}
       />

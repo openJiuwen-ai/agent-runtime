@@ -21,8 +21,10 @@ import { toast } from '../../stores/uiStore';
 import { ApiError } from '../../services/api';
 import { ImportClusterModal } from './modal/ImportClusterModal';
 import { useGuideAutoOpen } from '../../hooks/useGuideAutoOpen';
+import { useClustersGuideStatus } from '../../hooks/useGuideStatus';
 import { bumpGuideRevision } from '../../stores/guideStore';
 import { WorkspaceNote } from '../../components/WorkspaceNote';
+import { WarnBadge, type WarnBadgeLink } from '../../components/WarnBadge';
 import { ClusterCardStats } from './ClusterCardStats';
 
 type ViewMode = 'brief' | 'list';
@@ -31,10 +33,8 @@ type InstanceSortField =
   | 'jiuwenclaw_name'
   | 'gateway_status'
   | 'runtime_status'
-  | 'user_web_status'
   | 'gateway_last_alive'
   | 'runtime_last_alive'
-  | 'user_web_last_alive'
   | 'updated_at';
 
 const VIEW_MODE_STORAGE_KEY = 'claw_manager_instance_view';
@@ -59,8 +59,6 @@ function InstanceListTable({
   onGatewayStatusFilterChange,
   runtimeStatusFilter,
   onRuntimeStatusFilterChange,
-  userWebStatusFilter,
-  onUserWebStatusFilterChange,
 }: {
   items: InstanceSummary[];
   onChanged: () => void;
@@ -72,8 +70,6 @@ function InstanceListTable({
   onGatewayStatusFilterChange: (value: string) => void;
   runtimeStatusFilter: string;
   onRuntimeStatusFilterChange: (value: string) => void;
-  userWebStatusFilter: string;
-  onUserWebStatusFilterChange: (value: string) => void;
 }) {
   const { t } = useTranslation();
   const { navigate } = useRouter();
@@ -88,12 +84,12 @@ function InstanceListTable({
 
   return (
     <>
-      <div className="card manager-page-table !p-0">
+      <div className="card !p-0">
         <div className="overflow-x-auto">
-          <table className="table w-max min-w-full">
+          <table className="table cluster-list-table w-max min-w-full">
             <thead>
               <tr>
-                <th className="min-w-[12rem]">
+                <th>
                   <TableColumnSort
                     label={t('topology.instanceName')}
                     value={sortBy === 'jiuwenclaw_name' ? sortOrder : ''}
@@ -101,7 +97,7 @@ function InstanceListTable({
                     onChange={(value) => onSortChange('jiuwenclaw_name', value)}
                   />
                 </th>
-                <th className="whitespace-nowrap">
+                <th>
                   <div className="th-filter">
                     <span className="th-filter__label">{t('topology.gatewayStatus')}</span>
                     <TableColumnSort
@@ -120,7 +116,7 @@ function InstanceListTable({
                     />
                   </div>
                 </th>
-                <th className="whitespace-nowrap">
+                <th>
                   <div className="th-filter">
                     <span className="th-filter__label">{t('topology.runtimeStatus')}</span>
                     <TableColumnSort
@@ -139,26 +135,7 @@ function InstanceListTable({
                     />
                   </div>
                 </th>
-                <th className="whitespace-nowrap">
-                  <div className="th-filter">
-                    <span className="th-filter__label">{t('topology.userWebStatus')}</span>
-                    <TableColumnSort
-                      iconOnly
-                      label={t('topology.userWebStatus')}
-                      value={sortBy === 'user_web_status' ? sortOrder : ''}
-                      options={sortOptions}
-                      onChange={(value) => onSortChange('user_web_status', value)}
-                    />
-                    <TableColumnFilter
-                      iconOnly
-                      label={t('topology.userWebStatus')}
-                      value={userWebStatusFilter}
-                      options={statusFilterOptions}
-                      onChange={onUserWebStatusFilterChange}
-                    />
-                  </div>
-                </th>
-                <th className="whitespace-nowrap min-w-[10.5rem]">
+                <th>
                   <TableColumnSort
                     label={t('topology.gatewayLastAlive')}
                     value={sortBy === 'gateway_last_alive' ? sortOrder : ''}
@@ -166,7 +143,7 @@ function InstanceListTable({
                     onChange={(value) => onSortChange('gateway_last_alive', value)}
                   />
                 </th>
-                <th className="whitespace-nowrap min-w-[10.5rem]">
+                <th>
                   <TableColumnSort
                     label={t('topology.runtimeLastAlive')}
                     value={sortBy === 'runtime_last_alive' ? sortOrder : ''}
@@ -174,15 +151,7 @@ function InstanceListTable({
                     onChange={(value) => onSortChange('runtime_last_alive', value)}
                   />
                 </th>
-                <th className="whitespace-nowrap min-w-[10.5rem]">
-                  <TableColumnSort
-                    label={t('topology.userWebLastAlive')}
-                    value={sortBy === 'user_web_last_alive' ? sortOrder : ''}
-                    options={sortOptions}
-                    onChange={(value) => onSortChange('user_web_last_alive', value)}
-                  />
-                </th>
-                <th className="whitespace-nowrap min-w-[10.5rem]">
+                <th>
                   <TableColumnSort
                     label={t('topology.modifiedAt')}
                     value={sortBy === 'updated_at' ? sortOrder : ''}
@@ -196,46 +165,51 @@ function InstanceListTable({
             <tbody>
               {items.length === 0 ? (
                 <tr>
-                  <td colSpan={9}>
+                  <td colSpan={7}>
                     <Empty text={t('common.empty')} />
                   </td>
                 </tr>
               ) : (
                 items.map((instance) => (
                   <tr key={instance.jiuwenclaw_id}>
-                    <td>
-                      <div className="font-medium text-text-strong">{instance.jiuwenclaw_name}</div>
-                      <div className="mono text-[11px] text-muted break-all">{instance.jiuwenclaw_id}</div>
+                    <td className="align-top">
+                      <div className="text-text-strong font-medium break-words" title={instance.jiuwenclaw_name}>
+                        {instance.jiuwenclaw_name}
+                      </div>
+                      <div className="text-[11px] text-muted mono break-all" title={instance.jiuwenclaw_id}>
+                        {instance.jiuwenclaw_id}
+                      </div>
                     </td>
-                    <td>
+                    <td className="whitespace-nowrap">
                       <StatusBadge status={instance.gateway_status} />
                     </td>
-                    <td>
+                    <td className="whitespace-nowrap">
                       <StatusBadge status={instance.runtime_status} />
                     </td>
-                    <td>
-                      <StatusBadge status={instance.user_web_status || 'pending'} />
-                    </td>
-                    <td className="mono text-[11px] whitespace-nowrap">
+                    <td className="mono text-[11px] text-muted whitespace-nowrap" title={formatTime(instance.gateway_last_alive)}>
                       {formatTime(instance.gateway_last_alive)}
                     </td>
-                    <td className="mono text-[11px] whitespace-nowrap">
+                    <td className="mono text-[11px] text-muted whitespace-nowrap" title={formatTime(instance.runtime_last_alive)}>
                       {formatTime(instance.runtime_last_alive)}
                     </td>
-                    <td className="mono text-[11px] whitespace-nowrap">
-                      {formatTime(instance.user_web_last_alive)}
+                    <td className="mono text-[11px] text-muted whitespace-nowrap" title={formatTime(instance.updated_at)}>
+                      {formatTime(instance.updated_at)}
                     </td>
-                    <td className="mono text-[11px] whitespace-nowrap">{formatTime(instance.updated_at)}</td>
-                    <td>
+                    <td className="whitespace-nowrap min-w-[9.5rem]">
                       <div className="flex items-center gap-1">
                         <button
-                          className="btn sm"
+                          className="btn sm ghost"
                           onClick={() => navigate(`/instances/${instance.jiuwenclaw_id}`)}
                         >
-                          {t('redesign.clusterWorkbench', { defaultValue: '配置工作台' })}
+                          {t('redesign.clusterWorkbench')}
                         </button>
-                        <button className="btn primary sm" onClick={() => navigate(`/instances/${encodeURIComponent(instance.jiuwenclaw_id)}/setup`)}>{t('redesign.continueClusterSetup', { defaultValue: '继续配置' })} →</button>
-                        <ClusterManagementActions compact instanceId={instance.jiuwenclaw_id} name={instance.jiuwenclaw_name} onDeleted={onChanged} />
+                        <button
+                          className="btn sm ghost"
+                          onClick={() => navigate(`/instances/${encodeURIComponent(instance.jiuwenclaw_id)}/setup`)}
+                        >
+                          {t('redesign.continueClusterSetup')}
+                        </button>
+                        <ClusterManagementActions compact instanceId={instance.jiuwenclaw_id} name={instance.jiuwenclaw_name} namespace={instance.namespace} onDeleted={onChanged} />
                       </div>
                     </td>
                   </tr>
@@ -245,7 +219,6 @@ function InstanceListTable({
           </table>
         </div>
       </div>
-
     </>
   );
 }
@@ -293,7 +266,6 @@ export function InstanceListPage() {
   const { searchInput, setSearchInput, searchQuery } = useListSearch();
   const [gatewayStatusFilter, setGatewayStatusFilter] = useState<string>('');
   const [runtimeStatusFilter, setRuntimeStatusFilter] = useState<string>('');
-  const [userWebStatusFilter, setUserWebStatusFilter] = useState<string>('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [sortBy, setSortBy] = useState<InstanceSortField | ''>('');
@@ -324,11 +296,6 @@ export function InstanceListPage() {
     setPage(1);
   };
 
-  const handleUserWebStatusFilterChange = (value: string) => {
-    setUserWebStatusFilter(value);
-    setPage(1);
-  };
-
   const handleSortChange = (field: InstanceSortField, value: ColumnSortValue) => {
     if (value === '') {
       setSortBy('');
@@ -355,7 +322,6 @@ export function InstanceListPage() {
         page_size: pageSize,
         gateway_status: gatewayStatusFilter || undefined,
         runtime_status: runtimeStatusFilter || undefined,
-        user_web_status: userWebStatusFilter || undefined,
         search: searchQuery,
         sort_by: apiSortBy,
         sort_order: apiSortOrder,
@@ -363,7 +329,6 @@ export function InstanceListPage() {
     [
       gatewayStatusFilter,
       runtimeStatusFilter,
-      userWebStatusFilter,
       page,
       pageSize,
       searchQuery,
@@ -377,6 +342,25 @@ export function InstanceListPage() {
     void instances.reload();
   };
 
+  /** 各集群引导告警（未配置准入用户/组织、Agent、运行时），用于卡片右上角叹号 */
+  const clusterIds = useMemo(
+    () => (instances.data?.items ?? []).map((it) => it.jiuwenclaw_id),
+    [instances.data],
+  );
+  const alertsByInstance = useClustersGuideStatus(clusterIds);
+  const clusterAlertLinks = (instanceId: string): WarnBadgeLink[] => {
+    const labels: Record<string, string> = {
+      accessUsers: t('instanceDetail.accessPanel.instance.users'),
+      accessOrgs: t('instanceDetail.accessPanel.instance.orgs'),
+      agentResource: t('instanceDetail.resourcePanel.tabs.agent'),
+      poolResource: t('instanceDetail.resourcePanel.tabs.serviceResource'),
+    };
+    return (alertsByInstance[instanceId] ?? []).map((a) => ({
+      label: t('guide.missingItem', { item: labels[a.labelKey] ?? a.labelKey }),
+      to: a.to,
+      openTarget: a.openTarget,
+    }));
+  };
 
   const handleRefresh = async () => {
     if (refreshing) return;
@@ -405,6 +389,7 @@ export function InstanceListPage() {
 
   const renderClusterCard = (instance: InstanceSummary) => {
     const connected = allComponentsConnected(instance);
+    const alertLinks = clusterAlertLinks(instance.jiuwenclaw_id);
     return (
       <article className="card cluster-card" key={instance.jiuwenclaw_id}>
         <div className="cluster-card__head">
@@ -417,14 +402,19 @@ export function InstanceListPage() {
             <p className="mono mt-1 truncate text-xs text-muted">{instance.jiuwenclaw_id} · {instance.namespace || 'default'}</p>
             </div>
           </div>
-          <span className={`pill sm ${connected ? 'ok' : 'warn'}`}>{connected ? t('redesign.connected', { defaultValue: '运行正常' }) : t('redesign.inspect', { defaultValue: '待检查' })}</span>
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            {alertLinks.length > 0 && (
+              <WarnBadge className="opacity-100" links={alertLinks} />
+            )}
+            <span className={`pill sm ${connected ? 'ok' : 'warn'}`}>{connected ? t('redesign.connected') : t('redesign.inspect')}</span>
+          </div>
         </div>
         <ClusterCardStats instanceId={instance.jiuwenclaw_id} />
-        {!connected && <div className="cluster-card__notice"><span className="statusDot" />{t('redesign.clusterNeedsInspection', { defaultValue: '部分组件需要检查，进入工作台继续配置。' })}</div>}
+        {!connected && <div className="cluster-card__notice"><span className="statusDot" />{t('redesign.clusterNeedsInspection')}</div>}
         <div className="cluster-card__actions">
-          <button type="button" className="btn" onClick={() => navigate(`/instances/${instance.jiuwenclaw_id}/cluster-config`)}>{t('redesign.clusterWorkbench', { defaultValue: '配置工作台' })}</button>
-          <button type="button" className="btn primary" onClick={() => navigate(`/instances/${instance.jiuwenclaw_id}/setup`)}>{t('redesign.continueClusterSetup', { defaultValue: '继续配置' })} →</button>
-          <div className="cluster-card__management-actions"><ClusterManagementActions compact size="md" instanceId={instance.jiuwenclaw_id} name={instance.jiuwenclaw_name} onDeleted={refresh} /></div>
+          <button type="button" className="btn" onClick={() => navigate(`/instances/${instance.jiuwenclaw_id}/cluster-config`)}>{t('redesign.clusterWorkbench')}</button>
+          <button type="button" className="btn primary" onClick={() => navigate(`/instances/${instance.jiuwenclaw_id}/setup`)}>{t('redesign.continueClusterSetup')}</button>
+          <div className="cluster-card__management-actions"><ClusterManagementActions compact size="md" instanceId={instance.jiuwenclaw_id} name={instance.jiuwenclaw_name} namespace={instance.namespace} onDeleted={refresh} /></div>
         </div>
       </article>
     );
@@ -434,21 +424,39 @@ export function InstanceListPage() {
     <>
       <div className="cluster-management-workspace flex min-w-0 flex-col gap-4">
         <div className="page-header w-full min-w-0 flex-wrap items-start gap-y-3">
-          <div className="min-w-[7.5rem] max-w-[12rem] shrink-0 sm:max-w-[16rem]">
-            <div className="page-title truncate" title={t('redesign.clusterManagement', { defaultValue: '集群管理' })}>
-              {t('redesign.clusterManagement', { defaultValue: '集群管理' })}
+          <div className="min-w-[7.5rem] max-w-[20rem] shrink-0 sm:max-w-[32rem]">
+            <div className="page-title truncate" title={t('redesign.clusterManagement')}>
+              {t('redesign.clusterManagement')}
             </div>
-            <div className="page-subtitle truncate" title={t('redesign.clusterManagementSubtitle', { defaultValue: '服务实例是 Agent 真正运行的环境；进入集群后可继续配置准入、运行资源和 Agent。' })}>
-              {t('redesign.clusterManagementSubtitle', { defaultValue: '服务实例是 Agent 真正运行的环境；进入集群后可继续配置准入、运行资源和 Agent。' })}
+            <div className="page-subtitle truncate" title={t('redesign.clusterManagementSubtitle')}>
+              {t('redesign.clusterManagementSubtitle')}
             </div>
           </div>
-        <div className="cluster-management-toolbar">
-          <ListSearchInput value={searchInput} onChange={setSearchInput} placeholder={t('topology.searchPlaceholder')} className="min-w-0 flex-1" />
-          <ViewModeToggle value={viewMode} onChange={handleViewModeChange} />
-          <button className="btn sm" disabled={refreshing} onClick={() => void handleRefresh()}>{refreshing ? t('common.loading') : t('common.refresh')}</button>
-          <button className="btn sm" onClick={() => setImportOpen(true)}>{t('topology.import')}</button>
-          <button className="btn primary sm" onClick={() => navigate('/configuration-wizard?from=cluster')}>+ {t('redesign.createCluster', { defaultValue: '新建集群' })}</button>
-        </div>
+          <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
+            <ListSearchInput
+              value={searchInput}
+              onChange={setSearchInput}
+              placeholder={t('topology.searchPlaceholder')}
+              className="basis-full sm:basis-auto"
+            />
+            <ViewModeToggle value={viewMode} onChange={handleViewModeChange} />
+            <button className="btn sm" disabled={refreshing} onClick={() => void handleRefresh()}>
+              {refreshing ? t('common.loading') : t('common.refresh')}
+            </button>
+            <button className="btn sm" onClick={() => setImportOpen(true)}>
+              {t('topology.import')}
+            </button>
+            <button
+              className="btn primary sm"
+              title={t('deployments.action.upHint')}
+              onClick={() => navigate('/deployments/new')}
+            >
+              + {t('topology.deployCluster')}
+            </button>
+            <button className="btn sm" onClick={() => navigate('/configuration-wizard?from=cluster')}>
+              + {t('redesign.createCluster')}
+            </button>
+          </div>
         </div>
 
         <div className="flex w-full min-w-0 shrink-0 flex-col gap-4">
@@ -472,8 +480,6 @@ export function InstanceListPage() {
               onGatewayStatusFilterChange={handleGatewayStatusFilterChange}
               runtimeStatusFilter={runtimeStatusFilter}
               onRuntimeStatusFilterChange={handleRuntimeStatusFilterChange}
-              userWebStatusFilter={userWebStatusFilter}
-              onUserWebStatusFilterChange={handleUserWebStatusFilterChange}
             />
           ) : !instances.data?.items.length ? (
             <div className="card"><Empty text={t('common.empty')} /></div>
@@ -494,8 +500,8 @@ export function InstanceListPage() {
               }}
             />
           )}
-          <WorkspaceNote title="服务实例是 Agent 真正运行的环境">
-            新建集群从登记连接信息开始，再按“集群准入 → 运行资源 → Agent 绑定 → 状态检查”完成配置；中途离开后点击“继续配置”，会根据已保存的配置进入下一项。
+          <WorkspaceNote title={t('redesign.workspaceNoteTitle')}>
+            {t('redesign.workspaceNoteBody')}
           </WorkspaceNote>
         </div>
       </div>

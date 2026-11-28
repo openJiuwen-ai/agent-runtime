@@ -21,17 +21,25 @@ SM 侧 ctx,级联管理全部生命周期(框架 App 的 lifespan 只认一个 c
 - 构造时同时建 **rm_sysctx**(同 redis/db,仅 `key_prefix` 不同:SM=`{session_manager}`,RM=`{resource_manager}`;前缀带 Redis Cluster hash tag,模块键域同槽,详见 `docs/feature/2026-08-redis-cluster.md`)。**rm_sysctx 必须显式 `_owns_db=False, _owns_redis=False`**(2026-09 加固):框架缺省语义是「传了 db 即拥有」——不传则 `start()` 对共享 DB handler 二次 `init_database()+connect()`(重建 engine、旧池泄漏一条连接),`stop()` 会 dispose SM ctx 还在用的共享 engine;非拥有态仍保留 db readiness/redis ping 双前缀健康检查。
 - `_bind_modules()`:先构造后绑定,破解 SM↔RM 循环引用——
   `SessionState`/`ResourceState` → `SessionManagerFacade`/`ResourceManagerFacade(ResourceOrchestrator)` → `ConfigStore(push_pool_config=rm_facade.update_pool_config)` → `SessionOrchestrator` → `SessionSweeper`/`ResourceSweeper`。
-- `_build_jobs()`:7 个后台任务,全部 `create_single_leader_job`(tick 级 Redis 选主锁,多副本全局单副本执行;`tick_timeout_sec` 取 `TICK_TIMEOUTS` 常量表——单次 tick 上限,防 redis/k8s IO 抖动挂死 `_run_forever` 循环,超时取消本拍记日志、下一拍重试):
+- `_build_jobs()`:7 个后台任务,全部 `create_single_leader_job`(tick 级 Redis 选主锁,多副本全局单副本执行;`tick_timeout_sec` 取 `TICK_TIMEOUTS` 常量表——单次 tick 上限,防 redis/k8s IO 抖动挂死 `_run_forever` 循环,超时取消本拍记日志、下一拍重试)。**四个 rm_\* 的上限不在本表写死,而是取 `resource_manager/sweeper` 的 `*_TICK_TIMEOUT` 常量**——sweeper 的业务执行锁 TTL 由同一组常量派生(+10s),两处各写一份必漂移(2026-11:reclaim 锁 TTL=2s 而单拍上限 60s):
 
 | 任务 | tick | tick 超时 | 锁键(`agent_runtime:job:*`) | 动作 |
 |---|---|---|---|---|
 | sm_sweep | `sweep_interval`(1s) | 30s | `sm_sweep` | 到期 pass + 空 Pod pass |
+
 | rm_autoscale | `autoscale_interval`(1s) | 370s(盖住 deploy ready_timeout 300 + DEPLOY_LOCK_TTL 360) | `rm_autoscale` | min_idle 热备补位 |
 | rm_reclaim | `reclaim_interval`(1s) | 60s | `rm_reclaim` | idle 超 pod_ttl 回收 |
 | rm_watch | `watch_interval`(10s) | 300s | `rm_watch` | 死 Pod 判定 + 健康探测 |
 | rm_reconcile | `reconcile_interval`(30s) | 300s | `rm_reconcile` | 孤儿/stale 对账 |
 | sys_sample | `eval_sample_interval`(30s,钳 5) | 30s | `sys_sample` | 自评估:per-scope 池态+计数快照采样(spec/evaluation.md) |
 | sys_eval | `eval_interval`(300s,钳 30) | 120s(盖住 LLM timeout 60) | `sys_eval` | 自评估:规则引擎(+可选 LLM)产报告落 Redis |
+
+框架侧租约纪律(2026-11,`service/.../periodic`):**选主锁 TTL = `max(interval, 10s)` 下限**
+——原先恒等于调度间隔,1s 间隔任务于是拿 1s 租约、0.33s 续一次,高延迟/公用 Redis 上
+任何一次续期往返超过 1s 即失锁、把正在跑的那一拍 abort(该拍本身允许跑 370s);续期
+改为固定节拍 + 瞬时错误重试一次;**醒来后那次 Redis `TIME` 对表的往返耗时不再计入
+「睡过头」判据**(否则 RTT > 集合窗口 80ms 时 1Hz 任务每拍必被判 missed fire 整拍丢弃,
+现网 sm_sweep 因此长期不执行到期驱逐)。调用方可用 `lock_ttl_sec=` 显式覆盖。
 
 另有**非选主**任务 telemetry flusher(2026-09):`start()` 起、每副本一个,5s
 周期 drain 热路径计数缓冲 → `{agent_runtime:eval}:ct:scope:{sid}` HINCRBY
@@ -142,6 +150,7 @@ SM 侧 ctx,级联管理全部生命周期(框架 App 的 lifespan 只认一个 c
 | health_probe_timeout | `AGENT_RUNTIME_HEALTH_PROBE_TIMEOUT` | 3.0 | RM:健康探测单次 HTTP 超时(2026-10;AgentServer 慢启动/高负载误杀时调大) |
 | default_session_ttl | `AGENT_RUNTIME_DEFAULT_SESSION_TTL` | 60 | touch 兜底 ttl |
 | deploy_mode | `AGENT_RUNTIME_DEPLOY_MODE` | full | **仅显式 full\|routing\|subprocess,非法值启动 raise**(2026-10-routing-deploy-mode;2026-11 增 subprocess)。full=自建/自删 agent-server Pod(存量行为);routing=客户 StatefulSet 预建+`register_pods` 注册,本服务只分配不建删、零 K8s API 调用(SA 无需任何 pods 权限;autoscale 关闭、cleanup 拒绝、watch/reconcile 对外部 Pod 只走 HTTP 健康探测);subprocess=本机进程级拉起 AgentServer(轻量单机 jiuwenswarm-ee-lite,无 K8s 依赖;`SubprocessPodClient` 完整实现 K8sPodClient 契约(`probe_pod_health` 直接返回健康,进程死活由 sweeper dead-pod 扫描经 `get_pod` phase 兜底,2026-11-05),pod_spec 容器规范形翻译为子进程命令/env,端口动态分配——`PodDeployInfo.published_port` 回传实际 SSE 口,0=未提供时上层回退模板声明口;与 link mTLS enforce 不兼容,启动 raise)。子进程 env 见 `AGENT_RUNTIME_SUBPROCESS_*` |
+| rm_scope_reindex | `AGENT_RUNTIME_RM_SCOPE_REINDEX` | auto | **仅显式 auto\|off\|force,非法值启动 raise**(2026-11-scope-index-no-scan)。auto=无完成标记才做一次全库 SCAN 回填 RM scope 索引(存量库迁移,后台跑不阻断就绪;多副本由租约互斥);off=永不回填(索引只靠 config_sync 下发自建——**存量库上会让 autoscale/reclaim 在首次 config_sync 前看不到任何 scope**);force=无条件重扫(修索引漂移)。**常态枚举恒读索引集合,与本项无关** |
 | redis_lua | `AGENT_RUNTIME_REDIS_LUA` | on | **仅显式 on\|off,非法值启动 raise**(2026-10-redis-no-lua-compat)。off=SM/RM 状态层走 WATCH/MULTI/EXEC 无 Lua 实现(禁 EVAL 环境),框架层锁/选主同步 memo,不发任何 EVAL 探测命令;on=与存量逐字节一致 |
 | eval_sample_interval | `AGENT_RUNTIME_EVAL_SAMPLE_INTERVAL` | 30 | sys_sample 采样间隔(钳 5;spec/evaluation.md) |
 | eval_interval | `AGENT_RUNTIME_EVAL_INTERVAL` | 300 | sys_eval 评估间隔(钳 30) |

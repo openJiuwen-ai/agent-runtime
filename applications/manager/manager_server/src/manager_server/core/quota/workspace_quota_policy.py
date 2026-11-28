@@ -9,6 +9,7 @@ from openjiuwen_runtime.foundation.db.handler import DBHandler
 
 from manager_server.infrastructure.common import resolve_order_by
 from manager_server.infrastructure.match_expr import (
+    WORKSPACE_QUOTA_MATCH_NAMES,
     evaluate_match_expr,
     match_expr_is_unconditional,
     match_key,
@@ -87,6 +88,7 @@ def select_effective_policy(
     user_id: str,
     group_id: str,
     bot_id: str,
+    agent_id: str = "",
 ) -> Any | None:
     """同一集群的启用行里，命中且 priority 最小的一条。"""
     hits: list[Any] = []
@@ -98,6 +100,7 @@ def select_effective_policy(
             user_id=user_id,
             group_id=group_id,
             bot_id=bot_id,
+            agent_id=agent_id,
         ):
             hits.append(row)
     if not hits:
@@ -295,6 +298,7 @@ class WorkspaceQuotaPolicyService:
         user_id: str,
         group_id: str,
         bot_id: str,
+        agent_id: str = "",
     ) -> dict[str, Any] | None:
         cid = cluster_id.strip()
         rows = await self.list_enabled(cluster_id=cid)
@@ -303,6 +307,7 @@ class WorkspaceQuotaPolicyService:
             user_id=user_id,
             group_id=group_id,
             bot_id=bot_id,
+            agent_id=agent_id,
         )
         if chosen is None:
             return None
@@ -340,7 +345,9 @@ class WorkspaceQuotaPolicyService:
         _require_admin_priority(priority)
         name = _normalize_policy_name(policy_name)
         desc = _normalize_policy_desc(policy_desc)
-        expr = validate_match_expr(match_expr)
+        # workspace quota 策略专用允许集合（issue #124）：多允许 agent_id 维度匹配。
+        # 其余域（service_resource / team_quota）保持默认 ALLOWED_MATCH_NAMES 边界。
+        expr = validate_match_expr(match_expr, allowed_names=WORKSPACE_QUOTA_MATCH_NAMES)
         _require_limit(limit_bytes)
         _require_percents(soft_percent, hard_percent)
         await self._assert_unique(
@@ -404,7 +411,10 @@ class WorkspaceQuotaPolicyService:
         if "policy_desc" in changes:
             merged["policy_desc"] = _normalize_policy_desc(changes["policy_desc"])
         if "match_expr" in changes:
-            merged["match_expr"] = validate_match_expr(changes["match_expr"])
+            # workspace quota 策略专用允许集合（issue #124）：见 create 时的注释。
+            merged["match_expr"] = validate_match_expr(
+                changes["match_expr"], allowed_names=WORKSPACE_QUOTA_MATCH_NAMES
+            )
         if "priority" in changes:
             merged["priority"] = int(changes["priority"])
             if not locked:

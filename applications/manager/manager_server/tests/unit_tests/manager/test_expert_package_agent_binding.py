@@ -81,7 +81,8 @@ async def test_expert_package_published_with_agent_and_exported_as_dependency(
         f"packages[{index}].{key}": value
         for index, package in enumerate(expert_body["packages"])
         for key, value in package.items()
-    }
+        # 未配置 swarmflow 时导出器按 JSON 列惯例输出一条 null 叶子
+    } | {"swarmflow": None}
 
     updated_packages = [{**expert_body["packages"][0], "version": "1.1.0"}]
     await h.patch_json(

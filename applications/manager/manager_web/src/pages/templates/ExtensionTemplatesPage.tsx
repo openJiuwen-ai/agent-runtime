@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAsync } from '../../hooks/useAsync';
 import { useListSearch } from '../../hooks/useListSearch';
-import { ExtensionTemplateApi, ApiError } from '../../services/api';
+import { ExtensionTemplateApi } from '../../services/api';
 import type { ExtensionConfigTemplate } from '../../types';
 import { Empty } from '../../components/Empty';
 import { Pagination } from '../../components/Pagination';
@@ -18,8 +18,14 @@ import { ListSearchInput } from '../../components/ListSearchInput';
 import { ExtensionTemplateModal } from './ExtensionTemplateModal';
 import { toast } from '../../stores/uiStore';
 import { formatTime, truncate } from '../../utils/format';
+import {
+  deleteBlockedByReferences,
+  disableBlockedByReferences,
+  templateInUseMessage,
+} from '../../utils/templateInUse';
 import { useRouter } from '../../router';
 import { ResourceExportButton, ResourceImportButton } from '../../components/ResourceImportExport';
+import { WorkspaceNote } from '../../components/WorkspaceNote';
 
 type ExtensionTemplateSortField =
   | 'template_name'
@@ -29,7 +35,8 @@ type ExtensionTemplateSortField =
   | 'updated_at';
 
 export function ExtensionTemplatesPage() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const zh = i18n.language.startsWith('zh');
   const { navigate } = useRouter();
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
@@ -93,6 +100,11 @@ export function ExtensionTemplatesPage() {
 
   const toggleEnabled = async (row: ExtensionConfigTemplate, enabled: boolean) => {
     if (togglingId) return;
+    const blocked = disableBlockedByReferences(enabled, row.reference_count, t);
+    if (blocked) {
+      toast('warn', blocked);
+      return;
+    }
     const previous = row.enabled;
     setItems((list) =>
       list.map((item) => (item.template_id === row.template_id ? { ...item, enabled } : item)),
@@ -108,10 +120,20 @@ export function ExtensionTemplatesPage() {
       setItems((list) =>
         list.map((item) => (item.template_id === row.template_id ? { ...item, enabled: previous } : item)),
       );
-      toast('danger', t('errors.saveFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
+      const localized = templateInUseMessage(e, t, 'disable');
+      toast('danger', localized ?? t('errors.saveFailedGeneric'));
     } finally {
       setTogglingId(null);
     }
+  };
+
+  const requestDelete = (row: ExtensionConfigTemplate) => {
+    const blocked = deleteBlockedByReferences(row.reference_count, t);
+    if (blocked) {
+      toast('warn', blocked);
+      return;
+    }
+    setDelTarget(row);
   };
 
   return (
@@ -311,7 +333,7 @@ export function ExtensionTemplatesPage() {
                       >
                         {t('common.edit')}
                       </button>
-                      <button className="btn sm danger" onClick={() => setDelTarget(row)}>
+                      <button className="btn sm danger" onClick={() => requestDelete(row)}>
                         {t('common.delete')}
                       </button>
                     </div>
@@ -335,6 +357,14 @@ export function ExtensionTemplatesPage() {
           }}
         />
       )}
+
+      <WorkspaceNote title={t('extensionTemplate.title')}>
+        {t('extensionTemplate.subtitle')}
+        {zh ? '。' : '. '}
+        {zh
+          ? '保存后，在 Agent 或集群配置中引用；修改已被引用的资源前，请先查看关联模板和集群。'
+          : 'Reference saved resources from an Agent or cluster configuration. Review linked templates and clusters before changing a referenced resource.'}
+      </WorkspaceNote>
       </div>
       </div>
 
@@ -359,7 +389,8 @@ export function ExtensionTemplatesPage() {
             toast('success', t('success.deleted'));
             void reload();
           } catch (e) {
-            toast('danger', t('errors.deleteFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
+            const localized = templateInUseMessage(e, t, 'delete');
+            toast('danger', localized ?? t('errors.deleteFailedGeneric'));
           }
         }}
         onClose={() => setDelTarget(null)}

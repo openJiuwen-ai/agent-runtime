@@ -64,14 +64,12 @@ async def _import(http, resource_type, workbook):
                 "model_type": [],
                 "retry_count": 0,
                 "enabled": False,
-                "enable_function_calling": False,
             },
             {
                 "model_type": [],
                 "timeout": 360,
-                "retry_count": 0,
+                "retry_count": 3,
                 "enabled": False,
-                "enable_function_calling": False,
             },
         ),
         (

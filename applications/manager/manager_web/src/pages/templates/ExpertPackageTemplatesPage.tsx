@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAsync } from '../../hooks/useAsync';
 import { useListSearch } from '../../hooks/useListSearch';
-import { ExpertPackageTemplateApi, ApiError } from '../../services/api';
+import { ExpertPackageTemplateApi } from '../../services/api';
 import type { ExpertPackageTemplate } from '../../types';
 import { Pagination } from '../../components/Pagination';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
@@ -11,6 +11,11 @@ import { ListSearchInput } from '../../components/ListSearchInput';
 import { ExpertPackageTemplateModal } from './ExpertPackageTemplateModal';
 import { toast } from '../../stores/uiStore';
 import { formatTime, truncate } from '../../utils/format';
+import {
+  deleteBlockedByReferences,
+  disableBlockedByReferences,
+  templateInUseMessage,
+} from '../../utils/templateInUse';
 import { useRouter } from '../../router';
 import { ResourceExportButton, ResourceImportButton } from '../../components/ResourceImportExport';
 import { agentResourceReferencesPath } from '../../utils/agentTemplateNavigation';
@@ -50,6 +55,11 @@ export function ExpertPackageTemplatesPage() {
 
   const toggleEnabled = async (row: ExpertPackageTemplate, enabled: boolean) => {
     if (togglingId) return;
+    const blocked = disableBlockedByReferences(enabled, row.reference_count, t);
+    if (blocked) {
+      toast('warn', blocked);
+      return;
+    }
     const previous = row.enabled;
     setItems((list) =>
       list.map((item) => (item.template_id === row.template_id ? { ...item, enabled } : item)),
@@ -69,10 +79,20 @@ export function ExpertPackageTemplatesPage() {
           item.template_id === row.template_id ? { ...item, enabled: previous } : item,
         ),
       );
-      toast('danger', t('errors.saveFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
+      const localized = templateInUseMessage(e, t, 'disable');
+      toast('danger', localized ?? t('errors.saveFailedGeneric'));
     } finally {
       setTogglingId(null);
     }
+  };
+
+  const requestDelete = (row: ExpertPackageTemplate) => {
+    const blocked = deleteBlockedByReferences(row.reference_count, t);
+    if (blocked) {
+      toast('warn', blocked);
+      return;
+    }
+    setDelTarget(row);
   };
 
   return (
@@ -81,7 +101,7 @@ export function ExpertPackageTemplatesPage() {
         {returnPath && <div><button type="button" className="btn" onClick={() => navigate(returnPath)}>
           {returnPath.startsWith('/instances/')
             ? (zh ? '← 返回来源集群的 Agent绑定' : '← Back to source cluster Agent bindings')
-            : (zh ? '← 返回 Agent模板' : '← Back to Agent template')}
+            : (zh ? '← 返回 Agent模板' : '← Back to Agent Templates')}
         </button></div>}
         <div className="page-header w-full min-w-0 flex-wrap items-start gap-y-3">
           <div className="min-w-[7.5rem] max-w-[20rem] shrink-0 sm:max-w-[32rem]">
@@ -193,7 +213,7 @@ export function ExpertPackageTemplatesPage() {
                             >
                               {t('common.edit')}
                             </button>
-                            <button className="btn sm danger" onClick={() => setDelTarget(row)}>
+                            <button className="btn sm danger" onClick={() => requestDelete(row)}>
                               {t('common.delete')}
                             </button>
                           </div>
@@ -243,9 +263,8 @@ export function ExpertPackageTemplatesPage() {
             toast('success', t('success.deleted'));
             void reload();
           } catch (e) {
-            toast('danger', t('errors.deleteFailed', {
-              detail: e instanceof ApiError ? e.detail : (e as Error).message,
-            }));
+            const localized = templateInUseMessage(e, t, 'delete');
+            toast('danger', localized ?? t('errors.deleteFailedGeneric'));
           }
         }}
         onClose={() => setDelTarget(null)}

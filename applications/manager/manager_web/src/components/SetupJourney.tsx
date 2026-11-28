@@ -53,21 +53,23 @@ export function SetupJourney({ compact = false, onNavigate }: { compact?: boolea
   ];
   const tasks: GuideTask[][] = [
     [
-      { title: tr('模型', 'Models'), description: tr('添加可调用的模型，供 Agent 模板选择。', 'Add callable models for Agent templates.'), href: '/model-templates' },
+      { title: tr('模型', 'Models'), description: tr('添加可调用的模型，供 Agent模板选择。', 'Add callable models for Agent templates.'), href: '/model-templates' },
     ],
     [
-      { title: tr('Agent配置模板', 'Agent configuration templates'), description: tr('选择默认模型，按需组合技能和工具；保存为可复用的 Agent 模板。', 'Choose a default model and optional skills and tools, then save a reusable Agent template.'), href: agentPreparationCatalogPath(targetId, preparationContext) },
-      { title: tr('运行时模板管理', 'Runtime templates'), description: tr('管理可复用的运行时模板，在集群中绑定使用。', 'Manage reusable runtime templates and bind them to a cluster.'), href: runtimeCatalogPath('service-config-templates', preparationContext, targetId) },
-      { title: tr('Agent模板', 'Agent templates'), description: tr('选择 Agent 配置模板和运行时模板，手动创建可供用户面使用的 Agent。', 'Select an Agent configuration template and a runtime template to create an Agent for the user console.'), href: '/agent-definitions' },
+      { title: tr('Agent模板', 'Agent Templates'), description: tr('选择默认模型，按需组合技能和工具；保存为可复用的 Agent模板。', 'Choose a default model and optional skills and tools, then save a reusable Agent template.'), href: agentPreparationCatalogPath(targetId, preparationContext) },
+      { title: tr('运行时模板', 'Runtime Templates'), description: tr('管理可复用的运行时模板，在集群中绑定使用。', 'Manage reusable runtime templates and bind them to a cluster.'), href: runtimeCatalogPath('service-config-templates', preparationContext, targetId) },
+      { title: tr('Agent ID', 'Agent ID'), description: tr('选择 Agent模板和运行时模板，手动创建可供用户面使用的 Agent ID。', 'Select an Agent template and a runtime template to create an Agent ID for the user console.'), href: '/agent-definitions' },
     ],
   ];
   const optional: GuideTask[] = [
-    { title: tr('预置技能源', 'Prebuilt skills'), description: tr('为 Agent 提供可复用技能。', 'Provide reusable skills for Agents.'), href: '/skill-prebuilt-templates' },
+    { title: tr('预置技能', 'Prebuilt skills'), description: tr('为 Agent 提供可复用技能。', 'Provide reusable skills for Agents.'), href: '/skill-prebuilt-templates' },
     { title: tr('MCP服务', 'MCP services'), description: tr('连接外部工具服务。', 'Connect external tool services.'), href: '/mcp-templates' },
     { title: tr('工具安全策略', 'Tool safety policies'), description: tr('约束工具调用权限与行为。', 'Control tool permissions and behavior.'), href: '/safety-guardrails' },
+    { title: tr('执行护栏', 'Execution guard'), description: tr('配置输出打转重试和工具循环断路。', 'Configure repeat retries and the tool-loop circuit breaker.'), href: '/execution-guard-templates' },
     { title: tr('向量模型', 'Embedding models'), description: tr('为检索提供文本向量能力。', 'Provide embeddings for retrieval.'), href: '/embedding-templates' },
-    { title: tr('A2A管理', 'A2A management'), description: tr('管理外部 Agent 接入与访问策略。', 'Manage external Agents and access policies.'), href: '/a2a-management' },
-    { title: tr('专家与专家包', 'Experts and packages'), description: tr('组合专家能力，在 Agent 模板中引用。', 'Compose expert capabilities and reference them in Agent templates.'), href: '/expert-package-templates' },
+    // A2A 管理页签暂时隐藏
+    // { title: tr('A2A管理', 'A2A management'), description: tr('管理外部 Agent 接入与访问策略。', 'Manage external Agents and access policies.'), href: '/a2a-management' },
+    { title: tr('专家包', 'Expert packages'), description: tr('组合专家能力，在 Agent 中引用。', 'Compose expert capabilities and reference them in Agents.'), href: '/expert-package-templates' },
     { title: tr('扩展配置', 'Extensions'), description: tr('添加业务需要的扩展参数。', 'Add extension settings for your workload.'), href: '/extension-config-templates' },
   ];
   const renderTask = (task: GuideTask) => <button type="button" key={task.title} className={`setup-guide-task ${task.href.split('?')[0] === path ? 'is-current' : ''}`} onClick={() => go(task.href)}>
@@ -89,7 +91,7 @@ export function SetupJourney({ compact = false, onNavigate }: { compact?: boolea
         {(clusters.data || []).map(row => <option key={row.jiuwenclaw_id} value={row.jiuwenclaw_id}>{row.jiuwenclaw_name} · {row.jiuwenclaw_id.slice(0, 8)}</option>)}
       </select>
       <button type="button" className="btn primary sm" disabled={!targetId} title={!targetId ? tr('请先选择集群', 'Select a cluster first') : undefined} onClick={() => go(to('cluster-config'))}>{tr('前往配置工作台', 'Open configuration workspace')} →</button>
-      <button type="button" className="btn sm" onClick={() => { setClusterChoice(null); selectCluster(''); open(2); go('/configuration-wizard?from=cluster'); }}>{tr('新建集群', 'New cluster')}</button>
+      <button type="button" className="btn sm" onClick={() => { setClusterChoice(null); selectCluster(''); open(2); go('/configuration-wizard?from=cluster'); }}>{tr('注册集群', 'Register cluster')}</button>
     </div>}
     {current >= 2 && (clusters.error ? <p className="text-xs text-danger" role="alert">{clusters.error} <button type="button" className="btn ghost sm" onClick={() => void clusters.reload()}>{tr('重试', 'Retry')}</button></p> : requestedId && !clusters.loading && !selected && <p className="text-xs text-muted">{tr('之前的集群已不可用，请重新选择或新建。', 'The previous cluster is unavailable. Choose another or create one.')}</p>)}
     {current < 2 && <>
@@ -99,7 +101,7 @@ export function SetupJourney({ compact = false, onNavigate }: { compact?: boolea
     {current === 2 && <div className="setup-guide-tasks">
       <button type="button" className="setup-guide-task" disabled={!targetId} onClick={() => go(to('access'))}><strong>{tr('集群准入', 'Cluster admission')}<span>→</span></strong><span>{tr('选择允许进入集群的用户与组织。', 'Choose the users and organizations allowed into the cluster.')}</span></button>
       <button type="button" className="setup-guide-task" disabled={!targetId} onClick={() => go(to('service-resources'))}><strong>{tr('绑定运行时模板', 'Bind a runtime template')}<span>→</span></strong><span>{tr('选择运行时模板，设置适用范围与优先级。', 'Choose a runtime template and set its scope and priority.')}</span></button>
-      <button type="button" className="setup-guide-task" disabled={!targetId} onClick={() => go(to('agent-resources'))}><strong>{tr('绑定 Agent', 'Bind an Agent')}<span>→</span></strong><span>{tr('选择 Agent 模板，并设置哪些准入身份可以使用。', 'Select an Agent template and grant access to admitted identities.')}</span></button>
+      <button type="button" className="setup-guide-task" disabled={!targetId} onClick={() => go(to('agent-resources'))}><strong>{tr('绑定 Agent模板', 'Bind an Agent template')}<span>→</span></strong><span>{tr('选择 Agent模板，并设置哪些准入身份可以使用。', 'Select an Agent template and grant access to admitted identities.')}</span></button>
     </div>}
     {current === 3 && <div className="setup-guide-tasks"><button type="button" className="setup-guide-task" disabled={!targetId} onClick={() => go(to('status'))}><strong>{tr('检查连接与验证对话', 'Check connections and verify a conversation')}<span>→</span></strong><span>{tr('检查当前集群的组件连接，再进入用户面验证账号权限及 Agent 对话。保存模板不代表已完成实际运行验证。', 'Check the cluster connections, then verify account access and an Agent conversation in the user console. Saving templates does not verify execution.')}</span></button></div>}
     {current === 0 && <div className="setup-guide-optional"><button type="button" className="btn sm setup-guide-optional__toggle" aria-expanded={showOptional} onClick={toggleOptional}>{showOptional ? '−' : '+'} {tr('可选能力资源', 'Optional capability resources')}</button>{showOptional && <div className="setup-guide-tasks setup-guide-tasks--resources">{optional.map(renderTask)}</div>}</div>}

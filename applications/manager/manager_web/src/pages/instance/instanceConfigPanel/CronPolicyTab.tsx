@@ -4,6 +4,7 @@ import { ApiError, CronPolicyApi } from '../../../services/api';
 import { ConfirmDialog } from '../../../components/ConfirmDialog';
 import { toast } from '../../../stores/uiStore';
 import { formatTime } from '../../../utils/format';
+import { INT32_MAX, isNonNegInt32 } from '../../../utils/intBounds';
 
 const DEFAULT_LIMIT = '5';
 
@@ -12,7 +13,9 @@ interface Props {
 }
 
 function isNonNegativeInteger(value: string): boolean {
-  return /^\d+$/.test(value.trim());
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) return false;
+  return isNonNegInt32(Number(trimmed));
 }
 
 export function CronPolicyTab({ instanceId }: Props) {
@@ -139,11 +142,17 @@ export function CronPolicyTab({ instanceId }: Props) {
         <input
           type="number"
           min={0}
+          max={INT32_MAX}
           step={1}
           className="input w-full max-w-xs"
           value={limit}
           onChange={(e) => setLimit(e.target.value)}
         />
+        {limit.trim() !== '' && !isNonNegativeInteger(limit) && (
+          <div className="text-[11px] text-danger mt-1" role="alert">
+            {t('instanceConfig.cronPolicy.invalid')}
+          </div>
+        )}
       </div>
 
       <ConfirmDialog

@@ -7,7 +7,7 @@ import { join } from 'node:path';
 const cacheDir = await mkdtemp(join(tmpdir(), 'wizard-resource-test-'));
 const server = await createServer({ cacheDir, optimizeDeps: { noDiscovery: true, include: [] }, configFile: false, server: { middlewareMode: true, hmr: false, ws: false }, appType: 'custom' });
 try {
-  const { activeWizardAgentContexts, activeRuntimeTemplateIds, initialWizardResource, runtimePriorityConflict, matchingAttemptResource, ensureWizardAgentDefinition } = await server.ssrLoadModule('/src/utils/wizardResources.ts');
+  const { activeRuntimeTemplateIds, initialWizardResource, runtimePriorityConflict, matchingAttemptResource, ensureWizardAgentDefinition } = await server.ssrLoadModule('/src/utils/wizardResources.ts');
   const row = { resource_id: 'binding-1', resource_name: 'My runtime', ref_template_id: 'runtime-a', match_expr: '', priority: 3, enabled: true, expires_at: null };
   await test('an explicit template handoff never selects an unrelated existing binding', () => {
     assert.equal(initialWizardResource([row], 'runtime-new'), undefined);
@@ -33,19 +33,6 @@ try {
     assert.equal(matchingAttemptResource([timed], { ...attempt, expiresAt: '2030-01-01T00:00:00.000Z' }), timed);
   });
   const definition = { agent_id: 'agent-1', agent_config_template_id: 'config-a', runtime_template_id: 'runtime-a', agent_name: 'Existing Agent' };
-  await test('account readiness requires its own active binding and exact template pair, even when another pair is valid', () => {
-    const agent = { ...row, resource_id: 'agent-binding', ref_template_id: 'config-a' };
-    const context = { bot_id: 'agent-binding', jiuwenclaw_id: 'cluster-a', agent_template_id: 'config-a', runtime_template_id: 'runtime-a' };
-    const filter = (contexts, agents = [agent], runtimes = [row], definitions = [definition]) => activeWizardAgentContexts(contexts, 'cluster-a', agents, runtimes, definitions);
-    assert.deepEqual(filter([context]), [context]);
-    assert.deepEqual(filter([{ ...context, jiuwenclaw_id: 'another-cluster' }]), []);
-    assert.deepEqual(filter([{ ...context, bot_id: 'disabled-binding' }]), []);
-    assert.deepEqual(filter([{ ...context, agent_template_id: 'disabled-template' }]), []);
-    assert.deepEqual(filter([{ ...context, runtime_template_id: 'missing-runtime' }]), []);
-    assert.deepEqual(filter([context], [{ ...agent, enabled: false }]), []);
-    assert.deepEqual(filter([context], [agent], [{ ...row, expires_at: '2000-01-01T00:00:00Z' }]), []);
-    assert.deepEqual(filter([context], [agent], [row], [{ ...definition, runtime_template_id: 'another-runtime' }]), []);
-  });
   await test('an exact Agent definition pair is reused without creating another global Agent', async () => {
     let creates = 0;
     const saved = await ensureWizardAgentDefinition({ list: async () => [definition], create: async () => { creates++; return definition; } }, 'config-a', 'runtime-a');

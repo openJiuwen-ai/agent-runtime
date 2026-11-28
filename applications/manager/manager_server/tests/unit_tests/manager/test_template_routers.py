@@ -389,28 +389,28 @@ def _demo_container_wire(container_id: str) -> dict:
 async def test_service_config_default_rawdata(
     manager_api: ManagerApiHarness,
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
 ):
-    """default-rawdata：OBS 对象缺失 404；存在则原样返回 JSON。"""
+    """default-rawdata：未配置/文件缺失 404；挂载文件存在则原样返回 JSON。"""
     import json
 
     from httpx import codes
 
     h = manager_api
-    monkeypatch.setattr(config_mod.settings, "deploy_namespace", "wx")
+    url = h.templates_url("/service-config-templates/default-rawdata")
+
+    # 未配置挂载路径（runtime 未部署）→ 404
+    monkeypatch.setattr(config_mod.settings, "agentserver_json_path", "")
+    resp = await h.http.get(url)
+    assert resp.status_code == codes.NOT_FOUND
+
+    # 已配置但文件缺失（ConfigMap 未注入数据）→ 404
     monkeypatch.setattr(
         config_mod.settings,
-        "agent_runtime_default_conf_path",
-        "defaults/{ns}/agentserver.json",
+        "agentserver_json_path",
+        str(tmp_path / "agentserver.json"),
     )
-
-    async def _missing(_key: str, **_kwargs):
-        raise FileNotFoundError("object not found")
-
-    monkeypatch.setattr(
-        "manager_server.infrastructure.obs.fetch_object_bytes",
-        _missing,
-    )
-    resp = await h.http.get(h.templates_url("/service-config-templates/default-rawdata"))
+    resp = await h.http.get(url)
     assert resp.status_code == codes.NOT_FOUND
 
     payload = {
@@ -421,17 +421,8 @@ async def test_service_config_default_rawdata(
             "scopes": [],
         },
     }
+    conf_file = tmp_path / "agentserver.json"
+    conf_file.write_text(json.dumps(payload), encoding="utf-8")
 
-    expected_key = config_mod.settings.resolved_agent_runtime_default_conf_path
-    assert expected_key == "defaults/wx/agentserver.json"
-
-    async def _present(key: str, **_kwargs):
-        assert key == expected_key
-        return json.dumps(payload).encode("utf-8")
-
-    monkeypatch.setattr(
-        "manager_server.infrastructure.obs.fetch_object_bytes",
-        _present,
-    )
     data = await h.get_json("/service-config-templates/default-rawdata")
     assert data == payload

@@ -1,5 +1,5 @@
 export type ClusterCreationHostMode = 'auto' | 'manual';
-export const clusterCreationEndpointKeys = ['gateway', 'runtime', 'web', 'gatewayHttp', 'gatewayWs'] as const;
+export const clusterCreationEndpointKeys = ['gateway', 'runtime'] as const;
 export type ClusterCreationEndpointKey = typeof clusterCreationEndpointKeys[number];
 export type ClusterCreationHosts = Record<ClusterCreationEndpointKey, string>;
 export interface ClusterCreationDraft {
@@ -9,13 +9,10 @@ export interface ClusterCreationDraft {
   hostMode: ClusterCreationHostMode;
   gateway: string;
   runtime: string;
-  web: string;
-  gatewayHttp: string;
-  gatewayWs: string;
 }
 export const emptyClusterCreationDraft: ClusterCreationDraft = {
   name: '', description: '', namespace: '', hostMode: 'auto',
-  gateway: '', runtime: '', web: '', gatewayHttp: '', gatewayWs: '',
+  gateway: '', runtime: '',
 };
 export function clusterCreationDraftKey(userId: string, template = '', returnTo = ''): string {
   return 'manager:cluster-creation-draft:' + JSON.stringify([userId, template, returnTo]);
@@ -42,14 +39,11 @@ export function clearClusterCreationDraft(storage: Pick<Storage, 'removeItem'>, 
   try { storage.removeItem(key); } catch { /* Browser storage may be unavailable. */ }
 }
 export function clusterCreationHosts(namespace: string): ClusterCreationHosts {
-  if (!namespace.trim()) return { gateway: '', runtime: '', web: '', gatewayHttp: '', gatewayWs: '' };
+  if (!namespace.trim()) return { gateway: '', runtime: '' };
   const suffix = '.' + namespace.trim();
   return {
     gateway: 'http://jiuwenswarm-gateway' + suffix + ':19000',
     runtime: 'http://jiuwenswarm-agent-runtime' + suffix + ':8091',
-    web: 'http://jiuwenswarm-web' + suffix + ':5173',
-    gatewayHttp: 'http://jiuwenswarm-gateway' + suffix + ':19000',
-    gatewayWs: 'http://jiuwenswarm-gateway' + suffix + ':19000',
   };
 }
 
@@ -57,8 +51,7 @@ export function clusterCreationHosts(namespace: string): ClusterCreationHosts {
 export function resolveClusterCreationHosts(draft: ClusterCreationDraft): ClusterCreationHosts {
   if (draft.hostMode === 'auto') return clusterCreationHosts(draft.namespace);
   return {
-    gateway: draft.gateway, runtime: draft.runtime, web: draft.web,
-    gatewayHttp: draft.gatewayHttp, gatewayWs: draft.gatewayWs,
+    gateway: draft.gateway, runtime: draft.runtime,
   };
 }
 
@@ -67,16 +60,9 @@ export function normalizeClusterCreationDraft(draft: ClusterCreationDraft): Clus
   return { ...draft, ...resolveClusterCreationHosts(draft), hostMode: 'manual' };
 }
 
-/** Standard Gateway user endpoints follow the management URL until customized independently. */
+/** Keep edits to each component endpoint independent. */
 export function updateClusterCreationEndpoint(draft: ClusterCreationDraft, key: ClusterCreationEndpointKey, value: string): ClusterCreationDraft {
-  const current = normalizeClusterCreationDraft(draft);
-  const next = { ...current, [key]: value };
-  if (key === 'gateway') {
-    for (const related of ['gatewayHttp', 'gatewayWs'] as const) {
-      if (current[related] === current.gateway) next[related] = value;
-    }
-  }
-  return next;
+  return { ...normalizeClusterCreationDraft(draft), [key]: value };
 }
 
 /** Follow namespace changes for suggested endpoints while keeping explicitly customized addresses. */

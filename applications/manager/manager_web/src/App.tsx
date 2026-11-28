@@ -3,7 +3,7 @@ import { AgentDetailPage } from './pages/AgentDetailPage';
 import { AgentWorkspacePage } from './pages/AgentWorkspacePage';
 import { AgentConnectPage } from './pages/AgentConnectPage';
 import { ConfigurationWizardPage } from './pages/ConfigurationWizardPage';
-import { Component, ReactNode, useEffect, useState } from 'react';
+import { Component, ReactNode } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Sidebar } from './components/Sidebar';
@@ -22,6 +22,7 @@ import { ClusterSetupResumePage } from './pages/instance/ClusterSetupResumePage'
 import { canonicalClusterSection, canonicalClusterPath } from './utils/clusterNavigation';
 import { DeploymentListPage } from './pages/deployment/DeploymentListPage';
 import { DeploymentDetailPage } from './pages/deployment/DeploymentDetailPage';
+import { CreateDeploymentPage } from './pages/deployment/CreateDeploymentPage';
 import { ModelTemplatesPage } from './pages/templates/ModelTemplatesPage';
 import { EmbeddingTemplatesPage } from './pages/templates/EmbeddingTemplatesPage';
 import { ExtensionTemplatesPage } from './pages/templates/ExtensionTemplatesPage';
@@ -31,6 +32,7 @@ import { ContainerTemplatesPage } from './pages/templates/ContainerTemplatesPage
 import { ServiceConfigTemplatesPage } from './pages/templates/ServiceConfigTemplatesPage';
 import { AgentDefinitionsPage } from './pages/templates/AgentDefinitionsPage';
 import { SafetyGuardrailsPage } from './pages/templates/SafetyGuardrailsPage';
+import { ExecutionGuardrailsPage } from './pages/templates/ExecutionGuardrailsPage';
 import { matchRoute, RouterProvider, useRouter } from './router';
 import { AuthProvider, useAuth } from './auth/AuthContext';
 import { LoginPage } from './pages/LoginPage';
@@ -46,20 +48,17 @@ import { RolesEditPage } from './pages/iam/RolesEditPage';
 import { ApprovalPage } from './pages/approval/ApprovalPage';
 import { ApprovalEditPage } from './pages/approval/ApprovalEditPage';
 import { ApprovalSkillPreviewPage } from './pages/approval/ApprovalSkillPreviewPage';
-import { A2AManagementPage } from './pages/templates/A2AManagementPage';
 import { ResourceWorkspaceFrame } from './components/ResourceWorkspaceFrame';
 import { WorkspaceNote } from './components/WorkspaceNote';
 import { ExpertPackageTemplatesPage } from './pages/templates/ExpertPackageTemplatesPage';
 import { getProductName } from './utils/env';
 import {
-  ApiError,
   AuthUser,
   canAccessManager,
   hasPermission,
   isPlatformAdmin,
   isWorkspaceQuotaEnabled,
   isApprovalEnabled,
-  UserConsoleApi,
 } from './services/api';
 
 interface ErrorBoundaryState {
@@ -155,28 +154,56 @@ function RouteView() {
     return <InstanceListPage />;
   }
   if (path === '/model-templates') {
-    return <ResourceWorkspaceFrame><ModelTemplatesPage /></ResourceWorkspaceFrame>;
+    return (
+      <div className="manager-page">
+        <ModelTemplatesPage />
+      </div>
+    );
   }
   if (path === '/embedding-templates') {
-    return <ResourceWorkspaceFrame><EmbeddingTemplatesPage /></ResourceWorkspaceFrame>;
+    return (
+      <div className="manager-page">
+        <EmbeddingTemplatesPage />
+      </div>
+    );
   }
   if (path === '/extension-config-templates') {
-    return <ResourceWorkspaceFrame><ExtensionTemplatesPage /></ResourceWorkspaceFrame>;
+    return (
+      <div className="manager-page">
+        <ExtensionTemplatesPage />
+      </div>
+    );
   }
   if (path === '/mcp-templates') {
-    return <ResourceWorkspaceFrame><McpTemplatesPage /></ResourceWorkspaceFrame>;
+    return (
+      <div className="manager-page">
+        <McpTemplatesPage />
+      </div>
+    );
   }
   if (path === '/skill-prebuilt-templates') {
-    return <ResourceWorkspaceFrame><SkillPrebuiltTemplatesPage /></ResourceWorkspaceFrame>;
+    return (
+      <div className="manager-page">
+        <SkillPrebuiltTemplatesPage />
+      </div>
+    );
   }
   if (path === '/container-templates') {
     return <ContainerTemplatesPage />;
   }
   if (path === '/safety-guardrails') {
-    return <ResourceWorkspaceFrame><SafetyGuardrailsPage /></ResourceWorkspaceFrame>;
+    return (
+      <div className="manager-page">
+        <SafetyGuardrailsPage />
+      </div>
+    );
   }
+  if (path === '/execution-guard-templates') {
+    return <ResourceWorkspaceFrame><ExecutionGuardrailsPage /></ResourceWorkspaceFrame>;
+  }
+  // A2A 管理页签暂时隐藏：旧书签与残留入口显式回到总览，避免静默落到末尾 OverviewPage
   if (path === '/a2a-management') {
-    return <ResourceWorkspaceFrame><A2AManagementPage /></ResourceWorkspaceFrame>;
+    return <Navigate to="/manager/overview" replace />;
   }
   if (path === '/expert-packages') {
     return <Navigate to={`/manager/expert-package-templates${params.size ? `?${params}` : ''}`} replace />;
@@ -206,21 +233,41 @@ function RouteView() {
     return <OrgsPage />;
   }
   if (path === '/orgs/new') {
-    return <><OrgsEditPage /><WorkspaceNote title="组织用于管理成员范围">先保存组织基本信息，再在成员页维护用户归属；集群准入仍需回到具体集群配置。</WorkspaceNote></>;
+    return (
+      <>
+        <OrgsEditPage />
+        <WorkspaceNote title={t('iam.orgsEditBannerTitle')}>{t('iam.orgsEditBannerText')}</WorkspaceNote>
+      </>
+    );
   }
   const orgEdit = matchRoute('/orgs/:groupId', path);
   if (orgEdit) {
-    return <><OrgsEditPage groupId={orgEdit.groupId} /><WorkspaceNote title="组织用于管理成员范围">先保存组织基本信息，再在成员页维护用户归属；集群准入仍需回到具体集群配置。</WorkspaceNote></>;
+    return (
+      <>
+        <OrgsEditPage groupId={orgEdit.groupId} />
+        <WorkspaceNote title={t('iam.orgsEditBannerTitle')}>{t('iam.orgsEditBannerText')}</WorkspaceNote>
+      </>
+    );
   }
   if (path === '/roles') {
     return <RolesPage />;
   }
   if (path === '/roles/new') {
-    return <><RolesEditPage /><WorkspaceNote title="角色用于管理访问权限">角色保存后可分配给用户；它与集群准入是两层关系，具体集群仍需单独配置。</WorkspaceNote></>;
+    return (
+      <>
+        <RolesEditPage />
+        <WorkspaceNote title={t('roles.editBannerTitle')}>{t('roles.editBannerText')}</WorkspaceNote>
+      </>
+    );
   }
   const roleEdit = matchRoute('/roles/:roleId', path);
   if (roleEdit) {
-    return <><RolesEditPage roleId={roleEdit.roleId} /><WorkspaceNote title="角色用于管理访问权限">角色保存后可分配给用户；它与集群准入是两层关系，具体集群仍需单独配置。</WorkspaceNote></>;
+    return (
+      <>
+        <RolesEditPage roleId={roleEdit.roleId} />
+        <WorkspaceNote title={t('roles.editBannerTitle')}>{t('roles.editBannerText')}</WorkspaceNote>
+      </>
+    );
   }
   if (path === '/approvals') {
     if (!isApprovalEnabled(user)) {
@@ -258,6 +305,9 @@ function RouteView() {
   }
   if (path === '/deployments') {
     return <DeploymentListPage />;
+  }
+  if (path === '/deployments/new') {
+    return <CreateDeploymentPage />;
   }
   const deploymentDetail = matchRoute('/deployments/:id', path);
   if (deploymentDetail) {
@@ -307,29 +357,24 @@ function Shell() {
   );
 }
 
-/** 已登录用户的默认落地页:平台/管理员类型角色→/manager,有限权限→对应页,否则→/user。 */
-function roleHome(user: AuthUser): string {
-  if (isPlatformAdmin(user) || user.manager_access) return '/manager';
-  if (isApprovalEnabled(user) && hasPermission(user, 'approval:read')) {
-    return '/manager/approvals';
-  }
-  if (hasPermission(user, 'iam:role:read')) return '/manager/roles';
-  return '/user';
+function roleHome(user: AuthUser): string | null {
+  return canAccessManager(user) ? '/manager' : null;
 }
 
 /** /auth:已登录则按角色跳走,否则展示登录页。 */
 function AuthRoute() {
   const { user } = useAuth();
-  if (user) return <Navigate to={roleHome(user)} replace />;
-  return <LoginPage />;
+  const home = user && roleHome(user);
+  if (home) return <Navigate to={home} replace />;
+  return <LoginPage denied={Boolean(user)} />;
 }
 
-/** 登录 + 角色守卫:未登录→/auth;要求管理面但无资格→/user。 */
+/** 登录 + 角色守卫:未登录→/auth;要求管理面但无资格→/auth。 */
 function RequireAuth({ manager, children }: { manager?: boolean; children: ReactNode }) {
   const { user } = useAuth();
   if (!user) return <Navigate to="/auth" replace />;
   if (manager && !canAccessManager(user)) {
-    return <Navigate to="/user" replace />;
+    return <Navigate to="/auth" replace />;
   }
   return <>{children}</>;
 }
@@ -337,86 +382,7 @@ function RequireAuth({ manager, children }: { manager?: boolean; children: React
 /** 根/未知路径:按登录态与角色重定向。 */
 function RootRedirect() {
   const { user } = useAuth();
-  return <Navigate to={user ? roleHome(user) : '/auth'} replace />;
-}
-
-function readCookie(name: string): string {
-  const prefix = `${name}=`;
-  for (const part of document.cookie.split(';')) {
-    const item = part.trim();
-    if (item.startsWith(prefix)) {
-      return decodeURIComponent(item.slice(prefix.length));
-    }
-  }
-  return '';
-}
-
-/**
- * /chat 由 nginx 按 Cookie jiuwenclaw_id 动态反代 User Web，不能使用 SPA 内部 Navigate。
- * 保留 /user 作为角色落地地址：先写入 active-cluster Cookie，再跳 /chat/。
- * 无 Agent 上下文时仍进入 /chat/，由 User Web EnterpriseEntry 展示空态与「返回登录页」。
- */
-function UserWebRedirect() {
-  const { t } = useTranslation();
-  const { logout } = useAuth();
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const { contexts } = await UserConsoleApi.agentContexts();
-        if (cancelled) return;
-        if (!contexts.length) {
-          // 无上下文：先清残留 HttpOnly jiuwenclaw_id，再交给 User Web 空态页
-          // （否则上一用户选中的实例 Cookie 会让 auth_request 对当前用户 403）
-          try {
-            await UserConsoleApi.clearActiveCluster();
-          } catch {
-            /* 忽略 */
-          }
-          if (!cancelled) {
-            window.location.replace('/chat/');
-          }
-          return;
-        }
-        const cookieJid = readCookie('jiuwenclaw_id');
-        const preferred =
-          contexts.find((item) => item.jiuwenclaw_id === cookieJid)?.jiuwenclaw_id ??
-          contexts[0].jiuwenclaw_id;
-        await UserConsoleApi.setActiveCluster(preferred);
-        if (!cancelled) {
-          window.location.replace('/chat/');
-        }
-      } catch (e) {
-        if (!cancelled) {
-          setError(
-            e instanceof ApiError ? e.detail : (e as Error).message || t('auth.clusterSelectFailed'),
-          );
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [t]);
-
-  if (error) {
-    return (
-      <div className="flex flex-col items-center justify-center h-screen gap-3 text-muted">
-        <div>{error}</div>
-        <div className="flex gap-2">
-          <button className="btn" onClick={() => window.location.reload()}>
-            {t('common.refresh')}
-          </button>
-          <button className="btn btn-primary" onClick={() => void logout()}>
-            {t('auth.backToLogin')}
-          </button>
-        </div>
-      </div>
-    );
-  }
-  return <div className="flex items-center justify-center h-screen text-muted">{t('auth.loading')}</div>;
+  return <Navigate to={(user && roleHome(user)) || '/auth'} replace />;
 }
 
 function Gate() {
@@ -444,15 +410,6 @@ function Gate() {
             <RouterProvider basename="/manager">
               <Shell />
             </RouterProvider>
-          </RequireAuth>
-        }
-      />
-      {/* 用户面：通过页面级跳转进入同源 /chat，不再套 Manager Web iframe。 */}
-      <Route
-        path="/user/*"
-        element={
-          <RequireAuth>
-            <UserWebRedirect />
           </RequireAuth>
         }
       />

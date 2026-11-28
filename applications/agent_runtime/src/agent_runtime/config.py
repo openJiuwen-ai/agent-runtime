@@ -118,6 +118,22 @@ def _env_redis_lua(name: str) -> bool:
     )
 
 
+def _env_scope_reindex(name: str) -> str:
+    """AGENT_RUNTIME_RM_SCOPE_REINDEX 解析：auto|off|force，非法值启动 raise。
+
+    同 _env_redis_lua 的理由：配错静默回 auto 会在百万键公用库上多付一次
+    数分钟的全库 SCAN（后台跑不阻断服务，但白烧 Redis），应在启动就暴露。
+    """
+    raw = (os.getenv(name) or "").strip().lower()
+    if not raw:
+        return "auto"
+    if raw in ("auto", "off", "force"):
+        return raw
+    raise ValueError(
+        f"invalid {name}={os.getenv(name)!r}: 仅接受 auto|off|force（默认 auto）"
+    )
+
+
 def _env_deploy_mode(name: str) -> str:
     """AGENT_RUNTIME_DEPLOY_MODE 专用解析：仅显式 full|routing|subprocess，非法值启动 raise。
 
@@ -164,6 +180,11 @@ class AgentRuntimeConfig:
     # Redis 无 Lua 兼容模式（AGENT_RUNTIME_REDIS_LUA=on|off，默认 on）：
     # off = SM/RM 状态层走 WATCH/MULTI/EXEC 实现，框架层锁/选主同步降级
     redis_lua: bool = True
+    # RM scope 索引回填（AGENT_RUNTIME_RM_SCOPE_REINDEX=auto|off|force，默认
+    # auto）：auto = 无完成标记才做一次全库 SCAN 回填（存量库迁移）；off = 永不
+    # 回填（索引只靠 config_sync 下发自建）；force = 无条件重扫（修索引漂移）。
+    # 常态枚举恒读索引集合，与本项无关，见 resource_manager/state.known_scope_ids
+    rm_scope_reindex: str = "auto"
     # 系统自评估（docs/spec/evaluation.md）：采样/评估两 job + LLM 分析（默认禁用）
     eval_sample_interval: int = 30             # sys_sample：趋势采样间隔（下限钳 5s）
     eval_interval: int = 300                   # sys_eval：评估报告间隔（下限钳 30s）
@@ -201,6 +222,8 @@ class AgentRuntimeConfig:
                 "AGENT_RUNTIME_HEALTH_PROBE_TIMEOUT", 3.0),
             default_session_ttl=_env_int("AGENT_RUNTIME_DEFAULT_SESSION_TTL", 60),
             redis_lua=_env_redis_lua("AGENT_RUNTIME_REDIS_LUA"),
+            rm_scope_reindex=_env_scope_reindex(
+                "AGENT_RUNTIME_RM_SCOPE_REINDEX"),
             eval_sample_interval=_env_int("AGENT_RUNTIME_EVAL_SAMPLE_INTERVAL", 30),
             eval_interval=_env_int("AGENT_RUNTIME_EVAL_INTERVAL", 300),
             eval_llm_base_url=(os.getenv("AGENT_RUNTIME_EVAL_LLM_BASE_URL") or "").strip(),

@@ -6,7 +6,7 @@ const server = await createServer({ configFile: false, server: { middlewareMode:
 try {
   const { activeAdmissionRules, deriveClusterSetupProgress, isActiveConfiguration } = await server.ssrLoadModule('/src/utils/clusterSetupProgress.ts');
   const now = Date.parse('2026-11-02T12:00:00Z');
-  const instance = { jiuwenclaw_id: 'one', gateway_status: 'pending', runtime_status: 'pending', user_web_status: 'pending' };
+  const instance = { jiuwenclaw_id: 'one', gateway_status: 'pending', runtime_status: 'pending' };
   const allow = { enabled: true, expires_at: null, subject_type: 'user', subject_id: 'user-one', login_policy: 'allow' };
   const binding = { enabled: true, expires_at: null };
   const input = { instance, users: [], orgs: [], agents: [], runtimes: [] };

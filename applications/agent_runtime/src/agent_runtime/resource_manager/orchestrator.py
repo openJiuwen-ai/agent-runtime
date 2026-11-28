@@ -21,8 +21,8 @@ from uuid import uuid4
 from ..containers import main_health_path, main_sse_port, normalize_pod_spec
 from ..errors import DeployFailed, InvalidParams, MaxPodsReached, PodsStartingUp
 from ..link_mtls import LinkMTLSConfig
-from ..spec_fields import DEPLOY_VER_FIELDS
-from ..util import fingerprint, key_unsafe, now_ts
+from ..spec_fields import deploy_fingerprint
+from ..util import key_unsafe, now_ts
 from .k8s import DEFAULT_READY_TIMEOUT, K8sPodClient
 from .models import PodDeployInfo
 from .state import ResourceState
@@ -48,8 +48,7 @@ def _deploy_ver(pod_spec: dict[str, Any]) -> str:
     先过 normalize_pod_spec(只补 canonical 缺省键不改值):pod_spec 可能来自
     Redis pod_spec_json 缓存——未来加容器字段后旧缓存缺新键,补默认(==旧行为)
     后与新算指纹相等 → 零伪 A 类日落;行为性新键应当日落,日落正确。"""
-    norm = normalize_pod_spec(pod_spec)
-    return fingerprint({f: norm.get(f) for f in DEPLOY_VER_FIELDS})
+    return deploy_fingerprint(pod_spec)
 
 
 class ResourceOrchestrator:
@@ -421,6 +420,12 @@ class ResourceOrchestrator:
             "max_pods": int(pool_config.get("max_pods", 1)),
             "pod_ttl": int(pool_config.get("pod_ttl", 300)),
             "session_ttl": int(pool_config.get("session_ttl", 600)),
+            # 退役标记（2026-11）：config_sync 扩散③（被删 scope 推 min_idle=0）
+            # 置 1，扩散①/refresh 的正常下发恒置 0（复活即清）。reconcile 的空壳
+            # 回收只认这个标记——**不能用 min_idle==0 代替**：按需供给的生效
+            # scope 合法地 min_idle=0 且静息时零 Pod，误删它的 config 会让下一次
+            # route 的 acquire 拿到 no_config 而冷启失败。
+            "retired": 1 if pool_config.get("retired") else 0,
         }
         if pod_spec is not None:
             mapping["deploy_ver"] = _deploy_ver(pod_spec)

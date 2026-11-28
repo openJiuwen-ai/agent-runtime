@@ -8,13 +8,14 @@ from .application_config_routers import application_config_router, package_catal
 from .agent_client_registration_routers import registration_router
 from .agent_definition_routers import agent_definition_router
 from .approval_routers import approval_router
-from .auth_guards import get_current_user, require_admin
+from .auth_guards import get_current_user, require_admin, require_user_surface
 from .authz_routers import authz_router
 from .deployment_routers import deployment_router
 from .import_export_routers import import_export_router
 from .instance_access_routers import gateway_lookup_router, instance_grant_router
 from .instance_resource_routers import instance_resource_router
 from .instance_routers import instance_router
+from .org_cleanup_routers import org_cleanup_router
 from .quota_routers import quota_router
 from .template_routers import templates_router
 from .user_console_routers import public_user_console_router, user_console_router
@@ -32,7 +33,10 @@ def _build_api_router() -> APIRouter:
     v1_router.include_router(authz_router, tags=["Authorization"])
     v1_router.include_router(approval_router, tags=["Approvals"])
     # 用户控制台：当前用户可见 Agent + 用户面选路。
-    v1_router.include_router(user_console_router, prefix="/user-console", tags=["User Console"])
+    v1_router.include_router(
+        user_console_router, prefix="/user-console", tags=["User Console"],
+        dependencies=[Depends(require_user_surface)],
+    )
     admin_router = APIRouter(dependencies=[Depends(require_admin)])
     admin_router.include_router(registration_router, tags=["Agent Client Registration"])
     admin_router.include_router(templates_router, tags=["Templates"])
@@ -62,6 +66,8 @@ def _build_api_router() -> APIRouter:
         prefix=INSTANCES_PREFIX,
         tags=["Instance Access"],
     )
+    # 身份变更（删组织/删用户/移出组织）后的团队级联清理。
+    admin_router.include_router(org_cleanup_router, tags=["Quota"])
     # 反查：一批实体各授权了哪些实例。
     admin_router.include_router(gateway_lookup_router, tags=["Instance Access"])
     # 管理面启动部署（产品面 up + 幂等重跑升级；/defaults 字面路由先于 /{id} 注册）

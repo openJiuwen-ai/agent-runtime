@@ -76,9 +76,6 @@ function ClusterCreationForm({ draftKey, template, returnTo }: { draftKey: strin
   const endpointFields = [
     { key: 'gateway' as const, label: tr('Gateway 管理地址', 'Gateway management URL'), required: true },
     { key: 'runtime' as const, label: tr('Runtime 管理地址', 'Runtime management URL'), required: true },
-    { key: 'web' as const, label: tr('用户面地址', 'User Web URL'), required: true },
-    { key: 'gatewayHttp' as const, label: tr('Gateway 用户面 HTTP 地址', 'Gateway user HTTP URL'), required: true },
-    { key: 'gatewayWs' as const, label: tr('Gateway 用户面 WebSocket 基地址', 'Gateway user WebSocket base URL'), required: false },
   ];
   const flow = [
     [tr('连接已有服务', 'Connect existing services'), tr('确认部署命名空间和服务地址', 'Confirm the deployment namespace and endpoints')],
@@ -113,8 +110,7 @@ function ClusterCreationForm({ draftKey, template, returnTo }: { draftKey: strin
       const created = await InstanceApi.create({
         jiuwenclaw_name: draft.name.trim(), description: draft.description.trim() || undefined,
         namespace, space_id: 'default', created_by: user?.user_id || 'manager',
-        gateway_host: hosts.gateway.trim(), runtime_host: hosts.runtime.trim(), user_web_host: hosts.web.trim(),
-        gateway_web_http_host: hosts.gatewayHttp.trim(), gateway_web_ws_host: hosts.gatewayWs.trim() || undefined,
+        gateway_host: hosts.gateway.trim(), runtime_host: hosts.runtime.trim(),
       });
       try { clearClusterCreationDraft(sessionStorage, draftKey); } catch { /* Creation has already succeeded. */ }
       bumpGuideRevision();
@@ -124,7 +120,7 @@ function ClusterCreationForm({ draftKey, template, returnTo }: { draftKey: strin
       if (returnTo) context.set('returnTo', returnTo);
       if (mounted.current) navigate(guidedClusterWizardPath(created.jiuwenclaw_id, 2, context), { replace: true });
     } catch (cause) {
-      setError(tr('创建集群失败：', 'Could not create cluster: ') + (cause instanceof ApiError ? cause.detail : (cause as Error).message));
+      setError(tr('注册集群失败：', 'Could not register cluster: ') + (cause instanceof ApiError ? cause.detail : (cause as Error).message));
     } finally {
       requestInFlight.current = false;
       setSaving(false);
@@ -135,7 +131,7 @@ function ClusterCreationForm({ draftKey, template, returnTo }: { draftKey: strin
     <div className="page-header wizard-header">
       <div>
         <button type="button" className="btn ghost sm" disabled={saving} onClick={() => navigate('/instances')}>← {tr('集群管理', 'Clusters')}</button>
-        <h1 className="page-title mt-3">{tr('新建集群', 'Create cluster')}</h1>
+        <h1 className="page-title mt-3">{tr('注册集群', 'Register cluster')}</h1>
         <p className="page-subtitle">{tr('连接已经启动的服务，登记部署信息后继续配置集群准入和资源绑定。', 'Connect services that are already running, then configure cluster admission and resource bindings.')}</p>
       </div>
       <span className="tag">{tr('第 1 步 · 接入服务', 'Step 1 · Connect services')}</span>
@@ -146,7 +142,7 @@ function ClusterCreationForm({ draftKey, template, returnTo }: { draftKey: strin
     </section>}
     <div className="wizard-layout">
       <aside className="card wizard-steps">
-        <h2 className="text-sm font-semibold">{tr('新建集群流程', 'Cluster setup flow')}</h2>
+        <h2 className="text-sm font-semibold">{tr('集群配置流程', 'Cluster setup flow')}</h2>
         <ol className="mt-3 flex flex-col gap-1" aria-label={tr('集群配置流程', 'Cluster setup flow')}>
           {flow.map(([title, description], index) => <li key={title} className={'wizard-step ' + (index === 0 ? 'current' : '')} aria-current={index === 0 ? 'step' : undefined}><span className="wizard-step__num">{index + 1}</span><span><strong>{title}</strong><small>{description}</small></span></li>)}
         </ol>
@@ -171,13 +167,8 @@ function ClusterCreationForm({ draftKey, template, returnTo }: { draftKey: strin
             </div>
             <div className="wizard-endpoints-heading"><div><h3>{tr('服务地址', 'Service endpoints')}</h3><p className="wizard-field-help">{tr('按上方命名空间预填 Kubernetes 内部地址，可直接修改。跨集群或使用自定义服务名时，请填写 Manager 服务端可访问的地址。', 'Kubernetes URLs are filled from the namespace above and can be edited directly. For another cluster or custom service names, use URLs reachable from the Manager server.')}</p></div><button type="button" className="btn ghost sm" disabled={!draft.namespace.trim()} onClick={() => update({ ...clusterCreationHosts(draft.namespace), hostMode: 'manual' })}>{tr('重置为标准地址', 'Reset standard URLs')}</button></div>
             <div className="wizard-endpoint-fields">
-              {endpointFields.slice(0, 3).map(field => <label className="label wizard-endpoint-field" key={field.key} htmlFor={'cluster-create-' + field.key}><span>{field.label} <span className="text-danger">*</span></span><input id={'cluster-create-' + field.key} className="input mono" required value={hosts[field.key]} maxLength={512} onChange={event => updateEndpoint(field.key, event.target.value)} placeholder="http://host:port" autoCapitalize="none" spellCheck={false} /></label>)}
+              {endpointFields.map(field => <label className="label wizard-endpoint-field" key={field.key} htmlFor={'cluster-create-' + field.key}><span>{field.label} <span className="text-danger">*</span></span><input id={'cluster-create-' + field.key} className="input mono" required value={hosts[field.key]} maxLength={512} onChange={event => updateEndpoint(field.key, event.target.value)} placeholder="http://host:port" autoCapitalize="none" spellCheck={false} /></label>)}
             </div>
-            <details className="wizard-extra-endpoints" open={hosts.gatewayHttp !== hosts.gateway || hosts.gatewayWs !== hosts.gateway ? true : undefined}>
-              <summary>{tr('更多连接地址', 'Additional endpoints')} <span>{tr('Gateway 用户面 HTTP / WebSocket', 'Gateway user HTTP / WebSocket')}</span></summary>
-              <p className="wizard-field-help">{tr('标准部署使用相同的 Gateway 基地址；需要独立访问地址时可在此修改。WebSocket 请填写 HTTP(S) 基地址，留空时由服务使用默认值。', 'Standard deployments use the same Gateway base URL. Edit these for separate endpoints. Use an HTTP(S) base URL for WebSocket, or leave it blank for the service default.')}</p>
-              <div className="wizard-endpoint-fields">{endpointFields.slice(3).map(field => <label className="label wizard-endpoint-field" key={field.key} htmlFor={'cluster-create-' + field.key}><span>{field.label}{field.required && <span className="text-danger"> *</span>}</span><input id={'cluster-create-' + field.key} className="input mono" value={hosts[field.key]} maxLength={512} onChange={event => updateEndpoint(field.key, event.target.value)} placeholder="http://host:port" autoCapitalize="none" spellCheck={false} /></label>)}</div>
-            </details>
           </fieldset>
           {error && <p className="mt-4 text-sm text-danger break-words" role="alert">{error}</p>}
           <div className="wizard-actions"><button type="button" className="btn" disabled={saving} onClick={() => navigate('/instances')}>{tr('暂时离开', 'Leave for now')}</button><button type="submit" className="btn primary" disabled={saving || templateUnavailable}>{saving ? tr('保存中…', 'Saving…') : tr('保存并配置集群准入', 'Save and configure admission')} →</button></div>

@@ -1,0 +1,83 @@
+# =====================================================================
+# Manager Web nginx 配置模板(UBI 镜像专用)
+#
+# 由 docker/openshift/manager-web-nginx-start.sh 在启动时 envsubst 渲染:
+#   /etc/nginx/templates/default.conf.template → /opt/app-root/etc/nginx.d/default.conf
+# 环境变量与部署注入的同名 env 一致(必须全部提供):
+#   MANAGER_WEB_PORT / MANAGER_WEB_PROXY_TARGET / MANAGER_WEB_IDP_TARGET /
+#   WORKSPACE_QUOTA_ENABLED
+#
+# =====================================================================
+
+server {
+    listen ${MANAGER_WEB_PORT};
+    server_name _;
+    # Preserve the public scheme and port when the OpenShift router terminates TLS.
+    absolute_redirect off;
+
+    # Scope the UBI temp paths here so images with http-level paths can also mount this template.
+    proxy_temp_path /tmp/proxy_temp;
+    client_body_temp_path /tmp/client_body_temp;
+    fastcgi_temp_path /tmp/fastcgi_temp;
+    uwsgi_temp_path /tmp/uwsgi_temp;
+    scgi_temp_path /tmp/scgi_temp;
+
+    # Python 版对请求体大小无限制(文件上传走 /file-api)
+    client_max_body_size 0;
+
+    # 上游不做压缩(httpx 中继语义:响应原文透传),出口压缩由 nginx 负责
+    proxy_set_header Accept-Encoding "";
+    proxy_http_version 1.1;
+    proxy_connect_timeout 10s;
+    proxy_send_timeout 30s;
+    proxy_read_timeout 30s;
+
+    root /app/agent-runtime/applications/manager/manager_web/dist;
+    index index.html;
+
+    gzip on;
+    gzip_vary on;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+
+    # ---------- index.html 运行时配置注入（WORKSPACE_QUOTA_ENABLED） ----------
+    sub_filter '__WORKSPACE_QUOTA_ENABLED_VALUE__' '${WORKSPACE_QUOTA_ENABLED}';
+    sub_filter_once on;
+    sub_filter_types text/html;
+
+    # ---------- /api → Manager Server ----------
+    # /api 的 307 斜杠规范化会携带集群内部地址,proxy_redirect 改写回外部
+    # 路径(对齐 Python 版 follow_redirects=True 的服务端跟随语义)
+    location = /api         { return 307 /api/; }
+    location = /api/v1/user-console { return 404; }
+    location ^~ /api/v1/user-console/ { return 404; }
+    location ^~ /api/ {
+        proxy_pass ${MANAGER_WEB_PROXY_TARGET};
+        proxy_redirect ${MANAGER_WEB_PROXY_TARGET}/ /;
+    }
+
+    # ---------- /idp → Identity(免鉴权,认证服务自身校验) ----------
+    location = /idp { return 307 /idp/; }
+    location ^~ /idp/ {
+        rewrite ^/idp/(.*)$ /$1 break;
+        proxy_set_header X-Jiuwen-Web-Surface manager;
+        proxy_pass ${MANAGER_WEB_IDP_TARGET};
+    }
+
+    location ~ ^/(?:chat|gateway-api|file-api|share-api|ws|manager-api)(?:/|$) {
+        return 404;
+    }
+
+    # ---------- SPA 静态资源 ----------
+    location ^~ /assets/ {
+        try_files $uri =404;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+    }
+    location = /index.html {
+        add_header Cache-Control "no-cache, must-revalidate";
+    }
+    # SPA history 深链(/auth、/manager/*)回退 index.html
+    location / {
+        try_files $uri $uri/ /index.html;
+        add_header Cache-Control "no-cache, must-revalidate";
+    }
+}

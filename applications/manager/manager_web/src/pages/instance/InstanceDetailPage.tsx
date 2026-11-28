@@ -1,11 +1,8 @@
-import { useState, type ReactNode } from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAsync } from '../../hooks/useAsync';
-import { useFormDirty } from '../../hooks/useFormDirty';
-import { InstanceApi, UserConsoleApi, ApiError } from '../../services/api';
+import { InstanceApi, ApiError } from '../../services/api';
 import { useRouter } from '../../router';
-import { Modal, ModalCancelButton } from '../../components/Modal';
-import { LimitedTextInput } from '../../components/LimitedTextInput';
 import { bumpGuideRevision } from '../../stores/guideStore';
 import { toast } from '../../stores/uiStore';
 import { isValidHttpUrl } from '../../utils/url';
@@ -16,6 +13,7 @@ import { InstanceServiceResourceTab } from './instanceResourcePanel/InstanceServ
 import { WorkspaceNote } from '../../components/WorkspaceNote';
 import { ClusterWorkspaceNavigation, type ClusterWorkspaceSection } from '../../components/ClusterWorkspaceNavigation';
 import { ClusterOtherSettingsPanel } from './ClusterOtherSettingsPanel';
+import './instanceDetailPanel/ConnectivityCard.css';
 
 export type InstancePageTab = 'access' | 'agentResources' | 'serviceResources' | 'otherSettings' | 'status';
 
@@ -26,44 +24,17 @@ interface Props {
 
 const HOST_MAX = 512;
 
-type ConnectivityForm = {
-  gateway_host: string;
-  runtime_host: string;
-  user_web_host: string;
-  gateway_web_http_host: string;
-  gateway_web_ws_host: string;
-};
-
-function FieldLabel({ children, required }: { children: ReactNode; required?: boolean }) {
-  return (
-    <label className="label">
-      {children}
-      {required && (
-        <span className="text-danger ml-0.5" aria-hidden="true">
-          *
-        </span>
-      )}
-    </label>
-  );
-}
-
 export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
   const { t, i18n } = useTranslation();
   const instance = useAsync(() => InstanceApi.get(instanceId), [instanceId]);
+  const componentStatus = useAsync(
+    () => (tab === 'status' ? InstanceApi.componentStatus(instanceId) : Promise.resolve(null)),
+    [instanceId, tab],
+  );
   const { navigate } = useRouter();
   const [probing, setProbing] = useState(false);
-  const [openingConsole, setOpeningConsole] = useState(false);
   const [checkResult, setCheckResult] = useState('');
-
-  const [editOpen, setEditOpen] = useState(false);
-  const [connectivityForm, setConnectivityForm] = useState<ConnectivityForm>({
-    gateway_host: '',
-    runtime_host: '',
-    user_web_host: '',
-    gateway_web_http_host: '',
-    gateway_web_ws_host: '',
-  });
-  const { markClean, isDirty } = useFormDirty(editOpen);
+  const [savingHosts, setSavingHosts] = useState(false);
 
   const zh = i18n.language.startsWith('zh');
   const tabContext: Record<string, { title: string; body: string }> = {
@@ -76,8 +47,8 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
       body: zh ? '探活只代表管理面能访问组件；Agent 是否能运行，还要同时满足准入、Agent 授权和运行资源条件。' : 'Health checks show management connectivity. Agent execution also requires admission, Agent access and runtime resources.',
     },
     agentResources: {
-      title: zh ? '决定谁能使用哪些 Agent' : 'Choose who can use each Agent',
-      body: zh ? '这里保存的是当前集群的 Agent 使用授权，不会修改全局 Agent 定义。' : 'These are Agent access bindings for this cluster; the global Agent definition remains unchanged.',
+      title: zh ? '为集群选择可用的 Agent 资源' : 'Choose the Agent resources for this cluster',
+      body: zh ? 'Agent 是可复用定义；只有在当前集群绑定并设置授权范围后，用户面才会向目标用户提供。' : 'Agents are reusable definitions and only become available to users after being bound and authorized for this cluster.',
     },
     serviceResources: {
       title: zh ? '为 Agent 选择实际运行资源' : 'Choose the runtime resources for Agents',
@@ -90,65 +61,47 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
   };
   const context = tabContext[tab] ?? tabContext.access;
 
-  const handleOpenEditConnectivity = () => {
-    const d = instance.data;
-    const next: ConnectivityForm = {
-      gateway_host: d?.gateway_host ?? '',
-      runtime_host: d?.runtime_host ?? '',
-      user_web_host: d?.user_web_host ?? '',
-      gateway_web_http_host: d?.gateway_web_http_host ?? '',
-      gateway_web_ws_host: d?.gateway_web_ws_host ?? '',
-    };
-    setConnectivityForm(next);
-    markClean(next);
-    setEditOpen(true);
-  };
-
-  const submitConnectivity = async () => {
-    const gateway = connectivityForm.gateway_host.trim();
-    const runtime = connectivityForm.runtime_host.trim();
-    const userWeb = connectivityForm.user_web_host.trim();
-    const gatewayWebHttp = connectivityForm.gateway_web_http_host.trim();
-    const gatewayWebWs = connectivityForm.gateway_web_ws_host.trim();
+  const saveConnectivity = async (patch: { gateway_host?: string; runtime_host?: string }) => {
+    const gateway = (patch.gateway_host ?? instance.data?.gateway_host ?? '').trim();
+    const runtime = (patch.runtime_host ?? instance.data?.runtime_host ?? '').trim();
     const requiredChecks: { label: string; invalid: boolean }[] = [
       { label: t('instanceForm.gatewayHost'), invalid: !gateway },
       { label: t('instanceForm.runtimeHost'), invalid: !runtime },
-      { label: t('instanceForm.userWebHost'), invalid: !userWeb },
-      { label: t('instanceForm.gatewayWebHttpHost'), invalid: !gatewayWebHttp },
     ];
     const missing = requiredChecks.find((item) => item.invalid);
     if (missing) {
       toast('warn', t('instanceForm.fieldRequired', { field: missing.label }));
-      return;
+      return false;
     }
     const hostsToValidate: { value: string; field: string }[] = [
       { value: gateway, field: t('instanceForm.gatewayHost') },
       { value: runtime, field: t('instanceForm.runtimeHost') },
-      { value: userWeb, field: t('instanceForm.userWebHost') },
-      { value: gatewayWebHttp, field: t('instanceForm.gatewayWebHttpHost') },
-      { value: gatewayWebWs, field: t('instanceForm.gatewayWebWsHost') },
     ];
     for (const host of hostsToValidate) {
-      if (!host.value) continue;
       if (!isValidHttpUrl(host.value)) {
         toast('warn', t('instanceForm.hostInvalid', { field: host.field }));
-        return;
+        return false;
       }
     }
+    if (gateway.length > HOST_MAX || runtime.length > HOST_MAX) {
+      toast('warn', zh ? '地址过长' : 'Host too long');
+      return false;
+    }
+    setSavingHosts(true);
     try {
       await InstanceApi.update(instanceId, {
         gateway_host: gateway,
         runtime_host: runtime,
-        user_web_host: userWeb,
-        gateway_web_http_host: gatewayWebHttp,
-        gateway_web_ws_host: gatewayWebWs,
       });
       toast('success', t('success.saved'));
-      setEditOpen(false);
-      void instance.reload();
+      await instance.reload();
       bumpGuideRevision();
+      return true;
     } catch (e) {
       toast('danger', t('errors.saveFailed', { detail: e instanceof ApiError ? e.detail : (e as Error).message }));
+      return false;
+    } finally {
+      setSavingHosts(false);
     }
   };
 
@@ -158,140 +111,82 @@ export function InstanceDetailPage({ instanceId, tab = 'access' }: Props) {
     setCheckResult('');
     try {
       const result = await InstanceApi.probeHealth();
-      await instance.reload();
-      setCheckResult(zh ? `检查结束：共检查 ${result.probed} 个组件地址，跳过 ${result.skipped} 个。当前集群的实际结果见下方组件状态。` : `Checked ${result.probed} component endpoints; skipped ${result.skipped}. Review this cluster's component status below.`);
+      setCheckResult(
+        zh
+          ? `刷新完成：已探活 ${result.probed} 个地址（跳过 ${result.skipped}），并更新组件与 Pod 状态。`
+          : `Refreshed: probed ${result.probed} endpoints (skipped ${result.skipped}) and updated component/pod status.`,
+      );
     } catch (cause) {
       toast('danger', zh ? `连接检查失败：${cause instanceof ApiError ? cause.detail : (cause as Error).message}` : `Connectivity check failed: ${(cause as Error).message}`);
-    } finally { setProbing(false); }
-  };
-
-  const openUserConsole = async () => {
-    if (openingConsole) return;
-    setOpeningConsole(true);
-    setCheckResult('');
-    try {
-      const { contexts } = await UserConsoleApi.agentContexts();
-      if (!contexts.some(row => row.jiuwenclaw_id === instanceId)) {
-        setCheckResult(zh ? '当前登录身份没有此集群的可用 Agent 上下文。请核对该身份的准入和 Agent 使用范围，或使用已获准的测试账号登录用户面。' : 'This identity has no Agent context in this cluster. Check admission and Agent scope, or sign into the user console with an admitted test account.');
-        return;
+    } finally {
+      // 探活失败也要刷新本地实例/组件数据（刷新语义，不因 probe 失败卡住旧状态）
+      try {
+        await instance.reload();
+        await componentStatus.reload();
+      } catch {
+        /* reload 失败已由各自 hook 暴露；此处不二次 toast */
       }
-      await UserConsoleApi.setActiveCluster(instanceId);
-      window.location.assign('/chat/');
-    } catch (cause) {
-      toast('danger', zh ? `无法进入当前集群用户面：${cause instanceof ApiError ? cause.detail : (cause as Error).message}` : `Could not open user console: ${(cause as Error).message}`);
-    } finally { setOpeningConsole(false); }
+      setProbing(false);
+    }
   };
 
   const sections: Record<InstancePageTab, ClusterWorkspaceSection> = {
-    access: 'access', agentResources: 'agent-resources',
-    serviceResources: 'service-resources', otherSettings: 'other-settings', status: 'status',
+    access: 'access',
+    agentResources: 'agent-resources',
+    serviceResources: 'service-resources',
+    otherSettings: 'other-settings',
+    status: 'status',
   };
   const section = sections[tab];
   if (instance.loading && !instance.data) return <div className="card">{t('common.loading')}</div>;
-  if (instance.error || !instance.data) return <div className="card text-danger" role="alert">{instance.error || t('common.empty')}<button className="btn ml-3" onClick={() => void instance.reload()}>{t('common.refresh')}</button><button className="btn ml-2" onClick={() => navigate('/instances')}>{zh ? '返回集群管理' : 'Return to clusters'}</button></div>;
+  if (instance.error || !instance.data) {
+    return (
+      <div className="card text-danger" role="alert">
+        {instance.error || t('common.empty')}
+        <button className="btn ml-3" onClick={() => void instance.reload()}>
+          {t('common.refresh')}
+        </button>
+        <button className="btn ml-2" onClick={() => navigate('/instances')}>
+          {zh ? '返回集群管理' : 'Return to clusters'}
+        </button>
+      </div>
+    );
+  }
 
   return (
-    <>
-      <div className={`cluster-detail-page cluster-detail-page--${tab} flex min-w-0 flex-col gap-4`}>
-        <ClusterWorkspaceNavigation
-          instanceId={instanceId}
-          name={instance.data?.jiuwenclaw_name ?? instanceId}
-          section={section}
-        />
-        <div className="cluster-detail-body w-full min-w-0">
-          {tab === 'otherSettings' ? <ClusterOtherSettingsPanel instanceId={instanceId} /> : <>
-          {tab === 'access' && <InstanceAccessPanel instanceId={instanceId} />}
-          {tab === 'agentResources' && (
-            <InstanceAgentResourceTab instanceId={instanceId} />
-          )}
-          {tab === 'serviceResources' && <InstanceServiceResourceTab instanceId={instanceId} />}
-          {tab === 'status' && (
-            <InstanceDetailPanel
-              instance={instance}
-              onOpenEditConnectivity={handleOpenEditConnectivity}
-              onRefresh={() => void instance.reload()}
-              onCheckConnectivity={() => void checkConnectivity()}
-              onOpenUserConsole={() => void openUserConsole()}
-              probing={probing}
-              openingConsole={openingConsole}
-              checkResult={checkResult}
-            />
-          )}
-          </>}
-        </div>
-        <footer className="cluster-detail-footer">
-          <WorkspaceNote title={context.title}>{context.body}</WorkspaceNote>
-        </footer>
-      </div>
-
-      <Modal
-        open={editOpen}
-        title={t('instanceDetail.editConnectivity')}
-        onClose={() => setEditOpen(false)}
-        dirty={isDirty(connectivityForm)}
-        size="lg"
-        footer={
+    <div className={`cluster-detail-page cluster-detail-page--${tab} flex min-w-0 flex-col gap-4`}>
+      <ClusterWorkspaceNavigation
+        instanceId={instanceId}
+        name={instance.data?.jiuwenclaw_name ?? instanceId}
+        section={section}
+      />
+      <div className="cluster-detail-body w-full min-w-0">
+        {tab === 'otherSettings' ? (
+          <ClusterOtherSettingsPanel instanceId={instanceId} />
+        ) : (
           <>
-            <ModalCancelButton />
-            <button className="btn primary" onClick={() => void submitConnectivity()}>
-              {t('common.save')}
-            </button>
+            {tab === 'access' && <InstanceAccessPanel instanceId={instanceId} />}
+            {tab === 'agentResources' && <InstanceAgentResourceTab instanceId={instanceId} />}
+            {tab === 'serviceResources' && <InstanceServiceResourceTab instanceId={instanceId} />}
+            {tab === 'status' && (
+              <InstanceDetailPanel
+                instance={instance}
+                componentStatus={componentStatus.data}
+                componentStatusLoading={componentStatus.loading}
+                componentStatusError={componentStatus.error}
+                onSaveConnectivity={saveConnectivity}
+                savingConnectivity={savingHosts}
+                onRefresh={() => void checkConnectivity()}
+                probing={probing}
+                checkResult={checkResult}
+              />
+            )}
           </>
-        }
-      >
-        <div className="flex flex-col gap-3">
-          <div>
-            <FieldLabel required>{t('instanceForm.gatewayHost')}</FieldLabel>
-            <LimitedTextInput
-              value={connectivityForm.gateway_host}
-              maxLength={HOST_MAX}
-              onChange={(gateway_host) =>
-                setConnectivityForm((prev) => ({ ...prev, gateway_host }))
-              }
-            />
-          </div>
-          <div>
-            <FieldLabel required>{t('instanceForm.runtimeHost')}</FieldLabel>
-            <LimitedTextInput
-              value={connectivityForm.runtime_host}
-              maxLength={HOST_MAX}
-              onChange={(runtime_host) =>
-                setConnectivityForm((prev) => ({ ...prev, runtime_host }))
-              }
-            />
-          </div>
-          <div>
-            <FieldLabel required>{t('instanceForm.userWebHost')}</FieldLabel>
-            <LimitedTextInput
-              value={connectivityForm.user_web_host}
-              maxLength={HOST_MAX}
-              onChange={(user_web_host) =>
-                setConnectivityForm((prev) => ({ ...prev, user_web_host }))
-              }
-            />
-          </div>
-          <div>
-            <FieldLabel required>{t('instanceForm.gatewayWebHttpHost')}</FieldLabel>
-            <LimitedTextInput
-              value={connectivityForm.gateway_web_http_host}
-              maxLength={HOST_MAX}
-              onChange={(gateway_web_http_host) =>
-                setConnectivityForm((prev) => ({ ...prev, gateway_web_http_host }))
-              }
-            />
-          </div>
-          <div>
-            <FieldLabel>{t('instanceForm.gatewayWebWsHost')}</FieldLabel>
-            <LimitedTextInput
-              value={connectivityForm.gateway_web_ws_host}
-              maxLength={HOST_MAX}
-              onChange={(gateway_web_ws_host) =>
-                setConnectivityForm((prev) => ({ ...prev, gateway_web_ws_host }))
-              }
-            />
-          </div>
-        </div>
-      </Modal>
-    </>
+        )}
+      </div>
+      <footer className="cluster-detail-footer">
+        <WorkspaceNote title={context.title}>{context.body}</WorkspaceNote>
+      </footer>
+    </div>
   );
 }

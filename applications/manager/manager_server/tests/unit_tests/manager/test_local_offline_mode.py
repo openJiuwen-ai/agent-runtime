@@ -67,7 +67,6 @@ async def test_offline_validates_urls_without_opening_network(offline_mode, monk
     await config_host_probe.require_config_hosts_reachable(
         gateway_host="http://gateway.default:19000",
         runtime_host="https://runtime.default:8091",
-        user_web_host="http://web.default:5173",
     )
     assert await config_host_probe.check_config_host_alive(
         "http://gateway.default:19000", side="gateway"
@@ -76,7 +75,7 @@ async def test_offline_validates_urls_without_opening_network(offline_mode, monk
 
 
 @pytest.mark.parametrize("host", ["gateway.default:19000", "file:///tmp/config", "http://"])
-@pytest.mark.parametrize("field", ["gateway_host", "runtime_host", "user_web_host"])
+@pytest.mark.parametrize("field", ["gateway_host", "runtime_host"])
 @pytest.mark.asyncio
 async def test_offline_still_rejects_invalid_urls(offline_mode, monkeypatch, field, host):
     network = MagicMock(side_effect=AssertionError("offline mode opened HTTP transport"))
@@ -151,11 +150,11 @@ async def test_offline_scanner_skips_without_claiming_online(offline_mode, monke
     rows = [
         SimpleNamespace(
             jiuwenclaw_id="cluster-1", gateway_host="http://gw",
-            runtime_host="http://rt", user_web_host="http://web",
+            runtime_host="http://rt",
         ),
         SimpleNamespace(
             jiuwenclaw_id="cluster-2", gateway_host="http://gw2",
-            runtime_host=None, user_web_host=None,
+            runtime_host=None,
         ),
     ]
     handler = SimpleNamespace(list_records=AsyncMock(return_value=rows), update=AsyncMock())
@@ -164,7 +163,7 @@ async def test_offline_scanner_skips_without_claiming_online(offline_mode, monke
     monkeypatch.setattr(heartbeat_scanner, "check_config_host_alive", probe)
     monkeypatch.setattr(heartbeat_scanner, "apply_health_probe_result", health_update)
     assert await heartbeat_scanner.scan_instance_health_once(handler) == {
-        "probed": 0, "alive": 0, "dead": 0, "skipped": 4,
+        "probed": 0, "alive": 0, "dead": 0, "skipped": 3,
     }
     probe.assert_not_awaited()
     health_update.assert_not_awaited()
@@ -191,14 +190,11 @@ async def test_offline_instance_create_update_persist_with_pending_health(
         jiuwenclaw_name="Offline integration cluster",
         gateway_host="http://gw.local-dev.invalid:19000",
         runtime_host="http://rt.local-dev.invalid:8091",
-        user_web_host="http://web.local-dev.invalid:5173",
-        gateway_web_http_host="http://gw.local-dev.invalid:19002",
-        gateway_web_ws_host="http://gw.local-dev.invalid:19000",
     )
     created = await manager_api.http.post(manager_api.instances_url(), json=body)
     assert created.status_code == 200, created.text
     jid = created.json()["data"]["jiuwenclaw_id"]
-    for side in ("gateway", "runtime", "user_web"):
+    for side in ("gateway", "runtime"):
         assert created.json()["data"][f"{side}_status"] == "pending"
 
     updated_host = "http://gw-updated.local-dev.invalid:19000"
@@ -213,7 +209,7 @@ async def test_offline_instance_create_update_persist_with_pending_health(
     assert stored is not None
     assert stored.gateway_host == updated_host
     assert stored.description == "saved offline"
-    for side in ("gateway", "runtime", "user_web"):
+    for side in ("gateway", "runtime"):
         assert getattr(stored, f"{side}_status") == "pending"
         assert getattr(stored, f"{side}_last_alive") is None
     runtime_probe.assert_not_awaited()

@@ -39,6 +39,7 @@ import { collectPages } from '../../../utils/overview';
 import { runtimeCatalogPath } from '../../../utils/runtimeResourceNavigation';
 import { ClusterContentHeading } from '../ClusterContentHeading';
 import { serviceResourceUpdateBody, resourceExpiryForUpdate } from '../../../utils/instanceResourceUpdate';
+import { INT32_MAX, INT32_MIN, isInt32 } from '../../../utils/intBounds';
 import {
   applyRuntimeTemplateChoice, consumeRuntimeBindingAction, emptyRuntimeBindingDraft,
   readRuntimeBindingDraft, runtimeBindingDraftKey, writeRuntimeBindingDraft, type RuntimeBindingDraft,
@@ -229,7 +230,7 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
     } catch { /* Browser storage access itself can be disabled. */ }
     if (!draftSaveWarned.current) {
       draftSaveWarned.current = true;
-      toast('warn', t('redesign.draftUnavailable', { defaultValue: '无法暂存绑定草稿，返回后需重新填写。' }));
+      toast('warn', t('redesign.draftUnavailable'));
     }
     return false;
   }, [handoffKey, t]);
@@ -251,8 +252,8 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
       setAddResourceName(draft.addResourceName);
       if (result.error) {
         toast('warn', result.error === 'disabled'
-          ? t('redesign.runtimeTemplateDisabled', { defaultValue: '返回的运行规格已停用，请重新选择可用运行规格。' })
-          : t('redesign.runtimeTemplateMissing', { defaultValue: '返回的运行规格已不存在，请重新选择。' }));
+          ? t('redesign.runtimeTemplateDisabled')
+          : t('redesign.runtimeTemplateMissing'));
       }
     }
     persistAddDraft(draft);
@@ -369,8 +370,8 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
       toast('warn', t('policies.fieldRequired', { field: t('instanceDetail.resourcePanel.serviceResource.template') }));
       return;
     }
-    if (!Number.isInteger(editPriority)) {
-      toast('warn', t('policies.fieldRequired', { field: t('instanceDetail.resourcePanel.serviceResource.priority') }));
+    if (!isInt32(editPriority)) {
+      toast('warn', t('instanceDetail.resourcePanel.serviceResource.priorityInvalid'));
       return;
     }
     const err = validateMatchExprModel(parseMatchExpr(matchExpr));
@@ -655,7 +656,7 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
               <button
                 className="btn primary"
                 style={{ marginLeft: 8 }}
-                disabled={busy || restoredDraftKey !== handoffKey || !!requestedTemplate || catalogState.loading || !!catalogState.error || !catalog.some(item => item.template_id === addTemplateId && item.enabled !== false) || !addResourceName.trim() || !Number.isInteger(addPriority)}
+                disabled={busy || restoredDraftKey !== handoffKey || !!requestedTemplate || catalogState.loading || !!catalogState.error || !catalog.some(item => item.template_id === addTemplateId && item.enabled !== false) || !addResourceName.trim()}
                 onClick={async () => {
                   if (!addResourceName.trim()) {
                     toast('warn', t('policies.fieldRequired', { field: t(`${sr}.resourceName`) }));
@@ -665,8 +666,8 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
                     toast('warn', t('policies.fieldRequired', { field: t(`${sr}.template`) }));
                     return;
                   }
-                  if (!Number.isInteger(addPriority)) {
-                    toast('warn', t('policies.fieldRequired', { field: t(`${sr}.priority`) }));
+                  if (!isInt32(addPriority)) {
+                    toast('warn', t(`${sr}.priorityInvalid`));
                     return;
                   }
                   const err = validateMatchExprModel(parseMatchExpr(addMatchExpr));
@@ -755,17 +756,24 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
                 className="input mt-1 w-full"
                 type="number"
                 step={1}
+                min={INT32_MIN}
+                max={INT32_MAX}
                 value={Number.isInteger(addPriority) ? addPriority : ''}
                 onChange={(e) => {
                   const raw = e.target.value;
                   setAddPriority(raw === '' ? NaN : Number(raw));
                 }}
               />
+              {!Number.isNaN(addPriority) && !isInt32(addPriority) && (
+                <div className="text-[11px] text-danger mt-1" role="alert">
+                  {t(`${sr}.priorityInvalid`)}
+                </div>
+              )}
             </label>
             <label className="block mb-3">
               <FieldLabel>{t(`${sr}.scopeLabel`)}</FieldLabel>
               <div className="mt-1">
-                <MatchExprEditor value={addMatchExpr} onChange={setAddMatchExpr} />
+                <MatchExprEditor agentResourceInstanceId={instanceId} value={addMatchExpr} onChange={setAddMatchExpr} />
               </div>
             </label>
             <label className="block">
@@ -853,18 +861,26 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
               className="input mt-1 w-full"
               type="number"
               step={1}
+              min={INT32_MIN}
+              max={INT32_MAX}
               value={Number.isInteger(editPriority) ? editPriority : ''}
               onChange={(e) => {
                 const raw = e.target.value;
                 setEditPriority(raw === '' ? NaN : Number(raw));
               }}
             />
+            {!Number.isNaN(editPriority) && !isInt32(editPriority) && (
+              <div className="text-[11px] text-danger mt-1" role="alert">
+                {t(`${sr}.priorityInvalid`)}
+              </div>
+            )}
           </label>
           <label className="block mb-3">
             <FieldLabel>{t(`${sr}.scopeLabel`)}</FieldLabel>
             <div className="mt-1">
               <MatchExprEditor
                 key={editing.resource_id}
+                agentResourceInstanceId={instanceId}
                 value={matchExpr}
                 onChange={setMatchExpr}
               />

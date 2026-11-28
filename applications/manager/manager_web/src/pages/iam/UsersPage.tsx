@@ -15,7 +15,7 @@ import {
 import { useAsync } from '../../hooks/useAsync';
 import { useFormDirty } from '../../hooks/useFormDirty';
 import { useListSearch } from '../../hooks/useListSearch';
-import { ApiError, IamUser, UserApi } from '../../services/api';
+import { ApiError, IamUser, InstanceBindingApi, UserApi } from '../../services/api';
 import { toast } from '../../stores/uiStore';
 import { formatTime } from '../../utils/format';
 import { isValidIdentityId, sanitizeIdentityIdInput } from '../../utils/identityId';
@@ -111,8 +111,43 @@ export function UsersPage() {
     if (data?.items) setItems(data.items);
   }, [data]);
 
+  const requestDelete = async (row: IamUser) => {
+    try {
+      const refs = await InstanceBindingApi.userReferences(row.user_id);
+      if ((refs.total ?? 0) > 0) {
+        toast('warn', t('iam.userReferencedNoDelete', { count: refs.total }));
+        return;
+      }
+      setDelTarget(row);
+    } catch (e) {
+      toast(
+        'danger',
+        t('errors.loadFailed', {
+          detail: e instanceof ApiError ? e.detail : (e as Error).message,
+        }),
+      );
+    }
+  };
+
   const toggleStatus = async (row: IamUser, enabled: boolean) => {
     if (togglingId) return;
+    if (!enabled) {
+      try {
+        const refs = await InstanceBindingApi.userReferences(row.user_id);
+        if ((refs.total ?? 0) > 0) {
+          toast('warn', t('iam.userReferencedNoDisable', { count: refs.total }));
+          return;
+        }
+      } catch (e) {
+        toast(
+          'danger',
+          t('errors.loadFailed', {
+            detail: e instanceof ApiError ? e.detail : (e as Error).message,
+          }),
+        );
+        return;
+      }
+    }
     const nextStatus = enabled ? 'active' : 'disabled';
     const previous = row.status;
     setItems((list) =>
@@ -145,7 +180,7 @@ export function UsersPage() {
     <>
       <div className="iam-workspace flex min-w-0 flex-col gap-4">
         <div className="page-header w-full min-w-0 flex-wrap items-start gap-y-3">
-          <div className="min-w-[7.5rem] max-w-[12rem] shrink-0 sm:max-w-[16rem]">
+          <div className="min-w-[7.5rem] max-w-[20rem] shrink-0 sm:max-w-[32rem]">
             <div className="page-title truncate" title={t('iam.users')}>
               {t('iam.users')}
             </div>
@@ -302,7 +337,7 @@ export function UsersPage() {
                               <button className="btn sm ghost" onClick={() => setEditing(u)}>
                                 {t('common.edit')}
                               </button>
-                              <button className="btn sm danger" onClick={() => setDelTarget(u)}>
+                              <button className="btn sm danger" onClick={() => void requestDelete(u)}>
                                 {t('common.delete')}
                               </button>
                             </div>
@@ -362,6 +397,12 @@ export function UsersPage() {
         onConfirm={async () => {
           if (!delTarget) return;
           try {
+            const refs = await InstanceBindingApi.userReferences(delTarget.user_id);
+            if ((refs.total ?? 0) > 0) {
+              toast('warn', t('iam.userReferencedNoDelete', { count: refs.total }));
+              setDelTarget(null);
+              return;
+            }
             await UserApi.remove(delTarget.user_id);
             toast('success', t('success.deleted'));
             void reload();
@@ -542,6 +583,18 @@ function UserModal({ user, onClose, onSaved }: { user: IamUser | null; onClose: 
     if (!isEdit) {
       if (!isValidIdentityId(username)) {
         toast('warn', t('iam.idCharsetInvalid', { field: t('iam.username') }));
+        return;
+      }
+    }
+    if (isEdit && user && status === 'disabled' && user.status !== 'disabled') {
+      try {
+        const refs = await InstanceBindingApi.userReferences(user.user_id);
+        if ((refs.total ?? 0) > 0) {
+          toast('warn', t('iam.userReferencedNoDisable', { count: refs.total }));
+          return;
+        }
+      } catch (e) {
+        toast('danger', e instanceof ApiError ? e.detail : String(e));
         return;
       }
     }

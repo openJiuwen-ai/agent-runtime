@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
 from typing import Any
 from urllib.parse import SplitResult, urlsplit
@@ -13,7 +12,6 @@ from urllib.parse import SplitResult, urlsplit
 from manager_server.infrastructure.config import settings
 
 _SSL_VERIFY_OFF = {"", "0", "false", "no", "off"}
-_DEFAULT_GET_MAX_BYTES = 2 * 1024 * 1024
 
 
 class ObsError(Exception):
@@ -26,14 +24,6 @@ class ObsNotConfiguredError(ObsError):
 
 class ObsEndpointInvalidError(ObsError):
     """OBS_URL 非法。"""
-
-
-class ObsUnavailableError(ObsError):
-    """对象存储不可达或返回非业务错误。"""
-
-
-class ObsObjectError(ObsError):
-    """对象级失败（权限、超限等；不含 NotFound）。"""
 
 
 def _obs_http_client() -> Any:
@@ -108,46 +98,3 @@ def get_client() -> tuple[Any, str]:
     if virtual_host:
         client.enable_virtual_style_endpoint()
     return client, bucket
-
-
-def fetch_object_bytes_sync(
-    object_key: str, *, max_bytes: int = _DEFAULT_GET_MAX_BYTES
-) -> bytes:
-    """直读对象字节；对象不存在抛 ``FileNotFoundError``。"""
-    from minio.error import S3Error
-
-    key = str(object_key or "").strip().lstrip("/")
-    if not key:
-        raise ValueError("object_key is empty")
-    client, bucket = get_client()
-    try:
-        response = client.get_object(bucket, key)
-        try:
-            data = response.read(max_bytes + 1)
-        finally:
-            response.close()
-            response.release_conn()
-    except FileNotFoundError:
-        raise
-    except S3Error as exc:
-        if exc.code in {"NoSuchKey", "NoSuchObject", "NoSuchBucket"}:
-            raise FileNotFoundError(f"object not found: {key}") from exc
-        raise ObsObjectError(
-            f"object storage returned {exc.code or 'an error'}"
-        ) from exc
-    except ObsError:
-        raise
-    except Exception as exc:  # noqa: BLE001
-        raise ObsUnavailableError("object storage is unreachable") from exc
-
-    if len(data) > max_bytes:
-        raise ObsObjectError("object is larger than the allowed limit")
-    return data
-
-
-async def fetch_object_bytes(
-    object_key: str, *, max_bytes: int = _DEFAULT_GET_MAX_BYTES
-) -> bytes:
-    return await asyncio.to_thread(
-        fetch_object_bytes_sync, object_key, max_bytes=max_bytes
-    )

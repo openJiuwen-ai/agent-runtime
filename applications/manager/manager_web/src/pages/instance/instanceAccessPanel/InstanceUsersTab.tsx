@@ -99,16 +99,22 @@ export function InstanceUsersTab({ instanceId }: Props) {
     [bindingData?.user_ids, userGrantById],
   );
 
+  /** 以准入记录为准；目录中已删除的用户仍展示，避免库里有绑定但列表空白。 */
   const boundUsers = useMemo((): BoundUserRow[] => {
-    return allUsers
-      .filter((u) => boundUserIds.has(u.user_id))
-      .map((u) => {
-        const grant = userGrantById.get(u.user_id);
-        if (!grant) return null;
-        return { ...u, grant };
-      })
-      .filter((x): x is BoundUserRow => x != null);
-  }, [allUsers, boundUserIds, userGrantById]);
+    const directory = new Map(allUsers.map((u) => [u.user_id, u]));
+    return (bindingData?.items ?? []).map((grant) => {
+      const user = directory.get(grant.subject_id);
+      if (user) return { ...user, grant };
+      return {
+        user_id: grant.subject_id,
+        display_name: t(`${IA}.missingUser`),
+        status: 'missing',
+        created_at: null,
+        updated_at: null,
+        grant,
+      };
+    });
+  }, [allUsers, bindingData?.items, t]);
 
   const { searchInput, setSearchInput, searchQuery } = useListSearch();
   const [page, setPage] = useState(1);
@@ -489,7 +495,9 @@ function UserRow({
         <input type="checkbox" checked={checked} onChange={onToggle} />
       </td>
       <td className="align-top">
-        <div className="text-text-strong font-medium break-words">{user.display_name}</div>
+        <div className={`font-medium break-words ${user.status === 'missing' ? 'text-danger' : 'text-text-strong'}`}>
+          {user.display_name}
+        </div>
         <div className="text-[11px] text-muted mono break-all" title={user.user_id}>
           {user.user_id}
         </div>

@@ -1,69 +1,73 @@
-# Headless Service：给 StatefulSet 提供稳定 DNS 域名
+# MariaDB 部署清单（OpenShift）
+# 说明：
+#   - 存储类经 DATA_STORAGE_CLASS 变量配置（.env.custom，留空走集群默认）动态供给（WaitForFirstConsumer）
+#   - 适配 restricted-v2 SCC：随机 uid 运行，fsGroup 由 SCC 自动注入
+#   - 镜像经 MARIADB_IMAGE 变量配置（.env.custom）
+# 访问：oc port-forward sts/mariadb 3306:3306
 apiVersion: v1
 kind: Service
 metadata:
-  name: <<MARIADB_NAME>>-headless
+  name: mariadb-headless
+  namespace: "<<NAMESPACE>>"
 spec:
   ports:
     - port: 3306
       targetPort: 3306
-  clusterIP: None  # 关键：无头服务，StatefulSet 必须依赖
+  clusterIP: None
   selector:
-    app: <<MARIADB_NAME>>
-
+    app: mariadb
 ---
-# NodePort Service：供外部工具连接 MariaDB
 apiVersion: v1
-kind: Service
+kind: PersistentVolumeClaim
 metadata:
-  name: <<MARIADB_NAME>>-nodeport
+  name: mariadb-pvc
+  namespace: "<<NAMESPACE>>"
 spec:
-  type: NodePort
-  ports:
-    - port: 3306       # 集群内部端口
-      targetPort: 3306 # 容器端口
-      nodePort: <<MARIADB_NODE_PORT>>  # 外部访问端口（30000-32767）
-  selector:
-    app: <<MARIADB_NAME>>
-
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 4Gi
+  storageClassName: <<DATA_STORAGE_CLASS>>
 ---
-# StatefulSet：MariaDB 有状态应用（稳定网络 + 稳定存储）
-# 与 MySQL 协议兼容：应用侧 DB_TYPE 由 check_if_db_up 归一化为 mysql
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: <<MARIADB_NAME>>
+  name: mariadb
+  namespace: "<<NAMESPACE>>"
 spec:
-  serviceName: <<MARIADB_NAME>>-headless  # 绑定 Headless Service
+  serviceName: mariadb-headless
   replicas: 1
   selector:
     matchLabels:
-      app: <<MARIADB_NAME>>
+      app: mariadb
   template:
     metadata:
       labels:
-        app: <<MARIADB_NAME>>
+        app: mariadb
     spec:
       containers:
-        - name: <<MARIADB_NAME>>
+        - name: mariadb
           image: <<MARIADB_IMAGE>>
           imagePullPolicy: IfNotPresent
           args:
-            - --innodb_use_native_aio=0
-            - --innodb_flush_method=O_DIRECT_NO_FSYNC
-            - --max-connections=<<MARIADB_MAX_CONNECTION>>
+            - "--innodb_use_native_aio=0"
+            - "--innodb_flush_method=O_DIRECT_NO_FSYNC"
+            - "--max-connections=400"
+            - "--sql-mode=PIPES_AS_CONCAT,ANSI_QUOTES,IGNORE_SPACE,ORACLE,NO_KEY_OPTIONS,NO_TABLE_OPTIONS,NO_FIELD_OPTIONS,STRICT_TRANS_TABLES,NO_AUTO_CREATE_USER,SIMULTANEOUS_ASSIGNMENT"
+          envFrom:
+            - secretRef:
+                name: jiuwenswarm-secret-configmap
           env:
-            - name: MARIADB_ROOT_PASSWORD
-              value: "<<MARIADB_ROOT_PASSWORD>>"  # 生产环境请务必修改！
             - name: TZ
-              value: "<<TIMEZONE>>"
+              value: "Asia/Shanghai"
             - name: MARIADB_ROOT_HOST
-              value: "%"              # 允许 root 从任意地址登录（外部工具可用）
+              value: "%"
           ports:
             - containerPort: 3306
-              name: <<MARIADB_NAME>>
+              name: mariadb
           volumeMounts:
-            - name: <<MARIADB_NAME>>-data
+            - name: mariadb-data
               mountPath: /var/lib/mysql
           livenessProbe:
             tcpSocket:
@@ -78,49 +82,6 @@ spec:
             periodSeconds: 5
             timeoutSeconds: 2
       volumes:
-        - name: <<MARIADB_NAME>>-data
+        - name: mariadb-data
           persistentVolumeClaim:
-            claimName: <<MARIADB_NAME>>-pvc
-
----
-# PV 持久化存储
-apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: <<MARIADB_NAME>>-pv
-  labels:
-    app: <<MARIADB_NAME>>
-spec:
-  capacity:
-    storage: <<MARIADB_STORAGE_SIZE>>
-  accessModes:
-    - ReadWriteOnce                       # RWX: 多个 Pod 可同时读写
-  persistentVolumeReclaimPolicy: Retain   # 删除 PVC 时保留数据
-  storageClassName: ""                    # 不使用 StorageClass
-  nfs:
-    server: <<NFS_SERVER_ADDR>>                    # NFS 服务器地址
-    path: <<NFS_SHARE_PATH>>/<<MARIADB_NAME>>      # NFS 共享路径
-    readOnly: false
-  mountOptions:
-    - nfsvers=4
-    - soft        # 改成 soft！防止节点卡死
-    - timeo=600   # 超时时间：60秒
-    - retrans=2   # 重试2次
-    - noatime
-
----
-# PVC 持久化存储（自动绑定 PV）
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: <<MARIADB_NAME>>-pvc
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: <<MARIADB_STORAGE_SIZE>>
-  storageClassName: ""       # 不使用 StorageClass
-  selector:
-    matchLabels:
-      app: <<MARIADB_NAME>>
+            claimName: mariadb-pvc

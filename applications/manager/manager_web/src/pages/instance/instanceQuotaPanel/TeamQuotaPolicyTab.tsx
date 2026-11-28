@@ -14,6 +14,7 @@ import { LimitedTextInput } from '../../../components/LimitedTextInput';
 import { HintTooltip } from '../../../components/HintTooltip';
 import { toast } from '../../../stores/uiStore';
 import { formatTime } from '../../../utils/format';
+import { INT32_MAX, isNonNegInt32 } from '../../../utils/intBounds';
 import { matchExprToEditorString } from '../../../utils/matchExpr';
 
 const FIELD_MAX_LENGTH = {
@@ -129,7 +130,7 @@ export function TeamQuotaPolicyTab({ instanceId, onChange }: { instanceId: strin
       }));
       return;
     }
-    if (!Number.isInteger(form.priority)) {
+    if (!isNonNegInt32(form.priority)) {
       toast('warn', t('instanceDetail.teamQuota.invalidPriority'));
       return;
     }
@@ -241,10 +242,10 @@ export function TeamQuotaPolicyTab({ instanceId, onChange }: { instanceId: strin
                   ) : (
                     rows.map((row) => (
                       <tr key={row.policy_id}>
-                        <td>
-                          <div className="font-medium">{row.policy_name}</div>
+                        <td className="max-w-[14rem] align-top">
+                          <div className="font-medium break-words">{row.policy_name}</div>
                           {row.policy_desc ? (
-                            <div className="text-xs text-muted">{row.policy_desc}</div>
+                            <div className="text-xs text-muted break-words">{row.policy_desc}</div>
                           ) : null}
                         </td>
                         <td>
@@ -350,9 +351,16 @@ export function TeamQuotaPolicyTab({ instanceId, onChange }: { instanceId: strin
                 className="input w-full"
                 type="number"
                 step={1}
+                min={0}
+                max={INT32_MAX}
                 value={Number.isInteger(form.priority) ? form.priority : ''}
                 onChange={(e) => update('priority', e.target.value === '' ? Number.NaN : Number(e.target.value))}
               />
+              {!Number.isNaN(form.priority) && !isNonNegInt32(form.priority) && (
+                <div className="text-[11px] text-danger mt-1" role="alert">
+                  {t('instanceDetail.teamQuota.invalidPriority')}
+                </div>
+              )}
             </div>
           </div>
           <div>

@@ -1,12 +1,12 @@
 import {
   A2AAccessPolicyTemplateApi, AgentTemplateApi, EmbeddingTemplateApi, ExtensionTemplateApi, ExpertPackageTemplateApi,
   InstanceAgentResourceApi, InstanceApi, McpTemplateApi, ModelTemplateApi,
-  PermissionsTemplateApi, SkillPrebuiltTemplateApi, type AgentTemplate,
+  ExecutionGuardTemplateApi, PermissionsTemplateApi, SkillPrebuiltTemplateApi, type AgentTemplate,
 } from './api';
 import { collectPages } from '../utils/overview';
 import { parseRefChain } from '../utils/templateRef';
 
-const catalogs: Record<string, { get: (id: string) => Promise<{ template_name: string; enabled: boolean }>; path: string }> = {
+const catalogs: Record<string, { get: (id: string) => Promise<{ template_name: string; enabled: boolean }>; path?: string }> = {
   ...Object.fromEntries(['default_model', 'video_model', 'audio_model', 'vision_model', 'image_gen_model'].map(slot => [slot, { get: id => ModelTemplateApi.get(id), path: '/model-templates' }])),
   embedding_model: { get: id => EmbeddingTemplateApi.get(id), path: '/embedding-templates' },
   skill_prebuilt: { get: id => SkillPrebuiltTemplateApi.get(id), path: '/skill-prebuilt-templates' },
@@ -14,7 +14,9 @@ const catalogs: Record<string, { get: (id: string) => Promise<{ template_name: s
   extension_config: { get: id => ExtensionTemplateApi.get(id), path: '/extension-config-templates' },
   mcp: { get: id => McpTemplateApi.get(id), path: '/mcp-templates' },
   permissions: { get: id => PermissionsTemplateApi.get(id), path: '/safety-guardrails' },
-  a2a_access_policy: { get: async id => { const policy = await A2AAccessPolicyTemplateApi.get(id); return { template_name: policy.policy_name, enabled: policy.enabled }; }, path: '/a2a-management?tab=policies' },
+  execution_guard: { get: id => ExecutionGuardTemplateApi.get(id), path: '/execution-guard-templates' },
+  // A2A 管理页暂隐藏：仍解析策略名称，但不提供目录跳转
+  a2a_access_policy: { get: async id => { const policy = await A2AAccessPolicyTemplateApi.get(id); return { template_name: policy.policy_name, enabled: policy.enabled }; } },
 };
 
 export async function loadAgentReferences(agent: AgentTemplate) {

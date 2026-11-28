@@ -231,15 +231,94 @@ class _ClusterScanShim:
             cursors = {n: c for n, c in cursors.items() if c != 0}
 
 
-async def test_known_scope_ids_cluster_dict_cursor_pagination():
-    """cluster dict 游标分页续扫（issue #4581）：多轮扫描不再把 dict 当游标回传。"""
+async def test_scan_scope_ids_cluster_dict_cursor_pagination():
+    """cluster dict 游标分页续扫（issue #4581）：多轮扫描不再把 dict 当游标回传。
+
+    2026-11 起全库 SCAN 只剩回填/诊断路径（``scan_scope_ids``），常态枚举走
+    索引集合——本回归锚随之移到 scan 路径上（锚点仍然必要：回填仍要在
+    cluster 上跨节点续扫）。
+    """
     k = "{resource_manager}:resource:scope:%s:config"
     shim = _ClusterScanShim({
         "nodeA": [[k % "s1", k % "s2"],   # 首轮 2 键,游标未归零
                   [k % "s3"]],            # 次轮扫尽
         "nodeB": [[k % "s4"]],            # 单轮扫尽
     })
-    assert await ResourceState(shim).known_scope_ids() == ["s1", "s2", "s3", "s4"]
+    assert await ResourceState(shim).scan_scope_ids() == ["s1", "s2", "s3", "s4"]
+
+
+async def test_known_scope_ids_reads_index_without_scanning(rm_state):
+    """常态枚举只读索引集合：save_scope_config 自动登记，且不触碰 SCAN。
+
+    现网事故锚（2026-11）：公用 Redis DBSIZE=113 万时 `SCAN MATCH` 单次 390s，
+    1s 一拍的 autoscale/reclaim 因此每拍必超时。本用例把「枚举不得扫库」
+    钉死——scan_iter 被调用即失败。
+    """
+    await rm_state.save_scope_config("s-a", {"min_idle_pods": 1})
+    await rm_state.save_scope_config("s-b", {"min_idle_pods": 0})
+
+    async def _boom(*a, **kw):
+        raise AssertionError("known_scope_ids must not SCAN the keyspace")
+        yield  # pragma: no cover - 使其成为 async generator
+
+    original = type(rm_state.redis).scan_iter
+    try:
+        type(rm_state.redis).scan_iter = _boom
+        assert await rm_state.known_scope_ids() == ["s-a", "s-b"]
+    finally:
+        type(rm_state.redis).scan_iter = original
+
+    # 代次 bump 也登记（refresh 先 bump 后 push，HINCRBY 会建 config 哈希）
+    await rm_state.bump_generation("s-c")
+    assert await rm_state.known_scope_ids() == ["s-a", "s-b", "s-c"]
+
+
+async def test_reindex_scopes_seeds_index_once_then_skips(rm_state):
+    """存量迁移：全库 SCAN 回填一次（含声明表），完成标记后不再重扫。"""
+    # 绕过 save_scope_config 直写，模拟索引建立之前的存量键
+    await rm_state.redis.hset(rm_state.k.scope_config("legacy-1"), "max_pods", "2")
+    await rm_state.redis.hset(rm_state.k.scope_config("legacy-2"), "max_pods", "2")
+    await rm_state.redis.hset(rm_state.k.scope_declared("legacy-2"), "p0", "{}")
+    assert await rm_state.known_scope_ids() == []
+
+    assert await rm_state.reindex_scopes() == 2
+    assert await rm_state.known_scope_ids() == ["legacy-1", "legacy-2"]
+    assert await rm_state.declared_scope_ids() == ["legacy-2"]
+
+    # 完成标记 → 第二次直接跳过（-1），一个 Redis 只付一次全库扫描
+    assert await rm_state.reindex_scopes() == -1
+    # force 无条件重扫（运维修漂移）
+    await rm_state.redis.srem(rm_state.k.scopes_index(), "legacy-1")
+    assert await rm_state.reindex_scopes(force=True) == 2
+    assert await rm_state.known_scope_ids() == ["legacy-1", "legacy-2"]
+
+
+async def test_forget_scope_drops_config_and_index(rm_state):
+    """空壳回收：forget 后既不在索引里也没有 config（config_sync 不再重推）。"""
+    await rm_state.save_scope_config("s-dead", {"min_idle_pods": 0, "retired": 1})
+    await rm_state.set_drain_until("s-dead", NOW + 60, 120)
+    assert await rm_state.known_scope_ids() == ["s-dead"]
+
+    await rm_state.forget_scope("s-dead")
+    assert await rm_state.known_scope_ids() == []
+    assert await rm_state.load_scope_config("s-dead") == {}
+    assert await rm_state.drain_until("s-dead") is None
+
+
+async def test_declared_index_tracks_add_remove_drop(rm_state):
+    """声明索引随 add/remove/drop 收敛（adopt 遍历源，不扫库）。"""
+    await rm_state.add_declared("s-ext", {"p0": "{}", "p1": "{}"})
+    assert await rm_state.declared_scope_ids() == ["s-ext"]
+    # 删一半仍在
+    assert await rm_state.remove_declared("s-ext", ["p0"]) == 1
+    assert await rm_state.declared_scope_ids() == ["s-ext"]
+    # 删空即出索引
+    assert await rm_state.remove_declared("s-ext", ["p1"]) == 1
+    assert await rm_state.declared_scope_ids() == []
+    # drop 幂等出索引
+    await rm_state.add_declared("s-ext", {"p0": "{}"})
+    assert await rm_state.drop_declared("s-ext") == 1
+    assert await rm_state.declared_scope_ids() == []
 
 
 # ---------------------------------------------------------------- follower 等待室

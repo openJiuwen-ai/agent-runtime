@@ -1,0 +1,105 @@
+/* 连通地址：Gateway / Runtime 双卡片，支持卡片内联编辑 */
+
+.connectivity-card__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+@media (max-width: 720px) {
+  .connectivity-card__grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.connectivity-endpoint {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  transition: border-color var(--duration-fast) ease, background var(--duration-fast) ease;
+}
+
+.connectivity-endpoint:hover {
+  border-color: var(--border-strong);
+  background: var(--panel-strong);
+}
+
+.connectivity-endpoint.is-editing {
+  border-color: var(--border-accent);
+  background: var(--panel-strong);
+}
+
+.connectivity-endpoint__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.connectivity-endpoint__label {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.connectivity-endpoint__actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.connectivity-endpoint__action {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  font-family: var(--font-body);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+}
+
+.connectivity-endpoint__action:hover:not(:disabled) {
+  color: var(--accent);
+  background: var(--accent-subtle);
+}
+
+.connectivity-endpoint__action:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.connectivity-endpoint__action.is-primary {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.connectivity-endpoint__value {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
+  color: var(--text-strong);
+  word-break: break-all;
+  min-height: 1.45em;
+}
+
+.connectivity-endpoint__value.is-empty {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.connectivity-endpoint__input {
+  width: 100%;
+  font-family: var(--mono);
+  font-size: 12px;
+}

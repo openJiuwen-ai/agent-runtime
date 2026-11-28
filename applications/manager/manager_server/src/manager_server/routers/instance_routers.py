@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 
 from manager_server.core.instance import InstanceService
+from manager_server.core.instance.component_status import build_component_status
 from manager_server.core.instance.link_binding_service import (
     InstanceLinkBindingService,
     LinkBindingConflict,
@@ -207,6 +208,18 @@ async def unbind_instance_link(
             "rotation_required": rotation_required,
         },
     )
+
+
+@instance_router.get("/{jiuwenclaw_id}/component-status", response_model=ResponseModel)
+async def get_instance_component_status(
+    jiuwenclaw_id: str,
+    handler: Annotated[DBHandler, Depends(get_db_handler)],
+):
+    """组件连接状态 + 命名空间内 Gateway/Runtime/AgentServer Pod 与 CPU/内存用量。"""
+    data = await build_component_status(handler, jiuwenclaw_id=jiuwenclaw_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="instance not found")
+    return ResponseModel(code=200, message="success", data=data)
 
 
 @instance_router.get("/{jiuwenclaw_id}/pods", response_model=ResponseModel)

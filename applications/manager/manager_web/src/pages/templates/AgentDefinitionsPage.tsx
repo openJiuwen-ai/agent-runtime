@@ -12,6 +12,7 @@ import { useGuideAutoOpen } from '../../hooks/useGuideAutoOpen';
 import { useListSearch } from '../../hooks/useListSearch';
 import {
   AgentDefinitionApi,
+  AgentClientRegistrationApi,
   AgentTemplateApi,
   ApiError,
   ServiceConfigTemplateApi,
@@ -20,6 +21,7 @@ import {
 import { bumpGuideRevision } from '../../stores/guideStore';
 import { toast } from '../../stores/uiStore';
 import { truncate } from '../../utils/format';
+import { AgentKeycloakModal } from './AgentKeycloakModal';
 
 const NAME_MAX_LENGTH = 128;
 const TEMPLATE_PAGE_SIZE = 200;
@@ -32,7 +34,7 @@ function apiErrorCode(error: unknown): string | undefined {
 }
 
 /**
- * Agent 模板列表：管理员手动新增「Agent 配置模板 + 运行时模板」组合，
+ * Agent ID 列表：管理员手动新增「Agent模板 + 运行时模板」组合，
  * 维护每个组合（agent_id）对应的 Agent 名称。
  */
 export function AgentDefinitionsPage() {
@@ -41,6 +43,8 @@ export function AgentDefinitionsPage() {
   const [pageSize, setPageSize] = useState(20);
   const { searchInput, setSearchInput, searchQuery } = useListSearch();
   const [editing, setEditing] = useState<AgentDefinition | null>(null);
+  const [keycloakRow, setKeycloakRow] = useState<AgentDefinition | null>(null);
+  const { data: registrationConfig } = useAsync(AgentClientRegistrationApi.capabilities);
   const [creating, setCreating] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<AgentDefinition | null>(null);
 
@@ -70,11 +74,15 @@ export function AgentDefinitionsPage() {
 
   return (
     <>
-      <div className="flex min-w-0 flex-col gap-4">
+      <div className="manager-page flex min-w-0 flex-col gap-4">
         <div className="page-header w-full min-w-0 flex-wrap items-start gap-y-3">
           <div className="min-w-[7.5rem] max-w-[20rem] shrink-0 sm:max-w-[32rem]">
-            <div className="page-title">{t('agentDefinition.title')}</div>
-            <div className="page-subtitle">{t('agentDefinition.subtitle')}</div>
+            <div className="page-title truncate" title={t('agentDefinition.title')}>
+              {t('agentDefinition.title')}
+            </div>
+            <div className="page-subtitle truncate" title={t('agentDefinition.subtitle')}>
+              {t('agentDefinition.subtitle')}
+            </div>
           </div>
           <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
             <ListSearchInput
@@ -83,111 +91,127 @@ export function AgentDefinitionsPage() {
               placeholder={t('agentDefinition.searchPlaceholder')}
               className="basis-full sm:basis-auto"
             />
-            <button className="btn sm primary" onClick={() => setCreating(true)}>
-              + {t('agentDefinition.new')}
-            </button>
             <button className="btn sm" onClick={() => void reload()}>
               {t('common.refresh')}
             </button>
+            <button className="btn primary sm" onClick={() => setCreating(true)}>
+              + {t('agentDefinition.new')}
+            </button>
           </div>
         </div>
-        <div className="card !p-0">
-          {loading ? (
-            <div className="p-4 text-sm text-muted">{t('common.loading')}</div>
-          ) : error ? (
-            <div className="p-4 text-sm text-danger">
-              {t('errors.loadFailed', { detail: error })}
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="table w-max min-w-full">
-                <thead>
-                  <tr>
-                    <th className="cell-keep-case">{t('agentDefinition.column.name')}</th>
-                    <th className="cell-keep-case">{t('agentDefinition.column.id')}</th>
-                    <th>{t('agentDefinition.column.agentConfig')}</th>
-                    <th>{t('agentDefinition.column.runtime')}</th>
-                    <th>{t('common.actions')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {items.length === 0 ? (
+
+        <div className="flex w-full min-w-0 shrink-0 flex-col gap-4">
+          <div className="card !p-0">
+            {loading ? (
+              <div className="p-4 text-sm text-muted">{t('common.loading')}</div>
+            ) : error ? (
+              <div className="p-4 text-sm text-danger">
+                {t('errors.loadFailed', { detail: error })}
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className={registrationConfig?.enabled ? 'table w-full min-w-[56rem]' : 'table w-max min-w-full'}>
+                  <thead>
                     <tr>
-                      <td colSpan={5}>
-                        <Empty text={t('agentDefinition.empty')} />
-                      </td>
+                      <th className="cell-keep-case">{t('agentDefinition.column.name')}</th>
+                      <th className="cell-keep-case">{t('agentDefinition.column.id')}</th>
+                      <th>{t('agentDefinition.column.agentConfig')}</th>
+                      <th>{t('agentDefinition.column.runtime')}</th>
+                      <th className="whitespace-nowrap min-w-[9.5rem]">{t('common.actions')}</th>
                     </tr>
-                  ) : items.map((row) => (
-                    <tr key={row.agent_id}>
-                      <td className="align-top">
-                        <div className="font-medium text-text-strong">{row.agent_name}</div>
-                      </td>
-                      <td className="align-top">
-                        <div className="flex items-center gap-2">
-                          <span className="mono max-w-[18rem] break-all text-xs" title={row.agent_id}>
-                            {row.agent_id}
-                          </span>
-                          <button
-                            type="button"
-                            className="btn ghost sm shrink-0"
-                            title={t('agentDefinition.copyId')}
-                            onClick={() => void copyAgentId(row.agent_id)}
-                          >
-                            {t('common.copy')}
-                          </button>
-                        </div>
-                      </td>
-                      <td className="align-top">
-                        <div className="text-sm">
-                          {row.agent_config_template_name || t('common.none')}
-                        </div>
-                        <div className="mono text-[11px] text-muted" title={row.agent_config_template_id}>
-                          {truncate(row.agent_config_template_id, 36)}
-                        </div>
-                      </td>
-                      <td className="align-top">
-                        <div className="text-sm">
-                          {row.runtime_template_name || t('common.none')}
-                        </div>
-                        <div className="mono text-[11px] text-muted" title={row.runtime_template_id}>
-                          {truncate(row.runtime_template_id, 36)}
-                        </div>
-                      </td>
-                      <td className="whitespace-nowrap align-top">
-                        <div className="flex items-center gap-2">
-                          <button
-                            className="btn sm ghost"
-                            onClick={() => setEditing(row)}
-                          >
-                            {t('agentDefinition.edit')}
-                          </button>
-                          <button
-                            className="btn sm danger"
-                            onClick={() => setDeleteTarget(row)}
-                          >
-                            {t('common.delete')}
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+                  </thead>
+                  <tbody>
+                    {items.length === 0 ? (
+                      <tr>
+                        <td colSpan={5}>
+                          <Empty text={t('agentDefinition.empty')} />
+                        </td>
+                      </tr>
+                    ) : items.map((row) => (
+                      <tr key={row.agent_id}>
+                        <td className="align-top">
+                          <div className="text-text-strong font-medium break-words">{row.agent_name}</div>
+                        </td>
+                        <td className="align-top">
+                          <div className="flex items-center gap-2">
+                            <span className="mono max-w-[18rem] break-all text-xs text-muted" title={row.agent_id}>
+                              {row.agent_id}
+                            </span>
+                            <button
+                              type="button"
+                              className="btn ghost sm shrink-0"
+                              title={t('agentDefinition.copyId')}
+                              onClick={() => void copyAgentId(row.agent_id)}
+                            >
+                              {t('common.copy')}
+                            </button>
+                          </div>
+                        </td>
+                        <td className="align-top">
+                          <div className="text-sm text-text-strong font-medium break-words">
+                            {row.agent_config_template_name || t('common.none')}
+                          </div>
+                          <div className="mono text-[11px] text-muted break-all" title={row.agent_config_template_id}>
+                            {truncate(row.agent_config_template_id, 36)}
+                          </div>
+                        </td>
+                        <td className="align-top">
+                          <div className="text-sm text-text-strong font-medium break-words">
+                            {row.runtime_template_name || t('common.none')}
+                          </div>
+                          <div className="mono text-[11px] text-muted break-all" title={row.runtime_template_id}>
+                            {truncate(row.runtime_template_id, 36)}
+                          </div>
+                        </td>
+                        <td className="whitespace-nowrap min-w-[9.5rem] align-top">
+                          <div className="flex items-center gap-1">
+                            {registrationConfig?.enabled && (
+                              <button
+                                type="button"
+                                className={row.keycloak_client?.status === 'bound'
+                                  ? 'btn sm !border-green-600/30 !bg-green-500/10 !text-green-700 dark:!text-green-400'
+                                  : 'btn sm !border-primary/30 !bg-primary/10 !text-primary'}
+                                onClick={() => setKeycloakRow(row)}
+                              >
+                                {t('agentDefinition.keycloak.button')} ｜ {t(`agentDefinition.keycloak.${row.keycloak_client?.status === 'bound' ? 'bound' : 'unbound'}`)}
+                              </button>
+                            )}
+                            <button
+                              className="btn sm ghost"
+                              onClick={() => setEditing(row)}
+                            >
+                              {t('agentDefinition.edit')}
+                            </button>
+                            <button
+                              className="btn sm danger"
+                              onClick={() => setDeleteTarget(row)}
+                            >
+                              {t('common.delete')}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+          {data ? (
+            <Pagination
+              page={page}
+              pageSize={pageSize}
+              total={data.total ?? items.length}
+              onChange={(nextPage, nextSize) => {
+                setPage(nextPage);
+                setPageSize(nextSize);
+              }}
+            />
+          ) : null}
         </div>
-        {data ? (
-          <Pagination
-            page={page}
-            pageSize={pageSize}
-            total={data.total ?? items.length}
-            onChange={(nextPage, nextSize) => {
-              setPage(nextPage);
-              setPageSize(nextSize);
-            }}
-          />
-        ) : null}
       </div>
+      {keycloakRow && <AgentKeycloakModal key={keycloakRow.agent_id} row={keycloakRow}
+        capabilities={registrationConfig} onClose={() => setKeycloakRow(null)} onChanged={() => void reload()} />}
       <CreateAgentDefinitionModal
         open={creating}
         onClose={() => setCreating(false)}
@@ -208,7 +232,9 @@ export function AgentDefinitionsPage() {
       <ConfirmDialog
         open={!!deleteTarget}
         danger
-        message={t('agentDefinition.deleteConfirm')}
+        message={deleteTarget?.keycloak_client?.status === 'bound'
+          ? t('agentDefinition.keycloak.deleteAgentConfirm', { name: deleteTarget.agent_name })
+          : t('agentDefinition.deleteConfirm')}
         onConfirm={async () => {
           if (!deleteTarget) return;
           try {
@@ -218,8 +244,15 @@ export function AgentDefinitionsPage() {
             void reload();
             bumpGuideRevision();
           } catch (e) {
+            const code = e instanceof ApiError
+              ? (e.raw as { detail?: { code?: string } })?.detail?.code : undefined;
             toast('danger', t('errors.deleteFailed', {
-              detail: e instanceof ApiError ? e.detail : (e as Error).message,
+              detail: code === 'bound_client_cleanup_unavailable'
+                ? t('agentDefinition.keycloak.errors.bound_client_cleanup_unavailable')
+                : deleteTarget.keycloak_client?.status === 'bound' && e instanceof ApiError
+                && [409, 502, 503].includes(e.status)
+                ? t('agentDefinition.keycloak.errors.request_failed')
+                : e instanceof ApiError ? e.detail : (e as Error).message,
             }));
           }
         }}

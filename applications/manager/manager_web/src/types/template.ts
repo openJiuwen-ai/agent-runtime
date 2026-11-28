@@ -6,7 +6,6 @@ export interface ModelTemplate {
   template_name: string;
   description?: string | null;
   model_type: ModelTypeValue;
-  model_tags?: string[] | null;
   api_base: string;
   api_key: string;
   model_id: string;
@@ -14,8 +13,6 @@ export interface ModelTemplate {
   parameters?: Record<string, unknown> | null;
   timeout: number;
   retry_count: number;
-  enable_streaming: boolean;
-  enable_function_calling: boolean;
   verify_ssl: boolean;
   enabled: boolean;
   /** 只读：在 Agent 配置模板各模型槽位引用本模板的 Agent 配置模板数 */
@@ -29,16 +26,12 @@ export interface ModelTemplateCreateBody {
   template_name: string;
   description?: string | null;
   model_type: ModelTypeValue;
-  model_tags?: string[] | null;
   api_base: string;
   api_key: string;
   model_id: string;
   model_provider: string;
   parameters?: Record<string, unknown> | null;
   timeout?: number;
-  retry_count?: number;
-  enable_streaming?: boolean;
-  enable_function_calling?: boolean;
   verify_ssl?: boolean;
   enabled?: boolean;
   data?: Record<string, unknown>;
@@ -51,7 +44,6 @@ export interface EmbeddingTemplate {
   template_id: string;
   template_name: string;
   description?: string | null;
-  embed_tags?: string[] | null;
   api_base: string;
   api_key: string;
   model_id: string;
@@ -69,7 +61,6 @@ export interface EmbeddingTemplate {
 export interface EmbeddingTemplateCreateBody {
   template_name: string;
   description?: string | null;
-  embed_tags?: string[] | null;
   api_base: string;
   api_key: string;
   model_id: string;
@@ -128,12 +119,23 @@ export interface ExpertPackageItem {
   version: string;
 }
 
+/** Swarmflow 企业策略（企业最小接入设计方案 §4.2），存于 expert_package_template.swarmflow JSON 列。 */
+export interface SwarmflowConfig {
+  allowed: boolean;
+  default_enabled: boolean;
+  max_workflows: number;
+  agents_per_run?: number | null;
+  max_agents_total: number;
+  swarmflow_budget?: number | null;
+}
+
 export interface ExpertPackageTemplate {
   id: number;
   template_id: string;
   template_name: string;
   description?: string | null;
   packages: ExpertPackageItem[];
+  swarmflow?: SwarmflowConfig | null;
   enabled: boolean;
   revision: number;
   reference_count: number;
@@ -145,6 +147,7 @@ export interface ExpertPackageTemplateCreateBody {
   template_name: string;
   description?: string | null;
   packages: ExpertPackageItem[];
+  swarmflow?: SwarmflowConfig | null;
   enabled?: boolean;
 }
 
@@ -152,6 +155,7 @@ export type ExpertPackageTemplateUpdateBody = Partial<{
   template_name: string;
   description: string | null;
   packages: ExpertPackageItem[];
+  swarmflow: SwarmflowConfig | null;
   enabled: boolean;
   /** 打开编辑时的 revision；与服务端不一致时返回 409 */
   expected_revision: number;
@@ -253,6 +257,30 @@ export interface PermissionsTemplateCreateBody {
 
 export type PermissionsTemplateUpdateBody = Partial<PermissionsTemplateCreateBody>;
 
+export interface ExecutionGuardTemplate {
+  id: number;
+  template_id: string;
+  template_name: string;
+  description?: string | null;
+  enabled: boolean;
+  /** 只读：在 Agent 配置模板 execution_guard 槽位引用本模板的 Agent 配置模板数 */
+  reference_count: number;
+  body: Record<string, unknown>;
+  data?: Record<string, unknown> | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface ExecutionGuardTemplateCreateBody {
+  template_name: string;
+  description?: string | null;
+  enabled?: boolean;
+  body: Record<string, unknown>;
+  data?: Record<string, unknown>;
+}
+
+export type ExecutionGuardTemplateUpdateBody = Partial<ExecutionGuardTemplateCreateBody>;
+
 export interface ServiceConfigTemplate {
   id: number;
   template_id: string;
@@ -316,7 +344,6 @@ export interface A2AOutboundTemplate {
   template_id: string;
   template_name: string;
   description?: string | null;
-  a2a_tags?: string[] | null;
   source_url: string;
   card_path: string;
   agent_card: Record<string, unknown>;
@@ -357,7 +384,6 @@ export interface A2AOutboundTemplateCreateBody {
   discovery_id: string;
   template_name: string;
   description?: string | null;
-  a2a_tags?: string[];
   credential?: string;
   connect_timeout_seconds?: number;
   sync_wait_seconds?: number;
@@ -367,7 +393,6 @@ export interface A2AOutboundTemplateCreateBody {
 export interface A2AOutboundTemplateUpdateBody {
   template_name?: string;
   description?: string | null;
-  a2a_tags?: string[];
   credential?: string;
   clear_credential?: boolean;
   connect_timeout_seconds?: number;

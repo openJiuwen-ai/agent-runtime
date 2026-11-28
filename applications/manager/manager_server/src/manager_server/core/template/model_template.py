@@ -8,6 +8,7 @@ from openjiuwen_runtime.foundation.db.handler import DBHandler
 
 from manager_server.core.template.push_template_to_gateway import (
     assert_template_deletable,
+    assert_template_not_referenced,
     count_agent_template_reference_counts,
     update_template_on_referencing_gateways,
     delete_template_on_referencing_gateways,
@@ -24,6 +25,8 @@ from manager_server.infrastructure.utils import iso_datetime, new_uuid4, utc_now
 from manager_server.models.template_models import MODEL_TEMPLATE_TABLE_DEF
 
 _MODEL_TEMPLATE_TABLE = MODEL_TEMPLATE_TABLE_DEF.table_name
+# 列仍保留以满足非空约束。请求不再写入；重试次数改由执行护栏模板的 transient_max_retries 持有。
+MODEL_TEMPLATE_STORED_RETRY_COUNT = 3
 _ALLOWED_SORT_FIELDS = frozenset({
     "template_name",
     "description",
@@ -52,16 +55,12 @@ def _matches_search(row: Any, query: str) -> bool:
 
 
 def row_to_out(row: Any, *, reference_count: int = 0) -> ModelTemplateOut:
-    model_tags = row.model_tags
-    if model_tags is not None and not isinstance(model_tags, list):
-        model_tags = list(model_tags) if model_tags else None
     return ModelTemplateOut(
         id=row.id,
         template_id=str(row.template_id),
         template_name=row.template_name,
         description=row.description,
         model_type=row.model_type,
-        model_tags=model_tags,
         api_base=row.api_base,
         api_key=row.api_key,
         model_id=row.model_id,
@@ -69,8 +68,6 @@ def row_to_out(row: Any, *, reference_count: int = 0) -> ModelTemplateOut:
         parameters=row.parameters,
         timeout=row.timeout,
         retry_count=row.retry_count,
-        enable_streaming=row.enable_streaming,
-        enable_function_calling=row.enable_function_calling,
         verify_ssl=row.verify_ssl,
         enabled=row.enabled,
         reference_count=reference_count,
@@ -99,16 +96,13 @@ class ModelTemplateService:
             "template_name": body.template_name,
             "description": body.description,
             "model_type": body.model_type,
-            "model_tags": body.model_tags,
             "api_base": body.api_base,
             "api_key": body.api_key,
             "model_id": body.model_id,
             "model_provider": body.model_provider,
             "parameters": body.parameters,
             "timeout": body.timeout,
-            "retry_count": body.retry_count,
-            "enable_streaming": body.enable_streaming,
-            "enable_function_calling": body.enable_function_calling,
+            "retry_count": MODEL_TEMPLATE_STORED_RETRY_COUNT,
             "verify_ssl": body.verify_ssl,
             "enabled": body.enabled,
             "data": body.data,
@@ -222,6 +216,11 @@ class ModelTemplateService:
         )
         if existing is None:
             return None
+
+        if updates.get("enabled") is False and bool(getattr(existing, "enabled", True)):
+            await assert_template_not_referenced(
+                self._handler, template_id, "model_templates", action="disable"
+            )
 
         await update_template_on_referencing_gateways(
             self._handler,

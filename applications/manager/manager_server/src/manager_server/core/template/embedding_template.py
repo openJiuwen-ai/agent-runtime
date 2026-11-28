@@ -8,6 +8,7 @@ from openjiuwen_runtime.foundation.db.handler import DBHandler
 
 from manager_server.core.template.push_template_to_gateway import (
     assert_template_deletable,
+    assert_template_not_referenced,
     count_agent_template_reference_counts,
     update_template_on_referencing_gateways,
     delete_template_on_referencing_gateways,
@@ -45,21 +46,16 @@ def _matches_search(row: Any, query: str) -> bool:
         str(getattr(row, "model_provider", "") or ""),
         str(getattr(row, "model_id", "") or ""),
         str(getattr(row, "api_base", "") or ""),
-        *(getattr(row, "embed_tags", None) or []),
     ]
     return any(needle in str(field).lower() for field in fields)
 
 
 def row_to_out(row: Any, *, reference_count: int = 0) -> EmbeddingTemplateOut:
-    embed_tags = row.embed_tags
-    if embed_tags is not None and not isinstance(embed_tags, list):
-        embed_tags = list(embed_tags) if embed_tags else None
     return EmbeddingTemplateOut(
         id=row.id,
         template_id=str(row.template_id),
         template_name=row.template_name,
         description=row.description,
-        embed_tags=embed_tags,
         api_base=row.api_base,
         api_key=row.api_key,
         model_id=row.model_id,
@@ -188,6 +184,10 @@ class EmbeddingTemplateService:
         if not updates:
             counts = await self._reference_counts()
             return row_to_out(existing, reference_count=counts.get(str(existing.template_id), 0))
+        if updates.get("enabled") is False and bool(getattr(existing, "enabled", True)):
+            await assert_template_not_referenced(
+                self._handler, template_id, "embedding_templates", action="disable"
+            )
         await update_template_on_referencing_gateways(
             self._handler,
             "embedding_templates",

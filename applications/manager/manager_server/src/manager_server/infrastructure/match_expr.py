@@ -1,8 +1,16 @@
 """``match_expr`` 写入校验与求值（与配置生效策略 / Gateway 约定同构）。
 
-仅允许引用 ``user_id`` / ``group_id`` / ``bot_id``；支持 ``==`` / ``!=`` / ``in`` / ``not in`` 运算符。
+默认仅允许引用 ``user_id`` / ``group_id`` / ``bot_id``；支持 ``==`` / ``!=`` / ``in`` / ``not in`` 运算符。
 空值 / 空数组 / 不含比较符的字符串视为全匹配。
 语法错误在**写入**时拒绝；**求值**失败视为不命中。
+
+域专用集合：
+- ``WORKSPACE_QUOTA_MATCH_NAMES``：workspace quota 策略额外允许 ``agent_id``
+  （issue #124：UI 在 workspace quota 策略里按 Agent 匹配时下发
+  ``agent_id in ('<resource_id>')``）。仅 workspace_quota_policy 的校验/求值使用。
+  其余域（service_resource / team_quota / agent_resource）保持默认边界，
+  避免管理员在那些域误写 ``agent_id`` 后写入通过、运行期 ctx 恒空 → 静默错配。
+- ``AGENT_RESOURCE_MATCH_NAMES``：Agent 资源授权范围仅用户 / 群组（禁止 bot_id）。
 """
 
 from __future__ import annotations
@@ -12,7 +20,9 @@ import json
 from typing import Any, Iterator
 
 ALLOWED_MATCH_NAMES = frozenset({"user_id", "group_id", "bot_id"})
-# Agent 资源授权范围仅用户 / 群组，不允许按 agent（bot_id）匹配。
+# workspace quota 策略专用（issue #124）：多允许 agent_id 维度匹配。
+WORKSPACE_QUOTA_MATCH_NAMES = frozenset({"user_id", "group_id", "bot_id", "agent_id"})
+# Agent 资源授权范围仅用户 / 群组，不允许按 bot_id 匹配。
 AGENT_RESOURCE_MATCH_NAMES = frozenset({"user_id", "group_id"})
 
 _INVALID_PREFIX = "invalid match_expr: "
@@ -122,6 +132,7 @@ def evaluate_match_expr(
     user_id: str = "",
     group_id: str = "",
     bot_id: str = "",
+    agent_id: str = "",
 ) -> bool:
     """对当前请求上下文求值；失败或不命中返回 ``False``。"""
     try:
@@ -132,6 +143,7 @@ def evaluate_match_expr(
             "user_id": str(user_id or ""),
             "group_id": str(group_id or ""),
             "bot_id": str(bot_id or ""),
+            "agent_id": str(agent_id or ""),
         }
         if isinstance(canon, list):
             return any(_eval_expr_string(item, ctx) for item in canon)
@@ -141,21 +153,48 @@ def evaluate_match_expr(
 
 
 def iter_equality_binds(value: Any) -> Iterator[tuple[str, str]]:
-    """抽出 ``user_id == '…'`` / ``group_id == '…'`` 字面量，供授权时自动补绑实例准入。"""
-    canon = canonicalize_match_expr(value)
-    texts: list[str]
-    if isinstance(canon, list):
-        texts = [str(x) for x in canon]
-    elif isinstance(canon, str) and canon:
-        texts = [canon]
-    else:
-        return
-    for text in texts:
+    """抽出 ``user_id ==/'in'`` / ``group_id ==/'in'`` 字面量，供授权时自动补绑实例准入。"""
+    for text in _match_expr_texts(value):
         try:
             tree = ast.parse(text, mode="eval")
         except SyntaxError:
             continue
         yield from _iter_eq_binds(tree.body)
+
+
+def iter_field_literals(
+    value: Any,
+    *,
+    fields: frozenset[str] | None = None,
+) -> Iterator[tuple[str, str]]:
+    """抽出 match_expr 中指定字段的全部字面量（``==`` / ``!=`` / ``in`` / ``not in``）。"""
+    names = fields if fields is not None else ALLOWED_MATCH_NAMES
+    for text in _match_expr_texts(value):
+        try:
+            tree = ast.parse(text, mode="eval")
+        except SyntaxError:
+            continue
+        yield from _iter_field_literals(tree.body, names)
+
+
+def match_expr_mentions_value(value: Any, *, field: str, literal: str) -> bool:
+    """``match_expr`` 是否引用了某字段的指定字面量。"""
+    target = str(literal or "").strip()
+    if not target:
+        return False
+    return any(
+        name == field and lit == target
+        for name, lit in iter_field_literals(value, fields=frozenset({field}))
+    )
+
+
+def _match_expr_texts(value: Any) -> list[str]:
+    canon = canonicalize_match_expr(value)
+    if isinstance(canon, list):
+        return [str(x) for x in canon if str(x).strip()]
+    if isinstance(canon, str) and canon.strip():
+        return [canon]
+    return []
 
 
 def _validate_expr_string(
@@ -274,25 +313,74 @@ def _eval_node(node: ast.AST, ctx: dict[str, str]) -> Any:
 
 
 def _iter_eq_binds(node: ast.AST) -> Iterator[tuple[str, str]]:
+    """仅 ``==`` / ``in`` 正向绑定（自动补绑用）。"""
+    yield from _iter_compare_literals(
+        node,
+        fields=frozenset({"user_id", "group_id"}),
+        include_positive=True,
+        include_negative=False,
+    )
+
+
+def _iter_field_literals(
+    node: ast.AST, fields: frozenset[str]
+) -> Iterator[tuple[str, str]]:
+    """引用检查：正向与反向比较均计入。"""
+    yield from _iter_compare_literals(
+        node,
+        fields=fields,
+        include_positive=True,
+        include_negative=True,
+    )
+
+
+def _iter_compare_literals(
+    node: ast.AST,
+    *,
+    fields: frozenset[str],
+    include_positive: bool,
+    include_negative: bool,
+) -> Iterator[tuple[str, str]]:
     if isinstance(node, ast.BoolOp):
         for child in node.values:
-            yield from _iter_eq_binds(child)
+            yield from _iter_compare_literals(
+                child,
+                fields=fields,
+                include_positive=include_positive,
+                include_negative=include_negative,
+            )
         return
-    if isinstance(node, ast.Compare) and len(node.ops) == 1:
-        op = node.ops[0]
-        left, right = node.left, node.comparators[0]
-        if isinstance(op, ast.Eq):
-            name: str | None = None
-            literal: str | None = None
-            if isinstance(left, ast.Name) and left.id in ("user_id", "group_id") and isinstance(right, ast.Constant):
-                name, literal = left.id, right.value if isinstance(right.value, str) else None
-            elif isinstance(right, ast.Name) and right.id in ("user_id", "group_id") and isinstance(left, ast.Constant):
-                name, literal = right.id, left.value if isinstance(left.value, str) else None
-            if name and literal:
-                yield name, literal
-        elif isinstance(op, ast.In):
-            if isinstance(left, ast.Name) and left.id in ("user_id", "group_id") and isinstance(right, ast.Tuple):
-                for elt in right.elts:
-                    if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
-                        yield left.id, elt.value
+    if not (isinstance(node, ast.Compare) and len(node.ops) == 1):
+        return
+    op = node.ops[0]
+    left, right = node.left, node.comparators[0]
+    if isinstance(op, (ast.Eq, ast.NotEq)):
+        if isinstance(op, ast.Eq) and not include_positive:
+            return
+        if isinstance(op, ast.NotEq) and not include_negative:
+            return
+        name: str | None = None
+        literal: str | None = None
+        if isinstance(left, ast.Name) and left.id in fields and isinstance(right, ast.Constant):
+            name, literal = left.id, right.value if isinstance(right.value, str) else None
+        elif isinstance(right, ast.Name) and right.id in fields and isinstance(left, ast.Constant):
+            name, literal = right.id, left.value if isinstance(left.value, str) else None
+        if name and literal:
+            yield name, literal
+        return
+    if isinstance(op, (ast.In, ast.NotIn)):
+        if isinstance(op, ast.In) and not include_positive:
+            return
+        if isinstance(op, ast.NotIn) and not include_negative:
+            return
+        if not (isinstance(left, ast.Name) and left.id in fields):
+            return
+        # ``('x')`` 在 AST 中是 Constant，不是单元素 Tuple；两种都认
+        if isinstance(right, ast.Constant) and isinstance(right.value, str):
+            yield left.id, right.value
+            return
+        if isinstance(right, (ast.Tuple, ast.List)):
+            for elt in right.elts:
+                if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                    yield left.id, elt.value
         return

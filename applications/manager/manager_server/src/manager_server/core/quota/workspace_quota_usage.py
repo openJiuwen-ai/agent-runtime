@@ -281,11 +281,18 @@ class WorkspaceQuotaUsageService:
         status = _as_str(raw.get("status")).strip().lower()
 
         if limit_bytes is None or not source_policy_id or status not in _VALID_STATUS:
+            # gateway 上报用量时只带 user_id/group_id/bot_id 三元组（issue #124：
+            # upsert_usage_cache 在 gateway 侧按三元组 key 缓存），不带 agent_id。
+            # 此兜底选路不传 agent_id：带 ``agent_id in (...)`` 的策略在此链路上
+            # 不参与匹配（ctx["agent_id"]=="" 时该类表达式返回 False）。effective
+            # API 显式传 agent_id 时同一 workspace 可能解析出不同配额；这是预期
+            # 行为，已在 issue #124 文档化。
             chosen = select_effective_policy(
                 policies,
                 user_id=user_id,
                 group_id=group_id,
                 bot_id=bot_id,
+                agent_id="",
             )
             if chosen is None:
                 limit_bytes = -1

@@ -10,6 +10,7 @@ import type {
   ExtensionConfigTemplate,
   ExtensionConfigTemplateCreateBody,
   ExtensionConfigTemplateUpdateBody,
+  InstanceComponentStatus,
   InstanceDetail,
   InstanceSummary,
   ManagerWsStatus,
@@ -29,6 +30,9 @@ import type {
   PermissionsTemplate,
   PermissionsTemplateCreateBody,
   PermissionsTemplateUpdateBody,
+  ExecutionGuardTemplate,
+  ExecutionGuardTemplateCreateBody,
+  ExecutionGuardTemplateUpdateBody,
   ServiceConfigTemplate,
   ServiceConfigTemplateCreateBody,
   ServiceConfigTemplateUpdateBody,
@@ -103,22 +107,10 @@ let accessToken: string | null = localStorage.getItem(ACCESS_KEY);
 let refreshToken: string | null = localStorage.getItem(REFRESH_KEY);
 let unauthorizedHandler: (() => void) | null = null;
 
-function syncAccessCookie(access: string | null): void {
-  const secure = window.location.protocol === 'https:' ? '; Secure' : '';
-  if (access) {
-    document.cookie = `${ACCESS_KEY}=${encodeURIComponent(access)}; Path=/; SameSite=Strict${secure}`;
-  } else {
-    document.cookie = `${ACCESS_KEY}=; Path=/; Max-Age=0; SameSite=Strict${secure}`;
-  }
-}
-
-syncAccessCookie(accessToken);
-
 export function setTokens(access: string | null, refresh?: string | null): void {
   accessToken = access;
   if (access) localStorage.setItem(ACCESS_KEY, access);
   else localStorage.removeItem(ACCESS_KEY);
-  syncAccessCookie(access);
   if (refresh !== undefined) {
     refreshToken = refresh;
     if (refresh) localStorage.setItem(REFRESH_KEY, refresh);
@@ -162,7 +154,7 @@ export function formatApiErrorDetail(detail: unknown): string {
         return '';
       })
       .filter(Boolean);
-    return messages.join('；') || i18n.t('errors.validationFailed');
+    return messages.join(', ') || i18n.t('errors.validationFailed');
   }
   if (typeof detail === 'object') {
     const obj = detail as Record<string, unknown>;
@@ -206,7 +198,7 @@ function buildQuery(query?: RequestOptions['query']) {
 async function tryRefresh(): Promise<boolean> {
   if (!refreshToken) return false;
   try {
-    const resp = await fetch(`${IDP_BASE}/v1/auth/refresh`, {
+    const resp = await fetch(`${IDP_BASE}/v1/auth/refresh?surface=manager`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ refresh_token: refreshToken }),
@@ -231,7 +223,7 @@ function resolveRequestUrl(base: string, path: string, query: string): string {
 async function requestCore<T>(
   base: string, path: string, opts: RequestOptions, unwrap: boolean, retried = false,
 ): Promise<T> {
-  // User Web and the optional renewal frame share the same platform session.
+  // Read the latest tokens if another management tab renewed the session.
   accessToken = localStorage.getItem(ACCESS_KEY);
   refreshToken = localStorage.getItem(REFRESH_KEY);
   const url = resolveRequestUrl(base, path, buildQuery(opts.query));
@@ -286,6 +278,19 @@ function http<T>(path: string, opts: RequestOptions = {}): Promise<T> {
 /** 认证/目录 API(独立认证服务, /idp)——原始 JSON。 */
 function idpHttp<T>(path: string, opts: RequestOptions = {}): Promise<T> {
   return requestCore<T>(IDP_BASE, path, opts, false);
+}
+
+/**
+ * IAM 写操作成功后回收团队配额（B1）。
+ *
+ * 管理面 nginx 把 ``/idp`` 直接反代到 identity，manager-server 的级联钩子不在链路上，
+ * 因此由前端在删组织/删用户/移出成员/改组织成功后主动调用 reclaim 接口。
+ * 只做后台触发：失败仅记录日志，不阻塞也不影响已经完成的主操作。
+ */
+function reclaimTeams(path: string): void {
+  void http<unknown>(path, { method: 'POST' }).catch((error) => {
+    console.warn(`[reclaim-teams] ${path} failed`, error);
+  });
 }
 
 // ---------- System ----------
@@ -399,7 +404,7 @@ export const AuthApi = {
   /** OAuth2 密码流：表单 POST /token → 存 access+refresh，再取 /me 返回用户。 */
   login: async (username: string, password: string): Promise<AuthUser> => {
     const body = new URLSearchParams({ username, password });
-    const resp = await fetch(`${IDP_BASE}/v1/auth/token`, {
+    const resp = await fetch(`${IDP_BASE}/v1/auth/token?surface=manager`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body,
@@ -420,16 +425,16 @@ export const AuthApi = {
     return withManagerAuthorization(await idpHttp<AuthUser>('/v1/auth/me'));
   },
   federationConnections: () =>
-    idpHttp<{ connections: FederationConnection[] }>('/v1/auth/federation/connections'),
+    idpHttp<{ connections: FederationConnection[] }>('/v1/auth/federation/connections?surface=manager'),
   federationConfiguration: (connectionId: string) =>
-    idpHttp<FederationConfiguration>(`/v1/auth/federation/${encodeURIComponent(connectionId)}/configuration`),
+    idpHttp<FederationConfiguration>(`/v1/auth/federation/${encodeURIComponent(connectionId)}/configuration?surface=manager`),
   refreshFederationHandoff: (connectionId: string, token: string) =>
     idpHttp<NonNullable<TokenResponse['federation']>>(`/v1/auth/federation/${encodeURIComponent(connectionId)}/token-handoff`, {
       method: 'POST', body: {}, headers: { 'X-User-Token': `Bearer ${token}` },
     }),
   confirmFederationToken: async (connectionId: string, token: string): Promise<AuthUser> => {
     // This endpoint authenticates the customer JWT, not a platform JWT.
-    const response = await fetch(`${IDP_BASE}/v1/auth/federation/${encodeURIComponent(connectionId)}/token-login`, {
+    const response = await fetch(`${IDP_BASE}/v1/auth/federation/${encodeURIComponent(connectionId)}/token-login?surface=manager`, {
       method: 'POST', credentials: 'same-origin',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: '{}',
@@ -448,11 +453,11 @@ export const AuthApi = {
   beginFederatedLogin: (connectionId: string): void => {
     const connection = encodeURIComponent(connectionId);
     window.location.assign(
-      `${IDP_BASE}/v1/auth/federation/${connection}/login?return_to=${encodeURIComponent('/auth')}`,
+      `${IDP_BASE}/v1/auth/federation/${connection}/login?surface=manager&return_to=${encodeURIComponent('/auth')}`,
     );
   },
   exchangeFederationCode: async (code: string): Promise<AuthUser> => {
-    const t = await idpHttp<TokenResponse>('/v1/auth/federation/exchange', {
+    const t = await idpHttp<TokenResponse>('/v1/auth/federation/exchange?surface=manager', {
       method: 'POST',
       body: { code },
     });
@@ -471,10 +476,6 @@ export const AuthApi = {
         await idpHttp('/v1/auth/logout', { method: 'POST', body: { refresh_token: refreshToken } });
       }
     } catch { /* 忽略登出请求错误 */ }
-    try {
-      // HttpOnly jiuwenclaw_id 只能由后端清；残留会导致下一用户 /chat 403
-      await UserConsoleApi.clearActiveCluster();
-    } catch { /* 忽略清 Cookie 失败 */ }
     clearTokens();
     try {
       const { endBrowserSession } = await import('../auth/federation/client');
@@ -807,7 +808,9 @@ export interface AgentClientRegistrationCapabilities {
 
 export interface AgentClientBinding {
   client_id: string;
-  status: 'bound';
+  status: 'bound' | 'unbound';
+  operation: 'register' | 'delete' | null;
+  error: { action: 'register' | 'delete'; code: string } | null;
 }
 
 export interface AgentTemplate {
@@ -815,12 +818,10 @@ export interface AgentTemplate {
   template_id: string;
   template_name: string;
   description: string | null;
-  agent_tags: string[] | null;
   template_ref: Record<string, string[]>;
   enabled: boolean;
   data: Record<string, unknown> | null;
   reference_count?: number;
-  keycloak_client?: AgentClientBinding | null;
   created_at: string | null;
   updated_at: string | null;
 }
@@ -873,12 +874,22 @@ export const OrgApi = {
   get: (gid: string) => idpHttp<Org>(`/v1/orgs/${encodeURIComponent(gid)}`),
   update: (gid: string, body: { display_name?: string; status?: string }) =>
     idpHttp<Org>(`/v1/orgs/${encodeURIComponent(gid)}`, { method: 'PATCH', body }),
-  remove: (gid: string) => idpHttp<{ deleted: boolean }>(`/v1/orgs/${encodeURIComponent(gid)}`, { method: 'DELETE' }),
+  remove: async (gid: string) => {
+    const result = await idpHttp<{ deleted: boolean }>(`/v1/orgs/${encodeURIComponent(gid)}`, { method: 'DELETE' });
+    reclaimTeams(`/v1/orgs/${encodeURIComponent(gid)}/reclaim-teams`);
+    return result;
+  },
   listMembers: (gid: string) => idpHttp<{ users: IamUser[] }>(`/v1/orgs/${encodeURIComponent(gid)}/members`),
   addMembers: (gid: string, user_ids: string[]) =>
     idpHttp<{ added: string[] }>(`/v1/orgs/${encodeURIComponent(gid)}/members`, { method: 'POST', body: { user_ids } }),
-  removeMember: (gid: string, userId: string) =>
-    idpHttp<{ removed: boolean }>(`/v1/orgs/${encodeURIComponent(gid)}/members/${encodeURIComponent(userId)}`, { method: 'DELETE' }),
+  removeMember: async (gid: string, userId: string) => {
+    const result = await idpHttp<{ removed: boolean }>(
+      `/v1/orgs/${encodeURIComponent(gid)}/members/${encodeURIComponent(userId)}`,
+      { method: 'DELETE' },
+    );
+    reclaimTeams(`/v1/users/${encodeURIComponent(userId)}/reclaim-teams`);
+    return result;
+  },
 };
 
 export const UserApi = {
@@ -898,9 +909,19 @@ export const UserApi = {
     idpHttp<IamUser>('/v1/users/', { method: 'POST', body }),
   update: (id: string, body: { display_name?: string; status?: string; password?: string }) =>
     idpHttp<IamUser>(`/v1/users/${encodeURIComponent(id)}`, { method: 'PATCH', body }),
-  remove: (id: string) => idpHttp<{ deleted: boolean }>(`/v1/users/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-  setOrgs: (id: string, group_ids: string[]) =>
-    idpHttp<{ group_ids: string[] }>(`/v1/users/${encodeURIComponent(id)}/orgs`, { method: 'PUT', body: { group_ids } }),
+  remove: async (id: string) => {
+    const result = await idpHttp<{ deleted: boolean }>(`/v1/users/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    reclaimTeams(`/v1/users/${encodeURIComponent(id)}/reclaim-teams`);
+    return result;
+  },
+  setOrgs: async (id: string, group_ids: string[]) => {
+    const result = await idpHttp<{ group_ids: string[] }>(
+      `/v1/users/${encodeURIComponent(id)}/orgs`,
+      { method: 'PUT', body: { group_ids } },
+    );
+    reclaimTeams(`/v1/users/${encodeURIComponent(id)}/reclaim-teams`);
+    return result;
+  },
   batchCreate: (
     users: Array<{ username: string; password: string; display_name?: string; orgs?: string[] }>,
   ) =>
@@ -974,9 +995,14 @@ export const AgentClientRegistrationApi = {
   capabilities: () => http<AgentClientRegistrationCapabilities>(
     '/v1/integrations/keycloak/agent-client-registrations/capabilities',
   ),
-  register: (templateId: string, clientId: string) => http<AgentClientBinding>(
-    `/v1/agent-templates/${encodeURIComponent(templateId)}/keycloak-client`,
-    { method: 'POST', body: { client_id: clientId } },
+  get: (agentId: string) => http<AgentClientBinding>(
+    `/v1/agent-definitions/${encodeURIComponent(agentId)}/keycloak-client`,
+  ),
+  register: (agentId: string) => http<AgentClientBinding>(
+    `/v1/agent-definitions/${encodeURIComponent(agentId)}/keycloak-client`, { method: 'POST' },
+  ),
+  remove: (agentId: string) => http<AgentClientBinding>(
+    `/v1/agent-definitions/${encodeURIComponent(agentId)}/keycloak-client`, { method: 'DELETE' },
   ),
 };
 
@@ -993,7 +1019,6 @@ export const AgentTemplateApi = {
   create: (body: {
     template_name: string;
     description?: string | null;
-    agent_tags?: string[] | null;
     template_ref?: Record<string, string[]>;
     enabled?: boolean;
     data?: Record<string, unknown> | null;
@@ -1003,7 +1028,6 @@ export const AgentTemplateApi = {
     body: {
       template_name?: string;
       description?: string | null;
-      agent_tags?: string[] | null;
       template_ref?: Record<string, string[]>;
       enabled?: boolean;
       data?: Record<string, unknown> | null;
@@ -1016,6 +1040,7 @@ export const BotApi = AgentTemplateApi;
 
 /** Agent 模板（agent_definition）：管理员手动创建的 Agent 配置模板与运行时模板组合。 */
 export interface AgentDefinition {
+  keycloak_client: AgentClientBinding;
   agent_id: string;
   agent_name: string;
   agent_config_template_id: string;
@@ -1295,6 +1320,28 @@ export const InstanceBindingApi = {
     http<{ bindings: Record<string, string[]> }>('/v1/org-gateways', {
       query: { group_ids: groupIds.join(',') },
     }),
+  /** 删除/禁用组织前：统计 manager 侧引用（准入 / Agent 授权范围 / 配额策略） */
+  orgReferences: (groupId: string) =>
+    http<{
+      group_id: string;
+      total: number;
+      instance_grants: number;
+      agent_resources: number;
+      service_resources: number;
+      workspace_quota_policies: number;
+      team_quota_policies: number;
+    }>(`/v1/org-references/${encodeURIComponent(groupId)}`),
+  /** 删除/禁用用户前：统计 manager 侧引用（准入 / Agent 授权范围 / 配额策略） */
+  userReferences: (userId: string) =>
+    http<{
+      user_id: string;
+      total: number;
+      instance_grants: number;
+      agent_resources: number;
+      service_resources: number;
+      workspace_quota_policies: number;
+      team_quota_policies: number;
+    }>(`/v1/user-references/${encodeURIComponent(userId)}`),
 };
 
 export interface UserGateway {
@@ -1305,47 +1352,6 @@ export interface UserGateway {
   space_id?: string;
   gateway_endpoint: string | null;
 }
-
-/** 用户控制台：可访问的 Agent 上下文（bot_id + group_id + user_id + jiuwenclaw_id）。 */
-export interface UserAgentContext {
-  bot_id: string;
-  group_id: string;
-  user_id: string;
-  jiuwenclaw_id: string;
-  /** 实例/集群展示名 */
-  jiuwenclaw_name: string;
-  /** 稳定展示标识：agent_ + agent_id（43 位 base62）；无 Agent 配置模板 id 时回退 resource_name */
-  agent_name: string;
-  /** 43 位 base62 可逆编码（运行时模板 + Agent 配置模板）；旧数据可能为空 */
-  agent_id?: string;
-  /** 运行时模板 id；无匹配运行时模板时为空串 */
-  runtime_template_id?: string;
-  /** Agent 配置模板 id（instance_agent_resource.ref_template_id） */
-  agent_template_id?: string;
-  /** Agent 资源展示名（人类可读，用于回退展示） */
-  resource_name?: string;
-  group_name: string;
-}
-
-// 当前登录用户视角：身份来自 JWT；组合由 instance_grant + instance_agent_resource 算出。
-export const UserConsoleApi = {
-  orgs: async () => {
-    const data = await idpHttp<{ orgs: Org[] }>('/v1/auth/me/orgs');
-    return { orgs: excludeNoOrgItems(data.orgs) };
-  },
-  agentContexts: () => http<{ contexts: UserAgentContext[]; empty_reason?: 'no_grant' | 'no_agent_template' | null }>('/v1/user-console/agent-contexts'),
-  /** 设置用户面动态反代 Cookie（jiuwenclaw_id） */
-  setActiveCluster: (jiuwenclaw_id: string) =>
-    http<{ jiuwenclaw_id: string }>('/v1/user-console/active-cluster', {
-      method: 'POST',
-      body: { jiuwenclaw_id },
-    }),
-  /** 清除用户面动态反代 Cookie（登出 / 无上下文进 /chat 前） */
-  clearActiveCluster: () =>
-    http<{ cleared: boolean }>('/v1/user-console/active-cluster', {
-      method: 'DELETE',
-    }),
-};
 
 // ---------- Instances ----------
 
@@ -1362,28 +1368,27 @@ export const InstanceApi = {
     page_size?: number;
     gateway_status?: string;
     runtime_status?: string;
-    user_web_status?: string;
     search?: string;
     sort_by?:
       | 'jiuwenclaw_name'
       | 'gateway_status'
       | 'runtime_status'
-      | 'user_web_status'
       | 'gateway_last_alive'
       | 'runtime_last_alive'
-      | 'user_web_last_alive'
       | 'namespace'
       | 'updated_at';
     sort_order?: 'asc' | 'desc';
   }) =>
     http<InstancePageRaw>('/v1/instances/', { query: params }),
-  /** 立即探活所有实例的 Gateway / Runtime / User Web，刷新 online/offline 状态。 */
+  /** 立即探活所有实例的 Gateway / Runtime，刷新 online/offline 状态。 */
   probeHealth: () =>
     http<{ probed: number; alive: number; dead: number; skipped: number }>(
       '/v1/instances/health-probe',
       { method: 'POST' },
     ),
   get: (id: string) => http<InstanceDetail>(`/v1/instances/${encodeURIComponent(id)}`),
+  componentStatus: (id: string) =>
+    http<InstanceComponentStatus>(`/v1/instances/${encodeURIComponent(id)}/component-status`),
   create: (body: CreateInstanceBody) => http<InstanceSummary>('/v1/instances/', { method: 'POST', body }),
   update: (id: string, body: UpdateInstanceBody) =>
     http<InstanceDetail>(`/v1/instances/${encodeURIComponent(id)}`, { method: 'PATCH', body }),
@@ -1735,6 +1740,31 @@ export const McpTemplateApi = {
     http<{ deleted: boolean; template_id: string }>(
       `/v1/mcp-templates/${encodeURIComponent(id)}`,
       { method: 'DELETE' },
+    ),
+};
+
+export const ExecutionGuardTemplateApi = {
+  list: (params?: {
+    page?: number;
+    page_size?: number;
+    enabled?: boolean;
+    search?: string;
+    sort_by?: 'template_name' | 'description' | 'updated_at';
+    sort_order?: 'asc' | 'desc';
+  }) => http<PageResult<ExecutionGuardTemplate>>('/v1/execution-guard-templates', { query: params }),
+  get: (id: string) =>
+    http<ExecutionGuardTemplate>(`/v1/execution-guard-templates/${encodeURIComponent(id)}`),
+  create: (body: ExecutionGuardTemplateCreateBody) =>
+    http<ExecutionGuardTemplate>('/v1/execution-guard-templates', { method: 'POST', body }),
+  update: (id: string, body: ExecutionGuardTemplateUpdateBody) =>
+    http<ExecutionGuardTemplate>(`/v1/execution-guard-templates/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body,
+    }),
+  remove: (id: string) =>
+    http<{ deleted: boolean; template_id: string }>(
+      `/v1/execution-guard-templates/${encodeURIComponent(id)}`,
+      { method: 'DELETE' }
     ),
 };
 

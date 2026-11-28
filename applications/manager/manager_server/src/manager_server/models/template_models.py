@@ -1,5 +1,6 @@
 """模板表定义：model_template、embedding_template、extension_config_template、
-skill_prebuilt_template、expert_package_template、permissions_template、A2A 模板、
+skill_prebuilt_template、expert_package_template、permissions_template、
+execution_guard_template、A2A 模板、
 service_config_container、service_config_template、agent_template（id 自增主键；对外引用 UUID 业务键）。
 """
 
@@ -33,8 +34,6 @@ MODEL_TEMPLATE_TABLE_DEF = TableDefinition(
         ColumnDefinition("parameters", "json", nullable=True),
         ColumnDefinition("timeout", "integer", nullable=False, default=360),
         ColumnDefinition("retry_count", "integer", nullable=False, default=3),
-        ColumnDefinition("enable_streaming", "boolean", nullable=False, default=True),
-        ColumnDefinition("enable_function_calling", "boolean", nullable=False, default=True),
         ColumnDefinition("verify_ssl", "boolean", nullable=False, default=False),
         ColumnDefinition("enabled", "boolean", nullable=False, default=True),
         ColumnDefinition("data", "json", nullable=True),
@@ -144,6 +143,10 @@ EXPERT_PACKAGE_TEMPLATE_TABLE_DEF = TableDefinition(
         ColumnDefinition("template_name", "string", length=128, nullable=False),
         ColumnDefinition("description", "string", length=512, nullable=True),
         ColumnDefinition("packages", "json", nullable=False),
+        # Swarmflow 企业策略（企业最小接入设计方案 §4.2）：JSON 对象，键为
+        # allowed / default_enabled / max_workflows / agents_per_run / max_agents_total / swarmflow_budget；
+        # 键白名单与取值约束见 schemas/template_schemas.py::SwarmflowConfig。
+        ColumnDefinition("swarmflow", "json", nullable=True),
         ColumnDefinition("enabled", "boolean", nullable=False, default=True),
         ColumnDefinition("revision", "integer", nullable=False, default=0),
         ColumnDefinition("created_at", "datetime", nullable=False),
@@ -233,6 +236,30 @@ A2A_ACCESS_POLICY_TEMPLATE_TABLE_DEF = TableDefinition(
 
 PERMISSIONS_TEMPLATE_TABLE_DEF = TableDefinition(
     table_name="permissions_template",
+    columns=[
+        ColumnDefinition(
+            "id",
+            "integer",
+            primary_key=True,
+            autoincrement=True,
+            nullable=False,
+        ),
+        ColumnDefinition("template_id", "string", length=100, nullable=False),
+        ColumnDefinition("template_name", "string", length=128, nullable=False),
+        ColumnDefinition("description", "string", length=512, nullable=True),
+        ColumnDefinition("enabled", "boolean", nullable=False, default=True),
+        ColumnDefinition("body", "json", nullable=False),
+        ColumnDefinition("data", "json", nullable=True),
+        ColumnDefinition("created_at", "datetime", nullable=False),
+        ColumnDefinition("updated_at", "datetime", nullable=False),
+    ],
+    indexes=[
+        IndexDefinition(["template_id"], unique=True),
+    ],
+)
+
+EXECUTION_GUARD_TEMPLATE_TABLE_DEF = TableDefinition(
+    table_name="execution_guard_template",
     columns=[
         ColumnDefinition(
             "id",

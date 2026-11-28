@@ -55,19 +55,12 @@ def _registration_key(source_url: str, card_path: str) -> str:
     return f"sha256:{digest}"
 
 
-def _normalize_tags(value: Any) -> list[str] | None:
-    if value is None or isinstance(value, list):
-        return value
-    return list(value) if value else None
-
-
 def _row_payload(row: Any) -> dict[str, Any]:
     return {
         "id": row.id,
         "template_id": str(row.template_id),
         "template_name": row.template_name,
         "description": row.description,
-        "a2a_tags": _normalize_tags(row.a2a_tags),
         "source_url": row.source_url,
         "card_path": row.card_path,
         "agent_card": row.agent_card,
@@ -134,7 +127,6 @@ def _matches_search(row: Any, query: str) -> bool:
         row.template_name,
         row.description or "",
         row.source_url,
-        *(_normalize_tags(row.a2a_tags) or []),
     ]
     return any(needle in str(value).lower() for value in fields)
 

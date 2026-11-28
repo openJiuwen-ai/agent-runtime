@@ -14,7 +14,6 @@ import './ContainerTemplateModal.css';
 interface Props {
   open: boolean;
   template: ContainerTemplate | null;
-  /** Seed a new independent template without changing the shared source. */
   copyFrom?: ContainerTemplate;
   onClose: () => void;
   onSaved: (saved: ContainerTemplate) => void;
@@ -23,8 +22,7 @@ interface Props {
 type DefaultChoice = { item: DeploymentContainerPreviewItem; fingerprint: string };
 
 export function ContainerTemplateModal({ open, template, copyFrom, onClose, onSaved }: Props) {
-  const { t, i18n } = useTranslation();
-  const tr = (cn: string, en: string) => i18n.language.startsWith('zh') ? cn : en;
+  const { t } = useTranslation();
   const { markClean, isDirty } = useFormDirty(open);
   const [form, setForm] = useState(() => containerTemplateForm());
   // Keep the full source so fields outside the compact controls survive saving.
@@ -86,7 +84,7 @@ export function ContainerTemplateModal({ open, template, copyFrom, onClose, onSa
       if (requestVersion.current !== version) return;
       setPreview(result);
       if (!result.fingerprint || !result.templates.length) {
-        setDefaultsError(result.message || tr('暂无可读取的默认容器模板，请联系管理员检查部署配置。', 'No default containers are available. Ask an administrator to check the deployment configuration.'));
+        setDefaultsError(result.message || t('containerTemplate.defaultsUnavailable'));
         return;
       }
       setSelection(result.templates[0].source_container_id);
@@ -147,29 +145,29 @@ export function ContainerTemplateModal({ open, template, copyFrom, onClose, onSa
     footer={<><ModalCancelButton /><button className="btn primary" onClick={() => void submit()} disabled={saving || loadingDefaults || !!pendingDefault}>{saving ? t('common.loading') : t('common.save')}</button></>}
   >
     <div className="runtime-template-form container-template-form">
-      {!template && <section className="runtime-template-defaults" aria-label={tr('默认容器模板', 'Default container templates')}>
+      {!template && <section className="runtime-template-defaults" aria-label={t('containerTemplate.defaultsSectionAria')}>
         <div className="runtime-template-defaults__header">
-          <div><h3>{tr('从默认配置开始', 'Start from the default configuration')}</h3><p>{tr('读取部署文件中的原始容器配置，检查后保存为新模板。', 'Read the original container configuration from the deployment file, then review and save a new template.')}</p></div>
-          <button type="button" className="btn" disabled={saving || loadingDefaults} onClick={() => void readDefaults()}>{loadingDefaults ? tr('读取中…', 'Reading…') : tr('读取默认模板', 'Read default template')}</button>
+          <div><h3>{t('containerTemplate.startFromDefault')}</h3><p>{t('containerTemplate.startFromDefaultHint')}</p></div>
+          <button type="button" className="btn" disabled={saving || loadingDefaults} onClick={() => void readDefaults()}>{loadingDefaults ? t('containerTemplate.reading') : t('containerTemplate.readDefaultTemplate')}</button>
         </div>
         {preview && preview.templates.length > 1 && <div className="runtime-template-defaults__selection">
-          <select className="select" aria-label={tr('选择默认容器模板', 'Choose a default container template')} value={selection} disabled={saving || loadingDefaults} onChange={event => setSelection(event.target.value)}>
+          <select className="select" aria-label={t('containerTemplate.selectDefaultTemplate')} value={selection} disabled={saving || loadingDefaults} onChange={event => setSelection(event.target.value)}>
             {preview.templates.map(item => <option key={item.source_container_id} value={item.source_container_id}>{item.template.template_name} · {item.source_container_id}</option>)}
           </select>
           <button type="button" className="btn" disabled={saving || loadingDefaults} onClick={() => {
             const item = preview.templates.find(entry => entry.source_container_id === selection);
             if (item && preview.fingerprint) chooseDefault({ item, fingerprint: preview.fingerprint });
-          }}>{tr('填入表单', 'Fill form')}</button>
+          }}>{t('containerTemplate.fillForm')}</button>
         </div>}
         {defaultsError && <p className="runtime-template-defaults__message text-danger" role="alert">{defaultsError}</p>}
-        {pendingDefault && <div className="runtime-template-defaults__confirm" role="group" aria-label={tr('替换当前填写内容', 'Replace current entries')}>
-          <p>{tr('读取默认模板会替换当前表单内容，是否继续？', 'Loading the default template will replace your current entries. Continue?')}</p>
+        {pendingDefault && <div className="runtime-template-defaults__confirm" role="group" aria-label={t('containerTemplate.replaceConfirmAria')}>
+          <p>{t('containerTemplate.replaceConfirm')}</p>
           <div className="runtime-template-defaults__actions">
-            <button type="button" className="btn sm" onClick={() => setPendingDefault(null)}>{tr('保留当前填写', 'Keep current entries')}</button>
-            <button type="button" className="btn primary sm" onClick={() => applyDefault(pendingDefault)}>{tr('替换当前填写', 'Replace entries')}</button>
+            <button type="button" className="btn sm" onClick={() => setPendingDefault(null)}>{t('containerTemplate.keepCurrent')}</button>
+            <button type="button" className="btn primary sm" onClick={() => applyDefault(pendingDefault)}>{t('containerTemplate.replaceCurrent')}</button>
           </div>
         </div>}
-        {loadedDefault && !pendingDefault && <p className="runtime-template-defaults__message" role="status">{tr('已读取默认配置并生成新的容器 ID，保存后可在运行时模板中选择。', 'Defaults loaded with a new container ID. After saving, select this container in a runtime template.')}</p>}
+        {loadedDefault && !pendingDefault && <p className="runtime-template-defaults__message" role="status">{t('containerTemplate.defaultsLoaded')}</p>}
       </section>}
       <fieldset className="runtime-template-form__fields container-template-form__fields" disabled={saving || loadingDefaults}>
         <ContainerTemplateFields form={form} update={update} />

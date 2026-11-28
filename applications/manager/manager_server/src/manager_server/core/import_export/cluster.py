@@ -11,10 +11,8 @@ from openjiuwen_runtime.foundation.db.handler import DBHandler
 from openjiuwen_runtime.foundation.db.sqlalchemy_handler import SQLAlchemyHandler
 from sqlalchemy import insert
 
-from manager_server.core.instance.instance_service import (
-    _find_config_host_conflict,
-    _find_user_face_host_conflict,
-)
+from manager_server.core.instance.instance_service import _find_config_host_conflict
+from manager_server.core.template.model_template import MODEL_TEMPLATE_STORED_RETRY_COUNT
 from manager_server.core.template.push_template_to_gateway import (
     rebuild_jid_template_ref_for_gateway,
     slot_template_pairs_from_template_ref,
@@ -89,8 +87,6 @@ _INSTANCE_RUNTIME_FIELDS = {
     "gateway_last_alive",
     "runtime_status",
     "runtime_last_alive",
-    "user_web_status",
-    "user_web_last_alive",
 }
 _A2A_RUNTIME_FIELDS = {
     "pending_revision",
@@ -147,19 +143,18 @@ TABLE_SPECS: tuple[TableSpec, ...] = (
         "10_AgentTemplates",
         AGENT_TEMPLATE_TABLE_DEF,
         ("template_id",),
-        frozenset({"template_ref", "agent_tags"}),
+        frozenset({"template_ref"}),
     ),
     TableSpec(
         "12_ModelTemplates",
         MODEL_TEMPLATE_TABLE_DEF,
         ("template_id",),
-        frozenset({"model_type", "model_tags"}),
+        frozenset({"model_type"}),
     ),
     TableSpec(
         "13_EmbeddingTemplates",
         EMBEDDING_TEMPLATE_TABLE_DEF,
         ("template_id",),
-        frozenset({"embed_tags"}),
     ),
     TableSpec("14_SkillTemplates", SKILL_PREBUILT_TEMPLATE_TABLE_DEF, ("template_id",)),
     TableSpec("29_ExpertPackageTemplates", EXPERT_PACKAGE_TEMPLATE_TABLE_DEF, ("template_id",)),
@@ -171,7 +166,7 @@ TABLE_SPECS: tuple[TableSpec, ...] = (
         "19_A2AAgents",
         A2A_OUTBOUND_TEMPLATE_TABLE_DEF,
         ("template_id",),
-        frozenset(_A2A_RUNTIME_FIELDS | {"a2a_tags"}),
+        frozenset(_A2A_RUNTIME_FIELDS),
     ),
     TableSpec(
         "20_A2APolicies",
@@ -292,10 +287,7 @@ _SHEET_ORDER = (
 _INLINE_LIST_FIELDS = {
     "instance_agent_resource": ("match_expr",),
     "instance_service_resource": ("match_expr",),
-    "agent_template": ("agent_tags",),
-    "model_template": ("model_type", "model_tags"),
-    "embedding_template": ("embed_tags",),
-    "a2a_outbound_template": ("a2a_tags",),
+    "model_template": ("model_type",),
     "service_config_container": ("command", "args"),
 }
 
@@ -596,8 +588,6 @@ def _table_sheet(
     columns = _columns(spec.table_def, excluded=spec.excluded)
     headers = [column.name for column in columns if str(column.data_type).lower() != "json"]
     headers.extend(_INLINE_LIST_FIELDS.get(spec.table, ()))
-    if spec.table == "instance_info":
-        headers.extend(("gateway_web_http_host", "gateway_web_ws_host"))
     output: list[dict[str, Any]] = []
     sensitive: set[tuple[int, str]] = set()
     for row_index, source in enumerate(rows):
@@ -606,21 +596,6 @@ def _table_sheet(
         for column in columns:
             if str(column.data_type).lower() == "json":
                 value = redacted.get(column.name)
-                if (
-                    spec.table == "instance_info"
-                    and column.name == "data"
-                    and isinstance(value, dict)
-                ):
-                    value = {
-                        key: item
-                        for key, item in value.items()
-                        if key not in {"gateway_web_http_host", "gateway_web_ws_host"}
-                    }
-                    # Promoted face-host columns are decoded into ``data``
-                    # before ExtraFields.  An empty ``data`` leaf would replace
-                    # those hosts again, so omit it from the manifest.
-                    if not value:
-                        continue
                 if column.name in redacted:
                     leaves: list[tuple[str, str, Any]] = []
                     _flatten(value, column.name, leaves)
@@ -647,10 +622,6 @@ def _table_sheet(
                 record[field] = str(value)
             else:
                 record[field] = ""
-        if spec.table == "instance_info":
-            data = redacted.get("data") if isinstance(redacted.get("data"), dict) else {}
-            record["gateway_web_http_host"] = data.get("gateway_web_http_host")
-            record["gateway_web_ws_host"] = data.get("gateway_web_ws_host")
         output.append(record)
     return SheetData(
         name=spec.sheet,
@@ -961,11 +932,6 @@ def _decode_workbook(
                     value[field] = (
                         canonicalize_match_expr(items) if field == "match_expr" else items
                     )
-            if spec.table == "instance_info":
-                value.setdefault("data", {})
-                for field in ("gateway_web_http_host", "gateway_web_ws_host"):
-                    if raw.get(field) not in (None, ""):
-                        value["data"][field] = str(raw[field])
             decoded.append(value)
         rows_by_table[spec.table] = decoded
 
@@ -1137,6 +1103,9 @@ def _validate_import_rows(rows: dict[str, list[dict[str, Any]]]) -> list[dict[st
                     continue
                 # Business IDs and snapshot-only columns are not CreateBody fields.
                 row.update(normalized)
+                if table == "model_template":
+                    # 工作簿里的旧重试次数不再采用，写入列保留值。
+                    row["retry_count"] = MODEL_TEMPLATE_STORED_RETRY_COUNT
             missing = []
             for column in table_def.columns:
                 if column.nullable or column.autoincrement or column.name in _AUDIT_FIELDS:
@@ -1398,7 +1367,7 @@ async def _instance_host_actions(
         cluster_id = str(row.get("jiuwenclaw_id") or "")
         if await handler.get("instance_info", {"jiuwenclaw_id": cluster_id}) is not None:
             continue
-        for column in ("gateway_host", "runtime_host", "user_web_host"):
+        for column in ("gateway_host", "runtime_host"):
             host = str(row.get(column) or "").strip()
             if not host:
                 actions.append(
@@ -1421,36 +1390,6 @@ async def _instance_host_actions(
                         "action": "conflict",
                         "detail": (
                             f"{column} is already used by instance "
-                            f"{getattr(conflict, 'jiuwenclaw_id', '')}"
-                        ),
-                    }
-                )
-        data = row.get("data") if isinstance(row.get("data"), dict) else {}
-        for key in ("gateway_web_http_host", "gateway_web_ws_host"):
-            host = str(data.get(key) or "").strip()
-            if key == "gateway_web_http_host" and not host:
-                actions.append(
-                    {
-                        "scope": "manager",
-                        "object_type": "instance_info",
-                        "object_id": cluster_id,
-                        "action": "missing_dependency",
-                        "detail": f"{key} is required",
-                    }
-                )
-                continue
-            if not host:
-                continue
-            conflict = await _find_user_face_host_conflict(handler, host, key=key)
-            if conflict is not None:
-                actions.append(
-                    {
-                        "scope": "manager",
-                        "object_type": "instance_info",
-                        "object_id": cluster_id,
-                        "action": "conflict",
-                        "detail": (
-                            f"{key} is already used by instance "
                             f"{getattr(conflict, 'jiuwenclaw_id', '')}"
                         ),
                     }
@@ -1520,8 +1459,61 @@ async def _dependency_actions(
     return actions
 
 
+async def _runtime_config_actions(
+    handler: DBHandler,
+    rows: dict[str, list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    """导入前用与 Runtime config_sync 共用的 foundation 校验检查模板/容器组合。
+
+    与手工保存一致：非法组合作为阻塞项返回，导入不会落库；纯本地校验，
+    不依赖 Runtime 是否可达（issue #203）。
+    """
+    actions: list[dict[str, Any]] = []
+    templates = rows.get("service_config_template", [])
+    if not templates:
+        return actions
+
+    from manager_server.core.instance_resource.runtime_config_sync import (
+        preflight_template_binding,
+    )
+    from manager_server.core.template.service_config_container import (
+        load_wires_by_ids,
+        row_to_wire,
+    )
+
+    provided: dict[str, dict[str, Any]] = {}
+    for container in rows.get("service_config_container", []):
+        cid = str(container.get("container_id") or "")
+        if cid:
+            provided[cid] = row_to_wire(container)
+
+    for template in templates:
+        tid = str(template.get("template_id") or "")
+        if not tid:
+            continue
+        ids = [template.get("main_container_id"), *(template.get("sidecar_container_ids") or [])]
+        ids = [str(item) for item in ids if item]
+        missing = [cid for cid in ids if cid not in provided]
+        if missing:
+            provided.update(await load_wires_by_ids(handler, missing))
+        containers = [provided[cid] for cid in ids if cid in provided]
+        try:
+            preflight_template_binding(template, containers)
+        except ValueError as exc:
+            actions.append(
+                {
+                    "scope": "runtime",
+                    "object_type": "service_config_template",
+                    "object_id": tid,
+                    "action": "invalid_config",
+                    "detail": str(exc),
+                }
+            )
+    return actions
+
+
 def _report(actions: list[dict[str, Any]], resource_id: str) -> dict[str, Any]:
-    blocking = {"conflict", "missing_dependency", "missing_sensitive_value"}
+    blocking = {"conflict", "missing_dependency", "missing_sensitive_value", "invalid_config"}
     counts: dict[str, int] = {}
     for action in actions:
         key = str(action["action"])
@@ -1656,6 +1648,9 @@ class ClusterImportExportAdapter:
         actions.extend(await _manager_actions(context.handler, rows))
         actions.extend(await _instance_host_actions(context.handler, rows))
         actions.extend(await _dependency_actions(context.handler, rows))
+        actions.extend(
+            await _runtime_config_actions(context.handler, rows)
+        )
         actions.extend(await _a2a_semantic_actions(context.handler, rows))
         actions.extend(
             await role_preflight_actions(

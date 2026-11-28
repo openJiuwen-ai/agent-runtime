@@ -8,6 +8,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
 from identity_center.infrastructure.config import Settings
+from identity_center.security.tokens import LoginSurface
 
 
 class OidcConnectionConfig(BaseModel):
@@ -16,6 +17,7 @@ class OidcConnectionConfig(BaseModel):
     connection_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
     name: str = Field(default="Enterprise SSO", min_length=1, max_length=128)
     flow: Literal["server_code", "browser_pkce"] = "browser_pkce"
+    surface: LoginSurface = "user"
     issuer: str = Field(min_length=1)
     client_id: str = Field(min_length=1)
     client_secret: SecretStr | None = None

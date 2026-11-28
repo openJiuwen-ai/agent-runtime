@@ -3,7 +3,7 @@ import test from 'node:test';
 import { createServer } from 'vite';
 
 globalThis.window = { location: { protocol: 'http:' } };
-globalThis.document = { cookie: '' };
+globalThis.document = { cookie: '', documentElement: { lang: '' } };
 globalThis.localStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
 const server = await createServer({ configFile: false, server: { middlewareMode: true, hmr: false, ws: false }, appType: 'custom' });
 try {

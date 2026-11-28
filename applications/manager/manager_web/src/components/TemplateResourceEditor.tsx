@@ -5,11 +5,11 @@ import { EditorPresentationProvider, useEditorPresentation } from './InlineEdito
 import {
   ApiError, ModelTemplateApi, EmbeddingTemplateApi, SkillPrebuiltTemplateApi,
   ExpertPackageTemplateApi, ExtensionTemplateApi, McpTemplateApi,
-  PermissionsTemplateApi, A2AAccessPolicyTemplateApi,
+  PermissionsTemplateApi, A2AAccessPolicyTemplateApi, ExecutionGuardTemplateApi,
 } from '../services/api';
 import type {
   ModelTemplate, EmbeddingTemplate, SkillPrebuiltTemplate, ExpertPackageTemplate,
-  ExtensionConfigTemplate, McpTemplate, PermissionsTemplate, A2AAccessPolicyTemplate,
+  ExtensionConfigTemplate, McpTemplate, PermissionsTemplate, A2AAccessPolicyTemplate, ExecutionGuardTemplate,
 } from '../types';
 import type { TemplateRefEditorSlot } from '../utils/templateRef';
 import { ModelTemplateModal } from '../pages/templates/ModelTemplateModal';
@@ -18,6 +18,7 @@ import { SkillPrebuiltTemplateModal } from '../pages/templates/SkillPrebuiltTemp
 import { ExpertPackageTemplateModal } from '../pages/templates/ExpertPackageTemplateModal';
 import { ExtensionTemplateModal } from '../pages/templates/ExtensionTemplateModal';
 import { McpTemplateModal } from '../pages/templates/McpTemplateModal';
+import { ExecutionGuardrailsModal } from '../pages/templates/ExecutionGuardrailsModal';
 import { SafetyGuardrailsModal } from '../pages/templates/SafetyGuardrailsModal';
 import { A2AAccessPolicyModal } from '../pages/templates/A2AAccessPolicyModal';
 
@@ -28,6 +29,7 @@ type Resource =
   | { kind: 'expert'; value: ExpertPackageTemplate }
   | { kind: 'extension'; value: ExtensionConfigTemplate }
   | { kind: 'mcp'; value: McpTemplate }
+  | { kind: 'execution'; value: ExecutionGuardTemplate }
   | { kind: 'permissions'; value: PermissionsTemplate }
   | { kind: 'a2a'; value: A2AAccessPolicyTemplate };
 
@@ -38,6 +40,7 @@ function resourceKind(slot: TemplateRefEditorSlot): Resource['kind'] {
     case 'expert_package': return 'expert';
     case 'extension_config': return 'extension';
     case 'mcp': return 'mcp';
+    case 'execution_guard': return 'execution';
     case 'permissions': return 'permissions';
     case 'a2a_access_policy': return 'a2a';
     default: return 'model';
@@ -52,6 +55,7 @@ async function loadResource(kind: Resource['kind'], id: string): Promise<Resourc
     case 'expert': return { kind, value: await ExpertPackageTemplateApi.get(id) };
     case 'extension': return { kind, value: await ExtensionTemplateApi.get(id) };
     case 'mcp': return { kind, value: await McpTemplateApi.get(id) };
+    case 'execution': return { kind, value: await ExecutionGuardTemplateApi.get(id) };
     case 'permissions': return { kind, value: await PermissionsTemplateApi.get(id) };
     case 'a2a': return { kind, value: await A2AAccessPolicyTemplateApi.get(id) };
   }
@@ -130,6 +134,11 @@ export function TemplateResourceEditor({ slot, templateId, onClose, onSaved }: {
     case 'mcp': {
       const source = resource?.kind === kind ? resource.value : null;
       editor = <McpTemplateModal {...props} template={mode === 'view' ? source : null} copyFrom={mode === 'copy' ? source ?? undefined : undefined} />;
+      break;
+    }
+    case 'execution': {
+      const source = resource?.kind === kind ? resource.value : null;
+      editor = <ExecutionGuardrailsModal {...props} template={mode === 'view' ? source : null} copyFrom={mode === 'copy' ? source ?? undefined : undefined} />;
       break;
     }
     case 'permissions': {

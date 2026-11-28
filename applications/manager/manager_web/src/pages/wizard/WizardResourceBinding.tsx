@@ -158,10 +158,10 @@ export function WizardResourceBinding({ kind, instanceId, initialTemplateId, act
     try { setEditor({ copy: isRuntime ? await ServiceConfigTemplateApi.get(item.template_id) : await AgentTemplateApi.get(item.template_id) }); setDetails(null); }
     catch (cause) { setError(errorMessage(cause)); }
   }
-  function templateSaved(item: Template, keepOpen = false) {
+  function templateSaved(item: Template) {
     setTemplates(current => [item, ...current.filter(row => row.template_id !== item.template_id)]);
     update({ templateId: item.template_id, name: draft.name || item.template_name });
-    if (!keepOpen) setEditor(null);
+    setEditor(null);
     setDetails(null); setQuery('');
   }
 
@@ -255,7 +255,7 @@ export function WizardResourceBinding({ kind, instanceId, initialTemplateId, act
 
           <div className="wizard-resource-section-heading wizard-resource-divider"><div><h3>{tr('在本集群中的使用方式', 'Usage in this cluster')}</h3></div></div>
           <div className="wizard-resource-fields"><label><span>{isRuntime ? tr('绑定名称', 'Binding name') : tr('Agent名称', 'Agent name')} *</span><input className="input" maxLength={128} value={draft.name} disabled={saving} onChange={event => update({ name: event.target.value })} /></label>{isRuntime && <label><span>{tr('优先级', 'Priority')} *</span><input className="input" type="number" step="1" value={draft.priority} disabled={saving} onChange={event => update({ priority: Number(event.target.value) })} /><small>{tr('数值越小越优先；同一集群的启用绑定不可重复。', 'Lower values take precedence; enabled bindings need unique priorities.')}</small></label>}<label className="wizard-resource-field-wide"><span>{tr('描述', 'Description')}</span><textarea className="input" rows={2} maxLength={512} value={draft.description} disabled={saving} onChange={event => update({ description: event.target.value })} /></label></div>
-          <fieldset disabled={saving} className="wizard-resource-scope"><legend>{tr('适用范围', 'Scope')}</legend><p>{tr('全部表示所有已获准进入集群的身份；也可按用户或组织进一步限制。', 'All includes identities admitted to this cluster. You can further restrict by user or organization.')}</p><MatchExprEditor revision={catalogRevision} value={draft.scope} onChange={scope => update({ scope })} allowedFields={isRuntime ? undefined : AGENT_RESOURCE_MATCH_FIELDS} /></fieldset>
+          <fieldset disabled={saving} className="wizard-resource-scope"><legend>{tr('适用范围', 'Scope')}</legend><p>{tr('全部表示所有已获准进入集群的身份；也可按用户或组织进一步限制。', 'All includes identities admitted to this cluster. You can further restrict by user or organization.')}</p><MatchExprEditor agentResourceInstanceId={isRuntime ? instanceId : undefined} revision={catalogRevision} value={draft.scope} onChange={scope => update({ scope })} allowedFields={isRuntime ? undefined : AGENT_RESOURCE_MATCH_FIELDS} /></fieldset>
           <details className="wizard-resource-advanced"><summary>{tr('有效期与启用状态', 'Expiry and enabled status')}</summary><div className="wizard-resource-fields"><label><span>{tr('过期时间（留空永久有效）', 'Expiry (blank means no expiry)')}</span><input className="input" type="datetime-local" value={draft.expiresAt} disabled={saving} onChange={event => update({ expiresAt: event.target.value })} /></label><label className="wizard-resource-checkbox"><input type="checkbox" checked={draft.enabled} disabled={saving} onChange={event => update({ enabled: event.target.checked })} /><span>{tr('启用此绑定', 'Enable this binding')}</span></label></div></details>
         </section>
         {!isRuntime && initialized && !state.error && !activeRuntimeIds.length && <p role="status" className="wizard-resource-error">{tr('请先在第 3 步保存有效的运行资源，再继续配置 Agent。', 'Save an active runtime resource in step 3 before configuring an Agent.')}</p>}
@@ -263,7 +263,7 @@ export function WizardResourceBinding({ kind, instanceId, initialTemplateId, act
         <div className="wizard-resource-actions"><span>{tr('模板保存后会保留在全局目录；此步骤保存后才创建集群绑定。', 'Saved templates remain in the global directory. Cluster bindings are saved in this step.')}</span><button type="button" className="btn primary" disabled={saving || !initialized || !selected?.enabled || (!isRuntime && !runtimeId)} onClick={() => void save()}>{saving ? tr('正在保存…', 'Saving…') : isRuntime ? tr('保存并配置 Agent →', 'Save and configure Agent →') : tr('保存并验证 →', 'Save and verify →')}</button></div>
       </>}
     </div>
-    {editor && <InlineEditorProvider active={active}>{isRuntime ? <ServiceConfigTemplateModal open template={null} copyFrom={editor.copy as ServiceConfigTemplate | undefined} onClose={() => setEditor(null)} onSaved={item => templateSaved(item)} /> : <AgentTemplateModal open template={null} copyFrom={editor.copy as AgentTemplate | undefined} onClose={() => setEditor(null)} onSaved={(item, options) => templateSaved(item, Boolean(options?.keepOpen))} />}</InlineEditorProvider>}
+    {editor && <InlineEditorProvider active={active}>{isRuntime ? <ServiceConfigTemplateModal open template={null} copyFrom={editor.copy as ServiceConfigTemplate | undefined} onClose={() => setEditor(null)} onSaved={item => templateSaved(item)} /> : <AgentTemplateModal open template={null} copyFrom={editor.copy as AgentTemplate | undefined} onClose={() => setEditor(null)} onSaved={item => templateSaved(item)} />}</InlineEditorProvider>}
     {details && <InlineEditorProvider active={active}><EditorPresentationProvider readOnly footer={<><button type="button" className="btn" onClick={() => setDetails(null)}>{tr('返回绑定配置', 'Back to binding')}</button><button type="button" className="btn primary" onClick={() => void copyTemplate(details)}>{tr('复制并自定义', 'Copy and customize')}</button></>}>{isRuntime ? <ServiceConfigTemplateModal open template={details as ServiceConfigTemplate} onClose={() => setDetails(null)} onSaved={() => {}} /> : <AgentTemplateModal open template={details as AgentTemplate} onClose={() => setDetails(null)} onSaved={() => {}} />}</EditorPresentationProvider></InlineEditorProvider>}
   </div>;
 }

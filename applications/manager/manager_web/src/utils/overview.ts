@@ -12,6 +12,6 @@ export async function collectPages<T>(fetchPage: (page: number, size: number) =>
   return items;
 }
 export const isConnected = (status?: string | null) => ['online', 'ready', 'running', 'active', 'ok'].includes((status || '').toLowerCase());
-export function allComponentsConnected(instance: { gateway_status?: string | null; runtime_status?: string | null; user_web_status?: string | null }) {
-  return isConnected(instance.gateway_status) && isConnected(instance.runtime_status) && isConnected(instance.user_web_status);
+export function allComponentsConnected(instance: { gateway_status?: string | null; runtime_status?: string | null }) {
+  return isConnected(instance.gateway_status) && isConnected(instance.runtime_status);
 }

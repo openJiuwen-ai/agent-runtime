@@ -32,8 +32,7 @@ type ContainerTemplateSortField = 'template_name' | 'container_id' | 'updated_at
  * 供运行时模板绑定（binding 关系见运行时模板编辑页）。
  */
 export function ContainerTemplatesPage() {
-  const { t, i18n } = useTranslation();
-  const tr = (cn: string, en: string) => i18n.language.startsWith('zh') ? cn : en;
+  const { t } = useTranslation();
   const { params, navigate } = useRouter();
   const runtimeCatalog = runtimeCatalogPath('service-config-templates', params);
   const clusterReturnPath = runtimeClusterReturnPath(params);
@@ -172,23 +171,27 @@ export function ContainerTemplatesPage() {
 
   return (
     <>
-      <div className="flex min-w-0 flex-col gap-4">
+      <div className="manager-page flex min-w-0 flex-col gap-4">
         {clusterReturnPath && (
           <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
-            <span className="text-muted">正在为当前集群准备容器模板。下一步在运行时模板管理中选择容器，再回集群绑定运行资源。</span>
+            <span className="text-muted">{t('containerTemplate.prepareClusterHint')}</span>
             <div className="flex flex-wrap gap-2">
-              <button className="btn sm" onClick={() => navigate(clusterReturnPath)}>← 返回集群运行资源</button>
-              <button className="btn sm primary" onClick={() => navigate(runtimeCatalog)}>前往运行时模板管理 →</button>
+              <button className="btn sm" onClick={() => navigate(clusterReturnPath)}>{t('containerTemplate.backToClusterRuntime')}</button>
+              <button className="btn sm primary" onClick={() => navigate(runtimeCatalog)}>{t('containerTemplate.goToRuntime')}</button>
             </div>
           </div>
         )}
-        <div className="page-header runtime-catalog-header w-full min-w-0 flex-wrap items-start gap-y-3">
-          <div className="runtime-catalog-header__identity">
-            <div className="page-title">{t('containerTemplate.title')}</div>
-            <div className="page-subtitle">{t('containerTemplate.subtitle')}</div>
+        <div className="page-header w-full min-w-0 flex-wrap items-start gap-y-3">
+          <div className="min-w-[7.5rem] max-w-[20rem] shrink-0 sm:max-w-[32rem]">
+            <div className="page-title truncate" title={t('containerTemplate.title')}>
+              {t('containerTemplate.title')}
+            </div>
+            <div className="page-subtitle truncate" title={t('containerTemplate.subtitle')}>
+              {t('containerTemplate.subtitle')}
+            </div>
           </div>
-          <div className="runtime-catalog-header__toolbar">
-            <ListSearchInput value={searchInput} onChange={setSearchInput} placeholder={t('containerTemplate.searchPlaceholder')} className="runtime-catalog-header__search" />
+          <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
+            <ListSearchInput value={searchInput} onChange={setSearchInput} placeholder={t('containerTemplate.searchPlaceholder')} className="basis-full sm:basis-auto" />
             <button className="btn sm" onClick={() => void reload()}>{t('common.refresh')}</button>
             <input
               ref={importInputRef}
@@ -210,7 +213,9 @@ export function ContainerTemplatesPage() {
             </button>
           </div>
         </div>
-        <div className="card manager-page-table !p-0">
+
+        <div className="flex w-full min-w-0 shrink-0 flex-col gap-4">
+        <div className="card !p-0">
           {loading ? (
             <div className="p-4 text-sm text-muted">{t('common.loading')}</div>
           ) : error ? (
@@ -258,7 +263,7 @@ export function ContainerTemplatesPage() {
                         onChange={(value) => handleSortChange('updated_at', value)}
                       />
                     </th>
-                    <th>{t('common.actions')}</th>
+                    <th className="whitespace-nowrap min-w-[9.5rem]">{t('common.actions')}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -268,36 +273,42 @@ export function ContainerTemplatesPage() {
                     <tr key={row.template_id}>
                       <td className="align-top">
                         <div className="flex items-center gap-2">
-                          <span className="font-medium text-text-strong">{row.template_name}</span>
-                          {!!row.data?.deployment_default && <span className="tag shrink-0">{tr('默认', 'Default')}</span>}
+                          <span className="text-text-strong font-medium break-words">{row.template_name}</span>
+                          {!!row.data?.deployment_default && <span className="tag shrink-0">{t('containerTemplate.deploymentDefault')}</span>}
                         </div>
-                        <div className="mono text-[11px] text-muted">{row.template_id}</div>
+                        <div className="text-[11px] text-muted mono break-all" title={row.template_id}>{row.template_id}</div>
                       </td>
-                      <td className="mono max-w-[14rem] break-all text-xs" title={row.container_id}>
+                      <td className="mono text-xs min-w-[10rem] max-w-[18rem] break-all align-top text-text-strong" title={row.container_id}>
                         {row.container_id}
                       </td>
-                      <td className="mono max-w-[16rem] text-[11px] text-muted" title={row.image}>
+                      <td className="mono text-[11px] text-muted max-w-[16rem]" title={row.image}>
                         {truncate(row.image, 36) || '—'}
                       </td>
-                      <td>
-                        <Switch checked={row.enabled} disabled={togglingId === row.template_id} onChange={(enabled) => void toggleEnabled(row, enabled)} />
+                      <td className="whitespace-nowrap">
+                        <Switch
+                          checked={row.enabled}
+                          disabled={togglingId === row.template_id}
+                          aria-label={row.enabled ? t('common.enabled') : t('common.disabled')}
+                          onChange={(enabled) => void toggleEnabled(row, enabled)}
+                        />
                       </td>
-                      <td>
+                      <td className="whitespace-nowrap">
                         {row.reference_count > 0 ? (
-                          <span
+                          <button
+                            type="button"
                             className="tag cursor-pointer"
                             title={t('containerTemplate.referenceHint')}
                             onClick={() => navigate(runtimeCatalog)}
                           >
                             {row.reference_count}
-                          </span>
+                          </button>
                         ) : (
                           <span className="text-[11px] text-muted">0</span>
                         )}
                       </td>
-                      <td className="mono whitespace-nowrap text-[11px] text-muted">{formatTime(row.updated_at)}</td>
-                      <td className="whitespace-nowrap">
-                        <div className="flex gap-1">
+                      <td className="mono text-[11px] text-muted whitespace-nowrap">{formatTime(row.updated_at)}</td>
+                      <td className="whitespace-nowrap min-w-[9.5rem]">
+                        <div className="flex items-center gap-1">
                           <button className="btn sm ghost" onClick={() => { setEditing(row); setModalOpen(true); }}>{t('common.edit')}</button>
                           <button className="btn sm danger" onClick={() => setDeleteTarget(row)}>{t('common.delete')}</button>
                         </div>
@@ -312,9 +323,10 @@ export function ContainerTemplatesPage() {
         {data ? (
           <Pagination page={page} pageSize={pageSize} total={data.total ?? data.items.length} onChange={(nextPage, nextSize) => { setPage(nextPage); setPageSize(nextSize); }} />
         ) : null}
-        <WorkspaceNote title="容器模板由运行时模板统一引用" action={<button className="btn sm" type="button" onClick={() => navigate(runtimeCatalog)}>前往运行时模板管理 →</button>}>
-          容器模板定义镜像、环境变量和挂载。可在运行时模板中组合容器，再将运行时模板绑定到集群。
+        <WorkspaceNote title={t('containerTemplate.workspaceNoteTitle')} action={<button className="btn sm" type="button" onClick={() => navigate(runtimeCatalog)}>{t('containerTemplate.goToRuntime')}</button>}>
+          {t('containerTemplate.workspaceNoteBody')}
         </WorkspaceNote>
+        </div>
       </div>
       <ContainerTemplateModal
         open={modalOpen}

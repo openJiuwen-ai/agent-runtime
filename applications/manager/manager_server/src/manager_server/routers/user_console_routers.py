@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Query, Response
@@ -21,6 +22,7 @@ from openjiuwen_runtime.foundation.db.handler import DBHandler
 from pydantic import BaseModel, Field
 
 from manager_server.core.approval import ApprovalService
+from manager_server.core.authz.service import AuthzService
 from manager_server.core.skill_upload.errors import SkillUploadError
 from manager_server.core.skill_upload.service import SkillUploadService
 from manager_server.core.user_console import UserConsoleService
@@ -42,6 +44,39 @@ WORKSPACE_QUOTA_FEATURE_DISABLED = "WORKSPACE_QUOTA_FEATURE_DISABLED"
 
 _Handler = Annotated[DBHandler, Depends(get_db_handler)]
 _CurUser = Annotated[Any, Depends(get_current_user)]
+
+# platform_admin 判定按 uid 短 TTL 缓存（issue #124 审查 #3）：
+# resolve_user_face_upstream 是 nginx auth_request 子请求，每个用户面资源请求
+# 都会命中；AuthzService.is_platform_admin 内部至少 1 次 list_records + N 次 get
+# 且无内置缓存，裸查库会让 QPS 与 DB 查询量线性放大。platform_admin 状态变化
+# 不频繁（角色绑定由管理员操作），5s TTL 足够覆盖大部分 hot path。
+_PLATFORM_ADMIN_CACHE_TTL_S = 5.0
+_platform_admin_cache: dict[str, tuple[float, bool]] = {}
+
+
+async def _is_platform_admin_cached(handler: DBHandler, uid: str) -> bool:
+    """带 TTL 缓存的 is_platform_admin 判定。
+
+    DB 异常时降级为 False（router 转 403），避免 auth_request 返回 5xx 把
+    整个用户面拖成 500（issue #124 审查 #1）。
+    """
+    if not uid:
+        return False
+    now = time.monotonic()
+    hit = _platform_admin_cache.get(uid)
+    if hit is not None:
+        expires_at, value = hit
+        if expires_at > now:
+            return value
+        _platform_admin_cache.pop(uid, None)
+
+    try:
+        value = await AuthzService(handler).is_platform_admin(uid)
+    except Exception:  # noqa: BLE001 — DB 抖动/连接池耗尽等
+        # 降级：不让 auth_request 冒 5xx。失败不缓存，下一拍重试。
+        return False
+    _platform_admin_cache[uid] = (now + _PLATFORM_ADMIN_CACHE_TTL_S, value)
+    return value
 
 
 def _ok(data: Any = None) -> ResponseModel:
@@ -147,13 +182,26 @@ async def resolve_user_face_upstream(
     """鉴权 + 按 Cookie 下发用户面上游 origin（供 nginx ``auth_request_set``）。
 
     响应头：``X-User-Web-Upstream`` / ``X-Gateway-Http-Upstream`` / ``X-Gateway-Ws-Upstream``。
+
+    ``platform_admin`` 跳过 ``instance_grant`` 准入检查：平台管理员需要跨所有实例
+    读取 gateway-api 资源（团队配额策略等），不应被逐实例授权表挡住。
+
+    ``is_platform_admin`` 判定按 ``uid`` 加短 TTL 缓存：本端点是 nginx
+    ``auth_request`` 子请求，每个用户面资源请求都会命中；``AuthzService.is_platform_admin``
+    内部至少 1 次 ``list_records`` + N 次 ``get`` 且无内置缓存，裸查库会让 QPS 与
+    DB 查询量线性放大。``platform_admin`` 状态变化不频繁（角色绑定由管理员操作），
+    5s TTL 足够覆盖大部分 hot path；DB 异常时降级为 ``bypass_admission=False``（403），
+    避免 auth_request 返回 5xx 把整个用户面拖成 500。
     """
+    uid = str(getattr(user, "user_id", "") or "")
+    bypass_admission = await _is_platform_admin_cached(handler, uid)
     try:
         upstreams = await resolve_user_face_upstreams(
             handler,
-            user_id=str(getattr(user, "user_id", "") or ""),
+            user_id=uid,
             groups=list(getattr(user, "groups", []) or []),
             jiuwenclaw_id=jiuwenclaw_id,
+            bypass_admission=bypass_admission,
         )
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc

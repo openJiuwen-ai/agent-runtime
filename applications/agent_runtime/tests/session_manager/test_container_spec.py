@@ -353,6 +353,71 @@ def test_volume_join_read_only_overrides():
     assert cont["host_path_mounts"][0]["read_only"] is True
 
 
+def test_secret_volume_join_selects_ca_key_read_only():
+    volumes = canonical_volumes([
+        {"name": "egress-ca", "secret": {
+            "secretName": "shared-ca-secret",
+            "items": [{"key": "ca-bundle.pem", "path": "ca-bundle.pem"}]}}
+    ], "volumes")
+    spec = parse_container_spec({
+        "container_id": "c", "image": "agent:1",
+        "env": [{"name": "SSL_CERT_FILE",
+                 "value": "/etc/jiuwen-ca/ca-bundle.pem"}],
+        "volumeMounts": [{"name": "egress-ca", "mountPath": "/etc/jiuwen-ca"}],
+    }, "container", role=MAIN_ROLE)
+    cont = build_canonical(spec, volumes, "container", role=MAIN_ROLE)
+    assert cont["env"]["SSL_CERT_FILE"] == "/etc/jiuwen-ca/ca-bundle.pem"
+    assert cont["secret_mounts"] == [{
+        "secret_name": "shared-ca-secret",
+        "mount_path": "/etc/jiuwen-ca",
+        "sub_path": None,
+        "items": [{"key": "ca-bundle.pem", "path": "ca-bundle.pem"}],
+        "read_only": True,
+    }]
+
+
+@pytest.mark.parametrize("volume,mount,match", [
+    ({"secretName": "keycloak-tls", "optional": True},
+     {"name": "ca", "mountPath": "/etc/ca"}, "unknown keys"),
+    ({"secretName": "keycloak-tls"},
+     {"name": "ca", "mountPath": "/etc/ca", "readOnly": False},
+     "read_only must be true"),
+    ({"secretName": "keycloak-tls",
+      "items": [{"key": "tls.crt", "path": "/absolute"}]},
+     {"name": "ca", "mountPath": "/etc/ca"}, "relative path"),
+])
+def test_secret_volume_rejects_invalid_config(volume, mount, match):
+    with pytest.raises(InvalidParams, match=match):
+        volumes = canonical_volumes([{"name": "ca", "secret": volume}], "v")
+        spec = parse_container_spec({"container_id": "c", "image": "i:1",
+                                     "volumeMounts": [mount]},
+                                    "c", role=MAIN_ROLE)
+        build_canonical(spec, volumes, "c", role=MAIN_ROLE)
+
+
+@pytest.mark.parametrize("path", [None, "", "../ca.pem", "dir/../ca.pem", "..hidden"])
+def test_secret_item_requires_valid_projection_path(path):
+    from agent_runtime.mounts import canonical_secret_mounts
+    with pytest.raises(InvalidParams, match="relative path"):
+        canonical_secret_mounts([{
+            "secret_name": "shared-ca", "mount_path": "/etc/ca",
+            "items": [{"key": "ca.crt", "path": path}],
+        }], "secret_mounts")
+
+
+@pytest.mark.parametrize("items", [False, 0, "", {}])
+def test_secret_items_rejects_falsy_non_lists(items):
+    from agent_runtime.mounts import canonical_secret_mounts
+    with pytest.raises(InvalidParams, match="items must be a list"):
+        canonical_secret_mounts([{
+            "secret_name": "shared-ca", "mount_path": "/etc/ca", "items": items,
+        }], "secret_mounts")
+    with pytest.raises(InvalidParams, match="items must be a list"):
+        canonical_volumes([{
+            "name": "ca", "secret": {"secretName": "shared-ca", "items": items},
+        }], "volumes")
+
+
 @pytest.mark.parametrize("volumes,mounts,where_role,match", [
     # 悬挂引用
     ([], [{"name": "ghost", "mountPath": "/g"}], MAIN_ROLE, r"not defined"),
@@ -454,7 +519,7 @@ def test_container_spec_from_row_none_and_corrupt():
 # -------------------------------------------------------------- build_canonical(C2 内核)
 
 def test_build_canonical_main_golden():
-    """wire 主容器 + volumes → canonical 黄金 dict(13 键,指纹/传输/渲染同形)。"""
+    """wire 主容器 + volumes → canonical 黄金 dict(指纹/传输/渲染同形)。"""
     from agent_runtime.session_manager.container_spec import build_canonical
     spec = parse_container_spec(MAIN_FULL, "containers[0]", role=MAIN_ROLE)
     volumes = canonical_volumes(list(MAIN_VOLUMES.values()), "volumes")
@@ -477,10 +542,12 @@ def test_build_canonical_main_golden():
                       "cpu_limit": "2", "memory_limit": "4Gi"},
         "host_path_mounts": [],
         "configmap_mounts": [],
+        "secret_mounts": [],
         "pvc_mounts": [{"claim_name": "agent-data",
                         "mount_path": "/var/lib/agent", "read_only": False}],
         "nfs_mounts": [{"server": "10.0.0.1", "path": "/export",
                         "mount_path": "/mnt/nfs", "read_only": False}],
+        "empty_dir_mounts": [],
         "security_context": {"run_as_user": 1000, "run_as_group": 1000,
                              "privileged": False, "capabilities_add": [],
                              "capabilities_drop": [],

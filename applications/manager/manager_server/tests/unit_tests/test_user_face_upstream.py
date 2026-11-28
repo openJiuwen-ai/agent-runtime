@@ -70,11 +70,6 @@ async def test_resolve_falls_back_to_defaults_without_cookie(
 ) -> None:
     monkeypatch.setattr(
         upstream.settings,
-        "manager_web_user_web_target",
-        "http://default-web:5173",
-    )
-    monkeypatch.setattr(
-        upstream.settings,
         "manager_web_gateway_http_target",
         "http://default-gw:19002",
     )
@@ -89,7 +84,6 @@ async def test_resolve_falls_back_to_defaults_without_cookie(
         groups=[],
         jiuwenclaw_id=None,
     )
-    assert result.user_web == "http://default-web:5173"
     assert result.gateway_http == "http://default-gw:19002"
     assert result.gateway_ws == "http://default-gw:19000"
 
@@ -100,18 +94,13 @@ async def test_resolve_uses_instance_hosts_when_admitted(
 ) -> None:
     monkeypatch.setattr(
         upstream.settings,
-        "manager_web_user_web_target",
-        "http://default-web:5173",
-    )
-    monkeypatch.setattr(
-        upstream.settings,
         "manager_web_gateway_http_target",
         "http://default-gw:19002",
     )
     monkeypatch.setattr(
         upstream.settings,
         "manager_web_gateway_ws_target",
-        "http://default-gw:19000",
+        "ws://default-gw:19000",
     )
 
     async def admit(*_a: Any, **_k: Any) -> bool:
@@ -126,11 +115,7 @@ async def test_resolve_uses_instance_hosts_when_admitted(
         "get_instance_row",
         AsyncMock(
             return_value=SimpleNamespace(
-                user_web_host="http://inst-web:5173",
-                data={
-                    "gateway_web_http_host": "http://inst-gw:19002",
-                    "gateway_web_ws_host": "ws://inst-gw:19000",
-                },
+                gateway_host="http://inst-gw:19000",
             )
         ),
     )
@@ -140,8 +125,7 @@ async def test_resolve_uses_instance_hosts_when_admitted(
         groups=["g1"],
         jiuwenclaw_id="jid-1",
     )
-    assert result.user_web == "http://inst-web:5173"
-    assert result.gateway_http == "http://inst-gw:19002"
+    assert result.gateway_http == "http://inst-gw:19000"
     assert result.gateway_ws == "http://inst-gw:19000"
 
 
@@ -166,12 +150,52 @@ async def test_resolve_rejects_unadmitted_instance(
 
 
 @pytest.mark.asyncio
+async def test_resolve_rejects_incomplete_instance_without_gateway(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        upstream.settings,
+        "manager_web_gateway_http_target",
+        "",
+    )
+    monkeypatch.setattr(
+        upstream.settings,
+        "manager_web_gateway_ws_target",
+        "ws://default-gw:19000",
+    )
+
+    async def admit(*_a: Any, **_k: Any) -> bool:
+        return True
+
+    monkeypatch.setattr(
+        "manager_server.core.user_console.UserConsoleService.user_can_access_instance",
+        admit,
+    )
+    monkeypatch.setattr(
+        upstream,
+        "get_instance_row",
+        AsyncMock(return_value=SimpleNamespace(gateway_host=None)),
+    )
+    with pytest.raises(LookupError, match="incomplete"):
+        await upstream.resolve_user_face_upstreams(
+            handler=object(),  # type: ignore[arg-type]
+            user_id="u1",
+            groups=["g1"],
+            jiuwenclaw_id="jid-1",
+        )
+
+
+@pytest.mark.asyncio
 async def test_cached_upstream_rechecks_grant_and_current_groups(monkeypatch):
     admit = AsyncMock(side_effect=[True, True, False])
     monkeypatch.setattr(
         "manager_server.core.user_console.UserConsoleService.user_can_access_instance", admit
     )
-    lookup = AsyncMock(return_value=SimpleNamespace(user_web_host="http://web:5173", data={}))
+    lookup = AsyncMock(
+        return_value=SimpleNamespace(
+            gateway_host="http://inst-gw:19000",
+        )
+    )
     monkeypatch.setattr(upstream, "get_instance_row", lookup)
     for groups in (["g1"], ["g2"]):
         await upstream.resolve_user_face_upstreams(

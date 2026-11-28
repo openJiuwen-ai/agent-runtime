@@ -32,8 +32,22 @@ from .state import ResourceState
 logger = logging.getLogger("agent_runtime.resource_manager")
 
 HEALTH_FAIL_THRESHOLD = 2   # 连续失败判半死（防瞬时抖动误杀，场景 N）
-WATCH_LOCK_TTL = 15         # 10s tick + 余量
-RECONCILE_LOCK_TTL = 60     # 30s tick + 余量
+
+# 各 job 的单拍上限（main.TICK_TIMEOUTS 由此构造，禁止两处各写一份而漂移）与
+# tick 级执行锁 TTL。**锁 TTL 必须 ≥ 单拍上限**（2026-11 现网事故：autoscale/
+# reclaim 的锁 TTL 写死 2s，而实跑 60~185s → 锁早过期，另一副本可并发进同一拍，
+# reclaim 侧无 lock_deploy 兜底）。runner 在每拍结束必 release，故长 TTL 只影响
+# 「进程被 SIGKILL 后该 job 最多停一个 TTL」的故障窗口，常态交接不受影响。
+AUTOSCALE_TICK_TIMEOUT = 370   # 最重路径 = deploy 等 Ready（ready_timeout 300s）
+RECLAIM_TICK_TIMEOUT = 60
+WATCH_TICK_TIMEOUT = 300
+RECONCILE_TICK_TIMEOUT = 300
+_LOCK_TTL_SLACK = 10           # 盖住「取消本拍 → finally unlock」的收尾往返
+AUTOSCALE_LOCK_TTL = AUTOSCALE_TICK_TIMEOUT + _LOCK_TTL_SLACK
+RECLAIM_LOCK_TTL = RECLAIM_TICK_TIMEOUT + _LOCK_TTL_SLACK
+WATCH_LOCK_TTL = WATCH_TICK_TIMEOUT + _LOCK_TTL_SLACK
+RECONCILE_LOCK_TTL = RECONCILE_TICK_TIMEOUT + _LOCK_TTL_SLACK
+
 DRAIN_SURGE_MARGIN = 1      # 排空纪元活跃时的容量上限加成（暂写死，2026-09-17
                             # 优雅排空决策；与 lua_scripts 两闸门内的 +1 对齐——
                             # 改动须三处同步）
@@ -89,7 +103,8 @@ class ResourceSweeper:
             logger.debug("autoscale skipped (routing deploy mode)")
             return
         token = uuid4().hex
-        if not await self.state.try_lock(self.state.k.lock_autoscale(), 2, token):
+        if not await self.state.try_lock(
+                self.state.k.lock_autoscale(), AUTOSCALE_LOCK_TTL, token):
             return
         t0 = time.monotonic()
         outcomes: dict[str, int] = {}
@@ -225,7 +240,8 @@ class ResourceSweeper:
 
     async def reclaim_once(self) -> None:
         token = uuid4().hex
-        if not await self.state.try_lock(self.state.k.lock_reclaim(), 2, token):
+        if not await self.state.try_lock(
+                self.state.k.lock_reclaim(), RECLAIM_LOCK_TTL, token):
             return
         t0 = time.monotonic()
         scopes = reclaimed = 0
@@ -463,7 +479,7 @@ class ResourceSweeper:
         if not await self.state.try_lock(self.state.k.lock_reconcile(), RECONCILE_LOCK_TTL, token):
             return
         t0 = time.monotonic()
-        healed = orphans = stale = failed = 0
+        healed = orphans = stale = failed = forgotten = 0
         view: list[dict[str, str]] = []
         try:
             # 0. idle 计时自愈（无 Lua 模式的唯一崩溃窗口，时长 < 一个 reconcile
@@ -493,6 +509,14 @@ class ResourceSweeper:
                     failed += 1
                     logger.exception(
                         "reconcile idle heal scope failed: scope=%s", scope_id)
+
+            # 0.2 空壳 scope 回收（2026-11）：已退役（config_sync 扩散③ 推过
+            #     retired=1）且已排空干净的 scope → 删 config + 出索引。
+            #     config 键原先无 TTL 也无任何删除点，被删 scope 的池参数会
+            #     永久留库：每次 config_sync 对它重推 min_idle=0、autoscale/
+            #     reclaim 每拍遍历它（现网 6 个 scope 里 5 个是这种僵尸）。
+            #     判据只认 retired 标记 + 彻底空壳，见 state.forget_scope。
+            forgotten += await self._sweep_retired_scopes()
 
             # 0.5 外部收养（routing 模式）：declared ∖ 已注册 → HTTP 探测 → 注册。
             #     StatefulSet 同名重建的自动恢复路径（判死 PURGE 后声明仍在，
@@ -574,10 +598,42 @@ class ResourceSweeper:
             await self.state.unlock(self.state.k.lock_reconcile(), token)
             logger.debug(
                 "reconcile tick: pods=%d healed=%d orphans=%d stale=%d "
-                "failed=%d duration_ms=%.0f",
-                len(view), healed, orphans, stale, failed,
+                "forgotten=%d failed=%d duration_ms=%.0f",
+                len(view), healed, orphans, stale, forgotten, failed,
                 (time.monotonic() - t0) * 1000,
             )
+
+    async def _sweep_retired_scopes(self) -> int:
+        """退役且空壳的 scope → forget（返回回收数；per-scope 隔离）。
+
+        空壳判据四件齐备：候选集 / 占位 / idle 池 / 外部声明表全空。只要还有
+        任何 Pod 痕迹就留着（存量会话还在其上服务，排空后下一拍再收）。
+        """
+        forgotten = 0
+        for scope_id in await self.state.known_scope_ids():
+            try:
+                cfg = await self.state.load_scope_config(scope_id)
+                if cfg.get("retired") != "1":
+                    continue
+                if await self.state.pod_count(scope_id):
+                    continue
+                if await self.state.deploying_count(scope_id):
+                    continue
+                if await self.state.idle_pods(scope_id):
+                    continue
+                if await self.state.declared_names(scope_id):
+                    continue
+                await self.state.forget_scope(scope_id)
+                forgotten += 1
+                logger.info(
+                    "retired scope forgotten: scope=%s (no pods/deploying/"
+                    "idle/declared left; config_sync will no longer re-push it)",
+                    scope_id,
+                )
+            except Exception:  # noqa: BLE001 - per-scope 隔离，下拍重试
+                logger.exception(
+                    "retired scope sweep failed: scope=%s", scope_id)
+        return forgotten
 
     # -------------------------------------------------------------- 清理
 

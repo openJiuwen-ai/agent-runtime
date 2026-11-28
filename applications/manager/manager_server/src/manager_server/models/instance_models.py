@@ -30,7 +30,7 @@ INSTANCE_INFO_TABLE_DEF = TableDefinition(
             "runtime_status", "string", length=32, nullable=False, default="pending"
         ),
         ColumnDefinition("runtime_last_alive", "datetime", nullable=True),
-        # User Web 侧（探活地址 / 状态 / 上次存活；存量库由 init 补列 + 回填）
+        # User Web 侧字段暂时保留（管理面已不再配置/探活；全局用户面拆分后待后续清理）
         ColumnDefinition(
             "user_web_host", "string", length=512, nullable=False, default=""
         ),
@@ -39,7 +39,7 @@ INSTANCE_INFO_TABLE_DEF = TableDefinition(
         ),
         ColumnDefinition("user_web_last_alive", "datetime", nullable=True),
         ColumnDefinition("space_id", "string", length=64, nullable=False, default="default"),
-        # 扩展 JSON：gateway_web_http_host / gateway_web_ws_host 等用户面反代上游
+        # 扩展 JSON（历史 gateway_web_* 已废弃，上游统一用 gateway_host）
         ColumnDefinition("data", "json", nullable=True),
         ColumnDefinition("created_at", "datetime", nullable=False),
         ColumnDefinition("created_by", "string", length=64, nullable=False),

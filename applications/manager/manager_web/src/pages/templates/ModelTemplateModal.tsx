@@ -7,7 +7,8 @@ import { LimitedTextInput } from '../../components/LimitedTextInput';
 import { useFormDirty } from '../../hooks/useFormDirty';
 import { ModelTemplateApi, ApiError } from '../../services/api';
 import { toast } from '../../stores/uiStore';
-import { fromCommaList, safeStringify, toCommaList } from '../../utils/format';
+import { safeStringify } from '../../utils/format';
+import { INT32_MAX } from '../../utils/intBounds';
 import { jsonContentForValidation } from '../../utils/jsonExample';
 import { findUnsafeTextField } from '../../utils/safeText';
 import { isValidHttpUrl } from '../../utils/url';
@@ -82,16 +83,12 @@ interface FormState {
   template_name: string;
   description: string;
   model_type: string[];
-  model_tags: string;
   api_base: string;
   api_key: string;
   model_id: string;
   model_provider: string;
   parameters: string;
   timeout: number;
-  retry_count: number;
-  enable_streaming: boolean;
-  enable_function_calling: boolean;
   verify_ssl: boolean;
   headers: string;
 }
@@ -100,16 +97,12 @@ const empty: FormState = {
   template_name: '',
   description: '',
   model_type: [],
-  model_tags: '',
   api_base: '',
   api_key: '',
   model_id: '',
   model_provider: 'OpenAI',
   parameters: '',
   timeout: 360,
-  retry_count: 3,
-  enable_streaming: true,
-  enable_function_calling: true,
   verify_ssl: false,
   headers: '',
 };
@@ -166,7 +159,6 @@ export function ModelTemplateModal({ open, template, copyFrom, onClose, onSaved 
           template_name: clipField(sourceTemplate.template_name, FIELD_MAX_LENGTH.template_name),
           description: clipField(sourceTemplate.description ?? '', FIELD_MAX_LENGTH.description),
           model_type: sourceTemplate.model_type ?? [],
-          model_tags: toCommaList(sourceTemplate.model_tags),
           api_base: clipField(sourceTemplate.api_base, FIELD_MAX_LENGTH.api_base),
           api_key: clipField(sourceTemplate.api_key, FIELD_MAX_LENGTH.api_key),
           model_id: clipField(sourceTemplate.model_id, FIELD_MAX_LENGTH.model_id),
@@ -176,9 +168,6 @@ export function ModelTemplateModal({ open, template, copyFrom, onClose, onSaved 
           ),
           parameters: safeStringify(sourceTemplate.parameters ?? {}, 2),
           timeout: sourceTemplate.timeout,
-          retry_count: sourceTemplate.retry_count,
-          enable_streaming: sourceTemplate.enable_streaming,
-          enable_function_calling: sourceTemplate.enable_function_calling,
           verify_ssl: sourceTemplate.verify_ssl,
           headers: headersFromData(sourceTemplate.data),
         }
@@ -234,21 +223,13 @@ export function ModelTemplateModal({ open, template, copyFrom, onClose, onSaved 
       { label: t('modelTemplate.templateDescription'), value: form.description },
       { label: t('modelTemplate.modelProvider'), value: form.model_provider },
       { label: t('modelTemplate.modelId'), value: form.model_id },
-      ...(fromCommaList(form.model_tags) ?? []).map((tag) => ({
-        label: t('modelTemplate.modelTags'),
-        value: tag,
-      })),
     ]);
     if (unsafeField) {
       toast('warn', t('modelTemplate.unsafeText', { field: unsafeField }));
       return;
     }
-    if (!Number.isFinite(form.timeout) || form.timeout < 1) {
+    if (!Number.isInteger(form.timeout) || form.timeout < 1 || form.timeout > INT32_MAX) {
       toast('warn', t('modelTemplate.timeoutMin'));
-      return;
-    }
-    if (!Number.isFinite(form.retry_count) || form.retry_count < 0) {
-      toast('warn', t('modelTemplate.retryCountMin'));
       return;
     }
     const paramErr = checkJson(form.parameters);
@@ -273,16 +254,12 @@ export function ModelTemplateModal({ open, template, copyFrom, onClose, onSaved 
       template_name: form.template_name.trim(),
       description: form.description.trim() || null,
       model_type: modelTypeList,
-      model_tags: fromCommaList(form.model_tags),
       api_base: form.api_base.trim(),
       api_key: form.api_key,
       model_id: form.model_id.trim(),
       model_provider: form.model_provider.trim(),
       parameters: form.parameters.trim() ? tryParseJson(form.parameters, {}) : null,
       timeout: form.timeout,
-      retry_count: form.retry_count,
-      enable_streaming: form.enable_streaming,
-      enable_function_calling: form.enable_function_calling,
       verify_ssl: form.verify_ssl,
     };
     const nextData = buildTemplateData((template ?? copyFrom)?.data, parsedHeaders);
@@ -413,13 +390,15 @@ export function ModelTemplateModal({ open, template, copyFrom, onClose, onSaved 
           </div>
         </div>
         <div>
-          <FieldLabel>{t('modelTemplate.modelTags')}</FieldLabel>
-          <input
-            className="input"
-            placeholder={t('modelTemplate.modelTagsHint')}
-            value={form.model_tags}
-            onChange={(e) => update('model_tags', e.target.value)}
-          />
+          <FieldLabel>{t('modelTemplate.verifySsl')}</FieldLabel>
+          <label className="flex items-center gap-2 cursor-pointer border border-border rounded-md px-3 h-[2.375rem] hover:bg-bg-hover text-sm">
+            <input
+              type="checkbox"
+              checked={form.verify_ssl}
+              onChange={(e) => update('verify_ssl', e.target.checked)}
+            />
+            <span>{form.verify_ssl ? t('common.enabled') : t('common.disabled')}</span>
+          </label>
         </div>
         <div>
           <FieldLabel required>{t('modelTemplate.timeout')}</FieldLabel>
@@ -427,38 +406,15 @@ export function ModelTemplateModal({ open, template, copyFrom, onClose, onSaved 
             className="input"
             type="number"
             min={1}
+            max={INT32_MAX}
             value={form.timeout}
             onChange={(e) => update('timeout', Number(e.target.value))}
           />
-        </div>
-        <div>
-          <FieldLabel required>{t('modelTemplate.retryCount')}</FieldLabel>
-          <input
-            className="input"
-            type="number"
-            min={0}
-            value={form.retry_count}
-            onChange={(e) => update('retry_count', Number(e.target.value))}
-          />
-        </div>
-        <div className="md:col-span-2 grid grid-cols-2 md:grid-cols-3 gap-2 text-xs">
-          {[
-            ['enable_streaming', t('modelTemplate.enableStreaming')],
-            ['enable_function_calling', t('modelTemplate.enableFunctionCalling')],
-            ['verify_ssl', t('modelTemplate.verifySsl')],
-          ].map(([k, label]) => (
-            <label
-              key={k}
-              className="flex items-center gap-2 cursor-pointer border border-border rounded-md px-3 py-2 hover:bg-bg-hover"
-            >
-              <input
-                type="checkbox"
-                checked={form[k as keyof FormState] as boolean}
-                onChange={(e) => update(k as keyof FormState, e.target.checked as never)}
-              />
-              <span>{label}</span>
-            </label>
-          ))}
+          {(!Number.isInteger(form.timeout) || form.timeout < 1 || form.timeout > INT32_MAX) && (
+            <div className="text-[11px] text-danger mt-1" role="alert">
+              {t('modelTemplate.timeoutMin')}
+            </div>
+          )}
         </div>
         <div className="md:col-span-2">
           <JsonField

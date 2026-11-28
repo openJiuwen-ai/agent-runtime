@@ -33,7 +33,7 @@ from manager_server.schemas.application_config_schemas import (
     LogMaskingRuleListQuery,
     LogMaskingRuleUpdateBody,
 )
-from manager_server.schemas.common_schemas import ResponseModel
+from manager_server.schemas.common_schemas import INT32_MAX, ResponseModel
 
 application_config_router = APIRouter()
 package_catalog_router = APIRouter()
@@ -304,7 +304,7 @@ async def get_package_catalog():
 
 
 class CronPolicyUpsertRequest(BaseModel):
-    max_jobs_per_user: int = Field(..., ge=0)
+    max_jobs_per_user: int = Field(..., ge=0, le=INT32_MAX)
 
 
 @application_config_router.put(

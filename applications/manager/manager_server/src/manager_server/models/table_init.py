@@ -52,6 +52,7 @@ from manager_server.models.template_models import (
     MCP_TEMPLATE_TABLE_DEF,
     MODEL_TEMPLATE_TABLE_DEF,
     PERMISSIONS_TEMPLATE_TABLE_DEF,
+    EXECUTION_GUARD_TEMPLATE_TABLE_DEF,
     EXPERT_PACKAGE_TEMPLATE_TABLE_DEF,
     SERVICE_CONFIG_CONTAINER_TABLE_DEF,
     SERVICE_CONFIG_TEMPLATE_TABLE_DEF,
@@ -83,6 +84,7 @@ ALL_TABLE_DEFINITIONS = (
     SKILL_PREBUILT_TEMPLATE_TABLE_DEF,
     EXPERT_PACKAGE_TEMPLATE_TABLE_DEF,
     PERMISSIONS_TEMPLATE_TABLE_DEF,
+    EXECUTION_GUARD_TEMPLATE_TABLE_DEF,
     MCP_TEMPLATE_TABLE_DEF,
     SERVICE_CONFIG_CONTAINER_TABLE_DEF,
     SERVICE_CONFIG_TEMPLATE_TABLE_DEF,
@@ -385,6 +387,136 @@ async def _ensure_expert_package_revision_column(handler: DBHandler) -> None:
                 raise
 
 
+async def _ensure_expert_package_template_swarmflow_column(handler: DBHandler) -> None:
+    """旧库补 ``expert_package_template.swarmflow``（JSON，可空）。"""
+
+    def upgrade(connection):
+        inspector = inspect(connection)
+        table_name = EXPERT_PACKAGE_TEMPLATE_TABLE_DEF.table_name
+        if not inspector.has_table(table_name):
+            return
+        cols = {col["name"] for col in inspector.get_columns(table_name)}
+        if "swarmflow" in cols:
+            return
+        quote = connection.dialect.identifier_preparer.quote
+        dialect = connection.dialect.name
+        if dialect == "postgresql":
+            col_type = "JSONB"
+        elif dialect in ("mysql", "mariadb"):
+            col_type = "JSON"
+        else:
+            col_type = "TEXT"
+        connection.execute(
+            text(
+                f"ALTER TABLE {quote(table_name)} "
+                f"ADD COLUMN {quote('swarmflow')} {col_type} NULL"
+            )
+        )
+
+    for attempt in range(3):
+        try:
+            async with handler.get_engine().begin() as connection:
+                await connection.run_sync(upgrade)
+            return
+        except DBAPIError as exc:
+            dialect = handler.get_engine().dialect.name
+            sqlstate = getattr(exc.orig, "sqlstate", None) or getattr(
+                exc.orig, "pgcode", None
+            )
+            errno = exc.orig.args[0] if exc.orig.args else None
+            column_race = (
+                (dialect == "postgresql" and sqlstate == "42701")
+                or (dialect == "mysql" and errno == 1060)
+                or "duplicate column" in str(exc.orig).lower()
+            )
+            if not column_race or attempt == 2:
+                raise
+
+
+async def _drop_model_template_retired_flags(handler: DBHandler) -> None:
+    """Drop retired model_template flags that reject inserts after the code removal.
+
+    ``enable_streaming`` / ``enable_function_calling`` were removed from the table
+    definition, but existing MariaDB/MySQL schemas still keep them as NOT NULL
+    without defaults, so creating a model fails with OperationalError 1364.
+
+    DROP 失败不中止启动：新代码已不再读写这两列；与
+    ``_drop_instance_grant_upload_skill_policy`` 保持同一策略。
+    """
+    if not isinstance(handler, SQLAlchemyHandler):
+        return
+
+    retired = ("enable_streaming", "enable_function_calling")
+
+    def migrate(sync_connection) -> None:
+        table_name = MODEL_TEMPLATE_TABLE_DEF.table_name
+        inspector = inspect(sync_connection)
+        if not inspector.has_table(table_name):
+            return
+        columns = {item["name"] for item in inspector.get_columns(table_name)}
+        quote = sync_connection.dialect.identifier_preparer.quote
+        dropped: list[str] = []
+        for column in retired:
+            if column not in columns:
+                continue
+            sync_connection.execute(
+                text(
+                    f"ALTER TABLE {quote(table_name)} "
+                    f"DROP COLUMN {quote(column)}"
+                )
+            )
+            dropped.append(column)
+        if dropped:
+            _log.info("dropped model_template columns: %s", ", ".join(dropped))
+
+    try:
+        async with handler.get_engine().begin() as connection:
+            await connection.run_sync(migrate)
+    except DBAPIError as exc:
+        dialect = handler.get_engine().dialect.name
+        sqlstate = getattr(exc.orig, "sqlstate", None) or getattr(exc.orig, "pgcode", None)
+        errno = exc.orig.args[0] if exc.orig.args else None
+        message = str(exc.orig).lower()
+        already_dropped = (
+            (dialect == "postgresql" and sqlstate == "42703")
+            or (dialect == "mysql" and errno == 1091)
+            or "no such column" in message
+            or "does not exist" in message
+        )
+        if not already_dropped:
+            _log.warning(
+                "drop model_template.enable_streaming/enable_function_calling failed: %s",
+                exc,
+            )
+
+
+async def _ensure_agent_definition_data_column(handler: DBHandler) -> None:
+    """Add nullable binding storage to existing installations without resetting data."""
+    def upgrade(connection):
+        inspector = inspect(connection)
+        table_name = AGENT_DEFINITION_TABLE_DEF.table_name
+        if not inspector.has_table(table_name):
+            return
+        if "data" in {col["name"] for col in inspector.get_columns(table_name)}:
+            return
+        quote = connection.dialect.identifier_preparer.quote
+        connection.execute(text(
+            f"ALTER TABLE {quote(table_name)} ADD COLUMN {quote('data')} JSON"
+        ))
+
+    try:
+        async with handler.get_engine().begin() as connection:
+            await connection.run_sync(upgrade)
+    except DBAPIError:
+        # Another Manager may have performed the same additive upgrade.
+        async with handler.get_engine().begin() as connection:
+            exists = await connection.run_sync(lambda conn: "data" in {
+                col["name"] for col in inspect(conn).get_columns(AGENT_DEFINITION_TABLE_DEF.table_name)
+            })
+        if not exists:
+            raise
+
+
 async def init_all_tables(handler: DBHandler) -> None:
     _ensure_bigint_type_support()
     # 必须在表循环之前补列：init_table 建索引会因缺列失败。
@@ -394,8 +526,11 @@ async def init_all_tables(handler: DBHandler) -> None:
     await _ensure_team_quota_org_column(handler)
     await _migrate_a2a_discovery_settings(handler)
     await _drop_instance_grant_upload_skill_policy(handler)
+    await _drop_model_template_retired_flags(handler)
     await _ensure_user_preference_default_extras_column(handler)
     await _ensure_expert_package_revision_column(handler)
+    await _ensure_expert_package_template_swarmflow_column(handler)
+    await _ensure_agent_definition_data_column(handler)
     from manager_server.core.authz import seed_authz_defaults
 
     await seed_authz_defaults(handler)

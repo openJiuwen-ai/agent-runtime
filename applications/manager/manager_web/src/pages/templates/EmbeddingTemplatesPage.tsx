@@ -13,13 +13,19 @@ import {
 } from '../../components/TableColumnSort';
 import { useAsync } from '../../hooks/useAsync';
 import { useListSearch } from '../../hooks/useListSearch';
-import { ApiError, EmbeddingTemplateApi } from '../../services/api';
+import { EmbeddingTemplateApi } from '../../services/api';
 import { toast } from '../../stores/uiStore';
 import type { EmbeddingTemplate } from '../../types';
 import { formatTime, truncate } from '../../utils/format';
+import {
+  deleteBlockedByReferences,
+  disableBlockedByReferences,
+  templateInUseMessage,
+} from '../../utils/templateInUse';
 import { useRouter } from '../../router';
 import { EmbeddingTemplateModal } from './EmbeddingTemplateModal';
 import { ResourceExportButton, ResourceImportButton } from '../../components/ResourceImportExport';
+import { WorkspaceNote } from '../../components/WorkspaceNote';
 
 type EmbeddingTemplateSortField =
   | 'template_name'
@@ -30,7 +36,8 @@ type EmbeddingTemplateSortField =
   | 'updated_at';
 
 export function EmbeddingTemplatesPage() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const zh = i18n.language.startsWith('zh');
   const { navigate } = useRouter();
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
@@ -84,6 +91,11 @@ export function EmbeddingTemplatesPage() {
 
   const toggleEnabled = async (row: EmbeddingTemplate, enabled: boolean) => {
     if (togglingId) return;
+    const blocked = disableBlockedByReferences(enabled, row.reference_count, t);
+    if (blocked) {
+      toast('warn', blocked);
+      return;
+    }
     const previous = row.enabled;
     setItems((current) =>
       current.map((item) => item.template_id === row.template_id ? { ...item, enabled } : item),
@@ -98,12 +110,20 @@ export function EmbeddingTemplatesPage() {
           item.template_id === row.template_id ? { ...item, enabled: previous } : item,
         ),
       );
-      toast('danger', t('errors.saveFailed', {
-        detail: toggleError instanceof ApiError ? toggleError.detail : (toggleError as Error).message,
-      }));
+      const localized = templateInUseMessage(toggleError, t, 'disable');
+      toast('danger', localized ?? t('errors.saveFailedGeneric'));
     } finally {
       setTogglingId(null);
     }
+  };
+
+  const requestDelete = (row: EmbeddingTemplate) => {
+    const blocked = deleteBlockedByReferences(row.reference_count, t);
+    if (blocked) {
+      toast('warn', blocked);
+      return;
+    }
+    setDeleteTarget(row);
   };
 
   return (
@@ -111,8 +131,12 @@ export function EmbeddingTemplatesPage() {
       <div className="flex min-w-0 flex-col gap-4">
         <div className="page-header w-full min-w-0 flex-wrap items-start gap-y-3">
           <div className="min-w-[7.5rem] max-w-[20rem] shrink-0 sm:max-w-[32rem]">
-            <div className="page-title truncate">{t('embeddingTemplate.title')}</div>
-            <div className="page-subtitle truncate">{t('embeddingTemplate.subtitle')}</div>
+            <div className="page-title truncate" title={t('embeddingTemplate.title')}>
+              {t('embeddingTemplate.title')}
+            </div>
+            <div className="page-subtitle truncate" title={t('embeddingTemplate.subtitle')}>
+              {t('embeddingTemplate.subtitle')}
+            </div>
           </div>
           <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
             <ListSearchInput value={searchInput} onChange={setSearchInput} placeholder={t('embeddingTemplate.searchPlaceholder')} className="basis-full sm:basis-auto" />
@@ -123,137 +147,152 @@ export function EmbeddingTemplatesPage() {
             </button>
           </div>
         </div>
-        <div className="card manager-page-table !p-0">
-          {loading ? (
-            <div className="p-4 text-sm text-muted">{t('common.loading')}</div>
-          ) : error ? (
-            <div className="p-4 text-sm text-danger">{t('errors.loadFailed', { detail: error })}</div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="table w-max min-w-full">
-                <thead>
-                  <tr>
-                    <th>
-                      <TableColumnSort
-                        label={t('embeddingTemplate.templateName')}
-                        value={sortBy === 'template_name' ? sortOrder : ''}
-                        options={sortOptions}
-                        onChange={(value) => handleSortChange('template_name', value)}
-                      />
-                    </th>
-                    <th>
-                      <TableColumnSort
-                        label={t('embeddingTemplate.templateDescription')}
-                        value={sortBy === 'description' ? sortOrder : ''}
-                        options={sortOptions}
-                        onChange={(value) => handleSortChange('description', value)}
-                      />
-                    </th>
-                    <th>
-                      <TableColumnSort
-                        label={t('embeddingTemplate.modelProvider')}
-                        value={sortBy === 'model_provider' ? sortOrder : ''}
-                        options={sortOptions}
-                        onChange={(value) => handleSortChange('model_provider', value)}
-                      />
-                    </th>
-                    <th>
-                      <TableColumnSort
-                        label={t('embeddingTemplate.modelId')}
-                        value={sortBy === 'model_id' ? sortOrder : ''}
-                        options={sortOptions}
-                        onChange={(value) => handleSortChange('model_id', value)}
-                      />
-                    </th>
-                    <th>{t('embeddingTemplate.embedTags')}</th>
-                    <th>
-                      <TableColumnSort
-                        label={t('embeddingTemplate.apiBase')}
-                        value={sortBy === 'api_base' ? sortOrder : ''}
-                        options={sortOptions}
-                        onChange={(value) => handleSortChange('api_base', value)}
-                      />
-                    </th>
-                    <th>
-                      <TableColumnFilter
-                        label={t('common.enabled')}
-                        value={enabledFilter}
-                        options={[
-                          { value: '', label: t('common.all') },
-                          { value: 'true', label: t('common.enabled') },
-                          { value: 'false', label: t('common.disabled') },
-                        ]}
-                        onChange={(value) => { setEnabledFilter(value); setPage(1); }}
-                      />
-                    </th>
-                    <th>{t('embeddingTemplate.referenceCount')}</th>
-                    <th>
-                      <TableColumnSort
-                        label={t('embeddingTemplate.updatedAt')}
-                        value={sortBy === 'updated_at' ? sortOrder : ''}
-                        options={sortOptions}
-                        onChange={(value) => handleSortChange('updated_at', value)}
-                      />
-                    </th>
-                    <th>{t('common.actions')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {items.length === 0 ? (
-                    <tr><td colSpan={10}><Empty text={t('common.empty')} /></td></tr>
-                  ) : items.map((row) => (
-                    <tr key={row.template_id}>
-                      <td className="align-top">
-                        <div className="font-medium text-text-strong">{row.template_name}</div>
-                        <div className="mono text-[11px] text-muted">{row.template_id}</div>
-                      </td>
-                      <td className="max-w-[14rem] text-[11px] text-muted" title={row.description ?? undefined}>
-                        {row.description ? truncate(row.description, 48) : '—'}
-                      </td>
-                      <td className="whitespace-nowrap"><span className="tag">{row.model_provider}</span></td>
-                      <td className="mono max-w-[18rem] break-all text-xs">{row.model_id}</td>
-                      <td className="max-w-[14rem]">
-                        <div className="flex flex-wrap gap-1">
-                          {(row.embed_tags ?? []).map((tag) => <span key={tag} className="tag">{tag}</span>)}
-                        </div>
-                      </td>
-                      <td className="mono max-w-[14rem] text-[11px] text-muted" title={row.api_base}>
-                        {truncate(row.api_base, 36)}
-                      </td>
-                      <td>
-                        <Switch checked={row.enabled} disabled={togglingId === row.template_id} onChange={(enabled) => void toggleEnabled(row, enabled)} />
-                      </td>
-                      <td className="whitespace-nowrap">
-                        {row.reference_count > 0 ? (
-                          <button type="button"
-                            className="tag cursor-pointer"
-                            title={t('embeddingTemplate.referenceHint')}
-                            onClick={() => navigate(agentResourceReferencesPath('embedding', row.template_id, row.template_name))}
-                          >
-                            {row.reference_count}
-                          </button>
-                        ) : (
-                          <span className="text-[11px] text-muted">0</span>
-                        )}
-                      </td>
-                      <td className="mono whitespace-nowrap text-[11px] text-muted">{formatTime(row.updated_at)}</td>
-                      <td className="whitespace-nowrap">
-                        <div className="flex gap-1">
-                          <ResourceExportButton resourceType="embedding" resourceIds={[row.template_id]} />
-                          <button className="btn sm ghost" onClick={() => { setEditing(row); setModalOpen(true); }}>{t('common.edit')}</button>
-                          <button className="btn sm danger" onClick={() => setDeleteTarget(row)}>{t('common.delete')}</button>
-                        </div>
-                      </td>
+
+        <div className="flex w-full min-w-0 shrink-0 flex-col gap-4">
+          <div className="card !p-0">
+            {loading ? (
+              <div className="p-4 text-sm text-muted">{t('common.loading')}</div>
+            ) : error ? (
+              <div className="p-4 text-sm text-danger">{t('errors.loadFailed', { detail: error })}</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="table w-max min-w-full">
+                  <thead>
+                    <tr>
+                      <th>
+                        <TableColumnSort
+                          label={t('embeddingTemplate.templateName')}
+                          value={sortBy === 'template_name' ? sortOrder : ''}
+                          options={sortOptions}
+                          onChange={(value) => handleSortChange('template_name', value)}
+                        />
+                      </th>
+                      <th>
+                        <TableColumnSort
+                          label={t('embeddingTemplate.templateDescription')}
+                          value={sortBy === 'description' ? sortOrder : ''}
+                          options={sortOptions}
+                          onChange={(value) => handleSortChange('description', value)}
+                        />
+                      </th>
+                      <th>
+                        <TableColumnSort
+                          label={t('embeddingTemplate.modelProvider')}
+                          value={sortBy === 'model_provider' ? sortOrder : ''}
+                          options={sortOptions}
+                          onChange={(value) => handleSortChange('model_provider', value)}
+                        />
+                      </th>
+                      <th>
+                        <TableColumnSort
+                          label={t('embeddingTemplate.modelId')}
+                          value={sortBy === 'model_id' ? sortOrder : ''}
+                          options={sortOptions}
+                          onChange={(value) => handleSortChange('model_id', value)}
+                        />
+                      </th>
+                      <th>
+                        <TableColumnSort
+                          label={t('embeddingTemplate.apiBase')}
+                          value={sortBy === 'api_base' ? sortOrder : ''}
+                          options={sortOptions}
+                          onChange={(value) => handleSortChange('api_base', value)}
+                        />
+                      </th>
+                      <th>
+                        <TableColumnFilter
+                          label={t('common.enabled')}
+                          value={enabledFilter}
+                          options={[
+                            { value: '', label: t('common.all') },
+                            { value: 'true', label: t('common.enabled') },
+                            { value: 'false', label: t('common.disabled') },
+                          ]}
+                          onChange={(value) => { setEnabledFilter(value); setPage(1); }}
+                        />
+                      </th>
+                      <th>{t('embeddingTemplate.referenceCount')}</th>
+                      <th>
+                        <TableColumnSort
+                          label={t('embeddingTemplate.updatedAt')}
+                          value={sortBy === 'updated_at' ? sortOrder : ''}
+                          options={sortOptions}
+                          onChange={(value) => handleSortChange('updated_at', value)}
+                        />
+                      </th>
+                      <th className="whitespace-nowrap min-w-[9.5rem]">{t('common.actions')}</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {items.length === 0 ? (
+                      <tr><td colSpan={9}><Empty text={t('common.empty')} /></td></tr>
+                    ) : items.map((row) => (
+                      <tr key={row.template_id}>
+                        <td className="align-top">
+                          <div className="text-text-strong font-medium break-words">{row.template_name}</div>
+                          <div className="text-[11px] text-muted mono break-all" title={row.template_id}>{row.template_id}</div>
+                        </td>
+                        <td className="text-[11px] text-muted max-w-[14rem]" title={row.description ?? undefined}>
+                          {row.description ? truncate(row.description, 48) : '—'}
+                        </td>
+                        <td className="whitespace-nowrap"><span className="tag">{row.model_provider}</span></td>
+                        <td className="mono text-xs min-w-[10rem] max-w-[18rem] break-all align-top text-text-strong" title={row.model_id}>{row.model_id}</td>
+                        <td className="mono text-[11px] text-muted max-w-[12rem]" title={row.api_base}>{truncate(row.api_base, 36)}</td>
+                        <td className="whitespace-nowrap">
+                          <Switch
+                            checked={row.enabled}
+                            disabled={togglingId === row.template_id}
+                            aria-label={row.enabled ? t('common.enabled') : t('common.disabled')}
+                            onChange={(enabled) => void toggleEnabled(row, enabled)}
+                          />
+                        </td>
+                        <td className="whitespace-nowrap">
+                          {row.reference_count > 0 ? (
+                            <button
+                              type="button"
+                              className="tag cursor-pointer"
+                              title={t('embeddingTemplate.referenceHint')}
+                              onClick={() => navigate(agentResourceReferencesPath('embedding', row.template_id, row.template_name))}
+                            >
+                              {row.reference_count}
+                            </button>
+                          ) : (
+                            <span className="text-[11px] text-muted">0</span>
+                          )}
+                        </td>
+                        <td className="mono text-[11px] text-muted whitespace-nowrap">{formatTime(row.updated_at)}</td>
+                        <td className="whitespace-nowrap min-w-[9.5rem]">
+                          <div className="flex items-center gap-1">
+                            <ResourceExportButton resourceType="embedding" resourceIds={[row.template_id]} />
+                            <button className="btn sm ghost" onClick={() => { setEditing(row); setModalOpen(true); }}>{t('common.edit')}</button>
+                            <button className="btn sm danger" onClick={() => requestDelete(row)}>{t('common.delete')}</button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {data && (
+            <Pagination
+              page={page}
+              pageSize={pageSize}
+              total={data.total ?? data.items.length}
+              onChange={(nextPage, nextSize) => { setPage(nextPage); setPageSize(nextSize); }}
+            />
           )}
+
+          <WorkspaceNote title={t('embeddingTemplate.title')}>
+            {t('embeddingTemplate.subtitle')}
+            {zh ? '。' : '. '}
+            {zh
+              ? '保存后，在 Agent 或集群配置中引用；修改已被引用的资源前，请先查看关联模板和集群。'
+              : 'Reference saved resources from an Agent or cluster configuration. Review linked templates and clusters before changing a referenced resource.'}
+          </WorkspaceNote>
         </div>
-        {data ? (
-          <Pagination page={page} pageSize={pageSize} total={data.total ?? data.items.length} onChange={(nextPage, nextSize) => { setPage(nextPage); setPageSize(nextSize); }} />
-        ) : null}
       </div>
       <EmbeddingTemplateModal
         open={modalOpen}
@@ -272,9 +311,8 @@ export function EmbeddingTemplatesPage() {
             toast('success', t('success.deleted'));
             void reload();
           } catch (deleteError) {
-            toast('danger', t('errors.deleteFailed', {
-              detail: deleteError instanceof ApiError ? deleteError.detail : (deleteError as Error).message,
-            }));
+            const localized = templateInUseMessage(deleteError, t, 'delete');
+            toast('danger', localized ?? t('errors.deleteFailedGeneric'));
           }
         }}
         onClose={() => setDeleteTarget(null)}

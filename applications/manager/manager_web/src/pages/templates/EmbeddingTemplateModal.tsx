@@ -11,7 +11,6 @@ import type {
   EmbeddingTemplateCreateBody,
   EmbeddingTemplateUpdateBody,
 } from '../../types';
-import { fromCommaList, toCommaList } from '../../utils/format';
 import { findUnsafeTextField } from '../../utils/safeText';
 import { isValidHttpUrl } from '../../utils/url';
 
@@ -37,7 +36,6 @@ const DEFAULT_MODEL_PROVIDER = MODEL_PROVIDER_OPTIONS[0];
 interface FormState {
   template_name: string;
   description: string;
-  embed_tags: string;
   api_base: string;
   api_key: string;
   model_id: string;
@@ -47,7 +45,6 @@ interface FormState {
 const empty: FormState = {
   template_name: '',
   description: '',
-  embed_tags: '',
   api_base: '',
   api_key: '',
   model_id: '',
@@ -76,7 +73,6 @@ export function EmbeddingTemplateModal({ open, template, copyFrom, onClose, onSa
       ? {
           template_name: sourceTemplate.template_name,
           description: sourceTemplate.description ?? '',
-          embed_tags: toCommaList(sourceTemplate.embed_tags),
           api_base: sourceTemplate.api_base,
           api_key: sourceTemplate.api_key,
           model_id: sourceTemplate.model_id,
@@ -114,10 +110,6 @@ export function EmbeddingTemplateModal({ open, template, copyFrom, onClose, onSa
       { label: t('embeddingTemplate.templateName'), value: form.template_name },
       { label: t('embeddingTemplate.templateDescription'), value: form.description },
       { label: t('embeddingTemplate.modelId'), value: form.model_id },
-      ...(fromCommaList(form.embed_tags) ?? []).map((tag) => ({
-        label: t('embeddingTemplate.embedTags'),
-        value: tag,
-      })),
     ]);
     if (unsafeField) {
       toast('warn', t('embeddingTemplate.unsafeText', { field: unsafeField }));
@@ -127,7 +119,6 @@ export function EmbeddingTemplateModal({ open, template, copyFrom, onClose, onSa
     const body: EmbeddingTemplateCreateBody | EmbeddingTemplateUpdateBody = {
       template_name: form.template_name.trim(),
       description: form.description.trim() || null,
-      embed_tags: fromCommaList(form.embed_tags),
       api_base: form.api_base.trim(),
       api_key: form.api_key,
       model_id: form.model_id.trim(),
@@ -210,10 +201,6 @@ export function EmbeddingTemplateModal({ open, template, copyFrom, onClose, onSa
         <div className="md:col-span-2">
           <FieldLabel>{t('embeddingTemplate.templateDescription')}</FieldLabel>
           <LimitedTextInput value={form.description} maxLength={FIELD_MAX_LENGTH.description} onChange={(value) => update('description', value)} />
-        </div>
-        <div className="md:col-span-2">
-          <FieldLabel>{t('embeddingTemplate.embedTags')}</FieldLabel>
-          <input className="input" value={form.embed_tags} placeholder={t('embeddingTemplate.embedTagsHint')} onChange={(event) => update('embed_tags', event.target.value)} />
         </div>
       </div>
       {template && <ConfigRefreshCostHint scope="template" />}

@@ -1,5 +1,5 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-"""创建/更新实例时探测 Gateway / Runtime / User Web 是否可达。"""
+"""创建/更新实例时探测 Gateway / Runtime 是否可达。"""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ import httpx
 from manager_server.infrastructure.dev_mode import offline_dev_enabled
 from manager_server.security.link_mtls import ManagerLinkMTLSConfig
 
-Side = Literal["gateway", "runtime", "user_web"]
+Side = Literal["gateway", "runtime"]
 
 
 def runtime_probe_enabled() -> bool:
@@ -27,8 +27,6 @@ def runtime_probe_enabled() -> bool:
 _GATEWAY_HEALTH_PATH = "/api/health"
 # Agent Runtime：``GET /healthz``（agent_runtime main._register_healthz）
 _RUNTIME_HEALTH_PATH = "/healthz"
-# User Web：无专用 health；探根路径（SPA index / 静态服务）
-_USER_WEB_HEALTH_PATH = "/"
 
 _DEFAULT_TIMEOUT = 5.0
 
@@ -36,9 +34,7 @@ _DEFAULT_TIMEOUT = 5.0
 def _health_path(side: Side) -> str:
     if side == "gateway":
         return _GATEWAY_HEALTH_PATH
-    if side == "runtime":
-        return _RUNTIME_HEALTH_PATH
-    return _USER_WEB_HEALTH_PATH
+    return _RUNTIME_HEALTH_PATH
 
 
 async def probe_config_host(
@@ -51,7 +47,6 @@ async def probe_config_host(
 
     - gateway → ``{base}/api/health``，期望 2xx/3xx（非 4xx/5xx）
     - runtime → ``{base}/healthz``，期望 2xx/3xx，且 JSON ``ok`` 不为 false
-    - user_web → ``{base}/``，期望 2xx/3xx（SPA 入口可达）
     """
     base = str(base_url or "").strip().rstrip("/")
     if not base:
@@ -65,7 +60,7 @@ async def probe_config_host(
         raise ValueError(f"{side} host must be an http(s) URL, got {base_url!r}")
 
     path = _health_path(side)
-    url = f"{base}{path}" if path != "/" else f"{base}/"
+    url = f"{base}{path}"
     try:
         async with httpx.AsyncClient(**client_kwargs) as client:
             resp = await client.get(url)
@@ -113,12 +108,11 @@ async def require_config_hosts_reachable(
     *,
     gateway_host: str | None = None,
     runtime_host: str | None = None,
-    user_web_host: str | None = None,
     timeout: float = _DEFAULT_TIMEOUT,
 ) -> None:
-    """对非空的 Gateway / Runtime / User Web host 依次探活；任一失败即抛错。"""
+    """对非空的 Gateway / Runtime host 依次探活；任一失败即抛错。"""
     if offline_dev_enabled():
-        hosts = (("gateway", gateway_host), ("runtime", runtime_host), ("user_web", user_web_host))
+        hosts = (("gateway", gateway_host), ("runtime", runtime_host))
         for side, host in hosts:
             if host:
                 parsed = urlsplit(str(host).strip())
@@ -132,5 +126,3 @@ async def require_config_hosts_reachable(
         await probe_config_host(gateway_host, side="gateway", timeout=timeout)
     if runtime_host:
         await probe_config_host(runtime_host, side="runtime", timeout=timeout)
-    if user_web_host:
-        await probe_config_host(user_web_host, side="user_web", timeout=timeout)

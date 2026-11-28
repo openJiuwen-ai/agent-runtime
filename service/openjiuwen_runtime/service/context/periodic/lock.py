@@ -11,6 +11,7 @@ WATCH/MULTI/EXEC 的 owner-token 校验式 CAS，语义等价。
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any, Optional
 from uuid import uuid4
 
@@ -160,27 +161,49 @@ class TickLock:
             task.cancel()
 
     async def _renew_loop(self, token: str) -> None:
+        """后台续期：固定节拍（不随续期往返耗时漂移），瞬时错误重试一次。
+
+        2026-11：原实现 ``sleep(interval)`` 是「间隔 + 续期耗时」的漂移节拍，
+        且单次异常即判失锁 → 高延迟 Redis 上一次抖动就把正在跑的那一拍
+        abort（无 Lua 模式的 CAS 续期要 3~4 个往返，更容易撞上）。现在：
+        节拍按单调时钟对齐（续期慢则下一次立刻再续），异常先重试一次，
+        仍失败才判失锁；``not owner`` 是确定性结论，不重试。
+        """
         try:
+            next_at = time.monotonic()
             while True:
-                await asyncio.sleep(self._renew_interval_sec)
-                try:
-                    ok = await self.renew_once(token)
-                except asyncio.CancelledError:
-                    logger.debug(
-                        "tick lock renew cancelled: key=%s token=%s",
-                        self._lock_key,
-                        token,
-                    )
-                    raise
-                except Exception:
-                    # Redis 抖动等：视为失锁，避免续期挂掉后业务还以为握着锁
-                    logger.exception(
-                        "tick lock renew error: key=%s token=%s",
-                        self._lock_key,
-                        token,
-                    )
-                    self._mark_lost("renew_error", token)
-                    return
+                next_at += self._renew_interval_sec
+                await asyncio.sleep(max(0.0, next_at - time.monotonic()))
+                ok: Optional[bool] = None
+                for attempt in (0, 1):
+                    try:
+                        ok = await self.renew_once(token)
+                        break
+                    except asyncio.CancelledError:
+                        logger.debug(
+                            "tick lock renew cancelled: key=%s token=%s",
+                            self._lock_key,
+                            token,
+                        )
+                        raise
+                    except Exception:
+                        if attempt == 0:
+                            logger.warning(
+                                "tick lock renew error, retrying once: "
+                                "key=%s token=%s",
+                                self._lock_key,
+                                token,
+                                exc_info=True,
+                            )
+                            continue
+                        # 连续失败：视为失锁，避免续期挂掉后业务还以为握着锁
+                        logger.exception(
+                            "tick lock renew error: key=%s token=%s",
+                            self._lock_key,
+                            token,
+                        )
+                        self._mark_lost("renew_error", token)
+                        return
                 if not ok:
                     self._mark_lost("renew_not_owner", token)
                     return

@@ -70,13 +70,12 @@ export function TeamQuotaUsageTab({ instanceId, refreshKey = 0 }: { instanceId: 
                   <th>{t('instanceDetail.teamQuota.usage.botId')}</th>
                   <th>{t('instanceDetail.teamQuota.usage.used')}</th>
                   <th>{t('instanceDetail.teamQuota.usage.limit')}</th>
-                  <th>{t('instanceDetail.teamQuota.usage.default')}</th>
                 </tr>
               </thead>
               <tbody>
                 {items.length === 0 ? (
                   <tr>
-                    <td colSpan={7}>
+                    <td colSpan={6}>
                       <Empty text={t('instanceDetail.teamQuota.usage.empty')} />
                     </td>
                   </tr>
@@ -103,7 +102,6 @@ export function TeamQuotaUsageTab({ instanceId, refreshKey = 0 }: { instanceId: 
                           <td>{row.bot_id || '—'}</td>
                           <td>{row.used}</td>
                           <td>{row.limit}</td>
-                          <td>{row.default}</td>
                         </tr>
                         {expanded
                           ? (row.teams ?? []).map((team) => (
@@ -114,7 +112,6 @@ export function TeamQuotaUsageTab({ instanceId, refreshKey = 0 }: { instanceId: 
                                 </td>
                                 <td>{team.used}</td>
                                 <td>{team.limit}</td>
-                                <td />
                               </tr>
                             ))
                           : null}

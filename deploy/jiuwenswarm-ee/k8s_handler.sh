@@ -1,321 +1,1048 @@
 #!/usr/bin/env bash
-set -euo >/dev/null 2>&1
+[ -n "${_DEPLOY_K8S_HANDLER_SH:-}" ] && return 0
+_DEPLOY_K8S_HANDLER_SH=1
 
-check_if_master() {
-    if ! kubectl get node "$(hostname)" -o wide | awk '{print $3}' | grep -qEw "master|control-plane"; then
-        error "This script must be run on master node."
-    fi
-}
+# 本次运行内已分配的 NodePort（ensure_node_port 进程内去重，防止同批组件撞端口）
+_ENSURED_NODE_PORTS=""
 
-# Wait for kubernetes resource rollout ready
-# Args:
-#   1: resource kind
-#   2: resource name
-#   3: namespace (optional, default: default)
-wait_k8s_resource_ready() {
-    local kind="$1"
-    local name="$2"
-    local namespace="${3:-default}"
-    
-    info "Waiting for k8s resource: ${kind}/${namespace}/${name}"
-    exec_cmd kubectl rollout status "${kind}/${name}" --namespace="${namespace}"
-    success "${kind}/${namespace}/${name} is ready now"
-}
+# k8s_handler.sh —— 原生 k8s 形态（CLUSTER_TYPE=k8s）专属函数；openshift 形态下均不生效。
+# 包含三部分：
+#   1. k8s 形态通道实现（_kctl_k8s_*）：kubectl.sh 共享原语的 k8s 分支，按形态分流调用
+#   2. manager-web NodePort Service 追加（apply_k8s_extras）
+#   3. NFS 直连挂载（resolve_nfs_vars + apply_nfs_direct_mounts）：PVC 卷改写为 NFS 直连挂载；
+#      NFS_SERVER_ADDR 空=内置 NFS server（地址解析 + 数据目录自动创建），非空=外部 NFS
 
-# Check if kubernetes resource exists
-# Args:
-#   1: resource kind
-#   2: resource name
-#   3: namespace (optional, default: default)
-# Return: 0 = exists, 1 = not exists
-check_k8s_resource_exists() {
-    if [ "${DEPLOY_VARS["RENDER_ONLY"]}" == "true" ]; then
-        return 0
-    fi
+# ---------- NFS 直连挂载改写 ----------
+# 改写范围（yq 动态修改渲染产物 conf/*.yaml）：mariadb/mysql/postgresql/agentserver/minio → 删 PVC 文档，卷改为 nfs
+# redis 纯缓存不挂卷（模板已关闭 AOF），不参与改写
+# swarm-pvc.yaml 由 component_files 按形态剔除，k8s 形态不渲染不部署。
+# ENABLE_EXTERNAL_NFS=true（外部 NFS）时目录由使用方自行管理
 
-    local kind="$1"
-    local name="$2"
-    local namespace="${3:-default}"
-    local args=""
-
-    # Cluster-scoped resource: PersistentVolume
-    if [[ "${kind}" == "pv" || "${kind}" == "PersistentVolume" ]]; then
-        args="${kind} ${name}"
-        namespace=""
-    else
-        args="${kind} ${name} -n ${namespace}"
-    fi
-
-    if kubectl get ${args} >/dev/null 2>&1; then
-        return 0
-    fi
-    return 1
-}
-
-# delete all pods with specified name prefix
-delete_k8s_pods() {
-    local name="$1"
-    local namespace="${2:-default}"
-
-    info "Deleting all pods with prefix: ${name} (namespace: ${namespace})"
-    # Get prefixed pod list and execute batch deletion
-    info "Executing: kubectl get pods -n \"${namespace}\" -o name | grep -E \"^pod/${name}\" | xargs -r kubectl delete -n \"${namespace}\""
-    kubectl get pods -n "${namespace}" -o name \
-        | grep -E "^pod/${name}" \
-        | xargs -r kubectl delete -n "${namespace}"
-    success "All pods with prefix '${name}' have been deleted"
-}
-
-
-# Create specified kubernetes resource
-# Args:
-#   1: resource kind
-#   2: resource name
-#   3: namespace (optional, default: default)
-create_k8s_resource() {
-    local kind="$1"
-    local name="$2"
-    local namespace="${3:-default}"
-
-    local cmd_args=""
-    # PV and namespace are cluster-scoped, without namespace
-    if [[ "${kind}" == "pv" || "${kind}" == "ns" ]]; then
-        cmd_args="${kind} ${name}"
-        namespace=""
-    else
-        cmd_args="${kind} ${name} -n ${namespace}"
-    fi
-
-    # Check whether target resource exists
-    if kubectl get ${cmd_args} >/dev/null 2>&1; then
-        info "${kind}/${namespace}/${name} exists, skipping create."
-        return
-    fi
-
-    info "Creating k8s resource:  ${kind}/${namespace}/${name}"
-    exec_cmd kubectl create ${cmd_args}
-    success "${kind}/${namespace}/${name} is created now"
-}
-
-# Delete specified kubernetes resource
-# Args:
-#   1: resource kind
-#   2: resource name
-#   3: namespace (optional, default: default)
-delete_k8s_resource() {
-    local kind="$1"
-    local name="$2"
-    local namespace="${3:-default}"
-
-    local cmd_args=""
-    # PV is cluster-scoped, without namespace
-    if [[ "${kind}" == "pv" || "${kind}" == "PersistentVolume" ]]; then
-        cmd_args="${kind} ${name}"
-        namespace=""
-    else
-        cmd_args="${kind} ${name} -n ${namespace}"
-    fi
-
-    # Check whether target resource exists
-    if ! kubectl get ${cmd_args} >/dev/null 2>&1; then
-        info "${kind}/${namespace}/${name} not found, skipping deletion."
-        return
-    fi
-
-    info "Deleting k8s resource:  ${kind}/${namespace}/${name}"
-    exec_cmd kubectl delete ${cmd_args}
-    success "${kind}/${namespace}/${name} is deleted now"
-}
-
-
-# Wait for a pod in a given namespace to be fully terminated and removed
-# =====================================================================
-# 按正确顺序删除清单文件中的资源（替代 kubectl delete -f 一把梭），单参数 file。
-#
-# 先用一次 yq 解读清单，产出有序的"删除计划"（TSV：kind/namespace/name），
-# 计划顺序即删除顺序：
-#   1) Deployment / StatefulSet / DaemonSet → 删完等 Pod 全部退出，释放卷挂载
-#      （否则 PVC 被 pvc-protection finalizer 卡住）
-#   2) PersistentVolumeClaim    → kubectl delete 自带阻塞语义，无需额外 wait：
-#      Pod 已退出 finalizer 即可满足；若仍阻塞说明还有别的 Pod 挂载，属应暴露问题
-#   3) PersistentVolume         → Retain 策略只删对象不删 NFS 数据，
-#      重建同名 PV 后数据仍可见
-#   4) 剩余资源 delete -f 一把删（RBAC/Service/ConfigMap；PVC/PV 已删，此处 no-op）
-#
-# 为什么不能直接 kubectl delete -f：清单内 PV 常排在 PVC 之前，PV 因 pv-protection
-# finalizer 等待 PVC 先删，而 PVC 的删除请求尚未发出 → kubectl 永久阻塞（死锁）。
-# =====================================================================
-delete_k8s_resource_by_file() {
-    local file="$1"
-
-    local plan
-    plan=$(yq eval-all '
-        (select(.kind == "Deployment")          | [.kind, (.metadata.namespace // "-"), .metadata.name] | @tsv),
-        (select(.kind == "StatefulSet")         | [.kind, (.metadata.namespace // "-"), .metadata.name] | @tsv),
-        (select(.kind == "DaemonSet")           | [.kind, (.metadata.namespace // "-"), .metadata.name] | @tsv),
-        (select(.kind == "PersistentVolumeClaim") | [.kind, (.metadata.namespace // "-"), .metadata.name] | @tsv),
-        (select(.kind == "PersistentVolume")    | [.kind, (.metadata.namespace // "-"), .metadata.name] | @tsv)
-    ' "${file}") || plan=""
-
-    # 模板未写 namespace 的资源，获取默认的命名空间
-    local context_ns
-    context_ns=$(kubectl config view --minify -o jsonpath='{..namespace}' 2>/dev/null)
-    [ -z "${context_ns}" ] && context_ns="default"
-
-    local kind ns name
-    while IFS=$'\t' read -r kind ns name; do
-        [ -z "${kind}" ] && continue
-        [ "${ns}" == "-" ] && ns="${context_ns}"
-        case "${kind}" in
-            Deployment|StatefulSet|DaemonSet)
-                exec_cmd kubectl delete "${kind}" "${name}" -n "${ns}" --ignore-not-found=true
-                wait_pod_terminated "${name}" "${ns}"
-                ;;
-            PersistentVolumeClaim)
-                exec_cmd kubectl delete pvc "${name}" -n "${ns}" --ignore-not-found=true
-                ;;
-            PersistentVolume)
-                exec_cmd kubectl delete pv "${name}" --ignore-not-found=true
-                ;;
-        esac
-    done <<< "${plan}"
-
-    # 剩余资源一把删（此时再删工作负载/PVC/PV 为 no-op）
-    exec_cmd kubectl delete -f "${file}" --ignore-not-found=true
-}
-
-wait_pod_terminated() {
-  local pod_name_prefix="$1"
-  local namespace="${2:-default}"
-
-  echo "=== Waiting for pod [${namespace}/${pod_name_prefix}*] to terminate completely..."
-
-  while kubectl get pods -n "${namespace}" | grep -q "${pod_name_prefix}"; do
-    info "Pod is still terminating, waiting 3 seconds..."
-    sleep 3
+# 在内置 NFS server Pod 内创建组件数据目录（mkdir -p + chmod 777，随机 uid 可写）；
+# RENDER_ONLY（不连集群）与外部 NFS 模式跳过
+# 定位内置 NFS server Pod。
+# 注意：失败用 return 1 + stderr 提示，不能在函数内 error()——命令替换 $(...) 中
+# error 的 exit 1 只退出子 shell，报错文本（stdout）会被父 shell 捕获成返回值
+builtin_nfs_pod() { # → stdout: "<ns> <Pod名>"；失败原因 → stderr；rc 1=未找到
+  # 实例定位与基础服务同规则（本 ns → BASE_SVC_NS，自动去重）：nfs-server 为
+  # hostNetwork 单例（绑定节点 2049 端口），全集群仅能存活一套，共享实例推荐部署在 default
+  local pod ns seen=" "
+  # KCTL_NS 在 main 于 check_vars 之后才赋值；check_vars 内经本函数探测时取 NAMESPACE 兜底
+  for ns in "${KCTL_NS:-${DEPLOY_VARS["NAMESPACE"]:-}}" "${DEPLOY_VARS["BASE_SVC_NS"]}"; do
+    [ -n "$ns" ] || continue
+    case "$seen" in *" $ns "*) continue;; esac
+    seen="$seen$ns "
+    pod=$(kubectl get pods -n "$ns" -l "app=${DEPLOY_VARS["NFS_NAME"]}" \
+      -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    [ -n "$pod" ] && { printf '%s %s' "$ns" "$pod"; return 0; }
   done
-
-  success "Pod has been fully terminated and cleaned up!"
+  echo "未找到内置 NFS server Pod（探测 ns:${seen}label app=${DEPLOY_VARS["NFS_NAME"]}）：请先 ./deploy.sh up nfs，或改配外部 NFS（NFS_SERVER_ADDR）" >&2
+  return 1
 }
 
-fetch_current_node_ip() {
-    if [ -n "${DEPLOY_VARS["CURRENT_NODE_IP"]:-}" ]; then
-        return
-    fi
-
-    # Get InternalIP of current master node
-    DEPLOY_VARS["CURRENT_NODE_IP"]=$(kubectl get node "${DEPLOY_VARS["CURRENT_NODE_NAME"]}" -o json | \
-        jq -r '.status.addresses[] | 
-            select(.type == "InternalIP") | 
-            .address')
-    info "CURRENT_NODE_IP: ${DEPLOY_VARS["CURRENT_NODE_IP"]}"
-}
-
-
-fetch_current_node_name() {
-    # 用户已自行定义
-    if [ -n "${DEPLOY_VARS["CURRENT_NODE_NAME"]:-}" ]; then
-        info "CURRENT_NODE_NAME defined: ${DEPLOY_VARS["CURRENT_NODE_NAME"]}"
-        return
-    fi
-
-    # 默认用hostname尝试自动获取
-    # 注意: kubectl 内置 JSONPath 不支持嵌套过滤 [?(...[?(...)])],
-    # 会报 "unterminated filter"，因此改用 jq（与本文件其它地方一致）
-    DEPLOY_VARS["CURRENT_NODE_NAME"]=$(kubectl get nodes -o json | \
-        jq -r --arg HOST "$(hostname)" \
-        '.items[] |
-            select(.status.addresses[] | select(.type=="Hostname") | .address == $HOST) |
-            .metadata.name')
-    if [ -n "${DEPLOY_VARS["CURRENT_NODE_NAME"]:-}" ]; then
-        info "CURRENT_NODE_NAME: ${DEPLOY_VARS["CURRENT_NODE_NAME"]}"
-        return
-    fi
-
-    # 尝试用IP获取
-    for ip in $(hostname -I); do
-        DEPLOY_VARS["CURRENT_NODE_NAME"]=$(kubectl get nodes -o json | \
-            jq -r --arg IP "$ip" \
-            '.items[] |
-                select(.status.addresses[] | select(.type=="InternalIP") | .address == $IP) |
-                .metadata.name')
-        if [ -n "${DEPLOY_VARS["CURRENT_NODE_NAME"]:-}" ]; then
-            info "CURRENT_NODE_NAME: ${DEPLOY_VARS["CURRENT_NODE_NAME"]}"
-            return
-        fi
-    done
-
-    error "Failed to auto-detect node name, please set CURRENT_NODE_NAME manually"
-}
-
-# Collect Kubernetes cluster information:
-#     current master IP
-#     current master name
-#     worker IPs
-#     other master IPs
-# =====================================================================
-# 集群版本校验：观测组件（OpenTelemetry Collector 等）要求 Kubernetes v1.25+。
-# 版本号取自 apiserver /version；minor 兼容发行版后缀（如 "25+"、"25.3-gke.0"）。
-# =====================================================================
-check_k8s_cluster_version() {
-    local raw major minor
-    raw=$(kubectl get --raw=/version 2>/dev/null) || \
-        error "Failed to get Kubernetes version, please check cluster connectivity"
-    major=$(echo "${raw}" | jq -r '.major // empty')
-    minor=$(echo "${raw}" | jq -r '.minor // empty' | tr -dc '0-9')
-    if [ -z "${major}" ] || [ -z "${minor}" ]; then
-        error "Failed to parse Kubernetes version (raw: ${raw}), please check cluster connectivity"
-    fi
-    if [ "${major}" -lt 1 ] || { [ "${major}" -eq 1 ] && [ "${minor}" -lt 25 ]; }; then
-        warning "Kubernetes v${major}.${minor} is below v1.25 (OpenTelemetry Collector requires v1.25+), disabling the observability module"
-        DEPLOY_VARS["OBSERVABILITY_ENABLED"]="false"
-        return
-    fi
-    info "Kubernetes version check passed: v${major}.${minor}"
-}
-
-
-# ======== Check if the cluster has at least 2 nodes ========
-# 不足 2 个 Ready 节点仅警告放行（单节点/实验集群不被阻塞，生产环境请扩容）
-check_cluster_has_enough_nodes() {
-    if [ "${CMD}" == "down"  ]; then
-        return
-    fi
-    info "===== Checking cluster node count ====="
-
-    # Get ready node count (only Ready nodes)
-    local node_count=$(kubectl get nodes --no-headers | grep -w "Ready" | wc -l)
-
-    # Check if node count >= 2
-    if [[ ${node_count} -lt 2 ]]; then
-        warning "Cluster only has ${node_count} Ready node(s), at least 2 recommended. Continuing anyway..."
-        return
-    fi
-
-    success "Cluster has ${node_count} Ready nodes, check passed!"
-}
-
-collect_k8s_cluster_info() {
-    check_k8s_cluster_version
-    check_cluster_has_enough_nodes
-    fetch_current_node_name
-    fetch_current_node_ip
-}
-
-# Check if any node has the gateway=enable label
-if_any_nodes_gateway_label() {
-    info "=== Checking if any node has gateway=enable label ==="
-
-    local all_nodes=$(kubectl get nodes -o jsonpath='{.items[*].metadata.name}')
-
-    for node in ${all_nodes}; do
-        local label_value=$(kubectl get node "${node}" -o jsonpath='{.metadata.labels.gateway}')
-        if [ "$label_value" == "enable" ]; then
-            info "Check result: Node ${node} with gateway=enable label **exists** in the cluster"
-            return 0
-        fi
-    done
-
-    info "Check result: No nodes with gateway=enable label **exist** in the cluster"
+# 内置 NFS server 的挂载地址 = Pod 所在节点 IP（数据目录在节点 hostPath 下）
+_resolve_builtin_nfs_server() { # → stdout: 节点 IP；失败原因 → stderr；rc 1=失败
+  local out ns pod ip
+  out=$(builtin_nfs_pod) || return 1
+  read -r ns pod <<< "$out"
+  ip=$(kubectl get pod "$pod" -n "$ns" \
+    -o jsonpath='{.status.hostIP}' 2>/dev/null)
+  if [ -z "$ip" ]; then
+    echo "内置 NFS server Pod $ns/$pod 尚无 hostIP（可能未就绪/正在重建）" >&2
     return 1
+  fi
+  printf '%s' "$ip"
+}
+
+# 在内置 NFS server Pod 内创建组件数据目录（mkdir -p + chmod 777，随机 uid 可写）；
+# 外部 NFS（ENABLE_EXTERNAL_NFS=true）时目录由使用方自行管理，跳过
+prepare_nfs_path() { # $1=组件
+  [ "${DEPLOY_VARS["ENABLE_EXTERNAL_NFS"]}" = "true" ] && return 0
+  local comp="$1"
+  # 创建路径 = <NFS_POD_PATH> + <NFS_SHARE_PATH>/<NAMESPACE>/<组件>，与清单里的
+  # nfs.path（NFS 伪根相对路径）严格对应——NFS_SHARE_PATH 为子路径时二者才会指向同一目录
+  local root="${DEPLOY_VARS["NFS_POD_PATH"]%/}"
+  local share="${DEPLOY_VARS["NFS_SHARE_PATH"]%/}"
+  local dir="${root}${share}/${DEPLOY_VARS["NAMESPACE"]}/${comp}"
+  local out ns pod
+  out=$(builtin_nfs_pod) \
+    || error "未找到内置 NFS server Pod，无法创建数据目录 $dir（原因见 stderr 输出）"
+  read -r ns pod <<< "$out"
+  info "创建 NFS 数据目录: $ns/${dir}（Pod $pod）"
+  kubectl exec "$pod" -n "$ns" \
+    -- sh -c "mkdir -p '${dir}' && chmod 777 '${dir}'" \
+    || error "NFS 数据目录创建失败: $dir"
+}
+
+# NFS 变量校验与内置/外置模式派生（NFS 直连挂载仅 k8s 形态使用）：
+# 内置/外置唯一判据为 NFS_SERVER_ADDR 是否为空；设置时须为主机名或 IP，
+# 共享根路径须为绝对路径
+resolve_nfs_vars() {
+  # 双形态校验：NFS_SERVER_ADDR/NFS_SHARE_PATH 除 k8s 直连挂载外，还被 nfs-sc
+  # 供给组件（双形态）消费；ENABLE_EXTERNAL_NFS 供 k8s 形态直连挂载派生使用
+  local val="${DEPLOY_VARS["NFS_SERVER_ADDR"]:-}"
+  if [ -n "$val" ]; then
+    DEPLOY_VARS["ENABLE_EXTERNAL_NFS"]="true"    # 外部 NFS server
+  else
+    DEPLOY_VARS["ENABLE_EXTERNAL_NFS"]="false"   # 内置 NFS server
+  fi
+  [ -z "$val" ] || [[ "$val" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] \
+    || error "NFS_SERVER_ADDR 非法（须为主机名或 IP）: $val"
+  val="${DEPLOY_VARS["NFS_SHARE_PATH"]:-}"
+  [[ "$val" =~ ^/[A-Za-z0-9_./-]*$ ]] \
+    || error "NFS_SHARE_PATH 非法（须为绝对路径）: $val"
+}
+
+# 单文档资源：卷的 persistentVolumeClaim → nfs
+_nfs_rewrite_volume() { # $1=资源文件 $2=卷名 $3=nfs路径 $4=server
+  local file="$1" vol="$2" path="$3" server="$4"
+  yq -i "(.spec.template.spec.volumes[] | select(.name == \"$vol\") | .persistentVolumeClaim) = null
+         | (.spec.template.spec.volumes[] | select(.name == \"$vol\") | .nfs) = {\"server\": \"$server\", \"path\": \"$path\"}" "$file"
+  [ "$(yq ".spec.template.spec.volumes[] | select(.name == \"$vol\") | .nfs.server" "$file")" != "null" ] \
+    || error "NFS 卷改写失败: $(basename "$file")/$vol"
+}
+
+# 多文档清单改写：拆分 → 逐资源处理 → 重组（避免多文档 yq select 丢文档）
+_nfs_rewrite_file() { # $1=conf 清单 $2=卷名 $3=nfs路径 $4=server
+  local file="$1" vol="$2" path="$3" server="$4"
+  local tmp res kind kept=()
+  tmp="$CONF_DIR/nfsrw-$$"; mkdir -p "$tmp"
+  kctl_split_resources "$file" "$tmp" || { rm -rf "$tmp"; return 0; }
+  for res in "${KCTL_RESOURCES[@]}"; do
+    kind=$(yq '.kind' "$res")
+    case "$kind" in
+      PersistentVolumeClaim) continue;;
+      Deployment|StatefulSet) _nfs_rewrite_volume "$res" "$vol" "$path" "$server";;
+    esac
+    kept+=("$res")
+  done
+  awk 'FNR==1 && NR>1 {print "---"} {print}' "${kept[@]}" > "$file"
+  rm -rf "$tmp"
+}
+
+# CLUSTER_TYPE=k8s 的渲染后处理入口；其余形态 no-op
+# 按需改写：仅处理本次渲染产物（render_templates 传入的清单），conf/ 中其他文件不动；
+apply_nfs_direct_mounts() { # $@=本次渲染的清单文件名
+  nfs_direct_mode || return 0   # MOUNT_TYPE=sc / openshift 形态：数据卷保持 PVC，不改写
+  # 仅 up 改写数据卷并准备目录：down 只需 conf 里的资源名与集群一致（卷形态不影响按名删除），
+  # 且拆除时内置 NFS Pod 可能已先被删——此时解析 NFS 地址不应阻塞卸载
+  [ "${CMD:-}" = "up" ] || return 0
+
+  # 仅处理带数据卷的组件（mariadb/mysql/postgresql/minio/agentserver/gateway），
+  # 其清单按 <组件>-data 卷名改写为 NFS 直连挂载；其余清单（含 nfs 自身）不涉及
+  local -a need=() cmp
+  for cmp in mariadb mysql postgresql minio agentserver gateway; do
+    in_array "$cmp.yaml" "$@" && need+=("$cmp")
+  done
+  in_array "agentserver.json" "$@" && need+=("agentserver.json")
+  [ ${#need[@]} -gt 0 ] || return 0
+
+  local base="${DEPLOY_VARS["NFS_SHARE_PATH"]}"
+  base="${base%/}"
+  local ns="${DEPLOY_VARS["NAMESPACE"]}"
+
+  # 模式由 resolve_nfs_vars 派生：NFS_SERVER_ADDR 空=built-in（ENABLE_EXTERNAL_NFS=false，
+  # 地址从 Pod hostIP 解析，目录自动创建）；非空=external（ENABLE_EXTERNAL_NFS=true，目录须已存在）
+  local external="${DEPLOY_VARS["ENABLE_EXTERNAL_NFS"]}" server=""
+  if [ "$external" = "true" ]; then
+    server="${DEPLOY_VARS["NFS_SERVER_ADDR"]}"
+    info "外部 NFS 模式：$server（数据目录须已存在于 NFS 服务器）"
+  elif [ "${DEPLOY_VARS["RENDER_ONLY"]}" = "true" ]; then
+    info "内置 NFS 模式 + --render-only：跳过数据卷改写（NFS 地址需连接集群解析），部署请走完整 up"
+    return 0
+  else
+    server=$(_resolve_builtin_nfs_server) \
+      || error "内置 NFS server 解析失败（原因见 stderr 输出）"
+    [[ "$server" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] \
+      || error "解析到的 NFS 地址非法: $server"
+    DEPLOY_VARS["NFS_SERVER_ADDR"]="$server"   # 回填解析结果，下游统一取用
+    info "内置 NFS 模式：$server（数据目录自动创建）"
+  fi
+
+  local -a rewritten=()
+  # 改写范围遵循约定：模板 <组件>.yaml，卷名 <组件>-data，数据目录 <base>/<ns>/<组件>；
+  # 卷名与模板不符时 _nfs_rewrite_volume 的结果校验会报错拦截
+  local cmp
+  for cmp in mariadb mysql postgresql minio agentserver gateway; do
+    in_array "$cmp.yaml" "$@" || continue
+    _nfs_rewrite_file "$CONF_DIR/$cmp.yaml" "${cmp}-data" "$base/$ns/$cmp" "$server"
+    info "NFS 直连改写完成: $server:$base/$ns/$cmp"
+    rewritten+=("$cmp")
+    [ "$external" = "true" ] || prepare_nfs_path "$cmp"   # 外部 NFS 跳过，内置自动创建
+  done
+  # full 模式：agentserver.json（runtime 建 Pod 的 config_sync 载荷）data 卷同样
+  # 改写为 NFS 直连（与 agentserver.yaml 同源路径），目录一并就绪
+  if in_array "agentserver.json" "$@"; then
+    _nfs_rewrite_json "$CONF_DIR/agentserver.json" "$base/$ns/agentserver" "$server"
+    info "NFS 直连改写完成: agentserver.json → $server:$base/$ns/agentserver"
+    [ "$external" = "true" ] || prepare_nfs_path agentserver
+  fi
+  return 0
+}
+
+# agentserver.json（full 模式 runtime 建 Pod 的 config_sync 载荷）数据卷 NFS 直连改写：
+# data 卷由 PVC 源改写为 NFS 源（server/path），与 agentserver.yaml 的直连约定同源
+# （<NFS_SHARE_PATH>/<NAMESPACE>/agentserver）。json 保持 JSON 格式输出（-o=json）
+_nfs_rewrite_json() { # $1=json文件 $2=nfs路径 $3=server
+  yq -i -o=json '
+    (.rawdata.templates[].volumes[]
+      | select(.persistentVolumeClaim.claimName == "jiuwenswarm-pvc")) |=
+    ({"name": .name,
+      "nfs": {"server": "'"${3}"'", "path": "'"${2}"'"}})' "$1"
+}
+
+# ---------- k8s 形态通道实现（由 kubectl.sh 的共享原语按形态分流调用） ----------
+# kubectl.sh 的 kctl_http / _kctl_patch / 资源动词在 CLUSTER_TYPE=k8s 时路由到本节函数；
+# 语义对齐 curl 通道（错误码映射、网络类故障重试），保证上层 yq 解析行为一致
+
+# kubectl stderr → http_code（对齐 curl 通道语义；网络类故障输出 000 触发重试）
+_kctl_k8s_err_code() { # $1=stderr 文本
+  case "$1" in
+    *"(NotFound)"*)          echo 404;;
+    *"(AlreadyExists)"*)     echo 409;;
+    *"(Forbidden)"*)         echo 403;;
+    *"(Unauthorized)"*)      echo 401;;
+    *"(BadRequest)"*)        echo 400;;
+    *"Unable to connect"*|*"connection refused"*|*"i/o timeout"*|*"Client.Timeout"*|*"no such host"*)
+                             echo 000;;
+    *)                       echo 500;;
+  esac
+}
+
+# GET 走 kubectl get --raw（路径含 namespace/query 原样透传）；
+# POST/PUT/DELETE 不经此通道（资源动词按文件处理，见各 kctl_*_resource）
+_kctl_k8s_http() { # $1=method $2=path $3=resp文件
+  local method="$1" url="$2" out="$3" err code n
+  [ "$method" = GET ] || error "k8s 形态不支持 raw $method（资源操作走文件动词）"
+  err="$(kctl_tmpdir)/k8s-err"
+  for n in 1 2 3; do
+    if kubectl get --raw "$url" > "$out" 2> "$err"; then
+      printf '%s' "200"; return 0
+    fi
+    code=$(_kctl_k8s_err_code "$(cat "$err")")
+    [ "$code" = 000 ] || break
+    sleep 2
+  done
+  mv -f "$err" "$out"
+  printf '%s' "$code"
+}
+
+# merge-patch / strategic merge patch：路径解析出 ns/plural/name → kubectl patch
+_kctl_k8s_patch() { # $1=Content-Type $2=资源路径 $3=JSON体 $4=resp文件
+  local ct="$1" url="$2" body="$3" out="$4" err plural ns name code type
+  case "$ct" in
+    *strategic-merge-patch*) type=strategic;;
+    *merge-patch*)           type=merge;;
+    *) error "k8s 形态不支持的 patch 类型: $ct";;
+  esac
+  plural=$(sed -E 's#.*/([^/]+)/[^/]+$#\1#' <<< "$url")
+  name=$(sed -E 's#.*/##' <<< "$url")
+  ns=""; [[ "$url" == *"/namespaces/"* ]] && ns=$(sed -E 's#.*/namespaces/([^/]+)/.*#\1#' <<< "$url")
+  err="$(kctl_tmpdir)/k8s-err"
+  if kubectl patch "$plural" "$name" ${ns:+-n "$ns"} --type="$type" -p "$body" -o json > "$out" 2> "$err"; then
+    printf '%s' "200"; return 0
+  fi
+  code=$(_kctl_k8s_err_code "$(cat "$err")")
+  mv -f "$err" "$out"
+  printf '%s' "$code"
+}
+
+# ---------- manager-web NodePort Service ----------
+
+# 资源动词的 k8s 分支（由 kubectl.sh 的 kctl_*_resource 按 is_k8s_cluster 分流调用；
+# KCTL_LK/KCTL_NAME 已由调用方 kctl_resolve_resource 解析）
+_kctl_k8s_apply_resource() { # $1=资源文件
+  local err out code
+  err="$(kctl_tmpdir)/k8s-err"
+  if out=$(kubectl apply -f "$1" 2> "$err"); then
+    info "$out"
+  else
+    code=$(_kctl_k8s_err_code "$(cat "$err")")
+    kctl_show_err "$code" "$err"
+  fi
+}
+
+_kctl_k8s_create_resource() { # $1=资源文件
+  local err code
+  err="$(kctl_tmpdir)/k8s-err"
+  if kubectl create -f "$1" > /dev/null 2> "$err"; then
+    success "$KCTL_LK/$KCTL_NAME created"
+  else
+    code=$(_kctl_k8s_err_code "$(cat "$err")")
+    if [ "$code" = 409 ]; then
+      error "Error from server (AlreadyExists): $KCTL_LK/$KCTL_NAME"
+    fi
+    kctl_show_err "$code" "$err"
+  fi
+}
+
+_kctl_k8s_replace_resource() { # $1=资源文件
+  local err code
+  err="$(kctl_tmpdir)/k8s-err"
+  if kubectl replace -f "$1" > /dev/null 2> "$err"; then
+    success "$KCTL_LK/$KCTL_NAME replaced"
+  else
+    code=$(_kctl_k8s_err_code "$(cat "$err")")
+    if [ "$code" = 404 ]; then
+      error "$KCTL_LK/$KCTL_NAME 不存在（replace 不做创建，请先 apply）"
+    fi
+    kctl_show_err "$code" "$err"
+  fi
+}
+
+_kctl_k8s_delete_resource() { # $1=资源文件
+  # --wait=false：删除请求发出即返回，不阻塞等待资源消失（PVC 的 pvc-protection
+  # finalizer 会持有到 Pod 终止，阻塞式删除会被卡死）；Pod 终止由组件级
+  # wait_deleted 统一等待并受预算约束。--ignore-not-found 由 KCTL_IGNORE_NOT_FOUND 控制
+  local err code out
+  err="$(kctl_tmpdir)/k8s-err"
+  out=$(kubectl delete -f "$1" --ignore-not-found --wait=false 2> "$err") \
+    || { code=$(_kctl_k8s_err_code "$(cat "$err")"); kctl_show_err "$code" "$err"; }
+  [ -n "$out" ] && info "删除: $(echo "$out" | sed 's/ deleted//g; s/ from [^ ]* namespace//g' | tr '\n' ' ' | sed 's/  */ /g; s/ $//')"
+}
+
+# 单端口占用判断：本机监听（netstat/ss）+ 集群 nodePort 绑定（kubectl 获取后 yq 解析）
+_port_taken() { # → 0=占用 1=空闲
+  local port="$1"
+  grep -qE ":${port}[[:space:]]" <<<"$2" && return 0
+  grep -qx "${port}" <<<"$3" && return 0
+  return 1
+}
+
+# NodePort 申请：
+#   .env.custom 已配置 → 校验占用（含本次运行已分配），被占即报错
+#   未配置             → 优先复用本 namespace 同名 Service 已持有的端口（复跑稳定），
+#                        否则从 NODE_PORT_RANGE_START~END 自动挑选首个空闲端口写入 DEPLOY_VARS
+ensure_node_port() { # $1=DEPLOY_VARS 变量名（如 MANAGER_WEB_NODE_PORT）[$2=复用检查的 Service 名，默认 jiuwenswarm-manager-web-nodeport]
+  local name="$1"
+  local reuse_svc="${2:-jiuwenswarm-manager-web-nodeport}"
+  local configured="${DEPLOY_VARS[$name]:-}"
+  # 占用集合一次性预取（避免逐端口查询 APIServer）；查询失败按空处理（视为无占用）。
+  # 复用检查仅排除「本 namespace 的」$reuse_svc：其他 namespace 同名 Service 占用的
+  # nodePort 是真实冲突（nodePort 集群级唯一），必须计入占用
+  local local_listens cluster_ports svc_json current_port
+  local ns="${DEPLOY_VARS["NAMESPACE"]}"
+  local_listens=$(netstat -tuln 2>/dev/null || ss -tuln 2>/dev/null || true)
+  svc_json=$(kubectl get svc --all-namespaces -o json 2>/dev/null || true)
+  cluster_ports=$(printf '%s' "$svc_json" \
+    | yq '.items[] | select(.metadata.name != "'"$reuse_svc"'" or .metadata.namespace != "'"${ns}"'") | .spec.ports[]? | .nodePort | select(. != null)' 2>/dev/null \
+    | sort -u || true)
+  # 本 namespace 自家 Service 已持有的 nodePort：留空自动分配时优先复用（复跑端口稳定）
+  current_port=$(printf '%s' "$svc_json" \
+    | yq '.items[] | select(.metadata.name == "'"$reuse_svc"'" and .metadata.namespace == "'"${ns}"'") | .spec.ports[]? | .nodePort | select(. != null)' 2>/dev/null \
+    | head -1)
+  if [ -n "$configured" ]; then
+    if _port_taken "$configured" "$local_listens" "$cluster_ports" \
+      || grep -qx "${configured}" <<<"${_ENSURED_NODE_PORTS:-}"; then
+      error "${name}=${configured} 已被占用（本机监听 / 集群 Service / 本次运行已分配），请在 .env.custom 更换，或留空以自动分配"
+    fi
+    _ENSURED_NODE_PORTS+="${configured}"
+    _ENSURED_NODE_PORTS+=$'\n'
+    info "使用预配置 NodePort: ${name}=${configured}"
+    return 0
+  fi
+  local port
+  if [ -n "$current_port" ]; then
+    DEPLOY_VARS[$name]="$current_port"
+    _ENSURED_NODE_PORTS+="${current_port}"
+    _ENSURED_NODE_PORTS+=$'\n'
+    info "复用已分配 NodePort: ${name}=$current_port"
+    return 0
+  fi
+  for port in $(seq "${DEPLOY_VARS["NODE_PORT_RANGE_START"]}" "${DEPLOY_VARS["NODE_PORT_RANGE_END"]}"); do
+    if ! _port_taken "$port" "$local_listens" "$cluster_ports" \
+      && ! grep -qx "${port}" <<<"${_ENSURED_NODE_PORTS:-}"; then
+      DEPLOY_VARS[$name]="$port"
+      _ENSURED_NODE_PORTS+="${port}"
+      _ENSURED_NODE_PORTS+=$'\n'
+      info "自动分配 NodePort: ${name}=$port（范围 ${DEPLOY_VARS["NODE_PORT_RANGE_START"]}-${DEPLOY_VARS["NODE_PORT_RANGE_END"]}）"
+      return 0
+    fi
+  done
+  error "NodePort 自动分配失败：${DEPLOY_VARS["NODE_PORT_RANGE_START"]}-${DEPLOY_VARS["NODE_PORT_RANGE_END"]} 范围内无空闲端口"
+}
+
+# 通用：向清单文件追加单端口 NodePort Service 文档（幂等，按名称查重）
+append_nodeport_svc() { # $1=conf文件 $2=Service名 $3=app标签 $4=nodePort $5=端口名 $6=端口号
+  local file="$1" name="$2" app="$3" node_port="$4" pname="$5" pnum="$6"
+  local ns="${DEPLOY_VARS["NAMESPACE"]}"
+  [ -n "$node_port" ] || error "NodePort 未分配（$name，先调用 ensure_node_port）"
+  [ -z "$(yq 'select(.kind == "Service" and .metadata.name == "'"$name"'") | .metadata.name' "$file")" ] \
+    || { info "NodePort Service $name 已存在，跳过追加"; return 0; }
+  yq eval-all -i 'select(fileIndex == 0), select(fileIndex == 1)' "$file" \
+    <(yq -n -o=yaml '.apiVersion = "v1" | .kind = "Service" | .metadata.name = "'"$name"'" | .metadata.namespace = "'"$ns"'" | .spec.type = "NodePort" | .spec.selector.app = "'"$app"'" | .spec.ports = [{"name": "'"$pname"'", "port": '"$pnum"', "targetPort": '"$pnum"', "nodePort": '"$node_port"'}]') \
+    || error "NodePort Service 追加失败: $name"
+  [ -n "$(yq 'select(.kind == "Service" and .metadata.name == "'"$name"'") | .spec.type' "$file")" ] \
+    || error "NodePort Service 校验失败: $name"
+  local scheme=http
+  [ "$pname" != https ] || scheme=https
+  info "NodePort Service 已追加: $name（nodePort=$node_port，外部访问 $scheme://<节点IP>:$node_port）"
+}
+
+# k8s 形态清单后处理分发（与 apply_nfs_direct_mounts 并列；其余形态 no-op）
+apply_k8s_extras() { # $@=本次渲染的清单文件名
+  is_k8s_cluster || return 0
+  local f
+  for f in "$@"; do
+    case "$f" in *.yaml) ;; *) continue;; esac   # 非 K8s 清单（agentserver.json）不经 yq 改写
+    # k8s 形态无 Route 资源（openshift 独有）：剥离清单中残留的 Route 文档（幂等）
+    yq -i 'select(.kind != "Route")' "$CONF_DIR/$f"
+    case "$f" in
+      manager-web.yaml)
+        ensure_node_port MANAGER_WEB_NODE_PORT
+        append_nodeport_svc "$CONF_DIR/manager-web.yaml" jiuwenswarm-manager-web-nodeport \
+          jiuwenswarm-manager-web "${DEPLOY_VARS["MANAGER_WEB_NODE_PORT"]}" http 5273;;
+      web.yaml)
+        ensure_node_port WEB_NODE_PORT jiuwenswarm-web-nodeport
+        append_nodeport_svc "$CONF_DIR/web.yaml" jiuwenswarm-web-nodeport \
+          jiuwenswarm-web "${DEPLOY_VARS["WEB_NODE_PORT"]}" https 5173;;
+      minio.yaml)
+        ensure_node_port MINIO_API_NODE_PORT minio-api-nodeport
+        ensure_node_port MINIO_CONSOLE_NODE_PORT minio-console-nodeport
+        append_nodeport_svc "$CONF_DIR/minio.yaml" minio-api-nodeport minio \
+          "${DEPLOY_VARS["MINIO_API_NODE_PORT"]}" api 9000
+        append_nodeport_svc "$CONF_DIR/minio.yaml" minio-console-nodeport minio \
+          "${DEPLOY_VARS["MINIO_CONSOLE_NODE_PORT"]}" console 9001;;
+      mariadb.yaml)
+        ensure_node_port MARIADB_NODE_PORT mariadb-nodeport
+        append_nodeport_svc "$CONF_DIR/mariadb.yaml" mariadb-nodeport mariadb \
+          "${DEPLOY_VARS["MARIADB_NODE_PORT"]}" mysql 3306;;
+      mysql.yaml)
+        ensure_node_port MYSQL_NODE_PORT mysql-nodeport
+        append_nodeport_svc "$CONF_DIR/mysql.yaml" mysql-nodeport mysql \
+          "${DEPLOY_VARS["MYSQL_NODE_PORT"]}" mysql 3306;;
+      postgresql.yaml)
+        ensure_node_port POSTGRESQL_NODE_PORT postgresql-nodeport
+        append_nodeport_svc "$CONF_DIR/postgresql.yaml" postgresql-nodeport postgresql \
+          "${DEPLOY_VARS["POSTGRESQL_NODE_PORT"]}" postgres 5432;;
+    esac
+  done
+}
+
+# ---------- manager-server 部署默认参数快照注入（开箱即用） ----------
+
+# manager up 渲染时把 .env.custom 的非敏感键值（镜像清单/副本数/部署模式等）以 JSON
+# 注入 manager-server 的 env MANAGER_DEPLOY_ENV_JSON；manager-server 每次启动据此刷新
+# 部署默认参数（defaults 表）——免镜像改动、免手工配置，且随每次 manager up 重新注入，
+# 版本升级（换镜像 tag）后重启即自动跟进。
+# 敏感键（密码/密钥类，Deployment env 明文可见）不注入，经 defaults 接口单独配置；
+# 工具内部/强制键不注入：NAMESPACE 由任务参数指定、MODE 在管理面链路恒为 product
+# （dev 挂载仅 CLI 部署使用）、CLUSTER_TYPE/RENDER_ONLY 等为工具自管；
+# 仅取单行完整键值（`KEY="value"` 或 `KEY=value`），多行跨行值不注入。
+apply_manager_deploy_env_snapshot() { # $@=本次渲染的清单文件名
+  local f key val json=""
+  for f in "$@"; do
+    case "${f%.yaml}" in manager-server) ;; *) continue;; esac
+    [ -f "$CONF_DIR/$f" ] || continue
+    while IFS='=' read -r key val; do
+      case "$key" in ""|\#*) continue;; esac
+      case "$key" in NAMESPACE|MODE|CLUSTER_TYPE|RENDER_ONLY|SCOPE|CMD) continue;; esac
+      [[ "$key" =~ (PASSWORD|SECRET|TOKEN|ACCESS_KEY)$ ]] && continue
+      val="${val%\"}"; val="${val#\"}"
+      val="${val//\\/\\\\}"; val="${val//\"/\\\"}"
+      json="${json:+$json,}\"$key\":\"$val\""
+    done < <(grep -E '^[A-Za-z0-9_]+="[^"]*"$|^[A-Za-z0-9_]+=[^="#]*$' "$CUSTOM_ENV_FILE")
+    [ -n "$json" ] || return 0
+    SNAP_JSON="{$json}" yq -i \
+      '(select(.kind == "Deployment").spec.template.spec.containers[0].env) |=
+        ((. // []) + [{"name": "MANAGER_DEPLOY_ENV_JSON", "value": strenv(SNAP_JSON)}])' "$CONF_DIR/$f" \
+      || error "manager-server 部署默认参数快照注入失败: $f"
+    info "manager-server defaults 快照注入：非敏感键已随清单下发（共 $(echo "$json" | grep -oE '(^|,)"[A-Za-z0-9_]+"' | wc -l | awk '{print $1}') 键）"
+  done
+}
+
+# ---------- manager-server 部署凭证注入（管理面程序化部署） ----------
+
+# manager up 的前置步骤：部署凭证 Secret 缺失时自动创建（双形态）。
+# 避免渲染清单引用了 Secret 而实际缺失，manager-server 卡在 ContainerCreating。
+# - k8s 形态：MANAGER_DEPLOY_KUBECONFIG_SECRET 非空时，从部署机 kubeconfig
+#   （$KUBECONFIG 或 ~/.kube/config）创建；
+# - openshift 形态：token 取 MANAGER_DEPLOY_TOKEN_FILE 指定文件，否则本机 oc 登录态
+#   （oc whoami -t；OAuth token 会过期，生产建议专用 SA 长期 token 手工预建）。
+# 创建统一走 kctl 通道（两形态一致；openshift 无 kubectl）。
+# 安全门：仅 manager-server 在本次目标里；已存在不覆盖（保护手工预建的长期凭证）；
+# openshift 取不到 token 时 warning 放行（pod 卡 ContainerCreating 有明确事件）。
+# down 不回收：凭证独立于组件生命周期，跨 up 幂等复用。
+ensure_manager_deploy_credentials() {
+  in_array manager-server "${TARGETS[@]}" || return 0
+  local secret key value
+  if is_k8s_cluster; then
+    secret="${DEPLOY_VARS["MANAGER_DEPLOY_KUBECONFIG_SECRET"]}"
+    [ -n "$secret" ] || return 0
+    local src="${KUBECONFIG:-$HOME/.kube/config}"
+    if [ ! -f "$src" ]; then
+      # 凭证不可得时置空开关：apply_manager_deploy_credentials 据此跳过卷注入，
+      # 确保「清单引用的 Secret 一定存在」——否则 manager-server 卡
+      # ContainerCreating，管理面整体不可用。无凭证时 pod 正常启动，部署功能
+      # 降级为任务 validate 阶段的明确 403 文案；预建 Secret 后重跑 up 即恢复注入
+      warning "部署机 kubeconfig 不存在（$src），跳过部署凭证注入（不创建 Secret、不挂载卷）；
+可手工预建后重跑: kubectl -n $KCTL_NS create secret generic $secret --from-file=kubeconfig=<文件>"
+      DEPLOY_VARS["MANAGER_DEPLOY_KUBECONFIG_SECRET"]=""
+      return 0
+    fi
+    key="kubeconfig"; value="$(base64 -w0 "$src")"
+  else
+    secret="${DEPLOY_VARS["MANAGER_DEPLOY_TOKEN_SECRET"]:-manager-deploy-token}"
+    local token_file="${DEPLOY_VARS["MANAGER_DEPLOY_TOKEN_FILE"]:-}"
+    if [ -n "$token_file" ] && [ -f "$token_file" ]; then
+      value="$(tr -d '\r\n' < "$token_file" | base64 -w0)"
+    elif command -v oc >/dev/null 2>&1; then
+      local tok; tok="$(oc whoami -t 2>/dev/null)"
+      [ -n "$tok" ] || { warning "oc 登录态取不到 token，请手工预建 Secret $secret（或配 MANAGER_DEPLOY_TOKEN_FILE）"; return 0; }
+      value="$(printf '%s' "$tok" | base64 -w0)"
+    else
+      warning "无法自动获取 token（无 MANAGER_DEPLOY_TOKEN_FILE 且本机无 oc），请手工预建 Secret $secret"
+      return 0
+    fi
+    key="token"
+  fi
+  _ensure_deploy_secret_via_kctl "$KCTL_NS" "$secret" "$key" "$value"     && success "已自动创建部署凭证 Secret: $secret（ns: $KCTL_NS）"
+  return 0
+}
+
+# 经 kctl 通道探测/创建部署凭证 Secret（404 → 创建；已存在沿用；探测异常 warning 放行）
+_ensure_deploy_secret_via_kctl() { # $1=ns $2=secret名 $3=键名 $4=base64值
+  local ns="$1" secret="$2" key="$3" value="$4" code resp body err
+  resp="$(kctl_tmpdir)/ensure-deploy-secret"
+  code=$(kctl_http GET "/api/v1/namespaces/$ns/secrets/$secret" "$resp")
+  case "$code" in
+    200) info "部署凭证 Secret 已存在: $secret（沿用，不覆盖）"; return 1;;
+    404) ;;
+    *)   warning "部署凭证 Secret 探测失败（HTTP $code），跳过自动创建"; return 1;;
+  esac
+  if is_k8s_cluster; then
+    # k8s 通道资源操作走文件动词（raw POST 不支持）：Secret 落清单后 kubectl create；
+    # AlreadyExists（409）视为并发创建沿用（探测 404 后的窄窗口竞态）
+    body="$(kctl_tmpdir)/ensure-deploy-secret.yaml"
+    printf 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: %s\n  namespace: %s\ntype: Opaque\ndata:\n  %s: %s\n' \
+      "$secret" "$ns" "$key" "$value" > "$body"
+    err="$(kctl_tmpdir)/ensure-deploy-secret.err"
+    if kubectl create -f "$body" >/dev/null 2>"$err"; then
+      return 0
+    fi
+    [ "$(_kctl_k8s_err_code "$(cat "$err")")" = 409 ] \
+      && { info "部署凭证 Secret 已存在: $secret（并发创建，沿用）"; return 1; }
+    error "创建部署凭证 Secret 失败: $(head -c 200 "$err" 2>/dev/null)"
+  fi
+  # openshift：curl 通道支持 raw POST。kctl_http 第4参数约定为 body 文件路径
+  # （内部 --data-binary @file），须先落盘再传，直接传内容字符串会被 curl 当文件名
+  # （报 error encountered when reading a file → HTTP 000）
+  body="$(kctl_tmpdir)/ensure-deploy-secret-body"
+  printf '{"apiVersion":"v1","kind":"Secret","metadata":{"name":"%s","namespace":"%s"},"type":"Opaque","data":{"%s":"%s"}}' \
+    "$secret" "$ns" "$key" "$value" > "$body"
+  code=$(kctl_http POST "/api/v1/namespaces/$ns/secrets" "$resp" "$body")
+  case "$code" in
+    200|201) return 0;;
+    409) info "部署凭证 Secret 已存在: $secret（并发创建，沿用）"; return 1;;
+    *)   error "创建部署凭证 Secret 失败: HTTP $code $(head -c 200 "$resp" 2>/dev/null)";;
+  esac
+}
+
+# manager-server 部署凭证注入（双形态，按本次部署的 CLUSTER_TYPE 分流）：
+# - k8s：MANAGER_DEPLOY_KUBECONFIG_SECRET 非空时注入 Secret 卷（只读 subPath 挂
+#   /etc/manager/deploy-kubeconfig）+ env MANAGER_DEPLOY_KUBECONFIG；
+# - openshift：注入 token Secret 卷（/etc/manager/deploy-token）+ env
+#   MANAGER_DEPLOY_TOKEN / MANAGER_DEPLOY_API_SERVER。
+# 两形态都注入 env MANAGER_DEPLOY_CLUSTER_TYPE（manager-server 据此选定部署子进程的
+# 形态与凭证通道）。manager-server SA 自身保持零集群 RBAC。
+apply_manager_deploy_credentials() { # $@=本次渲染的清单文件名
+  local f secret mounts envs
+  if is_k8s_cluster; then
+    secret="${DEPLOY_VARS["MANAGER_DEPLOY_KUBECONFIG_SECRET"]}"
+    [ -n "$secret" ] || return 0
+    mounts='[{"name": "manager-deploy-credential", "mountPath": "/etc/manager/deploy-kubeconfig", "subPath": "kubeconfig", "readOnly": true}]'
+    envs='[{"name": "MANAGER_DEPLOY_KUBECONFIG", "value": "/etc/manager/deploy-kubeconfig"}, {"name": "MANAGER_DEPLOY_CLUSTER_TYPE", "value": "k8s"}]'
+    local vol='{"name": "manager-deploy-credential", "secret": {"secretName": "'"$secret"'"}}'
+  else
+    secret="${DEPLOY_VARS["MANAGER_DEPLOY_TOKEN_SECRET"]:-manager-deploy-token}"
+    mounts='[{"name": "manager-deploy-credential", "mountPath": "/etc/manager/deploy-token", "subPath": "token", "readOnly": true}]'
+    envs='[{"name": "MANAGER_DEPLOY_TOKEN", "value": "/etc/manager/deploy-token"}, {"name": "MANAGER_DEPLOY_CLUSTER_TYPE", "value": "openshift"}, {"name": "MANAGER_DEPLOY_API_SERVER", "value": "'"${DEPLOY_VARS["CLUSTER_API_SERVER"]}"'"}]'
+    local vol='{"name": "manager-deploy-credential", "secret": {"secretName": "'"$secret"'"}}'
+  fi
+  for f in "$@"; do
+    case "${f%.yaml}" in manager-server) ;; *) continue;; esac
+    [ -f "$CONF_DIR/$f" ] || continue
+    VOL_JSON="$vol" MOUNTS_JSON="$mounts" ENVS_JSON="$envs" yq -i '
+      (select(.kind == "Deployment").spec.template.spec.volumes) |= ((. // []) + [strenv(VOL_JSON) | from_json])
+      | (select(.kind == "Deployment").spec.template.spec.containers[0].volumeMounts) |= ((. // []) + (strenv(MOUNTS_JSON) | from_json))
+      | (select(.kind == "Deployment").spec.template.spec.containers[0].env) |= ((. // []) + (strenv(ENVS_JSON) | from_json))
+    ' "$CONF_DIR/$f" || error "manager-server 部署凭证注入失败: $f"
+    info "manager-server 部署凭证后处理：注入 $secret 凭证卷（$(is_k8s_cluster && echo kubeconfig || echo token)）"
+  done
+}
+
+# ---------- agent-runtime / manager-server 三模式后处理 ----------
+
+# 按部署模式修整渲染产物：
+# - runtime + full：注入 Pod 操作 RBAC（SA/Role/RoleBinding 文档前置 +
+#   Deployment serviceAccountName），agent-runtime 获得 AgentServer 增删查能力；
+#   routing/off 不注入（零 K8s 权限形态）
+# - manager-server + 非 routing：剥除 AGENTSERVER_POD_DNS_LIST env 条目
+#   （静态注册清单仅 routing 消费；off/full 不需要该环境变量）
+# - manager-server + TEAM_SKILLS_HUB_BASE_URL 留空：剥除残留 env
+#   （两行式 name/value 在 replace_placeholder 只删 value 行，避免空串覆盖代码默认）
+apply_runtime_mode_extras() { # $@=本次渲染的清单文件名
+  local mode="${DEPLOY_VARS["AGENT_RUNTIME_DEPLOY_MODE"]}" f
+  for f in "$@"; do
+    case "${f%.yaml}" in
+      runtime)
+        [ "$mode" = full ] || continue
+        [ -f "$CONF_DIR/$f" ] || continue
+        {
+          echo "---"
+          yq -n '{"apiVersion":"v1","kind":"ServiceAccount","metadata":{"name":"jiuwenswarm-agent-runtime-sa","namespace":"'"${DEPLOY_VARS["NAMESPACE"]}"'"}}'
+          echo "---"
+          yq -n '{"apiVersion":"rbac.authorization.k8s.io/v1","kind":"Role","metadata":{"name":"jiuwenswarm-agent-runtime-pods","namespace":"'"${DEPLOY_VARS["NAMESPACE"]}"'"},"rules":[{"apiGroups":[""],"resources":["pods"],"verbs":["get","list","watch","create","delete"]},{"apiGroups":[""],"resources":["pods/log"],"verbs":["get"]}]}'
+          echo "---"
+          yq -n '{"apiVersion":"rbac.authorization.k8s.io/v1","kind":"RoleBinding","metadata":{"name":"jiuwenswarm-agent-runtime-pods-binding","namespace":"'"${DEPLOY_VARS["NAMESPACE"]}"'"},"subjects":[{"kind":"ServiceAccount","name":"jiuwenswarm-agent-runtime-sa","namespace":"'"${DEPLOY_VARS["NAMESPACE"]}"'"}],"roleRef":{"apiGroup":"rbac.authorization.k8s.io","kind":"Role","name":"jiuwenswarm-agent-runtime-pods"}}'
+          echo "---"
+          cat "$CONF_DIR/$f"
+        } > "$CONF_DIR/$f.tmp" && mv -f "$CONF_DIR/$f.tmp" "$CONF_DIR/$f"
+        yq -i '(select(.kind == "Deployment").spec.template.spec) |= (.serviceAccountName = "jiuwenswarm-agent-runtime-sa")' "$CONF_DIR/$f"
+        info "runtime 模式后处理：full → 注入 Pod 操作 RBAC"
+        ;;
+      manager-server)
+        [ -f "$CONF_DIR/$f" ] || continue
+        # Hub 基址与部署模式无关：留空时各 mode 都要剥残留 name
+        if [ -z "${DEPLOY_VARS["TEAM_SKILLS_HUB_BASE_URL"]:-}" ]; then
+          yq -i '(select(.kind == "Deployment").spec.template.spec.containers[0].env) |= map(select(.name != "TEAM_SKILLS_HUB_BASE_URL"))' "$CONF_DIR/$f"
+          info "manager-server 后处理：TEAM_SKILLS_HUB_BASE_URL 留空 → 剥除 env"
+        fi
+        [ "$mode" = routing ] && continue
+        yq -i '(select(.kind == "Deployment").spec.template.spec.containers[0].env) |= map(select(.name != "AGENTSERVER_POD_DNS_LIST"))' "$CONF_DIR/$f"
+        info "manager-server 模式后处理：$mode → 剥除静态注册清单 env"
+        ;;
+    esac
+  done
+}
+
+# ---------- 沙箱类型后处理（SANDBOX_TYPE） ----------
+
+# 按沙箱类型修整渲染产物（SANDBOX_TYPE 语义见 .env.example 与 resolve_sandbox_type_vars）：
+# - off：no-op（保持原样）
+# - kata：AgentServer 沙箱 Pod 注入 runtimeClassName: kata（Kata 轻量虚机隔离；
+#   集群须预装 Kata Containers 并已创建 RuntimeClass kata，否则 Pod 无法启动）：
+#   · agentserver.yaml → StatefulSet Pod 模板（off/routing 模式预启动的沙箱 Pod）
+#   · agentserver.json → config_sync 载荷 rawdata.templates（full 模式 runtime 按需
+#     创建的沙箱 Pod；runtime 侧按模板级白名单解析，未知键暂忽略——消费生效待
+#     runtime 打通 runtimeClassName 字段后自然解锁）
+# - jiuwenbox：AgentServer Pod 注入 jiuwenbox 沙箱 sidecar 容器（root + SYS_ADMIN/
+#   NET_ADMIN + unconfined seccomp + /sys/fs/cgroup hostPath——容器隔离强依赖）。
+#   OCP 前置：Pod 的 ServiceAccount 须绑定 anyuid/privileged SCC，否则沙箱起不来
+#   · agentserver.yaml → StatefulSet Pod 模板（off/routing 模式预启动的沙箱 Pod）
+#   · agentserver.json → config_sync 载荷 rawdata.containers + sidecar_container_ids
+#     （full 模式 runtime 按需创建的沙箱 Pod）
+apply_sandbox_type_extras() { # $@=本次渲染的清单文件名
+  [ "${DEPLOY_VARS["SANDBOX_TYPE"]}" = kata ] || return 0
+  local f
+  for f in "$@"; do
+    case "$f" in
+      agentserver.yaml)
+        [ -f "$CONF_DIR/$f" ] || continue
+        # 更新运算符写法：不匹配的文档（headless/ClusterIP Service）原样保留
+        yq -i '(select(.kind == "StatefulSet" and .metadata.name == "jiuwenswarm-agentserver").spec.template.spec) |= (.runtimeClassName = "kata")' "$CONF_DIR/$f"
+        [ "$(yq 'select(.kind == "StatefulSet").spec.template.spec.runtimeClassName' "$CONF_DIR/$f")" = "kata" ] \
+          || error "runtimeClassName 注入校验失败: $f"
+        info "沙箱后处理：agentserver.yaml 注入 runtimeClassName: kata";;
+      agentserver.json)
+        [ -f "$CONF_DIR/$f" ] || continue
+        yq -i -o=json '.rawdata.templates[].runtimeClassName = "kata"' "$CONF_DIR/$f"
+        [ "$(yq -r '.rawdata.templates[0].runtimeClassName' "$CONF_DIR/$f")" = "kata" ] \
+          || error "runtimeClassName 注入校验失败: $f"
+        info "沙箱后处理：agentserver.json 注入 runtimeClassName: kata";;
+    esac
+  done
+}
+
+# jiuwenbox 沙箱 sidecar 注入（SANDBOX_TYPE=jiuwenbox）：
+# - agentserver.yaml → StatefulSet 追加 sidecar 容器 + cgroup hostPath 卷；
+#   sidecar 挂业务卷 profile/，与主进程保持工作区文件级 IPC 同径
+# - agentserver.json → config_sync 载荷追加 c-jiuwenbox 容器 + sidecar_container_ids
+#   + hp-cgroup 卷（与 ee 部署的 config_sync 载荷同规格）
+# - securityContext 除 root + SYS_ADMIN/NET_ADMIN + seccomp Unconfined 外，
+#   另须关闭 AppArmor：containerd 默认 profile（cri-containerd.apparmor.d）
+#   deny mount，`ip netns add` 卡死在 mount --make-shared /var/run/netns
+#   （Permission denied），warm pool 启动失败。
+#   关闭方式按载荷形态分派：
+#   · yaml 清单（routing）：清单直发 apiserver，须按集群版本分派
+#     （is_k8s_version_ge 1.31）：≥ v1.31 用 securityContext.appArmorProfile 字段
+#     （KEP-4157，v1.31 beta 默认开启）；< v1.31 或版本未知走 legacy pod 注解
+#   · config_sync 载荷（json，full）：与集群版本无关——载荷由 runtime 解析，
+#     容器契约支持 securityContext.appArmorProfile，渲染 Pod 时统一以
+#     legacy pod 注解（container.apparmor.security.beta.kubernetes.io/<名>:
+#     unconfined）落地，该字段不经 apiserver
+
+# ---------- Kubernetes 集群版本探测与比较 ----------
+# 版本取自 apiserver /version，进程内缓存（多清单渲染只探测一次）；minor 兼容发行版
+# 后缀（如 "31+"、"31.3-gke.0"，取数字前缀）。RENDER_ONLY / 连不上集群 → 保持 unknown，
+# is_k8s_version_ge 一律判否，调用方按"保守降级"处理。
+_K8S_VERSION_STR="unknown" # 已探测到的集群版本 major.minor；unknown=RENDER_ONLY/探测失败
+_k8s_version_probe() { # 填充 _K8S_VERSION_STR（已探测或 RENDER_ONLY 时跳过）
+  [ "${_K8S_VERSION_STR}" != "unknown" ] && return 0
+  [ "${DEPLOY_VARS["RENDER_ONLY"]:-}" = "true" ] && return 0
+  local raw major minor
+  raw=$(kubectl get --raw=/version 2>/dev/null) || raw=""
+  major=$(printf '%s' "${raw}" | yq -r '.major // ""' 2>/dev/null) || major=""
+  major="${major%%[!0-9]*}"
+  minor=$(printf '%s' "${raw}" | yq -r '.minor // ""' 2>/dev/null) || minor=""
+  minor="${minor%%[!0-9]*}"
+  if [ -n "${major}" ] && [ -n "${minor}" ]; then
+    _K8S_VERSION_STR="${major}.${minor}"
+  fi
+}
+
+# 集群版本 ≥ 目标版本判定。用法: is_k8s_version_ge <major.minor>（如 1.25 / 1.31，兼容 v 前缀）
+# ≥ → rc 0；< 或版本未知 → rc 1
+is_k8s_version_ge() {
+  [ $# -eq 1 ] || error "is_k8s_version_ge: 须传 1 个 major.minor 版本参数"
+  local want="${1#v}"
+  [[ "${want}" =~ ^[0-9]+\.[0-9]+$ ]] || error "is_k8s_version_ge: 版本参数须为 major.minor 形式: $1"
+  _k8s_version_probe
+  [ "${_K8S_VERSION_STR}" = "unknown" ] && return 1
+  local wm="${want%%.*}" wn="${want#*.}" gm="${_K8S_VERSION_STR%%.*}" gn="${_K8S_VERSION_STR#*.}"
+  [ "${gm}" -gt "${wm}" ] || { [ "${gm}" -eq "${wm}" ] && [ "${gn}" -ge "${wn}" ]; }
+}
+
+_apply_jiuwenbox_sidecar_yaml() { # $1=agentserver.yaml
+  local img="${DEPLOY_VARS["JIUWENBOX_IMAGE"]}" port="${DEPLOY_VARS["JIUWENBOX_PORT"]:-8321}"
+  yq -i '(select(.kind == "StatefulSet").spec.template.spec.containers) |= (. + [{
+    "name": "jiuwenbox",
+    "image": "'"${img}"'",
+    "imagePullPolicy": "IfNotPresent",
+    "ports": [{"containerPort": '"${port}"'}],
+    "env": [
+      {"name": "JIUWENBOX_LISTEN", "value": "http://0.0.0.0:'"${port}"'"},
+      {"name": "JIUWENBOX_POLICY_PATH", "value": "/app/jiuwenswarm/jiuwenbox/src/jiuwenbox/configs/enterprise-policy.yaml"},
+      {"name": "JIUWENSWARM_DATA_DIR", "value": "/home/app/.jiuwenswarm"},
+      {"name": "POD_NAME", "valueFrom": {"fieldRef": {"fieldPath": "metadata.name"}}},
+      {"name": "TZ", "value": "Asia/Shanghai"}
+    ],
+    "securityContext": {"runAsUser": 0, "runAsGroup": 0,
+      "capabilities": {"add": ["SYS_ADMIN", "NET_ADMIN"]},
+      "seccompProfile": {"type": "Unconfined"}},
+    "readinessProbe": {"tcpSocket": {"port": '"${port}"'}, "initialDelaySeconds": 10, "periodSeconds": 5},
+    "volumeMounts": [
+      {"name": "agentserver-data", "mountPath": "/home/app/.jiuwenswarm/profile"},
+      {"name": "hp-cgroup", "mountPath": "/sys/fs/cgroup"}
+    ]
+  }])' "$1"
+  yq -i '(select(.kind == "StatefulSet").spec.template.spec.volumes) |= (. + [{"name": "hp-cgroup", "hostPath": {"path": "/sys/fs/cgroup", "type": "Directory"}}])' "$1"
+  # 注入校验：StatefulSet 须有 jiuwenbox 容器 + hp-cgroup 卷
+  [ "$(yq 'select(.kind == "StatefulSet").spec.template.spec.containers[] | select(.name == "jiuwenbox") | .name' "$1")" = "jiuwenbox" ]     || error "jiuwenbox sidecar 注入校验失败: $1"
+  [ "$(yq 'select(.kind == "StatefulSet").spec.template.spec.volumes[] | select(.name == "hp-cgroup") | .name' "$1")" = "hp-cgroup" ]     || error "hp-cgroup 卷注入校验失败: $1"
+  # 关闭 AppArmor 按集群版本分派（containerd 默认 profile deny mount 会卡死
+  # `ip netns add`，warm pool 起不来，须显式 Unconfined）
+  if is_k8s_version_ge 1.31; then
+    # ≥ v1.31：securityContext.appArmorProfile 字段（新 API，apiserver 原生校验）
+    yq -i '(select(.kind == "StatefulSet").spec.template.spec.containers[] | select(.name == "jiuwenbox").securityContext) |= (. + {"appArmorProfile": {"type": "Unconfined"}})' "$1"
+    [ "$(yq 'select(.kind == "StatefulSet").spec.template.spec.containers[] | select(.name == "jiuwenbox") | .securityContext.appArmorProfile.type' "$1")" = "Unconfined" ]     || error "jiuwenbox appArmorProfile 注入校验失败: $1"
+    info "jiuwenbox AppArmor 关闭：appArmorProfile 字段（集群 v${_K8S_VERSION_STR}）"
+  else
+    # < v1.31 / 版本未知（RENDER_ONLY、连不上集群）：legacy pod 注解，全版本可用
+    yq -i '(select(.kind == "StatefulSet").spec.template.metadata.annotations) |= ((. // {}) + {"container.apparmor.security.beta.kubernetes.io/jiuwenbox": "unconfined"})' "$1"
+    [ "$(yq 'select(.kind == "StatefulSet").spec.template.metadata.annotations["container.apparmor.security.beta.kubernetes.io/jiuwenbox"]' "$1")" = "unconfined" ]     || error "jiuwenbox appArmor 注解注入校验失败: $1"
+    info "jiuwenbox AppArmor 关闭：legacy pod 注解（集群 v${_K8S_VERSION_STR}）"
+  fi
+}
+
+_apply_jiuwenbox_sidecar_json() { # $1=agentserver.json
+  # appArmorProfile 由 runtime 渲染 Pod 时转成 legacy pod 注解落地
+  # （不经 apiserver），与集群版本无关，无需按版本分派。
+  local img="${DEPLOY_VARS["JIUWENBOX_IMAGE"]}" port="${DEPLOY_VARS["JIUWENBOX_PORT"]:-8321}"
+  yq -i -o=json '
+    .rawdata.containers += [{
+      "container_id": "c-jiuwenbox",
+      "name": "jiuwenbox",
+      "image": "'"${img}"'",
+      "imagePullPolicy": "IfNotPresent",
+      "ports": [{"containerPort": '"${port}"'}],
+      "env": [
+        {"name": "JIUWENBOX_LISTEN", "value": "http://0.0.0.0:'"${port}"'"},
+        {"name": "JIUWENSWARM_DATA_DIR", "value": "/home/app/.jiuwenswarm"},
+        {"name": "JIUWENBOX_POLICY_PATH", "value": "/app/jiuwenswarm/jiuwenbox/src/jiuwenbox/configs/enterprise-policy.yaml"},
+        {"name": "TZ", "value": "Asia/Shanghai"}
+      ],
+      "securityContext": {"runAsUser": 0, "runAsGroup": 0,
+        "capabilities": {"add": ["SYS_ADMIN", "NET_ADMIN"]},
+        "seccompProfile": {"type": "Unconfined"},
+        "appArmorProfile": {"type": "Unconfined"}},
+      "readinessProbe": {"tcpSocket": {"port": '"${port}"'}, "initialDelaySeconds": 10, "periodSeconds": 5},
+      "volumeMounts": [
+        {"name": "data", "mountPath": "/home/app/.jiuwenswarm/profile"},
+        {"name": "hp-cgroup", "mountPath": "/sys/fs/cgroup"}
+      ]
+    }] |
+    .rawdata.templates[].sidecar_container_ids = ["c-jiuwenbox"] |
+    .rawdata.templates[].volumes += [{"name": "hp-cgroup", "hostPath": {"path": "/sys/fs/cgroup", "type": "Directory"}}]
+  ' "$1"
+  # 注入校验：config_sync 载荷须含 c-jiuwenbox 容器 + sidecar_container_ids + appArmorProfile
+  [ "$(yq -r '.rawdata.containers[].container_id' "$1" | grep -c c-jiuwenbox)" -ge 1 ]     || error "jiuwenbox sidecar 注入校验失败: $1"
+  [ "$(yq -r '.rawdata.templates[0].sidecar_container_ids[]' "$1" | grep -c c-jiuwenbox)" -ge 1 ]     || error "sidecar_container_ids 注入校验失败: $1"
+  [ "$(yq -r '.rawdata.containers[] | select(.container_id == "c-jiuwenbox") | .securityContext.appArmorProfile.type' "$1")" = "Unconfined" ]     || error "jiuwenbox appArmorProfile 注入校验失败: $1"
+}
+
+apply_jiuwenbox_extras() { # $@=本次渲染的清单文件名
+  [ "${DEPLOY_VARS["SANDBOX_TYPE"]}" = jiuwenbox ] || return 0
+  local f
+  for f in "$@"; do
+    case "$f" in
+      agentserver.yaml)
+        [ -f "$CONF_DIR/$f" ] || continue
+        _apply_jiuwenbox_sidecar_yaml "$CONF_DIR/$f"
+        info "沙箱后处理：agentserver.yaml 注入 jiuwenbox sidecar";;
+      agentserver.json)
+        [ -f "$CONF_DIR/$f" ] || continue
+        _apply_jiuwenbox_sidecar_json "$CONF_DIR/$f"
+        info "沙箱后处理：agentserver.json 注入 jiuwenbox sidecar";;
+    esac
+  done
+}
+
+# ---------- dev 模式代码挂载（MODE=dev） ----------
+# hostPath 把宿主机仓库代码挂载到镜像内代码路径，改代码无需重建镜像；Pod 固定到代码所在节点
+# 仅 CLUSTER_TYPE=k8s 支持（openshift SCC 禁止 hostPath）
+
+# 给清单内工作负载（Deployment/StatefulSet，如 agentserver）的首个容器追加一个 hostPath
+# 代码挂载（volume + volumeMount）；agentserver.json（full 模式 config_sync 载荷，runtime
+# 按其建 Pod）等价处理：卷注入 rawdata.templates[].volumes，挂载注入 c-agentserver 容器
+# 注：select(...).path |= 是更新运算符（非管道 select），yq 对不匹配的文档原样保留，
+# 多文档清单（工作负载 + Service）不会丢文档——勿改成 select(...) | .path = 值 的管道形式
+add_code_mount() { # $1=清单文件 $2=卷名 $3=宿主机路径 $4=容器内路径 $5=hostPath.type(默认 Directory)
+  local file="$1" name="$2" host_path="$3" mount_path="$4" host_type="${5:-Directory}"
+  case "$file" in
+    *.json)
+      # config_sync 载荷按 container_id 定位容器，卷按模板注入（-o=json 保持 JSON 格式）
+      yq -i -o=json '
+        (.rawdata.containers[] | select(.container_id == "c-agentserver").volumeMounts)
+          |= ((. // []) + [{"name": "'"${name}"'", "mountPath": "'"${mount_path}"'"}])
+        | .rawdata.templates[].volumes
+          |= ((. // []) + [{"name": "'"${name}"'", "hostPath": {"path": "'"${host_path}"'", "type": "'"${host_type}"'"}}])
+      ' "$file";;
+    *)
+      yq -i '
+        select(.kind == "Deployment" or .kind == "StatefulSet").spec.template.spec.containers[0].volumeMounts
+          |= ((. // []) + [{"name": "'"${name}"'", "mountPath": "'"${mount_path}"'"}])
+        | select(.kind == "Deployment" or .kind == "StatefulSet").spec.template.spec.volumes
+          |= ((. // []) + [{"name": "'"${name}"'", "hostPath": {"path": "'"${host_path}"'", "type": "'"${host_type}"'"}}])
+      ' "$file";;
+  esac
+}
+
+mount_swarm_code() { # jiuwenswarm 仓库 → 镜像内代码根
+  [ -n "${DEPLOY_VARS["SWARM_CODE_PATH"]:-}" ] || return 0
+  add_code_mount "$1" "swarm-code" "${DEPLOY_VARS["SWARM_CODE_PATH"]}" "${DEPLOY_VARS["SWARM_POD_CODE_PATH"]}"
+}
+
+mount_gateway_code() { # agent-gateway 仓库 → 镜像内代码根
+  if [ -z "${DEPLOY_VARS["GATEWAY_CODE_PATH"]:-}" ]; then
+    warning "GATEWAY_CODE_PATH 未设置：gateway 使用镜像内置代码（dev 模式下改动不生效）"
+    return 0
+  fi
+  add_code_mount "$1" "gateway-code" "${DEPLOY_VARS["GATEWAY_CODE_PATH"]}" "${DEPLOY_VARS["GATEWAY_POD_CODE_PATH"]}"
+}
+
+# jiuwenbox sidecar 同挂 jiuwenswarm 仓库（dev 专用）：sandbox 镜像 editable 安装与
+# entrypoint 均走仓库原路径（Dockerfile.sandbox：JIUWENBOX_POLICY_PATH、
+# sandbox-entrypoint.sh，dev 模式依赖仓库挂载生效），生产镜像内置同路径副本不挂载；
+# 挂载策略对齐 deploy/jiuwenswarm-ee（sidecar 仅挂仓库，不挂 core/site-packages）
+mount_swarm_code_sidecar() { # $1=agentserver 清单（yaml 或 config_sync 载荷 json）
+  [ -n "${DEPLOY_VARS["SWARM_CODE_PATH"]:-}" ] || return 0
+  local file="$1" name="swarm-code" mount_path="${DEPLOY_VARS["SWARM_POD_CODE_PATH"]}"
+  case "$file" in
+    *.json)
+      yq -i -o=json '
+        (.rawdata.containers[] | select(.container_id == "c-jiuwenbox").volumeMounts)
+          |= ((. // []) + [{"name": "'"${name}"'", "mountPath": "'"${mount_path}"'"}])
+      ' "$file";;
+    *)
+      yq -i '
+        (select(.kind == "Deployment" or .kind == "StatefulSet").spec.template.spec.containers[]
+          | select(.name == "jiuwenbox").volumeMounts)
+          |= ((. // []) + [{"name": "'"${name}"'", "mountPath": "'"${mount_path}"'"}])
+      ' "$file";;
+  esac
+}
+
+mount_runtime_code() { # agent-runtime 仓库 → 镜像内代码根
+  [ -n "${DEPLOY_VARS["RUNTIME_CODE_PATH"]:-}" ] || return 0
+  add_code_mount "$1" "runtime-code" "${DEPLOY_VARS["RUNTIME_CODE_PATH"]}" "${DEPLOY_VARS["RUNTIME_POD_CODE_PATH"]}"
+}
+
+mount_runtime_pkg() { # agent-runtime 的 foundation/management 子包 → site-packages
+  [ -n "${DEPLOY_VARS["RUNTIME_CODE_PATH"]:-}" ] || return 0
+  local src="${DEPLOY_VARS["RUNTIME_CODE_PATH"]}" dst="${DEPLOY_VARS["RUNTIME_POD_PKG_PATH"]}"
+  add_code_mount "$1" "foundation-code" "${src}/foundation/openjiuwen_runtime/foundation" "${dst}/foundation"
+  add_code_mount "$1" "management-code" "${src}/management/openjiuwen_runtime/management" "${dst}/management"
+}
+
+mount_core_pkg() { # agent-core 的 openjiuwen 包 → site-packages
+  [ -n "${DEPLOY_VARS["CORE_CODE_PATH"]:-}" ] || return 0
+  add_code_mount "$1" "core-code" "${DEPLOY_VARS["CORE_CODE_PATH"]}/openjiuwen" "${DEPLOY_VARS["CORE_POD_PKG_PATH"]}"
+}
+
+mount_gateway_pkg() { # agent-gateway 的 agent_gateway 包 → site-packages（jiuwenswarm 运行期依赖，与 core 同族）
+  [ -n "${DEPLOY_VARS["GATEWAY_CODE_PATH"]:-}" ] || return 0
+  add_code_mount "$1" "gateway-pkg" "${DEPLOY_VARS["GATEWAY_CODE_PATH"]}/agent_gateway" "${DEPLOY_VARS["GATEWAY_POD_PKG_PATH"]}"
+}
+
+mount_web_nginx_template() { # web：仓库 nginx 模板与可选 upstream 脚本盖到镜像 entrypoint 读取路径
+  # openshift 版模板已归位 docker/ 原件（原 docker/openshift/ 覆盖副本已合并删除），
+  # 挂载机制保留：部署期盖到镜像 entrypoint 读取路径，与镜像构建解耦
+  add_code_mount "$1" "web-nginx-template" \
+    "${DEPLOY_VARS["SWARM_CODE_PATH"]}/docker/jiuwenswarm-ee/web.nginx.conf.template" \
+    "/etc/nginx/templates/default.conf.template" "File"
+  add_code_mount "$1" "web-optional-upstreams" \
+    "${DEPLOY_VARS["SWARM_CODE_PATH"]}/docker/jiuwenswarm-ee/web-optional-upstreams.sh" \
+    "/docker-entrypoint.d/40-optional-upstreams.sh" "File"
+}
+
+mount_manager_web_nginx_template() { # manager-web：仓库 nginx 模板同上
+  # manager-web 模板已随 docker 目录收敛进 docker/jiuwenswarm-ee/（原覆盖副本已删）
+  add_code_mount "$1" "manager-web-nginx-template" \
+    "${DEPLOY_VARS["RUNTIME_CODE_PATH"]}/docker/jiuwenswarm-ee/manager-web.nginx.conf.template" \
+    "/etc/nginx/templates/default.conf.template" "File"
+}
+
+# 自动识别当前节点（hostPath 是节点本地的，Pod 必须固定到代码所在节点）：
+# 优先 .env.custom 的 CURRENT_NODE_NAME；否则按本机 hostname、再按本机 IP 匹配集群节点
+fetch_current_node_name() {
+  [ -n "${DEPLOY_VARS["CURRENT_NODE_NAME"]:-}" ] && {
+    info "CURRENT_NODE_NAME: ${DEPLOY_VARS["CURRENT_NODE_NAME"]}"
+    return 0
+  }
+  local host ip
+  host=$(hostname)
+  DEPLOY_VARS["CURRENT_NODE_NAME"]=$(kubectl get nodes -o json 2>/dev/null \
+    | HOST="$host" yq -r '.items[] | select(.status.addresses[]? | select(.type == "Hostname") | .address == strenv(HOST)) | .metadata.name' 2>/dev/null | head -1)
+  [ -n "${DEPLOY_VARS["CURRENT_NODE_NAME"]}" ] && {
+    info "CURRENT_NODE_NAME: ${DEPLOY_VARS["CURRENT_NODE_NAME"]}（按 hostname 识别）"
+    return 0
+  }
+  for ip in $(hostname -I 2>/dev/null); do
+    DEPLOY_VARS["CURRENT_NODE_NAME"]=$(kubectl get nodes -o json 2>/dev/null \
+      | IP="$ip" yq -r '.items[] | select(.status.addresses[]? | select(.type == "InternalIP") | .address == strenv(IP)) | .metadata.name' 2>/dev/null | head -1)
+    [ -n "${DEPLOY_VARS["CURRENT_NODE_NAME"]}" ] && {
+      info "CURRENT_NODE_NAME: ${DEPLOY_VARS["CURRENT_NODE_NAME"]}（按 IP 识别）"
+      return 0
+    }
+  done
+  error "无法识别当前节点（本机可能不是集群节点）：需在 .env.custom 配置 CURRENT_NODE_NAME（MODE=dev 代码挂载 / nfs-server 节点固定场景）"
+}
+
+# nfs 组件渲染后处理：nodeName 兜底告警（仅 nfs.yaml；--render-only 离线渲染无法
+# 识别部署节点时 nodeName 整行删除，Pod 可调度到任意节点，hostPath 数据随节点漂移）
+apply_nfs_extras() { # $@=本次渲染的清单文件名
+  local f
+  for f in "$@"; do
+    [ "$f" = nfs.yaml ] || continue
+    [ -f "$CONF_DIR/$f" ] || continue
+    if [ -z "${DEPLOY_VARS["CURRENT_NODE_NAME"]}" ]; then
+      warning "CURRENT_NODE_NAME 未识别：nfs-server 的 nodeName 已留空，Pod 可调度到任意节点（hostPath 数据随节点漂移）；正式部署请在集群可达环境重新渲染，或显式配置 CURRENT_NODE_NAME"
+    elif [ "${DEPLOY_VARS["CURRENT_NODE_NAME"]}" != "$(hostname)" ]; then
+      warning "NFS 导出根 ${DEPLOY_VARS["NFS_HOST_PATH"]} 须存在于节点 ${DEPLOY_VARS["CURRENT_NODE_NAME"]}：本机（$(hostname)）与其不一致时，请在该节点手工创建目录并 chmod 777"
+    fi
+  done
+}
+
+# MODE=dev 的渲染后处理：按组件挂载代码并固定节点；openshift 形态忽略 MODE=dev
+apply_dev_code_mounts() { # $@=本次渲染的清单文件名
+  is_k8s_cluster || return 0
+  [ "${CMD:-}" = "up" ] || return 0
+  [ "${DEPLOY_VARS["MODE"]}" = "dev" ] || return 0
+  local f comp node_fetched=""
+  for f in "$@"; do
+    comp="${f%.yaml}"; comp="${comp%.json}"   # agentserver.json（full 模式 runtime 建 Pod 的载荷）与 agentserver.yaml 同按 agentserver 处理
+    case "$comp" in
+      agentserver)
+        mount_runtime_pkg "$CONF_DIR/$f"; mount_core_pkg "$CONF_DIR/$f"; mount_gateway_pkg "$CONF_DIR/$f"
+        mount_swarm_code "$CONF_DIR/$f"; mount_swarm_code_sidecar "$CONF_DIR/$f";;
+      gateway)
+        mount_runtime_pkg "$CONF_DIR/$f"; mount_core_pkg "$CONF_DIR/$f"
+        mount_gateway_code "$CONF_DIR/$f";;
+      web)
+        [ "${DEPLOY_VARS["IS_MOUNT_WEB_CODE"]}" = "true" ] || continue
+        mount_swarm_code "$CONF_DIR/$f"; mount_web_nginx_template "$CONF_DIR/$f";;
+      web-server)
+        [ -n "${DEPLOY_VARS["SWARM_CODE_PATH"]}" ] || continue
+        mount_swarm_code "$CONF_DIR/$f";;
+      identity|manager-server|runtime)
+        mount_runtime_code "$CONF_DIR/$f";;
+      manager-web)
+        [ "${DEPLOY_VARS["IS_MOUNT_MANAGER_WEB_CODE"]}" = "true" ] || continue
+        mount_runtime_code "$CONF_DIR/$f"; mount_manager_web_nginx_template "$CONF_DIR/$f";;
+      *) continue;;   # mariadb/minio/redis/secret 等基础服务不挂代码
+    esac
+    # 节点识别惰性执行：仅存在需挂载组件时才解析（纯基础服务渲染不依赖节点）
+    [ -n "$node_fetched" ] || { fetch_current_node_name; node_fetched=1; }
+    # hostPath 是节点本地的，工作负载（Deployment/StatefulSet，如 agentserver）固定到代码所在节点
+    # agentserver.json 走模板级 nodeName（config_sync 合法键，runtime 建 Pod 时透传）
+    case "$f" in
+      *.json) yq -i -o=json '.rawdata.templates[].nodeName = "'"${DEPLOY_VARS["CURRENT_NODE_NAME"]}"'"' "$CONF_DIR/$f";;
+      *)      yq -i 'select(.kind == "Deployment" or .kind == "StatefulSet").spec.template.spec.nodeName = "'"${DEPLOY_VARS["CURRENT_NODE_NAME"]}"'"' "$CONF_DIR/$f";;
+    esac
+    info "dev 模式后处理完成: $comp（节点 ${DEPLOY_VARS["CURRENT_NODE_NAME"]}）"
+  done
+  return 0
+}
+
+# MODE=dev 代码路径校验：须为绝对路径且目录存在
+require_abs_dir() { # $1=变量名
+  local p="${DEPLOY_VARS[$1]}"
+  [[ "$p" = /* ]] || error "$1 须为绝对路径: $p"
+  [ -d "$p" ] || error "$1 目录不存在: $p"
+}
+
+# MODE 相关校验（check_vars 统一入口调用）
+# MODE 为 k8s 形态专属调试开关：openshift 形态及 down 命令直接忽略全部 MODE 设置
+resolve_dev_mode_vars() {
+  is_k8s_cluster || return 0
+  [ "${CMD:-}" = "up" ] || return 0
+  local mode="${DEPLOY_VARS["MODE"]}"
+  [[ "$mode" =~ ^(product|dev)$ ]] || error "MODE 非法（product | dev）: $mode"
+  [ "$mode" = "dev" ] || return 0
+
+  # --render-only 不做节点自动识别（nodeName 要写进清单）：仅当目标含需 dev 挂载的
+  # 组件（与 apply_dev_code_mounts 的挂载清单一致）时才要求显式节点名；
+  # redis/mariadb 等基础服务不挂代码、不固定节点，无节点名也应可单独渲染
+  if [ "${DEPLOY_VARS["RENDER_ONLY"]}" = "true" ] && [ -z "${DEPLOY_VARS["CURRENT_NODE_NAME"]}" ]; then
+    local comp
+    for comp in "${TARGETS[@]}"; do
+      case "$comp" in
+        agentserver|gateway|web|identity|manager-server|manager-web|runtime)
+          error "MODE=dev + --render-only 渲染含 dev 挂载组件（目标: ${TARGETS[*]}），需在 .env.custom 显式配置 CURRENT_NODE_NAME";;
+        web-server)
+          [ -z "${DEPLOY_VARS["SWARM_CODE_PATH"]}" ] || error "挂载 web-server 源码时，需在 .env.custom 显式配置 CURRENT_NODE_NAME";;
+      esac
+    done
+  fi
+
+  [ -n "${DEPLOY_VARS["SWARM_CODE_PATH"]}" ] && require_abs_dir SWARM_CODE_PATH
+  local v
+  for v in RUNTIME_CODE_PATH CORE_CODE_PATH GATEWAY_CODE_PATH; do
+    [ -n "${DEPLOY_VARS[$v]}" ] && require_abs_dir "$v"
+  done
+  return 0
+}
+
+# k8s 形态：up 前置——目标 namespace 不存在时自动创建（down 不调用本函数）
+# 由统一入口 kctl_ensure_namespace（kubectl.sh）按集群形态分流调用；
+# openshift 形态走 ProjectRequest API（_kctl_oc_ensure_namespace，同在 kubectl.sh），不经本函数
+# get 退出码非 0 不等于不存在（无 get namespaces 权限/网络故障同样非 0）：
+# 以 create 结果为准，仅 AlreadyExists 视为已存在放行，其余错误连同 kubectl stderr 报出
+_kctl_k8s_ensure_namespace() { # $1=namespace
+  is_k8s_cluster || return 0   # openshift：不探测、不自动创建
+  local ns="$1" err code
+  [ -n "$ns" ] || return 0
+  if kubectl get namespace "$ns" >/dev/null 2>&1; then
+    return 0
+  fi
+  err="$(kctl_tmpdir)/ns-err"
+  info "namespace $ns 不存在，自动创建"
+  if kubectl create namespace "$ns" >/dev/null 2>"$err"; then
+    info "namespace $ns 已创建"
+    return 0
+  fi
+  code=$(_kctl_k8s_err_code "$(cat "$err")")
+  [ "$code" = 409 ] && { info "namespace $ns 已存在"; return 0; }
+  error "namespace $ns 创建失败 → HTTP $code（若 ns 已存在则是缺 get namespaces 权限所致）: $(cat "$err")"
 }

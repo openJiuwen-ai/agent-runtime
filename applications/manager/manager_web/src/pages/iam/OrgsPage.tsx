@@ -13,7 +13,7 @@ import {
 import { useAsync } from '../../hooks/useAsync';
 import { useListSearch } from '../../hooks/useListSearch';
 import { useRouter } from '../../router';
-import { ApiError, Org, OrgApi } from '../../services/api';
+import { ApiError, InstanceBindingApi, Org, OrgApi } from '../../services/api';
 import { toast } from '../../stores/uiStore';
 import { formatTime } from '../../utils/format';
 import { ResourceExportButton, ResourceImportButton } from '../../components/ResourceImportExport';
@@ -88,8 +88,43 @@ export function OrgsPage() {
     if (data?.items) setItems(data.items);
   }, [data]);
 
+  const requestDelete = async (row: Org) => {
+    try {
+      const refs = await InstanceBindingApi.orgReferences(row.group_id);
+      if ((refs.total ?? 0) > 0) {
+        toast('warn', t('iam.orgReferencedNoDelete', { count: refs.total }));
+        return;
+      }
+      setDelTarget(row);
+    } catch (e) {
+      toast(
+        'danger',
+        t('errors.loadFailed', {
+          detail: e instanceof ApiError ? e.detail : (e as Error).message,
+        }),
+      );
+    }
+  };
+
   const toggleStatus = async (row: Org, enabled: boolean) => {
     if (togglingId) return;
+    if (!enabled) {
+      try {
+        const refs = await InstanceBindingApi.orgReferences(row.group_id);
+        if ((refs.total ?? 0) > 0) {
+          toast('warn', t('iam.orgReferencedNoDisable', { count: refs.total }));
+          return;
+        }
+      } catch (e) {
+        toast(
+          'danger',
+          t('errors.loadFailed', {
+            detail: e instanceof ApiError ? e.detail : (e as Error).message,
+          }),
+        );
+        return;
+      }
+    }
     const nextStatus = enabled ? 'active' : 'disabled';
     const previous = row.status;
     setItems((list) =>
@@ -122,7 +157,7 @@ export function OrgsPage() {
     <>
       <div className="iam-workspace flex min-w-0 flex-col gap-4">
         <div className="page-header w-full min-w-0 flex-wrap items-start gap-y-3">
-          <div className="min-w-[7.5rem] max-w-[12rem] shrink-0 sm:max-w-[16rem]">
+          <div className="min-w-[7.5rem] max-w-[20rem] shrink-0 sm:max-w-[32rem]">
             <div className="page-title truncate" title={t('iam.orgs')}>
               {t('iam.orgs')}
             </div>
@@ -281,7 +316,10 @@ export function OrgsPage() {
                               >
                                 {t('common.edit')}
                               </button>
-                              <button className="btn sm danger" onClick={() => setDelTarget(o)}>
+                              <button
+                                className="btn sm danger"
+                                onClick={() => void requestDelete(o)}
+                              >
                                 {t('common.delete')}
                               </button>
                             </div>
@@ -319,6 +357,13 @@ export function OrgsPage() {
         onConfirm={async () => {
           if (!delTarget) return;
           try {
+            // 确认时再查一次，避免打开对话框后引用又被加上
+            const refs = await InstanceBindingApi.orgReferences(delTarget.group_id);
+            if ((refs.total ?? 0) > 0) {
+              toast('warn', t('iam.orgReferencedNoDelete', { count: refs.total }));
+              setDelTarget(null);
+              return;
+            }
             await OrgApi.remove(delTarget.group_id);
             toast('success', t('success.deleted'));
             void reload();

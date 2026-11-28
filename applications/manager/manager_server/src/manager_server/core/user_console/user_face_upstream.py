@@ -1,8 +1,9 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """用户面动态上游解析（nginx auth_request 子请求）。
 
-按 Cookie ``jiuwenclaw_id`` 解析 Manager 可达的 User Web / Gateway 上游；
-缺 Cookie 或实例未配置时回退 ``MANAGER_WEB_*_TARGET``。
+按 Cookie ``jiuwenclaw_id`` 解析 Manager 可达的 Gateway 上游（HTTP/WS 均取
+``instance_info.gateway_host``）；缺 Cookie 或实例未配置时回退
+``MANAGER_WEB_GATEWAY_*_TARGET``。
 
 nginx 变量 ``proxy_pass`` 的 ``resolver`` **不会**使用 ``/etc/resolv.conf`` 的
 search 域，因此短名 ``svc`` / ``svc.ns`` 会 Host not found；下发前扩成
@@ -28,7 +29,6 @@ from manager_server.infrastructure.logger import get_logger
 
 JIUWENCLAW_ID_COOKIE = "jiuwenclaw_id"
 
-_HDR_USER_WEB = "X-User-Web-Upstream"
 _HDR_GATEWAY_HTTP = "X-Gateway-Http-Upstream"
 _HDR_GATEWAY_WS = "X-Gateway-Ws-Upstream"
 
@@ -62,13 +62,11 @@ _PUBLIC_TLDS = frozenset(
 
 @dataclass(frozen=True, slots=True)
 class UserFaceUpstreams:
-    user_web: str
     gateway_http: str
     gateway_ws: str
 
     def as_headers(self) -> dict[str, str]:
         return {
-            _HDR_USER_WEB: self.user_web,
             _HDR_GATEWAY_HTTP: self.gateway_http,
             _HDR_GATEWAY_WS: self.gateway_ws,
         }
@@ -154,7 +152,6 @@ def coerce_http_upstream(raw: str) -> str:
 
 def _defaults() -> UserFaceUpstreams:
     return UserFaceUpstreams(
-        user_web=coerce_http_upstream(settings.manager_web_user_web_target),
         gateway_http=coerce_http_upstream(settings.manager_web_gateway_http_target),
         gateway_ws=coerce_http_upstream(settings.manager_web_gateway_ws_target),
     )
@@ -190,19 +187,26 @@ async def resolve_user_face_upstreams(
     user_id: str,
     groups: list[str] | None,
     jiuwenclaw_id: str | None,
+    bypass_admission: bool = False,
 ) -> UserFaceUpstreams:
-    """解析当前请求应反代的上游；无 Cookie 时直接回退默认。
+    """解析当前请求应反代的 Gateway 上游；无 Cookie 时直接回退默认。
+
+    ``bypass_admission=True`` 跳过 ``instance_grant`` 准入检查，仅放行给
+    ``platform_admin`` 等特权调用方——平台管理员需要跨所有实例读取
+    gateway-api 资源（团队配额策略等），不应被逐实例授权表挡住。
 
     Raises:
         PermissionError: Cookie 指向的实例当前用户无权访问。
-        LookupError: Cookie 指向的实例不存在。
+        LookupError: Cookie 指向的实例不存在（``bypass_admission`` 不影响：
+            实例行不存在时仍 fail-closed 403，避免把请求静默路由到默认集群的
+            上游造成跨集群写错目标——issue #124 审查 #4）。
     """
     defaults = _defaults()
     jid = str(jiuwenclaw_id or "").strip()
     uid = str(user_id or "").strip()
     # Cache only upstream mappings, not authorization decisions: grants may be
     # revoked/disabled/expired and a refreshed token can have different groups.
-    if jid:
+    if jid and not bypass_admission:
         admitted = await UserConsoleService(handler).user_can_access_instance(uid, jid, groups)
         if not admitted:
             raise PermissionError(f"instance not admitted: {jid}")
@@ -213,7 +217,6 @@ async def resolve_user_face_upstreams(
             "user_face_upstream_cache_hit",
             user_id=uid,
             jiuwenclaw_id=jid or None,
-            user_web=cached.user_web,
             gateway_http=cached.gateway_http,
             gateway_ws=cached.gateway_ws,
         )
@@ -224,7 +227,6 @@ async def resolve_user_face_upstreams(
         _log.info(
             "user_face_upstream_defaults",
             user_id=uid,
-            user_web=defaults.user_web,
             gateway_http=defaults.gateway_http,
             gateway_ws=defaults.gateway_ws,
         )
@@ -232,17 +234,20 @@ async def resolve_user_face_upstreams(
 
     row = await get_instance_row(handler, jid)
     if row is None:
+        # fail-closed（issue #124 审查 #4）：cookie 指向的实例在 manager_dyx 不存在
+        # 时，无论是否 platform_admin 都继续抛 LookupError（router 转 403）。回退到
+        # ``defaults`` 会把请求静默路由到**默认集群**的上游（manager 库里第一个集群），
+        # 与 cookie 指定的集群不同 —— 管理员后续的读写会落到错误的集群，属于跨集群
+        # 写错目标的高风险行为。platform_admin 跨实例管理时让其重新选择实例或要求
+        # 先建实例行，比静默路由错配安全。
         raise LookupError(f"instance not found: {jid}")
 
-    data = getattr(row, "data", None)
-    data_dict = dict(data) if isinstance(data, dict) else {}
-    raw_user_web = getattr(row, "user_web_host", None)
+    raw_gateway = getattr(row, "gateway_host", None)
     resolved = UserFaceUpstreams(
-        user_web=_pick(raw_user_web, defaults.user_web),
-        gateway_http=_pick(data_dict.get("gateway_web_http_host"), defaults.gateway_http),
-        gateway_ws=_pick(data_dict.get("gateway_web_ws_host"), defaults.gateway_ws),
+        gateway_http=_pick(raw_gateway, defaults.gateway_http),
+        gateway_ws=_pick(raw_gateway, defaults.gateway_ws),
     )
-    if not resolved.user_web or not resolved.gateway_http or not resolved.gateway_ws:
+    if not resolved.gateway_http or not resolved.gateway_ws:
         raise LookupError(f"instance upstream incomplete: {jid}")
 
     _cache_set(cache_key, resolved)
@@ -250,10 +255,7 @@ async def resolve_user_face_upstreams(
         "user_face_upstream_resolved",
         user_id=uid,
         jiuwenclaw_id=jid,
-        raw_user_web=raw_user_web,
-        raw_gateway_http=data_dict.get("gateway_web_http_host"),
-        raw_gateway_ws=data_dict.get("gateway_web_ws_host"),
-        user_web=resolved.user_web,
+        raw_gateway_host=raw_gateway,
         gateway_http=resolved.gateway_http,
         gateway_ws=resolved.gateway_ws,
     )

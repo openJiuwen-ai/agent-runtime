@@ -89,10 +89,6 @@ class Settings(BaseSettings):
         default="http://127.0.0.1:8770",
         validation_alias="MANAGER_WEB_IDP_TARGET",
     )
-    manager_web_user_web_target: str = Field(
-        default="http://127.0.0.1:5173",
-        validation_alias="MANAGER_WEB_USER_WEB_TARGET",
-    )
     manager_web_gateway_http_target: str = Field(
         default="http://127.0.0.1:19002",
         validation_alias="MANAGER_WEB_GATEWAY_HTTP_TARGET",
@@ -145,8 +141,8 @@ class Settings(BaseSettings):
     deploy_enabled: bool = Field(
         default=True, validation_alias="MANAGER_DEPLOY_ENABLED"
     )
-    # deploy/openshift 工具树：留空自动探测（镜像内 /app/agent-runtime/deploy/openshift
-    # → 源码仓 deploy/openshift）
+    # deploy/jiuwenswarm-ee 工具树：留空自动探测（镜像内 /app/agent-runtime/deploy/jiuwenswarm-ee
+    # → 源码仓 deploy/jiuwenswarm-ee）
     deploy_tool_dir: str = Field(default="", validation_alias="MANAGER_DEPLOY_TOOL_DIR")
     # 部署子进程用的 kubeconfig（k8s 形态 kubectl 隐式解析；随 Secret 卷注入）
     deploy_kubeconfig: str = Field(
@@ -182,15 +178,12 @@ class Settings(BaseSettings):
         default=180, validation_alias="MANAGER_DEPLOY_HEARTBEAT_STALE_SECONDS"
     )
 
-    # 与部署 NAMESPACE 对齐；默认 object key 模板里的 {ns} 由此替换
-    deploy_namespace: str = Field(
-        default="default",
-        validation_alias="NAMESPACE",
-    )
-    # 管理面「导入默认配置」读取的 OBS object key；可用 {ns} 占位（→ deploy_namespace）
-    agent_runtime_default_conf_path: str = Field(
-        default="defaults/{ns}/agentserver.json",
-        validation_alias="AGENT_RUNTIME_DEFAULT_CONF_PATH",
+    # 管理面「导入默认配置」读取的本地文件路径：deploy 把渲染完成的 agentserver.json
+    # 注入 ConfigMap（jiuwenswarm-manager-runtime-defaults）并挂载到该路径；留空=未配置。
+    # 与「运行时模板发现」端点共用同一 env（agentserver-discovery 直读 os.environ）
+    agentserver_json_path: str = Field(
+        default="",
+        validation_alias="AGENTSERVER_JSON_PATH",
     )
 
     @property
@@ -200,15 +193,6 @@ class Settings(BaseSettings):
     @property
     def port(self) -> int:
         return self.rest_port
-
-    @property
-    def resolved_agent_runtime_default_conf_path(self) -> str:
-        """解析后的默认 agentserver.json object key（替换 {ns}）。"""
-        ns = str(self.deploy_namespace or "default").strip() or "default"
-        tpl = str(self.agent_runtime_default_conf_path or "").strip() or (
-            "defaults/{ns}/agentserver.json"
-        )
-        return tpl.replace("{ns}", ns)
 
 
 settings = Settings()

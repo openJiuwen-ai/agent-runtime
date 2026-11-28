@@ -218,6 +218,17 @@ class ServiceConfigTemplateService:
         await _assert_bound_containers_exist(self._handler, body)
         template_uuid = new_uuid4()
         row = self.build_row_for_create(body, template_id=template_uuid, data=data)
+        # 保存前预检（issue #203）：创建同样要过 foundation 校验，避免落库后
+        # Runtime 才发现 volumes/挂载不一致。
+        from manager_server.core.instance_resource.runtime_config_sync import (
+            preflight_template_binding,
+        )
+        from manager_server.core.template.service_config_container import (
+            load_wires_for_template,
+        )
+
+        preflight_template_binding(
+            row, await load_wires_for_template(self._handler, row))
         now = utc_now()
         payload = dict(row)
         payload.setdefault("created_at", now)
@@ -322,6 +333,39 @@ class ServiceConfigTemplateService:
 
         payload = dict(updates)
         payload["updated_at"] = utc_now()
+
+        # 保存前预检（issue #203）：模板级/绑定/volumes 变更先用与 Runtime
+        # config_sync 共用的 foundation 校验跑一遍，不通过则不落库。
+        runtime_keys = {
+            "main_container_id", "sidecar_container_ids", "volumes",
+            "namespace", "node_name", "fs_group", "pod_name", "sse_path",
+            "ready_timeout", "ready_poll_interval", "scope_concurrency",
+            "pod_concurrency", "session_ttl", "pod_ttl", "min_idle_pods",
+            "message_timeout", "data", "enabled",
+        }
+        if any(key in updates for key in runtime_keys):
+            merged_row: dict[str, Any] = {}
+            for key in (
+                "template_id", "template_name", "description", "enabled",
+                "data", "namespace", "node_name", "fs_group", "pod_name",
+                "sse_path", "kubeconfig", "ready_timeout",
+                "ready_poll_interval", "main_container_id",
+                "sidecar_container_ids", "volumes", "min_idle_pods",
+                "pod_concurrency", "pod_ttl", "scope_concurrency",
+                "session_ttl", "message_timeout",
+            ):
+                merged_row[key] = getattr(existing, key, None)
+            merged_row.update(updates)
+            from manager_server.core.instance_resource.runtime_config_sync import (
+                preflight_template_binding,
+            )
+            from manager_server.core.template.service_config_container import (
+                load_wires_for_template,
+            )
+
+            containers = await load_wires_for_template(self._handler, merged_row)
+            preflight_template_binding(merged_row, containers)
+
         row = await self._handler.update(
             _TABLE, {"template_id": template_id}, payload
         )

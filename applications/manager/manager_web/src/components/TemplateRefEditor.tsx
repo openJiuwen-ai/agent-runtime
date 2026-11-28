@@ -32,7 +32,8 @@ const SLOT_CONFIG_PATH: Record<string, string> = {
   extension_config: '/extension-config-templates',
   mcp: '/mcp-templates',
   permissions: '/safety-guardrails',
-  a2a_access_policy: '/a2a-management?tab=policies',
+  execution_guard: '/execution-guard-templates',
+  // A2A 管理页暂隐藏：不展示「前往 A2A 管理」死链
 };
 
 /** 槽位 → 引导页面名称（用于「前往 {页面} 页面 →」链接文案） */
@@ -48,7 +49,7 @@ const SLOT_HINT_PAGE_KEY: Record<string, string> = {
   extension_config: 'extensionTemplate.title',
   mcp: 'mcpTemplate.title',
   permissions: 'safetyGuardrails.title',
-  a2a_access_policy: 'a2aManagement.title',
+  execution_guard: 'executionGuardrails.title',
 };
 
 function SelectChevron({ open = false }: { open?: boolean }) {
@@ -356,10 +357,11 @@ export function TemplateRefEditor({
     vision_model: tr('为图像理解任务选择模型。', 'Choose a model for image understanding.'),
     image_gen_model: tr('为图片生成任务选择模型。', 'Choose a model for image generation.'),
     embedding_model: tr('选择文本向量化使用的模型。', 'Choose a model for text embeddings.'),
-    skill_prebuilt: tr('选择 Agent 可使用的预置技能源，可选择多个。', 'Select one or more prebuilt skill sources for this Agent.'),
+    skill_prebuilt: tr('选择 Agent 可使用的预置技能，可选择多个。', 'Select one or more prebuilt skills for this Agent.'),
     extension_config: tr('组合可复用的扩展配置，可选择多个。', 'Combine one or more reusable extension configurations.'),
     mcp: tr('连接 Agent 可调用的 MCP 工具服务，可选择多个。', 'Connect one or more MCP tool services for this Agent.'),
     permissions: tr('设置 Agent 调用工具时遵循的安全策略。', 'Set the safety policy for Agent tool calls.'),
+    execution_guard: tr('设置模型输出打转、瞬时失败重试和工具循环断路。', 'Set repeat detection, transient retries, and the tool-loop circuit breaker.'),
     a2a_access_policy: tr('限制此 Agent 可访问的外部 Agent 范围。', 'Limit the external Agents this Agent can access.'),
     expert_package: tr('选择随 Agent 一起发布的专家与专家团组合。', 'Choose the experts and groups published with this Agent.'),
   };

@@ -19,17 +19,26 @@ import {
   type MatchNode,
   type MatchOp,
 } from '../utils/matchExpr';
-import { AgentTemplateApi, OrgApi, UserApi } from '../services/api';
+import { OrgApi, UserApi } from '../services/api';
 import { useAsync } from '../hooks/useAsync';
+import { loadMatchAgentOptions } from '../services/matchAgentOptions';
 import { collectPages } from '../utils/overview';
 
 interface SelectOption { id: string; label: string }
 
 const MatchFieldsContext = createContext<MatchField[]>(MATCH_FIELDS);
 const MatchOptionsContext = createContext<Partial<Record<MatchField, SelectOption[]>>>({});
+const MatchAgentOptionsContext = createContext<{
+  options: SelectOption[];
+  resourceScoped: boolean;
+  loading: boolean;
+  error: string | null;
+}>({ options: [], resourceScoped: false, loading: false, error: null });
 
 function useFieldOptions(field: MatchField): SelectOption[] {
-  return useContext(MatchOptionsContext)[field] ?? [];
+  const directory = useContext(MatchOptionsContext);
+  const agents = useContext(MatchAgentOptionsContext);
+  return field === 'bot_id' ? agents.options : directory[field] ?? [];
 }
 
 function TrashIcon() {
@@ -178,45 +187,61 @@ function ConditionLeaf({
 }) {
   const { t } = useTranslation();
   const allowedFields = useContext(MatchFieldsContext);
+  const agentOptions = useContext(MatchAgentOptionsContext);
   const fieldOptions = useMemo(() => {
     // 已有非法字段时仍展示当前值，便于用户改成合法字段
     if (allowedFields.includes(value.field)) return allowedFields;
     return [...allowedFields, value.field];
   }, [allowedFields, value.field]);
   const options = useFieldOptions(value.field);
+  const resourceScoped = value.field === 'bot_id' && agentOptions.resourceScoped;
+  const unavailable = resourceScoped && !agentOptions.loading && !agentOptions.error
+    ? value.values.filter((id) => !options.some((option) => option.id === id))
+    : [];
+  // Keep old or deleted IDs visible and removable; never guess a template-to-resource mapping.
+  const selectableOptions = unavailable.length
+    ? [...options, ...unavailable.map((id) => ({ id, label: t('policies.matchExpr.unavailableAgent', { id }) }))]
+    : options;
   return (
-    <div className="flex min-w-0 items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--card)] px-2.5 py-2 shadow-[inset_0_1px_0_var(--card-highlight)]">
-      <select
-        className="select w-[5.5rem] shrink-0 !py-1 !text-xs"
-        value={value.field}
-        onChange={(e) => onChange({ ...value, field: e.target.value as MatchField, values: [] })}
-      >
-        {fieldOptions.map((f) => (
-          <option key={f} value={f}>
-            {t(`policies.matchExpr.fields.${f}`)}
-          </option>
-        ))}
-      </select>
-      <select
-        className="select w-[5rem] shrink-0 !py-1 !text-xs"
-        value={value.op}
-        onChange={(e) => onChange({ ...value, op: e.target.value as MatchOp })}
-      >
-        <option value="in">in</option>
-        <option value="not in">not in</option>
-      </select>
-      <MultiSelectDropdown
-        options={options}
-        selected={value.values}
-        onChange={(values) => onChange({ ...value, values })}
-        placeholder={t('policies.matchExpr.valuePlaceholder')}
-      />
-      <button type="button" className="btn sm ghost shrink-0 !px-2" onClick={onAddCondition}>
-        + {t('policies.matchExpr.addCondition')}
-      </button>
-      {canRemove ? (
-        <DeleteIconButton label={t('policies.matchExpr.removeCondition')} onClick={onRemove} />
-      ) : null}
+    <div className="flex min-w-0 flex-col gap-1">
+      <div className="flex min-w-0 items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--card)] px-2.5 py-2 shadow-[inset_0_1px_0_var(--card-highlight)]">
+        <select
+          className={`select ${agentOptions.resourceScoped ? 'w-[8rem]' : 'w-[5.5rem]'} shrink-0 !py-1 !text-xs`}
+          value={value.field}
+          onChange={(e) => onChange({ ...value, field: e.target.value as MatchField, values: [] })}
+        >
+          {fieldOptions.map((f) => (
+            <option key={f} value={f}>
+              {f === 'bot_id' && agentOptions.resourceScoped
+                ? t('policies.matchExpr.clusterAgent')
+                : t(`policies.matchExpr.fields.${f}`)}
+            </option>
+          ))}
+        </select>
+        <select
+          className="select w-[5rem] shrink-0 !py-1 !text-xs"
+          value={value.op}
+          onChange={(e) => onChange({ ...value, op: e.target.value as MatchOp })}
+        >
+          <option value="in">in</option>
+          <option value="not in">not in</option>
+        </select>
+        <MultiSelectDropdown
+          options={selectableOptions}
+          selected={value.values}
+          onChange={(values) => onChange({ ...value, values })}
+          placeholder={t('policies.matchExpr.valuePlaceholder')}
+        />
+        <button type="button" className="btn sm ghost shrink-0 !px-2" onClick={onAddCondition}>
+          + {t('policies.matchExpr.addCondition')}
+        </button>
+        {canRemove ? (
+          <DeleteIconButton label={t('policies.matchExpr.removeCondition')} onClick={onRemove} />
+        ) : null}
+      </div>
+      {unavailable.length > 0 && (
+        <div className="text-[11px] text-danger" role="alert">{t('policies.matchExpr.unavailableAgentHint')}</div>
+      )}
     </div>
   );
 }
@@ -513,7 +538,9 @@ interface MatchExprEditorProps {
   onChange: (value: string) => void;
   /** 可选字段；默认 group/user/bot。Agent 资源传 user/group 即可。 */
   allowedFields?: MatchField[];
-  /** Refresh directory choices after identities or templates were created in a preceding step. */
+  /** Runtime 授权传当前集群 ID，按集群 Agent 资源选择；省略时保持模板选项。 */
+  agentResourceInstanceId?: string;
+  /** Refresh choices after identities or resources were created in a preceding step. */
   revision?: number;
 }
 
@@ -521,6 +548,7 @@ export function MatchExprEditor({
   value,
   onChange,
   allowedFields = MATCH_FIELDS,
+  agentResourceInstanceId,
   revision = 0,
 }: MatchExprEditorProps) {
   const { t } = useTranslation();
@@ -529,22 +557,35 @@ export function MatchExprEditor({
     [allowedFields],
   );
   const [model, setModel] = useState<MatchExprModel>(() => parseMatchExpr(value));
+  const lastEmittedRef = useRef(value);
   const loadOptions = model.mode === 'custom';
   const loadAgents = fields.includes('bot_id');
-  const options = useAsync(async () => {
-    if (!loadOptions) return {};
-    const [orgs, users, agents] = await Promise.all([
+  const directory = useAsync(async () => {
+    if (!loadOptions) return { revision, options: {} };
+    const [orgs, users] = await Promise.all([
       collectPages((page, page_size) => OrgApi.list({ page, page_size })),
       collectPages((page, page_size) => UserApi.list({ page, page_size })),
-      loadAgents ? collectPages((page, page_size) => AgentTemplateApi.list({ page, page_size })) : Promise.resolve([]),
     ]);
-    return {
+    return { revision, options: {
       group_id: orgs.map(row => ({ id: row.group_id, label: row.display_name || row.group_id })),
       user_id: users.map(row => ({ id: row.user_id, label: row.display_name || row.user_id })),
-      bot_id: agents.map(row => ({ id: row.template_id, label: row.template_name || row.template_id })),
-    };
-  }, [loadOptions, loadAgents, revision]);
-  const lastEmittedRef = useRef(value);
+    } };
+  }, [loadOptions, revision]);
+  const { data: agents, loading: agentsLoading, error: agentsError } = useAsync(
+    async () => ({
+      instanceId: agentResourceInstanceId,
+      revision,
+      items: loadOptions && loadAgents ? await loadMatchAgentOptions(agentResourceInstanceId) : [],
+    }),
+    [loadOptions, loadAgents, agentResourceInstanceId, revision],
+  );
+  const currentAgents = agents && agents.instanceId === agentResourceInstanceId && agents.revision === revision ? agents : null;
+  const agentOptions = useMemo(() => ({
+    options: currentAgents?.items ?? [],
+    resourceScoped: agentResourceInstanceId !== undefined,
+    loading: agentsLoading || (!currentAgents && !agentsError),
+    error: agentsError,
+  }), [currentAgents, agentResourceInstanceId, agentsLoading, agentsError]);
 
   useEffect(() => {
     if (value === lastEmittedRef.current) return;
@@ -578,54 +619,67 @@ export function MatchExprEditor({
   };
 
   return (
-    <MatchFieldsContext.Provider value={fields}><MatchOptionsContext.Provider value={options.data ?? {}}>
-      <div className="flex flex-col gap-2">
-        {loadOptions && options.error && <div className="text-xs text-danger" role="alert">{options.error}<button type="button" className="btn sm ml-2" onClick={() => void options.reload()}>{t('common.refresh')}</button></div>}
-        <select
-          className="select w-full max-w-xs"
-          value={model.mode}
-          onChange={(e) => setMode(e.target.value as MatchExprMode)}
-        >
-          <option value="all">{t('policies.matchExpr.modeAll')}</option>
-          <option value="custom">{t('policies.matchExpr.modeCustom')}</option>
-        </select>
+    <MatchFieldsContext.Provider value={fields}>
+      <MatchOptionsContext.Provider value={directory.data?.revision === revision ? directory.data.options : {}}>
+      <MatchAgentOptionsContext.Provider value={agentOptions}>
+        <div className="flex flex-col gap-2">
+          <select
+            className="select w-full max-w-xs"
+            value={model.mode}
+            onChange={(e) => setMode(e.target.value as MatchExprMode)}
+          >
+            <option value="all">{t('policies.matchExpr.modeAll')}</option>
+            <option value="custom">{t('policies.matchExpr.modeCustom')}</option>
+          </select>
 
-        {model.mode === 'all' ? (
-          <div className="text-[11px] text-muted">{t('policies.matchExpr.allHint')}</div>
-        ) : model.raw ? (
-          <div className="flex flex-col gap-2">
-            <div className="text-[11px] text-muted">{t('policies.matchExpr.rawHint')}</div>
-            <textarea
-              className="input min-h-[72px] mono text-xs"
-              value={model.raw}
-              onChange={(e) => emit({ ...model, raw: e.target.value })}
+          {loadOptions && directory.error && (
+            <div className="text-xs text-danger" role="alert">{directory.error}<button type="button" className="btn sm ml-2" onClick={() => void directory.reload()}>{t('common.refresh')}</button></div>
+          )}
+
+          {model.mode === 'custom' && loadAgents && agentsError && (
+            <div className="text-[11px] text-danger" role="alert">
+              {t('policies.matchExpr.agentOptionsLoadFailed', { error: agentsError })}
+            </div>
+          )}
+
+          {model.mode === 'all' ? (
+            <div className="text-[11px] text-muted">{t('policies.matchExpr.allHint')}</div>
+          ) : model.raw ? (
+            <div className="flex flex-col gap-2">
+              <div className="text-[11px] text-muted">{t('policies.matchExpr.rawHint')}</div>
+              <textarea
+                className="input min-h-[72px] mono text-xs"
+                value={model.raw}
+                onChange={(e) => emit({ ...model, raw: e.target.value })}
+              />
+              <button
+                type="button"
+                className="btn sm ghost self-start"
+                onClick={() => emit(parseMatchExpr(model.raw))}
+              >
+                {t('policies.matchExpr.resetToVisual')}
+              </button>
+            </div>
+          ) : (
+            <MindMapGroup
+              group={model.root}
+              root={model.root}
+              depth={0}
+              isRoot
+              layoutKey={structureKey}
+              onChangeRoot={(root) => emit({ ...model, mode: 'custom', root, raw: undefined })}
             />
-            <button
-              type="button"
-              className="btn sm ghost self-start"
-              onClick={() => emit(parseMatchExpr(model.raw))}
-            >
-              {t('policies.matchExpr.resetToVisual')}
-            </button>
-          </div>
-        ) : (
-          <MindMapGroup
-            group={model.root}
-            root={model.root}
-            depth={0}
-            isRoot
-            layoutKey={structureKey}
-            onChangeRoot={(root) => emit({ ...model, mode: 'custom', root, raw: undefined })}
-          />
-        )}
+          )}
 
-        {model.mode === 'custom' && preview ? (
-          <div className="rounded-md border border-dashed border-[var(--border)] bg-[var(--bg-muted)] px-2.5 py-2">
-            <div className="text-[11px] text-muted mb-1">{t('policies.matchExpr.preview')}</div>
-            <code className="block text-[11px] mono text-muted break-all">{preview}</code>
-          </div>
-        ) : null}
-      </div>
-    </MatchOptionsContext.Provider></MatchFieldsContext.Provider>
+          {model.mode === 'custom' && preview ? (
+            <div className="rounded-md border border-dashed border-[var(--border)] bg-[var(--bg-muted)] px-2.5 py-2">
+              <div className="text-[11px] text-muted mb-1">{t('policies.matchExpr.preview')}</div>
+              <code className="block text-[11px] mono text-muted break-all">{preview}</code>
+            </div>
+          ) : null}
+        </div>
+      </MatchAgentOptionsContext.Provider>
+      </MatchOptionsContext.Provider>
+    </MatchFieldsContext.Provider>
   );
 }

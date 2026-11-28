@@ -1,113 +1,91 @@
 #!/usr/bin/env bash
-set -euo >/dev/null 2>&1
+[ -n "${_DEPLOY_ARGS_HANDLER_SH:-}" ] && return 0
+_DEPLOY_ARGS_HANDLER_SH=1
 
-# ========== Parses command-line arguments ========== 
+# args_handler.sh —— 命令行解析
+# 解析结果写入全局：CMD(up|down)、SCOPE(""|manager)、TARGETS
+
+CMD=""
+SCOPE=""
+TARGETS=()
+TARGETS_EXPLICIT=0   # 1=命令行显式指定组件（默认目标按模式派生，显式目标按模式校验矛盾）
+
 parse_args() {
-    local i=0
-    local args=("$@")
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      up|down)   [ -z "$CMD" ] || error "命令重复: $CMD 与 $1"
+                 CMD="$1";;
+      manager)   [ -z "$SCOPE" ] || error "组重复: manager"
+                 SCOPE=manager;;
+      -n)        [ $# -ge 2 ] || error "-n 需要参数"
+                 DEPLOY_VARS["NAMESPACE"]="$2"; shift;;
+      --render-only) DEPLOY_VARS["RENDER_ONLY"]="true";;
+      -y|--yes)  ;;   # 兼容保留参数，无实际作用（卸载无需确认）
+      -h|--help) usage; exit 0;;
+      *)         component_managed "$1" || error "不支持的参数: $1（可用：[manager] up|down，组件名，-n，--render-only，-y，-h）"
+                 in_array "$1" "${TARGETS[@]}" || TARGETS+=("$1");;   # 显式指定组件
+    esac
+    shift
+  done
 
-    while [ $i -lt ${#args[@]} ]; do
-        case "${args[$i]}" in
-            up|down|restart)
-                CMD="${args[$i]}"
-                i=$((i+1))
-                ;;
-            nfs|nfs-sc|rabbitmq|mariadb|mysql|postgresql|minio|log|jina|proxy|monitor|gateway|web|manager|runtime|agentserver)
-                MODULES+=("${args[$i]^^}")
-                i=$((i+1))
-                ;;
-            -n)
-                DEPLOY_VARS["NAMESPACE"]="${args[$((i+1))]}"
-                i=$((i+2))
-                ;;
-            --render-only)
-                DEPLOY_VARS["RENDER_ONLY"]="true"
-                i=$((i+1))
-                ;;
-            -h|--help)
-                print_help
-                ;;
-            *)
-                error "Invalid Args: ${args[$i]}"
-                ;;
-        esac
-    done
+  [ -n "$CMD" ] || error "缺少命令 up|down（用法见 -h）"
 
-    # Verify that the command must exist
-    if [ -z "${CMD:-}" ]; then
-        error "Command not specified! Use 'up', 'down' or 'restart'"
-        exit 1
+  # down 直接消费 conf/ 现有清单（按部署时资源名卸载），不支持重渲染：
+  # 清单缺失时按 main 里的提示先 up --render-only 补齐
+  [ "${DEPLOY_VARS["RENDER_ONLY"]}" = "true" ] && [ "$CMD" = down ] \
+    && error "down 不支持 --render-only（卸载直接消费 conf/ 现有清单；缺失时先 up --render-only 补齐）"
+
+  # nfs-sc 显式目标仅限 up --render-only：离线渲染无法探测节点架构，作为手动指定渲染入口
+  # （正式部署/卸载一律走 nfs 统一入口，由 filter_targets_by_nfs_platform 自动解析组件集）
+  if in_array nfs-sc "${TARGETS[@]}" \
+    && { [ "$CMD" != up ] || [ "${DEPLOY_VARS["RENDER_ONLY"]}" != "true" ]; }; then
+    error "nfs-sc 仅支持随 up --render-only 显式指定（离线渲染无法探测节点架构的手动渲染入口）；部署/卸载统一使用 nfs 目标（工具按形态/外挂 NFS/节点架构自动解析组件集）"
+  fi
+
+  # 目标组件：显式指定优先（按规范依赖序排列）；未指定则取组默认
+  if [ ${#TARGETS[@]} -gt 0 ]; then
+    TARGETS_EXPLICIT=1
+    if [ "$CMD" = up ] && in_array web-server "${TARGETS[@]}" \
+        && ! in_array secret "${TARGETS[@]}"; then
+      TARGETS+=(secret)
     fi
-
-    # If no modules are specified, deploy all by default
-    if [ ${#MODULES[@]} -eq 0 ]; then
-        process_modules
-    fi
-
-    # AGENT_RUNTIME_ENABLED 决定 agentserver 的生命周期归属：
-    #   true  -> AGENTSERVER 模块由 agent-runtime 动态创建
-    #   false -> AGENTSERVER 模块由 Deployment+Service启动，不经 agent-runtime）
-    if [ "${DEPLOY_VARS["AGENT_RUNTIME_ENABLED"]}" == "false" ]; then
-        if [[ " ${MODULES[@]} " =~ " RUNTIME " ]]; then
-            error "module 'runtime' requires AGENT_RUNTIME_ENABLED=true"
-        fi
-    else
-        if [[ " ${MODULES[@]} " =~ " AGENTSERVER " ]]; then
-            error "module 'agentserver' requires AGENT_RUNTIME_ENABLED=false"
-        fi
-    fi
-
-    info "Executing command: $*"
-    info "CMD=${CMD}"
-    info "MODULES=${MODULES[@]}"
-    info "NAMESPACE=${DEPLOY_VARS["NAMESPACE"]}"
+    sort_targets
+  elif [ "$SCOPE" = manager ]; then
+    TARGETS=("${MANAGER_TARGETS[@]}")
+  else
+    TARGETS=("${UP_TARGETS[@]}")
+  fi
 }
 
-process_modules() {
-    if [ "${DEPLOY_VARS["AGENT_RUNTIME_ENABLED"]}" == "false" ]; then
-        MODULES=("MONITOR" "GATEWAY" "WEB" "AGENTSERVER")
-    else
-        MODULES=("MONITOR" "GATEWAY" "WEB" "RUNTIME")
-    fi
-}
-
-# Print help info and exit
-print_help() {
-    cat << EOF
-Usage: ./$(basename "$0") [COMMAND] [MODULES...] [OPTIONS]
-
-Commands (Required):
-  up        Deploy and start specified modules
-  down      Stop and uninstall specified modules
-  restart   Restart specified modules
-
-Modules (Optional):
-  nfs       NFS service module (deploys to default namespace, ignores -n parameter)
-  rabbitmq  RabbitMQ module (deploys to default namespace, ignores -n parameter)
-  mariadb   MariaDB module (deploys to default namespace, ignores -n parameter)
-  mysql     MySQL module (deploys to default namespace, ignores -n parameter)
-  minio     Minio module (deploys to default namespace, ignores -n parameter)
-  log       Log module (deploys to default namespace, ignores -n parameter)
-  jina      Jina module (deploys to default namespace, ignores -n parameter)
-  proxy     Proxy module (deploys to default namespace, ignores -n parameter)
-  monitor   Observability module
-  gateway   Gateway service module
-  web       Web frontend module
-  runtime   Agent-Runtime module (dynamic agentserver pods; requires AGENT_RUNTIME_ENABLED=true)
-  agentserver  AgentServer module (Deployment+Service; requires AGENT_RUNTIME_ENABLED=false)
-  manager   Manager module
-
-Options:
-  -n NAMESPACE              Specify Kubernetes namespace (defaults to default if unspecified)
-  --render-only             Only render and output YAML manifests to conf directory
-  -h, --help                Display this help message and exit
-
-Examples:
-  ./$(basename "$0") up                                # Deploy default modules in default namespace
-  ./$(basename "$0") up nfs                            # Deploy NFS (always uses default namespace, ignores -n parameter)
-  ./$(basename "$0") down                              # Uninstall default modules in default namespace
-  ./$(basename "$0") restart                           # Restart default modules in default namespace
-  ./$(basename "$0") restart gateway                   # Restart gateway module in default namespace
+usage() {
+  cat <<'EOF'
+用法: deploy.sh [manager] [组件...] <up|down> [-n NAMESPACE] [--render-only] [-y]
+  up                拉起产品组件（按 AGENT_RUNTIME_DEPLOY_MODE 派生，见 .env.example）:
+                    off:     secret → redis → agentserver → gateway
+                    routing: 同上 + runtime（会话粘性路由，零 K8s 权限）
+                    full:    secret → redis → runtime → gateway
+                             （AgentServer 由 runtime 按需创建，自动注入 Pod 操作 RBAC）
+  manager up        拉起管理套件与用户面: web-server → web → identity → manager-server → manager-web
+                    （依赖的 secret / redis 集群缺失时自动拉起，已有则复用）
+  up mariadb        只部署/渲染指定组件；可多选，如: up mariadb minio
+  up web-server   单独部署用户面后端（镜像由 WEB_SERVER_IMAGE 指定）
+  up web            单独部署用户面前端
+                    基础服务四件套: mariadb / mysql / postgresql / minio（数据库三选一）
+  up nfs            NFS 存储统一入口，实际组件集自动解析:
+                    openshift / 外部 NFS / 非 amd64 节点 → nfs-sc（存储供给组件）
+                    k8s amd64 内置模式   → nfs + nfs-sc（NFS server + 存储供给一次拉起）
+  up nfs-sc         仅限搭配 --render-only：离线渲染无法探测节点架构时的手动渲染入口；
+                    正式部署/卸载不支持，统一走 nfs 目标
+  down [组件...]    卸载目标（倒序删除；共享依赖 secret/redis 仍被存活组件依赖时保留，
+                    卸载后依赖方清零则自动回收）。默认 down 与 up 目标对称；
+                    模式切换（routing→off）后遗留的 runtime 用 `down runtime` 清理
+  -n NAMESPACE      指定 namespace（默认取 .env.custom 的 NAMESPACE）
+  --render-only     只渲染本次目标组件的清单到 conf/，不连接集群（核对/交付 yaml 用；仅 up）
+  -y                兼容保留参数，无实际作用（卸载不再需要确认）
+前置条件: 基础服务已拉起（./deploy.sh up mariadb minio，见 README）
+版本管理: 组件镜像名（含 amd64/arm64 架构段）统一维护在 .env.custom
+示例: ./deploy.sh up && ./deploy.sh manager up
+      ./deploy.sh up mariadb --render-only   # 只渲染 mariadb 清单
+      ./deploy.sh -n other-ns up --render-only
 EOF
-    exit 0
 }

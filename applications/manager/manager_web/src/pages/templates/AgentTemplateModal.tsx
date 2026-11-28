@@ -8,14 +8,9 @@ import { TemplateRefEditor } from '../../components/TemplateRefEditor';
 import { LimitedTextInput } from '../../components/LimitedTextInput';
 import { JsonField } from '../../components/JsonField';
 import { useFormDirty } from '../../hooks/useFormDirty';
-import {
-  AgentTemplate, AgentTemplateApi, AgentClientRegistrationApi, ApiError,
-  type AgentClientRegistrationCapabilities,
-} from '../../services/api';
-import { agentRegistrationErrorKey, hasAgentCredentials, maskAgentClientSecrets } from '../../utils/agentClientRegistration';
+import { AgentTemplate, AgentTemplateApi, ApiError } from '../../services/api';
 import { toast } from '../../stores/uiStore';
 import { bumpGuideRevision } from '../../stores/guideStore';
-import { fromCommaList, toCommaList } from '../../utils/format';
 import { jsonContentForValidation } from '../../utils/jsonExample';
 import {
   findSingleValueTemplateRefViolation,
@@ -27,17 +22,14 @@ interface Props {
   open: boolean;
   template: AgentTemplate | null;
   copyFrom?: AgentTemplate;
-  registrationConfig?: AgentClientRegistrationCapabilities | null;
   onClose: () => void;
-  onSaved: (saved: AgentTemplate, options?: { keepOpen: true }) => void;
+  onSaved: (saved: AgentTemplate) => void;
 }
 
 const FIELD_MAX_LENGTH = {
   template_name: 128,
   description: 512,
 } as const;
-
-type RegistrationErrorKey = ReturnType<typeof agentRegistrationErrorKey> | 'saveFailed';
 
 function FieldLabel({ children, required }: { children: ReactNode; required?: boolean }) {
   return (
@@ -51,7 +43,6 @@ function FieldLabel({ children, required }: { children: ReactNode; required?: bo
 interface FormState {
   template_name: string;
   description: string;
-  agent_tags: string;
   template_ref: TemplateRefMap;
   custom_config_json: string;
   upload_local_skill: boolean;
@@ -60,7 +51,6 @@ interface FormState {
 const empty: FormState = {
   template_name: '',
   description: '',
-  agent_tags: '',
   template_ref: {},
   custom_config_json: '',
   upload_local_skill: false,
@@ -90,62 +80,36 @@ function parseCustomConfig(text: string): {
   }
 }
 
-export function AgentTemplateModal({ open, template, copyFrom, registrationConfig, onClose, onSaved }: Props) {
+export function AgentTemplateModal({ open, template, copyFrom, onClose, onSaved }: Props) {
   const { t } = useTranslation();
-  const presentation = useEditorPresentation();
-  const [discoveredRegistration, setDiscoveredRegistration] = useState<AgentClientRegistrationCapabilities | null>(null);
-  const effectiveRegistrationConfig = registrationConfig === undefined ? discoveredRegistration : registrationConfig;
   const { markClean, isDirty } = useFormDirty(open);
   const [form, setForm] = useState<FormState>(empty);
   const [saving, setSaving] = useState(false);
-  const [savedTemplate, setSavedTemplate] = useState<AgentTemplate | null>(null);
-  const [clientId, setClientId] = useState('');
-  const [registrationError, setRegistrationError] = useState<RegistrationErrorKey | null>(null);
-  const [registering, setRegistering] = useState(false);
-  const [showSecrets, setShowSecrets] = useState(false);
-  const currentTemplate = savedTemplate ?? template;
-  const sourceTemplate = currentTemplate ?? copyFrom;
-  const binding = currentTemplate?.keycloak_client;
-  const busy = saving || registering;
-
-  useEffect(() => {
-    if (!open || registrationConfig !== undefined) return;
-    let cancelled = false;
-    void AgentClientRegistrationApi.capabilities().then(config => {
-      if (!cancelled) setDiscoveredRegistration(config);
-    }).catch(() => { if (!cancelled) setDiscoveredRegistration(null); });
-    return () => { cancelled = true; };
-  }, [open, registrationConfig]);
+  const presentation = useEditorPresentation();
+  const sourceTemplate = template ?? copyFrom;
+  const currentTemplate = template;
+  const busy = saving;
 
   useEffect(() => {
     if (!open) return;
-    const source = template ?? copyFrom;
-    const next: FormState = source
+    const next: FormState = sourceTemplate
       ? {
-          template_name: (!template && copyFrom ? `${source.template_name.slice(0, 117)} - copy` : source.template_name).slice(0, FIELD_MAX_LENGTH.template_name),
-          description: (source.description ?? '').slice(0, FIELD_MAX_LENGTH.description),
-          agent_tags: toCommaList(source.agent_tags),
-          template_ref: normalizeTemplateRefFromApi(source.template_ref),
-          custom_config_json: customConfigText(source.data),
-          upload_local_skill: source.data?.upload_local_skill === true,
+          template_name: sourceTemplate.template_name.slice(0, FIELD_MAX_LENGTH.template_name),
+          description: (sourceTemplate.description ?? '').slice(0, FIELD_MAX_LENGTH.description),
+          template_ref: normalizeTemplateRefFromApi(sourceTemplate.template_ref),
+          custom_config_json: customConfigText(sourceTemplate.data),
+          upload_local_skill: sourceTemplate.data?.upload_local_skill === true,
         }
       : empty;
+    if (!template && copyFrom) next.template_name = `${next.template_name.slice(0, 117)} - copy`;
     setForm(next);
     markClean(next);
-    setSavedTemplate(null);
-    setClientId('');
-    setRegistrationError(null);
-    setShowSecrets(false);
   }, [open, template, copyFrom, markClean]);
 
   const update = <K extends keyof FormState>(k: K, v: FormState[K]) =>
     setForm((s) => ({ ...s, [k]: v }));
 
   const customConfig = parseCustomConfig(form.custom_config_json);
-  const credentialsExist = hasAgentCredentials(customConfig.value);
-  const containsSecret = customConfig.value.some((entry) => typeof entry.client_secret === 'string' && entry.client_secret);
-  const hideSecrets = containsSecret && !showSecrets;
-
   const templateBody = () => {
     if (customConfig.error) {
       toast('warn', t('agentTemplate.customConfigInvalid'));
@@ -183,47 +147,9 @@ export function AgentTemplateModal({ open, template, copyFrom, registrationConfi
     return {
       template_name: form.template_name.trim(),
       description: form.description.trim() || null,
-      agent_tags: fromCommaList(form.agent_tags),
       template_ref: form.template_ref,
       data: nextData,
     };
-  };
-
-  const registerClient = async () => {
-    const id = clientId.trim();
-    if (!effectiveRegistrationConfig?.enabled || !effectiveRegistrationConfig.configured
-      || busy || binding || credentialsExist || !id) return;
-    const body = currentTemplate ? undefined : templateBody();
-    if (!currentTemplate && !body) return;
-    setRegistering(true);
-    setRegistrationError(null);
-    let target = currentTemplate;
-    try {
-      if (!target && body) {
-        target = await AgentTemplateApi.create(body);
-        setSavedTemplate(target);
-        markClean(form);
-        onSaved(target, { keepOpen: true });
-      }
-      if (!target) return;
-      const result = await AgentClientRegistrationApi.register(target.template_id, id);
-      const registered: AgentTemplate = { ...target, keycloak_client: { client_id: result.client_id, status: 'bound' } };
-      setSavedTemplate(registered);
-      bumpGuideRevision();
-      onSaved(registered, { keepOpen: true });
-      toast('success', t('agentTemplate.registration.success'));
-    } catch (error) {
-      const persisted = target ? await AgentTemplateApi.get(target.template_id).catch(() => null) : null;
-      if (persisted?.keycloak_client) {
-        setSavedTemplate(persisted);
-        onSaved(persisted, { keepOpen: true });
-      } else {
-        const key = error instanceof ApiError ? agentRegistrationErrorKey(error.status, error.raw) : 'failed';
-        setRegistrationError(target ? key : 'saveFailed');
-      }
-    } finally {
-      setRegistering(false);
-    }
   };
 
   const submit = async () => {
@@ -262,123 +188,68 @@ export function AgentTemplateModal({ open, template, copyFrom, registrationConfi
         </>
       }
     >
-      <div className="grid grid-cols-1 gap-4">
-        <div className="agent-template-identity">
-          <div>
-            <FieldLabel required>{t('agentTemplate.templateName')}</FieldLabel>
-            <LimitedTextInput ariaLabel={t('agentTemplate.templateName')} value={form.template_name} maxLength={FIELD_MAX_LENGTH.template_name} onChange={(value) => update('template_name', value)} />
-          </div>
-          <div>
-            <FieldLabel>{t('agentTemplate.agentTags')}</FieldLabel>
-            <input className="input" aria-label={t('agentTemplate.agentTags')} placeholder={t('agentTemplate.agentTagsHint')} value={form.agent_tags} onChange={(event) => update('agent_tags', event.target.value)} />
-          </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div className="md:col-span-2">
+          <FieldLabel required>{t('agentTemplate.templateName')}</FieldLabel>
+          <LimitedTextInput
+            value={form.template_name}
+            maxLength={FIELD_MAX_LENGTH.template_name}
+            onChange={(v) => update('template_name', v)}
+          />
         </div>
-        <div>
+        <div className="md:col-span-2">
           <FieldLabel>{t('agentTemplate.templateDescription')}</FieldLabel>
-          <LimitedTextInput ariaLabel={t('agentTemplate.templateDescription')} value={form.description} maxLength={FIELD_MAX_LENGTH.description} onChange={(value) => update('description', value)} />
+          <LimitedTextInput
+            value={form.description}
+            maxLength={FIELD_MAX_LENGTH.description}
+            onChange={(v) => update('description', v)}
+          />
         </div>
-        {effectiveRegistrationConfig?.enabled && (
-          <section className="agent-capability-card" aria-labelledby="agent-client-title">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h3 id="agent-client-title" className="text-sm font-semibold text-text-strong">
-                {t('agentTemplate.registration.title')}
-              </h3>
-              <span className={binding ? 'pill ok sm' : 'pill muted sm'}>
-                {t(binding ? 'agentTemplate.registration.bound' : 'agentTemplate.registration.unbound')}
-              </span>
-            </div>
-            <p className="mt-1 text-xs text-muted">{t('agentTemplate.registration.secretHint')}</p>
-            <div className="mt-3 flex flex-wrap items-end gap-2">
-              <div className="min-w-[14rem] flex-1">
-                <label className="label" htmlFor="agent-client-id">Client ID</label>
-                <input
-                  id="agent-client-id"
-                  className="input font-mono"
-                  value={binding?.client_id ?? clientId}
-                  placeholder="customer-agent"
-                  onChange={(event) => setClientId(event.target.value)}
-                  readOnly={!!binding}
-                  disabled={!binding && (!effectiveRegistrationConfig.configured || busy || credentialsExist)}
-                  spellCheck={false}
-                />
-              </div>
-              {!binding && (
-                <button
-                  type="button"
-                  className="btn primary"
-                  onClick={() => void registerClient()}
-                  disabled={!effectiveRegistrationConfig.configured || busy || credentialsExist || !clientId.trim()
-                    || (!currentTemplate && (!form.template_name.trim() || customConfig.error !== null))}
-                >
-                  {t(registering ? 'agentTemplate.registration.pending'
-                    : registrationError ? 'agentTemplate.registration.retry'
-                    : currentTemplate ? 'agentTemplate.registration.button' : 'agentTemplate.registration.saveAndRegister')}
-                </button>
-              )}
-            </div>
-            {binding && <p className="mt-2 text-xs text-muted">{t('agentTemplate.registration.boundHint')}</p>}
-            {!binding && !currentTemplate && <p className="mt-2 text-xs text-muted">{t('agentTemplate.registration.saveHint')}</p>}
-            {!binding && credentialsExist && <p className="mt-2 text-xs text-muted">{t('agentTemplate.registration.alreadyConfigured')}</p>}
-            {!binding && !effectiveRegistrationConfig.configured && <p className="mt-2 text-xs text-danger" role="alert">{t('agentTemplate.registration.unconfigured')}</p>}
-            {registrationError && (
-              <div className="mt-3 rounded-md bg-danger-subtle px-3 py-2 text-xs text-danger" role="alert">
-                <p className="font-medium">{t(`agentTemplate.registration.${registrationError}`)}</p>
-                {!template && savedTemplate && <p className="mt-1">{t('agentTemplate.registration.savedHint')}</p>}
-              </div>
-            )}
-          </section>
-        )}
-        <div>
+        <div className="md:col-span-2">
           <TemplateRefEditor
             key={template?.template_id ?? 'new'}
             resourceLinksInNewTab
             collapseOptional
+            expandOptional={presentation.readOnly || !!customConfig.error}
             label={t('agentTemplate.templateRef')}
             hint={t('agentTemplate.templateRefHint')}
             requiredSlots={['default_model']}
             value={form.template_ref}
             onChange={(v) => update('template_ref', v)}
-            optionalSelectedCount={(customConfig.value.length ? 1 : 0) + (form.upload_local_skill ? 1 : 0)}
-            expandOptional={presentation.readOnly || !!customConfig.error}
+            optionalSelectedCount={form.upload_local_skill ? 1 : 0}
             optionalContent={(
-              <>
-                <section className="agent-capability-card" data-testid="agent-template-upload-local-skill">
-                  <div className="flex items-center justify-between gap-4">
-                    <div>
-                      <div className="label mb-0">{t('agentTemplate.uploadLocalSkill')}</div>
-                      <p className="mt-1 text-xs text-muted">{t('agentTemplate.uploadLocalSkillHint')}</p>
-                    </div>
-                    <Switch
-                      checked={form.upload_local_skill}
-                      onChange={(value) => update('upload_local_skill', value)}
-                      disabled={busy}
-                      aria-label={t('agentTemplate.uploadLocalSkill')}
-                    />
+              <section className="agent-capability-card" data-testid="agent-template-upload-local-skill">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <div className="label mb-0">{t('agentTemplate.uploadLocalSkill')}</div>
+                    <p className="mt-1 text-xs text-muted">{t('agentTemplate.uploadLocalSkillHint')}</p>
                   </div>
-                </section>
-                <details className="agent-capability-card agent-template-custom-config" data-testid="agent-template-custom-config" open={customConfig.error ? true : undefined}>
-                  <summary className="cursor-pointer text-sm font-medium mb-3">{t('agentTemplate.customConfig')}</summary>
-                  <JsonField
-                    label={t('agentTemplate.customConfig')}
-                    value={hideSecrets ? maskAgentClientSecrets(customConfig.value) : form.custom_config_json}
-                    onChange={(value) => update('custom_config_json', value)}
-                    placeholder={'[\n  {\n    "xxx": "yyy",\n    "xxxz": "asdasd"\n  }\n]'}
-                    rows={7}
-                    readOnly={busy || hideSecrets}
-                    labelActions={containsSecret && <button type="button" className="btn ghost sm" onClick={() => setShowSecrets((value) => !value)}>
-                      {t(showSecrets ? 'agentTemplate.registration.hideSecret' : 'agentTemplate.registration.showSecret')}
-                    </button>}
+                  <Switch
+                    checked={form.upload_local_skill}
+                    onChange={(value) => update('upload_local_skill', value)}
+                    disabled={busy}
+                    aria-label={t('agentTemplate.uploadLocalSkill')}
                   />
-                  <p className="text-[11px] text-muted mt-1">{t('agentTemplate.customConfigHint')}</p>
-                  {customConfig.error === 'objectArray' && (
-                    <div className="text-[11px] text-danger mt-1" role="alert">
-                      {t('agentTemplate.customConfigInvalid')}
-                    </div>
-                  )}
-                </details>
-              </>
+                </div>
+              </section>
             )}
           />
+        </div>
+        <div className="md:col-span-2" data-testid="agent-template-custom-config">
+          <JsonField
+            label={t('agentTemplate.customConfig')}
+            value={form.custom_config_json}
+            onChange={(value) => update('custom_config_json', value)}
+            placeholder={'[\n  {\n    "xxx": "yyy",\n    "xxxz": "asdasd"\n  }\n]'}
+            rows={7}
+            readOnly={busy}
+          />
+          <p className="text-[11px] text-muted mt-1">{t('agentTemplate.customConfigHint')}</p>
+          {customConfig.error === 'objectArray' && (
+            <div className="text-[11px] text-danger mt-1" role="alert">
+              {t('agentTemplate.customConfigInvalid')}
+            </div>
+          )}
         </div>
       </div>
       {currentTemplate && <ConfigRefreshCostHint scope="template" />}

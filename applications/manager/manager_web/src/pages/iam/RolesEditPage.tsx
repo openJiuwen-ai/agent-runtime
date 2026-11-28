@@ -26,6 +26,12 @@ import {
   UserApi,
 } from '../../services/api';
 import { toast } from '../../stores/uiStore';
+import {
+  displayPermissionDescription,
+  displayPermissionName,
+  displayRoleDescription,
+  displayRoleName,
+} from '../../utils/authzI18n';
 import { formatTime } from '../../utils/format';
 import {
   isValidIdentityId,
@@ -203,8 +209,20 @@ export function RolesEditPage({ roleId }: { roleId?: string }) {
         }
         setRoleMeta(role);
         setFormRoleId(clipField(role.role_id, FIELD_MAX_LENGTH.role_id));
-        setName(clipField(role.name, FIELD_MAX_LENGTH.name));
-        setDescription(clipField(role.description ?? '', FIELD_MAX_LENGTH.description));
+        setName(
+          clipField(
+            role.is_system ? displayRoleName(role, t) : role.name,
+            FIELD_MAX_LENGTH.name,
+          ),
+        );
+        setDescription(
+          clipField(
+            role.is_system
+              ? displayRoleDescription(role, t)
+              : (role.description ?? ''),
+            FIELD_MAX_LENGTH.description,
+          ),
+        );
         setScope(role.scope);
         setSelected(new Set(role.permission_ids));
         setAssignedIds(role.user_ids);
@@ -314,9 +332,15 @@ export function RolesEditPage({ roleId }: { roleId?: string }) {
         toast('success', t('success.created'));
         navigate(`/roles/${encodeURIComponent(created.role_id)}`);
       } else if (roleId) {
+        // System roles: always persist API originals, never the localized form values.
         const updated = await AuthzApi.updateRole(roleId, {
-          name: name.trim().slice(0, FIELD_MAX_LENGTH.name),
-          description: description.trim().slice(0, FIELD_MAX_LENGTH.description) || null,
+          name: (isSystem ? (roleMeta?.name ?? '') : name)
+            .trim()
+            .slice(0, FIELD_MAX_LENGTH.name),
+          description:
+            (isSystem ? (roleMeta?.description ?? '') : description)
+              .trim()
+              .slice(0, FIELD_MAX_LENGTH.description) || null,
           scope,
           ...(isSystem ? {} : {
             permission_ids: [...selected],
@@ -429,7 +453,7 @@ export function RolesEditPage({ roleId }: { roleId?: string }) {
                 value={name}
                 maxLength={FIELD_MAX_LENGTH.name}
                 onChange={setName}
-                disabled={!canWrite}
+                disabled={!canWrite || isSystem}
                 required
               />
             </div>
@@ -439,10 +463,10 @@ export function RolesEditPage({ roleId }: { roleId?: string }) {
                 <textarea
                   className="input w-full min-h-24 flex-1 min-w-0"
                   value={description}
+                  disabled={!canWrite || isSystem}
                   onChange={(event) =>
                     setDescription(clipField(event.target.value, FIELD_MAX_LENGTH.description))
                   }
-                  disabled={!canWrite}
                   maxLength={FIELD_MAX_LENGTH.description}
                 />
                 <span
@@ -504,6 +528,10 @@ export function RolesEditPage({ roleId }: { roleId?: string }) {
                   {group.items.map((permission) => {
                     const checked = selected.has(permission.permission_id);
                     const locked = isSystem || !canWrite;
+                    const permissionDescription = displayPermissionDescription(
+                      permission,
+                      t,
+                    );
                     return (
                       <label
                         key={permission.permission_id}
@@ -519,13 +547,15 @@ export function RolesEditPage({ roleId }: { roleId?: string }) {
                           onChange={() => togglePermission(permission.permission_id)}
                         />
                         <span className="min-w-0">
-                          <span className="block text-sm font-medium">{permission.name}</span>
+                          <span className="block text-sm font-medium">
+                            {displayPermissionName(permission, t)}
+                          </span>
                           <span className="block mono text-[11px] text-muted break-all">
                             {permission.permission_id}
                           </span>
-                          {permission.description && (
+                          {permissionDescription && (
                             <span className="block text-xs text-muted mt-1">
-                              {permission.description}
+                              {permissionDescription}
                             </span>
                           )}
                         </span>

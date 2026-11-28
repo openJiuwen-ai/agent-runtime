@@ -1,13 +1,15 @@
 """部署参数 → deploy.sh 的 .env.custom 生成与派生。
 
-白名单 + 校验规则与 deploy/openshift 的 var_handler.sh 对齐（命名空间 DNS label、
+白名单 + 校验规则与 deploy/jiuwenswarm-ee 的 var_handler.sh 对齐（命名空间 DNS label、
 镜像字符集、副本正整数、部署模式枚举）；CLUSTER_TYPE/MODE 由服务端强制写死，
 不接受请求传入。值不得包含引号/反斜杠/换行（bash env 读取器与 YAML 渲染的安全边界）。
 """
 
 from __future__ import annotations
 
+import os
 import re
+from pathlib import Path
 
 # K8s DNS label：小写字母/数字/连字符，不以连字符首尾，最长 63（与前端一致）
 K8S_NS_RE = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
@@ -24,6 +26,7 @@ IMAGE_ENV_KEYS = (
     "AGENTSERVER_IMAGE",
     "GATEWAY_IMAGE",
     "WEB_IMAGE",
+    "WEB_SERVER_IMAGE",
     "IDENTITY_IMAGE",
     "MANAGER_SERVER_IMAGE",
     "MANAGER_WEB_IMAGE",
@@ -40,6 +43,7 @@ REPLICA_ENV_KEYS = (
     "AGENT_SERVER_REPLICAS",
     "GATEWAY_REPLICAS",
     "WEB_REPLICAS",
+    "WEB_SERVER_REPLICAS",
     "IDENTITY_REPLICAS",
     "MANAGER_SERVER_REPLICAS",
     "MANAGER_WEB_REPLICAS",
@@ -61,13 +65,17 @@ ALLOWED_ENV_KEYS = frozenset(
         "DB_PORT",
         "DB_USER",
         "DB_PASSWORD",
+        "WEB_SERVER_DB_USER",
+        "WEB_SERVER_DB_PASSWORD",
         "MARIADB_ROOT_PASSWORD",
         "MYSQL_ROOT_PASSWORD",
         "POSTGRES_PASSWORD",
         "GATEWAY_DB_NAME",
         "WEB_DB_NAME",
+        "MANAGER_DB_NAME",
         "GATEWAY_PG_SCHEMA",
         "WEB_PG_SCHEMA",
+        "MANAGER_PG_SCHEMA",
         # Redis（外置）
         "REDIS_HOST",
         "REDIS_PORT",
@@ -86,6 +94,8 @@ ALLOWED_ENV_KEYS = frozenset(
         "WORKSPACE_STORAGE_CLASS",
         # NodePort
         "MANAGER_WEB_NODE_PORT",
+        "WEB_NODE_PORT",
+        "WEB_TLS_HOSTS",
         # openshift 形态集群接入（API 地址 / 自签开关；经快照-defaults-任务链路流动）
         "CLUSTER_API_SERVER",
         "CLUSTER_API_INSECURE",
@@ -109,20 +119,108 @@ MANAGER_PLANE_ENV_KEYS = (
 )
 
 # 强制键名：不接受请求/默认表传入（值由服务端写死；CLUSTER_TYPE 取值随集群形态）
-FORCED_KEY_NAMES = frozenset({"CLUSTER_TYPE", "MODE"})
+FORCED_KEY_NAMES = frozenset({"CLUSTER_TYPE", "MODE", "MANAGER_PLANE_NS"})
 # 兼容旧引用（测试等）：k8s 形态下的强制键值
 FORCED_ENV = {"CLUSTER_TYPE": "k8s", "MODE": "product"}
+
+# pod 内 namespace 投射文件（manager-server 部署子进程注入 MANAGER_PLANE_NS 用）
+_SA_NAMESPACE_FILE = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+
+
+def _detect_manager_plane_ns() -> str:
+    """manager-server 自身所在 ns：显式 env 覆盖 > SA namespace 文件；源码运行返回空。
+
+    部署子进程据此渲染 web / web-server 的 identity / manager-server 跨 ns
+    上游地址（deploy.sh resolve_manager_plane_urls）；空值不注入（CLI 单 ns 语义）。
+    """
+    explicit = os.environ.get("MANAGER_PLANE_NS", "").strip()
+    if explicit:
+        return explicit
+    try:
+        if Path(_SA_NAMESPACE_FILE).is_file():
+            ns = Path(_SA_NAMESPACE_FILE).read_text(encoding="utf-8").strip()
+            if ns:
+                return ns
+    except OSError:
+        pass
+    return ""
+
+
+def _manager_plane_db_env() -> dict:
+    """管理面自身 DB 事实（本进程 env；manager up 渲染注入）。
+
+    企业版用户面的 web-server 经只读账号读**管理面库**的 user_access_* 视图
+   （shared_views.initialize_user_access 在 manager 库建视图并授权该账号）。
+    跨 ns 部署产品面时按管理面真实库名/账号渲染，替代按产品面 ns 派生的
+    manager_<产品面ns>（无人建库建账，web-server 永不 ready）。
+    约束：两平面共用同一 DB 实例（内置共享或同外置实例；内置形态天然成立）。
+    三键不全（如源码运行无这些 env）则整体不注入，回落 CLI 单 ns 派生语义。
+    """
+    name = os.environ.get("MANAGER_DB_NAME", "").strip()
+    user = os.environ.get("WEB_SERVER_DB_USER", "").strip()
+    password = os.environ.get("WEB_SERVER_DB_PASSWORD", "").strip()
+    if not (name and user and password):
+        return {}
+    facts = {
+        "MANAGER_DB_NAME": name,
+        "WEB_SERVER_DB_USER": user,
+        "WEB_SERVER_DB_PASSWORD": password,
+    }
+    schema = os.environ.get("MANAGER_PG_SCHEMA", "").strip()
+    if schema:
+        facts["MANAGER_PG_SCHEMA"] = schema
+    return facts
+
+
+def manager_plane_defaults(existing: dict | None = None) -> dict:
+    """产品面部署默认参数的管理面侧补全：仅集群内运行（可探测 plane ns）且键缺失时
+    填补 DB 事实；显式 defaults / 请求覆盖仍优先（操作员可另行配置只读账号）。
+    调用方以 ``{**manager_plane_defaults(stored), **stored}`` 合成有效 defaults。"""
+    if not _detect_manager_plane_ns():
+        return {}
+    return {
+        key: value
+        for key, value in _manager_plane_db_env().items()
+        if not (existing or {}).get(key)
+    }
 
 
 def forced_env() -> dict:
     """服务端强制键：CLUSTER_TYPE 随 manager 所在集群形态（MANAGER_DEPLOY_CLUSTER_TYPE
-    渲染注入），非法值回落 k8s；MODE 恒为 product（dev 代码挂载仅 CLI 部署语义）。"""
+    渲染注入），非法值回落 k8s；MODE 恒为 product（dev 代码挂载仅 CLI 部署语义）；
+    MANAGER_PLANE_NS 为本服务所在 ns（集群内运行时，产品面跨 ns 定位管理面服务）。"""
     from manager_server.infrastructure.config import settings
 
     cluster_type = (settings.deploy_cluster_type or "k8s").strip().lower()
     if cluster_type not in ("k8s", "openshift"):
         cluster_type = "k8s"
-    return {"CLUSTER_TYPE": cluster_type, "MODE": "product"}
+    forced = {"CLUSTER_TYPE": cluster_type, "MODE": "product"}
+    plane_ns = _detect_manager_plane_ns()
+    if plane_ns:
+        forced["MANAGER_PLANE_NS"] = plane_ns
+    return forced
+
+
+def parse_env_custom_text(text: str) -> dict:
+    """解析用户粘贴的 .env.custom 全量文本（单行 KEY="value" / KEY=value）。
+
+    跳过注释与空行；引号成对剥离；未识别行忽略（宽容导入）。多行跨行值不支持
+    （校验层本身禁引号/换行注入）。键值白名单与合法性由 merge_env 统一把关。
+    """
+    result: dict[str, str] = {}
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        if not key.isidentifier():
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        result[key] = value
+    return result
 
 
 def validate_env_value(key: str, value: str) -> str:
@@ -188,9 +286,17 @@ def validate_merged_env(env: dict, *, namespace: str) -> None:
         candidates = password_keys.get(db_type, ("DB_PASSWORD",))
         if not any(env.get(k) for k in candidates):
             raise ValueError("外置数据库需配置 DB_PASSWORD（或对应类型的 root 密码）")
-    # SANDBOX_TYPE=jiuwenbox 需要沙箱镜像
-    if env.get("SANDBOX_TYPE") == "jiuwenbox" and not env.get("JIUWENBOX_IMAGE"):
-        raise ValueError("SANDBOX_TYPE=jiuwenbox 需要配置 JIUWENBOX_IMAGE")
+    # SANDBOX_TYPE=jiuwenbox 需要沙箱镜像；留空按 CLUSTER_TYPE 派生
+    # （k8s→jiuwenbox、openshift→off，与 var_handler.sh resolve_sandbox_type_vars 同源，
+    # 派生发生在 bash 侧，此处须提前按派生后语义校验才能在创建时给出明确 400）
+    sandbox = env.get("SANDBOX_TYPE") or (
+        "off" if str(env.get("CLUSTER_TYPE", "k8s")).lower() == "openshift" else "jiuwenbox"
+    )
+    if sandbox == "jiuwenbox" and not env.get("JIUWENBOX_IMAGE"):
+        raise ValueError(
+            "k8s 形态默认沙箱为 jiuwenbox（SANDBOX_TYPE 未设置时按 CLUSTER_TYPE 派生），"
+            "需在默认参数中配置 JIUWENBOX_IMAGE，或显式设置 SANDBOX_TYPE=off"
+        )
 
 
 def build_env_custom(env: dict, *, namespace: str) -> str:
@@ -267,9 +373,6 @@ def derive_instance_hosts(namespace: str) -> dict:
     return {
         "gateway_host": f"http://jiuwenswarm-gateway.{namespace}:19000",
         "runtime_host": f"http://jiuwenswarm-agent-runtime.{namespace}:8091",
-        "user_web_host": f"http://jiuwenswarm-web.{namespace}:5173",
-        "gateway_web_http_host": f"http://jiuwenswarm-gateway.{namespace}:19000",
-        "gateway_web_ws_host": f"http://jiuwenswarm-gateway.{namespace}:19000",
     }
 
 

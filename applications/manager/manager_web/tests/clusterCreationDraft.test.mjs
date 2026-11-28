@@ -12,7 +12,7 @@ try {
     const map = new Map();
     const storage = { getItem: key => map.get(key) || null, setItem: (key, value) => map.set(key, value), removeItem: key => map.delete(key) };
     const key = clusterCreationDraftKey('admin', 'agent-a', '/agent-templates?search=客服');
-    const draft = { name: '测试集群', description: 'draft', namespace: 'test', hostMode: 'manual', gateway: 'http://gateway:1', runtime: 'http://runtime:2', web: 'http://web:3', gatewayHttp: 'http://gateway:4', gatewayWs: '' };
+    const draft = { name: '测试集群', description: 'draft', namespace: 'test', hostMode: 'manual', gateway: 'http://gateway:1', runtime: 'http://runtime:2' };
     saveClusterCreationDraft(storage, key, draft);
     assert.deepEqual(readClusterCreationDraft(storage, key), draft);
     clearClusterCreationDraft(storage, key);
@@ -41,23 +41,19 @@ try {
     const named = { ...oldBlank, name: 'Saved cluster' };
     assert.deepEqual(readClusterCreationDraft({ getItem: () => JSON.stringify(named) }, 'key'), named);
   });
-  test('Gateway edits follow standard user endpoints while preserving custom or cleared ones', () => {
+  test('component endpoint edits remain independent', () => {
     const first = updateClusterCreationNamespace(emptyClusterCreationDraft, 'zyq');
     const changed = updateClusterCreationEndpoint(first, 'gateway', 'https://gateway.example.test');
-    assert.equal(changed.gatewayHttp, changed.gateway);
-    assert.equal(changed.gatewayWs, changed.gateway);
+    assert.equal(changed.gateway, 'https://gateway.example.test');
     assert.equal(changed.runtime, first.runtime);
-    const custom = updateClusterCreationEndpoint({ ...changed, gatewayHttp: 'https://http.example.test', gatewayWs: '' }, 'gateway', 'https://next.example.test');
-    assert.equal(custom.gatewayHttp, 'https://http.example.test');
-    assert.equal(custom.gatewayWs, '');
+    const legacy = { ...changed, web: 'http://old-web:5173', gatewayHttp: 'http://old-http:19000' };
+    assert.deepEqual(readClusterCreationDraft({ getItem: () => JSON.stringify(legacy) }, 'key'), changed);
   });
   test('automatic endpoints consistently use the current namespace', () => {
     const hosts = clusterCreationHosts(' preview ');
     assert.equal(hosts.gateway, 'http://jiuwenswarm-gateway.preview:19000');
     assert.equal(hosts.runtime, 'http://jiuwenswarm-agent-runtime.preview:8091');
-    assert.equal(hosts.web, 'http://jiuwenswarm-web.preview:5173');
-    assert.equal(hosts.gatewayWs, hosts.gatewayHttp);
-    assert.deepEqual(clusterCreationHosts(' '), { gateway: '', runtime: '', web: '', gatewayHttp: '', gatewayWs: '' });
+    assert.deepEqual(clusterCreationHosts(' '), { gateway: '', runtime: '' });
     assert.equal(emptyClusterCreationDraft.namespace, '');
   });
   test('legacy automatic drafts migrate using the addresses that would actually have been submitted', () => {
@@ -68,18 +64,15 @@ try {
     assert.equal(migrated.hostMode, 'manual');
     assert.deepEqual(resolveClusterCreationHosts(migrated), clusterCreationHosts('zyq'));
     assert.equal(migrated.gateway.includes('old-custom'), false);
-    const manual = { ...legacy, hostMode: 'manual', gatewayWs: '' };
+    const manual = { ...legacy, hostMode: 'manual' };
     assert.deepEqual(normalizeClusterCreationDraft(manual), manual);
   });
   test('the first namespace fills endpoint suggestions and later changes preserve custom addresses', () => {
     const first = updateClusterCreationNamespace(normalizeClusterCreationDraft(emptyClusterCreationDraft), 'zyq');
     assert.deepEqual(resolveClusterCreationHosts(first), clusterCreationHosts('zyq'));
-    const changed = updateClusterCreationNamespace({ ...first, web: 'https://user.example.test', gatewayWs: '' }, 'staging');
-    assert.equal(changed.gateway, 'http://jiuwenswarm-gateway.staging:19000');
+    const changed = updateClusterCreationNamespace({ ...first, gateway: 'https://gateway.example.test' }, 'staging');
+    assert.equal(changed.gateway, 'https://gateway.example.test');
     assert.equal(changed.runtime, 'http://jiuwenswarm-agent-runtime.staging:8091');
-    assert.equal(changed.gatewayHttp, 'http://jiuwenswarm-gateway.staging:19000');
-    assert.equal(changed.web, 'https://user.example.test');
-    assert.equal(changed.gatewayWs, '');
     assert.equal(changed.namespace, 'staging');
     assert.equal(first.namespace, 'zyq');
   });
@@ -88,7 +81,6 @@ try {
     const cleared = updateClusterCreationNamespace({ ...first, gateway: 'https://external.example.test' }, '');
     assert.equal(cleared.gateway, 'https://external.example.test');
     assert.equal(cleared.runtime, '');
-    assert.equal(cleared.web, '');
     assert.equal(cleared.namespace, '');
     assert.deepEqual(resolveClusterCreationHosts(normalizeClusterCreationDraft(emptyClusterCreationDraft)), clusterCreationHosts(''));
   });

@@ -294,6 +294,29 @@ async def test_deleted_scope_gets_min_idle_zero(runtime):
     assert len(drop_pushes) == 1
     pool, spec = drop_pushes[0][1], drop_pushes[0][2]
     assert pool["min_idle_pods"] == 0 and spec is None
+    # 退役标记（2026-11）：RM 侧 reconcile 凭它在排空后删 config + 出索引，
+    # 否则被删 scope 的 config 永久留库、每拍都被遍历/重推
+    assert pool["retired"] == 1
+
+
+async def test_expired_scope_push_is_not_marked_retired(runtime):
+    """过期 scope 推 min_idle=0 但**不**退役——它仍在载荷里（落库、可续期）。
+
+    红线：retired 只由「从载荷消失」触发（扩散③，含 enabled=false 的缺席）；
+    把「过期」也算退役会让 RM 删掉 config，续期后要等下一次 config_sync
+    才能冷启。
+    """
+    past = (datetime.now(timezone.utc) - timedelta(hours=1)
+            ).isoformat().replace("+00:00", "Z")
+    await runtime.config_store.config_sync(_payload(
+        [_tpl("tpl-1"), _tpl("tpl-fb")],
+        [_scope("s-exp", "tpl-1", index=0, expires_at=past),
+         _scope("fallback", "tpl-fb", index=100)],
+    ))
+    pushes = [p for p in runtime.pool_pushes if p[0] == "s-exp"]
+    assert pushes and int(pushes[-1][1]["min_idle_pods"]) == 0
+    assert pushes[-1][2] is None                       # 不预热
+    assert not pushes[-1][1].get("retired")
 
 
 # -------------------------------------------------------------- A/B 类扩散(沿用语义)
@@ -753,7 +776,7 @@ _SIDECAR = {
     "readiness_probe_type": "tcp",
 }
 
-# _SIDECAR 经 wire → canonical 的期望形态(13 键全填满)
+# _SIDECAR 经 wire → canonical 的期望形态(所有缺省键填满)
 _SIDECAR_CANONICAL = {
     "name": "jiuwenbox",
     "image": "jiuwenbox-amd64:0.0.1",
@@ -775,6 +798,7 @@ _SIDECAR_CANONICAL = {
                           "mount_path": "/sys/fs/cgroup",
                           "read_only": False, "host_path_type": None}],
     "configmap_mounts": [], "pvc_mounts": [], "nfs_mounts": [],
+    "empty_dir_mounts": [], "secret_mounts": [],
     "readiness_probe": {"probe_type": "tcp", "path": "/health",
                         "initial_delay": 5, "period": 10, "timeout": 3},
 }
@@ -1129,6 +1153,26 @@ async def test_split_sync_persists_rows_and_routes(runtime):
 
     outcome = await runtime.route("s1")
     assert outcome["pod_sse_url"].startswith("http://")
+
+
+@requires_lua
+async def test_secret_volume_sync_database_and_route(runtime):
+    """Secret 名称/key 经过 config_sync、DB 回读、route 后完整到达 RM。"""
+    from agent_runtime.session_manager.config_store import TEMPLATE_TABLE
+    payload = _split_payload([_main_container(
+        env=[{"name": "SSL_CERT_FILE", "value": "/etc/ca/ca.pem"}],
+        volumeMounts=[{"name": "ca", "mountPath": "/etc/ca"}])],
+        [_split_tpl("tpl-secret", volumes=[{"name": "ca", "secret": {
+            "secretName": "shared-ca", "items": [{"key": "root.pem", "path": "ca.pem"}]}}])])
+    await runtime.config_store.config_sync(payload)
+    row = await runtime.db.get(TEMPLATE_TABLE, {"template_id": "tpl-secret"})
+    assert row.volumes[0]["secret_name"] == "shared-ca"
+    template = await runtime.config_store.get_template("tpl-secret")
+    await runtime.route("secret-session")
+    spec = runtime.k8s.deployed_specs[0]
+    assert spec["main_container"]["secret_mounts"] == template.main_container["secret_mounts"]
+    assert spec["main_container"]["secret_mounts"][0]["read_only"] is True
+    assert spec["main_container"]["env"]["SSL_CERT_FILE"] == "/etc/ca/ca.pem"
 
 
 @requires_lua

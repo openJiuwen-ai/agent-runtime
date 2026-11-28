@@ -1,4 +1,4 @@
-import type { AgentDefinition, InstanceAgentResource, InstanceServiceResource, UserAgentContext } from '../services/api';
+import type { AgentDefinition, InstanceAgentResource, InstanceServiceResource } from '../services/api';
 import { isActiveConfiguration } from './clusterSetupProgress';
 import { matchExprToEditorString } from './matchExpr';
 
@@ -10,18 +10,6 @@ export function initialWizardResource<T extends InstanceServiceResource | Instan
 
 export function definitionForPair(definitions: AgentDefinition[], configId: string, runtimeId: string): AgentDefinition | undefined {
   return definitions.find(item => item.agent_config_template_id === configId && item.runtime_template_id === runtimeId);
-}
-
-/** Account access must resolve to the same active binding and configured template pair. */
-export function activeWizardAgentContexts(
-  contexts: UserAgentContext[], instanceId: string,
-  agents: InstanceAgentResource[], runtimes: InstanceServiceResource[], definitions: AgentDefinition[],
-): UserAgentContext[] {
-  const runtimeIds = new Set(runtimes.filter(row => isActiveConfiguration(row)).map(row => row.ref_template_id));
-  return contexts.filter(context => context.jiuwenclaw_id === instanceId
-    && agents.some(row => isActiveConfiguration(row) && row.resource_id === context.bot_id && row.ref_template_id === context.agent_template_id)
-    && runtimeIds.has(context.runtime_template_id || '')
-    && Boolean(definitionForPair(definitions, context.agent_template_id || '', context.runtime_template_id || '')));
 }
 
 export async function ensureWizardAgentDefinition(
@@ -38,7 +26,7 @@ export async function ensureWizardAgentDefinition(
   }
 }
 
-/** Disabled / expired resources cannot supply a runtime to a user Agent context. */
+/** Disabled / expired resources cannot supply a runtime to an Agent definition. */
 export function activeRuntimeTemplateIds(resources: InstanceServiceResource[], enabledTemplateIds: string[]): string[] {
   const enabled = new Set(enabledTemplateIds);
   return [...new Set(resources.filter(row => isActiveConfiguration(row) && enabled.has(row.ref_template_id)).map(row => row.ref_template_id))];

@@ -1,4 +1,4 @@
-"""部署工具树定位与可用性检查（deploy/openshift 随镜像分发）。"""
+"""部署工具树定位与可用性检查（deploy/jiuwenswarm-ee 随镜像分发）。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 from manager_server.infrastructure.config import settings
 
 # 镜像内工具树位置（docker/Dockerfile.base COPY 整仓）
-_IMAGE_TOOL_DIR = Path("/app/agent-runtime/deploy/openshift")
+_IMAGE_TOOL_DIR = Path("/app/agent-runtime/deploy/jiuwenswarm-ee")
 
 
 def resolve_tool_dir() -> Path:
@@ -20,11 +20,11 @@ def resolve_tool_dir() -> Path:
     if _IMAGE_TOOL_DIR.is_dir():
         return _IMAGE_TOOL_DIR
     # 源码运行：manager_server/src/manager_server/core/deployment/ → 仓根
-    return Path(__file__).resolve().parents[7] / "deploy" / "openshift"
+    return Path(__file__).resolve().parents[7] / "deploy" / "jiuwenswarm-ee"
 
 
 def read_tool_version(tool_dir: Path | None = None) -> str:
-    """读工具树版本戳（deploy/openshift/TOOL_VERSION）；缺失返回 unknown。"""
+    """读工具树版本戳（deploy/jiuwenswarm-ee/TOOL_VERSION）；缺失返回 unknown。"""
     path = (tool_dir or resolve_tool_dir()) / "TOOL_VERSION"
     try:
         version = path.read_text(encoding="utf-8").strip()

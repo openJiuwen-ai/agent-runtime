@@ -1,73 +1,69 @@
-# 集群内访问
+# Redis 部署清单（OpenShift）
+# 纯缓存用途，不挂持久卷；ACL 业务用户认证（default 用户禁用）；适配 restricted-v2 SCC
+# 访问：oc port-forward svc/redis 6379:6379，redis-cli --user $REDIS_USER -a $REDIS_PASSWORD（密码见 global_vars）
+#      （default 用户已禁用，仅 -a 不带用户名会认证失败）
 apiVersion: v1
 kind: Service
 metadata:
-  name: <<REDIS_NAME>>
-  namespace: <<NAMESPACE>>
+  name: jiuwenswarm-redis
+  namespace: "<<NAMESPACE>>"
 spec:
-  selector:
-    app: <<REDIS_NAME>>
   ports:
     - name: redis
-      port: <<REDIS_PORT>>
-      targetPort: <<REDIS_PORT>>
----
-# NodePort Service：供集群外访问 Redis
-apiVersion: v1
-kind: Service
-metadata:
-  name: <<REDIS_NAME>>-nodeport
-  namespace: <<NAMESPACE>>
-spec:
-  type: NodePort
-  ports:
-    - port: <<REDIS_PORT>>           # 集群内部端口
-      targetPort: <<REDIS_PORT>>     # 容器端口
-      nodePort: <<REDIS_NODE_PORT>>  # 外部访问端口（30000-32767）
+      port: 6379
+      targetPort: 6379
   selector:
-    app: <<REDIS_NAME>>
-
+    app: jiuwenswarm-redis
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: <<REDIS_NAME>>
-  namespace: <<NAMESPACE>>
+  name: jiuwenswarm-redis
+  namespace: "<<NAMESPACE>>"
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: <<REDIS_NAME>>
+      app: jiuwenswarm-redis
   template:
     metadata:
       labels:
-        app: <<REDIS_NAME>>
+        app: jiuwenswarm-redis
     spec:
       containers:
         - name: redis
           image: <<REDIS_IMAGE>>
-          ports:
-            - containerPort: <<REDIS_PORT>>
-              name: redis
+          imagePullPolicy: IfNotPresent
           args:
             - redis-server
-            - --appendonly
-            - "yes"
+            # 禁用 RDB 快照：不挂持久卷（纯缓存），且 /data 属镜像层，随机 UID 不可写，
+            # 默认 save 策略会 BGSAVE 失败 → MISCONF 拒写
+            - --save
+            - ""
+            # ACL：禁用 default 用户（不能用 --requirepass 替代，它会隐式重新启用 default）；
+            # 值必须加引号：裸写的 on 会被 kubectl 解析为 bool，> 开头会直接导致 YAML 解析失败
+            - --user
+            - "default"
+            - "off"
+            - --user
+            - "<<REDIS_USER>>"
+            - "on"
+            - "><<REDIS_PASSWORD>>"
+            - "~*"
+            - "&*"
+            - "+@all"
+          ports:
+            - containerPort: 6379
+              name: redis
           livenessProbe:
             tcpSocket:
-              port: <<REDIS_PORT>>
+              port: 6379
             initialDelaySeconds: 10
             periodSeconds: 10
+            timeoutSeconds: 5
           readinessProbe:
-            exec:
-              command:
-                - redis-cli
-                - ping
+            tcpSocket:
+              port: 6379
             initialDelaySeconds: 5
             periodSeconds: 5
-          resources:
-            requests:
-              cpu: 100m
-              memory: 128Mi
-            limits:
-              memory: 512Mi
+            timeoutSeconds: 3

@@ -1,7 +1,7 @@
 """模板 API 请求/响应模型。
 
 涵盖 model_template、extension_config_template、skill_prebuilt_template、
-permissions_template、service_config_template、agent_template。
+permissions_template、execution_guard_template、service_config_template、agent_template。
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ from pydantic import (
 )
 
 from manager_server.schemas.safe_text import SafeTextMixin
+from manager_server.schemas.common_schemas import INT32_MAX
 
 from manager_server.infrastructure.template_ref import (
     normalize_template_ref,
@@ -189,7 +190,7 @@ AGENT_TEMPLATE_OPERATION_KEY = "_jiuwen_template_operation"
 
 
 def validate_agent_template_data(data: dict[str, Any] | None) -> dict[str, Any] | None:
-    for key in (MANAGED_AGENT_CLIENT_KEY, AGENT_TEMPLATE_OPERATION_KEY):
+    for key in (MANAGED_AGENT_CLIENT_KEY, AGENT_TEMPLATE_OPERATION_KEY, "managed_agent_clients"):
         if data is not None and key in data:
             raise ValueError(f"data.{key} is managed by the server")
     if data is not None and "custom_config" in data:
@@ -207,7 +208,6 @@ class AgentTemplateCreateBody(SafeTextMixin):
 
     template_name: str = Field(..., min_length=1, max_length=128)
     description: str | None = Field(default=None, max_length=512)
-    agent_tags: list[str] | None = None
     template_ref: TemplateRefField = Field(default_factory=dict)
     enabled: bool = True
     data: AgentTemplateData = None
@@ -218,7 +218,6 @@ class AgentTemplateUpdateBody(SafeTextMixin):
 
     template_name: str | None = Field(default=None, min_length=1, max_length=128)
     description: str | None = Field(default=None, max_length=512)
-    agent_tags: list[str] | None = None
     template_ref: OptionalTemplateRefField = None
     enabled: bool | None = None
     data: AgentTemplateData = None
@@ -233,7 +232,7 @@ class AgentTemplateListQuery(BaseModel):
     search: str | None = Field(
         default=None,
         max_length=256,
-        description="按 template_id、template_name、description、agent_tags 模糊搜索",
+        description="按 template_id、template_name、description 模糊搜索",
     )
     sort_by: str | None = Field(
         default=None,
@@ -248,16 +247,12 @@ class ModelTemplateCreateBody(SafeTextMixin):
     template_name: str = Field(..., min_length=1, max_length=128)
     description: str | None = Field(default=None, max_length=512)
     model_type: list[ModelTypeLiteral] = Field(default_factory=list)
-    model_tags: list[str] | None = None
     api_base: ApiBaseUrl
     api_key: str = Field(..., min_length=1)
     model_id: str = Field(..., min_length=1, max_length=128)
     model_provider: str = Field(..., min_length=1, max_length=64)
     parameters: dict[str, Any] | None = None
-    timeout: int = Field(default=360, ge=1)
-    retry_count: int = Field(default=3, ge=0)
-    enable_streaming: bool = True
-    enable_function_calling: bool = True
+    timeout: int = Field(default=360, ge=1, le=INT32_MAX)
     verify_ssl: bool = False
     enabled: bool = True
     data: dict[str, Any] | None = None
@@ -274,16 +269,12 @@ class ModelTemplateUpdateBody(SafeTextMixin):
     template_name: str | None = Field(default=None, min_length=1, max_length=128)
     description: str | None = Field(default=None, max_length=512)
     model_type: list[ModelTypeLiteral] | None = None
-    model_tags: list[str] | None = None
     api_base: ApiBaseUrl | None = None
     api_key: str | None = Field(default=None, min_length=1)
     model_id: str | None = Field(default=None, min_length=1, max_length=128)
     model_provider: str | None = Field(default=None, min_length=1, max_length=64)
     parameters: dict[str, Any] | None = None
-    timeout: int | None = Field(default=None, ge=1)
-    retry_count: int | None = Field(default=None, ge=0)
-    enable_streaming: bool | None = None
-    enable_function_calling: bool | None = None
+    timeout: int | None = Field(default=None, ge=1, le=INT32_MAX)
     verify_ssl: bool | None = None
     enabled: bool | None = None
     data: dict[str, Any] | None = None
@@ -300,7 +291,6 @@ class ModelTemplateOut(BaseModel):
     template_name: str
     description: str | None
     model_type: list[str]
-    model_tags: list[str] | None
     api_base: str
     api_key: str
     model_id: str
@@ -308,8 +298,6 @@ class ModelTemplateOut(BaseModel):
     parameters: dict[str, Any] | None
     timeout: int
     retry_count: int
-    enable_streaming: bool
-    enable_function_calling: bool
     verify_ssl: bool
     enabled: bool
     reference_count: int = 0
@@ -356,7 +344,6 @@ class EmbeddingTemplateCreateBody(SafeTextMixin):
 
     template_name: str = Field(..., min_length=1, max_length=128)
     description: str | None = Field(default=None, max_length=512)
-    embed_tags: list[str] | None = None
     api_base: ApiBaseUrl
     api_key: str = Field(..., min_length=1)
     model_id: str = Field(..., min_length=1, max_length=128)
@@ -378,7 +365,6 @@ class EmbeddingTemplateUpdateBody(SafeTextMixin):
 
     template_name: str | None = Field(default=None, min_length=1, max_length=128)
     description: str | None = Field(default=None, max_length=512)
-    embed_tags: list[str] | None = None
     api_base: ApiBaseUrl | None = None
     api_key: str | None = Field(default=None, min_length=1)
     model_id: str | None = Field(default=None, min_length=1, max_length=128)
@@ -394,7 +380,6 @@ class EmbeddingTemplateOut(BaseModel):
     template_id: str
     template_name: str
     description: str | None
-    embed_tags: list[str] | None
     api_base: str
     api_key: str
     model_id: str
@@ -594,7 +579,6 @@ class A2AOutboundTemplateCreateBody(SafeTextMixin):
     discovery_id: str = Field(..., min_length=1, max_length=128)
     template_name: str = Field(..., min_length=1, max_length=128)
     description: str | None = Field(default=None, max_length=512)
-    a2a_tags: list[str] | None = None
     credential: str | None = Field(default=None, max_length=4096)
     connect_timeout_seconds: float = Field(default=10.0, gt=0)
     sync_wait_seconds: float = Field(default=120.0, gt=0)
@@ -628,7 +612,6 @@ class A2AOutboundTemplateUpdateBody(SafeTextMixin):
 
     template_name: str | None = Field(default=None, min_length=1, max_length=128)
     description: str | None = Field(default=None, max_length=512)
-    a2a_tags: list[str] | None = None
     credential: str | None = Field(default=None, max_length=4096)
     clear_credential: bool = False
     connect_timeout_seconds: float | None = Field(default=None, gt=0)
@@ -657,7 +640,6 @@ class A2AOutboundTemplateOut(BaseModel):
     template_id: str
     template_name: str
     description: str | None
-    a2a_tags: list[str] | None
     source_url: str
     card_path: str
     agent_card: dict[str, Any]
@@ -790,6 +772,57 @@ class PermissionsTemplateOut(BaseModel):
     updated_at: str | None
 
 
+class ExecutionGuardTemplateCreateBody(SafeTextMixin):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    template_name: str = Field(..., min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=512)
+    enabled: bool = True
+    body: dict[str, Any] = Field(
+        ...,
+        description="完整 execution_guard 段，含模型异常检测与循环断路器",
+    )
+    data: dict[str, Any] | None = None
+
+
+class ExecutionGuardTemplateUpdateBody(SafeTextMixin):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    template_name: str | None = Field(default=None, min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=512)
+    enabled: bool | None = None
+    body: dict[str, Any] | None = None
+    data: dict[str, Any] | None = None
+
+
+class ExecutionGuardTemplateListQuery(BaseModel):
+    page: int = Field(1, ge=1)
+    page_size: int = Field(20, ge=1, le=200)
+    enabled: bool | None = None
+    search: str | None = Field(
+        default=None,
+        description="按 template_id、template_name、description 模糊搜索",
+    )
+    sort_by: str | None = Field(
+        default=None,
+        description="排序字段：template_name、description、updated_at",
+    )
+    sort_order: str | None = Field(default=None, description="排序方向：asc、desc")
+
+
+class ExecutionGuardTemplateOut(BaseModel):
+    id: int
+    template_id: str
+    template_name: str
+    description: str | None
+    enabled: bool
+    reference_count: int = 0
+    body: dict[str, Any]
+    data: dict[str, Any] | None
+    created_at: str | None
+    updated_at: str | None
+
+
 _VALID_MCP_TRANSPORTS = frozenset(
     {
         "stdio",
@@ -892,8 +925,7 @@ class McpTemplateOut(BaseModel):
 
 
 # 与库表类型上限一致：integer → 有符号 32 位
-
-_SERVICE_INT_MAX = 2_147_483_647
+_SERVICE_INT_MAX = INT32_MAX
 
 
 # --- service_config_container（容器模板）---
@@ -906,7 +938,7 @@ class ServiceConfigContainerCreateBody(SafeTextMixin):
     description: str | None = Field(default=None, max_length=512)
     container_id: str = Field(..., min_length=1, max_length=100)
     name: str = Field(default="agent", max_length=128)
-    image: str = Field(default="", max_length=512)
+    image: str = Field(..., min_length=1, max_length=512)
     image_pull_policy: str = Field(default="IfNotPresent", max_length=64)
     ports: list[dict[str, Any]] | None = None
     env: list[dict[str, Any]] | None = None
@@ -928,7 +960,7 @@ class ServiceConfigContainerUpdateBody(SafeTextMixin):
     description: str | None = Field(default=None, max_length=512)
     container_id: str | None = Field(default=None, min_length=1, max_length=100)
     name: str | None = Field(default=None, max_length=128)
-    image: str | None = Field(default=None, max_length=512)
+    image: str | None = Field(default=None, min_length=1, max_length=512)
     image_pull_policy: str | None = Field(default=None, max_length=64)
     ports: list[dict[str, Any]] | None = None
     env: list[dict[str, Any]] | None = None
@@ -1114,6 +1146,23 @@ class ExpertPackageItem(BaseModel):
     version: str = Field(default="", max_length=64)
 
 
+class SwarmflowConfig(BaseModel):
+    """Swarmflow 企业策略（JSON 列）：键白名单 + 取值约束，创建/更新/出参共用。
+
+    仅允许 bool/int 字段且 ``extra="forbid"``，任意未知键、字符串值与
+    越界数值在入库前即被 422 拦截，不依赖自由文本安全校验。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    allowed: bool = True
+    default_enabled: bool = False
+    max_workflows: int = Field(default=16, ge=1, le=10_000)
+    agents_per_run: int | None = Field(default=None, ge=1, le=10_000)
+    max_agents_total: int = Field(default=64, ge=1, le=100_000)
+    swarmflow_budget: int | None = Field(default=None, ge=1, le=10_000_000)
+
+
 def _assign_normalized_packages(model: Any) -> None:
     from manager_server.core.template.expert_package_template import normalize_package_items
 
@@ -1128,6 +1177,7 @@ class ExpertPackageTemplateCreateBody(SafeTextMixin):
     template_name: str = Field(..., min_length=1, max_length=128)
     description: str | None = Field(default=None, max_length=512)
     packages: list[ExpertPackageItem] = Field(..., min_length=1)
+    swarmflow: SwarmflowConfig | None = None
     enabled: bool = True
 
     @model_validator(mode="after")
@@ -1142,6 +1192,7 @@ class ExpertPackageTemplateUpdateBody(SafeTextMixin):
     template_name: str | None = Field(default=None, min_length=1, max_length=128)
     description: str | None = Field(default=None, max_length=512)
     packages: list[ExpertPackageItem] | None = Field(default=None, min_length=1)
+    swarmflow: SwarmflowConfig | None = None
     enabled: bool | None = None
     expected_revision: int | None = Field(
         default=None,
@@ -1175,6 +1226,7 @@ class ExpertPackageTemplateOut(BaseModel):
     template_name: str
     description: str | None
     packages: list[ExpertPackageItem]
+    swarmflow: SwarmflowConfig | None = None
     enabled: bool
     revision: int = 0
     reference_count: int = 0

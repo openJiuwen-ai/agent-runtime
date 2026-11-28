@@ -6,6 +6,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from manager_server.schemas.common_schemas import INT32_MAX
+
 
 class WorkspaceQuotaEffectiveQuery(BaseModel):
     """查询用户在指定 group/bot 下的生效配额。"""
@@ -13,6 +15,7 @@ class WorkspaceQuotaEffectiveQuery(BaseModel):
     user_id: str = Field(..., min_length=1)
     group_id: str = Field(..., min_length=1)
     bot_id: str = Field(..., min_length=1)
+    agent_id: str = Field(default="", description="Agent 标识；为空表示不带 agent_id 维度匹配")
 
 
 class WorkspaceQuotaPolicyListQuery(BaseModel):
@@ -41,7 +44,8 @@ class WorkspaceQuotaPolicyCreateBody(BaseModel):
     policy_name: str = Field(..., min_length=1, max_length=128)
     policy_desc: str | None = Field(default=None, max_length=512)
     match_expr: Any = None
-    priority: int = 0
+    # 管理员策略须 ≥ 0；负数域留给审批等系统写入（不经本 Create body）。
+    priority: int = Field(default=0, ge=0, le=INT32_MAX)
     limit_bytes: int
     soft_percent: int = Field(ge=0, le=100, default=80)
     hard_percent: int = Field(ge=0, le=100, default=100)
@@ -55,7 +59,7 @@ class WorkspaceQuotaPolicyPatchBody(BaseModel):
     policy_desc: str | None = Field(default=None, max_length=512)
     limit_bytes: int | None = None
     match_expr: Any = None
-    priority: int | None = None
+    priority: int | None = Field(default=None, ge=0, le=INT32_MAX)
     soft_percent: int | None = Field(default=None, ge=0, le=100)
     hard_percent: int | None = Field(default=None, ge=0, le=100)
     enabled: bool | None = None
@@ -87,7 +91,7 @@ class TeamQuotaPolicyUpsertBody(BaseModel):
     policy_name: str = Field(default="team-quota", max_length=128)
     policy_desc: str | None = Field(default=None, max_length=512)
     match_expr: Any = None
-    priority: int = 0
+    priority: int = Field(default=0, ge=0, le=INT32_MAX)
     max_teams_per_user: int = Field(default=5, ge=1, le=1000)
     max_teammates_per_team: int = Field(default=5, ge=1, le=1000)
     max_teams_per_org: int = Field(default=0, ge=0, le=1000)

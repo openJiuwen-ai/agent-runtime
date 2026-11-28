@@ -55,7 +55,6 @@ def model_templates() -> list[tuple[str, dict[str, Any]]]:
                 "template_name": "全局兜底-经济型",
                 "description": "无服务/Agent 命中时使用",
                 "model_type": ["default"],
-                "model_tags": ["chat"],
                 "api_base": "https://api.openai.com/v1",
                 "api_key": "sk-demo-global",
                 "model_id": "gpt-4o-mini",
@@ -83,7 +82,6 @@ def model_templates() -> list[tuple[str, dict[str, Any]]]:
             {
                 "template_name": "VIP-加强对话",
                 "model_type": ["default", "vision"],
-                "model_tags": ["chat", "vision"],
                 "api_base": "https://api.openai.com/v1",
                 "api_key": "sk-demo-vip",
                 "model_id": "gpt-5",
@@ -369,9 +367,6 @@ def instance_create_body(
     jiuwenclaw_name: str = "ut-demo-instance",
     gateway_host: str = "http://127.0.0.1:18080",
     runtime_host: str = "http://127.0.0.1:18081",
-    user_web_host: str = "http://127.0.0.1:15173",
-    gateway_web_http_host: str = "http://127.0.0.1:19002",
-    gateway_web_ws_host: str = "http://127.0.0.1:19000",
 ) -> dict[str, Any]:
     return {
         "jiuwenclaw_name": jiuwenclaw_name,
@@ -381,7 +376,4 @@ def instance_create_body(
         "space_id": "default",
         "gateway_host": gateway_host,
         "runtime_host": runtime_host,
-        "user_web_host": user_web_host,
-        "gateway_web_http_host": gateway_web_http_host,
-        "gateway_web_ws_host": gateway_web_ws_host,
     }
