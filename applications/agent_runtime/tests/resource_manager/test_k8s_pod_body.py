@@ -947,3 +947,53 @@ def test_reject_material_helper_name_collision(name):
     client = _TestPodClient(link_mtls_config=link)
     with pytest.raises(DeployFailed, match="reserved"):
         client.build("pod-1", _base_spec(main_container=_main(name=name)))
+
+
+def test_sync_sidecar_disabled_by_env_keeps_init_and_materials(monkeypatch):
+    """一次性材料部署可关停常驻 sync sidecar：init 与材料卷不受影响。"""
+    link = LinkMTLSConfig(
+        mode=LinkMTLSMode.ENFORCE,
+        identity=MTLSDeploymentIdentity("deployment", "binding", 1),
+        agentserver_secret="agentserver-link-tls",
+    )
+    client = _TestPodClient(link_mtls_config=link)
+    monkeypatch.setenv("AGENT_RUNTIME_LINK_MTLS_SYNC_SIDECAR", "off")
+    pod = client.build(
+        "pod-1",
+        _base_spec(
+            main_container=_main(security_context={"run_as_user": 1000}),
+            sidecars=[JIUWENBOX],
+        ),
+    )
+    spec = pod.kwargs["spec"].kwargs
+    names = [c.kwargs["name"] for c in spec["containers"]]
+    assert "link-material-sync" not in names
+    assert spec["init_containers"][0].kwargs["name"] == "link-material-init"
+    init = spec["init_containers"][0].kwargs
+    assert init["command"][-1] == "--once"
+    volume_names = {v.kwargs["name"] for v in spec["volumes"]}
+    assert {"jiuwenswarm-link-mtls-source", "jiuwenswarm-link-mtls"} <= volume_names
+    main = next(c.kwargs for c in spec["containers"] if c.kwargs["name"] == "agent")
+    env = {e.kwargs["name"]: e.kwargs["value"] for e in main["env"]}
+    assert env["JIUWENSWARM_LINK_MTLS_MODE"] == "enforce"
+
+
+def test_sync_sidecar_enabled_by_default(monkeypatch):
+    link = LinkMTLSConfig(
+        mode=LinkMTLSMode.ENFORCE,
+        identity=MTLSDeploymentIdentity("deployment", "binding", 1),
+        agentserver_secret="agentserver-link-tls",
+    )
+    client = _TestPodClient(link_mtls_config=link)
+    monkeypatch.delenv("AGENT_RUNTIME_LINK_MTLS_SYNC_SIDECAR", raising=False)
+    pod = client.build(
+        "pod-1",
+        _base_spec(
+            main_container=_main(security_context={"run_as_user": 1000}),
+            sidecars=[JIUWENBOX],
+        ),
+    )
+    spec = pod.kwargs["spec"].kwargs
+    names = [c.kwargs["name"] for c in spec["containers"]]
+    assert names.count("link-material-sync") == 1
+    assert spec["init_containers"][0].kwargs["name"] == "link-material-init"

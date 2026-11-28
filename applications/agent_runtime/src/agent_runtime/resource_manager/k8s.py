@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import random
 import re
 import string
@@ -657,7 +658,15 @@ class RealK8sPodClient(K8sPodClient):
                 if path.is_relative_to(root):
                     env[name] = str(root / "private" / "identity" / path.relative_to(root))
             helper = self._link_material_helper(client, main, source_name)
-            helpers.append(client.V1Container(name="link-material-sync", **helper))
+            # The sync sidecar only matters when link Secrets may rotate: the
+            # AgentServer process loads identity once at startup (no hot reload),
+            # and rotation is fully covered by pod recreation (the init container
+            # re-copies from the Secret). Once-only deployments can disable the
+            # idle sidecar via env to save per-pod resources.
+            if os.getenv(
+                "AGENT_RUNTIME_LINK_MTLS_SYNC_SIDECAR", "on"
+            ).strip().lower() not in {"off", "false", "0", "no"}:
+                helpers.append(client.V1Container(name="link-material-sync", **helper))
             helper = {**helper, "command": [*helper.get("command", []), "--once"]}
             initializers.append(client.V1Container(name="link-material-init", **helper))
         container.volume_mounts = [
