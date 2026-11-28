@@ -88,6 +88,20 @@
     "nextMonth": "Next month",
     "nextYear": "Next year",
     "yearMonthHeader": "{{month}}/{{year}}",
+    "month": {
+      "jan": "Jan",
+      "feb": "Feb",
+      "mar": "Mar",
+      "apr": "Apr",
+      "may": "May",
+      "jun": "Jun",
+      "jul": "Jul",
+      "aug": "Aug",
+      "sep": "Sep",
+      "oct": "Oct",
+      "nov": "Nov",
+      "dec": "Dec"
+    },
     "weekday": {
       "sun": "Su",
       "mon": "Mo",

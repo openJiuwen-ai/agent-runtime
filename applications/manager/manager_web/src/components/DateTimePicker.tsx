@@ -17,9 +17,25 @@ import {
 
 /** Monday-first weekday order (matches zh Ant Design calendar). */
 const WEEKDAY_KEYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const;
+const MONTH_KEYS = [
+  'jan',
+  'feb',
+  'mar',
+  'apr',
+  'may',
+  'jun',
+  'jul',
+  'aug',
+  'sep',
+  'oct',
+  'nov',
+  'dec',
+] as const;
 const HOURS = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0'));
 const MINUTES = Array.from({ length: 60 }, (_, i) => String(i).padStart(2, '0'));
 const PANEL_WIDTH = 400;
+
+type PanelView = 'day' | 'month' | 'year';
 
 interface DateTimePickerProps {
   value: string;
@@ -64,7 +80,7 @@ export function DateTimePicker({
   const todayStr = todayLocalDate();
 
   const [open, setOpen] = useState(false);
-  const [panelView, setPanelView] = useState<'day' | 'year'>('day');
+  const [panelView, setPanelView] = useState<PanelView>('day');
   const [cursor, setCursor] = useState({ year: initial.getFullYear(), month: initial.getMonth() });
   const [yearPageStart, setYearPageStart] = useState(initial.getFullYear() - 5);
   const [panelStyle, setPanelStyle] = useState<CSSProperties>({});
@@ -153,6 +169,10 @@ export function DateTimePicker({
       event.stopPropagation();
       event.preventDefault();
       if (panelView === 'year') {
+        setPanelView('month');
+        return;
+      }
+      if (panelView === 'month') {
         setPanelView('day');
         return;
       }
@@ -210,6 +230,10 @@ export function DateTimePicker({
     });
   }
 
+  function openMonthView() {
+    setPanelView('month');
+  }
+
   function openYearView() {
     setYearPageStart(cursor.year - 5);
     setPanelView('year');
@@ -217,7 +241,16 @@ export function DateTimePicker({
 
   function pickYear(year: number) {
     setCursor((c) => ({ ...c, year }));
+    setPanelView('month');
+  }
+
+  function pickMonth(monthIndex: number) {
+    setCursor((c) => ({ ...c, month: monthIndex }));
     setPanelView('day');
+  }
+
+  function shiftYear(delta: number) {
+    setCursor((c) => ({ ...c, year: c.year + delta }));
   }
 
   const emptyText = placeholder ?? t('dateTimePicker.placeholder');
@@ -275,6 +308,53 @@ export function DateTimePicker({
                 ))}
               </div>
             </div>
+          ) : panelView === 'month' ? (
+            <div className="flex min-h-0 flex-1 flex-col p-3">
+              <div className="mb-3 flex items-center justify-between">
+                <button
+                  type="button"
+                  title={t('dateTimePicker.prevYear')}
+                  aria-label={t('dateTimePicker.prevYear')}
+                  onClick={() => shiftYear(-1)}
+                  className="rounded p-1 text-muted hover:bg-bg-hover hover:text-text"
+                >
+                  <NavChevronLeft />
+                </button>
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-sm font-medium text-text hover:bg-bg-hover"
+                  onClick={openYearView}
+                >
+                  {cursor.year}
+                  <CaretDown />
+                </button>
+                <button
+                  type="button"
+                  title={t('dateTimePicker.nextYear')}
+                  aria-label={t('dateTimePicker.nextYear')}
+                  onClick={() => shiftYear(1)}
+                  className="rounded p-1 text-muted hover:bg-bg-hover hover:text-text"
+                >
+                  <NavChevronRight />
+                </button>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {MONTH_KEYS.map((key, monthIndex) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => pickMonth(monthIndex)}
+                    className={`rounded-sm py-2 text-sm transition-colors ${
+                      monthIndex === cursor.month
+                        ? 'bg-accent text-white'
+                        : 'text-text hover:bg-bg-hover'
+                    }`}
+                  >
+                    {t(`dateTimePicker.month.${key}`)}
+                  </button>
+                ))}
+              </div>
+            </div>
           ) : (
             /* Height follows the calendar; time columns are pinned to that height and scroll. */
             <div className="relative flex">
@@ -283,7 +363,7 @@ export function DateTimePicker({
                   <button
                     type="button"
                     className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-sm font-medium text-text hover:bg-bg-hover"
-                    onClick={openYearView}
+                    onClick={openMonthView}
                   >
                     {t('dateTimePicker.yearMonthHeader', {
                       year: cursor.year,
