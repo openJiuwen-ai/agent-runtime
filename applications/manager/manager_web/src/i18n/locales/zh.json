@@ -82,6 +82,26 @@
     "hoursAgo": "{{count}}h 前",
     "daysAgo": "{{count}}d 前"
   },
+  "dateTimePicker": {
+    "prevYear": "上一年",
+    "prevMonth": "上一月",
+    "nextMonth": "下一月",
+    "nextYear": "下一年",
+    "yearMonthHeader": "{{year}}年{{month}}月",
+    "weekday": {
+      "sun": "日",
+      "mon": "一",
+      "tue": "二",
+      "wed": "三",
+      "thu": "四",
+      "fri": "五",
+      "sat": "六"
+    },
+    "today": "今天",
+    "clear": "清除",
+    "placeholder": "年/月/日 --:--",
+    "pickDateTime": "选择日期时间"
+  },
   "brand": {
     "title": "{{productName}}",
     "sub": "Manager"

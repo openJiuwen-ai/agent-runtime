@@ -10,6 +10,7 @@ const server = await createServer({ configFile: false, server: { middlewareMode:
 
 try {
   const { agentResourceUpdateBody, serviceResourceUpdateBody, resourceExpiryForUpdate } = await server.ssrLoadModule('/src/utils/instanceResourceUpdate.ts');
+  const { toDatetimeLocalValue } = await server.ssrLoadModule('/src/utils/datetimeLocal.ts');
   const { InstanceAgentResourceApi, InstanceServiceResourceApi } = await server.ssrLoadModule('/src/services/api.ts');
   const binding = {
     id: 4,
@@ -30,8 +31,7 @@ try {
 
   await test('unchanged expiry editor preserves seconds and milliseconds; edits and clears remain explicit', () => {
     const original = binding.expires_at;
-    const date = new Date(original);
-    const displayed = new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+    const displayed = toDatetimeLocalValue(original);
     assert.equal(resourceExpiryForUpdate(original, displayed), original);
     assert.equal(resourceExpiryForUpdate(original, ''), null);
     assert.equal(resourceExpiryForUpdate(null, '2028-02-03T14:27'), new Date('2028-02-03T14:27').toISOString());

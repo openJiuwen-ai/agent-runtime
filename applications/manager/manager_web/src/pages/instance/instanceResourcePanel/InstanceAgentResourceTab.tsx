@@ -41,6 +41,8 @@ import { applyAgentTemplateChoice, clusterBindingDraftKey, emptyClusterBindingDr
 import { AgentExpertBindingSummary } from '../../../components/AgentExpertBindingSummary';
 import { agentPreparationCatalogPath, consumeAgentBindingAction } from '../../../utils/agentFlowContext';
 import { ClusterContentHeading } from '../ClusterContentHeading';
+import { DateTimePicker } from '../../../components/DateTimePicker';
+import { toDatetimeLocalValue } from '../../../utils/datetimeLocal';
 import { agentResourceUpdateBody, resourceExpiryForUpdate } from '../../../utils/instanceResourceUpdate';
 
 interface Props {
@@ -256,11 +258,7 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
       const nextAgentId = editing.ref_template_id || '';
       const nextName = clipField(editing.resource_name ?? '', FIELD_MAX_LENGTH.resource_name);
       const nextDesc = clipField(editing.resource_desc ?? '', FIELD_MAX_LENGTH.resource_desc);
-      let nextExpires = '';
-      if (editing.expires_at) {
-        const d = new Date(editing.expires_at);
-        nextExpires = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
-      }
+      const nextExpires = toDatetimeLocalValue(editing.expires_at);
       setMatchExpr(nextMatch);
       setEditAgentId(nextAgentId);
       setEditResourceName(nextName);
@@ -653,12 +651,11 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
             </label>
             <label className="block">
               <FieldLabel>{t('instanceDetail.resourcePanel.agent.expiresAt')}</FieldLabel>
-              <input
-                type="datetime-local"
-                className="input mt-1 w-full cursor-pointer"
+              <DateTimePicker
+                className="mt-1 w-full"
+                aria-label={t('instanceDetail.resourcePanel.agent.expiresAt')}
                 value={addExpiresAt}
-                onChange={(e) => setAddExpiresAt(e.target.value)}
-                onClick={(e) => (e.target as HTMLInputElement).showPicker?.()}
+                onChange={setAddExpiresAt}
               />
               <div className="text-[11px] text-muted mt-1">{t('instanceDetail.resourcePanel.agent.expiresHint')}</div>
             </label>
@@ -744,12 +741,11 @@ export function InstanceAgentResourceTab({ instanceId }: Props) {
           </label>
           <label className="block mb-3">
             <FieldLabel>{t('instanceDetail.resourcePanel.agent.expiresAt')}</FieldLabel>
-            <input
-              type="datetime-local"
-              className="input mt-1 w-full cursor-pointer"
+            <DateTimePicker
+              className="mt-1 w-full"
+              aria-label={t('instanceDetail.resourcePanel.agent.expiresAt')}
               value={editExpiresAt}
-              onChange={(e) => setEditExpiresAt(e.target.value)}
-              onClick={(e) => (e.target as HTMLInputElement).showPicker?.()}
+              onChange={setEditExpiresAt}
             />
             <div className="text-[11px] text-muted mt-1">{t('instanceDetail.resourcePanel.agent.expiresHint')}</div>
           </label>

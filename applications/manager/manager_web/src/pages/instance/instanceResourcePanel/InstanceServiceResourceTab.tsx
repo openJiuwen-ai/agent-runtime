@@ -38,6 +38,8 @@ import { useAuth } from '../../../auth/AuthContext';
 import { collectPages } from '../../../utils/overview';
 import { runtimeCatalogPath } from '../../../utils/runtimeResourceNavigation';
 import { ClusterContentHeading } from '../ClusterContentHeading';
+import { DateTimePicker } from '../../../components/DateTimePicker';
+import { toDatetimeLocalValue } from '../../../utils/datetimeLocal';
 import { serviceResourceUpdateBody, resourceExpiryForUpdate } from '../../../utils/instanceResourceUpdate';
 import { INT32_MAX, INT32_MIN, isInt32 } from '../../../utils/intBounds';
 import {
@@ -284,11 +286,7 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
       const nextName = clipField(editing.resource_name ?? '', FIELD_MAX_LENGTH.resource_name);
       const nextDesc = clipField(editing.resource_desc ?? '', FIELD_MAX_LENGTH.resource_desc);
       const nextPriority = editing.priority ?? 0;
-      let nextExpires = '';
-      if (editing.expires_at) {
-        const d = new Date(editing.expires_at);
-        nextExpires = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
-      }
+      const nextExpires = toDatetimeLocalValue(editing.expires_at);
       setMatchExpr(nextMatch);
       setEditTemplateId(nextTemplateId);
       setEditResourceName(nextName);
@@ -778,12 +776,11 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
             </label>
             <label className="block">
               <FieldLabel>{t(`${sr}.expiresAt`)}</FieldLabel>
-              <input
-                type="datetime-local"
-                className="input mt-1 w-full cursor-pointer"
+              <DateTimePicker
+                className="mt-1 w-full"
+                aria-label={t(`${sr}.expiresAt`)}
                 value={addExpiresAt}
-                onChange={(e) => setAddExpiresAt(e.target.value)}
-                onClick={(e) => (e.target as HTMLInputElement).showPicker?.()}
+                onChange={setAddExpiresAt}
               />
               <div className="text-[11px] text-muted mt-1">{t(`${sr}.expiresHint`)}</div>
             </label>
@@ -888,12 +885,11 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
           </label>
           <label className="block mb-3">
             <FieldLabel>{t(`${sr}.expiresAt`)}</FieldLabel>
-            <input
-              type="datetime-local"
-              className="input mt-1 w-full cursor-pointer"
+            <DateTimePicker
+              className="mt-1 w-full"
+              aria-label={t(`${sr}.expiresAt`)}
               value={editExpiresAt}
-              onChange={(e) => setEditExpiresAt(e.target.value)}
-              onClick={(e) => (e.target as HTMLInputElement).showPicker?.()}
+              onChange={setEditExpiresAt}
             />
             <div className="text-[11px] text-muted mt-1">{t(`${sr}.expiresHint`)}</div>
           </label>

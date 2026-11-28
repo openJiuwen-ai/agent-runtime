@@ -82,6 +82,26 @@
     "hoursAgo": "{{count}}h ago",
     "daysAgo": "{{count}}d ago"
   },
+  "dateTimePicker": {
+    "prevYear": "Previous year",
+    "prevMonth": "Previous month",
+    "nextMonth": "Next month",
+    "nextYear": "Next year",
+    "yearMonthHeader": "{{month}}/{{year}}",
+    "weekday": {
+      "sun": "Su",
+      "mon": "Mo",
+      "tue": "Tu",
+      "wed": "We",
+      "thu": "Th",
+      "fri": "Fr",
+      "sat": "Sa"
+    },
+    "today": "Today",
+    "clear": "Clear",
+    "placeholder": "YYYY-MM-DD --:--",
+    "pickDateTime": "Pick date and time"
+  },
   "brand": {
     "title": "{{productName}}",
     "sub": "Manager"

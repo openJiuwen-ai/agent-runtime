@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Modal, ModalCancelButton } from '../../../components/Modal';
+import { DateTimePicker } from '../../../components/DateTimePicker';
 import { HintTooltip } from '../../../components/HintTooltip';
 import { useRouter } from '../../../router';
 import { useFormDirty } from '../../../hooks/useFormDirty';
@@ -158,12 +159,11 @@ export function AddToInstanceModal({
             <span className="text-sm font-medium">
               {t('instanceDetail.accessPanel.instance.expiresAt')}
             </span>
-            <input
-              type="datetime-local"
-              className="input mt-1 w-full cursor-pointer"
+            <DateTimePicker
+              className="mt-1 w-full"
+              aria-label={t('instanceDetail.accessPanel.instance.expiresAt')}
               value={expiresAt}
-              onChange={(e) => setExpiresAt(e.target.value)}
-              onClick={(e) => (e.target as HTMLInputElement).showPicker?.()}
+              onChange={setExpiresAt}
             />
             <div className="text-[11px] text-muted mt-1">
               {t('instanceDetail.accessPanel.instance.expiresHint')}
