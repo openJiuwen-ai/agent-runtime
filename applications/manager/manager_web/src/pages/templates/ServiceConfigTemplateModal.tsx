@@ -3,7 +3,7 @@
  * 新建时可读取部署文件预览；保存后端才创建模板及所需容器副本。
  * 普通编辑保留现有绑定与元数据，容器配置在容器模板目录维护。
  */
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { LimitedTextInput } from '../../components/LimitedTextInput';
 import { Modal, ModalCancelButton } from '../../components/Modal';
@@ -13,10 +13,11 @@ import { toast } from '../../stores/uiStore';
 import { bumpGuideRevision } from '../../stores/guideStore';
 import { ContainerTemplateModal } from './ContainerTemplateModal';
 import './ServiceConfigTemplateModal.css';
+import { INT32_MAX } from '../../utils/intBounds';
 import { isValidUnixAbsPath } from '../../utils/path';
 import { findUnsafeTextField } from '../../utils/safeText';
 import { collectPages } from '../../utils/overview';
-import { runtimeTemplateForm, runtimeTemplateData, type RuntimeTemplateForm as FormState } from '../../utils/runtimeTemplateForm';
+import { intFieldProblem, runtimeTemplateForm, runtimeTemplateData, type IntFieldProblem, type RuntimeTemplateForm as FormState } from '../../utils/runtimeTemplateForm';
 import { templateValidationMessage } from '../../utils/templateValidation';
 import type {
   ContainerTemplate,
@@ -25,7 +26,19 @@ import type {
   ServiceConfigTemplateCreateBody,
 } from '../../types';
 
-const INT32_MAX = 2_147_483_647;
+const DEFAULTS = runtimeTemplateForm();
+
+/** Integer fields of the capacity section: [form key, label i18n key, lower bound]. */
+const INT_FIELDS = [
+  ['min_idle_pods', 'minIdlePods', 0],
+  ['pod_concurrency', 'podConcurrency', 1],
+  ['scope_concurrency', 'scopeConcurrency', 1],
+  ['pod_ttl', 'podTtl', 1],
+  ['session_ttl', 'sessionTtl', 1],
+  ['message_timeout', 'messageTimeout', 1],
+  ['ready_timeout', 'readyTimeout', 1],
+  ['ready_poll_interval', 'readyPollInterval', 1],
+] as const;
 
 function parseJsonArray(text: string): { ok: true; value?: Record<string, unknown>[] } | { ok: false } {
   const trimmed = text.trim();
@@ -55,6 +68,25 @@ function FieldLabel({ children, required }: { children: ReactNode; required?: bo
   );
 }
 
+function FieldError({ id, children }: { id: string; children: ReactNode }) {
+  return (
+    <p id={id} className="runtime-template-field__error" role="alert">
+      {children}
+    </p>
+  );
+}
+
+/** 字段含义 + 表单实际校验的取值范围 */
+function IntFieldHint({ id, hint, range }: { id: string; hint: string; range: string }) {
+  return (
+    <p id={id} className="runtime-template-field__hint">
+      {hint}
+      <br />
+      {range}
+    </p>
+  );
+}
+
 function GroupLabel({ children, hint }: { children: ReactNode; hint?: string }) {
   return (
     <div className="runtime-template-group-label">
@@ -70,17 +102,19 @@ function ContainerBindingSelect({
   templates,
   value,
   onChange,
+  invalid,
 }: {
   label: string;
   templates: ServiceConfigContainerBrief[];
   value: string;
   onChange: (containerId: string) => void;
+  invalid?: boolean;
 }) {
   const { t } = useTranslation();
   const selected = templates.find((tpl) => tpl.container_id === value);
   return (
     <div className="runtime-template-binding">
-      <select className="select" aria-label={label} value={value} onChange={(e) => onChange(e.target.value)}>
+      <select className="select" aria-label={label} aria-invalid={invalid || undefined} value={value} onChange={(e) => onChange(e.target.value)}>
         <option value="">{t('serviceConfigTemplate.bindingPlaceholder')}</option>
         {templates.map((tpl) => (
           <option key={tpl.container_id} value={tpl.container_id}>
@@ -132,6 +166,10 @@ export function ServiceConfigTemplateModal({ open, template, onClose, onSaved }:
   const [defaultContainers, setDefaultContainers] = useState<ServiceConfigContainerBrief[]>([]);
   const containerOptions = [...defaultContainers, ...catalogContainers.filter(item => !defaultContainers.some(draft => draft.container_id === item.container_id))];
   const [containerModalOpen, setContainerModalOpen] = useState(false);
+  const fieldsRef = useRef<HTMLFieldSetElement>(null);
+  const fieldId = useId();
+  /** 必填字段的行内错误在首次保存失败后才出现，之后随输入实时更新 */
+  const [attempted, setAttempted] = useState(false);
 
   useEffect(() => { if (!open) setContainerModalOpen(false); }, [open]);
 
@@ -159,6 +197,7 @@ export function ServiceConfigTemplateModal({ open, template, onClose, onSaved }:
     setLoadedDefault(null);
     setDefaultContainers([]);
     setPendingDefault(null);
+    setAttempted(false);
     if (!open) return;
     const next = runtimeTemplateForm(template ?? undefined);
     setForm(next);
@@ -224,13 +263,31 @@ export function ServiceConfigTemplateModal({ open, template, onClose, onSaved }:
   const update = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setForm((current) => ({ ...current, [key]: value }));
 
+  const requiredText = (field: string) => t('serviceConfigTemplate.fieldRequired', { field });
+  const outOfRangeText = (field: string, min: number) => t('serviceConfigTemplate.numberOutOfRange', { field, min, max: INT32_MAX });
+  const intProblemText = (label: string, min: number, problem: IntFieldProblem) => {
+    const field = t(`serviceConfigTemplate.${label}`);
+    return problem === 'missing' ? requiredText(field) : outOfRangeText(field, min);
+  };
+  const mainMissingText = t('serviceConfigTemplate.bindingMissingWarn', { role: t('serviceConfigTemplate.mainContainerBinding') });
+
+  /** 拦截保存：提示、展开所在折叠区并把焦点移到出错字段 */
+  const reject = (key: string, message: string) => {
+    setAttempted(true);
+    const field = fieldsRef.current?.querySelector<HTMLElement>(`[data-field="${key}"]`);
+    const control = field?.querySelector<HTMLElement>('input, select, textarea');
+    control?.closest('details')?.setAttribute('open', '');
+    control?.focus();
+    toast('warn', message);
+  };
+
   const submit = async () => {
     if (!form.template_name.trim()) {
-      toast('warn', t('serviceConfigTemplate.fieldRequired', { field: t('serviceConfigTemplate.templateName') }));
+      reject('template_name', requiredText(t('serviceConfigTemplate.templateName')));
       return;
     }
     if (!form.main_container_id.trim()) {
-      toast('warn', t('serviceConfigTemplate.bindingMissingWarn', { role: t('serviceConfigTemplate.mainContainerBinding') }));
+      reject('main_container_id', mainMissingText);
       return;
     }
     if (form.sidecar_ids.some((id) => !id.trim())) {
@@ -243,13 +300,24 @@ export function ServiceConfigTemplateModal({ open, template, onClose, onSaved }:
       toast('warn', t('serviceConfigTemplate.containerIdConflict'));
       return;
     }
+    for (const [key, label, min] of INT_FIELDS) {
+      const problem = intFieldProblem(form[key], min);
+      if (problem) {
+        reject(key, intProblemText(label, min, problem));
+        return;
+      }
+    }
     if (form.sse_path.trim() && !isValidUnixAbsPath(form.sse_path.trim())) {
-      toast('warn', t('serviceConfigTemplate.pathInvalid', { field: t('serviceConfigTemplate.ssePath') }));
+      reject('sse_path', t('serviceConfigTemplate.pathInvalid', { field: t('serviceConfigTemplate.ssePath') }));
       return;
     }
     const volumes = parseJsonArray(form.volumes_json);
     if (!volumes.ok) {
-      toast('warn', t('serviceConfigTemplate.jsonArrayInvalid', { field: t('serviceConfigTemplate.volumes') }));
+      reject('volumes_json', t('serviceConfigTemplate.jsonArrayInvalid', { field: t('serviceConfigTemplate.volumes') }));
+      return;
+    }
+    if (form.fs_group.trim() && intFieldProblem(form.fs_group, 0)) {
+      reject('fs_group', outOfRangeText(t('serviceConfigTemplate.fsGroup'), 0));
       return;
     }
     const unsafe = findUnsafeTextField([
@@ -262,32 +330,26 @@ export function ServiceConfigTemplateModal({ open, template, onClose, onSaved }:
       return;
     }
 
-    const fsGroup = Number(form.fs_group);
-    const fsGroupValue =
-      form.fs_group.trim() && Number.isInteger(fsGroup) && fsGroup >= 0 && fsGroup <= INT32_MAX
-        ? fsGroup
-        : null;
-
     const body: ServiceConfigTemplateCreateBody = {
       template_name: form.template_name.trim(),
       namespace: form.namespace,
       description: form.description.trim() || null,
       node_name: form.node_name.trim() || null,
-      fs_group: fsGroupValue,
+      fs_group: form.fs_group.trim() ? Number(form.fs_group) : null,
       pod_name: form.pod_name.trim() || 'agentserver',
       sse_path: form.sse_path.trim() || '/api/v1/events/stream',
       kubeconfig: form.kubeconfig.trim() || null,
-      ready_timeout: form.ready_timeout,
-      ready_poll_interval: form.ready_poll_interval,
+      ready_timeout: Number(form.ready_timeout),
+      ready_poll_interval: Number(form.ready_poll_interval),
       main_container_id: mainId,
       sidecar_container_ids: sidecarIds,
       volumes: volumes.value ?? [],
-      min_idle_pods: form.min_idle_pods,
-      pod_concurrency: form.pod_concurrency,
-      pod_ttl: form.pod_ttl,
-      message_timeout: form.message_timeout,
-      scope_concurrency: form.scope_concurrency,
-      session_ttl: form.session_ttl,
+      min_idle_pods: Number(form.min_idle_pods),
+      pod_concurrency: Number(form.pod_concurrency),
+      pod_ttl: Number(form.pod_ttl),
+      message_timeout: Number(form.message_timeout),
+      scope_concurrency: Number(form.scope_concurrency),
+      session_ttl: Number(form.session_ttl),
       enabled: template ? template.enabled : form.enabled,
       data: templateData,
     };
@@ -315,6 +377,9 @@ export function ServiceConfigTemplateModal({ open, template, onClose, onSaved }:
     }
   };
 
+  const nameMissing = attempted && !form.template_name.trim();
+  const mainMissing = attempted && !form.main_container_id.trim();
+
   return (
     <>
       <Modal
@@ -334,19 +399,23 @@ export function ServiceConfigTemplateModal({ open, template, onClose, onSaved }:
       >
         <div className="runtime-template-form">
           {defaultTemplatePicker}
-          <fieldset className="runtime-template-form__fields" disabled={saving || loadingDefaults}>
+          <fieldset ref={fieldsRef} className="runtime-template-form__fields" disabled={saving || loadingDefaults}>
             <section className="runtime-template-section">
               <GroupLabel>{t('serviceConfigTemplate.basicInfo')}</GroupLabel>
               <div className="runtime-template-grid">
-                <div className="runtime-template-field">
+                <div className="runtime-template-field" data-field="template_name">
                   <FieldLabel required>{t('serviceConfigTemplate.templateName')}</FieldLabel>
                   <LimitedTextInput
                     ariaLabel={t('serviceConfigTemplate.templateName')}
                     value={form.template_name}
                     maxLength={128}
                     required
+                    ariaInvalid={nameMissing}
                     onChange={(v) => update('template_name', v)}
                   />
+                  {nameMissing && (
+                    <FieldError id={`${fieldId}-template_name`}>{requiredText(t('serviceConfigTemplate.templateName'))}</FieldError>
+                  )}
                 </div>
                 <div className="runtime-template-field">
                   <FieldLabel>{t('serviceConfigTemplate.templateDescription')}</FieldLabel>
@@ -369,14 +438,16 @@ export function ServiceConfigTemplateModal({ open, template, onClose, onSaved }:
                   + {t('containerTemplate.new')}
                 </button>
               </div>
-              <div className="runtime-template-field">
+              <div className="runtime-template-field" data-field="main_container_id">
                 <FieldLabel required>{t('serviceConfigTemplate.mainContainerBinding')}</FieldLabel>
                 <ContainerBindingSelect
                   label={t('serviceConfigTemplate.mainContainerBinding')}
                   templates={containerOptions}
                   value={form.main_container_id}
+                  invalid={mainMissing}
                   onChange={(containerId) => update('main_container_id', containerId)}
                 />
+                {mainMissing && <FieldError id={`${fieldId}-main_container_id`}>{mainMissingText}</FieldError>}
                 {form.main_container_id && !containerOptions.some((tpl) => tpl.container_id === form.main_container_id) && (
                   <p className="runtime-template-field__hint text-warning">
                     {t('serviceConfigTemplate.bindingNotFoundWarn', { id: form.main_container_id })}
@@ -423,29 +494,36 @@ export function ServiceConfigTemplateModal({ open, template, onClose, onSaved }:
                 <span className="runtime-template-disclosure__meta">{t('serviceConfigTemplate.adjustAsNeeded')}</span>
               </summary>
               <div className="runtime-template-disclosure__body runtime-template-grid">
-                {([
-                  ['min_idle_pods', 'minIdlePods', 0],
-                  ['pod_concurrency', 'podConcurrency', 1],
-                  ['scope_concurrency', 'scopeConcurrency', 1],
-                  ['pod_ttl', 'podTtl', 1],
-                  ['session_ttl', 'sessionTtl', 1],
-                  ['message_timeout', 'messageTimeout', 1],
-                  ['ready_timeout', 'readyTimeout', 1],
-                  ['ready_poll_interval', 'readyPollInterval', 1],
-                ] as const).map(([key, label, min]) => (
-                  <div key={key} className="runtime-template-field">
-                    <FieldLabel>{t(`serviceConfigTemplate.${label}`)}</FieldLabel>
-                    <input
-                      className="input"
-                      aria-label={t(`serviceConfigTemplate.${label}`)}
-                      type="number"
-                      min={min}
-                      max={INT32_MAX}
-                      value={form[key]}
-                      onChange={(e) => update(key, Number(e.target.value))}
-                    />
-                  </div>
-                ))}
+                {INT_FIELDS.map(([key, label, min]) => {
+                  const field = t(`serviceConfigTemplate.${label}`);
+                  const problem = attempted ? intFieldProblem(form[key], min) : null;
+                  return (
+                    <div key={key} className="runtime-template-field" data-field={key}>
+                      <FieldLabel required>{field}</FieldLabel>
+                      <input
+                        className="input"
+                        aria-label={field}
+                        aria-invalid={problem ? true : undefined}
+                        aria-describedby={problem ? `${fieldId}-${key}-hint ${fieldId}-${key}-error` : `${fieldId}-${key}-hint`}
+                        type="number"
+                        min={min}
+                        max={INT32_MAX}
+                        step={1}
+                        required
+                        value={form[key]}
+                        onChange={(e) => update(key, e.target.value)}
+                      />
+                      <IntFieldHint
+                        id={`${fieldId}-${key}-hint`}
+                        hint={t(`serviceConfigTemplate.${label}Hint`)}
+                        range={t('serviceConfigTemplate.intFieldRange', { min, max: INT32_MAX, defaultValue: DEFAULTS[key] })}
+                      />
+                      {problem && (
+                        <FieldError id={`${fieldId}-${key}-error`}>{intProblemText(label, min, problem)}</FieldError>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </details>
 
@@ -458,24 +536,33 @@ export function ServiceConfigTemplateModal({ open, template, onClose, onSaved }:
                 <div className="runtime-template-field">
                   <FieldLabel>{t('serviceConfigTemplate.nodeName')}</FieldLabel>
                   <LimitedTextInput ariaLabel={t('serviceConfigTemplate.nodeName')} value={form.node_name} maxLength={128} onChange={(v) => update('node_name', v)} />
+                  <p className="runtime-template-field__hint">{t('serviceConfigTemplate.nodeNameHint')}</p>
                 </div>
-                <div className="runtime-template-field">
+                <div className="runtime-template-field" data-field="fs_group">
                   <FieldLabel>{t('serviceConfigTemplate.fsGroup')}</FieldLabel>
-                  <input className="input" aria-label={t('serviceConfigTemplate.fsGroup')} type="number" min={0} max={INT32_MAX} value={form.fs_group} onChange={(e) => update('fs_group', e.target.value)} />
+                  <input className="input" aria-label={t('serviceConfigTemplate.fsGroup')} type="number" min={0} max={INT32_MAX} step={1} value={form.fs_group} onChange={(e) => update('fs_group', e.target.value)} />
+                  <IntFieldHint
+                    id={`${fieldId}-fs_group-hint`}
+                    hint={t('serviceConfigTemplate.fsGroupHint')}
+                    range={t('serviceConfigTemplate.intFieldRangeOptional', { min: 0, max: INT32_MAX })}
+                  />
                 </div>
                 <div className="runtime-template-field">
                   <FieldLabel>{t('serviceConfigTemplate.podName')}</FieldLabel>
                   <LimitedTextInput ariaLabel={t('serviceConfigTemplate.podName')} value={form.pod_name} maxLength={128} onChange={(v) => update('pod_name', v)} />
+                  <p className="runtime-template-field__hint">{t('serviceConfigTemplate.podNameHint')}</p>
                 </div>
-                <div className="runtime-template-field">
+                <div className="runtime-template-field" data-field="sse_path">
                   <FieldLabel>{t('serviceConfigTemplate.ssePath')}</FieldLabel>
                   <input className="input" aria-label={t('serviceConfigTemplate.ssePath')} value={form.sse_path} maxLength={128} onChange={(e) => update('sse_path', e.target.value)} />
+                  <p className="runtime-template-field__hint">{t('serviceConfigTemplate.ssePathHint')}</p>
                 </div>
                 <div className="runtime-template-field runtime-template-field--wide">
                   <FieldLabel>{t('serviceConfigTemplate.kubeconfig')}</FieldLabel>
                   <LimitedTextInput ariaLabel={t('serviceConfigTemplate.kubeconfig')} value={form.kubeconfig} maxLength={512} onChange={(v) => update('kubeconfig', v)} />
+                  <p className="runtime-template-field__hint">{t('serviceConfigTemplate.kubeconfigHint')}</p>
                 </div>
-                <div className="runtime-template-field runtime-template-field--wide">
+                <div className="runtime-template-field runtime-template-field--wide" data-field="volumes_json">
                   <FieldLabel>{t('serviceConfigTemplate.volumes')}</FieldLabel>
                   <textarea
                     className="input runtime-template-json"
