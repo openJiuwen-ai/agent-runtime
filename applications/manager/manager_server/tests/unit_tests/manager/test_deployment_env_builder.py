@@ -31,6 +31,7 @@ _MIN_ENV = {
     "REDIS_IMAGE": "redis:7-alpine",
     "MINIO_IMAGE": "minio/minio:latest",
     "AGENTSERVER_IMAGE": "swr.example/jiuwenswarm-core:1.0",
+    "JIUWENBOX_IMAGE": "swr.example/jiuwenswarm-sandbox:1.0",
     "MARIADB_ROOT_PASSWORD": "Root@123456",
 }
 
@@ -113,8 +114,28 @@ class TestValidateMergedEnv:
 
     def test_jiuwenbox_requires_image(self):
         merged = merge_env(_MIN_ENV, {"SANDBOX_TYPE": "jiuwenbox"})
+        merged.pop("JIUWENBOX_IMAGE", None)
         with pytest.raises(ValueError, match="JIUWENBOX_IMAGE"):
             validate_merged_env(merged, namespace="team-a")
+
+    def test_k8s_derived_sandbox_requires_image(self):
+        # SANDBOX_TYPE 留空时 bash 侧按 CLUSTER_TYPE 派生（k8s→jiuwenbox），
+        # 创建时须按派生后语义校验，避免任务起跑后才在 validate 阶段失败
+        no_sandbox = {k: v for k, v in _MIN_ENV.items() if k != "JIUWENBOX_IMAGE"}
+        merged = merge_env(no_sandbox, {})
+        with pytest.raises(ValueError, match="JIUWENBOX_IMAGE"):
+            validate_merged_env(merged, namespace="team-a")
+        # 显式 off 不需要沙箱镜像
+        merged = merge_env(no_sandbox, {"SANDBOX_TYPE": "off"})
+        validate_merged_env(merged, namespace="team-a")
+
+    def test_openshift_derived_sandbox_off(self, monkeypatch):
+        from manager_server.infrastructure.config import settings
+        monkeypatch.setattr(settings, "deploy_cluster_type", "openshift")
+        no_sandbox = {k: v for k, v in _MIN_ENV.items() if k != "JIUWENBOX_IMAGE"}
+        merged = merge_env(no_sandbox, {})
+        assert merged["CLUSTER_TYPE"] == "openshift"
+        validate_merged_env(merged, namespace="team-a")
 
 
 def test_web_server_parameters_survive_task_generation():
@@ -337,3 +358,78 @@ class TestOcpDbHost:
             namespace="proj-x",
         )
         assert conn["host"] == "db.example"
+
+
+class TestManagerPlaneNs:
+    def test_detect_explicit_env_wins(self, monkeypatch):
+        from manager_server.core.deployment import env_builder
+        monkeypatch.setattr(env_builder, "_SA_NAMESPACE_FILE", "/nonexistent")
+        monkeypatch.setenv("MANAGER_PLANE_NS", "explicit-ns")
+        assert env_builder._detect_manager_plane_ns() == "explicit-ns"
+
+    def test_detect_from_sa_namespace_file(self, monkeypatch, tmp_path):
+        from manager_server.core.deployment import env_builder
+        ns_file = tmp_path / "namespace"
+        ns_file.write_text("pod-ns\n", encoding="utf-8")
+        monkeypatch.setattr(env_builder, "_SA_NAMESPACE_FILE", str(ns_file))
+        monkeypatch.delenv("MANAGER_PLANE_NS", raising=False)
+        assert env_builder._detect_manager_plane_ns() == "pod-ns"
+
+    def test_detect_source_run_empty(self, monkeypatch):
+        from manager_server.core.deployment import env_builder
+        monkeypatch.setattr(env_builder, "_SA_NAMESPACE_FILE", "/nonexistent")
+        monkeypatch.delenv("MANAGER_PLANE_NS", raising=False)
+        assert env_builder._detect_manager_plane_ns() == ""
+
+    def test_forced_env_carries_plane_ns(self, monkeypatch):
+        from manager_server.core.deployment import env_builder
+        monkeypatch.setenv("MANAGER_PLANE_NS", "mgr-ns")
+        merged = merge_env(_MIN_ENV, {})
+        assert merged["MANAGER_PLANE_NS"] == "mgr-ns"
+        assert 'MANAGER_PLANE_NS="mgr-ns"' in build_env_custom(merged, namespace="team-a")
+
+    def test_plane_ns_in_inputs_ignored(self):
+        # 存量脏数据（defaults/请求混入强制键）不落任务 env，服务端值唯一
+        poisoned = {**_MIN_ENV, "MANAGER_PLANE_NS": "evil-ns"}
+        merged = merge_env(poisoned, {"MANAGER_PLANE_NS": "evil-ns2"})
+        assert "MANAGER_PLANE_NS" not in merged or merged["MANAGER_PLANE_NS"] != "evil-ns2"
+
+    def test_manager_plane_db_env_trio(self, monkeypatch):
+        from manager_server.core.deployment import env_builder
+        monkeypatch.setenv("MANAGER_DB_NAME", "manager_wmq")
+        monkeypatch.setenv("WEB_SERVER_DB_USER", "user_backend_wmq")
+        monkeypatch.setenv("WEB_SERVER_DB_PASSWORD", "Readonly@1")
+        assert env_builder._manager_plane_db_env() == {
+            "MANAGER_DB_NAME": "manager_wmq",
+            "WEB_SERVER_DB_USER": "user_backend_wmq",
+            "WEB_SERVER_DB_PASSWORD": "Readonly@1",
+        }
+        # 三键不全整体不注入（源码运行无这些 env）
+        monkeypatch.delenv("WEB_SERVER_DB_USER", raising=False)
+        assert env_builder._manager_plane_db_env() == {}
+
+    def test_plane_defaults_fill_only_missing(self, monkeypatch):
+        from manager_server.core.deployment import env_builder
+        monkeypatch.setattr(env_builder, "_SA_NAMESPACE_FILE", "/nonexistent")
+        for key, value in (
+            ("MANAGER_DB_NAME", "manager_wmq"),
+            ("WEB_SERVER_DB_USER", "user_backend_wmq"),
+            ("WEB_SERVER_DB_PASSWORD", "Readonly@1"),
+        ):
+            monkeypatch.setenv(key, value)
+        # 无 plane ns（源码运行）：不补全，维持按部署 ns 派生的单 ns 语义
+        assert env_builder.manager_plane_defaults({}) == {}
+        # 有 plane ns（集群内）：缺失键补管理面事实
+        monkeypatch.setenv("MANAGER_PLANE_NS", "wmq")
+        seeded = env_builder.manager_plane_defaults({})
+        assert seeded["MANAGER_DB_NAME"] == "manager_wmq"
+        assert seeded["WEB_SERVER_DB_USER"] == "user_backend_wmq"
+        # 显式 defaults 优先：已配置的只读账号不被覆盖（补全结果不含该键，合成时保留显式值）
+        partial = env_builder.manager_plane_defaults({"WEB_SERVER_DB_USER": "custom"})
+        assert "WEB_SERVER_DB_USER" not in partial
+        assert "MANAGER_DB_NAME" in partial
+        assert {**partial, **{"WEB_SERVER_DB_USER": "custom"}}["WEB_SERVER_DB_USER"] == "custom"
+        # 合成后经 merge_env 白名单放行，任务 env 带管理面库事实
+        merged = merge_env({**seeded, **_MIN_ENV}, {})
+        assert merged["MANAGER_DB_NAME"] == "manager_wmq"
+        assert 'MANAGER_DB_NAME="manager_wmq"' in build_env_custom(merged, namespace="team-a")

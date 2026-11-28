@@ -392,7 +392,7 @@
     "unbindConfirm": "解绑仅移除管理面的注册记录（探活/授权/配置下发），不影响集群本身运行。确认解绑该集群？",
     "unbindSuccess": "已解绑",
     "undeploy": "卸载",
-    "undeployConfirm": "将向命名空间 {{ns}} 发起卸载任务（倒序删除产品组件，PVC 数据一并删除且不可恢复），并解绑该集群的注册记录。确认继续？",
+    "undeployConfirm": "将卸载集群「{{name}}」：向命名空间 {{namespace}} 发起卸载任务（倒序删除产品组件，PVC 数据一并删除且不可恢复），并解绑该集群的注册记录。确认继续？",
     "undeployStarted": "卸载任务已发起，正在跳转任务详情"
   },
   "instanceForm": {
@@ -1355,7 +1355,8 @@
       "finishedAt": "结束时间",
       "errorSummary": "失败原因",
       "interruptedHint": "任务因服务重启等原因被中断，可重新发起部署",
-      "gotoInstance": "查看实例"
+      "gotoSetup": "继续配置集群",
+      "gotoSetupHint": "按已保存配置定位下一步：准入 / 运行资源 / Agent 绑定 / 检查"
     },
     "progress": {
       "title": "部署进度",
@@ -1997,10 +1998,10 @@
     "clusterManagementSubtitle": "服务实例是 Agent 真正运行的环境；进入集群后可继续配置准入、运行资源和 Agent。",
     "clusterWorkbench": "配置工作台",
     "continueClusterSetup": "继续配置",
-    "createCluster": "新建集群",
+    "createCluster": "注册集群",
     "clusterNeedsInspection": "部分组件需要检查，进入工作台继续配置。",
     "workspaceNoteTitle": "服务实例是 Agent 真正运行的环境",
-    "workspaceNoteBody": "新建集群从登记连接信息开始，再按“集群准入 → 运行资源 → Agent资源 → 状态检查”完成配置；中途离开后点击“继续配置”，会根据已保存的配置进入下一项。",
+    "workspaceNoteBody": "注册集群从登记连接信息开始，再按“集群准入 → 运行资源 → Agent资源 → 状态检查”完成配置；中途离开后点击“继续配置”，会根据已保存的配置进入下一项。",
     "returnToClusters": "集群管理",
     "backToAgentTemplates": "返回 Agent模板",
     "refreshConfig": "刷新配置",

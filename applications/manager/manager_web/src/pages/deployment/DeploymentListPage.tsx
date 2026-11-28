@@ -11,7 +11,6 @@ import { Pagination } from '../../components/Pagination';
 import { ListSearchInput } from '../../components/ListSearchInput';
 import { formatTime } from '../../utils/format';
 import { toast } from '../../stores/uiStore';
-import { CreateDeploymentModal } from './CreateDeploymentModal';
 import { DeploymentStatusBadge } from './deploymentStatus';
 
 /** 运行中/排队任务存在时整表轮询间隔。 */
@@ -161,7 +160,6 @@ export function DeploymentListPage() {
   const { searchInput, setSearchInput, searchQuery } = useListSearch();
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
-  const [createOpen, setCreateOpen] = useState(false);
 
   const defaults = useAsync<DeploymentDefaults>(() => DeploymentApi.getDefaults(), []);
   const tasks = useAsync(
@@ -217,7 +215,7 @@ export function DeploymentListPage() {
             </button>
             <button
               className="btn primary sm"
-              onClick={() => setCreateOpen(true)}
+              onClick={() => navigate('/deployments/new')}
               disabled={defaultsData ? !defaultsData.deploy_enabled : false}
               title={
                 defaultsData && !defaultsData.deploy_enabled
@@ -270,17 +268,6 @@ export function DeploymentListPage() {
           )}
         </div>
       </div>
-
-      <CreateDeploymentModal
-        open={createOpen}
-        defaults={defaultsData}
-        onClose={() => setCreateOpen(false)}
-        onCreated={(deploymentId) => {
-          setCreateOpen(false);
-          void tasks.reload();
-          navigate(`/deployments/${deploymentId}`);
-        }}
-      />
     </>
   );
 }

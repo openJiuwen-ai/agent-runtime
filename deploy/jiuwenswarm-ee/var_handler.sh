@@ -275,6 +275,21 @@ resolve_manager_web_resolver() {
   return 0
 }
 
+# 管理面服务（identity / manager-server）对产品面的暴露地址：
+# - MANAGER_PLANE_NS 留空（CLI 单 ns 全量部署）或等于本次 ns：维持同 ns 短名默认值；
+# - 跨 ns（manager-server 程序化部署产品面到其他 ns，其注入自身 pod ns）：改写为
+#   <svc>.<ns> 跨 ns 服务名——产品面 web / web-server 的 IDP / manager 上游指向管理面。
+# check_vars 内调用：up / down / --render-only 三路径一致（渲染前生效）。
+resolve_manager_plane_urls() {
+  local mpns="${DEPLOY_VARS["MANAGER_PLANE_NS"]:-}"
+  [ -n "$mpns" ] || return 0
+  [ "$mpns" != "${DEPLOY_VARS["NAMESPACE"]}" ] || return 0
+  DEPLOY_VARS["IDENTITY_SVC_URL"]="http://jiuwenswarm-identity.${mpns}:8770"
+  DEPLOY_VARS["MANAGER_SVC_URL"]="http://jiuwenswarm-manager-server.${mpns}:8765"
+  info "管理面服务跨 ns 定位: identity / manager-server → ${mpns}"
+  return 0
+}
+
 # ---------- 基础服务：内置/外置模式 ----------
 # 判据唯一：对应接入地址（DB_HOST / REDIS_HOST）是否为空，与其他变量无关；
 # 派生出的 ENABLE_EXTERNAL_DB / ENABLE_EXTERNAL_REDIS 供渲染与依赖预检消费。
@@ -625,6 +640,7 @@ check_vars() {
   resolve_redis_vars
   resolve_obs_vars                 # OBS_URL 空=内置 MinIO 自动派生；外部校验必填项
   resolve_manager_web_resolver     # MANAGER_WEB_RESOLVER 为空时按形态/环境自动解析
+  resolve_manager_plane_urls       # 管理面服务跨 ns 定位（MANAGER_PLANE_NS 注入时改写 IDP/manager 上游地址）
   check_image_vars
   check_replicas_vars
   check_web_server_vars

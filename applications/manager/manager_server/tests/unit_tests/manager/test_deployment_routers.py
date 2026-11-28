@@ -9,8 +9,12 @@ pytestmark = pytest.mark.asyncio
 
 _DEPLOYMENTS = "/api/v1/deployments"
 
-# 与工具树校验对齐的最小 env（create 经 defaults 播种路径补全，这里只放关键项）
-_BASE_ENV = {"AGENT_RUNTIME_IMAGE": "swr.example/agent-runtime:1.0"}
+# 与工具树校验对齐的最小 env（create 经 defaults 播种路径补全，这里只放关键项；
+# k8s 形态 SANDBOX_TYPE 留空派生 jiuwenbox，创建校验要求沙箱镜像）
+_BASE_ENV = {
+    "AGENT_RUNTIME_IMAGE": "swr.example/agent-runtime:1.0",
+    "JIUWENBOX_IMAGE": "swr.example/jiuwenswarm-sandbox:1.0",
+}
 
 
 @pytest.fixture
@@ -237,6 +241,7 @@ async def test_create_with_env_custom_text_import(manager_api, tool_available):
         "# 注释行忽略\n"
         'GATEWAY_REPLICAS="3"\n'
         "WEB_REPLICAS=2\n"
+        "JIUWENBOX_IMAGE=swr.example/jiuwenswarm-sandbox:1.0\n"   # k8s 派生沙箱需镜像（不依赖本地 .env.custom 播种）
         'MARIADB_ROOT_PASSWORD="Imported@123"\n'
         "CLUSTER_TYPE=k8s\n"          # 强制键：merge 时忽略
         "JUNK_LINE_WITHOUT_EQ\n"      # 无等号：宽容忽略
@@ -258,6 +263,7 @@ async def test_create_with_env_custom_text_import(manager_api, tool_available):
     task_env = detail["params"]["env"]
     assert task_env["GATEWAY_REPLICAS"] == "5"
     assert task_env["WEB_REPLICAS"] == "2"
+    assert task_env["JIUWENBOX_IMAGE"].startswith("swr.example/")
     assert task_env["MARIADB_ROOT_PASSWORD"] == "******"   # 敏感键出参掩码
     assert "CLUSTER_TYPE" not in task_env
 

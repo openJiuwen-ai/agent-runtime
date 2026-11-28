@@ -392,7 +392,7 @@
     "unbindConfirm": "Unbinding only removes the registration record (probing/authorization/config push); the cluster itself keeps running. Unbind this cluster?",
     "unbindSuccess": "Unbound",
     "undeploy": "Undeploy",
-    "undeployConfirm": "This will create an undeploy task for namespace {{ns}} (reverse-order removal; PVC data is deleted and unrecoverable) and unbind the cluster registration. Continue?",
+    "undeployConfirm": "This will undeploy cluster \"{{name}}\": an undeploy task is created for namespace {{namespace}} (reverse-order removal; PVC data is deleted and unrecoverable) and the cluster registration is unbound. Continue?",
     "undeployStarted": "Undeploy task created, opening task detail"
   },
   "instanceForm": {
@@ -1355,7 +1355,8 @@
       "finishedAt": "Finished At",
       "errorSummary": "Failure Summary",
       "interruptedHint": "The task was interrupted (e.g. by a service restart). You may start a new deployment.",
-      "gotoInstance": "View Instance"
+      "gotoSetup": "Continue cluster setup",
+      "gotoSetupHint": "Resume at the next unconfigured step: admission / runtime resources / Agent bindings / checks"
     },
     "progress": {
       "title": "Progress",
@@ -1996,10 +1997,10 @@
     "clusterManagementSubtitle": "Service instances are where Agents actually run. After entering a cluster, continue with admission, runtime resources, and Agents.",
     "clusterWorkbench": "Configuration workspace",
     "continueClusterSetup": "Continue setup",
-    "createCluster": "New cluster",
+    "createCluster": "Register Cluster",
     "clusterNeedsInspection": "Some components need checking. Open the workspace to continue setup.",
     "workspaceNoteTitle": "Service instances are where Agents actually run",
-    "workspaceNoteBody": "Create a cluster by registering connection info, then finish setup in order: Admission → Runtime resources → Agent resources → Status check. If you leave midway, Continue setup resumes from the saved progress.",
+    "workspaceNoteBody": "Register a cluster by saving its connection info, then finish setup in order: Admission → Runtime resources → Agent resources → Status check. If you leave midway, Continue setup resumes from the saved progress.",
     "returnToClusters": "Clusters",
     "backToAgentTemplates": "Back to Agent Templates",
     "refreshConfig": "Refresh configuration",

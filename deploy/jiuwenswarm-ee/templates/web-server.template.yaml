@@ -55,9 +55,9 @@ spec:
             - name: WEB_SERVER_PG_SCHEMA
               value: "<<MANAGER_PG_SCHEMA>>"
             - name: WEB_SERVER_IDENTITY_URL
-              value: "http://jiuwenswarm-identity:8770"
+              value: "<<IDENTITY_SVC_URL>>"
             - name: WEB_SERVER_MANAGER_URL
-              value: "http://jiuwenswarm-manager-server:8765"
+              value: "<<MANAGER_SVC_URL>>"
             - name: WEB_SERVER_DEFAULT_GATEWAY_HTTP
               value: "http://jiuwenswarm-gateway:19000"
             - name: WEB_SERVER_DEFAULT_GATEWAY_WS

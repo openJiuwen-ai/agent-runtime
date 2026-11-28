@@ -61,7 +61,7 @@ function ClusterCreationForm({ draftKey, template, returnTo }: { draftKey: strin
     { key: 'runtime' as const, label: t('instanceForm.runtimeHost'), required: true },
   ];
   const flow = [
-    [tr('创建服务实例', 'Create service instance'), tr('保存集群名称和服务地址', 'Save the cluster identity and endpoints')],
+    [tr('登记服务实例', 'Register service instance'), tr('保存集群名称和服务地址', 'Save the cluster identity and endpoints')],
     [tr('集群准入', 'Cluster admission'), tr('允许哪些用户或组织进入', 'Choose who can enter')],
     [tr('运行资源', 'Runtime resources'), tr('绑定运行时模板并设置适用范围', 'Bind a runtime template and set its scope')],
     [tr('Agent 绑定', 'Agent bindings'), tr('选择模板并设置使用范围', 'Select templates and their access scope')],
@@ -97,13 +97,13 @@ function ClusterCreationForm({ draftKey, template, returnTo }: { draftKey: strin
       });
       try { clearClusterCreationDraft(sessionStorage, draftKey); } catch { /* Creation has already succeeded. */ }
       bumpGuideRevision();
-      toast('success', tr('服务实例已创建，继续配置集群准入。', 'Service instance created. Continue with cluster admission.'));
+      toast('success', tr('服务实例已登记，继续配置集群准入。', 'Service instance registered. Continue with cluster admission.'));
       const context = new URLSearchParams();
       if (template) context.set('template', template);
       if (returnTo) context.set('returnTo', returnTo);
       navigate(clusterSetupPath(created.jiuwenclaw_id, 'access', context), { replace: true });
     } catch (cause) {
-      setError(tr('创建集群失败：', 'Could not create cluster: ') + (cause instanceof ApiError ? cause.detail : (cause as Error).message));
+      setError(tr('注册集群失败：', 'Could not register cluster: ') + (cause instanceof ApiError ? cause.detail : (cause as Error).message));
     } finally {
       requestInFlight.current = false;
       setSaving(false);
@@ -114,26 +114,26 @@ function ClusterCreationForm({ draftKey, template, returnTo }: { draftKey: strin
     <div className="page-header wizard-header">
       <div>
         <button type="button" className="btn ghost sm" disabled={saving} onClick={() => navigate('/instances')}>← {tr('集群管理', 'Clusters')}</button>
-        <h1 className="page-title mt-3">{tr('新建集群', 'Create cluster')}</h1>
+        <h1 className="page-title mt-3">{tr('注册集群', 'Register cluster')}</h1>
         <p className="page-subtitle">{tr('先保存服务实例，之后在该集群中完成准入、运行资源、Agent 绑定和检查。', 'Save the service instance, then configure admission, runtime resources, Agent bindings and checks inside that cluster.')}</p>
       </div>
-      <span className="tag">{tr('第 1 步 · 创建服务实例', 'Step 1 · Create service instance')}</span>
+      <span className="tag">{tr('第 1 步 · 登记服务实例', 'Step 1 · Register service instance')}</span>
     </div>
     {template && <section className="card mb-4 flex flex-wrap items-center justify-between gap-3">
-      <div><strong>{tr('待绑定 Agent 模板', 'Agent template to bind')} · {templateState.data?.template_name || template}</strong><p className="mt-1 text-sm text-muted">{templateState.error || (templateState.loading ? tr('正在读取模板…', 'Loading template…') : !templateState.data?.enabled ? tr('模板已停用，请先在模板管理中启用。', 'Enable this template in Agent template management first.') : tr('此模板会保留到 Agent 绑定步骤，创建后仍按准入、运行资源、Agent 绑定的顺序继续。', 'The template will remain selected for the Agent binding step. Continue through admission and runtime resources first.'))}</p></div>
+      <div><strong>{tr('待绑定 Agent 模板', 'Agent template to bind')} · {templateState.data?.template_name || template}</strong><p className="mt-1 text-sm text-muted">{templateState.error || (templateState.loading ? tr('正在读取模板…', 'Loading template…') : !templateState.data?.enabled ? tr('模板已停用，请先在模板管理中启用。', 'Enable this template in Agent template management first.') : tr('此模板会保留到 Agent 绑定步骤，登记后仍按准入、运行资源、Agent 绑定的顺序继续。', 'The template will remain selected for the Agent binding step. Continue through admission and runtime resources first.'))}</p></div>
       <div className="flex gap-2"><button type="button" className="btn sm" disabled={saving} onClick={() => navigate(returnTo || '/agent-templates')}>{tr('返回模板管理', 'Return to templates')}</button>{templateState.error && <button type="button" className="btn sm" onClick={() => void templateState.reload()}>{tr('重试', 'Retry')}</button>}</div>
     </section>}
     <div className="wizard-layout">
       <aside className="card wizard-steps">
-        <h2 className="text-sm font-semibold">{tr('新建集群流程', 'Cluster setup flow')}</h2>
+        <h2 className="text-sm font-semibold">{tr('注册集群流程', 'Cluster registration flow')}</h2>
         <ol className="mt-3 flex flex-col gap-1" aria-label={tr('集群配置流程', 'Cluster setup flow')}>
           {flow.map(([title, description], index) => <li key={title} className={'wizard-step ' + (index === 0 ? 'current' : '')} aria-current={index === 0 ? 'step' : undefined}><span className="wizard-step__num">{index + 1}</span><span><strong>{title}</strong><small>{description}</small></span></li>)}
         </ol>
-        <p className="mt-4 text-xs leading-5 text-muted">{tr('创建成功后，每一步都在当前集群内完成。已保存的配置可随时从集群管理重新进入。', 'After creation, every step stays within the cluster. Saved settings can always be reopened from Clusters.')}</p>
+        <p className="mt-4 text-xs leading-5 text-muted">{tr('注册成功后，每一步都在当前集群内完成。已保存的配置可随时从集群管理重新进入。', 'After registration, every step stays within the cluster. Saved settings can always be reopened from Clusters.')}</p>
       </aside>
       <main className="wizard-main">
         <form className="card wizard-card" onSubmit={event => void create(event)}>
-          <div className="flex flex-wrap items-start justify-between gap-2"><div><h2 className="font-semibold">{tr('创建服务实例', 'Create service instance')}</h2><p className="wizard-help">{tr('登记集群标识和实际服务地址，后续配置将绑定到这个服务实例。', 'Register the cluster identity and service endpoints. Subsequent settings belong to this service instance.')}</p></div><span className="text-xs text-muted">{tr('离开后可在本标签页恢复草稿', 'Draft resumes in this browser tab')}</span></div>
+          <div className="flex flex-wrap items-start justify-between gap-2"><div><h2 className="font-semibold">{tr('登记服务实例', 'Register service instance')}</h2><p className="wizard-help">{tr('登记集群标识和实际服务地址，后续配置将绑定到这个服务实例。', 'Register the cluster identity and service endpoints. Subsequent settings belong to this service instance.')}</p></div><span className="text-xs text-muted">{tr('离开后可在本标签页恢复草稿', 'Draft resumes in this browser tab')}</span></div>
           <fieldset disabled={saving} className="m-0 min-w-0 border-0 p-0">
             <div className="wizard-form-grid">
               <label className="label" htmlFor="cluster-create-name">{tr('集群名称', 'Cluster name')} <span className="text-danger">*</span><input id="cluster-create-name" className="input" maxLength={128} value={draft.name} onChange={event => update({ name: event.target.value })} placeholder={tr('例如：测试集群', 'e.g. Test cluster')} /></label>
@@ -149,9 +149,9 @@ function ClusterCreationForm({ draftKey, template, returnTo }: { draftKey: strin
             {draft.hostMode === 'auto' ? <div className="wizard-endpoint-preview">{endpointFields.map(field => <div key={field.key}><span>{field.label}</span><code>{autoHosts[field.key]}</code></div>)}</div> : <div className="wizard-form-grid">{endpointFields.map(field => <label className="label" key={field.key} htmlFor={'cluster-create-' + field.key}>{field.label}{field.required && <span className="text-danger"> *</span>}<input id={'cluster-create-' + field.key} className="input mono" value={draft[field.key]} maxLength={512} onChange={event => update({ [field.key]: event.target.value })} placeholder="http://host:port" /></label>)}</div>}
           </fieldset>
           {error && <p className="mt-4 text-sm text-danger break-words" role="alert">{error}</p>}
-          <div className="wizard-actions"><button type="button" className="btn" disabled={saving} onClick={() => navigate('/instances')}>{tr('暂时离开', 'Leave for now')}</button><button type="submit" className="btn primary" disabled={saving || templateUnavailable}>{saving ? tr('创建中…', 'Creating…') : tr('创建并配置集群准入', 'Create and configure admission')} →</button></div>
+          <div className="wizard-actions"><button type="button" className="btn" disabled={saving} onClick={() => navigate('/instances')}>{tr('暂时离开', 'Leave for now')}</button><button type="submit" className="btn primary" disabled={saving || templateUnavailable}>{saving ? tr('登记中…', 'Registering…') : tr('保存并配置集群准入', 'Save and configure admission')} →</button></div>
         </form>
-        <WorkspaceNote title={tr('新建集群只登记一个服务实例', 'Creating a cluster registers one service instance')}>{tr('本页保存集群名称和连接地址，不会自动创建运行资源或授予 Agent 使用权限。创建后按集群准入 → 运行资源 → Agent 绑定 → 检查并验证继续；完成保存的配置会保留在该集群中。', 'This page saves the cluster identity and endpoints. Continue with admission, runtime resources, Agent bindings and verification. Each saved configuration remains attached to the cluster.')}</WorkspaceNote>
+        <WorkspaceNote title={tr('注册集群只登记一个服务实例', 'Registering a cluster adds one service instance')}>{tr('本页保存集群名称和连接地址，不会自动创建运行资源或授予 Agent 使用权限。登记后按集群准入 → 运行资源 → Agent 绑定 → 检查并验证继续；完成保存的配置会保留在该集群中。', 'This page saves the cluster identity and endpoints. Continue with admission, runtime resources, Agent bindings and verification. Each saved configuration remains attached to the cluster.')}</WorkspaceNote>
       </main>
     </div>
   </div>;

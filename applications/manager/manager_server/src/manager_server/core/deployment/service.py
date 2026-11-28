@@ -114,6 +114,8 @@ class DeploymentService:
             raise DeploymentError(f"部署功能不可用: {reason}", status_code=503)
         namespace = str(body.namespace or "").strip()
         defaults = await self.get_defaults()
+        # 管理面侧默认补全（集群内运行时填补管理面 DB 事实，缺失键才填；显式值优先）
+        defaults = {**env_builder.manager_plane_defaults(defaults), **defaults}
         # .env.custom 全量文本导入：解析后作为覆盖基底，显式 env 键优先于文本键
         parsed_text = env_builder.parse_env_custom_text(body.env_custom_text or "")
         overrides = {**parsed_text, **dict(body.env or {})}
@@ -312,7 +314,7 @@ class DeploymentService:
         merged = {**current, **validated}
         # 强制键由服务端在每次部署时写死，不得落入存储（历史 bug：merge_env 的返回值
         # 含 FORCED_ENV，曾随本接口写库，导致后续任务创建报"不支持的配置键"）
-        for forced_key in env_builder.FORCED_ENV:
+        for forced_key in env_builder.FORCED_KEY_NAMES:
             merged.pop(forced_key, None)
         await self._handler.update(
             _DEFAULTS_TABLE,
