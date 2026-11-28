@@ -349,14 +349,10 @@ class Access(IAccess):
                     logger.error(
                         "Access 等待下游响应超时: request_id=%s timeout=%s", rid, to
                     )
-                    try:
-                        # 等响应超时: 写一个 error chunk 给上游, 否则前端只能看到流静默结束
-                        await self._put_timeout_error_chunk(response_queue, session_request, rid, to)
-                    except Exception as put_err:  # noqa: BLE001
-                        logger.error(
-                            "Access 超时写入 error chunk 失败: request_id=%s err=%s",
-                            rid, put_err, exc_info=True,
-                        )
+                    # 等响应超时: 直接向上游 yield 一个 error chunk, 否则前端只能看到流静默结束
+                    yield self._response_parser.response(
+                        self._build_timeout_error_chunk(session_request, rid, to)
+                    )
                     break
                 logger.debug("Access 收到流式分片, request_id=%s", rid)
                 yield self._response_parser.response(data)
@@ -377,23 +373,20 @@ class Access(IAccess):
                 if cleaned:
                     logger.info("老化的 ServiceManager 已成功清理")
 
-    async def _put_timeout_error_chunk(
+    def _build_timeout_error_chunk(
             self,
-            response_queue: asyncio.Queue[Any],
             session_request: ISessionRequest,
             rid: str,
             timeout: int,
-    ) -> None:
-        """写入一个超时error chunk"""
+    ) -> dict[str, Any]:
+        """构造一个超时error chunk, 由调用方yield给上游"""
         channel_id = str(session_request.channel_id or "")
-        await response_queue.put(
-            {
-                "request_id": rid,
-                "channel_id": channel_id,
-                "is_complete": True,
-                "payload": {
-                    "error": f"下游响应超时({timeout}s)",
-                    "message": f"下游响应超时({timeout}s)",
-                },
-            }
-        )
+        return {
+            "request_id": rid,
+            "channel_id": channel_id,
+            "is_complete": True,
+            "payload": {
+                "error": f"下游响应超时({timeout}s)",
+                "message": f"下游响应超时({timeout}s)",
+            },
+        }
