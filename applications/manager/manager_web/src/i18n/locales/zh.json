@@ -1754,6 +1754,11 @@
     "agentTemplatesDisable": "该资源仍被 {{count}} 个 Agent模板引用，请先解除引用后再禁用",
     "agentTemplatesDelete": "该资源仍被 {{count}} 个 Agent模板引用，请先解除引用后再删除"
   },
+  "templateValidation": {
+    "duplicateEnvName": "环境变量「{{name}}」重复了，请只保留一项后再保存。",
+    "volumesNotMounted": "卷「{{names}}」已声明但未被任何容器挂载。请在主容器或 Sandbox 的 volumeMounts 中按名称引用，或从 volumes 中删除。",
+    "volumeMountUndefined": "挂载名「{{name}}」未在运行时模板的 volumes 中定义。请先在 volumes 中声明同名卷，或删掉该 volumeMount。"
+  },
   "templateRefEditor": {},
   "containerTemplate": {
     "title": "容器模板",

@@ -32,11 +32,13 @@ def _container_wire() -> dict:
 
 def test_preflight_template_binding_raises_with_issue_detail():
     """容器挂载了模板未定义的卷 → 本地预检直接拒绝（issue #203 回归）。"""
-    with pytest.raises(ValueError) as exc:
+    from manager_server.core.template.errors import TemplateValidationError
+
+    with pytest.raises(TemplateValidationError) as exc:
         rcs.preflight_template_binding(_template_row(), [_container_wire()])
-    text = str(exc.value)
-    assert "tpl-1" in text
-    assert "not defined in the template volumes" in text
+    assert exc.value.code == "volume_mount_undefined"
+    assert exc.value.fields.get("name") == "data"
+    assert "data" in str(exc.value)
 
 
 def test_preflight_template_binding_accepts_valid_combination():

@@ -7,6 +7,7 @@ import { toast } from '../../stores/uiStore';
 import type { ContainerTemplate, ContainerTemplateCreateBody } from '../../types';
 import { findUnsafeTextField } from '../../utils/safeText';
 import { containerTemplateForm, buildContainerTemplateBody, type ContainerTemplateForm } from '../../utils/containerTemplateForm';
+import { templateValidationMessage } from '../../utils/templateValidation';
 import { ContainerTemplateFields } from './ContainerTemplateFields';
 import './ServiceConfigTemplateModal.css';
 import './ContainerTemplateModal.css';
@@ -126,7 +127,14 @@ export function ContainerTemplateModal({ open, template, onClose, onSaved }: Pro
       toast('success', t('success.saved'));
       onSaved(saved);
     } catch (error) {
-      toast('danger', t('errors.saveFailed', { detail: error instanceof ApiError ? error.detail : (error as Error).message }));
+      const localized = templateValidationMessage(error, t);
+      toast(
+        'danger',
+        localized
+          ?? t('errors.saveFailed', {
+            detail: error instanceof ApiError ? error.detail : (error as Error).message,
+          }),
+      );
     } finally {
       setSaving(false);
     }
