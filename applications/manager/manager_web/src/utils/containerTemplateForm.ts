@@ -114,11 +114,16 @@ function parseArray(value: string, label: string, strings = false): unknown[] {
 function parseEnv(value: string): unknown[] {
   if (value.trim().startsWith('[')) return parseArray(value, '环境变量');
   const entries: { name: string; value: string }[] = [];
+  const seen = new Set<string>();
   for (const line of value.split(/\r?\n/)) {
     if (!line.trim() || line.trimStart().startsWith('#')) continue;
     const index = line.indexOf('=');
     const name = index < 0 ? '' : line.slice(0, index).trim();
     if (!name) throw new Error('环境变量：每行应为 KEY=value，或使用 JSON 数组。');
+    if (seen.has(name)) {
+      throw new Error(`环境变量「${name}」重复了，请只保留一项后再保存。`);
+    }
+    seen.add(name);
     entries.push({ name, value: line.slice(index + 1) });
   }
   return entries;

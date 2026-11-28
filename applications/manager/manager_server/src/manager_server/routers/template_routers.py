@@ -25,7 +25,11 @@ from manager_server.core.template.a2a_access_policy_template import (
 from manager_server.core.template.a2a_outbound_template import A2AOutboundTemplateService
 from manager_server.core.template.a2a_discovery import A2ADiscoveryError, create_candidate
 from manager_server.core.template.a2a_discovery_settings import A2ADiscoverySettingsService
-from manager_server.core.template.errors import TemplateInUseError
+from manager_server.core.template.errors import TemplateInUseError, TemplateValidationError
+from manager_server.core.template.runtime_validation import (
+    maybe_classify_value_error,
+    validation_http_detail,
+)
 from manager_server.core.template.embedding_template import (
     EmbeddingTemplateService,
 )
@@ -173,11 +177,17 @@ def _agent_template_svc(handler: DBHandler) -> AgentTemplateService:
 
 
 def _http_from_value_error(exc: ValueError) -> HTTPException:
-    """ValueError → 400；TemplateInUseError 保留 code/count 供前端本地化。"""
+    """ValueError → 400；可本地化错误保留 code 供前端映射。"""
     if isinstance(exc, TemplateInUseError):
         return HTTPException(
             status_code=400,
             detail={"code": exc.code, "message": str(exc), "count": exc.count},
+        )
+    classified = maybe_classify_value_error(exc)
+    if isinstance(classified, TemplateValidationError):
+        return HTTPException(
+            status_code=400,
+            detail=validation_http_detail(classified),
         )
     return HTTPException(status_code=400, detail=str(exc))
 

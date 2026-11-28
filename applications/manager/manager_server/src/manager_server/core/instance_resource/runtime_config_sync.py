@@ -403,11 +403,12 @@ def preflight_template_binding(
         "scopes": [],
     })
     if errors:
-        tid = str(_g(template_row, "template_id") or "")
-        raise ValueError(
-            f"runtime config validation failed template_id={tid}: "
-            f"{format_validation_errors(errors)}"
+        from manager_server.core.template.runtime_validation import (
+            raise_from_validation_errors,
         )
+
+        tid = str(_g(template_row, "template_id") or "")
+        raise_from_validation_errors(errors, template_id=tid)
 
 
 async def build_runtime_config(
@@ -519,10 +520,11 @@ async def sync_runtime_config(
     rawdata = await build_runtime_config(handler, jiuwenclaw_id, resource_rows=resource_rows)
     errors = validate_runtime_config_payload(rawdata)
     if errors:
-        raise ValueError(
-            f"runtime config validation failed jiuwenclaw_id={jiuwenclaw_id}: "
-            f"{format_validation_errors(errors)}"
+        from manager_server.core.template.runtime_validation import (
+            raise_from_validation_errors,
         )
+
+        raise_from_validation_errors(errors, template_id=str(jiuwenclaw_id or ""))
     envelope = {
         "type": "config_sync",
         "metadata": {

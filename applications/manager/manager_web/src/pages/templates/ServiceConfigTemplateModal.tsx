@@ -17,6 +17,7 @@ import { isValidUnixAbsPath } from '../../utils/path';
 import { findUnsafeTextField } from '../../utils/safeText';
 import { collectPages } from '../../utils/overview';
 import { runtimeTemplateForm, runtimeTemplateData, type RuntimeTemplateForm as FormState } from '../../utils/runtimeTemplateForm';
+import { templateValidationMessage } from '../../utils/templateValidation';
 import type {
   ContainerTemplate,
   ServiceConfigContainerBrief,
@@ -301,11 +302,13 @@ export function ServiceConfigTemplateModal({ open, template, onClose, onSaved }:
       toast('success', t('success.saved'));
       onSaved(saved);
     } catch (e) {
+      const localized = templateValidationMessage(e, t);
       toast(
         'danger',
-        t('errors.saveFailed', {
-          detail: e instanceof ApiError ? e.detail : (e as Error).message,
-        }),
+        localized
+          ?? t('errors.saveFailed', {
+            detail: e instanceof ApiError ? e.detail : (e as Error).message,
+          }),
       );
     } finally {
       setSaving(false);

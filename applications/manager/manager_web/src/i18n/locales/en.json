@@ -1704,6 +1704,11 @@
     "agentTemplatesDisable": "This resource is still referenced by {{count}} Agent template(s). Remove those references before disabling it.",
     "agentTemplatesDelete": "This resource is still referenced by {{count}} Agent template(s). Remove those references before deleting it."
   },
+  "templateValidation": {
+    "duplicateEnvName": "Environment variable \"{{name}}\" is duplicated. Keep only one entry, then save again.",
+    "volumesNotMounted": "Volume(s) \"{{names}}\" are declared but not mounted by any container. Reference them by name in the main or Sandbox volumeMounts, or remove them from volumes.",
+    "volumeMountUndefined": "Mount name \"{{name}}\" is not defined in the runtime template volumes. Declare a matching volume first, or remove this volumeMount."
+  },
   "templateRefEditor": {},
   "containerTemplate": {
     "title": "Container Templates",
