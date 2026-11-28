@@ -91,6 +91,32 @@ def test_raise_from_validation_errors_drops_cascade_noise() -> None:
     assert "not present" not in str(exc.value)
 
 
+def test_raise_from_validation_errors_keeps_cascade_when_only_noise() -> None:
+    """全是级联句时保留原文，且不重复 runtime config validation failed 前缀。"""
+    with pytest.raises(ValueError) as exc:
+        raise_from_validation_errors(
+            [
+                {
+                    "path": "templates[tpl-1]",
+                    "message": (
+                        "template 'tpl-1' main_container_id 'c-1' "
+                        "not present in the containers section"
+                    ),
+                },
+                {
+                    "path": "containers[0].container_id",
+                    "message": "not referenced by any template: 'orphan'",
+                },
+            ],
+            template_id="tpl-1",
+        )
+    text = str(exc.value)
+    assert text.startswith("runtime config validation failed template_id=tpl-1: ")
+    assert text.count("runtime config validation failed") == 1
+    assert "not present in the containers section" in text
+    assert "not referenced by any template" in text
+
+
 def test_preflight_duplicate_env_raises_structured_error() -> None:
     with pytest.raises(TemplateValidationError) as exc:
         rcs.preflight_template_binding(

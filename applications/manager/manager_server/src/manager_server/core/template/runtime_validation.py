@@ -100,7 +100,11 @@ def raise_from_validation_errors(
     *,
     template_id: str = "",
 ) -> None:
-    """有错误则抛出；优先可本地化根因，并丢掉连锁 not-present 噪音。"""
+    """有错误则抛出；优先可本地化根因。
+
+    有根因时，连锁 not-present / not-referenced 不进入抛出文案（避免噪音）。
+    若只有这类级联句（例如全量投影里孤立未引用容器），则保留原文，避免信息回退。
+    """
     if not errors:
         return
     primary: list[TemplateValidationError] = []
@@ -110,6 +114,8 @@ def raise_from_validation_errors(
         message = str(item.get("message") or "").strip()
         blob = f"{path}: {message}" if path else message
         if _is_cascade(message):
+            if blob:
+                leftovers.append(blob)
             continue
         classified = classify_message(message)
         if classified is not None:
@@ -119,7 +125,7 @@ def raise_from_validation_errors(
     if primary:
         raise primary[0]
     tid = str(template_id or "").strip()
-    detail = "; ".join(leftovers) if leftovers else "runtime config validation failed"
+    detail = "; ".join(leftovers) if leftovers else "no detail reported by foundation"
     prefix = f"runtime config validation failed template_id={tid}: " if tid else (
         "runtime config validation failed: "
     )
