@@ -2,6 +2,7 @@ import { ReactNode, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../../auth/AuthContext';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
+import { DateTimePicker } from '../../components/DateTimePicker';
 import { Empty } from '../../components/Empty';
 import { LimitedTextInput } from '../../components/LimitedTextInput';
 import { ListSearchInput } from '../../components/ListSearchInput';
@@ -32,6 +33,7 @@ import {
   displayRoleDescription,
   displayRoleName,
 } from '../../utils/authzI18n';
+import { toDatetimeLocalValue } from '../../utils/datetimeLocal';
 import { formatTime } from '../../utils/format';
 import {
   isValidIdentityId,
@@ -931,15 +933,6 @@ function AssigneesPanel({
   );
 }
 
-function toDatetimeLocalValue(iso: string | null | undefined): string {
-  if (!iso) return '';
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return '';
-  return new Date(date.getTime() - date.getTimezoneOffset() * 60000)
-    .toISOString()
-    .slice(0, 16);
-}
-
 function parseExpiresAtInput(
   rawValue: string,
   t: ReturnType<typeof useTranslation>['t'],
@@ -1021,12 +1014,11 @@ function EditAssigneeModal({
         </div>
         <label className="block">
           <span className="label">{t('roles.expiresAt')}</span>
-          <input
-            type="datetime-local"
-            className="input mt-1 w-full cursor-pointer"
+          <DateTimePicker
+            className="mt-1 w-full"
+            aria-label={t('roles.expiresAt')}
             value={expiresAt}
-            onChange={(event) => setExpiresAt(event.target.value)}
-            onClick={(event) => (event.target as HTMLInputElement).showPicker?.()}
+            onChange={setExpiresAt}
           />
           <div className="text-[11px] text-muted mt-1">{t('roles.expiresHint')}</div>
         </label>
@@ -1195,12 +1187,11 @@ function AddAssigneeModal({
         )}
         <label className="block">
           <span className="label">{t('roles.expiresAt')}</span>
-          <input
-            type="datetime-local"
-            className="input mt-1 w-full cursor-pointer"
+          <DateTimePicker
+            className="mt-1 w-full"
+            aria-label={t('roles.expiresAt')}
             value={expiresAt}
-            onChange={(event) => setExpiresAt(event.target.value)}
-            onClick={(event) => (event.target as HTMLInputElement).showPicker?.()}
+            onChange={setExpiresAt}
           />
           <div className="text-[11px] text-muted mt-1">{t('roles.expiresHint')}</div>
         </label>

@@ -82,6 +82,40 @@
     "hoursAgo": "{{count}}h ago",
     "daysAgo": "{{count}}d ago"
   },
+  "dateTimePicker": {
+    "prevYear": "Previous year",
+    "prevMonth": "Previous month",
+    "nextMonth": "Next month",
+    "nextYear": "Next year",
+    "yearMonthHeader": "{{month}}/{{year}}",
+    "month": {
+      "jan": "Jan",
+      "feb": "Feb",
+      "mar": "Mar",
+      "apr": "Apr",
+      "may": "May",
+      "jun": "Jun",
+      "jul": "Jul",
+      "aug": "Aug",
+      "sep": "Sep",
+      "oct": "Oct",
+      "nov": "Nov",
+      "dec": "Dec"
+    },
+    "weekday": {
+      "sun": "Su",
+      "mon": "Mo",
+      "tue": "Tu",
+      "wed": "We",
+      "thu": "Th",
+      "fri": "Fr",
+      "sat": "Sa"
+    },
+    "today": "Today",
+    "clear": "Clear",
+    "placeholder": "YYYY-MM-DD --:--",
+    "pickDateTime": "Pick date and time"
+  },
   "brand": {
     "title": "{{productName}}",
     "sub": "Manager"
