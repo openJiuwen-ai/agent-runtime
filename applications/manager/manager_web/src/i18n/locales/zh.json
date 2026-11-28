@@ -1250,6 +1250,10 @@
       "noOptions": "暂无可选模板"
     },
     "matchExpr": {
+      "clusterAgent": "集群 Agent",
+      "unavailableAgent": "不可用的 Agent（{{id}}）",
+      "unavailableAgentHint": "部分已选 Agent 不在当前集群的可选资源中，请移除并重新选择。",
+      "agentOptionsLoadFailed": "Agent 选项加载失败：{{error}}",
       "modeAll": "全员可用",
       "modeCustom": "部分可用",
       "allHint": "留空表示任意 user_id / group_id / bot_id 均命中。",

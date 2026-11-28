@@ -773,7 +773,7 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
             <label className="block mb-3">
               <FieldLabel>{t(`${sr}.scopeLabel`)}</FieldLabel>
               <div className="mt-1">
-                <MatchExprEditor value={addMatchExpr} onChange={setAddMatchExpr} />
+                <MatchExprEditor agentResourceInstanceId={instanceId} value={addMatchExpr} onChange={setAddMatchExpr} />
               </div>
             </label>
             <label className="block">
@@ -880,6 +880,7 @@ export function InstanceServiceResourceTab({ instanceId }: Props) {
             <div className="mt-1">
               <MatchExprEditor
                 key={editing.resource_id}
+                agentResourceInstanceId={instanceId}
                 value={matchExpr}
                 onChange={setMatchExpr}
               />
