@@ -10,6 +10,7 @@ interface LimitedTextInputProps {
   placeholder?: string;
   disabled?: boolean;
   required?: boolean;
+  ariaInvalid?: boolean;
   /** 关联 `<datalist id=…>`，用于可输入下拉建议 */
   list?: string;
   onFocus?: () => void;
@@ -38,6 +39,7 @@ export function LimitedTextInput({
   placeholder,
   disabled,
   required,
+  ariaInvalid,
   list,
   onFocus,
   onBlur,
@@ -67,6 +69,7 @@ export function LimitedTextInput({
         placeholder={placeholder}
         disabled={disabled}
         required={required}
+        aria-invalid={ariaInvalid || undefined}
         list={list}
         autoComplete={autoComplete}
         autoFocus={autoFocus}

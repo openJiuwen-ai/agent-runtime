@@ -1,3 +1,4 @@
+import { INT32_MAX } from './intBounds';
 import type { ServiceConfigTemplate, ServiceConfigTemplateCreateBody } from '../types';
 
 export type RuntimeTemplateForm = {
@@ -10,21 +11,32 @@ export type RuntimeTemplateForm = {
   pod_name: string;
   sse_path: string;
   kubeconfig: string;
-  ready_timeout: number;
-  ready_poll_interval: number;
-  min_idle_pods: number;
-  pod_concurrency: number;
-  pod_ttl: number;
-  message_timeout: number;
-  scope_concurrency: number;
-  session_ttl: number;
+  /** Raw text of the number boxes, so a cleared box stays empty instead of turning into 0. */
+  ready_timeout: string;
+  ready_poll_interval: string;
+  min_idle_pods: string;
+  pod_concurrency: string;
+  pod_ttl: string;
+  message_timeout: string;
+  scope_concurrency: string;
+  session_ttl: string;
   volumes_json: string;
   main_container_id: string;
   sidecar_ids: string[];
 };
 
+export type IntFieldProblem = 'missing' | 'range';
+
+/** Bounds mirror the manager-server schema: the upper bound is the integer column limit. */
+export function intFieldProblem(text: string, min: number): IntFieldProblem | null {
+  if (!text.trim()) return 'missing';
+  const value = Number(text);
+  return Number.isInteger(value) && value >= min && value <= INT32_MAX ? null : 'range';
+}
+
 /** The same mapping is used for saved templates and deployment-file previews. */
 export function runtimeTemplateForm(template?: ServiceConfigTemplateCreateBody | ServiceConfigTemplate): RuntimeTemplateForm {
+  const int = (value: number | undefined, fallback: number) => String(value ?? fallback);
   return {
     template_name: template?.template_name ?? '',
     enabled: template?.enabled ?? true,
@@ -35,14 +47,14 @@ export function runtimeTemplateForm(template?: ServiceConfigTemplateCreateBody |
     pod_name: template?.pod_name ?? 'agentserver',
     sse_path: template?.sse_path ?? '/api/v1/events/stream',
     kubeconfig: template?.kubeconfig ?? '',
-    ready_timeout: template?.ready_timeout ?? 300,
-    ready_poll_interval: template?.ready_poll_interval ?? 2,
-    min_idle_pods: template?.min_idle_pods ?? 0,
-    pod_concurrency: template?.pod_concurrency ?? 2,
-    pod_ttl: template?.pod_ttl ?? 300,
-    message_timeout: template?.message_timeout ?? 600,
-    scope_concurrency: template?.scope_concurrency ?? 3,
-    session_ttl: template?.session_ttl ?? 60,
+    ready_timeout: int(template?.ready_timeout, 300),
+    ready_poll_interval: int(template?.ready_poll_interval, 2),
+    min_idle_pods: int(template?.min_idle_pods, 0),
+    pod_concurrency: int(template?.pod_concurrency, 2),
+    pod_ttl: int(template?.pod_ttl, 300),
+    message_timeout: int(template?.message_timeout, 600),
+    scope_concurrency: int(template?.scope_concurrency, 3),
+    session_ttl: int(template?.session_ttl, 60),
     volumes_json: template?.volumes == null ? '' : JSON.stringify(template.volumes, null, 2),
     main_container_id: template?.main_container_id ?? '',
     sidecar_ids: [...(template?.sidecar_container_ids ?? [])],

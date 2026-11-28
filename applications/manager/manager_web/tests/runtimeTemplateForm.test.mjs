@@ -4,7 +4,8 @@ import { createServer } from 'vite';
 
 const server = await createServer({ configFile: false, server: { middlewareMode: true, hmr: false, ws: false }, appType: 'custom' });
 try {
-  const { runtimeTemplateForm, runtimeTemplateData } = await server.ssrLoadModule('/src/utils/runtimeTemplateForm.ts');
+  const { intFieldProblem, runtimeTemplateForm, runtimeTemplateData } = await server.ssrLoadModule('/src/utils/runtimeTemplateForm.ts');
+  const intKeys = ['ready_timeout', 'ready_poll_interval', 'min_idle_pods', 'pod_concurrency', 'pod_ttl', 'message_timeout', 'scope_concurrency', 'session_ttl'];
   test('loading defaults preserves deployment values and bindings rather than generic form defaults', () => {
     const template = {
       template_name: 'Deployment runtime', description: 'Recovered configuration', namespace: 'business', enabled: false,
@@ -15,9 +16,11 @@ try {
       main_container_id: 'draft-main', sidecar_container_ids: ['draft-sandbox'],
     };
     const form = runtimeTemplateForm(template);
-    for (const key of ['namespace', 'enabled', 'node_name', 'pod_name', 'sse_path', 'kubeconfig', 'ready_timeout', 'ready_poll_interval', 'min_idle_pods', 'pod_concurrency', 'pod_ttl', 'message_timeout', 'scope_concurrency', 'session_ttl', 'main_container_id']) {
+    for (const key of ['namespace', 'enabled', 'node_name', 'pod_name', 'sse_path', 'kubeconfig', 'main_container_id']) {
       assert.equal(form[key], template[key]);
     }
+    // Number boxes hold raw text so that a cleared box stays empty instead of becoming 0.
+    for (const key of intKeys) assert.equal(form[key], String(template[key]));
     assert.equal(form.fs_group, '0');
     assert.deepEqual(JSON.parse(form.volumes_json), template.volumes);
     assert.deepEqual(form.sidecar_ids, template.sidecar_container_ids);
@@ -37,8 +40,23 @@ try {
     const fresh = runtimeTemplateForm();
     assert.equal(prior.main_container_id, 'draft-main');
     assert.equal(fresh.main_container_id, '');
-    assert.equal(fresh.pod_concurrency, 2);
+    assert.equal(fresh.pod_concurrency, '2');
     assert.equal(fresh.template_name, '');
     assert.equal(runtimeTemplateData(undefined), undefined);
+  });
+  test('required integer fields reject blanks, fractions and out-of-range values', () => {
+    // Lower bounds mirror the manager-server schema (ge=1, except min_idle_pods ge=0).
+    assert.equal(intFieldProblem('', 1), 'missing');
+    assert.equal(intFieldProblem('0', 1), 'range');
+    assert.equal(intFieldProblem('1.5', 1), 'range');
+    assert.equal(intFieldProblem('2147483648', 1), 'range');
+    assert.equal(intFieldProblem('1', 1), null);
+    assert.equal(intFieldProblem('2147483647', 1), null);
+    assert.equal(intFieldProblem('', 0), 'missing');
+    assert.equal(intFieldProblem('-1', 0), 'range');
+    assert.equal(intFieldProblem('0', 0), null);
+    // An untouched form is submittable: every required field is prefilled with a valid default.
+    const defaults = runtimeTemplateForm();
+    for (const key of intKeys) assert.equal(intFieldProblem(defaults[key], key === 'min_idle_pods' ? 0 : 1), null, key);
   });
 } finally { await server.close(); }
